@@ -20,6 +20,7 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.provider import BaseToolProvider
 
 if TYPE_CHECKING:
     pass
@@ -59,7 +60,7 @@ _OBS_SET_VISIBILITY_SCHEMA: Dict[str, Any] = {
 }
 
 
-class OBSProvider:
+class OBSProvider(BaseToolProvider):
     """OBS ToolProvider（send_text / switch_scene / set_source_visibility）"""
 
     PROVIDER_NAME = "obs"
@@ -345,9 +346,5 @@ def register_obs_tools(
     event_bus: Optional[EventBus] = None,
 ) -> OBSProvider:
     provider = create_obs_provider(config=config, event_bus=event_bus)
-    if hasattr(registry, "register_provider"):
-        registry.register_provider(provider)
-    else:
-        for spec in provider.list_tools():
-            registry.register(spec, provider.invoke)
+    registry.register_provider(provider)
     return provider

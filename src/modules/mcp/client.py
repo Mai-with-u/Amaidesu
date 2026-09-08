@@ -120,6 +120,23 @@ class McpClient:
             logger.warning(f"MCP server '{self.name}' list_tools 失败: {type(exc).__name__}: {exc}")
             return []
 
+    async def probe(self) -> bool:
+        """主动探活：先看本地连接状态，未连接则尝试一次重连。
+
+        Returns:
+            当前连接是否可用（True=健康）
+
+        语义：
+        - 已连接 + client 实例存在 → 立即返回 True（不走网络，纯本地判据）
+        - 否则记 info 日志并复用 ``self.connect()``（不会抛异常）做一次重连，
+          返回其 bool 结果。复用 connect 即可保持"释放旧实例 / 失败兜底"等
+          现有生命周期行为一致
+        """
+        if self._connected and self._client is not None:
+            return True
+        logger.info(f"MCP server '{self.name}' 探活：未连接，尝试重连")
+        return await self.connect()
+
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """调用 server 上的工具，返回 FastMCP CallToolResult（原始结果）。
 

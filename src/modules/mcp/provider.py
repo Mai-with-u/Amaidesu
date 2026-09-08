@@ -23,12 +23,12 @@ from src.modules.logging import get_logger
 from src.modules.mcp import mapper
 from src.modules.mcp.client import McpClient
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
-from src.modules.tools.provider import ToolProvider
+from src.modules.tools.provider import BaseToolProvider
 
 logger = get_logger("McpToolProvider")
 
 
-class McpToolProvider(ToolProvider):
+class McpToolProvider(BaseToolProvider):
     """MCP server 工具 Provider（缓存 specs + invoke 转发）。
 
     Attributes:
@@ -132,6 +132,11 @@ class McpToolProvider(ToolProvider):
     async def close(self) -> None:
         """关闭底层连接（幂等）。"""
         await self._client.close()
+
+    async def health_check(self) -> bool:
+        """探活钩子：MCP server 粒度——同一 server 的全部工具共用一条连接，
+        同生共死（探活通过即整组恢复）。委托给 ``McpClient.probe``。"""
+        return await self._client.probe()
 
 
 __all__ = ["McpToolProvider"]

@@ -80,6 +80,13 @@ class CoreEvents:
     # 订阅者可以 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。
     TOOL_RESULT_WILDCARD = "tool.result.#"
 
+    # ========== v2 语义域事件（tool 健康状态变更通配订阅模式） ==========
+    # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
+    # 如 "tool.health.maicraft_speak"。仅在状态跃迁时发射：连续失败达阈值熔断（open）、
+    # 探活通过或冷却期满恢复（closed）。
+    # Dashboard 转发层订阅 `event_bus.on("tool.health.#", ...)` 一站式监听。
+    TOOL_HEALTH_WILDCARD = "tool.health.#"
+
     # ========== v2 语义域事件（直播间行为流通配订阅模式） ==========
     # 与 TOOL_RESULT_WILDCARD 同性质的通配订阅标识，不是被 emit 的具体事件名。
     # 覆盖 room.message.danmaku / gift / super_chat / enter 四类；

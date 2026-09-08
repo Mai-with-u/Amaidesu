@@ -303,8 +303,13 @@ async def asyncio_sleep_ms(ms: int) -> None:
 | `ToolExecutionResult` | `src/modules/tools/models.py` | `tool_name`, `success`, `content`, `blocks` (`ResultBlock` 列表), `error_message`, `structured_content`, `duration_ms`, `timestamp_ms` |
 | `ResultBlock` | `src/modules/tools/models.py` | `kind` (`"text"`/`"image"`), `text`, `data` (base64), `mime_type` |
 | `ToolProvider`（Protocol） | `src/modules/tools/provider.py` | `name` 属性、`list_tools()`、`async invoke(invocation) -> ToolExecutionResult`（**永不抛异常**） |
-| `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider)` / `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(provider=)` |
+| `BaseToolProvider`（ABC） | `src/modules/tools/provider.py` | 所有经 `register_provider` 装配的 Provider 的继承基类；带 `category` ClassVar 与 `health_check` 探活钩子默认实现 |
+| `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider)` / `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(provider=)` / `probe_tool(name)`（熔断器探活入口） |
 | `default_tool_registry()` | `src/modules/tools/registry.py` | 进程内单例；`@tool` 装饰器默认注册到这里 |
+
+### Provider 探活契约（与熔断器配套）
+
+有外部连接（WebSocket / HTTP / stdio 子进程等）的 Provider 继承 `BaseToolProvider` 并**重写** `health_check`（连接可用才返回 True）；无状态工具沿用基类默认（返回 True，语义为"无可检查之物，让流量决定"——熔断后冷却期满即恢复，再失败再熔断）。`ToolRegistry.probe_tool(name)` 统一按名定位 provider 并调用 `health_check`，熔断器配套的 `ToolHealthMonitor` 走这一条路径，无须再做反射式存在性探测。维护外部连接的 Provider 实际覆写 `health_check` 由架构测试 `tests/architecture/test_provider_health_contract.py` 强制约束。
 
 ### 两条路径的现实取舍
 
@@ -858,5 +863,7 @@ class MyToolProvider(ToolProvider):
 - [数据流规则](../architecture/data-flow.md) — 单向数据流约束
 
 ---
+
+*最后更新：2026-09-08（Provider 探活契约落地：新增 `BaseToolProvider` ABC（`src/modules/tools/provider.py`），收敛 `category` ClassVar 与 `health_check` 探活钩子默认实现；删除 `ToolRegistry.provider_health_check` 反射式探测，新增 `probe_tool(name)` 统一入口；`ToolHealthMonitor.probe_cycle` 收口为单一路径（经 `probe_tool` 判定 → True 复位 / False 维持）；`register_provider` 对非 `BaseToolProvider` 子类每次 register_provider 注册记一条 warning（向后兼容、不抛错；持续出现即迁移未完成的信号）。全部经 `register_provider` 注册的生产 Provider 已迁移（VTS / Warudo / VRChat / OBS / vision / memory / minecraft / text_adv / content_engine / agent_control / mcp）；MCP 重写 `health_check` 委托 `McpClient.probe`，其它 Provider 沿用基类默认（待接入真实探活）。新增架构测试 `tests/architecture/test_provider_health_contract.py` 强制维护外部连接的 Provider 真正覆写 `health_check`（避免默认实现被误算成有效探活）。"两条路径的现实取舍"表新增 Provider 探活契约段落）*
 
 *最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施。端到端消息流时序步骤 12-14：worker 改 `await speak(text, utterance_id)`（注入的 speak 适配器，绑定 `tts_engine.handle_speech`）；步骤 12 标注 VTS 仍是 ToolRegistry 中的工具；步骤 13 标注 TTS 引擎自身——基础模块、非工具——发布 utterance 事件 + ToolRegistry 中零 TTS 条目。关键要点表发声队列行补"构造期注入 speak 适配器"；TTS 播出行改写为"`src/modules/tts/` 基础模块 + `build_tts_infrastructure` 装配入口"。已知缺口"TTS 渲染工具需显式注册" → "TTS 已基础模块化（原缺口已闭环 + v2.0.12 §8 修正）"+ 装配期注入直连说明。装饰器两条路径对比表"现有生产工具"行删除 `src/modules/tools/output/tts/__init__.py` 陈旧引用；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*

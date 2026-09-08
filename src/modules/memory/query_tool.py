@@ -23,6 +23,7 @@ from src.modules.tools.models import (
     ToolInvocation,
     ToolSpec,
 )
+from src.modules.tools.provider import BaseToolProvider
 
 logger = get_logger("QueryMemoryTool")
 
@@ -48,7 +49,7 @@ QUERY_MEMORY_SPEC = ToolSpec(
 
 
 @dataclass(slots=True)
-class QueryMemoryToolProvider:
+class QueryMemoryToolProvider(BaseToolProvider):
     """query_memory 工具的 ToolProvider。
 
     memory provider 字段可热绑：构造后修改 ``memory`` 字段以切换后端

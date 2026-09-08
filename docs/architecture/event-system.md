@@ -302,6 +302,8 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | `streamer.speech` | `StreamerSpeechPayload` | `StreamerAgent`（`_dispatch_speech_and_emotion`，speech 非空时；`streamer_agent.py`） | `SimulatorService`（节奏唤醒，`simulator/service.py`）；`Broadcaster`（`websocket/broadcaster.py` handler_map + `_subscribe_core_events`，WS type `streamer.speech`） | 主播发言业务事实（与 TTS 启用正交）；Payload 含 `utterance_id` / `text` / `emotion` / `target_user_id`（可选，回复对象，落库与 `viewers.replied_count` 闭环用）/ `reply_to_message_id`（可选，本条发言回复的那条弹幕的 message_id，与 live_chat 观众行 `message_id` 构成互动分析关联键）/ `live_session_id`（发布方不填，场次盖章拦截器注入） |
 | `tool.result.<tool_name>` | `ToolResultPayload` | `ToolRegistry.invoke`（工具执行完成后，无论成败均广播；未挂载 EventBus 时跳过） | Dashboard Broadcaster（`tool.result.#` 通配）与 traces 查询；handler 按 `payload.tool_name` 分发 | **工具结果回传**（事件名不固定，emit 时用具体 `tool.result.<tool_name>`，如 `tool.result.speak`；`ToolSpec.result_event` 可定制名） |
 | `tool.result.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。`CoreEvents.TOOL_RESULT_WILDCARD = "tool.result.#"`（`names.py` L62）保留作订阅标识常量，**不在 names.py 的 `get_all_events()` 反射收集范围内**（按 `value.islower() and "." in value` 筛选时该字符串通过，但 `_validate_event_data` 找不到具体注册类型时仅 debug 警告，不阻断 emit） |
+| `tool.health.<tool_name>` | `ToolHealthPayload` | `ToolRegistry`（熔断判定与探活恢复的统一出口：连续失败达阈值熔断时广播 `state="open"`；`recover_tool` 复位时广播 `state="closed"`；**仅在状态跃迁时发**，每次 invoke 不发） | Dashboard 转发层（`tool.health.#` 通配） | **工具健康跃迁**（熔断→摘除 / 探活通过→恢复；Payload 含 `tool_name` / `provider` / `state` / `failure_count` / `last_error` / `timestamp_ms`）。具体名 `tool.health.<tool_name>` 由 `ToolRegistry` emit 时填；订阅者通过 `event_bus.on("tool.health.#", handler, model_class=ToolHealthPayload)` 通配监听后按 `tool_name` 字段分发 |
+| `tool.health.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.health.#", ...)` 一站式监听所有工具健康跃迁。`CoreEvents.TOOL_HEALTH_WILDCARD = "tool.health.#"`（`names.py` L80）保留作订阅标识常量；与 `tool.result.#` 同性质——不在 `EVENT_REGISTRY` 注册，仅供通配订阅 |
 | `tts.utterance.started` | `UtteranceStartedPayload` | TTS 引擎（基础模块，非工具；`src/modules/tts/` 下 4 个 Provider 之一，按 `core.toml [tts].provider` 装配期单选构造后注入 StreamerAgent）——仅在 `handle_speech` 收到非空 `utterance_id` 参数时发布；流式引擎=首块 PCM 写声卡，全量引擎=`play_audio` 调用 | 字幕写入器、编排层记账器等状态联动消费者（**当前生产代码暂无订阅——字幕订阅接线属后续工作，本表如实标记预留**） | 一次发声开始。Payload 含 `utterance_id`（全链路关联键，编排层生成 `utt_{epoch_ms}_{seq}`）、`speech_text`、`engine`（`edge`/`gptsovits`/`omni`/`voicebox`）、`duration_ms`（Optional[int]：全量引擎=合成后精确值；流式引擎合成未完=None）、`timestamp_ms`。 |
 | `tts.utterance.finished` | `UtteranceFinishedPayload` | TTS 引擎（基础模块）在播放完成时刻（百毫秒级精度，不含声卡硬件缓冲残余） | 编排层（句末再决策 / 释放锁）、存储（落 reply 耗时）、后台记账器（**预留**） | 一次发声播放完成。`duration_ms` 由 PCM 样本数÷采样率精确计算；事件名常量 `CoreEvents.TTS_UTTERANCE_FINISHED`。 |
 | `tts.utterance.failed` | `UtteranceFailedPayload` | TTS 引擎（基础模块）在合成或播放失败时（合成错误、WebSocket 断开、音频设备异常等任何阶段） | 编排层（错误兜底 / 重试决策）、存储（落失败记录）（**预留**） | 一次发声失败。Payload 含 `error_message`（异常 message / 错误码 / 阶段标记）。事件名常量 `CoreEvents.TTS_UTTERANCE_FAILED`。 |
@@ -313,6 +315,7 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | `RoomMessagePayload` | `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.enter`（`room.py` L81-84 四重注册，按 `message_type` 字段判别） |
 | `GamePayload` | `game.milestone` / `game.attention_required` / `game.error`（`game.py` L22-24 三重注册，按 `event_type` 字段判别） |
 | `ToolResultPayload` | **不绑定**具体 `tool.result.*` 事件名（`tool_result.py` L22-25 注释明确），emit 时用具体名 `tool.result.<tool_name>`，handler 按 `tool_name` 字段分发 |
+| `ToolHealthPayload` | **不绑定**具体 `tool.health.*` 事件名（`tool_health.py` L20-23 注释明确），emit 时用具体名 `tool.health.<tool_name>`，handler 按 `tool_name` 字段分发 |
 
 ### EventRecorder 订阅范围（监控组件典型）
 
@@ -863,6 +866,8 @@ class MyPayload(BasePayload):
 ---
 
 *最后更新：2026-09-06（事件历史持久层迁移：EventHistoryRecorder 记录面从 `data/events/*.jsonl` 每日文件改为 SQLite `event_history` 表——`EventHistoryService` 保留内存环形缓冲供 Dashboard 热查询（recent/游标续传/按场次过滤不变），落库经 fire-and-forget 异步写、失败仅告警；启动时 `backfill_today_from_store` 从表回灌当日事件（Dashboard 重启不再丢当日历史）；`EventRecord` 新增 `event_name`（EventBus 精确事件名，修正旧录制 type 粗粒度导致回放过滤永不命中的缺陷）与 `timestamp_ms` 字段；`[events].persist` 语义改为写库，CONFIG_VERSION 2.0.17）*
+
+*最后更新：2026-09-08（事件事实表新增 `tool.health.<tool_name>` 与 `tool.health.#` 通配占位符：发布者 `ToolRegistry`（熔断判定与探活恢复的统一出口，仅在状态跃迁时发——连续失败达阈值熔断时 `state="open"`、`recover_tool` 复位时 `state="closed"`），订阅者 Dashboard 转发层，`tool.health.#` 通配一站式监听；Payload `ToolHealthPayload` 含 `tool_name` / `provider` / `state` / `failure_count` / `last_error` / `timestamp_ms`，与 `ToolResultPayload` 同为通配族 Payload、不绑定具体事件名；类→多事件共享表补 `ToolHealthPayload` 行）*
 
 *最后更新：2026-09-06（遗留接线补全：`agenda.update` 由 `StreamerAgent` 在环节推进/手动控制后实际发布——此前只有订阅端，Dashboard/OutlineWorkbench 依赖该事件重拉节目单快照；`AgendaIdle` 推进到末尾补上缺失的 on_advance 回调）
 

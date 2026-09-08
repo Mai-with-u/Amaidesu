@@ -19,8 +19,9 @@ import pytest
 from pydantic import BaseModel, Field
 
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RoomMessagePayload, RoomMessageUser
-from src.modules.events.registry import EVENT_REGISTRY, EventRegistry
+from src.modules.events.registry import EVENT_REGISTRY
 
 # =============================================================================
 # Test Models
@@ -616,3 +617,36 @@ async def test_empty_event_name(event_bus: EventBus):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
+
+
+# =============================================================================
+# tool.health.# 通配路由集成测试（真实 EventBus emit → 通配分发）
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_tool_health_wildcard_matches_concrete_emit(event_bus: EventBus):
+    """真实 emit 路径验证：``tool.health.#`` 通配订阅能收到具体名 ``tool.health.<tool>`` 事件"""
+    from src.modules.events.payloads.tool_health import ToolHealthPayload
+
+    seen: list[tuple[str, ToolHealthPayload]] = []
+
+    async def handler(event_name, payload: ToolHealthPayload, source: str):
+        seen.append((event_name, payload))
+
+    event_bus.on(CoreEvents.TOOL_HEALTH_WILDCARD, handler, ToolHealthPayload)
+
+    payload = ToolHealthPayload(
+        tool_name="maicraft_speak",
+        provider="maicraft",
+        state="open",
+        failure_count=3,
+        last_error="连接失败",
+    )
+    await event_bus.emit("tool.health.maicraft_speak", payload, source="ToolRegistry", wait=True)
+
+    assert len(seen) == 1
+    event_name, received = seen[0]
+    assert event_name == "tool.health.maicraft_speak"
+    assert received.tool_name == "maicraft_speak"
+    assert received.state == "open"

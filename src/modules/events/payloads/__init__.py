@@ -65,6 +65,7 @@ from .room import (
     SuperChatInfo,
 )
 from .speech import StreamerSpeechPayload
+from .tool_health import ToolHealthPayload
 from .tool_result import ToolResultPayload
 from .utterance import (
     UtteranceFailedPayload,
@@ -101,6 +102,8 @@ __all__ = [
     "StreamerStagePayload",
     # tool.result.* 异步工具结果
     "ToolResultPayload",
+    # tool.health.* 工具健康状态变更
+    "ToolHealthPayload",
     # tts.utterance.* 发声实例生命周期
     "UtteranceStartedPayload",
     "UtteranceFinishedPayload",

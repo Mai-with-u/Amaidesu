@@ -44,6 +44,7 @@ bind_pending_tools(registry)  # L1 @tool pending 刷入
 
 from src.modules.tools.bootstrap import bind_core_tools
 from src.modules.tools.decorator import bind_pending_tools, tool
+from src.modules.tools.health import ToolHealthMonitor
 from src.modules.tools.models import (
     ResultBlock,
     ToolExecutionResult,
@@ -64,6 +65,8 @@ __all__ = [
     "make_provider_from_specs",
     # 注册中心
     "ToolRegistry",
+    # 熔断器探活服务
+    "ToolHealthMonitor",
     # L1 装饰器
     "tool",
     # 装配入口（生产路径）

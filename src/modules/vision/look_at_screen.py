@@ -39,7 +39,7 @@ from src.modules.tools.models import (
     ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import ToolProvider
+from src.modules.tools.provider import BaseToolProvider
 
 logger = get_logger("look_at_screen")
 
@@ -166,7 +166,7 @@ def build_look_at_screen_spec() -> ToolSpec:
 # ---------------------------------------------------------------------------
 
 
-class LookAtScreenProvider(ToolProvider):
+class LookAtScreenProvider(BaseToolProvider):
     """``look_at_screen`` 工具的 ToolProvider（Provider 协议）。
 
     通过构造器注入屏幕采集 / 文本读取后端；测试可传 ``None`` 表示优雅降级。

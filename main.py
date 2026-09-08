@@ -64,7 +64,7 @@ from src.modules.subtitle import build_subtitle_infrastructure
 from src.modules.subtitle.backends import DashboardBackend
 from src.modules.tts import build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
-from src.modules.tools import ToolRegistry
+from src.modules.tools import ToolHealthMonitor, ToolRegistry
 from src.modules.tools.bootstrap import bind_core_tools
 from src.agents.text_adv.content_engine import StubContentEngine
 from src.modules.tools.decorator import bind_pending_tools
@@ -318,6 +318,8 @@ async def create_app_components(
     "SQLiteStore",
     Optional["StorageLedger"],
     "LiveSessionManager",
+    Optional[ToolRegistry],
+    Optional[ToolHealthMonitor],
 ]:
     """组合根：构造并连接所有核心组件。
 
@@ -341,7 +343,8 @@ async def create_app_components(
     Returns:
         (context_service, event_bus, llm_service, dashboard_server,
          event_recorder, collector_manager, agent_manager,
-         simulator_service, sqlite_store, storage_ledger, session_manager)
+         simulator_service, sqlite_store, storage_ledger, session_manager,
+         tool_registry, health_monitor)
     """
     # --- 存储与记忆（SQLiteStore + SimpleMemory）---
     # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
@@ -476,8 +479,14 @@ async def create_app_components(
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
     if agents_config:
         logger.info("初始化 AgentManager（src/agents/）...")
-        # 挂载 EventBus：工具调用完成后广播 tool.result.<name>（Dashboard 溯源消费）
-        tool_registry = ToolRegistry(event_bus=event_bus)
+        # 挂载 EventBus：工具调用完成后广播 tool.result.<name>（Dashboard 溯源消费）；
+        # 熔断器连续失败阈值由 [tools.health].failure_threshold 控制（<=0 关闭熔断）
+        tools_health_cfg = (config.get("tools") or {}).get("health", {}) if isinstance(config, dict) else {}
+        if not isinstance(tools_health_cfg, dict):
+            tools_health_cfg = {}
+        # 注意不可用 `or 3` 兜底：会把用户显式配置的 0（关闭熔断）吞成 3
+        failure_threshold = int(tools_health_cfg.get("failure_threshold", 3))
+        tool_registry = ToolRegistry(event_bus=event_bus, failure_threshold=failure_threshold)
         agent_manager = AgentManager(tool_registry=tool_registry, memory=memory)
 
         # TTS 引擎实例（基础设施，不经 ToolRegistry）：按 [tts] 段装配；
@@ -593,6 +602,25 @@ async def create_app_components(
             applied = tool_registry.apply_disabled(disabled_names)
             logger.info(f"已按 [tools].disabled_tools 停用 {applied} 个工具（重启前配置为唯一事实源）")
 
+        # --- 工具熔断器探活（[tools.health]；装配期启动 monitor，shutdown 关闭）---
+        # monitor 必须先于 agents 启动：agents 已经在跑的情况下熔断工具的恢复不能
+        # 滞后；started=True 后在 [agents] 任何使用 registry 的调用都能看到探活结果。
+        health_monitor: Optional[ToolHealthMonitor] = None
+        if bool(tools_health_cfg.get("enabled", True)):
+            probe_interval_ms = int(tools_health_cfg.get("probe_interval_ms", 30000) or 30000)
+            health_monitor = ToolHealthMonitor(
+                tool_registry,
+                event_bus,
+                probe_interval_ms=probe_interval_ms,
+            )
+            health_monitor.start()
+            logger.info(
+                f"ToolHealthMonitor 已启动（probe_interval_ms={probe_interval_ms}, "
+                f"failure_threshold={failure_threshold}）"
+            )
+        else:
+            logger.info("[tools.health].enabled=false：仅保留 ToolRegistry 熔断判定，跳过探活循环")
+
         await agent_manager.start_all()
         logger.info(f"AgentManager 已启动（{len(agent_manager)} 个 Agent）")
 
@@ -658,6 +686,8 @@ async def create_app_components(
         sqlite_store,
         storage_ledger,
         session_manager,
+        tool_registry if agents_config else None,
+        health_monitor if agents_config else None,
     )
 
 
@@ -1035,8 +1065,10 @@ async def run_shutdown(
     sqlite_store: Optional["SQLiteStore"] = None,
     storage_ledger: Optional["StorageLedger"] = None,
     session_manager: Optional["LiveSessionManager"] = None,
+    tool_registry: Optional[ToolRegistry] = None,
+    health_monitor: Optional[ToolHealthMonitor] = None,
 ) -> None:
-    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），最后 EventBus/ContextService/LLMManager 清理，SQLiteStore.close 收尾落盘。"""
+    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），最后 EventBus/ContextService/LLMManager 清理，SQLiteStore.close 收尾落盘。"""
     _saw_cancelled = False
 
     async def safe_log(coro, name: str):
@@ -1108,6 +1140,21 @@ async def run_shutdown(
         )
         await safe_log(session_manager.stop(), "LiveSessionManager.stop")
 
+    # 工具熔断器探活：先停 monitor 循环（不再触发新的 recover_tool），
+    # 再关闭 MCP stdio 子进程（修停机泄漏——``close_mcp_providers`` 此前
+    # 仅导出未被调用，MCP server 子进程会随 Python 进程一起被强杀）。
+    if health_monitor is not None:
+        logger.info("正在停止 ToolHealthMonitor...")
+        await safe_log(health_monitor.stop(), "ToolHealthMonitor.stop")
+        logger.info("ToolHealthMonitor 已停止")
+
+    if tool_registry is not None:
+        logger.info("正在关闭 MCP Provider（修停机泄漏）...")
+        # 函数体内 import：fastmcp 为可选重型依赖（避免停机路径强制加载）
+        from src.modules.mcp import close_mcp_providers
+
+        await safe_log(close_mcp_providers(tool_registry), "close_mcp_providers")
+
     logger.info("等待待处理事件完成并清理 EventBus...")
     if event_bus is not None:
         await safe_log(event_bus.cleanup(), "EventBus.cleanup")
@@ -1164,6 +1211,8 @@ async def main() -> None:
         sqlite_store,
         storage_ledger,
         session_manager,
+        tool_registry,
+        health_monitor,
     ) = await create_app_components(
         config,
         config_service,
@@ -1195,6 +1244,8 @@ async def main() -> None:
             sqlite_store=sqlite_store,
             storage_ledger=storage_ledger,
             session_manager=session_manager,
+            tool_registry=tool_registry,
+            health_monitor=health_monitor,
         )
         return
 
@@ -1240,6 +1291,8 @@ async def main() -> None:
         sqlite_store=sqlite_store,
         storage_ledger=storage_ledger,
         session_manager=session_manager,
+        tool_registry=tool_registry,
+        health_monitor=health_monitor,
     )
 
 

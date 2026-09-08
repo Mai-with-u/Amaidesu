@@ -26,7 +26,7 @@ from src.modules.tools.models import (
     ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import ToolProvider
+from src.modules.tools.provider import BaseToolProvider
 
 logger = get_logger("content_engine")
 
@@ -291,7 +291,7 @@ def build_content_engine_specs() -> List[ToolSpec]:
     return list(_CONTENT_ENGINE_SPECS)
 
 
-class ContentEngineProvider(ToolProvider):
+class ContentEngineProvider(BaseToolProvider):
     """把 ContentEngine 封装成 5 个工具注册到 ToolRegistry。
 
     工具来源 provider="content_engine"（独立提供者；工具名已带同名前缀，

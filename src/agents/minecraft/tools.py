@@ -29,7 +29,7 @@ from src.modules.tools.models import (
     ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import ToolProvider
+from src.modules.tools.provider import BaseToolProvider
 
 from .state import MinecraftAgentState
 
@@ -180,7 +180,7 @@ def build_get_state_spec() -> ToolSpec:
 
 
 @dataclass(slots=True)
-class MinecraftToolProvider(ToolProvider):
+class MinecraftToolProvider(BaseToolProvider):
     """MinecraftAgent 局部工具 Provider
 
     持有 :class:`MinecraftAgentState`，把"文档式工具"映射为状态读写；

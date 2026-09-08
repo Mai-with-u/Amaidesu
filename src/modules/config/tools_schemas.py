@@ -115,6 +115,28 @@ class McpProviderConfig(ToolProviderConfig):
     model_config = ConfigDict(extra="allow")
 
 
+class ToolsHealthConfig(BaseConfig):
+    """工具熔断器健康监控配置（``[tools.health]`` 段）
+
+    控制 ToolRegistry 的连续失败熔断行为与 ToolHealthMonitor 探活节拍：
+    - ``enabled``：是否装配 ToolHealthMonitor（false 时只保留 registry 侧熔断判定，monitor 不启动）
+    - ``failure_threshold``：连续失败次数达阈值即熔断摘除（``<= 0`` 关闭熔断）
+    - ``probe_interval_ms``：monitor 对熔断工具的探活节拍毫秒；同样用作
+      "熔断后最小驻留时长"——monitor 在 dwell 时间未到时不会尝试恢复
+    """
+
+    enabled: bool = Field(default=True, description="是否启用 ToolHealthMonitor 探活循环")
+    failure_threshold: int = Field(
+        default=3,
+        description="ToolRegistry 连续失败熔断阈值（<=0 关闭熔断，monitor 仍可装配但永不跳闸）",
+    )
+    probe_interval_ms: int = Field(
+        default=30000,
+        gt=0,
+        description="ToolHealthMonitor 探活节拍毫秒；兼作熔断后最小驻留时长",
+    )
+
+
 # ---------------------------------------------------------------------------
 # [tools] 段聚合
 # ---------------------------------------------------------------------------
@@ -178,6 +200,13 @@ class ToolsConfig(BaseConfig):
         json_schema_extra={"x-ui-type": "object"},
     )
 
+    # 工具熔断器健康监控（ToolRegistry 熔断 + ToolHealthMonitor 探活）
+    health: ToolsHealthConfig = Field(
+        default_factory=ToolsHealthConfig,
+        description="工具熔断器健康监控（连续失败熔断 + 探活恢复）",
+        json_schema_extra={"x-ui-type": "object"},
+    )
+
     # 停用的工具名列表：工具仍全量注册（工具页可见全集），但默认对 LLM 不可见
     # 且调用被拒绝；由组合根在装配完成后应用到 ToolRegistry
     disabled_tools: List[str] = Field(
@@ -215,6 +244,8 @@ __all__ = [
     "VisionProviderConfig",
     "MemoryProviderConfig",
     "McpProviderConfig",
+    # 工具熔断器健康监控
+    "ToolsHealthConfig",
     # 聚合
     "ToolsConfig",
     # 顶层根模型

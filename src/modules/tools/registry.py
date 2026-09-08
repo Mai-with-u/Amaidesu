@@ -7,11 +7,14 @@ ToolRegistry —— 工具注册中心
 - 接受 ``ToolProvider`` 整体注册（Provider.list_tools 全量展开）
 - 可选挂载 ``EventBus``：每次调用完成后 emit ``tool.result.<name>``，
   供 Dashboard 溯源（broadcaster 通配订阅 ``tool.result.#``）
+- 可选熔断器：连续失败计数达阈值则摘除工具（tripped），
+  配套 ``ToolHealthMonitor`` 做探活恢复（``src/modules/tools/health.py``）
 
 接口约定：register（去重保留先注册）/ register_provider（注册名统一
 ``<provider>_<工具名>`` 前缀 + 记录 provider 声明的分类）/ list_tools /
 list_categories / invoke（异常→error result 兜底）/ to_llm_definitions
-（内部→LLM 转换层，解耦协议）
+（内部→LLM 转换层，解耦协议）/ recover_tool（探活通过后复位熔断）/
+probe_tool（按名定位 provider 并调用其 ``health_check`` 拿回 bool）。
 """
 
 from __future__ import annotations
@@ -19,17 +22,19 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Literal, Optional
 
+from src.modules.events.payloads.tool_health import ToolHealthPayload
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import ToolProvider
+from src.modules.tools.provider import BaseToolProvider, ToolProvider
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -56,6 +61,25 @@ def _resolve_registered_name(spec: ToolSpec) -> str:
     if spec.name.startswith(prefix):
         return spec.name
     return f"{prefix}{spec.name}"
+
+
+# =============================================================================
+# 单工具健康状态（熔断器内部数据）
+# =============================================================================
+
+
+@dataclass(slots=True)
+class _ToolHealth:
+    """单工具熔断器状态（ToolRegistry 内部使用）。
+
+    字段全部为零值起步；invocation 完成后由 ``invoke`` 维护；外部仅通过
+    ``tool_health_snapshot`` / ``is_tripped`` / ``recover_tool`` 触达。
+    """
+
+    consecutive_failures: int = 0
+    tripped: bool = False
+    tripped_at_ms: int = 0
+    last_error: str = ""
 
 
 # =============================================================================
@@ -107,7 +131,12 @@ def set_default_registry(registry: Optional["ToolRegistry"]) -> None:
 class ToolRegistry:
     """工具注册中心。"""
 
-    def __init__(self, event_bus: Optional["EventBus"] = None) -> None:
+    def __init__(
+        self,
+        event_bus: Optional["EventBus"] = None,
+        *,
+        failure_threshold: int = 3,
+    ) -> None:
         # 按 name 索引：首次注册优先（去重）
         self._tools: Dict[str, tuple[ToolSpec, ToolImplCallable]] = {}
         # Provider 引用（仅诊断 / 重复检测）
@@ -118,7 +147,15 @@ class ToolRegistry:
         # 但对 LLM 不可见（list_tools 默认排除）且调用被拒绝
         self._disabled: set[str] = set()
         # 可选事件总线：挂载后每次调用完成 emit tool.result.<name>
+        # 熔断/恢复时额外 emit tool.health.<name>
         self._event_bus = event_bus
+        # 单工具熔断器状态（仅在 invoke 触发失败/成功后维护）
+        self._health: Dict[str, _ToolHealth] = {}
+        # 连续失败达阈值即熔断（<=0 关闭熔断：状态仍记录、绝不跳闸）
+        self._failure_threshold = failure_threshold
+        # 注册名 → 所属 BaseToolProvider 实例（register_provider 时记录；
+        # 探活按此直查归属，避免 provider.name 与 spec.provider 的字符串耦合）
+        self._tool_owner: Dict[str, BaseToolProvider] = {}
 
     # -------------------- 注册 --------------------
 
@@ -148,10 +185,20 @@ class ToolRegistry:
         拷贝改写 name 后再注册，**不污染** provider ``list_tools()`` 返回的
         原 spec 对象。provider 声明的 ``category`` 一并记录（按 spec.provider
         提供者名归组，供 ``list_categories()`` / ``list_tools(category=)`` 查询）。
+
+        迁移完整性提示：传入对象非 ``BaseToolProvider`` 子类时记 WARNING
+        （每次注册都记——迁移未完成的持续信号，提示补齐 BaseToolProvider 继承）。
+        仍照常注册（向后兼容，不抛错）。
         """
         if provider in self._providers:
             logger.debug(f"Provider '{provider.name}' 已注册过（保留）")
             return 0
+        if not isinstance(provider, BaseToolProvider):
+            logger.warning(
+                f"Provider '{provider.name}'（class={type(provider).__name__}）"
+                "非 BaseToolProvider 子类，属迁移遗留，无法参与探活约定；"
+                "请继承 BaseToolProvider 并按需覆写 health_check"
+            )
         self._providers.append(provider)
         category = getattr(provider, "category", "") or ""
         new_count = 0
@@ -164,6 +211,10 @@ class ToolRegistry:
             self._record_category(spec.provider, category)
             if self.register(reg_spec, provider.invoke):
                 new_count += 1
+            # 记录"注册名 → Provider 实例"所有权：探活按此直查归属，
+            # 不经 provider.name 字符串匹配（name 与 spec.provider 无须同值）
+            if isinstance(provider, BaseToolProvider):
+                self._tool_owner[registered_name] = provider
         logger.info(f"Provider '{provider.name}' 已注册（含 {new_count} 个新工具，总数={len(self._tools)}）")
         return new_count
 
@@ -185,8 +236,9 @@ class ToolRegistry:
         category: Optional[str] = None,
         *,
         include_disabled: bool = False,
+        include_tripped: bool = False,
     ) -> List[ToolSpec]:
-        """返回已注册工具的 spec（默认排除停用工具）。
+        """返回已注册工具的 spec（默认排除停用/熔断工具）。
 
         Args:
             provider: 可选过滤（提供者标识，如 "vts" / "warudo" /
@@ -196,6 +248,8 @@ class ToolRegistry:
             include_disabled: True 时包含已停用工具（工具页展示全集用）；
                 LLM 可见性（Planner / Replyer / to_llm_definitions）走默认
                 排除路径。
+            include_tripped: True 时包含熔断中的工具（Dashboard 工具页展示全集用）。
+                默认排除以避免 LLM 看见已被摘除的工具。
 
         Returns:
             满足条件的 spec 列表（过滤条件为 AND 关系）。
@@ -203,6 +257,8 @@ class ToolRegistry:
         specs = [spec for spec, _ in self._tools.values()]
         if not include_disabled:
             specs = [s for s in specs if s.name not in self._disabled]
+        if not include_tripped:
+            specs = [s for s in specs if not self.is_tripped(s.name)]
         if provider is not None:
             specs = [s for s in specs if s.provider == provider]
         if category is not None:
@@ -263,6 +319,13 @@ class ToolRegistry:
         注意：实施方返回的已经是 ToolExecutionResult；此处只做包一层 +
         未找到时兜底。挂载了 EventBus 时，找到工具并执行完成（无论成败）
         都会 emit ``tool.result.<name>``；emit 失败不影响调用结果。
+
+        熔断器联动：
+        - 未知/停用短路返回 **不** 触达健康状态（与旧契约一致）
+        - 熔断短路返回 **不** emit ``tool.result.<name>``（与未知/停用短路一致）
+        - 实施方成功 → 重置 ``consecutive_failures`` 为 0
+        - 实施方失败（含抛异常）→ ``consecutive_failures += 1``、记 ``last_error``，
+          达到阈值且未跳闸 → 标记 tripped、emit ``tool.health.<name>``（state=open）
         """
         pair = self._tools.get(invocation.tool_name)
         if pair is None:
@@ -283,6 +346,14 @@ class ToolRegistry:
                 error_message=f"工具 '{invocation.tool_name}' 已停用（可在 Web UI 工具页重新启用）",
                 timestamp_ms=int(time.time() * 1000),
             )
+        if self.is_tripped(invocation.tool_name):
+            logger.warning(f"工具 '{invocation.tool_name}' 已熔断，拒绝调用（source={invocation.source or 'unknown'}）")
+            return ToolExecutionResult(
+                tool_name=invocation.tool_name,
+                success=False,
+                error_message="工具已熔断，探活恢复中",
+                timestamp_ms=int(time.time() * 1000),
+            )
         spec, impl = pair
         try:
             result = await impl(invocation)
@@ -297,6 +368,7 @@ class ToolRegistry:
                 error_message=f"{type(exc).__name__}: {exc}",
                 timestamp_ms=int(time.time() * 1000),
             )
+        await self._record_health(spec, result)
         await self._emit_tool_result(spec, result, invocation)
         return result
 
@@ -325,6 +397,168 @@ class ToolRegistry:
             await self._event_bus.emit(spec.resolve_result_event(), payload, source="ToolRegistry")
         except Exception as exc:  # noqa: BLE001 - 观测旁路，不反噬调用方
             logger.warning(f"tool.result 事件广播失败（工具: {spec.name}）: {exc}")
+
+    # -------------------- 熔断器：内部维护 --------------------
+
+    def _ensure_health(self, name: str) -> _ToolHealth:
+        """懒初始化健康状态（首次失败/恢复前不存在）。"""
+        health = self._health.get(name)
+        if health is None:
+            health = _ToolHealth()
+            self._health[name] = health
+        return health
+
+    async def _record_health(self, spec: ToolSpec, result: ToolExecutionResult) -> None:
+        """在 ``invoke`` 主路径上更新单工具熔断器状态。
+
+        - 成功 → 重置连续失败
+        - 失败 → 递增计数、记录最近错误；达到阈值且未跳闸 → 触发熔断并广播
+        """
+        health = self._ensure_health(spec.name)
+        if result.success:
+            health.consecutive_failures = 0
+            health.last_error = ""
+            return
+        health.consecutive_failures += 1
+        health.last_error = result.error_message or ""
+        threshold = self._failure_threshold
+        if threshold > 0 and not health.tripped and health.consecutive_failures >= threshold:
+            health.tripped = True
+            health.tripped_at_ms = now_ms()
+            logger.warning(
+                f"工具 '{spec.name}' 连续失败 {health.consecutive_failures} 次（阈值 {threshold}），"
+                "已熔断摘除，等待探活恢复"
+            )
+            await self._emit_tool_health(
+                spec.name,
+                spec.provider,
+                state="open",
+                failure_count=health.consecutive_failures,
+                last_error=health.last_error,
+            )
+
+    async def _emit_tool_health(
+        self,
+        tool_name: str,
+        provider: str,
+        *,
+        state: Literal["open", "closed"],
+        failure_count: int,
+        last_error: str,
+    ) -> None:
+        """广播工具健康跃迁事件（``tool.health.<name>``）；事件总线缺失或广播失败仅记日志。"""
+        if self._event_bus is None:
+            return
+        try:
+            payload = ToolHealthPayload(
+                tool_name=tool_name,
+                provider=provider,
+                state=state,
+                failure_count=failure_count,
+                last_error=last_error,
+            )
+            await self._event_bus.emit(
+                f"tool.health.{tool_name}",
+                payload,
+                source="ToolRegistry",
+            )
+        except Exception as exc:  # noqa: BLE001 - 观测旁路
+            logger.warning(f"tool.health 事件广播失败（工具: {tool_name}）: {exc}")
+
+    # -------------------- 熔断器：公共 API --------------------
+
+    def is_tripped(self, name: str) -> bool:
+        """工具是否处于熔断状态。"""
+        health = self._health.get(name)
+        return bool(health and health.tripped)
+
+    @property
+    def tripped_tools(self) -> List[str]:
+        """当前熔断中的工具名（排序快照，供 ToolHealthMonitor 遍历）。"""
+        return sorted(name for name, h in self._health.items() if h.tripped)
+
+    def tool_health_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """返回对 Dashboard 有意义的工具健康快照。
+
+        仅包含熔断中或近期有失败的工具；其余工具按 "健康" 处理（Dashboard
+        按缺席键推断）。键为注册名，值包含 provider/state/failure_count/
+        last_error/tripped_at_ms 字段。
+        """
+        snapshot: Dict[str, Dict[str, Any]] = {}
+        for name, health in self._health.items():
+            if not health.tripped and health.consecutive_failures <= 0:
+                continue
+            spec = self._tools.get(name)
+            snapshot[name] = {
+                "provider": spec[0].provider if spec is not None else "",
+                "state": "tripped" if health.tripped else "healthy",
+                "failure_count": health.consecutive_failures,
+                "last_error": health.last_error,
+                "tripped_at_ms": health.tripped_at_ms,
+            }
+        return snapshot
+
+    def recover_tool(self, name: str) -> bool:
+        """手动/探活通过时复位熔断器；返回是否真做了恢复动作。
+
+        同步语义：状态在调用瞬间翻转；``tool.health.<name>`` 跃迁事件通过
+        ``asyncio.create_task`` 后台调度（调用方在 async 上下文时生效，
+        无运行循环时静默丢弃——此情形下事件消费方也不会启动）。
+        """
+        health = self._health.get(name)
+        if health is None or not health.tripped:
+            return False
+        health.consecutive_failures = 0
+        health.tripped = False
+        health.tripped_at_ms = 0
+        health.last_error = ""
+        spec = self._tools.get(name)
+        provider_id = spec[0].provider if spec is not None else ""
+        logger.info(f"工具 '{name}' 已恢复可用（探活通过）")
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 无运行循环：事件总线也无法调度；状态已翻转即可
+            return True
+        loop.create_task(
+            self._emit_tool_health(
+                name,
+                provider_id,
+                state="closed",
+                failure_count=0,
+                last_error="",
+            )
+        )
+        return True
+
+    async def probe_tool(self, tool_name: str) -> bool:
+        """对指定工具调用其所属 provider 的 ``health_check``。
+
+        归属解析走 ``_tool_owner``（注册时记录的"注册名 → Provider 实例"
+        映射），不做任何名字字符串匹配——provider 的 ``name`` 属性与
+        ``spec.provider`` 允许不同值（前者用于日志/去重，后者用于注册名
+        前缀与分组），二者不构成可依赖的对应关系。
+
+        工具未经 ``register_provider`` 注册（如 ``register()`` 直注册的
+        裸函数）时无归属 provider，按基类默认语义返回 True——"无可检查
+        之物，让流量决定"：熔断后冷却期满即恢复，再失败再熔断。
+
+        探活过程异常按不健康处理（warning 日志携带类型 + 消息，返回 False）。
+
+        Returns:
+            True = 当前可用（或无归属 provider、无检查必要）；
+            False = 不可用或探活异常。
+        """
+        owner = self._tool_owner.get(tool_name)
+        if owner is None:
+            return True
+        try:
+            return bool(await owner.health_check())
+        except Exception as exc:  # noqa: BLE001 - 探活异常=不健康，不上抛
+            logger.warning(
+                f"probe_tool: provider '{owner.name}' health_check 异常（{type(exc).__name__}: {exc}），按不健康处理"
+            )
+            return False
 
     async def invoke_many(
         self,
@@ -373,11 +607,14 @@ class ToolRegistry:
         self._providers.clear()
         self._categories.clear()
         self._disabled.clear()
+        self._health.clear()
+        self._tool_owner.clear()
         logger.debug("ToolRegistry 已清空")
 
     # 兼容 inspect / debug
     def __repr__(self) -> str:
-        return f"<ToolRegistry tools={len(self._tools)} providers={len(self._providers)}>"
+        tripped = len(self.tripped_tools)
+        return f"<ToolRegistry tools={len(self._tools)} providers={len(self._providers)} tripped={tripped}>"
 
 
 __all__ = ["ToolRegistry", "default_tool_registry", "set_default_registry"]

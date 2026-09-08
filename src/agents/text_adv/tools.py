@@ -25,7 +25,7 @@ from src.modules.tools.models import (
     ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import ToolProvider
+from src.modules.tools.provider import BaseToolProvider
 
 from .state import TextAdvGameAgentState, TextAdvOption
 
@@ -101,7 +101,7 @@ def build_get_story_spec() -> ToolSpec:
 
 
 @dataclass(slots=True)
-class TextAdvToolProvider(ToolProvider):
+class TextAdvToolProvider(BaseToolProvider):
     """文字冒险 Agent 的专属工具 Provider（provider="text_adv"）
 
     持有 :class:`TextAdvGameAgentState` 和 :class:`ContentEngine`，

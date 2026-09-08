@@ -33,6 +33,7 @@ from src.modules.tools.models import (
     ToolInvocation,
     ToolSpec,
 )
+from src.modules.tools.provider import BaseToolProvider
 
 from .expression_controller import ExpressionController
 from .hotkey_matcher import HotkeyMatcher
@@ -137,7 +138,7 @@ _VTS_SET_IDLE_SCHEMA: Dict[str, Any] = {
 # =============================================================================
 
 
-class VTSProvider:
+class VTSProvider(BaseToolProvider):
     """VTS 虚拟形象 ToolProvider
 
     实现 ToolProvider 协议，编排各引擎子件。
@@ -817,10 +818,5 @@ def register_vts_tools(
         config=config,
         event_bus=event_bus,
     )
-    if hasattr(registry, "register_provider"):
-        registry.register_provider(provider)
-    else:
-        # fallback：手动注册每个 spec
-        for spec in provider.list_tools():
-            registry.register(spec, provider.invoke)
+    registry.register_provider(provider)
     return provider

@@ -105,7 +105,7 @@ async def close_mcp_providers(registry: ToolRegistry) -> None:
     """
     # 通过 registry 的内部 provider 列表访问（避免破坏封装——仅诊断用途
     # 的关闭钩子，不新增公开 API）
-    providers = getattr(registry, "_providers", None) or []
+    providers = registry._providers
     for prov in providers:
         if isinstance(prov, McpToolProvider):
             try:

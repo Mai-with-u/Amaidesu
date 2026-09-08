@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.provider import BaseToolProvider
 
 # python-osc 软降级
 try:
@@ -59,7 +60,7 @@ _VRCHAT_TRIGGER_GESTURE_SCHEMA: Dict[str, Any] = {
 }
 
 
-class VRChatProvider:
+class VRChatProvider(BaseToolProvider):
     """VRChat 虚拟形象 ToolProvider（OSC 协议）"""
 
     PROVIDER_NAME = "vrchat"
@@ -266,9 +267,5 @@ def register_vrchat_tools(
         config=config,
         event_bus=event_bus,
     )
-    if hasattr(registry, "register_provider"):
-        registry.register_provider(provider)
-    else:
-        for spec in provider.list_tools():
-            registry.register(spec, provider.invoke)
+    registry.register_provider(provider)
     return provider

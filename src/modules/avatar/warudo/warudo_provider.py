@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.provider import BaseToolProvider
 
 from .state.warudo_state_manager import WarudoStateManager
 from .subtitle.subtitle_manager import WarudoSubtitleManager
@@ -124,7 +125,7 @@ _WARUDO_STATE_SCHEMA: Dict[str, Any] = {
 # =============================================================================
 
 
-class WarudoProvider:
+class WarudoProvider(BaseToolProvider):
     """Warudo 虚拟形象 ToolProvider
 
     实现 ToolProvider 协议，编排各引擎子件。
@@ -660,9 +661,5 @@ def register_warudo_tools(
         config=config,
         event_bus=event_bus,
     )
-    if hasattr(registry, "register_provider"):
-        registry.register_provider(provider)
-    else:
-        for spec in provider.list_tools():
-            registry.register(spec, provider.invoke)
+    registry.register_provider(provider)
     return provider

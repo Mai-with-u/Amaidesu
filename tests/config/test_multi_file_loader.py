@@ -102,7 +102,7 @@ class TestLoading:
         assert version == CONFIG_VERSION
         # 此处硬编码版本号与 CONFIG_VERSION 锁定一致——升版本时**必须**同步更新，
         # 否则"升了版本但没改测试"会让回归用例失明。
-        assert version == "2.0.25"
+        assert version == "2.0.26"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

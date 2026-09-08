@@ -20,7 +20,7 @@ from typing import ClassVar, Iterable, List, Optional
 from src.modules.agents.manager import AgentManager
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
-from src.modules.tools.provider import ToolProvider
+from src.modules.tools.provider import BaseToolProvider
 
 logger = get_logger("AgentControl")
 
@@ -174,7 +174,7 @@ class AgentControl:
 
 
 @dataclass(slots=True)
-class AgentControlProvider(ToolProvider):
+class AgentControlProvider(BaseToolProvider):
     """把 AgentControl 工具注册到 ToolRegistry 的 Provider。"""
 
     manager: AgentManager
