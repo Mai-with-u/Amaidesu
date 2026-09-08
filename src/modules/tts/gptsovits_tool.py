@@ -27,7 +27,7 @@ from .common import (
     emit_utterance_finished,
     emit_utterance_started,
 )
-from .gptsovits_client import GPTSoVITSClient
+from .gptsovits_client import GPTSoVITSClient, GPTSoVITSServiceError
 
 if TYPE_CHECKING:
     pass
@@ -263,9 +263,20 @@ class GPTSoVITSProvider:
             self.audio_manager.stop_stream()
             self.logger.warning("TTS 渲染被取消（已截断播放）: utterance_id=: {}", utterance_id)
             raise
+        except GPTSoVITSServiceError as e:
+            # 服务未启动等环境故障是预期内的：简短告警即可，不打全量 traceback
+            self.error_count += 1
+            self.logger.warning("TTS 渲染失败: {}（本条放弃，等待服务恢复）", e)
+            await emit_utterance_failed(
+                self.event_bus,
+                utterance_id=utterance_id,
+                engine=self.PROVIDER_NAME,
+                error_message=str(e),
+            )
+            raise
         except Exception as e:
             self.error_count += 1
-            self.logger.opt(exception=True).error("TTS 渲染失败: : {}", e)
+            self.logger.opt(exception=True).error("TTS 渲染失败: {}", e)
             await emit_utterance_failed(
                 self.event_bus,
                 utterance_id=utterance_id,

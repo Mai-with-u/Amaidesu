@@ -5,8 +5,9 @@ GPTSoVITSClient 测试
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
-from src.modules.tts.gptsovits_client import GPTSoVITSClient
+from src.modules.tts.gptsovits_client import GPTSoVITSClient, GPTSoVITSServiceError
 
 
 @pytest.fixture
@@ -202,6 +203,41 @@ class TestGPTSoVITSClient:
         with pytest.raises(Exception, match="流式 TTS 请求失败"):
             result = client.tts_stream(text="测试文本", text_lang="zh")
             list(result)  # 触发迭代器
+
+    @patch("src.modules.tts.gptsovits_client.requests.get")
+    def test_tts_stream_connection_error_translated(self, mock_get, client):
+        """服务未启动：连接错误转译为简短 GPTSoVITSServiceError，不携带底层噪声"""
+        mock_get.side_effect = requests.exceptions.ConnectionError(
+            "HTTPConnectionPool(host='127.0.0.1', port=9880): Max retries exceeded "
+            "with url: /?text=xxx (Caused by NewConnectionError(...))"
+        )
+
+        with pytest.raises(GPTSoVITSServiceError) as exc_info:
+            client.tts_stream(text="测试文本", text_lang="zh")
+
+        message = str(exc_info.value)
+        assert "服务不可达" in message
+        assert "http://127.0.0.1:9880" in message
+        assert "HTTPConnectionPool" not in message
+        assert "Max retries" not in message
+        # 原始异常保留在 __cause__ 供调试
+        assert isinstance(exc_info.value.__cause__, requests.exceptions.ConnectionError)
+
+    @patch("src.modules.tts.gptsovits_client.requests.get")
+    def test_tts_connection_error_translated(self, mock_get, client):
+        """同步 TTS：连接错误同样转译为简短业务异常"""
+        mock_get.side_effect = requests.exceptions.ConnectionError("refused")
+
+        with pytest.raises(GPTSoVITSServiceError, match="服务不可达"):
+            client.tts(text="测试文本", text_lang="zh")
+
+    @patch("src.modules.tts.gptsovits_client.requests.get")
+    def test_tts_stream_timeout_translated(self, mock_get, client):
+        """超时转译为简短业务异常"""
+        mock_get.side_effect = requests.exceptions.Timeout("timed out")
+
+        with pytest.raises(GPTSoVITSServiceError, match="请求超时"):
+            client.tts_stream(text="测试文本", text_lang="zh")
 
     @patch("src.modules.tts.gptsovits_client.requests.get")
     def test_check_connection_success(self, mock_get, client):

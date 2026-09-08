@@ -27,6 +27,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
 )
+from src.modules.tts.gptsovits_client import GPTSoVITSServiceError
 from src.modules.tts.gptsovits_tool import (
     DTYPE,
     GPTSoVITSProvider,
@@ -288,6 +289,37 @@ class TestUtteranceEventsFailed:
         assert failed.utterance_id == "utt_fail_1"
         assert failed.engine == "gptsovits"
         assert "ws closed" in failed.error_message
+
+    async def test_service_unavailable_emits_failed_with_short_message(self, event_bus_async: EventBus):
+        """服务未启动（GPTSoVITSServiceError）：failed 事件携带简短消息并 raise"""
+        provider = GPTSoVITSProvider(config={"type": "gptsovits"}, event_bus=event_bus_async)
+        captured: list[tuple[str, object]] = []
+
+        async def capture(event_name: str, data: object, source: str) -> None:
+            captured.append((event_name, data))
+
+        event_bus_async.on(CoreEvents.TTS_UTTERANCE_FAILED, capture, model_class=UtteranceFailedPayload)
+
+        await _prepare_started_provider(
+            provider,
+            tts_client_mock=MagicMock(
+                tts_stream=MagicMock(
+                    side_effect=GPTSoVITSServiceError("GPT-SoVITS 服务不可达 (http://127.0.0.1:9880)，请确认服务已启动")
+                )
+            ),
+        )
+
+        with pytest.raises(GPTSoVITSServiceError, match="服务不可达"):
+            await provider.handle_speech("你好", utterance_id="utt_svc_down")
+
+        await event_bus_async.cleanup()
+
+        failed_events = [e for e in captured if e[0] == CoreEvents.TTS_UTTERANCE_FAILED]
+        assert len(failed_events) == 1
+        failed = failed_events[0][1]
+        assert isinstance(failed, UtteranceFailedPayload)
+        assert "服务不可达" in failed.error_message
+        assert "HTTPConnectionPool" not in failed.error_message
 
 
 @pytest.mark.asyncio

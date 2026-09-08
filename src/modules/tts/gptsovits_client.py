@@ -8,11 +8,20 @@ GPT-SoVITS TTS 客户端
 """
 
 import re
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, NoReturn, Optional
 
 import requests
 
 from src.modules.logging import get_logger
+
+
+class GPTSoVITSServiceError(Exception):
+    """GPT-SoVITS 服务不可达 / 请求失败。
+
+    requests 的连接类异常字符串携带完整 URL 与底层连接池细节，直接抛出
+    会把日志刷成数百行 traceback；本异常只保留对排查有用的简短信息
+    （服务地址 + 失败类别），原始异常经 ``__cause__`` 保留供调试器查看。
+    """
 
 
 class GPTSoVITSClient:
@@ -234,6 +243,14 @@ class GPTSoVITSClient:
             params["prompt_language"] = prompt_lang or "zh"
         return params
 
+    def _raise_service_error(self, e: requests.exceptions.RequestException) -> NoReturn:
+        """把 requests 连接类异常转译为简短业务异常（服务未启动时避免日志刷屏）"""
+        if isinstance(e, requests.exceptions.ConnectionError):
+            raise GPTSoVITSServiceError(f"GPT-SoVITS 服务不可达 ({self.base_url})，请确认服务已启动") from e
+        if isinstance(e, requests.exceptions.Timeout):
+            raise GPTSoVITSServiceError(f"GPT-SoVITS 服务请求超时 ({self.base_url})") from e
+        raise GPTSoVITSServiceError(f"GPT-SoVITS 服务请求失败 ({type(e).__name__})") from e
+
     def tts(
         self,
         text: str,
@@ -305,11 +322,14 @@ class GPTSoVITSClient:
             super_sampling=super_sampling,
         )
 
-        response = requests.get(
-            f"{self.base_url}/",
-            params=params,
-            timeout=self._timeout[1],
-        )
+        try:
+            response = requests.get(
+                f"{self.base_url}/",
+                params=params,
+                timeout=self._timeout[1],
+            )
+        except requests.exceptions.RequestException as e:
+            self._raise_service_error(e)
 
         if response.status_code != 200:
             error_msg = response.json().get("message", "Unknown error")
@@ -387,13 +407,16 @@ class GPTSoVITSClient:
             super_sampling=super_sampling,
         )
 
-        response = requests.get(
-            f"{self.base_url}/",
-            params=params,
-            stream=True,
-            timeout=self._timeout,
-            headers={"Connection": "keep-alive"},
-        )
+        try:
+            response = requests.get(
+                f"{self.base_url}/",
+                params=params,
+                stream=True,
+                timeout=self._timeout,
+                headers={"Connection": "keep-alive"},
+            )
+        except requests.exceptions.RequestException as e:
+            self._raise_service_error(e)
 
         if response.status_code != 200:
             error_msg = response.json().get("message", "Unknown error")
@@ -418,5 +441,5 @@ class GPTSoVITSClient:
                 self.logger.warning(f"GPT-SoVITS 服务器响应异常: {response.status_code}")
             return is_connected
         except Exception as e:
-            self.logger.error("检查 GPT-SoVITS 连接失败: : {}", e)
+            self.logger.error("检查 GPT-SoVITS 连接失败: {}", e)
             return False
