@@ -295,6 +295,7 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | `game.milestone` | `GamePayload` | 游戏 Agent（§1.49 BaseAgent 事件上报面） | `EventRecorder`（L75 `component_model_map`）；`Broadcaster`（通过 `event_type_map` 转发给组件 handler）；`StorageLedger`（通配订阅 `game.*` → `game_events` 表） | 游戏重大进展（挖到钻石 / 通关章节）；`event_type="milestone"` |
 | `game.attention_required` | `GamePayload` | 游戏 Agent | `EventRecorder`（L76）；`Broadcaster`（`event_type_map` 转发）；`StorageLedger`（`game.*` 通配 → `game_events`） | 安全阀偏差报告（"我先回血再去挖钻石"）；`event_type="attention_required"` |
 | `game.error` | `GamePayload` | 游戏 Agent | `EventRecorder`（L77）；`Broadcaster`（`event_type_map` 转发）；`StorageLedger`（`game.*` 通配 → `game_events`） | 游戏异常；`event_type="error"` |
+| `game.report` | `GamePayload` | 游戏 Agent（`minecraft_report` 工具回调 / 批次终止系统兜底交付） | `StreamerAgent`（`_on_game_event` 叙事收集，主播"是否回提示词"的决策数据源）；`EventRecorder`；`Broadcaster`（`event_type_map` 转发）；`StorageLedger`（`game.*` 通配 → `game_events`） | 游戏 Agent 主动向派发方上报——交付总结 / 升级决策；`event_type="report"`，`report_kind`（`delivery`/`escalation`，仅本事件有值） |
 | `agenda.update` | `AgendaPayload` | `StreamerAgent`（Agenda 环节推进/手动控制后；AgendaSegment 适配为运行进度条目形状） | `EventRecorder` + Dashboard Broadcaster（前端订阅以触发节目单快照重拉） | AgendaItem 运行进度变更（done=环节完成 / schedule=进度位置变更；insert 预留） |
 | `planner.checkpoint` | `CheckpointPayload` | 空转探测器（后台轻循环，§1.7） | `EventRecorder`（L67，`model_class=None` 兜底）；`Broadcaster`（L96 / L112-115 `_subscribe_core_events`）；`Widget`（`widget/service.py` L88-92） | 空转检查点提醒（纯提醒零决策，携带当前 AgendaItem 定位） |
 | `planner.decision` | `PlannerDecisionPayload` | `StreamerAgent`（`_make_two_stage_decision` 收口，每轮恰好一条，成功/失败/低置信度降级全覆盖） | `EventRecorder`（`_on_named_event`，type=事件名）、`Broadcaster`（WS type `planner.decision`）、观察器（决策卡） | 决策轮记录：`round_id`（`rnd_{epoch_ms}_{seq}`，本轮弹幕批次/决策/发言/工具结果共同关联键）、触发原因、批次摘要、决策结论、`reply_to_message_id`（回复关联键）、`silent_reason`（low_confidence=低置信度压制）、`error`、`planner_raw`（截断原文）、`llm_request_id`（请求历史指针）、分段耗时 |
@@ -313,7 +314,7 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | Payload 类 | 注册到的事件 |
 |---|---|
 | `RoomMessagePayload` | `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.enter`（`room.py` L81-84 四重注册，按 `message_type` 字段判别） |
-| `GamePayload` | `game.milestone` / `game.attention_required` / `game.error`（`game.py` L22-24 三重注册，按 `event_type` 字段判别） |
+| `GamePayload` | `game.milestone` / `game.attention_required` / `game.error` / `game.report`（`game.py` 四重注册，按 `event_type` 字段判别） |
 | `ToolResultPayload` | **不绑定**具体 `tool.result.*` 事件名（`tool_result.py` L22-25 注释明确），emit 时用具体名 `tool.result.<tool_name>`，handler 按 `tool_name` 字段分发 |
 | `ToolHealthPayload` | **不绑定**具体 `tool.health.*` 事件名（`tool_health.py` L20-23 注释明确），emit 时用具体名 `tool.health.<tool_name>`，handler 按 `tool_name` 字段分发 |
 
@@ -324,7 +325,7 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 - `ROOM_MESSAGE_DANMAKU` / `GIFT` / `SUPER_CHAT` / `ENTER`（4 类 RoomMessagePayload）
 - `CORE_STARTUP` / `CORE_SHUTDOWN` / `CORE_ERROR`
 - `PLANNER_CHECKPOINT` / `AGENDA_UPDATE`（`model_class=None` 兜底）
-- `GAME_MILESTONE` / `GAME_ATTENTION_REQUIRED` / `GAME_ERROR`（`EventRecorder` 以 `GamePayload` 订阅）
+- `GAME_MILESTONE` / `GAME_ATTENTION_REQUIRED` / `GAME_ERROR` / `GAME_REPORT`（`EventRecorder` 以 `GamePayload` 订阅）
 
 > **注意**：当前 `room.message.gift` / `super_chat` / `enter` 三个事件的**订阅者仅 `EventRecorder`**，记账入库但不驱动决策（决策侧仅消费 `danmaku` 高价值信号）。其他潜在订阅点（礼物感谢 / 进房欢迎 / SC 复读）尚未接入，待规划。
 
@@ -864,19 +865,3 @@ class MyPayload(BasePayload):
 - [架构决策记录](adr/README.md)
 
 ---
-
-*最后更新：2026-09-06（事件历史持久层迁移：EventHistoryRecorder 记录面从 `data/events/*.jsonl` 每日文件改为 SQLite `event_history` 表——`EventHistoryService` 保留内存环形缓冲供 Dashboard 热查询（recent/游标续传/按场次过滤不变），落库经 fire-and-forget 异步写、失败仅告警；启动时 `backfill_today_from_store` 从表回灌当日事件（Dashboard 重启不再丢当日历史）；`EventRecord` 新增 `event_name`（EventBus 精确事件名，修正旧录制 type 粗粒度导致回放过滤永不命中的缺陷）与 `timestamp_ms` 字段；`[events].persist` 语义改为写库，CONFIG_VERSION 2.0.17）*
-
-*最后更新：2026-09-08（事件事实表新增 `tool.health.<tool_name>` 与 `tool.health.#` 通配占位符：发布者 `ToolRegistry`（熔断判定与探活恢复的统一出口，仅在状态跃迁时发——连续失败达阈值熔断时 `state="open"`、`recover_tool` 复位时 `state="closed"`），订阅者 Dashboard 转发层，`tool.health.#` 通配一站式监听；Payload `ToolHealthPayload` 含 `tool_name` / `provider` / `state` / `failure_count` / `last_error` / `timestamp_ms`，与 `ToolResultPayload` 同为通配族 Payload、不绑定具体事件名；类→多事件共享表补 `ToolHealthPayload` 行）*
-
-*最后更新：2026-09-06（遗留接线补全：`agenda.update` 由 `StreamerAgent` 在环节推进/手动控制后实际发布——此前只有订阅端，Dashboard/OutlineWorkbench 依赖该事件重拉节目单快照；`AgendaIdle` 推进到末尾补上缺失的 on_advance 回调）
-
-*最后更新：2026-09-06（接线收口：删除 `connection.event` 死注册及其 Payload——零发布零订阅，`EventRecorder` 的 game.* 订阅 model_class 由误用的 `ConnectionEventPayload` 修正为 `GamePayload`、`planner.checkpoint`/`agenda.update` 由 BasePayload 兜底修正为注册类型；`tool.result.<name>` 由 `ToolRegistry.invoke` 在工具执行完成后广播（挂载 EventBus 时），Dashboard Broadcaster 的 `tool.result.#` 通配订阅自此有数据源；拦截器作用域落地为声明式 `scope_prefixes` 机制——限流/相似过滤显式声明 `room.message.*` 域，实现与本文档既有声明一致；Payload 目录树补 `speech.py`）
-
-*最后更新：2026-09-06（场次语义落地 + 决策可观测：`live.started`/`live.ended` 发布者改为 `LiveSessionManager`，Payload 由一类双注册拆为 `LiveStartedPayload`/`LiveEndedPayload`（`live_session_id` 变为 INTEGER 主键，含 `empty_discarded` 空场次丢弃标记）；新增 `planner.decision`（决策轮记录，`round_id` 关联键、`reply_to_message_id` 回复关联、`silent_reason` 降级标记、`llm_request_id` 请求历史指针）与 `streamer.stage`（决策管线阶段状态）两事件；`streamer.speech` Payload 增加 `reply_to_message_id` 与场次盖章说明；`room.message.*` 的 `live_session_id` 由发布方填写改为场次盖章拦截器统一注入，新增 `message_id` 关联键）*
-
-*上次更新：2026-09-06（事件事实表 `game.milestone` / `game.attention_required` / `game.error` 三行订阅者列新增 `StorageLedger`（通配订阅 `game.*` → `game_events` 表，按 `event_type` 判别；写链先行接通，游戏代理上线即自动落库））*
-
-*最后更新：2026-09-05（事件事实表补 `streamer.speech` 行（此前缺失）：发布者 StreamerAgent、订阅者 SimulatorService + Broadcaster（本次 Broadcaster 新增订阅，WS type `streamer.speech`，服务 DevTools 主播发言测试的实时发言流）；v2.0.12 §8 概念修正：TTS 提升为基础设施。事件事实表 `tts.utterance.*` 三事件发布者由"TTS 引擎工具自身"改为"TTS 引擎（基础模块，非工具）"+ 装配期单选构造注入 StreamerAgent 说明；TTS Utterance 域小节发布者条款改写："发布者"由"TTS 引擎工具自身 + `invoke` 收到非空 `utterance_id`"改为"TTS 引擎自身（基础模块，非工具）+ `handle_speech` 收到非空 `utterance_id`"；订阅者段 [数据流规则] 章节锚点 §5 → §6（消费者通道三分法已迁至 §6）；Payload 形状差异、终点广播防环约束、发布-only 三条不变；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
-
-*上次更新：2026-08-25（v2.0.0 语义域事件对齐：移除三阶段事件表，新增 15 常量 + 通配占位符事实表，新增 MQTT 通配订阅章节，重写 Payload/订阅者/拦截器作用域）*

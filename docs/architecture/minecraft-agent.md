@@ -1,6 +1,6 @@
 # MinecraftAgent 设计
 
-Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：普通 ReAct Agent——用 MCP 工具玩 Minecraft，主播 Agent 是它的用户。
+Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 ReAct Agent——用 MCP 工具玩 Minecraft，主播 Agent 是它的用户。
 
 ## 驱动原则
 
@@ -12,32 +12,50 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：普通 ReAct Age
 **MinecraftAgent = 一个用 MCP 工具玩 Minecraft 的普通 ReAct Agent。**
 
 - 系统提示词 + 工具面 = 全部"编程"，不发明任何特殊协议
-- 主播 Agent 是它的用户：派任务（`minecraft_assign`）、看进度（`minecraft_get_state`）、被事件触发（game.*）
-- MCP 串行不特殊处理——LLM 自己明白 execute 返回 task_id 后自主用 `maicraft_task` 查询/应答，系统零干预
+- 主播 Agent 是它的用户：发提示词（`minecraft_send_prompt`）、看进度（`minecraft_get_state`）、收上报（`game.report`）
+- execute 受理异步是唯一系统特判：`maicraft_execute` 返回受理回执（task_id），真实执行由 Mod 后台 tick 驱动（分钟级）——系统登记 handoff 跟踪，事件驱动唤醒（见下节），LLM 不用推理步数轮询
 - LLM 可一次返回多个 tool_calls（批量请求 → 串行执行 → 批量喂回，标准 function calling 循环）
 
-## 任务生命周期（ReAct 循环）
+## 任务生命周期（事件驱动 ReAct）
 
 ```
 空闲（事件挂起，零消耗，无 LLM/无 MCP 调用）
-  │ 主播调 minecraft_assign("建一座房子")
+  │ 主播调 minecraft_send_prompt("建一座房子")
   ▼
 消息入队 → 唤醒
   ▼
-任务循环（每步 = 一次 LLM 推理）：
-  ├─ flush 新消息 → 追加为 user 消息（怎么吸收是 LLM 的决策——系统不硬转向）
+任务批次（每步 = 一次 LLM 推理）：
+  ├─ flush 新消息（主播提示词 / 系统注入的任务快照）→ user 消息
   ├─ 规整对话历史（旧观察 → 占位符，保留最近 N 条）
   ├─ LLM 推理（系统提示词 + 对话历史 + 工具面）→ tool_calls（可多个）
   ├─ 串行执行（局部工具直接落状态；其余经 ToolRegistry 透传 = MCP 调用）
-  │    └─ todo write 后 diff：pending→done 转变 → 发 game.milestone（只发一次）
+  │    └─ execute 受理回执（accepted=true + task_id）→ 登记 handoff 跟踪
   ├─ 工具结果作为观察喂回（OpenAI tool role + tool_call_id 关联）
-  └─ 终止：LLM 无 tool_calls（自然终止，最终文本 → 交付里程碑）
-          或步数超上限（game.attention_required 挂起）
-          或进程停止 / 平台暂停
-  → 清空对话历史（todo/notebook/milestones 保留），回空闲
+  └─ 批次终止语义（五条，全部系统可判定，见下节）
+  → 回空闲（todo/notebook/reports 保留；handoff 跟踪跨批次持续）
 ```
 
 暂停语义：平台 pause 在步骤间与工具调用间挂起（不打断当前执行中的工具调用），resume 后继续。
+
+### 批次终止语义
+
+| # | 情形 | 行为 |
+|---|------|------|
+| 1 | LLM 调 `minecraft_report(kind=delivery)` | 停止；工具内交付门禁：有未决 handoff → 拒绝并返回错误观察（LLM 自纠） |
+| 2 | LLM 调 `minecraft_report(kind=escalation)` | 停止，静默等主播 `send_prompt` 唤醒 |
+| 3 | 自然终止，无 report、无未决 handoff | 系统兜底把终止文本包装为一次 delivery（主播必收到一次且仅一次交付） |
+| 4 | 自然终止，有未决 handoff | 静默让出回合，等 handoff 唤醒 |
+| 5 | 步数超 max_steps | `game.attention_required` 挂起 |
+
+### handoff 跟踪（受理 → 唤醒）
+
+execute 受理 ≠ 完成：等待期 LLM 自由行动（推进其他 todo / 记笔记 / 响应主播），系统负责把后台任务的真实进展送回来。
+
+- **订阅通知**：handoff 登记时订阅 MaiCraft attention 资源（`maicraft://attention`，标准 MCP resources/subscribe，通道能力见 `McpClient.subscribe_resource`）；handoff 清空即退订
+- **周期兜底**：订阅通知是提示（advisory，单槽合并、可丢）——`execute_poll_interval_ms` 到点也核实一次（防丢通知/断连）
+- **事实核实**：通知/到点 → `maicraft_task(action="get")` 核实快照；**状态真迁移才注入**消息队列 + 唤醒 worker（虚假/无关通知 = 继续睡，LLM 零消耗）
+- **wait_timeout**：`execute_wait_timeout_ms` 长期无进展 → 注入告警消息（不杀任务，deadline 顺延），LLM 自行决定后续
+- 终态（success/failed/timeout/cancelled）注入后移除跟踪；决策点（waiting_for_decision）/暂停注入后保留跟踪（LLM 用 `maicraft_task(action="answer")` 应答后任务恢复后台跑）
 
 ## 工具契约
 
@@ -47,23 +65,24 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：普通 ReAct Age
 
 | 工具 | 说明 |
 |---|---|
-| `minecraft_todo` | 待办文档（read/write 全量读写，无 id）。任务分解与推进由 LLM 自主决策；完成项由 LLM 标 done（系统自动 diff 发里程碑） |
-| `minecraft_notebook` | 工作笔记（read/write）。持久记忆：对话历史会压缩、笔记不会——重要发现写这里，主播可经状态查询看到 |
-| `maicraft_perceive` / `maicraft_execute` / `maicraft_task` 等 | registry 动态发现的 MCP 工具（每任务开始时重新拉取，非启动快照——Mod 重连后工具面变化可见）；参数按 Mod 定义填写 |
+| `minecraft_todo` | 待办文档（read/write 全量读写，无 id）。任务分解与推进由 LLM 自主决策 |
+| `minecraft_notebook` | 工作笔记（read/write）。持久记忆：对话历史会压缩、笔记不会——重要发现写这里 |
+| `minecraft_report` | 上报通道（玩家→主播唯一发声出口）：delivery 交付总结 / escalation 升级决策 |
+| `maicraft_perceive` / `maicraft_execute` / `maicraft_task` 等 | registry 动态发现的 MCP 工具（每任务重新拉取）；参数按 Mod 定义填写 |
 
 **对外工具**（主播侧调，不进 LLM 工具面）：
-- `minecraft_assign`：命令通道——纯消息投递 + 唤醒；系统不代写 todo（目标分解是 LLM 用 `minecraft_todo` 自己做的事）
-- `minecraft_get_state`：状态通道——只读返回 `{todo, notebook, recent_milestones}` 三元组
+- `minecraft_send_prompt`：提示词通道——纯消息投递 + 唤醒；主播是玩家 Agent 的用户（派发/调整任务、回答问题、补充要求），系统不代写 todo
+- `minecraft_get_state`：状态通道——只读返回 `{todo, notebook, recent_reports}` 三元组
 
 ## 事件契约（确定性系统事件，无 LLM 自觉汇报）
 
 | 事件 | 触发 |
 |---|---|
-| `game.milestone` | ① todo 项 pending→done（diff，重写不重复）② 交付总结（LLM 终止文本） |
+| `game.report` | LLM 调 `minecraft_report`（delivery/escalation）或批次终止系统兜底交付；kind 见 `GamePayload.report_kind` |
 | `game.attention_required` | 步数超上限挂起 |
 | `game.error` | 工具执行异常 / LLM 调用失败 / 无 LLM fail-fast |
 
-事件 payload 复用 `GamePayload`（`game="minecraft"`）；里程碑同时进内存 `recent_milestones`（状态查询数据源，保留最近 10 条）。
+事件 payload 复用 `GamePayload`（`game="minecraft"`）；上报同时进内存 `recent_reports`（状态查询数据源，保留最近 10 条）。`game.milestone` 不再由本 Agent 发射（todo-diff 自动里程碑已移除，防主播叙事刷屏）——剧情推进语义留给 text_adv。
 
 ## 对话管理与压缩
 
@@ -74,15 +93,21 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：普通 ReAct Age
 ## 配置
 
 ```toml
-[agents.game.minecraft]
-max_steps = 50   # 单任务 ReAct 循环最大步数（超出挂起上报，防失控）
+[agents.minecraft]
+max_steps = 50                    # 单任务 ReAct 循环最大步数（超出挂起上报，防失控）
+execute_poll_interval_ms = 2000   # handoff 周期兜底核实间隔
+execute_wait_timeout_ms = 1800000 # 后台任务单轮 wait_timeout 上限（告警不杀任务）
+
+[agents.minecraft.mcp]            # Agent 私有 MCP（位置即归属，owner_agent="minecraft"）
+enabled = true
+url = "http://127.0.0.1:8766/mcp"
 ```
 
-无时间循环字段（tick 已取消）。配 `CONFIG_VERSION` 同步规则：配置结构变更升版本号并保证漂移写回。
+配 `CONFIG_VERSION` 同步规则：配置结构变更升版本号并保证漂移写回。
 
 ## 解耦边界
 
-- agent 领域核心零 maicraft 知识：工具面经 registry 动态发现；MCP server 连接由通道层路由（`McpToolProvider` 绑定 server 的 client），agent 不感知
+- agent 领域核心零 maicraft 接口知识：工具面经 registry 动态发现（任务查询工具按原始名后缀匹配，注册名前缀形态不定）；MCP server 连接由通道层路由（`McpToolProvider` 绑定 server 的 client），agent 不感知
 - 工具失败作为错误观察喂回 LLM（ReAct 标准，LLM 自调整）；连续失败由 max_steps 兜底
 - 内容特有逻辑内聚 `src/agents/minecraft/` 包（加内容=加包+配置，框架零改动）
 
@@ -90,9 +115,6 @@ max_steps = 50   # 单任务 ReAct 循环最大步数（超出挂起上报，防
 
 - [架构总览](overview.md) — 组件图与目录结构
 - [v2.0.0 架构叙事](v2-architecture.md) — Agent/Tool 判据推导
+- [事件系统](event-system.md) — game.* 事件语义单一事实源
 - [数据流规则](data-flow.md) — 事件流约束
 - [组件开发指南](../development/component-guide.md) — 游戏 Agent 范式
-
----
-
-*最后更新：2026-09-08（MinecraftAgent ReAct 设计定稿：命令驱动任务生命周期、工具契约与命名规则、确定性事件契约、对话压缩分级、解耦边界）*
