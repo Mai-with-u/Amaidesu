@@ -304,7 +304,7 @@ async def asyncio_sleep_ms(ms: int) -> None:
 | `ResultBlock` | `src/modules/tools/models.py` | `kind` (`"text"`/`"image"`), `text`, `data` (base64), `mime_type` |
 | `ToolProvider`（Protocol） | `src/modules/tools/provider.py` | `name` 属性、`list_tools()`、`async invoke(invocation) -> ToolExecutionResult`（**永不抛异常**） |
 | `BaseToolProvider`（ABC） | `src/modules/tools/provider.py` | 所有经 `register_provider` 装配的 Provider 的继承基类；带 `category` ClassVar 与 `health_check` 探活钩子默认实现 |
-| `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider)` / `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(provider=)` / `probe_tool(name)`（熔断器探活入口） |
+| `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider, *, owner_agent="")`（`owner_agent` 非空即归属限定）/ `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(provider=, include_scoped=False)` / `scoped_owner_of(name)` / `probe_tool(name)`（熔断器探活入口） |
 | `default_tool_registry()` | `src/modules/tools/registry.py` | 进程内单例；`@tool` 装饰器默认注册到这里 |
 
 ### Provider 探活契约（与熔断器配套）
@@ -525,6 +525,43 @@ async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult
 | `should_speak_proactively` / `parse_command`（Agent 专属 builtin Provider） | `src/agents/streamer/tools/proactive_tool.py`、`src/agents/streamer/tools/command_tool.py` | 路径 ① |
 | ContentEngine 控制面（`provider="builtin"`） | `src/modules/tools/content_engine.py` | 路径 ① |
 | `@tool` 装饰器示例 | `src/modules/tools/decorator.py`（内含使用范例） | 路径 ② |
+
+### 工具可见性三维模型
+
+工具在系统内有三个独立的"能不能用"判定维度，分别约束不同的可见层：
+
+| 维度 | 含义 | 控制位置 | 影响 |
+|------|------|---------|------|
+| 存在性 | 工具是否被装配到 `ToolRegistry` | `register` / `register_provider` | 不注册就完全不存在（也无法 invoke） |
+| 可见性 | LLM 工具面是否能看到该工具 | `disabled_tools` + `tripped` + 归属限定（owner_agent） | 可见性收紧后 `list_tools()` 默认面排除；invoke 仍可能命中 |
+| 可用性 | 工具当前是否真正可调用 | 熔断器（`is_tripped`）+ Provider `health_check` | 不可用时 invoke 返回失败 result，不抛异常 |
+
+**LLM 工具面公式**（`list_tools(provider=None, include_disabled=False, include_tripped=False, include_scoped=False)` 的过滤结果）：
+
+```
+LLM 工具面 = 全部注册工具 − 手动停用(disabled_tools) − 熔断中(tripped) − 归属限定(owner_agent 非空)
+```
+
+**归属限定（owner_agent）**的三条可见路径：
+
+| 调用形态 | 是否受归属过滤 | 典型用途 |
+|---------|--------------|---------|
+| `list_tools(provider=None)` 默认面 | ✅ 排除归属限定工具 | Planner / Replyer 拉一般 LLM 工具面 |
+| `list_tools(provider="<具体>")` 域查询 | ❌ 不做归属过滤 | Agent 拉自己的工具面（`list_tools(provider="maicraft")`） |
+| `list_tools(include_scoped=True)` 运营面 | ❌ 不做归属过滤 | Dashboard 工具页运营视图 |
+
+`invoke()` 不校验归属——受众治理只管发现面，LLM 幻觉编名直调保留工具是已知边界。
+
+### MCP 二分表（通用 vs Agent 私有）
+
+| 通道 | 配置位置 | 工具注册时 `provider` | 装配入口 | 适用 |
+|------|---------|---------------------|----------|------|
+| 通用 MCP | `tools.toml` 的 `[tools.mcp.config.servers.<别名>]` | `<server 名>`（如 `maicraft`） | 组合根 `bind_mcp_tools(registry, ...)` | 任何 Agent 都可调用，类 Claude Code 全局工具源 |
+| Agent 私有 MCP | `agents.toml` 的 `[agents.<Agent 名>.mcp]` | `<server 名>` | Agent `_on_start` 自行装配，以 `owner_agent=<自身>` 注册 | 仅供该 Agent 的域内查询（`list_tools(provider=...)`） |
+
+原则：**位置即归属，装配即声明，调度与基建全局统一**——通用 MCP 与 Agent 私有 MCP 共用 `McpToolProvider` / `ToolRegistry` / 熔断器 / 探活等基建，唯一区别是归属标记与配置宿主文件。Agent 私有 MCP 的 `enabled=false` 时不装配（Agent 是命令驱动，MCP 不可用只降级）。
+
+典型范例：MinecraftAgent 在 `[agents.minecraft].mcp` 声明其 maicraft server，启动时自动以 `owner_agent="minecraft"` 注册——任何其它 Agent 都看不到，主播 Agent 与文本冒险 Agent 都不会被 maicraft 工具污染工具面。
 
 ---
 
