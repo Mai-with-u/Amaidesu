@@ -204,6 +204,21 @@
                   </div>
                 </template>
               </el-table-column>
+              <el-table-column label="状态" width="90" align="center">
+                <template #default="{ row }">
+                  <div class="health-cell" @click.stop>
+                    <el-tooltip
+                      v-if="row.health && row.health.state === 'tripped'"
+                      placement="top"
+                      :show-after="100"
+                      :content="healthTooltip(row)"
+                    >
+                      <el-tag size="small" type="danger" effect="dark">已熔断</el-tag>
+                    </el-tooltip>
+                    <span v-else class="health-dot" aria-label="健康" />
+                  </div>
+                </template>
+              </el-table-column>
             </el-table>
             <div v-else class="provider-table-empty">没有匹配的工具</div>
           </article>
@@ -293,11 +308,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import { toolsApi } from '@/api';
-import type { ParameterSpec, ToolCategoryView, ToolEntry, ToolProviderUnit } from '@/types';
+import { useWebSocketStore } from '@/stores/websocket';
+import type {
+  ParameterSpec,
+  ToolCategoryView,
+  ToolEntry,
+  ToolHealth,
+  ToolHealthEventData,
+  ToolProviderUnit,
+  WebSocketMessage,
+} from '@/types';
 
 // ===== 分类元数据 =====
 
@@ -536,8 +560,46 @@ watch(activeCategory, () => {
   searchQuery.value = '';
 });
 
+// ===== 实时熔断状态（WS tool.health.*） =====
+
+function applyHealthUpdate(toolName: string, next: ToolHealth | null): void {
+  const target = tools.value.find(t => t.name === toolName);
+  if (!target) return;
+  target.health = next;
+}
+
+function handleHealthMessage(msg: WebSocketMessage): void {
+  if (!msg.type.startsWith('tool.health.')) return;
+  const payload = msg.data as unknown as ToolHealthEventData;
+  if (!payload || typeof payload.tool_name !== 'string') return;
+  if (payload.state === 'open') {
+    applyHealthUpdate(payload.tool_name, {
+      state: 'tripped',
+      failure_count: payload.failure_count,
+      last_error: payload.last_error,
+      tripped_at_ms: payload.timestamp_ms,
+    });
+  } else if (payload.state === 'closed') {
+    applyHealthUpdate(payload.tool_name, null);
+  }
+}
+
+function healthTooltip(row: ToolEntry): string {
+  const h = row.health;
+  if (!h) return '';
+  // el-tooltip 默认按纯文本渲染，\n 不会换行，用分号分隔两段信息
+  return `${h.last_error}；连续失败 ${h.failure_count} 次`;
+}
+
+const wsStore = useWebSocketStore();
+
 onMounted(() => {
+  wsStore.subscribe(handleHealthMessage);
   void refreshAll();
+});
+
+onBeforeUnmount(() => {
+  wsStore.unsubscribe(handleHealthMessage);
 });
 </script>
 
@@ -805,6 +867,21 @@ onMounted(() => {
 .cell-switch {
   display: inline-flex;
   align-items: center;
+}
+
+.health-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+}
+
+.health-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-success);
+  opacity: 0.45;
 }
 
 /* ----- 2. 元信息条 ----- */

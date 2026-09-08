@@ -337,6 +337,37 @@ export interface ParameterSpec {
 }
 
 /**
+ * 工具熔断状态（GET /api/v1/tools 中每条工具的可选 `health` 字段）。
+ *
+ * 后端在工具有失败历史（熔断中或曾失败已恢复）时返回非 null；无任何失败历史时为 null 或不存在。
+ */
+export interface ToolHealth {
+  state: 'tripped' | 'healthy';
+  /** 触发熔断时的连续失败次数 */
+  failure_count: number;
+  /** 最后一次失败的错误文本 */
+  last_error: string;
+  /** 熔断时刻（Unix epoch 毫秒；未熔断的失败历史为 0） */
+  tripped_at_ms: number;
+}
+
+/**
+ * WS `tool.health.<tool_name>` 消息的 `data` 载荷。
+ *
+ * `state === 'open'` 表示该工具刚刚触发熔断；`state === 'closed'` 表示熔断恢复。
+ * `tool_name` 与 `GET /api/v1/tools` 返回的 `ToolEntry.name` 等价。
+ */
+export interface ToolHealthEventData {
+  tool_name: string;
+  provider: string;
+  state: 'open' | 'closed';
+  failure_count: number;
+  last_error: string;
+  /** Unix epoch 毫秒 */
+  timestamp_ms: number;
+}
+
+/**
  * 已注册工具条目（GET /api/v1/tools）。
  *
  * `name` 为完整工具名（`<provider>_<动词>_<对象>`，前缀内嵌）；`provider` /
@@ -356,6 +387,8 @@ export interface ToolEntry {
   disabled?: boolean;
   /** 异步工具的结果回传事件名（仅 kind === 'async' 时存在） */
   result_event?: string;
+  /** 熔断状态快照（仅在被熔断时为非 null；REST 初值 + WS 实时覆盖） */
+  health?: ToolHealth | null;
 }
 
 export interface ToolsView {

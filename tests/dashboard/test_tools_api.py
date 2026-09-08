@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -79,7 +80,7 @@ class _FakeToolRegistry:
         self._categories = dict(categories or {})
         self._disabled: set[str] = set()
 
-    def list_tools(self, provider=None, *, include_disabled: bool = False):
+    def list_tools(self, provider=None, *, include_disabled: bool = False, include_tripped: bool = False):
         specs = [s for s in self._specs if include_disabled or s.name not in self._disabled]
         if provider is not None:
             specs = [s for s in specs if s.provider == provider]
@@ -305,7 +306,7 @@ def test_tools_magicmock_registry_returns_tools(config_dir: Path) -> None:
     from src.modules.dashboard.dependencies import set_dashboard_server
 
     class _EmptyRegistry:
-        def list_tools(self, provider=None):
+        def list_tools(self, provider=None, *, include_disabled: bool = False, include_tripped: bool = False):
             return []
 
         def category_of(self, name: str) -> str:
@@ -421,9 +422,7 @@ def test_control_enables_studio_member(tools_client: TestClient, tools_config_di
     assert "enabled = true" in content
 
 
-def test_control_category_level_member_writes_flat_section(
-    tools_client: TestClient, tools_config_dir: Path
-) -> None:
+def test_control_category_level_member_writes_flat_section(tools_client: TestClient, tools_config_dir: Path) -> None:
     """vision/memory 为分类级开关，写 [tools.<分类>]，不落嵌套段。"""
     resp = tools_client.post("/api/v1/tools/categories/vision/vision/control", json={"action": "disable"})
     assert resp.status_code == 200
@@ -433,9 +432,7 @@ def test_control_category_level_member_writes_flat_section(
     assert "[tools.vision.vision]" not in content
 
 
-def test_control_mcp_server_writes_server_section(
-    tools_client: TestClient, tools_config_dir: Path
-) -> None:
+def test_control_mcp_server_writes_server_section(tools_client: TestClient, tools_config_dir: Path) -> None:
     """mcp server 开关写 [tools.mcp.config.servers.<键>].enabled。"""
     resp = tools_client.post("/api/v1/tools/categories/mcp/maicraft/control", json={"action": "disable"})
     assert resp.status_code == 200
@@ -460,9 +457,7 @@ def test_control_rejects_unknown_member(tools_client: TestClient) -> None:
 # ==================== POST /tools/{name}/control（工具级） ====================
 
 
-def test_tool_control_disable_writes_disabled_list(
-    tools_client: TestClient, tools_config_dir: Path
-) -> None:
+def test_tool_control_disable_writes_disabled_list(tools_client: TestClient, tools_config_dir: Path) -> None:
     """停用工具 → 名字进入 [tools].disabled_tools。"""
     resp = tools_client.post("/api/v1/tools/vts_trigger_hotkey/control", json={"action": "disable"})
     assert resp.status_code == 200
@@ -475,9 +470,7 @@ def test_tool_control_disable_writes_disabled_list(
     assert "vts_trigger_hotkey" in content
 
 
-def test_tool_control_enable_removes_from_disabled_list(
-    tools_client: TestClient, tools_config_dir: Path
-) -> None:
+def test_tool_control_enable_removes_from_disabled_list(tools_client: TestClient, tools_config_dir: Path) -> None:
     import tomlkit
 
     tools_client.post("/api/v1/tools/vts_trigger_hotkey/control", json={"action": "disable"})
@@ -499,3 +492,132 @@ def test_tool_control_enable_unregistered_name_is_noop(tools_client: TestClient)
     """启用一个本来就不在停用列表的名字 → 幂等成功。"""
     resp = tools_client.post("/api/v1/tools/ghost_tool/control", json={"action": "enable"})
     assert resp.status_code == 200
+
+
+# ==================== health 字段合并（熔断/恢复快照注入响应） ====================
+
+
+class _HealthStubRegistry:
+    """最小 stub：list_tools 接 include_tripped，tool_health_snapshot 返回钉死数据。"""
+
+    def __init__(self, specs, *, snapshot: dict[str, dict[str, Any]] | None = None) -> None:
+        self._specs = list(specs)
+        self._snapshot = dict(snapshot or {})
+        self._disabled: set[str] = set()
+        self._tripped: set[str] = set()
+        self._categories: dict[str, str] = {}
+
+    def list_tools(self, provider=None, *, include_disabled: bool = False, include_tripped: bool = False):
+        specs = list(self._specs)
+        if not include_disabled:
+            specs = [s for s in specs if s.name not in self._disabled]
+        if not include_tripped:
+            specs = [s for s in specs if s.name not in self._tripped]
+        if provider is not None:
+            specs = [s for s in specs if s.provider == provider]
+        return specs
+
+    def category_of(self, name: str) -> str:
+        return self._categories.get(name, "")
+
+    def is_disabled(self, name: str) -> bool:
+        return name in self._disabled
+
+    def tool_health_snapshot(self) -> dict[str, dict[str, Any]]:
+        return {k: dict(v) for k, v in self._snapshot.items()}
+
+    def apply_tripped(self, names) -> None:
+        self._tripped = {n for n in names if any(s.name == n for s in self._specs)}
+
+
+def _build_health_server(config_dir: Path, registry):
+    from src.modules.config.core_schemas import DashboardConfig
+    from src.modules.config.service import ConfigService
+    from src.modules.dashboard.server import DashboardServer
+
+    svc = ConfigService(base_dir=str(config_dir.parent))
+    svc.initialize()
+    return DashboardServer(
+        event_bus=None,  # type: ignore[arg-type]
+        context_service=None,  # type: ignore[arg-type]
+        config_service=svc,
+        dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
+        tool_registry=registry,  # type: ignore[arg-type]
+    )
+
+
+def test_tools_response_exposes_health_field_for_tripped_tool(config_dir: Path) -> None:
+    """tripped 工具的 health 字段是带 state/tripped_at_ms 的对象；其他工具为 None。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    snapshot = {
+        "vts_trigger_hotkey": {
+            "provider": "vts",
+            "state": "tripped",
+            "failure_count": 5,
+            "last_error": "ConnectionError: VTS 不可达",
+            "tripped_at_ms": 1700000000000,
+        },
+    }
+    registry = _HealthStubRegistry(_default_specs(), snapshot=snapshot)
+    server = _build_health_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        assert resp.status_code == 200
+        by_name = {a["name"]: a for a in resp.json()["tools"]}
+
+        assert by_name["vts_trigger_hotkey"]["health"] == {
+            "state": "tripped",
+            "failure_count": 5,
+            "last_error": "ConnectionError: VTS 不可达",
+            "tripped_at_ms": 1700000000000,
+        }
+        assert by_name["reply_to_user"]["health"] is None
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_response_health_none_when_snapshot_missing_method(config_dir: Path) -> None:
+    """registry 不实现 tool_health_snapshot 时，所有 health 字段都是 None（不抛 500）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    server = _build_health_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        assert resp.status_code == 200
+        for entry in resp.json()["tools"]:
+            assert entry["health"] is None
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_listing_includes_tripped_tools(config_dir: Path) -> None:
+    """include_tripped=True 路径：默认被熔断摘除的工具仍出现在 listing（带 health 对象）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    snapshot = {
+        "vts_trigger_hotkey": {
+            "provider": "vts",
+            "state": "tripped",
+            "failure_count": 3,
+            "last_error": "boom",
+            "tripped_at_ms": 1700000000000,
+        },
+    }
+    registry = _HealthStubRegistry(_default_specs(), snapshot=snapshot)
+    registry.apply_tripped(["vts_trigger_hotkey"])
+    server = _build_health_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        names = {a["name"] for a in resp.json()["tools"]}
+        assert "vts_trigger_hotkey" in names
+        assert "reply_to_user" in names
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]

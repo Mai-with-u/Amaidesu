@@ -5,13 +5,14 @@
    WS type 转发（与已有 danmaku 一致）
 2. 订阅 CoreEvents.AGENDA_UPDATE 并以 "agenda.update" WS type 转发
 3. 订阅 CoreEvents.TOOL_RESULT_WILDCARD 通配模式，WS type 沿用具体事件名
-4. 取消订阅（stop）正常
+4. 订阅 CoreEvents.TOOL_HEALTH_WILDCARD 通配模式，WS type 沿用具体事件名
+5. 取消订阅（stop）正常
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -24,6 +25,7 @@ from src.modules.events.payloads import (
     StreamerSpeechPayload,
     ToolResultPayload,
 )
+from src.modules.events.payloads.tool_health import ToolHealthPayload
 
 
 class _FakeWSHandler:
@@ -165,6 +167,53 @@ async def test_tool_result_wildcard_preserves_concrete_event_name(bus_and_handle
     assert call.args[0] == "tool.result.speak"
     assert call.args[1]["tool_name"] == "speak"
     assert call.args[1]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_tool_health_wildcard_preserves_concrete_event_name(bus_and_handler) -> None:
+    """tool.health.# 通配订阅收到具体事件名（tool.health.maicraft_speak）后，
+    WS type 沿用该具体名（不是通配串）；payload 字段透传。"""
+    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
+
+    bus, ws = bus_and_handler
+    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
+    await broadcaster.start()
+
+    payload = ToolHealthPayload(
+        tool_name="maicraft_speak",
+        provider="maicraft",
+        state="open",
+        failure_count=3,
+        last_error="ConnectionError: MCP server 未连接且重连失败",
+        timestamp_ms=1706745600000,
+    )
+    handler, _model_cls = bus.subscribed[CoreEvents.TOOL_HEALTH_WILDCARD]
+    concrete_event = "tool.health.maicraft_speak"
+    await handler(concrete_event, payload, source="test")
+
+    ws.broadcast.assert_awaited_once()
+    call = ws.broadcast.await_args
+    # ws type 沿用具体事件名本身（不是 "tool.health.#" 通配串）
+    assert call.args[0] == "tool.health.maicraft_speak"
+    assert call.args[1]["tool_name"] == "maicraft_speak"
+    assert call.args[1]["provider"] == "maicraft"
+    assert call.args[1]["state"] == "open"
+    assert call.args[1]["failure_count"] == 3
+    assert call.args[1]["last_error"] == "ConnectionError: MCP server 未连接且重连失败"
+    assert call.args[1]["timestamp_ms"] == 1706745600000
+    assert call.kwargs.get("message_id") == payload.id
+
+
+@pytest.mark.asyncio
+async def test_broadcaster_subscribes_to_tool_health_wildcard(bus_and_handler) -> None:
+    """broadcaster.start() 应订阅 CoreEvents.TOOL_HEALTH_WILDCARD。"""
+    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
+
+    bus, ws = bus_and_handler
+    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
+    await broadcaster.start()
+    assert CoreEvents.TOOL_HEALTH_WILDCARD in bus.subscribed
+    await broadcaster.stop()
 
 
 @pytest.mark.asyncio

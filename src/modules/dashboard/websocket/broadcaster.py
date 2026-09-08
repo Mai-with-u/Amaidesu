@@ -12,6 +12,8 @@ EventBus 事件广播器
 - ``streamer.speech`` → WS type ``"streamer.speech"``
 - ``tool.result.#`` 通配 → WS type = 具体事件名（``tool.result.<tool_name>``），
   payload 为 ``ToolResultPayload.model_dump``
+- ``tool.health.#`` 通配 → WS type = 具体事件名（``tool.health.<tool_name>``），
+  payload 为 ``ToolHealthPayload.model_dump``；仅在熔断/恢复跃迁时发射
 - ``core.startup`` / ``core.shutdown`` → WS type 来自 ``SYSTEM_STATUS_TYPE``
 - ``core.error`` → WS type 来自 ``SYSTEM_ERROR_TYPE``
 - 组件事件（``COMPONENT_EVENT_TYPE_MAP`` 涵盖的事件）按映射表输出
@@ -42,6 +44,7 @@ from src.modules.events.payloads import (
     RoomMessagePayload,
     StreamerSpeechPayload,
     StreamerStagePayload,
+    ToolHealthPayload,
     ToolResultPayload,
 )
 from src.modules.events.payloads.base import BasePayload
@@ -118,6 +121,7 @@ class EventBroadcaster:
             CoreEvents.AGENDA_UPDATE: self._on_agenda_update,
             CoreEvents.STREAMER_SPEECH: self._on_streamer_speech,
             CoreEvents.TOOL_RESULT_WILDCARD: self._on_tool_result,
+            CoreEvents.TOOL_HEALTH_WILDCARD: self._on_tool_health,
             CoreEvents.CORE_STARTUP: self._on_core_event,
             CoreEvents.CORE_SHUTDOWN: self._on_core_event,
             CoreEvents.CORE_ERROR: self._on_core_error,
@@ -161,6 +165,11 @@ class EventBroadcaster:
             CoreEvents.TOOL_RESULT_WILDCARD,
             self._on_tool_result,
             model_class=ToolResultPayload,
+        )
+        self._subscribe_event(
+            CoreEvents.TOOL_HEALTH_WILDCARD,
+            self._on_tool_health,
+            model_class=ToolHealthPayload,
         )
         # 决策可观测 + 场次生命周期（WS type 与事件名一致）
         self._subscribe_event(
@@ -250,6 +259,13 @@ class EventBroadcaster:
             await self.ws_handler.broadcast(event_name, dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 tool result 失败: {e}")
+
+    async def _on_tool_health(self, event_name: str, data: ToolHealthPayload, source: str) -> None:
+        try:
+            dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
+            await self.ws_handler.broadcast(event_name, dict_data, message_id=data.id)
+        except Exception as e:
+            logger.error(f"广播 tool health 失败: {e}")
 
     async def _on_named_event(self, event_name: str, data: BasePayload, source: str) -> None:
         """通用直通广播：WS type = 事件名（planner.decision / streamer.stage / live.*）。"""

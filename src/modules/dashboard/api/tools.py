@@ -163,16 +163,49 @@ def _runtime_tool_counts(registry: Any) -> Dict[Tuple[str, str], Tuple[int, int]
     """按 (分类, 工具 provider 标识) 统计工具数，返回 (全集数, 停用数)。
 
     统计包含停用工具——工具页展示提供者的工具全集，停用数供行级开关渲染。
+    熔断（tripped）工具也纳入全集统计（与停用并列可见），便于面板观察
+    运行态健康徽标。
     """
     counts: Dict[Tuple[str, str], Tuple[int, int]] = {}
     try:
-        for spec in registry.list_tools(include_disabled=True):
+        for spec in registry.list_tools(include_disabled=True, include_tripped=True):
             key = (registry.category_of(spec.name), getattr(spec, "provider", "") or "")
             total, disabled = counts.get(key, (0, 0))
             counts[key] = (total + 1, disabled + (1 if registry.is_disabled(spec.name) else 0))
     except Exception:
         pass
     return counts
+
+
+def _safe_tool_health_snapshot(registry: Any) -> Dict[str, Dict[str, Any]]:
+    """取工具健康快照（旧 registry / mock 未实现时返回空 dict）。"""
+    snapshot = getattr(registry, "tool_health_snapshot", None)
+    if snapshot is None:
+        return {}
+    try:
+        result = snapshot()
+    except Exception:
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def _format_tool_health(entry: Any) -> Optional[Dict[str, Any]]:
+    """从快照单项构建响应 health 字段；absent / 无效输入返回 None。
+
+    触发条件：工具有过失败历史（即出现在快照里）；不存在则视为"无历史"，
+    响应字段不出现 health。前端按"无徽标"渲染。
+    """
+    if not isinstance(entry, dict):
+        return None
+    state = entry.get("state")
+    if state not in ("tripped", "healthy"):
+        return None
+    return {
+        "state": state,
+        "failure_count": int(entry.get("failure_count", 0) or 0),
+        "last_error": str(entry.get("last_error", "") or ""),
+        "tripped_at_ms": int(entry.get("tripped_at_ms", 0) or 0),
+    }
 
 
 def _get_tools_config(server: "DashboardServer") -> Dict[str, Any]:
@@ -194,15 +227,17 @@ async def list_tools(
 
     Returns:
         {"tools": [{"name", "description", "parameters", "provider", "kind",
-                    "category", "disabled", "result_event"(仅异步工具)}, ...]}
+                    "category", "disabled", "result_event"(仅异步工具),
+                    "health": 可选熔断/历史健康对象；无历史则为 None}, ...]}
     """
     registry = _get_registry(server)
 
     try:
-        specs = registry.list_tools(provider=provider, include_disabled=True)
+        specs = registry.list_tools(provider=provider, include_disabled=True, include_tripped=True)
     except Exception:
         specs = []
 
+    health_snapshot = _safe_tool_health_snapshot(registry)
     tools = [
         _build_action_entry(
             spec,
@@ -211,6 +246,8 @@ async def list_tools(
         )
         for spec in specs
     ]
+    for entry in tools:
+        entry["health"] = _format_tool_health(health_snapshot.get(entry["name"]))
     return {"tools": tools}
 
 
@@ -425,7 +462,7 @@ async def control_tool(
     enable = request.action == "enable"
     registry = _get_registry(server)
     try:
-        known = {s.name for s in registry.list_tools(include_disabled=True)}
+        known = {s.name for s in registry.list_tools(include_disabled=True, include_tripped=True)}
     except Exception:
         known = set()
     if not enable and name not in known:
