@@ -66,7 +66,7 @@ _PHASE_TO_REGISTRY: dict[tuple[str, str], str] = {
 
 # 配置版本号。权威定义：本文件的 ``CONFIG_VERSION`` 与 ``MetaConfig.version``
 # 默认值必须同步修改（改一必改二）。详见 AGENTS.md "配置 Schema 变更规则"。
-CONFIG_VERSION = "2.0.26"
+CONFIG_VERSION = "2.0.27"
 
 # 配置文件清单（按域划分）：core / model / agents / tools / memory / storage / background
 _CONFIG_FILES = [
@@ -186,6 +186,18 @@ CROSS_FILE_MIGRATIONS: tuple[CrossFileMigration, ...] = (
         target_key="subtitle",
         source_nested_path=("output", "config", "subtitle"),
         target_nested_path=("tk_gui",),
+    ),
+    # tools.toml [tools.mcp.config.servers.maicraft] 整段 → agents.toml
+    # [agents.minecraft.mcp]：通用 MCP 通道下"游戏专属 server"的归属下放。
+    # 整段搬运（用户原 server 配置 dict 全部保留）；源路径删除后再次加载
+    # 因源不存在被跳过，目标已存在不再覆盖——单值移动模式的天然幂等。
+    CrossFileMigration(
+        source_file="tools.toml",
+        source_key="tools",
+        target_file="agents.toml",
+        target_key="agents",
+        source_nested_path=("mcp", "config", "servers", "maicraft"),
+        target_nested_path=("minecraft", "mcp"),
     ),
 )
 

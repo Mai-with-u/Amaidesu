@@ -110,7 +110,14 @@ class MemoryProviderConfig(ToolProviderConfig):
 
 
 class McpProviderConfig(ToolProviderConfig):
-    """MCP 外部工具源分类（modules/mcp 通道；config.servers 声明 server 连接）"""
+    """通用 MCP 外部工具源分类（modules/mcp 通道；config.servers 声明 server 连接）。
+
+    该通道只承载**通用** MCP——任何 Agent（主播 / 游戏）都可经 ToolRegistry
+    看到并调用，定位是 Claude Code 风格的全局工具源。Agent 私有 MCP
+    （仅服务于特定 Agent 的工具集，如 minecraft 专属）不走本段，
+    而是写在 agents.toml 各 Agent 自己的段（位置即归属）：``[agents.<name>.mcp]``。
+    装配即声明；调度与基建由全局 ToolRegistry + McpToolProvider 统一承担。
+    """
 
     model_config = ConfigDict(extra="allow")
 

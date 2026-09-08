@@ -36,6 +36,7 @@ from typing import Dict, List, Literal, Optional
 from pydantic import ConfigDict, Field
 
 from src.modules.config.schemas.base import BaseConfig
+from src.modules.mcp.config import McpServerConfig
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +189,13 @@ class MinecraftAgentConfig(BaseConfig):
 
     与运行时 ``MinecraftConfig`` 的字段同步维护；命令驱动 ReAct Agent 的全部
     行为参数集中此处。无任何公共段——它就是自己的顶级子配置。
+
+    Attributes:
+        command_llm: 决策用的 LLM profile 名（引用 model.toml）
+        max_steps: 单任务 ReAct 循环最大步数（防失控挂起）
+        mcp: Agent 私有 MCP server 配置——位置即归属，启用时由 MinecraftAgent
+            在 _on_start 装配并以 owner_agent="minecraft" 注册进全局 ToolRegistry，
+            默认不对其它 Agent 暴露（归属限定语义）。enabled=false 时不装配。
     """
 
     command_llm: str = Field(
@@ -198,6 +206,13 @@ class MinecraftAgentConfig(BaseConfig):
         default=50,
         ge=1,
         description="单任务 ReAct 循环最大步数（超出挂起上报，防失控）",
+    )
+    mcp: McpServerConfig = Field(
+        default_factory=lambda: McpServerConfig(url="http://127.0.0.1:8766/mcp"),
+        description=(
+            "Agent 私有 MCP server（minecraft 专属工具源；enabled=false 时不装配，"
+            "装配时以 owner_agent='minecraft' 注册进 ToolRegistry 默认不进入一般工具面）"
+        ),
     )
 
 
