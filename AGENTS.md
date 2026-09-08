@@ -2,314 +2,113 @@
 
 为在此代码库中工作的 AI 编码代理提供指南。
 
-**本文档为 AI 代理核心规则**：只内联**硬约束**（必须/禁止/架构红线）与**高频 API 速查**；详细操作手册走渐进式披露——一律以相对链接指向 `docs/` 权威文档，不在本文复制。通用编程/工具链常识（Python 语法、git 基础、uv 用法等）不收录。
+**本文件只写对 AI 的行为约束**（硬约束/流程约束），以"做什么"的正向表述为主。代码结构、API 用法、命令、配置细节等不在此罗列——AI 自行探索代码库与 `docs/` 目录获取，避免文档与代码漂移耦合。通用编程/工具链常识（Python 语法、git 基础、uv 用法等）不收录。**git log 是一切变更历史的事实源。**
 
-## 快速导航
+## 核心思想
 
-| 我想... | 查看文档 |
-|---------|---------|
-| 快速上手项目 | [快速开始](docs/getting-started.md) |
-| 了解代码规范 | [开发规范](docs/development-guide.md) |
-| 理解架构设计 | [v2.0.0 架构叙事](docs/architecture/v2-architecture.md) |
-| 速查组件/目录/时序 | [架构总览](docs/architecture/overview.md) |
-| 理解游戏 Agent 设计 | [MinecraftAgent 设计](docs/architecture/minecraft-agent.md) |
-| 理解事件系统 | [事件系统](docs/architecture/event-system.md) |
-| 开发采集器/工具/Agent | [组件开发指南](docs/development/component-guide.md) |
-| 开发事件拦截器 | [事件系统](docs/architecture/event-system.md#事件拦截器interceptor) |
-| 管理提示词 | [提示词管理](docs/development/prompt-management.md) |
-| 编写测试 | [测试指南](docs/development/testing-guide.md) |
+**第一性原理**：设计与开发从问题本质出发推导，而非惯例惯性。做设计决策前先问：这个组件存在的根本目的是什么？解决问题的最小必要机制是什么？结论落在代码，推导落在文档（范例：`docs/architecture/v2-architecture.md`，理解本项目架构先读这篇）。
+
+## 快速方向
+
+- 架构与设计文档：`docs/architecture/`
+- 开发指南文档：`docs/development/`
+- 安装与运行：README.md
 
 ## 硬约束
 
 ### 必须遵守
 
-- 移动或者重命名文件的时候注意使用 `git mv` 保留历史记录
 - 使用中文和用户沟通以及编写文档、注释
-- 需要如实汇报自己的工作进度，不得隐瞒问题不报，不得在未经用户允许的情况下降低任务达成标准
-- **测试策略（改动范围优先）**：改哪里测哪里——只跑改动相关的测试文件（如 `uv run pytest tests/agents/game/test_minecraft.py -q`）+ `uv run ruff check`（限改动文件）。**全量 `uv run pytest tests/` 仅在收口/并入主线/跨模块重构时跑**，常规改动禁止跑全量（150s+ 浪费）。提交前：目标测试绿 + ruff 绿。**提交前格式化**：`uv run ruff format .`
-- **git 提交必须获得用户显式授权**：任何 `git commit` / `git push` 前必须确认用户明确要求（含"提交/commit/push"等词）。计划文件（`.omo/plans/*.md`）中的 Commit 策略**仅覆盖该计划范围内的任务**；计划之外的工作（bug 修复、追加功能、临时改动）即使复用同一委托模板，也**不得**继承提交授权——委托子代理时若任务超出计划范围，**禁止**在 prompt 中写入 commit 指令，改为"完成后展示结果，由用户决定是否提交"。
-- **git 提交体规范（Conventional Commits）**：格式 `type(scope): subject`（type ∈ feat/fix/docs/refactor/perf/test/chore；scope 用影响域，如 decision/dashboard/config/core/prompts）。subject 用**中文**简洁描述（≤50 字符）；body 用**中文**说明"为什么"（空行分隔，可留空）。Windows PowerShell 下提交 message 必须用 `git commit -F <file>`（UTF-8 文件）或双引号包裹（防 `$` 变量展开、防中文乱码）；提交后 `git log -1` 复核无乱码、无截断。**禁止**：英文 subject、乱码字符、特殊符号被 shell 吞掉、body 缺失"为什么"。
+- 如实汇报工作进度与受阻状态；任务达成标准一经确认即保持，调整须经用户同意
+- **测试策略（改动范围优先）**：改哪里测哪里——只跑改动相关的测试文件 + `uv run ruff check`（限改动文件）。全量 `uv run pytest tests/` 留给收口/并入主线/跨模块重构/新工作树基线对齐。提交前：目标测试绿 + ruff 绿 + `uv run ruff format .`
+- 移动或者重命名文件时使用 `git mv` 保留历史记录
+- **机器本地信息与敏感信息不入库**：本地绝对路径、仅适用于开发者个人环境的信息（如工作树物理路径、机器布局）、密钥/token 等敏感信息，一律登记于 `AGENTS.local.md`（不入库，opencode 会将其识别为本地规则文件）
+- 需要用户决定的事项写在回复"备注/待你确认"区；todo 列表只放 agent 可自行推进的事项
 
-### 禁止事项
+### 架构红线（最高约束）
 
-| 禁止 | 原因 | 替代方案 |
-|------|------|----------|
-| ❌ 创建新的 Plugin（插件系统已移除） | 架构已重构为 Agent+工具系统 | 创建 Collector / BaseAgent 子类 / ToolProvider |
-| ❌ 使用服务注册机制（已废弃） | 使用 EventBus | EventBus 事件系统 |
-| ❌ 硬编码事件名字符串 | 避免拼写错误 | 使用 `CoreEvents` 常量 |
-| ❌ 使用空的 except 块 | 隐藏错误 | 记录日志并处理 |
-| ❌ 删除失败的测试来"通过" | 自欺欺人 | 修复代码或测试 |
-| ❌ 在修复 bug 时进行大规模重构 | 扩大风险范围 | 只修复 bug |
-| ❌ 提交未验证的代码 | 可能破坏构建 | 先运行测试和 lint |
-| ❌ 类变量中存储可变对象 | 共享状态问题 | 使用 `__init__` 初始化 |
-| ❌ 把"需要用户回复才能继续"的内容加入 todo list | todo tracker 会被系统持续催促,而 agent 又无法推进,陷入死循环 | 用户驱动的阻塞项(等用户决定/确认)不要写成 todo;若必须跟踪,在回复中作为"备注"或"待你确认"显式说明,不进 todo 系统 |
+**主体性判据（★）**：组件按驱动方式三分——
+- **主播 Agent**：自我驱动（唯一）——直播期间持续运行决策循环，没人调也在跑
+- **游戏 Agent**：命令驱动（类 Code Agent）——收到命令才启动任务内有界循环，任务完成即停、空闲零消耗；因有自身状态与任务内自主决策，仍属 Agent
+- **工具**：被动驱动，被调才干活，无循环（TTS 等基础能力属基础设施，走独立装配通道）
+- 直播内容 = 编排配置 + Planner 上下文/行为模式的变化，代码模块零新增
+
+**边界规则**（判据的直接应用，违反即架构回退）：
+- Agent 内部器官（Planner/Replyer）留在 Agent 内部，对外只暴露 Agent 契约——把内脏注册进 ToolRegistry 即插件换皮（本项目真实发生过的架构回退）
+- 游戏/内容逻辑内聚 `src/agents/<family>/<name>/` 包内：加内容 = 加包 + 配置，框架零改动
+- 采集器只发布数据事件；下游结果的查询诉求走工具实现（发现平面口诀："能挥手吗"可问，"刚才挥手成功了吗"不可问）
+- 快照型能力（被调才看）实现为工具，持续流型实现为采集器
+
+### 实现纪律
+
+- 新能力用 Collector（持续流数据源）/ BaseAgent 子类（业务 Agent）/ ToolProvider（被动能力）承载——插件系统与服务注册机制已从架构移除，其历史只见于 git log
+- 事件名一律引用 `CoreEvents` 常量，拼写正确性与全局可检索性都靠它保证
+- 每个异常路径都记录日志并携带原因上下文，空 catch 块按缺陷处理
+- 测试失败即缺陷暴露：转绿的途径是修复代码或修复测试本身，删除/跳过测试达成的绿灯不构成验证
+- bug 修复保持最小改动面，重构意图另开任务
+- 可变实例状态在 `__init__` 初始化，类属性只放常量与不可变默认
+
+### 代码约定
+
+- **命名**：类名 PascalCase；函数/变量 snake_case；私有成员前导下划线；Collector/Agent/工具/拦截器类以类型名结尾
+- **数据类型**：数据模型/配置 Schema/事件 Payload 用 Pydantic BaseModel；简单内部统计用 dataclass；接口协议用 Protocol
+- **时间字段**：统一毫秒——时刻用 `int` Unix epoch 毫秒，时长/超时命名 `<name>_ms`，秒单位变体（`timestamp_s` / `duration_seconds`）与本仓库约定冲突；历史 `timestamp` 字段用 Pydantic alias 兼容
+- **依赖注入**：服务对象（LLM/提示词/事件总线等）一律构造器注入；跨组件传递用参数显式传递，Context 容器只装上下文数据
+- **import 纪律**：import 一律放文件顶部（`from __future__` 之后），按 isort 排序。函数体内 import 限 5 种情形，且必须自足注释说明原因：TYPE_CHECKING 块、循环 import 规避、可选重型依赖延迟加载、Pydantic `model_rebuild()` forward-ref、测试可 mock 性。顶部已有同模块 import 时，函数内直接复用顶部引用
 
 ### AI 痕迹防范（防 AI slop）
 
-**原则**：注释/ docstring 只回答"这段代码**是什么**、**为什么这样设计**"。**代码注释禁止引用文档**（`§N.NN`、`Wave N`、`vN.N.N`、`ADR-XXX`、章节号、版本号）——因为文档会频繁变化，未及时维护就会过时，误导读者。行为/架构原因用**自足的自然语言**表述，不锚定到可能漂移的文档位置。
+**原则**：注释/docstring 回答"这段代码**是什么**、**为什么这样设计**"，用自足的自然语言表述。代码内引用外部文档位置是反模式——文档会漂移，过时引用误导读者。以下具名反例一旦出现即为残留，按右列清理：
 
-| 禁止 | 替代方案 |
+| 具名反例 | 清理方式 |
 |------|----------|
-| 章节引用（`§1.50`、`§1.46.1`、`§1.7 / §1.49`） | 直接陈述架构含义（如"敏感词净化归 Replyer 表达引擎"） |
-| 版本变更记录（`Wave N`、`vN.N.N 修复/新增`、`重构后已删除`） | 删除；git log 是变更历史的事实源 |
-| `ADR-XXX` 编号引用 | 删除编号，保留其技术实质（如"订阅 room.message.# 落业务表"） |
-| 步骤编号注释（`# --- 1. ... ---`、`2b/3c/6d`） | 纯客观标题（`# --- LLM 服务 ---`）；函数过长优先拆函数 |
-| docstring 中的"变更历史"段 | 只保留功能/架构描述 |
+| 章节引用（`§1.50`） | 改写为直接陈述架构含义 |
+| 版本变更记录（`vN.N.N 修复/新增`、`重构后已删除`） | 删除；git log 是事实源 |
+| `ADR-XXX` 编号引用 | 删除编号，保留技术实质 |
+| 步骤编号注释（`# --- 1. ... ---`） | 改纯客观标题；函数过长优先拆函数 |
+| docstring"变更历史"段 | 只保留功能/架构描述 |
 
-**import 纪律**：import 一律放文件顶部（`from __future__` 之后、第一个代码语句之前），按 isort 排序。函数体内 import 仅允许以下 5 种情形，且**必须**有自足注释说明原因：
+### 配置与存储变更
 
-1. `TYPE_CHECKING` 块（类型检查专用）
-2. 循环 import 规避（注释写明：模块间互引）
-3. 可选重型依赖延迟加载（`pyvts`/`torch`/`sounddevice` 等，注释写明）
-4. Pydantic `model_rebuild()` forward-ref（注释写明）
-5. **测试可 mock 性**（如 `llm/manager.py`：函数体内 import 使 `unittest.mock.patch` 能拦截，顶部 import 会使 patch 失效）
+- 配置系统是"Schema 即真相"（Pydantic Schema 驱动生成/验证/迁移），权威入口在 `src/modules/config/`。每次配置结构修改（增删改字段/段移动）同步升 `CONFIG_VERSION`，并与 `MetaConfig.version` 默认值保持一致——这是用户现有配置文件被自动升级的前提
+- 需要数据变换时（字段重命名/段拆分/类型转换）注册迁移 hook（原地修改 dict、幂等、返回变更路径）并配迁移测试；配置段跨文件移动时注册跨文件迁移并配测试；纯新增字段由写回机制自动补默认值
+- **升版本 ≠ 迁移生效**：提交前实际验证迁移写回落盘（跑 `tests/config/` 或手动触发配置加载检查升级日志）——"只改 Schema 不升版本/不验证迁移"是本区最高频事故形态，此类提交视为未完成
+- 存储表结构变更升 `SCHEMA_VERSION`，迁移记录幂等推进
+- 组件嵌套配置（采集器/Agent/工具包）变更时同步更新对应 schema 测试
 
-**硬性禁止**：同一模块顶部和函数体内重复 import；同一模块在多个函数体内重复 import；改函数时先检查顶部是否已有同模块 import——有则复用。
+### 文档维护
 
-### 架构红线（v2 最高约束）
+**单一事实源**：修改以下事实时只改权威处，其他文件只引用链接——事件表→`docs/architecture/event-system.md`；组件清单/目录结构→`docs/architecture/overview.md`；数据流规则→`docs/architecture/data-flow.md`；游戏 Agent 范式→`docs/architecture/minecraft-agent.md`；三范式开发指南→`docs/development/component-guide.md`；架构决策记录→`docs/architecture/adr/`（按创建时间递增编号，含状态/日期/实现提交 hash）。
 
-**架构一句话**：Amaidesu 2.0.0 = **Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 节目单）**。完整推导见 [v2.0.0 架构叙事](docs/architecture/v2-architecture.md)。
+- 变更历史只在 git log，文档内不设"变更记录/最后更新"条目——文末堆积式 changelog 是本项目真实发生过的事故（持续污染每次 AI 会话上下文）；文档正文陈述当前事实即可
+- 图片放 `docs/images/`，视频放 `docs/videos/`
 
-**主体性判据（★ 最高约束）**：组件按驱动方式三分——
-- **主播 Agent**：自我驱动（唯一）——直播期间持续运行决策循环，没人调也在跑
-- **游戏 Agent**：命令驱动（类 Code Agent）——收到命令才启动任务内有界循环，任务完成即停、空闲零消耗；因有自身状态与任务内自主决策，仍是 Agent 而非工具
-- **工具**：被动驱动，被调才干活，无循环（Replyer 表达引擎、屏幕捕捉、VLM；TTS 自 v2.0.12 §8 修正起已是基础模块，不再是工具）
-- **直播内容是编排配置 + Planner 上下文/行为模式的变化，不是代码模块**
+## 流程约束
 
-| 禁止模式 | 说明 | 详细规则 |
-|---------|------|----------|
-| ❌ 把 Agent 内脏注册为工具 | Planner/Replyer 是主播 Agent 的内部器官（用户拍板），注册为工具即插件换皮 | [组件开发指南](docs/development/component-guide.md) |
-| ❌ 内容特有逻辑写进框架层 | 防插件换皮红线：游戏/内容逻辑内聚 `src/agents/<family>/<name>/` 包内，加内容=加包+配置，框架零改动 | 同上 |
-| ❌ 采集器订阅下游事件 | 采集器只发布数据事件，不订阅 Agent/工具的结果事件 | [数据流与边界规则](docs/architecture/data-flow.md) |
-| ❌ 感知快照做成采集器 | 快照型能力（被调才看，如 `look_at_screen`）是工具；持续流型才是采集器 | 同上 |
+### git 提交纪律
 
-数据流三层面约束（数据平面/分层规则/发现平面）完整表述见 [数据流与边界规则](docs/architecture/data-flow.md)。发现平面口诀："能挥手吗"可问（发现），"刚才挥手成功了吗"不可问（结果回灌）。
+**提交先获用户显式授权**：`git commit` / `git push` 前确认用户明确要求。计划文件（`.omo/plans/*.md`）的 Commit 策略仅覆盖该计划范围内的任务；计划外任务不得继承提交授权——委托子代理时 prompt 只写"完成后展示结果，由用户决定提交"，不写入 commit 指令。
 
-### 文档维护规则
+**提交体规范（Conventional Commits）**：
+- 格式 `type(scope): subject`。type 从封闭集合取值：feat / fix / docs / refactor / perf / test / chore / build / revert
+- scope 与代码顶层模块/目录名一致（小写英文，单复数以目录为准），拿不准就省略；任务性词汇（wiring/cleanup/comments 类，均为本项目真实漂移案例）使 log 检索失真，禁止用作 scope
+- subject 用中文、动词开头、句末不加句号，≤30 字符（约 60 显示宽，保证 `git log --oneline` 不截断）；同批多个意图用 "+" 分列
+- body 用中文说明"为什么"与关键取舍，每行 ≤36 个中文字符（72 显示宽）；diff 自明的（措辞/格式/笔误）可省略，行为变化或含取舍的必须写
+- 测试结果仅在有额外信息量时写入提交信息（如个别失败属预期过渡态），常规通过数留在本地
+- revert 手写：`revert(scope): 回滚 <原 subject 摘要>`，body 注明原提交 hash 与回滚原因
+- 协作署名（Co-Authored-By 等）仅按用户明确要求添加
+- Windows PowerShell：提交 message 一律 `git commit -F <file>`（UTF-8 无 BOM 文件）；临时用引号时仅限单引号（双引号会展开 `$var`、解释反引号）
+- 提交后 `git log -1` 复核无乱码（含 BOM）、无截断
 
-**单一事实源**（修改以下事实时只改权威处，其他文件只引用链接，禁止复制）：
+**一次提交一个意图**：无关变更分批提交；连环缺陷同因修复可合批，subject 用 "+" 分列。
 
-| 事实 | 唯一权威处 |
-|------|-----------|
-| 事件表（含发布者/订阅者/数据类型） | `docs/architecture/event-system.md` |
-| 数据流图 / 组件清单 / 目录结构 | `docs/architecture/overview.md` |
-| MinecraftAgent 设计（游戏 Agent 范式） | `docs/architecture/minecraft-agent.md` |
-| 生命周期表 / 三范式开发指南 | `docs/development/component-guide.md` |
-| 架构决策记录（ADR） | `docs/architecture/adr/` |
-| 数据流规则约束 | `docs/architecture/data-flow.md` |
+### 多工作树并行开发
 
-- 修改文档后更新文件末尾"最后更新"日期（`YYYY-MM-DD` + 变更摘要）
-- ADR 编号按创建时间递增，含元数据（状态 / 日期 / 实现提交 40 位 hash）
-- 根目录不放图片/视频；图片放 `docs/images/`，视频放 `docs/videos/`
-- 详细规范见 [文档维护规范](docs/development/documentation-guide.md)
+使用 `git worktree` 为并行任务提供隔离检出环境。任务工作树物理路径属机器本地信息，登记于 `AGENTS.local.md`（不入库）；放置于仓库外同级目录；同一分支同时只允许一个工作树。工作树分两类：
 
-### 配置 Schema 变更规则（★ 高事故区，改配置必读）
-
-配置系统是"Schema 即真相"（Pydantic Schema 驱动生成/验证/迁移）。**任何对配置结构的修改都必须升版本号**，否则用户现有配置文件不会被自动升级，迁移机制沦为摆设（历史教训：`CONFIG_VERSION` 长期停在 0.4.0 只有漂移警告；大纲功能配置缺失静默失效）。
-
-**版本号机制**：
-- 唯一权威定义：`src/modules/config/multi_file_loader.py` 的 `CONFIG_VERSION`
-- `src/modules/config/core_schemas.py` 的 `MetaConfig.version` 默认值必须与 `CONFIG_VERSION` **同步修改**（改一必改二）
-- 用户文件版本位于 `config/core.toml` 的 `[meta].version`，升级时自动写回
-
-**必须升 CONFIG_VERSION（patch 级，如 2.0.4 → 2.0.5）**：新增/删除/重命名字段（含各工具包/Agent 嵌套配置类）、字段类型或约束变化、字段默认值语义变化、配置段移动/拆分/合并。仅改注释/description 或纯内部重构（不改 TOML 结构）不需要升版本。
-
-**需要数据变换时（字段重命名/段拆分/类型转换/默认值调整）还必须注册 `ConfigUpgradeHook`**：
-- 注册到 `src/modules/config/upgrade_hooks.py` 的 `CONFIG_UPGRADE_HOOKS`；hook 必须**原地修改 dict、幂等**、返回变更字段路径列表
-- 每个 hook 必须配单元测试（旧结构输入 → 断言新结构输出）
-- 纯新增字段（无需数据变换）可不注册 hook，由写回机制自动补默认值
-
-**配置段跨文件移动**必须注册 `CrossFileMigration`：
-- 注册到 `src/modules/config/multi_file_loader.py` 的 `CROSS_FILE_MIGRATIONS`（source_file/source_key → target_file/target_key）
-- 执行时机：`load_config_dir` 中目标段缺失时合并进目标文件，源文件备份到 `config/old/` 后移除；必须配迁移测试
-
-**存储层表结构变更另有硬规则**：改 `src/modules/storage/schema.py` 的任何表必须升 `SCHEMA_VERSION` 并保证 `schema_migrations` 记录推进（幂等）。
-
-**变更时需同步检查**：
-
-| 变更内容 | 需同步修改 |
-|---------|-----------|
-| 任何 Schema 变更 | `CONFIG_VERSION` + `MetaConfig.version` |
-| 需要数据变换 | `upgrade_hooks.py` 注册 hook + 迁移测试 |
-| 配置段跨文件移动 | `multi_file_loader.py` 注册 CrossFileMigration + 迁移测试 |
-| 涉及旧配置段（迁移/死配置） | `migration.py` 的 `_SECTION_MAP` / `_DEAD_SECTIONS` |
-| 组件嵌套配置（采集器/Agent/工具包） | 对应 `tests/config/test_*_schema.py` 更新 |
-
-**升版本 ≠ 迁移生效（★ 禁止"升了版本但没验证迁移"的提交）**：
-- 真正让用户文件升级的是 `load_config_dir` 的**漂移写回闭环**——只覆盖 `multi_file_loader.py` 中接入 `_load_and_validate_schema` + `_write_back_schema_file` 的文件。**当前全部 7 个文件（core/model/agents/tools/memory/storage/background）均已接入**，未来新增配置文件必须同样接入，否则该文件的 Schema 变更不会写回用户文件（字段缺失只在内存兜底，功能静默失效）。
-- 每次 Schema 变更后必须实际验证迁移生效：用 `uv run python -c "from src.modules.config.multi_file_loader import load_config_dir; load_config_dir(__import__('pathlib').Path('config'))"` 检查日志出现"已自动升级: 补齐 N 项"且对应字段落盘；或跑 `tests/config/test_config_auto_upgrade.py`。
-- 提交前 `uv run pytest tests/config/ -q` 必须通过；注册了 hook 必须有对应迁移测试。禁止"只改 Schema 不升版本/不注册 hook"的提交。
-
-## 高频 API 速查
-
-### 事件系统
-
-```python
-from src.modules.events.names import CoreEvents
-
-# 发布事件
-await event_bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
-
-# 订阅事件（model_class 必填，自动反序列化）
-event_bus.on(CoreEvents.ROOM_MESSAGE_DANMAKU, self.handle_message, model_class=RoomMessagePayload)
-
-# 通配订阅（收全部工具结果回传）
-event_bus.on("tool.result.#", self.on_tool_result, model_class=ToolResultPayload)
-```
-
-- 事件按语义域组织：`core.*` / `live.*` / `room.message.*` / `game.*` / `agenda.*` + `planner.*` / `tool.result.<name>`；通配订阅 `*` 单层、`#` 多层尾缀（MQTT 风格）
-- 事件 Payload 用 `@register_event("事件名")` 装饰器注册（幂等；启动时 `register_core_events()` 触发 import），不硬编码事件名字符串
-- 完整事件表 / 通配排序语义 / Payload 规范见 [事件系统](docs/architecture/event-system.md)
-
-**时间字段约定（★ 硬规则）**：统一毫秒（ms）。时刻字段用 `int` Unix epoch 毫秒，时长/超时字段用毫秒，命名 `<name>_ms`（如 `timestamp_ms`、`render_timeout_ms`）。禁止 `timestamp_s` / `duration_seconds`；历史 `timestamp` 字段用 Pydantic `alias` 兼容。
-
-### 组件开发（三范式）
-
-| 类型 | 职责 | 基类/协议 | 位置 |
-|------|------|----------|------|
-| **采集器 Collector** | 持续流型数据源，主动推事件（`room.message.*` 等） | `BaseCollector.collect()` 返回 AsyncIterator | `src/modules/collectors/<域>/` |
-| **业务 Agent** | 主播自我驱动 / 游戏命令驱动（类 Code Agent，任务内有界循环），决策循环内聚 | `BaseAgent`（协议六面 + `list_tools()` 抽象） | `src/agents/<family>/<name>/` |
-| **工具 Tool** | 被动能力契约（渲染/感知/内容引擎），被调才干活 | `ToolProvider` Protocol + `ToolSpec` | `src/modules/tools/<包>/` 或 Agent 包内 |
-
-添加组件三步：
-1. 采集器：继承 `BaseCollector`，实现 `collect()`；配置写 `tools.toml` 的 `[tools.perception.config]`
-2. 工具：实现 `ToolProvider`（或 Agent 内提供 `list_tools()`），经 `tool_registry.register_provider(...)` 注册（生产模式为 ToolProvider 类；`@tool` 装饰器双模式——无 `registry=` 时入模块级 pending 表，由装配根 `bind_pending_tools(registry)` flush；带 `registry=` 时立即注册，仅测试/本地用）
-3. Agent：继承 `BaseAgent`，放 `src/agents/<family>/<name>/` 自包含包；在 `agents.toml` 的 `[agents].enabled` 启用、`src/modules/agents/factory.py` 登记
-
-> **单一事实源**：三范式完整指南（含最小骨架代码、装配路径、生命周期表）见 [组件开发指南](docs/development/component-guide.md)。
-
-### 事件拦截器开发
-
-1. 继承 `EventInterceptor`（`src/modules/events/interceptors/base.py`）
-2. 实现 `name` 属性（唯一标识）与 `intercept()` 方法
-3. 在 `main.py` 的 `register_event_interceptors()` 中实例化并 `event_bus.add_interceptor()`
-4. 配置放 `core.toml` 的 `[interceptors.<name>]`
-5. `intercept()` 返回 dict 放行（可原地修改 payload）、返回 `None` 丢弃事件
-
-**详细指南**：[事件系统 - 事件拦截器](docs/architecture/event-system.md#事件拦截器interceptor)
-
-### LLM / 提示词 / 日志
-
-```python
-from src.modules.llm import LLMManager
-from src.modules.prompts import get_prompt_manager
-from src.modules.logging import get_logger
-
-llm_manager = LLMManager()
-await llm_manager.setup(model_config)
-response = await llm_manager.chat("你好")              # 完整对话（profile: llm）
-short_reply = await llm_manager.chat_fast("翻译成英文")  # 快速对话（profile: llm_fast）
-
-prompt = get_prompt_manager().get_raw("amaidesu_replyer")  # 原始提示词
-prompt = get_prompt_manager().render("vts_hotkey", text="用户消息")  # 渲染变量
-
-logger = get_logger("MyClassName")  # 类名/模块名；--filter 用同名参数过滤
-logger.info("信息日志"); logger.error("错误日志", exc_info=True)
-```
-
-- LLM 为 **provider + profile** 两层结构（`[[llm_providers]]` 连接池 + `[llm]/[llm_fast]/[vlm]/[llm_local]/[llm_summary]/[llm_agenda]` profile 引用覆盖），配置见 `config/model.toml`
-- 添加 LLM provider：新建 `src/modules/llm/clients/your_client.py` 继承 `BaseLLMClient` 实现 `chat()/stream_chat()`，末尾 `register_client("your_type", YourClient)`，配置加 `[[llm_providers]]`；未知 provider/client_type 在 `setup()` 时 fail-fast
-- 提示词：模板键为声明式键（frontmatter `name`），文件内聚在消费组件 `prompts/` 目录，`src/**/prompts/` 约定自动发现，详见 [提示词管理](docs/development/prompt-management.md)
-
-### 依赖注入 / 配置读取
-
-- **服务对象**（LLMManager、PromptManager、EventBus 等）→ 构造器注入（DI）；禁止把服务塞进 Context 容器传递。详见 [依赖注入指南](docs/development/dependency-injection.md)
-- 配置：`config/` 目录 **7 文件**（core/model/agents/tools/memory/storage/background，首次运行从 Schema 自动生成；CONFIG_VERSION 以 `multi_file_loader.py` 为准，勿在本文标注具体值——历史教训：标注长期滞后误导）；Agent 启用 `[agents].enabled` / 工具包启用 `[tools].enabled` / 拦截器配置 `[interceptors.*]`
-
-## 多工作树并行开发
-
-使用 `git worktree` 为并行任务（多代理协作、实验性改动）提供互相隔离的检出环境：所有工作树共享同一 `.git`，各自独立 index 与工作目录。
-
-- 术语：**主工作区**=检出主分支（`v2.0.0`）的原仓库；**任务工作树**=`git worktree add` 创建的链接工作树；**停泊分支**=`scratch/idle-*` 占位分支
-- 任务工作树**物理路径属于机器本地信息**，登记于 `AGENTS.local.md`（不入库）；放置于仓库外同级目录，禁止嵌套在仓库内；同一分支同时只允许一个工作树
-
-**开工固定动作**：
-```bash
-# ① 侦察：主线位置与他人未提交变更
-git status --short && git log --oneline -1 v2.0.0
-# ② 换班：从主线最新位置长出新任务分支（无需检出 v2.0.0 本身）
-git switch -c task/<名称> v2.0.0
-# ③ 环境引导 + 基线对齐（先分清"环境的失败"与"代码的失败"）
-uv sync && uv run pytest tests/ -q
-```
-- **交集预检（硬性前置）**：列出新任务目标文件集，与主工作区未提交变更求交集；非零重叠时改为协调串行，不得开工
-- 被 `.gitignore` 排除但测试所需文件（如 `tests/modules/prompts/golden_datasets/*.jsonl`）需从主工作区手动复制或经 post-checkout 钩子补齐
-
-**收口固定动作**：
-1. 提交前照常测试 + lint（铁律不变）；提交仍须用户显式授权
-2. **主线已前移**：先 `git rebase v2.0.0`；冲突解决后必须做**语义双验**（双方意图的特征标记在合并结果中均可检索到），并重新全量测试
-3. **并入主线**：优先快进；主工作区被占用无法 checkout 时，确认 `git merge-base --is-ancestor v2.0.0 <任务分支>` 后用 `git update-ref refs/heads/v2.0.0 <任务分支>` 推进指针，**立即**回主工作区对本任务路径执行 `git checkout HEAD -- <路径>` 同步陈旧副本（索引幽灵条目用 `git rm --cached` 清理），全程不得触碰他人未提交文件
-4. 清理：`git worktree remove <路径>`、删除已并入分支
-
-| 禁止 | 替代方案 |
-|------|---------|
-| ❌ 未做交集预检即开工 | 预检零重叠才并行，否则串行 |
-| ❌ 在仓库目录内部嵌套创建工作树 | 放置于仓库外同级目录 |
-| ❌ `update-ref` 推进指针后不同步主工作区 | 紧跟路径级 `checkout HEAD -- <路径>` 同步 |
-| ❌ 删除失败的工作树来"通过"验证 | 先定位环境差异（缺失的忽略文件 / 过期基线） |
-
-## 常用命令
-
-```bash
-uv sync            # 同步依赖（uv 是包管理器）
-uv run python main.py                    # 正常运行
-uv run python main.py --debug            # 调试模式
-uv run python main.py --filter StreamerAgent ConsoleInputCollector   # 过滤日志
-uv run python main.py --dry              # 仅验证组合根装配后立即退出
-
-uv run pytest tests/                     # 运行所有测试
-uv run pytest tests/path/to/test.py      # 运行特定测试
-uv run ruff check .                      # 代码检查
-uv run ruff format .                     # 代码格式化
-```
-
-Web Dashboard 两种模式（生产 60214 / 开发 60315）说明见 [快速开始 - Web Dashboard](docs/getting-started.md#44-web-dashboard)。
-
-## 测试规范
-
-- pytest；测试文件 `test_*.py`，测试函数 `async def test_*():`；异步测试用 `@pytest.mark.asyncio`
-- 详细指南：[测试指南](docs/development/testing-guide.md)
-
-## 其他约定
-
-- **命名约定**：类名 PascalCase（`EventBus`、`CollectorManager`、`StreamerAgent`）；函数/变量 snake_case；私有成员前导下划线；Collector/Agent/工具/拦截器类以类型名结尾（`ConsoleInputCollector` / `StreamerAgent` / `EdgeTTSProvider` / `RateLimitInterceptor`）。详细规范见 [开发规范](docs/development-guide.md)
-- **数据类型**：数据模型/配置 Schema/事件 Payload 用 Pydantic BaseModel；简单内部统计用 dataclass；接口协议用 Protocol
-- ContextService 是 L1 对话配对窗口（内存，`DialogueTurn` 配对视图；不持久化——启动时由组合根从 SQLite `live_chat` 通过 `seed_dialogue_turns` 回灌，见 `main.py::_bootstrap_context_from_live_chat`），ContextAssembler（`src/modules/context/`）为 Planner/Replyer 组装快照上下文（纯函数）
-- 核心布局：`src/modules/`（框架模块）+ `src/agents/`（业务 Agent：streamer/game）+ `config/`（七文件配置）+ `docs/`（文档），详见 [架构总览](docs/architecture/overview.md#目录结构)
-- 日志过滤：`--filter` 参数传入 `get_logger` 的第一个参数（类名或模块名）
-
-## 相关文档
-
-### 新手入门
-- [快速开始](docs/getting-started.md) - 环境搭建和基本使用
-
-### 架构理解
-- [v2.0.0 架构叙事](docs/architecture/v2-architecture.md) - 重构缘由与设计推导（先读这篇）
-- [架构总览](docs/architecture/overview.md) - v2.0.0 组件清单与目录结构
-- [数据流规则](docs/architecture/data-flow.md) - 数据流约束和规则
-- [事件系统](docs/architecture/event-system.md) - EventBus 使用指南
-- [事件命名规范](docs/architecture/event-naming-convention.md) - 事件命名规则
-
-### 开发指南
-- [开发规范](docs/development-guide.md) - 代码风格和约定
-- [组件开发指南](docs/development/component-guide.md) - 采集器/工具/Agent 三范式开发详解
-- [事件拦截器](docs/architecture/event-system.md#事件拦截器interceptor) - 事件拦截器开发详解
-- [提示词管理](docs/development/prompt-management.md) - PromptManager 使用
-- [测试指南](docs/development/testing-guide.md) - 测试规范和最佳实践
-
----
-
-*最后更新：2026-09-06（遗留接线补全：core.toml [context] 段与 Planner 组装路径实际接线——enabled 开关（false 时跳过组装器与记忆召回、以直播流窗口文本作为 context_block）+ memory_recall_long_term 驱动 Planner.recall_top_k；删除无实现载体的 memory_recall_viewers（SimpleMemory 无画像批量召回接口）与 cache_ttl_ms（纯函数组装器 + 每批动态窗口下无正确缓存语义），CONFIG_VERSION 2.0.15 → 2.0.16，漂移写回自动清理用户文件冗余键；agenda.update 由 StreamerAgent 在环节推进/手动控制后实际发布（此前只有订阅端，前端Dashboard/OutlineWorkbench 依赖该事件重拉节目单快照）；新增 CoreEvents.ROOM_MESSAGE_WILDCARD 通配订阅常量，storage_ledger 字面量改用常量）*
-
-*最后更新：2026-09-06（接线收口：CONFIG_VERSION 2.0.4 → 2.0.15（实际值以 `multi_file_loader.py` 为准，此前本文档长期标注 2.0.4 已严重滞后）；2.0.15 收口 tools.toml 僵尸配置（output enabled 剥离 subtitle、删除 debug_console/sticker/remote_stream 死子段、obs_control 改名 obs、perception 剥离已删除的 text_adv_game 采集器），新增 `_migrate_tools_2_0_15` 钩子及迁移测试；拦截器新增 声明式作用域 `scope_prefixes`（空 = 不限域），限流/相似过滤显式限定 `room.message.*`；`ToolRegistry` 可挂载 EventBus 广播 `tool.result.<name>`；组合根发布 `core.startup`/`core.shutdown`；修复 EventHistoryRecorder 对 game.* 订阅的 model_class 错配；删除 v1 遗留：`src/modules/di/`（反射式装配，文档已同步）、`types/intent.py` 类型闭环、`integrations/amaidesu_plugin/`、`tests/mocks/` 死 mock、一次性 scripts；pyproject 清理零引用依赖）*
-
-*最后更新：2026-09-08（主播 Agent 决策链 ReAct 化：Planner 从单发 produce_plan 决策改为 ReAct 循环——chat_messages + 工具面（ToolRegistry 全量 + reply 局部工具）、max_steps=8 防失控、自然终止=静默；Replyer 收缩为 reply 工具实现载体（表达引擎零工具面）；废除 DecisionPlan 管道与 produce_plan 协议；planner_llm 默认 llm_fast→llm（决策核心质量敏感）、新增 planner_max_steps=8；CONFIG_VERSION 2.0.23）*
-*最后更新：2026-09-08（MinecraftAgent ReAct 重构：从命令驱动 decide 协议（Intent 换皮）改为普通 ReAct Agent——系统提示词+工具面即全部编程、主播即用户；工具名对齐前缀机制 minecraft_assign/minecraft_todo/minecraft_notebook/minecraft_get_state（provider=minecraft 全名）；assign 纯消息投递不代写 todo、notebook 持久工作记忆；adapter 删除 agent 零 maicraft 知识（registry 动态工具面 + MCP 天然路由 server_id 判定冗余删除）；事件确定性化（todo-done diff 里程碑/交付总结/max_steps 挂起/error）；对话用已有 chat_messages + 完整 tool_call 格式喂回 + 旧观察压缩；CONFIG_VERSION 2.0.20 → 2.0.21（minecraft 段删 tick_interval_ms/server_id、增 max_steps）；旧 decide 提示词删除、新 amaidesu_minecraft_agent 系统提示词）*
-
-*最后更新：2026-09-07（工具注册名无条件 provider 前缀 + provider 分类声明（89763443）：注册名=<provider>_<工具名>、spec 未带前缀时 replace 拷贝改写、ToolProvider.category 协议属性、list_categories()/list_tools(category=)/to_llm_definitions(category=)、存量 provider 对齐（obs/vison/memory/framework/game）、调用方与测试对齐、"域"→"分类"措辞清理）*
-
-*最后更新：2026-09-07（主体性判据三分修正（用户拍板）：主播 Agent=自我驱动（唯一）/ 游戏 Agent=命令驱动（类 Code Agent，命令启动任务内有界循环、完成即停、空闲零消耗）/ 工具=被动调用；MinecraftAgent 按此重构为事件唤醒（set_goal 触发 _goal_worker→_run_goal），删除存在性心跳循环；同批修复：感知数据进 prompt、adapter ok 保留、attention 安全阀轮询、command_llm/live_session_id 接线、[agents.game.minecraft] 配置段接入（CONFIG_VERSION 2.0.20）、set_goal 写入 todo、决策 LLM 暴露 mc_todo/mc_memo、任务跟踪防重复派发）*
-
-*上次更新：2026-09-05（上下文四层架构落地：「其他约定」节 ContextService 条目补充为"L1 对话配对窗口（内存，DialogueTurn 配对视图；不持久化——启动时由组合根从 SQLite `live_chat` 通过 `seed_dialogue_turns` 回灌，见 `main.py::_bootstrap_context_from_live_chat`）"；「高频 API 速查」节未改；同日 v2.0.12 §8 概念修正：TTS 提升为基础设施（基础模块）。架构红线节"主体性判据"工具例子清单中 TTS 加注"自 v2.0.12 §8 修正起已是基础模块，不再是工具"——其余三例仍为工具；高频 API 速查节"事件系统" + "命名约定" + "依赖注入"未改；事件 Payload / 配置 Schema / 三范式 / 拦截器节未改；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））
-
-*最后更新：2026-09-06（测试策略强化：改哪里测哪里——常规改动只跑相关测试文件 + ruff（限改动文件），全量 `pytest tests/` 仅限收口/并入主线/跨模块重构；替换原"提交代码前运行测试"条目措辞）*
+- **临时工作树**：一次性任务用，`git worktree add` 创建；收口并入主线后删除工作树目录与已并入分支
+- **常驻工作树**：持续复用的固定目录；工作树目录与其历史任务分支长期保留（供追溯），接新任务时换班——先侦察主线位置与他人未提交变更，再从主线最新位置长出新分支 `git switch -c task/<新名称> v2.0.0`
+- **交集预检（硬性前置）**：开工前列出新任务目标文件集，与主工作区未提交变更求交集；非零重叠改为协调串行
+- 被 `.gitignore` 排除但测试所需的运行时素材，从主工作区手动补齐
+- **收口**：先 rebase 主线；冲突解决后做语义双验（双方意图的特征标记在合并结果中均可检索）并重新全量测试；并入主线优先快进，主工作区被占用时推进分支指针后**立即**回主工作区对本任务路径做路径级 checkout 同步陈旧副本，改动范围限于本任务路径、避开他人未提交文件；最后临时工作树删除工作树目录与已并入分支，常驻工作树的目录与分支均保留待下次换班
+- 工作树中测试失败时，先排查环境差异（缺失的忽略文件、过期基线），再怀疑代码
