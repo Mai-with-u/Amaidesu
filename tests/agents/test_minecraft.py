@@ -12,6 +12,7 @@ from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.manager import LLMResponse
 from src.modules.tools.models import ToolInvocation
+from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.registry import ToolRegistry
 
 
@@ -291,7 +292,7 @@ async def test_react_mcp_tool_via_registry_passthrough() -> None:
     """MCP 工具（maicraft_*）经 registry 透传——agent 不感知 maicraft 接口。"""
     registry = ToolRegistry()
 
-    class FakeMcpProvider:
+    class FakeMcpProvider(BaseToolProvider):
         category = "game"
         name = "FakeMcp"
 
@@ -551,7 +552,7 @@ async def test_react_tool_failure_fed_back_to_llm() -> None:
     """MCP 工具失败（ok:false）作为观察喂回 LLM，循环继续（ReAct 标准，LLM 自调整）。"""
     registry = ToolRegistry()
 
-    class FailingMcp:
+    class FailingMcp(BaseToolProvider):
         category = "game"
         name = "FailingMcp"
 
