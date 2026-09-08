@@ -10,10 +10,9 @@
 设计要点：
 - 纯函数：不依赖任何全局状态/kwargs 注入；便于单测，无需真实 server
 - **不含 server 特定知识**：只做类型层映射，不解析任何工具语义
-- 工具名加前缀：MCP server 的工具名可能有两种形态——不带前缀的（如
-  ``perceive``）与已经带 server 名的（如 ``serverA_perceive``）。Amaidesu
-  侧统一加前缀（server 别名）避免与内置工具重名（ToolRegistry 先注册保留，
-  重名会被静默跳过）。
+- 工具名**无条件**加前缀（``<server名>_``）：注册名铁定不与内置工具冲突，
+  也不依赖"原名是否已带前缀"的猜测；Provider 在 list_tools 时记录
+  注册名 → MCP 原名的映射表，调用时查表还原（不做任何字符串剥离）
 """
 
 from __future__ import annotations
@@ -24,39 +23,26 @@ from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolSpec
 
 
 def normalize_tool_name(raw_name: str, prefix: str) -> str:
-    """给 MCP 工具名加前缀（防重名），并保持语义清晰。
+    """给 MCP 工具名**无条件**加前缀（防重名，不猜原名形态）。
 
     Args:
-        raw_name: MCP 侧工具原名（可能已含 server 前缀，如
-            ``serverA_perceive``；也可能不带）
+        raw_name: MCP 侧工具原名（无论是否已带 server 前缀，一律再加）
         prefix: 前缀（通常为 ``<server名>_``）
 
     Returns:
-        加前缀后的工具名（如 ``serverA_perceive``）
+        加前缀后的注册名（如 server 名=serverA、原名=serverA_perceive
+        → 注册名=serverA_serverA_perceive）
+
+    说明：
+        不做"已带前缀则跳过"的去重——那需要猜测原名形态，猜错即调用
+        失败（Unknown tool）。注册名与原名的对应关系由 Provider 的
+        映射表记录（见 McpToolProvider._name_map），注册名只要唯一
+        且可查表还原即可，形态不重要。
     """
     name = raw_name.strip()
     if not prefix:
         return name
-    # 已带前缀则跳过（防重复前缀：server 名=serverA 且工具名=serverA_perceive
-    # → 仍为 serverA_perceive）
-    if name.startswith(prefix):
-        return name
     return f"{prefix}{name}"
-
-
-def strip_tool_prefix(tool_name: str, prefix: str) -> str:
-    """剥掉 Amaidesu 侧前缀，还原 MCP 侧工具原名（调用前用）。
-
-    Args:
-        tool_name: 注册后的工具名（含前缀）
-        prefix: 前缀（与 normalize_tool_name 一致）
-
-    Returns:
-        MCP 侧工具原名（不带前缀）
-    """
-    if prefix and tool_name.startswith(prefix):
-        return tool_name[len(prefix) :]
-    return tool_name
 
 
 def to_spec(
@@ -194,7 +180,6 @@ def to_result(
 
 __all__ = [
     "normalize_tool_name",
-    "strip_tool_prefix",
     "to_spec",
     "to_result",
 ]

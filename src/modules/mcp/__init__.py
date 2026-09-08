@@ -30,7 +30,7 @@ from typing import Any, Dict, Optional
 from src.modules.logging import get_logger
 from src.modules.mcp.client import McpClient
 from src.modules.mcp.config import McpExternalConfig, McpServerConfig
-from src.modules.mcp.mapper import normalize_tool_name, strip_tool_prefix, to_result, to_spec
+from src.modules.mcp.mapper import normalize_tool_name, to_result, to_spec
 from src.modules.mcp.provider import McpToolProvider
 from src.modules.tools.registry import ToolRegistry
 
@@ -123,7 +123,6 @@ __all__ = [
     "McpToolProvider",
     # 映射
     "normalize_tool_name",
-    "strip_tool_prefix",
     "to_spec",
     "to_result",
     # 装配

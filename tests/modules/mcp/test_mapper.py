@@ -1,7 +1,7 @@
 """Mapper 纯函数单测：MCP → Amaidesu 工具契约映射
 
 覆盖：
-- normalize_tool_name / strip_tool_prefix（前缀加/剥、防重复前缀）
+- normalize_tool_name（无条件加前缀）
 - to_spec（Tool → ToolSpec：name/description/inputSchema/provider）
 - to_result（CallToolResult → ToolExecutionResult：成功/错误/结构化/image 块）
 """
@@ -14,7 +14,6 @@ import pytest
 
 from src.modules.mcp.mapper import (
     normalize_tool_name,
-    strip_tool_prefix,
     to_result,
     to_spec,
 )
@@ -54,7 +53,7 @@ class FakeCallToolResult:
 
 
 # ---------------------------------------------------------------------------
-# normalize_tool_name / strip_tool_prefix
+# normalize_tool_name（无条件加前缀）
 # ---------------------------------------------------------------------------
 
 
@@ -62,22 +61,13 @@ class TestToolName:
     def test_prefix_added_when_missing(self) -> None:
         assert normalize_tool_name("perceive", "serverA_") == "serverA_perceive"
 
-    def test_prefix_skipped_when_already_present(self) -> None:
-        assert normalize_tool_name("serverA_perceive", "serverA_") == "serverA_perceive"
+    def test_prefix_always_added_even_if_present(self) -> None:
+        # 原名已带 server 前缀也照样再加：不猜原名形态，注册名唯一即可，
+        # 调用时由 Provider 映射表还原原名
+        assert normalize_tool_name("serverA_perceive", "serverA_") == "serverA_serverA_perceive"
 
     def test_no_prefix_returns_raw(self) -> None:
         assert normalize_tool_name("perceive", "") == "perceive"
-
-    def test_strip_removes_prefix(self) -> None:
-        assert strip_tool_prefix("serverA_perceive", "serverA_") == "perceive"
-
-    def test_strip_no_prefix_returns_raw(self) -> None:
-        assert strip_tool_prefix("perceive", "serverA_") == "perceive"
-
-    def test_round_trip_preserves_mcp_name(self) -> None:
-        raw = "perceive"
-        prefixed = normalize_tool_name(raw, "serverA_")
-        assert strip_tool_prefix(prefixed, "serverA_") == raw
 
 
 # ---------------------------------------------------------------------------

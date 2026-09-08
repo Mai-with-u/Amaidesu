@@ -85,6 +85,12 @@ class McpClient:
             # 延迟 import FastMCP Client
             from fastmcp import Client
 
+            if self._client is not None:
+                # 重连前先释放旧实例，避免上下文泄漏
+                try:
+                    await self._client.__aexit__(None, None, None)
+                except Exception:  # noqa: BLE001 - 旧实例释放失败不阻断重连
+                    pass
             transport = self._build_transport()
             client = Client(transport)
             await client.__aenter__()
@@ -118,16 +124,17 @@ class McpClient:
         """调用 server 上的工具，返回 FastMCP CallToolResult（原始结果）。
 
         Args:
-            tool_name: MCP 侧工具原名（**不带前缀**——前缀是 Amaidesu 侧
-                命名空间，调用前由 Provider 剥掉）
+            tool_name: MCP 侧工具原名（Provider 从注册名→原名映射表查得）
             arguments: 工具参数 dict
 
         Returns:
             CallToolResult；未连接 / 调用失败时返回 None（由 Provider 转换为错误结果）
         """
         if not self._connected or self._client is None:
-            logger.warning(f"MCP server '{self.name}' 未连接，无法调用工具 '{tool_name}'")
-            return None
+            # 长时间运行后连接可能静默断开：惰性重连一次，失败才放弃
+            logger.info(f"MCP server '{self.name}' 未连接，尝试重连后调用 '{tool_name}'")
+            if not await self.connect():
+                return None
         try:
             started = time.time()
             result = await self._client.call_tool(tool_name, arguments)
@@ -135,7 +142,10 @@ class McpClient:
             logger.debug(f"MCP 调用 {self.name}.{tool_name} 完成（{duration_ms}ms）")
             return result
         except Exception as exc:  # noqa: BLE001 - 通道边界兜底
+            # 调用异常多为连接层失效（断线/服务重启）：标记断开，下次调用触发重连
             logger.warning(f"MCP server '{self.name}' 调用工具 '{tool_name}' 失败: {type(exc).__name__}: {exc}")
+            self._connected = False
+            self._client = None
             return None
 
     async def close(self) -> None:

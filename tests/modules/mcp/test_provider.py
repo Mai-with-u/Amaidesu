@@ -108,7 +108,7 @@ class TestProvider:
         assert count == 0
         assert list(prov.list_tools()) == []
 
-    async def test_invoke_strips_prefix_and_forwards(self) -> None:
+    async def test_invoke_resolves_raw_name_via_map(self) -> None:
         client, prov = _provider()
         client.set_tools([FakeTool("perceive", "观察")])
         await prov.setup()
@@ -117,6 +117,19 @@ class TestProvider:
         assert result.success is True
         assert client.called == [{"name": "perceive", "arguments": {"view": "situation"}}]
         assert result.structured_content == {"raw": "perceive"}
+
+    async def test_invoke_raw_name_already_prefixed_resolved_via_map(self) -> None:
+        # 回归：MaiCraft server 工具原名自带 maicraft_ 前缀，旧 strip 逻辑
+        # 把注册名剥成 perceive → server 报 Unknown tool；现在无条件加前缀
+        # + 映射表查表还原，原名形态不再影响调用
+        client, prov = _provider()
+        client.set_tools([FakeTool("maicraft_perceive", "观察")])
+        await prov.setup()
+        assert list(prov.list_tools())[0].name == "serverA_maicraft_perceive"
+
+        result = await prov.invoke(ToolInvocation(tool_name="serverA_maicraft_perceive"))
+        assert result.success is True
+        assert client.called == [{"name": "maicraft_perceive", "arguments": {}}]
 
     async def test_invoke_unknown_tool_returns_failure(self) -> None:
         client, prov = _provider()

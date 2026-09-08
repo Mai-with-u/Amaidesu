@@ -51,7 +51,50 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.modules.llm.clients.base import _client_impls
-from src.modules.llm.manager import LLMManager, LLMResponse, RetryConfig, ClientType
+from src.modules.llm.manager import (
+    LLMManager,
+    LLMResponse,
+    RetryConfig,
+    ClientType,
+    normalize_tool_calls_for_protocol,
+)
+
+
+# =============================================================================
+# normalize_tool_calls_for_protocol - 喂回协议规整
+# =============================================================================
+
+
+class TestNormalizeToolCallsForProtocol:
+    def test_dict_arguments_serialized_to_json_string(self) -> None:
+        # 回归：client 解析层返回 arguments 为 dict，直接喂回被严格端点
+        # 拒绝（400 invalid type: map）
+        raw = [
+            {
+                "id": "call_01",
+                "type": "function",
+                "function": {"name": "minecraft_assign", "arguments": {"content": "合成工作台"}},
+            }
+        ]
+        normalized = normalize_tool_calls_for_protocol(raw)
+        assert normalized[0]["function"]["arguments"] == '{"content": "合成工作台"}'
+        assert isinstance(normalized[0]["function"]["arguments"], str)
+
+    def test_string_arguments_passthrough(self) -> None:
+        raw = [{"id": "c1", "type": "function", "function": {"name": "reply", "arguments": '{"a": 1}'}}]
+        normalized = normalize_tool_calls_for_protocol(raw)
+        assert normalized[0]["function"]["arguments"] == '{"a": 1}'
+
+    def test_missing_fields_defaulted(self) -> None:
+        normalized = normalize_tool_calls_for_protocol([{"function": {"name": "x"}}])
+        assert normalized[0]["id"] == ""
+        assert normalized[0]["type"] == "function"
+        assert normalized[0]["function"]["arguments"] == "{}"
+
+    def test_none_and_empty(self) -> None:
+        assert normalize_tool_calls_for_protocol(None) == []
+        assert normalize_tool_calls_for_protocol([]) == []
+
 
 # =============================================================================
 # Test Constants - 标准配置

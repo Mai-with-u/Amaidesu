@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.context.assembler import AssemblerInputs, PlannerAssembler
 from src.modules.context.snapshot import EnvironmentBlock
+from src.modules.llm.manager import normalize_tool_calls_for_protocol
 from src.modules.logging import get_logger
 from src.modules.memory.models import MemoryHit
 from src.modules.time_utils import now_ms
@@ -283,9 +284,13 @@ class Planner:
             self.last_request_id = getattr(response, "request_id", None) or None
 
             tool_calls = list(getattr(response, "tool_calls", None) or [])
-            assistant_msg: Dict[str, Any] = {"role": "assistant", "content": getattr(response, "content", None)}
+            assistant_content = getattr(response, "content", None)
+            if assistant_content is not None and not isinstance(assistant_content, str):
+                # OpenAI 协议要求 content 为 string/null，部分 client 返回结构化内容
+                assistant_content = json.dumps(assistant_content, ensure_ascii=False, default=str)
+            assistant_msg: Dict[str, Any] = {"role": "assistant", "content": assistant_content}
             if tool_calls:
-                assistant_msg["tool_calls"] = tool_calls
+                assistant_msg["tool_calls"] = normalize_tool_calls_for_protocol(tool_calls)
             messages.append(assistant_msg)
 
             # 自然终止：LLM 不再调用任何工具 = 本轮不说话

@@ -36,6 +36,7 @@ from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
+from src.modules.llm.manager import normalize_tool_calls_for_protocol
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
@@ -298,9 +299,13 @@ class MinecraftAgent(BaseAgent):
 
             # 组装 assistant 消息（完整 tool_calls 形态，供后续关联喂回）
             tool_calls = response.tool_calls or []
-            assistant_msg: Dict[str, Any] = {"role": "assistant", "content": response.content}
+            assistant_content = response.content
+            if assistant_content is not None and not isinstance(assistant_content, str):
+                # OpenAI 协议要求 content 为 string/null，部分 client 返回结构化内容
+                assistant_content = json.dumps(assistant_content, ensure_ascii=False, default=str)
+            assistant_msg: Dict[str, Any] = {"role": "assistant", "content": assistant_content}
             if tool_calls:
-                assistant_msg["tool_calls"] = tool_calls
+                assistant_msg["tool_calls"] = normalize_tool_calls_for_protocol(tool_calls)
             messages.append(assistant_msg)
 
             # 自然终止：LLM 无 tool_calls → 交付汇报

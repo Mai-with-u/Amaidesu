@@ -3,7 +3,8 @@
 实现 ``ToolProvider`` Protocol：
 - ``list_tools()``：同步返回缓存的 ToolSpec 列表（MCP list_tools 是 async，
   与 Provider 协议同步签名之间的阻抗通过**连接时预拉缓存**化解）
-- ``invoke()``：剥前缀 → 转发到 MCP client → 映射结果；永远不抛异常
+- ``invoke()``：查映射表还原 MCP 原名 → 转发到 MCP client → 映射结果；
+  永远不抛异常
 
 ## 可见性语义（★ 关键设计）
 - ``provider`` 默认 = server 名（如 maicraft → "maicraft"）：注册后工具进入
@@ -53,6 +54,9 @@ class McpToolProvider(ToolProvider):
         self.prefix = prefix if prefix is not None else f"{server_name}_"
         self._provider = provider or server_name
         self._specs: List[ToolSpec] = []
+        # 注册名 → MCP 原名（setup 时从 list_tools 记录；调用时查表还原，
+        # 不做任何字符串剥离——原名可能自带 server 前缀，剥错即 Unknown tool）
+        self._name_map: dict = {}
         self._synced = False
 
     @property
@@ -74,7 +78,14 @@ class McpToolProvider(ToolProvider):
                 self._synced = True
                 return 0
         tools = await self._client.list_tools()
-        self._specs = [mapper.to_spec(t, prefix=self.prefix, provider=self._provider) for t in tools]
+        self._specs = []
+        self._name_map = {}
+        for t in tools:
+            raw_name = getattr(t, "name", "")
+            spec = mapper.to_spec(t, prefix=self.prefix, provider=self._provider)
+            self._specs.append(spec)
+            if raw_name:
+                self._name_map[spec.name] = raw_name
         self._synced = True
         logger.info(
             f"MCP Provider '{self.server_name}' 工具缓存就绪（{len(self._specs)} 个，"
@@ -87,14 +98,13 @@ class McpToolProvider(ToolProvider):
         return list(self._specs)
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        """执行 MCP 工具：剥前缀 → 转发 → 映射结果。永远不抛异常。"""
+        """执行 MCP 工具：查映射表还原原名 → 转发 → 映射结果。永远不抛异常。"""
         started_ms = int(time.time() * 1000)
         full_name = invocation.tool_name
-        mcp_name = mapper.strip_tool_prefix(full_name, self.prefix)
 
         # 前置检查：工具是否属于本 Provider（不知道的工具 → 失败结果，不抛）
-        known_names = [s.name for s in self._specs]
-        if full_name not in known_names:
+        mcp_name = self._name_map.get(full_name)
+        if mcp_name is None:
             return ToolExecutionResult(
                 tool_name=full_name,
                 success=False,
