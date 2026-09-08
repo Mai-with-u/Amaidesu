@@ -14,7 +14,7 @@ import os
 import queue
 import threading
 import tkinter as tk
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageColor, ImageFilter, ImageFont, ImageTk
 from pydantic import Field
@@ -82,6 +82,8 @@ class OutlineLabel:
         self.font_size_px = font[1] if font else 28
         self._font_px = round(self.font_size_px * 4 / 3)
         self._photo: Any = None
+        # emoji 兜底字体缓存：None=未尝试 False=不可用 FreeTypeFont=已加载
+        self._emoji_font_obj: Any = None
         self._background_color = background_color
 
         canvas_kwargs = {
@@ -186,21 +188,45 @@ class OutlineLabel:
         line_h = self._line_height()
         total_h = len(lines) * line_h
         y = (height - total_h) // 2
+        emoji_font = self._load_emoji_font()
+        main_ascent = font.getmetrics()[0]
+        emoji_ascent = emoji_font.getmetrics()[0] if emoji_font else main_ascent
         for line in lines:
-            # getmask(mode="1") 返回 ImagingCore（无抗锯齿，字节为 0/255 二值）；
-            # 转 Image("L") 后膨胀/合成，像素保持纯色（无灰度中间值）。
-            mask_core = font.getmask(line, mode="1")
-            mask_w, mask_h = mask_core.size
-            if mask_w <= 0 or mask_h <= 0:
-                continue
-            mask_l = Image.frombytes("L", (mask_w, mask_h), bytes(mask_core))
-            x = (width - mask_w) // 2
-            if self.outline_enabled and self.outline_width > 0:
-                outline_l = mask_l.filter(ImageFilter.MaxFilter(self.outline_width * 2 + 1))
-                img.paste(Image.new("RGB", outline_l.size, outline_rgb), (x, y), outline_l)
-            img.paste(Image.new("RGB", mask_l.size, text_rgb), (x, y), mask_l)
+            # 每段按所属字体取 1-bit ink 掩码（无抗锯齿），段间按 advance
+            # 排布、按 ascent 差对齐基线；掩码膨胀/合成与单字体时一致。
+            segments: List[Tuple[Image.Image, int, int]] = []
+            cursor = 0.0
+            for seg_text, use_emoji in self._split_emoji_runs(line):
+                f = emoji_font if (use_emoji and emoji_font) else font
+                advance = f.getlength(seg_text)
+                bbox = f.getbbox(seg_text)
+                if bbox is None or bbox[2] - bbox[0] <= 0 or bbox[3] - bbox[1] <= 0:
+                    cursor += advance
+                    continue
+                # getmask(mode="1") 返回 ImagingCore（无抗锯齿，字节为
+                # 0/255 二值）；转 Image("L") 后膨胀/合成，像素保持纯色
+                # （无灰度中间值）。
+                mask_core = f.getmask(seg_text, mode="1")
+                mask_w, mask_h = mask_core.size
+                if mask_w <= 0 or mask_h <= 0:
+                    cursor += advance
+                    continue
+                mask_l = Image.frombytes("L", (mask_w, mask_h), bytes(mask_core))
+                ascent_diff = (main_ascent - emoji_ascent) if (use_emoji and emoji_font) else 0
+                segments.append((mask_l, round(cursor + bbox[0]), y + bbox[1] + ascent_diff))
+                cursor += advance
+            pen_x = (width - round(cursor)) // 2
+            for mask_l, seg_x, seg_y in segments:
+                self._paste_mask(img, mask_l, pen_x + seg_x, seg_y, text_rgb, outline_rgb)
             y += line_h
         return img
+
+    def _paste_mask(self, img: Image.Image, mask_l: Image.Image, x: int, y: int, text_rgb, outline_rgb) -> None:
+        """把一段 ink 掩码按"先描边后填充"合成到画布。"""
+        if self.outline_enabled and self.outline_width > 0:
+            outline_l = mask_l.filter(ImageFilter.MaxFilter(self.outline_width * 2 + 1))
+            img.paste(Image.new("RGB", outline_l.size, outline_rgb), (x, y), outline_l)
+        img.paste(Image.new("RGB", mask_l.size, text_rgb), (x, y), mask_l)
 
     def _load_font(self) -> Optional[ImageFont.FreeTypeFont]:
         """解析字体路径：先用字体族名（Pillow Windows 走注册表），失败后退化为
@@ -226,18 +252,82 @@ class OutlineLabel:
                 continue
         return None
 
+    def _load_emoji_font(self) -> Optional[ImageFont.FreeTypeFont]:
+        """加载 Windows 内置的 Segoe UI Emoji 作为 emoji 兜底字体。
+
+        不开 embedded_color：COLR 字体按普通轮廓渲染，得到的 1-bit 掩码
+        与主文本共用描边/纯色合成管线（彩色像素会破坏 ``-transparentcolor``
+        的纯色打孔约定）。字体缺失（非 Windows 环境）时返回 None，emoji
+        退回主字体按现状渲染（方块）。
+        """
+        cached = getattr(self, "_emoji_font_obj", None)
+        if cached is not None:
+            return cached or None
+        font = None
+        try:
+            font = ImageFont.truetype("seguiemj.ttf", self._font_px)
+        except Exception:
+            for path in glob.glob(r"C:\Windows\Fonts\seguiemj*.tt[fc]"):
+                try:
+                    font = ImageFont.truetype(path, self._font_px)
+                    break
+                except Exception:
+                    continue
+        self._emoji_font_obj = font if font is not None else False
+        return font
+
+    @staticmethod
+    def _is_emoji_char(ch: str) -> bool:
+        """字符是否属于 emoji 字体接管的 Unicode 区段。
+
+        只收 Segoe UI Emoji 确定覆盖的区段（含变体选择符/零宽连接符/
+        键帽组合符）；箭头、©®™ 等雅黑本身有字形的符号不接管，避免把
+        正常文本字形换成 emoji 风格。
+        """
+        cp = ord(ch)
+        return (
+            0x1F000 <= cp <= 0x1FAFF
+            or 0x2600 <= cp <= 0x27BF
+            or 0x2B00 <= cp <= 0x2BFF
+            or 0x231A <= cp <= 0x231B
+            or 0x23E9 <= cp <= 0x23FA
+            or cp in (0x200D, 0xFE0F, 0x20E3)
+        )
+
+    def _split_emoji_runs(self, line: str) -> List[Tuple[str, bool]]:
+        """把一行拆成 ``(文本段, 是否走 emoji 字体)`` 序列。
+
+        变体选择符/零宽连接符归入 emoji 段，让多码点 emoji 尽量成段；
+        段内按原字符顺序交由字体排版（无复杂整形时多码点 emoji 可能逐
+        码点平铺，属可接受降级）。
+        """
+        segments: List[Tuple[str, bool]] = []
+        for ch in line:
+            is_emoji = self._is_emoji_char(ch)
+            if segments and segments[-1][1] == is_emoji:
+                segments[-1] = (segments[-1][0] + ch, is_emoji)
+            else:
+                segments.append((ch, is_emoji))
+        return segments
+
     def _wrap_lines(self, font, max_width: int) -> List[str]:
         text = (self.display_text or "").strip()
         if not text:
             return []
+        emoji_font = self._load_emoji_font()
         lines: List[str] = []
         current = ""
+        current_w = 0.0
         for ch in text:
-            if font.getlength(current + ch) > max_width - 20 and current:
+            f = emoji_font if (emoji_font and self._is_emoji_char(ch)) else font
+            ch_w = f.getlength(ch)
+            if current and current_w + ch_w > max_width - 20:
                 lines.append(current)
                 current = ch
+                current_w = ch_w
             else:
                 current += ch
+                current_w += ch_w
         if current:
             lines.append(current)
         return lines

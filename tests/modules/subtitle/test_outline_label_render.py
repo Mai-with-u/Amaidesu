@@ -95,3 +95,45 @@ def test_required_height_grows_with_wrapped_lines():
     multi_h = multi.required_height()
     assert single_h > 0
     assert multi_h > single_h
+
+
+def test_split_emoji_runs_classifies_and_glues_joiners():
+    label = _make_label(text="你好🃏AB")
+    assert label._split_emoji_runs("你好🃏AB") == [("你好", False), ("🃏", True), ("AB", False)]
+    # 零宽连接符/变体选择符归入 emoji 段，多码点 emoji 不被拆散
+    assert label._split_emoji_runs("👍‍👎") == [("👍‍👎", True)]
+    assert label._split_emoji_runs("纯文本") == [("纯文本", False)]
+
+
+def test_emoji_font_renders_monochrome_ink():
+    label = _make_label(text="✅")
+    emoji_font = label._load_emoji_font()
+    if emoji_font is None:
+        import pytest
+
+        pytest.skip("缺少 Segoe UI Emoji 字体（非 Windows 环境）")
+    bbox = emoji_font.getbbox("✅")
+    assert bbox is not None and bbox[2] > bbox[0] and bbox[3] > bbox[1]
+
+
+def test_render_emoji_pixels_only_three_colors():
+    img = _make_label(text="完成✅🔥")._render_text(800, 100, BG)
+    assert img is not None
+    colors = set(img.getdata())
+    # emoji 走单色轮廓渲染，同样只允许三种纯色（无彩色/抗锯齿中间色）
+    assert colors <= {ImageColorToTuple(BG), ImageColorToTuple(OUTLINE), ImageColorToTuple(TEXT)}, colors
+
+
+def test_wrap_lines_counts_emoji_width():
+    label = _make_label(text="好嘞✅🔥⛏️稍等看成品✅" * 5)
+    font = label._load_font()
+    assert font is not None
+    lines = label._wrap_lines(font, 800)
+    assert len(lines) >= 2
+    emoji_font = label._load_emoji_font()
+    for line in lines:
+        width = 0.0
+        for seg, use_emoji in label._split_emoji_runs(line):
+            f = emoji_font if (use_emoji and emoji_font) else font
+            width += f.getlength(seg)
+        assert width <= 780
