@@ -212,6 +212,40 @@ class OBSProvider(BaseToolProvider):
                 self.is_connected = False
         self._has_started = False
 
+    async def connect(self) -> bool:
+        """手动建立 OBS 连接（手动重连的"建立"半步）。
+
+        委托 ``_connect_obs``：底层已对 obsws-python 缺失 / 连接异常做了 try/
+        except 兜底并返回 bool，本层不另捕。``_has_started`` 保持不变——
+        手动 connect 假设 setup 已先完成（组合根装配期调过），属于 setup
+        内部的连接刷新，**不**重置 ``_has_started`` 标志。
+        """
+        self.logger.info("手动触发 OBS 连接")
+        ok = await self._connect_obs()
+        if not ok:
+            self.logger.warning("OBS 手动连接失败（详见上方连接错误日志）")
+        return ok
+
+    async def disconnect(self) -> bool:
+        """手动断开 OBS 连接（手动重连的"断开"半步）。
+
+        与 ``cleanup`` 不同：仅关闭 ``obs_connection`` 并清空本地句柄 + 置
+        ``is_connected=False``，**不重置** ``_has_started``——保持 setup 语
+        义（仍可再 connect）。obsws-python 的 ``disconnect`` 同步调用，做
+        try/except 兜底（断连中或重复断连不阻断）。返回 True 表达"断开动
+        作已完成"。
+        """
+        self.logger.info("手动断开 OBS 连接")
+        if self.obs_connection:
+            try:
+                self.obs_connection.disconnect()
+            except Exception as e:
+                self.logger.warning(f"手动断开 OBS 连接异常（忽略）: {e}")
+            finally:
+                self.obs_connection = None
+                self.is_connected = False
+        return True
+
     # ===== 业务方法 =====
 
     async def switch_scene(self, scene_name: str) -> bool:
