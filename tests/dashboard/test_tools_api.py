@@ -81,6 +81,7 @@ class _FakeToolRegistry:
         self._categories = dict(categories or {})
         self._disabled: set[str] = set()
         self._scoped_owner: dict[str, str] = {}
+        self._supports_reconnect: dict[str, bool] = {}
 
     def list_tools(
         self,
@@ -109,6 +110,12 @@ class _FakeToolRegistry:
 
     def scoped_owner_of(self, name: str) -> str:
         return self._scoped_owner.get(name, "")
+
+    def provider_supports_reconnect(self, name: str) -> bool:
+        return self._supports_reconnect.get(name, False)
+
+    def set_supports_reconnect(self, name: str, value: bool) -> None:
+        self._supports_reconnect[name] = value
 
 
 def _default_specs():
@@ -665,5 +672,162 @@ def test_tools_listing_includes_tripped_tools(config_dir: Path) -> None:
         names = {a["name"] for a in resp.json()["tools"]}
         assert "vts_trigger_hotkey" in names
         assert "reply_to_user" in names
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+# ==================== supports_reconnect 字段（GET /tools 暴露）====================
+
+
+def test_tools_response_includes_supports_reconnect_field(client: TestClient) -> None:
+    """GET /tools 条目默认带 supports_reconnect 字段（值由 registry 决定）。"""
+    resp = client.get("/api/v1/tools")
+    by_name = {a["name"]: a for a in resp.json()["tools"]}
+    assert "supports_reconnect" in by_name["vts_trigger_hotkey"]
+    assert by_name["vts_trigger_hotkey"]["supports_reconnect"] is False
+    assert by_name["reply_to_user"]["supports_reconnect"] is False
+
+
+def test_tools_response_supports_reconnect_true_when_provider_supports(config_dir: Path) -> None:
+    """registry 报告某工具归属 Provider 支持重连 → 条目字段为 True。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    registry.set_supports_reconnect("vts_trigger_hotkey", True)
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        by_name = {a["name"]: a for a in resp.json()["tools"]}
+        assert by_name["vts_trigger_hotkey"]["supports_reconnect"] is True
+        assert by_name["reply_to_user"]["supports_reconnect"] is False
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_response_supports_reconnect_false_when_registry_missing_method(config_dir: Path) -> None:
+    """registry 不实现 provider_supports_reconnect → 字段统一 False（不抛 500）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    class _NoReconnectQueryRegistry(_FakeToolRegistry):
+        # 故意不实现 provider_supports_reconnect
+        pass
+
+    registry = _NoReconnectQueryRegistry(_default_specs(), _default_categories())
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        for entry in resp.json()["tools"]:
+            assert entry["supports_reconnect"] is False
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+# ==================== POST /tools/providers/{provider_id}/reconnect ====================
+
+
+class _ReconnectFakeRegistry(_FakeToolRegistry):
+    """带 reconnect_provider 行为的 stub registry。"""
+
+    def __init__(self, specs, categories=None, *, reconnect_result: dict | None = None) -> None:
+        super().__init__(specs, categories)
+        self._reconnect_result = reconnect_result
+        self.reconnect_calls: list[str] = []
+
+    async def reconnect_provider(self, provider_id: str) -> dict:
+        self.reconnect_calls.append(provider_id)
+        if self._reconnect_result is None:
+            return {"ok": False, "error": f"未注册 Provider: {provider_id}"}
+        # 按 provider_id 选择性返回
+        return dict(self._reconnect_result)
+
+
+def test_reconnect_provider_success_returns_report(config_dir: Path) -> None:
+    """成功路径：200 + 报告 dict。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    result = {"ok": True, "provider_id": "vts", "recovered": ["vts_trigger_hotkey"], "still_tripped": []}
+    registry = _ReconnectFakeRegistry(_default_specs(), _default_categories(), reconnect_result=result)
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post("/api/v1/tools/providers/vts/reconnect")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["provider_id"] == "vts"
+        assert body["recovered"] == ["vts_trigger_hotkey"]
+        assert body["still_tripped"] == []
+        assert registry.reconnect_calls == ["vts"]
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_reconnect_provider_unknown_returns_404(config_dir: Path) -> None:
+    """未注册 provider_id → 404。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _ReconnectFakeRegistry(_default_specs(), _default_categories())
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post("/api/v1/tools/providers/ghost/reconnect")
+        assert resp.status_code == 404
+        assert "未注册 Provider" in resp.json()["detail"]
+        assert "ghost" in resp.json()["detail"]
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_reconnect_provider_unsupported_returns_409(config_dir: Path) -> None:
+    """已注册但不支持重连 → 409。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    result = {"ok": False, "error": "Provider 'reply' 不支持手动重连"}
+    registry = _ReconnectFakeRegistry(_default_specs(), _default_categories(), reconnect_result=result)
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post("/api/v1/tools/providers/reply/reconnect")
+        assert resp.status_code == 409
+        assert "不支持手动重连" in resp.json()["detail"]
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_reconnect_provider_failure_returns_500(config_dir: Path) -> None:
+    """重连失败（非未注册/非不支持）→ 500。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    result = {"ok": False, "error": "重连失败: 通道超时"}
+    registry = _ReconnectFakeRegistry(_default_specs(), _default_categories(), reconnect_result=result)
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post("/api/v1/tools/providers/vts/reconnect")
+        assert resp.status_code == 500
+        assert "通道超时" in resp.json()["detail"]
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_reconnect_provider_registry_missing_method_returns_503(config_dir: Path) -> None:
+    """registry 不实现 reconnect_provider → 503（旧版兼容路径）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post("/api/v1/tools/providers/vts/reconnect")
+        assert resp.status_code == 503
     finally:
         set_dashboard_server(None)  # type: ignore[arg-type]

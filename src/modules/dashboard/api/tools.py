@@ -8,6 +8,7 @@ Tools API（工具内省与提供者开关端点）
 - GET  /api/v1/tools/categories                          -> 提供者分类目录（分类 → 提供者 → 开关 + 运行态计数）
 - POST /api/v1/tools/categories/{category}/{key}/control -> 提供者开关写回 tools.toml（重启后生效）
 - POST /api/v1/tools/{name}/control                      -> 单个工具停用/启用（写 [tools].disabled_tools，重启后生效）
+- POST /api/v1/tools/providers/{provider_id}/reconnect   -> 手动重连指定 Provider（重连成功即探活 + 复位归属工具熔断）
 
 数据源：``DashboardServer.tool_registry``（运行态）与
 ``ConfigService.main_config`` 的 ``[tools]`` 段（配置态）。
@@ -15,6 +16,12 @@ Tools API（工具内省与提供者开关端点）
 提供者开关语义：一个提供者 = 一个 enabled 开关，控制权归属人类（配置 +
 Web UI），AI 主播不可决策；写回后需重启应用让组合根按新开关重新装配
 （工具注册发生在启动期）。
+
+可用性动作语义：手动重连用于连接类工具故障（VTS/Warudo/MCP 掉线）时，
+从 Dashboard 触发通道级重连；重连成功后对归属该 Provider 的全部已熔断
+工具做探活，通过者即刻复位熔断（联动 ``probe_tool`` + ``recover_tool``）。
+无连接语义或未覆写 ``connect`` 的 Provider 不暴露按钮（按 ``supports_reconnect``
+判定）。
 """
 
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
@@ -137,11 +144,16 @@ def _build_action_entry(
     category: str,
     disabled: bool = False,
     owner_agent: str = "",
+    supports_reconnect: bool = False,
 ) -> Dict[str, Any]:
     """构造单个工具条目（工具清单视图，供前端展示）。
 
     ``owner_agent`` 由调用方从 registry 传入（scoped_owner_of）；空串表示无
     归属限定（通用工具）。前端"归属列展示"留待后续——目前默认返回全部已含。
+
+    ``supports_reconnect`` 由调用方按归属 Provider 判定（registry 提
+    供 ``provider_supports_reconnect(name)``）；用于工具行渲染"手动重连"
+    按钮的可视条件。无连接语 Provider 一律 False。
     """
     entry: Dict[str, Any] = {
         "name": spec.name,
@@ -152,6 +164,7 @@ def _build_action_entry(
         "category": category,
         "disabled": disabled,
         "owner_agent": owner_agent,
+        "supports_reconnect": supports_reconnect,
     }
     if entry["kind"] == "async":
         entry["result_event"] = spec.resolve_result_event()
@@ -218,6 +231,22 @@ def _format_tool_health(entry: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+def _supports_reconnect(registry: Any, tool_name: str) -> bool:
+    """按工具名查归属 Provider 是否支持手动重连（不可用/未实现方法时返回 False）。
+
+    registry 兼容旧版/missing：未实现 ``provider_supports_reconnect`` 时回
+    退为 False（前端不渲染手动重连按钮）。FastAPI 响应构造里调一次/工具，
+    量级 O(工具数)，单次调用经 ``_tool_owner`` 直查不开销。
+    """
+    fn = getattr(registry, "provider_supports_reconnect", None)
+    if fn is None:
+        return False
+    try:
+        return bool(fn(tool_name))
+    except Exception:  # noqa: BLE001 - 兼容层兜底
+        return False
+
+
 def _get_tools_config(server: "DashboardServer") -> Dict[str, Any]:
     """读主配置的 ``[tools]`` 段（缺失 / 非 dict 时返回空 dict）。"""
     main_config = server.config_service.main_config if server.config_service else {}
@@ -259,6 +288,7 @@ async def list_tools(
             category=registry.category_of(spec.name),
             disabled=registry.is_disabled(spec.name),
             owner_agent=getattr(registry, "scoped_owner_of", lambda _n: "")(spec.name),
+            supports_reconnect=_supports_reconnect(registry, spec.name),
         )
         for spec in specs
     ]
@@ -514,3 +544,41 @@ async def control_tool(
         "enabled": enable,
         "message": f"工具 {name} 已{action_text}（写入 tools.toml），重启后生效",
     }
+
+
+@router.post(
+    "/tools/providers/{provider_id}/reconnect",
+    summary="手动重连指定 Provider（成功后联动探活 + 复位归属工具熔断）",
+)
+async def reconnect_provider_endpoint(
+    provider_id: str,
+    server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
+) -> Dict[str, Any]:
+    """触发通道级手动重连：仅维护外部连接（VTS/Warudo/OBS/MCP）的 Provider
+    可用。失败映射：
+
+    - 404 → registry 中无此 provider_id（未注册 / 拼写错误）
+    - 409 → registry 已注册但 Provider 不支持重连（非 BaseToolProvider /
+      ``supports_reconnect`` 为 False，例如无连接语 Provider 与内置 spec 工厂
+      生成的 Provider）
+
+    成功（200）返回报告 dict：``provider_id``、``recovered``（已复位熔断的工
+    具名列表）、``still_tripped``（探活未通过的熔断工具名列表）。详情日志
+    走 ``ToolRegistry.reconnect_provider``。
+    """
+    registry = _get_registry(server)
+    fn = getattr(registry, "reconnect_provider", None)
+    if fn is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ToolRegistry 不支持 reconnect_provider（旧版无此能力）",
+        )
+    report = await fn(provider_id)
+    if report.get("ok"):
+        return report
+    err = report.get("error", "")
+    if "未注册 Provider" in err:
+        raise HTTPException(status_code=404, detail=err)
+    if "不支持手动重连" in err:
+        raise HTTPException(status_code=409, detail=err)
+    raise HTTPException(status_code=500, detail=err)
