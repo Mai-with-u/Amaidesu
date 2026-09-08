@@ -18,7 +18,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.streamer.plan import DecisionPlan
 from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -76,7 +75,7 @@ def test_resolve_target_by_message_id():
     """plan.target 命中 batch 中某条消息的 message_id → 返回该消息的 user_id。"""
     agent = _make_minimal_agent()
     msg = _make_msg(text="主播好", user_id="alice", message_id="msg_123")
-    plan = DecisionPlan(target="msg_123")
+    plan = {"target": "msg_123"}
 
     assert agent._resolve_reply_target_user(plan, [msg]) == "alice"
 
@@ -85,7 +84,7 @@ def test_resolve_target_by_text_fallback():
     """plan.target 未命中 message_id，但命中 text 子串 → 返回 user_id。"""
     agent = _make_minimal_agent()
     msg = _make_msg(text="你好呀主播", user_id="bob")
-    plan = DecisionPlan(target="你好呀")
+    plan = {"target": "你好呀"}
 
     assert agent._resolve_reply_target_user(plan, [msg]) == "bob"
 
@@ -94,7 +93,7 @@ def test_resolve_target_none_when_no_target():
     """plan.target=None → 返回 None（主动发言/无特定目标）。"""
     agent = _make_minimal_agent()
     msg = _make_msg(text="hi", user_id="alice")
-    plan = DecisionPlan(target=None)
+    plan = {"target": None}
 
     assert agent._resolve_reply_target_user(plan, [msg]) is None
 
@@ -105,7 +104,7 @@ def test_resolve_target_fallback_last_message():
     m1 = _make_msg(text="aaa", user_id="alice")
     m2 = _make_msg(text="bbb", user_id="bob")
     m3 = _make_msg(text="ccc", user_id="carol")
-    plan = DecisionPlan(target="zzz_unmatched")
+    plan = {"target": "zzz_unmatched"}
 
     assert agent._resolve_reply_target_user(plan, [m1, m2, m3]) == "carol"
 
@@ -113,7 +112,7 @@ def test_resolve_target_fallback_last_message():
 def test_resolve_target_empty_batch():
     """batch=[] → 返回 None（无消息可兜底）。"""
     agent = _make_minimal_agent()
-    plan = DecisionPlan(target="msg_123")
+    plan = {"target": "msg_123"}
 
     assert agent._resolve_reply_target_user(plan, []) is None
 
@@ -158,7 +157,7 @@ class TestReplyToMessageIdResolution:
             _make_msg(text="今天玩什么？", user_id="u1", message_id="m1"),
             _make_msg(text="主播好可爱", user_id="u2", message_id="m2"),
         ]
-        plan = DecisionPlan(should_reply=True, target="观众A", reply_to="m2", confidence=0.9)
+        plan = {"target": "观众A", "reply_to": "m2"}
         user_id = agent._resolve_reply_target_user(plan, batch)
         assert user_id == "u2", "reply_to 应精确命中对应弹幕的观众"
 
@@ -166,7 +165,7 @@ class TestReplyToMessageIdResolution:
     async def test_reply_to_miss_returns_none_no_fallback(self) -> None:
         agent = _make_minimal_agent()
         batch = [_make_msg(text="今天玩什么？", user_id="u1", message_id="m1")]
-        plan = DecisionPlan(should_reply=True, reply_to="不存在的id", confidence=0.9)
+        plan = {"reply_to": "不存在的id"}
         user_id = agent._resolve_reply_target_user(plan, batch)
         assert user_id is None, "reply_to 未命中时不做文本兜底（防误关联）"
 

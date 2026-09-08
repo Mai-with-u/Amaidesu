@@ -25,7 +25,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.plan import DecisionPlan
 from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
 from src.modules.llm.manager import LLMResponse
 
@@ -64,8 +63,8 @@ def _build_agent() -> StreamerAgent:
     )
 
 
-def _patch_planner(agent: StreamerAgent, plan: Optional[DecisionPlan]) -> None:
-    agent._planner.plan = AsyncMock(return_value=plan)
+def _patch_planner(agent: StreamerAgent, outcome: Optional[Dict[str, Any]]) -> None:
+    agent._planner.plan = AsyncMock(return_value=outcome)
 
 
 def _patch_reply_provider(
@@ -148,13 +147,17 @@ async def test_danmaku_mode_success_returns_full_view():
     agent = _build_agent()
     _patch_planner(
         agent,
-        DecisionPlan(
-            should_reply=True,
-            target="debug_测试观众",
-            topic_summary="打招呼",
-            reply_guidance="友好回应",
-            confidence=0.9,
-        ),
+        {
+            "replied": True,
+            "target": "debug_测试观众",
+            "reply_to": "debug_测试观众",
+            "topic_summary": "打招呼",
+            "reply_guidance": "友好回应",
+            "confidence": 0.9,
+            "speech": "欢迎来到直播间！",
+            "emotion": "happy",
+            "reply_payload": _REPLY_STRUCTURED,
+        },
     )
     _patch_reply_provider(agent, _REPLY_STRUCTURED)
 
@@ -191,7 +194,7 @@ async def test_danmaku_mode_success_returns_full_view():
 async def test_danmaku_default_nickname_when_missing():
     """nickname 缺省时用「测试观众」占位。"""
     agent = _build_agent()
-    _patch_planner(agent, DecisionPlan(should_reply=False))
+    _patch_planner(agent, {"replied": False, "silent_reason": "natural"})
     _patch_reply_provider(agent, None)
 
     await agent.debug_test_decision(batch=[{"text": "你好"}])
@@ -209,7 +212,7 @@ async def test_planner_rejected_returns_plan_without_speech():
     agent = _build_agent()
     _patch_planner(
         agent,
-        DecisionPlan(should_reply=False, confidence=0.2, topic_summary="闲聊"),
+        {"replied": False, "silent_reason": "natural", "topic_summary": "闲聊"},
     )
     _patch_reply_provider(agent, None)
 
@@ -248,7 +251,7 @@ async def test_reply_tool_failure_returns_error():
     agent = _build_agent()
     _patch_planner(
         agent,
-        DecisionPlan(should_reply=True, confidence=0.9),
+        {"replied": False, "error": "reply_tool_failed: LLM 超时"},
     )
     _patch_reply_provider(agent, None, error="LLM 超时")
 
@@ -256,8 +259,8 @@ async def test_reply_tool_failure_returns_error():
 
     assert result["success"] is True
     assert result["error"] is not None
-    assert result["error"].startswith("reply_tool_failed")
-    assert "LLM 超时" in result["error"]
+    # reply 失败发生在 Planner ReAct 循环内，错误经 planner_failed 前缀带出
+    assert "reply_tool_failed: LLM 超时" in result["error"]
     assert result["speech"] is None
 
 
@@ -273,7 +276,12 @@ async def test_proactive_mode_bypasses_rate_limit():
     agent = _build_agent()  # config.proactive_enabled=False
     _patch_planner(
         agent,
-        DecisionPlan(should_reply=True, confidence=0.8, topic_summary="主动话题"),
+        {
+            "replied": True,
+            "topic_summary": "主动话题",
+            "speech": "欢迎来到直播间！",
+            "reply_payload": _REPLY_STRUCTURED,
+        },
     )
     _patch_reply_provider(agent, _REPLY_STRUCTURED)
 

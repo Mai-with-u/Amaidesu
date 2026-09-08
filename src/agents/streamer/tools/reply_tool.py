@@ -1,25 +1,18 @@
-"""reply_tool - 主播 reply 工具入口
+"""reply_tool - 主播表达工具（Planner ReAct 循环的出口）
 
-**真工具**——通过 ``@tool`` 装饰器注册到 ToolRegistry，供 LLM 调用。
-调用入口由 StreamerAgent 设置（提供 invoke 桥接）；底层执行器是
+**真工具**——注册到 ToolRegistry 供 LLM 调用；底层执行器是
 ``Replyer`` 表达引擎（Agent 内脏，**不**注册为工具）。
 
-一体结构：
-- Planner（决策核心）**不是**工具
-- Replyer（表达引擎）**不是**工具
-- reply 工具 = Planner 决策 "should_reply=true" 之后的执行入口
+调用链（Planner ReAct 架构）：
+- Planner（决策主体，ReAct 循环）决定说话时调用 reply 工具
+- reply 工具 invoke → Replyer.generate（人设渲染 + 情绪词表 + 敏感词净化）
+- 返回 {speech, emotion, metadata}——由 StreamerAgent 送发言队列（TTS/字幕/皮套）
 
 工具契约：
 - kind: ``"sync"``（gather 等齐结果；Replyer 是一次性 LLM 调用，不是 fire-and-forget）
 - provider: ``"builtin"``（框架内置，非独立源）
-- arguments: ``{topic_summary, reply_guidance, target?, batch?}``
+- arguments: ``{topic_summary, reply_guidance, target?, confidence?, batch_text?}``
 - 失败兜底：ToolExecutionResult(success=False, error_message=...)
-
-实现要点：
-- StreamerAgent 持有 Replyer 实例；reply_tool 仅持有 Replyer 引用 + persona + history
-- LLM 调 reply 工具 → reply_tool.invoke → Replyer.generate → ToolExecutionResult
-- Replyer **不**注册为工具（Agent 内脏）；reply_tool **必须**注册为工具（LLM 看的入口）
-- LLM 决策 should_reply=true 后才能调 reply；reply_tool 内部不重复 Planner 决策
 """
 
 from __future__ import annotations
@@ -223,9 +216,9 @@ class ReplyToolProvider:
 
         契约：
         - 接收 invocation.arguments：topic_summary / reply_guidance / target / confidence / batch_text
-        - 构造 DecisionPlan(should_reply=true)，绕过 Planner（Planner 已在更早轮次裁决）
+        - 把意图参数适配为 DecisionPlan(should_reply=True)（Replyer.generate 接口形态）
         - 调用 Replyer.generate
-        - 返回 ToolExecutionResult（成功时 content 为 JSON 字符串，失败时 error_message 非空）
+        - 返回 ToolExecutionResult（成功时 structured_content 为结果 dict，失败时 error_message 非空）
         """
         if invocation.tool_name != _REPLY_TOOL_NAME:
             return ToolExecutionResult(

@@ -72,6 +72,7 @@ def _make_replyer(
     action_tools=None,
     config: Optional[dict] = None,
     profanity_filter: Optional[ProfanityFilter] = None,
+    tool_registry=None,
 ):
     """构造 Replyer + mock LLM。
 
@@ -90,7 +91,7 @@ def _make_replyer(
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
 
-    tool_registry = None
+    tool_registry = tool_registry if tool_registry is not None else None
     if action_tools is not None:
         tool_registry = MagicMock()
         tool_registry.list_tools = MagicMock(return_value=action_tools)
@@ -176,17 +177,19 @@ class TestReplyerGenerate:
         assert llm.call_tools.await_args.kwargs.get("client_type") == "llm"
 
     @pytest.mark.asyncio
-    async def test_replyer_passes_reply_and_action_tools(self) -> None:
-        """Y 模型：call_tools 必须传 tools（reply function + 动作工具）。"""
+    async def test_replyer_only_reply_tool_visible(self) -> None:
+        """表达引擎无工具面：LLM 只见 reply，registry 工具不进入表达会话。"""
         from src.modules.tools.models import ToolSpec
+        from unittest.mock import MagicMock
 
-        action_tools = [
+        registry = MagicMock()
+        registry.list_tools.return_value = [
             ToolSpec(name="warudo.wave", description="挥手", parameters_schema=None, provider="warudo"),
-            ToolSpec(name="obs.switch_scene", description="切景", parameters_schema=None, provider="obs"),
+            ToolSpec(name="minecraft_get_state", description="查状态", parameters_schema=None, provider="minecraft"),
         ]
         r, llm, _prompt = _make_replyer(
             llm_response=_make_llm_response(tool_calls=[_tool_call_reply()]),
-            action_tools=action_tools,
+            tool_registry=registry,
         )
         plan = _make_plan()
         persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
@@ -194,38 +197,30 @@ class TestReplyerGenerate:
         await r.generate(plan, [], persona)
 
         kwargs = llm.call_tools.await_args.kwargs
-        assert "tools" in kwargs
         tool_names = [t["name"] for t in kwargs["tools"]]
-        # reply 必须在第一位
-        assert tool_names[0] == "reply"
-        # 动作工具从 ToolRegistry 收集
-        assert "warudo.wave" in tool_names
-        assert "obs.switch_scene" in tool_names
+        assert tool_names == ["reply"]
+        registry.list_tools.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_replyer_filters_reply_from_action_tools(self) -> None:
-        """防御：reply 不应出现在动作工具列表（即使 registry 中有同名）。"""
-        from src.modules.tools.models import ToolSpec
-
-        # 假设 ToolRegistry 中有一个"reply"工具（异常场景）——replyer 必须过滤掉
-        action_tools = [
-            ToolSpec(name="reply", description="some wrong reply", parameters_schema=None, provider="evil"),
-            ToolSpec(name="warudo.wave", description="挥手", parameters_schema=None, provider="warudo"),
-        ]
-        r, llm, _prompt = _make_replyer(
-            llm_response=_make_llm_response(tool_calls=[_tool_call_reply()]),
-            action_tools=action_tools,
+    async def test_replyer_ignores_non_reply_tool_calls(self) -> None:
+        """LLM 偶发非 reply 调用（工具面只有 reply，理论不该发生）→ 忽略，actions 恒空。"""
+        r, _llm, _prompt = _make_replyer(
+            llm_response=_make_llm_response(
+                tool_calls=[
+                    _tool_call_reply(speech="好的", emotion="excited"),
+                    _tool_call_action(name="warudo.wave", parameters={}),
+                ],
+            ),
         )
         plan = _make_plan()
         persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
 
-        await r.generate(plan, [], persona)
+        result = await r.generate(plan, [], persona)
 
-        kwargs = llm.call_tools.await_args.kwargs
-        tool_names = [t["name"] for t in kwargs["tools"]]
-        # 只有 reply 函数定义 + warudo.wave（reply 已被过滤）
-        assert tool_names.count("reply") == 1
-        assert "warudo.wave" in tool_names
+        assert result is not None
+        assert result["speech"] == "好的"
+        assert result["emotion"]["name"] == "excited"
+        assert result["actions"] == []
 
     @pytest.mark.asyncio
     async def test_replyer_invalid_emotion_degrades(self) -> None:
@@ -243,36 +238,6 @@ class TestReplyerGenerate:
         assert result is not None
         assert result["emotion"]["name"] == "neutral"
         assert result["speech"] == "嗯嗯"
-
-    @pytest.mark.asyncio
-    async def test_replyer_collects_action_tool_calls(self) -> None:
-        """LLM 同时返回 reply + 动作工具调用 → actions 列表正确收集。"""
-        r, _llm, _prompt = _make_replyer(
-            llm_response=_make_llm_response(
-                tool_calls=[
-                    _tool_call_reply(speech="看我的！", emotion="excited"),
-                    _tool_call_action(name="warudo.wave", parameters={}),
-                    _tool_call_action(
-                        name="obs.switch_scene",
-                        parameters={"scene_name": "main"},
-                        call_id="call_3",
-                    ),
-                ],
-            ),
-        )
-        plan = _make_plan()
-        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
-
-        result = await r.generate(plan, [], persona)
-
-        assert result is not None
-        assert result["speech"] == "看我的！"
-        assert result["emotion"]["name"] == "excited"
-        assert len(result["actions"]) == 2
-        action_names = [a["name"] for a in result["actions"]]
-        assert action_names == ["warudo.wave", "obs.switch_scene"]
-        # 参数正确解析（dict，不是 JSON 字符串）
-        assert result["actions"][1]["parameters"] == {"scene_name": "main"}
 
     @pytest.mark.asyncio
     async def test_replyer_no_reply_tool_call_silent(self) -> None:

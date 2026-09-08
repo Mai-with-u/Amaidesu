@@ -572,17 +572,23 @@ async def test_decision_loop_unaffected_when_tts_disabled():
         tts_engine=None,
     )
 
-    # Patch Planner.plan 直返 DecisionPlan（绕开 LLM call_tools 失败路径）
-    from src.agents.streamer.plan import DecisionPlan
-
+    # Patch Planner.plan 为 outcome dict（绕开 LLM；ReAct 循环内 reply 已完成）
     agent._planner.plan = AsyncMock(
-        return_value=DecisionPlan(
-            should_reply=True,
-            target="u1",
-            topic_summary="t",
-            reply_guidance="r",
-            confidence=0.9,
-        )
+        return_value={
+            "replied": True,
+            "target": "u1",
+            "topic_summary": "t",
+            "reply_guidance": "r",
+            "confidence": 0.9,
+            "speech": "OK",
+            "emotion": "happy",
+            "reply_payload": {
+                "speech": "OK",
+                "emotion": {"name": "happy", "intensity": 0.5},
+                "actions": [{"name": "wave", "parameters": {}}],
+                "metadata": {},
+            },
+        }
     )
 
     from src.agents.streamer.tools.reply_tool import ReplyToolProvider

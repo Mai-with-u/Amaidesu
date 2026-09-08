@@ -75,7 +75,8 @@ class TestAgentsConfigSubConfigs:
 class TestStreamerAgentConfig:
     def test_defaults(self):
         cfg = StreamerAgentConfig()
-        assert cfg.planner_llm == "llm_fast"
+        assert cfg.planner_llm == "llm"
+        assert cfg.planner_max_steps == 8
         assert cfg.replyer_llm == "llm"
         assert cfg.room_state_enabled is True
         assert cfg.batch_window_ms == 3000

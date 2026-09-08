@@ -458,7 +458,7 @@ class TestRealRepoTemplates:
         try:
             manager = get_prompt_manager()
             assert set(manager.list_templates()) == {
-                "amaidesu_planner",
+                "amaidesu_planner_react",
                 "amaidesu_replyer",
                 "agenda_expand",
                 "viewer_message",

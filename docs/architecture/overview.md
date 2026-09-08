@@ -1,3 +1,4 @@
+*最后更新：2026-09-08（主播 Agent 决策链 ReAct 化：Planner 从单发 produce_plan 决策改为 ReAct 循环——chat_messages + 工具面（ToolRegistry 全量动态拉取 + reply 局部工具），max_steps=8 防失控，自然终止=静默；Replyer 收缩为 reply 局部工具的实现载体（表达引擎零工具面，LLM 只见 reply）；废除 DecisionPlan 管道（should_reply 分支/_make_reply_invocation）；planner_llm 默认 llm_fast→llm（ReAct 决策核心质量敏感），新增 planner_max_steps=8；CONFIG_VERSION 2.0.23；mermaid 决策流同步：Planner→reply 工具→Replyer→speech 入队）*
 *最后更新：2026-09-06（持久层文件存储收口：①`event_history` 表落地——EventHistoryRecorder 订阅的语义域事件全量落库（替代 data/events/*.jsonl，SCHEMA_VERSION 升至 5），录制回放数据源与 Dashboard 事件历史持久层同源；②`llm_requests` 表落地——RequestHistoryManager 请求历史入库，dashboard LLM 历史页改 SQL 分页（根治旧实现每次记录全量重写当日 JSON 文件的写放大），`[events].persist` 语义改写库、CONFIG_VERSION 2.0.17；③SQLiteStore 迁移前自动备份——版本推进前在线快照到 data/backups/（不自动清理）；④历史 JSONL 已导入真实库，data/events 与 data/llm_history 待应用重启后删除）*
 
 # 架构总览（v2.0.0）
@@ -34,8 +35,8 @@ flowchart TB
     end
 
     subgraph Streamer["StreamerAgent (src/agents/streamer/)"]
-        Planner["Planner 决策循环<br/>(planner_llm, 无 tools)"]
-        Reply["Replyer 表达引擎<br/>(replyer_llm, ProfanityFilter)"]
+        Planner["Planner ReAct 循环<br/>(planner_llm 默认 llm, 全局工具面 + reply)"]
+        Reply["Replyer 表达引擎<br/>(replyer_llm, ProfanityFilter)<br/>= reply 工具的实现载体"]
         Agenda["Agenda 子系统<br/>节目单 + idle 补偿 + 背景任务"]
         Tools["自带工具<br/>reply / should_speak_proactively / parse_command"]
         UQ["UtteranceQueue<br/>FIFO 串行播放队列<br/>丢最旧 / 单 worker / 渲染超时"]
@@ -64,16 +65,14 @@ flowchart TB
     INT --> Bus
     Bus --> Planner
     Bus --> Agenda
-    Planner --> Reply
-    Planner --> Tools
-    Reply -->|tools.invoke| Out
-    Tools -->|tools.invoke| Out
+    Planner -->|reply 局部工具| Reply
+    Planner -->|tools.invoke| Out
     Planner -->|tools.invoke| CE
     Planner -->|tools.invoke| Per
     Planner -->|tools.invoke| Mem
     Bus -.->|wildcard| Game
     Game -->|tools.invoke| CE
-    Tools -.->|speech 入队| UQ
+    Reply -.->|speech 入队| UQ
     UQ -->|fire-and-forget| TTS
     TTS -.->|started / finished / failed| Bus
     TTS -.->|声卡播放| Audio

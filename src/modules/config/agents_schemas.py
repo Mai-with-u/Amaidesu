@@ -69,8 +69,13 @@ class StreamerAgentConfig(BaseConfig):
     """
 
     planner_llm: str = Field(
-        default="llm_fast",
-        description="Planner 使用的 LLM profile 名（默认 llm_fast 快速模型）",
+        default="llm",
+        description="Planner 使用的 LLM profile 名（ReAct 决策核心：工具编排与意图构思质量敏感，默认 llm 高质量模型）",
+    )
+    planner_max_steps: int = Field(
+        default=8,
+        ge=1,
+        description="Planner 单决策窗 ReAct 循环最大步数（超出静默收场，防失控）",
     )
     replyer_llm: str = Field(
         default="llm",
@@ -78,7 +83,7 @@ class StreamerAgentConfig(BaseConfig):
     )
 
     # 旧字段名兼容
-    planner_client: str = Field(default="llm_fast", description="（兼容字段）Planner LLM client")
+    planner_client: str = Field(default="llm", description="（兼容字段）Planner LLM client")
     replyer_client: str = Field(default="llm", description="（兼容字段）Replyer LLM client")
 
     # --- 弹幕聚合 ---

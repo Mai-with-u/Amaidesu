@@ -97,6 +97,32 @@ class OpenAIClient(BaseLLMClient):
             contents.append({"type": "image_url", "image_url": {"url": self._path_or_url_to_data_url(img)}})
         return contents
 
+    @staticmethod
+    def _normalize_tool_definitions(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """把内部扁平工具定义规范化为 OpenAI 协议形态。
+
+        项目内工具定义统一用扁平结构 {name, description, parameters}；
+        OpenAI 协议要求 {"type": "function", "function": {...}} 包装。
+        部分严格端点会拒绝扁平格式（400: missing field `type`），
+        已带 type 字段的定义原样保留。
+        """
+        normalized: List[Dict[str, Any]] = []
+        for tool in tools:
+            if "type" in tool:
+                normalized.append(tool)
+            else:
+                normalized.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": tool.get("name", ""),
+                            "description": tool.get("description", ""),
+                            "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+                        },
+                    }
+                )
+        return normalized
+
     async def chat(
         self,
         messages: List[Dict[str, Any]],
@@ -114,7 +140,7 @@ class OpenAIClient(BaseLLMClient):
                 "temperature": temperature or self.temperature,
             }
             if tools:
-                request_params["tools"] = tools
+                request_params["tools"] = self._normalize_tool_definitions(tools)
                 request_params["tool_choice"] = "auto"
             if max_tokens:
                 request_params["max_tokens"] = max_tokens

@@ -389,12 +389,19 @@ class LLMManager:
             client_type = ClientType.DEFAULT
 
         messages = self._build_messages(prompt, system_message)
-        return await self._call_with_retry(
+        response = await self._call_with_retry(
             client_type,
             "chat",
             messages=messages,
             tools=tools,
         )
+        self.logger.warning(
+            f"[诊断] call_tools 完成: client={client_type}, success={getattr(response, 'success', None)}, "
+            f"error={getattr(response, 'error', None)!r}, "
+            f"tool_calls={[tc.get('function', {}).get('name') for tc in (getattr(response, 'tool_calls', None) or []) if isinstance(tc, dict)]}, "
+            f"content[:200]={(getattr(response, 'content', None) or '')[:200]!r}"
+        )
+        return response
 
     # === 便捷方法 ===
 

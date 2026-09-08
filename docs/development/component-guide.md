@@ -795,23 +795,23 @@ class MyToolProvider(ToolProvider):
         ↓ 进入 MessageBuffer；TimingGate 判定是否强制响应
 6. StreamerAgent._flush_loop 周期检查 → MessageBuffer.should_flush()
         ↓ 取出一批弹幕
-7. _make_two_stage_decision(batch) → Planner.plan(batch, llm=llm_fast)
-        ↓ Planner 输出 DecisionPlan{should_reply, topic_summary, reply_guidance, confidence}
-        ↓ 注：confidence ≥ 0.3 才进入下一步（具体阈值看 Planner 实现）
-8. DecisionPlan.should_reply=True → _make_reply_invocation(plan, batch)
-        ↓ ToolInvocation(tool_name="reply", arguments={...}, source="streamer_agent")
-9. ToolRegistry.invoke(invocation) → ReplyToolProvider.invoke(invocation)
-        ↓ 注入依赖：persona / history / agenda
-10. Replyer.generate(plan, batch, persona, history, agenda, profanity_filter)
-        ↓ LLM（llm profile，高质量模型）+ 人设 prompt + 敏感词净化
-11. ToolExecutionResult{success=True, content=json({speech, emotion, action, metadata})}
-        ↓
-12. Agent 解析 result.content → speech 生成 utterance_id 入 UtteranceQueue（fire-and-forget，不阻塞决策循环）；
-    emotion → 直调 vts_set_expression 工具（仍是 ToolRegistry 中的工具）；action 暂不消费
-        ↓
+7. _make_two_stage_decision(batch) → Planner.plan(batch, llm=planner_llm 默认 llm)
+         ↓ Planner ReAct 循环：chat_messages + 工具面（ToolRegistry 全量 + reply 局部工具）
+         ↓ 每步 tool_calls 串行执行（查游戏状态/记忆等 → 观察 tool role 喂回），max_steps=8 防失控
+8. LLM 调 reply(意图参数 {topic_summary, reply_guidance, target, confidence})
+         ↓ Planner 循环内直连 _reply_provider.invoke（局部工具，不进 ToolRegistry）
+9. ReplyToolProvider.invoke(invocation)
+         ↓ 注入依赖：persona / history / agenda
+10. Replyer.generate(plan, batch, persona, history, agenda)
+         ↓ LLM（llm profile，高质量模型）+ 人设 prompt + 敏感词净化；LLM 只见 reply
+11. ToolExecutionResult{success=True, structured_content={speech, emotion, metadata}}
+         ↓
+12. Planner 循环收到 reply 成功即收尾 → outcome{replied/speech/...} → Agent 解析 speech 生成 utterance_id 入 UtteranceQueue（fire-and-forget，不阻塞决策循环）；
+    emotion → 直调 vts_set_expression 工具（仍是 ToolRegistry 中的工具）
+         ↓
 13. 队列 worker 串行 await speak(text, utterance_id)（speak 是构造期注入的适配器，绑定装配期由 build_tts_infrastructure 选中的 tts_engine.handle_speech）→ 引擎合成 + 播放
     （TTS 引擎自身——基础模块，非工具——发布 tts.utterance.started/finished/failed 事件供字幕等消费者订阅；ToolRegistry 中零 TTS 条目）
-        ↓
+         ↓
 14. 音频经 AudioDeviceManager（src/modules/audio/）输出到扬声器
 ```
 
@@ -823,9 +823,9 @@ class MyToolProvider(ToolProvider):
 | 拦截器配置 | `config/core.toml` 的 `[interceptors.rate_limit]` / `[interceptors.similar_filter]` | 启停由 `enabled` 标志控制 |
 | Agent 订阅 | `src/agents/streamer/streamer_agent.py::_subscribe_events` | 在 `_on_start` 中挂；priority=50 |
 | 弹幕聚合 | `src/agents/streamer/message_buffer.py` + `timing_gate.py` | 批窗口 / 强制响应规则 |
-| Planner 决策 | `src/agents/streamer/planner.py` | 调用 `llm_fast` profile；输出 `DecisionPlan` |
-| Reply 工具 | `src/agents/streamer/tools/reply_tool.py` | 调 Replyer 表达引擎 |
-| Replyer 表达 | `src/agents/streamer/replyer.py` | 调 `llm` profile + ProfanityFilter |
+| Planner ReAct 决策 | `src/agents/streamer/planner.py` | `planner_llm`（默认 llm 高质量模型）；工具面=registry 全量+reply；`planner_max_steps=8` |
+| Reply 工具 | `src/agents/streamer/tools/reply_tool.py` | 局部工具（不进 ToolRegistry）；Planner 循环内直连 invoke |
+| Replyer 表达 | `src/agents/streamer/replyer.py` | 调 `llm` profile + ProfanityFilter；LLM 只见 reply |
 | 发声队列 | `src/agents/streamer/utterance_queue.py` | FIFO 串行；满时丢最旧；单条 render_timeout_ms 看门狗；构造期注入 `speak` 适配器（绑定 `tts_engine.handle_speech`） |
 | TTS 播出 | `src/modules/tts/` 基础模块（4 引擎 Provider）+ `build_tts_infrastructure` 装配入口 | 引擎（`handle_speech`）发 `tts.utterance.*` 事件；详见 ADR-007 |
 

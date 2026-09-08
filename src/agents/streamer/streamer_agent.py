@@ -313,6 +313,7 @@ class StreamerAgent(BaseAgent):
             config={
                 "planner_llm": config.planner_llm,
                 "planner_client": config.planner_client,
+                "planner_max_steps": getattr(config, "planner_max_steps", 8),
             },
             llm_service=llm_manager,
             prompt_service=prompt_manager,
@@ -597,6 +598,9 @@ class StreamerAgent(BaseAgent):
             history_provider=(self._read_history_sync if self._context is not None else None),
             agenda_text_provider=self._build_agenda_text_sync,
         )
+        # Planner ReAct 循环经 reply_provider 直连表达引擎（Provider 构造晚于
+        # Planner __init__，此处补绑）
+        self._planner.bind_reply_provider(self._reply_provider)
 
         # proactive tool
         self._proactive_provider = ProactiveToolProvider(
@@ -986,10 +990,11 @@ class StreamerAgent(BaseAgent):
         # 游戏叙事（三通道·事件：MinecraftAgent 等 emit 的 game.* 摘要）
         game_narrative = self._game_narrative_text()
 
-        # Planner 决策（失败细节经 Planner.last_failure 带出，供决策事件区分降级原因）
+        # Planner ReAct 决策（循环内完成查信息与 reply 调用；失败细节经
+        # Planner.last_failure 带出，供决策事件区分降级原因）
         planner_started_ms = now_ms()
         try:
-            plan = await self._planner.plan(
+            outcome = await self._planner.plan(
                 batch,
                 forced=forced,
                 proactive=proactive,
@@ -999,75 +1004,50 @@ class StreamerAgent(BaseAgent):
             )
         except Exception as exc:
             self._logger.error(f"Planner 调用异常: {exc}", exc_info=True)
-            plan = None
+            outcome = None
             result["error"] = f"planner_failed: {exc}"
         result["planner_duration_ms"] = now_ms() - planner_started_ms
         result["planner_raw"] = (getattr(self._planner, "last_raw_content", "") or "")[:2000]
         result["llm_request_id"] = getattr(self._planner, "last_request_id", None)
 
-        if plan is None:
+        if outcome is None:
             self._planner_failures += 1
             self._total_no_action += 1
             detail = getattr(self._planner, "last_failure", None)
             result["error"] = result["error"] or (
-                f"planner_failed: {detail}" if detail else "planner_failed: 返回 None（LLM 异常/脏 JSON/低置信度）"
+                f"planner_failed: {detail}" if detail else "planner_failed: 决策循环异常"
             )
             result["total_duration_ms"] = now_ms() - started_ms
             return result
 
         result["plan"] = {
-            "should_reply": plan.should_reply,
-            "target": plan.target,
-            "reply_to": plan.reply_to,
-            "topic_summary": plan.topic_summary,
-            "reply_guidance": plan.reply_guidance,
-            "confidence": plan.confidence,
-            "silent_reason": plan.silent_reason,
+            "should_reply": outcome.get("replied", False),
+            "target": outcome.get("target"),
+            "reply_to": outcome.get("reply_to"),
+            "topic_summary": outcome.get("topic_summary", ""),
+            "reply_guidance": outcome.get("reply_guidance", ""),
+            "confidence": outcome.get("confidence"),
+            "silent_reason": outcome.get("silent_reason"),
         }
-        result["reply_to_message_id"] = plan.reply_to
-        result["silent_reason"] = plan.silent_reason
+        result["reply_to_message_id"] = outcome.get("reply_to")
+        result["silent_reason"] = outcome.get("silent_reason")
 
-        # Plan 裁决
-        if not plan.should_reply:
+        # 未说话（自然终止/超步/LLM 失败）——静默收场
+        if not outcome.get("replied"):
             self._total_no_action += 1
-            self._consume_plan_assessment(plan)
+            if outcome.get("error"):
+                self._planner_failures += 1
+                result["error"] = f"planner_failed: {outcome['error']}"
+            self._consume_plan_assessment(outcome)
             result["total_duration_ms"] = now_ms() - started_ms
             return result
 
-        # 触发 reply 工具（StreamerAgent 直接调 reply Provider.invoke，
-        # 跳过 LLM chat loop——Agent 内脏直连 LLM executor）
-        reply_started_ms = now_ms()
-        try:
-            reply_result = await self._reply_provider.invoke(  # type: ignore[union-attr]
-                self._make_reply_invocation(plan, batch)
-            )
-        except Exception as exc:
-            self._logger.error(f"Reply 工具调用异常: {exc}", exc_info=True)
-            self._replyer_failures += 1
-            self._total_no_action += 1
-            result["error"] = f"reply_tool_failed: {exc}"
-            result["reply_duration_ms"] = now_ms() - reply_started_ms
-            result["total_duration_ms"] = now_ms() - started_ms
-            return result
-        result["reply_duration_ms"] = now_ms() - reply_started_ms
-
-        if not reply_result.success:
-            self._replyer_failures += 1
-            self._total_no_action += 1
-            self._logger.warning(f"Reply 工具返回失败: {reply_result.error_message}")
-            result["error"] = f"reply_tool_failed: {reply_result.error_message}"
-            result["total_duration_ms"] = now_ms() - started_ms
-            return result
-
-        # 解析 reply payload 并分发到发言管线（speech → TTS / emotion → VTS）。
-        # 决策循环契约：此分支任何异常都不能阻断后续 RoomState/Agenda 更新。
-        # replied_count 闭环：从 batch 反查本次回复的观众 user_id，透传到发言管线；
-        # reply_to_message_id（Planner 指向的具体弹幕）随发言事件落库，形成
-        # "主播回应了哪条弹幕"的可查询关联。
+        # reply 已在 Planner ReAct 循环内经 reply 工具完成（Planner 阶段耗时含
+        # 表达生成）；此处仅把产出送发言管线（speech → TTS / emotion → VTS）。
         speech_info = self._dispatch_speech_and_emotion(
-            reply_result.structured_content,
-            self._resolve_reply_target_user(plan, batch),
-            reply_to_message_id=plan.reply_to,
+            outcome.get("reply_payload"),
+            self._resolve_reply_target_user(outcome, batch),
+            reply_to_message_id=outcome.get("reply_to"),
         )
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info
@@ -1080,7 +1060,7 @@ class StreamerAgent(BaseAgent):
             self._proactive_trigger.record_trigger(reason, now_ms())
 
         # 消费 Planner 顺带评估（灌注 AgendaIdle）
-        self._consume_plan_assessment(plan)
+        self._consume_plan_assessment(outcome)
 
         # 持久化 Agenda runtime
         if self._agenda_idle is not None and self._agenda_state.agenda is not None:
@@ -1092,39 +1072,22 @@ class StreamerAgent(BaseAgent):
         result["total_duration_ms"] = now_ms() - started_ms
         return result
 
-    def _make_reply_invocation(
-        self,
-        plan: Any,
-        batch: List[NormalizedMessage],
-    ) -> Any:
-        """构造 reply 工具的 ToolInvocation。"""
-        return ToolInvocation(
-            tool_name="reply",
-            arguments={
-                "topic_summary": plan.topic_summary,
-                "reply_guidance": plan.reply_guidance,
-                "target": plan.target,
-                "confidence": plan.confidence,
-            },
-            source="streamer_agent",
-        )
-
     def _resolve_reply_target_user(
         self,
-        plan: Any,
+        outcome: Dict[str, Any],
         batch: List[NormalizedMessage],
     ) -> Optional[str]:
         """从 batch 反查本次回复的观众 user_id。
 
-        优先消费 ``plan.reply_to``（Planner 指向的弹幕 message_id——按
-        message_id 等值命中即可）；未提供时回退 ``plan.target``（弹幕
+        优先消费 ``outcome["reply_to"]``（reply 意图指向的弹幕 message_id——按
+        message_id 等值命中即可）；未提供时回退 ``outcome["target"]``（弹幕
         ``message_id`` 或文本片段）匹配：message_id 等值 → text 包含/相等。
         全未命中时保守兜底为 batch 最后一条消息的 user_id（"回复最后那条"
         通常是意图所指）；batch 为空或 target 为空时返回 None。该方法只做
         反查，不写状态、不发事件；异常吞掉记 warning 不上抛（决策循环必须继续）。
         """
-        reply_to = getattr(plan, "reply_to", None)
-        target = reply_to or getattr(plan, "target", None)
+        reply_to = outcome.get("reply_to")
+        target = reply_to or outcome.get("target")
         if not isinstance(target, str) or not target:
             return None
         if not batch:
@@ -1542,17 +1505,17 @@ class StreamerAgent(BaseAgent):
             except RuntimeError as exc:
                 self._logger.warning(f"动作任务创建失败（已忽略）: tool={name}, err={exc}")
 
-    def _consume_plan_assessment(self, plan: Any) -> None:
-        """消费 Planner 评估字段，灌入 AgendaIdle。"""
+    def _consume_plan_assessment(self, outcome: Dict[str, Any]) -> None:
+        """消费 Planner 顺带评估字段（灌注 AgendaIdle）。"""
         if self._agenda_idle is None:
             return
         if not self.typed_config.agenda_advance_eval_enabled:
             return
         try:
             self._agenda_idle.note_plan_assessment(
-                may_advance=getattr(plan, "may_advance", False),
-                need_more_time=getattr(plan, "need_more_time", False),
-                branch_id=getattr(plan, "branch_id", None),
+                may_advance=bool(outcome.get("may_advance", False)),
+                need_more_time=bool(outcome.get("need_more_time", False)),
+                branch_id=outcome.get("branch_id"),
             )
         except Exception as exc:
             self._logger.warning(f"消费 Planner 评估异常: {exc}")

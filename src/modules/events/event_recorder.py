@@ -125,7 +125,7 @@ class EventHistoryRecorder:
                     event_name=event_name,
                     timestamp_ms=self._payload_timestamp_ms(data),
                     level="info",
-                    source=dict_data.get("live_session_id", source),
+                    source=str(dict_data.get("live_session_id", source) or source),
                     summary=summary,
                     data=dict_data,
                 )

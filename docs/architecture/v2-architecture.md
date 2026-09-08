@@ -133,7 +133,7 @@ flowchart TB
 
 各层要点：
 
-- **主播 Agent**（`src/agents/streamer/`）：弹幕经 MessageBuffer 聚合，Planner 以 llm_fast 判断是否值得回复（置信度门槛），命中则调用自有 `reply` 工具——Replyer 表达引擎生成 speech/emotion/action 并做敏感词净化。**Planner 与 Replyer 是内脏，永不注册为工具。**Agenda 子系统（加载/运行状态/空转调度/持久化）承担"没观众时干什么"；后台双任务负责记账与话题聚合。
+- **主播 Agent**：`src/agents/streamer/`——弹幕窗 MessageBuffer 聚合，Planner 以 ReAct 循环决策（工具面 = 全局 ToolRegistry + reply 局部工具，`planner_llm` 默认 llm 高质量模型，`planner_max_steps=8` 防失控）：查信息（游戏状态/记忆）→ 调 `reply` 工具 → Replyer 表达引擎生成 speech/emotion/action（含敏感词净化）。**Planner 与 Replyer 都是内脏，两者都不注册为工具**（reply_tool 是 LLM 调用入口）。Agenda 子系统管理环节/冷场状态/轮转节奏/持久化队列中的"没有弹幕时说什么"，与后台弹幕机双轨互动。
 - **游戏代理**（`src/agents/game/<game>/`）：AI 玩家范式——感知（公用 look_at_screen 快照）、推进（专属工具如 text_adv_choose_option）、循环内聚于一个自包含包。加游戏 = 加包 + 配置，框架零改动。
 - **工具层**：约 60 个工具统一 ToolSpec 契约，三个来源——内置（进程内渲染/感知）、内容引擎（玩家引擎控制面）、MCP（外部扩展）。同步调用结果直返，异步工具经 `tool.result.<name>` 事件回传。
 - **存储层**：SQLite 11 表（场次/直播消息流/礼物/SC/话题/观众/Agenda 计划与运行时/游戏事件/时间线摘要/LLM 用量）+ schema_migrations 版本化迁移；模拟数据带 `simulated` 列，统计查询一律排除——模拟观众不是观众。
@@ -207,3 +207,5 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 *最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施（基础模块）。"工具层（被动能力，ToolRegistry 注册）"表格工具例子删除 TTS（"TTS 自 v2.0.12 §8 修正起已是基础模块"）；Mermaid 工具层节点 T1 标注"TTS 自 v2.0.12 §8 起迁至基础模块层"；九节"遗留与下一步"原 TTS 闭环条目改写为"TTS 族装配已闭环 + §8 概念修正后最终态（v2.0.12）"+ `build_tts_infrastructure` 装配期注入说明 + ToolRegistry 零 TTS 条目；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
 
 *上次更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：九节"遗留与下一步"对应条目改写为拆除说明；首版：四代架构史、主体性判据、防换皮铁闸、全景与九 Wave 落地叙事）*
+
+*最后更新：2026-09-08（主播 Agent 决策链 ReAct 化：Planner 从单发 produce_plan 改为 ReAct 循环——chat_messages + 全局工具面 + reply 局部工具（max_steps=8）；Replyer 收缩为 reply 工具实现载体（零工具面）；废除 DecisionPlan 管道；planner_llm 默认升为 llm；设计详情见 .omo/drafts/streamer-react-design.md）*

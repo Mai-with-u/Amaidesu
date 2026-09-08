@@ -1,27 +1,20 @@
-"""Replyer - 主播 Agent 表达引擎
+"""Replyer - 主播 Agent 表达引擎（reply 工具的实现载体）
 
-设计原则（Y 模型）：
-- Planner（决策阶段）：**零人设**，只决定"要不要回复 / 回复谁 / 聊什么"，输出 DecisionPlan。
-- Replyer（表达阶段，本模块）：**注入人设**，根据 plan + 弹幕批次 + 人设生成实际回复，
-  通过标准 function calling 一次性产出 speech + emotion + 动作列表。
-- 两者使用不同的 LLM 客户端：Planner 用快速模型（llm_fast），Replyer 用高质量模型（llm）。
+定位（Planner ReAct 架构下）：
+- Planner 是决策主体，以 ReAct 循环运行（查信息 → 决定说不说 → 调 reply 工具）。
+- Replyer 是 reply 工具的内部实现：被 Planner 的 reply 调用触发，注入人设，
+  把决策意图（topic_summary / reply_guidance / target）渲染成实际回复。
+- reply 工具契约由 ``tools/reply_tool.py`` 暴露；本类**不**注册为工具、
+  **不**持有任何工具面（reply 是唯一 function 定义，纯结构化输出口）。
 
 职责边界：
-- 调用 LLMManager.call_tools(prompt, tools=...) 标准接口，向 LLM 声明 ``reply`` function
-  （Agent 内部协议——主播自身 LLM 会话的出口）+ 由 ToolRegistry 转换的动作工具 functions。
-- 解析 response.tool_calls：找到 ``reply`` call 取出 speech/emotion；
-  其余 tool_calls 收集为 actions 列表（返回给 StreamerAgent 主循环统一分发）。
-- **不**注册为工具；reply 工具契约本身由 ``tools/reply_tool.py`` 暴露给外层 Planner。
+- 调用 LLMManager.call_tools(prompt, tools=[reply_fn_def])——LLM 只见 reply。
+- 解析 response.tool_calls：reply call 取 speech/emotion/intensity；其余忽略。
 - **敏感词净化**（输出端）：内置 ProfanityFilter 做"嘴"端净化——speech 输出前
   经词表过滤（替换或丢弃）。
-
-与 StreamerAgent 的关系：
-- 本类是一个"纯函数式"的表达组件，由 StreamerAgent 持有并在 reply_tool.invoke 时调用。
-- 工具 actions 不做白名单校验：ToolRegistry 暴露给 LLM 时，LLM 只能选已注册工具，
-  结构化协议本身就是校验，不再需要白名单影子机制。
+- 两者使用不同的 LLM 客户端：Planner 用快速模型（llm_fast），Replyer 用高质量模型（llm）。
 
 配置兼容：``replyer_client`` 配置键保留（向后兼容）；同时接受 ``replyer_llm``。
-净化：内置 profanity filter（词表 + 替换 + drop_on_match 选项）。
 """
 
 from __future__ import annotations
@@ -132,17 +125,14 @@ class Replyer:
             self.logger.debug("DecisionPlan.should_reply=False，Replyer 跳过生成")
             return None
 
-        # ① 注入人设 + 决策计划 + 弹幕上下文 + 会话历史 + Agenda 上下文，渲染 Replyer prompt
+        # 注入人设 + 决策意图 + 弹幕上下文 + 会话历史 + Agenda 上下文，渲染 prompt
         prompt = self._render_prompt(plan, batch, persona, history, agenda)
 
-        # ② 构造 function definitions：reply（Agent 内部协议）+ 来自 ToolRegistry 的动作工具
-        tools = [self._build_reply_function_def()] + self._collect_action_function_defs()
+        # reply 是唯一工具——表达引擎不持有信息/动作工具面
+        tools = [self._build_reply_function_def()]
 
-        # ③ 调用高质量 LLM（call_tools 标准接口）
         try:
-            self.logger.info(
-                f"Replyer 生成回复中 (plan.target={plan.target!r}, client={self.replyer_llm}, tools={len(tools)})"
-            )
+            self.logger.info(f"Replyer 生成回复中 (plan.target={plan.target!r}, client={self.replyer_llm})")
             response = await self._llm_service.call_tools(
                 prompt=prompt,
                 tools=tools,
@@ -156,27 +146,26 @@ class Replyer:
             self.logger.warning(f"Replyer LLM 返回失败: {getattr(response, 'error', 'unknown')}, silent 降级")
             return None
 
-        # ④ 解析 tool_calls（找 reply call 取 speech/emotion/intensity；其余收集为 actions）
-        speech, emotion_name, emotion_intensity, actions = self._parse_tool_calls(getattr(response, "tool_calls", None))
+        speech, emotion_name, emotion_intensity = self._parse_tool_calls(getattr(response, "tool_calls", None))
 
         if not speech:
             self.logger.info("Replyer LLM 未返回 reply 或 speech 为空，silent 降级")
             return None
 
-        # ⑤ emotion 校验（合法枚举保留，非枚举降级 neutral）
+        # 情绪校验：合法枚举保留，非枚举降级 neutral
         valid_emotion_names = {e.value for e in Emotion}
         if emotion_name not in valid_emotion_names:
             self.logger.warning(f"Replyer 情绪 '{emotion_name}' 不在枚举中，降级为 neutral")
             emotion_name = "neutral"
 
-        # ⑥ 组装回复
+        # actions 恒空——动作执行归 Planner ReAct 循环的 registry 工具调用
         result = {
             "speech": speech,
             "emotion": {
                 "name": emotion_name,
                 "intensity": emotion_intensity,
             },
-            "actions": actions,
+            "actions": [],
             "metadata": {
                 "source_id": "streamer_agent",
                 "target": plan.target,
@@ -260,92 +249,55 @@ class Replyer:
             },
         }
 
-    def _collect_action_function_defs(self) -> List[Dict[str, Any]]:
-        """从 ToolRegistry 收集动作工具的 function 定义（OpenAI 形态）。
-
-        - 数据源：tool_registry.list_tools() 返回的 ToolSpec 列表。
-        - 过滤掉 ``name == "reply"``（防御：reply 不应注册到动作库；本模块内联定义）。
-        - 转换：``{"name": spec.name, "description": spec.description, "parameters": spec.parameters_schema}``。
-        - tool_registry 缺失或查询失败时返回空列表（reply 工具仍可用，仅无并发动作能力）。
-        """
-        if self._tool_registry is None:
-            return []
-
-        try:
-            specs = self._tool_registry.list_tools()
-        except Exception as e:
-            self.logger.warning(f"Replyer 查询 ToolRegistry 失败，动作能力降级为空: {e}")
-            return []
-
-        definitions: List[Dict[str, Any]] = []
-        for spec in specs:
-            # 防御：reply 已在 replyer 内联定义，不应出现在动作库
-            if spec.name == _REPLY_FUNCTION_NAME:
-                continue
-            entry: Dict[str, Any] = {
-                "name": spec.name,
-                "description": spec.description,
-            }
-            if spec.parameters_schema is not None:
-                entry["parameters"] = spec.parameters_schema
-            definitions.append(entry)
-
-        self.logger.debug(f"Replyer 已收集 {len(definitions)} 个动作工具 function 定义")
-        return definitions
-
     # ==================== tool_calls 解析 ====================
 
     @staticmethod
     def _parse_tool_calls(
         tool_calls: Optional[List[Dict[str, Any]]],
-    ) -> Tuple[str, Optional[str], float, List[Dict[str, Any]]]:
-        """从 LLMResponse.tool_calls 解析 reply(speech/emotion/intensity) 与 actions。
+    ) -> Tuple[str, Optional[str], float]:
+        """从 LLMResponse.tool_calls 解析 reply(speech/emotion/intensity)。
+
+        Replyer 工具面只有 reply，非 reply 调用一律忽略。
 
         Args:
             tool_calls: LLM 返回的 tool_calls 列表（OpenAI 形态：
                         ``{"name": str, "arguments": str|dict, "id": str, "type": "function"}``）
 
         Returns:
-            ``(speech, emotion_name, emotion_intensity, actions)``：
+            ``(speech, emotion_name, emotion_intensity)``：
             - speech: 找到 reply call 时的 speech 字符串；找不到 reply 或 speech 为空时为 ``""``
             - emotion_name: reply call 提供的 emotion；未提供/非法时为 ``None``
             - emotion_intensity: reply call 提供的情绪强度，clamp 到 [0.0, 1.0]；
               未提供/非法时默认 0.5
-            - actions: 非 reply 的 tool_calls 列表，元素形如 ``{"name": str, "parameters": dict}``；
-                       arguments 解析失败时 ``parameters`` 为空 dict。
         """
         if not tool_calls:
-            return "", None, 0.5, []
+            return "", None, 0.5
 
         speech = ""
         emotion_name: Optional[str] = None
         emotion_intensity = 0.5
-        actions: List[Dict[str, Any]] = []
 
         for call in tool_calls:
-            name = call.get("name", "") if isinstance(call, dict) else ""
-            if name == _REPLY_FUNCTION_NAME:
-                args = _parse_call_arguments(call)
-                if isinstance(args, dict):
-                    raw_speech = args.get("speech", "")
-                    if isinstance(raw_speech, str):
-                        speech = raw_speech.strip()
-                    raw_emotion = args.get("emotion")
-                    if isinstance(raw_emotion, str) and raw_emotion:
-                        emotion_name = raw_emotion.lower()
-                    raw_intensity = args.get("intensity")
-                    try:
-                        emotion_intensity = min(1.0, max(0.0, float(raw_intensity)))
-                    except (TypeError, ValueError):
-                        emotion_intensity = 0.5
+            if not isinstance(call, dict):
                 continue
+            fn = call.get("function") if isinstance(call.get("function"), dict) else call
+            if fn.get("name", "") != _REPLY_FUNCTION_NAME:
+                continue
+            args = _parse_call_arguments(call)
+            if isinstance(args, dict):
+                raw_speech = args.get("speech", "")
+                if isinstance(raw_speech, str):
+                    speech = raw_speech.strip()
+                raw_emotion = args.get("emotion")
+                if isinstance(raw_emotion, str) and raw_emotion:
+                    emotion_name = raw_emotion.lower()
+                raw_intensity = args.get("intensity")
+                try:
+                    emotion_intensity = min(1.0, max(0.0, float(raw_intensity)))
+                except (TypeError, ValueError):
+                    emotion_intensity = 0.5
 
-            # 非 reply call → 收集为 action
-            raw_params = _parse_call_arguments(call)
-            parameters = raw_params if isinstance(raw_params, dict) else {}
-            actions.append({"name": name, "parameters": parameters})
-
-        return speech, emotion_name, emotion_intensity, actions
+        return speech, emotion_name, emotion_intensity
 
     # ==================== 敏感词净化（输出端） ====================
 
@@ -475,6 +427,8 @@ def _parse_call_arguments(call: Dict[str, Any]) -> Any:
     解析失败时返回原始值（让 caller 自行降级）。
     """
     raw = call.get("arguments", {}) if isinstance(call, dict) else {}
+    if not raw and isinstance(call.get("function"), dict):
+        raw = call["function"].get("arguments", {})
     if isinstance(raw, dict):
         return raw
     if isinstance(raw, str):
