@@ -138,5 +138,34 @@ class McpToolProvider(BaseToolProvider):
         同生共死（探活通过即整组恢复）。委托给 ``McpClient.probe``。"""
         return await self._client.probe()
 
+    async def connect(self) -> bool:
+        """建立 MCP 通道连接（手动重连的"建立"半步）。
+
+        已连接短路返回 True（手动重连场景下"双开"无意义，避免拉起第二条
+        transport 抢占 server 资源）。未连接时委托 ``McpClient.connect``——
+        底层已对断连 / 超时 / transport 异常做了兜底，本层不另捕异常，仅
+        记录失败原因供上层日志对照。返回 bool 与客户端一致（True=已建立）。
+        """
+        if self._client.connected:
+            logger.info(f"MCP Provider '{self.server_name}' 已连接，跳过手动 connect")
+            return True
+        ok = await self._client.connect()
+        if ok:
+            logger.info(f"MCP Provider '{self.server_name}' 手动连接成功")
+        else:
+            logger.warning(f"MCP Provider '{self.server_name}' 手动连接失败（详见 McpClient 日志）")
+        return ok
+
+    async def disconnect(self) -> bool:
+        """断开 MCP 通道连接（手动重连的"断开"半步）。
+
+        委托 ``McpClient.close``：底层幂等且异常兜底，本层不另捕。返回值保留
+        为 True 以表达"断开动作已发出"语义——即使原本未连接，调用语义仍
+        是"已断开状态"，上层无须据此判定重连成败（看 ``connect`` 返回值）。
+        """
+        logger.info(f"MCP Provider '{self.server_name}' 手动断开连接")
+        await self._client.close()
+        return True
+
 
 __all__ = ["McpToolProvider"]
