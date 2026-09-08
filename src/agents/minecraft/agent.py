@@ -154,13 +154,72 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
 
     async def _on_start(self) -> None:
-        """启动钩子：注册专属工具 + 启动命令 worker（空闲零消耗）。"""
+        """启动钩子：注册专属工具 + 装配 Agent 私有 MCP（启用时） + 启动命令 worker。"""
         if self._tool_registry is not None:
             self._register_tools()
+            await self._bind_agent_owned_mcp()
 
         self._running = True
         self._worker_task = asyncio.create_task(self._worker())
         self._logger.info("MinecraftAgent 已启动（命令驱动：等待 minecraft_assign）")
+
+    async def _bind_agent_owned_mcp(self) -> None:
+        """装配 Agent 私有 MCP server（[agents.minecraft.mcp]）。
+
+        启用条件：registry 非空且 ``typed_config.mcp.enabled`` 为 True。
+        装配：以 ``owner_agent="minecraft"`` 注册到 ToolRegistry——默认不进入
+        LLM 通用工具面，仅 MinecraftAgent 通过 ``list_tools(provider="maicraft")``
+        域内查询可见。
+        失败语义：整个装配 try/except 包裹，连接失败/装配异常仅 warning 不阻断
+        Agent 启动——Agent 是命令驱动，MCP 不可用只降级（无 maicraft 工具可调）。
+        关闭：依赖全局 ``close_mcp_providers``（registry._providers 遍历）——
+        本 Agent 不在 _on_stop 单独关闭，保持与"通用 MCP 通道"一致的清理路径。
+        """
+        if self._tool_registry is None:
+            return
+        mcp_cfg = self.typed_config.mcp
+        if not mcp_cfg.enabled:
+            return
+        # 函数内 import：mcp 模块涉及 fastmcp 重型依赖；按"可选重型依赖延迟加载"
+        # 白名单情形，_on_start 是异步路径，导入仅在启动期发生一次。
+        from src.modules.mcp.client import McpClient
+        from src.modules.mcp.provider import McpToolProvider
+
+        server_name = "maicraft"
+        client = McpClient(name=server_name, config=mcp_cfg)
+        prov = McpToolProvider(
+            client=client,
+            server_name=server_name,
+            prefix=None,  # 走默认 <server_name>_ 前缀
+            provider=server_name,  # spec.provider = "maicraft"，与历史契约一致
+        )
+        try:
+            count = await prov.setup()
+        except Exception as exc:  # noqa: BLE001 - 装配异常仅降级
+            self._logger.warning(f"Agent 私有 MCP（owner_agent=minecraft）装配异常: {type(exc).__name__}: {exc}")
+            try:
+                await client.close()
+            except Exception:  # noqa: BLE001 - 关闭失败不二次上抛
+                pass
+            return
+        if count == 0:
+            # 对齐 bind_mcp_tools 的隔离风格：连接失败或 server 无工具 → 不注册
+            self._logger.warning("Agent 私有 MCP（owner_agent=minecraft）连接失败或 server 未暴露工具，未注册")
+            try:
+                await client.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        try:
+            new_count = self._tool_registry.register_provider(prov, owner_agent=self.name)
+        except Exception as exc:  # noqa: BLE001 - 注册异常兜底
+            self._logger.warning(f"Agent 私有 MCP（owner_agent=minecraft）注册失败: {type(exc).__name__}: {exc}")
+            try:
+                await client.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        self._logger.info(f"Agent 私有 MCP（owner_agent=minecraft）装配完成：新注册 {new_count}/{count} 个工具")
 
     async def _on_stop(self) -> None:
         """停止钩子：取消命令 worker（任务执行随 worker 取消而中断）。"""

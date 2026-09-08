@@ -1,6 +1,7 @@
 """MinecraftAgent 测试：工具契约 / ReAct 循环 / 事件 / assign / 装配"""
 
 import asyncio
+from typing import Any, Dict
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -559,7 +560,15 @@ async def test_react_tool_failure_fed_back_to_llm() -> None:
         def list_tools(self):
             from src.modules.tools.models import ToolSpec
 
-            return [ToolSpec(name="maicraft_execute", description="执行", parameters_schema={"type": "object"}, kind="sync", provider="maicraft")]
+            return [
+                ToolSpec(
+                    name="maicraft_execute",
+                    description="执行",
+                    parameters_schema={"type": "object"},
+                    kind="sync",
+                    provider="maicraft",
+                )
+            ]
 
         async def invoke(self, invocation: ToolInvocation):
             from src.modules.tools.models import ToolExecutionResult
@@ -573,7 +582,9 @@ async def test_react_tool_failure_fed_back_to_llm() -> None:
         # 第一轮：调用 MCP 工具 → 失败观察；第二轮：读到失败 → 自然终止
         if not any(m.get("role") == "tool" for m in messages):
             return _resp(tool_calls=[_tool_call("maicraft_execute", {"goal": "mine"})])
-        seen_failure.append(any("world not loaded" in m.get("content", "") for m in messages if m.get("role") == "tool"))
+        seen_failure.append(
+            any("world not loaded" in m.get("content", "") for m in messages if m.get("role") == "tool")
+        )
         return _resp("接受错误，尝试重试")
 
     llm = MagicMock()
@@ -605,7 +616,11 @@ async def test_react_multi_tool_calls_batch_execute() -> None:
             return _resp(
                 tool_calls=[
                     _tool_call("minecraft_notebook", {"action": "write", "content": "笔记 A"}, "c1"),
-                    _tool_call("minecraft_todo", {"action": "write", "todos": [{"content": "任务 B", "status": "in_progress"}]}, "c2"),
+                    _tool_call(
+                        "minecraft_todo",
+                        {"action": "write", "todos": [{"content": "任务 B", "status": "in_progress"}]},
+                        "c2",
+                    ),
                 ]
             )
         return _resp("done")
@@ -712,3 +727,232 @@ def test_factory_minecraft_schema_defaults() -> None:
     )
     assert isinstance(agent, MinecraftAgent)
     assert agent.typed_config.max_steps == 50
+
+
+# ---------------------------------------------------------------------------
+# Agent 私有 MCP（owner_agent="minecraft"）装配契约
+# ---------------------------------------------------------------------------
+
+
+class _FakeMcpClient:
+    """McpClient 替身：暴露 Agent 装配路径上用到的 connect/close 即可。"""
+
+    def __init__(self, name: str, config: Any) -> None:
+        self.name = name
+        self.config = config
+        self.connected = False
+        self.closed = False
+
+    async def connect(self) -> bool:
+        self.connected = True
+        return True
+
+    async def close(self) -> None:
+        self.closed = True
+        self.connected = False
+
+
+class _FakeMcpProvider:
+    """McpToolProvider 替身：setup() 返回指定工具数；list_tools 暴露缓存 specs。"""
+
+    category = "mcp"
+
+    def __init__(
+        self,
+        *,
+        client: Any,
+        server_name: str,
+        prefix: str | None = None,
+        provider: str | None = None,
+    ) -> None:
+        self.client = client
+        self.server_name = server_name
+        self.prefix = prefix if prefix is not None else f"{server_name}_"
+        self._provider = provider or server_name
+        self._specs: list = []
+        self._setup_called = False
+        # 强制构造一次工具列表：模拟 server 暴露 2 个 maicraft 工具
+        self._tool_count = 2
+
+    @property
+    def name(self) -> str:
+        return f"McpProvider:{self.server_name}"
+
+    async def setup(self) -> int:
+        self._setup_called = True
+        from src.modules.tools.models import ToolSpec
+
+        self._specs = [
+            ToolSpec(
+                name=f"{self.prefix}{tool_name}",
+                description=f"desc {tool_name}",
+                kind="sync",
+                provider=self._provider,
+            )
+            for tool_name in ("perceive", "execute")
+        ]
+        return self._tool_count
+
+    def list_tools(self):
+        return list(self._specs)
+
+    async def invoke(self, invocation: ToolInvocation) -> Any:
+        from src.modules.tools.models import ToolExecutionResult
+
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
+
+    async def close(self) -> None:
+        await self.client.close()
+
+
+class _ZeroToolProvider(_FakeMcpProvider):
+    """setup() 返回 0（连接失败或 server 无工具）的替身——不应被注册。"""
+
+    async def setup(self) -> int:
+        self._setup_called = True
+        self._specs = []
+        return 0
+
+
+class _RaisingProvider(_FakeMcpProvider):
+    """setup() 抛异常的替身——装配应被兜底，不阻断 Agent 启动。"""
+
+    async def setup(self) -> int:
+        self._setup_called = True
+        raise ConnectionError("mock connect failure")
+
+
+def _patch_mcp(monkeypatch: pytest.MonkeyPatch, provider_cls: type) -> Dict[str, Any]:
+    """替换 src.modules.mcp 内的 McpClient 与 McpToolProvider 类。"""
+    import src.modules.mcp as mcp_module
+    from src.modules.mcp.client import McpClient
+    from src.modules.mcp.provider import McpToolProvider
+
+    monkeypatch.setattr(mcp_module, "McpClient", _FakeMcpClient)
+    monkeypatch.setattr(mcp_module, "McpToolProvider", provider_cls)
+    # 也覆盖真实类的导入路径（agent._bind_agent_owned_mcp 走模块引用）
+    monkeypatch.setattr("src.modules.mcp.client.McpClient", _FakeMcpClient)
+    monkeypatch.setattr("src.modules.mcp.provider.McpToolProvider", provider_cls)
+    return {
+        "McpClient": McpClient,
+        "McpToolProvider": McpToolProvider,
+    }
+
+
+@pytest.mark.asyncio
+async def test_on_start_binds_agent_owned_mcp_with_owner_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_on_start 启用 mcp 时：McpClient/McpToolProvider 被实例化、setup 调用、
+    工具以 owner_agent='minecraft' 注册进 ToolRegistry；域内查询可见、一般面默认排除。"""
+    _patch_mcp(monkeypatch, _FakeMcpProvider)
+
+    from src.modules.mcp.config import McpServerConfig
+
+    registry = ToolRegistry()
+    event_bus = MagicMock()
+    event_bus.emit = AsyncMock()
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=True, url="http://127.0.0.1:8766/mcp")),
+        llm_manager=MagicMock(),
+        event_bus=event_bus,
+        tool_registry=registry,
+    )
+
+    await agent.start()
+
+    # 域内查询（provider="maicraft"）：可见
+    scoped_names = {s.name for s in registry.list_tools(provider="maicraft")}
+    assert scoped_names == {"maicraft_perceive", "maicraft_execute"}
+    # 一般面：默认排除归属限定的 maicraft_*（minecraft_* 本地工具无归属限定，仍在一般面）
+    default_names = {s.name for s in registry.list_tools()}
+    assert "maicraft_perceive" not in default_names
+    assert "maicraft_execute" not in default_names
+    # 归属查询：每个 maicraft 工具都标 owner_agent=minecraft
+    assert registry.scoped_owner_of("maicraft_perceive") == "minecraft"
+    assert registry.scoped_owner_of("maicraft_execute") == "minecraft"
+    # 运营面：include_scoped=True 含一切
+    all_names = {s.name for s in registry.list_tools(include_scoped=True)}
+    assert {"maicraft_perceive", "maicraft_execute"}.issubset(all_names)
+
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_on_start_disabled_mcp_skips_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """mcp.enabled=false：不构造 McpClient、不调 setup、不注册——零装配。"""
+    constructed_clients: list = []
+    constructed_providers: list = []
+
+    class CountingClient(_FakeMcpClient):
+        def __init__(self, name: str, config: Any) -> None:
+            super().__init__(name, config)
+            constructed_clients.append(self)
+
+    class CountingProvider(_FakeMcpProvider):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            constructed_providers.append(self)
+
+    _patch_mcp(monkeypatch, CountingProvider)
+    monkeypatch.setattr("src.modules.mcp.client.McpClient", CountingClient)
+    monkeypatch.setattr("src.modules.mcp.provider.McpToolProvider", CountingProvider)
+
+    from src.modules.mcp.config import McpServerConfig
+
+    registry = ToolRegistry()
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=False)),
+        llm_manager=MagicMock(),
+        event_bus=MagicMock(),
+        tool_registry=registry,
+    )
+    await agent.start()
+
+    assert constructed_clients == [], "enabled=false 不应实例化 McpClient"
+    assert constructed_providers == [], "enabled=false 不应实例化 McpToolProvider"
+    assert registry.list_tools(provider="maicraft") == []
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_on_start_setup_failure_does_not_block_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """setup() 抛异常：装配被 try/except 兜底，Agent 仍正常 start（命令驱动降级）。"""
+    _patch_mcp(monkeypatch, _RaisingProvider)
+
+    from src.modules.mcp.config import McpServerConfig
+
+    registry = ToolRegistry()
+    event_bus = MagicMock()
+    event_bus.emit = AsyncMock()
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=True)),
+        llm_manager=MagicMock(),
+        event_bus=event_bus,
+        tool_registry=registry,
+    )
+
+    await agent.start()  # 不抛即通过
+    assert registry.list_tools(provider="maicraft") == [], "setup 抛异常时不应有工具被注册"
+    assert agent._running is True, "Agent 仍应进入运行态（MCP 不可用仅降级）"
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_on_start_zero_tools_closes_client_and_skips_register(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """setup() 返回 0（连接失败 / server 无工具）：close client、不注册——对齐通用通道的隔离风格。"""
+    _patch_mcp(monkeypatch, _ZeroToolProvider)
+
+    from src.modules.mcp.config import McpServerConfig
+
+    registry = ToolRegistry()
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=True)),
+        llm_manager=MagicMock(),
+        event_bus=MagicMock(),
+        tool_registry=registry,
+    )
+
+    await agent.start()
+    assert registry.list_tools(provider="maicraft") == [], "count=0 时不应注册到 registry"
+    await agent.stop()

@@ -9,6 +9,7 @@ from __future__ import annotations
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
+from src.modules.mcp.config import McpServerConfig
 
 
 class MinecraftConfig(BaseConfig):
@@ -16,9 +17,16 @@ class MinecraftConfig(BaseConfig):
 
     Attributes:
         max_steps: 单任务内 ReAct 循环（LLM 推理步数）上限——防失控挂起
+        mcp: Agent 私有 MCP server 配置（位置即归属）。enabled=true 时
+            _on_start 装配 McpToolProvider 并以 owner_agent="minecraft" 注册进
+            ToolRegistry；false 时不装配（Agent 命令驱动，MCP 不可用即降级）。
     """
 
     max_steps: int = Field(default=50, ge=1, description="单任务 ReAct 循环最大步数（超出挂起上报）")
+    mcp: McpServerConfig = Field(
+        default_factory=lambda: McpServerConfig(url="http://127.0.0.1:8766/mcp"),
+        description="Agent 私有 MCP server（enabled=false 时不装配）",
+    )
 
 
 __all__ = ["MinecraftConfig"]
