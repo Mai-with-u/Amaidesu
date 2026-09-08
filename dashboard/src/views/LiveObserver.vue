@@ -115,15 +115,9 @@
           <span v-else class="slate-idle">节目单未运行或未接入</span>
         </section>
 
-        <el-alert
-          v-if="showTestModeNotice"
-          class="test-mode-notice"
-          type="info"
-          :closable="false"
-          show-icon
-          title="未开启直播场次"
-          description="当前消息仅在内存中流转用于测试，不会保存到数据库；正式直播请先在左侧开启场次"
-        />
+        <div v-if="showTestModeNotice" class="test-mode-notice" title="正式直播请先在左侧开启场次">
+          测试模式：未开启场次，消息仅在内存中流转不落库
+        </div>
 
         <section class="stage" aria-label="时间线">
           <header class="stage-bar" :class="{ 'is-paused': paused && sessionMode === 'live' }">
@@ -242,9 +236,9 @@
                     <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
                   </div>
 
-                  <!-- 决策记录：planner.decision（本轮为什么这么做） -->
+                  <!-- 决策卡：verdict（实时裁决）+ decision（沉默/失败轮或统计回填后）共用 -->
                   <div
-                    v-else-if="entry.kind === 'decision'"
+                    v-else-if="entry.kind === 'decision' || entry.kind === 'verdict'"
                     class="decision"
                     :class="{ 'is-failed': entry.failed, 'is-silent': isSilentDecision(entry) }"
                   >
@@ -269,7 +263,6 @@
                     </div>
                     <p class="act-text">{{ entry.text }}</p>
                     <p v-if="guidanceOf(entry)" class="d-guidance">{{ guidanceOf(entry) }}</p>
-                    <p v-if="speechOf(entry)" class="d-speech">🎤 {{ speechOf(entry) }}</p>
                     <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
                     <div class="d-meta">
                       <span v-if="batchSizeOf(entry) > 0" class="mono"
@@ -289,6 +282,17 @@
                       >
                         完整请求 ↗
                       </a>
+                      <details v-if="plannerThinkingOf(entry.roundId)" class="d-thinking">
+                        <summary>思考过程</summary>
+                        <p
+                          v-for="seg in plannerThinkingOf(entry.roundId)"
+                          :key="seg.step"
+                          class="d-thinking-phase"
+                        >
+                          <span class="d-thinking-tag">Planner · 步骤 {{ seg.step }}</span>
+                          <span class="mono">{{ seg.text }}</span>
+                        </p>
+                      </details>
                       <details v-if="rawOf(entry)" class="d-raw">
                         <summary>原始输出</summary>
                         <pre class="mono">{{ rawOf(entry) }}</pre>
@@ -296,14 +300,14 @@
                     </div>
                   </div>
 
-                  <!-- 主播动作（工具结果） -->
+                  <!-- 工具调用卡（tool.result.*）：来源徽标在右侧（主播决策 / 游戏 Agent） -->
                   <div
                     v-else-if="entry.kind === 'tool'"
                     class="act"
                     :class="{ 'is-failed': entry.failed, 'is-speak': entry.speak }"
                   >
                     <div class="act-head">
-                      <span class="act-kind">主播</span>
+                      <span class="act-kind">工具调用</span>
                       <code class="act-tool mono">{{ entry.actor }}</code>
                       <span class="act-arrow" aria-hidden="true">→</span>
                       <span v-if="entry.badge" class="act-badge">{{ entry.badge }}</span>
@@ -314,7 +318,7 @@
                     <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
                   </div>
 
-                  <!-- 主播发言（streamer.speech） -->
+                  <!-- 主播发言（streamer.speech）：表达语义 + Replyer 思考回看 -->
                   <div v-else-if="entry.kind === 'speech'" class="act is-speech">
                     <div class="act-head">
                       <span class="act-kind act-kind--speech">主播</span>
@@ -326,6 +330,13 @@
                       <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
                     </div>
                     <p class="act-text">🎤 {{ entry.text }}</p>
+                    <details v-if="replyerThinkingOf(entry.roundId)" class="d-thinking">
+                      <summary>生成思考</summary>
+                      <p class="d-thinking-phase">
+                        <span class="d-thinking-tag">Replyer</span>
+                        <span class="mono">{{ replyerThinkingOf(entry.roundId) }}</span>
+                      </p>
+                    </details>
                   </div>
 
                   <!-- 观众发声：弹幕 / 礼物 / SC -->
@@ -344,6 +355,20 @@
                   </div>
                 </li>
               </ol>
+
+              <!-- 活动思考区：当前步骤的 reasoning 实时滚动（与工具卡时间交织） -->
+              <div v-if="activeThinking && sessionMode === 'live'" class="thinking-live">
+                <div class="thinking-live-head">
+                  <span class="whisper-dot is-running" aria-hidden="true" />
+                  <span class="thinking-live-title">{{ activeThinking.label }}</span>
+                  <span class="grow" />
+                  <code class="mono">{{ activeThinking.roundId }}</code>
+                </div>
+                <p class="thinking-live-phase">
+                  <span class="d-thinking-tag">{{ activeThinking.phase === 'replyer' ? 'Replyer' : 'Planner' }}</span>
+                  <span class="mono">{{ activeThinking.segment }}</span>
+                </p>
+              </div>
             </div>
 
             <button
@@ -402,14 +427,14 @@
  * - 回看：GET /live-sessions/{id}/timeline（明细行 + 事件历史按时间合并）
  * 渲染字段一律取自后端真实 Payload（src/modules/events/payloads/），不臆造字段。
  */
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Monitor } from '@element-plus/icons-vue';
 import { useEventsStore, useWebSocketStore } from '@/stores';
 import { debugApi, liveSessionsApi, simulatorApi, streamerApi } from '@/api';
 import { summarizeEvent } from '@/utils/eventSummary';
-import type { LiveSessionItem, WebSocketMessage } from '@/types';
+import type { LiveSessionItem, ThinkingDelta, WebSocketMessage } from '@/types';
 
 // ============================================================
 // 常量
@@ -452,6 +477,7 @@ type EntryKind =
   | 'tool'
   | 'agenda'
   | 'milestone'
+  | 'verdict'
   | 'decision'
   | 'stage'
   | 'boundary';
@@ -500,6 +526,98 @@ interface AgendaBanner {
 }
 
 // ============================================================
+// 思考流（WS kind="stream"；ADR-008 best-effort 观测通道）
+// ============================================================
+
+const THINKING_ROUNDS_MAX = 20;
+/** 单步思考段 */
+interface ThinkingStep {
+  step: number;
+  text: string;
+}
+/** 每决策轮的思考聚合：planner 按步骤分段（与工具卡时间交织），replyer 独立一段。
+ * plannerDone/replyerDone 分别由 verdict（裁决落地）与 speech（发言落地）驱动 */
+interface ThinkingRound {
+  steps: ThinkingStep[];
+  replyerText: string;
+  /** 最后活动的段："planner:<step>" | "replyer" */
+  lastSegment: string;
+  plannerDone: boolean;
+  replyerDone: boolean;
+}
+const thinkingRounds = reactive(new Map<string, ThinkingRound>());
+
+function thinkingOf(roundId: string): ThinkingRound | undefined {
+  return roundId ? thinkingRounds.get(roundId) : undefined;
+}
+
+/** 决策卡回看用：Planner 各步骤思考段（replyer 段归发言卡） */
+function plannerThinkingOf(roundId: string): ThinkingStep[] {
+  const round = thinkingOf(roundId);
+  if (!round) return [];
+  return round.steps.filter(s => s.text);
+}
+
+/** 发言卡回看用：Replyer 思考段文本（空串返回空，模板不渲染 details） */
+function replyerThinkingOf(roundId: string): string {
+  return thinkingOf(roundId)?.replyerText ?? '';
+}
+
+/** 活动中的思考段（时间线尾部实时滚动区），显示最后活动且未完结的段 */
+const activeThinking = computed<{
+  roundId: string;
+  round: ThinkingRound;
+  segment: string;
+  label: string;
+  phase: string;
+} | null>(() => {
+  for (const [roundId, round] of thinkingRounds) {
+    if (!round.plannerDone && !round.replyerDone) continue;
+    if (round.lastSegment === 'replyer') {
+      if (round.replyerDone) continue;
+      return { roundId, round, segment: round.replyerText, label: '生成发言中', phase: 'replyer' };
+    }
+    if (round.plannerDone) continue;
+    const step = Number(round.lastSegment.split(':')[1] ?? 1);
+    const seg = round.steps.find(s => s.step === step);
+    return { roundId, round, segment: seg?.text ?? '', label: `思考中 · 步骤 ${step}`, phase: 'planner' };
+  }
+  return null;
+});
+
+function handleThinkingMessage(message: WebSocketMessage): void {
+  if (message.kind !== 'stream' || message.type !== 'thinking.delta') return;
+  const deltas = (message.data.deltas ?? []) as ThinkingDelta[];
+  for (const delta of deltas) {
+    let round = thinkingRounds.get(delta.round_id);
+    if (!round) {
+      round = reactive({ steps: [], replyerText: '', lastSegment: '', plannerDone: false, replyerDone: false });
+      thinkingRounds.set(delta.round_id, round);
+      // 上限保尾：只保留最近 N 轮供决策卡回看，更早的文本随轮淘汰
+      while (thinkingRounds.size > THINKING_ROUNDS_MAX) {
+        const oldest = thinkingRounds.keys().next().value;
+        if (oldest === undefined) break;
+        thinkingRounds.delete(oldest);
+      }
+    }
+    if (delta.phase === 'replyer') {
+      round.replyerText += delta.text_delta;
+      round.lastSegment = 'replyer';
+      round.replyerDone = false;
+    } else {
+      let seg = round.steps.find(s => s.step === delta.step);
+      if (!seg) {
+        seg = reactive({ step: delta.step, text: '' });
+        round.steps.push(seg);
+      }
+      seg.text += delta.text_delta;
+      round.lastSegment = `planner:${delta.step}`;
+      round.plannerDone = false;
+    }
+  }
+}
+
+// ============================================================
 // Store 与全局状态
 // ============================================================
 
@@ -507,6 +625,18 @@ const eventsStore = useEventsStore();
 const wsStore = useWebSocketStore();
 const { events } = storeToRefs(eventsStore);
 const { isConnected: wsConnected } = storeToRefs(wsStore);
+
+wsStore.subscribe(handleThinkingMessage);
+
+// 重连清理：思考流无回填，断线期间的增量已不可得，重连后清空悬空活动段
+watch(wsConnected, (connected, previous) => {
+  if (connected && previous === false) {
+    for (const round of thinkingRounds.values()) {
+      round.plannerDone = true;
+      round.replyerDone = true;
+    }
+  }
+});
 
 // ============================================================
 // 通用取值助手
@@ -672,13 +802,16 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
   });
 }
 
-/** 主播动作：tool.result.*（ToolResultPayload） */
+/** 主播动作：tool.result.*（ToolResultPayload）；按 caller_source 区分归属 Agent */
 function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
   const toolName = str(data.tool_name) || event.type.slice('tool.result.'.length) || 'tool';
   const status = str(data.status);
   const failed = status === 'error';
   const spoken = pickToolText(data.result);
   const statusText = status ? (failed ? '执行失败' : '执行完成') : '';
+  const source = str(data.caller_source);
+  const caller =
+    source === 'planner-react' ? '主播决策' : source === 'minecraft-react' ? '游戏 Agent' : source;
   return makeEntry({
     id: event.id,
     kind: 'tool',
@@ -686,7 +819,7 @@ function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEn
     actor: toolName,
     text: spoken || statusText || summarizeEvent(event.type, data),
     note: failed ? str(data.error_message) : '',
-    badge: failed ? '失败' : '',
+    badge: failed ? '失败' : caller,
     failed,
     speak: toolName === 'speak',
     roundId: str(data.round_id),
@@ -705,20 +838,21 @@ function fromSpeech(event: FeedEvent, data: Record<string, unknown>): ShowEntry 
     note: emotion,
     speak: true,
     replyTo: str(data.reply_to_message_id),
+    roundId: str(data.round_id),
   });
 }
 
-/** 决策记录：planner.decision（PlannerDecisionPayload） */
+/** 决策记录：planner.decision（PlannerDecisionPayload）。
+ * 决策卡只承载裁决语义（决定回应什么话题/为何沉默）；发言文本由 streamer.speech 发言卡承载 */
 function fromDecision(id: string, tsSec: number, data: Record<string, unknown>): ShowEntry {
   const error = str(data.error);
   const shouldReply = bool(data.should_reply);
   const silentReason = str(data.silent_reason);
-  const speech = str(data.speech);
   const badge = error ? '失败' : shouldReply ? '回应' : silentReason ? '静默·压制' : '沉默';
   const text = error
     ? error
     : shouldReply
-      ? speech || str(data.topic_summary) || '决定发言'
+      ? str(data.topic_summary) || '决定发言'
       : silentReason === 'low_confidence'
         ? 'LLM 想回应，但置信度过低——被裁决压制为静默'
         : str(data.topic_summary)
@@ -738,6 +872,21 @@ function fromDecision(id: string, tsSec: number, data: Record<string, unknown>):
     replyTo: str(data.reply_to_message_id),
     detail: data,
     llmRequestId: str(data.llm_request_id),
+  });
+}
+
+/** 裁决卡：planner.verdict（reply 调用时刻的即时裁决；轮末 decision 按轮回填统计） */
+function fromVerdict(id: string, tsSec: number, data: Record<string, unknown>): ShowEntry {
+  return makeEntry({
+    id,
+    kind: 'verdict',
+    tsSec,
+    actor: '决策',
+    text: str(data.topic_summary) || '决定发言',
+    badge: '回应',
+    roundId: str(data.round_id),
+    replyTo: str(data.reply_to_message_id),
+    detail: data,
   });
 }
 
@@ -803,6 +952,7 @@ function toEntry(event: FeedEvent): ShowEntry | null {
   // WS 广播把 4 种 room.message.* 统一为 "room.message"，种类由 payload.message_type 判别
   if (event.type === 'room.message') return fromRoomMessage(event, data);
   if (event.type === 'streamer.speech') return fromSpeech(event, data);
+  if (event.type === 'planner.verdict') return fromVerdict(event.id, toSeconds(event.timestamp), data);
   if (event.type === 'planner.decision')
     return fromDecision(event.id, toSeconds(event.timestamp), data);
   if (event.type === 'streamer.stage') return fromStage(event.id, toSeconds(event.timestamp), data);
@@ -834,10 +984,6 @@ function confidenceLabel(entry: ShowEntry): string {
 
 function guidanceOf(entry: ShowEntry): string {
   return str(decisionDetail(entry).reply_guidance);
-}
-
-function speechOf(entry: ShowEntry): string {
-  return str(decisionDetail(entry).speech);
 }
 
 function batchSizeOf(entry: ShowEntry): number {
@@ -1120,10 +1266,30 @@ watch(
   ([list, isPaused, hidden]) => {
     if (isPaused) return;
     const next: ShowEntry[] = [];
+    // 轮次 → 已渲染的裁决卡；decision 到达时把统计回填进裁决卡而非新增重复卡
+    const verdictByRound = new Map<string, ShowEntry>();
     for (const event of list) {
       if (hidden.has(event.id)) continue;
       const entry = toEntry(event as FeedEvent);
-      if (entry) next.push(entry);
+      if (!entry) continue;
+      if (entry.kind === 'verdict' && entry.roundId) {
+        verdictByRound.set(entry.roundId, entry);
+      } else if (entry.kind === 'decision' && entry.roundId) {
+        const verdict = verdictByRound.get(entry.roundId);
+        if (verdict) {
+          // decision 的统计/失败信息回填裁决卡；decision 自身不再成卡
+          verdict.detail = decisionDetail(entry) || verdict.detail;
+          verdict.llmRequestId = entry.llmRequestId || verdict.llmRequestId;
+          verdict.failed = entry.failed;
+          if (entry.failed) {
+            verdict.text = entry.text;
+            verdict.badge = '失败';
+            verdict.note = entry.note;
+          }
+          continue;
+        }
+      }
+      next.push(entry);
     }
     liveEntries.value = next.slice(-MAX_ENTRIES);
   },
@@ -1346,7 +1512,19 @@ function countAdded(next: ShowEntry[], prev: ShowEntry[]): number {
 }
 
 watch(entries, async (next, prev) => {
-  if (sessionMode.value !== 'live') return;
+  if (sessionMode.value === 'live') {
+    // 思考段终态联动：verdict/decision 落地 → planner 段结束；speech 落地 → replyer 段结束
+    const prevKinds = new Set((prev ?? []).map(entry => `${entry.kind}:${entry.roundId}`));
+    for (const entry of next) {
+      if (!entry.roundId) continue;
+      const round = thinkingRounds.get(entry.roundId);
+      if (!round) continue;
+      const key = `${entry.kind}:${entry.roundId}`;
+      if (prevKinds.has(key)) continue;
+      if (entry.kind === 'verdict' || entry.kind === 'decision') round.plannerDone = true;
+      if (entry.kind === 'speech') round.replyerDone = true;
+    }
+  }
   const added = countAdded(next, prev ?? []);
   await nextTick();
   if (atBottom.value) {
@@ -1397,6 +1575,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  wsStore.unsubscribe(handleThinkingMessage);
   if (tickTimer) {
     clearInterval(tickTimer);
     tickTimer = null;
@@ -1791,6 +1970,15 @@ onUnmounted(() => {
 
 .slate-idle {
   font-size: 13px;
+  color: var(--text-placeholder);
+}
+
+/* 测试模式提示：单行小字，不占用时间线空间 */
+.test-mode-notice {
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: 11px;
   color: var(--text-placeholder);
 }
 
@@ -2328,6 +2516,75 @@ onUnmounted(() => {
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 220px;
+  overflow-y: auto;
+}
+
+/* 思考过程：决策卡内回看（同 d-raw 形态） */
+.d-thinking {
+  flex-basis: 100%;
+}
+.d-thinking summary {
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--text-placeholder);
+  user-select: none;
+}
+.d-thinking-phase {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.d-thinking-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  background: var(--color-agent-bg);
+  color: var(--color-agent);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 16px;
+  vertical-align: 1px;
+}
+
+/* 活动思考区：时间线尾部的实时滚动卡（生成中观感） */
+.thinking-live {
+  margin: 10px 0 0 38px;
+  max-width: 92%;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-agent-bg);
+  border-left: 2px solid var(--color-agent);
+  opacity: 0.85;
+}
+.thinking-live-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 10px;
+  color: var(--text-placeholder);
+}
+.thinking-live-title {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.thinking-live-phase {
+  margin: 4px 0 0;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 96px;
   overflow-y: auto;
 }
 

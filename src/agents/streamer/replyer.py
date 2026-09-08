@@ -94,6 +94,7 @@ class Replyer:
         persona: Dict[str, Any],
         history: Optional[List[Any]] = None,
         agenda: Optional[str] = None,
+        on_delta: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
         """根据 Planner 的决策计划 + 弹幕批次 + 人设，生成实际回复。
 
@@ -114,6 +115,7 @@ class Replyer:
                 主循环）从 ``AgendaState`` 拼装后传入，描述当前环节的
                 title / task_description / key_points / 环节剩余时长 + 整场进度。
                 透传到 prompt 的 ``$agenda`` 变量。
+            on_delta: 思考流回调（LLM 层形态 (kind, text_delta)；ADR-008）。
 
         Returns:
             Dict 实例（含 speech/emotion/actions/metadata）；LLM 异常、tool_calls 缺失
@@ -137,6 +139,7 @@ class Replyer:
                 prompt=prompt,
                 tools=tools,
                 client_type=self.replyer_llm,
+                on_delta=on_delta,
             )
         except Exception as e:
             self.logger.error(f"Replyer LLM 调用异常: {e}", exc_info=True)

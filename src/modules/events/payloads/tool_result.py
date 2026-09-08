@@ -39,6 +39,9 @@ class ToolResultPayload(BasePayload):
             场次盖章拦截器统一注入当前进行中场次；0 表示未归属。
         round_id: 关联的决策轮次 ID（可选）。工具调用发生在某轮决策上下文内时
             由调用方填写，供观察器把工具结果与决策轮成组。
+        caller_source: 调用方标识（可选）。透传自 ToolInvocation.source
+            （"planner-react"=主播决策循环 / "minecraft-react"=游戏 Agent 循环），
+            供观察器区分工具调用的归属 Agent。
         status: 执行状态（success=成功完成 / error=执行失败）
         result: 工具执行结果数据（结构由各工具自行定义）
         error_message: 错误信息（status=error 时填写）
@@ -48,7 +51,15 @@ class ToolResultPayload(BasePayload):
     tool_name: str = Field(..., description="工具名（与具体事件名后缀一致，如 'speak'/'summarize_timeline'）")
     live_session_id: int = Field(
         default=0,
-        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+        description="场次主键（live_sessions.id）。发布方不填，由场次盖章拦截器注入当前进行中场次；0 表示未归属。",
+    )
+    round_id: Optional[str] = Field(
+        default=None,
+        description="关联的决策轮次 ID；工具调用不在决策轮上下文内时为 None",
+    )
+    caller_source: Optional[str] = Field(
+        default=None,
+        description="调用方标识（透传自 ToolInvocation.source；区分归属 Agent）",
     )
     round_id: Optional[str] = Field(
         default=None,

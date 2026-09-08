@@ -107,7 +107,10 @@ class ToolInvocation:
         arguments: 参数（dict 形态；执行函数自行解析具体 schema）
         call_id: 调用 ID（用于一次性回合内配对；可空）
         invoked_at_ms: 调用时刻（毫秒）
-        source: 调用方标识（如 Agent 名）
+        source: 调用方标识（如 "planner-react" / "minecraft-react"）；
+            经 registry invoke 后透传到 tool.result 事件的 caller_source
+        round_id: 关联决策轮次 ID（调用发生在主播决策轮上下文内时填写；
+            经 registry invoke 后透传到 tool.result 事件的 round_id）
     """
 
     tool_name: str
@@ -115,6 +118,7 @@ class ToolInvocation:
     call_id: str = ""
     invoked_at_ms: int = 0
     source: str = ""
+    round_id: str = ""
 
 
 __all__ = [

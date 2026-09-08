@@ -288,11 +288,23 @@ export interface MessageListResponse {
  * `tool.result.<name>` / `game.*` / `live.*` / `system.*`）。
  */
 export interface WebSocketMessage {
+  /** 消息类别："event"=事件广播（缺省，进事件缓冲）；"stream"=观测流（独立缓冲，不入事件通道） */
+  kind?: string;
   type: string;
   timestamp: number;
   data: Record<string, unknown>;
   /** 事件唯一 ID（前端幂等去重依据） */
   id?: string;
+}
+
+/** 思考流单条增量（WS kind="stream" / type="thinking.delta" 的 data.deltas 元素） */
+export interface ThinkingDelta {
+  round_id: string;
+  /** "planner" | "replyer" */
+  phase: string;
+  step: number;
+  seq: number;
+  text_delta: string;
 }
 
 export interface SubscribeRequest {

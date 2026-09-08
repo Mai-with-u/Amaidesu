@@ -63,6 +63,7 @@ from .planner import Planner
 from .proactive_trigger import ProactiveTrigger
 from .replyer import ProfanityFilter, Replyer
 from .room_state import RoomState
+from .thinking_stream import ThinkingStreamContext
 from .timing_gate import TimingGate
 from .tools.command_tool import CommandToolProvider
 from .tools.proactive_tool import ProactiveToolProvider
@@ -175,6 +176,23 @@ class StreamerAgentConfig(BaseConfig):
         description="命令映射 {name: action}",
     )
 
+    # --- 思考流旁路（ADR-008；观察面专用，best-effort 不落库）---
+    # 与 src/modules/config/agents_schemas.py 的 WebUI 镜像 Schema 保持字段一致
+    thinking_stream_enabled: bool = _PydField(
+        default=True,
+        description="思考流总开关：决策/生成期间的 reasoning 增量经旁路通道推送 WebUI 控制台",
+    )
+    thinking_stream_flush_interval_ms: int = _PydField(
+        default=100,
+        ge=20,
+        description="思考流合帧推送间隔（毫秒）",
+    )
+    thinking_stream_buffer_max: int = _PydField(
+        default=400,
+        ge=10,
+        description="思考流环形缓冲上限（条）；超限丢最旧",
+    )
+
 
 # ---------------------------------------------------------------------------
 # StreamerAgent
@@ -220,6 +238,7 @@ class StreamerAgent(BaseAgent):
         tts_engine: Optional["TTSProvider"] = None,
         subtitle_service: Optional["SubtitleService"] = None,
         session_manager: Optional[Any] = None,
+        thinking_sink: Optional[Any] = None,
     ) -> None:
         """初始化主播 Agent。
 
@@ -267,6 +286,9 @@ class StreamerAgent(BaseAgent):
             session_manager: 可选 ``LiveSessionManager``（场次唯一事实源）。
                 后台心跳按其解析的当前场次主键写 live_sessions 实时状态；
                 ``None`` 时心跳降级跳过（场次归属由管理器负责，Agent 不自建）。
+            thinking_sink: 可选思考流旁路出口（``ThinkingStreamSink`` 结构契约，
+                dashboard 侧 hub 实现；ADR-008）。``None`` 或配置关闭时思考流
+                整体短路——决策循环行为与无旁路完全一致。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -278,6 +300,8 @@ class StreamerAgent(BaseAgent):
         self._sqlite = sqlite_store
         self._session_manager = session_manager
         self._persona_provider = persona_provider
+        # 思考流旁路出口（可选；观察面专用，不进 EventBus 不落库）
+        self._thinking_sink = thinking_sink
         # 记忆后端（可选；None 时记忆相关功能整体降级）
         self._memory = memory
         self._logger = get_logger("StreamerAgent")
@@ -597,6 +621,7 @@ class StreamerAgent(BaseAgent):
             persona=self._persona_provider or {},
             history_provider=(self._read_history_sync if self._context is not None else None),
             agenda_text_provider=self._build_agenda_text_sync,
+            event_bus=self._event_bus,
         )
         # Planner ReAct 循环经 reply_provider 直连表达引擎（Provider 构造晚于
         # Planner __init__，此处补绑）
@@ -993,6 +1018,9 @@ class StreamerAgent(BaseAgent):
         # Planner ReAct 决策（循环内完成查信息与 reply 调用；失败细节经
         # Planner.last_failure 带出，供决策事件区分降级原因）
         planner_started_ms = now_ms()
+        thinking = None
+        if self._thinking_sink is not None and getattr(self.typed_config, "thinking_stream_enabled", True):
+            thinking = ThinkingStreamContext(self._thinking_sink, round_id)
         try:
             outcome = await self._planner.plan(
                 batch,
@@ -1001,6 +1029,8 @@ class StreamerAgent(BaseAgent):
                 history=history,
                 agenda_text=agenda_text,
                 game_narrative=game_narrative,
+                thinking=thinking,
+                round_id=round_id,
             )
         except Exception as exc:
             self._logger.error(f"Planner 调用异常: {exc}", exc_info=True)
@@ -1048,6 +1078,7 @@ class StreamerAgent(BaseAgent):
             outcome.get("reply_payload"),
             self._resolve_reply_target_user(outcome, batch),
             reply_to_message_id=outcome.get("reply_to"),
+            round_id=round_id,
         )
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info
@@ -1240,6 +1271,7 @@ class StreamerAgent(BaseAgent):
         reply_payload: Any,
         reply_target_user_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
+        round_id: str = "",
     ) -> Optional[tuple]:
         """消费 reply 结构化结果并触发下游管线（决策循环安全：永不抛异常）。
 
@@ -1251,6 +1283,8 @@ class StreamerAgent(BaseAgent):
                 ``streamer.speech`` 业务事件，None 表示主动发言/无特定对象）。
             reply_to_message_id: 本次回复所指向弹幕的 message_id（可选；
                 来自 Planner 决策输出，透传到发言事件并落库为互动关联）。
+            round_id: 决策轮次 ID（可选；透传到 ``streamer.speech`` 事件供
+                观察器把发言卡与该轮思考过程成组）。
 
         行为契约：
         - 非 dict 输入 → WARN 日志 + 直接返回（决策循环不受影响）
@@ -1302,6 +1336,7 @@ class StreamerAgent(BaseAgent):
                 cleaned_emotion,
                 reply_target_user_id,
                 reply_to_message_id=reply_to_message_id,
+                round_id=round_id,
             )
             self._record_streamer_speech_history(cleaned_speech, cleaned_emotion)
             self._schedule_subtitle_show(cleaned_speech, utterance_id)
@@ -1321,12 +1356,14 @@ class StreamerAgent(BaseAgent):
         emotion: Optional[str],
         target_user_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
+        round_id: str = "",
     ) -> None:
         """发布 ``streamer.speech`` 业务事件（fire-and-forget；下游不得触发新决策）。"""
         if self._event_bus is None:
             return
         payload = StreamerSpeechPayload(
             utterance_id=utterance_id,
+            round_id=round_id or None,
             text=text,
             emotion=emotion,
             target_user_id=target_user_id,

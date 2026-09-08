@@ -45,6 +45,7 @@ from src.modules.tools.models import ToolInvocation
 from src.modules.types.message_type import require_message_type
 
 from .room_state import RoomState, RoomStateSnapshot
+from .thinking_stream import ThinkingStreamContext
 from .tools.reply_tool import build_reply_tool_spec
 
 __all__ = ["Planner"]
@@ -189,6 +190,8 @@ class Planner:
         history: Optional[List[Any]] = None,
         agenda_text: Optional[str] = None,
         game_narrative: str = "",
+        thinking: Optional[ThinkingStreamContext] = None,
+        round_id: str = "",
     ) -> Dict[str, Any]:
         """对一个决策窗跑 ReAct 循环，产出 outcome dict。
 
@@ -199,6 +202,10 @@ class Planner:
             history: 最近对话历史（可选；反重复用）。
             agenda_text: 当前 Agenda 渲染文本（可选）。
             game_narrative: 游戏叙事文本（game.* 事件摘要；可主动经工具查询更多）。
+            thinking: 思考流上下文（可选；提供时每次 LLM 调用的 reasoning
+                增量经旁路通道外发，ADR-008）。
+            round_id: 决策轮次 ID（工具调用经 ToolInvocation.round_id 透传到
+                tool.result 事件，供观察器归属；空串表示无轮次关联）。
 
         Returns:
             outcome dict：
@@ -265,6 +272,7 @@ class Planner:
                     messages=messages,
                     tools=tool_face,
                     client_type=self.planner_llm,
+                    on_delta=thinking.callback_for("planner", steps) if thinking else None,
                 )
             except Exception as e:
                 self.logger.warning(f"Planner LLM 调用异常: {e}")
@@ -308,9 +316,9 @@ class Planner:
                 outcome["tool_trace"].append(name)
 
                 if name == "reply":
-                    observation, replied = await self._invoke_reply(args, outcome)
+                    observation, replied = await self._invoke_reply(args, outcome, thinking=thinking, round_id=round_id)
                 else:
-                    observation = await self._invoke_registry_tool(name, args)
+                    observation = await self._invoke_registry_tool(name, args, round_id=round_id)
                 messages.append(
                     {
                         "role": "tool",
@@ -434,17 +442,34 @@ class Planner:
             face.append(_spec_to_fn_def(spec))
         return face
 
-    async def _invoke_reply(self, args: Dict[str, Any], outcome: Dict[str, Any]) -> tuple[str, bool]:
-        """执行 reply 局部工具；成功时把产出写进 outcome 并返回 (观察, replied=True)。"""
+    async def _invoke_reply(
+        self,
+        args: Dict[str, Any],
+        outcome: Dict[str, Any],
+        *,
+        thinking: Optional[ThinkingStreamContext] = None,
+        round_id: str = "",
+    ) -> tuple[str, bool]:
+        """执行 reply 局部工具；成功时把产出写进 outcome 并返回 (观察, replied=True)。
+
+        thinking 提供时：调用前把 replyer 阶段回调设到 Provider 的临时槽位，
+        调用后立即清理（一次性语义，防跨轮残留）。
+        """
         if self._reply_provider is None:
             return json.dumps({"ok": False, "error": "reply 工具不可用（Provider 未绑定）"}, ensure_ascii=False), False
+        set_thinking = getattr(self._reply_provider, "set_thinking_callback", None)
         try:
+            if set_thinking is not None:
+                set_thinking(thinking.callback_for("replyer", 1) if thinking else None)
             result = await self._reply_provider.invoke(
-                ToolInvocation(tool_name="reply", arguments=args, source="planner-react")
+                ToolInvocation(tool_name="reply", arguments=args, source="planner-react", round_id=round_id)
             )
         except Exception as e:
             self.logger.warning(f"reply 工具执行异常: {e}", exc_info=True)
             return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False), False
+        finally:
+            if set_thinking is not None:
+                set_thinking(None)
 
         if not result.success:
             return json.dumps({"ok": False, "error": result.error_message or "reply 失败"}, ensure_ascii=False), False
@@ -470,13 +495,13 @@ class Planner:
         self.logger.info(f"Planner ReAct 收尾：reply 成功 (target={outcome['target']!r}, steps={outcome['steps']})")
         return json.dumps({"ok": True, "speech_delivered": True}, ensure_ascii=False), True
 
-    async def _invoke_registry_tool(self, name: str, args: Dict[str, Any]) -> str:
+    async def _invoke_registry_tool(self, name: str, args: Dict[str, Any], round_id: str = "") -> str:
         """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。"""
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
         try:
             result = await self._tool_registry.invoke(
-                ToolInvocation(tool_name=name, arguments=args, source="planner-react")
+                ToolInvocation(tool_name=name, arguments=args, source="planner-react", round_id=round_id)
             )
         except Exception as e:
             self.logger.warning(f"工具 '{name}' 执行异常: {e}", exc_info=True)

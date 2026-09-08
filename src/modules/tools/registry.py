@@ -297,11 +297,15 @@ class ToolRegistry:
                 error_message=f"{type(exc).__name__}: {exc}",
                 timestamp_ms=int(time.time() * 1000),
             )
-        await self._emit_tool_result(spec, result)
+        await self._emit_tool_result(spec, result, invocation)
         return result
 
-    async def _emit_tool_result(self, spec: ToolSpec, result: ToolExecutionResult) -> None:
-        """广播工具结果事件（``tool.result.<name>``）；任何失败仅记日志。"""
+    async def _emit_tool_result(self, spec: ToolSpec, result: ToolExecutionResult, invocation: ToolInvocation) -> None:
+        """广播工具结果事件（``tool.result.<name>``）；任何失败仅记日志。
+
+        调用上下文（round_id / caller_source）从 invocation 透传进 payload，
+        供观察器区分工具调用的归属轮次与 Agent。
+        """
         if self._event_bus is None:
             return
         try:
@@ -311,6 +315,8 @@ class ToolRegistry:
                 result_data = {"content": result.content}
             payload = ToolResultPayload(
                 tool_name=result.tool_name,
+                round_id=invocation.round_id or None,
+                caller_source=invocation.source or None,
                 status="success" if result.success else "error",
                 result=result_data,
                 error_message=result.error_message,

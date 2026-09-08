@@ -47,6 +47,9 @@ class CoreEvents:
     # 每轮两阶段决策结束发一条（成功/失败/低置信度降级全覆盖），观察器的
     # 决策卡数据源；round_id 为本轮弹幕批次/决策/发言/工具结果的共同关联键。
     PLANNER_DECISION = "planner.decision"
+    # 裁决时刻即时事件：reply 工具被调用（Planner 决定回应）时发一条，
+    # 表达生成之前到达；观察器实时渲染裁决卡，轮末 decision 按轮回填统计。
+    PLANNER_VERDICT = "planner.verdict"
 
     # ========== v2 语义域事件（streamer 决策管线阶段状态） ==========
     # 决策管线阶段变化即发射（planning/replying/idle），观察器状态条数据源：

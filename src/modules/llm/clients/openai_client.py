@@ -12,7 +12,7 @@ import json
 import mimetypes
 import os
 from io import BytesIO
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
 
 from json_repair import repair_json
 from openai import AsyncOpenAI
@@ -131,8 +131,32 @@ class OpenAIClient(BaseLLMClient):
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
+        on_delta: Optional[Callable[[str, str], None]] = None,
     ) -> LLMResponse:
-        """聊天调用。"""
+        """聊天调用。
+
+        on_delta 非 None 时走流式传输（SSE 逐帧接收、边收边回调），流结束后
+        组装完整 LLMResponse 返回——传输层流式、语义层整段（ADR-008）。
+        流式请求建立失败时自动降级为非流式一次性调用（回调不触发）。
+        """
+        if on_delta is not None:
+            try:
+                return await self._chat_streaming(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=tools,
+                    interrupt_flag=interrupt_flag,
+                    on_delta=on_delta,
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+                error_msg = f"LLM 流式请求超时或被中断: {e}"
+                self.logger.error(error_msg)
+                return LLMResponse(success=False, content=None, error=error_msg)
+            except Exception as e:
+                self.logger.warning(f"流式请求失败，降级为非流式: {e}")
+                # 落到下方非流式路径
+
         try:
             request_params: Dict[str, Any] = {
                 "model": self.model,
@@ -193,6 +217,118 @@ class OpenAIClient(BaseLLMClient):
             error_msg = f"LLM 请求失败: {str(e)}"
             self.logger.error(error_msg)
             return LLMResponse(success=False, content=None, error=error_msg)
+
+    async def _chat_streaming(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        tools: Optional[List[Dict[str, Any]]],
+        interrupt_flag: Optional[asyncio.Event],
+        on_delta: Callable[[str, str], None],
+    ) -> LLMResponse:
+        """流式传输路径：SSE 逐帧接收，reasoning/content 增量实时回调，最终组装完整响应。
+
+        增量三分（ADR-008）：reasoning 外发回调；content 外发回调（调用方自行取舍）；
+        tool call arguments 碎片只在客户端拼接成完整 JSON，不外发。
+        拼接语义与非流式一致：arguments JSON 解析失败走 repair_json 兜底。
+        """
+        request_params: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature or self.temperature,
+            "stream": True,
+            # usage 随末帧返回；不支持该参数的兼容端点会在 create 阶段抛错，
+            # 由调用方（chat）降级为非流式路径兜底
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            request_params["tools"] = self._normalize_tool_definitions(tools)
+            request_params["tool_choice"] = "auto"
+        if max_tokens:
+            request_params["max_tokens"] = max_tokens
+        elif self.max_tokens:
+            request_params["max_tokens"] = self.max_tokens
+
+        stream = await self.client.chat.completions.create(**request_params)
+        content_parts: List[str] = []
+        reasoning_parts: List[str] = []
+        # index -> {"id": str, "name": str, "arguments": list[str]}（arguments 碎片按序拼接）
+        tool_states: Dict[int, Dict[str, Any]] = {}
+        usage: Optional[Dict[str, int]] = None
+        model_name: Optional[str] = None
+        try:
+            async for chunk in stream:
+                if interrupt_flag is not None and interrupt_flag.is_set():
+                    break
+                if getattr(chunk, "usage", None) is not None:
+                    usage = {
+                        "prompt_tokens": chunk.usage.prompt_tokens,
+                        "completion_tokens": chunk.usage.completion_tokens,
+                        "total_tokens": chunk.usage.total_tokens,
+                    }
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    continue
+                model_name = getattr(chunk, "model", None) or model_name
+                delta = choices[0].delta
+                # 原生 reasoning 字段（DeepSeek R1 系）；<think> 内嵌型不走此路径，
+                # 其思考随 content 外发、最终由 parse_reasoning 统一切分
+                reasoning_piece = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if reasoning_piece:
+                    reasoning_parts.append(reasoning_piece)
+                    on_delta("reasoning", reasoning_piece)
+                content_piece = getattr(delta, "content", None)
+                if content_piece:
+                    content_parts.append(content_piece)
+                    on_delta("content", content_piece)
+                for tc_delta in getattr(delta, "tool_calls", None) or []:
+                    state = tool_states.setdefault(tc_delta.index, {"id": "", "name": "", "arguments": []})
+                    if tc_delta.id:
+                        state["id"] = tc_delta.id
+                    fn = getattr(tc_delta, "function", None)
+                    if fn is not None and fn.name:
+                        state["name"] = fn.name
+                    if fn is not None and fn.arguments:
+                        state["arguments"].append(fn.arguments)
+        finally:
+            try:
+                await stream.aclose()
+            except Exception as e:
+                self.logger.debug(f"关闭流失败（已忽略）: {e}")
+
+        raw_content = "".join(content_parts)
+        native_reasoning = "".join(reasoning_parts) or None
+        content, reasoning_content = parse_reasoning(
+            raw_content,
+            native_reasoning,
+            ReasoningParseMode(self.config.get("reasoning_parse_mode", "auto")),
+        )
+        result = LLMResponse(
+            success=True,
+            content=content,
+            model=model_name or self.model,
+            usage=usage,
+            reasoning_content=reasoning_content,
+        )
+        if tool_states:
+            result.tool_calls = []
+            for index in sorted(tool_states):
+                state = tool_states[index]
+                raw_arguments = "".join(state["arguments"])
+                try:
+                    parsed_arguments = json.loads(raw_arguments) if raw_arguments else {}
+                except (json.JSONDecodeError, TypeError):
+                    parsed_arguments = repair_json(raw_arguments, return_objects=True)
+                result.tool_calls.append(
+                    {
+                        "id": state["id"],
+                        "type": "function",
+                        "function": {"name": state["name"], "arguments": parsed_arguments},
+                    }
+                )
+        return result
 
     async def stream_chat(  # type: ignore[override]
         self,

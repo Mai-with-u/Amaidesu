@@ -36,6 +36,7 @@ from src.modules.config.core_schemas import ContextAssemblerConfig, DashboardCon
 from src.modules.config.service import ConfigService
 from src.modules.context import ContextService
 from src.modules.dashboard.server import DashboardServer
+from src.modules.dashboard.stream_preview import StreamPreviewHub
 from src.modules.events import (
     EventBus,
     list_registered_events,
@@ -471,6 +472,7 @@ async def create_app_components(
 
     # --- AgentManager + StreamerAgent ---
     agent_manager: Optional["AgentManager"] = None
+    thinking_hub: Optional[StreamPreviewHub] = None
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
     if agents_config:
         logger.info("初始化 AgentManager（src/agents/）...")
@@ -481,6 +483,15 @@ async def create_app_components(
         # TTS 引擎实例（基础设施，不经 ToolRegistry）：按 [tts] 段装配；
         # 失败 / 关闭时返回 None，StreamerAgent 走 TTS 关闭路径。
         tts_engine = build_tts_infrastructure(tts_section, event_bus=event_bus)
+
+        # 思考流旁路 hub（ADR-008；观察面专用）：Agent 装配先于 dashboard 启动，
+        # ws 通道延迟绑定（dashboard 就绪后 attach_ws）；未绑定期间 delta 丢弃。
+        thinking_hub = StreamPreviewHub(
+            flush_interval_ms=int(
+                (agents_config.get("streamer") or {}).get("thinking_stream_flush_interval_ms", 100) or 100
+            ),
+            buffer_max=int((agents_config.get("streamer") or {}).get("thinking_stream_buffer_max", 400) or 400),
+        )
 
         await _register_agents_from_config(
             agent_manager,
@@ -496,6 +507,7 @@ async def create_app_components(
             tts_engine=tts_engine,
             subtitle_service=subtitle_service,
             session_manager=session_manager,
+            thinking_sink=thinking_hub,
         )
 
         # --- 核心域工具（avatar/studio 域开关，L2 Provider）+ L1 @tool pending 刷入 ---
@@ -627,6 +639,11 @@ async def create_app_components(
         if "dashboard" in subtitle_backends:
             subtitle_service.register_backend(DashboardBackend(dashboard_server.widget_service))
             logger.info("DashboardBackend 已注册到 subtitle_service")
+
+    # 思考流旁路 hub 绑定 WS 通道（Agent 装配先于 dashboard 启动，见构造处）
+    if thinking_hub is not None and dashboard_server is not None and dashboard_server.ws_handler is not None:
+        thinking_hub.attach_ws(dashboard_server.ws_handler)
+        logger.info("StreamPreviewHub 已绑定 dashboard WS 通道")
 
     # --- 组件装配完成 ---
     return (
@@ -763,6 +780,7 @@ async def _register_agents_from_config(
     tts_engine: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
     session_manager: Optional[Any] = None,
+    thinking_sink: Optional[Any] = None,
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
@@ -838,6 +856,7 @@ async def _register_agents_from_config(
                 tts_engine=tts_engine,
                 subtitle_service=subtitle_service,
                 session_manager=session_manager,
+                thinking_sink=thinking_sink,
             )
             manager.register(
                 agent,

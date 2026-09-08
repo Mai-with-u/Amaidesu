@@ -17,9 +17,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from typing import Any, Dict, List, Optional, Union
 
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.planner import PlannerVerdictPayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
@@ -163,12 +166,58 @@ class ReplyToolProvider:
         persona: Union[dict[str, Any], Any, None],
         history_provider: Optional[Any] = None,
         agenda_text_provider: Optional[Any] = None,
+        event_bus: Optional[Any] = None,
     ) -> None:
         self._replyer = replyer
         self._persona = persona
         self._history_provider = history_provider
         self._agenda_text_provider = agenda_text_provider
+        # 本轮思考流回调（LLM 层形态 on_delta）；由 Planner 在 reply 调用前设置、
+        # 调用后清理（一次性槽位，ReAct 串行无并发）
+        self._thinking_callback: Optional[Any] = None
+        # 可选 EventBus：reply 调用入口发布 planner.verdict（裁决时刻即时事实）
+        self._event_bus = event_bus
         self._logger = get_logger("ReplyTool")
+
+    def set_thinking_callback(self, callback: Optional[Any]) -> None:
+        """设置/清理本轮 replyer 阶段的思考流回调（Planner 每轮一次性注入）。"""
+        self._thinking_callback = callback
+
+    def _emit_verdict(self, args: Dict[str, Any], round_id: str) -> None:
+        """发布 ``planner.verdict``（裁决时刻即时事实；观测旁路，失败不阻断）。"""
+        if self._event_bus is None:
+            return
+
+        async def _do_emit() -> None:
+            event_bus = self._event_bus
+            if event_bus is None:
+                return
+            try:
+                confidence_raw = args.get("confidence", 0.9)
+                try:
+                    confidence = float(confidence_raw) if confidence_raw is not None else 0.9
+                except (TypeError, ValueError):
+                    confidence = 0.9
+                target = args.get("target")
+                await event_bus.emit(
+                    CoreEvents.PLANNER_VERDICT,
+                    PlannerVerdictPayload(
+                        round_id=round_id,
+                        topic_summary=str(args.get("topic_summary", "") or ""),
+                        reply_guidance=str(args.get("reply_guidance", "") or ""),
+                        confidence=min(1.0, max(0.0, confidence)),
+                        target=target if isinstance(target, str) else None,
+                        reply_to_message_id=None,
+                    ),
+                    source="reply_tool",
+                )
+            except Exception as exc:  # noqa: BLE001 - 观测旁路，不反噬调用方
+                self._logger.warning(f"planner.verdict 发布失败（已忽略）: {exc}")
+
+        try:
+            asyncio.create_task(_do_emit())
+        except RuntimeError as exc:
+            self._logger.warning(f"planner.verdict 任务创建失败（已忽略）: {exc}")
 
     @property
     def name(self) -> str:
@@ -228,6 +277,10 @@ class ReplyToolProvider:
             )
 
         args = invocation.arguments or {}
+
+        # 裁决时刻即时事实：reply 被调用即 Planner 已决定回应（表达生成之前）
+        self._emit_verdict(args, round_id=invocation.round_id)
+
         topic_summary = str(args.get("topic_summary", "") or "")
         reply_guidance = str(args.get("reply_guidance", "") or "")
         target_raw = args.get("target", None)
@@ -263,6 +316,9 @@ class ReplyToolProvider:
                 error_message=f"reply_tool 依赖解析失败: {type(exc).__name__}: {exc}",
             )
 
+        # 一次性槽位：取出即清（防异常路径残留跨轮回调；Planner finally 兜底再清一次）
+        thinking_callback = self._thinking_callback
+        self._thinking_callback = None
         try:
             result = await self._replyer.generate(
                 plan=plan,
@@ -270,6 +326,7 @@ class ReplyToolProvider:
                 persona=persona_dict,
                 history=history,
                 agenda=agenda,
+                on_delta=thinking_callback,
             )
         except Exception as exc:
             self._logger.error(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}", exc_info=True)

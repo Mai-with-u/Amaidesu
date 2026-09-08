@@ -55,6 +55,7 @@ from .planner import (
     CheckpointPayload,
     PlannerBatchItem,
     PlannerDecisionPayload,
+    PlannerVerdictPayload,
     StreamerStagePayload,
 )
 from .room import (
@@ -96,6 +97,7 @@ __all__ = [
     "CheckpointPayload",
     "PlannerBatchItem",
     "PlannerDecisionPayload",
+    "PlannerVerdictPayload",
     "StreamerStagePayload",
     # tool.result.* 异步工具结果
     "ToolResultPayload",

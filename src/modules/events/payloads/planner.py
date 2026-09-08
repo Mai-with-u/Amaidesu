@@ -221,10 +221,53 @@ class StreamerStagePayload(BasePayload):
     )
 
 
+@register_event("planner.verdict")
+class PlannerVerdictPayload(BasePayload):
+    """
+    裁决事件：Planner 决定回应并触发 reply 工具的时刻发出（表达生成之前）。
+
+    事件名：``planner.verdict``
+    发布者：ReplyToolProvider（reply 工具 invoke 入口处）
+    订阅者：观察器（裁决卡实时渲染）
+
+    与 ``planner.decision`` 的分工：
+    - verdict = 裁决发生时刻的即时事实（回应意图 + 置信度），观察者实时可见，
+      出现于查证工具卡之后、表达生成之前
+    - decision = 轮末统计汇总（耗时/原始输出/请求指针），观察器按 round_id
+      回填到裁决卡，不渲染重复卡片；沉默轮无 verdict，decision 独立成卡
+
+    Attributes:
+        round_id: 决策轮次 ID（与 decision/发言/工具结果共用关联键）
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
+        topic_summary: 话题摘要（Planner 的 reply 调用参数）
+        reply_guidance: 给 Replyer 的方向性指引
+        confidence: 决策置信度 [0.0, 1.0]
+        target: 决策面向的对象
+        reply_to_message_id: 决策所回复弹幕的 message_id
+        timestamp_ms: 事件发布时间戳（Unix 毫秒）
+    """
+
+    round_id: str = Field(..., description="决策轮次 ID（rnd_{epoch_ms}_{seq}）")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
+    topic_summary: str = Field(default="", description="话题摘要")
+    reply_guidance: str = Field(default="", description="给 Replyer 的方向性指引")
+    confidence: float = Field(default=0.0, description="决策置信度 [0.0, 1.0]")
+    target: Optional[str] = Field(default=None, description="决策面向的对象")
+    reply_to_message_id: Optional[str] = Field(default=None, description="决策所回复弹幕的 message_id")
+    timestamp_ms: int = Field(
+        default_factory=lambda: now_ms(),
+        description="事件发布时间戳（Unix 毫秒）",
+    )
+
+
 __all__ = [
     "CheckpointAgendaPosition",
     "CheckpointPayload",
     "PlannerBatchItem",
     "PlannerDecisionPayload",
+    "PlannerVerdictPayload",
     "StreamerStagePayload",
 ]

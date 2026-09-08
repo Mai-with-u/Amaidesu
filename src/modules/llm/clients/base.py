@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import abc
 import asyncio
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from src.modules.llm.manager import LLMResponse
+
+OnDeltaCallback = Callable[[str, str], None]
+"""流式增量回调：(kind, text_delta)，kind ∈ {"reasoning", "content"}。"""
 
 
 class BaseLLMClient(abc.ABC):
@@ -30,8 +33,13 @@ class BaseLLMClient(abc.ABC):
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
+        on_delta: Optional[OnDeltaCallback] = None,
     ) -> LLMResponse:
-        """执行一次非流式聊天请求。"""
+        """执行一次聊天请求。
+
+        on_delta 非 None 时实现方应走流式传输并逐帧回调增量，
+        最终仍返回完整 LLMResponse（传输层流式、语义层整段）。
+        """
         raise NotImplementedError
 
     @abc.abstractmethod

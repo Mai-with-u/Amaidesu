@@ -38,6 +38,7 @@ from src.modules.events.payloads import (
     LiveEndedPayload,
     LiveStartedPayload,
     PlannerDecisionPayload,
+    PlannerVerdictPayload,
     RoomMessagePayload,
     StreamerSpeechPayload,
     StreamerStagePayload,
@@ -110,6 +111,7 @@ class EventBroadcaster:
             CoreEvents.ROOM_MESSAGE_ENTER: self._on_room_message,
             CoreEvents.PLANNER_CHECKPOINT: self._on_planner_checkpoint,
             CoreEvents.PLANNER_DECISION: self._on_named_event,
+            CoreEvents.PLANNER_VERDICT: self._on_named_event,
             CoreEvents.STREAMER_STAGE: self._on_named_event,
             CoreEvents.LIVE_STARTED: self._on_named_event,
             CoreEvents.LIVE_ENDED: self._on_named_event,
@@ -165,6 +167,11 @@ class EventBroadcaster:
             CoreEvents.PLANNER_DECISION,
             self._on_named_event,
             model_class=PlannerDecisionPayload,
+        )
+        self._subscribe_event(
+            CoreEvents.PLANNER_VERDICT,
+            self._on_named_event,
+            model_class=PlannerVerdictPayload,
         )
         self._subscribe_event(
             CoreEvents.STREAMER_STAGE,

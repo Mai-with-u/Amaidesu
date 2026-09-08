@@ -125,7 +125,8 @@ class TestLoading:
         # v2.0.20：Minecraft 接入——[agents.game] 新增 minecraft 嵌套段
         # （tick_interval_ms/server_id），tick 计时字段归一毫秒。
         # v2.0.22：[tools] 新增 disabled_tools（工具级停用列表，纯新增字段无迁移）。
-        assert version == "2.0.23"
+        # v2.0.24：[agents.streamer] 新增思考流三字段（ADR-008，纯新增无迁移）。
+        assert version == "2.0.24"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

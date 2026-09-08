@@ -51,6 +51,8 @@ export const useEventsStore = defineStore('events', () => {
   }
 
   function handleMessage(message: WebSocketMessage) {
+    // 观测流（kind="stream"，如 thinking.delta）不入事件通道——独立缓冲，防污染事件历史与游标
+    if (message.kind === 'stream') return;
     // 后端初始历史：与当前条目合并（幂等，任意到达顺序，避免替换吞掉已到达的实时事件）
     if (message.type === 'events.history') {
       const history = (message.data.events as LoggedEvent[]) ?? [];

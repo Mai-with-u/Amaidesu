@@ -214,6 +214,26 @@ class WebSocketHandler:
 
         return success_count
 
+    async def broadcast_stream(self, stream_type: str, data: Dict[str, object]) -> int:
+        """广播观测流消息（kind="stream"）到所有已连接客户端。
+
+        流消息不走事件订阅过滤——它是 best-effort 观测通道（ADR-008），
+        前端按 kind 分流到独立缓冲，不进事件通道。
+        """
+        message = WebSocketMessage(
+            kind="stream",
+            type=stream_type,
+            timestamp=time.time(),
+            data=data,
+        )
+
+        success_count = 0
+        for client_id in list(self._clients.keys()):
+            if await self._send_to_client(client_id, message):
+                success_count += 1
+
+        return success_count
+
     async def send_heartbeat(self) -> None:
         """发送心跳到所有客户端，并踢出超过超时阈值未响应 pong 的连接"""
         message = WebSocketMessage(

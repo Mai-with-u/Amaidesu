@@ -301,3 +301,115 @@ def test_base_url_normalization():
         "model": "info-model",
         "base_url": "localhost:8080/v1///",
     }
+
+
+# ---------------------------------------------------------------------------
+# 流式传输路径（on_delta 非 None）：传输层流式、语义层整段（ADR-008）
+# ---------------------------------------------------------------------------
+
+
+class _FakeStream:
+    """async iterator 模拟 SSE 流（含 aclose）。"""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._chunks:
+            raise StopAsyncIteration
+        return self._chunks.pop(0)
+
+    async def aclose(self):
+        self.closed = True
+
+
+def _delta(reasoning=None, content=None, tool_calls=None):
+    return SimpleNamespace(reasoning_content=reasoning, content=content, tool_calls=tool_calls)
+
+
+def _tool_delta(index, name=None, arguments=None, call_id=None):
+    return SimpleNamespace(
+        index=index,
+        id=call_id,
+        function=SimpleNamespace(name=name, arguments=arguments),
+    )
+
+
+def _stream_chunk(delta=None, usage=None, model="test-model"):
+    choices = [SimpleNamespace(delta=delta or SimpleNamespace(), finish_reason=None)]
+    return SimpleNamespace(choices=choices, usage=usage, model=model)
+
+
+@pytest.mark.asyncio
+async def test_chat_streaming_emits_reasoning_and_content_deltas():
+    """reasoning/content 增量逐帧回调，最终响应组装为整段文本。"""
+    client, sdk_client = _make_client()
+    chunks = [
+        _stream_chunk(_delta(reasoning="想一")),
+        _stream_chunk(_delta(reasoning="想二")),
+        _stream_chunk(_delta(content="你")),
+        _stream_chunk(_delta(content="好")),
+        _stream_chunk(
+            _delta(),
+            usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3, total_tokens=10),
+        ),
+    ]
+    sdk_client.chat.completions.create.return_value = _FakeStream(chunks)
+
+    received = []
+    result = await client.chat(MESSAGES, on_delta=lambda kind, text: received.append((kind, text)))
+
+    assert result.success is True
+    assert result.content == "你好"
+    assert result.reasoning_content == "想一想二"
+    assert result.usage == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+    assert received == [("reasoning", "想一"), ("reasoning", "想二"), ("content", "你"), ("content", "好")]
+
+
+@pytest.mark.asyncio
+async def test_chat_streaming_accumulates_tool_call_fragments():
+    """tool call arguments 碎片客户端拼接（不外发），最终完整 JSON 解析。"""
+    client, sdk_client = _make_client({"reasoning_parse_mode": "none"})
+    chunks = [
+        _stream_chunk(_delta(reasoning="决定回应")),
+        _stream_chunk(_delta(tool_calls=[_tool_delta(0, call_id="call_1", name="reply")])),
+        _stream_chunk(_delta(tool_calls=[_tool_delta(0, arguments='{"speech"')])),
+        _stream_chunk(_delta(tool_calls=[_tool_delta(0, arguments=': "大家好"}')])),
+        _stream_chunk(_delta()),
+    ]
+    sdk_client.chat.completions.create.return_value = _FakeStream(chunks)
+
+    received = []
+    result = await client.chat(MESSAGES, on_delta=lambda kind, text: received.append((kind, text)))
+
+    assert result.success is True
+    assert received == [("reasoning", "决定回应")]
+    assert result.tool_calls == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "reply", "arguments": {"speech": "大家好"}},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_streaming_falls_back_to_non_streaming_on_create_error():
+    """流式 create 失败（如端点不支持 stream_options）→ 降级非流式，返回完整结果。"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.side_effect = [
+        Exception("stream_options is not supported"),
+        _response(content="fallback"),
+    ]
+
+    received = []
+    result = await client.chat(MESSAGES, on_delta=lambda kind, text: received.append((kind, text)))
+
+    assert result.success is True
+    assert result.content == "fallback"
+    assert received == []  # 降级路径不产生增量
+    assert sdk_client.chat.completions.create.await_count == 2

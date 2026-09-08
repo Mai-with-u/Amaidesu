@@ -8,7 +8,7 @@ import asyncio
 import json
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -301,6 +301,7 @@ class LLMManager:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        on_delta: Optional[Callable[[str, str], None]] = None,
     ) -> LLMResponse:
         """
         聊天调用（使用 messages 列表）
@@ -311,6 +312,8 @@ class LLMManager:
             temperature: 温度参数
             max_tokens: 最大 token 数
             tools: 工具定义（OpenAI 格式）
+            on_delta: 流式增量回调 (kind, text_delta)，kind ∈ {"reasoning", "content"}；
+                非 None 时该次调用走流式传输，最终仍返回完整 LLMResponse（ADR-008）
 
         Returns:
             LLMResponse: 响应结果
@@ -325,6 +328,7 @@ class LLMManager:
             temperature=temperature,
             max_tokens=max_tokens,
             tools=tools,
+            on_delta=on_delta,
         )
 
     async def stream_chat(
@@ -397,6 +401,7 @@ class LLMManager:
         *,
         client_type: str = None,
         system_message: Optional[str] = None,
+        on_delta: Optional[Callable[[str, str], None]] = None,
     ) -> LLMResponse:
         """
         工具调用
@@ -406,6 +411,7 @@ class LLMManager:
             tools: 工具定义列表（OpenAI 格式）
             client_type: 使用的客户端类型，默认为 llm
             system_message: 系统消息
+            on_delta: 流式增量回调（语义同 chat_messages；ADR-008）
 
         Returns:
             LLMResponse: 包含 tool_calls 的响应结果
@@ -419,6 +425,7 @@ class LLMManager:
             "chat",
             messages=messages,
             tools=tools,
+            on_delta=on_delta,
         )
         self.logger.warning(
             f"[诊断] call_tools 完成: client={client_type}, success={getattr(response, 'success', None)}, "

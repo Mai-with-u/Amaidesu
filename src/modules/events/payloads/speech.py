@@ -62,6 +62,10 @@ class StreamerSpeechPayload(BasePayload):
     """
 
     utterance_id: str = Field(..., description="一次发言实例的唯一 ID（编排层生成，全链路关联键）")
+    round_id: Optional[str] = Field(
+        default=None,
+        description="关联决策轮次 ID；发言发生在主播决策轮上下文内时填写（观察器成组用）",
+    )
     live_session_id: int = Field(
         default=0,
         description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",

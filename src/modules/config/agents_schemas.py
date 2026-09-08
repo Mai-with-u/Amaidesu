@@ -154,6 +154,22 @@ class StreamerAgentConfig(BaseConfig):
         description="命令映射 {name: action}",
     )
 
+    # --- 思考流旁路（ADR-008；观察面专用，best-effort 不落库）---
+    thinking_stream_enabled: bool = Field(
+        default=True,
+        description="思考流总开关：决策/生成期间的 reasoning 增量经旁路通道推送 WebUI 控制台",
+    )
+    thinking_stream_flush_interval_ms: int = Field(
+        default=100,
+        ge=20,
+        description="思考流合帧推送间隔（毫秒）",
+    )
+    thinking_stream_buffer_max: int = Field(
+        default=400,
+        ge=10,
+        description="思考流环形缓冲上限（条）；超限丢最旧",
+    )
+
 
 # ---------------------------------------------------------------------------
 # [agents.game] 配置（engine 子段按具体游戏实现展开）
