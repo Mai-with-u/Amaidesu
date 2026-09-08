@@ -1961,7 +1961,7 @@ def build_streamer_agent(
         config: ``StreamerAgentConfig`` 实例
         其余参数同 ``StreamerAgent.__init__``
         agent_manager: ``AgentManager`` 实例（构造完后 register 到管理器）
-        spec_provider: provider 来源溯源（"builtin"/"game"/"mcp"），默认 builtin
+        spec_provider: provider 来源溯源（"builtin"/Agent 名/"mcp"），默认 builtin
         speech_config: 发言管线配置（来自核心 ``[tts]`` 段；可选，组合根接线
             由独立任务负责）。
 

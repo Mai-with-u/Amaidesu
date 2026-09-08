@@ -5,10 +5,10 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from src.agents.game.minecraft.agent import MinecraftAgent
-from src.agents.game.minecraft.config import MinecraftConfig
-from src.agents.game.minecraft.state import MinecraftAgentState
-from src.agents.game.minecraft.tools import MinecraftToolProvider
+from src.agents.minecraft.agent import MinecraftAgent
+from src.agents.minecraft.config import MinecraftConfig
+from src.agents.minecraft.state import MinecraftAgentState
+from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.manager import LLMResponse
 from src.modules.tools.models import ToolInvocation
@@ -666,12 +666,12 @@ async def test_command_after_task_reaches_messages() -> None:
 
 
 def test_factory_instantiates_minecraft() -> None:
-    """factory engine=minecraft 分派到 MinecraftAgent（声明确认 + max_steps 透传）。"""
+    """factory 按顶级名分派 minecraft → MinecraftAgent（声明确认 + max_steps 透传）。"""
     from src.modules.agents.factory import instantiate_agent
 
     agent = instantiate_agent(
-        "game",
-        {"engine": "minecraft", "minecraft": {"max_steps": 9}},
+        "minecraft",
+        {"max_steps": 9},
         llm_manager=None,
         prompt_manager=None,
         event_bus=MagicMock(),
@@ -682,8 +682,8 @@ def test_factory_instantiates_minecraft() -> None:
     assert [s.name for s in agent.list_tools()] == ["todo", "notebook", "get_state", "assign"]
 
 
-def test_factory_defaults_to_minecraft_engine() -> None:
-    """无 engine 键时默认 minecraft（与 agents_schemas GameAgentConfig.engine 默认一致）。"""
+def test_factory_rejects_legacy_game_name() -> None:
+    """分类层已移除，旧注册名 "game" 不再可实例化（防分类层复活）。"""
     from src.modules.agents.factory import instantiate_agent
 
     agent = instantiate_agent(
@@ -694,4 +694,20 @@ def test_factory_defaults_to_minecraft_engine() -> None:
         event_bus=MagicMock(),
         tool_registry=None,
     )
+    assert agent is None
+
+
+def test_factory_minecraft_schema_defaults() -> None:
+    """空配置实例化 minecraft，行为参数取 Schema 默认值。"""
+    from src.modules.agents.factory import instantiate_agent
+
+    agent = instantiate_agent(
+        "minecraft",
+        {},
+        llm_manager=None,
+        prompt_manager=None,
+        event_bus=MagicMock(),
+        tool_registry=None,
+    )
     assert isinstance(agent, MinecraftAgent)
+    assert agent.typed_config.max_steps == 50

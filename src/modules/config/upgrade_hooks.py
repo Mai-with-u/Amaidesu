@@ -167,7 +167,10 @@ def _migrate_agents_2_0_3(data: dict[str, Any]) -> list[str]:
         return changed
     enabled = agents.get("enabled")
     if isinstance(enabled, list):
-        valid = [v for v in enabled if isinstance(v, str) and v in ("streamer", "game", "custom")]
+        # "game" 在 2.0.3 时代是合法 Agent 名，保留给 2.0.25 钩子按 engine
+        # 转换为具体顶级名（minecraft / text_adv）；在此处过滤会使链式迁移
+        # 丢失游戏 Agent 的启用状态。
+        valid = [v for v in enabled if isinstance(v, str) and v in ("streamer", "game", "minecraft", "text_adv")]
         if len(valid) != len(enabled):
             agents["enabled"] = valid or ["streamer"]
             changed.append("agents.enabled")
@@ -364,7 +367,8 @@ def _migrate_agents_2_0_0(data: dict[str, Any]) -> list[str]:
                 "room_state_cold_timeout_ms": 60000,
                 "room_state_llm_summary_interval_ms": 60000,
             },
-            "game": None,
+            "minecraft": None,
+            "text_adv": None,
         }
         changed.append("agents")
         return changed
@@ -788,6 +792,85 @@ def _migrate_tools_2_0_19(data: dict[str, Any]) -> list[str]:
     return changed
 
 
+def _migrate_agents_2_0_25(data: dict[str, Any]) -> list[str]:
+    """agents.toml 2.0.25：移除游戏 Agent 分类层，扁平化为顶级 Agent。
+
+    旧形状（``[agents.game]`` 公共段 + ``engine`` 判别字段 + 引擎子段）→
+    新形状（每个游戏 Agent 是独立顶级子配置，自包含全部字段）。
+
+    行为：
+    - ``enabled`` 列表中 ``"game"`` 按旧 ``engine`` 字段替换为 ``"minecraft"`` /
+      ``"text_adv"``；无 ``engine`` 字段时默认替换为 ``"minecraft"``（与历史行为一致）
+    - ``[agents.game]`` 的非 engine 字段（如 ``command_llm``）合并进对应
+      ``[agents.<engine>]`` 段（已有同名段则保留用户值，旧段字段作 fallback）
+    - ``[agents.game.<engine>]`` 子段字段合并进新 ``[agents.<engine>]`` 段
+    - 删除 ``[agents.game]`` 整段
+    - 旧 ``enabled`` 中其他无效值由 2.0.3 钩子处理，本钩子只关心 game → engine 替换
+
+    原地修改、幂等（重复执行时旧结构已不存在，无事发生），返回变更路径列表。
+    """
+    changed: list[str] = []
+
+    agents = data.get("agents")
+    if not isinstance(agents, dict):
+        return changed
+
+    game_section = agents.get("game")
+    has_old_game_section = isinstance(game_section, dict)
+
+    # enabled 列表中的 "game" 占位项按 engine 判别字段替换为具体顶级 Agent 名
+    enabled = agents.get("enabled")
+    if isinstance(enabled, list) and "game" in enabled:
+        engine_hint = "minecraft"
+        if has_old_game_section:
+            engine_hint = str(game_section.get("engine", "minecraft") or "minecraft")
+        new_enabled: list[Any] = []
+        replaced = False
+        for v in enabled:
+            if v == "game":
+                if engine_hint in ("minecraft", "text_adv") and engine_hint not in new_enabled:
+                    new_enabled.append(engine_hint)
+                replaced = True
+            elif isinstance(v, str):
+                new_enabled.append(v)
+        if replaced:
+            agents["enabled"] = new_enabled
+            changed.append("agents.enabled")
+
+    # 把 [agents.game] 公共字段 + 旧 [agents.game.<engine>] 子段合并到
+    # 新顶级 [agents.<engine>]（已存在的用户值优先保留）
+    if has_old_game_section:
+        engine_hint = str(game_section.get("engine", "minecraft") or "minecraft")
+        if engine_hint not in ("minecraft", "text_adv"):
+            engine_hint = "minecraft"
+
+        # engine 判别字段与引擎子段（minecraft / text_adv）都不是平铺后的
+        # 合法字段，子段字段经下方 setdefault 展开合并，子段容器本身丢弃。
+        public_fields = {k: v for k, v in game_section.items() if k != "engine" and k not in ("minecraft", "text_adv")}
+        legacy_engine_section = game_section.get(engine_hint)
+        if isinstance(legacy_engine_section, dict):
+            for k, v in legacy_engine_section.items():
+                public_fields.setdefault(k, v)
+
+        target_section = agents.get(engine_hint)
+        if not isinstance(target_section, dict):
+            target_section = {}
+            agents[engine_hint] = target_section
+
+        merged_any = False
+        for k, v in public_fields.items():
+            if k not in target_section:
+                target_section[k] = v
+                merged_any = True
+
+        del agents["game"]
+        changed.append("agents.game")
+        if merged_any:
+            changed.append(f"agents.{engine_hint}")
+
+    return changed
+
+
 CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
     # 历史钩子（保留供回滚，新文件不再触发）
     ConfigUpgradeHook(
@@ -914,6 +997,12 @@ CONFIG_UPGRADE_HOOKS: tuple[ConfigUpgradeHook, ...] = (
         target_version="2.0.19",
         config_file="tools.toml",
         migrate=_migrate_tools_2_0_19,
+    ),
+    # 游戏 Agent 分类层移除：[agents.game] + engine 判别 → 顶级扁平 Agent
+    ConfigUpgradeHook(
+        target_version="2.0.25",
+        config_file="agents.toml",
+        migrate=_migrate_agents_2_0_25,
     ),
 )
 

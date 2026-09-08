@@ -71,6 +71,9 @@ _AGENT_CATEGORIES: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
     ("framework", (("framework", "框架内置（framework_*，如 AgentControl）"),)),
 )
 
+# 工具分类 "game" 在 Agent 扁平化后对应任意游戏 Agent 启用
+_GAME_AGENT_NAMES: Tuple[str, ...] = ("minecraft", "text_adv")
+
 # 分类级开关的成员（键与分类名相同，配置段为 [tools.<分类>]）。
 _CATEGORY_LEVEL_KEYS = {"vision", "memory"}
 
@@ -292,7 +295,10 @@ async def list_tool_categories(
     agents_enabled = agents_cfg.get("enabled", []) if isinstance(agents_cfg, dict) else []
     agents_enabled = agents_enabled if isinstance(agents_enabled, list) else []
     for category, members in _AGENT_CATEGORIES:
-        enabled = category in agents_enabled
+        if category == "game":
+            enabled = any(name in agents_enabled for name in _GAME_AGENT_NAMES)
+        else:
+            enabled = category in agents_enabled
         categories.append(
             {
                 "category": category,

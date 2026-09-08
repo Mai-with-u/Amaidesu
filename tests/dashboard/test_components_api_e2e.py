@@ -32,8 +32,8 @@ enabled = ["streamer"]
 [agents.streamer]
 planner_llm = "llm_fast"
 
-[agents.game]
-full_screen = true
+[agents.minecraft]
+max_steps = 50
 """
 
 _TOOLS_TOML = """\
@@ -120,10 +120,11 @@ def test_list_components_returns_all_groups_with_disabled(client: TestClient) ->
     assert collectors["console_input"]["is_started"] is False
 
     agents = {c["name"]: c for c in data["agents"]}
-    assert set(agents) == {"streamer", "game"}
+    assert set(agents) == {"streamer", "minecraft", "text_adv"}
     assert agents["streamer"]["is_enabled"] is True
     assert agents["streamer"]["is_started"] is False
-    assert agents["game"]["is_enabled"] is False
+    assert agents["minecraft"]["is_enabled"] is False
+    assert agents["text_adv"]["is_enabled"] is False
 
 
 def test_control_start_dynamically_starts_collector(client: TestClient, config_dir: Path) -> None:

@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger as loguru_logger
 
-from src.agents.game.text_adv import TextAdvGameAgent, TextAdvGameConfig
+from src.agents.text_adv import TextAdvGameAgent, TextAdvGameConfig
 from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
 from src.modules.agents.manager import AgentManager
 from src.modules.collectors.factory import instantiate_collector
@@ -66,7 +66,7 @@ from src.modules.tts import build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import ToolRegistry
 from src.modules.tools.bootstrap import bind_core_tools
-from src.agents.game.text_adv.content_engine import StubContentEngine
+from src.agents.text_adv.content_engine import StubContentEngine
 from src.modules.tools.decorator import bind_pending_tools
 from src.modules.vision.look_at_screen import LookAtScreenProvider
 from src.modules.vision.pil_capture import PillowImageGrabCapture
@@ -579,9 +579,9 @@ async def create_app_components(
             logger.warning("[tools.mcp].enabled=false 但配置了 servers —— MCP 工具未装配")
 
         agents_enabled = ((config.get("agents") or {}).get("enabled") or []) if isinstance(config, dict) else []
-        if "game" in agents_enabled and "vision_look_at_screen" not in tool_registry:
+        if "text_adv" in agents_enabled and "vision_look_at_screen" not in tool_registry:
             logger.warning(
-                "游戏 Agent 已启用但 vision_look_at_screen 未注册"
+                "文字冒险 Agent 已启用但 vision_look_at_screen 未注册"
                 "（[tools.vision].enabled=false？）——感知将走空快照降级路径"
             )
 
@@ -784,10 +784,11 @@ async def _register_agents_from_config(
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
-    [agents] 段结构：
-        enabled = ["streamer", "game"]
+    [agents] 段结构（扁平：每个 Agent 一份顶级子配置）：
+        enabled = ["streamer", "minecraft", "text_adv"]
         streamer = { planner_llm = "llm_fast", replyer_llm = "llm", ... }
-        game = { ... }
+        minecraft = { command_llm = "llm", max_steps = 50 }
+        text_adv = { command_llm = "llm", engine_kind = "text_adv" }
 
     memory 为 SimpleMemory 记忆后端，仅 streamer Agent 消费。
 
@@ -864,44 +865,40 @@ async def _register_agents_from_config(
                 description="直播主播决策主体：聚合弹幕 → Planner 决策 → Replyer 表达",
             )
             continue
-        if agent_name == "game":
+        if agent_name == "minecraft":
             try:
-                game_cfg_dict = sub_cfg if isinstance(sub_cfg, dict) else {}
-                engine_name = str(game_cfg_dict.get("engine", "minecraft") or "minecraft")
+                from src.agents.minecraft import MinecraftAgent
+                from src.agents.minecraft.config import MinecraftConfig
 
-                if engine_name == "minecraft":
-                    from src.agents.game.minecraft import MinecraftAgent
-                    from src.agents.game.minecraft.config import MinecraftConfig
-
-                    mc_section = game_cfg_dict.get("minecraft")
-                    mc_section = mc_section if isinstance(mc_section, dict) else {}
-                    try:
-                        minecraft_cfg = MinecraftConfig(**mc_section)
-                    except Exception as e:
-                        logger.warning(f"解析 MinecraftConfig 失败: {e}; 使用默认配置")
-                        minecraft_cfg = MinecraftConfig()
-                    minecraft_agent = MinecraftAgent(
-                        config=minecraft_cfg,
-                        llm_manager=llm_service,
-                        llm_profile=str(game_cfg_dict.get("command_llm", "llm") or "llm"),
-                        prompt_manager=get_prompt_manager(),
-                        event_bus=event_bus,
-                        tool_registry=tool_registry,
-                        live_session_id=_LIVE_SESSION_ID,
-                    )
-                    manager.register(
-                        minecraft_agent,
-                        spec_provider="game",
-                        description="游戏 AI 玩家代理（Minecraft / MaiCraftMod）",
-                    )
-                    logger.info(f"MinecraftAgent 已注册 (engine={engine_name})")
-                    continue
-                if engine_name != "text_adv":
-                    logger.warning(f"game Agent 引擎 '{engine_name}' 尚未实现（仅 text_adv/minecraft），跳过")
-                    continue
-
+                mc_section = sub_cfg if isinstance(sub_cfg, dict) else {}
                 try:
-                    text_adv_cfg = TextAdvGameConfig(**{k: v for k, v in game_cfg_dict.items() if k != "engine"})
+                    minecraft_cfg = MinecraftConfig(**mc_section)
+                except Exception as e:
+                    logger.warning(f"解析 MinecraftConfig 失败: {e}; 使用默认配置")
+                    minecraft_cfg = MinecraftConfig()
+                minecraft_agent = MinecraftAgent(
+                    config=minecraft_cfg,
+                    llm_manager=llm_service,
+                    llm_profile=str(mc_section.get("command_llm", "llm") or "llm"),
+                    prompt_manager=get_prompt_manager(),
+                    event_bus=event_bus,
+                    tool_registry=tool_registry,
+                    live_session_id=_LIVE_SESSION_ID,
+                )
+                manager.register(
+                    minecraft_agent,
+                    spec_provider="minecraft",
+                    description="游戏 AI 玩家代理（Minecraft / MaiCraftMod）",
+                )
+                logger.info("MinecraftAgent 已注册")
+            except Exception as e:
+                logger.warning(f"minecraft Agent 注册失败: {e}")
+            continue
+        if agent_name == "text_adv":
+            try:
+                text_adv_section = sub_cfg if isinstance(sub_cfg, dict) else {}
+                try:
+                    text_adv_cfg = TextAdvGameConfig(**text_adv_section)
                 except Exception as e:
                     logger.warning(f"解析 TextAdvGameConfig 失败: {e}; 使用默认配置")
                     text_adv_cfg = TextAdvGameConfig()
@@ -915,15 +912,12 @@ async def _register_agents_from_config(
                 )
                 manager.register(
                     text_adv_agent,
-                    spec_provider="game",
+                    spec_provider="text_adv",
                     description="游戏 AI 玩家代理（text_adv 文字冒险引擎）",
                 )
-                logger.info(f"TextAdvGameAgent 已注册 (engine={engine_name})")
+                logger.info("TextAdvGameAgent 已注册")
             except Exception as e:
-                logger.warning(f"game Agent 注册失败: {e}")
-            continue
-        if agent_name == "custom":
-            logger.info("custom Agent 由用户自定义注册，当前跳过（占位）")
+                logger.warning(f"text_adv Agent 注册失败: {e}")
             continue
         logger.warning(f"未知的 Agent 类型: {agent_name}（升级 hook 应已过滤 maibot 等）")
 

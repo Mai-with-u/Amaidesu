@@ -15,14 +15,14 @@ Amaidesu 内容引擎工具包
 
 注册示例：
 ```python
-from src.agents.game.text_adv.content_engine import ContentEngineProvider
+from src.agents.text_adv.content_engine import ContentEngineProvider
 
 provider = ContentEngineProvider(engine=my_real_engine)
 registry.register_provider(provider)
 ```
 """
 
-from src.agents.game.text_adv.content_engine.provider import (
+from src.agents.text_adv.content_engine.provider import (
     ContentEngine,
     ContentEngineProvider,
     ContentEngineStatus,

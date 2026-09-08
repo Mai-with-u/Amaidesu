@@ -9,15 +9,16 @@ AGENTS.md 钩子契约：
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
 from src.modules.config.upgrade_hooks import (
     CONFIG_UPGRADE_HOOKS,
     _migrate_agents_2_0_0,
     _migrate_agents_2_0_1,
+    _migrate_agents_2_0_25,
     _migrate_agents_2_0_3,
     _migrate_background_2_0_0,
     _migrate_core_2_0_0,
@@ -84,7 +85,7 @@ class TestCoreHook2_0_0:
 class TestModelHook2_0_0:
     def test_llm_outline_renamed_to_llm_agenda(self):
         data = {"llm_outline": {"provider": "default", "model": "x"}}
-        changed = _migrate_model_2_0_0(data)
+        _migrate_model_2_0_0(data)
         assert "llm_outline" not in data
         assert "llm_agenda" in data
         assert data["llm_agenda"]["model"] == "x"
@@ -196,7 +197,7 @@ class TestMainosabaHookLegacy:
 
     def test_mainosaba_migrated_to_text_adv_game(self):
         data = {"collectors": {"mainosaba": {"full_screen": True}, "enabled": ["mainosaba"]}}
-        changed = _migrate_mainosaba_to_text_adv_game(data)
+        _migrate_mainosaba_to_text_adv_game(data)
         assert "mainosaba" not in data["collectors"]
         assert "text_adv_game" in data["collectors"]
         assert "text_adv_game" in data["collectors"]["enabled"]
@@ -1141,11 +1142,11 @@ class TestCoreTTSSchema:
         assert cfg.max_queue == 10
         assert cfg.render_timeout_ms == 0
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             TTSConfig(max_queue=0)
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             TTSConfig(max_queue=21)
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             TTSConfig(render_timeout_ms=-1)
 
     def test_core_config_has_tts_section(self):
@@ -1444,3 +1445,91 @@ class TestToolsHook2_0_19:
         assert _migrate_tools_2_0_19({"tools": {}}) == []
         assert _migrate_tools_2_0_19({"tools": {"avatar": {}}}) == []
         assert _migrate_tools_2_0_19({"tools": {"avatar": {"vts": {}}}}) == []
+
+
+class TestAgentsHook2_0_25:
+    """agents.toml 2.0.25：移除 [agents.game] 分类层，扁平化为顶级 Agent。"""
+
+    def test_enabled_game_replaced_with_default_engine(self):
+        data = {"agents": {"enabled": ["streamer", "game"]}}
+        changed = _migrate_agents_2_0_25(data)
+        assert data["agents"]["enabled"] == ["streamer", "minecraft"]
+        assert "agents.enabled" in changed
+
+    def test_enabled_game_replaced_with_text_adv(self):
+        data = {"agents": {"enabled": ["game"], "game": {"engine": "text_adv"}}}
+        changed = _migrate_agents_2_0_25(data)
+        assert data["agents"]["enabled"] == ["text_adv"]
+        assert "agents.enabled" in changed
+
+    def test_game_section_merged_into_top_level(self):
+        data = {
+            "agents": {
+                "enabled": ["game"],
+                "game": {
+                    "engine": "minecraft",
+                    "command_llm": "llm",
+                    "minecraft": {"max_steps": 120},
+                },
+            }
+        }
+        changed = _migrate_agents_2_0_25(data)
+        assert "game" not in data["agents"]
+        assert data["agents"]["minecraft"] == {"command_llm": "llm", "max_steps": 120}
+        assert "agents.game" in changed
+        assert "agents.minecraft" in changed
+
+    def test_existing_user_values_win_over_legacy(self):
+        """新段已有用户值时保留用户值，旧公共段字段仅作 fallback。"""
+        data = {
+            "agents": {
+                "enabled": ["minecraft"],
+                "game": {"command_llm": "llm"},
+                "minecraft": {"command_llm": "llm_qwen"},
+            }
+        }
+        changed = _migrate_agents_2_0_25(data)
+        assert data["agents"]["minecraft"]["command_llm"] == "llm_qwen"
+        assert "agents.game" in changed
+        assert "agents.minecraft" not in changed
+
+    def test_idempotent(self):
+        data = {
+            "agents": {
+                "enabled": ["streamer", "game"],
+                "game": {"engine": "minecraft", "command_llm": "llm"},
+            }
+        }
+        first = _migrate_agents_2_0_25(data)
+        assert first != []
+        second = _migrate_agents_2_0_25(data)
+        assert second == []
+
+    def test_noop_when_path_missing(self):
+        assert _migrate_agents_2_0_25({}) == []
+        assert _migrate_agents_2_0_25({"agents": None}) == []
+        assert _migrate_agents_2_0_25({"agents": {}}) == []
+        assert _migrate_agents_2_0_25({"agents": {"enabled": ["streamer"]}}) == []
+
+    def test_hook_registered(self):
+        hooks = [h for h in CONFIG_UPGRADE_HOOKS if h.target_version == "2.0.25"]
+        assert {h.config_file for h in hooks} == {"agents.toml"}
+
+    def test_chain_from_2_0_0_preserves_game_agent(self):
+        """老配置全链升级：2.0.3 保留 "game"，2.0.25 转换为具体引擎名。"""
+        data = {
+            "agents": {
+                "enabled": ["streamer", "game"],
+                "game": {
+                    "engine": "minecraft",
+                    "command_llm": "llm",
+                    "minecraft": {"max_steps": 99},
+                },
+            }
+        }
+        result = apply_upgrade_hooks(data, "agents.toml", "2.0.0", "2.0.25")
+        agents = result.data["agents"]
+        assert agents["enabled"] == ["streamer", "minecraft"]
+        assert "game" not in agents
+        assert agents["minecraft"] == {"command_llm": "llm", "max_steps": 99}
+        assert result.migrated is True

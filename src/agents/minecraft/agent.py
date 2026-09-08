@@ -24,8 +24,8 @@ from collections import deque
 from dataclasses import replace
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
-from src.agents.game.minecraft.state import MinecraftAgentState
-from src.agents.game.minecraft.tools import (
+from src.agents.minecraft.state import MinecraftAgentState
+from src.agents.minecraft.tools import (
     MinecraftToolProvider,
     build_assign_spec,
     build_get_state_spec,

@@ -3,9 +3,11 @@
 配置名 → 具体类的唯一映射，供启动装配与 Dashboard 动态启停复用。
 
 配置名映射：
-- streamer → StreamerAgent
-- game    → 按 engine 分派（minecraft → MinecraftAgent（默认）/ text_adv → TextAdvGameAgent）
-- custom  → 用户自定义注册（占位，不实例化）
+- streamer   → StreamerAgent
+- minecraft  → MinecraftAgent
+- text_adv   → TextAdvGameAgent
+
+Agent 间无分类层；每个 Agent 是一等公民。
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from typing import Any, Optional
 from src.modules.agents.base import BaseAgent
 
 # 已实现的 Agent 注册名
-SUPPORTED_AGENTS: tuple[str, ...] = ("streamer", "game")
+SUPPORTED_AGENTS: tuple[str, ...] = ("streamer", "minecraft", "text_adv")
 
 
 def instantiate_agent(
@@ -59,34 +61,37 @@ def instantiate_agent(
             persona_provider=persona_provider,
         )
 
-    if name == "game":
-        engine_name = str(config.get("engine", "minecraft") or "minecraft")
-        if engine_name == "minecraft":
-            from src.agents.game.minecraft import MinecraftAgent
-            from src.agents.game.minecraft.config import MinecraftConfig
-
-            mc_section = config.get("minecraft")
-            mc_section = mc_section if isinstance(mc_section, dict) else {}
-            try:
-                minecraft_cfg = MinecraftConfig(**mc_section)
-            except Exception:
-                minecraft_cfg = MinecraftConfig()
-            return MinecraftAgent(
-                config=minecraft_cfg,
-                llm_manager=llm_manager,
-                llm_profile=str(config.get("command_llm", "llm") or "llm"),
-                prompt_manager=prompt_manager,
-                event_bus=event_bus,
-                tool_registry=tool_registry,
-            )
-        if engine_name != "text_adv":
-            return None
-        from src.agents.game.text_adv import TextAdvGameAgent, TextAdvGameConfig
-        from src.agents.game.text_adv.content_engine import StubContentEngine
+    if name == "minecraft":
+        from src.agents.minecraft import MinecraftAgent
+        from src.agents.minecraft.config import MinecraftConfig
 
         try:
-            text_adv_cfg = TextAdvGameConfig(**{k: v for k, v in config.items() if k != "engine"})
-        except Exception:
+            minecraft_cfg = MinecraftConfig(**config)
+        except Exception as exc:
+            from src.modules.logging import get_logger
+
+            get_logger("AgentFactory").warning(f"解析 MinecraftConfig 失败: {exc}; 使用默认配置")
+            minecraft_cfg = MinecraftConfig()
+        llm_profile = str(config.get("command_llm", "llm") or "llm") if isinstance(config, dict) else "llm"
+        return MinecraftAgent(
+            config=minecraft_cfg,
+            llm_manager=llm_manager,
+            llm_profile=llm_profile,
+            prompt_manager=prompt_manager,
+            event_bus=event_bus,
+            tool_registry=tool_registry,
+        )
+
+    if name == "text_adv":
+        from src.agents.text_adv import TextAdvGameAgent, TextAdvGameConfig
+        from src.agents.text_adv.content_engine import StubContentEngine
+
+        try:
+            text_adv_cfg = TextAdvGameConfig(**config) if config else TextAdvGameConfig()
+        except Exception as exc:
+            from src.modules.logging import get_logger
+
+            get_logger("AgentFactory").warning(f"解析 TextAdvGameConfig 失败: {exc}; 使用默认配置")
             text_adv_cfg = TextAdvGameConfig()
         return TextAdvGameAgent(
             config=text_adv_cfg,

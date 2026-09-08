@@ -1,6 +1,6 @@
 """文字冒险游戏 Agent
 
-``src/agents/game/`` 下的示例游戏 Agent，体现
+``src/agents/text_adv/`` 自包含包，体现
 "加内容 = 加包 + 配置，框架零改动" 的包设计。
 
 组成（全部自包含，无外部游戏特定依赖）：
@@ -16,13 +16,13 @@
 - 生命周期 → BaseAgent 六面协议（``modules/agents/base.py``）
 """
 
-from src.agents.game.text_adv.agent import (
+from src.agents.text_adv.agent import (
     TextAdvGameAgent,
     TextAdvGameConfig,
     build_text_adv_agent,
 )
-from src.agents.game.text_adv.state import TextAdvGameAgentState
-from src.agents.game.text_adv.tools import (
+from src.agents.text_adv.state import TextAdvGameAgentState
+from src.agents.text_adv.tools import (
     TextAdvToolProvider,
     build_choose_option_spec,
     build_get_story_spec,

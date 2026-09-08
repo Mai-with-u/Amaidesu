@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, Iterable, Optional
 
 from src.modules.logging import get_logger
-from src.agents.game.text_adv.content_engine import ContentEngine, ContentInput
+from src.agents.text_adv.content_engine import ContentEngine, ContentInput
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,

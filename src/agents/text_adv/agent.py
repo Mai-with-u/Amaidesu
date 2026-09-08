@@ -3,7 +3,7 @@
 设计：
 - 继承 ``BaseAgent``（协议六面全部实现）
 - 构造注入依赖（llm/prompt/event_bus/tool_registry/content_engine/...）
-- 自带 game 分类专属工具（``text_adv_choose_option`` / ``text_adv_get_story``），provider="text_adv"
+- 自带 Agent 专属工具（``text_adv_choose_option`` / ``text_adv_get_story``），provider="text_adv"
 - 复用公用感知工具（注册名 ``vision_look_at_screen``，provider="vision"）—— 通过 ToolRegistry 调
 - 复用公用 content_engine 控制面（provider="content_engine"）
 - 内部状态 ``TextAdvGameAgentState``（内容状态内部自由）
@@ -33,7 +33,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolSpec
-from src.agents.game.text_adv.content_engine import (
+from src.agents.text_adv.content_engine import (
     ContentEngine,
     ContentEngineProvider,
     StubContentEngine,
@@ -64,14 +64,13 @@ __all__ = [
 class TextAdvGameConfig(BaseConfig):
     """文字冒险游戏 Agent 配置
 
-    字段对齐状态独立范式（判别口诀）：
-    - 只有**该游戏特有**的配置在这里（其它公用配置走 ``modules/``）
-    - 没有 schema 新增到 ``[agents.game]`` 顶层（沿用 ``GameAgentConfig.engine`` 字段）
+    字段对齐状态独立范式：
+    - 只有**该 Agent 特有**的配置在这里（公用配置走 ``modules/``）
     - 默认值即可跑（构造 StubContentEngine，无需外部游戏进程）
     """
 
     # 标识（仅用于日志 / 多实例区分；不参与 tool dispatch）
-    engine_kind: str = _PydField(default="text_adv", description="游戏引擎标识")
+    engine_kind: str = _PydField(default="text_adv", description="内容引擎标识")
 
     # 推进策略：first_option=首选项（简化版，测试可断言）；llm=LLM 选择（待实现）
     decision_strategy: str = _PydField(
@@ -103,7 +102,7 @@ class TextAdvGameAgent(BaseAgent):
     """
 
     # ----- 元数据 -----
-    name = "game"
+    name = "text_adv"
     description = "文字冒险游戏 Agent"
 
     # ----- 事件族声明 -----
@@ -401,7 +400,7 @@ def build_text_adv_agent(
     event_bus: Optional[EventBus] = None,
     tool_registry: Optional[ToolRegistry] = None,
     live_session_id: str = "",
-    spec_provider: str = "game",
+    spec_provider: str = "text_adv",
 ) -> TextAdvGameAgent:
     """便捷工厂：构造 TextAdvGameAgent + 注册到 AgentManager。
 
@@ -409,7 +408,7 @@ def build_text_adv_agent(
         config: TextAdvGameConfig 实例
         agent_manager: AgentManager 实例（构造完后 register）
         其余参数同 :class:`TextAdvGameAgent`
-        spec_provider: provider 来源溯源（默认 "game"）
+        spec_provider: provider 来源溯源（默认 "text_adv"）
 
     Returns:
         构造好的 TextAdvGameAgent（已 register 到 agent_manager）

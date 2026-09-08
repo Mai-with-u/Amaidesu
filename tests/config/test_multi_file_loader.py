@@ -1,7 +1,6 @@
 """多文件加载器和生成器测试（v2.0.0：7 文件）"""
 
 import shutil
-from pathlib import Path
 
 import pytest
 
@@ -101,32 +100,9 @@ class TestLoading:
         generate_default_configs(temp_config_dir)
         version = get_config_version(temp_config_dir)
         assert version == CONFIG_VERSION
-        # v2.0.6：PersonaConfig 新增 behavior_style 字段，CONFIG_VERSION 同步升 patch。
         # 此处硬编码版本号与 CONFIG_VERSION 锁定一致——升版本时**必须**同步更新，
         # 否则"升了版本但没改测试"会让回归用例失明。
-        # v2.0.7：tools_schemas 新增 [tools.look_at_screen]（W7 前置，屏幕快照工具开关）。
-        # v2.0.8：Sticker 事件链全链删除（output_schemas 删 sticker 字段），CONFIG_VERSION 升 patch。
-        # v2.0.9：D1 VLM 收编——ScreenChangeCollector 移除 api_key/base_url/model_name；
-        # VLM 调用统一走 LLMManager.chat_vision(client_type="vlm")。
-        # v2.0.10：TTS 基础设施重塑——core.toml 新增 [tts]，tools.toml 剥离
-        # OutputHandlersConfig 调度字段与 Provider 死字段，render_timeout_ms 上移。
-        # v2.0.11：发声等待超时语义修正——覆盖合成+播放全周期，默认 10s → 60s。
-        # v2.0.12：TTS 彻底基础模块化——tools.toml 四个引擎连接/合成子段
-        # （edge_tts/gptsovits/voicebox/omni_tts）整体迁入 core.toml [tts.<engine>]。
-        # v2.0.13：字幕基础设施化——tools.toml 字幕子段迁入 core.toml [subtitle].tk_gui。
-        # v2.0.14：模拟器世界重构——三模式运行时数据入库（schema 新表）。
-        # v2.0.15：僵尸配置收口——output 白名单/死子段清理、obs_control 改名 obs、
-        # perception 剥离已删除的 text_adv_game 采集器。
-        # v2.0.17：事件历史与 LLM 请求历史入库——[events].persist 语义从
-        # data/events/ JSONL 文件改为 SQLite event_history 表。
-        # v2.0.18：工具域开关重构——[tools.output] 拆 avatar/studio、look_at_screen→vision、
-        # external→mcp，CONFIG_VERSION 升 patch。
-        # v2.0.19：旧树→新树自足全量迁移（含 vrchat 补迁）+ vts llm_* 死配置清理。
-        # v2.0.20：Minecraft 接入——[agents.game] 新增 minecraft 嵌套段
-        # （tick_interval_ms/server_id），tick 计时字段归一毫秒。
-        # v2.0.22：[tools] 新增 disabled_tools（工具级停用列表，纯新增字段无迁移）。
-        # v2.0.24：[agents.streamer] 新增思考流三字段（ADR-008，纯新增无迁移）。
-        assert version == "2.0.24"
+        assert version == "2.0.25"
 
     def test_drift_fixed_on_load(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

@@ -48,7 +48,7 @@ def _make_config() -> dict:
         "agents": {
             "enabled": ["streamer"],
             "streamer": {"planner_llm": "llm_fast"},
-            "game": {},
+            "minecraft": {},
         },
         "tools": {
             "enabled": ["perception", "output"],
@@ -98,10 +98,10 @@ def test_list_includes_disabled_agents() -> None:
     grouped = get_v2_component_list(config, server)
 
     by_name = {c.name: c for c in grouped["agents"]}
-    assert set(by_name) == {"streamer", "game"}
+    assert set(by_name) == {"streamer", "minecraft"}
     assert by_name["streamer"].is_enabled is True
     assert by_name["streamer"].is_started is True
-    assert by_name["game"].is_enabled is False
+    assert by_name["minecraft"].is_enabled is False
 
 
 def test_list_excludes_tools_group() -> None:
@@ -133,10 +133,10 @@ def test_component_list_response_serializes_v2_groups() -> None:
 
 
 def test_agents_section_without_enabled_still_lists_children() -> None:
-    config = {"agents": {"streamer": {}, "game": {"x": 1}}}
+    config = {"agents": {"streamer": {}, "minecraft": {"x": 1}}}
     grouped = get_v2_component_list(config, _make_server())
     names = {c.name for c in grouped["agents"]}
-    assert names == {"streamer", "game"}
+    assert names == {"streamer", "minecraft"}
     assert all(c.is_enabled is False for c in grouped["agents"])
 
 
@@ -163,7 +163,7 @@ class TestDescriptionEnrichment:
         grouped = get_v2_component_list(config, server)
         by_name = {c.name: c for c in grouped["agents"]}
         assert by_name["streamer"].description == "主播 Agent"
-        assert by_name["game"].description == ""
+        assert by_name["minecraft"].description == ""
 
     def test_default_description_is_empty(self) -> None:
         config = _make_config()

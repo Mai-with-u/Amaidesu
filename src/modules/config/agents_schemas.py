@@ -5,22 +5,28 @@
 段树结构（TOML 视角）::
 
     [agents]
-    enabled = ["streamer", "game"]
+    enabled = ["streamer", "minecraft", "text_adv"]
 
-    [agents.streamer]
+    [agents.streamer]  # 主播 Agent
     planner_llm = "llm"
     replyer_llm = "llm_fast"
     proactive_enabled = true
 
-    [agents.game]
-    enabled = true
-    engine = "minecraft"
+    [agents.minecraft]  # Minecraft 游戏 Agent（自包含所有字段）
     command_llm = "llm"
+    max_steps = 50
+
+    [agents.text_adv]  # 文字冒险游戏 Agent（自包含所有字段）
+    command_llm = "llm"
+    engine_kind = "text_adv"
 
 设计原则：
 - 业务 Agent 统一经 ``[agents]`` 段注册启用
+- Agent 间无分类层——每个 Agent 是一份顶级子配置，**自己拥有全部字段**
+  （无 ``[agents.game]`` 公共段，无 ``engine`` 判别字段）
 - 复用 profile 名（planner_llm = "llm"）引用 model.toml 的 LLM profile
-- ``budget`` 用嵌套 dict 而非独立 BaseConfig（保持简洁，字段少）
+- ``enabled`` 列表接受已知 Agent 名（streamer / minecraft / text_adv），
+  未知名由 Pydantic 校验拒绝（extra="forbid" + Literal 约束）
 """
 
 from __future__ import annotations
@@ -37,10 +43,11 @@ from src.modules.config.schemas.base import BaseConfig
 # ---------------------------------------------------------------------------
 
 
+# 顶级 Agent 注册名（与 SUPPORTED_AGENTS 同步；变更时一起改）。
 AgentType = Literal[
     "streamer",  # 主播 Agent（Planner+Replyer）
-    "game",  # 游戏 Agent（占位，具体游戏子类型用 game.<name>）
-    "custom",  # 自定义 Agent
+    "minecraft",  # Minecraft 游戏 Agent
+    "text_adv",  # 文字冒险游戏 Agent
 ]
 
 
@@ -172,16 +179,21 @@ class StreamerAgentConfig(BaseConfig):
 
 
 # ---------------------------------------------------------------------------
-# [agents.game] 配置（engine 子段按具体游戏实现展开）
+# [agents.minecraft] 配置
 # ---------------------------------------------------------------------------
 
 
-class MinecraftGameSettings(BaseConfig):
-    """Minecraft 游戏 Agent 配置段（[agents.game.minecraft]）
+class MinecraftAgentConfig(BaseConfig):
+    """Minecraft 游戏 Agent 配置（[agents.minecraft]）
 
-    可配置字段与运行时 ``MinecraftConfig`` 的对应字段同步维护。
+    与运行时 ``MinecraftConfig`` 的字段同步维护；命令驱动 ReAct Agent 的全部
+    行为参数集中此处。无任何公共段——它就是自己的顶级子配置。
     """
 
+    command_llm: str = Field(
+        default="llm",
+        description="Minecraft Agent 决策用的 LLM profile 名",
+    )
     max_steps: int = Field(
         default=50,
         ge=1,
@@ -189,25 +201,30 @@ class MinecraftGameSettings(BaseConfig):
     )
 
 
-class GameAgentConfig(BaseConfig):
-    """游戏 Agent 配置
+# ---------------------------------------------------------------------------
+# [agents.text_adv] 配置
+# ---------------------------------------------------------------------------
 
-    ``engine`` 标识具体游戏实现（如 "minecraft" / "stardew" 等）；
-    各引擎专属配置放同名子段（如 ``[agents.game.minecraft]``）。
+
+class TextAdvAgentConfig(BaseConfig):
+    """文字冒险游戏 Agent 配置（[agents.text_adv]）
+
+    文字冒险 Agent 的全部字段集中此处；不再走 ``[agents.game]`` + ``engine``
+    判别字段模式——Agent 本身就是顶级名。
     """
 
-    enabled: bool = Field(default=True, description="是否启用游戏 Agent")
-    engine: str = Field(
-        default="minecraft",
-        description="游戏引擎标识（与 [agents.game.<engine>] 子段对应）",
-    )
     command_llm: str = Field(
         default="llm",
-        description="游戏 Agent 决策用的 LLM profile 名",
+        description="TextAdv Agent 决策用的 LLM profile 名",
     )
-    minecraft: MinecraftGameSettings = Field(
-        default_factory=MinecraftGameSettings,
-        description="Minecraft 引擎专属配置",
+    engine_kind: str = Field(default="text_adv", description="内容引擎标识（默认 text_adv）")
+    decision_strategy: str = Field(
+        default="first_option",
+        description="推进策略（first_option=首选项；llm=LLM 选择——待实现）",
+    )
+    enable_event_emission: bool = Field(
+        default=True,
+        description="是否在感知/推进时 emit game.* 事件",
     )
 
 
@@ -226,13 +243,13 @@ class AgentsConfig(BaseConfig):
 
     model_config = ConfigDict(extra="forbid")
 
-    # 启用列表（哪些 Agent 参与运行）
+    # 启用列表（哪些 Agent 参与运行）——取值必须为已知顶级 Agent 名
     enabled: List[AgentType] = Field(
         default_factory=lambda: ["streamer"],
         description="启用的 Agent 列表",
         json_schema_extra={
             "x-ui-type": "multiselect",
-            "x-options": ["streamer", "game", "custom"],
+            "x-options": ["streamer", "minecraft", "text_adv"],
         },
     )
 
@@ -242,9 +259,14 @@ class AgentsConfig(BaseConfig):
         description="主播 Agent（Planner+Replyer）配置",
         json_schema_extra={"x-ui-type": "object"},
     )
-    game: Optional[GameAgentConfig] = Field(
+    minecraft: Optional[MinecraftAgentConfig] = Field(
         default=None,
-        description="游戏 Agent 通用配置（具体游戏子段由对应游戏 Agent 实现补全）",
+        description="Minecraft 游戏 Agent 配置",
+        json_schema_extra={"x-ui-type": "object"},
+    )
+    text_adv: Optional[TextAdvAgentConfig] = Field(
+        default=None,
+        description="文字冒险游戏 Agent 配置",
         json_schema_extra={"x-ui-type": "object"},
     )
 
@@ -271,7 +293,8 @@ __all__ = [
     "AgentType",
     # 各 Agent ConfigSchema
     "StreamerAgentConfig",
-    "GameAgentConfig",
+    "MinecraftAgentConfig",
+    "TextAdvAgentConfig",
     # 聚合
     "AgentsConfig",
     # 顶层根模型

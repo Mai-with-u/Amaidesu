@@ -35,17 +35,17 @@ from typing import AsyncGenerator, Dict, List
 
 import pytest
 
-from src.agents.game.text_adv import (
+from src.agents.text_adv import (
     TextAdvGameAgent,
     TextAdvGameAgentState,
     TextAdvGameConfig,
     build_text_adv_agent,
 )
-from src.agents.game.text_adv.content_engine import (
+from src.agents.text_adv.content_engine import (
     ContentEngineProvider,
     FakeContentEngine,
 )
-from src.agents.game.text_adv.state import TextAdvOption
+from src.agents.text_adv.state import TextAdvOption
 from src.modules.agents import AgentManager, AgentState
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -166,7 +166,7 @@ async def started_agent(
 
 def test_text_adv_agent_metadata() -> None:
     """协议 6：name / description。"""
-    assert TextAdvGameAgent.name == "game"
+    assert TextAdvGameAgent.name == "text_adv"
     assert "文字冒险" in TextAdvGameAgent.description
 
 
@@ -198,8 +198,8 @@ def test_text_adv_agent_factory_registers_in_manager() -> None:
         agent_manager=manager,
         live_session_id="test",
     )
-    assert "game" in manager
-    assert manager.get("game") is agent
+    assert "text_adv" in manager
+    assert manager.get("text_adv") is agent
 
 
 # =============================================================================
@@ -498,7 +498,7 @@ async def test_look_at_screen_with_fake_backend_returns_image_block() -> None:
 
 async def test_stub_content_engine_round_trip() -> None:
     """StubContentEngine：start/send_input/stop/get_state 全部正常。"""
-    from src.agents.game.text_adv.content_engine import (
+    from src.agents.text_adv.content_engine import (
         StubContentEngine,
         ContentInput,
     )
@@ -521,7 +521,7 @@ async def test_stub_content_engine_round_trip() -> None:
 
 async def test_content_engine_rejects_when_not_started() -> None:
     """引擎未启动时 send_input → 拒绝（accepted=False）。"""
-    from src.agents.game.text_adv.content_engine import (
+    from src.agents.text_adv.content_engine import (
         StubContentEngine,
         ContentInput,
     )
@@ -545,7 +545,7 @@ async def test_agent_manager_lifecycle_for_text_adv() -> None:
         agent_manager=manager,
     )
     await manager.start_all()
-    assert "game" in manager.list_running()
+    assert "text_adv" in manager.list_running()
     await manager.stop_all()
     assert agent.state == AgentState.STOPPED
 
@@ -617,11 +617,11 @@ async def test_perception_failure_emits_game_error_event(
     registry.register_provider(boom_provider)
     # ContentEngine 也要重新注册
     content_engine = started_agent["content_engine"]  # type: ignore[assignment]
-    from src.agents.game.text_adv.content_engine import ContentEngineProvider
+    from src.agents.text_adv.content_engine import ContentEngineProvider
 
     registry.register_provider(ContentEngineProvider(engine=content_engine))
     # Game provider 需要重新构造并注册
-    from src.agents.game.text_adv import TextAdvToolProvider
+    from src.agents.text_adv import TextAdvToolProvider
 
     registry.register_provider(
         TextAdvToolProvider(state=agent._game_state, engine=content_engine)  # noqa: SLF001
