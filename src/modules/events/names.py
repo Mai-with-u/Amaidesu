@@ -34,10 +34,13 @@ class CoreEvents:
     ROOM_MESSAGE_ENTER = "room.message.enter"
 
     # ========== v2 语义域事件（game.* 游戏里程碑） ==========
-    # 低频、只发重大变化。三类：milestone / attention_required / error
+    # 低频、只发重大变化。四类：milestone / attention_required / error / report。
+    # report 是游戏 Agent 主动向派发方（主播）的上报通道：交付总结（delivery）
+    # / 升级决策（escalation）——见 GamePayload.report_kind。
     GAME_MILESTONE = "game.milestone"
     GAME_ATTENTION_REQUIRED = "game.attention_required"
     GAME_ERROR = "game.error"
+    GAME_REPORT = "game.report"
 
     # ========== v2 语义域事件（agenda/planner） ==========
     AGENDA_UPDATE = "agenda.update"

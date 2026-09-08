@@ -164,6 +164,7 @@ _TIMELINE_EVENT_TYPES = frozenset(
         "live.ended",
         "agenda.update",
         "game.milestone",
+        "game.report",
     }
 )
 

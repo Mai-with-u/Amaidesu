@@ -77,6 +77,7 @@ class EventHistoryRecorder:
             CoreEvents.GAME_MILESTONE: GamePayload,
             CoreEvents.GAME_ATTENTION_REQUIRED: GamePayload,
             CoreEvents.GAME_ERROR: GamePayload,
+            CoreEvents.GAME_REPORT: GamePayload,
         }
         for event_name, payload_class in component_model_map.items():
             self._subscribe(event_name, self._on_component_event, model_class=payload_class)

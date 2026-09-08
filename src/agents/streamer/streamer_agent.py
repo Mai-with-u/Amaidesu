@@ -681,6 +681,13 @@ class StreamerAgent(BaseAgent):
             model_class=GamePayload,
             priority=40,
         )
+        # 游戏主动上报（交付总结/升级决策）——主播叙事与"是否回提示词"的决策数据源
+        self._event_bus.on(
+            CoreEvents.GAME_REPORT,
+            self._on_game_event,
+            model_class=GamePayload,
+            priority=40,
+        )
         self._logger.info("StreamerAgent 已订阅 room.message.danmaku / game.*")
 
     async def _on_game_event(

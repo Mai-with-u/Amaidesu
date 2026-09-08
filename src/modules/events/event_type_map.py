@@ -12,6 +12,7 @@ COMPONENT_EVENT_TYPE_MAP: dict[str, str] = {
     CoreEvents.GAME_MILESTONE: "game.milestone",
     CoreEvents.GAME_ATTENTION_REQUIRED: "game.attention_required",
     CoreEvents.GAME_ERROR: "game.error",
+    CoreEvents.GAME_REPORT: "game.report",
     CoreEvents.LIVE_STARTED: "live.started",
     CoreEvents.LIVE_ENDED: "live.ended",
 }
