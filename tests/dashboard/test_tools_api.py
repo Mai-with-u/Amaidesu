@@ -26,7 +26,8 @@ version = "2.0.3"
 """
 
 # 覆盖全部成员形态的最小 tools.toml：分类成员（avatar/studio）+ 分类级开关
-# （vision/memory）+ mcp server
+# （vision/memory）+ mcp server（通用通道；maicraft 已下放到 agents.toml 的
+# [agents.minecraft].mcp 作为 Agent 私有 MCP——跨文件迁移会自动处理）
 _TOOLS_TOML = """\
 [meta]
 version = "2.0.19"
@@ -47,7 +48,7 @@ enabled = true
 [tools.mcp]
 enabled = false
 
-[tools.mcp.config.servers.maicraft]
+[tools.mcp.config.servers.generic_mcp]
 enabled = true
 """
 
@@ -79,11 +80,21 @@ class _FakeToolRegistry:
         self._specs = list(specs)
         self._categories = dict(categories or {})
         self._disabled: set[str] = set()
+        self._scoped_owner: dict[str, str] = {}
 
-    def list_tools(self, provider=None, *, include_disabled: bool = False, include_tripped: bool = False):
+    def list_tools(
+        self,
+        provider=None,
+        *,
+        include_disabled: bool = False,
+        include_tripped: bool = False,
+        include_scoped: bool = False,
+    ):
         specs = [s for s in self._specs if include_disabled or s.name not in self._disabled]
         if provider is not None:
             specs = [s for s in specs if s.provider == provider]
+        if provider is None and not include_scoped:
+            specs = [s for s in specs if s.name not in self._scoped_owner]
         return specs
 
     def category_of(self, name: str) -> str:
@@ -95,6 +106,9 @@ class _FakeToolRegistry:
 
     def is_disabled(self, name: str) -> bool:
         return name in self._disabled
+
+    def scoped_owner_of(self, name: str) -> str:
+        return self._scoped_owner.get(name, "")
 
 
 def _default_specs():
@@ -243,6 +257,25 @@ def test_tools_includes_disabled_flag(config_dir: Path) -> None:
         set_dashboard_server(None)  # type: ignore[arg-type]
 
 
+def test_tools_expose_owner_agent_for_scoped_tools(config_dir: Path) -> None:
+    """/tools 条目含 owner_agent 字段；归属限定的工具标其 Agent 名，无归属为空串。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    # 模拟归属限定：vts_trigger_hotkey 归属 'minecraft'
+    registry._scoped_owner["vts_trigger_hotkey"] = "minecraft"
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        by_name = {a["name"]: a for a in resp.json()["tools"]}
+        assert by_name["vts_trigger_hotkey"]["owner_agent"] == "minecraft"
+        assert by_name["reply_to_user"]["owner_agent"] == ""
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
 def test_tools_provider_query_filter(client: TestClient) -> None:
     """?provider= 过滤透传 registry。"""
     resp = client.get("/api/v1/tools", params={"provider": "vts"})
@@ -360,9 +393,9 @@ def test_categories_lists_mcp_servers_dynamically(tools_client: TestClient) -> N
     by_category = {c["category"]: c for c in resp.json()["categories"]}
     mcp_providers = {p["key"]: p for p in by_category["mcp"]["providers"]}
     assert mcp_providers == {
-        "maicraft": {
-            "key": "maicraft",
-            "provider_name": "maicraft",
+        "generic_mcp": {
+            "key": "generic_mcp",
+            "provider_name": "generic_mcp",
             "description": "MCP server",
             "enabled": True,
             "in_config": True,
@@ -434,11 +467,11 @@ def test_control_category_level_member_writes_flat_section(tools_client: TestCli
 
 def test_control_mcp_server_writes_server_section(tools_client: TestClient, tools_config_dir: Path) -> None:
     """mcp server 开关写 [tools.mcp.config.servers.<键>].enabled。"""
-    resp = tools_client.post("/api/v1/tools/categories/mcp/maicraft/control", json={"action": "disable"})
+    resp = tools_client.post("/api/v1/tools/categories/mcp/generic_mcp/control", json={"action": "disable"})
     assert resp.status_code == 200
 
     content = (tools_config_dir / "tools.toml").read_text(encoding="utf-8")
-    assert "[tools.mcp.config.servers.maicraft]" in content
+    assert "[tools.mcp.config.servers.generic_mcp]" in content
     # 同一文件里 server 段落中应出现 disabled 的 enabled 值（粗校验：disable 后无 enabled = true 残留于该段）
     assert "enabled = false" in content
 
@@ -506,8 +539,16 @@ class _HealthStubRegistry:
         self._disabled: set[str] = set()
         self._tripped: set[str] = set()
         self._categories: dict[str, str] = {}
+        self._scoped_owner: dict[str, str] = {}
 
-    def list_tools(self, provider=None, *, include_disabled: bool = False, include_tripped: bool = False):
+    def list_tools(
+        self,
+        provider=None,
+        *,
+        include_disabled: bool = False,
+        include_tripped: bool = False,
+        include_scoped: bool = False,
+    ):
         specs = list(self._specs)
         if not include_disabled:
             specs = [s for s in specs if s.name not in self._disabled]
@@ -515,6 +556,8 @@ class _HealthStubRegistry:
             specs = [s for s in specs if s.name not in self._tripped]
         if provider is not None:
             specs = [s for s in specs if s.provider == provider]
+        if provider is None and not include_scoped:
+            specs = [s for s in specs if s.name not in self._scoped_owner]
         return specs
 
     def category_of(self, name: str) -> str:
@@ -522,6 +565,9 @@ class _HealthStubRegistry:
 
     def is_disabled(self, name: str) -> bool:
         return name in self._disabled
+
+    def scoped_owner_of(self, name: str) -> str:
+        return self._scoped_owner.get(name, "")
 
     def tool_health_snapshot(self) -> dict[str, dict[str, Any]]:
         return {k: dict(v) for k, v in self._snapshot.items()}

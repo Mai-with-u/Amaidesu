@@ -132,8 +132,17 @@ def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
     return result
 
 
-def _build_action_entry(spec: Any, category: str, disabled: bool = False) -> Dict[str, Any]:
-    """构造单个工具条目（工具清单视图，供前端展示）。"""
+def _build_action_entry(
+    spec: Any,
+    category: str,
+    disabled: bool = False,
+    owner_agent: str = "",
+) -> Dict[str, Any]:
+    """构造单个工具条目（工具清单视图，供前端展示）。
+
+    ``owner_agent`` 由调用方从 registry 传入（scoped_owner_of）；空串表示无
+    归属限定（通用工具）。前端"归属列展示"留待后续——目前默认返回全部已含。
+    """
     entry: Dict[str, Any] = {
         "name": spec.name,
         "description": getattr(spec, "description", "") or "",
@@ -142,6 +151,7 @@ def _build_action_entry(spec: Any, category: str, disabled: bool = False) -> Dic
         "kind": getattr(spec, "kind", "") or "sync",
         "category": category,
         "disabled": disabled,
+        "owner_agent": owner_agent,
     }
     if entry["kind"] == "async":
         entry["result_event"] = spec.resolve_result_event()
@@ -233,7 +243,12 @@ async def list_tools(
     registry = _get_registry(server)
 
     try:
-        specs = registry.list_tools(provider=provider, include_disabled=True, include_tripped=True)
+        specs = registry.list_tools(
+            provider=provider,
+            include_disabled=True,
+            include_tripped=True,
+            include_scoped=True,  # Dashboard 工具页是运营面：可见一切
+        )
     except Exception:
         specs = []
 
@@ -243,6 +258,7 @@ async def list_tools(
             spec,
             category=registry.category_of(spec.name),
             disabled=registry.is_disabled(spec.name),
+            owner_agent=getattr(registry, "scoped_owner_of", lambda _n: "")(spec.name),
         )
         for spec in specs
     ]
