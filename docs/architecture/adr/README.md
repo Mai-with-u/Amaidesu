@@ -35,3 +35,4 @@ ADR 记录已经作出的决定，不替代实现文档，也不用于记录迁�
 - [ADR-007：TTS 作为配置驱动基础设施（reply → utterance 事件 → 引擎）；§8 概念修正后 TTS 提升为基础设施（基础模块），退出工具池](007-tts-infrastructure-pipeline.md)
 - [ADR-008：主播思考流旁路通道（观察面流式 / 播出面整段）](008-streamer-thinking-stream-bypass.md)
 - [ADR-009：Agent 私有 MCP 与工具归属限定（位置即归属，装配即声明）](009-agent-owned-mcp.md)
+- [ADR-010：工具可用性手动操作（手动重连）](010-tool-availability-reconnect.md)
