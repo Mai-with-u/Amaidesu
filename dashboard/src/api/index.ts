@@ -29,6 +29,7 @@ import type {
   ToolProviderControlAction,
   ToolControlResponse,
   ToolProviderControlResponse,
+  ToolReconnectResponse,
   SimulatorStatus,
   SimPersona,
   SimGift,
@@ -111,6 +112,8 @@ export const toolsApi = {
     }),
   controlTool: (name: string, action: ToolProviderControlAction) =>
     api.post<ToolControlResponse>(`/tools/${name}/control`, { action }),
+  reconnectProvider: (providerId: string) =>
+    api.post<ToolReconnectResponse>(`/tools/providers/${providerId}/reconnect`),
 };
 
 // ===== Simulator 控制面（世界模拟器：generate 生成 / replay 回放） =====

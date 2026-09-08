@@ -389,6 +389,13 @@ export interface ToolEntry {
   result_event?: string;
   /** 熔断状态快照（仅在被熔断时为非 null；REST 初值 + WS 实时覆盖） */
   health?: ToolHealth | null;
+  /**
+   * 工具所属 Provider 是否支持手动重连（`POST /tools/providers/{provider_id}/reconnect`）。
+   *
+   * 仅当为 true 时前端才在工具条目上渲染重连按钮；该字段由后端 `/api/v1/tools`
+   * 按所属 Provider 派生填充——前端不二次推断。
+   */
+  supports_reconnect?: boolean;
 }
 
 export interface ToolsView {
@@ -436,6 +443,20 @@ export interface ToolProviderControlResponse {
   success: boolean;
   enabled: boolean;
   message: string;
+}
+
+/**
+ * `POST /api/v1/tools/providers/{provider_id}/reconnect` 响应。
+ *
+ * - `recovered`：探活通过、熔断被清除的工具名列表。
+ * - `still_tripped`：重连后探活仍失败、继续保持熔断的工具名列表；非空时
+ *   前端按 warning 反馈（重连本身成功，但部分工具未恢复）。
+ */
+export interface ToolReconnectResponse {
+  ok: boolean;
+  provider_id: string;
+  recovered: string[];
+  still_tripped: string[];
 }
 
 // ==================== Simulator 控制面（ADR-006） ====================

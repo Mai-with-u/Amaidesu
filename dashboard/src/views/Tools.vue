@@ -219,6 +219,28 @@
                   </div>
                 </template>
               </el-table-column>
+              <el-table-column label="操作" width="80" align="center">
+                <template #default="{ row }">
+                  <div v-if="row.supports_reconnect" class="cell-action" @click.stop>
+                    <el-tooltip
+                      content="重连其所属工具提供者并恢复熔断工具"
+                      placement="top"
+                      :show-after="100"
+                    >
+                      <el-button
+                        size="small"
+                        type="warning"
+                        link
+                        :loading="row.provider ? reconnecting.has(row.provider) : false"
+                        :disabled="!row.provider"
+                        @click="onReconnect(row.provider ?? '')"
+                      >
+                        重连
+                      </el-button>
+                    </el-tooltip>
+                  </div>
+                </template>
+              </el-table-column>
             </el-table>
             <div v-else class="provider-table-empty">没有匹配的工具</div>
           </article>
@@ -495,6 +517,42 @@ async function onToggle(unit: ToolProviderUnit, next: boolean) {
     ElMessage.error(detail);
   } finally {
     toggling.delete(unit.key);
+  }
+}
+
+// ===== 工具提供者手动重连 =====
+//
+// 按 provider 维度防重：同一 Provider 下多行触发同一调用，按行名防重会出现
+// loading 不同步；用 provider_id 做 Set 键，保证任意一行触发都共享 loading。
+const reconnecting = reactive(new Set<string>());
+
+function extractReconnectDetail(err: unknown): string {
+  // axios 错误：后端 404/409 返回 {detail: "..."}，需要穿透 axios 默认 message
+  const ax = err as { response?: { data?: { detail?: string } } };
+  return ax?.response?.data?.detail ?? (err instanceof Error ? err.message : '重连失败');
+}
+
+async function onReconnect(providerId: string) {
+  if (!providerId || reconnecting.has(providerId)) return;
+  reconnecting.add(providerId);
+  try {
+    const resp = await toolsApi.reconnectProvider(providerId);
+    const recoveredCount = resp.data.recovered.length;
+    const stillTrippedCount = resp.data.still_tripped.length;
+    if (stillTrippedCount > 0) {
+      ElMessage.warning(
+        `重连成功但 ${stillTrippedCount} 个工具探活未通过：${resp.data.still_tripped.join('、')}`,
+      );
+    } else if (recoveredCount > 0) {
+      ElMessage.success(`已恢复 ${recoveredCount} 个工具`);
+    } else {
+      ElMessage.success('重连完成（当前无熔断工具）');
+    }
+    await refreshAll();
+  } catch (e) {
+    ElMessage.error(extractReconnectDetail(e));
+  } finally {
+    reconnecting.delete(providerId);
   }
 }
 
@@ -867,6 +925,13 @@ onBeforeUnmount(() => {
 .cell-switch {
   display: inline-flex;
   align-items: center;
+}
+
+.cell-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
 }
 
 .health-cell {
