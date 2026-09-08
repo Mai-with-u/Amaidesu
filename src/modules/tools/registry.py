@@ -598,6 +598,102 @@ class ToolRegistry:
             )
             return False
 
+    def _tools_owned_by(self, provider: ToolProvider) -> List[str]:
+        """列出归属指定 Provider 的全部已注册工具名（按 ``_tool_owner`` 反查）。
+
+        复用 ``_tool_owner`` 反向索引：O(N) 单次扫描，未额外维护反向表——
+        注册表量级（数百）下单次扫描成本可忽略，避免给热路径加状态。
+        用于 ``reconnect_provider`` 在重连成功后遍历归属工具做探活 + 熔断复位。
+        """
+        return [name for name, owner in self._tool_owner.items() if owner is provider]
+
+    def provider_supports_reconnect(self, tool_name: str) -> bool:
+        """按工具名查归属 Provider 是否支持手动重连（供 Dashboard 工具页渲染按钮用）。
+
+        无归属 Provider / 归属对象非 ``BaseToolProvider`` / Provider 的
+        ``supports_reconnect`` 为 False 任一条件触发即返回 False。未知工具名
+        同样 False）。不解名/字符串猜测，按 ``_tool_owner`` 直查——与
+        ``probe_tool`` 的归属解析口径一致。
+        """
+        owner = self._tool_owner.get(tool_name)
+        if not isinstance(owner, BaseToolProvider):
+            return False
+        return bool(owner.supports_reconnect)
+
+    async def reconnect_provider(self, provider_id: str) -> Dict[str, Any]:
+        """手动重连指定 Provider；成功后对归属其工具的熔断器联动探活复位。
+
+        行为：
+        - ``provider_id`` = Provider.name（按 ``_providers`` 线性查找）。
+          provider 的 ``name`` 与 ``spec.provider`` 无须同值（前者日志/去重，
+          后者注册名前缀），二者不构成可依赖的对应关系——本方法只匹配
+          ``provider.name``。
+        - 未找到 → ``{"ok": False, "error": "未注册 Provider: <id>"}``
+        - 找到但不支持重连（非 BaseToolProvider 或 ``supports_reconnect``
+          为 False）→ ``{"ok": False, "error": "Provider ... 不支持手动重连"}``
+        - 找到且支持 → ``await provider.reconnect()``：
+          - 失败 → ``{"ok": False, "error": "重连失败...", "provider_id": <id>}``
+          - 成功 → 反查归属工具，逐个 ``probe_tool``，通过且 ``is_tripped`` 即
+            ``recover_tool``；返回 ``{"ok": True, "provider_id": ..., "recovered":
+            [<已复位工具名>], "still_tripped": [<探活未通过的熔断工具名>]}``。
+            未熔断的工具不纳入报告（运营只需关心"恢复 + 仍未恢复"两个集合）。
+        """
+        provider = next((p for p in self._providers if p.name == provider_id), None)
+        if provider is None:
+            logger.warning(f"手动重连失败：未注册 Provider '{provider_id}'")
+            return {"ok": False, "error": f"未注册 Provider: {provider_id}"}
+        if not isinstance(provider, BaseToolProvider) or not provider.supports_reconnect:
+            logger.warning(
+                f"手动重连失败：Provider '{provider_id}'（class={type(provider).__name__}）"
+                "不支持手动重连（无覆写 connect 或非 BaseToolProvider）"
+            )
+            return {
+                "ok": False,
+                "error": f"Provider '{provider_id}' 不支持手动重连",
+            }
+
+        logger.info(f"手动触发 Provider '{provider_id}' 重连")
+        try:
+            ok = bool(await provider.reconnect())
+        except Exception as exc:  # noqa: BLE001 - 重连边界兜底，不上抛
+            logger.error(
+                f"Provider '{provider_id}' 重连异常: {type(exc).__name__}: {exc}",
+                exc_info=True,
+            )
+            return {
+                "ok": False,
+                "error": f"重连失败: {type(exc).__name__}: {exc}",
+                "provider_id": provider_id,
+            }
+        if not ok:
+            logger.warning(f"Provider '{provider_id}' 手动重连失败（provider.reconnect 返回 False）")
+            return {
+                "ok": False,
+                "error": "重连失败: provider.reconnect 返回 False",
+                "provider_id": provider_id,
+            }
+
+        recovered: List[str] = []
+        still_tripped: List[str] = []
+        for tool_name in self._tools_owned_by(provider):
+            if not self.is_tripped(tool_name):
+                continue
+            healthy = await self.probe_tool(tool_name)
+            if healthy and self.recover_tool(tool_name):
+                recovered.append(tool_name)
+            else:
+                still_tripped.append(tool_name)
+        logger.info(
+            f"Provider '{provider_id}' 重连成功，恢复 {len(recovered)} 个熔断工具"
+            + (f"，仍有 {len(still_tripped)} 个未通过探活" if still_tripped else "")
+        )
+        return {
+            "ok": True,
+            "provider_id": provider_id,
+            "recovered": recovered,
+            "still_tripped": still_tripped,
+        }
+
     async def invoke_many(
         self,
         invocations: Iterable[ToolInvocation],

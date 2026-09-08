@@ -7,7 +7,9 @@ ToolProvider Protocol 与 BaseToolProvider 基类
 - ``ToolProvider`` Protocol——结构性接口契约，运行时按方法名判定 duck typing；
   仍是所有 Provider 实现必须满足的最小集合
 - ``BaseToolProvider`` ABC——所有经 ``ToolRegistry.register_provider`` 装配的
-  Provider 的继承基类；带 ``category`` ClassVar 收敛与 ``health_check`` 探活钩子默认实现
+  Provider 的继承基类；带 ``category`` ClassVar 收敛、``health_check`` 探活钩子
+  默认实现，以及连接动作契约（``connect`` / ``disconnect`` / ``reconnect`` 与
+  ``supports_reconnect`` 单点判定）
 
 ## 探活契约
 ``BaseToolProvider.health_check`` 默认实现返回 ``True``，语义为
@@ -17,10 +19,24 @@ ToolProvider Protocol 与 BaseToolProvider 基类
 真实检查：连接可用才返回 ``True``；不可用返回 ``False``；方法内抛异常视作检查
 失败，由调用方按不健康处理。
 
+## 可用性动作契约
+维护外部连接的 Provider 覆写 ``connect`` / ``disconnect``（无连接语者沿用基类默认，
+二者均返回 ``False``）即可启用手动重连。``supports_reconnect`` 属性以"本类是否覆
+写了 ``connect``"为单点判定，子类只需覆写 ``connect`` 即自动启用重连支持，**不**
+需要额外打标。``reconnect`` 默认组合为 ``disconnect`` + ``connect``；维护特殊语
+义（如 MCP 关闭整条 stream 后重新建立）的 Provider 可整体覆写。
+
+手动重连的语义在 ``ToolRegistry.reconnect_provider``：重连成功后对归属该 Provider
+的全部已熔断工具调用 ``probe_tool`` 探活，通过者即刻 ``recover_tool`` 复位熔断，
+联动熔断器恢复路径。手动重连与各 Provider 自身后台重连循环（如 VTS 的
+``_reconnect_loop``、Warudo 的 ``_connection_loop``）属低频可接受并发场景，
+不强制串行化。
+
 ## 工厂
 ``make_provider_from_specs``：从一组 ``(spec, impl)`` 元组构造固定 provider
 （便于内置工具组合）；其内部 ``_SpecImplProvider`` 继承 ``BaseToolProvider``，
-对 ``ToolProvider`` Protocol 仍保持结构一致。
+对 ``ToolProvider`` Protocol 仍保持结构一致，且不覆写 ``connect``，因此**不支
+持手动重连**（与"无状态 Provider 无重连按钮"的前端契约一致）。
 
 ## 契约要点
 - Provider 知道**自己的**工具；``ToolRegistry`` 负责聚合多个 Provider
@@ -84,6 +100,42 @@ class ToolProvider(Protocol):
         """
         ...
 
+    async def connect(self) -> bool:
+        """建立通道连接——默认无连接可建，返回 False。
+
+        维护外部连接的 Provider 应覆写：建立成功返回 True，失败返回 False
+        （不抛异常）。与 ``BaseToolProvider.connect`` 行为一致；Protocol 上挂此
+        签名仅为 duck-typed 完整性保证，runtime_checkable 不会强制所有实现覆写。
+        """
+        ...
+
+    async def disconnect(self) -> bool:
+        """断开通道连接——默认无连接可断，返回 False。
+
+        维护外部连接的 Provider 应覆写：断开完成返回 True，未连接 / 失败返回
+        False（不抛异常）。Protocol 签名仅供 duck-typed 完整性保证。
+        """
+        ...
+
+    async def reconnect(self) -> bool:
+        """手动重连——默认组合：先 ``disconnect`` 再 ``connect``。
+
+        子类可整体覆写以表达特殊语义（如关闭底层 stream 后重建）。返回 bool
+        等同 ``connect`` 的返回值。Protocol 签名仅供 duck-typed 完整性保证。
+        """
+        ...
+
+    @property
+    def supports_reconnect(self) -> bool:
+        """是否支持手动重连——默认按"本类是否覆写了 ``connect``"判定。
+
+        无须子类打标，覆写 ``connect`` 即自动启用。无状态 / 无连接语 Provider
+        沿用基类默认（即不支持）。Protocol 上挂此 property 仅为 duck-typed
+        完整性保证；运行时判定走 ``BaseToolProvider.supports_reconnect`` 的
+        单点实现。
+        """
+        ...
+
 
 # =============================================================================
 # 抽象基类：所有注册到 ToolRegistry 的 Provider 都应继承
@@ -96,6 +148,10 @@ class BaseToolProvider(ABC):
     提供：
     - ``category`` ClassVar 收敛（实现方可继续用子类声明的具体值覆盖）
     - ``health_check`` 探活钩子默认实现（返回 True，语义见模块注释）
+    - 连接动作契约默认实现（``connect`` / ``disconnect`` 沿用基类 = 不支持；
+      ``reconnect`` = ``disconnect`` + ``connect``）；维护外部连接的 Provider
+      覆写 ``connect`` 即可同时获得重连支持，``supports_reconnect`` 按"本类是
+      否覆写了 ``connect``"自动判定
     - 抽象方法：``list_tools()`` / ``invoke()``——子类必须实现
 
     继承本类的 Provider 同时满足 ``ToolProvider`` Protocol（结构一致）：Protocol
@@ -127,6 +183,47 @@ class BaseToolProvider(ABC):
         Provider 沿用默认实现——熔断后冷却期满即恢复，再失败再熔断，由流量决定。
         """
         return True
+
+    async def connect(self) -> bool:
+        """建立通道连接（默认实现 = 不支持）。
+
+        维护外部连接（WebSocket / HTTP / stdio 子进程等）的 Provider **必须**
+        重写此方法：建立成功返回 True，失败返回 False（不抛异常）。无连接
+        语 / 无状态 Provider 沿用基类默认——``supports_reconnect`` 据此判定
+        为 False，Dashboard 不暴露手动重连按钮。
+        """
+        return False
+
+    async def disconnect(self) -> bool:
+        """断开通道连接（默认实现 = 不支持）。
+
+        与 ``connect`` 对称：维护外部连接的 Provider 重写为真实断开逻辑；无
+        连接语 Provider 沿用基类默认。无须与 ``connect`` 同时覆写，但缺一会
+        导致 ``reconnect`` 默认组合对缺项方短路失败——重连失败时调用方按返
+        回值处理，不上抛。
+        """
+        return False
+
+    async def reconnect(self) -> bool:
+        """手动重连默认组合（先断开再建立）。
+
+        子类整体覆写可表达特殊语义（如 MCP 关闭整条 stream 后重建；OBS 断开
+        后通过 ``_connect_obs`` 重建）。返回 bool 等同 ``connect`` 的返回值。
+        异常路径不上抛（由 ``connect`` / ``disconnect`` 各自的实现兜底）。
+        """
+        await self.disconnect()
+        return await self.connect()
+
+    @property
+    def supports_reconnect(self) -> bool:
+        """是否支持手动重连——单点判定：本类是否覆写了 ``connect``。
+
+        通过 ``type(self).connect is not BaseToolProvider.connect`` 内省：不
+        依赖子类额外打标，覆写 ``connect`` 即自动启用。``_SpecImplProvider``
+        等未覆写 ``connect`` 的子类据此返回 False，与"无状态 Provider 无重连
+        按钮"的前端契约一致。
+        """
+        return type(self).connect is not BaseToolProvider.connect
 
 
 # =============================================================================
