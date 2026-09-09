@@ -36,25 +36,6 @@ export const useSettingsStore = defineStore('settings', () => {
     return pendingChanges.value.length;
   });
 
-  const requiresRestart = computed(() => {
-    return pendingChanges.value.some(change => {
-      // 检查是否有需要重启的配置变更
-      const restartPrefixes = [
-        'llm.',
-        'llm_fast.',
-        'vlm.',
-        'llm_local.',
-        'llm_summary.',
-        'llm_agenda.',
-        'llm_providers.',
-        'core.',
-        'dashboard.',
-        'logging.',
-      ];
-      return restartPrefixes.some(prefix => change.key.startsWith(prefix));
-    });
-  });
-
   // 动作
   async function fetchSchema() {
     loading.value = true;
@@ -88,9 +69,8 @@ export const useSettingsStore = defineStore('settings', () => {
     error.value = null;
 
     try {
-      // 逐个保存变更
+      // 收集所有 PATCH 结果：HTTP 状态恒为 200，必须逐条 inspect 响应体的 success
       const results: ConfigUpdateResponse[] = [];
-      let requiresRestartFlag = false;
 
       for (const change of pendingChanges.value) {
         const request: ConfigUpdateRequest = {
@@ -100,24 +80,35 @@ export const useSettingsStore = defineStore('settings', () => {
 
         const response = await api.patch<ConfigUpdateResponse>('/config', request);
         results.push(response.data);
+      }
 
-        if (response.data.requires_restart) {
-          requiresRestartFlag = true;
+      // 全成功：把每条变更落到 originalValues 并清空 pending；任一失败则保持 dirty 状态
+      const failedResults = results.filter(r => !r.success);
+      if (failedResults.length === 0) {
+        for (const change of pendingChanges.value) {
+          setNestedValue(originalValues.value, change.key, change.newValue);
         }
+        pendingChanges.value = [];
+
+        // requires_restart 由后端在每次成功响应里告知，全部成功后取任意一条为 true 即生效
+        const requiresRestartFlag = results.some(r => r.requires_restart);
+        return {
+          success: true,
+          message: results[results.length - 1]?.message || '配置已保存',
+          requires_restart: requiresRestartFlag,
+        };
       }
 
-      // 更新原始值
-      for (const change of pendingChanges.value) {
-        setNestedValue(originalValues.value, change.key, change.newValue);
-      }
-
-      // 清空待保存变更
-      pendingChanges.value = [];
-
+      // 失败聚合：取首条失败消息 + 失败计数；保留后端中文文案
+      const firstFailure = failedResults[0];
+      const failureMessage =
+        failedResults.length === 1
+          ? firstFailure.message
+          : `${firstFailure.message}（另有 ${failedResults.length - 1} 项失败）`;
       return {
-        success: results.every(r => r.success),
-        message: requiresRestartFlag ? '配置已保存，部分更改需要重启服务才能生效' : '配置已保存',
-        requires_restart: requiresRestartFlag,
+        success: false,
+        message: failureMessage,
+        requires_restart: false,
       };
     } catch (e) {
       console.error('Failed to save changes:', e);
@@ -194,7 +185,6 @@ export const useSettingsStore = defineStore('settings', () => {
     groups,
     hasChanges,
     changeCount,
-    requiresRestart,
     // 动作
     fetchSchema,
     saveChanges,

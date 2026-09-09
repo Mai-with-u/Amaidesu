@@ -61,13 +61,20 @@
         :stretch="false"
         @tab-click="handleTabClick"
       >
-        <el-tab-pane
-          v-for="tab in FILE_TABS"
-          :key="tab.key"
-          :label="getTabLabel(tab)"
-          :name="tab.key"
-          lazy
-        >
+        <el-tab-pane v-for="tab in FILE_TABS" :key="tab.key" :name="tab.key" lazy>
+          <template #label>
+            <span class="file-tab-label">
+              <el-icon class="file-tab-icon"><component :is="tab.icon" /></el-icon>
+              <span>{{ tab.label }}</span>
+              <el-icon
+                v-if="tab.restart && getFileChangeCount(tab.key) > 0"
+                class="file-tab-restart"
+                color="var(--color-warning)"
+              >
+                <WarningFilled />
+              </el-icon>
+            </span>
+          </template>
           <!-- 搜索模式：跨文件结果 -->
           <div v-if="searchQuery" class="search-results">
             <div
@@ -80,7 +87,9 @@
                   ><component :is="getIcon(match.section.icon)"
                 /></el-icon>
                 <span class="search-section-title">{{ match.section.label }}</span>
-                <el-tag size="small" type="info">{{ tab.label }}</el-tag>
+                <el-tag size="small" type="info">{{
+                  getFileTabLabel(match.section.file_name)
+                }}</el-tag>
               </div>
               <div class="section-fields">
                 <SubFieldGroup
@@ -192,6 +201,7 @@ import {
   Key,
   Connection,
   Management,
+  WarningFilled,
 } from '@element-plus/icons-vue';
 import { useSettingsStore } from '@/stores/settings';
 import type { ConfigFieldSchema, ConfigGroupSchema, PendingChange } from '@/types/settings';
@@ -205,37 +215,37 @@ import ComponentCardList from '@/components/settings/ComponentCardList.vue';
 const FALLBACK_FILE_TABS = [
   {
     key: 'core.toml',
-    label: '🚀 核心',
+    label: '核心',
     icon: Monitor,
     desc: '通用 / 角色 / Dashboard / 日志',
     restart: true,
   },
-  { key: 'model.toml', label: '🧠 模型', icon: Cpu, desc: 'LLM / VLM 模型配置', restart: true },
+  { key: 'model.toml', label: '模型', icon: Cpu, desc: 'LLM / VLM 模型配置', restart: true },
   {
     key: 'agents.toml',
-    label: '🤖 业务 Agent',
+    label: '业务 Agent',
     icon: ChatDotRound,
     desc: '主播 Agent / 游戏 Agent',
     restart: false,
   },
   {
     key: 'tools.toml',
-    label: '🔧 工具包',
+    label: '工具包',
     icon: Film,
     desc: 'TTS / 字幕 / VTS / OBS / 感知',
     restart: false,
   },
   {
     key: 'memory.toml',
-    label: '💾 记忆',
+    label: '记忆',
     icon: Microphone,
     desc: 'SimpleMemory / Amemorix',
     restart: false,
   },
-  { key: 'storage.toml', label: '📦 存储', icon: Document, desc: 'SQLite 存储', restart: false },
+  { key: 'storage.toml', label: '存储', icon: Document, desc: 'SQLite 存储', restart: false },
   {
     key: 'background.toml',
-    label: '⏱️ 后台',
+    label: '后台',
     icon: ChatDotRound,
     desc: '压缩 worker 等后台任务',
     restart: false,
@@ -336,11 +346,11 @@ function getIcon(iconName?: string) {
   return iconMap[iconName] || Setting;
 }
 
-// Tab 标签渲染
-function getTabLabel(tab: (typeof FILE_TABS)[0]) {
-  const hasChanges = getFileChangeCount(tab.key) > 0;
-  const restartNeeded = tab.restart && hasChanges;
-  return `${tab.label}${restartNeeded ? ' ⚠️' : ''}`;
+// 文件名 → Tab 标签：用于搜索结果行展示匹配所属的真实文件
+function getFileTabLabel(fileName?: string): string {
+  if (!fileName) return '';
+  const tab = FILE_TABS.find(t => t.key === fileName);
+  return tab?.label ?? fileName;
 }
 
 // Tab 点击：搜索时清除搜索
@@ -598,6 +608,21 @@ async function handleRestart() {
 .file-tabs :deep(.el-tabs__active-bar) {
   height: 2px;
   background: var(--color-primary);
+}
+
+/* 文件 Tab 自定义 label：图标 + 文本 + 重启警告 */
+.file-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.file-tab-icon {
+  font-size: 14px;
+}
+
+.file-tab-restart {
+  font-size: 14px;
 }
 
 /* Tab 内容区可滚动 */

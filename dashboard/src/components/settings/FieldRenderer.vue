@@ -5,6 +5,9 @@
       <label class="field-label">
         {{ field.label }}
         <span v-if="field.required" class="required-mark">*</span>
+        <el-tag v-if="field.readonly" size="small" type="info" effect="plain" class="readonly-tag"
+          >只读</el-tag
+        >
       </label>
       <el-tag v-if="isModified" size="small" type="warning" effect="plain">已修改</el-tag>
     </div>
@@ -22,6 +25,7 @@
           type="password"
           show-password
           :placeholder="String(field.default || '')"
+          :disabled="field.readonly"
           @input="handleChange"
         />
         <el-input
@@ -30,12 +34,14 @@
           type="textarea"
           :rows="3"
           :placeholder="String(field.default || '')"
+          :disabled="field.readonly"
           @input="handleChange"
         />
         <el-input
           v-else
           v-model="localValue"
           :placeholder="String(field.default || '')"
+          :disabled="field.readonly"
           @input="handleChange"
         />
       </template>
@@ -48,6 +54,7 @@
           :max="field.validation?.max"
           :step="1"
           controls-position="right"
+          :disabled="field.readonly"
           @change="handleChange"
         />
       </template>
@@ -61,18 +68,24 @@
           :step="0.1"
           :precision="2"
           controls-position="right"
+          :disabled="field.readonly"
           @change="handleChange"
         />
       </template>
 
       <!-- 布尔类型 -->
       <template v-else-if="field.type === 'boolean'">
-        <el-switch v-model="localValue" @change="handleChange" />
+        <el-switch v-model="localValue" :disabled="field.readonly" @change="handleChange" />
       </template>
 
       <!-- 选择类型 -->
       <template v-else-if="field.type === 'select'">
-        <el-select v-model="localValue" :placeholder="'请选择'" @change="handleChange">
+        <el-select
+          v-model="localValue"
+          :placeholder="'请选择'"
+          :disabled="field.readonly"
+          @change="handleChange"
+        >
           <el-option
             v-for="option in selectOptions"
             :key="option"
@@ -290,6 +303,11 @@ function setObjectValue(key: string, value: unknown) {
 .required-mark {
   color: var(--color-danger);
   margin-left: 2px;
+}
+
+.readonly-tag {
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
 .field-description {

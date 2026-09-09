@@ -38,6 +38,7 @@ export interface ConfigFieldSchema {
   required: boolean;
   sensitive: boolean;
   group?: string;
+  readonly?: boolean;
 }
 
 // 配置分组 Schema
