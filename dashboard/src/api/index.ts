@@ -23,6 +23,7 @@ import type {
   LLMUsageSummary,
   LLMHistoryQueryParams,
   LLMHistoryResponse,
+  LLMHistoryStatistics,
   LLMRequestHistory,
   ToolsView,
   ToolCategoriesView,
@@ -98,6 +99,8 @@ export const llmApi = {
   getUsageSummary: () => api.get<LLMUsageSummary>('/llm/usage/summary'),
   getHistory: (params: LLMHistoryQueryParams) =>
     api.get<LLMHistoryResponse>('/llm/history', { params }),
+  getStatistics: (params?: { start_time?: number; end_time?: number }) =>
+    api.get<LLMHistoryStatistics>('/llm/history/statistics', { params }),
   getRequestById: (requestId: string) => api.get<LLMRequestHistory>(`/llm/history/${requestId}`),
 };
 

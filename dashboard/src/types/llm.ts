@@ -68,3 +68,26 @@ export interface LLMHistoryResponse {
   page_size: number;
   total_pages: number;
 }
+
+/**
+ * LLM 用量聚合统计（GET /api/v1/llm/history/statistics）。
+ *
+ * 可按时间窗口过滤：start_time/end_time 为 Unix epoch 毫秒（缺省 = 全量）。
+ * 用于首页"今日成本"卡片——只统计当天 00:00 本地以来的调用与花费。
+ */
+export interface LLMHistoryStatistics {
+  total_requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  /** 0-1（成功请求 / 总请求）；首页渲染为百分比 */
+  success_rate: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_cost: number;
+  avg_latency_ms: number;
+  model_stats: Record<string, { count: number; total_tokens: number; total_cost: number }>;
+  client_stats: Record<string, number>;
+  /** 统计窗口起止；全量统计时两端均为 null */
+  time_range: { start: number | null; end: number | null };
+}
