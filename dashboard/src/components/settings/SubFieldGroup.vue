@@ -26,6 +26,7 @@
             :get-value="getValue"
             :get-original="getOriginal"
             :update-value="updateValue"
+            :get-change-count="getChangeCount"
           />
         </div>
       </div>
@@ -54,6 +55,11 @@ const props = defineProps<{
   getValue: (key: string) => unknown;
   getOriginal: (key: string) => unknown;
   updateValue: (field: ConfigFieldSchema, value: unknown) => void;
+  /**
+   * 父级下发的「某字段 key 下的待保存变更条数」查询函数；
+   * 用于子卡片徽标。未提供时徽标隐藏（保留向后兼容）。
+   */
+  getChangeCount?: (key: string) => number;
 }>();
 
 const expanded = ref<Set<string>>(new Set());
@@ -75,13 +81,15 @@ function toggleCard(key: string) {
   }
 }
 
+/**
+ * 子卡片徽标：sum 父级注入的 getChangeCount(child.key)——子项的 key 前缀即
+ * 「子字段下的待保存变更条数」。父级未注入时徽标隐藏（v-if 自动消失）。
+ */
 function getChildrenChangeCount(field: ConfigFieldSchema): number {
-  if (!field.children) return 0;
+  if (!props.getChangeCount || !field.children) return 0;
   let count = 0;
   for (const child of field.children) {
-    if (child.children && child.children.length > 0) {
-      count += getChildrenChangeCount(child);
-    }
+    count += props.getChangeCount(child.key);
   }
   return count;
 }

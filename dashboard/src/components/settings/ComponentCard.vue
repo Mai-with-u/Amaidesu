@@ -33,6 +33,7 @@
         :get-value="getValue"
         :get-original="getOriginal"
         :update-value="updateValue"
+        :get-change-count="getChangeCount"
       />
     </div>
   </div>
@@ -54,6 +55,8 @@ const props = defineProps<{
   getOriginal: (key: string) => unknown;
   updateValue: (field: ConfigFieldSchema, value: unknown) => void;
   onToggle: (name: string, newEnabled: boolean) => void;
+  /** 透传给内部 SubFieldGroup 的子卡片徽标查询函数 */
+  getChangeCount?: (key: string) => number;
 }>();
 
 const expanded = ref(true);

@@ -59,17 +59,40 @@ export interface ConfigSchemaResponse {
   version: string;
 }
 
-// 配置更新请求
-export interface ConfigUpdateRequest {
-  key: string;
-  value: unknown;
-}
-
 // 配置更新响应
 export interface ConfigUpdateResponse {
   success: boolean;
   message: string;
   requires_restart?: boolean;
+}
+
+// 批量配置更新（与后端 POST /api/v1/config/batch 对齐）：单次请求携带多条变更，
+// 全部成功才落盘；任一校验失败整批回退，磁盘零写入。
+export interface ConfigBatchChange {
+  key: string;
+  value: unknown;
+}
+
+export interface ConfigBatchUpdateRequest {
+  changes: ConfigBatchChange[];
+}
+
+export interface ConfigBatchChangeResult {
+  key: string;
+  success: boolean;
+}
+
+export interface ConfigBatchChangeError {
+  key: string;
+  message: string;
+}
+
+export interface ConfigBatchUpdateResponse {
+  success: boolean;
+  message: string;
+  requires_restart?: boolean;
+  results?: ConfigBatchChangeResult[];
+  errors?: ConfigBatchChangeError[];
 }
 
 // 待保存的变更

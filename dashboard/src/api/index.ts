@@ -17,8 +17,9 @@ import type {
   InjectMessageResponse,
   EventBusStatsResponse,
   ConfigSchemaResponse,
-  ConfigUpdateRequest,
   ConfigUpdateResponse,
+  ConfigBatchUpdateRequest,
+  ConfigBatchUpdateResponse,
   LLMUsageStats,
   LLMUsageSummary,
   LLMHistoryQueryParams,
@@ -76,10 +77,12 @@ export const componentApi = {
 //
 // 后端 `/api/v1/config` 返回 7 文件合并的扁平 dict（core / model / agents / tools /
 // memory / storage / background）；`/api/v1/config/schema` 返回按文件归类的 groups。
+// `/api/v1/config/batch` 为原子批量保存，全部成功才落盘。
 export const configApi = {
   get: () => api.get<ConfigResponse>('/config'),
   getSchema: () => api.get<ConfigSchemaResponse>('/config/schema'),
-  update: (request: ConfigUpdateRequest) => api.patch<ConfigUpdateResponse>('/config', request),
+  batchUpdate: (request: ConfigBatchUpdateRequest) =>
+    api.post<ConfigBatchUpdateResponse>('/config/batch', request),
   restart: () => api.post<ConfigUpdateResponse>('/config/restart'),
 };
 

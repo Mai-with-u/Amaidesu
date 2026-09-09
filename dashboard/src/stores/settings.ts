@@ -7,7 +7,6 @@ import { ref, computed } from 'vue';
 import type {
   ConfigSchemaResponse,
   ConfigGroupSchema,
-  ConfigUpdateRequest,
   ConfigUpdateResponse,
   PendingChange,
 } from '@/types/settings';
@@ -69,45 +68,35 @@ export const useSettingsStore = defineStore('settings', () => {
     error.value = null;
 
     try {
-      // 收集所有 PATCH 结果：HTTP 状态恒为 200，必须逐条 inspect 响应体的 success
-      const results: ConfigUpdateResponse[] = [];
+      // 批量端点原子语义：要么全部成功落盘，要么任一校验失败整批回退（后端保证）。
+      // 前端只 inspect 响应体的 success，HTTP 状态恒为 200。
+      const response = await api.post<{
+        success: boolean;
+        message: string;
+        requires_restart?: boolean;
+        results?: { key: string; success: boolean }[];
+        errors?: { key: string; message: string }[];
+      }>('/config/batch', {
+        changes: pendingChanges.value.map(c => ({ key: c.key, value: c.newValue })),
+      });
+      const data = response.data;
 
-      for (const change of pendingChanges.value) {
-        const request: ConfigUpdateRequest = {
-          key: change.key,
-          value: change.newValue,
-        };
-
-        const response = await api.patch<ConfigUpdateResponse>('/config', request);
-        results.push(response.data);
-      }
-
-      // 全成功：把每条变更落到 originalValues 并清空 pending；任一失败则保持 dirty 状态
-      const failedResults = results.filter(r => !r.success);
-      if (failedResults.length === 0) {
+      if (data.success) {
         for (const change of pendingChanges.value) {
           setNestedValue(originalValues.value, change.key, change.newValue);
         }
         pendingChanges.value = [];
-
-        // requires_restart 由后端在每次成功响应里告知，全部成功后取任意一条为 true 即生效
-        const requiresRestartFlag = results.some(r => r.requires_restart);
         return {
           success: true,
-          message: results[results.length - 1]?.message || '配置已保存',
-          requires_restart: requiresRestartFlag,
+          message: data.message || '配置已保存',
+          requires_restart: !!data.requires_restart,
         };
       }
 
-      // 失败聚合：取首条失败消息 + 失败计数；保留后端中文文案
-      const firstFailure = failedResults[0];
-      const failureMessage =
-        failedResults.length === 1
-          ? firstFailure.message
-          : `${firstFailure.message}（另有 ${failedResults.length - 1} 项失败）`;
+      // 失败：保留 pendingChanges 不清空，让用户继续编辑；后端已保证磁盘零写入
       return {
         success: false,
-        message: failureMessage,
+        message: data.message || '保存配置失败',
         requires_restart: false,
       };
     } catch (e) {

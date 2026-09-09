@@ -10,11 +10,11 @@
           @input="handleUpdate"
         />
         <el-input
-          v-model="entry.value"
+          v-model="entry.display"
           size="small"
           placeholder="值"
           class="dict-value-input"
-          @input="handleUpdate"
+          @input="handleValueEdit(index)"
         />
         <el-button type="danger" size="small" text :icon="Delete" @click="removeRow(index)" />
       </div>
@@ -30,9 +30,17 @@
 import { ref, watch } from 'vue';
 import { Plus, Delete } from '@element-plus/icons-vue';
 
+/**
+ * 单条编辑项：
+ * - key：用户输入的字典键（始终为字符串）
+ * - display：编辑框展示的字符串；非字符串值通过 JSON.stringify 进入，编辑后
+ *   通过 JSON.parse 回填；解析失败的纯文本保持为字符串
+ * - value：回写到父组件的实际值（unknown，保留原类型）
+ */
 interface KeyValueEntry {
   key: string;
-  value: string;
+  display: string;
+  value: unknown;
 }
 
 const props = defineProps<{
@@ -44,16 +52,35 @@ const emit = defineEmits<{
   change: [];
 }>();
 
+/** 渲染时非字符串值通过 JSON 展示给用户。 */
+function valueToDisplay(value: unknown): string {
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+/** 编辑时尝试把用户输入解析回原类型；空字符串或解析失败时回退为字符串。 */
+function displayToValue(display: string): unknown {
+  if (display === '') return '';
+  try {
+    return JSON.parse(display);
+  } catch {
+    return display;
+  }
+}
+
+/** 把外部 dict 转成内部编辑项：保留原值类型，仅生成展示串。 */
 function dictToEntries(dict: unknown): KeyValueEntry[] {
-  if (!dict || typeof dict !== 'object') return [];
+  if (!dict || typeof dict !== 'object' || Array.isArray(dict)) return [];
   return Object.entries(dict).map(([k, v]) => ({
     key: k,
-    value: typeof v === 'string' ? v : JSON.stringify(v),
+    display: valueToDisplay(v),
+    value: v,
   }));
 }
 
-function entriesToDict(entries: KeyValueEntry[]): Record<string, string> {
-  const result: Record<string, string> = {};
+/** 把内部编辑项转回父组件需要的 dict：空键被过滤。 */
+function entriesToDict(entries: KeyValueEntry[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
   for (const e of entries) {
     if (e.key) result[e.key] = e.value;
   }
@@ -62,36 +89,46 @@ function entriesToDict(entries: KeyValueEntry[]): Record<string, string> {
 
 const entries = ref<KeyValueEntry[]>([]);
 const _lastSyncedHash = ref('');
-const _externalHash = ref('');
 
-/** 对 entries 做稳定序列化，用于比对是否是自己的更新 */
-function entriesHash(): string {
-  const ordered = entries.value.filter(e => e.key).sort((a, b) => a.key.localeCompare(b.key));
-  return JSON.stringify(ordered);
+/**
+ * 用"按 key 排序后的 JSON"做稳定指纹，避免外部值顺序差异触发误重置；
+ * 对称用作「自己的 emit 回环」识别——外部回传和我们刚发出去的字典完全一致时跳过重置。
+ */
+function canonicalHash(obj: Record<string, unknown>): string {
+  const sorted: Record<string, unknown> = {};
+  for (const k of Object.keys(obj).sort()) sorted[k] = obj[k];
+  return JSON.stringify(sorted);
 }
 
 watch(
   () => props.modelValue,
   newVal => {
-    const external = JSON.stringify(dictToEntries(newVal));
-    if (external === _lastSyncedHash.value) return; // 自己的 emit 回环
-    _externalHash.value = external;
+    const incoming = canonicalHash(entriesToDict(dictToEntries(newVal)));
+    if (incoming === _lastSyncedHash.value) return; // 自己的 emit 回环
     entries.value = dictToEntries(newVal);
+    _lastSyncedHash.value = incoming;
   },
   { immediate: true },
 );
 
-/** 仅当外部值与我们产生的新值不同时才重置（版本号） */
+/** 用户在编辑框里修改值：解析展示串回填到 value，再触发一次同步。 */
+function handleValueEdit(index: number) {
+  const entry = entries.value[index];
+  if (!entry) return;
+  entry.value = displayToValue(entry.display);
+  syncToParent();
+}
+
 function syncToParent() {
-  const newHash = entriesHash();
-  if (newHash === _lastSyncedHash.value) return; // 无变化
+  const newHash = canonicalHash(entriesToDict(entries.value));
+  if (newHash === _lastSyncedHash.value) return; // 无变化（包含用户编辑但解析后类型未变的情形）
   _lastSyncedHash.value = newHash;
   emit('update:modelValue', entriesToDict(entries.value));
   emit('change');
 }
 
 function addRow() {
-  entries.value.push({ key: '', value: '' });
+  entries.value.push({ key: '', display: '', value: '' });
   // 不立即同步：空 key 会被 entriesToDict 过滤掉，导致循环清除
   // handleUpdate 由用户输入 key/value 时触发
 }

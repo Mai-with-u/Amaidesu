@@ -25,6 +25,7 @@
         :get-value="getValue"
         :get-original="getOriginal"
         :update-value="updateValue"
+        :get-change-count="getChangeCount"
         :on-toggle="handleToggle"
       />
     </div>
@@ -43,6 +44,8 @@ const props = defineProps<{
   getValue: (key: string) => unknown;
   getOriginal: (key: string) => unknown;
   updateValue: (field: ConfigFieldSchema, value: unknown) => void;
+  /** 透传给 ComponentCard → SubFieldGroup 的子卡片徽标查询函数 */
+  getChangeCount?: (key: string) => number;
 }>();
 
 function emitValue(key: string, value: unknown) {

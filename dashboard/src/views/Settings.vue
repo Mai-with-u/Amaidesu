@@ -97,6 +97,7 @@
                   :get-value="getFieldValue"
                   :get-original="getOriginalValue"
                   :update-value="updateFieldValue"
+                  :get-change-count="getPendingChangeCount"
                 />
               </div>
             </div>
@@ -142,6 +143,7 @@
                   :get-value="getFieldValue"
                   :get-original="getOriginalValue"
                   :update-value="updateFieldValue"
+                  :get-change-count="getPendingChangeCount"
                 />
                 <SubFieldGroup
                   v-else
@@ -149,6 +151,7 @@
                   :get-value="getFieldValue"
                   :get-original="getOriginalValue"
                   :update-value="updateFieldValue"
+                  :get-change-count="getPendingChangeCount"
                 />
               </div>
             </div>
@@ -326,19 +329,50 @@ const globalSearchResults = computed(() => {
   const q = searchQuery.value.toLowerCase();
   const results: { section: ConfigGroupSchema; fields: ConfigFieldSchema[]; file: string }[] = [];
 
+  /**
+   * 递归遍历字段：children 是树形分组，properties 是字典式键值（来自 object 类型）。
+   * 命中即收集；用 seenSet 在「全组」粒度去重，避免嵌套字段被父级和子级同时返回造成重复卡片。
+   */
   for (const group of settingsStore.groups) {
-    const matched = group.fields.filter(
-      f =>
-        f.label.toLowerCase().includes(q) ||
-        f.key.toLowerCase().includes(q) ||
-        (f.description?.toLowerCase().includes(q) ?? false),
-    );
+    const seen = new Set<string>();
+    const matched: ConfigFieldSchema[] = [];
+    collectMatchingFields(group.fields, q, seen, matched);
     if (matched.length > 0) {
       results.push({ section: group, fields: matched, file: group.file_name ?? '' });
     }
   }
   return results;
 });
+
+function fieldMatches(f: ConfigFieldSchema, q: string): boolean {
+  return (
+    f.label.toLowerCase().includes(q) ||
+    f.key.toLowerCase().includes(q) ||
+    (f.description?.toLowerCase().includes(q) ?? false)
+  );
+}
+
+function collectMatchingFields(
+  fields: ConfigFieldSchema[],
+  q: string,
+  seen: Set<string>,
+  out: ConfigFieldSchema[],
+): void {
+  for (const f of fields) {
+    if (!seen.has(f.key) && fieldMatches(f, q)) {
+      seen.add(f.key);
+      out.push(f);
+    } else if (seen.has(f.key)) {
+      // 命中过 key 的父级不再重复收集，但子级分支仍要继续遍历
+    }
+    if (f.children && f.children.length > 0) {
+      collectMatchingFields(f.children, q, seen, out);
+    }
+    if (f.properties) {
+      collectMatchingFields(Object.values(f.properties), q, seen, out);
+    }
+  }
+}
 
 // ── 图标 ──────────────────────────────────────────────────
 function getIcon(iconName?: string) {
@@ -369,6 +403,15 @@ function getFileChangeCount(fileName: string): number {
 // 某个 section 的变更数
 function getSectionChangeCount(sectionKey: string): number {
   return settingsStore.pendingChanges.filter(c => c.key.startsWith(sectionKey + '.')).length;
+}
+
+/**
+ * 子卡片徽标计数：传入任意字段 key，返回其下挂（严格前缀 `key.`）的待保存变更条数。
+ * 子卡片自身若是被修改的叶子，依赖 FieldRenderer 的「已修改」标签；此处只标深层修改。
+ */
+function getPendingChangeCount(key: string): number {
+  const prefix = key + '.';
+  return settingsStore.pendingChanges.filter(c => c.key.startsWith(prefix)).length;
 }
 
 // ── 字段读写 ──────────────────────────────────────────────
