@@ -30,6 +30,7 @@ def _make_planner(
     memory: Any | None = None,
     context_enabled: bool = True,
     max_steps: int = 8,
+    elapsed_live_provider: Any | None = None,
 ) -> tuple[Planner, MagicMock, MagicMock]:
     """构造测试 Planner：mock LLM（chat_messages）+ mock prompt_service。
 
@@ -72,6 +73,7 @@ def _make_planner(
         memory=memory,
         context_enabled=context_enabled,
         reply_provider=prov,
+        elapsed_live_provider=elapsed_live_provider,
     )
     return planner, llm, prompt
 
@@ -377,3 +379,121 @@ async def test_prompt_render_failure_degrades() -> None:
     assert outcome["replied"] is False
     assert outcome["silent_reason"] == "prompt_render_failed"
     assert planner.last_failure is not None and "template missing" in planner.last_failure
+
+
+# ---------------------------------------------------------------------------
+# 直播流渲染：中文角色标签 / 尾部去重 / 字符级 topics 摘除
+# ---------------------------------------------------------------------------
+
+
+def _history_msg(role: str, content: str) -> Any:
+    msg = MagicMock()
+    msg.role = MagicMock(value=role)
+    msg.content = content
+    return msg
+
+
+def test_render_history_chinese_role_labels() -> None:
+    """历史角色渲染为中文标签，不透传 LLM 角色标记。"""
+    history = [
+        _history_msg("user", "来个落地水"),
+        _history_msg("assistant", "好嘞这就来"),
+    ]
+
+    text = Planner._render_history(history)
+
+    assert "观众: 来个落地水" in text
+    assert "主播: 好嘞这就来" in text
+    assert "user:" not in text
+
+
+def test_render_history_tail_dedup_only_strips_trailing_matches() -> None:
+    """尾部与本批同文本的消息剔除；更早的不连续同文保留。"""
+    history = [
+        _history_msg("user", "上次也说过落地水"),
+        _history_msg("user", "来个落地水"),
+        _history_msg("user", "来个落地水"),
+    ]
+
+    text = Planner._render_history(history, exclude_tail_texts={"来个落地水"})
+
+    assert "来个落地水" not in text
+    assert "上次也说过落地水" in text
+
+
+@pytest.mark.asyncio
+async def test_context_dedups_batch_from_history_tail() -> None:
+    """弹幕先落库再决策：直播流窗口内本批弹幕不与历史重复渲染。"""
+    planner, llm, _prompt = _make_planner(chat_responses=[_resp()])
+    history = [
+        _history_msg("user", "大家好呀"),
+        _history_msg("user", "来个落地水"),
+    ]
+
+    await planner.plan([_msg("来个落地水", mid="m9")], history=history)
+
+    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
+    assert user_msg["content"].count("来个落地水") == 1
+    assert "观众: 大家好呀" in user_msg["content"]
+    assert "user:" not in user_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_context_omits_char_level_topics() -> None:
+    """字符级 topics 不进 prompt——不出现"关键变化"段（单字噪声）。"""
+    planner, llm, _prompt = _make_planner(chat_responses=[_resp()])
+    planner._room_state.update(_msg("来个落地水"))
+    planner._room_state.update(_msg("来个落地水"))
+
+    await planner.plan([_msg("来个落地水")])
+
+    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
+    assert "关键变化" not in user_msg["content"]
+
+
+# ---------------------------------------------------------------------------
+# 开播时长：provider 注入 / 未注入与异常降级
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_context_includes_elapsed_live_duration() -> None:
+    """开播时长 provider 提供数据 → 快照渲染分钟级时长。"""
+    planner, llm, _prompt = _make_planner(
+        chat_responses=[_resp()],
+        elapsed_live_provider=lambda: 75 * 60_000,
+    )
+
+    await planner.plan([_msg()])
+
+    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
+    assert "已开播时长: 1 小时 15 分钟" in user_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_context_elapsed_provider_missing_omits_line() -> None:
+    """provider 未注入（未开播语义）→ 快照不含开播时长行。"""
+    planner, llm, _prompt = _make_planner(chat_responses=[_resp()])
+
+    await planner.plan([_msg()])
+
+    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
+    assert "已开播时长" not in user_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_context_elapsed_provider_failure_degrades() -> None:
+    """provider 抛异常 → 降级为 0（省略该行），不阻断决策。"""
+    def _boom() -> int:
+        raise RuntimeError("agenda down")
+
+    planner, llm, _prompt = _make_planner(
+        chat_responses=[_resp()],
+        elapsed_live_provider=_boom,
+    )
+
+    outcome = await planner.plan([_msg()])
+
+    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
+    assert "已开播时长" not in user_msg["content"]
+    assert outcome["silent_reason"] == "natural"

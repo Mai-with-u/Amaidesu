@@ -32,7 +32,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.context.assembler import AssemblerInputs, PlannerAssembler
@@ -66,6 +66,14 @@ _OBSERVATION_MAX_CHARS: int = 2000
 
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
 _DEFAULT_MAX_STEPS: int = 8
+
+#: 会话历史角色 → 直播流渲染标签：直播流是多对一弹幕墙，
+#: 透传 LLM 角色标记（user:/assistant:）会污染 user 消息内的文本结构
+_HISTORY_ROLE_LABELS: Dict[str, str] = {
+    "user": "观众",
+    "assistant": "主播",
+    "system": "系统",
+}
 
 
 class _PlannerConfig(BaseConfig):
@@ -124,6 +132,7 @@ class Planner:
         context_enabled: bool = True,
         behavior_style: str = "",
         reply_provider: Any = None,
+        elapsed_live_provider: Optional[Callable[[], Optional[int]]] = None,
     ) -> None:
         """初始化 Planner。
 
@@ -140,6 +149,8 @@ class Planner:
             behavior_style: 人设行为准则（决策侧）。
             reply_provider: reply 局部工具的 Provider（ReplyToolProvider）；
                 start 前由 StreamerAgent 经 ``bind_reply_provider`` 注入也可。
+            elapsed_live_provider: 整场开播时长查询（``AgendaState.get_elapsed_live_ms``，
+                返回 Unix 毫秒或 None=未开播）；None 时快照不含开播时长行。
         """
         if config is None:
             self.typed_config = _PlannerConfig()
@@ -165,6 +176,7 @@ class Planner:
         self._context_enabled = context_enabled
         self._behavior_style: str = behavior_style or ""
         self._reply_provider = reply_provider
+        self._elapsed_live_provider = elapsed_live_provider
 
         self._assembler = PlannerAssembler()
 
@@ -178,6 +190,10 @@ class Planner:
     def bind_reply_provider(self, provider: Any) -> None:
         """注入 reply 局部工具 Provider（StreamerAgent start 时绑定）。"""
         self._reply_provider = provider
+
+    def bind_elapsed_live_provider(self, provider: Callable[[], Optional[int]]) -> None:
+        """注入开播时长查询（StreamerAgent 构造 AgendaState 后绑定，同 bind 模式）。"""
+        self._elapsed_live_provider = provider
 
     # ==================== 主入口 ====================
 
@@ -358,7 +374,10 @@ class Planner:
         """组装决策上下文块（组装器路径 / 裸消息路径）。"""
         snapshot = self._room_state.get_snapshot()
         danmaku_text = self._render_batch(batch)
-        history_text = self._render_history(history)
+        batch_texts = {
+            (getattr(msg, "text", "") or "").strip() for msg in batch if (getattr(msg, "text", "") or "").strip()
+        }
+        history_text = self._render_history(history, exclude_tail_texts=batch_texts)
 
         recent_chat_parts: List[str] = []
         if history_text and history_text != "（暂无对话历史）":
@@ -371,12 +390,20 @@ class Planner:
             return recent_chat_window
 
         current_ms = now_ms()
+        duration_so_far_ms = 0
+        if self._elapsed_live_provider is not None:
+            try:
+                duration_so_far_ms = int(self._elapsed_live_provider() or 0)
+            except Exception as exc:
+                self.logger.warning(f"读取开播时长失败（按 0 处理，快照省略该行）: {exc}")
+        # key_changes 留空：RoomState.topics 是字符级词频（落库统计口径），
+        # 单字进 prompt 是噪声，话题信息由 unread_summary（LLM 摘要）承载
         env_block = EnvironmentBlock(
             minute_bucket_ms=(current_ms // 60000) * 60000,
-            duration_so_far_ms=0,
+            duration_so_far_ms=duration_so_far_ms,
             current_stage_label=None,
             unread_summary=getattr(snapshot, "topic_summary", "") or "",
-            key_changes=list(getattr(snapshot, "topics", []) or []),
+            key_changes=[],
         )
 
         memory_recall_section = await self._recall_memory(snapshot, batch)
@@ -579,13 +606,27 @@ class Planner:
         return "\n".join(lines)
 
     @staticmethod
-    def _render_history(history: Optional[List[Any]]) -> str:
-        """将会话历史渲染为文本块（``<role>: <content>`` 行；主动发言占位标注 [系统]）。"""
+    def _render_history(history: Optional[List[Any]], exclude_tail_texts: Optional[set] = None) -> str:
+        """将会话历史渲染为直播流文本块（中文角色标签；主动发言占位标注 [系统]）。
+
+        exclude_tail_texts：从尾部剔除与本批弹幕同文本的消息——弹幕先落库
+        再进入决策，窗口内会与本批渲染重复；仅剔尾部连续命中段，更早的同文
+        历史保留（高频弹幕如"666"的更早记录仍是有效上下文）。
+        """
         if not history:
             return "（暂无对话历史）"
 
+        excluded = exclude_tail_texts or set()
+        end = len(history)
+        while end > 0:
+            tail_content = (getattr(history[end - 1], "content", "") or "").strip()
+            if tail_content and tail_content in excluded:
+                end -= 1
+            else:
+                break
+
         lines: List[str] = []
-        for msg in history:
+        for msg in history[:end]:
             role = getattr(msg, "role", None)
             role_str = getattr(role, "value", str(role)) if role else "user"
             content = getattr(msg, "content", "") or ""
@@ -594,5 +635,6 @@ class Planner:
             if role_str == "user" and content.startswith("（主动发言"):
                 lines.append(f"[系统] {content}")
                 continue
-            lines.append(f"{role_str}: {content}")
+            label = _HISTORY_ROLE_LABELS.get(role_str, role_str)
+            lines.append(f"{label}: {content}")
         return "\n".join(lines)

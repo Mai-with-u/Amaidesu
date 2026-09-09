@@ -22,6 +22,7 @@ ContextAssembler —— 纯函数上下文组装
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -169,14 +170,16 @@ class PlannerAssembler(ContextAssembler):
             )
         )
 
-        # 工具定义
-        sections.append(
-            AssembledSection(
-                title="可用工具",
-                body=inputs.tool_definitions_block or "（无）",
-                stability=SectionStability.STABLE,
+        # 工具定义：工具面经 LLM 请求 tools 参数注入（function calling），
+        # 本段只承载可选的人类可读补充；空块时整段省略，不渲染"（无）"占位
+        if inputs.tool_definitions_block:
+            sections.append(
+                AssembledSection(
+                    title="可用工具",
+                    body=inputs.tool_definitions_block,
+                    stability=SectionStability.STABLE,
+                )
             )
-        )
 
         # 环节描述
         sections.append(
@@ -191,7 +194,7 @@ class PlannerAssembler(ContextAssembler):
         sections.append(
             AssembledSection(
                 title="时间线摘要",
-                body=_render_timeline_blocks(inputs.timeline_blocks),
+                body=_render_timeline_blocks(inputs.timeline_blocks) or "（暂无）",
                 stability=SectionStability.STABLE,
             )
         )
@@ -273,12 +276,15 @@ def _render_timeline_blocks(blocks: List[TimelineBlock]) -> str:
 
 
 def _render_environment(env: Optional[EnvironmentBlock]) -> str:
-    """渲染直播间快照。"""
+    """渲染直播间快照（内部毫秒在渲染层转人类可读，数据载体不变）。"""
     if env is None:
         return "（暂无）"
     lines: List[str] = []
-    lines.append(f"- 时刻(分钟级): {env.minute_bucket_ms}ms")
-    lines.append(f"- 已开播时长: {env.duration_so_far_ms}ms")
+    local_time = datetime.fromtimestamp(env.minute_bucket_ms / 1000).strftime("%Y-%m-%d %H:%M")
+    lines.append(f"- 时刻: {local_time}")
+    # 未开播/数据源缺失时为 0，渲染无信息量——跳过而非显示 "0 分钟"
+    if env.duration_so_far_ms > 0:
+        lines.append(f"- 已开播时长: {_format_duration_minutes(env.duration_so_far_ms)}")
     if env.current_stage_label:
         lines.append(f"- 当前环节: {env.current_stage_label}")
     if env.unread_summary:
@@ -288,6 +294,17 @@ def _render_environment(env: Optional[EnvironmentBlock]) -> str:
         for change in env.key_changes:
             lines.append(f"  - {change}")
     return "\n".join(lines)
+
+
+def _format_duration_minutes(ms: int) -> str:
+    """毫秒时长 → 分钟粒度文本（决策场景秒级精度无益）。"""
+    total_minutes = max(0, ms) // 60_000
+    if total_minutes < 1:
+        return "不足 1 分钟"
+    hours, minutes = divmod(total_minutes, 60)
+    if hours:
+        return f"{hours} 小时 {minutes} 分钟"
+    return f"{minutes} 分钟"
 
 
 def _render_working_memory(wm: Optional[WorkingMemoryTrace]) -> str:

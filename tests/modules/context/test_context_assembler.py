@@ -13,6 +13,8 @@ Wave 3 仅测试组装行为；与旧 ContextService 并行共存，不动旧模
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from src.modules.context import (
@@ -214,3 +216,70 @@ def test_context_assembler_is_abstract() -> None:
         pass
     else:
         pytest.fail("基类 assemble 应抛 NotImplementedError")
+
+
+# =============================================================================
+# 渲染修正：空工具块省略 / 空时间线占位 / 快照人类可读
+# =============================================================================
+
+
+def test_planner_assembler_skips_tool_section_when_empty() -> None:
+    """tool_definitions_block 为空 → 不渲染"可用工具"段（工具经 tools 参数注入）。"""
+    planner = PlannerAssembler()
+    snap = planner.assemble(AssemblerInputs(persona="X", agent_kind="planner"))
+    assert "可用工具" not in [sec.title for sec in snap.sections]
+
+    snap_with_tools = planner.assemble(
+        AssemblerInputs(
+            persona="X",
+            tool_definitions_block="- reply: 说话出口",
+            agent_kind="planner",
+        )
+    )
+    assert "可用工具" in [sec.title for sec in snap_with_tools.sections]
+
+
+def test_environment_render_human_readable() -> None:
+    """快照时刻渲染本地日期+分钟；零开播时长不渲染该行；空时间线占位（暂无）。"""
+    planner = PlannerAssembler()
+    snap = planner.assemble(
+        AssemblerInputs(
+            persona="X",
+            environment=EnvironmentBlock(minute_bucket_ms=60_000, duration_so_far_ms=0),
+            agent_kind="planner",
+        )
+    )
+
+    env_section = next(s for s in snap.sections if s.title == "直播间快照")
+    expected_time = datetime.fromtimestamp(60).strftime("%Y-%m-%d %H:%M")
+    assert f"时刻: {expected_time}" in env_section.body
+    assert "ms" not in env_section.body
+    assert "已开播时长" not in env_section.body
+
+    timeline_section = next(s for s in snap.sections if s.title == "时间线摘要")
+    assert timeline_section.body == "（暂无）"
+
+
+def test_environment_duration_rendered_in_minutes() -> None:
+    """开播时长按分钟粒度渲染（秒级精度不进 prompt）。"""
+    planner = PlannerAssembler()
+
+    snap = planner.assemble(
+        AssemblerInputs(
+            persona="X",
+            environment=EnvironmentBlock(minute_bucket_ms=60_000, duration_so_far_ms=75 * 60_000),
+            agent_kind="planner",
+        )
+    )
+    env_section = next(s for s in snap.sections if s.title == "直播间快照")
+    assert "已开播时长: 1 小时 15 分钟" in env_section.body
+
+    snap_sub_minute = planner.assemble(
+        AssemblerInputs(
+            persona="X",
+            environment=EnvironmentBlock(minute_bucket_ms=60_000, duration_so_far_ms=30_000),
+            agent_kind="planner",
+        )
+    )
+    env_sub = next(s for s in snap_sub_minute.sections if s.title == "直播间快照")
+    assert "已开播时长: 不足 1 分钟" in env_sub.body

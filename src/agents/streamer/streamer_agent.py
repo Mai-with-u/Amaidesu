@@ -395,6 +395,8 @@ class StreamerAgent(BaseAgent):
 
         # Agenda 子系统
         self._agenda_state = AgendaState()
+        # Planner 构造早于 AgendaState，开播时长锚点沿用 bind 注入（同 bind_reply_provider）
+        self._planner.bind_elapsed_live_provider(self._agenda_state.get_elapsed_live_ms)
         self._agenda_loader: Optional[AgendaLoader] = None
         self._agenda_idle: Optional[AgendaIdle] = None
 
