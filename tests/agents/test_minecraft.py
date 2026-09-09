@@ -1,7 +1,7 @@
 """MinecraftAgent 测试：工具契约 / ReAct 循环 / 事件 / send_prompt / handoff / 装配"""
 
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -1438,3 +1438,140 @@ async def test_on_start_zero_tools_closes_client_and_skips_register(
     assert registry.list_tools(provider="maicraft") == [], "count=0 时不应注册到 registry"
     assert agent._mcp_client is None, "装配失败的 client 引用应被撤回"
     await agent.stop()
+
+
+class _RecordingSink:
+    def __init__(self) -> None:
+        self.calls: List[Dict[str, Any]] = []
+
+    def on_thinking_delta(self, *, round_id: str, phase: str, step: int, seq: int, text_delta: str) -> None:
+        self.calls.append({"round_id": round_id, "phase": phase, "step": step, "seq": seq, "text_delta": text_delta})
+
+
+class _CapturingToolProvider(BaseToolProvider):
+    """记录每次 ToolInvocation（用于断言任务内 round_id 透传到工具面）。"""
+
+    category = "minecraft"
+    name = "CapturingToolProvider"
+
+    def __init__(self) -> None:
+        self.invocations: List[ToolInvocation] = []
+
+    def list_tools(self) -> List[ToolSpec]:
+        return [
+            ToolSpec(
+                name="minecraft_capture",
+                description="cap",
+                parameters_schema={"type": "object"},
+                kind="sync",
+                provider="minecraft",
+            )
+        ]
+
+    async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        self.invocations.append(invocation)
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True, structured_content={"ok": True})
+
+
+def _build_sink_agent(llm: Any, sink: Optional[Any], capturing: _CapturingToolProvider) -> MinecraftAgent:
+    registry = ToolRegistry()
+    registry.register_provider(capturing)
+
+    from src.modules.mcp.config import McpServerConfig
+
+    return MinecraftAgent(
+        MinecraftConfig(max_steps=5, mcp=McpServerConfig(enabled=False)),
+        llm_manager=llm,
+        event_bus=_make_event_bus(),
+        tool_registry=registry,
+        thinking_sink=sink,
+    )
+
+
+@pytest.mark.asyncio
+async def test_thinking_sink_receives_reasoning_with_minecraft_phase() -> None:
+    """sink 注入后：LLM reasoning delta → sink.on_thinking_delta，phase=minecraft，seq 跨步单调递增；content delta 不转发。"""
+    sink = _RecordingSink()
+    cap = _CapturingToolProvider()
+
+    async def fake(messages, **kwargs):
+        on_delta = kwargs.get("on_delta")
+        if not any(m.get("role") == "tool" for m in messages):
+            if on_delta is not None:
+                on_delta("reasoning", "step1 A")
+                on_delta("content", "step1 content x")
+                on_delta("reasoning", "step1 B")
+            return _resp(tool_calls=[_tool_call("minecraft_capture", {"v": 1}, "c1")])
+        if on_delta is not None:
+            on_delta("reasoning", "step2")
+        return _resp("done")
+
+    llm = _RecordingLlm(fake)
+    agent = _build_sink_agent(llm, sink, cap)
+
+    await agent.start()
+    await agent.send_prompt("两步")
+    await _wait_until(lambda: len(sink.calls) >= 3)
+    await agent.stop()
+
+    by_text = {c["text_delta"]: c for c in sink.calls}
+    assert set(by_text) == {"step1 A", "step1 B", "step2"}
+    assert not any("content" in k for k in by_text)
+    round_ids = {c["round_id"] for c in sink.calls}
+    assert len(round_ids) == 1
+    (rid,) = round_ids
+    assert rid.startswith("mc_") and len(rid) == 3 + 12
+    assert {c["phase"] for c in sink.calls} == {"minecraft"}
+    seqs = [c["seq"] for c in sink.calls]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
+    assert {c["step"] for c in sink.calls} == {1, 2}
+    assert by_text["step1 A"]["step"] == 1 and by_text["step1 B"]["step"] == 1 and by_text["step2"]["step"] == 2
+
+
+@pytest.mark.asyncio
+async def test_thinking_sink_round_id_propagates_to_tool_invocations() -> None:
+    """任务内 ToolInvocation.round_id 与 sink 收到的 round_id 一致——工具卡可关联思考轮。"""
+    sink = _RecordingSink()
+    cap = _CapturingToolProvider()
+
+    async def fake(messages, **kwargs):
+        on_delta = kwargs.get("on_delta")
+        if on_delta is not None:
+            on_delta("reasoning", "思考")
+        if not any(m.get("role") == "tool" for m in messages):
+            return _resp(tool_calls=[_tool_call("minecraft_capture", {"k": "v"}, "c1")])
+        return _resp("done")
+
+    llm = _RecordingLlm(fake)
+    agent = _build_sink_agent(llm, sink, cap)
+
+    await agent.start()
+    await agent.send_prompt("cap")
+    await _wait_until(lambda: len(cap.invocations) >= 1 and len(sink.calls) >= 1)
+    await agent.stop()
+
+    inv = cap.invocations[0]
+    assert inv.round_id == sink.calls[0]["round_id"]
+    assert inv.round_id.startswith("mc_")
+
+
+@pytest.mark.asyncio
+async def test_thinking_sink_none_keeps_existing_behavior() -> None:
+    """sink=None 时：on_delta 为 None（不触发任何 sink 方法），ToolInvocation.round_id 保持空串。"""
+    cap = _CapturingToolProvider()
+
+    async def fake(messages, **kwargs):
+        assert kwargs.get("on_delta") is None
+        if not any(m.get("role") == "tool" for m in messages):
+            return _resp(tool_calls=[_tool_call("minecraft_capture", {"k": "v"}, "c1")])
+        return _resp("done")
+
+    llm = _RecordingLlm(fake)
+    agent = _build_sink_agent(llm, None, cap)
+
+    await agent.start()
+    await agent.send_prompt("cap")
+    await _wait_until(lambda: len(cap.invocations) >= 1)
+    await agent.stop()
+
+    assert cap.invocations[0].round_id == ""

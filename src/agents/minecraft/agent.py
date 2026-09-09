@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
@@ -132,6 +133,7 @@ class MinecraftAgent(BaseAgent):
         event_bus: Optional[EventBus] = None,
         tool_registry: Optional[ToolRegistry] = None,
         live_session_id: str = "",
+        thinking_sink: Optional[Any] = None,
     ) -> None:
         """初始化 Minecraft Agent。
 
@@ -143,6 +145,9 @@ class MinecraftAgent(BaseAgent):
             event_bus: 可选 EventBus（emit game.* 事件）
             tool_registry: 可选 ToolRegistry（注册 Agent 专属工具 + 动态发现 MCP 工具）
             live_session_id: 场次 ID（写入 game.* 事件 payload）
+            thinking_sink: 可选思考流旁路出口（鸭子类型：任何带
+                ``on_thinking_delta(round_id, phase, step, seq, text_delta)`` 方法的对象）。
+                ``None`` 时思考流整体短路，决策循环行为与无旁路完全一致。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -152,6 +157,7 @@ class MinecraftAgent(BaseAgent):
         self._event_bus = event_bus
         self._tool_registry = tool_registry
         self._live_session_id = live_session_id or "minecraft_session"
+        self._thinking_sink = thinking_sink
 
         # Agent 内部状态（内存，不持久化）
         self._mc_state: MinecraftAgentState = MinecraftAgentState()
@@ -396,6 +402,8 @@ class MinecraftAgent(BaseAgent):
         ]
 
         steps = 0
+        mc_round = f"mc_{uuid.uuid4().hex[:12]}" if self._thinking_sink is not None else ""
+        mc_seq_box = [0]
         while self._running and steps < self.typed_config.max_steps:
             steps += 1
 
@@ -410,11 +418,13 @@ class MinecraftAgent(BaseAgent):
             self._compact_observations(messages)
 
             # --- LLM 推理 ---
+            on_delta = self._build_thinking_callback(mc_round, steps, mc_seq_box) if mc_round else None
             try:
                 response = await self._llm.chat_messages(
                     messages=messages,
                     client_type=self._llm_profile,
                     tools=tool_defs,
+                    on_delta=on_delta,
                 )
             except asyncio.CancelledError:
                 raise
@@ -467,7 +477,7 @@ class MinecraftAgent(BaseAgent):
                 if not isinstance(arguments, dict):
                     arguments = {}
 
-                observation = await self._execute_tool(name, arguments)
+                observation = await self._execute_tool(name, arguments, round_id=mc_round)
                 await self._register_handoff_from_receipt(observation)
                 messages.append(
                     {
@@ -508,8 +518,13 @@ class MinecraftAgent(BaseAgent):
                     "content": "[观察已压缩]",
                 }
 
-    async def _execute_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """串行执行单个工具调用：局部工具直调 provider；其余经 registry 透传。"""
+    async def _execute_tool(self, name: str, arguments: Dict[str, Any], *, round_id: str = "") -> Dict[str, Any]:
+        """串行执行单个工具调用：局部工具直调 provider；其余经 registry 透传。
+
+        ``round_id`` 任务内 ReAct 轮 ID（思考流旁路同轮）；经 ToolInvocation
+        透传到 tool.result 事件，供 WebUI 工具卡关联思考轮。无任务上下文
+        的调用（如 handoff watcher）保持空串。
+        """
         bare_name = name
         if "_" in name:
             prov, _, tail = name.partition("_")
@@ -517,7 +532,7 @@ class MinecraftAgent(BaseAgent):
                 bare_name = tail
         if bare_name in _LOCAL_TOOL_NAMES and self._tool_provider is not None:
             result = await self._tool_provider.invoke(
-                ToolInvocation(tool_name=bare_name, arguments=arguments, source="minecraft-react")
+                ToolInvocation(tool_name=bare_name, arguments=arguments, source="minecraft-react", round_id=round_id)
             )
             if result.success:
                 return result.structured_content if isinstance(result.structured_content, dict) else {"ok": True}
@@ -525,12 +540,37 @@ class MinecraftAgent(BaseAgent):
 
         if self._tool_registry is not None:
             result = await self._tool_registry.invoke(
-                ToolInvocation(tool_name=name, arguments=arguments, source="minecraft-react")
+                ToolInvocation(tool_name=name, arguments=arguments, source="minecraft-react", round_id=round_id)
             )
             if result.success:
                 return result.structured_content if isinstance(result.structured_content, dict) else {"ok": True}
             return {"ok": False, "error": result.error_message or "工具执行失败", "tool": name}
         return {"ok": False, "error": "工具执行失败：tool_registry 未注入", "tool": name}
+
+    def _build_thinking_callback(self, round_id: str, step: int, seq_box: List[int]) -> Any:
+        """构造 LLM 层增量回调（duck-typed sink），只转发 reasoning 增量。
+
+        自足实现：不在此 import streamer 包的内脏 ThinkingStreamContext——
+        跨 Agent import 违反边界（ADR-008：Protocol 鸭子匹配）。seq_box
+        是 list 包装以实现闭包内计数自增（list[0]=... 不需 nonlocal）。
+        """
+        sink = self._thinking_sink
+        if sink is None:
+            return None
+
+        def _on_delta(kind: str, text_delta: str) -> None:
+            if kind != "reasoning" or not text_delta:
+                return
+            seq_box[0] += 1
+            sink.on_thinking_delta(
+                round_id=round_id,
+                phase="minecraft",
+                step=step,
+                seq=seq_box[0],
+                text_delta=text_delta,
+            )
+
+        return _on_delta
 
     # ==================================================================
     # handoff 跟踪（execute 受理 → 订阅/兜底核实 → 真迁移注入唤醒）

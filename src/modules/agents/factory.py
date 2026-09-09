@@ -31,12 +31,17 @@ def instantiate_agent(
     tool_registry: Any = None,
     memory: Any = None,
     persona_provider: Optional[Any] = None,
+    thinking_sink: Optional[Any] = None,
 ) -> Optional[BaseAgent]:
     """按名实例化 Agent；未知名字返回 None。
 
     ``persona_provider`` 关键字参数透传给 StreamerAgent；装配根从
     ``config_service.get_section("persona")`` 拉取 persona dict 传入，
     缺省 None 时 StreamerAgent 走 ``_DEFAULT_*`` 兜底。
+
+    ``thinking_sink`` 关键字参数透传给 StreamerAgent 与 MinecraftAgent
+    （鸭子类型：任何带 ``on_thinking_delta`` 方法的对象）；缺省 None 时
+    两 Agent 的思考流旁路整体短路，决策循环行为与无旁路完全一致。
     """
     config = config if isinstance(config, dict) else {}
 
@@ -59,6 +64,7 @@ def instantiate_agent(
             tool_registry=tool_registry,
             memory=memory,
             persona_provider=persona_provider,
+            thinking_sink=thinking_sink,
         )
 
     if name == "minecraft":
@@ -80,6 +86,7 @@ def instantiate_agent(
             prompt_manager=prompt_manager,
             event_bus=event_bus,
             tool_registry=tool_registry,
+            thinking_sink=thinking_sink,
         )
 
     if name == "text_adv":

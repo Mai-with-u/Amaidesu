@@ -914,6 +914,7 @@ async def _register_agents_from_config(
                     event_bus=event_bus,
                     tool_registry=tool_registry,
                     live_session_id=_LIVE_SESSION_ID,
+                    thinking_sink=thinking_sink,
                 )
                 manager.register(
                     minecraft_agent,
