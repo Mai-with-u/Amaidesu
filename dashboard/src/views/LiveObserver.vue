@@ -109,7 +109,7 @@
             <span v-if="agenda.expectedLabel" class="slate-meta mono">
               预计 {{ agenda.expectedLabel }}
             </span>
-            <span class="slate-meta mono">{{ relativeTime(agenda.changedAtSec) }}</span>
+            <span class="slate-meta mono">{{ relativeTime(nowSec, agenda.changedAtSec) }}</span>
           </template>
           <span v-else class="slate-idle">节目单未运行或未接入</span>
         </section>
@@ -179,189 +179,16 @@
 
           <div class="stage-body">
             <div ref="scrollRef" class="stage-scroll" @scroll.passive="onScroll">
-              <div v-if="entries.length === 0" class="stage-empty">
-                <el-icon class="stage-empty-icon"><Monitor /></el-icon>
-                <p class="stage-empty-text">
-                  {{
-                    sessionMode === 'live'
-                      ? '静候消息与决策——注入一条弹幕试试'
-                      : '该场次暂无可回看条目'
-                  }}
-                </p>
-              </div>
-
-              <ol v-else class="feed">
-                <li v-for="entry in entries" :key="entry.id" class="feed-row">
-                  <!-- 环节推进 / 场次边界：横贯分隔行 -->
-                  <div v-if="entry.kind === 'agenda' || entry.kind === 'boundary'" class="beat">
-                    <span class="beat-rule" aria-hidden="true" />
-                    <span class="beat-body">
-                      <span class="beat-eyebrow">{{
-                        entry.kind === 'boundary' ? '场次' : '环节'
-                      }}</span>
-                      <span class="beat-label">{{ entry.text }}</span>
-                      <span v-if="entry.badge" class="beat-action">{{ entry.badge }}</span>
-                      <span v-if="entry.note" class="beat-note">{{ entry.note }}</span>
-                    </span>
-                    <span class="beat-rule" aria-hidden="true" />
-                    <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
-                  </div>
-
-                  <!-- 里程碑：庆祝行 -->
-                  <div v-else-if="entry.kind === 'milestone'" class="milestone">
-                    <span class="milestone-mark" aria-hidden="true">★</span>
-                    <div class="milestone-body">
-                      <p class="milestone-text">{{ entry.text }}</p>
-                      <p v-if="entry.note" class="milestone-meta mono">{{ entry.note }}</p>
-                    </div>
-                    <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
-                  </div>
-
-                  <!-- 阶段状态：安静单行（决策管线在做什么/卡在哪） -->
-                  <div v-else-if="entry.kind === 'stage'" class="whisper">
-                    <span class="whisper-dot" aria-hidden="true" />
-                    <span class="whisper-text" :class="{ 'is-running': entry.speak }">
-                      {{ entry.text }}<template v-if="entry.note"> · {{ entry.note }}</template>
-                    </span>
-                    <span class="grow" />
-                    <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
-                  </div>
-
-                  <!-- 进场：安静单行 -->
-                  <div v-else-if="entry.kind === 'enter'" class="whisper">
-                    <span class="whisper-dot" aria-hidden="true" />
-                    <span class="whisper-text">{{ entry.text }}</span>
-                    <span class="grow" />
-                    <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
-                  </div>
-
-                  <!-- 决策卡：verdict（实时裁决）+ decision（沉默/失败轮或统计回填后）共用 -->
-                  <div
-                    v-else-if="entry.kind === 'decision' || entry.kind === 'verdict'"
-                    class="decision"
-                    :class="{ 'is-failed': entry.failed, 'is-silent': isSilentDecision(entry) }"
-                  >
-                    <div class="act-head">
-                      <span class="act-kind">决策</span>
-                      <code v-if="entry.roundId" class="d-round mono">{{ entry.roundId }}</code>
-                      <span v-if="confidenceLabel(entry)" class="d-conf mono">{{
-                        confidenceLabel(entry)
-                      }}</span>
-                      <span
-                        v-if="entry.badge"
-                        class="act-badge"
-                        :class="{ 'is-silent-badge': isSilentDecision(entry) }"
-                      >
-                        {{ entry.badge }}
-                      </span>
-                      <span class="grow" />
-                      <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
-                    </div>
-                    <div v-if="entry.replyTo" class="reply-quote">
-                      <template v-if="replyQuoteOf(entry)">
-                        <span class="reply-quote-name">{{ replyQuoteOf(entry)!.actor }}</span>
-                        <span class="reply-quote-text">{{ replyQuoteOf(entry)!.text }}</span>
-                      </template>
-                      <span v-else class="reply-quote-fallback">回复了一条弹幕</span>
-                    </div>
-                    <p class="act-text">{{ entry.text }}</p>
-                    <p v-if="guidanceOf(entry)" class="d-guidance">{{ guidanceOf(entry) }}</p>
-                    <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
-                    <div class="d-meta">
-                      <span v-if="batchSizeOf(entry) > 0" class="mono"
-                        >批次 {{ batchSizeOf(entry) }} 条</span
-                      >
-                      <span v-if="plannerMsOf(entry)" class="mono"
-                        >决策 {{ plannerMsOf(entry) }}ms</span
-                      >
-                      <span v-if="replyMsOf(entry)" class="mono"
-                        >生成 {{ replyMsOf(entry) }}ms</span
-                      >
-                      <a
-                        v-if="entry.llmRequestId"
-                        class="d-link"
-                        :href="`/llm/history?request_id=${encodeURIComponent(entry.llmRequestId)}`"
-                        @click.stop
-                      >
-                        完整请求 ↗
-                      </a>
-                      <details v-if="plannerThinkingOf(entry.roundId)" class="d-thinking">
-                        <summary>思考过程</summary>
-                        <p
-                          v-for="seg in plannerThinkingOf(entry.roundId)"
-                          :key="seg.step"
-                          class="d-thinking-phase"
-                        >
-                          <span class="d-thinking-tag">Planner · 步骤 {{ seg.step }}</span>
-                          <span class="mono">{{ seg.text }}</span>
-                        </p>
-                      </details>
-                      <details v-if="rawOf(entry)" class="d-raw">
-                        <summary>原始输出</summary>
-                        <pre class="mono">{{ rawOf(entry) }}</pre>
-                      </details>
-                    </div>
-                  </div>
-
-                  <!-- 工具调用卡（tool.result.*）：来源徽标在右侧（主播决策 / 游戏 Agent） -->
-                  <div
-                    v-else-if="entry.kind === 'tool'"
-                    class="act"
-                    :class="{ 'is-failed': entry.failed, 'is-speak': entry.speak }"
-                  >
-                    <div class="act-head">
-                      <span class="act-kind">工具调用</span>
-                      <code class="act-tool mono">{{ entry.actor }}</code>
-                      <span class="act-arrow" aria-hidden="true">→</span>
-                      <span v-if="entry.badge" class="act-badge">{{ entry.badge }}</span>
-                      <span class="grow" />
-                      <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
-                    </div>
-                    <p class="act-text">{{ entry.text }}</p>
-                    <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
-                  </div>
-
-                  <!-- 主播发言（streamer.speech）：表达语义 + Replyer 思考回看 -->
-                  <div v-else-if="entry.kind === 'speech'" class="act is-speech">
-                    <div class="act-head">
-                      <span class="act-kind act-kind--speech">主播</span>
-                      <span v-if="entry.note" class="act-emotion">{{ entry.note }}</span>
-                      <span class="grow" />
-                      <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
-                    </div>
-                    <div v-if="entry.replyTo" class="reply-quote">
-                      <template v-if="replyQuoteOf(entry)">
-                        <span class="reply-quote-name">{{ replyQuoteOf(entry)!.actor }}</span>
-                        <span class="reply-quote-text">{{ replyQuoteOf(entry)!.text }}</span>
-                      </template>
-                      <span v-else class="reply-quote-fallback">回复了一条弹幕</span>
-                    </div>
-                    <p class="act-text">🎤 {{ entry.text }}</p>
-                    <details v-if="replyerThinkingOf(entry.roundId)" class="d-thinking">
-                      <summary>生成思考</summary>
-                      <p class="d-thinking-phase">
-                        <span class="d-thinking-tag">Replyer</span>
-                        <span class="mono">{{ replyerThinkingOf(entry.roundId) }}</span>
-                      </p>
-                    </details>
-                  </div>
-
-                  <!-- 观众发声：弹幕 / 礼物 / SC -->
-                  <div v-else class="chat" :class="`chat--${entry.kind}`">
-                    <span class="avatar" aria-hidden="true">{{ entry.initial }}</span>
-                    <div class="bubble">
-                      <div class="bubble-head">
-                        <span class="who" :title="entry.actor">{{ entry.actor }}</span>
-                        <span v-if="entry.badge" class="chip">{{ entry.badge }}</span>
-                        <span v-if="entry.money" class="money mono">{{ entry.money }}</span>
-                        <span class="grow" />
-                        <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
-                      </div>
-                      <p class="say">{{ entry.text }}</p>
-                    </div>
-                  </div>
-                </li>
-              </ol>
+              <FeedTimeline
+                :entries="entries"
+                :planner-thinking="plannerThinkingOf"
+                :replyer-thinking="replyerThinkingOf"
+                :empty-text="
+                  sessionMode === 'live'
+                    ? '静候消息与决策——注入一条弹幕试试'
+                    : '该场次暂无可回看条目'
+                "
+              />
 
               <!-- 活动思考区：当前步骤的 reasoning 实时滚动（与工具卡时间交织） -->
               <div v-if="activeThinking && sessionMode === 'live'" class="thinking-live">
@@ -439,33 +266,36 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Monitor } from '@element-plus/icons-vue';
 import { useEventsStore, useWebSocketStore } from '@/stores';
 import { debugApi, liveSessionsApi, simulatorApi, streamerApi } from '@/api';
-import { summarizeEvent } from '@/utils/eventSummary';
+import {
+  AGENDA_ACTION_LABEL,
+  STAGE_LABEL,
+  MAX_ENTRIES,
+  buildLiveEntries,
+  bool,
+  formatAmount,
+  fromDecision,
+  fromStage,
+  isRecord,
+  makeEntry,
+  num,
+  relativeTime,
+  str,
+  toSeconds,
+  type FeedEvent,
+  type ShowEntry,
+  type ThinkingStep,
+} from '@/utils/liveFeed';
+import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import type { LiveSessionItem, ThinkingDelta, WebSocketMessage } from '@/types';
 
 // ============================================================
 // 常量
 // ============================================================
 
-const MAX_ENTRIES = 400;
 /** 距底 ≤ 此距离视为"贴底"，可自动跟随 */
 const BOTTOM_THRESHOLD_PX = 40;
-/** 结果载荷里可作"主播说了什么"的字段候选（按优先级） */
-const TOOL_TEXT_KEYS = ['speech_text', 'text', 'speech', 'content', 'message', 'summary'] as const;
-
-const AGENDA_ACTION_LABEL: Record<string, string> = {
-  done: '已完成',
-  schedule: '已改期',
-  insert: '新增环节',
-};
-
-const STAGE_LABEL: Record<string, string> = {
-  planning: '决策中',
-  replying: '生成中',
-  idle: '空闲',
-};
 
 const SOURCE_LABEL: Record<string, string> = {
   manual: '手动',
@@ -476,55 +306,6 @@ const SOURCE_LABEL: Record<string, string> = {
 // ============================================================
 // 类型
 // ============================================================
-
-type EntryKind =
-  | 'danmaku'
-  | 'gift'
-  | 'super_chat'
-  | 'enter'
-  | 'speech'
-  | 'tool'
-  | 'agenda'
-  | 'milestone'
-  | 'verdict'
-  | 'decision'
-  | 'stage'
-  | 'boundary';
-
-/** 事件缓冲条目：events store 在 WebSocketMessage 上补了去重 id */
-type FeedEvent = WebSocketMessage & { id: string };
-
-/** 时间线条目（view-ready，模板不再碰原始 payload） */
-interface ShowEntry {
-  id: string;
-  kind: EntryKind;
-  /** Unix 秒（后端事件 timestamp 为秒，毫秒亦兼容） */
-  tsSec: number;
-  /** 观众昵称 / 工具名 / 环节名 */
-  actor: string;
-  /** 主体文案 */
-  text: string;
-  /** 次要文案（错误信息 / 环节备注 / 游戏场景 / 阶段补充） */
-  note: string;
-  /** 类型徽标（礼物 / SC / 失败 / 回应 / 沉默 / 环节动作） */
-  badge: string;
-  /** 金额强调（¥50） */
-  money: string;
-  failed: boolean;
-  speak: boolean;
-  /** 头像首字 */
-  initial: string;
-  /** 决策轮次 ID（planner.decision；发言/工具结果经它成组） */
-  roundId: string;
-  /** 回复关联键（所回复弹幕的 message_id） */
-  replyTo: string;
-  /** 观众消息自身 ID（弹幕 / SC / 礼物；enter 为空）。决策/发言卡通过 replyTo 反查本字段定位被回复弹幕 */
-  messageId: string;
-  /** 决策卡附加字段（置信度/耗时/原始输出/请求历史指针等） */
-  detail: Record<string, unknown> | null;
-  /** LLM 请求历史指针（决策卡"完整请求"链接） */
-  llmRequestId: string;
-}
 
 interface AgendaBanner {
   order: number;
@@ -541,11 +322,6 @@ interface AgendaBanner {
 // ============================================================
 
 const THINKING_ROUNDS_MAX = 20;
-/** 单步思考段 */
-interface ThinkingStep {
-  step: number;
-  text: string;
-}
 /** 每决策轮的思考聚合：planner 按步骤分段（与工具卡时间交织），replyer 独立一段。
  * plannerDone/replyerDone 分别由 verdict（裁决落地）与 speech（发言落地）驱动 */
 interface ThinkingRound {
@@ -662,33 +438,8 @@ watch(wsConnected, (connected, previous) => {
 });
 
 // ============================================================
-// 通用取值助手
+// 通用取值助手（侧栏时钟/时长；事件→条目取值助手见 utils/liveFeed.ts）
 // ============================================================
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function str(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function num(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function bool(value: unknown): boolean {
-  return value === true;
-}
-
-/** 时间戳归一到 Unix 秒（后端为秒；毫秒值兜底换算） */
-function toSeconds(value: number): number {
-  return value > 1e12 ? value / 1000 : value;
-}
-
-function formatAmount(amount: number): string {
-  return Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
-}
 
 function clockLabel(ms: number): string {
   return new Date(ms).toLocaleTimeString('zh-CN', {
@@ -707,331 +458,10 @@ function durationLabel(ms: number): string {
   return rest > 0 ? `${hours}h${rest}m` : `${hours}h`;
 }
 
-function pickToolText(result: unknown): string {
-  if (!isRecord(result)) return '';
-  for (const key of TOOL_TEXT_KEYS) {
-    const text = str(result[key]);
-    if (text) return text;
-  }
-  return '';
-}
-
-/** RoomMessageUser → 展示名（与 summarizeEvent 的取名口径一致） */
-function userLabel(value: unknown): string {
-  if (!isRecord(value)) return '匿名观众';
-  const name = str(value.name);
-  if (name) return name;
-  const id = str(value.id);
-  return id ? `#${id}` : '匿名观众';
-}
-
-function initialOf(actor: string): string {
-  const chars = Array.from(actor.replace(/^#/, ''));
-  return chars.length > 0 ? chars[0].toUpperCase() : '?';
-}
-
 // ============================================================
-// 事件 → 时间线条目
+// 事件 → 时间线条目（折叠规则与取值助手统一在 utils/liveFeed.ts；
+// 回看时间线仍按条目类型直接调 makeEntry / fromDecision / fromStage）
 // ============================================================
-
-function makeEntry(base: {
-  id: string;
-  kind: EntryKind;
-  tsSec: number;
-  actor?: string;
-  text: string;
-  note?: string;
-  badge?: string;
-  money?: string;
-  failed?: boolean;
-  speak?: boolean;
-  roundId?: string;
-  replyTo?: string;
-  messageId?: string;
-  detail?: Record<string, unknown> | null;
-  llmRequestId?: string;
-}): ShowEntry {
-  const actor = base.actor ?? '';
-  return {
-    id: base.id,
-    kind: base.kind,
-    tsSec: base.tsSec,
-    actor,
-    text: base.text,
-    note: base.note ?? '',
-    badge: base.badge ?? '',
-    money: base.money ?? '',
-    failed: base.failed ?? false,
-    speak: base.speak ?? false,
-    initial: initialOf(actor),
-    roundId: base.roundId ?? '',
-    replyTo: base.replyTo ?? '',
-    messageId: base.messageId ?? '',
-    detail: base.detail ?? null,
-    llmRequestId: base.llmRequestId ?? '',
-  };
-}
-
-/** 观众行为流：room.message（RoomMessagePayload 扁平载荷，message_type 判别） */
-function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const tsSec = toSeconds(event.timestamp);
-  const actor = userLabel(data.user);
-  const content = str(data.content);
-  const fallback = () => content || summarizeEvent(event.type, data);
-  const messageType = str(data.message_type) || 'danmaku';
-  const messageId = str(data.message_id);
-
-  if (messageType === 'gift') {
-    const gift = isRecord(data.gift) ? data.gift : null;
-    const giftName = gift ? str(gift.name) : '';
-    const count = (gift ? num(gift.count) : null) ?? 1;
-    return makeEntry({
-      id: event.id,
-      kind: 'gift',
-      tsSec,
-      actor,
-      text: giftName ? `送出 ${giftName} ×${count}` : fallback(),
-      badge: '礼物',
-      messageId,
-    });
-  }
-
-  if (messageType === 'super_chat') {
-    const sc = isRecord(data.sc) ? data.sc : null;
-    const amount = sc ? num(sc.amount) : null;
-    return makeEntry({
-      id: event.id,
-      kind: 'super_chat',
-      tsSec,
-      actor,
-      text: fallback(),
-      badge: 'SC',
-      money: amount != null ? `¥${formatAmount(amount)}` : '',
-      messageId,
-    });
-  }
-
-  if (messageType === 'enter') {
-    return makeEntry({
-      id: event.id,
-      kind: 'enter',
-      tsSec,
-      actor,
-      text: `${actor} 进入直播间`,
-    });
-  }
-
-  return makeEntry({
-    id: event.id,
-    kind: 'danmaku',
-    tsSec,
-    actor,
-    text: fallback(),
-    messageId,
-  });
-}
-
-/** 主播动作：tool.result.*（ToolResultPayload）；按 caller_source 区分归属 Agent */
-function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const toolName = str(data.tool_name) || event.type.slice('tool.result.'.length) || 'tool';
-  const status = str(data.status);
-  const failed = status === 'error';
-  const spoken = pickToolText(data.result);
-  const statusText = status ? (failed ? '执行失败' : '执行完成') : '';
-  const source = str(data.caller_source);
-  const caller =
-    source === 'planner-react' ? '主播决策' : source === 'minecraft-react' ? '游戏 Agent' : source;
-  return makeEntry({
-    id: event.id,
-    kind: 'tool',
-    tsSec: toSeconds(event.timestamp),
-    actor: toolName,
-    text: spoken || statusText || summarizeEvent(event.type, data),
-    note: failed ? str(data.error_message) : '',
-    badge: failed ? '失败' : caller,
-    failed,
-    speak: toolName === 'speak',
-    roundId: str(data.round_id),
-  });
-}
-
-/** 主播发言：streamer.speech（StreamerSpeechPayload） */
-function fromSpeech(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const emotion = str(data.emotion);
-  return makeEntry({
-    id: event.id,
-    kind: 'speech',
-    tsSec: toSeconds(event.timestamp),
-    actor: '主播',
-    text: str(data.text) || summarizeEvent(event.type, data),
-    note: emotion,
-    speak: true,
-    replyTo: str(data.reply_to_message_id),
-    roundId: str(data.round_id),
-  });
-}
-
-/** 决策记录：planner.decision（PlannerDecisionPayload）。
- * 决策卡只承载裁决语义（决定回应什么话题/为何沉默）；发言文本由 streamer.speech 发言卡承载 */
-function fromDecision(id: string, tsSec: number, data: Record<string, unknown>): ShowEntry {
-  const error = str(data.error);
-  const shouldReply = bool(data.should_reply);
-  const silentReason = str(data.silent_reason);
-  const badge = error ? '失败' : shouldReply ? '回应' : silentReason ? '静默·压制' : '沉默';
-  const text = error
-    ? error
-    : shouldReply
-      ? str(data.topic_summary) || '决定发言'
-      : silentReason === 'low_confidence'
-        ? 'LLM 想回应，但置信度过低——被裁决压制为静默'
-        : str(data.topic_summary)
-          ? `决定不回应（${str(data.topic_summary)}）`
-          : '决定不回应';
-  const note = shouldReply && !error ? '' : error ? '' : str(data.error_message);
-  return makeEntry({
-    id,
-    kind: 'decision',
-    tsSec,
-    actor: '决策',
-    text,
-    note,
-    badge,
-    failed: Boolean(error),
-    roundId: str(data.round_id),
-    replyTo: str(data.reply_to_message_id),
-    detail: data,
-    llmRequestId: str(data.llm_request_id),
-  });
-}
-
-/** 裁决卡：planner.verdict（reply 调用时刻的即时裁决；轮末 decision 按轮回填统计） */
-function fromVerdict(id: string, tsSec: number, data: Record<string, unknown>): ShowEntry {
-  return makeEntry({
-    id,
-    kind: 'verdict',
-    tsSec,
-    actor: '决策',
-    text: str(data.topic_summary) || '决定发言',
-    badge: '回应',
-    roundId: str(data.round_id),
-    replyTo: str(data.reply_to_message_id),
-    detail: data,
-  });
-}
-
-/** 阶段状态：streamer.stage（StreamerStagePayload） */
-function fromStage(id: string, tsSec: number, data: Record<string, unknown>): ShowEntry {
-  const stage = str(data.stage);
-  const running = str(data.agent_state) === 'running';
-  const label = STAGE_LABEL[stage] ?? (stage || '阶段变化');
-  return makeEntry({
-    id,
-    kind: 'stage',
-    tsSec,
-    text: `阶段：${label}`,
-    note: str(data.detail),
-    speak: running,
-  });
-}
-
-/** 场次边界：live.started / live.ended */
-function fromLiveBoundary(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const started = event.type === 'live.started';
-  const title = str(data.title);
-  const reason = str(data.reason);
-  return makeEntry({
-    id: event.id,
-    kind: 'boundary',
-    tsSec: toSeconds(event.timestamp),
-    text: started ? '场次开启' : '场次结束',
-    badge: started ? str(data.source) : bool(data.empty_discarded) ? '空场次已丢弃' : '',
-    note: title || reason,
-  });
-}
-
-/** 环节推进：agenda.update（AgendaPayload） */
-function fromAgenda(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const item = isRecord(data.item) ? data.item : {};
-  const action = str(data.action);
-  return makeEntry({
-    id: event.id,
-    kind: 'agenda',
-    tsSec: toSeconds(event.timestamp),
-    text: str(item.label) || summarizeEvent(event.type, data) || '未命名环节',
-    note: str(item.note),
-    badge: AGENDA_ACTION_LABEL[action] ?? action,
-  });
-}
-
-/** 里程碑：game.milestone（GamePayload） */
-function fromMilestone(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const meta = [str(data.game), str(data.scene)].filter(Boolean).join(' · ');
-  return makeEntry({
-    id: event.id,
-    kind: 'milestone',
-    tsSec: toSeconds(event.timestamp),
-    text: str(data.message) || summarizeEvent(event.type, data),
-    note: meta,
-  });
-}
-
-/** 非控制台事件（system.* 等）返回 null，不进时间线 */
-function toEntry(event: FeedEvent): ShowEntry | null {
-  const data = isRecord(event.data) ? event.data : {};
-  // WS 广播把 4 种 room.message.* 统一为 "room.message"，种类由 payload.message_type 判别
-  if (event.type === 'room.message') return fromRoomMessage(event, data);
-  if (event.type === 'streamer.speech') return fromSpeech(event, data);
-  if (event.type === 'planner.verdict')
-    return fromVerdict(event.id, toSeconds(event.timestamp), data);
-  if (event.type === 'planner.decision')
-    return fromDecision(event.id, toSeconds(event.timestamp), data);
-  if (event.type === 'streamer.stage') return fromStage(event.id, toSeconds(event.timestamp), data);
-  if (event.type === 'live.started' || event.type === 'live.ended')
-    return fromLiveBoundary(event, data);
-  if (event.type.startsWith('tool.result.')) return fromToolResult(event, data);
-  if (event.type === 'agenda.update') return fromAgenda(event, data);
-  if (event.type === 'game.milestone') return fromMilestone(event, data);
-  return null;
-}
-
-// ============================================================
-// 决策卡取值助手（detail 字段安全读取）
-// ============================================================
-
-function decisionDetail(entry: ShowEntry): Record<string, unknown> {
-  return isRecord(entry.detail) ? entry.detail : {};
-}
-
-function isSilentDecision(entry: ShowEntry): boolean {
-  const detail = decisionDetail(entry);
-  return !bool(detail.should_reply) && !entry.failed;
-}
-
-function confidenceLabel(entry: ShowEntry): string {
-  const value = num(decisionDetail(entry).confidence);
-  return value != null ? `置信 ${value.toFixed(2)}` : '';
-}
-
-function guidanceOf(entry: ShowEntry): string {
-  return str(decisionDetail(entry).reply_guidance);
-}
-
-function batchSizeOf(entry: ShowEntry): number {
-  const batch = decisionDetail(entry).batch;
-  return Array.isArray(batch) ? batch.length : 0;
-}
-
-function plannerMsOf(entry: ShowEntry): number | null {
-  return num(decisionDetail(entry).planner_duration_ms);
-}
-
-function replyMsOf(entry: ShowEntry): number | null {
-  return num(decisionDetail(entry).reply_duration_ms);
-}
-
-function rawOf(entry: ShowEntry): string {
-  return str(decisionDetail(entry).planner_raw);
-}
 
 // ============================================================
 // 场次侧边栏：列表 / 生命周期 / 回看
@@ -1298,33 +728,7 @@ watch(
   [events, paused, hiddenIds],
   ([list, isPaused, hidden]) => {
     if (isPaused) return;
-    const next: ShowEntry[] = [];
-    // 轮次 → 已渲染的裁决卡；decision 到达时把统计回填进裁决卡而非新增重复卡
-    const verdictByRound = new Map<string, ShowEntry>();
-    for (const event of list) {
-      if (hidden.has(event.id)) continue;
-      const entry = toEntry(event as FeedEvent);
-      if (!entry) continue;
-      if (entry.kind === 'verdict' && entry.roundId) {
-        verdictByRound.set(entry.roundId, entry);
-      } else if (entry.kind === 'decision' && entry.roundId) {
-        const verdict = verdictByRound.get(entry.roundId);
-        if (verdict) {
-          // decision 的统计/失败信息回填裁决卡；decision 自身不再成卡
-          verdict.detail = decisionDetail(entry) || verdict.detail;
-          verdict.llmRequestId = entry.llmRequestId || verdict.llmRequestId;
-          verdict.failed = entry.failed;
-          if (entry.failed) {
-            verdict.text = entry.text;
-            verdict.badge = '失败';
-            verdict.note = entry.note;
-          }
-          continue;
-        }
-      }
-      next.push(entry);
-    }
-    liveEntries.value = next.slice(-MAX_ENTRIES);
+    liveEntries.value = buildLiveEntries(list as FeedEvent[], hidden);
   },
   { immediate: true },
 );
@@ -1333,28 +737,6 @@ watch(
 const entries = computed<ShowEntry[]>(() =>
   sessionMode.value === 'live' ? liveEntries.value : replayEntries.value,
 );
-
-/** 弹幕 message_id → 时间线条目（用于发言/决策卡回复引用反查）。
- * 仅索引观众消息类（弹幕 / SC / 礼物）；同一 ID 重复出现时取首次，时间线按 tsSec 正序遍历保证幂等。 */
-const messageIndex = computed<Map<string, ShowEntry>>(() => {
-  const map = new Map<string, ShowEntry>();
-  for (const item of entries.value) {
-    if (!item.messageId) continue;
-    if (item.kind !== 'danmaku' && item.kind !== 'super_chat' && item.kind !== 'gift') continue;
-    if (!map.has(item.messageId)) map.set(item.messageId, item);
-  }
-  return map;
-});
-
-/** 把决策/发言卡的 replyTo 反查成 QQ 风格引用块所需的两字段。
- * 未命中（时间线被清空、消息被水位裁剪、回看数据缺失 message_id 等）返回 null，调用方按占位降级渲染。 */
-function replyQuoteOf(entry: ShowEntry): { actor: string; text: string } | null {
-  const targetId = entry.replyTo;
-  if (!targetId) return null;
-  const target = messageIndex.value.get(targetId);
-  if (!target) return null;
-  return { actor: target.actor, text: target.text };
-}
 
 function togglePause(): void {
   paused.value = !paused.value;
@@ -1597,6 +979,9 @@ watch(entries, async (next, prev) => {
 const nowTick = ref(Date.now());
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 
+/** 当前 Unix 秒（相对时间标签入参；FeedTimeline 自带 tick，这里仅供顶部环节横幅使用） */
+const nowSec = computed(() => Math.floor(nowTick.value / 1000));
+
 const wallClock = computed(() =>
   new Date(nowTick.value).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
@@ -1605,15 +990,6 @@ const wallClock = computed(() =>
     hour12: false,
   }),
 );
-
-function relativeTime(tsSec: number): string {
-  const diff = Math.max(0, Math.floor(nowTick.value / 1000 - tsSec));
-  if (diff < 5) return '刚刚';
-  if (diff < 60) return `${diff}s 前`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m 前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h 前`;
-  return `${Math.floor(diff / 86400)}d 前`;
-}
 
 // ============================================================
 // 生命周期
@@ -2176,479 +1552,6 @@ onUnmounted(() => {
   transform: translateX(-50%) translateY(-1px);
 }
 
-/* ============================================================ */
-/* 空态                                                          */
-/* ============================================================ */
-.stage-empty {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--spacing-sm);
-}
-.stage-empty-icon {
-  font-size: 44px;
-  color: var(--border-color-dark);
-}
-.stage-empty-text {
-  margin: 0;
-  font-size: 13px;
-  letter-spacing: 0.3px;
-  color: var(--text-placeholder);
-}
-
-/* ============================================================ */
-/* 流：单列居左时间轴脊线——所有条目沿轴排布，靠样式区分             */
-/* ============================================================ */
-.feed {
-  position: relative;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.feed::before {
-  content: '';
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  left: 14px;
-  width: 1px;
-  background: var(--border-color);
-}
-
-.feed-row {
-  display: flex;
-  flex-direction: column;
-  animation: rowIn 0.22s cubic-bezier(0.33, 1, 0.68, 1);
-}
-
-@keyframes rowIn {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.stamp {
-  font-size: 10px;
-  color: var(--text-placeholder);
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-/* ============================================================ */
-/* 观众发声：气泡                                                */
-/* ============================================================ */
-.chat {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  max-width: 82%;
-}
-
-.avatar {
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 11px;
-  font-weight: 700;
-  background: var(--bg-card);
-  border: 1px solid var(--color-collector);
-  color: var(--color-collector);
-  box-shadow: 0 0 0 3px var(--bg-card);
-  z-index: 1;
-}
-
-.bubble {
-  flex: 1;
-  min-width: 0;
-  padding: 7px 12px;
-  border-radius: 4px 12px 12px 12px;
-  background: var(--bg-hover);
-}
-
-.bubble-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 2px;
-}
-
-.who {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-collector);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 220px;
-}
-
-.chip {
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-color-light);
-  flex-shrink: 0;
-}
-
-.money {
-  font-size: 12px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-.say {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-regular);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* --- 礼物：暖色高亮 --- */
-.chat--gift {
-  max-width: 88%;
-}
-.chat--gift .avatar {
-  border-color: var(--color-warning);
-  color: var(--color-warning);
-}
-.chat--gift .bubble {
-  background: var(--color-warning-bg);
-  border-left: 2px solid var(--color-warning);
-  box-shadow: var(--shadow-sm);
-}
-.chat--gift .who {
-  color: var(--color-warning);
-}
-.chat--gift .say {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-/* --- SC：最强高亮（暖色渐变 + 金额） --- */
-.chat--super_chat {
-  max-width: 92%;
-}
-.chat--super_chat .avatar {
-  border-color: var(--color-danger);
-  color: var(--color-danger);
-}
-.chat--super_chat .bubble {
-  padding: 10px 14px;
-  border-left: 3px solid var(--color-danger);
-  background: linear-gradient(100deg, var(--color-danger-bg), var(--color-warning-bg));
-  box-shadow: var(--shadow-md);
-}
-.chat--super_chat .who {
-  font-size: 12px;
-  color: var(--color-danger);
-}
-.chat--super_chat .chip {
-  background: var(--color-danger);
-  color: var(--text-inverse);
-  border-color: var(--color-danger);
-}
-.chat--super_chat .money {
-  font-size: 14px;
-  color: var(--color-danger);
-}
-.chat--super_chat .say {
-  font-size: 15px;
-  font-weight: 500;
-  line-height: 1.55;
-  color: var(--text-primary);
-}
-
-/* ============================================================ */
-/* 安静单行：进场 / 阶段状态                                      */
-/* ============================================================ */
-.whisper {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 18px;
-}
-/* 占位宽度与头像一致（28px），使圆点正落在时间轴脊线上 */
-.whisper-dot {
-  width: 28px;
-  height: 12px;
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  z-index: 1;
-}
-.whisper-dot::before {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-placeholder);
-  box-shadow: 0 0 0 3px var(--bg-card);
-}
-.whisper-text {
-  font-size: 11px;
-  color: var(--text-placeholder);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.whisper-text.is-running {
-  color: var(--color-agent);
-}
-
-/* ============================================================ */
-/* 决策记录：居左宽卡——本轮为什么这么做                            */
-/* ============================================================ */
-.decision {
-  margin-left: 38px; /* 28px 头像 + 10px 间距：与气泡体对齐 */
-  max-width: 92%;
-  padding: 9px 12px;
-  border-radius: var(--radius-md);
-  background: var(--color-agent-bg);
-  border-left: 3px solid var(--color-agent);
-}
-.decision.is-failed {
-  background: var(--color-danger-bg);
-  border-left-color: var(--color-danger);
-}
-.decision.is-silent {
-  background: var(--bg-hover);
-  border-left-color: var(--border-color-dark);
-}
-
-.act-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 3px;
-}
-
-.act-kind {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1.4px;
-  color: var(--color-agent);
-  flex-shrink: 0;
-}
-.act-kind--speech {
-  color: var(--color-agent);
-}
-.act-emotion {
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--color-agent);
-  background: var(--color-agent-bg);
-  flex-shrink: 0;
-}
-
-.d-round {
-  font-size: 10px;
-  color: var(--text-placeholder);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 180px;
-}
-
-.d-conf {
-  font-size: 10px;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.act-badge {
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  font-size: 10px;
-  font-weight: 700;
-  background: var(--color-danger);
-  color: var(--text-inverse);
-  flex-shrink: 0;
-}
-.act-badge.is-silent-badge {
-  background: var(--bg-active);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-color-dark);
-}
-
-.act-text {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-regular);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.decision.is-failed .act-text {
-  color: var(--color-danger);
-}
-.decision.is-silent .act-text {
-  color: var(--text-secondary);
-}
-
-/* QQ 风格引用块：被回复弹幕的「昵称 + 原文」摘要 */
-.reply-quote {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 6px 0 0;
-  padding: 5px 8px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  border-left: 3px solid var(--border-color-dark);
-  min-width: 0;
-}
-.reply-quote-name {
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.4;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.reply-quote-text {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-regular);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  line-clamp: 2;
-  overflow: hidden;
-  word-break: break-word;
-}
-.reply-quote-fallback {
-  font-size: 11px;
-  font-style: italic;
-  line-height: 1.5;
-  color: var(--text-placeholder);
-}
-
-.d-guidance {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  word-break: break-word;
-}
-
-.d-speech {
-  margin: 5px 0 0;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-  word-break: break-word;
-}
-
-.act-note {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--color-danger);
-  word-break: break-word;
-}
-
-.d-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 6px;
-  font-size: 10px;
-  color: var(--text-placeholder);
-}
-
-.d-link {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-primary);
-  text-decoration: none;
-}
-.d-link:hover {
-  text-decoration: underline;
-}
-
-.d-raw {
-  flex-basis: 100%;
-}
-.d-raw summary {
-  cursor: pointer;
-  font-size: 10px;
-  color: var(--text-placeholder);
-  user-select: none;
-}
-.d-raw pre {
-  margin: 6px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-/* 思考过程：决策卡内回看（同 d-raw 形态） */
-.d-thinking {
-  flex-basis: 100%;
-}
-.d-thinking summary {
-  cursor: pointer;
-  font-size: 10px;
-  color: var(--text-placeholder);
-  user-select: none;
-}
-.d-thinking-phase {
-  margin: 6px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  font-size: 10px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 180px;
-  overflow-y: auto;
-}
-.d-thinking-tag {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  background: var(--color-agent-bg);
-  color: var(--color-agent);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 16px;
-  vertical-align: 1px;
-}
-
 /* 活动思考区：时间线尾部的实时滚动卡（生成中观感） */
 .thinking-live {
   margin: 10px 0 0 38px;
@@ -2667,6 +1570,23 @@ onUnmounted(() => {
   font-size: 10px;
   color: var(--text-placeholder);
 }
+/* 控制台独占：thinking-live 头部的小圆点（行圆点的 running 变体；行本体已迁到 FeedTimeline） */
+.thinking-live .whisper-dot {
+  width: 28px;
+  height: 12px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  z-index: 1;
+}
+.thinking-live .whisper-dot::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-agent);
+  box-shadow: 0 0 0 3px var(--bg-card);
+}
 .thinking-live-title {
   font-weight: 600;
   color: var(--text-secondary);
@@ -2681,158 +1601,22 @@ onUnmounted(() => {
   max-height: 96px;
   overflow-y: auto;
 }
-
-/* ============================================================ */
-/* 主播动作：居左卡（工具结果 / 发言）                             */
-/* ============================================================ */
-.act {
-  margin-left: 38px; /* 与决策卡同列对齐 */
-  max-width: 92%;
-  min-width: 240px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  background: var(--color-tool-bg);
-  border-left: 2px solid var(--color-tool);
-}
-.act.is-speak {
-  padding: 10px 14px;
-  box-shadow: var(--shadow-sm);
-}
-.act.is-failed {
-  background: var(--color-danger-bg);
-  border-left-color: var(--color-danger);
-}
-.act.is-speech {
+/* 控制台独占：thinking-live 内的 Replyer/Planner 标签徽章（行体已迁到 FeedTimeline） */
+.thinking-live .d-thinking-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
   background: var(--color-agent-bg);
-  border-left: 2px solid var(--color-agent);
-}
-
-.act-tool {
-  font-size: 11px;
+  color: var(--color-agent);
+  font-size: 9px;
   font-weight: 600;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 16px;
+  vertical-align: 1px;
 }
 
-.act-arrow {
-  font-size: 11px;
-  color: var(--text-placeholder);
-  flex-shrink: 0;
-}
-
-.act.is-failed .act-kind {
-  color: var(--color-danger);
-}
-
-.act.is-speak .act-text {
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-.act.is-speak .act-text::before {
-  content: '「';
-  color: var(--color-tool);
-}
-.act.is-speak .act-text::after {
-  content: '」';
-  color: var(--color-tool);
-}
-
-/* ============================================================ */
-/* 环节推进 / 场次边界：横贯分隔行                                 */
-/* ============================================================ */
-.beat {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 6px 0;
-}
-.beat-rule {
-  height: 1px;
-  background: var(--color-agenda);
-  opacity: 0.45;
-}
-.beat-rule:first-child {
-  width: 24px;
-  flex-shrink: 0;
-}
-.beat-rule:last-of-type {
-  flex: 1;
-}
-.beat-body {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.beat-eyebrow {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1.6px;
-  color: var(--color-agenda);
-  flex-shrink: 0;
-}
-.beat-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.beat-action {
-  padding: 0 7px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 700;
-  background: var(--color-agenda-bg);
-  color: var(--color-agenda);
-  flex-shrink: 0;
-}
-.beat-note {
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* ============================================================ */
-/* 里程碑：庆祝行                                                */
-/* ============================================================ */
-.milestone {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 4px 0;
-  padding: 8px 14px;
-  border-radius: var(--radius-md);
-  background: var(--color-game-bg);
-  border: 1px dashed var(--color-game);
-}
-.milestone-mark {
-  font-size: 15px;
-  color: var(--color-game);
-  flex-shrink: 0;
-}
-.milestone-body {
-  flex: 1;
-  min-width: 0;
-}
-.milestone-text {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  word-break: break-word;
-}
-.milestone-meta {
-  margin: 2px 0 0;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
+/* 时间线行的具体样式（feed/beat/milestone/whisper/decision/act/chat 等）
+ * 已迁出至 components/live/FeedTimeline.vue；本页只保留控制台独占的滚动体与面板样式 */
 
 /* ============================================================ */
 /* 窄屏                                                          */
@@ -2850,14 +1634,6 @@ onUnmounted(() => {
 @media (max-width: 860px) {
   .sessions {
     display: none;
-  }
-  .chat,
-  .chat--gift,
-  .chat--super_chat,
-  .decision,
-  .act {
-    max-width: 100%;
-    margin-left: 0;
   }
   .slate-label {
     max-width: 55%;
