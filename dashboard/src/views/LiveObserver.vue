@@ -71,10 +71,7 @@
               <span class="grow" />
               <span>{{ item.message_count }} 条</span>
             </div>
-            <div
-              v-if="!item.is_active && item.source !== 'legacy'"
-              class="session-actions"
-            >
+            <div v-if="!item.is_active && item.source !== 'legacy'" class="session-actions">
               <el-popconfirm
                 title="删除该场次及其全部明细？"
                 width="220"
@@ -87,7 +84,9 @@
             </div>
           </li>
         </ul>
-        <p class="sessions-hint">启动不自动开场次；未开启期间消息仅在内存中流转（测试模式，不落库）</p>
+        <p class="sessions-hint">
+          启动不自动开场次；未开启期间消息仅在内存中流转（测试模式，不落库）
+        </p>
       </aside>
 
       <!-- ============================================================ -->
@@ -248,9 +247,6 @@
                       <span v-if="confidenceLabel(entry)" class="d-conf mono">{{
                         confidenceLabel(entry)
                       }}</span>
-                      <span v-if="entry.replyTo" class="chip" title="回复关联键（互动分析）">
-                        回复 {{ entry.replyTo }}
-                      </span>
                       <span
                         v-if="entry.badge"
                         class="act-badge"
@@ -260,6 +256,13 @@
                       </span>
                       <span class="grow" />
                       <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
+                    </div>
+                    <div v-if="entry.replyTo" class="reply-quote">
+                      <template v-if="replyQuoteOf(entry)">
+                        <span class="reply-quote-name">{{ replyQuoteOf(entry)!.actor }}</span>
+                        <span class="reply-quote-text">{{ replyQuoteOf(entry)!.text }}</span>
+                      </template>
+                      <span v-else class="reply-quote-fallback">回复了一条弹幕</span>
                     </div>
                     <p class="act-text">{{ entry.text }}</p>
                     <p v-if="guidanceOf(entry)" class="d-guidance">{{ guidanceOf(entry) }}</p>
@@ -323,11 +326,15 @@
                     <div class="act-head">
                       <span class="act-kind act-kind--speech">主播</span>
                       <span v-if="entry.note" class="act-emotion">{{ entry.note }}</span>
-                      <span v-if="entry.replyTo" class="chip" title="本条发言回复的那条弹幕">
-                        回复 {{ entry.replyTo }}
-                      </span>
                       <span class="grow" />
                       <time class="stamp mono">{{ relativeTime(entry.tsSec) }}</time>
+                    </div>
+                    <div v-if="entry.replyTo" class="reply-quote">
+                      <template v-if="replyQuoteOf(entry)">
+                        <span class="reply-quote-name">{{ replyQuoteOf(entry)!.actor }}</span>
+                        <span class="reply-quote-text">{{ replyQuoteOf(entry)!.text }}</span>
+                      </template>
+                      <span v-else class="reply-quote-fallback">回复了一条弹幕</span>
                     </div>
                     <p class="act-text">🎤 {{ entry.text }}</p>
                     <details v-if="replyerThinkingOf(entry.roundId)" class="d-thinking">
@@ -365,7 +372,9 @@
                   <code class="mono">{{ activeThinking.roundId }}</code>
                 </div>
                 <p class="thinking-live-phase">
-                  <span class="d-thinking-tag">{{ activeThinking.phase === 'replyer' ? 'Replyer' : 'Planner' }}</span>
+                  <span class="d-thinking-tag">{{
+                    activeThinking.phase === 'replyer' ? 'Replyer' : 'Planner'
+                  }}</span>
                   <span class="mono">{{ activeThinking.segment }}</span>
                 </p>
               </div>
@@ -509,6 +518,8 @@ interface ShowEntry {
   roundId: string;
   /** 回复关联键（所回复弹幕的 message_id） */
   replyTo: string;
+  /** 观众消息自身 ID（弹幕 / SC / 礼物；enter 为空）。决策/发言卡通过 replyTo 反查本字段定位被回复弹幕 */
+  messageId: string;
   /** 决策卡附加字段（置信度/耗时/原始输出/请求历史指针等） */
   detail: Record<string, unknown> | null;
   /** LLM 请求历史指针（决策卡"完整请求"链接） */
@@ -580,7 +591,13 @@ const activeThinking = computed<{
     if (round.plannerDone) continue;
     const step = Number(round.lastSegment.split(':')[1] ?? 1);
     const seg = round.steps.find(s => s.step === step);
-    return { roundId, round, segment: seg?.text ?? '', label: `思考中 · 步骤 ${step}`, phase: 'planner' };
+    return {
+      roundId,
+      round,
+      segment: seg?.text ?? '',
+      label: `思考中 · 步骤 ${step}`,
+      phase: 'planner',
+    };
   }
   return null;
 });
@@ -591,7 +608,13 @@ function handleThinkingMessage(message: WebSocketMessage): void {
   for (const delta of deltas) {
     let round = thinkingRounds.get(delta.round_id);
     if (!round) {
-      round = reactive({ steps: [], replyerText: '', lastSegment: '', plannerDone: false, replyerDone: false });
+      round = reactive({
+        steps: [],
+        replyerText: '',
+        lastSegment: '',
+        plannerDone: false,
+        replyerDone: false,
+      });
       thinkingRounds.set(delta.round_id, round);
       // 上限保尾：只保留最近 N 轮供决策卡回看，更早的文本随轮淘汰
       while (thinkingRounds.size > THINKING_ROUNDS_MAX) {
@@ -724,6 +747,7 @@ function makeEntry(base: {
   speak?: boolean;
   roundId?: string;
   replyTo?: string;
+  messageId?: string;
   detail?: Record<string, unknown> | null;
   llmRequestId?: string;
 }): ShowEntry {
@@ -742,6 +766,7 @@ function makeEntry(base: {
     initial: initialOf(actor),
     roundId: base.roundId ?? '',
     replyTo: base.replyTo ?? '',
+    messageId: base.messageId ?? '',
     detail: base.detail ?? null,
     llmRequestId: base.llmRequestId ?? '',
   };
@@ -754,6 +779,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
   const content = str(data.content);
   const fallback = () => content || summarizeEvent(event.type, data);
   const messageType = str(data.message_type) || 'danmaku';
+  const messageId = str(data.message_id);
 
   if (messageType === 'gift') {
     const gift = isRecord(data.gift) ? data.gift : null;
@@ -766,6 +792,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
       actor,
       text: giftName ? `送出 ${giftName} ×${count}` : fallback(),
       badge: '礼物',
+      messageId,
     });
   }
 
@@ -780,6 +807,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
       text: fallback(),
       badge: 'SC',
       money: amount != null ? `¥${formatAmount(amount)}` : '',
+      messageId,
     });
   }
 
@@ -799,6 +827,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
     tsSec,
     actor,
     text: fallback(),
+    messageId,
   });
 }
 
@@ -952,7 +981,8 @@ function toEntry(event: FeedEvent): ShowEntry | null {
   // WS 广播把 4 种 room.message.* 统一为 "room.message"，种类由 payload.message_type 判别
   if (event.type === 'room.message') return fromRoomMessage(event, data);
   if (event.type === 'streamer.speech') return fromSpeech(event, data);
-  if (event.type === 'planner.verdict') return fromVerdict(event.id, toSeconds(event.timestamp), data);
+  if (event.type === 'planner.verdict')
+    return fromVerdict(event.id, toSeconds(event.timestamp), data);
   if (event.type === 'planner.decision')
     return fromDecision(event.id, toSeconds(event.timestamp), data);
   if (event.type === 'streamer.stage') return fromStage(event.id, toSeconds(event.timestamp), data);
@@ -1200,6 +1230,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
             actor: str(entry.user_name) || '匿名观众',
             text: `送出 ${str(entry.gift_name)} ×${num(entry.gift_count) ?? 1}`,
             badge: '礼物',
+            messageId: str(entry.message_id),
           }),
         );
         return;
@@ -1215,6 +1246,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
             text: str(entry.content),
             badge: 'SC',
             money: amount != null ? `¥${formatAmount(amount)}` : '',
+            messageId: str(entry.message_id),
           }),
         );
         return;
@@ -1230,6 +1262,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
             entry.kind === 'enter'
               ? `${str(entry.user_name) || '观众'} 进入直播间`
               : str(entry.content),
+          messageId: str(entry.message_id),
         }),
       );
     });
@@ -1300,6 +1333,28 @@ watch(
 const entries = computed<ShowEntry[]>(() =>
   sessionMode.value === 'live' ? liveEntries.value : replayEntries.value,
 );
+
+/** 弹幕 message_id → 时间线条目（用于发言/决策卡回复引用反查）。
+ * 仅索引观众消息类（弹幕 / SC / 礼物）；同一 ID 重复出现时取首次，时间线按 tsSec 正序遍历保证幂等。 */
+const messageIndex = computed<Map<string, ShowEntry>>(() => {
+  const map = new Map<string, ShowEntry>();
+  for (const item of entries.value) {
+    if (!item.messageId) continue;
+    if (item.kind !== 'danmaku' && item.kind !== 'super_chat' && item.kind !== 'gift') continue;
+    if (!map.has(item.messageId)) map.set(item.messageId, item);
+  }
+  return map;
+});
+
+/** 把决策/发言卡的 replyTo 反查成 QQ 风格引用块所需的两字段。
+ * 未命中（时间线被清空、消息被水位裁剪、回看数据缺失 message_id 等）返回 null，调用方按占位降级渲染。 */
+function replyQuoteOf(entry: ShowEntry): { actor: string; text: string } | null {
+  const targetId = entry.replyTo;
+  if (!targetId) return null;
+  const target = messageIndex.value.get(targetId);
+  if (!target) return null;
+  return { actor: target.actor, text: target.text };
+}
 
 function togglePause(): void {
   paused.value = !paused.value;
@@ -2450,6 +2505,45 @@ onUnmounted(() => {
 }
 .decision.is-silent .act-text {
   color: var(--text-secondary);
+}
+
+/* QQ 风格引用块：被回复弹幕的「昵称 + 原文」摘要 */
+.reply-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  border-left: 3px solid var(--border-color-dark);
+  min-width: 0;
+}
+.reply-quote-name {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reply-quote-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-regular);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+.reply-quote-fallback {
+  font-size: 11px;
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--text-placeholder);
 }
 
 .d-guidance {

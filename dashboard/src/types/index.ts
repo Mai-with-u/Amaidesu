@@ -233,6 +233,9 @@ export interface RoomMessageEventData {
   content?: string;
   gift?: { name?: string; count?: number } | null;
   sc?: { amount?: number } | null;
+  /** 弹幕 / SC / 礼物 message_id（来源：RoomMessagePayload.message_id；用于发言/决策卡回复引用反查）。
+   * enter 类无关联消息，该字段为空。 */
+  message_id?: string;
   /** 模拟数据溯源（true=模拟器生成/回放；统计查询必须排除） */
   simulated?: boolean;
   /** Unix 毫秒 */
@@ -711,6 +714,9 @@ export interface SessionTimelineItem {
   event_type?: string;
   /** kind=event 时的事件负载 */
   data?: Record<string, unknown>;
+  /** 弹幕（live_chat）的 message_id；用于发言/决策卡回复引用反查。
+   * speech / gift / super_chat / enter 在回看 API 中不带此字段。 */
+  message_id?: string;
   [key: string]: unknown;
 }
 
