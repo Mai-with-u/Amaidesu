@@ -113,22 +113,89 @@
           </div>
         </div>
 
-        <!-- 工具调用卡（tool.result.*）：来源徽标在右侧（主播决策 / 游戏 Agent） -->
+        <!-- 工具调用卡（tool.result.*）：状态徽标（成功/失败）+ 来源徽标（主播决策/游戏 Agent）拆双槽
+             工具卡一律中性底——状态由左边线色 + 徽标承载，避免高频工具行刷成警报墙 -->
         <div
           v-else-if="entry.kind === 'tool'"
-          class="act"
-          :class="{ 'is-failed': entry.failed, 'is-speak': entry.speak }"
+          class="act is-tool-neutral"
+          :class="{
+            'is-failed': entry.failed,
+            'is-speak': entry.speak,
+            'is-agent-streamer': agentGroupOf(entry) === 'streamer',
+            'is-agent-game': agentGroupOf(entry) === 'game',
+          }"
         >
           <div class="act-head">
             <span class="act-kind">工具调用</span>
             <code class="act-tool mono">{{ entry.actor }}</code>
-            <span class="act-arrow" aria-hidden="true">→</span>
-            <span v-if="entry.badge" class="act-badge">{{ entry.badge }}</span>
+            <!-- 状态徽标：成功/失败。compact 模式下成功徽标隐藏（失败照常显示） -->
+            <span
+              v-if="entry.badge && (!compact || entry.failed)"
+              class="act-badge"
+              :class="{ 'is-success-badge': entry.badge === '成功' }"
+            >
+              {{ entry.badge }}
+            </span>
+            <!-- 来源徽标（中性色，与状态徽标区分不抢视觉） -->
+            <span v-if="entry.source" class="act-source">{{ entry.source }}</span>
             <span class="grow" />
             <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
           </div>
-          <p class="act-text">{{ entry.text }}</p>
+          <p v-if="entry.text" class="act-text">{{ entry.text }}</p>
           <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
+          <!-- 参数/结果折叠区：compact 下不渲染（首页保持紧凑）；detail 为空时整段不渲染。
+               JSON 树与复制交互对齐 LLM 历史页（vue-json-pretty + 剪贴板） -->
+          <details
+            v-if="!compact && hasToolDetail(entry)"
+            class="t-payload"
+            :class="{ 'is-failed': entry.failed }"
+          >
+            <summary>参数 / 结果</summary>
+            <!-- 失败时错误文本优先展示（开发者定位异常最直接的线索） -->
+            <div v-if="entry.failed && toolErrorOf(entry)" class="t-payload-block">
+              <div class="t-payload-head">
+                <span class="t-payload-tag t-payload-tag--error">错误</span>
+                <el-icon class="copy-icon" title="复制" @click="copyText(toolErrorOf(entry))">
+                  <CopyDocument />
+                </el-icon>
+              </div>
+              <pre class="t-payload-text mono">{{ toolErrorOf(entry) }}</pre>
+            </div>
+            <div v-if="hasToolArgs(entry)" class="t-payload-block">
+              <div class="t-payload-head">
+                <span class="t-payload-tag">参数</span>
+                <el-icon
+                  class="copy-icon"
+                  title="复制 JSON"
+                  @click="copyJson(toolDetail(entry).args)"
+                >
+                  <CopyDocument />
+                </el-icon>
+              </div>
+              <div class="t-payload-json">
+                <VueJsonPretty :data="toJsonData(toolDetail(entry).args)" theme="dark" show-line />
+              </div>
+            </div>
+            <div v-if="hasToolResult(entry)" class="t-payload-block">
+              <div class="t-payload-head">
+                <span class="t-payload-tag">结果</span>
+                <el-icon
+                  class="copy-icon"
+                  title="复制 JSON"
+                  @click="copyJson(toolDetail(entry).result)"
+                >
+                  <CopyDocument />
+                </el-icon>
+              </div>
+              <div class="t-payload-json">
+                <VueJsonPretty
+                  :data="toJsonData(toolDetail(entry).result)"
+                  theme="dark"
+                  show-line
+                />
+              </div>
+            </div>
+          </details>
         </div>
 
         <!-- 主播发言（streamer.speech）：表达语义 + Replyer 思考回看 -->
@@ -154,6 +221,28 @@
               <span class="mono">{{ replyerThinking!(entry.roundId) }}</span>
             </p>
           </details>
+        </div>
+
+        <!-- 游戏 Agent 上报（game.* / 走 toGameEntry）：绿色系左边线，act 变体 -->
+        <div
+          v-else-if="entry.kind === 'game'"
+          class="act is-agent-game"
+          :class="{ 'is-failed': entry.failed }"
+        >
+          <div class="act-head">
+            <span class="act-kind act-kind--game">游戏 Agent</span>
+            <span
+              v-if="entry.badge"
+              class="act-badge"
+              :class="{ 'is-success-badge': !entry.failed }"
+            >
+              {{ entry.badge }}
+            </span>
+            <span class="grow" />
+            <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
+          </div>
+          <p class="act-text">{{ entry.text }}</p>
+          <p v-if="entry.note" class="act-note is-game-note">{{ entry.note }}</p>
         </div>
 
         <!-- 观众发声：弹幕 / 礼物 / SC -->
@@ -187,8 +276,11 @@
  * 本组件只负责"按条目渲染"，对上游数据来源无要求，可被任何 Vue 页面复用。
  */
 import { computed, onUnmounted, ref } from 'vue';
-import { Monitor } from '@element-plus/icons-vue';
+import { CopyDocument, Monitor } from '@element-plus/icons-vue';
+import VueJsonPretty from 'vue-json-pretty';
+import 'vue-json-pretty/lib/styles.css';
 import {
+  agentGroupOf,
   batchSizeOf,
   confidenceLabel,
   guidanceOf,
@@ -251,6 +343,59 @@ function replyQuoteOf(entry: ShowEntry): { actor: string; text: string } | null 
   const target = messageIndex.value.get(targetId);
   if (!target) return null;
   return { actor: target.actor, text: target.text };
+}
+
+/** 工具卡的 detail 字段读取守卫——liveFeed.fromToolResult 总是写入 detail，但回看路径或老事件可能为 null */
+function toolDetail(entry: ShowEntry): { args: unknown; result: unknown; error_message: string } {
+  const detail = entry.detail;
+  if (!detail) return { args: null, result: null, error_message: '' };
+  return {
+    args: detail.args ?? null,
+    result: detail.result ?? null,
+    error_message: typeof detail.error_message === 'string' ? detail.error_message : '',
+  };
+}
+
+/** 折叠区可见性：args / result / error_message 任一非空即视为有可展示载荷 */
+function hasToolDetail(entry: ShowEntry): boolean {
+  const d = toolDetail(entry);
+  return hasToolArgs(entry) || hasToolResult(entry) || (entry.failed && d.error_message.length > 0);
+}
+function hasPayloadValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.length > 0;
+  if (typeof value === 'object' && !Array.isArray(value)) return Object.keys(value).length > 0;
+  return true;
+}
+function hasToolArgs(entry: ShowEntry): boolean {
+  return hasPayloadValue(toolDetail(entry).args);
+}
+function hasToolResult(entry: ShowEntry): boolean {
+  return hasPayloadValue(toolDetail(entry).result);
+}
+function toolErrorOf(entry: ShowEntry): string {
+  return toolDetail(entry).error_message;
+}
+
+/** vue-json-pretty 的 data 仅接受 JSON 结构；事件 payload 来自线上数据用 JSON 往返归一化
+ * （剥掉 undefined / 函数等非 JSON 值），避免直接强转掩盖真实脏数据 */
+type JsonData = string | number | boolean | null | JsonData[] | { [key: string]: JsonData };
+function toJsonData(value: unknown): JsonData {
+  return JSON.parse(JSON.stringify(value ?? null)) as JsonData;
+}
+
+/** 复制交互与 LLM 历史页一致：剪贴板写入格式化 JSON；循环引用等异常落兜底文本 */
+async function copyJson(data: unknown): Promise<void> {
+  let text = '';
+  try {
+    text = JSON.stringify(data, null, 2);
+  } catch {
+    text = '[不可序列化]';
+  }
+  await navigator.clipboard.writeText(text);
+}
+async function copyText(text: string): Promise<void> {
+  await navigator.clipboard.writeText(text);
 }
 </script>
 
@@ -762,6 +907,29 @@ function replyQuoteOf(entry: ShowEntry): { actor: string; text: string } | null 
   background: var(--color-danger-bg);
   border-left-color: var(--color-danger);
 }
+
+/* 工具调用卡特例：失败/成功不再刷整行底色——工具调用是高频行，红底视觉噪音过大。
+ * 状态由左边线色 + 徽标承载；卡体统一中性面板底（继承 .act 默认的 --color-tool-bg） */
+.act.is-tool-neutral {
+  background: var(--bg-card);
+}
+.act.is-tool-neutral.is-failed {
+  background: var(--bg-card);
+  border-left-color: var(--color-danger);
+  border-left-width: 2px;
+}
+.act.is-tool-neutral.is-agent-streamer,
+.act.is-tool-neutral.is-agent-game {
+  background: var(--bg-card);
+}
+.act.is-tool-neutral.is-agent-game.is-failed {
+  background: var(--bg-card);
+  border-left-color: var(--color-danger);
+}
+/* 成功无显式 is-success 类——沿用 .act 默认的 --color-tool 边线（绿色系）即可 */
+.act.is-tool-neutral.is-speak {
+  background: var(--bg-card);
+}
 .act.is-speech {
   background: var(--color-agent-bg);
   border-left: 2px solid var(--color-agent);
@@ -776,10 +944,130 @@ function replyQuoteOf(entry: ShowEntry): { actor: string; text: string } | null 
   text-overflow: ellipsis;
 }
 
-.act-arrow {
-  font-size: 11px;
-  color: var(--text-placeholder);
+/* 工具调用来源徽标（中性色，与成功/失败红绿徽标互不抢视觉） */
+.act-source {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color-light);
   flex-shrink: 0;
+}
+
+/* 参数/结果折叠区：形态对齐 LLM 历史页（暗底 JSON 树 + 悬浮复制），
+   summary 压到 11px 弱色，避免与卡片主文案争夺层级 */
+.t-payload {
+  margin-top: 6px;
+}
+.t-payload summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.t-payload summary::-webkit-details-marker {
+  display: none;
+}
+.t-payload summary::before {
+  content: '▸';
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+.t-payload[open] summary::before {
+  transform: rotate(90deg);
+}
+.t-payload summary:hover {
+  color: var(--text-primary);
+}
+.t-payload-block {
+  margin-top: 6px;
+}
+.t-payload-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.t-payload-tag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+.t-payload-tag--error {
+  color: var(--color-danger);
+}
+.t-payload-head .copy-icon {
+  font-size: 12px;
+  color: var(--text-placeholder);
+  cursor: pointer;
+}
+.t-payload-head .copy-icon:hover {
+  color: var(--text-primary);
+}
+.t-payload-json {
+  margin-top: 4px;
+  background: #1e1e1e;
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 12px;
+}
+/* vue-json-pretty 的 key 不自带颜色（继承容器文字色，浅色主题下是深灰），
+   深底上必须显式给高对比配色；字符串/数字用比库默认更亮的变体 */
+.t-payload-json :deep(.vjs-tree) {
+  color: #d4d4d4;
+}
+.t-payload-json :deep(.vjs-value-string) {
+  color: #7ee787;
+}
+.t-payload-json :deep(.vjs-value-number),
+.t-payload-json :deep(.vjs-value-boolean) {
+  color: #79c0ff;
+}
+.t-payload-json :deep(.vjs-value-null) {
+  color: #79c0ff;
+}
+.t-payload-text {
+  margin: 4px 0 0;
+  background: #1e1e1e;
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-danger);
+}
+
+/* 成功徽标：复用 .act-badge 形状但改用安全色 */
+.act-badge.is-success-badge {
+  background: var(--color-success);
+  color: var(--text-inverse);
+}
+
+/* 游戏 Agent 上报（kind='game'）：绿色系左边线 + 浅绿底，沿用 act 卡形态 */
+.act.is-agent-game {
+  background: var(--color-game-bg);
+  border-left-color: var(--color-game);
+}
+.act.is-agent-game.is-failed {
+  background: var(--color-danger-bg);
+  border-left-color: var(--color-danger);
+}
+.act-kind--game {
+  color: var(--color-game);
+}
+.act-note.is-game-note {
+  color: var(--text-secondary);
 }
 
 .act.is-failed .act-kind {

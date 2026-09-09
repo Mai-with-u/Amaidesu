@@ -144,6 +144,31 @@
                 注入弹幕
               </el-button>
               <el-button size="small" @click="testDialogVisible = true">决策测试</el-button>
+              <!-- 来源过滤 chips：仅过滤 Agent 产生的卡（tool/speech/decision/verdict/stage/game），
+                观众消息与场次边界始终可见；与既有 el-button 族风格一致 -->
+              <span class="agent-filter">
+                <el-check-tag
+                  :checked="agentFilter === 'all'"
+                  size="small"
+                  @change="(checked: boolean) => handleAgentChip('all', checked)"
+                >
+                  全部
+                </el-check-tag>
+                <el-check-tag
+                  :checked="agentFilter === 'streamer'"
+                  size="small"
+                  @change="(checked: boolean) => handleAgentChip('streamer', checked)"
+                >
+                  主播
+                </el-check-tag>
+                <el-check-tag
+                  :checked="agentFilter === 'game'"
+                  size="small"
+                  @change="(checked: boolean) => handleAgentChip('game', checked)"
+                >
+                  游戏 Agent
+                </el-check-tag>
+              </span>
               <span class="stage-count mono">{{ entries.length }} / {{ MAX_ENTRIES }}</span>
               <el-button size="small" :type="paused ? 'primary' : 'default'" @click="togglePause">
                 {{ paused ? '继续' : '暂停' }}
@@ -200,7 +225,11 @@
                 </div>
                 <p class="thinking-live-phase">
                   <span class="d-thinking-tag">{{
-                    activeThinking.phase === 'replyer' ? 'Replyer' : 'Planner'
+                    activeThinking.phase === 'replyer'
+                      ? 'Replyer'
+                      : activeThinking.phase === 'minecraft'
+                        ? '游戏 Agent'
+                        : 'Planner'
                   }}</span>
                   <span class="mono">{{ activeThinking.segment }}</span>
                 </p>
@@ -272,6 +301,7 @@ import {
   AGENDA_ACTION_LABEL,
   STAGE_LABEL,
   MAX_ENTRIES,
+  agentGroupOf,
   buildLiveEntries,
   bool,
   formatAmount,
@@ -282,7 +312,9 @@ import {
   num,
   relativeTime,
   str,
+  toGameEntry,
   toSeconds,
+  type AgentGroup,
   type FeedEvent,
   type ShowEntry,
   type ThinkingStep,
@@ -327,8 +359,10 @@ const THINKING_ROUNDS_MAX = 20;
 interface ThinkingRound {
   steps: ThinkingStep[];
   replyerText: string;
-  /** 最后活动的段："planner:<step>" | "replyer" */
+  /** 最后活动的段："planner:<step>" | "replyer" | "minecraft:<step>" */
   lastSegment: string;
+  /** 最后一条 delta 的 phase（planner / replyer / minecraft），用于 activeThinking 渲染与标签区分 */
+  lastPhase: string;
   plannerDone: boolean;
   replyerDone: boolean;
 }
@@ -371,8 +405,8 @@ const activeThinking = computed<{
       roundId,
       round,
       segment: seg?.text ?? '',
-      label: `思考中 · 步骤 ${step}`,
-      phase: 'planner',
+      label: round.lastPhase === 'minecraft' ? '游戏 Agent·思考' : `思考中 · 步骤 ${step}`,
+      phase: round.lastPhase,
     };
   }
   return null;
@@ -388,6 +422,7 @@ function handleThinkingMessage(message: WebSocketMessage): void {
         steps: [],
         replyerText: '',
         lastSegment: '',
+        lastPhase: delta.phase,
         plannerDone: false,
         replyerDone: false,
       });
@@ -402,15 +437,19 @@ function handleThinkingMessage(message: WebSocketMessage): void {
     if (delta.phase === 'replyer') {
       round.replyerText += delta.text_delta;
       round.lastSegment = 'replyer';
+      round.lastPhase = 'replyer';
       round.replyerDone = false;
     } else {
+      // planner 与 minecraft 共享 step-based 累积：同 Map 同段索引；
+      // phase 由 lastPhase 区分，渲染端按 phase 显示「Planner / 游戏 Agent」
       let seg = round.steps.find(s => s.step === delta.step);
       if (!seg) {
         seg = reactive({ step: delta.step, text: '' });
         round.steps.push(seg);
       }
       seg.text += delta.text_delta;
-      round.lastSegment = `planner:${delta.step}`;
+      round.lastSegment = `${delta.phase}:${delta.step}`;
+      round.lastPhase = delta.phase;
       round.plannerDone = false;
     }
   }
@@ -634,6 +673,20 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
               note: [str(data.game), str(data.scene)].filter(Boolean).join(' · '),
             }),
           );
+        } else if (
+          type === 'game.report' ||
+          type === 'game.attention_required' ||
+          type === 'game.error'
+        ) {
+          // 实时路径已由共享层 toEntry→toGameEntry 自动入列；
+          // 回看路径手工拼出 FeedEvent 调用同一函数，保持条目构造逻辑单点维护
+          const gameEntry = toGameEntry({
+            id,
+            type,
+            timestamp: entry.ts_ms,
+            data,
+          } as FeedEvent);
+          if (gameEntry) next.push(gameEntry);
         }
         return;
       }
@@ -724,6 +777,16 @@ const paused = ref(false);
 const hiddenIds = ref<Set<string>>(new Set());
 const liveEntries = ref<ShowEntry[]>([]);
 
+/** 来源过滤：实时模式下按 Agent 组别过滤展示条目（观众消息与场次边界不过滤——观众始终可见）；
+ *  回看模式不生效（场次条目全量呈现） */
+const agentFilter = ref<'all' | AgentGroup>('all');
+
+/** chips 点击处理：el-check-tag 在「勾选→取消勾选」时都会触发 change；
+ *  排他语义下只接受「点亮」动作，避免误触把已选中态切走 */
+function handleAgentChip(value: 'all' | AgentGroup, checked: boolean): void {
+  if (checked) agentFilter.value = value;
+}
+
 watch(
   [events, paused, hiddenIds],
   ([list, isPaused, hidden]) => {
@@ -733,10 +796,13 @@ watch(
   { immediate: true },
 );
 
-/** 展示条目：实时模式取 WS 流，回看模式取 REST 时间线 */
-const entries = computed<ShowEntry[]>(() =>
-  sessionMode.value === 'live' ? liveEntries.value : replayEntries.value,
-);
+/** 展示条目：实时模式按 agentFilter 过滤；回看模式取 REST 时间线全量 */
+const entries = computed<ShowEntry[]>(() => {
+  const list = sessionMode.value === 'live' ? liveEntries.value : replayEntries.value;
+  if (sessionMode.value === 'replay') return list;
+  if (agentFilter.value === 'all') return list;
+  return list.filter(entry => agentGroupOf(entry) === agentFilter.value);
+});
 
 function togglePause(): void {
   paused.value = !paused.value;
@@ -1460,6 +1526,17 @@ onUnmounted(() => {
   padding: 2px 8px;
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
+}
+
+/* 来源过滤 chips：与既有按钮族尺寸对齐，行内排布 */
+.agent-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.agent-filter :deep(.el-check-tag) {
+  font-size: 11px;
 }
 
 .inject-panel {

@@ -55,7 +55,8 @@ export type EntryKind =
   | 'verdict'
   | 'decision'
   | 'stage'
-  | 'boundary';
+  | 'boundary'
+  | 'game';
 
 /** 事件缓冲条目：events store 在 WebSocketMessage 上补了去重 id */
 export type FeedEvent = WebSocketMessage & { id: string };
@@ -90,6 +91,8 @@ export interface ShowEntry {
   detail: Record<string, unknown> | null;
   /** LLM 请求历史指针（决策卡"完整请求"链接） */
   llmRequestId: string;
+  /** 来源标签文本（工具调用的归属 Agent / 游戏 Agent 上报）。空串表示无来源 */
+  source: string;
 }
 
 /** 单步思考段（与工具卡时间交织的实时思考流片段） */
@@ -150,6 +153,30 @@ function initialOf(actor: string): string {
   return chars.length > 0 ? chars[0].toUpperCase() : '?';
 }
 
+/** 时间线条目归到三类 Agent 组之一：'streamer' 主播管线 / 'game' 游戏 Agent / 'room' 房间事件。
+ *  工具条目按 source 归类：主播决策→streamer，游戏 Agent→game，其他有值 source 按前缀 minecraft 判 game 否则 streamer；
+ *  speech/decision/verdict/stage→streamer；game→game；其余 kind→room */
+export type AgentGroup = 'streamer' | 'game' | 'room';
+
+export function agentGroupOf(entry: ShowEntry): AgentGroup {
+  if (entry.kind === 'game') return 'game';
+  if (
+    entry.kind === 'speech' ||
+    entry.kind === 'decision' ||
+    entry.kind === 'verdict' ||
+    entry.kind === 'stage'
+  ) {
+    return 'streamer';
+  }
+  if (entry.kind === 'tool') {
+    if (entry.source === '主播决策') return 'streamer';
+    if (entry.source === '游戏 Agent') return 'game';
+    if (entry.source && entry.source.startsWith('minecraft')) return 'game';
+    return 'streamer';
+  }
+  return 'room';
+}
+
 // ============================================================
 // 事件 → 时间线条目
 // ============================================================
@@ -170,6 +197,7 @@ export function makeEntry(base: {
   messageId?: string;
   detail?: Record<string, unknown> | null;
   llmRequestId?: string;
+  source?: string;
 }): ShowEntry {
   const actor = base.actor ?? '';
   return {
@@ -189,6 +217,7 @@ export function makeEntry(base: {
     messageId: base.messageId ?? '',
     detail: base.detail ?? null,
     llmRequestId: base.llmRequestId ?? '',
+    source: base.source ?? '',
   };
 }
 
@@ -251,27 +280,47 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
   });
 }
 
-/** 主播动作：tool.result.*（ToolResultPayload）；按 caller_source 区分归属 Agent */
+/** 工具调用来源归一（caller_source → 显示文本）。planner-react / minecraft-* 折叠到人类可读标签，其他原样保留 */
+export function callerSourceLabel(source: string): string {
+  if (source === 'planner-react') return '主播决策';
+  if (source === 'minecraft-react' || source === 'minecraft-handoff') return '游戏 Agent';
+  return source;
+}
+
+/** 主播动作：tool.result.*（ToolResultPayload）；按 caller_source 区分归属 Agent
+ * detail 字段承载原始入参/结果/错误文本——给前端"参数/结果"折叠面板做数据源；
+ * arguments 字段由后端并行新增（ToolResultPayload.arguments），事件里缺失时取 null。
+ */
 function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
   const toolName = str(data.tool_name) || event.type.slice('tool.result.'.length) || 'tool';
   const status = str(data.status);
   const failed = status === 'error';
   const spoken = pickToolText(data.result);
-  const statusText = status ? (failed ? '执行失败' : '执行完成') : '';
-  const source = str(data.caller_source);
-  const caller =
-    source === 'planner-react' ? '主播决策' : source === 'minecraft-react' ? '游戏 Agent' : source;
+  const source = callerSourceLabel(str(data.caller_source));
+  // 状态徽标与来源徽标拆双槽：有 status 时恒为成功/失败，无 status 留空避免抢视觉
+  const badge = status ? (failed ? '失败' : '成功') : '';
+  // detail 用对象承载三个原始字段：args（入参）/ result（结果）/ error_message（错误文本）
+  // 模板里按需渲染，折叠面板仅在 args/result/error_message 任一非空时才显示
+  const errorText = str(data.error_message);
+  const detail: Record<string, unknown> = {
+    args: data.arguments ?? null,
+    result: data.result ?? null,
+    error_message: errorText,
+  };
   return makeEntry({
     id: event.id,
     kind: 'tool',
     tsSec: toSeconds(event.timestamp),
     actor: toolName,
-    text: spoken || statusText || summarizeEvent(event.type, data),
-    note: failed ? str(data.error_message) : '',
-    badge: failed ? '失败' : caller,
+    // 正文只在有实质内容时出现（speak 工具的播报文本）；成败已由徽标承载，不重复成行
+    text: spoken,
+    note: failed ? errorText : '',
+    badge,
     failed,
     speak: toolName === 'speak',
     roundId: str(data.round_id),
+    source,
+    detail,
   });
 }
 
@@ -395,6 +444,39 @@ function fromMilestone(event: FeedEvent, data: Record<string, unknown>): ShowEnt
   });
 }
 
+/** game.* 事件 → ShowEntry（GamePayload，event_type 判别）。
+ *  非 game.* 事件返回 null；game.milestone 不走此函数（旧路径在 LiveObserver 本地维护） */
+export function toGameEntry(event: FeedEvent): ShowEntry | null {
+  if (!event.type.startsWith('game.')) return null;
+  const data = isRecord(event.data) ? event.data : {};
+  const eventType = str(data.event_type) || event.type.slice('game.'.length);
+  const reportKind = str(data.report_kind);
+  // 按 event_type 决定徽标语义；report 在 escalation 时升级为"升级提醒"
+  let badge = '';
+  if (eventType === 'report') badge = reportKind === 'escalation' ? '升级提醒' : '汇报';
+  else if (eventType === 'attention_required') badge = '需要关注';
+  else if (eventType === 'error') badge = '游戏错误';
+  else if (eventType === 'milestone') badge = '里程碑';
+  // 次要文案：scene 优先；report 时再叠加 report_kind 上下文
+  const noteParts: string[] = [];
+  const scene = str(data.scene);
+  if (scene) noteParts.push(scene);
+  if (eventType === 'report' && reportKind) {
+    noteParts.push(reportKind === 'escalation' ? '需要主播决策' : '交付总结');
+  }
+  return makeEntry({
+    id: event.id,
+    kind: 'game',
+    tsSec: toSeconds(event.timestamp),
+    actor: str(data.game) || eventType,
+    text: str(data.message) || summarizeEvent(event.type, data),
+    note: noteParts.join(' · '),
+    badge,
+    failed: eventType === 'error',
+    source: '游戏 Agent',
+  });
+}
+
 /** 非控制台事件（system.* 等）返回 null，不进时间线 */
 export function toEntry(event: FeedEvent): ShowEntry | null {
   const data = isRecord(event.data) ? event.data : {};
@@ -410,7 +492,14 @@ export function toEntry(event: FeedEvent): ShowEntry | null {
     return fromLiveBoundary(event, data);
   if (event.type.startsWith('tool.result.')) return fromToolResult(event, data);
   if (event.type === 'agenda.update') return fromAgenda(event, data);
+  // game.milestone 旧路径由 LiveObserver 本地处理；其他 game.*（report/attention_required/error）统一走 toGameEntry
   if (event.type === 'game.milestone') return fromMilestone(event, data);
+  if (
+    event.type === 'game.report' ||
+    event.type === 'game.attention_required' ||
+    event.type === 'game.error'
+  )
+    return toGameEntry(event);
   return null;
 }
 
