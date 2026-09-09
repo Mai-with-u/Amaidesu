@@ -14,19 +14,27 @@ PATCH 通过 ``key`` 的首段 (例如 ``persona.bot_name`` → ``persona``) 路
 """
 
 from collections import defaultdict
-from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, Union, get_args, get_origin
 import asyncio
 import os
+import re
 import subprocess
 import sys
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
+from src.modules.config.agents_schemas import AgentsRootConfig
+from src.modules.config.background_schemas import BackgroundRootConfig
+from src.modules.config.core_schemas import CoreConfig
+from src.modules.config.memory_schemas import MemoryRootConfig
+from src.modules.config.model_schemas import ModelConfig
+from src.modules.config.storage_schemas import StorageRootConfig
 from src.modules.config.toml_utils import (
     load_toml_with_comments,
     write_toml_preserve,
 )
+from src.modules.config.tools_schemas import ToolsRootConfig
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.logging import get_logger
 
@@ -40,26 +48,195 @@ logger = get_logger("ConfigAPI")
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
-# 需要重启服务的配置键前缀
-RESTART_REQUIRED_PREFIXES = [
-    "llm.",
-    "llm_fast.",
-    "vlm.",
-    "llm_local.",
-    "llm_providers.",
-    "maicore.",
-    "dashboard.",
-    "logging.",
-    # mcp 段由 upgrade_hooks 主动剥离，无需列在重启前缀里
-]
+# section 顶层字段名 → Pydantic 根模型；与 _build_frontend_groups 共用同一份 schema 树
+_SECTION_TO_ROOT_MODEL: Dict[str, type[BaseModel]] = {
+    "meta": CoreConfig,
+    "general": CoreConfig,
+    "persona": CoreConfig,
+    "context": CoreConfig,
+    "events": CoreConfig,
+    "dashboard": CoreConfig,
+    "logging": CoreConfig,
+    "interceptors": CoreConfig,
+    "simulator": CoreConfig,
+    "tts": CoreConfig,
+    "subtitle": CoreConfig,
+    "llm": ModelConfig,
+    "llm_fast": ModelConfig,
+    "vlm": ModelConfig,
+    "llm_local": ModelConfig,
+    "llm_providers": ModelConfig,
+    "llm_summary": ModelConfig,
+    "llm_agenda": ModelConfig,
+    "agents": AgentsRootConfig,
+    "streamer": AgentsRootConfig,
+    "tools": ToolsRootConfig,
+    "perception": ToolsRootConfig,
+    "output": ToolsRootConfig,
+    "understanding": ToolsRootConfig,
+    "content_engine": ToolsRootConfig,
+    "external": ToolsRootConfig,
+    "memory": MemoryRootConfig,
+    "simple": MemoryRootConfig,
+    "amemorix": MemoryRootConfig,
+    "storage": StorageRootConfig,
+    "sqlite": StorageRootConfig,
+    "background": BackgroundRootConfig,
+    "compressor": BackgroundRootConfig,
+}
 
 
-def _check_requires_restart(key: str) -> bool:
-    """检查配置更改是否需要重启"""
-    for prefix in RESTART_REQUIRED_PREFIXES:
-        if key.startswith(prefix):
-            return True
+def _unwrap_optional(annotation: Any) -> Any:
+    """剥离 ``Optional[X]`` / ``Union[X, None]`` 包装，保留其它 ``Union`` 结构。"""
+    if get_origin(annotation) is Union:
+        non_none = [a for a in get_args(annotation) if a is not type(None)]
+        if len(non_none) == 1:
+            return non_none[0]
+    return annotation
+
+
+def _resolve_schema_node(key: str) -> Optional[tuple[type[BaseModel], Any]]:
+    """按点分 key 走 schema 树；返回 (containing_model_cls, leaf_field_info_or_None)。
+
+    任意一段未在 schema 中找到则返回 ``None``，由调用方按"未知配置项"拒绝。
+    ``dict[str, Any]`` 字段（如拦截器配置）下接受任意下一段键作为叶子字段；
+    此时 ``leaf_field_info`` 为 ``None``，调用方跳过字段级类型/约束校验。
+    """
+    parts = key.split(".")
+    if not parts or not parts[0]:
+        return None
+    section = parts[0]
+    root_cls = _SECTION_TO_ROOT_MODEL.get(section)
+    if root_cls is None:
+        return None
+    current_cls = root_cls
+    for i, segment in enumerate(parts[:-1]):
+        if segment not in current_cls.model_fields:
+            return None
+        fld = current_cls.model_fields[segment]
+        annotation = _unwrap_optional(fld.annotation)
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            current_cls = annotation
+        elif get_origin(annotation) is dict:
+            # 自由键 dict 字段：仅当下一段就是叶子时合法，否则无法再向下展开
+            if i < len(parts) - 2:
+                return None
+            return current_cls, fld
+        else:
+            return None
+    leaf_name = parts[-1]
+    if leaf_name not in current_cls.model_fields:
+        return None
+    return current_cls, current_cls.model_fields[leaf_name]
+
+
+def _field_is_readonly(field_info: Any) -> bool:
+    """检查字段是否标记 readonly（来自 ``json_schema_extra={"readonly": True}``）。"""
+    extra = getattr(field_info, "json_schema_extra", None)
+    if isinstance(extra, dict) and extra.get("readonly") is True:
+        return True
     return False
+
+
+def _validate_value_for_field(value: Any, field_info: Any, dotted_key: str) -> Optional[str]:
+    """校验 ``value`` 是否匹配字段类型与约束；通过返回 ``None``，失败返回中文错误消息。
+
+    校验维度：
+    - 类型：标量 (str/int/float/bool) / 数组 (list) / 对象 (dict) / Literal / 嵌套 Pydantic 模型
+    - 约束：从 Pydantic ``Field.metadata`` 提取 ge/le/gt/lt/min_length/max_length/pattern
+
+    选择此实现的原因：deterministic + testable。覆盖嵌套 Pydantic 模型字段时调用
+    ``model_validate``，让 Pydantic 自身的错误处理覆盖 min_length/pattern 等深层约束；
+    标量字段用直接 isinstance + 约束比较，避免构造整个 containing model 的开销。
+    """
+    annotation = _unwrap_optional(field_info.annotation)
+
+    # Literal[X, Y, ...] -> 值必须命中选项之一
+    if get_origin(annotation) is not None and str(get_origin(annotation)) == "typing.Literal":
+        options = list(get_args(annotation))
+        if value not in options:
+            return f"{dotted_key} 值必须是 {options} 之一，收到: {value!r}"
+        return None
+
+    # 嵌套 Pydantic 模型 -> 走 model_validate
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        if not isinstance(value, dict):
+            return f"{dotted_key} 应为对象，收到: {type(value).__name__}"
+        try:
+            annotation.model_validate(value)
+        except ValidationError as e:
+            return f"{dotted_key} 结构校验失败: {e}"
+        return None
+
+    # 标量类型（注意：bool 必须在 int 之前判断，因为 isinstance(True, int) == True）
+    if annotation is bool:
+        if not isinstance(value, bool):
+            return f"{dotted_key} 应为布尔值 (true/false)，收到: {type(value).__name__}"
+    elif annotation is int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return f"{dotted_key} 应为整数，收到: {type(value).__name__}"
+    elif annotation is float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"{dotted_key} 应为数字，收到: {type(value).__name__}"
+    elif annotation is str:
+        if not isinstance(value, str):
+            return f"{dotted_key} 应为字符串，收到: {type(value).__name__}"
+    elif get_origin(annotation) in {list, set, tuple}:
+        if not isinstance(value, list):
+            return f"{dotted_key} 应为数组，收到: {type(value).__name__}"
+        elem_args = get_args(annotation)
+        if elem_args:
+            elem_type = _unwrap_optional(elem_args[0])
+            for i, item in enumerate(value):
+                if isinstance(elem_type, type) and issubclass(elem_type, BaseModel):
+                    if not isinstance(item, dict):
+                        return f"{dotted_key}[{i}] 应为对象，收到: {type(item).__name__}"
+                    try:
+                        elem_type.model_validate(item)
+                    except ValidationError as e:
+                        return f"{dotted_key}[{i}] 结构校验失败: {e}"
+                elif elem_type is int and (isinstance(item, bool) or not isinstance(item, int)):
+                    return f"{dotted_key}[{i}] 应为整数，收到: {type(item).__name__}"
+                elif elem_type is float and (isinstance(item, bool) or not isinstance(item, (int, float))):
+                    return f"{dotted_key}[{i}] 应为数字，收到: {type(item).__name__}"
+                elif elem_type is str and not isinstance(item, str):
+                    return f"{dotted_key}[{i}] 应为字符串，收到: {type(item).__name__}"
+                elif elem_type is bool and not isinstance(item, bool):
+                    return f"{dotted_key}[{i}] 应为布尔值，收到: {type(item).__name__}"
+    elif annotation is dict or get_origin(annotation) is dict:
+        if not isinstance(value, dict):
+            return f"{dotted_key} 应为对象，收到: {type(value).__name__}"
+    else:
+        # 未识别的注解类型：保守放行（写入将由外层 tomlkit 序列化兜底）
+        return None
+
+    # 标量/字符串约束（ge/le/gt/lt/min_length/max_length/pattern）
+    metadata = getattr(field_info, "metadata", None) or []
+    for c in metadata:
+        ge = getattr(c, "ge", None)
+        le = getattr(c, "le", None)
+        gt = getattr(c, "gt", None)
+        lt = getattr(c, "lt", None)
+        min_length = getattr(c, "min_length", None)
+        max_length = getattr(c, "max_length", None)
+        pattern = getattr(c, "pattern", None)
+        if isinstance(value, str) and min_length is not None and len(value) < min_length:
+            return f"{dotted_key} 长度不能少于 {min_length} 字符"
+        if isinstance(value, str) and max_length is not None and len(value) > max_length:
+            return f"{dotted_key} 长度不能超过 {max_length} 字符"
+        if isinstance(value, str) and pattern is not None:
+            # Pydantic 用 search 校验 pattern，这里保持一致
+            if not re.search(pattern, value):
+                return f"{dotted_key} 不匹配要求的格式 ({pattern})"
+        if not isinstance(value, bool) and isinstance(value, (int, float)) and ge is not None and value < ge:
+            return f"{dotted_key} 不能小于 {ge}"
+        if not isinstance(value, bool) and isinstance(value, (int, float)) and le is not None and value > le:
+            return f"{dotted_key} 不能大于 {le}"
+        if not isinstance(value, bool) and isinstance(value, (int, float)) and gt is not None and value <= gt:
+            return f"{dotted_key} 必须大于 {gt}"
+        if not isinstance(value, bool) and isinstance(value, (int, float)) and lt is not None and value >= lt:
+            return f"{dotted_key} 必须小于 {lt}"
+    return None
 
 
 def _resolve_section(key: str) -> str:
@@ -246,6 +423,8 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
         "value": _get_nested_value(main_config, dotted_key),
         "required": field.get("required", False),
         "sensitive": _is_sensitive_field(dotted_key),
+        # 透传 schema_generator 从 json_schema_extra 解析出的 readonly 标记，与 PATCH 接口的拒绝逻辑共用同一信号
+        "readonly": bool(field.get("readonly", False)),
     }
     validation: dict = {}
     for k in ("minValue", "maxValue", "options", "pattern"):
@@ -588,6 +767,30 @@ async def update_config(request: ConfigUpdateRequest, server: ServerDep) -> Conf
             target_file=_path_basename(config_path),
         )
 
+    # 走 schema 树校验：未知配置项 / readonly / 类型或约束违规一律拒绝
+    schema_node = _resolve_schema_node(request.key)
+    if schema_node is None:
+        return ConfigUpdateResponse(
+            success=False,
+            message=f"未知配置项: {request.key}",
+            target_file=_path_basename(config_path),
+        )
+    _containing_cls, leaf_field = schema_node
+    if leaf_field is not None and _field_is_readonly(leaf_field):
+        return ConfigUpdateResponse(
+            success=False,
+            message=f"{request.key} 为只读字段，禁止修改",
+            target_file=_path_basename(config_path),
+        )
+    if leaf_field is not None:
+        validation_error = _validate_value_for_field(request.value, leaf_field, request.key)
+        if validation_error is not None:
+            return ConfigUpdateResponse(
+                success=False,
+                message=validation_error,
+                target_file=_path_basename(config_path),
+            )
+
     try:
         # 1. 使用 tomlkit 读取（保留注释）
         doc = load_toml_with_comments(str(config_path))
@@ -607,13 +810,15 @@ async def update_config(request: ConfigUpdateRequest, server: ServerDep) -> Conf
         success, message = write_toml_preserve(str(config_path), doc, create_backup=False)
 
         if success:
-            requires_restart = _check_requires_restart(request.key)
+            # ConfigService.reload_config() 只刷新内存中的 main_config，不向已构造的 Agent / Tool /
+            # Collector 注入新配置（reload 回调链路未被任何生产代码注册，FileWatcher 也未启动），
+            # 故任何 PATCH 都要求用户重启服务才能生效；前缀白名单的差异化策略已被废弃。
             logger.info(f"配置已更新: {request.key} = {request.value} (写入 {_path_basename(config_path)})")
 
             return ConfigUpdateResponse(
                 success=True,
-                message="配置已保存到文件",
-                requires_restart=requires_restart,
+                message="配置已保存到文件，需重启服务后生效",
+                requires_restart=True,
                 target_file=_path_basename(config_path),
             )
 

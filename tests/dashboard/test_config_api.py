@@ -391,9 +391,7 @@ class TestPatchConfigEndpoint:
         resp = client.patch("/api/v1/config", json={"key": "persona.bot_name", "value": "测试"})
         assert resp.status_code == 200
 
-        assert not old_path.exists(), (
-            "PATCH 不应写入根目录的硬编码 config.toml 路径,应写入 config/core.toml"
-        )
+        assert not old_path.exists(), "PATCH 不应写入根目录的硬编码 config.toml 路径,应写入 config/core.toml"
 
     def test_patch_returns_requires_restart_for_llm_keys(self, client):
         resp = client.patch("/api/v1/config", json={"key": "llm.model", "value": "gpt-5"})
@@ -409,12 +407,13 @@ class TestPatchConfigEndpoint:
         assert body["success"] is True
         assert body.get("requires_restart") is True
 
-    def test_patch_persona_does_not_require_restart(self, client):
+    def test_patch_persona_requires_restart(self, client):
+        """decision A: 任何 PATCH 都要求重启（ConfigService.reload_config 不向已构造 Agent 注入新值）。"""
         resp = client.patch("/api/v1/config", json={"key": "persona.bot_name", "value": "测试名"})
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
-        assert body.get("requires_restart") is False
+        assert body.get("requires_restart") is True
 
     def test_patch_logging_requires_restart(self, client):
         resp = client.patch("/api/v1/config", json={"key": "logging.level", "value": "DEBUG"})
@@ -498,9 +497,10 @@ class TestPatchConfigEmptyKeyValidation:
         assert "[1]" in body["message"]
 
     def test_patch_accepts_valid_nested_dict(self, client, config_dir):
+        """``interceptors`` 是 ``dict[str, Any]`` 字段，下一段是自由键，叶子无 schema 校验。"""
         resp = client.patch(
             "/api/v1/config",
-            json={"key": "persona.custom", "value": {"name": "麦麦", "age": 18}},
+            json={"key": "interceptors.rate_limit", "value": {"name": "麦麦", "age": 18}},
         )
         assert resp.status_code == 200
         body = resp.json()
@@ -509,8 +509,8 @@ class TestPatchConfigEmptyKeyValidation:
         from src.modules.config.toml_utils import load_toml_with_comments
 
         doc = load_toml_with_comments(str(config_dir / "core.toml"))
-        assert doc["persona"]["custom"]["name"] == "麦麦"
-        assert doc["persona"]["custom"]["age"] == 18
+        assert doc["interceptors"]["rate_limit"]["name"] == "麦麦"
+        assert doc["interceptors"]["rate_limit"]["age"] == 18
 
 
 # ===========================================================================
@@ -599,3 +599,167 @@ class TestGetConfigSchemaEndpoint:
         for g in groups:
             for f in g["fields"]:
                 assert f["type"] != "number", f"field {f['key']} has type 'number' which should be 'float'"
+
+
+# ===========================================================================
+# 5. PATCH /api/v1/config — schema 校验 / readonly / 类型约束
+# ===========================================================================
+
+
+class TestPatchConfigSchemaValidation:
+    """PATCH schema 校验矩阵：未知 / readonly / 类型与约束违规全部拒绝。"""
+
+    def test_patch_unknown_key_rejected_and_nothing_written(self, client, config_dir):
+        """未知 key：返回 success=false，磁盘文件保持原状。"""
+        resp = client.patch("/api/v1/config", json={"key": "persona.does_not_exist", "value": "x"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "未知配置项" in body["message"]
+        assert "persona.does_not_exist" in body["message"]
+
+        core_content = (config_dir / "core.toml").read_text(encoding="utf-8")
+        assert "does_not_exist" not in core_content, "未知 key 不应写入磁盘"
+
+    def test_patch_unknown_section_rejected(self, client, config_dir):
+        """未注册的 section：返回 success=false。"""
+        resp = client.patch("/api/v1/config", json={"key": "ghost.foo", "value": "x"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "未知配置项" in body["message"]
+
+    def test_patch_readonly_field_meta_version_rejected(self, client, config_dir):
+        """``meta.version`` 标记 readonly，PATCH 一律拒绝。"""
+        resp = client.patch("/api/v1/config", json={"key": "meta.version", "value": "v2.0.28"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "只读" in body["message"]
+        assert "meta.version" in body["message"]
+
+        # 写拒绝后磁盘内容不应被本次 PATCH 覆盖（drift 写回可能升级 version，但 PATCH 值不应落地）
+        from src.modules.config.toml_utils import load_toml_with_comments
+
+        doc = load_toml_with_comments(str(config_dir / "core.toml"))
+        assert doc["meta"]["version"] != "v2.0.28", "readonly 字段不应被 PATCH 覆盖"
+
+    def test_patch_type_violation_string_into_integer_rejected(self, client, config_dir):
+        """``persona.max_response_length`` 是 int 字段，写入字符串应被拒绝。"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "persona.max_response_length", "value": "fifty"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "persona.max_response_length" in body["message"]
+        assert "整数" in body["message"]
+
+        core_content = (config_dir / "core.toml").read_text(encoding="utf-8")
+        assert "fifty" not in core_content, "类型错误不应写入磁盘"
+
+    def test_patch_type_violation_bool_into_string_rejected(self, client, config_dir):
+        """bool 写入字符串字段应被拒绝。"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "persona.bot_name", "value": True},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "字符串" in body["message"]
+
+    def test_patch_constraint_violation_above_max_rejected(self, client, config_dir):
+        """``dashboard.subtitle_widget.max_messages`` 约束 ``le=50``，写入超出范围应被拒绝。"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "dashboard.subtitle_widget.max_messages", "value": 999},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False, f"超出 max_messages 上限应被拒绝，实际消息: {body['message']}"
+        assert "不能大于 50" in body["message"] or "le" in body["message"].lower()
+
+    def test_patch_valid_save_returns_success_and_requires_restart(self, client):
+        """合法写入：success=true 且 requires_restart=True（decision A）。"""
+        resp = client.patch("/api/v1/config", json={"key": "persona.bot_name", "value": "新名"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body.get("requires_restart") is True, (
+            "decision A: reload_config 不向已构造 Agent 注入新值，任何 PATCH 都要提示重启"
+        )
+        assert body.get("target_file") == "core.toml"
+
+    def test_patch_valid_save_writes_toml_value_correctly(self, client, config_dir):
+        """合法写入：值正确落地到对应 TOML 文件。"""
+        new_value = "持久化_校验_" + "x"  # 用 ASCII 避免控制台编码干扰
+        resp = client.patch("/api/v1/config", json={"key": "persona.bot_name", "value": new_value})
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+        from src.modules.config.toml_utils import load_toml_with_comments
+
+        doc = load_toml_with_comments(str(config_dir / "core.toml"))
+        assert doc["persona"]["bot_name"] == new_value
+
+    def test_patch_does_not_create_unknown_sections(self, client, config_dir):
+        """未注册的中间段不会被自动创建（避免垃圾 section 注入）。"""
+        # 第一段就是未知 section，必须拒绝
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "totally_unknown_section.field", "value": "x"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "未知配置项" in body["message"]
+
+        # 确认没有任何 toml 文件被污染
+        for fname in (
+            "core.toml",
+            "model.toml",
+            "agents.toml",
+            "tools.toml",
+            "memory.toml",
+            "storage.toml",
+            "background.toml",
+        ):
+            content = (config_dir / fname).read_text(encoding="utf-8")
+            assert "totally_unknown_section" not in content
+
+
+# ===========================================================================
+# 6. GET /api/v1/config/schema — readonly 字段标记透传
+# ===========================================================================
+
+
+class TestSchemaReadonlyFlag:
+    """``meta.version`` 通过 ``json_schema_extra`` 标记 readonly，schema 接口必须透传。"""
+
+    def test_meta_version_field_marked_readonly(self, client):
+        resp = client.get("/api/v1/config/schema")
+        assert resp.status_code == 200
+        groups = resp.json()["groups"]
+        meta_group = next((g for g in groups if g["key"] == "meta"), None)
+        assert meta_group is not None, "meta 组必须在 schema 中存在"
+        version_field = next(
+            (f for f in meta_group["fields"] if f["key"] == "meta.version"),
+            None,
+        )
+        assert version_field is not None, "meta.version 字段必须在 schema 中"
+        assert version_field.get("readonly") is True, f"meta.version 应标记 readonly，实际字段: {version_field}"
+
+    def test_other_fields_default_to_non_readonly(self, client):
+        """非 readonly 字段在响应中显式带 ``readonly: false``，供前端判别。"""
+        resp = client.get("/api/v1/config/schema")
+        groups = resp.json()["groups"]
+        persona_group = next((g for g in groups if g["key"] == "persona"), None)
+        assert persona_group is not None
+        bot_name = next(
+            (f for f in persona_group["fields"] if f["key"] == "persona.bot_name"),
+            None,
+        )
+        assert bot_name is not None
+        assert bot_name.get("readonly") is False
