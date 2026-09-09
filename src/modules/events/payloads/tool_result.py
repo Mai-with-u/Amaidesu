@@ -43,6 +43,8 @@ class ToolResultPayload(BasePayload):
             （"planner-react"=主播决策循环 / "minecraft-react"=游戏 Agent 循环），
             供观察器区分工具调用的归属 Agent。
         status: 执行状态（success=成功完成 / error=执行失败）
+        arguments: 透传自调用方的入参（ToolInvocation.arguments 的浅拷贝；
+            WebUI 等观察器据此把工具结果与入参对齐展示）
         result: 工具执行结果数据（结构由各工具自行定义）
         error_message: 错误信息（status=error 时填写）
         timestamp_ms: 完成时刻（Unix 毫秒）
@@ -61,11 +63,11 @@ class ToolResultPayload(BasePayload):
         default=None,
         description="调用方标识（透传自 ToolInvocation.source；区分归属 Agent）",
     )
-    round_id: Optional[str] = Field(
-        default=None,
-        description="关联的决策轮次 ID；工具调用不在决策轮上下文内时为 None",
-    )
     status: Literal["success", "error"] = Field(..., description="执行状态（success/error）")
+    arguments: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="调用方入参（透传自 ToolInvocation.arguments 的浅拷贝，供 WebUI 等观察器对齐展示；缺省/None 时落空 dict）",
+    )
     result: Dict[str, Any] = Field(
         default_factory=dict,
         description="工具执行结果数据（结构由各工具自行定义）",

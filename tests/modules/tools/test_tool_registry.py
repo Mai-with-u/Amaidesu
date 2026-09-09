@@ -366,6 +366,32 @@ async def test_invoke_emits_tool_result_event_when_event_bus_attached() -> None:
     assert payload.result == {"content": "done"}
 
 
+async def test_invoke_emits_tool_result_with_arguments_echo(registry: ToolRegistry) -> None:
+    """tool.result 事件携带调用方入参（arguments 透传），供 WebUI 对齐展示。"""
+    from src.modules.events.event_bus import EventBus
+    from src.modules.events.payloads.tool_result import ToolResultPayload
+
+    bus = EventBus(enable_stats=False)
+    received: list[ToolResultPayload] = []
+
+    async def _on_result(event_name: str, payload: ToolResultPayload, source: str) -> None:
+        received.append(payload)
+
+    bus.on("tool.result.#", _on_result, ToolResultPayload)
+    registry._event_bus = bus
+
+    async def _ok(inv: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name=inv.tool_name, success=True)
+
+    registry.register(ToolSpec(name="arg_tool", description="d", kind="sync"), _ok)
+    await registry.invoke(ToolInvocation(tool_name="arg_tool", source="test", arguments={"city": "上海", "n": 3}))
+    await registry.invoke(ToolInvocation(tool_name="arg_tool", source="test"))
+    await asyncio.sleep(0.01)  # emit 为 fire-and-forget，让派发任务跑完
+    assert len(received) == 2
+    assert received[0].arguments == {"city": "上海", "n": 3}
+    assert received[1].arguments == {}  # 缺省入参落空 dict，不落 None
+
+
 async def test_invoke_emits_tool_result_error_event(registry: ToolRegistry) -> None:
     """实现异常路径同样广播（status=error），且不反噬调用结果。"""
     from src.modules.events.event_bus import EventBus

@@ -428,6 +428,7 @@ class ToolRegistry:
                 round_id=invocation.round_id or None,
                 caller_source=invocation.source or None,
                 status="success" if result.success else "error",
+                arguments=dict(invocation.arguments or {}),
                 result=result_data,
                 error_message=result.error_message,
                 timestamp_ms=result.timestamp_ms or int(time.time() * 1000),
