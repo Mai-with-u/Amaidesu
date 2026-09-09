@@ -303,6 +303,61 @@ class ConfigUpdateResponse(BaseModel):
     )
 
 
+class BatchConfigChange(BaseModel):
+    """批量更新中的单条变更。"""
+
+    key: str = Field(description="配置键（点分隔路径,如 'general.platform_id')")
+    value: Any = Field(description="配置值")
+
+
+class BatchConfigUpdateRequest(BaseModel):
+    """批量配置更新请求。
+
+    多个变更按提交顺序处理：
+    - 同一批次内出现重复 key 时，后者覆盖前者的校验值与最终写入值（last-wins），
+      这是为了支持前端"反复编辑同字段"时的最终一致性，不视为错误。
+    - 整体按事务处理：任意一条校验失败则整个批次回退（无文件被改写）。
+    """
+
+    changes: list[BatchConfigChange] = Field(description="本次要提交的变更列表（按顺序处理，重复 key 后者覆盖前者）")
+
+
+class BatchChangeResult(BaseModel):
+    """批量端点中每条变更的处理结果。"""
+
+    key: str = Field(description="配置键")
+    success: bool = Field(description="本条是否成功")
+
+
+class BatchChangeError(BaseModel):
+    """批量端点中失败条目的错误明细。"""
+
+    key: str = Field(description="失败的配置键")
+    message: str = Field(description="失败原因（中文）")
+
+
+class BatchConfigUpdateResponse(BaseModel):
+    """批量配置更新响应。
+
+    - 全部成功时：``success=true``，``results`` 列出每条 key 与 success=true，
+      ``requires_restart=true`` 沿用单条 PATCH 的诚实策略。
+    - 任一失败时：``success=false``，``errors`` 列出失败条目，``message`` 是首条失败的
+      中文消息（含 "（另有 N 项失败）" 聚合后缀），并保证磁盘零写入。
+    """
+
+    success: bool = Field(description="是否全部成功")
+    message: str = Field(description="聚合后的结果消息")
+    requires_restart: bool = Field(default=False, description="是否需要重启服务（仅全部成功时为 true）")
+    results: list[BatchChangeResult] = Field(
+        default_factory=list,
+        description="每条变更的处理结果（仅成功时填充）",
+    )
+    errors: list[BatchChangeError] = Field(
+        default_factory=list,
+        description="失败条目列表（仅失败时填充）",
+    )
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/config
 # ---------------------------------------------------------------------------
@@ -313,6 +368,11 @@ async def get_config(server: ServerDep) -> ConfigResponse:
     """获取当前配置
 
     返回扁平化的 ``main_config`` 字典 (ConfigService 已合并 core/model/input/decision/output)。
+
+    敏感字段 (api_key / token / password / secret 等) 的值在响应中替换为 ``""``，
+    避免明文凭据被此接口整盘导出。
+    前端配置页应通过 ``/api/v1/config/schema`` 读取字段定义，
+    本接口仅作为只读快照使用。
     """
     config_service = server.config_service
     if not config_service:
@@ -320,7 +380,9 @@ async def get_config(server: ServerDep) -> ConfigResponse:
         return ConfigResponse()
 
     try:
-        return ConfigResponse(config=dict(config_service.main_config or {}))
+        raw_config = dict(config_service.main_config or {})
+        masked_config = _mask_sensitive_values(raw_config)
+        return ConfigResponse(config=masked_config)
     except Exception as e:
         logger.error(f"获取配置失败: {e}", exc_info=True)
         return ConfigResponse()
@@ -407,22 +469,47 @@ def _apply_component_meta(group_fields: list[dict]) -> list[dict]:
     return result
 
 
+def _mask_sensitive_values(config: dict, path_prefix: str = "") -> dict:
+    """递归遍历 config，对敏感字段的标量值替换为 ``""``，返回新 dict（不修改原对象）。
+
+    路径语义与 schema 字段的 dotted key 一致：dict 子段拼接到前缀后，
+    list 子项不引入新的路径段（数组元素匿名），与 ``collect_all_fields`` 生成的
+    ``llm_providers.api_key`` 这类扁平 key 保持一致，便于复用 ``_is_sensitive_field``。
+    """
+    masked: dict = {}
+    for k, v in config.items():
+        full_key = f"{path_prefix}.{k}" if path_prefix else str(k)
+        if isinstance(v, dict):
+            masked[k] = _mask_sensitive_values(v, full_key)
+        elif isinstance(v, list):
+            masked[k] = [_mask_sensitive_values(item, full_key) if isinstance(item, dict) else item for item in v]
+        else:
+            masked[k] = "" if _is_sensitive_field(full_key) else v
+    return masked
+
+
 def _convert_to_api_field(field: dict, main_config: dict) -> dict:
     """将 generator schema 的 field dict 转换为前端 API 字段格式。
 
     集中维护转换逻辑，使 ``_build_frontend_groups`` 与
     ``_expand_sub_config_fields`` 复用同一份字段规范化规则。
+
+    敏感字段：``value`` 一律返回空字符串，避免明文 API key 通过 schema 接口泄漏。
+    前端基于 schema 的 diff 基线策略只在用户真正编辑时提交新值，
+    未触动过的敏感字段保持空字符串上送，被后端视为"未改动"而不会覆盖磁盘上的真实值。
     """
     dotted_key = field.get("key", "")
+    raw_value = _get_nested_value(main_config, dotted_key)
+    is_sensitive = _is_sensitive_field(dotted_key)
     gfield: dict = {
         "key": dotted_key,
         "label": _extract_label(field),
         "description": field.get("description", ""),
         "type": _map_gen_type(field.get("type", "string")),
         "default": field.get("default"),
-        "value": _get_nested_value(main_config, dotted_key),
+        "value": "" if is_sensitive else raw_value,
         "required": field.get("required", False),
-        "sensitive": _is_sensitive_field(dotted_key),
+        "sensitive": is_sensitive,
         # 透传 schema_generator 从 json_schema_extra 解析出的 readonly 标记，与 PATCH 接口的拒绝逻辑共用同一信号
         "readonly": bool(field.get("readonly", False)),
     }
@@ -835,6 +922,165 @@ async def update_config(request: ConfigUpdateRequest, server: ServerDep) -> Conf
             message=f"更新配置失败: {str(e)}",
             target_file=_path_basename(config_path) if config_path else None,
         )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/config/batch — 批量原子保存
+# ---------------------------------------------------------------------------
+
+
+@router.post("/batch", response_model=BatchConfigUpdateResponse)
+async def batch_update_config(
+    request: BatchConfigUpdateRequest,
+    server: ServerDep,
+) -> BatchConfigUpdateResponse:
+    """批量原子更新配置。
+
+    单次请求携带多条变更，要么全部成功要么全部回退（事务语义）：
+    任一变更在校验阶段失败则拒绝整个批次并保持磁盘零写入；
+    写入阶段按目标 TOML 文件分组，每个文件只读写一次。
+
+    同一批次内出现重复 key 时按 **last-wins** 处理：后者的 value 覆盖前者的校验值与
+    最终写入值，便于前端"反复编辑同字段后保存"的最终一致性，不视为错误。
+    """
+    config_service = server.config_service
+    if not config_service:
+        return BatchConfigUpdateResponse(
+            success=False,
+            message="Config service not available",
+        )
+
+    if not request.changes:
+        return BatchConfigUpdateResponse(
+            success=False,
+            message="没有可保存的更改",
+        )
+
+    deduped: Dict[str, Any] = {}
+    for change in request.changes:
+        deduped[change.key] = change.value
+    normalized: list[tuple[str, Any]] = list(deduped.items())
+
+    validation_error = _validate_batch(normalized)
+    if validation_error is not None:
+        return validation_error
+
+    write_error = _write_batch(normalized, server)
+    if write_error is not None:
+        return write_error
+
+    logger.info(f"批量配置更新成功: 共 {len(normalized)} 项")
+    return BatchConfigUpdateResponse(
+        success=True,
+        message="配置已保存",
+        requires_restart=True,
+        results=[BatchChangeResult(key=k, success=True) for k, _ in normalized],
+    )
+
+
+def _validate_batch(
+    normalized: list[tuple[str, Any]],
+) -> Optional[BatchConfigUpdateResponse]:
+    """逐条复用单条 PATCH 的校验规则；任一失败返回完整失败响应（不写盘）。"""
+    errors: list[BatchChangeError] = []
+    for key, value in normalized:
+        empty_key_path = _find_empty_key(value)
+        if empty_key_path is not None:
+            errors.append(
+                BatchChangeError(
+                    key=key,
+                    message=f"配置值包含空键: '{empty_key_path}'（位于 {key}，请移除空白键后重试）",
+                )
+            )
+            continue
+
+        schema_node = _resolve_schema_node(key)
+        if schema_node is None:
+            errors.append(BatchChangeError(key=key, message=f"未知配置项: {key}"))
+            continue
+
+        _containing_cls, leaf_field = schema_node
+        if leaf_field is not None and _field_is_readonly(leaf_field):
+            errors.append(BatchChangeError(key=key, message=f"{key} 为只读字段，禁止修改"))
+            continue
+
+        if leaf_field is not None:
+            validation_error = _validate_value_for_field(value, leaf_field, key)
+            if validation_error is not None:
+                errors.append(BatchChangeError(key=key, message=validation_error))
+                continue
+
+    if not errors:
+        return None
+
+    first = errors[0]
+    if len(errors) == 1:
+        agg_message = first.message
+    else:
+        agg_message = f"{first.message}（另有 {len(errors) - 1} 项失败）"
+    return BatchConfigUpdateResponse(
+        success=False,
+        message=agg_message,
+        errors=errors,
+    )
+
+
+def _group_by_file(
+    normalized: list[tuple[str, Any]],
+    server: ServerDep,
+) -> Dict[str, list[tuple[list[str], Any]]]:
+    """把 (key, value) 按目标 TOML 文件路径分组，便于一次性读写。"""
+    by_file: Dict[str, list[tuple[list[str], Any]]] = {}
+    for key, value in normalized:
+        section = _resolve_section(key)
+        config_path = server.get_config_path(section)
+        if not config_path:
+            raise ValueError(f"无法定位配置文件: section={section!r} (key={key})")
+        by_file.setdefault(config_path, []).append((key.split("."), value))
+    return by_file
+
+
+def _write_batch(
+    normalized: list[tuple[str, Any]],
+    server: ServerDep,
+) -> Optional[BatchConfigUpdateResponse]:
+    """按目标文件分组写入，每个文件仅做一次 ``load_toml_with_comments`` + ``write_toml_preserve``。
+
+    返回 ``None`` 表示全部成功；返回 ``BatchConfigUpdateResponse(success=False, ...)`` 时
+    可能已有部分文件被写入（与单条 PATCH 同样忠实报错，不做回滚）。
+    """
+    try:
+        by_file = _group_by_file(normalized, server)
+    except ValueError as e:
+        return BatchConfigUpdateResponse(success=False, message=str(e))
+
+    for file_path, edits in by_file.items():
+        try:
+            doc = load_toml_with_comments(str(file_path))
+            for key_parts, value in edits:
+                current = doc
+                for k in key_parts[:-1]:
+                    next_node = current.get(k)
+                    if not isinstance(next_node, dict):
+                        current[k] = {}
+                    current = current[k]
+                current[key_parts[-1]] = value
+            ok, message = write_toml_preserve(str(file_path), doc, create_backup=False)
+        except Exception as e:
+            logger.error(f"批量写入失败: {file_path}: {e}", exc_info=True)
+            return BatchConfigUpdateResponse(
+                success=False,
+                message=f"写入配置文件失败: {e}",
+            )
+
+        if not ok:
+            logger.error(f"批量写入失败: {file_path}: {message}")
+            return BatchConfigUpdateResponse(
+                success=False,
+                message=f"写入配置文件失败: {message}",
+            )
+
+    return None
 
 
 # ---------------------------------------------------------------------------

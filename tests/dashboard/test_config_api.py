@@ -763,3 +763,277 @@ class TestSchemaReadonlyFlag:
         )
         assert bot_name is not None
         assert bot_name.get("readonly") is False
+
+
+# ===========================================================================
+# 7. POST /api/v1/config/batch — 批量原子保存
+# ===========================================================================
+
+
+class TestBatchUpdateEndpoint:
+    """批量端点事务语义：校验全部通过才写盘，按目标 TOML 文件分组写入。"""
+
+    def _post_batch(self, client, changes):
+        return client.post("/api/v1/config/batch", json={"changes": changes})
+
+    def test_batch_empty_changes_rejected(self, client):
+        resp = self._post_batch(client, [])
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert body["message"] == "没有可保存的更改"
+        assert body.get("results", []) == []
+        assert body.get("errors", []) == []
+
+    def test_batch_single_file_writes_once_and_requires_restart(self, client, config_dir):
+        changes = [
+            {"key": "persona.bot_name", "value": "新名字A"},
+            {"key": "persona.personality", "value": "温柔"},
+        ]
+        resp = self._post_batch(client, changes)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["success"] is True
+        assert body["message"] == "配置已保存"
+        assert body["requires_restart"] is True
+        assert len(body["results"]) == 2
+        for r in body["results"]:
+            assert r["success"] is True
+        assert body.get("errors", []) == []
+
+        core = (config_dir / "core.toml").read_text(encoding="utf-8")
+        assert "新名字A" in core
+        assert "温柔" in core
+
+    def test_batch_multi_file_writes_each_target_once(self, client, config_dir):
+        changes = [
+            {"key": "persona.bot_name", "value": "跨文件A"},
+            {"key": "llm.model", "value": "claude-3-batch"},
+            {"key": "agents.streamer.planner_llm", "value": "llm"},
+        ]
+        resp = self._post_batch(client, changes)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["success"] is True
+        assert body["requires_restart"] is True
+        assert len(body["results"]) == 3
+
+        assert "跨文件A" in (config_dir / "core.toml").read_text(encoding="utf-8")
+        assert "claude-3-batch" in (config_dir / "model.toml").read_text(encoding="utf-8")
+        assert "planner_llm" in (config_dir / "agents.toml").read_text(encoding="utf-8")
+
+        for fname in ("tools.toml", "memory.toml", "storage.toml", "background.toml"):
+            content = (config_dir / fname).read_text(encoding="utf-8")
+            for v in ("跨文件A", "claude-3-batch", "planner_llm"):
+                assert v not in content, f"{fname} 不应被批量端点影响"
+
+    def test_batch_one_invalid_key_writes_nothing(self, client, config_dir):
+        before_core = (config_dir / "core.toml").read_bytes()
+        before_model = (config_dir / "model.toml").read_bytes()
+        before_agents = (config_dir / "agents.toml").read_bytes()
+
+        changes = [
+            {"key": "persona.bot_name", "value": "应当不被写入"},
+            {"key": "persona.does_not_exist", "value": "x"},
+            {"key": "llm.model", "value": "gpt-4-batch-fail"},
+        ]
+        resp = self._post_batch(client, changes)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "未知配置项" in body["message"]
+        assert "persona.does_not_exist" in body["message"]
+        assert body.get("requires_restart") in (False, None)
+
+        errors = body["errors"]
+        assert len(errors) == 1
+        assert errors[0]["key"] == "persona.does_not_exist"
+        assert "未知配置项" in errors[0]["message"]
+
+        assert (config_dir / "core.toml").read_bytes() == before_core
+        assert (config_dir / "model.toml").read_bytes() == before_model
+        assert (config_dir / "agents.toml").read_bytes() == before_agents
+
+    def test_batch_multiple_failures_aggregates_message(self, client):
+        changes = [
+            {"key": "persona.max_response_length", "value": "fifty"},
+            {"key": "persona.does_not_exist", "value": "x"},
+            {"key": "meta.version", "value": "v9.9.9"},
+        ]
+        resp = self._post_batch(client, changes)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "另有 2 项失败" in body["message"]
+        assert len(body["errors"]) == 3
+        keys_in_errors = {e["key"] for e in body["errors"]}
+        assert keys_in_errors == {"persona.max_response_length", "persona.does_not_exist", "meta.version"}
+
+    def test_batch_readonly_field_rejected_with_others_unchanged(self, client, config_dir):
+        changes = [
+            {"key": "persona.bot_name", "value": "应被丢弃"},
+            {"key": "meta.version", "value": "v9.9.9"},
+        ]
+        resp = self._post_batch(client, changes)
+        body = resp.json()
+        assert body["success"] is False
+        assert "只读" in body["message"]
+        assert body["errors"][0]["key"] == "meta.version"
+
+        core = (config_dir / "core.toml").read_text(encoding="utf-8")
+        assert "应被丢弃" not in core
+
+    def test_batch_type_violation_rejected(self, client):
+        changes = [{"key": "persona.max_response_length", "value": "fifty"}]
+        resp = self._post_batch(client, changes)
+        body = resp.json()
+        assert body["success"] is False
+        assert "整数" in body["message"]
+        assert body["errors"][0]["key"] == "persona.max_response_length"
+
+    def test_batch_unknown_section_rejected(self, client):
+        changes = [{"key": "ghost.foo", "value": "x"}]
+        resp = self._post_batch(client, changes)
+        body = resp.json()
+        assert body["success"] is False
+        assert "未知配置项" in body["message"]
+        assert body["errors"][0]["key"] == "ghost.foo"
+
+    def test_batch_duplicate_key_last_wins(self, client, config_dir):
+        changes = [
+            {"key": "persona.bot_name", "value": "第一次"},
+            {"key": "persona.bot_name", "value": "最终值"},
+        ]
+        resp = self._post_batch(client, changes)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert len(body["results"]) == 1
+        assert body["results"][0]["key"] == "persona.bot_name"
+        assert body["results"][0]["success"] is True
+
+        from src.modules.config.toml_utils import load_toml_with_comments
+
+        doc = load_toml_with_comments(str(config_dir / "core.toml"))
+        assert doc["persona"]["bot_name"] == "最终值"
+        assert "第一次" not in (config_dir / "core.toml").read_text(encoding="utf-8")
+
+    def test_batch_duplicate_key_last_invalid_overrides_valid(self, client):
+        """同一 key 重复时，后者的无效值会覆盖前者的合法值（last-wins），整批回退。"""
+        changes = [
+            {"key": "persona.bot_name", "value": "合法值"},
+            {"key": "persona.bot_name", "value": 12345},
+            {"key": "persona.max_response_length", "value": "fifty"},
+        ]
+        resp = self._post_batch(client, changes)
+        body = resp.json()
+        assert body["success"] is False
+        # 去重后 bot_name 末值为 12345（int 写入 string 字段），max_response_length 是 "fifty"
+        # 两个都会触发类型错误，整批回退
+        assert len(body["errors"]) == 2
+
+    def test_batch_without_service_returns_failure(self):
+        from src.modules.config.core_schemas import DashboardConfig
+        from src.modules.dashboard.server import DashboardServer
+        from src.modules.dashboard.dependencies import set_dashboard_server
+
+        cfg = DashboardConfig(host="127.0.0.1", port=60214)
+        server = DashboardServer(
+            event_bus=None,
+            input_manager=None,
+            decision_manager=None,
+            output_manager=None,
+            context_service=None,
+            config_service=None,
+            dashboard_config=cfg,
+        )
+        set_dashboard_server(server)
+        try:
+            from fastapi.testclient import TestClient
+            from src.modules.dashboard.api.router import create_app
+
+            app = create_app()
+            client = TestClient(app)
+            resp = client.post(
+                "/api/v1/config/batch",
+                json={"changes": [{"key": "persona.bot_name", "value": "x"}]},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["success"] is False
+            assert "not available" in body["message"].lower() or "不可用" in body["message"]
+        finally:
+            set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+# ===========================================================================
+# 8. GET /api/v1/config — 敏感字段屏蔽
+# ===========================================================================
+
+
+class TestGetConfigSensitiveMasking:
+    """GET /config 全量导出接口对敏感字段（api_key / token / password / secret）做屏蔽。"""
+
+    def test_api_key_in_llm_local_masked(self, client):
+        resp = client.get("/api/v1/config")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["config"]["llm_local"]["api_key"] == ""
+
+    def test_api_key_in_providers_masked(self, client):
+        resp = client.get("/api/v1/config")
+        body = resp.json()
+        providers = body["config"].get("llm_providers", [])
+        assert isinstance(providers, list) and len(providers) >= 1
+        assert providers[0]["api_key"] == ""
+
+    def test_non_sensitive_fields_unchanged(self, client):
+        resp = client.get("/api/v1/config")
+        body = resp.json()
+        assert body["config"]["persona"]["bot_name"] == "麦麦"
+        assert body["config"]["llm"]["model"] == "gpt-4"
+        assert body["config"]["llm_local"]["base_url"] == "http://localhost:11434/v1"
+
+    def test_masking_does_not_mutate_underlying_config(self, client, dashboard_server):
+        client.get("/api/v1/config")
+        assert dashboard_server.config_service.main_config["llm_local"]["api_key"] == "sk-dummy"
+
+
+# ===========================================================================
+# 9. GET /api/v1/config/schema — 敏感字段 value 屏蔽
+# ===========================================================================
+
+
+class TestSchemaSensitiveMasking:
+    """Schema 接口的敏感字段 value 一律为 ``""``，避免明文凭据经 schema 接口外泄。"""
+
+    def _all_fields(self, client) -> list[dict]:
+        groups = client.get("/api/v1/config/schema").json()["groups"]
+        out: list[dict] = []
+        for g in groups:
+            for f in g["fields"]:
+                out.append(f)
+                for c in f.get("children", []) or []:
+                    out.append(c)
+        return out
+
+    def test_schema_sensitive_field_value_is_empty_string(self, client):
+        fields = self._all_fields(client)
+        api_key_field = next((f for f in fields if f["key"] == "llm_local.api_key"), None)
+        assert api_key_field is not None, "llm_local.api_key 字段应在 schema 中存在"
+        assert api_key_field.get("sensitive") is True
+        assert api_key_field["value"] == ""
+
+    def test_schema_provider_api_key_value_masked(self, client):
+        fields = self._all_fields(client)
+        provider_api_key = next((f for f in fields if f["key"] == "llm_providers.api_key"), None)
+        assert provider_api_key is not None, "llm_providers.api_key 字段应在 schema 中存在"
+        assert provider_api_key.get("sensitive") is True
+        assert provider_api_key["value"] == ""
+
+    def test_schema_non_sensitive_field_value_preserved(self, client):
+        fields = self._all_fields(client)
+        bot_name = next((f for f in fields if f["key"] == "persona.bot_name"), None)
+        assert bot_name is not None
+        assert bot_name.get("sensitive") is False
+        assert bot_name["value"] == "麦麦"
