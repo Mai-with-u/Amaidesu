@@ -168,8 +168,12 @@ class EventHistoryConfig(BaseConfig):
         description="事件历史内存环形缓冲大小",
     )
     persist: bool = Field(
-        default=True,
-        description="是否将事件历史持久化到 SQLite event_history 表",
+        default=False,
+        description=(
+            "是否将事件历史持久化到 SQLite event_history 表。"
+            "事件日志定位为运行周期观察窗，默认仅内存、重启即清，"
+            "避免上一轮运行的事件经回灌混入新一轮调试视野"
+        ),
     )
 
 

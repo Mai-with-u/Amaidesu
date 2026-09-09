@@ -18,15 +18,16 @@ class TestCoreConfig:
         assert c.persona.behavior_style, "behavior_style 默认值不应为空"
         assert c.context.enabled is True
         assert c.dashboard.port == 60214
+        # 事件日志仅内存（运行周期观察窗）：默认不落库，重启即清，
+        # 保证每轮运行的调试视野互不污染。
+        assert c.events.persist is False
         assert c.meta.version == CONFIG_VERSION
 
     def test_persona_behavior_style_default_matches_config_version(self):
         """v2.0.6: CONFIG_VERSION 与 behavior_style 字段必须同时存在（防漂移）。"""
         from src.modules.config.upgrade_hooks import _parse_version
 
-        assert _parse_version(CONFIG_VERSION) >= _parse_version("2.0.6"), (
-            "CONFIG_VERSION 必须不低于本次升级（2.0.6）"
-        )
+        assert _parse_version(CONFIG_VERSION) >= _parse_version("2.0.6"), "CONFIG_VERSION 必须不低于本次升级（2.0.6）"
         c = CoreConfig()
         # 显式断言 behavior_style 默认值已落盘（防止上游"升了版本但没加字段"的回退）。
         assert c.persona.behavior_style.startswith("积极与观众互动"), (
