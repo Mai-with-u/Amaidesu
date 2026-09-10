@@ -11,7 +11,7 @@
 - 运行时态 → :class:`StreamerAgent` 公开门面（``debug_test_decision`` /
   ``trigger_external_proactive`` / ``get_statistics``），不触碰 Agent 私有属性。
 - 配置只读展示 → ``server.config_service.main_config["agents"]["streamer"]``，
-  与 agenda.py 的读取方式一致。
+  与流程单编排页 API 的读取方式一致。
 - ``test-decision`` 为同步长请求（两段 LLM，典型 10~30s）；仅限开发调试面使用。
 """
 
@@ -45,7 +45,7 @@ class _DebugTestDecisionCallable(Protocol):
     """StreamerAgent.debug_test_decision 的鸭子接口。
 
     Dashboard 只依赖这一最小契约；agent_manager 返回的实例满足该契约即可被消费，
-    不强制继承 StreamerAgent（与 agenda.py 的门面依赖模式一致）。
+    不强制继承 StreamerAgent（与流程单编排页 API 的门面依赖模式一致）。
     """
 
     async def __call__(
@@ -77,7 +77,7 @@ def _read_streamer_config(server: "DashboardServer") -> Dict[str, Any]:
     streamer_cfg = ((main_config or {}).get("agents") or {}).get("streamer") or {}
     return {
         "proactive_enabled": bool(streamer_cfg.get("proactive_enabled", False)),
-        "agenda_enabled": bool(streamer_cfg.get("agenda_enabled", False)),
+        "rundown_id": str(streamer_cfg.get("rundown_id", "") or ""),
         "batch_window_ms": int(streamer_cfg.get("batch_window_ms", 3000) or 0),
         "planner_llm": str(streamer_cfg.get("planner_llm", "llm_fast") or ""),
         "replyer_llm": str(streamer_cfg.get("replyer_llm", "llm") or ""),

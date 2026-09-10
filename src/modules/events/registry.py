@@ -222,18 +222,18 @@ def register_core_events() -> None:
     该函数本身不维护任何事件→Payload 映射。Payload 模块一旦被 import，
     其内部的 ``@register_event`` 装饰器即把对应类登记到 :data:`EVENT_REGISTRY`。
 
-    触发各语义域 Payload 模块（live/room/game/agenda/planner 等）的导入，
+    触发各语义域 Payload 模块（live/room/game/rundown/planner 等）的导入，
     让 ``@register_event`` 装饰器执行；``tool_result`` 模块即使无具体
     ``@register_event`` 装饰器调用也一并 import 以触发模块级代码。
     """
     # noqa: F401 —— 仅为触发模块级 @register_event 执行
     from src.modules.events.payloads import (  # noqa: F401
-        agenda as _agenda_payloads,  # noqa: F401
         core as _core_payloads,  # noqa: F401
         game as _game_payloads,  # noqa: F401
         live as _live_payloads,  # noqa: F401
         planner as _planner_payloads,  # noqa: F401
         room as _room_payloads,  # noqa: F401
+        rundown as _rundown_payloads,  # noqa: F401
         speech as _speech_payloads,  # noqa: F401
         tool_health as _tool_health_payloads,  # noqa: F401
         tool_result as _tool_result_payloads,  # noqa: F401

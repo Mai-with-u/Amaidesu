@@ -69,8 +69,7 @@ class StreamerAgentConfig(BaseConfig):
         proactive_cold_timeout_ms: 冷场判定阈值（毫秒）
         proactive_min_interval_ms: 两次主动发言最小间隔（毫秒）
         proactive_max_per_hour: 每小时主动发言次数上限
-        agenda_enabled: 是否启用 Agenda
-        agenda_path: Agenda TOML 文件路径
+        rundown_id: 流程单 id（空 = 使用内置默认流程单）
         profanity_enabled: 是否启用敏感词净化（输出端）
         command_prefix: 命令前缀
         command_mappings: 命令映射 {name: action}
@@ -133,14 +132,9 @@ class StreamerAgentConfig(BaseConfig):
     proactive_max_per_hour: int = Field(default=6, ge=1, description="每小时主动发言次数上限")
     proactive_topic_required: bool = Field(default=True, description="话题缺失时跳过触发")
 
-    # --- Agenda ---
-    agenda_enabled: bool = Field(default=False, description="Agenda 总开关")
-    agenda_path: str = Field(default="", description="Agenda TOML 文件路径")
-    agenda_expand_client: str = Field(default="llm_agenda", description="AI 扩展用 LLM profile")
-    agenda_advance_eval_enabled: bool = Field(default=True, description="Planner 顺带评估开关")
-    agenda_scheduler_tick_ms: int = Field(default=1_000, ge=1, description="Agenda 调度循环 tick 间隔（毫秒）")
-    agenda_auto_start: bool = Field(default=True, description="setup 时自动加载并启动 Agenda")
-    agenda_speech_interval_ms: int = Field(default=3_000, ge=1000, description="Agenda 环节内两次主动发言最小间隔")
+    # --- 流程单（Rundown）---
+    rundown_id: str = Field(default="", description="流程单 id（空 = 使用内置默认流程单）")
+    rundown_speech_interval_ms: int = Field(default=3_000, ge=1000, description="流程单环节内两次主动发言最小间隔")
 
     # --- 敏感词净化（输出端）---
     profanity_enabled: bool = Field(default=False, description="敏感词净化开关")

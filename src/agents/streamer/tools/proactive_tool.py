@@ -37,8 +37,8 @@ __all__ = ["build_proactive_tool_spec", "ProactiveToolProvider", "register_proac
 
 _PROACTIVE_TOOL_NAME = "should_speak_proactively"
 _PROACTIVE_TOOL_DESCRIPTION = (
-    "询问是否应触发主动发言（冷场救场 / Agenda 推进 / 定时话题 / 外部 API）。"
-    "返回触发原因字符串（external/agenda/schedule/cold），或 None 表示不应触发。"
+    "询问是否应触发主动发言（冷场救场 / 流程单推进 / 定时话题 / 外部 API）。"
+    "返回触发原因字符串（external/rundown/schedule/cold），或 None 表示不应触发。"
     "工具内部基于 ProactiveTrigger 纯规则判定，频率限制（min_interval / max_per_hour / "
     "topic_required）已内嵌——主播自己主动调此工具可避免无意中违反频率限制。"
 )
@@ -80,14 +80,14 @@ class ProactiveToolProvider:
         trigger: ProactiveTrigger,
         room_state: RoomState,
         external_pending: Any = None,
-        agenda_pending: Any = None,
-        agenda_ready: Any = None,
+        rundown_pending: Any = None,
+        rundown_ready: Any = None,
     ) -> None:
         self._trigger = trigger
         self._room_state = room_state
         self._external_pending = external_pending
-        self._agenda_pending = agenda_pending
-        self._agenda_ready = agenda_ready
+        self._rundown_pending = rundown_pending
+        self._rundown_ready = rundown_ready
         self._logger = get_logger("ProactiveTool")
 
     @property
@@ -125,16 +125,16 @@ class ProactiveToolProvider:
 
         # 解析外部信号（鸭子类型）
         external_pending = await self._resolve_flag(self._external_pending)
-        agenda_pending = await self._resolve_flag(self._agenda_pending)
-        agenda_ready = await self._resolve_flag(self._agenda_ready)
+        rundown_pending = await self._resolve_flag(self._rundown_pending)
+        rundown_ready = await self._resolve_flag(self._rundown_ready)
 
         try:
             reason = self._trigger.should_trigger(
                 room_state=self._room_state,
                 now_ms=now_ms(),
                 external_pending=external_pending,
-                agenda_pending=agenda_pending,
-                agenda_ready=agenda_ready,
+                rundown_pending=rundown_pending,
+                rundown_ready=rundown_ready,
             )
         except Exception as exc:
             self._logger.error(f"ProactiveTrigger.should_trigger 抛出未捕获异常: {exc}", exc_info=True)
@@ -166,8 +166,8 @@ def register_proactive_tool(
     trigger: ProactiveTrigger,
     room_state: RoomState,
     external_pending: Any = None,
-    agenda_pending: Any = None,
-    agenda_ready: Any = None,
+    rundown_pending: Any = None,
+    rundown_ready: Any = None,
 ) -> bool:
     """便捷函数：构造 should_speak_proactively 工具 Provider 并注册到 ToolRegistry。
 
@@ -175,7 +175,7 @@ def register_proactive_tool(
         registry: ``ToolRegistry`` 实例
         trigger: ``ProactiveTrigger`` 实例（StreamerAgent 持有）
         room_state: ``RoomState`` 实例（用于快照查询 + is_cold 判定）
-        external_pending/agenda_pending/agenda_ready: 鸭子类型 flag（sync/async callable -> bool）
+        external_pending/rundown_pending/rundown_ready: 鸭子类型 flag（sync/async callable -> bool）
 
     Returns:
         True = 注册成功（name 唯一）；False = name 已存在，跳过。
@@ -184,7 +184,7 @@ def register_proactive_tool(
         trigger=trigger,
         room_state=room_state,
         external_pending=external_pending,
-        agenda_pending=agenda_pending,
-        agenda_ready=agenda_ready,
+        rundown_pending=rundown_pending,
+        rundown_ready=rundown_ready,
     )
     return registry.register_provider(provider)

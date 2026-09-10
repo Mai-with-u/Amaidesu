@@ -5,10 +5,9 @@ EventBus 事件广播器
 
 订阅的事件族：
 - ``room.message.*``（danmaku / gift / super_chat / enter） → WS type ``"room.message"``
-- ``planner.checkpoint`` → WS type 来自 ``PLANNER_CHECKPOINT_TYPE``
 - ``planner.decision`` / ``streamer.stage`` / ``live.started`` / ``live.ended``
   → WS type = 事件名（直通）
-- ``agenda.update`` → WS type ``"agenda.update"``
+- ``rundown.changed`` → WS type 来自 ``RUNDOWN_CHANGED_TYPE``
 - ``streamer.speech`` → WS type ``"streamer.speech"``
 - ``tool.result.#`` 通配 → WS type = 具体事件名（``tool.result.<tool_name>``），
   payload 为 ``ToolResultPayload.model_dump``
@@ -27,13 +26,12 @@ from pydantic import BaseModel
 from src.modules.events.names import CoreEvents
 from src.modules.events.event_type_map import (
     COMPONENT_EVENT_TYPE_MAP,
-    PLANNER_CHECKPOINT_TYPE,
     ROOM_MESSAGE_TYPE,
+    RUNDOWN_CHANGED_TYPE,
     SYSTEM_ERROR_TYPE,
     SYSTEM_STATUS_TYPE,
 )
 from src.modules.events.payloads import (
-    AgendaPayload,
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
@@ -42,6 +40,7 @@ from src.modules.events.payloads import (
     PlannerDecisionPayload,
     PlannerVerdictPayload,
     RoomMessagePayload,
+    RundownChangedPayload,
     StreamerSpeechPayload,
     StreamerStagePayload,
     ToolHealthPayload,
@@ -112,13 +111,12 @@ class EventBroadcaster:
             CoreEvents.ROOM_MESSAGE_GIFT: self._on_room_message,
             CoreEvents.ROOM_MESSAGE_SUPER_CHAT: self._on_room_message,
             CoreEvents.ROOM_MESSAGE_ENTER: self._on_room_message,
-            CoreEvents.PLANNER_CHECKPOINT: self._on_planner_checkpoint,
             CoreEvents.PLANNER_DECISION: self._on_named_event,
             CoreEvents.PLANNER_VERDICT: self._on_named_event,
             CoreEvents.STREAMER_STAGE: self._on_named_event,
             CoreEvents.LIVE_STARTED: self._on_named_event,
             CoreEvents.LIVE_ENDED: self._on_named_event,
-            CoreEvents.AGENDA_UPDATE: self._on_agenda_update,
+            CoreEvents.RUNDOWN_CHANGED: self._on_rundown_changed,
             CoreEvents.STREAMER_SPEECH: self._on_streamer_speech,
             CoreEvents.TOOL_RESULT_WILDCARD: self._on_tool_result,
             CoreEvents.TOOL_HEALTH_WILDCARD: self._on_tool_health,
@@ -146,16 +144,6 @@ class EventBroadcaster:
                 self._on_room_message,
                 model_class=RoomMessagePayload,
             )
-        self._subscribe_event(
-            CoreEvents.PLANNER_CHECKPOINT,
-            self._on_planner_checkpoint,
-            model_class=BasePayload,  # CheckpointPayload 兜底
-        )
-        self._subscribe_event(
-            CoreEvents.AGENDA_UPDATE,
-            self._on_agenda_update,
-            model_class=AgendaPayload,
-        )
         self._subscribe_event(
             CoreEvents.STREAMER_SPEECH,
             self._on_streamer_speech,
@@ -197,6 +185,11 @@ class EventBroadcaster:
             self._on_named_event,
             model_class=LiveEndedPayload,
         )
+        self._subscribe_event(
+            CoreEvents.RUNDOWN_CHANGED,
+            self._on_rundown_changed,
+            model_class=RundownChangedPayload,
+        )
 
     def _subscribe_system_events(self) -> None:
         for event_name, handler, payload_class in [
@@ -232,19 +225,12 @@ class EventBroadcaster:
         except Exception as e:
             logger.error(f"广播 room message 失败: {e}")
 
-    async def _on_planner_checkpoint(self, event_name: str, data: BasePayload, source: str) -> None:
+    async def _on_rundown_changed(self, event_name: str, data: RundownChangedPayload, source: str) -> None:
         try:
             dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
-            await self.ws_handler.broadcast(PLANNER_CHECKPOINT_TYPE, dict_data, message_id=data.id)
+            await self.ws_handler.broadcast(RUNDOWN_CHANGED_TYPE, dict_data, message_id=data.id)
         except Exception as e:
-            logger.error(f"广播 planner checkpoint 失败: {e}")
-
-    async def _on_agenda_update(self, event_name: str, data: AgendaPayload, source: str) -> None:
-        try:
-            dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
-            await self.ws_handler.broadcast("agenda.update", dict_data, message_id=data.id)
-        except Exception as e:
-            logger.error(f"广播 agenda update 失败: {e}")
+            logger.error(f"广播 rundown changed 失败: {e}")
 
     async def _on_streamer_speech(self, event_name: str, data: StreamerSpeechPayload, source: str) -> None:
         try:

@@ -1,14 +1,14 @@
-"""Agenda 工作台 API（v2 Agenda 子系统）
+"""流程单（Rundown）编排页 API
 
-提供主播 Agent 节目单（Agenda）状态查询与手动控制端点：
+提供主播 Agent 流程单状态查询与手动控制端点：
 
-- ``GET  /api/v1/agenda/state``   — 整场快照 + 推进历史 + 环节清单 + 扩展缓存
-- ``POST /api/v1/agenda/control`` — pause / resume / skip / rewind / jump / unload / start
+- ``GET  /api/v1/agenda/state``   — 整场快照 + 变更历史 + 环节清单
+- ``POST /api/v1/agenda/control`` — pause / resume / next / goto
 
 数据来源
 --------
-- 运行时态 → :class:`StreamerAgent` 公开门面（``get_agenda_view`` / ``agenda_control``），
-  避免 Dashboard 直接触碰 ``_agenda_state`` / ``_agenda_loader`` 等私有属性。
+- 运行时态 → :class:`StreamerAgent` 公开门面（``get_rundown_view`` / ``rundown_control``），
+  避免 Dashboard 直接触碰 ``_rundown_state`` 等私有属性。
 - 配置只读展示 → ``server.config_service.main_config["agents"]["streamer"]``，
   与 components.py 的 main_config 读取方式一致。
 """
@@ -21,12 +21,11 @@ from fastapi import APIRouter, Depends
 
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.agenda import (
-    AgendaConfigView,
-    AgendaControlRequest,
-    AgendaControlResponse,
-    AgendaExpandedView,
-    AgendaSegmentView,
-    AgendaStateResponse,
+    RundownConfigView,
+    RundownControlRequest,
+    RundownControlResponse,
+    RundownSegmentView,
+    RundownStateResponse,
 )
 
 if TYPE_CHECKING:
@@ -39,8 +38,8 @@ router = APIRouter()
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
-class _AgendaControlCallable(Protocol):
-    """StreamerAgent.agenda_control 的鸭子接口（由 facade 实现）。
+class _RundownControlCallable(Protocol):
+    """StreamerAgent.rundown_control 的鸭子接口（由 facade 实现）。
 
     Dashboard 只依赖这一最小契约，agent_manager 返回的实例若满足该契约即可
     被本模块消费；不强制继承 StreamerAgent。
@@ -51,13 +50,12 @@ class _AgendaControlCallable(Protocol):
         action: str,
         *,
         segment_id: Optional[str] = None,
-        path: Optional[str] = None,
         now_ms: Optional[int] = None,
     ) -> tuple[bool, str, Optional[Dict[str, Any]]]: ...
 
 
 # ---------------------------------------------------------------------------
-# 内部辅助：定位 StreamerAgent + 解析 agenda 配置
+# 内部辅助：定位 StreamerAgent + 解析流程单配置
 # ---------------------------------------------------------------------------
 
 
@@ -75,19 +73,11 @@ def _resolve_streamer_agent(server: "DashboardServer") -> Optional[Any]:
         return None
 
 
-def _read_streamer_agenda_config(server: "DashboardServer") -> Dict[str, Any]:
-    """从 main_config 读 agents.streamer.agenda_* 字段；缺字段用默认值。"""
+def _read_streamer_rundown_config(server: "DashboardServer") -> Dict[str, Any]:
+    """从 main_config 读 agents.streamer.rundown_id；缺字段用默认值。"""
     main_config = server.config_service.main_config if server.config_service else {}
     streamer_cfg = ((main_config or {}).get("agents") or {}).get("streamer") or {}
-    # 兼容旧字段 outline_*
-    agenda_enabled = bool(streamer_cfg.get("agenda_enabled", streamer_cfg.get("outline_enabled", False)))
-    agenda_path = str(streamer_cfg.get("agenda_path", streamer_cfg.get("outline_path", "")) or "")
-    agenda_auto_start = bool(streamer_cfg.get("agenda_auto_start", streamer_cfg.get("outline_auto_start", True)))
-    return {
-        "agenda_enabled": agenda_enabled,
-        "agenda_path": agenda_path,
-        "agenda_auto_start": agenda_auto_start,
-    }
+    return {"rundown_id": str(streamer_cfg.get("rundown_id", "") or "")}
 
 
 def _empty_state_response(
@@ -95,35 +85,29 @@ def _empty_state_response(
     *,
     message: str,
     cfg: Optional[Dict[str, Any]] = None,
-) -> AgendaStateResponse:
+) -> RundownStateResponse:
     """构造 ``available=false`` 的降级响应（空快照/空列表，配置尽力填充）。"""
-    cfg_dict = cfg if cfg is not None else _read_streamer_agenda_config(server)
-    return AgendaStateResponse(
+    cfg_dict = cfg if cfg is not None else _read_streamer_rundown_config(server)
+    return RundownStateResponse(
         available=False,
         message=message,
         snapshot=None,
         transitions=[],
         segments=[],
-        expanded={},
-        config=AgendaConfigView(**cfg_dict),
+        config=RundownConfigView(**cfg_dict),
     )
 
 
-def _build_agenda_view(view: Dict[str, Any]) -> AgendaStateResponse:
-    """把 StreamerAgent.get_agenda_view() 的 dict 包成强类型响应。"""
-    segments = [AgendaSegmentView(**s) for s in view.get("segments", [])]
-    expanded_raw = view.get("expanded", {}) or {}
-    expanded_typed: Dict[str, Optional[AgendaExpandedView]] = {}
-    for seg_id, value in expanded_raw.items():
-        expanded_typed[seg_id] = AgendaExpandedView(**value) if isinstance(value, dict) else None
-    return AgendaStateResponse(
+def _build_rundown_view(view: Dict[str, Any]) -> RundownStateResponse:
+    """把 StreamerAgent.get_rundown_view() 的 dict 包成强类型响应。"""
+    segments = [RundownSegmentView(**s) for s in view.get("segments", [])]
+    return RundownStateResponse(
         available=True,
         message=None,
         snapshot=view.get("snapshot"),
         transitions=list(view.get("transitions", [])),
         segments=segments,
-        expanded=expanded_typed,
-        config=AgendaConfigView(),  # available=true 时 config 由 outer 覆盖
+        config=RundownConfigView(),  # available=true 时 config 由 outer 覆盖
     )
 
 
@@ -132,83 +116,75 @@ def _build_agenda_view(view: Dict[str, Any]) -> AgendaStateResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/state", response_model=AgendaStateResponse)
-async def get_agenda_state(server: ServerDep) -> AgendaStateResponse:
-    """获取 Agenda 工作台状态视图（只读）。
+@router.get("/state", response_model=RundownStateResponse)
+async def get_rundown_state(server: ServerDep) -> RundownStateResponse:
+    """获取流程单编排页状态视图（只读）。
 
-    当 streamer agent 未注册、Agenda 未启用或组件未就绪时返回 ``available=false``
-    降级响应（snapshot/transitions/segments/expanded 均为空，config 尽力填充）。
+    当 streamer agent 未注册或流程单未加载时返回 ``available=false``
+    降级响应（snapshot/transitions/segments 均为空，config 尽力填充）。
     """
-    cfg = _read_streamer_agenda_config(server)
+    cfg = _read_streamer_rundown_config(server)
     agent = _resolve_streamer_agent(server)
     if agent is None:
         return _empty_state_response(server, message="主播 Agent 未启用", cfg=cfg)
-    if not cfg["agenda_enabled"]:
-        return _empty_state_response(server, message="Agenda 未开启", cfg=cfg)
 
-    is_available = getattr(agent, "is_agenda_available", None)
+    is_available = getattr(agent, "is_rundown_available", None)
     if callable(is_available):
         try:
             if not is_available():
-                return _empty_state_response(server, message="Agenda 组件未就绪", cfg=cfg)
+                return _empty_state_response(server, message="流程单未加载", cfg=cfg)
         except Exception:
-            return _empty_state_response(server, message="Agenda 组件未就绪", cfg=cfg)
+            return _empty_state_response(server, message="流程单未加载", cfg=cfg)
 
-    view_getter_raw = getattr(agent, "get_agenda_view", None)
+    view_getter_raw = getattr(agent, "get_rundown_view", None)
     if not callable(view_getter_raw):
-        return _empty_state_response(server, message="Agenda 组件未就绪", cfg=cfg)
+        return _empty_state_response(server, message="流程单未加载", cfg=cfg)
     view_getter = cast(Callable[..., Optional[Dict[str, Any]]], view_getter_raw)
 
     try:
         view: Optional[Dict[str, Any]] = view_getter()
     except Exception as exc:
-        return _empty_state_response(server, message=f"Agenda 视图获取失败: {exc}", cfg=cfg)
+        return _empty_state_response(server, message=f"流程单视图获取失败: {exc}", cfg=cfg)
 
     if view is None:
-        return _empty_state_response(server, message="Agenda 组件未就绪", cfg=cfg)
+        return _empty_state_response(server, message="流程单未加载", cfg=cfg)
 
-    response = _build_agenda_view(view)
-    response.config = AgendaConfigView(**cfg)
+    response = _build_rundown_view(view)
+    response.config = RundownConfigView(**cfg)
     return response
 
 
-@router.post("/control", response_model=AgendaControlResponse)
-async def control_agenda(
-    request: AgendaControlRequest,
+@router.post("/control", response_model=RundownControlResponse)
+async def control_rundown(
+    request: RundownControlRequest,
     server: ServerDep,
-) -> AgendaControlResponse:
-    """执行 Agenda 控制动作（pause/resume/skip/rewind/jump/unload/start）。
+) -> RundownControlResponse:
+    """执行流程单控制动作（pause/resume/next/goto，by="human"）。
 
     错误约定（不抛 HTTPException）：
-    - agent 未注册 / Agenda 未开启 / 组件未就绪 → ``success=false`` + 原因
-    - jump 缺 ``segment_id`` / start 缺 ``path`` → ``success=false`` + 字段校验消息
-    - start TOML 解析失败 → ``success=false`` + 异常消息（捕获 FileNotFoundError /
-      PermissionError / ValidationError 等）
-    - state 控制方法抛异常 → ``success=false`` + 异常消息
+    - agent 未注册 / 组件未就绪 → ``success=false`` + 原因
+    - goto 缺 ``segment_id`` → ``success=false`` + 字段校验消息
+    - 状态机结构化拒绝（最少停留未到等）→ ``success=false`` + 拒绝原因
     """
     agent = _resolve_streamer_agent(server)
     if agent is None:
-        return AgendaControlResponse(success=False, message="主播 Agent 未启用", snapshot=None)
-    cfg = _read_streamer_agenda_config(server)
-    if not cfg["agenda_enabled"]:
-        return AgendaControlResponse(success=False, message="Agenda 未开启", snapshot=None)
+        return RundownControlResponse(success=False, message="主播 Agent 未启用", snapshot=None)
 
-    control_raw = getattr(agent, "agenda_control", None)
+    control_raw = getattr(agent, "rundown_control", None)
     if not callable(control_raw):
-        return AgendaControlResponse(success=False, message="Agenda 组件未就绪", snapshot=None)
-    control = cast(_AgendaControlCallable, control_raw)
+        return RundownControlResponse(success=False, message="流程单未加载", snapshot=None)
+    control = cast(_RundownControlCallable, control_raw)
 
     action_value = request.action.value
     try:
         ok, message, snapshot = await control(
             action_value,
             segment_id=request.segment_id,
-            path=request.path,
         )
     except Exception as exc:
-        return AgendaControlResponse(
+        return RundownControlResponse(
             success=False,
             message=f"控制失败: {exc}",
             snapshot=None,
         )
-    return AgendaControlResponse(success=ok, message=message, snapshot=snapshot)
+    return RundownControlResponse(success=ok, message=message, snapshot=snapshot)

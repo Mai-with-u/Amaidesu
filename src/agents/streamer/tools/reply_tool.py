@@ -165,13 +165,13 @@ class ReplyToolProvider:
         replyer: Replyer,
         persona: Union[dict[str, Any], Any, None],
         history_provider: Optional[Any] = None,
-        agenda_text_provider: Optional[Any] = None,
+        rundown_text_provider: Optional[Any] = None,
         event_bus: Optional[Any] = None,
     ) -> None:
         self._replyer = replyer
         self._persona = persona
         self._history_provider = history_provider
-        self._agenda_text_provider = agenda_text_provider
+        self._rundown_text_provider = rundown_text_provider
         # 本轮思考流回调（LLM 层形态 on_delta）；由 Planner 在 reply 调用前设置、
         # 调用后清理（一次性槽位，ReAct 串行无并发）
         self._thinking_callback: Optional[Any] = None
@@ -251,13 +251,13 @@ class ReplyToolProvider:
             self._logger.warning(f"reply_tool: history_provider 调用失败: {exc}")
             return None
 
-    async def _resolve_agenda(self) -> Optional[str]:
-        if self._agenda_text_provider is None:
+    async def _resolve_rundown(self) -> Optional[str]:
+        if self._rundown_text_provider is None:
             return None
         try:
-            return await self._await_maybe(self._agenda_text_provider())  # type: ignore[no-any-return]
+            return await self._await_maybe(self._rundown_text_provider())  # type: ignore[no-any-return]
         except Exception as exc:
-            self._logger.warning(f"reply_tool: agenda_text_provider 调用失败: {exc}")
+            self._logger.warning(f"reply_tool: rundown_text_provider 调用失败: {exc}")
             return None
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -307,7 +307,7 @@ class ReplyToolProvider:
         try:
             persona_dict = await self._resolve_persona()
             history = await self._resolve_history()
-            agenda = await self._resolve_agenda()
+            rundown = await self._resolve_rundown()
         except Exception as exc:
             self._logger.error(f"reply_tool: 解析依赖失败: {exc}", exc_info=True)
             return ToolExecutionResult(
@@ -325,7 +325,7 @@ class ReplyToolProvider:
                 batch=batch,
                 persona=persona_dict,
                 history=history,
-                agenda=agenda,
+                rundown=rundown,
                 on_delta=thinking_callback,
             )
         except Exception as exc:
@@ -355,7 +355,7 @@ def build_reply_tool_invoker(
     replyer: Replyer,
     persona: Any,
     history_provider: Any = None,
-    agenda_text_provider: Any = None,
+    rundown_text_provider: Any = None,
 ):
     """便捷构造 reply 工具的 invoker 函数（直接喂给 ``ToolRegistry.register``）。
 
@@ -363,7 +363,7 @@ def build_reply_tool_invoker(
         replyer: Stage 2 表达引擎实例
         persona: 人设 dict 或可调用对象
         history_provider: 可选，async/sync 调用返回 List
-        agenda_text_provider: 可选，async/sync 调用返回 str
+        rundown_text_provider: 可选，async/sync 调用返回 str
 
     Returns:
         async invoker 函数，可直接 ``registry.register(spec, invoker)``。
@@ -372,7 +372,7 @@ def build_reply_tool_invoker(
         replyer=replyer,
         persona=persona,
         history_provider=history_provider,
-        agenda_text_provider=agenda_text_provider,
+        rundown_text_provider=rundown_text_provider,
     )
 
     async def _invoker(invocation: ToolInvocation) -> ToolExecutionResult:
@@ -387,7 +387,7 @@ def register_reply_tool(
     replyer: Replyer,
     persona: Any,
     history_provider: Any = None,
-    agenda_text_provider: Any = None,
+    rundown_text_provider: Any = None,
 ) -> bool:
     """便捷函数：构造 reply 工具 spec + invoker 并注册到 ToolRegistry。
 
@@ -396,7 +396,7 @@ def register_reply_tool(
         replyer: Stage 2 表达引擎实例（StreamerAgent 持有）
         persona: 人设 dict 或可调用对象
         history_provider: 可选，async/sync 调用返回 List[ConversationMessage]
-        agenda_text_provider: 可选，async/sync 调用返回 str
+        rundown_text_provider: 可选，async/sync 调用返回 str
 
     Returns:
         True = 注册成功（name 唯一）；False = name 已存在，跳过。
@@ -406,6 +406,6 @@ def register_reply_tool(
         replyer=replyer,
         persona=persona,
         history_provider=history_provider,
-        agenda_text_provider=agenda_text_provider,
+        rundown_text_provider=rundown_text_provider,
     )
     return registry.register(spec, invoker)

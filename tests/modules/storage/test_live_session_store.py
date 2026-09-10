@@ -163,23 +163,6 @@ async def test_count_and_cascade_delete(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cascade_delete_keeps_agenda_tables(store: SQLiteStore) -> None:
-    """agenda_plan/agenda_runtime 的 live_session_id 列实际存 agenda_id，级联删除不得波及。"""
-    pk = await store.insert_live_session(started_at_ms=1_000)
-    await store.execute(
-        "INSERT INTO agenda_plan (live_session_id, label, \"order\", starts_at_ms, expected_ms, created_by) "
-        "VALUES (?, '开场', 1, 0, 0, 'test')",
-        (pk,),
-    )
-    await store.delete_live_session(live_session_id=pk)
-    rows = await store.execute("SELECT * FROM agenda_plan")
-    assert len(rows) == 1
-
-
-# ===== dangling 收口 =====
-
-
-@pytest.mark.asyncio
 async def test_list_dangling_live_sessions_returns_unclosed(store: SQLiteStore) -> None:
     """未结账（ended_at_ms IS NULL）的场次被列入 dangling；已结账行不入选。"""
     await store.insert_live_session(started_at_ms=1_000, source="manual")  # 进行中显式场次（dangling）

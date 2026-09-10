@@ -3,7 +3,7 @@ Trace 聚合 API
 
 从 EventHistoryService 中按 message_id 聚合三段链路：
 - messages: room.message.* 事件（采集器行为流）
-- planning: planner.checkpoint / agenda.update 事件（决策与编排）
+- planning: rundown.changed 事件（决策与编排）
 - execution: tool.result.* 事件（工具调用结果回传）
 
 不依赖额外存储，纯查询 EventHistoryService 内存环形缓冲。
@@ -17,9 +17,9 @@ Trace 聚合 API
 room.message 事件的天然链路键——``EventRecord.id``、``EventRecord.data["id"]``
 与 WS 消息 id 三者同源。messages 段据此实现按 ``message_id`` 精确对齐。
 
-planning / execution 段仍为空数组：``AgendaPayload`` / ``CheckpointPayload`` /
+planning / execution 段仍为空数组：``RundownChangedPayload`` /
 ``ToolResultPayload`` 的事件 id 标识的是各自事件，与触发消息之间没有关联键
-（已查 src/modules/events/payloads/ 内 planner.py / agenda.py / tool_result.py
+（已查 src/modules/events/payloads/ 内 planner.py / rundown.py / tool_result.py
 验证）。待事件契约扩展关联字段后，仅需修改 ``_collect_segments`` 的两个空段
 即可启用三段对齐。
 ----------------------------------------------------------------------
@@ -41,7 +41,7 @@ router = APIRouter()
 logger = get_logger("TracesAPI")
 
 # 三段聚合的事件类型集合（与 EventHistoryRecorder 写入字面量保持一致）
-_PLANNING_EVENT_TYPES = frozenset({"planner.checkpoint", "agenda.update"})
+_PLANNING_EVENT_TYPES = frozenset({"rundown.changed"})
 _EXECUTION_EVENT_PREFIX = "tool.result."
 
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
@@ -154,7 +154,7 @@ def _collect_segments(
     """按 message_id 聚合三段记录。
 
     - messages 段：按链路键（payload 顶层 ``id``）精确对齐的 room.message 记录。
-    - planning 段：返回 []（CheckpointPayload/AgendaPayload 与触发消息无关联键）。
+    - planning 段：返回 []（RundownChangedPayload 与触发消息无关联键）。
     - execution 段：返回 []（ToolResultPayload 与触发消息无关联键）。
 
     待事件契约扩展跨事件关联字段后，仅替换本函数 planning/execution 两个

@@ -3,7 +3,7 @@
 覆盖：
 1. 订阅 CoreEvents.ROOM_MESSAGE_{GIFT,SUPER_CHAT,ENTER} 并以 "room.message"
    WS type 转发（与已有 danmaku 一致）
-2. 订阅 CoreEvents.AGENDA_UPDATE 并以 "agenda.update" WS type 转发
+2. 订阅 CoreEvents.RUNDOWN_CHANGED 并以 "rundown.changed" WS type 转发
 3. 订阅 CoreEvents.TOOL_RESULT_WILDCARD 通配模式，WS type 沿用具体事件名
 4. 订阅 CoreEvents.TOOL_HEALTH_WILDCARD 通配模式，WS type 沿用具体事件名
 5. 取消订阅（stop）正常
@@ -18,10 +18,9 @@ import pytest
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
-    AgendaPayload,
-    AgendaItem,
     RoomMessagePayload,
     RoomMessageUser,
+    RundownChangedPayload,
     StreamerSpeechPayload,
     ToolResultPayload,
 )
@@ -67,8 +66,7 @@ async def test_broadcaster_subscribes_to_4_new_events(bus_and_handler) -> None:
         CoreEvents.ROOM_MESSAGE_GIFT,
         CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
         CoreEvents.ROOM_MESSAGE_ENTER,
-        CoreEvents.PLANNER_CHECKPOINT,
-        CoreEvents.AGENDA_UPDATE,
+        CoreEvents.RUNDOWN_CHANGED,
         CoreEvents.TOOL_RESULT_WILDCARD,
     ):
         assert event_name in bus.subscribed, f"未订阅 {event_name}"
@@ -112,34 +110,31 @@ async def test_room_message_events_broadcast_as_room_message_type(bus_and_handle
 
 
 @pytest.mark.asyncio
-async def test_agenda_update_broadcast_as_agenda_update_type(bus_and_handler) -> None:
-    """agenda.update → ws type 'agenda.update'。"""
+async def test_rundown_changed_broadcast_as_rundown_changed_type(bus_and_handler) -> None:
+    """rundown.changed → ws type 'rundown.changed'。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 
     bus, ws = bus_and_handler
     broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
     await broadcaster.start()
 
-    payload = AgendaPayload(
-        live_session_id="ls_test",
-        action="done",
-        item=AgendaItem(
-            plan_id="plan_1",
-            order=1,
-            label="开场寒暄",
-            done=True,
-            current=False,
-            inserted_by="human",
-        ),
+    payload = RundownChangedPayload(
+        rundown_id="rd_test",
+        segment_id="self_intro",
+        segment_title="自我介绍",
+        index=1,
+        total=4,
+        by="human",
     )
-    handler, _model_cls = bus.subscribed[CoreEvents.AGENDA_UPDATE]
-    await handler(CoreEvents.AGENDA_UPDATE, payload, source="test")
+    handler, _model_cls = bus.subscribed[CoreEvents.RUNDOWN_CHANGED]
+    await handler(CoreEvents.RUNDOWN_CHANGED, payload, source="test")
 
     ws.broadcast.assert_awaited_once()
     call = ws.broadcast.await_args
-    assert call.args[0] == "agenda.update"
+    assert call.args[0] == "rundown.changed"
     assert isinstance(call.args[1], dict)
-    assert call.args[1]["action"] == "done"
+    assert call.args[1]["segment_id"] == "self_intro"
+    assert call.args[1]["by"] == "human"
 
 
 @pytest.mark.asyncio

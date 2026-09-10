@@ -6,7 +6,7 @@
 //   - room.message（WS 统一类型）→ "{message_type} · {user.name/id}: {content 截断}"
 //   - streamer.speech → "发言: {text}"
 //   - tool.result.<name> → "{tool_name} · {status} [+ error tail]"
-//   - agenda.* → "{action} {item.label}"
+//   - rundown.changed → "环节切换/流程单完成"
 //   - planner.* → 1-2 个最有意义的 kv（active/next 或 timeline_summary 截断）
 //   - game.* → "{message}" + scene；live.* → session/platform 摘要
 //   - core.* → message 或 event 名

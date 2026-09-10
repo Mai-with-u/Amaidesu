@@ -93,7 +93,7 @@ class Replyer:
         batch: List[Any],
         persona: Dict[str, Any],
         history: Optional[List[Any]] = None,
-        agenda: Optional[str] = None,
+        rundown: Optional[str] = None,
         on_delta: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
         """根据 Planner 的决策计划 + 弹幕批次 + 人设，生成实际回复。
@@ -111,10 +111,10 @@ class Replyer:
             history: 可选的最近会话历史（鸭子类型对象列表，需有 ``role`` 和 ``content`` 属性）；
                      role 可能是枚举（取 ``.value``），content 是 str。None 表示无历史可用，
                      渲染为占位文本。
-            agenda: 当前 Agenda 的渲染文本（可选）。由调用方（如 StreamerAgent
-                主循环）从 ``AgendaState`` 拼装后传入，描述当前环节的
+            rundown: 当前流程单的渲染文本（可选）。由调用方（如 StreamerAgent
+                主循环）从 ``RundownState`` 拼装后传入，描述当前环节的
                 title / task_description / key_points / 环节剩余时长 + 整场进度。
-                透传到 prompt 的 ``$agenda`` 变量。
+                透传到 prompt 的 ``$rundown`` 变量。
             on_delta: 思考流回调（LLM 层形态 (kind, text_delta)；ADR-008）。
 
         Returns:
@@ -127,8 +127,8 @@ class Replyer:
             self.logger.debug("DecisionPlan.should_reply=False，Replyer 跳过生成")
             return None
 
-        # 注入人设 + 决策意图 + 弹幕上下文 + 会话历史 + Agenda 上下文，渲染 prompt
-        prompt = self._render_prompt(plan, batch, persona, history, agenda)
+        # 注入人设 + 决策意图 + 弹幕上下文 + 会话历史 + 流程单上下文，渲染 prompt
+        prompt = self._render_prompt(plan, batch, persona, history, rundown)
 
         # reply 是唯一工具——表达引擎不持有信息/动作工具面
         tools = [self._build_reply_function_def()]
@@ -197,17 +197,17 @@ class Replyer:
         batch: List[Any],
         persona: Dict[str, Any],
         history: Optional[List[Any]] = None,
-        agenda: Optional[str] = None,
+        rundown: Optional[str] = None,
     ) -> str:
-        """渲染 Replyer prompt，注入人设三件套 + 计划 + 弹幕 + 会话历史 + Agenda 上下文。
+        """渲染 Replyer prompt，注入人设三件套 + 计划 + 弹幕 + 会话历史 + 流程单上下文。
 
         人设分离承诺的另一半：$personality / $style_constraints / $bot_name 必须传给模板。
         会话历史用于让 Replyer 看到自己最近说过的话，避免冷场反复生成相同句式。
-        Agenda 上下文（$agenda）是任务上下文注入（当前环节 / 整场进度），由调用方拼装后传入；
-        None / 空串时用占位文本，避免模板出现字面 $agenda。
+        流程单上下文（$rundown）是任务上下文注入（当前环节 / 整场进度），由调用方拼装后传入；
+        None / 空串时用占位文本，避免模板出现字面 $rundown。
         """
-        # Agenda 上下文：None / 空串时用占位文本，与 Planner 对齐
-        agenda_render = agenda if agenda else "（当前无节目单）"
+        # 流程单上下文：None / 空串时用占位文本，与 Planner 对齐
+        rundown_render = rundown if rundown else "（当前无流程单）"
         return self._prompt_service.render_safe(
             _REPLYER_TEMPLATE,
             bot_name=persona.get("bot_name", self._bot_name),
@@ -216,7 +216,7 @@ class Replyer:
             plan=_render_plan_text(plan),
             danmaku_batch=_render_batch_text(batch),
             conversation_history=_render_history_text(history),
-            agenda=agenda_render,
+            rundown=rundown_render,
         )
 
     # ==================== function 定义构造 ====================

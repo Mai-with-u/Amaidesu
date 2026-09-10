@@ -32,19 +32,19 @@ class TestProactiveTriggerDisabled:
         assert t.should_trigger(room, now_ms=10_000) is None
 
 
-class TestProactiveTriggerOutlinePending:
-    """agenda_pending 立即触发 agenda（仅受总开关约束）。"""
+class TestProactiveTriggerRundownPending:
+    """rundown_pending 立即触发 rundown（仅受总开关约束）。"""
 
-    def test_agenda_pending_always_fires(self):
+    def test_rundown_pending_always_fires(self):
         t = ProactiveTrigger({"enabled": True})
         room = _MockRoomState(last_speech_ms=9_999)  # 刚说过话
-        reason = t.should_trigger(room, now_ms=10_000, agenda_pending=True)
-        assert reason == "agenda"
+        reason = t.should_trigger(room, now_ms=10_000, rundown_pending=True)
+        assert reason == "rundown"
 
-    def test_agenda_pending_respects_disabled(self):
+    def test_rundown_pending_respects_disabled(self):
         t = ProactiveTrigger({"enabled": False})
         room = _MockRoomState(last_speech_ms=None)
-        reason = t.should_trigger(room, now_ms=10_000, agenda_pending=True)
+        reason = t.should_trigger(room, now_ms=10_000, rundown_pending=True)
         assert reason is None
 
 
@@ -88,29 +88,29 @@ class TestProactiveTriggerExternal:
         assert reason is None
 
 
-class TestProactiveTriggerOutlineReady:
-    """agenda_ready 绕过 min_interval/max_per_hour/topic_required，但有独立间隔。"""
+class TestProactiveTriggerRundownReady:
+    """rundown_ready 绕过 min_interval/max_per_hour/topic_required，但有独立间隔。"""
 
-    def test_agenda_ready_after_interval_fires(self):
+    def test_rundown_ready_after_interval_fires(self):
         t = ProactiveTrigger(
             {
                 "enabled": True,
-                "agenda_speech_interval_ms": 3_000,
+                "rundown_speech_interval_ms": 3_000,
             }
         )
         room = _MockRoomState(last_speech_ms=10_000_000)
-        reason = t.should_trigger(room, now_ms=10_005_000, agenda_ready=True)
-        assert reason == "agenda"
+        reason = t.should_trigger(room, now_ms=10_005_000, rundown_ready=True)
+        assert reason == "rundown"
 
-    def test_agenda_ready_too_soon_returns_none(self):
+    def test_rundown_ready_too_soon_returns_none(self):
         t = ProactiveTrigger(
             {
                 "enabled": True,
-                "agenda_speech_interval_ms": 3_000,
+                "rundown_speech_interval_ms": 3_000,
             }
         )
         room = _MockRoomState(last_speech_ms=10_000_000)
-        reason = t.should_trigger(room, now_ms=10_001_000, agenda_ready=True)
+        reason = t.should_trigger(room, now_ms=10_001_000, rundown_ready=True)
         assert reason is None
 
 
@@ -199,7 +199,7 @@ class TestProactiveTriggerRecord:
 
 
 class TestProactiveTriggerPriority:
-    """优先级：external > agenda > schedule > cold。"""
+    """优先级：external > rundown_pending > rundown_overdue > rundown_ready > schedule > cold。"""
 
     def test_external_outranks_cold(self):
         """当 external_pending=True + 房间冷场时，external 优先。"""
@@ -214,3 +214,37 @@ class TestProactiveTriggerPriority:
         room = _MockRoomState(last_speech_ms=None, last_message_ms=None)
         reason = t.should_trigger(room, now_ms=10_000_000, external_pending=True)
         assert reason == "external"
+
+
+class TestProactiveTriggerOverdue:
+    """rundown_overdue 超时闹钟：双重冷却（overdue 间隔 + speech 防抖）。"""
+
+    def test_overdue_fires_and_cools_down(self):
+        t = ProactiveTrigger({"enabled": True, "rundown_overdue_interval_ms": 60_000})
+        room = _MockRoomState(last_speech_ms=None)
+        assert t.should_trigger(room, now_ms=10_000_000, rundown_overdue=True) == "rundown"
+        # 冷却期内不重复提醒
+        assert t.should_trigger(room, now_ms=10_030_000, rundown_overdue=True) is None
+        # 冷却期满再次提醒
+        assert t.should_trigger(room, now_ms=10_061_000, rundown_overdue=True) == "rundown"
+
+    def test_overdue_respects_speech_debounce(self):
+        t = ProactiveTrigger({"enabled": True, "rundown_speech_interval_ms": 3_000})
+        room = _MockRoomState(last_speech_ms=10_000_000)
+        # 刚发过言（1 秒前），即使超时也不提醒
+        assert t.should_trigger(room, now_ms=10_001_000, rundown_overdue=True) is None
+        # 防抖过后提醒
+        assert t.should_trigger(room, now_ms=10_004_000, rundown_overdue=True) == "rundown"
+
+    def test_overdue_respects_disabled(self):
+        t = ProactiveTrigger({"enabled": False})
+        room = _MockRoomState(last_speech_ms=None)
+        assert t.should_trigger(room, now_ms=10_000, rundown_overdue=True) is None
+
+    def test_rundown_pending_outranks_overdue(self):
+        t = ProactiveTrigger({"enabled": True})
+        room = _MockRoomState(last_speech_ms=None)
+        reason = t.should_trigger(room, now_ms=10_000, rundown_pending=True, rundown_overdue=True)
+        assert reason == "rundown"
+        # pending 分支先行返回，不消费 overdue 冷却
+        assert t._last_overdue_ms is None

@@ -11,8 +11,8 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
 - live.py: 场次生命周期（live.started/live.ended，LiveSessionManager 发布）
 - room.py: 直播间行为流（room.message.*）
 - game.py: 游戏里程碑（game.*）
-- agenda.py: Agenda 运行进度（agenda.update）
-- planner.py: 空转检查点 / 决策轮记录 / 阶段状态（planner.checkpoint / planner.decision / streamer.stage）
+- rundown.py: 流程单变更（rundown.changed）
+- planner.py: 决策轮记录 / 阶段状态（planner.decision / streamer.stage）
 - tool_result.py: 异步工具结果（tool.result.*，不绑定具体名）
 - utterance.py: TTS 一次发声实例生命周期（tts.utterance.*）
 - speech.py: 主播发言业务事实（streamer.speech）
@@ -36,10 +36,6 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
 
 from src.modules.logging import get_logger
 
-from .agenda import (
-    AgendaItem,
-    AgendaPayload,
-)
 from .core import (
     CoreErrorPayload,
     CoreShutdownPayload,
@@ -51,8 +47,6 @@ from .live import (
     LiveStartedPayload,
 )
 from .planner import (
-    CheckpointAgendaPosition,
-    CheckpointPayload,
     PlannerBatchItem,
     PlannerDecisionPayload,
     PlannerVerdictPayload,
@@ -64,6 +58,7 @@ from .room import (
     RoomMessageUser,
     SuperChatInfo,
 )
+from .rundown import RundownChangedPayload
 from .speech import StreamerSpeechPayload
 from .tool_health import ToolHealthPayload
 from .tool_result import ToolResultPayload
@@ -90,16 +85,13 @@ __all__ = [
     "RoomMessagePayload",
     # game.* 游戏里程碑
     "GamePayload",
-    # agenda 语义域 — 节目单运行进度
-    "AgendaItem",
-    "AgendaPayload",
     # planner / streamer 决策管线
-    "CheckpointAgendaPosition",
-    "CheckpointPayload",
     "PlannerBatchItem",
     "PlannerDecisionPayload",
     "PlannerVerdictPayload",
     "StreamerStagePayload",
+    # rundown 流程单子系统
+    "RundownChangedPayload",
     # tool.result.* 异步工具结果
     "ToolResultPayload",
     # tool.health.* 工具健康状态变更

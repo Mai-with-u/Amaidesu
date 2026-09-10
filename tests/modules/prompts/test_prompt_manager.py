@@ -453,14 +453,13 @@ class TestRealRepoTemplates:
     """真实仓库集成测试：约定扫描发现各组件内聚提示词"""
 
     def test_singleton_loads_exactly_expected_keys(self):
-        """全仓加载后键集合应精确等于 9 个声明式键（防漂移回归网）"""
+        """全仓加载后键集合应精确等于 8 个声明式键（防漂移回归网）"""
         reset_prompt_manager()
         try:
             manager = get_prompt_manager()
             assert set(manager.list_templates()) == {
                 "amaidesu_planner_react",
                 "amaidesu_replyer",
-                "agenda_expand",
                 "viewer_message",
                 "sc_message",
                 "passerby_message",
@@ -468,15 +467,5 @@ class TestRealRepoTemplates:
                 "persona_generation",
                 "amaidesu_minecraft_agent",
             }
-        finally:
-            reset_prompt_manager()
-
-    def test_agenda_expand_renders_after_rename_fix(self):
-        """agenda_expand（原 outline_expand 错位）应可正常渲染"""
-        reset_prompt_manager()
-        try:
-            manager = get_prompt_manager()
-            rendered = manager.render_safe("agenda_expand", title="开场")
-            assert "开场" in rendered or len(rendered) > 0
         finally:
             reset_prompt_manager()

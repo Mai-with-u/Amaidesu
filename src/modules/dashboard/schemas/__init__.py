@@ -45,13 +45,12 @@ from src.modules.dashboard.schemas.message import (
     SessionListResponse,
 )
 from src.modules.dashboard.schemas.agenda import (
-    AgendaConfigView,
-    AgendaControlAction,
-    AgendaControlRequest,
-    AgendaControlResponse,
-    AgendaExpandedView,
-    AgendaSegmentView,
-    AgendaStateResponse,
+    RundownConfigView,
+    RundownControlAction,
+    RundownControlRequest,
+    RundownControlResponse,
+    RundownSegmentView,
+    RundownStateResponse,
 )
 from src.modules.dashboard.schemas.component import (
     ComponentControlAction,
@@ -84,13 +83,12 @@ __all__ = [
     "ComponentControlRequest",
     "ComponentControlResponse",
     # Agenda
-    "AgendaControlAction",
-    "AgendaConfigView",
-    "AgendaSegmentView",
-    "AgendaExpandedView",
-    "AgendaStateResponse",
-    "AgendaControlRequest",
-    "AgendaControlResponse",
+    "RundownControlAction",
+    "RundownConfigView",
+    "RundownSegmentView",
+    "RundownStateResponse",
+    "RundownControlRequest",
+    "RundownControlResponse",
     # Message
     "MessageItem",
     "MessageListResponse",

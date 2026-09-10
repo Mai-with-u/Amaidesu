@@ -17,8 +17,6 @@ from src.modules.events.event_type_map import (
 )
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
-    AgendaPayload,
-    CheckpointPayload,
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
@@ -27,6 +25,7 @@ from src.modules.events.payloads import (
     LiveStartedPayload,
     PlannerDecisionPayload,
     RoomMessagePayload,
+    RundownChangedPayload,
     StreamerStagePayload,
 )
 from src.modules.events.payloads.base import BasePayload
@@ -64,14 +63,13 @@ class EventHistoryRecorder:
         self._subscribe(CoreEvents.CORE_STARTUP, self._on_core_event, model_class=CoreStartupPayload)
         self._subscribe(CoreEvents.CORE_SHUTDOWN, self._on_core_event, model_class=CoreShutdownPayload)
         self._subscribe(CoreEvents.CORE_ERROR, self._on_core_error, model_class=CoreErrorPayload)
-        self._subscribe(CoreEvents.PLANNER_CHECKPOINT, self._on_core_event, model_class=CheckpointPayload)
-        self._subscribe(CoreEvents.AGENDA_UPDATE, self._on_core_event, model_class=AgendaPayload)
 
         # 决策可观测 + 场次生命周期（type=事件名独立记录；观察器按场回看的数据源）
         self._subscribe(CoreEvents.PLANNER_DECISION, self._on_named_event, model_class=PlannerDecisionPayload)
         self._subscribe(CoreEvents.STREAMER_STAGE, self._on_named_event, model_class=StreamerStagePayload)
         self._subscribe(CoreEvents.LIVE_STARTED, self._on_named_event, model_class=LiveStartedPayload)
         self._subscribe(CoreEvents.LIVE_ENDED, self._on_named_event, model_class=LiveEndedPayload)
+        self._subscribe(CoreEvents.RUNDOWN_CHANGED, self._on_named_event, model_class=RundownChangedPayload)
 
         component_model_map = {
             CoreEvents.GAME_MILESTONE: GamePayload,

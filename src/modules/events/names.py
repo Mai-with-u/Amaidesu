@@ -5,7 +5,7 @@
 
 命名规范：
 - 格式: 域.主体.动作（点分隔）
-- 域为语义域（live / room / game / agenda / planner / tool / streamer），不是阶段（input / decision / output）
+- 域为语义域（live / room / game / rundown / planner / tool / streamer），不是阶段（input / decision / output）
 - 通配订阅：``*``=单层 ``#``=多层（MQTT 风格）
 """
 
@@ -42,9 +42,11 @@ class CoreEvents:
     GAME_ERROR = "game.error"
     GAME_REPORT = "game.report"
 
-    # ========== v2 语义域事件（agenda/planner） ==========
-    AGENDA_UPDATE = "agenda.update"
-    PLANNER_CHECKPOINT = "planner.checkpoint"
+    # ========== 流程单（Rundown）子系统事件 ==========
+    # 唯一发布者：``RundownState`` 变更边界。``rundown.changed`` 涵盖
+    # load / goto / next（含 finish）/ pause / resume 五种状态变更；
+    # by 字段区分 agent/human/system；finish 时 segment_id="" 且 index==total。
+    RUNDOWN_CHANGED = "rundown.changed"
 
     # ========== v2 语义域事件（planner 决策轮记录） ==========
     # 每轮两阶段决策结束发一条（成功/失败/低置信度降级全覆盖），观察器的

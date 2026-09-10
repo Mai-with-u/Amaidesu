@@ -1,16 +1,16 @@
 """
 存储 Schema 定义
 
-本模块是全部 SQLite 表的**单一事实源**：13 张业务表（11 张核心直播表 +
-2 张模拟器运行时表）+ 模块私有表（当前为 SimpleMemory 的 ``_memory_facts``
-/ ``_memory_profiles``）+ ``schema_migrations``。
+本模块是全部 SQLite 表的**单一事实源**：13 张业务表（10 张核心直播表 +
+2 张模拟器运行时表 + 1 张流程单表）+ 模块私有表（当前为 SimpleMemory 的
+``_memory_facts`` / ``_memory_profiles``）+ ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
 表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
 
 ## 命名硬规则
 - 时间字段一律 ``*_ms``（毫秒 int）
 - 场次叫 ``live_sessions``，消息流叫 ``live_chat``（live chat 行业标准）
-- ``live_sessions`` 一行 = 一场直播（有开始/结束边界）；房间/频道是场次之上的
+- ``live_sessions`` 一行 = 一场直播（有开始/结束边界）；房间/状态
   静态属性（``stream_id`` 普通属性列，**不参与主键语义**，一房多场）
 - ``live_sessions.source`` 标记场次来源（manual=手动 / replay=模拟器回放 /
   legacy=历史遗留行）
@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 5
+SCHEMA_VERSION: int = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +50,7 @@ class SchemaMigration:
 
 
 # =============================================================================
-# 15 张业务表 + 模块私有表 + schema_migrations
+# 业务表 + 模块私有表 + schema_migrations
 # =============================================================================
 # - live_sessions           场次 + 直播实时状态（一场一行）
 # - live_chat               全量直播消息流（行业 live chat）
@@ -58,8 +58,6 @@ class SchemaMigration:
 # - super_chats             SC 明细（独立副表）
 # - topics                  话题（每行一个，1NF）
 # - viewers                 观众统计（跨场客观数字）
-# - agenda_plan             原始大纲（基准，只读）
-# - agenda_runtime          运行进度（Agent 改）
 # - game_events             游戏里程碑事件
 # - timeline_summary        摘要层
 # - llm_usage               LLM 调用记录
@@ -67,6 +65,7 @@ class SchemaMigration:
 # - event_history           语义域事件流（录制回放 + dashboard 事件历史持久层）
 # - sim_personas            模拟器常驻观众人设（运行时数据，WebUI 管理）
 # - sim_gifts               模拟器礼物目录（运行时数据，WebUI 管理）
+# - rundowns                流程单（rundown 子系统）
 # - _memory_facts           SimpleMemory 事实记忆（模块私有）
 # - _memory_profiles        SimpleMemory 人物画像（模块私有）
 # - schema_migrations       版本管理
@@ -94,11 +93,8 @@ def build_schema_sql() -> str:
         # viewers —— 观众统计
         + _VIEWERS_SQL
         + "\n"
-        # agenda_plan —— 原始大纲
-        + _AGENDA_PLAN_SQL
-        + "\n"
-        # agenda_runtime —— 运行进度
-        + _AGENDA_RUNTIME_SQL
+        # rundowns —— 流程单
+        + _RUNDOWNS_SQL
         + "\n"
         # game_events —— 游戏里程碑
         + _GAME_EVENTS_SQL
@@ -140,8 +136,7 @@ def list_expected_tables() -> List[str]:
         "super_chats",
         "topics",
         "viewers",
-        "agenda_plan",
-        "agenda_runtime",
+        "rundowns",
         "game_events",
         "timeline_summary",
         "llm_usage",
@@ -285,6 +280,17 @@ CREATE TABLE IF NOT EXISTS agenda_runtime (
     current          INTEGER NOT NULL DEFAULT 0,
     note             TEXT,
     inserted_by      TEXT NOT NULL
+);
+""".strip()
+
+
+_RUNDOWNS_SQL = """
+CREATE TABLE IF NOT EXISTS rundowns (
+    id            TEXT PRIMARY KEY,
+    title         TEXT NOT NULL,
+    segments_json TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
 );
 """.strip()
 
@@ -486,8 +492,22 @@ def _migrate_v4_session_semantics(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_live_chat_message_id ON live_chat(message_id)")
 
 
+def _migrate_v6_rundowns_replace_agenda(conn: sqlite3.Connection) -> None:
+    """v5 → v6：rundowns 表替代 agenda_plan / agenda_runtime 两表。
+
+    v5 时代的 agenda 存储链路未在运行时接线，两表保证为空；直接 DROP。
+    rundowns 表由 ``_RUNDOWNS_SQL``（IF NOT EXISTS 幂等）建立，对新库
+    与已升级库都安全——新库的 ``build_schema_sql()`` 已不含旧表 DDL，此处
+    DROP IF EXISTS 仅为处理已升级库。
+    """
+    conn.execute("DROP TABLE IF EXISTS agenda_plan")
+    conn.execute("DROP TABLE IF EXISTS agenda_runtime")
+    conn.executescript(_RUNDOWNS_SQL)
+
+
 SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     4: _migrate_v4_session_semantics,
+    6: _migrate_v6_rundowns_replace_agenda,
 }
 
 

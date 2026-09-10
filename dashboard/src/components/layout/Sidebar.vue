@@ -32,7 +32,7 @@
         </el-menu-item>
         <el-menu-item index="/outline">
           <el-icon><List /></el-icon>
-          <span>Agenda 工作台</span>
+          <span>流程单工作台</span>
         </el-menu-item>
 
         <div class="sidebar-divider" />

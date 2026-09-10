@@ -41,7 +41,6 @@ def _make_agent_config(**overrides) -> StreamerAgentConfig:
         "planner_llm": "llm_fast",
         "replyer_llm": "llm",
         "proactive_enabled": False,
-        "agenda_enabled": False,
         "profanity_enabled": False,
         "batch_window_ms": 100,
         "tick_interval_ms": 50,
@@ -606,7 +605,6 @@ async def test_decision_loop_unaffected_when_tts_disabled():
         replyer=replyer,
         persona={},
         history_provider=None,
-        agenda_text_provider=None,
     )
 
     await agent._make_two_stage_decision(

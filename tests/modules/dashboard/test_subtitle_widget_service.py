@@ -171,7 +171,7 @@ class TestSubscriptions:
 
         # 字幕订阅由 SubtitleService 主动驱动，EventBus 上不应再有
         # planner.checkpoint 的处理器
-        handlers = svc.event_bus._handlers.get(CoreEvents.PLANNER_CHECKPOINT, [])
+        handlers = svc.event_bus._handlers.get("planner.checkpoint", [])
         assert len(handlers) == 0
 
         await svc.stop()

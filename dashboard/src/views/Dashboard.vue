@@ -169,7 +169,7 @@ const { status } = storeToRefs(systemStore);
 
 const uptimeSec = computed(() => status.value?.uptime_seconds ?? 0);
 
-// ====== 组件 / 工具 / 主播 / 节目单 / 场次（REST 周期刷） ======
+// ====== 组件 / 工具 / 主播 / 流程单 / 场次（REST 周期刷） ======
 
 interface CollectorSummary {
   name: string;

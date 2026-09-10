@@ -47,6 +47,7 @@ from src.modules.types.message_type import require_message_type
 from .room_state import RoomState, RoomStateSnapshot
 from .thinking_stream import ThinkingStreamContext
 from .tools.reply_tool import build_reply_tool_spec
+from .tools.rundown_tool import build_rundown_control_function_def
 
 __all__ = ["Planner"]
 
@@ -133,6 +134,7 @@ class Planner:
         behavior_style: str = "",
         reply_provider: Any = None,
         elapsed_live_provider: Optional[Callable[[], Optional[int]]] = None,
+        rundown_provider: Any = None,
     ) -> None:
         """初始化 Planner。
 
@@ -149,7 +151,7 @@ class Planner:
             behavior_style: 人设行为准则（决策侧）。
             reply_provider: reply 局部工具的 Provider（ReplyToolProvider）；
                 start 前由 StreamerAgent 经 ``bind_reply_provider`` 注入也可。
-            elapsed_live_provider: 整场开播时长查询（``AgendaState.get_elapsed_live_ms``，
+            elapsed_live_provider: 整场开播时长查询（``RundownState.get_elapsed_live_ms``，
                 返回 Unix 毫秒或 None=未开播）；None 时快照不含开播时长行。
         """
         if config is None:
@@ -177,6 +179,7 @@ class Planner:
         self._behavior_style: str = behavior_style or ""
         self._reply_provider = reply_provider
         self._elapsed_live_provider = elapsed_live_provider
+        self._rundown_provider = rundown_provider
 
         self._assembler = PlannerAssembler()
 
@@ -192,8 +195,15 @@ class Planner:
         self._reply_provider = provider
 
     def bind_elapsed_live_provider(self, provider: Callable[[], Optional[int]]) -> None:
-        """注入开播时长查询（StreamerAgent 构造 AgendaState 后绑定，同 bind 模式）。"""
+        """注入开播时长查询（StreamerAgent 构造 RundownState 后绑定，同 bind 模式）。"""
         self._elapsed_live_provider = provider
+
+    def bind_rundown_provider(self, provider: Any) -> None:
+        """注入流程单控制 Provider（StreamerAgent 装配 RundownState 后绑定）。
+
+        绑定且流程单激活时，工具面追加 ``rundown_control``——Agent 自主推进环节。
+        """
+        self._rundown_provider = provider
 
     # ==================== 主入口 ====================
 
@@ -204,7 +214,7 @@ class Planner:
         forced: bool = False,
         proactive: bool = False,
         history: Optional[List[Any]] = None,
-        agenda_text: Optional[str] = None,
+        rundown_text: Optional[str] = None,
         game_narrative: str = "",
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
@@ -216,7 +226,7 @@ class Planner:
             forced: 是否为强制回应批次（SC / 礼物 / 上舰）。
             proactive: 是否为主动发言触发（冷场/定时；batch 可能为空）。
             history: 最近对话历史（可选；反重复用）。
-            agenda_text: 当前 Agenda 渲染文本（可选）。
+            rundown_text: 当前流程单渲染文本（可选）。
             game_narrative: 游戏叙事文本（game.* 事件摘要；可主动经工具查询更多）。
             thinking: 思考流上下文（可选；提供时每次 LLM 调用的 reasoning
                 增量经旁路通道外发，ADR-008）。
@@ -252,10 +262,6 @@ class Planner:
             "tool_trace": [],
             "error": None,
             "reply_payload": None,
-            # Agenda 评估兼容字段（ReAct 暂不产出，保留给 AgendaIdle 消费）
-            "may_advance": False,
-            "need_more_time": False,
-            "branch_id": None,
         }
 
         system_prompt = self._render_system_prompt()
@@ -264,7 +270,7 @@ class Planner:
             outcome["silent_reason"] = "prompt_render_failed"
             return outcome
 
-        context_block = await self._assemble_context(batch, history, agenda_text)
+        context_block = await self._assemble_context(batch, history, rundown_text)
         if context_block is None:
             outcome["error"] = self.last_failure
             outcome["silent_reason"] = "assembler_failed"
@@ -333,6 +339,8 @@ class Planner:
 
                 if name == "reply":
                     observation, replied = await self._invoke_reply(args, outcome, thinking=thinking, round_id=round_id)
+                elif name == "rundown_control" and self._rundown_provider is not None:
+                    observation = self._invoke_rundown_control(args)
                 else:
                     observation = await self._invoke_registry_tool(name, args, round_id=round_id)
                 messages.append(
@@ -369,7 +377,7 @@ class Planner:
         self,
         batch: List[Any],
         history: Optional[List[Any]],
-        agenda_text: Optional[str],
+        rundown_text: Optional[str],
     ) -> Optional[str]:
         """组装决策上下文块（组装器路径 / 裸消息路径）。"""
         snapshot = self._room_state.get_snapshot()
@@ -413,7 +421,7 @@ class Planner:
                 persona="",
                 tool_definitions_block="",
                 current_stage_label=None,
-                stage_descriptions=agenda_text or "",
+                stage_descriptions=rundown_text or "",
                 timeline_blocks=[],
                 recent_chat_window=recent_chat_window,
                 environment=env_block,
@@ -453,8 +461,11 @@ class Planner:
     # ==================== 工具面与执行 ====================
 
     def _build_tool_face(self) -> List[Dict[str, Any]]:
-        """构造 LLM 工具面：reply 局部工具 + 全局 ToolRegistry（过滤内部协议）。"""
+        """构造 LLM 工具面：reply + rundown_control 局部工具 + 全局 ToolRegistry（过滤内部协议）。"""
         face: List[Dict[str, Any]] = [_spec_to_fn_def(build_reply_tool_spec())]
+        # 流程单激活时追加 rundown_control——环节推进是决策脑的职责（推进权归 Agent）
+        if self._rundown_provider is not None and self._rundown_provider.is_active():
+            face.append(build_rundown_control_function_def())
         if self._tool_registry is None:
             return face
         try:
@@ -521,6 +532,16 @@ class Planner:
 
         self.logger.info(f"Planner ReAct 收尾：reply 成功 (target={outcome['target']!r}, steps={outcome['steps']})")
         return json.dumps({"ok": True, "speech_delivered": True}, ensure_ascii=False), True
+
+    def _invoke_rundown_control(self, args: Dict[str, Any]) -> str:
+        """执行 rundown_control 局部工具（状态机方法同步非阻塞），返回观察 JSON 文本。"""
+        if self._rundown_provider is None:
+            return json.dumps({"ok": False, "error": "rundown_control 不可用（Provider 未绑定）"}, ensure_ascii=False)
+        try:
+            return self._rundown_provider.invoke(args)
+        except Exception as e:
+            self.logger.warning(f"rundown_control 执行异常: {e}", exc_info=True)
+            return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
 
     async def _invoke_registry_tool(self, name: str, args: Dict[str, Any], round_id: str = "") -> str:
         """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。"""

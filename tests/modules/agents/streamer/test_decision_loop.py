@@ -125,7 +125,6 @@ def _setup_agent(chat_responses: list | None = None) -> tuple[StreamerAgent, Eve
         planner_llm="llm_fast",
         replyer_llm="llm",
         proactive_enabled=False,
-        agenda_enabled=False,
         profanity_enabled=False,
         batch_window_ms=100,
         tick_interval_ms=50,
@@ -209,7 +208,6 @@ async def test_decision_loop_planner_no_reply_path():
         planner_llm="llm_fast",
         replyer_llm="llm",
         proactive_enabled=False,
-        agenda_enabled=False,
         profanity_enabled=False,
         batch_window_ms=100,
         tick_interval_ms=50,
@@ -273,8 +271,8 @@ async def test_decision_loop_proactive_tool_invoke():
         trigger=trigger,
         room_state=rs,
         external_pending=False,
-        agenda_pending=False,
-        agenda_ready=False,
+        rundown_pending=False,
+        rundown_ready=False,
     )
 
     # 主播内部协议工具不经 ToolRegistry 注册（Y 模型），按生产形态直调
@@ -342,7 +340,6 @@ async def test_decision_loop_handle_message_direct():
         planner_llm="llm_fast",
         replyer_llm="llm",
         proactive_enabled=False,
-        agenda_enabled=False,
         profanity_enabled=False,
         batch_window_ms=100,
         tick_interval_ms=50,

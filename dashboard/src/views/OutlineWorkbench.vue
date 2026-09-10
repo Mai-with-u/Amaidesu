@@ -3,8 +3,8 @@
     <!-- 顶部：标题 + 副标题 + 刷新 -->
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">Agenda 工作台</h1>
-        <p class="page-subtitle">节目单实时状态 · 手动控制 · 推进历史</p>
+        <h1 class="page-title">流程单工作台</h1>
+        <p class="page-subtitle">流程单实时状态 · 手动控制 · 推进历史</p>
       </div>
       <div class="header-actions">
         <el-button :icon="Refresh" :loading="loadingState" @click="refresh"> 刷新 </el-button>
@@ -28,7 +28,7 @@
       <el-button size="small" type="primary" @click="refresh">重试</el-button>
     </el-alert>
 
-    <!-- 不可用态：后端 agenda 未启用 -->
+    <!-- 不可用态：后端流程单未加载 -->
     <template v-else-if="state && !state.available">
       <el-alert
         :title="state.message ?? '流程单未加载'"
@@ -273,7 +273,7 @@
     <!-- 兜底：available=true 但 snapshot 缺失（如已 unloaded 中间态） -->
     <template v-else>
       <el-alert
-        title="节目单快照不可用"
+        title="流程单快照不可用"
         type="info"
         :closable="false"
         show-icon
@@ -578,7 +578,7 @@ async function fetchState(opts: { silent?: boolean } = {}): Promise<void> {
     // 记录本次拉取的基线时刻，用于本地 tick 漂移
     snapshotBaselineMs.value = Date.now();
   } catch (e) {
-    loadError.value = e instanceof Error ? e.message : '无法加载节目单状态';
+    loadError.value = e instanceof Error ? e.message : '无法加载流程单状态';
     state.value = null;
   } finally {
     initialLoading.value = false;

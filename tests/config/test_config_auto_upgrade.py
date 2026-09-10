@@ -433,3 +433,32 @@ class TestOutputHandlersMigration:
         load_config_dir(config_dir)
 
         assert (config_dir / "output.toml").exists(), "无 [handlers] 时源文件应原样保留"
+
+
+class TestAgendaToRundownMigration:
+    """Agenda→Rundown 重设计：旧 agenda_* 键被 Schema 剥离，写回落盘清除。"""
+
+    def test_agenda_keys_stripped_and_rundown_written_back(self, config_dir: Path):
+        """旧配置含 agenda_* 键：升级加载后剥离，写回落盘清除并补 rundown 默认字段。"""
+        _set_version(config_dir, "2.0.28")
+        _remove_section(config_dir, "agents", "agents.streamer")
+        _append_section(
+            config_dir,
+            "agents",
+            (
+                "\n[agents.streamer]\n"
+                "agenda_enabled = true\n"
+                "agenda_path = \"config/agenda/live.toml\"\n"
+                "agenda_auto_start = true\n"
+                "agenda_speech_interval_ms = 5000\n"
+            ),
+        )
+
+        load_config_dir(config_dir)
+
+        content = (config_dir / "agents.toml").read_text(encoding="utf-8-sig")
+        assert "agenda_enabled" not in content
+        assert "agenda_path" not in content
+        assert "agenda_speech_interval_ms" not in content
+        assert "rundown_id" in content
+        assert "rundown_speech_interval_ms" in content

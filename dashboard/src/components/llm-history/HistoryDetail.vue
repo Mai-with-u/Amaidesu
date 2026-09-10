@@ -49,22 +49,29 @@
           <div v-for="(m, i) in promptMessages" :key="i" class="message-card">
             <div class="message-header">
               <span class="prompt-role" :class="`is-${m.role}`">{{ m.role }}</span>
-              <span
-                v-if="m.tool_call_id"
-                class="message-meta"
-                title="对应请求的 tool_call_id"
-              >↩ {{ shortId(m.tool_call_id) }}</span>
+              <span v-if="m.tool_call_id" class="message-meta" title="对应请求的 tool_call_id"
+                >↩ {{ shortId(m.tool_call_id) }}</span
+              >
             </div>
             <!-- tool 返回是 JSON 字符串，用代码块美化；其余走 markdown -->
-            <pre v-if="m.role === 'tool' && m.content" class="tool-result"><code>{{ prettyMaybeJson(m.content) }}</code></pre>
-            <div v-else-if="m.content" class="prompt-message-body" v-html="renderMarkdown(m.content)"></div>
+            <pre
+              v-if="m.role === 'tool' && m.content"
+              class="tool-result"
+            ><code>{{ prettyMaybeJson(m.content) }}</code></pre>
+            <div
+              v-else-if="m.content"
+              class="prompt-message-body"
+              v-html="renderMarkdown(m.content)"
+            ></div>
             <div v-if="m.tool_calls?.length" class="tool-calls-list">
               <div v-for="tc in m.tool_calls" :key="tc.id" class="tool-call-item">
                 <div class="tool-call-head">
                   <span class="tool-call-name">{{ tc.function?.name || 'unknown' }}</span>
                   <span class="message-meta" :title="tc.id">{{ shortId(tc.id) }}</span>
                 </div>
-                <pre class="tool-call-args"><code>{{ formatArguments(tc.function?.arguments) }}</code></pre>
+                <pre
+                  class="tool-call-args"
+                ><code>{{ formatArguments(tc.function?.arguments) }}</code></pre>
               </div>
             </div>
           </div>
@@ -184,7 +191,12 @@ const promptMessages = computed<PromptMessage[]>(() => {
     return messages.map(m => ({
       role: m.role || 'unknown',
       // content 理论上为字符串，非字符串形态（多模态 parts 等）退化为 JSON 文本
-      content: typeof m.content === 'string' ? m.content : m.content ? JSON.stringify(m.content, null, 2) : '',
+      content:
+        typeof m.content === 'string'
+          ? m.content
+          : m.content
+            ? JSON.stringify(m.content, null, 2)
+            : '',
       tool_call_id: m.tool_call_id,
       tool_calls: m.tool_calls,
     }));

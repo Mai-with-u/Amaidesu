@@ -14,7 +14,7 @@
 - **轻循环**（periodic tick ~5s）：
   - 直播间状态记账（热度/统计 → 写 live_sessions 表）
   - 话题增量聚合（关键词计数 O(1)，内存态）
-  - 空转检测信号（check_idle → emit planner.checkpoint，由 AgendaIdle 接管）
+  - 空转检测信号（由 ProactiveTrigger 承载；流程单超时提醒见 rundown_overdue 触发源）
   - 窗口滑动检查（事件量/时间阈值 → put 压缩队列）
 - **压缩 worker**（asyncio.Queue 触发）：
   - queue.get() → LLM 压缩（一次调用：时间线摘要 + 话题总结句）→ 写摘要层

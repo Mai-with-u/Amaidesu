@@ -113,7 +113,7 @@
               relativeTime(nowSec, rundownBanner.changedAtSec)
             }}</span>
           </template>
-          <span v-else class="slate-idle">节目单未运行或未接入</span>
+          <span v-else class="slate-idle">流程单未运行或未接入</span>
         </section>
 
         <div v-if="showTestModeNotice" class="test-mode-notice" title="正式直播请先在左侧开启场次">

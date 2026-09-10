@@ -18,11 +18,9 @@
 - ``silent_reason``: 静默原因标记。``low_confidence``=LLM 想回但被本地低置信度
   裁决压制（should_reply 改写为 False）；None=无本地压制（LLM 自己决定沉默）。
   仅由 Planner 降级路径填写，LLM 原生输出不产生该字段。
-- ``may_advance`` / ``need_more_time`` / ``branch_id``: Planner 顺带评估（仅 Agenda 激活时有意义）
 
 兼容性：
-- ``may_advance`` / ``need_more_time`` / ``branch_id`` / ``reply_to`` / ``silent_reason``
-  全部带默认值，缺少这些字段的 JSON 仍可正常解析。
+- ``reply_to`` / ``silent_reason`` 全部带默认值，缺少这些字段的 JSON 仍可正常解析。
 """
 
 from __future__ import annotations
@@ -48,9 +46,6 @@ class DecisionPlan(BaseModel):
     reply_guidance: str = ""
     confidence: float = 0.0
     silent_reason: Optional[str] = None
-    may_advance: bool = False
-    need_more_time: bool = False
-    branch_id: Optional[str] = None
     version: str = "2.0"
 
 

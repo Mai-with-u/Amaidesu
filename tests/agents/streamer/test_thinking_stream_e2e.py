@@ -43,7 +43,6 @@ def _build_agent(thinking_sink: Optional[Any], enabled: bool = True) -> Streamer
         planner_llm="llm_fast",
         replyer_llm="llm",
         proactive_enabled=False,
-        agenda_enabled=False,
         profanity_enabled=False,
         batch_window_ms=100,
         tick_interval_ms=50,

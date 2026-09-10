@@ -4,8 +4,8 @@
 协议六面（最小契约）：
 - 生命周期：start/stop/cleanup + 可重建性
 - 工具提供：list_tools() → 暴露 reply / should_speak_proactively / parse_command
-- 事件上报：emit（planner.checkpoint 等；订阅 room.message.danmaku 等）
-- 状态读写：RoomState / AgendaState 内部组件
+- 事件上报：emit（rundown.changed 等；订阅 room.message.danmaku 等）
+- 状态读写：RoomState / RundownState 内部组件
 - 健康：BaseAgent 心跳协议
 - 元数据：name / description
 
@@ -37,7 +37,6 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.context.models import MessageRole
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.agenda import AgendaItem, AgendaPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.planner import (
     PlannerBatchItem,
@@ -50,13 +49,13 @@ from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
-from src.modules.time_utils import format_duration_ms, now_ms
+from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types.message_type import require_message_type
 
-from .agenda.agenda_idle import AgendaIdle
-from .agenda.agenda_loader import AgendaLoader
-from .agenda.agenda_state import AgendaState
+from .rundown.rundown import DEFAULT_RUNDOWN, Rundown
+from .rundown.rundown_state import RundownState
+from .tools.rundown_tool import RundownControlProvider
 from .background import BackgroundMaintainer
 from .message_buffer import MessageBuffer
 from .planner import Planner
@@ -147,14 +146,9 @@ class StreamerAgentConfig(BaseConfig):
     proactive_max_per_hour: int = _PydField(default=6, ge=1, description="每小时主动发言次数上限")
     proactive_topic_required: bool = _PydField(default=True, description="话题摘要缺失时是否跳过触发")
 
-    # --- Agenda ---
-    agenda_enabled: bool = _PydField(default=False, description="Agenda 总开关（默认关闭）")
-    agenda_path: str = _PydField(default="", description="Agenda TOML 文件路径")
-    agenda_expand_client: str = _PydField(default="llm_agenda", description="AI 扩展用 LLM profile")
-    agenda_advance_eval_enabled: bool = _PydField(default=True, description="Planner 顺带评估开关")
-    agenda_scheduler_tick_ms: int = _PydField(default=1_000, ge=1, description="Agenda 调度循环 tick 间隔（毫秒）")
-    agenda_auto_start: bool = _PydField(default=True, description="setup 时自动加载并启动 Agenda")
-    agenda_speech_interval_ms: int = _PydField(default=3_000, ge=1000, description="Agenda 环节内两次主动发言最小间隔")
+    # --- 流程单（Rundown）---
+    rundown_id: str = _PydField(default="", description="流程单 id（空 = 使用内置默认流程单）")
+    rundown_speech_interval_ms: int = _PydField(default=3_000, ge=1000, description="流程单环节内两次主动发言最小间隔")
 
     # --- 敏感词净化（输出端）---
     profanity_enabled: bool = _PydField(default=False, description="敏感词净化开关")
@@ -200,13 +194,14 @@ class StreamerAgentConfig(BaseConfig):
 
 
 class StreamerAgent(BaseAgent):
-    """主播 Agent：编排 Planner + Replyer + 工具 + 后台任务 + Agenda。
+    """主播 Agent：编排 Planner + Replyer + 工具 + 后台任务 + 流程单。
 
     实现协议六面：
     - 生命周期（start/stop/cleanup）
     - 工具提供：reply / should_speak_proactively / parse_command（3 个 @tool）
-    - 事件上报：emit（planner.checkpoint 等）；订阅 room.message.*
-    - 状态读写：内部 RoomState / AgendaState / MessageBuffer
+      + rundown_control（Planner 局部协议工具）
+    - 事件上报：emit（rundown.changed / planner.decision 等）；订阅 room.message.*
+    - 状态读写：内部 RoomState / RundownState / MessageBuffer
     - 健康：BaseAgent 心跳
     - 元数据：name / description
     """
@@ -216,10 +211,7 @@ class StreamerAgent(BaseAgent):
     description = "Streamer Agent - 主播决策 + 表达 + 后台维护"
 
     # -----事件族声明（可选）-----
-    emits_events = (
-        CoreEvents.PLANNER_CHECKPOINT,
-        CoreEvents.AGENDA_UPDATE,
-    )
+    emits_events = ("rundown.changed",)
 
     def __init__(
         self,
@@ -247,11 +239,11 @@ class StreamerAgent(BaseAgent):
             llm_manager: ``LLMManager`` 实例
             prompt_manager: ``PromptManager`` 实例
             context_service: 可选 ``ContextService``（持久化对话历史）
-            event_bus: 可选 ``EventBus``（Agent 通过它订阅 room.message.* / emit planner.checkpoint）
+            event_bus: 可选 ``EventBus``（Agent 通过它订阅 room.message.* / emit rundown.changed 等）
             tool_registry: 可选 ``ToolRegistry``（Agent 把自己的工具注册进去；
                 VTS 表情工具仍走该 registry，TTS 不再走；
                 Planner/Replyer 也从它读取 game 工具清单做动作选择）
-            sqlite_store: 可选 ``SQLiteStore``（live_sessions + agenda_runtime 持久化）
+            sqlite_store: 可选 ``SQLiteStore``（live_sessions 状态 + rundowns 流程单库）
             persona_provider: 可选人设字典来源（鸭子类型：callable 返回 dict / dict 本身）
             context_assembler_config: 可选 ``ContextAssemblerConfig``（core.toml [context] 段；
                 控制 Planner 组装路径开关与长记忆召回条数；None 时 Planner 走内置默认）
@@ -389,16 +381,18 @@ class StreamerAgent(BaseAgent):
             "schedule_only_cold": config.proactive_schedule_only_cold,
             "max_per_hour": config.proactive_max_per_hour,
             "topic_required": config.proactive_topic_required,
-            "agenda_speech_interval_ms": config.agenda_speech_interval_ms,
+            "rundown_speech_interval_ms": config.rundown_speech_interval_ms,
         }
         self._proactive_trigger = ProactiveTrigger(proactive_config)
 
-        # Agenda 子系统
-        self._agenda_state = AgendaState()
-        # Planner 构造早于 AgendaState，开播时长锚点沿用 bind 注入（同 bind_reply_provider）
-        self._planner.bind_elapsed_live_provider(self._agenda_state.get_elapsed_live_ms)
-        self._agenda_loader: Optional[AgendaLoader] = None
-        self._agenda_idle: Optional[AgendaIdle] = None
+        # 流程单（Rundown）子系统：备忘录 + 闹钟（推进权归 Agent）
+        # Planner 构造早于 RundownState，开播时长锚点沿用 bind 注入（同 bind_reply_provider）
+        self._rundown_state = RundownState(
+            emit=self._emit_rundown_changed,
+            on_changed=self._on_rundown_changed,
+        )
+        self._planner.bind_elapsed_live_provider(self._rundown_state.get_elapsed_live_ms)
+        self._planner.bind_rundown_provider(RundownControlProvider(self._rundown_state))
 
         # 后台维护器（双任务：轻循环 + 压缩 worker）
         background_config = {
@@ -426,8 +420,8 @@ class StreamerAgent(BaseAgent):
 
         # 一次性 pending flag（外部 API 触发主动发言）
         self._external_proactive_pending: bool = False
-        # Agenda 切换触发 flag（AgendaIdle on_advance 回调置位）
-        self._agenda_proactive_pending: bool = False
+        # 流程单环节切换触发 flag（RundownState 变更回调置位；装配切片接线）
+        self._rundown_proactive_pending: bool = False
 
         # 统计
         self._total_messages = 0
@@ -465,7 +459,7 @@ class StreamerAgent(BaseAgent):
             f"StreamerAgent 已构造 "
             f"(planner_llm={config.planner_llm}, replyer_llm={config.replyer_llm}, "
             f"proactive_enabled={config.proactive_enabled}, "
-            f"agenda_enabled={config.agenda_enabled}, "
+            f"rundown_id={config.rundown_id!r}, "
             f"tts_enabled={self._tts_enabled}, "
             f"tts_engine={'<已注入>' if tts_engine is not None else '<未注入>'})"
         )
@@ -492,9 +486,8 @@ class StreamerAgent(BaseAgent):
         if self.typed_config.room_state_enabled:
             await self._background.start()
 
-        # 启动 Agenda 组件
-        if self.typed_config.agenda_enabled and self.typed_config.agenda_auto_start:
-            await self._start_agenda_components()
+        # 启动流程单（fail-soft：加载失败降级为无流程单）
+        await self._start_rundown()
 
         # 启动发言管线（speech → TTS / emotion → VTS）
         # 仅在 TTS 显式启用且 tts_engine 注入时构造；否则保持禁用（决策循环
@@ -542,13 +535,6 @@ class StreamerAgent(BaseAgent):
             await self._background.stop()
         except Exception as exc:
             self._logger.warning(f"停止 BackgroundMaintainer 失败: {exc}")
-
-        # 停止 Agenda
-        if self._agenda_idle is not None:
-            try:
-                await self._agenda_idle.stop()
-            except Exception as exc:
-                self._logger.warning(f"停止 AgendaIdle 失败: {exc}")
 
         # 停止 flush 循环
         if self._flush_task is not None and not self._flush_task.done():
@@ -622,7 +608,7 @@ class StreamerAgent(BaseAgent):
             replyer=self._replyer,
             persona=self._persona_provider or {},
             history_provider=(self._read_history_sync if self._context is not None else None),
-            agenda_text_provider=self._build_agenda_text_sync,
+            rundown_text_provider=self._build_rundown_text_sync,
             event_bus=self._event_bus,
         )
         # Planner ReAct 循环经 reply_provider 直连表达引擎（Provider 构造晚于
@@ -634,8 +620,8 @@ class StreamerAgent(BaseAgent):
             trigger=self._proactive_trigger,
             room_state=self._room_state,
             external_pending=lambda: self._external_proactive_pending,
-            agenda_pending=lambda: self._agenda_proactive_pending,
-            agenda_ready=self._is_agenda_active,
+            rundown_pending=lambda: self._rundown_proactive_pending,
+            rundown_ready=self._is_rundown_active,
         )
 
         # command tool
@@ -856,14 +842,15 @@ class StreamerAgent(BaseAgent):
         async with self._flush_lock:
             # buffer 空时 → 主动发言判定
             if self._buffer.is_empty:
-                agenda_pending = self._agenda_proactive_pending
-                self._agenda_proactive_pending = False
+                rundown_pending = self._rundown_proactive_pending
+                self._rundown_proactive_pending = False
                 reason = self._proactive_trigger.should_trigger(
                     self._room_state,
                     now_ms(),
                     external_pending=self._external_proactive_pending,
-                    agenda_pending=agenda_pending,
-                    agenda_ready=self._is_agenda_active(),
+                    rundown_pending=rundown_pending,
+                    rundown_ready=self._is_rundown_active(),
+                    rundown_overdue=self._is_rundown_overdue(),
                 )
                 self._external_proactive_pending = False
                 if reason is not None:
@@ -1018,8 +1005,8 @@ class StreamerAgent(BaseAgent):
         # 读历史（duck-typed）
         history = await self._read_history("live")
 
-        # 拼装 Agenda 上下文
-        agenda_text = self._build_agenda_text()
+        # 拼装流程单上下文
+        rundown_text = self._build_rundown_text()
 
         # 游戏叙事（三通道·事件：MinecraftAgent 等 emit 的 game.* 摘要）
         game_narrative = self._game_narrative_text()
@@ -1036,7 +1023,7 @@ class StreamerAgent(BaseAgent):
                 forced=forced,
                 proactive=proactive,
                 history=history,
-                agenda_text=agenda_text,
+                rundown_text=rundown_text,
                 game_narrative=game_narrative,
                 thinking=thinking,
                 round_id=round_id,
@@ -1077,7 +1064,6 @@ class StreamerAgent(BaseAgent):
             if outcome.get("error"):
                 self._planner_failures += 1
                 result["error"] = f"planner_failed: {outcome['error']}"
-            self._consume_plan_assessment(outcome)
             result["total_duration_ms"] = now_ms() - started_ms
             return result
 
@@ -1098,16 +1084,6 @@ class StreamerAgent(BaseAgent):
         if proactive:
             reason = trigger_reason.removeprefix("proactive:") if trigger_reason else "unknown"
             self._proactive_trigger.record_trigger(reason, now_ms())
-
-        # 消费 Planner 顺带评估（灌注 AgendaIdle）
-        self._consume_plan_assessment(outcome)
-
-        # 持久化 Agenda runtime
-        if self._agenda_idle is not None and self._agenda_state.agenda is not None:
-            try:
-                await self._agenda_state.persist_runtime()
-            except Exception:
-                pass
 
         result["total_duration_ms"] = now_ms() - started_ms
         return result
@@ -1551,347 +1527,171 @@ class StreamerAgent(BaseAgent):
             except RuntimeError as exc:
                 self._logger.warning(f"动作任务创建失败（已忽略）: tool={name}, err={exc}")
 
-    def _consume_plan_assessment(self, outcome: Dict[str, Any]) -> None:
-        """消费 Planner 顺带评估字段（灌注 AgendaIdle）。"""
-        if self._agenda_idle is None:
-            return
-        if not self.typed_config.agenda_advance_eval_enabled:
-            return
-        try:
-            self._agenda_idle.note_plan_assessment(
-                may_advance=bool(outcome.get("may_advance", False)),
-                need_more_time=bool(outcome.get("need_more_time", False)),
-                branch_id=outcome.get("branch_id"),
-            )
-        except Exception as exc:
-            self._logger.warning(f"消费 Planner 评估异常: {exc}")
-
     # ==================================================================
-    # Agenda 子系统管理
+    # 流程单（Rundown）运行时
     # ==================================================================
 
-    def _is_agenda_active(self) -> bool:
-        """判定 Agenda 是否激活且有当前环节（供 ProactiveToolProvider outline_ready）。"""
-        if self._agenda_state.agenda is None:
-            return False
-        if self._agenda_state.status.value != "running":
-            return False
-        return self._agenda_state.current_segment_id is not None
+    def _is_rundown_active(self) -> bool:
+        """判定流程单是否激活且有当前环节（供 ProactiveTrigger rundown_ready）。"""
+        return self._rundown_state.status == "running"
 
-    def _build_agenda_text(self) -> Optional[str]:
-        """拼装 Agenda 渲染文本（注入 Planner/Replyer $agenda 变量）。"""
-        if not self._is_agenda_active():
-            return None
-        state = self._agenda_state
-        seg_id = state.current_segment_id
-        if seg_id is None:
-            return None
-        seg = self._find_agenda_segment(seg_id)
-        if seg is None:
-            return None
-        agenda = state.agenda
-        if agenda is None:
-            return None
-        seg_ids = [s.id for s in agenda.segments]
-        try:
-            idx = seg_ids.index(seg_id)
-        except ValueError:
-            return None
-        total = len(agenda.segments)
-        title = getattr(seg, "title", "") or ""
-        task = getattr(seg, "task_description", "") or ""
-        key_points = list(getattr(seg, "key_points", []) or [])
-        expanded = state.get_expanded(seg_id)
-        topic_guidance = (getattr(expanded, "topic_guidance", "") if expanded is not None else "") or task
-        remaining_ms = state.get_current_segment_remaining_ms()
-        elapsed_live = state.get_elapsed_live_ms()
-        total_planned = state.get_total_planned_ms()
-        progress_pct = state.get_progress_percent()
+    def _is_rundown_overdue(self) -> bool:
+        """当前环节停留是否已超预期（供 ProactiveTrigger rundown_overdue 闹钟）。"""
+        return self._rundown_state.is_current_segment_overdue()
 
-        lines = []
-        lines.append(f"当前环节：{title}（第 {idx + 1}/{total} 环节）")
-        if task:
-            lines.append(f"任务：{task}")
-        if topic_guidance and topic_guidance != task:
-            lines.append(f"话题引导：{topic_guidance}")
-        if key_points:
-            lines.append(f"关键节点：{'、'.join(key_points)}")
-        lines.append(f"环节剩余：约 {format_duration_ms(remaining_ms)}")
-        if elapsed_live is not None and total_planned is not None and progress_pct is not None:
-            lines.append(
-                f"整场进度：已进行 {format_duration_ms(elapsed_live)} / "
-                f"共 {format_duration_ms(total_planned)}（{progress_pct:.0f}%）"
-            )
-        return "\n".join(lines)
+    def _build_rundown_text(self) -> Optional[str]:
+        """拼装流程单情境文本（注入 Planner/Replyer $rundown 变量）。"""
+        return self._rundown_state.build_context_text()
 
-    def _build_agenda_text_sync(self) -> Optional[str]:
-        """同步包装（reply_tool 的 agenda_text_provider 鸭子接口）。"""
-        return self._build_agenda_text()
+    def _build_rundown_text_sync(self) -> Optional[str]:
+        """同步包装（reply_tool 的 rundown_text_provider 鸭子接口）。"""
+        return self._build_rundown_text()
 
-    def _find_agenda_segment(self, segment_id: str) -> Any:
-        """按 id 在当前 Agenda 中查找环节对象。"""
-        if self._agenda_state.agenda is None:
-            return None
-        for seg in self._agenda_state.agenda.segments:
-            if getattr(seg, "id", None) == segment_id:
-                return seg
-        return None
+    async def _start_rundown(self) -> None:
+        """加载流程单并启动运行时（唯一装配点；fail-soft）。
 
-    async def _start_agenda_components(self) -> None:
-        """构造 + 启动 AgendaLoader / AgendaState / AgendaIdle。"""
-        path = self.typed_config.agenda_path
-        if not path:
-            self._logger.info("Agenda 未配置路径，跳过加载")
-            return
-        try:
-            self._agenda_loader = AgendaLoader(
-                llm_manager=self._llm,
-                prompt_manager=self._prompt,
-                config={
-                    "agenda_expand_client": self.typed_config.agenda_expand_client,
-                },
-            )
-            agenda = await self._agenda_loader.load(path)
-            self._agenda_state.start(agenda)
-
-            self._agenda_idle = AgendaIdle(
-                config={
-                    "agenda_scheduler_tick_ms": self.typed_config.agenda_scheduler_tick_ms,
-                    "agenda_advance_eval_enabled": self.typed_config.agenda_advance_eval_enabled,
-                },
-                state=self._agenda_state,
-                loader=self._agenda_loader,
-                on_advance=self._on_agenda_advance,
-            )
-            if self._event_bus is not None:
-                self._agenda_idle.attach_event_bus(self._event_bus)
-            await self._agenda_idle.start()
-            self._emit_agenda_change(action="schedule", segment_id=self._agenda_state.current_segment_id)
-
-            self._logger.info(
-                f"Agenda 已加载: path={path!r}, agenda_id={agenda.agenda_id!r}, segments={len(agenda.segments)}"
-            )
-        except Exception as exc:
-            self._logger.error(f"Agenda 加载失败，降级为无 Agenda 模式: {exc}", exc_info=True)
-            self._agenda_idle = None
-            self._agenda_loader = None
-
-    def _emit_agenda_change(self, *, action: str, segment_id: Optional[str], done: bool = False) -> None:
-        """按环节 id 查找环节对象并广播 ``agenda.update``；查不到（无节目单/无环节）静默跳过。"""
-        segment = self._find_agenda_segment(segment_id) if segment_id else None
-        if segment is None:
-            return
-        self._emit_agenda_update(action=action, segment=segment, done=done)
-
-    def _emit_agenda_update(self, *, action: str, segment: Any, done: bool = False) -> None:
-        """广播 ``agenda.update``（环节变更；fire-and-forget）。
-
-        Dashboard 前端（Dashboard / OutlineWorkbench）订阅该事件触发节目单
-        快照重拉，环节推进/跳转/回退后 UI 才能即时刷新。payload 的
-        ``AgendaItem`` 是运行进度条目形状，这里从状态机的 ``AgendaSegment``
-        适配：label←title、expected_ms←duration_ms、order←segments 索引。
-
-        Args:
-            action: payload 动作（done=环节完成 / schedule=进度位置变更）
-            segment: 变更涉及的环节对象（``AgendaSegment`` 或 duck-typed）
-            done: 环节是否已完成
+        加载顺序：配置 ``rundown_id`` → 存储读取；未配置 / 不存在 / 读取失败
+        → 回退内置默认流程单（初次直播·自我介绍）。
         """
+        rundown_id = (self.typed_config.rundown_id or "").strip()
+        rundown: Optional[Rundown] = None
+        if rundown_id and self._sqlite is not None:
+            try:
+                rundown = await self._sqlite.get_rundown(rundown_id)
+            except Exception as exc:
+                self._logger.warning(f"读取流程单 '{rundown_id}' 失败: {exc}")
+                rundown = None
+            if rundown is None:
+                self._logger.warning(f"流程单 '{rundown_id}' 不存在，回退内置默认流程单")
+        if rundown is None:
+            rundown = DEFAULT_RUNDOWN
+        self._rundown_state.load(rundown)
+        self._logger.info(f"流程单已加载: id={rundown.rundown_id!r}, segments={len(rundown.segments)}")
+
+    def _on_rundown_changed(self, segment_id: str, by: str) -> None:
+        """流程单变更通知：置位 proactive 即时信号（新环节开场要马上说）。"""
+        self._rundown_proactive_pending = True
+        self._logger.info(f"流程单变更: segment={segment_id!r}, by={by!r}")
+
+    def _emit_rundown_changed(self, event_name: str, payload: Any) -> None:
+        """桥接 RundownState 的事件回调到 EventBus（异步 emit 经任务调度）。"""
         if self._event_bus is None:
             return
-        segments = getattr(self._agenda_state.agenda, "segments", None) or []
-        segment_id = getattr(segment, "id", "")
-        order = next((i for i, s in enumerate(segments) if getattr(s, "id", None) == segment_id), 0)
-        item = AgendaItem(
-            plan_id=str(getattr(self._agenda_state, "agenda_id", "") or ""),
-            order=order,
-            label=str(getattr(segment, "title", "") or segment_id),
-            starts_at_ms=int(getattr(self._agenda_state, "segment_started_at_ms", 0) or 0) or None,
-            expected_ms=int(getattr(segment, "duration_ms", 0) or 0) or None,
-            done=done,
-            current=False,
-        )
-        payload = AgendaPayload(live_session_id="live", action=action, item=item)
-        asyncio.create_task(self._event_bus.emit(CoreEvents.AGENDA_UPDATE, payload, source="StreamerAgent"))
-
-    def _on_agenda_advance(self, new_segment_id: str, reason: Optional[str]) -> None:
-        """AgendaIdle 推进回调（同步方法）。"""
-        self._agenda_proactive_pending = True
-        self._logger.info(f"Agenda 推进回调: new_segment={new_segment_id!r}, reason={reason!r}")
-        # 推进即上一环节完成 → 广播 agenda.update（前端重拉节目单快照）
-        completed = self._agenda_state.completed_segment_ids
-        prev_id = completed[-1] if completed else None
-        prev_segment = self._find_agenda_segment(prev_id) if prev_id else None
-        if prev_segment is not None:
-            self._emit_agenda_update(action="done", segment=prev_segment, done=True)
+        try:
+            asyncio.create_task(self._event_bus.emit(event_name, payload, source="RundownState"))
+        except RuntimeError as exc:
+            self._logger.warning(f"rundown.changed 任务创建失败（已忽略）: {exc}")
 
     # ==================================================================
-    # 公开门面：供 Dashboard API 读取与控制 Agenda
+    # 公开门面：供 Dashboard API 读取与控制流程单
     # ==================================================================
 
-    def is_agenda_available(self) -> bool:
-        """判定 Agenda 是否对外可用（Agent 已启动且 Agenda 组件就绪）。
+    def is_rundown_available(self) -> bool:
+        """判定流程单是否对外可用（运行时已加载流程单）。
 
-        - 返回 ``True`` 仅当 ``AgendaState`` 已挂载并加载过 agenda；
-        - 返回 ``False`` 表示 Dashboard 工作台应降级为不可用视图。
+        - 返回 ``False`` 表示 Dashboard 编排页应降级为不可用视图。
         """
-        return self._agenda_state.agenda is not None
+        return self._rundown_state.rundown is not None
 
-    def get_agenda_view(self, *, now_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
-        """聚合 Dashboard 工作台所需的全部 Agenda 视图数据。
+    def get_rundown_view(self, *, now_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """聚合 Dashboard 编排页所需的流程单视图数据。
 
         Returns:
-            ``None`` 当 Agenda 未加载（agent 未启用或 agenda 组件未就绪）；
-            否则返回::
+            ``None`` 当流程单未加载；否则返回::
 
                 {
-                    "snapshot": dict,  # AgendaState.get_snapshot() 原样
-                    "transitions": list[dict],  # 最近 50 条状态机转移
-                    "segments": list[dict],  # 节目单环节清单（含 branch_count / expanded / needs_expansion）
-                    "expanded": dict[str, dict | None],  # 每个环节的扩展内容缓存
+                    "snapshot": dict,  # RundownState.get_snapshot() 原样
+                    "transitions": list[dict],  # 最近 50 条变更历史
+                    "segments": list[dict],  # 环节清单（id/title/目标/要点/时长/备注）
                 }
         """
-        state = self._agenda_state
-        if state.agenda is None:
+        state = self._rundown_state
+        rundown = state.rundown
+        if rundown is None:
             return None
 
-        snapshot = state.get_snapshot(now_ms=now_ms)
-        transitions = state.get_transitions()
-
-        segments_view: List[Dict[str, Any]] = []
-        expanded_view: Dict[str, Optional[Dict[str, Any]]] = {}
-        for seg in getattr(state.agenda, "segments", []) or []:
-            seg_id = getattr(seg, "id", None)
-            if not seg_id:
-                continue
-            segments_view.append(
-                {
-                    "id": seg_id,
-                    "title": getattr(seg, "title", "") or "",
-                    "duration_ms": int(getattr(seg, "duration_ms", 0) or 0),
-                    "min_duration_ms": getattr(seg, "min_duration_ms", None),
-                    "task_description": getattr(seg, "task_description", "") or "",
-                    "key_points": list(getattr(seg, "key_points", []) or []),
-                    "branch_count": len(list(getattr(seg, "branches", []) or [])),
-                    "expanded": state.get_expanded(seg_id) is not None,
-                    "needs_expansion": state.needs_expansion(seg_id),
-                }
-            )
-            expanded_obj = state.get_expanded(seg_id)
-            if expanded_obj is None:
-                expanded_view[seg_id] = None
-            else:
-                expanded_view[seg_id] = {
-                    "opening_line": getattr(expanded_obj, "opening_line", "") or "",
-                    "topic_guidance": getattr(expanded_obj, "topic_guidance", "") or "",
-                    "talking_points": list(getattr(expanded_obj, "talking_points", []) or []),
-                }
+        segments_view: List[Dict[str, Any]] = [
+            {
+                "id": seg.id,
+                "title": seg.title,
+                "task_description": seg.task_description,
+                "key_points": list(seg.key_points),
+                "expected_ms": seg.expected_ms,
+                "min_duration_ms": seg.min_duration_ms,
+                "notes": seg.notes,
+            }
+            for seg in rundown.segments
+        ]
 
         return {
-            "snapshot": snapshot,
-            "transitions": transitions,
+            "snapshot": state.get_snapshot(now_ms=now_ms),
+            "transitions": state.get_transitions(),
             "segments": segments_view,
-            "expanded": expanded_view,
         }
 
-    async def agenda_control(
+    async def rundown_control(
         self,
         action: str,
         *,
         segment_id: Optional[str] = None,
-        path: Optional[str] = None,
         now_ms: Optional[int] = None,
     ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
-        """执行 Dashboard 手动控制动作（pause/resume/skip/rewind/jump/unload/start）。
+        """执行 Dashboard 手动控制动作（pause/resume/next/goto，by="human"）。
 
-        仅做转发与异常包装，不改变 AgendaState 既有行为；调用方可凭 ``success`` /
-        ``message`` / ``snapshot`` 三元组渲染 UI。
+        仅做转发与结构化拒绝翻译；调用方可凭 ``success`` / ``message`` /
+        ``snapshot`` 三元组渲染 UI。
 
         Args:
-            action: 控制动作名（pause/resume/skip/rewind/jump/unload/start）
-            segment_id: jump 必填；其它动作忽略
-            path: start 必填；指向 Agenda TOML（相对/绝对均可）
-            now_ms: 可选时间戳（默认走 AgendaState 注入时钟或真实时钟）
+            action: 控制动作名（pause/resume/next/goto）
+            segment_id: goto 必填；其它动作忽略
+            now_ms: 可选时间戳（默认走 RundownState 注入时钟或真实时钟）
 
         Returns:
-            ``(success, message, snapshot)``：失败时 ``snapshot`` 为 ``None``，
-            成功或部分成功（start 加载成功）时 ``snapshot`` 为最新 ``get_snapshot()``。
+            ``(success, message, snapshot)``：失败时 ``snapshot`` 为 ``None``。
         """
-        state = self._agenda_state
+        state = self._rundown_state
 
         def _snap() -> Optional[Dict[str, Any]]:
             try:
                 return state.get_snapshot(now_ms=now_ms)
             except Exception as exc:  # pragma: no cover - 防御
-                self._logger.warning(f"agenda_control 取快照失败: {exc}")
+                self._logger.warning(f"rundown_control 取快照失败: {exc}")
                 return None
 
         try:
             if action == "pause":
-                state.pause(now_ms=now_ms)
-                return True, "已暂停", _snap()
-            if action == "resume":
-                state.resume(now_ms=now_ms)
-                return True, "已恢复", _snap()
-            if action == "skip":
-                new_id = state.skip(now_ms=now_ms)
-                completed = state.completed_segment_ids
-                self._emit_agenda_change(action="done", segment_id=completed[-1] if completed else None, done=True)
-                msg = f"已跳过到 {new_id}" if new_id else "已到末尾，节目单完成"
-                return True, msg, _snap()
-            if action == "rewind":
-                new_id = state.rewind(now_ms=now_ms)
-                self._emit_agenda_change(action="schedule", segment_id=new_id)
-                msg = f"已回退到 {new_id}" if new_id else "已在首段，无法回退"
-                return True, msg, _snap()
-            if action == "jump":
+                reject = state.pause(by="human", now_ms=now_ms)
+            elif action == "resume":
+                reject = state.resume(by="human", now_ms=now_ms)
+            elif action == "next":
+                reject = state.next(by="human", now_ms=now_ms)
+            elif action == "goto":
                 if not segment_id:
-                    return False, "jump 必须提供 segment_id", None
-                state.jump_to(segment_id, now_ms=now_ms)
-                self._emit_agenda_change(action="schedule", segment_id=segment_id)
-                return True, f"已跳转到 {segment_id}", _snap()
-            if action == "unload":
-                state.unload(now_ms=now_ms)
-                return True, "已卸载节目单", None
-            if action == "start":
-                if not path:
-                    return False, "start 必须提供 path", None
-                loader = self._build_agenda_loader()
-                if loader is None:
-                    return False, "AgendaLoader 无法构造（缺少 LLM/Prompt 服务）", None
-                try:
-                    agenda = await loader.load(path)
-                except FileNotFoundError as exc:
-                    return False, f"TOML 文件不存在: {exc}", None
-                except PermissionError as exc:
-                    return False, f"读取 TOML 权限不足: {exc}", None
-                except Exception as exc:
-                    return False, f"TOML 解析失败: {exc}", None
-                state.start(agenda, now_ms=now_ms)
-                self._emit_agenda_change(action="schedule", segment_id=state.current_segment_id)
-                return True, f"已启动节目单 {agenda.agenda_id}", _snap()
-            return False, f"未知 action: {action!r}", None
+                    return False, "goto 必须提供 segment_id", None
+                reject = state.goto(segment_id, by="human", now_ms=now_ms)
+            else:
+                return False, f"未知 action: {action!r}", None
+
+            if reject is not None:
+                messages = {
+                    "min_duration_not_met": (
+                        f"当前环节最少停留未到（还需约 {max(1, round(reject.remaining_ms / 1000))} 秒）"
+                    ),
+                    "unknown_segment_id": f"环节不存在（可用: {', '.join(reject.available_ids)}）",
+                    "already_done": "流程单已完成",
+                    "not_running": "流程单未在运行",
+                    "not_paused": "流程单未在暂停",
+                    "no_rundown_loaded": "未加载流程单",
+                }
+                return False, messages.get(reject.reason, reject.reason), _snap()
+            return True, "已执行", _snap()
         except ValueError as exc:
-            # jump_to 不存在的 segment_id 等契约级错误
+            # 契约级错误（非法 by 等程序员错误）
             return False, str(exc), _snap()
         except Exception as exc:
-            # 状态机内部错误（如 unload 后再操作）统一兜底，避免 dashboard 500
-            self._logger.warning(f"agenda_control {action!r} 异常: {exc}", exc_info=True)
+            # 状态机内部错误统一兜底，避免 dashboard 500
+            self._logger.warning(f"rundown_control {action!r} 异常: {exc}", exc_info=True)
             return False, f"控制失败: {exc}", _snap()
-
-    def _build_agenda_loader(self) -> Optional["AgendaLoader"]:
-        """构造（或复用）AgendaLoader；start 动作需要时调用。"""
-        if self._agenda_loader is not None:
-            return self._agenda_loader
-        if self._llm is None or self._prompt is None:
-            return None
-        self._agenda_loader = AgendaLoader(
-            llm_manager=self._llm,
-            prompt_manager=self._prompt,
-            config={
-                "agenda_expand_client": self.typed_config.agenda_expand_client,
-            },
-        )
-        return self._agenda_loader
 
     # ==================================================================
     # 历史读取（duck-typed 鸭子接口）

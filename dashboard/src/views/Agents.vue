@@ -204,7 +204,7 @@
             </header>
 
             <p class="stream-note">
-              三族合并：planner.*（想）/ agenda.*（程）/ tool.result.*（做）； tool.result
+              三族合并：planner.*（想）/ rundown.changed（程）/ tool.result.*（做）； tool.result
               失败时显示红色 badge 与错误摘要。
             </p>
 
@@ -214,7 +214,7 @@
                 <p>
                   {{
                     streamBuffer.length === 0
-                      ? '暂无轨迹——等待 Agent 活动（planner/agenda/tool.result）'
+                      ? '暂无轨迹——等待 Agent 活动（planner/rundown/tool.result）'
                       : '当前过滤下无匹配条目'
                   }}
                 </p>
@@ -270,9 +270,9 @@
  *   旧版侧栏 feed 升格为页面主角（flex-1）；批量按钮下放到左列表头。
  *
  * 数据流归因：
- * - 运行轨迹按三事件族（planner.* / agenda.* / tool.result.*）合并，
+ * - 运行轨迹按三事件族（planner.* / rundown.changed / tool.result.*）合并，
  *   对每个 entry 标 stage badge（想/程/做）+ 失败标记（tool.result 红色）。
- * - 单 Agent 场景下三族前缀与目标 Agent 强相关（planner/agenda 由 Agent 触发，
+ * - 单 Agent 场景下三族前缀与目标 Agent 强相关（planner/rundown 由 Agent 触发，
  *   tool.result 由 Agent 调用）；多 Agent 并行时按时间近似归属（见 subtitle）。
  * - 后端后续票：事件负载增加 agent-identity 字段可消除近似归因。
  */

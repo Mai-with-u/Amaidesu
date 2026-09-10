@@ -15,9 +15,8 @@
 - ``streamer_agent``    - BaseAgent 子类（编排上面所有组件）
 
 子包：
-- ``agenda/``           - Agenda（节目单）子系统：``agenda``（数据契约）/ ``agenda_loader``
-  （TOML 加载 + AI 扩展）/ ``agenda_state``（运行时状态机）/ ``agenda_store``（SQLite 实现）/
-  ``agenda_idle``（后台调度循环）
+- ``rundown/``          - 流程单（Rundown）子系统：``rundown``（数据契约 + 内置默认流程单）/
+  ``rundown_state``（运行时状态：游标 + 计时 + 唯一变更边界）/ ``rundown_tool``（Agent 推进工具）
 - ``tools/``            - Agent 专属工具壳层（**真工具**，provider="builtin"）：``reply_tool``
   （reply）/ ``proactive_tool``（should_speak_proactively）/ ``command_tool``（parse_command）；
   只包装顶层内脏，不含决策/表达逻辑

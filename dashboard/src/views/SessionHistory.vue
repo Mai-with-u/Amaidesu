@@ -4,7 +4,7 @@
       <div class="header-left">
         <h1 class="page-title">会话调试</h1>
         <p class="page-subtitle">
-          v2 对话闭环：观众消息 → 主播发言（Planner / Agenda / 工具作为过程行）
+          v2 对话闭环：观众消息 → 主播发言（Planner / 流程单 / 工具作为过程行）
         </p>
       </div>
       <div class="header-actions">
@@ -31,7 +31,7 @@
           <el-option label="观众消息 (room.message)" value="room.message" />
           <el-option label="主播发言 (streamer.speech)" value="streamer.speech" />
           <el-option label="Planner 决策 (planner.*)" value="planner" />
-          <el-option label="Agenda 节目单 (agenda.*)" value="agenda" />
+          <el-option label="流程单 (rundown.*)" value="rundown" />
           <el-option label="工具结果 (tool.result.*)" value="tool.result" />
         </el-select>
         <el-input
@@ -127,7 +127,7 @@
             <div class="chat-avatar chat-avatar--speech" title="主播">主</div>
           </template>
 
-          <!-- 决策/编排/工具过程行（居中 · planner / agenda / tool.result） -->
+          <!-- 决策/编排/工具过程行（居中 · planner / rundown.changed / tool.result） -->
           <template v-else-if="event.kind === 'system'">
             <div
               :class="['system-strip', { 'is-expanded': expanded.has(event.id) }]"
@@ -650,7 +650,7 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
-/* ===== 过程行（planner / agenda / tool.result） ===== */
+/* ===== 过程行（planner / rundown.changed / tool.result） ===== */
 .system-strip {
   display: flex;
   flex-direction: column;
