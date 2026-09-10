@@ -1,9 +1,7 @@
-*最后更新：2026-09-08（主播 Agent 决策链 ReAct 化：Planner 从单发 produce_plan 决策改为 ReAct 循环——chat_messages + 工具面（ToolRegistry 全量动态拉取 + reply 局部工具），max_steps=8 防失控，自然终止=静默；Replyer 收缩为 reply 局部工具的实现载体（表达引擎零工具面，LLM 只见 reply）；废除 DecisionPlan 管道（should_reply 分支/_make_reply_invocation）；planner_llm 默认 llm_fast→llm（ReAct 决策核心质量敏感），新增 planner_max_steps=8；CONFIG_VERSION 2.0.23；mermaid 决策流同步：Planner→reply 工具→Replyer→speech 入队）*
-*最后更新：2026-09-06（持久层文件存储收口：①`event_history` 表落地——EventHistoryRecorder 订阅的语义域事件全量落库（替代 data/events/*.jsonl，SCHEMA_VERSION 升至 5），录制回放数据源与 Dashboard 事件历史持久层同源；②`llm_requests` 表落地——RequestHistoryManager 请求历史入库，dashboard LLM 历史页改 SQL 分页（根治旧实现每次记录全量重写当日 JSON 文件的写放大），`[events].persist` 语义改写库、CONFIG_VERSION 2.0.17；③SQLiteStore 迁移前自动备份——版本推进前在线快照到 data/backups/（不自动清理）；④历史 JSONL 已导入真实库，data/events 与 data/llm_history 待应用重启后删除）*
 
 # 架构总览（v2.0.0）
 
-Amaidesu 是一个 **AI VTuber 框架**，v2.0.0 采用 **Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 节目单）** 架构。系统采用**三通道协作**作为跨主体通信机制——命令（工具，主播→游戏，目标级意图，如 text_adv_choose_option）、事件（EventBus，游戏→主播，里程碑/异常）、状态（工具，主播按需主动读取游戏封装读接口，如 text_adv_get_story——按游戏实际需要设计，不强制单一 getStatus），事件拦截器挂在分发层做语义净化；Collector 从外部世界推入房间消息，Agent 拥有自己的决策循环并消费 ToolRegistry 中的工具完成表达与控制，Dashboard 仅作为 observer，不参与数据流。
+Amaidesu 是一个 **AI VTuber 框架**，v2.0.0 采用 **Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Rundown 流程单）** 架构。系统采用**三通道协作**作为跨主体通信机制——命令（工具，主播→游戏，目标级意图，如 text_adv_choose_option）、事件（EventBus，游戏→主播，里程碑/异常）、状态（工具，主播按需主动读取游戏封装读接口，如 text_adv_get_story——按游戏实际需要设计，不强制单一 getStatus），事件拦截器挂在分发层做语义净化；Collector 从外部世界推入房间消息，Agent 拥有自己的决策循环并消费 ToolRegistry 中的工具完成表达与控制，Dashboard 仅作为 observer，不参与数据流。
 
 > 本文是**速查参考**（组件清单/目录结构/启动时序）。重构的来龙去脉与设计推导见 [v2.0.0 架构叙事](v2-architecture.md)。
 
@@ -37,7 +35,7 @@ flowchart TB
     subgraph Streamer["StreamerAgent (src/agents/streamer/)"]
         Planner["Planner ReAct 循环<br/>(planner_llm 默认 llm, 全局工具面 + reply)"]
         Reply["Replyer 表达引擎<br/>(replyer_llm, ProfanityFilter)<br/>= reply 工具的实现载体"]
-        Agenda["Agenda 子系统<br/>节目单 + idle 补偿 + 背景任务"]
+        Rundown["Rundown 流程单子系统<br/>备忘录 + 闹钟（推进权归 Agent）"]
         Tools["自带工具<br/>reply / should_speak_proactively / parse_command"]
         UQ["UtteranceQueue<br/>FIFO 串行播放队列<br/>丢最旧 / 单 worker / 渲染超时"]
     end
@@ -64,7 +62,7 @@ flowchart TB
     Collectors -->|"emit_semantic_events<br/>data_type→事件"| INT
     INT --> Bus
     Bus --> Planner
-    Bus --> Agenda
+    Bus --> Rundown
     Planner -->|reply 局部工具| Reply
     Planner -->|tools.invoke| Out
     Planner -->|tools.invoke| CE
@@ -90,7 +88,7 @@ Amaidesu/
 ├── config/                      # 配置目录（多文件结构，首次运行自动生成）
 ├── src/
 │   ├── agents/                  # 业务 Agent（StreamerAgent + GameAgent：text_adv/minecraft 范例）
-│   │   ├── streamer/            #   主播 Agent（Planner/Replyer/Agenda/工具/后台维护）
+│   │   ├── streamer/            #   主播 Agent（Planner/Replyer/Rundown/工具/后台维护）
 │   │   └── game/                #   游戏 Agent（AI 玩家范式）
 │   │       ├── text_adv/        #     文字冒险 GameAgent 范例（content_engine 范式）
 │   │       └── minecraft/       #     Minecraft GameAgent（maicraft MCP 语义工具 + minecraft_todo/minecraft_notebook/minecraft_get_state/minecraft_assign）
@@ -235,7 +233,7 @@ sequenceDiagram
 
 #### 业务层（`src/agents/`）
 
-`src/agents/streamer/` 主播 Agent 包：顶层平铺内脏与协作组件，强内聚簇收进子包（`agenda/` 子系统 / `tools/` 工具壳层 / `command/` 解析原语）：
+`src/agents/streamer/` 主播 Agent 包：顶层平铺内脏与协作组件，强内聚簇收进子包（`rundown/` 子系统 / `tools/` 工具壳层 / `command/` 解析原语）：
 
 | 角色 | 模块 |
 |------|------|
@@ -243,14 +241,14 @@ sequenceDiagram
 | **决策循环（Planner）** | `planner.py`（planner_llm 调 `chat()` 不传 tools，结构化 JSON 输出）、`plan.py`（plan 数据结构） |
 | **表达引擎（Replyer）** | `replyer.py`（replyer_llm 调 `chat()` 不传 tools，纯文本 JSON + ProfanityFilter） |
 | **主动发言规则** | `proactive_trigger.py`（纯规则触发器，主循环直接驱动；经 `tools/proactive_tool.py` 包装为工具供 LLM 查询） |
-| **节目单（Agenda）** | `agenda/` 子包：`agenda.py`（数据契约）/ `agenda_loader.py` / `agenda_state.py` / `agenda_store.py` / `agenda_idle.py`（5 文件：编排本身内聚在 Agent 内，直播内容=配置+Planner 上下文/行为模式变化，不是代码模块） |
+| **流程单（Rundown）** | `rundown/` 子包：`rundown.py`（数据契约 + 内置默认流程单）/ `rundown_state.py`（游标 + 计时 + 唯一变更边界）/ `rundown_tool.py`（Agent 推进工具）；备忘录 + 闹钟——环节推进由 Agent 经工具自主决定，超时闹钟并入 ProactiveTrigger 只提醒不执法 |
 | **房间与消息** | `room_state.py`（直播间状态聚合）、`message_buffer.py`（弹幕聚合窗口：默认 3s/20 条） |
 | **后台维护** | `background.py`（双任务 BackgroundMaintainer 取代旧 RoomStateLoop） |
 | **发言管线** | `utterance_queue.py`（v2.0.10 新增：`UtteranceQueue` FIFO 串行队列，丢最旧 / 单 worker / 渲染超时看门狗；构造期注入 `speak` 可调用对象（绑定 `tts_engine.handle_speech`），后台串行直接 `await speak(text, utterance_id)`，不再经 ToolRegistry） |
 | **工具壳层** | `tools/` 子包：`reply_tool.py`（`reply`）、`proactive_tool.py`（`should_speak_proactively`）、`command_tool.py`（`parse_command`）——Agent 专属 builtin 工具入口，只包装顶层内脏，不含决策/表达逻辑 |
 | **时序门** | `timing_gate.py` |
 | **命令解析** | `command/command.py` + `command/command_parser.py` + `command/command_registry.py`（`tools/command_tool.py` 的底层纯解析原语） |
-| **提示词** | `prompts/amaidesu_planner.md` + `prompts/amaidesu_replyer.md` + `prompts/agenda_expand.md` |
+| **提示词** | `prompts/amaidesu_planner_react.md` + `prompts/amaidesu_replyer.md` |
 
 `src/agents/text_adv/` 文字冒险 GameAgent 范例（content_engine 范式）：`agent.py`（继承 `BaseAgent`）、`state.py`（剧情状态）、`tools.py`（游戏侧 dispatch），构造时注入 `content_engine=StubContentEngine(engine_kind="text_adv")`，通过 `content_engine_*` 5 工具间接驱动引擎。
 
@@ -287,7 +285,7 @@ sequenceDiagram
 
 **判别口诀**："谁驱动谁"——能自我维持状态/轮询/心跳的就是 Agent，只在被调用时执行的就是 Tool。
 
-> **直播内容 = 编排配置 + Planner 上下文/行为模式的变化，不是代码模块**。一份节目单不会新增 Agent 或 Tool，只是改变 `StreamerAgent` 加载的 Agenda、Planner 提示词上下文与 Replyer 行为模式。这就是为什么 `agenda_*.py` 等模块收在 `src/agents/streamer/agenda/` 子包内——它们是 StreamerAgent 内部子组件，而非顶级模块或可注册工具。
+> **直播内容 = 编排配置 + Planner 上下文/行为模式的变化，不是代码模块**。一份流程单不会新增 Agent 或 Tool，只是改变 `StreamerAgent` 加载的 Rundown、Planner 提示词上下文与 Replyer 行为模式。这就是为什么 `rundown_*.py` 等模块收在 `src/agents/streamer/rundown/` 子包内——它们是 StreamerAgent 内部子组件，而非顶级模块或可注册工具。
 
 ### 生命周期
 
@@ -421,7 +419,7 @@ enabled = true
 
 ### 非缺口（设计如此，勿重复上报）
 
-- **`agenda_plan` 表无运行时写入**：原始大纲的权威源是 TOML 文件（`agenda_loader` 直接解析），该表保留接口但明确不做持久化（见 `agenda_store.py` 头注）。
+- **流程单运行进度不持久化**：流程单权威源是 `rundowns` 表（WebUI 建立，TOML 已移除）；运行进度（当前环节/计时）纯内存，重启即重读流程单从头开始。v2 的 `agenda_plan`/`agenda_runtime` 表已随 Schema 迁移 DROP。
 - **`enter` 事件不落库**：进场消息无对应明细表，属设计决定（`live_sessions` 心跳与进场是不同概念），`StorageLedger` 收到后 debug 日志丢弃。
 - **`simulated` 溯源已闭环**：`StorageLedger` 已从 `RoomMessagePayload.simulated` 端到端写穿 `live_chat` / `gifts` / `super_chats` 三表贯穿列，并有测试覆盖（`tests/modules/storage/test_storage_ledger.py::test_ledger_simulated_true_flows_to_column`）。
 
@@ -442,17 +440,11 @@ enabled = true
 
 ---
 
-*最后更新：2026-09-07（工具体系重构：注册名 = `<provider>_<工具名>` 无条件前缀（register_provider 内统一改写，spec 已带前缀则原样）；`ToolProvider` 协议新增 `category` 自声明分类（avatar/studio/vision/memory/game/mcp/framework），registry 提供 `list_categories()` 与 `list_tools(category=)`；存量对齐——obs provider 值 `obs_control`→`obs`、text_adv 工具 provider `game`→`text_adv`、content_engine provider `game`→`content_engine`、各 avatar/studio/vision/memory/framework provider 补齐 category；look_at_screen 注册名变 `vision_look_at_screen`、query_memory 变 `memory_query_memory`、AgentControl 六工具变 `framework_*`；minecraft 工具（provider=game、mc_* 裸名）注册名暂变 `game_mc_*` 属预期过渡态，其最终对齐随 minecraft ReAct 重构批完成；工具分类语义措辞统一"域"→"分类"）*
 
-*最后更新：2026-09-06（avatar 域收口：vrchat 自 vts 包物理拆出为独立包 `src/modules/avatar/vrchat/`（域开关早已独立，本次补齐代码布局）；vts 热键工具改按名优先触发（hotkey_id 兜底），工具描述连接后动态携带可用热键清单；warudo 动作类工具描述动态携带 `[tools.avatar.warudo.config].action_catalog` 预声明清单，删除 6 张死映射表；LLM 热键匹配链整体删除（含 llm_* 6 配置键）；emotion intensity 全链路接线——reply function schema 新增 intensity 参数 → Replyer 解析 clamp → StreamerAgent 透传 → vts_set_expression weight；工具表 provider 列改提供者标识并修正 VTS 工具数漂移（13→12，vts_lip_sync 从未存在于注册表）；目录结构/全景图/配置示例同步域化新树；avatar/studio 工具 provider 标识化补齐（builtin→vts/vrchat/warudo）；新增 VTSProvider 本体测试与 warudo action_catalog 测试）*
 
-*最后更新：2026-09-06（场次语义落地：新增 src/modules/session/（LiveSessionManager，场次唯一事实源——开启/结束/删除/归属解析/防膨胀，live.started/ended 唯一发布方；启动不自动开新场次，无显式场次期间消息归默认场次单行复用）；live_sessions 主键语义从「房间号哈希映射」修正为「一场直播一行」（AUTOINCREMENT + source 列，房间降为普通属性），SCHEMA_VERSION 升至 4（v3→v4 迁移：存量行标记 legacy 并封闭悬空行，live_chat 增加 message_id/reply_to_message_id 回复关联列与索引）；事件层场次归属改由 SessionStampInterceptor 单点盖章（发布方不再填 live_session_id）；决策可观测：planner.decision（决策轮记录）与 streamer.stage（阶段状态）两事件上线，Planner 输出 reply_to 指向具体弹幕 message_id；模拟器回放自动开/关场次，SessionSelector 退役；Dashboard 新增 /api/v1/live-sessions 控制面）*
 
-*最后更新：2026-09-06（持久层写链补全：①`live_sessions` 心跳落链接通——`SQLiteStore.update_live_session_heartbeat` 首次心跳开行 + `end_live_session` 关闭链结账，`BackgroundMaintainer` 去除 hasattr 静默防御；②SimpleMemory 私有表 `_memory_facts`/`_memory_profiles` DDL 收编进 `storage/schema.py` 统一版本管理，`SCHEMA_VERSION` 升至 3，`SimpleMemory.initialize()` 改为表自检；③`llm_usage` 落库——`LLMManager` 构造器注入 `SQLiteStore`，成功调用旁路写明细，装配顺序调整为存储栈先于 LLM 服务；④`timeline_summary` + `topics` 落库——`BackgroundMaintainer` 摘要成功后写摘要历史与话题快照投影；⑤已知缺口清单重写：移除已闭环的 simulated 溯源条目，新增"非缺口"小节（agenda_plan/enter/simulated），新增 game_events 无写链条目；⑥删除 `SQLiteStore.transaction()` NotImplementedError 占位；⑦批次5：`StorageLedger` 扩展订阅 `game.*`（milestone/attention_required/error）落库 `game_events` 表，缺口清单对应条目改为「有写链但暂无数据源」。session_id→INTEGER 主键映射收敛为 `sqlite_store.session_id_to_pk` 单一权威，`StorageLedger._session_pk_to_int` 改为薄委托）*
 
-*最后更新：2026-09-05（世界发射器统一（ADR-006 修订）：MockCollector 整体删除——Mermaid 图 Ext 子图 Mock 节点与 Collectors 子图 CMock 节点移除、目录结构 collectors/mock/ 行删除、采集器组件表 mock_danmaku 行删除；确定性回放由 `SimulatorService` mode=replay 承载（详见 ADR-006 修订记录）。上下文四层架构落地：ContextService 定位为 L1 对话配对窗口——目录结构注释更新为"DialogueTurn 存取 + 启动时从 live_chat 回灌"；storage/ 目录注释补充 StorageLedger 唯一写穿入口（room.message.# + streamer.speech → live_chat/gifts/super_chats + viewers 统计）与 SQLiteStore 领域查询说明）*
 
-*最后更新：2026-09-05（v2.0.12 §8 概念修正：TTS 提升为基础设施。全景图：ToolRegistry 子图移除 TTS Facade + 引擎×4 节点并标注"TTS 提升为基础设施后已不含 TTS"，新增"共享基础设施 `src/modules/`"子图含 `tts/` 与 `audio/` 两个节点；UtteranceQueue→TTS 箭头直连基础模块节点（不再是 ToolRegistry 路由）。目录结构：`src/modules/tools/output/tts/` 子目录删除注释，新增 `src/modules/tts/` 段（4 Provider + common + gptsovits_client + wav_decoder + assembly）。启动时序：5a0 步骤改为 `build_tts_infrastructure` 装配期构造引擎实例注入 StreamerAgent（不再走 ToolRegistry）；5a 标注"TTS 已不在此列"。StreamerAgent 包角色表：发言管线行改为"构造期注入 `speak` 适配器 + 后台串行 `await speak(text, utterance_id)`，不再经 ToolRegistry"。工具族总览：v2.0.10 约 53 → v2.0.12 约 51；TTS 行整段重写为"基础模块"行（4 Provider 在 `src/modules/tts/`，按 `[tts].provider` 单选构造，不注册 ToolRegistry）；合计说明去掉 TTS 工具数。配置示例：`[tts]` 段行为参数补 `render_timeout_ms = 60000`；新增 `[tts.gptsovits]` 引擎子段示例；`tools.toml` 注释改为"TTS 一族已在 v2.0.12 提升为基础设施，本表完全不含 TTS"，删除原 `[tools.output.tts.gptsovits]` 子段示例。已知缺口闭环段：v2.0.10 → v2.0.12 §8 概念修正后最终态——TTS 由 `build_tts_infrastructure` 装配期注入，非 TTS 工具族由 `bind_core_tools` 列表驱动；同日术语统一：'退役出工具池'改为'提升为基础设施'（避免误导为降级））*
 
 *上次更新：2026-08-28（ADR-006 落地：mock_danmaku 表格描述收敛为"确定性 JSONL 回放器（LLM 仿真由 simulator/ SimulatorService 承担）"；`simulator/` 目录条目改写为开发基础设施描述；启动时序补 4b SimulatorService 步骤（条件装配，--dry 强制 auto_start=False）、关闭时序补 1.5 SimulatorService 关闭步骤；已知缺口第 3 条由 `simulator/` 已脱线替换为"存储记账器 simulated 列写入链缺口"——`live_chat`/`gifts`/`super_chats` 表已有列但记账器未从 payload 读取，**不升 SCHEMA_VERSION**）*
 

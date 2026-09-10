@@ -812,7 +812,7 @@ class MyToolProvider(ToolProvider):
 
 | 范例 | 文件 | 说明 |
 |------|------|------|
-| StreamerAgent（业务 Agent） | `src/agents/streamer/streamer_agent.py` | 完整范例：订阅事件 + 后台双任务 + Agenda + 三工具 Provider |
+| StreamerAgent（业务 Agent） | `src/agents/streamer/streamer_agent.py` | 完整范例：订阅事件 + 后台双任务 + 流程单 + 三工具 Provider |
 | StreamerAgent 工具 | `src/agents/streamer/tools/{reply_tool,proactive_tool,command_tool}.py` | `provider="builtin"`；StreamerAgent 内部用 |
 | TextAdvGameAgent（游戏 Agent） | `src/agents/text_adv/agent.py` | 自包含包；`provider="text_adv"`（分类 game）；感知-推进闭环 |
 | TextAdvGameAgent 工具 | `src/agents/text_adv/tools.py` | `provider="text_adv"`（分类 game）；Agent 专属推进工具 |
@@ -843,8 +843,8 @@ class MyToolProvider(ToolProvider):
 8. LLM 调 reply(意图参数 {topic_summary, reply_guidance, target, confidence})
          ↓ Planner 循环内直连 _reply_provider.invoke（局部工具，不进 ToolRegistry）
 9. ReplyToolProvider.invoke(invocation)
-         ↓ 注入依赖：persona / history / agenda
-10. Replyer.generate(plan, batch, persona, history, agenda)
+         ↓ 注入依赖：persona / history / rundown
+10. Replyer.generate(plan, batch, persona, history, rundown)
          ↓ LLM（llm profile，高质量模型）+ 人设 prompt + 敏感词净化；LLM 只见 reply
 11. ToolExecutionResult{success=True, structured_content={speech, emotion, metadata}}
          ↓
