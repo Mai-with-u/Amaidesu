@@ -200,7 +200,7 @@
             <div class="dt-dot" />
             <div class="dt-card">
               <div class="dt-card-header">
-                <span class="dt-card-title">⚙ 执行段（tool.result.* + agenda.*）</span>
+                <span class="dt-card-title">⚙ 执行段（tool.result.* + rundown.changed）</span>
                 <el-tag size="small" type="success" effect="plain">
                   {{ currentTrace.segments.execution.length }} 条
                 </el-tag>
@@ -457,7 +457,7 @@ function copyText(text: string) {
 function getEventClass(type: string): string {
   if (type.startsWith('room.message')) return 'type-collector';
   if (type === 'streamer.speech') return 'type-agent';
-  if (type.startsWith('agenda')) return 'type-agent';
+  if (type === 'rundown.changed') return 'type-agent';
   if (type.startsWith('planner')) return 'type-agent';
   if (type.startsWith('tool.result')) return 'type-tool';
   if (type.startsWith('tts.utterance')) return 'type-tool';

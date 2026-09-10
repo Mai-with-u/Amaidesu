@@ -46,21 +46,12 @@
     return errTail ? `${toolName} · ${status} · ${errTail}` : `${toolName} · ${status}`;
   }
 
-  if (type.startsWith('agenda.')) {
-    const action = pickString(d.action, 8);
-    const item = (d.item as { label?: string } | undefined) ?? null;
-    const label = item?.label ? truncate(item.label, 18) : '';
-    return label ? `${action} ${label}` : action || type;
-  }
-
-  if (type.startsWith('planner.')) {
-    const item = (d.agenda_item as { active?: string; next?: string } | undefined) ?? null;
-    const summary = pickString(d.timeline_summary, 24);
-    const active = item?.active ? truncate(item.active, 14) : '';
-    const next = item?.next ? truncate(item.next, 14) : '';
-    const parts = [active, next].filter(Boolean);
-    if (parts.length) return parts.join(' → ');
-    return summary || type;
+  if (type === 'rundown.changed') {
+    const seg = pickString(d.segment_title, 18);
+    const index = typeof d.index === 'number' ? d.index : null;
+    const total = typeof d.total === 'number' ? d.total : null;
+    if (index != null && total != null && index >= total) return '流程单完成';
+    return seg ? `切换到 ${seg}` : type;
   }
 
   if (type.startsWith('game.')) {

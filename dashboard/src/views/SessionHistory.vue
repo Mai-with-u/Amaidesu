@@ -320,7 +320,7 @@ function messageTextOf(event: DebugSessionEvent): string {
 
 function systemBadgeLabel(type: string): string {
   if (type.startsWith('planner')) return 'Planner';
-  if (type.startsWith('agenda')) return 'Agenda';
+  if (type === 'rundown.changed') return '流程单';
   if (type.startsWith('tool.result')) return '工具';
   return '系统';
 }

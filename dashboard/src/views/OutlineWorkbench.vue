@@ -31,14 +31,15 @@
     <!-- 不可用态：后端 agenda 未启用 -->
     <template v-else-if="state && !state.available">
       <el-alert
-        :title="state.message ?? '节目单管理通道未启用'"
+        :title="state.message ?? '流程单未加载'"
         type="warning"
         :closable="false"
         show-icon
         class="state-block"
       >
         <p class="hint-line">
-          请到「设置」页开启 <code>agents.streamer.agenda_enabled</code> 后重启 Amaidesu 生效。
+          请在设置页配置 <code>agents.streamer.rundown_id</code>；未配置时主播 Agent
+          会自动使用内置默认流程单。
         </p>
         <el-button size="small" type="primary" @click="refresh">重试</el-button>
       </el-alert>
@@ -47,34 +48,10 @@
     <!-- 未加载态：status ∈ {inactive, unloaded} -->
     <template v-else-if="isNotLoaded">
       <section class="load-card">
-        <h3 class="load-title">加载节目单</h3>
-        <p class="load-desc">从指定路径加载节目单文件并立即启动播出。</p>
-        <div class="load-row">
-          <el-input
-            v-model="agendaPathInput"
-            placeholder="节目单文件路径（如 data/agendas/demo.yaml）"
-            clearable
-            class="load-input"
-            @keyup.enter="handleStart"
-          />
-          <el-button
-            type="primary"
-            :icon="VideoPlay"
-            :loading="actionLoading === 'start'"
-            @click="handleStart"
-          >
-            加载并开始
-          </el-button>
-        </div>
-        <p v-if="state?.config.agenda_path" class="load-default-hint">
-          当前配置默认路径：<code>{{ state.config.agenda_path }}</code>
-          <el-link
-            v-if="state.config.agenda_path !== agendaPathInput"
-            type="primary"
-            @click="agendaPathInput = state.config.agenda_path"
-          >
-            使用此路径
-          </el-link>
+        <h3 class="load-title">流程单未启动</h3>
+        <p class="load-desc">
+          未配置 rundown_id 时，主播 Agent 会自动使用内置默认流程单（初次直播·自我介绍）； Agent
+          启动后本页将展示实时进度。可在下方环节预览查看流程单内容。
         </p>
       </section>
 
@@ -95,9 +72,9 @@
           <el-table-column label="环节名" min-width="200">
             <template #default="{ row }">{{ row.title }}</template>
           </el-table-column>
-          <el-table-column label="时长" width="100">
+          <el-table-column label="预期时长" width="110">
             <template #default="{ row }">
-              <span class="mono">{{ formatDuration(row.duration_ms) }}</span>
+              <span class="mono">{{ formatDuration(row.expected_ms) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="状态" width="100" align="center">
@@ -109,7 +86,7 @@
       </section>
     </template>
 
-    <!-- 运行态：status ∈ {loading, running, completed} -->
+    <!-- 运行态：status ∈ {running, paused, done} -->
     <template v-else-if="snapshot">
       <!-- 1. 总览 KPI 行 -->
       <section class="totals-row">
@@ -120,7 +97,7 @@
               {{ statusLabel }}
             </el-tag>
             <el-tag
-              v-if="snapshot.is_paused"
+              v-if="snapshot.paused"
               type="warning"
               effect="plain"
               size="small"
@@ -128,26 +105,17 @@
             >
               已暂停
             </el-tag>
-            <el-tag
-              v-if="snapshot.manually_overridden"
-              type="warning"
-              effect="plain"
-              size="small"
-              class="override-tag"
-            >
-              手动模式
-            </el-tag>
           </div>
           <div class="total-sub">
-            节目单 ID：<span class="mono">{{ snapshot.agenda_id ?? '—' }}</span>
+            流程单 ID：<span class="mono">{{ snapshot.rundown_id ?? '—' }}</span>
           </div>
         </article>
 
         <article class="total-card total-title">
-          <div class="total-label">节目单标题</div>
-          <div class="total-value title-value">{{ snapshot.agenda_title ?? '—' }}</div>
+          <div class="total-label">流程单标题</div>
+          <div class="total-value title-value">{{ snapshot.title ?? '—' }}</div>
           <div class="total-sub">
-            进度 {{ snapshot.completed_count }} / {{ snapshot.total_count || '?' }} 个环节
+            进度 {{ snapshot.index }} / {{ snapshot.total || '?' }} 个环节
           </div>
         </article>
 
@@ -161,51 +129,23 @@
             class="progress-bar"
           />
           <div class="progress-text mono">
-            <span>{{ formatDuration(elapsedLiveMs) }}</span>
-            <span class="progress-sep">/</span>
-            <span>{{ formatDuration(snapshot.total_planned_ms) }}</span>
             <span class="progress-percent mono">{{ progressPercent.toFixed(1) }}%</span>
-          </div>
-          <div class="total-sub">
-            自动启动：<span :class="state?.config.agenda_auto_start ? 'flag-yes' : 'flag-no'">
-              {{ state?.config.agenda_auto_start ? '已开启' : '已关闭' }}
-            </span>
           </div>
         </article>
       </section>
 
       <!-- 2. 当前环节大卡 -->
       <section
-        v-if="snapshot.current_segment"
+        v-if="snapshot.current"
         class="current-card"
-        :class="{ 'is-paused': snapshot.is_paused }"
+        :class="{ 'is-paused': snapshot.paused }"
       >
         <div class="current-head">
           <span class="current-eyebrow">当前环节</span>
-          <h2 class="current-title" :title="snapshot.current_segment.title">
-            {{ snapshot.current_segment.title }}
+          <h2 class="current-title" :title="snapshot.current.title">
+            {{ snapshot.current.title }}
           </h2>
-          <el-tag
-            v-if="snapshot.current_segment.needs_expansion && !snapshot.current_segment.expanded"
-            type="warning"
-            effect="plain"
-            size="small"
-            class="expansion-tag"
-          >
-            扩展内容生成中
-          </el-tag>
           <span class="grow" />
-          <el-button
-            v-if="canUnload"
-            size="small"
-            plain
-            :icon="Delete"
-            :loading="actionLoading === 'unload'"
-            class="unload-btn"
-            @click="confirmUnload"
-          >
-            卸载节目单
-          </el-button>
         </div>
 
         <div class="current-times">
@@ -221,36 +161,28 @@
           <div class="time-block time-block--total">
             <span class="time-label">总时长</span>
             <span class="time-value mono time-value--sub">{{
-              formatDuration(snapshot.current_segment.duration_ms)
+              formatDuration(snapshot.current.expected_ms)
             }}</span>
           </div>
         </div>
 
         <div class="current-actions">
           <el-button
-            :type="snapshot.is_paused ? 'primary' : 'default'"
-            :icon="snapshot.is_paused ? VideoPlay : VideoPause"
-            :loading="actionLoading === (snapshot.is_paused ? 'resume' : 'pause')"
+            :type="snapshot.paused ? 'primary' : 'default'"
+            :icon="VideoPause"
+            :loading="actionLoading === (snapshot.paused ? 'resume' : 'pause')"
             @click="togglePause"
           >
-            {{ snapshot.is_paused ? '继续' : '暂停' }}
+            {{ snapshot.paused ? '继续' : '暂停' }}
           </el-button>
-          <el-button :icon="ArrowRightBold" :loading="actionLoading === 'skip'" @click="handleSkip">
-            跳过本环节
-          </el-button>
-          <el-button
-            :icon="RefreshLeft"
-            :loading="actionLoading === 'rewind'"
-            plain
-            @click="handleRewind"
-          >
-            回到上一环节
+          <el-button :icon="ArrowRightBold" :loading="actionLoading === 'next'" @click="handleNext">
+            切到下一环节
           </el-button>
         </div>
 
-        <div v-if="snapshot.next_segment" class="next-line">
+        <div v-if="nextSegment" class="next-line">
           <span class="next-eyebrow">下一环节</span>
-          <span class="next-title">{{ snapshot.next_segment.title }}</span>
+          <span class="next-title">{{ nextSegment.title }}</span>
           <span class="next-arrow" aria-hidden="true">→</span>
         </div>
       </section>
@@ -288,9 +220,9 @@
               <span class="segment-label">{{ row.title }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="时长" width="100">
+          <el-table-column label="预期时长" width="110">
             <template #default="{ row }">
-              <span class="mono">{{ formatDuration(row.duration_ms) }}</span>
+              <span class="mono">{{ formatDuration(row.expected_ms) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="状态" width="100" align="center">
@@ -302,18 +234,6 @@
               >
                 {{ segmentStatusLabel(row) }}
               </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column v-if="showInsertedBy" label="来源" width="80" align="center">
-            <template #default="{ row }">
-              <span class="mono source-cell">{{
-                row.inserted_by === 'human' ? '人工' : 'AI'
-              }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column v-if="showStartsAt" label="计划开始" width="120" align="center">
-            <template #default="{ row }">
-              <span class="mono">{{ formatStartsAt(row.starts_at_ms) }}</span>
             </template>
           </el-table-column>
         </el-table>
@@ -331,16 +251,19 @@
         <el-timeline v-else class="history-timeline">
           <el-timeline-item
             v-for="(entry, idx) in historyEntries"
-            :key="`${entry.timestamp_ms}-${idx}`"
-            :timestamp="formatTime(entry.timestamp_ms)"
+            :key="`${entry.at_ms}-${idx}`"
+            :timestamp="formatTime(entry.at_ms)"
             :type="historyDotType(entry)"
             placement="top"
             class="history-item"
           >
             <div class="history-row">
-              <span class="history-event mono">{{ entry.event }}</span>
+              <span class="history-event mono">{{ entry.action }}</span>
               <span class="history-segment">{{ segmentTitleOf(entry.segment_id) }}</span>
-              <span v-if="entry.reason" class="history-reason">· {{ entry.reason }}</span>
+              <span class="history-reason"
+                >·
+                {{ entry.by === 'human' ? '手动' : entry.by === 'system' ? '系统' : 'Agent' }}</span
+              >
             </div>
           </el-timeline-item>
         </el-timeline>
@@ -392,44 +315,17 @@
         <section class="drawer-section">
           <h4 class="drawer-h">元信息</h4>
           <dl class="meta-grid">
-            <dt>时长</dt>
-            <dd class="mono">{{ formatDuration(activeSegment.duration_ms) }}</dd>
+            <dt>预期时长</dt>
+            <dd class="mono">{{ formatDuration(activeSegment.expected_ms) }}</dd>
             <template v-if="activeSegment.min_duration_ms != null">
-              <dt>最小时长</dt>
+              <dt>最短停留</dt>
               <dd class="mono">{{ formatDuration(activeSegment.min_duration_ms) }}</dd>
             </template>
-            <dt>分支数</dt>
-            <dd class="mono">{{ activeSegment.branch_count }}</dd>
-            <template v-if="activeSegment.inserted_by">
-              <dt>来源</dt>
-              <dd>{{ activeSegment.inserted_by === 'human' ? '人工编排' : 'AI 插入' }}</dd>
+            <template v-if="activeSegment.notes">
+              <dt>备注</dt>
+              <dd>{{ activeSegment.notes }}</dd>
             </template>
           </dl>
-        </section>
-
-        <section class="drawer-section">
-          <h4 class="drawer-h">扩展内容</h4>
-          <div v-if="activeExpanded" class="expanded-content">
-            <div class="expanded-block">
-              <span class="expanded-label">开场白</span>
-              <p class="expanded-text">{{ activeExpanded.opening_line }}</p>
-            </div>
-            <div class="expanded-block">
-              <span class="expanded-label">话题引导</span>
-              <p class="expanded-text">{{ activeExpanded.topic_guidance }}</p>
-            </div>
-            <div class="expanded-block">
-              <span class="expanded-label">讨论要点</span>
-              <ul v-if="activeExpanded.talking_points.length > 0" class="talking-points">
-                <li v-for="(p, i) in activeExpanded.talking_points" :key="i" class="talking-point">
-                  <span class="talking-bullet" aria-hidden="true">▸</span>
-                  <span>{{ p }}</span>
-                </li>
-              </ul>
-              <p v-else class="drawer-muted">未提供讨论要点</p>
-            </div>
-          </div>
-          <p v-else class="drawer-muted">尚未生成</p>
         </section>
 
         <div class="drawer-footer">
@@ -444,7 +340,7 @@
                 type="primary"
                 :icon="Position"
                 :disabled="!canJumpFromDrawer"
-                :loading="actionLoading === 'jump'"
+                :loading="actionLoading === 'goto'"
               >
                 跳到此环节
               </el-button>
@@ -458,40 +354,31 @@
 
 <script setup lang="ts">
 /**
- * Agenda 工作台 —— 节目单实时状态 + 手动控制
+ * 流程单编排页 —— 流程单实时状态 + 手动控制
  *
  * 数据来源：
  * - REST 轮询：GET /api/v1/agenda/state（300ms 防抖 + WS 触发）
- * - WebSocket：agenda.update / planner.checkpoint（onMessage 过滤，触发重拉）
+ * - WebSocket：rundown.changed（onMessage 过滤，触发重拉）
  * - 本地 1s setInterval：仅用于重算当前环节的 elapsed/remaining 倒计时显示
  *
  * 三态布局：
- * 1. 不可用（available=false）：alert 引导去 Settings 开启
- * 2. 未加载（status=inactive|unloaded）：窄卡输入路径 + start + 环节预览
- * 3. 运行中（status=loading|running|completed）：KPI 行 + 当前环节卡 + 环节表 + 历史时间线
+ * 1. 不可用（available=false）：主播 Agent 未启动
+ * 2. 未加载（status=idle）：等待主播 Agent 启动 + 环节预览
+ * 3. 运行中（status=running|paused|done）：KPI 行 + 当前环节卡 + 环节表 + 历史时间线
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import {
-  ArrowRightBold,
-  Delete,
-  Position,
-  Refresh,
-  RefreshLeft,
-  VideoPause,
-  VideoPlay,
-} from '@element-plus/icons-vue';
-import { agendaApi } from '@/api';
+import { ArrowRightBold, Position, Refresh, VideoPause } from '@element-plus/icons-vue';
+import { rundownApi } from '@/api';
 import { wsClient } from '@/api/websocket';
 import type {
-  AgendaControlAction,
-  AgendaControlResponse,
-  AgendaCurrentSegmentView,
-  AgendaExpandedContent,
-  AgendaSegmentView,
-  AgendaSnapshot,
-  AgendaStateResponse,
-  AgendaTransitionEntry,
+  RundownControlAction,
+  RundownControlResponse,
+  RundownCurrentSegment,
+  RundownSegmentView,
+  RundownSnapshot,
+  RundownStateResponse,
+  RundownTransitionEntry,
   WebSocketMessage,
 } from '@/types';
 
@@ -499,12 +386,11 @@ import type {
 // 响应式状态
 // ============================================================
 
-const state = ref<AgendaStateResponse | null>(null);
+const state = ref<RundownStateResponse | null>(null);
 const initialLoading = ref(true);
 const loadingState = ref(false);
 const loadError = ref<string | null>(null);
-const actionLoading = ref<AgendaControlAction | null>(null);
-const agendaPathInput = ref('');
+const actionLoading = ref<RundownControlAction | null>(null);
 
 // 本地 1s tick：仅重算当前环节 elapsed/remaining 展示
 const nowTickMs = ref(Date.now());
@@ -514,25 +400,15 @@ const nowTickMs = ref(Date.now());
 // ============================================================
 
 const drawerOpen = ref(false);
-const activeSegment = ref<AgendaSegmentView | null>(null);
+const activeSegment = ref<RundownSegmentView | null>(null);
 
 const drawerTitle = computed(() =>
   activeSegment.value ? `环节详情 · ${activeSegment.value.title}` : '环节详情',
 );
 
-const activeExpanded = computed<AgendaExpandedContent | null>(() => {
-  const seg = activeSegment.value;
-  if (!seg || !state.value) return null;
-  return state.value.expanded[seg.id] ?? null;
-});
+const canJumpFromDrawer = computed(() => snapshot.value?.status === 'running');
 
-const canJumpFromDrawer = computed(() => {
-  // 仅运行中可跳转（loading/running），completed/unloaded 不可
-  const s = snapshot.value?.status;
-  return s === 'loading' || s === 'running';
-});
-
-function openDrawer(row: AgendaSegmentView) {
+function openDrawer(row: RundownSegmentView) {
   activeSegment.value = row;
   drawerOpen.value = true;
 }
@@ -541,63 +417,31 @@ function openDrawer(row: AgendaSegmentView) {
 // 派生状态
 // ============================================================
 
-const snapshot = computed<AgendaSnapshot | null>(() => state.value?.snapshot ?? null);
+const snapshot = computed<RundownSnapshot | null>(() => state.value?.snapshot ?? null);
 
-const isNotLoaded = computed(() => {
-  const s = snapshot.value?.status;
-  return s === 'inactive' || s === 'unloaded';
-});
-
-const canUnload = computed(() => {
-  const s = snapshot.value?.status;
-  return s === 'running' || s === 'completed';
-});
-
-const showInsertedBy = computed(() =>
-  (state.value?.segments ?? []).some(seg => seg.inserted_by !== undefined),
-);
-
-const showStartsAt = computed(() =>
-  (state.value?.segments ?? []).some(seg => seg.starts_at_ms != null && seg.starts_at_ms > 0),
-);
+const isNotLoaded = computed(() => snapshot.value?.status === 'idle');
 
 const statusLabel = computed(() => {
   const s = snapshot.value;
   if (!s) return '—';
-  if (s.is_paused && s.status === 'running') return '已暂停';
   switch (s.status) {
-    case 'inactive':
-      return '未激活';
-    case 'loading':
-      return '加载中';
     case 'running':
       return '进行中';
-    case 'completed':
+    case 'paused':
+      return '已暂停';
+    case 'done':
       return '已完成';
-    case 'unloaded':
-      return '已卸载';
     default:
-      return s.status;
+      return '未启动';
   }
 });
 
 const statusTagType = computed<'success' | 'warning' | 'info' | 'primary' | 'danger'>(() => {
   const s = snapshot.value;
   if (!s) return 'info';
-  if (s.is_paused && s.status === 'running') return 'warning';
-  switch (s.status) {
-    case 'running':
-      return 'success';
-    case 'loading':
-      return 'primary';
-    case 'completed':
-      return 'info';
-    case 'unloaded':
-      return 'info';
-    case 'inactive':
-    default:
-      return 'info';
-  }
+  if (s.status === 'paused') return 'warning';
+  if (s.status === 'running') return 'success';
+  return 'info';
 });
 
 const progressPercent = computed(() => {
@@ -607,46 +451,50 @@ const progressPercent = computed(() => {
 });
 
 const progressColor = computed(() => {
-  if (snapshot.value?.manually_overridden) return 'var(--color-warning)';
-  if (snapshot.value?.status === 'completed') return 'var(--color-info)';
+  if (snapshot.value?.status === 'done') return 'var(--color-info)';
   return 'var(--color-agenda)';
 });
 
-const elapsedLiveMs = computed(() => snapshot.value?.elapsed_live_ms ?? 0);
-
-const currentSegment = computed<AgendaCurrentSegmentView | null>(
-  () => snapshot.value?.current_segment ?? null,
+const currentSegment = computed<RundownCurrentSegment | null>(
+  () => snapshot.value?.current ?? null,
 );
 
 const tickElapsedMs = computed(() => {
   const seg = currentSegment.value;
   if (!seg) return 0;
-  // 后端 elapsed_ms 是快照时刻的累计；is_paused 时不递增
-  if (snapshot.value?.is_paused) return Math.max(0, seg.elapsed_ms);
+  // 后端 elapsed_ms 是快照时刻的累计；paused 时不递增
+  if (snapshot.value?.paused) return Math.max(0, seg.elapsed_ms);
   const drift = nowTickMs.value - snapshotBaselineMs.value;
-  return Math.max(0, Math.min(seg.duration_ms, seg.elapsed_ms + drift));
+  return Math.max(0, Math.min(seg.expected_ms, seg.elapsed_ms + drift));
 });
 
 const tickRemainingMs = computed(() => {
   const seg = currentSegment.value;
   if (!seg) return 0;
-  return Math.max(0, seg.duration_ms - tickElapsedMs.value);
+  return Math.max(0, seg.expected_ms - tickElapsedMs.value);
 });
 
 /** 快照基线时刻（用于本地 tick 漂移计算） */
 const snapshotBaselineMs = ref(Date.now());
 
-/** 推进历史：仅展示最近 20 条，按时间倒序 */
-const historyEntries = computed<AgendaTransitionEntry[]>(() => {
+/** 变更历史：仅展示最近 20 条，按时间倒序 */
+const historyEntries = computed<RundownTransitionEntry[]>(() => {
   const list = state.value?.transitions ?? [];
-  return [...list].sort((a, b) => b.timestamp_ms - a.timestamp_ms).slice(0, 20);
+  return [...list].sort((a, b) => b.at_ms - a.at_ms).slice(0, 20);
+});
+
+/** 下一环节预览（无下一环节/已结束时为 null） */
+const nextSegment = computed<RundownSegmentView | null>(() => {
+  const s = snapshot.value;
+  if (!s || s.status === 'done') return null;
+  return state.value?.segments[s.index + 1] ?? null;
 });
 
 // ============================================================
 // 段状态 / 来源 / 时间格式化
 // ============================================================
 
-function segmentStatusOf(seg: AgendaSegmentView): 'done' | 'current' | 'pending' {
+function segmentStatusOf(seg: RundownSegmentView): 'done' | 'current' | 'pending' {
   const cur = currentSegment.value;
   if (cur && cur.id === seg.id) return 'current';
   // 简化：用 currentSegment.id 之前的视作 done，索引比较作为兜底
@@ -658,21 +506,21 @@ function segmentStatusOf(seg: AgendaSegmentView): 'done' | 'current' | 'pending'
   return 'pending';
 }
 
-function segmentStatusLabel(seg: AgendaSegmentView): string {
+function segmentStatusLabel(seg: RundownSegmentView): string {
   const s = segmentStatusOf(seg);
   if (s === 'done') return '已完成';
   if (s === 'current') return '进行中';
   return '待开始';
 }
 
-function segmentStatusTagType(seg: AgendaSegmentView): 'success' | 'warning' | 'info' {
+function segmentStatusTagType(seg: RundownSegmentView): 'success' | 'warning' | 'info' {
   const s = segmentStatusOf(seg);
   if (s === 'done') return 'success';
   if (s === 'current') return 'warning';
   return 'info';
 }
 
-function segmentStatusTagEffect(seg: AgendaSegmentView): 'plain' | 'dark' {
+function segmentStatusTagEffect(seg: RundownSegmentView): 'plain' | 'dark' {
   return segmentStatusOf(seg) === 'current' ? 'dark' : 'plain';
 }
 
@@ -681,7 +529,7 @@ function segmentTitleOf(id: string): string {
   return seg?.title ?? id;
 }
 
-function rowClassName({ row }: { row: AgendaSegmentView }): string {
+function rowClassName({ row }: { row: RundownSegmentView }): string {
   return segmentStatusOf(row) === 'current' ? 'is-current-row' : '';
 }
 
@@ -706,16 +554,10 @@ function formatTime(tsMs: number): string {
   });
 }
 
-function formatStartsAt(tsMs: number | null | undefined): string {
-  if (tsMs == null || tsMs <= 0) return '—';
-  const d = new Date(tsMs);
-  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
 function historyDotType(
-  entry: AgendaTransitionEntry,
+  entry: RundownTransitionEntry,
 ): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
-  const ev = entry.event.toLowerCase();
+  const ev = entry.action.toLowerCase();
   if (ev.includes('fail') || ev.includes('error')) return 'danger';
   if (ev.includes('skip') || ev.includes('pause') || ev.includes('override')) return 'warning';
   if (ev.includes('done') || ev.includes('complete') || ev.includes('finish')) return 'success';
@@ -731,12 +573,8 @@ async function fetchState(opts: { silent?: boolean } = {}): Promise<void> {
   if (!opts.silent) loadingState.value = true;
   loadError.value = null;
   try {
-    const res = await agendaApi.getState();
+    const res = await rundownApi.getState();
     state.value = res.data;
-    // 初始化输入路径（首次加载时）
-    if (!agendaPathInput.value && res.data.config.agenda_path) {
-      agendaPathInput.value = res.data.config.agenda_path;
-    }
     // 记录本次拉取的基线时刻，用于本地 tick 漂移
     snapshotBaselineMs.value = Date.now();
   } catch (e) {
@@ -757,13 +595,13 @@ function refresh(): void {
 // ============================================================
 
 async function performControl(
-  action: AgendaControlAction,
-  extra: { segment_id?: string; path?: string } = {},
-): Promise<AgendaControlResponse['snapshot'] | null> {
+  action: RundownControlAction,
+  extra: { segment_id?: string } = {},
+): Promise<RundownControlResponse['snapshot'] | null> {
   if (actionLoading.value) return null;
   actionLoading.value = action;
   try {
-    const res = await agendaApi.control({ action, ...extra });
+    const res = await rundownApi.control({ action, ...extra });
     const data = res.data;
     if (!data.success) {
       ElMessage.error(data.message || '操作失败');
@@ -787,35 +625,18 @@ async function performControl(
   }
 }
 
-function handleStart(): void {
-  const path = agendaPathInput.value.trim();
-  if (!path) {
-    ElMessage.warning('请填写节目单文件路径');
-    return;
-  }
-  void performControl('start', { path });
-}
-
 function togglePause(): void {
   const s = snapshot.value;
   if (!s) return;
-  void performControl(s.is_paused ? 'resume' : 'pause');
+  void performControl(s.paused ? 'resume' : 'pause');
 }
 
-function handleSkip(): void {
-  void performControl('skip');
+function handleNext(): void {
+  void performControl('next');
 }
 
-function handleRewind(): void {
-  void performControl('rewind');
-}
-
-function confirmUnload(): void {
-  void performControl('unload');
-}
-
-function handleJump(seg: AgendaSegmentView): void {
-  void performControl('jump', { segment_id: seg.id });
+function handleJump(seg: RundownSegmentView): void {
+  void performControl('goto', { segment_id: seg.id });
 }
 
 // ============================================================
@@ -828,7 +649,7 @@ let wsActive = false;
 
 function onWsMessage(msg: WebSocketMessage): void {
   if (!wsActive) return;
-  if (msg.type !== 'agenda.update' && msg.type !== 'planner.checkpoint') return;
+  if (msg.type !== 'rundown.changed') return;
   // 300ms 防抖：避免事件风暴期间反复拉取
   if (reloadTimer) clearTimeout(reloadTimer);
   reloadTimer = setTimeout(() => {

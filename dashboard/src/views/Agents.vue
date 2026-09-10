@@ -402,19 +402,19 @@ const latestDecisionLabel = computed<string>(() => {
 // 运行轨迹：三族合并 + 阶段 badge + 失败标记
 // ============================================================
 
-type StageKind = 'planner' | 'agenda' | 'tool';
+type StageKind = 'planner' | 'rundown' | 'tool';
 type FilterKind = 'all' | StageKind;
 
 const filterOptions: { value: FilterKind; label: string }[] = [
   { value: 'all', label: '全部' },
   { value: 'planner', label: '想' },
-  { value: 'agenda', label: '程' },
+  { value: 'rundown', label: '程' },
   { value: 'tool', label: '做' },
 ];
 
 const stageLabels: Record<StageKind, string> = {
   planner: '想',
-  agenda: '程',
+  rundown: '程',
   tool: '做',
 };
 
@@ -424,7 +424,7 @@ function stageLabel(stage: StageKind): string {
 
 function getStage(type: string): StageKind | null {
   if (type.startsWith('planner.')) return 'planner';
-  if (type.startsWith('agenda.')) return 'agenda';
+  if (type === 'rundown.changed') return 'rundown';
   if (type.startsWith('tool.result.')) return 'tool';
   return null;
 }

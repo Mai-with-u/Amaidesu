@@ -93,23 +93,25 @@
       <!-- 右区：环节横幅 + 时间线                                        -->
       <!-- ============================================================ -->
       <section class="console-main">
-        <section class="slate" :class="{ 'is-idle': !agenda }" aria-label="当前环节">
+        <section class="slate" :class="{ 'is-idle': !rundownBanner }" aria-label="当前环节">
           <span class="slate-eyebrow">当前环节</span>
-          <template v-if="agenda">
-            <span class="slate-order mono">#{{ agenda.order }}</span>
-            <h2 class="slate-label" :title="agenda.label">{{ agenda.label }}</h2>
-            <span class="slate-action">{{ agenda.actionLabel }}</span>
-            <span v-if="agenda.note" class="slate-note" :title="agenda.note">{{
-              agenda.note
+          <template v-if="rundownBanner">
+            <span class="slate-order mono">#{{ rundownBanner.order }}</span>
+            <h2 class="slate-label" :title="rundownBanner.label">{{ rundownBanner.label }}</h2>
+            <span class="slate-action">{{ rundownBanner.actionLabel }}</span>
+            <span v-if="rundownBanner.note" class="slate-note" :title="rundownBanner.note">{{
+              rundownBanner.note
             }}</span>
             <span class="grow" />
-            <span v-if="agenda.startLabel" class="slate-meta mono"
-              >计划 {{ agenda.startLabel }}</span
+            <span v-if="rundownBanner.startLabel" class="slate-meta mono"
+              >计划 {{ rundownBanner.startLabel }}</span
             >
-            <span v-if="agenda.expectedLabel" class="slate-meta mono">
-              预计 {{ agenda.expectedLabel }}
+            <span v-if="rundownBanner.expectedLabel" class="slate-meta mono">
+              预计 {{ rundownBanner.expectedLabel }}
             </span>
-            <span class="slate-meta mono">{{ relativeTime(nowSec, agenda.changedAtSec) }}</span>
+            <span class="slate-meta mono">{{
+              relativeTime(nowSec, rundownBanner.changedAtSec)
+            }}</span>
           </template>
           <span v-else class="slate-idle">节目单未运行或未接入</span>
         </section>
@@ -298,7 +300,6 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { useEventsStore, useWebSocketStore } from '@/stores';
 import { debugApi, liveSessionsApi, simulatorApi, streamerApi } from '@/api';
 import {
-  AGENDA_ACTION_LABEL,
   STAGE_LABEL,
   MAX_ENTRIES,
   agentGroupOf,
@@ -339,7 +340,7 @@ const SOURCE_LABEL: Record<string, string> = {
 // 类型
 // ============================================================
 
-interface AgendaBanner {
+interface RundownBanner {
   order: number;
   label: string;
   actionLabel: string;
@@ -486,15 +487,6 @@ function clockLabel(ms: number): string {
     minute: '2-digit',
     hour12: false,
   });
-}
-
-function durationLabel(ms: number): string {
-  const minutes = Math.round(ms / 60000);
-  if (minutes < 1) return '<1m';
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest > 0 ? `${hours}h${rest}m` : `${hours}h`;
 }
 
 // ============================================================
@@ -651,16 +643,19 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
               note: str(data.title) || str(data.reason),
             }),
           );
-        } else if (type === 'agenda.update') {
-          const agendaItem = isRecord(data.item) ? data.item : {};
+        } else if (type === 'rundown.changed') {
+          const index = typeof data.index === 'number' ? data.index : 0;
+          const total = typeof data.total === 'number' ? data.total : 0;
+          const finished = total > 0 && index >= total;
           next.push(
             makeEntry({
               id,
-              kind: 'agenda',
+              kind: 'rundown',
               tsSec: entry.ts_ms / 1000,
-              text: str(agendaItem.label) || '未命名环节',
-              note: str(agendaItem.note),
-              badge: AGENDA_ACTION_LABEL[str(data.action)] ?? str(data.action),
+              text: str(data.segment_title) || (finished ? '流程单完成' : '环节切换'),
+              note: finished ? '流程单已全部完成' : `环节 ${index}/${total}`,
+              badge:
+                str(data.by) === 'human' ? '手动' : str(data.by) === 'system' ? '系统' : 'Agent',
             }),
           );
         } else if (type === 'game.milestone') {
@@ -829,27 +824,25 @@ watch(events, list => {
 });
 
 // ============================================================
-// 当前环节横幅：取最近一条 agenda.update
+// 当前环节横幅：取最近一条 rundownBanner.update
 // ============================================================
 
-const agenda = computed<AgendaBanner | null>(() => {
+const rundownBanner = computed<RundownBanner | null>(() => {
   const list = events.value;
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const event = list[i];
-    if (event.type !== 'agenda.update') continue;
+    if (event.type !== 'rundown.changed') continue;
     const data = isRecord(event.data) ? event.data : {};
-    const item = isRecord(data.item) ? data.item : {};
-    const action = str(data.action);
-    const startsAtMs = num(item.starts_at_ms);
-    const expectedMs = num(item.expected_ms);
-    const changedAtMs = num(data.changed_at_ms);
+    const by = typeof data.by === 'string' ? data.by : 'agent';
+    const changedAtMs = typeof data.at_ms === 'number' ? data.at_ms : null;
+    const index = typeof data.index === 'number' ? data.index : 0;
     return {
-      order: num(item.order) ?? 0,
-      label: str(item.label) || '未命名环节',
-      actionLabel: AGENDA_ACTION_LABEL[action] ?? (action || '进行中'),
-      note: str(item.note),
-      startLabel: startsAtMs != null ? clockLabel(startsAtMs) : '',
-      expectedLabel: expectedMs != null && expectedMs > 0 ? durationLabel(expectedMs) : '',
+      order: index + 1,
+      label: str(data.segment_title) || '未命名环节',
+      actionLabel: by === 'human' ? '手动切换' : by === 'system' ? '系统切换' : 'Agent 切换',
+      note: '',
+      startLabel: '',
+      expectedLabel: '',
       changedAtSec: changedAtMs != null ? changedAtMs / 1000 : toSeconds(event.timestamp),
     };
   }

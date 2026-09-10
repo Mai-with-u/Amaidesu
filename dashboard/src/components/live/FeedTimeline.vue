@@ -8,7 +8,7 @@
     <ol v-else class="feed">
       <li v-for="entry in entries" :key="entry.id" class="feed-row">
         <!-- 环节推进 / 场次边界：横贯分隔行 -->
-        <div v-if="entry.kind === 'agenda' || entry.kind === 'boundary'" class="beat">
+        <div v-if="entry.kind === 'rundown' || entry.kind === 'boundary'" class="beat">
           <span class="beat-rule" aria-hidden="true" />
           <span class="beat-body">
             <span class="beat-eyebrow">{{ entry.kind === 'boundary' ? '场次' : '环节' }}</span>

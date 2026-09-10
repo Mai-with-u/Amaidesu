@@ -1,4 +1,4 @@
-<!--
+﻿<!--
   运行总览（直播间状态板）
 
   首页只回答运营视角的四个问题：
@@ -130,11 +130,11 @@
       <span class="infra-sep" aria-hidden="true">·</span>
       <a
         class="infra-link"
-        :class="{ 'is-disabled': infra.agenda.unavailable }"
+        :class="{ 'is-disabled': infra.rundown.unavailable }"
         @click.prevent="router.push('/outline')"
       >
         <span>节目</span>
-        <span class="mono">{{ infra.agenda.text }}</span>
+        <span class="mono">{{ infra.rundown.text }}</span>
       </a>
       <span class="grow" />
       <span class="infra-hint mono">→</span>
@@ -147,9 +147,9 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { useSystemStore, useEventsStore } from '@/stores';
-import { agendaApi, componentApi, liveSessionsApi, llmApi, streamerApi, toolsApi } from '@/api';
+import { rundownApi, componentApi, liveSessionsApi, llmApi, streamerApi, toolsApi } from '@/api';
 import type {
-  AgendaStateResponse,
+  RundownStateResponse,
   LiveSessionListResponse,
   LLMHistoryStatistics,
   LLMUsageSummary,
@@ -180,7 +180,7 @@ interface CollectorSummary {
 const collectors = ref<CollectorSummary[]>([]);
 const tools = ref<ToolEntry[]>([]);
 const streamerStatus = ref<StreamerStatusResponse | null>(null);
-const agendaState = ref<AgendaStateResponse | null>(null);
+const agendaState = ref<RundownStateResponse | null>(null);
 const sessions = ref<LiveSessionListResponse | null>(null);
 
 const streamerAvailable = computed(() => streamerStatus.value?.available === true);
@@ -418,28 +418,24 @@ const infra = computed(() => {
   const idle = collectors.value.filter(c => !c.is_started).map(c => c.name);
   const tripped = tools.value.filter(t => t.health?.state === 'tripped').length;
 
-  let agendaText = '未启用';
+  let agendaText = '未加载';
   let unavailable = false;
   const snap = agendaState.value?.snapshot ?? null;
-  if (snap?.status === 'running') {
-    const cur = snap.current_segment;
-    const k = snap.completed_count + 1;
-    const total = snap.total_count;
-    agendaText = `环节 ${k}/${total} · ${cur?.title ?? '环节'}`;
-    if (snap.is_paused) agendaText += ' · 已暂停';
-  } else if (snap?.status === 'loading') {
-    agendaText = '加载中';
-  } else if (snap?.status === 'completed') {
+  if (snap?.status === 'running' || snap?.status === 'paused') {
+    const cur = snap.current;
+    agendaText = `环节 ${snap.index + 1}/${snap.total} · ${cur?.title ?? '环节'}`;
+    if (snap.status === 'paused') agendaText += ' · 已暂停';
+  } else if (snap?.status === 'done') {
     agendaText = '已完结';
   } else {
     unavailable = true;
-    agendaText = '未启用';
+    agendaText = '未加载';
   }
 
   return {
     collectors: { total, started, idleNames: idle.slice(0, 3) },
     tools: { tripped },
-    agenda: { text: agendaText, unavailable },
+    rundown: { text: agendaText, unavailable },
   };
 });
 
@@ -450,17 +446,17 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null;
 async function refreshSnapshot(): Promise<void> {
   // 组件清单由 systemStore 轮询驱动（1s tick），这里只补独立 REST
   try {
-    const [compResp, toolsResp, streamerResp, agendaResp, sessionsResp] = await Promise.all([
+    const [compResp, toolsResp, streamerResp, rundownResp, sessionsResp] = await Promise.all([
       componentApi.getAll(),
       toolsApi.list(),
       streamerApi.getStatus(),
-      agendaApi.getState(),
+      rundownApi.getState(),
       liveSessionsApi.list(),
     ]);
     collectors.value = compResp.data.collectors ?? [];
     tools.value = toolsResp.data.tools ?? [];
     streamerStatus.value = streamerResp.data;
-    agendaState.value = agendaResp.data;
+    agendaState.value = rundownResp.data;
     sessions.value = sessionsResp.data;
   } catch {
     // 任一接口失败都保留旧值；结论条自然按缺失数据降级（直播中/降级/空闲）
@@ -480,11 +476,12 @@ function stopRefresh(): void {
   }
 }
 
-// 收到 agenda.update 时立即刷新节目单快照（避免等下个 12s tick）
+// 收到 rundown.changed 时立即刷新流程单快照（避免等下个 12s tick）
 watch(
   () => eventsStore.events[eventsStore.events.length - 1]?.type,
   type => {
-    if (type === 'agenda.update') void agendaApi.getState().then(r => (agendaState.value = r.data));
+    if (type === 'rundown.changed')
+      void rundownApi.getState().then(r => (agendaState.value = r.data));
   },
 );
 

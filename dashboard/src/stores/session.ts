@@ -23,7 +23,7 @@ const MAX_EVENTS = 200;
 
 /** 是否为会话页关注的决策/编排/工具事件 */
 function isSystemEventType(type: string): boolean {
-  return type.startsWith('planner') || type.startsWith('agenda') || type.startsWith('tool.result');
+  return type.startsWith('planner') || type === 'rundown.changed' || type.startsWith('tool.result');
 }
 
 /** 统一解析：WS 消息与 events.history 历史共用；非会话关注类型返回 null */

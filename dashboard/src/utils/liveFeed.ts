@@ -27,12 +27,6 @@ export const TOOL_TEXT_KEYS = [
   'summary',
 ] as const;
 
-export const AGENDA_ACTION_LABEL: Record<string, string> = {
-  done: '已完成',
-  schedule: '已改期',
-  insert: '新增环节',
-};
-
 export const STAGE_LABEL: Record<string, string> = {
   planning: '决策中',
   replying: '生成中',
@@ -50,7 +44,7 @@ export type EntryKind =
   | 'enter'
   | 'speech'
   | 'tool'
-  | 'agenda'
+  | 'rundown'
   | 'milestone'
   | 'verdict'
   | 'decision'
@@ -418,17 +412,19 @@ function fromLiveBoundary(event: FeedEvent, data: Record<string, unknown>): Show
   });
 }
 
-/** 环节推进：agenda.update（AgendaPayload） */
-function fromAgenda(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const item = isRecord(data.item) ? data.item : {};
-  const action = str(data.action);
+/** 环节切换：rundown.changed（RundownChangedPayload） */
+function fromRundown(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  const index = typeof data.index === 'number' ? data.index : null;
+  const total = typeof data.total === 'number' ? data.total : null;
+  const finished = index != null && total != null && index >= total;
+  const by = typeof data.by === 'string' ? data.by : 'agent';
   return makeEntry({
     id: event.id,
-    kind: 'agenda',
+    kind: 'rundown',
     tsSec: toSeconds(event.timestamp),
-    text: str(item.label) || summarizeEvent(event.type, data) || '未命名环节',
-    note: str(item.note),
-    badge: AGENDA_ACTION_LABEL[action] ?? action,
+    text: str(data.segment_title) || (finished ? '流程单完成' : '环节切换'),
+    note: finished ? '' : index != null && total != null ? `环节 ${index}/${total}` : '',
+    badge: by === 'human' ? '手动' : by === 'system' ? '系统' : 'Agent',
   });
 }
 
@@ -491,7 +487,7 @@ export function toEntry(event: FeedEvent): ShowEntry | null {
   if (event.type === 'live.started' || event.type === 'live.ended')
     return fromLiveBoundary(event, data);
   if (event.type.startsWith('tool.result.')) return fromToolResult(event, data);
-  if (event.type === 'agenda.update') return fromAgenda(event, data);
+  if (event.type === 'rundown.changed') return fromRundown(event, data);
   // game.milestone 旧路径由 LiveObserver 本地处理；其他 game.*（report/attention_required/error）统一走 toGameEntry
   if (event.type === 'game.milestone') return fromMilestone(event, data);
   if (

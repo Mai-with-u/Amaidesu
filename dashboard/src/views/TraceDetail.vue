@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="trace-page">
     <!-- 页面标题 -->
     <header class="page-header">
@@ -179,7 +179,7 @@
               <div class="card-header">
                 <span class="card-title">
                   <el-icon><Promotion /></el-icon>
-                  执行 — tool.result.* / agenda.*
+                  执行 — tool.result.* / rundown.changed
                 </span>
                 <el-tag size="small" type="success">
                   {{ trace.segments.execution.length }} 条
