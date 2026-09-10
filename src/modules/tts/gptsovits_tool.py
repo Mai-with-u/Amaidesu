@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections import deque
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 import numpy as np
 from pydantic import Field
@@ -219,21 +219,25 @@ class GPTSoVITSProvider:
 
         try:
             async with self.tts_lock:
-                audio_stream = self.tts_client.tts_stream(  # type: ignore[union-attr]
-                    text=final_text,
-                    text_lang=self.text_language,
-                    prompt_lang=self.prompt_language,
-                    top_k=self.top_k,
-                    top_p=self.top_p,
-                    temperature=self.temperature,
-                    speed_factor=self.speed_factor,
-                    text_split_method=self.text_split_method,
-                    batch_size=self.batch_size,
-                    batch_threshold=self.batch_threshold,
-                    repetition_penalty=self.repetition_penalty,
-                    sample_steps=self.sample_steps,
-                    super_sampling=self.super_sampling,
-                    media_type=self.media_type,
+                # 同步 requests 调用（连接+等待响应头），放线程池执行：GPTSoVITS
+                # 推理慢时在事件循环线程内等待会冻结整个循环（WebUI 同循环全卡）
+                audio_stream = await asyncio.to_thread(
+                    lambda: self.tts_client.tts_stream(  # type: ignore[union-attr]
+                        text=final_text,
+                        text_lang=self.text_language,
+                        prompt_lang=self.prompt_language,
+                        top_k=self.top_k,
+                        top_p=self.top_p,
+                        temperature=self.temperature,
+                        speed_factor=self.speed_factor,
+                        text_split_method=self.text_split_method,
+                        batch_size=self.batch_size,
+                        batch_threshold=self.batch_threshold,
+                        repetition_penalty=self.repetition_penalty,
+                        sample_steps=self.sample_steps,
+                        super_sampling=self.super_sampling,
+                        media_type=self.media_type,
+                    )
                 )
 
                 self.audio_manager.start_stream()
@@ -300,10 +304,18 @@ class GPTSoVITSProvider:
                     if audio_chunk is not None:
                         yield audio_chunk
             else:
-                for chunk in audio_stream:
+                # requests 流式生成器的 next() 会同步阻塞读 socket，逐块放线程池
+                # 迭代：服务端推理间隙（chunk 间隔可达数十秒）冻结事件循环的元凶
+                loop = asyncio.get_running_loop()
+                chunk_iter = iter(audio_stream)
+                sentinel = object()
+                while True:
+                    chunk = await loop.run_in_executor(None, next, chunk_iter, sentinel)
+                    if chunk is sentinel:
+                        break
                     if not chunk:
                         continue
-                    audio_chunk = await decode_wav_chunk(chunk, dtype=DTYPE)
+                    audio_chunk = await decode_wav_chunk(cast(bytes, chunk), dtype=DTYPE)
                     if audio_chunk is not None:
                         yield audio_chunk
         except Exception as e:

@@ -176,10 +176,19 @@ class OmniTTSProvider:
         )
 
         try:
-            audio_stream = self._tts_stream(text)
+            # 同步 requests 调用（连接+等待响应头）放线程池：推理等待不能冻结事件循环
+            audio_stream = await asyncio.to_thread(self._tts_stream, text)
             self.audio_manager.start_stream()
 
-            for chunk in audio_stream:
+            # requests 流式生成器的 next() 会同步阻塞读 socket，逐块放线程池迭代：
+            # 服务端推理间隙（chunk 间隔可达数十秒）是冻结事件循环的元凶
+            loop = asyncio.get_running_loop()
+            chunk_iter = iter(audio_stream)
+            sentinel = object()
+            while True:
+                chunk = await loop.run_in_executor(None, next, chunk_iter, sentinel)
+                if chunk is sentinel:
+                    break
                 if not chunk:
                     continue
                 pcm_array = self._decode_to_pcm(chunk)
