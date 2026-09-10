@@ -37,6 +37,7 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.context.models import MessageRole
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.planner import (
     PlannerBatchItem,
@@ -138,7 +139,7 @@ class StreamerAgentConfig(BaseConfig):
     )
 
     # --- 主动发言 ---
-    proactive_enabled: bool = _PydField(default=False, description="主动发言总开关（默认关闭）")
+    proactive_enabled: bool = _PydField(default=True, description="主动发言总开关（流程单/冷场/定时等所有主动发言源）")
     proactive_cold_timeout_ms: int = _PydField(default=45_000, ge=0, description="冷场判定阈值（毫秒）")
     proactive_min_interval_ms: int = _PydField(default=120_000, ge=0, description="两次主动发言最小间隔")
     proactive_schedule_interval_ms: int = _PydField(default=300_000, ge=0, description="定时话题触发间隔（0 = 关闭）")
@@ -418,6 +419,9 @@ class StreamerAgent(BaseAgent):
         self._flush_lock = asyncio.Lock()
         self._running = False
 
+        # 场次进行位：live.started 置位 / live.ended 复位。主动发言的业务边界
+        # = 场次——没开播只回弹幕不主动开题，开场白（rundown opening）等开播
+        self._live_active: bool = False
         # 一次性 pending flag（外部 API 触发主动发言）
         self._external_proactive_pending: bool = False
         # 流程单环节切换触发 flag（RundownState 变更回调置位；装配切片接线）
@@ -478,6 +482,12 @@ class StreamerAgent(BaseAgent):
         # 订阅 room.message.*（collectors emit 的语义域事件）
         if self._event_bus is not None:
             self._subscribe_events()
+
+        # 场次初始同步：订阅前场次可能已开启（模拟器回放 auto_start 先于 Agent
+        # 订阅），以 session_manager 当前状态为准，不依赖事件是否错过
+        if self._session_manager is not None and self._session_manager.active_pk is not None:
+            self._live_active = True
+            self._logger.info(f"启动时场次已在进行（id={self._session_manager.active_pk}）：主动发言放行")
 
         # 启动后台 flush 循环
         self._flush_task = asyncio.create_task(self._flush_loop())
@@ -676,7 +686,42 @@ class StreamerAgent(BaseAgent):
             model_class=GamePayload,
             priority=40,
         )
-        self._logger.info("StreamerAgent 已订阅 room.message.danmaku / game.*")
+        # 场次边界事件：开播放行主动发言，下播收闸（开场白属于场次，不属于进程）
+        self._event_bus.on(
+            CoreEvents.LIVE_STARTED,
+            self._on_live_started,
+            model_class=LiveStartedPayload,
+            priority=60,
+        )
+        self._event_bus.on(
+            CoreEvents.LIVE_ENDED,
+            self._on_live_ended,
+            model_class=LiveEndedPayload,
+            priority=60,
+        )
+        self._logger.info("StreamerAgent 已订阅 room.message.danmaku / game.* / live.started|ended")
+
+    async def _on_live_started(
+        self,
+        event_name: str,
+        payload: LiveStartedPayload,
+        source: str,
+    ) -> None:
+        """live.started 回调：开播，放行主动发言。"""
+        del event_name, source
+        self._live_active = True
+        self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
+
+    async def _on_live_ended(
+        self,
+        event_name: str,
+        payload: LiveEndedPayload,
+        source: str,
+    ) -> None:
+        """live.ended 回调：下播，主动发言收闸。"""
+        del event_name, source
+        self._live_active = False
+        self._logger.info("场次已结束：主动发言收闸")
 
     async def _on_game_event(
         self,
@@ -840,8 +885,11 @@ class StreamerAgent(BaseAgent):
             return
 
         async with self._flush_lock:
-            # buffer 空时 → 主动发言判定
+            # buffer 空时 → 主动发言判定（场次边界闸：未开播直接返回且不消费
+            # pending 信号，环节变更信号保留到开播后首个 tick 生效）
             if self._buffer.is_empty:
+                if not self._live_active:
+                    return
                 rundown_pending = self._rundown_proactive_pending
                 self._rundown_proactive_pending = False
                 reason = self._proactive_trigger.should_trigger(
@@ -1344,7 +1392,8 @@ class StreamerAgent(BaseAgent):
         round_id: str = "",
     ) -> None:
         """发布 ``streamer.speech`` 业务事件（fire-and-forget；下游不得触发新决策）。"""
-        if self._event_bus is None:
+        event_bus = self._event_bus
+        if event_bus is None:
             return
         payload = StreamerSpeechPayload(
             utterance_id=utterance_id,
@@ -1357,7 +1406,7 @@ class StreamerAgent(BaseAgent):
 
         async def _do_emit() -> None:
             try:
-                await self._event_bus.emit(
+                await event_bus.emit(
                     CoreEvents.STREAMER_SPEECH,
                     payload,
                     source="streamer_agent.speech",
@@ -1581,6 +1630,18 @@ class StreamerAgent(BaseAgent):
             asyncio.create_task(self._event_bus.emit(event_name, payload, source="RundownState"))
         except RuntimeError as exc:
             self._logger.warning(f"rundown.changed 任务创建失败（已忽略）: {exc}")
+
+    # ==================================================================
+    # 公开门面：主动发言动态开关（Dashboard 直播控制台）
+    # ==================================================================
+
+    def is_proactive_enabled(self) -> bool:
+        """主动发言总开关当前状态（运行时实际值，供动态开关展示）。"""
+        return self._proactive_trigger.is_enabled()
+
+    def set_proactive_enabled(self, enabled: bool) -> None:
+        """切换主动发言总开关（运行时立即生效；落盘由调用方负责）。"""
+        self._proactive_trigger.set_enabled(enabled)
 
     # ==================================================================
     # 公开门面：供 Dashboard API 读取与控制流程单

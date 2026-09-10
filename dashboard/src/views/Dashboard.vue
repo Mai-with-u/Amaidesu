@@ -30,6 +30,16 @@
         <span v-if="todayCostSubText" class="verdict-meta-sub mono">{{ todayCostSubText }}</span>
         <span class="verdict-meta-sep" aria-hidden="true">·</span>
         <span class="verdict-meta-item mono">今日调用 {{ todayCallsText }}</span>
+        <span class="verdict-meta-sep" aria-hidden="true">·</span>
+        <div class="verdict-proactive">
+          <span class="verdict-meta-item">主动发言</span>
+          <el-switch
+            v-model="proactiveEnabled"
+            size="small"
+            :loading="proactiveToggling"
+            @change="onProactiveToggle"
+          />
+        </div>
         <el-button class="verdict-eventlog" type="primary" plain size="small" @click="goEventLog">
           事件流
         </el-button>
@@ -145,6 +155,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useSystemStore, useEventsStore } from '@/stores';
 import { rundownApi, componentApi, liveSessionsApi, llmApi, streamerApi, toolsApi } from '@/api';
@@ -180,6 +191,22 @@ interface CollectorSummary {
 const collectors = ref<CollectorSummary[]>([]);
 const tools = ref<ToolEntry[]>([]);
 const streamerStatus = ref<StreamerStatusResponse | null>(null);
+const proactiveEnabled = ref(false);
+const proactiveToggling = ref(false);
+
+async function onProactiveToggle(value: string | number | boolean) {
+  const enabled = Boolean(value);
+  proactiveToggling.value = true;
+  try {
+    const resp = await streamerApi.toggleProactive({ enabled });
+    ElMessage.success(resp.data.message || (enabled ? '主动发言已开启' : '主动发言已关闭'));
+  } catch (error) {
+    proactiveEnabled.value = !enabled;
+    ElMessage.error(`切换失败: ${(error as Error).message}`);
+  } finally {
+    proactiveToggling.value = false;
+  }
+}
 const agendaState = ref<RundownStateResponse | null>(null);
 const sessions = ref<LiveSessionListResponse | null>(null);
 
@@ -456,6 +483,7 @@ async function refreshSnapshot(): Promise<void> {
     collectors.value = compResp.data.collectors ?? [];
     tools.value = toolsResp.data.tools ?? [];
     streamerStatus.value = streamerResp.data;
+    proactiveEnabled.value = streamerResp.data.config?.proactive_enabled ?? false;
     agendaState.value = rundownResp.data;
     sessions.value = sessionsResp.data;
   } catch {
@@ -641,6 +669,12 @@ onUnmounted(() => {
   flex-shrink: 0;
   flex-wrap: wrap;
 }
+.verdict-proactive {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .verdict-meta-item {
   font-size: 12px;
   color: var(--text-secondary);

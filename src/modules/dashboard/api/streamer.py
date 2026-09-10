@@ -23,6 +23,8 @@ from fastapi import APIRouter, Depends
 
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.streamer import (
+    ProactiveToggleRequest,
+    ProactiveToggleResponse,
     StreamerStatusResponse,
     StreamerTestDecisionRequest,
     StreamerTestDecisionResponse,
@@ -76,7 +78,7 @@ def _read_streamer_config(server: "DashboardServer") -> Dict[str, Any]:
     main_config = server.config_service.main_config if server.config_service else {}
     streamer_cfg = ((main_config or {}).get("agents") or {}).get("streamer") or {}
     return {
-        "proactive_enabled": bool(streamer_cfg.get("proactive_enabled", False)),
+        "proactive_enabled": bool(streamer_cfg.get("proactive_enabled", True)),
         "rundown_id": str(streamer_cfg.get("rundown_id", "") or ""),
         "batch_window_ms": int(streamer_cfg.get("batch_window_ms", 3000) or 0),
         "planner_llm": str(streamer_cfg.get("planner_llm", "llm_fast") or ""),
@@ -181,6 +183,30 @@ async def test_decision(
     )
 
 
+@router.post("/proactive-toggle", response_model=ProactiveToggleResponse)
+async def toggle_proactive(
+    request: ProactiveToggleRequest,
+    server: ServerDep,
+) -> ProactiveToggleResponse:
+    """切换主动发言总开关（运行时立即生效；配置落盘保持，重启不丢）。"""
+    agent = _resolve_streamer_agent(server)
+    if agent is not None:
+        setter = getattr(agent, "set_proactive_enabled", None)
+        if callable(setter):
+            setter(request.enabled)
+
+    # 落盘复用 config PATCH 的 tomlkit 保留注释写回链路；函数内 import 属
+    # 可选重型依赖延迟加载（config 模块体量大，仅落盘时需要）
+    from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
+
+    update = await update_config(
+        ConfigUpdateRequest(key="agents.streamer.proactive_enabled", value=request.enabled),
+        server,
+    )
+    message = "主动发言已切换" if update.success else f"已切换（运行时生效），配置保存失败: {update.message}"
+    return ProactiveToggleResponse(enabled=request.enabled, message=message)
+
+
 @router.post("/trigger-proactive", response_model=TriggerProactiveResponse)
 async def trigger_proactive(
     request: TriggerProactiveRequest,
@@ -205,13 +231,13 @@ async def trigger_proactive(
         logger.error(f"trigger-proactive 调用异常: {exc}", exc_info=True)
         return TriggerProactiveResponse(success=False, message=f"触发失败: {exc}")
 
-    cfg = _read_streamer_config(server)
-    if not cfg["proactive_enabled"]:
+    enabled_getter = getattr(agent, "is_proactive_enabled", None)
+    if not (callable(enabled_getter) and enabled_getter()):
         return TriggerProactiveResponse(
             success=True,
             message=(
-                "已置位，但 proactive_enabled=false：真实链路会在下个 tick 静默丢弃。"
-                "如需立即开口请改用「主动发言（直跑）」模式。"
+                "已置位，但主动发言总开关当前为关：真实链路会在下个 tick 静默丢弃。"
+                "如需立即开口请改用「主动发言（直跑）」模式，或在直播控制台打开开关。"
             ),
         )
     return TriggerProactiveResponse(

@@ -124,7 +124,7 @@ class StreamerAgentConfig(BaseConfig):
     )
 
     # --- 主动发言 ---
-    proactive_enabled: bool = Field(default=False, description="主动发言总开关（默认关闭）")
+    proactive_enabled: bool = Field(default=True, description="主动发言总开关（流程单/冷场/定时等所有主动发言源）")
     proactive_cold_timeout_ms: int = Field(default=45_000, ge=0, description="冷场判定阈值（毫秒）")
     proactive_min_interval_ms: int = Field(default=120_000, ge=0, description="两次主动发言最小间隔")
     proactive_schedule_interval_ms: int = Field(default=300_000, ge=0, description="定时话题触发间隔（0=关闭）")

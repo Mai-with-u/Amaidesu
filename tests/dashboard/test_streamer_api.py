@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -40,12 +41,22 @@ class FakeStreamerAgent:
         debug_result: Optional[Dict[str, Any]] = None,
         debug_exception: Optional[Exception] = None,
         trigger_exception: Optional[Exception] = None,
+        proactive_enabled: bool = True,
     ) -> None:
         self._debug_result = debug_result
         self._debug_exception = debug_exception
         self._trigger_exception = trigger_exception
         self.debug_calls: list[Dict[str, Any]] = []
         self.trigger_calls: list[Optional[str]] = []
+        self.proactive_enabled = proactive_enabled
+        self.proactive_toggle_calls: list[bool] = []
+
+    def is_proactive_enabled(self) -> bool:
+        return self.proactive_enabled
+
+    def set_proactive_enabled(self, enabled: bool) -> None:
+        self.proactive_toggle_calls.append(enabled)
+        self.proactive_enabled = enabled
 
     def get_statistics(self) -> Dict[str, Any]:
         return {
@@ -338,9 +349,7 @@ def test_test_decision_proactive_mode_passes_none_batch(config_dir: Path) -> Non
 def test_test_decision_facade_error_wrapped(config_dir: Path) -> None:
     """门面返回 success=false（入参校验失败）→ error 透传，success=false。"""
     _write_config(config_dir)
-    agent = FakeStreamerAgent(
-        debug_result={"success": False, "error": "proactive 模式不接受弹幕批次"}
-    )
+    agent = FakeStreamerAgent(debug_result={"success": False, "error": "proactive 模式不接受弹幕批次"})
     client = _make_client(config_dir, agent=agent)
 
     resp = client.post("/api/v1/streamer/test-decision", json={"proactive": True})
@@ -388,7 +397,7 @@ def test_trigger_proactive_calls_facade(config_dir: Path) -> None:
 def test_trigger_proactive_warns_when_disabled(config_dir: Path) -> None:
     """proactive_enabled=false → 置位成功但提示真实链路会静默丢弃。"""
     _write_config(config_dir, proactive_enabled=False)
-    agent = FakeStreamerAgent()
+    agent = FakeStreamerAgent(proactive_enabled=False)
     client = _make_client(config_dir, agent=agent)
 
     resp = client.post("/api/v1/streamer/trigger-proactive", json={})
@@ -396,6 +405,23 @@ def test_trigger_proactive_warns_when_disabled(config_dir: Path) -> None:
     body = resp.json()
     assert body["success"] is True
     assert "静默丢弃" in body["message"]
+
+
+def test_proactive_toggle_updates_runtime_and_config(config_dir: Path) -> None:
+    """总开关闭合链路：Agent 运行时立即生效 + agents.toml 落盘保持。"""
+    _write_config(config_dir, proactive_enabled=False)
+    agent = FakeStreamerAgent(proactive_enabled=False)
+    client = _make_client(config_dir, agent=agent)
+
+    resp = client.post("/api/v1/streamer/proactive-toggle", json={"enabled": True})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["enabled"] is True
+    assert agent.proactive_enabled is True
+    assert agent.proactive_toggle_calls == [True]
+
+    saved = tomllib.loads((config_dir / "agents.toml").read_text(encoding="utf-8"))
+    assert saved["agents"]["streamer"]["proactive_enabled"] is True
 
 
 def test_trigger_proactive_unavailable_when_no_streamer_agent(config_dir: Path) -> None:

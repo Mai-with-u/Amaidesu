@@ -200,6 +200,17 @@ export interface StreamerStatusResponse {
 }
 
 /** `POST /api/v1/streamer/trigger-proactive` 请求体。 */
+/** `POST /api/v1/streamer/proactive-toggle` 请求体。 */
+export interface ProactiveToggleRequest {
+  enabled: boolean;
+}
+
+/** `POST /api/v1/streamer/proactive-toggle` 响应。 */
+export interface ProactiveToggleResponse {
+  enabled: boolean;
+  message: string;
+}
+
 export interface TriggerProactiveRequest {
   topic_hint?: string;
 }

@@ -71,3 +71,16 @@ class TriggerProactiveResponse(BaseModel):
 
     success: bool
     message: str
+
+
+class ProactiveToggleRequest(BaseModel):
+    """主动发言总开关切换请求（运行时立即生效 + 配置落盘保持）。"""
+
+    enabled: bool
+
+
+class ProactiveToggleResponse(BaseModel):
+    """主动发言总开关切换响应。"""
+
+    enabled: bool
+    message: str = ""

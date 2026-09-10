@@ -138,6 +138,14 @@ class ProactiveTrigger:
     # 公共 API
     # ------------------------------------------------------------------
 
+    def is_enabled(self) -> bool:
+        """总开关当前状态（Dashboard 动态开关展示用）。"""
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        """运行时切换总开关（立即生效；持久化由调用方负责写回配置）。"""
+        self._enabled = bool(enabled)
+
     def should_trigger(
         self,
         room_state: Any,

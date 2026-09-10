@@ -25,6 +25,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.llm.manager import LLMResponse
 from src.modules.tools import ToolRegistry, ToolInvocation
 from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 
 
@@ -91,7 +92,10 @@ def _replyer_failure(reason: str = "mock failure") -> LLMResponse:
 # ---------------------------------------------------------------------------
 
 
-def _setup_agent(chat_responses: list | None = None) -> tuple[StreamerAgent, EventBus, ToolRegistry, MagicMock, MagicMock]:
+def _setup_agent(
+    chat_responses: list | None = None,
+    config_overrides: dict | None = None,
+) -> tuple[StreamerAgent, EventBus, ToolRegistry, MagicMock, MagicMock]:
     """构造完整测试 Agent：mock LLM（chat_messages=Planner / call_tools=Replyer）。
 
     默认：Planner 首步直接调 reply；Replyer 产出 "谢谢支持！" + happy。
@@ -122,12 +126,15 @@ def _setup_agent(chat_responses: list | None = None) -> tuple[StreamerAgent, Eve
     prompt.render_safe = MagicMock(return_value="PROMPT")
 
     config = StreamerAgentConfig(
-        planner_llm="llm_fast",
-        replyer_llm="llm",
-        proactive_enabled=False,
-        profanity_enabled=False,
-        batch_window_ms=100,
-        tick_interval_ms=50,
+        **{
+            "planner_llm": "llm_fast",
+            "replyer_llm": "llm",
+            "proactive_enabled": False,
+            "profanity_enabled": False,
+            "batch_window_ms": 100,
+            "tick_interval_ms": 50,
+            **(config_overrides or {}),
+        }
     )
 
     bus = EventBus()
@@ -281,6 +288,85 @@ async def test_decision_loop_proactive_tool_invoke():
     result = await provider.invoke(ToolInvocation(tool_name="should_speak_proactively", arguments={}, source="test"))
     # 内容可能是 "cold" 或 ""（取决于状态）
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_decision_loop_proactive_gated_until_live_started():
+    """主动发言场次闸：开播前静默且 pending 信号保留，开播后首个 tick 触发。"""
+    agent, bus, registry, llm, prompt = _setup_agent(
+        chat_responses=[_planner_react_response([])],
+        config_overrides={"proactive_enabled": True},
+    )
+
+    await agent.start()
+    try:
+        agent._rundown_proactive_pending = True
+
+        await asyncio.sleep(0.2)
+        assert agent._total_proactive == 0, "未开播时主动发言应静默"
+        assert agent._rundown_proactive_pending is True, "pending 信号不应被消费"
+
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=1, source="manual", title="测试场"),
+            source="test",
+        )
+        await asyncio.sleep(0.2)
+
+        assert agent._live_active is True
+        assert agent._total_proactive >= 1, "开播后首个 tick 应消费保留的 pending 触发主动发言"
+        assert agent._rundown_proactive_pending is False
+    finally:
+        await agent.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_decision_loop_proactive_gated_after_live_ended():
+    """下播收闸：live.ended 后主动发言静默，弹幕回复不受影响。"""
+    agent, bus, registry, llm, prompt = _setup_agent(
+        chat_responses=[_planner_react_response([])],
+        config_overrides={"proactive_enabled": True},
+    )
+
+    await agent.start()
+    try:
+        await bus.emit(
+            CoreEvents.LIVE_STARTED,
+            LiveStartedPayload(live_session_id=1),
+            source="test",
+        )
+        await asyncio.sleep(0.1)
+        assert agent._live_active is True
+
+        await bus.emit(
+            CoreEvents.LIVE_ENDED,
+            LiveEndedPayload(live_session_id=1, reason="手动结束"),
+            source="test",
+        )
+        await asyncio.sleep(0.1)
+        assert agent._live_active is False
+
+        agent._rundown_proactive_pending = True
+        baseline = agent._total_proactive
+        await asyncio.sleep(0.3)
+        assert agent._total_proactive == baseline, "下播后主动发言应静默（无新增触发）"
+        assert agent._rundown_proactive_pending is True, "下播后的 pending 信号保留待下场"
+    finally:
+        await agent.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_decision_loop_danmaku_reply_not_gated_by_live_session():
+    """场次闸只挡主动发言分支：弹幕回复路径不受开播状态影响。"""
+    agent, bus, registry, llm, prompt = _setup_agent()
+
+    await agent.start()
+    try:
+        await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, _make_payload("主播好可爱！"), source="bilibili")
+        await asyncio.sleep(0.2)
+        assert llm.chat_messages.await_count >= 1, "未开播时弹幕回复不应被门控"
+    finally:
+        await agent.cleanup()
 
 
 @pytest.mark.asyncio

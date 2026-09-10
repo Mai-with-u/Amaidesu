@@ -18,7 +18,7 @@ class MetaConfig(BaseConfig):
     """配置元数据"""
 
     version: str = Field(
-        default="2.0.29",
+        default="2.0.30",
         description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
         # 版本号仅接受纯数字字串，前端编辑成 "v2.0.28" 之类会破坏启动时的迁移解析，
         # 故标记为只读，PATCH 接口据此拒绝写回。

@@ -39,6 +39,8 @@ import type {
   RundownStateResponse,
   RundownControlRequest,
   RundownControlResponse,
+  ProactiveToggleRequest,
+  ProactiveToggleResponse,
   StreamerStatusResponse,
   StreamerTestDecisionRequest,
   StreamerTestDecisionResponse,
@@ -203,6 +205,8 @@ export * from './traces';
 // 下个 flush tick 经限流判定后才可能开口）。
 export const streamerApi = {
   getStatus: () => api.get<StreamerStatusResponse>('/streamer/status'),
+  toggleProactive: (request: ProactiveToggleRequest) =>
+    api.post<ProactiveToggleResponse>('/streamer/proactive-toggle', request),
   testDecision: (request: StreamerTestDecisionRequest) =>
     api.post<StreamerTestDecisionResponse>('/streamer/test-decision', request, {
       timeout: 120000,
