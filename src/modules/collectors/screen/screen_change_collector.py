@@ -17,9 +17,10 @@ from pydantic import Field
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.types.base.normalized_message import NormalizedMessage
 
 from .screen_analyzer import ScreenAnalyzer
 from .screen_reader import ScreenAnalysisResult, ScreenReader
@@ -32,7 +33,7 @@ class ScreenChangeCollector(BaseCollector):
     """
     屏幕变化采集器
 
-    通过差异检测 + VLM 分析，将屏幕变化描述为文本 NormalizedMessage。
+    通过差异检测 + VLM 分析，将屏幕变化描述为文本事件载荷。
     仅在屏幕发生变化时才调用 VLM，缓存去重避免重复调用 —— 省 token。
     """
 
@@ -80,7 +81,7 @@ class ScreenChangeCollector(BaseCollector):
     # 旧 InputCollectorManager 兼容接口
     # ------------------------------------------------------------------
 
-    def stream(self) -> AsyncIterator[NormalizedMessage]:
+    def stream(self) -> AsyncIterator[RoomMessagePayload]:
         if not self.is_started:
             raise RuntimeError("Collector 未启动，请先调用 start()")
 
@@ -121,8 +122,8 @@ class ScreenChangeCollector(BaseCollector):
 
         self.logger.info("ScreenChangeCollector 已清理")
 
-    async def collect(self) -> AsyncIterator[NormalizedMessage]:
-        """启动并返回 NormalizedMessage 流"""
+    async def collect(self) -> AsyncIterator[RoomMessagePayload]:
+        """启动并返回事件载荷流（载荷在 collect 内直发 room.message.danmaku）"""
         self.is_started = True
         self._message_queue = asyncio.Queue()
 
@@ -154,8 +155,10 @@ class ScreenChangeCollector(BaseCollector):
 
             while self.is_started:
                 try:
-                    normalized_msg = await asyncio.wait_for(self._message_queue.get(), timeout=1.0)
-                    yield normalized_msg
+                    payload = await asyncio.wait_for(self._message_queue.get(), timeout=1.0)
+                    # 直发语义事件（场次归属由盖章拦截器统一注入）
+                    await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
+                    yield payload
                 except asyncio.TimeoutError:
                     continue
 
@@ -189,7 +192,7 @@ class ScreenChangeCollector(BaseCollector):
             self.logger.error(f"处理屏幕变化时出错: {e}", exc_info=True)
 
     async def _on_context_update(self, data: Dict[str, Any]) -> None:
-        """处理上下文更新 - 创建 NormalizedMessage 并放入队列"""
+        """处理上下文更新 - 创建事件载荷并放入队列"""
         try:
             analysis_result: Optional[ScreenAnalysisResult] = data.get("analysis_result")
             if not analysis_result:
@@ -200,24 +203,20 @@ class ScreenChangeCollector(BaseCollector):
             if not new_context:
                 return
 
-            normalized_msg = NormalizedMessage(
-                text=new_context,
-                source=self.name,
-                data_type="text",
-                importance=0.5,
+            payload = RoomMessagePayload(
+                message_type="danmaku",
+                user=RoomMessageUser(id="screen_analyzer", name="屏幕分析"),
+                content=new_context,
                 timestamp_ms=now_ms(),
-                user_id="screen_analyzer",
-                user_nickname="屏幕分析",
-                platform="screen",
             )
 
             if self._message_queue:
-                await self._message_queue.put(normalized_msg)
+                await self._message_queue.put(payload)
 
             self.messages_sent += 1
             self.last_message_time = time.time()
 
-            self.logger.debug(f"屏幕描述消息已创建: {new_context[:50]}...")
+            self.logger.debug(f"屏幕描述载荷已创建: {new_context[:50]}...")
 
         except Exception as e:
             self.logger.error(f"创建屏幕描述消息失败: {e}", exc_info=True)

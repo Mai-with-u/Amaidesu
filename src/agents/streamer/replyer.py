@@ -109,7 +109,7 @@ class Replyer:
 
         Args:
             plan: Planner 产出的决策计划（should_reply=True 时才应到达此处）。
-            batch: 本批弹幕（NormalizedMessage 列表）。
+            batch: 本批弹幕（RoomMessagePayload 列表）。
             history: 可选的最近会话历史（鸭子类型对象列表，需有 ``role`` 和 ``content`` 属性）；
                      role 可能是枚举（取 ``.value``），content 是 str。None 表示无历史可用，
                      渲染为占位文本。

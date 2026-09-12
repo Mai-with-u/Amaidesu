@@ -18,7 +18,6 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from src.modules.logging import get_logger
-from src.modules.types.message_type import MessageTypeNotRegistered, require_message_type
 
 __all__ = [
     "ROLE_LABELS",
@@ -34,9 +33,22 @@ __all__ = [
 
 logger = get_logger("canonical")
 
-#: live_chat ``message_type`` 取值 → 登记表键名（落库口径与登记口径的别名表）。
-#: live_chat 只落弹幕（danmaku）与主播发言（speak）；礼物/SC 走各自明细表。
-_TYPE_ALIASES: Dict[str, str] = {"danmaku": "text", "": "text"}
+#: live_chat ``message_type`` → AI 侧 prompt 模板（批与历史同源的单一映射；
+#: 变量 ``{nickname}`` / ``{content}``）。模板值是下游解析对齐的契约，
+#: 不要顺手优化文案。空串/未知类型按普通弹幕渲染。
+PROMPT_TEMPLATES: Dict[str, str] = {
+    "danmaku": "{nickname}: {content}",
+    "gift": "[礼物] {nickname}: {content}",
+    "super_chat": "[醒目留言] {nickname}: {content}",
+    "enter": "[入场] {nickname}: {content}",
+    "partner_speech": "{nickname}: {content}",
+}
+
+
+def prompt_template_for(message_type: str) -> str:
+    """取 message_type 对应的 prompt 模板；空串/未知类型按普通弹幕渲染。"""
+    return PROMPT_TEMPLATES.get(message_type or "danmaku", PROMPT_TEMPLATES["danmaku"])
+
 
 #: 文本视图的角色标签（Replyer / 后台摘要复用的标签式历史渲染）。
 ROLE_LABELS: Dict[str, str] = {
@@ -88,13 +100,7 @@ def canonical_content(
     if role == "assistant":
         content = text
     else:
-        template_key = _TYPE_ALIASES.get(message_type, message_type)
-        try:
-            spec = require_message_type(template_key)
-            line = spec.prompt_template.format(text=text, nickname=nickname or "观众")
-        except MessageTypeNotRegistered:
-            logger.warning(f"未知 message_type={message_type!r}，按普通弹幕渲染")
-            line = f"{nickname or '观众'}: {text}"
+        line = prompt_template_for(message_type).format(nickname=nickname or "观众", content=text)
         content = line
         if message_id:
             content = f"{content} [id:{message_id}]"
@@ -134,16 +140,17 @@ def turn_to_message(turn: Any) -> Dict[str, str]:
 
 
 def batch_item_to_message(msg: Any) -> Dict[str, str]:
-    """弹幕批成员（NormalizedMessage 鸭子类型）→ 消息 dict（与历史同形）。"""
-    nickname = getattr(msg, "user_nickname", None) or getattr(msg, "user_id", None) or "观众"
-    text = getattr(msg, "text", None) or str(msg)
+    """弹幕批成员（RoomMessagePayload 鸭子类型）→ 消息 dict（与历史同形）。"""
+    user = getattr(msg, "user", None)
+    nickname = (getattr(user, "name", None) or getattr(user, "id", None)) if user is not None else None
+    text = getattr(msg, "content", None) or str(msg)
     return {
         "role": "user",
         "content": canonical_content(
             role="user",
             nickname=_as_str(nickname) or "观众",
             text=text if isinstance(text, str) else str(text),
-            message_type=getattr(msg, "data_type", "text") or "text",
+            message_type=getattr(msg, "message_type", "danmaku") or "danmaku",
             message_id=_as_str(getattr(msg, "message_id", None)),
         ),
     }

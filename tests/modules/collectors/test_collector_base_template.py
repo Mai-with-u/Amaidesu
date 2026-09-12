@@ -1,9 +1,9 @@
-"""BaseCollector v2 主动推事件模板测试（后台消费任务 + 兜底 emit）
+"""BaseCollector v2 主动推事件模板测试（后台消费任务 + 自产自发）
 
 覆盖：
 1. ``_start_collect_task`` 后台消费 ``collect()`` 生成器
-2. 带 ``_emit_semantic_events=True`` 的采集器基类**不**兜底转发（防重复）
-3. 无内部 emit 的采集器基类**兜底**转发 room.message.*
+2. 采集器在 collect() 内自行 emit 事件（自产自发，基类零转换零兜底）
+3. 不 emit 的采集器不产生任何事件（基类无兜底转发）
 4. ``_stop_collect_task`` 取消任务
 """
 
@@ -13,14 +13,14 @@ import asyncio
 from typing import AsyncIterator
 
 from src.modules.collectors.base import BaseCollector
-from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 
-class _EmitCollector(BaseCollector):
-    """带内部 emit（emit_semantic_events=True）的测试采集器。"""
+class _SelfEmitCollector(BaseCollector):
+    """在 collect() 内自行 emit 的测试采集器（自产自发）。"""
 
-    name = "emit_test"
-    _emit_semantic_events = True
+    name = "self_emit_test"
 
     def __init__(self, bus):
         self.messages: list[str] = []
@@ -30,36 +30,43 @@ class _EmitCollector(BaseCollector):
         self._bus = bus
         super().__init__(event_bus=bus)
 
-    async def collect(self) -> AsyncIterator[NormalizedMessage]:
+    async def collect(self) -> AsyncIterator[RoomMessagePayload]:
         self.started = True
         while self.is_started:
             await asyncio.sleep(0.01)
             if not self.messages:
                 break
-            yield NormalizedMessage(text=self.messages.pop(0), data_type="text", source=self.name)
+            text = self.messages.pop(0)
+            payload = RoomMessagePayload(
+                message_type="danmaku",
+                user=RoomMessageUser(id="u1", name="测试"),
+                content=text,
+            )
+            await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
+            yield payload
         self.stopped = True
 
-    async def emit_event(self, event_name: str, payload, source: str | None = None):
-        await self._bus.emit(event_name, payload)
 
+class _SilentCollector(BaseCollector):
+    """不 emit 的测试采集器（基类不做任何兜底转发）。"""
 
-class _NoEmitCollector(BaseCollector):
-    """无内部 emit（走基类兜底）的测试采集器。"""
-
-    name = "noemit_test"
+    name = "silent_test"
 
     def __init__(self, bus):
         self.messages: list[str] = []
         self.is_started = False
-        self._bus = bus
         super().__init__(event_bus=bus)
 
-    async def collect(self) -> AsyncIterator[NormalizedMessage]:
+    async def collect(self) -> AsyncIterator[RoomMessagePayload]:
         while self.is_started:
             await asyncio.sleep(0.01)
             if not self.messages:
                 break
-            yield NormalizedMessage(text=self.messages.pop(0), data_type="text", source=self.name)
+            yield RoomMessagePayload(
+                message_type="danmaku",
+                user=RoomMessageUser(id="u1", name="测试"),
+                content=self.messages.pop(0),
+            )
 
 
 class _FakeBus:
@@ -70,10 +77,10 @@ class _FakeBus:
         self.events.append((event_name, payload))
 
 
-def test_emit_collector_no_double_emit() -> None:
-    """内部 emit 采集器：基类不兜底转发（防双发）。"""
+def test_self_emit_collector_emits_and_yields() -> None:
+    """自产自发采集器：collect() 内 emit 的任务经后台消费到达总线。"""
     bus = _FakeBus()
-    collector = _EmitCollector(bus)
+    collector = _SelfEmitCollector(bus)
     collector.messages.append("第一条")
 
     async def run():
@@ -87,31 +94,31 @@ def test_emit_collector_no_double_emit() -> None:
 
     asyncio.run(run())
 
-    # 内部 emit 路径：基类不重复，但本测例模拟内部已 emit（这里仅为验证模板可运行）
     assert collector.started is True
+    assert bus.events, "自产自发应发出事件"
+    event_name, payload = bus.events[0]
+    assert event_name == "room.message.danmaku"
+    assert payload.content == "第一条"  # type: ignore[attr-defined]
 
 
-def test_noemit_collector_gets_fallback_emit() -> None:
-    """无内部 emit 采集器：基类兜底转到 room.message.danmaku。"""
+def test_silent_collector_gets_no_fallback_emit() -> None:
+    """不 emit 的采集器：基类无兜底转发，总线零事件。"""
     bus = _FakeBus()
-    collector = _NoEmitCollector(bus)
+    collector = _SilentCollector(bus)
     collector.messages.append("屏幕内容")
 
     async def run():
         collector.is_started = True
         await collector._start_collect_task()
         for _ in range(30):
-            if bus.events:
+            if collector._collect_task is not None and collector._collect_task.done():
                 break
             await asyncio.sleep(0.01)
         await collector._stop_collect_task()
 
     asyncio.run(run())
 
-    assert bus.events, "兜底应发出事件"
-    event_name, payload = bus.events[0]
-    assert event_name == "room.message.danmaku"
-    assert payload.content == "屏幕内容"  # type: ignore[attr-defined]
+    assert bus.events == [], "基类不应兜底转发（采集器自产自发）"
 
 
 def test_manager_dynamic_register_start_stop() -> None:

@@ -2,7 +2,7 @@
 
 覆盖：
 1. 入参校验：proactive + batch 互斥拒绝；非 proactive 空 batch 拒绝。
-2. 弹幕模式：构造 NormalizedMessage 后走真实两阶段决策，
+2. 弹幕模式：构造 RoomMessagePayload 后走真实两阶段决策，
    门面返回视图含 plan / speech / utterance_id / elapsed_ms。
 3. Planner 拒绝：plan.should_reply=false 如实回传（speech=None，不算错误）。
 4. Planner 失败（返回 None）：error 回传 planner_failed。
@@ -159,12 +159,12 @@ async def test_danmaku_mode_success_returns_full_view():
     assert result["utterance_id"].startswith("utt_")
     assert result["trigger_reason"] == "dashboard:debug_test"
 
-    # Planner 收到的批次已转 NormalizedMessage（昵称/文本透传）
+    # Planner 收到的批次即事件载荷（昵称/文本透传）
     plan_call = agent._planner.plan.await_args
     batch = plan_call.args[0]
     assert len(batch) == 1
-    assert batch[0].text == "主播好"
-    assert batch[0].user_nickname == "测试观众"
+    assert batch[0].content == "主播好"
+    assert batch[0].user.name == "测试观众"
     assert plan_call.kwargs["forced"] is False
     assert plan_call.kwargs["proactive"] is False
 
@@ -180,7 +180,7 @@ async def test_danmaku_default_nickname_when_missing():
 
     await agent.debug_test_decision(batch=[{"text": "你好"}])
     batch = agent._planner.plan.await_args.args[0]
-    assert batch[0].user_nickname == "测试观众"
+    assert batch[0].user.name == "测试观众"
 
 # ---------------------------------------------------------------------------
 # Planner 拒绝 / 失败

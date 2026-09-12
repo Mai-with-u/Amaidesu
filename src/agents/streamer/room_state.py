@@ -141,13 +141,13 @@ class RoomState:
         """记录一条弹幕消息,维护热度窗口。
 
         Args:
-            message: 标准化消息(仅需具备 ``text`` 字段;
-                ``NormalizedMessage`` 或 duck-typed 对象均可)
+            message: 直播间消息(仅需具备 ``content`` 字段;
+                ``RoomMessagePayload`` 或 duck-typed 对象均可)
             now_ms: 消息到达时刻(Unix 毫秒)。测试中传入确定性时间戳;
                 None 时使用真实时钟。
         """
         ts = self._resolve_now(now_ms)
-        text = getattr(message, "text", "") or ""
+        text = getattr(message, "content", "") or ""
         self._window.append(_WindowEntry(ts_ms=ts, text=text))
         self._last_message_ms = ts
         self._trim(ts)

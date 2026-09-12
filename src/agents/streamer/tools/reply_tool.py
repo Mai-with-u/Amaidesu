@@ -226,7 +226,7 @@ class ReplyToolProvider:
         except (TypeError, ValueError):
             confidence = 0.9
 
-        # batch_text → 暂存为 raw_text（Replyer.generate 接受 NormalizedMessage 列表；
+        # batch_text → 暂存为 raw_text（Replyer.generate 接受弹幕批次列表；
         # 工具调用时无原始结构，故传空列表；Replyer 仍能基于 plan + persona 生成）
         batch: List[Any] = []
 

@@ -2,7 +2,7 @@
 MessageBuffer - 弹幕聚合缓冲（StreamerAgent 内部批状态）
 
 直播场景下弹幕高频突发，逐条调用 LLM 既慢又贵。MessageBuffer 在一个时间/条数
-窗口内聚合多条 NormalizedMessage，由 StreamerAgent 的主循环统一取出一批做决策。
+窗口内聚合多条 RoomMessagePayload，由 StreamerAgent 的主循环统一取出一批做决策。
 
 设计要点：
 - 记录首条消息的"到达时间"用于时间窗口判定（而非消息自带 timestamp，后者可能由上游设定）
@@ -14,7 +14,16 @@ MessageBuffer - 弹幕聚合缓冲（StreamerAgent 内部批状态）
 from typing import List, Optional, Tuple
 
 from src.agents.streamer import canonical
-from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.events.payloads.room import RoomMessagePayload
+
+# 批渲染的单一映射迁居 canonical（批与历史同形）；此处保留同名转发，
+# 供 Planner 等既有引用点继续以 prompt_template_for 取模板。
+PROMPT_TEMPLATES = canonical.PROMPT_TEMPLATES
+
+
+def prompt_template_for(message_type: str) -> str:
+    """取 message_type 对应的 AI 侧 prompt 模板；未知类型按普通弹幕渲染。"""
+    return canonical.prompt_template_for(message_type)
 
 
 class MessageBuffer:
@@ -40,7 +49,7 @@ class MessageBuffer:
             batch_max_size: 单批最多聚合的消息条数，达到即触发刷新
             enable_idle_compensation: 是否启用空窗补偿（窗口过期时按空窗时间折算等效消息数）
         """
-        self._messages: List[NormalizedMessage] = []
+        self._messages: List[RoomMessagePayload] = []
         self._force: bool = False
         self._first_arrival_ms: int = 0
         self._last_arrival_ms: int = 0
@@ -51,11 +60,11 @@ class MessageBuffer:
 
     # ==================== 写入 ====================
 
-    def add(self, message: NormalizedMessage, *, arrival_ms: int, forced: bool = False) -> None:
+    def add(self, message: RoomMessagePayload, *, arrival_ms: int, forced: bool = False) -> None:
         """追加一条消息到缓冲。
 
         Args:
-            message: 标准化消息
+            message: 直播间行为流事件载荷
             arrival_ms: 消息到达时间（Unix 毫秒），用于时间窗口判定
             forced: 该消息是否触发强制响应（由 TimingGate 判定后传入）
         """
@@ -66,7 +75,7 @@ class MessageBuffer:
         if forced:
             self._force = True
 
-    def drain(self) -> List[NormalizedMessage]:
+    def drain(self) -> List[RoomMessagePayload]:
         """取出并清空缓冲中的全部消息，同时重置强制标志与窗口起点。
 
         Returns:
@@ -190,7 +199,7 @@ class MessageBuffer:
     # ==================== 渲染 ====================
 
     @staticmethod
-    def render_batch_text(messages: List[NormalizedMessage]) -> str:
+    def render_batch_text(messages: List[RoomMessagePayload]) -> str:
         """将一批消息渲染为文本块（委托 canonical 映射，与历史同形）。
 
         Args:

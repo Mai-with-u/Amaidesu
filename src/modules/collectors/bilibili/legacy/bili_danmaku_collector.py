@@ -26,7 +26,6 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class BiliDanmakuMessageConfig(BaseModel):
@@ -42,7 +41,7 @@ class BiliDanmakuMessageConfig(BaseModel):
     )
     platform: str = Field(
         default="bilibili",
-        description="来源平台标识（写入 NormalizedMessage.platform）",
+        description="来源平台标识",
     )
 
 
@@ -104,8 +103,8 @@ class BiliDanmakuCollector(BaseCollector):
     # 旧 InputCollectorManager 兼容接口
     # ------------------------------------------------------------------
 
-    def stream(self) -> AsyncIterator[NormalizedMessage]:
-        """返回 NormalizedMessage 数据流（旧 InputCollectorManager 过渡期）"""
+    def stream(self) -> AsyncIterator[RoomMessagePayload]:
+        """返回事件载荷数据流（旧 InputCollectorManager 过渡期）"""
         if not self.is_started:
             raise RuntimeError("Collector 未启动，请先调用 start()")
 
@@ -138,12 +137,12 @@ class BiliDanmakuCollector(BaseCollector):
 
         self.logger.info("BiliDanmakuCollector 已清理")
 
-    async def collect(self) -> AsyncIterator[NormalizedMessage]:
+    async def collect(self) -> AsyncIterator[RoomMessagePayload]:
         """
         采集弹幕数据（旧版轮询）
 
         Yields:
-            NormalizedMessage: 弹幕标准化消息
+            RoomMessagePayload: 弹幕事件载荷
         """
         self.is_started = True
 
@@ -181,11 +180,11 @@ class BiliDanmakuCollector(BaseCollector):
             self.is_started = False
             self.logger.info("Bilibili 弹幕采集已停止")
 
-    async def _fetch_and_process(self) -> AsyncIterator[NormalizedMessage]:
+    async def _fetch_and_process(self) -> AsyncIterator[RoomMessagePayload]:
         """
         获取并处理弹幕
 
-        从 Bilibili API 获取弹幕，过滤新弹幕并转换为 NormalizedMessage。
+        从 Bilibili API 获取弹幕，过滤新弹幕并转换为事件载荷。
         """
         if not self._session or self._session.closed:
             self.logger.warning("aiohttp session 未初始化或已关闭，跳过本次轮询。")
@@ -224,12 +223,12 @@ class BiliDanmakuCollector(BaseCollector):
                         self.logger.debug(f"收到 {len(new_danmakus)} 条新弹幕")
 
                         for item in new_danmakus:
-                            normalized_msg = await self._create_danmaku_message(item)
-                            if normalized_msg:
+                            payload = await self._create_danmaku_message(item)
+                            if payload:
                                 # emit room.message.danmaku 语义事件
                                 if self._emit_semantic_events:
-                                    await self._emit_semantic_event(normalized_msg)
-                                yield normalized_msg
+                                    await self._emit_semantic_event(payload)
+                                yield payload
                     else:
                         self.logger.debug("没有新的弹幕")
 
@@ -246,33 +245,23 @@ class BiliDanmakuCollector(BaseCollector):
         except Exception as e:
             self.logger.exception(f"处理 Bilibili 弹幕时发生未知错误: {e}")
 
-    async def _emit_semantic_event(self, normalized_msg: NormalizedMessage) -> None:
+    async def _emit_semantic_event(self, payload: RoomMessagePayload) -> None:
         """emit room.message.danmaku 语义事件"""
         try:
-            payload = RoomMessagePayload(
-                # 场次归属由场次盖章拦截器统一注入；message_id 透传（回复关联键）
-                message_id=normalized_msg.message_id,
-                message_type="danmaku",
-                user=RoomMessageUser(
-                    id=str(normalized_msg.user_id or "unknown"),
-                    name=str(normalized_msg.user_nickname or "unknown"),
-                ),
-                content=normalized_msg.text,
-                timestamp_ms=normalized_msg.timestamp_ms,
-            )
+            # 场次归属由场次盖章拦截器统一注入；message_id 透传（回复关联键）
             await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
         except Exception as e:
             self.logger.debug(f"emit 语义事件失败: {e}", exc_info=True)
 
-    async def _create_danmaku_message(self, item: Dict[str, Any]) -> Optional[NormalizedMessage]:
+    async def _create_danmaku_message(self, item: Dict[str, Any]) -> Optional[RoomMessagePayload]:
         """
-        创建弹幕 NormalizedMessage
+        创建弹幕事件载荷
 
         Args:
             item: Bilibili API 返回的弹幕项
 
         Returns:
-            NormalizedMessage: 弹幕标准化消息
+            RoomMessagePayload: 弹幕事件载荷
         """
         text = item.get("text", "")
         nickname = item.get("nickname", "未知用户")
@@ -287,15 +276,9 @@ class BiliDanmakuCollector(BaseCollector):
         ts = item.get("check_info", {}).get("ts")
         timestamp_ms = int(ts * 1000) if ts else now_ms()
 
-        # 直接创建 NormalizedMessage
-        return NormalizedMessage(
-            text=text,
-            source=self.name,
-            data_type="text",
-            importance=0.5,
+        return RoomMessagePayload(
+            message_type="danmaku",
+            user=RoomMessageUser(id=str(user_id), name=nickname),
+            content=text,
             timestamp_ms=timestamp_ms,
-            user_id=str(user_id),
-            user_nickname=nickname,
-            platform=self.message_config.platform,
-            room_id=str(self.room_id),
         )

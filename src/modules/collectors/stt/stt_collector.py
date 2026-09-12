@@ -23,9 +23,10 @@ import numpy as np
 
 from src.modules.collectors.base import BaseCollector
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.types.base.normalized_message import NormalizedMessage
 
 from .config import STTInputConfig
 
@@ -39,7 +40,7 @@ class STTCollector(BaseCollector):
     语音转文字采集器
 
     使用 sounddevice 捕获音频，通过 VAD 判断话语起止，
-    实时发送到讯飞 ASR，生成识别的文本 NormalizedMessage。
+    实时发送到讯飞 ASR，生成识别文本的事件载荷。
     """
 
     name = "stt"
@@ -222,7 +223,7 @@ class STTCollector(BaseCollector):
     # 旧 InputCollectorManager 兼容接口
     # ------------------------------------------------------------------
 
-    def stream(self) -> AsyncIterator[NormalizedMessage]:
+    def stream(self) -> AsyncIterator[RoomMessagePayload]:
         if not self.is_started:
             raise RuntimeError("Collector 未启动，请先调用 start()")
 
@@ -236,7 +237,7 @@ class STTCollector(BaseCollector):
         return _generate()
 
     async def start(self) -> None:
-        """启动：开后台任务消费 collect()（基类兜底 emit room.message.*）。"""
+        """启动：开后台任务消费 collect()（collect 内直发 room.message.*）。"""
         if not self.is_started:
             self.is_started = True
             await self._start_collect_task()
@@ -263,8 +264,8 @@ class STTCollector(BaseCollector):
 
         self.logger.info("STTCollector 清理完成")
 
-    async def collect(self) -> AsyncIterator[NormalizedMessage]:
-        """采集语音数据并生成 NormalizedMessage"""
+    async def collect(self) -> AsyncIterator[RoomMessagePayload]:
+        """采集语音数据并生成事件载荷（直发 room.message.danmaku）"""
         if not self.vad_enabled or self.vad_model is None:
             self.logger.error("VAD 未启用或模型未加载，无法运行")
             return
@@ -434,8 +435,10 @@ class STTCollector(BaseCollector):
 
                 try:
                     while not self._result_queue.empty():
-                        result = await asyncio.wait_for(self._result_queue.get(), timeout=0.01)
-                        yield result
+                        payload = await asyncio.wait_for(self._result_queue.get(), timeout=0.01)
+                        # 直发语义事件（场次归属由盖章拦截器统一注入）
+                        await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
+                        yield payload
                         self._result_queue.task_done()
                 except asyncio.TimeoutError:
                     pass
@@ -601,15 +604,14 @@ class STTCollector(BaseCollector):
 
                             if full_text and not utterance_failed:
                                 await self._result_queue.put(
-                                    NormalizedMessage(
-                                        text=full_text,
-                                        source=self.name,
-                                        data_type="text",
-                                        importance=0.5,
+                                    RoomMessagePayload(
+                                        message_type="danmaku",
+                                        user=RoomMessageUser(
+                                            id=str(self.message_config.get("user_id") or "voice_user"),
+                                            name=str(self.message_config.get("user_nickname") or "语音观众"),
+                                        ),
+                                        content=full_text,
                                         timestamp_ms=now_ms(),
-                                        user_id=self.message_config.get("user_id") or None,
-                                        user_nickname=self.message_config.get("user_nickname") or None,
-                                        platform="voice",
                                     )
                                 )
                                 self.full_text = ""

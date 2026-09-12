@@ -42,14 +42,9 @@ def _inject_payload(data_type: str) -> dict:
     return {"text": "测试弹幕", "data_type": data_type, "source": "test_debug"}
 
 
-def test_unregistered_data_type_returns_400(client):
+def test_inject_with_arbitrary_data_type_succeeds(client):
+    """注入端点固定发 danmaku；data_type 不再经登记制校验（登记制已删除）。"""
     resp = client.post("/api/v1/debug/inject-message", json=_inject_payload("not_registered_xyz"))
-    assert resp.status_code == 400
-    assert "not_registered_xyz" in resp.json()["detail"]
-
-
-def test_registered_data_type_injects_successfully(client):
-    resp = client.post("/api/v1/debug/inject-message", json=_inject_payload("text"))
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True

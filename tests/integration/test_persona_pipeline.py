@@ -155,16 +155,15 @@ class TestDecisionExpressionSeparation:
             )
         )
 
-        from src.modules.types.base.normalized_message import NormalizedMessage
+        from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
-        msg = NormalizedMessage(
-            text="测试弹幕",
-            source="test",
-            data_type="text",
-            importance=0.5,
-            timestamp=0,
-            user_id="u1",
-            user_nickname="测试观众",
+        # 触发 planner.plan()；StreamerAgent 持有的 Planner 在 __init__ 时已注入
+        # behavior_style（来自装配根透传的 persona_provider）。
+        msg = RoomMessagePayload(
+            message_type="danmaku",
+            user=RoomMessageUser(id="u1", name="测试观众"),
+            content="测试弹幕",
+            timestamp_ms=0,
         )
         result = await agent._planner.plan([msg], forced=False)
         assert result is not None, "Planner.plan 返回 None（mock LLM 应能生成决策）"

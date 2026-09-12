@@ -25,7 +25,6 @@ from src.modules.events.payloads.room import (
 )
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.types.bili import (
     BiliBaseMessage,
     BiliMessageType,
@@ -36,7 +35,6 @@ from src.modules.types.bili import (
     GuardMessage,
     SuperChatMessage,
 )
-from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
 
 from .client.websocket_client import BiliWebSocketClient
 
@@ -45,7 +43,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
     """Bilibili 官方弹幕采集器
 
     使用官方 WebSocket API 实时接收弹幕/SC/礼物/进房事件，emit
-    ``room.message.*`` 语义域事件（默认）；同时仍 yield NormalizedMessage
+    ``room.message.*`` 语义域事件（默认）；同时仍 yield 事件载荷
     以兼容旧 InputCollectorManager 过渡期。
     """
 
@@ -119,8 +117,8 @@ class BiliDanmakuOfficialCollector(BaseCollector):
     # 旧 InputCollectorManager 兼容接口
     # ------------------------------------------------------------------
 
-    def stream(self) -> AsyncIterator[NormalizedMessage]:
-        """返回 NormalizedMessage 数据流（旧 InputCollectorManager 过渡期使用）"""
+    def stream(self) -> AsyncIterator[RoomMessagePayload]:
+        """返回 room.message.* 事件载荷流（旧 InputCollectorManager 过渡期使用）"""
         if not self.is_started:
             raise RuntimeError("Collector 未启动，请先调用 start()")
 
@@ -161,7 +159,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
 
         self.logger.info("BiliDanmakuOfficialCollector 已清理")
 
-    async def collect(self) -> AsyncIterator[NormalizedMessage]:
+    async def collect(self) -> AsyncIterator[RoomMessagePayload]:
         """采集弹幕数据（流式）；同时 emit room.message.* 语义域事件"""
         self.is_started = True
 
@@ -182,11 +180,11 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         try:
             while self.is_started:
                 try:
-                    normalized_msg = await asyncio.wait_for(message_queue.get(), timeout=1.0)
-                    if normalized_msg is None:
+                    payload = await asyncio.wait_for(message_queue.get(), timeout=1.0)
+                    if payload is None:
                         self.logger.info("收到结束信号，停止数据采集")
                         break
-                    yield normalized_msg
+                    yield payload
                 except asyncio.TimeoutError:
                     continue
                 except Exception as e:
@@ -228,67 +226,33 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 self.logger.debug(f"无法解析消息类型: {cmd}")
                 return
 
-            normalized_msg = self._create_normalized_message(bili_message)
+            payload = self._create_payload(bili_message)
 
-            # emit 语义域事件 room.message.*
-            if self._emit_semantic_events:
-                await self._emit_semantic_event(bili_message, normalized_msg)
+            # emit 语义域事件 room.message.*（受配置门控）
+            if payload is not None and self._emit_semantic_events:
+                await self._emit_semantic_event(payload)
 
-            self.logger.debug(f"消息已处理: {normalized_msg.text[:50]}...")
-            await message_queue.put(normalized_msg)
+            if payload is not None:
+                self.logger.debug(f"消息已处理: {payload.content[:50]}...")
+                await message_queue.put(payload)
 
         except Exception as e:
             self.logger.error(f"处理消息时出错: {e}", exc_info=True)
             self.logger.debug(f"失败消息数据: cmd={message_data.get('cmd')}")
 
-    async def _emit_semantic_event(self, bili_msg: BiliBaseMessage, normalized_msg: NormalizedMessage) -> None:
-        """emit room.message.* 语义域事件"""
-        try:
-            user_id = str(getattr(bili_msg, "open_id", None) or "unknown")
-            user_name = str(getattr(bili_msg, "uname", None) or "unknown")
-
-            if isinstance(bili_msg, DanmakuMessage):
-                payload = RoomMessagePayload(
-                    message_id=normalized_msg.message_id,
-                    message_type="danmaku",
-                    user=RoomMessageUser(id=user_id, name=user_name),
-                    content=bili_msg.msg,
-                    timestamp_ms=normalized_msg.timestamp_ms,
-                )
-                await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
-            elif isinstance(bili_msg, EnterMessage):
-                payload = RoomMessagePayload(
-                    message_id=normalized_msg.message_id,
-                    message_type="enter",
-                    user=RoomMessageUser(id=user_id, name=user_name),
-                    content="",
-                    timestamp_ms=normalized_msg.timestamp_ms,
-                )
-                await self.emit_event(CoreEvents.ROOM_MESSAGE_ENTER, payload)
-            elif isinstance(bili_msg, GiftMessage):
-                actual_num = max(bili_msg.gift_num, bili_msg.combo_info.combo_count)
-                payload = RoomMessagePayload(
-                    message_id=normalized_msg.message_id,
-                    message_type="gift",
-                    user=RoomMessageUser(id=user_id, name=user_name),
-                    content="",
-                    gift=GiftInfo(name=bili_msg.gift_name or "礼物", count=actual_num),
-                    timestamp_ms=normalized_msg.timestamp_ms,
-                )
-                await self.emit_event(CoreEvents.ROOM_MESSAGE_GIFT, payload)
-            elif isinstance(bili_msg, SuperChatMessage):
-                payload = RoomMessagePayload(
-                    message_id=normalized_msg.message_id,
-                    message_type="super_chat",
-                    user=RoomMessageUser(id=user_id, name=user_name),
-                    content=bili_msg.message,
-                    sc=SuperChatInfo(amount=float(bili_msg.rmb)),
-                    timestamp_ms=normalized_msg.timestamp_ms,
-                )
-                await self.emit_event(CoreEvents.ROOM_MESSAGE_SUPER_CHAT, payload)
-            # Guard 没有独立 room.message.* 事件，按 danmaku 走（携带 guard_name 提示）
-        except Exception as e:
-            self.logger.debug(f"emit 语义事件失败: {e}", exc_info=True)
+    async def _emit_semantic_event(self, payload: RoomMessagePayload) -> None:
+        """按载荷的 message_type 选事件名并 emit room.message.* 事件。"""
+        event_map = {
+            "danmaku": CoreEvents.ROOM_MESSAGE_DANMAKU,
+            "enter": CoreEvents.ROOM_MESSAGE_ENTER,
+            "gift": CoreEvents.ROOM_MESSAGE_GIFT,
+            "super_chat": CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+        }
+        event_name = event_map.get(payload.message_type)
+        if event_name is None:
+            self.logger.debug(f"未知 message_type '{payload.message_type}'，跳过 emit")
+            return
+        await self.emit_event(event_name, payload)
 
     def _create_message_from_dict(self, data: Dict[str, Any]) -> Optional[BiliBaseMessage]:
         """从字典创建对应的消息对象"""
@@ -307,125 +271,57 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         else:
             return None
 
-    def _create_normalized_message(self, bili_msg: BiliBaseMessage) -> NormalizedMessage:
-        """从 B 站消息构造 NormalizedMessage"""
-        user_id = getattr(bili_msg, "open_id", None) or None
-        user_nickname = getattr(bili_msg, "uname", None) or None
-        room_id = str(getattr(bili_msg, "room_id", 0)) or None
+    def _create_payload(self, bili_msg: BiliBaseMessage) -> Optional[RoomMessagePayload]:
+        """从 B 站消息构造 room.message.* 事件载荷。
+
+        场次归属（live_session_id）由事件总线的场次盖章拦截器统一注入，
+        采集器不感知"当前是哪一场"。Guard 无独立 room.message.* 事件，
+        返回 None（与既有行为一致：不进事件流）。
+        """
+        user_id = str(getattr(bili_msg, "open_id", None) or "unknown")
+        user_name = str(getattr(bili_msg, "uname", None) or "unknown")
+        timestamp_ms = int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms()
 
         if isinstance(bili_msg, DanmakuMessage):
             self.logger.debug(f"[弹幕] {bili_msg.uname}: {bili_msg.msg}")
-            return NormalizedMessage(
-                text=bili_msg.msg,
-                source=self.name,
-                data_type="text",
-                importance=self._calculate_danmaku_importance(bili_msg),
-                timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
-                raw=bili_msg,
-                user_id=user_id,
-                user_nickname=user_nickname,
-                platform="bilibili",
-                room_id=room_id,
+            return RoomMessagePayload(
+                message_type="danmaku",
+                user=RoomMessageUser(id=user_id, name=user_name),
+                content=bili_msg.msg,
+                timestamp_ms=timestamp_ms,
             )
 
-        elif isinstance(bili_msg, EnterMessage):
+        if isinstance(bili_msg, EnterMessage):
             self.logger.debug(f"[进入] {bili_msg.uname} 进入了直播间")
-            return NormalizedMessage(
-                text=f"{bili_msg.uname} 进入了直播间",
-                source=self.name,
-                data_type="enter",
-                importance=0.1,
-                timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
-                raw=bili_msg,
-                user_id=user_id,
-                user_nickname=user_nickname,
-                platform="bilibili",
-                room_id=room_id,
+            return RoomMessagePayload(
+                message_type="enter",
+                user=RoomMessageUser(id=user_id, name=user_name),
+                content="",
+                timestamp_ms=timestamp_ms,
             )
 
-        elif isinstance(bili_msg, GiftMessage):
+        if isinstance(bili_msg, GiftMessage):
             actual_num = max(bili_msg.gift_num, bili_msg.combo_info.combo_count)
             gift_name = bili_msg.gift_name or "礼物"
-            description = f"{bili_msg.uname} 送出了 {actual_num} 个 {gift_name}"
-            self.logger.debug(f"[礼物] {description}")
-
-            return NormalizedMessage(
-                text=description,
-                source=self.name,
-                data_type="gift",
-                importance=self._calculate_gift_importance(bili_msg, actual_num),
-                timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
-                raw=bili_msg,
-                user_id=user_id,
-                user_nickname=user_nickname,
-                platform="bilibili",
-                room_id=room_id,
+            self.logger.debug(f"[礼物] {bili_msg.uname} 送出了 {actual_num} 个 {gift_name}")
+            return RoomMessagePayload(
+                message_type="gift",
+                user=RoomMessageUser(id=user_id, name=user_name),
+                content="",
+                gift=GiftInfo(name=gift_name, count=actual_num),
+                timestamp_ms=timestamp_ms,
             )
 
-        elif isinstance(bili_msg, GuardMessage):
-            guard_name = GUARD_LEVEL_NAMES.get(bili_msg.guard_level, DEFAULT_GUARD_NAME)
-            description = f"{bili_msg.uname} 开通了 {guard_name}"
-            self.logger.debug(f"[大航海] {description}")
-            importance_scores = {1: 1.0, 2: 0.9, 3: 0.8}
-            return NormalizedMessage(
-                text=description,
-                source=self.name,
-                data_type="guard",
-                importance=importance_scores.get(bili_msg.guard_level, 0.7),
-                timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
-                raw=bili_msg,
-                user_id=user_id,
-                user_nickname=user_nickname,
-                platform="bilibili",
-                room_id=room_id,
+        if isinstance(bili_msg, SuperChatMessage):
+            self.logger.debug(f"[SC] {bili_msg.uname}: {bili_msg.message}")
+            return RoomMessagePayload(
+                message_type="super_chat",
+                user=RoomMessageUser(id=user_id, name=user_name),
+                content=bili_msg.message,
+                sc=SuperChatInfo(amount=float(bili_msg.rmb)),
+                timestamp_ms=timestamp_ms,
             )
 
-        elif isinstance(bili_msg, SuperChatMessage):
-            if bili_msg.message.strip():
-                description = f"[SC {bili_msg.rmb}元] {bili_msg.uname}: {bili_msg.message}"
-                text = bili_msg.message
-            else:
-                description = f"[SC {bili_msg.rmb}元] {bili_msg.uname} 发送了醒目留言"
-                text = description
-            self.logger.debug(f"[SC] {description}")
-            importance = min(0.5 + bili_msg.rmb / 100, 1.0)
-            return NormalizedMessage(
-                text=text,
-                source=self.name,
-                data_type="super_chat",
-                importance=importance,
-                timestamp_ms=int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms(),
-                raw=bili_msg,
-                user_id=user_id,
-                user_nickname=user_nickname,
-                platform="bilibili",
-                room_id=room_id,
-            )
-
-        else:
-            return NormalizedMessage(
-                text=str(bili_msg.raw_data),
-                source=self.name,
-                data_type="unknown",
-                importance=0.1,
-                timestamp_ms=now_ms(),
-                raw=bili_msg,
-                user_id=user_id,
-                user_nickname=user_nickname,
-                platform="bilibili",
-                room_id=room_id,
-            )
-
-    def _calculate_danmaku_importance(self, msg: DanmakuMessage) -> float:
-        """计算弹幕重要性"""
-        base = 0.5
-        medal_bonus = min(msg.fans_medal_level / 40, 0.2)
-        guard_bonus = {1: 0.3, 2: 0.2, 3: 0.1}.get(msg.guard_level, 0)
-        return min(base + medal_bonus + guard_bonus, 1.0)
-
-    def _calculate_gift_importance(self, msg: GiftMessage, actual_num: int) -> float:
-        """计算礼物重要性"""
-        base = min(msg.price / 10000, 0.5)
-        quantity_bonus = min(actual_num / 10, 0.3)
-        paid_bonus = 0.1 if msg.paid else 0
-        return min(base + quantity_bonus + paid_bonus, 1.0)
+        # Guard 等其余类型：无独立 room.message.* 事件
+        self.logger.debug(f"消息类型无对应 room.message.* 事件，跳过: {type(bili_msg).__name__}")
+        return None

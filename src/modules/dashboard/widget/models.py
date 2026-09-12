@@ -12,7 +12,6 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
-from src.modules.types.message_type import require_message_type
 
 
 class SubtitleWidgetMessage(BaseModel):
@@ -41,9 +40,8 @@ class MessageType(StrEnum):
     - ``msg.message_type == MessageType.TEXT`` 直接生效（无需 ``.value``）
     - JSON 序列化仍输出字符串值（前端 Danmaku.vue 不需要联动改动）
 
-    值与 ``NormalizedMessage.data_type`` 一一对齐（与
-    ``src.modules.types.message_type`` 登记表同源），仅 ``REPLY`` 是 widget 内部
-    类型（AI 回复，不来自 ``data_type``）。
+    值与直播间行为流事件的 ``message_type`` 对齐（widget 服务层做事件类型
+    到本枚举的翻译），仅 ``REPLY`` 是 widget 内部类型（AI 回复，不来自事件）。
     """
 
     TEXT = "text"  # 普通文本（与 data_type 对齐，原 DANMAKU）
@@ -55,6 +53,16 @@ class MessageType(StrEnum):
 
 
 _DEFAULT_GUARD_LEVEL = 3
+
+# message_type → 前端展示模板（widget 本地映射）。
+# 渲染输出与前端解析严格对齐，不要顺手优化文案。
+_DISPLAY_TEMPLATES: dict[str, str] = {
+    "text": "{content}",
+    "gift": "送出 {gift_name} x{gift_count}",
+    "super_chat": "¥{sc_price} {sc_message}",
+    "guard": "开通了 {guard_name}",
+    "enter": "进入了直播间",
+}
 
 
 class DanmakuWidgetMessage(BaseModel):
@@ -93,14 +101,14 @@ class DanmakuWidgetMessage(BaseModel):
     def to_display_text(self) -> str:
         """生成显示文本。
 
-        显示模板从 ``MESSAGE_TYPE_REGISTRY`` 取——与 MessageBuffer / Planner / Simulator
-        共享同一事实源。``REPLY`` 是 widget 独有类型，无模板，按 content 兜底。
+        ``REPLY`` 是 widget 独有类型，无模板，按 content 兜底；其余类型查
+        本模块的展示模板映射，未知类型按 content 兜底。
         """
         if self.message_type == MessageType.REPLY:
             return self.content
 
-        spec = require_message_type(self.message_type)
-        return spec.display_template.format(
+        template = _DISPLAY_TEMPLATES.get(str(self.message_type), "{content}")
+        return template.format(
             content=self.content,
             gift_name=self.gift_name or "礼物",
             gift_count=self.gift_count or 1,

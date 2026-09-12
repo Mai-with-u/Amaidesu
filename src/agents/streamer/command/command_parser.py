@@ -7,7 +7,7 @@ import shlex
 from typing import Optional
 
 from src.modules.logging import get_logger
-from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.events.payloads.room import RoomMessagePayload
 
 from .command import Command
 
@@ -23,7 +23,7 @@ class CommandParser:
         escaped_prefix = re.escape(command_prefix)
         self.command_pattern = re.compile(rf"^{escaped_prefix}(\w+)(?:\s+(.*))?$")
 
-    def parse_command(self, text: str, original_message: NormalizedMessage) -> Optional[Command]:
+    def parse_command(self, text: str, original_message: RoomMessagePayload) -> Optional[Command]:
         """
         解析命令文本。
 

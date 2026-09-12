@@ -19,7 +19,6 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.types.message_type import MessageTypeNotRegistered, require_message_type
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -47,11 +46,6 @@ async def inject_message(
         return InjectMessageResponse(success=False, error="Event bus not available")
 
     try:
-        try:
-            require_message_type(request.data_type)
-        except MessageTypeNotRegistered as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
         # 通过 EventBus 发布 room.message.danmaku（v2 语义域事件）。
         # user.name 用 source 承载昵称——前端注入的"来源标识"在直播间语境
         # 就是观众昵称，Agent 侧统一读 user_nickname。

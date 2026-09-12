@@ -6,15 +6,14 @@
 from __future__ import annotations
 
 from src.agents.streamer.message_buffer import MessageBuffer
-from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 
-def _msg(text: str = "hi", *, data_type: str = "text", importance: float = 0.5) -> NormalizedMessage:
-    return NormalizedMessage(
-        text=text,
-        source="test",
-        data_type=data_type,
-        importance=importance,
+def _msg(text: str = "hi", *, message_type: str = "danmaku", nickname: str = "观众") -> RoomMessagePayload:
+    return RoomMessagePayload(
+        message_type=message_type,
+        user=RoomMessageUser(id=f"u_{nickname}", name=nickname),
+        content=text,
     )
 
 
@@ -35,8 +34,8 @@ class TestMessageBufferBasic:
 
         msgs = buf.drain()
         assert len(msgs) == 2
-        assert msgs[0].text == "a"
-        assert msgs[1].text == "b"
+        assert msgs[0].content == "a"
+        assert msgs[1].content == "b"
         assert buf.is_empty is True
         assert buf.force is False
 
@@ -136,7 +135,7 @@ class TestMessageBufferRender:
     def test_render_with_messages(self) -> None:
         msgs = [
             _msg("hello"),
-            _msg("world", data_type="super_chat", importance=0.9),
+            _msg("world", message_type="super_chat"),
         ]
         text = MessageBuffer.render_batch_text(msgs)
         assert "hello" in text

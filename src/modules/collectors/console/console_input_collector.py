@@ -23,7 +23,6 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.types.base.normalized_message import NormalizedMessage
 
 # 控制台输入循环异常后重试间隔（秒）
 _ERROR_RETRY_INTERVAL_S = 1
@@ -33,12 +32,12 @@ _ERROR_RETRY_INTERVAL_S = 1
 # readline 任务会排队延迟调度，用户输入的行要多次回车才被消费。
 _STDIN_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="console-stdin")
 
-# data_type → (事件名, message_type, 是否需要 content)
+# message_type → 事件名（载荷已自带 message_type，本表只负责选事件名）
 _MESSAGE_TYPE_TO_EVENT = {
-    "text": (CoreEvents.ROOM_MESSAGE_DANMAKU, "danmaku"),
-    "gift": (CoreEvents.ROOM_MESSAGE_GIFT, "gift"),
-    "super_chat": (CoreEvents.ROOM_MESSAGE_SUPER_CHAT, "super_chat"),
-    "guard": (CoreEvents.ROOM_MESSAGE_ENTER, "enter"),
+    "danmaku": CoreEvents.ROOM_MESSAGE_DANMAKU,
+    "gift": CoreEvents.ROOM_MESSAGE_GIFT,
+    "super_chat": CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+    "enter": CoreEvents.ROOM_MESSAGE_ENTER,
 }
 
 
@@ -52,7 +51,7 @@ class ConsoleInputCollector(BaseCollector):
     控制台输入采集器
 
     从标准输入读取文本，支持命令处理(exit, gift, sc, guard)。
-    直接构造 NormalizedMessage，无需中间数据结构。
+    直接构造 RoomMessagePayload，无需中间数据结构。
     """
 
     name = "console_input"
@@ -88,7 +87,7 @@ class ConsoleInputCollector(BaseCollector):
     # 旧 InputCollectorManager 兼容接口
     # ------------------------------------------------------------------
 
-    def stream(self) -> AsyncIterator[NormalizedMessage]:
+    def stream(self) -> AsyncIterator[RoomMessagePayload]:
         if not self.is_started:
             raise RuntimeError("Collector 未启动，请先调用 start()")
 
@@ -143,7 +142,7 @@ class ConsoleInputCollector(BaseCollector):
     # ------------------------------------------------------------------
 
     async def _run_input_loop(self) -> None:
-        """后台任务：实时读 stdin，构造 NormalizedMessage 并 emit 语义事件。"""
+        """后台任务：实时读 stdin，构造 RoomMessagePayload 并 emit 语义事件。"""
         loop = asyncio.get_event_loop()
         self.logger.info("控制台输入已准备就绪。输入 'exit()' 来停止。")
 
@@ -164,16 +163,11 @@ class ConsoleInputCollector(BaseCollector):
                     if message:
                         await self._emit_semantic_event(message)
                 else:
-                    message = NormalizedMessage(
-                        text=text,
-                        source=self.name,
-                        data_type="text",
-                        importance=0.5,
+                    message = RoomMessagePayload(
+                        message_type="danmaku",
+                        user=RoomMessageUser(id=self.user_id, name=self.user_nickname),
+                        content=text,
                         timestamp_ms=now_ms(),
-                        raw=None,
-                        user_id=self.user_id,
-                        user_nickname=self.user_nickname,
-                        platform="console",
                     )
                     await self._emit_semantic_event(message)
 
@@ -186,35 +180,22 @@ class ConsoleInputCollector(BaseCollector):
 
         self.logger.info("控制台输入循环结束")
 
-    async def _emit_semantic_event(self, normalized_msg: NormalizedMessage) -> None:
-        """构造 RoomMessagePayload 并 emit 对应 room.message.* 事件。"""
-        mapping = _MESSAGE_TYPE_TO_EVENT.get(normalized_msg.data_type)
-        if mapping is None:
-            self.logger.debug(f"未知 data_type '{normalized_msg.data_type}'，跳过 emit")
+    async def _emit_semantic_event(self, payload: RoomMessagePayload) -> None:
+        """按载荷的 message_type 选事件名并 emit room.message.* 事件。"""
+        event_name = _MESSAGE_TYPE_TO_EVENT.get(payload.message_type)
+        if event_name is None:
+            self.logger.debug(f"未知 message_type '{payload.message_type}'，跳过 emit")
             return
-        event_name, message_type = mapping
-
-        payload = RoomMessagePayload(
-            # 场次归属由场次盖章拦截器统一注入；message_id 透传（回复关联键）
-            message_id=normalized_msg.message_id,
-            message_type=message_type,  # type: ignore[arg-type]
-            user=RoomMessageUser(
-                id=str(normalized_msg.user_id or "console_user"),
-                name=str(normalized_msg.user_nickname or "控制台"),
-            ),
-            content=normalized_msg.text or "",
-            timestamp_ms=normalized_msg.timestamp_ms,
-        )
         await self.emit_event(event_name, payload)
-        self.logger.info(f"已 emit {event_name} (content='{normalized_msg.text[:40]}')")
+        self.logger.info(f"已 emit {event_name} (content='{payload.content[:40]}')")
 
     # ------------------------------------------------------------------
     # 旧 collect() 生成器兼容（外部消费者不存在时保留接口）
     # ------------------------------------------------------------------
 
-    async def collect(self) -> AsyncIterator[NormalizedMessage]:
+    async def collect(self) -> AsyncIterator[RoomMessagePayload]:
         """
-        启动控制台输入，直接返回 NormalizedMessage 流（旧兼容出口）
+        启动控制台输入，直接返回 RoomMessagePayload 流（旧兼容出口）
 
         支持的命令:
         - exit(): 退出
@@ -223,7 +204,7 @@ class ConsoleInputCollector(BaseCollector):
         - /guard [用户名] [等级]: 发送大航海消息
 
         Yields:
-            NormalizedMessage: 标准化消息
+            RoomMessagePayload: 直播间行为流事件载荷
         """
         self.is_started = True
 
@@ -248,16 +229,11 @@ class ConsoleInputCollector(BaseCollector):
                         if message:
                             yield message
                     else:
-                        yield NormalizedMessage(
-                            text=text,
-                            source=self.name,
-                            data_type="text",
-                            importance=0.5,
+                        yield RoomMessagePayload(
+                            message_type="danmaku",
+                            user=RoomMessageUser(id=self.user_id, name=self.user_nickname),
+                            content=text,
                             timestamp_ms=now_ms(),
-                            raw=None,
-                            user_id=self.user_id,
-                            user_nickname=self.user_nickname,
-                            platform="console",
                         )
 
                 except asyncio.CancelledError:
@@ -272,7 +248,7 @@ class ConsoleInputCollector(BaseCollector):
         finally:
             self.is_started = False
 
-    async def _handle_command(self, cmd_line: str) -> Optional[NormalizedMessage]:
+    async def _handle_command(self, cmd_line: str) -> Optional[RoomMessagePayload]:
         parts = cmd_line[1:].strip().split()
         if not parts:
             return None
@@ -303,8 +279,8 @@ class ConsoleInputCollector(BaseCollector):
         print(f"未知命令: {cmd_name}。输入 '/help' 查看可用命令。")
         return None
 
-    async def _create_gift_message(self, args: List[str]) -> Optional[NormalizedMessage]:
-        """创建礼物 NormalizedMessage"""
+    async def _create_gift_message(self, args: List[str]) -> Optional[RoomMessagePayload]:
+        """创建礼物事件载荷"""
         username = args[0] if len(args) > 0 else "测试用户"
         gift_name = args[1] if len(args) > 1 else "辣条"
         gift_count = int(args[2]) if len(args) > 2 and args[2].isdigit() else 1
@@ -314,41 +290,30 @@ class ConsoleInputCollector(BaseCollector):
             return None
 
         description = f"{username} 送出了 {gift_count} 个 {gift_name}"
-        importance = min(0.3 + gift_count * 0.05, 1.0)
 
         print(f"发送礼物测试: {username} -> {gift_count}个{gift_name}")
-        return NormalizedMessage(
-            text=description,
-            source=self.name,
-            data_type="gift",
-            importance=importance,
+        return RoomMessagePayload(
+            message_type="gift",
+            user=RoomMessageUser(id=self.user_id, name=username),
+            content=description,
             timestamp_ms=now_ms(),
-            raw=None,
-            user_id=self.user_id,
-            user_nickname=username,
-            platform="console",
         )
 
-    async def _create_sc_message(self, args: List[str]) -> Optional[NormalizedMessage]:
-        """创建醒目留言 NormalizedMessage"""
+    async def _create_sc_message(self, args: List[str]) -> Optional[RoomMessagePayload]:
+        """创建醒目留言事件载荷"""
         username = args[0] if len(args) > 0 else "SC大佬"
         content_text = " ".join(args[1:]) if len(args) > 1 else "这是一条测试醒目留言！"
 
         print(f"发送醒目留言测试: {username} - {content_text}")
-        return NormalizedMessage(
-            text=content_text,
-            source=self.name,
-            data_type="super_chat",
-            importance=0.7,
+        return RoomMessagePayload(
+            message_type="super_chat",
+            user=RoomMessageUser(id=self.user_id, name=username),
+            content=content_text,
             timestamp_ms=now_ms(),
-            raw=None,
-            user_id=self.user_id,
-            user_nickname=username,
-            platform="console",
         )
 
-    async def _create_guard_message(self, args: List[str]) -> Optional[NormalizedMessage]:
-        """创建大航海 NormalizedMessage"""
+    async def _create_guard_message(self, args: List[str]) -> Optional[RoomMessagePayload]:
+        """创建大航海开通事件载荷（进房语义）"""
         username = args[0] if len(args) > 0 else "大航海"
         guard_level = args[1] if len(args) > 1 else "舰长"
 
@@ -358,18 +323,11 @@ class ConsoleInputCollector(BaseCollector):
             return None
 
         description = f"{username} 开通了{guard_level}"
-        importance_scores = {"总督": 1.0, "提督": 0.9, "舰长": 0.8}
-        importance = importance_scores.get(guard_level, 0.8)
 
         print(f"发送大航海测试: {username} 开通了{guard_level}")
-        return NormalizedMessage(
-            text=description,
-            source=self.name,
-            data_type="guard",
-            importance=importance,
+        return RoomMessagePayload(
+            message_type="enter",
+            user=RoomMessageUser(id=self.user_id, name=username),
+            content=description,
             timestamp_ms=now_ms(),
-            raw=None,
-            user_id=self.user_id,
-            user_nickname=username,
-            platform="console",
         )

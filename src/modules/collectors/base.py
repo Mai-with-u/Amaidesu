@@ -13,8 +13,6 @@ import asyncio
 from enum import Enum
 from typing import Any, AsyncIterator, Optional
 
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 
@@ -125,58 +123,18 @@ class BaseCollector:
                 logger.debug(f"Collector '{self.name}' 后台任务异常（已吞）", exc_info=True)
 
     async def _consume_collect(self) -> None:
-        """迭代 ``collect()`` 生成器；collect 内部自行 emit 语义事件。
+        """迭代 ``collect()`` 生成器（采集器自产自发）。
 
-        带内部 emit 的采集器（bilibili/mock，``emit_semantic_events=True``）
-        在 collect() 中自行 ``_emit_semantic_event``；无内部 emit 的采集器
-        （screen/stt/console 类）由基类兜底转发。判定依据：采集器实例的
-        ``_emit_semantic_events`` 配置（True → 内部负责；False/不存在 → 兜底）。
+        采集器在 collect() 内部自行构造事件载荷并 ``emit_event``；本基类
+        只负责驱动生成器迭代与异常隔离，不做任何消息转换或兜底转发。
         """
-        has_internal_emit = bool(getattr(self, "_emit_semantic_events", False))
         try:
-            async for message in self.collect():
-                if not has_internal_emit:
-                    await self._emit_normalized_message(message)
+            async for _message in self.collect():
+                pass
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 边界
             logger.error(f"Collector '{self.name}' collect() 后台消费循环异常: {exc}", exc_info=True)
-
-    async def _emit_normalized_message(self, message: Any) -> None:
-        """把 NormalizedMessage 标准化为 room.message.* 事件并 emit（兜底转发）。
-
-        data_type → 事件映射（与 console collector 的 ``_MESSAGE_TYPE_TO_EVENT`` 一致）：
-        - text → room.message.danmaku
-        - gift → room.message.gift
-        - super_chat → room.message.super_chat
-        - guard → room.message.enter（大航海=进房语义）
-        """
-        data_type = getattr(message, "data_type", "text")
-        event_map = {
-            "text": (CoreEvents.ROOM_MESSAGE_DANMAKU, "danmaku"),
-            "gift": (CoreEvents.ROOM_MESSAGE_GIFT, "gift"),
-            "super_chat": (CoreEvents.ROOM_MESSAGE_SUPER_CHAT, "super_chat"),
-            "guard": (CoreEvents.ROOM_MESSAGE_ENTER, "enter"),
-        }
-        mapping = event_map.get(data_type)
-        if mapping is None:
-            logger.debug(f"未知 data_type '{data_type}'，跳过 emit")
-            return
-
-        event_name, message_type = mapping
-        payload = RoomMessagePayload(
-            # 场次归属（live_session_id）由事件总线的场次盖章拦截器统一注入，
-            # 采集器不感知"当前是哪一场"
-            message_id=str(getattr(message, "message_id", "") or ""),
-            message_type=message_type,  # type: ignore[arg-type]
-            user=RoomMessageUser(
-                id=str(getattr(message, "user_id", None) or "unknown"),
-                name=str(getattr(message, "user_nickname", None) or "unknown"),
-            ),
-            content=str(getattr(message, "text", "") or ""),
-            timestamp_ms=int(getattr(message, "timestamp_ms", 0) or 0),
-        )
-        await self.emit_event(event_name, payload)
 
     # ----- 子类可选钩子 -----
 
@@ -184,8 +142,8 @@ class BaseCollector:
         """采集数据循环（子类实现）。
 
         Returns:
-            AsyncIterator[NormalizedMessage]：由基类 ``_consume_collect()``
-            后台迭代（主动推事件模式）。具体采集器必须实现。
+            采集器自行产出事件载荷并 emit 后的异步迭代器；由基类
+            ``_consume_collect()`` 后台迭代驱动。具体采集器必须实现。
         """
         raise NotImplementedError(f"Collector '{self.name}' 未实现 collect()")
 

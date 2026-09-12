@@ -23,7 +23,7 @@ from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
-from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 
 def _make_minimal_agent(*, event_bus: Optional[EventBus] = None) -> StreamerAgent:
@@ -48,15 +48,12 @@ def _make_msg(
     text: str,
     user_id: str,
     message_id: Optional[str] = None,
-) -> NormalizedMessage:
-    """构造测试用 NormalizedMessage。"""
-    return NormalizedMessage(
-        text=text,
-        source="test",
-        data_type="text",
-        importance=0.5,
-        user_id=user_id,
-        user_nickname=f"user_{user_id}",
+) -> RoomMessagePayload:
+    """构造测试用 RoomMessagePayload。"""
+    return RoomMessagePayload(
+        message_type="danmaku",
+        user=RoomMessageUser(id=user_id, name=f"user_{user_id}"),
+        content=text,
         message_id=message_id or f"auto_{text}_{user_id}",
     )
 

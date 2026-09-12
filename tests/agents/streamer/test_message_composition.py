@@ -20,7 +20,7 @@ from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.manager import LLMResponse
 from src.modules.tools.models import ToolExecutionResult
-from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 
 @dataclass(frozen=True)
@@ -34,10 +34,11 @@ class FakeTurn:
     message_id: str = ""
 
 
-def _batch_msg(text: str, mid: str, *, nickname: str = "小明", data_type: str = "text") -> NormalizedMessage:
-    return NormalizedMessage(
-        text=text, source="test", data_type=data_type,
-        user_id="u1", user_nickname=nickname, message_id=mid,
+def _batch_msg(text: str, mid: str, *, nickname: str = "小明", message_type: str = "danmaku") -> RoomMessagePayload:
+    return RoomMessagePayload(
+        message_type=message_type,
+        user=RoomMessageUser(id="u1", name=nickname),
+        content=text, message_id=mid,
     )
 
 
@@ -84,7 +85,7 @@ def test_canonical_batch_and_history_same_shape() -> None:
 
 def test_canonical_type_prefix_and_role_mapping() -> None:
     """类型前缀按登记表渲染；assistant 行原样内容、不加 id。"""
-    gift = canonical.batch_item_to_message(_batch_msg("送出 小花花 x1", "m2", nickname="小红", data_type="gift"))
+    gift = canonical.batch_item_to_message(_batch_msg("送出 小花花 x1", "m2", nickname="小红", message_type="gift"))
     assert gift == {"role": "user", "content": "[礼物] 小红: 送出 小花花 x1 [id:m2]"}
     speak = canonical.turn_to_message(FakeTurn(role="assistant", content="晚上好", message_type="speak", message_id="m3"))
     assert speak == {"role": "assistant", "content": "晚上好"}

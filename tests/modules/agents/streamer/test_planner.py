@@ -96,10 +96,11 @@ def _make_planner(
 
 def _msg(text: str = "hi", mid: str = "m1") -> Any:
     msg = MagicMock()
-    msg.text = text
-    msg.user_nickname = "观众"
+    msg.content = text
     msg.message_id = mid
-    msg.data_type = "text"
+    msg.message_type = "danmaku"
+    msg.user.name = "观众"
+    msg.user.id = "u_观众"
     return msg
 
 

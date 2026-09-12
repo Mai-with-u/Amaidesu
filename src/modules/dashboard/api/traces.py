@@ -90,7 +90,7 @@ async def get_trace(
     """获取单条消息的完整链路追踪。
 
     Args:
-        message_id: 目标 NormalizedMessage 的 ``message_id``。
+        message_id: 目标事件载荷的 ``message_id``。
         server: 由 FastAPI 注入的 DashboardServer。
 
     Returns:

@@ -44,14 +44,12 @@ from src.modules.events.payloads.planner import (
     PlannerDecisionPayload,
     StreamerStagePayload,
 )
-from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.time_utils import now_ms
-from src.modules.types.base.normalized_message import NormalizedMessage
-from src.modules.types.message_type import require_message_type
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 from .rundown.rundown import DEFAULT_RUNDOWN, Rundown
 from .rundown.rundown_state import RundownState
@@ -223,8 +221,7 @@ class StreamerAgent(BaseAgent):
             enable_idle_compensation=config.batch.enable_idle_compensation,
         )
         self._timing_gate = TimingGate(
-            force_data_types=config.force.force_data_types,
-            force_importance=config.force.force_importance,
+            force_message_types=config.force.force_data_types,
         )
 
         # 房间态势（纯规则滑动窗口）
@@ -629,31 +626,12 @@ class StreamerAgent(BaseAgent):
         payload: RoomMessagePayload,
         source: str,
     ) -> None:
-        """弹幕事件回调：转 NormalizedMessage + 推进 RoomState + 入缓冲。"""
+        """弹幕事件回调：推进 RoomState + 入缓冲（载荷即事件载荷，零映射）。"""
         if payload.message_type != "danmaku":
             return
-        try:
-            # message_id 透传 payload 值（采集器/模拟器生成，落库与回复关联同键）；
-            # 缺省时 NormalizedMessage 自动生成 UUID，保证批次内 [id:] 编号可用
-            msg_kwargs: Dict[str, Any] = dict(
-                text=payload.content,
-                source=source or "room.message.danmaku",
-                data_type="text",
-                importance=0.5,
-                timestamp=payload.timestamp_ms,
-                user_id=payload.user.id,
-                user_nickname=payload.user.name,
-            )
-            if payload.message_id:
-                msg_kwargs["message_id"] = payload.message_id
-            msg = NormalizedMessage(**msg_kwargs)
-            require_message_type(msg.data_type)
-        except Exception as exc:
-            self._logger.warning(f"弹幕事件转 NormalizedMessage 失败: {exc}")
-            return
-        await self.handle_message(msg)
+        await self.handle_message(payload)
 
-    async def handle_message(self, msg: NormalizedMessage) -> None:
+    async def handle_message(self, msg: RoomMessagePayload) -> None:
         """处理一条弹幕（collectors → Agent 入口；测试也可直接调）。"""
         self._total_messages += 1
         # RoomState 热度信号
@@ -707,21 +685,18 @@ class StreamerAgent(BaseAgent):
         if not proactive and not (batch and any(str(item.get("text", "")).strip() for item in batch)):
             return {"success": False, "error": "弹幕批次为空：请至少提供一条 text 非空的弹幕"}
 
-        messages: List[NormalizedMessage] = []
+        messages: List[RoomMessagePayload] = []
         for item in batch or []:
             text = str(item.get("text", "")).strip()
             if not text:
                 continue
             nickname = str(item.get("nickname", "")).strip() or "测试观众"
             messages.append(
-                NormalizedMessage(
-                    text=text,
-                    source="dashboard.debug",
-                    data_type="text",
-                    importance=0.5,
-                    timestamp=now_ms(),
-                    user_id=f"debug_{nickname}",
-                    user_nickname=nickname,
+                RoomMessagePayload(
+                    message_type="danmaku",
+                    user=RoomMessageUser(id=f"debug_{nickname}", name=nickname),
+                    content=text,
+                    timestamp_ms=now_ms(),
                 )
             )
 
@@ -820,7 +795,7 @@ class StreamerAgent(BaseAgent):
 
     async def _make_two_stage_decision(
         self,
-        batch: List[NormalizedMessage],
+        batch: List[RoomMessagePayload],
         *,
         forced: bool,
         trigger_reason: str,
@@ -899,7 +874,7 @@ class StreamerAgent(BaseAgent):
 
     async def _decide_round(
         self,
-        batch: List[NormalizedMessage],
+        batch: List[RoomMessagePayload],
         *,
         round_id: str,
         started_ms: int,
@@ -1021,7 +996,7 @@ class StreamerAgent(BaseAgent):
     def _resolve_reply_target_user(
         self,
         outcome: Dict[str, Any],
-        batch: List[NormalizedMessage],
+        batch: List[RoomMessagePayload],
     ) -> Optional[str]:
         """从 batch 反查本次回复的观众 user_id。
 
@@ -1044,15 +1019,15 @@ class StreamerAgent(BaseAgent):
             if reply_to:
                 for msg in batch:
                     if getattr(msg, "message_id", None) == reply_to:
-                        return getattr(msg, "user_id", None)
+                        return getattr(msg.user, "id", None)
                 return None
             for msg in batch:
                 if getattr(msg, "message_id", None) == target:
-                    return getattr(msg, "user_id", None)
-                msg_text = getattr(msg, "text", None)
+                    return getattr(msg.user, "id", None)
+                msg_text = getattr(msg, "content", None)
                 if isinstance(msg_text, str) and msg_text and (target in msg_text or msg_text == target):
-                    return getattr(msg, "user_id", None)
-            return getattr(batch[-1], "user_id", None)
+                    return getattr(msg.user, "id", None)
+            return getattr(batch[-1].user, "id", None)
         except Exception as exc:
             self._logger.warning(f"反查 reply target user 异常: {exc}")
             return None
@@ -1124,7 +1099,7 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 观测事件不阻断决策循环
             self._logger.warning(f"streamer.stage 发布失败（已忽略）: stage={stage}, err={exc}")
 
-    async def _emit_planner_decision(self, result: Dict[str, Any], batch: List[NormalizedMessage]) -> None:
+    async def _emit_planner_decision(self, result: Dict[str, Any], batch: List[RoomMessagePayload]) -> None:
         """发布 ``planner.decision`` 决策轮记录事件（决策循环内直接 await，保证先于 idle 状态）。
 
         从 ``_decide_round`` 的结果视图构造决策事件：触发原因、批次摘要、
@@ -1145,9 +1120,9 @@ class StreamerAgent(BaseAgent):
             batch=[
                 PlannerBatchItem(
                     message_id=str(getattr(msg, "message_id", "") or ""),
-                    user_id=str(getattr(msg, "user_id", "") or ""),
-                    user_name=str(getattr(msg, "user_nickname", "") or ""),
-                    text=(str(getattr(msg, "text", "") or ""))[:120],
+                    user_id=str(getattr(msg.user, "id", "") or ""),
+                    user_name=str(getattr(msg.user, "name", "") or ""),
+                    text=(str(getattr(msg, "content", "") or ""))[:120],
                 )
                 for msg in batch or []
             ],

@@ -25,7 +25,6 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.llm.manager import LLMResponse
 from src.modules.tools import ToolRegistry, ToolInvocation
-from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 
@@ -36,15 +35,6 @@ def _make_payload(text: str = "主播好可爱") -> RoomMessagePayload:
         content=text,
     )
 
-def _make_normalized(text: str = "主播好可爱") -> NormalizedMessage:
-    return NormalizedMessage(
-        text=text,
-        source="bilibili",
-        data_type="text",
-        importance=0.5,
-        user_id="u1",
-        user_nickname="观众A",
-    )
 
 # ---------------------------------------------------------------------------
 # LLMResponse 工厂（Planner ReAct：chat_messages 完整形态 / Replyer：call_tools）
@@ -329,7 +319,7 @@ async def test_decision_loop_handle_message_direct():
     )
 
     # 不启动（不订阅事件），直接 handle_message
-    await agent.handle_message(_make_normalized("直接调用"))
+    await agent.handle_message(_make_payload("直接调用"))
 
     # 统计：消息已入缓冲
     assert agent.get_statistics()["total_messages"] == 1

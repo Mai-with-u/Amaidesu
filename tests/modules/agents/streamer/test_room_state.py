@@ -14,7 +14,7 @@ from src.agents.streamer.room_state import (
 
 class _FakeMsg:
     def __init__(self, text: str) -> None:
-        self.text = text
+        self.content = text
 
 
 class TestRoomStateUpdate:
