@@ -108,7 +108,7 @@ def _msg(text: str = "hi", mid: str = "m1") -> Any:
 # ---------------------------------------------------------------------------
 
 
-def test_tool_face_is_for_agent_registry_result() -> None:
+def test_tool_list_is_for_agent_registry_result() -> None:
     """工具列表 = for_agent("streamer") 注册表结果（全名直出，统一来源）；rundown 例外条件追加。"""
     registry = MagicMock()
     registry.list_tools.return_value = [
@@ -117,12 +117,12 @@ def test_tool_face_is_for_agent_registry_result() -> None:
     ]
     planner, _llm, _prompt = _make_planner(registry=registry)
 
-    face = planner._build_tool_face()
-    names = [f["name"] for f in face]
+    tool_list = planner._build_tool_list()
+    names = [f["name"] for f in tool_list]
     assert names == ["minecraft_get_work_log", "streamer_reply"]  # 注册表全名直出、无重复注入
 
 
-def test_tool_face_registry_missing_is_empty() -> None:
+def test_tool_list_registry_missing_is_empty() -> None:
     """registry 未注入：工具列表为空（reply 也来自注册表，统一来源）。"""
     planner = Planner(
         config={"planner_llm": "llm"},
@@ -132,8 +132,8 @@ def test_tool_face_registry_missing_is_empty() -> None:
         tool_registry=None,
         reply_provider=MagicMock(),
     )
-    face = planner._build_tool_face()
-    assert face == []
+    tool_list = planner._build_tool_list()
+    assert tool_list == []
 
 
 # ---------------------------------------------------------------------------

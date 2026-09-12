@@ -13,7 +13,7 @@
 - 感知 → 调公用 ``look_at_screen`` 工具（``modules/tools/perception/``）
 - 控制 → 调公用 ``content_engine_*`` 工具（``modules/tools/content_engine/``）
 - 事件 → emit ``game.*`` 语义域事件（``events/names.py`` + ``events/payloads/game.py``）
-- 生命周期 → BaseAgent 六面协议（``modules/agents/base.py``）
+- 生命周期 → BaseAgent 协议六项（``modules/agents/base.py``）
 """
 
 from src.agents.text_adv.agent import (

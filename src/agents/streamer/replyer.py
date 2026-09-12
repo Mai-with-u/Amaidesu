@@ -5,7 +5,7 @@
 - Replyer 是 reply 工具的内部实现：被 Planner 的 reply 调用触发，注入人设，
   把决策意图（topic_summary / reply_guidance / target）渲染成实际回复。
 - reply 工具契约由 ``tools/reply_tool.py`` 暴露；本类**不**注册为工具、
-  **不**持有任何工具面（reply 是唯一 function 定义，纯结构化输出口）。
+  **不**持有任何工具列表（reply 是唯一 function 定义，纯结构化输出口）。
 
 职责边界：
 - 调用 LLMManager.call_tools(prompt, tools=[reply_fn_def])——LLM 只见 reply。
@@ -77,7 +77,7 @@ class Replyer:
         """
         self._config: Dict[str, Any] = config or {}
         # LLM profile 用途名由 StreamerAgent 装配期硬编码传入（_PROFILE_REPLYER）；
-        # 保留为实例属性以兼容工具面与日志输出（仅展示用）。
+        # 保留为实例属性以兼容工具列表与日志输出（仅展示用）。
         self.profile: str = self._config.get("profile", "llm")
         self._bot_name: str = self._config.get("bot_name", _DEFAULT_BOT_NAME)
         self._audience_salutation: str = self._config.get("audience_salutation", _DEFAULT_AUDIENCE_SALUTATION)
@@ -131,7 +131,7 @@ class Replyer:
         # 注入人设 + 决策意图 + 弹幕上下文 + 会话历史 + 流程单上下文，渲染 prompt
         prompt = self._render_prompt(plan, batch, persona, history, rundown)
 
-        # reply 是唯一工具——表达引擎不持有信息/动作工具面
+        # reply 是唯一工具——表达引擎不持有信息/动作工具列表
         tools = [self._build_reply_function_def()]
 
         try:
@@ -262,7 +262,7 @@ class Replyer:
     ) -> Tuple[str, Optional[str], float]:
         """从 LLMResponse.tool_calls 解析 reply(speech/emotion/intensity)。
 
-        Replyer 工具面只有 reply，非 reply 调用一律忽略。
+        Replyer 工具列表只有 reply，非 reply 调用一律忽略。
 
         Args:
             tool_calls: LLM 返回的 tool_calls 列表（OpenAI 形态：

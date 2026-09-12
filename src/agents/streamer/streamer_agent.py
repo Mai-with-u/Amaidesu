@@ -211,7 +211,7 @@ class StreamerAgent(BaseAgent):
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
 
-        # Planner（决策核心，Agent 内脏——非工具）
+        # Planner（决策核心，Agent 内部件——非工具）
         # 行为准则（behavior_style）优先级：包内 persona 权威 > persona_provider（dict）传入。
         # 包内 config.persona 是配置权威；persona_provider 仍保留以兼容外部注入
         # （如测试），存在时其 behavior_style 覆盖 config.persona.behavior_style。
@@ -253,7 +253,7 @@ class StreamerAgent(BaseAgent):
             enabled=wf.enabled,
         )
 
-        # Replyer（表达引擎，Agent 内脏——非工具）
+        # Replyer（表达引擎，Agent 内部件——非工具）
         # audience_salutation 默认"大家"——旧 user_name 默认值
         self._replyer = Replyer(
             config={
@@ -268,7 +268,7 @@ class StreamerAgent(BaseAgent):
             word_filter=self._word_filter,
         )
 
-        # 主动发言触发器（纯规则组件，Agent 内脏）
+        # 主动发言触发器（纯规则组件，Agent 内部件）
         proactive = config.proactive
         proactive_config = {
             "enabled": proactive.enabled,

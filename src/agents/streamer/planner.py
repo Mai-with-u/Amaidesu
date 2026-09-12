@@ -15,7 +15,7 @@
 3. **高质量模型**：Planner profile 默认 ``planner``（StreamerAgent 装配期硬编码
    传入 `_PROFILE_PLANNER`）——ReAct 决策核心做工具编排与表达意图构思，
    质量敏感（乱调工具/意图偏差的代价高于延迟）。
-4. **工具面**：全局 ToolRegistry 动态拉取 + reply 局部工具 function 定义；
+4. **工具列表**：全局 ToolRegistry 动态拉取 + reply 局部工具 function 定义；
    过滤 provider=="streamer" 的 spec（Agent 内部协议防重入）。
 5. **观察作为观察返回**：工具结果以 OpenAI ``tool`` role + ``tool_call_id`` 关联重新写入。
 6. **有界循环**：``planner_max_steps``（默认 8）防失控；直播节奏要求快进快出。
@@ -25,7 +25,7 @@
     batch + room_state.snapshot + history + forced/proactive + behavior_style
         ──▶ render('amaidesu_planner_react')（系统提示词）
         ──▶ 首轮 user 消息 = context_block（组装器/裸消息路径）+ 情境标注
-        ──▶ llm_service.chat_messages(messages, tools=工具面, client_type=planner_profile)
+        ──▶ llm_service.chat_messages(messages, tools=工具列表, client_type=planner_profile)
         ──▶ 循环：tool_calls 串行执行（reply → 局部 Provider；其余 → registry）
         ──▶ outcome dict（replied / speech / silent_reason / steps / tool_trace）
 """
@@ -169,7 +169,7 @@ class Planner:
             self.typed_config = _PlannerConfig.from_dict(dict(config))
 
         # LLM profile 用途名由 StreamerAgent 装配期硬编码传入（_PROFILE_PLANNER）；
-        # 本字段保留以兼容 Planner 内部工具面与日志输出（profile 名仅展示用）。
+        # 本字段保留以兼容 Planner 内部工具列表与日志输出（profile 名仅展示用）。
         self.profile: str = getattr(config, "profile", "llm") if config is not None else "llm"
         self.max_steps: int = self.typed_config.planner_max_steps
 
@@ -282,7 +282,7 @@ class Planner:
 
         user_message = self._render_situational_message(context_block, forced, proactive, game_narrative)
 
-        tool_face = self._build_tool_face()
+        tool_list = self._build_tool_list()
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
@@ -296,7 +296,7 @@ class Planner:
             try:
                 response = await self._llm_service.chat_messages(
                     messages=messages,
-                    tools=tool_face,
+                    tools=tool_list,
                     client_type=self.profile,
                     on_delta=thinking.callback_for("planner", steps) if thinking else None,
                 )
@@ -464,29 +464,29 @@ class Planner:
 
     # ==================== 工具列表与执行 ====================
 
-    def _build_tool_face(self) -> List[Dict[str, Any]]:
+    def _build_tool_list(self) -> List[Dict[str, Any]]:
         """LLM 工具列表 = 注册表按可见名单计算（for_agent="streamer"）。
 
         唯一例外：rundown_control 是动态工具——按流程单激活状态条件追加
         （注册表条目已在 for_agent 结果中，跳过防重）。
         """
-        face: List[Dict[str, Any]] = []
+        tool_list: List[Dict[str, Any]] = []
         # 流程单激活时追加 rundown_control——环节推进是决策脑的职责（推进权归 Agent）
         if self._rundown_provider is not None and self._rundown_provider.is_active():
-            face.append(build_rundown_control_function_def())
+            tool_list.append(build_rundown_control_function_def())
         if self._tool_registry is None:
-            return face
+            return tool_list
         try:
             specs = self._tool_registry.list_tools(for_agent="streamer")
         except Exception as e:
             self.logger.warning(f"Planner 拉取工具列表失败（本轮仅保留 rundown_control）: {e}")
-            return face
+            return tool_list
         for spec in specs:
             # rundown_control 由上面的激活条件追加（动态工具的已知例外，防重复条目）
             if getattr(spec, "provider", "") == "rundown":
                 continue
-            face.append(_spec_to_fn_def(spec))
-        return face
+            tool_list.append(_spec_to_fn_def(spec))
+        return tool_list
 
     async def _invoke_reply(
         self,
