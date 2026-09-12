@@ -243,19 +243,20 @@ class TestPersonaPipelineEndToEnd:
     def test_default_bot_name_is_maiamai_not_ides(self) -> None:
         """P1：bot_name 默认值全库统一为 '麦麦'，历史 '爱德丝' 禁止（防回退断言）。
 
-        验证权威默认值源已对齐：
-          1. core_schemas.PersonaConfig.bot_name（core.toml 兼容保留）
+        验证权威默认值源已对齐（persona 权威已迁至
+        agents/streamer/config.py StreamerPersonaConfig；core_schemas.PersonaConfig
+        只是占位兼容壳，bot_name 默认空串，不再承载默认值）：
+          1. StreamerPersonaConfig.bot_name（persona 段权威）
           2. agents_schemas.AgentsConfig.streamer.persona.bot_name（包内权威 StreamerConfig）
           3. src.agents.streamer.config.StreamerConfig.persona.bot_name
           4. replyer._DEFAULT_BOT_NAME
         """
         from src.agents.streamer import replyer
-        from src.agents.streamer.config import StreamerConfig
+        from src.agents.streamer.config import StreamerConfig, StreamerPersonaConfig
         from src.modules.config.agents_schemas import AgentsConfig
-        from src.modules.config.core_schemas import PersonaConfig
 
-        assert PersonaConfig().bot_name == "麦麦", (
-            f"core_schemas.PersonaConfig.bot_name 应为 '麦麦'，实际: {PersonaConfig().bot_name!r}"
+        assert StreamerPersonaConfig().bot_name == "麦麦", (
+            f"StreamerPersonaConfig.bot_name 应为 '麦麦'，实际: {StreamerPersonaConfig().bot_name!r}"
         )
         assert StreamerConfig().persona.bot_name == "麦麦", (
             f"StreamerConfig.persona.bot_name 应为 '麦麦'，实际: {StreamerConfig().persona.bot_name!r}"
@@ -269,7 +270,7 @@ class TestPersonaPipelineEndToEnd:
 
         # 显式断言历史值"爱德丝"已清零（任何一处出现即回归）
         for source_name, source_value in [
-            ("PersonaConfig", PersonaConfig().bot_name),
+            ("StreamerPersonaConfig", StreamerPersonaConfig().bot_name),
             ("StreamerConfig.persona", StreamerConfig().persona.bot_name),
             ("AgentsConfig.streamer.persona", AgentsConfig().streamer.persona.bot_name),
             ("replyer._DEFAULT_BOT_NAME", replyer._DEFAULT_BOT_NAME),

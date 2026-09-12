@@ -5,7 +5,7 @@ memory/bootstrap.py 单元测试（Wave 8 / 记忆接线修复）
 - ``build_memory_stack``：
   - backend="simple" → 成功初始化 + 双表就绪
   - backend="amemorix" / 未知值 → ``raise ValueError``
-  - 缺省 / 异常输入（None / 非 dict / 缺 storage.sqlite）→ 走默认值
+  - 缺省 / 异常输入（None / 非 dict / 缺 sqlite 段）→ 走默认值
 - ``bind_memory_tools``：
   - 注册后 ``len(registry) + 1``，能 invoke query_memory 召回已写入事实
   - registry 必须是 ``ToolRegistry``（type check）
@@ -44,16 +44,14 @@ def tmp_db_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def simple_config(tmp_db_dir: Path) -> dict:
-    """最小可用 config（backend=simple + storage.sqlite.db_path 指向 tmp）。"""
+    """最小可用 config（backend=simple + sqlite.db_path 指向 tmp）。"""
     return {
         "memory": {"backend": "simple", "simple": None, "amemorix": None},
-        "storage": {
-            "sqlite": {
-                "db_path": str(tmp_db_dir / "test.db"),
-                "wal": True,
-                "busy_timeout_ms": 5000,
-                "foreign_keys": True,
-            }
+        "sqlite": {
+            "db_path": str(tmp_db_dir / "test.db"),
+            "wal": True,
+            "busy_timeout_ms": 5000,
+            "foreign_keys": True,
         },
     }
 
@@ -99,7 +97,7 @@ async def test_build_memory_stack_idempotent(tmp_db_dir: Path) -> None:
     """重复 build 不报错（initialize 幂等；同一 db_path 重复装配应可成功）。"""
     cfg = {
         "memory": {"backend": "simple"},
-        "storage": {"sqlite": {"db_path": str(tmp_db_dir / "idem.db")}},
+        "sqlite": {"db_path": str(tmp_db_dir / "idem.db")},
     }
     s1, m1 = await build_memory_stack(cfg)
     try:
@@ -123,7 +121,7 @@ async def test_build_memory_stack_rejects_amemorix_backend(tmp_db_dir: Path) -> 
     """backend='amemorix' → ValueError（fail-fast，当前仅支持 simple）。"""
     cfg = {
         "memory": {"backend": "amemorix"},
-        "storage": {"sqlite": {"db_path": str(tmp_db_dir / "amemorix.db")}},
+        "sqlite": {"db_path": str(tmp_db_dir / "amemorix.db")},
     }
     with pytest.raises(ValueError) as exc_info:
         await build_memory_stack(cfg)
@@ -136,7 +134,7 @@ async def test_build_memory_stack_rejects_unknown_backend(tmp_db_dir: Path) -> N
     """backend='unknown' → ValueError（任何非 SUPPORTED_BACKENDS 值都拒绝）。"""
     cfg = {
         "memory": {"backend": "redis"},
-        "storage": {"sqlite": {"db_path": str(tmp_db_dir / "unknown.db")}},
+        "sqlite": {"db_path": str(tmp_db_dir / "unknown.db")},
     }
     with pytest.raises(ValueError):
         await build_memory_stack(cfg)
@@ -146,7 +144,7 @@ async def test_build_memory_stack_default_backend_is_simple(tmp_db_dir: Path) ->
     """不写 backend（缺省）→ 走 simple 默认（向后兼容）。"""
     cfg = {
         "memory": {},  # 无 backend 字段
-        "storage": {"sqlite": {"db_path": str(tmp_db_dir / "default_backend.db")}},
+        "sqlite": {"db_path": str(tmp_db_dir / "default_backend.db")},
     }
     store, mem = await build_memory_stack(cfg)
     try:
@@ -166,11 +164,11 @@ async def test_supported_backends_constant() -> None:
 # =============================================================================
 
 
-async def test_build_memory_stack_tolerates_missing_storage_block(tmp_db_dir: Path) -> None:
-    """config['storage'] 缺省 / 非 dict → 走 DEFAULT_DB_PATH（不报错）。"""
+async def test_build_memory_stack_tolerates_missing_sqlite_block(tmp_db_dir: Path) -> None:
+    """config['sqlite'] 缺省 / 非 dict → 走 DEFAULT_DB_PATH（不报错）。"""
     cfg = {"memory": {"backend": "simple"}}
-    # storage 完全缺失：使用默认 DB 路径；为避免污染默认 DB 我们改用
-    # 自定义 cfg 提供 sqlite 字段，但这里专门测 storage 缺失兜底
+    # sqlite 段完全缺失：使用默认 DB 路径；为避免污染默认 DB 我们改用
+    # 自定义 cfg 提供 sqlite 字段，但这里专门测 sqlite 段缺失兜底
     store, mem = await build_memory_stack(cfg)
     try:
         assert isinstance(mem, SimpleMemory)
@@ -200,7 +198,7 @@ async def test_build_memory_stack_resolves_relative_db_path_to_absolute(tmp_path
     rel_name = "_rel_db_test_wave8.db"
     cfg = {
         "memory": {"backend": "simple"},
-        "storage": {"sqlite": {"db_path": rel_name}},  # 相对路径
+        "sqlite": {"db_path": rel_name},  # 顶层 sqlite 段，相对路径
     }
     store, _ = await build_memory_stack(cfg)
     try:

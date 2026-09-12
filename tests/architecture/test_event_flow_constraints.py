@@ -180,6 +180,8 @@ class TestEventFlowConstraints:
         # 允许 Agent 订阅 room.message.*（Planner 必须订阅弹幕驱动决策）
         # 允许 Agent 订阅 game.*（游戏事件族：主播叙事收集——同 Agent 域内的
         # 游戏 Agent emit、主播 Agent 订阅，沿既有 game.* 模式扩展）
+        # 允许 Agent 订阅 live.*（直播生命周期事件：场次进行位闸门放行/收闸
+        # 主动发言——基础设施事件，非其他 Agent 的决策输出）
         # 仅检测是否订阅了其他 Agent 的输出事件
         violations = [
             sub
@@ -187,6 +189,7 @@ class TestEventFlowConstraints:
             if sub["event_name"] not in INPUT_EVENTS
             and not sub["event_name"].startswith("tool.result.")
             and not sub["event_name"].startswith("game.")
+            and not sub["event_name"].startswith("live.")
         ]
         if violations:
             violation_details = "\n".join(
@@ -196,7 +199,7 @@ class TestEventFlowConstraints:
                 ]
             )
             raise AssertionError(
-                f"Agent layer subscribes to unexpected events (allowed: room.message.* or tool.result.*).\n"
+                f"Agent layer subscribes to unexpected events (allowed: room.message.* / tool.result.* / game.* / live.*).\n"
                 f"Found {len(violations)} violation(s):\n"
                 f"{violation_details}"
             )

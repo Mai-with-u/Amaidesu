@@ -15,12 +15,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.modules.config.service import ConfigService
-from src.modules.events.event_bus import EventBus
 
 
 def _minimal_config(simulator_enabled: bool = False) -> Dict[str, Any]:
@@ -67,9 +65,7 @@ def config_service_factory(tmp_path: Path):
         return cs
 
     yield _make
-    for cs in created:
-        # ConfigService 无显式 close 接口（无 I/O 持有）
-        pass
+    # ConfigService 无显式 close 接口（无 I/O 持有），created 实例无需清理
 
 
 class TestSimulatorWiring:
@@ -78,23 +74,18 @@ class TestSimulatorWiring:
     @pytest.fixture(autouse=True)
     def _stub_llm_setup(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """绕开 LLMManager.setup 的真实 provider 校验（测试目标非 LLM）。"""
+
         async def _noop_setup(self, config: Any) -> None:
             return None
 
         async def _noop_cleanup(self) -> None:
             return None
 
-        monkeypatch.setattr(
-            "src.modules.llm.manager.LLMManager.setup", _noop_setup
-        )
-        monkeypatch.setattr(
-            "src.modules.llm.manager.LLMManager.cleanup", _noop_cleanup
-        )
+        monkeypatch.setattr("src.modules.llm.manager.LLMManager.setup", _noop_setup)
+        monkeypatch.setattr("src.modules.llm.manager.LLMManager.cleanup", _noop_cleanup)
 
     @pytest.mark.asyncio
-    async def test_disabled_means_zero_wiring(
-        self, config_service_factory, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_disabled_means_zero_wiring(self, config_service_factory, monkeypatch: pytest.MonkeyPatch) -> None:
         """[simulator].enabled=false → simulator_service 元组项为 None（零装配）。"""
         from main import create_app_components
 
@@ -109,12 +100,14 @@ class TestSimulatorWiring:
             config_service=config_service,
             dev_webui=False,
         )
-        # 第 8 项 (index=7) 是 simulator_service；第 11 项 (index=10) 是 session_manager
-        assert len(result) == 11, f"组合根元组应返回 11 项，实际 {len(result)}"
+        # 组合根契约（create_app_components 返回元组，共 13 项）：
+        # 第 8 项 (index=7) 是 simulator_service；第 11 项 (index=10) 是 session_manager；
+        # 末尾两项 (index=11/12) 是工具系统重设计后追加的 tool_registry / health_monitor
+        assert len(result) == 13, f"组合根元组应返回 13 项，实际 {len(result)}"
         simulator_service = result[7]
-        assert simulator_service is None, (
-            "enabled=false 时 simulator_service 应为 None（零装配）"
-        )
+        assert simulator_service is None, "enabled=false 时 simulator_service 应为 None（零装配）"
+        session_manager = result[10]
+        assert session_manager is not None, "session_manager 应始终被装配"
 
         # 清理已装配的资源
         await result[1].cleanup()  # event_bus
@@ -124,9 +117,7 @@ class TestSimulatorWiring:
             await result[2].cleanup()  # llm_service
 
     @pytest.mark.asyncio
-    async def test_enabled_dry_mode_no_llm_call(
-        self, config_service_factory, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_enabled_dry_mode_no_llm_call(self, config_service_factory, monkeypatch: pytest.MonkeyPatch) -> None:
         """enabled=true + auto_start=False（--dry 模式）→ 装配但 is_running=False（不产生 LLM 调用）。"""
         from main import create_app_components
 
@@ -143,9 +134,7 @@ class TestSimulatorWiring:
             simulator_auto_start=False,
         )
         simulator_service = result[7]
-        assert simulator_service is not None, (
-            "enabled=true 时 simulator_service 应被装配"
-        )
+        assert simulator_service is not None, "enabled=true 时 simulator_service 应被装配"
         assert simulator_service.is_running is False, (
             "auto_start=False 时 simulator_service.is_running 应为 False（不启动主循环）"
         )
@@ -178,9 +167,7 @@ class TestSimulatorWiring:
         )
         simulator_service = result[7]
         assert simulator_service is not None
-        assert simulator_service.is_running is True, (
-            "enabled=true + auto_start=True 时 simulator_service 应已自动启动"
-        )
+        assert simulator_service.is_running is True, "enabled=true + auto_start=True 时 simulator_service 应已自动启动"
 
         # 清理：先 stop 主循环再 cleanup
         await simulator_service.cleanup()
@@ -203,12 +190,8 @@ class TestMainDryModeShutdown:
         async def _noop_cleanup(self) -> None:
             return None
 
-        monkeypatch.setattr(
-            "src.modules.llm.manager.LLMManager.setup", _noop_setup
-        )
-        monkeypatch.setattr(
-            "src.modules.llm.manager.LLMManager.cleanup", _noop_cleanup
-        )
+        monkeypatch.setattr("src.modules.llm.manager.LLMManager.setup", _noop_setup)
+        monkeypatch.setattr("src.modules.llm.manager.LLMManager.cleanup", _noop_cleanup)
 
     @pytest.mark.asyncio
     async def test_dry_mode_does_not_start_simulator(
@@ -231,9 +214,7 @@ class TestMainDryModeShutdown:
         )
         simulator_service = result[7]
         assert simulator_service is not None
-        assert simulator_service.is_running is False, (
-            "--dry 模式下 simulator_service 不应启动主循环"
-        )
+        assert simulator_service.is_running is False, "--dry 模式下 simulator_service 不应启动主循环"
 
         # run_shutdown 也应正常关闭（不抛错）
         await run_shutdown(
