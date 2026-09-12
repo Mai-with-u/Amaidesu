@@ -35,7 +35,6 @@ class CollectorsRootConfig(BaseConfig):
         default_factory=lambda: ["console_input"],
         description="启用的 Collector 列表（注册名 = 配置段名）",
         json_schema_extra={
-            "x-ui-type": "multiselect",
             "x-options": [
                 "bili_danmaku",
                 "bili_danmaku_official",

@@ -72,7 +72,7 @@ class TestToolsConfigDisabledLegacyFields:
         assert "output" in str(exc_info.value).lower()
 
     def test_enabled_field_rejected(self):
-        """原包级 enabled 列表已废除（ToolPackType 已删除）"""
+        """工具域无包级 enabled 列表（域开关 = 提供者开关单元）"""
         with pytest.raises(ValidationError):
             ToolsConfig.model_validate({"enabled": ["perception"]})
 

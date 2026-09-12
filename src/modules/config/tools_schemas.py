@@ -234,7 +234,6 @@ class ToolsConfig(BaseConfig):
     disabled_tools: List[str] = Field(
         default_factory=list,
         description="停用的工具名列表（对 LLM 不可见且不可调用，重启后生效）",
-        json_schema_extra={"x-ui-type": "multiselect"},
     )
 
 

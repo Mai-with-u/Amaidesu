@@ -199,7 +199,6 @@ class SubtitleInfraConfig(BaseConfig):
         default_factory=lambda: ["tk_gui"],
         description="启用的字幕后端列表（可多后端同时启用：tk_gui / dashboard）",
         json_schema_extra={
-            "x-ui-type": "multi-select",
             "x-options": ["tk_gui", "dashboard"],
         },
     )

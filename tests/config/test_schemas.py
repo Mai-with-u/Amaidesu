@@ -61,7 +61,7 @@ class TestStreamerContextConfig:
 class TestModelConfig:
     """三层结构（providers / models / profiles）的新断言
 
-    旧的 ``llm`` / ``llm_fast`` / ``vlm`` / ``llm_local`` 单字段断言已废弃——
+    LLM 配置已迁移三层结构（model.toml [llm_profiles]），单字段形态不再存在——
     profile 现在是 ``llm_profiles.<name>`` 字典条目（planner / replyer / summary /
     minecraft / vision / simulator 6 成员）。完整基线测试由 T20 收口，本类
     仅保留面向三层结构的核心不变量。

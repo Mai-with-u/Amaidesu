@@ -182,6 +182,7 @@ class DashboardServer:
             event_bus=self.event_bus,
             ws_handler=self.ws_handler,
             event_history=self.event_history,
+            history_push_limit=self.dashboard_config.max_history_messages,
         )
         await self.event_broadcaster.start()
 

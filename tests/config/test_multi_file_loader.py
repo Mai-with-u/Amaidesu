@@ -48,7 +48,7 @@ class TestGeneration:
     def test_generated_model_has_three_layers(self, temp_config_dir):
         """model.toml 生成形态——三层结构（providers / models / profiles）
 
-        旧结构 ``[llm]`` / ``[vlm]`` / ``[llm_agenda]`` 等单一 profile 段位
+        三层结构落地后单一 profile 段位（旧命名）不再存在，
         已废除（§6.2 重构）；新结构按 llm_providers / llm_models / llm_profiles
         三层装配。
         """

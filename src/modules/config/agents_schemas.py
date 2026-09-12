@@ -70,7 +70,6 @@ class AgentsConfig(BaseConfig):
         default_factory=lambda: ["streamer"],
         description="启用的 Agent 列表",
         json_schema_extra={
-            "x-ui-type": "multiselect",
             "x-options": ["streamer", "minecraft", "text_adv"],
         },
     )

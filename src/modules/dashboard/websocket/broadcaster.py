@@ -56,8 +56,6 @@ if TYPE_CHECKING:
 
 logger = get_logger("EventBroadcaster")
 
-HISTORY_PUSH_LIMIT = 100
-
 
 class EventBroadcaster:
     """EventBus 事件广播器 - 将 EventBus 事件广播到 WebSocket 客户端"""
@@ -68,11 +66,13 @@ class EventBroadcaster:
         ws_handler: "WebSocketHandler",
         subscribe_events: Optional[List[str]] = None,
         event_history: Optional["EventHistoryService"] = None,
+        history_push_limit: int = 100,
     ):
         self.event_bus = event_bus
         self.ws_handler = ws_handler
         self.subscribe_events = subscribe_events or []
         self.event_history = event_history
+        self.history_push_limit = history_push_limit
         self._subscribed_events: Set[str] = set()
         self._is_running = False
 
@@ -299,7 +299,7 @@ class EventBroadcaster:
         """向新连接的客户端推送最近的事件历史（匹配 LogStreamer 模式）。"""
         if not self.event_history:
             return
-        recent = self.event_history.get_recent(HISTORY_PUSH_LIMIT)
+        recent = self.event_history.get_recent(self.history_push_limit)
         if not recent:
             return
         from src.modules.dashboard.schemas.event import WebSocketMessage

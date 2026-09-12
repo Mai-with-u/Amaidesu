@@ -147,9 +147,10 @@ class TestTextAdvPackageConfig:
 
 class TestJsonSchemaExtra:
     def test_enabled_has_ui_metadata(self):
+        """enabled 的 UI 元数据：候选名单（x-options）供下拉/多选渲染。"""
         field_info = AgentsConfig.model_fields["enabled"]
         extra = field_info.json_schema_extra or {}
-        assert extra.get("x-ui-type") == "multiselect"
+        assert "x-ui-type" not in extra  # 非规范 ui-type 标记已清（T28）
         assert set(extra.get("x-options", [])) == {"streamer", "minecraft", "text_adv"}
 
 
