@@ -32,6 +32,9 @@ class CoreEvents:
     ROOM_MESSAGE_GIFT = "room.message.gift"
     ROOM_MESSAGE_SUPER_CHAT = "room.message.super_chat"
     ROOM_MESSAGE_ENTER = "room.message.enter"
+    # 联动对象发言（房间里第三个说话者——非弹幕、非主播）。落 live_chat
+    # 时 sender_role="partner"，不计观众统计。
+    ROOM_MESSAGE_PARTNER_SPEECH = "room.message.partner_speech"
 
     # ========== v2 语义域事件（game.* 游戏里程碑） ==========
     # 低频、只发重大变化。四类：milestone / attention_required / error / report。
@@ -41,6 +44,11 @@ class CoreEvents:
     GAME_ATTENTION_REQUIRED = "game.attention_required"
     GAME_ERROR = "game.error"
     GAME_REPORT = "game.report"
+
+    # ========== v2 语义域事件（perception.* 主播感知流） ==========
+    # 主播 Agent 对直播内容的感知（视觉等），非观众行为、非房间消息——
+    # 不落 live_chat（避免"屏幕内容当弹幕"的数据污染）。
+    PERCEPTION_SCREEN = "perception.screen"
 
     # ========== 流程单（Rundown）子系统事件 ==========
     # 唯一发布者：``RundownState`` 变更边界。``rundown.changed`` 涵盖

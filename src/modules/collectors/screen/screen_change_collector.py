@@ -18,7 +18,7 @@ from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.perception import ScreenDescriptionPayload
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 
@@ -81,7 +81,7 @@ class ScreenChangeCollector(BaseCollector):
     # 旧 InputCollectorManager 兼容接口
     # ------------------------------------------------------------------
 
-    def stream(self) -> AsyncIterator[RoomMessagePayload]:
+    def stream(self) -> AsyncIterator[ScreenDescriptionPayload]:
         if not self.is_started:
             raise RuntimeError("Collector 未启动，请先调用 start()")
 
@@ -122,8 +122,8 @@ class ScreenChangeCollector(BaseCollector):
 
         self.logger.info("ScreenChangeCollector 已清理")
 
-    async def collect(self) -> AsyncIterator[RoomMessagePayload]:
-        """启动并返回事件载荷流（载荷在 collect 内直发 room.message.danmaku）"""
+    async def collect(self) -> AsyncIterator[ScreenDescriptionPayload]:
+        """启动并返回事件载荷流（载荷在 collect 内直发 perception.screen）"""
         self.is_started = True
         self._message_queue = asyncio.Queue()
 
@@ -156,8 +156,8 @@ class ScreenChangeCollector(BaseCollector):
             while self.is_started:
                 try:
                     payload = await asyncio.wait_for(self._message_queue.get(), timeout=1.0)
-                    # 直发语义事件（场次归属由盖章拦截器统一注入）
-                    await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
+                    # 直发感知流事件（不落 live_chat，避免"屏幕内容当弹幕"的污染）
+                    await self.emit_event(CoreEvents.PERCEPTION_SCREEN, payload)
                     yield payload
                 except asyncio.TimeoutError:
                     continue
@@ -203,9 +203,7 @@ class ScreenChangeCollector(BaseCollector):
             if not new_context:
                 return
 
-            payload = RoomMessagePayload(
-                message_type="danmaku",
-                user=RoomMessageUser(id="screen_analyzer", name="屏幕分析"),
+            payload = ScreenDescriptionPayload(
                 content=new_context,
                 timestamp_ms=now_ms(),
             )

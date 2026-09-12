@@ -16,6 +16,8 @@
   legacy=历史遗留行）
 - ``live_chat.message_id`` 与 ``live_chat.reply_to_message_id`` 构成"主播发言
   回复了哪条观众弹幕"的关联键（互动分析数据面）
+- ``live_chat.sender_role`` 取值：``viewer``（观众弹幕）/ ``assistant``（主播
+  发言）/ ``partner``（联动对象发言——不计观众统计）
 - ``live_chat`` / ``gifts`` / ``super_chats`` 表加 ``simulated`` 贯穿列
   （模拟数据用 False 默认 / True 标记，消费方 WHERE ``simulated=0`` 排除模拟数据）
 - 模块私有表以 ``_`` 前缀命名，表达"非业务数据平面、仅所属模块读写"

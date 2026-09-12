@@ -10,6 +10,7 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
 - core.py: Core 系统事件 Payload（core.startup/shutdown/error）
 - live.py: 场次生命周期（live.started/live.ended，LiveSessionManager 发布）
 - room.py: 直播间行为流（room.message.*）
+- perception.py: 主播感知流（perception.screen）
 - game.py: 游戏里程碑（game.*）
 - rundown.py: 流程单变更（rundown.changed）
 - planner.py: 决策轮记录 / 阶段状态（planner.decision / streamer.stage）
@@ -72,6 +73,7 @@ from .utterance import (
 logger = get_logger("Payloads")
 
 __all__ = [
+    "ScreenDescriptionPayload",
     # Core 系统事件
     "CoreStartupPayload",
     "CoreShutdownPayload",

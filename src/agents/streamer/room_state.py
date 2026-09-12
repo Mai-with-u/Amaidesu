@@ -70,6 +70,8 @@ class RoomStateSnapshot:
         last_update_ms: 本次快照生成时刻(Unix 毫秒)
         topic_summary: 低频 LLM 话题摘要(可选,RoomStateLoop 填充,默认空串)
         topic_summary_at_ms: 话题摘要的生成时刻(Unix 毫秒,0 表示尚未生成)
+        screen_context: 主播视觉感知的最近画面描述(perception.screen 事件填充,
+            空串表示尚无感知输入)
     """
 
     heat: str
@@ -78,6 +80,7 @@ class RoomStateSnapshot:
     last_update_ms: int
     topic_summary: str = ""
     topic_summary_at_ms: int = 0
+    screen_context: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +112,8 @@ class RoomState:
         # 话题摘要(由 background.py 低频 LLM 填充,内存态)
         self._topic_summary: str = ""
         self._topic_summary_at_ms: int = 0
+        # 主播视觉感知的最近画面描述(perception.screen 事件填充,内存态)
+        self._screen_context: str = ""
         # 最近一条弹幕到达时刻(不受滑动窗口裁剪影响,用于冷场判定)
         self._last_message_ms: Optional[int] = None
         # 最近一次主播主动发言时刻(与弹幕并列但互不影响;
@@ -221,6 +226,14 @@ class RoomState:
     # ------------------------------------------------------------------
     # 话题摘要(由 background.py 填充)
     # ------------------------------------------------------------------
+
+    def set_screen_context(self, description: str) -> None:
+        """记录主播视觉感知的最近画面描述(内存态,不持久化)。
+
+        数据源为 ``perception.screen`` 事件(屏幕采集器);决策组装时经
+        快照进入环境参考,不属于观众行为、不进热度窗口。
+        """
+        self._screen_context = description
 
     def set_topic_summary(self, summary: str, *, now_ms: Optional[int] = None) -> None:
         """存储低频 LLM 话题摘要(内存态,不持久化)
@@ -341,6 +354,7 @@ class RoomState:
             last_update_ms=ts,
             topic_summary=self._topic_summary,
             topic_summary_at_ms=self._topic_summary_at_ms,
+            screen_context=self._screen_context,
         )
 
     # ------------------------------------------------------------------

@@ -742,6 +742,43 @@ async def test_ledger_stop_unsubscribes_game_events(event_bus: EventBus, store: 
 
 
 # =============================================================================
+# 联动对象发言（partner_speech）：落 live_chat 但不计观众统计
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_partner_speech_persists_without_viewer_stats(
+    ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
+) -> None:
+    """partner_speech 落 live_chat（sender_role="partner"），且无观众统计副作用。"""
+    payload = make_room_message(message_type="partner_speech", content="我来了！", live_session_id=_FAKE_PK)
+    await event_bus.emit(CoreEvents.ROOM_MESSAGE_PARTNER_SPEECH, payload, source="stt", wait=True)
+
+    rows = await store.execute("SELECT * FROM live_chat")
+    assert len(rows) == 1
+    assert rows[0]["sender_role"] == "partner"
+    assert rows[0]["message_type"] == "partner_speech"
+    assert rows[0]["content"] == "我来了！"
+
+    viewers = await store.execute("SELECT * FROM viewers")
+    assert viewers == [], "联动对象发言不应计入观众统计"
+
+
+@pytest.mark.asyncio
+async def test_perception_screen_not_persisted(
+    ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
+) -> None:
+    """perception.screen 不在 room.message.# 通配内：不落 live_chat，无伪观众。"""
+    from src.modules.events.payloads.perception import ScreenDescriptionPayload
+
+    payload = ScreenDescriptionPayload(content="主播正在玩《双人成行》")
+    await event_bus.emit(CoreEvents.PERCEPTION_SCREEN, payload, source="screen", wait=True)
+
+    assert await store.execute("SELECT * FROM live_chat") == []
+    assert await store.execute("SELECT * FROM viewers") == []
+
+
+# =============================================================================
 # 回复关联：reply_to_message_id 落库（"主播回应了哪条弹幕"可查询）
 # =============================================================================
 

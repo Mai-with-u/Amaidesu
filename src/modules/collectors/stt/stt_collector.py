@@ -265,7 +265,7 @@ class STTCollector(BaseCollector):
         self.logger.info("STTCollector 清理完成")
 
     async def collect(self) -> AsyncIterator[RoomMessagePayload]:
-        """采集语音数据并生成事件载荷（直发 room.message.danmaku）"""
+        """采集语音数据并生成事件载荷（直发 room.message.partner_speech）"""
         if not self.vad_enabled or self.vad_model is None:
             self.logger.error("VAD 未启用或模型未加载，无法运行")
             return
@@ -436,8 +436,9 @@ class STTCollector(BaseCollector):
                 try:
                     while not self._result_queue.empty():
                         payload = await asyncio.wait_for(self._result_queue.get(), timeout=0.01)
-                        # 直发语义事件（场次归属由盖章拦截器统一注入）
-                        await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
+                        # 直发联动对象发言事件（场次归属由盖章拦截器统一注入；
+                        # 落库走 sender_role="partner"，不计观众统计）
+                        await self.emit_event(CoreEvents.ROOM_MESSAGE_PARTNER_SPEECH, payload)
                         yield payload
                         self._result_queue.task_done()
                 except asyncio.TimeoutError:
@@ -605,10 +606,10 @@ class STTCollector(BaseCollector):
                             if full_text and not utterance_failed:
                                 await self._result_queue.put(
                                     RoomMessagePayload(
-                                        message_type="danmaku",
+                                        message_type="partner_speech",
                                         user=RoomMessageUser(
-                                            id=str(self.message_config.get("user_id") or "voice_user"),
-                                            name=str(self.message_config.get("user_nickname") or "语音观众"),
+                                            id=str(self.message_config.get("user_id") or "partner"),
+                                            name=str(self.message_config.get("user_nickname") or "联动对象"),
                                         ),
                                         content=full_text,
                                         timestamp_ms=now_ms(),

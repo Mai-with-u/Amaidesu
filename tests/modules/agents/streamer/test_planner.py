@@ -293,6 +293,19 @@ async def test_react_llm_error_outcome() -> None:
 
 
 @pytest.mark.asyncio
+async def test_screen_context_enters_environment_block() -> None:
+    """RoomState.screen_context（perception.screen 通道）进环境块的"关键变化"。"""
+    from src.agents.streamer.room_state import RoomState
+
+    planner, llm, prompt = _make_planner(chat_responses=[_resp()], context_enabled=True)
+    planner._room_state.set_screen_context("主播正在玩《双人成行》")
+
+    rendered = await planner._assemble_reference([], [], None, False, False, "")
+    assert rendered is not None
+    assert "屏幕画面：主播正在玩《双人成行》" in rendered
+
+
+@pytest.mark.asyncio
 async def test_context_bare_path_when_disabled() -> None:
     """context_enabled=False → 裸消息路径（本批为原生 user 消息，参考段仅情境标注）。"""
     planner, llm, prompt = _make_planner(chat_responses=[_resp()], context_enabled=False)

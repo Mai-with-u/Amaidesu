@@ -82,6 +82,7 @@ class SuperChatInfo(BaseModel):
 @register_event("room.message.gift")
 @register_event("room.message.super_chat")
 @register_event("room.message.enter")
+@register_event("room.message.partner_speech")
 class RoomMessagePayload(BasePayload):
     """
     直播间行为流事件 Payload（统一形状 + message_type 判别）
@@ -91,6 +92,8 @@ class RoomMessagePayload(BasePayload):
     - ``room.message.gift`` — 礼物（应填充 ``gift``）
     - ``room.message.super_chat`` — SC（应填充 ``content`` + ``sc``）
     - ``room.message.enter`` — 进房（无内容）
+    - ``room.message.partner_speech`` — 联动对象发言（房间里第三个说话者：
+      非弹幕、非主播；落 live_chat 时 ``sender_role="partner"``，不计观众统计）
 
     发布者：直播接入层（弹幕/礼物/SC/进房接收 → 结构化）
     订阅者：Planner（订 ``room.message.danmaku`` 高价值醒来）、后台记账器（订 ``room.*`` 写 live_sessions 状态）
@@ -116,7 +119,7 @@ class RoomMessagePayload(BasePayload):
         default="",
         description="消息唯一 ID（平台消息 ID 或发布方生成）；与主播发言 reply_to_message_id 构成回复关联键",
     )
-    message_type: Literal["danmaku", "gift", "super_chat", "enter"] = Field(
+    message_type: Literal["danmaku", "gift", "super_chat", "enter", "partner_speech"] = Field(
         ...,
         description="消息类型。通配订阅 room.message.# 时按此字段分发（与存储 live_chat.message_type 枚举一致）",
     )

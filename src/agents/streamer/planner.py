@@ -422,14 +422,16 @@ class Planner:
                 duration_so_far_ms = int(self._elapsed_live_provider() or 0)
             except Exception as exc:
                 self.logger.warning(f"读取开播时长失败（按 0 处理，快照省略该行）: {exc}")
-        # key_changes 留空：RoomState.topics 是字符级词频（落库统计口径），
-        # 单字进 prompt 是噪声，话题信息由 unread_summary（LLM 摘要）承载
+        # key_changes：主播视觉感知的最近画面描述（perception.screen → RoomState）。
+        # RoomState.topics 是字符级词频（落库统计口径），单字进 prompt 是噪声，
+        # 话题信息由 unread_summary（LLM 摘要）承载
+        screen_context = (getattr(snapshot, "screen_context", "") or "").strip()
         env_block = EnvironmentBlock(
             minute_bucket_ms=(current_ms // 60000) * 60000,
             duration_so_far_ms=duration_so_far_ms,
             current_stage_label=None,
             unread_summary=getattr(snapshot, "topic_summary", "") or "",
-            key_changes=[],
+            key_changes=[f"屏幕画面：{screen_context}"] if screen_context else [],
         )
 
         memory_recall_section = await self._recall_memory(snapshot, batch)

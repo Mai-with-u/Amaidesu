@@ -10,6 +10,7 @@ StorageLedger —— 直播间消息流落库记账器
   - ``danmaku``   → live_chat（+ 顺路 upsert viewers.message_count）
   - ``gift``      → gifts（+ 顺路 upsert viewers.gift_count）
   - ``super_chat`` → super_chats（SC 属 high-value，统计计数走 SimpleMemory 语义层，不混入 viewers）
+  - ``partner_speech`` → live_chat（sender_role="partner"，**不**计观众统计）
   - ``enter``     → 当前 schema 无 enter 明细表 → debug 日志后丢弃（场次状态归 LiveSessionManager，不在本层职责）
 - viewers 写穿伴随：选在主表落库同点 upsert，避免后台 tick 的重复扫描与时序问题；SC 不计入保持现有行为
 - 订阅 ``streamer.speech`` 业务事件（主播发言），写入 live_chat（sender_role="assistant"，message_type="speak"）。
@@ -120,7 +121,8 @@ class StorageLedger:
         self._started = True
         logger.info(
             f"StorageLedger 已订阅 {_ROOM_MESSAGE_WILDCARD}"
-            "（danmaku→live_chat / gift→gifts / super_chat→super_chats / enter→debug 丢弃）"
+            "（danmaku→live_chat / gift→gifts / super_chat→super_chats"
+            " / partner_speech→live_chat.partner / enter→debug 丢弃）"
             f" + {CoreEvents.STREAMER_SPEECH}（→live_chat, sender_role=assistant）"
             f" + {_GAME_EVENT_WILDCARD}（milestone/attention_required/error→game_events）",
         )
@@ -207,6 +209,21 @@ class StorageLedger:
                     user_name=payload.user.name,
                     amount=float(sc.amount),
                     message=payload.content or "",
+                    simulated=payload.simulated,
+                )
+                return
+            if msg_type == "partner_speech":
+                # 联动对象发言（房间里第三个说话者）：落 live_chat 但
+                # sender_role="partner"，**不**计观众统计（与观众弹幕分流）
+                await self.chat_repo.insert_live_chat(
+                    live_session_id=live_pk,
+                    timestamp_ms=payload.timestamp_ms,
+                    sender_role="partner",
+                    sender_id=payload.user.id,
+                    sender_name=payload.user.name,
+                    content=payload.content or "",
+                    message_type=msg_type,
+                    message_id=payload.message_id or None,
                     simulated=payload.simulated,
                 )
                 return
