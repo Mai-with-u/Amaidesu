@@ -253,10 +253,12 @@ function formatLatency(ms: number): string {
 // 获取客户端类型标签文字
 function getClientTypeLabel(type: string): string {
   const labelMap: Record<string, string> = {
-    llm: 'LLM',
-    llm_fast: 'Fast',
-    vlm: 'VLM',
-    llm_local: 'Local',
+    planner: '主 LLM',
+    replyer: '回复',
+    summary: '摘要',
+    minecraft: '游戏',
+    vision: '视觉',
+    simulator: '模拟',
   };
   return labelMap[type] || type;
 }

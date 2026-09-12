@@ -49,38 +49,6 @@ if TYPE_CHECKING:
 from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 from src.modules.dashboard.websocket.handler import WebSocketHandler
 
-_SECTION_TO_CONFIG_FILE: dict[str, str] = {
-    "meta": "core.toml",
-    "general": "core.toml",
-    "persona": "core.toml",
-    "context": "core.toml",
-    "dashboard": "core.toml",
-    "events": "core.toml",
-    "logging": "core.toml",
-    "interceptors": "core.toml",
-    "simulator": "core.toml",
-    "llm": "model.toml",
-    "llm_fast": "model.toml",
-    "vlm": "model.toml",
-    "llm_local": "model.toml",
-    "llm_providers": "model.toml",
-    "llm_summary": "model.toml",
-    "llm_agenda": "model.toml",
-    "agents": "agents.toml",
-    "streamer": "agents.toml",
-    "tools": "tools.toml",
-    "perception": "tools.toml",
-    "understanding": "tools.toml",
-    "output": "tools.toml",
-    "content_engine": "tools.toml",
-    "external": "tools.toml",
-    "memory": "memory.toml",
-    "simple": "memory.toml",
-    "amemorix": "memory.toml",
-    "storage": "storage.toml",
-    "sqlite": "storage.toml",
-}
-
 
 class DashboardServer:
     """Dashboard 服务器主类"""
@@ -355,24 +323,26 @@ class DashboardServer:
         return f"http://{self.host}:{self.port}"
 
     def get_config_path(self, section: Optional[str] = None) -> Optional[str]:
-        """获取配置文件路径
-
-        根据配置节名路由到对应的 TOML 文件 (多文件配置结构)。
+        """获取配置文件路径（六文件树，自描述协议解析）
 
         Args:
-            section: 配置节名 (例如 ``"persona"`` / ``"llm"`` / ``"collectors"``)。
-                ``None`` 时返回 ``core.toml`` (默认核心配置文件)。
+            section: 配置 scope（agents/collectors/tools/model/storage/infra，
+                即文件名去后缀）。
 
         Returns:
-            对应 TOML 文件的绝对路径字符串;若 ``config_service`` 不可用则返回 ``None``。
+            对应 TOML 文件的绝对路径字符串；scope 未知或 ``config_service``
+            不可用时返回 ``None``。
         """
         if not (self.config_service and hasattr(self.config_service, "base_dir")):
             return None
 
+        from src.modules.config.multi_file_loader import resolve_root_schema
+
+        root_cls = resolve_root_schema(section or "")
+        if root_cls is None:
+            return None
         config_dir = Path(self.config_service.base_dir) / "config"
-        # 未知 section 兜底到 core.toml,避免静默失败
-        filename = _SECTION_TO_CONFIG_FILE.get(section or "", "core.toml")
-        return str(config_dir / filename)
+        return str(config_dir / root_cls.__file_name__)
 
     async def _start_vite_dev_server(self) -> None:
         """启动 Vite 开发服务器子进程（开发模式专用）"""

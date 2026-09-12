@@ -34,7 +34,7 @@
         v-if="!status.enabled"
         type="info"
         title="模拟器当前未启用"
-        description="请在 config/core.toml 的 [simulator] 段将 enabled 设为 true 并重启应用。mode 字段决定启动时走生成还是回放。"
+        description="请在 config/infra.toml 的 [simulator] 段将 enabled 设为 true 并重启应用。mode 字段决定启动时走生成还是回放。"
         show-icon
         :closable="false"
       />
@@ -43,7 +43,7 @@
         v-else-if="!status.is_available"
         type="warning"
         title="配置启用但服务未注入"
-        description="通常因为 SQLiteStore / LLMManager 缺失（如 --dry 模式），或组合根跳过 [simulator] 装配。请检查 config/core.toml 的 [simulator] 段。"
+        description="通常因为 SQLiteStore / LLMManager 缺失（如 --dry 模式），或组合根跳过 [simulator] 装配。请检查 config/infra.toml 的 [simulator] 段。"
         show-icon
         :closable="false"
       />
@@ -125,7 +125,7 @@
                     {{ status.config.mode ?? 'generate' }}
                   </el-descriptions-item>
                   <el-descriptions-item label="LLM client">
-                    {{ status.config.llm_client_type || 'llm_fast' }}
+                    {{ status.config.llm_client_type || 'simulator' }}
                   </el-descriptions-item>
                   <el-descriptions-item label="Token 预算">
                     {{ formatNumber(status.config.token_budget_per_hour) }} / 小时
@@ -275,7 +275,7 @@
                   </el-descriptions-item>
                 </el-descriptions>
                 <p class="hint">
-                  修改任一字段请编辑 <code>config/core.toml</code> 的
+                  修改任一字段请编辑 <code>config/infra.toml</code> 的
                   <code>[simulator]</code> 段并重启应用（运行时不支持热改）。
                 </p>
               </el-card>

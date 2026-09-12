@@ -211,46 +211,39 @@ import type { ConfigFieldSchema, ConfigGroupSchema, PendingChange } from '@/type
 import SubFieldGroup from '@/components/settings/SubFieldGroup.vue';
 import ComponentCardList from '@/components/settings/ComponentCardList.vue';
 
-// ── 文件 Tab 定义（v2.0：7 文件配置树） ──────────────────────
-// 后端 `/api/v1/config/schema` 返回的 groups 元素已带 `file_name` 与 `file_label` 字段
-// （v2 配置管理 W2 改造后），前端从 schema 动态推断 Tab 列表；下方保留硬编码顺序作为
-// 兜底（schema 为空 / 后端异常时仍可展示所有文件 Tab）。
+// ── 文件 Tab 定义（v2：6 文件配置树） ──────────────────────
+// 后端 `/api/v1/config/schema` 返回的 groups 元素已带 `file_name` 与 `file_label`
+// 字段（根 Schema 自描述协议），前端从 schema 动态推断 Tab 列表；下方保留硬编码
+// 顺序作为兜底（schema 为空 / 后端异常时仍可展示所有文件 Tab）。
 const FALLBACK_FILE_TABS = [
-  {
-    key: 'core.toml',
-    label: '核心',
-    icon: Monitor,
-    desc: '通用 / 角色 / Dashboard / 日志',
-    restart: true,
-  },
-  { key: 'model.toml', label: '模型', icon: Cpu, desc: 'LLM / VLM 模型配置', restart: true },
   {
     key: 'agents.toml',
     label: '业务 Agent',
-    icon: ChatDotRound,
-    desc: '主播 Agent / 游戏 Agent',
-    restart: false,
+    icon: Monitor,
+    desc: '主播 Agent / 游戏 Agent / 文本_adv',
+    restart: true,
   },
   {
-    key: 'tools.toml',
-    label: '工具包',
-    icon: Film,
-    desc: 'TTS / 字幕 / VTS / OBS / 感知',
-    restart: false,
-  },
-  {
-    key: 'memory.toml',
-    label: '记忆',
+    key: 'collectors.toml',
+    label: '采集器',
     icon: Microphone,
-    desc: 'SimpleMemory / Amemorix',
-    restart: false,
+    desc: '弹幕 / 语音 / 屏幕采集',
+    restart: true,
   },
-  { key: 'storage.toml', label: '存储', icon: Document, desc: 'SQLite 存储', restart: false },
+  { key: 'tools.toml', label: '工具包', icon: Tools, desc: '工具域开关与提供者', restart: true },
   {
-    key: 'background.toml',
-    label: '后台',
-    icon: ChatDotRound,
-    desc: '压缩 worker 等后台任务',
+    key: 'model.toml',
+    label: '模型',
+    icon: Cpu,
+    desc: 'Provider / 模型 / 用途 Profile',
+    restart: true,
+  },
+  { key: 'storage.toml', label: '存储', icon: Document, desc: 'SQLite / 记忆后端', restart: true },
+  {
+    key: 'infra.toml',
+    label: '基础设施',
+    icon: Setting,
+    desc: 'TTS / 字幕 / Dashboard / 日志',
     restart: false,
   },
 ];
@@ -283,7 +276,7 @@ const settingsStore = useSettingsStore();
 const showRestartDialog = ref(false);
 const restarting = ref(false);
 const searchQuery = ref('');
-const activeFileTab = ref('core.toml');
+const activeFileTab = ref('agents.toml');
 
 // ── 计算属性 ──────────────────────────────────────────────
 // 所有 group 按后端返回的 file_name 分组

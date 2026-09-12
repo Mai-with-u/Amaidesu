@@ -19,8 +19,8 @@ export type ComponentGroup = 'collectors' | 'agents';
  *
  * getters：
  * - `collectorsList` / `agentsList`：各组原始 ComponentSummary 列表。
- * - `collectorsTotal` / `agentsTotal`：各组配置总数（来源：tools.toml
- *   [tools.perception.config] 段 / agents.toml [agents] 段）。
+ * - `collectorsTotal` / `agentsTotal`：各组配置总数（来源：collectors.toml
+ *   顶层段与 enabled 名单 / agents.toml [agents] 段）。
  * - `batchControl(group, action)`：批量启停同一组下所有未在目标状态的组件。
  */
 export const useComponentsStore = defineStore('components', () => {

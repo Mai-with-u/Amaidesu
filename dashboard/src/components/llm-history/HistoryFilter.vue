@@ -24,10 +24,12 @@
           style="width: 160px"
           @update:model-value="handleClientTypeChange"
         >
-          <el-option label="LLM" value="llm" />
-          <el-option label="LLM Fast" value="llm_fast" />
-          <el-option label="VLM" value="vlm" />
-          <el-option label="LLM Local" value="llm_local" />
+          <el-option label="主 LLM" value="planner" />
+          <el-option label="回复" value="replyer" />
+          <el-option label="视觉" value="vision" />
+          <el-option label="游戏" value="minecraft" />
+          <el-option label="摘要" value="summary" />
+          <el-option label="模拟" value="simulator" />
         </el-select>
       </div>
 

@@ -156,10 +156,12 @@ function getLatencyClass(ms: number): string {
 // 获取客户端类型标签
 function getClientTypeTag(type: string): string {
   const typeMap: Record<string, string> = {
-    llm: 'primary',
-    llm_fast: 'success',
-    vlm: 'warning',
-    llm_local: 'info',
+    planner: 'primary',
+    replyer: 'success',
+    summary: 'warning',
+    vision: 'danger',
+    minecraft: 'info',
+    simulator: 'info',
   };
   return typeMap[type] || 'info';
 }
@@ -167,10 +169,12 @@ function getClientTypeTag(type: string): string {
 // 获取客户端类型标签文字
 function getClientTypeLabel(type: string): string {
   const labelMap: Record<string, string> = {
-    llm: 'LLM',
-    llm_fast: 'Fast',
-    vlm: 'VLM',
-    llm_local: 'Local',
+    planner: '主 LLM',
+    replyer: '回复',
+    summary: '摘要',
+    minecraft: '游戏',
+    vision: '视觉',
+    simulator: '模拟',
   };
   return labelMap[type] || type;
 }
