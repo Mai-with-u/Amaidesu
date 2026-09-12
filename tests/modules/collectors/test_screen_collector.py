@@ -111,10 +111,10 @@ def test_screen_reader_calls_chat_vision_with_mock_llm_manager() -> None:
     assert result.raw_response["model"] == "vlm-test"
     assert result.raw_response["usage"] == {"total_tokens": 42}
 
-    # chat_vision 被调一次，参数正确（client_type=vlm、images=bytes 列表、prompt/system_message 非空）
+    # chat_vision 被调一次，参数正确（client_type=vision、images=bytes 列表、prompt/system_message 非空）
     llm_manager.chat_vision.assert_awaited_once()
     call_kwargs = llm_manager.chat_vision.await_args.kwargs
-    assert call_kwargs["client_type"] == "vlm"
+    assert call_kwargs["client_type"] == "vision"
     assert isinstance(call_kwargs["images"], list)
     assert len(call_kwargs["images"]) == 1
     assert isinstance(call_kwargs["images"][0], (bytes, bytearray))

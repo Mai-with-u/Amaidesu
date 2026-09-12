@@ -128,7 +128,7 @@ class MinecraftAgent(BaseAgent):
         config: MinecraftConfig,
         *,
         llm_manager: Optional[Any] = None,
-        llm_profile: str = "llm",
+        llm_profile: str = "minecraft",
         prompt_manager: Optional[Any] = None,
         event_bus: Optional[EventBus] = None,
         tool_registry: Optional[ToolRegistry] = None,
@@ -140,7 +140,7 @@ class MinecraftAgent(BaseAgent):
         Args:
             config: MinecraftConfig 实例
             llm_manager: 可选 LLMManager（ReAct 循环用；无则任务失败 fast-fail）
-            llm_profile: 决策调用的 LLM profile 名（对应配置 [llm] 段键）
+            llm_profile: 决策调用的 LLM profile 名（对应配置 [llm_profiles.<name>] 段键，默认 'minecraft'）
             prompt_manager: 可选 PromptManager（渲染系统提示词）
             event_bus: 可选 EventBus（emit game.* 事件）
             tool_registry: 可选 ToolRegistry（注册 Agent 专属工具 + 动态发现 MCP 工具）

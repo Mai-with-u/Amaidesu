@@ -74,7 +74,7 @@ async def test_persist_writes_timeline_and_topics(store: SQLiteStore) -> None:
 
     topics = await store.execute("SELECT * FROM topics ORDER BY source, label")
     # 无关键词时只有摘要句行
-    assert [t["source"] for t in topics] == ["llm_summary"]
+    assert [t["source"] for t in topics] == ["summary"]
     assert topics[0]["label"] == "观众在讨论新版本更新"
     assert topics[0]["score"] == pytest.approx(1.0)
 

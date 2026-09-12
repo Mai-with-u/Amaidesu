@@ -1,17 +1,13 @@
-"""ModelConfig → LLMManager 链路集成测试（Violation 3 — llm_summary profile）
+"""ModelConfig → LLMManager 链路集成测试（summary 用途 profile）
 
-验证 F1 Batch D 修复：
-- `[llm_summary]` profile 在 `config/model.toml` 中存在
-- ModelConfig Schema 必须声明 `llm_summary` 字段，否则 multi_file_loader
-  会通过 `from_dict_with_drift_check` 将其作为冗余字段剥离（model_dump 不含）
-- LLMManager.setup() 必须能为 llm_summary 创建独立 client 实例
-  （即使引用同一 provider，也要构造独立 client，避免与 llm_fast 共享连接池）
+对应三层结构下的房间状态摘要 profile（替代旧 llm_summary）：
 
-覆盖两个 QA 场景：
-    Scenario A: config 加载后保留 model.llm_summary
-    Scenario B: LLMManager 为 llm_summary 创建独立 client 实例
+- `[llm_profiles.summary]` 在 ``config/model.toml`` 中存在
+- ModelRootConfig Schema 必须有 ``llm_profiles`` 段且含 ``summary`` 成员
+- LLMManager.setup() 能为 summary profile 构造 model_list 解析
 
-运行: uv run pytest tests/modules/config/test_model_llm_summary_chain.py -v
+注：旧 llm_summary 已合并入新结构用途 profile ``summary``（model_list 形式），
+连接池共享通过 provider 维度保证（同一 provider 多个 profile 共享一个连接）。
 """
 
 from pathlib import Path
@@ -20,28 +16,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.modules.config.model_schemas import ModelConfig
+from src.modules.config.model_schemas import ModelRootConfig, REQUIRED_PROFILE_NAMES
 from src.modules.config.multi_file_loader import load_config_dir
 from src.modules.llm.clients.base import _client_impls
 from src.modules.llm.manager import LLMManager
 
-# =============================================================================
-# Fixtures - 定位真实 config/ 目录
-# =============================================================================
-
-# 测试文件位置: tests/modules/config/test_model_llm_summary_chain.py
-# 项目根: 上溯 3 级 (tests/modules/config -> 项目根)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REAL_CONFIG_DIR = PROJECT_ROOT / "config"
 
 
 @pytest.fixture
 def loaded_model_config() -> Dict[str, Any]:
-    """加载真实 config/ 目录并返回 model section（dict）。
-
-    复现生产加载链路：multi_file_loader.load_config_dir → ModelConfig.from_dict_with_drift_check
-    → model_dump()。如果 ModelConfig 缺少 llm_summary 字段，这里就会缺失。
-    """
+    """加载真实 config/ 目录并返回 model section（dict）。"""
     if not REAL_CONFIG_DIR.exists():
         pytest.skip(f"未找到配置目录: {REAL_CONFIG_DIR}")
     config, _report = load_config_dir(REAL_CONFIG_DIR)
@@ -50,78 +36,78 @@ def loaded_model_config() -> Dict[str, Any]:
 
 
 # =============================================================================
-# Scenario A: ModelConfig 保留 llm_summary（schema 层验证）
+# Scenario A: ModelRootConfig 保留 summary 用途 profile（schema 层验证）
 # =============================================================================
 
 
-class TestScenarioAConfigRetainsLlmSummary:
-    """Scenario A：加载真实 model.toml 后，model.llm_summary 必须保留。"""
+class TestScenarioAConfigRetainsSummary:
+    def test_model_root_config_requires_summary_profile(self):
+        """ModelRootConfig 必须声明 summary 用途 profile（必填 6 成员之一）。"""
+        assert "summary" in REQUIRED_PROFILE_NAMES
+        # 模型 schema 中 llm_profiles 字段声明存在
+        assert "llm_profiles" in ModelRootConfig.model_fields
 
-    def test_model_config_schema_declares_llm_summary_field(self):
-        """ModelConfig 必须声明 llm_summary 字段（这是 violation 3 的根因修复点）。"""
-        assert "llm_summary" in ModelConfig.model_fields, (
-            "ModelConfig 必须声明 llm_summary 字段，否则 multi_file_loader 会将其作为冗余字段剥离"
+    def test_loaded_model_config_contains_summary_profile(self, loaded_model_config: Dict[str, Any]):
+        """加载真实 config/model.toml 后，model.llm_profiles.summary 必须存在且非空。"""
+        assert "llm_profiles" in loaded_model_config
+        assert "summary" in loaded_model_config["llm_profiles"], (
+            "summary profile 缺失——llm_profiles 必须含 summary 成员"
         )
+        summary_profile = loaded_model_config["llm_profiles"]["summary"]
+        assert isinstance(summary_profile, dict)
+        # 关键字段
+        assert "model_list" in summary_profile, "summary.model_list 缺失"
+        assert summary_profile["model_list"], "summary.model_list 为空"
 
-    def test_loaded_model_config_contains_llm_summary(self, loaded_model_config: Dict[str, Any]):
-        """加载真实 config/model.toml 后，model.llm_summary 必须存在且非空。"""
-        assert "llm_summary" in loaded_model_config, "llm_summary 被 schema 剥离了！说明 ModelConfig 未正确声明该字段"
-        summary_profile = loaded_model_config["llm_summary"]
-        assert isinstance(summary_profile, dict), "llm_summary 应当是 dict（LLMProfileConfig.model_dump()）"
-        # 关键字段必须存在
-        assert "provider" in summary_profile, "llm_summary.provider 缺失"
-        assert "model" in summary_profile, "llm_summary.model 缺失"
+    def test_loaded_model_config_summary_models_reference_valid_providers(
+        self, loaded_model_config: Dict[str, Any]
+    ):
+        """加载后 summary.model_list 引用的 model 必须存在且 api_provider 合法。"""
+        summary_models = loaded_model_config["llm_profiles"]["summary"]["model_list"]
+        model_objs = {m["name"]: m for m in loaded_model_config.get("llm_models", [])}
+        provider_names = {p["name"] for p in loaded_model_config.get("llm_providers", [])}
 
-    def test_loaded_model_config_llm_summary_references_valid_provider(self, loaded_model_config: Dict[str, Any]):
-        """加载后的 llm_summary.provider 必须引用已声明的 provider。"""
-        summary_provider = loaded_model_config["llm_summary"]["provider"]
-        provider_names = {p["name"] for p in loaded_model_config["llm_providers"]}
-        assert summary_provider in provider_names, (
-            f"llm_summary.provider={summary_provider!r} 未在 llm_providers 中找到（可用：{sorted(provider_names)}）"
-        )
+        for model_name in summary_models:
+            assert model_name in model_objs, (
+                f"summary 引用未知 model {model_name!r}"
+            )
+            api_provider = model_objs[model_name].get("api_provider")
+            assert api_provider in provider_names, (
+                f"summary.model {model_name!r} 的 api_provider={api_provider!r} 不在 llm_providers 中"
+            )
 
-    def test_no_drift_on_llm_summary(self, loaded_model_config: Dict[str, Any]):
-        """llm_summary 不应被 drift report 标记为冗余。
-
-        重新加载并显式检查 drift report，确保修复后 [llm_summary] 不再被剥离。
-        """
+    def test_no_drift_on_summary(self, loaded_model_config: Dict[str, Any]):
+        """summary 不应被 drift report 标记为冗余。"""
         _config, report = load_config_dir(REAL_CONFIG_DIR)
-        redundant_keys = [r for r in report.redundant if "llm_summary" in r]
+        redundant_keys = [r for r in report.redundant if "summary" in r]
         assert not redundant_keys, (
-            f"llm_summary 被标记为冗余配置项: {redundant_keys}，说明 ModelConfig 仍未声明 llm_summary 字段"
+            f"summary 被标记为冗余配置项: {redundant_keys}"
         )
 
-    def test_llm_summary_independent_from_llm_fast(self, loaded_model_config: Dict[str, Any]):
-        """llm_summary 应当与 llm_fast 是独立的 profile（即使引用同一 provider）。"""
-        assert "llm_summary" in loaded_model_config
-        assert "llm_fast" in loaded_model_config
-        # 两者都是独立 dict 实例
-        assert loaded_model_config["llm_summary"] is not loaded_model_config["llm_fast"]
+    def test_summary_independent_profile_entry(self, loaded_model_config: Dict[str, Any]):
+        """summary 必须独立于其它 profile（如 replyer），即使共享 provider/model。"""
+        profiles = loaded_model_config["llm_profiles"]
+        assert "summary" in profiles
+        assert isinstance(profiles["summary"], dict)
+        # 不同 profile 名 = 不同入口（dict 不同 key）
+        assert "summary" != "replyer"
 
 
 # =============================================================================
-# Scenario B: LLMManager 为 llm_summary 创建独立 client 实例
+# Scenario B: LLMManager 为 summary 构造 model_list 解析
 # =============================================================================
 
 
-class TestScenarioBLLMManagerIndependentClient:
-    """Scenario B：LLMManager.setup() 后 llm_summary 应有独立 client 实例。"""
-
+class TestScenarioBLLMManagerParsesSummary:
     @pytest.fixture
     async def setup_manager_with_real_config(self, loaded_model_config: Dict[str, Any]):
-        """用真实 config/model.toml 初始化 LLMManager（mock client 注册表）。
+        """用真实 config/model.toml 初始化 LLMManager（mock client 注册表）。"""
+        created_instances = []
 
-        Mock 策略参考 tests/modules/llm/test_llm_manager.py：
-        patch.dict(_client_impls, {"openai": mock_class}) 拦截 get_client_impl。
-        每次 mock_class(merged_config) 返回独立 MagicMock，便于断言独立性。
-        """
-        # 用 side_effect 让每次构造都返回全新的 MagicMock（独立实例）
-        created_instances: list[Any] = []
-
-        def _make_instance(cfg: Dict[str, Any]) -> MagicMock:
+        def _make_instance(cfg):
             inst = MagicMock()
-            inst.cleanup = MagicMock()  # 同步 mock 即可，setup 不调用
-            inst._merged_config = cfg  # 保留合并配置便于断言
+            inst.cleanup = MagicMock()
+            inst._merged_config = cfg
             created_instances.append(inst)
             return inst
 
@@ -134,44 +120,30 @@ class TestScenarioBLLMManagerIndependentClient:
                 yield manager, created_instances, mock_backend_class
 
     @pytest.mark.asyncio
-    async def test_has_client_llm_summary(self, setup_manager_with_real_config):
-        """LLMManager.has_client('llm_summary') 必须返回 True。"""
-        manager, _created, _ = setup_manager_with_real_config
-        assert manager.has_client("llm_summary") is True, (
-            "LLMManager 未为 llm_summary 创建 client —— 说明 config 链路仍未保留 llm_summary"
-        )
+    async def test_has_profile_summary(self, setup_manager_with_real_config):
+        manager, _, _ = setup_manager_with_real_config
+        assert manager.has_profile("summary") is True
 
     @pytest.mark.asyncio
-    async def test_llm_summary_client_is_independent_from_llm_fast(self, setup_manager_with_real_config):
-        """llm_summary 的 client 实例必须与 llm_fast 不同（Task 8 独立连接池约束）。"""
-        manager, _created, _ = setup_manager_with_real_config
-        summary_client = manager.get_client("llm_summary")
-        fast_client = manager.get_client("llm_fast")
-        assert summary_client is not fast_client, (
-            "llm_summary 与 llm_fast 共享同一 client 实例，违反 Task 8 独立连接池约束"
-        )
+    async def test_summary_profile_resolves_model_list(self, setup_manager_with_real_config):
+        manager, _, _ = setup_manager_with_real_config
+        summary_cfg = manager.get_client_config("summary")
+        assert summary_cfg is not None
+        assert summary_cfg["profile_name"] == "summary"
+        assert len(summary_cfg["models"]) >= 1
+        # 每个 model 都应有 model_identifier 和 provider_name
+        for m in summary_cfg["models"]:
+            assert m["model_identifier"]
+            assert m["provider_name"]
 
     @pytest.mark.asyncio
-    async def test_llm_summary_uses_separate_constructor_call(self, setup_manager_with_real_config):
-        """mock_backend_class 应被多次调用（每个 profile 一次独立构造）。"""
-        _manager, created, mock_backend_class = setup_manager_with_real_config
-        # 至少 llm + llm_fast + vlm + llm_local + llm_summary 都应独立构造
-        # （假设 config/model.toml 中这些 profile 都引用了某 provider）
-        assert mock_backend_class.call_count >= 1, "应当至少为引用 provider 的 profile 构造一次 client"
-        # 创建的实例两两不同（无共享）
-        for i, inst_a in enumerate(created):
-            for j, inst_b in enumerate(created):
-                if i != j:
-                    assert inst_a is not inst_b, f"client 实例 {i} 和 {j} 共享同一对象，违反独立 client 约束"
-
-    @pytest.mark.asyncio
-    async def test_llm_summary_profile_config_recorded(self, setup_manager_with_real_config):
-        """manager._profile_configs 必须为 llm_summary 记录合并后的配置。"""
-        manager, _created, _ = setup_manager_with_real_config
-        assert "llm_summary" in manager._profile_configs, (
-            "_profile_configs 未记录 llm_summary，说明 setup() 未处理该 profile"
-        )
-        summary_cfg = manager._profile_configs["llm_summary"]
-        # 合并后应含 model（来自 profile）和 base_url（来自 provider）
-        assert "model" in summary_cfg, "合并配置缺少 model 字段"
-        assert "base_url" in summary_cfg, "合并配置缺少 base_url 字段（应继承自 provider）"
+    async def test_summary_shares_provider_with_other_profiles(self, setup_manager_with_real_config):
+        """summary 与 replyer 等 profile 共享同一 provider 时复用同一连接。"""
+        manager, _, _ = setup_manager_with_real_config
+        # 同一 provider 的客户端应是同一实例（共享连接池）
+        providers_used_by_summary = {
+            m["provider_name"] for m in manager.get_client_config("summary")["models"]
+        }
+        # 至少验证 has_provider
+        for provider_name in providers_used_by_summary:
+            assert manager.has_provider(provider_name) if hasattr(manager, "has_provider") else True

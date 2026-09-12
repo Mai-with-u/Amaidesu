@@ -82,7 +82,7 @@ def instantiate_agent(
         return MinecraftAgent(
             config=minecraft_cfg,
             llm_manager=llm_manager,
-            llm_profile="llm",
+            llm_profile="minecraft",
             prompt_manager=prompt_manager,
             event_bus=event_bus,
             tool_registry=tool_registry,

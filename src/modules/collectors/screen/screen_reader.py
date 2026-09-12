@@ -3,7 +3,7 @@ ScreenReader —— 屏幕变化 → VLM 文本
 
 仅在 ``ScreenAnalyzer`` 检测到屏幕**变化**时才调用 VLM，避免无变化的轮询浪费 token。
 
-VLM 调用统一走 ``LLMManager.chat_vision(client_type="vlm")``，key/model/重试/日志
+VLM 调用统一走 ``LLMManager.chat_vision(client_type="vision")``，key/model/重试/日志
 走 model.toml 的 ``[vlm]`` profile 与 ``[[llm_providers]]`` 池。
 
 缓存去重策略：最近 ``max_cached_images`` 张图像哈希，避免重复调用；
@@ -119,7 +119,7 @@ class ScreenReader:
             response = await self._llm_manager.chat_vision(
                 prompt=_VLM_PROMPT,
                 images=[image_bytes],
-                client_type="vlm",
+                client_type="vision",
                 system_message=_VLM_SYSTEM_MESSAGE,
             )
         except Exception as e:

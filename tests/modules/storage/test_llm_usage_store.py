@@ -92,15 +92,37 @@ class _FakeUsageClient:
 def _make_manager_with_fake_client(store: SQLiteStore, monkeypatch) -> LLMManager:
     manager = LLMManager(sqlite_store=store)
     # 直接注入客户端与配置，绕过 setup() 的真实 provider 装配
-    manager._clients["llm"] = _FakeUsageClient()
-    manager._profile_configs["llm"] = {"provider": "zhipu", "model": "glm-4.7"}
+    fake_client = _FakeUsageClient()
+    manager._provider_clients["zhipu"] = fake_client
+    manager._providers["zhipu"] = ({"name": "zhipu", "client_type": "openai"}, fake_client)
+    manager._models["glm-4.7"] = (
+        {"name": "glm-4.7", "model_identifier": "glm-4.7", "api_provider": "zhipu"},
+        "zhipu",
+    )
+    from src.modules.llm.manager import _ResolvedModel, _ResolvedProfile
+
+    manager._profiles["llm"] = _ResolvedProfile(
+        profile_name="llm",
+        hard_timeout_ms=90_000,
+        slow_threshold_ms=15_000,
+        selection_strategy="sequential",
+        seed=0,
+        temperature=None,
+        max_tokens=None,
+        models=[
+            _ResolvedModel(
+                model_name="glm-4.7", model_identifier="glm-4.7", provider_name="zhipu"
+            )
+        ],
+    )
+    manager._model_call_counts["llm"] = {}
     return manager
 
 
 @pytest.mark.asyncio
 async def test_successful_call_persists_llm_usage(store: SQLiteStore, monkeypatch) -> None:
     manager = _make_manager_with_fake_client(store, monkeypatch)
-    result = await manager.chat("你好")
+    result = await manager.chat("你好", client_type="llm")
     assert result.success
 
     rows = await store.execute("SELECT * FROM llm_usage")
@@ -117,9 +139,31 @@ async def test_successful_call_persists_llm_usage(store: SQLiteStore, monkeypatc
 @pytest.mark.asyncio
 async def test_call_without_store_does_not_persist(monkeypatch) -> None:
     manager = LLMManager()  # 未注入 store：不落库也不报错
-    manager._clients["llm"] = _FakeUsageClient()
-    manager._profile_configs["llm"] = {"provider": "zhipu"}
-    result = await manager.chat("你好")
+    fake_client = _FakeUsageClient()
+    manager._provider_clients["zhipu"] = fake_client
+    manager._providers["zhipu"] = ({"name": "zhipu", "client_type": "openai"}, fake_client)
+    manager._models["glm-4.7"] = (
+        {"name": "glm-4.7", "model_identifier": "glm-4.7", "api_provider": "zhipu"},
+        "zhipu",
+    )
+    from src.modules.llm.manager import _ResolvedModel, _ResolvedProfile
+
+    manager._profiles["llm"] = _ResolvedProfile(
+        profile_name="llm",
+        hard_timeout_ms=90_000,
+        slow_threshold_ms=15_000,
+        selection_strategy="sequential",
+        seed=0,
+        temperature=None,
+        max_tokens=None,
+        models=[
+            _ResolvedModel(
+                model_name="glm-4.7", model_identifier="glm-4.7", provider_name="zhipu"
+            )
+        ],
+    )
+    manager._model_call_counts["llm"] = {}
+    result = await manager.chat("你好", client_type="llm")
     assert result.success
 
 
@@ -131,6 +175,6 @@ async def test_persist_failure_degrades_without_breaking_call(store: SQLiteStore
         raise RuntimeError("db locked")
 
     monkeypatch.setattr(store, "insert_llm_usage", _boom)
-    result = await manager.chat("你好")
+    result = await manager.chat("你好", client_type="llm")
     # 落库失败不阻断调用链，调用仍成功返回
     assert result.success

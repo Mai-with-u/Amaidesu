@@ -56,7 +56,7 @@ async def test_chat_basic():
         usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15)
     )
 
-    result = await client.chat(MESSAGES, temperature=0.7, max_tokens=99)
+    result = await client.chat(MESSAGES, model="test-model", temperature=0.7, max_tokens=99)
 
     assert result.success is True
     assert result.content == "world"
@@ -80,7 +80,7 @@ async def test_chat_timeout():
 
     sdk_client.chat.completions.create.side_effect = slow_create
 
-    result = await client.chat(MESSAGES)
+    result = await client.chat(MESSAGES, model="test-model")
 
     assert result.success is False
     assert result.error is not None
@@ -99,7 +99,7 @@ async def test_chat_interrupt():
     sdk_client.chat.completions.create.side_effect = slow_create
     asyncio.get_running_loop().call_later(0.1, interrupt_flag.set)
 
-    result = await client.chat(MESSAGES, interrupt_flag=interrupt_flag)
+    result = await client.chat(MESSAGES, model="test-model", interrupt_flag=interrupt_flag)
 
     assert result.success is False
     assert result.error is not None
@@ -121,7 +121,7 @@ async def test_stream_chat_interrupt():
     stream.__aiter__.side_effect = chunks
     sdk_client.chat.completions.create.return_value = stream
 
-    pieces = [piece async for piece in client.stream_chat(MESSAGES, max_tokens=88, stop_event=stop_event)]
+    pieces = [piece async for piece in client.stream_chat(MESSAGES, model="test-model", max_tokens=88, stop_event=stop_event)]
 
     assert pieces == ["first"]
     assert sdk_client.chat.completions.create.await_args.kwargs["max_tokens"] == 88
@@ -137,7 +137,7 @@ async def test_vision():
         usage=SimpleNamespace(prompt_tokens=20, completion_tokens=6, total_tokens=26),
     )
 
-    result = await client.vision(MESSAGES, [b"not-a-real-image"])
+    result = await client.vision(MESSAGES, [b"not-a-real-image"], model="test-model")
 
     assert result.success is True
     assert result.content == "an image"
@@ -158,7 +158,7 @@ async def test_tool_calls():
     )
     sdk_client.chat.completions.create.return_value = _response(tool_calls=[tool_call])
 
-    result = await client.chat(MESSAGES, tools=[{"type": "function", "function": {"name": "weather"}}])
+    result = await client.chat(MESSAGES, model="test-model", tools=[{"type": "function", "function": {"name": "weather"}}])
 
     assert result.tool_calls == [
         {
@@ -180,8 +180,7 @@ async def test_tool_args_json_repair():
     )
     sdk_client.chat.completions.create.return_value = _response(tool_calls=[tool_call])
 
-    result = await client.chat(MESSAGES)
-
+    result = await client.chat(MESSAGES, model="test-model")
     assert result.tool_calls is not None
     assert result.tool_calls[0]["function"]["arguments"] == {"city": "Tokyo"}
 
@@ -191,8 +190,7 @@ async def test_reasoning_native():
     client, sdk_client = _make_client({"reasoning_parse_mode": "native"})
     sdk_client.chat.completions.create.return_value = _response(reasoning_content="思考过程")
 
-    result = await client.chat(MESSAGES)
-
+    result = await client.chat(MESSAGES, model="test-model")
     assert result.content == "world"
     assert result.reasoning_content == "思考过程"
 
@@ -202,8 +200,7 @@ async def test_reasoning_think_tag():
     client, sdk_client = _make_client({"reasoning_parse_mode": "think_tag"})
     sdk_client.chat.completions.create.return_value = _response(content="<think>internal</think>hello")
 
-    result = await client.chat(MESSAGES)
-
+    result = await client.chat(MESSAGES, model="test-model")
     assert result.content == "hello"
     assert result.reasoning_content == "internal"
 
@@ -215,8 +212,7 @@ async def test_reasoning_none():
         content="<think>internal</think>hello", reasoning_content="native"
     )
 
-    result = await client.chat(MESSAGES)
-
+    result = await client.chat(MESSAGES, model="test-model")
     assert result.content == "<think>internal</think>hello"
     assert result.reasoning_content is None
 
@@ -361,7 +357,7 @@ async def test_chat_streaming_emits_reasoning_and_content_deltas():
     sdk_client.chat.completions.create.return_value = _FakeStream(chunks)
 
     received = []
-    result = await client.chat(MESSAGES, on_delta=lambda kind, text: received.append((kind, text)))
+    result = await client.chat(MESSAGES, model="test-model", on_delta=lambda kind, text: received.append((kind, text)))
 
     assert result.success is True
     assert result.content == "你好"
@@ -384,7 +380,7 @@ async def test_chat_streaming_accumulates_tool_call_fragments():
     sdk_client.chat.completions.create.return_value = _FakeStream(chunks)
 
     received = []
-    result = await client.chat(MESSAGES, on_delta=lambda kind, text: received.append((kind, text)))
+    result = await client.chat(MESSAGES, model="test-model", on_delta=lambda kind, text: received.append((kind, text)))
 
     assert result.success is True
     assert received == [("reasoning", "决定回应")]
@@ -407,7 +403,7 @@ async def test_chat_streaming_falls_back_to_non_streaming_on_create_error():
     ]
 
     received = []
-    result = await client.chat(MESSAGES, on_delta=lambda kind, text: received.append((kind, text)))
+    result = await client.chat(MESSAGES, model="test-model", on_delta=lambda kind, text: received.append((kind, text)))
 
     assert result.success is True
     assert result.content == "fallback"

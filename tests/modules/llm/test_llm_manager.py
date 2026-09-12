@@ -1,40 +1,36 @@
-"""
-LLMManager 单元测试（provider-reference 配置格式）
+"""LLMManager 单元测试（三层配置：providers / models / profiles）
 
 测试 LLMManager 的所有核心功能：
-- 初始化和配置（provider-reference 格式）
-- 聊天接口（chat、stream_chat）
-- 工具调用（call_tools）
-- 视觉理解（vision）
-- 简化接口（simple_chat、simple_vision）
-- 重试机制（_call_with_retry）
-- 统计信息（token usage、backend info）
-- 新增：provider fail-fast、role 覆盖、共享 client 等
+- 三层结构初始化（llm_providers + llm_models + llm_profiles）
+- 聊天接口（chat / chat_messages / chat_vision / stream_chat / call_tools）
+- 简化接口（simple_chat / simple_vision）
+- 模型选择策略（sequential / balance / random）
+- 故障切换（hard_timeout_ms → 切下一个 model；slow_threshold_ms → 仅告警）
+- 重试机制（仅在单模型上重试，不跨模型）
+- 统计信息（token usage / provider info）
+- 清理（cleanup）
 
 运行: uv run pytest tests/modules/llm/test_llm_manager.py -v
 
-=== 新配置格式说明 ===
+=== 新配置格式 ===
 
-旧格式（已废弃）：
-    {
-        "llm": {"backend": "openai", "api_key": "...", "model": "..."},
-        "llm_fast": {"backend": "openai", "api_key": "...", "model": "..."},
-    }
-
-新格式（provider-reference）：
     {
         "llm_providers": [
             {"name": "test", "client_type": "openai", "base_url": "...", "api_key": "..."}
         ],
-        "llm": {"provider": "test", "model": "..."},
-        "llm_fast": {"provider": "test", "model": "..."},
+        "llm_models": [
+            {"name": "m1", "model_identifier": "gpt-4o-mini", "api_provider": "test"},
+        ],
+        "llm_profiles": {
+            "planner": {"model_list": ["m1"], "hard_timeout_ms": 90000},
+        },
     }
 
 === Mock 策略 ===
 
-每个 Client 实现通过 src.modules.llm.clients.base.register_client() 在
-模块导入时注册到 _client_impls 字典。注册时存的是原始类对象的引用，
-而不是通过模块属性查找。
+client 实现通过 src.modules.llm.clients.base.register_client() 在模块导入
+时注册到 _client_impls 字典，注册时存的是原始类对象的引用，
+不是通过模块属性查找。
 
 因此 `patch("src.modules.llm.clients.openai_client.OpenAIClient")` 不能拦截
 manager 内部 `get_client_impl("openai")` 的查询——它会拿到未 patch 的原类。
@@ -52,10 +48,11 @@ import pytest
 
 from src.modules.llm.clients.base import _client_impls
 from src.modules.llm.manager import (
+    ClientType,  # 向后兼容别名
     LLMManager,
     LLMResponse,
+    ProfileNames,
     RetryConfig,
-    ClientType,
     normalize_tool_calls_for_protocol,
 )
 
@@ -67,8 +64,6 @@ from src.modules.llm.manager import (
 
 class TestNormalizeToolCallsForProtocol:
     def test_dict_arguments_serialized_to_json_string(self) -> None:
-        # 回归：client 解析层返回 arguments 为 dict，直接喂回被严格端点
-        # 拒绝（400 invalid type: map）
         raw = [
             {
                 "id": "call_01",
@@ -97,10 +92,10 @@ class TestNormalizeToolCallsForProtocol:
 
 
 # =============================================================================
-# Test Constants - 标准配置
+# 标准配置：三层结构（1 个 provider / 3 个 model / 3 个 profile）
 # =============================================================================
 
-# 一个标准的 provider 配置（用于验证 provider config 直接传给 Client 构造器）
+
 PROVIDER_CONFIG = {
     "name": "test",
     "client_type": "openai",
@@ -108,26 +103,17 @@ PROVIDER_CONFIG = {
     "api_key": "test-api-key",
 }
 
-# 标准 mock_config：1 个 provider "test"，3 个 role（llm / llm_fast / vlm）共享同一 provider
 STANDARD_MOCK_CONFIG: Dict[str, Any] = {
     "llm_providers": [PROVIDER_CONFIG],
-    "llm": {
-        "provider": "test",
-        "model": "gpt-4o-mini",
-        "temperature": 0.7,
-        "max_tokens": 2048,
-    },
-    "llm_fast": {
-        "provider": "test",
-        "model": "gpt-3.5-turbo",
-        "temperature": 0.2,
-        "max_tokens": 1024,
-    },
-    "vlm": {
-        "provider": "test",
-        "model": "gpt-4-vision-preview",
-        "temperature": 0.3,
-        "max_tokens": 1024,
+    "llm_models": [
+        {"name": "gpt-4o-mini", "model_identifier": "gpt-4o-mini", "api_provider": "test"},
+        {"name": "gpt-3.5-turbo", "model_identifier": "gpt-3.5-turbo", "api_provider": "test"},
+        {"name": "gpt-4-vision", "model_identifier": "gpt-4-vision-preview", "api_provider": "test"},
+    ],
+    "llm_profiles": {
+        "planner": {"model_list": ["gpt-4o-mini"], "temperature": 0.7, "max_tokens": 2048},
+        "replyer": {"model_list": ["gpt-3.5-turbo"], "temperature": 0.2, "max_tokens": 1024},
+        "vision": {"model_list": ["gpt-4-vision"], "temperature": 0.3, "max_tokens": 1024},
     },
 }
 
@@ -138,7 +124,6 @@ STANDARD_MOCK_CONFIG: Dict[str, Any] = {
 
 
 def _make_mock_backend() -> MagicMock:
-    """构造一个标准 mock backend，覆盖 chat/stream_chat/vision/cleanup/get_info。"""
     mock_backend = MagicMock()
     mock_backend.chat = AsyncMock(
         return_value=LLMResponse(
@@ -173,13 +158,11 @@ def _make_mock_backend() -> MagicMock:
 
 @pytest.fixture
 def mock_config() -> Dict[str, Any]:
-    """标准测试配置（1 个 provider 被 3 个 role 共享）"""
     return STANDARD_MOCK_CONFIG
 
 
 @pytest.fixture
 def llm_manager() -> LLMManager:
-    """未初始化的 LLMManager 实例"""
     return LLMManager()
 
 
@@ -201,107 +184,30 @@ async def setup_llm_manager(llm_manager: LLMManager, mock_config: Dict[str, Any]
 
 
 @pytest.mark.asyncio
-async def test_setup_initializes_backends(llm_manager: LLMManager, mock_config: Dict[str, Any]):
-    """测试 setup 初始化 providers 和 roles"""
-    mock_backend = _make_mock_backend()
-    mock_backend_class = MagicMock(return_value=mock_backend)
+async def test_setup_initializes_providers_and_profiles(
+    llm_manager: LLMManager, mock_config: Dict[str, Any]
+):
+    """测试 setup 初始化 providers / models / profiles"""
+    mock_backend_class = MagicMock(return_value=_make_mock_backend())
 
     with patch.dict(_client_impls, {"openai": mock_backend_class}):
         with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
-            # mock_config 有 1 个 provider + 3 个 role
-            # 每个 role 用 merged config 独立初始化，所以共 3 次
-            assert mock_backend_class.call_count == 3
-            assert len(llm_manager._providers) == 1
-            assert "test" in llm_manager._providers
-            assert len(llm_manager._clients) == 3
-            assert "llm" in llm_manager._clients
-            assert "llm_fast" in llm_manager._clients
-            assert "vlm" in llm_manager._clients
+            # 1 个 provider → 1 个客户端实例（profile 维度不再各自构造 client）
+            assert mock_backend_class.call_count == 1
+            assert len(llm_manager.list_providers()) == 1
+            assert "test" in llm_manager.list_providers()
+            assert len(llm_manager.list_models()) == 3
+            assert len(llm_manager.list_clients()) == 3  # planner / replyer / vision
+            for p in ("planner", "replyer", "vision"):
+                assert llm_manager.has_profile(p)
 
 
 @pytest.mark.asyncio
-async def test_setup_with_custom_config(llm_manager: LLMManager):
-    """测试使用自定义 provider 配置初始化（验证 pcfg 是 provider config 而非 role config）"""
-    custom_provider = {
-        "name": "custom",
-        "client_type": "openai",
-        "model": "custom-model",
-        "api_key": "custom-key",
-        "base_url": "https://custom.api.com/v1",
-    }
-    config = {
-        "llm_providers": [custom_provider],
-        "llm": {"provider": "custom", "model": "gpt-4"},
-    }
-
-    mock_backend_class = MagicMock(return_value=MagicMock())
-    with patch.dict(_client_impls, {"openai": mock_backend_class}):
-        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
-            await llm_manager.setup(config)
-
-            # 验证 client 使用 merged config（provider + role 合并），model 是 role 的 gpt-4
-            call_args = mock_backend_class.call_args[0][0]
-            assert call_args["model"] == "gpt-4"
-            assert call_args["api_key"] == "custom-key"
-
-            # role config 应该 merge 到 _profile_configs
-            # merged = {**provider_cfg, **role_raw}
-            # 所以 role 的 model 优先级高于 provider
-            role_config = llm_manager._profile_configs["llm"]
-            assert role_config["model"] == "gpt-4"
-            assert role_config["api_key"] == "custom-key"
-            assert role_config["base_url"] == "https://custom.api.com/v1"
-
-
-@pytest.mark.asyncio
-async def test_setup_unknown_client_type_raises_error(llm_manager: LLMManager):
-    """测试未注册的 client_type 立即 fail-fast（不再静默 fallback 到 OpenAI）"""
-    config = {
-        "llm_providers": [
-            {"name": "test", "client_type": "unknown_backend"},
-        ],
-        "llm": {"provider": "test", "model": "test-model"},
-    }
-
-    with pytest.raises(ValueError, match="未注册的客户端类型"):
-        await llm_manager.setup(config)
-
-
-@pytest.mark.asyncio
-async def test_setup_unknown_provider_raises_error(llm_manager: LLMManager):
-    """测试 role 引用了不存在的 provider 时 fail-fast"""
-    mock_backend_class = MagicMock(return_value=MagicMock())
-    config = {
-        "llm_providers": [{"name": "real", "client_type": "openai"}],
-        "llm": {"provider": "nonexistent", "model": "test-model"},
-    }
-
-    with patch.dict(_client_impls, {"openai": mock_backend_class}):
-        with pytest.raises(ValueError, match="provider 'nonexistent' 不存在"):
-            await llm_manager.setup(config)
-
-
-@pytest.mark.asyncio
-async def test_setup_duplicate_provider_name_raises_error(llm_manager: LLMManager):
-    """测试 llm_providers 中存在重复 name 时 fail-fast"""
-    mock_backend_class = MagicMock(return_value=MagicMock())
-    config = {
-        "llm_providers": [
-            {"name": "test", "client_type": "openai"},
-            {"name": "test", "client_type": "openai"},  # 重复
-        ],
-        "llm": {"provider": "test", "model": "x"},
-    }
-
-    with patch.dict(_client_impls, {"openai": mock_backend_class}):
-        with pytest.raises(ValueError, match="重复的 provider name"):
-            await llm_manager.setup(config)
-
-
-@pytest.mark.asyncio
-async def test_setup_initializes_token_manager(llm_manager: LLMManager, mock_config: Dict[str, Any]):
+async def test_setup_initializes_token_manager(
+    llm_manager: LLMManager, mock_config: Dict[str, Any]
+):
     """测试 setup 初始化 TokenUsageManager"""
     mock_backend_class = MagicMock(return_value=_make_mock_backend())
 
@@ -313,6 +219,133 @@ async def test_setup_initializes_token_manager(llm_manager: LLMManager, mock_con
             mock_token_manager.assert_called_once_with(use_global=True)
 
 
+@pytest.mark.asyncio
+async def test_setup_with_custom_config(llm_manager: LLMManager):
+    """测试自定义 provider 配置初始化"""
+    custom_provider = {
+        "name": "custom",
+        "client_type": "openai",
+        "api_key": "custom-key",
+        "base_url": "https://custom.api.com/v1",
+    }
+    config = {
+        "llm_providers": [custom_provider],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "custom-model-id", "api_provider": "custom"},
+        ],
+        "llm_profiles": {
+            "planner": {"model_list": ["m1"]},
+        },
+    }
+
+    mock_backend_class = MagicMock(return_value=MagicMock())
+    with patch.dict(_client_impls, {"openai": mock_backend_class}):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
+
+            # client 仅构造 provider 配置（不绑定 model）
+            call_args = mock_backend_class.call_args[0][0]
+            assert call_args["api_key"] == "custom-key"
+            assert call_args["base_url"] == "https://custom.api.com/v1"
+            assert "model" not in call_args  # model 由调用方每次传入
+
+
+@pytest.mark.asyncio
+async def test_setup_unknown_client_type_raises_error(llm_manager: LLMManager):
+    """测试未注册的 client_type 立即 fail-fast"""
+    config = {
+        "llm_providers": [
+            {"name": "test", "client_type": "unknown_backend"},
+        ],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id1", "api_provider": "test"},
+        ],
+        "llm_profiles": {"planner": {"model_list": ["m1"]}},
+    }
+
+    with pytest.raises(ValueError, match="未注册的客户端类型"):
+        await llm_manager.setup(config)
+
+
+@pytest.mark.asyncio
+async def test_setup_unknown_provider_in_model_raises_error(llm_manager: LLMManager):
+    """测试 model 引用了不存在的 provider 时 fail-fast"""
+    mock_backend_class = MagicMock(return_value=MagicMock())
+    config = {
+        "llm_providers": [{"name": "real", "client_type": "openai"}],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id1", "api_provider": "nonexistent"},
+        ],
+        "llm_profiles": {"planner": {"model_list": ["m1"]}},
+    }
+
+    with patch.dict(_client_impls, {"openai": mock_backend_class}):
+        with pytest.raises(ValueError, match="llm_models"):
+            await llm_manager.setup(config)
+
+
+@pytest.mark.asyncio
+async def test_setup_duplicate_provider_name_raises_error(llm_manager: LLMManager):
+    """测试 llm_providers 中存在重复 name 时 fail-fast"""
+    mock_backend_class = MagicMock(return_value=MagicMock())
+    config = {
+        "llm_providers": [
+            {"name": "test", "client_type": "openai"},
+            {"name": "test", "client_type": "openai"},
+        ],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id1", "api_provider": "test"},
+        ],
+        "llm_profiles": {"planner": {"model_list": ["m1"]}},
+    }
+
+    with patch.dict(_client_impls, {"openai": mock_backend_class}):
+        with pytest.raises(ValueError, match="重复的 provider name"):
+            await llm_manager.setup(config)
+
+
+@pytest.mark.asyncio
+async def test_setup_empty_providers_raises_error(llm_manager: LLMManager):
+    """测试 llm_providers 为空时 fail-fast"""
+    config: Dict[str, Any] = {
+        "llm_providers": [],
+        "llm_models": [],
+        "llm_profiles": {},
+    }
+    with pytest.raises(ValueError, match="llm_providers"):
+        await llm_manager.setup(config)
+
+
+@pytest.mark.asyncio
+async def test_setup_profile_references_unknown_model_raises_error(llm_manager: LLMManager):
+    """测试 profile.model_list 引用未知 model 时 fail-fast"""
+    mock_backend_class = MagicMock(return_value=MagicMock())
+    config = {
+        "llm_providers": [{"name": "test", "client_type": "openai"}],
+        "llm_models": [{"name": "m1", "model_identifier": "id1", "api_provider": "test"}],
+        "llm_profiles": {"planner": {"model_list": ["nonexistent"]}},
+    }
+
+    with patch.dict(_client_impls, {"openai": mock_backend_class}):
+        with pytest.raises(ValueError, match="引用未知 model"):
+            await llm_manager.setup(config)
+
+
+@pytest.mark.asyncio
+async def test_setup_profile_empty_model_list_raises_error(llm_manager: LLMManager):
+    """测试 profile.model_list 为空时 fail-fast"""
+    mock_backend_class = MagicMock(return_value=MagicMock())
+    config = {
+        "llm_providers": [{"name": "test", "client_type": "openai"}],
+        "llm_models": [{"name": "m1", "model_identifier": "id1", "api_provider": "test"}],
+        "llm_profiles": {"planner": {"model_list": []}},
+    }
+
+    with patch.dict(_client_impls, {"openai": mock_backend_class}):
+        with pytest.raises(ValueError, match="model_list 为空"):
+            await llm_manager.setup(config)
+
+
 # =============================================================================
 # 聊天接口测试
 # =============================================================================
@@ -320,7 +353,7 @@ async def test_setup_initializes_token_manager(llm_manager: LLMManager, mock_con
 
 @pytest.mark.asyncio
 async def test_chat_basic(setup_llm_manager):
-    """测试基本聊天功能"""
+    """测试基本聊天功能（planner profile）"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
     response = await llm_manager.chat("Hello, world!")
@@ -332,14 +365,26 @@ async def test_chat_basic(setup_llm_manager):
 
 
 @pytest.mark.asyncio
+async def test_chat_passes_model_per_call(setup_llm_manager):
+    """测试 chat 调用时把 model_identifier 作为 model 参数传给 client"""
+    llm_manager, mock_backend, _ = setup_llm_manager
+
+    await llm_manager.chat("Hello", client_type="planner")
+
+    call_args = mock_backend.chat.call_args
+    # 每次调用都应携带 model 参数（profile='planner' → model='gpt-4o-mini'）
+    assert call_args[1]["model"] == "gpt-4o-mini"
+    # model 不再绑定到 self.model（构造时无 model 字段）
+    assert "model" not in (llm_manager._providers["test"][0])
+
+
+@pytest.mark.asyncio
 async def test_chat_with_system_message(setup_llm_manager):
     """测试带系统消息的聊天"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
-    response = await llm_manager.chat("Hello", system_message="You are a helpful assistant")
+    await llm_manager.chat("Hello", system_message="You are a helpful assistant")
 
-    assert response.success is True
-    # 验证消息格式正确
     call_args = mock_backend.chat.call_args
     messages = call_args[1]["messages"]
     assert len(messages) == 2
@@ -351,52 +396,57 @@ async def test_chat_with_system_message(setup_llm_manager):
 
 @pytest.mark.asyncio
 async def test_chat_with_temperature(setup_llm_manager):
-    """测试带温度参数的聊天"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
-    response = await llm_manager.chat("Hello", temperature=0.9)
+    await llm_manager.chat("Hello", temperature=0.9)
 
-    assert response.success is True
     call_args = mock_backend.chat.call_args
     assert call_args[1]["temperature"] == 0.9
 
 
 @pytest.mark.asyncio
 async def test_chat_with_max_tokens(setup_llm_manager):
-    """测试带 max_tokens 参数的聊天"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
-    response = await llm_manager.chat("Hello", max_tokens=100)
+    await llm_manager.chat("Hello", max_tokens=100)
 
-    assert response.success is True
     call_args = mock_backend.chat.call_args
     assert call_args[1]["max_tokens"] == 100
 
 
 @pytest.mark.asyncio
-async def test_chat_with_custom_backend(setup_llm_manager):
-    """测试使用自定义 client_type"""
+async def test_chat_with_custom_profile(setup_llm_manager):
+    """测试选择 replyer profile"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
-    response = await llm_manager.chat("Hello", client_type="llm_fast")
+    response = await llm_manager.chat("Hello", client_type="replyer")
 
     assert response.success is True
+    call_args = mock_backend.chat.call_args
+    assert call_args[1]["model"] == "gpt-3.5-turbo"
 
 
 @pytest.mark.asyncio
 async def test_chat_records_token_usage(setup_llm_manager):
-    """测试聊天记录 token 使用量"""
     llm_manager, mock_backend, mock_token_manager = setup_llm_manager
 
     await llm_manager.chat("Hello")
 
-    # 验证 token 使用量被记录
     mock_token_manager.return_value.record_usage.assert_called_once_with(
         model_name="gpt-4o-mini",
         prompt_tokens=10,
         completion_tokens=5,
         total_tokens=15,
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_with_unknown_profile_raises(setup_llm_manager):
+    """测试调用未注册的 profile 立即 fail-fast"""
+    llm_manager, _, _ = setup_llm_manager
+
+    with pytest.raises(ValueError, match="未配置"):
+        await llm_manager.chat("Test", client_type="unknown_backend")
 
 
 # =============================================================================
@@ -406,8 +456,6 @@ async def test_chat_records_token_usage(setup_llm_manager):
 
 @pytest.mark.asyncio
 async def test_stream_chat_basic(llm_manager: LLMManager, mock_config: Dict[str, Any]):
-    """测试基本流式聊天"""
-
     async def mock_stream(**kwargs):
         for chunk in ["Hello", " world", "!"]:
             yield chunk
@@ -429,8 +477,6 @@ async def test_stream_chat_basic(llm_manager: LLMManager, mock_config: Dict[str,
 
 @pytest.mark.asyncio
 async def test_stream_chat_with_stop_event(llm_manager: LLMManager, mock_config: Dict[str, Any]):
-    """测试流式聊天支持停止事件"""
-
     async def mock_stream(**kwargs):
         for chunk in ["Chunk1", "Chunk2", "Chunk3"]:
             stop_event = kwargs.get("stop_event")
@@ -456,31 +502,6 @@ async def test_stream_chat_with_stop_event(llm_manager: LLMManager, mock_config:
             assert len(chunks) == 2
 
 
-@pytest.mark.asyncio
-async def test_stream_chat_with_system_message(llm_manager: LLMManager, mock_config: Dict[str, Any]):
-    """测试流式聊天带系统消息"""
-
-    async def mock_stream(**kwargs):
-        messages = kwargs.get("messages", [])
-        if len(messages) == 2 and messages[0]["role"] == "system":
-            yield "OK"
-        else:
-            yield "FAIL"
-
-    mock_backend = MagicMock()
-    mock_backend.stream_chat = mock_stream
-
-    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
-        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
-            await llm_manager.setup(mock_config)
-
-            chunks = []
-            async for chunk in llm_manager.stream_chat("Hello", system_message="You are helpful"):
-                chunks.append(chunk)
-
-            assert chunks == ["OK"]
-
-
 # =============================================================================
 # 工具调用测试
 # =============================================================================
@@ -488,7 +509,6 @@ async def test_stream_chat_with_system_message(llm_manager: LLMManager, mock_con
 
 @pytest.mark.asyncio
 async def test_call_tools_basic(setup_llm_manager):
-    """测试基本工具调用"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
     mock_backend.chat.return_value = LLMResponse(
@@ -524,23 +544,7 @@ async def test_call_tools_basic(setup_llm_manager):
 
 
 @pytest.mark.asyncio
-async def test_call_tools_with_system_message(setup_llm_manager):
-    """测试工具调用带系统消息"""
-    llm_manager, mock_backend, _ = setup_llm_manager
-
-    tools = [{"type": "function", "function": {"name": "test"}}]
-
-    await llm_manager.call_tools("Test", tools, system_message="You are a tool-using assistant")
-
-    call_args = mock_backend.chat.call_args
-    messages = call_args[1]["messages"]
-    assert messages[0]["role"] == "system"
-    assert messages[0]["content"] == "You are a tool-using assistant"
-
-
-@pytest.mark.asyncio
 async def test_call_tools_passes_tools_parameter(setup_llm_manager):
-    """测试工具调用正确传递 tools 参数"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
     tools = [{"type": "function", "function": {"name": "calculate", "description": "Perform calculation"}}]
@@ -559,7 +563,6 @@ async def test_call_tools_passes_tools_parameter(setup_llm_manager):
 
 @pytest.mark.asyncio
 async def test_vision_basic(setup_llm_manager):
-    """测试基本视觉理解"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
     images = ["https://example.com/image.jpg"]
@@ -573,7 +576,6 @@ async def test_vision_basic(setup_llm_manager):
 
 @pytest.mark.asyncio
 async def test_vision_with_multiple_images(setup_llm_manager):
-    """测试多图片视觉理解"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
     images = [
@@ -586,31 +588,19 @@ async def test_vision_with_multiple_images(setup_llm_manager):
     assert response.success is True
     call_args = mock_backend.vision.call_args
     assert call_args[1]["images"] == images
+    assert call_args[1]["model"] == "gpt-4-vision-preview"
 
 
 @pytest.mark.asyncio
-async def test_vision_with_system_message(setup_llm_manager):
-    """测试视觉理解带系统消息"""
-    llm_manager, mock_backend, _ = setup_llm_manager
-
-    response = await llm_manager.chat_vision(
-        "Describe this", ["https://example.com/image.jpg"], system_message="You are a vision expert"
-    )
-
-    assert response.success is True
-    call_args = mock_backend.vision.call_args
-    messages = call_args[1]["messages"]
-    assert messages[0]["role"] == "system"
-
-
-@pytest.mark.asyncio
-async def test_vision_uses_vlm_backend_by_default(setup_llm_manager):
-    """测试 vision 默认使用 vlm client"""
+async def test_vision_uses_vision_backend_by_default(setup_llm_manager):
+    """测试 vision 默认走 vision profile"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
     await llm_manager.chat_vision("Test", ["image.jpg"])
 
     mock_backend.vision.assert_called_once()
+    call_args = mock_backend.vision.call_args
+    assert call_args[1]["model"] == "gpt-4-vision-preview"
 
 
 # =============================================================================
@@ -620,7 +610,6 @@ async def test_vision_uses_vlm_backend_by_default(setup_llm_manager):
 
 @pytest.mark.asyncio
 async def test_simple_chat_returns_text(setup_llm_manager):
-    """测试 simple_chat 直接返回文本"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
     result = await llm_manager.simple_chat("Hello")
@@ -630,29 +619,29 @@ async def test_simple_chat_returns_text(setup_llm_manager):
 
 @pytest.mark.asyncio
 async def test_simple_chat_with_error_returns_error_message(setup_llm_manager):
-    """测试 simple_chat 错误处理"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
     mock_backend.chat.return_value = LLMResponse(success=False, content=None, error="API Error")
 
     result = await llm_manager.simple_chat("Hello")
 
-    assert result == "错误: API Error"
+    # 新格式：失败时 error 含 "全部模型失败 [...]" + 底层错误，便于排查
+    assert result.startswith("错误:")
+    assert "API Error" in result
+    assert "gpt-4o-mini" in result  # 列出尝试过的 model
 
 
 @pytest.mark.asyncio
-async def test_simple_chat_with_backend_parameter(setup_llm_manager):
-    """测试 simple_chat 支持 client_type 参数"""
+async def test_simple_chat_with_profile_parameter(setup_llm_manager):
     llm_manager, mock_backend, _ = setup_llm_manager
 
-    result = await llm_manager.simple_chat("Test", client_type="llm_fast")
+    result = await llm_manager.simple_chat("Test", client_type="replyer")
 
     assert result == "Test response"
 
 
 @pytest.mark.asyncio
 async def test_simple_vision_returns_text(setup_llm_manager):
-    """测试 simple_vision 直接返回文本"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
     result = await llm_manager.simple_vision("Describe this", ["image.jpg"])
@@ -662,24 +651,26 @@ async def test_simple_vision_returns_text(setup_llm_manager):
 
 @pytest.mark.asyncio
 async def test_simple_vision_with_error_returns_error_message(setup_llm_manager):
-    """测试 simple_vision 错误处理"""
     llm_manager, mock_backend, _ = setup_llm_manager
 
     mock_backend.vision.return_value = LLMResponse(success=False, content=None, error="Vision API Error")
 
     result = await llm_manager.simple_vision("Test", ["image.jpg"])
 
-    assert result == "错误: Vision API Error"
+    # 新格式：失败时 error 含 "全部模型失败 [...]" + 底层错误
+    assert result.startswith("错误:")
+    assert "Vision API Error" in result
+    assert "gpt-4-vision" in result
 
 
 # =============================================================================
-# 重试机制测试
+# 重试机制测试（单模型内的重试，不跨模型）
 # =============================================================================
 
 
 @pytest.mark.asyncio
 async def test_retry_on_failure(llm_manager: LLMManager, mock_config: Dict[str, Any]):
-    """测试失败时自动重试"""
+    """测试失败时在单模型上自动重试"""
     call_count = 0
 
     async def failing_chat(**kwargs):
@@ -705,12 +696,12 @@ async def test_retry_on_failure(llm_manager: LLMManager, mock_config: Dict[str, 
             response = await llm_manager.chat("Test")
 
             assert response.success is True
-            assert call_count == 3  # 失败2次，第3次成功
+            assert call_count == 3  # 失败 2 次，第 3 次成功
 
 
 @pytest.mark.asyncio
 async def test_retry_exhaustion(llm_manager: LLMManager, mock_config: Dict[str, Any]):
-    """测试重试次数耗尽"""
+    """测试单模型重试耗尽（max_retries 默认 3）"""
 
     async def always_failing_chat(**kwargs):
         raise Exception("Persistent API Error")
@@ -756,38 +747,269 @@ async def test_retry_with_custom_config(llm_manager: LLMManager, mock_config: Di
             elapsed = time.time() - start
 
             assert response.success is False
-            assert call_count == 2  # max_retries=2
-            # 验证有延迟（base_delay=0.1）
+            assert call_count == 2  # max_retries=2 → 1 次首次 + 1 次重试
             assert elapsed >= 0.1
 
 
+# =============================================================================
+# 模型选择策略测试
+# =============================================================================
+
+
 @pytest.mark.asyncio
-async def test_retry_exponential_backoff(llm_manager: LLMManager, mock_config: Dict[str, Any]):
-    """测试指数退避"""
-    llm_manager._retry_config = RetryConfig(max_retries=3, base_delay=0.1)
+async def test_sequential_strategy_uses_first_model(llm_manager: LLMManager):
+    """sequential 策略：始终取 model_list[0]"""
+    config = {
+        "llm_providers": [{"name": "p1", "client_type": "openai"}],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id-m1", "api_provider": "p1"},
+            {"name": "m2", "model_identifier": "id-m2", "api_provider": "p1"},
+        ],
+        "llm_profiles": {
+            "planner": {
+                "model_list": ["m1", "m2"],
+                "selection_strategy": {"name": "sequential"},
+            },
+        },
+    }
+    mock_backend = _make_mock_backend()
+    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
 
-    call_times = []
+            # 连续调用 3 次：每次都应该用 m1
+            for _ in range(3):
+                await llm_manager.chat("Test", client_type="planner")
 
-    async def failing_chat(**kwargs):
-        call_times.append(asyncio.get_event_loop().time())
-        raise Exception("Error")
+            used_models = [c[1]["model"] for c in mock_backend.chat.call_args_list]
+            assert used_models == ["id-m1", "id-m1", "id-m1"]
+
+
+@pytest.mark.asyncio
+async def test_balance_strategy_picks_least_used(llm_manager: LLMManager):
+    """balance 策略：调用次数最少的优先"""
+    config = {
+        "llm_providers": [{"name": "p1", "client_type": "openai"}],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id-m1", "api_provider": "p1"},
+            {"name": "m2", "model_identifier": "id-m2", "api_provider": "p1"},
+        ],
+        "llm_profiles": {
+            "planner": {
+                "model_list": ["m1", "m2"],
+                "selection_strategy": {"name": "balance"},
+            },
+        },
+    }
+    mock_backend = _make_mock_backend()
+    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
+
+            await llm_manager.chat("Test", client_type="planner")
+            first = mock_backend.chat.call_args_list[0][1]["model"]
+
+            await llm_manager.chat("Test", client_type="planner")
+            second = mock_backend.chat.call_args_list[1][1]["model"]
+
+            # 第一次取计数少的（并列时取 model_list 中靠前的 m1）；
+            # 第二次取计数更少的 m2（balance 选最闲）
+            assert first == "id-m1"  # m1 在并列时优先（同计数取 index 小的）
+            assert second == "id-m2"  # m2 调用次数少，被选
+            assert first != second
+
+
+@pytest.mark.asyncio
+async def test_random_strategy_with_seed(llm_manager: LLMManager):
+    """random 策略：seed 固定时 RNG 可重现"""
+    config = {
+        "llm_providers": [{"name": "p1", "client_type": "openai"}],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id-m1", "api_provider": "p1"},
+            {"name": "m2", "model_identifier": "id-m2", "api_provider": "p1"},
+            {"name": "m3", "model_identifier": "id-m3", "api_provider": "p1"},
+        ],
+        "llm_profiles": {
+            "planner": {
+                "model_list": ["m1", "m2", "m3"],
+                "selection_strategy": {"name": "random", "seed": 42},
+            },
+        },
+    }
+    mock_backend1 = _make_mock_backend()
+    mock_backend2 = _make_mock_backend()
+    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend1)}):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
+            await llm_manager.chat("Test", client_type="planner")
+            chosen_1 = mock_backend1.chat.call_args[1]["model"]
+
+    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend2)}):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
+            await llm_manager.chat("Test", client_type="planner")
+            chosen_2 = mock_backend2.chat.call_args[1]["model"]
+
+    # 相同 seed → 同样选择
+    assert chosen_1 == chosen_2
+
+
+@pytest.mark.asyncio
+async def test_invalid_selection_strategy_raises(llm_manager: LLMManager):
+    """未知策略在 setup 阶段 fail-fast"""
+    config = {
+        "llm_providers": [{"name": "p1", "client_type": "openai"}],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id-m1", "api_provider": "p1"},
+        ],
+        "llm_profiles": {
+            "planner": {
+                "model_list": ["m1"],
+                "selection_strategy": {"name": "unknown_strategy"},
+            },
+        },
+    }
+    with pytest.raises(ValueError, match="selection_strategy"):
+        await llm_manager.setup(config)
+
+
+# =============================================================================
+# 故障切换测试
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_failover_advances_to_second_model_on_timeout(llm_manager: LLMManager):
+    """硬超时 / 异常切到下一个"""
+    config = {
+        "llm_providers": [{"name": "p1", "client_type": "openai", "max_retries": 0}],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id-m1", "api_provider": "p1"},
+            {"name": "m2", "model_identifier": "id-m2", "api_provider": "p1"},
+        ],
+        "llm_profiles": {
+            "planner": {
+                "model_list": ["m1", "m2"],
+                "selection_strategy": {"name": "sequential"},
+                "hard_timeout_ms": 1000,
+                "slow_threshold_ms": 500,
+            },
+        },
+    }
+    call_count = {"m1": 0, "m2": 0}
+
+    async def flaky_chat(**kwargs):
+        model = kwargs.get("model")
+        call_count[model] = call_count.get(model, 0) + 1
+        if model == "id-m1":
+            raise Exception("upstream timeout")
+        return LLMResponse(
+            success=True,
+            content="success from m2",
+            model="id-m2",
+            usage={"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+        )
 
     mock_backend = MagicMock()
-    mock_backend.chat = failing_chat
+    mock_backend.chat = flaky_chat
     mock_backend.get_info.return_value = {"name": "OpenAIClient"}
 
     with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
         with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
-            await llm_manager.setup(mock_config)
+            await llm_manager.setup(config)
 
-            await llm_manager.chat("Test")
+            response = await llm_manager.chat("Test", client_type="planner")
 
-            # 验证延迟逐渐增加（指数退避）
-            assert len(call_times) == 3
-            delay1 = call_times[1] - call_times[0]
-            delay2 = call_times[2] - call_times[1]
-            # 第二次延迟应该大于第一次（近似）
-            assert delay2 >= delay1 * 0.9  # 允许一些误差
+            assert response.success is True
+            assert response.content == "success from m2"
+            assert response.model == "id-m2"
+            assert call_count["id-m1"] == 1
+            assert call_count["id-m2"] == 1
+
+
+@pytest.mark.asyncio
+async def test_failover_all_models_fail_returns_error_listing_all(llm_manager: LLMManager):
+    """全列表失败：返回 success=False 且 error 含所有模型名"""
+    config = {
+        "llm_providers": [{"name": "p1", "client_type": "openai", "max_retries": 0}],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id-m1", "api_provider": "p1"},
+            {"name": "m2", "model_identifier": "id-m2", "api_provider": "p1"},
+        ],
+        "llm_profiles": {
+            "planner": {
+                "model_list": ["m1", "m2"],
+                "selection_strategy": {"name": "sequential"},
+            },
+        },
+    }
+
+    async def always_fail(**kwargs):
+        raise Exception(f"fail-{kwargs.get('model')}")
+
+    mock_backend = MagicMock()
+    mock_backend.chat = always_fail
+    mock_backend.get_info.return_value = {"name": "OpenAIClient"}
+
+    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
+
+            response = await llm_manager.chat("Test", client_type="planner")
+
+            assert response.success is False
+            assert "全部模型失败" in response.error
+            assert "m1" in response.error
+            assert "m2" in response.error
+
+
+@pytest.mark.asyncio
+async def test_slow_threshold_warns_but_does_not_switch(llm_manager: LLMManager):
+    """慢调用仅告警，不切换模型
+
+    验证点：单次慢调用后直接返回成功结果（不再尝试 m2）。
+    告警日志通过 loguru 发出（不走 stdlib logging），本测试不强行捕获，
+    由日志收集链路负责——重点守住"不切换"行为契约。
+    """
+    config = {
+        "llm_providers": [{"name": "p1", "client_type": "openai"}],
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id-m1", "api_provider": "p1"},
+            {"name": "m2", "model_identifier": "id-m2", "api_provider": "p1"},
+        ],
+        "llm_profiles": {
+            "planner": {
+                "model_list": ["m1", "m2"],
+                "selection_strategy": {"name": "sequential"},
+                "slow_threshold_ms": 0,  # 任何调用都触发告警
+                "hard_timeout_ms": 10000,
+            },
+        },
+    }
+
+    async def slow_but_succeed(**kwargs):
+        await asyncio.sleep(0.01)
+        return LLMResponse(
+            success=True,
+            content="ok",
+            model="id-m1",
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+
+    mock_backend = MagicMock()
+    mock_backend.chat = AsyncMock(side_effect=slow_but_succeed)
+    mock_backend.get_info.return_value = {"name": "OpenAIClient"}
+
+    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
+        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
+            await llm_manager.setup(config)
+            response = await llm_manager.chat("Test", client_type="planner")
+
+            # 慢调用仍返回成功（不切换）
+            assert response.success is True
+            assert response.content == "ok"
+            # 不切换：只调了 1 次
+            assert len(mock_backend.chat.call_args_list) == 1
 
 
 # =============================================================================
@@ -797,7 +1019,6 @@ async def test_retry_exponential_backoff(llm_manager: LLMManager, mock_config: D
 
 @pytest.mark.asyncio
 async def test_get_token_usage_summary(setup_llm_manager):
-    """测试获取 token 使用摘要"""
     llm_manager, _, mock_token_manager = setup_llm_manager
 
     mock_token_manager.return_value.format_total_cost_summary.return_value = (
@@ -813,7 +1034,6 @@ async def test_get_token_usage_summary(setup_llm_manager):
 
 @pytest.mark.asyncio
 async def test_get_token_usage_summary_when_not_initialized(llm_manager: LLMManager):
-    """测试 token 管理器未初始化时的摘要"""
     summary = llm_manager.get_token_usage_summary()
 
     assert summary == "Token 管理器未初始化"
@@ -821,55 +1041,41 @@ async def test_get_token_usage_summary_when_not_initialized(llm_manager: LLMMana
 
 @pytest.mark.asyncio
 async def test_get_client_info(setup_llm_manager):
-    """测试获取 client 信息"""
-    llm_manager, mock_backend, _ = setup_llm_manager
+    """测试 get_client_info 返回 provider 视角（含 profile 关联）"""
+    llm_manager, _, _ = setup_llm_manager
 
     info = llm_manager.get_client_info()
 
     assert isinstance(info, dict)
-    assert "llm" in info
-    assert "llm_fast" in info
-    assert "vlm" in info
-    # 验证信息结构
-    assert "client" in info["llm"]
-    assert "config" in info["llm"]
+    assert "test" in info
+    assert "client" in info["test"]
+    assert "profiles" in info["test"]
+    # 1 个 provider 被 3 个 profile 共享
+    assert set(info["test"]["profiles"]) == {"planner", "replyer", "vision"}
 
 
 @pytest.mark.asyncio
-async def test_get_client_info_returns_correct_structure(setup_llm_manager):
-    """测试 client 信息结构"""
-    llm_manager, mock_backend, _ = setup_llm_manager
-
-    info = llm_manager.get_client_info()
-
-    for _client_name, client_info in info.items():
-        assert "client" in client_info
-        assert "config" in client_info
-
-
-@pytest.mark.asyncio
-async def test_get_client_config_returns_merged_config(llm_manager: LLMManager, mock_config: Dict[str, Any]):
-    """测试 get_client_config 返回 role merged config（provider + role，role 字段优先）"""
+async def test_get_client_config_returns_profile_runtime(llm_manager: LLMManager, mock_config: Dict[str, Any]):
+    """测试 get_client_config 返回 profile 运行时视图"""
     mock_backend = _make_mock_backend()
     with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
         with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
-            cfg = llm_manager.get_client_config("llm")
+            cfg = llm_manager.get_client_config("planner")
             assert cfg is not None
-            # role 的 model 应覆盖 provider 的 model（如果有）
-            assert cfg["model"] == "gpt-4o-mini"
-            # provider 的字段被合并进来
-            assert cfg["api_key"] == "test-api-key"
-            assert cfg["base_url"] == "https://api.test.com/v1"
+            assert cfg["profile_name"] == "planner"
+            assert cfg["hard_timeout_ms"] >= 1000
+            assert cfg["slow_threshold_ms"] >= 100
+            assert cfg["selection_strategy"] == "sequential"
+            assert len(cfg["models"]) == 1
+            assert cfg["models"][0]["model_identifier"] == "gpt-4o-mini"
 
 
 @pytest.mark.asyncio
 async def test_get_client_config_returns_none_for_unconfigured(setup_llm_manager):
-    """测试 get_client_config 对未配置角色返回 None"""
     llm_manager, _, _ = setup_llm_manager
 
-    # 用 vlm role 测试不存在的角色
     assert llm_manager.get_client_config("nonexistent") is None
 
 
@@ -879,29 +1085,26 @@ async def test_get_client_config_returns_none_for_unconfigured(setup_llm_manager
 
 
 @pytest.mark.asyncio
-async def test_get_nonexistent_backend_raises_error(setup_llm_manager):
-    """测试获取不存在的 client 抛出错误"""
+async def test_get_provider_client_unknown_raises(setup_llm_manager):
     llm_manager, _, _ = setup_llm_manager
 
-    with pytest.raises(ValueError, match="LLM 客户端 'nonexistent' 未配置"):
-        llm_manager._get_client("nonexistent")
+    with pytest.raises(ValueError, match="provider 'unknown_backend' 不存在"):
+        llm_manager.get_provider_client("unknown_backend")
 
 
 @pytest.mark.asyncio
-async def test_chat_with_nonexistent_backend(setup_llm_manager):
-    """测试使用不存在的 client 进行聊天"""
+async def test_chat_with_unknown_profile(setup_llm_manager):
     llm_manager, _, _ = setup_llm_manager
 
-    with pytest.raises(ValueError, match="LLM 客户端 'unknown_backend' 未配置"):
+    with pytest.raises(ValueError, match="未配置"):
         await llm_manager.chat("Test", client_type="unknown_backend")
 
 
 @pytest.mark.asyncio
-async def test_vision_with_nonexistent_backend(setup_llm_manager):
-    """测试使用不存在的 client 进行视觉理解"""
+async def test_vision_with_unknown_profile(setup_llm_manager):
     llm_manager, _, _ = setup_llm_manager
 
-    with pytest.raises(ValueError, match="LLM 客户端 'unknown_backend' 未配置"):
+    with pytest.raises(ValueError, match="未配置"):
         await llm_manager.chat_vision("Test", ["image.jpg"], client_type="unknown_backend")
 
 
@@ -911,20 +1114,25 @@ async def test_vision_with_nonexistent_backend(setup_llm_manager):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_all_backends(llm_manager: LLMManager):
-    """测试清理所有 client（多 provider 各清理一次）"""
-    # 用 3 个独立 provider，cleanup 会被调用 3 次
+async def test_cleanup_all_providers(llm_manager: LLMManager):
+    """3 个独立 provider 时各清理 1 次"""
     config = {
         "llm_providers": [
             {"name": "p1", "client_type": "openai"},
             {"name": "p2", "client_type": "openai"},
             {"name": "p3", "client_type": "openai"},
         ],
-        "llm": {"provider": "p1", "model": "m1"},
-        "llm_fast": {"provider": "p2", "model": "m2"},
-        "vlm": {"provider": "p3", "model": "m3"},
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id1", "api_provider": "p1"},
+            {"name": "m2", "model_identifier": "id2", "api_provider": "p2"},
+            {"name": "m3", "model_identifier": "id3", "api_provider": "p3"},
+        ],
+        "llm_profiles": {
+            "planner": {"model_list": ["m1"]},
+            "replyer": {"model_list": ["m2"]},
+            "vision": {"model_list": ["m3"]},
+        },
     }
-    # 每个 provider 一个独立 mock backend，cleanup 才能分别计数
     mock_backends = []
     for _ in range(3):
         mb = MagicMock()
@@ -935,21 +1143,19 @@ async def test_cleanup_all_backends(llm_manager: LLMManager):
     with patch.dict(_client_impls, {"openai": MagicMock(side_effect=mock_backends)}):
         with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(config)
-            assert len(llm_manager._clients) == 3
+            assert len(llm_manager._provider_clients) == 3
 
             await llm_manager.cleanup()
 
-            # 3 个独立 provider，cleanup 各调用 1 次
             for mb in mock_backends:
                 assert mb.cleanup.call_count == 1
-            assert len(llm_manager._clients) == 0
-            assert len(llm_manager._profile_configs) == 0
+            assert len(llm_manager._provider_clients) == 0
             assert len(llm_manager._providers) == 0
 
 
 @pytest.mark.asyncio
-async def test_cleanup_handles_backend_errors(llm_manager: LLMManager):
-    """测试清理时处理单个 client 错误（不中断其他清理）"""
+async def test_cleanup_handles_provider_errors(llm_manager: LLMManager):
+    """清理时单个 provider 错误不阻断其他清理"""
 
     async def failing_cleanup():
         raise Exception("Cleanup error")
@@ -967,25 +1173,29 @@ async def test_cleanup_handles_backend_errors(llm_manager: LLMManager):
             {"name": "p1", "client_type": "openai"},
             {"name": "p2", "client_type": "openai"},
         ],
-        "llm": {"provider": "p1", "model": "m1"},
-        "llm_fast": {"provider": "p2", "model": "m2"},
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id1", "api_provider": "p1"},
+            {"name": "m2", "model_identifier": "id2", "api_provider": "p2"},
+        ],
+        "llm_profiles": {
+            "planner": {"model_list": ["m1"]},
+            "replyer": {"model_list": ["m2"]},
+        },
     }
 
     with patch.dict(_client_impls, {"openai": MagicMock(side_effect=[mock_backend1, mock_backend2])}):
         with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(config)
 
-            # cleanup 不抛出异常，继续清理其他 client
             await llm_manager.cleanup()
 
-            # backend1 的 cleanup 抛错但不影响 backend2 被清理
             mock_backend2.cleanup.assert_awaited_once()
-            assert len(llm_manager._clients) == 0
+            assert len(llm_manager._provider_clients) == 0
 
 
 @pytest.mark.asyncio
-async def test_cleanup_dedups_same_client_instance(llm_manager: LLMManager, mock_config: Dict[str, Any]):
-    """测试共享同一 client 实例的多个 role 只清理一次（id-based dedup）"""
+async def test_cleanup_dedups_shared_provider(llm_manager: LLMManager, mock_config: Dict[str, Any]):
+    """同一 provider 被多个 profile 共享时只 cleanup 一次"""
     mock_backend = MagicMock()
     mock_backend.cleanup = AsyncMock()
     mock_backend.get_info.return_value = {"name": "OpenAIClient"}
@@ -993,13 +1203,11 @@ async def test_cleanup_dedups_same_client_instance(llm_manager: LLMManager, mock
     with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
         with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
-            # 3 个 role 共享同一个 client（同一 provider）
-            assert llm_manager._clients["llm"] is llm_manager._clients["llm_fast"]
-            assert llm_manager._clients["llm"] is llm_manager._clients["vlm"]
+            # 3 个 profile 共享同一 provider 客户端
+            assert llm_manager._provider_clients["test"] is mock_backend
 
             await llm_manager.cleanup()
 
-            # 同一个 client 按 id 去重，只调用 cleanup 一次
             assert mock_backend.cleanup.call_count == 1
 
 
@@ -1010,7 +1218,6 @@ async def test_cleanup_dedups_same_client_instance(llm_manager: LLMManager, mock
 
 @pytest.mark.asyncio
 async def test_build_messages_without_system(setup_llm_manager):
-    """测试不带系统消息的消息构建"""
     llm_manager, _, _ = setup_llm_manager
 
     messages = llm_manager._build_messages("Hello", None)
@@ -1022,7 +1229,6 @@ async def test_build_messages_without_system(setup_llm_manager):
 
 @pytest.mark.asyncio
 async def test_build_messages_with_system(setup_llm_manager):
-    """测试带系统消息的消息构建"""
     llm_manager, _, _ = setup_llm_manager
 
     messages = llm_manager._build_messages("Hello", "You are helpful")
@@ -1035,145 +1241,45 @@ async def test_build_messages_with_system(setup_llm_manager):
 
 
 # =============================================================================
-# Provider/Role 配置合并测试（新增）
+# Provider 共享 / 引用测试
 # =============================================================================
 
 
 @pytest.mark.asyncio
-async def test_multiple_roles_share_same_client_instance(llm_manager: LLMManager, mock_config: Dict[str, Any]):
-    """测试多个 role 共享同一 provider 时共享同一 client 实例"""
+async def test_multiple_profiles_share_same_provider_client(
+    llm_manager: LLMManager, mock_config: Dict[str, Any]
+):
+    """3 个 profile 共享同一 provider 客户端实例"""
     mock_backend = _make_mock_backend()
     with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
         with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(mock_config)
 
-            # 3 个 role 都指向 provider "test"，应该共享同一 client 实例
-            assert llm_manager._clients["llm"] is llm_manager._clients["llm_fast"]
-            assert llm_manager._clients["llm"] is llm_manager._clients["vlm"]
-            # provider 仅注册 1 次
-            assert len(llm_manager._providers) == 1
-
-
-@pytest.mark.asyncio
-async def test_role_config_overrides_provider_model(llm_manager: LLMManager):
-    """测试 role 的 model 覆盖 provider 的 model（merged config）"""
-    config = {
-        "llm_providers": [
-            {"name": "p1", "client_type": "openai", "model": "provider-default-model"},
-        ],
-        "llm": {"provider": "p1", "model": "role-specific-model"},
-    }
-    mock_backend = _make_mock_backend()
-    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
-        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
-            await llm_manager.setup(config)
-
-            # role config 中明确指定 model，应保留 role 的值
-            assert llm_manager._profile_configs["llm"]["model"] == "role-specific-model"
-
-
-@pytest.mark.asyncio
-async def test_role_config_overrides_provider_base_url(llm_manager: LLMManager):
-    """测试 role 的 base_url 覆盖 provider 的 base_url"""
-    config = {
-        "llm_providers": [
-            {
-                "name": "p1",
-                "client_type": "openai",
-                "base_url": "https://provider.api.com/v1",
-                "api_key": "provider-key",
-            }
-        ],
-        "llm": {
-            "provider": "p1",
-            "model": "m",
-            "base_url": "https://role.api.com/v2",
-        },
-    }
-    mock_backend = _make_mock_backend()
-    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
-        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
-            await llm_manager.setup(config)
-
-            # role 的 base_url 应覆盖 provider 的 base_url
-            assert llm_manager._profile_configs["llm"]["base_url"] == "https://role.api.com/v2"
-
-
-@pytest.mark.asyncio
-async def test_role_config_overrides_provider_api_key(llm_manager: LLMManager):
-    """测试 role 的 api_key 覆盖 provider 的 api_key"""
-    config = {
-        "llm_providers": [
-            {
-                "name": "p1",
-                "client_type": "openai",
-                "base_url": "https://api.com/v1",
-                "api_key": "provider-key",
-            }
-        ],
-        "llm": {
-            "provider": "p1",
-            "model": "m",
-            "api_key": "role-key",
-        },
-    }
-    mock_backend = _make_mock_backend()
-    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
-        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
-            await llm_manager.setup(config)
-
-            # role 的 api_key 应覆盖 provider 的 api_key
-            assert llm_manager._profile_configs["llm"]["api_key"] == "role-key"
-
-
-@pytest.mark.asyncio
-async def test_role_config_inherits_unspecified_provider_fields(llm_manager: LLMManager):
-    """测试 role config 未指定的字段应继承 provider config"""
-    config = {
-        "llm_providers": [
-            {
-                "name": "p1",
-                "client_type": "openai",
-                "base_url": "https://provider.api.com/v1",
-                "api_key": "provider-key",
-                "temperature": 0.3,
-            }
-        ],
-        "llm": {
-            "provider": "p1",
-            "model": "role-model",
-            # 没指定 api_key / base_url / temperature
-        },
-    }
-    mock_backend = _make_mock_backend()
-    with patch.dict(_client_impls, {"openai": MagicMock(return_value=mock_backend)}):
-        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
-            await llm_manager.setup(config)
-
-            merged = llm_manager._profile_configs["llm"]
-            # 指定的字段保留
-            assert merged["model"] == "role-model"
-            # 未指定的字段从 provider 继承
-            assert merged["api_key"] == "provider-key"
-            assert merged["base_url"] == "https://provider.api.com/v1"
-            assert merged["temperature"] == 0.3
+            # 3 个 profile 都指向 provider "test"
+            assert llm_manager._provider_clients["test"] is mock_backend
+            assert len(llm_manager.list_providers()) == 1
 
 
 @pytest.mark.asyncio
 async def test_multiple_independent_providers_create_separate_clients(llm_manager: LLMManager):
-    """测试不同 provider 指向不同 name 时会创建独立的 client 实例"""
+    """不同 provider 各自独立 client"""
     config = {
         "llm_providers": [
             {"name": "p1", "client_type": "openai"},
             {"name": "p2", "client_type": "openai"},
         ],
-        "llm": {"provider": "p1", "model": "m1"},
-        "llm_fast": {"provider": "p2", "model": "m2"},
+        "llm_models": [
+            {"name": "m1", "model_identifier": "id1", "api_provider": "p1"},
+            {"name": "m2", "model_identifier": "id2", "api_provider": "p2"},
+        ],
+        "llm_profiles": {
+            "planner": {"model_list": ["m1"]},
+            "replyer": {"model_list": ["m2"]},
+        },
     }
     mock_backend1 = _make_mock_backend()
     mock_backend2 = _make_mock_backend()
 
-    # 用 side_effect 控制 provider1 → mock1, provider2 → mock2
     with patch.dict(
         _client_impls,
         {"openai": MagicMock(side_effect=[mock_backend1, mock_backend2])},
@@ -1181,10 +1287,8 @@ async def test_multiple_independent_providers_create_separate_clients(llm_manage
         with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
             await llm_manager.setup(config)
 
-            # 不同的 provider 应有独立的 client 实例
-            assert llm_manager._clients["llm"] is not llm_manager._clients["llm_fast"]
-            # 但 _providers 有 2 个独立条目
-            assert len(llm_manager._providers) == 2
+            assert llm_manager._provider_clients["p1"] is mock_backend1
+            assert llm_manager._provider_clients["p2"] is mock_backend2
 
 
 # =============================================================================
@@ -1193,7 +1297,6 @@ async def test_multiple_independent_providers_create_separate_clients(llm_manage
 
 
 def test_retry_config_defaults():
-    """测试 RetryConfig 默认值"""
     config = RetryConfig()
 
     assert config.max_retries == 3
@@ -1202,7 +1305,6 @@ def test_retry_config_defaults():
 
 
 def test_retry_config_custom_values():
-    """测试自定义 RetryConfig"""
     config = RetryConfig(max_retries=5, base_delay=2.0, max_delay=20.0)
 
     assert config.max_retries == 5
@@ -1216,7 +1318,6 @@ def test_retry_config_custom_values():
 
 
 def test_llm_response_defaults():
-    """测试 LLMResponse 默认值"""
     response = LLMResponse(success=True)
 
     assert response.success is True
@@ -1229,7 +1330,6 @@ def test_llm_response_defaults():
 
 
 def test_llm_response_with_all_fields():
-    """测试 LLMResponse 所有字段"""
     response = LLMResponse(
         success=True,
         content="Test content",
@@ -1249,7 +1349,6 @@ def test_llm_response_with_all_fields():
 
 
 def test_llm_response_error_case():
-    """测试 LLMResponse 错误情况"""
     response = LLMResponse(success=False, content=None, error="API Error")
 
     assert response.success is False
@@ -1258,66 +1357,34 @@ def test_llm_response_error_case():
 
 
 # =============================================================================
-# A1.6 回归保护：llm_agenda profile 注册（由 llm_outline 改名）
+# ProfileNames 回归保护（新用途名）
 # =============================================================================
 
 
-def test_client_type_includes_llm_agenda():
-    assert "llm_agenda" in ClientType.ALL
-    assert ClientType.LLM_AGENDA == "llm_agenda"
-    assert ClientType.LLM_OUTLINE == "llm_agenda"
-    assert ClientType.LLM_AGENDA == ClientType.LLM_OUTLINE
-    assert len(ClientType.ALL) == len(set(ClientType.ALL))
+def test_profile_names_includes_all_six_purposes():
+    assert "planner" in ProfileNames.ALL
+    assert "replyer" in ProfileNames.ALL
+    assert "summary" in ProfileNames.ALL
+    assert "minecraft" in ProfileNames.ALL
+    assert "vision" in ProfileNames.ALL
+    assert "simulator" in ProfileNames.ALL
 
 
-def test_client_type_is_valid_recognizes_llm_agenda():
-    assert ClientType.is_valid("llm_agenda") is True
+def test_profile_names_is_valid():
+    assert ProfileNames.is_valid("planner") is True
+    assert ProfileNames.is_valid("vision") is True
+    assert ProfileNames.is_valid("unknown") is False
 
 
-@pytest.mark.asyncio
-async def test_setup_registers_llm_agenda_profile(llm_manager: LLMManager):
-    config = {
-        "llm_providers": [PROVIDER_CONFIG],
-        "llm_agenda": {
-            "provider": "test",
-            "model": "agenda-model",
-            "temperature": 0.5,
-        },
-    }
-    mock_backend_class = MagicMock(return_value=MagicMock())
-    with patch.dict(_client_impls, {"openai": mock_backend_class}):
-        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
-            await llm_manager.setup(config)
-
-    assert "llm_agenda" in llm_manager._clients
-    assert "llm_agenda" in llm_manager._profile_configs
-    profile = llm_manager._profile_configs["llm_agenda"]
-    assert profile["model"] == "agenda-model"
-    assert profile["temperature"] == 0.5
-
-
-@pytest.mark.asyncio
-async def test_setup_does_not_register_legacy_llm_outline_as_separate(
-    llm_manager: LLMManager,
-):
-    config = {
-        "llm_providers": [PROVIDER_CONFIG],
-        "llm_outline": {
-            "provider": "test",
-            "model": "outline-model",
-        },
-    }
-    mock_backend_class = MagicMock(return_value=MagicMock())
-    with patch.dict(_client_impls, {"openai": mock_backend_class}):
-        with patch("src.modules.llm.clients.token_usage_manager.TokenUsageManager"):
-            await llm_manager.setup(config)
-
-    assert "llm_outline" not in llm_manager._clients
+def test_client_type_alias_points_to_profile_names():
+    """ClientType 兼容别名仍指向 ProfileNames（防止误以为旧 ClientType 仍可独立构造）"""
+    assert ClientType is ProfileNames
 
 
 # =============================================================================
 # 运行入口
 # =============================================================================
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

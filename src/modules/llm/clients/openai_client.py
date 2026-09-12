@@ -27,7 +27,11 @@ from src.modules.logging import get_logger
 
 
 class OpenAIClient(BaseLLMClient):
-    """OpenAI 兼容 API 客户端。"""
+    """OpenAI 兼容 API 客户端。
+
+    按 provider 维度共享：构造时只持有连接信息（base_url/api_key/headers/
+    retry/timeout），model 由每次调用通过 ``model`` 参数传入。
+    """
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
@@ -42,10 +46,10 @@ class OpenAIClient(BaseLLMClient):
             default_headers=client_config.default_headers or None,
             default_query=client_config.default_query or None,
         )
-        self.model = config.get("model", "gpt-4o-mini")
+        # provider 级默认（profile 显式给值时覆盖）
         self.max_tokens = config.get("max_tokens")
         self.temperature = config.get("temperature", 0.2)
-        self.logger.info(f"OpenAI 客户端初始化完成 (模型: {self.model})")
+        self.logger.info(f"OpenAI 客户端初始化完成 (端点: {client_config.base_url})")
 
     @classmethod
     def client_type_name(cls) -> str:
@@ -127,6 +131,7 @@ class OpenAIClient(BaseLLMClient):
         self,
         messages: List[Dict[str, Any]],
         *,
+        model: str,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -143,6 +148,7 @@ class OpenAIClient(BaseLLMClient):
             try:
                 return await self._chat_streaming(
                     messages,
+                    model=model,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     tools=tools,
@@ -159,7 +165,7 @@ class OpenAIClient(BaseLLMClient):
 
         try:
             request_params: Dict[str, Any] = {
-                "model": self.model,
+                "model": model,
                 "messages": messages,
                 "temperature": temperature or self.temperature,
             }
@@ -222,6 +228,7 @@ class OpenAIClient(BaseLLMClient):
         self,
         messages: List[Dict[str, Any]],
         *,
+        model: str,
         temperature: Optional[float],
         max_tokens: Optional[int],
         tools: Optional[List[Dict[str, Any]]],
@@ -235,7 +242,7 @@ class OpenAIClient(BaseLLMClient):
         拼接语义与非流式一致：arguments JSON 解析失败走 repair_json 兜底。
         """
         request_params: Dict[str, Any] = {
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "temperature": temperature or self.temperature,
             "stream": True,
@@ -308,7 +315,7 @@ class OpenAIClient(BaseLLMClient):
         result = LLMResponse(
             success=True,
             content=content,
-            model=model_name or self.model,
+            model=model_name or model,
             usage=usage,
             reasoning_content=reasoning_content,
         )
@@ -334,6 +341,7 @@ class OpenAIClient(BaseLLMClient):
         self,
         messages: List[Dict[str, Any]],
         *,
+        model: str,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stop_event: Optional[asyncio.Event] = None,
@@ -341,7 +349,7 @@ class OpenAIClient(BaseLLMClient):
     ) -> AsyncIterator[str]:
         """流式聊天。"""
         request_params: Dict[str, Any] = {
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "temperature": temperature or self.temperature,
             "stream": True,
@@ -378,6 +386,7 @@ class OpenAIClient(BaseLLMClient):
         messages: List[Dict[str, Any]],
         images: List[Union[str, bytes]],
         *,
+        model: str,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> LLMResponse:
@@ -386,7 +395,7 @@ class OpenAIClient(BaseLLMClient):
             user_content = self._build_vision_user_content(messages[-1]["content"], images)
             vision_messages = messages[:-1] + [{"role": "user", "content": user_content}]
             request_params: Dict[str, Any] = {
-                "model": self.model,
+                "model": model,
                 "messages": vision_messages,
                 "temperature": temperature or self.temperature,
             }
