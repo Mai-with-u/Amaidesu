@@ -141,7 +141,7 @@ class WarudoProvider(BaseToolProvider):
     class ConfigSchema(BaseConfig):
         """Warudo 配置（WebSocket + 字幕 + 后台任务 + 动作目录）
 
-        TOML 段位：[tools.avatar.warudo].config；本规范见 .omo/drafts/config-schema-spec.md
+        TOML 段位：[tools.avatar.warudo].config
         """
 
         type: str = "warudo"

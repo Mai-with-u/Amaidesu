@@ -5,7 +5,7 @@
 （可见名单 ``["streamer"]``，ADR-012）。决策面的出现时机仍由 Planner 按
 ``RundownControlProvider.is_active`` 条件追加（动态工具的已知例外）。
 推进权归 Agent：何时切换环节是决策脑自己的决定，本工具只提供能力通道，
-并把 ``RundownState`` 的结构化拒绝（未知环节 id / 未达最少停留）原样回灌
+并把 ``RundownState`` 的结构化拒绝（未知环节 id / 未达最少停留）原样重新写入
 ——Agent 读到拒绝原因后自纠，不走异常通道。
 
 工具契约：
@@ -68,7 +68,7 @@ _CONTROL_SPEC = ToolSpec(
 
 
 def build_rundown_control_function_def() -> Dict[str, Any]:
-    """构造 rundown_control 的 OpenAI function 定义（Planner ReAct 工具面）。"""
+    """构造 rundown_control 的 OpenAI function 定义（Planner ReAct 工具列表）。"""
     return {
         "name": _TOOL_NAME,
         "description": _CONTROL_SPEC.description,
@@ -94,7 +94,7 @@ def build_rundown_tool_provider(provider: "RundownControlProvider") -> ToolProvi
 
 
 class RundownControlProvider:
-    """rundown_control 的执行器（Agent 内脏协议，直连 ``RundownState``）。
+    """rundown_control 的执行器（Agent 内部件协议，直连 ``RundownState``）。
 
     非线程安全；仅在 StreamerAgent 单一 asyncio 事件循环内使用。
     """
@@ -104,11 +104,11 @@ class RundownControlProvider:
         self._logger = get_logger("RundownControlTool")
 
     def is_active(self) -> bool:
-        """流程单是否激活（Planner 据此决定是否把工具放进本轮工具面）。"""
+        """流程单是否激活（Planner 据此决定是否把工具放进本轮工具列表）。"""
         return self._state.rundown is not None
 
     def invoke(self, args: Dict[str, Any]) -> str:
-        """执行控制动作，返回观察 JSON 文本（成功与结构化拒绝都回灌给 LLM）。"""
+        """执行控制动作，返回观察 JSON 文本（成功与结构化拒绝都重新写入给 LLM）。"""
         action = str(args.get("action", "") or "")
         try:
             if action == "next":

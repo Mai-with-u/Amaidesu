@@ -11,11 +11,11 @@ ToolRegistry —— 工具注册中心
   配套 ``ToolHealthMonitor`` 做探活恢复（``src/modules/tools/health.py``）
 - 可见名单（ADR-012）：``register_provider(visible_to=...)`` 注册处逐工具声明
   可见给哪些 Agent（默认 ``["*"]`` 全员）；``list_tools(for_agent=...)`` 按
-  Agent 计算工具面。名单只约束发现面，``invoke()`` 不校验。
+  Agent 计算工具列表。名单只约束可见性，``invoke()`` 不校验。
 
 接口约定：register（去重保留先注册）/ register_provider（注册键 = 派生全名 +
 提供者单名校验 + 记录 provider 声明的分类 + 可选可见名单）
-/ list_tools（for_agent 按名单计算工具面；provider / category 过滤；运营全集
+/ list_tools（for_agent 按名单计算工具列表；provider / category 过滤；运营全集
 = 不传 for_agent） / list_categories / invoke（异常→error result 兜底）/
 to_llm_definitions（内部→LLM 转换层，解耦协议）/ recover_tool（探活通过后复位熔断）/
 probe_tool（按名定位 provider 并调用其 ``health_check`` 拿回 bool）/
@@ -146,7 +146,7 @@ class ToolRegistry:
         self._tool_owner: Dict[str, BaseToolProvider] = {}
         # 注册名 → 可见名单（register_provider 的 visible_to 声明；未声明的
         # 工具不在表中，等价 ["*"] 全员可见）。名单是生产侧代码事实：
-        # 值为 Agent 注册名列表或 ["*"]；只约束发现面（for_agent 计算），
+        # 值为 Agent 注册名列表或 ["*"]；只约束可见性（for_agent 计算），
         # invoke 不校验（编名直调是已知边界）。
         self._visible_to: Dict[str, List[str]] = {}
 
@@ -190,8 +190,8 @@ class ToolRegistry:
         全名**，值 = 可见的 Agent 注册名列表或 ``["*"]``（全员）。校验
         fail-fast：值非空且元素为非空字符串、``"*"`` 只能单独出现、键必须
         命中本注册项声明的工具全名（拼错即报错）。**未列出的工具默认
-        ``["*"]``**（共享常态，全局注册零负担）。名单只约束发现面
-        （``list_tools(for_agent=...)`` 按它计算工具面）；``invoke()``
+        ``["*"]``**（共享常态，全局注册零负担）。名单只约束可见性
+        （``list_tools(for_agent=...)`` 按它计算工具列表）；``invoke()``
         不校验——LLM 幻觉编名直调保留工具是已知的受众治理边界。
 
         迁移完整性提示：传入对象非 ``BaseToolProvider`` 子类时记 WARNING
@@ -293,7 +293,7 @@ class ToolRegistry:
         可见性按名单计算（ADR-012）：
         - ``for_agent=None`` → 不做名单过滤（运营全集；Dashboard 工具页用）
         - ``for_agent="<Agent 注册名>"`` → 只返回名单包含该名或 ``["*"]``
-          的工具（该 Agent 的工具面；全体消费方统一从这里拿）
+          的工具（该 Agent 的工具列表；全体消费方统一从这里拿）
 
         Args:
             provider: 可选过滤（提供者标识，如 "vts" / "warudo" /
@@ -305,7 +305,7 @@ class ToolRegistry:
                 排除路径。
             include_tripped: True 时包含熔断中的工具（Dashboard 工具页展示全集用）。
                 默认排除以避免 LLM 看见已被摘除的工具。
-            for_agent: 按 Agent 注册名计算工具面（见上）；None 为运营全集。
+            for_agent: 按 Agent 注册名计算工具列表（见上）；None 为运营全集。
             include_scoped: **已废弃，无效果**（保留形参兼容旧调用方；
                 名单机制下全集即默认行为）。
 
@@ -360,7 +360,7 @@ class ToolRegistry:
         """返回工具的可见名单（未声明 = 全员，返回 ``["*"]`` 快照）。
 
         供运营面（Dashboard 等）标注"这个工具谁能看见"。名单只约束
-        发现面，``invoke()`` 不校验（编名直调是已知边界）。
+        可见性，``invoke()`` 不校验（编名直调是已知边界）。
         """
         entries = self._visible_to.get(full_name)
         return list(entries) if entries is not None else ["*"]
@@ -530,7 +530,7 @@ class ToolRegistry:
         failure_count: int,
         last_error: str,
     ) -> None:
-        """广播工具健康跃迁事件（``tool.health.<name>``）；事件总线缺失或广播失败仅记日志。"""
+        """广播工具健康切换事件（``tool.health.<name>``）；事件总线缺失或广播失败仅记日志。"""
         if self._event_bus is None:
             return
         try:
@@ -585,7 +585,7 @@ class ToolRegistry:
     def recover_tool(self, name: str) -> bool:
         """手动/探活通过时复位熔断器；返回是否真做了恢复动作。
 
-        同步语义：状态在调用瞬间翻转；``tool.health.<name>`` 跃迁事件通过
+        同步语义：状态在调用瞬间翻转；``tool.health.<name>`` 切换事件通过
         ``asyncio.create_task`` 后台调度（调用方在 async 上下文时生效，
         无运行循环时静默丢弃——此情形下事件消费方也不会启动）。
         """

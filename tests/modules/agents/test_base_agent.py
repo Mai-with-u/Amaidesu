@@ -2,7 +2,7 @@
 BaseAgent / AgentManager / AgentControl 单元测试（框架统一控制）
 
 覆盖：
-- BaseAgent 协议六面（生命周期 / 工具提供 / 事件上报 / 状态 / 心跳 / 元数据）
+- BaseAgent 协议六项（生命周期 / 工具提供 / 事件上报 / 状态 / 心跳 / 元数据）
 - start → stop → cleanup 状态机
 - pause / resume / shutdown 控制
 - 心跳 + is_alive 判定
@@ -35,7 +35,7 @@ from src.modules.tools.models import ToolExecutionResult, ToolSpec
 
 
 class _SampleAgent(BaseAgent):
-    """最小可工作子类（满足协议六面）。"""
+    """最小可工作子类（满足协议六项）。"""
 
     name = "sample_agent"
     description = "Sample Agent for testing the protocol"
@@ -87,7 +87,7 @@ async def started_agent(sample_agent: _SampleAgent) -> AsyncGenerator[_SampleAge
 
 
 # =============================================================================
-# BaseAgent 协议六面
+# BaseAgent 协议六项
 # =============================================================================
 
 

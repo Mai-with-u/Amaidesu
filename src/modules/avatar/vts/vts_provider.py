@@ -173,7 +173,7 @@ class VTSProvider(BaseToolProvider):
     class ConfigSchema(BaseConfig):
         """VTS 配置（连接 + LipSync + Idle 三大段）
 
-        TOML 段位：[tools.avatar.vts].config；本规范见 .omo/drafts/config-schema-spec.md
+        TOML 段位：[tools.avatar.vts].config
 
         说明：vts 字段多沿用历史命名（如 ``*_ms`` 实际单位是 float 秒）；
         本批保持行为保真（默认值 + 类型逐一等价），不顺手改单位/命名。

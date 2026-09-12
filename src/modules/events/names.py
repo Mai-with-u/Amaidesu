@@ -95,7 +95,7 @@ class CoreEvents:
 
     # ========== v2 语义域事件（tool 健康状态变更通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
-    # 如 "tool.health.maicraft_speak"。仅在状态跃迁时发射：连续失败达阈值熔断（open）、
+    # 如 "tool.health.maicraft_speak"。仅在状态切换时发射：连续失败达阈值熔断（open）、
     # 探活通过或冷却期满恢复（closed）。
     # Dashboard 转发层订阅 `event_bus.on("tool.health.#", ...)` 一站式监听。
     TOOL_HEALTH_WILDCARD = "tool.health.#"

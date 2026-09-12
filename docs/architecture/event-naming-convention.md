@@ -50,7 +50,7 @@ Amaidesu 当前共 8 个有具体事件的语义域 + `tool` 通配前缀（仅�
 | **streamer** | 主播 Agent 管线阶段与发言业务事实：`streamer.stage`（决策管线阶段变化）/ `streamer.speech`（一条发言已生成，与 TTS 启用与否正交） | `streamer.stage` / `streamer.speech` |
 | **tts** | 一次发声实例的生命周期（开始 / 完成 / 失败），`utterance_id` 全链路串联；**终点广播**，消费者不得触发新决策 | `tts.utterance.started` / `tts.utterance.finished` / `tts.utterance.failed` |
 | **task** | 异步任务生命周期（受理 → 进行中含决策点 → 终态）。发起方订阅按 `payload.initiator` 过滤唤醒；**通知是提示、查询是事实源**（记录表是事实源） | `task.changed` |
-| **tool**（通配前缀） | 异步工具结果 / 工具健康跃迁。**通配 pattern**：`tool.result.#` / `tool.health.#` 一站式监听；emit 时用具体名 `tool.result.<tool_name>` | `tool.result.speak` / `tool.health.maicraft_speak` |
+| **tool**（通配前缀） | 异步工具结果 / 工具健康切换。**通配 pattern**：`tool.result.#` / `tool.health.#` 一站式监听；emit 时用具体名 `tool.result.<tool_name>` | `tool.result.speak` / `tool.health.maicraft_speak` |
 
 > **v2.0.8 收口**：原 `output.sticker` 特例域（`output.sticker.command`，§1.46.1 保留事件）已随 C1 治理删除——StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；接电线也救不了（无 LLM 工具暴露贴纸触发）。未来做表情功能时重新设计，本轮不留事件链。
 

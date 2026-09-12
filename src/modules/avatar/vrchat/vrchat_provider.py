@@ -86,7 +86,7 @@ class VRChatProvider(BaseToolProvider):
     }
 
     class ConfigSchema(BaseConfig):
-        """VRChat OSC 配置（host + out port；本规范见 .omo/drafts/config-schema-spec.md）"""
+        """VRChat OSC 配置（host + out port）"""
 
         type: str = "vrchat"
         vrc_host: str = Field(default="127.0.0.1", description="VRChat OSC 主机地址")

@@ -1,10 +1,10 @@
 """Planner - 主播 Agent 决策核心（ReAct 循环）
 
-职责（Agent 内脏，**不是工具**）：
+职责（Agent 内部件，**不是工具**）：
 - 决策主体：每个决策窗内跑一次有界 ReAct 循环——查信息（registry 工具）
   → 决定说不说 → 调 reply 局部工具收尾
 - reply 是循环内的局部工具（``tools/reply_tool.py`` 的 Provider 直连，
-  不进 ToolRegistry——Agent 内脏协议）
+  不进 ToolRegistry——Agent 内部件协议）
 - 自然终止（LLM 无工具调用）= 本轮不说话
 
 核心契约：
@@ -14,9 +14,9 @@
    ``$bot_name``——表达侧三件套仅注入 Replyer。behavior_style = 决策侧。
 3. **高质量模型**：``planner_llm`` 默认 ``llm``——ReAct 决策核心做工具编排与
    表达意图构思，质量敏感（乱调工具/意图偏差的代价高于延迟）。
-4. **工具面**：全局 ToolRegistry 动态拉取 + reply 局部工具 function 定义；
+4. **工具列表**：全局 ToolRegistry 动态拉取 + reply 局部工具 function 定义；
    过滤 provider=="streamer" 的 spec（Agent 内部协议防重入）。
-5. **观察喂回**：工具结果以 OpenAI ``tool`` role + ``tool_call_id`` 关联回灌。
+5. **观察作为观察返回**：工具结果以 OpenAI ``tool`` role + ``tool_call_id`` 关联重新写入。
 6. **有界循环**：``planner_max_steps``（默认 8）防失控；直播节奏要求快进快出。
 7. **降级安全**：LLM 异常 / 超步 / reply 不可用均产出 silent outcome（不抛异常）。
 
@@ -24,7 +24,7 @@
     batch + room_state.snapshot + history + forced/proactive + behavior_style
         ──▶ render('amaidesu_planner_react')（系统提示词）
         ──▶ 首轮 user 消息 = context_block（组装器/裸消息路径）+ 情境标注
-        ──▶ llm_service.chat_messages(messages, tools=工具面, client_type=planner_llm)
+        ──▶ llm_service.chat_messages(messages, tools=工具列表, client_type=planner_llm)
         ──▶ 循环：tool_calls 串行执行（reply → 局部 Provider；其余 → registry）
         ──▶ outcome dict（replied / speech / silent_reason / steps / tool_trace）
 """
@@ -61,7 +61,7 @@ _RECALL_QUERY_BATCH_CHARS: int = 200
 #: 单条召回 hit 文本截断长度（控制 prompt 体积）。
 _RECALL_HIT_TEXT_CHARS: int = 80
 
-#: 单条工具观察喂回的最大字符数（超长观察截断，控上下文体积）。
+#: 单条工具观察作为观察返回的最大字符数（超长观察截断，控上下文体积）。
 _OBSERVATION_MAX_CHARS: int = 2000
 
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
@@ -143,7 +143,7 @@ class Planner:
                 ``async chat_messages(messages, tools=..., client_type=...) -> LLMResponse``。
             prompt_service: 提示词管理器，需提供 ``render_safe(name, **vars) -> str``。
             room_state: 直播间态势规则层实例。
-            tool_registry: 全局 ToolRegistry——ReAct 工具面来源（信息收集/动作工具）。
+            tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作工具）。
             memory: 记忆后端（鸭子类型 ``MemoryProvider``）；None 时无记忆决策。
             recall_top_k: 每轮注入 prompt 的最大命中条数。
             context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
@@ -200,7 +200,7 @@ class Planner:
     def bind_rundown_provider(self, provider: Any) -> None:
         """注入流程单控制 Provider（StreamerAgent 装配 RundownState 后绑定）。
 
-        绑定且流程单激活时，工具面追加 ``rundown_control``——Agent 自主推进环节。
+        绑定且流程单激活时，工具列表追加 ``rundown_control``——Agent 自主推进环节。
         """
         self._rundown_provider = provider
 
@@ -457,10 +457,10 @@ class Planner:
         lines.append(context_block)
         return "\n".join(lines)
 
-    # ==================== 工具面与执行 ====================
+    # ==================== 工具列表与执行 ====================
 
     def _build_tool_face(self) -> List[Dict[str, Any]]:
-        """LLM 工具面 = 注册表按可见名单计算（for_agent="streamer"，ADR-012）。
+        """LLM 工具列表 = 注册表按可见名单计算（for_agent="streamer"，ADR-012）。
 
         唯一例外：rundown_control 是动态工具——按流程单激活状态条件追加
         （注册表条目已在 for_agent 结果中，跳过防重）。
@@ -474,7 +474,7 @@ class Planner:
         try:
             specs = self._tool_registry.list_tools(for_agent="streamer")
         except Exception as e:
-            self.logger.warning(f"Planner 拉取工具面失败（本轮仅保留 rundown_control）: {e}")
+            self.logger.warning(f"Planner 拉取工具列表失败（本轮仅保留 rundown_control）: {e}")
             return face
         for spec in specs:
             # rundown_control 由上面的激活条件追加（动态工具的已知例外，防重复条目）

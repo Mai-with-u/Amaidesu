@@ -394,7 +394,7 @@ async def test_react_todo_done_no_longer_emits_milestone() -> None:
 
 @pytest.mark.asyncio
 async def test_react_full_format_feedback_and_id_association() -> None:
-    """完整 OpenAI 格式喂回：assistant.tool_calls + tool role + tool_call_id 关联。"""
+    """完整 OpenAI 格式作为观察返回：assistant.tool_calls + tool role + tool_call_id 关联。"""
     captured: list[dict] = []
 
     async def fake(messages, **kwargs):
@@ -418,7 +418,7 @@ async def test_react_full_format_feedback_and_id_association() -> None:
     await agent.send_prompt("探索东侧")
     await _wait_until(lambda: len(captured) >= 2)
 
-    # 第二轮请求的 messages 应含正确的喂回结构
+    # 第二轮请求的 messages 应含正确的作为观察返回结构
     second = captured[1]
     assistant = [m for m in second if m.get("role") == "assistant"]
     tools = [m for m in second if m.get("role") == "tool"]
@@ -462,8 +462,8 @@ async def test_react_mcp_tool_via_registry_passthrough() -> None:
         tools_given = kwargs.get("tools") or []
         first = not any(m.get("role") == "tool" for m in messages)
         if first:
-            assert any(t["name"] == "maicraft_perceive" for t in tools_given)  # 动态工具面含 MCP 工具
-            assert any(t["name"] == "minecraft_todo" for t in tools_given)  # 局部工具面是注册名
+            assert any(t["name"] == "maicraft_perceive" for t in tools_given)  # 动态工具列表含 MCP 工具
+            assert any(t["name"] == "minecraft_todo" for t in tools_given)  # 局部工具列表是注册名
             return _resp(tool_calls=[_tool_call("maicraft_perceive", {"view": "situation"})])
         return _resp("感知完成")
 
@@ -664,7 +664,7 @@ async def test_react_observation_compaction() -> None:
 
 @pytest.mark.asyncio
 async def test_react_tool_failure_fed_back_to_llm() -> None:
-    """MCP 工具失败（ok:false）作为观察喂回 LLM，循环继续（ReAct 标准，LLM 自调整）。"""
+    """MCP 工具失败（ok:false）作为观察作为观察返回 LLM，循环继续（ReAct 标准，LLM 自调整）。"""
     registry = ToolRegistry()
 
     class FailingMcp(BaseToolProvider):
@@ -712,13 +712,13 @@ async def test_react_tool_failure_fed_back_to_llm() -> None:
     await agent.send_prompt("挖矿")
     await _wait_until(lambda: len(seen_failure) >= 1)
 
-    assert seen_failure == [True]  # 失败观察真实喂回
+    assert seen_failure == [True]  # 失败观察真实作为观察返回
     await agent.stop()
 
 
 @pytest.mark.asyncio
 async def test_react_multi_tool_calls_batch_execute() -> None:
-    """同轮多个 tool_calls：串行执行，结果全部喂回（消息顺序对应）。"""
+    """同轮多个 tool_calls：串行执行，结果全部作为观察返回（消息顺序对应）。"""
     llm = MagicMock()
     calls = 0
 
@@ -996,7 +996,7 @@ async def test_execute_receipt_registers_task_and_subscribes() -> None:
         record = tracker.ledger.get("task-1")
         assert record is not None, "受理回执已登记跟踪"
         assert record.initiator == "minecraft" and record.executor == "maicraft"
-        # 受理回执照常喂回 LLM（回合继续，不被折叠）
+        # 受理回执照常作为观察返回 LLM（回合继续，不被折叠）
         second_tool_msgs = [m for m in llm.captured[1] if m.get("role") == "tool"]
         assert any("accepted" in m["content"] and "task-1" in m["content"] for m in second_tool_msgs)
         # 执行侧通知订阅随任务发起（提供者复用）
@@ -1146,7 +1146,7 @@ async def test_task_stall_alert_without_killing_task() -> None:
 
 @pytest.mark.asyncio
 async def test_delivery_gate_rejects_with_pending_task() -> None:
-    """交付门禁：有进行中后台任务时 LLM 调 report(delivery) 被拒——错误观察喂回自纠。"""
+    """交付门禁：有进行中后台任务时 LLM 调 report(delivery) 被拒——错误观察作为观察返回自纠。"""
     provider = _FakeMaiCraftProvider()
     registry = ToolRegistry()
     registry.register_provider(provider)
@@ -1156,7 +1156,7 @@ async def test_delivery_gate_rejects_with_pending_task() -> None:
         if not tool_msgs:
             return _resp(tool_calls=[_tool_call("maicraft_maicraft_execute", {"goal": "挖矿"})])
         if not any("不能交付" in m for m in tool_msgs):
-            # 提前交付 → 门禁拒绝，错误观察喂回
+            # 提前交付 → 门禁拒绝，错误观察作为观察返回
             return _resp(tool_calls=[_tool_call("minecraft_report", {"kind": "delivery", "content": "应该完成了"})])
         return _resp("知道了，继续等后台任务")  # 自纠后静默让出
 
@@ -1178,7 +1178,7 @@ async def test_delivery_gate_rejects_with_pending_task() -> None:
         agent._event_bus.on(_CE.GAME_REPORT, _on_report, model_class=GamePayload)
         await asyncio.sleep(0.05)
         assert not _reports(reports), "提前交付被拦截，主播零骚扰"
-        # 拒绝原因作为失败观察喂回 LLM
+        # 拒绝原因作为失败观察作为观察返回 LLM
         tool_msgs = [m["content"] for m in llm.captured[2] if m.get("role") == "tool"]
         assert any("不能交付" in m for m in tool_msgs)
     finally:
@@ -1376,7 +1376,7 @@ async def test_on_start_binds_agent_owned_mcp_with_visible_list(monkeypatch: pyt
     # 可见名单：读工具放开给主播（sync 直读），执行类 fail-closed 仅自己
     assert registry.visible_to_of("maicraft_perceive") == ["streamer", "minecraft"]
     assert registry.visible_to_of("maicraft_execute") == ["minecraft"]
-    # 按 Agent 计算工具面
+    # 按 Agent 计算工具列表
     streamer_face = {s.full_name for s in registry.list_tools(for_agent="streamer")}
     assert "maicraft_perceive" in streamer_face
     assert "maicraft_execute" not in streamer_face
@@ -1485,7 +1485,7 @@ class _RecordingSink:
 
 
 class _CapturingToolProvider(BaseToolProvider):
-    """记录每次 ToolInvocation（用于断言任务内 round_id 透传到工具面）。"""
+    """记录每次 ToolInvocation（用于断言任务内 round_id 透传到工具列表）。"""
 
     category = "minecraft"
     name = "minecraft"

@@ -188,7 +188,7 @@ class LookAtScreenProvider(BaseToolProvider):
     class ConfigSchema(BaseConfig):
         """look_at_screen 配置（默认最大图像宽度；省 token 用）
 
-        TOML 段位：[tools.vision].config；本规范见 .omo/drafts/config-schema-spec.md
+        TOML 段位：[tools.vision].config
         """
 
         type: str = "vision"

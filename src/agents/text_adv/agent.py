@@ -1,7 +1,7 @@
 """TextAdvGameAgent —— 文字冒险游戏 Agent
 
 设计：
-- 继承 ``BaseAgent``（协议六面全部实现）
+- 继承 ``BaseAgent``（协议六项全部实现）
 - 构造注入依赖（llm/prompt/event_bus/tool_registry/content_engine/...）
 - 自带 Agent 专属工具（``text_adv_choose_option`` / ``text_adv_get_story``），provider="text_adv"
 - 复用公用感知工具（注册名 ``vision_look_at_screen``，provider="vision"）—— 通过 ToolRegistry 调
@@ -10,7 +10,7 @@
 - 感知-决策-推进闭环：``on_state_change`` → vision_look_at_screen → decide → text_adv_choose_option
 - 不继承任何"组合式引擎"（无组合式引擎定案）
 
-协议六面（最小契约）：
+协议六项（最小契约）：
 - 生命周期：start/stop/cleanup（默认实现）
 - 工具提供：list_tools() → text_adv_choose_option + text_adv_get_story（provider="text_adv"）
 - 事件上报：emit game.milestone / game.attention_required / game.error

@@ -4,17 +4,17 @@
 - 主播 Agent 是它的用户：framework_delegate 委派派活、minecraft_get_work_log 读工作文档、
   minecraft_report 收上报
 - 命令驱动（类 Code Agent）：空闲零消耗；委派指令唤醒任务，任务内有界
-  ReAct 循环（LLM 推理 → 工具调用串行执行 → 观察喂回），批次终止语义见
+  ReAct 循环（LLM 推理 → 工具调用串行执行 → 观察作为观察返回），批次终止语义见
   ``_run_task``——无存在性心跳、无时间循环
-- 系统提示词 + 工具面 = 全部"编程"，不发明任何特殊协议
+- 系统提示词 + 工具列表 = 全部"编程"，不发明任何特殊协议
 - execute 受理异步唯一特判：maicraft_execute 返回受理回执（task_id），真实执行
   由游戏 tick 后台驱动（分钟级）——系统登记 handoff 跟踪，经资源订阅通知 +
   周期兜底核实任务快照，状态真迁移才注入消息唤醒 LLM（通知是提示可丢，
   task get 是事实源）；等待期 LLM 自由行动或让出回合，零空耗
-- agent 零 maicraft 接口知识：工具面经 registry 动态发现（list_tools(provider="maicraft)")，
+- agent 零 maicraft 接口知识：工具列表经 registry 动态发现（list_tools(provider="maicraft)")，
   任务查询工具按原始名后缀匹配发现（注册名前缀形态不定）
 
-继承 ``BaseAgent``（协议六面全部实现），构造注入依赖。
+继承 ``BaseAgent``（协议六项全部实现），构造注入依赖。
 局部工具（todo/notebook/get_work_log/report，注册名 minecraft_*）声明 →
 注册进 ToolRegistry。
 """
@@ -153,7 +153,7 @@ class MinecraftAgent(BaseAgent):
         self._delegated_batch_ids: List[str] = []
         self._delegated_finished_ids: List[str] = []
 
-        # 通用任务基建（组合根注入；缺省 None = 无跟踪能力，受理回执只喂回 LLM）
+        # 通用任务基建（组合根注入；缺省 None = 无跟踪能力，受理回执只作为观察返回 LLM）
         self._task_tracker: Optional[Any] = task_tracker
         # Agent 私有 MCP（_on_start 装配成功时持有）：资源订阅接线用
         self._mcp_client: Optional[Any] = None
@@ -372,9 +372,9 @@ class MinecraftAgent(BaseAgent):
         循环每步：
         1. flush 命令/系统注入消息 → 追加 user 消息
         2. 规整对话历史（旧观察 → 占位符）
-        3. LLM 推理（chat_messages + 工具面）→ tool_calls（可多个）
+        3. LLM 推理（chat_messages + 工具列表）→ tool_calls（可多个）
         4. 串行执行：统一经 ToolRegistry（观测/停用/熔断复用既有机制）
-        5. 工具结果作为观察喂回（OpenAI tool role + tool_call_id）
+        5. 工具结果作为观察作为观察返回（OpenAI tool role + tool_call_id）
         批次终止语义（五条，全部系统可判定）：
         1. LLM 调 minecraft_report(kind=delivery) → 停止（工具内交付门禁校验）
         2. LLM 调 minecraft_report(kind=escalation) → 停止，静默等主播委派
@@ -388,11 +388,11 @@ class MinecraftAgent(BaseAgent):
 
         self._task_reported = False
         system_prompt = self._system_prompt()
-        # 工具面 = 注册表按可见名单计算（for_agent，每任务重新拉取）——
+        # 工具列表 = 注册表按可见名单计算（for_agent，每任务重新拉取）——
         # minecraft 名单内含本地件 todo/notebook/report 与 maicraft_*，共享工具
         # 按各自名单照常出现；报告缺陷（report 不在旧手工列表）随统一来源消除
         if self._tool_registry is None:
-            self._logger.warning("任务执行无 tool_registry：工具面为空，任务将失败")
+            self._logger.warning("任务执行无 tool_registry：工具列表为空，任务将失败")
             tool_defs: List[Dict[str, Any]] = []
         else:
             specs = self._tool_registry.list_tools(for_agent=self.name)
@@ -442,7 +442,7 @@ class MinecraftAgent(BaseAgent):
                 await self.emit_error(f"LLM 调用失败: {response.error or '未知错误'}")
                 return
 
-            # 组装 assistant 消息（完整 tool_calls 形态，供后续关联喂回）
+            # 组装 assistant 消息（完整 tool_calls 形态，供后续关联作为观察返回）
             tool_calls = response.tool_calls or []
             assistant_content = response.content
             if assistant_content is not None and not isinstance(assistant_content, str):
@@ -469,7 +469,7 @@ class MinecraftAgent(BaseAgent):
                     self._logger.info(f"任务批次结束（{steps} 步，已上报）")
                 return
 
-            # --- 工具执行与观察喂回 ---
+            # --- 工具执行与观察作为观察返回 ---
             for call in tool_calls:
                 await self._paused.wait()
                 func = call.get("function") or {}
@@ -543,7 +543,7 @@ class MinecraftAgent(BaseAgent):
     def _build_thinking_callback(self, round_id: str, step: int, seq_box: List[int]) -> Any:
         """构造 LLM 层增量回调（duck-typed sink），只转发 reasoning 增量。
 
-        自足实现：不在此 import streamer 包的内脏 ThinkingStreamContext——
+        自足实现：不在此 import streamer 包的内部件 ThinkingStreamContext——
         跨 Agent import 违反边界（ADR-008：Protocol 鸭子匹配）。seq_box
         是 list 包装以实现闭包内计数自增（list[0]=... 不需 nonlocal）。
         """
@@ -572,7 +572,7 @@ class MinecraftAgent(BaseAgent):
     def _track_receipt(self, tool_full_name: str, observation: Dict[str, Any]) -> None:
         """回执型工具的受理回执（``accepted=true + task_id``）→ 登记通用任务跟踪。
 
-        受理回执照常喂回 LLM（回合继续）；核实/事件/唤醒交给跟踪循环
+        受理回执照常作为观察返回 LLM（回合继续）；核实/事件/唤醒交给跟踪循环
         （通知=提示、查询=事实源），状态真变化经 ``task.changed`` 回来
         （见 ``on_task_notification``）。无 tracker（未注入）时只记日志。
         """
@@ -661,7 +661,7 @@ class MinecraftAgent(BaseAgent):
 
         Returns:
             拒绝原因（交付门禁：有未决 handoff 时拒绝 delivery——后台任务
-            没收尾不能交付，错误观察喂回 LLM 自纠）；None = 受理。
+            没收尾不能交付，错误观察作为观察返回 LLM 自纠）；None = 受理。
         """
         pending = self._pending_task_count()
         if kind == "delivery" and pending:

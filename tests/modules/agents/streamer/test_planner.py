@@ -1,7 +1,7 @@
 """Planner ReAct 循环测试。
 
-覆盖：工具面构造 / ReAct 循环（reply 收尾、自然终止、超步）/ registry 路由
-与观察喂回 / LLM 失败降级 / 上下文组装两路径 / 记忆召回 / 可观测副产品。
+覆盖：工具列表构造 / ReAct 循环（reply 收尾、自然终止、超步）/ registry 路由
+与观察作为观察返回 / LLM 失败降级 / 上下文组装两路径 / 记忆召回 / 可观测副产品。
 """
 
 from typing import Any
@@ -104,12 +104,12 @@ def _msg(text: str = "hi", mid: str = "m1") -> Any:
 
 
 # ---------------------------------------------------------------------------
-# 工具面
+# 工具列表
 # ---------------------------------------------------------------------------
 
 
 def test_tool_face_is_for_agent_registry_result() -> None:
-    """工具面 = for_agent("streamer") 注册表结果（全名直出，统一来源）；rundown 例外条件追加。"""
+    """工具列表 = for_agent("streamer") 注册表结果（全名直出，统一来源）；rundown 例外条件追加。"""
     registry = MagicMock()
     registry.list_tools.return_value = [
         ToolSpec(name="get_work_log", description="查工作文档", parameters_schema={"type": "object"}, kind="sync", provider="minecraft"),
@@ -123,7 +123,7 @@ def test_tool_face_is_for_agent_registry_result() -> None:
 
 
 def test_tool_face_registry_missing_is_empty() -> None:
-    """registry 未注入：工具面为空（reply 也来自注册表，统一来源）。"""
+    """registry 未注入：工具列表为空（reply 也来自注册表，统一来源）。"""
     planner = Planner(
         config={"planner_llm": "llm"},
         llm_service=MagicMock(),
@@ -172,7 +172,7 @@ async def test_react_natural_termination_silent() -> None:
 
 @pytest.mark.asyncio
 async def test_react_registry_tool_then_reply() -> None:
-    """先调 registry 工具（观察喂回）→ 再调 reply 收尾。"""
+    """先调 registry 工具（观察作为观察返回）→ 再调 reply 收尾。"""
     registry = MagicMock()
     registry.list_tools.return_value = [
         ToolSpec(name="minecraft_get_state", description="查", parameters_schema={"type": "object"}, kind="sync", provider="minecraft"),
@@ -191,7 +191,7 @@ async def test_react_registry_tool_then_reply() -> None:
     assert outcome["replied"] is True
     assert outcome["tool_trace"] == ["minecraft_get_state", "streamer_reply"]
     assert llm.chat_messages.await_count == 2
-    # 观察喂回：第二轮 messages 含 tool role + tool_call_id 关联
+    # 观察作为观察返回：第二轮 messages 含 tool role + tool_call_id 关联
     second = llm.chat_messages.await_args_list[1].kwargs["messages"]
     tool_msgs = [m for m in second if m.get("role") == "tool"]
     assert tool_msgs and tool_msgs[0]["tool_call_id"] == "c1"
@@ -224,7 +224,7 @@ async def test_react_max_steps_silent() -> None:
 
 @pytest.mark.asyncio
 async def test_react_tool_failure_fed_back_to_llm() -> None:
-    """registry 工具失败 → 失败观察喂回 LLM（LLM 自调整）。"""
+    """registry 工具失败 → 失败观察作为观察返回 LLM（LLM 自调整）。"""
     registry = MagicMock()
     registry.list_tools.return_value = [
         ToolSpec(name="tool_x", description="x", parameters_schema={"type": "object"}, kind="sync", provider="x"),

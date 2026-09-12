@@ -372,8 +372,8 @@ async def create_app_components(
         config.get("context", {}) if isinstance(config, dict) else {}
     )
 
-    # --- 启动期不进行任何上下文回灌（每次启动 = 干净测试环境）---
-    # 跨场次对话记忆由 SimpleMemory / 摘要机制承载，不在组合根做 live_chat 回灌。
+    # --- 启动期不进行任何上下文重新写入（每次启动 = 干净测试环境）---
+    # 跨场次对话记忆由 SimpleMemory / 摘要机制承载，不在组合根做 live_chat 重新写入。
     # 无显式场次期间消息仅在内存流转，落库路径依据 0 值跳过。
 
     # --- EventBus + 场次管理 + 拦截器 ---
@@ -731,7 +731,7 @@ async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any], sql
         recorder = EventHistoryRecorder(event_bus=event_bus, event_history=service)
         await recorder.start()
         if typed_events_config.persist:
-            # 启动回灌：从 event_history 表载入当日事件（dashboard 重启不丢当日历史）
+            # 启动重新写入：从 event_history 表载入当日事件（dashboard 重启不丢当日历史）
             await service.backfill_today_from_store()
         logger.info(
             f"事件历史记录器已启动（size={typed_events_config.history_size}, persist={typed_events_config.persist}）"

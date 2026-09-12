@@ -33,8 +33,8 @@ flowchart TB
     end
 
     subgraph Streamer["StreamerAgent (src/agents/streamer/)"]
-        Planner["Planner ReAct 循环<br/>(planner_llm 默认 llm, 全局工具面 + reply)"]
-        Reply["Replyer 表达引擎<br/>(replyer_llm, ProfanityFilter)<br/>= reply 工具的实现载体"]
+        Planner["Planner ReAct 循环<br/>(planner_llm 默认 llm, 全局工具列表 + reply)"]
+        Reply["Replyer 表达引擎<br/>(replyer_llm, ProfanityFilter)<br/>= reply 工具的"]
         Rundown["Rundown 流程单子系统<br/>备忘录 + 闹钟（推进权归 Agent）"]
         Tools["自带工具<br/>reply / should_speak_proactively / parse_command"]
         UQ["UtteranceQueue<br/>FIFO 串行播放队列<br/>丢最旧 / 单 worker / 渲染超时"]
@@ -93,7 +93,7 @@ Amaidesu/
 │   │       ├── text_adv/        #     文字冒险 GameAgent 范例（内容引擎为包内私有接口）
 │   │       └── minecraft/       #     Minecraft GameAgent（maicraft MCP 语义工具 + minecraft_todo/minecraft_notebook/minecraft_report/minecraft_get_state/minecraft_send_prompt）
 │   └── modules/                 # 共享模块（基础设施 + 领域组件）
-│       ├── agents/              # Agent 框架层：BaseAgent 协议六面 / AgentManager / AgentControl 6 工具 / factory(SUPPORTED_AGENTS)
+│       ├── agents/              # Agent 框架层：BaseAgent 协议六项 / AgentManager / AgentControl 6 工具 / factory(SUPPORTED_AGENTS)
 │       ├── audio/               # v2.0.10 抽出：AudioDeviceManager（声卡播放 / 录音），原 `src/modules/tts/audio_device_manager.py` 上移
 │       ├── tts/                 # v2.0.12 TTS 基础设施包（基础模块，非工具）：4 引擎 Provider（EdgeTTSProvider / GPTSoVITSProvider / VoiceboxProvider / OmniTTSProvider）+ common.py 共享函数 + gptsovits_client.py（GPT-SoVITS WebSocket 客户端与 Provider 同包）+ wav_decoder.py + assembly.py（build_tts_infrastructure 入口）。详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md)
 │       ├── collectors/          # 输入采集域（BaseCollector + CollectorManager + 各域 Collector）
@@ -110,7 +110,7 @@ Amaidesu/
 │       │   ├── interceptors/    #   EventInterceptor 协议 + InterceptorChain
 │       │   └── payloads/        #   Payload 按域分包（v2.0.10 新增 utterance.py 承载 tts.utterance.* 三事件）
 │       ├── config/              # 配置管理（多文件 Schema 驱动 + 升级钩子）
-│       ├── context/             # ContextService（L1 对话配对窗口：DialogueTurn 存取 + 启动时从 live_chat 回灌）
+│       ├── context/             # ContextService（L1 对话配对窗口：DialogueTurn 存取 + 启动时从 live_chat 重新写入）
 │       ├── dashboard/           # Web Dashboard（FastAPI + WebSocket）
 │       ├── di/                  # 依赖注入工具
 │       ├── llm/                 # LLM 服务（provider + profile 两层）
@@ -226,14 +226,14 @@ sequenceDiagram
 
 | 文件 | 内容 |
 |------|------|
-| `base.py` | `BaseAgent` 协议六面（§1.49）：1.生命周期（start/stop/cleanup + 工厂重建）、2.工具提供（`list_tools()`）、3.事件上报（`emit_event` + `emits_events` 可选声明）、4.状态读写（`_state` + heartbeat）、5.健康（`note_heartbeat/is_alive/dead_threshold_ms`）、6.元数据（`name/description`）。状态机：`CREATED → STARTING → RUNNING → PAUSED → STOPPING → STOPPED → ERRORED`。 |
+| `base.py` | `BaseAgent` 协议六项（§1.49）：1.生命周期（start/stop/cleanup + 工厂重建）、2.工具提供（`list_tools()`）、3.事件上报（`emit_event` + `emits_events` 可选声明）、4.状态读写（`_state` + heartbeat）、5.健康（`note_heartbeat/is_alive/dead_threshold_ms`）、6.元数据（`name/description`）。状态机：`CREATED → STARTING → RUNNING → PAUSED → STOPPING → STOPPED → ERRORED`。 |
 | `manager.py` | `AgentManager`：注册 / 启动（LIFO） / 停止 / cleanup / 动态启停（`start_agent`/`stop_agent`/`enable_agent`/`disable_agent`）；`audit_tools(registry) -> list[str]` 启动后只读审计未实现工具声明（不参与注册） |
 | `control.py` | `AgentControl`（直调接口） + `AgentControlProvider`（注册到 ToolRegistry），对外暴露 6 个 framework 工具（注册名带前缀）：`framework_pause_agent` / `framework_resume_agent` / `framework_shutdown_agent` / `framework_restart_agent` / `framework_list_agents` / `framework_agent_state` |
 | `factory.py` | `SUPPORTED_AGENTS = ("streamer", "game")` + `instantiate_agent(name, config, ...)` 中央化配置名 → 类映射，供组合根与 Dashboard 动态启停共用 |
 
 #### 业务层（`src/agents/`）
 
-`src/agents/streamer/` 主播 Agent 包：顶层平铺内脏与协作组件，强内聚簇收进子包（`rundown/` 子系统 / `tools/` 工具壳层 / `command/` 解析原语）：
+`src/agents/streamer/` 主播 Agent 包：顶层平铺内部件与协作组件，强内聚簇收进子包（`rundown/` 子系统 / `tools/` 工具壳层 / `command/` 解析原语）：
 
 | 角色 | 模块 |
 |------|------|
@@ -245,7 +245,7 @@ sequenceDiagram
 | **房间与消息** | `room_state.py`（直播间状态聚合）、`message_buffer.py`（弹幕聚合窗口：默认 3s/20 条） |
 | **后台维护** | `background.py`（双任务 BackgroundMaintainer 取代旧 RoomStateLoop） |
 | **发言管线** | `utterance_queue.py`（v2.0.10 新增：`UtteranceQueue` FIFO 串行队列，丢最旧 / 单 worker / 渲染超时看门狗；构造期注入 `speak` 可调用对象（绑定 `tts_engine.handle_speech`），后台串行直接 `await speak(text, utterance_id)`，不再经 ToolRegistry） |
-| **工具壳层** | `tools/` 子包：`reply_tool.py`（`reply`）、`proactive_tool.py`（`should_speak_proactively`）、`command_tool.py`（`parse_command`）——Agent 专属 builtin 工具入口，只包装顶层内脏，不含决策/表达逻辑 |
+| **工具壳层** | `tools/` 子包：`reply_tool.py`（`reply`）、`proactive_tool.py`（`should_speak_proactively`）、`command_tool.py`（`parse_command`）——Agent 专属 builtin 工具入口，只包装顶层内部件，不含决策/表达逻辑 |
 | **时序门** | `timing_gate.py` |
 | **命令解析** | `command/command.py` + `command/command_parser.py` + `command/command_registry.py`（`tools/command_tool.py` 的底层纯解析原语） |
 | **提示词** | `prompts/amaidesu_planner_react.md` + `prompts/amaidesu_replyer.md` |

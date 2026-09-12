@@ -16,7 +16,7 @@ QA Scenario（acceptance criteria）：
     Evidence: .omo/evidence/w7-game-agent.txt
 
 覆盖：
-- BaseAgent 协议六面在游戏 Agent 上的具体落地
+- BaseAgent 协议六项在游戏 Agent 上的具体落地
 - 感知工具复用（look_at_screen 通过 ToolRegistry.invoke 调用）
 - 推进工具自备（text_adv_choose_option provider="game"）
 - content_engine 为包内私有接口（send_input 触发 FakeContentEngine 记录，直连不经注册表）
@@ -154,7 +154,7 @@ async def started_agent(
 
 
 # =============================================================================
-# BaseAgent 协议六面（落地在 TextAdvGameAgent）
+# BaseAgent 协议六项（落地在 TextAdvGameAgent）
 # =============================================================================
 
 

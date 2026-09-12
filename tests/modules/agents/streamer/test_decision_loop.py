@@ -1,6 +1,6 @@
 """StreamerAgent 决策循环集成测试（Planner ReAct 架构）。
 
-Planner 以 ReAct 循环运行（``llm.chat_messages`` + 全局工具面 + reply 局部工具）；
+Planner 以 ReAct 循环运行（``llm.chat_messages`` + 全局工具列表 + reply 局部工具）；
 Replyer 仍是 ``llm.call_tools(tools=[reply])``。测试 mock 同步对齐：
 - Planner LLM 响应 = ``chat_messages`` 返回完整 OpenAI 形态 tool_calls
   （``{id, type, function: {name, arguments}}``）

@@ -1,7 +1,7 @@
 """StreamerAgent - 主播 Agent（BaseAgent 子类）
 
 主播 Agent = Planner（决策核心）+ reply 工具（入口）+ Replyer（表达引擎），一体。
-协议六面（最小契约）：
+协议六项（最小契约）：
 - 生命周期：start/stop/cleanup + 可重建性
 - 工具提供：list_tools() → 暴露 reply / should_speak_proactively / parse_command
 - 事件上报：emit（rundown.changed 等；订阅 room.message.danmaku 等）
@@ -195,7 +195,7 @@ class StreamerAgentConfig(BaseConfig):
 class StreamerAgent(BaseAgent):
     """主播 Agent：编排 Planner + Replyer + 工具 + 后台任务 + 流程单。
 
-    实现协议六面：
+    实现协议六项：
     - 生命周期（start/stop/cleanup）
     - 工具提供：reply / should_speak_proactively / parse_command（3 个工具）
       + rundown_control（Planner 局部协议工具）
@@ -312,7 +312,7 @@ class StreamerAgent(BaseAgent):
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
 
-        # Planner（决策核心，Agent 内脏——非工具）
+        # Planner（决策核心，Agent 内部件——非工具）
         # 从 self._persona_provider（装配根注入的 [persona] dict）
         # 提取 behavior_style（行动准则）并透传给 Planner；persona_provider 是 dict
         # 或可调用对象两种形式，统一用鸭子类型断言。
@@ -357,7 +357,7 @@ class StreamerAgent(BaseAgent):
             enabled=config.profanity_enabled,
         )
 
-        # Replyer（表达引擎，Agent 内脏——非工具）
+        # Replyer（表达引擎，Agent 内部件——非工具）
         self._replyer = Replyer(
             config={
                 "replyer_llm": config.replyer_llm,
@@ -371,7 +371,7 @@ class StreamerAgent(BaseAgent):
             profanity_filter=self._profanity_filter,
         )
 
-        # 主动发言触发器（纯规则组件，Agent 内脏）
+        # 主动发言触发器（纯规则组件，Agent 内部件）
         proactive_config = {
             "enabled": config.proactive_enabled,
             "cold_timeout_ms": config.proactive_cold_timeout_ms,
@@ -424,7 +424,7 @@ class StreamerAgent(BaseAgent):
         self._live_active: bool = False
         # 一次性 pending flag（外部 API 触发主动发言）
         self._external_proactive_pending: bool = False
-        # 流程单环节切换触发 flag（RundownState 变更回调置位；装配切片接线）
+        # 流程单环节切换触发 flag（RundownState 变更回调置位；装配接线）
         self._rundown_proactive_pending: bool = False
 
         # 统计

@@ -1,7 +1,7 @@
 """reply_tool - 主播表达工具（Planner ReAct 循环的出口）
 
 **真工具**——注册到 ToolRegistry 供 LLM 调用；底层执行器是
-``Replyer`` 表达引擎（Agent 内脏，**不**注册为工具）。
+``Replyer`` 表达引擎（Agent 内部件，**不**注册为工具）。
 
 调用链（Planner ReAct 架构）：
 - Planner（决策主体，ReAct 循环）决定说话时调用 reply 工具

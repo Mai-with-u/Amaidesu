@@ -3,7 +3,7 @@
 主播 Agent 是一体：Planner（决策核心）+ reply 工具（入口）+ Replyer（表达引擎）。
 
 目录结构：
-顶层平铺——Agent 内脏与协作组件（非工具，不注册进 ToolRegistry）：
+顶层平铺——Agent 内部件与协作组件（非工具，不注册进 ToolRegistry）：
 - ``plan``              - 决策契约（DecisionPlan Pydantic，Planner 产出 / Replyer 消费）
 - ``planner``           - 决策核心（决策循环，调 planner_llm）
 - ``replyer``           - 表达引擎（调 replyer_llm + ProfanityFilter）
@@ -19,7 +19,7 @@
   ``rundown_state``（运行时状态：游标 + 计时 + 唯一变更边界）/ ``rundown_tool``（Agent 推进工具）
 - ``tools/``            - Agent 专属工具壳层（**真工具**，provider="builtin"）：``reply_tool``
   （reply / rundown_control，经 ToolRegistry 注册 + 名单隔离）；
-  只包装顶层内脏，不含决策/表达逻辑
+  只包装顶层内部件，不含决策/表达逻辑
 - ``command/``          - 纯解析原语（命令数据结构 / 解析器 / 注册表，不注册工具）
 """
 

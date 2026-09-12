@@ -1,9 +1,9 @@
 """
-BaseAgent —— Agent 协议六面
+BaseAgent —— Agent 协议六项
 
 框架对 Agent 的**唯一要求**（最小契约）；Agent 内部完全自由。
 
-## 协议六面（最小契约）
+## 协议六项（最小契约）
 - 生命周期：start / stop / cleanup + 可重建性（工厂重建崩溃实例）
 - 工具提供：list_tools() → 声明暴露的工具
 - 事件上报：自由 emit + 可选声明事件族

@@ -304,7 +304,7 @@ async def asyncio_sleep_ms(ms: int) -> None:
 | `ResultBlock` | `src/modules/tools/models.py` | `kind` (`"text"`/`"image"`), `text`, `data` (base64), `mime_type` |
 | `ToolProvider`（Protocol） | `src/modules/tools/provider.py` | `name` 属性（与全部 spec 的 `provider` 同值同源，注册期校验）、`list_tools()`、`async invoke(invocation) -> ToolExecutionResult`（**永不抛异常**）；可选钩子 `query_task` / `subscribe_task_notifications`（任务适配器，默认不支持） |
 | `BaseToolProvider`（ABC） | `src/modules/tools/provider.py` | 所有经 `register_provider` 装配的 Provider 的继承基类；带 `category` ClassVar 与 `health_check` 探活钩子默认实现 |
-| `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider, *, visible_to=...)`（可见名单，ADR-012）/ `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(for_agent=...)`（按名单计算工具面）/ `visible_to_of(name)` / `probe_tool(name)`（熔断器探活入口） |
+| `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider, *, visible_to=...)`（可见名单，ADR-012）/ `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(for_agent=...)`（按名单计算工具列表）/ `visible_to_of(name)` / `probe_tool(name)`（熔断器探活入口） |
 | `as_tool_impl` / `make_provider_from_specs` | `src/modules/tools/provider.py` | 简单工具正典路径：普通 async 函数 + spec 组装标准 Provider（样板 `src/modules/memory/query_tool.py`） |
 
 ### Provider 探活契约（与熔断器配套）
@@ -430,7 +430,7 @@ registry.register_provider(
    已被约束禁止。新 Agent 零维护自动正确。
 3. **内部件判据（哪些不是工具）**：代码直接调用的部件不算工具、不进表——
    如主动发言判定（ProactiveTrigger）、命令解析原语（command/ 包）；它们
-   被特意排除在 LLM 工具面之外，没有 `ToolSpec`、不经注册表。
+   被特意排除在 LLM 工具列表之外，没有 `ToolSpec`、不经注册表。
 
 **红线三分**（AGENTS.md 同款表述）：
 
@@ -460,14 +460,14 @@ registry.register_provider(
 | 值 | Agent 注册名列表或 `["*"]`（单独出现 = 全员） |
 | 默认 | `["*"]`——不写即全员，全局注册零负担（fail-open，有意取舍） |
 | 校验（fail-fast） | 值非空、`"*"` 单独出现、键必须命中本注册项声明的工具全名（拼错即报错） |
-| 计算接口 | `list_tools(for_agent="<Agent 名>")`——该 Agent 的工具面；全体消费方统一从这里拿 |
+| 计算接口 | `list_tools(for_agent="<Agent 名>")`——该 Agent 的工具列表；全体消费方统一从这里拿 |
 | 运营全集 | `list_tools()`（不传 `for_agent`）——Dashboard 工具页看一切 |
 | 调用边界 | `invoke()` 不查名单——LLM 幻觉编名直调是已知边界（封死需调用方身份治理） |
 
-**LLM 工具面公式**（`for_agent` 的过滤结果）：
+**LLM 工具列表公式**（`for_agent` 的过滤结果）：
 
 ```
-<Agent> 工具面 = 全部注册工具 − 停用(disabled_tools) − 熔断中(tripped) − 名单不含该 Agent 的工具
+<Agent> 工具列表 = 全部注册工具 − 停用(disabled_tools) − 熔断中(tripped) − 名单不含该 Agent 的工具
 ```
 
 已知例外：动态工具（如 `rundown_control` 按流程单激活状态出现）名单静态，
@@ -510,14 +510,14 @@ reply 走注册表后三事件都发——观测冗余是**有意接受**的（�
 
 ### 已知边界（有意取舍，勿当缺陷上报）
 
-- 编名直调不拦：`invoke` 不查名单/身份（发现面治理为主防线）
+- 编名直调不拦：`invoke` 不查名单/身份（可见性治理为主防线）
 - 重启丢跟踪：任务记录表内存态，重启后进行中任务的跟踪消失（执行侧仍在跑）
 - 无排队上限：委派/回执任务积压无限流
 - 无发起方取消：执行侧可用其工具取消（如 maicraft task cancel）；跨 Agent
   取消按需再加
 - 动态工具列表内条件追加：`rundown_control` 按激活状态出现（唯一已知例外）
 - 停用边界作用于全部工具：停用关键内部件（如 `minecraft_todo`）会直接破坏
-  宿主 Agent 运行——管理面有警示标注（确认制，非硬禁）
+  宿主 Agent 运行——管理界面有警示标注（确认制，非硬禁）
 - 任务基建节拍配置 `[tools.tasks]` 为兜底读取（新键 → 旧键 → 默认），正式
   配置段由配置线落
 
@@ -530,7 +530,7 @@ reply 走注册表后三事件都发——观测冗余是**有意接受**的（�
 
 原则：**位置即归属，装配即声明，调度与基建全局统一**——通用 MCP 与 Agent 私有 MCP 共用 `McpToolProvider` / `ToolRegistry` / 熔断器 / 探活等基建，唯一区别是归属标记与配置宿主文件。Agent 私有 MCP 的 `enabled=false` 时不装配（Agent 是命令驱动，MCP 不可用只降级）。
 
-典型范例：MinecraftAgent 在 `[agents.minecraft].mcp` 声明其 maicraft server，启动时以逐工具名单注册（fail-closed：执行类工具仅 minecraft；读工具 perceive 放开给主播直读）——其它 Agent 的工具面不被 maicraft 执行工具污染。
+典型范例：MinecraftAgent 在 `[agents.minecraft].mcp` 声明其 maicraft server，启动时以逐工具名单注册（fail-closed：执行类工具仅 minecraft；读工具 perceive 放开给主播直读）——其它 Agent 的工具列表不被 maicraft 执行工具污染。
 
 ---
 
@@ -546,7 +546,7 @@ reply 走注册表后三事件都发——观测冗余是**有意接受**的（�
 - **游戏 Agent**（如 `text_adv` / `minecraft`）——感知游戏画面 → 推进剧情/操作
 - **自定义 Agent**（如 `custom`）——任何不归属业务/游戏的特殊决策体
 
-### 协议六面（最小契约）
+### 协议六项（最小契约）
 
 继承自 [`BaseAgent`](../../src/modules/agents/base.py)（位于 `src/modules/modules/agents/base.py`）。
 
@@ -807,8 +807,8 @@ class MyToolProvider(ToolProvider):
 6. StreamerAgent._flush_loop 周期检查 → MessageBuffer.should_flush()
         ↓ 取出一批弹幕
 7. _make_two_stage_decision(batch) → Planner.plan(batch, llm=planner_llm 默认 llm)
-         ↓ Planner ReAct 循环：chat_messages + 工具面（ToolRegistry 全量 + reply 局部工具）
-         ↓ 每步 tool_calls 串行执行（查游戏状态/记忆等 → 观察 tool role 喂回），max_steps=8 防失控
+         ↓ Planner ReAct 循环：chat_messages + 工具列表（ToolRegistry 全量 + reply 局部工具）
+         ↓ 每步 tool_calls 串行执行（查游戏状态/记忆等 → 观察 tool role 作为观察返回），max_steps=8 防失控
 8. LLM 调 reply(意图参数 {topic_summary, reply_guidance, target, confidence})
          ↓ Planner 循环内直连 _reply_provider.invoke（局部工具，不进 ToolRegistry）
 9. ReplyToolProvider.invoke(invocation)
@@ -834,7 +834,7 @@ class MyToolProvider(ToolProvider):
 | 拦截器配置 | `config/core.toml` 的 `[interceptors.rate_limit]` / `[interceptors.similar_filter]` | 启停由 `enabled` 标志控制 |
 | Agent 订阅 | `src/agents/streamer/streamer_agent.py::_subscribe_events` | 在 `_on_start` 中挂；priority=50 |
 | 弹幕聚合 | `src/agents/streamer/message_buffer.py` + `timing_gate.py` | 批窗口 / 强制响应规则 |
-| Planner ReAct 决策 | `src/agents/streamer/planner.py` | `planner_llm`（默认 llm 高质量模型）；工具面=registry 全量+reply；`planner_max_steps=8` |
+| Planner ReAct 决策 | `src/agents/streamer/planner.py` | `planner_llm`（默认 llm 高质量模型）；工具列表=registry 全量+reply；`planner_max_steps=8` |
 | Reply 工具 | `src/agents/streamer/tools/reply_tool.py` | 局部工具（不进 ToolRegistry）；Planner 循环内直连 invoke |
 | Replyer 表达 | `src/agents/streamer/replyer.py` | 调 `llm` profile + ProfanityFilter；LLM 只见 reply |
 | 发声队列 | `src/agents/streamer/utterance_queue.py` | FIFO 串行；满时丢最旧；单条 render_timeout_ms 看门狗；构造期注入 `speak` 适配器（绑定 `tts_engine.handle_speech`） |

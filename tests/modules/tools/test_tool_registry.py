@@ -449,13 +449,13 @@ async def test_invoke_without_event_bus_skips_emit(registry: ToolRegistry) -> No
 # 可见名单（visible_to，ADR-012）
 #
 # - 注册处逐工具声明（值 = Agent 注册名列表或 ["*"]；未声明默认全员）
-# - for_agent 按名单计算工具面；不传 for_agent = 运营全集
-# - invoke() 不查名单——受众治理只管发现面（编名直调是已知边界）
+# - for_agent 按名单计算工具列表；不传 for_agent = 运营全集
+# - invoke() 不查名单——受众治理只管可见性（编名直调是已知边界）
 # =============================================================================
 
 
 def test_visible_to_recorded_and_for_agent_filters(registry: ToolRegistry) -> None:
-    """visible_to 注册处声明生效：for_agent 按名单计算工具面；未列工具默认全员。"""
+    """visible_to 注册处声明生效：for_agent 按名单计算工具列表；未列工具默认全员。"""
 
     class MixedProvider(BaseToolProvider):
         @property
@@ -478,7 +478,7 @@ def test_visible_to_recorded_and_for_agent_filters(registry: ToolRegistry) -> No
     # 名单查询
     assert registry.visible_to_of("mixed_open") == ["*"]  # 未声明 = 全员
     assert registry.visible_to_of("mixed_secret") == ["minecraft"]
-    # for_agent 计算工具面
+    # for_agent 计算工具列表
     streamer_face = {s.full_name for s in registry.list_tools(for_agent="streamer")}
     assert streamer_face == {"mixed_open"}  # secret 对主播不可见
     minecraft_face = {s.full_name for s in registry.list_tools(for_agent="minecraft")}
@@ -538,7 +538,7 @@ def test_clear_resets_visible_to(registry: ToolRegistry) -> None:
 
 
 async def test_invoke_not_in_visible_list_is_not_blocked(registry: ToolRegistry) -> None:
-    """名单只管发现面：不在名单内的 Agent 编名直调仍按"已知工具"路径执行。
+    """名单只管可见性：不在名单内的 Agent 编名直调仍按"已知工具"路径执行。
 
     LLM 幻觉编名直调保留工具是已知的受众治理边界，此测试固定该契约
     （与 ADR-009/012 的 invoke 不查身份一致）。
@@ -546,7 +546,7 @@ async def test_invoke_not_in_visible_list_is_not_blocked(registry: ToolRegistry)
     provider = _SampleProvider()
     registry.register_provider(provider, visible_to={"game_p_a": ["minecraft"]})
 
-    # streamer 的工具面看不到 game_p_a，但 invoke 仍能命中
+    # streamer 的工具列表看不到 game_p_a，但 invoke 仍能命中
     assert "game_p_a" not in {s.full_name for s in registry.list_tools(for_agent="streamer")}
     res = await registry.invoke(ToolInvocation(tool_name="game_p_a"))
     assert res.success is True
