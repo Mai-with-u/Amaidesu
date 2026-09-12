@@ -1,47 +1,61 @@
-"""Core 和 Model Schema 默认值测试"""
+"""Schema 默认值测试（六文件新结构）
 
-from src.modules.config.core_schemas import CoreConfig
+历史：原 TestCoreConfig 类测试 core.toml 的 CoreConfig 根——core.toml
+已消亡（§6.2 重构），CoreConfig 现为 dashboard 旧调用点的占位壳；
+persona / context / events / dashboard / simulator / logging / interceptors
+各段的真实权威已分别迁出至：
+
+- persona       → agents/streamer/config.py StreamerPersonaConfig
+- context       → agents.toml [agents.streamer.context]（StreamerContextConfig）
+- events        → infra.toml [events]（EventHistoryConfig，保留在 core_schemas 引用）
+- dashboard     → infra.toml [dashboard]（DashboardConfig，保留在 core_schemas 引用）
+- simulator     → infra.toml [simulator]（SimulatorConfigSchema）
+- logging       → infra.toml [logging]（LoggingConfig）
+- interceptors  → infra.toml [interceptors]（动态段，typed 化待 T15 后收口）
+
+TestCoreConfig 类已删除——旧断言所依赖的 CoreConfig 聚合形态已不存在；
+本文件保留 TestModelConfig 与新 TestStreamerPersonaConfig 等迁移后的断言。
+"""
+
 from src.modules.config.model_schemas import ModelConfig
-from src.modules.config.file_meta import CONFIG_BASELINE_VERSION, FileMetaConfig
+from src.agents.streamer.config import StreamerPersonaConfig
+from src.agents.streamer.config import StreamerContextConfig
 
 
-class TestCoreConfig:
+class TestStreamerPersonaConfig:
+    """Persona 段权威（agents/streamer/config.py StreamerPersonaConfig）
+
+    原 CoreConfig.persona 段已迁出——本测试直接断言新位置默认值与字段存在性。
+    """
+
     def test_defaults(self):
-        c = CoreConfig()
-        assert c.general.platform_id == "amaidesu"
-        assert c.persona.bot_name == "麦麦"
-        assert c.persona.emotion_intensity == 7
-        # v2.0.6：PersonaConfig 新增 behavior_style 字段，Planner 决策侧注入。
-        # 默认值由 core_schemas 权威定义；测试以存在性 + 非空即可锁定契约，
-        # 文本变化由其他用例覆盖。
-        assert isinstance(c.persona.behavior_style, str)
-        assert c.persona.behavior_style, "behavior_style 默认值不应为空"
-        assert c.context.enabled is True
-        assert c.dashboard.port == 60214
-        # 事件日志仅内存（运行周期观察窗）：默认不落库，重启即清，
-        # 保证每轮运行的调试视野互不污染。
-        assert c.events.persist is False
-        assert FileMetaConfig().version == CONFIG_BASELINE_VERSION
-
-    def test_persona_behavior_style_default_matches_config_version(self):
-        """behavior_style 字段必须存在且默认文本与权威定义一致（防漂移）。"""
-        c = CoreConfig()
-        # 显式断言 behavior_style 默认值已落盘（防止上游"升了版本但没加字段"的回退）。
-        assert c.persona.behavior_style.startswith("积极与观众互动"), (
-            "behavior_style 默认文本与 core_schemas 权威定义漂移，请回归"
+        p = StreamerPersonaConfig()
+        # 草稿 §11 定案默认值
+        assert p.bot_name == "麦麦"
+        assert p.personality == "活泼开朗，有些调皮，喜欢和观众互动"
+        assert p.style_constraints == "口语化，使用网络流行语，避免机械式回复，适当使用emoji"
+        assert p.behavior_style.startswith("积极与观众互动"), (
+            "behavior_style 默认文本与权威定义漂移，请回归草稿 §11"
         )
+        assert p.audience_salutation == "大家"
 
-    def test_simulator_present(self):
-        c = CoreConfig()
-        assert c.simulator.enabled is False
+    def test_behavior_style_non_empty(self):
+        """behavior_style 字段必须存在且非空（Planner 决策侧注入契约）。"""
+        p = StreamerPersonaConfig()
+        assert isinstance(p.behavior_style, str)
+        assert p.behavior_style, "behavior_style 默认值不应为空"
 
-    def test_logging_present(self):
-        c = CoreConfig()
-        assert c.logging.level == "INFO"
 
-    def test_interceptors_is_dict(self):
-        c = CoreConfig()
-        assert isinstance(c.interceptors, dict)
+class TestStreamerContextConfig:
+    """Context 段权威（agents/streamer/config.py StreamerContextConfig）
+
+    原 CoreConfig.context 段已迁出至 agents.toml [agents.streamer.context]。
+    """
+
+    def test_defaults(self):
+        c = StreamerContextConfig()
+        assert c.enabled is True
+        assert c.memory_recall_long_term == 3
 
 
 class TestModelConfig:

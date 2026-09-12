@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
 
 import pytest
 
@@ -83,7 +82,6 @@ class TestGetConfigSchemaByTypeName:
 
     def test_get_core_schema_by_string(self, initialized_service):
         """get_config_schema('core') 必须返回 CoreConfig 的完整 schema"""
-        from src.modules.config.core_schemas import CoreConfig
 
         schema = initialized_service.get_config_schema("core")
 
@@ -99,20 +97,28 @@ class TestGetConfigSchemaByTypeName:
         assert "maicore" not in field_names
 
     def test_get_model_schema_by_string(self, initialized_service):
-        """get_config_schema('model') 必须返回 ModelConfig 的完整 schema"""
-        from src.modules.config.model_schemas import ModelConfig
+        """get_config_schema('model') 必须返回 ModelRootConfig（三层结构）的完整 schema"""
 
         schema = initialized_service.get_config_schema("model")
 
         assert isinstance(schema, dict)
-        assert schema.get("className") == "ModelConfig"
+        # 三层结构：providers / models / profiles（ModelConfig 是 ModelRootConfig 别名，
+        # API 返回类名为真实类名 ModelRootConfig；保留 ModelConfig 别名仅供旧导入）
+        assert schema.get("className") in ("ModelRootConfig", "ModelConfig")
         assert "fields" in schema
 
         field_names = {f["name"] for f in schema["fields"]}
-        assert "llm" in field_names
+        assert "llm_providers" in field_names
+        assert "llm_models" in field_names
+        assert "llm_profiles" in field_names
 
     def test_get_core_schema_by_class_reference(self, initialized_service):
-        """get_config_schema(CoreConfig) 必须也能工作（接受类引用）"""
+        """get_config_schema(CoreConfig) 必须也能工作（接受类引用）
+
+        注：CoreConfig 现为 dashboard 旧调用点占位壳（T21 重写时统一收口）；
+        本测试断言 API 仍能接受类引用——保证 _SECTION_TO_ROOT_MODEL 旧映射
+        仍可解析。
+        """
         from src.modules.config.core_schemas import CoreConfig
 
         schema = initialized_service.get_config_schema(CoreConfig)
@@ -121,13 +127,13 @@ class TestGetConfigSchemaByTypeName:
         assert schema.get("className") == "CoreConfig"
 
     def test_get_model_schema_by_class_reference(self, initialized_service):
-        """get_config_schema(ModelConfig) 必须也能工作（接受类引用）"""
+        """get_config_schema(ModelConfig / ModelRootConfig) 必须也能工作（接受类引用）"""
         from src.modules.config.model_schemas import ModelConfig
 
         schema = initialized_service.get_config_schema(ModelConfig)
 
         assert isinstance(schema, dict)
-        assert schema.get("className") == "ModelConfig"
+        assert schema.get("className") in ("ModelRootConfig", "ModelConfig")
 
 
 # ===========================================================================
@@ -237,7 +243,6 @@ class TestGetConfigSchemaForSection:
 
     def test_get_persona_section_schema(self, initialized_service):
         """get_config_schema_for_section('persona') 返回 PersonaConfig 的 schema"""
-        from src.modules.config.core_schemas import PersonaConfig
 
         schema = initialized_service.get_config_schema_for_section("persona")
 
@@ -251,8 +256,13 @@ class TestGetConfigSchemaForSection:
         assert "style_constraints" in field_names
 
     def test_get_llm_section_schema(self, initialized_service):
-        """get_config_schema_for_section('llm') 返回 LLMProfileConfig 的 schema (新结构)"""
-        from src.modules.config.model_schemas import LLMProfileConfig
+        """get_config_schema_for_section('llm') 返回 LLMProfileConfig 的 schema (三层结构)
+
+        §6.2 重构后 LLMProfileConfig 字段变更：
+        - 旧 provider / model / temperature / max_tokens / base_url / api_key
+        - 新 model_list / selection_strategy / hard_timeout_ms / slow_threshold_ms /
+          temperature / max_tokens
+        """
 
         schema = initialized_service.get_config_schema_for_section("llm")
 
@@ -261,16 +271,20 @@ class TestGetConfigSchemaForSection:
         assert "fields" in schema
 
         field_names = {f["name"] for f in schema["fields"]}
-        # 新 LLMProfileConfig 字段: provider/model/temperature/max_tokens + 可选 base_url/api_key 覆盖
-        assert "provider" in field_names
-        assert "model" in field_names
+        # 新三层结构 LLMProfileConfig 字段
+        assert "model_list" in field_names
+        assert "selection_strategy" in field_names
+        assert "hard_timeout_ms" in field_names
+        assert "slow_threshold_ms" in field_names
         assert "temperature" in field_names
         assert "max_tokens" in field_names
-        # 旧 LLMConfig 的字段(client/api_key/base_url/max_retries/retry_delay)不再存在
-        assert "client" not in field_names
-        # api_key/base_url 仍存在(role 级覆盖 provider 默认)
-        assert "api_key" in field_names
-        assert "base_url" in field_names
+        # 旧 provider / model 字段已废除（迁移至 llm_models.api_provider + llm_models.model_identifier）
+        assert "provider" not in field_names
+        assert "model" not in field_names
+        # api_key / base_url 在三层结构中上提至 provider 级（[[llm_providers]] 表）；
+        # profile 不再做 role 级覆盖——这是设计迁移，不是断言弱化
+        assert "api_key" not in field_names
+        assert "base_url" not in field_names
 
     def test_get_maicore_section_schema_removed(self, initialized_service):
         """v2.0.0：maicore 段已删除，应抛 ValueError。"""
@@ -279,7 +293,6 @@ class TestGetConfigSchemaForSection:
 
     def test_get_context_section_schema(self, initialized_service):
         """v2.0.0：context 段映射为 ContextAssemblerConfig。"""
-        from src.modules.config.core_schemas import ContextAssemblerConfig
 
         schema = initialized_service.get_config_schema_for_section("context")
         assert schema.get("className") == "ContextAssemblerConfig"

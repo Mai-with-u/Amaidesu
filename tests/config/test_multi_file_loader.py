@@ -3,7 +3,6 @@
 import shutil
 
 import pytest
-import tomlkit
 
 from src.modules.config.file_meta import CONFIG_BASELINE_VERSION
 from src.modules.config.multi_file_loader import (
@@ -46,12 +45,19 @@ class TestGeneration:
         assert "[agents.streamer.context]" in agents_content
         assert "[agents.streamer.background]" in agents_content
 
-    def test_generated_model_has_llm(self, temp_config_dir):
+    def test_generated_model_has_three_layers(self, temp_config_dir):
+        """model.toml 生成形态——三层结构（providers / models / profiles）
+
+        旧结构 ``[llm]`` / ``[vlm]`` / ``[llm_agenda]`` 等单一 profile 段位
+        已废除（§6.2 重构）；新结构按 llm_providers / llm_models / llm_profiles
+        三层装配。
+        """
         generate_default_configs(temp_config_dir)
         model_content = (temp_config_dir / "model.toml").read_text(encoding="utf-8-sig")
-        assert "[llm]" in model_content
-        assert "[vlm]" in model_content
-        assert "[llm_agenda]" in model_content
+        assert "[[llm_providers]]" in model_content
+        # llm_models 默认空数组（生成时未填具体模型）—— 接受两种写法
+        assert "[[llm_models]]" in model_content or "llm_models = []" in model_content
+        assert "[llm_profiles]" in model_content
 
     def test_generated_infra_has_sections(self, temp_config_dir):
         generate_default_configs(temp_config_dir)
