@@ -248,7 +248,7 @@ class StreamerCommandConfig(BaseConfig):
 class StreamerThinkingStreamConfig(BaseConfig):
     """[agents.streamer.thinking_stream] 段
 
-    思考流旁路（ADR-008；观察面专用，best-effort 不落库）。
+    思考流旁路（观察面专用，best-effort 不落库）。
     """
 
     enabled: bool = Field(

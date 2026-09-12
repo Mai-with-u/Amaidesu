@@ -54,7 +54,7 @@ _OBSERVATION_KEEP = 10
 # 交付/上报文本截断（事件 payload 与兜底交付共用）
 _MAX_DELIVERY_TEXT = 800
 
-# MaiCraft 原始状态 → 任务词表状态映射（绑定处适配声明的一部分；ADR-013 词表）
+# MaiCraft 原始状态 → 任务词表状态映射（绑定处适配声明的一部分；词表）
 _MAICRAFT_TASK_STATUS_MAP = {
     "pending": "accepted",
     "running": "running",
@@ -191,7 +191,7 @@ class MinecraftAgent(BaseAgent):
         """装配 Agent 私有 MCP server（[agents.minecraft.mcp]）。
 
         启用条件：registry 非空且 ``typed_config.mcp.enabled`` 为 True。
-        装配：以逐工具可见名单注册到 ToolRegistry（ADR-012，fail-closed：
+        装配：以逐工具可见名单注册到 ToolRegistry（fail-closed：
         每个工具默认仅 minecraft 可见；读工具 perceive 放开给主播直读），
         MinecraftAgent 通过 ``list_tools(provider="maicraft")`` 域内查询可见。
         失败语义：整个装配 try/except 包裹，连接失败/装配异常仅 warning 不阻断
@@ -249,7 +249,7 @@ class MinecraftAgent(BaseAgent):
             except Exception:  # noqa: BLE001
                 pass
             return
-        # 绑定处适配声明（ADR-013）：任务查询工具（原始名后缀定位，server
+        # 绑定处适配声明：任务查询工具（原始名后缀定位，server
         # 特有知识留在此处）+ 状态映射 + attention 通知资源；订阅起停归跟踪循环
         for spec in prov.list_tools():
             if spec.name.endswith("maicraft_task"):
@@ -308,7 +308,7 @@ class MinecraftAgent(BaseAgent):
             build_report_spec(),
         ]
 
-    # 局部工具可见名单（注册处声明，ADR-012）：本地件只有 minecraft 自己可见；
+    # 局部工具可见名单（注册处声明）：本地件只有 minecraft 自己可见；
     # get_work_log 是主播的叙事素材读服务。派活走框架委派原语（framework_delegate）。
     _LOCAL_VISIBLE_TO = {
         "minecraft_todo": ["minecraft"],
@@ -544,7 +544,7 @@ class MinecraftAgent(BaseAgent):
         """构造 LLM 层增量回调（duck-typed sink），只转发 reasoning 增量。
 
         自足实现：不在此 import streamer 包的内部件 ThinkingStreamContext——
-        跨 Agent import 违反边界（ADR-008：Protocol 鸭子匹配）。seq_box
+        跨 Agent import 违反边界（Protocol 鸭子匹配）。seq_box
         是 list 包装以实现闭包内计数自增（list[0]=... 不需 nonlocal）。
         """
         sink = self._thinking_sink
@@ -566,7 +566,7 @@ class MinecraftAgent(BaseAgent):
         return _on_delta
 
     # ==================================================================
-    # 后台任务跟踪（通用基建适配声明；原 handoff 手写跟踪已迁移——ADR-013）
+    # 后台任务跟踪（通用基建适配声明；原 handoff 手写跟踪已迁移到通用任务基建）
     # ==================================================================
 
     def _track_receipt(self, tool_full_name: str, observation: Dict[str, Any]) -> None:

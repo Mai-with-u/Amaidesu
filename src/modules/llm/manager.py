@@ -282,6 +282,20 @@ class LLMManager:
         from src.modules.llm.clients.token_usage_manager import TokenUsageManager
 
         self._token_manager = TokenUsageManager(use_global=True)
+        # 价格唯一来源 = model.toml [[llm_models]] 的定价字段
+        # 价格表按 model_identifier 键入（费用查询用的是请求实际的 API 模型标识）
+        self._token_manager.set_model_prices(
+            {
+                mcfg.get("model_identifier") or mname: {
+                    "price_in": mcfg.get("price_in", 0.0),
+                    "price_out": mcfg.get("price_out", 0.0),
+                    "cache_price_in": mcfg.get("cache_price_in", 0.0),
+                    "cache": mcfg.get("cache", ""),
+                }
+                for mname, (mcfg, _prov) in self._models.items()
+                if mcfg.get("price_in", 0.0) > 0 or mcfg.get("price_out", 0.0) > 0
+            }
+        )
 
         self.logger.info(
             f"LLMManager 初始化完成，providers: {list(self._providers.keys())}, profiles: {list(self._profiles.keys())}"

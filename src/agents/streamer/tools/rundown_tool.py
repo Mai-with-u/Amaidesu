@@ -2,7 +2,7 @@
 
 **注册形态**：provider="rundown"、声明名 control → 全名 ``rundown_control``，
 经 ``build_rundown_tool_provider`` 组装后由 StreamerAgent 注册进 ToolRegistry
-（可见名单 ``["streamer"]``，ADR-012）。决策面的出现时机仍由 Planner 按
+（可见名单 ``["streamer"]``）。决策面的出现时机仍由 Planner 按
 ``RundownControlProvider.is_active`` 条件追加（动态工具的已知例外）。
 推进权归 Agent：何时切换环节是决策脑自己的决定，本工具只提供能力通道，
 并把 ``RundownState`` 的结构化拒绝（未知环节 id / 未达最少停留）原样重新写入

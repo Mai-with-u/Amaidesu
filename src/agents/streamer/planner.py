@@ -233,7 +233,7 @@ class Planner:
             rundown_text: 当前流程单渲染文本（可选）。
             game_narrative: 游戏叙事文本（game.* 事件摘要；可主动经工具查询更多）。
             thinking: 思考流上下文（可选；提供时每次 LLM 调用的 reasoning
-                增量经旁路通道外发，ADR-008）。
+                增量经旁路通道外发）。
             round_id: 决策轮次 ID（工具调用经 ToolInvocation.round_id 透传到
                 tool.result 事件，供观察器归属；空串表示无轮次关联）。
 
@@ -465,7 +465,7 @@ class Planner:
     # ==================== 工具列表与执行 ====================
 
     def _build_tool_face(self) -> List[Dict[str, Any]]:
-        """LLM 工具列表 = 注册表按可见名单计算（for_agent="streamer"，ADR-012）。
+        """LLM 工具列表 = 注册表按可见名单计算（for_agent="streamer"）。
 
         唯一例外：rundown_control 是动态工具——按流程单激活状态条件追加
         （注册表条目已在 for_agent 结果中，跳过防重）。

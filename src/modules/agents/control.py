@@ -2,7 +2,7 @@
 AgentControl —— 框架级 Agent 控制与委派
 
 - pause / resume / shutdown / restart 框架级控制工具
-- framework_delegate / framework_task_status：跨 Agent 委派原语（ADR-013）
+- framework_delegate / framework_task_status：跨 Agent 委派原语
   ——派活拿回执（accepted + task_id），任务进度随时可查；指令只当自然
   语言（给目标，不给步骤），不加编排/条件分支
 - provider="framework"（框架内置提供，非独立源；可见名单默认 ["*"]）
@@ -217,7 +217,7 @@ class AgentControl:
 class AgentControlProvider(BaseToolProvider):
     """把 AgentControl 工具（控制 6 件 + 委派 2 件）注册到 ToolRegistry 的 Provider。
 
-    委派原语（ADR-013）：
+    委派原语：
     - ``framework_delegate(agent, instruction)``：名册校验 + **禁自派** +
       目标接收入口（BaseAgent 默认拒收）→ 受理成功登记同一张任务记录表
       （agent 型：发起方=调用方、执行者=目标、事实源=执行 Agent）

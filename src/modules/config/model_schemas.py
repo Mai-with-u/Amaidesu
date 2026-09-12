@@ -12,8 +12,8 @@
 - provider / model 字段 = 平台 / API 提供商侧调整 → 改 providers/models 段
 - profile 字段 = 应用侧角色调整 → 改 llm_profiles 段
 
-价格合流：``[[llm_models]]`` 含 price_in / price_out / cache_price_in，
-``token_usage_manager`` 直接从配置源取价，删 ``model_price.toml`` 旧来源。
+价格合流：价格唯一来源 = 本表 ``price_in`` / ``price_out`` / ``cache_price_in``，
+``token_usage_manager`` 按模型标识从注入的价格表取价。
 """
 
 from __future__ import annotations
@@ -113,10 +113,10 @@ class LLMModelConfig(BaseConfig):
         description="关联的 provider 名（对应 llm_providers[].name）",
     )
     visual: bool = Field(default=False, description="是否支持视觉（影响 chat_vision 是否装配）")
-    price_in: float = Field(default=0.0, ge=0.0, description="输入 token 单价（per 1k）")
-    price_out: float = Field(default=0.0, ge=0.0, description="输出 token 单价（per 1k）")
+    price_in: float = Field(default=0.0, ge=0.0, description="输入 token 单价（每百万 token）")
+    price_out: float = Field(default=0.0, ge=0.0, description="输出 token 单价（每百万 token）")
     cache: str = Field(default="", description="缓存类型（空=无；'anthropic' 等按 provider 约定）")
-    cache_price_in: float = Field(default=0.0, ge=0.0, description="缓存输入 token 单价（per 1k）")
+    cache_price_in: float = Field(default=0.0, ge=0.0, description="缓存输入 token 单价（每百万 token）")
 
 
 class LLMSelectionStrategy(BaseConfig):

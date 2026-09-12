@@ -217,7 +217,7 @@ class WebSocketHandler:
     async def broadcast_stream(self, stream_type: str, data: Dict[str, object]) -> int:
         """广播观测流消息（kind="stream"）到所有已连接客户端。
 
-        流消息不走事件订阅过滤——它是 best-effort 观测通道（ADR-008），
+        流消息不走事件订阅过滤——它是 best-effort 观测通道，
         前端按 kind 分流到独立缓冲，不进事件通道。
         """
         message = WebSocketMessage(

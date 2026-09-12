@@ -1,4 +1,4 @@
-"""思考流旁路 hub：缓冲 + 合帧 + WebSocket 直推（ADR-008）。
+"""思考流旁路 hub：缓冲 + 合帧 + WebSocket 直推）。
 
 实现 ``ThinkingStreamSink`` 结构契约（agents 侧 Protocol 的鸭子匹配，
 不产生 import 依赖）。delta 在 flush 窗口内合帧为单条 WS 流消息批量推送，
@@ -24,7 +24,7 @@ THINKING_STREAM_TYPE = "thinking.delta"
 
 
 class StreamPreviewHub:
-    """思考流旁路 hub（观察面专用，ADR-008）。
+    """思考流旁路 hub（观察面专用）。
 
     Agent 侧经 ``ThinkingStreamSink`` Protocol 注入；dashboard 侧实现。
     """

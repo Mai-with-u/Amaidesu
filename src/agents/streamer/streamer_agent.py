@@ -177,7 +177,7 @@ class StreamerAgent(BaseAgent):
                 后台心跳按其解析的当前场次主键写 live_sessions 实时状态；
                 ``None`` 时心跳降级跳过（场次归属由管理器负责，Agent 不自建）。
             thinking_sink: 可选思考流旁路出口（``ThinkingStreamSink`` 结构契约，
-                dashboard 侧 hub 实现；ADR-008）。``None`` 或配置关闭时思考流
+                dashboard 侧 hub 实现）。``None`` 或配置关闭时思考流
                 整体短路——决策循环行为与无旁路完全一致。
         """
         super().__init__(event_bus=event_bus)
@@ -467,7 +467,7 @@ class StreamerAgent(BaseAgent):
 
         只有真工具进声明：``streamer_reply``（注册 + 名单 ["streamer"]）。
         should_speak_proactively / parse_command 是代码直连的内部件，不是工具、
-        不声明不注册（§5 判据）；rundown_control 由 rundown 注册项声明（provider
+        不声明不注册（注册处生产侧声明判据）；rundown_control 由 rundown 注册项声明（provider
         ="rundown"，非本 Agent 名下）。
 
         前置启动窗口兜底：Provider 槽位在 ``__init__`` 里被置 None，直到
@@ -485,7 +485,7 @@ class StreamerAgent(BaseAgent):
     def _register_tools(self) -> None:
         """构造 reply Provider；reply 与 rundown_control 注册进 ToolRegistry。
 
-        名单口径（ADR-012，注册处声明）：
+        名单口径（注册处声明）：
         - ``streamer_reply``：LLM 可调的真工具，注册 + 名单 ``["streamer"]``
           （自己的工具填自己）；Planner 经 registry 统一调用，thinking 回调
           槽位仍挂在本 Provider 实例上。

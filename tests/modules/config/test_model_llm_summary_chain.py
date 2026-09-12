@@ -17,20 +17,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.modules.config.model_schemas import ModelRootConfig, REQUIRED_PROFILE_NAMES
-from src.modules.config.multi_file_loader import load_config_dir
+from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
 from src.modules.llm.clients.base import _client_impls
 from src.modules.llm.manager import LLMManager
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-REAL_CONFIG_DIR = PROJECT_ROOT / "config"
-
-
 @pytest.fixture
-def loaded_model_config() -> Dict[str, Any]:
-    """加载真实 config/ 目录并返回 model section（dict）。"""
-    if not REAL_CONFIG_DIR.exists():
-        pytest.skip(f"未找到配置目录: {REAL_CONFIG_DIR}")
-    config, _report = load_config_dir(REAL_CONFIG_DIR)
+def loaded_model_config(tmp_path: Path) -> Dict[str, Any]:
+    """生成六文件基线（tmp，自包含不依赖机器本地配置）并返回 model section。"""
+    config_dir = tmp_path / "config"
+    generate_default_configs(config_dir)
+    config, _report = load_config_dir(config_dir)
     assert "model" in config, "load_config_dir 应当返回 model section"
     return config["model"]
 
@@ -48,7 +44,7 @@ class TestScenarioAConfigRetainsSummary:
         assert "llm_profiles" in ModelRootConfig.model_fields
 
     def test_loaded_model_config_contains_summary_profile(self, loaded_model_config: Dict[str, Any]):
-        """加载真实 config/model.toml 后，model.llm_profiles.summary 必须存在且非空。"""
+        """生成的 model.toml 中 llm_profiles.summary 必须存在且非空。"""
         assert "llm_profiles" in loaded_model_config
         assert "summary" in loaded_model_config["llm_profiles"], (
             "summary profile 缺失——llm_profiles 必须含 summary 成员"
@@ -76,9 +72,11 @@ class TestScenarioAConfigRetainsSummary:
                 f"summary.model {model_name!r} 的 api_provider={api_provider!r} 不在 llm_providers 中"
             )
 
-    def test_no_drift_on_summary(self, loaded_model_config: Dict[str, Any]):
+    def test_no_drift_on_summary(self, tmp_path: Path):
         """summary 不应被 drift report 标记为冗余。"""
-        _config, report = load_config_dir(REAL_CONFIG_DIR)
+        config_dir = tmp_path / "config"
+        generate_default_configs(config_dir)
+        _config, report = load_config_dir(config_dir)
         redundant_keys = [r for r in report.redundant if "summary" in r]
         assert not redundant_keys, (
             f"summary 被标记为冗余配置项: {redundant_keys}"
@@ -101,7 +99,7 @@ class TestScenarioAConfigRetainsSummary:
 class TestScenarioBLLMManagerParsesSummary:
     @pytest.fixture
     async def setup_manager_with_real_config(self, loaded_model_config: Dict[str, Any]):
-        """用真实 config/model.toml 初始化 LLMManager（mock client 注册表）。"""
+        """用生成的 model 配置初始化 LLMManager（mock client 注册表）。"""
         created_instances = []
 
         def _make_instance(cfg):

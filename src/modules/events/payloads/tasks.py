@@ -1,4 +1,4 @@
-"""task.* 事件 Payload（异步任务生命周期，ADR-013）
+"""task.* 事件 Payload（异步任务生命周期）
 
 ``task.changed``：任务记录表写入边界在状态**真的变化**时发布（同状态
 幂等不重发）。消费者按 ``payload.initiator`` 过滤唤醒（BaseAgent 默认

@@ -12,9 +12,9 @@
 
 设计原则：
 - ``backend`` 仅支持 ``"simple"``（关键词召回）；amemorix 外部服务
-  段位已废除（F7 + §13 S4 决策：外部依赖解耦期迁出，待独立路线再引入）
-- SimpleMemory 子段已废除（三字段 recall_top_k / viewer_profile_max /
-  fact_max_age_days 在 SimpleMemory 实现中为常量，不再暴露配置面）
+  仅 ``"simple"``（外部记忆后端属独立路线，不在本体系）
+- SimpleMemory 三字段 recall_top_k / viewer_profile_max /
+  fact_max_age_days 在 SimpleMemory 实现中为常量，不暴露配置面
 """
 
 from __future__ import annotations

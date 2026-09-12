@@ -1,4 +1,4 @@
-"""思考流旁路通道契约与单轮组装器（ADR-008）。
+"""思考流旁路通道契约与单轮组装器）。
 
 思考流是 best-effort 观测通道：delta 不经过 EventBus、不落库，仅由
 dashboard 侧 hub 合帧后经 WebSocket 直推控制台。与事件通道（可靠 +

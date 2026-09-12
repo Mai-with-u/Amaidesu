@@ -71,7 +71,7 @@ class StorageRootConfig(BaseConfig):
     - ``[memory]``：记忆子系统装配（backend 行切换）
 
     注：记忆子模块（bootstrap.py）按新扁平结构从 ``config["sqlite"]`` /
-    ``config["memory"]`` 直接读取；旧的 ``[storage]`` 包裹层已废除。
+    ``config["memory"]`` 直接读取（顶层扁平段位，无包裹层）。
     """
 
     model_config = ConfigDict(extra="forbid")

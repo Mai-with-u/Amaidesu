@@ -45,28 +45,7 @@ def temp_usage_dir():
 
 
 @pytest.fixture
-def mock_price_file(temp_usage_dir):
-    """创建模拟价格配置文件"""
-    price_file = temp_usage_dir / "model_price.toml"
-    price_content = """
-[gpt-4o]
-price_in = 2.50
-price_out = 10.00
-
-[gpt-4o-mini]
-price_in = 0.15
-price_out = 0.60
-
-[claude-3-5-sonnet]
-price_in = 3.00
-price_out = 15.00
-"""
-    price_file.write_text(price_content, encoding="utf-8")
-    return price_file
-
-
-@pytest.fixture
-def token_manager(temp_usage_dir, mock_price_file):
+def token_manager(temp_usage_dir):
     """创建 TokenUsageManager 实例（使用 use_global=False 避免污染全局）"""
     # Patch __init__ 中的 project_root 路径
     with patch.object(TokenUsageManager, "__init__", lambda self, update_callback=None, use_global=True: None):
@@ -132,17 +111,13 @@ def test_get_model_price_exact_match(token_manager):
     assert price["price_out"] == 10.00
 
 
-def test_get_model_price_fuzzy_match(token_manager):
-    """测试模糊匹配模型价格"""
-    # 测试版本号匹配
-    price = token_manager._get_model_price("gpt-4o-2024-05-13")
-    assert price is not None
-    assert price["price_in"] == 2.50
-
-    # 测试部分名称匹配
-    price = token_manager._get_model_price("claude-3-5-sonnet-20241022")
-    assert price is not None
-    assert price["price_in"] == 3.00
+def test_get_model_price_no_fuzzy_match(token_manager):
+    """价格只按 model_identifier 精确匹配——模糊匹配会误算费用（T11 删除）"""
+    # 同族不同标识（带版本后缀）不得命中已登记价格
+    assert token_manager._get_model_price("gpt-4o-2024-05-13") is None
+    assert token_manager._get_model_price("claude-3-5-sonnet-20241022") is None
+    # 精确名仍命中
+    assert token_manager._get_model_price("gpt-4o") is not None
 
 
 def test_get_model_price_not_found(token_manager):

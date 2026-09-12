@@ -116,7 +116,7 @@ class Replyer:
                 主循环）从 ``RundownState`` 拼装后传入，描述当前环节的
                 title / task_description / key_points / 环节剩余时长 + 整场进度。
                 透传到 prompt 的 ``$rundown`` 变量。
-            on_delta: 思考流回调（LLM 层形态 (kind, text_delta)；ADR-008）。
+            on_delta: 思考流回调（LLM 层形态 (kind, text_delta)）。
 
         Returns:
             Dict 实例（含 speech/emotion/actions/metadata）；LLM 异常、tool_calls 缺失

@@ -141,7 +141,7 @@ class OpenAIClient(BaseLLMClient):
         """聊天调用。
 
         on_delta 非 None 时走流式传输（SSE 逐帧接收、边收边回调），流结束后
-        组装完整 LLMResponse 返回——传输层流式、语义层整段（ADR-008）。
+        组装完整 LLMResponse 返回——传输层流式、语义层整段）。
         流式请求建立失败时自动降级为非流式一次性调用（回调不触发）。
         """
         if on_delta is not None:
@@ -237,7 +237,7 @@ class OpenAIClient(BaseLLMClient):
     ) -> LLMResponse:
         """流式传输路径：SSE 逐帧接收，reasoning/content 增量实时回调，最终组装完整响应。
 
-        增量三分（ADR-008）：reasoning 外发回调；content 外发回调（调用方自行取舍）；
+        增量三分：reasoning 外发回调；content 外发回调（调用方自行取舍）；
         tool call arguments 碎片只在客户端拼接成完整 JSON，不外发。
         拼接语义与非流式一致：arguments JSON 解析失败走 repair_json 兜底。
         """

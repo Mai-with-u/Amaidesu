@@ -221,7 +221,7 @@ class VTSProvider(BaseToolProvider):
             default_factory=dict,
             description="Idle 额外参数 {参数名: 目标值}，人类配置预声明",
         )
-        # Optional[float] 历史兼容 → 按 §1② 转空值不可表达，保留字段类型 Optional 但默认 None
+        # Optional[float] 历史兼容 →；空值不可用空串表达，保留字段类型 Optional 但默认 None
         idle_extra_speed: Optional[float] = Field(default=None, description="Idle 额外参数速度（None=不额外调整）")
 
     def __init__(

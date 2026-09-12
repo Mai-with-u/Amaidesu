@@ -9,7 +9,7 @@ ToolRegistry —— 工具注册中心
   供 Dashboard 溯源（broadcaster 通配订阅 ``tool.result.#``）
 - 可选熔断器：连续失败计数达阈值则摘除工具（tripped），
   配套 ``ToolHealthMonitor`` 做探活恢复（``src/modules/tools/health.py``）
-- 可见名单（ADR-012）：``register_provider(visible_to=...)`` 注册处逐工具声明
+- 可见名单：``register_provider(visible_to=...)`` 注册处逐工具声明
   可见给哪些 Agent（默认 ``["*"]`` 全员）；``list_tools(for_agent=...)`` 按
   Agent 计算工具列表。名单只约束可见性，``invoke()`` 不校验。
 
@@ -290,7 +290,7 @@ class ToolRegistry:
     ) -> List[ToolSpec]:
         """返回已注册工具的 spec（默认排除停用/熔断工具）。
 
-        可见性按名单计算（ADR-012）：
+        可见性按名单计算：
         - ``for_agent=None`` → 不做名单过滤（运营全集；Dashboard 工具页用）
         - ``for_agent="<Agent 注册名>"`` → 只返回名单包含该名或 ``["*"]``
           的工具（该 Agent 的工具列表；全体消费方统一从这里拿）

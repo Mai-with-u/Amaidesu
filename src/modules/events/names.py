@@ -53,7 +53,7 @@ class CoreEvents:
     # 状态**真的变化**时发一条（同状态幂等不重发）。payload 带 task_id /
     # 状态 / 摘要 / 发起方 / 执行者；镜像 ``rundown.changed`` 的单事件 +
     # payload 判别形态。BaseAgent 默认按 ``payload.initiator == self.name``
-    # 过滤唤醒（跨 Agent 委派与回执型工具共用，ADR-013）。
+    # 过滤唤醒（跨 Agent 委派与回执型工具共用）。
     TASK_CHANGED = "task.changed"
 
     # ========== v2 语义域事件（planner 决策轮记录） ==========

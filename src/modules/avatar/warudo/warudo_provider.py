@@ -155,7 +155,7 @@ class WarudoProvider(BaseToolProvider):
         talking_head_interval: float = Field(default=0.1, ge=0.01, description="TalkingHead 最小间隔秒数")
         throw_fish_cooldown: float = Field(default=5.0, ge=0.0, description="抛鱼动画冷却秒数")
         # 动作目录（人类登记的可用动作名+说明；类似 MCP servers 的动态键例外，
-        # 键=动作名、值=说明；typed 形态 Dict[str, str] 不算 §1⑤ 自由 dict）
+        # 键=动作名、值=说明；typed 形态 Dict[str, str] 为有界键值映射，不算自由 dict）
         action_catalog: Dict[str, str] = Field(
             default_factory=dict,
             description="可用蓝图动作目录 {动作名: 说明}，人类配置预声明；用于拼入工具描述供 LLM 选择",

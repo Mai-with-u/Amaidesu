@@ -12,7 +12,6 @@ Token使用量管理器
 
 import json
 import time
-import tomllib
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -80,7 +79,7 @@ class TokenUsageManager:
         self.logger = get_logger("TokenUsageManager")
 
         # 加载模型价格配置
-        self.model_prices = self._load_model_prices()
+        self.model_prices: Dict[str, Dict[str, float]] = {}
 
         # 设置更新回调
         self.update_callback = update_callback
@@ -89,46 +88,28 @@ class TokenUsageManager:
         if use_global:
             global_token_manager = self
 
-    def _load_model_prices(self) -> Dict[str, Dict[str, float]]:
-        """加载模型价格配置
-
-        Returns:
-            模型价格配置字典
-        """
-        price_file = Path(__file__).parent / "model_price.toml"
-
-        if not price_file.exists():
-            self.logger.info("模型价格配置文件不存在，将无法计算费用")
-            return {}
-
-        try:
-            with open(price_file, "rb") as f:
-                prices = tomllib.load(f)
-                self.logger.info(f"成功加载模型价格配置: {list(prices.keys())}")
-                return prices
-        except Exception as e:
-            self.logger.warning(f"读取模型价格配置失败: {e}")
-            return {}
-
-    def _get_model_price(self, model_name: str) -> Optional[Dict[str, float]]:
-        """获取指定模型的价格配置
+    def set_model_prices(self, prices: Dict[str, Dict[str, float]]) -> None:
+        """注入模型价格表（来源：model.toml [[llm_models]] 的 price_in/price_out/cache_price_in）。
 
         Args:
-            model_name: 模型名称
+            prices: ``{model_identifier: {price_in, price_out, cache_price_in, ...}}``
+        """
+        self.model_prices = dict(prices)
+        if self.model_prices:
+            self.logger.info(f"模型价格已从配置载入: {sorted(self.model_prices.keys())}")
+        else:
+            self.logger.info("模型价格表为空（[[llm_models]] 未配置价格），无法计算费用")
+
+    def _get_model_price(self, model_name: str) -> Optional[Dict[str, float]]:
+        """按模型标识精确匹配价格配置（不做模糊匹配——误匹配会算错费用）
+
+        Args:
+            model_name: 模型标识（[[llm_models]].model_identifier）
 
         Returns:
-            价格配置字典，如果不存在则返回None
+            价格配置字典，未登记则返回 None
         """
-        # 尝试精确匹配
-        if model_name in self.model_prices:
-            return self.model_prices[model_name]
-
-        # 尝试模糊匹配（移除版本号等后缀）
-        for price_model in self.model_prices.keys():
-            if model_name.startswith(price_model.split("-")[0]) or price_model in model_name:
-                return self.model_prices[price_model]
-
-        return None
+        return self.model_prices.get(model_name)
 
     def _calculate_cost(self, model_name: str, prompt_tokens: int, completion_tokens: int) -> Dict[str, Any]:
         """计算token使用费用
