@@ -1,0 +1,18 @@
+# 统一行尾策略：文本一律 LF（防 Windows 混合行尾噪音）
+* text=auto eol=lf
+# Windows 批处理例外
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# 二进制显式声明（防误判）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.exe binary
+*.dll binary
+*.whl binary
+*.sqlite3 binary
