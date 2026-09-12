@@ -2,8 +2,9 @@
 
 覆盖:
 1. **get_v2_component_list** — 配置全集构建：
-   - 采集器全集 = collectors 子键（含未启用占位）
-   - Agent 全集 = agents 子键（enabled 之外的键）
+   - 采集器全集 = collectors.toml 视图（顶层各采集器段 ∪ 顶层 enabled 名单，
+     enabled/meta 为文件级键不算组件）
+   - Agent 全集 = agents.toml [agents] 段子键（enabled 之外的键）
    - 未启用组件 is_enabled=False / is_started=False
    - 已启用 + 运行中 is_started=True
    - 工具不在组件清单（工具以域开关单元管理，见 test_tools_api.py）
@@ -28,15 +29,10 @@ def _make_server(
     server = MagicMock()
     cm = MagicMock()
     cm.list_running = lambda: collector_running or set()
-    cm._collectors = {
-        name: MagicMock(description=desc)
-        for name, desc in (collector_descs or {}).items()
-    }
+    cm._collectors = {name: MagicMock(description=desc) for name, desc in (collector_descs or {}).items()}
     am = MagicMock()
     am.list_running = lambda: agent_running or set()
-    am._agents = {
-        name: MagicMock(description=desc) for name, desc in (agent_descs or {}).items()
-    }
+    am._agents = {name: MagicMock(description=desc) for name, desc in (agent_descs or {}).items()}
     server.collector_manager = cm
     server.agent_manager = am
     server.tool_registry = MagicMock()
@@ -44,6 +40,8 @@ def _make_server(
 
 
 def _make_config() -> dict:
+    """组件配置视图（新契约：collectors scope = collectors.toml 顶层内容，
+    enabled 名单与各采集器段同层；meta 为文件级键不算组件）。"""
     return {
         "agents": {
             "enabled": ["streamer"],
@@ -51,7 +49,8 @@ def _make_config() -> dict:
             "minecraft": {},
         },
         "collectors": {
-            "enabled": ["bili_danmaku"],
+            "enabled": ["bili_danmaku", "stt"],
+            "meta": {"version": "2.0.31"},
             "bili_danmaku": {"room_id": 1},
             "screen": {},
         },
@@ -63,8 +62,10 @@ def test_list_includes_disabled_collectors() -> None:
     server = _make_server(collector_running={"bili_danmaku"})
     grouped = get_v2_component_list(config, server)
 
+    # 新契约：组件全集 = 采集器段 ∪ enabled 名单（stt 仅在名单中，空配置占位）
     by_name = {c.name: c for c in grouped["collectors"]}
-    assert set(by_name) == {"bili_danmaku", "screen"}
+    assert set(by_name) == {"bili_danmaku", "screen", "stt"}
+    assert "meta" not in by_name  # 文件级键不算组件
 
     danmaku = by_name["bili_danmaku"]
     assert danmaku.group == "collectors"
@@ -74,6 +75,10 @@ def test_list_includes_disabled_collectors() -> None:
     screen = by_name["screen"]
     assert screen.is_enabled is False
     assert screen.is_started is False
+
+    stt = by_name["stt"]
+    assert stt.is_enabled is True  # 仅在名单中、无配置段也算启用
+    assert stt.is_started is False
 
 
 def test_list_includes_disabled_agents() -> None:

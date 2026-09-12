@@ -2,22 +2,23 @@
 组件管理 API
 
 提供 采集器 / Agent 两组组件的状态查询和控制接口。
-数据源为拍平后的主配置（ConfigService.main_config）与运行时
-CollectorManager / AgentManager。
+数据源：配置态为 collectors.toml（顶层 ``enabled`` 名单 + 各采集器段）与
+agents.toml（``[agents]`` 段），运行时为 CollectorManager / AgentManager。
 
 路径参数 ``group`` ∈ {"collectors", "agents"}；ComponentSummary.description
 由管理器注册填充（空串兜底）。工具不在此管理：工具以"域开关单元"管理
-（见 tools API 的 domains 端点）。
+（见 tools API 的 categories 端点）。
+
+配置写盘一律经统一写回器 ``update_config_values``（Schema 校验 + 备份 +
+注释重生成），不再做 TOML 原位编辑。
 """
 
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.modules.config.toml_utils import (
-    load_toml_with_comments,
-    write_toml_preserve,
-)
+from src.modules.config.errors import ConfigValidationError
+from src.modules.config.multi_file_loader import update_config_values
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.component import (
     ComponentControlAction,
@@ -27,79 +28,69 @@ from src.modules.dashboard.schemas.component import (
     ComponentDetailResponse,
     ComponentListResponse,
 )
-from src.modules.dashboard.utils.component_helper import get_v2_component_list
+from src.modules.dashboard.utils.component_helper import (
+    build_config_view,
+    config_dir,
+    get_v2_component_list,
+    read_toml_dict,
+)
+from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
+
+logger = get_logger("DashboardComponentsAPI")
 
 router = APIRouter()
 
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
-# v2：group（路径参数）→ (配置文件顶层段, doc 嵌套键路径)
-# 采集器配置独立为 collectors.toml，路径为顶层 ``[collectors]`` 段
-_GROUP_TO_CONFIG: Dict[str, tuple[str, List[str]]] = {
-    "collectors": ("collectors", ["collectors"]),
-    "agents": ("agents", ["agents"]),
+# v2：group（路径参数）→ 配置文件名 + enabled 列表在文件内的点分键路径。
+# 采集器名单在 collectors.toml 顶层（无嵌套段）；Agent 名单在 [agents] 段内。
+_GROUP_TO_FILE: Dict[str, tuple[str, str]] = {
+    "collectors": ("collectors.toml", "enabled"),
+    "agents": ("agents.toml", "agents.enabled"),
 }
 
 
-def _set_enabled_in_doc(doc: Dict[str, Any], path_keys: List[str], enabled: List[str]) -> None:
-    """按嵌套键路径定位 doc 中的 enabled 列表并写回（自动创建缺失段）。"""
-    node: Dict[str, Any] = doc
-    for key in path_keys:
-        child = node.get(key)
-        if not isinstance(child, dict):
-            child = {}
-            node[key] = child
-        node = child
-    node["enabled"] = enabled
-
-
-def _get_enabled_in_doc(doc: Dict[str, Any], path_keys: List[str]) -> List[str]:
-    node: Dict[str, Any] = doc
-    for key in path_keys:
-        child = node.get(key)
-        if not isinstance(child, dict):
+def _read_enabled_list(server: "DashboardServer", group: str) -> List[str]:
+    """读指定组件组的 enabled 名单（collectors.toml 顶层 / agents.toml [agents]）。"""
+    file_name, dotted_key = _GROUP_TO_FILE[group]
+    doc = read_toml_dict(config_dir(server) / file_name)
+    node: Any = doc
+    for part in dotted_key.split("."):
+        node = node.get(part) if isinstance(node, dict) else None
+        if node is None:
             return []
-        node = child
-    enabled = node.get("enabled")
-    return list(enabled) if isinstance(enabled, list) else []
+    return [n for n in node if isinstance(n, str)] if isinstance(node, list) else []
 
 
 def _sync_enabled_config(server: "DashboardServer", group: str, name: str, *, enable: bool) -> ComponentControlResponse:
-    """把组件名加入/移除对应配置段 enabled 列表（幂等写回）。
+    """把组件名加入/移除对应配置文件 enabled 名单（经统一写回器幂等写回）。
 
     group 映射（v2）：
-    - collectors → collectors.toml ``[collectors].enabled``
+    - collectors → collectors.toml 顶层 ``enabled``
     - agents → agents.toml ``[agents].enabled``
     """
-    section_info = _GROUP_TO_CONFIG.get(group)
-    if section_info is None:
+    if group not in _GROUP_TO_FILE:
         return ComponentControlResponse(success=False, message=f"未知组件组: {group}")
-    top_section, path_keys = section_info
-
-    config_path = server.get_config_path(top_section)
-    if not config_path:
-        return ComponentControlResponse(success=False, message="Config file path not available")
+    file_name, dotted_key = _GROUP_TO_FILE[group]
 
     try:
-        doc = load_toml_with_comments(str(config_path))
-        enabled = _get_enabled_in_doc(doc, path_keys)
+        enabled = _read_enabled_list(server, group)
         if enable and name not in enabled:
             enabled.append(name)
         elif not enable and name in enabled:
             enabled.remove(name)
-        _set_enabled_in_doc(doc, path_keys, enabled)
-
-        success, message = write_toml_preserve(str(config_path), doc, create_backup=False)
-        if not success:
-            return ComponentControlResponse(success=False, message=f"写入配置失败: {message}")
+        try:
+            update_config_values(config_dir(server), file_name, {dotted_key: enabled})
+        except ConfigValidationError as exc:
+            return ComponentControlResponse(success=False, message=f"配置校验失败: {exc}")
         action_text = "加入启用列表" if enable else "从启用列表移除"
         return ComponentControlResponse(
             success=True,
-            message=f"组件 {name} 已{action_text}（{config_path}），重启后生效",
+            message=f"组件 {name} 已{action_text}（{file_name}），重启后生效",
         )
     except Exception as e:
         return ComponentControlResponse(success=False, message=f"配置同步失败: {e}")
@@ -108,8 +99,7 @@ def _sync_enabled_config(server: "DashboardServer", group: str, name: str, *, en
 @router.get("", response_model=ComponentListResponse)
 async def list_components(server: ServerDep) -> ComponentListResponse:
     """获取所有组件列表（v2：采集器 / Agent，含未启用组件）"""
-    main_config = server.config_service.main_config if server.config_service else {}
-    grouped = get_v2_component_list(main_config, server)
+    grouped = get_v2_component_list(build_config_view(server), server)
     return ComponentListResponse(
         collectors=grouped["collectors"],
         agents=grouped["agents"],
@@ -123,10 +113,9 @@ async def get_component(
     server: ServerDep,
 ) -> ComponentDetailResponse:
     """获取单个组件详情（group ∈ {collectors, agents}）"""
-    if group not in _GROUP_TO_CONFIG:
+    if group not in _GROUP_TO_FILE:
         raise HTTPException(status_code=404, detail=f"Unknown component group: {group}")
-    main_config = server.config_service.main_config if server.config_service else {}
-    grouped = get_v2_component_list(main_config, server)
+    grouped = get_v2_component_list(build_config_view(server), server)
     for summary in grouped.get(group, []):
         if summary.name == name:
             return ComponentDetailResponse(component=ComponentDetail(**summary.model_dump()))
@@ -144,7 +133,7 @@ async def control_component(
 
     group ∈ {"collectors", "agents"}（路径参数统一为 group）。
     """
-    if group not in _GROUP_TO_CONFIG:
+    if group not in _GROUP_TO_FILE:
         raise HTTPException(status_code=400, detail=f"Invalid group: {group}")
 
     if request.action == ComponentControlAction.START:
@@ -173,9 +162,7 @@ async def control_component(
 
 async def _try_dynamic_start(server: "DashboardServer", group: str, name: str) -> ComponentControlResponse | None:
     """尝试动态启动组件（实例化+注册+start）。返回 None 表示不可动态启动。"""
-    top_section, _path_keys = _GROUP_TO_CONFIG[group]
-    main_config = server.config_service.main_config if server.config_service else {}
-    sub_cfg = _read_sub_config(main_config, top_section, group, name)
+    sub_cfg = _read_sub_config(server, group, name)
 
     if group == "collectors":
         manager = server.collector_manager
@@ -242,11 +229,19 @@ async def _try_dynamic_stop(server: "DashboardServer", group: str, name: str) ->
     return None
 
 
-def _read_sub_config(main_config: dict, top_section: str, group: str, name: str) -> dict:
-    """读取组件的子段配置 dict（无则空 dict）。"""
-    if top_section == "tools":
-        if group == "collectors":
-            return dict((main_config.get("tools") or {}).get("perception", {}).get("config", {}).get(name) or {})
-    if top_section == "agents":
-        return dict((main_config.get("agents") or {}).get(name) or {})
+def _read_sub_config(server: "DashboardServer", group: str, name: str) -> dict:
+    """读取组件的子段配置 dict（无则空 dict）。
+
+    - collectors → collectors.toml 顶层同名段（``[<name>]``）
+    - agents → agents.toml ``[agents.<name>]``
+    """
+    if group == "collectors":
+        doc = read_toml_dict(config_dir(server) / "collectors.toml")
+        section = doc.get(name)
+        return dict(section) if isinstance(section, dict) else {}
+    if group == "agents":
+        main_config = server.config_service.main_config if server.config_service else {}
+        agents_section = main_config.get("agents") if isinstance(main_config, dict) else {}
+        section = (agents_section or {}).get(name) if isinstance(agents_section, dict) else None
+        return dict(section) if isinstance(section, dict) else {}
     return {}

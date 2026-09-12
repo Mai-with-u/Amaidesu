@@ -6,12 +6,16 @@
 2. **GET /api/v1/tools/categories** — 提供者分类目录（分类 → 提供者 →
    开关状态 + 运行态计数）
 3. **POST /api/v1/tools/categories/{category}/{key}/control** — 提供者开关
-   写回 tools.toml（写回位置按成员类型区分；未知成员 / Agent 自声明分类 400）
-4. tool_registry=None → 503
+   经统一写回器 update_config_values 写 tools.toml（重启后生效；未知成员 /
+   Agent 自声明分类 400）
+4. **POST /api/v1/tools/{name}/control** — 工具级停用/启用（写
+   tools.disabled_tools，重启后生效）；关键内部件需 confirm 确认
+5. tool_registry=None → 503
 """
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -20,37 +24,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-_CORE_TOML = """\
-[meta]
-version = "2.0.3"
-"""
-
-# 覆盖全部成员形态的最小 tools.toml：分类成员（avatar/studio）+ 分类级开关
-# （vision/memory）+ mcp server（通用通道；maicraft 已下放到 agents.toml 的
-# [agents.minecraft].mcp 作为 Agent 私有 MCP——跨文件迁移会自动处理）
-_TOOLS_TOML = """\
-[meta]
-version = "2.0.19"
-
-[tools]
-
-[tools.avatar.vts]
-enabled = true
-
-[tools.avatar.vts.config]
-
-[tools.studio.obs]
-enabled = false
-
-[tools.vision]
-enabled = true
-
-[tools.mcp]
-enabled = false
-
-[tools.mcp.config.servers.generic_mcp]
-enabled = true
-"""
+def _load_tools_toml(config_dir: Path) -> dict:
+    """读测试 config 目录下的 tools.toml 为 dict（tomllib 只读，用于落盘断言；
+    配置管线落盘带 BOM，需以 utf-8-sig 剥除）。"""
+    text = (config_dir / "tools.toml").read_text(encoding="utf-8-sig")
+    return tomllib.loads(text)
 
 
 def _make_spec(
@@ -146,11 +124,17 @@ def _default_specs():
             kind="async",
             result_event="tool.result.reply_to_user",
         ),
+        # 关键内部件代表（AgentControl 框架工具）：覆盖警示确认语义测试
+        _make_spec("shutdown_agent", "关闭 Agent", provider="framework"),
     ]
 
 
 def _default_categories() -> dict[str, str]:
-    return {"vts_trigger_hotkey": "avatar", "reply_to_user": "streamer"}
+    return {
+        "vts_trigger_hotkey": "avatar",
+        "reply_to_user": "streamer",
+        "shutdown_agent": "framework",
+    }
 
 
 def _build_server(config_dir: Path, registry):
@@ -169,11 +153,30 @@ def _build_server(config_dir: Path, registry):
     )
 
 
+def _prepare_config(config_dir: Path) -> None:
+    """首启生成六文件基线，再经统一写回器铺出覆盖全部成员形态的 tools 态：
+    分类成员（avatar/studio）+ 分类级开关（vision）+ mcp server（通用通道）。"""
+    from src.modules.config.multi_file_loader import update_config_values
+    from src.modules.config.service import ConfigService
+
+    ConfigService(base_dir=str(config_dir.parent)).initialize()
+    update_config_values(
+        config_dir,
+        "tools.toml",
+        {
+            "tools.avatar.vts": {"enabled": True},
+            "tools.studio.obs": {"enabled": False},
+            "tools.vision.enabled": True,
+            "tools.mcp.enabled": False,
+            "tools.mcp.config.servers.generic_mcp": {"enabled": True},
+        },
+    )
+
+
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
     cfg = tmp_path / "config"
     cfg.mkdir()
-    (cfg / "core.toml").write_text(_CORE_TOML, encoding="utf-8")
     return cfg
 
 
@@ -181,8 +184,7 @@ def config_dir(tmp_path: Path) -> Path:
 def tools_config_dir(tmp_path: Path) -> Path:
     cfg = tmp_path / "config"
     cfg.mkdir()
-    (cfg / "core.toml").write_text(_CORE_TOML, encoding="utf-8")
-    (cfg / "tools.toml").write_text(_TOOLS_TOML, encoding="utf-8")
+    _prepare_config(cfg)
     return cfg
 
 
@@ -414,12 +416,16 @@ def test_categories_lists_mcp_servers_dynamically(tools_client: TestClient) -> N
 
 
 def test_categories_agent_categories_not_switchable(tools_client: TestClient) -> None:
-    """game / framework 随 agents.toml 启用列表存在，不可开关。"""
+    """game / framework 随 agents.toml 启用列表存在，不可开关。
+
+    新契约：game 分类提供者来自注册表动态归属（content_engine 显示条目已删除，
+    game 成员 = 注册表实际存在的游戏 Agent 自声明工具集）。
+    """
     resp = tools_client.get("/api/v1/tools/categories")
     by_category = {c["category"]: c for c in resp.json()["categories"]}
 
     game = by_category["game"]
-    assert [p["key"] for p in game["providers"]] == ["text_adv", "content_engine"]
+    assert [p["key"] for p in game["providers"]] == ["text_adv"]
     for p in game["providers"]:
         assert p["switchable"] is False
         assert p["enabled"] is False  # 测试配置未启用 game Agent
@@ -448,9 +454,10 @@ def test_control_disables_avatar_member(tools_client: TestClient, tools_config_d
     body = resp.json()
     assert body["success"] is True
     assert body["enabled"] is False
+    assert "重启后生效" in body["message"]
 
-    content = (tools_config_dir / "tools.toml").read_text(encoding="utf-8")
-    assert "enabled = false" in content
+    # 新契约：写盘经统一写回器，落盘形态用 tomllib 只读断言
+    assert _load_tools_toml(tools_config_dir)["tools"]["avatar"]["vts"]["enabled"] is False
 
 
 def test_control_enables_studio_member(tools_client: TestClient, tools_config_dir: Path) -> None:
@@ -458,8 +465,7 @@ def test_control_enables_studio_member(tools_client: TestClient, tools_config_di
     assert resp.status_code == 200
     assert resp.json()["enabled"] is True
 
-    content = (tools_config_dir / "tools.toml").read_text(encoding="utf-8")
-    assert "enabled = true" in content
+    assert _load_tools_toml(tools_config_dir)["tools"]["studio"]["obs"]["enabled"] is True
 
 
 def test_control_category_level_member_writes_flat_section(tools_client: TestClient, tools_config_dir: Path) -> None:
@@ -467,9 +473,9 @@ def test_control_category_level_member_writes_flat_section(tools_client: TestCli
     resp = tools_client.post("/api/v1/tools/categories/vision/vision/control", json={"action": "disable"})
     assert resp.status_code == 200
 
-    content = (tools_config_dir / "tools.toml").read_text(encoding="utf-8")
-    assert "[tools.vision]" in content
-    assert "[tools.vision.vision]" not in content
+    doc = _load_tools_toml(tools_config_dir)
+    assert doc["tools"]["vision"]["enabled"] is False
+    assert "vision" not in doc["tools"].get("vision", {})
 
 
 def test_control_mcp_server_writes_server_section(tools_client: TestClient, tools_config_dir: Path) -> None:
@@ -477,10 +483,8 @@ def test_control_mcp_server_writes_server_section(tools_client: TestClient, tool
     resp = tools_client.post("/api/v1/tools/categories/mcp/generic_mcp/control", json={"action": "disable"})
     assert resp.status_code == 200
 
-    content = (tools_config_dir / "tools.toml").read_text(encoding="utf-8")
-    assert "[tools.mcp.config.servers.generic_mcp]" in content
-    # 同一文件里 server 段落中应出现 disabled 的 enabled 值（粗校验：disable 后无 enabled = true 残留于该段）
-    assert "enabled = false" in content
+    server_cfg = _load_tools_toml(tools_config_dir)["tools"]["mcp"]["config"]["servers"]["generic_mcp"]
+    assert server_cfg["enabled"] is False
 
 
 def test_control_rejects_agent_category(tools_client: TestClient) -> None:
@@ -498,28 +502,25 @@ def test_control_rejects_unknown_member(tools_client: TestClient) -> None:
 
 
 def test_tool_control_disable_writes_disabled_list(tools_client: TestClient, tools_config_dir: Path) -> None:
-    """停用工具 → 名字进入 [tools].disabled_tools。"""
+    """停用工具 → 名字进入 tools.disabled_tools（新契约：写盘后不触发热重载）。"""
     resp = tools_client.post("/api/v1/tools/vts_trigger_hotkey/control", json={"action": "disable"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
     assert body["enabled"] is False
+    assert "重启后生效" in body["message"]
 
-    content = (tools_config_dir / "tools.toml").read_text(encoding="utf-8")
-    assert "disabled_tools" in content
-    assert "vts_trigger_hotkey" in content
+    assert _load_tools_toml(tools_config_dir)["tools"]["disabled_tools"] == ["vts_trigger_hotkey"]
 
 
 def test_tool_control_enable_removes_from_disabled_list(tools_client: TestClient, tools_config_dir: Path) -> None:
-    import tomlkit
-
     tools_client.post("/api/v1/tools/vts_trigger_hotkey/control", json={"action": "disable"})
     resp = tools_client.post("/api/v1/tools/vts_trigger_hotkey/control", json={"action": "enable"})
     assert resp.status_code == 200
     assert resp.json()["enabled"] is True
 
-    doc = tomlkit.parse((tools_config_dir / "tools.toml").read_text(encoding="utf-8"))
-    assert list(doc["tools"]["disabled_tools"]) == []
+    # 新契约：落盘断言走 tomllib 只读（写路径经统一写回器，注释不保留）
+    assert _load_tools_toml(tools_config_dir)["tools"]["disabled_tools"] == []
 
 
 def test_tool_control_unknown_name_returns_404(tools_client: TestClient) -> None:
@@ -531,6 +532,39 @@ def test_tool_control_unknown_name_returns_404(tools_client: TestClient) -> None
 def test_tool_control_enable_unregistered_name_is_noop(tools_client: TestClient) -> None:
     """启用一个本来就不在停用列表的名字 → 幂等成功。"""
     resp = tools_client.post("/api/v1/tools/ghost_tool/control", json={"action": "enable"})
+    assert resp.status_code == 200
+
+
+# ==================== 关键内部件停用保护（警示确认语义） ====================
+
+
+def test_tool_control_critical_tool_requires_confirm(tools_client: TestClient) -> None:
+    """新契约：停用关键内部件（AgentControl 框架工具）缺 confirm → 400 + 中文风险说明。"""
+    resp = tools_client.post("/api/v1/tools/shutdown_agent/control", json={"action": "disable"})
+    assert resp.status_code == 400
+    assert "关键内部件" in resp.json()["detail"]
+    assert "confirm" in resp.json()["detail"]
+
+
+def test_tool_control_critical_tool_with_confirm_disables(tools_client: TestClient, tools_config_dir: Path) -> None:
+    """关键内部件停用携带 confirm=true → 正常写入停用列表。"""
+    resp = tools_client.post(
+        "/api/v1/tools/shutdown_agent/control",
+        json={"action": "disable", "confirm": True},
+    )
+    assert resp.status_code == 200
+    assert _load_tools_toml(tools_config_dir)["tools"]["disabled_tools"] == ["shutdown_agent"]
+
+
+def test_tool_control_critical_tool_enable_needs_no_confirm(tools_client: TestClient) -> None:
+    """启用方向不受关键件保护约束（无 confirm 也放行）。"""
+    resp = tools_client.post("/api/v1/tools/shutdown_agent/control", json={"action": "enable"})
+    assert resp.status_code == 200
+
+
+def test_tool_control_non_critical_tool_ignores_confirm(tools_client: TestClient) -> None:
+    """非关键工具停用不需要 confirm（缺省 False 不拦截）。"""
+    resp = tools_client.post("/api/v1/tools/vts_trigger_hotkey/control", json={"action": "disable"})
     assert resp.status_code == 200
 
 

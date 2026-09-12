@@ -17,7 +17,7 @@ from src.modules.dashboard.schemas.system import (
     HealthResponse,
     SystemStatusResponse,
 )
-from src.modules.dashboard.utils.component_helper import get_v2_component_list
+from src.modules.dashboard.utils.component_helper import build_config_view, get_v2_component_list
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -37,8 +37,9 @@ async def get_system_status(server: ServerDep) -> SystemStatusResponse:
     """获取系统整体状态（v2：基于采集器/Agent/工具三组 + EventBus 统计）。"""
     uptime = time.time() - _startup_time
 
-    main_config = server.config_service.main_config if server.config_service else {}
-    grouped = get_v2_component_list(main_config, server)
+    # 组件视图经公共构建器：collectors 来自 collectors.toml 直读（拍平主配置
+    # 没有 "collectors" scope），agents 来自拍平主配置
+    grouped = get_v2_component_list(build_config_view(server), server)
 
     groups: Dict[str, GroupStatus] = {
         "collectors": _build_group_status(grouped.get("collectors", [])),

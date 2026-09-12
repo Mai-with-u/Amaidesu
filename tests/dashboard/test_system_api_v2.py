@@ -16,49 +16,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-_CORE_TOML = """\
-[meta]
-version = "2.0.3"
-"""
 
-_AGENTS_TOML = """\
-[agents]
-enabled = ["streamer"]
 
-[agents.streamer]
-planner_llm = "llm_fast"
-
-[agents.minecraft]
-max_steps = 50
-"""
-
-_TOOLS_TOML = """\
-[tools]
-enabled = ["perception", "output"]
-
-[tools.perception]
-enabled = true
-provider = "builtin"
-
-[tools.perception.config]
-enabled = ["bili_danmaku"]
-
-[tools.perception.config.bili_danmaku]
-room_id = 1
-
-[tools.output]
-enabled = true
-provider = "builtin"
-
-[tools.output.config]
-enabled = ["subtitle"]
-
-[tools.output.config.subtitle]
-font_size = 28
-
-[tools.output.config.vts]
-vts_host = "localhost"
-"""
 
 
 class _FakeEventStats:
@@ -84,11 +43,12 @@ class _FakeToolRegistry:
 
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
+    """六文件基线（组件计数断言基于生成基线：5 采集器段 + 3 Agent 段）。"""
+    from src.modules.config.multi_file_loader import generate_default_configs
+
     cfg = tmp_path / "config"
     cfg.mkdir()
-    (cfg / "core.toml").write_text(_CORE_TOML, encoding="utf-8")
-    (cfg / "agents.toml").write_text(_AGENTS_TOML, encoding="utf-8")
-    (cfg / "tools.toml").write_text(_TOOLS_TOML, encoding="utf-8")
+    generate_default_configs(cfg)
     return cfg
 
 
@@ -155,8 +115,8 @@ def test_status_groups_count_correctly(client: TestClient) -> None:
     resp = client.get("/api/v1/system/status").json()
 
     collectors = resp["groups"]["collectors"]
-    assert collectors["total"] == 1  # bili_danmaku
-    assert collectors["enabled"] == 1  # bili_danmaku 启用
+    assert collectors["total"] == 1  # 生成基线无预置采集器段，仅 enabled 名单的 console_input
+    assert collectors["enabled"] == 1  # console_input 启用
 
     agents = resp["groups"]["agents"]
     assert agents["total"] == 3  # streamer + minecraft + text_adv（Schema 三 Agent 全占位）
