@@ -91,10 +91,14 @@ platform_id = "test"
 
 
 def test_agent_enabled_check_based_on_list_v2(temp_base_dir):
-    """agents 段 enabled 列表应保留用户启用项。"""
+    """agents 段 enabled 列表应保留用户启用项。
+
+    取值必须是 AgentType 已知名（streamer/minecraft/text_adv）——
+    未知名在校验阶段硬错（校验硬错语义，无 raw 降级）。
+    """
     _write_agents_config(
         temp_base_dir,
-        '[agents]\nenabled = ["test_input", "another_input"]\n',
+        '[agents]\nenabled = ["streamer", "minecraft"]\n',
     )
 
     config_service = ConfigService(base_dir=temp_base_dir)
@@ -103,7 +107,8 @@ def test_agent_enabled_check_based_on_list_v2(temp_base_dir):
     agents_config = config_service.get_section("agents", {})
     enabled_list = agents_config.get("enabled", [])
 
-    assert "test_input" in enabled_list
+    assert "streamer" in enabled_list
+    assert "minecraft" in enabled_list
     assert len(enabled_list) == 2
 
 

@@ -1,33 +1,42 @@
-"""多文件配置加载器
+"""多文件配置加载器（阶段化管线）
 
-从 config/ 目录加载 6 个 TOML 配置文件，使用 Pydantic Schema 验证并检测漂移。
-首次运行时从 Schema 默认值生成带注释的配置文件。
+从 config/ 目录加载 6 个 TOML 配置文件，按固定阶段序执行：
+
+    ① read_all_raw      6 文件全读为 dict（缺失文件先行按 Schema 生成）
+    ② 跨文件钩子        声明 target_file 的钩子，双写 + 双版本同升
+    ③ 每文件钩子        单文件内的 dict 原地变换
+    ④ Pydantic 校验     硬错——类型违约直接抛出（含字段 dotted path）
+    ⑤ 漂移写回          全量写出 + 备份；采集器子段按注册表校验与补全
+    ⑥ 合并视图          剥离 per-file ``[meta]`` 后按 scope 合并
 
 配置文件结构（按域划分）:
     config/agents.toml      - 业务 Agent（含主播人设/上下文/后台维护段）
     config/collectors.toml  - 采集器（enabled 名单 + 各采集器段）
     config/tools.toml       - 工具提供者启用/配置
-    config/model.toml       - LLM/VLM 模型配置
-    config/storage.toml     - 存储（SQLite + 记忆子系统装配）
+    config/model.toml       - LLM/VLM 模型配置（三层：providers/models/profiles）
+    config/storage.toml     - 存储（顶层 [sqlite] + [memory]）
     config/infra.toml       - 基础设施（tts/subtitle/events/interceptors/dashboard/logging/simulator）
 
-> **写回闭环**：全部文件均接入 ``_load_and_validate_schema``
-> + ``_write_back_schema_file``，漂移字段会自动写回用户文件（缺失补默认、
-> 冗余剥离）。未接入写回闭环的文件，其 Schema 变更不会落到用户文件。
-> **meta 隔离**：每文件的 ``[meta]`` 段是文件私有元数据，合并视图在
-> 装入前剥离——版本不进入全局命名空间，按文件独立取回。
+设计约定：
+- **校验失败必须硬错**——不存在 raw dict 降级路径；加载失败由上层
+  （ConfigService）翻译为启动失败。
+- **meta 隔离**——每文件的 ``[meta]`` 段是文件私有元数据，合并视图装入前
+  剥离；版本按文件独立读取（``get_config_version``）。
+- **free-form 子段的权威在组件包**——采集器子段经组件注册表
+  （``COMPONENT_SCHEMAS``）分发校验；TTS 引擎/字幕后端子段为 free-form
+  dict，其编辑链路由 WebUI 侧的 provider Schema 承担，加载管线不做补全。
 """
 
 from __future__ import annotations
 
-import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import tomlkit
 from tomlkit.items import AoT
+from pydantic import BaseModel
 
 from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_value
 from src.modules.config.agents_schemas import AgentsRootConfig
@@ -37,7 +46,6 @@ from src.modules.config.model_schemas import ModelConfig
 from src.modules.config.storage_schemas import StorageRootConfig
 from src.modules.config.infra_schemas import InfraRootConfig
 from src.modules.logging import get_logger
-from pydantic import BaseModel
 
 logger = get_logger("MultiFileLoader")
 
@@ -80,6 +88,16 @@ _FILE_COMMENTS: dict[str, str] = {
     "storage.toml": "存储配置 - Amaidesu",
     "infra.toml": "基础设施配置 - Amaidesu",
 }
+
+# ---------------------------------------------------------------------------
+# 钩子注册表（当前为空表；钩子协议：原地改 dict、返回变更路径列表、幂等）
+# - 每文件钩子：签名 (file_name, data: dict) -> list[str]
+# - 跨文件钩子：签名 (all_data: dict[str, dict]) -> list[str]；声明 target_file
+#   的跨文件变更由调度器双写并同步推进两文件版本
+# ---------------------------------------------------------------------------
+
+FILE_HOOKS: dict[str, tuple[Callable[..., list[str]], ...]] = {fname: () for fname in _CONFIG_FILES}
+CROSS_FILE_HOOKS: tuple[Callable[..., list[str]], ...] = ()
 
 
 def _backup_file(file_path: Path, config_dir: Path, batch_id: str | None = None) -> Path | None:
@@ -211,17 +229,12 @@ def _dict_to_toml_table(data: dict[str, Any]) -> Any:
     return table
 
 
-def _serialize_instance_to_toml(
-    schema_cls: type[BaseModel],
-    instance: BaseModel,
-    *,
-    compact: bool = False,
-) -> str:
+def _serialize_instance_to_toml(schema_cls: type[BaseModel], instance: BaseModel) -> str:
     """把配置实例序列化为多文件格式 TOML（顶层字段即顶层表/键值）。
 
-    Args:
-        compact: 紧凑模式——字段之间不插入空行（供子段补全生成使用，
-            使补全段与用户手写风格一致）；整文件写回保持默认的宽松排版。
+    ``extra="allow"`` 的 Schema（如 CollectorsRootConfig）携带的动态键
+    （``[collectors.<name>]`` 子段）同样输出——只遍历 model_fields 会把
+    子段静默丢弃，属于数据丢失缺陷。
     """
     doc = tomlkit.document()
     for field_name, field_info in schema_cls.model_fields.items():
@@ -235,207 +248,41 @@ def _serialize_instance_to_toml(
             for item in value:
                 table.append(_table_from_model(item))
         elif isinstance(value, dict):
-            # dict 子段（free-form）不加容器级注释：文本稳定性优先；
-            # 字段级注释由各 Provider Schema 的字段 description 在补全/写回路径提供
+            # dict 子段（free-form）不加容器级注释：文本稳定性优先
             table = _dict_to_toml_table(value)
         else:
             if field_info.description:
                 doc.add(tomlkit.comment(field_info.description))
             doc[field_name] = value
-            if not compact:
-                doc.add(tomlkit.nl())
+            doc.add(tomlkit.nl())
             continue
         if field_info.description and not isinstance(value, dict):
             doc.add(tomlkit.comment(field_info.description))
         doc[field_name] = table
-        if not compact:
-            doc.add(tomlkit.nl())
-    return tomlkit.dumps(doc)
+        doc.add(tomlkit.nl())
 
-
-# 子段名 → ConfigSchema 延迟加载器：
-# - TTS 引擎与字幕后端是基础设施，配置宿主为 infra.toml（[tts] / [subtitle]）
-# - 形象/演播室 provider 的 ConfigSchema 由各自包内权威定义；装配期由
-#   注册表驱动补全（参见 _complete_free_form_sections 的 providers 路径）。
-# Schema 嵌在 Provider 类内部且 Provider 模块 import 较重（audio/网络依赖），
-# 因此仅在补全流程实际运行时才加载；加载失败（依赖缺失）时跳过该子段。
-_TTS_ENGINE_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] = {
-    "edge_tts": lambda: _try_import_provider_schema("src.modules.tts.edge_tts_tool", "EdgeTTSProvider"),
-    "gptsovits": lambda: _try_import_provider_schema("src.modules.tts.gptsovits_tool", "GPTSoVITSProvider"),
-    "omni_tts": lambda: _try_import_provider_schema("src.modules.tts.omni_tts_tool", "OmniTTSProvider"),
-    "voicebox": lambda: _try_import_provider_schema("src.modules.tts.voicebox_tool", "VoiceboxProvider"),
-}
-
-_SUBTITLE_BACKEND_SCHEMA_LOADERS: dict[str, Callable[[], Optional[type[BaseModel]]]] = {
-    "tk_gui": lambda: _try_import_provider_schema("src.modules.subtitle.backends.tk_gui_service", "SubtitleGuiService"),
-}
-
-
-def _try_import_provider_schema(module_path: str, provider_name: str) -> Optional[type[BaseModel]]:
-    """延迟加载 Provider 模块并返回其 ConfigSchema；失败返回 None。"""
-    try:
-        import importlib
-
-        module = importlib.import_module(module_path)
-        cls = getattr(module, provider_name, None)
-        if cls is None:
-            return None
-        return getattr(cls, "ConfigSchema", None)
-    except Exception:
-        return None
-
-
-def _complete_provider_config_sections(
-    config_dir: Path,
-    section_container: dict[str, Any],
-    table_prefix: str,
-    schema_loaders: dict[str, Callable[[], Optional[type[BaseModel]]]],
-    file_name: str,
-    batch_id: str | None = None,
-) -> list[str]:
-    """Provider 子配置补全：``[<table_prefix>.<name>]`` 缺失键由 Provider
-    ConfigSchema 默认值补齐，并以 Schema 注释格式重写该子段（用户已填值保留）。
-
-    Provider 子段是 free-form dict，不参与宿主文件根 Schema 校验；Provider 新增
-    配置字段时用户文件无法感知。本函数在宿主文件加载后运行，把"模板滞后"
-    的字段补进用户文件，使配置文件始终自描述（字段 + 注释说明）。
-
-    Args:
-        config_dir: 配置目录（备份与读写宿主文件）。
-        section_container: 宿主文件中承载各子段的容器 dict（如 infra.toml 的
-            ``[tts]`` 段或 tools.toml 的 ``[tools.output.config]`` 段内存表示），
-            补全结果同步回写。
-        table_prefix: 子段表头前缀（``"tts"`` 或 ``"tools.output.config"``）。
-        schema_loaders: 子段名 → ConfigSchema 延迟加载器。
-        file_name: 宿主文件名（``"infra.toml"`` / ``"tools.toml"``）。
-        batch_id: 备份批次号。
-
-    Returns:
-        被补全的子段名列表（如 ``["gptsovits"]``）。
-    """
-    file_path = config_dir / file_name
-    if not file_path.exists():
-        return []
-
-    try:
-        text = file_path.read_text(encoding="utf-8-sig")
-    except OSError:
-        return []
-
-    completed: list[str] = []
-    for key, schema_loader in schema_loaders.items():
-        user_data = section_container.get(key)
-        if not isinstance(user_data, dict):
+    extras = getattr(instance, "__pydantic_extra__", None) or {}
+    for key, value in extras.items():
+        if value is None:
             continue
-        schema_cls = schema_loader()
-        if schema_cls is None:
-            continue
-        # 探测默认实例：含必填字段的 schema 无法在空状态下构造，跳过补全
-        try:
-            defaults = schema_cls().model_dump()
-        except Exception:
-            continue
-        missing_keys = [k for k in defaults if k not in user_data]
-        if not missing_keys:
-            continue
-
-        merged = {**defaults, **user_data}
-        instance = schema_cls(**merged)
-        body = _serialize_instance_to_toml(schema_cls, instance, compact=True)
-        new_section = f"[{table_prefix}.{key}]\n{body}"
-
-        # 文本级整段替换：从子段表头到下一个表头（或文件尾）
-        pattern = re.compile(rf"(?ms)^\[{re.escape(table_prefix)}\.{re.escape(key)}\][ \t]*\r?\n.*?(?=^\[|\Z)")
-        if not pattern.search(text):
-            # 用户文件中该子段整段缺失：追加到容器表头之后
-            header_pattern = re.compile(rf"(?m)^(\[{re.escape(table_prefix)}\][ \t]*\r?\n)")
-            if header_pattern.search(text):
-                text = header_pattern.sub(lambda m, s=new_section: m.group(1) + s + "\n", text, count=1)
-            else:
-                text = text.rstrip("\n") + "\n\n" + new_section
+        if isinstance(value, dict):
+            doc[key] = _dict_to_toml_table(value)
         else:
-            text = pattern.sub(lambda _m, s=new_section: s, text)
-
-        # 同步内存中的容器，保持文件与本次加载结果一致
-        section_container[key] = merged
-        completed.append(key)
-        logger.info(f"{file_name} 子段 '{key}' 补全 {len(missing_keys)} 个缺失配置项（含注释说明）")
-
-    if completed:
-        try:
-            _backup_file(file_path, config_dir, batch_id=batch_id)
-            file_path.write_text(text, encoding="utf-8")
-        except OSError as e:
-            logger.warning(f"{file_name} 子段补全写回失败（内存中已补齐）: {e}")
-    return completed
-
-
-def _complete_free_form_sections(
-    config_dir: Path,
-    file_name: str,
-    file_data: dict[str, Any],
-    batch_id: str | None,
-) -> list[str]:
-    """按宿主文件分发 Provider 子段补全（free-form dict 不参与根 Schema 校验）。"""
-    completed: list[str] = []
-    if file_name == "infra.toml":
-        tts_section = file_data.get("tts", {}) if isinstance(file_data, dict) else {}
-        if isinstance(tts_section, dict):
-            completed += _complete_provider_config_sections(
-                config_dir,
-                tts_section,
-                table_prefix="tts",
-                schema_loaders=_TTS_ENGINE_SCHEMA_LOADERS,
-                file_name="infra.toml",
-                batch_id=batch_id,
-            )
-        subtitle_section = file_data.get("subtitle", {}) if isinstance(file_data, dict) else {}
-        if isinstance(subtitle_section, dict):
-            completed += _complete_provider_config_sections(
-                config_dir,
-                subtitle_section,
-                table_prefix="subtitle",
-                schema_loaders=_SUBTITLE_BACKEND_SCHEMA_LOADERS,
-                file_name="infra.toml",
-                batch_id=batch_id,
-            )
-    elif file_name == "collectors.toml":
-        collectors_section = file_data.get("collectors") if isinstance(file_data, dict) else None
-        if isinstance(collectors_section, dict):
-            from src.modules.config.registry import COMPONENT_SCHEMAS
-
-            def _safe_collector_loader(name: str, schema_cls: type[BaseModel]):
-                def _loader() -> Optional[type[BaseModel]]:
-                    return schema_cls
-
-                return _loader
-
-            completed += _complete_provider_config_sections(
-                config_dir,
-                collectors_section,
-                table_prefix="collectors",
-                schema_loaders={
-                    name: _safe_collector_loader(name, schema_cls) for name, schema_cls in COMPONENT_SCHEMAS.items()
-                },
-                file_name="collectors.toml",
-                batch_id=batch_id,
-            )
-    return completed
+            doc[key] = value
+        doc.add(tomlkit.nl())
+    return tomlkit.dumps(doc)
 
 
 def _write_back_schema_file(
     config_dir: Path,
     file_name: str,
     schema_cls: type[BaseConfig],
-    user_data: dict[str, Any],
+    instance: BaseConfig,
     *,
     batch_id: str | None = None,
 ) -> Path | None:
-    """自动升级写回：备份旧文件 → 用户值合并（缺失补默认、冗余已剥离）→ 序列化写回。"""
+    """漂移写回：备份旧文件 → 按校验后实例全量序列化写盘。"""
     file_path = config_dir / file_name
-    data = dict(user_data)
-
-    instance = schema_cls(**data)
     content = _serialize_instance_to_toml(schema_cls, instance)
     backup_path = _backup_file(file_path, config_dir, batch_id=batch_id)
     has_bom = False
@@ -450,7 +297,7 @@ def _write_back_schema_file(
 
 
 def _ensure_required_files(config_dir: Path) -> list[str]:
-    """补齐缺失的必需配置文件（6 个域文件）。
+    """补齐缺失的必需配置文件（6 个域文件）——首启/单缺语义。
 
     Returns:
         本次补齐的文件名列表
@@ -500,17 +347,63 @@ def _filter_optional_container_missing(report: DriftReport, schema_cls: type[Bas
     report.missing = [m for m in report.missing if m.split(".")[-1] not in empty_fields]
 
 
-def _load_and_validate_schema(
-    file_path: Path,
-    schema_cls: type[BaseConfig],
-) -> tuple[dict[str, Any], DriftReport]:
-    """加载单个 Schema 配置文件并验证。"""
+def _read_toml_dict(file_path: Path) -> dict[str, Any]:
+    """读取单个 TOML 文件为 dict（兼容 UTF-8 BOM）。"""
     with open(file_path, "r", encoding="utf-8-sig") as f:
-        doc = tomlkit.load(f)
+        return tomlkit.load(f).unwrap()
 
-    raw_data = doc.unwrap()
+
+def _validate_collectors_sections(
+    root_instance: CollectorsRootConfig,
+    report: DriftReport,
+) -> None:
+    """按组件注册表校验采集器子段（阶段④ 的 collectors 分支）。
+
+    - 子段名不在注册表 → 硬错（Typo 防护，列出合法名单）
+    - 在册子段 → 包内 ConfigSchema 校验 + 漂移检测；漂移路径以
+      ``<采集器名>.<字段>`` 前缀并入宿主文件报告
+    - 校验后的干净子段 dict 回填 root 实例的 extras，供阶段⑤ 全量写回
+    """
+    # 函数内 import 规避循环依赖：组件注册表会拉起各组件包，
+    # 而部分组件包（如采集器）转而引用本模块的加载能力
+    from src.modules.config.registry import COMPONENT_SCHEMAS
+
+    extras = root_instance.__pydantic_extra__ or {}
+    for name in sorted(extras):
+        schema_cls = COMPONENT_SCHEMAS.get(name)
+        if schema_cls is None:
+            raise ValueError(
+                f"collectors.toml 含未注册的采集器段 [{name}]"
+                f"（合法名单：{sorted(COMPONENT_SCHEMAS)}）；"
+                f"新采集器需在其包内定义 ConfigSchema 并登记注册表"
+            )
+        sub_raw = extras[name]
+        if not isinstance(sub_raw, dict):
+            raise ValueError(f"collectors.toml 段 [{name}] 期望 TOML 表（dict），实际 {type(sub_raw).__name__}")
+        try:
+            sub_instance, sub_report = schema_cls.from_dict_with_drift_check(sub_raw)
+        except Exception as exc:
+            raise ValueError(f"collectors.toml 段 [{name}] 校验失败: {exc}") from exc
+        report.missing.extend(f"{name}.{m}" for m in sub_report.missing)
+        report.redundant.extend(f"{name}.{r}" for r in sub_report.redundant)
+        root_instance.__pydantic_extra__[name] = sub_instance.model_dump()
+
+
+def _validate_file(file_name: str, raw_data: dict[str, Any]) -> tuple[BaseConfig, DriftReport]:
+    """阶段④：单文件 Pydantic 校验（硬错）。
+
+    Returns:
+        (校验后的实例（含补默认/剥冗余）, 漂移报告)
+
+    Raises:
+        Exception: 类型违约 / 未注册采集器段等——原样向上抛出，不做降级。
+    """
+    schema_cls = _ROOT_SCHEMAS[file_name]
     instance, report = schema_cls.from_dict_with_drift_check(raw_data)
-    return instance.model_dump(), report
+    _filter_optional_container_missing(report, schema_cls)
+    if isinstance(instance, CollectorsRootConfig):
+        _validate_collectors_sections(instance, report)
+    return instance, report
 
 
 def _log_drift_writeback(
@@ -533,7 +426,11 @@ def _log_drift_writeback(
 def load_config_dir(
     config_dir: Path,
 ) -> tuple[dict[str, Any], DriftReport]:
-    """加载 config/ 目录下全部 6 个 TOML 配置文件（含漂移写回闭环）
+    """阶段化加载 config/ 目录下全部 6 个 TOML 配置文件。
+
+    阶段序：① 全读 → ② 跨文件钩子 → ③ 每文件钩子 → ④ 校验（硬错）→
+    ⑤ 漂移写回 → ⑥ 合并视图（剥 ``[meta]``）。阶段边界均有日志标记，
+    便于 QA 断言管线行为。
 
     Args:
         config_dir: config/ 目录路径
@@ -541,57 +438,74 @@ def load_config_dir(
     Returns:
         (按 scope 合并的配置字典, 综合漂移报告)
 
-    加载闭环（覆盖全部文件，逐文件独立执行）：
-    缺失文件自动补齐；Schema 验证 → 存在漂移（缺失/冗余字段）时备份 +
-    写回（缺失补默认值、冗余删除）；free-form Provider 子段按其包内
-    ConfigSchema 补全；``[meta]`` 段在装入合并视图前剥离（meta 隔离）。
+    Raises:
+        Exception: 任一文件校验失败（类型违约 / 未注册采集器段）——
+            硬错语义，无 raw dict 降级路径。
     """
-    # 函数内 import 规避循环依赖：组件注册表会拉起各组件包，
-    # 而部分组件包（如采集器）转而引用本模块的加载能力
+    # 组合根装配断言：组件 ConfigSchema 注册表必须完整
     from src.modules.config.registry import ensure_component_registry
 
-    # 组合根装配断言：组件 ConfigSchema 注册表必须完整
     ensure_component_registry()
 
-    _ensure_required_files(config_dir)
+    generated = _ensure_required_files(config_dir)
+    if generated:
+        logger.info(f"[加载管线] 首启生成 {len(generated)} 个缺失文件: {generated}")
 
+    # --- 阶段① read_all_raw ---
+    raw_docs: dict[str, dict[str, Any]] = {fname: _read_toml_dict(config_dir / fname) for fname in _CONFIG_FILES}
+    logger.info("[加载管线] 阶段① read_all_raw 完成（6 文件）")
+
+    # --- 阶段② 跨文件钩子 ---
+    if CROSS_FILE_HOOKS:
+        for hook in CROSS_FILE_HOOKS:
+            hook(raw_docs)
+        logger.info(f"[加载管线] 阶段② 跨文件钩子执行 {len(CROSS_FILE_HOOKS)} 个")
+    else:
+        logger.info("[加载管线] 阶段② 跨文件钩子：注册表为空，跳过")
+
+    # --- 阶段③ 每文件钩子 ---
+    hook_count = sum(len(hooks) for hooks in FILE_HOOKS.values())
+    if hook_count:
+        for fname, hooks in FILE_HOOKS.items():
+            for hook in hooks:
+                hook(fname, raw_docs[fname])
+        logger.info(f"[加载管线] 阶段③ 每文件钩子执行 {hook_count} 个")
+    else:
+        logger.info("[加载管线] 阶段③ 每文件钩子：注册表为空，跳过")
+
+    # --- 阶段④ 校验（硬错） + 阶段⑤ 漂移写回 ---
     combined = DriftReport()
-    result: dict[str, Any] = {}
+    validated: dict[str, tuple[BaseConfig, DriftReport]] = {}
+    for fname in _CONFIG_FILES:
+        instance, report = _validate_file(fname, raw_docs[fname])
+        validated[fname] = (instance, report)
+    logger.info("[加载管线] 阶段④ Pydantic 校验完成（6 文件，硬错语义）")
+
     batch_id: str | None = None
+    residuals: dict[str, DriftReport] = {}
+    for fname, (instance, report) in validated.items():
+        if report.has_drift:
+            batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = _write_back_schema_file(config_dir, fname, _ROOT_SCHEMAS[fname], instance, batch_id=batch_id)
+            _log_drift_writeback(fname, backup, config_dir, report.missing, report.redundant)
+            # 写回后磁盘内容 = 校验实例的序列化，残余漂移为净；
+            # 返回报告语义 = "写回后的残余漂移"（漂移过程可见性走日志）
+            residuals[fname] = DriftReport()
+        else:
+            residuals[fname] = report
+    logger.info("[加载管线] 阶段⑤ 漂移写回完成")
 
-    for file_name in _CONFIG_FILES:
-        scope = _FILE_SCOPES[file_name]
-        schema_cls = _ROOT_SCHEMAS[file_name]
-        file_path = config_dir / file_name
-        if not file_path.exists():
-            continue
-
-        try:
-            data, report = _load_and_validate_schema(file_path, schema_cls)
-            _filter_optional_container_missing(report, schema_cls)
-            if report.has_drift:
-                batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup = _write_back_schema_file(config_dir, file_name, schema_cls, data, batch_id=batch_id)
-                _log_drift_writeback(file_name, backup, config_dir, report.missing, report.redundant)
-                data, report = _load_and_validate_schema(file_path, schema_cls)
-                _filter_optional_container_missing(report, schema_cls)
-
-            completed = _complete_free_form_sections(config_dir, file_name, data, batch_id)
-            if completed:
-                # 补全改变了文件，重新加载以取到与磁盘一致的最新内容
-                data, report = _load_and_validate_schema(file_path, schema_cls)
-                _filter_optional_container_missing(report, schema_cls)
-
-            data.pop("meta", None)
-            result[scope] = data
-            combined.redundant.extend(f"{scope}.{r}" for r in report.redundant)
-            combined.missing.extend(f"{scope}.{m}" for m in report.missing)
-        except Exception as e:
-            logger.warning(f"{file_name} Schema 验证失败，回退 raw dict 加载: {e}")
-            with open(file_path, "r", encoding="utf-8-sig") as f:
-                raw = tomlkit.load(f).unwrap()
-            raw.pop("meta", None)
-            result[scope] = raw
+    # --- 阶段⑥ 合并视图（剥 [meta]）---
+    result: dict[str, Any] = {}
+    for fname, (instance, _report) in validated.items():
+        scope = _FILE_SCOPES[fname]
+        data = instance.model_dump()
+        data.pop("meta", None)
+        result[scope] = data
+        residual = residuals[fname]
+        combined.redundant.extend(f"{scope}.{r}" for r in residual.redundant)
+        combined.missing.extend(f"{scope}.{m}" for m in residual.missing)
+    logger.info("[加载管线] 阶段⑥ 合并视图完成（meta 已剥离）")
 
     return result, combined
 
