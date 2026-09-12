@@ -13,6 +13,7 @@ from src.modules.dashboard.api import (
     sessions,
     simulator,
     system,
+    viewers,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "simulator",
     "agenda",
     "sessions",
+    "viewers",
 ]

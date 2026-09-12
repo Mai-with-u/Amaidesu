@@ -48,6 +48,7 @@ import type {
   TriggerProactiveResponse,
   LiveSessionListResponse,
   SessionTimelineResponse,
+  ViewerStatsResponse,
   WebSocketMessage,
 } from '@/types';
 
@@ -187,6 +188,15 @@ export const eventsApi = {
     api.get<{ events: WebSocketMessage[]; total: number; has_more: boolean }>('/events', {
       params,
     }),
+};
+
+// ===== 观众统计（只读） =====
+//
+// `GET /viewers`：viewers 表 top-N 汇总行（count = 返回行数）。
+// 首页"今日统计条"的"观众"数字来源，不做列表/表格消费面。
+export const viewersApi = {
+  get: (params?: { limit?: number; order_by?: string }) =>
+    api.get<ViewerStatsResponse>('/viewers', { params }),
 };
 
 // ===== Trace =====

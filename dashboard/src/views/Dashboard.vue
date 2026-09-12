@@ -158,7 +158,15 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useSystemStore, useEventsStore } from '@/stores';
-import { rundownApi, componentApi, liveSessionsApi, llmApi, streamerApi, toolsApi } from '@/api';
+import {
+  rundownApi,
+  componentApi,
+  liveSessionsApi,
+  llmApi,
+  streamerApi,
+  toolsApi,
+  viewersApi,
+} from '@/api';
 import type {
   RundownStateResponse,
   LiveSessionListResponse,
@@ -207,6 +215,7 @@ async function onProactiveToggle(value: string | number | boolean) {
     proactiveToggling.value = false;
   }
 }
+const viewerCount = ref<number>(0);
 const agendaState = ref<RundownStateResponse | null>(null);
 const sessions = ref<LiveSessionListResponse | null>(null);
 
@@ -386,6 +395,7 @@ const statsStrip = computed<StatItem[]>(() => [
   { key: 'gift', label: '礼物', value: bufferCounts.value.gift, window: '缓冲' },
   { key: 'sc', label: 'SC', value: bufferCounts.value.superChat, window: '缓冲' },
   { key: 'enter', label: '进场', value: bufferCounts.value.enter, window: '缓冲' },
+  { key: 'viewers', label: '观众', value: viewerCount.value, window: '入库以来' },
   { key: 'replies', label: '回复', value: stats.value.replies, window: '启动以来' },
   { key: 'proactive', label: '主动', value: stats.value.proactive, window: '启动以来' },
 ]);
@@ -488,6 +498,14 @@ async function refreshSnapshot(): Promise<void> {
     sessions.value = sessionsResp.data;
   } catch {
     // 任一接口失败都保留旧值；结论条自然按缺失数据降级（直播中/降级/空闲）
+  }
+
+  // 观众数字独立取数：失败只保留旧值，不拖累上方整体快照
+  try {
+    const viewersResp = await viewersApi.get({ limit: 5 });
+    viewerCount.value = viewersResp.data.count;
+  } catch {
+    // 观众接口失败时保留旧值（显示 0）
   }
 }
 

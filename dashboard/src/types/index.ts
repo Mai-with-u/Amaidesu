@@ -689,3 +689,20 @@ export interface SessionTimelineResponse {
   live_session_id: number;
   items: SessionTimelineItem[];
 }
+
+/** 单行观众统计（GET /api/v1/viewers） */
+export interface ViewerStatItem {
+  user_id: string;
+  user_name: string;
+  message_count: number;
+  gift_count: number;
+  replied_count: number;
+  interaction_count: number;
+  last_active_ms: number;
+}
+
+export interface ViewerStatsResponse {
+  /** = top 行数（受 limit 约束，非全表行数） */
+  count: number;
+  top: ViewerStatItem[];
+}
