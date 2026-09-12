@@ -19,6 +19,7 @@ from typing import AsyncGenerator, Generator
 import pytest
 
 from src.modules.memory.simple_memory import SimpleMemory
+from src.modules.storage.migrations import SCHEMA_MIGRATIONS
 from src.modules.storage.schema import (
     SCHEMA_VERSION,
     list_expected_tables,
@@ -48,6 +49,13 @@ async def test_fresh_db_records_all_versions_up_to_current(store: SQLiteStore) -
     assert version == SCHEMA_VERSION
     rows = await store.execute("SELECT version FROM schema_migrations ORDER BY version")
     assert [r["version"] for r in rows] == list(range(1, SCHEMA_VERSION + 1))
+
+
+def test_migration_registry_covers_every_version() -> None:
+    """守护严格 +1 版本纪律：1..SCHEMA_VERSION 每版都在迁移注册表内。"""
+    missing = set(range(1, SCHEMA_VERSION + 1)) - set(SCHEMA_MIGRATIONS)
+    extra = set(SCHEMA_MIGRATIONS) - set(range(1, SCHEMA_VERSION + 1))
+    assert not missing and not extra, f"迁移注册表与版本链不一致: 缺失版本={sorted(missing)} 多余版本={sorted(extra)}"
 
 
 @pytest.mark.asyncio

@@ -23,8 +23,9 @@
 ## Schema 迁移机制
 - ``schema_migrations(version PK, applied_at_ms)``
 - ``SCHEMA_VERSION`` 常量 = 当前权威版本
-- ``SCHEMA_MIGRATIONS``：version → 迁移回调（原地修改、幂等）。``SQLiteStore``
-  在推进版本时按序执行；回调内部用列存在性检查保证对新建库与已迁移库安全
+- 版本迁移注册表在 ``migrations/`` 包（一版本一文件，严格 +1，每版必有
+  条目）。``SQLiteStore`` 推进版本时从注册表按序执行；回调原地修改、幂等，
+  用列存在性检查保证对新建库与已迁移库安全
 - ``build_schema_sql()`` 返回完整建表 DDL（IF NOT EXISTS 幂等，含最新列）
 - ``list_expected_tables()`` 返回启动自检必须存在的业务表名（不含私有表：
   私有表随所属模块后端启用与否而变化，不纳入"缺一即拒启"的闸门）
@@ -33,9 +34,8 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
-from typing import Callable, Dict, List
+from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
 SCHEMA_VERSION: int = 7
@@ -445,72 +445,13 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 
 # =============================================================================
-# 版本迁移回调（version → 原地修改、幂等）
+# 版本迁移回调已迁出至 ``migrations/`` 包（一版本一文件），
+# 注册表见 ``src/modules/storage/migrations/__init__.py``。
 # =============================================================================
-# SQLiteStore 推进 schema_migrations 版本时按序执行；回调内部用列存在性检查
-# 保证对"新建库（DDL 已含最新列）"与"重复执行"都安全。
-
-
-def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    """检查表列是否存在（PRAGMA table_info）。"""
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()  # noqa: S608 表名为代码内常量
-    return any(row[1] == column for row in rows)
-
-
-def _migrate_v4_session_semantics(conn: sqlite3.Connection) -> None:
-    """v3 → v4：场次主键语义修正（一房多场）+ 回复关联列。
-
-    - ``live_sessions`` 增加 ``source`` 列：旧库经 ADD COLUMN 补列时默认
-      ``'legacy'``——所有存量行都是"房间号哈希映射"时代的遗留数据，天然标记；
-      新建库的 DDL 默认 ``'manual'``（回调检测到列已存在则跳过）。
-    - 存量遗留行收口：``ended_at_ms`` 为空的补为 ``updated_at_ms``（历史行
-      没有可重建的结束边界，以其最后活动时刻封闭，避免永远显示"进行中"）。
-    - ``live_chat`` 增加 ``message_id`` / ``reply_to_message_id`` 列与消息 ID 索引。
-    """
-    if not _column_exists(conn, "live_sessions", "source"):
-        conn.execute("ALTER TABLE live_sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'")
-    # 遗留行封闭（幂等：COALESCE 保留已有结束时间）
-    conn.execute("UPDATE live_sessions SET ended_at_ms = updated_at_ms WHERE source = 'legacy' AND ended_at_ms IS NULL")
-    if not _column_exists(conn, "live_chat", "message_id"):
-        conn.execute("ALTER TABLE live_chat ADD COLUMN message_id TEXT")
-    if not _column_exists(conn, "live_chat", "reply_to_message_id"):
-        conn.execute("ALTER TABLE live_chat ADD COLUMN reply_to_message_id TEXT")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_live_chat_message_id ON live_chat(message_id)")
-
-
-def _migrate_v6_rundowns_replace_agenda(conn: sqlite3.Connection) -> None:
-    """v5 → v6：rundowns 表替代 agenda_plan / agenda_runtime 两表。
-
-    v5 时代的 agenda 存储链路未在运行时接线，两表保证为空；直接 DROP。
-    rundowns 表由 ``_RUNDOWNS_SQL``（IF NOT EXISTS 幂等）建立，对新库
-    与已升级库都安全——新库的 ``build_schema_sql()`` 已不含旧表 DDL，此处
-    DROP IF EXISTS 仅为处理已升级库。
-    """
-    conn.execute("DROP TABLE IF EXISTS agenda_plan")
-    conn.execute("DROP TABLE IF EXISTS agenda_runtime")
-    conn.executescript(_RUNDOWNS_SQL)
-
-
-def _migrate_v7_drop_profiles_table(conn: sqlite3.Connection) -> None:
-    """v6 → v7：删除 SimpleMemory 人物画像私有表。
-
-    画像读写面（读写方法 + 数据模型）已整体移除，生产代码零引用；
-    该表只被本模块的 SimpleMemory 读写，直接 DROP 回收空间。新建库的
-    ``build_schema_sql()`` 已不含该表 DDL，DROP IF EXISTS 仅处理存量库。
-    """
-    conn.execute("DROP TABLE IF EXISTS _memory_profiles")
-
-
-SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
-    4: _migrate_v4_session_semantics,
-    6: _migrate_v6_rundowns_replace_agenda,
-    7: _migrate_v7_drop_profiles_table,
-}
 
 
 __all__ = [
     "SCHEMA_VERSION",
-    "SCHEMA_MIGRATIONS",
     "SchemaMigration",
     "build_schema_sql",
     "list_expected_tables",

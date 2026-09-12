@@ -29,8 +29,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.storage.connection import ManagedSQLiteConnection, SQLiteConnectionManager
+from src.modules.storage.migrations import SCHEMA_MIGRATIONS
 from src.modules.storage.schema import (
-    SCHEMA_MIGRATIONS,
     SCHEMA_VERSION,
     build_schema_sql,
     list_expected_tables,
