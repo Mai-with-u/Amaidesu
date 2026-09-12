@@ -17,7 +17,7 @@ from src.modules.simulator.types import (
     Persona,
     PersonaRole,
 )
-from src.modules.storage import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -28,19 +28,19 @@ def temp_db_path() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_db_path)
+async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
+    s = SQLiteDatabase(temp_db_path)
     await s.initialize()
     yield s
     await s.close()
 
 
-async def _seed_residents(store: SQLiteStore, count: int = 10, include_hater: bool = True) -> None:
+async def _seed_residents(store: SQLiteDatabase, count: int = 10, include_hater: bool = True) -> None:
     """写入 count 个常驻人设（hater 仅 1 个）"""
     base_roles = ["fan", "teaser", "newcomer", "veteran"]
     for i in range(count):
         role = "hater" if include_hater and i == count - 1 else base_roles[i % len(base_roles)]
-        await store.insert_sim_persona(
+        await store.sim.insert_sim_persona(
             user_id=f"resident_{i:03d}",
             user_nickname=f"观众{i}",
             role=role,
@@ -54,7 +54,7 @@ async def _seed_residents(store: SQLiteStore, count: int = 10, include_hater: bo
 async def test_load_default_filters_hater(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema()
-    pool = PersonaPool(sqlite_store=store)
+    pool = PersonaPool(sim_repo=store.sim)
     await pool.load(cfg)
     residents = pool.list_residents()
     roles = {p.role for p in residents}
@@ -66,7 +66,7 @@ async def test_load_default_filters_hater(store):
 async def test_load_enable_hater(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema(enable_hater=True)
-    pool = PersonaPool(sqlite_store=store)
+    pool = PersonaPool(sim_repo=store.sim)
     await pool.load(cfg)
     assert len(pool.list_residents()) == 10
 
@@ -74,7 +74,7 @@ async def test_load_enable_hater(store):
 @pytest.mark.asyncio
 async def test_load_empty_pool_when_no_data(store):
     cfg = SimulatorConfigSchema()
-    pool = PersonaPool(sqlite_store=store)
+    pool = PersonaPool(sim_repo=store.sim)
     await pool.load(cfg)
     assert pool.list_residents() == []
 
@@ -82,7 +82,7 @@ async def test_load_empty_pool_when_no_data(store):
 @pytest.mark.asyncio
 async def test_pick_one_falls_back_to_passerby_on_empty_pool(store):
     cfg = SimulatorConfigSchema()
-    pool = PersonaPool(sqlite_store=store)
+    pool = PersonaPool(sim_repo=store.sim)
     await pool.load(cfg)
     p = pool.pick_one()
     assert p.is_temporary is True
@@ -93,7 +93,7 @@ async def test_pick_one_falls_back_to_passerby_on_empty_pool(store):
 async def test_pick_one_returns_valid_persona(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema(enable_hater=True)
-    pool = PersonaPool(sqlite_store=store)
+    pool = PersonaPool(sim_repo=store.sim)
     await pool.load(cfg)
     p = pool.pick_one()
     assert p.user_id is not None
@@ -105,7 +105,7 @@ async def test_pick_one_returns_valid_persona(store):
 async def test_record_message_increments(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema(enable_hater=True)
-    pool = PersonaPool(sqlite_store=store)
+    pool = PersonaPool(sim_repo=store.sim)
     await pool.load(cfg)
     p = pool.pick_one()
     before = p.messages_generated
@@ -117,7 +117,7 @@ async def test_record_message_increments(store):
 async def test_get_stats(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema(enable_hater=True)
-    pool = PersonaPool(sqlite_store=store)
+    pool = PersonaPool(sim_repo=store.sim)
     await pool.load(cfg)
     block_count = 5
     for _ in range(block_count):
@@ -128,8 +128,8 @@ async def test_get_stats(store):
     assert sum(stats.values()) == block_count
 
 
-def _new_pool(store: SQLiteStore) -> PersonaPool:
-    return PersonaPool(sqlite_store=store)
+def _new_pool(store: SQLiteDatabase) -> PersonaPool:
+    return PersonaPool(sim_repo=store.sim)
 
 
 @pytest.mark.asyncio

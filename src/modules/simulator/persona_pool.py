@@ -8,7 +8,7 @@ from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
 from src.modules.simulator.types import Persona, PersonaRole
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.repos import SimRepo
 
 
 class PersonaPool:
@@ -28,19 +28,19 @@ class PersonaPool:
     ]
     _PASSERBY_POOL_CAP = 50
 
-    def __init__(self, sqlite_store: SQLiteStore, rng: Optional[random.Random] = None):
+    def __init__(self, sim_repo: SimRepo, rng: Optional[random.Random] = None):
         self._rng = rng or random.Random()
         self._residents: List[Persona] = []
         self._passersby: List[Persona] = []  # temporary
         self._config: Optional[SimulatorConfigSchema] = None
         self._messages_by_role: Dict[str, int] = {}
         self._all_residents: List[Persona] = []
-        self._store = sqlite_store
+        self._sim = sim_repo
 
     async def load(self, config: SimulatorConfigSchema) -> None:
         """从 DB 加载常驻人设并应用运行时筛选配置。"""
         self._config = config
-        rows = await self._store.list_sim_personas(include_inactive=True)
+        rows = await self._sim.list_sim_personas(include_inactive=True)
         self._all_residents = [
             Persona(
                 user_id=row["user_id"],
@@ -130,7 +130,7 @@ class PersonaPool:
         if not fresh:
             return 0
         for persona in fresh:
-            await self._store.insert_sim_persona(
+            await self._sim.insert_sim_persona(
                 user_id=persona.user_id,
                 user_nickname=persona.user_nickname,
                 role=persona.role.value,
@@ -161,7 +161,7 @@ class PersonaPool:
             elif hasattr(target, key):
                 setattr(target, key, value)
                 db_fields[key] = value
-        await self._store.update_sim_persona(user_id=user_id, fields=db_fields)
+        await self._sim.update_sim_persona(user_id=user_id, fields=db_fields)
         self._apply_resident_filter()
         return True
 
@@ -175,7 +175,7 @@ class PersonaPool:
         self._all_residents = [p for p in self._all_residents if p.user_id != user_id]
         if len(self._all_residents) == before:
             return False
-        await self._store.delete_sim_persona(user_id=user_id)
+        await self._sim.delete_sim_persona(user_id=user_id)
         self._apply_resident_filter()
         return True
 

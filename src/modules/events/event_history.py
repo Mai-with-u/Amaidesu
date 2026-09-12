@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
-    from src.modules.storage.sqlite_store import SQLiteStore
+    from src.modules.storage.repos import EventRepo
 
 
 # 默认参数
@@ -108,10 +108,10 @@ class EventHistoryService:
     """事件环形缓冲历史服务。
 
     在内存中保留最近 N 条事件(默认 5000),可选择性地把每条事件写入
-    ``event_history`` 表（``persist=True`` 且注入 SQLiteStore 时生效）。
+    ``event_history`` 表（``persist=True`` 且注入 EventRepo 时生效）。
 
     用法:
-    - 由组合根实例化并注入 SQLiteStore,再交给 EventHistoryRecorder
+    - 由组合根实例化并注入 EventRepo,再交给 EventHistoryRecorder
     - 不是单例;多个实例相互独立
     """
 
@@ -119,14 +119,14 @@ class EventHistoryService:
         self,
         max_events: int = DEFAULT_MAX_EVENTS,
         persist: bool = False,
-        sqlite_store: Optional["SQLiteStore"] = None,
+        event_repo: Optional["EventRepo"] = None,
     ) -> None:
         """初始化事件历史服务。
 
         Args:
             max_events: 环形缓冲容量(deque maxlen),必须为正整数
             persist: 是否启用 ``event_history`` 表持久化
-            sqlite_store: 持久化目标;persist=True 但未注入时仅保留内存缓冲
+            event_repo: 持久化目标(EventRepo);persist=True 但未注入时仅保留内存缓冲
 
         Raises:
             ValueError: 当 `max_events` 非正数
@@ -136,14 +136,14 @@ class EventHistoryService:
 
         self.max_events: int = max_events
         self.persist: bool = persist
-        self._sqlite_store = sqlite_store
+        self._event_repo = event_repo
         self.logger = get_logger(self.__class__.__name__)
 
         # 内存环形缓冲
         self._buffer: Deque[EventRecord] = deque(maxlen=max_events)
 
-        if self.persist and sqlite_store is None:
-            self.logger.warning("事件历史 persist=True 但未注入 SQLiteStore，仅保留内存缓冲")
+        if self.persist and event_repo is None:
+            self.logger.warning("事件历史 persist=True 但未注入 EventRepo，仅保留内存缓冲")
 
     # ------------------------------------------------------------------ #
     # 内部                                                                #
@@ -164,7 +164,7 @@ class EventHistoryService:
     async def _persist_event(self, event: EventRecord) -> None:
         """写单条事件到 ``event_history`` 表；失败仅告警（记账旁路语义）。"""
         try:
-            await self._sqlite_store.insert_event(
+            await self._event_repo.insert_event(
                 record_id=event.id,
                 event_name=event.event_name or event.type,
                 timestamp_ms=self._resolve_timestamp_ms(event),
@@ -190,7 +190,7 @@ class EventHistoryService:
         self._buffer.append(event)
 
         # 2) 持久化开关或存储缺失时直接返回
-        if not self.persist or self._sqlite_store is None:
+        if not self.persist or self._event_repo is None:
             return
 
         try:
@@ -207,11 +207,11 @@ class EventHistoryService:
         替代旧实现"读当日 JSONL 文件恢复"；解析失败的行跳过。
         返回回灌条数（persist 未生效或无存储时返回 0）。
         """
-        if not self.persist or self._sqlite_store is None:
+        if not self.persist or self._event_repo is None:
             return 0
         today = self._date_string(time.time())
         try:
-            rows = await self._sqlite_store.get_day_events(today)
+            rows = await self._event_repo.get_day_events(today)
         except Exception as exc:  # noqa: BLE001 回灌失败不阻塞启动
             self.logger.warning(f"事件历史回灌失败 ({today}): {exc}")
             return 0

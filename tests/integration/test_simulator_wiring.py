@@ -220,6 +220,6 @@ class TestMainDryModeShutdown:
             collector_manager=result[4],
             agent_manager=result[5],
             simulator_service=simulator_service,
-            sqlite_store=result[7],
+            database=result[7],
             storage_ledger=result[8],
         )

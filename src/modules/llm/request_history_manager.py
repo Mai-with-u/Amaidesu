@@ -2,7 +2,7 @@
 LLM 请求历史记录管理器
 
 负责记录每次 LLM 请求的完整信息，包括请求参数、响应内容、Token 使用量、费用等。
-持久化目标是 SQLite ``llm_requests`` 表（组合根经 ``attach_store`` 注入）；
+持久化目标是 SQLite ``llm_requests`` 表（组合根经 ``attach_repo`` 注入）；
 未注入时仅保留内存环形缓存（查询范围随之受限）。
 
 全局管理器使用方式：
@@ -26,7 +26,7 @@ from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
-    from src.modules.storage.sqlite_store import SQLiteStore
+    from src.modules.storage.repos import LLMRepo
 
 # 全局请求历史记录管理器实例
 global_request_history_manager: Optional["RequestHistoryManager"] = None
@@ -131,7 +131,7 @@ class RequestHistoryManager:
         use_global: bool = True,
         cache_size: int = CACHE_SIZE,
         enabled: bool = True,
-        sqlite_store: Optional["SQLiteStore"] = None,
+        llm_repo: Optional["LLMRepo"] = None,
     ):
         """初始化请求历史记录管理器
 
@@ -140,7 +140,7 @@ class RequestHistoryManager:
             use_global: 是否使用全局实例
             cache_size: 内存缓存大小
             enabled: 是否启用记录功能。测试环境关闭以避免污染数据库
-            sqlite_store: 持久化目标；未注入时仅内存缓存（可后续 attach_store）
+            llm_repo: 持久化目标（LLMRepo）；未注入时仅内存缓存（可后续 attach_repo）
         """
         # 如果使用全局实例且已存在，则返回现有实例
         global global_request_history_manager
@@ -160,7 +160,7 @@ class RequestHistoryManager:
         self.enabled = enabled
 
         # 持久化目标
-        self._sqlite_store = sqlite_store
+        self._llm_repo = llm_repo
 
         # 内存缓存（使用 deque 限制大小）
         self._cache: deque = deque(maxlen=cache_size)
@@ -169,14 +169,14 @@ class RequestHistoryManager:
         if use_global:
             global_request_history_manager = self
 
-    def attach_store(self, sqlite_store: Optional["SQLiteStore"]) -> None:
+    def attach_repo(self, llm_repo: Optional["LLMRepo"]) -> None:
         """组合根注入持久化目标（全局单例可能先于组合根被惰性创建）。"""
-        self._sqlite_store = sqlite_store
+        self._llm_repo = llm_repo
 
     @property
-    def sqlite_store(self) -> Optional["SQLiteStore"]:
+    def llm_repo(self) -> Optional["LLMRepo"]:
         """当前注入的持久化目标（测试可读）。"""
-        return self._sqlite_store
+        return self._llm_repo
 
     # -------------------- 写入 --------------------
 
@@ -198,7 +198,7 @@ class RequestHistoryManager:
         self._cache.append(record_dict)
 
         # 异步写库（fire-and-forget；无事件循环的同步上下文仅保留内存缓存）
-        if self._sqlite_store is not None:
+        if self._llm_repo is not None:
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
@@ -223,7 +223,7 @@ class RequestHistoryManager:
         """写单条请求到 ``llm_requests`` 表；失败仅告警（记账旁路语义）。"""
         usage = record_dict.get("usage") or {}
         try:
-            await self._sqlite_store.insert_llm_request(
+            await self._llm_repo.insert_llm_request(
                 request_id=record_dict["request_id"],
                 timestamp_ms=record_dict.get("timestamp", 0),
                 client_type=record_dict.get("client_type", ""),
@@ -307,8 +307,8 @@ class RequestHistoryManager:
         Returns:
             请求记录字典，未找到返回 None
         """
-        if self._sqlite_store is not None:
-            row = await self._sqlite_store.get_llm_request_by_id(request_id)
+        if self._llm_repo is not None:
+            row = await self._llm_repo.get_llm_request_by_id(request_id)
             return self._row_to_record(row) if row is not None else None
 
         # 无存储：查内存缓存
@@ -341,8 +341,8 @@ class RequestHistoryManager:
         Returns:
             包含 records, total, page, page_size, total_pages 的字典
         """
-        if self._sqlite_store is not None:
-            result = await self._sqlite_store.query_llm_requests(
+        if self._llm_repo is not None:
+            result = await self._llm_repo.query_llm_requests(
                 client_type=client_type,
                 model_name=model_name,
                 start_time=start_time,
@@ -401,14 +401,14 @@ class RequestHistoryManager:
                 "message": "必须设置 confirm=True 才能执行清除操作",
             }
 
-        if self._sqlite_store is None:
+        if self._llm_repo is None:
             return {
                 "success": False,
                 "message": "未接入持久化存储，无历史可清除",
             }
 
         try:
-            deleted = await self._sqlite_store.delete_llm_requests_before(before_date=before_date)
+            deleted = await self._llm_repo.delete_llm_requests_before(before_date=before_date)
 
             # 同步修剪内存缓存
             if before_date is None:
@@ -496,12 +496,12 @@ class RequestHistoryManager:
         """
         time_range = {"start": start_time, "end": end_time}
 
-        if self._sqlite_store is None:
+        if self._llm_repo is None:
             stats = self._statistics_from_records(list(self._cache))
             stats["time_range"] = time_range
             return stats
 
-        stats = await self._sqlite_store.llm_request_statistics(start_time=start_time, end_time=end_time)
+        stats = await self._llm_repo.llm_request_statistics(start_time=start_time, end_time=end_time)
         overall = stats["overall"]
         total_requests = int(overall.get("total", 0))
         successful_requests = int(overall.get("success_count", 0))
@@ -539,9 +539,9 @@ class RequestHistoryManager:
         Returns:
             日期字符串列表（降序）；无存储时返回空列表
         """
-        if self._sqlite_store is None:
+        if self._llm_repo is None:
             return []
-        return await self._sqlite_store.llm_request_available_dates()
+        return await self._llm_repo.llm_request_available_dates()
 
     def get_cache_size(self) -> int:
         """获取当前缓存大小

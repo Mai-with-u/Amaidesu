@@ -17,7 +17,7 @@ from src.modules.logging import get_logger
 from src.modules.simulator.config_schema import SimulatorConfigSchema
 
 if TYPE_CHECKING:
-    from src.modules.storage.sqlite_store import SQLiteStore
+    from src.modules.storage.repos import EventRepo
 
 
 class ReplayEngine:
@@ -27,9 +27,9 @@ class ReplayEngine:
     ``next_gap_seconds()`` 的间隔调度 emit → 队列空即回放结束。
     """
 
-    def __init__(self, config: SimulatorConfigSchema, sqlite_store: "SQLiteStore") -> None:
+    def __init__(self, config: SimulatorConfigSchema, event_repo: "EventRepo") -> None:
         self._config = config
-        self._sqlite_store = sqlite_store
+        self._event_repo = event_repo
         self.logger = get_logger("ReplayEngine")
         self._queue: List[RoomMessagePayload] = []
         self._cursor = 0
@@ -61,7 +61,7 @@ class ReplayEngine:
         if simulated_only is None:
             simulated_only = self._config.replay_simulated_only
 
-        rows = await self._sqlite_store.get_day_events(date_str, event_name=CoreEvents.ROOM_MESSAGE_DANMAKU)
+        rows = await self._event_repo.get_day_events(date_str, event_name=CoreEvents.ROOM_MESSAGE_DANMAKU)
 
         entries: List[RoomMessagePayload] = []
         for row in rows:

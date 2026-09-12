@@ -23,7 +23,7 @@ from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.config import StreamerConfig
 from src.modules.llm.manager import LLMResponse
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -34,8 +34,8 @@ def temp_db_path() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_db_path)
+async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
+    s = SQLiteDatabase(temp_db_path)
     await s.initialize()
     yield s
     await s.close()
@@ -57,7 +57,7 @@ class _FakeSessionManager:
 
 
 @pytest.mark.asyncio
-async def test_initialize_creates_live_chat_session_ts_index(store: SQLiteStore) -> None:
+async def test_initialize_creates_live_chat_session_ts_index(store: SQLiteDatabase) -> None:
     """全新库 initialize → sqlite_master 含组合索引。"""
     rows = await store.execute(
         "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_live_chat_session_ts'"
@@ -66,9 +66,9 @@ async def test_initialize_creates_live_chat_session_ts_index(store: SQLiteStore)
 
 
 @pytest.mark.asyncio
-async def test_initialize_index_idempotent(store: SQLiteStore) -> None:
+async def test_initialize_index_idempotent(store: SQLiteDatabase) -> None:
     """重复 initialize 不因索引 DDL 报错（IF NOT EXISTS 幂等）。"""
-    store2 = SQLiteStore(store.db_path)
+    store2 = SQLiteDatabase(store.db_path)
     await store2.initialize()
     await store2.close()
 
@@ -79,24 +79,24 @@ async def test_initialize_index_idempotent(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_recent_live_chat_role_filter(store: SQLiteStore) -> None:
+async def test_list_recent_live_chat_role_filter(store: SQLiteDatabase) -> None:
     """sender_role='viewer' 只取观众行；空表返回 []。"""
-    empty = await store.list_recent_live_chat(live_session_id=1, sender_role="viewer")
+    empty = await store.chat.list_recent_live_chat(live_session_id=1, sender_role="viewer")
     assert empty == []
 
-    await store.insert_live_chat(
+    await store.chat.insert_live_chat(
         live_session_id=1, timestamp_ms=100, sender_role="viewer",
         sender_name="观众A", content="你好", message_type="danmaku",
     )
-    await store.insert_live_chat(
+    await store.chat.insert_live_chat(
         live_session_id=1, timestamp_ms=200, sender_role="assistant",
         sender_name="主播", content="欢迎", message_type="speak",
     )
-    rows = await store.list_recent_live_chat(live_session_id=1, sender_role="viewer")
+    rows = await store.chat.list_recent_live_chat(live_session_id=1, sender_role="viewer")
     assert [r["content"] for r in rows] == ["你好"]
 
 
-def _make_agent(sqlite_store, session_manager) -> StreamerAgent:
+def _make_agent(store: SQLiteDatabase, session_manager) -> StreamerAgent:
     llm = MagicMock()
     llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
     prompt = MagicMock()
@@ -107,13 +107,13 @@ def _make_agent(sqlite_store, session_manager) -> StreamerAgent:
         prompt_manager=prompt,
         event_bus=None,
         tool_registry=None,
-        sqlite_store=sqlite_store,
+        chat_repo=store.chat,
         session_manager=session_manager,
     )
 
 
 @pytest.mark.asyncio
-async def test_read_history_no_active_session_returns_empty(store: SQLiteStore) -> None:
+async def test_read_history_no_active_session_returns_empty(store: SQLiteDatabase) -> None:
     """无显式场次（首场/未开播）→ 空列表，不抛错。"""
     agent = _make_agent(store, _FakeSessionManager(None))
     history = await agent._read_history()
@@ -121,7 +121,7 @@ async def test_read_history_no_active_session_returns_empty(store: SQLiteStore) 
 
 
 @pytest.mark.asyncio
-async def test_read_history_empty_session_returns_empty(store: SQLiteStore) -> None:
+async def test_read_history_empty_session_returns_empty(store: SQLiteDatabase) -> None:
     """场次存在但 live_chat 无行（首决定窗）→ 空列表，不抛错。"""
     agent = _make_agent(store, _FakeSessionManager(1))
     history = await agent._read_history()
@@ -129,13 +129,13 @@ async def test_read_history_empty_session_returns_empty(store: SQLiteStore) -> N
 
 
 @pytest.mark.asyncio
-async def test_read_history_returns_turns_in_chronological_order(store: SQLiteStore) -> None:
+async def test_read_history_returns_turns_in_chronological_order(store: SQLiteDatabase) -> None:
     """历史按时间正序返回，role 承载 sender_role。"""
-    await store.insert_live_chat(
+    await store.chat.insert_live_chat(
         live_session_id=1, timestamp_ms=100, sender_role="viewer",
         sender_name="观众A", content="先问", message_type="danmaku",
     )
-    await store.insert_live_chat(
+    await store.chat.insert_live_chat(
         live_session_id=1, timestamp_ms=200, sender_role="assistant",
         sender_name="主播", content="后答", message_type="speak",
     )
@@ -152,7 +152,7 @@ async def test_read_history_returns_turns_in_chronological_order(store: SQLiteSt
 # ---------------------------------------------------------------------------
 
 
-def _make_maintainer(store: SQLiteStore) -> tuple[BackgroundMaintainer, MagicMock]:
+def _make_maintainer(store: SQLiteDatabase) -> tuple[BackgroundMaintainer, MagicMock]:
     room_state = RoomState()
     llm = MagicMock()
     llm.chat = AsyncMock(
@@ -166,16 +166,16 @@ def _make_maintainer(store: SQLiteStore) -> tuple[BackgroundMaintainer, MagicMoc
         llm_service=llm,
         session_manager=_FakeSessionManager(1),
         memory=memory,
-        sqlite_store=store,
+        chat_repo=store.chat,
     )
     return maintainer, llm
 
 
 @pytest.mark.asyncio
-async def test_summarize_topic_reads_live_chat_viewer_rows(store: SQLiteStore) -> None:
+async def test_summarize_topic_reads_live_chat_viewer_rows(store: SQLiteDatabase) -> None:
     """seed live_chat viewer 行 → 摘要 LLM 收到弹幕文本，topic_summary 被写入。"""
     maintainer, llm = _make_maintainer(store)
-    await store.insert_live_chat(
+    await store.chat.insert_live_chat(
         live_session_id=1, timestamp_ms=100, sender_role="viewer",
         sender_name="观众A", content="新版本什么时候上线", message_type="danmaku",
     )
@@ -191,7 +191,7 @@ async def test_summarize_topic_reads_live_chat_viewer_rows(store: SQLiteStore) -
 
 
 @pytest.mark.asyncio
-async def test_summarize_topic_no_active_session_is_noop(store: SQLiteStore) -> None:
+async def test_summarize_topic_no_active_session_is_noop(store: SQLiteDatabase) -> None:
     """无显式场次 → 静默跳过（不调 LLM、不写摘要）。"""
     room_state = RoomState()
     llm = MagicMock()
@@ -201,7 +201,7 @@ async def test_summarize_topic_no_active_session_is_noop(store: SQLiteStore) -> 
         room_state=room_state,
         llm_service=llm,
         session_manager=_FakeSessionManager(None),
-        sqlite_store=store,
+        chat_repo=store.chat,
     )
 
     await maintainer._summarize_topic(now_ms=200_000)
@@ -211,11 +211,11 @@ async def test_summarize_topic_no_active_session_is_noop(store: SQLiteStore) -> 
 
 
 @pytest.mark.asyncio
-async def test_summarize_topic_only_assistant_rows_clears_summary(store: SQLiteStore) -> None:
+async def test_summarize_topic_only_assistant_rows_clears_summary(store: SQLiteDatabase) -> None:
     """窗口内只有主播发言（无观众弹幕）→ 清空 topic_summary 防自嗨循环。"""
     maintainer, llm = _make_maintainer(store)
     maintainer._room_state.set_topic_summary("旧话题", now_ms=1)
-    await store.insert_live_chat(
+    await store.chat.insert_live_chat(
         live_session_id=1, timestamp_ms=100, sender_role="assistant",
         sender_name="主播", content="大家好", message_type="speak",
     )

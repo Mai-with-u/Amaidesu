@@ -89,11 +89,12 @@ class BackgroundMaintainer:
         *,
         room_state: RoomState,
         llm_service: Optional[Any] = None,
-        live_session_store: Optional[Any] = None,
+        sessions_repo: Optional[Any] = None,
+        chat_repo: Optional[Any] = None,
+        topic_repo: Optional[Any] = None,
         session_manager: Optional[Any] = None,
         memory: Optional[Any] = None,
         event_bus: Optional[EventBus] = None,
-        sqlite_store: Optional[Any] = None,
         prompt_manager: Optional[PromptManager] = None,
     ) -> None:
         """初始化。
@@ -110,7 +111,7 @@ class BackgroundMaintainer:
                 - ``compressor_queue_max``（默认 100）
             room_state: ``RoomState`` 实例（轻循环读取快照）
             llm_service: LLM 管理器（可选；压缩 worker 调用）
-            live_session_store: ``live_sessions`` 存储接口（duck-typed；轻循环写状态）
+            sessions_repo: ``SessionRepo``（轻循环写场次实时状态）
             session_manager: 场次管理器（``LiveSessionManager`` 或鸭子类型；
                 提供 ``async resolve_pk() -> Optional[int]``）。心跳、话题快照
                 与话题摘要的场次归属经它解析（与 live_chat 写路径同源）；
@@ -118,7 +119,9 @@ class BackgroundMaintainer:
             memory: 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时关闭
                 摘要/事件两路写入功能——BackgroundMaintainer 整体降级为"只记账"。
             event_bus: 可选 ``EventBus``；提供时 ``start()`` 阶段订阅礼物/SC 事件。
-            sqlite_store: 可选 ``SQLiteStore``；提供时每次摘要成功后写
+            chat_repo: 可选 ``ChatRepo``；提供时话题摘要读取 live_chat
+                最近观众行（``sender_role="viewer"``）。
+            topic_repo: 可选 ``TopicRepo``；提供时每次摘要成功后写
                 ``timeline_summary``（摘要历史）与 ``topics``（当前话题快照投影）。
             prompt_manager: ``PromptManager`` 实例（摘要系统提示词经其渲染）。
                 ``None`` 时回退全局单例 ``get_prompt_manager()``（惰性、仅首次
@@ -127,12 +130,13 @@ class BackgroundMaintainer:
         self._config = config
         self._room_state = room_state
         self._llm_service = llm_service
-        self._live_session_store = live_session_store
+        self._sessions_repo = sessions_repo
+        self._chat_repo = chat_repo
         self._session_manager = session_manager
-        # 写入面——memory / event_bus / sqlite_store 由 main.py 装配；None 时各自降级
+        # 写入面——memory / event_bus / chat_repo / topic_repo 由 main.py 装配；None 时各自降级
         self._memory = memory
         self._event_bus = event_bus
-        self._sqlite_store = sqlite_store
+        self._topic_repo = topic_repo
         # 提示词面——prompt_manager 由 StreamerAgent 构造透传；None 时首次使用回退全局单例
         self._prompt_manager = prompt_manager
         # 摘要系统提示词渲染缓存（零变量模板，渲染结果恒定）
@@ -315,7 +319,7 @@ class BackgroundMaintainer:
         ts = now_ms if now_ms is not None else _real_now_ms()
 
         # 1. 写 live_sessions（热度/计数快照）
-        if self._live_session_store is not None:
+        if self._sessions_repo is not None:
             try:
                 await self._write_live_session(ts)
             except Exception as exc:
@@ -340,7 +344,7 @@ class BackgroundMaintainer:
         取其主键，否则默认场次）；管理器缺失时降级跳过——心跳不建行，
         场次行的创建/结账归 LiveSessionManager。
         """
-        if self._live_session_store is None or self._session_manager is None:
+        if self._sessions_repo is None or self._session_manager is None:
             return
         snapshot = self._room_state.get_snapshot(now_ms=now_ms)
         # 热度数字映射：low=1, medium=2, high=3
@@ -352,7 +356,7 @@ class BackgroundMaintainer:
         except Exception as exc:  # noqa: BLE001 记账降级，不阻断轻循环
             self._logger.warning(f"场次归属解析失败，跳过本次心跳: {exc}")
             return
-        await self._live_session_store.update_live_session_stats(
+        await self._sessions_repo.update_live_session_stats(
             live_session_id=live_pk,
             heat=heat_int,
             viewer_count=0,  # TODO: 接入观众统计
@@ -362,7 +366,7 @@ class BackgroundMaintainer:
 
     async def _maybe_summarize(self, now_ms: int) -> None:
         """摘要门控：按热度频率调用 LLM（走 chat_fast profile）。"""
-        if self._llm_service is None or self._sqlite_store is None:
+        if self._llm_service is None or self._chat_repo is None:
             return
         snap = self._room_state.get_snapshot(now_ms=now_ms)
         interval = self._interval_for_heat(snap.heat)
@@ -438,13 +442,13 @@ class BackgroundMaintainer:
         assistant、礼物/SC 不落 live_chat）。无显式场次时静默跳过；
         窗口内无观众弹幕（仅主播自嗨）则清空 topic_summary 防自嗨循环。
         """
-        if self._llm_service is None or self._sqlite_store is None or self._session_manager is None:
+        if self._llm_service is None or self._chat_repo is None or self._session_manager is None:
             return
         try:
             live_pk = await self._session_manager.resolve_pk()
             if live_pk is None:
                 return
-            rows = await self._sqlite_store.list_recent_live_chat(
+            rows = await self._chat_repo.list_recent_live_chat(
                 live_session_id=live_pk,
                 limit=20,
                 sender_role="viewer",
@@ -510,31 +514,34 @@ class BackgroundMaintainer:
 
         异常降级：落库失败仅 warning，不阻断后台记账循环。
         """
-        if self._sqlite_store is None or self._session_manager is None:
+        if self._topic_repo is None or self._session_manager is None:
             return
         try:
             live_pk = await self._session_manager.resolve_pk()
             window_start = previous_summary_ms or max(now_ms - self._summary_interval_ms, 0)
-            await self._sqlite_store.execute(
-                "INSERT INTO timeline_summary (live_session_id, start_ms, end_ms, summary, tags) VALUES (?, ?, ?, ?, ?)",
-                (live_pk, window_start, now_ms, summary, None),
+            await self._topic_repo.insert_timeline_summary(
+                live_session_id=live_pk, start_ms=window_start, end_ms=now_ms, summary=summary, tags=None
             )
             snapshot = self._room_state.get_snapshot(now_ms=now_ms)
-            await self._sqlite_store.execute(
-                "DELETE FROM topics WHERE live_session_id=?",
-                (live_pk,),
-            )
+            await self._topic_repo.delete_session_topics(live_session_id=live_pk)
             for rank, keyword in enumerate(snapshot.topics):
-                await self._sqlite_store.execute(
-                    "INSERT INTO topics (live_session_id, label, source, score, trend, duration_ms, count) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (live_pk, keyword, "word_freq", 1.0 / (rank + 1), 0.0, self._summary_interval_ms, 0),
+                await self._topic_repo.insert_topic(
+                    live_session_id=live_pk,
+                    label=keyword,
+                    source="word_freq",
+                    score=1.0 / (rank + 1),
+                    trend=0.0,
+                    duration_ms=self._summary_interval_ms,
                 )
             if summary:
-                await self._sqlite_store.execute(
-                    "INSERT INTO topics (live_session_id, label, source, score, trend, duration_ms, count) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (live_pk, summary, "summary", 1.0, 0.0, self._summary_interval_ms, 1),
+                await self._topic_repo.insert_topic(
+                    live_session_id=live_pk,
+                    label=summary,
+                    source="summary",
+                    score=1.0,
+                    trend=0.0,
+                    duration_ms=self._summary_interval_ms,
+                    count=1,
                 )
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志，不阻断记账循环
             self._logger.warning(f"话题快照落库失败（timeline_summary/topics）: {exc}")

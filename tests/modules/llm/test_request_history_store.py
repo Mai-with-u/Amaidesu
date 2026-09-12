@@ -15,7 +15,7 @@ from src.modules.llm.request_history_manager import (
     RequestRecord,
     TokenUsage,
 )
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -26,16 +26,16 @@ def temp_dir() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_dir: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_dir / "llm-history.db")
+async def store(temp_dir: Path) -> AsyncGenerator[SQLiteDatabase, None]:
+    s = SQLiteDatabase(temp_dir / "llm-history.db")
     await s.initialize()
     yield s
     await s.close()
 
 
 @pytest.fixture
-async def manager(store: SQLiteStore) -> AsyncGenerator[RequestHistoryManager, None]:
-    m = RequestHistoryManager(use_global=False, sqlite_store=store)
+async def manager(store: SQLiteDatabase) -> AsyncGenerator[RequestHistoryManager, None]:
+    m = RequestHistoryManager(use_global=False, llm_repo=store.llm)
     yield m
 
 
@@ -57,7 +57,7 @@ def _record(request_id: str, *, ts_ms: int, model: str = "glm-x", success: bool 
     )
 
 
-async def _wait_for_count(store: SQLiteStore, expected: int, timeout: float = 3.0) -> None:
+async def _wait_for_count(store: SQLiteDatabase, expected: int, timeout: float = 3.0) -> None:
     async def _poll() -> None:
         while True:
             rows = await store.execute("SELECT COUNT(*) AS n FROM llm_requests")
@@ -69,9 +69,9 @@ async def _wait_for_count(store: SQLiteStore, expected: int, timeout: float = 3.
 
 
 @pytest.mark.asyncio
-async def test_record_request_persists_to_store(store: SQLiteStore) -> None:
+async def test_record_request_persists_to_store(store: SQLiteDatabase) -> None:
     """record_request 经 fire-and-forget 写入 llm_requests 表。"""
-    manager = RequestHistoryManager(use_global=False, sqlite_store=store)
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
     manager.record_request(_record("req-1", ts_ms=1_000))
     await _wait_for_count(store, 1)
 
@@ -84,9 +84,9 @@ async def test_record_request_persists_to_store(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_history_from_store_pagination(store: SQLiteStore) -> None:
+async def test_get_history_from_store_pagination(store: SQLiteDatabase) -> None:
     """get_history 走 SQL 分页（时间倒序），记录字段还原完整。"""
-    manager = RequestHistoryManager(use_global=False, sqlite_store=store)
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
     for idx in range(3):
         manager.record_request(_record(f"req-{idx}", ts_ms=1_000 * (idx + 1)))
     await _wait_for_count(store, 3)
@@ -102,9 +102,9 @@ async def test_get_history_from_store_pagination(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_history_filters(store: SQLiteStore) -> None:
+async def test_get_history_filters(store: SQLiteDatabase) -> None:
     """模型/成功状态筛选生效。"""
-    manager = RequestHistoryManager(use_global=False, sqlite_store=store)
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
     manager.record_request(_record("req-ok", ts_ms=1_000))
     manager.record_request(_record("req-bad", ts_ms=2_000, success=False))
     await _wait_for_count(store, 2)
@@ -117,9 +117,9 @@ async def test_get_history_filters(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_request_by_id_from_store(store: SQLiteStore) -> None:
+async def test_get_request_by_id_from_store(store: SQLiteDatabase) -> None:
     """按 request_id 从库里取单条详情。"""
-    manager = RequestHistoryManager(use_global=False, sqlite_store=store)
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
     manager.record_request(_record("req-detail", ts_ms=5_000))
     await _wait_for_count(store, 1)
 
@@ -129,9 +129,9 @@ async def test_get_request_by_id_from_store(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_statistics_from_store(store: SQLiteStore) -> None:
+async def test_get_statistics_from_store(store: SQLiteDatabase) -> None:
     """统计接口走 SQL 聚合，model_stats/client_stats 形状与旧实现一致。"""
-    manager = RequestHistoryManager(use_global=False, sqlite_store=store)
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
     manager.record_request(_record("req-1", ts_ms=1_000))
     manager.record_request(_record("req-2", ts_ms=2_000, success=False))
     await _wait_for_count(store, 2)
@@ -148,9 +148,9 @@ async def test_get_statistics_from_store(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_clear_history_from_store(store: SQLiteStore) -> None:
+async def test_clear_history_from_store(store: SQLiteDatabase) -> None:
     """clear_history 删除库记录并修剪缓存。"""
-    manager = RequestHistoryManager(use_global=False, sqlite_store=store)
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
     manager.record_request(_record("req-1", ts_ms=1_000))
     await _wait_for_count(store, 1)
 
@@ -165,9 +165,9 @@ async def test_clear_history_from_store(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_available_dates_desc(store: SQLiteStore) -> None:
+async def test_available_dates_desc(store: SQLiteDatabase) -> None:
     """日期清单降序（最新在前）。"""
-    manager = RequestHistoryManager(use_global=False, sqlite_store=store)
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
     manager.record_request(_record("req-1", ts_ms=1_750_000_000_000))  # 约某日
     manager.record_request(_record("req-2", ts_ms=1_790_000_000_000))  # 更晚日期
     await _wait_for_count(store, 2)
@@ -180,7 +180,7 @@ async def test_available_dates_desc(store: SQLiteStore) -> None:
 @pytest.mark.asyncio
 async def test_no_store_falls_back_to_cache() -> None:
     """未注入 store：查询退化为内存缓存路径，不报错。"""
-    manager = RequestHistoryManager(use_global=False, sqlite_store=None)
+    manager = RequestHistoryManager(use_global=False, llm_repo=None)
     manager.record_request(_record("req-cache", ts_ms=1_000))
     assert manager.get_cache_size() == 1
 

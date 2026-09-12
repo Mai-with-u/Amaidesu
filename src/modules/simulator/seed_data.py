@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from src.modules.logging import get_logger
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.repos import SimRepo
 
 
 logger = get_logger("SimulatorSeedData")
@@ -105,14 +105,14 @@ DEFAULT_PERSONAS: tuple[Dict[str, Any], ...] = (
 )
 
 
-async def seed_simulator_data(store: SQLiteStore) -> None:
+async def seed_simulator_data(sim_repo: SimRepo) -> None:
     """启动期一次性种子导入：空表才插入内置默认值，已有数据一律不动。
 
     幂等：非空表跳过；重复调用无副作用。
     """
-    if await store.count_sim_personas() == 0:
+    if await sim_repo.count_sim_personas() == 0:
         for item in DEFAULT_PERSONAS:
-            await store.insert_sim_persona(
+            await sim_repo.insert_sim_persona(
                 user_id=item["user_id"],
                 user_nickname=item["user_nickname"],
                 role=item["role"],
@@ -123,9 +123,9 @@ async def seed_simulator_data(store: SQLiteStore) -> None:
             )
         logger.info(f"sim_personas 空表，已导入 {len(DEFAULT_PERSONAS)} 个内置常驻人设")
 
-    if await store.count_sim_gifts() == 0:
+    if await sim_repo.count_sim_gifts() == 0:
         for item in DEFAULT_GIFTS:
-            await store.insert_sim_gift(
+            await sim_repo.insert_sim_gift(
                 gift_id=item["gift_id"],
                 gift_name=item["gift_name"],
                 category=item["category"],

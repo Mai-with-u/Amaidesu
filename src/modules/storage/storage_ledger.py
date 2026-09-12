@@ -3,7 +3,7 @@ StorageLedger —— 直播间消息流落库记账器
 
 与 EventHistoryRecorder 同类（订阅事件→处理），但写目标不同：
 - EventHistoryRecorder → 事件历史服务（dashboard 用）
-- StorageLedger       → SQLiteStore 业务表（live chat 行业标准数据平面）
+- StorageLedger       → SQLite 业务表（live chat 行业标准数据平面）
 
 ## 职责
 - 订阅 ``room.message.#``（MQTT 风格通配），按 payload.message_type 分发：
@@ -30,7 +30,8 @@ StorageLedger —— 直播间消息流落库记账器
 - 不改 schema（表结构权威在 schema.py）
 
 ## 装配
-- 构造时传入 EventBus + SQLiteStore + LiveSessionManager，随后调用 ``await ledger.start()``
+- 构造时传入 EventBus + ChatRepo/ViewerRepo/EventRepo（按需窄注入） +
+  LiveSessionManager，随后调用 ``await ledger.start()``
 - ``--dry`` 模式跳过订阅（保留构造便于冒烟，stop 仍可被调）
 - run_shutdown 关闭链：放在 EventHistoryRecorder.stop 之后、EventBus.cleanup 之前
 """
@@ -44,7 +45,7 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.repos import ChatRepo, EventRepo, ViewerRepo
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -63,19 +64,24 @@ _GAME_EVENT_WILDCARD = "game.*"
 class StorageLedger:
     """直播间行为流落库记账器。
 
-    独立的 EventBus 订阅者；写目标 SQLiteStore（业务表 live_chat/gifts/super_chats）。
-    与 EventHistoryRecorder 并存——后者写事件历史，前者写业务明细——不冲突。
+    独立的 EventBus 订阅者；写目标为明细三表（ChatRepo）、观众统计
+    （ViewerRepo）与 game_events（EventRepo）。与 EventHistoryRecorder
+    并存——后者写事件历史，前者写业务明细——不冲突。
     """
 
     def __init__(
         self,
         event_bus: "EventBus",
-        sqlite_store: SQLiteStore,
+        chat_repo: ChatRepo,
+        viewer_repo: ViewerRepo,
+        event_repo: EventRepo,
         *,
         session_manager: Optional["LiveSessionManager"] = None,
     ) -> None:
         self.event_bus = event_bus
-        self.sqlite_store = sqlite_store
+        self.chat_repo = chat_repo
+        self.viewer_repo = viewer_repo
+        self.event_repo = event_repo
         # 场次归属解析（payload 未盖章时回退）；None 时按无场次降级跳过
         self._session_manager = session_manager
         # 订阅句柄表（stop 时按 event_name 取消）
@@ -152,7 +158,7 @@ class StorageLedger:
                 )
                 return
             if msg_type == "danmaku":
-                await self.sqlite_store.insert_live_chat(
+                await self.chat_repo.insert_live_chat(
                     live_session_id=live_pk,
                     timestamp_ms=payload.timestamp_ms,
                     sender_role="viewer",
@@ -163,7 +169,7 @@ class StorageLedger:
                     message_id=payload.message_id or None,
                     simulated=payload.simulated,
                 )
-                await self.sqlite_store.upsert_viewer_message(
+                await self.viewer_repo.upsert_viewer_message(
                     user_id=payload.user.id,
                     user_name=payload.user.name,
                     timestamp_ms=payload.timestamp_ms,
@@ -174,7 +180,7 @@ class StorageLedger:
                 if gift is None:
                     logger.debug("gift 事件 payload.gift 为空，跳过（采集器层补字段）")
                     return
-                await self.sqlite_store.insert_gift(
+                await self.chat_repo.insert_gift(
                     live_session_id=live_pk,
                     timestamp_ms=payload.timestamp_ms,
                     user_id=payload.user.id,
@@ -183,7 +189,7 @@ class StorageLedger:
                     gift_count=int(gift.count),
                     simulated=payload.simulated,
                 )
-                await self.sqlite_store.upsert_viewer_gift(
+                await self.viewer_repo.upsert_viewer_gift(
                     user_id=payload.user.id,
                     user_name=payload.user.name,
                     timestamp_ms=payload.timestamp_ms,
@@ -194,7 +200,7 @@ class StorageLedger:
                 if sc is None:
                     logger.debug("super_chat 事件 payload.sc 为空，跳过")
                     return
-                await self.sqlite_store.insert_super_chat(
+                await self.chat_repo.insert_super_chat(
                     live_session_id=live_pk,
                     timestamp_ms=payload.timestamp_ms,
                     user_id=payload.user.id,
@@ -247,7 +253,7 @@ class StorageLedger:
                     f"跳过落库（utterance_id={payload.utterance_id}）",
                 )
                 return
-            await self.sqlite_store.insert_live_chat(
+            await self.chat_repo.insert_live_chat(
                 live_session_id=live_pk,
                 timestamp_ms=payload.timestamp_ms,
                 sender_role="assistant",
@@ -258,7 +264,7 @@ class StorageLedger:
                 simulated=False,
             )
             if payload.target_user_id:
-                await self.sqlite_store.upsert_viewer_replied(
+                await self.viewer_repo.upsert_viewer_replied(
                     user_id=payload.target_user_id,
                     timestamp_ms=payload.timestamp_ms,
                 )
@@ -287,17 +293,13 @@ class StorageLedger:
             if live_pk is None:
                 logger.debug(f"game.* 事件无法归属场次，跳过落库（event_type={payload.event_type}）")
                 return
-            await self.sqlite_store.execute(
-                "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    live_pk,
-                    payload.game,
-                    payload.event_type,
-                    payload.message,
-                    payload.scene or None,
-                    payload.timestamp_ms,
-                ),
+            await self.event_repo.insert_game_event(
+                live_session_id=live_pk,
+                game=payload.game,
+                event_type=payload.event_type,
+                message=payload.message,
+                scene=payload.scene or None,
+                timestamp_ms=payload.timestamp_ms,
             )
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
             logger.error(

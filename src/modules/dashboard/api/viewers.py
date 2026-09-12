@@ -49,12 +49,12 @@ async def get_viewer_stats(
 
     ``order_by`` 合法性由存储层白名单兜底，非法值转 400。
     """
-    manager = server.session_manager
-    if manager is None:
-        raise HTTPException(status_code=503, detail="场次管理器不可用")
+    viewer_repo = server.viewer_repo
+    if viewer_repo is None:
+        raise HTTPException(status_code=503, detail="观众统计仓储不可用")
 
     try:
-        rows = await manager.store.list_viewer_stats(limit=limit, order_by=order_by)
+        rows = await viewer_repo.list_viewer_stats(limit=limit, order_by=order_by)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

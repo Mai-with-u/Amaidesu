@@ -21,7 +21,7 @@ from src.modules.simulator.types import (
     PersonaRole,
     StreamerContextSnapshot,
 )
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.repos import SimRepo
 
 # sim_gifts 允许通过 update_gift 更新的字段（与 DB 白名单一致的运行时防线）
 _GIFT_UPDATABLE_FIELDS = frozenset({"gift_name", "category", "weight", "data_type", "sc_amount_rmb"})
@@ -37,12 +37,12 @@ class GiftGenerator:
     def __init__(
         self,
         config: SimulatorConfigSchema,
-        sqlite_store: SQLiteStore,
+        sim_repo: SimRepo,
         llm_wrapper: Any = None,
         rng: Optional[random.Random] = None,
     ):
         self._config = config
-        self._store = sqlite_store
+        self._sim = sim_repo
         self._llm_wrapper = llm_wrapper
         self._rng = rng or random.Random()
         self._logger = get_logger("GiftGenerator")
@@ -51,7 +51,7 @@ class GiftGenerator:
 
     async def load(self) -> None:
         """从 DB 加载礼物目录到内存缓存。"""
-        rows = await self._store.list_sim_gifts()
+        rows = await self._sim.list_sim_gifts()
         self._gifts = [
             GiftItem(
                 gift_id=row["gift_id"],
@@ -76,7 +76,7 @@ class GiftGenerator:
         """新增礼物；gift_id 已存在时返回 False。"""
         if any(g.gift_id == gift.gift_id for g in self._gifts):
             return False
-        await self._store.insert_sim_gift(
+        await self._sim.insert_sim_gift(
             gift_id=gift.gift_id,
             gift_name=gift.gift_name,
             category=gift.category,
@@ -97,10 +97,10 @@ class GiftGenerator:
         unknown = set(fields) - _GIFT_UPDATABLE_FIELDS
         if unknown:
             raise ValueError(f"update_gift 非法字段: {sorted(unknown)}")
-        updated = await self._store.update_sim_gift(gift_id=gift_id, fields=fields)
+        updated = await self._sim.update_sim_gift(gift_id=gift_id, fields=fields)
         if not updated:
             return False
-        row = next((r for r in await self._store.list_sim_gifts() if r["gift_id"] == gift_id), None)
+        row = next((r for r in await self._sim.list_sim_gifts() if r["gift_id"] == gift_id), None)
         target = next((g for g in self._gifts if g.gift_id == gift_id), None)
         if row is not None and target is not None:
             refreshed = GiftItem(
@@ -121,7 +121,7 @@ class GiftGenerator:
         Returns:
             True 删除成功；False 礼物不存在。
         """
-        deleted = await self._store.delete_sim_gift(gift_id=gift_id)
+        deleted = await self._sim.delete_sim_gift(gift_id=gift_id)
         if not deleted:
             return False
         target = next((g for g in self._gifts if g.gift_id == gift_id), None)

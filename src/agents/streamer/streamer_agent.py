@@ -17,7 +17,10 @@ agent = StreamerAgent(
     prompt_manager=prompt,
     event_bus=bus,
     tool_registry=registry,
-    sqlite_store=store,
+    rundown_repo=store.rundowns,
+    chat_repo=store.chat,
+    sessions_repo=store.sessions,
+    topic_repo=store.topics,
 )
 await agent.start()
 # Agent now: subscribes room.message.danmaku → buffers → planner → reply tool → ...
@@ -133,7 +136,10 @@ class StreamerAgent(BaseAgent):
         prompt_manager: Any,
         event_bus: Optional[EventBus] = None,
         tool_registry: Optional[ToolRegistry] = None,
-        sqlite_store: Optional[Any] = None,
+        rundown_repo: Optional[Any] = None,
+        chat_repo: Optional[Any] = None,
+        sessions_repo: Optional[Any] = None,
+        topic_repo: Optional[Any] = None,
         memory: Any = None,
         context_assembler_config: Optional[Any] = None,
         speech_config: Optional[Dict[str, Any]] = None,
@@ -152,7 +158,10 @@ class StreamerAgent(BaseAgent):
             tool_registry: 可选 ``ToolRegistry``（Agent 把自己的工具注册进去；
                 VTS 表情工具仍走该 registry，TTS 不再走；
                 Planner/Replyer 也从它读取 game 工具清单做动作选择）
-            sqlite_store: 可选 ``SQLiteStore``（live_sessions 状态 + rundowns 流程单库）
+            rundown_repo: 可选 ``RundownRepo``（流程单库；配置 rundown_id 时启动读取）
+            chat_repo: 可选 ``ChatRepo``（live_chat 会话历史读取，reply tool 历史源）
+            sessions_repo: 可选 ``SessionRepo``（live_sessions 实时状态，转交后台维护器）
+            topic_repo: 可选 ``TopicRepo``（摘要/话题快照落地，转交后台维护器）
             context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
                 控制 Planner 组装路径开关与长记忆召回条数；None 时 Planner 走内置默认）
             memory: 可选记忆后端（实现 ``MemoryProvider`` 协议，含
@@ -196,7 +205,9 @@ class StreamerAgent(BaseAgent):
         self._prompt = prompt_manager
         self._event_bus = event_bus
         self._tool_registry = tool_registry
-        self._sqlite = sqlite_store
+        # 仓储注入（组合根按需分发；None 时对应能力降级）
+        self._rundowns = rundown_repo
+        self._chat = chat_repo
         self._session_manager = session_manager
         # 思考流旁路出口（可选；观察面专用，不进 EventBus 不落库）
         self._thinking_sink = thinking_sink
@@ -308,11 +319,12 @@ class StreamerAgent(BaseAgent):
             background_config,
             room_state=self._room_state,
             llm_service=llm_manager,
-            live_session_store=sqlite_store,  # live_sessions 实时状态落库（按 session_manager 解析的当前场次）
+            sessions_repo=sessions_repo,  # live_sessions 实时状态落库（按 session_manager 解析的当前场次）
+            chat_repo=chat_repo,  # 话题摘要读 live_chat 最近观众行
             session_manager=session_manager,  # 场次归属解析（None 时心跳降级跳过）
             memory=memory,  # 记忆写入面：摘要 → ingest；None 时降级
             event_bus=event_bus,  # 高价值事件（礼物/SC）→ ingest
-            sqlite_store=sqlite_store,  # 摘要落地：timeline_summary + topics 快照
+            topic_repo=topic_repo,  # 摘要落地：timeline_summary + topics 快照
             prompt_manager=self._prompt,  # 摘要系统提示词渲染（复用 Agent 持有的 PromptManager）
         )
 
@@ -496,7 +508,7 @@ class StreamerAgent(BaseAgent):
         # reply tool（无条件构造——thinking 槽位与注册共用同一实例）
         self._reply_provider = ReplyToolProvider(
             replyer=self._replyer,
-            history_provider=(self._read_history_sync if self._sqlite is not None else None),
+            history_provider=(self._read_history_sync if self._chat is not None else None),
             rundown_text_provider=self._build_rundown_text_sync,
             event_bus=self._event_bus,
         )
@@ -1445,9 +1457,9 @@ class StreamerAgent(BaseAgent):
         """
         rundown_id = (self.typed_config.rundown_id or "").strip()
         rundown: Optional[Rundown] = None
-        if rundown_id and self._sqlite is not None:
+        if rundown_id and self._rundowns is not None:
             try:
-                rundown = await self._sqlite.get_rundown(rundown_id)
+                rundown = await self._rundowns.get_rundown(rundown_id)
             except Exception as exc:
                 self._logger.warning(f"读取流程单 '{rundown_id}' 失败: {exc}")
                 rundown = None
@@ -1613,13 +1625,13 @@ class StreamerAgent(BaseAgent):
         （StorageLedger 落库）同源；无显式场次（首场/未开播）或存储缺失时
         返回空列表，不抛错（首场首决定窗的空读是常态而非异常）。
         """
-        if self._sqlite is None or self._session_manager is None:
+        if self._chat is None or self._session_manager is None:
             return None
         try:
             live_pk = await self._session_manager.resolve_pk()
             if live_pk is None:
                 return []
-            rows = await self._sqlite.list_recent_live_chat(
+            rows = await self._chat.list_recent_live_chat(
                 live_session_id=live_pk,
                 limit=self.typed_config.history_limit,
             )

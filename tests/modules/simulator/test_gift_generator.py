@@ -18,7 +18,7 @@ from src.modules.simulator.types import (
     GiftItem,
     StreamerContextSnapshot,
 )
-from src.modules.storage import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -29,22 +29,22 @@ def temp_db_path() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_db_path)
+async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
+    s = SQLiteDatabase(temp_db_path)
     await s.initialize()
     yield s
     await s.close()
 
 
 @pytest.fixture
-async def seeded_store(store: SQLiteStore) -> SQLiteStore:
+async def seeded_store(store: SQLiteDatabase) -> SQLiteDatabase:
     """预置内置默认礼物目录"""
-    await seed_simulator_data(store)
+    await seed_simulator_data(store.sim)
     return store
 
 
-def _new_gen(store: SQLiteStore) -> GiftGenerator:
-    return GiftGenerator(SimulatorConfigSchema(), sqlite_store=store)
+def _new_gen(store: SQLiteDatabase) -> GiftGenerator:
+    return GiftGenerator(SimulatorConfigSchema(), sim_repo=store.sim)
 
 
 @pytest.mark.asyncio

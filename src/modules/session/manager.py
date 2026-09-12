@@ -3,7 +3,7 @@
 场次 = 一段有开始/结束边界的直播时间段；房间/频道是场次之上的静态属性，
 一房多场。本模块是场次的**唯一事实源**：
 
-- 行级写入经 ``SQLiteStore`` 的 live_sessions 领域方法（主键 AUTOINCREMENT）；
+- 行级写入经 ``SessionRepo`` 的 live_sessions 领域方法（主键 AUTOINCREMENT）；
 - 生命周期广播 ``live.started`` / ``live.ended`` 事件；
 - 对下游（StorageLedger / 场次盖章拦截器 / 模拟器 / Dashboard API）暴露
   ``resolve_pk()``——显式场次进行中返回其主键，否则返回 ``None``。
@@ -33,9 +33,10 @@ from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayloa
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 
+from src.modules.storage.repos import ChatRepo, SessionRepo
+
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
-    from src.modules.storage.sqlite_store import SQLiteStore
 
 logger = get_logger("LiveSessionManager")
 
@@ -51,13 +52,15 @@ class LiveSessionManager:
 
     def __init__(
         self,
-        sqlite_store: "SQLiteStore",
+        session_repo: SessionRepo,
+        chat_repo: ChatRepo,
         event_bus: "EventBus",
         *,
         platform: str = "unknown",
         room_id: str = "",
     ) -> None:
-        self._store = sqlite_store
+        self._sessions = session_repo
+        self._chat = chat_repo
         self._event_bus = event_bus
         self._platform = platform
         self._room_id = room_id
@@ -76,9 +79,9 @@ class LiveSessionManager:
         # 残留收口：上次进程未正常退出的"进行中"显式场次，以最后活动
         # 时刻封闭（没有可重建的真实结束边界）。本次进程不会自动开新场次；
         # 无显式场次期间，``resolve_pk()`` 返回 None，下游落库路径据此跳过。
-        for row in await self._store.list_dangling_live_sessions():
+        for row in await self._sessions.list_dangling_live_sessions():
             ended = int(row["updated_at_ms"] or row["started_at_ms"])
-            await self._store.close_live_session(live_session_id=int(row["id"]), ended_at_ms=ended)
+            await self._sessions.close_live_session(live_session_id=int(row["id"]), ended_at_ms=ended)
             logger.warning(
                 f"收口上次残留的进行中场次: id={row['id']} title={row['title']!r} "
                 f"（ended_at_ms 补为最后活动时刻 {ended}）"
@@ -110,7 +113,7 @@ class LiveSessionManager:
             if self._active_pk is not None:
                 await self._close_active(reason="开启新场次前自动结束", ended_at_ms=now_ms())
             started = now_ms()
-            pk = await self._store.insert_live_session(
+            pk = await self._sessions.insert_live_session(
                 stream_id=room_id if room_id is not None else self._room_id,
                 platform=platform or self._platform,
                 started_at_ms=started,
@@ -148,15 +151,15 @@ class LiveSessionManager:
         pk = self._active_pk
         source = self._active_source or "manual"
 
-        row = await self._store.get_live_session(live_session_id=pk)
+        row = await self._sessions.get_live_session(live_session_id=pk)
         started_at = int(row["started_at_ms"]) if row is not None else ended_at_ms
-        await self._store.close_live_session(live_session_id=pk, ended_at_ms=ended_at_ms)
+        await self._sessions.close_live_session(live_session_id=pk, ended_at_ms=ended_at_ms)
 
-        details = await self._store.count_session_details(live_session_id=pk)
+        details = await self._chat.count_session_details(live_session_id=pk)
         empty_discarded = False
         if details == 0:
             # 空场次不留行：开启后没有任何消息的场次直接删除
-            await self._store.delete_live_session(live_session_id=pk)
+            await self._sessions.delete_live_session(live_session_id=pk)
             empty_discarded = True
             logger.info(f"空场次已丢弃: id={pk}（无任何明细行，不保留）")
 
@@ -187,12 +190,12 @@ class LiveSessionManager:
         被误报为不存在。
         """
         async with self._lock:
-            row = await self._store.get_live_session(live_session_id=live_session_id)
+            row = await self._sessions.get_live_session(live_session_id=live_session_id)
             if row is None:
                 return False
             if live_session_id == self._active_pk:
                 await self._close_active(reason="删除场次前自动结束", ended_at_ms=now_ms())
-            await self._store.delete_live_session(live_session_id=live_session_id)
+            await self._sessions.delete_live_session(live_session_id=live_session_id)
             logger.info(f"场次已删除: id={live_session_id}（明细级联清除）")
             return True
 
@@ -227,12 +230,17 @@ class LiveSessionManager:
         title_keyword: Optional[str] = None,
     ) -> List:
         """场次列表（显式场次按开始时间倒序 + 消息数），供 Dashboard API / 控制台侧边栏。"""
-        return await self._store.list_live_sessions(limit=limit, source=source, title_keyword=title_keyword)
+        return await self._sessions.list_live_sessions(limit=limit, source=source, title_keyword=title_keyword)
 
     @property
-    def store(self) -> "SQLiteStore":
-        """底层存储（回看数据面只读访问）。"""
-        return self._store
+    def sessions(self) -> SessionRepo:
+        """场次仓储（回看数据面只读访问：单场行查询等）。"""
+        return self._sessions
+
+    @property
+    def chat(self) -> ChatRepo:
+        """明细仓储（回看数据面只读访问：补录/核对明细行等）。"""
+        return self._chat
 
     async def get_session_details(self, live_session_id: int, *, limit: int = 300) -> List[dict]:
         """单场明细行（live_chat + gifts + super_chats 合并，时间正序）。
@@ -240,7 +248,7 @@ class LiveSessionManager:
         回看时间线的数据面：把三张明细表拉平为带 kind 的条目流，
         消息行带 message_id / reply_to_message_id 关联键。
         """
-        rows = await self._store.list_recent_live_chat(live_session_id=live_session_id, limit=limit)
+        rows = await self._chat.list_recent_live_chat(live_session_id=live_session_id, limit=limit)
         items: List[dict] = []
         for row in rows:
             ts = int(row["timestamp_ms"])
@@ -266,10 +274,7 @@ class LiveSessionManager:
                         "simulated": bool(row["simulated"]),
                     }
                 )
-        gift_rows = await self._store.execute(
-            "SELECT * FROM gifts WHERE live_session_id=? ORDER BY timestamp_ms ASC LIMIT ?",
-            (live_session_id, limit),
-        )
+        gift_rows = await self._chat.list_session_gifts(live_session_id=live_session_id, limit=limit)
         for row in gift_rows:
             items.append(
                 {
@@ -282,10 +287,7 @@ class LiveSessionManager:
                     "simulated": bool(row["simulated"]),
                 }
             )
-        sc_rows = await self._store.execute(
-            "SELECT * FROM super_chats WHERE live_session_id=? ORDER BY timestamp_ms ASC LIMIT ?",
-            (live_session_id, limit),
-        )
+        sc_rows = await self._chat.list_session_super_chats(live_session_id=live_session_id, limit=limit)
         for row in sc_rows:
             items.append(
                 {

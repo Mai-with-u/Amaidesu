@@ -20,7 +20,7 @@ Simulator API（世界模拟器三模式控制面）
   注入为 None（如默认生产模式），端点返回 ``{enabled: false, is_available: false}``
   而不是 404 —— 控制面要与"未启用"区分清楚。
 - 人设/礼物 CRUD 走 ``SimulatorService`` 持有的 ``PersonaPool`` / ``GiftGenerator``
-  （DB 写穿 + 内存缓存刷新），Dashboard 不直接持有 SQLiteStore。
+  （DB 写穿 + 内存缓存刷新），Dashboard 不直接持有存储连接。
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
-from src.modules.storage.sqlite_store import sqlite_store as get_default_store
+from src.modules.storage.database import sqlite_database as get_default_db
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -193,7 +193,7 @@ async def get_simulator_status(server: ServerDep) -> Dict[str, Any]:
     if not enabled:
         message = "[simulator].enabled=false；模拟器未启用。请在 config/core.toml 的 [simulator] 段将 enabled 设为 true 并重启。"
     elif not is_available:
-        message = "配置启用但 SimulatorService 未注入（SQLiteStore/LLMManager 缺失或 --dry 模式）。"
+        message = "配置启用但 SimulatorService 未注入（存储仓储/LLMManager 缺失或 --dry 模式）。"
     elif is_running:
         message = f"模拟器正在运行（mode={mode}）。"
     else:
@@ -226,7 +226,7 @@ async def start_simulator(server: ServerDep, request: Optional[SimulatorStartReq
     if service is None:
         return {
             "success": False,
-            "message": "SimulatorService 未注入（通常因 SQLiteStore/LLMManager 缺失或 --dry 模式）。",
+            "message": "SimulatorService 未注入（通常因存储仓储/LLMManager 缺失或 --dry 模式）。",
         }
     if getattr(service, "is_running", False):
         return {"success": True, "message": "模拟器已在运行", "is_running": True}
@@ -291,9 +291,9 @@ async def list_replay_dates(server: ServerDep) -> Dict[str, Any]:
     """列出有弹幕录制记录的日期（按时间正序），供回放选择器使用。
 
     数据源为 ``event_history`` 表（与 SimulatorService 实例无关），经
-    默认 store 工厂取连接；enabled=false 也可用。
+    默认数据库工厂取事件仓储；enabled=false 也可用。
     """
-    dates = await get_default_store().list_event_dates(CoreEvents.ROOM_MESSAGE_DANMAKU)
+    dates = await get_default_db().events.list_event_dates(CoreEvents.ROOM_MESSAGE_DANMAKU)
     return {"dates": dates}
 
 

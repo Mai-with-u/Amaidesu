@@ -28,7 +28,7 @@ from src.modules.memory import (
     build_query_memory_tool,
 )
 from src.modules.memory.simple_memory import _extract_keywords
-from src.modules.storage import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 from src.modules.time_utils import now_ms
 from src.modules.tools import ToolInvocation, ToolRegistry
 
@@ -46,15 +46,15 @@ def temp_db_path() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_db_path)
+async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
+    s = SQLiteDatabase(temp_db_path)
     await s.initialize()
     yield s
     await s.close()
 
 
 @pytest.fixture
-async def memory(store: SQLiteStore) -> AsyncGenerator[SimpleMemory, None]:
+async def memory(store: SQLiteDatabase) -> AsyncGenerator[SimpleMemory, None]:
     mem = SimpleMemory(store)
     await mem.initialize()
     yield mem

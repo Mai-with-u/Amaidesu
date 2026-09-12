@@ -25,7 +25,7 @@ from src.modules.storage.schema import (
     list_expected_tables,
     list_private_tables,
 )
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -36,15 +36,15 @@ def temp_db_path() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_db_path)
+async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
+    s = SQLiteDatabase(temp_db_path)
     await s.initialize()
     yield s
     await s.close()
 
 
 @pytest.mark.asyncio
-async def test_fresh_db_records_all_versions_up_to_current(store: SQLiteStore) -> None:
+async def test_fresh_db_records_all_versions_up_to_current(store: SQLiteDatabase) -> None:
     version = await store.get_schema_version()
     assert version == SCHEMA_VERSION
     rows = await store.execute("SELECT version FROM schema_migrations ORDER BY version")
@@ -61,12 +61,12 @@ def test_migration_registry_covers_every_version() -> None:
 @pytest.mark.asyncio
 async def test_old_db_upgrades_monotonically(temp_db_path: Path) -> None:
     # 先造一个"版本停留在 1"的旧库
-    old = SQLiteStore(temp_db_path)
+    old = SQLiteDatabase(temp_db_path)
     await old.initialize()
     await old.execute("DELETE FROM schema_migrations WHERE version > 1")
     assert await old.get_schema_version() == 1
     # 旧库预置一行业务数据，升级后必须原样保留
-    await old.insert_live_chat(
+    await old.chat.insert_live_chat(
         live_session_id=7,
         timestamp_ms=1_000,
         sender_role="viewer",
@@ -75,7 +75,7 @@ async def test_old_db_upgrades_monotonically(temp_db_path: Path) -> None:
     )
     await old.close()
 
-    reopened = SQLiteStore(temp_db_path)
+    reopened = SQLiteDatabase(temp_db_path)
     await reopened.initialize()
     try:
         assert await reopened.get_schema_version() == SCHEMA_VERSION
@@ -86,7 +86,7 @@ async def test_old_db_upgrades_monotonically(temp_db_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_private_tables_created_by_store_initialize(store: SQLiteStore) -> None:
+async def test_private_tables_created_by_store_initialize(store: SQLiteDatabase) -> None:
     for table in list_private_tables():
         assert await store.table_exists(table), f"私有表 {table} 未随 store.initialize() 建立"
     # 索引也随表建立
@@ -98,7 +98,7 @@ async def test_private_tables_created_by_store_initialize(store: SQLiteStore) ->
 
 @pytest.mark.asyncio
 async def test_simple_memory_initialize_fails_fast_on_missing_tables(temp_db_path: Path) -> None:
-    store = SQLiteStore(temp_db_path, auto_apply_schema=False)
+    store = SQLiteDatabase(temp_db_path, auto_apply_schema=False)
     await store.initialize()
     try:
         memory = SimpleMemory(store)
@@ -156,7 +156,7 @@ async def test_v3_to_v4_migration_semantics(temp_db_path: Path) -> None:
     conn.commit()
     conn.close()
 
-    store = SQLiteStore(temp_db_path)
+    store = SQLiteDatabase(temp_db_path)
     await store.initialize()
     try:
         assert await store.get_schema_version() == SCHEMA_VERSION
@@ -186,7 +186,7 @@ async def test_v3_to_v4_migration_semantics(temp_db_path: Path) -> None:
         await store.close()
 
     # 幂等：再次 initialize 不破坏数据、不重复迁移
-    store2 = SQLiteStore(temp_db_path)
+    store2 = SQLiteDatabase(temp_db_path)
     await store2.initialize()
     try:
         assert await store2.get_schema_version() == SCHEMA_VERSION
@@ -201,7 +201,7 @@ async def test_v6_to_v7_migration_drops_memory_profiles(temp_db_path: Path) -> N
     """v6 形状的旧库升级到 v7：人物画像私有表被幂等 DROP，业务数据保留。"""
 
     # 造 v7 新库后手工回退版本记录并补建旧表，模拟 v6 存量库
-    old = SQLiteStore(temp_db_path)
+    old = SQLiteDatabase(temp_db_path)
     await old.initialize()
     await old.execute("DELETE FROM schema_migrations WHERE version > 6")
     await old.execute(
@@ -218,7 +218,7 @@ async def test_v6_to_v7_migration_drops_memory_profiles(temp_db_path: Path) -> N
     await old.close()
 
     # 重新 initialize：迁移 7 执行 DROP，版本推进到当前
-    reopened = SQLiteStore(temp_db_path)
+    reopened = SQLiteDatabase(temp_db_path)
     await reopened.initialize()
     try:
         assert await reopened.get_schema_version() == SCHEMA_VERSION
@@ -230,7 +230,7 @@ async def test_v6_to_v7_migration_drops_memory_profiles(temp_db_path: Path) -> N
         await reopened.close()
 
     # 幂等：再次 initialize 成功，表保持不存在
-    again = SQLiteStore(temp_db_path)
+    again = SQLiteDatabase(temp_db_path)
     await again.initialize()
     try:
         assert await again.get_schema_version() == SCHEMA_VERSION

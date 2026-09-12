@@ -19,7 +19,7 @@ from typing import AsyncGenerator, Generator
 import pytest
 
 from src.modules.storage.schema import SCHEMA_VERSION
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -30,8 +30,8 @@ def temp_dir() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_dir: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_dir / "test.db")
+async def store(temp_dir: Path) -> AsyncGenerator[SQLiteDatabase, None]:
+    s = SQLiteDatabase(temp_dir / "test.db")
     await s.initialize()
     yield s
     await s.close()
@@ -61,7 +61,7 @@ async def test_legacy_db_backed_up_and_upgraded(temp_dir: Path) -> None:
     db_path = temp_dir / "legacy.db"
     _make_legacy_db(db_path)
 
-    store = SQLiteStore(db_path)
+    store = SQLiteDatabase(db_path)
     try:
         await store.initialize()
         assert await store.get_schema_version() == SCHEMA_VERSION
@@ -88,12 +88,12 @@ async def test_legacy_db_backed_up_and_upgraded(temp_dir: Path) -> None:
 async def test_version_lagged_db_backed_up(temp_dir: Path) -> None:
     """版本记录落后（如停在 1）的库升级时也生成备份。"""
     db_path = temp_dir / "lagged.db"
-    first = SQLiteStore(db_path)
+    first = SQLiteDatabase(db_path)
     await first.initialize()
     await first.execute("DELETE FROM schema_migrations WHERE version > 1")
     await first.close()
 
-    reopened = SQLiteStore(db_path)
+    reopened = SQLiteDatabase(db_path)
     try:
         await reopened.initialize()
         assert await reopened.get_schema_version() == SCHEMA_VERSION
@@ -106,7 +106,7 @@ async def test_version_lagged_db_backed_up(temp_dir: Path) -> None:
 async def test_fresh_db_no_backup(temp_dir: Path) -> None:
     """全新库（文件不存在）首次初始化不生成备份。"""
     db_path = temp_dir / "fresh.db"
-    store = SQLiteStore(db_path)
+    store = SQLiteDatabase(db_path)
     try:
         await store.initialize()
         assert await store.get_schema_version() == SCHEMA_VERSION
@@ -122,7 +122,7 @@ async def test_backup_failure_does_not_block_migration(temp_dir: Path) -> None:
     _make_legacy_db(db_path)
     (temp_dir / "backups").write_text("not a dir", encoding="utf-8")
 
-    store = SQLiteStore(db_path)
+    store = SQLiteDatabase(db_path)
     try:
         await store.initialize()
         assert await store.get_schema_version() == SCHEMA_VERSION
@@ -133,7 +133,7 @@ async def test_backup_failure_does_not_block_migration(temp_dir: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_backups_not_auto_pruned(store: SQLiteStore, temp_dir: Path) -> None:
+async def test_backups_not_auto_pruned(store: SQLiteDatabase, temp_dir: Path) -> None:
     """备份不做自动清理：同一库多次备份文件共存，由用户自行管理。"""
     db_path = temp_dir / "test.db"
     store._backup_before_migration(SCHEMA_VERSION - 1)

@@ -24,11 +24,8 @@ from src.agents.streamer.rundown.rundown import (
     Rundown,
     RundownSegment,
 )
-from src.modules.storage import (
-    SCHEMA_VERSION,
-    SQLiteStore,
-    list_expected_tables,
-)
+from src.modules.storage import SCHEMA_VERSION, list_expected_tables
+from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.schema import build_schema_sql
 from src.modules.time_utils import now_ms
 
@@ -46,11 +43,12 @@ def temp_db_path() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_db_path)
-    await s.initialize()
-    yield s
-    await s.close()
+async def store(temp_db_path: Path):
+    """直接使用 SQLiteDatabase：断言/自检走 db，流程单读写走 db.rundowns。"""
+    db = SQLiteDatabase(temp_db_path)
+    await db.initialize()
+    yield db
+    await db.close()
 
 
 def _make_rundown(
@@ -78,7 +76,7 @@ def _make_rundown(
 
 
 @pytest.mark.asyncio
-async def test_rundowns_table_exists_after_initialize(store: SQLiteStore) -> None:
+async def test_rundowns_table_exists_after_initialize(store: SQLiteDatabase) -> None:
     """``store.initialize()`` 后 ``rundowns`` 表存在；``agenda_*`` 不在。"""
     assert await store.table_exists("rundowns")
     assert not await store.table_exists("agenda_plan")
@@ -94,14 +92,14 @@ async def test_rundowns_table_exists_after_initialize(store: SQLiteStore) -> Non
 
 
 @pytest.mark.asyncio
-async def test_rundown_round_trip(store: SQLiteStore) -> None:
+async def test_rundown_round_trip(store: SQLiteDatabase) -> None:
     """upsert → get → list → delete 全链。"""
     rundown = _make_rundown(rundown_id="rd_1", title="首播流程单")
 
-    await store.upsert_rundown(rundown)
+    await store.rundowns.upsert_rundown(rundown)
 
     # get 命中
-    fetched = await store.get_rundown("rd_1")
+    fetched = await store.rundowns.get_rundown("rd_1")
     assert fetched is not None
     assert fetched.rundown_id == "rd_1"
     assert fetched.title == "首播流程单"
@@ -110,26 +108,26 @@ async def test_rundown_round_trip(store: SQLiteStore) -> None:
     assert fetched.segments[0].expected_ms == 10_000
 
     # list 含 1 条
-    listed = await store.list_rundowns()
+    listed = await store.rundowns.list_rundowns()
     assert [r.rundown_id for r in listed] == ["rd_1"]
 
     # delete 命中
-    assert await store.delete_rundown("rd_1") is True
+    assert await store.rundowns.delete_rundown("rd_1") is True
     # 再删返回 False
-    assert await store.delete_rundown("rd_1") is False
+    assert await store.rundowns.delete_rundown("rd_1") is False
     # get 未命中
-    assert await store.get_rundown("rd_1") is None
+    assert await store.rundowns.get_rundown("rd_1") is None
     # list 为空
-    assert await store.list_rundowns() == []
+    assert await store.rundowns.list_rundowns() == []
 
 
 @pytest.mark.asyncio
 async def test_rundown_upsert_preserves_created_at_updates_only_updated_at(
-    store: SQLiteStore,
+    store: SQLiteDatabase,
 ) -> None:
     """``upsert_rundown`` 二次写入保留 ``created_at_ms``，刷新 ``updated_at_ms``。"""
     initial = _make_rundown(rundown_id="rd_1")
-    await store.upsert_rundown(initial)
+    await store.rundowns.upsert_rundown(initial)
     rows = await store.execute("SELECT created_at_ms, updated_at_ms FROM rundowns WHERE id=?", ("rd_1",))
     first_row = rows[0]
     first_created = int(first_row["created_at_ms"])
@@ -153,7 +151,7 @@ async def test_rundown_upsert_preserves_created_at_updates_only_updated_at(
             ),
         ],
     )
-    await store.upsert_rundown(updated)
+    await store.rundowns.upsert_rundown(updated)
     rows2 = await store.execute("SELECT created_at_ms, updated_at_ms FROM rundowns WHERE id=?", ("rd_1",))
     second_row = rows2[0]
     second_created = int(second_row["created_at_ms"])
@@ -165,7 +163,7 @@ async def test_rundown_upsert_preserves_created_at_updates_only_updated_at(
     assert second_updated > first_updated
     assert before_ms <= second_updated
     # 业务字段更新
-    fetched = await store.get_rundown("rd_1")
+    fetched = await store.rundowns.get_rundown("rd_1")
     assert fetched is not None
     assert fetched.title == "更新后的标题"
     assert fetched.segments[0].title == "开场（已改）"
@@ -173,27 +171,27 @@ async def test_rundown_upsert_preserves_created_at_updates_only_updated_at(
 
 
 @pytest.mark.asyncio
-async def test_rundown_list_ordered_by_created_at_asc(store: SQLiteStore) -> None:
+async def test_rundown_list_ordered_by_created_at_asc(store: SQLiteDatabase) -> None:
     """``list_rundowns`` 按 ``created_at_ms`` 升序返回。"""
     r1 = _make_rundown(rundown_id="rd_1")
-    await store.upsert_rundown(r1)
+    await store.rundowns.upsert_rundown(r1)
     r2 = _make_rundown(rundown_id="rd_2")
-    await store.upsert_rundown(r2)
+    await store.rundowns.upsert_rundown(r2)
     r3 = _make_rundown(rundown_id="rd_3")
-    await store.upsert_rundown(r3)
+    await store.rundowns.upsert_rundown(r3)
 
-    listed = await store.list_rundowns()
+    listed = await store.rundowns.list_rundowns()
     assert [r.rundown_id for r in listed] == ["rd_1", "rd_2", "rd_3"]
 
 
 @pytest.mark.asyncio
-async def test_rundown_get_unknown_returns_none(store: SQLiteStore) -> None:
+async def test_rundown_get_unknown_returns_none(store: SQLiteDatabase) -> None:
     """``get_rundown`` 未命中返回 ``None``。"""
-    assert await store.get_rundown("ghost") is None
+    assert await store.rundowns.get_rundown("ghost") is None
 
 
 @pytest.mark.asyncio
-async def test_rundown_segments_serialization_round_trip(store: SQLiteStore) -> None:
+async def test_rundown_segments_serialization_round_trip(store: SQLiteDatabase) -> None:
     """复杂 segments（含 ``key_points`` / ``min_duration_ms`` / ``notes``）往返无损。"""
     rundown = Rundown(
         rundown_id="rd_complex",
@@ -216,8 +214,8 @@ async def test_rundown_segments_serialization_round_trip(store: SQLiteStore) -> 
             ),
         ],
     )
-    await store.upsert_rundown(rundown)
-    fetched = await store.get_rundown("rd_complex")
+    await store.rundowns.upsert_rundown(rundown)
+    fetched = await store.rundowns.get_rundown("rd_complex")
     assert fetched is not None
     assert len(fetched.segments) == 2
     s1 = fetched.segments[0]
@@ -229,10 +227,10 @@ async def test_rundown_segments_serialization_round_trip(store: SQLiteStore) -> 
 
 
 @pytest.mark.asyncio
-async def test_rundown_default_rundown_upserts_and_round_trips(store: SQLiteStore) -> None:
+async def test_rundown_default_rundown_upserts_and_round_trips(store: SQLiteDatabase) -> None:
     """``DEFAULT_RUNDOWN`` 落库 / 读回无损。"""
-    await store.upsert_rundown(DEFAULT_RUNDOWN)
-    fetched = await store.get_rundown(DEFAULT_RUNDOWN.rundown_id)
+    await store.rundowns.upsert_rundown(DEFAULT_RUNDOWN)
+    fetched = await store.rundowns.get_rundown(DEFAULT_RUNDOWN.rundown_id)
     assert fetched is not None
     assert fetched.rundown_id == DEFAULT_RUNDOWN.rundown_id
     assert fetched.title == DEFAULT_RUNDOWN.title
@@ -291,7 +289,7 @@ async def test_v5_to_v6_migration_drops_agenda_and_creates_rundowns(temp_db_path
     finally:
         conn.close()
 
-    s = SQLiteStore(temp_db_path)
+    s = SQLiteDatabase(temp_db_path)
     try:
         await s.initialize()
         assert await s.get_schema_version() == SCHEMA_VERSION
@@ -315,8 +313,8 @@ async def test_v5_to_v6_migration_drops_agenda_and_creates_rundowns(temp_db_path
         assert int(col_map["updated_at_ms"]["notnull"]) == 1
 
         # 迁移后 rundowns 表可写可读
-        await s.upsert_rundown(_make_rundown(rundown_id="post_migrate"))
-        listed = await s.list_rundowns()
+        await s.rundowns.upsert_rundown(_make_rundown(rundown_id="post_migrate"))
+        listed = await s.rundowns.list_rundowns()
         assert [r.rundown_id for r in listed] == ["post_migrate"]
     finally:
         await s.close()
@@ -352,22 +350,22 @@ async def test_v6_migration_is_idempotent(temp_db_path: Path) -> None:
         conn.close()
 
     # 首次升级
-    first = SQLiteStore(temp_db_path)
+    first = SQLiteDatabase(temp_db_path)
     await first.initialize()
     try:
-        await first.upsert_rundown(_make_rundown(rundown_id="keep_me"))
+        await first.rundowns.upsert_rundown(_make_rundown(rundown_id="keep_me"))
     finally:
         await first.close()
 
     # 再次打开 —— 不应破坏数据；migration 幂等
-    second = SQLiteStore(temp_db_path)
+    second = SQLiteDatabase(temp_db_path)
     try:
         await second.initialize()
         assert await second.get_schema_version() == SCHEMA_VERSION
         # agenda 表依旧不存在
         assert not await second.table_exists("agenda_plan")
         # rundowns 表依旧可读
-        fetched = await second.get_rundown("keep_me")
+        fetched = await second.rundowns.get_rundown("keep_me")
         assert fetched is not None
         assert fetched.rundown_id == "keep_me"
         # schema_migrations 没有重复记录（INSERT OR IGNORE）
@@ -382,7 +380,7 @@ async def test_v6_migration_is_idempotent(temp_db_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_fresh_db_reaches_current_schema_version(temp_db_path: Path) -> None:
     """全新库首次 ``initialize()`` 直接走到当前 SCHEMA_VERSION；无 agenda 表。"""
-    s = SQLiteStore(temp_db_path)
+    s = SQLiteDatabase(temp_db_path)
     try:
         await s.initialize()
         assert await s.get_schema_version() == SCHEMA_VERSION

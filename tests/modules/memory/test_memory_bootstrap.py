@@ -25,7 +25,7 @@ from src.modules.memory.bootstrap import (
     build_memory_stack,
 )
 from src.modules.memory.simple_memory import SimpleMemory
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 from src.modules.tools import ToolInvocation, ToolRegistry
 
 
@@ -59,7 +59,7 @@ def simple_config(tmp_db_dir: Path) -> dict:
 @pytest.fixture
 async def built_stack(
     simple_config: dict,
-) -> AsyncGenerator[tuple[SQLiteStore, SimpleMemory], None]:
+) -> AsyncGenerator[tuple[SQLiteDatabase, SimpleMemory], None]:
     """构造完成的 (store, memory)；自动清理。"""
     store, mem = await build_memory_stack(simple_config)
     try:
@@ -74,18 +74,18 @@ async def built_stack(
 
 
 async def test_build_memory_stack_returns_store_and_simple_memory(
-    built_stack: tuple[SQLiteStore, SimpleMemory],
+    built_stack: tuple[SQLiteDatabase, SimpleMemory],
 ) -> None:
-    """正常 config → 返回 (SQLiteStore, SimpleMemory) 且都已初始化。"""
+    """正常 config → 返回 (SQLiteDatabase, SimpleMemory) 且都已初始化。"""
     store, mem = built_stack
-    assert isinstance(store, SQLiteStore)
+    assert isinstance(store, SQLiteDatabase)
     assert isinstance(mem, SimpleMemory)
     assert store.initialized is True
     assert mem._store is store  # SimpleMemory 持有同一 store
 
 
 async def test_build_memory_stack_creates_private_tables(
-    built_stack: tuple[SQLiteStore, SimpleMemory],
+    built_stack: tuple[SQLiteDatabase, SimpleMemory],
 ) -> None:
     """装配后 _memory_facts 私有表已存在。"""
     store, _ = built_stack
@@ -224,7 +224,7 @@ async def test_build_memory_stack_resolves_relative_db_path_to_absolute(tmp_path
 
 
 async def test_bind_memory_tools_registers_query_memory(
-    built_stack: tuple[SQLiteStore, SimpleMemory],
+    built_stack: tuple[SQLiteDatabase, SimpleMemory],
 ) -> None:
     """bind_memory_tools 后 registry 多 1 个工具（query_memory），能正常 invoke。"""
     _, mem = built_stack
@@ -238,7 +238,7 @@ async def test_bind_memory_tools_registers_query_memory(
 
 
 async def test_bind_memory_tools_invoke_recalls_ingested_fact(
-    built_stack: tuple[SQLiteStore, SimpleMemory],
+    built_stack: tuple[SQLiteDatabase, SimpleMemory],
 ) -> None:
     """端到端：build → bind → ingest → invoke memory_query_memory 召回中文事实。"""
     _, mem = built_stack
@@ -269,7 +269,7 @@ async def test_bind_memory_tools_rejects_none_memory() -> None:
         bind_memory_tools(registry, memory=None)
 
 
-async def test_bind_memory_tools_duplicate_returns_zero(built_stack: tuple[SQLiteStore, SimpleMemory]) -> None:
+async def test_bind_memory_tools_duplicate_returns_zero(built_stack: tuple[SQLiteDatabase, SimpleMemory]) -> None:
     """重复注册同一 memory（provider 实例不同但 spec.name 冲突）→ 返回 0。"""
     _, mem = built_stack
     registry = ToolRegistry()

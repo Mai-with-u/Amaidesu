@@ -24,7 +24,7 @@
 - ``schema_migrations(version PK, applied_at_ms)``
 - ``SCHEMA_VERSION`` 常量 = 当前权威版本
 - 版本迁移注册表在 ``migrations/`` 包（一版本一文件，严格 +1，每版必有
-  条目）。``SQLiteStore`` 推进版本时从注册表按序执行；回调原地修改、幂等，
+  条目）。``SQLiteDatabase`` 推进版本时从注册表按序执行；回调原地修改、幂等，
   用列存在性检查保证对新建库与已迁移库安全
 - ``build_schema_sql()`` 返回完整建表 DDL（IF NOT EXISTS 幂等，含最新列）
 - ``list_expected_tables()`` 返回启动自检必须存在的业务表名（不含私有表：

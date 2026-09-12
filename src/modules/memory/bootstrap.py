@@ -2,11 +2,11 @@
 记忆层组合根装配入口
 
 装配原则：
-- **显式注入**——``config`` 由调用方传入；``SQLiteStore`` / ``SimpleMemory``
+- **显式注入**——``config`` 由调用方传入；``SQLiteDatabase`` / ``SimpleMemory``
   / ``ToolRegistry`` 全部由本模块在调用方提供的 config 上构造
 - **类型检查 + fail-fast**：registry 必须是 ``ToolRegistry``；backend 必须是
   ``"simple"``；遇到未知值直接 ``raise ValueError``
-- **零全局单例**：本模块**不**接触 ``sqlite_store()`` 默认单例；注册表由
+- **零全局单例**：本模块**不**接触 ``sqlite_database()`` 默认单例；注册表由
   组合根构造并经参数传入（``bind_memory_tools``）
 
 ## 调用示例（main.py 装配阶段）
@@ -30,7 +30,7 @@ bind_memory_tools(registry, memory)  # 注册 query_memory 工具
 fail-fast 由组合根捕获并退出（避免启动后才发现 memory 缺失）。
 
 ## 时间单位约定
-- SQLiteStore.timeout 单位是**秒**（sqlite3.connect timeout）
+- SQLiteDatabase.timeout 单位是**秒**（sqlite3.connect timeout）
 - 本模块将 config ``busy_timeout_ms``（毫秒 int）按 ``/1000`` 转换为秒再传入
 """
 
@@ -44,7 +44,7 @@ from src.modules.memory.provider import MemoryProvider
 from src.modules.memory.query_tool import build_query_memory_tool
 from src.modules.memory.simple_memory import SimpleMemory
 from src.modules.storage._default_path import DEFAULT_DB_PATH
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 from src.modules.tools.registry import ToolRegistry
 
 logger = get_logger("MemoryBootstrap")
@@ -75,7 +75,7 @@ def _resolve_db_path(sqlite_cfg: Dict[str, Any]) -> Path:
 def _resolve_busy_timeout_seconds(sqlite_cfg: Dict[str, Any]) -> float:
     """从 ``sqlite_cfg`` 中读 ``busy_timeout_ms``（毫秒 int）并转换为秒。
 
-    SQLiteStore.timeout 单位是秒。schema 默认 5000ms → 5s。缺省/非 int 时
+    SQLiteDatabase.timeout 单位是秒。schema 默认 5000ms → 5s。缺省/非 int 时
     走 5s 默认（与 schema 与 PRAGMA 对齐——旧注释"30s"是错的）。
     """
     raw = sqlite_cfg.get("busy_timeout_ms") if isinstance(sqlite_cfg, dict) else None
@@ -89,8 +89,8 @@ def _resolve_busy_timeout_seconds(sqlite_cfg: Dict[str, Any]) -> float:
     return float(seconds)
 
 
-async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteStore, SimpleMemory]:
-    """构造 SQLiteStore + SimpleMemory 记忆栈。
+async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteDatabase, SimpleMemory]:
+    """构造 SQLiteDatabase + SimpleMemory 记忆栈。
 
     Args:
         config: 扁平化后的 ConfigService dict；形如
@@ -101,7 +101,7 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteStore, Simpl
 
     Returns:
         ``(store, memory)`` 元组：
-        - ``store``：已 ``initialize()`` 的 SQLiteStore
+        - ``store``：已 ``initialize()`` 的 SQLiteDatabase
         - ``memory``：已 ``initialize()`` 的 SimpleMemory（私有表已就绪）
 
     Raises:
@@ -121,16 +121,16 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteStore, Simpl
             f"当前仅支持 {SUPPORTED_BACKENDS}。"
         )
 
-    # SQLiteStore 配置解析 + 构造
+    # SQLiteDatabase 配置解析 + 构造
     sqlite_cfg_raw = config.get("sqlite")
     sqlite_cfg = sqlite_cfg_raw if isinstance(sqlite_cfg_raw, dict) else {}
 
     db_path = _resolve_db_path(sqlite_cfg)
     busy_timeout_s = _resolve_busy_timeout_seconds(sqlite_cfg)
 
-    store = SQLiteStore(db_path=db_path, timeout=busy_timeout_s)
+    store = SQLiteDatabase(db_path=db_path, timeout=busy_timeout_s)
     await store.initialize()
-    logger.info(f"记忆栈：SQLiteStore 已初始化 path={db_path} timeout={busy_timeout_s}s")
+    logger.info(f"记忆栈：SQLiteDatabase 已初始化 path={db_path} timeout={busy_timeout_s}s")
 
     # SimpleMemory 装配 + 私有表初始化
     memory = SimpleMemory(store)

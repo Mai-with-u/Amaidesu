@@ -2,8 +2,8 @@
 SimpleMemory —— 关键词召回实现
 
 ## 设计
-- 内部使用 SQLiteStore，**复用业务表基座**（模块私有表建在同一库，事务在
-  ``SQLiteStore`` 上走，避免分散存储后端）
+- 内部使用 SQLiteDatabase，**复用业务表基座**（模块私有表建在同一库，事务在
+  ``SQLiteDatabase`` 上走，避免分散存储后端）
 - 召回 = 简单 LIKE 关键词匹配（不使用 embedding）
 
 ## 召回分词策略
@@ -29,9 +29,9 @@ SimpleMemory —— 关键词召回实现
 对外接口 = ``recall``（召回）与 ``ingest``（写入），签名即承诺面。
 
 ## 存储说明
-本模块使用 SQLiteStore 数据库里 1 张**模块私有表**（``_`` 前缀表达"非业务
+本模块使用 SQLiteDatabase 数据库里 1 张**模块私有表**（``_`` 前缀表达"非业务
 数据平面、仅 SimpleMemory 读写"；DDL 权威在 ``storage/schema.py``，随
-``SQLiteStore.initialize()`` 统一建表，并纳入 ``SCHEMA_VERSION`` 版本管理）：
+``SQLiteDatabase.initialize()`` 统一建表，并纳入 ``SCHEMA_VERSION`` 版本管理）：
 - ``_memory_facts``：事实/事件记忆条目
 
 ``SimpleMemory.initialize()`` 只做表自检，不带 DDL——建表职责单一归
@@ -49,7 +49,7 @@ from typing import Any, List
 from src.modules.logging import get_logger
 from src.modules.memory.models import MemoryHit, MemoryWriteResult
 from src.modules.memory.provider import MemoryProvider
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 from src.modules.time_utils import now_ms
 
 logger = get_logger("SimpleMemory")
@@ -139,15 +139,15 @@ def _extract_keywords(query: str, max_keywords: int = 8) -> List[str]:
 class SimpleMemory(MemoryProvider):
     """关键词召回的记忆实现（SQLite 持久化）。"""
 
-    def __init__(self, store: SQLiteStore) -> None:
+    def __init__(self, store: SQLiteDatabase) -> None:
         self._store = store
 
     async def initialize(self) -> None:
-        """自检私有表已就位（DDL 由 SQLiteStore.initialize() 按 schema.py 统一建）。"""
+        """自检私有表已就位（DDL 由 SQLiteDatabase.initialize() 按 schema.py 统一建）。"""
         for table in ("_memory_facts",):
             if not await self._store.table_exists(table):
                 raise RuntimeError(
-                    f"SimpleMemory 私有表 {table} 不存在：请先执行 SQLiteStore.initialize()（建表 DDL 权威在 storage/schema.py）"
+                    f"SimpleMemory 私有表 {table} 不存在：请先执行 SQLiteDatabase.initialize()（建表 DDL 权威在 storage/schema.py）"
                 )
         logger.debug("SimpleMemory 私有表自检通过")
 

@@ -5,7 +5,7 @@
 - _persist_topic_snapshot：timeline_summary 一行一段摘要历史，窗口为 [上次摘要, 本次]
 - topics 快照投影：本场旧行被清除后插入最新关键词行 + 摘要句行
 - 场次主键经 LiveSessionManager 解析（跨表可 JOIN）
-- 未注入 sqlite_store 时整体跳过，不报错
+- 未注入 topic_repo 时整体跳过，不报错
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import pytest
 
 from src.agents.streamer.background import BackgroundMaintainer
 from src.agents.streamer.room_state import RoomState
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -30,11 +30,11 @@ def temp_db_path() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_db_path)
-    await s.initialize()
-    yield s
-    await s.close()
+async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
+    db = SQLiteDatabase(temp_db_path)
+    await db.initialize()
+    yield db
+    await db.close()
 
 
 class _FakeSessionManager:
@@ -45,20 +45,21 @@ class _FakeSessionManager:
         return self._pk
 
 
-def _make_maintainer(store: SQLiteStore, pk: int = 777) -> BackgroundMaintainer:
+def _make_maintainer(store: SQLiteDatabase, pk: int = 777) -> BackgroundMaintainer:
     room_state = RoomState()
     room_state.set_topic_summary("占位", now_ms=1)
     return BackgroundMaintainer(
         {"summary_interval_ms": 60_000},
         room_state=room_state,
-        live_session_store=store,
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        topic_repo=store.topics,
         session_manager=_FakeSessionManager(pk),
-        sqlite_store=store,
     )
 
 
 @pytest.mark.asyncio
-async def test_persist_writes_timeline_and_topics(store: SQLiteStore) -> None:
+async def test_persist_writes_timeline_and_topics(store: SQLiteDatabase) -> None:
     maintainer = _make_maintainer(store, pk=777)
     await maintainer._persist_topic_snapshot(
         "观众在讨论新版本更新", now_ms=120_000, previous_summary_ms=60_000
@@ -79,7 +80,7 @@ async def test_persist_writes_timeline_and_topics(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_persist_refreshes_topics_snapshot(store: SQLiteStore) -> None:
+async def test_persist_refreshes_topics_snapshot(store: SQLiteDatabase) -> None:
     maintainer = _make_maintainer(store)
     await maintainer._persist_topic_snapshot("第一轮摘要", now_ms=60_000, previous_summary_ms=0)
     await maintainer._persist_topic_snapshot("第二轮摘要", now_ms=120_000, previous_summary_ms=60_000)
@@ -104,7 +105,7 @@ async def test_persist_skipped_without_store() -> None:
     maintainer = BackgroundMaintainer(
         {},
         room_state=RoomState(),
-        sqlite_store=None,
+        topic_repo=None,
     )
-    # 不注入 sqlite_store：整体跳过，不抛异常
+    # 不注入 topic_repo：整体跳过，不抛异常
     await maintainer._persist_topic_snapshot("摘要", now_ms=1_000, previous_summary_ms=0)

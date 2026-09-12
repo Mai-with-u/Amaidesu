@@ -71,7 +71,7 @@ class SQLiteConnectionManager:
         manager = SQLiteConnectionManager(Path("data/amaidesu.db"))
         with manager.transaction() as conn:
             conn.execute("INSERT INTO ...", (...))
-        # 通过异步层 SQLiteStore 封装后，调用方无需手动 to_thread
+        # 通过异步层 SQLiteDatabase/仓储封装后，调用方无需手动 to_thread
     """
 
     def __init__(self, db_path: Path, *, timeout: float = 30.0) -> None:

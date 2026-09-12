@@ -17,7 +17,7 @@ from typing import AsyncGenerator, Generator
 import pytest
 
 from src.modules.llm.manager import LLMManager, LLMResponse
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -28,19 +28,20 @@ def temp_db_path() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_db_path)
-    await s.initialize()
-    yield s
-    await s.close()
+async def store(temp_db_path: Path):
+    """直接使用 SQLiteDatabase：断言用裸 SQL，写入用 db.llm 仓储。"""
+    db = SQLiteDatabase(temp_db_path)
+    await db.initialize()
+    yield db
+    await db.close()
 
 
 # ===== insert_llm_usage =====
 
 
 @pytest.mark.asyncio
-async def test_insert_llm_usage_roundtrip(store: SQLiteStore) -> None:
-    rowid = await store.insert_llm_usage(
+async def test_insert_llm_usage_roundtrip(store: SQLiteDatabase) -> None:
+    rowid = await store.llm.insert_llm_usage(
         model_name="glm-4.7",
         provider_name="zhipu",
         request_type="chat",
@@ -89,8 +90,8 @@ class _FakeUsageClient:
         )
 
 
-def _make_manager_with_fake_client(store: SQLiteStore, monkeypatch) -> LLMManager:
-    manager = LLMManager(sqlite_store=store)
+def _make_manager_with_fake_client(store: SQLiteDatabase, monkeypatch) -> LLMManager:
+    manager = LLMManager(llm_repo=store.llm)
     # 直接注入客户端与配置，绕过 setup() 的真实 provider 装配
     fake_client = _FakeUsageClient()
     manager._provider_clients["zhipu"] = fake_client
@@ -120,7 +121,7 @@ def _make_manager_with_fake_client(store: SQLiteStore, monkeypatch) -> LLMManage
 
 
 @pytest.mark.asyncio
-async def test_successful_call_persists_llm_usage(store: SQLiteStore, monkeypatch) -> None:
+async def test_successful_call_persists_llm_usage(store: SQLiteDatabase, monkeypatch) -> None:
     manager = _make_manager_with_fake_client(store, monkeypatch)
     result = await manager.chat("你好", client_type="llm")
     assert result.success
@@ -168,13 +169,13 @@ async def test_call_without_store_does_not_persist(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_persist_failure_degrades_without_breaking_call(store: SQLiteStore, monkeypatch) -> None:
+async def test_persist_failure_degrades_without_breaking_call(store: SQLiteDatabase, monkeypatch) -> None:
     manager = _make_manager_with_fake_client(store, monkeypatch)
 
     async def _boom(**kwargs):
         raise RuntimeError("db locked")
 
-    monkeypatch.setattr(store, "insert_llm_usage", _boom)
+    monkeypatch.setattr(manager._llm_repo, "insert_llm_usage", _boom)
     result = await manager.chat("你好", client_type="llm")
     # 落库失败不阻断调用链，调用仍成功返回
     assert result.success

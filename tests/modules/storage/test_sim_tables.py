@@ -14,7 +14,7 @@ from src.modules.simulator.seed_data import (
     DEFAULT_PERSONAS,
     seed_simulator_data,
 )
-from src.modules.storage import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -25,11 +25,11 @@ def temp_db_path() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
-    s = SQLiteStore(temp_db_path)
-    await s.initialize()
-    yield s
-    await s.close()
+async def store(temp_db_path: Path):  # noqa: ANN201 仓储实例
+    db = SQLiteDatabase(temp_db_path)
+    await db.initialize()
+    yield db.sim
+    await db.close()
 
 
 # =============================================================================
@@ -38,7 +38,7 @@ async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteStore, None]:
 
 
 @pytest.mark.asyncio
-async def test_persona_insert_and_list(store: SQLiteStore) -> None:
+async def test_persona_insert_and_list(store: SQLiteDatabase) -> None:
     """插入后人设可列出；停用行默认不可见。"""
     await store.insert_sim_persona(
         user_id="sim_a",
@@ -64,7 +64,7 @@ async def test_persona_insert_and_list(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_persona_duplicate_user_id_rejected(store: SQLiteStore) -> None:
+async def test_persona_duplicate_user_id_rejected(store: SQLiteDatabase) -> None:
     """user_id 唯一约束生效。"""
     await store.insert_sim_persona(
         user_id="sim_dup",
@@ -86,7 +86,7 @@ async def test_persona_duplicate_user_id_rejected(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_persona_update_whitelist_and_timestamp(store: SQLiteStore) -> None:
+async def test_persona_update_whitelist_and_timestamp(store: SQLiteDatabase) -> None:
     """白名单外字段拒绝；合法更新维护 updated_at_ms。"""
     await store.insert_sim_persona(
         user_id="sim_u",
@@ -108,14 +108,14 @@ async def test_persona_update_whitelist_and_timestamp(store: SQLiteStore) -> Non
 
 
 @pytest.mark.asyncio
-async def test_persona_update_nonexistent_returns_false(store: SQLiteStore) -> None:
+async def test_persona_update_nonexistent_returns_false(store: SQLiteDatabase) -> None:
     """更新不存在的 user_id 返回 False。"""
     updated = await store.update_sim_persona(user_id="ghost", fields={"personality": "x"})
     assert updated is False
 
 
 @pytest.mark.asyncio
-async def test_persona_delete(store: SQLiteStore) -> None:
+async def test_persona_delete(store: SQLiteDatabase) -> None:
     """删除存在的人设返回 True，再删返回 False。"""
     await store.insert_sim_persona(
         user_id="sim_d",
@@ -135,7 +135,7 @@ async def test_persona_delete(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_gift_insert_list_update_delete(store: SQLiteStore) -> None:
+async def test_gift_insert_list_update_delete(store: SQLiteDatabase) -> None:
     """礼物目录增查改删全链。"""
     await store.insert_sim_gift(
         gift_id="g1",
@@ -175,7 +175,7 @@ async def test_gift_insert_list_update_delete(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_seed_imports_into_empty_tables(store: SQLiteStore) -> None:
+async def test_seed_imports_into_empty_tables(store: SQLiteDatabase) -> None:
     """空表导入内置默认值，数量与常量一致。"""
     await seed_simulator_data(store)
     assert await store.count_sim_personas() == len(DEFAULT_PERSONAS)
@@ -186,7 +186,7 @@ async def test_seed_imports_into_empty_tables(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_seed_is_idempotent(store: SQLiteStore) -> None:
+async def test_seed_is_idempotent(store: SQLiteDatabase) -> None:
     """非空表重复 seed 不追加（幂等）。"""
     await seed_simulator_data(store)
     await seed_simulator_data(store)
@@ -195,7 +195,7 @@ async def test_seed_is_idempotent(store: SQLiteStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_seed_skips_existing_user_data(store: SQLiteStore) -> None:
+async def test_seed_skips_existing_user_data(store: SQLiteDatabase) -> None:
     """用户已有数据（哪怕只剩一行）不被种子覆盖。"""
     await store.insert_sim_persona(
         user_id="my_own",

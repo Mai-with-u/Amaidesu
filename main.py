@@ -58,7 +58,8 @@ from src.modules.memory.bootstrap import bind_memory_tools, build_memory_stack
 from src.modules.prompts import get_prompt_manager
 from src.modules.session import LiveSessionManager
 from src.modules.simulator import SimulatorService
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.repos import EventRepo
 from src.modules.subtitle import build_subtitle_infrastructure
 from src.modules.subtitle.backends import DashboardBackend
 from src.modules.tts import build_tts_infrastructure
@@ -311,7 +312,7 @@ async def create_app_components(
     Optional["CollectorManager"],
     Optional["AgentManager"],
     Optional["SimulatorService"],
-    "SQLiteStore",
+    "SQLiteDatabase",
     Optional["StorageLedger"],
     "LiveSessionManager",
     Optional[ToolRegistry],
@@ -339,21 +340,21 @@ async def create_app_components(
     Returns:
         (event_bus, llm_service, dashboard_server,
          event_recorder, collector_manager, agent_manager,
-         simulator_service, sqlite_store, storage_ledger, session_manager,
+         simulator_service, database, storage_ledger, session_manager,
          tool_registry, health_monitor)
     """
-    # --- 存储与记忆（SQLiteStore + SimpleMemory）---
+    # --- 存储与记忆（SQLiteDatabase + SimpleMemory）---
     # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
-    logger.info("初始化存储与记忆（SQLiteStore + SimpleMemory）...")
-    sqlite_store, memory = await build_memory_stack(config)
-    logger.info(f"存储与记忆已就绪（db={sqlite_store.db_path}）")
+    logger.info("初始化存储与记忆（SQLiteDatabase + SimpleMemory）...")
+    database, memory = await build_memory_stack(config)
+    logger.info(f"存储与记忆已就绪（db={database.db_path}）")
 
     # --- LLM 服务 ---
     logger.info("初始化 LLM 服务...")
-    llm_service = LLMManager(sqlite_store=sqlite_store)
+    llm_service = LLMManager(llm_repo=database.llm)
     await llm_service.setup(config)
     # 请求历史落库目标注入（全局单例可能已被惰性创建，须显式 attach）
-    get_global_request_history_manager().attach_store(sqlite_store)
+    get_global_request_history_manager().attach_repo(database.llm)
     logger.info("已创建 LLM 服务实例")
 
     # --- 上下文组装器配置归位至 [agents.streamer.context]；下游组装路径直接读 cfg.context ---
@@ -370,7 +371,7 @@ async def create_app_components(
     # LiveSessionManager：场次唯一事实源（开启/结束/删除/归属解析）。
     # 启动不自动开新场次；无显式场次期间 ``resolve_pk()`` 返回 None，
     # 下游 StorageLedger 据此跳过落库。
-    session_manager = LiveSessionManager(sqlite_store, event_bus)
+    session_manager = LiveSessionManager(database.sessions, database.chat, event_bus)
     if session_manager_auto_start:
         await session_manager.start()
 
@@ -378,13 +379,13 @@ async def create_app_components(
     logger.info("事件总线已初始化，事件拦截器已挂载")
 
     # --- 事件历史（系统级）---
-    event_recorder = await _start_event_recorder(event_bus, config, sqlite_store)
+    event_recorder = await _start_event_recorder(event_bus, config, database.events)
     logger.info("事件历史记录器已启动")
 
     # --- StorageLedger（订阅 room.message.# 落业务表）---
     storage_ledger: Optional[StorageLedger] = await _start_storage_ledger(
         event_bus,
-        sqlite_store,
+        database,
         auto_start=storage_ledger_auto_start,
         session_manager=session_manager,
     )
@@ -409,14 +410,16 @@ async def create_app_components(
 
     # --- SimulatorService（开发基础设施）---
     # 默认 enabled=false 生产零装配；enabled=true 时装配并自动启动（除非 --dry）。
-    # 装配需 SQLiteStore（人设/礼物/世界窗口）+ LLMManager（generate 模式）+ EventBus + ConfigService。
+    # 装配需存储仓储（人设/礼物/世界窗口）+ LLMManager（generate 模式）+ EventBus + ConfigService。
     simulator_service: Optional["SimulatorService"] = None
     simulator_cfg = config.get("simulator", {}) if isinstance(config, dict) else {}
     if isinstance(simulator_cfg, dict) and simulator_cfg.get("enabled", False):
         logger.info("初始化 SimulatorService（src/modules/simulator/）...")
         simulator_service = SimulatorService(
             event_bus=event_bus,
-            sqlite_store=sqlite_store,
+            sim_repo=database.sim,
+            chat_repo=database.chat,
+            event_repo=database.events,
             services_by_type={type(llm_service): llm_service},
             session_manager=session_manager,
         )
@@ -693,7 +696,7 @@ async def create_app_components(
         collector_manager,
         agent_manager,
         simulator_service,
-        sqlite_store,
+        database,
         storage_ledger,
         session_manager,
         tool_registry if agents_config else None,
@@ -707,7 +710,7 @@ async def create_app_components(
 # ---------------------------------------------------------------------------
 
 
-async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any], sqlite_store: "SQLiteStore"):
+async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any], event_repo: "EventRepo"):
     """启动事件历史记录器（系统级，与 Dashboard 解耦）。"""
     events_config = config.get("events", {}) if isinstance(config, dict) else {}
     typed_events_config = EventHistoryConfig(**events_config)
@@ -715,7 +718,7 @@ async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any], sql
         service = EventHistoryService(
             max_events=typed_events_config.history_size,
             persist=typed_events_config.persist,
-            sqlite_store=sqlite_store,
+            event_repo=event_repo,
         )
         recorder = EventHistoryRecorder(event_bus=event_bus, event_history=service)
         await recorder.start()
@@ -733,7 +736,7 @@ async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any], sql
 
 async def _start_storage_ledger(
     event_bus: EventBus,
-    sqlite_store: SQLiteStore,
+    database: SQLiteDatabase,
     *,
     auto_start: bool = True,
     session_manager: Optional["LiveSessionManager"] = None,
@@ -750,7 +753,9 @@ async def _start_storage_ledger(
     try:
         ledger = StorageLedger(
             event_bus=event_bus,
-            sqlite_store=sqlite_store,
+            chat_repo=database.chat,
+            viewer_repo=database.viewers,
+            event_repo=database.events,
             session_manager=session_manager,
         )
         if auto_start:
@@ -1054,14 +1059,14 @@ async def run_shutdown(
     agent_manager: Optional["AgentManager"],
     simulator_service: Optional["SimulatorService"],
     *,
-    sqlite_store: Optional["SQLiteStore"] = None,
+    database: Optional["SQLiteDatabase"] = None,
     storage_ledger: Optional["StorageLedger"] = None,
     session_manager: Optional["LiveSessionManager"] = None,
     tool_registry: Optional[ToolRegistry] = None,
     health_monitor: Optional[ToolHealthMonitor] = None,
     task_tracker: Optional[TaskTracker] = None,
 ) -> None:
-    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），最后 EventBus/LLMManager 清理，SQLiteStore.close 收尾落盘。"""
+    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），最后 EventBus/LLMManager 清理，SQLiteDatabase.close 收尾落盘。"""
     _saw_cancelled = False
 
     async def safe_log(coro, name: str):
@@ -1161,9 +1166,9 @@ async def run_shutdown(
         await safe_log(llm_service.cleanup(), "LLMManager.cleanup")
     logger.info("核心服务已关闭")
 
-    if sqlite_store is not None:
-        logger.info("正在关闭 SQLiteStore...")
-        await safe_log(sqlite_store.close(), "SQLiteStore.close")
+    if database is not None:
+        logger.info("正在关闭 SQLiteDatabase...")
+        await safe_log(database.close(), "SQLiteDatabase.close")
 
     logger.info("Amaidesu 应用程序已关闭。")
 
@@ -1199,7 +1204,7 @@ async def main() -> None:
         collector_manager,
         agent_manager,
         simulator_service,
-        sqlite_store,
+        database,
         storage_ledger,
         session_manager,
         tool_registry,
@@ -1232,7 +1237,7 @@ async def main() -> None:
             collector_manager,
             agent_manager,
             simulator_service,
-            sqlite_store=sqlite_store,
+            database=database,
             storage_ledger=storage_ledger,
             session_manager=session_manager,
             tool_registry=tool_registry,
@@ -1279,7 +1284,7 @@ async def main() -> None:
         collector_manager,
         agent_manager,
         simulator_service,
-        sqlite_store=sqlite_store,
+        database=database,
         storage_ledger=storage_ledger,
         session_manager=session_manager,
         tool_registry=tool_registry,

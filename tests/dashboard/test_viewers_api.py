@@ -1,7 +1,7 @@
 """Viewers API 测试：观众统计只读端点。
 
-使用真实 SQLiteStore（临时库）经 DashboardServer 挂载，走完整 HTTP 层；
-造数直连 ``store.upsert_viewer_*``，不经过业务写链。
+使用真实 SQLiteDatabase（临时库）经 DashboardServer 挂载，走完整 HTTP 层；
+造数直连 ``store.viewers.upsert_viewer_*``，不经过业务写链。
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from src.modules.events.event_bus import EventBus
 from src.modules.session import LiveSessionManager
-from src.modules.storage import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -45,10 +45,10 @@ def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
     async def _build():
         from src.modules.events.event_history import EventHistoryService
 
-        store = SQLiteStore(temp_db_path)
+        store = SQLiteDatabase(temp_db_path)
         await store.initialize()
         bus = EventBus()
-        manager = LiveSessionManager(store, bus)
+        manager = LiveSessionManager(store.sessions, store.chat, bus)
         await manager.start()
         event_history = EventHistoryService(max_events=100, persist=False)
 
@@ -57,6 +57,7 @@ def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
             config_service=None,  # type: ignore[arg-type]
             dashboard_config=DashboardConfig(host="127.0.0.1", port=60215),
             session_manager=manager,
+            viewer_repo=store.viewers,
             event_history=event_history,
         )
         return store, bus, manager, server
@@ -66,6 +67,7 @@ def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
     loop.close()
 
     _server_ref_cache["server"] = server
+    _server_ref_cache["store"] = store
     set_dashboard_server(server)
     app = create_app()
     with TestClient(app) as c:
@@ -86,12 +88,11 @@ def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
 
 def _seed_viewers(count: int) -> None:
     """直连底层 store 造 viewer 行（发言计数区分排名）。"""
-    server = _server_ref()
-    store = server.session_manager.store
+    store = _server_ref_cache["store"]
 
     async def _seed():
         for i in range(count):
-            await store.upsert_viewer_message(
+            await store.viewers.upsert_viewer_message(
                 user_id=f"u{i}",
                 user_name=f"观众{i}",
                 timestamp_ms=1_700_000_000_000 + i,
@@ -130,11 +131,10 @@ def test_viewers_seeded_count_and_fields(client: TestClient) -> None:
 
 def test_viewers_order_by_gift_and_limit(client: TestClient) -> None:
     _seed_viewers(3)
-    server = _server_ref()
-    store = server.session_manager.store
+    store = _server_ref_cache["store"]
 
     async def _seed_gift():
-        await store.upsert_viewer_gift(
+        await store.viewers.upsert_viewer_gift(
             user_id="u0",
             user_name="观众0",
             timestamp_ms=1_700_000_001_000,

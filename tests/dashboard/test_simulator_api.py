@@ -1,6 +1,6 @@
 """Simulator API 测试：状态 / 回放日期 / 人设与礼物 CRUD。
 
-注：使用真实 SimulatorService（tmp SQLiteStore + setup），不触发真实 LLM
+注：使用真实 SimulatorService（tmp SQLiteDatabase + setup），不触发真实 LLM
 （mode=generate 且无 LLMManager 注入时 setup 只落数据平面，CRUD 均可用）。
 """
 
@@ -18,7 +18,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.simulator import SimulatorService
 from src.modules.simulator.config_schema import SimulatorConfigSchema
 from src.modules.simulator.seed_data import seed_simulator_data
-from src.modules.storage import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 class _FakeConfigService:
@@ -28,8 +28,8 @@ class _FakeConfigService:
         self.main_config = {"simulator": {"enabled": False}}
 
 
-def _make_service(store: SQLiteStore) -> SimulatorService:
-    return SimulatorService(event_bus=EventBus(), sqlite_store=store)
+def _make_service(store: SQLiteDatabase) -> SimulatorService:
+    return SimulatorService(event_bus=EventBus(), sim_repo=store.sim, chat_repo=store.chat, event_repo=store.events)
 
 
 @pytest.fixture
@@ -46,9 +46,9 @@ async def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
     from src.modules.dashboard.dependencies import set_dashboard_server
     from src.modules.dashboard.server import DashboardServer
 
-    store = SQLiteStore(temp_db_path)
+    store = SQLiteDatabase(temp_db_path)
     await store.initialize()
-    await seed_simulator_data(store)
+    await seed_simulator_data(store.sim)
     service = _make_service(store)
     await service.setup(_FakeConfigService(), auto_start=False)  # type: ignore[arg-type]
 
@@ -90,15 +90,15 @@ def test_replay_dates_empty(client: TestClient, monkeypatch: pytest.MonkeyPatch,
     """
     import asyncio
 
-    from src.modules.storage.sqlite_store import SQLiteStore
+    from src.modules.storage.database import SQLiteDatabase
 
-    async def _make() -> SQLiteStore:
-        store = SQLiteStore(tmp_path / "replay-dates.db")
+    async def _make() -> SQLiteDatabase:
+        store = SQLiteDatabase(tmp_path / "replay-dates.db")
         await store.initialize()
         return store
 
     store = asyncio.run(_make())
-    monkeypatch.setattr("src.modules.dashboard.api.simulator.get_default_store", lambda: store)
+    monkeypatch.setattr("src.modules.dashboard.api.simulator.get_default_db", lambda: store)
     try:
         body = client.get("/api/v1/simulator/replay/dates").json()
         assert body == {"dates": []}
@@ -111,24 +111,24 @@ def test_replay_dates_from_event_history(client: TestClient, monkeypatch: pytest
     import asyncio
 
     from src.modules.events.names import CoreEvents
-    from src.modules.storage.sqlite_store import SQLiteStore
+    from src.modules.storage.database import SQLiteDatabase
 
-    async def _make() -> SQLiteStore:
-        store = SQLiteStore(tmp_path / "replay-dates-populated.db")
+    async def _make() -> SQLiteDatabase:
+        store = SQLiteDatabase(tmp_path / "replay-dates-populated.db")
         await store.initialize()
-        await store.insert_event(
+        await store.events.insert_event(
             record_id="rec-2",
             event_name=CoreEvents.ROOM_MESSAGE_DANMAKU,
             timestamp_ms=1_790_000_000_000,  # 晚日期
             payload_json="{}",
         )
-        await store.insert_event(
+        await store.events.insert_event(
             record_id="rec-1",
             event_name=CoreEvents.ROOM_MESSAGE_DANMAKU,
             timestamp_ms=1_750_000_000_000,  # 早日期
             payload_json="{}",
         )
-        await store.insert_event(
+        await store.events.insert_event(
             record_id="rec-noise",
             event_name="core.startup",
             timestamp_ms=1_760_000_000_000,
@@ -137,7 +137,7 @@ def test_replay_dates_from_event_history(client: TestClient, monkeypatch: pytest
         return store
 
     store = asyncio.run(_make())
-    monkeypatch.setattr("src.modules.dashboard.api.simulator.get_default_store", lambda: store)
+    monkeypatch.setattr("src.modules.dashboard.api.simulator.get_default_db", lambda: store)
     try:
         body = client.get("/api/v1/simulator/replay/dates").json()
         assert body["dates"] == sorted(body["dates"])

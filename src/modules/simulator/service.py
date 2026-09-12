@@ -43,7 +43,7 @@ from src.modules.simulator.replay_engine import ReplayEngine
 from src.modules.simulator.seed_data import seed_simulator_data
 from src.modules.simulator.token_budget import TokenBudgetController
 from src.modules.simulator.types import PersonaRole, StreamerContextSnapshot
-from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.repos import ChatRepo, EventRepo, SimRepo
 from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -74,12 +74,16 @@ class SimulatorService:
     def __init__(
         self,
         event_bus: EventBus,
-        sqlite_store: Optional[SQLiteStore] = None,
+        sim_repo: Optional[SimRepo] = None,
+        chat_repo: Optional[ChatRepo] = None,
+        event_repo: Optional[EventRepo] = None,
         services_by_type: Optional[Dict[type, Any]] = None,
         session_manager: Optional[Any] = None,
     ) -> None:
         self.event_bus = event_bus
-        self._store = sqlite_store
+        self._sim = sim_repo
+        self._chat = chat_repo
+        self._events = event_repo
         # 场次管理器：世界窗口读取按其解析当前场次；回放启停自动开/关场次
         self._session_manager = session_manager
         self._opened_session_pk: Optional[int] = None
@@ -132,28 +136,28 @@ class SimulatorService:
             self.logger.warning(f"simulator 配置解析失败，跳过创建: {exc}")
             return
 
-        if self._store is None:
-            self.logger.warning("simulator: SQLiteStore 未注入，人设/礼物/上下文功能不可用，跳过创建")
+        if self._sim is None:
+            self.logger.warning("simulator: SimRepo 未注入，人设/礼物功能不可用，跳过创建")
             return
 
         # 启动期一次性种子导入（空表才插内置默认值；幂等）
-        await seed_simulator_data(self._store)
+        await seed_simulator_data(self._sim)
 
         # 实例化数据平面（人设池 / 节奏 / 礼物 / 预算 / 会话 / 回放）
-        self._persona_pool = PersonaPool(sqlite_store=self._store, rng=random.Random())
+        self._persona_pool = PersonaPool(sim_repo=self._sim, rng=random.Random())
         await self._persona_pool.load(self._config_obj)
 
         self._cadence = CadenceGenerator(config=self._config_obj)
 
         self._gift_generator = GiftGenerator(
             config=self._config_obj,
-            sqlite_store=self._store,
+            sim_repo=self._sim,
             rng=random.Random(),
         )
         await self._gift_generator.load()
 
         self._token_budget = TokenBudgetController(budget_per_hour=self._config_obj.token_budget_per_hour)
-        self._replay_engine = ReplayEngine(config=self._config_obj, sqlite_store=self._store)
+        self._replay_engine = ReplayEngine(config=self._config_obj, event_repo=self._events)
 
         # 实例化 LLM 包装器（需 LLMManager，DI 注入或 warning；replay 模式不需要）
         llm_service = self._find_llm_service()
@@ -385,7 +389,7 @@ class SimulatorService:
         场次归属经 LiveSessionManager 解析当前场次（未显式开场次时为临时
         兜底场次）；管理器缺失或读取失败时返回空窗口（本轮无上下文）。
         """
-        if self._store is None or self._config_obj is None or self._session_manager is None:
+        if self._chat is None or self._config_obj is None or self._session_manager is None:
             return []
         role = getattr(persona, "role", None)
         limit = (
@@ -395,7 +399,7 @@ class SimulatorService:
         )
         try:
             live_pk = await self._session_manager.resolve_pk()
-            rows = await self._store.list_recent_live_chat(
+            rows = await self._chat.list_recent_live_chat(
                 live_session_id=live_pk,
                 limit=limit,
             )

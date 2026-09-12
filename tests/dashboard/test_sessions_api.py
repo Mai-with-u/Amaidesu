@@ -1,6 +1,6 @@
 """Sessions API 测试：场次列表 / 开启 / 结束 / 删除。
 
-使用真实 LiveSessionManager（tmp SQLiteStore + EventBus），走完整 HTTP 层。
+使用真实 LiveSessionManager（tmp SQLiteDatabase + EventBus），走完整 HTTP 层。
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from src.modules.events.event_bus import EventBus
 from src.modules.session import LiveSessionManager
-from src.modules.storage import SQLiteStore
+from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
@@ -43,10 +43,10 @@ def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
     async def _build():
         from src.modules.events.event_history import EventHistoryService
 
-        store = SQLiteStore(temp_db_path)
+        store = SQLiteDatabase(temp_db_path)
         await store.initialize()
         bus = EventBus()
-        manager = LiveSessionManager(store, bus)
+        manager = LiveSessionManager(store.sessions, store.chat, bus)
         await manager.start()
         event_history = EventHistoryService(max_events=100, persist=False)
 
@@ -147,7 +147,7 @@ def test_session_timeline_merges_details_and_events(client: TestClient) -> None:
     loop = asyncio.new_event_loop()
 
     async def _seed():
-        await manager.store.insert_live_chat(
+        await manager.chat.insert_live_chat(
             live_session_id=pk,
             timestamp_ms=1_700_000_000_000,
             sender_role="viewer",
@@ -157,7 +157,7 @@ def test_session_timeline_merges_details_and_events(client: TestClient) -> None:
             message_type="danmaku",
             message_id="msg_seed_1",
         )
-        await manager.store.insert_live_chat(
+        await manager.chat.insert_live_chat(
             live_session_id=pk,
             timestamp_ms=1_700_000_005_000,
             sender_role="assistant",
@@ -213,7 +213,7 @@ def test_list_sessions_with_filters(client: TestClient) -> None:
     loop = asyncio.new_event_loop()
 
     async def _seed():
-        await manager.store.insert_live_chat(
+        await manager.chat.insert_live_chat(
             live_session_id=first,
             timestamp_ms=1_700_000_000_000,
             sender_role="viewer",

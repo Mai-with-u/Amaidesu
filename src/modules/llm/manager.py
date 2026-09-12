@@ -25,15 +25,14 @@ import json
 import random
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
 from src.modules.llm.clients.base import get_client_impl
 from src.modules.logging import get_logger
 
-if TYPE_CHECKING:
-    from src.modules.storage.sqlite_store import SQLiteStore
+from src.modules.storage.repos import LLMRepo
 
 # === 数据类定义 ===
 
@@ -176,7 +175,7 @@ class LLMManager:
         ```
     """
 
-    def __init__(self, sqlite_store: Optional["SQLiteStore"] = None):
+    def __init__(self, llm_repo: Optional[LLMRepo] = None):
         self.logger = get_logger("LLMManager")
         # provider_name -> provider 配置 + 客户端实例（共享连接）
         self._providers: Dict[str, Tuple[Dict[str, Any], Any]] = {}
@@ -194,7 +193,7 @@ class LLMManager:
         self._token_manager = None
         self._retry_config = RetryConfig()
         # 注入后每次成功调用旁路写一条 llm_usage（失败降级不阻断调用）；None 时不落库
-        self._sqlite_store = sqlite_store
+        self._llm_repo = llm_repo
         # 随机策略 RNG（lazy 创建，按 seed 决定是否固定）
         self._rng: Optional[random.Random] = None
 
@@ -822,7 +821,7 @@ class LLMManager:
                 completion_tokens=result.usage.get("completion_tokens", 0),
                 total_tokens=result.usage.get("total_tokens", 0),
             )
-        if result.usage and self._sqlite_store:
+        if result.usage and self._llm_repo:
             duration_ms = int((time.time() - start_time) * 1000)
             try:
                 await self._persist_llm_usage(
@@ -852,7 +851,7 @@ class LLMManager:
         result: LLMResponse,
         duration_ms: int,
     ) -> None:
-        """把一次成功调用的 token 消耗写入 ``llm_usage`` 表（``SQLiteStore`` 注入时生效）。
+        """把一次成功调用的 token 消耗写入 ``llm_usage`` 表（``LLMRepo`` 注入时生效）。
 
         费用口径与请求历史一致（同走 ``TokenUsageManager._calculate_cost``）；
         任何写入失败只记 warning，绝不阻断 LLM 调用链。
@@ -870,7 +869,7 @@ class LLMManager:
             provider_name = "unknown"
             if model_name in self._models:
                 _, provider_name = self._models[model_name]
-            await self._sqlite_store.insert_llm_usage(
+            await self._llm_repo.insert_llm_usage(
                 model_name=result.model or model_name,
                 provider_name=str(provider_name),
                 request_type=method,

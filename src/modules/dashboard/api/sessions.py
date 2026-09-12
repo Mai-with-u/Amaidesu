@@ -183,7 +183,7 @@ async def session_timeline(
     manager = _require_session_manager(server)
     if manager is None:
         raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
-    row = await manager.store.get_live_session(live_session_id=session_id)
+    row = await manager.sessions.get_live_session(live_session_id=session_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
 
