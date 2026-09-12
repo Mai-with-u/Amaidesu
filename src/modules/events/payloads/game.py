@@ -38,7 +38,8 @@ class GamePayload(BasePayload):
     订阅者：主播 Planner（监听重大变化做决策）
 
     Attributes:
-        live_session_id: 场次 ID（与存储 game_events FK 一致）
+        live_session_id: 场次主键（int）。发布方不填（保持默认 0），
+          由场次盖章拦截器注入当前场次的存储主键；0 表示未归属
         game: 游戏标识（如 "minecraft"/"stardew_valley"）
         event_type: 事件类型 Literal（与 4 个事件名一一对应）
         message: 人类可读的描述（"挖到钻石了！" / "生命值低于 30%"）
@@ -47,7 +48,10 @@ class GamePayload(BasePayload):
         timestamp_ms: 事件时间戳（Unix 毫秒）
     """
 
-    live_session_id: str = Field(..., description="场次唯一 ID")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入",
+    )
     game: str = Field(..., description="游戏标识（如 'minecraft'/'stardew_valley'）")
     event_type: Literal["milestone", "attention_required", "error", "report"] = Field(
         ...,
@@ -67,7 +71,7 @@ class GamePayload(BasePayload):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "live_session_id": "ls_20260822_001",
+                "live_session_id": 0,
                 "game": "minecraft",
                 "event_type": "milestone",
                 "message": "挖到钻石了！",

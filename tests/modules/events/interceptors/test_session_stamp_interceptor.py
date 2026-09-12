@@ -38,6 +38,16 @@ async def test_stamps_unstamped_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stamps_game_events() -> None:
+    """game.* 域事件同样盖章：发布方不填的场次主键由拦截器注入 int 值。"""
+    ic = SessionStampInterceptor(_FakeSessionManager(42))
+    payload: Dict[str, Any] = {"live_session_id": 0, "message": "挖到钻石了！"}
+    out = await ic.intercept("game.milestone", payload, "test")
+    assert out is not None
+    assert out["live_session_id"] == 42
+
+
+@pytest.mark.asyncio
 async def test_skips_when_already_stamped() -> None:
     sm = _FakeSessionManager(42)
     ic = SessionStampInterceptor(sm)

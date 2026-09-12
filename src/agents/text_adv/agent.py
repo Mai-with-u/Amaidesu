@@ -89,7 +89,6 @@ class TextAdvGameAgent(BaseAgent):
         prompt_manager: Optional[Any] = None,
         event_bus: Optional[EventBus] = None,
         tool_registry: Optional[ToolRegistry] = None,
-        live_session_id: str = "",
     ) -> None:
         """初始化文字冒险 Agent。
 
@@ -100,7 +99,6 @@ class TextAdvGameAgent(BaseAgent):
             prompt_manager: 可选 PromptManager（同上）
             event_bus: 可选 EventBus（emit game.* 事件）
             tool_registry: 可选 ToolRegistry（注册 Agent 专属工具）
-            live_session_id: 场次 ID（写入 game.* 事件 payload）
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -109,7 +107,6 @@ class TextAdvGameAgent(BaseAgent):
         self._event_bus = event_bus
         self._tool_registry = tool_registry
         self._content_engine: ContentEngine = content_engine or StubContentEngine()
-        self._live_session_id = live_session_id or "wave7_session"
 
         # 内容状态（Agent 内部自由）；避免与 BaseAgent.state 属性同名故用 _game_state
         self._game_state: TextAdvGameAgentState = TextAdvGameAgentState()
@@ -185,7 +182,6 @@ class TextAdvGameAgent(BaseAgent):
         if not self.typed_config.enable_event_emission:
             return
         payload = GamePayload(
-            live_session_id=self._live_session_id,
             game="text_adv",
             event_type="milestone",
             message=message,
@@ -198,7 +194,6 @@ class TextAdvGameAgent(BaseAgent):
         if not self.typed_config.enable_event_emission:
             return
         payload = GamePayload(
-            live_session_id=self._live_session_id,
             game="text_adv",
             event_type="attention_required",
             message=message,
@@ -211,7 +206,6 @@ class TextAdvGameAgent(BaseAgent):
         if not self.typed_config.enable_event_emission:
             return
         payload = GamePayload(
-            live_session_id=self._live_session_id,
             game="text_adv",
             event_type="error",
             message=message,
@@ -353,7 +347,6 @@ def build_text_adv_agent(
     prompt_manager: Optional[Any] = None,
     event_bus: Optional[EventBus] = None,
     tool_registry: Optional[ToolRegistry] = None,
-    live_session_id: str = "",
     spec_provider: str = "text_adv",
 ) -> TextAdvGameAgent:
     """便捷工厂：构造 TextAdvGameAgent + 注册到 AgentManager。
@@ -374,7 +367,6 @@ def build_text_adv_agent(
         prompt_manager=prompt_manager,
         event_bus=event_bus,
         tool_registry=tool_registry,
-        live_session_id=live_session_id,
     )
     agent_manager.register(agent, spec_provider=spec_provider)
     return agent

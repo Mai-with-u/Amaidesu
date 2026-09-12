@@ -212,7 +212,6 @@ async def test_minecraft_agent_emits_game_report_with_payload() -> None:
     agent = MinecraftAgent(
         MinecraftConfig(),
         event_bus=event_bus,
-        live_session_id="ls_test",
     )
     await agent._emit_report("delivery", "挖到钻石了，交付！", scene="y=-12")
 

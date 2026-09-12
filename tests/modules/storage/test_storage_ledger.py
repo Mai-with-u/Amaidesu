@@ -630,7 +630,7 @@ async def test_ledger_dispatches_game_milestone_to_game_events(
     ledger: StorageLedger, store: SQLiteStore, event_bus: EventBus
 ) -> None:
     payload = GamePayload(
-        live_session_id="test_session",
+        live_session_id=_FAKE_PK,
         game="minecraft",
         event_type="milestone",
         message="挖到钻石了！",
@@ -659,7 +659,7 @@ async def test_ledger_dispatches_attention_required_and_error(
         ("game.error", "error"),
     ):
         payload = GamePayload(
-            live_session_id="test_session",
+            live_session_id=0,
             game="minecraft",
             event_type=event_type,  # type: ignore[arg-type]
             message=f"类型 {event_type} 的描述",
@@ -677,7 +677,7 @@ async def test_ledger_game_event_scene_empty_becomes_null(
 ) -> None:
     """scene 留空（默认 ""）落库为 NULL，便于消费方区分"无场景上下文"。"""
     payload = GamePayload(
-        live_session_id="test_session",
+        live_session_id=0,
         game="stardew_valley",
         event_type="milestone",
         message="通关第一年",
@@ -701,7 +701,7 @@ async def test_ledger_game_write_failure_does_not_break_flow(
 
         monkeypatch.setattr(store, "execute", _boom)
         payload = GamePayload(
-            live_session_id="test_session",
+            live_session_id=0,
             game="minecraft",
             event_type="error",
             message="写入会炸",
@@ -723,7 +723,7 @@ async def test_ledger_stop_unsubscribes_game_events(event_bus: EventBus, store: 
     await ledger.stop()
 
     payload = GamePayload(
-        live_session_id="test_session",
+        live_session_id=0,
         game="minecraft",
         event_type="milestone",
         message="停止后不应落库",
@@ -896,7 +896,7 @@ async def test_ledger_game_event_skipped_when_no_active_session(
     await ledger.start()
     try:
         payload = GamePayload(
-            live_session_id="test_session",
+            live_session_id=0,
             game="minecraft",
             event_type="milestone",
             message="无场次游戏事件",

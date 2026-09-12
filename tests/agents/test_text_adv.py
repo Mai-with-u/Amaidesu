@@ -134,7 +134,6 @@ async def started_agent(
         content_engine=content_engine,
         event_bus=event_bus,
         tool_registry=registry,
-        live_session_id="test_session_w7",
     )
 
     await agent.start()
@@ -190,7 +189,6 @@ def test_text_adv_agent_factory_registers_in_manager() -> None:
     agent = build_text_adv_agent(
         config=TextAdvConfig(),
         agent_manager=manager,
-        live_session_id="test",
     )
     assert "text_adv" in manager
     assert manager.get("text_adv") is agent

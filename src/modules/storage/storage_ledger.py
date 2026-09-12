@@ -277,12 +277,13 @@ class StorageLedger:
     ) -> None:
         """``game.*`` 通配回调：游戏里程碑/安全阀/异常写入 game_events 表。
 
-        场次归属走 ``LiveSessionManager.resolve_pk()``（payload 自带的
-        ``live_session_id`` 是游戏侧的字符串标识，非存储主键，不消费）；
-        写入异常隔离：单条失败仅记 error 日志，不抛出。
+        场次归属与其他域一致：消费 payload 上由场次盖章拦截器注入的
+        ``live_session_id``（int 主键）；未归属时经 ``_resolve_live_pk``
+        回退会话管理器，仍无场次则跳过。写入异常隔离：单条失败仅记
+        error 日志，不抛出。
         """
         try:
-            live_pk = await self._resolve_live_pk()
+            live_pk = await self._resolve_live_pk(payload.live_session_id)
             if live_pk is None:
                 logger.debug(f"game.* 事件无法归属场次，跳过落库（event_type={payload.event_type}）")
                 return

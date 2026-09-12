@@ -104,7 +104,6 @@ class MinecraftAgent(BaseAgent):
         prompt_manager: Optional[Any] = None,
         event_bus: Optional[EventBus] = None,
         tool_registry: Optional[ToolRegistry] = None,
-        live_session_id: str = "",
         thinking_sink: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
     ) -> None:
@@ -117,7 +116,6 @@ class MinecraftAgent(BaseAgent):
             prompt_manager: 可选 PromptManager（渲染系统提示词）
             event_bus: 可选 EventBus（emit game.* 事件）
             tool_registry: 可选 ToolRegistry（注册 Agent 专属工具 + 动态发现 MCP 工具）
-            live_session_id: 场次 ID（写入 game.* 事件 payload）
             thinking_sink: 可选思考流旁路出口（鸭子类型：任何带
                 ``on_thinking_delta(round_id, phase, step, seq, text_delta)`` 方法的对象）。
                 ``None`` 时思考流整体短路，决策循环行为与无旁路完全一致。
@@ -132,7 +130,6 @@ class MinecraftAgent(BaseAgent):
         self._prompt = prompt_manager
         self._event_bus = event_bus
         self._tool_registry = tool_registry
-        self._live_session_id = live_session_id or "minecraft_session"
         self._thinking_sink = thinking_sink
 
         # Agent 内部状态（内存，不持久化）
@@ -708,7 +705,6 @@ class MinecraftAgent(BaseAgent):
         if self._event_bus is None:
             return
         payload = GamePayload(
-            live_session_id=self._live_session_id,
             game="minecraft",
             event_type=event_type,
             message=message,
