@@ -34,19 +34,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
 SCHEMA_VERSION: int = 7
-
-
-@dataclass(frozen=True, slots=True)
-class SchemaMigration:
-    """单次迁移记录"""
-
-    version: int
-    applied_at_ms: int
 
 
 # =============================================================================
@@ -250,37 +241,6 @@ CREATE TABLE IF NOT EXISTS viewers (
 """.strip()
 
 
-_AGENDA_PLAN_SQL = """
-CREATE TABLE IF NOT EXISTS agenda_plan (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    label            TEXT NOT NULL,
-    "order"          INTEGER NOT NULL,
-    starts_at_ms     INTEGER NOT NULL,
-    expected_ms      INTEGER NOT NULL,
-    note             TEXT,
-    created_by       TEXT NOT NULL
-);
-""".strip()
-
-
-_AGENDA_RUNTIME_SQL = """
-CREATE TABLE IF NOT EXISTS agenda_runtime (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    plan_id          INTEGER,
-    label            TEXT NOT NULL,
-    "order"          INTEGER NOT NULL,
-    starts_at_ms     INTEGER NOT NULL,
-    expected_ms      INTEGER NOT NULL,
-    done             INTEGER NOT NULL DEFAULT 0,
-    current          INTEGER NOT NULL DEFAULT 0,
-    note             TEXT,
-    inserted_by      TEXT NOT NULL
-);
-""".strip()
-
-
 _RUNDOWNS_SQL = """
 CREATE TABLE IF NOT EXISTS rundowns (
     id            TEXT PRIMARY KEY,
@@ -452,7 +412,6 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 __all__ = [
     "SCHEMA_VERSION",
-    "SchemaMigration",
     "build_schema_sql",
     "list_expected_tables",
     "list_private_tables",

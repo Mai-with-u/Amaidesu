@@ -27,7 +27,8 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.storage.sqlite_store import SQLiteStore
-from src.modules.storage.storage_ledger import StorageLedger, make_room_message
+from src.modules.storage.storage_ledger import StorageLedger
+from tests.modules.storage.helpers import make_room_message
 
 
 # 测试用场次管理器替身：固定返回预置主键（模拟"显式场次进行中"的解析结果）

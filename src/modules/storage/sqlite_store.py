@@ -61,12 +61,6 @@ def sqlite_store() -> "SQLiteStore":
     return _default_store
 
 
-def set_default_store(store: Optional["SQLiteStore"]) -> None:
-    """设置/清除默认 SQLiteStore（用于测试或自定义路径）。"""
-    global _default_store
-    _default_store = store
-
-
 # =============================================================================
 # SQLiteStore 实现
 # =============================================================================
@@ -1421,7 +1415,7 @@ class SQLiteStore:
             logger.warning(f"schema 迁移前备份失败，继续迁移: {exc}")
 
 
-__all__ = ["SQLiteStore", "sqlite_store", "set_default_store"]
+__all__ = ["SQLiteStore", "sqlite_store"]
 
 
 # 引入 ManagedSQLiteConnection 仅为类型导出便利（不在 __all__）

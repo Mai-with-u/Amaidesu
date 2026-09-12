@@ -41,16 +41,10 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
-from src.modules.events.payloads.room import (
-    GiftInfo,
-    RoomMessagePayload,
-    RoomMessageUser,
-    SuperChatInfo,
-)
+from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
 from src.modules.storage.sqlite_store import SQLiteStore
-from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -330,49 +324,4 @@ class StorageLedger:
             return None
 
 
-# ===== 辅助：仅测试用（构造 RoomMessagePayload 便利）=====
-
-
-def make_room_message(
-    *,
-    message_type: str = "danmaku",
-    live_session_id: int = 0,
-    message_id: str = "",
-    user: Optional[RoomMessageUser] = None,
-    content: str = "",
-    gift_name: str = "小星星",
-    gift_count: int = 1,
-    sc_amount: float = 50.0,
-    simulated: bool = False,
-    timestamp_ms: Optional[int] = None,
-) -> RoomMessagePayload:
-    """构造 ``RoomMessagePayload``：仅供测试/示例，避免重复样板。
-
-    生产代码应走对应采集器/simulator 自然产出。``live_session_id`` 默认 0
-    （未归属），由场次盖章拦截器或测试内显式指定。
-    """
-    if user is None:
-        user = RoomMessageUser(id="tester", name="测试观众")
-
-    common: dict = {
-        "live_session_id": live_session_id,
-        "message_id": message_id,
-        "message_type": message_type,  # type: ignore[arg-type]
-        "user": user,
-        "content": content,
-        "simulated": simulated,
-    }
-    if timestamp_ms is not None:
-        common["timestamp_ms"] = timestamp_ms
-    else:
-        common["timestamp_ms"] = now_ms()
-
-    if message_type == "gift":
-        common["gift"] = GiftInfo(name=gift_name, count=gift_count)
-    elif message_type == "super_chat":
-        common["sc"] = SuperChatInfo(amount=sc_amount)
-
-    return RoomMessagePayload(**common)
-
-
-__all__ = ["StorageLedger", "make_room_message"]
+__all__ = ["StorageLedger"]
