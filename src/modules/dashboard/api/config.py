@@ -299,6 +299,10 @@ _SENSITIVE_PATTERNS = ["api_key", "api_secret", "token", "password", "secret", "
 
 def _is_sensitive_field(key: str) -> bool:
     key_lower = key.lower()
+    # *_tokens（复数）是预算类参数（max_tokens 等），不是凭据——
+    # "token" 模式会误伤它们，导致 UI 上显示占位且占位回写被拒
+    if key_lower.endswith("_tokens"):
+        return False
     return any(p in key_lower for p in _SENSITIVE_PATTERNS)
 
 

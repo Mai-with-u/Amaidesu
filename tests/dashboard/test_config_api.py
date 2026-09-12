@@ -100,6 +100,12 @@ class TestGetConfigEndpoint:
         api_key = config["llm_providers"][0]["api_key"]
         assert api_key == "已设置"
 
+    def test_get_config_does_not_mask_budget_tokens(self, client):
+        """max_tokens 等预算类参数不是凭据，正常显示数值（QA 发现的误伤修复）"""
+        resp = client.get("/api/v1/config")
+        config = resp.json()["config"]
+        assert isinstance(config["llm_profiles"]["planner"]["max_tokens"], int)
+
     def test_get_config_values_match_toml(self, client, config_dir):
         """合并视图值与磁盘 TOML 一致（dashboard.port）"""
         resp = client.get("/api/v1/config")
