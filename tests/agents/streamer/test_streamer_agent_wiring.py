@@ -309,10 +309,10 @@ async def test_emotion_invokes_vts_set_expression_via_create_task():
 
     registry.register(
         ToolSpec(
-            name="vts_set_expression",
+            name="set_expression",
             description="mock vts",
             kind="sync",
-            provider="builtin",
+            provider="vts",
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -369,10 +369,10 @@ async def test_emotion_intensity_maps_to_vts_weight():
 
     registry.register(
         ToolSpec(
-            name="vts_set_expression",
+            name="set_expression",
             description="mock vts",
             kind="sync",
-            provider="builtin",
+            provider="vts",
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -424,10 +424,10 @@ async def test_unknown_emotion_does_not_call_vts():
 
     registry.register(
         ToolSpec(
-            name="vts_set_expression",
+            name="set_expression",
             description="mock vts",
             kind="sync",
-            provider="builtin",
+            provider="vts",
         ),
         _mock_vts_impl,
     )
@@ -510,7 +510,7 @@ async def test_empty_speech_does_not_enqueue():
     from src.modules.tools import ToolSpec
 
     registry.register(
-        ToolSpec(name="vts_set_expression", description="x", kind="sync", provider="builtin"),
+        ToolSpec(name="set_expression", description="x", kind="sync", provider="vts"),
         _mock_vts,
     )
 

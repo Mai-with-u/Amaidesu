@@ -56,7 +56,7 @@ from src.modules.types.message_type import require_message_type
 
 from .rundown.rundown import DEFAULT_RUNDOWN, Rundown
 from .rundown.rundown_state import RundownState
-from .tools.rundown_tool import RundownControlProvider
+from .tools.rundown_tool import RundownControlProvider, build_rundown_tool_provider
 from .background import BackgroundMaintainer
 from .message_buffer import MessageBuffer
 from .planner import Planner
@@ -65,8 +65,6 @@ from .replyer import ProfanityFilter, Replyer
 from .room_state import RoomState
 from .thinking_stream import ThinkingStreamContext
 from .timing_gate import TimingGate
-from .tools.command_tool import CommandToolProvider
-from .tools.proactive_tool import ProactiveToolProvider
 from .tools.reply_tool import ReplyToolProvider
 from .utterance_queue import (
     DEFAULT_MAX_QUEUE,
@@ -199,7 +197,7 @@ class StreamerAgent(BaseAgent):
 
     实现协议六面：
     - 生命周期（start/stop/cleanup）
-    - 工具提供：reply / should_speak_proactively / parse_command（3 个 @tool）
+    - 工具提供：reply / should_speak_proactively / parse_command（3 个工具）
       + rundown_control（Planner 局部协议工具）
     - 事件上报：emit（rundown.changed / planner.decision 等）；订阅 room.message.*
     - 状态读写：内部 RoomState / RundownState / MessageBuffer
@@ -393,7 +391,9 @@ class StreamerAgent(BaseAgent):
             on_changed=self._on_rundown_changed,
         )
         self._planner.bind_elapsed_live_provider(self._rundown_state.get_elapsed_live_ms)
-        self._planner.bind_rundown_provider(RundownControlProvider(self._rundown_state))
+        # 控制执行器单实例：Planner 直连与 ToolRegistry 注册共用同一状态机
+        self._rundown_tool_provider = RundownControlProvider(self._rundown_state)
+        self._planner.bind_rundown_provider(self._rundown_tool_provider)
 
         # 后台维护器（双任务：轻循环 + 压缩 worker）
         background_config = {
@@ -441,8 +441,6 @@ class StreamerAgent(BaseAgent):
 
         # 工具 Provider 实例（用于 invoke）
         self._reply_provider: Optional[ReplyToolProvider] = None
-        self._proactive_provider: Optional[ProactiveToolProvider] = None
-        self._command_provider: Optional[CommandToolProvider] = None
 
         # ===== 发言管线（speech → TTS / emotion → VTS）=====
         # 仅当显式启用且 tts_engine 注入时才构造队列；否则决策循环行为
@@ -562,58 +560,38 @@ class StreamerAgent(BaseAgent):
     # ==================================================================
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        """声明本 Agent 暴露的工具。
+        """声明本 Agent 暴露的工具（审计对账口径，AgentManager.audit_tools）。
 
-        单一事实源：tool spec 完全源自三个工具 Provider（ReplyToolProvider /
-        ProactiveToolProvider / CommandToolProvider）。Provider 在 ``_register_tools``
-        里无条件构造，并经 ``ToolRegistry.register_provider`` 自行发布——本方法只
-        是把这些 Provider 各自 ``list_tools()`` 的返回聚合起来供审计方对账
-        ToolRegistry 是否已注册同名 spec（AgentManager.audit_missing_tools），
-        本方法本身**不读 registry、不写 registry、不调用 Provider.invoke**。
+        只有真工具进声明：``streamer_reply``（注册 + 名单 ["streamer"]）。
+        should_speak_proactively / parse_command 是代码直连的内部件，不是工具、
+        不声明不注册（§5 判据）；rundown_control 由 rundown 注册项声明（provider
+        ="rundown"，非本 Agent 名下）。
 
         前置启动窗口兜底：Provider 槽位在 ``__init__`` 里被置 None，直到
-        ``_on_start → _register_tools`` 才会被实例化。若此时审计方已注册 Agent
-        但尚未 ``start()``，三个 Provider 全为 None，必须回退到直接调用
-        ``build_*_tool_spec`` 工厂函数构造 spec——工厂函数与 Provider 路径走的是
-        同一套 spec 定义，无事实源漂移；该兜底仅为"审计先行"语义保留。
+        ``_on_start → _register_tools`` 才实例化；此时回退到工厂函数构造
+        spec（同一套定义，无事实源漂移）。
         """
-        if any(p is not None for p in (self._reply_provider, self._proactive_provider, self._command_provider)):
-            specs: List[ToolSpec] = []
-            for provider in (
-                self._reply_provider,
-                self._proactive_provider,
-                self._command_provider,
-            ):
-                if provider is not None:
-                    specs.extend(provider.list_tools())
-            return specs
+        if self._reply_provider is not None:
+            return list(self._reply_provider.list_tools())
 
-        # 预启动窗口：Provider 尚未构造（Agent 已 register 但未 start），
-        # 直接调用工厂函数构造三个 spec（与 Provider 路径等价）。
+        # 预启动窗口：Provider 尚未构造（Agent 已 register 但未 start）
         from .tools.reply_tool import build_reply_tool_spec
-        from .tools.proactive_tool import build_proactive_tool_spec
-        from .tools.command_tool import build_command_tool_spec
 
-        return [
-            build_reply_tool_spec(),
-            build_proactive_tool_spec(),
-            build_command_tool_spec(),
-        ]
+        return [build_reply_tool_spec()]
 
     def _register_tools(self) -> None:
-        """构造三个工具 Provider（Agent 内部协议，不注册进 ToolRegistry）。
+        """构造 reply Provider；reply 与 rundown_control 注册进 ToolRegistry。
 
-        Y 模型分层：reply / should_speak_proactively / parse_command 是
-        主播 Agent 自身出口（内部协议），只服务自身的决策循环与表达会话，
-        **不做全局能力**——不进 ToolRegistry（架构红线：Agent 内脏
-        不注册为全局工具）。``_make_two_stage_decision`` 直接调用
-        ``_reply_provider.invoke``（决策循环内脏路径）。
-
-        动作工具（warudo_*/obs_*/text_adv_* 等通用动作库）仍由
-        ToolRegistry 注册管理，LLM 经标准 tool calling 访问。
+        名单口径（ADR-012，注册处声明）：
+        - ``streamer_reply``：LLM 可调的真工具，注册 + 名单 ``["streamer"]``
+          （自己的工具填自己）；Planner 经 registry 统一调用，thinking 回调
+          槽位仍挂在本 Provider 实例上。
+        - ``rundown_control``：注册（provider="rundown"，名单 ``["streamer"]``）
+          进 ToolRegistry 获得观测/管理条目；决策面仍由 Planner 按流程单激活
+          状态条件追加（动态工具的已知例外）。
         """
 
-        # reply tool（无条件构造——决策循环直连调用依赖）
+        # reply tool（无条件构造——thinking 槽位与注册共用同一实例）
         self._reply_provider = ReplyToolProvider(
             replyer=self._replyer,
             persona=self._persona_provider or {},
@@ -621,28 +599,18 @@ class StreamerAgent(BaseAgent):
             rundown_text_provider=self._build_rundown_text_sync,
             event_bus=self._event_bus,
         )
-        # Planner ReAct 循环经 reply_provider 直连表达引擎（Provider 构造晚于
-        # Planner __init__，此处补绑）
+        # Planner 的 reply 调用经 registry；绑定 Provider 仅为 thinking 回调槽位
         self._planner.bind_reply_provider(self._reply_provider)
 
         # proactive tool
-        self._proactive_provider = ProactiveToolProvider(
-            trigger=self._proactive_trigger,
-            room_state=self._room_state,
-            external_pending=lambda: self._external_proactive_pending,
-            rundown_pending=lambda: self._rundown_proactive_pending,
-            rundown_ready=self._is_rundown_active,
-        )
-
-        # command tool
-        self._command_provider = CommandToolProvider(
-            command_prefix=self.typed_config.command_prefix,
-            command_mappings=self.typed_config.command_mappings,
-        )
-
-        self._logger.info(
-            "StreamerAgent 3 个内部协议 Provider 已构造：reply / should_speak_proactively / parse_command（不入 ToolRegistry）"
-        )
+        # 注册：reply 与 rundown_control（可见名单 ["streamer"]）
+        if self._tool_registry is not None:
+            self._tool_registry.register_provider(self._reply_provider, visible_to={"streamer_reply": ["streamer"]})
+            self._tool_registry.register_provider(
+                build_rundown_tool_provider(self._rundown_tool_provider),
+                visible_to={"rundown_control": ["streamer"]},
+            )
+            self._logger.info("StreamerAgent 工具已注册：streamer_reply / rundown_control（名单 [streamer]）")
 
     # ==================================================================
     # 事件订阅
@@ -1130,7 +1098,8 @@ class StreamerAgent(BaseAgent):
         self._total_replies += 1
         self._room_state.record_speech(now_ms())
         if proactive:
-            reason = trigger_reason.removeprefix("proactive:") if trigger_reason else "unknown"
+            # 决策循环内约定 proactive 原因带 "proactive:" 标记（debug/记账共用），此处取其后正文
+            reason = trigger_reason[len("proactive:") :] if trigger_reason else "unknown"
             self._proactive_trigger.record_trigger(reason, now_ms())
 
         result["total_duration_ms"] = now_ms() - started_ms

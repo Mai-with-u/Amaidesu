@@ -115,21 +115,21 @@ class VRChatProvider(BaseToolProvider):
     def list_tools(self) -> list[ToolSpec]:
         return [
             ToolSpec(
-                name="vrchat_set_expression",
+                name="set_expression",
                 description="VRChat 设置 OSC 表情参数",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VRCHAT_SET_EXPRESSION_SCHEMA,
             ),
             ToolSpec(
-                name="vrchat_trigger_gesture",
+                name="trigger_gesture",
                 description="VRChat 触发手势",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VRCHAT_TRIGGER_GESTURE_SCHEMA,
             ),
             ToolSpec(
-                name="vrchat_get_stats",
+                name="get_stats",
                 description="读取 VRChat 状态统计",
                 kind="sync",
                 provider=self.PROVIDER_NAME,

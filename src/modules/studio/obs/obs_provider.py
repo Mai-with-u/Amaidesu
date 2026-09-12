@@ -128,28 +128,28 @@ class OBSProvider(BaseToolProvider):
     def list_tools(self) -> list[ToolSpec]:
         return [
             ToolSpec(
-                name="obs_send_text",
+                name="send_text",
                 description="OBS 发送文本到文本源（可选逐字效果）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_OBS_SEND_TEXT_SCHEMA,
             ),
             ToolSpec(
-                name="obs_switch_scene",
+                name="switch_scene",
                 description="OBS 切换场景",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_OBS_SWITCH_SCENE_SCHEMA,
             ),
             ToolSpec(
-                name="obs_set_source_visibility",
+                name="set_source_visibility",
                 description="OBS 设置源可见性",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_OBS_SET_VISIBILITY_SCHEMA,
             ),
             ToolSpec(
-                name="obs_send_test",
+                name="send_test",
                 description="OBS 发送测试消息（启动时默认行为）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,

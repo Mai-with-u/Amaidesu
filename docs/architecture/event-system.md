@@ -52,7 +52,7 @@ flowchart LR
     IC -->|emit room.message.*<br/>core.*<br/>live.started/ended| EB
     EB -->|on: 精确订阅| AG
     EB -->|on: 监控订阅| OB
-    AG -->|emit tool.result.*<br/>planner.checkpoint| EB
+    AG -->|emit planner.decision/verdict<br/>streamer.stage/speech| EB
     TP -->|emit tool.result.*| EB
 ```
 
@@ -87,20 +87,20 @@ src/modules/events/
 ├── event_history.py      # 事件历史查询服务（内存环形缓冲 + event_history 表持久化/回灌）
 ├── event_recorder.py     # 事件记录器（监控组件，订阅语义域事件落库）
 ├── registry.py           # @register_event 装饰器 + EVENT_REGISTRY
-├── names.py              # CoreEvents 常量（17 + 通配占位符；v2.0.10 新增 TTS_UTTERANCE_STARTED/FINISHED/FAILED 三个）
+├── names.py              # CoreEvents 常量（21 个具体事件 + 3 个通配占位符）
 ├── event_type_map.py     # 事件名 → 组件类型映射（组件事件专用）
 └── payloads/
     ├── __init__.py       # Payload 统一导出（10 个域模块）
     ├── base.py           # BasePayload 基类
     ├── core.py           # core.* Payload（3 个事件分别注册）
-    ├── live.py           # live.* Payload（一类双注册）
+    ├── live.py           # live.* Payload（两类分别注册：LiveStartedPayload / LiveEndedPayload）
     ├── room.py           # room.message.* Payload（一类四注册）
-    ├── game.py           # game.* Payload（一类三注册）
+    ├── game.py           # game.* Payload（一类四注册）
     ├── rundown.py        # rundown.changed Payload
-    ├── rundown.py        # rundown.changed Payload（流程单变更）
-    ├── planner.py        # planner.checkpoint Payload
-    ├── tool_result.py    # tool.result.* Payload（不绑定具体名）
+    ├── planner.py        # planner.decision / planner.verdict / streamer.stage Payload
     ├── speech.py         # streamer.speech Payload（主播发言业务事实）
+    ├── tool_result.py    # tool.result.* Payload（不绑定具体名）
+    ├── tool_health.py    # tool.health.* Payload（不绑定具体名）
     └── utterance.py     # tts.utterance.* Payload（三类三注册：started / finished / failed）
 ```
 
@@ -276,9 +276,9 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 
 ## 事件事实表
 
-> **单一事实源**：本表是 Amaidesu 当前全部 17 个事件常量 + 1 个通配占位符的权威定义。任何新增/删除/重命名事件，**必须先修改本表再写代码**。
+> **单一事实源**：本表是 Amaidesu 当前全部 21 个事件常量 + 3 个通配占位符的权威定义。任何新增/删除/重命名事件，**必须先修改本表再写代码**。
 
-事件命名遵循 v2 语义域规范（详见 [事件命名规范](event-naming-convention.md)）：`<域>.<子类>.<动作>`，**域 = 领域**（live/room/game/rundown/planner/tool/core），**不是阶段**。
+事件命名遵循 v2 语义域规范（详见 [事件命名规范](event-naming-convention.md)）：`<域>.<子类>.<动作>`，**域 = 领域**（core/live/room/game/rundown/planner/streamer/tts，外加 tool 通配前缀），**不是阶段**。
 
 ### 完整事件表
 
@@ -301,15 +301,17 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | `rundown.changed` | `RundownChangedPayload` | `RundownState`（唯一变更边界——`RundownControlTool` / Dashboard 手动 / 闹钟兜底三路均走同一路径） | `EventRecorder`（`_on_named_event`，type=事件名）；Dashboard `Broadcaster`（WS type `rundown.changed`，由 `RUNDOWN_CHANGED_TYPE` 提供）；未来 Dashboard 编排页（订阅实时刷新） | 流程单变更：涵盖 load / goto / next（含 finish）/ pause / resume；`by` 字段区分 `agent`/`human`/`system`；finish 时 `segment_id=""` 且 `index==total`，订阅者据此识别"流程单走完"。详 `docs/architecture/rundown-mechanism.md` |
 
 | `planner.decision` | `PlannerDecisionPayload` | `StreamerAgent`（`_make_two_stage_decision` 收口，每轮恰好一条，成功/失败/低置信度降级全覆盖） | `EventRecorder`（`_on_named_event`，type=事件名）、`Broadcaster`（WS type `planner.decision`）、观察器（决策卡） | 决策轮记录：`round_id`（`rnd_{epoch_ms}_{seq}`，本轮弹幕批次/决策/发言/工具结果共同关联键）、触发原因、批次摘要、决策结论、`reply_to_message_id`（回复关联键）、`silent_reason`（low_confidence=低置信度压制）、`error`、`planner_raw`（截断原文）、`llm_request_id`（请求历史指针）、分段耗时 |
+| `planner.verdict` | `PlannerVerdictPayload` | `ReplyToolProvider`（reply 工具 invoke 入口，Planner 决定回应的时刻、表达生成之前） | `Broadcaster`（WS type `planner.verdict`）、观察器（裁决卡实时渲染） | 裁决时刻即时事件：`round_id` / `topic_summary` / `reply_guidance` / `confidence` / `target` / `reply_to_message_id`。沉默轮无 verdict；`planner.decision` 轮末按 round_id 回填统计，两者不重复渲染 |
 | `streamer.stage` | `StreamerStagePayload` | `StreamerAgent`（决策循环边界：planning → idle） | `EventRecorder`（`_on_named_event`）、`Broadcaster`（WS type `streamer.stage`）、观察器（状态条） | 决策管线阶段状态（`stage`：planning/replying/idle；`agent_state`：running/wait）；LLM 挂起时状态条停格即证据 |
 | `streamer.speech` | `StreamerSpeechPayload` | `StreamerAgent`（`_dispatch_speech_and_emotion`，speech 非空时；`streamer_agent.py`） | `SimulatorService`（节奏唤醒，`simulator/service.py`）；`Broadcaster`（`websocket/broadcaster.py` handler_map + `_subscribe_core_events`，WS type `streamer.speech`） | 主播发言业务事实（与 TTS 启用正交）；Payload 含 `utterance_id` / `text` / `emotion` / `target_user_id`（可选，回复对象，落库与 `viewers.replied_count` 闭环用）/ `reply_to_message_id`（可选，本条发言回复的那条弹幕的 message_id，与 live_chat 观众行 `message_id` 构成互动分析关联键）/ `live_session_id`（发布方不填，场次盖章拦截器注入） |
 | `tool.result.<tool_name>` | `ToolResultPayload` | `ToolRegistry.invoke`（工具执行完成后，无论成败均广播；未挂载 EventBus 时跳过） | Dashboard Broadcaster（`tool.result.#` 通配）与 traces 查询；handler 按 `payload.tool_name` 分发 | **工具结果回传**（事件名不固定，emit 时用具体 `tool.result.<tool_name>`，如 `tool.result.speak`；`ToolSpec.result_event` 可定制名）。Payload 含 `tool_name` / `live_session_id` / `round_id` / `caller_source` / `status` / `arguments`（透传自 `ToolInvocation.arguments` 的浅拷贝，供 WebUI 等观察器对齐入参展示）/ `result` / `error_message` / `timestamp_ms` |
-| `tool.result.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。`CoreEvents.TOOL_RESULT_WILDCARD = "tool.result.#"`（`names.py` L62）保留作订阅标识常量，**不在 names.py 的 `get_all_events()` 反射收集范围内**（按 `value.islower() and "." in value` 筛选时该字符串通过，但 `_validate_event_data` 找不到具体注册类型时仅 debug 警告，不阻断 emit） |
+| `tool.result.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。`CoreEvents.TOOL_RESULT_WILDCARD = "tool.result.#"` 保留作订阅标识常量，**不在 names.py 的 `get_all_events()` 反射收集范围内**（`_validate_event_data` 找不到具体注册类型时仅 debug 警告，不阻断 emit） |
 | `tool.health.<tool_name>` | `ToolHealthPayload` | `ToolRegistry`（熔断判定与探活恢复的统一出口：连续失败达阈值熔断时广播 `state="open"`；`recover_tool` 复位时广播 `state="closed"`；**仅在状态跃迁时发**，每次 invoke 不发） | Dashboard 转发层（`tool.health.#` 通配） | **工具健康跃迁**（熔断→摘除 / 探活通过→恢复；Payload 含 `tool_name` / `provider` / `state` / `failure_count` / `last_error` / `timestamp_ms`）。具体名 `tool.health.<tool_name>` 由 `ToolRegistry` emit 时填；订阅者通过 `event_bus.on("tool.health.#", handler, model_class=ToolHealthPayload)` 通配监听后按 `tool_name` 字段分发 |
-| `tool.health.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.health.#", ...)` 一站式监听所有工具健康跃迁。`CoreEvents.TOOL_HEALTH_WILDCARD = "tool.health.#"`（`names.py` L80）保留作订阅标识常量；与 `tool.result.#` 同性质——不在 `EVENT_REGISTRY` 注册，仅供通配订阅 |
+| `tool.health.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.health.#", ...)` 一站式监听所有工具健康跃迁。`CoreEvents.TOOL_HEALTH_WILDCARD = "tool.health.#"` 保留作订阅标识常量；与 `tool.result.#` 同性质——不在 `EVENT_REGISTRY` 注册，仅供通配订阅 |
 | `tts.utterance.started` | `UtteranceStartedPayload` | TTS 引擎（基础模块，非工具；`src/modules/tts/` 下 4 个 Provider 之一，按 `core.toml [tts].provider` 装配期单选构造后注入 StreamerAgent）——仅在 `handle_speech` 收到非空 `utterance_id` 参数时发布；流式引擎=首块 PCM 写声卡，全量引擎=`play_audio` 调用 | 字幕写入器、编排层记账器等状态联动消费者（**当前生产代码暂无订阅——字幕订阅接线属后续工作，本表如实标记预留**） | 一次发声开始。Payload 含 `utterance_id`（全链路关联键，编排层生成 `utt_{epoch_ms}_{seq}`）、`speech_text`、`engine`（`edge`/`gptsovits`/`omni`/`voicebox`）、`duration_ms`（Optional[int]：全量引擎=合成后精确值；流式引擎合成未完=None）、`timestamp_ms`。 |
 | `tts.utterance.finished` | `UtteranceFinishedPayload` | TTS 引擎（基础模块）在播放完成时刻（百毫秒级精度，不含声卡硬件缓冲残余） | 编排层（句末再决策 / 释放锁）、存储（落 reply 耗时）、后台记账器（**预留**） | 一次发声播放完成。`duration_ms` 由 PCM 样本数÷采样率精确计算；事件名常量 `CoreEvents.TTS_UTTERANCE_FINISHED`。 |
-| `tts.utterance.failed` | `UtteranceFailedPayload` | TTS 引擎（基础模块）在合成或播放失败时（合成错误、WebSocket 断开、音频设备异常等任何阶段） | 编排层（错误兜底 / 重试决策）、存储（落失败记录）（**预留**） | 一次发声失败。Payload 含 `error_message`（异常 message / 错误码 / 阶段标记）。事件名常量 `CoreEvents.TTS_UTTERANCE_FAILED`。 |
+| `tts.utterance.failed` | `UtteranceFailedPayload` | 一次性发声失败（合成错误 / WebSocket 断开 / 音频设备异常） | | TTS 引擎在 `src/modules/tts/` 下 4 个 Provider 之一；事件名常量 `CoreEvents.TTS_UTTERANCE_FAILED` |
+| `task.changed` | `TaskChangedPayload` | 异步任务（回执型工具受理 / 跨 Agent 委派）状态真变化或无进展告警。 接收方按 `payload.initiator` 过滤唤醒；事件名常量 `CoreEvents.TASK_CHANGED`（ADR-013） | | 任务记录表写入边界（`src/modules/tools/tasks.py`，`TaskLedger`/ `TaskTracker`）；仅状态迁移或停滞告警时发（接受→运行组内迁移静默）；快照由接收方按需查询 | | TTS 引擎（基础模块）在合成或播放失败时（合成错误、WebSocket 断开、音频设备异常等任何阶段） | 编排层（错误兜底 / 重试决策）、存储（落失败记录）（**预留**） | 一次发声失败。Payload 含 `error_message`（异常 message / 错误码 / 阶段标记）。事件名常量 `CoreEvents.TTS_UTTERANCE_FAILED`。 |
 
 ### 类 → 多事件共享
 
@@ -322,12 +324,13 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 
 ### EventRecorder 订阅范围（监控组件典型）
 
-`event_recorder.py` L56-77 一次性订阅以下事件做记账：
+`event_recorder.py` 的 `EventHistoryRecorder.start()` 一次性订阅以下事件做记账：
 
 - `ROOM_MESSAGE_DANMAKU` / `GIFT` / `SUPER_CHAT` / `ENTER`（4 类 RoomMessagePayload）
 - `CORE_STARTUP` / `CORE_SHUTDOWN` / `CORE_ERROR`
-- `PLANNER_CHECKPOINT` / `AGENDA_UPDATE`（`model_class=None` 兜底）
-- `RUNDOWN_CHANGED`（流程单变更，`_on_named_event`，type=事件名）
+- `PLANNER_DECISION` / `STREAMER_STAGE`（决策可观测，`_on_named_event`，type=事件名）
+- `LIVE_STARTED` / `LIVE_ENDED`（场次生命周期）
+- `RUNDOWN_CHANGED`（流程单变更）
 - `GAME_MILESTONE` / `GAME_ATTENTION_REQUIRED` / `GAME_ERROR` / `GAME_REPORT`（`EventRecorder` 以 `GamePayload` 订阅）
 
 > **注意**：当前 `room.message.gift` / `super_chat` / `enter` 三个事件的**订阅者仅 `EventRecorder`**，记账入库但不驱动决策（决策侧仅消费 `danmaku` 高价值信号）。其他潜在订阅点（礼物感谢 / 进房欢迎 / SC 复读）尚未接入，待规划。
@@ -346,11 +349,17 @@ classDiagram
     BasePayload <|-- CoreStartupPayload
     BasePayload <|-- CoreShutdownPayload
     BasePayload <|-- CoreErrorPayload
-    BasePayload <|-- LivePayload
+    BasePayload <|-- LiveStartedPayload
+    BasePayload <|-- LiveEndedPayload
     BasePayload <|-- RoomMessagePayload
     BasePayload <|-- GamePayload
     BasePayload <|-- RundownChangedPayload
+    BasePayload <|-- PlannerDecisionPayload
+    BasePayload <|-- PlannerVerdictPayload
+    BasePayload <|-- StreamerStagePayload
+    BasePayload <|-- StreamerSpeechPayload
     BasePayload <|-- ToolResultPayload
+    BasePayload <|-- ToolHealthPayload
     BasePayload <|-- UtteranceStartedPayload
     BasePayload <|-- UtteranceFinishedPayload
     BasePayload <|-- UtteranceFailedPayload
@@ -359,7 +368,7 @@ classDiagram
     BaseModel <|-- SuperChatInfo
 ```
 
-> 当前实际存在的 13 个 Payload 类（含 `BasePayload`）+ 3 个嵌套子结构（`RoomMessageUser` / `GiftInfo` / `SuperChatInfo`），全部定义在 `src/modules/events/payloads/` 下按域分包。
+> 当前实际存在的 18 个 Payload 类（含 `BasePayload`）+ 3 个嵌套子结构（`RoomMessageUser` / `GiftInfo` / `SuperChatInfo`），全部定义在 `src/modules/events/payloads/` 下按域分包。
 
 ### 按域分类
 
@@ -394,17 +403,18 @@ classDiagram
 #### Game 域
 
 | Payload 类 | 事件名 | 用途 |
-|-----------|--------|------|
-| `GamePayload`（一类三注册） | `game.milestone` / `game.attention_required` / `game.error` | 游戏重大进展 / 安全阀偏差 / 异常；通过 `event_type: Literal[...]` 字段判别 |
+|---|---|---|
+| `GamePayload`（一类四注册） | `game.milestone` / `game.attention_required` / `game.error` / `game.report` | 游戏重大进展 / 安全阀偏差 / 异常 / 交付上报；通过 `event_type: Literal[...]` 字段判别 |
 
-#### Rundown / Planner 域
+#### Rundown / Planner / Streamer 域
 
 | Payload 类 | 事件名 | 用途 |
-|-----------|--------|------|
-| `RundownChangedPayload` | `rundown.changed` | 流程单变更（segment_id/index/total/by=agent|human|system；finish 时 segment_id="" 且 index==total） |
+|---|---|---|
 | `RundownChangedPayload` | `rundown.changed` | 流程单变更（`rundown_id` / `segment_id` / `segment_title` / `index` / `total` / `by` / `at_ms`；finish 时 `segment_id=""` 且 `index==total`） |
 | `PlannerDecisionPayload` | `planner.decision` | 决策轮记录（`round_id` 关联键 + 决策结论 + `reply_to_message_id` + 失败原因 + 耗时） |
+| `PlannerVerdictPayload` | `planner.verdict` | 裁决时刻即时事件（reply 工具被调用、表达生成之前；`round_id` / `topic_summary` / `reply_guidance` / `confidence` / `target`） |
 | `StreamerStagePayload` | `streamer.stage` | 决策管线阶段状态（planning/replying/idle + agent_state） |
+| `StreamerSpeechPayload` | `streamer.speech` | 主播发言业务事实（`utterance_id` / `text` / `emotion` / `target_user_id` / `reply_to_message_id`，与 TTS 启用与否正交） |
 
 > **v2.0.8 收口**：原 `Output Sticker（特例）` 节（`output.sticker.command` / `StickerCommandPayload`）已随 C1 治理删除——StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；接电线也救不了（无 LLM 工具暴露贴纸触发）。未来做表情功能时重新设计，本轮不留事件链。
 
@@ -476,7 +486,7 @@ class RoomMessagePayload(BasePayload):
 ```
 
 - **幂等**：同一类重复注册到同一事件名不会出错（`EVENT_REGISTRY[event_name] = cls` 覆盖检查会先比对 `existing is cls`，仅在**不同类型**时抛 `ValueError`）
-- **一类多事件名**（v2 增量）：`LivePayload` / `RoomMessagePayload` / `GamePayload` 通过堆叠装饰器注册到多个事件名（`@register_event("live.started") @register_event("live.ended") class LivePayload`）
+- **一类多事件名**（v2 增量）：`RoomMessagePayload` / `GamePayload` 通过堆叠装饰器注册到多个事件名（`@register_event("room.message.danmaku") @register_event("room.message.gift") ... class RoomMessagePayload`）
 - **反向引用**：被装饰类获得 `cls._registered_event_name` 属性（单名 = 字符串；多名 = `_MultiName` 对象，与任意已注册名 `==` 相等）
 - **`cls._all_registered_names`**：列出全部已注册名（`frozenset[str]`）
 

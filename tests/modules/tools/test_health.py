@@ -89,12 +89,12 @@ async def test_consecutive_failures_trip_at_threshold() -> None:
     spec = ToolSpec(name="flaky", description="d", kind="sync", provider="test")
     registry.register(spec, _bad_async)
 
-    inv = ToolInvocation(tool_name="flaky", source="t")
+    inv = ToolInvocation(tool_name="test_flaky", source="t")
     await registry.invoke(inv)
-    assert not registry.is_tripped("flaky"), "1st 失败未达阈值"
+    assert not registry.is_tripped("test_flaky"), "1st 失败未达阈值"
     await registry.invoke(inv)
-    assert registry.is_tripped("flaky"), "2nd 失败应熔断"
-    assert "flaky" in registry.tripped_tools
+    assert registry.is_tripped("test_flaky"), "2nd 失败应熔断"
+    assert "test_flaky" in registry.tripped_tools
 
 
 async def test_tripped_tool_filtered_from_default_list() -> None:
@@ -103,14 +103,14 @@ async def test_tripped_tool_filtered_from_default_list() -> None:
     spec = ToolSpec(name="t1", description="d", kind="sync", provider="p")
     registry.register(spec, _bad_async)
 
-    await registry.invoke(ToolInvocation(tool_name="t1"))
-    assert registry.is_tripped("t1")
+    await registry.invoke(ToolInvocation(tool_name="p_t1"))
+    assert registry.is_tripped("p_t1")
 
-    visible_default = {s.name for s in registry.list_tools()}
-    assert "t1" not in visible_default, "默认应摘除"
+    visible_default = {s.full_name for s in registry.list_tools()}
+    assert "p_t1" not in visible_default, "默认应摘除"
 
-    visible_all = {s.name for s in registry.list_tools(include_tripped=True)}
-    assert "t1" in visible_all
+    visible_all = {s.full_name for s in registry.list_tools(include_tripped=True)}
+    assert "p_t1" in visible_all
 
 
 async def test_tripped_tool_filtered_from_to_llm_definitions() -> None:
@@ -118,10 +118,10 @@ async def test_tripped_tool_filtered_from_to_llm_definitions() -> None:
     registry = ToolRegistry(failure_threshold=1)
     registry.register(ToolSpec(name="trip", description="d", kind="sync", provider="p"), _bad_async)
 
-    await registry.invoke(ToolInvocation(tool_name="trip"))
-    assert registry.is_tripped("trip")
+    await registry.invoke(ToolInvocation(tool_name="p_trip"))
+    assert registry.is_tripped("p_trip")
     defs = registry.to_llm_definitions()
-    assert all(d["name"] != "trip" for d in defs)
+    assert all(d["name"] != "p_trip" for d in defs)
 
 
 async def test_invoke_tripped_returns_failure_no_tool_result_event() -> None:
@@ -138,12 +138,12 @@ async def test_invoke_tripped_returns_failure_no_tool_result_event() -> None:
         registry = ToolRegistry(event_bus=bus, failure_threshold=1)
         registry.register(ToolSpec(name="x", description="d", kind="sync", provider="p"), _bad_async)
         # 第 1 次失败 → 熔断
-        await registry.invoke(ToolInvocation(tool_name="x"))
+        await registry.invoke(ToolInvocation(tool_name="p_x"))
         await _flush()
         results.clear()
 
         # 熔断后再 invoke：失败 result，不 emit
-        res = await registry.invoke(ToolInvocation(tool_name="x"))
+        res = await registry.invoke(ToolInvocation(tool_name="p_x"))
         assert res.success is False
         assert "熔断" in res.error_message
         await _flush()
@@ -167,12 +167,12 @@ async def test_success_resets_consecutive_counter() -> None:
     _flip.calls = 0
     registry.register(spec, _flip)
 
-    await registry.invoke(ToolInvocation(tool_name="flip"))  # fail (count=1)
-    await registry.invoke(ToolInvocation(tool_name="flip"))  # success (count=0)
-    await registry.invoke(ToolInvocation(tool_name="flip"))  # fail (count=1)
-    assert not registry.is_tripped("flip")
+    await registry.invoke(ToolInvocation(tool_name="p_flip"))  # fail (count=1)
+    await registry.invoke(ToolInvocation(tool_name="p_flip"))  # success (count=0)
+    await registry.invoke(ToolInvocation(tool_name="p_flip"))  # fail (count=1)
+    assert not registry.is_tripped("p_flip")
     snap = registry.tool_health_snapshot()
-    entry = snap.get("flip")
+    entry = snap.get("p_flip")
     assert entry is not None and entry["state"] == "healthy"
     assert entry["failure_count"] == 1
 
@@ -190,14 +190,14 @@ async def test_trip_emits_open_event_recover_emits_closed_event() -> None:
 
         registry = ToolRegistry(event_bus=bus, failure_threshold=1)
         registry.register(ToolSpec(name="z", description="d", kind="sync", provider="p"), _bad_async)
-        await registry.invoke(ToolInvocation(tool_name="z"))
+        await registry.invoke(ToolInvocation(tool_name="p_z"))
         await _flush()
-        assert any(p.state == "open" and p.tool_name == "z" for p in health_events)
+        assert any(p.state == "open" and p.tool_name == "p_z" for p in health_events)
 
-        registry.recover_tool("z")
+        registry.recover_tool("p_z")
         await _flush()
-        assert any(p.state == "closed" and p.tool_name == "z" for p in health_events)
-        assert not registry.is_tripped("z")
+        assert any(p.state == "closed" and p.tool_name == "p_z" for p in health_events)
+        assert not registry.is_tripped("p_z")
     finally:
         await bus.cleanup()
 
@@ -207,12 +207,12 @@ async def test_threshold_zero_disables_tripping() -> None:
     registry = ToolRegistry(failure_threshold=0)
     registry.register(ToolSpec(name="never", description="d", kind="sync", provider="p"), _bad_async)
     for _ in range(10):
-        await registry.invoke(ToolInvocation(tool_name="never"))
-    assert not registry.is_tripped("never")
+        await registry.invoke(ToolInvocation(tool_name="p_never"))
+    assert not registry.is_tripped("p_never")
     snap = registry.tool_health_snapshot()
-    assert "never" in snap
-    assert snap["never"]["state"] == "healthy"
-    assert snap["never"]["failure_count"] == 10
+    assert "p_never" in snap
+    assert snap["p_never"]["state"] == "healthy"
+    assert snap["p_never"]["failure_count"] == 10
 
 
 # =============================================================================
@@ -315,27 +315,26 @@ async def test_probe_tool_plain_register_returns_true() -> None:
     registry = ToolRegistry()
     spec = ToolSpec(name="lonely", description="d", kind="sync", provider="nowhere")
     registry.register(spec, _ok_async)
-    assert await registry.probe_tool("lonely") is True
+    assert await registry.probe_tool("nowhere_lonely") is True
 
 
-async def test_probe_tool_resolves_owner_despite_name_mismatch() -> None:
-    """回归测试：provider.name 与 spec.provider 不同值时仍能解析归属。
+async def test_probe_tool_resolves_owner_via_registration_map() -> None:
+    """探活归属走注册时记录的全名→Provider 映射（对象引用，非名字匹配）。
 
-    生产中普遍存在 name（类名风格，用于日志/去重）≠ spec.provider
-    （短标识，用于注册名前缀/分组）的情形（如 McpToolProvider.name =
-    "McpProvider:<server>" 而 spec.provider = "<server>"）。探活归属
-    必须走注册时记录的所有权映射，不得做名字字符串匹配。
+    命名模型下 provider.name 与 spec.provider 同值同源（注册期 fail-fast
+    校验，见 test_tool_registry 的不匹配拒绝用例）；本用例固定探活按
+    所有权映射命中并返回 Provider 重写的 health_check 值。
     """
 
-    class _MismatchedProvider(BaseToolProvider):
+    class _OwnedProbeProvider(BaseToolProvider):
         category = "test"
 
         @property
         def name(self) -> str:
-            return "TotallyDifferentClassName"
+            return "realprov"
 
         def list_tools(self):
-            return [ToolSpec(name="realprov_tool", description="d", kind="sync", provider="realprov")]
+            return [ToolSpec(name="tool", description="d", kind="sync", provider="realprov")]
 
         async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
             return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
@@ -344,10 +343,8 @@ async def test_probe_tool_resolves_owner_despite_name_mismatch() -> None:
             return False
 
     registry = ToolRegistry()
-    registry.register_provider(_MismatchedProvider())
+    registry.register_provider(_OwnedProbeProvider())
 
-    # name "TotallyDifferentClassName" != spec.provider "realprov"，
-    # 仍须命中所有者并返回其重写值 False（若走名字匹配将错判为 True）
     assert await registry.probe_tool("realprov_tool") is False
 
 
@@ -479,7 +476,7 @@ async def test_probe_cycle_respects_minimum_dwell() -> None:
     prov = _ProbeProvider(returns=True)
     registry.register_provider(prov)
     # 真实熔断（threshold=1）
-    registry.register(ToolSpec(name="probe_dwell", description="d", kind="sync", provider="probe"), _bad_async)
+    registry.register(ToolSpec(name="dwell", description="d", kind="sync", provider="probe"), _bad_async)
     await registry.invoke(ToolInvocation(tool_name="probe_dwell"))
     assert registry.is_tripped("probe_dwell")
 
@@ -511,15 +508,15 @@ async def test_health_snapshot_only_includes_tripped_or_failed_tools() -> None:
     registry.register(ToolSpec(name="clean", description="d", kind="sync", provider="p"), _ok_async)
     registry.register(ToolSpec(name="dirty", description="d", kind="sync", provider="p"), _bad_async)
 
-    await registry.invoke(ToolInvocation(tool_name="clean"))
+    await registry.invoke(ToolInvocation(tool_name="p_clean"))
     snap1 = registry.tool_health_snapshot()
     assert snap1 == {}
 
-    await registry.invoke(ToolInvocation(tool_name="dirty"))
+    await registry.invoke(ToolInvocation(tool_name="p_dirty"))
     snap2 = registry.tool_health_snapshot()
-    assert "dirty" in snap2
-    assert snap2["dirty"]["state"] == "healthy"  # 未达阈值但有失败
-    assert "clean" not in snap2
+    assert "p_dirty" in snap2
+    assert snap2["p_dirty"]["state"] == "healthy"  # 未达阈值但有失败
+    assert "p_clean" not in snap2
 
 
 async def test_invoke_unknown_tool_does_not_touch_health() -> None:

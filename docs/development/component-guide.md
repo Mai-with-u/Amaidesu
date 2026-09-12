@@ -298,205 +298,97 @@ async def asyncio_sleep_ms(ms: int) -> None:
 
 | 类型 | 位置 | 关键字段 |
 |------|------|----------|
-| `ToolSpec` | `src/modules/tools/models.py` | `name`, `description`, `parameters_schema`, `kind` (`"sync"`/`"async"`), `provider` (`"builtin"`/`"game"`/`"mcp"`), `result_event`, `output_schema` |
+| `ToolSpec` | `src/modules/tools/models.py` | `name`（声明名，**不带前缀**）, `description`, `parameters_schema`, `kind` (`"sync"`/`"async"`), `provider`（提供者短名）, `result_event`, `output_schema`；对外全名 = `full_name` 派生（`<provider>_<name>`，唯一实现、不存下来） |
 | `ToolInvocation` | `src/modules/tools/models.py` | `tool_name`, `arguments`, `call_id`, `invoked_at_ms`, `source` |
 | `ToolExecutionResult` | `src/modules/tools/models.py` | `tool_name`, `success`, `content`, `blocks` (`ResultBlock` 列表), `error_message`, `structured_content`, `duration_ms`, `timestamp_ms` |
 | `ResultBlock` | `src/modules/tools/models.py` | `kind` (`"text"`/`"image"`), `text`, `data` (base64), `mime_type` |
-| `ToolProvider`（Protocol） | `src/modules/tools/provider.py` | `name` 属性、`list_tools()`、`async invoke(invocation) -> ToolExecutionResult`（**永不抛异常**） |
+| `ToolProvider`（Protocol） | `src/modules/tools/provider.py` | `name` 属性（与全部 spec 的 `provider` 同值同源，注册期校验）、`list_tools()`、`async invoke(invocation) -> ToolExecutionResult`（**永不抛异常**）；可选钩子 `query_task` / `subscribe_task_notifications`（任务适配器，默认不支持） |
 | `BaseToolProvider`（ABC） | `src/modules/tools/provider.py` | 所有经 `register_provider` 装配的 Provider 的继承基类；带 `category` ClassVar 与 `health_check` 探活钩子默认实现 |
-| `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider, *, owner_agent="")`（`owner_agent` 非空即归属限定）/ `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(provider=, include_scoped=False)` / `scoped_owner_of(name)` / `probe_tool(name)`（熔断器探活入口） |
-| `default_tool_registry()` | `src/modules/tools/registry.py` | 进程内单例；`@tool` 装饰器默认注册到这里 |
+| `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider, *, visible_to=...)`（可见名单，ADR-012）/ `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(for_agent=...)`（按名单计算工具面）/ `visible_to_of(name)` / `probe_tool(name)`（熔断器探活入口） |
+| `as_tool_impl` / `make_provider_from_specs` | `src/modules/tools/provider.py` | 简单工具正典路径：普通 async 函数 + spec 组装标准 Provider（样板 `src/modules/memory/query_tool.py`） |
 
 ### Provider 探活契约（与熔断器配套）
 
 有外部连接（WebSocket / HTTP / stdio 子进程等）的 Provider 继承 `BaseToolProvider` 并**重写** `health_check`（连接可用才返回 True）；无状态工具沿用基类默认（返回 True，语义为"无可检查之物，让流量决定"——熔断后冷却期满即恢复，再失败再熔断）。`ToolRegistry.probe_tool(name)` 统一按名定位 provider 并调用 `health_check`，熔断器配套的 `ToolHealthMonitor` 走这一条路径，无须再做反射式存在性探测。维护外部连接的 Provider 实际覆写 `health_check` 由架构测试 `tests/architecture/test_provider_health_contract.py` 强制约束。
 
-### 两条路径的现实取舍
+### 简单工具正典路径（唯一路径）
 
-项目提供两种添加工工具的方式。**生产推荐路径 ①**（所有现存生产工具均此模式）；路径 ② 为轻量声明，仅供测试或未来探索使用。
+无状态、轻量的简单工具**不必手写 Provider 类**——正典路径三件套：
 
-| 维度 | 路径 ① `ToolProvider` 类 + `registry.register_provider()` | 路径 ② `@tool` 装饰器 |
-|------|--------------------------------------------------------|------------------------|
-| 状态/资源管理 | ✅ 构造器注入依赖（后端 / 引擎 / 配置） | ❌ 函数本体，外部状态需闭包/全局变量 |
-| 注册到指定 registry | ✅ 传任意 `ToolRegistry` 实例 | ❌ 默认进 `default_tool_registry()` 单例；要隔离需 `registry=...` 参数 |
-| 多工具聚合 | ✅ 一个 Provider 可声明多个 `ToolSpec` | ❌ 一函数一工具 |
-| 测试隔离 | ✅ Fake 后端构造后注入 Provider，干净 | ⚠️ 默认污染全局 registry，需 `clear()` |
-| 现有生产工具 | ✅ `look_at_screen` / `text_adv_choose_option` / `text_adv_get_story` / `reply` / `should_speak_proactively` / `parse_command` / ContentEngine 控制面 | ❌ **生产零使用**；仅 `look_at_screen` 旧测试 等轻量声明 |
-| 推荐主路径 | ✅ **推荐** | ⚠️ 轻量声明 path（测试/未来用） |
+1. `ToolSpec`（声明名裸名，全名自动派生）
+2. 普通 async 函数（经 `as_tool_impl` 包装：返回值/异常/计时归一为
+   `ToolExecutionResult`）
+3. `make_provider_from_specs` 组装 Provider，装配处一行
+   `registry.register_provider(provider, visible_to=...)` 注册
 
-### 最小骨架代码
+样板：`src/modules/memory/query_tool.py`（QueryMemory）。
 
-#### 路径 ①：`ToolProvider` 类（**生产推荐**）
+**升级为手写 Provider 类的判据**（出现任一条才升级）：需要连接重连
+（覆写 `connect`/`health_check`）/ 共享状态 / 动态工具表 / 任务适配器
+（回执型工具覆写 `query_task` / `subscribe_task_notifications`）。
+手写类同样继承 `BaseToolProvider`，`name` 属性必须与其全部 spec 的
+`provider` 同值（注册期 fail-fast 校验）。
 
-参考：`src/modules/tools/perception/look_at_screen.py`（公用 builtin 工具）、`src/agents/text_adv/tools.py`（text_adv 专属 Provider）。
+### 最小骨架代码（正典路径）
+
+参考样板：`src/modules/memory/query_tool.py`（QueryMemory——无连接、无状态的最纯形态）。
 
 ```python
-"""
-my_tool.py —— 示例工具（路径 ①：ToolProvider 类）
-放 src/modules/tools/<domain>/my_tool.py 或 src/agents/<name>/tools.py
-"""
-from __future__ import annotations
+# my_tool.py —— 简单工具正典路径样板
+# 放 src/modules/tools/<domain>/my_tool.py（公用）或 src/agents/<name>/tools.py（Agent 专属）
+from src.modules.tools.models import ToolSpec
+from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
 
-import time
-from typing import Iterable, Optional
-
-from src.modules.logging import get_logger
-from src.modules.tools.models import (
-    ToolExecutionResult,
-    ToolInvocation,
-    ToolSpec,
-)
-from src.modules.tools.provider import ToolProvider
-
-logger = get_logger("my_tool")
-
-
-# ---------------------------------------------------------------------------
-# 1. ToolSpec 工厂（返回 LLM 看的工具定义）
-# ---------------------------------------------------------------------------
+PROVIDER_NAME = "my"  # 提供者短名（三合一身份：全名前缀 / 注册名 / 定位键）
 
 MY_TOOL_SPEC = ToolSpec(
-    name="my_tool",
-    description="示例工具：把传入的文本翻译为大写（同步工具，调用即返回结果）。",
+    name="my_tool",  # 声明名裸名（不带前缀）；对外全名 = my_my_tool 派生
+    description="示例工具：把传入的文本翻译为大写。",
     parameters_schema={
         "type": "object",
-        "properties": {
-            "text": {
-                "type": "string",
-                "description": "要转换的文本",
-            },
-        },
+        "properties": {"text": {"type": "string", "description": "要转换的文本"}},
         "required": ["text"],
     },
-    kind="sync",                # "sync"=gather 等齐；"async"=fire-and-forget + result_event
-    provider="builtin",         # "builtin"/"game"/"mcp"——来源溯源
-    output_schema={
-        "type": "object",
-        "properties": {"result": {"type": "string"}},
-    },
-)
-
-
-def build_my_tool_spec() -> ToolSpec:
-    """构造 ToolSpec（工厂方法，便于将来参数化）。"""
-    return MY_TOOL_SPEC
-
-
-# ---------------------------------------------------------------------------
-# 2. ToolProvider 实现（满足 ToolProvider 协议）
-# ---------------------------------------------------------------------------
-
-class MyToolProvider(ToolProvider):
-    """my_tool 的 Provider；构造器注入依赖（这里演示空依赖版）。"""
-
-    @property
-    def name(self) -> str:
-        return "MyToolProvider"
-
-    def list_tools(self) -> Iterable[ToolSpec]:
-        return [build_my_tool_spec()]
-
-    async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        """契约：永不抛异常；失败转为 ToolExecutionResult(success=False, error_message=...)。"""
-        started_ms = int(time.time() * 1000)
-        try:
-            args = invocation.arguments or {}
-            text = str(args.get("text", "") or "")
-            if not text:
-                return ToolExecutionResult(
-                    tool_name="my_tool",
-                    success=False,
-                    error_message="缺少必填参数 text",
-                    timestamp_ms=int(time.time() * 1000),
-                    duration_ms=int(time.time() * 1000) - started_ms,
-                )
-            # TODO: 真实业务逻辑
-            upper = text.upper()
-            return ToolExecutionResult(
-                tool_name="my_tool",
-                success=True,
-                content=upper,
-                structured_content={"result": upper},
-                timestamp_ms=int(time.time() * 1000),
-                duration_ms=int(time.time() * 1000) - started_ms,
-            )
-        except Exception as exc:  # noqa: BLE001 - 边界处兜底
-            logger.warning(f"my_tool 执行失败: {exc}", exc_info=True)
-            return ToolExecutionResult(
-                tool_name="my_tool",
-                success=False,
-                error_message=f"{type(exc).__name__}: {exc}",
-                timestamp_ms=int(time.time() * 1000),
-                duration_ms=int(time.time() * 1000) - started_ms,
-            )
-
-
-# ---------------------------------------------------------------------------
-# 3. 注册到 ToolRegistry（由装配处调用）
-# ---------------------------------------------------------------------------
-
-def register_my_tool(registry, *, provider_name: str = "MyToolProvider") -> int:
-    """便捷函数：构造 Provider 并注册到指定 registry。返回新注册数。"""
-    return registry.register_provider(MyToolProvider())
-
-
-__all__ = ["MyToolProvider", "MY_TOOL_SPEC", "build_my_tool_spec", "register_my_tool"]
-```
-
-**注册调用**（通常在装配处 / `Agent._register_tools` / `main.py` 中）：
-
-```python
-from src.modules.tools.registry import default_tool_registry
-from my_tool import register_my_tool
-
-registry = default_tool_registry()  # 或 main.py 持有的 ToolRegistry 实例
-register_my_tool(registry)
-```
-
-#### 路径 ②：`@tool` 装饰器（轻量声明，测试/未来用）
-
-参考：`src/modules/tools/decorator.py`（装饰器实现）。
-
-```python
-"""
-my_lightweight_tool.py —— 示例工具（路径 ②：@tool 装饰器）
-注意：进程内单例 default_tool_registry()；隔离测试需 registry=... 参数。
-"""
-from src.modules.tools import tool, ToolInvocation, ToolExecutionResult
-
-
-@tool(
-    name="my_lightweight_tool",
-    description="示例轻量工具：返回当前时刻（毫秒）。",
-    parameters_schema={"type": "object", "properties": {}, "required": []},
     kind="sync",
-    provider="builtin",  # 默认 builtin
+    provider=PROVIDER_NAME,
 )
-async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult:
-    import time
-    now_ms = int(time.time() * 1000)
-    return ToolExecutionResult(
-        tool_name="my_lightweight_tool",
-        success=True,
-        content=str(now_ms),
-        structured_content={"now_ms": now_ms},
-        timestamp_ms=now_ms,
+
+
+async def _run(invocation) -> str:
+    """执行体：普通 async 函数。
+
+    返回 str/None → 成功 content；抛异常 → 失败结果（含异常信息）；计时自动包。
+    """
+    args = invocation.arguments or {}
+    return str(args.get("text", "")).upper()
+
+
+def build_my_tool() -> ToolProvider:
+    """组装 Provider（as_tool_impl 归一化 + make_provider_from_specs 包装）。"""
+    return make_provider_from_specs(
+        PROVIDER_NAME,
+        [(MY_TOOL_SPEC, as_tool_impl(MY_TOOL_SPEC.full_name, _run))],
+        category="my_domain",  # 可选分类（Dashboard 分组用）
     )
 ```
 
-> **装饰器特性**（详见 `src/modules/tools/decorator.py`）：
-> - `name` 默认用函数名；`description` 默认用 `inspect.getdoc(fn)`
-> - `kind="async"` 自动把 `result_event` 设为 `"tool.result.<name>"`（来自 `DEFAULT_RESULT_EVENT_PREFIX`）
-> - 自动包装返回值/异常为 `ToolExecutionResult`
-> - **不取代** `ToolProvider`：有状态/多步骤/需要构造器注入的请走路径 ①
+**注册调用**（装配处 / `Agent._register_tools` / `main.py`）：
+
+```python
+registry.register_provider(
+    build_my_tool(),
+    # 名单（ADR-012）：默认 ["*"] 全员可省略；Agent 专属工具填 ["<Agent 注册名>"]
+    visible_to={"my_my_tool": ["*"]},
+)
+```
 
 ### 装配路径
 
 | 步骤 | 位置 | 操作 |
 |------|------|------|
 | ① 放代码 | `src/modules/tools/<domain>/my_tool.py`（公用 builtin 工具）或 `src/agents/<name>/tools.py`（Agent 专属） | Provider 类 `XxxToolProvider` + `build_xxx_spec()` |
-| ② 注册 | Agent 专属：在该 Agent 的 `_register_tools` 中 `self._tool_registry.register_provider(provider)`；公用 builtin：在装配根 `main.py` 或专门的 wiring 模块中注册 | |
-| ③ 配置（可选） | Agent 专属工具一般无独立配置段（行为由 Agent 配置决定）；公用 builtin 工具若需要开关，放 `[tools.perception.config.<tool_name>]` 或 `[tools.output.config.<tool_name>]` | |
+| ② 注册（带名单） | Agent 专属：在该 Agent 的 `_register_tools` 中 `self._tool_registry.register_provider(provider, visible_to=...)`；公用：在装配根 `main.py` 注册（默认全员） | 名单是注册处代码事实（ADR-012）：值 = Agent 注册名列表或 `["*"]`；未列工具默认全员 |
+| ③ 配置（可选） | Agent 专属工具一般无独立配置段（行为由 Agent 配置决定）；公用工具按分类开关（`[tools.<domain>.<key>].enabled`） | |
 | ④ 列出与转换 | `ToolRegistry.to_llm_definitions()` 自动从 `ToolSpec.parameters_schema` 派生 OpenAI 风格 function calling 定义供 LLM 看 | |
 | ⑤ 调用 | `ToolRegistry.invoke(ToolInvocation(tool_name, arguments, call_id, source))`；**永不抛异常**——失败返回 `ToolExecutionResult(success=False, error_message=...)` | |
 
@@ -504,7 +396,7 @@ async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult
 
 - **Agent 专属工具**：Agent 子类 `_register_tools()` 方法（参考 `StreamerAgent._register_tools`、`TextAdvGameAgent._register_tools`）。在 Agent `_on_start` 阶段调用。
 - **公用 builtin 工具**：在装配根（`main.py` 或专用 wiring 模块）调 `register_xxx_tool(registry)`，通常在 `LLMManager.setup` 之后立即注册。
-- **工具注册聚合**：生产路径下不存在任何 manager 级聚合函数（旧 `register_all_tools` / `collect_tool_specs` / `_make_agent_tool_bridge` 已删除）——Agent 子类在 `_register_tools()` 中自己 `registry.register_provider(provider)`；`tools/output/*` 等公用 builtin 包由 `main.py` 的 `bind_core_tools(registry, slice)` 显式调 `register_*_tools(registry, config)`；L1 `@tool` 待注册条目由 `bind_pending_tools(registry)` flush；启动结束后 `audit_tools(registry)` 只做只读审计、列出未实现声明并 warning，不参与注入。
+- **工具注册聚合**：生产路径下不存在任何 manager 级聚合函数——Agent 子类在 `_register_tools()` 中自己 `registry.register_provider(provider, visible_to=...)`；avatar/studio 分类工具由 `main.py` 的 `bind_core_tools(registry, tools_cfg)` 按域开关装配；启动结束后 `audit_tools(registry)` 只做只读审计（声明与注册按派生全名对账），不参与注入。
 
 ### 测试要点
 
@@ -517,51 +409,128 @@ async def my_lightweight_tool(invocation: ToolInvocation) -> ToolExecutionResult
 
 ### 真实范例指引
 
-| 范例 | 文件 | 路径 |
+| 范例 | 文件 | 形态 |
 |------|------|------|
-| `look_at_screen`（公用 builtin，屏幕快照） | `src/modules/tools/perception/look_at_screen.py` | 路径 ① |
-| `text_adv_choose_option` / `text_adv_get_story`（Agent 专属 Provider，分类 game） | `src/agents/text_adv/tools.py` | 路径 ①（`provider="text_adv"`） |
-| `reply`（Agent 专属 builtin Provider） | `src/agents/streamer/tools/reply_tool.py` | 路径 ①（`provider="builtin"`） |
-| `should_speak_proactively` / `parse_command`（Agent 专属 builtin Provider） | `src/agents/streamer/tools/proactive_tool.py`、`src/agents/streamer/tools/command_tool.py` | 路径 ① |
-| ContentEngine 控制面（`provider="builtin"`） | `src/modules/tools/content_engine.py` | 路径 ① |
-| `@tool` 装饰器示例 | `src/modules/tools/decorator.py`（内含使用范例） | 路径 ② |
+| `memory_query_memory`（公用查询，正典样板） | `src/modules/memory/query_tool.py` | 正典路径（`as_tool_impl` + `make_provider_from_specs`） |
+| `vision_look_at_screen`（公用感知） | `src/modules/vision/look_at_screen.py` | 手写 Provider（DI 后端） |
+| `text_adv_choose_option` / `text_adv_get_story`（Agent 专属） | `src/agents/text_adv/tools.py` | 手写 Provider（`provider="text_adv"`） |
+| `streamer_reply`（主播发言出口，注册 + 名单 `["streamer"]`） | `src/agents/streamer/tools/reply_tool.py` | 手写 Provider（thinking 槽位） |
+| `rundown_control`（动态工具，条件追加例外） | `src/agents/streamer/tools/rundown_tool.py` | 正典路径包装直连执行器 |
+| `framework_delegate` / `framework_task_status`（委派原语） | `src/modules/agents/control.py` | 手写 Provider（`provider="framework"`） |
 
-### 工具可见性三维模型
+### 三个反直觉点（先读这里，防止按旧红线重新推错）
 
-工具在系统内有三个独立的"能不能用"判定维度，分别约束不同的可见层：
+1. **为何全部工具都注册？** 旧红线"Agent 内部件不注册"写于"注册=全局可见"的旧世界；
+   现在可见性由名单隔离（ADR-012）——注册带来统一观测（`tool.result` 事件）、
+   停用/熔断治理、工具页管理，全部复用注册表既有机制，不做第二路径。
+   注册的判据 = **"是不是工具"**（LLM/调用方会去调的能力）。
+2. **为何名单在生产侧（注册处代码声明）而不是消费侧（每 Agent 配清单）？**
+   本系统 Agent 与工具都是代码、Agent 只有一层无子代理；工具的生产者最清楚
+   它给谁用（出生时一处声明），消费侧清单要求每个 Agent 持有全局工具知识且
+   已被约束禁止。新 Agent 零维护自动正确。
+3. **内部件判据（哪些不是工具）**：代码直接调用的部件不算工具、不进表——
+   如主动发言判定（ProactiveTrigger）、命令解析原语（command/ 包）；它们
+   被特意排除在 LLM 工具面之外，没有 `ToolSpec`、不经注册表。
 
-| 维度 | 含义 | 控制位置 | 影响 |
-|------|------|---------|------|
-| 存在性 | 工具是否被装配到 `ToolRegistry` | `register` / `register_provider` | 不注册就完全不存在（也无法 invoke） |
-| 可见性 | LLM 工具面是否能看到该工具 | `disabled_tools` + `tripped` + 归属限定（owner_agent） | 可见性收紧后 `list_tools()` 默认面排除；invoke 仍可能命中 |
-| 可用性 | 工具当前是否真正可调用 | 熔断器（`is_tripped`）+ Provider `health_check` | 不可用时 invoke 返回失败 result，不抛异常 |
+**红线三分**（AGENTS.md 同款表述）：
 
-**LLM 工具面公式**（`list_tools(provider=None, include_disabled=False, include_tripped=False, include_scoped=False)` 的过滤结果）：
+| 类别 | 处置 | 例子 |
+|------|------|------|
+| LLM 可调的内部工具 | **注册 + 名单隔离**（名单填自己或指定受众） | `streamer_reply`、`minecraft_todo` |
+| Planner / Replyer 类本体 | **留在 Agent 内部，不进表**（Agent 的决策/表达部件，代码直连） | Planner、Replyer |
+| 代码直连的内部件 | **不是工具、不进表**（无 ToolSpec，被调才干活的纯代码部件） | ProactiveTrigger、命令解析原语 |
+
+### 可见名单机制（ADR-012）
+
+名单是**注册处的代码事实**（生产侧逐工具声明）：
+
+```python
+registry.register_provider(
+    provider,
+    visible_to={
+        "minecraft_todo": ["minecraft"],       # 仅自己
+        "maicraft_perceive": ["streamer", "minecraft"],  # 读工具放开给主播
+        # 未列出的工具默认 ["*"]（全员，共享常态）
+    },
+)
+```
+
+| 规则 | 说明 |
+|------|------|
+| 值 | Agent 注册名列表或 `["*"]`（单独出现 = 全员） |
+| 默认 | `["*"]`——不写即全员，全局注册零负担（fail-open，有意取舍） |
+| 校验（fail-fast） | 值非空、`"*"` 单独出现、键必须命中本注册项声明的工具全名（拼错即报错） |
+| 计算接口 | `list_tools(for_agent="<Agent 名>")`——该 Agent 的工具面；全体消费方统一从这里拿 |
+| 运营全集 | `list_tools()`（不传 `for_agent`）——Dashboard 工具页看一切 |
+| 调用边界 | `invoke()` 不查名单——LLM 幻觉编名直调是已知边界（封死需调用方身份治理） |
+
+**LLM 工具面公式**（`for_agent` 的过滤结果）：
 
 ```
-LLM 工具面 = 全部注册工具 − 手动停用(disabled_tools) − 熔断中(tripped) − 归属限定(owner_agent 非空)
+<Agent> 工具面 = 全部注册工具 − 停用(disabled_tools) − 熔断中(tripped) − 名单不含该 Agent 的工具
 ```
 
-**归属限定（owner_agent）**的三条可见路径：
+已知例外：动态工具（如 `rundown_control` 按流程单激活状态出现）名单静态，
+靠工具列表内条件追加，记录为例外。
 
-| 调用形态 | 是否受归属过滤 | 典型用途 |
-|---------|--------------|---------|
-| `list_tools(provider=None)` 默认面 | ✅ 排除归属限定工具 | Planner / Replyer 拉一般 LLM 工具面 |
-| `list_tools(provider="<具体>")` 域查询 | ❌ 不做归属过滤 | Agent 拉自己的工具面（`list_tools(provider="maicraft")`） |
-| `list_tools(include_scoped=True)` 运营面 | ❌ 不做归属过滤 | Dashboard 工具页运营视图 |
+### 三事件分工（防混淆）
 
-`invoke()` 不校验归属——受众治理只管发现面，LLM 幻觉编名直调保留工具是已知边界。
+| 事件 | 语义 | 发射点 |
+|------|------|--------|
+| `planner.verdict` | 决定时刻（reply 工具被调用、表达生成之前） | ReplyToolProvider |
+| `tool.result.<全名>` | 调用完成（成功/失败，含入参回显） | `ToolRegistry.invoke` 统一发射 |
+| `streamer.speech` | 业务事实（一条发言已生成，与 TTS 启用正交） | StreamerAgent 发言管线 |
+
+reply 走注册表后三事件都发——观测冗余是**有意接受**的（统一规则优先，
+三事件各答一个不同的问题）。
+
+### 异步任务基建与委派（ADR-013）
+
+回执型工具（调用拿任务号而非结果，如 `maicraft_execute`）与跨 Agent 委派
+共用一套基建（`src/modules/tools/tasks.py`）：
+
+- **受理约定**：结构化结果 `accepted=true + task_id`（回合不阻塞）
+- **任务记录表**（`TaskLedger`，内存）：任务号 → 状态/快照/发起方/执行者；
+  终态移除；`accepted↔running` 组内迁移静默（不唤醒），决策点与终态才发
+  `task.changed`
+- **跟踪循环**（`TaskTracker`，照 ToolHealthMonitor）：通知触发 + 周期兜底；
+  订阅按提供者复用；无进展提醒（`wait_timeout_ms` 停滞告警，不杀任务）
+- **适配器钩子**（默认不支持，回执型 provider 覆写）：`query_task(task_id)`
+  查事实；`subscribe_task_notifications(callback)` 订提示
+- **委派原语**：`framework_delegate(agent, instruction)` → 回执 + task_id
+  （名册校验、禁自派、BaseAgent 接收入口默认拒收）；`framework_task_status
+  (task_id)` 查进度。受理失败与任务失败分开
+- **唤醒**：`task.changed`（仅真变化/告警）→ BaseAgent 默认按
+  `payload.initiator == self.name` 过滤 → 子类覆写 `on_task_notification`
+  注入消息 + 唤醒
+
+接入回执型工具：绑定处声明适配器（查询工具全名 + 状态映射 + 通知 URI），
+范例见 `MinecraftAgent._bind_agent_owned_mcp`；接入委派：Agent 覆写
+`receive_delegation`（默认拒收），范例见 `MinecraftAgent.receive_delegation`。
+
+### 已知边界（有意取舍，勿当缺陷上报）
+
+- 编名直调不拦：`invoke` 不查名单/身份（发现面治理为主防线）
+- 重启丢跟踪：任务记录表内存态，重启后进行中任务的跟踪消失（执行侧仍在跑）
+- 无排队上限：委派/回执任务积压无限流
+- 无发起方取消：执行侧可用其工具取消（如 maicraft task cancel）；跨 Agent
+  取消按需再加
+- 动态工具列表内条件追加：`rundown_control` 按激活状态出现（唯一已知例外）
+- 停用边界作用于全部工具：停用关键内部件（如 `minecraft_todo`）会直接破坏
+  宿主 Agent 运行——管理面有警示标注（确认制，非硬禁）
+- 任务基建节拍配置 `[tools.tasks]` 为兜底读取（新键 → 旧键 → 默认），正式
+  配置段由配置线落
 
 ### MCP 二分表（通用 vs Agent 私有）
 
 | 通道 | 配置位置 | 工具注册时 `provider` | 装配入口 | 适用 |
 |------|---------|---------------------|----------|------|
 | 通用 MCP | `tools.toml` 的 `[tools.mcp.config.servers.<别名>]` | `<server 名>`（如 `maicraft`） | 组合根 `bind_mcp_tools(registry, ...)` | 任何 Agent 都可调用，类 Claude Code 全局工具源 |
-| Agent 私有 MCP | `agents.toml` 的 `[agents.<Agent 名>.mcp]` | `<server 名>` | Agent `_on_start` 自行装配，以 `owner_agent=<自身>` 注册 | 仅供该 Agent 的域内查询（`list_tools(provider=...)`） |
+| Agent 私有 MCP | `agents.toml` 的 `[agents.<Agent 名>.mcp]` | `<server 名>` | Agent `_on_start` 自行装配，逐工具名单（fail-closed：默认仅自己，读工具放开） | 名单内的 Agent 可见；域内查询 `list_tools(provider=...)` 照常 |
 
 原则：**位置即归属，装配即声明，调度与基建全局统一**——通用 MCP 与 Agent 私有 MCP 共用 `McpToolProvider` / `ToolRegistry` / 熔断器 / 探活等基建，唯一区别是归属标记与配置宿主文件。Agent 私有 MCP 的 `enabled=false` 时不装配（Agent 是命令驱动，MCP 不可用只降级）。
 
-典型范例：MinecraftAgent 在 `[agents.minecraft].mcp` 声明其 maicraft server，启动时自动以 `owner_agent="minecraft"` 注册——任何其它 Agent 都看不到，主播 Agent 与文本冒险 Agent 都不会被 maicraft 工具污染工具面。
+典型范例：MinecraftAgent 在 `[agents.minecraft].mcp` 声明其 maicraft server，启动时以逐工具名单注册（fail-closed：执行类工具仅 minecraft；读工具 perceive 放开给主播直读）——其它 Agent 的工具面不被 maicraft 执行工具污染。
 
 ---
 
@@ -783,7 +752,7 @@ class MyToolProvider(ToolProvider):
 | ② 注册工厂 | `src/modules/agents/factory.py` | `SUPPORTED_AGENTS` 元组加 `<注册名>`；加 `if name == "<注册名>":` 分支做 `instantiate_agent` |
 | ③ 写配置 | `config/agents.toml` 的 `[agents]` | `enabled = ["<注册名>"]` + `[agents.<注册名>]` 子段（参考 `StreamerAgentConfig` 字段） |
 | ④ 装配调用 | `main.py._register_agents_from_config` 或 `AgentManager.enable_agent(name, config, ...)` | 工厂实例化 → 构造器注入依赖 → `manager.register(agent, spec_provider="<builtin\|game\|mcp>")` → `manager.start_agent(name)` |
-| ⑤ 工具接线 | `bind_core_tools` / `bind_pending_tools` / Agent 子类 `_register_tools()` | 装配根 `main.py` 在 `start_all` 之前先调 `bind_core_tools(registry, [tools.output.config] slice)` 注册 9 个 output 包、再调 `bind_pending_tools(registry)` flush L1 `@tool` pending；随后 `start_all` 触发每个 Agent 子类的 `_register_tools()` 自己 `registry.register_provider(provider)`；结束后 `audit_tools(registry)` 列出未实现声明并 warning |
+| ⑤ 工具接线 | `bind_core_tools` / Agent 子类 `_register_tools()` | 装配根 `main.py` 先按域开关调 `bind_core_tools(registry, tools_cfg)` 装 avatar/studio 分类工具并启动任务跟踪循环；`start_all` 触发每个 Agent 子类 `_register_tools()` 自己 `registry.register_provider(provider, visible_to=...)`；结束后 `audit_tools(registry)` 按派生全名对账（零警告 = 声明与注册一致） |
 | ⑥ Dashboard | 自动可见 | 组件管理页从 `SUPPORTED_AGENTS` 拉清单 |
 
 **业务包放置规范**（防"插件换皮"红线）：
@@ -874,7 +843,7 @@ class MyToolProvider(ToolProvider):
 ### 已知缺口
 
 - **TTS 已基础模块化（原缺口已闭环 + v2.0.12 §8 修正）**：`core.toml [tts].enabled = true` 后，`build_tts_infrastructure` 装配期按 `[tts].provider` 单选构造引擎实例，StreamerAgent 构造期接收并把 `engine.handle_speech` 注入 UtteranceQueue；reply 产出的 speech 经 UtteranceQueue → 引擎 `handle_speech` 播出（不走 ToolRegistry，零 TTS 工具条目）。设计决策见 [ADR-007](../architecture/adr/007-tts-infrastructure-pipeline.md)。
-- **工具注册路径唯一**：`AgentManager` 不再聚合工具注册（旧 `register_all_tools` / `collect_tool_specs` / `_make_agent_tool_bridge` 已删除）——真实注册只走两条：① Agent 子类 `_register_tools()` 中自己 `registry.register_provider(provider)`；② 公用 builtin 包在 `main.py` 由 `bind_core_tools(registry, slice)` 显式调 `register_*_tools(registry, config)`（或 `bind_pending_tools(registry)` flush L1 `@tool` pending）。装配结束后 `AgentManager.audit_tools(registry)` 返回未实现声明列表并 warning，不写任何工具实现。
+- **工具注册路径唯一**：`AgentManager` 不聚合工具注册——真实注册只走两条：① Agent 子类 `_register_tools()` 中自己 `registry.register_provider(provider, visible_to=...)`；② 分类工具在 `main.py` 由 `bind_core_tools(registry, tools_cfg)` 按域开关装配。装配结束后 `AgentManager.audit_tools(registry)` 按派生全名对账（缺失即 warning），不写任何工具实现。
 
 ---
 

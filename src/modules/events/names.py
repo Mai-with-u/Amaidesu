@@ -48,6 +48,14 @@ class CoreEvents:
     # by 字段区分 agent/human/system；finish 时 segment_id="" 且 index==total。
     RUNDOWN_CHANGED = "rundown.changed"
 
+    # ========== v2 语义域事件（task 异步任务生命周期） ==========
+    # 唯一发布者：任务记录表（``src/modules/tools/tasks.py``）的写入边界——
+    # 状态**真的变化**时发一条（同状态幂等不重发）。payload 带 task_id /
+    # 状态 / 摘要 / 发起方 / 执行者；镜像 ``rundown.changed`` 的单事件 +
+    # payload 判别形态。BaseAgent 默认按 ``payload.initiator == self.name``
+    # 过滤唤醒（跨 Agent 委派与回执型工具共用，ADR-013）。
+    TASK_CHANGED = "task.changed"
+
     # ========== v2 语义域事件（planner 决策轮记录） ==========
     # 每轮两阶段决策结束发一条（成功/失败/低置信度降级全覆盖），观察器的
     # 决策卡数据源；round_id 为本轮弹幕批次/决策/发言/工具结果的共同关联键。

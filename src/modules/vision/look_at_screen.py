@@ -193,7 +193,7 @@ class LookAtScreenProvider(BaseToolProvider):
 
     @property
     def name(self) -> str:
-        return "LookAtScreenProvider"
+        return PROVIDER_NAME
 
     def list_tools(self) -> Iterable[ToolSpec]:
         return [LOOK_AT_SCREEN_SPEC]

@@ -37,7 +37,7 @@ class _ConnectableProvider(BaseToolProvider):
         return "conn"
 
     def list_tools(self):
-        return [ToolSpec(name="conn_a", description="a", kind="sync", provider="conn")]
+        return [ToolSpec(name="a", description="a", kind="sync", provider="conn")]
 
     async def invoke(self, invocation: ToolInvocation):
         from src.modules.tools.models import ToolExecutionResult

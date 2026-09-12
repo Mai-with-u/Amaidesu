@@ -34,6 +34,8 @@ ADR 记录已经作出的决定，不替代实现文档，也不用于记录迁�
 - [ADR-006：LLM 模拟器是官方开发基础设施，mock 采集器仅承担确定性回放](006-simulator-is-dev-infrastructure.md)
 - [ADR-007：TTS 作为配置驱动基础设施（reply → utterance 事件 → 引擎）；§8 概念修正后 TTS 提升为基础设施（基础模块），退出工具池](007-tts-infrastructure-pipeline.md)
 - [ADR-008：主播思考流旁路通道（观察面流式 / 播出面整段）](008-streamer-thinking-stream-bypass.md)
-- [ADR-009：Agent 私有 MCP 与工具归属限定（位置即归属，装配即声明）](009-agent-owned-mcp.md)
+- [ADR-009：Agent 私有 MCP 与工具归属限定（位置即归属，装配即声明）](009-agent-owned-mcp.md)（2026-09-11 修订：归属 + 名单双轴）
 - [ADR-010：工具可用性手动操作（手动重连）](010-tool-availability-reconnect.md)
 - [ADR-011：Rundown 流程单取代 Agenda 编排子系统](011-rundown-replaces-agenda.md)
+- [ADR-012：工具可见名单机制（注册处生产侧声明）](012-tool-visibility-list.md)
+- [ADR-013：异步任务基建与 Agent 委派原语](013-async-task-infrastructure-and-delegation.md)

@@ -46,7 +46,6 @@ from src.modules.types.message_type import require_message_type
 
 from .room_state import RoomState, RoomStateSnapshot
 from .thinking_stream import ThinkingStreamContext
-from .tools.reply_tool import build_reply_tool_spec
 from .tools.rundown_tool import build_rundown_control_function_def
 
 __all__ = ["Planner"]
@@ -89,8 +88,8 @@ class _PlannerConfig(BaseConfig):
 
 
 def _spec_to_fn_def(spec: Any) -> Dict[str, Any]:
-    """ToolSpec → OpenAI function def。"""
-    entry: Dict[str, Any] = {"name": spec.name, "description": spec.description}
+    """ToolSpec → OpenAI function def（name 用派生全名，与调用契约一致）。"""
+    entry: Dict[str, Any] = {"name": spec.full_name, "description": spec.description}
     if spec.parameters_schema is not None:
         entry["parameters"] = spec.parameters_schema
     return entry
@@ -337,7 +336,7 @@ class Planner:
                     continue
                 outcome["tool_trace"].append(name)
 
-                if name == "reply":
+                if name == "streamer_reply":
                     observation, replied = await self._invoke_reply(args, outcome, thinking=thinking, round_id=round_id)
                 elif name == "rundown_control" and self._rundown_provider is not None:
                     observation = self._invoke_rundown_control(args)
@@ -461,21 +460,25 @@ class Planner:
     # ==================== 工具面与执行 ====================
 
     def _build_tool_face(self) -> List[Dict[str, Any]]:
-        """构造 LLM 工具面：reply + rundown_control 局部工具 + 全局 ToolRegistry（过滤内部协议）。"""
-        face: List[Dict[str, Any]] = [_spec_to_fn_def(build_reply_tool_spec())]
+        """LLM 工具面 = 注册表按可见名单计算（for_agent="streamer"，ADR-012）。
+
+        唯一例外：rundown_control 是动态工具——按流程单激活状态条件追加
+        （注册表条目已在 for_agent 结果中，跳过防重）。
+        """
+        face: List[Dict[str, Any]] = []
         # 流程单激活时追加 rundown_control——环节推进是决策脑的职责（推进权归 Agent）
         if self._rundown_provider is not None and self._rundown_provider.is_active():
             face.append(build_rundown_control_function_def())
         if self._tool_registry is None:
             return face
         try:
-            specs = self._tool_registry.list_tools()
+            specs = self._tool_registry.list_tools(for_agent="streamer")
         except Exception as e:
-            self.logger.warning(f"Planner 拉取工具面失败（仅 reply 可用）: {e}")
+            self.logger.warning(f"Planner 拉取工具面失败（本轮仅保留 rundown_control）: {e}")
             return face
         for spec in specs:
-            # streamer 内部协议工具（reply/proactive/command 等）不进决策面（防重入）
-            if getattr(spec, "provider", "") == "streamer":
+            # rundown_control 由上面的激活条件追加（动态工具的已知例外，防重复条目）
+            if getattr(spec, "provider", "") == "rundown":
                 continue
             face.append(_spec_to_fn_def(spec))
         return face
@@ -488,19 +491,23 @@ class Planner:
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
     ) -> tuple[str, bool]:
-        """执行 reply 局部工具；成功时把产出写进 outcome 并返回 (观察, replied=True)。
+        """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出写进 outcome 并返回 (观察, replied=True)。
 
-        thinking 提供时：调用前把 replyer 阶段回调设到 Provider 的临时槽位，
-        调用后立即清理（一次性语义，防跨轮残留）。
+        统一调用路径：reply 与其他工具一样经 ``registry.invoke``（观测/停用/
+        熔断复用既有机制，tool.result 事件照发）。thinking 回调槽位机制保留：
+        调用前把 replyer 阶段回调设到 Provider 的临时槽位，调用后立即清理
+        （一次性语义，防跨轮残留）——槽位挂在 Provider 实例上，不经注册表。
         """
-        if self._reply_provider is None:
-            return json.dumps({"ok": False, "error": "reply 工具不可用（Provider 未绑定）"}, ensure_ascii=False), False
+        if self._tool_registry is None:
+            return json.dumps(
+                {"ok": False, "error": "reply 工具不可用（tool_registry 未注入）"}, ensure_ascii=False
+            ), False
         set_thinking = getattr(self._reply_provider, "set_thinking_callback", None)
         try:
             if set_thinking is not None:
                 set_thinking(thinking.callback_for("replyer", 1) if thinking else None)
-            result = await self._reply_provider.invoke(
-                ToolInvocation(tool_name="reply", arguments=args, source="planner-react", round_id=round_id)
+            result = await self._tool_registry.invoke(
+                ToolInvocation(tool_name="streamer_reply", arguments=args, source="planner-react", round_id=round_id)
             )
         except Exception as e:
             self.logger.warning(f"reply 工具执行异常: {e}", exc_info=True)

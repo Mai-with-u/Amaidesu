@@ -22,8 +22,9 @@ class MinecraftConfig(BaseConfig):
         execute_wait_timeout_ms: 后台任务单轮 wait_timeout 上限（毫秒）——
             长期无进展注入告警消息（不杀任务），LLM 自行决定后续
         mcp: Agent 私有 MCP server 配置（位置即归属）。enabled=true 时
-            _on_start 装配 McpToolProvider 并以 owner_agent="minecraft" 注册进
-            ToolRegistry；false 时不装配（Agent 命令驱动，MCP 不可用即降级）。
+            _on_start 装配 McpToolProvider 并以逐工具可见名单（ADR-012，
+            fail-closed）注册进 ToolRegistry；false 时不装配（Agent 命令
+            驱动，MCP 不可用即降级）。
     """
 
     max_steps: int = Field(default=50, ge=1, description="单任务 ReAct 循环最大步数（超出挂起上报）")

@@ -1,8 +1,7 @@
 """Mapper 纯函数单测：MCP → Amaidesu 工具契约映射
 
 覆盖：
-- normalize_tool_name（无条件加前缀）
-- to_spec（Tool → ToolSpec：name/description/inputSchema/provider）
+- to_spec（Tool → ToolSpec：name 存 server 原始名，provider 默认 "mcp"、全名派生）
 - to_result（CallToolResult → ToolExecutionResult：成功/错误/结构化/image 块）
 """
 
@@ -13,7 +12,6 @@ from typing import Any
 import pytest
 
 from src.modules.mcp.mapper import (
-    normalize_tool_name,
     to_result,
     to_spec,
 )
@@ -53,25 +51,7 @@ class FakeCallToolResult:
 
 
 # ---------------------------------------------------------------------------
-# normalize_tool_name（无条件加前缀）
-# ---------------------------------------------------------------------------
-
-
-class TestToolName:
-    def test_prefix_added_when_missing(self) -> None:
-        assert normalize_tool_name("perceive", "serverA_") == "serverA_perceive"
-
-    def test_prefix_always_added_even_if_present(self) -> None:
-        # 原名已带 server 前缀也照样再加：不猜原名形态，注册名唯一即可，
-        # 调用时由 Provider 映射表还原原名
-        assert normalize_tool_name("serverA_perceive", "serverA_") == "serverA_serverA_perceive"
-
-    def test_no_prefix_returns_raw(self) -> None:
-        assert normalize_tool_name("perceive", "") == "perceive"
-
-
-# ---------------------------------------------------------------------------
-# to_spec
+# to_spec（声明名 = server 原始名；全名派生）
 # ---------------------------------------------------------------------------
 
 
@@ -82,8 +62,8 @@ class TestToSpec:
             description="观察当前局面",
             input_schema={"type": "object", "properties": {"view": {"type": "string"}}},
         )
-        spec = to_spec(tool, prefix="serverA_")
-        assert spec.name == "serverA_perceive"
+        spec = to_spec(tool)
+        assert spec.name == "perceive"
         assert spec.description == "观察当前局面"
         assert spec.parameters_schema == {
             "type": "object",
@@ -91,15 +71,25 @@ class TestToSpec:
         }
         assert spec.kind == "sync"
         assert spec.provider == "mcp"
+        assert spec.full_name == "mcp_perceive"
 
     def test_provider_override(self) -> None:
         tool = FakeMcpTool(name="perceive")
-        spec = to_spec(tool, prefix="serverA_", provider="game")
+        spec = to_spec(tool, provider="game")
         assert spec.provider == "game"
+        assert spec.full_name == "game_perceive"
+
+    def test_raw_name_with_prefix_kept_as_is(self) -> None:
+        # 原名自带 server 前缀（旧 mod 数据形态）也原样保留为声明名；
+        # 全名派生不解析原名，调用 server 时用 spec.name 直呼
+        tool = FakeMcpTool(name="serverA_perceive")
+        spec = to_spec(tool, provider="serverA")
+        assert spec.name == "serverA_perceive"
+        assert spec.full_name == "serverA_serverA_perceive"
 
     def test_no_schema_returns_none(self) -> None:
         tool = FakeMcpTool(name="bare", description="no schema")
-        spec = to_spec(tool, prefix="")
+        spec = to_spec(tool)
         assert spec.parameters_schema is None
 
 

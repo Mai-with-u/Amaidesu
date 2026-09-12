@@ -9,7 +9,7 @@ ToolRegistry 单元测试。
 - Provider 整体注册
 - to_llm_definitions 转换
 - 异步工具 kind="async" result_event 默认 ``tool.result.<name>``
-- @tool 装饰器
+- 简单工具路径：``make_provider_from_specs`` 构造 + 注册
 """
 
 from __future__ import annotations
@@ -24,10 +24,9 @@ from src.modules.tools import (
     ToolProvider,
     ToolRegistry,
     ToolSpec,
-    tool,
 )
 from src.modules.tools.models import ToolExecutionResult
-from src.modules.tools.provider import BaseToolProvider
+from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
 
 
 # =============================================================================
@@ -136,14 +135,14 @@ async def test_invoke_implementation_exception_isolation(registry: ToolRegistry)
 class _SampleProvider(ToolProvider):
     @property
     def name(self) -> str:
-        return "SampleProvider"
+        return "game"
 
     # 自声明归属分类（provider 名 → 分类 正交）
     category = "game"
 
     def __init__(self) -> None:
+        # 声明名是裸名；对外全名 = <provider>_<工具名>（ToolSpec.full_name 派生）
         self._specs: List[ToolSpec] = [
-            # 裸名（不带 provider 前缀）：register_provider 会自动补 "game_" 前缀
             ToolSpec(name="p_a", description="a", kind="sync", provider="game"),
             ToolSpec(name="p_b", description="b", kind="sync", provider="game"),
         ]
@@ -152,35 +151,49 @@ class _SampleProvider(ToolProvider):
         return list(self._specs)
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        # 注册名统一为 <provider>_<name>；本地分发剥前缀归一
-        local = invocation.tool_name.removeprefix("game_")
-        if local == "p_a":
-            return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="from_a")
-        if local == "p_b":
-            return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="from_b")
+        # 调用方使用的就是派生全名，等值对照分发
+        name = invocation.tool_name
+        if name == "game_p_a":
+            return ToolExecutionResult(tool_name=name, success=True, content="from_a")
+        if name == "game_p_b":
+            return ToolExecutionResult(tool_name=name, success=True, content="from_b")
         return ToolExecutionResult(
-            tool_name=invocation.tool_name,
+            tool_name=name,
             success=False,
             error_message="not_in_provider",
         )
 
 
-async def test_provider_registration_auto_prefixes_bare_names(registry: ToolRegistry) -> None:
-    """裸名工具注册进 registry 时自动补 ``<provider>_`` 前缀（无条件）。"""
+async def test_provider_registration_keys_are_derived_full_names(registry: ToolRegistry) -> None:
+    """注册键 = 派生全名；spec 原样存储（声明名保持裸名，无改名拷贝）。"""
     provider = _SampleProvider()
     new_count = registry.register_provider(provider)
     assert new_count == 2
     tools = registry.list_tools()
-    names = {t.name for t in tools}
-    assert names == {"game_p_a", "game_p_b"}
+    full_names = {t.full_name for t in tools}
+    assert full_names == {"game_p_a", "game_p_b"}
+    # spec 原样存储：声明名仍是裸名（list_tools 返回的就是 provider 声明的 spec）
+    bare_names = {t.name for t in tools}
+    assert bare_names == {"p_a", "p_b"}
     # provider 过滤（按提供者名）
     game_tools = registry.list_tools(provider="game")
     assert len(game_tools) == 2
     builtin_tools = registry.list_tools(provider="builtin")
     assert len(builtin_tools) == 0
-    # 前缀改写不得污染 provider 返回的原 spec（list_tools 仍返回裸名）
-    raw_names = {s.name for s in provider.list_tools()}
-    assert raw_names == {"p_a", "p_b"}
+
+
+async def test_provider_name_spec_provider_mismatch_rejected(registry: ToolRegistry) -> None:
+    """提供者单名校验（fail-fast）：provider.name 与 spec.provider 不同值 → 抛错。"""
+
+    class MismatchedProvider(_SampleProvider):
+        @property
+        def name(self) -> str:
+            return "other"
+
+    with pytest.raises(ValueError) as exc_info:
+        registry.register_provider(MismatchedProvider())
+    assert "other" in str(exc_info.value)
+    assert "game" in str(exc_info.value)
 
 
 async def test_provider_category_recorded_and_queryable(registry: ToolRegistry) -> None:
@@ -189,14 +202,14 @@ async def test_provider_category_recorded_and_queryable(registry: ToolRegistry) 
     registry.register_provider(provider)
     assert registry.list_categories() == ["game"]
     cat_tools = registry.list_tools(category="game")
-    assert {t.name for t in cat_tools} == {"game_p_a", "game_p_b"}
+    assert {t.full_name for t in cat_tools} == {"game_p_a", "game_p_b"}
     assert registry.list_tools(category="avatar") == []
     # 未声明分类的 provider 不产生空分类
     assert registry.list_categories() == ["game"]
 
 
 async def test_provider_registered_name_invocable(registry: ToolRegistry) -> None:
-    """provider 分发剥前缀归一后，按注册名 invoke 可命中。"""
+    """按派生全名 invoke 可命中（调用与索引共用全名）。"""
     provider = _SampleProvider()
     registry.register_provider(provider)
     res = await registry.invoke(ToolInvocation(tool_name="game_p_a"))
@@ -262,55 +275,57 @@ async def test_to_llm_definitions_shape(registry: ToolRegistry) -> None:
 
 
 # =============================================================================
-# @tool 装饰器
+# 简单工具路径：make_provider_from_specs
 # =============================================================================
 
 
-def test_tool_decorator_pending_mode_does_not_touch_default_registry():
-    """@tool 装饰器无 ``registry=`` 时只入 pending 表，不污染默认 registry。
+def _build_hello_provider() -> ToolProvider:
+    """构造一个 spec + 函数 的固定 Provider（简单工具正典形态）。"""
 
-    验证 pending 模式：装饰器**不**触发 ``default_tool_registry()``。
-    """
-    from src.modules.tools.decorator import _clear_pending, _pending_count
+    async def hi(invocation: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="hello")
+
+    return make_provider_from_specs(
+        "simple",
+        [(ToolSpec(name="hi", description="hi", provider="simple"), hi)],
+    )
+
+
+def test_make_provider_from_specs_registers_and_invokes():
+    """spec + 函数经 make_provider_from_specs 构造后可注册、按注册名可调用。"""
+    reg = ToolRegistry()
+    provider = _build_hello_provider()
+    assert reg.register_provider(provider) == 1
+    assert reg.has("simple_hi")
+
+
+async def test_make_provider_from_specs_invoke_by_registered_name():
+    """按注册名（``<provider>_<name>``）invoke 命中实现函数。"""
+    reg = ToolRegistry()
+    reg.register_provider(_build_hello_provider())
+    res = await reg.invoke(ToolInvocation(tool_name="simple_hi"))
+    assert res.success is True
+    assert res.content == "hello"
+    assert res.tool_name == "simple_hi"
+
+
+def test_make_provider_from_specs_no_side_effects_on_default_registry():
+    """构造与注册只影响显式传入的 registry，不触碰默认单例。"""
     from src.modules.tools.registry import (
         default_tool_registry,
         set_default_registry,
     )
 
-    _clear_pending()
-    # 隔离默认 registry：用 sentinel 检测是否被污染
     saved = default_tool_registry()
     sentinel = ToolRegistry()
     set_default_registry(sentinel)
     try:
-
-        @tool(description="hi")
-        async def hi(invocation: ToolInvocation) -> ToolExecutionResult:
-            return ToolExecutionResult(tool_name="hi", success=True, content="hello")
-
-        spec = hi.tool_spec  # type: ignore[attr-defined]
-        assert spec.name == "hi"
-        assert spec.description == "hi"
-        # pending 模式不应触碰默认 registry
-        assert _pending_count() == 1
-        assert sentinel.has("hi") is False, "pending 模式不应写入默认单例"
+        reg = ToolRegistry()
+        reg.register_provider(_build_hello_provider())
+        assert reg.has("simple_hi")
+        assert sentinel.has("simple_hi") is False, "注册不应写入默认单例"
     finally:
         set_default_registry(saved)
-        _clear_pending()
-
-
-def test_tool_decorator_explicit_registry_mode():
-    """@tool 装饰器传 ``registry=`` 时立即注册到该 registry（测试兼容路径）。"""
-    reg = ToolRegistry()
-
-    @tool(description="hi", registry=reg)
-    async def hi(invocation: ToolInvocation) -> ToolExecutionResult:
-        return ToolExecutionResult(tool_name="hi", success=True, content="hello")
-
-    spec = hi.tool_spec  # type: ignore[attr-defined]
-    assert spec.name == "hi"
-    assert spec.description == "hi"
-    assert reg.has("hi")
 
 
 # =============================================================================
@@ -431,119 +446,150 @@ async def test_invoke_without_event_bus_skips_emit(registry: ToolRegistry) -> No
 
 
 # =============================================================================
-# 归属限定（owner_agent）
+# 可见名单（visible_to，ADR-012）
 #
-# 三方过滤语义：
-# - 一般查询（provider=None 且 include_scoped=False）→ 排除归属限定工具
-# - provider 域查询（provider 非 None）→ 不做归属过滤（Agent 拉自己的工具面）
-# - 运营查询（include_scoped=True）→ 包含一切（Dashboard 工具页）
-# invoke() 不校验归属——受众治理只管发现面。
+# - 注册处逐工具声明（值 = Agent 注册名列表或 ["*"]；未声明默认全员）
+# - for_agent 按名单计算工具面；不传 for_agent = 运营全集
+# - invoke() 不查名单——受众治理只管发现面（编名直调是已知边界）
 # =============================================================================
 
 
-def test_register_provider_owner_agent_records_scoped_owner(registry: ToolRegistry) -> None:
-    """register_provider 传 owner_agent 非空时，每个工具的 _scoped_owner 被标记。"""
-    provider = _SampleProvider()
-    new_count = registry.register_provider(provider, owner_agent="minecraft")
-    assert new_count == 2
-    assert registry.scoped_owner_of("game_p_a") == "minecraft"
-    assert registry.scoped_owner_of("game_p_b") == "minecraft"
+def test_visible_to_recorded_and_for_agent_filters(registry: ToolRegistry) -> None:
+    """visible_to 注册处声明生效：for_agent 按名单计算工具面；未列工具默认全员。"""
 
-
-def test_register_provider_default_owner_agent_is_empty(registry: ToolRegistry) -> None:
-    """不传 owner_agent 时，工具无归属限定（与原行为一致）。"""
-    provider = _SampleProvider()
-    registry.register_provider(provider)
-    assert registry.scoped_owner_of("game_p_a") == ""
-    assert registry.scoped_owner_of("game_p_b") == ""
-
-
-def test_list_tools_default_excludes_scoped_tools(registry: ToolRegistry) -> None:
-    """一般查询（provider=None 且 include_scoped=False）排除归属限定工具。"""
-
-    class PublicProvider(BaseToolProvider):
+    class MixedProvider(BaseToolProvider):
         @property
         def name(self) -> str:
-            return "PublicProvider"
+            return "mixed"
 
         def list_tools(self):
-            return [ToolSpec(name="public_x", description="x", kind="sync", provider="public")]
+            return [
+                ToolSpec(name="open", description="o", kind="sync", provider="mixed"),
+                ToolSpec(name="secret", description="s", kind="sync", provider="mixed"),
+            ]
 
         async def invoke(self, invocation: ToolInvocation):
-            return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="from_public")
+            return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
 
-    scoped = _SampleProvider()
-    registry.register_provider(scoped, owner_agent="minecraft")
-    registry.register_provider(PublicProvider())
+    registry.register_provider(
+        MixedProvider(), visible_to={"mixed_secret": ["minecraft"]}
+    )
 
-    names = {t.name for t in registry.list_tools()}
-    assert "public_x" in names
-    assert "game_p_a" not in names
-    assert "game_p_b" not in names
+    # 名单查询
+    assert registry.visible_to_of("mixed_open") == ["*"]  # 未声明 = 全员
+    assert registry.visible_to_of("mixed_secret") == ["minecraft"]
+    # for_agent 计算工具面
+    streamer_face = {s.full_name for s in registry.list_tools(for_agent="streamer")}
+    assert streamer_face == {"mixed_open"}  # secret 对主播不可见
+    minecraft_face = {s.full_name for s in registry.list_tools(for_agent="minecraft")}
+    assert minecraft_face == {"mixed_open", "mixed_secret"}
+    # 不传 for_agent = 运营全集
+    everything = {s.full_name for s in registry.list_tools()}
+    assert everything == {"mixed_open", "mixed_secret"}
 
 
-def test_list_tools_include_scoped_returns_all(registry: ToolRegistry) -> None:
-    """运营查询（include_scoped=True）含一切：归属限定工具也在内。"""
+def test_for_agent_wildcard_visible_to_all(registry: ToolRegistry) -> None:
+    """visible_to 显式声明 ["*"] 等价全员可见。"""
 
-    class PublicProvider(BaseToolProvider):
+    class OpenProvider(BaseToolProvider):
         @property
         def name(self) -> str:
-            return "PublicProvider"
+            return "open"
 
         def list_tools(self):
-            return [ToolSpec(name="public_x", description="x", kind="sync", provider="public")]
+            return [ToolSpec(name="x", description="x", kind="sync", provider="open")]
 
         async def invoke(self, invocation: ToolInvocation):
-            return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="from_public")
+            return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
 
-    scoped = _SampleProvider()
-    registry.register_provider(scoped, owner_agent="minecraft")
-    registry.register_provider(PublicProvider())
-
-    names = {t.name for t in registry.list_tools(include_scoped=True)}
-    assert names == {"game_p_a", "game_p_b", "public_x"}
+    registry.register_provider(OpenProvider(), visible_to={"open_x": ["*"]})
+    assert {s.full_name for s in registry.list_tools(for_agent="anyone")} == {"open_x"}
 
 
-def test_list_tools_provider_query_bypasses_scoped_filter(registry: ToolRegistry) -> None:
-    """provider 域查询（provider 非 None）不做归属过滤——MinecraftAgent 拉自己工具面的前提。
-
-    这是与"排除归属限定"一般面的关键区别：Agent 拉自己 provider 名下的工具时，
-    必须能看到（否则 MinecraftAgent.list_tools(provider="maicraft") 会变空）。
-    """
-    scoped = _SampleProvider()
-    registry.register_provider(scoped, owner_agent="minecraft")
-
-    assert registry.list_tools() == []
-    names = {t.name for t in registry.list_tools(provider="game")}
-    assert names == {"game_p_a", "game_p_b"}
+def test_visible_to_empty_list_rejected(registry: ToolRegistry) -> None:
+    """校验失败：空表非法。"""
+    provider = _SampleProvider()
+    with pytest.raises(ValueError, match="非空列表"):
+        registry.register_provider(provider, visible_to={"game_p_a": []})
 
 
-def test_scoped_owner_of_unknown_tool_returns_empty(registry: ToolRegistry) -> None:
-    """未知工具的归属查询返回空串（与"未声明"语义一致）。"""
-    assert registry.scoped_owner_of("never_registered") == ""
+def test_visible_to_wildcard_mixed_rejected(registry: ToolRegistry) -> None:
+    """校验失败：'*' 只能单独出现（["*","streamer"] 非法）。"""
+    provider = _SampleProvider()
+    with pytest.raises(ValueError, match="单独出现"):
+        registry.register_provider(provider, visible_to={"game_p_a": ["*", "streamer"]})
 
 
-def test_clear_resets_scoped_owner(registry: ToolRegistry) -> None:
-    """clear() 同步清空 _scoped_owner（与其他内部容器一致）。"""
-    scoped = _SampleProvider()
-    registry.register_provider(scoped, owner_agent="minecraft")
-    assert registry.scoped_owner_of("game_p_a") == "minecraft"
+def test_visible_to_unknown_key_rejected(registry: ToolRegistry) -> None:
+    """校验失败：键拼错（未命中本注册项声明的工具全名）即报错。"""
+    provider = _SampleProvider()
+    with pytest.raises(ValueError, match="未命中"):
+        registry.register_provider(provider, visible_to={"game_pa_typo": ["streamer"]})
+
+
+def test_clear_resets_visible_to(registry: ToolRegistry) -> None:
+    """clear() 同步清空 _visible_to（与其他内部容器一致）。"""
+    provider = _SampleProvider()
+    registry.register_provider(provider, visible_to={"game_p_a": ["minecraft"]})
+    assert registry.visible_to_of("game_p_a") == ["minecraft"]
 
     registry.clear()
-    assert registry.scoped_owner_of("game_p_a") == ""
+    assert registry.visible_to_of("game_p_a") == ["*"]
 
 
-async def test_invoke_scoped_tool_is_not_blocked_by_ownership(registry: ToolRegistry) -> None:
-    """受众治理只管发现面：归属限定的工具在 invoke 时不校验归属——LLM 幻觉编名
-    直调保留工具是已知的受众治理边界，此测试固定该契约。
+async def test_invoke_not_in_visible_list_is_not_blocked(registry: ToolRegistry) -> None:
+    """名单只管发现面：不在名单内的 Agent 编名直调仍按"已知工具"路径执行。
 
-    ``list_tools()`` 默认排除该工具，但 ``invoke()`` 仍按"已知工具"路径执行。
+    LLM 幻觉编名直调保留工具是已知的受众治理边界，此测试固定该契约
+    （与 ADR-009/012 的 invoke 不查身份一致）。
     """
     provider = _SampleProvider()
-    registry.register_provider(provider, owner_agent="minecraft")
+    registry.register_provider(provider, visible_to={"game_p_a": ["minecraft"]})
 
-    # 受众治理只管发现面：invoke 仍能命中归属限定的工具
-    assert registry.list_tools() == []
+    # streamer 的工具面看不到 game_p_a，但 invoke 仍能命中
+    assert "game_p_a" not in {s.full_name for s in registry.list_tools(for_agent="streamer")}
     res = await registry.invoke(ToolInvocation(tool_name="game_p_a"))
     assert res.success is True
     assert res.content == "from_a"
+    assert res.tool_name == "game_p_a"
+
+
+# =============================================================================
+# 命名模型：full_name 派生与停用列表警告
+# =============================================================================
+
+
+def test_full_name_derivation() -> None:
+    """全名 = <provider>_<工具名> 派生；同一 spec 重复计算结果一致（不存下来）。"""
+    spec = ToolSpec(name="todo", description="d", kind="sync", provider="minecraft")
+    assert spec.full_name == "minecraft_todo"
+    assert spec.full_name == spec.full_name
+
+
+def test_full_name_empty_provider_falls_back_to_name() -> None:
+    """provider 为空（匿名工具）时全名 = 工具名本身（兜底，不应出现）。"""
+    spec = ToolSpec(name="echo", description="d", kind="sync")
+    assert spec.provider == ""
+    assert spec.full_name == "echo"
+
+
+def test_apply_disabled_warns_on_unmatched_names(
+    registry: ToolRegistry,
+) -> None:
+    """停用列表中未注册的名字触发 warning 并列出（防改名后静默失效）；已存在名字正常生效。"""
+    from loguru import logger
+
+    provider = _SampleProvider()
+    registry.register_provider(provider)
+
+    messages: list[str] = []
+    handler_id = logger.add(lambda m: messages.append(m), level="WARNING")
+    try:
+        effective = registry.apply_disabled(["game_p_a", "不存在的工具名"])
+    finally:
+        logger.remove(handler_id)
+
+    assert effective == 1
+    assert registry.is_disabled("game_p_a") is True
+    assert registry.disabled_tools == ["game_p_a"]
+    assert any("不存在的工具名" in m for m in messages), "未匹配条目应出现在 warning 日志"

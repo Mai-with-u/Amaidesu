@@ -18,7 +18,7 @@
 - ``rundown/``          - 流程单（Rundown）子系统：``rundown``（数据契约 + 内置默认流程单）/
   ``rundown_state``（运行时状态：游标 + 计时 + 唯一变更边界）/ ``rundown_tool``（Agent 推进工具）
 - ``tools/``            - Agent 专属工具壳层（**真工具**，provider="builtin"）：``reply_tool``
-  （reply）/ ``proactive_tool``（should_speak_proactively）/ ``command_tool``（parse_command）；
+  （reply / rundown_control，经 ToolRegistry 注册 + 名单隔离）；
   只包装顶层内脏，不含决策/表达逻辑
 - ``command/``          - 纯解析原语（命令数据结构 / 解析器 / 注册表，不注册工具）
 """

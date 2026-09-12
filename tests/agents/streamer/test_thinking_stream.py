@@ -159,7 +159,7 @@ async def test_provider_sets_and_clears_thinking_callback():
     provider.set_thinking_callback(callback)
     result = await provider.invoke(
         ToolInvocation(
-            tool_name="reply",
+            tool_name="streamer_reply",
             arguments={"topic_summary": "s"},
             source="planner-react",
         )

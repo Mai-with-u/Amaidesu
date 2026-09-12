@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import AsyncGenerator, Iterable
 
+import asyncio
+
 import pytest
 
 from src.modules.agents import (
@@ -308,7 +310,7 @@ async def test_audit_tools_reports_missing_when_impl_absent(
     mgr = AgentManager()
     mgr.register(sample_agent)
     reg = ToolRegistry()  # 空 registry，无任何工具
-    assert mgr.audit_tools(reg) == ["sample_tool"]
+    assert mgr.audit_tools(reg) == ["game_sample_tool"]
 
 
 async def test_audit_tools_empty_when_impl_registered(
@@ -353,7 +355,7 @@ async def test_audit_tools_skips_agents_whose_list_tools_raises(
     # sample_agent 的 sample_tool 仍应被报告为缺失；
     # raising Agent 不应导致审计崩溃。
     missing = mgr.audit_tools(reg)
-    assert missing == ["sample_tool"]
+    assert missing == ["game_sample_tool"]
 
 
 async def test_agent_manager_unregister_only_when_stopped() -> None:
@@ -404,7 +406,7 @@ async def test_agent_control_list_tools_via_registry(sample_agent: _SampleAgent)
         "framework_list_agents",
         "framework_agent_state",
     }
-    names = {spec.name for spec in reg.list_tools()}
+    names = {spec.full_name for spec in reg.list_tools()}
     assert expected.issubset(names)
 
 
@@ -476,3 +478,52 @@ async def test_agent_control_provider_is_provider(sample_agent: _SampleAgent) ->
     mgr.register(sample_agent)
     cp = build_agent_control_provider(mgr)
     assert isinstance(cp, ToolProvider)
+
+
+# ---------------------------------------------------------------------------
+# task.changed 唤醒（BaseAgent 默认行为：订阅 + 发起方过滤 + 退订清理）
+# ---------------------------------------------------------------------------
+
+
+async def test_task_wakeup_filters_by_initiator_and_unsubscribes() -> None:
+    """task.changed：只唤醒发起方（initiator 匹配）；stop 后退订（后续事件不再派发）。"""
+    from src.modules.events.event_bus import EventBus
+    from src.modules.events.names import CoreEvents
+    from src.modules.events.payloads.tasks import TaskChangedPayload
+
+    class _WakeupAgent(_SampleAgent):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.notified: list[str] = []
+
+        def on_task_notification(self, payload) -> None:
+            self.notified.append(payload.task_id)
+
+    agent = _WakeupAgent(event_bus=EventBus(enable_stats=False))
+    await agent.start()
+    bus = agent._event_bus
+    try:
+
+        async def _fire(initiator: str, task_id: str) -> None:
+            await bus.emit(
+                CoreEvents.TASK_CHANGED,
+                TaskChangedPayload(task_id=task_id, status="running", initiator=initiator, executor="minecraft"),
+                source="TaskLedger",
+            )
+
+        await _fire("sample_agent", "t-mine")  # 发起方是自己 → 派发
+        await _fire("other_agent", "t-other")  # 发起方是别人 → 过滤
+        await asyncio.sleep(0.05)
+        assert agent.notified == ["t-mine"], "只唤醒发起方"
+    finally:
+        await agent.stop()
+
+    # stop 后退订：后续事件不再派发
+    await bus.emit(
+        CoreEvents.TASK_CHANGED,
+        TaskChangedPayload(task_id="t-after", status="running", initiator="sample_agent", executor="minecraft"),
+        source="TaskLedger",
+    )
+    await asyncio.sleep(0.05)
+    assert agent.notified == ["t-mine"], "退订清理生效（stop 后不再派发）"
+    await bus.cleanup()

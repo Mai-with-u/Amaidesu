@@ -67,7 +67,7 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 | | 驱动方式 | 循环/目标 | 例子 |
 |---|---|---|---|
 | **主播 Agent** | 自我驱动（唯一），直播期间持续运行 | 有 | 主播 Planner 决策循环 |
-| **游戏 Agent** | 命令驱动（类 Code Agent）：命令启动任务内有界循环，完成即停、空闲零消耗 | 任务内 | MinecraftAgent（set_goal 唤醒） |
+| **游戏 Agent** | 命令驱动（类 Code Agent）：命令启动任务内有界循环，完成即停、空闲零消耗 | 任务内 | MinecraftAgent（minecraft_send_prompt 唤醒） |
 | **工具** | 被动驱动，被调才干活 | 无 | Replyer 表达引擎、屏幕捕捉、VLM（TTS 自 v2.0.12 §8 修正起已是基础模块，不再是工具） |
 
 以及一句对内容生产者的解放：**直播内容是编排配置 + Planner 上下文/行为模式的变化，不是代码模块。** 加一档节目不需要写代码，加一类游戏才需要一个新 Agent 包。
@@ -82,7 +82,7 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 |---|---|
 | 核心功能也做成插件，必需与可选混杂 | 工具/存储/记忆/事件/LLM 全部是框架基础设施（`src/modules/`）；只有"主体"住在 Agent 包里 |
 | 服务注册机制，依赖运行时才暴露问题 | 无服务注册；构造器注入 + 事件/工具契约 |
-| 24 个插件互相依赖成石山 | 游戏 Agent 之间零依赖，经事件（`game.*`）/状态（工具，如 text_adv_get_story）/指令（set_goal 类工具）三通道松耦合 |
+| 24 个插件互相依赖成石山 | 游戏 Agent 之间零依赖，经事件（`game.*`）/状态（工具，如 text_adv_get_story）/指令（minecraft_send_prompt 类工具）三通道松耦合 |
 | 消息流经中心中转，链路不清 | Agent → 工具/事件/存储直达，单向清晰 |
 | 全局/插件级配置混乱 | 七文件按领域拆分 + Pydantic Schema 校验 |
 
@@ -105,19 +105,19 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 
 ## 五、v2.0.0 全景
 
-**Amaidesu 2.0.0 = Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 节目单）**
+**Amaidesu 2.0.0 = Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Rundown 流程单；ADR-011 取代 Agenda）**
 
 ```mermaid
 flowchart TB
     subgraph Agents["Agent 层（主播自我驱动 / 游戏命令驱动）"]
-        SA["主播 StreamerAgent<br/>MessageBuffer → Planner 决策循环 → reply 工具 → Replyer 表达引擎<br/>+ Agenda 子系统 + 后台双任务"]
-        GA["游戏代理（命令驱动）<br/>MinecraftAgent：set_goal 唤醒任务内有界循环（AI 玩家范式）"]
+        SA["主播 StreamerAgent<br/>MessageBuffer → Planner 决策循环 → reply 工具 → Replyer 表达引擎<br/>+ Rundown 流程单 + 后台双任务"]
+        GA["游戏代理（命令驱动）<br/>MinecraftAgent：minecraft_send_prompt 唤醒任务内有界循环（AI 玩家范式）"]
     end
     subgraph Tools["工具层（被动能力，ToolRegistry 注册）"]
         T1["output：字幕 / VTS / Warudo / OBS…<br/>（TTS 自 v2.0.12 §8 起迁至基础模块层）"]
         T2["perception：look_at_screen"]
-        T3["content_engine：游戏控制面"]
-        T4["memory / agent 控制 / streamer 自带 reply 等"]
+        T3["memory：query_memory"]
+        T4["agent 控制 / streamer 自带 reply / minecraft 自有工具等"]
     end
     subgraph Infra["框架设施"]
         COL["Collectors ×4<br/>bilibili/console/screen/stt"]
@@ -126,7 +126,7 @@ flowchart TB
     end
     EXT["外部输入"] --> COL -->|"room.message.*"| BUS
     BUS --> SA
-    GA -.->|"game.* / set_goal"| SA
+    GA -.->|"game.* / minecraft_send_prompt"| SA
     SA -->|"invoke ~60 tools"| Tools
     SA & GA --> STO
 ```

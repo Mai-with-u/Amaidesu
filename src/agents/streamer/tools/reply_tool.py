@@ -10,7 +10,7 @@
 
 工具契约：
 - kind: ``"sync"``（gather 等齐结果；Replyer 是一次性 LLM 调用，不是 fire-and-forget）
-- provider: ``"builtin"``（框架内置，非独立源）
+- provider: ``"streamer"``（主播 Agent 自有工具；全名 streamer_reply）
 - arguments: ``{topic_summary, reply_guidance, target?, confidence?, batch_text?}``
 - 失败兜底：ToolExecutionResult(success=False, error_message=...)
 """
@@ -33,8 +33,6 @@ from ..replyer import Replyer
 
 __all__ = [
     "build_reply_tool_spec",
-    "build_reply_tool_invoker",
-    "register_reply_tool",
     "build_reply_function_def",
 ]
 
@@ -84,11 +82,7 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
 
 
 def build_reply_tool_spec() -> ToolSpec:
-    """构造 reply 工具的 ToolSpec（供 ToolRegistry.register 调用）。
-
-    Returns:
-        reply 工具的 ToolSpec（kind=sync, provider=builtin）。
-    """
+    """构造 reply 工具的 ToolSpec（声明名 reply；全名 streamer_reply 派生自 provider）。"""
     return ToolSpec(
         name=_REPLY_TOOL_NAME,
         description=_REPLY_TOOL_DESCRIPTION,
@@ -96,6 +90,10 @@ def build_reply_tool_spec() -> ToolSpec:
         kind="sync",
         provider="streamer",
     )
+
+
+# 派生全名（唯一实现经 ToolSpec.full_name；分发与调用统一用它）
+_REPLY_TOOL_FULL_NAME = build_reply_tool_spec().full_name
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +154,7 @@ class ReplyToolProvider:
     """reply 工具的 Provider（满足 ``ToolProvider`` 协议）。
 
     StreamerAgent 直接 ``registry.register_provider(reply_tool_provider)`` 注册。
-    实现 ``invoke`` 时按 ``invocation.tool_name == "reply"`` 分发到 ``Replyer``。
+    实现 ``invoke`` 时按 ``invocation.tool_name == 全名（streamer_reply）`` 分发到 ``Replyer``。
     """
 
     def __init__(
@@ -221,7 +219,7 @@ class ReplyToolProvider:
 
     @property
     def name(self) -> str:
-        return "ReplyTool"
+        return "streamer"
 
     def list_tools(self):
         return [build_reply_tool_spec()]
@@ -269,7 +267,7 @@ class ReplyToolProvider:
         - 调用 Replyer.generate
         - 返回 ToolExecutionResult（成功时 structured_content 为结果 dict，失败时 error_message 非空）
         """
-        if invocation.tool_name != _REPLY_TOOL_NAME:
+        if invocation.tool_name != _REPLY_TOOL_FULL_NAME:
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,
@@ -311,7 +309,7 @@ class ReplyToolProvider:
         except Exception as exc:
             self._logger.error(f"reply_tool: 解析依赖失败: {exc}", exc_info=True)
             return ToolExecutionResult(
-                tool_name=_REPLY_TOOL_NAME,
+                tool_name=invocation.tool_name,
                 success=False,
                 error_message=f"reply_tool 依赖解析失败: {type(exc).__name__}: {exc}",
             )
@@ -331,81 +329,20 @@ class ReplyToolProvider:
         except Exception as exc:
             self._logger.error(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}", exc_info=True)
             return ToolExecutionResult(
-                tool_name=_REPLY_TOOL_NAME,
+                tool_name=invocation.tool_name,
                 success=False,
                 error_message=f"Replyer.generate 异常: {type(exc).__name__}: {exc}",
             )
 
         if result is None:
             return ToolExecutionResult(
-                tool_name=_REPLY_TOOL_NAME,
+                tool_name=invocation.tool_name,
                 success=False,
                 error_message=("Replyer 返回 None（降级：LLM 失败 / 脏 JSON / 空 text / profanity 丢弃）"),
             )
 
         return ToolExecutionResult(
-            tool_name=_REPLY_TOOL_NAME,
+            tool_name=invocation.tool_name,
             success=True,
             structured_content=result,
         )
-
-
-def build_reply_tool_invoker(
-    *,
-    replyer: Replyer,
-    persona: Any,
-    history_provider: Any = None,
-    rundown_text_provider: Any = None,
-):
-    """便捷构造 reply 工具的 invoker 函数（直接喂给 ``ToolRegistry.register``）。
-
-    Args:
-        replyer: Stage 2 表达引擎实例
-        persona: 人设 dict 或可调用对象
-        history_provider: 可选，async/sync 调用返回 List
-        rundown_text_provider: 可选，async/sync 调用返回 str
-
-    Returns:
-        async invoker 函数，可直接 ``registry.register(spec, invoker)``。
-    """
-    provider = ReplyToolProvider(
-        replyer=replyer,
-        persona=persona,
-        history_provider=history_provider,
-        rundown_text_provider=rundown_text_provider,
-    )
-
-    async def _invoker(invocation: ToolInvocation) -> ToolExecutionResult:
-        return await provider.invoke(invocation)
-
-    return _invoker
-
-
-def register_reply_tool(
-    registry: Any,
-    *,
-    replyer: Replyer,
-    persona: Any,
-    history_provider: Any = None,
-    rundown_text_provider: Any = None,
-) -> bool:
-    """便捷函数：构造 reply 工具 spec + invoker 并注册到 ToolRegistry。
-
-    Args:
-        registry: ``ToolRegistry`` 实例
-        replyer: Stage 2 表达引擎实例（StreamerAgent 持有）
-        persona: 人设 dict 或可调用对象
-        history_provider: 可选，async/sync 调用返回 List[ConversationMessage]
-        rundown_text_provider: 可选，async/sync 调用返回 str
-
-    Returns:
-        True = 注册成功（name 唯一）；False = name 已存在，跳过。
-    """
-    spec = build_reply_tool_spec()
-    invoker = build_reply_tool_invoker(
-        replyer=replyer,
-        persona=persona,
-        history_provider=history_provider,
-        rundown_text_provider=rundown_text_provider,
-    )
-    return registry.register(spec, invoker)

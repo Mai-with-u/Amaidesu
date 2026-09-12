@@ -9,16 +9,17 @@ ToolRegistry —— 工具注册中心
   供 Dashboard 溯源（broadcaster 通配订阅 ``tool.result.#``）
 - 可选熔断器：连续失败计数达阈值则摘除工具（tripped），
   配套 ``ToolHealthMonitor`` 做探活恢复（``src/modules/tools/health.py``）
-- 可选归属限定：``register_provider(owner_agent="...")`` 注册的工具默认不进入
-  LLM 通用工具面，仅供对应 Agent 的域内查询（``list_tools(provider=...)``）消费
+- 可见名单（ADR-012）：``register_provider(visible_to=...)`` 注册处逐工具声明
+  可见给哪些 Agent（默认 ``["*"]`` 全员）；``list_tools(for_agent=...)`` 按
+  Agent 计算工具面。名单只约束发现面，``invoke()`` 不校验。
 
-接口约定：register（去重保留先注册）/ register_provider（注册名统一
-``<provider>_<工具名>`` 前缀 + 记录 provider 声明的分类 + 可选归属限定）
-/ list_tools（一般面排除归属限定 / provider 域查询不受限 / include_scoped 运营
-面包一切） / list_categories / invoke（异常→error result 兜底）/
+接口约定：register（去重保留先注册）/ register_provider（注册键 = 派生全名 +
+提供者单名校验 + 记录 provider 声明的分类 + 可选可见名单）
+/ list_tools（for_agent 按名单计算工具面；provider / category 过滤；运营全集
+= 不传 for_agent） / list_categories / invoke（异常→error result 兜底）/
 to_llm_definitions（内部→LLM 转换层，解耦协议）/ recover_tool（探活通过后复位熔断）/
 probe_tool（按名定位 provider 并调用其 ``health_check`` 拿回 bool）/
-scoped_owner_of（按名查归属 Agent）。
+visible_to_of（按名查可见名单）。
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Literal, Optional
 
 from src.modules.events.payloads.tool_health import ToolHealthPayload
@@ -48,23 +49,6 @@ ToolImplCallable = Callable[[ToolInvocation], Awaitable[ToolExecutionResult]]
 
 
 logger = get_logger("ToolRegistry")
-
-
-def _resolve_registered_name(spec: ToolSpec) -> str:
-    """把声明名解析为注册名（``<provider>_<name>``，无条件）。
-
-    注册名规则：``注册名 = <provider>_<工具名>``。provider 是全局唯一的
-    提供者名、工具名 provider 内唯一，二者拼出的注册名全局唯一，且满足
-    OpenAI / Anthropic function calling 对工具名字符集的要求（分隔符 `_`，
-    不用 `:`）。spec.name 已带 ``<provider>_`` 前缀时原样返回（存量 provider
-    对齐后常见）；未带则补前缀。provider 为空（匿名工具）时不做改写。
-    """
-    if not spec.provider:
-        return spec.name
-    prefix = f"{spec.provider}_"
-    if spec.name.startswith(prefix):
-        return spec.name
-    return f"{prefix}{spec.name}"
 
 
 # =============================================================================
@@ -103,7 +87,6 @@ def default_tool_registry() -> "ToolRegistry":
     生产路径应：
     1. 由组合根显式构造 ``ToolRegistry()`` 实例
     2. 调用 ``bind_core_tools(registry, config)`` 注入 L2 Provider
-    3. 调用 ``bind_pending_tools(registry)`` 刷入 L1 ``@tool`` 装饰的工具
 
     该单例仅保留以兼容依赖 ``default_tool_registry()`` 的旧测试；
     ``set_default_registry(None)`` 可用于测试间重置隔离。
@@ -141,7 +124,8 @@ class ToolRegistry:
         *,
         failure_threshold: int = 3,
     ) -> None:
-        # 按 name 索引：首次注册优先（去重）
+        # 按全名索引（全名 = ``spec.full_name`` 派生值，唯一实现见 models.py；
+        # 首次注册优先，去重）
         self._tools: Dict[str, tuple[ToolSpec, ToolImplCallable]] = {}
         # Provider 引用（仅诊断 / 重复检测）
         self._providers: List[ToolProvider] = []
@@ -160,46 +144,55 @@ class ToolRegistry:
         # 注册名 → 所属 BaseToolProvider 实例（register_provider 时记录；
         # 探活按此直查归属，避免 provider.name 与 spec.provider 的字符串耦合）
         self._tool_owner: Dict[str, BaseToolProvider] = {}
-        # 注册名 → 归属 Agent 名（owner_agent 非空时记录；归属限定的语义是"注册进
-        # registry 但默认不进一般工具面，供该 Agent 的域内查询使用"）。空串/缺失
-        # 表示无归属限定，与 list_tools 一般面的过滤语义一致。
-        self._scoped_owner: Dict[str, str] = {}
+        # 注册名 → 可见名单（register_provider 的 visible_to 声明；未声明的
+        # 工具不在表中，等价 ["*"] 全员可见）。名单是生产侧代码事实：
+        # 值为 Agent 注册名列表或 ["*"]；只约束发现面（for_agent 计算），
+        # invoke 不校验（编名直调是已知边界）。
+        self._visible_to: Dict[str, List[str]] = {}
 
     # -------------------- 注册 --------------------
 
     def register(self, spec: ToolSpec, impl: ToolImplCallable) -> bool:
-        """注册一个工具（先注册保留）。
+        """注册一个工具（先注册保留）。索引键 = ``spec.full_name``（派生值）。
 
         Returns:
-            是否成功注册（重复 name → 跳过并返回 False）
+            是否成功注册（重复全名 → 跳过并返回 False）
         """
-        existing = self._tools.get(spec.name)
+        registered_name = spec.full_name
+        existing = self._tools.get(registered_name)
         if existing is not None:
-            logger.debug(f"工具 '{spec.name}' 已注册（保留先注册，跳过本次 provider={spec.provider}）")
+            logger.debug(f"工具 '{registered_name}' 已注册（保留先注册，跳过本次 provider={spec.provider}）")
             return False
-        self._tools[spec.name] = (spec, impl)
-        logger.debug(f"工具 '{spec.name}' 已注册（provider={spec.provider}, kind={spec.kind}）")
+        self._tools[registered_name] = (spec, impl)
+        logger.debug(f"工具 '{registered_name}' 已注册（provider={spec.provider}, kind={spec.kind}）")
         return True
 
-    def register_tool(self, spec: ToolSpec, impl: ToolImplCallable) -> bool:
-        """``register`` 的别名。"""
-        return self.register(spec, impl)
+    def register_provider(
+        self,
+        provider: ToolProvider,
+        *,
+        visible_to: Optional[Dict[str, List[str]]] = None,
+    ) -> int:
+        """注册一个 Provider 的全部工具。返回新注册数（去重不计）。
 
-    def register_provider(self, provider: ToolProvider, *, owner_agent: str = "") -> int:
-        """注册一个 Provider 的所有工具。返回新注册数（去重不计）。
+        命名模型：注册键 = 每个 spec 的派生全名（``<provider>_<工具名>``，
+        唯一实现见 ``ToolSpec.full_name``）；spec **原样存储**（声明名保持
+        裸名，不做任何改名拷贝）。provider 自声明的 ``category`` 一并记录
+        （按 spec.provider 提供者名归组，供 ``list_categories()`` /
+        ``list_tools(category=)`` 查询）。
 
-        注册名统一改写为 ``<provider>_<工具名>``（规则见
-        ``_resolve_registered_name``）：spec 未带前缀时用 ``dataclasses.replace``
-        拷贝改写 name 后再注册，**不污染** provider ``list_tools()`` 返回的
-        原 spec 对象。provider 声明的 ``category`` 一并记录（按 spec.provider
-        提供者名归组，供 ``list_categories()`` / ``list_tools(category=)`` 查询）。
+        提供者单名校验（fail-fast）：Provider 的 ``name`` 必须与其全部
+        spec 的 ``provider`` 同值（同值同源）——不一致直接抛 ``ValueError``。
+        这是"一个提供者一个短名"的注册期保证；探活/关闭/归属仍按对象
+        引用（``_tool_owner``）工作，不依赖字符串。
 
-        归属限定（``owner_agent``）：非空时本次注册的全部工具被标记为归属该 Agent，
-        在 ``list_tools(provider=None, include_scoped=False)`` 默认面被排除——
-        仅供该 Agent 自己的域内查询（``list_tools(provider=...)``）消费。
-        用于"Agent 私有 MCP"等场景：注册到全局 registry 但默认对其它 Agent 不可见。
-        归属限定只约束发现面，``invoke()`` 不校验——LLM 幻觉编名直调保留工具是
-        已知的受众治理边界。
+        可见名单（``visible_to``，生产侧声明）：键 = 本次注册项声明的**工具
+        全名**，值 = 可见的 Agent 注册名列表或 ``["*"]``（全员）。校验
+        fail-fast：值非空且元素为非空字符串、``"*"`` 只能单独出现、键必须
+        命中本注册项声明的工具全名（拼错即报错）。**未列出的工具默认
+        ``["*"]``**（共享常态，全局注册零负担）。名单只约束发现面
+        （``list_tools(for_agent=...)`` 按它计算工具面）；``invoke()``
+        不校验——LLM 幻觉编名直调保留工具是已知的受众治理边界。
 
         迁移完整性提示：传入对象非 ``BaseToolProvider`` 子类时记 WARNING
         （每次注册都记——迁移未完成的持续信号，提示补齐 BaseToolProvider 继承）。
@@ -208,6 +201,16 @@ class ToolRegistry:
         if provider in self._providers:
             logger.debug(f"Provider '{provider.name}' 已注册过（保留）")
             return 0
+        specs = list(provider.list_tools())
+        mismatched = [s for s in specs if s.provider != provider.name]
+        if mismatched:
+            detail = ", ".join(f"spec({s.provider!r}, {s.name!r})" for s in mismatched)
+            raise ValueError(
+                f"Provider 名与其 spec.provider 必须同值同源：provider.name={provider.name!r} "
+                f"但声明了不同的 provider 值 [{detail}]"
+            )
+        declared_full_names = {s.full_name for s in specs}
+        validated_lists = self._validate_visible_to(visible_to, declared_full_names)
         if not isinstance(provider, BaseToolProvider):
             logger.warning(
                 f"Provider '{provider.name}'（class={type(provider).__name__}）"
@@ -217,23 +220,51 @@ class ToolRegistry:
         self._providers.append(provider)
         category = getattr(provider, "category", "") or ""
         new_count = 0
-        for spec in provider.list_tools():
-            registered_name = _resolve_registered_name(spec)
-            reg_spec = spec
-            if registered_name != spec.name:
-                # 拷贝改写，避免把前缀写回 provider 原 spec（list_tools 可重复调用）
-                reg_spec = replace(spec, name=registered_name)
+        for spec in specs:
+            registered_name = spec.full_name
             self._record_category(spec.provider, category)
-            if self.register(reg_spec, provider.invoke):
+            if self.register(spec, provider.invoke):
                 new_count += 1
-            # 记录"注册名 → Provider 实例"所有权：探活按此直查归属，
-            # 不经 provider.name 字符串匹配（name 与 spec.provider 无须同值）
+            # 记录"全名 → Provider 实例"所有权：探活按此直查归属
+            # （provider.name 与 spec.provider 同值同源，见注册校验）
             if isinstance(provider, BaseToolProvider):
                 self._tool_owner[registered_name] = provider
-            if owner_agent:
-                self._scoped_owner[registered_name] = owner_agent
+            if validated_lists is not None:
+                self._visible_to[registered_name] = validated_lists[registered_name]
         logger.info(f"Provider '{provider.name}' 已注册（含 {new_count} 个新工具，总数={len(self._tools)}）")
         return new_count
+
+    @staticmethod
+    def _validate_visible_to(
+        visible_to: Optional[Dict[str, List[str]]],
+        declared_full_names: set[str],
+    ) -> Optional[Dict[str, List[str]]]:
+        """校验可见名单并按全名补全（未列工具填默认 ``["*"]``）；非法即抛错。
+
+        校验规则（fail-fast）：
+        - 值必须是非空列表，元素为非空字符串（Agent 注册名）
+        - ``"*"`` 表示全员，只能单独出现（``["*", "x"]`` 非法）
+        - 键必须命中该注册项声明的工具全名（拼错即报错，防名单静默失效）
+        """
+        if visible_to is None:
+            return None
+        result: Dict[str, List[str]] = {}
+        unknown_keys = [k for k in visible_to if k not in declared_full_names]
+        if unknown_keys:
+            raise ValueError(
+                f"visible_to 中的键未命中本注册项声明的工具全名（可能拼错）: "
+                f"{sorted(unknown_keys)}；本注册项声明: {sorted(declared_full_names)}"
+            )
+        for full_name in declared_full_names:
+            entries = visible_to.get(full_name, ["*"])
+            if not isinstance(entries, list) or not entries:
+                raise ValueError(f"visible_to['{full_name}'] 必须是非空列表，得到 {entries!r}")
+            if any((not isinstance(e, str)) or (not e) for e in entries):
+                raise ValueError(f"visible_to['{full_name}'] 的元素必须是非空字符串，得到 {entries!r}")
+            if "*" in entries and len(entries) > 1:
+                raise ValueError(f"visible_to['{full_name}'] 含 '*' 时只能单独出现（全员），得到 {entries!r}")
+            result[full_name] = list(entries)
+        return result
 
     def _record_category(self, provider_name: str, category: str) -> None:
         """记录"提供者名 → 分类"映射（先注册保留，冲突仅记日志）。"""
@@ -254,16 +285,15 @@ class ToolRegistry:
         *,
         include_disabled: bool = False,
         include_tripped: bool = False,
+        for_agent: Optional[str] = None,
         include_scoped: bool = False,
     ) -> List[ToolSpec]:
-        """返回已注册工具的 spec（默认排除停用/熔断/归属限定工具）。
+        """返回已注册工具的 spec（默认排除停用/熔断工具）。
 
-        归属限定的三方过滤语义：
-        - 一般查询（``provider is None`` 且 ``include_scoped=False``）→
-          排除所有归属限定工具（LLM 默认工具面）
-        - 显式域查询（``provider is not None``）→ 不做归属过滤
-          （Agent 自身通过 ``list_tools(provider="<其 provider>")`` 拉自己的工具面）
-        - 运营查询（``include_scoped=True``）→ 包含一切（Dashboard 工具页用）
+        可见性按名单计算（ADR-012）：
+        - ``for_agent=None`` → 不做名单过滤（运营全集；Dashboard 工具页用）
+        - ``for_agent="<Agent 注册名>"`` → 只返回名单包含该名或 ``["*"]``
+          的工具（该 Agent 的工具面；全体消费方统一从这里拿）
 
         Args:
             provider: 可选过滤（提供者标识，如 "vts" / "warudo" /
@@ -275,23 +305,32 @@ class ToolRegistry:
                 排除路径。
             include_tripped: True 时包含熔断中的工具（Dashboard 工具页展示全集用）。
                 默认排除以避免 LLM 看见已被摘除的工具。
-            include_scoped: True 时包含归属限定工具（Dashboard 工具页全集用）。
+            for_agent: 按 Agent 注册名计算工具面（见上）；None 为运营全集。
+            include_scoped: **已废弃，无效果**（保留形参兼容旧调用方；
+                名单机制下全集即默认行为）。
 
         Returns:
             满足条件的 spec 列表（过滤条件为 AND 关系）。
         """
         specs = [spec for spec, _ in self._tools.values()]
         if not include_disabled:
-            specs = [s for s in specs if s.name not in self._disabled]
+            specs = [s for s in specs if s.full_name not in self._disabled]
         if not include_tripped:
-            specs = [s for s in specs if not self.is_tripped(s.name)]
-        if provider is None and not include_scoped:
-            specs = [s for s in specs if s.name not in self._scoped_owner]
+            specs = [s for s in specs if not self.is_tripped(s.full_name)]
+        if for_agent is not None:
+            specs = [s for s in specs if self._is_visible_to(s.full_name, for_agent)]
         if provider is not None:
             specs = [s for s in specs if s.provider == provider]
         if category is not None:
             specs = [s for s in specs if self._categories.get(s.provider) == category]
         return specs
+
+    def _is_visible_to(self, full_name: str, agent_name: str) -> bool:
+        """名单判定：未声明（不在表中）= 全员可见；声明则须命中该 Agent 名或 "*"。"""
+        entries = self._visible_to.get(full_name)
+        if entries is None:
+            return True
+        return "*" in entries or agent_name in entries
 
     def list_categories(self) -> List[str]:
         """返回当前已注册提供者声明的全部分类（去重、按名排序）。
@@ -317,25 +356,31 @@ class ToolRegistry:
             return ""
         return self._categories.get(spec.provider, "")
 
-    def scoped_owner_of(self, name: str) -> str:
-        """返回工具的归属 Agent 名（无归属限定返回空串）。
+    def visible_to_of(self, full_name: str) -> List[str]:
+        """返回工具的可见名单（未声明 = 全员，返回 ``["*"]`` 快照）。
 
-        仅 ``register_provider(owner_agent=<非空>)`` 注册的工具才会有非空归属；
-        通用工具（普通 Provider 注册的、@tool 装饰的）一律返回 ``""``。
-        用于 Dashboard 工具页标注归属、Agent 启动期校验"我注册的 MCP 工具是否
-        真的带了我的 owner_agent"。
+        供运营面（Dashboard 等）标注"这个工具谁能看见"。名单只约束
+        发现面，``invoke()`` 不校验（编名直调是已知边界）。
         """
-        return self._scoped_owner.get(name, "")
+        entries = self._visible_to.get(full_name)
+        return list(entries) if entries is not None else ["*"]
 
     # -------------------- 停用 --------------------
 
     def apply_disabled(self, names: Iterable[str]) -> int:
-        """整体设置停用集合（组合根装配完成后调用；未知名字忽略）。
+        """整体设置停用集合（组合根装配完成后调用）。
+
+        未匹配任何已注册工具的条目记一行 warning 并列出（防止工具改名后
+        配置里的停用条目静默失效）；已存在的名字正常生效。
 
         Returns:
             实际生效的停用工具数（即注册表中存在的名字数）。
         """
-        self._disabled = {n for n in names if n in self._tools}
+        name_set = set(names)
+        self._disabled = {n for n in name_set if n in self._tools}
+        unmatched = sorted(name_set - self._disabled)
+        if unmatched:
+            logger.warning(f"停用列表中有 {len(unmatched)} 个未注册工具（可能已改名或拼错，本次不生效）: {unmatched}")
         if self._disabled:
             logger.info(f"ToolRegistry 已停用 {len(self._disabled)} 个工具: {sorted(self._disabled)}")
         return len(self._disabled)
@@ -435,7 +480,7 @@ class ToolRegistry:
             )
             await self._event_bus.emit(spec.resolve_result_event(), payload, source="ToolRegistry")
         except Exception as exc:  # noqa: BLE001 - 观测旁路，不反噬调用方
-            logger.warning(f"tool.result 事件广播失败（工具: {spec.name}）: {exc}")
+            logger.warning(f"tool.result 事件广播失败（工具: {spec.full_name}）: {exc}")
 
     # -------------------- 熔断器：内部维护 --------------------
 
@@ -453,7 +498,7 @@ class ToolRegistry:
         - 成功 → 重置连续失败
         - 失败 → 递增计数、记录最近错误；达到阈值且未跳闸 → 触发熔断并广播
         """
-        health = self._ensure_health(spec.name)
+        health = self._ensure_health(spec.full_name)
         if result.success:
             health.consecutive_failures = 0
             health.last_error = ""
@@ -465,11 +510,11 @@ class ToolRegistry:
             health.tripped = True
             health.tripped_at_ms = now_ms()
             logger.warning(
-                f"工具 '{spec.name}' 连续失败 {health.consecutive_failures} 次（阈值 {threshold}），"
+                f"工具 '{spec.full_name}' 连续失败 {health.consecutive_failures} 次（阈值 {threshold}），"
                 "已熔断摘除，等待探活恢复"
             )
             await self._emit_tool_health(
-                spec.name,
+                spec.full_name,
                 spec.provider,
                 state="open",
                 failure_count=health.consecutive_failures,
@@ -573,10 +618,9 @@ class ToolRegistry:
     async def probe_tool(self, tool_name: str) -> bool:
         """对指定工具调用其所属 provider 的 ``health_check``。
 
-        归属解析走 ``_tool_owner``（注册时记录的"注册名 → Provider 实例"
-        映射），不做任何名字字符串匹配——provider 的 ``name`` 属性与
-        ``spec.provider`` 允许不同值（前者用于日志/去重，后者用于注册名
-        前缀与分组），二者不构成可依赖的对应关系。
+        归属解析走 ``_tool_owner``（注册时记录的"全名 → Provider 实例"
+        映射），按对象引用直查，不做名字字符串匹配（provider.name 与
+        spec.provider 同值同源，见 ``register_provider`` 校验）。
 
         工具未经 ``register_provider`` 注册（如 ``register()`` 直注册的
         裸函数）时无归属 provider，按基类默认语义返回 True——"无可检查
@@ -608,6 +652,14 @@ class ToolRegistry:
         """
         return [name for name, owner in self._tool_owner.items() if owner is provider]
 
+    def provider_of_tool(self, full_name: str) -> Optional[ToolProvider]:
+        """按工具全名查归属 Provider 实例（``_tool_owner`` 直查；未知返回 None）。
+
+        供任务跟踪循环定位受理工具的执行侧（查询/通知适配器挂在该
+        provider 上）；与 ``probe_tool`` 的归属解析同口径。
+        """
+        return self._tool_owner.get(full_name)
+
     def provider_supports_reconnect(self, tool_name: str) -> bool:
         """按工具名查归属 Provider 是否支持手动重连（供 Dashboard 工具页渲染按钮用）。
 
@@ -626,9 +678,8 @@ class ToolRegistry:
 
         行为：
         - ``provider_id`` = Provider.name（按 ``_providers`` 线性查找）。
-          provider 的 ``name`` 与 ``spec.provider`` 无须同值（前者日志/去重，
-          后者注册名前缀），二者不构成可依赖的对应关系——本方法只匹配
-          ``provider.name``。
+          provider.name 与 spec.provider 同值同源（注册期校验保证），外部
+          （Dashboard 等）传提供者短名即可命中。
         - 未找到 → ``{"ok": False, "error": "未注册 Provider: <id>"}``
         - 找到但不支持重连（非 BaseToolProvider 或 ``supports_reconnect``
           为 False）→ ``{"ok": False, "error": "Provider ... 不支持手动重连"}``
@@ -720,7 +771,7 @@ class ToolRegistry:
         definitions: List[Dict[str, Any]] = []
         for spec in self.list_tools(provider=provider, category=category):
             entry: Dict[str, Any] = {
-                "name": spec.name,
+                "name": spec.full_name,
                 "description": spec.description,
             }
             if spec.parameters_schema is not None:
@@ -744,7 +795,7 @@ class ToolRegistry:
         self._disabled.clear()
         self._health.clear()
         self._tool_owner.clear()
-        self._scoped_owner.clear()
+        self._visible_to.clear()
         logger.debug("ToolRegistry 已清空")
 
     # 兼容 inspect / debug

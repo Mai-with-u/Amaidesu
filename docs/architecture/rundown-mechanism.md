@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS rundowns (
 
 环节 `expected_ms` 到期后，闹钟按冷却间隔（默认 1 分钟）以 `reason="rundown_overdue"` 唤醒一轮 proactive 决策。Agent 醒来看到的情境是"当前环节已超时 X 分钟"，由它自行决定继续、切换或收尾——**只提醒，不执法**。若未来证明需要硬切换，在闹钟处加 `hard_cutoff` 策略直接调 `goto` 即可（预留，不实现）。
 
-v2 的独立调度循环与 `planner.checkpoint` 事件不保留；空闲提醒职责归 ProactiveTrigger 自身，与流程单无关。
+v2 的独立调度循环与旧检查点事件不保留；空闲提醒职责归 ProactiveTrigger 自身，与流程单无关。
 
 ## 事件（唯一）
 

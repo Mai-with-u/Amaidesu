@@ -46,7 +46,7 @@ def test_list_tools_description_carries_catalog(mock_event_bus):
     )
 
     for name in ("warudo_trigger_hotkey", "warudo_trigger_body", "warudo_trigger_head", "warudo_trigger_action"):
-        spec = next(s for s in provider.list_tools() if s.name == name)
+        spec = next(s for s in provider.list_tools() if s.full_name == name)
         assert "wave（招手）" in spec.description
 
 

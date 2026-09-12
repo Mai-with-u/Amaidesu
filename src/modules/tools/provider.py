@@ -22,7 +22,7 @@ ToolProvider Protocol 与 BaseToolProvider 基类
 ## 可用性动作契约
 维护外部连接的 Provider 覆写 ``connect`` / ``disconnect``（无连接语者沿用基类默认，
 二者均返回 ``False``）即可启用手动重连。``supports_reconnect`` 属性以"本类是否覆
-写了 ``connect``"为单点判定，子类只需覆写 ``connect`` 即自动启用重连支持，**不**
+写了 ``connect``"为单点判定，子类只需覆写 ``connect`` 即自动启用重连支持，**不
 需要额外打标。``reconnect`` 默认组合为 ``disconnect`` + ``connect``；维护特殊语
 义（如 MCP 关闭整条 stream 后重新建立）的 Provider 可整体覆写。
 
@@ -32,11 +32,16 @@ ToolProvider Protocol 与 BaseToolProvider 基类
 ``_reconnect_loop``、Warudo 的 ``_connection_loop``）属低频可接受并发场景，
 不强制串行化。
 
-## 工厂
-``make_provider_from_specs``：从一组 ``(spec, impl)`` 元组构造固定 provider
-（便于内置工具组合）；其内部 ``_SpecImplProvider`` 继承 ``BaseToolProvider``，
-对 ``ToolProvider`` Protocol 仍保持结构一致，且不覆写 ``connect``，因此**不支
-持手动重连**（与"无状态 Provider 无重连按钮"的前端契约一致）。
+## 简单工具路径（正典）
+无状态、轻量的简单工具不必手写 Provider 类：
+
+- ``as_tool_impl``——把普通 async 函数包装成标准工具实现（返回值归一化：
+  str/None → content、异常 → 失败结果、自动计时）
+- ``make_provider_from_specs``——用一组 ``(spec, impl)`` 构造固定 Provider，
+  装配处一行 ``registry.register_provider(...)`` 完成注册
+
+样板见 ``src/modules/memory/query_tool.py``（QueryMemory）。
+升级为手写 Provider 类的判据：需要连接重连 / 共享状态 / 动态工具表 / 任务适配器。
 
 ## 契约要点
 - Provider 知道**自己的**工具；``ToolRegistry`` 负责聚合多个 Provider
@@ -52,7 +57,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, ClassVar, Iterable, List, Optional, Protocol, runtime_checkable
 
+from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+
+_logger = get_logger("ToolProvider")
 
 
 # Provider 实现函数的统一签名
@@ -175,6 +184,24 @@ class BaseToolProvider(ABC):
         """执行工具调用——子类必须实现（永不抛异常）。"""
         ...
 
+    async def query_task(self, task_id: str) -> Optional[dict]:
+        """查询适配器（可选，默认不支持）：按任务号查执行侧任务快照。
+
+        回执型工具的 provider（如 MCP 游戏 server）覆写本方法，返回
+        ``{"status": <词表状态>, "snapshot": {...}, "summary": "..."}``；
+        默认 ``None`` 表示不支持查询（跟踪循环跳过核实，仅靠通知/超时）。
+        """
+        return None
+
+    def subscribe_task_notifications(self, callback) -> Optional[Callable[[], None]]:
+        """通知适配器（可选，默认不支持）：订阅执行侧任务提示。
+
+        覆写时返回退订句柄（无参可调用）；收到提示即调 ``callback(task_id)``
+        （举旗级、可丢——提示只触发核实，事实以查询为准）。默认 ``None``
+        表示不支持订阅（跟踪循环降级为纯周期兜底）。
+        """
+        return None
+
     async def health_check(self) -> bool:
         """探活钩子默认实现：返回 True（无可检查之物）。
 
@@ -227,6 +254,61 @@ class BaseToolProvider(ABC):
 
 
 # =============================================================================
+# 返回值归一化：as_tool_impl
+# =============================================================================
+
+
+def as_tool_impl(
+    tool_name: str,
+    fn: Callable[[ToolInvocation], Awaitable[Any]],
+) -> ToolImpl:
+    """把普通 async 函数包装成标准工具实现（简单工具正典路径的组成部分）。
+
+    归一化规则：
+    - 返回 ``ToolExecutionResult`` → 原样透传（自动补全缺省的时间戳/耗时）
+    - 返回 str / None 等普通值 → 成功结果（``content=str(value)``，None → ""）
+    - 抛出异常 → 失败结果（``error_message="异常类型: 信息"``，不外抛，
+      异常细节记入日志）
+
+    Args:
+        tool_name: 工具名（结果的 ``tool_name`` 字段以它回显，保持溯源一致；
+            与注册名形态对齐由调用方负责）
+        fn: 普通 async 函数，接收 ``ToolInvocation``，返回任意值
+    """
+
+    async def _impl(invocation: ToolInvocation) -> ToolExecutionResult:
+        started_ms = now_ms()
+        try:
+            value = await fn(invocation)
+        except Exception as exc:  # noqa: BLE001 - 工具边界兜底，异常转失败结果
+            finished_ms = now_ms()
+            _logger.error(f"工具 '{tool_name}' 执行抛出异常: {type(exc).__name__}: {exc}", exc_info=True)
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message=f"{type(exc).__name__}: {exc}",
+                timestamp_ms=finished_ms,
+                duration_ms=finished_ms - started_ms,
+            )
+        if isinstance(value, ToolExecutionResult):
+            if value.timestamp_ms == 0:
+                value.timestamp_ms = now_ms()
+            if value.duration_ms == 0:
+                value.duration_ms = now_ms() - started_ms
+            return value
+        finished_ms = now_ms()
+        return ToolExecutionResult(
+            tool_name=tool_name,
+            success=True,
+            content=str(value) if value is not None else "",
+            timestamp_ms=finished_ms,
+            duration_ms=finished_ms - started_ms,
+        )
+
+    return _impl
+
+
+# =============================================================================
 # 工厂：make_provider_from_specs
 # =============================================================================
 
@@ -245,11 +327,8 @@ class _SpecImplProvider(BaseToolProvider):
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         for spec, impl in self.spec_impl_pairs:
-            # 注册名可能带 "<provider>_" 前缀（register_provider 统一改写）；
-            # 本 Provider 只认声明时的裸名，比对上剥前缀等价形式
-            if spec.name == invocation.tool_name or (
-                spec.provider and invocation.tool_name == f"{spec.provider}_{spec.name}"
-            ):
+            # 调用方使用的就是派生全名（<provider>_<工具名>），等值对照分发
+            if spec.full_name == invocation.tool_name:
                 return await impl(invocation)
         # 未知：兜底失败（不抛）
         if self.fallback_result_factory is not None:
@@ -268,13 +347,15 @@ def make_provider_from_specs(
 ) -> ToolProvider:
     """用一组 ``(spec, impl)`` 构造一个固定的 Provider。
 
-    适用场景：内置工具（无状态、轻）；GameAgent/MCP 推荐手写类实现
-    ``BaseToolProvider``（多状态/多步骤/有外部连接）。
+    简单工具正典路径：spec + 函数（经 ``as_tool_impl`` 包装）+ 本工厂 +
+    装配处一行 ``register_provider``。适用于内置工具（无状态、轻）；
+    GameAgent/MCP 推荐手写类实现 ``BaseToolProvider``
+    （多状态/多步骤/有外部连接）。
     """
     return _SpecImplProvider(name=name, spec_impl_pairs=spec_impl_pairs, category=category)
 
 
-__all__ = ["ToolProvider", "BaseToolProvider", "ToolImpl", "make_provider_from_specs"]
+__all__ = ["ToolProvider", "BaseToolProvider", "ToolImpl", "as_tool_impl", "make_provider_from_specs"]
 
 
 # 让 Pylance 不报 _ 变量未用

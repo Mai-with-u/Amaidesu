@@ -50,26 +50,25 @@ class FakeProvider:
         *,
         client: FakeClient,
         server_name: str,
-        prefix: Optional[str] = None,
-        provider: str = "mcp",
+        provider: Optional[str] = None,
     ) -> None:
         self.client = client
         self.server_name = server_name
-        self.prefix = prefix or f"{server_name}_"
-        self.provider = provider
+        self.provider = provider or server_name
         self._specs: List[ToolSpec] = []
 
     @property
     def name(self) -> str:
-        return f"McpProvider:{self.server_name}"
+        # 与真实 McpToolProvider 对齐：单名 = provider（默认 server 名）
+        return self.provider
 
     async def setup(self) -> int:
         if not self.client.connect_ok:
             return 0
-        # 与真实 McpToolProvider 对齐：provider = server 名（注册名前缀 =
-        # <provider>_，工具名已带 server 前缀 → 注册名不变）
+        # 与真实 McpToolProvider 对齐：声明名 = server 原始名，
+        # 全名 = <provider>_<原始名>（ToolSpec.full_name 派生）
         self._specs = [
-            ToolSpec(name=f"{self.prefix}{t.name}", description=t.description, provider=self.provider)
+            ToolSpec(name=t.name, description=t.description, provider=self.provider)
             for t in self.client.tools
         ]
         return len(self._specs)
@@ -104,10 +103,9 @@ def patch_mcp(monkeypatch: pytest.MonkeyPatch) -> Dict[str, FakeClient]:
         *,
         client: FakeClient,
         server_name: str,
-        prefix: Optional[str] = None,
-        provider: str = "mcp",
+        provider: Optional[str] = None,
     ) -> FakeProvider:
-        return FakeProvider(client=client, server_name=server_name, prefix=prefix, provider=provider)
+        return FakeProvider(client=client, server_name=server_name, provider=provider)
 
     monkeypatch.setattr(mcp_module, "McpClient", fake_client_cls)
     monkeypatch.setattr(mcp_module, "McpToolProvider", fake_provider_cls)
@@ -135,10 +133,10 @@ async def test_bind_two_servers_all_ok(patch_mcp) -> None:
     assert report["other"]["tools"] == 1
     assert len(registry) == 3  # serverA 2 + other 1
 
-    # 注册进 registry 的工具均带前缀
-    names = {s.name for s in registry.list_tools()}
-    assert "serverA_perceive" in names
-    assert "other_ping" in names
+    # 注册进 registry 的工具对外全名 = <provider>_<原始名>
+    full_names = {s.full_name for s in registry.list_tools()}
+    assert "serverA_perceive" in full_names
+    assert "other_ping" in full_names
 
 
 async def test_single_server_failure_isolated(patch_mcp) -> None:
@@ -188,17 +186,17 @@ async def test_empty_config_no_servers(patch_mcp) -> None:
     assert len(registry) == 0
 
 
-async def test_duplicate_prefix_collision_reported(patch_mcp) -> None:
-    """显式 prefix 相同的两个 server：注册名含各自 provider（server 名）前缀，
-    仍全局唯一，不冲突（注册名 = <provider>_<工具名> 机制的兜底）。"""
+async def test_same_raw_name_servers_do_not_collide(patch_mcp) -> None:
+    """两个 server 暴露同名工具：全名含各自 provider（server 名）前缀，
+    仍全局唯一，不冲突（全名 = <provider>_<原始名> 机制的兜底）。"""
     from src.modules.mcp import bind_mcp_tools
 
     patch_mcp["first"] = FakeClient([FakeTool("ping")])
     patch_mcp["second"] = FakeClient([FakeTool("ping")])
     raw_cfg = {
         "servers": {
-            "first": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:5/mcp", "prefix": "same_"},
-            "second": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:6/mcp", "prefix": "same_"},
+            "first": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:5/mcp"},
+            "second": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:6/mcp"},
         }
     }
 
@@ -208,6 +206,6 @@ async def test_duplicate_prefix_collision_reported(patch_mcp) -> None:
     assert report["first"]["ok"] is True
     assert report["first"]["tools"] == 1
     assert report["second"]["ok"] is True
-    assert report["second"]["tools"] == 1  # 注册名 first_same_ping / second_same_ping，互不冲突
-    names = {s.name for s in registry.list_tools()}
-    assert names == {"first_same_ping", "second_same_ping"}
+    assert report["second"]["tools"] == 1  # 全名 first_ping / second_ping，互不冲突
+    full_names = {s.full_name for s in registry.list_tools()}
+    assert full_names == {"first_ping", "second_ping"}

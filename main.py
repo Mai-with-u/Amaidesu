@@ -64,10 +64,10 @@ from src.modules.subtitle import build_subtitle_infrastructure
 from src.modules.subtitle.backends import DashboardBackend
 from src.modules.tts import build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
-from src.modules.tools import ToolHealthMonitor, ToolRegistry
+from src.modules.tools import TaskLedger, TaskTracker, ToolHealthMonitor, ToolRegistry
+from src.modules.tools.tasks import resolve_tasks_config
 from src.modules.tools.bootstrap import bind_core_tools
 from src.agents.text_adv.content_engine import StubContentEngine
-from src.modules.tools.decorator import bind_pending_tools
 from src.modules.vision.look_at_screen import LookAtScreenProvider
 from src.modules.vision.pil_capture import PillowImageGrabCapture
 
@@ -502,6 +502,23 @@ async def create_app_components(
             buffer_max=int((agents_config.get("streamer") or {}).get("thinking_stream_buffer_max", 400) or 400),
         )
 
+        # --- 通用任务基建（[tools.tasks] 兜底读取：新键 → 旧键 → 默认；ADR-013）---
+        # 记录表挂事件总线（task.changed 广播）；跟踪循环与 Agent 生命周期同步启停。
+        _tools_cfg_tmp = (config.get("tools") or {}) if isinstance(config, dict) else {}
+        task_ledger = TaskLedger(event_bus=event_bus)
+        tasks_poll_ms, tasks_wait_ms = resolve_tasks_config(
+            _tools_cfg_tmp if isinstance(_tools_cfg_tmp, dict) else None,
+            agents_config,
+        )
+        task_tracker = TaskTracker(
+            tool_registry,
+            task_ledger,
+            poll_interval_ms=tasks_poll_ms,
+            wait_timeout_ms=tasks_wait_ms,
+        )
+        task_tracker.start()
+        logger.info(f"任务跟踪循环已启动（poll_interval_ms={tasks_poll_ms}, wait_timeout_ms={tasks_wait_ms}）")
+
         await _register_agents_from_config(
             agent_manager,
             agents_config,
@@ -511,6 +528,7 @@ async def create_app_components(
             context_service,
             tool_registry,
             memory,
+            task_tracker,
             context_assembler_config=context_assembler_config,
             tts_section=tts_section,
             tts_engine=tts_engine,
@@ -519,9 +537,9 @@ async def create_app_components(
             thinking_sink=thinking_hub,
         )
 
-        # --- 核心域工具（avatar/studio 域开关，L2 Provider）+ L1 @tool pending 刷入 ---
+        # --- 核心域工具（avatar/studio 域开关，L2 Provider）---
         # 在 agent_manager.start_all() 之前完成 → StreamerAgent._on_start()
-        # 调用 _register_tools() 时 registry 已就绪，可与 L2/L1 工具同台。
+        # 调用 _register_tools() 时 registry 已就绪，可与 L2 工具同台。
         # 配置：bind_core_tools 读取 [tools] 段的域开关（avatar.vts / studio.obs 等），
         # 每个域段 enabled=true 才装配该提供者。TTS/字幕装配由核心 [tts]/[subtitle]
         # 段驱动（见各自 build 入口），不在本段。
@@ -538,11 +556,6 @@ async def create_app_components(
             f"核心工具包已绑定: 成功 {core_succeeded}/{len(core_report)}"
             f"，合计新增 {sum(core_report.values())} 个工具" + (f"，失败包: {core_failed}" if core_failed else "")
         )
-        pending_count = bind_pending_tools(tool_registry)
-        if pending_count > 0:
-            logger.info(f"@tool pending 已刷入 {pending_count} 个工具")
-        else:
-            logger.debug("@tool pending 表为空（L1 装饰器路径今日无产出）")
 
         # --- 记忆检索工具（LLM 主动 query_memory；[tools.memory] 域开关）---
         memory_cfg = tools_section.get("memory", {}) if isinstance(tools_section, dict) else {}
@@ -621,6 +634,14 @@ async def create_app_components(
         else:
             logger.info("[tools.health].enabled=false：仅保留 ToolRegistry 熔断判定，跳过探活循环")
 
+        # --- 框架 Agent 控制与委派原语（provider=framework；含 delegate/task_status）---
+        if tool_registry is not None:
+            from src.modules.agents.control import build_agent_control_provider
+
+            framework_provider = build_agent_control_provider(agent_manager, task_ledger)
+            framework_count = tool_registry.register_provider(framework_provider)
+            logger.info(f"framework 工具已注册（控制+委派，新增 {framework_count} 个）")
+
         await agent_manager.start_all()
         logger.info(f"AgentManager 已启动（{len(agent_manager)} 个 Agent）")
 
@@ -688,6 +709,7 @@ async def create_app_components(
         session_manager,
         tool_registry if agents_config else None,
         health_monitor if agents_config else None,
+        task_tracker if agents_config else None,
     )
 
 
@@ -804,6 +826,7 @@ async def _register_agents_from_config(
     context_service,
     tool_registry=None,
     memory=None,
+    task_tracker=None,
     *,
     context_assembler_config: Optional[Any] = None,
     tts_section: Optional[Dict[str, Any]] = None,
@@ -915,6 +938,7 @@ async def _register_agents_from_config(
                     tool_registry=tool_registry,
                     live_session_id=_LIVE_SESSION_ID,
                     thinking_sink=thinking_sink,
+                    task_tracker=task_tracker,
                 )
                 manager.register(
                     minecraft_agent,
@@ -1068,6 +1092,7 @@ async def run_shutdown(
     session_manager: Optional["LiveSessionManager"] = None,
     tool_registry: Optional[ToolRegistry] = None,
     health_monitor: Optional[ToolHealthMonitor] = None,
+    task_tracker: Optional[TaskTracker] = None,
 ) -> None:
     """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），最后 EventBus/ContextService/LLMManager 清理，SQLiteStore.close 收尾落盘。"""
     _saw_cancelled = False
@@ -1144,6 +1169,9 @@ async def run_shutdown(
     # 工具熔断器探活：先停 monitor 循环（不再触发新的 recover_tool），
     # 再关闭 MCP stdio 子进程（修停机泄漏——``close_mcp_providers`` 此前
     # 仅导出未被调用，MCP server 子进程会随 Python 进程一起被强杀）。
+    if task_tracker is not None:
+        await safe_log(task_tracker.stop(), "TaskTracker.stop")
+
     if health_monitor is not None:
         logger.info("正在停止 ToolHealthMonitor...")
         await safe_log(health_monitor.stop(), "ToolHealthMonitor.stop")
@@ -1214,6 +1242,7 @@ async def main() -> None:
         session_manager,
         tool_registry,
         health_monitor,
+        task_tracker,
     ) = await create_app_components(
         config,
         config_service,
@@ -1247,6 +1276,7 @@ async def main() -> None:
             session_manager=session_manager,
             tool_registry=tool_registry,
             health_monitor=health_monitor,
+            task_tracker=task_tracker,
         )
         return
 
@@ -1294,6 +1324,7 @@ async def main() -> None:
         session_manager=session_manager,
         tool_registry=tool_registry,
         health_monitor=health_monitor,
+        task_tracker=task_tracker,
     )
 
 

@@ -13,6 +13,7 @@ from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.manager import LLMResponse
 from src.modules.tools.models import ToolSpec, ToolExecutionResult
+from src.modules.tools.registry import ToolRegistry
 
 
 def _tc(name: str, args: dict, call_id: str = "c1") -> dict:
@@ -42,7 +43,8 @@ def _make_planner(
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="SYSTEM_PROMPT")
 
-    reg = registry if registry is not None else MagicMock()
+    # 缺省真注册表 + 注册 mock reply（统一调用路径：reply 经 registry.invoke）
+    reg = registry if registry is not None else ToolRegistry()
     if not hasattr(reg, "list_tools"):
         reg.list_tools = MagicMock(return_value=[])
 
@@ -53,7 +55,7 @@ def _make_planner(
         prov = MagicMock()
         prov.invoke = AsyncMock(
             return_value=ToolExecutionResult(
-                tool_name="reply",
+                tool_name="streamer_reply",
                 success=True,
                 structured_content={
                     "speech": "测试回复",
@@ -62,6 +64,20 @@ def _make_planner(
                     "metadata": {"target": "u1"},
                 },
             )
+        )
+
+    if isinstance(reg, ToolRegistry) and not reg.has("streamer_reply"):
+        from src.modules.tools.provider import make_provider_from_specs
+        from src.modules.tools.models import ToolSpec as _TS
+
+        _reply_spec = _TS(name="reply", description="主播发言出口", kind="sync", provider="streamer")
+
+        async def _reply_impl(inv):  # type: ignore[no-untyped-def]
+            return await prov.invoke(inv)
+
+        reg.register_provider(
+            make_provider_from_specs("streamer", [(_reply_spec, _reply_impl)]),
+            visible_to={"streamer_reply": ["streamer"]},
         )
 
     planner = Planner(
@@ -92,26 +108,22 @@ def _msg(text: str = "hi", mid: str = "m1") -> Any:
 # ---------------------------------------------------------------------------
 
 
-def test_tool_face_reply_first_and_streamer_filtered() -> None:
-    """工具面 = reply + registry 工具；provider=streamer 的内部协议被过滤。"""
+def test_tool_face_is_for_agent_registry_result() -> None:
+    """工具面 = for_agent("streamer") 注册表结果（全名直出，统一来源）；rundown 例外条件追加。"""
     registry = MagicMock()
     registry.list_tools.return_value = [
-        ToolSpec(name="minecraft_get_state", description="查状态", parameters_schema={"type": "object"}, kind="sync", provider="minecraft"),
-        ToolSpec(name="reply", description="内部协议残留", parameters_schema=None, kind="sync", provider="streamer"),
-        ToolSpec(name="parse_command", description="内部协议", parameters_schema=None, kind="sync", provider="streamer"),
+        ToolSpec(name="get_work_log", description="查工作文档", parameters_schema={"type": "object"}, kind="sync", provider="minecraft"),
+        ToolSpec(name="reply", description="说话出口", parameters_schema=None, kind="sync", provider="streamer"),
     ]
     planner, _llm, _prompt = _make_planner(registry=registry)
 
     face = planner._build_tool_face()
     names = [f["name"] for f in face]
-    assert names[0] == "reply"
-    assert "minecraft_get_state" in names
-    assert "reply" not in names[1:]
-    assert "parse_command" not in names
+    assert names == ["minecraft_get_work_log", "streamer_reply"]  # 注册表全名直出、无重复注入
 
 
-def test_tool_face_registry_missing_still_reply() -> None:
-    """registry 未注入：工具面退化为仅 reply。"""
+def test_tool_face_registry_missing_is_empty() -> None:
+    """registry 未注入：工具面为空（reply 也来自注册表，统一来源）。"""
     planner = Planner(
         config={"planner_llm": "llm"},
         llm_service=MagicMock(),
@@ -121,7 +133,7 @@ def test_tool_face_registry_missing_still_reply() -> None:
         reply_provider=MagicMock(),
     )
     face = planner._build_tool_face()
-    assert [f["name"] for f in face] == ["reply"]
+    assert face == []
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +144,7 @@ def test_tool_face_registry_missing_still_reply() -> None:
 @pytest.mark.asyncio
 async def test_react_reply_terminates_loop() -> None:
     """LLM 调 reply → 经 reply_provider 执行 → 循环立即终止（说话即收尾）。"""
-    llm_resp = _resp(tool_calls=[_tc("reply", {"topic_summary": "t", "target": "m1"})])
+    llm_resp = _resp(tool_calls=[_tc("streamer_reply", {"topic_summary": "t", "target": "m1"})])
     planner, llm, _prompt = _make_planner(chat_responses=[llm_resp])
 
     outcome = await planner.plan([_msg()])
@@ -141,7 +153,7 @@ async def test_react_reply_terminates_loop() -> None:
     assert outcome["speech"] == "测试回复"
     assert outcome["silent_reason"] is None
     assert outcome["steps"] == 1
-    assert outcome["tool_trace"] == ["reply"]
+    assert outcome["tool_trace"] == ["streamer_reply"]
     # reply 之后不再有下一轮 LLM 调用
     assert llm.chat_messages.await_count == 1
 
@@ -170,14 +182,14 @@ async def test_react_registry_tool_then_reply() -> None:
     )
     chat = [
         _resp(tool_calls=[_tc("minecraft_get_state", {}, "c1")]),
-        _resp(tool_calls=[_tc("reply", {"topic_summary": "t"}, "c2")]),
+        _resp(tool_calls=[_tc("streamer_reply", {"topic_summary": "t"}, "c2")]),
     ]
     planner, llm, _prompt = _make_planner(chat_responses=chat, registry=registry)
 
     outcome = await planner.plan([_msg()])
 
     assert outcome["replied"] is True
-    assert outcome["tool_trace"] == ["minecraft_get_state", "reply"]
+    assert outcome["tool_trace"] == ["minecraft_get_state", "streamer_reply"]
     assert llm.chat_messages.await_count == 2
     # 观察喂回：第二轮 messages 含 tool role + tool_call_id 关联
     second = llm.chat_messages.await_args_list[1].kwargs["messages"]
@@ -247,7 +259,7 @@ async def test_react_reply_unavailable_fed_back() -> None:
     )
     planner._llm_service.chat_messages = AsyncMock(
         side_effect=[
-            _resp(tool_calls=[_tc("reply", {"topic_summary": "t"})]),
+            _resp(tool_calls=[_tc("streamer_reply", {"topic_summary": "t"})]),
             _resp(),
         ]
     )

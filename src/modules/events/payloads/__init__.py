@@ -60,6 +60,7 @@ from .room import (
 )
 from .rundown import RundownChangedPayload
 from .speech import StreamerSpeechPayload
+from .tasks import TaskChangedPayload
 from .tool_health import ToolHealthPayload
 from .tool_result import ToolResultPayload
 from .utterance import (
@@ -92,6 +93,8 @@ __all__ = [
     "StreamerStagePayload",
     # rundown 流程单子系统
     "RundownChangedPayload",
+    # task.* 异步任务生命周期
+    "TaskChangedPayload",
     # tool.result.* 异步工具结果
     "ToolResultPayload",
     # tool.health.* 工具健康状态变更

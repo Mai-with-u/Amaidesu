@@ -4,8 +4,14 @@ query_memory 工具
 LLM 可调用 ``query_memory(query, top_k)`` 返回相关记忆；结果以
 ``ToolExecutionResult.content`` 文本形式呈现（最多 N 条）。
 
-注册方式：可通过 ``default_tool_registry().register_provider(QueryMemoryToolProvider(memory))``
-或全局单例 ``build_query_memory_tool()`` 提供默认空壳后绑定 memory provider。
+**简单工具正典路径样板**——本文件演示无状态简单工具的标准写法：
+``ToolSpec`` + 普通 async 函数（经 ``as_tool_impl`` 包装返回值/异常/计时）
++ ``make_provider_from_specs`` 组装 Provider，装配处（组合根经
+``bind_memory_tools``）一行 ``register_provider`` 注册。无连接、无共享
+状态、无动态工具表的工具照此写，不必手写 Provider 类。
+
+注册方式：由组合根构造注册表后，经 ``bind_memory_tools``（见
+``src/modules/memory/bootstrap.py``）把本工具注入组合根传入的注册表。
 
 时间字段：timestamp_ms 在 Amaidesu 内部使用毫秒，本工具不引入秒/毫秒转换
 （仅在切换 AMemorixProvider 时由 Provider 内部负责）。
@@ -13,20 +19,21 @@ LLM 可调用 ``query_memory(query, top_k)`` 返回相关记忆；结果以
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, ClassVar, List, Optional
+from typing import Any, List, Optional
 
-from src.modules.logging import get_logger
 from src.modules.memory.provider import MemoryProvider
 from src.modules.tools.models import (
-    ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import BaseToolProvider
+from src.modules.tools.provider import (
+    ToolProvider,
+    as_tool_impl,
+    make_provider_from_specs,
+)
 
-logger = get_logger("QueryMemoryTool")
-
+# 提供者短名（注册名前缀 = memory_query_memory；与 provider.name 同值同源）
+PROVIDER_NAME = "memory"
 
 QUERY_MEMORY_SPEC = ToolSpec(
     name="query_memory",
@@ -44,69 +51,50 @@ QUERY_MEMORY_SPEC = ToolSpec(
     },
     kind="sync",
     result_event="",
-    provider="memory",
+    provider=PROVIDER_NAME,
 )
 
 
-@dataclass(slots=True)
-class QueryMemoryToolProvider(BaseToolProvider):
-    """query_memory 工具的 ToolProvider。
+async def _run_query_memory(invocation: ToolInvocation, memory: Optional[MemoryProvider]) -> str:
+    """query_memory 的执行体（普通 async 函数；异常交由 as_tool_impl 包装）。"""
+    if memory is None:
+        raise ValueError("query_memory 工具未绑定 MemoryProvider")
+    args = invocation.arguments or {}
+    query = str(args.get("query", "")).strip()
+    try:
+        top_k = int(args.get("top_k", 5))
+    except (TypeError, ValueError):
+        top_k = 5
+    top_k = max(1, min(top_k, 20))
 
-    memory provider 字段可热绑：构造后修改 ``memory`` 字段以切换后端
-    （默认为 ``None``，调用前必须设置）。
+    if not query:
+        return "（空查询）"
+
+    hits = await memory.recall(query, top_k=top_k)
+    return _format_hits(hits)
+
+
+def build_query_memory_tool(memory: Optional[MemoryProvider] = None) -> ToolProvider:
+    """构造 query_memory 工具的 Provider（简单工具正典路径样板）。
+
+    ``as_tool_impl`` 把 ``_run_query_memory`` 的返回值/异常/计时归一为
+    ``ToolExecutionResult``（结果回显派生全名 memory_query_memory，保持
+    溯源一致）；``make_provider_from_specs`` 组装成固定 Provider
+    （name=PROVIDER_NAME，category=memory）。
     """
-
-    memory: Optional[MemoryProvider] = None
-
-    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
-    category: ClassVar[str] = "memory"
-
-    @property
-    def name(self) -> str:
-        return "QueryMemoryToolProvider"
-
-    def list_tools(self):
-        yield QUERY_MEMORY_SPEC
-
-    async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        # 注册名（memory_query_memory）即调用方使用的名；结果回显它保持溯源一致
-        tool_name = invocation.tool_name
-        if self.memory is None:
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message="query_memory 工具未绑定 MemoryProvider",
+    return make_provider_from_specs(
+        PROVIDER_NAME,
+        [
+            (
+                QUERY_MEMORY_SPEC,
+                as_tool_impl(
+                    QUERY_MEMORY_SPEC.full_name,
+                    lambda inv: _run_query_memory(inv, memory),
+                ),
             )
-        args = invocation.arguments or {}
-        query = str(args.get("query", "")).strip()
-        try:
-            top_k = int(args.get("top_k", 5))
-        except (TypeError, ValueError):
-            top_k = 5
-        top_k = max(1, min(top_k, 20))
-
-        if not query:
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=True,
-                content="（空查询）",
-            )
-
-        try:
-            hits = await self.memory.recall(query, top_k=top_k)
-        except Exception as exc:  # noqa: BLE001 - 边界
-            logger.error(f"query_memory recall 失败: {exc}", exc_info=True)
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message=f"recall 失败: {type(exc).__name__}: {exc}",
-            )
-
-        return ToolExecutionResult(
-            tool_name=tool_name,
-            success=True,
-            content=_format_hits(hits),
-        )
+        ],
+        category="memory",
+    )
 
 
 def _format_hits(hits: List[Any]) -> str:
@@ -128,32 +116,8 @@ def _format_hits(hits: List[Any]) -> str:
     return "\n".join(lines)
 
 
-def build_query_memory_tool() -> QueryMemoryToolProvider:
-    """工厂：构造一个空壳 ``QueryMemoryToolProvider``（待绑定 memory）。"""
-    return QueryMemoryToolProvider(memory=None)
-
-
-# 模块级默认 provider（被默认 ToolRegistry 引用前可绑定 memory）
-_default_query_provider = build_query_memory_tool()
-
-
-def get_default_query_tool() -> QueryMemoryToolProvider:
-    """取得默认 query_memory provider（用于 builtin 注册）。"""
-    return _default_query_provider
-
-
-async def query_memory(text: str, top_k: int = 5) -> List[Any]:
-    """直接函数形式（非工具路径）。供代码内调用。"""
-    mem = _default_query_provider.memory
-    if mem is None:
-        return []
-    return await mem.recall(text, top_k=top_k)
-
-
 __all__ = [
+    "PROVIDER_NAME",
     "QUERY_MEMORY_SPEC",
-    "QueryMemoryToolProvider",
     "build_query_memory_tool",
-    "get_default_query_tool",
-    "query_memory",
 ]

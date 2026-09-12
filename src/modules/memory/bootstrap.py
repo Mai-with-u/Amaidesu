@@ -6,8 +6,8 @@
   / ``ToolRegistry`` 全部由本模块在调用方提供的 config 上构造
 - **类型检查 + fail-fast**：registry 必须是 ``ToolRegistry``；backend 必须是
   ``"simple"``；遇到未知值（含 ``"amemorix"``）直接 ``raise ValueError``
-- **零全局单例**：本模块**不**接触 ``sqlite_store()`` 默认单例，也不触碰
-  ``default_tool_registry()`` / ``get_default_query_tool()``
+- **零全局单例**：本模块**不**接触 ``sqlite_store()`` 默认单例；注册表由
+  组合根构造并经参数传入（``bind_memory_tools``）
 
 ## 调用示例（main.py 装配阶段）
 
@@ -41,7 +41,7 @@ from typing import Any, Dict, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.memory.provider import MemoryProvider
-from src.modules.memory.query_tool import QueryMemoryToolProvider
+from src.modules.memory.query_tool import build_query_memory_tool
 from src.modules.memory.simple_memory import SimpleMemory
 from src.modules.storage._default_path import DEFAULT_DB_PATH
 from src.modules.storage.sqlite_store import SQLiteStore
@@ -146,11 +146,12 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteStore, Simpl
 def bind_memory_tools(registry: ToolRegistry, memory: MemoryProvider) -> int:
     """把 ``query_memory`` 工具注册到 ``registry``。
 
-    显式构造一个 ``QueryMemoryToolProvider(memory=memory)`` 并
-    ``registry.register_provider(provider)``；返回新增工具数。
+    经 ``build_query_memory_tool(memory)`` 构造 Provider（简单工具正典路径
+    样板，见 ``query_tool.py``）并 ``registry.register_provider(provider)``；
+    返回新增工具数。
 
-    **禁止**走 ``default_tool_registry()`` / ``get_default_query_tool()`` 单例路径
-    ——生产装配必须由调用方持有 registry，本函数把 provider 注入到那个 registry。
+    **禁止**全局单例路径——生产装配必须由组合根构造注册表并传入，
+    本函数把 provider 注入到那个注册表。
 
     Args:
         registry: 调用方构造的 ``ToolRegistry``（必须非 None）
@@ -164,7 +165,7 @@ def bind_memory_tools(registry: ToolRegistry, memory: MemoryProvider) -> int:
     if memory is None:
         raise ValueError("bind_memory_tools: memory 不能为 None；请先调用 build_memory_stack")
 
-    provider = QueryMemoryToolProvider(memory=memory)
+    provider = build_query_memory_tool(memory)
     new_count = registry.register_provider(provider)
     if new_count > 0:
         logger.info(f"记忆工具已绑定: provider='{provider.name}' 新增 {new_count} 个工具（query_memory）")

@@ -1,14 +1,15 @@
 """rundown_tool - 流程单控制工具（Planner ReAct 循环的推进出口）
 
-**Agent 内脏协议工具**——与 reply 同类：不进 ToolRegistry（provider 为
-"streamer" 的工具会被决策面过滤），由 Planner 在 ReAct 循环内直连调用。
+**注册形态**：provider="rundown"、声明名 control → 全名 ``rundown_control``，
+经 ``build_rundown_tool_provider`` 组装后由 StreamerAgent 注册进 ToolRegistry
+（可见名单 ``["streamer"]``，ADR-012）。决策面的出现时机仍由 Planner 按
+``RundownControlProvider.is_active`` 条件追加（动态工具的已知例外）。
 推进权归 Agent：何时切换环节是决策脑自己的决定，本工具只提供能力通道，
 并把 ``RundownState`` 的结构化拒绝（未知环节 id / 未达最少停留）原样回灌
 ——Agent 读到拒绝原因后自纠，不走异常通道。
 
 工具契约：
-- OpenAI function 形态（``build_rundown_control_function_def``），仅在流程单
-  激活时由 Planner 加入工具面（``RundownControlProvider.is_active``）
+- OpenAI function 形态（``build_rundown_control_function_def``）
 - ``RundownControlProvider.invoke(args)`` 同步执行（状态机方法非阻塞），
   返回观察 JSON：成功带流程单快照；拒绝带 reason / available_segment_ids /
   remaining_ms
@@ -20,11 +21,16 @@ import json
 from typing import Any, Dict
 
 from src.modules.logging import get_logger
+from src.modules.tools.models import ToolSpec
+from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
 
 from ..rundown.rundown_state import RundownState
 
-__all__ = ["build_rundown_control_function_def", "RundownControlProvider"]
-
+__all__ = [
+    "build_rundown_control_function_def",
+    "build_rundown_tool_provider",
+    "RundownControlProvider",
+]
 
 _TOOL_NAME = "rundown_control"
 
@@ -47,18 +53,44 @@ _PARAMETERS_SCHEMA: dict[str, Any] = {
     "required": ["action"],
 }
 
+# 注册形态的 spec：provider="rundown"、声明名 control（全名 rundown_control 派生）
+_CONTROL_SPEC = ToolSpec(
+    name="control",
+    description=(
+        "流程单控制：切换直播环节或暂停/恢复环节计时。"
+        "当本环节目标已达成、或剩余时间不多且话题自然收束时，用 next/goto 推进；"
+        "被拒绝时读取原因（如最少停留未到），不要盲目重试同一调用。"
+    ),
+    parameters_schema=_PARAMETERS_SCHEMA,
+    kind="sync",
+    provider="rundown",
+)
+
 
 def build_rundown_control_function_def() -> Dict[str, Any]:
     """构造 rundown_control 的 OpenAI function 定义（Planner ReAct 工具面）。"""
     return {
         "name": _TOOL_NAME,
-        "description": (
-            "流程单控制：切换直播环节或暂停/恢复环节计时。"
-            "当本环节目标已达成、或剩余时间不多且话题自然收束时，用 next/goto 推进；"
-            "被拒绝时读取原因（如最少停留未到），不要盲目重试同一调用。"
-        ),
+        "description": _CONTROL_SPEC.description,
         "parameters": _PARAMETERS_SCHEMA,
     }
+
+
+def build_rundown_tool_provider(provider: "RundownControlProvider") -> ToolProvider:
+    """把 RundownControlProvider 包成注册形态的 ToolProvider（简单工具路径）。
+
+    注册键 = 派生全名 ``rundown_control``（provider="rundown" + 声明名
+    control）；执行体复用同一 ``RundownControlProvider.invoke``——注册
+    通道与 Planner 直连通道走同一状态机，无第二事实源。
+    """
+
+    async def _run(inv):  # type: ignore[no-untyped-def]
+        return provider.invoke(dict(inv.arguments or {}))
+
+    return make_provider_from_specs(
+        "rundown",
+        [(_CONTROL_SPEC, as_tool_impl(_CONTROL_SPEC.full_name, _run))],
+    )
 
 
 class RundownControlProvider:

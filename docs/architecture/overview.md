@@ -29,7 +29,7 @@ flowchart TB
     end
 
     subgraph Bus["EventBus（语义域事件）"]
-        EB["room.message.danmaku / gift / super_chat / enter<br/>planner.checkpoint<br/>+ 通配订阅"]
+        EB["room.message.danmaku / gift / super_chat / enter<br/>planner.decision / streamer.speech / rundown.changed<br/>+ 通配订阅"]
     end
 
     subgraph Streamer["StreamerAgent (src/agents/streamer/)"]
@@ -41,8 +41,8 @@ flowchart TB
     end
 
     subgraph Game["游戏 Agent (src/agents/ 顶级自包含包)"]
-        TextAdv["TextAdvGameAgent<br/>+ StubContentEngine<br/>+ content_engine_* 5 工具"]
-        MC["MinecraftAgent<br/>+ maicraft 语义工具（MCP）<br/>+ minecraft_todo / minecraft_notebook / minecraft_get_state / minecraft_assign"]
+        TextAdv["TextAdvGameAgent<br/>+ StubContentEngine（包内私有引擎）<br/>+ text_adv_choose_option / text_adv_get_story"]
+        MC["MinecraftAgent<br/>+ maicraft 语义工具（MCP）<br/>+ minecraft_todo / minecraft_notebook / minecraft_report / minecraft_get_state / minecraft_send_prompt"]
     end
 
     subgraph Registry["ToolRegistry (src/modules/tools/)"]
@@ -90,8 +90,8 @@ Amaidesu/
 │   ├── agents/                  # 业务 Agent（StreamerAgent + GameAgent：text_adv/minecraft 范例）
 │   │   ├── streamer/            #   主播 Agent（Planner/Replyer/Rundown/工具/后台维护）
 │   │   └── game/                #   游戏 Agent（AI 玩家范式）
-│   │       ├── text_adv/        #     文字冒险 GameAgent 范例（content_engine 范式）
-│   │       └── minecraft/       #     Minecraft GameAgent（maicraft MCP 语义工具 + minecraft_todo/minecraft_notebook/minecraft_get_state/minecraft_assign）
+│   │       ├── text_adv/        #     文字冒险 GameAgent 范例（内容引擎为包内私有接口）
+│   │       └── minecraft/       #     Minecraft GameAgent（maicraft MCP 语义工具 + minecraft_todo/minecraft_notebook/minecraft_report/minecraft_get_state/minecraft_send_prompt）
 │   └── modules/                 # 共享模块（基础设施 + 领域组件）
 │       ├── agents/              # Agent 框架层：BaseAgent 协议六面 / AgentManager / AgentControl 6 工具 / factory(SUPPORTED_AGENTS)
 │       ├── audio/               # v2.0.10 抽出：AudioDeviceManager（声卡播放 / 录音），原 `src/modules/tts/audio_device_manager.py` 上移
@@ -250,11 +250,11 @@ sequenceDiagram
 | **命令解析** | `command/command.py` + `command/command_parser.py` + `command/command_registry.py`（`tools/command_tool.py` 的底层纯解析原语） |
 | **提示词** | `prompts/amaidesu_planner_react.md` + `prompts/amaidesu_replyer.md` |
 
-`src/agents/text_adv/` 文字冒险 GameAgent 范例（content_engine 范式）：`agent.py`（继承 `BaseAgent`）、`state.py`（剧情状态）、`tools.py`（游戏侧 dispatch），构造时注入 `content_engine=StubContentEngine(engine_kind="text_adv")`，通过 `content_engine_*` 5 工具间接驱动引擎。
+`src/agents/text_adv/` 文字冒险 GameAgent 范例：`agent.py`（继承 `BaseAgent`）、`state.py`（剧情状态）、`tools.py`（游戏侧 dispatch）、`content_engine/` 子包（引擎 Protocol + Stub/Fake，**包内私有**：构造注入、Agent 与工具直连调用，不注册不暴露），构造时注入 `content_engine=StubContentEngine(engine_kind="text_adv")`。
 
 ### ③ 工具族
 
-总览：约 51 个工具。注册名 = `ToolSpec.provider`（**提供者标识**，全局唯一，如 `vts` / `vrchat` / `warudo` / `obs` / `vision` / `memory` / `framework` / `text_adv` / `content_engine`）+ `_` + 工具声明名——LLM 与调用方只见注册名（未带前缀的声明名注册时自动补前缀）。provider 自声明**分类**（avatar / studio / vision / memory / game / mcp / framework，经 `registry.list_categories()` / `list_tools(category=)` 查询）；tools.toml 段为配置地址，三者正交。主播 Agent 默认可见全部已启用工具（`registry.list_tools()` 全量），可见性由人类控制的开关（`[tools.avatar.*].enabled` 等）决定。装配由 `bind_core_tools` 按 avatar/studio 开关驱动，详见 [启动时序](#启动时序) 5a 步骤。其余已知缺口见"已知缺口"。
+总览：约 46 个工具。注册名 = `ToolSpec.provider`（**提供者标识**，全局唯一，如 `vts` / `vrchat` / `warudo` / `obs` / `vision` / `memory` / `framework` / `text_adv`）+ `_` + 工具声明名——LLM 与调用方只见注册名（未带前缀的声明名注册时自动补前缀）。provider 自声明**分类**（avatar / studio / vision / memory / game / mcp / framework，经 `registry.list_categories()` / `list_tools(category=)` 查询）；tools.toml 段为配置地址，三者正交。主播 Agent 默认可见全部已启用工具（`registry.list_tools()` 全量），可见性由人类控制的开关（`[tools.avatar.*].enabled` 等）决定。装配由 `bind_core_tools` 按 avatar/studio 开关驱动，详见 [启动时序](#启动时序) 5a 步骤。其余已知缺口见"已知缺口"。
 
 | 分类 | provider 标识 | 工具数 | 工具名（注册名） |
 |----|----------|-------|--------|
@@ -266,7 +266,7 @@ sequenceDiagram
 | studio | `obs` | 4 | `obs_send_text` / `obs_switch_scene` / `obs_set_source_visibility` / `obs_send_test` |
 | vision | `vision` | 1 | `vision_look_at_screen`（同步快照工具，注入 `ScreenCapture`/`TextReader` 后端；无后端时返回成功 + 空文本，不抛异常） |
 | game | `text_adv` | 2 | `text_adv_choose_option` / `text_adv_get_story`（游戏侧 dispatch，`agents/text_adv/` 内聚） |
-| game | `content_engine` | 5 | `content_engine_start` / `content_engine_stop` / `content_engine_send_input` / `content_engine_status` / `content_engine_get_state`（通用游戏内容引擎控制面） |
+| game | `minecraft` | 5 | `minecraft_todo` / `minecraft_notebook` / `minecraft_report` / `minecraft_get_state` / `minecraft_send_prompt`（`agents/minecraft/` 内聚；maicraft_* MCP 工具另见 mcp 行） |
 | memory | `memory` | 1 | `memory_query_memory`（绑定 `MemoryProvider` 后才可用） |
 | mcp | `<server 名>` | 按 server | `maicraft_*` 等（MCP server 工具经通道注册，provider = server 名） |
 | Streamer 自带 | `streamer` | 3 | `reply` / `should_speak_proactively` / `parse_command`（Agent 内部协议工具，**不入 ToolRegistry**） |
@@ -281,7 +281,7 @@ sequenceDiagram
 | 谁驱动 | 主播**自我驱动**（持续循环）；游戏**命令驱动**（类 Code Agent：命令唤醒任务内有界循环，完成即停，空闲零消耗） | **被调才干活**（纯被动，调用即返回 `ToolExecutionResult`） |
 | 形态 | 继承 `BaseAgent`，可发事件、可订阅、可销毁重建 | 继承 `ToolProvider`，`list_tools()` + `invoke(ToolInvocation)` |
 | 暴露 | 整个生命周期 + `list_tools()` 聚合到 ToolRegistry | 只通过 `ToolRegistry.invoke(name, args)` 暴露给 LLM |
-| 例子 | `StreamerAgent`（Planner 循环 + 后台 BackgroundMaintainer）、`TextAdvGameAgent`、`MinecraftAgent`（命令唤醒任务执行） | `vision_look_at_screen`、`content_engine_send_input`、`vts_set_expression` |
+| 例子 | `StreamerAgent`（Planner 循环 + 后台 BackgroundMaintainer）、`TextAdvGameAgent`、`MinecraftAgent`（命令唤醒任务执行） | `vision_look_at_screen`、`memory_query_memory`、`vts_set_expression` |
 
 **判别口诀**："谁驱动谁"——能自我维持状态/轮询/心跳的就是 Agent，只在被调用时执行的就是 Tool。
 
@@ -298,7 +298,7 @@ sequenceDiagram
 
 ### 事件系统（摘要）
 
-EventBus 是事件通道（三通道协作之一，承载游戏→主播的事件汇报）。事件命名采用语义域形式（`room.message.danmaku` / `planner.checkpoint` 等），支持通配订阅（`room.message.*`）。完整事件表（含发布者/订阅者/Payload 类型）见 [事件系统](event-system.md)；命名规则见 [事件命名规范](event-naming-convention.md)。
+EventBus 是事件通道（三通道协作之一，承载游戏→主播的事件汇报）。事件命名采用语义域形式（`room.message.danmaku` / `planner.decision` 等），支持通配订阅（`room.message.*`）。完整事件表（含发布者/订阅者/Payload 类型）见 [事件系统](event-system.md)；命名规则见 [事件命名规范](event-naming-convention.md)。
 
 ### 事件拦截器（Interceptor）
 
@@ -317,7 +317,7 @@ EventBus 是事件通道（三通道协作之一，承载游戏→主播的事�
 v2 不再支持"插件系统"——`src/modules/plugins/` 已移除。新功能通过 **Agent 包内聚**实现：
 
 - **内容特有逻辑全部内聚**到 `src/agents/<name>/`（目录名 = Agent 注册名），框架层（`src/modules/`）**零改动**
-- 例：新增"MC Agent" → 在 `src/agents/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`engine.py`（实现 `ContentEngine` Protocol）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`（注册名自动带 `<provider>_` 前缀）；公用工具由 `bind_core_tools` 显式装配；启动结束 `audit_tools` 审计
+- 例：新增"MC Agent" → 在 `src/agents/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`tools.py`（自有工具 spec）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`（注册名自动带 `<provider>_` 前缀）；公用工具由 `bind_core_tools` 显式装配；启动结束 `audit_tools` 审计
 - 例：新增"播报 Agent" → 在 `src/agents/announcer/` 建包，自己订阅自己感兴趣的事件，自己实现 `list_tools()`
 - **禁止**为新功能在 `src/modules/` 加新模块分组（除非它真的是跨阶段基础设施）；**禁止**通过 monkey-patching 或 import 副作用往框架注入行为
 

@@ -1,20 +1,18 @@
 """
 工具层组合根装配入口
 
-集中装配 Amaidesu 框架自带的"核心"工具包到指定 ``ToolRegistry``，
-并把 ``@tool`` 装饰器挂起的 pending 工具刷入同一 registry。
+集中装配 Amaidesu 框架自带的"核心"工具包到指定 ``ToolRegistry``。
 
 ## 设计要点
 - **显式注入**——registry 由调用方构造并传入，本模块**不**触碰任何全局单例
-  （``default_tool_registry()``）。生产代码请使用本入口；测试可通过
-  ``bind_pending_tools`` 单独验证装饰器 pending 路径
-- **非 TTS 包白名单**——``[tools.output.config].enabled`` 列表驱动非 TTS
-  包（subtitle / vts / vrchat / warudo / obs）的装配；列表外的包一律不
-  装配（避免"配置里没启用但工具进入 registry"的隐式行为）
-- **按包隔离**——每个 ``register_<x>_tools`` 调用都被 ``try/except`` 包裹，
+  （``default_tool_registry()``）。生产代码请使用本入口
+- **分类开关装配**——``[tools.<domain>.<key>].enabled``（如
+  ``[tools.avatar.vts].enabled``）驱动各提供者的装配；段缺失或 false 时
+  不装配（避免"配置里没启用但工具进入 registry"的隐式行为）
+- **按包隔离**——每个提供者的注册调用都被 ``try/except`` 包裹，
   单包失败（缺配置 / 缺 endpoint / 缺依赖）只记 ERROR 日志 + 报告里
   ``count=0``，不阻断其它包
-- **无目录扫描**——绑定关系全部写死在下方 ``_NON_TTS_PACKAGES`` 中，
+- **无目录扫描**——绑定关系全部写死在下方 ``_DOMAIN_MEMBERS`` 中，
   避免动态 import / 文件系统扫描引入隐式耦合
 - **与 L2 Provider 注册语义对齐**——输出包内已有 ``register_<x>_tools``
   函数，统一调用入口（不改 provider 内部）
@@ -26,29 +24,27 @@
 ```python
 from src.modules.tools import ToolRegistry
 from src.modules.tools.bootstrap import bind_core_tools
-from src.modules.tools.decorator import bind_pending_tools
 
 registry = ToolRegistry()
-report = bind_core_tools(registry, config=output_config_dict)
-bind_pending_tools(registry)
+report = bind_core_tools(registry, config=tools_section_dict)
 ```
 
 ## 当前覆盖的核心工具包
 
-### 非 TTS 输出包（按 ``[tools.output.config].enabled`` 白名单）
-| 配置键 | register 函数 | 描述 |
+### 输出控制包（按分类开关 ``[tools.<domain>.<key>].enabled``）
+| 分类段 | register 函数 | 描述 |
 |---|---|---|
-| ``"vts"`` | ``register_vts_tools`` | VTubeStudio 控制 |
-| ``"vrchat"`` | ``register_vrchat_tools`` | VRChat OSC 桥接 |
-| ``"warudo"`` | ``register_warudo_tools`` | Warudo 控制 |
-| ``"obs"`` | ``register_obs_tools`` | OBS Studio 控制 |
+| ``[tools.avatar.vts]`` | ``register_vts_tools`` | VTubeStudio 控制 |
+| ``[tools.avatar.vrchat]`` | ``register_vrchat_tools`` | VRChat OSC 桥接 |
+| ``[tools.avatar.warudo]`` | ``register_warudo_tools`` | Warudo 控制 |
+| ``[tools.studio.obs]`` | ``register_obs_tools`` | OBS Studio 控制 |
 
 注意：
 
-- ``perception`` / ``content_engine`` 是 L2 DI 工具（需 ``ScreenCapture`` /
-  ``ContentEngine`` 注入），无 ``register_*_tools`` 入口，由组合根在
-  知道具体依赖后再 ``registry.register_provider(...)`` 注入——**不在本
-  bootstrap 范围**（架构红线：工具不感知 Agent 层）
+- ``perception``（vision_look_at_screen）是 L2 DI 工具（需 ``ScreenCapture``
+  注入），无 ``register_*_tools`` 入口，由组合根在知道具体依赖后再
+  ``registry.register_provider(...)`` 注入——**不在本 bootstrap 范围**
+  （架构红线：工具不感知 Agent 层）
 
 ## TTS 与字幕装配说明
 
@@ -56,13 +52,11 @@ TTS 与字幕均为基础设施而非工具：
 
 - TTS 由 ``src/modules/tts/build_tts_infrastructure`` 按核心 ``[tts]``
   段构造引擎实例并由 ``StreamerAgent`` 直接持有调用
-- 字幕由 ``src/modules/subtitle/build_subtitle_infrastructure`` 按
-  ``[tools.output.config.subtitle]`` 段构造 ``SubtitleService`` 实例并
-  注入 ``StreamerAgent`` 直接调用
+- 字幕由 ``src/modules/subtitle/build_subtitle_infrastructure`` 按核心
+  ``[subtitle]`` 段构造 ``SubtitleService`` 实例并注入
+  ``StreamerAgent`` 直接调用
 
-两者均不经 ``ToolRegistry``。本模块不介入 TTS / 字幕装配。
-``[tools.output.config].enabled`` 列表中的 ``"subtitle"`` 条目会被静默忽略
-（字幕不由本模块装配；白名单无对应映射项）。
+两者均不经 ``ToolRegistry``，本模块不介入 TTS / 字幕装配。
 """
 
 from __future__ import annotations
@@ -114,11 +108,6 @@ _DOMAIN_MEMBERS: List[_EntrySpec] = [
     (("avatar", "warudo"), "Warudo 控制", _load_warudo),
     (("studio", "obs"), "OBS Studio 控制", _load_obs),
 ]
-
-# 对外保留的 _NON_TTS_PACKAGES / _CORE_PACKAGES 兼容名（指代全部可控分类包）。
-# 运行时不使用，仅供外部静态分析 / 类型检查引用；实际装配由分类段开关门控。
-_NON_TTS_PACKAGES: List[_EntrySpec] = list(_DOMAIN_MEMBERS)
-_CORE_PACKAGES: List[_EntrySpec] = list(_DOMAIN_MEMBERS)
 
 
 def _resolve_domain_config(tools_cfg: Dict[str, Any], domain: str, key: str) -> Dict[str, Any]:
