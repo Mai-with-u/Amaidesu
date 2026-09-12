@@ -18,7 +18,6 @@ class TestServerConfig:
         cfg = McpServerConfig(transport="http", url="http://127.0.0.1:8766/mcp")
         assert cfg.url == "http://127.0.0.1:8766/mcp"
         assert cfg.enabled is True
-        assert cfg.prefix == ""  # 禁 None：空串 = 未设置 → 装配时 fallback 到 server 名
 
     def test_http_bad_url_rejected(self) -> None:
         with pytest.raises(ValidationError):

@@ -1,6 +1,6 @@
 """StreamerAgent 决策循环集成测试（Planner ReAct 架构）。
 
-Planner 以 ReAct 循环运行（``llm.chat_messages`` + 全局工具面 + reply 局部工具）；
+Planner 以 ReAct 循环运行（``llm.chat_messages`` + 全局工具列表 + reply 局部工具）；
 Replyer 仍是 ``llm.call_tools(tools=[reply])``。测试 mock 同步对齐：
 - Planner LLM 响应 = ``chat_messages`` 返回完整 OpenAI 形态 tool_calls
   （``{id, type, function: {name, arguments}}``）
@@ -97,7 +97,7 @@ def _setup_agent(
             _planner_react_response(
                 [
                     _planner_tool_call(
-                        "reply",
+                        "streamer_reply",
                         {
                             "topic_summary": "主播好可爱",
                             "reply_guidance": "回应夸奖",
@@ -143,22 +143,22 @@ def _setup_agent(
 async def test_decision_loop_danmaku_to_reply_provider():
     """决策循环端到端：弹幕事件 → Planner chat_messages（ReAct 调 reply）→ Replyer.call_tools → 发言管线。
 
-    reply 是局部工具：不进 ToolRegistry；Planner 循环内经 _reply_provider.invoke 直连。
+    reply 是真工具：注册进 ToolRegistry（名单 [streamer]）；Planner 循环内暂仍经
+    _reply_provider.invoke 直连（调用统一在后续任务收口）。proactive/command 是
+    代码直连的内部件，不注册（§5 判据）。
     """
     agent, bus, registry, llm, prompt = _setup_agent()
 
     await agent.start()
     try:
-        # 内部协议工具由 Agent 自身声明（不进 ToolRegistry）
+        # 工具声明（Agent 面向审计的口径）
         spec_names = {spec.name for spec in agent.list_tools()}
-        assert "reply" in spec_names
-        assert "should_speak_proactively" in spec_names
-        assert "parse_command" in spec_names
+        assert spec_names == {"reply"}  # 只有真工具进声明（proactive/command 是内部件）
 
-        registered_in_registry = {spec.name for spec in registry.list_tools()}
-        assert "reply" not in registered_in_registry
-        assert "should_speak_proactively" not in registered_in_registry
-        assert "parse_command" not in registered_in_registry
+        registered = {spec.full_name for spec in registry.list_tools()}
+        assert "streamer_reply" in registered  # reply 已注册（名单 [streamer]）
+        assert "should_speak_proactively" not in registered
+        assert "parse_command" not in registered
 
         # 1. 投放一条弹幕事件
         payload = _make_payload("主播好可爱！")
@@ -234,39 +234,6 @@ async def test_decision_loop_planner_no_reply_path():
         await agent.cleanup()
 
 @pytest.mark.asyncio
-async def test_decision_loop_proactive_tool_invoke():
-    """should_speak_proactively 工具可独立调用：返回触发 reason 或 None。"""
-    from src.agents.streamer.tools.proactive_tool import ProactiveToolProvider
-    from src.agents.streamer.proactive_trigger import ProactiveTrigger
-    from src.agents.streamer.room_state import RoomState
-
-    # 直接构造 trigger + provider 并注册到 registry
-    trigger = ProactiveTrigger(
-        {
-            "enabled": True,
-            "cold_timeout_ms": 45_000,
-            "min_interval_ms": 0,
-            "topic_required": False,
-            "max_per_hour": 10,
-        }
-    )
-    rs = RoomState()
-    rs.set_topic_summary("观众在聊游戏", now_ms=1_000)
-
-    provider = ProactiveToolProvider(
-        trigger=trigger,
-        room_state=rs,
-        external_pending=False,
-        rundown_pending=False,
-        rundown_ready=False,
-    )
-
-    # 主播内部协议工具不经 ToolRegistry 注册（Y 模型），按生产形态直调
-    # provider.invoke（裸名分发）
-    # 房间无最近消息 → 冷场 → 应触发 cold
-    result = await provider.invoke(ToolInvocation(tool_name="should_speak_proactively", arguments={}, source="test"))
-    # 内容可能是 "cold" 或 ""（取决于状态）
-    assert result is not None
 
 @pytest.mark.asyncio
 async def test_decision_loop_proactive_gated_until_live_started():
@@ -345,47 +312,6 @@ async def test_decision_loop_danmaku_reply_not_gated_by_live_session():
         await agent.cleanup()
 
 @pytest.mark.asyncio
-async def test_decision_loop_parse_command_tool():
-    """parse_command 工具：返回解析后的命令 dict（is_command + name + args + action）。"""
-    from src.agents.streamer.tools.command_tool import CommandToolProvider
-
-    provider = CommandToolProvider(
-        command_prefix="/",
-        command_mappings={"chat": "chat", "attack": "attack"},
-    )
-
-    # 主播内部协议工具不经 ToolRegistry 注册（Y 模型），按生产形态直调
-    # provider.invoke（裸名分发）
-    # 测试合法命令
-    result = await provider.invoke(
-        ToolInvocation(tool_name="parse_command", arguments={"text": "/chat hello world"}, source="test")
-    )
-    assert result.success is True
-    parsed = json.loads(result.content)
-    assert parsed["is_command"] is True
-    assert parsed["name"] == "chat"
-    assert parsed["args"] == ["hello", "world"]
-    assert parsed["action"] == "chat"
-    assert parsed["supported"] is True
-
-    # 测试非命令文本
-    result = await provider.invoke(
-        ToolInvocation(tool_name="parse_command", arguments={"text": "普通弹幕"}, source="test")
-    )
-    assert result.success is True
-    parsed = json.loads(result.content)
-    assert parsed["is_command"] is False
-
-    # 测试不支持的命令
-    result = await provider.invoke(
-        ToolInvocation(tool_name="parse_command", arguments={"text": "/unknown foo"}, source="test")
-    )
-    assert result.success is True
-    parsed = json.loads(result.content)
-    assert parsed["is_command"] is True
-    assert parsed["name"] == "unknown"
-    assert parsed["supported"] is False
-    assert parsed["action"] is None
 
 @pytest.mark.asyncio
 async def test_decision_loop_handle_message_direct():
@@ -494,7 +420,7 @@ class TestDecisionObservability:
                 _planner_react_response(
                     [
                         _planner_tool_call(
-                            "reply",
+                            "streamer_reply",
                             {
                                 "topic_summary": "回应夸奖",
                                 "reply_guidance": "回应夸奖",

@@ -30,7 +30,7 @@ from typing import Any, Dict, Optional
 from src.modules.logging import get_logger
 from src.modules.mcp.client import McpClient
 from src.modules.mcp.config import McpExternalConfig, McpServerConfig
-from src.modules.mcp.mapper import normalize_tool_name, to_result, to_spec
+from src.modules.mcp.mapper import to_result, to_spec
 from src.modules.mcp.provider import McpToolProvider
 from src.modules.tools.registry import ToolRegistry
 
@@ -74,7 +74,6 @@ async def bind_mcp_tools(
             prov = McpToolProvider(
                 client=client,
                 server_name=server_name,
-                prefix=server_cfg.prefix,
                 provider=provider or server_name,
             )
             count = await prov.setup()
@@ -122,7 +121,6 @@ __all__ = [
     "McpClient",
     "McpToolProvider",
     # 映射
-    "normalize_tool_name",
     "to_spec",
     "to_result",
     # 装配

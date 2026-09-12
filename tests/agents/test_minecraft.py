@@ -120,8 +120,8 @@ async def test_minecraft_notebook_full_document() -> None:
 
 
 @pytest.mark.asyncio
-async def test_minecraft_get_state_three_fields() -> None:
-    """minecraft_get_state 三元组：todo/notebook/recent_reports。"""
+async def test_minecraft_get_work_log_three_fields() -> None:
+    """minecraft_get_work_log 三元组：todo/notebook/recent_reports。"""
     state = _make_state()
     provider = _make_provider(state)
     reg = ToolRegistry()
@@ -129,7 +129,7 @@ async def test_minecraft_get_state_three_fields() -> None:
 
     state.add_report("delivery", "挖到钻石了！", "y=-12")
     state.set_notebook("矿脉在 Y=12")
-    r = await reg.invoke(_invocation("minecraft_get_state", {}))
+    r = await reg.invoke(_invocation("minecraft_get_work_log", {}))
     assert r.success
     d = r.structured_content
     assert d["recent_reports"] == [{"kind": "delivery", "content": "挖到钻石了！", "scene": "y=-12"}]
@@ -138,7 +138,7 @@ async def test_minecraft_get_state_three_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_minecraft_get_state_reports_ring_buffer() -> None:
+async def test_minecraft_get_work_log_reports_ring_buffer() -> None:
     """上报只保留最近 10 条（环形）。"""
     state = _make_state()
     for i in range(15):
@@ -147,35 +147,8 @@ async def test_minecraft_get_state_reports_ring_buffer() -> None:
     assert state.reports[-1]["content"] == "上报 14"
 
 
-@pytest.mark.asyncio
-async def test_minecraft_send_prompt_delivers_message() -> None:
-    """minecraft_send_prompt 提示词通道：消息投递给 callback（不写 todo——分解是 LLM 的事）。"""
-    received: list[str] = []
-
-    async def cb(content: str) -> None:
-        received.append(content)
-
-    provider = MinecraftToolProvider(state=_make_state(), send_prompt_callback=cb)
-    reg = ToolRegistry()
-    reg.register_provider(provider)
-
-    r = await reg.invoke(_invocation("minecraft_send_prompt", {"content": "挖 3 个钻石"}))
-    assert r.success
-    assert received == ["挖 3 个钻石"]
-    # 系统不代写 todo（目标分解是 LLM 的行为）
-    assert provider.state.todos == []
 
 
-@pytest.mark.asyncio
-async def test_minecraft_send_prompt_without_callback_degrades() -> None:
-    """send_prompt 无 callback：降级成功返回（消息丢失记日志，不阻断调用方）。"""
-    provider = _make_provider(_make_state())
-    reg = ToolRegistry()
-    reg.register_provider(provider)
-
-    r = await reg.invoke(_invocation("minecraft_send_prompt", {"content": "建房子"}))
-    assert r.success
-    assert r.structured_content["delivered"] is True
 
 
 @pytest.mark.asyncio
@@ -306,6 +279,7 @@ async def test_react_report_delivery_stops_batch() -> None:
         MinecraftConfig(max_steps=10),
         llm_manager=llm,
         event_bus=event_bus,
+        tool_registry=ToolRegistry(),
     )
     await agent.start()
     await agent.send_prompt("干活")
@@ -335,6 +309,7 @@ async def test_react_report_escalation_stops_and_waits() -> None:
         MinecraftConfig(max_steps=10),
         llm_manager=llm,
         event_bus=event_bus,
+        tool_registry=ToolRegistry(),
     )
     await agent.start()
     await agent.send_prompt("遇到困难的任务")
@@ -419,7 +394,7 @@ async def test_react_todo_done_no_longer_emits_milestone() -> None:
 
 @pytest.mark.asyncio
 async def test_react_full_format_feedback_and_id_association() -> None:
-    """完整 OpenAI 格式喂回：assistant.tool_calls + tool role + tool_call_id 关联。"""
+    """完整 OpenAI 格式作为观察返回：assistant.tool_calls + tool role + tool_call_id 关联。"""
     captured: list[dict] = []
 
     async def fake(messages, **kwargs):
@@ -437,12 +412,13 @@ async def test_react_full_format_feedback_and_id_association() -> None:
         MinecraftConfig(max_steps=5),
         llm_manager=llm,
         event_bus=event_bus,
+        tool_registry=ToolRegistry(),
     )
     await agent.start()
     await agent.send_prompt("探索东侧")
     await _wait_until(lambda: len(captured) >= 2)
 
-    # 第二轮请求的 messages 应含正确的喂回结构
+    # 第二轮请求的 messages 应含正确的作为观察返回结构
     second = captured[1]
     assistant = [m for m in second if m.get("role") == "assistant"]
     tools = [m for m in second if m.get("role") == "tool"]
@@ -461,12 +437,12 @@ async def test_react_mcp_tool_via_registry_passthrough() -> None:
 
     class FakeMcpProvider(BaseToolProvider):
         category = "game"
-        name = "FakeMcp"
+        name = "maicraft"
 
         def list_tools(self):
             return [
                 ToolSpec(
-                    name="maicraft_perceive",
+                    name="perceive",
                     description="感知",
                     parameters_schema={"type": "object"},
                     kind="sync",
@@ -486,8 +462,8 @@ async def test_react_mcp_tool_via_registry_passthrough() -> None:
         tools_given = kwargs.get("tools") or []
         first = not any(m.get("role") == "tool" for m in messages)
         if first:
-            assert any(t["name"] == "maicraft_perceive" for t in tools_given)  # 动态工具面含 MCP 工具
-            assert any(t["name"] == "minecraft_todo" for t in tools_given)  # 局部工具面是注册名
+            assert any(t["name"] == "maicraft_perceive" for t in tools_given)  # 动态工具列表含 MCP 工具
+            assert any(t["name"] == "minecraft_todo" for t in tools_given)  # 局部工具列表是注册名
             return _resp(tool_calls=[_tool_call("maicraft_perceive", {"view": "situation"})])
         return _resp("感知完成")
 
@@ -548,8 +524,12 @@ async def test_react_pause_suspends_loop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_prompt_wakes_worker_full_chain() -> None:
-    """send_prompt 全链路：registry 调 minecraft_send_prompt → worker 唤醒 → 任务真实执行。"""
+async def test_instruction_injection_wakes_worker_full_chain() -> None:
+    """指令注入全链路：内部 send_prompt（系统/测试通道）→ worker 唤醒 → 任务真实执行。
+
+    原 minecraft_send_prompt 工具已退役（职能并入接收委派入口）；跨 Agent
+    派活的工具链验证见 tests/modules/agents/test_delegation.py。
+    """
     llm = MagicMock()
     llm.chat_messages = AsyncMock(return_value=_resp("收到，开始执行"))
     event_bus = MagicMock()
@@ -564,8 +544,7 @@ async def test_send_prompt_wakes_worker_full_chain() -> None:
     )
     await agent.start()
 
-    r = await registry.invoke(_invocation("minecraft_send_prompt", {"content": "工具链目标"}))
-    assert r.success
+    await agent.send_prompt("工具链目标")
     await _wait_until(lambda: llm.chat_messages.awaited)
 
     await agent.stop()
@@ -685,17 +664,17 @@ async def test_react_observation_compaction() -> None:
 
 @pytest.mark.asyncio
 async def test_react_tool_failure_fed_back_to_llm() -> None:
-    """MCP 工具失败（ok:false）作为观察喂回 LLM，循环继续（ReAct 标准，LLM 自调整）。"""
+    """MCP 工具失败（ok:false）作为观察作为观察返回 LLM，循环继续（ReAct 标准，LLM 自调整）。"""
     registry = ToolRegistry()
 
     class FailingMcp(BaseToolProvider):
         category = "game"
-        name = "FailingMcp"
+        name = "maicraft"
 
         def list_tools(self):
             return [
                 ToolSpec(
-                    name="maicraft_execute",
+                    name="execute",
                     description="执行",
                     parameters_schema={"type": "object"},
                     kind="sync",
@@ -733,13 +712,13 @@ async def test_react_tool_failure_fed_back_to_llm() -> None:
     await agent.send_prompt("挖矿")
     await _wait_until(lambda: len(seen_failure) >= 1)
 
-    assert seen_failure == [True]  # 失败观察真实喂回
+    assert seen_failure == [True]  # 失败观察真实作为观察返回
     await agent.stop()
 
 
 @pytest.mark.asyncio
 async def test_react_multi_tool_calls_batch_execute() -> None:
-    """同轮多个 tool_calls：串行执行，结果全部喂回（消息顺序对应）。"""
+    """同轮多个 tool_calls：串行执行，结果全部作为观察返回（消息顺序对应）。"""
     llm = MagicMock()
     calls = 0
 
@@ -767,6 +746,7 @@ async def test_react_multi_tool_calls_batch_execute() -> None:
         MinecraftConfig(max_steps=5),
         llm_manager=llm,
         event_bus=event_bus,
+        tool_registry=ToolRegistry(),
     )
     await agent.start()
     await agent.send_prompt("批量任务")
@@ -853,23 +833,25 @@ class _FakeMaiCraftProvider(BaseToolProvider):
     """
 
     category = "game"
-    name = "FakeMaiCraft"
+    name = "maicraft"
 
     def __init__(self, task_states: Dict[str, Dict[str, Any]] | None = None) -> None:
         self.task_states: Dict[str, Dict[str, Any]] = task_states if task_states is not None else {}
         self.get_calls: List[str] = []
+        self.notify_callbacks: List[Any] = []
+        self.attention_unsubscribed = 0
 
     def list_tools(self) -> List[ToolSpec]:
         return [
             ToolSpec(
-                name="maicraft_maicraft_execute",
+                name="maicraft_execute",
                 description="执行（受理型）",
                 parameters_schema={"type": "object"},
                 kind="sync",
                 provider="maicraft",
             ),
             ToolSpec(
-                name="maicraft_maicraft_task",
+                name="maicraft_task",
                 description="任务查询/应答",
                 parameters_schema={"type": "object"},
                 kind="sync",
@@ -907,6 +889,43 @@ class _FakeMaiCraftProvider(BaseToolProvider):
                 )
         return ToolExecutionResult(tool_name=name, success=False, error_message=f"unknown call: {name}")
 
+    # ----- 任务适配器（对齐真实 McpToolProvider 的绑定处声明形态） -----
+
+    async def query_task(self, task_id: str):
+        snap = self.task_states.get(task_id)
+        if snap is None:
+            return None
+        raw = str(snap.get("state", ""))
+        mapped = _MAICRAFT_TEST_STATUS_MAP.get(raw, raw)
+        return {"status": mapped, "snapshot": dict(snap), "summary": raw}
+
+    def subscribe_task_notifications(self, callback):
+        self.notify_callbacks.append(callback)
+
+        def _unsubscribe() -> None:
+            if callback in self.notify_callbacks:
+                self.notify_callbacks.remove(callback)
+            self.attention_unsubscribed += 1
+
+        return _unsubscribe
+
+    def fire_attention(self) -> None:
+        """测试模拟执行侧通知（举旗级，可丢）。"""
+        for cb in list(self.notify_callbacks):
+            cb("")
+
+
+# MaiCraft 原始状态 → 任务词表（与 agent 绑定处 _MAICRAFT_TASK_STATUS_MAP 同款）
+_MAICRAFT_TEST_STATUS_MAP = {
+    "pending": "accepted",
+    "running": "running",
+    "waiting_for_decision": "waiting_for_decision",
+    "success": "succeeded",
+    "failed": "failed",
+    "timeout": "timeout",
+    "cancelled": "cancelled",
+}
+
 
 def _make_event_bus() -> MagicMock:
     bus = MagicMock()
@@ -930,23 +949,33 @@ class _RecordingLlm:
         return await self._script(messages, **kwargs)
 
 
-def _make_handoff_agent(
+def _make_task_agent(
     llm: Any,
     registry: ToolRegistry,
-    config: MinecraftConfig | None = None,
-) -> MinecraftAgent:
-    # mcp.enabled=False：跳过装配路径（订阅替身在 start 后注入 _mcp_client）
-    return MinecraftAgent(
-        config or MinecraftConfig(max_steps=10, mcp=McpServerConfig(enabled=False)),
+    *,
+    wait_timeout_ms: int = 1_800_000,
+    poll_interval_ms: int = 20,
+) -> tuple[MinecraftAgent, "TaskTracker"]:
+    """构造接入通用任务基建的 MinecraftAgent（真实 EventBus 驱动 task.changed 唤醒链）。"""
+    from src.modules.events.event_bus import EventBus
+    from src.modules.tools.tasks import TaskLedger, TaskTracker
+
+    bus = EventBus(enable_stats=False)
+    ledger = TaskLedger(event_bus=bus)
+    tracker = TaskTracker(registry, ledger, poll_interval_ms=poll_interval_ms, wait_timeout_ms=wait_timeout_ms)
+    agent = MinecraftAgent(
+        MinecraftConfig(max_steps=10, mcp=McpServerConfig(enabled=False)),
         llm_manager=llm,
-        event_bus=_make_event_bus(),
+        event_bus=bus,
         tool_registry=registry,
+        task_tracker=tracker,
     )
+    return agent, tracker
 
 
 @pytest.mark.asyncio
-async def test_execute_receipt_registers_handoff_and_subscribes() -> None:
-    """execute 受理回执 → handoff 登记 + attention 资源订阅发起。"""
+async def test_execute_receipt_registers_task_and_subscribes() -> None:
+    """execute 受理回执 → 登记通用任务跟踪 + 执行侧通知订阅发起（通知=提示）。"""
     provider = _FakeMaiCraftProvider()
     registry = ToolRegistry()
     registry.register_provider(provider)
@@ -957,142 +986,133 @@ async def test_execute_receipt_registers_handoff_and_subscribes() -> None:
         return _resp("已受理，先干别的")
 
     llm = _RecordingLlm(script)
-
-    agent = _make_handoff_agent(llm, registry)
-    fake_client = _FakeSubscribableClient("maicraft", None)
+    agent, tracker = _make_task_agent(llm, registry)
+    tracker.start()
     await agent.start()
-    agent._mcp_client = fake_client  # start 后注入：接管订阅接线
-    await agent.send_prompt("挖矿")
-    await _wait_until(lambda: len(llm.captured) == 2)
+    try:
+        await agent.send_prompt("挖矿")
+        await _wait_until(lambda: len(llm.captured) == 2)
 
-    assert "task-1" in agent._handoffs  # 回执登记
-    assert fake_client.subscribe_calls == ["maicraft://attention"]  # 订阅发起
-    # 受理回执照常喂回 LLM（回合继续，不被折叠）
-    second_tool_msgs = [m for m in llm.captured[1] if m.get("role") == "tool"]
-    assert any("accepted" in m["content"] and "task-1" in m["content"] for m in second_tool_msgs)
-
-    # 情形 4：有未决 handoff 自然终止 → 静默让出（无交付）
-    assert not _reports(_emitted_payloads(agent._event_bus))
-    await agent.stop()
+        record = tracker.ledger.get("task-1")
+        assert record is not None, "受理回执已登记跟踪"
+        assert record.initiator == "minecraft" and record.executor == "maicraft"
+        # 受理回执照常作为观察返回 LLM（回合继续，不被折叠）
+        second_tool_msgs = [m for m in llm.captured[1] if m.get("role") == "tool"]
+        assert any("accepted" in m["content"] and "task-1" in m["content"] for m in second_tool_msgs)
+        # 执行侧通知订阅随任务发起（提供者复用）
+        await _wait_until(lambda: len(provider.notify_callbacks) == 1)
+    finally:
+        await tracker.stop()
+        await agent.stop()
 
 
 @pytest.mark.asyncio
-async def test_handoff_terminal_notification_wakes_worker_with_snapshot() -> None:
-    """全链路：通知举旗 → task get 核实 → 终态注入快照 + worker 唤醒 + 跟踪移除 + 退订。"""
+async def test_task_terminal_wakes_worker_with_snapshot() -> None:
+    """全链路：通知举旗 → 查询核实 → 终态 task.changed → 唤醒注入快照 → 条目移除。"""
     provider = _FakeMaiCraftProvider()
     registry = ToolRegistry()
     registry.register_provider(provider)
 
     async def script(messages, **kwargs):
         user_msgs = [m["content"] for m in messages if m.get("role") == "user"]
-        if any("状态迁移" in u for u in user_msgs):
-            return _resp("任务完成了，交付")  # 被注入唤醒的第二批
+        if any("状态变化" in u and "task-1" in u for u in user_msgs):
+            return _resp("任务完成了，交付")
         if not any(m.get("role") == "tool" for m in messages):
             return _resp(tool_calls=[_tool_call("maicraft_maicraft_execute", {"goal": "挖矿"})])
-        return _resp("已受理，静默等通知")  # 第一批自然终止（有 handoff，静默让出）
+        return _resp("已受理，静默等通知")  # 第一批自然终止（有跟踪任务，静默让出）
 
     llm = _RecordingLlm(script)
-
-    agent = _make_handoff_agent(llm, registry)
-    fake_client = _FakeSubscribableClient("maicraft", None)
+    agent, tracker = _make_task_agent(llm, registry)
+    tracker.start()
     await agent.start()
-    agent._mcp_client = fake_client  # start 后注入：接管订阅接线
-    await agent.send_prompt("挖矿")
-    await _wait_until(lambda: len(llm.captured) == 2)
-    assert "task-1" in agent._handoffs
+    try:
+        await agent.send_prompt("挖矿")
+        await _wait_until(lambda: len(llm.captured) == 2)
+        assert tracker.ledger.get("task-1") is not None
 
-    # 模拟 MaiCraft 任务完成 + server 推送更新通知（回调举旗）
-    provider.task_states["task-1"]["state"] = "success"
-    fake_client.subscriptions["maicraft://attention"]("maicraft://attention")
+        # 执行侧推进到终态并发通知 → 跟踪循环核实 → task.changed → 注入唤醒
+        provider.task_states["task-1"]["state"] = "success"
+        provider.task_states["task-1"]["note"] = "房子盖好了"
+        provider.fire_attention()
 
-    # watcher 核实 → 注入 → worker 第二批 → LLM 看到快照
-    await _wait_until(lambda: len(llm.captured) >= 3)
-    injected = [m["content"] for m in llm.captured[2] if m.get("role") == "user"]
-    assert any("state=success" in u and "task-1" in u for u in injected)
-
-    # 终态后跟踪移除 + 退订
-    await _wait_until(lambda: not agent._handoffs)
-    await _wait_until(lambda: fake_client.unsubscribed == ["maicraft://attention"])
-    # task get 核实真实发生（事实源）：登记首查 + 通知后核实
-    assert provider.get_calls.count("task-1") >= 2
-    await agent.stop()
+        await _wait_until(lambda: len(llm.captured) >= 3)
+        injected = [m["content"] for m in llm.captured[2] if m.get("role") == "user"]
+        assert any("task-1" in u and "succeeded" in u for u in injected), "注入含任务号与终态"
+        assert any("房子盖好了" in u for u in injected), "注入含执行侧快照"
+        await _wait_until(lambda: tracker.ledger.get("task-1") is None)  # 终态后条目移除
+    finally:
+        await tracker.stop()
+        await agent.stop()
 
 
 @pytest.mark.asyncio
-async def test_handoff_no_state_change_no_injection() -> None:
-    """通知但状态无真迁移（仍 running）→ 不注入，LLM 零消耗继续睡。"""
+async def test_task_no_state_change_no_injection() -> None:
+    """虚假/无关通知（状态未变）→ 继续睡：无注入、无新推理（幂等不重发）。"""
     provider = _FakeMaiCraftProvider()
     registry = ToolRegistry()
     registry.register_provider(provider)
 
     async def script(messages, **kwargs):
         if not any(m.get("role") == "tool" for m in messages):
-            return _resp(tool_calls=[_tool_call("maicraft_maicraft_execute", {"goal": "长任务"})])
-        return _resp("已受理，静默等通知")
+            return _resp(tool_calls=[_tool_call("maicraft_maicraft_execute", {"goal": "挖矿"})])
+        return _resp("已受理，静默等")
 
     llm = _RecordingLlm(script)
-
-    agent = _make_handoff_agent(llm, registry)
-    fake_client = _FakeSubscribableClient("maicraft", None)
+    agent, tracker = _make_task_agent(llm, registry)
+    tracker.start()
     await agent.start()
-    agent._mcp_client = fake_client  # start 后注入：接管订阅接线
-    await agent.send_prompt("长任务")
-    await _wait_until(lambda: len(llm.captured) == 2)
+    try:
+        await agent.send_prompt("挖矿")
+        await _wait_until(lambda: len(llm.captured) == 2)
 
-    # 任务仍 running：通知到达（虚假/无关提示）→ 核实无迁移 → 不唤醒
-    fake_client.subscriptions["maicraft://attention"]("maicraft://attention")
-    await asyncio.sleep(0.4)
-    assert len(llm.captured) == 2  # 无新推理（零空耗）
-    assert "task-1" in agent._handoffs  # 跟踪保持
-    await agent.stop()
+        provider.fire_attention()  # 状态仍是 running（受理即 running）→ 无真变化
+        await asyncio.sleep(0.15)
+        assert len(llm.captured) == 2, "无状态变化不注入、不开新推理"
+        assert tracker.ledger.get("task-1") is not None
+    finally:
+        await tracker.stop()
+        await agent.stop()
 
 
 @pytest.mark.asyncio
-async def test_handoff_decision_point_injects_and_keeps_tracking() -> None:
-    """决策点（waiting_for_decision）注入快照但保留跟踪；answer 后任务继续后台跑。"""
+async def test_task_decision_point_injects_and_keeps_tracking() -> None:
+    """决策点（waiting_for_decision）：注入唤醒但保留跟踪（应答后任务继续后台跑）。"""
     provider = _FakeMaiCraftProvider()
     registry = ToolRegistry()
     registry.register_provider(provider)
 
     async def script(messages, **kwargs):
         user_msgs = [m["content"] for m in messages if m.get("role") == "user"]
+        if any("waiting_for_decision" in u for u in user_msgs):
+            return _resp(tool_calls=[_tool_call("maicraft_maicraft_task", {"action": "answer", "task_id": "task-1"})])
         if not any(m.get("role") == "tool" for m in messages):
             return _resp(tool_calls=[_tool_call("maicraft_maicraft_execute", {"goal": "需要选择的任务"})])
-        if not any("状态迁移" in u for u in user_msgs):
-            return _resp("已受理，静默等通知")
-        # 被决策点唤醒：应答后自然终止（handoff 仍在 → 静默）
-        return _resp(
-            tool_calls=[_tool_call("maicraft_maicraft_task", {"action": "answer", "task_id": "task-1", "choice": "A"})]
-        )
+        return _resp("已受理，静默等")
 
     llm = _RecordingLlm(script)
-
-    agent = _make_handoff_agent(llm, registry)
-    fake_client = _FakeSubscribableClient("maicraft", None)
+    agent, tracker = _make_task_agent(llm, registry)
+    tracker.start()
     await agent.start()
-    agent._mcp_client = fake_client  # start 后注入：接管订阅接线
-    await agent.send_prompt("需要选择的任务")
-    await _wait_until(lambda: len(llm.captured) == 2)
+    try:
+        await agent.send_prompt("需要选择的任务")
+        await _wait_until(lambda: len(llm.captured) == 2)
 
-    provider.task_states["task-1"]["state"] = "waiting_for_decision"
-    fake_client.subscriptions["maicraft://attention"]("maicraft://attention")
+        provider.task_states["task-1"]["state"] = "waiting_for_decision"
+        provider.fire_attention()
 
-    # 决策点注入唤醒，LLM 用 task answer 应答
-    await _wait_until(lambda: len(llm.captured) >= 3)
-    injected = [m["content"] for m in llm.captured[2] if m.get("role") == "user"]
-    assert any("state=waiting_for_decision" in u for u in injected)
-
-    # 应答后 handoff 保持跟踪（任务恢复后台跑），不退订
-    await _wait_until(lambda: len(llm.captured) >= 4)
-    await asyncio.sleep(0.15)
-    assert "task-1" in agent._handoffs
-    assert fake_client.unsubscribed == []
-    await agent.stop()
+        await _wait_until(lambda: len(llm.captured) >= 3)
+        injected = [m["content"] for m in llm.captured[2] if m.get("role") == "user"]
+        assert any("waiting_for_decision" in u and "answer" in u for u in injected), "注入含应答指引"
+        # 应答后执行侧切回 running（假 provider answer 语义）→ 仍为进行中，保留跟踪
+        await _wait_until(lambda: (r := tracker.ledger.get("task-1")) is not None and r.status == "running")
+    finally:
+        await tracker.stop()
+        await agent.stop()
 
 
 @pytest.mark.asyncio
-async def test_handoff_wait_timeout_alerts_without_killing_task() -> None:
-    """wait_timeout：长期无进展注入告警（不杀任务），跟踪保留等待后续。"""
+async def test_task_stall_alert_without_killing_task() -> None:
+    """无进展提醒（wait_timeout）：停滞告警注入（不杀任务），跟踪保留等待后续。"""
     provider = _FakeMaiCraftProvider()
     registry = ToolRegistry()
     registry.register_provider(provider)
@@ -1101,32 +1121,32 @@ async def test_handoff_wait_timeout_alerts_without_killing_task() -> None:
         user_msgs = [m["content"] for m in messages if m.get("role") == "user"]
         if not any(m.get("role") == "tool" for m in messages):
             return _resp(tool_calls=[_tool_call("maicraft_maicraft_execute", {"goal": "卡住的任务"})])
-        if not any("wait_timeout" in u for u in user_msgs):
+        if not any("停滞" in u for u in user_msgs):
             return _resp("已受理，静默等通知")
         return _resp("收到告警，去查一下任务")
 
     llm = _RecordingLlm(script)
-
-    agent = _make_handoff_agent(llm, registry)
+    agent, tracker = _make_task_agent(llm, registry, wait_timeout_ms=80)
+    tracker.start()
     await agent.start()
-    await agent.send_prompt("卡住的任务")
-    await _wait_until(lambda: len(llm.captured) == 2)
-    assert "task-1" in agent._handoffs
+    try:
+        await agent.send_prompt("卡住的任务")
+        await _wait_until(lambda: len(llm.captured) == 2)
+        assert tracker.ledger.get("task-1") is not None
 
-    # 截止时刻拨到过去 → 下一轮兜底核实触发告警
-    agent._handoffs["task-1"].deadline_ms = 0
-    agent._handoff_signal.set()
-
-    await _wait_until(lambda: len(llm.captured) >= 3)
-    injected = [m["content"] for m in llm.captured[2] if m.get("role") == "user"]
-    assert any("wait_timeout" in u and "task-1" in u for u in injected)
-    assert "task-1" in agent._handoffs  # 不杀任务：跟踪保留（deadline 已顺延）
-    await agent.stop()
+        # 状态长期不变（running）→ 越过 wait_timeout → 停滞告警注入
+        await _wait_until(lambda: len(llm.captured) >= 3, timeout=5.0)
+        injected = [m["content"] for m in llm.captured[2] if m.get("role") == "user"]
+        assert any("停滞" in u and "task-1" in u for u in injected), "告警注入含任务号"
+        assert tracker.ledger.get("task-1") is not None, "不杀任务：跟踪保留"
+    finally:
+        await tracker.stop()
+        await agent.stop()
 
 
 @pytest.mark.asyncio
-async def test_delivery_gate_rejects_with_pending_handoff() -> None:
-    """交付门禁：有未决 handoff 时 LLM 调 report(delivery) 被拒——错误观察喂回自纠。"""
+async def test_delivery_gate_rejects_with_pending_task() -> None:
+    """交付门禁：有进行中后台任务时 LLM 调 report(delivery) 被拒——错误观察作为观察返回自纠。"""
     provider = _FakeMaiCraftProvider()
     registry = ToolRegistry()
     registry.register_provider(provider)
@@ -1136,23 +1156,34 @@ async def test_delivery_gate_rejects_with_pending_handoff() -> None:
         if not tool_msgs:
             return _resp(tool_calls=[_tool_call("maicraft_maicraft_execute", {"goal": "挖矿"})])
         if not any("不能交付" in m for m in tool_msgs):
-            # 提前交付 → 门禁拒绝，错误观察喂回
+            # 提前交付 → 门禁拒绝，错误观察作为观察返回
             return _resp(tool_calls=[_tool_call("minecraft_report", {"kind": "delivery", "content": "应该完成了"})])
         return _resp("知道了，继续等后台任务")  # 自纠后静默让出
 
     llm = _RecordingLlm(script)
-
-    agent = _make_handoff_agent(llm, registry)
+    agent, tracker = _make_task_agent(llm, registry)
+    tracker.start()
     await agent.start()
-    await agent.send_prompt("挖矿")
-    await _wait_until(lambda: len(llm.captured) >= 3)
+    try:
+        await agent.send_prompt("挖矿")
+        await _wait_until(lambda: len(llm.captured) >= 3)
 
-    emitted = _emitted_payloads(agent._event_bus)
-    assert not _reports(emitted)  # 提前交付被拦截，主播零骚扰
-    # 拒绝原因作为失败观察喂回 LLM
-    tool_msgs = [m["content"] for m in llm.captured[2] if m.get("role") == "tool"]
-    assert any("不能交付" in m for m in tool_msgs)
-    await agent.stop()
+        from src.modules.events.names import CoreEvents as _CE
+
+        reports: List[GamePayload] = []
+
+        async def _on_report(name: str, payload: GamePayload, source: str) -> None:
+            reports.append(payload)
+
+        agent._event_bus.on(_CE.GAME_REPORT, _on_report, model_class=GamePayload)
+        await asyncio.sleep(0.05)
+        assert not _reports(reports), "提前交付被拦截，主播零骚扰"
+        # 拒绝原因作为失败观察作为观察返回 LLM
+        tool_msgs = [m["content"] for m in llm.captured[2] if m.get("role") == "tool"]
+        assert any("不能交付" in m for m in tool_msgs)
+    finally:
+        await tracker.stop()
+        await agent.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -1174,7 +1205,7 @@ def test_factory_instantiates_minecraft() -> None:
     )
     assert isinstance(agent, MinecraftAgent)
     assert agent.typed_config.max_steps == 9
-    assert [s.name for s in agent.list_tools()] == ["todo", "notebook", "get_state", "send_prompt", "report"]
+    assert [s.name for s in agent.list_tools()] == ["todo", "notebook", "get_work_log", "report"]
 
 
 def test_factory_rejects_legacy_game_name() -> None:
@@ -1195,9 +1226,9 @@ def test_factory_rejects_legacy_game_name() -> None:
 def test_factory_minecraft_schema_defaults() -> None:
     """空配置实例化 minecraft，行为参数取 Schema 默认值。
 
-    执行节奏参数（poll_interval_ms / wait_timeout_ms）保留在 MinecraftConfig
-    上以保 handoff 跟踪循环运行期可读；T26 工具线合流时改消费 `[tools.tasks]`
-    段同名字段（默认 2000 / 1_800_000 与本字段一致）。
+    执行节奏参数（execute_poll_interval_ms / execute_wait_timeout_ms）保留在
+    MinecraftConfig 上以保 handoff 跟踪循环运行期可读；全局任务基建的节拍
+    另由 [tools.tasks] 段承载（两者同名约定区分：Agent 私有带 execute_ 前缀）。
     """
     from src.modules.agents.factory import instantiate_agent
 
@@ -1211,8 +1242,8 @@ def test_factory_minecraft_schema_defaults() -> None:
     )
     assert isinstance(agent, MinecraftAgent)
     assert agent.typed_config.max_steps == 50
-    assert agent.typed_config.poll_interval_ms == 2000
-    assert agent.typed_config.wait_timeout_ms == 1_800_000
+    assert agent.typed_config.execute_poll_interval_ms == 2000
+    assert agent.typed_config.execute_wait_timeout_ms == 1_800_000
 
 
 # ---------------------------------------------------------------------------
@@ -1239,7 +1270,11 @@ class _FakeMcpClient:
 
 
 class _FakeMcpProvider:
-    """McpToolProvider 替身：setup() 返回指定工具数；list_tools 暴露缓存 specs。"""
+    """McpToolProvider 替身：setup() 返回指定工具数；list_tools 暴露缓存 specs。
+
+    对齐真实 McpToolProvider 命名模型：name = provider（默认 server 名）；
+    spec 声明名 = server 原始名，全名 = <provider>_<原始名> 派生。
+    """
 
     category = "mcp"
 
@@ -1248,12 +1283,10 @@ class _FakeMcpProvider:
         *,
         client: Any,
         server_name: str,
-        prefix: str | None = None,
         provider: str | None = None,
     ) -> None:
         self.client = client
         self.server_name = server_name
-        self.prefix = prefix if prefix is not None else f"{server_name}_"
         self._provider = provider or server_name
         self._specs: list = []
         self._setup_called = False
@@ -1262,13 +1295,13 @@ class _FakeMcpProvider:
 
     @property
     def name(self) -> str:
-        return f"McpProvider:{self.server_name}"
+        return self._provider
 
     async def setup(self) -> int:
         self._setup_called = True
         self._specs = [
             ToolSpec(
-                name=f"{self.prefix}{tool_name}",
+                name=tool_name,
                 description=f"desc {tool_name}",
                 kind="sync",
                 provider=self._provider,
@@ -1322,9 +1355,10 @@ def _patch_mcp(monkeypatch: pytest.MonkeyPatch, provider_cls: type) -> Dict[str,
 
 
 @pytest.mark.asyncio
-async def test_on_start_binds_agent_owned_mcp_with_owner_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_on_start_binds_agent_owned_mcp_with_visible_list(monkeypatch: pytest.MonkeyPatch) -> None:
     """_on_start 启用 mcp 时：McpClient/McpToolProvider 被实例化、setup 调用、
-    工具以 owner_agent='minecraft' 注册进 ToolRegistry；域内查询可见、一般面默认排除。"""
+    工具以逐工具可见名单（ADR-012，fail-closed）注册进 ToolRegistry：
+    读工具 perceive 给主播+自己；执行类仅 minecraft；域内查询照常可见。"""
     _patch_mcp(monkeypatch, _FakeMcpProvider)
 
     from src.modules.mcp.config import McpServerConfig
@@ -1342,18 +1376,20 @@ async def test_on_start_binds_agent_owned_mcp_with_owner_agent(monkeypatch: pyte
     await agent.start()
 
     # 域内查询（provider="maicraft"）：可见
-    scoped_names = {s.name for s in registry.list_tools(provider="maicraft")}
+    scoped_names = {s.full_name for s in registry.list_tools(provider="maicraft")}
     assert scoped_names == {"maicraft_perceive", "maicraft_execute"}
-    # 一般面：默认排除归属限定的 maicraft_*（minecraft_* 本地工具无归属限定，仍在一般面）
-    default_names = {s.name for s in registry.list_tools()}
-    assert "maicraft_perceive" not in default_names
-    assert "maicraft_execute" not in default_names
-    # 归属查询：每个 maicraft 工具都标 owner_agent=minecraft
-    assert registry.scoped_owner_of("maicraft_perceive") == "minecraft"
-    assert registry.scoped_owner_of("maicraft_execute") == "minecraft"
-    # 运营面：include_scoped=True 含一切
-    all_names = {s.name for s in registry.list_tools(include_scoped=True)}
-    assert {"maicraft_perceive", "maicraft_execute"}.issubset(all_names)
+    # 可见名单：读工具放开给主播（sync 直读），执行类 fail-closed 仅自己
+    assert registry.visible_to_of("maicraft_perceive") == ["streamer", "minecraft"]
+    assert registry.visible_to_of("maicraft_execute") == ["minecraft"]
+    # 按 Agent 计算工具列表
+    streamer_face = {s.full_name for s in registry.list_tools(for_agent="streamer")}
+    assert "maicraft_perceive" in streamer_face
+    assert "maicraft_execute" not in streamer_face
+    minecraft_face = {s.full_name for s in registry.list_tools(for_agent="minecraft")}
+    assert {"maicraft_perceive", "maicraft_execute"}.issubset(minecraft_face)
+    # 本地工具名单：get_work_log 给主播，todo/notebook/report/send_prompt 各归其主
+    assert registry.visible_to_of("minecraft_get_work_log") == ["streamer"]
+    assert registry.visible_to_of("minecraft_todo") == ["minecraft"]
     # 装配成功：client 引用留给 handoff 订阅接线
     assert agent._mcp_client is not None
 
@@ -1454,10 +1490,10 @@ class _RecordingSink:
 
 
 class _CapturingToolProvider(BaseToolProvider):
-    """记录每次 ToolInvocation（用于断言任务内 round_id 透传到工具面）。"""
+    """记录每次 ToolInvocation（用于断言任务内 round_id 透传到工具列表）。"""
 
     category = "minecraft"
-    name = "CapturingToolProvider"
+    name = "minecraft"
 
     def __init__(self) -> None:
         self.invocations: List[ToolInvocation] = []
@@ -1465,7 +1501,7 @@ class _CapturingToolProvider(BaseToolProvider):
     def list_tools(self) -> List[ToolSpec]:
         return [
             ToolSpec(
-                name="minecraft_capture",
+                name="capture",
                 description="cap",
                 parameters_schema={"type": "object"},
                 kind="sync",
@@ -1580,3 +1616,42 @@ async def test_thinking_sink_none_keeps_existing_behavior() -> None:
     await agent.stop()
 
     assert cap.invocations[0].round_id == ""
+
+
+@pytest.mark.asyncio
+async def test_own_tool_invoke_emits_tool_result_event() -> None:
+    """统一调用路径：minecraft 自工具（minecraft_todo）经 registry 调用产生 tool.result 观测。"""
+    from src.modules.events.event_bus import EventBus
+    from src.modules.events.payloads.tool_result import ToolResultPayload
+
+    bus = EventBus(enable_stats=False)
+    try:
+        received: list[tuple[str, ToolResultPayload]] = []
+
+        async def _on_result(event_name: str, payload: ToolResultPayload, source: str) -> None:
+            received.append((event_name, payload))
+
+        bus.on("tool.result.#", _on_result, ToolResultPayload)
+
+        registry = ToolRegistry(event_bus=bus)
+        registry.register_provider(_make_provider(_make_state()))
+
+        agent = MinecraftAgent(
+            MinecraftConfig(mcp=McpServerConfig(enabled=False)),
+            llm_manager=MagicMock(),
+            event_bus=MagicMock(),
+            tool_registry=registry,
+        )
+        await agent.start()
+        try:
+            obs = await agent._execute_tool("minecraft_todo", {"action": "read"})
+            assert obs.get("tool") == "todo"
+            await asyncio.sleep(0.05)  # emit 为 fire-and-forget
+            assert any(
+                name == "tool.result.minecraft_todo" and p.status == "success"
+                for name, p in received
+            ), f"应观测到 tool.result.minecraft_todo，实际: {[(n, p.status) for n, p in received]}"
+        finally:
+            await agent.stop()
+    finally:
+        await bus.cleanup()

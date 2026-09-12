@@ -1,5 +1,7 @@
 # 节目单编排机制（Agenda Mechanism）
 
+> ⚠️ **本文档已成历史档案**：Agenda 子系统已由 Rundown 流程单子系统整体取代（见 [ADR-011](./adr/011-rundown-replaces-agenda.md)；现行机制见 [rundown-mechanism.md](./rundown-mechanism.md)）。本文仅供追溯 v2 Agenda 设计与其失败原因，文中机制均不存在于当前代码。
+
 > 本文档是 v2 Agenda 子系统的权威设计说明。
 > 节目单给主播 Agent 增加"战略层"，让一场直播按预定义环节自动推进，零观众也能按计划直播，弹幕可打断但保持节目单对齐。
 > 事件表、数据流规则等单一事实源不在此重复，见[事件系统](./event-system.md)与[数据流规则](./data-flow.md)。

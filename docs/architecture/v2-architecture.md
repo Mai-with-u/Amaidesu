@@ -67,7 +67,7 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 | | 驱动方式 | 循环/目标 | 例子 |
 |---|---|---|---|
 | **主播 Agent** | 自我驱动（唯一），直播期间持续运行 | 有 | 主播 Planner 决策循环 |
-| **游戏 Agent** | 命令驱动（类 Code Agent）：命令启动任务内有界循环，完成即停、空闲零消耗 | 任务内 | MinecraftAgent（set_goal 唤醒） |
+| **游戏 Agent** | 命令驱动（类 Code Agent）：命令启动任务内有界循环，完成即停、空闲零消耗 | 任务内 | MinecraftAgent（minecraft_send_prompt 唤醒） |
 | **工具** | 被动驱动，被调才干活 | 无 | Replyer 表达引擎、屏幕捕捉、VLM（TTS 自 v2.0.12 §8 修正起已是基础模块，不再是工具） |
 
 以及一句对内容生产者的解放：**直播内容是编排配置 + Planner 上下文/行为模式的变化，不是代码模块。** 加一档节目不需要写代码，加一类游戏才需要一个新 Agent 包。
@@ -82,7 +82,7 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 |---|---|
 | 核心功能也做成插件，必需与可选混杂 | 工具/存储/记忆/事件/LLM 全部是框架基础设施（`src/modules/`）；只有"主体"住在 Agent 包里 |
 | 服务注册机制，依赖运行时才暴露问题 | 无服务注册；构造器注入 + 事件/工具契约 |
-| 24 个插件互相依赖成石山 | 游戏 Agent 之间零依赖，经事件（`game.*`）/状态（工具，如 text_adv_get_story）/指令（set_goal 类工具）三通道松耦合 |
+| 24 个插件互相依赖成石山 | 游戏 Agent 之间零依赖，经事件（`game.*`）/状态（工具，如 text_adv_get_story）/指令（minecraft_send_prompt 类工具）三通道松耦合 |
 | 消息流经中心中转，链路不清 | Agent → 工具/事件/存储直达，单向清晰 |
 | 全局/插件级配置混乱 | 七文件按领域拆分 + Pydantic Schema 校验 |
 
@@ -105,19 +105,19 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 
 ## 五、v2.0.0 全景
 
-**Amaidesu 2.0.0 = Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Agenda 节目单）**
+**Amaidesu 2.0.0 = Agent（自主主体）+ 工具（能力契约）+ 存储（状态/记忆）+ 编排（Rundown 流程单；ADR-011 取代 Agenda）**
 
 ```mermaid
 flowchart TB
     subgraph Agents["Agent 层（主播自我驱动 / 游戏命令驱动）"]
-        SA["主播 StreamerAgent<br/>MessageBuffer → Planner 决策循环 → reply 工具 → Replyer 表达引擎<br/>+ Agenda 子系统 + 后台双任务"]
-        GA["游戏代理（命令驱动）<br/>MinecraftAgent：set_goal 唤醒任务内有界循环（AI 玩家范式）"]
+        SA["主播 StreamerAgent<br/>MessageBuffer → Planner 决策循环 → reply 工具 → Replyer 表达引擎<br/>+ Rundown 流程单 + 后台双任务"]
+        GA["游戏代理（命令驱动）<br/>MinecraftAgent：minecraft_send_prompt 唤醒任务内有界循环（AI 玩家范式）"]
     end
     subgraph Tools["工具层（被动能力，ToolRegistry 注册）"]
         T1["output：字幕 / VTS / Warudo / OBS…<br/>（TTS 自 v2.0.12 §8 起迁至基础模块层）"]
         T2["perception：look_at_screen"]
-        T3["content_engine：游戏控制面"]
-        T4["memory / agent 控制 / streamer 自带 reply 等"]
+        T3["memory：query_memory"]
+        T4["agent 控制 / streamer 自带 reply / minecraft 自有工具等"]
     end
     subgraph Infra["框架设施"]
         COL["Collectors ×4<br/>bilibili/console/screen/stt"]
@@ -126,14 +126,14 @@ flowchart TB
     end
     EXT["外部输入"] --> COL -->|"room.message.*"| BUS
     BUS --> SA
-    GA -.->|"game.* / set_goal"| SA
+    GA -.->|"game.* / minecraft_send_prompt"| SA
     SA -->|"invoke ~60 tools"| Tools
     SA & GA --> STO
 ```
 
 各层要点：
 
-- **主播 Agent**：`src/agents/streamer/`——弹幕窗 MessageBuffer 聚合，Planner 以 ReAct 循环决策（工具面 = 全局 ToolRegistry + reply 局部工具，`planner_llm` 默认 llm 高质量模型，`planner_max_steps=8` 防失控）：查信息（游戏状态/记忆）→ 调 `reply` 工具 → Replyer 表达引擎生成 speech/emotion/action（含敏感词净化）。**Planner 与 Replyer 都是内脏，两者都不注册为工具**（reply_tool 是 LLM 调用入口）。Agenda 子系统管理环节/冷场状态/轮转节奏/持久化队列中的"没有弹幕时说什么"，与后台弹幕机双轨互动。
+- **主播 Agent**：`src/agents/streamer/`——弹幕窗 MessageBuffer 聚合，Planner 以 ReAct 循环决策（工具列表 = 全局 ToolRegistry + reply 局部工具，`planner_llm` 默认 llm 高质量模型，`planner_max_steps=8` 防失控）：查信息（游戏状态/记忆）→ 调 `reply` 工具 → Replyer 表达引擎生成 speech/emotion/action（含敏感词净化）。**Planner 与 Replyer 都是内部件，两者都不注册为工具**（reply_tool 是 LLM 调用入口）。Agenda 子系统管理环节/冷场状态/轮转节奏/持久化队列中的"没有弹幕时说什么"，与后台弹幕机双轨互动。
 - **游戏代理**（`src/agents/<name>/`，如 minecraft / text_adv）：AI 玩家范式——感知（公用 look_at_screen 快照）、推进（专属工具如 text_adv_choose_option）、循环内聚于一个自包含包。加游戏 = 加包 + 配置，框架零改动。
 - **工具层**：约 60 个工具统一 ToolSpec 契约，三个来源——内置（进程内渲染/感知）、内容引擎（玩家引擎控制面）、MCP（外部扩展）。同步调用结果直返，异步工具经 `tool.result.<name>` 事件回传。
 - **存储层**：SQLite 11 表（场次/直播消息流/礼物/SC/话题/观众/Agenda 计划与运行时/游戏事件/时间线摘要/LLM 用量）+ schema_migrations 版本化迁移；模拟数据带 `simulated` 列，统计查询一律排除——模拟观众不是观众。
@@ -208,4 +208,4 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 
 *上次更新：2026-08-27（v2.0.6 AudioStreamChannel 拆除：九节"遗留与下一步"对应条目改写为拆除说明；首版：四代架构史、主体性判据、防换皮铁闸、全景与九 Wave 落地叙事）*
 
-*最后更新：2026-09-08（主播 Agent 决策链 ReAct 化：Planner 从单发 produce_plan 改为 ReAct 循环——chat_messages + 全局工具面 + reply 局部工具（max_steps=8）；Replyer 收缩为 reply 工具实现载体（零工具面）；废除 DecisionPlan 管道；planner_llm 默认升为 llm；设计详情见 .omo/drafts/streamer-react-design.md）*
+*最后更新：2026-09-08（主播 Agent 决策链 ReAct 化：Planner 从单发 produce_plan 改为 ReAct 循环——chat_messages + 全局工具列表 + reply 局部工具（max_steps=8）；Replyer 收缩为 reply 工具（零工具列表）；废除 DecisionPlan 管道；planner_llm 默认升为 llm；设计详情见 .omo/drafts/streamer-react-design.md）*

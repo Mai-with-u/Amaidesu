@@ -41,9 +41,9 @@ PROVIDER_NAME = "text_adv"
 
 
 def build_choose_option_spec() -> ToolSpec:
-    """``text_adv_choose_option`` 工具规格——游戏推进核心入口"""
+    """``text_adv_choose_option`` 工具规格——游戏推进核心入口（声明名 choose_option，全名派生）"""
     return ToolSpec(
-        name="text_adv_choose_option",
+        name="choose_option",
         description=(
             "选择文字冒险游戏当前剧情段的某个选项（option_id）。"
             "内部把选项翻译为 content_engine 输入（点击/按键/命令）并执行。"
@@ -73,9 +73,9 @@ def build_choose_option_spec() -> ToolSpec:
 
 
 def build_get_story_spec() -> ToolSpec:
-    """``text_adv_get_story`` 工具规格——读取当前剧情段（只读）"""
+    """``text_adv_get_story`` 工具规格——读取当前剧情段（只读；声明名 get_story，全名派生）"""
     return ToolSpec(
-        name="text_adv_get_story",
+        name="get_story",
         description=(
             "读取当前文字冒险游戏剧情段（scene_id / scene_text / options / history）。"
             "只读操作，不触发 content_engine 输入。"
@@ -124,7 +124,7 @@ class TextAdvToolProvider(BaseToolProvider):
 
     @property
     def name(self) -> str:
-        return "TextAdvToolProvider"
+        return PROVIDER_NAME
 
     def list_tools(self) -> Iterable[ToolSpec]:
         return [build_choose_option_spec(), build_get_story_spec()]
@@ -135,6 +135,7 @@ class TextAdvToolProvider(BaseToolProvider):
         started_ms = int(time.time() * 1000)
 
         try:
+            # 调用方使用的就是派生全名（text_adv_choose_option 等），等值对照分发
             if name == "text_adv_choose_option":
                 return await self._invoke_choose_option(args, started_ms)
             if name == "text_adv_get_story":

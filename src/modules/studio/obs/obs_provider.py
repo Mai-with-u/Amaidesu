@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -74,19 +74,12 @@ class OBSProvider(BaseToolProvider):
         type: str = "obs"
         host: str = Field(default="localhost", description="OBS WebSocket 主机地址")
         port: int = Field(default=4455, ge=1, le=65535, description="OBS WebSocket 端口")
-        password: Optional[str] = Field(default=None, description="OBS WebSocket 密码")
+        password: str = Field(default="", description="OBS WebSocket 密码（空串=无密码）")
         text_source_name: str = Field(default="text", description="文本源名称")
         typewriter_enabled: bool = Field(default=False, description="是否启用逐字显示效果")
         typewriter_speed: float = Field(default=0.1, ge=0.01, le=2.0, description="每个字符间隔秒数")
         typewriter_delay: float = Field(default=0.5, ge=0.0, le=10.0, description="完整显示后延迟秒数")
         test_on_connect: bool = Field(default=True, description="连接时是否发送测试消息")
-
-        @field_validator("password")
-        @classmethod
-        def validate_password(cls, v: Optional[str]) -> Optional[str]:
-            if v is None or v == "":
-                return v
-            return v
 
     def __init__(
         self,
@@ -128,28 +121,28 @@ class OBSProvider(BaseToolProvider):
     def list_tools(self) -> list[ToolSpec]:
         return [
             ToolSpec(
-                name="obs_send_text",
+                name="send_text",
                 description="OBS 发送文本到文本源（可选逐字效果）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_OBS_SEND_TEXT_SCHEMA,
             ),
             ToolSpec(
-                name="obs_switch_scene",
+                name="switch_scene",
                 description="OBS 切换场景",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_OBS_SWITCH_SCENE_SCHEMA,
             ),
             ToolSpec(
-                name="obs_set_source_visibility",
+                name="set_source_visibility",
                 description="OBS 设置源可见性",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_OBS_SET_VISIBILITY_SCHEMA,
             ),
             ToolSpec(
-                name="obs_send_test",
+                name="send_test",
                 description="OBS 发送测试消息（启动时默认行为）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,

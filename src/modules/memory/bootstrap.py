@@ -5,9 +5,9 @@
 - **显式注入**——``config`` 由调用方传入；``SQLiteStore`` / ``SimpleMemory``
   / ``ToolRegistry`` 全部由本模块在调用方提供的 config 上构造
 - **类型检查 + fail-fast**：registry 必须是 ``ToolRegistry``；backend 必须是
-  ``"simple"``
-- **零全局单例**：本模块**不**接触 ``sqlite_store()`` 默认单例，也不触碰
-  ``default_tool_registry()`` / ``get_default_query_tool()``
+  ``"simple"``；遇到未知值（含 ``"amemorix"``）直接 ``raise ValueError``
+- **零全局单例**：本模块**不**接触 ``sqlite_store()`` 默认单例；注册表由
+  组合根构造并经参数传入（``bind_memory_tools``）
 
 ## 调用示例（main.py 装配阶段）
 
@@ -26,13 +26,12 @@ bind_memory_tools(registry, memory)  # 注册 query_memory 工具
 |---|---|---|
 | ``"simple"`` | SQLite + 关键词召回（本模块） | → ``SimpleMemory(store)`` |
 
-amemorix 等外部后端已在 §13 S4 决议中迁出（解耦期路径），待独立路线再引入。
+``"amemorix"`` / 其它值：``raise ValueError("...当前仅支持 backend='simple'")``，
+fail-fast 由组合根捕获并退出（避免启动后才发现 memory 缺失）。
 
 ## 时间单位约定
 - SQLiteStore.timeout 单位是**秒**（sqlite3.connect timeout）
 - 本模块将 config ``busy_timeout_ms``（毫秒 int）按 ``/1000`` 转换为秒再传入
-- 实际生效默认 5s（schema 与 connection.py PRAGMA 一致；旧注释"30s"是错的，
-  F4 修正）
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ from typing import Any, Dict, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.memory.provider import MemoryProvider
-from src.modules.memory.query_tool import QueryMemoryToolProvider
+from src.modules.memory.query_tool import build_query_memory_tool
 from src.modules.memory.simple_memory import SimpleMemory
 from src.modules.storage._default_path import DEFAULT_DB_PATH
 from src.modules.storage.sqlite_store import SQLiteStore
@@ -56,7 +55,7 @@ SUPPORTED_BACKENDS: Tuple[str, ...] = ("simple",)
 
 
 def _resolve_db_path(sqlite_cfg: Dict[str, Any]) -> Path:
-    """从 ``config['sqlite']`` 中取出 db_path 并解析为绝对路径。
+    """从 ``config['sqlite']``（storage.toml 顶层段）取出 db_path 并解析为绝对路径。
 
     - 缺失 / 非 str：回退到 ``DEFAULT_DB_PATH``（项目根 ``data/amaidesu.db``）
     - 相对路径：相对于**项目根**（``DEFAULT_DB_PATH.parent.parent``，即 data 之上）
@@ -77,7 +76,7 @@ def _resolve_busy_timeout_seconds(sqlite_cfg: Dict[str, Any]) -> float:
     """从 ``sqlite_cfg`` 中读 ``busy_timeout_ms``（毫秒 int）并转换为秒。
 
     SQLiteStore.timeout 单位是秒。schema 默认 5000ms → 5s。缺省/非 int 时
-    走 5s 默认（与 schema 与 PRAGMA 一致——F4 修正旧注释"30s"是错的）。
+    走 5s 默认（与 schema 与 PRAGMA 对齐——旧注释"30s"是错的）。
     """
     raw = sqlite_cfg.get("busy_timeout_ms") if isinstance(sqlite_cfg, dict) else None
     if not isinstance(raw, (int, float)):
@@ -94,11 +93,11 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteStore, Simpl
     """构造 SQLiteStore + SimpleMemory 记忆栈。
 
     Args:
-        config: 扁平化后的 ConfigService dict；新结构形如
-            ``{"memory": {"backend": "simple"},
-              "sqlite": {"db_path": "...", "busy_timeout_ms": 5000}}``
-            （[storage] 包裹层已废除，[sqlite] 直接挂在 config 顶层；
-             [memory] 同层，backend 是字面量）
+        config: 扁平化后的 ConfigService dict；形如
+            ``{"memory": {"backend": "simple", ...},
+              "sqlite": {"db_path": "...", "busy_timeout_ms": 5000, ...}}``
+            其中 ``memory.simple`` / ``memory.amemorix`` 可能是 ``None`` 不是 ``{}``，
+            本函数对两者都安全（不读其内容——SimpleMemory 内部无配置项）。
 
     Returns:
         ``(store, memory)`` 元组：
@@ -118,10 +117,12 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteStore, Simpl
     backend = memory_cfg.get("backend", "simple")
     if backend not in SUPPORTED_BACKENDS:
         raise ValueError(
-            f"build_memory_stack: memory backend={backend!r} 不受支持；" f"当前仅支持 {SUPPORTED_BACKENDS}。"
+            f"build_memory_stack: memory backend={backend!r} 不受支持；"
+            f"当前仅支持 {SUPPORTED_BACKENDS}。"
+            f"（A_Memorix 接入尚未完成）"
         )
 
-    # SQLiteStore 配置解析 + 构造（[sqlite] 顶层段，无 [storage] 包裹）
+    # SQLiteStore 配置解析 + 构造
     sqlite_cfg_raw = config.get("sqlite")
     sqlite_cfg = sqlite_cfg_raw if isinstance(sqlite_cfg_raw, dict) else {}
 
@@ -143,11 +144,12 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteStore, Simpl
 def bind_memory_tools(registry: ToolRegistry, memory: MemoryProvider) -> int:
     """把 ``query_memory`` 工具注册到 ``registry``。
 
-    显式构造一个 ``QueryMemoryToolProvider(memory=memory)`` 并
-    ``registry.register_provider(provider)``；返回新增工具数。
+    经 ``build_query_memory_tool(memory)`` 构造 Provider（简单工具正典路径
+    样板，见 ``query_tool.py``）并 ``registry.register_provider(provider)``；
+    返回新增工具数。
 
-    **禁止**走 ``default_tool_registry()`` / ``get_default_query_tool()`` 单例路径
-    ——生产装配必须由调用方持有 registry，本函数把 provider 注入到那个 registry。
+    **禁止**全局单例路径——生产装配必须由组合根构造注册表并传入，
+    本函数把 provider 注入到那个注册表。
 
     Args:
         registry: 调用方构造的 ``ToolRegistry``（必须非 None）
@@ -161,7 +163,7 @@ def bind_memory_tools(registry: ToolRegistry, memory: MemoryProvider) -> int:
     if memory is None:
         raise ValueError("bind_memory_tools: memory 不能为 None；请先调用 build_memory_stack")
 
-    provider = QueryMemoryToolProvider(memory=memory)
+    provider = build_query_memory_tool(memory)
     new_count = registry.register_provider(provider)
     if new_count > 0:
         logger.info(f"记忆工具已绑定: provider='{provider.name}' 新增 {new_count} 个工具（query_memory）")

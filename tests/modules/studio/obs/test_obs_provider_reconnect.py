@@ -22,7 +22,7 @@ def _make_obs_provider(monkeypatch: pytest.MonkeyPatch) -> "obs_mod.OBSProvider"
             "type": "obs_control",
             "host": "127.0.0.1",
             "port": 4455,
-            "password": None,
+            "password": "",
             "text_source_name": "text",
             "typewriter_enabled": False,
             "typewriter_speed": 0.1,

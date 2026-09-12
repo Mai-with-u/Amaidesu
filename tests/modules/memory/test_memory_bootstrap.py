@@ -265,7 +265,7 @@ async def test_bind_memory_tools_rejects_none_memory() -> None:
 
 
 async def test_bind_memory_tools_duplicate_returns_zero(built_stack: tuple[SQLiteStore, SimpleMemory]) -> None:
-    """重复注册同一 memory（QueryMemoryToolProvider 实例不同但 spec.name 冲突）→ 返回 0。"""
+    """重复注册同一 memory（provider 实例不同但 spec.name 冲突）→ 返回 0。"""
     _, mem = built_stack
     registry = ToolRegistry()
     bind_memory_tools(registry, mem)

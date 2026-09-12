@@ -234,7 +234,8 @@ def register_core_events() -> None:
         planner as _planner_payloads,  # noqa: F401
         room as _room_payloads,  # noqa: F401
         rundown as _rundown_payloads,  # noqa: F401
-        speech as _speech_payloads,  # noqa: F401
+        speech as _speech_payloads,
+        tasks as _tasks_payloads,  # noqa: F401
         tool_health as _tool_health_payloads,  # noqa: F401
         tool_result as _tool_result_payloads,  # noqa: F401
         utterance as _utterance_payloads,  # noqa: F401

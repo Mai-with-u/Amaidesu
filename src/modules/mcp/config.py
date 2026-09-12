@@ -17,8 +17,6 @@
     # command = "npx"
     # args = ["-y", "some-mcp-server"]
     enabled = true
-    # 工具名前缀：默认 "<server名>_"（防与内置工具冲突）
-    # prefix = "my_server_"
 
 设计要点：
 - 服务端能力契约（tools 的 JSON Schema 等）由运行时 ``list_tools`` 动态拉取，
@@ -51,8 +49,6 @@ class McpServerConfig(BaseModel):
         args: stdio 传输时的命令行参数
         env: stdio 传输时的环境变量（可选）
         headers: http 传输时附加的 HTTP 头（如 Authorization）
-        prefix: 工具名前缀（默认 ``<server名>_``）；用于避免与内置工具重名
-            （ToolRegistry 注册策略是先注册保留，重名会被静默跳过）
         reconnect: 是否启用自动重连（连接中断后按退避策略重试）
         timeout_seconds: 连接超时（秒）
     """
@@ -72,10 +68,6 @@ class McpServerConfig(BaseModel):
     args: List[str] = Field(default_factory=list, description="stdio 传输的命令行参数")
     env: Dict[str, str] = Field(default_factory=dict, description="stdio 传输的环境变量")
     headers: Dict[str, str] = Field(default_factory=dict, description="http 传输附加请求头")
-    prefix: str = Field(
-        default="",
-        description="工具名前缀（空串 = 用默认 <server名>_）；防与内置工具重名",
-    )
     reconnect: bool = Field(default=True, description="连接中断后自动重连")
     timeout_seconds: float = Field(default=30.0, ge=1.0, description="连接超时（秒）")
 

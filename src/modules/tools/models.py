@@ -28,16 +28,15 @@ class ToolSpec:
     """工具规格（注册时声明；Planner 看到的就是这个）
 
     Attributes:
-        name: 工具声明名（provider 内唯一）；经 ``ToolRegistry.register_provider``
-              注册时注册名统一为 ``<provider>_<name>``（已带前缀则原样），
-              LLM / 调用方看到的是注册名
+        name: 工具声明名（provider 内唯一，**不带前缀**）；对外全名 =
+              ``full_name``（``<provider>_<name>`` 动态派生，不存下来）
         description: LLM 看的工具描述
         parameters_schema: JSON Schema 形态的参数描述（主流共识）；可为 None
         kind: "sync"（gather 等齐结果）/ "async"（fire-and-forget）
-        result_event: 异步工具结果事件名，默认 ``tool.result.<name>``；
+        result_event: 异步工具结果事件名，默认 ``tool.result.<全名>``；
                       可定制（如 some_tool → ``tool.result.some_tool_feedback``）
         provider: 提供者标识（如 vts / warudo / obs / vision / memory /
-                  maicraft；溯源、注册名前缀与过滤用，非白名单枚举）
+                  maicraft；溯源、全名前缀与过滤用，非白名单枚举）
         output_schema: 可选的 JSON Schema 形态的输出描述
     """
 
@@ -49,11 +48,23 @@ class ToolSpec:
     provider: str = ""
     output_schema: Optional[Dict[str, Any]] = None
 
+    @property
+    def full_name(self) -> str:
+        """派生唯一全名：``<provider>_<工具名>``。
+
+        需要字符串的边界（注册表索引键、LLM 工具列表、调用路由、停用
+        列表匹配、事件名）一律现算本值；全仓禁止手拼前缀或反向剥离，
+        也不把派生值写回本对象。provider 为空（匿名工具）时全名即工具名。
+        """
+        if not self.provider:
+            return self.name
+        return f"{self.provider}_{self.name}"
+
     def resolve_result_event(self) -> str:
-        """返回实际的异步结果事件名（默认 ``tool.result.<name>``）。"""
+        """返回实际的异步结果事件名（默认 ``tool.result.<全名>``）。"""
         if self.result_event:
             return self.result_event
-        return f"{DEFAULT_RESULT_EVENT_PREFIX}{self.name}"
+        return f"{DEFAULT_RESULT_EVENT_PREFIX}{self.full_name}"
 
 
 @dataclass(slots=True)

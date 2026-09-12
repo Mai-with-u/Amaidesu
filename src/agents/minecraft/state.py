@@ -69,10 +69,10 @@ class MinecraftAgentState:
         if len(self.reports) > MAX_REPORTS:
             self.reports = self.reports[-MAX_REPORTS:]
 
-    # ---- 状态导出（minecraft_get_state）----
+    # ---- 状态导出（minecraft_get_work_log）----
 
     def to_dict(self) -> Dict[str, Any]:
-        """导出完整状态快照（minecraft_get_state：todo/notebook/reports 三元组）。"""
+        """导出完整状态快照（minecraft_get_work_log：todo/notebook/reports 三元组）。"""
         return {
             "todo": self.todo_doc()["todos"],
             "notebook": self.notebook,

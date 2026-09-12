@@ -16,10 +16,10 @@ QA Scenario（acceptance criteria）：
     Evidence: .omo/evidence/w7-game-agent.txt
 
 覆盖：
-- BaseAgent 协议六面在游戏 Agent 上的具体落地
+- BaseAgent 协议六项在游戏 Agent 上的具体落地
 - 感知工具复用（look_at_screen 通过 ToolRegistry.invoke 调用）
 - 推进工具自备（text_adv_choose_option provider="game"）
-- content_engine 控制面（send_input 触发 FakeContentEngine 记录）
+- content_engine 为包内私有接口（send_input 触发 FakeContentEngine 记录，直连不经注册表）
 - 内部状态机（TextAdvGameAgentState：场景/选项/历史/去重）
 - game.* 事件 emit
 - main.py wiring：build_text_adv_agent 工厂 + AgentManager.register
@@ -41,10 +41,7 @@ from src.agents.text_adv import (
     TextAdvGameAgentState,
     build_text_adv_agent,
 )
-from src.agents.text_adv.content_engine import (
-    ContentEngineProvider,
-    FakeContentEngine,
-)
+from src.agents.text_adv.content_engine import FakeContentEngine
 from src.agents.text_adv.state import TextAdvOption
 from src.modules.agents import AgentManager, AgentState
 from src.modules.events.event_bus import EventBus
@@ -122,16 +119,14 @@ async def started_agent(
     registry = ToolRegistry()
     # 1) 注册公用感知工具（look_at_screen）
     look_provider = LookAtScreenProvider(
+        config={},
         screen_capture=perception_capture,
         text_reader=text_reader,
     )
     registry.register_provider(look_provider)
 
-    # 2) 注册 content_engine 控制面
-    ce_provider = ContentEngineProvider(engine=content_engine)
-    registry.register_provider(ce_provider)
-
-    # 3) 构造 Agent；Agent 自己会在 _on_start 中注册 text_adv_choose_option / text_adv_get_story
+    # 2) 构造 Agent；Agent 自己会在 _on_start 中注册 text_adv_choose_option / text_adv_get_story
+    #    （内容引擎为包内私有接口，构造注入直连，不经工具注册表）
     manager = AgentManager(tool_registry=registry)
     agent = build_text_adv_agent(
         config=TextAdvConfig(),
@@ -149,7 +144,6 @@ async def started_agent(
         "manager": manager,
         "registry": registry,
         "look_provider": look_provider,
-        "ce_provider": ce_provider,
         "content_engine": content_engine,
         "perception_capture": perception_capture,
         "text_reader": text_reader,
@@ -160,7 +154,7 @@ async def started_agent(
 
 
 # =============================================================================
-# BaseAgent 协议六面（落地在 TextAdvGameAgent）
+# BaseAgent 协议六项（落地在 TextAdvGameAgent）
 # =============================================================================
 
 
@@ -183,8 +177,8 @@ def test_text_adv_agent_list_tools_returns_game_provider_specs() -> None:
     agent = TextAdvGameAgent(config=config)
     specs = list(agent.list_tools())
     assert len(specs) == 2
-    names = {s.name for s in specs}
-    assert names == {"text_adv_choose_option", "text_adv_get_story"}
+    full_names = {s.full_name for s in specs}
+    assert full_names == {"text_adv_choose_option", "text_adv_get_story"}
     for s in specs:
         assert s.provider == "text_adv"
         assert s.kind == "sync"
@@ -462,7 +456,7 @@ async def test_look_at_screen_graceful_when_no_backend(
     from src.modules.tools.models import ToolInvocation
 
     registry = ToolRegistry()
-    provider = LookAtScreenProvider(screen_capture=None, text_reader=None)
+    provider = LookAtScreenProvider(config={}, screen_capture=None, text_reader=None)
     registry.register_provider(provider)
 
     res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
@@ -480,7 +474,7 @@ async def test_look_at_screen_with_fake_backend_returns_image_block() -> None:
     capture.queue_png(b"\x89PNG_FAKE", width=800, height=600)
     reader = FakeTextReader()
     reader.queue_text("游戏文本片段")
-    provider = LookAtScreenProvider(screen_capture=capture, text_reader=reader)
+    provider = LookAtScreenProvider(config={}, screen_capture=capture, text_reader=reader)
     registry.register_provider(provider)
 
     res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
@@ -611,18 +605,14 @@ async def test_perception_failure_emits_game_error_event(
     # 这里我们改用 monkeypatch 风格：构造新 provider 覆盖旧 spec
     from src.modules.vision import LookAtScreenProvider
 
-    boom_provider = LookAtScreenProvider(screen_capture=BoomCapture())
+    boom_provider = LookAtScreenProvider(config={}, screen_capture=BoomCapture())
     # 由于 register 去重，需要先 clear registry 的 look_at_screen
     registry.clear()
     registry.register_provider(boom_provider)
-    # ContentEngine 也要重新注册
-    content_engine = started_agent["content_engine"]  # type: ignore[assignment]
-    from src.agents.text_adv.content_engine import ContentEngineProvider
-
-    registry.register_provider(ContentEngineProvider(engine=content_engine))
-    # Game provider 需要重新构造并注册
+    # Game provider 需要重新构造并注册（内容引擎构造注入直连，无需注册表条目）
     from src.agents.text_adv import TextAdvToolProvider
 
+    content_engine = started_agent["content_engine"]  # type: ignore[assignment]
     registry.register_provider(
         TextAdvToolProvider(state=agent._game_state, engine=content_engine)  # noqa: SLF001
     )

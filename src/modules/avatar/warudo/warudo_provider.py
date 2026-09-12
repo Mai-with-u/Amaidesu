@@ -26,7 +26,9 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from pydantic import Field
 
+from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
@@ -136,6 +138,29 @@ class WarudoProvider(BaseToolProvider):
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category = "avatar"
 
+    class ConfigSchema(BaseConfig):
+        """Warudo 配置（WebSocket + 字幕 + 后台任务 + 动作目录）
+
+        TOML 段位：[tools.avatar.warudo].config
+        """
+
+        type: str = "warudo"
+        ws_host: str = Field(default="localhost", description="Warudo WebSocket 主机地址")
+        ws_port: int = Field(default=19190, ge=1, le=65535, description="Warudo WebSocket 端口")
+        reconnect_delay_seconds: float = Field(default=5.0, ge=0.0, description="断线重连间隔秒数")
+        subtitle_enabled: bool = Field(default=True, description="是否启用 Warudo 字幕服务")
+        subtitle_port: int = Field(default=8766, ge=1, le=65535, description="字幕服务端口")
+        subtitle_show_status: bool = Field(default=False, description="字幕窗口是否显示状态")
+        talking_head_enabled: bool = Field(default=True, description="是否启用 TalkingHead 后台任务")
+        talking_head_interval: float = Field(default=0.1, ge=0.01, description="TalkingHead 最小间隔秒数")
+        throw_fish_cooldown: float = Field(default=5.0, ge=0.0, description="抛鱼动画冷却秒数")
+        # 动作目录（人类登记的可用动作名+说明；类似 MCP servers 的动态键例外，
+        # 键=动作名、值=说明；typed 形态 Dict[str, str] 不算 §1⑤ 自由 dict）
+        action_catalog: Dict[str, str] = Field(
+            default_factory=dict,
+            description="可用蓝图动作目录 {动作名: 说明}，人类配置预声明；用于拼入工具描述供 LLM 选择",
+        )
+
     def __init__(
         self,
         config: Dict[str, Any],
@@ -145,23 +170,22 @@ class WarudoProvider(BaseToolProvider):
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)
 
-        # 配置
-        self.ws_host: str = str(config.get("ws_host", "localhost"))
-        self.ws_port: int = int(config.get("ws_port", 19190))
-        self.reconnect_delay_seconds: float = float(config.get("reconnect_delay_seconds", 5.0))
-        self.subtitle_enabled: bool = bool(config.get("subtitle_enabled", True))
-        self.subtitle_port: int = int(config.get("subtitle_port", 8766))
-        self.subtitle_show_status: bool = bool(config.get("subtitle_show_status", False))
-        self.talking_head_enabled: bool = bool(config.get("talking_head_enabled", True))
-        self.talking_head_interval: float = float(config.get("talking_head_interval", 0.1))
-        self.throw_fish_cooldown: float = float(config.get("throw_fish_cooldown", 5.0))
-
-        # 动作目录（配置预声明：Warudo 侧无法枚举蓝图动作，由人类在配置里
-        # 登记可用动作名与说明，拼入工具描述供 LLM 选择；形态 {动作名: 说明}）
-        raw_catalog = config.get("action_catalog") or {}
-        self.action_catalog: Dict[str, str] = (
-            {str(k): str(v) for k, v in raw_catalog.items()} if isinstance(raw_catalog, dict) else {}
-        )
+        # 配置（typed；空 dict = 全默认；失败 log+raise）
+        try:
+            self.typed_config = self.ConfigSchema.from_dict(config)
+        except Exception as e:
+            self.logger.error(f"配置验证失败: {e}")
+            raise
+        self.ws_host: str = self.typed_config.ws_host
+        self.ws_port: int = self.typed_config.ws_port
+        self.reconnect_delay_seconds: float = self.typed_config.reconnect_delay_seconds
+        self.subtitle_enabled: bool = self.typed_config.subtitle_enabled
+        self.subtitle_port: int = self.typed_config.subtitle_port
+        self.subtitle_show_status: bool = self.typed_config.subtitle_show_status
+        self.talking_head_enabled: bool = self.typed_config.talking_head_enabled
+        self.talking_head_interval: float = self.typed_config.talking_head_interval
+        self.throw_fish_cooldown: float = self.typed_config.throw_fish_cooldown
+        self.action_catalog: Dict[str, str] = dict(self.typed_config.action_catalog)
 
         # WebSocket 状态
         self.websocket: Any = None
@@ -233,90 +257,90 @@ class WarudoProvider(BaseToolProvider):
         catalog = self._action_catalog_summary()
         return [
             ToolSpec(
-                name="warudo_set_expression",
+                name="set_expression",
                 description="Warudo 设置 blendshape 表情参数",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_SET_EXPRESSION_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_trigger_hotkey",
+                name="trigger_hotkey",
                 description="Warudo 触发热键（按动作名）" + catalog,
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_TRIGGER_HOTKEY_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_trigger_body",
+                name="trigger_body",
                 description="Warudo 触发身体动作（姿势.json 蓝图）" + catalog,
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_BODY_ACTION_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_trigger_head",
+                name="trigger_head",
                 description="Warudo 触发头部动作（头部动态.json 蓝图）" + catalog,
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_HEAD_ACTION_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_trigger_action",
+                name="trigger_action",
                 description="Warudo 直接动作（蓝图节点名）" + catalog,
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_DIRECT_ACTION_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_set_subtitle",
+                name="set_subtitle",
                 description="Warudo 推送字幕文本（one-shot 模式）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_PUSH_SUBTITLE_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_throw_fish",
+                name="throw_fish",
                 description="Warudo 抛鱼动画（带冷却）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
             ),
             ToolSpec(
-                name="warudo_set_sight",
+                name="set_sight",
                 description="Warudo 设置视线状态（camera/danmu/phone）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_STATE_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_set_eyebrow",
+                name="set_eyebrow",
                 description="Warudo 设置眉毛状态",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_STATE_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_set_eye",
+                name="set_eye",
                 description="Warudo 设置眼睛状态",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_STATE_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_set_pupil",
+                name="set_pupil",
                 description="Warudo 设置瞳孔方向",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_STATE_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_set_mouth",
+                name="set_mouth",
                 description="Warudo 设置嘴巴第一层状态",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_STATE_SCHEMA,
             ),
             ToolSpec(
-                name="warudo_get_stats",
+                name="get_stats",
                 description="读取 Warudo 状态统计",
                 kind="sync",
                 provider=self.PROVIDER_NAME,

@@ -11,7 +11,7 @@
 ## TL;DR
 
 > 事件名 = **域.子类（可选）.动作**，已发生事实语义（过去时），无阶段化、无动词链。
-> 域 = **领域**（live/room/game/agenda/planner/tool/core），**不是阶段**（input/decision/output 已删除）。
+> 域 = **领域**（core/live/room/game/rundown/planner/streamer/tts，外加 tool 通配前缀），**不是阶段**（input/decision/output 已删除）。
 > 一个概念一个名字（查术语表，不混用同义词）；一个动词一个意思（细化，不要 `updated` / `data` 这种泛词）。
 > 起名前先查这里；7 条自查清单不过 → 停下重审。
 
@@ -25,8 +25,8 @@
 
 | 部分 | 必填 | 说明 | 示例 |
 |---|---|---|---|
-| `域` | ✅ | 事件所属**领域**（非阶段）：live/room/game/agenda/planner/tool/core | `room` |
-| `子类` | 可选 | 该域内的**子层**：`message`（行为流）/ `state`（状态快照）/ `result`（工具结果）/ `command`（命令下发）/ `checkpoint`（检查点提醒） | `message` |
+| `域` | ✅ | 事件所属**领域**（非阶段）：core/live/room/game/rundown/planner/streamer/tts | `room` |
+| `子类` | 可选 | 该域内的**子层**：`message`（行为流）/ `state`（状态快照）/ `result`（工具结果）/ `command`（命令下发） | `message` |
 | `动作` | ✅ | **已发生的事实**（过去时语义）：具体、单一、无歧义 | `danmaku` |
 
 **允许最多 4 层**（如 `room.message.danmaku`，子类存在时必然 4 层）；不强制 3 层（子类为可选，缺子类时 2 层，如 `live.started`）。
@@ -37,17 +37,20 @@
 
 ## 2. 语义域枚举及职责
 
-Amaidesu 当前共 7 个语义域。每个域有自己的职责边界，事件**只能在所属域内**。
+Amaidesu 当前共 8 个有具体事件的语义域 + `tool` 通配前缀（仅通配订阅模式，无具体常量事件）。每个域有自己的职责边界，事件**只能在所属域内**。
 
 | 域 | 职责 | 典型事件 |
 |---|---|---|
 | **core** | 系统级核心状态（启动 / 关闭 / 错误）。**不属于任何业务域**，仅供系统组件订阅 | `core.startup` / `core.shutdown` / `core.error` |
 | **live** | 直播场次生命周期（开播 / 下播）。**唯一含时间窗锚点**的域，所有 room/game 事件均需携带 `live_session_id` | `live.started` / `live.ended` |
 | **room** | 直播间行为流 / 状态。**子层强制**：行为流走 `.message.*`（已发生事实），状态走 `.state.*`（当前属性快照，预留层） | `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.enter` |
-| **game** | 游戏里程碑 / 异常。**低频**，只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差） | `game.milestone` / `game.attention_required` / `game.error` |
-| **agenda** | AgendaItem 运行进度变更（节目单打勾 / 改时间 / 插入）。**仅变更即发**，不是周期性状态广播 | `agenda.update` |
-| **planner** | Planner 检查点提醒（纯提醒零决策）。**唯一合法的"低频周期性"事件**（Planner 空闲 + 无 pending 异步 + 队列空 + 有未完成 AgendaItem 四判据全过才发） | `planner.checkpoint` |
-| **tool.result** | 异步工具结果回传（fire-and-forget 完成后）。**通配 pattern**：`tool.result.#` 一站式监听所有工具结果；emit 时用具体名 `tool.result.<tool_name>` | `tool.result.speak` / `tool.result.summarize_timeline` |
+| **game** | 游戏里程碑 / 异常 / 上报。**低频**，只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 交付总结） | `game.milestone` / `game.attention_required` / `game.error` / `game.report` |
+| **rundown** | 流程单（Rundown）状态变更（加载 / 跳转 / 推进 / 暂停 / 恢复）。**单事件 + payload 判别，仅变更即发**，不是周期性状态广播 | `rundown.changed` |
+| **planner** | 主播决策轮记录：轮末一条 `planner.decision`（决策卡数据源）；裁决时刻即时一条 `planner.verdict`（reply 被调用时、表达生成之前） | `planner.decision` / `planner.verdict` |
+| **streamer** | 主播 Agent 管线阶段与发言业务事实：`streamer.stage`（决策管线阶段变化）/ `streamer.speech`（一条发言已生成，与 TTS 启用与否正交） | `streamer.stage` / `streamer.speech` |
+| **tts** | 一次发声实例的生命周期（开始 / 完成 / 失败），`utterance_id` 全链路串联；**终点广播**，消费者不得触发新决策 | `tts.utterance.started` / `tts.utterance.finished` / `tts.utterance.failed` |
+| **task** | 异步任务生命周期（受理 → 进行中含决策点 → 终态）。发起方订阅按 `payload.initiator` 过滤唤醒；**通知是提示、查询是事实源**（记录表是事实源） | `task.changed` |
+| **tool**（通配前缀） | 异步工具结果 / 工具健康切换。**通配 pattern**：`tool.result.#` / `tool.health.#` 一站式监听；emit 时用具体名 `tool.result.<tool_name>` | `tool.result.speak` / `tool.health.maicraft_speak` |
 
 > **v2.0.8 收口**：原 `output.sticker` 特例域（`output.sticker.command`，§1.46.1 保留事件）已随 C1 治理删除——StickerHelper 零实例化零调用、消费端 VTSProvider 仅空转订阅；接电线也救不了（无 LLM 工具暴露贴纸触发）。未来做表情功能时重新设计，本轮不留事件链。
 
@@ -55,7 +58,7 @@ Amaidesu 当前共 7 个语义域。每个域有自己的职责边界，事件**
 
 ## 3. 「语义域不命名阶段」原则（首要）
 
-> 2.0.0 无三阶段，**域 = 领域**（live/room/game/agenda/planner/tool/core），不是 input/decision/output。
+> 2.0.0 无三阶段，**域 = 领域**（core/live/room/game/rundown/planner/streamer/tts + tool 通配前缀），不是 input/decision/output。
 
 | ❌ 阶段命名 | ✅ 语义域命名 | 违反规则 |
 |---|---|---|
@@ -95,7 +98,6 @@ Amaidesu 当前共 7 个语义域。每个域有自己的职责边界，事件**
 | `.state.*` | 状态（当前属性快照） | `room.state.heat` |
 | `.result.#` | 工具 / 异步结果回传 | `tool.result.speak` |
 | `.command` / `.control` | 命令下发（vs 已发生事件） | `room.control`（假设） |
-| `.checkpoint` | 检查点提醒（§1.7 纯提醒零决策） | `planner.checkpoint` |
 
 **关键区别**：
 
@@ -128,7 +130,7 @@ Amaidesu 当前共 7 个语义域。每个域有自己的职责边界，事件**
 
 | ✅ 唯一命名 | ❌ 混用 | 违反规则 |
 |---|---|---|
-| Agenda（AgendaItem / agenda.*） | Agenda 和 Outline 混用 | 同一概念两个名字 |
+| Rundown（流程单 / RundownState / rundown.changed） | Rundown 和 Agenda 混用 | 同一概念两个名字 |
 | LivePayload（live.started / live.ended 共用） | 一个 `LiveStartedPayload` 一个 `LiveEndedPayload` | 同一形状拆两 Payload |
 
 **判定**：起名前查 `CoreEvents` 常量 + 术语表，已有概念绝不另起新名。
@@ -204,20 +206,35 @@ class CoreEvents:
     ROOM_MESSAGE_SUPER_CHAT = "room.message.super_chat"
     ROOM_MESSAGE_ENTER = "room.message.enter"
 
-    # Game 游戏里程碑（3 类）
+    # Game 游戏里程碑 / 上报（4 类）
     GAME_MILESTONE = "game.milestone"
     GAME_ATTENTION_REQUIRED = "game.attention_required"
     GAME_ERROR = "game.error"
+    GAME_REPORT = "game.report"
 
-    # Agenda / Planner
-    AGENDA_UPDATE = "agenda.update"
-    PLANNER_CHECKPOINT = "planner.checkpoint"
+    # Rundown 流程单变更（单事件，payload 判别）
+    RUNDOWN_CHANGED = "rundown.changed"
 
-    # 工具结果通配（仅订阅标识，emit 用具体名 tool.result.<tool_name>）
+    # Planner 决策轮记录（轮末）+ 裁决时刻（即时）
+    PLANNER_DECISION = "planner.decision"
+    PLANNER_VERDICT = "planner.verdict"
+
+    # Streamer 管线阶段 + 发言业务事实
+    STREAMER_STAGE = "streamer.stage"
+    STREAMER_SPEECH = "streamer.speech"
+
+    # TTS 一次发声实例生命周期（终点广播）
+    TTS_UTTERANCE_STARTED = "tts.utterance.started"
+    TTS_UTTERANCE_FINISHED = "tts.utterance.finished"
+    TTS_UTTERANCE_FAILED = "tts.utterance.failed"
+
+    # 工具结果 / 健康 / 行为流通配（仅订阅标识，emit 用具体名 tool.result.<tool_name> 等）
     TOOL_RESULT_WILDCARD = "tool.result.#"
+    TOOL_HEALTH_WILDCARD = "tool.health.#"
+    ROOM_MESSAGE_WILDCARD = "room.message.#"
 ```
 
-完整事件清单（14 常量 + 1 通配占位符）见 [事件系统 - 事件事实表](event-system.md#事件事实表)。
+完整事件清单（21 个具体常量 + 3 个通配占位符）见 [事件系统 - 事件事实表](event-system.md#事件事实表)。
 
 ---
 
@@ -228,7 +245,7 @@ class CoreEvents:
 1. **域对吗**？是领域，不是阶段。（❌ 别写 input / decision / output）
 2. **子层对吗**？行为流 `.message.*`？状态 `.state.*`？结果 `.result.#`？命令 `.command`？（❌ 别把行为 / 状态平铺同层）
 3. **动作是过去时吗**？事件已发生。（❌ 别用 request / will / 将来式 / 未来时）
-4. **概念名统一吗**？查术语表，是否已有概念？（❌ 别 Agenda / Outline 混用）
+4. **概念名统一吗**？查术语表，是否已有概念？（❌ 别同一概念两个名字，如 Rundown / Agenda 混用）
 5. **动词具体吗**？能否从事件名猜出发生了什么？（❌ 别用 updated / data / generic 这种泛词）
 6. **要拆多事件吗**？同类命令能否合并成单事件 + action 判别？（❌ 别拆碎接口面）
 7. **是工具结果吗**？是则归 `tool.result.#`，别散落到域
@@ -251,8 +268,10 @@ class CoreEvents:
 | 游戏挖到钻石 | `game.milestone` | `game.progress`（泛化） | ⑤ 动词具体 |
 | 游戏安全阀偏差 | `game.attention_required` | `game.warn`（泛化） | ⑤ 动词具体 |
 | 游戏异常 | `game.error` | `game.exception`（混 error / exception） | ⑦ 概念名统一 |
-| AgendaItem 变更 | `agenda.update` | `outline.update`（混 Agenda / Outline） | ⑦ 概念名统一 |
-| Planner 空闲 | `planner.checkpoint` | `planner.idle` / `planner.status` | ⑤ 动词具体 + 子层对齐（`checkpoint` 是子层约定） |
+| 游戏交付总结 | `game.report` | `game.summary`（泛化）/ `game.finish`（混同义词） | ⑤ 动词具体 |
+| 流程单状态变更 | `rundown.changed` | `rundown.updated`（泛词 updated） | ⑤ 动词具体 |
+| 决策轮完成记录 | `planner.decision` | `planner.round` / `planner.result`（泛化） | ⑤ 动词具体 |
+| 裁决时刻（reply 被调用） | `planner.verdict` | `planner.decision`（与轮末记录混用） | ⑦ 概念名统一 |
 | 工具 speak 完成 | `tool.result.speak` | `output.speak.done`（散到输出域） | ⑧ 工具结果散落 |
 | 工具时间线总结 | `tool.result.summarize_timeline` | `planner.timeline_ready`（散到 planner 域） | ⑧ 工具结果散落 |
 | 房间控制（未来） | `room.control` + `action: Literal[...]` | `room.set_title` / `room.ban` / `room.mute`（拆碎） | ⑥ 命令拆分 |
@@ -266,7 +285,7 @@ class CoreEvents:
 | 项 | v1 旧规范（阶段化） | v2 新规范（语义域） |
 |---|---|---|
 | 格式 | `{domain}.{entity}.{verb}` | `{域}.{子类(可选)}.{动作}` |
-| 首段 | 阶段（`input` / `decision` / `output` / `core`） | 领域（`live` / `room` / `game` / `agenda` / `planner` / `tool` / `core`） |
+| 首段 | 阶段（`input` / `decision` / `output` / `core`） | 领域（`core` / `live` / `room` / `game` / `rundown` / `planner` / `streamer` / `tts` + `tool` 通配前缀） |
 | 动词链 | `received → generated → dispatched → finished` | **取消**（无阶段流转，用已发生事实） |
 | 层数 | 最多 3 | 最多 4（子类存在时） |
 | 动词 | 带方向性（进 / 决策 / 出） | 已发生事实（完成态、过去时） |
@@ -306,9 +325,3 @@ class CoreEvents:
 - [事件系统 - 通配订阅](event-system.md#通配订阅mqtt-风格)（MQTT 风格详解 + Specificity 排序）
 - [数据流规则](data-flow.md)（域间边界）
 - [架构决策记录](adr/README.md)
-
----
-
-*最后更新：2026-08-28（v2.0.8 Sticker 事件链全链删除：`output.sticker` 特例域从"语义域枚举及职责"表移除并改为 v2.0.8 收口说明（域计数 7+1→7）；TL;DR/语法表/§5 子层示例/§6 单事件 + action 表/§10 CoreEvents 常量代码块/§12 正反例对照表全数清除 `output.sticker.command` 引用；§13 v1 对照表命令类描述同步改写（`output.sticker.command` 不再作为 v2 命令类示例）；§14 迁移历史 `2026-08-22` 行补注 "v2.0.8 删除"；§10 末尾常量计数 15→14）*
-
-*上次更新：2026-08-25（v2.0.0 语义域事件对齐：取代 v1 三阶段命名规范；新增语义域枚举/职责、行为 vs 状态分层、命令类合并、工具结果统一、自查 7 条清单、正反例对照）*

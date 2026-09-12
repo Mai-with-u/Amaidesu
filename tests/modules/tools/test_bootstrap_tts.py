@@ -16,7 +16,7 @@ import inspect
 import pytest
 
 from src.modules.tools import ToolRegistry
-from src.modules.tools.bootstrap import _NON_TTS_PACKAGES, bind_core_tools
+from src.modules.tools.bootstrap import bind_core_tools
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ class TestNonTTSPackagesUnchanged:
     def test_subtitle_domain_absent_registers_nothing(self):
         """无 avatar/studio 域配置：bootstrap 不注册任何工具（防止隐式启用）。"""
         registry = ToolRegistry()
-        report = bind_core_tools(
+        bind_core_tools(
             registry,
             config={},
         )
@@ -73,7 +73,7 @@ class TestNonTTSPackagesUnchanged:
                 },
             },
         )
-        vts_tools = [n.name for n in registry.list_tools() if n.name.startswith("vts_")]
+        vts_tools = [n.full_name for n in registry.list_tools() if n.full_name.startswith("vts_")]
         assert vts_tools != [], "avatar.vts 已启用应被注册"
         assert report.get("vts", 0) > 0
 
@@ -88,7 +88,7 @@ class TestNonTTSPackagesUnchanged:
                 },
             },
         )
-        vts_tools = [n.name for n in registry.list_tools() if n.name.startswith("vts_")]
+        vts_tools = [n.full_name for n in registry.list_tools() if n.full_name.startswith("vts_")]
         assert vts_tools == [], "avatar.vts 未启用不应注册"
         assert report.get("vts", 0) == 0
 
@@ -103,7 +103,7 @@ class TestNonTTSPackagesUnchanged:
                 },
             },
         )
-        obs_tools = [n.name for n in registry.list_tools() if n.name.startswith("obs_")]
+        obs_tools = [n.full_name for n in registry.list_tools() if n.full_name.startswith("obs_")]
         assert obs_tools != [], "studio.obs 已启用应被注册"
 
     def test_missing_domains_registers_nothing(self):

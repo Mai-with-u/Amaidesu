@@ -28,7 +28,6 @@ import pytest
 from src.modules.memory import (
     MemoryProvider,
     PersonProfile,
-    QueryMemoryToolProvider,
     SimpleMemory,
     build_query_memory_tool,
 )
@@ -315,7 +314,7 @@ async def test_maintain_no_op_does_not_error(memory: SimpleMemory) -> None:
 async def test_query_tool_not_bound_returns_failure(memory: SimpleMemory) -> None:
     """未绑定 memory 的 query_memory provider 调用应返回失败 result。"""
     provider = build_query_memory_tool()  # 未绑定 memory
-    inv = ToolInvocation(tool_name="query_memory", arguments={"query": "x"})
+    inv = ToolInvocation(tool_name="memory_query_memory", arguments={"query": "x"})
     res = await provider.invoke(inv)
     assert res.success is False
     assert "未绑定" in res.error_message or "binding" in res.error_message.lower()
@@ -325,10 +324,9 @@ async def test_query_tool_registered_with_memory(memory: SimpleMemory) -> None:
     """绑定 memory 后调 query_memory 工具返回召回文本。"""
     await memory.ingest("主播推荐了一本《深入理解计算机系统》", source="seed")
 
-    provider = build_query_memory_tool()
-    provider.memory = memory
+    provider = build_query_memory_tool(memory=memory)
 
-    inv = ToolInvocation(tool_name="query_memory", arguments={"query": "深入理解", "top_k": 3})
+    inv = ToolInvocation(tool_name="memory_query_memory", arguments={"query": "深入理解", "top_k": 3})
     res = await provider.invoke(inv)
     assert res.success is True
     assert "深入理解" in res.content
@@ -337,9 +335,8 @@ async def test_query_tool_registered_with_memory(memory: SimpleMemory) -> None:
 
 async def test_query_tool_empty_query_handled(memory: SimpleMemory) -> None:
     """空 query 返回明确占位文本。"""
-    provider = build_query_memory_tool()
-    provider.memory = memory
-    inv = ToolInvocation(tool_name="query_memory", arguments={"query": ""})
+    provider = build_query_memory_tool(memory=memory)
+    inv = ToolInvocation(tool_name="memory_query_memory", arguments={"query": ""})
     res = await provider.invoke(inv)
     assert res.success is True
     assert "空查询" in res.content
@@ -349,7 +346,7 @@ async def test_query_tool_via_tool_registry(memory: SimpleMemory) -> None:
     """query_memory provider 注册到 ToolRegistry 后能正常 invoke（注册名带 memory_ 前缀）。"""
     await memory.ingest("Minecraft 中怎么合成下界合金？", source="seed")
 
-    provider = QueryMemoryToolProvider(memory=memory)
+    provider = build_query_memory_tool(memory=memory)
     registry = ToolRegistry()
     registered = registry.register_provider(provider)
     assert registered == 1

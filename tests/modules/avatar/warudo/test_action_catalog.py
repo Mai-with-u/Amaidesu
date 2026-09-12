@@ -30,13 +30,13 @@ def test_action_catalog_from_config(mock_event_bus):
     assert "sit（坐下）" in summary
 
 
-def test_action_catalog_ignores_non_dict_config(mock_event_bus):
-    provider = WarudoProvider(
-        {"ws_host": "localhost", "action_catalog": "invalid"},
-        event_bus=mock_event_bus,
-    )
-
-    assert provider.action_catalog == {}
+def test_action_catalog_rejects_non_dict_config(mock_event_bus):
+    """action_catalog 必须为 Dict[str, str]；非 dict 严格报错（schema 严格化）。"""
+    with pytest.raises(Exception):
+        WarudoProvider(
+            {"ws_host": "localhost", "action_catalog": "invalid"},
+            event_bus=mock_event_bus,
+        )
 
 
 def test_list_tools_description_carries_catalog(mock_event_bus):
@@ -46,7 +46,7 @@ def test_list_tools_description_carries_catalog(mock_event_bus):
     )
 
     for name in ("warudo_trigger_hotkey", "warudo_trigger_body", "warudo_trigger_head", "warudo_trigger_action"):
-        spec = next(s for s in provider.list_tools() if s.name == name)
+        spec = next(s for s in provider.list_tools() if s.full_name == name)
         assert "wave（招手）" in spec.description
 
 

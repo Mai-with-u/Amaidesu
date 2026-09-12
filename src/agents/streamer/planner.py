@@ -1,10 +1,10 @@
 """Planner - 主播 Agent 决策核心（ReAct 循环）
 
-职责（Agent 内脏，**不是工具**）：
+职责（Agent 内部件，**不是工具**）：
 - 决策主体：每个决策窗内跑一次有界 ReAct 循环——查信息（registry 工具）
   → 决定说不说 → 调 reply 局部工具收尾
 - reply 是循环内的局部工具（``tools/reply_tool.py`` 的 Provider 直连，
-  不进 ToolRegistry——Agent 内脏协议）
+  不进 ToolRegistry——Agent 内部件协议）
 - 自然终止（LLM 无工具调用）= 本轮不说话
 
 核心契约：
@@ -17,7 +17,7 @@
    质量敏感（乱调工具/意图偏差的代价高于延迟）。
 4. **工具面**：全局 ToolRegistry 动态拉取 + reply 局部工具 function 定义；
    过滤 provider=="streamer" 的 spec（Agent 内部协议防重入）。
-5. **观察喂回**：工具结果以 OpenAI ``tool`` role + ``tool_call_id`` 关联回灌。
+5. **观察作为观察返回**：工具结果以 OpenAI ``tool`` role + ``tool_call_id`` 关联重新写入。
 6. **有界循环**：``planner_max_steps``（默认 8）防失控；直播节奏要求快进快出。
 7. **降级安全**：LLM 异常 / 超步 / reply 不可用均产出 silent outcome（不抛异常）。
 
@@ -47,7 +47,6 @@ from src.modules.types.message_type import require_message_type
 
 from .room_state import RoomState, RoomStateSnapshot
 from .thinking_stream import ThinkingStreamContext
-from .tools.reply_tool import build_reply_tool_spec
 from .tools.rundown_tool import build_rundown_control_function_def
 
 __all__ = ["Planner"]
@@ -63,7 +62,7 @@ _RECALL_QUERY_BATCH_CHARS: int = 200
 #: 单条召回 hit 文本截断长度（控制 prompt 体积）。
 _RECALL_HIT_TEXT_CHARS: int = 80
 
-#: 单条工具观察喂回的最大字符数（超长观察截断，控上下文体积）。
+#: 单条工具观察作为观察返回的最大字符数（超长观察截断，控上下文体积）。
 _OBSERVATION_MAX_CHARS: int = 2000
 
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
@@ -93,8 +92,8 @@ class _PlannerConfig(BaseConfig):
 
 
 def _spec_to_fn_def(spec: Any) -> Dict[str, Any]:
-    """ToolSpec → OpenAI function def。"""
-    entry: Dict[str, Any] = {"name": spec.name, "description": spec.description}
+    """ToolSpec → OpenAI function def（name 用派生全名，与调用契约一致）。"""
+    entry: Dict[str, Any] = {"name": spec.full_name, "description": spec.description}
     if spec.parameters_schema is not None:
         entry["parameters"] = spec.parameters_schema
     return entry
@@ -148,7 +147,7 @@ class Planner:
                 ``async chat_messages(messages, tools=..., client_type=...) -> LLMResponse``。
             prompt_service: 提示词管理器，需提供 ``render_safe(name, **vars) -> str``。
             room_state: 直播间态势规则层实例。
-            tool_registry: 全局 ToolRegistry——ReAct 工具面来源（信息收集/动作工具）。
+            tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作工具）。
             memory: 记忆后端（鸭子类型 ``MemoryProvider``）；None 时无记忆决策。
             recall_top_k: 每轮注入 prompt 的最大命中条数。
             context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
@@ -206,7 +205,7 @@ class Planner:
     def bind_rundown_provider(self, provider: Any) -> None:
         """注入流程单控制 Provider（StreamerAgent 装配 RundownState 后绑定）。
 
-        绑定且流程单激活时，工具面追加 ``rundown_control``——Agent 自主推进环节。
+        绑定且流程单激活时，工具列表追加 ``rundown_control``——Agent 自主推进环节。
         """
         self._rundown_provider = provider
 
@@ -342,7 +341,7 @@ class Planner:
                     continue
                 outcome["tool_trace"].append(name)
 
-                if name == "reply":
+                if name == "streamer_reply":
                     observation, replied = await self._invoke_reply(args, outcome, thinking=thinking, round_id=round_id)
                 elif name == "rundown_control" and self._rundown_provider is not None:
                     observation = self._invoke_rundown_control(args)
@@ -463,24 +462,28 @@ class Planner:
         lines.append(context_block)
         return "\n".join(lines)
 
-    # ==================== 工具面与执行 ====================
+    # ==================== 工具列表与执行 ====================
 
     def _build_tool_face(self) -> List[Dict[str, Any]]:
-        """构造 LLM 工具面：reply + rundown_control 局部工具 + 全局 ToolRegistry（过滤内部协议）。"""
-        face: List[Dict[str, Any]] = [_spec_to_fn_def(build_reply_tool_spec())]
+        """LLM 工具列表 = 注册表按可见名单计算（for_agent="streamer"，ADR-012）。
+
+        唯一例外：rundown_control 是动态工具——按流程单激活状态条件追加
+        （注册表条目已在 for_agent 结果中，跳过防重）。
+        """
+        face: List[Dict[str, Any]] = []
         # 流程单激活时追加 rundown_control——环节推进是决策脑的职责（推进权归 Agent）
         if self._rundown_provider is not None and self._rundown_provider.is_active():
             face.append(build_rundown_control_function_def())
         if self._tool_registry is None:
             return face
         try:
-            specs = self._tool_registry.list_tools()
+            specs = self._tool_registry.list_tools(for_agent="streamer")
         except Exception as e:
-            self.logger.warning(f"Planner 拉取工具面失败（仅 reply 可用）: {e}")
+            self.logger.warning(f"Planner 拉取工具列表失败（本轮仅保留 rundown_control）: {e}")
             return face
         for spec in specs:
-            # streamer 内部协议工具（reply/proactive/command 等）不进决策面（防重入）
-            if getattr(spec, "provider", "") == "streamer":
+            # rundown_control 由上面的激活条件追加（动态工具的已知例外，防重复条目）
+            if getattr(spec, "provider", "") == "rundown":
                 continue
             face.append(_spec_to_fn_def(spec))
         return face
@@ -493,19 +496,23 @@ class Planner:
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
     ) -> tuple[str, bool]:
-        """执行 reply 局部工具；成功时把产出写进 outcome 并返回 (观察, replied=True)。
+        """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出写进 outcome 并返回 (观察, replied=True)。
 
-        thinking 提供时：调用前把 replyer 阶段回调设到 Provider 的临时槽位，
-        调用后立即清理（一次性语义，防跨轮残留）。
+        统一调用路径：reply 与其他工具一样经 ``registry.invoke``（观测/停用/
+        熔断复用既有机制，tool.result 事件照发）。thinking 回调槽位机制保留：
+        调用前把 replyer 阶段回调设到 Provider 的临时槽位，调用后立即清理
+        （一次性语义，防跨轮残留）——槽位挂在 Provider 实例上，不经注册表。
         """
-        if self._reply_provider is None:
-            return json.dumps({"ok": False, "error": "reply 工具不可用（Provider 未绑定）"}, ensure_ascii=False), False
+        if self._tool_registry is None:
+            return json.dumps(
+                {"ok": False, "error": "reply 工具不可用（tool_registry 未注入）"}, ensure_ascii=False
+            ), False
         set_thinking = getattr(self._reply_provider, "set_thinking_callback", None)
         try:
             if set_thinking is not None:
                 set_thinking(thinking.callback_for("replyer", 1) if thinking else None)
-            result = await self._reply_provider.invoke(
-                ToolInvocation(tool_name="reply", arguments=args, source="planner-react", round_id=round_id)
+            result = await self._tool_registry.invoke(
+                ToolInvocation(tool_name="streamer_reply", arguments=args, source="planner-react", round_id=round_id)
             )
         except Exception as e:
             self.logger.warning(f"reply 工具执行异常: {e}", exc_info=True)

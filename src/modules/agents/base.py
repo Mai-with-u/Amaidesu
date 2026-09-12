@@ -1,9 +1,9 @@
 """
-BaseAgent —— Agent 协议六面
+BaseAgent —— Agent 协议六项
 
 框架对 Agent 的**唯一要求**（最小契约）；Agent 内部完全自由。
 
-## 协议六面（最小契约）
+## 协议六项（最小契约）
 - 生命周期：start / stop / cleanup + 可重建性（工厂重建崩溃实例）
 - 工具提供：list_tools() → 声明暴露的工具
 - 事件上报：自由 emit + 可选声明事件族
@@ -98,6 +98,8 @@ class BaseAgent(abc.ABC):
         # 用子类声明的 name 初始化心跳（如未声明 → 防御用空串；Manager 拒绝）
         self._heartbeat = AgentHeartbeat(agent_name=self.name or "", last_heartbeat_ms=now_ms())
         self._restart_count: int = 0
+        # task.changed 唤醒订阅句柄（start 订阅 / stop 退订；None = 未订阅）
+        self._task_wakeup_handler: Any = None
         # 异步锁用于状态转移
         # 注：asyncio.Lock 在同步 __init__ 创建后，到第一次 await 才会在 loop 上绑定
         self._lock = asyncio.Lock()
@@ -120,6 +122,8 @@ class BaseAgent(abc.ABC):
             logger.error(f"Agent '{self.name}' 启动失败: {exc}", exc_info=True)
             raise
 
+        self._subscribe_task_wakeup()
+
         async with self._lock:
             self._state = AgentState.RUNNING
         self._heartbeat.last_heartbeat_ms = now_ms()
@@ -139,6 +143,8 @@ class BaseAgent(abc.ABC):
             logger.error(f"Agent '{self.name}' 停止失败: {exc}", exc_info=True)
             raise
 
+        self._unsubscribe_task_wakeup()
+
         async with self._lock:
             self._state = AgentState.STOPPED
         logger.info(f"Agent '{self.name}' 已停止")
@@ -157,6 +163,56 @@ class BaseAgent(abc.ABC):
     async def _on_stop(self) -> None:
         """子类停止钩子（优雅退出）"""
         return None  # 默认空操作：子类覆写
+
+    def receive_delegation(self, *, instruction: str, task_id: str) -> Optional[str]:
+        """接收委派入口（framework_delegate 调用；**默认拒收**）。
+
+        Returns:
+            拒收原因字符串（None = 已接收）。子类按需实现——典型做法：
+            指令入队 + 唤醒自己的执行循环 + 队列项携带任务号（供后续
+            把任务推进/终态写回任务记录表）。
+        """
+        return f"{self.name or type(self).__name__} 不接收委派（未实现接收入口或明确拒收）"
+
+    def on_task_notification(self, payload) -> None:
+        """任务变化通知钩子（``task.changed``，仅发起方是自己时被调）。
+
+        默认实现只记日志。子类覆写做**注入消息 + 唤醒**（把任务变化送进
+        自己的决策/执行循环；通知是提示，需要事实再查任务记录表）。
+        """
+        logger.debug(
+            f"Agent '{self.name}' 收到任务变化通知: task_id={getattr(payload, 'task_id', '?')} "
+            f"status={getattr(payload, 'status', '?')}"
+        )
+
+    def _subscribe_task_wakeup(self) -> None:
+        """订阅 ``task.changed``（start 尾部调用；按发起方过滤后派发钩子）。"""
+        if self._event_bus is None or self._task_wakeup_handler is not None:
+            return
+        from src.modules.events.names import CoreEvents
+        from src.modules.events.payloads.tasks import TaskChangedPayload
+
+        agent = self
+
+        async def _on_task_changed(event_name: str, payload: TaskChangedPayload, source: str) -> None:
+            if payload.initiator != agent.name:
+                return  # 只唤醒发起方（其他人任务的变化与本 Agent 无关）
+            agent.on_task_notification(payload)
+
+        self._task_wakeup_handler = _on_task_changed
+        self._event_bus.on(CoreEvents.TASK_CHANGED, _on_task_changed, model_class=TaskChangedPayload)
+
+    def _unsubscribe_task_wakeup(self) -> None:
+        """退订 ``task.changed``（stop 尾部调用；幂等）。"""
+        if self._event_bus is None or self._task_wakeup_handler is None:
+            return
+        from src.modules.events.names import CoreEvents
+
+        try:
+            self._event_bus.off(CoreEvents.TASK_CHANGED, self._task_wakeup_handler)
+        except Exception as exc:  # noqa: BLE001 - 退订失败不阻断停机
+            logger.warning(f"Agent '{self.name}' task.changed 退订异常（忽略）: {exc}")
+        self._task_wakeup_handler = None
 
     async def _on_cleanup(self) -> None:
         """子类资源清理钩子"""

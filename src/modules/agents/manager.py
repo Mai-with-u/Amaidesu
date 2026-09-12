@@ -245,25 +245,26 @@ class AgentManager:
     # -------------------- 工具审计 --------------------
 
     def audit_tools(self, registry: ToolRegistry) -> List[str]:
-        """审计：列出 Agent 已声明但 registry 未注册的工具名（纯只读）。
+        """审计：列出 Agent 已声明但 registry 未注册的工具（纯只读）。
 
-        遍历所有已注册 Agent 的 ``list_tools()`` 声明；对每个 spec name：
-        - 若 ``registry.has(name)`` 为 False，加入缺失列表。
-        - 若同名 spec 被 2+ 个 Agent 声明，记 warning，**不**在缺失列表中重复
+        遍历所有已注册 Agent 的 ``list_tools()`` 声明；对每个 spec 的
+        **派生全名**（``spec.full_name``）：
+        - 若 ``registry.has(full_name)`` 为 False，加入缺失列表。
+        - 若同全名被 2+ 个 Agent 声明，记 warning，**不**在缺失列表中重复
           （重复声明对"是否已注册"无影响）。
 
         Args:
             registry: 工具注册中心（实际项目里的 ``ToolRegistry`` 实例）。
 
         Returns:
-            排序后的缺失 spec name 列表（每个 name 至多出现一次）。
+            排序后的缺失工具全名列表（每个全名至多出现一次）。
 
         防御：
         - 若 ``agent.list_tools()`` 抛异常 → log warning + skip 该 Agent（不污染审计）。
         - 若 ``list_tools()`` 返回 ``None`` → 跳过该 Agent（不计入）。
         """
         missing: List[str] = []
-        # 跨 Agent 的同名声明追踪：name -> 首次声明的 Agent 注册名
+        # 跨 Agent 的同名声明追踪：全名 -> 首次声明的 Agent 注册名
         declared_by: Dict[str, str] = {}
 
         for agent_name, reg in self._agents.items():
@@ -280,17 +281,17 @@ class AgentManager:
                 continue
 
             for spec in spec_iter:
-                name = spec.name
-                first_agent = declared_by.get(name)
+                full_name = spec.full_name
+                first_agent = declared_by.get(full_name)
                 if first_agent is not None:
                     logger.warning(
-                        f"工具 '{name}' 被多个 Agent 声明：'{first_agent}' 与 "
+                        f"工具 '{full_name}' 被多个 Agent 声明：'{first_agent}' 与 "
                         f"'{agent_name}'；审计按首次声明记，重复声明不再计入缺失列表"
                     )
                     continue
-                declared_by[name] = agent_name
-                if not registry.has(name):
-                    missing.append(name)
+                declared_by[full_name] = agent_name
+                if not registry.has(full_name):
+                    missing.append(full_name)
 
         return sorted(missing)
 

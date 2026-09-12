@@ -10,9 +10,10 @@
 设计要点：
 - 纯函数：不依赖任何全局状态/kwargs 注入；便于单测，无需真实 server
 - **不含 server 特定知识**：只做类型层映射，不解析任何工具语义
-- 工具名**无条件**加前缀（``<server名>_``）：注册名铁定不与内置工具冲突，
-  也不依赖"原名是否已带前缀"的猜测；Provider 在 list_tools 时记录
-  注册名 → MCP 原名的映射表，调用时查表还原（不做任何字符串剥离）
+- 工具名存 **server 原始名**（``ToolSpec.name`` 不加前缀）；对外全名由
+  ``ToolSpec.full_name`` 派生（``<provider>_<原始名>``，provider 默认 =
+  server 名）。原名是否自带 server 前缀不影响正确性——调用 server 时
+  直接用 spec.name 原样回呼，无任何名字解析
 """
 
 from __future__ import annotations
@@ -22,51 +23,27 @@ from typing import Any, List
 from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolSpec
 
 
-def normalize_tool_name(raw_name: str, prefix: str) -> str:
-    """给 MCP 工具名**无条件**加前缀（防重名，不猜原名形态）。
-
-    Args:
-        raw_name: MCP 侧工具原名（无论是否已带 server 前缀，一律再加）
-        prefix: 前缀（通常为 ``<server名>_``）
-
-    Returns:
-        加前缀后的注册名（如 server 名=serverA、原名=serverA_perceive
-        → 注册名=serverA_serverA_perceive）
-
-    说明：
-        不做"已带前缀则跳过"的去重——那需要猜测原名形态，猜错即调用
-        失败（Unknown tool）。注册名与原名的对应关系由 Provider 的
-        映射表记录（见 McpToolProvider._name_map），注册名只要唯一
-        且可查表还原即可，形态不重要。
-    """
-    name = raw_name.strip()
-    if not prefix:
-        return name
-    return f"{prefix}{name}"
-
-
 def to_spec(
     tool: Any,
     *,
-    prefix: str,
     provider: str = "mcp",
 ) -> ToolSpec:
-    """把 mcp.types.Tool 转换为 ToolSpec。
+    """把 mcp.types.Tool 转换为 ToolSpec（声明名 = server 原始名）。
 
     Args:
         tool: mcp.types.Tool（有 name / description / inputSchema 属性）
-        prefix: 工具名前缀（见 normalize_tool_name）
-        provider: 来源标记（默认 "mcp"；内容层覆盖场景传 "game"）
+        provider: 提供者标识（默认 = server 名，如 "maicraft"；全名 =
+            ``<provider>_<原始名>`` 派生）
 
     Returns:
-        ToolSpec（kind="sync"：MCP 调用是请求-响应语义，无 fire-and-forget）
+        ``ToolSpec``（kind="sync"：MCP 调用是请求-响应语义，无 fire-and-forget）
     """
-    raw_name = getattr(tool, "name", "")
+    raw_name = str(getattr(tool, "name", "") or "")
     description = getattr(tool, "description", "") or ""
     input_schema = getattr(tool, "inputSchema", None) or None
 
     return ToolSpec(
-        name=normalize_tool_name(raw_name, prefix),
+        name=raw_name,
         description=description,
         parameters_schema=input_schema if isinstance(input_schema, dict) else None,
         kind="sync",
@@ -179,7 +156,6 @@ def to_result(
 
 
 __all__ = [
-    "normalize_tool_name",
     "to_spec",
     "to_result",
 ]

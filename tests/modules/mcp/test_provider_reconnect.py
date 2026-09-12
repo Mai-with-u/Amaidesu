@@ -83,7 +83,6 @@ class AnyConfig:
     env = {}
     args = []
     command = None
-    prefix = None
     enabled = True
     reconnect = True
     timeout_seconds = 30.0

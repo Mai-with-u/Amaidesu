@@ -100,10 +100,11 @@ class TestSimulatorWiring:
             config_service=config_service,
             dev_webui=False,
         )
-        # 组合根契约（create_app_components 返回元组，共 13 项）：
+        # 组合根契约（create_app_components 返回元组，共 14 项）：
         # 第 8 项 (index=7) 是 simulator_service；第 11 项 (index=10) 是 session_manager；
-        # 末尾两项 (index=11/12) 是工具系统重设计后追加的 tool_registry / health_monitor
-        assert len(result) == 13, f"组合根元组应返回 13 项，实际 {len(result)}"
+        # 末尾三项 (index=11/12/13) 是工具系统重设计后追加的
+        # tool_registry / health_monitor / task_tracker
+        assert len(result) == 14, f"组合根元组应返回 14 项，实际 {len(result)}"
         simulator_service = result[7]
         assert simulator_service is None, "enabled=false 时 simulator_service 应为 None（零装配）"
         session_manager = result[10]

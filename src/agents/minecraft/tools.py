@@ -1,19 +1,20 @@
-"""MinecraftAgent 局部工具（minecraft_send_prompt / minecraft_report / minecraft_todo /
-minecraft_notebook / minecraft_get_state）
+"""MinecraftAgent 局部工具（minecraft_report / minecraft_todo /
+minecraft_notebook / minecraft_get_work_log）
 
 工具归属约定（text_adv 同构）：
 - 局部工具（minecraft_todo / minecraft_notebook）= Agent 自己 LLM 用，驱动 ReAct 循环
   ——全量读写文档，无 id
-- 对外状态查询（minecraft_get_state）= 主播/外部经 ToolRegistry 调，只读——状态通道
-- 对外命令（minecraft_send_prompt）= 主播/外部经 ToolRegistry 调，**纯消息投递 + 唤醒**
-  ——主播是玩家 Agent 的用户（像给 Code Agent 发提示词）：派发/调整任务、回答问题、
-  补充要求；系统不代写 todo（目标分解是 LLM 用 minecraft_todo 自己做的事）
+- 对外工作文档读取（minecraft_get_work_log）= 主播经 ToolRegistry 调，只读——叙事素材通道
+- 跨 Agent 派活走框架委派原语（framework_delegate；原 minecraft_send_prompt
+  已退役，职能并入 Agent 的接收委派入口）——主播是玩家 Agent 的用户：
+  派发/调整任务、回答问题、补充要求；系统不代写 todo（目标分解是 LLM 用
+  minecraft_todo 自己做的事）
 - 局部上报（minecraft_report）= 玩家 Agent LLM 用：向主播交付总结（delivery）/
   升级决策（escalation）——玩家→主播唯一发声出口
 - provider="minecraft"（来源溯源：提供者=游戏 Agent 名全称，禁缩写）
 
-注册名由 ToolRegistry 自动拼接为 ``minecraft_<工具名>``（模块声明 provider，
-不在工具名里手写前缀）。
+对外全名由 ``ToolSpec.full_name`` 派生（``minecraft_<工具名>``，provider 即模块名），
+工具名里不手写前缀。
 
 全量读写设计（对齐内部 todo 工具 todowrite / edit 模式）：
 - read：返回当前文档全文
@@ -137,28 +138,6 @@ def build_notebook_spec() -> ToolSpec:
     )
 
 
-def build_send_prompt_spec() -> ToolSpec:
-    """``minecraft_send_prompt`` 工具规格——提示词通道（主播→玩家，纯消息投递 + 唤醒）"""
-    return ToolSpec(
-        name="send_prompt",
-        description=(
-            "给玩家 Agent 发送提示词（主播→玩家通道）。"
-            "用途：派发/调整任务、回答玩家的问题、补充要求。"
-            "提示词原文投递给玩家，由玩家自主理解并执行（分解/推进玩家自己决定）。"
-            "例：'挖 3 个钻石' / '先回基地补给，钻石稍后再挖'。"
-        ),
-        parameters_schema={
-            "type": "object",
-            "properties": {
-                "content": {"type": "string", "description": "提示词内容（目标级意图描述/回答/补充要求）"},
-            },
-            "required": ["content"],
-        },
-        kind="sync",
-        provider=PROVIDER_NAME,
-    )
-
-
 def build_report_spec() -> ToolSpec:
     """``minecraft_report`` 工具规格——上报通道（玩家→主播，交付/升级）"""
     return ToolSpec(
@@ -195,15 +174,16 @@ def build_report_spec() -> ToolSpec:
     )
 
 
-def build_get_state_spec() -> ToolSpec:
-    """``minecraft_get_state`` 工具规格——状态查询（状态通道，主播/外部只读调用）"""
+def build_get_work_log_spec() -> ToolSpec:
+    """``minecraft_get_work_log`` 工具规格——工作文档读服务（状态通道，主播只读调用）"""
     return ToolSpec(
-        name="get_state",
+        name="get_work_log",
         description=(
-            "只读查询 Minecraft 玩家当前状态快照："
+            "只读查询 Minecraft 玩家的工作文档："
             "todo（待办与进度）/ notebook（工作笔记）/ "
             "recent_reports（近期上报：交付与升级记录）。"
             "面向直播叙事——主播不需要自己记录游戏细节，按需查询即可。"
+            "本工具不查异步任务记录表；查任务进度用 framework_task_status。"
         ),
         parameters_schema={"type": "object", "properties": {}, "required": []},
         kind="sync",
@@ -229,26 +209,22 @@ class MinecraftToolProvider(BaseToolProvider):
     """MinecraftAgent 局部工具 Provider
 
     持有 :class:`MinecraftAgentState`，把"文档式工具"映射为状态读写；
-    ``send_prompt_callback`` 由 Agent 注入——minecraft_send_prompt 提示词经它
-    唤醒 Agent 任务执行（无 callback 时降级仅入队，供脱离 Agent 单测使用）。
     ``report_callback`` 由 Agent 注入——minecraft_report 上报经它发射事件并做
     交付门禁校验（返回拒绝原因字符串；None=受理）。
     """
 
     state: MinecraftAgentState
-    send_prompt_callback: Optional[Callable[[str], Any]] = None
     report_callback: Optional[ReportCallback] = None
 
     @property
     def name(self) -> str:
-        return "MinecraftProvider"
+        return PROVIDER_NAME
 
     def list_tools(self) -> Iterable[ToolSpec]:
         return [
             build_todo_spec(),
             build_notebook_spec(),
-            build_get_state_spec(),
-            build_send_prompt_spec(),
+            build_get_work_log_spec(),
             build_report_spec(),
         ]
 
@@ -257,29 +233,33 @@ class MinecraftToolProvider(BaseToolProvider):
         tool_name = invocation.tool_name
         args = dict(invocation.arguments or {})
 
-        # 注册名（minecraft_<name>）剥为声明名（<name>）：registry 分发到达的是注册名
-        if tool_name.startswith(f"{PROVIDER_NAME}_"):
-            tool_name = tool_name[len(f"{PROVIDER_NAME}_") :]
+        # 调用方使用的就是派生全名（minecraft_todo 等），按 spec 全名等值对照分发
+        local_specs = self.list_tools()
+        matched = next((s for s in local_specs if s.full_name == tool_name), None)
+        if matched is None:
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message=(
+                    f"未知工具: '{tool_name}'（MinecraftProvider 只提供 todo/notebook/get_work_log/report）"
+                ),
+                duration_ms=int(time.time() * 1000) - started_ms,
+            )
 
         try:
-            if tool_name == "todo":
+            if matched.name == "todo":
                 result = await self._invoke_todo(args)
-            elif tool_name == "notebook":
+            elif matched.name == "notebook":
                 result = await self._invoke_notebook(args)
-            elif tool_name == "get_state":
-                result = await self._invoke_get_state(args)
-            elif tool_name == "send_prompt":
-                result = await self._invoke_send_prompt(args)
-            elif tool_name == "report":
+            elif matched.name == "get_work_log":
+                result = await self._invoke_get_work_log(args)
+            elif matched.name == "report":
                 result = await self._invoke_report(args)
             else:
                 return ToolExecutionResult(
                     tool_name=tool_name,
                     success=False,
-                    error_message=(
-                        f"未知工具: '{tool_name}'"
-                        "（MinecraftProvider 只提供 todo/notebook/get_state/send_prompt/report）"
-                    ),
+                    error_message=f"未知工具: '{tool_name}'",
                     duration_ms=int(time.time() * 1000) - started_ms,
                 )
         except Exception as exc:  # noqa: BLE001 - 工具边界兜底
@@ -320,21 +300,8 @@ class MinecraftToolProvider(BaseToolProvider):
             return {"success": True, "content": self.state.notebook}
         return {"success": False, "error": f"未知 action: {action!r}"}
 
-    async def _invoke_get_state(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        return {"tool": "get_state", **self.state.to_dict()}
-
-    async def _invoke_send_prompt(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        content = str(args.get("content", ""))
-        if not content:
-            return {"success": False, "error": "send_prompt 需要 content 字符串"}
-        if self.send_prompt_callback is not None:
-            result = self.send_prompt_callback(content)
-            if hasattr(result, "__await__"):
-                await result
-        else:
-            # 降级仅记录（无 Agent 注入时消息不丢，但不会触发任务执行）
-            logger.warning("minecraft_send_prompt 无 send_prompt_callback：消息未投递")
-        return {"success": True, "delivered": True}
+    async def _invoke_get_work_log(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        return {"tool": "get_work_log", **self.state.to_dict()}
 
     async def _invoke_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
         kind = str(args.get("kind", ""))
@@ -358,8 +325,7 @@ __all__ = [
     "MinecraftToolProvider",
     "build_todo_spec",
     "build_notebook_spec",
-    "build_get_state_spec",
-    "build_send_prompt_spec",
+    "build_get_work_log_spec",
     "build_report_spec",
     "PROVIDER_NAME",
     "ReportCallback",

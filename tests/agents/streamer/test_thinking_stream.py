@@ -20,9 +20,11 @@ from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.modules.llm.manager import LLMResponse
 from src.modules.tools.models import ToolInvocation
 
+
 # ---------------------------------------------------------------------------
 # ThinkingStreamContext
 # ---------------------------------------------------------------------------
+
 
 class _RecordingSink:
     def __init__(self) -> None:
@@ -32,6 +34,7 @@ class _RecordingSink:
         self.calls.append(
             {"round_id": round_id, "phase": phase, "step": step, "seq": seq, "text_delta": text_delta}
         )
+
 
 def test_context_forwards_reasoning_with_increasing_seq():
     sink = _RecordingSink()
@@ -47,6 +50,7 @@ def test_context_forwards_reasoning_with_increasing_seq():
     ]
     assert all(c["round_id"] == "round_1" for c in sink.calls)
 
+
 def test_context_drops_content_and_empty_deltas():
     sink = _RecordingSink()
     ctx = ThinkingStreamContext(sink, round_id="round_1")
@@ -59,6 +63,7 @@ def test_context_drops_content_and_empty_deltas():
     assert len(sink.calls) == 1
     assert sink.calls[0]["text_delta"] == "思考"
 
+
 def test_context_replyer_phase_gets_step_1():
     sink = _RecordingSink()
     ctx = ThinkingStreamContext(sink, round_id="round_9")
@@ -69,9 +74,11 @@ def test_context_replyer_phase_gets_step_1():
     assert sink.calls[0]["step"] == 1
     assert sink.calls[0]["round_id"] == "round_9"
 
+
 # ---------------------------------------------------------------------------
 # Planner：thinking 透传到 chat_messages
 # ---------------------------------------------------------------------------
+
 
 def _make_planner() -> tuple[Planner, Dict[str, Any]]:
     llm = MagicMock()
@@ -89,12 +96,13 @@ def _make_planner() -> tuple[Planner, Dict[str, Any]]:
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
     planner = Planner(
-        config={"batch": {"batch_window_ms": 100, "tick_interval_ms": 50}, "planner_max_steps": 3},
+        config={"planner_llm": "llm_fast", "planner_max_steps": 3},
         llm_service=llm,
         prompt_service=prompt,
         room_state=MagicMock(),
     )
     return planner, captured
+
 
 @pytest.mark.asyncio
 async def test_planner_passes_thinking_callback_to_llm():
@@ -109,6 +117,7 @@ async def test_planner_passes_thinking_callback_to_llm():
     # LLM mock 内触发的 reasoning 增量经 context 组装到达 sink
     assert any(c["text_delta"] == "决策中思考" and c["phase"] == "planner" for c in sink.calls)
 
+
 @pytest.mark.asyncio
 async def test_planner_without_thinking_passes_none():
     planner, captured = _make_planner()
@@ -117,9 +126,11 @@ async def test_planner_without_thinking_passes_none():
 
     assert captured.get("on_delta") is None
 
+
 # ---------------------------------------------------------------------------
 # ReplyToolProvider：思考回调一次性槽位
 # ---------------------------------------------------------------------------
+
 
 def _make_provider_with_replyer_capture() -> tuple[ReplyToolProvider, Dict[str, Any]]:
     captured: Dict[str, Any] = {}
@@ -137,6 +148,7 @@ def _make_provider_with_replyer_capture() -> tuple[ReplyToolProvider, Dict[str, 
     )
     return provider, captured
 
+
 @pytest.mark.asyncio
 async def test_provider_sets_and_clears_thinking_callback():
     provider, captured = _make_provider_with_replyer_capture()
@@ -147,7 +159,7 @@ async def test_provider_sets_and_clears_thinking_callback():
     provider.set_thinking_callback(callback)
     result = await provider.invoke(
         ToolInvocation(
-            tool_name="reply",
+            tool_name="streamer_reply",
             arguments={"topic_summary": "s"},
             source="planner-react",
         )

@@ -5,7 +5,7 @@ ToolRegistry.reconnect_provider / provider_supports_reconnect 单测。
 - 未注册 provider_id → ok=False, error 含"未注册 Provider"
 - 已注册但不支持重连 → ok=False, error 含"不支持手动重连"
 - 重连失败 → ok=False, provider_id 透传
-- 重连成功 → ok=True，recovered 与 still_tripped 准确切片
+- 重连成功 → ok=True，recovered 与 still_tripped 准确分类
 
 附属覆盖：provider_supports_reconnect 三分支（BaseToolProvider 支持 / 不支持 / 非 BaseToolProvider）。
 """
@@ -37,7 +37,7 @@ class _ConnectableProvider(BaseToolProvider):
         return "conn"
 
     def list_tools(self):
-        return [ToolSpec(name="conn_a", description="a", kind="sync", provider="conn")]
+        return [ToolSpec(name="a", description="a", kind="sync", provider="conn")]
 
     async def invoke(self, invocation: ToolInvocation):
         from src.modules.tools.models import ToolExecutionResult

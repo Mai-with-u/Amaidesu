@@ -198,7 +198,7 @@ await event_bus.emit("room.message.danmaku", payload)
 
 ### 5.2 事件命名约定与常用常量
 
-v2 事件名按**语义域**组织（`live.*` / `room.message.*` / `game.*` / `agenda.*` / `planner.checkpoint` / `tool.result.#`），命名空间按"领域 / 主题 / 动作"点分，不掺阶段前缀：
+v2 事件名按**语义域**组织（`core.*` / `live.*` / `room.message.*` / `game.*` / `rundown.*` / `planner.*` / `streamer.*` / `tts.*`，外加 `tool.result.#` 通配），命名空间按"领域 / 主题 / 动作"点分，不掺阶段前缀：
 
 ```python
 class CoreEvents:
@@ -217,20 +217,27 @@ class CoreEvents:
     ROOM_MESSAGE_SUPER_CHAT = "room.message.super_chat"
     ROOM_MESSAGE_ENTER = "room.message.enter"
 
-    # game.* 游戏里程碑（低频、只发重大变化）
+    # game.* 游戏里程碑 / 上报（低频、只发重大变化）
     GAME_MILESTONE = "game.milestone"
     GAME_ATTENTION_REQUIRED = "game.attention_required"
     GAME_ERROR = "game.error"
+    GAME_REPORT = "game.report"
 
-    # agenda / planner 编排进度
-    AGENDA_UPDATE = "agenda.update"
-    PLANNER_CHECKPOINT = "planner.checkpoint"
+    # rundown / planner / streamer / tts
+    RUNDOWN_CHANGED = "rundown.changed"
+    PLANNER_DECISION = "planner.decision"
+    PLANNER_VERDICT = "planner.verdict"
+    STREAMER_STAGE = "streamer.stage"
+    STREAMER_SPEECH = "streamer.speech"
+    TTS_UTTERANCE_STARTED = "tts.utterance.started"
+    TTS_UTTERANCE_FINISHED = "tts.utterance.finished"
+    TTS_UTTERANCE_FAILED = "tts.utterance.failed"
 
     # 异步工具结果通配订阅模式（emit 用具体名，如 "tool.result.speak"）
     TOOL_RESULT_WILDCARD = "tool.result.#"
 ```
 
-> 完整常量表（含订阅者/Payload 形状）见 [事件系统](architecture/event-system.md#核心事件)。
+> 完整常量表（含订阅者/Payload 形状）见 [事件系统](architecture/event-system.md#事件事实表)。
 
 ### 5.3 事件 Payload 要求
 
@@ -264,7 +271,7 @@ class ToolResultPayload(BaseModel):
 
 ### 6.1 架构约束：数据流与边界规则
 
-严格遵守单向数据流：**采集器 emit 语义域事件 → Agent 订阅消费 → 工具被调用 → 结果通过 `tool.result.#` 通配事件回传**（结果不回灌采集器，也不经工具推事件回流 Agent）。
+严格遵守单向数据流：**采集器 emit 语义域事件 → Agent 订阅消费 → 工具被调用 → 结果通过 `tool.result.#` 通配事件回传**（结果不重新写入采集器，也不经工具推事件回流 Agent）。
 
 | 禁止模式 | 说明 |
 |---------|------|

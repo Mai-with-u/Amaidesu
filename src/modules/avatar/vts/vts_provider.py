@@ -25,7 +25,9 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from pydantic import Field
 
+from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
@@ -163,10 +165,64 @@ class VTSProvider(BaseToolProvider):
         "head_x": ("HeadAngleX", "HeadX", "FaceAngleX", "FaceX", "NeckAngleX"),
         "head_y": ("HeadAngleY", "HeadY", "FaceAngleY", "FaceY", "NeckAngleY"),
         "head_z": ("HeadAngleZ", "HeadZ", "FaceAngleZ", "FaceZ", "NeckAngleZ"),
-        "body_x": ("BodyAngleX", "BodyX", "BodyRotationX", "TorsoAngleX", "BodyPositionX"),
-        "body_y": ("BodyAngleY", "BodyY", "BodyRotationY", "TorsoAngleY", "BodyPositionY"),
-        "body_z": ("BodyAngleZ", "BodyZ", "BodyRotationZ", "TorsoAngleZ", "BodyPositionZ"),
+        "body_x": ("BodyAngleX", "BodyX", "BodyRotationX", "torsoAngleX", "BodyPositionX"),
+        "body_y": ("BodyAngleY", "BodyY", "BodyRotationY", "torsoAngleY", "BodyPositionY"),
+        "body_z": ("BodyAngleZ", "BodyZ", "BodyRotationZ", "torsoAngleZ", "BodyPositionZ"),
     }
+
+    class ConfigSchema(BaseConfig):
+        """VTS 配置（连接 + LipSync + Idle 三大段）
+
+        TOML 段位：[tools.avatar.vts].config
+
+        说明：vts 字段多沿用历史命名（如 ``*_ms`` 实际单位是 float 秒）；
+        本批保持行为保真（默认值 + 类型逐一等价），不顺手改单位/命名。
+        """
+
+        type: str = "vts"
+        # 连接
+        vts_host: str = Field(default="localhost", description="VTS WebSocket 主机地址")
+        vts_port: int = Field(default=8001, ge=1, le=65535, description="VTS WebSocket 端口")
+        lip_sync_enabled: bool = Field(default=True, description="是否启用 LipSync")
+        sample_rate: int = Field(default=16000, ge=8000, le=48000, description="LipSync 采样率 Hz")
+        # LipSync 详细（命名 *_ms 实际单位 = float 秒，行为保真）
+        volume_threshold: float = Field(default=0.01, ge=0.0, description="LipSync 音量阈值")
+        smoothing_factor: float = Field(default=0.3, ge=0.0, le=1.0, description="LipSync 平滑系数")
+        vowel_detection_sensitivity: float = Field(default=0.5, ge=0.0, le=1.0, description="LipSync 元音检测灵敏度")
+        volume_gain: float = Field(default=1.0, ge=0.0, description="LipSync 音量增益")
+        max_mouth_open: float = Field(default=0.6, ge=0.0, le=1.0, description="LipSync 最大张嘴度")
+        silence_threshold: float = Field(default=0.02, ge=0.0, description="LipSync 静音阈值")
+        close_mouth_threshold: float = Field(default=0.06, ge=0.0, description="LipSync 闭嘴阈值（低于此值触发闭嘴）")
+        power_curve: float = Field(default=1.0, ge=0.0, description="LipSync 功率曲线指数")
+        vowel_open_weight: float = Field(default=0.5, ge=0.0, description="LipSync 元音张嘴权重")
+        update_interval_ms: float = Field(default=30.0, ge=0.0, description="LipSync 更新间隔（秒；命名沿用）")
+        mouth_open_lerp_speed: float = Field(default=0.35, ge=0.0, description="LipSync 张嘴插值速度")
+        vowel_decay: float = Field(default=0.4, ge=0.0, description="LipSync 元音衰减")
+        min_mouth_delta: float = Field(default=0.005, ge=0.0, description="LipSync 最小张嘴变化阈值")
+        base_smile: float = Field(default=0.3, ge=-1.0, le=1.0, description="MouthSmile 静止基线值")
+        # Idle 运动
+        idle_enabled: bool = Field(default=True, description="是否启用 Idle 拟人动画")
+        idle_param_head_x: str = Field(default="HeadAngleX", description="Idle 头部 X 参数名")
+        idle_param_head_y: str = Field(default="HeadAngleY", description="Idle 头部 Y 参数名")
+        idle_param_head_z: str = Field(default="HeadAngleZ", description="Idle 头部 Z 参数名")
+        idle_param_body_x: str = Field(default="BodyX", description="Idle 身体 X 参数名")
+        idle_param_body_y: str = Field(default="BodyY", description="Idle 身体 Y 参数名")
+        idle_param_body_z: str = Field(default="BodyZ", description="Idle 身体 Z 参数名")
+        idle_head_amplitude: float = Field(default=0.05, ge=0.0, description="Idle 头部摆动幅度")
+        idle_body_amplitude: float = Field(default=0.02, ge=0.0, description="Idle 身体摆动幅度")
+        idle_speed: float = Field(default=1.0, ge=0.0, description="Idle 摆动速度系数")
+        idle_update_interval_ms: float = Field(default=40.0, ge=0.0, description="Idle 更新间隔（秒；命名沿用）")
+        idle_fade_speed: float = Field(default=0.15, ge=0.0, description="Idle 渐变速度")
+        idle_head_enabled: bool = Field(default=True, description="Idle 头部摆动开关")
+        idle_body_enabled: bool = Field(default=True, description="Idle 身体摆动开关")
+        idle_pause_while_speaking: bool = Field(default=False, description="Idle 说话时是否暂停摆动")
+        # 动态键：Idle 额外参数集（人类登记的额外参数名+速度；类似 MCP servers 动态键例外）
+        idle_extra_params: Dict[str, float] = Field(
+            default_factory=dict,
+            description="Idle 额外参数 {参数名: 目标值}，人类配置预声明",
+        )
+        # Optional[float] 历史兼容 → 按 §1② 转空值不可表达，保留字段类型 Optional 但默认 None
+        idle_extra_speed: Optional[float] = Field(default=None, description="Idle 额外参数速度（None=不额外调整）")
 
     def __init__(
         self,
@@ -178,10 +234,17 @@ class VTSProvider(BaseToolProvider):
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)
 
-        self.vts_host: str = config.get("vts_host", "localhost")
-        self.vts_port: int = int(config.get("vts_port", 8001))
-        self.lip_sync_enabled: bool = bool(config.get("lip_sync_enabled", True))
-        self.sample_rate: int = int(config.get("sample_rate", 16000))
+        # 配置（typed；空 dict = 全默认；失败 log+raise）
+        try:
+            self.typed_config = self.ConfigSchema.from_dict(config)
+        except Exception as e:
+            self.logger.error(f"配置验证失败: {e}")
+            raise
+
+        self.vts_host: str = self.typed_config.vts_host
+        self.vts_port: int = self.typed_config.vts_port
+        self.lip_sync_enabled: bool = self.typed_config.lip_sync_enabled
+        self.sample_rate: int = self.typed_config.sample_rate
 
         self._emotion_map = {
             "happy": {"MouthSmile": 1.0},
@@ -206,27 +269,27 @@ class VTSProvider(BaseToolProvider):
         self.render_count = 0
         self.error_count = 0
 
-        # 子组件
+        # 子组件（消费侧 typed 化：self.typed_config.<field> 替代裸 config.get）
         self.lip_sync = LipSyncProcessor(
             logger_name=f"{self.__class__.__name__}.LipSync",
             sample_rate=self.sample_rate,
-            volume_threshold=float(config.get("volume_threshold", 0.01)),
-            smoothing_factor=float(config.get("smoothing_factor", 0.3)),
-            vowel_detection_sensitivity=float(config.get("vowel_detection_sensitivity", 0.5)),
+            volume_threshold=self.typed_config.volume_threshold,
+            smoothing_factor=self.typed_config.smoothing_factor,
+            vowel_detection_sensitivity=self.typed_config.vowel_detection_sensitivity,
             vts_set_parameter=self._expression_set_param_proxy,
             is_connected=lambda: self._is_connected,
-            volume_gain=float(config.get("volume_gain", 1.0)),
-            max_mouth_open=float(config.get("max_mouth_open", 0.6)),
-            silence_threshold=float(config.get("silence_threshold", 0.02)),
-            close_mouth_threshold=float(config.get("close_mouth_threshold", 0.06)),
-            power_curve=float(config.get("power_curve", 1.0)),
-            vowel_open_weight=float(config.get("vowel_open_weight", 0.5)),
-            update_interval_ms=float(config.get("update_interval_ms", 30.0)),
-            mouth_open_lerp_speed=float(config.get("mouth_open_lerp_speed", 0.35)),
-            vowel_decay=float(config.get("vowel_decay", 0.4)),
-            min_mouth_delta=float(config.get("min_mouth_delta", 0.005)),
+            volume_gain=self.typed_config.volume_gain,
+            max_mouth_open=self.typed_config.max_mouth_open,
+            silence_threshold=self.typed_config.silence_threshold,
+            close_mouth_threshold=self.typed_config.close_mouth_threshold,
+            power_curve=self.typed_config.power_curve,
+            vowel_open_weight=self.typed_config.vowel_open_weight,
+            update_interval_ms=self.typed_config.update_interval_ms,
+            mouth_open_lerp_speed=self.typed_config.mouth_open_lerp_speed,
+            vowel_decay=self.typed_config.vowel_decay,
+            min_mouth_delta=self.typed_config.min_mouth_delta,
             expression_rest_values={
-                self.PARAM_MOUTH_SMILE: float(config.get("base_smile", 0.3)),
+                self.PARAM_MOUTH_SMILE: self.typed_config.base_smile,
                 self.PARAM_EYE_OPEN_LEFT: 1.0,
                 self.PARAM_EYE_OPEN_RIGHT: 1.0,
             },
@@ -246,26 +309,26 @@ class VTSProvider(BaseToolProvider):
             is_connected=lambda: self._is_connected,
             is_speaking=lambda: self.lip_sync.is_speaking,
             set_parameter=self._idle_set_param_proxy,
-            param_head_x=str(config.get("idle_param_head_x", "HeadAngleX")),
-            param_head_y=str(config.get("idle_param_head_y", "HeadAngleY")),
-            param_head_z=str(config.get("idle_param_head_z", "HeadAngleZ")),
-            param_body_x=str(config.get("idle_param_body_x", "BodyX")),
-            param_body_y=str(config.get("idle_param_body_y", "BodyY")),
-            param_body_z=str(config.get("idle_param_body_z", "BodyZ")),
-            head_amplitude=float(config.get("idle_head_amplitude", 0.05)),
-            body_amplitude=float(config.get("idle_body_amplitude", 0.02)),
-            speed=float(config.get("idle_speed", 1.0)),
-            update_interval_ms=float(config.get("idle_update_interval_ms", 40.0)),
-            fade_speed=float(config.get("idle_fade_speed", 0.15)),
-            head_enabled=bool(config.get("idle_head_enabled", True)),
-            body_enabled=bool(config.get("idle_body_enabled", True)),
-            speech_pause_enabled=bool(config.get("idle_pause_while_speaking", False)),
-            extra_params=config.get("idle_extra_params", {}) or {},
-            extra_speed=config.get("idle_extra_speed", None),
+            param_head_x=self.typed_config.idle_param_head_x,
+            param_head_y=self.typed_config.idle_param_head_y,
+            param_head_z=self.typed_config.idle_param_head_z,
+            param_body_x=self.typed_config.idle_param_body_x,
+            param_body_y=self.typed_config.idle_param_body_y,
+            param_body_z=self.typed_config.idle_param_body_z,
+            head_amplitude=self.typed_config.idle_head_amplitude,
+            body_amplitude=self.typed_config.idle_body_amplitude,
+            speed=self.typed_config.idle_speed,
+            update_interval_ms=self.typed_config.idle_update_interval_ms,
+            fade_speed=self.typed_config.idle_fade_speed,
+            head_enabled=self.typed_config.idle_head_enabled,
+            body_enabled=self.typed_config.idle_body_enabled,
+            speech_pause_enabled=self.typed_config.idle_pause_while_speaking,
+            extra_params=dict(self.typed_config.idle_extra_params),
+            extra_speed=self.typed_config.idle_extra_speed,
         )
-        self.idle_motion.set_baseline_params({self.PARAM_MOUTH_SMILE: float(config.get("base_smile", 0.3))})
+        self.idle_motion.set_baseline_params({self.PARAM_MOUTH_SMILE: self.typed_config.base_smile})
 
-        self.idle_enabled_cfg = bool(config.get("idle_enabled", True))
+        self.idle_enabled_cfg = self.typed_config.idle_enabled
 
     # ===== ToolProvider 协议 =====
 
@@ -277,80 +340,80 @@ class VTSProvider(BaseToolProvider):
         """声明本 Provider 暴露的工具列表（热键描述按连接状态动态携带可用清单）"""
         return [
             ToolSpec(
-                name="vts_smile",
+                name="smile",
                 description="设置 VTS MouthSmile 表情参数",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_SMILE_SCHEMA,
             ),
             ToolSpec(
-                name="vts_close_eyes",
+                name="close_eyes",
                 description="VTS 闭眼动作（EyeOpenLeft/Right=0）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
             ),
             ToolSpec(
-                name="vts_open_eyes",
+                name="open_eyes",
                 description="VTS 睁眼动作（EyeOpenLeft/Right=1）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
             ),
             ToolSpec(
-                name="vts_set_expression",
+                name="set_expression",
                 description="VTS 批量设置表情参数（multi-parameter 写入）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_SET_EXPRESSION_SCHEMA,
             ),
             ToolSpec(
-                name="vts_set_parameter_value",
+                name="set_parameter_value",
                 description="VTS 设置单个参数值",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_SET_PARAMETER_SCHEMA,
             ),
             ToolSpec(
-                name="vts_get_parameter_value",
+                name="get_parameter_value",
                 description="VTS 读取参数当前值",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_GET_PARAMETER_SCHEMA,
             ),
             ToolSpec(
-                name="vts_trigger_hotkey",
+                name="trigger_hotkey",
                 description="VTS 触发热键（按热键名 name 优先，hotkey_id 兜底）" + self._hotkey_catalog_summary(),
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_TRIGGER_HOTKEY_SCHEMA,
             ),
             ToolSpec(
-                name="vts_load_item",
+                name="load_item",
                 description="VTS 加载道具（VTube Studio ItemLoadRequest）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_LOAD_ITEM_SCHEMA,
             ),
             ToolSpec(
-                name="vts_load_sticker",
+                name="load_sticker",
                 description="VTS 加载贴纸文件（file_name 为 VTS 可访问路径）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
             ),
             ToolSpec(
-                name="vts_set_idle_enabled",
+                name="set_idle_enabled",
                 description="VTS 启停 idle 拟人动画",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_SET_IDLE_SCHEMA,
             ),
             ToolSpec(
-                name="vts_reconnect",
+                name="reconnect",
                 description="手动触发 VTS 重连循环",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
             ),
             ToolSpec(
-                name="vts_get_stats",
+                name="get_stats",
                 description="读取 VTS 状态统计信息",
                 kind="sync",
                 provider=self.PROVIDER_NAME,

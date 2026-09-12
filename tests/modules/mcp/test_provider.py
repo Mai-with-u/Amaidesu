@@ -1,8 +1,9 @@
 """McpToolProvider 单测：缓存 specs + invoke 转发
 
 mock McpClient（不发真实网络请求）——验证：
-- setup() 预拉工具列表 → list_tools() 同步返回缓存
-- invoke() 剥前缀转发、结果映射、未知工具失败、未连接降级
+- setup() 预拉工具列表 → list_tools() 同步返回缓存（声明名 = server 原始名）
+- invoke() 按派生全名对照 spec、原始名直呼 server、结果映射、未知工具失败、未连接降级
+- provider 单名：name = provider（默认 server 名，可显式覆盖）
 """
 
 from __future__ import annotations
@@ -66,9 +67,12 @@ class FakeMcpClient(McpClient):
         self._connected = False
 
 
-def _provider(server_name: str = "serverA", prefix: Optional[str] = None) -> tuple[FakeMcpClient, McpToolProvider]:
+def _provider(
+    server_name: str = "serverA",
+    provider: Optional[str] = None,
+) -> tuple[FakeMcpClient, McpToolProvider]:
     client = FakeMcpClient(name=server_name, config=AnyConfig())
-    prov = McpToolProvider(client=client, server_name=server_name, prefix=prefix)
+    prov = McpToolProvider(client=client, server_name=server_name, provider=provider)
     return client, prov
 
 
@@ -79,7 +83,6 @@ class AnyConfig:
     env = {}
     args = []
     command = None
-    prefix = None
     enabled = True
     reconnect = True
     timeout_seconds = 30.0
@@ -97,7 +100,9 @@ class TestProvider:
         count = await prov.setup()
         assert count == 2
         specs = list(prov.list_tools())
-        assert [s.name for s in specs] == ["serverA_perceive", "serverA_execute"]
+        # 声明名 = server 原始名；对外全名派生 <provider>_<原始名>
+        assert [s.name for s in specs] == ["perceive", "execute"]
+        assert [s.full_name for s in specs] == ["serverA_perceive", "serverA_execute"]
         assert specs[0].provider == "serverA"
         assert specs[1].parameters_schema == {"type": "object"}
 
@@ -108,7 +113,7 @@ class TestProvider:
         assert count == 0
         assert list(prov.list_tools()) == []
 
-    async def test_invoke_resolves_raw_name_via_map(self) -> None:
+    async def test_invoke_calls_server_with_raw_name(self) -> None:
         client, prov = _provider()
         client.set_tools([FakeTool("perceive", "观察")])
         await prov.setup()
@@ -118,14 +123,15 @@ class TestProvider:
         assert client.called == [{"name": "perceive", "arguments": {"view": "situation"}}]
         assert result.structured_content == {"raw": "perceive"}
 
-    async def test_invoke_raw_name_already_prefixed_resolved_via_map(self) -> None:
-        # 回归：MaiCraft server 工具原名自带 maicraft_ 前缀，旧 strip 逻辑
-        # 把注册名剥成 perceive → server 报 Unknown tool；现在无条件加前缀
-        # + 映射表查表还原，原名形态不再影响调用
+    async def test_invoke_raw_name_already_prefixed_kept_as_is(self) -> None:
+        # 回归：MaiCraft server 工具原名自带 maicraft_ 前缀。声明名原样保留
+        # （不做任何前缀拼接/解析）；调用 server 时用原始名直呼
         client, prov = _provider()
         client.set_tools([FakeTool("maicraft_perceive", "观察")])
         await prov.setup()
-        assert list(prov.list_tools())[0].name == "serverA_maicraft_perceive"
+        spec = list(prov.list_tools())[0]
+        assert spec.name == "maicraft_perceive"
+        assert spec.full_name == "serverA_maicraft_perceive"
 
         result = await prov.invoke(ToolInvocation(tool_name="serverA_maicraft_perceive"))
         assert result.success is True
@@ -162,12 +168,14 @@ class TestProvider:
         await prov.close()
         assert client.closed is True
 
-    async def test_provider_name(self) -> None:
+    async def test_provider_name_defaults_to_server_name(self) -> None:
         _, prov = _provider()
-        assert prov.name == "McpProvider:serverA"
+        assert prov.name == "serverA"
 
-    async def test_custom_prefix(self) -> None:
-        client, prov = _provider(prefix="mc_")
+    async def test_provider_name_overridable(self) -> None:
+        client, prov = _provider(provider="game")
         client.set_tools([FakeTool("perceive", "观察")])
         await prov.setup()
-        assert list(prov.list_tools())[0].name == "mc_perceive"
+        # 覆盖 provider → 单名与全名前缀随之改变
+        assert prov.name == "game"
+        assert list(prov.list_tools())[0].full_name == "game_perceive"

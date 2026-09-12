@@ -1,16 +1,16 @@
 """TextAdvGameAgent —— 文字冒险游戏 Agent
 
 设计：
-- 继承 ``BaseAgent``（协议六面全部实现）
+- 继承 ``BaseAgent``（协议六项全部实现）
 - 构造注入依赖（llm/prompt/event_bus/tool_registry/content_engine/...）
 - 自带 Agent 专属工具（``text_adv_choose_option`` / ``text_adv_get_story``），provider="text_adv"
 - 复用公用感知工具（注册名 ``vision_look_at_screen``，provider="vision"）—— 通过 ToolRegistry 调
-- 复用公用 content_engine 控制面（provider="content_engine"）
+- 内容引擎（ContentEngine）为包内私有接口：构造注入，Agent 与工具直连调用，不经工具注册表
 - 内部状态 ``TextAdvGameAgentState``（内容状态内部自由）
 - 感知-决策-推进闭环：``on_state_change`` → vision_look_at_screen → decide → text_adv_choose_option
 - 不继承任何"组合式引擎"（无组合式引擎定案）
 
-协议六面（最小契约）：
+协议六项（最小契约）：
 - 生命周期：start/stop/cleanup（默认实现）
 - 工具提供：list_tools() → text_adv_choose_option + text_adv_get_story（provider="text_adv"）
 - 事件上报：emit game.milestone / game.attention_required / game.error
@@ -32,7 +32,6 @@ from src.modules.logging import get_logger
 from src.modules.tools import ToolSpec
 from src.agents.text_adv.content_engine import (
     ContentEngine,
-    ContentEngineProvider,
     StubContentEngine,
 )
 from src.modules.tools.models import ToolInvocation
@@ -117,8 +116,6 @@ class TextAdvGameAgent(BaseAgent):
 
         # ToolProvider 实例（在 _on_start 中注册进 ToolRegistry）
         self._game_provider: Optional[TextAdvToolProvider] = None
-        # ContentEngineProvider（若用户没注册则由本 Agent 代为注册）
-        self._content_engine_provider: Optional[ContentEngineProvider] = None
 
         # 统计
         self._step_count = 0
@@ -140,7 +137,6 @@ class TextAdvGameAgent(BaseAgent):
         # 注册 Agent 专属工具（text_adv_choose_option / text_adv_get_story）
         if self._tool_registry is not None:
             self._register_tools()
-            self._register_content_engine()
 
         # 启动 content_engine（如果未启动）
         await self._safe_engine_start()
@@ -163,7 +159,7 @@ class TextAdvGameAgent(BaseAgent):
         return [build_choose_option_spec(), build_get_story_spec()]
 
     def _register_tools(self) -> None:
-        """注册 Agent 专属工具 + ContentEngine 控制面到 ToolRegistry。"""
+        """注册 Agent 专属工具到 ToolRegistry。"""
         if self._tool_registry is None:
             return
         self._game_provider = TextAdvToolProvider(
@@ -172,17 +168,6 @@ class TextAdvGameAgent(BaseAgent):
         )
         self._tool_registry.register_provider(self._game_provider)
         self._logger.info("TextAdvGameAgent 工具已注册：text_adv_choose_option / text_adv_get_story")
-
-    def _register_content_engine(self) -> None:
-        """注册 ContentEngine 控制面（若用户没自己注册）。"""
-        if self._tool_registry is None:
-            return
-        # 仅在 content_engine_* 工具尚未注册时才注册
-        if self._tool_registry.has("content_engine_send_input"):
-            return
-        self._content_engine_provider = ContentEngineProvider(engine=self._content_engine)
-        self._tool_registry.register_provider(self._content_engine_provider)
-        self._logger.info("TextAdvGameAgent 已代注册 ContentEngine 控制面")
 
     async def _safe_engine_start(self) -> None:
         """启动 content_engine（捕获异常，不阻断 Agent 启动）。"""

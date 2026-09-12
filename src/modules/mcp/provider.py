@@ -3,10 +3,12 @@
 实现 ``ToolProvider`` Protocol：
 - ``list_tools()``：同步返回缓存的 ToolSpec 列表（MCP list_tools 是 async，
   与 Provider 协议同步签名之间的阻抗通过**连接时预拉缓存**化解）
-- ``invoke()``：查映射表还原 MCP 原名 → 转发到 MCP client → 映射结果；
-  永远不抛异常
+- ``invoke()``：按派生全名找到 spec → 用 spec.name（server 原始名）直呼
+  server → 映射结果；永远不抛异常
 
-## 可见性语义（★ 关键设计）
+## 命名模型
+- spec.name 存 **server 原始名**；对外全名 = ``<provider>_<原始名>``
+  （``ToolSpec.full_name`` 唯一派生实现，无映射表、无名字解析）
 - ``provider`` 默认 = server 名（如 maicraft → "maicraft"）：注册后工具进入
   全局 ToolRegistry，任何 Agent（主播 / 游戏）通过 ``registry.invoke()``
   均可调用——与 Claude Code 的 MCP 插件语义一致："看到"即"可调"。
@@ -16,8 +18,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.mcp import mapper
@@ -33,9 +36,14 @@ class McpToolProvider(BaseToolProvider):
 
     Attributes:
         server_name: MCP server 别名（来自配置 key）
-        prefix: 工具名前缀（默认 ``<server_name>_``）
-        provider: 注册来源标记（默认 = server 名，如 "maicraft"；
-            可显式覆盖如 "game"）
+        provider: 提供者短名（默认 = server 名，如 "maicraft"；可显式覆盖）。
+            与 ``name`` 属性同值，与全部 spec 的 ``provider`` 同值同源
+        task_query_tool: 可选——server 侧任务查询工具的**全名**（声明
+            适配器时由绑定处传入）；提供后 ``query_task`` 经该工具查快照
+        task_status_map: 可选——server 原始状态 → 任务词表状态的映射
+            （绑定处声明，server 特有知识不进本类）
+        attention_uri: 可选——任务通知资源 URI（如 ``maicraft://attention``）；
+            提供后 ``subscribe_task_notifications`` 订阅该资源
     """
 
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
@@ -46,23 +54,24 @@ class McpToolProvider(BaseToolProvider):
         *,
         client: McpClient,
         server_name: str,
-        prefix: Optional[str] = None,
         provider: Optional[str] = None,
+        task_query_tool: Optional[str] = None,
+        task_status_map: Optional[dict] = None,
+        attention_uri: Optional[str] = None,
     ) -> None:
         self._client = client
         self.server_name = server_name
-        self.prefix = prefix or f"{server_name}_"
         self._provider = provider or server_name
+        self._task_query_tool = task_query_tool
+        self._task_status_map = dict(task_status_map) if task_status_map else None
+        self._attention_uri = attention_uri
         self._specs: List[ToolSpec] = []
-        # 注册名 → MCP 原名（setup 时从 list_tools 记录；调用时查表还原，
-        # 不做任何字符串剥离——原名可能自带 server 前缀，剥错即 Unknown tool）
-        self._name_map: dict = {}
         self._synced = False
 
     @property
     def name(self) -> str:
-        """Provider 标识（日志/去重用）。"""
-        return f"McpProvider:{self.server_name}"
+        """提供者短名（与 spec.provider 同值同源；日志/重连键用）。"""
+        return self._provider
 
     async def setup(self) -> int:
         """连接并预拉工具列表 → 填充缓存 specs（装配时调用一次）。
@@ -78,18 +87,10 @@ class McpToolProvider(BaseToolProvider):
                 self._synced = True
                 return 0
         tools = await self._client.list_tools()
-        self._specs = []
-        self._name_map = {}
-        for t in tools:
-            raw_name = getattr(t, "name", "")
-            spec = mapper.to_spec(t, prefix=self.prefix, provider=self._provider)
-            self._specs.append(spec)
-            if raw_name:
-                self._name_map[spec.name] = raw_name
+        self._specs = [mapper.to_spec(t, provider=self._provider) for t in tools]
         self._synced = True
         logger.info(
-            f"MCP Provider '{self.server_name}' 工具缓存就绪（{len(self._specs)} 个，"
-            f"prefix='{self.prefix}', provider={self._provider}）"
+            f"MCP Provider '{self.server_name}' 工具缓存就绪（{len(self._specs)} 个，provider={self._provider}）"
         )
         return len(self._specs)
 
@@ -98,13 +99,13 @@ class McpToolProvider(BaseToolProvider):
         return list(self._specs)
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        """执行 MCP 工具：查映射表还原原名 → 转发 → 映射结果。永远不抛异常。"""
+        """执行 MCP 工具：按派生全名对照 spec → 原始名直呼 server。永远不抛异常。"""
         started_ms = int(time.time() * 1000)
         full_name = invocation.tool_name
 
         # 前置检查：工具是否属于本 Provider（不知道的工具 → 失败结果，不抛）
-        mcp_name = self._name_map.get(full_name)
-        if mcp_name is None:
+        spec = next((s for s in self._specs if s.full_name == full_name), None)
+        if spec is None:
             return ToolExecutionResult(
                 tool_name=full_name,
                 success=False,
@@ -116,7 +117,8 @@ class McpToolProvider(BaseToolProvider):
         from fastmcp.exceptions import ToolError
 
         try:
-            result = await self._client.call_tool(mcp_name, dict(invocation.arguments or {}))
+            # spec.name = server 原始名，原样直呼（无任何名字解析）
+            result = await self._client.call_tool(spec.name, dict(invocation.arguments or {}))
         except ToolError as exc:
             # server 业务错误透传给调用方（LLM 据此自纠）；连接由 client 层保持，不断开
             duration_ms = int(time.time() * 1000) - started_ms
@@ -132,6 +134,67 @@ class McpToolProvider(BaseToolProvider):
     async def close(self) -> None:
         """关闭底层连接（幂等）。"""
         await self._client.close()
+
+    # ----- 任务适配器（可选；绑定处声明，见构造参数） -----
+
+    async def query_task(self, task_id: str) -> Optional[dict]:
+        """查询适配器：经任务查询工具（``task_query_tool`` 全名）查快照。
+
+        server 原始状态经 ``task_status_map`` 映射为任务词表状态；未声明
+        查询工具或查询失败返回 ``None``（跟踪循环按无新事实处理）。
+        """
+        if not self._task_query_tool:
+            return None
+        spec = next((s for s in self._specs if s.full_name == self._task_query_tool), None)
+        if spec is None:
+            return None
+        try:
+            result = await self._client.call_tool(spec.name, {"action": "get", "task_id": task_id})
+        except Exception as exc:  # noqa: BLE001 - 查询异常按无新事实上抛给调用方记日志
+            raise RuntimeError(f"MCP 任务查询失败（{spec.name}）: {type(exc).__name__}: {exc}") from exc
+        from src.modules.mcp.mapper import to_result
+
+        exec_result = to_result(result, tool_name=self._task_query_tool)
+        if not exec_result.success:
+            return None  # server 业务错误（如任务不存在）→ 无新事实
+        structured = exec_result.structured_content if isinstance(exec_result.structured_content, dict) else {}
+        raw_status = str(structured.get("state") or structured.get("status") or "")
+        mapped = (self._task_status_map or {}).get(raw_status, raw_status)
+        snapshot = dict(structured)
+        return {"status": mapped, "snapshot": snapshot, "summary": f"{raw_status} -> {mapped}" if raw_status else ""}
+
+    def subscribe_task_notifications(self, callback) -> Optional[Any]:
+        """通知适配器：订阅 ``attention_uri`` 资源（举旗级；返回退订句柄）。"""
+        if not self._attention_uri:
+            return None
+
+        def _on_notify(uri: str) -> None:
+            callback("")  # 资源通知不知道具体任务号——空串举旗，核实交给跟踪循环
+
+        pending: dict = {}
+
+        async def _subscribe() -> None:
+            pending["unsub"] = await self._client.subscribe_resource(self._attention_uri, _on_notify)  # type: ignore[arg-type]
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        loop.create_task(_subscribe())
+
+        def _unsubscribe() -> None:
+            unsub = pending.get("unsub")
+            if unsub is None:
+                pending["cancelled"] = True
+                return
+            try:
+                result = unsub()
+                if hasattr(result, "__await__"):
+                    loop.create_task(result)
+            except Exception as exc:  # noqa: BLE001 - 退订失败不阻断
+                logger.warning(f"attention 资源退订异常（忽略）: {exc}")
+
+        return _unsubscribe
 
     async def health_check(self) -> bool:
         """探活钩子：MCP server 粒度——同一 server 的全部工具共用一条连接，

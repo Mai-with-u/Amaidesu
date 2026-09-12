@@ -27,6 +27,9 @@ INPUT_EVENTS = {
     "room.message.enter",
 }
 
+# Agent 域允许的非输入订阅：场次生命周期（主动发言场次闸门）与游戏事件族
+AGENT_ALLOWED_PREFIXES = ("live.started", "live.ended", "game.", "tool.result.")
+
 DECISION_EVENTS = {
     "planner.checkpoint",
     "agenda.update",
@@ -153,7 +156,7 @@ class TestEventFlowConstraints:
     def test_tool_does_not_subscribe_to_input_events(self):
         """Tool（modules/tools）不能订阅 Input 事件（room.message.*）。
 
-        Tool 是被动调用（reply tool / should_speak_proactively tool），不订阅事件。
+        Tool 是被动调用（reply tool），不订阅事件。
         """
         tool_subscriptions = get_all_subscriptions_in_domain("tool")
         violations = [sub for sub in tool_subscriptions if sub["event_name"] in INPUT_EVENTS]
@@ -187,9 +190,7 @@ class TestEventFlowConstraints:
             sub
             for sub in agent_subscriptions
             if sub["event_name"] not in INPUT_EVENTS
-            and not sub["event_name"].startswith("tool.result.")
-            and not sub["event_name"].startswith("game.")
-            and not sub["event_name"].startswith("live.")
+            and not any(sub["event_name"].startswith(p) for p in AGENT_ALLOWED_PREFIXES)
         ]
         if violations:
             violation_details = "\n".join(

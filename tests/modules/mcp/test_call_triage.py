@@ -66,6 +66,8 @@ async def test_provider_invoke_converts_tool_error_to_failure_result() -> None:
     """全链路：真实分诊保持连接 → Provider 转失败结果（错误文本透传），永不外抛。"""
     from fastmcp.exceptions import ToolError
 
+    from src.modules.tools.models import ToolSpec
+
     provider = McpToolProvider(
         client=_TriagedClient(
             ToolError('{"error":{"code":"invalid_arguments","message":"need label"}}'),
@@ -74,8 +76,8 @@ async def test_provider_invoke_converts_tool_error_to_failure_result() -> None:
         ),
         server_name="maicraft",
     )
-    provider._specs = []
-    provider._name_map = {"maicraft_speak": "speak"}
+    # 声明名 = server 原始名；调用按派生全名对照 spec
+    provider._specs = [ToolSpec(name="speak", description="", provider="maicraft")]
 
     result = await provider.invoke(ToolInvocation(tool_name="maicraft_speak", arguments={}))
     assert isinstance(result, ToolExecutionResult)

@@ -106,7 +106,7 @@ def test_hotkey_catalog_summary_lists_names():
 def test_list_tools_description_carries_hotkey_catalog():
     provider = _build_provider(hotkey_list=[{"name": "Wave", "hotkeyID": "u1"}])
 
-    spec = next(s for s in provider.list_tools() if s.name == "vts_trigger_hotkey")
+    spec = next(s for s in provider.list_tools() if s.full_name == "vts_trigger_hotkey")
     assert "Wave" in spec.description
     # schema 不再强制 hotkey_id（按名优先）
     assert "hotkey_id" not in (spec.parameters_schema or {}).get("required", [])

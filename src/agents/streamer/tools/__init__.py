@@ -1,31 +1,19 @@
-"""主播 Agent 专属工具壳层（Agent 内部 builtin Provider）。
+"""主播 Agent 专属工具壳层（Agent 内部 Provider）。
 
-三个模块均为**真工具**（``provider="builtin"``），只做"包装内脏 → LLM 可调工具"
-的薄壳：本身不含决策/表达逻辑，被包装的内脏（Replyer / ProactiveTrigger /
-command 解析原语）留在上层目录，确保"Planner/Replyer 等内脏不注册为工具"
-的物理边界清晰。
+- ``reply_tool``        - ``streamer_reply`` 工具入口（包装 Replyer 表达引擎；
+  注册进 ToolRegistry，名单 ["streamer"]）
+- ``rundown_tool``      - ``rundown_control`` 工具（provider="rundown"；决策面
+  按流程单激活状态条件追加）
 
-- ``reply_tool``        - ``reply`` 工具入口（包装 Replyer 表达引擎）
-- ``proactive_tool``    - ``should_speak_proactively`` 工具入口（包装 ProactiveTrigger）
-- ``command_tool``      - ``parse_command`` 工具入口（包装 ``../command/`` 纯解析原语，只解析不执行）
+should_speak_proactively / parse_command 是代码直连的内部件（不是工具，
+不注册）；主动发言判定在 ``../proactive_trigger.py``，命令解析原语在
+``../command/``。
 """
 
-from .command_tool import CommandToolProvider, build_command_tool_spec, register_command_tool
-from .proactive_tool import (
-    ProactiveToolProvider,
-    build_proactive_tool_spec,
-    register_proactive_tool,
-)
-from .reply_tool import build_reply_tool_invoker, build_reply_tool_spec, register_reply_tool
+from .reply_tool import build_reply_tool_spec
+from .rundown_tool import build_rundown_tool_provider
 
 __all__ = [
-    "CommandToolProvider",
-    "build_command_tool_spec",
-    "register_command_tool",
-    "ProactiveToolProvider",
-    "build_proactive_tool_spec",
-    "register_proactive_tool",
-    "build_reply_tool_invoker",
     "build_reply_tool_spec",
-    "register_reply_tool",
+    "build_rundown_tool_provider",
 ]
