@@ -3,6 +3,7 @@ name: persona_generation
 version: "1.0"
 description: "常驻观众人设批量生成模板 - 按角色分布设计贴近真实 B 站观众的观众人设"
 variables:
+  - language
   - count
   - roles_hint
   - existing_nicknames_hint

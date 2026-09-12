@@ -113,7 +113,7 @@ class SimulatorLLMWrapper:
         """生成常驻观众的普通弹幕。"""
         recent_speech = "\n".join(context.recent_messages[-3:]) if context.recent_messages else "(主播尚未发言)"
 
-        prompt = self._prompts.render_safe(
+        prompt = self._prompts.render(
             "viewer_message",
             persona_name=persona.user_nickname,
             persona_role=persona.role.value,
@@ -147,7 +147,7 @@ class SimulatorLLMWrapper:
         """生成 SuperChat 付费留言。"""
         recent_speech = "\n".join(context.recent_messages[-3:]) if context.recent_messages else "(主播尚未发言)"
 
-        prompt = self._prompts.render_safe(
+        prompt = self._prompts.render(
             "sc_message",
             persona_name=persona.user_nickname,
             persona_personality=persona.personality,
@@ -178,7 +178,7 @@ class SimulatorLLMWrapper:
         """生成路人的随机弹幕。"""
         recent_speech = "\n".join(context.recent_messages[-3:]) if context.recent_messages else "(主播尚未发言)"
 
-        prompt = self._prompts.render_safe(
+        prompt = self._prompts.render(
             "passerby_message",
             streamer_recent_speech=recent_speech,
             recent_chat_context="(略)",
@@ -200,7 +200,7 @@ class SimulatorLLMWrapper:
 
     async def generate_warmup_message(self, persona: Persona) -> Optional[GeneratedMessage]:
         """生成暖场期弹幕（主播尚未开口阶段）。"""
-        prompt = self._prompts.render_safe(
+        prompt = self._prompts.render(
             "warmup_message",
             persona_name=persona.user_nickname,
             persona_personality=persona.personality,
@@ -241,7 +241,7 @@ class SimulatorLLMWrapper:
         existing_hint = ""
         if existing_nicknames:
             existing_hint = "以下昵称已被占用，严禁使用：" + "、".join(existing_nicknames[:30]) + "。"
-        prompt = self._prompts.render_safe(
+        prompt = self._prompts.render(
             "persona_generation",
             count=count,
             roles_hint="、".join(role_pool),

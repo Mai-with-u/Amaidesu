@@ -3,8 +3,8 @@
 提供统一的 Prompt 模板管理功能，支持：
 - 从文件系统加载 .md 模板文件
 - 解析 YAML frontmatter 元数据
-- 使用 string.Template 进行变量替换
-- 严格模式和安全模式渲染
+- 使用 string.Template 进行变量替换（严格模式：缺变量抛错）
+- 加载期校验：frontmatter 声明与正文占位符核对；解析/加载失败 fail-fast
 """
 
 from pathlib import Path
@@ -12,7 +12,6 @@ from string import Template
 from typing import Any, Dict, Optional
 
 import frontmatter
-import re
 
 from pydantic import BaseModel, Field
 
@@ -56,68 +55,21 @@ class PromptTemplate(BaseModel):
         template = Template(self.content)
         return template.substitute(**kwargs)
 
-    def render_safe(self, **kwargs: Any) -> str:
-        """渲染模板（安全模式）
-
-        缺失的变量会被保留为原样，不会抛出异常。
-
-        Args:
-            **kwargs: 模板变量
-
-        Returns:
-            渲染后的字符串
-        """
-        template = Template(self.content)
-        return template.safe_substitute(**kwargs)
-
-    def extract_section(self, section_name: str, **kwargs: Any) -> str:
-        """提取并渲染模板中的特定section
-
-        Args:
-            section_name: section名称（如 "User Message"）
-            **kwargs: 模板变量
-
-        Returns:
-            提取并渲染后的section内容，如果section不存在则返回空字符串
-
-        Example:
-            提取 "## User Message" section
-        """
-        # 先渲染整个模板
-        rendered = self.render(**kwargs)
-
-        # 提取指定section
-        pattern = rf"## {re.escape(section_name)}\s*\n(.*?)(?=\n## |\Z)"
-        match = re.search(pattern, rendered, re.DOTALL)
-
-        if match:
-            return match.group(1).strip()
-        return ""
-
-    def extract_content_without_section(self, section_name: str, **kwargs: Any) -> str:
-        """提取模板内容，排除指定的section
-
-        Args:
-            section_name: 要排除的section名称（如 "User Message"）
-            **kwargs: 模板变量
-
-        Returns:
-            渲染后的模板内容（排除指定section）
-
-        Example:
-            获取系统消息（排除 "User Message" section）
-        """
-        # 先渲染整个模板
-        rendered = self.render(**kwargs)
-
-        # 移除指定section
-        pattern = rf"## {re.escape(section_name)}\s*\n.*?(?=\n## |\Z)"
-        result = re.sub(pattern, "", rendered, flags=re.DOTALL)
-
-        return result.strip()
-
 
 # === Prompt 管理器 ===
+
+
+def _extract_placeholders(content: str) -> list[str]:
+    """提取模板正文中的 $占位符 名称（$$ 转义不计入）
+
+    复用 string.Template 的模式以与渲染行为严格一致。
+    """
+    used: list[str] = []
+    for match in Template.pattern.finditer(content):
+        name = match.group("named") or match.group("braced")
+        if name:
+            used.append(name)
+    return used
 
 
 class PromptManager:
@@ -127,8 +79,9 @@ class PromptManager:
     职责：
     - 从多个扫描根发现并加载所有 .md 模板文件（多根发现）
     - 解析 YAML frontmatter 元数据
-    - 提供 template 语法 ($variable) 的渲染功能
-    - 支持严格模式和安全模式渲染
+    - 提供 template 语法 ($variable) 的严格渲染（缺变量抛错）
+    - 加载期校验：frontmatter ``variables`` 声明与正文占位符核对（不一致告警）；
+      frontmatter 解析失败与单文件加载失败均 fail-fast
 
     模板键规则（声明式键，与文件位置解耦）：
     - 优先使用 frontmatter 的 ``name`` 字段作为全局唯一键
@@ -150,12 +103,6 @@ class PromptManager:
 
         # 渲染模板（键来自模板 frontmatter 的 name 字段）
         result = prompt_manager.render("amaidesu_replyer", text="你好")
-
-        # 安全模式渲染（缺失变量保留原样）
-        result = prompt_manager.render_safe("amaidesu_replyer", text="你好")
-
-        # 获取元数据
-        metadata = prompt_manager.get_metadata("amaidesu_replyer")
         ```
     """
 
@@ -251,14 +198,10 @@ class PromptManager:
                 rel_path = md_file.relative_to(root)
                 fallback_name = str(rel_path.with_suffix("")).replace("\\", "/")
 
-                try:
-                    self._load_template(fallback_name, md_file)
-                except ValueError:
-                    # 键冲突必须 fail-fast，禁止静默吞掉导致行为漂移
-                    raise
-                except Exception as e:
-                    self.logger.error(f"加载模板失败 {fallback_name}: {e}", exc_info=True)
+                # 单文件加载失败（含 frontmatter 解析失败与键冲突）一律 fail-fast
+                self._load_template(fallback_name, md_file)
 
+        self._check_variable_declarations()
         self.logger.info(f"已加载 {len(self._templates)} 个模板")
 
     def _load_template(self, fallback_name: str, path: Path) -> None:
@@ -277,7 +220,7 @@ class PromptManager:
         raw_content = path.read_text(encoding="utf-8")
 
         # 解析 frontmatter
-        frontmatter_data, content = self._parse_frontmatter(raw_content)
+        frontmatter_data, content = self._parse_frontmatter(raw_content, path)
 
         # 声明式键优先：frontmatter name > 路径兜底键
         declared = frontmatter_data.get("name")
@@ -308,7 +251,7 @@ class PromptManager:
 
         self.logger.debug(f"已加载模板: {template_name}")
 
-    def _parse_frontmatter(self, content: str) -> tuple[Dict[str, Any], str]:
+    def _parse_frontmatter(self, content: str, path: Path) -> tuple[Dict[str, Any], str]:
         """
         解析 YAML frontmatter
 
@@ -336,8 +279,26 @@ class PromptManager:
 
             return metadata, post.content
         except Exception as e:
-            self.logger.warning(f"frontmatter 解析失败，使用原始内容: {e}")
-            return {}, content
+            raise ValueError(f"frontmatter 解析失败 ({path}): {e}") from e
+
+    def _check_variable_declarations(self) -> None:
+        """核对每个模板的 frontmatter variables 声明与正文占位符
+
+        声明与使用不一致只告警不阻断启动：声明漂移本身不影响严格渲染的
+        正确性，但会让维护者对模板变量面产生误判。
+        """
+        for name, template in sorted(self._templates.items()):
+            declared = set(template.metadata.variables)
+            used = set(_extract_placeholders(template.content))
+            undeclared = sorted(used - declared)
+            unused = sorted(declared - used)
+            if not undeclared and not unused:
+                continue
+            self.logger.warning(
+                f"模板 '{name}' 变量声明与正文不一致"
+                f"（未声明: {undeclared or '无'}; 声明未使用: {unused or '无'}）"
+                f"，文件: {template.path}"
+            )
 
     # === 渲染接口 ===
 
@@ -353,103 +314,20 @@ class PromptManager:
             渲染后的字符串
 
         Raises:
-            KeyError: 如果模板不存在或缺少必需的变量
+            KeyError: 模板不存在，或缺少必需的变量（报错含模板名与缺失变量清单）
         """
         template = self._get_template(template_name)
-        return template.render(**kwargs)
-
-    def render_safe(self, template_name: str, **kwargs: Any) -> str:
-        """
-        渲染模板（安全模式）
-
-        Args:
-            template_name: 模板名称
-            **kwargs: 模板变量
-
-        Returns:
-            渲染后的字符串（缺失变量保留原样）
-
-        Raises:
-            KeyError: 如果模板不存在
-        """
-        template = self._get_template(template_name)
-        return template.render_safe(**kwargs)
+        try:
+            return template.render(**kwargs)
+        except KeyError as e:
+            provided = set(kwargs)
+            missing: list[str] = []
+            for v in _extract_placeholders(template.content):
+                if v not in provided and v not in missing:
+                    missing.append(v)
+            raise KeyError(f"模板 '{template_name}' 渲染失败，缺失变量: {', '.join(missing) or e.args[0]}") from e
 
     # === 查询接口 ===
-
-    def get_raw(self, template_name: str) -> str:
-        """
-        获取原始模板内容
-
-        Args:
-            template_name: 模板名称
-
-        Returns:
-            原始模板内容（含 frontmatter）
-
-        Raises:
-            KeyError: 如果模板不存在
-        """
-        template = self._get_template(template_name)
-        return template.raw
-
-    def get_metadata(self, template_name: str) -> TemplateMetadata:
-        """
-        获取模板元数据
-
-        Args:
-            template_name: 模板名称
-
-        Returns:
-            模板元数据
-
-        Raises:
-            KeyError: 如果模板不存在
-        """
-        template = self._get_template(template_name)
-        return template.metadata
-
-    def extract_section(self, template_name: str, section_name: str, **kwargs: Any) -> str:
-        """
-        提取并渲染模板中的特定section
-
-        Args:
-            template_name: 模板名称
-            section_name: section名称（如 "User Message"）
-            **kwargs: 模板变量
-
-        Returns:
-            提取并渲染后的section内容，如果section不存在则返回空字符串
-
-        Raises:
-            KeyError: 如果模板不存在
-
-        Example:
-            提取 "## User Message" section
-        """
-        template = self._get_template(template_name)
-        return template.extract_section(section_name, **kwargs)
-
-    def extract_content_without_section(self, template_name: str, section_name: str, **kwargs: Any) -> str:
-        """
-        提取模板内容，排除指定的section
-
-        Args:
-            template_name: 模板名称
-            section_name: 要排除的section名称（如 "User Message"）
-            **kwargs: 模板变量
-
-        Returns:
-            渲染后的模板内容（排除指定section）
-
-        Raises:
-            KeyError: 如果模板不存在
-
-        Example:
-            获取系统消息（排除 "User Message" section）
-        """
-        template = self._get_template(template_name)
-        return template.extract_content_without_section(section_name, **kwargs)
 
     def list_templates(self) -> list[str]:
         """

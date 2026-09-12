@@ -19,18 +19,16 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Deque, Optional
 
 from src.modules.logging import get_logger
+from src.modules.prompts import PromptManager, get_prompt_manager
 
 # 注：不依赖 aiohttp（VLM 调用统一走 LLMManager → chat_vision → OpenAIClient.vision）。
 # 图像以 bytes 形式传入 chat_vision，由 OpenAIClient._path_or_url_to_data_url 自动 data-URL 化。
 
-# VLM 调用的 prompt 模板。
-_VLM_PROMPT = "请描述当前屏幕内容（简明扼要）"
-
-# 屏幕分析 system message（提示模型保持客观、聚焦可见内容）。
-_VLM_SYSTEM_MESSAGE = (
-    "你是 VTuber 主播的屏幕感知助手。请根据用户提供的截图，简明扼要地描述屏幕上的关键内容"
-    "（如打开的窗口、正在进行的操作、文字内容等），便于主播理解屏幕上下文并据此回应弹幕。"
-)
+# VLM 提示词模板键（正文见包内 prompts/screen_vlm_prompt.md 与 screen_vlm_system.md，
+# 由 src/**/prompts/ 约定目录内聚承载）。system message 与 user prompt 是 chat_vision
+# 的两个独立参数，故拆为两个零变量模板。
+_SCREEN_PROMPT_KEY = "screen_vlm_prompt"
+_SCREEN_SYSTEM_KEY = "screen_vlm_system"
 
 
 @dataclass(slots=True)
@@ -56,12 +54,22 @@ class ScreenReader:
         self,
         max_cached_images: int = 5,
         llm_manager: Optional[Any] = None,
+        prompt_manager: Optional[PromptManager] = None,
     ):
         # VLM 连接配置统一走 model.toml。
         # llm_manager 为 None 时保留"跳过 VLM 调用 + 返回说明性结果"的降级语义，
         # 便于未配置 VLM 场景（仅做缓存去重）。
         self.max_cached_images = max_cached_images
         self._llm_manager = llm_manager
+        # PromptManager 取用方式：优先构造注入；未注入时回退全局单例
+        # get_prompt_manager()（惰性、仅首次 VLM 调用时触发）。不选构造链透传的
+        # 理由：ScreenReader 在 ScreenChangeCollector.collect() 内部创建，透传需
+        # 横穿 main → factory → collector 三层只为这一个消费者，与项目文档的
+        # 单例访问路径（模拟器 llm_wrapper 同款模式）相比改面大且无额外收益。
+        self._prompt_manager = prompt_manager
+        # 零变量模板渲染结果恒定，首用后缓存
+        self._vlm_prompt: Optional[str] = None
+        self._vlm_system_message: Optional[str] = None
 
         self.logger = get_logger("ScreenReader")
         self._image_hash_cache: Deque[str] = deque(maxlen=max_cached_images)
@@ -98,6 +106,20 @@ class ScreenReader:
 
         return result
 
+    def _get_vlm_prompt(self) -> str:
+        """渲染 VLM 用户 prompt（零变量模板，结果缓存复用）"""
+        if self._vlm_prompt is None:
+            manager = self._prompt_manager or get_prompt_manager()
+            self._vlm_prompt = manager.render(_SCREEN_PROMPT_KEY)
+        return self._vlm_prompt
+
+    def _get_vlm_system_message(self) -> str:
+        """渲染 VLM system message（零变量模板，结果缓存复用）"""
+        if self._vlm_system_message is None:
+            manager = self._prompt_manager or get_prompt_manager()
+            self._vlm_system_message = manager.render(_SCREEN_SYSTEM_KEY)
+        return self._vlm_system_message
+
     async def _call_vlm(self, image: Any, change_data: dict[str, Any]) -> Optional[ScreenAnalysisResult]:
         """通过 LLMManager 调用 VLM。
 
@@ -117,10 +139,10 @@ class ScreenReader:
         try:
             image_bytes = self._image_to_bytes(image)
             response = await self._llm_manager.chat_vision(
-                prompt=_VLM_PROMPT,
+                prompt=self._get_vlm_prompt(),
                 images=[image_bytes],
                 client_type="vision",
-                system_message=_VLM_SYSTEM_MESSAGE,
+                system_message=self._get_vlm_system_message(),
             )
         except Exception as e:
             self.logger.error(f"VLM 调用异常: {e}", exc_info=True)

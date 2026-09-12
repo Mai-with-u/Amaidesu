@@ -15,9 +15,6 @@
 
     # 渲染模板（键来自 frontmatter 的 name）
     result = prompt_mgr.render("amaidesu_replyer", text="你好")
-
-    # 安全模式渲染
-    result = prompt_mgr.render_safe("amaidesu_replyer", text="你好")
     ```
 """
 

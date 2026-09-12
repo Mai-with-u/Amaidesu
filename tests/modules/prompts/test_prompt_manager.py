@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 from src.modules.prompts import (
     PromptManager,
@@ -101,88 +102,70 @@ variables:
             manager = PromptManager(templates_dir=tmpdir)
             manager.load_all()
 
-            # 严格模式下缺失变量应抛出异常
-            with pytest.raises(KeyError):
+            # 严格模式下缺失变量应抛出异常，报错含模板名与缺失变量名
+            with pytest.raises(KeyError, match=r"test.*name"):
                 manager.render("test")  # 缺少 name 变量
 
-    def test_render_safe_missing_variable(self):
-        """测试安全模式下缺失变量保留原样"""
+    def test_render_missing_variable_error_lists_context(self):
+        """严格渲染缺变量时报错含模板名与缺失变量清单"""
         with tempfile.TemporaryDirectory() as tmpdir:
             templates_dir = Path(tmpdir)
-            # tempfile.TemporaryDirectory() 已经创建了目录，不需要再 mkdir
+            template_path = templates_dir / "greet.md"
+            template_path.write_text("Hi $name, today is $day.", encoding="utf-8")
 
-            # 创建带变量的模板
-            template_path = templates_dir / "test.md"
-            template_path.write_text("Hello, $name! Today is $day.", encoding="utf-8")
-
-            # 加载模板
             manager = PromptManager(templates_dir=tmpdir)
             manager.load_all()
 
-            # 安全模式下缺失变量保留原样
-            result = manager.render_safe("test", name="Alice")
-            assert result == "Hello, Alice! Today is $day."
+            with pytest.raises(KeyError) as exc_info:
+                manager.render("greet", name="Alice")
+            message = str(exc_info.value)
+            assert "greet" in message
+            assert "day" in message
 
-    def test_get_raw_template(self):
-        """测试获取原始模板内容"""
+    def test_load_all_warns_on_declaration_mismatch(self):
+        """frontmatter variables 声明与正文占位符不一致时 load_all 告警不阻断"""
         with tempfile.TemporaryDirectory() as tmpdir:
             templates_dir = Path(tmpdir)
-            # tempfile.TemporaryDirectory() 已经创建了目录，不需要再 mkdir
-
-            # 创建模板
-            template_path = templates_dir / "test.md"
-            raw_content = """---
-description: Test template
----
-Hello, $name!
-"""
-            template_path.write_text(raw_content, encoding="utf-8")
-
-            # 加载模板
-            manager = PromptManager(templates_dir=tmpdir)
-            manager.load_all()
-
-            # 获取原始内容
-            raw = manager.get_raw("test")
-            assert raw == raw_content
-
-    def test_get_metadata(self):
-        """测试获取模板元数据"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            templates_dir = Path(tmpdir)
-            # tempfile.TemporaryDirectory() 已经创建了目录，不需要再 mkdir
-
-            # 创建带 frontmatter 的模板
-            template_path = templates_dir / "test.md"
+            template_path = templates_dir / "drift.md"
             template_path.write_text(
                 """---
-description: 测试模板
-version: 2.0
 variables:
-  - name
-  - age
-author: TestAuthor
-tags:
-  - test
-  - example
+  - declared_only
 ---
-Hello, $name!
+Body: $undeclared_var
 """,
                 encoding="utf-8",
             )
 
-            # 加载模板
+            # 项目日志走 loguru，需挂 sink 捕获告警
+            messages: list[str] = []
+            handler_id = logger.add(lambda m: messages.append(m), level="WARNING")
             manager = PromptManager(templates_dir=tmpdir)
-            manager.load_all()
+            try:
+                manager.load_all()
+            finally:
+                logger.remove(handler_id)
+            text = "\n".join(messages)
 
-            # 获取元数据
-            metadata = manager.get_metadata("test")
-            assert metadata.name == "test"
-            assert metadata.description == "测试模板"
-            assert metadata.version == "2.0"
-            assert metadata.variables == ["name", "age"]
-            assert metadata.author == "TestAuthor"
-            assert metadata.tags == ["test", "example"]
+            assert "drift" in text
+            assert "undeclared_var" in text
+            assert "declared_only" in text
+            assert "drift" in manager.list_templates()
+
+    def test_load_all_raises_on_bad_frontmatter(self):
+        """frontmatter 语法错误时 load_all 应 fail-fast 抛异常（不静默降级）"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            templates_dir = Path(tmpdir)
+            template_path = templates_dir / "bad.md"
+            template_path.write_text(
+                "---\nbroken: [unclosed\n---\n正文内容",
+                encoding="utf-8",
+            )
+
+            manager = PromptManager(templates_dir=tmpdir)
+            with pytest.raises(Exception) as exc_info:
+                manager.load_all()
+            assert "bad.md" in str(exc_info.value)
 
     def test_list_templates(self):
         """测试列出所有模板"""
@@ -253,20 +236,6 @@ class TestPromptTemplate:
         result = template.render(name="Bob")
         assert result == "Hello, Bob!"
 
-    def test_render_safe_method(self):
-        """测试 PromptTemplate 的 render_safe 方法"""
-        metadata = TemplateMetadata(name="test")
-        template = PromptTemplate(
-            name="test",
-            content="Hello, $name! Age: $age",
-            raw="Hello, $name! Age: $age",
-            metadata=metadata,
-            path=Path("/fake/path"),
-        )
-
-        result = template.render_safe(name="Bob")
-        assert result == "Hello, Bob! Age: $age"
-
 
 class TestGlobalSingleton:
     """全局单例测试"""
@@ -325,36 +294,6 @@ class TestGlobalSingleton:
             result = manager.render("test")
             assert result == "Price: $100"
 
-    def test_template_with_complex_yaml(self):
-        """测试复杂 YAML frontmatter 解析"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            templates_dir = Path(tmpdir)
-            # tempfile.TemporaryDirectory() 已经创建了目录，不需要再 mkdir
-
-            # 创建带复杂 frontmatter 的模板
-            template_path = templates_dir / "complex.md"
-            template_path.write_text(
-                """---
-description: 复杂模板
-version: 1.0.0
-variables: [input, context, output]
-author: Test Author
-tags: [test, complex, multi-tag]
-extra_key: extra_value
----
-Content: $input -> $output
-""",
-                encoding="utf-8",
-            )
-
-            manager = PromptManager(templates_dir=tmpdir)
-            manager.load_all()
-
-            metadata = manager.get_metadata("complex")
-            assert metadata.description == "复杂模板"
-            assert metadata.variables == ["input", "context", "output"]
-            assert metadata.tags == ["test", "complex", "multi-tag"]
-
     def test_template_without_frontmatter(self):
         """测试没有 frontmatter 的模板"""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -370,12 +309,6 @@ Content: $input -> $output
 
             # 验证模板已加载
             assert "simple" in manager.list_templates()
-
-            # 验证元数据（应该有默认值）
-            metadata = manager.get_metadata("simple")
-            assert metadata.name == "simple"
-            assert metadata.description is None
-            assert metadata.variables == []
 
             # 验证可以渲染
             result = manager.render("simple", var="test")
@@ -401,7 +334,6 @@ class TestDeclarativeKeys:
 
             assert "my_custom_key" in manager.list_templates()
             assert "decision/intent" not in manager.list_templates()
-            assert manager.get_metadata("my_custom_key").name == "my_custom_key"
 
     def test_duplicate_name_raises_valueerror(self):
         """两个模板声明同名键时 load_all 应 fail-fast"""
@@ -453,7 +385,7 @@ class TestRealRepoTemplates:
     """真实仓库集成测试：约定扫描发现各组件内聚提示词"""
 
     def test_singleton_loads_exactly_expected_keys(self):
-        """全仓加载后键集合应精确等于 8 个声明式键（防漂移回归网）"""
+        """全仓加载后键集合应精确等于声明式键全集（防漂移回归网）"""
         reset_prompt_manager()
         try:
             manager = get_prompt_manager()
@@ -466,6 +398,10 @@ class TestRealRepoTemplates:
                 "warmup_message",
                 "persona_generation",
                 "amaidesu_minecraft_agent",
+                # T4 内联提示词归置新增
+                "summary_system",
+                "screen_vlm_system",
+                "screen_vlm_prompt",
             }
         finally:
             reset_prompt_manager()
