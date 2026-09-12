@@ -96,7 +96,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
 
 运行时消息和工具结果严格单向流动。具体规则：
 
-- **采集器只发布不订阅下游结果事件**。采集器订阅任何下游 Agent/工具结果事件 = 禁止。`BaseCollector.collect()` 只生产 `NormalizedMessage`，由 `_emit_semantic_events` 兜底映射到 `room.message.*` 后 emit 到 EventBus，然后退出。
+- **采集器只发布不订阅下游结果事件**。采集器订阅任何下游 Agent/工具结果事件 = 禁止。采集器在 `collect()` 内自行构造 `RoomMessagePayload` 等事件载荷并 emit 到 EventBus（自产自发，基类零转换零兜底），然后退出。
 - **工具异步结果走 `tool.result.<tool_name>`，不得回流到任何采集器**。`tool.result.synthesize` 之类的结果事件由需要它的 Agent（如 Planner）订阅以驱动后续动作；任何采集器订阅 `tool.result.#` = 禁止。
 - **同步工具调用的返回值天然单向**。`await ToolRegistry.invoke(name, args)` 的返回值由调用方持有，工具实现不感知调用方后续动作，也不得反过来通过事件重新写入。
 - **Agent 内部子组件不跨子组件发"决策完成""输出完成"之类胶水事件**。`decision.intent.generated` / `output.intent.*` 一类事件在 v2 已删除（见 `names.py` Wave 6 迁移注释），因为 Planner→Replyer 是同 Agent 内部直接 await，不经事件中转。
@@ -108,7 +108,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
 跨包只经共享抽象。具体规则：
 
 - **业务包 `src/agents/` 与框架模块 `src/modules/` 不反向 import**。`src/agents/streamer/` 内的 Agent 可以从 `src/modules/` 导入（事件、工具、配置、LLM、存储），但 `src/modules/` 不得 import 任何 `src/agents/` 的实现。
-- **共享契约放 `src/modules/types/`**。如 `NormalizedMessage`（`message_type.py`）/ `CapabilitiesProvider` Protocol（`capabilities.py`）/ `Emotion` 枚举 / `ToolProvider` 协议等。任何 Agent/工具都可能用到的基础类型都在这里。
+- **事件载荷是唯一的跨组件消息模型**：直播间消息统一用 `RoomMessagePayload`（`src/modules/events/payloads/`），采集器产出与 Agent 缓冲/决策消费同一形状，无中间转换。其余共享契约（`CapabilitiesProvider` Protocol / `Emotion` 枚举 / `ToolProvider` 协议等）仍在 `src/modules/types/`。
 - **框架层不得含直播/游戏内容特有逻辑**。"MC 怎么挖矿""主播怎么读弹幕"这类内容逻辑必须内聚到 `src/agents/<name>/` 包内（目录名 = Agent 注册名）。框架层只定义协议与基础设施，加新内容=加新 Agent 包+改配置，框架零改动。
 
 这条守护的是**可替换 / 可测试 / 无编译期环**。Agent 不该认识具体工具实现类，只该认识 `ToolRegistry` 抽象和共享层的 Protocol。
@@ -172,8 +172,8 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
          └─ StreamerAgent._on_danmaku_received      (streamer_agent.py L462-467 订阅，L470 处理)
 
 3. StreamerAgent 入口（弹幕 → 房间状态 + 缓冲）
-   └─ 转 NormalizedMessage（text / source / data_type="text" / user_id / timestamp_ms）
-   └─ await handle_message(msg)                     (L497)
+   └─ 载荷直通（事件载荷即消息模型，零映射）
+   └─ await handle_message(payload)
       ├─ self._room_state.update(msg, now_ms=…)     # 房间热度信号
       ├─ forced = self._timing_gate.is_forced(msg)   # 强制发言判定
       └─ self._buffer.add(msg, arrival_ms=…, forced=forced)

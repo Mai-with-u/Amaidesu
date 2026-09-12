@@ -339,7 +339,7 @@ tests/
 ├── mocks/                  # 测试用 Mock 对象
 └── modules/                # 模块层测试（对应 src/modules/）
     ├── agents/             # Agent 框架 + StreamerAgent 组件
-    ├── base/               # NormalizedMessage 等基类
+    ├── base/               # 事件总线与共享基类测试
     ├── collectors/         # bilibili / console / mock / screen / stt
     ├── config/             # 配置 Schema / 升级 hook / 漂移写回
     ├── context/            # ContextAssembler 快照组装

@@ -35,7 +35,6 @@ tests/
 └── modules/                # 模块层测试（对应 src/modules/）
     ├── agents/             # Agent 框架 + StreamerAgent 组件
     │   └── streamer/       # planner / replyer / agenda / 决策循环
-    ├── base/               # NormalizedMessage 等基类
     ├── collectors/         # bilibili / console / mock / screen / stt
     ├── config/             # 配置 Schema / 升级 hook / 漂移写回
     ├── context/            # ContextAssembler 快照组装
@@ -73,7 +72,7 @@ import asyncio
 import pytest
 
 from src.modules.events.event_bus import EventBus
-from src.modules.types.base.normalized_message import NormalizedMessage
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 
 # =============================================================================
@@ -89,12 +88,11 @@ def event_bus():
 
 @pytest.fixture
 def sample_message():
-    """创建示例 NormalizedMessage"""
-    return NormalizedMessage(
-        text="测试消息",
-        source="test",
-        data_type="text",
-        importance=0.5,
+    """创建示例 RoomMessagePayload"""
+    return RoomMessagePayload(
+        message_type="danmaku",
+        user=RoomMessageUser(id="u1", name="观众A"),
+        content="测试消息",
     )
 
 
@@ -108,11 +106,11 @@ async def test_event_bus_publish(event_bus, sample_message):
     """测试事件总线发布订阅功能"""
     received = []
 
-    async def handler(event_name: str, payload: NormalizedMessage, source: str):
+    async def handler(event_name: str, payload: RoomMessagePayload, source: str):
         received.append(payload)
 
     # 订阅事件
-    event_bus.on("test.event", handler, NormalizedMessage)
+    event_bus.on("test.event", handler, RoomMessagePayload)
 
     # 发布事件
     await event_bus.emit("test.event", sample_message, source="test")
@@ -120,7 +118,7 @@ async def test_event_bus_publish(event_bus, sample_message):
 
     # 验证结果
     assert len(received) == 1
-    assert received[0].text == "测试消息"
+    assert received[0].content == "测试消息"
 
 
 @pytest.mark.asyncio
@@ -135,12 +133,12 @@ async def test_event_bus_error_isolation(event_bus):
     async def normal_handler(event_name, payload, source):
         results.append("normal")
 
-    event_bus.on("test.event", failing_handler, NormalizedMessage, priority=10)
-    event_bus.on("test.event", normal_handler, NormalizedMessage, priority=20)
+    event_bus.on("test.event", failing_handler, RoomMessagePayload, priority=10)
+    event_bus.on("test.event", normal_handler, RoomMessagePayload, priority=20)
 
     # 启用错误隔离
-    await event_bus.emit("test.event", NormalizedMessage(
-        text="test", source="test", data_type="text", importance=0.5
+    await event_bus.emit("test.event", RoomMessagePayload(
+        message_type="danmaku", user=RoomMessageUser(id="u1", name="观众A"), content="test"
     ), source="test", error_isolate=True)
     await asyncio.sleep(0.1)
 

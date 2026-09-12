@@ -12,7 +12,7 @@
 **模拟器 = 开发基础设施**（与 Dashboard / `--dry` / 日志系统同类），不属于生产直播组件：
 
 - **默认关闭**：`[simulator].enabled = false`（生产零沾染）；
-- **按需装配**：组合根 `main.create_app_components` 在步骤 4b（CollectorManager 之后、AgentManager 之前）实例化 `SimulatorService` 并挂入生命周期，注入 SQLiteStore；
+- **按需装配**：组合根 `main.create_app_components` 在步骤 4b（CollectorManager 之后、AgentManager 之前）实例化 `SimulatorService` 并挂入生命周期，注入存储仓储；
 - **数据二等**：模拟器产生的事件 payload `simulated=True` 溯源标记贯穿，统计与入库一律排除（详见 §5）。
 
 **主体性判据检验**（AGENTS.md 红线）：模拟器不采集任何东西（不是采集器），不被调才干活（不是工具）；四态节奏与人设池自我驱动——按判据是 Agent 形态，但服务于开发者而非观众，故归入**开发工具分类**以可选装配的开发服务形态存在。
@@ -111,7 +111,7 @@ replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，�
 
 观众生成消息前读取"这个观众眼中的直播间"——**SQLite `live_chat` 公共流最近窗口**（观众弹幕 + 主播发言同表，场次隔离）：
 
-- 窗口读取：`SQLiteStore.list_recent_live_chat(live_session_id, limit)`，`live_session_id` 由 `session_pk_to_int(session_id)` 从 payload 场次字符串映射（与 `StorageLedger` 写入共用同一映射函数）；
+- 窗口读取：`ChatRepo.list_recent_live_chat(live_session_id, limit)`，`live_session_id` 为盖章注入的场次 int 主键；
 - 一致性语义：弱一致——emit 与落库之间有毫秒级时序差，秒级生成节奏下可忽略；
 - 重启不丢：世界状态唯一事实源在 SQLite，模拟器不维护第二份内存状态；
 - **token 预算**：窗口注入按"每字符 2 token"粗估计入 `TokenBudgetController`，与生成消耗共享同一硬上限。
@@ -127,7 +127,7 @@ replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，�
 ## 6. 录制与回放
 
 - **录制源**：EventHistoryService 落库的 SQLite `event_history` 表（全量事件、payload 完整 model_dump JSON）——录制即世界快照，无需第二种录制格式；
-- **读回 API**：`SQLiteStore.list_event_dates()` / `get_day_events(date, event_name=...)`（按本地日期过滤，时间正序）；
+- **读回 API**：`EventRepo.list_event_dates()` / `get_day_events(date, event_name=...)`（按本地日期过滤，时间正序）；
 - **回放队列**：`ReplayEngine` 过滤 `room.message.danmaku` 事件、还原 payload、按相邻毫秒时间戳差值调度；
 - **典型用法**：真实直播一晚 → 次日用 replay 模式重放给主播 Agent 锻炼（`replay_simulated_only=false` 回放全部真实弹幕）。
 

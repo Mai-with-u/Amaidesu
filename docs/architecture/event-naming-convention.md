@@ -43,9 +43,10 @@ Amaidesu 当前共 8 个有具体事件的语义域 + `tool` 通配前缀（仅�
 |---|---|---|
 | **core** | 系统级核心状态（启动 / 关闭 / 错误）。**不属于任何业务域**，仅供系统组件订阅 | `core.startup` / `core.shutdown` / `core.error` |
 | **live** | 直播场次生命周期（开播 / 下播）。**唯一含时间窗锚点**的域，所有 room/game 事件均需携带 `live_session_id` | `live.started` / `live.ended` |
-| **room** | 直播间行为流 / 状态。**子层强制**：行为流走 `.message.*`（已发生事实），状态走 `.state.*`（当前属性快照，预留层） | `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.enter` |
-| **game** | 游戏里程碑 / 异常 / 上报。**低频**，只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 交付总结） | `game.milestone` / `game.attention_required` / `game.error` / `game.report` |
+| **room** | 直播间行为流 / 状态。**子层强制**：行为流走 `.message.*`（已发生事实），状态走 `.state.*`（当前属性快照，预留层） | `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.enter` / `room.message.partner_speech`（联动对象发言） |
+| **game** | 游戏里程碑 / 异常 / 上报。**低频**，只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 交付总结）。`live_session_id` 为 int 场次主键：发布方不填，由场次盖章拦截器注入 | `game.milestone` / `game.attention_required` / `game.error` / `game.report` |
 | **rundown** | 流程单（Rundown）状态变更（加载 / 跳转 / 推进 / 暂停 / 恢复）。**单事件 + payload 判别，仅变更即发**，不是周期性状态广播 | `rundown.changed` |
+| **perception** | 主播感知流（对直播内容的感知：画面描述等）。**不是观众行为、不是房间消息**——不落 `live_chat`，经决策上下文的环境参考进 Planner | `perception.screen` |
 | **planner** | 主播决策轮记录：轮末一条 `planner.decision`（决策卡数据源）；裁决时刻即时一条 `planner.verdict`（reply 被调用时、表达生成之前） | `planner.decision` / `planner.verdict` |
 | **streamer** | 主播 Agent 管线阶段与发言业务事实：`streamer.stage`（决策管线阶段变化）/ `streamer.speech`（一条发言已生成，与 TTS 启用与否正交） | `streamer.stage` / `streamer.speech` |
 | **tts** | 一次发声实例的生命周期（开始 / 完成 / 失败），`utterance_id` 全链路串联；**终点广播**，消费者不得触发新决策 | `tts.utterance.started` / `tts.utterance.finished` / `tts.utterance.failed` |
@@ -85,7 +86,8 @@ Amaidesu 当前共 8 个有具体事件的语义域 + `tool` 通配前缀（仅�
 
 **当前实现状态**：
 
-- ✅ `room.message.*`（行为流，4 类已实现）
+- ✅ `room.message.*`（行为流，5 类已实现：danmaku / gift / super_chat / enter / partner_speech）
+- ✅ `perception.screen`（主播视觉感知；不落 live_chat，进决策环境参考）
 - ⏳ `room.state.*`（预留层，当前不实现任何事件；将来若需主动广播订阅的状态变更才会启用，不与行为流平铺同层）
 
 ---
@@ -200,17 +202,21 @@ class CoreEvents:
     LIVE_STARTED = "live.started"
     LIVE_ENDED = "live.ended"
 
-    # Room 行为流（4 类）
+    # Room 行为流（5 类）
     ROOM_MESSAGE_DANMAKU = "room.message.danmaku"
     ROOM_MESSAGE_GIFT = "room.message.gift"
     ROOM_MESSAGE_SUPER_CHAT = "room.message.super_chat"
     ROOM_MESSAGE_ENTER = "room.message.enter"
+    ROOM_MESSAGE_PARTNER_SPEECH = "room.message.partner_speech"
 
     # Game 游戏里程碑 / 上报（4 类）
     GAME_MILESTONE = "game.milestone"
     GAME_ATTENTION_REQUIRED = "game.attention_required"
     GAME_ERROR = "game.error"
     GAME_REPORT = "game.report"
+
+    # Perception 主播感知流
+    PERCEPTION_SCREEN = "perception.screen"
 
     # Rundown 流程单变更（单事件，payload 判别）
     RUNDOWN_CHANGED = "rundown.changed"

@@ -118,8 +118,8 @@ Amaidesu/
 │       ├── prompts/             # PromptManager（声明式键自动发现）
 │       ├── session/             # 直播场次管理（LiveSessionManager：开启/结束/删除/归属解析；live.started/ended 唯一发布方；无显式场次期间消息仅在内存流转不落库）
 │       ├── simulator/           # 世界模拟器（开发基础设施，ADR-006）：三模式发射器（generate LLM 生成 / replay 录制回放 / off）；SimulatorService + PersonaPool / CadenceGenerator / GiftGenerator / SimulatorLLMWrapper / TokenBudgetController / ReplayEngine；回放启停自动开/关场次；人设礼物入 SQLite（sim_personas/sim_gifts + 内置种子），观众上下文读 live_chat 窗口。默认 enabled=false，生产零沾染。详见 docs/development/simulator-guide.md。
-│       ├── storage/             # SQLite 存储层（StorageLedger 唯一写穿入口：订阅 room.message.# + streamer.speech，按 LiveSessionManager 解析的场次归属写 live_chat/gifts/super_chats + 维护 viewers 统计；SQLiteStore 提供领域查询与场次行管理；live_chat 含 message_id/reply_to_message_id 回复关联列）
-│       └── types/               # 共享类型（NormalizedMessage 等）
+│       ├── storage/             # SQLite 存储层（SQLiteDatabase 装配入口：连接/生命周期/schema 迁移 + 按域仓储 repos/——sessions/chat/viewers/sim/events/llm/rundowns/topics，消费者按需注入仓储；StorageLedger 写穿入口订阅 room.message.# + streamer.speech + game.*，按 LiveSessionManager 解析的场次归属写 live_chat（danmaku/partner_speech）/gifts/super_chats/game_events + 维护 viewers 统计；live_chat 含 message_id/reply_to_message_id 回复关联列）
+│       └── types/               # 共享类型（guard_levels / emotion_vocab / bili 等）
 ├── dashboard/                   # 前端 SPA（pnpm 构建到 dashboard/dist/，60214 静态挂载）
 ├── tests/                       # 顶层分组：agents / architecture / config / dashboard / integration / modules（+ characterization / mocks 支撑）
 └── docs/                        # 文档（架构 / 开发指南 / 决策记录）
@@ -287,7 +287,7 @@ sequenceDiagram
 
 | 基类 | 启动 | 停止 | 资源释放 | 业务入口 |
 |------|------|------|----------|----------|
-| **`BaseCollector`** | `start()` → 内部 `_start_collect_task()` 后台消费 `collect()` 生成器（v2 主动推事件模式） | `stop()` → 取消后台任务 | `cleanup()` → `_on_cleanup()` | `collect()`（子类实现，返回 `AsyncIterator[NormalizedMessage]`） |
+| **`BaseCollector`** | `start()` → 内部 `_start_collect_task()` 后台消费 `collect()` 生成器（v2 主动推事件模式） | `stop()` → 取消后台任务 | `cleanup()` → `_on_cleanup()` | `collect()`（子类实现，自产自发：内部构造事件载荷并 emit） |
 | **`BaseAgent`** | `start()` → `_on_start()` 钩子 + 心跳 | `stop()` → `_on_stop()` 钩子；额外 `pause()`/`resume()`/`shutdown()`（更严格） | `cleanup()` → `_on_cleanup()` 钩子 | `list_tools()` 抽象 + 自由 `emit_event` + 可选 `emits_events` 声明 |
 
 状态机（两者镜像）：`CREATED → STARTING → RUNNING → STOPPING → STOPPED → ERRORED`；Agent 额外有 `PAUSED` 用于 `framework_pause_agent` 控制。

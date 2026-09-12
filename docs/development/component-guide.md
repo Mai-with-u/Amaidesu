@@ -25,7 +25,7 @@
 
 需要把**外部世界**（B 站直播弹幕 / 控制台输入 / 屏幕变化 / 语音转文字 / JSONL 回放 / 第三方平台 webhook 等）转化为系统可消费的 `room.message.*` 语义事件时，新增一个采集器。
 
-采集器是**流型感知者**——长驻后台、被动等待或主动抓取外部信号，构造 `NormalizedMessage`（v2 兼容期）或直接构造 `RoomMessagePayload` 并 emit 到 EventBus。
+采集器是**流型感知者**——长驻后台、被动等待或主动抓取外部信号，直接构造 `RoomMessagePayload` 等事件载荷并 emit 到 EventBus（自产自发）。
 
 ### 基类速览
 
@@ -38,7 +38,7 @@
 | `__init__(event_bus=...)` | ✓ | 必须调 `super().__init__(event_bus=event_bus)` |
 | `start()` / `stop()` / `cleanup()` | 可覆写 | 基类有状态机实现，子类多覆写以挂自己的后台任务 |
 | `_on_start()` / `_on_stop()` / `_on_cleanup()` | 可覆写钩子 | 子类的真实启动/停止/清理逻辑放这里 |
-| `collect() -> AsyncIterator[Any]` | **必须覆写** | 数据流出口；要么自带 emit，要么返回 NormalizedMessage 由基类兜底转发 |
+| `collect() -> AsyncIterator[Any]` | **必须覆写** | 数据流出口；在生成器内自行构造事件载荷并 emit（自产自发，基类不兜底转发） |
 | `emit_event(name, payload, source=...)` | 工具方法 | 封装 emit，bus 为 None 时安全跳过 |
 | `set_event_bus(bus)` | 工具方法 | 生命周期内事后注入 EventBus |
 | `_emit_semantic_events: bool`（实例属性） | 可选 | `True` 表示子类在 `collect()` 里自行 emit 语义事件；`False`/缺省 → 基类 `_emit_normalized_message` 按 `data_type` 自动转发 |
@@ -126,7 +126,7 @@ class MyCollector(BaseCollector):
         while self.is_started:
             await asyncio.sleep(self.typed_config.poll_interval_s)
             # 真实采集逻辑在外层 _my_loop 里完成
-            yield  # 视需要返回 NormalizedMessage
+            yield payload  # 已在本生成器内 emit
 
     # ---------- 子类自带 emit：标记 _emit_semantic_events=True 让基类跳过兜底 ----------
 
@@ -162,13 +162,13 @@ class MyCollector(BaseCollector):
         return None
 ```
 
-#### 范式 B：基类兜底转发（推荐用于返回 NormalizedMessage 流的采集器）
+#### 范式 B：基类后台消费 + 生成器内 emit（推荐用于持续流的采集器）
 
-参考：`src/modules/collectors/mock/mock_collector.py`（默认走基类 `_start_collect_task()` + `_consume_collect()`）。
+参考：`src/modules/collectors/stt/stt_collector.py`（走基类 `_start_collect_task()` + `_consume_collect()`）。
 
 ```python
 """
-MyStreamCollector —— 示例采集器（范式 B：基类按 data_type 自动映射）
+MyStreamCollector —— 示例采集器（范式 B：生成器内直发事件，基类驱动后台消费）
 """
 from __future__ import annotations
 
@@ -179,14 +179,15 @@ from pydantic import Field
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.types.base.normalized_message import NormalizedMessage
 
 
 class MyStreamCollector(BaseCollector):
     name = "my_stream"
-    description = "示例采集器：基类兜底转发 NormalizedMessage → room.message.*"
+    description = "示例采集器：collect() 内直发 room.message.danmaku"
 
     class ConfigSchema(BaseConfig):
         interval_ms: int = Field(default=1000, ge=100)
@@ -218,27 +219,20 @@ class MyStreamCollector(BaseCollector):
     async def cleanup(self) -> None:
         await self.stop()
 
-    # ---------- 必实现：返回 NormalizedMessage 流；不设 _emit_semantic_events → 基类兜底 ----------
+    # ---------- 必实现：生成器内自行构造载荷并 emit（自产自发） ----------
 
-    async def collect(self) -> AsyncIterator[NormalizedMessage]:
-        """持续 yield NormalizedMessage；基类按 data_type 自动映射到 room.message.*：
-        - text        → room.message.danmaku
-        - gift        → room.message.gift
-        - super_chat  → room.message.super_chat
-        - guard       → room.message.enter
-        """
+    async def collect(self) -> AsyncIterator[RoomMessagePayload]:
+        """持续产出事件载荷；emit 由本生成器自行完成，基类不兜底转发。"""
         while self.is_started:
             await asyncio_sleep_ms(self.typed_config.interval_ms)
-            yield NormalizedMessage(
-                text="示例弹幕",
-                source=self.name,
-                data_type="text",  # 决定 emit 哪个事件
-                importance=0.5,
+            payload = RoomMessagePayload(
+                message_type="danmaku",
+                user=RoomMessageUser(id="u1", name="示例"),
+                content="示例弹幕",
                 timestamp_ms=now_ms(),
-                user_id="u1",
-                user_nickname="示例",
-                platform="my_stream",
             )
+            await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
+            yield payload
 
 
 async def asyncio_sleep_ms(ms: int) -> None:
@@ -247,9 +241,8 @@ async def asyncio_sleep_ms(ms: int) -> None:
 ```
 
 > **范式选择**：
-> - 需要精细控制 `RoomMessagePayload` 字段（如带礼物信息、上舰详情）→ 范式 A
-> - 数据形态已是 `NormalizedMessage` → 范式 B（最少代码）
-> - 都不需要时：基类 `_emit_normalized_message` 已能覆盖标准 text/gift/super_chat/guard 四种 data_type 的兜底转发
+> - 采集器全走同一形态：`collect()` 内自行构造事件载荷并 emit（自产自发，基类零转换零兜底）
+> - 走基类后台消费（`_start_collect_task`）还是自开后台循环（如 console 的 `_run_input_loop`）由采集器自行选择，两者都要求生成器/循环内完成 emit
 
 ### 装配路径
 
@@ -716,8 +709,7 @@ class MyAgent(BaseAgent):
     ) -> None:
         """弹幕事件回调——Agent 内部自由实现。"""
         # TODO: 把事件内容送入决策；典型流程：
-        #   message = NormalizedMessage.from_room_payload(payload)
-        #   decision = await self._planner.plan([message])
+        #   decision = await self._planner.plan([payload])
         #   if decision.should_reply:
         #       await self._tool_registry.invoke(ToolInvocation(...))
         self.logger.debug(f"收到 {event_name}: {getattr(payload, 'content', '')[:40]}")
@@ -797,7 +789,7 @@ class MyToolProvider(ToolProvider):
 1. 用户在 stdin 输入 "你好" + 回车
         ↓
 2. ConsoleInputCollector._run_input_loop() 读到行
-        ↓ 构造 NormalizedMessage(data_type="text") 并 _emit_semantic_event()
+        ↓ 构造 RoomMessagePayload(message_type="danmaku") 并 emit
 3. emit room.message.danmaku(payload=RoomMessagePayload{user, content, ...})
         ↓
 4. EventBus 分发 → [拦截器链] RateLimitInterceptor / SimilarFilterInterceptor
