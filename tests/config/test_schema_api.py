@@ -1,349 +1,181 @@
-"""ConfigService Schema API 测试套件 (Task 7)
+"""配置 Schema 生成器测试套件
 
-覆盖 ConfigService 的 schema 暴露 API：
+覆盖 ``ConfigSchemaGenerator`` 对六文件根 Schema 的输出契约：
 
-1. **get_config_schema(type)** — 根据类型名 (core/model/input/output/decision)
-   或类引用返回完整 UI schema
-2. **get_config_schema_for_section(section)** — 返回某节 (persona/llm/...)
-   的子 schema
-3. **无效类型处理** — 未知类型必须抛 ValueError 或返回 None
-4. **Dashboard 兼容性** — 输出格式符合前端动态表单预期
+1. **输出格式** — className / fields / nested 结构符合前端动态表单预期
+2. **字段形状** — name / type / label / description 必备，type 为 UI 类型集合
+3. **六根覆盖** — 六个根 Schema 全部可生成，自描述协议（文件名/显示名）就位
+4. **readonly 透传** — json_schema_extra 的 readonly 标记进入生成结果
 
-参考实现：ConfigSchemaGenerator.generate_config_schema() (已存在, Task 5)
+消费方：dashboard/api/config.py 的分组构建（写接口拒绝与展示共用同一信号）。
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+import json
 
 import pytest
 
+from src.modules.config.agents_schemas import AgentsRootConfig
+from src.modules.config.collectors_schemas import CollectorsRootConfig
+from src.modules.config.infra_schemas import InfraRootConfig
+from src.modules.config.model_schemas import ModelRootConfig
+from src.modules.config.schema_generator import ConfigSchemaGenerator
+from src.modules.config.storage_schemas import StorageRootConfig
+from src.modules.config.tools_schemas import ToolsRootConfig
 
-# ===========================================================================
-# Fixtures
-# ===========================================================================
+_SIX_ROOTS = [
+    AgentsRootConfig,
+    CollectorsRootConfig,
+    ToolsRootConfig,
+    ModelRootConfig,
+    StorageRootConfig,
+    InfraRootConfig,
+]
 
 
-@pytest.fixture
-def config_dir_with_toml(tmp_path: Path) -> Path:
-    """六文件基线布局（从 Schema 生成默认值，可被加载管线正常装载）。"""
-    from src.modules.config.multi_file_loader import generate_default_configs
-
-    cfg = tmp_path / "config"
-    cfg.mkdir()
-    generate_default_configs(cfg)
-    return cfg
-
-
-@pytest.fixture
-def initialized_service(config_dir_with_toml: Path):
-    """已 initialize() 的 ConfigService 实例"""
-    from src.modules.config.service import ConfigService
-
-    service = ConfigService(base_dir=str(config_dir_with_toml.parent))
-    service.initialize()
-    return service
+def _generate(cls) -> dict:
+    return ConfigSchemaGenerator.generate_config_schema(cls)
 
 
 # ===========================================================================
-# 1. get_config_schema(type) — 类型名路由
+# 1. 输出格式
 # ===========================================================================
 
 
-class TestGetConfigSchemaByTypeName:
-    """get_config_schema(type) 接受字符串类型名"""
+class TestSchemaFormat:
+    """生成结果必须包含 className / fields 顶层结构"""
 
-    def test_get_core_schema_by_string(self, initialized_service):
-        """get_config_schema('core') 必须返回 CoreConfig 的完整 schema"""
+    def test_schema_has_required_top_level_fields(self):
+        schema = _generate(InfraRootConfig)
 
-        schema = initialized_service.get_config_schema("core")
-
-        assert isinstance(schema, dict)
-        assert schema.get("className") == "CoreConfig"
-        assert "fields" in schema
+        assert schema["className"] == "InfraRootConfig"
         assert isinstance(schema["fields"], list)
-
-        field_names = {f["name"] for f in schema["fields"]}
-        assert "meta" in field_names
-        assert "persona" in field_names
-        assert "context" in field_names
-        assert "maicore" not in field_names
-
-    def test_get_model_schema_by_string(self, initialized_service):
-        """get_config_schema('model') 必须返回 ModelRootConfig（三层结构）的完整 schema"""
-
-        schema = initialized_service.get_config_schema("model")
-
-        assert isinstance(schema, dict)
-        # 三层结构：providers / models / profiles（ModelConfig 是 ModelRootConfig 别名，
-        # API 返回类名为真实类名 ModelRootConfig；保留 ModelConfig 别名仅供旧导入）
-        assert schema.get("className") in ("ModelRootConfig", "ModelConfig")
-        assert "fields" in schema
-
-        field_names = {f["name"] for f in schema["fields"]}
-        assert "llm_providers" in field_names
-        assert "llm_models" in field_names
-        assert "llm_profiles" in field_names
-
-    def test_get_core_schema_by_class_reference(self, initialized_service):
-        """get_config_schema(CoreConfig) 必须也能工作（接受类引用）
-
-        注：CoreConfig 现为 dashboard 旧调用点占位壳（T21 重写时统一收口）；
-        本测试断言 API 仍能接受类引用——保证 _SECTION_TO_ROOT_MODEL 旧映射
-        仍可解析。
-        """
-        from src.modules.config.core_schemas import CoreConfig
-
-        schema = initialized_service.get_config_schema(CoreConfig)
-
-        assert isinstance(schema, dict)
-        assert schema.get("className") == "CoreConfig"
-
-    def test_get_model_schema_by_class_reference(self, initialized_service):
-        """get_config_schema(ModelConfig / ModelRootConfig) 必须也能工作（接受类引用）"""
-        from src.modules.config.model_schemas import ModelConfig
-
-        schema = initialized_service.get_config_schema(ModelConfig)
-
-        assert isinstance(schema, dict)
-        assert schema.get("className") in ("ModelRootConfig", "ModelConfig")
-
-
-# ===========================================================================
-# 2. get_config_schema — 无效类型
-# ===========================================================================
-
-
-class TestGetConfigSchemaInvalid:
-    """无效类型必须有显式的失败行为"""
-
-    def test_invalid_type_name_raises_value_error(self, initialized_service):
-        """get_config_schema('invalid') 必须抛 ValueError"""
-        with pytest.raises(ValueError):
-            initialized_service.get_config_schema("invalid")
-
-    def test_invalid_type_name_does_not_return_silent_none(self, initialized_service):
-        """无效类型不应返回 None（避免静默失败）"""
-        # 如果选择返回 None 则跳过上例；此处强制 ValueError 契约
-        # 若实现选择 None，必须用专门测试覆盖
-        try:
-            result = initialized_service.get_config_schema("nonexistent_type")
-            assert result is None or isinstance(result, dict)
-            # 如果是 dict，必须包含 className 字段
-            if isinstance(result, dict):
-                assert "className" in result
-        except ValueError:
-            pass  # 接受 ValueError
-        except Exception as exc:
-            pytest.fail(f"未预期的异常类型: {type(exc).__name__}: {exc}")
-
-    def test_non_basemodel_class_raises_type_error(self, initialized_service):
-        """传入非 BaseModel 子类必须抛 TypeError"""
-        # 字符串、int 等不是 BaseModel
-        with pytest.raises((TypeError, ValueError)):
-            initialized_service.get_config_schema(42)
-
-
-# ===========================================================================
-# 3. get_config_schema — Dashboard 兼容性
-# ===========================================================================
-
-
-class TestSchemaDashboardCompat:
-    """schema 输出格式必须符合 Dashboard 动态表单约定"""
-
-    def test_schema_has_required_top_level_fields(self, initialized_service):
-        """顶层 schema 必须包含 className / fields"""
-        schema = initialized_service.get_config_schema("core")
-
-        assert "className" in schema
-        assert "fields" in schema
-        # fields 必须是 list
-        assert isinstance(schema["fields"], list)
-        # 至少有一个字段
         assert len(schema["fields"]) > 0
 
-    def test_each_field_has_required_keys(self, initialized_service):
-        """每个字段必须包含 name / type / label / description"""
-        schema = initialized_service.get_config_schema("core")
+    def test_schema_is_json_serializable(self):
+        """schema 必须可被 json.dumps 序列化（用于 HTTP API）"""
+        schema = _generate(ModelRootConfig)
+        json_str = json.dumps(schema, ensure_ascii=False, default=str)
+        assert isinstance(json_str, str)
+        parsed = json.loads(json_str)
+        assert parsed["className"] == "ModelRootConfig"
 
+    def test_nested_drilldown_present(self):
+        """嵌套 BaseConfig 字段展开进 nested（如 llm_providers 列表的元素类型）；
+        dict[str, 子模型] 容器字段不展开（生成器契约：自由键容器按 object 下发）"""
+        schema = _generate(ModelRootConfig)
+        assert "nested" in schema
+        assert "llm_providers" in schema["nested"]
+        assert "llm_profiles" not in schema["nested"]
+
+
+# ===========================================================================
+# 2. 字段形状
+# ===========================================================================
+
+
+class TestFieldShape:
+    """每个字段必须携带 name / type / label / description，type 为 UI 类型"""
+
+    def test_each_field_has_required_keys(self):
+        schema = _generate(InfraRootConfig)
         for field in schema["fields"]:
             assert "name" in field, f"field missing name: {field}"
             assert "type" in field, f"field missing type: {field}"
             assert "label" in field, f"field missing label: {field}"
-            # description 可以为空字符串
             assert "description" in field, f"field missing description: {field}"
 
-    def test_field_type_values_are_ui_types(self, initialized_service):
-        """field.type 必须是 UI 类型字符串集合之一"""
+    def test_field_type_values_are_ui_types(self):
         valid_types = {"string", "integer", "number", "boolean", "array", "object", "select"}
-        schema = initialized_service.get_config_schema("core")
+        for cls in _SIX_ROOTS:
+            schema = _generate(cls)
+            for field in schema["fields"]:
+                assert field["type"] in valid_types, (
+                    f"{cls.__name__}.{field.get('name')} 非法 UI 类型: {field.get('type')}"
+                )
 
-        for field in schema["fields"]:
-            assert field["type"] in valid_types, (
-                f"field {field.get('name')} has invalid type: {field.get('type')}"
-            )
-
-    def test_label_is_dict_with_locale(self, initialized_service):
-        """field.label 必须是 dict (至少包含 zh_CN)"""
-        schema = initialized_service.get_config_schema("core")
-
+    def test_label_is_dict_with_locale(self):
+        schema = _generate(ToolsRootConfig)
         for field in schema["fields"]:
             label = field["label"]
             assert isinstance(label, dict), f"label must be dict, got {type(label)}"
             assert "zh_CN" in label, f"label must contain zh_CN, got {label}"
 
-    def test_schema_is_json_serializable(self, initialized_service):
-        """schema 必须可被 json.dumps 序列化（用于 HTTP API）"""
-        import json
-
-        schema = initialized_service.get_config_schema("core")
-        json_str = json.dumps(schema, ensure_ascii=False, default=str)
-        assert isinstance(json_str, str)
-        assert len(json_str) > 0
-        # 反序列化验证
-        parsed = json.loads(json_str)
-        assert parsed["className"] == "CoreConfig"
-
 
 # ===========================================================================
-# 4. get_config_schema_for_section
+# 3. 六根覆盖与自描述协议
 # ===========================================================================
 
 
-class TestGetConfigSchemaForSection:
-    """get_config_schema_for_section(section) 返回指定节 (子 schema)"""
+class TestSixRootSchemas:
+    """六个根 Schema 全部可生成，自描述协议与加载器索引一致"""
 
-    def test_get_persona_section_schema(self, initialized_service):
-        """get_config_schema_for_section('persona') 返回 PersonaConfig 的 schema"""
+    def test_all_six_roots_generate(self):
+        for cls in _SIX_ROOTS:
+            schema = _generate(cls)
+            assert schema["className"] == cls.__name__
 
-        schema = initialized_service.get_config_schema_for_section("persona")
+    def test_self_described_file_names(self):
+        """__file_name__ 声明覆盖六文件，且与类一一对应"""
+        declared = {cls.__file_name__: cls for cls in _SIX_ROOTS}
+        assert set(declared) == {
+            "agents.toml",
+            "collectors.toml",
+            "tools.toml",
+            "model.toml",
+            "storage.toml",
+            "infra.toml",
+        }
+        for _fname, cls in declared.items():
+            assert cls.__section_label__, f"{cls.__name__} 缺少 __section_label__"
 
-        assert isinstance(schema, dict)
-        assert schema.get("className") == "PersonaConfig"
-        assert "fields" in schema
-
+    def test_model_root_has_three_layers(self):
+        """model.toml 三层结构字段在生成 schema 中齐备"""
+        schema = _generate(ModelRootConfig)
         field_names = {f["name"] for f in schema["fields"]}
-        assert "bot_name" in field_names
-        assert "personality" in field_names
-        assert "style_constraints" in field_names
+        assert {"llm_providers", "llm_models", "llm_profiles"} <= field_names
 
-    def test_get_llm_section_schema(self, initialized_service):
-        """get_config_schema_for_section('llm') 返回 LLMProfileConfig 的 schema (三层结构)
+    def test_llm_profile_fields_three_layer_contract(self):
+        """LLMProfileConfig 字段为三层结构契约（provider/model 角色级字段已废除）"""
+        from src.modules.config.model_schemas import LLMProfileConfig
 
-        §6.2 重构后 LLMProfileConfig 字段变更：
-        - 旧 provider / model / temperature / max_tokens / base_url / api_key
-        - 新 model_list / selection_strategy / hard_timeout_ms / slow_threshold_ms /
-          temperature / max_tokens
-        """
-
-        schema = initialized_service.get_config_schema_for_section("llm")
-
-        assert isinstance(schema, dict)
-        assert schema.get("className") == "LLMProfileConfig"
-        assert "fields" in schema
-
-        field_names = {f["name"] for f in schema["fields"]}
-        # 新三层结构 LLMProfileConfig 字段
-        assert "model_list" in field_names
-        assert "selection_strategy" in field_names
-        assert "hard_timeout_ms" in field_names
-        assert "slow_threshold_ms" in field_names
-        assert "temperature" in field_names
-        assert "max_tokens" in field_names
-        # 旧 provider / model 字段已废除（迁移至 llm_models.api_provider + llm_models.model_identifier）
+        profile_schema = _generate(LLMProfileConfig)
+        field_names = {f["name"] for f in profile_schema["fields"]}
+        assert {
+            "model_list",
+            "selection_strategy",
+            "hard_timeout_ms",
+            "slow_threshold_ms",
+            "temperature",
+            "max_tokens",
+        } <= field_names
         assert "provider" not in field_names
         assert "model" not in field_names
-        # api_key / base_url 在三层结构中上提至 provider 级（[[llm_providers]] 表）；
-        # profile 不再做 role 级覆盖——这是设计迁移，不是断言弱化
-        assert "api_key" not in field_names
-        assert "base_url" not in field_names
-
-    def test_get_maicore_section_schema_removed(self, initialized_service):
-        """v2.0.0：maicore 段已删除，应抛 ValueError。"""
-        with pytest.raises(ValueError):
-            initialized_service.get_config_schema_for_section("maicore")
-
-    def test_get_context_section_schema(self, initialized_service):
-        """v2.0.0：context 段映射为 ContextAssemblerConfig。"""
-
-        schema = initialized_service.get_config_schema_for_section("context")
-        assert schema.get("className") == "ContextAssemblerConfig"
-        field_names = {f["name"] for f in schema["fields"]}
-        assert "enabled" in field_names
-        assert "memory_recall_long_term" in field_names
-
-    def test_section_schema_has_nested_drilldown(self, initialized_service):
-        """如果 schema 有 nested 字段，必须能通过 section 路径展开"""
-        # CoreConfig 中嵌套的 persona 应该有完整的 PersonaConfig 子 schema
-        persona_schema = initialized_service.get_config_schema_for_section("persona")
-        assert "fields" in persona_schema
-        # bot_name 字段
-        bot_name_field = next(f for f in persona_schema["fields"] if f["name"] == "bot_name")
-        assert bot_name_field["type"] == "string"
-
-    def test_get_unknown_section_raises_value_error(self, initialized_service):
-        """未知的 section 必须抛 ValueError"""
-        with pytest.raises(ValueError):
-            initialized_service.get_config_schema_for_section("nonexistent_section")
-
-    def test_section_schema_is_json_serializable(self, initialized_service):
-        """section schema 也必须可 json 序列化"""
-        import json
-
-        schema = initialized_service.get_config_schema_for_section("persona")
-        json_str = json.dumps(schema, ensure_ascii=False, default=str)
-        assert isinstance(json_str, str)
-        assert len(json_str) > 0
-
-    def test_section_schema_includes_field_descriptions(self, initialized_service):
-        """section schema 的每个字段必须包含 description"""
-        schema = initialized_service.get_config_schema_for_section("persona")
-
-        for field in schema["fields"]:
-            assert "description" in field, f"field {field.get('name')} missing description"
-            # description 应是非空字符串
-            assert isinstance(field["description"], str)
-
-    def test_section_schema_preserves_json_schema_extra(self, initialized_service):
-        """json_schema_extra 中的字段标记 (x-ui-type / x-options / ...) 必须保留"""
-        schema = initialized_service.get_config_schema_for_section("llm")
-
-        # 新结构:LLMRoleConfig.temperature 有 json_schema_extra={"x-ui-type": "number"}
-        # LLMRoleConfig.max_tokens 有 json_schema_extra={"x-ui-type": "integer"}
-        temperature_field = next(f for f in schema["fields"] if f["name"] == "temperature")
-        assert temperature_field.get("x-ui-type") == "number"
-
-        max_tokens_field = next(f for f in schema["fields"] if f["name"] == "max_tokens")
-        assert max_tokens_field.get("x-ui-type") == "integer"
 
 
 # ===========================================================================
-# 5. Schema 来源一致性
+# 4. readonly 透传
 # ===========================================================================
 
 
-class TestSchemaSourceConsistency:
-    """get_config_schema 的结果必须与 ConfigSchemaGenerator 一致"""
+class TestReadonlyPassthrough:
+    def test_meta_version_marked_readonly(self):
+        """FileMetaConfig.version 的 readonly 标记进入生成结果（T21 写接口拒绝的信号源）"""
+        from src.modules.config.file_meta import FileMetaConfig
 
-    def test_matches_schema_generator_output(self, initialized_service):
-        """get_config_schema('core') 必须等于 ConfigSchemaGenerator.generate_config_schema(CoreConfig)"""
-        from src.modules.config.core_schemas import CoreConfig
-        from src.modules.config.schema_generator import ConfigSchemaGenerator
+        schema = _generate(FileMetaConfig)
+        version_field = next(f for f in schema["fields"] if f["name"] == "version")
+        assert version_field.get("readonly") is True
 
-        service_schema = initialized_service.get_config_schema("core")
-        generator_schema = ConfigSchemaGenerator.generate_config_schema(CoreConfig)
 
-        assert service_schema["className"] == generator_schema["className"]
-        assert len(service_schema["fields"]) == len(generator_schema["fields"])
+# ===========================================================================
+# 参数化冒烟：六根逐个生成不抛
+# ===========================================================================
 
-    def test_section_schema_matches_schema_generator(self, initialized_service):
-        """get_config_schema_for_section('persona') 必须等于 generate_config_schema(PersonaConfig)"""
-        from src.modules.config.core_schemas import PersonaConfig
-        from src.modules.config.schema_generator import ConfigSchemaGenerator
 
-        section_schema = initialized_service.get_config_schema_for_section("persona")
-        generator_schema = ConfigSchemaGenerator.generate_config_schema(PersonaConfig)
-
-        assert section_schema["className"] == generator_schema["className"]
-        assert len(section_schema["fields"]) == len(generator_schema["fields"])
+@pytest.mark.parametrize("cls", _SIX_ROOTS, ids=lambda c: c.__name__)
+def test_root_schema_generation_smoke(cls):
+    schema = _generate(cls)
+    assert schema["className"] == cls.__name__
+    assert isinstance(schema["fields"], list)

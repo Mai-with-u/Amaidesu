@@ -1,24 +1,19 @@
-"""Dashboard 配置 API 测试套件 (v2.0.0：7 文件)
+"""Dashboard 配置 API 测试套件（v2 六文件树）
 
-覆盖 Dashboard 配置管理 API 在多文件配置结构下的行为:
+覆盖 Dashboard 配置管理 API 在六文件配置结构下的行为:
 
-1. **GET /api/v1/config** — 返回当前合并配置 (扁平化的 main_config)
-2. **PATCH /api/v1/config** — 根据节名路由到正确的 TOML 文件:
-   - core 节 (general/persona/context/dashboard/logging/interceptors/meta/events) → core.toml
-   - model 节 (llm/llm_fast/vlm/llm_local/llm_summary/llm_agenda/llm_providers) → model.toml
-   - agents 节 (agents/streamer) → agents.toml
-   - tools 节 (tools/perception/output/...) → tools.toml
-   - memory 节 → memory.toml
-   - storage 节 → storage.toml
-   - background 节 → background.toml
-3. **GET /api/v1/config/schema** — 返回 ConfigSchemaGenerator 生成的 schema
-4. **get_config_path(section)** — 服务端辅助方法返回对应 TOML 文件路径
+1. **GET /api/v1/config** — 返回六 scope 合并视图，敏感字段"已设置"占位
+2. **PATCH /api/v1/config** — scope 首段路由到对应 TOML 文件，经统一管线写盘；
+   未知项 / 只读字段 / 类型违约 / 占位回写一律 422 + 中文消息
+3. **POST /api/v1/config/batch** — 多文件事务语义：任一失败磁盘零写入
+4. **GET /api/v1/config/schema** — 六个根 Schema 的自描述分组
+
+API 键约定：scope 前缀 + 文件内点分路径（如 ``tools.tools.tasks.poll_interval_ms``），
+与 GET 合并视图寻址一致。
 
 参考:
 - src/modules/dashboard/api/config.py
-- src/modules/dashboard/server.py (get_config_path)
-- src/modules/config/service.py (T7 schema API)
-- src/modules/config/multi_file_loader.py (v2.0.0: 7 个 TOML 文件结构)
+- src/modules/config/multi_file_loader.py（统一写回管线）
 """
 
 from __future__ import annotations
@@ -28,144 +23,14 @@ from pathlib import Path
 import pytest
 
 
-_CORE_TOML = """\
-# 核心系统配置 - Amaidesu v2.0.0
-
-type = "core"
-
-[meta]
-type = "meta"
-version = "2.0.0"
-
-[general]
-type = "general"
-platform_id = "amaidesu"
-
-[persona]
-type = "persona"
-bot_name = "麦麦"
-personality = "活泼开朗"
-
-[context]
-type = "context"
-enabled = true
-
-[dashboard]
-type = "dashboard"
-enabled = true
-host = "127.0.0.1"
-port = 60214
-
-[logging]
-type = "logging"
-enabled = true
-format = "jsonl"
-level = "INFO"
-"""
-
-_MODEL_TOML = """\
-# 模型配置
-
-type = "model"
-
-[[llm_providers]]
-name = "default"
-client_type = "openai"
-base_url = "https://api.openai.com/v1"
-api_key = ""
-timeout = 60
-max_retries = 3
-retry_delay = 1.0
-
-[llm]
-provider = "default"
-model = "gpt-4"
-temperature = 0.2
-
-[llm_fast]
-provider = "default"
-model = "gpt-3.5-turbo"
-
-[vlm]
-provider = "default"
-model = "gpt-4-vision-preview"
-
-[llm_local]
-provider = "default"
-model = "llama3"
-base_url = "http://localhost:11434/v1"
-api_key = "sk-dummy"
-"""
-
-_AGENTS_TOML = """\
-# 业务 Agent 配置
-
-[agents]
-enabled = ["streamer"]
-
-[agents.streamer]
-planner_llm = "llm_fast"
-replyer_llm = "llm"
-reply_probability = 0.7
-"""
-
-_TOOLS_TOML = """\
-# 工具包配置
-
-[tools]
-enabled = ["perception", "output"]
-
-[tools.perception]
-enabled = true
-provider = "builtin"
-
-[tools.output]
-enabled = true
-provider = "builtin"
-"""
-
-_MEMORY_TOML = """\
-# 记忆系统配置
-
-[memory]
-backend = "simple"
-
-[memory.simple]
-recall_top_k = 5
-"""
-
-_STORAGE_TOML = """\
-# 存储配置
-
-[storage.sqlite]
-db_path = "data/amaidesu.db"
-wal = true
-"""
-
-_BACKGROUND_TOML = """\
-# 后台维护配置
-
-[background]
-light_tick_ms = 5000
-
-[background.compressor]
-concurrency = 1
-queue_max = 100
-"""
-
-
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
-    """生成包含 7 个 TOML 的临时 config/ 目录（v2.0.0）。"""
+    """六文件基线布局（从 Schema 生成默认值，可被加载管线正常装载）。"""
+    from src.modules.config.multi_file_loader import generate_default_configs
+
     cfg = tmp_path / "config"
     cfg.mkdir()
-    (cfg / "core.toml").write_text(_CORE_TOML, encoding="utf-8")
-    (cfg / "model.toml").write_text(_MODEL_TOML, encoding="utf-8")
-    (cfg / "agents.toml").write_text(_AGENTS_TOML, encoding="utf-8")
-    (cfg / "tools.toml").write_text(_TOOLS_TOML, encoding="utf-8")
-    (cfg / "memory.toml").write_text(_MEMORY_TOML, encoding="utf-8")
-    (cfg / "storage.toml").write_text(_STORAGE_TOML, encoding="utf-8")
-    (cfg / "background.toml").write_text(_BACKGROUND_TOML, encoding="utf-8")
+    generate_default_configs(cfg)
     return cfg
 
 
@@ -209,79 +74,7 @@ def client(dashboard_server, config_service):
 
 
 # ===========================================================================
-# 1. get_config_path(section) — 路由节名 → 正确的 TOML 文件
-# ===========================================================================
-
-
-class TestGetConfigPath:
-    def test_get_path_for_persona_returns_core_toml(self, dashboard_server, config_dir):
-        result = dashboard_server.get_config_path("persona")
-        assert result is not None
-        assert Path(result).name == "core.toml"
-        assert Path(result) == config_dir / "core.toml"
-
-    def test_get_path_for_llm_returns_model_toml(self, dashboard_server, config_dir):
-        result = dashboard_server.get_config_path("llm")
-        assert result is not None
-        assert Path(result).name == "model.toml"
-        assert Path(result) == config_dir / "model.toml"
-
-    def test_get_path_for_agents_returns_agents_toml(self, dashboard_server, config_dir):
-        """agents 节 → agents.toml（v2.0.0）。"""
-        result = dashboard_server.get_config_path("agents")
-        assert result is not None
-        assert Path(result).name == "agents.toml"
-        assert Path(result) == config_dir / "agents.toml"
-
-    def test_get_path_for_tools_returns_tools_toml(self, dashboard_server, config_dir):
-        """tools 节 → tools.toml（v2.0.0）。"""
-        result = dashboard_server.get_config_path("tools")
-        assert result is not None
-        assert Path(result).name == "tools.toml"
-
-    def test_get_path_for_all_core_sections(self, dashboard_server, config_dir):
-        """core 节族（meta/general/persona/context/dashboard/logging）全部 → core.toml。"""
-        for section in ("meta", "general", "persona", "context", "dashboard", "logging"):
-            result = dashboard_server.get_config_path(section)
-            assert result is not None, f"{section} 应返回非 None"
-            assert Path(result).name == "core.toml", f"{section} 应路由到 core.toml"
-
-    def test_get_path_for_all_model_sections(self, dashboard_server, config_dir):
-        """model 节族（llm/llm_fast/vlm/llm_local/llm_summary/llm_agenda）全部 → model.toml。"""
-        for section in ("llm", "llm_fast", "vlm", "llm_local", "llm_summary", "llm_agenda"):
-            result = dashboard_server.get_config_path(section)
-            assert result is not None, f"{section} 应返回非 None"
-            assert Path(result).name == "model.toml", f"{section} 应路由到 model.toml"
-
-    def test_get_path_for_interceptors_returns_core_toml(self, dashboard_server, config_dir):
-        result = dashboard_server.get_config_path("interceptors")
-        assert result is not None
-        assert Path(result).name == "core.toml"
-
-    def test_get_path_without_service_returns_none(self):
-        from src.modules.config.core_schemas import DashboardConfig
-        from src.modules.dashboard.server import DashboardServer
-
-        cfg = DashboardConfig(host="127.0.0.1", port=60214)
-        server = DashboardServer(
-            event_bus=None,
-            input_manager=None,
-            decision_manager=None,
-            output_manager=None,
-            context_service=None,
-            config_service=None,
-            dashboard_config=cfg,
-        )
-        assert server.get_config_path("persona") is None
-
-    def test_get_path_unknown_section_falls_back_to_core(self, dashboard_server, config_dir):
-        result = dashboard_server.get_config_path("nonexistent_section_xyz")
-        assert result is not None
-        assert Path(result).name == "core.toml"
-
-
-# ===========================================================================
-# 2. GET /api/v1/config — 返回当前合并配置
+# 1. GET /api/v1/config
 # ===========================================================================
 
 
@@ -289,750 +82,309 @@ class TestGetConfigEndpoint:
     def test_get_config_returns_200(self, client):
         resp = client.get("/api/v1/config")
         assert resp.status_code == 200
-
-    def test_get_config_includes_core_sections(self, client):
-        resp = client.get("/api/v1/config")
         body = resp.json()
-        assert "config" in body, "响应必须包含 'config' 字段"
-        data = body["config"]
-        assert "dashboard" in data
-        assert "logging" in data
-        assert "tts" in data
-        # 人设归位 [agents.streamer.persona] 分组（嵌套呈现）
-        assert "persona" in data["agents"]["streamer"], "persona 必须在 agents.streamer 下"
+        assert "config" in body
 
-    def test_get_config_includes_model_sections(self, client):
+    def test_get_config_returns_flattened_merge(self, client):
+        """GET 返回扁平化合并视图：各文件根字段展平到顶层"""
         resp = client.get("/api/v1/config")
-        body = resp.json()
-        data = body["config"]
-        assert "llm" in data, "llm 节必须在响应中"
-        assert "vlm" in data
+        assert resp.status_code == 200
+        config = resp.json()["config"]
+        for key in ("agents", "tools", "enabled", "llm_providers", "sqlite", "dashboard"):
+            assert key in config, f"合并视图缺少键: {key}"
 
-    def test_get_config_includes_agents_sections(self, client):
-        """v2.0.0：agents 段族必须在响应中。"""
+    def test_get_config_masks_sensitive_fields(self, client):
+        """敏感字段值为"已设置"占位，明文不下发"""
         resp = client.get("/api/v1/config")
-        body = resp.json()
-        data = body["config"]
-        assert "agents" in data
+        config = resp.json()["config"]
+        api_key = config["llm_providers"][0]["api_key"]
+        assert api_key == "已设置"
 
-    def test_get_config_values_match_toml(self, client):
+    def test_get_config_values_match_toml(self, client, config_dir):
+        """合并视图值与磁盘 TOML 一致（dashboard.port）"""
         resp = client.get("/api/v1/config")
-        body = resp.json()
-        data = body["config"]
-        assert data["agents"]["streamer"]["persona"]["bot_name"] == "麦麦"
-        assert data["llm"]["model"] == "gpt-4"
-        assert data["llm"]["provider"] == "default"
-        assert isinstance(data["llm_providers"], list)
-        assert len(data["llm_providers"]) >= 1
-        assert data["llm_providers"][0]["name"] == "default"
-        assert data["llm_providers"][0]["client_type"] == "openai"
-
-    def test_get_config_maicore_removed(self, client):
-        """v2.0.0：maicore 段已从响应中消失。"""
-        resp = client.get("/api/v1/config")
-        body = resp.json()
-        data = body["config"]
-        assert "maicore" not in data
+        config = resp.json()["config"]
+        assert config["dashboard"]["port"] == 60214
 
 
 # ===========================================================================
-# 3. PATCH /api/v1/config — 路由到正确的 TOML 文件
+# 2. PATCH /api/v1/config — 统一管线写回
 # ===========================================================================
 
 
 class TestPatchConfigEndpoint:
-    def test_patch_persona_writes_to_core_toml(self, client, config_dir):
-        resp = client.patch("/api/v1/config", json={"key": "persona.bot_name", "value": "新名字"})
-        assert resp.status_code == 200, resp.text
+    def test_patch_infra_hot_scope_applies_without_restart(self, client, config_dir):
+        """infra 是 hot 段：写盘 + 即时重载，requires_restart=False"""
+        resp = client.patch("/api/v1/config", json={"key": "infra.dashboard.port", "value": 60299})
+        assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
-        core_content = (config_dir / "core.toml").read_text(encoding="utf-8")
-        assert "新名字" in core_content
-        for fname in ("model.toml", "agents.toml", "tools.toml", "memory.toml", "storage.toml", "background.toml"):
-            content = (config_dir / fname).read_text(encoding="utf-8")
-            assert "新名字" not in content, f"{fname} 不应被 persona 修改影响"
+        assert body["requires_restart"] is False
+        assert body["target_file"] == "infra.toml"
 
-    def test_patch_llm_writes_to_model_toml(self, client, config_dir):
-        resp = client.patch("/api/v1/config", json={"key": "llm.model", "value": "gpt-4-turbo"})
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["success"] is True
-        model_content = (config_dir / "model.toml").read_text(encoding="utf-8")
-        assert "gpt-4-turbo" in model_content
-        for fname in ("core.toml", "agents.toml", "tools.toml", "memory.toml", "storage.toml", "background.toml"):
-            content = (config_dir / fname).read_text(encoding="utf-8")
-            assert "gpt-4-turbo" not in content
+        import tomlkit
 
-    def test_patch_agents_writes_to_agents_toml(self, client, config_dir):
-        """v2.0.0：agents 段 PATCH → agents.toml。"""
+        with open(config_dir / "infra.toml", encoding="utf-8-sig") as f:
+            doc = tomlkit.load(f).unwrap()
+        assert doc["dashboard"]["port"] == 60299
+
+    def test_patch_tools_writes_via_pipeline(self, client, config_dir):
+        """非 hot 段：写盘成功 + 待重启语义"""
         resp = client.patch(
             "/api/v1/config",
-            json={"key": "agents.streamer.persona.bot_name", "value": "新主播名"},
+            json={"key": "tools.tools.tasks.poll_interval_ms", "value": 3000},
         )
-        assert resp.status_code == 200, resp.text
-        agents_content = (config_dir / "agents.toml").read_text(encoding="utf-8")
-        assert "新主播名" in agents_content
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body["requires_restart"] is True
+        assert body["target_file"] == "tools.toml"
 
-    def test_patch_tools_writes_to_tools_toml(self, client, config_dir):
-        """v2.0.0：tools 段 PATCH → tools.toml。"""
+        import tomlkit
+
+        with open(config_dir / "tools.toml", encoding="utf-8-sig") as f:
+            doc = tomlkit.load(f).unwrap()
+        assert doc["tools"]["tasks"]["poll_interval_ms"] == 3000
+
+    def test_patch_dict_profile_path(self, client, config_dir):
+        """dict[str, 子模型] 动态键路径可下钻（llm_profiles.replyer.temperature）"""
         resp = client.patch(
             "/api/v1/config",
-            json={"key": "tools.perception.enabled", "value": False},
+            json={"key": "model.llm_profiles.replyer.temperature", "value": 0.7},
         )
-        assert resp.status_code == 200, resp.text
-        tools_content = (config_dir / "tools.toml").read_text(encoding="utf-8")
-        assert "enabled" in tools_content
-
-    def test_patch_does_not_use_hardcoded_config_toml(self, client, tmp_path):
-        old_path = tmp_path / "config.toml"
-        assert not old_path.exists(), "测试前提: tmp_path/config.toml 不应存在"
-
-        resp = client.patch("/api/v1/config", json={"key": "persona.bot_name", "value": "测试"})
         assert resp.status_code == 200
 
-        assert not old_path.exists(), "PATCH 不应写入根目录的硬编码 config.toml 路径,应写入 config/core.toml"
+        import tomlkit
 
-    def test_patch_returns_requires_restart_for_llm_keys(self, client):
-        resp = client.patch("/api/v1/config", json={"key": "llm.model", "value": "gpt-5"})
+        with open(config_dir / "model.toml", encoding="utf-8-sig") as f:
+            doc = tomlkit.load(f).unwrap()
+        assert doc["llm_profiles"]["replyer"]["temperature"] == 0.7
+
+    def test_patch_dict_profile_business_rule_422(self, client):
+        """业务级校验同样生效：model_list 引用未注册模型 → 422"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "model.llm_profiles.planner.model_list", "value": ["no-such-model"]},
+        )
+        assert resp.status_code == 422
+        assert "no-such-model" in resp.json()["detail"]
+
+    def test_patch_unknown_scope_422(self, client):
+        resp = client.patch("/api/v1/config", json={"key": "legacy.persona.bot_name", "value": "x"})
+        assert resp.status_code == 422
+        assert "配置域" in resp.json()["detail"]
+
+    def test_patch_unknown_key_422(self, client):
+        """schema 树外的键 → 未知配置项（不静默落盘）"""
+        resp = client.patch("/api/v1/config", json={"key": "tools.tools.no_such_field", "value": 1})
+        assert resp.status_code == 422
+        assert "未知配置项" in resp.json()["detail"]
+
+    def test_patch_meta_version_readonly_422(self, client, config_dir):
+        """[meta].version 只读：PATCH → 422，文件不动"""
+        before = (config_dir / "agents.toml").read_bytes()
+        resp = client.patch("/api/v1/config", json={"key": "agents.meta.version", "value": "9.9.9"})
+        assert resp.status_code == 422
+        assert "只读" in resp.json()["detail"]
+        assert (config_dir / "agents.toml").read_bytes() == before
+
+    def test_patch_type_violation_422_with_field_path(self, client, config_dir):
+        """类型违约 → 422 + 消息含字段路径与文件名"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "tools.tools.tasks.poll_interval_ms", "value": "abc"},
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "tools.toml" in detail
+        assert "poll_interval_ms" in detail
+
+    def test_patch_constraint_violation_422(self, client):
+        """约束违约（ge=100）→ 422"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "tools.tools.tasks.poll_interval_ms", "value": 1},
+        )
+        assert resp.status_code == 422
+
+    def test_patch_sensitive_placeholder_rejected_422(self, client):
+        """回写"已设置"占位 → 422（防前端回显覆盖真实值）"""
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "model.llm_providers", "value": [{"name": "default", "api_key": "已设置"}]},
+        )
+        assert resp.status_code == 422
+        assert "占位" in resp.json()["detail"]
+
+    def test_patch_sensitive_explicit_new_value_writes(self, client, config_dir):
+        """敏感字段显式提交新值 → 正常写入"""
+        providers = [{"name": "default", "client_type": "openai", "base_url": "https://x/v1", "api_key": "sk-new"}]
+        resp = client.patch("/api/v1/config", json={"key": "model.llm_providers", "value": providers})
         assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert body.get("requires_restart") is True
 
-    def test_patch_returns_requires_restart_for_dashboard_keys(self, client):
-        resp = client.patch("/api/v1/config", json={"key": "dashboard.port", "value": 9999})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert body.get("requires_restart") is True
+        disk = (config_dir / "model.toml").read_text(encoding="utf-8-sig")
+        assert "sk-new" in disk
 
-    def test_patch_persona_requires_restart(self, client):
-        """decision A: 任何 PATCH 都要求重启（ConfigService.reload_config 不向已构造 Agent 注入新值）。"""
-        resp = client.patch("/api/v1/config", json={"key": "persona.bot_name", "value": "测试名"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert body.get("requires_restart") is True
-
-    def test_patch_logging_requires_restart(self, client):
-        resp = client.patch("/api/v1/config", json={"key": "logging.level", "value": "DEBUG"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert body.get("requires_restart") is True
-
-    def test_patch_persists_value(self, client, config_dir):
-        resp = client.patch("/api/v1/config", json={"key": "persona.bot_name", "value": "持久化测试"})
-        assert resp.status_code == 200
-
-        from src.modules.config.toml_utils import load_toml_with_comments
-
-        doc = load_toml_with_comments(str(config_dir / "core.toml"))
-        assert doc["persona"]["bot_name"] == "持久化测试"
-
-    def test_patch_multiple_sections_each_writes_to_correct_file(self, client, config_dir):
-        """v2.0.0：连续 PATCH 多个不同节，路由到 7 个不同文件。"""
-        updates = [
-            ("persona.bot_name", "新名字", "core.toml"),
-            ("llm.model", "claude-3", "model.toml"),
-            ("agents.streamer.persona.bot_name", "跨节主播名", "agents.toml"),
-        ]
-        for key, value, _expected_file in updates:
-            resp = client.patch("/api/v1/config", json={"key": key, "value": value})
-            assert resp.status_code == 200, f"PATCH {key} 失败: {resp.text}"
-            assert resp.json()["success"] is True
-
-        assert "新名字" in (config_dir / "core.toml").read_text(encoding="utf-8")
-        assert "claude-3" in (config_dir / "model.toml").read_text(encoding="utf-8")
-        assert "跨节主播名" in (config_dir / "agents.toml").read_text(encoding="utf-8")
+    def test_patch_empty_key_in_value_422(self, client):
+        resp = client.patch(
+            "/api/v1/config",
+            json={"key": "infra.interceptors", "value": {"": {"enabled": True}}},
+        )
+        assert resp.status_code == 422
+        assert "空键" in resp.json()["detail"]
 
 
 # ===========================================================================
-# 3b. PATCH /api/v1/config — 空键校验 (issue #69 #7)
+# 3. POST /api/v1/config/batch — 事务语义
 # ===========================================================================
 
 
-class TestPatchConfigEmptyKeyValidation:
-    def test_patch_rejects_top_level_empty_key(self, client, config_dir):
-        resp = client.patch(
-            "/api/v1/config",
-            json={"key": "persona.custom", "value": {"": "x"}},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "空键" in body["message"]
-        core_content = (config_dir / "core.toml").read_text(encoding="utf-8")
-        assert "custom" not in core_content
-
-    def test_patch_rejects_nested_empty_key_with_path(self, client, config_dir):
-        resp = client.patch(
-            "/api/v1/config",
-            json={"key": "persona.custom", "value": {"sub": {"": "x"}}},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "sub." in body["message"]
-
-    def test_patch_rejects_whitespace_key(self, client, config_dir):
-        resp = client.patch(
-            "/api/v1/config",
-            json={"key": "persona.custom", "value": {" ": "x"}},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "空键" in body["message"]
-
-    def test_patch_rejects_empty_key_in_list(self, client, config_dir):
-        resp = client.patch(
-            "/api/v1/config",
-            json={"key": "persona.custom", "value": [{"ok": 1}, {"": 2}]},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "[1]" in body["message"]
-
-    def test_patch_accepts_valid_nested_dict(self, client, config_dir):
-        """``interceptors`` 是 ``dict[str, Any]`` 字段，下一段是自由键，叶子无 schema 校验。"""
-        resp = client.patch(
-            "/api/v1/config",
-            json={"key": "interceptors.rate_limit", "value": {"name": "麦麦", "age": 18}},
+class TestBatchConfigEndpoint:
+    def test_batch_multi_file_writes_all(self, client, config_dir):
+        """跨文件批量保存：全部落盘"""
+        resp = client.post(
+            "/api/v1/config/batch",
+            json={
+                "changes": [
+                    {"key": "tools.tools.tasks.poll_interval_ms", "value": 3000},
+                    {"key": "infra.dashboard.port", "value": 60300},
+                ]
+            },
         )
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
 
-        from src.modules.config.toml_utils import load_toml_with_comments
+        import tomlkit
 
-        doc = load_toml_with_comments(str(config_dir / "core.toml"))
-        assert doc["interceptors"]["rate_limit"]["name"] == "麦麦"
-        assert doc["interceptors"]["rate_limit"]["age"] == 18
+        with open(config_dir / "tools.toml", encoding="utf-8-sig") as f:
+            tools_doc = tomlkit.load(f).unwrap()
+        with open(config_dir / "infra.toml", encoding="utf-8-sig") as f:
+            infra_doc = tomlkit.load(f).unwrap()
+        assert tools_doc["tools"]["tasks"]["poll_interval_ms"] == 3000
+        assert infra_doc["dashboard"]["port"] == 60300
+
+    def test_batch_invalid_change_zero_writes(self, client, config_dir):
+        """任一变更非法 → 422 + 磁盘零写入（事务回退）"""
+        before = {name: (config_dir / name).read_bytes() for name in ("tools.toml", "infra.toml")}
+        resp = client.post(
+            "/api/v1/config/batch",
+            json={
+                "changes": [
+                    {"key": "tools.tools.tasks.poll_interval_ms", "value": 3000},
+                    {"key": "infra.dashboard.port", "value": "not-a-number"},
+                ]
+            },
+        )
+        assert resp.status_code == 422
+        for name, content in before.items():
+            assert (config_dir / name).read_bytes() == content, f"{name} 不应被写入"
+
+    def test_batch_duplicate_key_last_wins(self, client, config_dir):
+        """重复 key 后者覆盖前者"""
+        resp = client.post(
+            "/api/v1/config/batch",
+            json={
+                "changes": [
+                    {"key": "infra.dashboard.port", "value": 60001},
+                    {"key": "infra.dashboard.port", "value": 60002},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+
+        import tomlkit
+
+        with open(config_dir / "infra.toml", encoding="utf-8-sig") as f:
+            doc = tomlkit.load(f).unwrap()
+        assert doc["dashboard"]["port"] == 60002
+
+    def test_batch_empty_changes_rejected(self, client):
+        resp = client.post("/api/v1/config/batch", json={"changes": []})
+        assert resp.status_code == 200
+        assert resp.json()["success"] is False
+
+    def test_batch_write_generates_backup(self, client, config_dir):
+        """统一管线写回产生备份（config/old/<批次>/）"""
+        client.post(
+            "/api/v1/config/batch",
+            json={"changes": [{"key": "storage.sqlite.db_path", "value": "data/other.db"}]},
+        )
+        old_dir = config_dir / "old"
+        assert old_dir.is_dir()
+        backups = list(old_dir.rglob("storage.toml"))
+        assert len(backups) == 1
 
 
 # ===========================================================================
-# 4. GET /api/v1/config/schema — 返回生成的 schema
+# 4. GET /api/v1/config/schema — 自描述分组
 # ===========================================================================
 
 
 class TestGetConfigSchemaEndpoint:
-    def _get_groups(self, client) -> list:
-        resp = client.get("/api/v1/config/schema")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "groups" in data, "响应必须包含 groups 列表"
-        assert isinstance(data["groups"], list)
-        return data["groups"]
-
-    def test_get_schema_returns_200(self, client):
-        resp = client.get("/api/v1/config/schema")
-        assert resp.status_code == 200
-
-    def test_get_schema_has_groups_and_version(self, client):
-        resp = client.get("/api/v1/config/schema")
-        data = resp.json()
-        assert "groups" in data
-        assert "version" in data
-        assert len(data["groups"]) > 0
-
-    def test_get_schema_groups_have_required_structure(self, client):
-        groups = self._get_groups(client)
-        for g in groups:
-            assert "key" in g
-            assert "label" in g
-            assert "fields" in g
-            assert isinstance(g["fields"], list)
-
-    def test_get_schema_each_field_has_key_type_label(self, client):
-        groups = self._get_groups(client)
-        for g in groups:
-            for f in g["fields"]:
-                assert "key" in f, f"field missing key: {f}"
-                assert "type" in f, f"field missing type: {f}"
-                assert "label" in f, f"field missing label: {f}"
-                assert f["type"] in ("string", "integer", "float", "boolean", "select", "array", "object")
-
-    def test_get_schema_field_has_value_from_config(self, client):
-        groups = self._get_groups(client)
-        assert any(g["key"] == "general" for g in groups), "general group should exist"
-
-    def test_get_schema_contains_persona_group(self, client):
-        groups = self._get_groups(client)
-        assert any(g["key"] == "persona" for g in groups)
-
-    def test_get_schema_llm_group_from_model_config(self, client):
-        groups = self._get_groups(client)
-        assert any(g["key"] == "llm" for g in groups), "llm group must exist (from ModelConfig)"
-
-    def test_get_schema_contains_agents_group(self, client):
-        """v2.0.0：agents 组应在响应中。"""
-        groups = self._get_groups(client)
-        assert any(g["key"] == "agents" for g in groups)
-
-    def test_get_schema_contains_tools_group(self, client):
-        """v2.0.0：tools 组应在响应中。"""
-        groups = self._get_groups(client)
-        assert any(g["key"] == "tools" for g in groups)
-
-    def test_get_schema_groups_have_order_key(self, client):
-        groups = self._get_groups(client)
-        for g in groups:
-            assert "order" in g
-
-    def test_get_schema_sensitive_fields_marked(self, client):
-        groups = self._get_groups(client)
-        llm = next((g for g in groups if g["key"] == "llm"), None)
-        if llm:
-            api_key = next((f for f in llm["fields"] if "api_key" in f["key"]), None)
-            if api_key:
-                assert api_key.get("sensitive") is True
-
-    def test_get_schema_type_number_mapped_to_float(self, client):
-        groups = self._get_groups(client)
-        for g in groups:
-            for f in g["fields"]:
-                if f["type"] == "float":
-                    return
-        for g in groups:
-            for f in g["fields"]:
-                assert f["type"] != "number", f"field {f['key']} has type 'number' which should be 'float'"
-
-
-# ===========================================================================
-# 5. PATCH /api/v1/config — schema 校验 / readonly / 类型约束
-# ===========================================================================
-
-
-class TestPatchConfigSchemaValidation:
-    """PATCH schema 校验矩阵：未知 / readonly / 类型与约束违规全部拒绝。"""
-
-    def test_patch_unknown_key_rejected_and_nothing_written(self, client, config_dir):
-        """未知 key：返回 success=false，磁盘文件保持原状。"""
-        resp = client.patch("/api/v1/config", json={"key": "persona.does_not_exist", "value": "x"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "未知配置项" in body["message"]
-        assert "persona.does_not_exist" in body["message"]
-
-        core_content = (config_dir / "core.toml").read_text(encoding="utf-8")
-        assert "does_not_exist" not in core_content, "未知 key 不应写入磁盘"
-
-    def test_patch_unknown_section_rejected(self, client, config_dir):
-        """未注册的 section：返回 success=false。"""
-        resp = client.patch("/api/v1/config", json={"key": "ghost.foo", "value": "x"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "未知配置项" in body["message"]
-
-    def test_patch_readonly_field_meta_version_rejected(self, client, config_dir):
-        """``meta.version`` 标记 readonly，PATCH 一律拒绝。"""
-        resp = client.patch("/api/v1/config", json={"key": "meta.version", "value": "v2.0.28"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "只读" in body["message"]
-        assert "meta.version" in body["message"]
-
-        # 写拒绝后磁盘内容不应被本次 PATCH 覆盖（drift 写回可能升级 version，但 PATCH 值不应落地）
-        from src.modules.config.toml_utils import load_toml_with_comments
-
-        doc = load_toml_with_comments(str(config_dir / "core.toml"))
-        assert doc["meta"]["version"] != "v2.0.28", "readonly 字段不应被 PATCH 覆盖"
-
-    def test_patch_type_violation_string_into_integer_rejected(self, client, config_dir):
-        """``persona.max_response_length`` 是 int 字段，写入字符串应被拒绝。"""
-        resp = client.patch(
-            "/api/v1/config",
-            json={"key": "persona.max_response_length", "value": "fifty"},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "persona.max_response_length" in body["message"]
-        assert "整数" in body["message"]
-
-        core_content = (config_dir / "core.toml").read_text(encoding="utf-8")
-        assert "fifty" not in core_content, "类型错误不应写入磁盘"
-
-    def test_patch_type_violation_bool_into_string_rejected(self, client, config_dir):
-        """bool 写入字符串字段应被拒绝。"""
-        resp = client.patch(
-            "/api/v1/config",
-            json={"key": "persona.bot_name", "value": True},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "字符串" in body["message"]
-
-    def test_patch_constraint_violation_above_max_rejected(self, client, config_dir):
-        """``dashboard.subtitle_widget.max_messages`` 约束 ``le=50``，写入超出范围应被拒绝。"""
-        resp = client.patch(
-            "/api/v1/config",
-            json={"key": "dashboard.subtitle_widget.max_messages", "value": 999},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False, f"超出 max_messages 上限应被拒绝，实际消息: {body['message']}"
-        assert "不能大于 50" in body["message"] or "le" in body["message"].lower()
-
-    def test_patch_valid_save_returns_success_and_requires_restart(self, client):
-        """合法写入：success=true 且 requires_restart=True（decision A）。"""
-        resp = client.patch("/api/v1/config", json={"key": "persona.bot_name", "value": "新名"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert body.get("requires_restart") is True, (
-            "decision A: reload_config 不向已构造 Agent 注入新值，任何 PATCH 都要提示重启"
-        )
-        assert body.get("target_file") == "core.toml"
-
-    def test_patch_valid_save_writes_toml_value_correctly(self, client, config_dir):
-        """合法写入：值正确落地到对应 TOML 文件。"""
-        new_value = "持久化_校验_" + "x"  # 用 ASCII 避免控制台编码干扰
-        resp = client.patch("/api/v1/config", json={"key": "persona.bot_name", "value": new_value})
-        assert resp.status_code == 200
-        assert resp.json()["success"] is True
-
-        from src.modules.config.toml_utils import load_toml_with_comments
-
-        doc = load_toml_with_comments(str(config_dir / "core.toml"))
-        assert doc["persona"]["bot_name"] == new_value
-
-    def test_patch_does_not_create_unknown_sections(self, client, config_dir):
-        """未注册的中间段不会被自动创建（避免垃圾 section 注入）。"""
-        # 第一段就是未知 section，必须拒绝
-        resp = client.patch(
-            "/api/v1/config",
-            json={"key": "totally_unknown_section.field", "value": "x"},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "未知配置项" in body["message"]
-
-        # 确认没有任何 toml 文件被污染
-        for fname in (
-            "core.toml",
-            "model.toml",
-            "agents.toml",
-            "tools.toml",
-            "memory.toml",
-            "storage.toml",
-            "background.toml",
-        ):
-            content = (config_dir / fname).read_text(encoding="utf-8")
-            assert "totally_unknown_section" not in content
-
-
-# ===========================================================================
-# 6. GET /api/v1/config/schema — readonly 字段标记透传
-# ===========================================================================
-
-
-class TestSchemaReadonlyFlag:
-    """``meta.version`` 通过 ``json_schema_extra`` 标记 readonly，schema 接口必须透传。"""
-
-    def test_meta_version_field_marked_readonly(self, client):
-        resp = client.get("/api/v1/config/schema")
-        assert resp.status_code == 200
-        groups = resp.json()["groups"]
-        meta_group = next((g for g in groups if g["key"] == "meta"), None)
-        assert meta_group is not None, "meta 组必须在 schema 中存在"
-        version_field = next(
-            (f for f in meta_group["fields"] if f["key"] == "meta.version"),
-            None,
-        )
-        assert version_field is not None, "meta.version 字段必须在 schema 中"
-        assert version_field.get("readonly") is True, f"meta.version 应标记 readonly，实际字段: {version_field}"
-
-    def test_other_fields_default_to_non_readonly(self, client):
-        """非 readonly 字段在响应中显式带 ``readonly: false``，供前端判别。"""
-        resp = client.get("/api/v1/config/schema")
-        groups = resp.json()["groups"]
-        persona_group = next((g for g in groups if g["key"] == "persona"), None)
-        assert persona_group is not None
-        bot_name = next(
-            (f for f in persona_group["fields"] if f["key"] == "persona.bot_name"),
-            None,
-        )
-        assert bot_name is not None
-        assert bot_name.get("readonly") is False
-
-
-# ===========================================================================
-# 7. POST /api/v1/config/batch — 批量原子保存
-# ===========================================================================
-
-
-class TestBatchUpdateEndpoint:
-    """批量端点事务语义：校验全部通过才写盘，按目标 TOML 文件分组写入。"""
-
-    def _post_batch(self, client, changes):
-        return client.post("/api/v1/config/batch", json={"changes": changes})
-
-    def test_batch_empty_changes_rejected(self, client):
-        resp = self._post_batch(client, [])
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert body["message"] == "没有可保存的更改"
-        assert body.get("results", []) == []
-        assert body.get("errors", []) == []
-
-    def test_batch_single_file_writes_once_and_requires_restart(self, client, config_dir):
-        changes = [
-            {"key": "persona.bot_name", "value": "新名字A"},
-            {"key": "persona.personality", "value": "温柔"},
-        ]
-        resp = self._post_batch(client, changes)
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["success"] is True
-        assert body["message"] == "配置已保存"
-        assert body["requires_restart"] is True
-        assert len(body["results"]) == 2
-        for r in body["results"]:
-            assert r["success"] is True
-        assert body.get("errors", []) == []
-
-        core = (config_dir / "core.toml").read_text(encoding="utf-8")
-        assert "新名字A" in core
-        assert "温柔" in core
-
-    def test_batch_multi_file_writes_each_target_once(self, client, config_dir):
-        changes = [
-            {"key": "persona.bot_name", "value": "跨文件A"},
-            {"key": "llm.model", "value": "claude-3-batch"},
-            {"key": "agents.streamer.persona.bot_name", "value": "批量主播名"},
-        ]
-        resp = self._post_batch(client, changes)
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["success"] is True
-        assert body["requires_restart"] is True
-        assert len(body["results"]) == 3
-
-        assert "跨文件A" in (config_dir / "core.toml").read_text(encoding="utf-8")
-        assert "claude-3-batch" in (config_dir / "model.toml").read_text(encoding="utf-8")
-        assert "批量主播名" in (config_dir / "agents.toml").read_text(encoding="utf-8")
-
-        for fname in ("tools.toml", "memory.toml", "storage.toml", "background.toml"):
-            content = (config_dir / fname).read_text(encoding="utf-8")
-            for v in ("跨文件A", "claude-3-batch", "批量主播名"):
-                assert v not in content, f"{fname} 不应被批量端点影响"
-
-    def test_batch_one_invalid_key_writes_nothing(self, client, config_dir):
-        before_core = (config_dir / "core.toml").read_bytes()
-        before_model = (config_dir / "model.toml").read_bytes()
-        before_agents = (config_dir / "agents.toml").read_bytes()
-
-        changes = [
-            {"key": "persona.bot_name", "value": "应当不被写入"},
-            {"key": "persona.does_not_exist", "value": "x"},
-            {"key": "llm.model", "value": "gpt-4-batch-fail"},
-        ]
-        resp = self._post_batch(client, changes)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "未知配置项" in body["message"]
-        assert "persona.does_not_exist" in body["message"]
-        assert body.get("requires_restart") in (False, None)
-
-        errors = body["errors"]
-        assert len(errors) == 1
-        assert errors[0]["key"] == "persona.does_not_exist"
-        assert "未知配置项" in errors[0]["message"]
-
-        assert (config_dir / "core.toml").read_bytes() == before_core
-        assert (config_dir / "model.toml").read_bytes() == before_model
-        assert (config_dir / "agents.toml").read_bytes() == before_agents
-
-    def test_batch_multiple_failures_aggregates_message(self, client):
-        changes = [
-            {"key": "persona.max_response_length", "value": "fifty"},
-            {"key": "persona.does_not_exist", "value": "x"},
-            {"key": "meta.version", "value": "v9.9.9"},
-        ]
-        resp = self._post_batch(client, changes)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "另有 2 项失败" in body["message"]
-        assert len(body["errors"]) == 3
-        keys_in_errors = {e["key"] for e in body["errors"]}
-        assert keys_in_errors == {"persona.max_response_length", "persona.does_not_exist", "meta.version"}
-
-    def test_batch_readonly_field_rejected_with_others_unchanged(self, client, config_dir):
-        changes = [
-            {"key": "persona.bot_name", "value": "应被丢弃"},
-            {"key": "meta.version", "value": "v9.9.9"},
-        ]
-        resp = self._post_batch(client, changes)
-        body = resp.json()
-        assert body["success"] is False
-        assert "只读" in body["message"]
-        assert body["errors"][0]["key"] == "meta.version"
-
-        core = (config_dir / "core.toml").read_text(encoding="utf-8")
-        assert "应被丢弃" not in core
-
-    def test_batch_type_violation_rejected(self, client):
-        changes = [{"key": "persona.max_response_length", "value": "fifty"}]
-        resp = self._post_batch(client, changes)
-        body = resp.json()
-        assert body["success"] is False
-        assert "整数" in body["message"]
-        assert body["errors"][0]["key"] == "persona.max_response_length"
-
-    def test_batch_unknown_section_rejected(self, client):
-        changes = [{"key": "ghost.foo", "value": "x"}]
-        resp = self._post_batch(client, changes)
-        body = resp.json()
-        assert body["success"] is False
-        assert "未知配置项" in body["message"]
-        assert body["errors"][0]["key"] == "ghost.foo"
-
-    def test_batch_duplicate_key_last_wins(self, client, config_dir):
-        changes = [
-            {"key": "persona.bot_name", "value": "第一次"},
-            {"key": "persona.bot_name", "value": "最终值"},
-        ]
-        resp = self._post_batch(client, changes)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert len(body["results"]) == 1
-        assert body["results"][0]["key"] == "persona.bot_name"
-        assert body["results"][0]["success"] is True
-
-        from src.modules.config.toml_utils import load_toml_with_comments
-
-        doc = load_toml_with_comments(str(config_dir / "core.toml"))
-        assert doc["persona"]["bot_name"] == "最终值"
-        assert "第一次" not in (config_dir / "core.toml").read_text(encoding="utf-8")
-
-    def test_batch_duplicate_key_last_invalid_overrides_valid(self, client):
-        """同一 key 重复时，后者的无效值会覆盖前者的合法值（last-wins），整批回退。"""
-        changes = [
-            {"key": "persona.bot_name", "value": "合法值"},
-            {"key": "persona.bot_name", "value": 12345},
-            {"key": "persona.max_response_length", "value": "fifty"},
-        ]
-        resp = self._post_batch(client, changes)
-        body = resp.json()
-        assert body["success"] is False
-        # 去重后 bot_name 末值为 12345（int 写入 string 字段），max_response_length 是 "fifty"
-        # 两个都会触发类型错误，整批回退
-        assert len(body["errors"]) == 2
-
-    def test_batch_without_service_returns_failure(self):
-        from src.modules.config.core_schemas import DashboardConfig
-        from src.modules.dashboard.server import DashboardServer
-        from src.modules.dashboard.dependencies import set_dashboard_server
-
-        cfg = DashboardConfig(host="127.0.0.1", port=60214)
-        server = DashboardServer(
-            event_bus=None,
-            input_manager=None,
-            decision_manager=None,
-            output_manager=None,
-            context_service=None,
-            config_service=None,
-            dashboard_config=cfg,
-        )
-        set_dashboard_server(server)
-        try:
-            from fastapi.testclient import TestClient
-            from src.modules.dashboard.api.router import create_app
-
-            app = create_app()
-            client = TestClient(app)
-            resp = client.post(
-                "/api/v1/config/batch",
-                json={"changes": [{"key": "persona.bot_name", "value": "x"}]},
-            )
-            assert resp.status_code == 200
-            body = resp.json()
-            assert body["success"] is False
-            assert "not available" in body["message"].lower() or "不可用" in body["message"]
-        finally:
-            set_dashboard_server(None)  # type: ignore[arg-type]
-
-
-# ===========================================================================
-# 8. GET /api/v1/config — 敏感字段屏蔽
-# ===========================================================================
-
-
-class TestGetConfigSensitiveMasking:
-    """GET /config 全量导出接口对敏感字段（api_key / token / password / secret）做屏蔽。"""
-
-    def test_api_key_in_llm_local_masked(self, client):
-        resp = client.get("/api/v1/config")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["config"]["llm_local"]["api_key"] == ""
-
-    def test_api_key_in_providers_masked(self, client):
-        resp = client.get("/api/v1/config")
-        body = resp.json()
-        providers = body["config"].get("llm_providers", [])
-        assert isinstance(providers, list) and len(providers) >= 1
-        assert providers[0]["api_key"] == ""
-
-    def test_non_sensitive_fields_unchanged(self, client):
-        resp = client.get("/api/v1/config")
-        body = resp.json()
-        assert body["config"]["agents"]["streamer"]["persona"]["bot_name"] == "麦麦"
-        assert body["config"]["llm"]["model"] == "gpt-4"
-        assert body["config"]["llm_local"]["base_url"] == "http://localhost:11434/v1"
-
-    def test_masking_does_not_mutate_underlying_config(self, client, dashboard_server):
-        client.get("/api/v1/config")
-        assert dashboard_server.config_service.main_config["llm_local"]["api_key"] == "sk-dummy"
-
-
-# ===========================================================================
-# 9. GET /api/v1/config/schema — 敏感字段 value 屏蔽
-# ===========================================================================
-
-
-class TestSchemaSensitiveMasking:
-    """Schema 接口的敏感字段 value 一律为 ``""``，避免明文凭据经 schema 接口外泄。"""
-
-    def _all_fields(self, client) -> list[dict]:
-        groups = client.get("/api/v1/config/schema").json()["groups"]
+    @staticmethod
+    def _leaf_fields(group: dict) -> list[dict]:
+        """递归收集组内叶子字段（容器字段带 children，叶子在深层）"""
         out: list[dict] = []
-        for g in groups:
-            for f in g["fields"]:
-                out.append(f)
-                for c in f.get("children", []) or []:
-                    out.append(c)
+
+        def walk(fields: list[dict]) -> None:
+            for f in fields:
+                if "children" in f:
+                    walk(f["children"])
+                else:
+                    out.append(f)
+
+        walk(group["fields"])
         return out
 
-    def test_schema_sensitive_field_value_is_empty_string(self, client):
-        fields = self._all_fields(client)
-        api_key_field = next((f for f in fields if f["key"] == "llm_local.api_key"), None)
-        assert api_key_field is not None, "llm_local.api_key 字段应在 schema 中存在"
-        assert api_key_field.get("sensitive") is True
-        assert api_key_field["value"] == ""
+    def test_get_schema_returns_six_groups(self, client):
+        """每个根 Schema 一个分组（自描述协议，无手写映射表）"""
+        resp = client.get("/api/v1/config/schema")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["version"] == "1.0.0"
+        groups = body["groups"]
+        assert len(groups) == 6
+        assert {g["key"] for g in groups} == {
+            "agents",
+            "collectors",
+            "tools",
+            "model",
+            "storage",
+            "infra",
+        }
 
-    def test_schema_provider_api_key_value_masked(self, client):
-        fields = self._all_fields(client)
-        provider_api_key = next((f for f in fields if f["key"] == "llm_providers.api_key"), None)
-        assert provider_api_key is not None, "llm_providers.api_key 字段应在 schema 中存在"
-        assert provider_api_key.get("sensitive") is True
-        assert provider_api_key["value"] == ""
+    def test_schema_groups_carry_self_described_file(self, client):
+        resp = client.get("/api/v1/config/schema")
+        for group in resp.json()["groups"]:
+            assert group["file_name"] == f"{group['key']}.toml"
+            assert group["label"]
+            assert group["file_label"]
 
-    def test_schema_non_sensitive_field_value_preserved(self, client):
-        fields = self._all_fields(client)
-        port = next((f for f in fields if f["key"] == "dashboard.port"), None)
-        assert port is not None
-        assert port.get("sensitive") is False
-        assert port["value"] == 60214
+    def test_schema_field_keys_carry_scope_prefix(self, client):
+        """字段 key 带 scope 前缀，与写接口键约定一致"""
+        resp = client.get("/api/v1/config/schema")
+        groups = {g["key"]: g for g in resp.json()["groups"]}
+        tool_keys = [f["key"] for f in self._leaf_fields(groups["tools"])]
+        assert tool_keys, "tools 组应有字段"
+        for key in tool_keys:
+            assert key.startswith("tools."), f"字段 key 缺 scope 前缀: {key}"
+
+    def test_schema_fields_have_required_shape(self, client):
+        resp = client.get("/api/v1/config/schema")
+        groups = resp.json()["groups"]
+        some_fields = [f for g in groups for f in self._leaf_fields(g)]
+        assert some_fields
+        for field in some_fields:
+            assert "key" in field
+            assert "type" in field
+            assert "label" in field
+
+    def test_schema_readonly_flag_passthrough(self, client):
+        """meta.version 的 readonly 标记透传到 schema（与写接口拒绝共用信号）"""
+        resp = client.get("/api/v1/config/schema")
+        groups = {g["key"]: g for g in resp.json()["groups"]}
+        agent_keys = {f["key"]: f for f in self._leaf_fields(groups["agents"])}
+        version_field = agent_keys.get("agents.meta.version")
+        assert version_field is not None
+        assert version_field["readonly"] is True

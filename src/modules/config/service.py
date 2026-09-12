@@ -27,7 +27,6 @@ from typing import (
     cast,
 )
 
-from pydantic import BaseModel
 
 from src.modules.logging import get_logger
 
@@ -653,91 +652,6 @@ class ConfigService:
         await self._file_watcher.stop()
         self._file_watcher = None
         self.logger.info("ConfigService 文件监视器已停止")
-
-    def get_config_schema(
-        self,
-        type_or_class: Union[str, type],
-    ) -> Dict[str, Any]:
-        """根据配置类型返回完整 UI schema。
-
-        Args:
-            type_or_class: 配置类型标识 (``"core"`` / ``"model"``) 或
-                ``CoreConfig`` / ``ModelConfig`` 类引用。
-
-        Returns:
-            ``ConfigSchemaGenerator.generate_config_schema`` 输出。
-
-        Raises:
-            ValueError: 未知的类型名。
-            TypeError: 非字符串且非 BaseModel 子类。
-        """
-        from src.modules.config.core_schemas import CoreConfig
-        from src.modules.config.model_schemas import ModelConfig
-        from src.modules.config.schema_generator import ConfigSchemaGenerator
-
-        type_map: Dict[str, type] = {
-            "core": CoreConfig,
-            "model": ModelConfig,
-        }
-
-        if isinstance(type_or_class, str):
-            if type_or_class not in type_map:
-                raise ValueError(f"未知的配置类型: {type_or_class!r}。支持: {sorted(type_map.keys())}")
-            cls = type_map[type_or_class]
-        elif isinstance(type_or_class, type) and issubclass(type_or_class, BaseModel):
-            cls = type_or_class
-        else:
-            raise TypeError(f"type_or_class 必须是 str 或 BaseModel 子类, 收到: {type(type_or_class).__name__}")
-
-        return ConfigSchemaGenerator.generate_config_schema(cls)
-
-    def get_config_schema_for_section(self, section: str) -> Dict[str, Any]:
-        """根据配置节名返回该节的 UI schema。
-
-        Args:
-            section: 节名 (例如 ``persona`` / ``llm`` / ``maicore`` /
-                ``dashboard`` / ``context`` / ``meta`` / ``general`` /
-                ``logging`` / ``llm_fast`` / ``vlm`` / ``llm_local`` / ``llm_summary`` / ``llm_outline``)。
-
-        Returns:
-            ``ConfigSchemaGenerator.generate_config_schema`` 输出。
-
-        Raises:
-            ValueError: 未知节名。
-        """
-        from src.modules.config.core_schemas import (
-            ContextAssemblerConfig,
-            DashboardConfig,
-            GeneralConfig,
-            MetaConfig,
-            PersonaConfig,
-        )
-        from src.modules.config.model_schemas import LLMProfileConfig
-        from src.modules.config.schema_generator import ConfigSchemaGenerator
-        from src.modules.config.schemas.logging import LoggingConfig
-        from src.modules.simulator.config_schema import SimulatorConfigSchema
-
-        section_map: Dict[str, type] = {
-            # core 子节
-            "meta": MetaConfig,
-            "general": GeneralConfig,
-            "persona": PersonaConfig,
-            "context": ContextAssemblerConfig,
-            "dashboard": DashboardConfig,
-            "simulator": SimulatorConfigSchema,
-            "logging": LoggingConfig,
-            # model 子节(新结构:所有 profile 共享同一 LLMProfileConfig,profile 引用 provider)
-            "llm": LLMProfileConfig,
-            "llm_fast": LLMProfileConfig,
-            "vlm": LLMProfileConfig,
-            "llm_local": LLMProfileConfig,
-            "llm_summary": LLMProfileConfig,
-            "llm_agenda": LLMProfileConfig,
-        }
-
-        if section not in section_map:
-            raise ValueError(f"未知的配置节: {section!r}。支持: {sorted(section_map.keys())}")
-        return ConfigSchemaGenerator.generate_config_schema(section_map[section])
 
 
 def deep_merge_configs(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:

@@ -27,6 +27,9 @@ class CollectorsRootConfig(BaseConfig):
 
     model_config = ConfigDict(extra="allow")
 
+    __file_name__ = "collectors.toml"
+    __section_label__ = "📥 采集器"
+
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
     enabled: list[str] = Field(
         default_factory=lambda: ["console_input"],

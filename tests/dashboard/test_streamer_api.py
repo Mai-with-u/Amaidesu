@@ -21,12 +21,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-_CORE_TOML = """\
-[meta]
-version = "2.0.3"
-"""
-
-
 # ---------------------------------------------------------------------------
 # Fake Agent（鸭子类型：实现 dashboard 关心的门面即可）
 # ---------------------------------------------------------------------------
@@ -106,16 +100,15 @@ class _FakeAgentManager:
 
 
 def _write_config(config_dir: Path, *, proactive_enabled: bool = False) -> None:
-    """写入测试用 agents.toml / core.toml（main_config["agents"]["streamer"] 来源）。"""
-    (config_dir / "core.toml").write_text(_CORE_TOML, encoding="utf-8")
-    agents_toml = f"""\
-[agents]
-enabled = ["streamer"]
+    """六文件基线 + 统一管线铺设 proactive 开关（main_config["agents"]["streamer"] 来源）。"""
+    from src.modules.config.multi_file_loader import generate_default_configs, update_config_values
 
-[agents.streamer.proactive]
-enabled = {str(proactive_enabled).lower()}
-"""
-    (config_dir / "agents.toml").write_text(agents_toml, encoding="utf-8")
+    generate_default_configs(config_dir)
+    update_config_values(
+        config_dir,
+        "agents.toml",
+        {"agents.streamer.proactive.enabled": proactive_enabled},
+    )
 
 
 def _make_client(
@@ -416,7 +409,7 @@ def test_proactive_toggle_updates_runtime_and_config(config_dir: Path) -> None:
     assert agent.proactive_enabled is True
     assert agent.proactive_toggle_calls == [True]
 
-    saved = tomllib.loads((config_dir / "agents.toml").read_text(encoding="utf-8"))
+    saved = tomllib.loads((config_dir / "agents.toml").read_text(encoding="utf-8-sig"))
     assert saved["agents"]["streamer"]["proactive"]["enabled"] is True
 
 

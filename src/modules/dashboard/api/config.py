@@ -1,39 +1,38 @@
-"""
-配置管理 API
+"""配置管理 API（六文件树）
 
 提供配置的查询、Schema 获取和修改接口。
 
-多文件配置支持:
-- ``config/core.toml`` - core 节族 (general/persona/maicore/context/dashboard/logging/pipelines)
-- ``config/model.toml`` - model 节族 (llm/llm_fast/vlm/llm_local)
-- ``config/input.toml`` - collectors 节 (Input 阶段)
-- ``config/decision.toml`` - deciders 节 (Decision 阶段)
-- ``config/output.toml`` - handlers 节 (Output 阶段)
+配置布局为 v2 六文件树（``config/agents.toml`` / ``collectors.toml`` /
+``tools.toml`` / ``model.toml`` / ``storage.toml`` / ``infra.toml``），
+文件归属与显示名由各根 Schema 的自描述协议（``__file_name__`` /
+``__section_label__``）提供，本模块不维护任何手写映射表。
 
-PATCH 通过 ``key`` 的首段 (例如 ``persona.bot_name`` → ``persona``) 路由到正确的 TOML 文件。
+API 键约定：**scope 前缀 + 文件内点分路径**——``tools.tools.tasks.poll_interval_ms``、
+``agents.agents.streamer.persona.bot_name``、``infra.dashboard.port``。
+首个段（scope）路由到对应文件；剥掉前缀的文件内路径同时是 GET 返回的
+扁平化合并视图（``main_config``）的寻址方式。
+
+校验语义：写路径统一走加载管线的 Schema 校验（``update_config_values``），
+类型/约束违约返回 422 + 中文消息（含文件名与字段路径），无手写字段校验分支。
 """
 
 from collections import defaultdict
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, Union, get_args, get_origin
 import asyncio
 import os
-import re
 import subprocess
 import sys
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, ValidationError
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
-from src.modules.config.agents_schemas import AgentsRootConfig
-from src.modules.config.core_schemas import CoreConfig
-from src.modules.config.memory_schemas import MemoryRootConfig
-from src.modules.config.model_schemas import ModelConfig
-from src.modules.config.storage_schemas import StorageRootConfig
-from src.modules.config.toml_utils import (
-    load_toml_with_comments,
-    write_toml_preserve,
+from src.modules.config.errors import ConfigValidationError
+from src.modules.config.multi_file_loader import (
+    resolve_root_schema,
+    update_config_values,
+    validate_config_updates,
 )
-from src.modules.config.tools_schemas import ToolsRootConfig
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.logging import get_logger
 
@@ -46,41 +45,11 @@ logger = get_logger("ConfigAPI")
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
+# 六文件 scope 清单（= 文件名去后缀；顺序即 Schema 分组展示顺序）
+_SCOPES = ("agents", "collectors", "tools", "model", "storage", "infra")
 
-# section 顶层字段名 → Pydantic 根模型；与 _build_frontend_groups 共用同一份 schema 树
-_SECTION_TO_ROOT_MODEL: Dict[str, type[BaseModel]] = {
-    "meta": CoreConfig,
-    "general": CoreConfig,
-    "persona": CoreConfig,
-    "context": CoreConfig,
-    "events": CoreConfig,
-    "dashboard": CoreConfig,
-    "logging": CoreConfig,
-    "interceptors": CoreConfig,
-    "simulator": CoreConfig,
-    "tts": CoreConfig,
-    "subtitle": CoreConfig,
-    "llm": ModelConfig,
-    "llm_fast": ModelConfig,
-    "vlm": ModelConfig,
-    "llm_local": ModelConfig,
-    "llm_providers": ModelConfig,
-    "llm_summary": ModelConfig,
-    "llm_agenda": ModelConfig,
-    "agents": AgentsRootConfig,
-    "streamer": AgentsRootConfig,
-    "tools": ToolsRootConfig,
-    "perception": ToolsRootConfig,
-    "output": ToolsRootConfig,
-    "understanding": ToolsRootConfig,
-    "content_engine": ToolsRootConfig,
-    "external": ToolsRootConfig,
-    "memory": MemoryRootConfig,
-    "simple": MemoryRootConfig,
-    "amemorix": MemoryRootConfig,
-    "storage": StorageRootConfig,
-    "sqlite": StorageRootConfig,
-}
+# GET 响应中敏感字段的占位文案：明文不下发，回写同值会被拒绝
+_SENSITIVE_PLACEHOLDER = "已设置"
 
 
 def _unwrap_optional(annotation: Any) -> Any:
@@ -92,39 +61,58 @@ def _unwrap_optional(annotation: Any) -> Any:
     return annotation
 
 
-def _resolve_schema_node(key: str) -> Optional[tuple[type[BaseModel], Any]]:
-    """按点分 key 走 schema 树；返回 (containing_model_cls, leaf_field_info_or_None)。
+def _walk_schema(model_cls: type[BaseModel], parts: list[str]) -> Optional[tuple[str, Any]]:
+    """在根 Schema 字段树中按段行走。
 
-    任意一段未在 schema 中找到则返回 ``None``，由调用方按"未知配置项"拒绝。
-    ``dict[str, Any]`` 字段（如拦截器配置）下接受任意下一段键作为叶子字段；
-    此时 ``leaf_field_info`` 为 ``None``，调用方跳过字段级类型/约束校验。
+    返回值三态：
+    - ``("leaf", (宿主模型, 字段定义))``：叶子字段定位成功
+    - ``("free_dict", None)``：进入自由字典段，子键形状未知（跳过字段级校验）
+    - ``None``：路径不存在（未知配置项）
     """
-    parts = key.split(".")
-    if not parts or not parts[0]:
+    if not parts:
         return None
-    section = parts[0]
-    root_cls = _SECTION_TO_ROOT_MODEL.get(section)
+    segment, rest = parts[0], parts[1:]
+
+    extra_allow = model_cls.model_config.get("extra") == "allow"
+    if segment not in model_cls.model_fields:
+        # extra="allow" 的宿主（collectors 根）：未知段是采集器子段，
+        # 权威 Schema 在组件注册表中，按注册表继续下钻
+        if extra_allow and rest:
+            from src.modules.config.registry import COMPONENT_SCHEMAS
+
+            sub_cls = COMPONENT_SCHEMAS.get(segment)
+            if sub_cls is not None:
+                return _walk_schema(sub_cls, rest)
+        return None
+
+    field_info = model_cls.model_fields[segment]
+    if not rest:
+        return ("leaf", (model_cls, field_info))
+
+    annotation = _unwrap_optional(field_info.annotation)
+    origin = get_origin(annotation)
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return _walk_schema(annotation, rest)
+    if origin is dict:
+        elem_args = get_args(annotation)
+        elem = _unwrap_optional(elem_args[-1]) if elem_args else None
+        if isinstance(elem, type) and issubclass(elem, BaseModel):
+            # dict[str, 子模型]：rest[0] 是动态键（如 planner / mcp server 名），
+            # 不参与字段校验，跳过后继续走值类型
+            return _walk_schema(elem, rest[1:])
+        return ("free_dict", None)
+    return None
+
+
+def _resolve_schema_node(key: str) -> Optional[tuple[str, Any]]:
+    """按 scope 前缀 + 点分路径走 schema 树；结果语义见 ``_walk_schema``。"""
+    parts = key.split(".")
+    if len(parts) < 2 or not parts[0]:
+        return None
+    root_cls = resolve_root_schema(parts[0])
     if root_cls is None:
         return None
-    current_cls = root_cls
-    for i, segment in enumerate(parts[:-1]):
-        if segment not in current_cls.model_fields:
-            return None
-        fld = current_cls.model_fields[segment]
-        annotation = _unwrap_optional(fld.annotation)
-        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-            current_cls = annotation
-        elif get_origin(annotation) is dict:
-            # 自由键 dict 字段：仅当下一段就是叶子时合法，否则无法再向下展开
-            if i < len(parts) - 2:
-                return None
-            return current_cls, fld
-        else:
-            return None
-    leaf_name = parts[-1]
-    if leaf_name not in current_cls.model_fields:
-        return None
-    return current_cls, current_cls.model_fields[leaf_name]
+    return _walk_schema(root_cls, parts[1:])
 
 
 def _field_is_readonly(field_info: Any) -> bool:
@@ -135,119 +123,16 @@ def _field_is_readonly(field_info: Any) -> bool:
     return False
 
 
-def _validate_value_for_field(value: Any, field_info: Any, dotted_key: str) -> Optional[str]:
-    """校验 ``value`` 是否匹配字段类型与约束；通过返回 ``None``，失败返回中文错误消息。
-
-    校验维度：
-    - 类型：标量 (str/int/float/bool) / 数组 (list) / 对象 (dict) / Literal / 嵌套 Pydantic 模型
-    - 约束：从 Pydantic ``Field.metadata`` 提取 ge/le/gt/lt/min_length/max_length/pattern
-
-    选择此实现的原因：deterministic + testable。覆盖嵌套 Pydantic 模型字段时调用
-    ``model_validate``，让 Pydantic 自身的错误处理覆盖 min_length/pattern 等深层约束；
-    标量字段用直接 isinstance + 约束比较，避免构造整个 containing model 的开销。
-    """
-    annotation = _unwrap_optional(field_info.annotation)
-
-    # Literal[X, Y, ...] -> 值必须命中选项之一
-    if get_origin(annotation) is not None and str(get_origin(annotation)) == "typing.Literal":
-        options = list(get_args(annotation))
-        if value not in options:
-            return f"{dotted_key} 值必须是 {options} 之一，收到: {value!r}"
-        return None
-
-    # 嵌套 Pydantic 模型 -> 走 model_validate
-    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        if not isinstance(value, dict):
-            return f"{dotted_key} 应为对象，收到: {type(value).__name__}"
-        try:
-            annotation.model_validate(value)
-        except ValidationError as e:
-            return f"{dotted_key} 结构校验失败: {e}"
-        return None
-
-    # 标量类型（注意：bool 必须在 int 之前判断，因为 isinstance(True, int) == True）
-    if annotation is bool:
-        if not isinstance(value, bool):
-            return f"{dotted_key} 应为布尔值 (true/false)，收到: {type(value).__name__}"
-    elif annotation is int:
-        if isinstance(value, bool) or not isinstance(value, int):
-            return f"{dotted_key} 应为整数，收到: {type(value).__name__}"
-    elif annotation is float:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return f"{dotted_key} 应为数字，收到: {type(value).__name__}"
-    elif annotation is str:
-        if not isinstance(value, str):
-            return f"{dotted_key} 应为字符串，收到: {type(value).__name__}"
-    elif get_origin(annotation) in {list, set, tuple}:
-        if not isinstance(value, list):
-            return f"{dotted_key} 应为数组，收到: {type(value).__name__}"
-        elem_args = get_args(annotation)
-        if elem_args:
-            elem_type = _unwrap_optional(elem_args[0])
-            for i, item in enumerate(value):
-                if isinstance(elem_type, type) and issubclass(elem_type, BaseModel):
-                    if not isinstance(item, dict):
-                        return f"{dotted_key}[{i}] 应为对象，收到: {type(item).__name__}"
-                    try:
-                        elem_type.model_validate(item)
-                    except ValidationError as e:
-                        return f"{dotted_key}[{i}] 结构校验失败: {e}"
-                elif elem_type is int and (isinstance(item, bool) or not isinstance(item, int)):
-                    return f"{dotted_key}[{i}] 应为整数，收到: {type(item).__name__}"
-                elif elem_type is float and (isinstance(item, bool) or not isinstance(item, (int, float))):
-                    return f"{dotted_key}[{i}] 应为数字，收到: {type(item).__name__}"
-                elif elem_type is str and not isinstance(item, str):
-                    return f"{dotted_key}[{i}] 应为字符串，收到: {type(item).__name__}"
-                elif elem_type is bool and not isinstance(item, bool):
-                    return f"{dotted_key}[{i}] 应为布尔值，收到: {type(item).__name__}"
-    elif annotation is dict or get_origin(annotation) is dict:
-        if not isinstance(value, dict):
-            return f"{dotted_key} 应为对象，收到: {type(value).__name__}"
-    else:
-        # 未识别的注解类型：保守放行（写入将由外层 tomlkit 序列化兜底）
-        return None
-
-    # 标量/字符串约束（ge/le/gt/lt/min_length/max_length/pattern）
-    metadata = getattr(field_info, "metadata", None) or []
-    for c in metadata:
-        ge = getattr(c, "ge", None)
-        le = getattr(c, "le", None)
-        gt = getattr(c, "gt", None)
-        lt = getattr(c, "lt", None)
-        min_length = getattr(c, "min_length", None)
-        max_length = getattr(c, "max_length", None)
-        pattern = getattr(c, "pattern", None)
-        if isinstance(value, str) and min_length is not None and len(value) < min_length:
-            return f"{dotted_key} 长度不能少于 {min_length} 字符"
-        if isinstance(value, str) and max_length is not None and len(value) > max_length:
-            return f"{dotted_key} 长度不能超过 {max_length} 字符"
-        if isinstance(value, str) and pattern is not None:
-            # Pydantic 用 search 校验 pattern，这里保持一致
-            if not re.search(pattern, value):
-                return f"{dotted_key} 不匹配要求的格式 ({pattern})"
-        if not isinstance(value, bool) and isinstance(value, (int, float)) and ge is not None and value < ge:
-            return f"{dotted_key} 不能小于 {ge}"
-        if not isinstance(value, bool) and isinstance(value, (int, float)) and le is not None and value > le:
-            return f"{dotted_key} 不能大于 {le}"
-        if not isinstance(value, bool) and isinstance(value, (int, float)) and gt is not None and value <= gt:
-            return f"{dotted_key} 必须大于 {gt}"
-        if not isinstance(value, bool) and isinstance(value, (int, float)) and lt is not None and value >= lt:
-            return f"{dotted_key} 必须小于 {lt}"
-    return None
-
-
-def _resolve_section(key: str) -> str:
-    """从点分 key 解析顶层 section (例如 'persona.bot_name' → 'persona')"""
-    if not key:
-        return ""
-    return key.split(".", 1)[0]
+def _resolve_scope(key: str) -> str:
+    """从点分 key 解析 scope（首段），例如 ``infra.dashboard.port`` → ``infra``。"""
+    return key.split(".", 1)[0] if key else ""
 
 
 def _find_empty_key(value: Any, path: str = "") -> Optional[str]:
     """递归查找 value 中嵌套的空 key（空字符串或纯空白），返回其字段路径；无则返回 None。
 
-    tomlkit 序列化时遇到空 key 会抛笼统的 "Empty key" 错误，无法定位具体字段。
-    此函数在写入前提前校验，返回可定位的路径（如 ``collectors.xxx.\"\"``）。
+    TOML 序列化遇到空 key 会抛笼统错误，无法定位具体字段；
+    此检查在写入前提前拦截，返回可定位的路径。
     """
     if isinstance(value, dict):
         for k, v in value.items():
@@ -272,10 +157,9 @@ def _find_empty_key(value: Any, path: str = "") -> Optional[str]:
 
 
 class ConfigResponse(BaseModel):
-    """完整配置响应 (扁平化的 main_config)
+    """完整配置响应 (合并视图)
 
-    顶层字段对应 ConfigService 中的各个 section,例如:
-    ``persona`` / ``general`` / ``llm`` / ``collectors`` / ``deciders`` / ``handlers``
+    顶层键为六个 scope：agents / collectors / tools / model / storage / infra。
     """
 
     config: Dict[str, Any] = Field(default_factory=dict, description="完整配置字典")
@@ -284,7 +168,7 @@ class ConfigResponse(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     """配置更新请求"""
 
-    key: str = Field(description="配置键（点分隔路径,如 'general.platform_id'）")
+    key: str = Field(description="配置键（scope 前缀点分路径，如 'infra.dashboard.port'）")
     value: Any = Field(description="配置值")
 
 
@@ -303,7 +187,7 @@ class ConfigUpdateResponse(BaseModel):
 class BatchConfigChange(BaseModel):
     """批量更新中的单条变更。"""
 
-    key: str = Field(description="配置键（点分隔路径,如 'general.platform_id')")
+    key: str = Field(description="配置键（scope 前缀点分路径，如 'tools.tools.tasks.poll_interval_ms'）")
     value: Any = Field(description="配置值")
 
 
@@ -311,7 +195,7 @@ class BatchConfigUpdateRequest(BaseModel):
     """批量配置更新请求。
 
     多个变更按提交顺序处理：
-    - 同一批次内出现重复 key 时，后者覆盖前者的校验值与最终写入值（last-wins），
+    - 同一批次内出现重复 key 时，后者覆盖前者的最终写入值（last-wins），
       这是为了支持前端"反复编辑同字段"时的最终一致性，不视为错误。
     - 整体按事务处理：任意一条校验失败则整个批次回退（无文件被改写）。
     """
@@ -337,7 +221,7 @@ class BatchConfigUpdateResponse(BaseModel):
     """批量配置更新响应。
 
     - 全部成功时：``success=true``，``results`` 列出每条 key 与 success=true，
-      ``requires_restart=true`` 沿用单条 PATCH 的诚实策略。
+      非 hot 段变更附带 ``requires_restart=true``。
     - 任一失败时：``success=false``，``errors`` 列出失败条目，``message`` 是首条失败的
       中文消息（含 "（另有 N 项失败）" 聚合后缀），并保证磁盘零写入。
     """
@@ -364,10 +248,12 @@ class BatchConfigUpdateResponse(BaseModel):
 async def get_config(server: ServerDep) -> ConfigResponse:
     """获取当前配置
 
-    返回扁平化的 ``main_config`` 字典 (ConfigService 已合并 core/model/input/decision/output)。
+    返回扁平化的 ``main_config``（六文件 scope 展平后的合并视图，键为
+    文件内点分路径的首段，如 ``agents`` / ``tools`` / ``dashboard``）。
 
-    敏感字段 (api_key / token / password / secret 等) 的值在响应中替换为 ``""``，
-    避免明文凭据被此接口整盘导出。
+    敏感字段 (api_key / token / password / secret 等) 的值在响应中替换为
+    "已设置" 占位——明文凭据不从此接口导出；回写该占位值会被 422 拒绝，
+    真正清空请显式提交空字符串。
     前端配置页应通过 ``/api/v1/config/schema`` 读取字段定义，
     本接口仅作为只读快照使用。
     """
@@ -441,11 +327,10 @@ def _extract_label(field: dict) -> str:
 
 
 def _mask_sensitive_values(config: dict, path_prefix: str = "") -> dict:
-    """递归遍历 config，对敏感字段的标量值替换为 ``""``，返回新 dict（不修改原对象）。
+    """递归遍历 config，对敏感字段的标量值替换为"已设置"占位，返回新 dict（不修改原对象）。
 
     路径语义与 schema 字段的 dotted key 一致：dict 子段拼接到前缀后，
-    list 子项不引入新的路径段（数组元素匿名），与 ``collect_all_fields`` 生成的
-    ``llm_providers.api_key`` 这类扁平 key 保持一致，便于复用 ``_is_sensitive_field``。
+    list 子项不引入新的路径段（数组元素匿名）。
     """
     masked: dict = {}
     for k, v in config.items():
@@ -455,21 +340,27 @@ def _mask_sensitive_values(config: dict, path_prefix: str = "") -> dict:
         elif isinstance(v, list):
             masked[k] = [_mask_sensitive_values(item, full_key) if isinstance(item, dict) else item for item in v]
         else:
-            masked[k] = "" if _is_sensitive_field(full_key) else v
+            masked[k] = _SENSITIVE_PLACEHOLDER if _is_sensitive_field(full_key) else v
     return masked
+
+
+def _display_value(key: str, main_config: dict) -> Any:
+    """取字段当前值用于展示：剥 scope 前缀后在扁平化 main_config 中寻址。"""
+    path_in_file = key.split(".", 1)[1] if "." in key else key
+    return _get_nested_value(main_config, path_in_file)
 
 
 def _convert_to_api_field(field: dict, main_config: dict) -> dict:
     """将 generator schema 的 field dict 转换为前端 API 字段格式。
 
-    集中维护字段规范化规则，供 ``_build_frontend_groups`` 复用。
+    集中维护字段规范化规则，供分组构建复用。
 
-    敏感字段：``value`` 一律返回空字符串，避免明文 API key 通过 schema 接口泄漏。
-    前端基于 schema 的 diff 基线策略只在用户真正编辑时提交新值，
-    未触动过的敏感字段保持空字符串上送，被后端视为"未改动"而不会覆盖磁盘上的真实值。
+    敏感字段：``value`` 一律返回"已设置"占位，避免明文 API key 通过 schema
+    接口泄漏；前端只在用户真正编辑时提交新值（回写占位会被 422 拒绝），
+    显式清空请提交空字符串。
     """
     dotted_key = field.get("key", "")
-    raw_value = _get_nested_value(main_config, dotted_key)
+    raw_value = _display_value(dotted_key, main_config)
     is_sensitive = _is_sensitive_field(dotted_key)
     gfield: dict = {
         "key": dotted_key,
@@ -477,10 +368,10 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
         "description": field.get("description", ""),
         "type": _map_gen_type(field.get("type", "string")),
         "default": field.get("default"),
-        "value": "" if is_sensitive else raw_value,
+        "value": _SENSITIVE_PLACEHOLDER if is_sensitive else raw_value,
         "required": field.get("required", False),
         "sensitive": is_sensitive,
-        # 透传 schema_generator 从 json_schema_extra 解析出的 readonly 标记，与 PATCH 接口的拒绝逻辑共用同一信号
+        # 透传 schema_generator 从 json_schema_extra 解析出的 readonly 标记，与写接口的拒绝逻辑共用同一信号
         "readonly": bool(field.get("readonly", False)),
     }
     validation: dict = {}
@@ -495,79 +386,10 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
     return gfield
 
 
-# section → TOML 文件映射（7 文件）
-_SECTION_TO_FILE: dict[str, str] = {
-    "meta": "core.toml",
-    "general": "core.toml",
-    "persona": "core.toml",
-    "context": "core.toml",
-    "dashboard": "core.toml",
-    "events": "core.toml",
-    "logging": "core.toml",
-    "pipelines": "core.toml",
-    "simulator": "core.toml",
-    "llm": "model.toml",
-    "llm_fast": "model.toml",
-    "vlm": "model.toml",
-    "llm_local": "model.toml",
-    "llm_providers": "model.toml",
-    "llm_summary": "model.toml",
-    "llm_agenda": "model.toml",
-    "agents": "agents.toml",
-    "streamer": "agents.toml",
-    "tools": "tools.toml",
-    "perception": "tools.toml",
-    "output": "tools.toml",
-    "memory": "memory.toml",
-    "simple": "memory.toml",
-    "amemorix": "memory.toml",
-    "storage": "storage.toml",
-    "sqlite": "storage.toml",
-}
-
-_FILE_LABELS: dict[str, str] = {
-    "core.toml": "🚀 核心",
-    "model.toml": "🧠 模型",
-    "agents.toml": "🤖 业务 Agent",
-    "tools.toml": "🔧 工具包",
-    "memory.toml": "💾 记忆",
-    "storage.toml": "📦 存储",
-}
-
-_SECTION_LABELS: dict[str, str] = {
-    "llm": "主 LLM 配置",
-    "llm_fast": "快速 LLM",
-    "vlm": "视觉语言模型",
-    "llm_local": "本地 LLM",
-    "llm_providers": "LLM 提供商列表",
-    "llm_summary": "房间状态摘要 LLM",
-    "llm_agenda": "直播大纲 LLM",
-    "meta": "元信息",
-    "general": "通用配置",
-    "persona": "VTuber 人设",
-    "context": "上下文组装器",
-    "events": "事件历史",
-    "dashboard": "Dashboard",
-    "logging": "日志",
-    "pipelines": "管道配置",
-    "simulator": "模拟直播间",
-    "agents": "业务 Agent",
-    "streamer": "主播 Agent",
-    "tools": "工具包",
-    "perception": "感知工具包",
-    "output": "输出工具包",
-    "memory": "记忆系统",
-    "simple": "SimpleMemory",
-    "amemorix": "Amemorix",
-    "storage": "存储",
-    "sqlite": "SQLite 存储",
-}
-
-
 def _group_into_children(fields: list[dict], _depth: int = 1) -> list[dict]:
     """将扁平的点分 key 字段列表构建为层级 children 结构。
 
-    ``_depth`` 标记当前层在 dotted key 中的段索引（初始 1 = section 后第一位）。
+    ``_depth`` 标记当前层在 dotted key 中的段索引（初始 1 = scope 后第一位）。
     递归时 ``_depth + 1``，不需要改动 key 本身。
 
     注意：同一 key 同时有扁平字段和嵌套子字段时（如 ``message_config`` 既是
@@ -614,73 +436,45 @@ def _group_into_children(fields: list[dict], _depth: int = 1) -> list[dict]:
 
 
 def _build_frontend_groups(config_service) -> dict:
-    """Schema 适配器：generator schema → {groups, version} 前端格式.
+    """Schema 适配器：六文件根 Schema → {groups, version} 前端格式.
 
-    使用 ``ConfigSchemaGenerator`` 直接输出（schema_registry 已废弃）。
-    label/icon 来自 ``_SECTION_LABELS`` 兜底表。
+    每个根 Schema 一个分组；分组 label / 文件归属来自根类的自描述协议
+    （``__section_label__`` / ``__file_name__``），无手写映射表。
+    字段 key 在文件内路径前加 scope 前缀，与合并视图寻址一致。
     """
     from src.modules.config.schema_generator import (
         ConfigSchemaGenerator,
         collect_all_fields,
     )
-    from src.modules.config.core_schemas import CoreConfig
-    from src.modules.config.model_schemas import ModelConfig
-    from src.modules.config.agents_schemas import AgentsRootConfig
-    from src.modules.config.tools_schemas import ToolsRootConfig
-    from src.modules.config.memory_schemas import MemoryRootConfig
-    from src.modules.config.storage_schemas import StorageRootConfig
 
     main_config = config_service.main_config or {}
 
-    core_schema = ConfigSchemaGenerator.generate_config_schema(CoreConfig)
-    model_schema = ConfigSchemaGenerator.generate_config_schema(ModelConfig)
-    agents_schema = ConfigSchemaGenerator.generate_config_schema(AgentsRootConfig)
-    tools_schema = ConfigSchemaGenerator.generate_config_schema(ToolsRootConfig)
-    memory_schema = ConfigSchemaGenerator.generate_config_schema(MemoryRootConfig)
-    storage_schema = ConfigSchemaGenerator.generate_config_schema(StorageRootConfig)
-    all_fields = (
-        collect_all_fields(core_schema)
-        + collect_all_fields(model_schema)
-        + collect_all_fields(agents_schema)
-        + collect_all_fields(tools_schema)
-        + collect_all_fields(memory_schema)
-        + collect_all_fields(storage_schema)
-    )
-    leaf_fields = [f for f in all_fields if "." in str(f.get("key", ""))]
-
-    section_map: Dict[str, list] = {}
-    for field in leaf_fields:
-        key = field.get("key", "")
-        parts = key.split(".")
-        section = parts[0] if parts else "_other"
-        if section not in section_map:
-            section_map[section] = []
-        section_map[section].append(field)
-
     groups: list[dict] = []
-    for section_key, fields in section_map.items():
+    for scope in _SCOPES:
+        root_cls = resolve_root_schema(scope)
+        if root_cls is None:
+            continue
+        schema = ConfigSchemaGenerator.generate_config_schema(root_cls)
+        leaf_fields = [f for f in collect_all_fields(schema) if "." in str(f.get("key", ""))]
         group_fields: list[dict] = []
-
-        for field in fields:
+        for field in leaf_fields:
+            # 文件内路径 → scope 前缀的 API 键
+            field["key"] = f"{scope}.{field['key']}"
             group_fields.append(_convert_to_api_field(field, main_config))
-
         group_fields = _group_into_children(group_fields)
 
-        file_name = _SECTION_TO_FILE.get(section_key, "core.toml")
         groups.append(
             {
-                "key": section_key,
-                "label": _SECTION_LABELS.get(section_key, section_key),
+                "key": scope,
+                "label": root_cls.__section_label__ or scope,
                 "description": "",
                 "icon": None,
                 "order": 99,
                 "fields": group_fields,
-                "file_name": file_name,
-                "file_label": _FILE_LABELS.get(file_name, file_name),
+                "file_name": root_cls.__file_name__,
+                "file_label": root_cls.__section_label__ or root_cls.__file_name__,
             }
         )
-
-    groups.sort(key=lambda g: g.get("order", 99) or 99)
 
     return {"groups": groups, "version": "1.0.0"}
 
@@ -689,8 +483,8 @@ def _build_frontend_groups(config_service) -> dict:
 async def get_config_schema(server: ServerDep) -> SchemaGroupsResponse:
     """获取配置 Schema
 
-    使用 ``ConfigSchemaGenerator`` 从 Pydantic 模型自动推导 Schema,
-    通过 ``_build_frontend_groups`` 转换为前端 ``{groups, version}`` 格式。
+    使用 ``ConfigSchemaGenerator`` 从六个根 Schema 自动推导，
+    经 ``_build_frontend_groups`` 转换为前端 ``{groups, version}`` 格式。
     """
     config_service = server.config_service
     if not config_service:
@@ -706,120 +500,139 @@ async def get_config_schema(server: ServerDep) -> SchemaGroupsResponse:
 
 
 # ---------------------------------------------------------------------------
+# 写路径共用校验
+# ---------------------------------------------------------------------------
+
+
+def _find_placeholder_write(value: Any, path: str = "") -> Optional[str]:
+    """递归查找回写进 value 的敏感占位符，返回其字段路径；无则返回 None。
+
+    占位符本意是"真实值不下发"的 GET 展示形态；出现在写请求里意味着
+    前端把占位当值回传，落盘会用占位文本覆盖真实凭据，必须拒绝。
+    """
+    if isinstance(value, dict):
+        for k, v in value.items():
+            key_str = str(k)
+            key_path = f"{path}.{key_str}" if path else key_str
+            if not isinstance(v, (dict, list)) and _is_sensitive_field(key_path) and v == _SENSITIVE_PLACEHOLDER:
+                return key_path
+            sub = _find_placeholder_write(v, key_path)
+            if sub is not None:
+                return sub
+    elif isinstance(value, list):
+        for v in value:
+            sub = _find_placeholder_write(v, path)
+            if sub is not None:
+                return sub
+    return None
+
+
+def _check_writable(key: str, value: Any) -> Optional[str]:
+    """写路径共用前置校验；通过返回 None，失败返回中文错误消息。
+
+    覆盖：未知配置项（schema 树外）/ 只读字段 / 敏感字段占位回写 / 嵌套空键。
+    值本身的类型与约束校验交给统一管线的 Schema 校验（写盘前硬错）。
+    """
+    empty_key_path = _find_empty_key(value)
+    if empty_key_path is not None:
+        return f"配置值包含空键: '{empty_key_path}'（位于 {key}，请移除空白键后重试）"
+
+    placeholder_path = _find_placeholder_write(value)
+    if placeholder_path is not None:
+        return f"{placeholder_path} 的值为占位符（真实值不下发）；请输入新值，显式清空请提交空字符串"
+
+    schema_node = _resolve_schema_node(key)
+    if schema_node is None:
+        return f"未知配置项: {key}"
+    kind, payload = schema_node
+    if kind == "free_dict":
+        return None
+    _containing_cls, leaf_field = payload
+    if leaf_field is not None and _field_is_readonly(leaf_field):
+        return f"{key} 为只读字段，禁止修改"
+    return None
+
+
+async def _apply_and_reload(
+    config_service,
+    config_dir,
+    updates_by_file: dict[str, dict[str, Any]],
+    keys: list[str],
+) -> tuple[bool, bool, Optional[str]]:
+    """按文件分组走统一管线写盘，随后对触碰的 scope 尝试重载。
+
+    Returns:
+        (success, requires_restart, error_message)
+    """
+    # 事务前置：全部文件先校验，任一失败即整批拒绝（磁盘零写入）
+    try:
+        for file_name, updates in updates_by_file.items():
+            validate_config_updates(config_dir, file_name, updates)
+    except ConfigValidationError as e:
+        return False, False, str(e)
+
+    for file_name, updates in updates_by_file.items():
+        try:
+            update_config_values(config_dir, file_name, updates)
+        except ConfigValidationError as e:
+            # 前置校验已通过，此处失败属并发修改窗口；忠实上报
+            logger.error(f"写入配置文件失败: {file_name}: {e}")
+            return False, False, f"写入配置文件失败: {e}"
+
+    scopes = [_resolve_scope(k) for k in keys]
+    reloaded = await config_service.reload_config(changed_scopes=scopes)
+    hot_applied = bool(reloaded) and all(s == "infra" for s in scopes)
+    return True, not hot_applied, None
+
+
+# ---------------------------------------------------------------------------
 # PATCH /api/v1/config
 # ---------------------------------------------------------------------------
 
 
 @router.patch("", response_model=ConfigUpdateResponse)
 async def update_config(request: ConfigUpdateRequest, server: ServerDep) -> ConfigUpdateResponse:
-    """更新配置（写入对应 TOML 文件,保留注释）
+    """更新配置（写入对应 TOML 文件，经统一管线）
 
-    根据 ``request.key`` 的首段(section)路由到正确的 TOML 文件:
-    - ``persona.*`` / ``general.*`` / ... → ``core.toml``
-    - ``llm.*`` / ``vlm.*`` / ... → ``model.toml``
-    - ``collectors.*`` → ``input.toml``
-    - ``deciders.*`` → ``decision.toml``
-    - ``handlers.*`` → ``output.toml``
+    根据 ``request.key`` 的 scope 首段路由到对应文件：
+    - ``agents.*`` → ``agents.toml``
+    - ``collectors.*`` → ``collectors.toml``
+    - ``tools.*`` → ``tools.toml``
+    - ``model.*`` → ``model.toml``
+    - ``storage.*`` → ``storage.toml``
+    - ``infra.*`` → ``infra.toml``（hot 段，写后即时重载生效）
     """
     config_service = server.config_service
     if not config_service:
-        return ConfigUpdateResponse(
-            success=False,
-            message="Config service not available",
-        )
+        raise HTTPException(status_code=503, detail="Config service 不可用")
 
-    section = _resolve_section(request.key)
-    if not section:
-        return ConfigUpdateResponse(
-            success=False,
-            message=f"无法从 key 解析 section: {request.key!r}",
-        )
+    scope = _resolve_scope(request.key)
+    root_cls = resolve_root_schema(scope)
+    if root_cls is None:
+        raise HTTPException(status_code=422, detail=f"未知配置域: {scope!r}（合法 scope: {list(_SCOPES)}）")
 
-    config_path = server.get_config_path(section)
-    if not config_path:
-        return ConfigUpdateResponse(
-            success=False,
-            message="Config file path not available",
-            target_file=None,
-        )
+    check_error = _check_writable(request.key, request.value)
+    if check_error is not None:
+        raise HTTPException(status_code=422, detail=check_error)
 
-    # 校验 value 中不含空 key（嵌套），避免 tomlkit 序列化时报笼统的 "Empty key" 错误
-    empty_key_path = _find_empty_key(request.value)
-    if empty_key_path is not None:
-        return ConfigUpdateResponse(
-            success=False,
-            message=f"配置值包含空键: '{empty_key_path}'（位于 {request.key}，请移除空白键后重试）",
-            target_file=_path_basename(config_path),
-        )
+    file_name = root_cls.__file_name__
+    path_in_file = request.key.split(".", 1)[1]
+    config_dir = _get_config_dir(config_service)
 
-    # 走 schema 树校验：未知配置项 / readonly / 类型或约束违规一律拒绝
-    schema_node = _resolve_schema_node(request.key)
-    if schema_node is None:
-        return ConfigUpdateResponse(
-            success=False,
-            message=f"未知配置项: {request.key}",
-            target_file=_path_basename(config_path),
-        )
-    _containing_cls, leaf_field = schema_node
-    if leaf_field is not None and _field_is_readonly(leaf_field):
-        return ConfigUpdateResponse(
-            success=False,
-            message=f"{request.key} 为只读字段，禁止修改",
-            target_file=_path_basename(config_path),
-        )
-    if leaf_field is not None:
-        validation_error = _validate_value_for_field(request.value, leaf_field, request.key)
-        if validation_error is not None:
-            return ConfigUpdateResponse(
-                success=False,
-                message=validation_error,
-                target_file=_path_basename(config_path),
-            )
+    success, requires_restart, error = await _apply_and_reload(
+        config_service, config_dir, {file_name: {path_in_file: request.value}}, [request.key]
+    )
+    if not success:
+        raise HTTPException(status_code=422, detail=error or "写入失败")
 
-    try:
-        # 1. 使用 tomlkit 读取（保留注释）
-        doc = load_toml_with_comments(str(config_path))
-
-        # 2. 更新嵌套值
-        keys = request.key.split(".")
-        current = doc
-        for k in keys[:-1]:
-            if k not in current:
-                current[k] = {}
-            current = current[k]
-
-        # 设置值
-        current[keys[-1]] = request.value
-
-        # 3. 原子写入（临时文件 → 验证 → 重命名，不创建备份）
-        success, message = write_toml_preserve(str(config_path), doc, create_backup=False)
-
-        if success:
-            # ConfigService.reload_config() 只刷新内存中的 main_config，不向已构造的 Agent / Tool /
-            # Collector 注入新配置（reload 回调链路未被任何生产代码注册，FileWatcher 也未启动），
-            # 故任何 PATCH 都要求用户重启服务才能生效；前缀白名单的差异化策略已被废弃。
-            logger.info(f"配置已更新: {request.key} = {request.value} (写入 {_path_basename(config_path)})")
-
-            return ConfigUpdateResponse(
-                success=True,
-                message="配置已保存到文件，需重启服务后生效",
-                requires_restart=True,
-                target_file=_path_basename(config_path),
-            )
-
-        return ConfigUpdateResponse(
-            success=False,
-            message=f"写入配置文件失败: {message}",
-            target_file=_path_basename(config_path),
-        )
-
-    except Exception as e:
-        logger.error(f"更新配置失败: {e}", exc_info=True)
-        return ConfigUpdateResponse(
-            success=False,
-            message=f"更新配置失败: {str(e)}",
-            target_file=_path_basename(config_path) if config_path else None,
-        )
+    logger.info(f"配置已更新: {request.key} (写入 {file_name})")
+    message = "配置已保存，hot 段已即时生效" if not requires_restart else "配置已保存到文件，需重启服务后完全生效"
+    return ConfigUpdateResponse(
+        success=True,
+        message=message,
+        requires_restart=requires_restart,
+        target_file=file_name,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -835,150 +648,60 @@ async def batch_update_config(
     """批量原子更新配置。
 
     单次请求携带多条变更，要么全部成功要么全部回退（事务语义）：
-    任一变更在校验阶段失败则拒绝整个批次并保持磁盘零写入；
-    写入阶段按目标 TOML 文件分组，每个文件只读写一次。
+    任一变更在前置校验或 Schema 校验阶段失败则拒绝整个批次并保持磁盘零写入；
+    写入阶段按目标 TOML 文件分组，每个文件只写一次（经统一管线，含备份与自写压标）。
 
-    同一批次内出现重复 key 时按 **last-wins** 处理：后者的 value 覆盖前者的校验值与
+    同一批次内出现重复 key 时按 **last-wins** 处理：后者的 value 覆盖前者的
     最终写入值，便于前端"反复编辑同字段后保存"的最终一致性，不视为错误。
     """
     config_service = server.config_service
     if not config_service:
-        return BatchConfigUpdateResponse(
-            success=False,
-            message="Config service not available",
-        )
+        raise HTTPException(status_code=503, detail="Config service 不可用")
 
     if not request.changes:
-        return BatchConfigUpdateResponse(
-            success=False,
-            message="没有可保存的更改",
-        )
+        return BatchConfigUpdateResponse(success=False, message="没有可保存的更改")
 
     deduped: Dict[str, Any] = {}
     for change in request.changes:
         deduped[change.key] = change.value
     normalized: list[tuple[str, Any]] = list(deduped.items())
 
-    validation_error = _validate_batch(normalized)
-    if validation_error is not None:
-        return validation_error
+    errors: list[BatchChangeError] = []
+    for key, value in normalized:
+        check_error = _check_writable(key, value)
+        if check_error is not None:
+            errors.append(BatchChangeError(key=key, message=check_error))
+    if errors:
+        first = errors[0]
+        agg = first.message if len(errors) == 1 else f"{first.message}（另有 {len(errors) - 1} 项失败）"
+        return BatchConfigUpdateResponse(success=False, message=agg, errors=errors)
 
-    write_error = _write_batch(normalized, server)
-    if write_error is not None:
-        return write_error
+    updates_by_file: dict[str, dict[str, Any]] = {}
+    for key, value in normalized:
+        scope = _resolve_scope(key)
+        root_cls = resolve_root_schema(scope)
+        if root_cls is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"未知配置域: {scope!r}（合法 scope: {list(_SCOPES)}）",
+            )
+        path_in_file = key.split(".", 1)[1]
+        updates_by_file.setdefault(root_cls.__file_name__, {})[path_in_file] = value
+
+    config_dir = _get_config_dir(config_service)
+    success, requires_restart, error = await _apply_and_reload(
+        config_service, config_dir, updates_by_file, [k for k, _ in normalized]
+    )
+    if not success:
+        raise HTTPException(status_code=422, detail=error or "写入失败")
 
     logger.info(f"批量配置更新成功: 共 {len(normalized)} 项")
     return BatchConfigUpdateResponse(
         success=True,
-        message="配置已保存",
-        requires_restart=True,
+        message="配置已保存" + ("，hot 段已即时生效" if not requires_restart else "，需重启服务后完全生效"),
+        requires_restart=requires_restart,
         results=[BatchChangeResult(key=k, success=True) for k, _ in normalized],
     )
-
-
-def _validate_batch(
-    normalized: list[tuple[str, Any]],
-) -> Optional[BatchConfigUpdateResponse]:
-    """逐条复用单条 PATCH 的校验规则；任一失败返回完整失败响应（不写盘）。"""
-    errors: list[BatchChangeError] = []
-    for key, value in normalized:
-        empty_key_path = _find_empty_key(value)
-        if empty_key_path is not None:
-            errors.append(
-                BatchChangeError(
-                    key=key,
-                    message=f"配置值包含空键: '{empty_key_path}'（位于 {key}，请移除空白键后重试）",
-                )
-            )
-            continue
-
-        schema_node = _resolve_schema_node(key)
-        if schema_node is None:
-            errors.append(BatchChangeError(key=key, message=f"未知配置项: {key}"))
-            continue
-
-        _containing_cls, leaf_field = schema_node
-        if leaf_field is not None and _field_is_readonly(leaf_field):
-            errors.append(BatchChangeError(key=key, message=f"{key} 为只读字段，禁止修改"))
-            continue
-
-        if leaf_field is not None:
-            validation_error = _validate_value_for_field(value, leaf_field, key)
-            if validation_error is not None:
-                errors.append(BatchChangeError(key=key, message=validation_error))
-                continue
-
-    if not errors:
-        return None
-
-    first = errors[0]
-    if len(errors) == 1:
-        agg_message = first.message
-    else:
-        agg_message = f"{first.message}（另有 {len(errors) - 1} 项失败）"
-    return BatchConfigUpdateResponse(
-        success=False,
-        message=agg_message,
-        errors=errors,
-    )
-
-
-def _group_by_file(
-    normalized: list[tuple[str, Any]],
-    server: ServerDep,
-) -> Dict[str, list[tuple[list[str], Any]]]:
-    """把 (key, value) 按目标 TOML 文件路径分组，便于一次性读写。"""
-    by_file: Dict[str, list[tuple[list[str], Any]]] = {}
-    for key, value in normalized:
-        section = _resolve_section(key)
-        config_path = server.get_config_path(section)
-        if not config_path:
-            raise ValueError(f"无法定位配置文件: section={section!r} (key={key})")
-        by_file.setdefault(config_path, []).append((key.split("."), value))
-    return by_file
-
-
-def _write_batch(
-    normalized: list[tuple[str, Any]],
-    server: ServerDep,
-) -> Optional[BatchConfigUpdateResponse]:
-    """按目标文件分组写入，每个文件仅做一次 ``load_toml_with_comments`` + ``write_toml_preserve``。
-
-    返回 ``None`` 表示全部成功；返回 ``BatchConfigUpdateResponse(success=False, ...)`` 时
-    可能已有部分文件被写入（与单条 PATCH 同样忠实报错，不做回滚）。
-    """
-    try:
-        by_file = _group_by_file(normalized, server)
-    except ValueError as e:
-        return BatchConfigUpdateResponse(success=False, message=str(e))
-
-    for file_path, edits in by_file.items():
-        try:
-            doc = load_toml_with_comments(str(file_path))
-            for key_parts, value in edits:
-                current = doc
-                for k in key_parts[:-1]:
-                    next_node = current.get(k)
-                    if not isinstance(next_node, dict):
-                        current[k] = {}
-                    current = current[k]
-                current[key_parts[-1]] = value
-            ok, message = write_toml_preserve(str(file_path), doc, create_backup=False)
-        except Exception as e:
-            logger.error(f"批量写入失败: {file_path}: {e}", exc_info=True)
-            return BatchConfigUpdateResponse(
-                success=False,
-                message=f"写入配置文件失败: {e}",
-            )
-
-        if not ok:
-            logger.error(f"批量写入失败: {file_path}: {message}")
-            return BatchConfigUpdateResponse(
-                success=False,
-                message=f"写入配置文件失败: {message}",
-            )
-
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1015,11 +738,7 @@ async def restart_service(server: ServerDep) -> ConfigUpdateResponse:
         )
 
 
-def _path_basename(path: str) -> str:
-    """提取路径的文件名部分,失败时返回原字符串"""
-    try:
-        import os as _os
+def _get_config_dir(config_service) -> Any:
+    """从 ConfigService 推导 config/ 目录路径。"""
 
-        return _os.path.basename(path)
-    except Exception:
-        return path
+    return Path(config_service.base_dir) / "config"

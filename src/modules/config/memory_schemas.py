@@ -53,14 +53,4 @@ class MemoryConfig(BaseConfig):
 __all__ = [
     "MemoryBackend",
     "MemoryConfig",
-    "MemoryRootConfig",
 ]
-
-
-# 向后兼容壳：原 memory.toml 独立文件根——已并入 storage.toml [memory] 段
-# 旧导入路径仍允许（dashboard/api/config.py 等占位）
-class MemoryRootConfig(BaseConfig):
-    """向后兼容壳——§6.2 重构后 memory 段已并入 storage.toml，无独立 memory.toml。
-    本壳保留供旧 _SECTION_TO_ROOT_MODEL 占位 key。"""
-
-    memory: MemoryConfig = Field(default_factory=MemoryConfig, description="占位")

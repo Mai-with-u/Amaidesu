@@ -6,7 +6,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Union, get_args, get_origin
+from typing import Any, ClassVar, Union, get_args, get_origin
 
 import tomlkit
 from pydantic import BaseModel, ConfigDict
@@ -91,6 +91,11 @@ class BaseConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    # 自描述协议（仅六文件根配置类覆盖）：文件归属与显示名由 Schema 自带，
+    # dashboard 等消费方据此解析，不再维护手写 section→file 映射表
+    __file_name__: ClassVar[str] = ""
+    __section_label__: ClassVar[str] = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BaseConfig":

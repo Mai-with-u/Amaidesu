@@ -76,6 +76,9 @@ class StorageRootConfig(BaseConfig):
 
     model_config = ConfigDict(extra="forbid")
 
+    __file_name__ = "storage.toml"
+    __section_label__ = "📦 存储"
+
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
     sqlite: SqliteStorageConfig = Field(
         default_factory=SqliteStorageConfig,

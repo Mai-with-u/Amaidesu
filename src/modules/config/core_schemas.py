@@ -4,15 +4,6 @@
 历史 / Dashboard / SubtitleWidget / DanmakuWidget）。这些类被 ``infra_schemas.py``
 的 ``InfraRootConfig`` 引用，不直接对应任何文件根——infra.toml 文件根由
 ``InfraRootConfig`` 持有。
-
-历史：原 ``core_schemas.py`` 还包含 ``MetaConfig`` / ``GeneralConfig`` /
-``PersonaConfig`` / ``ContextAssemblerConfig`` / ``CoreConfig``，其中：
-- ``MetaConfig`` 已被 ``file_meta.FileMetaConfig`` 取代
-- ``PersonaConfig`` 已被 ``agents/streamer/config.py`` 的 ``StreamerPersonaConfig`` 取代
-- ``ContextAssemblerConfig`` 已被 ``agents.toml`` 的 ``[agents.streamer.context]`` 取代
-- ``GeneralConfig`` / ``CoreConfig`` 随 core.toml 消亡
-
-按 §6.2 重构全部删净，本文件仅保留 infra 段位所需的 6 个 ConfigSchema。
 """
 
 from typing import Any, Dict, List
@@ -216,58 +207,3 @@ class SubtitleInfraConfig(BaseConfig):
         default_factory=dict,
         description="Tk GUI 字幕后端参数（SubtitleGuiService.ConfigSchema 键；缺失键自动补齐）",
     )
-
-
-# 历史文件保留：以下类已被 §6.2 重构删除——若需引用应使用新位置
-# - MetaConfig → file_meta.FileMetaConfig
-# - PersonaConfig → agents.streamer.config.StreamerPersonaConfig
-# - ContextAssemblerConfig → agents.toml [agents.streamer.context]
-# - GeneralConfig / CoreConfig → 随 core.toml 消亡
-#
-# ---------------------------------------------------------------------------
-# 向后兼容壳（dashboard 重写时统一收口）
-# ---------------------------------------------------------------------------
-# 保留为 BaseConfig 空壳：dashboard/api/config.py 等旧调用点的 _SECTION_TO_ROOT_MODEL
-# 映射表仍引用这些名字作为占位 key——删净会导致启动期 ImportError。
-# 真正的 schema 权威在新位置（FileMetaConfig / StreamerPersonaConfig / infra 段位），
-# 这些壳在运行时不被实际校验或装配，仅供旧导入通过。
-
-
-class MetaConfig(BaseConfig):
-    """向后兼容壳——权威在 file_meta.FileMetaConfig。"""
-
-    version: str = Field(default="", description="占位字段——真实权威见 FileMetaConfig")
-
-
-class GeneralConfig(BaseConfig):
-    """向后兼容壳——原 platform_id 段已被 §6.2 重构删除。"""
-
-    platform_id: str = Field(default="amaidesu", description="占位字段")
-
-
-class PersonaConfig(BaseConfig):
-    """向后兼容壳——权威在 agents/streamer/config.py StreamerPersonaConfig。"""
-
-    bot_name: str = Field(default="", description="占位字段")
-    personality: str = Field(default="", description="占位字段")
-    style_constraints: str = Field(default="", description="占位字段")
-    behavior_style: str = Field(default="", description="占位字段")
-    audience_salutation: str = Field(default="", description="占位字段")
-
-
-class ContextAssemblerConfig(BaseConfig):
-    """向后兼容壳——权威在 agents.toml [agents.streamer.context]。"""
-
-    enabled: bool = Field(default=True, description="占位字段")
-    memory_recall_long_term: int = Field(default=3, description="占位字段")
-
-
-class CoreConfig(BaseConfig):
-    """向后兼容壳——原 core.toml root；§6.2 重构后 core.toml 消亡，权威在
-    InfraRootConfig / AgentsRootConfig / 等 6 文件根。本类保留作
-    _SECTION_TO_ROOT_MODEL 占位 key。"""
-
-    meta: MetaConfig = Field(default_factory=MetaConfig, description="占位")
-    general: GeneralConfig = Field(default_factory=GeneralConfig, description="占位")
-    persona: PersonaConfig = Field(default_factory=PersonaConfig, description="占位")
-    context: ContextAssemblerConfig = Field(default_factory=ContextAssemblerConfig, description="占位")

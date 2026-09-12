@@ -249,6 +249,9 @@ class ToolsRootConfig(BaseConfig):
     对应 ``config/tools.toml`` 文件。
     """
 
+    __file_name__ = "tools.toml"
+    __section_label__ = "🔧 工具包"
+
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
     tools: ToolsConfig = Field(
         default_factory=ToolsConfig,

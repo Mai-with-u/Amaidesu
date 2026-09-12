@@ -90,6 +90,70 @@ _FILE_COMMENTS: dict[str, str] = {
     "infra.toml": "基础设施配置 - Amaidesu",
 }
 
+# 装配一致性断言：根 Schema 的自描述文件名必须与本表键一致，
+# 防止两处事实源漂移（类属性是权威，本表是加载侧索引）
+for _fname, _cls in _ROOT_SCHEMAS.items():
+    if _cls.__file_name__ != _fname:
+        raise RuntimeError(
+            f"根 Schema 自描述文件名不一致: {_cls.__name__} 声明 {_cls.__file_name__!r}, 索引键 {_fname!r}"
+        )
+
+
+def resolve_root_schema(scope: str) -> type[BaseConfig] | None:
+    """合并视图 scope（= 文件名去后缀）→ 根 Schema 类；未知 scope 返回 None。"""
+    file_name = next((f for f, s in _FILE_SCOPES.items() if s == scope), None)
+    return _ROOT_SCHEMAS.get(file_name) if file_name else None
+
+
+def validate_config_updates(config_dir: Path, file_name: str, updates: dict[str, Any]) -> None:
+    """校验键级变更并入后的文档（只校验不写盘）。
+
+    供批量写入口做事务前置：全部文件校验通过后再逐文件落盘，
+    保证"任一校验失败 → 磁盘零写入"。
+
+    Raises:
+        ConfigValidationError: 合并后的文档未通过 Schema 校验
+    """
+    raw = _read_toml_dict(config_dir / file_name)
+    _apply_updates_to_raw(raw, updates)
+    _validate_file(file_name, raw)
+
+
+def update_config_values(config_dir: Path, file_name: str, updates: dict[str, Any]) -> None:
+    """把键级变更并入指定配置文件并经统一管线写回（对外写入口）。
+
+    流程：读原始文档 → 应用点分键变更 → Schema 校验（硬错，ConfigValidationError
+    携带文件名与字段路径）→ 全量序列化写回（备份 + 自写压标 + 注释重生成形态）。
+
+    Args:
+        config_dir: config/ 目录路径
+        file_name: 目标文件名（六文件之一）
+        updates: ``{文件内点分路径: 新值}``，路径不含 scope 前缀；
+            同路径多次给定时后者覆盖前者
+
+    Raises:
+        ConfigValidationError: 合并后的文档未通过 Schema 校验（磁盘零写入）
+    """
+    raw = _read_toml_dict(config_dir / file_name)
+    _apply_updates_to_raw(raw, updates)
+    instance, _report = _validate_file(file_name, raw)
+    batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _write_back_schema_file(config_dir, file_name, _ROOT_SCHEMAS[file_name], instance, batch_id=batch_id)
+
+
+def _apply_updates_to_raw(raw: dict[str, Any], updates: dict[str, Any]) -> None:
+    """把 ``{文件内点分路径: 新值}`` 逐条写入原始文档 dict（原地修改）。"""
+    for dotted_key, value in updates.items():
+        parts = dotted_key.split(".")
+        current = raw
+        for part in parts[:-1]:
+            node = current.get(part)
+            if not isinstance(node, dict):
+                node = {}
+                current[part] = node
+            current = node
+        current[parts[-1]] = value
+
 
 def _backup_file(file_path: Path, config_dir: Path, batch_id: str | None = None) -> Path | None:
     """备份配置文件到 config/old/ 目录
