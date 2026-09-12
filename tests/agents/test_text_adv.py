@@ -119,6 +119,7 @@ async def started_agent(
     registry = ToolRegistry()
     # 1) 注册公用感知工具（look_at_screen）
     look_provider = LookAtScreenProvider(
+        config={},
         screen_capture=perception_capture,
         text_reader=text_reader,
     )
@@ -455,7 +456,7 @@ async def test_look_at_screen_graceful_when_no_backend(
     from src.modules.tools.models import ToolInvocation
 
     registry = ToolRegistry()
-    provider = LookAtScreenProvider(screen_capture=None, text_reader=None)
+    provider = LookAtScreenProvider(config={}, screen_capture=None, text_reader=None)
     registry.register_provider(provider)
 
     res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
@@ -473,7 +474,7 @@ async def test_look_at_screen_with_fake_backend_returns_image_block() -> None:
     capture.queue_png(b"\x89PNG_FAKE", width=800, height=600)
     reader = FakeTextReader()
     reader.queue_text("游戏文本片段")
-    provider = LookAtScreenProvider(screen_capture=capture, text_reader=reader)
+    provider = LookAtScreenProvider(config={}, screen_capture=capture, text_reader=reader)
     registry.register_provider(provider)
 
     res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
@@ -604,7 +605,7 @@ async def test_perception_failure_emits_game_error_event(
     # 这里我们改用 monkeypatch 风格：构造新 provider 覆盖旧 spec
     from src.modules.vision import LookAtScreenProvider
 
-    boom_provider = LookAtScreenProvider(screen_capture=BoomCapture())
+    boom_provider = LookAtScreenProvider(config={}, screen_capture=BoomCapture())
     # 由于 register 去重，需要先 clear registry 的 look_at_screen
     registry.clear()
     registry.register_provider(boom_provider)

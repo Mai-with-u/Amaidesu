@@ -570,8 +570,8 @@ async def create_app_components(
             vision_config = vision_cfg.get("config", {}) if isinstance(vision_cfg.get("config"), dict) else {}
             tool_registry.register_provider(
                 LookAtScreenProvider(
+                    config=vision_config,
                     screen_capture=PillowImageGrabCapture(),
-                    default_max_width=int(vision_config.get("default_max_width", 1280) or 0),
                 )
             )
             logger.info("look_at_screen 已注册（Pillow 截图后端）")

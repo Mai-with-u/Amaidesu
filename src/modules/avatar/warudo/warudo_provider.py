@@ -26,7 +26,9 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from pydantic import Field
 
+from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
@@ -136,6 +138,29 @@ class WarudoProvider(BaseToolProvider):
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category = "avatar"
 
+    class ConfigSchema(BaseConfig):
+        """Warudo 配置（WebSocket + 字幕 + 后台任务 + 动作目录）
+
+        TOML 段位：[tools.avatar.warudo].config；本规范见 .omo/drafts/config-schema-spec.md
+        """
+
+        type: str = "warudo"
+        ws_host: str = Field(default="localhost", description="Warudo WebSocket 主机地址")
+        ws_port: int = Field(default=19190, ge=1, le=65535, description="Warudo WebSocket 端口")
+        reconnect_delay_seconds: float = Field(default=5.0, ge=0.0, description="断线重连间隔秒数")
+        subtitle_enabled: bool = Field(default=True, description="是否启用 Warudo 字幕服务")
+        subtitle_port: int = Field(default=8766, ge=1, le=65535, description="字幕服务端口")
+        subtitle_show_status: bool = Field(default=False, description="字幕窗口是否显示状态")
+        talking_head_enabled: bool = Field(default=True, description="是否启用 TalkingHead 后台任务")
+        talking_head_interval: float = Field(default=0.1, ge=0.01, description="TalkingHead 最小间隔秒数")
+        throw_fish_cooldown: float = Field(default=5.0, ge=0.0, description="抛鱼动画冷却秒数")
+        # 动作目录（人类登记的可用动作名+说明；类似 MCP servers 的动态键例外，
+        # 键=动作名、值=说明；typed 形态 Dict[str, str] 不算 §1⑤ 自由 dict）
+        action_catalog: Dict[str, str] = Field(
+            default_factory=dict,
+            description="可用蓝图动作目录 {动作名: 说明}，人类配置预声明；用于拼入工具描述供 LLM 选择",
+        )
+
     def __init__(
         self,
         config: Dict[str, Any],
@@ -145,23 +170,22 @@ class WarudoProvider(BaseToolProvider):
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)
 
-        # 配置
-        self.ws_host: str = str(config.get("ws_host", "localhost"))
-        self.ws_port: int = int(config.get("ws_port", 19190))
-        self.reconnect_delay_seconds: float = float(config.get("reconnect_delay_seconds", 5.0))
-        self.subtitle_enabled: bool = bool(config.get("subtitle_enabled", True))
-        self.subtitle_port: int = int(config.get("subtitle_port", 8766))
-        self.subtitle_show_status: bool = bool(config.get("subtitle_show_status", False))
-        self.talking_head_enabled: bool = bool(config.get("talking_head_enabled", True))
-        self.talking_head_interval: float = float(config.get("talking_head_interval", 0.1))
-        self.throw_fish_cooldown: float = float(config.get("throw_fish_cooldown", 5.0))
-
-        # 动作目录（配置预声明：Warudo 侧无法枚举蓝图动作，由人类在配置里
-        # 登记可用动作名与说明，拼入工具描述供 LLM 选择；形态 {动作名: 说明}）
-        raw_catalog = config.get("action_catalog") or {}
-        self.action_catalog: Dict[str, str] = (
-            {str(k): str(v) for k, v in raw_catalog.items()} if isinstance(raw_catalog, dict) else {}
-        )
+        # 配置（typed；空 dict = 全默认；失败 log+raise）
+        try:
+            self.typed_config = self.ConfigSchema.from_dict(config)
+        except Exception as e:
+            self.logger.error(f"配置验证失败: {e}")
+            raise
+        self.ws_host: str = self.typed_config.ws_host
+        self.ws_port: int = self.typed_config.ws_port
+        self.reconnect_delay_seconds: float = self.typed_config.reconnect_delay_seconds
+        self.subtitle_enabled: bool = self.typed_config.subtitle_enabled
+        self.subtitle_port: int = self.typed_config.subtitle_port
+        self.subtitle_show_status: bool = self.typed_config.subtitle_show_status
+        self.talking_head_enabled: bool = self.typed_config.talking_head_enabled
+        self.talking_head_interval: float = self.typed_config.talking_head_interval
+        self.throw_fish_cooldown: float = self.typed_config.throw_fish_cooldown
+        self.action_catalog: Dict[str, str] = dict(self.typed_config.action_catalog)
 
         # WebSocket 状态
         self.websocket: Any = None

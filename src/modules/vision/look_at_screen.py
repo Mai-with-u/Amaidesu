@@ -30,8 +30,11 @@ from __future__ import annotations
 import base64
 import time
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Protocol, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple
 
+from pydantic import Field
+
+from src.modules.config.schemas.base import BaseConfig
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
     ResultBlock,
@@ -172,23 +175,43 @@ class LookAtScreenProvider(BaseToolProvider):
     通过构造器注入屏幕采集 / 文本读取后端；测试可传 ``None`` 表示优雅降级。
 
     Example:
-        >>> provider = LookAtScreenProvider(screen_capture=PyautoguiCapture())
+        >>> provider = LookAtScreenProvider(
+        ...     config={"default_max_width": 1280},
+        ...     screen_capture=PyautoguiCapture(),
+        ... )
         >>> registry.register_provider(provider)
     """
 
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category = "vision"
 
+    class ConfigSchema(BaseConfig):
+        """look_at_screen 配置（默认最大图像宽度；省 token 用）
+
+        TOML 段位：[tools.vision].config；本规范见 .omo/drafts/config-schema-spec.md
+        """
+
+        type: str = "vision"
+        default_max_width: int = Field(
+            default=1280,
+            ge=0,
+            description="图像缩放最大宽度（像素，0=不缩放；省 token 用）",
+        )
+
     def __init__(
         self,
+        config: Dict[str, Any],
         *,
         screen_capture: Optional[ScreenCapture] = None,
         text_reader: Optional[TextReader] = None,
-        default_max_width: int = 0,
     ) -> None:
+        # 配置转 typed（config: dict 必填；空 dict = 全部默认；失败 log+raise）
+        self._config_raw = dict(config) if config is not None else {}
+        self.typed_config = self.ConfigSchema.from_dict(self._config_raw)
+        self._default_max_width = int(self.typed_config.default_max_width)
+
         self._capture = screen_capture
         self._reader = text_reader
-        self._default_max_width = int(default_max_width)
         self._call_count = 0
 
     @property

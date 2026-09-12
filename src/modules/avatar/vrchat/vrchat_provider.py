@@ -13,6 +13,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from pydantic import Field
+
+from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
@@ -82,6 +85,13 @@ class VRChatProvider(BaseToolProvider):
         "Cross": 8,
     }
 
+    class ConfigSchema(BaseConfig):
+        """VRChat OSC 配置（host + out port；本规范见 .omo/drafts/config-schema-spec.md）"""
+
+        type: str = "vrchat"
+        vrc_host: str = Field(default="127.0.0.1", description="VRChat OSC 主机地址")
+        vrc_out_port: int = Field(default=9000, ge=1, le=65535, description="VRChat OSC 输出端口")
+
     def __init__(
         self,
         config: Dict[str, Any],
@@ -91,9 +101,14 @@ class VRChatProvider(BaseToolProvider):
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)
 
-        # 配置
-        self.vrc_host: str = str(config.get("vrc_host", "127.0.0.1"))
-        self.vrc_out_port: int = int(config.get("vrc_out_port", 9000))
+        # 配置（typed；空 dict = 全默认；失败 log+raise）
+        try:
+            self.typed_config = self.ConfigSchema.from_dict(config)
+        except Exception as e:
+            self.logger.error(f"配置验证失败: {e}")
+            raise
+        self.vrc_host: str = self.typed_config.vrc_host
+        self.vrc_out_port: int = self.typed_config.vrc_out_port
 
         # OSC 客户端
         self.osc_client: Any = None
