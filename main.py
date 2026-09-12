@@ -171,6 +171,12 @@ def load_config() -> Tuple[ConfigService, Dict[str, Any], bool]:
     config_service = ConfigService(base_dir=_BASE_DIR)
     try:
         config, was_created = config_service.initialize()
+        # 装配清单日志：6 文件树（按 disk 存在性 + 各文件 [meta].version）
+        # ——不仅核对 config dict，也核对磁盘 6 文件齐整性，便于 QA 断言
+        assembly_files = ("agents", "collectors", "infra", "model", "storage", "tools")
+        config_dir = os.path.join(_BASE_DIR, "config")
+        disk_present = [name for name in assembly_files if os.path.exists(os.path.join(config_dir, f"{name}.toml"))]
+        logger.info(f"配置装配清单（v2 6-file tree）：磁盘文件 {len(disk_present)}/6 个 → {disk_present}")
         return config_service, config, was_created
     except Exception as e:
         logger.critical(f"配置文件初始化失败: {e}", exc_info=True)
@@ -181,8 +187,8 @@ def load_config() -> Tuple[ConfigService, Dict[str, Any], bool]:
 def validate_config(config: Dict[str, Any]) -> None:
     """验证配置完整性，缺失必要配置时给出明确错误提示。
 
-    配置按 7 文件树划分：
-    core / model / agents / tools / memory / storage / background。
+    配置按 6 文件树划分：
+    agents / collectors / infra / model / storage / tools。
     本函数只做"存在性 + 顶层类型"轻量检查；详细字段验证由各 ConfigSchema
     在组件构造阶段自动完成（fail-fast 由 Pydantic 保证）。
     """
@@ -190,11 +196,10 @@ def validate_config(config: Dict[str, Any]) -> None:
         logger.critical("配置根对象不是 dict（schema 漂移？）")
         return
 
-    # core.toml 段（meta / general / context / events / dashboard / logging / interceptors）
-    if "general" not in config or not isinstance(config["general"], dict):
-        logger.critical("缺少 [general] 配置段（core.toml）")
+    # infra.toml 段（tts / subtitle / events / interceptors / dashboard / logging / simulator）
+    # 不做硬性存在校验：infra.toml 缺失时各模块自然降级。
 
-    # model.toml 段（顶层无聚合键，llm_providers/llm/llm_fast 等散落，不强制）
+    # model.toml 段（顶层无聚合键，llm_providers/llm_models/llm_profiles 散落，不强制）
     # 不强制报错：model.toml 缺失时 LLM 调用会自然降级为 warning。
 
     # agents.toml 段
@@ -211,26 +216,26 @@ def validate_config(config: Dict[str, Any]) -> None:
     elif not isinstance(tools_cfg, dict):
         logger.warning("[tools] 配置类型异常（期望 dict），Tool 功能将被禁用")
 
-    # collectors 子段位于 tools/agents 等聚合下，由各组件 Schema 自行校验，
-    # 不做顶层检查
+    # collectors.toml 段（独立顶层 [collectors] 段）
+    collectors_cfg = config.get("collectors")
+    if not collectors_cfg:
+        logger.debug("未检测到 [collectors] 配置，采集器功能关闭")
+    elif not isinstance(collectors_cfg, dict):
+        logger.warning("[collectors] 配置类型异常（期望 dict）")
 
-    # memory.toml 段
+    # storage.toml 段（顶层 [sqlite] + [memory]）
+    sqlite_cfg = config.get("sqlite")
+    if not sqlite_cfg:
+        logger.debug("未检测到 [sqlite] 配置，使用默认 db_path")
     memory_cfg = config.get("memory")
     if not memory_cfg:
         logger.debug("未检测到 [memory] 配置，使用 SimpleMemory 默认值")
     elif not isinstance(memory_cfg, dict):
         logger.warning("[memory] 配置类型异常（期望 dict），Memory 功能将退化")
 
-    # storage.toml 段
-    storage_cfg = config.get("storage")
-    if not storage_cfg:
-        logger.debug("未检测到 [storage] 配置，存储功能将仅 in-memory")
-    elif not isinstance(storage_cfg, dict):
-        logger.warning("[storage] 配置类型异常（期望 dict），存储功能将退化")
-
     # background 段已归位到 [agents.streamer.background]；此处不再单独校验
 
-    logger.info("配置验证通过（v2 7-file tree 存在性 + 类型检查）")
+    logger.info("配置验证通过（v2 6-file tree 存在性 + 类型检查）")
 
 
 def exit_if_config_created(was_created: bool) -> None:
@@ -453,7 +458,7 @@ async def create_app_components(
 
     # --- 核心配置预读：字幕基础设施段 [subtitle] ---
     #  AgentManager 注册 StreamerAgent 时需要 subtitle_service（注入后
-    #  编排层驱动字幕显示）；配置源为 core.toml [subtitle]。
+    #  编排层驱动字幕显示）；配置源为 infra.toml [subtitle]。
     subtitle_section = config.get("subtitle", {}) if isinstance(config, dict) else {}
     if not isinstance(subtitle_section, dict):
         subtitle_section = {}
@@ -761,15 +766,15 @@ async def _register_collectors_from_config(
     event_bus=None,
     llm_service=None,
 ):
-    """根据 [tools.perception.config] 段注册 Collector 实例到 CollectorManager。
+    """根据 [collectors] 段注册 Collector 实例到 CollectorManager。
 
-    段结构（tools.toml）：
+    段结构（collectors.toml）：
         enabled = ["bili_danmaku", "console_input", ...]
         bili_danmaku = { ... }
         console_input = { ... }
 
     新增可选 ``llm_service`` 参数，透传给需要 VLM 的采集器（仅
-    ``screen``/``read_pingmu``）。其余 collector 不消费 LLMManager，参数被忽略。
+    ``screen``）。其余 collector 不消费 LLMManager，参数被忽略。
     """
     enabled_list = config_section.get("enabled", []) or []
     for collector_name in enabled_list:
