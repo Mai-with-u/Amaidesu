@@ -24,16 +24,22 @@ Web UI），AI 主播不可决策；写回后需重启应用让组合根按新�
 判定）。
 """
 
+import tomllib
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from src.modules.config.toml_utils import load_toml_with_comments, write_toml_preserve
+from src.modules.config.errors import ConfigValidationError
+from src.modules.config.multi_file_loader import update_config_values
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
+
+logger = get_logger("DashboardToolsAPI")
 
 router = APIRouter()
 
@@ -67,14 +73,9 @@ _PROVIDER_MEMBERS: Tuple[Tuple[str, str, str, str], ...] = (
 )
 
 # 随 Agent 启用的分类（不可开关；提供者来自 Agent 自声明）。
+# game 分类成员随注册表动态（文字冒险游戏等游戏 Agent 自声明），不固定列举。
 _AGENT_CATEGORIES: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
-    (
-        "game",
-        (
-            ("text_adv", "文字冒险游戏（text_adv_*）"),
-            ("content_engine", "内容引擎控制面（content_engine_*）"),
-        ),
-    ),
+    ("game", (("text_adv", "文字冒险游戏（text_adv_*）"),)),
     ("framework", (("framework", "框架内置（framework_*，如 AgentControl）"),)),
 )
 
@@ -89,11 +90,29 @@ _CATEGORY_LEVEL_KEYS = {"vision", "memory"}
 # MCP 分类（提供者 = 各 server，动态来自 [tools.mcp.config.servers]）。
 _MCP_CATEGORY = "mcp"
 
+# 关键内部件停用保护清单：这些工具是宿主 Agent 运行控制的唯一操纵面
+# （AgentControl 框架工具——暂停/恢复/关闭/重启/状态内省）。误停用会让
+# Agent 失去自我控制通道（含 Dashboard 之外无替代入口的 shutdown/restart），
+# 因此停用走警示确认语义：请求必须显式携带 confirm=true。
+_CRITICAL_TOOL_NAMES: Tuple[str, ...] = (
+    "pause_agent",
+    "resume_agent",
+    "shutdown_agent",
+    "restart_agent",
+    "list_agents",
+    "agent_state",
+)
+
 
 class ProviderControlRequest(BaseModel):
-    """提供者开关控制请求体。"""
+    """提供者/工具开关控制请求体。
+
+    ``confirm``：停用关键内部件（``_CRITICAL_TOOL_NAMES``）时的警示确认
+    标记；缺省 False，非关键工具不要求。
+    """
 
     action: Literal["enable", "disable"]
+    confirm: bool = False
 
 
 def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
@@ -404,6 +423,44 @@ async def list_tool_categories(
     return {"categories": categories}
 
 
+def _config_dir(server: "DashboardServer") -> Path:
+    """从 config_service 推导 config/ 目录（不可用时抛 503）。"""
+    svc = server.config_service
+    if not (svc and hasattr(svc, "base_dir")):
+        raise HTTPException(status_code=503, detail="配置服务不可用")
+    return Path(svc.base_dir) / "config"
+
+
+def _read_tools_doc(config_dir: Path) -> Dict[str, Any]:
+    """读 tools.toml 原始文档（只读，缺失/解析失败时返回空 dict）。
+
+    配置管线落盘带 BOM，以 utf-8-sig 剥除后再交给 tomllib（tomllib 拒绝 BOM）。
+    """
+    path = config_dir / "tools.toml"
+    if not path.exists():
+        return {}
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception as exc:  # noqa: BLE001 - 只读边界：坏文件按空文档处理
+        logger.warning(f"读取 tools.toml 失败，按空文档处理: {exc}")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_tools_updates(config_dir: Path, updates: Dict[str, Any]) -> None:
+    """经统一写回器把变更并入 tools.toml（Schema 校验 + 备份 + 注释重生成）。
+
+    校验失败（ConfigValidationError）映射 400——属调用方提交的非法值；
+    其余异常映射 500。校验失败时磁盘零写入。
+    """
+    try:
+        update_config_values(config_dir, "tools.toml", updates)
+    except ConfigValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - 配置写回边界
+        raise HTTPException(status_code=500, detail=f"配置写回失败: {exc}") from exc
+
+
 @router.post("/tools/categories/{category}/{key}/control", summary="提供者开关写回（重启后生效）")
 async def control_tool_provider(
     category: str,
@@ -411,47 +468,31 @@ async def control_tool_provider(
     request: ProviderControlRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
 ) -> Dict[str, Any]:
-    """把提供者开关写回 tools.toml。
+    """把提供者开关写回 tools.toml（统一写回器 update_config_values）。
 
-    写回位置按成员类型区分：
-    - avatar / studio 成员：``[tools.<分类>.<键>].enabled``
-    - vision / memory（键与分类名相同）：``[tools.<分类>].enabled``
-    - mcp server：``[tools.mcp.config.servers.<键>].enabled``
+    写回位置按成员类型区分（点分键，不含 scope 前缀）：
+    - avatar / studio 成员：``tools.<分类>.<键>.enabled``
+    - vision / memory（键与分类名相同）：``tools.<分类>.enabled``
+    - mcp server：``tools.mcp.config.servers.<键>.enabled``
     - game 等自声明分类不可开关（400）
 
-    工具注册发生在组合根装配期（启动时），无动态启停语义——写回成功后
-    提示重启生效。
+    工具注册发生在组合根装配期（启动时），无动态启停语义——写盘后不触发热
+    重载，重启后生效。
     """
     known = {(c, k) for c, k, _p, _d in _PROVIDER_MEMBERS}
     agent_categories = {c for c, _members in _AGENT_CATEGORIES}
     if category in agent_categories:
         raise HTTPException(status_code=400, detail="Agent 自声明工具分类不可开关（随 Agent 启用）")
     if category == _MCP_CATEGORY:
-        path_keys = ["tools", _MCP_CATEGORY, "config", "servers", key]
+        dotted_key = f"tools.{_MCP_CATEGORY}.config.servers.{key}.enabled"
     elif (category, key) in known:
-        path_keys = ["tools", category] if key in _CATEGORY_LEVEL_KEYS else ["tools", category, key]
+        dotted_key = f"tools.{category}.enabled" if key in _CATEGORY_LEVEL_KEYS else f"tools.{category}.{key}.enabled"
     else:
         raise HTTPException(status_code=400, detail=f"未知工具提供者: {category}/{key}")
 
     enable = request.action == "enable"
-    config_path = server.get_config_path("tools")
-    if not config_path:
-        raise HTTPException(status_code=503, detail="tools.toml 路径不可用")
-
-    try:
-        doc = load_toml_with_comments(str(config_path))
-        _set_enabled(doc, path_keys, enable)
-        success, message = write_toml_preserve(str(config_path), doc, create_backup=False)
-    except Exception as exc:  # noqa: BLE001 - 配置写回边界
-        raise HTTPException(status_code=500, detail=f"配置写回失败: {exc}") from exc
-    if not success:
-        raise HTTPException(status_code=500, detail=f"配置写回失败: {message}")
-
-    if server.config_service is not None:
-        try:
-            await server.config_service.reload_config()
-        except Exception:  # noqa: BLE001 - 重载失败不影响写回结果
-            pass
+    config_dir = _config_dir(server)
+    _write_tools_updates(config_dir, {dotted_key: enable})
 
     action_text = "启用" if enable else "停用"
     return {
@@ -461,49 +502,20 @@ async def control_tool_provider(
     }
 
 
-def _set_enabled(doc: Any, path_keys: List[str], enable: bool) -> None:
-    """按嵌套键路径定位 doc 中的配置段并写 ``enabled``（段缺失自动创建）。"""
-    node = doc
-    for key in path_keys:
-        child = node.get(key)
-        if not isinstance(child, dict):
-            child = {}
-            node[key] = child
-        node = child
-    node["enabled"] = enable
-
-
-def _set_disabled_tools(doc: Any, names: List[str]) -> None:
-    """写 ``[tools].disabled_tools`` 列表（排序去重；段缺失自动创建）。"""
-    tools_node = doc.get("tools")
-    if not isinstance(tools_node, dict):
-        tools_node = {}
-        doc["tools"] = tools_node
-    tools_node["disabled_tools"] = sorted(set(names))
-
-
-def _get_disabled_tools(doc: Any) -> List[str]:
-    """读 ``[tools].disabled_tools`` 列表（缺失 / 非列表时返回空列表）。"""
-    tools_node = doc.get("tools")
-    if not isinstance(tools_node, dict):
-        return []
-    raw = tools_node.get("disabled_tools")
-    if not isinstance(raw, list):
-        return []
-    return [n for n in raw if isinstance(n, str)]
-
-
 @router.post("/tools/{name}/control", summary="单个工具停用/启用（写 [tools].disabled_tools，重启后生效）")
 async def control_tool(
     name: str,
     request: ProviderControlRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
 ) -> Dict[str, Any]:
-    """把工具名加入/移出 ``[tools].disabled_tools`` 停用列表。
+    """把工具名加入/移出 ``tools.disabled_tools`` 停用列表（统一写回器落盘）。
 
     停用的工具仍保留在注册表中（工具页可见全集），但对 LLM 不可见且调用被
-    拒绝；写回后需重启应用生效。工具名必须在运行时注册表中存在（防止拼写
-    错误静默写入无效条目）。
+    拒绝；写盘后不触发热重载，重启后生效。工具名必须在运行时注册表中存在
+    （防止拼写错误静默写入无效条目，404）。
+
+    关键内部件（``_CRITICAL_TOOL_NAMES``）停用走警示确认：缺 ``confirm=true``
+    时返回 400 并附中文风险说明；非关键工具不受影响。
     """
     enable = request.action == "enable"
     registry = _get_registry(server)
@@ -513,30 +525,34 @@ async def control_tool(
         known = set()
     if not enable and name not in known:
         raise HTTPException(status_code=404, detail=f"运行时未注册工具: {name}")
+    if not enable and name in _CRITICAL_TOOL_NAMES and not request.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"工具 {name} 是宿主 Agent 运行控制的关键内部件，停用会导致 Agent "
+                "失去自我控制通道（暂停/恢复/关闭/重启不可用）。如确认停用，请携带 "
+                "confirm: true 重新提交。"
+            ),
+        )
 
-    config_path = server.get_config_path("tools")
-    if not config_path:
-        raise HTTPException(status_code=503, detail="tools.toml 路径不可用")
+    config_dir = _config_dir(server)
+    doc = _read_tools_doc(config_dir)
+    tools_section = doc.get("tools")
+    tools_section = tools_section if isinstance(tools_section, dict) else {}
+    raw = tools_section.get("disabled_tools")
+    disabled = [n for n in raw if isinstance(n, str)] if isinstance(raw, list) else []
 
-    try:
-        doc = load_toml_with_comments(str(config_path))
-        disabled = _get_disabled_tools(doc)
-        if enable:
-            disabled = [n for n in disabled if n != name]
-        elif name not in disabled:
-            disabled.append(name)
-        _set_disabled_tools(doc, disabled)
-        success, message = write_toml_preserve(str(config_path), doc, create_backup=False)
-    except Exception as exc:  # noqa: BLE001 - 配置写回边界
-        raise HTTPException(status_code=500, detail=f"配置写回失败: {exc}") from exc
-    if not success:
-        raise HTTPException(status_code=500, detail=f"配置写回失败: {message}")
+    if enable:
+        disabled = [n for n in disabled if n != name]
+    elif name not in disabled:
+        disabled.append(name)
+    disabled = sorted(set(disabled))
 
-    if server.config_service is not None:
-        try:
-            await server.config_service.reload_config()
-        except Exception:  # noqa: BLE001 - 重载失败不影响写回结果
-            pass
+    unknown = [n for n in disabled if n not in known]
+    if unknown:
+        logger.warning(f"disabled_tools 含运行时未注册的工具名（重启后若仍不存在则不生效）: {unknown}")
+
+    _write_tools_updates(config_dir, {"tools.disabled_tools": disabled})
 
     action_text = "启用" if enable else "停用"
     return {
