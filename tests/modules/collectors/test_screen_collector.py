@@ -1,8 +1,8 @@
 """
-screen 采集器（read_pingmu 重命名）测试（Wave 5 + v2.0.9 D1 VLM 收编）
+screen 采集器测试（v2.0.9 D1 VLM 收编）
 
 覆盖：
-- ScreenChangeCollector 继承 BaseCollector（改名去拼音）
+- ScreenChangeCollector 继承 BaseCollector
 - 元数据正确
 - ScreenAnalyzer 差异检测逻辑（缩略图哈希）
 - ScreenReader VLM 缓存去重（同一 image 不重复调用 VLM）
@@ -33,7 +33,7 @@ def test_screen_change_inherits_base_collector() -> None:
 
 
 def test_screen_metadata() -> None:
-    """元数据正确（已重命名：read_pingmu → screen）"""
+    """screen 采集器元数据正确"""
     assert ScreenChangeCollector.name == "screen"
     assert ScreenChangeCollector.__name__ == "ScreenChangeCollector"
 

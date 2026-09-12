@@ -25,7 +25,6 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, ValidationError
 
 from src.modules.config.agents_schemas import AgentsRootConfig
-from src.modules.config.background_schemas import BackgroundRootConfig
 from src.modules.config.core_schemas import CoreConfig
 from src.modules.config.memory_schemas import MemoryRootConfig
 from src.modules.config.model_schemas import ModelConfig
@@ -81,8 +80,6 @@ _SECTION_TO_ROOT_MODEL: Dict[str, type[BaseModel]] = {
     "amemorix": MemoryRootConfig,
     "storage": StorageRootConfig,
     "sqlite": StorageRootConfig,
-    "background": BackgroundRootConfig,
-    "compressor": BackgroundRootConfig,
 }
 
 
@@ -443,32 +440,6 @@ def _extract_label(field: dict) -> str:
     return field.get("name", "")
 
 
-def _apply_component_meta(group_fields: list[dict]) -> list[dict]:
-    """用 ``COMPONENT_UI_REGISTRY`` 的组件元数据覆盖 ``_group_into_children`` 自动生成的标签。
-
-    匹配规则：字段 key 的最后一段（leaf）在 ``COMPONENT_UI_REGISTRY`` 中则覆盖
-    label/description（显示名/描述由组件装饰器声明，单一事实源头）。
-    未注册的容器保持原样（嵌套对象等非组件结构）。
-
-    递归处理 ``children`` 子树。
-    """
-    from src.modules.config.schemas import COMPONENT_UI_REGISTRY
-
-    result: list[dict] = []
-    for f in group_fields:
-        key = f.get("key", "")
-        parts = key.split(".")
-        if len(parts) >= 2:
-            leaf = parts[-1]
-            meta = COMPONENT_UI_REGISTRY.get(leaf)
-            if meta is not None:
-                f = {**f, "label": meta.label, "description": meta.description}
-        if f.get("children"):
-            f = {**f, "children": _apply_component_meta(f["children"])}
-        result.append(f)
-    return result
-
-
 def _mask_sensitive_values(config: dict, path_prefix: str = "") -> dict:
     """递归遍历 config，对敏感字段的标量值替换为 ``""``，返回新 dict（不修改原对象）。
 
@@ -491,8 +462,7 @@ def _mask_sensitive_values(config: dict, path_prefix: str = "") -> dict:
 def _convert_to_api_field(field: dict, main_config: dict) -> dict:
     """将 generator schema 的 field dict 转换为前端 API 字段格式。
 
-    集中维护转换逻辑，使 ``_build_frontend_groups`` 与
-    ``_expand_sub_config_fields`` 复用同一份字段规范化规则。
+    集中维护字段规范化规则，供 ``_build_frontend_groups`` 复用。
 
     敏感字段：``value`` 一律返回空字符串，避免明文 API key 通过 schema 接口泄漏。
     前端基于 schema 的 diff 基线策略只在用户真正编辑时提交新值，
@@ -525,68 +495,6 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
     return gfield
 
 
-def _expand_sub_config_fields(group_fields: list[dict], main_config: dict) -> list[dict]:
-    """为字段 leaf 名匹配 ``CONFIG_SCHEMA_REGISTRY`` 的字段注入子字段。
-
-    背景：
-        ``InputCollectorsConfig`` 的 Collector 字段声明为 ``Optional[Any]``（规避循环 import），
-        因此 ``ConfigSchemaGenerator`` 无法递归出 ``collectors.console_input.user_id`` 这类叶子字段。
-        这些字段在 API 层以 ``type="string"`` 的形式返回，前端 FieldRenderer 会把字典值渲染成空卡片。
-
-    修复：
-        利用 ``@collector/@handler/@decider`` 装饰器填充的 ``CONFIG_SCHEMA_REGISTRY``，
-        对 leaf 名匹配注册项的字段手动展开其 schema，作为新条目追加到扁平列表中。
-        后续 ``_group_into_children`` 会按 dotted key 把它们归入对应父字段下，形成 sub-card。
-
-    幂等性：
-        - 已有 ``children`` 的字段（OutputHandlersConfig/DecisionDecidersConfig 已经正确展开）跳过
-        - leaf 名不在 registry 中的字段跳过
-        - 输入 / 输出列表均不修改原对象，返回新列表
-    """
-    # 延迟 import：避免 config 模块加载时拉起 collector 模块（潜在循环依赖）
-    from src.modules.config.schemas import CONFIG_SCHEMA_REGISTRY
-    from src.modules.config.schema_generator import (
-        ConfigSchemaGenerator,
-        collect_all_fields,
-    )
-
-    expanded: list[dict] = []
-    for field in group_fields:
-        # --- 跳过条件（按优先级） ---
-        # 1. 已有 children → 已经展开过
-        if field.get("children"):
-            expanded.append(field)
-            continue
-
-        parts = field.get("key", "").split(".")
-        # 2. 单层字段（如 ``enabled``）无需展开
-        if len(parts) < 2:
-            expanded.append(field)
-            continue
-
-        # 3. 非 ``type="string"`` → 已经是 schema generator 正确展开的 object 类型
-        #    （handlers/deciders 的 Optional[ConfigSchema] 被正确映射为 object），无需二次展开。
-        if field.get("type") != "string":
-            expanded.append(field)
-            continue
-
-        # 4. leaf 名不在 CONFIG_SCHEMA_REGISTRY 中 → 不是注册的组件
-        leaf = parts[-1]
-        schema_cls = CONFIG_SCHEMA_REGISTRY.get(leaf)
-        if schema_cls is None:
-            expanded.append(field)
-            continue
-
-        # --- 展开：不添加原始 string 字段，只注入子字段 ---
-        # ``_group_into_children`` 会自动根据 dotted key 把子字段归入 sub-card。
-        sub_schema = ConfigSchemaGenerator.generate_config_schema(schema_cls)
-        sub_flat = collect_all_fields(sub_schema, prefix=field["key"])
-        for sf in sub_flat:
-            expanded.append(_convert_to_api_field(sf, main_config))
-
-    return expanded
-
-
 # section → TOML 文件映射（7 文件）
 _SECTION_TO_FILE: dict[str, str] = {
     "meta": "core.toml",
@@ -615,8 +523,6 @@ _SECTION_TO_FILE: dict[str, str] = {
     "amemorix": "memory.toml",
     "storage": "storage.toml",
     "sqlite": "storage.toml",
-    "background": "background.toml",
-    "compressor": "background.toml",
 }
 
 _FILE_LABELS: dict[str, str] = {
@@ -626,7 +532,6 @@ _FILE_LABELS: dict[str, str] = {
     "tools.toml": "🔧 工具包",
     "memory.toml": "💾 记忆",
     "storage.toml": "📦 存储",
-    "background.toml": "⏱️ 后台",
 }
 
 _SECTION_LABELS: dict[str, str] = {
@@ -656,8 +561,6 @@ _SECTION_LABELS: dict[str, str] = {
     "amemorix": "Amemorix",
     "storage": "存储",
     "sqlite": "SQLite 存储",
-    "background": "后台维护",
-    "compressor": "压缩 worker",
 }
 
 
@@ -726,7 +629,6 @@ def _build_frontend_groups(config_service) -> dict:
     from src.modules.config.tools_schemas import ToolsRootConfig
     from src.modules.config.memory_schemas import MemoryRootConfig
     from src.modules.config.storage_schemas import StorageRootConfig
-    from src.modules.config.background_schemas import BackgroundRootConfig
 
     main_config = config_service.main_config or {}
 
@@ -736,7 +638,6 @@ def _build_frontend_groups(config_service) -> dict:
     tools_schema = ConfigSchemaGenerator.generate_config_schema(ToolsRootConfig)
     memory_schema = ConfigSchemaGenerator.generate_config_schema(MemoryRootConfig)
     storage_schema = ConfigSchemaGenerator.generate_config_schema(StorageRootConfig)
-    background_schema = ConfigSchemaGenerator.generate_config_schema(BackgroundRootConfig)
     all_fields = (
         collect_all_fields(core_schema)
         + collect_all_fields(model_schema)
@@ -744,7 +645,6 @@ def _build_frontend_groups(config_service) -> dict:
         + collect_all_fields(tools_schema)
         + collect_all_fields(memory_schema)
         + collect_all_fields(storage_schema)
-        + collect_all_fields(background_schema)
     )
     leaf_fields = [f for f in all_fields if "." in str(f.get("key", ""))]
 
@@ -764,9 +664,7 @@ def _build_frontend_groups(config_service) -> dict:
         for field in fields:
             group_fields.append(_convert_to_api_field(field, main_config))
 
-        group_fields = _expand_sub_config_fields(group_fields, main_config)
         group_fields = _group_into_children(group_fields)
-        group_fields = _apply_component_meta(group_fields)
 
         file_name = _SECTION_TO_FILE.get(section_key, "core.toml")
         groups.append(

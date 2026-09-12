@@ -17,22 +17,18 @@ class MinecraftConfig(BaseConfig):
 
     Attributes:
         max_steps: 单任务内 ReAct 循环（LLM 推理步数）上限——防失控挂起
-        execute_poll_interval_ms: handoff 周期兜底核实间隔（毫秒）——
-            订阅通知是提示（可丢/断连），到点主动 task get 核实一次
-        execute_wait_timeout_ms: 后台任务单轮 wait_timeout 上限（毫秒）——
-            长期无进展注入告警消息（不杀任务），LLM 自行决定后续
         mcp: Agent 私有 MCP server 配置（位置即归属）。enabled=true 时
             _on_start 装配 McpToolProvider 并以 owner_agent="minecraft" 注册进
             ToolRegistry；false 时不装配（Agent 命令驱动，MCP 不可用即降级）。
     """
 
     max_steps: int = Field(default=50, ge=1, description="单任务 ReAct 循环最大步数（超出挂起上报）")
-    execute_poll_interval_ms: int = Field(
+    poll_interval_ms: int = Field(
         default=2000,
         ge=100,
         description="handoff 周期兜底核实任务快照的间隔（毫秒）",
     )
-    execute_wait_timeout_ms: int = Field(
+    wait_timeout_ms: int = Field(
         default=1_800_000,
         ge=1000,
         description="后台任务单轮 wait_timeout 上限（毫秒，到点注入告警不杀任务）",

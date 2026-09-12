@@ -1,8 +1,18 @@
-"""核心系统配置 Schema 定义
+"""基础设施组件 Schema 定义
 
-定义所有非业务域的系统级配置 Schema，对应 ``config/core.toml`` 文件。
+``config/infra.toml`` 7 段中各组件的 ConfigSchema 定义（TTS / 字幕 / 事件
+历史 / Dashboard / SubtitleWidget / DanmakuWidget）。这些类被 ``infra_schemas.py``
+的 ``InfraRootConfig`` 引用，不直接对应任何文件根——infra.toml 文件根由
+``InfraRootConfig`` 持有。
 
-包含：meta, general, persona, context, events, dashboard, simulator, logging, interceptors。
+历史：原 ``core_schemas.py`` 还包含 ``MetaConfig`` / ``GeneralConfig`` /
+``PersonaConfig`` / ``ContextAssemblerConfig`` / ``CoreConfig``，其中：
+- ``MetaConfig`` 已被 ``file_meta.FileMetaConfig`` 取代
+- ``PersonaConfig`` 已被 ``agents/streamer/config.py`` 的 ``StreamerPersonaConfig`` 取代
+- ``ContextAssemblerConfig`` 已被 ``agents.toml`` 的 ``[agents.streamer.context]`` 取代
+- ``GeneralConfig`` / ``CoreConfig`` 随 core.toml 消亡
+
+按 §6.2 重构全部删净，本文件仅保留 infra 段位所需的 6 个 ConfigSchema。
 """
 
 from typing import Any, Dict, List
@@ -10,89 +20,11 @@ from typing import Any, Dict, List
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
-from src.modules.config.schemas.logging import LoggingConfig
-from src.modules.simulator.config_schema import SimulatorConfigSchema
 
 
-class MetaConfig(BaseConfig):
-    """配置元数据"""
-
-    version: str = Field(
-        default="2.0.30",
-        description="配置版本号（用于自动迁移检测，权威定义于 multi_file_loader.py）",
-        # 版本号仅接受纯数字字串，前端编辑成 "v2.0.28" 之类会破坏启动时的迁移解析，
-        # 故标记为只读，PATCH 接口据此拒绝写回。
-        json_schema_extra={"readonly": True},
-    )
-
-
-class GeneralConfig(BaseConfig):
-    """通用配置"""
-
-    platform_id: str = Field(
-        default="amaidesu",
-        description="Amaidesu 进程标识（Dashboard / 日志 / 模拟器区分用）",
-    )
-
-
-class PersonaConfig(BaseConfig):
-    """VTuber 人设配置
-
-    定义 VTuber 的性格和说话风格，被 Planner/Replyer 等 LLM Agent 引用。
-
-    三个文本字段按消费侧分层注入：
-    - ``personality``：身份特征 → 仅注入 Replyer（表达侧）
-    - ``style_constraints``：表达风格 → 仅注入 Replyer（表达侧）
-    - ``behavior_style``：行动准则 → 仅注入 Planner（决策侧，何时发言 / 聊什么 / 何时沉默）
-
-    装配根将该段作为 dict 整体透传给 StreamerAgent.persona_provider，
-    Planner/Replyer 按职责各自读取对应字段。
-    """
-
-    bot_name: str = Field(default="麦麦", description="VTuber 名字")
-    personality: str = Field(
-        default="活泼开朗，有些调皮，喜欢和观众互动",
-        description="性格描述（50字以内，仅注入 Replyer 表达侧）",
-    )
-    style_constraints: str = Field(
-        default="口语化，使用网络流行语，避免机械式回复，适当使用emoji",
-        description="说话风格约束（指导 Replyer 表达，仅注入表达侧）",
-    )
-    user_name: str = Field(default="大家", description="对观众的称呼")
-    max_response_length: int = Field(default=50, description="回复长度限制（字数）")
-    emotion_intensity: int = Field(
-        default=7,
-        description="情感表达强度 (1-10, 1=平淡, 10=丰富)",
-    )
-    behavior_style: str = Field(
-        default="积极与观众互动，收到礼物和SC及时致谢，冷场时主动开新话题，遇到争议保持风度不纠缠",
-        description="Planner 行动准则：何时参与聊天、如何观察局面、何时保持安静（仅注入 Planner 决策，不进 Replyer 表达）",
-    )
-
-
-class ContextAssemblerConfig(BaseConfig):
-    """上下文组装器配置
-
-    会话历史存储职责在 memory 后端（ContextService 只做 L1 配对窗口），
-    本段控制 Planner 的上下文组装路径与记忆召回强度。
-
-    Attributes:
-        enabled: 是否启用组装器路径（关闭后 Planner 跳过组装器与记忆召回，
-            直接以直播流窗口文本作为 context_block）
-        memory_recall_long_term: 每次决策召回的长记忆条数上限
-            （SimpleMemory._memory_facts 关键词召回）
-    """
-
-    enabled: bool = Field(
-        default=True,
-        description="是否启用组装器路径（关闭后 Planner 跳过组装器与记忆召回，直接以直播流窗口文本注入）",
-    )
-    memory_recall_long_term: int = Field(
-        default=3,
-        ge=0,
-        le=20,
-        description="每次决策召回的长记忆条数上限",
-    )
+# ---------------------------------------------------------------------------
+# SubtitleWidget / DanmakuWidget（Dashboard 子段）
+# ---------------------------------------------------------------------------
 
 
 class SubtitleWidgetConfig(BaseConfig):
@@ -124,8 +56,13 @@ class DanmakuWidgetConfig(BaseConfig):
     min_importance: float = Field(default=0.0, ge=0.0, le=1.0, description="最小重要性过滤")
 
 
+# ---------------------------------------------------------------------------
+# Dashboard（含 SubtitleWidget + DanmakuWidget 子段）
+# ---------------------------------------------------------------------------
+
+
 class DashboardConfig(BaseConfig):
-    """Web Dashboard 配置"""
+    """Web Dashboard 配置（``[dashboard]`` 段）"""
 
     enabled: bool = Field(default=True, description="是否启用 Dashboard")
     host: str = Field(default="127.0.0.1", description="Dashboard 监听地址")
@@ -161,8 +98,13 @@ class DashboardConfig(BaseConfig):
     )
 
 
+# ---------------------------------------------------------------------------
+# EventHistory
+# ---------------------------------------------------------------------------
+
+
 class EventHistoryConfig(BaseConfig):
-    """事件历史记录配置"""
+    """事件历史记录配置（``[events]`` 段）"""
 
     history_size: int = Field(
         default=5000,
@@ -180,23 +122,17 @@ class EventHistoryConfig(BaseConfig):
     )
 
 
+# ---------------------------------------------------------------------------
+# TTS（4 引擎子段；free-form dict 由 provider schema 补全机制按需校验）
+# ---------------------------------------------------------------------------
+
+
 class TTSConfig(BaseConfig):
-    """TTS 基础设施配置。
-
-    TTS 是主播级基础设施——开启后每句回复都会自动 TTS 合成并播放。
-    与具体 TTS 引擎（edge_tts / gptsovits / voicebox / omni_tts）解耦：
-    调度开关（开/关、目标引擎、播放队列与超时）与每个引擎的连接/合成参数
-    全部位于本段，不拆分至 tools.toml。
-
-    引擎子段使用 free-form dict——各引擎的详细 ConfigSchema 嵌在引擎模块内部，
-    本段避免反向 import 引入循环依赖；具体键的校验/补全由 multi_file_loader
-    的 provider schema 补全机制按需加载引擎 ConfigSchema 后执行（迁移期允
-    许在子段缺失键时按 Provider ConfigSchema 默认值补齐）。
+    """TTS 基础设施配置（``[tts]`` 段）
 
     Attributes:
         enabled: TTS 总开关；关闭后即便底层引擎构造完成也不会自动发声。
         provider: 装配时据此选择唯一激活引擎（edge_tts/gptsovits/voicebox/omni_tts）。
-            装配期决定引擎实例，运行时不再有 Facade 路由层。
         max_queue: 发声播放队列上限；队列满时丢最旧一条保证新鲜度。
         render_timeout_ms: 单次发声（合成+播放）超时（毫秒）；0 表示不限制。
         edge_tts: EdgeTTS 引擎参数（仅 provider=edge_tts 时生效）。
@@ -247,12 +183,13 @@ class TTSConfig(BaseConfig):
     )
 
 
-class SubtitleInfraConfig(BaseConfig):
-    """字幕基础设施配置。
+# ---------------------------------------------------------------------------
+# SubtitleInfra（含 tk_gui 子段）
+# ---------------------------------------------------------------------------
 
-    字幕是主播级基础设施——配置启用后百分百工作，不由 Agent 决定用
-    不用。行为参数（enabled / backends）与各后端渲染参数（tk_gui
-    子段）全部位于本段。
+
+class SubtitleInfraConfig(BaseConfig):
+    """字幕基础设施配置（``[subtitle]`` 段）
 
     Attributes:
         enabled: 字幕总开关；开启后主播发言自动经 SubtitleService 广播
@@ -281,61 +218,56 @@ class SubtitleInfraConfig(BaseConfig):
     )
 
 
+# 历史文件保留：以下类已被 §6.2 重构删除——若需引用应使用新位置
+# - MetaConfig → file_meta.FileMetaConfig
+# - PersonaConfig → agents.streamer.config.StreamerPersonaConfig
+# - ContextAssemblerConfig → agents.toml [agents.streamer.context]
+# - GeneralConfig / CoreConfig → 随 core.toml 消亡
+#
+# ---------------------------------------------------------------------------
+# 向后兼容壳（dashboard 重写时统一收口）
+# ---------------------------------------------------------------------------
+# 保留为 BaseConfig 空壳：dashboard/api/config.py 等旧调用点的 _SECTION_TO_ROOT_MODEL
+# 映射表仍引用这些名字作为占位 key——删净会导致启动期 ImportError。
+# 真正的 schema 权威在新位置（FileMetaConfig / StreamerPersonaConfig / infra 段位），
+# 这些壳在运行时不被实际校验或装配，仅供旧导入通过。
+
+
+class MetaConfig(BaseConfig):
+    """向后兼容壳——权威在 file_meta.FileMetaConfig。"""
+
+    version: str = Field(default="", description="占位字段——真实权威见 FileMetaConfig")
+
+
+class GeneralConfig(BaseConfig):
+    """向后兼容壳——原 platform_id 段已被 §6.2 重构删除。"""
+
+    platform_id: str = Field(default="amaidesu", description="占位字段")
+
+
+class PersonaConfig(BaseConfig):
+    """向后兼容壳——权威在 agents/streamer/config.py StreamerPersonaConfig。"""
+
+    bot_name: str = Field(default="", description="占位字段")
+    personality: str = Field(default="", description="占位字段")
+    style_constraints: str = Field(default="", description="占位字段")
+    behavior_style: str = Field(default="", description="占位字段")
+    audience_salutation: str = Field(default="", description="占位字段")
+
+
+class ContextAssemblerConfig(BaseConfig):
+    """向后兼容壳——权威在 agents.toml [agents.streamer.context]。"""
+
+    enabled: bool = Field(default=True, description="占位字段")
+    memory_recall_long_term: int = Field(default=3, description="占位字段")
+
+
 class CoreConfig(BaseConfig):
-    """核心系统配置根类
+    """向后兼容壳——原 core.toml root；§6.2 重构后 core.toml 消亡，权威在
+    InfraRootConfig / AgentsRootConfig / 等 6 文件根。本类保留作
+    _SECTION_TO_ROOT_MODEL 占位 key。"""
 
-    聚合所有非业务域的系统级配置，对应 ``config/core.toml`` 文件。
-
-    段树：
-    - ``[meta]``        — 配置元数据（CONFIG_VERSION 权威）
-    - ``[general]``     — 通用配置
-    - ``[persona]``     — VTuber 人设
-    - ``[context]``     — ContextAssembler 配置
-    - ``[events]``      — EventBus 事件历史
-    - ``[dashboard]``   — Web Dashboard
-    - ``[simulator]``   — 模拟直播间
-    - ``[logging]``     — 日志
-    - ``[interceptors]`` — 事件拦截器配置（动态键）
-    - ``[tts]``         — TTS 基础设施（开关/目标引擎/队列/超时 + 引擎子段）
-    - ``[subtitle]``    — 字幕基础设施
-    """
-
-    meta: MetaConfig = Field(default_factory=MetaConfig, description="配置元数据")
-    general: GeneralConfig = Field(default_factory=GeneralConfig, description="通用配置")
-    persona: PersonaConfig = Field(default_factory=PersonaConfig, description="VTuber 人设配置")
-    context: ContextAssemblerConfig = Field(
-        default_factory=ContextAssemblerConfig,
-        description="上下文组装器配置（v2.0.0 替代旧会话存储）",
-    )
-    events: EventHistoryConfig = Field(default_factory=EventHistoryConfig, description="事件历史记录配置")
-    dashboard: DashboardConfig = Field(default_factory=DashboardConfig, description="Dashboard 配置")
-    simulator: SimulatorConfigSchema = Field(
-        default_factory=SimulatorConfigSchema, description="模拟直播间配置（数据文件位于 data/simulator/）"
-    )
-    logging: LoggingConfig = Field(default_factory=LoggingConfig, description="日志配置")
-    interceptors: dict[str, Any] = Field(
-        default_factory=lambda: {
-            "rate_limit": {
-                "enabled": True,
-                "global_rate_limit": 100,
-                "user_rate_limit": 10,
-                "window_size": 60,
-            },
-            "similar_filter": {
-                "enabled": True,
-                "similarity_threshold": 0.85,
-                "time_window": 5.0,
-                "min_text_length": 3,
-                "cross_user_filter": True,
-            },
-        },
-        description="事件拦截器配置（动态键，如 rate_limit / similar_filter；2.0.4 由 [pipelines] 正名）",
-    )
-    tts: TTSConfig = Field(
-        default_factory=TTSConfig,
-        description="TTS 基础设施配置（开关/目标引擎/队列/超时 + 引擎子段；2.0.10 调度字段上移，2.0.12 引擎连接参数从 tools.toml 整体迁入）",
-    )
-    subtitle: SubtitleInfraConfig = Field(
-        default_factory=SubtitleInfraConfig,
-        description="字幕基础设施配置（开关/后端列表 + tk_gui 子段；由 tools.toml [tools.output.config.subtitle] 迁移而来）",
-    )
+    meta: MetaConfig = Field(default_factory=MetaConfig, description="占位")
+    general: GeneralConfig = Field(default_factory=GeneralConfig, description="占位")
+    persona: PersonaConfig = Field(default_factory=PersonaConfig, description="占位")
+    context: ContextAssemblerConfig = Field(default_factory=ContextAssemblerConfig, description="占位")

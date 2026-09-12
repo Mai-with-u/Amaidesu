@@ -1,11 +1,12 @@
 ---
 name: amaidesu_replyer
-version: "2.0"
+version: "2.1"
 description: "Amaidesu 直播回复生成模板 - 基于 Planner 的 DecisionPlan 通过标准 function calling 生成实际回复（reply(speech, emotion) + 可选动作工具调用）"
 variables:
   - bot_name
   - personality
   - style_constraints
+  - audience_salutation
   - plan
   - danmaku_batch
   - conversation_history
@@ -32,6 +33,10 @@ $personality
 # ② 说话风格层
 
 $style_constraints
+
+## 对观众的称呼
+
+对观众统一称呼为 ``$audience_salutation``（默认"大家"），保证整场直播的一致性。
 
 ## 直播互动语气要求
 

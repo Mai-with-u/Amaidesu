@@ -79,8 +79,6 @@ _SECTION_TO_CONFIG_FILE: dict[str, str] = {
     "amemorix": "memory.toml",
     "storage": "storage.toml",
     "sqlite": "storage.toml",
-    "background": "background.toml",
-    "compressor": "background.toml",
 }
 
 

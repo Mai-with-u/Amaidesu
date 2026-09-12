@@ -25,22 +25,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
+from src.agents.streamer.config import StreamerConfig
+from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.llm.manager import LLMResponse
 
-
-def _make_agent_config(**overrides: Any) -> StreamerAgentConfig:
+def _make_agent_config(**overrides: Any) -> StreamerConfig:
     defaults: Dict[str, Any] = {
-        "planner_llm": "llm_fast",
-        "replyer_llm": "llm",
-        "proactive_enabled": False,
-        "profanity_enabled": False,
-        "batch_window_ms": 100,
-        "tick_interval_ms": 50,
+        "batch": {"batch_window_ms": 100, "tick_interval_ms": 50},
+        "proactive": {"enabled": False},
+        "word_filter": {"enabled": False},
     }
     defaults.update(overrides)
-    return StreamerAgentConfig(**defaults)
-
+    return StreamerConfig.from_dict(defaults)
 
 def _build_agent() -> StreamerAgent:
     """构造最小化 StreamerAgent（mock LLM / prompt / context）。"""
@@ -61,10 +57,8 @@ def _build_agent() -> StreamerAgent:
         tool_registry=None,
     )
 
-
 def _patch_planner(agent: StreamerAgent, outcome: Optional[Dict[str, Any]]) -> None:
     agent._planner.plan = AsyncMock(return_value=outcome)
-
 
 def _patch_reply_provider(
     agent: StreamerAgent, structured: Optional[Dict[str, Any]], error: Optional[str] = None
@@ -92,7 +86,6 @@ def _patch_reply_provider(
     provider.invoke = AsyncMock(return_value=result)
     agent._reply_provider = provider
 
-
 _REPLY_STRUCTURED: Dict[str, Any] = {
     "speech": "欢迎来到直播间！",
     "emotion": {"name": "happy", "intensity": 0.5},
@@ -100,11 +93,9 @@ _REPLY_STRUCTURED: Dict[str, Any] = {
     "metadata": {},
 }
 
-
 # ---------------------------------------------------------------------------
 # 入参校验
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_rejects_proactive_with_batch():
@@ -116,7 +107,6 @@ async def test_rejects_proactive_with_batch():
     assert result["success"] is False
     assert "proactive" in result["error"]
 
-
 @pytest.mark.asyncio
 async def test_rejects_empty_batch():
     agent = _build_agent()
@@ -127,7 +117,6 @@ async def test_rejects_empty_batch():
     result_none = await agent.debug_test_decision(batch=None)
     assert result_none["success"] is False
 
-
 @pytest.mark.asyncio
 async def test_rejects_batch_of_empty_texts():
     """全部 text 为空白的批次等同空批（校验在前，不进决策）。"""
@@ -135,11 +124,9 @@ async def test_rejects_batch_of_empty_texts():
     result = await agent.debug_test_decision(batch=[{"nickname": "观众", "text": "   "}])
     assert result["success"] is False
 
-
 # ---------------------------------------------------------------------------
 # 弹幕模式：成功路径
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_danmaku_mode_success_returns_full_view():
@@ -188,7 +175,6 @@ async def test_danmaku_mode_success_returns_full_view():
     # fire-and-forget 任务收尾（写历史等；无 event_bus 不 emit）
     await asyncio.sleep(0.05)
 
-
 @pytest.mark.asyncio
 async def test_danmaku_default_nickname_when_missing():
     """nickname 缺省时用「测试观众」占位。"""
@@ -200,11 +186,9 @@ async def test_danmaku_default_nickname_when_missing():
     batch = agent._planner.plan.await_args.args[0]
     assert batch[0].user_nickname == "测试观众"
 
-
 # ---------------------------------------------------------------------------
 # Planner 拒绝 / 失败
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_planner_rejected_returns_plan_without_speech():
@@ -225,7 +209,6 @@ async def test_planner_rejected_returns_plan_without_speech():
     # Replyer 未被触发
     agent._reply_provider.invoke.assert_not_awaited()
 
-
 @pytest.mark.asyncio
 async def test_planner_failure_returns_error():
     agent = _build_agent()
@@ -239,11 +222,9 @@ async def test_planner_failure_returns_error():
     assert result["error"].startswith("planner_failed")
     assert result["plan"] is None
 
-
 # ---------------------------------------------------------------------------
 # Reply 工具失败
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_reply_tool_failure_returns_error():
@@ -262,11 +243,9 @@ async def test_reply_tool_failure_returns_error():
     assert "reply_tool_failed: LLM 超时" in result["error"]
     assert result["speech"] is None
 
-
 # ---------------------------------------------------------------------------
 # proactive 直跑模式
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_proactive_mode_bypasses_rate_limit():

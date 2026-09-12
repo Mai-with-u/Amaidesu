@@ -38,9 +38,9 @@ router = APIRouter()
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 # v2：group（路径参数）→ (配置文件顶层段, doc 嵌套键路径)
-# doc 路径从 TOML 文件顶层段开始（tools.toml 顶层是 [tools]）
+# 采集器配置独立为 collectors.toml，路径为顶层 ``[collectors]`` 段
 _GROUP_TO_CONFIG: Dict[str, tuple[str, List[str]]] = {
-    "collectors": ("tools", ["tools", "perception", "config"]),
+    "collectors": ("collectors", ["collectors"]),
     "agents": ("agents", ["agents"]),
 }
 
@@ -72,7 +72,7 @@ def _sync_enabled_config(server: "DashboardServer", group: str, name: str, *, en
     """把组件名加入/移除对应配置段 enabled 列表（幂等写回）。
 
     group 映射（v2）：
-    - collectors → tools.toml ``[tools.perception.config].enabled``
+    - collectors → collectors.toml ``[collectors].enabled``
     - agents → agents.toml ``[agents].enabled``
     """
     section_info = _GROUP_TO_CONFIG.get(group)

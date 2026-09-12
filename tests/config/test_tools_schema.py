@@ -1,11 +1,13 @@
-"""Tools 配置 Schema 测试（v2.0.18 工具域开关重构后）
+"""Tools 配置 Schema 测试（v2.0.31 工具域重构后）
 
 测试 src/modules/config/tools_schemas.py：
 1. ToolsRootConfig 根结构（tools 子段）
-2. ToolsConfig 聚合：enabled 列表 + perception/output 包 + 工具域开关（avatar/studio/vision/memory/mcp）
+2. ToolsConfig 聚合：异步任务基建 + 各提供者分类（avatar/studio/vision/memory/mcp）
 3. ToolProviderConfig 开关语义（enabled + config）
 4. avatar/studio 动态子段（Dict[str, ProviderConfig]）
-5. json_schema_extra UI 元数据
+5. [tools.tasks] 段定义 + 默认值
+6. [tools.memory].enabled 默认 true
+7. 顶层禁用 perception/output（已迁出）
 """
 
 from __future__ import annotations
@@ -19,9 +21,9 @@ from src.modules.config.tools_schemas import (
     MemoryProviderConfig,
     StudioProviderConfig,
     ToolProviderConfig,
-    ToolPackType,
     ToolsConfig,
     ToolsRootConfig,
+    ToolsTasksConfig,
     VisionProviderConfig,
 )
 
@@ -36,31 +38,46 @@ class TestToolsRootConfig:
         assert cfg.tools is not None
 
 
-class TestToolsConfigEnabled:
-    def test_default_enabled_is_list(self):
-        cfg = ToolsConfig()
-        assert isinstance(cfg.enabled, list)
+class TestToolsTasksConfig:
+    def test_default_values(self):
+        cfg = ToolsTasksConfig()
+        assert cfg.poll_interval_ms == 2000
+        assert cfg.wait_timeout_ms == 1_800_000
 
-    def test_default_enabled_contains_perception_output(self):
-        cfg = ToolsConfig()
-        assert "perception" in cfg.enabled
-        assert "output" in cfg.enabled
-
-    def test_accepts_known_packs(self):
-        cfg = ToolsConfig(enabled=["perception", "output"])
-        assert len(cfg.enabled) == 2
-
-    def test_unknown_pack_rejected(self):
+    def test_poll_interval_ge_100(self):
         with pytest.raises(ValidationError):
-            ToolsConfig(enabled=["unknown_pack"])
+            ToolsTasksConfig(poll_interval_ms=50)
 
+    def test_wait_timeout_ge_1000(self):
+        with pytest.raises(ValidationError):
+            ToolsTasksConfig(wait_timeout_ms=500)
 
-class TestToolsConfigPackAndDomains:
-    def test_packs_default_none(self):
+    def test_tools_tasks_under_tools(self):
         cfg = ToolsConfig()
-        for pack in ("perception", "output"):
-            assert getattr(cfg, pack) is None, f"{pack} 应默认 None"
+        assert isinstance(cfg.tasks, ToolsTasksConfig)
+        assert cfg.tasks.poll_interval_ms == 2000
 
+
+class TestToolsConfigDisabledLegacyFields:
+    def test_perception_field_rejected(self):
+        """顶层 perception 段已迁出至 collectors.toml，应被 extra=forbid 拒绝"""
+        with pytest.raises(ValidationError) as exc_info:
+            ToolsConfig.model_validate({"perception": {"enabled": True}})
+        assert "perception" in str(exc_info.value).lower()
+
+    def test_output_field_rejected(self):
+        """顶层 output 段已迁出至 infra.toml，应被 extra=forbid 拒绝"""
+        with pytest.raises(ValidationError) as exc_info:
+            ToolsConfig.model_validate({"output": {"enabled": True}})
+        assert "output" in str(exc_info.value).lower()
+
+    def test_enabled_field_rejected(self):
+        """原包级 enabled 列表已废除（ToolPackType 已删除）"""
+        with pytest.raises(ValidationError):
+            ToolsConfig.model_validate({"enabled": ["perception"]})
+
+
+class TestToolsConfigDomains:
     def test_domains_default_empty_or_none(self):
         cfg = ToolsConfig()
         assert cfg.avatar == {} or cfg.avatar is None
@@ -101,8 +118,10 @@ class TestSpecializedDomains:
         cfg = VisionProviderConfig(enabled=True, config={"default_max_width": 1280})
         assert cfg.enabled is True
 
-    def test_memory(self):
-        cfg = MemoryProviderConfig(enabled=True)
+    def test_memory_default_enabled_true(self):
+        """记忆分类默认 enabled=true（消除配置漂移）"""
+        cfg = MemoryProviderConfig()
+        assert cfg.enabled is True
         assert cfg.config == {}
 
     def test_mcp(self):
@@ -115,9 +134,7 @@ class TestSpecializedDomains:
 
 
 class TestJsonSchemaExtra:
-    def test_enabled_has_ui_metadata(self):
-        field_info = ToolsConfig.model_fields["enabled"]
+    def test_tasks_has_ui_metadata(self):
+        field_info = ToolsConfig.model_fields["tasks"]
         extra = field_info.json_schema_extra or {}
-        assert extra.get("x-ui-type") == "multiselect"
-        assert "perception" in extra.get("x-options", [])
-        assert "output" in extra.get("x-options", [])
+        assert extra.get("x-ui-type") == "object"

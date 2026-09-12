@@ -33,7 +33,6 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.manager import AgentManager
-from src.modules.config.schemas.base import BaseConfig
 from src.modules.context.models import MessageRole
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -45,7 +44,6 @@ from src.modules.events.payloads.planner import (
     StreamerStagePayload,
 )
 from src.modules.events.payloads.room import RoomMessagePayload
-from pydantic import Field as _PydField
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
@@ -61,7 +59,7 @@ from .background import BackgroundMaintainer
 from .message_buffer import MessageBuffer
 from .planner import Planner
 from .proactive_trigger import ProactiveTrigger
-from .replyer import ProfanityFilter, Replyer
+from .replyer import WordFilter, Replyer
 from .room_state import RoomState
 from .thinking_stream import ThinkingStreamContext
 from .timing_gate import TimingGate
@@ -73,120 +71,21 @@ from .utterance_queue import (
     DEFAULT_RENDER_TIMEOUT_MS,
     UtteranceQueue,
 )
+from .config import StreamerConfig
 
 if TYPE_CHECKING:
     from src.modules.subtitle import SubtitleService
     from src.modules.tts import TTSProvider
 
-__all__ = ["StreamerAgent", "StreamerAgentConfig", "build_streamer_agent"]
+__all__ = ["StreamerAgent", "StreamerConfig", "build_streamer_agent"]
 
 # 游戏叙事摘要保留条数（近期叙事够用；进 Planner 上下文）
 _MAX_GAME_NARRATIVE = 10
 
-
-# ---------------------------------------------------------------------------
-# 配置 Schema
-# ---------------------------------------------------------------------------
-
-
-class StreamerAgentConfig(BaseConfig):
-    """主播 Agent 配置 Schema。
-
-    planner_llm / replyer_llm 为标准字段名；旧字段名（replyer_client / planner_client）
-    作为向后兼容映射保留。
-    """
-
-    # --- 两阶段 LLM profile：Planner 用 llm_fast，Replyer 用 llm ---
-    planner_llm: str = _PydField(default="llm_fast", description="Planner 使用的 LLM profile")
-    replyer_llm: str = _PydField(default="llm", description="Replyer 使用的 LLM profile")
-
-    # 旧字段名兼容
-    planner_client: str = _PydField(default="llm_fast", description="（兼容字段）Planner LLM client")
-    replyer_client: str = _PydField(default="llm", description="（兼容字段）Replyer LLM client")
-
-    # --- 弹幕聚合（含 idle 补偿公式）---
-    batch_window_ms: int = _PydField(default=3000, ge=0, description="弹幕聚合时间窗口（毫秒）")
-    batch_max_size: int = _PydField(default=20, ge=1, description="单批最多聚合的弹幕条数")
-    tick_interval_ms: int = _PydField(default=300, ge=50, description="后台聚合检查间隔（毫秒）")
-    enable_idle_compensation: bool = _PydField(default=True, description="空窗补偿开关")
-
-    # --- 强制触发 ---
-    force_data_types: List[str] = _PydField(
-        default_factory=lambda: ["super_chat", "guard", "gift"],
-        description="强制响应的数据类型",
-    )
-    force_importance: float = _PydField(default=0.8, ge=0.0, le=1.0, description="importance 达到该值则强制响应")
-
-    # --- 人设 ---
-    # 默认值 '麦麦' 与 core_schemas.PersonaConfig.bot_name 默认值 +
-    # config/core.toml 真实值对齐。
-    # 优先级链：persona dict（来自 core.toml，经装配根注入 StreamerAgent.persona_provider）
-    # > StreamerAgentConfig.bot_name（agents.toml 显式覆盖）> 本字段默认值。
-    bot_name: str = _PydField(default="麦麦", description="VTuber 名称")
-    history_limit: int = _PydField(default=30, ge=0, description="构建 prompt 时引用的历史消息条数")
-    enable_action_selection: bool = _PydField(
-        default=True,
-        description="是否让 LLM 从工具能力中选择动作",
-    )
-
-    # --- 房间状态后台预处理（后台双任务：轻循环）---
-    room_state_enabled: bool = _PydField(default=True, description="是否启用房间状态后台预处理")
-    room_state_cold_timeout_ms: int = _PydField(default=60_000, ge=0, description="房间冷场判定阈值（毫秒）")
-    room_state_llm_summary_interval_ms: int = _PydField(default=60_000, ge=0, description="低频 LLM 摘要间隔（毫秒）")
-    room_state_summary_client: str = _PydField(
-        default="llm_summary",
-        description="房间状态摘要专用 LLM profile（独立 client 实例）",
-    )
-
-    # --- 主动发言 ---
-    proactive_enabled: bool = _PydField(default=True, description="主动发言总开关（流程单/冷场/定时等所有主动发言源）")
-    proactive_cold_timeout_ms: int = _PydField(default=45_000, ge=0, description="冷场判定阈值（毫秒）")
-    proactive_min_interval_ms: int = _PydField(default=120_000, ge=0, description="两次主动发言最小间隔")
-    proactive_schedule_interval_ms: int = _PydField(default=300_000, ge=0, description="定时话题触发间隔（0 = 关闭）")
-    proactive_schedule_only_cold: bool = _PydField(default=True, description="定时触发是否仅限冷场")
-    proactive_max_per_hour: int = _PydField(default=6, ge=1, description="每小时主动发言次数上限")
-    proactive_topic_required: bool = _PydField(default=True, description="话题摘要缺失时是否跳过触发")
-
-    # --- 流程单（Rundown）---
-    rundown_id: str = _PydField(default="", description="流程单 id（空 = 使用内置默认流程单）")
-    rundown_speech_interval_ms: int = _PydField(default=3_000, ge=1000, description="流程单环节内两次主动发言最小间隔")
-
-    # --- 敏感词净化（输出端）---
-    profanity_enabled: bool = _PydField(default=False, description="敏感词净化开关")
-    profanity_words: List[str] = _PydField(default_factory=list, description="敏感词列表")
-    profanity_replacement: str = _PydField(default="***", description="替换字符")
-    profanity_case_sensitive: bool = _PydField(default=False, description="是否大小写敏感")
-    profanity_drop_on_match: bool = _PydField(default=False, description="命中时是否整条丢弃")
-
-    # --- 命令解析：parse_command 工具 ---
-    command_prefix: str = _PydField(default="/", description="命令前缀")
-    command_mappings: Dict[str, str] = _PydField(
-        default_factory=lambda: {
-            "chat": "chat",
-            "say": "chat",
-            "聊天": "chat",
-            "attack": "attack",
-            "攻击": "attack",
-        },
-        description="命令映射 {name: action}",
-    )
-
-    # --- 思考流旁路（ADR-008；观察面专用，best-effort 不落库）---
-    # 与 src/modules/config/agents_schemas.py 的 WebUI 镜像 Schema 保持字段一致
-    thinking_stream_enabled: bool = _PydField(
-        default=True,
-        description="思考流总开关：决策/生成期间的 reasoning 增量经旁路通道推送 WebUI 控制台",
-    )
-    thinking_stream_flush_interval_ms: int = _PydField(
-        default=100,
-        ge=20,
-        description="思考流合帧推送间隔（毫秒）",
-    )
-    thinking_stream_buffer_max: int = _PydField(
-        default=400,
-        ge=10,
-        description="思考流环形缓冲上限（条）；超限丢最旧",
-    )
+# LLM profile 用途名（与 [llm_profiles.<name>] 三层结构对齐；model.toml 必填 6 成员）
+_PROFILE_PLANNER = "planner"
+_PROFILE_REPLYER = "replyer"
+_PROFILE_SUMMARY = "summary"
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +115,7 @@ class StreamerAgent(BaseAgent):
 
     def __init__(
         self,
-        config: StreamerAgentConfig,
+        config: StreamerConfig,
         *,
         llm_manager: Any,
         prompt_manager: Any,
@@ -236,7 +135,7 @@ class StreamerAgent(BaseAgent):
         """初始化主播 Agent。
 
         Args:
-            config: ``StreamerAgentConfig`` 实例
+            config: ``StreamerConfig`` 实例
             llm_manager: ``LLMManager`` 实例
             prompt_manager: ``PromptManager`` 实例
             context_service: 可选 ``ContextService``（持久化对话历史）
@@ -246,7 +145,7 @@ class StreamerAgent(BaseAgent):
                 Planner/Replyer 也从它读取 game 工具清单做动作选择）
             sqlite_store: 可选 ``SQLiteStore``（live_sessions 状态 + rundowns 流程单库）
             persona_provider: 可选人设字典来源（鸭子类型：callable 返回 dict / dict 本身）
-            context_assembler_config: 可选 ``ContextAssemblerConfig``（core.toml [context] 段；
+            context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
                 控制 Planner 组装路径开关与长记忆召回条数；None 时 Planner 走内置默认）
             memory: 可选记忆后端（实现 ``MemoryProvider`` 协议，含
                 ``recall(query, top_k)`` / ``ingest(text, source, tags)``）。
@@ -302,87 +201,86 @@ class StreamerAgent(BaseAgent):
         # ===== 内部子组件 =====
         # 弹幕聚合缓冲 + 强制触发判定
         self._buffer = MessageBuffer(
-            batch_window_ms=config.batch_window_ms,
-            batch_max_size=config.batch_max_size,
-            enable_idle_compensation=config.enable_idle_compensation,
+            batch_window_ms=config.batch.batch_window_ms,
+            batch_max_size=config.batch.batch_max_size,
+            enable_idle_compensation=config.batch.enable_idle_compensation,
         )
         self._timing_gate = TimingGate(
-            force_data_types=config.force_data_types,
-            force_importance=config.force_importance,
+            force_data_types=config.force.force_data_types,
+            force_importance=config.force.force_importance,
         )
 
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
 
         # Planner（决策核心，Agent 内脏——非工具）
-        # 从 self._persona_provider（装配根注入的 [persona] dict）
-        # 提取 behavior_style（行动准则）并透传给 Planner；persona_provider 是 dict
-        # 或可调用对象两种形式，统一用鸭子类型断言。
-        _behavior_style = ""
+        # 行为准则（behavior_style）优先级：包内 persona 权威 > persona_provider（dict）传入。
+        # 包内 config.persona 是配置权威；persona_provider 仍保留以兼容外部注入
+        # （如测试），存在时其 behavior_style 覆盖 config.persona.behavior_style。
+        _behavior_style = config.persona.behavior_style or ""
         if self._persona_provider is not None:
             try:
                 _persona_dict = self._persona_provider() if callable(self._persona_provider) else self._persona_provider
                 if isinstance(_persona_dict, dict):
-                    _behavior_style = str(_persona_dict.get("behavior_style") or "")
+                    _provider_bs = str(_persona_dict.get("behavior_style") or "")
+                    if _provider_bs:
+                        _behavior_style = _provider_bs
             except Exception as exc:
                 self._logger.warning(f"Planner 读取 persona_provider.behavior_style 失败: {exc}")
+        # context 组装器路径开关与召回条数——直接读包内权威
+        _context_enabled = config.context.enabled
+        _recall_top_k = config.context.memory_recall_long_term
         self._planner = Planner(
             config={
-                "planner_llm": config.planner_llm,
-                "planner_client": config.planner_client,
-                "planner_max_steps": getattr(config, "planner_max_steps", 8),
+                "profile": _PROFILE_PLANNER,
+                "planner_max_steps": config.planner_max_steps,
             },
             llm_service=llm_manager,
             prompt_service=prompt_manager,
             room_state=self._room_state,
             tool_registry=tool_registry,
             memory=memory,
-            recall_top_k=(
-                int(getattr(context_assembler_config, "memory_recall_long_term", 3) or 3)
-                if context_assembler_config is not None
-                else 3
-            ),
-            context_enabled=(
-                bool(getattr(context_assembler_config, "enabled", True))
-                if context_assembler_config is not None
-                else True
-            ),
+            recall_top_k=int(_recall_top_k or 3),
+            context_enabled=bool(_context_enabled),
             behavior_style=_behavior_style,
         )
 
         # 敏感词过滤器（输出净化；None 表示不启用）
-        self._profanity_filter = ProfanityFilter(
-            words=config.profanity_words if config.profanity_enabled else None,
-            replacement=config.profanity_replacement,
-            case_sensitive=config.profanity_case_sensitive,
-            drop_on_match=config.profanity_drop_on_match,
-            enabled=config.profanity_enabled,
+        wf = config.word_filter
+        self._word_filter = WordFilter(
+            words=wf.words if wf.enabled else None,
+            replacement=wf.replacement,
+            case_sensitive=wf.case_sensitive,
+            drop_on_match=wf.drop_on_match,
+            enabled=wf.enabled,
         )
 
         # Replyer（表达引擎，Agent 内脏——非工具）
+        # audience_salutation 默认"大家"——旧 user_name 默认值
         self._replyer = Replyer(
             config={
-                "replyer_llm": config.replyer_llm,
-                "replyer_client": config.replyer_client,
+                "profile": _PROFILE_REPLYER,
                 "enable_action_selection": config.enable_action_selection,
-                "bot_name": config.bot_name,
+                "bot_name": config.persona.bot_name,
+                "audience_salutation": config.persona.audience_salutation,
             },
             llm_service=llm_manager,
             prompt_service=prompt_manager,
             tool_registry=tool_registry,
-            profanity_filter=self._profanity_filter,
+            word_filter=self._word_filter,
         )
 
         # 主动发言触发器（纯规则组件，Agent 内脏）
+        proactive = config.proactive
         proactive_config = {
-            "enabled": config.proactive_enabled,
-            "cold_timeout_ms": config.proactive_cold_timeout_ms,
-            "min_interval_ms": config.proactive_min_interval_ms,
-            "schedule_interval_ms": config.proactive_schedule_interval_ms,
-            "schedule_only_cold": config.proactive_schedule_only_cold,
-            "max_per_hour": config.proactive_max_per_hour,
-            "topic_required": config.proactive_topic_required,
-            "rundown_speech_interval_ms": config.rundown_speech_interval_ms,
+            "enabled": proactive.enabled,
+            "cold_timeout_ms": proactive.cold_timeout_ms,
+            "min_interval_ms": proactive.min_interval_ms,
+            "schedule_interval_ms": proactive.schedule_interval_ms,
+            "schedule_only_cold": proactive.schedule_only_cold,
+            "max_per_hour": proactive.max_per_hour,
+            "topic_required": proactive.topic_required,
+            "rundown_speech_interval_ms": proactive.rundown_speech_interval_ms,
         }
         self._proactive_trigger = ProactiveTrigger(proactive_config)
 
@@ -395,12 +293,17 @@ class StreamerAgent(BaseAgent):
         self._planner.bind_elapsed_live_provider(self._rundown_state.get_elapsed_live_ms)
         self._planner.bind_rundown_provider(RundownControlProvider(self._rundown_state))
 
-        # 后台维护器（双任务：轻循环 + 压缩 worker）
+        # 后台维护器（双任务：轻循环 + 压缩 worker）——读包内权威配置
+        bg = config.background
         background_config = {
-            "light_tick_ms": 5_000,
-            "cold_timeout_ms": config.room_state_cold_timeout_ms,
-            "summary_interval_ms": config.room_state_llm_summary_interval_ms,
-            "summary_client": config.room_state_summary_client,
+            "enabled": bg.enabled,
+            "light_tick_ms": bg.light_tick_ms,
+            "cold_timeout_ms": bg.cold_timeout_ms,
+            "summary_interval_ms": bg.summary_interval_ms,
+            "summary_client": _PROFILE_SUMMARY,
+            "window_event_threshold": bg.window_event_threshold,
+            "compressor_concurrency": bg.compressor.concurrency,
+            "compressor_queue_max": bg.compressor.queue_max,
         }
         self._background = BackgroundMaintainer(
             background_config,
@@ -461,8 +364,8 @@ class StreamerAgent(BaseAgent):
 
         self._logger.info(
             f"StreamerAgent 已构造 "
-            f"(planner_llm={config.planner_llm}, replyer_llm={config.replyer_llm}, "
-            f"proactive_enabled={config.proactive_enabled}, "
+            f"(profile_planner={_PROFILE_PLANNER}, profile_replyer={_PROFILE_REPLYER}, "
+            f"proactive_enabled={config.proactive.enabled}, "
             f"rundown_id={config.rundown_id!r}, "
             f"tts_enabled={self._tts_enabled}, "
             f"tts_engine={'<已注入>' if tts_engine is not None else '<未注入>'})"
@@ -493,7 +396,7 @@ class StreamerAgent(BaseAgent):
         self._flush_task = asyncio.create_task(self._flush_loop())
 
         # 启动后台双任务（轻循环 + 压缩 worker）
-        if self.typed_config.room_state_enabled:
+        if self.typed_config.background.enabled:
             await self._background.start()
 
         # 启动流程单（fail-soft：加载失败降级为无流程单）
@@ -636,8 +539,8 @@ class StreamerAgent(BaseAgent):
 
         # command tool
         self._command_provider = CommandToolProvider(
-            command_prefix=self.typed_config.command_prefix,
-            command_mappings=self.typed_config.command_mappings,
+            command_prefix=self.typed_config.command.prefix,
+            command_mappings=self.typed_config.command.mappings,
         )
 
         self._logger.info(
@@ -868,7 +771,7 @@ class StreamerAgent(BaseAgent):
 
     async def _flush_loop(self) -> None:
         """后台循环：周期性检查缓冲并触发批次决策。"""
-        interval = max(self.typed_config.tick_interval_ms / 1000.0, 0.05)
+        interval = max(self.typed_config.batch.tick_interval_ms / 1000.0, 0.05)
         try:
             while self._running:
                 await asyncio.sleep(interval)
@@ -1063,7 +966,7 @@ class StreamerAgent(BaseAgent):
         # Planner.last_failure 带出，供决策事件区分降级原因）
         planner_started_ms = now_ms()
         thinking = None
-        if self._thinking_sink is not None and getattr(self.typed_config, "thinking_stream_enabled", True):
+        if self._thinking_sink is not None and getattr(self.typed_config.thinking_stream, "enabled", True):
             thinking = ThinkingStreamContext(self._thinking_sink, round_id)
         try:
             outcome = await self._planner.plan(
@@ -1813,7 +1716,7 @@ class StreamerAgent(BaseAgent):
 
 def build_streamer_agent(
     *,
-    config: StreamerAgentConfig,
+    config: StreamerConfig,
     llm_manager: Any,
     prompt_manager: Any,
     agent_manager: AgentManager,
@@ -1828,7 +1731,7 @@ def build_streamer_agent(
     """便捷工厂：构造 StreamerAgent + 注册到 AgentManager。
 
     Args:
-        config: ``StreamerAgentConfig`` 实例
+        config: ``StreamerConfig`` 实例
         其余参数同 ``StreamerAgent.__init__``
         agent_manager: ``AgentManager`` 实例（构造完后 register 到管理器）
         spec_provider: provider 来源溯源（"builtin"/Agent 名/"mcp"），默认 builtin

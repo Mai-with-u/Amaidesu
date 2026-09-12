@@ -36,9 +36,9 @@ from typing import AsyncGenerator, Dict, List
 import pytest
 
 from src.agents.text_adv import (
+    TextAdvConfig,
     TextAdvGameAgent,
     TextAdvGameAgentState,
-    TextAdvGameConfig,
     build_text_adv_agent,
 )
 from src.agents.text_adv.content_engine import (
@@ -134,7 +134,7 @@ async def started_agent(
     # 3) 构造 Agent；Agent 自己会在 _on_start 中注册 text_adv_choose_option / text_adv_get_story
     manager = AgentManager(tool_registry=registry)
     agent = build_text_adv_agent(
-        config=TextAdvGameConfig(),
+        config=TextAdvConfig(),
         agent_manager=manager,
         content_engine=content_engine,
         event_bus=event_bus,
@@ -179,7 +179,7 @@ def test_text_adv_agent_emits_game_events() -> None:
 
 def test_text_adv_agent_list_tools_returns_game_provider_specs() -> None:
     """协议 2：list_tools 暴露 text_adv_choose_option + text_adv_get_story（provider="text_adv"）。"""
-    config = TextAdvGameConfig()
+    config = TextAdvConfig()
     agent = TextAdvGameAgent(config=config)
     specs = list(agent.list_tools())
     assert len(specs) == 2
@@ -194,7 +194,7 @@ def test_text_adv_agent_factory_registers_in_manager() -> None:
     """工厂 build_text_adv_agent：构造 + register 到 AgentManager。"""
     manager = AgentManager()
     agent = build_text_adv_agent(
-        config=TextAdvGameConfig(),
+        config=TextAdvConfig(),
         agent_manager=manager,
         live_session_id="test",
     )
@@ -240,7 +240,7 @@ async def test_agent_lifecycle() -> None:
     registry = ToolRegistry()
     manager = AgentManager(tool_registry=registry)
     agent = build_text_adv_agent(
-        config=TextAdvGameConfig(),
+        config=TextAdvConfig(),
         agent_manager=manager,
         content_engine=FakeContentEngine(),
         tool_registry=registry,
@@ -258,7 +258,7 @@ async def test_agent_start_registers_own_tools() -> None:
     registry = ToolRegistry()
     manager = AgentManager(tool_registry=registry)
     agent = build_text_adv_agent(
-        config=TextAdvGameConfig(),
+        config=TextAdvConfig(),
         agent_manager=manager,
         content_engine=FakeContentEngine(),
         tool_registry=registry,
@@ -541,7 +541,7 @@ async def test_agent_manager_lifecycle_for_text_adv() -> None:
     """AgentManager 集成：register → start_all → 全部 RUNNING → stop_all。"""
     manager = AgentManager()
     agent = build_text_adv_agent(
-        config=TextAdvGameConfig(),
+        config=TextAdvConfig(),
         agent_manager=manager,
     )
     await manager.start_all()
@@ -558,7 +558,7 @@ async def test_game_tools_audited_when_registered_via_registry() -> None:
     registry = ToolRegistry()
     manager = AgentManager(tool_registry=registry)
     agent = build_text_adv_agent(
-        config=TextAdvGameConfig(),
+        config=TextAdvConfig(),
         agent_manager=manager,
         content_engine=FakeContentEngine(),
         tool_registry=registry,

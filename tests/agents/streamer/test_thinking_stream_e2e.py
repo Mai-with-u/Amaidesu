@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
+from src.agents.streamer.config import StreamerConfig
+from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.llm.manager import LLMResponse
 
 
@@ -39,14 +40,12 @@ def _build_agent(thinking_sink: Optional[Any], enabled: bool = True) -> Streamer
     context = MagicMock()
     context.get_history = AsyncMock(return_value=[])
 
-    config = StreamerAgentConfig(
-        planner_llm="llm_fast",
-        replyer_llm="llm",
-        proactive_enabled=False,
-        profanity_enabled=False,
-        batch_window_ms=100,
-        tick_interval_ms=50,
-        thinking_stream_enabled=enabled,
+    config = StreamerConfig.from_dict(
+        {
+            "proactive": {"enabled": False},
+            "batch": {"batch_window_ms": 100, "tick_interval_ms": 50},
+            "thinking_stream": {"enabled": enabled},
+        }
     )
     return StreamerAgent(
         config=config,
@@ -73,8 +72,7 @@ async def test_decide_round_delivers_reasoning_to_sink():
     )
 
     assert any(
-        c["round_id"] == "round_e2e" and c["phase"] == "planner" and c["text_delta"] == "端到端思考"
-        for c in sink.calls
+        c["round_id"] == "round_e2e" and c["phase"] == "planner" and c["text_delta"] == "端到端思考" for c in sink.calls
     )
     # seq 轮内递增
     seqs = [c["seq"] for c in sink.calls if c["round_id"] == "round_e2e"]

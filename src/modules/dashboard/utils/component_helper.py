@@ -5,7 +5,7 @@
 基于 ManagerStatusProvider 协议与阶段层解耦。
 
 另提供基于配置全集 + 运行时 Manager 的摘要构建函数：
-- 配置全集 = agents.toml [agents] 子键 / tools.toml [tools.perception.config]
+- 配置全集 = agents.toml [agents] 子键 / collectors.toml [collectors]
   子键（"可用组件"清单）
 - 未在启用列表的组件以 is_enabled=False 占位（组件管理页可快速启用）
 - 工具不在本清单：工具以"域开关单元"管理（见 tools API 的 domains 端点），
@@ -81,7 +81,7 @@ def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) ->
     """构建 v2 两组组件列表（采集器 / Agent）。
 
     数据源：
-    - 采集器：tools.toml ``[tools.perception.config]`` 的子键（感知源全集）
+    - 采集器：collectors.toml ``[collectors]`` 的子键（感知源全集）
     - Agent：agents.toml ``[agents]`` 的子键（enabled 之外的键）
 
     未在启用列表中的组件以 ``is_enabled=False`` 占位，组件管理页可快速启停。
@@ -106,8 +106,8 @@ def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) ->
     )
 
     collectors = _build_from_config(
-        config_root=_nested(config_main, "tools", "perception", "config"),
-        enabled_list=_nested(config_main, "tools", "perception", "config", "enabled") or [],
+        config_root=_nested(config_main, "collectors") or {},
+        enabled_list=_nested(config_main, "collectors", "enabled") or [],
         group="collectors",
         phase="input",
         component_type="collector",

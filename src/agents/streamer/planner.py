@@ -12,8 +12,9 @@
    何时参与聊天、如何观察局面、何时保持安静）——来自 [persona].behavior_style。
 2. **身份/表达人设隔离**：Planner 不传 ``$personality`` / ``$style_constraints`` /
    ``$bot_name``——表达侧三件套仅注入 Replyer。behavior_style = 决策侧。
-3. **高质量模型**：``planner_llm`` 默认 ``llm``——ReAct 决策核心做工具编排与
-   表达意图构思，质量敏感（乱调工具/意图偏差的代价高于延迟）。
+3. **高质量模型**：Planner profile 默认 ``planner``（StreamerAgent 装配期硬编码
+   传入 `_PROFILE_PLANNER`）——ReAct 决策核心做工具编排与表达意图构思，
+   质量敏感（乱调工具/意图偏差的代价高于延迟）。
 4. **工具面**：全局 ToolRegistry 动态拉取 + reply 局部工具 function 定义；
    过滤 provider=="streamer" 的 spec（Agent 内部协议防重入）。
 5. **观察喂回**：工具结果以 OpenAI ``tool`` role + ``tool_call_id`` 关联回灌。
@@ -24,7 +25,7 @@
     batch + room_state.snapshot + history + forced/proactive + behavior_style
         ──▶ render('amaidesu_planner_react')（系统提示词）
         ──▶ 首轮 user 消息 = context_block（组装器/裸消息路径）+ 情境标注
-        ──▶ llm_service.chat_messages(messages, tools=工具面, client_type=planner_llm)
+        ──▶ llm_service.chat_messages(messages, tools=工具面, client_type=planner_profile)
         ──▶ 循环：tool_calls 串行执行（reply → 局部 Provider；其余 → registry）
         ──▶ outcome dict（replied / speech / silent_reason / steps / tool_trace）
 """
@@ -78,13 +79,16 @@ _HISTORY_ROLE_LABELS: Dict[str, str] = {
 
 
 class _PlannerConfig(BaseConfig):
-    """Planner 配置 Schema（StreamerAgentConfig 最小子集）。
+    """Planner 配置 Schema（StreamerConfig 最小子集）。
 
-    仅声明 Planner 直接使用的字段；当从完整 StreamerAgentConfig 加载时，
+    仅声明 Planner 直接使用的字段；当从完整 StreamerConfig 加载时，
     BaseConfig.from_dict() 的漂移检测会自动剥离其余字段。
+
+    planner_max_steps 从 StreamerConfig.planner_max_steps 注入；LLM profile
+    用途名（"planner"/"replyer"/"summary"）由 StreamerAgent 装配期硬编码，
+    不再作为配置字段透传。
     """
 
-    planner_llm: str = "llm"
     planner_max_steps: int = _DEFAULT_MAX_STEPS
 
 
@@ -139,7 +143,7 @@ class Planner:
         """初始化 Planner。
 
         Args:
-            config: 配置字典或已解析对象（planner_llm / planner_max_steps）。
+            config: 配置字典或已解析对象（profile / planner_max_steps）。
             llm_service: LLM 管理器，需提供
                 ``async chat_messages(messages, tools=..., client_type=...) -> LLMResponse``。
             prompt_service: 提示词管理器，需提供 ``render_safe(name, **vars) -> str``。
@@ -156,9 +160,8 @@ class Planner:
         """
         if config is None:
             self.typed_config = _PlannerConfig()
-        elif hasattr(config, "planner_llm"):
+        elif hasattr(config, "planner_max_steps"):
             self.typed_config = _PlannerConfig(
-                planner_llm=config.planner_llm,
                 planner_max_steps=getattr(config, "planner_max_steps", _DEFAULT_MAX_STEPS),
             )
         elif isinstance(config, dict):
@@ -166,7 +169,9 @@ class Planner:
         else:
             self.typed_config = _PlannerConfig.from_dict(dict(config))
 
-        self.planner_llm: str = self.typed_config.planner_llm
+        # LLM profile 用途名由 StreamerAgent 装配期硬编码传入（_PROFILE_PLANNER）；
+        # 本字段保留以兼容 Planner 内部工具面与日志输出（profile 名仅展示用）。
+        self.profile: str = getattr(config, "profile", "llm") if config is not None else "llm"
         self.max_steps: int = self.typed_config.planner_max_steps
 
         self._llm_service = llm_service
@@ -293,7 +298,7 @@ class Planner:
                 response = await self._llm_service.chat_messages(
                     messages=messages,
                     tools=tool_face,
-                    client_type=self.planner_llm,
+                    client_type=self.profile,
                     on_delta=thinking.callback_for("planner", steps) if thinking else None,
                 )
             except Exception as e:

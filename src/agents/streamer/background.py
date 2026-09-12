@@ -45,12 +45,14 @@ __all__ = ["BackgroundMaintainer"]
 _DEFAULT_LIGHT_TICK_MS = 5_000
 _DEFAULT_COLD_TIMEOUT_MS = 60_000
 _DEFAULT_SUMMARY_INTERVAL_MS = 60_000
-# 摘要专用 LLM profile（与 Planner / Replyer 隔离）
-_DEFAULT_SUMMARY_CLIENT = "llm_summary"
+# 摘要专用 LLM profile（与 Planner / Replyer 隔离；model.toml [llm_profiles.summary]）
+_DEFAULT_SUMMARY_CLIENT = "summary"
 # 窗口触发压缩的条数阈值
 _DEFAULT_WINDOW_EVENT_THRESHOLD = 200
-# 压缩队列上限
+# 压缩队列上限（与 StreamerCompressorConfig.queue_max 默认对齐）
 _DEFAULT_COMPRESSOR_QUEUE_MAX = 100
+# 压缩 worker 并发（与 StreamerCompressorConfig.concurrency 默认对齐）
+_DEFAULT_COMPRESSOR_CONCURRENCY = 1
 # 高价值事件记忆去抖窗口（同一用户相邻写入最小间隔，毫秒）
 _EVENT_INGEST_DEBOUNCE_MS = 60_000
 
@@ -99,11 +101,14 @@ class BackgroundMaintainer:
 
         Args:
             config: 配置字典或对象；读取
+                - ``enabled``（默认 True）
                 - ``light_tick_ms``（默认 5000）
                 - ``cold_timeout_ms``（默认 60000）
                 - ``summary_interval_ms``（默认 60000）
-                - ``summary_client``（默认 ``llm_summary``）
+                - ``summary_client``（默认 ``summary``）
                 - ``window_event_threshold``（默认 200）
+                - ``compressor_concurrency``（默认 1）
+                - ``compressor_queue_max``（默认 100）
             room_state: ``RoomState`` 实例（轻循环读取快照）
             llm_service: LLM 管理器（可选；压缩 worker 调用）
             live_session_store: ``live_sessions`` 存储接口（duck-typed；轻循环写状态）
@@ -136,6 +141,7 @@ class BackgroundMaintainer:
         self._subscribed = False
         self._logger = get_logger("BackgroundMaintainer")
 
+        self._enabled: bool = bool(_cfg(config, "enabled", True))
         self._light_tick_ms: int = _cfg(config, "light_tick_ms", _DEFAULT_LIGHT_TICK_MS)
         self._cold_timeout_ms: int = _cfg(config, "cold_timeout_ms", _DEFAULT_COLD_TIMEOUT_MS)
         self._summary_interval_ms: int = _cfg(config, "summary_interval_ms", _DEFAULT_SUMMARY_INTERVAL_MS)
@@ -155,8 +161,15 @@ class BackgroundMaintainer:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """启动轻循环 + 压缩 worker（创建 asyncio.Task）。"""
+        """启动轻循环 + 压缩 worker（创建 asyncio.Task）。
+
+        ``config.enabled=False`` 时整体短路：轻循环不跑、压缩 worker 不创建、
+        高价值事件也不订阅——所有后台维护功能降级为"关闭"。
+        """
         if self._running:
+            return
+        if not self._enabled:
+            self._logger.info("BackgroundMaintainer 配置 enabled=false，跳过启动")
             return
         self._running = True
         # 记忆写入面：高价值事件订阅（礼物 / SC）→ memory.ingest
@@ -497,7 +510,7 @@ class BackgroundMaintainer:
                 await self._sqlite_store.execute(
                     "INSERT INTO topics (live_session_id, label, source, score, trend, duration_ms, count) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (live_pk, summary, "llm_summary", 1.0, 0.0, self._summary_interval_ms, 1),
+                    (live_pk, summary, "summary", 1.0, 0.0, self._summary_interval_ms, 1),
                 )
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志，不阻断记账循环
             self._logger.warning(f"话题快照落库失败（timeline_summary/topics）: {exc}")

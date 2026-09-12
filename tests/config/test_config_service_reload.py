@@ -30,48 +30,17 @@ from watchfiles import Change
 # ===========================================================================
 
 
-def _build_core_toml() -> str:
-    """生成最小可加载的 core.toml 内容（v2.0.0）。"""
-    return (
-        "[meta]\n"
-        'type = "meta"\n'
-        'version = "2.0.0"\n'
-        "\n"
-        "[persona]\n"
-        'type = "persona"\n'
-        'bot_name = "麦麦"\n'
-    )
-
-
-def _build_model_toml() -> str:
-    """生成最小可加载的 model.toml 内容（v2.0.0 新 LLM 结构）。"""
-    return (
-        "[[llm_providers]]\n"
-        'name = "default"\n'
-        'client_type = "openai"\n'
-        "\n"
-        "[llm]\n"
-        'provider = "default"\n'
-        'model = "gpt-4"\n'
-    )
-
-
 @pytest.fixture
 def config_dir_with_toml(tmp_path: Path) -> Path:
-    """创建一个带有 7 个默认 TOML 配置文件的临时目录（v2.0.0）。
+    """创建一个带有 6 个默认 TOML 配置文件的临时目录。
 
     配置文件名与 Amaidesu 多文件加载约定一致：
-    core.toml / model.toml / agents.toml / tools.toml / memory.toml / storage.toml / background.toml
+    agents.toml / collectors.toml / tools.toml / model.toml / storage.toml / infra.toml
     """
+    from src.modules.config.multi_file_loader import generate_default_configs
+
     cfg = tmp_path / "config"
-    cfg.mkdir()
-
-    (cfg / "core.toml").write_text(_build_core_toml(), encoding="utf-8-sig")
-    (cfg / "model.toml").write_text(_build_model_toml(), encoding="utf-8-sig")
-
-    for name in ("agents", "tools", "memory", "storage", "background"):
-        (cfg / f"{name}.toml").write_text("", encoding="utf-8-sig")
-
+    generate_default_configs(cfg)
     return cfg
 
 
@@ -158,20 +127,24 @@ class TestReloadConfig:
     @pytest.mark.asyncio
     async def test_reload_re_reads_files(self, initialized_service, config_dir_with_toml):
         """reload_config 后 _main_config 必须反映磁盘上最新的 TOML 内容"""
-        new_core_toml = (
-            "[persona]\n"
-            'type = "persona"\n'
-            'bot_name = "新名字"\n'
-        )
-        (config_dir_with_toml / "core.toml").write_text(new_core_toml, encoding="utf-8")
+        # 写完整 toml：覆盖原 agents.toml，仅修改 persona.bot_name。
+        # 保留完整 [agents.streamer.*] 子树让 Pydantic 校验通过。
+        content = (config_dir_with_toml / "agents.toml").read_text(encoding="utf-8-sig")
+        # 把 bot_name 默认值替换为新值（保留其它子树）
+        new_content = content.replace('bot_name = "麦麦"', 'bot_name = "新名字"', 1)
+        (config_dir_with_toml / "agents.toml").write_text(new_content, encoding="utf-8")
 
-        # 旧值应仍是默认值
-        assert initialized_service.get_section("persona", {}).get("bot_name") in (None, "麦麦")
+        # 旧值应仍是默认值（reload 前 config 是初始 generate 的产物）
+        # get_section("agents") 直接返回 AgentsConfig 字典：{enabled, streamer, ...}
+        # （meta 在 loader 中已剥离，dump 中第一层 'agents' 被压平）
+        streamer_cfg = initialized_service.get_section("agents", {}).get("streamer", {})
+        assert streamer_cfg.get("persona", {}).get("bot_name") in (None, "麦麦")
 
         await initialized_service.reload_config()
 
         # reload 后必须看到新值
-        assert initialized_service.get_section("persona", {}).get("bot_name") == "新名字"
+        streamer_cfg = initialized_service.get_section("agents", {}).get("streamer", {})
+        assert streamer_cfg.get("persona", {}).get("bot_name") == "新名字"
 
     @pytest.mark.asyncio
     async def test_reload_invokes_callbacks_with_scopes(self, initialized_service):
@@ -187,10 +160,10 @@ class TestReloadConfig:
         initialized_service.register_reload_callback(cb1)
         initialized_service.register_reload_callback(cb2)
 
-        await initialized_service.reload_config(changed_scopes=["core", "model"])
+        await initialized_service.reload_config(changed_scopes=["agents", "model"])
 
-        assert ("cb1", ["core", "model"]) in calls
-        assert ("cb2", ["core", "model"]) in calls
+        assert ("cb1", ["agents", "model"]) in calls
+        assert ("cb2", ["agents", "model"]) in calls
 
     @pytest.mark.asyncio
     async def test_reload_supports_callback_without_scopes(self, initialized_service):
@@ -202,7 +175,7 @@ class TestReloadConfig:
 
         initialized_service.register_reload_callback(no_arg_cb)
 
-        await initialized_service.reload_config(changed_scopes=["core"])
+        await initialized_service.reload_config(changed_scopes=["infra"])
 
         assert "no_arg" in calls
 
@@ -240,7 +213,7 @@ class TestReloadConfig:
         initialized_service.register_reload_callback(good_cb_2)
 
         # bad_cb 抛异常不应让 reload_config 失败
-        result = await initialized_service.reload_config(changed_scopes=["core"])
+        result = await initialized_service.reload_config(changed_scopes=["infra"])
         assert result is True
 
         # good1 和 good2 必须都被调用
@@ -283,9 +256,9 @@ class TestHandleReload:
 
         initialized_service.register_reload_callback(cb)
 
-        # 模拟 core.toml 和 model.toml 一起被修改
+        # 模拟 agents.toml 和 model.toml 一起被修改
         changes = [
-            FileChange(change_type=Change.modified, path=config_dir_with_toml / "core.toml"),
+            FileChange(change_type=Change.modified, path=config_dir_with_toml / "agents.toml"),
             FileChange(change_type=Change.modified, path=config_dir_with_toml / "model.toml"),
         ]
 
@@ -293,7 +266,7 @@ class TestHandleReload:
 
         assert len(calls) == 1
         scopes_received = calls[0]
-        assert "core" in scopes_received
+        assert "agents" in scopes_received
         assert "model" in scopes_received
 
     @pytest.mark.asyncio
@@ -383,18 +356,17 @@ class TestFileWatcherLifecycle:
     async def test_watcher_monitors_all_config_files(
         self, initialized_service, config_dir_with_toml
     ):
-        """watcher 必须监听 config/ 下所有 7 个 TOML 文件（v2.0.0）"""
+        """watcher 必须监听 config/ 下全部 6 个 TOML 文件"""
         await initialized_service.start_file_watcher()
         try:
             watched_paths = [p.resolve() for p in initialized_service._file_watcher._paths]
             for name in (
-                "core.toml",
-                "model.toml",
                 "agents.toml",
+                "collectors.toml",
                 "tools.toml",
-                "memory.toml",
+                "model.toml",
                 "storage.toml",
-                "background.toml",
+                "infra.toml",
             ):
                 expected = (config_dir_with_toml / name).resolve()
                 assert expected in watched_paths, f"watcher 应监听 {name}"
@@ -411,19 +383,19 @@ class TestHotReloadEndToEnd:
     """修改 TOML 文件 → FileWatcher 检测 → reload → ConfigProxy 看到新值"""
 
     @pytest.mark.asyncio
-    async def test_modify_core_toml_triggers_reload_and_proxy_reflects_new_value(
+    async def test_modify_agents_toml_triggers_reload_and_proxy_reflects_new_value(
         self, initialized_service, config_dir_with_toml
     ):
-        """修改 core.toml 后, ConfigProxy 必须能看到新值"""
+        """修改 agents.toml 后, ConfigProxy 必须能看到新值"""
         from src.modules.config.config_proxy import ConfigProxy
         import tomlkit
 
         # 建立 proxy: 始终返回最新配置
         proxy = ConfigProxy(getter=lambda: initialized_service._main_config)
 
-        # 修改前的值
-        old_persona = proxy.get("persona", {})
-        old_bot_name = old_persona.get("bot_name") if isinstance(old_persona, dict) else None
+        # 修改前的值（persona 已迁入 agents.streamer.persona）
+        old_streamer = proxy.get("agents", {}).get("streamer", {})
+        old_bot_name = old_streamer.get("persona", {}).get("bot_name") if isinstance(old_streamer, dict) else None
 
         # 启动 watcher
         await initialized_service.start_file_watcher()
@@ -432,12 +404,12 @@ class TestHotReloadEndToEnd:
         await asyncio.sleep(0.3)
 
         try:
-            new_core_toml = (
-                "[persona]\n"
-                'type = "persona"\n'
-                'bot_name = "热重载后的名字"\n'
+            # 写完整 toml：保留 [agents.streamer.*] 全树，仅修改 persona.bot_name
+            content = (config_dir_with_toml / "agents.toml").read_text(encoding="utf-8-sig")
+            new_agents_toml = content.replace(
+                'bot_name = "麦麦"', 'bot_name = "热重载后的名字"', 1
             )
-            (config_dir_with_toml / "core.toml").write_text(new_core_toml, encoding="utf-8")
+            (config_dir_with_toml / "agents.toml").write_text(new_agents_toml, encoding="utf-8")
 
             # 等待 FileWatcher 检测 (debounce ~600ms) + reload
             # 多次轮询直到值改变或超时
@@ -445,10 +417,12 @@ class TestHotReloadEndToEnd:
             new_value = None
             while asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(0.2)
-                new_persona = proxy.get("persona", {})
-                if isinstance(new_persona, dict) and new_persona.get("bot_name") == "热重载后的名字":
-                    new_value = new_persona["bot_name"]
-                    break
+                new_streamer = proxy.get("agents", {}).get("streamer", {})
+                if isinstance(new_streamer, dict):
+                    nb = new_streamer.get("persona", {}).get("bot_name")
+                    if nb == "热重载后的名字":
+                        new_value = nb
+                        break
 
             assert new_value == "热重载后的名字", (
                 f"ConfigProxy 未反映热重载新值 (旧值={old_bot_name})"
@@ -475,7 +449,7 @@ class TestHotReloadEndToEnd:
 
         try:
             # 触发文件变更
-            (config_dir_with_toml / "core.toml").write_text(
+            (config_dir_with_toml / "agents.toml").write_text(
                 "# touched\n", encoding="utf-8"
             )
 
@@ -503,7 +477,7 @@ class TestHotReloadEndToEnd:
         initialized_service.register_reload_callback(cb2)
         initialized_service.register_reload_callback(cb3)
 
-        await initialized_service.reload_config(changed_scopes=["core"])
+        await initialized_service.reload_config(changed_scopes=["infra"])
 
         assert "cb1" in calls
         assert "cb2" in calls

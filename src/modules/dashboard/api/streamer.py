@@ -74,15 +74,22 @@ def _resolve_streamer_agent(server: "DashboardServer") -> Optional[Any]:
 
 
 def _read_streamer_config(server: "DashboardServer") -> Dict[str, Any]:
-    """从 main_config 读 agents.streamer 关键字段；缺字段用默认值。"""
+    """从 main_config 读 agents.streamer 关键字段；缺字段用默认值。
+
+    字段从嵌套子段读取：[agents.streamer.proactive].enabled、
+    [agents.streamer.batch].batch_window_ms 等。planner/replyer LLM profile
+    现已是消费端硬编码用途名（"planner"/"replyer"/"summary"），不再透出。
+    """
     main_config = server.config_service.main_config if server.config_service else {}
     streamer_cfg = ((main_config or {}).get("agents") or {}).get("streamer") or {}
+    proactive_cfg = streamer_cfg.get("proactive") if isinstance(streamer_cfg, dict) else {}
+    batch_cfg = streamer_cfg.get("batch") if isinstance(streamer_cfg, dict) else {}
     return {
-        "proactive_enabled": bool(streamer_cfg.get("proactive_enabled", True)),
+        "proactive_enabled": bool(
+            (proactive_cfg or {}).get("enabled", True) if isinstance(proactive_cfg, dict) else True
+        ),
         "rundown_id": str(streamer_cfg.get("rundown_id", "") or ""),
-        "batch_window_ms": int(streamer_cfg.get("batch_window_ms", 3000) or 0),
-        "planner_llm": str(streamer_cfg.get("planner_llm", "llm_fast") or ""),
-        "replyer_llm": str(streamer_cfg.get("replyer_llm", "llm") or ""),
+        "batch_window_ms": int((batch_cfg or {}).get("batch_window_ms", 3000) if isinstance(batch_cfg, dict) else 3000),
     }
 
 
@@ -200,7 +207,7 @@ async def toggle_proactive(
     from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
 
     update = await update_config(
-        ConfigUpdateRequest(key="agents.streamer.proactive_enabled", value=request.enabled),
+        ConfigUpdateRequest(key="agents.streamer.proactive.enabled", value=request.enabled),
         server,
     )
     message = "主动发言已切换" if update.success else f"已切换（运行时生效），配置保存失败: {update.message}"

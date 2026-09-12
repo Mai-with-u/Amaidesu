@@ -27,12 +27,13 @@ from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger as loguru_logger
 
-from src.agents.text_adv import TextAdvGameAgent, TextAdvGameConfig
-from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
+from src.agents.text_adv import TextAdvConfig, TextAdvGameAgent
+from src.agents.streamer.config import StreamerConfig
+from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.agents.manager import AgentManager
 from src.modules.collectors.factory import instantiate_collector
 from src.modules.collectors.manager import CollectorManager
-from src.modules.config.core_schemas import ContextAssemblerConfig, DashboardConfig, EventHistoryConfig
+from src.modules.config.core_schemas import DashboardConfig, EventHistoryConfig
 from src.modules.config.service import ConfigService
 from src.modules.context import ContextService
 from src.modules.dashboard.server import DashboardServer
@@ -227,12 +228,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     elif not isinstance(storage_cfg, dict):
         logger.warning("[storage] 配置类型异常（期望 dict），存储功能将退化")
 
-    # background.toml 段
-    background_cfg = config.get("background")
-    if not background_cfg:
-        logger.debug("未检测到 [background] 配置，后台任务采用默认 tick")
-    elif not isinstance(background_cfg, dict):
-        logger.warning("[background] 配置类型异常（期望 dict），后台任务采用默认 tick")
+    # background 段已归位到 [agents.streamer.background]；此处不再单独校验
 
     logger.info("配置验证通过（v2 7-file tree 存在性 + 类型检查）")
 
@@ -366,11 +362,8 @@ async def create_app_components(
     await context_service.initialize()
     logger.info("已创建上下文服务实例")
 
-    # --- [context] 组装器配置（Schema 权威：core_schemas.ContextAssemblerConfig）---
-    # 控制 Planner 的组装路径开关与长记忆召回条数；CoreService 构造走内置默认。
-    context_assembler_config = ContextAssemblerConfig.from_dict(
-        config.get("context", {}) if isinstance(config, dict) else {}
-    )
+    # --- 上下文组装器配置归位至 [agents.streamer.context]；下游组装路径直接读 cfg.context ---
+    # CoreService 构造走内置默认。
 
     # --- 启动期不进行任何上下文回灌（每次启动 = 干净测试环境）---
     # 跨场次对话记忆由 SimpleMemory / 摘要机制承载，不在组合根做 live_chat 回灌。
@@ -403,10 +396,10 @@ async def create_app_components(
     )
 
     # --- CollectorManager ---
-    # 采集器配置位于 tools.toml 的 [tools.perception.config]
+    # 采集器配置位于 collectors.toml 的 [collectors] 段（按 enabled 名单装配）
     collector_manager: Optional["CollectorManager"] = None
-    tools_perception = (config.get("tools") or {}).get("perception", {}) if isinstance(config, dict) else {}
-    collectors_config = tools_perception.get("config", {}) if isinstance(tools_perception, dict) else {}
+    collectors_root = config.get("collectors", {}) if isinstance(config, dict) else {}
+    collectors_config = collectors_root if isinstance(collectors_root, dict) else {}
     if collectors_config:
         logger.info("初始化 CollectorManager（src/modules/collectors/）...")
         collector_manager = CollectorManager()
@@ -495,11 +488,12 @@ async def create_app_components(
 
         # 思考流旁路 hub（ADR-008；观察面专用）：Agent 装配先于 dashboard 启动，
         # ws 通道延迟绑定（dashboard 就绪后 attach_ws）；未绑定期间 delta 丢弃。
+        # 配置从 [agents.streamer.thinking_stream] 子段读取（嵌套结构）。
+        _streamer_sub = agents_config.get("streamer", {}) if isinstance(agents_config, dict) else {}
+        _thinking_sub = _streamer_sub.get("thinking_stream", {}) if isinstance(_streamer_sub, dict) else {}
         thinking_hub = StreamPreviewHub(
-            flush_interval_ms=int(
-                (agents_config.get("streamer") or {}).get("thinking_stream_flush_interval_ms", 100) or 100
-            ),
-            buffer_max=int((agents_config.get("streamer") or {}).get("thinking_stream_buffer_max", 400) or 400),
+            flush_interval_ms=int(_thinking_sub.get("flush_interval_ms", 100) or 100),
+            buffer_max=int(_thinking_sub.get("buffer_max", 400) or 400),
         )
 
         await _register_agents_from_config(
@@ -511,7 +505,6 @@ async def create_app_components(
             context_service,
             tool_registry,
             memory,
-            context_assembler_config=context_assembler_config,
             tts_section=tts_section,
             tts_engine=tts_engine,
             subtitle_service=subtitle_service,
@@ -805,7 +798,6 @@ async def _register_agents_from_config(
     tool_registry=None,
     memory=None,
     *,
-    context_assembler_config: Optional[Any] = None,
     tts_section: Optional[Dict[str, Any]] = None,
     tts_engine: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
@@ -816,9 +808,9 @@ async def _register_agents_from_config(
 
     [agents] 段结构（扁平：每个 Agent 一份顶级子配置）：
         enabled = ["streamer", "minecraft", "text_adv"]
-        streamer = { planner_llm = "llm_fast", replyer_llm = "llm", ... }
-        minecraft = { command_llm = "llm", max_steps = 50 }
-        text_adv = { command_llm = "llm", engine_kind = "text_adv" }
+        [agents.streamer]  = { 完整子树（persona / context / background / ...） }
+        [agents.minecraft] = { max_steps = 50, mcp = {...} }
+        [agents.text_adv]  = { engine_kind = "text_adv", decision_strategy, enable_event_emission }
 
     memory 为 SimpleMemory 记忆后端，仅 streamer Agent 消费。
 
@@ -838,32 +830,18 @@ async def _register_agents_from_config(
             sub_cfg = {}
         if agent_name == "streamer":
             try:
-                cfg_obj = StreamerAgentConfig(**sub_cfg) if sub_cfg else StreamerAgentConfig()
+                cfg_obj = StreamerConfig.from_dict(sub_cfg) if sub_cfg else StreamerConfig()
             except Exception as e:
-                logger.warning(f"解析 StreamerAgent 配置失败: {e}; 使用默认配置")
-                cfg_obj = StreamerAgentConfig()
-
-            # 从 config_service 拉取 [persona] 段，构造 StreamerAgent
-            # 时透传为 persona_provider。优先级链：persona dict（来自 core.toml）
-            # > StreamerAgentConfig.bot_name > _DEFAULT_*。缺段时退化为空 dict，
-            # 由下游 Replyer 走 _DEFAULT_* 兜底，避免装配失败阻断冷启动。
-            persona_provider_dict = {}
-            if config_service is not None:
-                try:
-                    persona_provider_dict = dict(config_service.get_section("persona", default={}) or {})
-                except Exception as exc:
-                    logger.warning(f"读取 [persona] 配置段失败，回退为空 dict: {exc}")
-                    persona_provider_dict = {}
-            if persona_provider_dict:
-                logger.info(
-                    f"StreamerAgent 已注入 persona: bot_name={persona_provider_dict.get('bot_name', '<缺>')!r}, "
-                    f"behavior_style={'<已注入>' if persona_provider_dict.get('behavior_style') else '<缺失>'}"
-                )
-            else:
-                logger.warning(
-                    "[persona] 配置段为空，StreamerAgent.persona_provider 将传空 dict；"
-                    "Replyer/Planner 走 _DEFAULT_* 兜底（请检查 config/core.toml）"
-                )
+                logger.warning(f"解析 StreamerConfig 配置失败: {e}; 使用默认配置")
+                cfg_obj = StreamerConfig()
+            logger.info(
+                f"StreamerAgent 配置就绪: "
+                f"bot_name={cfg_obj.persona.bot_name!r}, "
+                f"audience_salutation={cfg_obj.persona.audience_salutation!r}, "
+                f"behavior_style={'<已注入>' if cfg_obj.persona.behavior_style else '<缺失>'}, "
+                f"background.enabled={cfg_obj.background.enabled}, "
+                f"background.light_tick_ms={cfg_obj.background.light_tick_ms}"
+            )
 
             tts = tts_section if isinstance(tts_section, dict) else {}
             # render_timeout_ms 兜底与 Schema 默认一致（防引擎卡死的上限语义）
@@ -881,8 +859,6 @@ async def _register_agents_from_config(
                 event_bus=event_bus,
                 tool_registry=tool_registry,
                 memory=memory,
-                persona_provider=persona_provider_dict,
-                context_assembler_config=context_assembler_config,
                 speech_config=speech_cfg,
                 tts_engine=tts_engine,
                 subtitle_service=subtitle_service,
@@ -909,7 +885,7 @@ async def _register_agents_from_config(
                 minecraft_agent = MinecraftAgent(
                     config=minecraft_cfg,
                     llm_manager=llm_service,
-                    llm_profile=str(mc_section.get("command_llm", "llm") or "llm"),
+                    llm_profile="llm",
                     prompt_manager=get_prompt_manager(),
                     event_bus=event_bus,
                     tool_registry=tool_registry,
@@ -929,10 +905,10 @@ async def _register_agents_from_config(
             try:
                 text_adv_section = sub_cfg if isinstance(sub_cfg, dict) else {}
                 try:
-                    text_adv_cfg = TextAdvGameConfig(**text_adv_section)
+                    text_adv_cfg = TextAdvConfig(**text_adv_section)
                 except Exception as e:
-                    logger.warning(f"解析 TextAdvGameConfig 失败: {e}; 使用默认配置")
-                    text_adv_cfg = TextAdvGameConfig()
+                    logger.warning(f"解析 TextAdvConfig 失败: {e}; 使用默认配置")
+                    text_adv_cfg = TextAdvConfig()
 
                 text_adv_agent = TextAdvGameAgent(
                     config=text_adv_cfg,

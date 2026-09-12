@@ -1,28 +1,50 @@
-"""模型配置 Schema 定义
+"""模型配置 Schema 定义（三层结构）
 
-定义 LLM/VLM 模型配置的 Pydantic Schema，采用"Provider + Profile"两层结构：
+定义 ``config/model.toml`` 的 Pydantic 聚合模型，采用三层结构：
 
-- LLMProviderConfig：API 提供商配置（共享的连接信息、鉴权、重试参数）
-- LLMProfileConfig：使用预设（引用 provider，并指定模型/温度等参数）
-- ModelConfig：聚合所有 provider 和 profile，对应 config/model.toml 文件
+- ``[[llm_providers]]``：API 提供商（连接信息 / 鉴权 / 重试参数）
+- ``[[llm_models]]``：模型注册表（model_identifier / api_provider / 价格）
+- ``[llm_profiles.<name>]``：用途 profile（planner / replyer / summary /
+  minecraft / vision / simulator）；引用 model_list，由 LLMManager 做选择
+  与故障切换
 
-这种拆分允许多个 profile 共享同一个 provider（例如 llm / llm_fast 都用 deepseek），
-同时让每个 profile 只描述自己关心的字段（model/temperature/max_tokens）。
+判据（谁改它的结构）：
+- provider / model 字段 = 平台 / API 提供商侧调整 → 改 providers/models 段
+- profile 字段 = 应用侧角色调整 → 改 llm_profiles 段
+
+价格合流：``[[llm_models]]`` 含 price_in / price_out / cache_price_in，
+``token_usage_manager`` 直接从配置源取价，删 ``model_price.toml`` 旧来源。
 """
+
+from __future__ import annotations
+
+from typing import List
 
 from pydantic import Field, model_validator
 
+from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
 
 
+# 必填 profile 成员清单（供 T18 加载期校验调用）
+REQUIRED_PROFILE_NAMES: tuple[str, ...] = (
+    "planner",
+    "replyer",
+    "summary",
+    "minecraft",
+    "vision",
+    "simulator",
+)
+
+
 class LLMProviderConfig(BaseConfig):
-    """API 提供商配置
+    """API 提供商配置（``[[llm_providers]]`` 表条目）
 
     一个 provider 描述一个 API 端点（OpenAI 兼容）的连接细节，
-    可被多个 role 共享（llm / llm_fast / vlm / llm_local / llm_summary / llm_agenda）。
+    可被多个 model 与 profile 共享。
 
     Attributes:
-        name: provider 唯一名称，供 role.provider 引用
+        name: provider 唯一名称，供 model.api_provider 与 profile.provider 引用
         client_type: 客户端实现标识（如 "openai"）
         base_url: API 端点
         api_key: API 密钥
@@ -37,7 +59,7 @@ class LLMProviderConfig(BaseConfig):
         reasoning_parse_mode: 推理内容解析模式（auto/native/think_tag/none）
     """
 
-    name: str = Field(default="default", description="provider 唯一名称（被 role.provider 引用）")
+    name: str = Field(default="default", description="provider 唯一名称（被 model.api_provider 引用）")
     client_type: str = Field(
         default="openai",
         description="客户端实现标识（如 openai）",
@@ -67,100 +89,163 @@ class LLMProviderConfig(BaseConfig):
     )
 
 
-class LLMProfileConfig(BaseConfig):
-    """LLM 使用预设配置
-
-    一个 profile 引用一个 provider，并指定具体的 model/温度等专属参数。
-    base_url / api_key 为空时使用 provider 的对应字段。
+class LLMModelConfig(BaseConfig):
+    """模型注册表条目（``[[llm_models]]`` 表）
 
     Attributes:
-        provider: 引用的 provider 名（必须存在于 ModelConfig.llm_providers）
-        model: 模型名称
-        temperature: 生成温度（None 表示使用 provider 默认）
-        max_tokens: 最大生成 token 数（None 表示使用 provider 默认）
-        base_url: 覆盖 provider.base_url（一般用于本地测试）
-        api_key: 覆盖 provider.api_key（一般用于 profile 级密钥隔离）
+        name: 模型唯一名（被 profile.model_list 引用）
+        model_identifier: 实际 API 模型标识（如 "gpt-4o-mini"）
+        api_provider: 关联的 provider 名（对应 llm_providers[].name）
+        visual: 是否支持视觉（影响 chat_vision 是否装配）
+        price_in: 输入 token 单价（per 1k，缺失时 cost 计为 0）
+        price_out: 输出 token 单价（per 1k）
+        cache: 缓存类型（"" 表示无缓存；"anthropic" 等按 provider 约定）
+        cache_price_in: 缓存输入 token 单价（per 1k；cache 为空时忽略）
     """
 
-    provider: str = Field(default="default", description="引用的 provider 名（对应 llm_providers[].name）")
-    model: str = Field(default="gpt-4o-mini", description="模型名称")
+    name: str = Field(default="default", description="模型唯一名（被 profile.model_list 引用）")
+    model_identifier: str = Field(
+        default="gpt-4o-mini",
+        description="实际 API 模型标识（传给 OpenAI 兼容 endpoint 的 model 字段）",
+    )
+    api_provider: str = Field(
+        default="default",
+        description="关联的 provider 名（对应 llm_providers[].name）",
+    )
+    visual: bool = Field(default=False, description="是否支持视觉（影响 chat_vision 是否装配）")
+    price_in: float = Field(default=0.0, ge=0.0, description="输入 token 单价（per 1k）")
+    price_out: float = Field(default=0.0, ge=0.0, description="输出 token 单价（per 1k）")
+    cache: str = Field(default="", description="缓存类型（空=无；'anthropic' 等按 provider 约定）")
+    cache_price_in: float = Field(default=0.0, ge=0.0, description="缓存输入 token 单价（per 1k）")
+
+
+class LLMSelectionStrategy(BaseConfig):
+    """profile 的 model_list 选择策略
+
+    sequential：按顺序取第一个可用模型（默认）
+    balance：按调用计数挑最闲的模型
+    random：随机选一个
+    """
+
+    name: str = Field(default="sequential", description="选择策略名")
+    seed: int = Field(default=0, description="random 策略的可选 seed（0=不固定）")
+
+
+class LLMProfileConfig(BaseConfig):
+    """LLM 用途 profile（``[llm_profiles.<name>]`` 段）
+
+    Attributes:
+        model_list: 引用的模型名列表（对应 llm_models[].name）
+        selection_strategy: 选择策略
+        hard_timeout_ms: 硬超时（毫秒）；到点取消当前请求并切下一个模型
+        slow_threshold_ms: 慢调用阈值（毫秒）；超阈值仅告警，不切换
+        temperature: 生成温度（None 表示使用 model 默认）
+        max_tokens: 最大生成 token 数（None 表示使用 model 默认）
+    """
+
+    model_list: List[str] = Field(
+        default_factory=list,
+        description="引用的模型名列表（对应 llm_models[].name，按顺序选择）",
+    )
+    selection_strategy: LLMSelectionStrategy = Field(
+        default_factory=LLMSelectionStrategy,
+        description="model_list 选择策略",
+    )
+    hard_timeout_ms: int = Field(
+        default=90_000,
+        ge=1000,
+        description="硬超时（毫秒）；到点取消当前请求并切下一个模型",
+    )
+    slow_threshold_ms: int = Field(
+        default=15_000,
+        ge=100,
+        description="慢调用阈值（毫秒）；超阈值仅告警，不切换",
+    )
     temperature: float | None = Field(
         default=None,
-        description="生成温度 (0.0-2.0)，None 表示使用 provider 默认",
+        description="生成温度 (0.0-2.0)，None 表示使用 model 默认",
         json_schema_extra={"x-ui-type": "number"},
     )
     max_tokens: int | None = Field(
         default=None,
-        description="最大 Token 数，None 表示使用 provider 默认",
+        description="最大 Token 数，None 表示使用 model 默认",
         json_schema_extra={"x-ui-type": "integer"},
     )
-    base_url: str | None = Field(default=None, description="覆盖 provider.base_url")
-    api_key: str | None = Field(default=None, description="覆盖 provider.api_key")
 
 
-class ModelConfig(BaseConfig):
+class ModelRootConfig(BaseConfig):
     """模型配置根类
 
-    聚合所有 LLM/VLM provider 和 profile 引用。
-    对应 config/model.toml 文件。
-
-    Attributes:
-        llm_providers: provider 列表（用 list 而非 dict，schema_generator 仅支持列表）
-        llm: 标准 LLM 使用预设（用于高质量任务）
-        llm_fast: 快速 LLM 使用预设（用于低延迟任务，如 Avatar 表情分析）
-        vlm: 视觉语言模型使用预设（用于图像理解任务）
-        llm_local: 本地模型使用预设（Ollama / LM Studio / vLLM 等）
-        llm_summary: 房间状态摘要 LLM 使用预设（独立 client，避免与 Planner 共享连接池）
-        llm_agenda: 直播大纲 LLM 使用预设（独立 client，Agenda AI 生成初始大纲）
+    对应 ``config/model.toml`` 文件，三层结构：
+    - ``llm_providers``：provider 列表（API 连接共享）
+    - ``llm_models``：模型注册表（model_identifier + 价格）
+    - ``llm_profiles``：用途 profile 字典（planner / replyer / summary /
+      minecraft / vision / simulator）；key 必填 6 成员
     """
 
-    llm_providers: list[LLMProviderConfig] = Field(
+    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
+    llm_providers: List[LLMProviderConfig] = Field(
         default_factory=lambda: [LLMProviderConfig()],
-        description="API provider 列表（被 profile.provider 引用）",
+        description="API provider 列表（被 llm_models.api_provider 引用）",
     )
-    llm: LLMProfileConfig = Field(default_factory=LLMProfileConfig, description="标准 LLM 使用预设")
-    llm_fast: LLMProfileConfig = Field(default_factory=LLMProfileConfig, description="快速 LLM 使用预设")
-    vlm: LLMProfileConfig = Field(default_factory=LLMProfileConfig, description="视觉语言模型使用预设")
-    llm_local: LLMProfileConfig = Field(default_factory=LLMProfileConfig, description="本地模型使用预设")
-    llm_summary: LLMProfileConfig = Field(
-        default_factory=LLMProfileConfig,
-        description="房间状态摘要 LLM 使用预设（独立 client，避免与 Planner 共享连接池）",
+    llm_models: List[LLMModelConfig] = Field(
+        default_factory=list,
+        description="模型注册表（被 llm_profiles.model_list 引用）",
     )
-    llm_agenda: LLMProfileConfig = Field(
-        default_factory=LLMProfileConfig,
-        description="直播大纲 LLM 使用预设（v2.0.0 由 llm_outline 改名，独立 client；用于 Agenda AI 生成初始大纲）",
+    llm_profiles: dict[str, LLMProfileConfig] = Field(
+        default_factory=dict,
+        description=(
+            "用途 profile 字典（必填 6 成员：planner / replyer / summary / " "minecraft / vision / simulator）"
+        ),
+        json_schema_extra={"x-ui-type": "object"},
     )
 
     @model_validator(mode="after")
-    def _validate_providers_and_profiles(self) -> "ModelConfig":
-        """校验 provider 唯一性 + profile→provider 引用
-
-        失败立即抛 ValueError（fail-fast），避免运行期才发现引用缺失。
-        """
+    def _validate_references(self) -> "ModelRootConfig":
+        """校验 provider.name 唯一性 + model.api_provider 引用 + profile.model_list 引用"""
         providers = self.llm_providers
         if not providers:
-            raise ValueError("ModelConfig.llm_providers 至少需要 1 个 provider")
+            raise ValueError("ModelRootConfig.llm_providers 至少需要 1 个 provider")
 
         # provider.name 唯一性
         names = [p.name for p in providers]
         duplicates = {n for n in names if names.count(n) > 1}
         if duplicates:
-            raise ValueError(f"ModelConfig.llm_providers 中存在重复的 provider name: {sorted(duplicates)}")
+            raise ValueError(f"llm_providers 中存在重复的 provider name: {sorted(duplicates)}")
 
-        # profile.provider 必须能解析到某个 provider.name。
-        # 仅校验在 ModelConfig(...) 构造时**显式传入**的 profile：
-        # 未传入的 profile 使用默认占位（provider='default'），
-        # 此时不强制要求 'default' 存在，避免"配置一半就报错"。
-        valid_names = set(names)
-        explicitly_set_profiles = self.model_fields_set
-        for profile_field in ("llm", "llm_fast", "vlm", "llm_local", "llm_summary", "llm_agenda"):
-            if profile_field not in explicitly_set_profiles:
-                continue
-            profile_cfg = getattr(self, profile_field)
-            if profile_cfg.provider not in valid_names:
+        valid_provider_names = set(names)
+        valid_model_names = {m.name for m in self.llm_models}
+
+        # model.api_provider 引用校验
+        for model_cfg in self.llm_models:
+            if model_cfg.api_provider not in valid_provider_names:
                 raise ValueError(
-                    f"ModelConfig.{profile_field}.provider={profile_cfg.provider!r} "
-                    f"未在 llm_providers 中找到（可用：{sorted(valid_names)}）"
+                    f"llm_models[{model_cfg.name!r}].api_provider={model_cfg.api_provider!r} "
+                    f"未在 llm_providers 中找到（可用：{sorted(valid_provider_names)}）"
                 )
 
+        # profile.model_list 引用校验
+        for profile_name, profile_cfg in self.llm_profiles.items():
+            for model_name in profile_cfg.model_list:
+                if model_name not in valid_model_names:
+                    raise ValueError(
+                        f"llm_profiles[{profile_name!r}].model_list 含未知模型 "
+                        f"{model_name!r}（可用：{sorted(valid_model_names)}）"
+                    )
+
         return self
+
+
+__all__ = [
+    "REQUIRED_PROFILE_NAMES",
+    "LLMProviderConfig",
+    "LLMModelConfig",
+    "LLMSelectionStrategy",
+    "LLMProfileConfig",
+    "ModelRootConfig",
+    # 向后兼容别名：旧测试 / 旧引用仍可访问 ModelConfig
+    "ModelConfig",
+]
+
+# 向后兼容别名（测试与下游导入平滑迁移；T20 收口时全量更新）
+ModelConfig = ModelRootConfig

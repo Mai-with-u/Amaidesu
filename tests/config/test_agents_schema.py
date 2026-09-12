@@ -3,7 +3,8 @@
 覆盖 src/modules/config/agents_schemas.py:
 1. **AgentsRootConfig 顶层结构**：包含 agents (AgentsConfig)
 2. **AgentsConfig 元数据**：enabled 列表 + 各 Agent 自包含子配置
-3. **各 Agent Config**：streamer / minecraft / text_adv 字段与校验
+3. **各 Agent Config**：minecraft / text_adv 字段与校验（streamer 侧已迁
+   至包内权威 src/agents/streamer/config.py；本文件保留类型断言）
 4. **json_schema_extra**：UI 元数据保留
 """
 
@@ -14,13 +15,12 @@ from typing import get_args
 import pytest
 from pydantic import ValidationError
 
+from src.agents.minecraft.config import MinecraftConfig
+from src.agents.text_adv.config import TextAdvConfig
 from src.modules.config.agents_schemas import (
     AgentType,
     AgentsConfig,
     AgentsRootConfig,
-    MinecraftAgentConfig,
-    StreamerAgentConfig,
-    TextAdvAgentConfig,
 )
 
 
@@ -58,84 +58,91 @@ class TestAgentsConfigEnabled:
 
 
 class TestAgentsConfigSubConfigs:
-    def test_default_subconfigs_none(self):
+    def test_streamer_default_is_full_config(self):
+        """streamer 默认是完整 StreamerConfig 实例（确保加载器自动补齐子树）。"""
         cfg = AgentsConfig()
-        assert cfg.streamer is None
-        assert cfg.minecraft is None
-        assert cfg.text_adv is None
-
-    def test_streamer_subconfig(self):
-        cfg = AgentsConfig(streamer={"planner_llm": "llm", "replyer_llm": "llm_fast"})
-        assert cfg.streamer.planner_llm == "llm"
-        assert cfg.streamer.replyer_llm == "llm_fast"
+        assert cfg.streamer is not None
+        assert cfg.streamer.persona.bot_name == "麦麦"
+        assert cfg.streamer.persona.audience_salutation == "大家"
 
     def test_minecraft_subconfig_self_contained(self):
-        """minecraft 是顶级子配置，自包含全部字段（无 [agents.game] 公共段）。"""
-        cfg = AgentsConfig(minecraft={"command_llm": "llm", "max_steps": 80})
-        assert cfg.minecraft.command_llm == "llm"
+        """minecraft 是顶级子配置，类型由包内权威 MinecraftConfig 提供。"""
+        cfg = AgentsConfig(minecraft={"max_steps": 80})
+        assert isinstance(cfg.minecraft, MinecraftConfig)
         assert cfg.minecraft.max_steps == 80
 
     def test_text_adv_subconfig_self_contained(self):
-        cfg = AgentsConfig(text_adv={"command_llm": "llm", "decision_strategy": "llm"})
-        assert cfg.text_adv.command_llm == "llm"
+        cfg = AgentsConfig(text_adv={"decision_strategy": "llm"})
+        assert isinstance(cfg.text_adv, TextAdvConfig)
         assert cfg.text_adv.decision_strategy == "llm"
 
     def test_game_section_rejected(self):
         with pytest.raises(ValidationError):
-            AgentsConfig(game={"engine": "minecraft", "command_llm": "llm"})
+            AgentsConfig(game={"engine": "minecraft", "max_steps": 50})
 
 
-class TestStreamerAgentConfig:
+class TestStreamerConfigInAgentsTree:
+    """streamer 字段类型由包内权威 StreamerConfig 提供；中央树仅引用。"""
+
+    def test_streamer_uses_package_authoritative_schema(self):
+        from src.agents.streamer.config import StreamerConfig
+
+        cfg = AgentsConfig()
+        assert isinstance(cfg.streamer, StreamerConfig)
+
+    def test_streamer_nested_subkeys_present(self):
+        cfg = AgentsConfig()
+        s = cfg.streamer
+        assert s.persona.audience_salutation == "大家"
+        assert s.context.enabled is True
+        assert s.context.memory_recall_long_term == 3
+        assert s.background.light_tick_ms == 5_000
+        assert s.background.compressor.concurrency == 1
+        assert s.background.compressor.queue_max == 100
+        assert s.batch.batch_window_ms == 3_000
+        assert s.force.force_data_types == ["super_chat", "guard", "gift"]
+        assert s.proactive.enabled is True
+        assert s.word_filter.enabled is False
+        assert s.command.prefix == "/"
+        assert s.thinking_stream.enabled is True
+
+
+class TestMinecraftPackageConfig:
+    """minecraft 字段类型由包内权威 MinecraftConfig 提供；中央树仅引用。"""
+
+    def test_uses_package_authoritative_schema(self):
+        cfg = AgentsConfig()
+        assert isinstance(cfg.minecraft, MinecraftConfig)
+
     def test_defaults(self):
-        cfg = StreamerAgentConfig()
-        assert cfg.planner_llm == "llm"
-        assert cfg.planner_max_steps == 8
-        assert cfg.replyer_llm == "llm"
-        assert cfg.room_state_enabled is True
-        assert cfg.batch_window_ms == 3000
-        assert cfg.batch_max_size == 20
-
-    def test_planner_replier_llm_overrides(self):
-        cfg = StreamerAgentConfig(
-            planner_llm="llm",
-            replyer_llm="llm_fast",
-        )
-        assert cfg.planner_llm == "llm"
-        assert cfg.replyer_llm == "llm_fast"
-
-    def test_room_state_cold_timeout_must_be_non_negative(self):
-        with pytest.raises(ValidationError):
-            StreamerAgentConfig(room_state_cold_timeout_ms=-1)
-
-
-class TestMinecraftAgentConfig:
-    def test_defaults(self):
-        cfg = MinecraftAgentConfig()
-        assert cfg.command_llm == "llm"
-        assert cfg.max_steps == 50
+        cfg = AgentsConfig()
+        assert cfg.minecraft.max_steps == 50
 
     def test_field_overrides(self):
-        cfg = MinecraftAgentConfig(command_llm="llm_fast", max_steps=120)
-        assert cfg.command_llm == "llm_fast"
-        assert cfg.max_steps == 120
+        cfg = AgentsConfig(minecraft={"max_steps": 120})
+        assert cfg.minecraft.max_steps == 120
 
     def test_max_steps_below_minimum_rejected(self):
         with pytest.raises(ValidationError):
-            MinecraftAgentConfig(max_steps=0)
+            AgentsConfig(minecraft={"max_steps": 0})
 
 
-class TestTextAdvAgentConfig:
+class TestTextAdvPackageConfig:
+    """text_adv 字段类型由包内权威 TextAdvConfig 提供；中央树仅引用。"""
+
+    def test_uses_package_authoritative_schema(self):
+        cfg = AgentsConfig()
+        assert isinstance(cfg.text_adv, TextAdvConfig)
+
     def test_defaults(self):
-        cfg = TextAdvAgentConfig()
-        assert cfg.command_llm == "llm"
-        assert cfg.engine_kind == "text_adv"
-        assert cfg.decision_strategy == "first_option"
-        assert cfg.enable_event_emission is True
+        cfg = AgentsConfig()
+        assert cfg.text_adv.engine_kind == "text_adv"
+        assert cfg.text_adv.decision_strategy == "first_option"
+        assert cfg.text_adv.enable_event_emission is True
 
     def test_field_overrides(self):
-        cfg = TextAdvAgentConfig(command_llm="llm_fast", enable_event_emission=False)
-        assert cfg.command_llm == "llm_fast"
-        assert cfg.enable_event_emission is False
+        cfg = AgentsConfig(text_adv={"enable_event_emission": False})
+        assert cfg.text_adv.enable_event_emission is False
 
 
 class TestJsonSchemaExtra:
@@ -148,13 +155,13 @@ class TestJsonSchemaExtra:
 
 class TestAgentsConfigRoundTrip:
     def test_model_dump_round_trip(self):
-        cfg = AgentsConfig(streamer={"planner_llm": "llm"})
+        cfg = AgentsConfig(streamer={"persona": {"bot_name": "测试"}})
         dumped = cfg.model_dump()
         cfg2 = AgentsConfig.model_validate(dumped)
-        assert cfg2.streamer.planner_llm == "llm"
+        assert cfg2.streamer.persona.bot_name == "测试"
 
     def test_game_agent_round_trip(self):
-        cfg = AgentsConfig(minecraft={"command_llm": "llm", "max_steps": 66})
+        cfg = AgentsConfig(minecraft={"max_steps": 66})
         dumped = cfg.model_dump()
         cfg2 = AgentsConfig.model_validate(dumped)
         assert cfg2.minecraft.max_steps == 66

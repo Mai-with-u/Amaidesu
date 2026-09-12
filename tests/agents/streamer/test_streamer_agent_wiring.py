@@ -29,24 +29,49 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
+from src.agents.streamer.config import StreamerConfig
+from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.llm.manager import LLMResponse
 from src.modules.tools import ToolExecutionResult, ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 
 
-def _make_agent_config(**overrides) -> StreamerAgentConfig:
-    """构造测试用 StreamerAgentConfig。"""
+def _make_agent_config(**overrides) -> StreamerConfig:
+    """构造测试用 StreamerConfig。
+
+    支持顶层覆盖与子段覆盖两种形式，如 ``batch_window_ms``（嵌套 batch 段）
+    与 ``word_filter_enabled``（扁平便利字段——测试代码不感知嵌套结构）。
+    """
     defaults: Dict[str, Any] = {
-        "planner_llm": "llm_fast",
-        "replyer_llm": "llm",
-        "proactive_enabled": False,
-        "profanity_enabled": False,
-        "batch_window_ms": 100,
-        "tick_interval_ms": 50,
+        "proactive": {"enabled": False},
+        "word_filter": {"enabled": False},
+        "batch": {
+            "batch_window_ms": 100,
+            "tick_interval_ms": 50,
+        },
     }
-    defaults.update(overrides)
-    return StreamerAgentConfig(**defaults)
+    # 扁平覆盖键（兼容旧测试代码写法）：batch_* 进 batch 子段，
+    # word_filter_* 进 word_filter 子段，proactive_* 进 proactive 子段。
+    flat_to_nested: Dict[str, tuple[str, str]] = {
+        "batch_window_ms": ("batch", "batch_window_ms"),
+        "batch_max_size": ("batch", "batch_max_size"),
+        "tick_interval_ms": ("batch", "tick_interval_ms"),
+        "enable_idle_compensation": ("batch", "enable_idle_compensation"),
+        "word_filter_enabled": ("word_filter", "enabled"),
+        "profanity_enabled": ("word_filter", "enabled"),
+        "word_filter_words": ("word_filter", "words"),
+        "profanity_words": ("word_filter", "words"),
+        "proactive_enabled": ("proactive", "enabled"),
+        "proactive_cold_timeout_ms": ("proactive", "cold_timeout_ms"),
+        "rundown_speech_interval_ms": ("proactive", "rundown_speech_interval_ms"),
+    }
+    for key, value in overrides.items():
+        if key in flat_to_nested:
+            section, field = flat_to_nested[key]
+            defaults.setdefault(section, {})[field] = value
+        else:
+            defaults[key] = value
+    return StreamerConfig.from_dict(defaults)
 
 
 def _build_streamer_agent(

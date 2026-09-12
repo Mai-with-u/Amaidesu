@@ -7,36 +7,30 @@
     [agents]
     enabled = ["streamer", "minecraft", "text_adv"]
 
-    [agents.streamer]  # 主播 Agent
-    planner_llm = "llm"
-    replyer_llm = "llm_fast"
-    proactive_enabled = true
-
-    [agents.minecraft]  # Minecraft 游戏 Agent（自包含所有字段）
-    command_llm = "llm"
-    max_steps = 50
-
-    [agents.text_adv]  # 文字冒险游戏 Agent（自包含所有字段）
-    command_llm = "llm"
-    engine_kind = "text_adv"
+    [agents.streamer]  # 主播 Agent（包内权威：src/agents/streamer/config.py）
+    [agents.minecraft]  # Minecraft 游戏 Agent（包内权威：src/agents/minecraft/config.py）
+    [agents.text_adv]  # 文字冒险游戏 Agent（包内权威：src/agents/text_adv/config.py）
 
 设计原则：
 - 业务 Agent 统一经 ``[agents]`` 段注册启用
 - Agent 间无分类层——每个 Agent 是一份顶级子配置，**自己拥有全部字段**
   （无 ``[agents.game]`` 公共段，无 ``engine`` 判别字段）
-- 复用 profile 名（planner_llm = "llm"）引用 model.toml 的 LLM profile
+- 组件配置权威在自身包内（``src/agents/<name>/config.py``），中央树只聚合引用
 - ``enabled`` 列表接受已知 Agent 名（streamer / minecraft / text_adv），
   未知名由 Pydantic 校验拒绝（extra="forbid" + Literal 约束）
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import ConfigDict, Field
 
+from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
-from src.modules.mcp.config import McpServerConfig
+
+# 包内权威 Schema 的延迟 import 与 model_rebuild 在文件末尾执行
+# （避免顶部 import 触发过重的依赖链）
 
 
 # ---------------------------------------------------------------------------
@@ -53,203 +47,6 @@ AgentType = Literal[
 
 
 # ---------------------------------------------------------------------------
-# [agents.streamer] 配置
-# ---------------------------------------------------------------------------
-
-
-class StreamerAgentConfig(BaseConfig):
-    """主播 Agent 配置
-
-    融合 Planner + Replyer 两阶段决策。
-
-    Attributes:
-        planner_llm: 决策阶段使用的 LLM profile 名（引用 model.toml）
-        replyer_llm: 表达阶段使用的 LLM profile 名
-        proactive_enabled: 是否启用主动发言
-        proactive_cold_timeout_ms: 冷场判定阈值（毫秒）
-        proactive_min_interval_ms: 两次主动发言最小间隔（毫秒）
-        proactive_max_per_hour: 每小时主动发言次数上限
-        rundown_id: 流程单 id（空 = 使用内置默认流程单）
-        profanity_enabled: 是否启用敏感词净化（输出端）
-        command_prefix: 命令前缀
-        command_mappings: 命令映射 {name: action}
-    """
-
-    planner_llm: str = Field(
-        default="llm",
-        description="Planner 使用的 LLM profile 名（ReAct 决策核心：工具编排与意图构思质量敏感，默认 llm 高质量模型）",
-    )
-    planner_max_steps: int = Field(
-        default=8,
-        ge=1,
-        description="Planner 单决策窗 ReAct 循环最大步数（超出静默收场，防失控）",
-    )
-    replyer_llm: str = Field(
-        default="llm",
-        description="Replyer 使用的 LLM profile 名（默认 llm 高质量模型）",
-    )
-
-    # 旧字段名兼容
-    planner_client: str = Field(default="llm", description="（兼容字段）Planner LLM client")
-    replyer_client: str = Field(default="llm", description="（兼容字段）Replyer LLM client")
-
-    # --- 弹幕聚合 ---
-    batch_window_ms: int = Field(default=3000, ge=0, description="弹幕聚合时间窗口（毫秒）")
-    batch_max_size: int = Field(default=20, ge=1, description="单批最多聚合的消息条数")
-    tick_interval_ms: int = Field(default=300, ge=50, description="后台聚合检查间隔（毫秒）")
-    enable_idle_compensation: bool = Field(default=True, description="空窗补偿开关")
-
-    # --- 强制触发 ---
-    force_data_types: List[str] = Field(
-        default_factory=lambda: ["super_chat", "guard", "gift"],
-        description="强制响应的数据类型",
-    )
-    force_importance: float = Field(default=0.8, ge=0.0, le=1.0, description="importance 达到该值则强制响应")
-
-    # --- 人设 ---
-    bot_name: str = Field(default="麦麦", description="VTuber 名称")
-    history_limit: int = Field(default=30, ge=0, description="构建 prompt 时引用的历史消息条数")
-    enable_action_selection: bool = Field(
-        default=True,
-        description="是否让 LLM 从工具能力中选择动作",
-    )
-
-    # --- 房间状态后台预处理（后台双任务：轻循环）---
-    room_state_enabled: bool = Field(default=True, description="是否启用房间状态后台预处理")
-    room_state_cold_timeout_ms: int = Field(default=60_000, ge=0, description="房间冷场判定阈值（毫秒）")
-    room_state_llm_summary_interval_ms: int = Field(default=60_000, ge=0, description="低频 LLM 摘要间隔（毫秒）")
-    room_state_summary_client: str = Field(
-        default="llm_summary",
-        description="房间状态摘要专用 LLM profile",
-    )
-
-    # --- 主动发言 ---
-    proactive_enabled: bool = Field(default=True, description="主动发言总开关（流程单/冷场/定时等所有主动发言源）")
-    proactive_cold_timeout_ms: int = Field(default=45_000, ge=0, description="冷场判定阈值（毫秒）")
-    proactive_min_interval_ms: int = Field(default=120_000, ge=0, description="两次主动发言最小间隔")
-    proactive_schedule_interval_ms: int = Field(default=300_000, ge=0, description="定时话题触发间隔（0=关闭）")
-    proactive_schedule_only_cold: bool = Field(default=True, description="定时触发是否仅限冷场")
-    proactive_max_per_hour: int = Field(default=6, ge=1, description="每小时主动发言次数上限")
-    proactive_topic_required: bool = Field(default=True, description="话题缺失时跳过触发")
-
-    # --- 流程单（Rundown）---
-    rundown_id: str = Field(default="", description="流程单 id（空 = 使用内置默认流程单）")
-    rundown_speech_interval_ms: int = Field(default=3_000, ge=1000, description="流程单环节内两次主动发言最小间隔")
-
-    # --- 敏感词净化（输出端）---
-    profanity_enabled: bool = Field(default=False, description="敏感词净化开关")
-    profanity_words: List[str] = Field(default_factory=list, description="敏感词列表")
-    profanity_replacement: str = Field(default="***", description="替换字符")
-    profanity_case_sensitive: bool = Field(default=False, description="是否大小写敏感")
-    profanity_drop_on_match: bool = Field(default=False, description="命中时是否整条丢弃")
-
-    # --- 命令解析 ---
-    command_prefix: str = Field(default="/", description="命令前缀")
-    command_mappings: Dict[str, str] = Field(
-        default_factory=lambda: {
-            "chat": "chat",
-            "say": "chat",
-            "聊天": "chat",
-            "attack": "attack",
-            "攻击": "attack",
-        },
-        description="命令映射 {name: action}",
-    )
-
-    # --- 思考流旁路（ADR-008；观察面专用，best-effort 不落库）---
-    thinking_stream_enabled: bool = Field(
-        default=True,
-        description="思考流总开关：决策/生成期间的 reasoning 增量经旁路通道推送 WebUI 控制台",
-    )
-    thinking_stream_flush_interval_ms: int = Field(
-        default=100,
-        ge=20,
-        description="思考流合帧推送间隔（毫秒）",
-    )
-    thinking_stream_buffer_max: int = Field(
-        default=400,
-        ge=10,
-        description="思考流环形缓冲上限（条）；超限丢最旧",
-    )
-
-
-# ---------------------------------------------------------------------------
-# [agents.minecraft] 配置
-# ---------------------------------------------------------------------------
-
-
-class MinecraftAgentConfig(BaseConfig):
-    """Minecraft 游戏 Agent 配置（[agents.minecraft]）
-
-    与运行时 ``MinecraftConfig`` 的字段同步维护；命令驱动 ReAct Agent 的全部
-    行为参数集中此处。无任何公共段——它就是自己的顶级子配置。
-
-    Attributes:
-        command_llm: 决策用的 LLM profile 名（引用 model.toml）
-        max_steps: 单任务 ReAct 循环最大步数（防失控挂起）
-        execute_poll_interval_ms: handoff 周期兜底核实间隔（毫秒）
-        execute_wait_timeout_ms: 后台任务单轮 wait_timeout 上限（毫秒）
-        mcp: Agent 私有 MCP server 配置——位置即归属，启用时由 MinecraftAgent
-            在 _on_start 装配并以 owner_agent="minecraft" 注册进全局 ToolRegistry，
-            默认不对其它 Agent 暴露（归属限定语义）。enabled=false 时不装配。
-    """
-
-    command_llm: str = Field(
-        default="llm",
-        description="Minecraft Agent 决策用的 LLM profile 名",
-    )
-    max_steps: int = Field(
-        default=50,
-        ge=1,
-        description="单任务 ReAct 循环最大步数（超出挂起上报，防失控）",
-    )
-    execute_poll_interval_ms: int = Field(
-        default=2000,
-        ge=100,
-        description="handoff 周期兜底核实任务快照的间隔（毫秒）",
-    )
-    execute_wait_timeout_ms: int = Field(
-        default=1_800_000,
-        ge=1000,
-        description="后台任务单轮 wait_timeout 上限（毫秒，到点注入告警不杀任务）",
-    )
-    mcp: McpServerConfig = Field(
-        default_factory=lambda: McpServerConfig(url="http://127.0.0.1:8766/mcp"),
-        description=(
-            "Agent 私有 MCP server（minecraft 专属工具源；enabled=false 时不装配，"
-            "装配时以 owner_agent='minecraft' 注册进 ToolRegistry 默认不进入一般工具面）"
-        ),
-    )
-
-
-# ---------------------------------------------------------------------------
-# [agents.text_adv] 配置
-# ---------------------------------------------------------------------------
-
-
-class TextAdvAgentConfig(BaseConfig):
-    """文字冒险游戏 Agent 配置（[agents.text_adv]）
-
-    文字冒险 Agent 的全部字段集中此处；不再走 ``[agents.game]`` + ``engine``
-    判别字段模式——Agent 本身就是顶级名。
-    """
-
-    command_llm: str = Field(
-        default="llm",
-        description="TextAdv Agent 决策用的 LLM profile 名",
-    )
-    engine_kind: str = Field(default="text_adv", description="内容引擎标识（默认 text_adv）")
-    decision_strategy: str = Field(
-        default="first_option",
-        description="推进策略（first_option=首选项；llm=LLM 选择——待实现）",
-    )
-    enable_event_emission: bool = Field(
-        default=True,
-        description="是否在感知/推进时 emit game.* 事件",
-    )
-
-
-# ---------------------------------------------------------------------------
 # [agents] 段聚合
 # ---------------------------------------------------------------------------
 
@@ -260,6 +57,10 @@ class AgentsConfig(BaseConfig):
     包含所有业务 Agent 的启用列表与子配置。
 
     使用 ``extra="forbid"`` 拒绝未知 Agent 子段，避免拼写错误静默通过。
+
+    各 Agent 子配置字段类型由对应包内权威 Schema 提供（双轨消灭：中央树
+    不再内联字段定义，避免漂移写回路径把同一字段在两处定义）；
+    ``default_factory`` 构造默认实例，确保加载器把空字段补齐为完整子树。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -274,19 +75,24 @@ class AgentsConfig(BaseConfig):
         },
     )
 
-    # 各 Agent 的可选子配置
-    streamer: Optional[StreamerAgentConfig] = Field(
-        default=None,
+    # 各 Agent 的子配置（包内权威）
+    # 类型用字符串前向引用（避免顶部循环 import）；model_rebuild() 在模块末尾解析
+    # 为真实类。default_factory 用 __import__ 延迟加载，确保字段类型在
+    # AgentsConfig.model_rebuild() 之前可用且不触发重型依赖链。
+    streamer: Optional["StreamerConfig"] = Field(  # type: ignore[name-defined]  # noqa: F821
+        default_factory=lambda: __import__("src.agents.streamer.config", fromlist=["StreamerConfig"]).StreamerConfig(),
         description="主播 Agent（Planner+Replyer）配置",
         json_schema_extra={"x-ui-type": "object"},
     )
-    minecraft: Optional[MinecraftAgentConfig] = Field(
-        default=None,
+    minecraft: Optional["MinecraftConfig"] = Field(  # type: ignore[name-defined]  # noqa: F821
+        default_factory=lambda: __import__(
+            "src.agents.minecraft.config", fromlist=["MinecraftConfig"]
+        ).MinecraftConfig(),
         description="Minecraft 游戏 Agent 配置",
         json_schema_extra={"x-ui-type": "object"},
     )
-    text_adv: Optional[TextAdvAgentConfig] = Field(
-        default=None,
+    text_adv: Optional["TextAdvConfig"] = Field(  # type: ignore[name-defined]  # noqa: F821
+        default_factory=lambda: __import__("src.agents.text_adv.config", fromlist=["TextAdvConfig"]).TextAdvConfig(),
         description="文字冒险游戏 Agent 配置",
         json_schema_extra={"x-ui-type": "object"},
     )
@@ -300,22 +106,30 @@ class AgentsConfig(BaseConfig):
 class AgentsRootConfig(BaseConfig):
     """Agents 配置根类
 
-    对应 ``config/agents.toml`` 文件。
+    对应 ``config/agents.toml`` 文件。``[agents.streamer]`` 子段完整承载原
+    ``persona`` / ``context`` / ``background`` 过渡段的字段；中央树不再持有
+    顶层 persona/context/background 镜像。
     """
 
+    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
     agents: AgentsConfig = Field(
         default_factory=AgentsConfig,
         description="[agents] 段聚合（启用列表 + 各 Agent 子配置）",
     )
 
 
+# 延迟 import：各 Agent 包内权威 Schema；通过 model_rebuild() 完成前向引用解析。
+from src.agents.minecraft.config import MinecraftConfig  # noqa: E402, F401
+from src.agents.streamer.config import StreamerConfig  # noqa: E402, F401
+from src.agents.text_adv.config import TextAdvConfig  # noqa: E402, F401
+
+# 重新解析 forward refs
+AgentsConfig.model_rebuild()
+
+
 __all__ = [
     # Agent 类型
     "AgentType",
-    # 各 Agent ConfigSchema
-    "StreamerAgentConfig",
-    "MinecraftAgentConfig",
-    "TextAdvAgentConfig",
     # 聚合
     "AgentsConfig",
     # 顶层根模型

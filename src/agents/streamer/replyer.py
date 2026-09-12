@@ -10,11 +10,9 @@
 职责边界：
 - 调用 LLMManager.call_tools(prompt, tools=[reply_fn_def])——LLM 只见 reply。
 - 解析 response.tool_calls：reply call 取 speech/emotion/intensity；其余忽略。
-- **敏感词净化**（输出端）：内置 ProfanityFilter 做"嘴"端净化——speech 输出前
+- **敏感词净化**（输出端）：内置 WordFilter 做"嘴"端净化——speech 输出前
   经词表过滤（替换或丢弃）。
-- 两者使用不同的 LLM 客户端：Planner 用快速模型（llm_fast），Replyer 用高质量模型（llm）。
-
-配置兼容：``replyer_client`` 配置键保留（向后兼容）；同时接受 ``replyer_llm``。
+- 两者使用不同的 LLM profile：Planner 用 ``planner`` profile，Replyer 用 ``replyer`` profile。
 """
 
 from __future__ import annotations
@@ -31,18 +29,19 @@ from .plan import DecisionPlan
 
 # 默认人设兜底值（persona dict 缺字段时使用）
 #
-# 优先级链：persona dict 中的同名键（来自 config/core.toml 的 [persona] 段，由装配根
+# 优先级链：persona dict 中的同名键（来自 StreamerConfig.persona，由装配根
 # main._register_agents_from_config 拉取后透传给 StreamerAgent.persona_provider，
 # 再经 ReplyToolProvider._resolve_persona 解析后传给 Replyer.generate(persona=...)）
-# > StreamerAgentConfig.bot_name（agents.toml 显式覆盖）
+# > StreamerConfig.persona 对应字段（agents.toml 显式覆盖）
 # > 本模块 _DEFAULT_* 常量（仅当 persona dict 完全缺失/字段缺位时兜底，避免冷启动崩）。
 #
 # _DEFAULT_BOT_NAME = '麦麦'、personality/style_constraints 文本与
-# core_schemas.PersonaConfig 默认值对齐；不允许 config 模块反向依赖 agents 层，
+# StreamerConfig.persona 默认值对齐；不允许 config 模块反向依赖 agents 层，
 # 故这里复制文本（保持依赖方向 agents → config 干净）。
 _DEFAULT_BOT_NAME = "麦麦"
 _DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和观众互动"
 _DEFAULT_STYLE_CONSTRAINTS = "口语化，使用网络流行语，避免机械式回复，适当使用emoji"
+_DEFAULT_AUDIENCE_SALUTATION = "大家"
 
 # Replyer 模板名（含 $personality/$style_constraints/$bot_name 人设注入）
 _REPLYER_TEMPLATE = "amaidesu_replyer"
@@ -64,27 +63,29 @@ class Replyer:
         llm_service: Any,
         prompt_service: Any,
         tool_registry: Optional[Any] = None,
-        profanity_filter: Optional["ProfanityFilter"] = None,
+        word_filter: Optional["WordFilter"] = None,
     ) -> None:
         """初始化 Replyer。
 
         Args:
-            config: 配置字典（兼容 StreamerAgentConfig 的子集字段），
-                    读取 replyer_llm / replyer_client / bot_name。
-            llm_service: LLM 管理器（使用 replyer_llm 指定的高质量客户端）。
+            config: 配置字典（兼容 StreamerConfig 的子集字段），
+                    读取 enable_action_selection / bot_name / audience_salutation。
+            llm_service: LLM 管理器（使用 profile 指定的高质量客户端）。
             prompt_service: 提示词管理器（渲染 amaidesu_replyer 模板）。
             tool_registry: 工具注册表（可选，用于收集动作工具的 function 定义）。
-            profanity_filter: 敏感词过滤器（输出端净化入口；None 表示不净化）。
+            word_filter: 敏感词过滤器（输出端净化入口；None 表示不净化）。
         """
         self._config: Dict[str, Any] = config or {}
-        # replyer_llm（新 agents_schemas 命名）+ replyer_client（向后兼容）
-        self.replyer_llm: str = self._config.get("replyer_llm", self._config.get("replyer_client", "llm"))
+        # LLM profile 用途名由 StreamerAgent 装配期硬编码传入（_PROFILE_REPLYER）；
+        # 保留为实例属性以兼容工具面与日志输出（仅展示用）。
+        self.profile: str = self._config.get("profile", "llm")
         self._bot_name: str = self._config.get("bot_name", _DEFAULT_BOT_NAME)
+        self._audience_salutation: str = self._config.get("audience_salutation", _DEFAULT_AUDIENCE_SALUTATION)
 
         self._llm_service = llm_service
         self._prompt_service = prompt_service
         self._tool_registry = tool_registry
-        self._profanity_filter = profanity_filter
+        self._word_filter = word_filter
         self.logger = get_logger("Replyer")
 
     async def generate(
@@ -99,7 +100,7 @@ class Replyer:
         """根据 Planner 的决策计划 + 弹幕批次 + 人设，生成实际回复。
 
         流程：注入人设渲染 'amaidesu_replyer'（含 $personality/$style_constraints/
-        $bot_name）→ 调用高质量 LLM（replyer_llm，**call_tools 标准接口**，
+        $bot_name）→ 调用高质量 LLM（profile，**call_tools 标准接口**，
         tools=[reply_fn_def] + action_fn_defs）→ 解析 response.tool_calls 提取
         reply(speech/emotion) 与 actions → 情绪降级 neutral → 敏感词净化 →
         返回 dict（不发布事件；reply_tool 负责 ToolExecutionResult 包装）。
@@ -134,11 +135,11 @@ class Replyer:
         tools = [self._build_reply_function_def()]
 
         try:
-            self.logger.info(f"Replyer 生成回复中 (plan.target={plan.target!r}, client={self.replyer_llm})")
+            self.logger.info(f"Replyer 生成回复中 (plan.target={plan.target!r}, client={self.profile})")
             response = await self._llm_service.call_tools(
                 prompt=prompt,
                 tools=tools,
-                client_type=self.replyer_llm,
+                client_type=self.profile,
                 on_delta=on_delta,
             )
         except Exception as e:
@@ -179,9 +180,9 @@ class Replyer:
         }
 
         # ⑦ 敏感词净化（净化职责归 Replyer 表达引擎）
-        result = self._apply_profanity_filter(result)
+        result = self._apply_word_filter(result)
         if result is None:
-            self.logger.warning("Replyer 输出被 profanity filter 丢弃（drop_on_match=True）")
+            self.logger.warning("Replyer 输出被 word filter 丢弃（drop_on_match=True）")
             return None
 
         self.logger.info(
@@ -213,6 +214,7 @@ class Replyer:
             bot_name=persona.get("bot_name", self._bot_name),
             personality=persona.get("personality", _DEFAULT_PERSONALITY),
             style_constraints=persona.get("style_constraints", _DEFAULT_STYLE_CONSTRAINTS),
+            audience_salutation=persona.get("audience_salutation", self._audience_salutation),
             plan=_render_plan_text(plan),
             danmaku_batch=_render_batch_text(batch),
             conversation_history=_render_history_text(history),
@@ -304,7 +306,7 @@ class Replyer:
 
     # ==================== 敏感词净化（输出端） ====================
 
-    def _apply_profanity_filter(
+    def _apply_word_filter(
         self,
         result: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
@@ -315,15 +317,15 @@ class Replyer:
 
         Returns:
             净化后的 result；``drop_on_match=True`` 且命中时返回 None（丢弃整条）。
-            无 profanity_filter 注入时直接返回原 result（无净化）。
+            无 word_filter 注入时直接返回原 result（无净化）。
         """
-        if result is None or self._profanity_filter is None:
+        if result is None or self._word_filter is None:
             return result
         speech = result.get("speech", "")
         if not isinstance(speech, str):
             return result
-        cleaned_speech, dropped = self._profanity_filter.filter(speech)
-        if dropped and self._profanity_filter.drop_on_match:
+        cleaned_speech, dropped = self._word_filter.filter(speech)
+        if dropped and self._word_filter.drop_on_match:
             return None
         # 原 dict 复制以避免污染其他引用
         new_result = dict(result)
@@ -332,11 +334,11 @@ class Replyer:
 
 
 # ============================================================================
-# ProfanityFilter —— 敏感词净化
+# WordFilter —— 敏感词净化
 # ============================================================================
 
 
-class ProfanityFilter:
+class WordFilter:
     """敏感词过滤器（"嘴"端净化职责）。
 
     配置项：
@@ -347,7 +349,7 @@ class ProfanityFilter:
     - ``drop_on_match``（bool）：命中时是否整条丢弃（True → 返回 None）
 
     使用示例：
-        >>> flt = ProfanityFilter(words=["脏话A", "脏话B"], replacement="***", drop_on_match=False)
+        >>> flt = WordFilter(words=["脏话A", "脏话B"], replacement="***", drop_on_match=False)
         >>> cleaned, dropped = flt.filter("这是一条脏话A测试")
         >>> cleaned
         '这是一条***测试'
@@ -484,4 +486,4 @@ def _render_history_text(history: Optional[List[Any]]) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["Replyer", "ProfanityFilter"]
+__all__ = ["Replyer", "WordFilter"]

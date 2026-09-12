@@ -54,9 +54,17 @@ def temp_base_dir():
 
 
 def _write_main_config(base_dir: str, content: str) -> None:
-    """写入主配置文件（旧格式 config.toml，由 ConfigService 自动迁移）。"""
+    """写入遗留 config.toml（单文件旧格式；多文件体系不读取该文件）。"""
     config_path = os.path.join(base_dir, "config.toml")
     with open(config_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _write_agents_config(base_dir: str, content: str) -> None:
+    """写入 config/agents.toml（多文件格式）。"""
+    config_dir = os.path.join(base_dir, "config")
+    os.makedirs(config_dir, exist_ok=True)
+    with open(os.path.join(config_dir, "agents.toml"), "w", encoding="utf-8") as f:
         f.write(content)
 
 
@@ -83,16 +91,10 @@ platform_id = "test"
 
 
 def test_agent_enabled_check_based_on_list_v2(temp_base_dir):
-    """agents 段 enabled 列表应包含用户启用项。"""
-    _write_main_config(
+    """agents 段 enabled 列表应保留用户启用项。"""
+    _write_agents_config(
         temp_base_dir,
-        """
-[general]
-platform_id = "test"
-
-[agents]
-enabled = ["test_input", "another_input"]
-""",
+        '[agents]\nenabled = ["test_input", "another_input"]\n',
     )
 
     config_service = ConfigService(base_dir=temp_base_dir)

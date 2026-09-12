@@ -340,7 +340,7 @@ class ReplyToolProvider:
             return ToolExecutionResult(
                 tool_name=_REPLY_TOOL_NAME,
                 success=False,
-                error_message=("Replyer 返回 None（降级：LLM 失败 / 脏 JSON / 空 text / profanity 丢弃）"),
+                error_message=("Replyer 返回 None（降级：LLM 失败 / 脏 JSON / 空 text / word_filter 丢弃）"),
             )
 
         return ToolExecutionResult(

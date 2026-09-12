@@ -46,13 +46,13 @@ class BiliMessageTypeConfig:
 
     def _build_config(self, config: Dict[str, Any]) -> Dict[str, bool]:
         """构建消息类型配置"""
-        config = self.DEFAULT_CONFIG.copy()
+        merged = self.DEFAULT_CONFIG.copy()
 
         for cmd, config_key in self.CONFIG_KEY_MAPPING.items():
             if config_key in config:
-                config[cmd] = config[config_key]
+                merged[cmd] = config[config_key]
 
-        return config
+        return merged
 
     def should_handle(self, cmd: str) -> bool:
         """检查是否应该处理此消息类型"""

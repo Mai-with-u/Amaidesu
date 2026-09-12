@@ -5,8 +5,8 @@
 目录结构：
 顶层平铺——Agent 内脏与协作组件（非工具，不注册进 ToolRegistry）：
 - ``plan``              - 决策契约（DecisionPlan Pydantic，Planner 产出 / Replyer 消费）
-- ``planner``           - 决策核心（决策循环，调 planner_llm）
-- ``replyer``           - 表达引擎（调 replyer_llm + ProfanityFilter）
+- ``planner``           - 决策核心（决策循环，调 Planner profile）
+- ``replyer``           - 表达引擎（调 Replyer profile + WordFilter）
 - ``proactive_trigger`` - 主动发言纯规则触发器（主循环直接驱动）
 - ``room_state``        - 直播间态势规则层（纯规则，60s 滑动窗口）
 - ``message_buffer``    - 弹幕聚合缓冲（idle 补偿公式保留）

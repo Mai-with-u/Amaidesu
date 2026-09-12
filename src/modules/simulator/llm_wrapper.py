@@ -319,7 +319,7 @@ class SimulatorLLMWrapper:
             async with self._semaphore:
                 response: LLMResponse = await self._llm.chat(
                     prompt,
-                    client_type=self._config.llm_client_type,
+                    client_type=self._config.llm_profile,
                     temperature=self._config.llm_temperature,
                     max_tokens=max_tokens,
                 )
@@ -330,7 +330,7 @@ class SimulatorLLMWrapper:
             return None
 
         if not response.success:
-            self._logger.warning(f"LLM 调用未成功 (client={self._config.llm_client_type}, error={response.error!r})")
+            self._logger.warning(f"LLM 调用未成功 (client={self._config.llm_profile}, error={response.error!r})")
             return None
         return response
 

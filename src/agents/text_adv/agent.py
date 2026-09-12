@@ -23,11 +23,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
-from pydantic import Field as _PydField
-
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.manager import AgentManager
-from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
@@ -41,6 +38,7 @@ from src.agents.text_adv.content_engine import (
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 
+from .config import TextAdvConfig
 from .state import TextAdvGameAgentState, TextAdvOption
 from .tools import (
     TextAdvToolProvider,
@@ -51,38 +49,9 @@ from .tools import (
 
 __all__ = [
     "TextAdvGameAgent",
-    "TextAdvGameConfig",
+    "TextAdvConfig",
     "build_text_adv_agent",
 ]
-
-
-# ---------------------------------------------------------------------------
-# 配置 Schema
-# ---------------------------------------------------------------------------
-
-
-class TextAdvGameConfig(BaseConfig):
-    """文字冒险游戏 Agent 配置
-
-    字段对齐状态独立范式：
-    - 只有**该 Agent 特有**的配置在这里（公用配置走 ``modules/``）
-    - 默认值即可跑（构造 StubContentEngine，无需外部游戏进程）
-    """
-
-    # 标识（仅用于日志 / 多实例区分；不参与 tool dispatch）
-    engine_kind: str = _PydField(default="text_adv", description="内容引擎标识")
-
-    # 推进策略：first_option=首选项（简化版，测试可断言）；llm=LLM 选择（待实现）
-    decision_strategy: str = _PydField(
-        default="first_option",
-        description="推进策略（first_option=首选项；llm=LLM 选择——待实现）",
-    )
-
-    # 心跳/超时等（与 BaseAgent 默认共存）
-    enable_event_emission: bool = _PydField(
-        default=True,
-        description="是否在感知/推进时 emit game.* 事件",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +83,7 @@ class TextAdvGameAgent(BaseAgent):
 
     def __init__(
         self,
-        config: TextAdvGameConfig,
+        config: TextAdvConfig,
         *,
         content_engine: Optional[ContentEngine] = None,
         llm_manager: Optional[Any] = None,
@@ -126,7 +95,7 @@ class TextAdvGameAgent(BaseAgent):
         """初始化文字冒险 Agent。
 
         Args:
-            config: TextAdvGameConfig 实例
+            config: TextAdvConfig 实例
             content_engine: 内容引擎（默认 StubContentEngine）
             llm_manager: 可选 LLMManager（简化版未用，保留接口以备未来扩展）
             prompt_manager: 可选 PromptManager（同上）
@@ -392,7 +361,7 @@ def _make_invocation(tool_name: str, *, arguments: Dict[str, Any], source: str):
 
 def build_text_adv_agent(
     *,
-    config: TextAdvGameConfig,
+    config: TextAdvConfig,
     agent_manager: AgentManager,
     content_engine: Optional[ContentEngine] = None,
     llm_manager: Optional[Any] = None,

@@ -131,9 +131,15 @@ class BaseConfig(BaseModel):
         class_fields = set(cls.model_fields.keys())
         data_keys = set(data.keys())
 
+        # ``extra="allow"`` 的 Schema（如 CollectorsRootConfig）保留未知键——
+        # 采集器子段是 free-form dict，由 multi_file_loader 在加载时按注册表
+        # 校验每个子段；此处不视为冗余，也不剥离
+        allow_extra = cls.model_config.get("extra") == "allow"
+
         # 检测多余字段（配置有，Schema 没有）
         for key in data_keys - class_fields:
-            report.redundant.append(key)
+            if not allow_extra:
+                report.redundant.append(key)
 
         # 检测缺失字段（Schema 有，配置没有）
         # None-默认值字段（如 LLMRoleConfig.api_key = None）不视为缺失——
@@ -144,8 +150,8 @@ class BaseConfig(BaseModel):
                 continue
             report.missing.append(key)
 
-        # 剥离多余字段
-        clean_data = {k: v for k, v in data.items() if k in class_fields}
+        # 剥离多余字段（extra="allow" 时保留）
+        clean_data = dict(data) if allow_extra else {k: v for k, v in data.items() if k in class_fields}
 
         # 递归处理嵌套的 BaseConfig 字段
         for field_name, field_info in cls.model_fields.items():

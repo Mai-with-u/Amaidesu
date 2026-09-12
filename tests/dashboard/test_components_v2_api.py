@@ -2,7 +2,7 @@
 
 覆盖:
 1. **get_v2_component_list** — 配置全集构建：
-   - 采集器全集 = tools.perception.config 子键（含未启用占位）
+   - 采集器全集 = collectors 子键（含未启用占位）
    - Agent 全集 = agents 子键（enabled 之外的键）
    - 未启用组件 is_enabled=False / is_started=False
    - 已启用 + 运行中 is_started=True
@@ -50,26 +50,10 @@ def _make_config() -> dict:
             "streamer": {"planner_llm": "llm_fast"},
             "minecraft": {},
         },
-        "tools": {
-            "enabled": ["perception", "output"],
-            "perception": {
-                "enabled": True,
-                "provider": "builtin",
-                "config": {
-                    "enabled": ["bili_danmaku"],
-                    "bili_danmaku": {"room_id": 1},
-                    "read_pingmu": {},
-                },
-            },
-            "output": {
-                "enabled": True,
-                "provider": "builtin",
-                "config": {
-                    "enabled": ["subtitle"],
-                    "subtitle": {},
-                    "vts": {},
-                },
-            },
+        "collectors": {
+            "enabled": ["bili_danmaku"],
+            "bili_danmaku": {"room_id": 1},
+            "screen": {},
         },
     }
 
@@ -80,14 +64,14 @@ def test_list_includes_disabled_collectors() -> None:
     grouped = get_v2_component_list(config, server)
 
     by_name = {c.name: c for c in grouped["collectors"]}
-    assert set(by_name) == {"bili_danmaku", "read_pingmu"}
+    assert set(by_name) == {"bili_danmaku", "screen"}
 
     danmaku = by_name["bili_danmaku"]
     assert danmaku.group == "collectors"
     assert danmaku.is_enabled is True
     assert danmaku.is_started is True
 
-    screen = by_name["read_pingmu"]
+    screen = by_name["screen"]
     assert screen.is_enabled is False
     assert screen.is_started is False
 
@@ -152,7 +136,7 @@ class TestDescriptionEnrichment:
         grouped = get_v2_component_list(config, server)
         by_name = {c.name: c for c in grouped["collectors"]}
         assert by_name["bili_danmaku"].description == "B站弹幕接收器"
-        assert by_name["read_pingmu"].description == ""
+        assert by_name["screen"].description == ""
 
     def test_agent_description_from_manager(self) -> None:
         config = _make_config()

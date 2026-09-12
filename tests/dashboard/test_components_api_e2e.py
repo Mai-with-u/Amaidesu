@@ -20,9 +20,17 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-_CORE_TOML = """\
+_COLLECTORS_TOML = """\
 [meta]
-version = "2.0.3"
+version = "2.0.31"
+
+[collectors]
+enabled = ["bili_danmaku"]
+
+[collectors.bili_danmaku]
+room_id = 1
+
+[collectors.console_input]
 """
 
 _AGENTS_TOML = """\
@@ -37,30 +45,11 @@ max_steps = 50
 """
 
 _TOOLS_TOML = """\
+[meta]
+version = "2.0.31"
+
 [tools]
-enabled = ["perception", "output"]
-
-[tools.perception]
-enabled = true
-provider = "builtin"
-
-[tools.perception.config]
-enabled = ["bili_danmaku"]
-
-[tools.perception.config.bili_danmaku]
-room_id = 1
-
-[tools.perception.config.console_input]
-
-[tools.output]
-enabled = true
-provider = "builtin"
-
-[tools.output.config]
-enabled = ["vts"]
-
-[tools.output.config.vts]
-vts_host = "localhost"
+disabled_tools = []
 """
 
 
@@ -68,7 +57,7 @@ vts_host = "localhost"
 def config_dir(tmp_path: Path) -> Path:
     cfg = tmp_path / "config"
     cfg.mkdir()
-    (cfg / "core.toml").write_text(_CORE_TOML, encoding="utf-8")
+    (cfg / "collectors.toml").write_text(_COLLECTORS_TOML, encoding="utf-8")
     (cfg / "agents.toml").write_text(_AGENTS_TOML, encoding="utf-8")
     (cfg / "tools.toml").write_text(_TOOLS_TOML, encoding="utf-8")
     return cfg
@@ -147,9 +136,9 @@ def test_control_stop_dynamically_stops_collector(client: TestClient, config_dir
     assert resp.status_code == 200
     assert resp.json()["success"] is True
 
-    content = (config_dir / "tools.toml").read_text(encoding="utf-8")
+    content = (config_dir / "collectors.toml").read_text(encoding="utf-8")
     # 子段名仍在（配置），但 enabled 列表应已移除该组件
-    enabled_match = re.search(r"\[tools\.perception\.config\]\s*enabled = (\[.*?\])", content)
+    enabled_match = re.search(r"\[collectors\]\s*enabled = (\[.*?\])", content)
     assert enabled_match is not None
     assert '"console_input"' not in enabled_match.group(1)
 

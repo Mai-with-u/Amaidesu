@@ -18,7 +18,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
+from src.agents.streamer.config import StreamerConfig
+from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
@@ -27,14 +28,10 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 
 def _make_minimal_agent(*, event_bus: Optional[EventBus] = None) -> StreamerAgent:
     """构造测试用最小 StreamerAgent（不调 _on_start）。"""
-    config = StreamerAgentConfig(
-        planner_llm="llm_fast",
-        replyer_llm="llm",
-        proactive_enabled=False,
-        profanity_enabled=False,
-        batch_window_ms=100,
-        tick_interval_ms=50,
-    )
+    config = StreamerConfig.from_dict({
+        "proactive": {"enabled": False},
+        "batch": {"batch_window_ms": 100, "tick_interval_ms": 50},
+    })
     return StreamerAgent(
         config=config,
         llm_manager=MagicMock(),

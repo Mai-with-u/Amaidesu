@@ -46,15 +46,16 @@ def instantiate_agent(
     config = config if isinstance(config, dict) else {}
 
     if name == "streamer":
-        from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
+        from src.agents.streamer.config import StreamerConfig
+        from src.agents.streamer.streamer_agent import StreamerAgent
 
         try:
-            cfg_obj = StreamerAgentConfig(**config) if config else StreamerAgentConfig()
+            cfg_obj = StreamerConfig.from_dict(config) if config else StreamerConfig()
         except Exception as exc:
             from src.modules.logging import get_logger
 
-            get_logger("AgentFactory").warning(f"解析 StreamerAgent 配置失败: {exc}; 使用默认配置")
-            cfg_obj = StreamerAgentConfig()
+            get_logger("AgentFactory").warning(f"解析 StreamerConfig 配置失败: {exc}; 使用默认配置")
+            cfg_obj = StreamerConfig()
         return StreamerAgent(
             config=cfg_obj,
             llm_manager=llm_manager,
@@ -78,11 +79,10 @@ def instantiate_agent(
 
             get_logger("AgentFactory").warning(f"解析 MinecraftConfig 失败: {exc}; 使用默认配置")
             minecraft_cfg = MinecraftConfig()
-        llm_profile = str(config.get("command_llm", "llm") or "llm") if isinstance(config, dict) else "llm"
         return MinecraftAgent(
             config=minecraft_cfg,
             llm_manager=llm_manager,
-            llm_profile=llm_profile,
+            llm_profile="llm",
             prompt_manager=prompt_manager,
             event_bus=event_bus,
             tool_registry=tool_registry,
@@ -90,16 +90,16 @@ def instantiate_agent(
         )
 
     if name == "text_adv":
-        from src.agents.text_adv import TextAdvGameAgent, TextAdvGameConfig
+        from src.agents.text_adv import TextAdvConfig, TextAdvGameAgent
         from src.agents.text_adv.content_engine import StubContentEngine
 
         try:
-            text_adv_cfg = TextAdvGameConfig(**config) if config else TextAdvGameConfig()
+            text_adv_cfg = TextAdvConfig(**config) if config else TextAdvConfig()
         except Exception as exc:
             from src.modules.logging import get_logger
 
-            get_logger("AgentFactory").warning(f"解析 TextAdvGameConfig 失败: {exc}; 使用默认配置")
-            text_adv_cfg = TextAdvGameConfig()
+            get_logger("AgentFactory").warning(f"解析 TextAdvConfig 失败: {exc}; 使用默认配置")
+            text_adv_cfg = TextAdvConfig()
         return TextAdvGameAgent(
             config=text_adv_cfg,
             content_engine=StubContentEngine(engine_kind="text_adv"),

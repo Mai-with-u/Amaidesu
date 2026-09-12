@@ -6,7 +6,7 @@
 - bili_danmaku         → BiliDanmakuCollector（legacy）
 - bili_danmaku_official→ BiliDanmakuOfficialCollector
 - console_input        → ConsoleInputCollector
-- read_pingmu          → ScreenChangeCollector
+- screen               → ScreenChangeCollector
 - stt                  → STTCollector
 """
 
@@ -21,7 +21,7 @@ SUPPORTED_COLLECTORS: tuple[str, ...] = (
     "bili_danmaku",
     "bili_danmaku_official",
     "console_input",
-    "read_pingmu",
+    "screen",
     "stt",
 )
 
@@ -34,7 +34,7 @@ def instantiate_collector(
 ) -> Optional[BaseCollector]:
     """按名实例化采集器；未知名字返回 None。
 
-    ``llm_manager`` 为可选参数：仅 ``screen``（read_pingmu）需要 LLMManager
+    ``llm_manager`` 为可选参数：仅 ``screen`` 采集器需要 LLMManager
     调用 VLM；其余 collector 沿用事件总线即可。传入 llm_manager 后透传至屏幕
     采集器，避免 ScreenReader 自带 aiohttp 绕过统一 profile 管理。
     """
@@ -52,7 +52,7 @@ def instantiate_collector(
         from src.modules.collectors.console.console_input_collector import ConsoleInputCollector
 
         return ConsoleInputCollector(config=config or {}, event_bus=event_bus)
-    if name == "read_pingmu":
+    if name == "screen":
         from src.modules.collectors.screen.screen_change_collector import ScreenChangeCollector
 
         return ScreenChangeCollector(

@@ -17,7 +17,7 @@ try:
 except ImportError:
     aiohttp = None
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
@@ -27,6 +27,23 @@ from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.types.base.normalized_message import NormalizedMessage
+
+
+class BiliDanmakuMessageConfig(BaseModel):
+    """Bilibili 弹幕消息处理配置（显式子模型——替代原 free-form dict）
+
+    default_user_id：未提供 uid 时使用的占位标识
+    platform：来源平台标识（默认 bilibili）
+    """
+
+    default_user_id: str = Field(
+        default="",
+        description="未提供 uid 时使用的占位标识（空 = 用 nickname 兜底）",
+    )
+    platform: str = Field(
+        default="bilibili",
+        description="来源平台标识（写入 NormalizedMessage.platform）",
+    )
 
 
 class BiliDanmakuCollector(BaseCollector):
@@ -44,7 +61,10 @@ class BiliDanmakuCollector(BaseCollector):
 
         room_id: int = Field(..., description="直播间ID", gt=0)
         poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1)
-        message_config: dict = Field(default_factory=dict, description="消息配置")
+        message_config: BiliDanmakuMessageConfig = Field(
+            default_factory=BiliDanmakuMessageConfig,
+            description="消息处理配置（default_user_id / platform）",
+        )
         emit_semantic_events: bool = Field(default=True, description="emit room.message.danmaku 语义事件")
 
     def __init__(
@@ -258,7 +278,7 @@ class BiliDanmakuCollector(BaseCollector):
         nickname = item.get("nickname", "未知用户")
 
         # 默认 user_id
-        user_id = item.get("uid") or self.message_config.get("default_user_id", f"bili_{nickname}")
+        user_id = item.get("uid") or self.message_config.default_user_id or f"bili_{nickname}"
 
         if not text:
             return None
@@ -276,6 +296,6 @@ class BiliDanmakuCollector(BaseCollector):
             timestamp_ms=timestamp_ms,
             user_id=str(user_id),
             user_nickname=nickname,
-            platform=self.message_config.get("platform", "bilibili"),
+            platform=self.message_config.platform,
             room_id=str(self.room_id),
         )

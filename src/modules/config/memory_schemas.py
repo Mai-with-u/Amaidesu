@@ -1,167 +1,66 @@
 """Memory 配置 Schema 定义
 
-定义 ``config/memory.toml`` 的 Pydantic 聚合模型。
+定义 ``config/storage.toml`` 中 ``[memory]`` 段的 Pydantic 模型。
 
 段树结构（TOML 视角）::
 
     [memory]
     backend = "simple"
 
-    [memory.simple]
-    recall_top_k = 5
-
 > 单一事实源原则：``db_path`` **不在此定义**——存储与记忆共用同一 SQLite
-> 库，路径权威在 storage.toml 的 ``[storage.sqlite].db_path``。
+> 库，路径权威在 ``[sqlite].db_path``。
 
 设计原则：
-- ``backend`` 字面量（simple | amemorix），一键切换存储后端
-- 记忆与存储分文件配置、彼此解耦（共享 db_path）
+- ``backend`` 仅支持 ``"simple"``（关键词召回）；amemorix 外部服务
+  段位已废除（F7 + §13 S4 决策：外部依赖解耦期迁出，待独立路线再引入）
+- SimpleMemory 子段已废除（三字段 recall_top_k / viewer_profile_max /
+  fact_max_age_days 在 SimpleMemory 实现中为常量，不再暴露配置面）
 """
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import ConfigDict, Field
 
 from src.modules.config.schemas.base import BaseConfig
 
 
-# ---------------------------------------------------------------------------
-# 记忆后端类型
-# ---------------------------------------------------------------------------
-
-
+# 后端字面量收紧为 simple（amemorix 段废除，bootstrap fail-fast 分支对应删除）
 MemoryBackend = Literal[
-    "simple",  # SimpleMemory（SQLite 关键词召回，无 embedding）
-    "amemorix",  # Amemorix（外部服务，可选）
+    "simple",  # 内置 SimpleMemory（SQLite 关键词召回，无 embedding）
 ]
 
 
-# ---------------------------------------------------------------------------
-# SimpleMemory 配置
-# ---------------------------------------------------------------------------
-
-
-class SimpleMemoryConfig(BaseConfig):
-    """SimpleMemory 记忆后端配置
-
-    SQLite 关键词召回实现，无 embedding。观众画像 + 事实条目都存在
-    storage.sqlite.db_path 的同一数据库中。
-
-    Attributes:
-        recall_top_k: 单次召回条数上限
-        viewer_profile_max: 单观众画像字段上限（防膨胀）
-        fact_max_age_days: 事实条目最大保留天数（0 = 永久）
-    """
-
-    recall_top_k: int = Field(
-        default=5,
-        ge=1,
-        le=100,
-        description="单次召回条数上限（关键词检索后取 top-k）",
-    )
-    viewer_profile_max: int = Field(
-        default=20,
-        ge=1,
-        description="单观众画像字段上限（防止画像无限膨胀）",
-    )
-    fact_max_age_days: int = Field(
-        default=90,
-        ge=0,
-        description="事实条目最大保留天数（0 表示永久保留）",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Amemorix 配置（占位，由外部 MemoryProvider 补全）
-# ---------------------------------------------------------------------------
-
-
-class AmemorixConfig(BaseConfig):
-    """Amemorix 记忆后端配置（占位）
-
-    Attributes:
-        endpoint: Amemorix 服务地址
-        api_key: API 密钥
-        timeout: 单次请求超时（秒）
-    """
-
-    endpoint: str = Field(
-        default="http://localhost:8100",
-        description="Amemorix 服务地址",
-    )
-    api_key: str = Field(
-        default="",
-        description="API 密钥（留空则使用环境变量 AMAIDES_AMEMORIX_API_KEY）",
-        json_schema_extra={"sensitive": True, "x-widget": "password"},
-    )
-    timeout: int = Field(
-        default=30,
-        ge=1,
-        description="单次请求超时（秒）",
-    )
-
-
-# ---------------------------------------------------------------------------
-# [memory] 段聚合
-# ---------------------------------------------------------------------------
-
-
 class MemoryConfig(BaseConfig):
-    """[memory] 段聚合
+    """``[memory]`` 段（嵌入 storage.toml 顶层）
 
-    通过 ``backend`` 字面量切换记忆后端实现；每种后端的配置在对应子段。
+    通过 ``backend`` 字面量切换记忆后端实现（当前仅 ``"simple"``）。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     backend: MemoryBackend = Field(
         default="simple",
-        description="记忆后端实现：simple=内置 SimpleMemory（关键词召回）, amemorix=外部服务",
+        description="记忆后端实现：simple=内置 SimpleMemory（关键词召回）",
         json_schema_extra={
             "x-ui-type": "select",
-            "x-options": ["simple", "amemorix"],
+            "x-options": ["simple"],
         },
-    )
-
-    simple: Optional[SimpleMemoryConfig] = Field(
-        default=None,
-        description="SimpleMemory 配置（backend='simple' 时生效）",
-        json_schema_extra={"x-ui-type": "object"},
-    )
-    amemorix: Optional[AmemorixConfig] = Field(
-        default=None,
-        description="Amemorix 配置（backend='amemorix' 时生效）",
-        json_schema_extra={"x-ui-type": "object"},
-    )
-
-
-# ---------------------------------------------------------------------------
-# 顶层根模型（对应 config/memory.toml）
-# ---------------------------------------------------------------------------
-
-
-class MemoryRootConfig(BaseConfig):
-    """Memory 配置根类
-
-    对应 ``config/memory.toml`` 文件。
-    """
-
-    memory: MemoryConfig = Field(
-        default_factory=MemoryConfig,
-        description="[memory] 段聚合（backend + 各后端配置）",
     )
 
 
 __all__ = [
-    # 记忆后端类型
     "MemoryBackend",
-    # 各后端 ConfigSchema
-    "SimpleMemoryConfig",
-    "AmemorixConfig",
-    # 聚合
     "MemoryConfig",
-    # 顶层根模型
     "MemoryRootConfig",
 ]
+
+
+# 向后兼容壳：原 memory.toml 独立文件根——已并入 storage.toml [memory] 段
+# 旧导入路径仍允许（dashboard/api/config.py 等占位）
+class MemoryRootConfig(BaseConfig):
+    """向后兼容壳——§6.2 重构后 memory 段已并入 storage.toml，无独立 memory.toml。
+    本壳保留供旧 _SECTION_TO_ROOT_MODEL 占位 key。"""
+
+    memory: MemoryConfig = Field(default_factory=MemoryConfig, description="占位")

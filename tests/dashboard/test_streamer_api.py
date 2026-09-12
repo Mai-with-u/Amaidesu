@@ -112,10 +112,8 @@ def _write_config(config_dir: Path, *, proactive_enabled: bool = False) -> None:
 [agents]
 enabled = ["streamer"]
 
-[agents.streamer]
-proactive_enabled = {str(proactive_enabled).lower()}
-planner_llm = "llm_fast"
-replyer_llm = "llm"
+[agents.streamer.proactive]
+enabled = {str(proactive_enabled).lower()}
 """
     (config_dir / "agents.toml").write_text(agents_toml, encoding="utf-8")
 
@@ -220,8 +218,6 @@ def test_status_returns_statistics_and_config(config_dir: Path) -> None:
     assert body["available"] is True
     assert body["statistics"]["total_replies"] == 2
     assert body["config"]["proactive_enabled"] is True
-    assert body["config"]["planner_llm"] == "llm_fast"
-    assert body["config"]["replyer_llm"] == "llm"
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +417,7 @@ def test_proactive_toggle_updates_runtime_and_config(config_dir: Path) -> None:
     assert agent.proactive_toggle_calls == [True]
 
     saved = tomllib.loads((config_dir / "agents.toml").read_text(encoding="utf-8"))
-    assert saved["agents"]["streamer"]["proactive_enabled"] is True
+    assert saved["agents"]["streamer"]["proactive"]["enabled"] is True
 
 
 def test_trigger_proactive_unavailable_when_no_streamer_agent(config_dir: Path) -> None:

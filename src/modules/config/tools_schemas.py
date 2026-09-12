@@ -4,8 +4,10 @@
 
 段树结构（TOML 视角）::
 
-    [tools]
-    enabled = ["perception", "output"]
+    # 异步任务基建（执行委派原语：poll/wait 节拍）
+    [tools.tasks]
+    poll_interval_ms = 2000
+    wait_timeout_ms = 1800000
 
     # 虚拟形象分类（每形象一 provider 实例；enabled 控制其工具可见性）
     [tools.avatar.vts]
@@ -25,7 +27,7 @@
     enabled = true
     config = {...}
 
-    # 记忆分类（工具出口：query_memory）
+    # 记忆分类（工具出口：query_memory；默认 enabled=true）
     [tools.memory]
     enabled = true
 
@@ -34,31 +36,29 @@
     enabled = true
     config.servers = {...}
 
+    # 工具熔断器健康监控
+    [tools.health]
+    enabled = true
+    failure_threshold = 3
+    probe_interval_ms = 30000
+
 设计原则：
 - 工具提供者为「开关单元」：一个形象 / 一个 MCP server = 一个 enabled 开关。
   开 = 其全部工具进入可见集；关 = 全部消失。开关控制权归属人类（配置 + Web UI）。
-- 感知/理解/输出按"能力包"分组（而非按阶段）；本文件为聚合容器与元数据，
-  组件字段由具体 Tool Provider 的 ConfigSchema 验证。
+- 感知已迁出至 ``collectors.toml``（``[collectors]`` 段）；输出已迁出至
+  ``infra.toml``（``[tts]``/``[subtitle]``/``[dashboard.subtitle_widget]`` 等段）。
+  本文件只承载工具域开关与异步任务基建。
+- 组件字段由具体 Tool Provider 的 ConfigSchema 验证；本文件为聚合容器与元数据。
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import ConfigDict, Field
 
+from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
-
-
-# ---------------------------------------------------------------------------
-# 工具能力包类型
-# ---------------------------------------------------------------------------
-
-
-ToolPackType = Literal[
-    "perception",  # 采集器包：屏幕/音频/弹幕/遥测（采集器通道，不迁移）
-    "output",  # 输出包：TTS/字幕/皮套/OBS（保留包级列表，实际开关在提供者级）
-]
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,13 @@ class VisionProviderConfig(ToolProviderConfig):
 
 
 class MemoryProviderConfig(ToolProviderConfig):
-    """记忆分类（工具出口 query_memory；LLM 主动检索关键词记忆）"""
+    """记忆分类（工具出口 query_memory；LLM 主动检索关键词记忆）
+
+    默认 enabled=true：缺省配置下 query_memory 已注册，与 main.py 消费端
+    ``.get("enabled", True)`` 兜底对齐，消除原"配置 false 时仍注册"的漂移。
+    """
+
+    enabled: bool = Field(default=True, description="是否启用 query_memory 记忆检索工具")
 
     model_config = ConfigDict(extra="allow")
 
@@ -120,6 +126,29 @@ class McpProviderConfig(ToolProviderConfig):
     """
 
     model_config = ConfigDict(extra="allow")
+
+
+class ToolsTasksConfig(BaseConfig):
+    """异步任务基建配置（``[tools.tasks]`` 段）
+
+    提供执行委派原语的节拍配置：
+    - ``poll_interval_ms``：跟踪循环轮询节拍（毫秒）
+    - ``wait_timeout_ms``：等待任务完成的最长时长（毫秒）
+
+    段定义与运行期消费分离：本任务负责段定义；端到端消费断言随工具线任务合流
+    由其覆盖（本任务交付即定义完成，消费侧硬错残留由工具线在合流日清理）。
+    """
+
+    poll_interval_ms: int = Field(
+        default=2000,
+        ge=100,
+        description="异步任务跟踪循环轮询间隔（毫秒）",
+    )
+    wait_timeout_ms: int = Field(
+        default=1_800_000,
+        ge=1000,
+        description="异步任务最长等待时长（毫秒）",
+    )
 
 
 class ToolsHealthConfig(BaseConfig):
@@ -152,31 +181,16 @@ class ToolsHealthConfig(BaseConfig):
 class ToolsConfig(BaseConfig):
     """[tools] 段聚合
 
-    包含所有能力包元数据 + 工具提供者开关（avatar/studio/vision/memory/mcp）。
-    使用 ``extra="forbid"`` 拒绝未知子段，避免拼写错误静默通过。
+    包含工具提供者开关（avatar/studio/vision/memory/mcp）+ 异步任务基建 +
+    工具熔断器配置 + disabled_tools 平铺列表。使用 ``extra="forbid"`` 拒绝未知子段。
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    # 启用的工具包列表（保留兼容：perception/output）
-    enabled: List[ToolPackType] = Field(
-        default_factory=lambda: ["perception", "output"],
-        description="启用的工具包列表",
-        json_schema_extra={
-            "x-ui-type": "multiselect",
-            "x-options": ["perception", "output"],
-        },
-    )
-
-    # 各能力包子配置（均为 Optional，未启用时 None）
-    perception: Optional[ToolProviderConfig] = Field(
-        default=None,
-        description="感知工具包（采集器配置：屏幕/音频/弹幕/遥测）",
-        json_schema_extra={"x-ui-type": "object"},
-    )
-    output: Optional[ToolProviderConfig] = Field(
-        default=None,
-        description="输出工具包（TTS/字幕配置保留段；皮套/OBS 开关下放到提供者级）",
+    # 异步任务基建节拍（段定义归本文件；消费侧由工具线任务合流覆盖）
+    tasks: ToolsTasksConfig = Field(
+        default_factory=ToolsTasksConfig,
+        description="异步任务基建节拍（poll_interval_ms / wait_timeout_ms）",
         json_schema_extra={"x-ui-type": "object"},
     )
 
@@ -198,7 +212,7 @@ class ToolsConfig(BaseConfig):
     )
     memory: Optional[MemoryProviderConfig] = Field(
         default=None,
-        description="记忆分类（工具出口 query_memory；enabled=true 时注册记忆检索工具）",
+        description="记忆分类（工具出口 query_memory；默认 enabled=true）",
         json_schema_extra={"x-ui-type": "object"},
     )
     mcp: Optional[McpProviderConfig] = Field(
@@ -234,15 +248,14 @@ class ToolsRootConfig(BaseConfig):
     对应 ``config/tools.toml`` 文件。
     """
 
+    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
     tools: ToolsConfig = Field(
         default_factory=ToolsConfig,
-        description="[tools] 段聚合（启用列表 + 各能力包/提供者分类配置）",
+        description="[tools] 段聚合（异步任务基建 + 各提供者分类配置 + disabled_tools）",
     )
 
 
 __all__ = [
-    # 工具能力包类型
-    "ToolPackType",
     # 工具提供者开关基类
     "ToolProviderConfig",
     # 分类配置
@@ -251,6 +264,8 @@ __all__ = [
     "VisionProviderConfig",
     "MemoryProviderConfig",
     "McpProviderConfig",
+    # 异步任务基建
+    "ToolsTasksConfig",
     # 工具熔断器健康监控
     "ToolsHealthConfig",
     # 聚合

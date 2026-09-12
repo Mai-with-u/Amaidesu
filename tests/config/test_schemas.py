@@ -2,7 +2,7 @@
 
 from src.modules.config.core_schemas import CoreConfig
 from src.modules.config.model_schemas import ModelConfig
-from src.modules.config.multi_file_loader import CONFIG_VERSION
+from src.modules.config.file_meta import CONFIG_BASELINE_VERSION, FileMetaConfig
 
 
 class TestCoreConfig:
@@ -21,13 +21,10 @@ class TestCoreConfig:
         # 事件日志仅内存（运行周期观察窗）：默认不落库，重启即清，
         # 保证每轮运行的调试视野互不污染。
         assert c.events.persist is False
-        assert c.meta.version == CONFIG_VERSION
+        assert FileMetaConfig().version == CONFIG_BASELINE_VERSION
 
     def test_persona_behavior_style_default_matches_config_version(self):
-        """v2.0.6: CONFIG_VERSION 与 behavior_style 字段必须同时存在（防漂移）。"""
-        from src.modules.config.upgrade_hooks import _parse_version
-
-        assert _parse_version(CONFIG_VERSION) >= _parse_version("2.0.6"), "CONFIG_VERSION 必须不低于本次升级（2.0.6）"
+        """behavior_style 字段必须存在且默认文本与权威定义一致（防漂移）。"""
         c = CoreConfig()
         # 显式断言 behavior_style 默认值已落盘（防止上游"升了版本但没加字段"的回退）。
         assert c.persona.behavior_style.startswith("积极与观众互动"), (
@@ -48,60 +45,29 @@ class TestCoreConfig:
 
 
 class TestModelConfig:
-    def test_defaults(self):
-        """新结构：llm_providers[] + llm (LLMRoleConfig 引用 provider)。
+    """三层结构（providers / models / profiles）的新断言
 
-        - `client` / `api_key` / `base_url` / `max_retries` / `retry_delay` 现位于 provider 层
-        - role 仅保留 `provider` / `model` / `temperature` / `max_tokens` + 可选覆盖
-        """
+    旧的 ``llm`` / ``llm_fast`` / ``vlm`` / ``llm_local`` 单字段断言已废弃——
+    profile 现在是 ``llm_profiles.<name>`` 字典条目（planner / replyer / summary /
+    minecraft / vision / simulator 6 成员）。完整基线测试由 T20 收口，本类
+    仅保留面向三层结构的核心不变量。
+    """
+
+    def test_three_layer_defaults(self):
+        """三层结构默认值：1 个默认 provider + 空 models/空 profiles 字典"""
         m = ModelConfig()
-        # Provider 默认值
         assert len(m.llm_providers) >= 1
-        provider = m.llm_providers[0]
-        assert provider.name == "default"
-        assert provider.client_type == "openai"
-        assert provider.api_key == ""
-        assert provider.base_url == "https://api.openai.com/v1"
-        assert provider.max_retries == 3
-        assert provider.retry_delay == 1.0
-        # Role 默认值
-        assert m.llm.provider == "default"
-        assert m.llm.model == "gpt-4o-mini"
-        # role.api_key 默认 None (空时使用 provider.api_key)
-        assert m.llm.api_key is None
-        # role.temperature / max_tokens 默认 None (空时使用 provider 默认)
-        assert m.llm.temperature is None
-        assert m.llm.max_tokens is None
-
-    def test_fast_llm_defaults(self):
-        """llm_fast 与 llm 共享同一个 LLMRoleConfig (默认 model 一致)。"""
-        m = ModelConfig()
-        # 新结构：所有 role 默认相同 model,toml 可独立覆盖
-        assert m.llm_fast.model == "gpt-4o-mini"
-        assert m.llm_fast.provider == "default"
-
-    def test_vlm_defaults(self):
-        """vlm role 同样是 LLMRoleConfig 实例,默认 model 与 llm 一致。"""
-        m = ModelConfig()
-        assert m.vlm.model == "gpt-4o-mini"
-        assert m.vlm.provider == "default"
-        # temperature 默认 None (由 provider 兜底)
-        assert m.vlm.temperature is None
-
-    def test_local_llm_defaults(self):
-        """llm_local 默认 model 与其他 role 一致;base_url/api_key 覆盖默认 None (运行时由 provider 兜底)。"""
-        m = ModelConfig()
-        assert m.llm_local.model == "gpt-4o-mini"
-        # role 级 base_url/api_key 默认 None,使用 provider 的对应字段
-        assert m.llm_local.base_url is None
-        assert m.llm_local.api_key is None
+        assert m.llm_models == []
+        assert m.llm_profiles == {}
 
     def test_no_hardcoded_real_keys(self):
-        """provider.api_key 必须默认空字符串,role.api_key 默认 None。"""
+        """provider.api_key 默认空字符串（无硬编码真实密钥）"""
         m = ModelConfig()
         provider = m.llm_providers[0]
         assert provider.api_key == "", "provider.api_key should be empty string by default"
-        # role 级 api_key 默认 None(由 provider 兜底),不应硬编码
-        for field_name in ("llm", "llm_fast", "vlm"):
-            role = getattr(m, field_name)
-            assert role.api_key is None, f"{field_name}.api_key should default to None"
+
+    def test_required_profile_names_exposed(self):
+        """必填 profile 成员清单常量暴露，供加载期校验调用"""
+        from src.modules.config.model_schemas import REQUIRED_PROFILE_NAMES
+
+        assert REQUIRED_PROFILE_NAMES == ("planner", "replyer", "summary", "minecraft", "vision", "simulator")

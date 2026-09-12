@@ -62,14 +62,15 @@ class SimulatorConfigSchema(BaseConfig):
     )
     warmup_duration_s: float = Field(default=300.0, ge=0.0, description="启动暖场期时长（秒）")
     max_message_chars: int = Field(default=50, ge=10, le=200, description="单条消息最大字符数")
-    llm_client_type: str = Field(default="llm_fast", description="使用的 LLM client 类型")
+    llm_profile: str = Field(
+        default="simulator",
+        description="LLM profile 用途名（对应 model.toml [llm_profiles.<name>]；默认 simulator）",
+    )
     llm_temperature: float = Field(default=0.9, ge=0.0, le=2.0)
     token_budget_per_hour: int = Field(default=50000, ge=1000, description="每小时 token 硬上限")
     max_concurrent_llm: int = Field(default=8, ge=1, le=32, description="最大并发 LLM 请求数")
     enable_hater: bool = Field(default=False, description="是否启用黑粉人设（仅 dev）")
     language: str = Field(default="zh", description="生成消息语言")
-    session_strategy: str = Field(default="smart", description="session 选择策略")
-    fallback_session_id: str = Field(default="simulated_viewers")
     cadence_mode: str = Field(
         default="uniform", description="节奏模式: uniform=均匀随机, fixed=固定间隔, auto=自适应突发"
     )

@@ -605,7 +605,7 @@ class MinecraftAgent(BaseAgent):
             return
         self._handoffs[task_id] = _Handoff(
             task_id=task_id,
-            deadline_ms=now_ms() + self.typed_config.execute_wait_timeout_ms,
+            deadline_ms=now_ms() + self.typed_config.wait_timeout_ms,
         )
         self._logger.info(f"execute 受理回执（task_id={task_id}），登记 handoff 跟踪")
         await self._ensure_attention_subscribed()
@@ -660,7 +660,7 @@ class MinecraftAgent(BaseAgent):
             except Exception as exc:  # noqa: BLE001 - 单轮核实失败不杀监视协程
                 self._logger.error(f"handoff 核实异常: {exc}", exc_info=True)
             # 推进周期兜底节拍：下一次无通知时的核实时刻
-            self._next_poll_ms = now_ms() + self.typed_config.execute_poll_interval_ms
+            self._next_poll_ms = now_ms() + self.typed_config.poll_interval_ms
 
     async def _verify_handoffs(self) -> None:
         """核实全部跟踪中任务：状态真迁移注入唤醒；wait_timeout 到点注入告警。"""
@@ -695,14 +695,14 @@ class MinecraftAgent(BaseAgent):
                             continue
             if now >= handoff.deadline_ms:
                 # wait_timeout：长期无进展告警（不杀任务），deadline 顺延一个周期
-                handoff.deadline_ms = now + self.typed_config.execute_wait_timeout_ms
+                handoff.deadline_ms = now + self.typed_config.wait_timeout_ms
                 detail = (
                     f"最近快照：{json.dumps(snapshot, ensure_ascii=False, default=str)}"
                     if verified
                     else "任务状态核实不可用（任务查询工具缺失或调用失败）"
                 )
                 await self._inject_wakeup_message(
-                    f"[系统] 后台任务 {task_id} 超过 {self.typed_config.execute_wait_timeout_ms}ms 无进展"
+                    f"[系统] 后台任务 {task_id} 超过 {self.typed_config.wait_timeout_ms}ms 无进展"
                     f"（wait_timeout），{detail}。请核查该任务（查询/取消/推进其他工作）。"
                 )
                 self._logger.warning(f"handoff wait_timeout（task_id={task_id}），已注入告警")

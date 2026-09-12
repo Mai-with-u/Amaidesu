@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.plan import DecisionPlan
-from src.agents.streamer.replyer import ProfanityFilter, Replyer
+from src.agents.streamer.replyer import WordFilter, Replyer
 from src.modules.llm.manager import LLMResponse
 
 
@@ -71,7 +71,7 @@ def _make_replyer(
     llm_side_effect: Optional[Exception] = None,
     action_tools=None,
     config: Optional[dict] = None,
-    profanity_filter: Optional[ProfanityFilter] = None,
+    word_filter: Optional[WordFilter] = None,
     tool_registry=None,
 ):
     """构造 Replyer + mock LLM。
@@ -105,7 +105,7 @@ def _make_replyer(
         llm_service=llm,
         prompt_service=prompt,
         tool_registry=tool_registry,
-        profanity_filter=profanity_filter,
+        word_filter=word_filter,
     )
     return r, llm, prompt
 
@@ -308,27 +308,27 @@ class TestReplyerGenerate:
         llm.call_tools.assert_not_called()
 
 
-class TestReplyerProfanityFilter:
-    """敏感词净化：原 output/pipelines/profanity_filter 逻辑 verbatim 归此地。"""
+class TestReplyerWordFilter:
+    """敏感词净化：原 output/pipelines/word_filter 逻辑 verbatim 归此地。"""
 
-    def test_profanity_filter_disabled_passes_through(self) -> None:
+    def test_word_filter_disabled_passes_through(self) -> None:
         """filter.enabled=False 时不过滤。"""
-        flt = ProfanityFilter(words=["bad"], enabled=False)
+        flt = WordFilter(words=["bad"], enabled=False)
         cleaned, dropped = flt.filter("hello bad world")
         assert cleaned == "hello bad world"
         assert dropped is False
 
-    def test_profanity_filter_replace_word(self) -> None:
+    def test_word_filter_replace_word(self) -> None:
         """filter.enabled=True + words=["脏话"] → 替换为 replacement。"""
-        flt = ProfanityFilter(words=["脏话"], replacement="***")
+        flt = WordFilter(words=["脏话"], replacement="***")
         cleaned, dropped = flt.filter("这是脏话测试")
         assert cleaned == "这是***测试"
         assert dropped is True
 
     @pytest.mark.asyncio
-    async def test_profanity_filter_drop_on_match(self) -> None:
+    async def test_word_filter_drop_on_match(self) -> None:
         """drop_on_match=True 时整条返回 None。"""
-        flt = ProfanityFilter(
+        flt = WordFilter(
             words=["脏话"],
             replacement="***",
             drop_on_match=True,
@@ -337,7 +337,7 @@ class TestReplyerProfanityFilter:
             llm_response=_make_llm_response(
                 tool_calls=[_tool_call_reply(speech="这是脏话测试")],
             ),
-            profanity_filter=flt,
+            word_filter=flt,
         )
         plan = _make_plan()
         persona = {"bot_name": "x", "personality": "p", "style_constraints": "s"}
@@ -347,14 +347,14 @@ class TestReplyerProfanityFilter:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_profanity_filter_replace_keep_result(self) -> None:
+    async def test_word_filter_replace_keep_result(self) -> None:
         """drop_on_match=False（默认）时净化后保留 result。"""
-        flt = ProfanityFilter(words=["脏话"], replacement="***")
+        flt = WordFilter(words=["脏话"], replacement="***")
         r, _llm, _prompt = _make_replyer(
             llm_response=_make_llm_response(
                 tool_calls=[_tool_call_reply(speech="这是脏话测试")],
             ),
-            profanity_filter=flt,
+            word_filter=flt,
         )
         plan = _make_plan()
         persona = {"bot_name": "x", "personality": "p", "style_constraints": "s"}
@@ -364,9 +364,9 @@ class TestReplyerProfanityFilter:
         assert result is not None
         assert result["speech"] == "这是***测试"
 
-    def test_profanity_filter_case_insensitive(self) -> None:
+    def test_word_filter_case_insensitive(self) -> None:
         """默认 case_sensitive=False 时大小写不敏感。"""
-        flt = ProfanityFilter(words=["BAD"], replacement="*")
+        flt = WordFilter(words=["BAD"], replacement="*")
         cleaned, dropped = flt.filter("hello bad BAD BaD")
         assert dropped is True
         assert "bad" not in cleaned.lower() or "*" in cleaned

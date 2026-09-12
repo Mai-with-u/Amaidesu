@@ -295,11 +295,11 @@ class TestGetConfigEndpoint:
         body = resp.json()
         assert "config" in body, "响应必须包含 'config' 字段"
         data = body["config"]
-        assert "persona" in data, "persona 节必须在响应中"
-        assert "general" in data
-        assert "context" in data
         assert "dashboard" in data
         assert "logging" in data
+        assert "tts" in data
+        # 人设归位 [agents.streamer.persona] 分组（嵌套呈现）
+        assert "persona" in data["agents"]["streamer"], "persona 必须在 agents.streamer 下"
 
     def test_get_config_includes_model_sections(self, client):
         resp = client.get("/api/v1/config")
@@ -319,7 +319,7 @@ class TestGetConfigEndpoint:
         resp = client.get("/api/v1/config")
         body = resp.json()
         data = body["config"]
-        assert data["persona"]["bot_name"] == "麦麦"
+        assert data["agents"]["streamer"]["persona"]["bot_name"] == "麦麦"
         assert data["llm"]["model"] == "gpt-4"
         assert data["llm"]["provider"] == "default"
         assert isinstance(data["llm_providers"], list)
@@ -367,12 +367,11 @@ class TestPatchConfigEndpoint:
         """v2.0.0：agents 段 PATCH → agents.toml。"""
         resp = client.patch(
             "/api/v1/config",
-            json={"key": "agents.streamer.planner_llm", "value": "llm"},
+            json={"key": "agents.streamer.persona.bot_name", "value": "新主播名"},
         )
         assert resp.status_code == 200, resp.text
         agents_content = (config_dir / "agents.toml").read_text(encoding="utf-8")
-        assert "planner_llm" in agents_content
-        assert '"llm"' in agents_content or "llm" in agents_content
+        assert "新主播名" in agents_content
 
     def test_patch_tools_writes_to_tools_toml(self, client, config_dir):
         """v2.0.0：tools 段 PATCH → tools.toml。"""
@@ -436,7 +435,7 @@ class TestPatchConfigEndpoint:
         updates = [
             ("persona.bot_name", "新名字", "core.toml"),
             ("llm.model", "claude-3", "model.toml"),
-            ("agents.streamer.planner_llm", "llm", "agents.toml"),
+            ("agents.streamer.persona.bot_name", "跨节主播名", "agents.toml"),
         ]
         for key, value, _expected_file in updates:
             resp = client.patch("/api/v1/config", json={"key": key, "value": value})
@@ -445,7 +444,7 @@ class TestPatchConfigEndpoint:
 
         assert "新名字" in (config_dir / "core.toml").read_text(encoding="utf-8")
         assert "claude-3" in (config_dir / "model.toml").read_text(encoding="utf-8")
-        assert "planner_llm" in (config_dir / "agents.toml").read_text(encoding="utf-8")
+        assert "跨节主播名" in (config_dir / "agents.toml").read_text(encoding="utf-8")
 
 
 # ===========================================================================
@@ -809,7 +808,7 @@ class TestBatchUpdateEndpoint:
         changes = [
             {"key": "persona.bot_name", "value": "跨文件A"},
             {"key": "llm.model", "value": "claude-3-batch"},
-            {"key": "agents.streamer.planner_llm", "value": "llm"},
+            {"key": "agents.streamer.persona.bot_name", "value": "批量主播名"},
         ]
         resp = self._post_batch(client, changes)
         assert resp.status_code == 200, resp.text
@@ -820,11 +819,11 @@ class TestBatchUpdateEndpoint:
 
         assert "跨文件A" in (config_dir / "core.toml").read_text(encoding="utf-8")
         assert "claude-3-batch" in (config_dir / "model.toml").read_text(encoding="utf-8")
-        assert "planner_llm" in (config_dir / "agents.toml").read_text(encoding="utf-8")
+        assert "批量主播名" in (config_dir / "agents.toml").read_text(encoding="utf-8")
 
         for fname in ("tools.toml", "memory.toml", "storage.toml", "background.toml"):
             content = (config_dir / fname).read_text(encoding="utf-8")
-            for v in ("跨文件A", "claude-3-batch", "planner_llm"):
+            for v in ("跨文件A", "claude-3-batch", "批量主播名"):
                 assert v not in content, f"{fname} 不应被批量端点影响"
 
     def test_batch_one_invalid_key_writes_nothing(self, client, config_dir):
@@ -990,7 +989,7 @@ class TestGetConfigSensitiveMasking:
     def test_non_sensitive_fields_unchanged(self, client):
         resp = client.get("/api/v1/config")
         body = resp.json()
-        assert body["config"]["persona"]["bot_name"] == "麦麦"
+        assert body["config"]["agents"]["streamer"]["persona"]["bot_name"] == "麦麦"
         assert body["config"]["llm"]["model"] == "gpt-4"
         assert body["config"]["llm_local"]["base_url"] == "http://localhost:11434/v1"
 
@@ -1033,7 +1032,7 @@ class TestSchemaSensitiveMasking:
 
     def test_schema_non_sensitive_field_value_preserved(self, client):
         fields = self._all_fields(client)
-        bot_name = next((f for f in fields if f["key"] == "persona.bot_name"), None)
-        assert bot_name is not None
-        assert bot_name.get("sensitive") is False
-        assert bot_name["value"] == "麦麦"
+        port = next((f for f in fields if f["key"] == "dashboard.port"), None)
+        assert port is not None
+        assert port.get("sensitive") is False
+        assert port["value"] == 60214

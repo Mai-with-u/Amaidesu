@@ -4,7 +4,7 @@
 "加内容 = 加包 + 配置，框架零改动" 的包设计。
 
 组成（全部自包含，无外部游戏特定依赖）：
-- :class:`TextAdvGameConfig` — Agent 配置 Schema（Pydantic）
+- :class:`TextAdvConfig` — Agent 配置 Schema（Pydantic；包内单一权威）
 - :class:`TextAdvGameAgentState` — 游戏内部状态（内容状态内部自由）
 - :class:`TextAdvToolProvider` — Agent 专属工具（``text_adv_choose_option`` / ``text_adv_get_story``）
 - :class:`TextAdvGameAgent` — 主 Agent（继承 BaseAgent）
@@ -18,9 +18,9 @@
 
 from src.agents.text_adv.agent import (
     TextAdvGameAgent,
-    TextAdvGameConfig,
     build_text_adv_agent,
 )
+from src.agents.text_adv.config import TextAdvConfig
 from src.agents.text_adv.state import TextAdvGameAgentState
 from src.agents.text_adv.tools import (
     TextAdvToolProvider,
@@ -30,7 +30,7 @@ from src.agents.text_adv.tools import (
 
 __all__ = [
     # 配置
-    "TextAdvGameConfig",
+    "TextAdvConfig",
     # 状态
     "TextAdvGameAgentState",
     # 工具

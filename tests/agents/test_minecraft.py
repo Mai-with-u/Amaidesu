@@ -1193,7 +1193,12 @@ def test_factory_rejects_legacy_game_name() -> None:
 
 
 def test_factory_minecraft_schema_defaults() -> None:
-    """空配置实例化 minecraft，行为参数取 Schema 默认值。"""
+    """空配置实例化 minecraft，行为参数取 Schema 默认值。
+
+    执行节奏参数（poll_interval_ms / wait_timeout_ms）保留在 MinecraftConfig
+    上以保 handoff 跟踪循环运行期可读；T26 工具线合流时改消费 `[tools.tasks]`
+    段同名字段（默认 2000 / 1_800_000 与本字段一致）。
+    """
     from src.modules.agents.factory import instantiate_agent
 
     agent = instantiate_agent(
@@ -1206,8 +1211,8 @@ def test_factory_minecraft_schema_defaults() -> None:
     )
     assert isinstance(agent, MinecraftAgent)
     assert agent.typed_config.max_steps == 50
-    assert agent.typed_config.execute_poll_interval_ms == 2000
-    assert agent.typed_config.execute_wait_timeout_ms == 1_800_000
+    assert agent.typed_config.poll_interval_ms == 2000
+    assert agent.typed_config.wait_timeout_ms == 1_800_000
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.streamer_agent import StreamerAgent, StreamerAgentConfig
+from src.agents.streamer.config import StreamerConfig
+from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -28,14 +29,12 @@ from src.modules.types.base.normalized_message import NormalizedMessage
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 
-
 def _make_payload(text: str = "主播好可爱") -> RoomMessagePayload:
     return RoomMessagePayload(
         message_type="danmaku",
         user=RoomMessageUser(id="u1", name="观众A"),
         content=text,
     )
-
 
 def _make_normalized(text: str = "主播好可爱") -> NormalizedMessage:
     return NormalizedMessage(
@@ -47,21 +46,17 @@ def _make_normalized(text: str = "主播好可爱") -> NormalizedMessage:
         user_nickname="观众A",
     )
 
-
 # ---------------------------------------------------------------------------
 # LLMResponse 工厂（Planner ReAct：chat_messages 完整形态 / Replyer：call_tools）
 # ---------------------------------------------------------------------------
-
 
 def _planner_tool_call(name: str, args: dict, call_id: str = "call_p1") -> dict:
     """构造 Planner 的完整 OpenAI 形态 tool_call。"""
     return {"id": call_id, "type": "function", "function": {"name": name, "arguments": args}}
 
-
 def _planner_react_response(tool_calls: list) -> LLMResponse:
     """构造 Planner 的 chat_messages 响应（完整 tool_calls；空列表 = 自然终止）。"""
     return LLMResponse(success=True, content="", tool_calls=tool_calls)
-
 
 def _replyer_response(speech: str, emotion: str = "happy", actions: list | None = None) -> LLMResponse:
     """构造 Replyer 的 call_tools 响应（tool_calls[0] = reply）。"""
@@ -81,16 +76,13 @@ def _replyer_response(speech: str, emotion: str = "happy", actions: list | None 
             )
     return LLMResponse(success=True, content="", tool_calls=tool_calls)
 
-
 def _replyer_failure(reason: str = "mock failure") -> LLMResponse:
     """构造 Replyer LLM 失败响应（success=False）。"""
     return LLMResponse(success=False, content=None, error=reason)
 
-
 # ---------------------------------------------------------------------------
 # Agent 装配（Planner ReAct + Replyer call_tools）
 # ---------------------------------------------------------------------------
-
 
 def _setup_agent(
     chat_responses: list | None = None,
@@ -125,17 +117,11 @@ def _setup_agent(
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
 
-    config = StreamerAgentConfig(
-        **{
-            "planner_llm": "llm_fast",
-            "replyer_llm": "llm",
-            "proactive_enabled": False,
-            "profanity_enabled": False,
-            "batch_window_ms": 100,
-            "tick_interval_ms": 50,
-            **(config_overrides or {}),
-        }
-    )
+    config = StreamerConfig.from_dict({
+        "batch": {"batch_window_ms": 100, "tick_interval_ms": 50},
+        "proactive": {"enabled": False},
+        **(config_overrides or {}),
+    })
 
     bus = EventBus()
     registry = ToolRegistry()
@@ -152,7 +138,6 @@ def _setup_agent(
     )
 
     return agent, bus, registry, llm, prompt
-
 
 @pytest.mark.asyncio
 async def test_decision_loop_danmaku_to_reply_provider():
@@ -198,7 +183,6 @@ async def test_decision_loop_danmaku_to_reply_provider():
     finally:
         await agent.cleanup()
 
-
 @pytest.mark.asyncio
 async def test_decision_loop_planner_no_reply_path():
     """Planner 自然终止（无 tool_calls）→ 不触发 Replyer.call_tools，静默收场。"""
@@ -211,14 +195,10 @@ async def test_decision_loop_planner_no_reply_path():
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
 
-    config = StreamerAgentConfig(
-        planner_llm="llm_fast",
-        replyer_llm="llm",
-        proactive_enabled=False,
-        profanity_enabled=False,
-        batch_window_ms=100,
-        tick_interval_ms=50,
-    )
+    config = StreamerConfig.from_dict({
+        "proactive": {"enabled": False},
+        "batch": {"batch_window_ms": 100, "tick_interval_ms": 50},
+    })
 
     bus = EventBus()
     registry = ToolRegistry()
@@ -252,7 +232,6 @@ async def test_decision_loop_planner_no_reply_path():
         assert stats["total_no_action"] >= 1
     finally:
         await agent.cleanup()
-
 
 @pytest.mark.asyncio
 async def test_decision_loop_proactive_tool_invoke():
@@ -289,13 +268,12 @@ async def test_decision_loop_proactive_tool_invoke():
     # 内容可能是 "cold" 或 ""（取决于状态）
     assert result is not None
 
-
 @pytest.mark.asyncio
 async def test_decision_loop_proactive_gated_until_live_started():
     """主动发言场次闸：开播前静默且 pending 信号保留，开播后首个 tick 触发。"""
     agent, bus, registry, llm, prompt = _setup_agent(
         chat_responses=[_planner_react_response([])],
-        config_overrides={"proactive_enabled": True},
+        config_overrides={"proactive": {"enabled": True}},
     )
 
     await agent.start()
@@ -319,13 +297,12 @@ async def test_decision_loop_proactive_gated_until_live_started():
     finally:
         await agent.cleanup()
 
-
 @pytest.mark.asyncio
 async def test_decision_loop_proactive_gated_after_live_ended():
     """下播收闸：live.ended 后主动发言静默，弹幕回复不受影响。"""
     agent, bus, registry, llm, prompt = _setup_agent(
         chat_responses=[_planner_react_response([])],
-        config_overrides={"proactive_enabled": True},
+        config_overrides={"proactive": {"enabled": True}},
     )
 
     await agent.start()
@@ -354,7 +331,6 @@ async def test_decision_loop_proactive_gated_after_live_ended():
     finally:
         await agent.cleanup()
 
-
 @pytest.mark.asyncio
 async def test_decision_loop_danmaku_reply_not_gated_by_live_session():
     """场次闸只挡主动发言分支：弹幕回复路径不受开播状态影响。"""
@@ -367,7 +343,6 @@ async def test_decision_loop_danmaku_reply_not_gated_by_live_session():
         assert llm.chat_messages.await_count >= 1, "未开播时弹幕回复不应被门控"
     finally:
         await agent.cleanup()
-
 
 @pytest.mark.asyncio
 async def test_decision_loop_parse_command_tool():
@@ -412,7 +387,6 @@ async def test_decision_loop_parse_command_tool():
     assert parsed["supported"] is False
     assert parsed["action"] is None
 
-
 @pytest.mark.asyncio
 async def test_decision_loop_handle_message_direct():
     """handle_message 直接入口（测试用）：跳过 EventBus，直接调 Agent。"""
@@ -422,14 +396,9 @@ async def test_decision_loop_handle_message_direct():
     prompt = MagicMock()
     prompt.render_safe = MagicMock(return_value="PROMPT")
 
-    config = StreamerAgentConfig(
-        planner_llm="llm_fast",
-        replyer_llm="llm",
-        proactive_enabled=False,
-        profanity_enabled=False,
-        batch_window_ms=100,
-        tick_interval_ms=50,
-    )
+    config = StreamerConfig.from_dict({
+        "proactive": {"enabled": False},
+    })
 
     agent = StreamerAgent(
         config=config,
@@ -445,7 +414,6 @@ async def test_decision_loop_handle_message_direct():
 
     # 统计：消息已入缓冲
     assert agent.get_statistics()["total_messages"] == 1
-
 
 class TestDecisionObservability:
     """决策可观测收口：每轮决策恰好一条 planner.decision + 阶段事件成对。"""

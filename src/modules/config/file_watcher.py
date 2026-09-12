@@ -2,7 +2,7 @@
 
 提供文件/目录变更的订阅与回调分发：``FileChange`` 变更记录、
 ``FileWatchSubscription`` 订阅句柄、``FileWatcher`` 监视器本体（含
-匹配过滤与回调失败统计）。尚未接入 ConfigService 的热重载链路。
+匹配过滤与回调失败统计）。ConfigService 订阅本监视器驱动配置热重载。
 """
 
 from dataclasses import dataclass
