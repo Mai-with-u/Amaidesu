@@ -548,11 +548,16 @@ async def create_app_components(
             tool_registry,
             tools_section,
         )
+        from src.modules.tools.bootstrap import CORE_MEMBER_COUNT
+
         core_succeeded = sum(1 for c in core_report.values() if c > 0)
         core_failed = [name for name, count in core_report.items() if count == 0]
+        core_skipped = CORE_MEMBER_COUNT - len(core_report)
+        skipped_note = f"，跳过（未配置）{core_skipped} 个" if core_skipped else ""
+        failed_note = f"，失败包: {core_failed}" if core_failed else ""
         logger.info(
-            f"核心工具包已绑定: 成功 {core_succeeded}/{len(core_report)}"
-            f"，合计新增 {sum(core_report.values())} 个工具" + (f"，失败包: {core_failed}" if core_failed else "")
+            f"核心工具包已绑定: 成功 {core_succeeded}/{len(core_report)}（尝试装配数）"
+            f"{skipped_note}，合计新增 {sum(core_report.values())} 个工具" + failed_note
         )
 
         # --- 记忆检索工具（LLM 主动 query_memory；[tools.memory] 域开关）---

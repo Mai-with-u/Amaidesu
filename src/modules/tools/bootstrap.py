@@ -162,8 +162,9 @@ def bind_core_tools(
             传 ``None`` 表示所有分类走"空配置"，一律不装配
 
     Returns:
-        ``{member_key: new_tool_count}`` 报告。失败 / 跳过成员
-        ``count=0``。
+        ``{member_key: new_tool_count}`` 报告，只含**实际尝试装配**的成员
+        （未启用的成员不进报告，由 INFO 日志记"跳过"）；报告内 ``count=0``
+        即尝试装配但失败。
     """
     if not isinstance(registry, ToolRegistry):
         raise TypeError(f"bind_core_tools: registry 必须是 ToolRegistry 实例，得到 {type(registry).__name__}")
@@ -175,8 +176,8 @@ def bind_core_tools(
     # --- 按分类开关装配 ---
     for (domain, key), description, loader in _DOMAIN_MEMBERS:
         if not _domain_enabled(tools_cfg, domain, key):
-            # 分类未启用：跳过（不记 ERROR，预期行为）
-            report[key] = 0
+            # 分类未启用：跳过（预期行为，不入报告；INFO 可见）
+            logger.info(f"bind_core_tools: '{key}' 未启用，跳过（{description}）")
             continue
 
         provider_config = _resolve_domain_config(tools_cfg, domain, key)
@@ -212,7 +213,10 @@ def bind_core_tools(
     return report
 
 
+CORE_MEMBER_COUNT = len(_DOMAIN_MEMBERS)
+
 __all__ = [
+    "CORE_MEMBER_COUNT",
     "bind_core_tools",
     "_DOMAIN_MEMBERS",
 ]
