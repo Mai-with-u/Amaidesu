@@ -241,14 +241,12 @@ def merge_toml_documents(
     template: tomlkit.TOMLDocument,
     user_config: tomlkit.TOMLDocument,
     array_merge_config: Optional[Dict[str, str]] = None,
-    deleted_keys: Optional[Dict[str, set]] = None,
 ) -> tomlkit.TOMLDocument:
     """合并两个 TOML 文档，保留用户修改和注释
 
     策略:
     - 模板新增键 → 添加
     - 用户修改的值 → 保留
-    - 用户删除的键 → 保持删除
     - 用户自定义字段 → 保留
     - 数组 → 按策略配置合并
 
@@ -256,13 +254,11 @@ def merge_toml_documents(
         template: 模板文档（tomlkit 对象）
         user_config: 用户配置文档（tomlkit 对象）
         array_merge_config: 数组合并策略配置
-        deleted_keys: 用户删除的键记录
 
     Returns:
         合并后的 tomlkit 文档
     """
     array_merge_config = array_merge_config or {}
-    deleted_keys = deleted_keys or {}
 
     # 深拷贝模板作为基础
     result = copy.deepcopy(template)
@@ -273,7 +269,6 @@ def merge_toml_documents(
         user_config,
         "",
         array_merge_config,
-        deleted_keys,
     )
 
     return result
@@ -284,7 +279,6 @@ def _merge_dicts(
     user: Dict[str, Any],
     path: str,
     array_merge_config: Dict[str, str],
-    deleted_keys: Dict[str, set],
 ) -> Dict[str, Any]:
     """递归合并字典
 
@@ -293,7 +287,6 @@ def _merge_dicts(
         user: 用户配置字典
         path: 当前路径（点分隔）
         array_merge_config: 数组合并策略
-        deleted_keys: 删除键记录
 
     Returns:
         合并后的字典
@@ -303,10 +296,6 @@ def _merge_dicts(
     # 处理模板中的键
     for key, template_value in template.items():
         current_path = f"{path}.{key}" if path else key
-
-        # 检查是否被用户删除
-        if current_path in deleted_keys.get(path, set()):
-            continue
 
         if key not in user:
             # 新增键
@@ -322,7 +311,6 @@ def _merge_dicts(
                     user_value,
                     current_path,
                     array_merge_config,
-                    deleted_keys,
                 )
             elif isinstance(template_value, list) and isinstance(user_value, list):
                 # 按策略合并数组
@@ -406,30 +394,6 @@ def ensure_meta_section(document: tomlkit.TOMLDocument) -> None:
         document.add("meta", tomlkit.table())
         # 添加注释
         document["meta"].add(tomlkit.comment("配置文件元信息"))
-
-
-def get_deleted_keys(document: tomlkit.TOMLDocument) -> Dict[str, list]:
-    """获取用户删除的键记录"""
-    if "meta" in document and "deleted_keys" in document["meta"]:
-        return document["meta"]["deleted_keys"]
-    return {}
-
-
-def set_deleted_keys(document: tomlkit.TOMLDocument, deleted_keys: Dict[str, list]) -> None:
-    """设置用户删除的键记录"""
-    ensure_meta_section(document)
-    document["meta"]["deleted_keys"] = deleted_keys
-
-
-def mark_key_as_deleted(document: tomlkit.TOMLDocument, section: str, key: str) -> None:
-    """标记某个键为已删除"""
-    ensure_meta_section(document)
-    if "deleted_keys" not in document["meta"]:
-        document["meta"]["deleted_keys"] = tomlkit.table()
-    if section not in document["meta"]["deleted_keys"]:
-        document["meta"]["deleted_keys"][section] = tomlkit.array()
-    if key not in document["meta"]["deleted_keys"][section]:
-        document["meta"]["deleted_keys"][section].append(key)
 
 
 def compare_versions(template_version: str, config_version: str) -> bool:

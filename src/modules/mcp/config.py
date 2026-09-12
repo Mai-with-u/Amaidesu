@@ -64,25 +64,26 @@ class McpServerConfig(BaseModel):
         default="http",
         description="传输方式：http（Streamable HTTP）/ stdio（子进程）",
     )
-    url: Optional[str] = Field(
-        default=None,
-        description="http 传输的端点 URL（如 http://127.0.0.1:8766/mcp）",
+    url: str = Field(
+        default="",
+        description="http 传输的端点 URL（如 http://127.0.0.1:8766/mcp）；空串 = 未设置",
     )
-    command: Optional[str] = Field(default=None, description="stdio 传输的启动命令")
+    command: str = Field(default="", description="stdio 传输的启动命令；空串 = 未设置")
     args: List[str] = Field(default_factory=list, description="stdio 传输的命令行参数")
     env: Dict[str, str] = Field(default_factory=dict, description="stdio 传输的环境变量")
     headers: Dict[str, str] = Field(default_factory=dict, description="http 传输附加请求头")
-    prefix: Optional[str] = Field(
-        default=None,
-        description="工具名前缀（默认 <server名>_）；防与内置工具重名",
+    prefix: str = Field(
+        default="",
+        description="工具名前缀（空串 = 用默认 <server名>_）；防与内置工具重名",
     )
     reconnect: bool = Field(default=True, description="连接中断后自动重连")
     timeout_seconds: float = Field(default=30.0, ge=1.0, description="连接超时（秒）")
 
     @field_validator("url")
     @classmethod
-    def _check_url(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and not (v.startswith("http://") or v.startswith("https://")):
+    def _check_url(cls, v: str) -> str:
+        # 空串 = 未设置（http 传输未配置），放行
+        if v and not (v.startswith("http://") or v.startswith("https://")):
             raise ValueError("url 必须以 http:// 或 https:// 开头")
         return v
 

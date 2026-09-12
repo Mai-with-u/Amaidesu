@@ -53,7 +53,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from pydantic import ConfigDict, Field
 
@@ -195,28 +195,29 @@ class ToolsConfig(BaseConfig):
     )
 
     # 工具提供者开关（单一事实源；动态子段：avatar.<name> / studio.<name>）
-    avatar: Optional[Dict[str, AvatarProviderConfig]] = Field(
+    # 禁 None 政策：段缺省 = 空容器 / 关态实例，全量写出可往返
+    avatar: Dict[str, AvatarProviderConfig] = Field(
         default_factory=dict,
         description="虚拟形象分类（每形象一实例：vts / warudo / vrchat ...，enabled 控制各形象工具）",
         json_schema_extra={"x-ui-type": "object"},
     )
-    studio: Optional[Dict[str, StudioProviderConfig]] = Field(
+    studio: Dict[str, StudioProviderConfig] = Field(
         default_factory=dict,
         description="演播室分类（obs 等，enabled 控制各演播工具）",
         json_schema_extra={"x-ui-type": "object"},
     )
-    vision: Optional[VisionProviderConfig] = Field(
-        default=None,
-        description="视觉基础模块（工具出口 look_at_screen；enabled=true 时组合根注入 Pillow 后端）",
+    vision: VisionProviderConfig = Field(
+        default_factory=lambda: VisionProviderConfig(enabled=False),
+        description="视觉基础模块（工具出口 look_at_screen；enabled=true 时组合根注入 Pillow 后端；缺省关态）",
         json_schema_extra={"x-ui-type": "object"},
     )
-    memory: Optional[MemoryProviderConfig] = Field(
-        default=None,
+    memory: MemoryProviderConfig = Field(
+        default_factory=MemoryProviderConfig,
         description="记忆分类（工具出口 query_memory；默认 enabled=true）",
         json_schema_extra={"x-ui-type": "object"},
     )
-    mcp: Optional[McpProviderConfig] = Field(
-        default=None,
+    mcp: McpProviderConfig = Field(
+        default_factory=McpProviderConfig,
         description="通用 MCP 外部工具源（config.servers 声明连接；enabled=true 时注册其工具）",
         json_schema_extra={"x-ui-type": "object"},
     )

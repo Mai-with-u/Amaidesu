@@ -95,10 +95,11 @@ def test_agent_enabled_check_based_on_list_v2(temp_base_dir):
 
     取值必须是 AgentType 已知名（streamer/minecraft/text_adv）——
     未知名在校验阶段硬错（校验硬错语义，无 raw 降级）。
+    文件必须自带 [meta].version（每文件版本硬性要求）。
     """
     _write_agents_config(
         temp_base_dir,
-        '[agents]\nenabled = ["streamer", "minecraft"]\n',
+        '[meta]\nversion = "2.0.31"\n\n[agents]\nenabled = ["streamer", "minecraft"]\n',
     )
 
     config_service = ConfigService(base_dir=temp_base_dir)

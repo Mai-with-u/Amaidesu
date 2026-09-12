@@ -63,6 +63,19 @@ _CONFIG_FILE_TO_SCOPE: Dict[str, str] = {
     "infra.toml": "infra",
 }
 
+# reload 策略（scope 级声明）：
+# - "restart"：装配类配置（Agent/采集器实例、provider 连接、端口、
+#   disabled_tools 等）——重载后仅日志"待重启"，已构造实例不热注入
+# - "hot"：基础设施标量——经 ConfigProxy 实时拉取 _main_config 即时生效
+_SCOPE_RELOAD_POLICY: Dict[str, str] = {
+    "agents": "restart",
+    "collectors": "restart",
+    "tools": "restart",
+    "model": "restart",
+    "storage": "restart",
+    "infra": "hot",
+}
+
 
 class ConfigService:
     """
@@ -546,17 +559,27 @@ class ConfigService:
             try:
                 self._main_config = self._load_main_config_from_disk()
             except Exception as exc:
-                self.logger.error(f"配置重载失败: {exc}")
+                # 热重载失败语义：保留旧配置继续运行（不打断直播）
+                self.logger.error(f"配置重载失败（保留旧配置继续运行）: {exc}")
                 return False
 
             self._reload_revision += 1
             self.logger.info(f"配置已重载 (revision={self._reload_revision}, scopes={list(scopes)})")
 
-            for callback in list(self._reload_callbacks):
-                try:
-                    await self._invoke_reload_callback(callback, scopes)
-                except Exception as exc:
-                    self.logger.warning(f"reload 回调执行失败: {exc}")
+            # 按策略分流：restart 段仅提示待重启；hot 段经 ConfigProxy 即时生效
+            hot_scopes = tuple(s for s in scopes if _SCOPE_RELOAD_POLICY.get(s) == "hot")
+            restart_scopes = tuple(s for s in scopes if _SCOPE_RELOAD_POLICY.get(s) != "hot")
+            if restart_scopes:
+                self.logger.warning(f"以下配置段含装配类变更，需重启进程后完全生效: {list(restart_scopes)}")
+
+            if hot_scopes:
+                for callback in list(self._reload_callbacks):
+                    try:
+                        await self._invoke_reload_callback(callback, hot_scopes)
+                    except Exception as exc:
+                        self.logger.warning(f"reload 回调执行失败: {exc}")
+            else:
+                self.logger.debug("reload_config: 无 hot 段变更，跳过回调分发")
         return True
 
     def _load_main_config_from_disk(self) -> Dict[str, Any]:
@@ -578,10 +601,17 @@ class ConfigService:
         self,
         changes: Sequence["FileChange"],
     ) -> None:
-        """FileWatcher 回调入口: 解析 scopes → 触发 reload_config。"""
+        """FileWatcher 回调入口: 自写抑制过滤 → 解析 scopes → reload_config。"""
         if not changes:
             return
-        scopes = self._resolve_changed_scopes(changes)
+        from src.modules.config.self_write_guard import consume_self_write
+
+        # 自写抑制：配置管线自身写盘产生的事件不触发重载（防重入放大）
+        external = [c for c in changes if not consume_self_write(c.path)]
+        if not external:
+            self.logger.debug("_handle_reload: 变更全部来自配置管线自写，跳过重载")
+            return
+        scopes = self._resolve_changed_scopes(external)
         if not scopes:
             return
         await self.reload_config(changed_scopes=scopes)

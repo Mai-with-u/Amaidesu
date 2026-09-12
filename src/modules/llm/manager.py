@@ -142,8 +142,8 @@ class _ResolvedProfile(BaseModel):
     slow_threshold_ms: int
     selection_strategy: str  # sequential / balance / random
     seed: int  # random 策略用；0 表示不固定
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
+    temperature: float = 0.3
+    max_tokens: int = 4096
     models: List[_ResolvedModel] = Field(default_factory=list)
 
     model_config = {"frozen": True}
@@ -329,8 +329,8 @@ class LLMManager:
             slow_threshold_ms=int(pcfg.get("slow_threshold_ms", 15_000) or 15_000),
             selection_strategy=strategy_name,
             seed=seed,
-            temperature=pcfg.get("temperature"),
-            max_tokens=pcfg.get("max_tokens"),
+            temperature=pcfg.get("temperature", 0.3),
+            max_tokens=pcfg.get("max_tokens", 4096),
             models=resolved_models,
         )
 
@@ -342,8 +342,8 @@ class LLMManager:
         *,
         client_type: Optional[str] = None,
         system_message: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
     ) -> LLMResponse:
         """聊天调用（按用途 profile 名走 model_list 选择 + 故障切换）"""
         profile_name = self._resolve_profile_name(client_type)
@@ -365,8 +365,8 @@ class LLMManager:
         messages: List[Dict[str, Any]],
         *,
         client_type: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
         tools: Optional[List[Dict[str, Any]]] = None,
         on_delta: Optional[Callable[[str, str], None]] = None,
     ) -> LLMResponse:
@@ -740,14 +740,12 @@ class LLMManager:
         """
         call_kwargs = dict(kwargs)
         call_kwargs["model"] = model_identifier
+        # profile 生成参数为具体值（禁 None）：调用方未显式给值时用 profile 档位
+        profile = self._get_profile(profile_name)
         if call_kwargs.get("temperature") is None:
-            profile = self._get_profile(profile_name)
-            if profile.temperature is not None:
-                call_kwargs["temperature"] = profile.temperature
+            call_kwargs["temperature"] = profile.temperature
         if call_kwargs.get("max_tokens") is None:
-            profile = self._get_profile(profile_name)
-            if profile.max_tokens is not None:
-                call_kwargs["max_tokens"] = profile.max_tokens
+            call_kwargs["max_tokens"] = profile.max_tokens
 
         max_retries = int(provider_cfg.get("max_retries", self._retry_config.max_retries) or 0)
         base_delay = float(provider_cfg.get("retry_delay", self._retry_config.base_delay) or 0.0)

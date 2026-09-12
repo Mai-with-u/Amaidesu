@@ -148,7 +148,10 @@ class TestReloadConfig:
 
     @pytest.mark.asyncio
     async def test_reload_invokes_callbacks_with_scopes(self, initialized_service):
-        """reload_config 必须用 changed_scopes 调用所有已注册回调"""
+        """reload_config 必须用 hot 段 scopes 调用所有已注册回调
+
+        回调只对 hot 段分发（restart 段仅记"待重启"日志）。
+        """
         calls = []
 
         def cb1(scopes):
@@ -160,10 +163,10 @@ class TestReloadConfig:
         initialized_service.register_reload_callback(cb1)
         initialized_service.register_reload_callback(cb2)
 
-        await initialized_service.reload_config(changed_scopes=["agents", "model"])
+        await initialized_service.reload_config(changed_scopes=["infra"])
 
-        assert ("cb1", ["agents", "model"]) in calls
-        assert ("cb2", ["agents", "model"]) in calls
+        assert ("cb1", ["infra"]) in calls
+        assert ("cb2", ["infra"]) in calls
 
     @pytest.mark.asyncio
     async def test_reload_supports_callback_without_scopes(self, initialized_service):
@@ -190,9 +193,9 @@ class TestReloadConfig:
 
         initialized_service.register_reload_callback(async_cb)
 
-        await initialized_service.reload_config(changed_scopes=["model"])
+        await initialized_service.reload_config(changed_scopes=["infra"])
 
-        assert ("async", ["model"]) in calls
+        assert ("async", ["infra"]) in calls
 
     @pytest.mark.asyncio
     async def test_reload_callback_exception_does_not_break_others(self, initialized_service):
@@ -248,7 +251,11 @@ class TestHandleReload:
     async def test_handle_reload_resolves_scopes_from_filenames(
         self, initialized_service, config_dir_with_toml
     ):
-        """FileChange 列表的 path.name 应映射到 scope 名 (core/model/...)"""
+        """FileChange 的 path.name → scope 映射；restart 段不分发回调
+
+        agents/model 均为 restart 策略：reload 成功但回调不触发
+        （回调仅对 hot 段分发——T18 reload 策略契约）。
+        """
         calls = []
 
         def cb(scopes):
@@ -264,10 +271,8 @@ class TestHandleReload:
 
         await initialized_service._handle_reload(changes)
 
-        assert len(calls) == 1
-        scopes_received = calls[0]
-        assert "agents" in scopes_received
-        assert "model" in scopes_received
+        # reload 本身成功；restart 段不分发回调
+        assert calls == []
 
     @pytest.mark.asyncio
     async def test_handle_reload_ignores_unknown_files(self, initialized_service, tmp_path):
@@ -431,10 +436,14 @@ class TestHotReloadEndToEnd:
             await initialized_service.stop_file_watcher()
 
     @pytest.mark.asyncio
-    async def test_reload_callback_fires_on_file_change(
+    async def test_reload_callback_fires_on_hot_scope_change(
         self, initialized_service, config_dir_with_toml
     ):
-        """FileWatcher 检测到变更后, 已注册的回调必须被调用"""
+        """hot 段（infra）有效变更 → 回调被调用
+
+        reload 策略契约：回调只对 hot 段分发（经 ConfigProxy 即时生效）；
+        restart 段变更仅记"待重启"日志，不触发回调。
+        """
         callback_called = asyncio.Event()
         received_scopes: list[Sequence[str]] = []
 
@@ -448,14 +457,48 @@ class TestHotReloadEndToEnd:
         await asyncio.sleep(0.3)
 
         try:
-            # 触发文件变更
-            (config_dir_with_toml / "agents.toml").write_text(
-                "# touched\n", encoding="utf-8"
+            # 触发 hot 段文件变更（追加注释行，内容仍为合法 TOML）
+            infra = config_dir_with_toml / "infra.toml"
+            infra.write_text(
+                infra.read_text(encoding="utf-8-sig") + "\n# touched\n", encoding="utf-8-sig"
             )
 
             # 等待回调触发 (最多 10s)
             await asyncio.wait_for(callback_called.wait(), timeout=10.0)
-            assert len(received_scopes) >= 1
+            assert received_scopes == [["infra"]]
+        finally:
+            await initialized_service.stop_file_watcher()
+
+    @pytest.mark.asyncio
+    async def test_invalid_change_keeps_old_config(
+        self, initialized_service, config_dir_with_toml
+    ):
+        """restart 段写入非法内容（缺版本号）→ 旧配置保留 + 回调不触发
+
+        热重载失败语义：校验硬错被 reload 捕获并大声记日志，内存配置
+        保持旧值继续运行（不打断直播）。
+        """
+        callback_called = asyncio.Event()
+
+        def cb(scopes):
+            callback_called.set()
+
+        initialized_service.register_reload_callback(cb)
+
+        old_agents = initialized_service.get_section("agents", {})
+
+        await initialized_service.start_file_watcher()
+        await asyncio.sleep(0.3)
+
+        try:
+            # 写入缺 [meta].version 的非法内容
+            (config_dir_with_toml / "agents.toml").write_text("# broken\n", encoding="utf-8")
+
+            # 给 watcher 留出轮询窗口：不应有任何回调
+            await asyncio.sleep(1.5)
+            assert not callback_called.is_set()
+            # 内存配置保留旧值
+            assert initialized_service.get_section("agents", {}) == old_agents
         finally:
             await initialized_service.stop_file_watcher()
 

@@ -3,8 +3,7 @@
 从 config/ 目录加载 6 个 TOML 配置文件，按固定阶段序执行：
 
     ① read_all_raw      6 文件全读为 dict（缺失文件先行按 Schema 生成）
-    ② 跨文件钩子        声明 target_file 的钩子，双写 + 双版本同升
-    ③ 每文件钩子        单文件内的 dict 原地变换
+    ②③ 版本推进 + 升级钩子  每文件链跑区间钩子；跨文件钩子双写 + 双版本同升
     ④ Pydantic 校验     硬错——类型违约直接抛出（含字段 dotted path）
     ⑤ 漂移写回          全量写出 + 备份；采集器子段按注册表校验与补全
     ⑥ 合并视图          剥离 per-file ``[meta]`` 后按 scope 合并
@@ -32,7 +31,7 @@ from __future__ import annotations
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import tomlkit
 from tomlkit.items import AoT
@@ -42,9 +41,11 @@ from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_v
 from src.modules.config.agents_schemas import AgentsRootConfig
 from src.modules.config.collectors_schemas import CollectorsRootConfig
 from src.modules.config.tools_schemas import ToolsRootConfig
-from src.modules.config.model_schemas import ModelConfig
+from src.modules.config.errors import ConfigValidationError
+from src.modules.config.model_schemas import REQUIRED_PROFILE_NAMES, ModelConfig, ModelRootConfig
 from src.modules.config.storage_schemas import StorageRootConfig
 from src.modules.config.infra_schemas import InfraRootConfig
+from src.modules.config.self_write_guard import mark_self_write
 from src.modules.logging import get_logger
 
 logger = get_logger("MultiFileLoader")
@@ -89,16 +90,6 @@ _FILE_COMMENTS: dict[str, str] = {
     "infra.toml": "基础设施配置 - Amaidesu",
 }
 
-# ---------------------------------------------------------------------------
-# 钩子注册表（当前为空表；钩子协议：原地改 dict、返回变更路径列表、幂等）
-# - 每文件钩子：签名 (file_name, data: dict) -> list[str]
-# - 跨文件钩子：签名 (all_data: dict[str, dict]) -> list[str]；声明 target_file
-#   的跨文件变更由调度器双写并同步推进两文件版本
-# ---------------------------------------------------------------------------
-
-FILE_HOOKS: dict[str, tuple[Callable[..., list[str]], ...]] = {fname: () for fname in _CONFIG_FILES}
-CROSS_FILE_HOOKS: tuple[Callable[..., list[str]], ...] = ()
-
 
 def _backup_file(file_path: Path, config_dir: Path, batch_id: str | None = None) -> Path | None:
     """备份配置文件到 config/old/ 目录
@@ -127,12 +118,10 @@ def _backup_file(file_path: Path, config_dir: Path, batch_id: str | None = None)
 
 
 def _populate_fields_table(table: Any, item: BaseModel) -> None:
-    """把 BaseModel 实例的字段填入 tomlkit table（None 值跳过）。"""
+    """把 BaseModel 实例的字段填入 tomlkit table（禁 None：所有字段一律落盘）。"""
     sub_config = item.model_dump()
     for sub_name, sub_info in type(item).model_fields.items():
         value = sub_config.get(sub_name)
-        if value is None:
-            continue
         if sub_info.description:
             table.add(tomlkit.comment(sub_info.description))
         _set_toml_value(table, sub_name, value)
@@ -167,9 +156,16 @@ def _generate_root_toml(file_name: str, schema_cls: type[BaseConfig]) -> str:
             doc[field_name] = AoT(tables)
             doc.add(tomlkit.nl())
             continue
+        elif isinstance(value, dict):
+            # dict 子段（如 [llm_profiles.<name>]）——值可能是 BaseConfig
+            # 模型，交给统一转换器递归展开为表
+            table = _dict_to_toml_table(value)
+            if field_info.description and value:
+                doc.add(tomlkit.comment(field_info.description))
+            doc[field_name] = table
+            doc.add(tomlkit.nl())
+            continue
         else:
-            if value is None:
-                continue
             if field_info.description:
                 doc.add(tomlkit.comment(field_info.description))
             doc[field_name] = value
@@ -185,7 +181,7 @@ def _generate_root_toml(file_name: str, schema_cls: type[BaseConfig]) -> str:
 
 
 def _table_from_model(instance: BaseModel) -> Any:
-    """把 BaseModel 实例序列化为 tomlkit Table（值 + description 注释，None 跳过）。
+    """把 BaseModel 实例序列化为 tomlkit Table（值 + description 注释；禁 None）。
 
     dict 值（free-form 子段）不加容器级 description 注释——注释插在父表流
     会与子表表头错位，且破坏按表头定位键值的文本消费者；子段内字段的
@@ -194,8 +190,6 @@ def _table_from_model(instance: BaseModel) -> Any:
     table = tomlkit.table()
     for sub_name, sub_info in type(instance).model_fields.items():
         value = getattr(instance, sub_name)
-        if value is None:
-            continue
         if isinstance(value, BaseModel):
             inner = _table_from_model(value)
         elif isinstance(value, list) and value and all(isinstance(v, BaseModel) for v in value):
@@ -206,7 +200,12 @@ def _table_from_model(instance: BaseModel) -> Any:
             inner = _dict_to_toml_table(value)
         else:
             inner = value
-        if sub_info.description:
+        # 嵌套表（BaseModel / AoT）由 tomlkit 渲染到父段之后，行内注释会
+        # 悬空在后续标量字段之前——仅标量与 free-form dict 字段加注释
+        is_nested_table = isinstance(value, BaseModel) or (
+            isinstance(value, list) and value and all(isinstance(v, BaseModel) for v in value)
+        )
+        if sub_info.description and not is_nested_table:
             table.add(tomlkit.comment(sub_info.description))
         table[sub_name] = inner
     return table
@@ -232,6 +231,7 @@ def _dict_to_toml_table(data: dict[str, Any]) -> Any:
 def _serialize_instance_to_toml(schema_cls: type[BaseModel], instance: BaseModel) -> str:
     """把配置实例序列化为多文件格式 TOML（顶层字段即顶层表/键值）。
 
+    禁 None：所有 Schema 字段一律落盘（空值以空容器/空串形态写出）。
     ``extra="allow"`` 的 Schema（如 CollectorsRootConfig）携带的动态键
     （``[collectors.<name>]`` 子段）同样输出——只遍历 model_fields 会把
     子段静默丢弃，属于数据丢失缺陷。
@@ -239,8 +239,6 @@ def _serialize_instance_to_toml(schema_cls: type[BaseModel], instance: BaseModel
     doc = tomlkit.document()
     for field_name, field_info in schema_cls.model_fields.items():
         value = getattr(instance, field_name)
-        if value is None:
-            continue
         if isinstance(value, BaseModel):
             table = _table_from_model(value)
         elif isinstance(value, list) and value and all(isinstance(v, BaseModel) for v in value):
@@ -263,8 +261,6 @@ def _serialize_instance_to_toml(schema_cls: type[BaseModel], instance: BaseModel
 
     extras = getattr(instance, "__pydantic_extra__", None) or {}
     for key, value in extras.items():
-        if value is None:
-            continue
         if isinstance(value, dict):
             doc[key] = _dict_to_toml_table(value)
         else:
@@ -281,18 +277,32 @@ def _write_back_schema_file(
     *,
     batch_id: str | None = None,
 ) -> Path | None:
-    """漂移写回：备份旧文件 → 按校验后实例全量序列化写盘。"""
+    """漂移写回：内容不变短路 → 备份旧文件 → 全量序列化写盘 + 压自写标记。
+
+    Returns:
+        备份路径；内容未变化（短路，未写盘）时为 None。
+    """
     file_path = config_dir / file_name
     content = _serialize_instance_to_toml(schema_cls, instance)
-    backup_path = _backup_file(file_path, config_dir, batch_id=batch_id)
+
     has_bom = False
     try:
         with open(file_path, "rb") as f:
             has_bom = f.read(3) == b"\xef\xbb\xbf"
     except OSError:
         pass
-    encoding = "utf-8-sig" if has_bom else "utf-8"
-    file_path.write_text(content, encoding=encoding)
+    new_bytes = content.encode("utf-8-sig" if has_bom else "utf-8")
+
+    # 内容不变短路：不写盘、不备份，避免 mtime 噪音与重写放大
+    try:
+        if file_path.read_bytes() == new_bytes:
+            return None
+    except OSError:
+        pass
+
+    backup_path = _backup_file(file_path, config_dir, batch_id=batch_id)
+    mark_self_write(file_path)
+    file_path.write_bytes(new_bytes)
     return backup_path
 
 
@@ -357,9 +367,9 @@ def _validate_collectors_sections(
     root_instance: CollectorsRootConfig,
     report: DriftReport,
 ) -> None:
-    """按组件注册表校验采集器子段（阶段④ 的 collectors 分支）。
+    """按组件注册表校验采集器子段与 enabled 名单（阶段④ 的 collectors 分支）。
 
-    - 子段名不在注册表 → 硬错（Typo 防护，列出合法名单）
+    - 子段名 / enabled 名不在注册表 → 硬错（Typo 防护，列出合法名单）
     - 在册子段 → 包内 ConfigSchema 校验 + 漂移检测；漂移路径以
       ``<采集器名>.<字段>`` 前缀并入宿主文件报告
     - 校验后的干净子段 dict 回填 root 实例的 extras，供阶段⑤ 全量写回
@@ -368,25 +378,59 @@ def _validate_collectors_sections(
     # 而部分组件包（如采集器）转而引用本模块的加载能力
     from src.modules.config.registry import COMPONENT_SCHEMAS
 
+    known = sorted(COMPONENT_SCHEMAS)
+    for enabled_name in root_instance.enabled:
+        if enabled_name not in COMPONENT_SCHEMAS:
+            raise ConfigValidationError(
+                "collectors.toml",
+                "collectors.enabled",
+                f"未注册的采集器名 {enabled_name!r}（合法名单：{known}）",
+            )
+
     extras = root_instance.__pydantic_extra__ or {}
     for name in sorted(extras):
         schema_cls = COMPONENT_SCHEMAS.get(name)
         if schema_cls is None:
-            raise ValueError(
-                f"collectors.toml 含未注册的采集器段 [{name}]"
-                f"（合法名单：{sorted(COMPONENT_SCHEMAS)}）；"
-                f"新采集器需在其包内定义 ConfigSchema 并登记注册表"
+            raise ConfigValidationError(
+                "collectors.toml",
+                f"collectors.{name}",
+                f"未注册的采集器段（合法名单：{known}）；新采集器需在其包内定义 ConfigSchema 并登记注册表",
             )
         sub_raw = extras[name]
         if not isinstance(sub_raw, dict):
-            raise ValueError(f"collectors.toml 段 [{name}] 期望 TOML 表（dict），实际 {type(sub_raw).__name__}")
+            raise ConfigValidationError(
+                "collectors.toml",
+                f"collectors.{name}",
+                f"期望 TOML 表（dict），实际 {type(sub_raw).__name__}",
+            )
         try:
             sub_instance, sub_report = schema_cls.from_dict_with_drift_check(sub_raw)
         except Exception as exc:
-            raise ValueError(f"collectors.toml 段 [{name}] 校验失败: {exc}") from exc
+            raise ConfigValidationError("collectors.toml", f"collectors.{name}", f"子段校验失败: {exc}") from exc
         report.missing.extend(f"{name}.{m}" for m in sub_report.missing)
         report.redundant.extend(f"{name}.{r}" for r in sub_report.redundant)
         root_instance.__pydantic_extra__[name] = sub_instance.model_dump()
+
+
+def _validate_required_llm_profiles(instance: BaseConfig) -> None:
+    """``[llm_profiles]`` 必填 6 成员校验（加载期，缺失即硬错）"""
+    profiles = getattr(instance, "llm_profiles", None)
+    if not isinstance(profiles, dict):
+        return
+    missing = [name for name in REQUIRED_PROFILE_NAMES if name not in profiles]
+    if missing:
+        raise ConfigValidationError(
+            "model.toml",
+            "llm_profiles",
+            f"缺少必填用途 profile：{missing}（必填 6 成员：{list(REQUIRED_PROFILE_NAMES)}）",
+        )
+    for name in REQUIRED_PROFILE_NAMES:
+        if not profiles[name].model_list:
+            raise ConfigValidationError(
+                "model.toml",
+                f"llm_profiles.{name}.model_list",
+                "model_list 为空（至少引用 1 个模型名）",
+            )
 
 
 def _validate_file(file_name: str, raw_data: dict[str, Any]) -> tuple[BaseConfig, DriftReport]:
@@ -396,13 +440,21 @@ def _validate_file(file_name: str, raw_data: dict[str, Any]) -> tuple[BaseConfig
         (校验后的实例（含补默认/剥冗余）, 漂移报告)
 
     Raises:
-        Exception: 类型违约 / 未注册采集器段等——原样向上抛出，不做降级。
+        ConfigValidationError: 类型违约 / 必填缺失 / 未注册名等——统一硬错载体，
+            携带文件名与字段 dotted path，无降级路径。
     """
     schema_cls = _ROOT_SCHEMAS[file_name]
-    instance, report = schema_cls.from_dict_with_drift_check(raw_data)
+    try:
+        instance, report = schema_cls.from_dict_with_drift_check(raw_data)
+    except ConfigValidationError:
+        raise
+    except Exception as exc:
+        raise ConfigValidationError(file_name, "", f"Schema 校验失败: {exc}") from exc
     _filter_optional_container_missing(report, schema_cls)
     if isinstance(instance, CollectorsRootConfig):
         _validate_collectors_sections(instance, report)
+    if isinstance(instance, ModelRootConfig):
+        _validate_required_llm_profiles(instance)
     return instance, report
 
 
@@ -455,23 +507,17 @@ def load_config_dir(
     raw_docs: dict[str, dict[str, Any]] = {fname: _read_toml_dict(config_dir / fname) for fname in _CONFIG_FILES}
     logger.info("[加载管线] 阶段① read_all_raw 完成（6 文件）")
 
-    # --- 阶段② 跨文件钩子 ---
-    if CROSS_FILE_HOOKS:
-        for hook in CROSS_FILE_HOOKS:
-            hook(raw_docs)
-        logger.info(f"[加载管线] 阶段② 跨文件钩子执行 {len(CROSS_FILE_HOOKS)} 个")
-    else:
-        logger.info("[加载管线] 阶段② 跨文件钩子：注册表为空，跳过")
+    # --- 阶段②③ 版本推进 + 升级钩子（每文件链；跨文件钩子双写 + 双版本同升）---
+    # 函数内 import：upgrade 模块的注册表被测试 patch，顶部 import 会使
+    # patch 指向失效的绑定
+    from src.modules.config.upgrade import advance_file_versions
 
-    # --- 阶段③ 每文件钩子 ---
-    hook_count = sum(len(hooks) for hooks in FILE_HOOKS.values())
-    if hook_count:
-        for fname, hooks in FILE_HOOKS.items():
-            for hook in hooks:
-                hook(fname, raw_docs[fname])
-        logger.info(f"[加载管线] 阶段③ 每文件钩子执行 {hook_count} 个")
-    else:
-        logger.info("[加载管线] 阶段③ 每文件钩子：注册表为空，跳过")
+    version_changes = advance_file_versions(raw_docs)
+    logger.info(
+        f"[加载管线] 阶段②③ 版本推进完成（推进文件 {len(version_changes)} 个）"
+        if version_changes
+        else "[加载管线] 阶段②③ 版本推进完成（全部文件已在基线）"
+    )
 
     # --- 阶段④ 校验（硬错） + 阶段⑤ 漂移写回 ---
     combined = DriftReport()
@@ -484,10 +530,12 @@ def load_config_dir(
     batch_id: str | None = None
     residuals: dict[str, DriftReport] = {}
     for fname, (instance, report) in validated.items():
-        if report.has_drift:
+        advanced = fname in version_changes
+        if report.has_drift or advanced:
             batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
             backup = _write_back_schema_file(config_dir, fname, _ROOT_SCHEMAS[fname], instance, batch_id=batch_id)
-            _log_drift_writeback(fname, backup, config_dir, report.missing, report.redundant)
+            if report.has_drift:
+                _log_drift_writeback(fname, backup, config_dir, report.missing, report.redundant)
             # 写回后磁盘内容 = 校验实例的序列化，残余漂移为净；
             # 返回报告语义 = "写回后的残余漂移"（漂移过程可见性走日志）
             residuals[fname] = DriftReport()

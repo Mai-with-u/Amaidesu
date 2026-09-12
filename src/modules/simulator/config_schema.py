@@ -1,7 +1,5 @@
 """模拟直播间的配置 Schema。"""
 
-from typing import Optional
-
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
@@ -17,9 +15,9 @@ class SimulatorConfigSchema(BaseConfig):
         pattern="^(generate|replay|off)$",
     )
     # ---- replay 模式参数 ----
-    replay_date: Optional[str] = Field(
-        default=None,
-        description="replay 模式默认回放的录制日期（YYYY-MM-DD，对应 data/events/{date}.jsonl）",
+    replay_date: str = Field(
+        default="",
+        description="replay 模式默认回放的录制日期（YYYY-MM-DD，对应 data/events/{date}.jsonl）；空串 = 不指定",
     )
     replay_speed: float = Field(
         default=1.0,

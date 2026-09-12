@@ -55,9 +55,10 @@ class TestGeneration:
         generate_default_configs(temp_config_dir)
         model_content = (temp_config_dir / "model.toml").read_text(encoding="utf-8-sig")
         assert "[[llm_providers]]" in model_content
-        # llm_models 默认空数组（生成时未填具体模型）—— 接受两种写法
-        assert "[[llm_models]]" in model_content or "llm_models = []" in model_content
-        assert "[llm_profiles]" in model_content
+        assert "[[llm_models]]" in model_content
+        # dict 形态的 llm_profiles 按 key 展开为子表（每用途一段）
+        for profile in ("planner", "replyer", "summary", "minecraft", "vision", "simulator"):
+            assert f"[llm_profiles.{profile}]" in model_content
 
     def test_generated_infra_has_sections(self, temp_config_dir):
         generate_default_configs(temp_config_dir)

@@ -24,41 +24,14 @@ import pytest
 # ===========================================================================
 
 
-def _build_core_toml() -> str:
-    return (
-        "[meta]\n"
-        'type = "meta"\n'
-        'version = "2.0.0"\n'
-        "\n"
-        "[persona]\n"
-        'type = "persona"\n'
-        'bot_name = "麦麦"\n'
-    )
-
-
-def _build_model_toml() -> str:
-    """新 LLM 结构:[[llm_providers]] + [llm] 引用 provider。"""
-    return (
-        "[[llm_providers]]\n"
-        'name = "default"\n'
-        'client_type = "openai"\n'
-        'base_url = "https://api.openai.com/v1"\n'
-        'api_key = ""\n'
-        "\n"
-        "[llm]\n"
-        'provider = "default"\n'
-        'model = "gpt-4"\n'
-    )
-
-
 @pytest.fixture
 def config_dir_with_toml(tmp_path: Path) -> Path:
+    """六文件基线布局（从 Schema 生成默认值，可被加载管线正常装载）。"""
+    from src.modules.config.multi_file_loader import generate_default_configs
+
     cfg = tmp_path / "config"
     cfg.mkdir()
-    (cfg / "core.toml").write_text(_build_core_toml(), encoding="utf-8-sig")
-    (cfg / "model.toml").write_text(_build_model_toml(), encoding="utf-8-sig")
-    for name in ("agents", "tools", "memory", "storage", "background"):
-        (cfg / f"{name}.toml").write_text("", encoding="utf-8-sig")
+    generate_default_configs(cfg)
     return cfg
 
 

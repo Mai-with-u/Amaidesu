@@ -107,8 +107,8 @@ def _make_manager_with_fake_client(store: SQLiteStore, monkeypatch) -> LLMManage
         slow_threshold_ms=15_000,
         selection_strategy="sequential",
         seed=0,
-        temperature=None,
-        max_tokens=None,
+        temperature=0.3,
+        max_tokens=4096,
         models=[
             _ResolvedModel(
                 model_name="glm-4.7", model_identifier="glm-4.7", provider_name="zhipu"
@@ -154,8 +154,8 @@ async def test_call_without_store_does_not_persist(monkeypatch) -> None:
         slow_threshold_ms=15_000,
         selection_strategy="sequential",
         seed=0,
-        temperature=None,
-        max_tokens=None,
+        temperature=0.3,
+        max_tokens=4096,
         models=[
             _ResolvedModel(
                 model_name="glm-4.7", model_identifier="glm-4.7", provider_name="zhipu"

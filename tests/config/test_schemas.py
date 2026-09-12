@@ -17,7 +17,7 @@ TestCoreConfig 类已删除——旧断言所依赖的 CoreConfig 聚合形态�
 本文件保留 TestModelConfig 与新 TestStreamerPersonaConfig 等迁移后的断言。
 """
 
-from src.modules.config.model_schemas import ModelConfig
+from src.modules.config.model_schemas import REQUIRED_PROFILE_NAMES, ModelConfig
 from src.agents.streamer.config import StreamerPersonaConfig
 from src.agents.streamer.config import StreamerContextConfig
 
@@ -68,11 +68,21 @@ class TestModelConfig:
     """
 
     def test_three_layer_defaults(self):
-        """三层结构默认值：1 个默认 provider + 空 models/空 profiles 字典"""
+        """三层结构默认值：1 默认 provider + 1 默认模型 + 6 用途 profile 种子
+
+        全新安装即可运行：每个 profile 缺省引用模型注册表的 default 条目；
+        各 profile 带用途化温度/超时档位（禁 None 政策，字段全部具体值）。
+        """
         m = ModelConfig()
         assert len(m.llm_providers) >= 1
-        assert m.llm_models == []
-        assert m.llm_profiles == {}
+        assert len(m.llm_models) == 1
+        assert m.llm_models[0].name == "default"
+        assert set(m.llm_profiles.keys()) == set(REQUIRED_PROFILE_NAMES)
+        for profile in m.llm_profiles.values():
+            assert profile.model_list == ["default"]
+        # 用途档位抽样：planner 决策稳（0.7），simulator 表达活（0.9）
+        assert m.llm_profiles["planner"].temperature == 0.7
+        assert m.llm_profiles["simulator"].temperature == 0.9
 
     def test_no_hardcoded_real_keys(self):
         """provider.api_key 默认空字符串（无硬编码真实密钥）"""

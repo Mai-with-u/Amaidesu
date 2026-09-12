@@ -141,13 +141,9 @@ class BaseConfig(BaseModel):
             if not allow_extra:
                 report.redundant.append(key)
 
-        # 检测缺失字段（Schema 有，配置没有）
-        # None-默认值字段（如 LLMRoleConfig.api_key = None）不视为缺失——
-        # 它们表示"使用 provider 兜底",在 TOML 中省略是合法且推荐的写法
+        # 检测缺失字段（Schema 有，配置没有）——禁 None 政策：所有字段一律
+        # 落盘，缺失即漂移，由写回按默认值补齐（全量写出语义）
         for key in class_fields - data_keys:
-            field_info = cls.model_fields.get(key)
-            if field_info is not None and field_info.default is None and not field_info.is_required():
-                continue
             report.missing.append(key)
 
         # 剥离多余字段（extra="allow" 时保留）

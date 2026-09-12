@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List
 
 from pydantic import Field, model_validator
 
@@ -139,8 +139,8 @@ class LLMProfileConfig(BaseConfig):
         selection_strategy: 选择策略
         hard_timeout_ms: 硬超时（毫秒）；到点取消当前请求并切下一个模型
         slow_threshold_ms: 慢调用阈值（毫秒）；超阈值仅告警，不切换
-        temperature: 生成温度（None 表示使用 model 默认）
-        max_tokens: 最大生成 token 数（None 表示使用 model 默认）
+        temperature: 生成温度（0.0-2.0）
+        max_tokens: 最大生成 token 数
     """
 
     model_list: List[str] = Field(
@@ -152,7 +152,7 @@ class LLMProfileConfig(BaseConfig):
         description="model_list 选择策略",
     )
     hard_timeout_ms: int = Field(
-        default=90_000,
+        default=180_000,
         ge=1000,
         description="硬超时（毫秒）；到点取消当前请求并切下一个模型",
     )
@@ -161,16 +161,37 @@ class LLMProfileConfig(BaseConfig):
         ge=100,
         description="慢调用阈值（毫秒）；超阈值仅告警，不切换",
     )
-    temperature: float | None = Field(
-        default=None,
-        description="生成温度 (0.0-2.0)，None 表示使用 model 默认",
+    temperature: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=2.0,
+        description="生成温度 (0.0-2.0)",
         json_schema_extra={"x-ui-type": "number"},
     )
-    max_tokens: int | None = Field(
-        default=None,
-        description="最大 Token 数，None 表示使用 model 默认",
+    max_tokens: int = Field(
+        default=4096,
+        ge=1,
+        description="最大生成 token 数",
         json_schema_extra={"x-ui-type": "integer"},
     )
+
+
+def _default_llm_profiles() -> dict[str, "LLMProfileConfig"]:
+    """六用途 profile 的缺省种子（用途名 → 用途化默认参数）。
+
+    用途档位在全新安装即可用：每个 profile 缺省引用模型注册表的
+    ``default`` 条目；温度/超时按用途取值（决策稳、表达活、摘要缓、
+    游戏稳、视觉快、模拟活）。
+    """
+    presets: dict[str, dict[str, Any]] = {
+        "planner": {"hard_timeout_ms": 90_000, "slow_threshold_ms": 15_000, "temperature": 0.7, "max_tokens": 4096},
+        "replyer": {"hard_timeout_ms": 60_000, "slow_threshold_ms": 8_000, "temperature": 0.2, "max_tokens": 2048},
+        "summary": {"hard_timeout_ms": 180_000, "slow_threshold_ms": 30_000, "temperature": 0.3, "max_tokens": 2048},
+        "minecraft": {"hard_timeout_ms": 180_000, "slow_threshold_ms": 15_000, "temperature": 0.2, "max_tokens": 4096},
+        "vision": {"hard_timeout_ms": 60_000, "slow_threshold_ms": 10_000, "temperature": 0.3, "max_tokens": 1024},
+        "simulator": {"hard_timeout_ms": 60_000, "slow_threshold_ms": 15_000, "temperature": 0.9, "max_tokens": 1024},
+    }
+    return {name: LLMProfileConfig(model_list=["default"], **override) for name, override in presets.items()}
 
 
 class ModelRootConfig(BaseConfig):
@@ -189,14 +210,12 @@ class ModelRootConfig(BaseConfig):
         description="API provider 列表（被 llm_models.api_provider 引用）",
     )
     llm_models: List[LLMModelConfig] = Field(
-        default_factory=list,
+        default_factory=lambda: [LLMModelConfig()],
         description="模型注册表（被 llm_profiles.model_list 引用）",
     )
     llm_profiles: dict[str, LLMProfileConfig] = Field(
-        default_factory=dict,
-        description=(
-            "用途 profile 字典（必填 6 成员：planner / replyer / summary / " "minecraft / vision / simulator）"
-        ),
+        default_factory=_default_llm_profiles,
+        description=("用途 profile 字典（必填 6 成员：planner / replyer / summary / minecraft / vision / simulator）"),
         json_schema_extra={"x-ui-type": "object"},
     )
 

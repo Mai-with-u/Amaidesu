@@ -51,7 +51,7 @@ class McpToolProvider(BaseToolProvider):
     ) -> None:
         self._client = client
         self.server_name = server_name
-        self.prefix = prefix if prefix is not None else f"{server_name}_"
+        self.prefix = prefix or f"{server_name}_"
         self._provider = provider or server_name
         self._specs: List[ToolSpec] = []
         # 注册名 → MCP 原名（setup 时从 list_tools 记录；调用时查表还原，

@@ -79,12 +79,17 @@ class TestToolsConfigDisabledLegacyFields:
 
 class TestToolsConfigDomains:
     def test_domains_default_empty_or_none(self):
+        """禁 None 契约：动态分类缺省空 dict；单实例分类缺省具体实例。
+
+        vision 缺省关态（enabled=False，等价旧 None 语义）；
+        memory 缺省 enabled=true（与消费端兜底对齐）。
+        """
         cfg = ToolsConfig()
-        assert cfg.avatar == {} or cfg.avatar is None
-        assert cfg.studio == {} or cfg.studio is None
-        assert cfg.vision is None
-        assert cfg.memory is None
-        assert cfg.mcp is None
+        assert cfg.avatar == {}
+        assert cfg.studio == {}
+        assert cfg.vision.enabled is False
+        assert cfg.memory.enabled is True
+        assert isinstance(cfg.mcp, McpProviderConfig)
 
 
 class TestToolProviderConfig:
