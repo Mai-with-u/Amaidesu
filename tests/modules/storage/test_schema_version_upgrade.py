@@ -4,7 +4,7 @@ Schema 版本升级机制单测
 覆盖：
 - 新库直接建到当前 SCHEMA_VERSION，schema_migrations 补齐 [1, N] 全部版本记录
 - 旧库（版本记录停留在 1）重新 initialize 后单调推进到当前版本，数据不被破坏
-- 模块私有表（_memory_facts / _memory_profiles）随 store.initialize() 统一建立，
+- 模块私有表（_memory_facts）随 store.initialize() 统一建立，
   且不在启动闸门 list_expected_tables() 里
 - SimpleMemory.initialize() 在私有表缺失时 fail-fast
 """
@@ -186,3 +186,46 @@ async def test_v3_to_v4_migration_semantics(temp_db_path: Path) -> None:
         assert [r["content"] for r in chat] == ["旧弹幕"]
     finally:
         await store2.close()
+
+
+@pytest.mark.asyncio
+async def test_v6_to_v7_migration_drops_memory_profiles(temp_db_path: Path) -> None:
+    """v6 形状的旧库升级到 v7：人物画像私有表被幂等 DROP，业务数据保留。"""
+
+    # 造 v7 新库后手工回退版本记录并补建旧表，模拟 v6 存量库
+    old = SQLiteStore(temp_db_path)
+    await old.initialize()
+    await old.execute("DELETE FROM schema_migrations WHERE version > 6")
+    await old.execute(
+        "CREATE TABLE _memory_profiles ("
+        "person_id TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '', "
+        "tags TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '', "
+        "updated_at_ms INTEGER NOT NULL)"
+    )
+    await old.execute(
+        "INSERT INTO _memory_profiles(person_id, display_name, tags, summary, updated_at_ms) "
+        "VALUES ('u_1', 'alice', 'tag', 'sum', 123)"
+    )
+    assert await old.get_schema_version() == 6
+    await old.close()
+
+    # 重新 initialize：迁移 7 执行 DROP，版本推进到当前
+    reopened = SQLiteStore(temp_db_path)
+    await reopened.initialize()
+    try:
+        assert await reopened.get_schema_version() == SCHEMA_VERSION
+        assert await reopened.table_exists("_memory_profiles") is False
+        # 存量业务数据不受影响
+        rows = await reopened.execute("SELECT COUNT(*) AS n FROM _memory_facts")
+        assert int(rows[0]["n"]) == 0
+    finally:
+        await reopened.close()
+
+    # 幂等：再次 initialize 成功，表保持不存在
+    again = SQLiteStore(temp_db_path)
+    await again.initialize()
+    try:
+        assert await again.get_schema_version() == SCHEMA_VERSION
+        assert await again.table_exists("_memory_profiles") is False
+    finally:
+        await again.close()

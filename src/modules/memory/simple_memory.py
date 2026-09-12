@@ -2,10 +2,9 @@
 SimpleMemory —— 关键词召回实现
 
 ## 设计
-- 内部使用 SQLiteStore，**复用 11 表基座**（个人 SQL 层另起二表，事务在
+- 内部使用 SQLiteStore，**复用业务表基座**（模块私有表建在同一库，事务在
   ``SQLiteStore`` 上走，避免分散存储后端）
 - 召回 = 简单 LIKE 关键词匹配（不使用 embedding）
-- 维护（maintain）= 简单按 timestamp_ms 衰减分数；空实现基准
 
 ## 召回分词策略
 
@@ -27,33 +26,28 @@ SimpleMemory —— 关键词召回实现
 - 不区分停用词（"的/了/是"会被当 2-gram 命中）
 - 无词性标注、无归一化（"弹幕"/"彈幕" 视为不同 token）
 
-接口冻结（Streamer Agent 等并行模块依赖现状）：
-``recall / ingest / get_person_profile / upsert_person_profile / maintain``
-签名禁止修改。
+对外接口 = ``recall``（召回）与 ``ingest``（写入），签名即承诺面。
 
 ## 存储说明
-本模块使用 SQLiteStore 数据库里 2 张**模块私有表**（``_`` 前缀表达"非业务
+本模块使用 SQLiteStore 数据库里 1 张**模块私有表**（``_`` 前缀表达"非业务
 数据平面、仅 SimpleMemory 读写"；DDL 权威在 ``storage/schema.py``，随
 ``SQLiteStore.initialize()`` 统一建表，并纳入 ``SCHEMA_VERSION`` 版本管理）：
 - ``_memory_facts``：事实/事件记忆条目
-- ``_memory_profiles``：观众语义画像
 
 ``SimpleMemory.initialize()`` 只做表自检，不带 DDL——建表职责单一归
-schema.py，避免两处 DDL 漂移。未来接 A_Memorix 时整体替换。
+schema.py，避免两处 DDL 漂移。
 
 ## 时间单位
-- Amaidesu 内部全毫秒
-- 接 A_Memorix 时在 adapter 层 ms → s（time_utils.ms_to_s/s_to_ms）——SimpleMemory
-  走毫秒，零转换
+- Amaidesu 内部全毫秒，本模块零转换
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any, List, Optional
+from typing import Any, List
 
 from src.modules.logging import get_logger
-from src.modules.memory.models import MemoryHit, MemoryWriteResult, PersonProfile
+from src.modules.memory.models import MemoryHit, MemoryWriteResult
 from src.modules.memory.provider import MemoryProvider
 from src.modules.storage.sqlite_store import SQLiteStore
 from src.modules.time_utils import now_ms
@@ -150,7 +144,7 @@ class SimpleMemory(MemoryProvider):
 
     async def initialize(self) -> None:
         """自检私有表已就位（DDL 由 SQLiteStore.initialize() 按 schema.py 统一建）。"""
-        for table in ("_memory_facts", "_memory_profiles"):
+        for table in ("_memory_facts",):
             if not await self._store.table_exists(table):
                 raise RuntimeError(
                     f"SimpleMemory 私有表 {table} 不存在：请先执行 SQLiteStore.initialize()（建表 DDL 权威在 storage/schema.py）"
@@ -222,70 +216,6 @@ class SimpleMemory(MemoryProvider):
         except (KeyError, TypeError, ValueError):
             new_id = -1
         return MemoryWriteResult(memory_id=new_id, accepted=True)
-
-    async def get_person_profile(self, person_id: str) -> PersonProfile:
-        """读取观众画像；缺记录返回空画像。"""
-        if not person_id:
-            return PersonProfile(person_id="")
-        row = await self._store.execute_fetchone(
-            "SELECT person_id, display_name, tags, summary, updated_at_ms FROM _memory_profiles WHERE person_id = ?",
-            (person_id,),
-        )
-        if row is None:
-            return PersonProfile(person_id=person_id)
-        tags_str = str(row["tags"] or "")
-        tags_list = [t for t in tags_str.split(",") if t] if tags_str else []
-        return PersonProfile(
-            person_id=str(row["person_id"]),
-            display_name=str(row["display_name"] or ""),
-            tags=tags_list,
-            summary=str(row["summary"] or ""),
-            updated_at_ms=int(row["updated_at_ms"] or 0),
-        )
-
-    async def upsert_person_profile(
-        self,
-        person_id: str,
-        *,
-        display_name: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        summary: Optional[str] = None,
-    ) -> PersonProfile:
-        """创建/合并更新观众画像（LLM 总结完调用）。"""
-        if not person_id:
-            raise ValueError("person_id 不能为空")
-
-        existing = await self.get_person_profile(person_id)
-        merged_name = display_name if display_name is not None else existing.display_name
-        merged_tags = tags if tags is not None else existing.tags
-        merged_summary = summary if summary is not None else existing.summary
-
-        # 去重 + 稳定排序
-        seen = set()
-        merged_tags = [t for t in merged_tags if not (t in seen or seen.add(t))]
-
-        ts = now_ms()
-        tags_str = ",".join(merged_tags)
-        # 使用参数化占位符避免 SQL 注入（f-string 拼接对分号/双引号/反斜杠等无防护）
-        await self._store.execute(
-            "INSERT INTO _memory_profiles(person_id, display_name, tags, summary, updated_at_ms) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(person_id) DO UPDATE SET "
-            "display_name=excluded.display_name, tags=excluded.tags, "
-            "summary=excluded.summary, updated_at_ms=excluded.updated_at_ms",
-            (person_id, merged_name, tags_str, merged_summary, ts),
-        )
-        return PersonProfile(
-            person_id=person_id,
-            display_name=merged_name,
-            tags=merged_tags,
-            summary=merged_summary,
-            updated_at_ms=ts,
-        )
-
-    async def maintain(self) -> None:
-        """维护操作占位：当前不做任何事，保留接口扩展点（LRU/衰减/合并）。"""
-        return None
 
 
 __all__ = ["SimpleMemory"]

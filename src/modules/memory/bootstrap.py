@@ -5,7 +5,7 @@
 - **显式注入**——``config`` 由调用方传入；``SQLiteStore`` / ``SimpleMemory``
   / ``ToolRegistry`` 全部由本模块在调用方提供的 config 上构造
 - **类型检查 + fail-fast**：registry 必须是 ``ToolRegistry``；backend 必须是
-  ``"simple"``；遇到未知值（含 ``"amemorix"``）直接 ``raise ValueError``
+  ``"simple"``；遇到未知值直接 ``raise ValueError``
 - **零全局单例**：本模块**不**接触 ``sqlite_store()`` 默认单例；注册表由
   组合根构造并经参数传入（``bind_memory_tools``）
 
@@ -26,7 +26,7 @@ bind_memory_tools(registry, memory)  # 注册 query_memory 工具
 |---|---|---|
 | ``"simple"`` | SQLite + 关键词召回（本模块） | → ``SimpleMemory(store)`` |
 
-``"amemorix"`` / 其它值：``raise ValueError("...当前仅支持 backend='simple'")``，
+其它 backend 值：``raise ValueError("...当前仅支持 backend='simple'")``，
 fail-fast 由组合根捕获并退出（避免启动后才发现 memory 缺失）。
 
 ## 时间单位约定
@@ -96,8 +96,8 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteStore, Simpl
         config: 扁平化后的 ConfigService dict；形如
             ``{"memory": {"backend": "simple", ...},
               "sqlite": {"db_path": "...", "busy_timeout_ms": 5000, ...}}``
-            其中 ``memory.simple`` / ``memory.amemorix`` 可能是 ``None`` 不是 ``{}``，
-            本函数对两者都安全（不读其内容——SimpleMemory 内部无配置项）。
+            其中 ``memory.simple`` 可能是 ``None`` 不是 ``{}``，
+            本函数对此安全（不读其内容——SimpleMemory 内部无配置项）。
 
     Returns:
         ``(store, memory)`` 元组：
@@ -117,9 +117,8 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteStore, Simpl
     backend = memory_cfg.get("backend", "simple")
     if backend not in SUPPORTED_BACKENDS:
         raise ValueError(
-            f"build_memory_stack: memory backend={backend!r} 不受支持；"
+            f"build_memory_stack: memory backend 不受支持（得到 {type(backend).__name__}）；"
             f"当前仅支持 {SUPPORTED_BACKENDS}。"
-            f"（A_Memorix 接入尚未完成）"
         )
 
     # SQLiteStore 配置解析 + 构造
@@ -136,7 +135,7 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteStore, Simpl
     # SimpleMemory 装配 + 私有表初始化
     memory = SimpleMemory(store)
     await memory.initialize()
-    logger.info("记忆栈：SimpleMemory 私有表（_memory_facts / _memory_profiles）已就绪")
+    logger.info("记忆栈：SimpleMemory 私有表（_memory_facts）已就绪")
 
     return store, memory
 
@@ -153,7 +152,7 @@ def bind_memory_tools(registry: ToolRegistry, memory: MemoryProvider) -> int:
 
     Args:
         registry: 调用方构造的 ``ToolRegistry``（必须非 None）
-        memory: ``MemoryProvider`` 实例（``SimpleMemory`` 或未来 ``AMemorixProvider``）
+        memory: ``MemoryProvider`` 实例（当前为 ``SimpleMemory``）
 
     Returns:
         本次新注册的工具数（重复注册则返回 0）。

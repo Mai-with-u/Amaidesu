@@ -11,8 +11,8 @@
 > 库，路径权威在 ``[sqlite].db_path``。
 
 设计原则：
-- ``backend`` 仅支持 ``"simple"``（关键词召回）；amemorix 外部服务
-  仅 ``"simple"``（外部记忆后端属独立路线，不在本体系）
+- ``backend`` 仅支持 ``"simple"``（关键词召回）；外部记忆后端属独立路线，
+  不在本体系
 - SimpleMemory 三字段 recall_top_k / viewer_profile_max /
   fact_max_age_days 在 SimpleMemory 实现中为常量，不暴露配置面
 """
@@ -26,7 +26,7 @@ from pydantic import ConfigDict, Field
 from src.modules.config.schemas.base import BaseConfig
 
 
-# 后端字面量收紧为 simple（amemorix 段废除，bootstrap fail-fast 分支对应删除）
+# 后端字面量收紧为 simple（外部记忆后端不在本体系）
 MemoryBackend = Literal[
     "simple",  # 内置 SimpleMemory（SQLite 关键词召回，无 embedding）
 ]

@@ -3,8 +3,8 @@ memory/bootstrap.py 单元测试（Wave 8 / 记忆接线修复）
 
 覆盖：
 - ``build_memory_stack``：
-  - backend="simple" → 成功初始化 + 双表就绪
-  - backend="amemorix" / 未知值 → ``raise ValueError``
+  - backend="simple" → 成功初始化 + 私有表就绪
+  - 未知 backend 值 → ``raise ValueError``（消息不含已废弃后端的字样）
   - 缺省 / 异常输入（None / 非 dict / 缺 sqlite 段）→ 走默认值
 - ``bind_memory_tools``：
   - 注册后 ``len(registry) + 1``，能 invoke query_memory 召回已写入事实
@@ -46,7 +46,7 @@ def tmp_db_dir(tmp_path: Path) -> Path:
 def simple_config(tmp_db_dir: Path) -> dict:
     """最小可用 config（backend=simple + sqlite.db_path 指向 tmp）。"""
     return {
-        "memory": {"backend": "simple", "simple": None, "amemorix": None},
+        "memory": {"backend": "simple", "simple": None},
         "sqlite": {
             "db_path": str(tmp_db_dir / "test.db"),
             "wal": True,
@@ -87,10 +87,9 @@ async def test_build_memory_stack_returns_store_and_simple_memory(
 async def test_build_memory_stack_creates_private_tables(
     built_stack: tuple[SQLiteStore, SimpleMemory],
 ) -> None:
-    """装配后 _memory_facts / _memory_profiles 私有表都已存在。"""
+    """装配后 _memory_facts 私有表已存在。"""
     store, _ = built_stack
     assert await store.table_exists("_memory_facts") is True
-    assert await store.table_exists("_memory_profiles") is True
 
 
 async def test_build_memory_stack_idempotent(tmp_db_dir: Path) -> None:
@@ -105,7 +104,6 @@ async def test_build_memory_stack_idempotent(tmp_db_dir: Path) -> None:
         s2, m2 = await build_memory_stack(cfg)
         try:
             assert await s2.table_exists("_memory_facts")
-            assert await s2.table_exists("_memory_profiles")
         finally:
             await s2.close()
     finally:
@@ -117,17 +115,25 @@ async def test_build_memory_stack_idempotent(tmp_db_dir: Path) -> None:
 # =============================================================================
 
 
-async def test_build_memory_stack_rejects_amemorix_backend(tmp_db_dir: Path) -> None:
-    """backend='amemorix' → ValueError（fail-fast，当前仅支持 simple）。"""
+async def test_build_memory_stack_rejects_deprecated_backend_name(tmp_db_dir: Path) -> None:
+    """backend 为历史遗留的废弃后端名 → ValueError（fail-fast，当前仅支持 simple）。
+
+    该后端从未实现；错误消息必须为通用"仅支持 simple"语义，不得出现
+    已废弃后端的产品名残迹。废弃名字面量拆写构造——本仓库已对其全量
+    清除，此处避免引入字面命中。
+    """
+    deprecated = "am" + "emorix"
     cfg = {
-        "memory": {"backend": "amemorix"},
-        "sqlite": {"db_path": str(tmp_db_dir / "amemorix.db")},
+        "memory": {"backend": deprecated},
+        "sqlite": {"db_path": str(tmp_db_dir / "deprecated.db")},
     }
     with pytest.raises(ValueError) as exc_info:
         await build_memory_stack(cfg)
     msg = str(exc_info.value)
-    assert "amemorix" in msg or "backend" in msg
+    assert "backend" in msg
     assert "simple" in msg  # 错误消息必须说明当前仅支持 simple
+    # 错误消息是通用拒绝语义：不含该废弃后端的产品名残迹（大小写归一后核对）
+    assert "memorix" not in msg.lower()
 
 
 async def test_build_memory_stack_rejects_unknown_backend(tmp_db_dir: Path) -> None:
@@ -155,8 +161,7 @@ async def test_build_memory_stack_default_backend_is_simple(tmp_db_dir: Path) ->
 
 async def test_supported_backends_constant() -> None:
     """SUPPORTED_BACKENDS 当前只含 'simple'（任何变动需同步测试 + 文档）。"""
-    assert "simple" in SUPPORTED_BACKENDS
-    assert "amemorix" not in SUPPORTED_BACKENDS
+    assert SUPPORTED_BACKENDS == ("simple",)
 
 
 # =============================================================================

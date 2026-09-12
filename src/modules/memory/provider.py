@@ -3,32 +3,30 @@ MemoryProvider Protocol
 
 ```python
 class MemoryProvider(Protocol):
-    async def recall(query, top_k) -> list[MemoryHit]      # 召回（关键词→后续可语义）
+    async def recall(query, top_k) -> list[MemoryHit]      # 召回
     async def ingest(text, source) -> MemoryWriteResult    # 写入
-    async def get_person_profile(person_id)                # 观众画像
-    async def maintain()                                   # 维护（可空实现）
 ```
 
 接入点：
-- **召回**：ContextAssembler 的"记忆召回面"——决策前 recall 观众画像+相关长记忆
-- **写入**：事件触发（观众互动/开播关播/里程碑）→ ingest
-- **配置**：`[memory] backend = "simple" | "amemorix"`——一行切换
+- **召回**：决策前 recall 相关长记忆（planner 预注入）+ query_memory 工具
+- **写入**：事件触发（话题摘要/观众互动）→ ingest
+- **配置**：`[memory] backend = "simple"`（当前唯一后端）
 
 ## 简单版的差异
 - 召回 = 关键词匹配（不使用 embedding）
-- 接 A_Memorix 时在 adapter 层毫秒→秒（time_utils.ms_to_s/s_to_ms）
+- Amaidesu 内部全毫秒，无秒↔毫秒转换
 """
 
 from __future__ import annotations
 
 from typing import Any, List, Protocol, runtime_checkable
 
-from src.modules.memory.models import MemoryHit, MemoryWriteResult, PersonProfile
+from src.modules.memory.models import MemoryHit, MemoryWriteResult
 
 
 @runtime_checkable
 class MemoryProvider(Protocol):
-    """记忆能力后端协议（接口稳定，后插 AMemorixProvider 不动接口）"""
+    """记忆能力后端协议（接口稳定，未来换后端不动接口）"""
 
     async def recall(self, query: str, top_k: int = 5) -> List[MemoryHit]:
         """按文本/标签/关键词召回。子类可覆盖（关键词 / 语义 / 混合）。"""
@@ -43,14 +41,6 @@ class MemoryProvider(Protocol):
         timestamp_ms: int = 0,
     ) -> MemoryWriteResult:
         """写入一条记忆。子类负责持久化与去重策略。"""
-        ...
-
-    async def get_person_profile(self, person_id: str) -> PersonProfile:
-        """读取某观众的语义画像（无记录 → 默认空画像）。"""
-        ...
-
-    async def maintain(self) -> None:
-        """维护（衰减 / LRU / 重算摘要 / …）。可空实现。"""
         ...
 
 

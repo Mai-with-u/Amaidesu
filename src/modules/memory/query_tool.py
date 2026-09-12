@@ -13,8 +13,8 @@ LLM 可调用 ``query_memory(query, top_k)`` 返回相关记忆；结果以
 注册方式：由组合根构造注册表后，经 ``bind_memory_tools``（见
 ``src/modules/memory/bootstrap.py``）把本工具注入组合根传入的注册表。
 
-时间字段：timestamp_ms 在 Amaidesu 内部使用毫秒，本工具不引入秒/毫秒转换
-（仅在切换 AMemorixProvider 时由 Provider 内部负责）。
+时间字段：timestamp_ms 在 Amaidesu 内部使用毫秒，本工具不做秒/毫秒转换
+（内部全毫秒零转换）。
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@
 
 本模块是全部 SQLite 表的**单一事实源**：13 张业务表（10 张核心直播表 +
 2 张模拟器运行时表 + 1 张流程单表）+ 模块私有表（当前为 SimpleMemory 的
-``_memory_facts`` / ``_memory_profiles``）+ ``schema_migrations``。
+``_memory_facts``）+ ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
 表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
 
@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 6
+SCHEMA_VERSION: int = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +67,6 @@ class SchemaMigration:
 # - sim_gifts               模拟器礼物目录（运行时数据，WebUI 管理）
 # - rundowns                流程单（rundown 子系统）
 # - _memory_facts           SimpleMemory 事实记忆（模块私有）
-# - _memory_profiles        SimpleMemory 人物画像（模块私有）
 # - schema_migrations       版本管理
 # =============================================================================
 
@@ -117,10 +116,8 @@ def build_schema_sql() -> str:
         # sim_gifts —— 模拟器礼物目录
         + _SIM_GIFTS_SQL
         + "\n"
-        # _memory_facts / _memory_profiles —— SimpleMemory 模块私有表（含索引）
+        # _memory_facts —— SimpleMemory 模块私有表（含索引）
         + _MEMORY_FACTS_SQL
-        + "\n"
-        + _MEMORY_PROFILES_SQL
         + "\n"
         # schema_migrations —— 版本管理
         + _SCHEMA_MIGRATIONS_SQL
@@ -152,7 +149,6 @@ def list_private_tables() -> List[str]:
     """返回模块私有表名（``_`` 前缀），供所属模块自检；不进入启动闸门。"""
     return [
         "_memory_facts",
-        "_memory_profiles",
     ]
 
 
@@ -375,7 +371,7 @@ CREATE TABLE IF NOT EXISTS sim_gifts (
 """.strip()
 
 
-# --- SimpleMemory 模块私有表（关键词召回的事实记忆 + 人物画像）---
+# --- SimpleMemory 模块私有表（关键词召回的事实记忆）---
 # 索引随表建立：召回按时间倒序取窗口、按来源过滤，两者都是热路径。
 
 _MEMORY_FACTS_SQL = """
@@ -389,17 +385,6 @@ CREATE TABLE IF NOT EXISTS _memory_facts (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_facts_timestamp ON _memory_facts(timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_memory_facts_source ON _memory_facts(source);
-""".strip()
-
-
-_MEMORY_PROFILES_SQL = """
-CREATE TABLE IF NOT EXISTS _memory_profiles (
-    person_id       TEXT PRIMARY KEY,
-    display_name    TEXT NOT NULL DEFAULT '',
-    tags            TEXT NOT NULL DEFAULT '',
-    summary         TEXT NOT NULL DEFAULT '',
-    updated_at_ms   INTEGER NOT NULL
-);
 """.strip()
 
 
@@ -505,9 +490,20 @@ def _migrate_v6_rundowns_replace_agenda(conn: sqlite3.Connection) -> None:
     conn.executescript(_RUNDOWNS_SQL)
 
 
+def _migrate_v7_drop_profiles_table(conn: sqlite3.Connection) -> None:
+    """v6 → v7：删除 SimpleMemory 人物画像私有表。
+
+    画像读写面（读写方法 + 数据模型）已整体移除，生产代码零引用；
+    该表只被本模块的 SimpleMemory 读写，直接 DROP 回收空间。新建库的
+    ``build_schema_sql()`` 已不含该表 DDL，DROP IF EXISTS 仅处理存量库。
+    """
+    conn.execute("DROP TABLE IF EXISTS _memory_profiles")
+
+
 SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     4: _migrate_v4_session_semantics,
     6: _migrate_v6_rundowns_replace_agenda,
+    7: _migrate_v7_drop_profiles_table,
 }
 
 
