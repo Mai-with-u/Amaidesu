@@ -412,7 +412,7 @@ docs: 更新开发规范文档
 - 工具包启用：`tools.toml` 的 `[tools].enabled`
 - 感知包内采集器开关：`tools.toml` 的 `[tools.perception.config.enabled]`
 - 渲染包内具体工具开关：`tools.toml` 的 `[tools.output.config.enabled]`
-- 拦截器配置：`core.toml` 的 `[interceptors.*]`
+- 拦截器配置：`infra.toml` 的 `[interceptors.*]`
 
 ### 9.2 配置示例
 
@@ -433,12 +433,12 @@ enabled = ["console_input"]
 [tools.output.config]
 enabled = ["subtitle", "vts"]  # TTS 已于 v2.0.12 提升为基础设施，迁至 src/modules/tts/ 基础模块——不再在本表列出
 
-# core.toml —— 事件拦截器
+# infra.toml —— 事件拦截器
 [interceptors.rate_limit]
 enabled = true
 ```
 
-> 配置为多文件结构：`config/core.toml` / `model.toml` / `agents.toml` / `tools.toml` / `memory.toml` / `storage.toml` / `background.toml`（七文件配置）。LLM 采用 provider + profile 两层结构（`[[llm_providers]]` + `[llm] provider=`），详见 [快速开始 - 编辑配置文件](getting-started.md#25-编辑配置文件)。
+> 配置为六文件结构：`config/agents.toml` / `collectors.toml` / `tools.toml` / `model.toml` / `storage.toml` / `infra.toml`，每文件自带 `[meta].version`。LLM 采用 provider / model / profile 三层结构（`[[llm_providers]]` + `[[llm_models]]` + `[llm_profiles]`），详见 [快速开始 - 编辑配置文件](getting-started.md#25-编辑配置文件)。
 
 ## 10. 组件开发速查
 
@@ -469,4 +469,3 @@ enabled = true
 
 *最后更新：2026-08-28（v2.0.8 Sticker 事件链全链删除——`OUTPUT_STICKER_COMMAND = "output.sticker.command"` 从 §5.2 CoreEvents 示例常量代码块移除（v2.0.0 残留的"v2 保留 Sticker→VTS 单向信号（§1.46.1）"引用同步删除，C1 治理收口））*
 
-*上次更新：2026-08-26（v2.0.0 全面落库——切到 Agent+工具+存储+编排架构、语义域事件、七文件配置体系；测试目录与 component-guide 链接同步；生命周期与三范式细节迁移至 component-guide）*

@@ -223,7 +223,7 @@ class MyComponent:
 
 **ConfigService** 是项目的统一配置管理服务，负责：
 
-- 加载 `config/` 目录下的多文件配置（`core.toml` / `model.toml` / `input.toml` / `decision.toml` / `output.toml`）
+- 加载 `config/` 目录下的六文件配置（`agents` / `collectors` / `tools` / `model` / `storage` / `infra`）
 - 首次运行从 Pydantic Schema 自动生成缺失的配置文件
 - 提供配置合并策略（Schema 默认值 + 配置覆盖）
 - 支持配置文件热重载（file watcher）
@@ -250,17 +250,16 @@ input_config = config_service.get_config_with_defaults(
 
 ### 3. 配置文件结构
 
-配置为**七文件**结构（`config/` 目录，v2.0.0），按关注点拆分：
+配置为**六文件**结构（`config/` 目录），按领域拆分，每文件自带 `[meta].version`：
 
 | 文件 | 内容 |
 |------|------|
-| `core.toml` | 核心配置（`[general]` / `[persona]` / `[logging]` / `[dashboard]` / `[interceptors.*]` 等） |
-| `model.toml` | LLM provider 池（`[[llm_providers]]`）+ 各 profile（`[llm]` / `[llm_fast]` / `[vlm]` / `[llm_local]` / `[llm_summary]` / `[llm_agenda]`） |
-| `agents.toml` | Agent 启用与配置（`[agents].enabled` + streamer/game 子段） |
-| `tools.toml` | 工具包启用与配置（`[tools].enabled` + 采集器挂 `[tools.perception.config]`、渲染挂 `[tools.output.config]`） |
-| `memory.toml` | 记忆系统（`[memory]` backend=simple\|amemorix） |
-| `storage.toml` | 存储层（`[storage]` sqlite） |
-| `background.toml` | 后台任务（`[background]` compressor 等） |
+| `agents.toml` | 业务 Agent（`[agents].enabled` + streamer/minecraft/text_adv 子树） |
+| `collectors.toml` | 采集器（顶层 `enabled` 名单 + 各采集器子段） |
+| `tools.toml` | 工具域（`[tools]` 提供者开关 / `disabled_tools` / `[tools.tasks]` 异步任务基建） |
+| `model.toml` | 三层模型结构（`[[llm_providers]]` / `[[llm_models]]` / `[llm_profiles]` 六用途 profile） |
+| `storage.toml` | 顶层扁平存储（`[sqlite]` / `[memory]`） |
+| `infra.toml` | 基础设施（`[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` / `[interceptors.*]` / `[simulator]`） |
 
 ### 4. 组件启用配置
 
@@ -314,22 +313,22 @@ cfg = config_service.get_config_with_defaults("console_input", phase="input")
 if config_service.is_config_enabled("console_input", phase="input"):
     # ...
 
-# 拦截器配置（core.toml [interceptors.*]）
+# 拦截器配置（infra.toml [interceptors.*]）
 pipe_cfg = config_service.get_interceptor_config("rate_limit")
 if config_service.is_interceptor_enabled("rate_limit"):
     # ...
 ```
 
-### 7. 配置文件生成与热重载
+### 7. 配置文件生成与重载
 
-- **首次运行**：`ConfigService.initialize()` 从 Pydantic Schema 自动生成 `config/` 目录及全部配置文件
-- **热重载**：`FileWatcher` 监听配置文件变更，通过 `register_reload_callback(callback)` 注册回调感知变化
-- **迁移**：`migration.py` / `upgrade_hooks.py` 处理配置版本升级
+- **首次运行**：`ConfigService.initialize()` 经加载管线自动生成 `config/` 六文件并按 Schema 校验
+- **重载**：`FileWatcher` 监听六文件变更（管线自写经自写压标跳过）；`reload_config` 按段策略分流——`infra` 为 hot 段即时回调生效，其余五文件提示待重启；重载失败保留旧配置继续运行
+- **版本升级**：`upgrade.py` 升级钩子注册表按 `[meta].version` 区间推进（缺失版本硬错）
 
 ```bash
-# 首次运行自动生成 config/ 目录
+# 首次运行自动生成 config/ 六文件
 uv run python main.py
-# → 生成 core.toml, model.toml, agents.toml, tools.toml, memory.toml, storage.toml, background.toml
+# → 生成 agents.toml, collectors.toml, tools.toml, model.toml, storage.toml, infra.toml
 ```
 
 ---
@@ -344,4 +343,3 @@ uv run python main.py
 
 ---
 
-*最后更新：2026-08-26（v2.0.0 对齐：配置章节切七文件体系、配置 API 示例更新为现行 ConfigService 方法；提示词内聚化重构：模板迁入消费组件 prompts/ 目录，键改用 frontmatter name 声明式键 + src/**/prompts 约定自动发现 + 重复键 fail-fast）*

@@ -308,7 +308,7 @@ EventBus 支持 **MQTT 风格**通配订阅（仅订阅名包含 `*` 或 `#` 时
 | `tool.result.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.result.#", ...)` 一站式监听所有工具结果。`CoreEvents.TOOL_RESULT_WILDCARD = "tool.result.#"` 保留作订阅标识常量，**不在 names.py 的 `get_all_events()` 反射收集范围内**（`_validate_event_data` 找不到具体注册类型时仅 debug 警告，不阻断 emit） |
 | `tool.health.<tool_name>` | `ToolHealthPayload` | `ToolRegistry`（熔断判定与探活恢复的统一出口：连续失败达阈值熔断时广播 `state="open"`；`recover_tool` 复位时广播 `state="closed"`；**仅在状态切换时发**，每次 invoke 不发） | Dashboard 转发层（`tool.health.#` 通配） | **工具健康切换**（熔断→摘除 / 探活通过→恢复；Payload 含 `tool_name` / `provider` / `state` / `failure_count` / `last_error` / `timestamp_ms`）。具体名 `tool.health.<tool_name>` 由 `ToolRegistry` emit 时填；订阅者通过 `event_bus.on("tool.health.#", handler, model_class=ToolHealthPayload)` 通配监听后按 `tool_name` 字段分发 |
 | `tool.health.#`（**通配占位符**，**不预注册**到 `EVENT_REGISTRY`） | 无（仅订阅标识） | 无（仅订阅标识） | 无（仅订阅标识） | **仅供订阅者使用的通配 pattern**：订阅 `event_bus.on("tool.health.#", ...)` 一站式监听所有工具健康切换。`CoreEvents.TOOL_HEALTH_WILDCARD = "tool.health.#"` 保留作订阅标识常量；与 `tool.result.#` 同性质——不在 `EVENT_REGISTRY` 注册，仅供通配订阅 |
-| `tts.utterance.started` | `UtteranceStartedPayload` | TTS 引擎（基础模块，非工具；`src/modules/tts/` 下 4 个 Provider 之一，按 `core.toml [tts].provider` 装配期单选构造后注入 StreamerAgent）——仅在 `handle_speech` 收到非空 `utterance_id` 参数时发布；流式引擎=首块 PCM 写声卡，全量引擎=`play_audio` 调用 | 字幕写入器、编排层记账器等状态联动消费者（**当前生产代码暂无订阅——字幕订阅接线属后续工作，本表如实标记预留**） | 一次发声开始。Payload 含 `utterance_id`（全链路关联键，编排层生成 `utt_{epoch_ms}_{seq}`）、`speech_text`、`engine`（`edge`/`gptsovits`/`omni`/`voicebox`）、`duration_ms`（Optional[int]：全量引擎=合成后精确值；流式引擎合成未完=None）、`timestamp_ms`。 |
+| `tts.utterance.started` | `UtteranceStartedPayload` | TTS 引擎（基础模块，非工具；`src/modules/tts/` 下 4 个 Provider 之一，按 `infra.toml [tts].provider` 装配期单选构造后注入 StreamerAgent）——仅在 `handle_speech` 收到非空 `utterance_id` 参数时发布；流式引擎=首块 PCM 写声卡，全量引擎=`play_audio` 调用 | 字幕写入器、编排层记账器等状态联动消费者（**当前生产代码暂无订阅——字幕订阅接线属后续工作，本表如实标记预留**） | 一次发声开始。Payload 含 `utterance_id`（全链路关联键，编排层生成 `utt_{epoch_ms}_{seq}`）、`speech_text`、`engine`（`edge`/`gptsovits`/`omni`/`voicebox`）、`duration_ms`（Optional[int]：全量引擎=合成后精确值；流式引擎合成未完=None）、`timestamp_ms`。 |
 | `tts.utterance.finished` | `UtteranceFinishedPayload` | TTS 引擎（基础模块）在播放完成时刻（百毫秒级精度，不含声卡硬件缓冲残余） | 编排层（句末再决策 / 释放锁）、存储（落 reply 耗时）、后台记账器（**预留**） | 一次发声播放完成。`duration_ms` 由 PCM 样本数÷采样率精确计算；事件名常量 `CoreEvents.TTS_UTTERANCE_FINISHED`。 |
 | `tts.utterance.failed` | `UtteranceFailedPayload` | 一次性发声失败（合成错误 / WebSocket 断开 / 音频设备异常） | | TTS 引擎在 `src/modules/tts/` 下 4 个 Provider 之一；事件名常量 `CoreEvents.TTS_UTTERANCE_FAILED` |
 | `task.changed` | `TaskChangedPayload` | 异步任务（回执型工具受理 / 跨 Agent 委派）状态真变化或无进展告警。 接收方按 `payload.initiator` 过滤唤醒；事件名常量 `CoreEvents.TASK_CHANGED`（ADR-013） | | 任务记录表写入边界（`src/modules/tools/tasks.py`，`TaskLedger`/ `TaskTracker`）；仅状态迁移或停滞告警时发（接受→运行组内迁移静默）；快照由接收方按需查询 | | TTS 引擎（基础模块）在合成或播放失败时（合成错误、WebSocket 断开、音频设备异常等任何阶段） | 编排层（错误兜底 / 重试决策）、存储（落失败记录）（**预留**） | 一次发声失败。Payload 含 `error_message`（异常 message / 错误码 / 阶段标记）。事件名常量 `CoreEvents.TTS_UTTERANCE_FAILED`。 |
@@ -434,7 +434,7 @@ classDiagram
 
 **契约要点**：
 
-- **发布者**：仅 TTS 引擎自身（基础模块，非工具；`src/modules/tts/` 下 4 个 Provider：`EdgeTTSProvider` / `GPTSoVITSProvider` / `VoiceboxProvider` / `OmniTTSProvider`，由 `build_tts_infrastructure(core [tts], event_bus)` 按 `core.toml [tts].provider` 单选构造后注入 StreamerAgent），且**只在 `handle_speech` 收到非空 `utterance_id` 参数时**发布——调用方（StreamerAgent 通过 UtteranceQueue）未携带该参数则不发事件，纯基础设施语义。
+- **发布者**：仅 TTS 引擎自身（基础模块，非工具；`src/modules/tts/` 下 4 个 Provider：`EdgeTTSProvider` / `GPTSoVITSProvider` / `VoiceboxProvider` / `OmniTTSProvider`，由 `build_tts_infrastructure(core [tts], event_bus)` 按 `infra.toml [tts].provider` 单选构造后注入 StreamerAgent），且**只在 `handle_speech` 收到非空 `utterance_id` 参数时**发布——调用方（StreamerAgent 通过 UtteranceQueue）未携带该参数则不发事件，纯基础设施语义。
 - **started 时机**：流式引擎 = 首块 PCM 写声卡；全量引擎 = `play_audio` 调用。
 - **finished 精度**：百毫秒级（不达 DAC 采样点精度）；声卡硬件缓冲残余**不在**信号内，因此 finished 事件是引擎回调信号而非播放端物理信号。
 - **订阅者**：当前生产代码**暂无订阅者**——字幕订阅接线属后续工作（事实：现有字幕 Provider 由 `StreamerAgent._dispatch_speech_and_emotion` 通过 speech 文本直接 fire-and-forget，不订阅 utterance 事件）；编排层记账、释放锁等消费者同样预留。Consumer taxonomy 与通道选择依据见 [数据流规则 §6](data-flow.md)。
@@ -565,7 +565,7 @@ event_bus.get_interceptor_names()            # 查看已挂载拦截器
 | `RateLimitInterceptor` | `interceptors/rate_limit.py` | `room.message.*` | 全局/单用户频率限制（防刷屏） |
 | `SimilarFilterInterceptor` | `interceptors/similar_filter.py` | `room.message.*` | 相似文本合并 |
 
-注册入口在 `main.py` 的 `register_event_interceptors()`（L239），配置来自 `core.toml` 的 `[interceptors.<name>]`（`enabled` 缺省视为启用）。
+注册入口在 `main.py` 的 `register_event_interceptors()`（L239），配置来自 `infra.toml` 的 `[interceptors.<name>]`（`enabled` 缺省视为启用）。
 
 > 敏感词净化不在拦截器层，主播发言统一出口在 Replyer 的 ProfanityFilter（§1.46.1 定案）。
 

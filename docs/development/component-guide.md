@@ -831,7 +831,7 @@ class MyToolProvider(ToolProvider):
 | 环节 | 实现位置 | 备注 |
 |------|----------|------|
 | 采集器 emit `room.message.danmaku` | `src/modules/collectors/console/console_input_collector.py::_emit_semantic_event` | 数据源换 = 替换采集器（`mock_danmaku` / `bili_danmaku_official` 等） |
-| 拦截器配置 | `config/core.toml` 的 `[interceptors.rate_limit]` / `[interceptors.similar_filter]` | 启停由 `enabled` 标志控制 |
+| 拦截器配置 | `config/infra.toml` 的 `[interceptors.rate_limit]` / `[interceptors.similar_filter]` | 启停由 `enabled` 标志控制 |
 | Agent 订阅 | `src/agents/streamer/streamer_agent.py::_subscribe_events` | 在 `_on_start` 中挂；priority=50 |
 | 弹幕聚合 | `src/agents/streamer/message_buffer.py` + `timing_gate.py` | 批窗口 / 强制响应规则 |
 | Planner ReAct 决策 | `src/agents/streamer/planner.py` | `planner_llm`（默认 llm 高质量模型）；工具列表=registry 全量+reply；`planner_max_steps=8` |
@@ -842,7 +842,7 @@ class MyToolProvider(ToolProvider):
 
 ### 已知缺口
 
-- **TTS 已基础模块化（原缺口已闭环 + v2.0.12 §8 修正）**：`core.toml [tts].enabled = true` 后，`build_tts_infrastructure` 装配期按 `[tts].provider` 单选构造引擎实例，StreamerAgent 构造期接收并把 `engine.handle_speech` 注入 UtteranceQueue；reply 产出的 speech 经 UtteranceQueue → 引擎 `handle_speech` 播出（不走 ToolRegistry，零 TTS 工具条目）。设计决策见 [ADR-007](../architecture/adr/007-tts-infrastructure-pipeline.md)。
+- **TTS 已基础模块化（原缺口已闭环 + v2.0.12 §8 修正）**：`infra.toml [tts].enabled = true` 后，`build_tts_infrastructure` 装配期按 `[tts].provider` 单选构造引擎实例，StreamerAgent 构造期接收并把 `engine.handle_speech` 注入 UtteranceQueue；reply 产出的 speech 经 UtteranceQueue → 引擎 `handle_speech` 播出（不走 ToolRegistry，零 TTS 工具条目）。设计决策见 [ADR-007](../architecture/adr/007-tts-infrastructure-pipeline.md)。
 - **工具注册路径唯一**：`AgentManager` 不聚合工具注册——真实注册只走两条：① Agent 子类 `_register_tools()` 中自己 `registry.register_provider(provider, visible_to=...)`；② 分类工具在 `main.py` 由 `bind_core_tools(registry, tools_cfg)` 按域开关装配。装配结束后 `AgentManager.audit_tools(registry)` 按派生全名对账（缺失即 warning），不写任何工具实现。
 
 ---
@@ -858,6 +858,16 @@ class MyToolProvider(ToolProvider):
 - **错误处理**：`ToolRegistry.invoke()` 和 `ToolProvider.invoke()` **永不抛异常**——失败转为 `ToolExecutionResult(success=False, error_message=...)`；Agent / Collector 在边界处 `try/except` 后 `logger.error(..., exc_info=True)`
 - **类型**：Pydantic `BaseModel` 用于数据模型 / 配置 Schema / 事件 Payload；`dataclass(slots=True)` 用于简单内部包装类；`Protocol` 用于接口契约
 - **测试**：使用 `pytest`；异步用 `@pytest.mark.asyncio`；构造器注入便于 mock；测试用 `FakeBackend` / `FakeProvider` / `MockEventBus`
+
+### 配置 Schema 约定（包内权威）
+
+组件配置的**单一权威**是组件包内的 `ConfigSchema`（Collector/工具 Provider 为类内嵌定义，Agent 为包内模块级 `*Config`）；中央配置树（`src/modules/config/*_schemas.py`）只留槽位与聚合段，**不内联**组件字段定义——同一字段两处定义必然漂移。
+
+- **定义**：`class ConfigSchema(BaseConfig)`，字段一律 `Field(default=..., description="...")`；具体值/空串哨兵表达（禁 `None`）；时间字段毫秒
+- **登记**：新组件在 `src/modules/config/registry.py` 的显式 import 链登记（`EXPECTED_COMPONENTS` 清单内）；漏登记会在启动断言暴露（缺失清单随异常给出）
+- **校验**：加载管线按注册表把采集器子段分发给包内 Schema 校验，漂移路径以 `<组件名>.<字段>` 前缀并入宿主文件报告；校验后的干净子段全量写回
+- **消费**：组件运行时 `self.ConfigSchema.from_dict(raw)` 得到 typed 配置；缺键补默认、多键剥离并计入漂移
+- **WebUI**：dashboard 按 `BaseConfig` 自描述协议（根 Schema 的 `__file_name__` / `__section_label__`）动态分组渲染；写路径统一走加载管线（`update_config_values`），勿自行读改写 TOML
 
 ### 相关文档
 

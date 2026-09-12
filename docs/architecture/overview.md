@@ -78,7 +78,7 @@ flowchart TB
     Dashboard["Dashboard (observer)<br/>REST + WS"] -.-> Bus
 ```
 
-> 上图省略了几个常驻配角：`LogStreamer`（向 Dashboard 推实时日志）、`EventHistoryRecorder`（事件历史持久化/查看）。v2.0.12 起 TTS 发言管线：StreamerAgent 解析 `reply.result.content`，speech 字段由 UtteranceQueue 串行送入装配期注入的 `tts_engine` 实例（`build_tts_infrastructure(tts_config, event_bus=None)` 按 `core.toml [tts].provider` 选中的引擎），其 `handle_speech` 入口完成合成 + 播放；TTS 引擎自身（基础模块，非工具）发布 `tts.utterance.*` 三事件；声卡播放经 `src/modules/audio/AudioDeviceManager`（v2.0.10 由旧 `src/modules/tts/audio_device_manager.py` 迁移而来）。ToolRegistry 中零 TTS 条目——TTS 不再走工具调用路径。
+> 上图省略了几个常驻配角：`LogStreamer`（向 Dashboard 推实时日志）、`EventHistoryRecorder`（事件历史持久化/查看）。v2.0.12 起 TTS 发言管线：StreamerAgent 解析 `reply.result.content`，speech 字段由 UtteranceQueue 串行送入装配期注入的 `tts_engine` 实例（`build_tts_infrastructure(tts_config, event_bus=None)` 按 `infra.toml [tts].provider` 选中的引擎），其 `handle_speech` 入口完成合成 + 播放；TTS 引擎自身（基础模块，非工具）发布 `tts.utterance.*` 三事件；声卡播放经 `src/modules/audio/AudioDeviceManager`（v2.0.10 由旧 `src/modules/tts/audio_device_manager.py` 迁移而来）。ToolRegistry 中零 TTS 条目——TTS 不再走工具调用路径。
 
 ## 目录结构
 
@@ -149,7 +149,7 @@ sequenceDiagram
 
     Main->>Main: parse_args / setup_logging_early
     Main->>Main: load_config(ConfigService.initialize)
-    Main->>Main: validate_config(7 文件存在性)
+    Main->>Main: validate_config（六文件存在性）
     Main->>Main: exit_if_config_created
     Main->>Main: register_core_events (EventBus 构造前)
     Main->>LLM: 1) setup(config)
@@ -172,7 +172,7 @@ sequenceDiagram
 
 CLI 选项：`--debug`（DEBUG 日志级别）、`--filter MODULE [MODULE ...]`（仅显示指定模块 INFO/DEBUG，WARNING+ 总显示）、`--dev-webui`（浏览器自动打开 `http://localhost:60315` 而非 `http://127.0.0.1:60214`）、`--dry`（仅验证组合根 wiring，不进入主循环即关闭）。
 
-拦截器默认行为（`core.toml` 的 `[interceptors.*]`，`enabled` 默认 `True`）：
+拦截器默认行为（`infra.toml` 的 `[interceptors.*]`，`enabled` 默认 `True`）：
 
 | 拦截器 | 默认参数 | 作用事件 | 行为 |
 |--------|---------|---------|------|
@@ -258,7 +258,7 @@ sequenceDiagram
 
 | 分类 | provider 标识 | 工具数 | 工具名（注册名） |
 |----|----------|-------|--------|
-| TTS | （基础模块） | — | 4 引擎 Provider 位于 `src/modules/tts/`，不注册 ToolRegistry；`build_tts_infrastructure` 按 `core.toml [tts].provider` 单选构造注入 StreamerAgent，详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md) |
+| TTS | （基础模块） | — | 4 引擎 Provider 位于 `src/modules/tts/`，不注册 ToolRegistry；`build_tts_infrastructure` 按 `infra.toml [tts].provider` 单选构造注入 StreamerAgent，详见 [ADR-007](adr/007-tts-infrastructure-pipeline.md) |
 | Subtitle | （基础模块） | — | `src/modules/subtitle/`（`build_subtitle_infrastructure` 装配，不经 ToolRegistry） |
 | avatar | `vts` | 12 | `vts_smile` / `vts_close_eyes` / `vts_open_eyes` / `vts_set_expression` / `vts_set_parameter_value` / `vts_get_parameter_value` / `vts_trigger_hotkey`（按热键名优先，连接后描述动态携带可用热键清单）/ `vts_load_item` / `vts_load_sticker` / `vts_set_idle_enabled` / `vts_reconnect` / `vts_get_stats` |
 | avatar | `vrchat` | 3 | `vrchat_set_expression` / `vrchat_trigger_gesture` / `vrchat_get_stats` |
@@ -302,7 +302,7 @@ EventBus 是事件通道（三通道协作之一，承载游戏→主播的事�
 
 ### 事件拦截器（Interceptor）
 
-挂在 EventBus 分发层的全局单点（`emit` 后、订阅者收到前过同一道链）。内置 `RateLimitInterceptor` + `SimilarFilterInterceptor`，作用于 `room.message.*`，配置见 `core.toml` 的 `[interceptors.*]`。语义契约沿袭自旧管道 Process：返回原事件=透传 / 新事件=转换 / `None`=丢弃。
+挂在 EventBus 分发层的全局单点（`emit` 后、订阅者收到前过同一道链）。内置 `RateLimitInterceptor` + `SimilarFilterInterceptor`，作用于 `room.message.*`，配置见 `infra.toml` 的 `[interceptors.*]`。语义契约沿袭自旧管道 Process：返回原事件=透传 / 新事件=转换 / `None`=丢弃。
 
 **敏感词净化不在拦截器层**——主播发言统一出口在 `Replyer.ProfanityFilter`（`src/agents/streamer/replyer.py`）。
 
@@ -343,61 +343,40 @@ agent = StreamerAgent(
 
 ### ④ 配置驱动
 
-v2 配置为 7 文件树（`core / model / agents / tools / memory / storage / background`），Pydantic Schema 驱动生成/验证/迁移。`[agents]` 与 `[tools]` 段分别管控主体与能力的启用。
+v2 配置为**六文件树**（`agents / collectors / tools / model / storage / infra`，`config/` 目录每域一文件），Pydantic Schema 驱动生成、校验与漂移写回；每文件自带 `[meta].version` 结构版本（独立递进）。启用开关收敛为两处：`agents.toml` 的 `[agents].enabled` 与 `collectors.toml` 顶层 `enabled`。
+
+加载是**单一管线**（`multi_file_loader.load_config_dir`）：①全读 → ②③版本推进（升级钩子注册表，缺失版本硬错）→ ④ Pydantic 校验（硬错，无 raw dict 降级；采集器子段按组件注册表分发校验）→ ⑤ 漂移写回（全量序列化 + 批次备份 + 自写压标）→ ⑥ 合并视图（剥 `[meta]`，scope 展平）。组件包内 `ConfigSchema` 是该组件配置的唯一权威，中央树不内联字段定义。
 
 ```toml
-# agents.toml —— 启用哪些 Agent（每个 Agent 一份顶级自包含子配置，无分类层）
+# agents.toml —— 业务 Agent（[agents] 段聚合启用名单 + 各 Agent 子配置）
 [agents]
-enabled = ["streamer", "text_adv"]
+enabled = ["streamer"]
 
 [agents.streamer]
-planner_llm = "llm_fast"
-replyer_llm  = "llm"
-# ... StreamerAgentConfig 其他字段
+# StreamerConfig 子树：persona / context / proactive / background / ...
+[agents.streamer.persona]
+bot_name = "麦麦"
 
-[agents.text_adv]
-command_llm = "llm"
-# ... TextAdvAgentConfig 其他字段
-```
+[agents.minecraft]
+# MinecraftConfig：max_steps / execute_* / mcp（Agent 私有 MCP，位置即归属）
 
-```toml
-# core.toml —— v2.0.12 TTS 基础设施段（自包含：行为参数 + 四引擎子段，独立于 [tools]）
-[tts]
-enabled = true                       # TTS 总开关
-provider = "gptsovits"               # 装配期据此选择唯一激活引擎（edge_tts/gptsovits/voicebox/omni_tts）；未知 provider 回退 edge_tts
-max_queue = 3                        # 丢最旧
-render_timeout_ms = 60000            # 单 utterance 超时（覆盖合成+播放全周期）
+# collectors.toml —— 采集器（名单驱动装配；各采集器子段由包内 ConfigSchema 校验）
+enabled = ["console_input"]
 
-[tts.gptsovits]                      # 引擎连接/合成参数子段（v2.0.12 起由 tools.toml 整体迁入）
-api_url = "ws://127.0.0.1:9880"
-# ... gptsovits 引擎连接参数
-
-# tools.toml —— 分类开关（avatar/studio 等分类各一开关单元：开 = 其全部工具可见，人类控制）
+# tools.toml —— 工具域（提供者开关 + disabled_tools + [tools.tasks] 异步任务基建）
 [tools]
-enabled = ["perception"]  # 顶层族启用开关
+disabled_tools = []
 
-[tools.perception.config]
-enabled = ["stt"]  # Collector 在此启用（采集配置已迁移至 [tools.perception.config]）
-bili_danmaku_official = { ... }
+# infra.toml —— 基础设施（tts / subtitle / dashboard / logging / interceptors / simulator / events）
 
-[tools.avatar.vts]        # avatar 分类：开一个形象 = 其全部工具进入可见集
-enabled = true
-[tools.avatar.vts.config] # 该形象的具体配置（连接参数 / idle / 热键相关）
-vts_host = "localhost"
+# model.toml —— 三层模型结构（llm_providers / llm_models / llm_profiles，6 用途 profile 必填）
 
-[tools.avatar.warudo]
-enabled = false
-[tools.avatar.warudo.config]
-action_catalog = { wave = "招手", nod = "点头" }  # 预声明动作清单（注入工具描述）
-
-[tools.avatar.vrchat]
-enabled = false
-
-[tools.studio.obs]
-enabled = true
+# storage.toml —— 顶层扁平（sqlite / memory）
 ```
 
-7 文件树、Schema 升级钩子、迁移测试等细节见 [配置 Schema 变更规则](../../AGENTS.md#配置-schema-变更规则) 与 `src/modules/config/` 下相关文档。
+WebUI 配置页经根 Schema 自描述协议（`__file_name__` / `__section_label__`）动态分组；写路径统一走 `update_config_values`（校验硬错 → 备份 → 自写压标 → 注释重生成），infra 为 hot 段（写后即时重载），其余段待重启。
+
+六文件布局、升级钩子注册表、配置变更规则等细节见 [配置与存储变更](../../AGENTS.md#配置与存储变更) 与 `src/modules/config/`（`multi_file_loader.py` 加载管线 / `upgrade.py` 版本推进 / `registry.py` 组件注册表）。
 
 ### ⑤ 错误隔离
 

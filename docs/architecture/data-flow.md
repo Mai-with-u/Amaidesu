@@ -86,7 +86,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
     RT -.->|emotion 直接 invoke| Other
 ```
 
-> 图例说明：实线箭头是当前主链路；虚线箭头是辅助通道（空转检查点、工具异步结果回传、TTS 生命周期事件广播、emotion 直调）。reply 的 speech 字段经 UtteranceQueue 串行送入装配期注入的 `tts_engine` 实例（`build_tts_infrastructure` 按 `core.toml [tts].provider` 单选构造后直接注入 StreamerAgent），由其 `handle_speech(text, utterance_id)` 完成合成 + 播放——不再经 ToolRegistry；emotion 字段由 StreamerAgent 解析后**直接 invoke** `vts_set_expression` 工具，不经事件；TTS 引擎自身（基础模块）播放生命周期发布 `tts.utterance.*` 三事件。皮套口型同步链路已拆除（见文末"通信机制选型"末段）。
+> 图例说明：实线箭头是当前主链路；虚线箭头是辅助通道（空转检查点、工具异步结果回传、TTS 生命周期事件广播、emotion 直调）。reply 的 speech 字段经 UtteranceQueue 串行送入装配期注入的 `tts_engine` 实例（`build_tts_infrastructure` 按 `infra.toml [tts].provider` 单选构造后直接注入 StreamerAgent），由其 `handle_speech(text, utterance_id)` 完成合成 + 播放——不再经 ToolRegistry；emotion 字段由 StreamerAgent 解析后**直接 invoke** `vts_set_expression` 工具，不经事件；TTS 引擎自身（基础模块）播放生命周期发布 `tts.utterance.*` 三事件。皮套口型同步链路已拆除（见文末"通信机制选型"末段）。
 
 ---
 
@@ -211,7 +211,7 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
 
 - **每一步都是单向流动**。控制台输入 → EventBus → StreamerAgent → 工具调用 → 返回值，全程无环。Planner→Replyer 是同 Agent 内 await，不经事件中转（v2 删除 `decision.intent.generated` 的原因）。
 - **拦截器层是全局单点**。RateLimit/SimilarFilter 作用于 `room.message.*`，所有订阅者共享净化后的结果。`core.*` / `live.*` / `planner.*` / `tts.utterance.*` 等不经过拦截器。
-- **TTS 是基础模块而非工具**（v2.0.12 §8 修正）。每句 reply 落库即发声——`reply.result.content` 的 `speech` 字段由 StreamerAgent 主动入 UtteranceQueue，不依赖 LLM 决策调用 TTS 工具（事实上 TTS 已提升为基础设施、移出 ToolRegistry）；装配期 `build_tts_infrastructure(core [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent，运行时由 UtteranceQueue 通过注入的 `speak` 适配器调 `engine.handle_speech`——零 Facade 路由层、零 ToolRegistry 条目。`core.toml [tts]` 自包含（行为参数 + 四引擎子段），`tools.toml` 无任何 TTS 段，详见 ADR-007。
+- **TTS 是基础模块而非工具**（v2.0.12 §8 修正）。每句 reply 落库即发声——`reply.result.content` 的 `speech` 字段由 StreamerAgent 主动入 UtteranceQueue，不依赖 LLM 决策调用 TTS 工具（事实上 TTS 已提升为基础设施、移出 ToolRegistry）；装配期 `build_tts_infrastructure(core [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent，运行时由 UtteranceQueue 通过注入的 `speak` 适配器调 `engine.handle_speech`——零 Facade 路由层、零 ToolRegistry 条目。`infra.toml [tts]` 自包含（行为参数 + 四引擎子段），`tools.toml` 无任何 TTS 段，详见 ADR-007。
 - **空转提醒不经事件**。独立调度循环与旧检查点事件已随流程单重设计删除（ADR-011）；空闲提醒职责归 ProactiveTrigger 自身（流程单超时提醒是其触发源之一）。
 
 ---

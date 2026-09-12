@@ -41,17 +41,16 @@ uv sync
 uv run python main.py
 ```
 
-首次运行会检测 `config/` 目录。目录不存在时，程序按 Schema 自动生成 **七文件配置树**：
+首次运行会检测 `config/` 目录。目录不存在时，程序按 Schema 自动生成 **六文件配置树**（每文件自带 `[meta].version` 结构版本）：
 
 ```
 config/
-├── core.toml        # 基础设施（meta/general/persona/context/events/dashboard/logging/interceptors）
-├── model.toml       # LLM/VLM 模型（[[llm_providers]] + [llm]/[llm_fast]/[vlm]/[llm_local]/[llm_summary]/[llm_agenda]）
-├── agents.toml      # 业务 Agent（[agents]）
-├── tools.toml       # 工具包（[tools] + 感知/理解/输出/内容引擎/外部）
-├── memory.toml      # 记忆系统（[memory] backend=simple|amemorix）
-├── storage.toml     # 存储（[storage.sqlite]）
-└── background.toml  # 后台维护（[background] + [background.compressor]）
+├── agents.toml      # 业务 Agent（[agents] 启用名单 + streamer/minecraft/text_adv 子树）
+├── collectors.toml  # 采集器（顶层 enabled 名单 + 各采集器子段）
+├── tools.toml       # 工具域（[tools] 提供者开关 / disabled_tools / [tools.tasks]）
+├── model.toml       # 三层模型结构（[[llm_providers]] / [[llm_models]] / [llm_profiles]）
+├── storage.toml     # 存储与记忆（顶层 [sqlite] / [memory]）
+└── infra.toml       # 基础设施（[tts] / [subtitle] / [dashboard] / [logging] / [interceptors.*] / [simulator]）
 ```
 
 生成完毕后程序会打印提示框并 **主动退出**，让你先编辑配置再回来：
@@ -66,15 +65,15 @@ config/
 
 > 这是 v2.0.0 引入的 `exit_if_config_created` 行为，避免用占位 API Key 直接跑 LLM、产生无意义的 token 消耗。补完配置后再次 `uv run python main.py` 即可。
 >
-> 如果是从旧版本（v1.x，五文件）升级，旧 `config/input.toml` / `config/decision.toml` / `config/output.toml` 会被自动迁移并备份到 `config/old/` 下，源段会被 `CrossFileMigration` 合并进新的 `tools.toml` / `agents.toml`。
+> 加载管线对结构漂移自动写回（缺键补默认、冗余键清理，写回前生成批次备份到 `config/old/`）；校验失败（类型违约 / 未注册采集器段 / 缺 `[meta].version`）启动期硬错退出。
 
 ### 2.5 编辑配置
 
-七文件各自只承担一个域，本节只列首次成功运行所必需的最小集。其他字段保留默认值即可。
+六文件各自只承担一个域，本节只列首次成功运行所必需的最小集。其他字段保留默认值即可。
 
 #### LLM 配置（必需）
 
-`config/model.toml` 采用 **provider + profile** 两层结构：`[[llm_providers]]` 定义可复用的 API 连接，profile（`[llm]` / `[llm_fast]` 等）通过 `provider` 字段引用并按需覆盖模型参数。
+`config/model.toml` 采用 **provider / model / profile 三层结构**：`[[llm_providers]]` 定义可复用的 API 连接，`[[llm_models]]` 登记模型标识与价格，`[llm_profiles]` 按**用途**（planner / replyer / summary / minecraft / vision / simulator，六成员必填）组合 provider 与模型列表并支持故障切换。
 
 ```toml
 # config/model.toml
@@ -84,14 +83,16 @@ client_type = "openai"       # 客户端类型
 base_url = "https://api.deepseek.com"
 api_key = "sk-your-key"      # 填入你的 API Key（留空会用 sk-dummy 并警告）
 
-[llm]                        # 高质量对话（默认 Planner/Replyer 都用它）
-provider = "deepseek"
-model = "deepseek-chat"
-temperature = 0.2
+[[llm_models]]
+provider = "deepseek"        # 引用上方 provider
+model_identifier = "deepseek-chat"
 
-[llm_fast]                   # 快速对话（低延迟）
-provider = "deepseek"
-model = "deepseek-chat"
+[llm_profiles.planner]       # 决策核心（质量敏感）
+model_list = ["deepseek-chat"]
+selection_strategy = "sequential"
+
+[llm_profiles.replyer]       # 表达引擎
+model_list = ["deepseek-chat"]
 temperature = 0.7
 ```
 
@@ -99,7 +100,7 @@ temperature = 0.7
 
 #### 启用 Agent（必需）
 
-`config/agents.toml` 控制哪些业务 Agent 启动。首次推荐只开 `streamer`（主播 Agent），等跑通后再加 `game`。
+`config/agents.toml` 控制哪些业务 Agent 启动。首次推荐只开 `streamer`（主播 Agent），等跑通后再加游戏 Agent。LLM profile 用途名由装配期固定（Planner→planner、Replyer→replyer），不再是配置字段。
 
 ```toml
 # config/agents.toml
@@ -108,71 +109,50 @@ enabled = ["streamer"]
 
 # 可选：自定义子段（全部字段均有默认值，留空走默认即可）
 [agents.streamer]
-planner_llm = "llm_fast"     # Planner 用的 LLM profile 名
-replyer_llm = "llm"          # Replyer 用的 LLM profile 名
-# proactive_enabled = false
-# profanity_enabled = false
+# [agents.streamer.persona]   # 人设（bot_name / personality / ...）
+# [agents.streamer.proactive] # 主动发言（enabled 默认 true）
 ```
 
-每个游戏 Agent 是一份独立顶级配置段，启用即在 `enabled` 列表加名（当前可用：`text_adv` 文字冒险示例，零依赖开箱可玩；`minecraft` 需 MCP 服务器）：
+游戏 Agent 是独立顶级配置段，启用即在 `enabled` 列表加名（当前可用：`text_adv` 文字冒险示例，零依赖开箱可玩；`minecraft` 需 MCP 服务器，Agent 私有 MCP 配置在 `[agents.minecraft.mcp]`，位置即归属）：
 
 ```toml
 [agents]
 enabled = ["streamer", "text_adv"]
-
-[agents.text_adv]
-command_llm = "llm"
 ```
 
 #### 启用采集器
 
-采集器归位 `config/tools.toml` 的 `[tools.perception]` 包下。先把"控制台输入"开起来，零依赖就能对话：
+采集器配置宿主是 `config/collectors.toml`（顶层 `enabled` 名单驱动装配）。默认已启用"控制台输入"，零依赖就能对话：
 
 ```toml
-# config/tools.toml
-[tools]
-enabled = ["perception", "output"]   # 工具包启用列表
-
-# 感知工具包（屏幕/音频/弹幕/遥测）
-[tools.perception]
-enabled = true
-provider = "builtin"                 # builtin=框架内置 / game=游戏 Agent / mcp=预留枚举值暂无实现
-
-# 工具包具体配置（采集器在此声明）
-[tools.perception.config]
+# config/collectors.toml
 enabled = ["console_input"]          # 仅启用控制台输入
-# enabled = ["bili_danmaku"]         # B 站 legacy 弹幕（需填 room_id）
-# enabled = ["bili_danmaku_official"]# B 站官方弹幕（需填 id_code/app_id/access_key）
-# enabled = ["read_pingmu"]          # 屏幕变化检测（需 VLM）
-# enabled = ["stt"]                  # 语音转写（需 iflytek 配置）
-# enabled = ["mock_danmaku"]         # 从 data/*.jsonl 回放（调试）
+# enabled = ["console_input", "bili_danmaku"]  # B 站 legacy 弹幕（需填 room_id）
+# enabled = ["console_input", "bili_danmaku_official"]  # B 站官方弹幕（需填 id_code/app_id/access_key）
+# enabled = ["console_input", "screen"]  # 屏幕变化检测（需 VLM profile）
+# enabled = ["console_input", "stt"]     # 语音转写（需 iflytek 配置）
 
-# 控制台输入子配置（可留空，使用默认）
-[tools.perception.config.console_input]
+# 各采集器的具体配置 = 同名子段（由该采集器包内 ConfigSchema 校验，缺键自动补默认）
+[console_input]
 user_id = "console_user"
 user_nickname = "控制台"
 ```
 
-跑通后再按需启用其他采集器，完整字段含义见配置 Schema（`src/modules/config/tools_schemas.py` 与各 Collector 模块的 `ConfigSchema`）。
+跑通后再按需启用其他采集器，完整字段含义见各 Collector 模块包内的 `ConfigSchema`。
 
 #### 启用渲染输出（可选）
 
-`[tools.output]` 包是字幕 / 皮套 / OBS 等渲染工具的统一入口，装配由 `config.enabled` 列表勾选控制。**TTS 不在此列**——语音已成为基础模块（v2.0.12 §8 修正：整体提升为基础设施，移出工具池），由 `config/core.toml` 的 `[tts]` 段独立控制（`enabled = true` 即主播每句话自动合成播出，`provider` 选择引擎；`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目），详见下方说明与 [ADR-007](architecture/adr/007-tts-infrastructure-pipeline.md)。
+字幕 / 皮套 / OBS 等渲染工具由 `config/tools.toml` 的提供者开关控制（开一个提供者 = 其全部工具进入可见集）；**TTS 是基础设施**，由 `config/infra.toml` 的 `[tts]` 段独立控制（`enabled = true` 即主播每句话自动合成播出，`provider` 单选引擎；ToolRegistry 中零 TTS 条目），详见 [ADR-007](architecture/adr/007-tts-infrastructure-pipeline.md)。
 
 ```toml
-# config/tools.toml（接在上文 [tools.perception] 之后）
-[tools.output]
-enabled = true
-provider = "builtin"
+# config/tools.toml —— 提供者开关（avatar=皮套 / studio=演播）
+[tools.avatar.vts]
+enabled = false                      # 开启后 vts_* 工具可见
 
-[tools.output.config]
-enabled = ["subtitle", "vts"]        # 仅示例：勾上后会按同名子段加载配置
-
-# TTS 不在 tools 配置里，语音由 core.toml 独立控制：
-# config/core.toml
-# [tts]
-# enabled = true                     # 开启后主播每句话自动合成播出
-# provider = "gptsovits"             # 引擎选择（edge_tts/gptsovits/voicebox/omni_tts）
+# config/infra.toml —— TTS 基础设施
+[tts]
+enabled = true                       # 开启后主播每句话自动合成播出
+provider = "gptsovits"               # 引擎选择（edge_tts/gptsovits/voicebox/omni_tts）
 ```
 
 ### 2.6 再次运行
@@ -191,44 +171,33 @@ uv run python main.py --dry
 
 ## 3. 配置说明
 
-### 3.1 主要配置段（七文件 ↔ 顶层段权威表）
+### 3.1 主要配置段（六文件 ↔ 顶层段权威表）
 
-| 配置文件 | 顶层段 | 说明 |
+| 配置文件 | 顶层段/键 | 说明 |
 |---------|--------|------|
-| `core.toml` | `[meta]` | 配置元数据（`CONFIG_VERSION=2.0.16`，自动写回） |
-| `core.toml` | `[general]` | 进程标识（Dashboard / 日志 / 模拟器区分用） |
-| `core.toml` | `[persona]` | VTuber 人设（bot_name / personality / style_constraints / max_response_length） |
-| `core.toml` | `[context]` | 上下文组装器（enabled / memory_recall_long_term） |
-| `core.toml` | `[events]` | 事件历史环形缓冲（history_size / persist） |
-| `core.toml` | `[dashboard]` | Web Dashboard 配置（端口 / CORS / 心跳） |
-| `core.toml` | `[simulator]` | 模拟直播间（开关 + LLM 节奏 + token 预算） |
-| `core.toml` | `[logging]` | 日志配置（级别 / 轮转 / 过滤） |
-| `core.toml` | `[interceptors.rate_limit]` / `[interceptors.similar_filter]` | 事件拦截器（作用于弹幕流，见 §3.4） |
-| `model.toml` | `[[llm_providers]]` | LLM provider 池（可复用 API 连接） |
-| `model.toml` | `[llm]` / `[llm_fast]` / `[vlm]` / `[llm_local]` / `[llm_summary]` / `[llm_agenda]` | LLM profile（引用 provider + 覆盖参数） |
-| `agents.toml` | `[agents]` 启用列表 + `[agents.<name>]` 各 Agent 顶级自包含子配置 | 业务 Agent 启用与配置 |
-| `tools.toml` | `[tools]` + `[tools.perception]` / `[tools.understanding]` / `[tools.output]` / `[tools.content_engine]` / `[tools.external]` | 工具包启用与子配置（替代旧 `[collectors]` / `[handlers]`） |
-| `memory.toml` | `[memory]` + 子表 | 记忆后端（`backend="simple"` 或 `"amemorix"`） |
-| `storage.toml` | `[storage.sqlite]` | SQLite 存储（`db_path` / `wal` / `busy_timeout_ms`） |
-| `background.toml` | `[background]` + `[background.compressor]` | 后台维护 tick 与压缩 worker |
-
-> 字段权威定义在 `src/modules/config/*_schemas.py`；修改后启动会自动写回默认值与 `CONFIG_VERSION`，迁移测试见 `tests/config/`。
+| `agents.toml` | `[meta]` / `[agents].enabled` / `[agents.<name>]` | 业务 Agent 启用与子树配置（streamer 子树含 persona/context/proactive/background/command 等） |
+| `collectors.toml` | `enabled` + 各采集器同名段 | 采集器名单驱动装配；子段由包内 ConfigSchema 校验 |
+| `tools.toml` | `[tools]` | 提供者开关（`[tools.avatar.*]` / `[tools.studio.*]` / `[tools.vision]` / `[tools.memory]` / `[tools.mcp]`）+ `disabled_tools` + `[tools.tasks]` / `[tools.health]` |
+| `model.toml` | `[[llm_providers]]` / `[[llm_models]]` / `[llm_profiles.<用途>]` | 三层模型结构；六用途 profile（planner/replyer/summary/minecraft/vision/simulator）必填 |
+| `storage.toml` | `[sqlite]` / `[memory]` | SQLite 连接（db_path / busy_timeout_ms）与记忆后端（backend="simple"） |
+| `infra.toml` | `[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` / `[simulator]` / `[events]` / `[interceptors.*]` | 基础设施段集（hot 段：写后即时重载） |
+> 字段权威定义在 `src/modules/config/*_schemas.py`；修改后加载管线自动写回补齐默认值；每文件 `[meta].version` 独立递进。
 
 ### 3.2 组件类型
 
 | 类型 | 职责 | 代码位置 | 配置入口 |
 |------|------|---------|---------|
-| **采集器（Collector）** | 世界→系统的入口：把弹幕、语音、控制台、屏幕变化等外部数据标准化、推事件 | `src/modules/collectors/` | `[tools.perception.config]` |
+| **采集器（Collector）** | 世界→系统的入口：把弹幕、语音、控制台、屏幕变化等外部数据标准化、推事件 | `src/modules/collectors/` | `collectors.toml`（`enabled` 名单 + 同名子段） |
 | **业务 Agent（Agent）** | 拥有内部状态与工具的主循环体；订阅事件、决策、调用工具 | `src/agents/` | `[agents]` + `[agents.<name>]` |
-| **工具（Tool）** | 单一能力函数（@tool 装饰器），由 Agent 在决策时按需调用 | `src/modules/tools/` | `[tools.<pack>.config]` |
+| **工具（Tool）** | 单一能力函数（@tool 装饰器），由 Agent 在决策时按需调用 | `src/modules/tools/` | `tools.toml` 提供者开关与子配置 |
 
-> 渲染工具（字幕 / VTS / OBS 等）在 v2 中以 **Tool Provider** 的形式注册：开启 `[tools.output]` 后，工具包内的组件会注册到 `ToolRegistry` 中。**TTS 是例外**——语音已成为基础模块（v2.0.12 §8 修正：整体提升为基础设施，移出工具池），位于 `src/modules/tts/`，由 `config/core.toml` 的 `[tts]` 段驱动装配（`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目；开启后主播每句话自动播出），详见 [组件开发指南](development/component-guide.md) 与 [ADR-007](architecture/adr/007-tts-infrastructure-pipeline.md)。
+> 渲染工具（字幕 / VTS / OBS 等）在 v2 中以 **Tool Provider** 的形式注册：开启对应提供者开关后，工具包内的组件会注册到 `ToolRegistry` 中。**TTS 是例外**——语音已成为基础模块（v2.0.12 §8 修正：整体提升为基础设施，移出工具池），位于 `src/modules/tts/`，由 `config/infra.toml` 的 `[tts]` 段驱动装配（`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目；开启后主播每句话自动播出），详见 [组件开发指南](development/component-guide.md) 与 [ADR-007](architecture/adr/007-tts-infrastructure-pipeline.md)。
 
 ### 3.3 可用组件清单
 
 完整字段含义见 [3阶段架构总览](architecture/overview.md)；本节列出当前已落地的组件名。
 
-#### 采集器（`SUPPORTED_COLLECTORS`）
+#### 采集器（`SUPPORTED_COLLECTORS`，即注册表在册名单）
 
 源：`src/modules/collectors/factory.py`
 
@@ -237,11 +206,9 @@ uv run python main.py --dry
 | `console_input` | 控制台输入（开发测试，零依赖） | `user_id` / `user_nickname` |
 | `bili_danmaku` | B 站 legacy 弹幕（轮询） | `room_id` / `poll_interval` |
 | `bili_danmaku_official` | B 站官方长连弹幕 | `id_code` / `app_id` / `access_key(_secret)` / `api_host` |
-| `read_pingmu` | 屏幕变化检测（VLM） | `screenshot_interval` / `diff_threshold` / `check_window` / `max_cache_size` / `max_cached_images`（VLM key/model 走 `model.toml [vlm]` profile） |
-| `stt` | 语音转文字（讯飞 ASR + VAD） | `stt.iflytek_asr` / `stt.vad` / `stt.audio` / `stt.message_config` |
-| `mock_danmaku` | 从 `data/*.jsonl` 回放（调试用） | `log_file_path` / `send_interval` / `loop_playback` |
+| `screen` | 屏幕变化检测（VLM） | 包内 ConfigSchema（VLM 走 `model.toml` vision profile） |
+| `stt` | 语音转文字（讯飞 ASR + VAD） | 包内 ConfigSchema（iflytek_asr / vad / audio） |
 
-> `text_adv_game` 仍在采集器 Schema 中保留，但实际已迁移到 `src/agents/text_adv/` 作为 Agent 实现，不再通过采集器配置。
 
 #### 业务 Agent（`SUPPORTED_AGENTS`）
 
@@ -249,10 +216,10 @@ uv run python main.py --dry
 
 | 名称 | 用途 | 关键子配置 |
 |------|------|-----------|
-| `streamer` | 主播 Agent（Planner + Replyer 两阶段决策） | `planner_llm` / `replyer_llm` / `proactive_*` / `agenda_*` / `profanity_*` / `command_*` |
-| `game` | 游戏 Agent（当前唯一引擎 `text_adv`，文字冒险示例） | `engine = "text_adv"` / `command_llm` |
+| `streamer` | 主播 Agent（Planner + Replyer 两阶段决策） | `[agents.streamer]` 子树（persona / context / proactive / background / command / word_filter） |
+| `minecraft` | 游戏 Agent（MCP 工具玩 Minecraft，事件驱动 ReAct） | `[agents.minecraft]`（max_steps / execute_* / mcp） |
 
-> `custom` 也在 AgentType 字面量里保留，但需用户自行注册，框架不内置实例化逻辑。
+> `text_adv`（文字冒险示例，零依赖开箱可玩）同属 Agent 清单；完整名单见 `src/modules/agents/factory.py` 的 `SUPPORTED_AGENTS`。
 
 #### 工具（按族列举，代表工具名）
 
@@ -268,10 +235,10 @@ uv run python main.py --dry
 
 ### 3.4 事件拦截器
 
-旧版 `input pipeline` 里的"防刷屏 / 相似文本合并"在 v2 中迁移为 **EventBus 全局事件拦截器**，默认开启，作用于弹幕流（`room.message.*` 事件）。`core.toml` 里对应两段：
+旧版 `input pipeline` 里的"防刷屏 / 相似文本合并"在 v2 中迁移为 **EventBus 全局事件拦截器**，默认开启，作用于弹幕流（`room.message.*` 事件）。`infra.toml` 里对应两段：
 
 ```toml
-# config/core.toml
+# config/infra.toml
 [interceptors.rate_limit]
 enabled = true                # 限流：单用户与全局窗口
 global_rate_limit = 100       # 全局每秒上限
@@ -370,7 +337,7 @@ pnpm run dev                     # → Vite 启动在 http://localhost:60315
 - 修改后端 Python (`src/**/*.py`) 或配置文件 (`config/*.toml`) 需要重启主程序
 - 只跑 `pnpm run dev` 而不跑主程序，WebSocket/API 会无法连接
 
-#### 配置选项（`config/core.toml`）
+#### 配置选项（`config/infra.toml`）
 
 ```toml
 [dashboard]
@@ -389,7 +356,7 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 
 - **实时事件流**（`/ws`）：EventBus 上的事件实时推送，可按类型过滤
 - **组件管理页**：采集器与 Agent 的动态启停 / 健康状态查看
-- **配置在线编辑**：在线修改 `core.toml` / `tools.toml` 等并热加载
+- **配置在线编辑**：在线修改配置并经统一管线写回（infra 段即时重载，其余待重启）
 - **LLM 对话调试**：直接在 UI 里向指定 profile 发请求，看完整 prompt 与 token 消耗
 - **会话历史**：按 session 维度查看观众消息、AI 回复、工具调用
 
@@ -439,7 +406,7 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 
 ### 已知限制
 
-- **TTS 已基础模块化**（v2.0.12 §8 修正：TTS 提升为基础设施）：在 `config/core.toml` 的 `[tts]` 段设 `enabled = true` 后，主播每句回复自动合成播出（引擎由 `provider` 选择，默认 `gptsovits` 需本地服务在跑；无本地服务可用 `edge_tts`，仅需网络）。字幕 / 皮套 / OBS 等渲染工具仍按 `[tools.output.config]` 的 `enabled` 列表勾选装配。
+- **TTS 已基础模块化**（v2.0.12 §8 修正：TTS 提升为基础设施）：在 `config/infra.toml` 的 `[tts]` 段设 `enabled = true` 后，主播每句回复自动合成播出（引擎由 `provider` 选择，默认 `gptsovits` 需本地服务在跑；无本地服务可用 `edge_tts`，仅需网络）。字幕 / 皮套 / OBS 等渲染工具仍按 `[tools.output.config]` 的 `enabled` 列表勾选装配。
 - **控制台交互**已可用；弹幕采集、屏幕识别、语音转写需对应第三方凭据（id_code / appid / VLM API Key 等）。
 - 完整字段定义在 `src/modules/config/*_schemas.py`；本指南只覆盖"首次跑通"的最小集。
 

@@ -84,7 +84,7 @@ Amaidesu 的业务层组织方式经历过四代。git 历史考实了这条演�
 | 服务注册机制，依赖运行时才暴露问题 | 无服务注册；构造器注入 + 事件/工具契约 |
 | 24 个插件互相依赖成石山 | 游戏 Agent 之间零依赖，经事件（`game.*`）/状态（工具，如 text_adv_get_story）/指令（minecraft_send_prompt 类工具）三通道松耦合 |
 | 消息流经中心中转，链路不清 | Agent → 工具/事件/存储直达，单向清晰 |
-| 全局/插件级配置混乱 | 七文件按领域拆分 + Pydantic Schema 校验 |
+| 全局/插件级配置混乱 | 六文件按领域拆分 + Pydantic Schema 校验 |
 
 ### 4.2 Agent 包边界硬规则
 
@@ -146,9 +146,9 @@ flowchart TB
 
 输入净化职责由 EventBus 分发层的**事件拦截器**承担（限流、相似过滤）。这里有一段收官插曲：v2 迁移初期曾把旧"输入管道"改造成拦截器但保留了旧"输出管道"框架，形成"零消费者的孤儿模块 + 文档虚构叙事"；2026-08-25 收官战将旧管道系统整体移除、`[pipelines]` 配置正名 `[interceptors]`，教训沉淀为一句话——**新建替代物之后必须同步清除旧物，否则文档会替死人说话。**
 
-### 6.2 配置：七文件 Schema 即真相
+### 6.2 配置：六文件 + 每文件版本 + 包内权威 + 单一管线
 
-core / model / agents / tools / memory / storage / background 七文件按领域拆分；Pydantic Schema 驱动生成、校验与版本化迁移（CONFIG_VERSION + 升级钩子 + 漂移写回闭环）。启用开关收敛为两处：`[agents].enabled` 与 `[tools].enabled`。
+`agents / collectors / tools / model / storage / infra` 六文件按领域拆分（`config/` 目录）；每文件自带 `[meta].version` 结构版本，经升级钩子注册表按区间独立推进（缺失硬错）。组件配置权威在各组件包内的 `ConfigSchema`（中央树只留槽位与聚合段），加载走单一管线（read → 版本推进 → Pydantic 校验硬错 → 漂移写回（备份 + 自写压标）→ 合并视图）。启用开关收敛为两处：`[agents].enabled` 与 `collectors.toml` 顶层 `enabled`；全局工具停用名单为 `[tools].disabled_tools`（重启生效）。设计决策见 [ADR-014](adr/014-config-six-file-refactor.md)。
 
 ## 七、落地：九个 Wave 的渐进迁移
 
@@ -157,7 +157,7 @@ core / model / agents / tools / memory / storage / background 七文件按领域
 | Wave | 内容 | 关键产出 |
 |------|------|---------|
 | W1 | 无害地基 | EventBus 通配订阅 + 语义域事件名 + 拦截器框架 |
-| W2 | 配置改造 | 五文件 → 七文件 + 版本化迁移钩子 |
+| W2 | 配置改造 | 五文件 → 多文件域拆分 + 版本化迁移（终态六文件体系见 §6.2 与 ADR-014） |
 | W3 | 新框架组件 | storage / tools 契约 / memory / context / BaseAgent / CollectorManager |
 | W4/W5 | 业务组件迁移（并行） | 渲染工具族 → tools/output；采集器 ×6 → collectors |
 | W6 | 主播 Agent | planner/replyer 内核 + Agenda 子系统 |
