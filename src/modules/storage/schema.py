@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS live_chat (
     tool_result      TEXT,
     simulated        INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_live_chat_session_ts ON live_chat(live_session_id, timestamp_ms);
 """.strip()
 
 

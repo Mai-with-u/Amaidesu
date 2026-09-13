@@ -15,7 +15,6 @@ agent = StreamerAgent(
     config=streamer_agent_config,
     llm_manager=llm,
     prompt_manager=prompt,
-    context_service=context,
     event_bus=bus,
     tool_registry=registry,
     sqlite_store=store,
@@ -29,11 +28,10 @@ await agent.cleanup()
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from src.modules.agents.base import BaseAgent
-from src.modules.agents.manager import AgentManager
-from src.modules.context.models import MessageRole
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
@@ -75,7 +73,7 @@ if TYPE_CHECKING:
     from src.modules.subtitle import SubtitleService
     from src.modules.tts import TTSProvider
 
-__all__ = ["StreamerAgent", "StreamerConfig", "build_streamer_agent"]
+__all__ = ["StreamerAgent", "StreamerConfig"]
 
 # 游戏叙事摘要保留条数（近期叙事够用；进 Planner 上下文）
 _MAX_GAME_NARRATIVE = 10
@@ -89,6 +87,22 @@ _PROFILE_SUMMARY = "summary"
 # ---------------------------------------------------------------------------
 # StreamerAgent
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _LiveChatTurn:
+    """live_chat 行的对话历史视图（鸭子类型：仅需 ``role`` / ``content`` 属性）。
+
+    ``role`` 直接承载 live_chat 的 ``sender_role``（viewer / assistant），
+    下游按字符串取值；昵称/类型/消息 ID 供 canonical 映射序列化
+    （content 格式 = ``昵称: 内容 [id:…]``，批与历史同形）。
+    """
+
+    role: str
+    content: str
+    sender_name: str = ""
+    message_type: str = "danmaku"
+    message_id: str = ""
 
 
 class StreamerAgent(BaseAgent):
@@ -117,11 +131,9 @@ class StreamerAgent(BaseAgent):
         *,
         llm_manager: Any,
         prompt_manager: Any,
-        context_service: Optional[Any] = None,
         event_bus: Optional[EventBus] = None,
         tool_registry: Optional[ToolRegistry] = None,
         sqlite_store: Optional[Any] = None,
-        persona_provider: Optional[Any] = None,
         memory: Any = None,
         context_assembler_config: Optional[Any] = None,
         speech_config: Optional[Dict[str, Any]] = None,
@@ -136,13 +148,11 @@ class StreamerAgent(BaseAgent):
             config: ``StreamerConfig`` 实例
             llm_manager: ``LLMManager`` 实例
             prompt_manager: ``PromptManager`` 实例
-            context_service: 可选 ``ContextService``（持久化对话历史）
             event_bus: 可选 ``EventBus``（Agent 通过它订阅 room.message.* / emit rundown.changed 等）
             tool_registry: 可选 ``ToolRegistry``（Agent 把自己的工具注册进去；
                 VTS 表情工具仍走该 registry，TTS 不再走；
                 Planner/Replyer 也从它读取 game 工具清单做动作选择）
             sqlite_store: 可选 ``SQLiteStore``（live_sessions 状态 + rundowns 流程单库）
-            persona_provider: 可选人设字典来源（鸭子类型：callable 返回 dict / dict 本身）
             context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
                 控制 Planner 组装路径开关与长记忆召回条数；None 时 Planner 走内置默认）
             memory: 可选记忆后端（实现 ``MemoryProvider`` 协议，含
@@ -184,12 +194,10 @@ class StreamerAgent(BaseAgent):
         self.typed_config = config
         self._llm = llm_manager
         self._prompt = prompt_manager
-        self._context = context_service
         self._event_bus = event_bus
         self._tool_registry = tool_registry
         self._sqlite = sqlite_store
         self._session_manager = session_manager
-        self._persona_provider = persona_provider
         # 思考流旁路出口（可选；观察面专用，不进 EventBus 不落库）
         self._thinking_sink = thinking_sink
         # 记忆后端（可选；None 时记忆相关功能整体降级）
@@ -212,19 +220,8 @@ class StreamerAgent(BaseAgent):
         self._room_state = RoomState()
 
         # Planner（决策核心，Agent 内部件——非工具）
-        # 行为准则（behavior_style）优先级：包内 persona 权威 > persona_provider（dict）传入。
-        # 包内 config.persona 是配置权威；persona_provider 仍保留以兼容外部注入
-        # （如测试），存在时其 behavior_style 覆盖 config.persona.behavior_style。
+        # 行为准则（behavior_style）只读包内配置权威 config.persona（决策侧通道）
         _behavior_style = config.persona.behavior_style or ""
-        if self._persona_provider is not None:
-            try:
-                _persona_dict = self._persona_provider() if callable(self._persona_provider) else self._persona_provider
-                if isinstance(_persona_dict, dict):
-                    _provider_bs = str(_persona_dict.get("behavior_style") or "")
-                    if _provider_bs:
-                        _behavior_style = _provider_bs
-            except Exception as exc:
-                self._logger.warning(f"Planner 读取 persona_provider.behavior_style 失败: {exc}")
         # context 组装器路径开关与召回条数——直接读包内权威
         _context_enabled = config.context.enabled
         _recall_top_k = config.context.memory_recall_long_term
@@ -254,12 +251,14 @@ class StreamerAgent(BaseAgent):
         )
 
         # Replyer（表达引擎，Agent 内部件——非工具）
-        # audience_salutation 默认"大家"——旧 user_name 默认值
+        # 人设四件套从包内配置权威 config.persona 单点构建、构造期注入
+        # （behavior_style 不进表达侧——只走 Planner 决策通道）
         self._replyer = Replyer(
             config={
                 "profile": _PROFILE_REPLYER,
-                "enable_action_selection": config.enable_action_selection,
                 "bot_name": config.persona.bot_name,
+                "personality": config.persona.personality,
+                "style_constraints": config.persona.style_constraints,
                 "audience_salutation": config.persona.audience_salutation,
             },
             llm_service=llm_manager,
@@ -311,10 +310,10 @@ class StreamerAgent(BaseAgent):
             llm_service=llm_manager,
             live_session_store=sqlite_store,  # live_sessions 实时状态落库（按 session_manager 解析的当前场次）
             session_manager=session_manager,  # 场次归属解析（None 时心跳降级跳过）
-            context_service=context_service,
             memory=memory,  # 记忆写入面：摘要 → ingest；None 时降级
             event_bus=event_bus,  # 高价值事件（礼物/SC）→ ingest
             sqlite_store=sqlite_store,  # 摘要落地：timeline_summary + topics 快照
+            prompt_manager=self._prompt,  # 摘要系统提示词渲染（复用 Agent 持有的 PromptManager）
         )
 
         # 后台 flush 循环（Agent 主循环）
@@ -497,8 +496,7 @@ class StreamerAgent(BaseAgent):
         # reply tool（无条件构造——thinking 槽位与注册共用同一实例）
         self._reply_provider = ReplyToolProvider(
             replyer=self._replyer,
-            persona=self._persona_provider or {},
-            history_provider=(self._read_history_sync if self._context is not None else None),
+            history_provider=(self._read_history_sync if self._sqlite is not None else None),
             rundown_text_provider=self._build_rundown_text_sync,
             event_bus=self._event_bus,
         )
@@ -921,8 +919,8 @@ class StreamerAgent(BaseAgent):
             "total_duration_ms": now_ms() - started_ms,
         }
 
-        # 读历史（duck-typed）
-        history = await self._read_history("live")
+        # 读历史（live_chat 单一事实源；无显式场次时为空）
+        history = await self._read_history()
 
         # 拼装流程单上下文
         rundown_text = self._build_rundown_text()
@@ -1193,7 +1191,7 @@ class StreamerAgent(BaseAgent):
 
         行为契约：
         - 非 dict 输入 → WARN 日志 + 直接返回（决策循环不受影响）
-        - TTS 未启用 → 仍发布 ``streamer.speech`` 业务事件 + 写入 ContextService 历史
+        - TTS 未启用 → 仍发布 ``streamer.speech`` 业务事件（存储落库由 StorageLedger 订阅完成）
           （TTS 启用与否与主播发言业务事实正交；下游消费者仅依赖业务事件）
         - speech 非空 → 生成 utterance_id + 发布业务事件 + 写入历史；TTS 启用时
           复用同一 utterance_id 入 TTS 队列（与 ``tts.utterance.*`` 共用关联键）
@@ -1222,7 +1220,7 @@ class StreamerAgent(BaseAgent):
         else:
             cleaned_emotion = None
 
-        # 动作工具调用（fire-and-forget；决策循环安全：失败仅记日志）
+        # 动作类工具调用（fire-and-forget；决策循环安全：失败仅记日志）
         self._schedule_actions(actions)
 
         # emotion → VTS 表情调用跟随 TTS 启用门：TTS 关闭（无语音/无声卡场景）
@@ -1243,7 +1241,6 @@ class StreamerAgent(BaseAgent):
                 reply_to_message_id=reply_to_message_id,
                 round_id=round_id,
             )
-            self._record_streamer_speech_history(cleaned_speech, cleaned_emotion)
             self._schedule_subtitle_show(cleaned_speech, utterance_id)
             if self._tts_enabled and self._utterance_queue is not None:
                 try:
@@ -1292,34 +1289,6 @@ class StreamerAgent(BaseAgent):
             asyncio.create_task(_do_emit())
         except RuntimeError as exc:
             self._logger.warning(f"streamer.speech 任务创建失败（已忽略）: utterance_id={utterance_id}, err={exc}")
-
-    def _record_streamer_speech_history(self, text: str, emotion: Optional[str]) -> None:
-        """把主播发言写入 ContextService 历史（fire-and-forget；缺 context_service 跳过）。
-
-        会话 id 与现有 ``_read_history_sync`` / ``_read_history`` 一致，使用
-        ``"live"`` 作为 live 场次默认 session_id；下游 Planner/Replyer 共享同一历史。
-        """
-        ctx = self._context
-        if ctx is None:
-            return
-
-        async def _do_record() -> None:
-            try:
-                await ctx.add_message(  # type: ignore[union-attr]
-                    session_id="live",
-                    role=MessageRole.ASSISTANT,
-                    content=text,
-                    emotion=emotion,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 异步背景任务边界
-                self._logger.warning(f"主播发言写入 ContextService 历史失败（已忽略）: err={exc}")
-
-        try:
-            asyncio.create_task(_do_record())
-        except RuntimeError as exc:
-            self._logger.warning(f"主播发言历史任务创建失败（已忽略）: err={exc}")
 
     def _schedule_subtitle_show(self, text: str, utterance_id: str) -> None:
         """异步触发字幕推送（fire-and-forget；缺字幕服务跳过，失败不抛异常）。
@@ -1399,11 +1368,11 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"VTS 表情任务创建失败（已忽略）: emotion={emotion}, err={exc}")
 
     def _schedule_actions(self, actions: Any) -> None:
-        """异步触发动作工具调用（fire-and-forget，失败不影响决策循环）。
+        """异步触发动作类工具调用（fire-and-forget，失败不影响决策循环）。
 
         ``actions`` 契约：``[{name: str, parameters: dict}, ...]``（来自
         Replyer 的 tool_calls 非 reply 部分；LLM 通过标准 function calling
-        选择的动作工具）。
+        选择的动作类工具）。
 
         与 ``_schedule_vts_emotion`` 同模式：
         - 每条动作独立 ``asyncio.create_task``（互不阻塞）
@@ -1441,7 +1410,7 @@ class StreamerAgent(BaseAgent):
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 - 异步背景任务边界
-                    self._logger.warning(f"动作工具调用异常（已忽略）: tool={inv.tool_name}, err={exc}")
+                    self._logger.warning(f"动作类工具调用异常（已忽略）: tool={inv.tool_name}, err={exc}")
 
             try:
                 asyncio.create_task(_invoke_action())
@@ -1635,31 +1604,38 @@ class StreamerAgent(BaseAgent):
 
         实际实现是返回 coroutine（不是同步 list），由 ReplyToolProvider 检测 awaitable 并 await。
         """
-        if self._context is None:
-            return None
+        return self._read_history()
 
-        async def _do_read():
-            try:
-                return await self._context.get_history(  # type: ignore[union-attr]
-                    "live", limit=self.typed_config.history_limit
-                )
-            except Exception as exc:
-                self._logger.warning(f"读取会话历史失败: {exc}")
-                return None
+    async def _read_history(self) -> Optional[List[Any]]:
+        """读当前场次最近对话历史（live_chat 单一事实源）。
 
-        return _do_read()
-
-    async def _read_history(self, session_id: str) -> Optional[List[Any]]:
-        """async 版本，供 _make_two_stage_decision 直接调用。"""
-        if self._context is None:
+        场次主键经 ``LiveSessionManager.resolve_pk()`` 解析——与写路径
+        （StorageLedger 落库）同源；无显式场次（首场/未开播）或存储缺失时
+        返回空列表，不抛错（首场首决定窗的空读是常态而非异常）。
+        """
+        if self._sqlite is None or self._session_manager is None:
             return None
         try:
-            return await self._context.get_history(  # type: ignore[union-attr]
-                session_id, limit=self.typed_config.history_limit
+            live_pk = await self._session_manager.resolve_pk()
+            if live_pk is None:
+                return []
+            rows = await self._sqlite.list_recent_live_chat(
+                live_session_id=live_pk,
+                limit=self.typed_config.history_limit,
             )
         except Exception as exc:
             self._logger.warning(f"读取会话历史失败: {exc}")
             return None
+        return [
+            _LiveChatTurn(
+                role=row["sender_role"],
+                content=row["content"],
+                sender_name=row["sender_name"] or "",
+                message_type=row["message_type"],
+                message_id=row["message_id"] or "",
+            )
+            for row in rows
+        ]
 
     # ==================================================================
     # 统计信息
@@ -1676,50 +1652,3 @@ class StreamerAgent(BaseAgent):
             "planner_failures": self._planner_failures,
             "replyer_failures": self._replyer_failures,
         }
-
-
-# ---------------------------------------------------------------------------
-# 便捷工厂
-# ---------------------------------------------------------------------------
-
-
-def build_streamer_agent(
-    *,
-    config: StreamerConfig,
-    llm_manager: Any,
-    prompt_manager: Any,
-    agent_manager: AgentManager,
-    context_service: Optional[Any] = None,
-    event_bus: Optional[EventBus] = None,
-    tool_registry: Optional[ToolRegistry] = None,
-    sqlite_store: Optional[Any] = None,
-    persona_provider: Optional[Any] = None,
-    spec_provider: str = "builtin",
-    speech_config: Optional[Dict[str, Any]] = None,
-) -> StreamerAgent:
-    """便捷工厂：构造 StreamerAgent + 注册到 AgentManager。
-
-    Args:
-        config: ``StreamerConfig`` 实例
-        其余参数同 ``StreamerAgent.__init__``
-        agent_manager: ``AgentManager`` 实例（构造完后 register 到管理器）
-        spec_provider: provider 来源溯源（"builtin"/Agent 名/"mcp"），默认 builtin
-        speech_config: 发言管线配置（来自核心 ``[tts]`` 段；可选，组合根接线
-            由独立任务负责）。
-
-    Returns:
-        构造好的 StreamerAgent（已 register 到 agent_manager）
-    """
-    agent = StreamerAgent(
-        config=config,
-        llm_manager=llm_manager,
-        prompt_manager=prompt_manager,
-        context_service=context_service,
-        event_bus=event_bus,
-        tool_registry=tool_registry,
-        sqlite_store=sqlite_store,
-        persona_provider=persona_provider,
-        speech_config=speech_config,
-    )
-    agent_manager.register(agent, spec_provider=spec_provider)
-    return agent

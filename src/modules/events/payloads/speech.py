@@ -5,7 +5,7 @@
 
 ``streamer`` 域代表主播 Agent 的业务事实层：本事件表达"主播已决定并生成
 一条发言"这一业务事实，发布时刻早于 TTS 是否启用、是否真有声卡、字幕是否
-启用——下游消费者（Simulator 节奏唤醒、ContextService 历史写入、字幕器、
+启用——下游消费者（Simulator 节奏唤醒、存储记账落库、字幕器、
 未来回放/字幕存档）拿到的是同一份业务信号。
 
 字段约束：
@@ -41,8 +41,8 @@ class StreamerSpeechPayload(BasePayload):
     事件名：``streamer.speech`` —— 主播 Agent 已生成一条发言。
 
     发布者：StreamerAgent（``_dispatch_speech_and_emotion``）。
-    订阅者：SimulatorService（节奏唤醒）、ContextService 写入历史、字幕
-    器、未来回放/字幕存档等。
+    订阅者：SimulatorService（节奏唤醒）、StorageLedger（落 live_chat）、
+    字幕器、未来回放/字幕存档等。
 
     Attributes:
         utterance_id: 一次发言实例的唯一 ID（编排层生成，格式

@@ -22,7 +22,6 @@ from src.modules.events.event_bus import EventBus
 def _make_server(event_bus) -> DashboardServer:
     return DashboardServer(
         event_bus=event_bus,
-        context_service=None,  # type: ignore[arg-type]
         config_service=None,  # type: ignore[arg-type]
         dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
     )

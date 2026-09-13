@@ -38,12 +38,6 @@ from src.modules.dashboard.schemas.llm import (
     LLMUsageSummaryResponse,
     TokenUsageSchema,
 )
-from src.modules.dashboard.schemas.message import (
-    MessageItem,
-    MessageListResponse,
-    SessionInfo,
-    SessionListResponse,
-)
 from src.modules.dashboard.schemas.agenda import (
     RundownConfigView,
     RundownControlAction,
@@ -89,11 +83,6 @@ __all__ = [
     "RundownStateResponse",
     "RundownControlRequest",
     "RundownControlResponse",
-    # Message
-    "MessageItem",
-    "MessageListResponse",
-    "SessionInfo",
-    "SessionListResponse",
     # Config
     "ConfigResponse",
     "ConfigUpdateRequest",

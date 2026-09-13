@@ -41,7 +41,6 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from src.modules.config.service import ConfigService
-    from src.modules.context.service import ContextService
     from src.modules.events.event_bus import EventBus
     from src.modules.events.event_history import EventHistoryService
     from src.modules.simulator.service import SimulatorService
@@ -56,7 +55,6 @@ class DashboardServer:
     def __init__(
         self,
         event_bus: "EventBus",
-        context_service: "ContextService",
         config_service: "ConfigService",
         dashboard_config: DashboardConfig,
         input_manager: Optional[ManagerStatusProvider] = None,
@@ -81,7 +79,6 @@ class DashboardServer:
         self.tool_registry = tool_registry
         self.llm_manager = llm_manager
         self.prompt_manager = prompt_manager
-        self.context_service = context_service
         self.config_service = config_service
         # 注入 SimulatorService 让 `/api/v1/simulator/*` 控制面可用。
         # 未注入（如默认生产配置 enabled=false）时相关端点仍可调用（返回 is_available=false）。

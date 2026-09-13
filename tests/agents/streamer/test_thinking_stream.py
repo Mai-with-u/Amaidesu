@@ -94,7 +94,7 @@ def _make_planner() -> tuple[Planner, Dict[str, Any]]:
 
     llm.chat_messages = AsyncMock(side_effect=_chat_messages)
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
+    prompt.render = MagicMock(return_value="PROMPT")
     planner = Planner(
         config={"planner_llm": "llm_fast", "planner_max_steps": 3},
         llm_service=llm,
@@ -144,7 +144,6 @@ def _make_provider_with_replyer_capture() -> tuple[ReplyToolProvider, Dict[str, 
 
     provider = ReplyToolProvider(
         replyer=cast(Replyer, _Replyer()),
-        persona={"bot_name": "麦麦"},
     )
     return provider, captured
 

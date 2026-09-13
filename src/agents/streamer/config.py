@@ -5,7 +5,7 @@
 段树结构（TOML 视角）::
 
     [agents.streamer]
-    rundown_id, planner_max_steps, enable_action_selection, history_limit
+    rundown_id, planner_max_steps, history_limit
 
     [agents.streamer.persona]
     bot_name, personality, style_constraints, behavior_style, audience_salutation
@@ -285,10 +285,6 @@ class StreamerConfig(BaseConfig):
         default=8,
         ge=1,
         description="Planner 单决策窗 ReAct 循环最大步数（超出静默收场，防失控）",
-    )
-    enable_action_selection: bool = Field(
-        default=True,
-        description="是否让 LLM 从工具能力中选择动作",
     )
     history_limit: int = Field(
         default=30,

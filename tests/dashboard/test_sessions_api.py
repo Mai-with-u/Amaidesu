@@ -52,7 +52,6 @@ def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
 
         server = DashboardServer(
             event_bus=bus,
-            context_service=None,  # type: ignore[arg-type]
             config_service=None,  # type: ignore[arg-type]
             dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
             session_manager=manager,

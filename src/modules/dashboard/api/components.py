@@ -193,7 +193,6 @@ async def _try_dynamic_start(server: "DashboardServer", group: str, name: str) -
             sub_cfg,
             llm_manager=getattr(server, "llm_manager", None),
             prompt_manager=getattr(server, "prompt_manager", None),
-            context_service=getattr(server, "context_service", None),
             event_bus=getattr(server, "event_bus", None),
         )
         if ok:

@@ -7,8 +7,8 @@
 - Why 不 N 个：快任务合并无成本、管理复杂度封顶
 - 生命周期：BackgroundMaintainer（非 Agent 无 LLM）统一 start/stop/cleanup
 - 后台 Loop 的角色是"记账者+提醒者"——不注入上下文，
-  只写状态（live_sessions）+发提醒；Planner 上下文统一由
-  ContextAssembler 从存储/事件装配（单一路径，无多路注入冲突）
+  只写状态（live_sessions）+发提醒；话题摘要从 live_chat 读观众弹幕
+  （单一事实源，与写路径同源）
 
 职责：
 - **轻循环**（periodic tick ~5s）：
@@ -31,8 +31,10 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
+from src.modules.prompts import PromptManager, get_prompt_manager
 from src.modules.time_utils import now_ms as _real_now_ms
 
+from .canonical import canonical_content
 from .room_state import RoomState
 
 __all__ = ["BackgroundMaintainer"]
@@ -56,11 +58,9 @@ _DEFAULT_COMPRESSOR_CONCURRENCY = 1
 # 高价值事件记忆去抖窗口（同一用户相邻写入最小间隔，毫秒）
 _EVENT_INGEST_DEBOUNCE_MS = 60_000
 
-# 摘要 LLM 系统提示词
-_SUMMARY_SYSTEM_PROMPT = (
-    "你是直播话题摘要助手。根据最近的观众弹幕，用一句话（不超过30字）"
-    "总结当前直播间观众正在讨论的主要话题。只输出摘要内容，不要添加额外说明。"
-)
+# 摘要系统提示词模板键（正文见 src/agents/streamer/prompts/summary_system.md，
+# 由包内 prompts/ 目录内聚承载）
+_SUMMARY_SYSTEM_TEMPLATE = "summary_system"
 
 
 def _cfg(config: Any, key: str, default: Any) -> Any:
@@ -91,11 +91,10 @@ class BackgroundMaintainer:
         llm_service: Optional[Any] = None,
         live_session_store: Optional[Any] = None,
         session_manager: Optional[Any] = None,
-        context_service: Optional[Any] = None,
-        session_id: str = "live",
         memory: Optional[Any] = None,
         event_bus: Optional[EventBus] = None,
         sqlite_store: Optional[Any] = None,
+        prompt_manager: Optional[PromptManager] = None,
     ) -> None:
         """初始化。
 
@@ -113,29 +112,31 @@ class BackgroundMaintainer:
             llm_service: LLM 管理器（可选；压缩 worker 调用）
             live_session_store: ``live_sessions`` 存储接口（duck-typed；轻循环写状态）
             session_manager: 场次管理器（``LiveSessionManager`` 或鸭子类型；
-                提供 ``async resolve_pk() -> int``）。心跳与话题快照的场次归属
-                经它解析（显式场次进行中取其主键，否则默认场次）；``None``
-                时两路写入整体降级跳过。
-            context_service: 上下文服务（可选；供压缩 worker 读历史）
-            session_id: ContextService 会话键（默认 "live"——L1 对话窗口的
-                逻辑键，与存储层场次主键无关）
+                提供 ``async resolve_pk() -> Optional[int]``）。心跳、话题快照
+                与话题摘要的场次归属经它解析（与 live_chat 写路径同源）；
+                ``None`` 时相关路径整体降级跳过。
             memory: 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时关闭
                 摘要/事件两路写入功能——BackgroundMaintainer 整体降级为"只记账"。
             event_bus: 可选 ``EventBus``；提供时 ``start()`` 阶段订阅礼物/SC 事件。
             sqlite_store: 可选 ``SQLiteStore``；提供时每次摘要成功后写
                 ``timeline_summary``（摘要历史）与 ``topics``（当前话题快照投影）。
+            prompt_manager: ``PromptManager`` 实例（摘要系统提示词经其渲染）。
+                ``None`` 时回退全局单例 ``get_prompt_manager()``（惰性、仅首次
+                使用时触发，避免未触达摘要路径的测试被动加载全仓模板）。
         """
         self._config = config
         self._room_state = room_state
         self._llm_service = llm_service
         self._live_session_store = live_session_store
         self._session_manager = session_manager
-        self._context_service = context_service
-        self._session_id = session_id
         # 写入面——memory / event_bus / sqlite_store 由 main.py 装配；None 时各自降级
         self._memory = memory
         self._event_bus = event_bus
         self._sqlite_store = sqlite_store
+        # 提示词面——prompt_manager 由 StreamerAgent 构造透传；None 时首次使用回退全局单例
+        self._prompt_manager = prompt_manager
+        # 摘要系统提示词渲染缓存（零变量模板，渲染结果恒定）
+        self._summary_system_prompt: Optional[str] = None
         # 同用户去抖时间戳表（user_id → last_ingest_ms）
         self._last_ingest_ms: Dict[str, int] = {}
         self._subscribed = False
@@ -361,7 +362,7 @@ class BackgroundMaintainer:
 
     async def _maybe_summarize(self, now_ms: int) -> None:
         """摘要门控：按热度频率调用 LLM（走 chat_fast profile）。"""
-        if self._llm_service is None or self._context_service is None:
+        if self._llm_service is None or self._sqlite_store is None:
             return
         snap = self._room_state.get_snapshot(now_ms=now_ms)
         interval = self._interval_for_heat(snap.heat)
@@ -430,26 +431,38 @@ class BackgroundMaintainer:
         # 其它类型（暂不实现；留给后续）
 
     async def _summarize_topic(self, now_ms: int) -> None:
-        """调 LLM 生成话题摘要（chat_fast profile）。"""
-        if self._llm_service is None or self._context_service is None:
+        """调 LLM 生成话题摘要（chat_fast profile）。
+
+        摘要输入 = live_chat 当前场次的最近 viewer 行（"真实观众弹幕"语义
+        由 SQL 的 ``sender_role='viewer'`` 过滤承载——主播发言行是
+        assistant、礼物/SC 不落 live_chat）。无显式场次时静默跳过；
+        窗口内无观众弹幕（仅主播自嗨）则清空 topic_summary 防自嗨循环。
+        """
+        if self._llm_service is None or self._sqlite_store is None or self._session_manager is None:
             return
         try:
-            history = await self._context_service.get_history(self._session_id, limit=20)
+            live_pk = await self._session_manager.resolve_pk()
+            if live_pk is None:
+                return
+            rows = await self._sqlite_store.list_recent_live_chat(
+                live_session_id=live_pk,
+                limit=20,
+                sender_role="viewer",
+            )
         except Exception as exc:
-            self._logger.warning(f"读取 ContextService 历史失败: {exc}")
-            return
-        if not history:
+            self._logger.warning(f"读取 live_chat 观众弹幕失败: {exc}")
             return
 
-        # 过滤非观众弹幕（主动发言占位符 / 主播回复）
-        real_history = [m for m in history if _is_real_danmaku(m)]
-        if not real_history:
+        if not rows:
             # 清空 topic_summary（防自嗨循环）
             self._room_state.set_topic_summary("", now_ms=now_ms)
             self._last_summary_ms = now_ms
             return
 
-        history_text = self._format_history(real_history)
+        # 摘要输入由 canonical 映射派生（与 Planner/Replyer 同源；此处只取 content）
+        history_text = "\n".join(
+            canonical_content(role="user", nickname=row["sender_name"] or "观众", text=row["content"]) for row in rows
+        )
         if not history_text.strip():
             return
 
@@ -458,7 +471,7 @@ class BackgroundMaintainer:
             response = await self._llm_service.chat(
                 prompt=prompt,
                 client_type=self._summary_client,
-                system_message=_SUMMARY_SYSTEM_PROMPT,
+                system_message=self._get_summary_system_prompt(),
             )
         except Exception as exc:
             self._logger.warning(f"话题摘要 LLM 调用异常: {exc}")
@@ -475,6 +488,17 @@ class BackgroundMaintainer:
             await self._persist_topic_snapshot(summary, now_ms=now_ms, previous_summary_ms=previous_summary_ms)
         else:
             self._logger.warning("话题摘要 LLM 返回失败")
+
+    def _get_summary_system_prompt(self) -> str:
+        """渲染摘要系统提示词（零变量模板，结果缓存复用）。
+
+        PromptManager 构造注入；未注入时回退全局单例 ``get_prompt_manager()``
+        （该单例启用 src/**/prompts/ 约定扫描，可发现包内 summary_system 模板）。
+        """
+        if self._summary_system_prompt is None:
+            manager = self._prompt_manager or get_prompt_manager()
+            self._summary_system_prompt = manager.render(_SUMMARY_SYSTEM_TEMPLATE)
+        return self._summary_system_prompt
 
     async def _persist_topic_snapshot(self, summary: str, *, now_ms: int, previous_summary_ms: int) -> None:
         """摘要成功后把话题状态写入 ``timeline_summary`` 与 ``topics`` 表。
@@ -514,23 +538,3 @@ class BackgroundMaintainer:
                 )
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志，不阻断记账循环
             self._logger.warning(f"话题快照落库失败（timeline_summary/topics）: {exc}")
-
-    @staticmethod
-    def _format_history(history: list) -> str:
-        lines = []
-        for msg in history:
-            role = getattr(msg, "role", None)
-            role_str = getattr(role, "value", str(role)) if role else "user"
-            content = getattr(msg, "content", "") or ""
-            lines.append(f"{role_str}: {content}")
-        return "\n".join(lines)
-
-
-def _is_real_danmaku(msg: Any) -> bool:
-    """判断消息是否为真实观众弹幕（话题摘要的唯一合法输入）。"""
-    role = getattr(msg, "role", None)
-    role_str = getattr(role, "value", str(role)) if role else ""
-    if role_str != "user":
-        return False
-    content = getattr(msg, "content", "") or ""
-    return not content.startswith("（主动发言")

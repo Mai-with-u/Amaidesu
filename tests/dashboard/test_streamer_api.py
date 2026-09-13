@@ -126,7 +126,6 @@ def _make_client(
 
     server = DashboardServer(
         event_bus=None,  # type: ignore[arg-type]
-        context_service=None,  # type: ignore[arg-type]
         config_service=svc,
         dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
         agent_manager=_FakeAgentManager(agent),  # type: ignore[arg-type]

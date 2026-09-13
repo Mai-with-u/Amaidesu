@@ -2,7 +2,6 @@
 
 架构组合根：
 - LLMManager：统一 LLM 客户端池
-- ContextService：会话历史/多会话隔离
 - EventBus：事件分发；启动时挂载事件拦截器
 - CollectorManager：管理 src/modules/collectors/ 下所有 Input Domain 组件
 - AgentManager：管理 src/agents/ 下所有 Agent（包括主播 StreamerAgent）
@@ -10,7 +9,7 @@
 - DashboardServer：WebUI（仅作为 observer，不参与决策/执行数据流）
 - LogStreamer + EventHistoryRecorder：日志 + 事件历史
 
-关闭顺序：CollectorManager.stop_all → SimulatorService.stop → AgentManager.stop_all → EventRecorder.stop → StorageLedger.stop → EventBus.cleanup → LLMManager.cleanup → ContextService.cleanup
+关闭顺序：CollectorManager.stop_all → SimulatorService.stop → AgentManager.stop_all → EventRecorder.stop → StorageLedger.stop → EventBus.cleanup → LLMManager.cleanup
 """
 
 from __future__ import annotations
@@ -35,7 +34,6 @@ from src.modules.collectors.factory import instantiate_collector
 from src.modules.collectors.manager import CollectorManager
 from src.modules.config.core_schemas import DashboardConfig, EventHistoryConfig
 from src.modules.config.service import ConfigService
-from src.modules.context import ContextService
 from src.modules.dashboard.server import DashboardServer
 from src.modules.dashboard.stream_preview import StreamPreviewHub
 from src.modules.events import (
@@ -75,9 +73,7 @@ from src.modules.vision.pil_capture import PillowImageGrabCapture
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# live 场次的 ContextService 会话键——与 StreamerAgent 内
-# ``_record_streamer_speech_history`` / ``_read_history`` 一致使用 "live" 字面量；
-# 这是 L1 对话窗口的逻辑键（内存），与存储层 live_sessions 场次主键无关。
+# MinecraftAgent 的游戏侧会话标识（游戏域字符串 id，非存储层 live_sessions 主键）。
 _LIVE_SESSION_ID = "live"
 
 
@@ -308,7 +304,6 @@ async def create_app_components(
     storage_ledger_auto_start: bool = True,
     session_manager_auto_start: bool = True,
 ) -> Tuple[
-    ContextService,
     EventBus,
     LLMManager,
     Optional["DashboardServer"],
@@ -324,7 +319,7 @@ async def create_app_components(
 ]:
     """组合根：构造并连接所有核心组件。
 
-    按依赖关系构造：LLM/ContextService 为基座，再装存储与记忆、EventBus 与
+    按依赖关系构造：LLM 为基座，再装存储与记忆、EventBus 与
     拦截器与场次管理，然后 EventHistoryRecorder + StorageLedger（溯源链收口），
     Collector/Simulator/Agent 按各自配置开关装配，ToolRegistry 在 Agent 启动前
     完成 L2/L1 接线与审计，最后挂 DashboardServer 作为 WebUI observer。
@@ -342,7 +337,7 @@ async def create_app_components(
             ``--dry`` 模式传 False，避免冒烟写库。
 
     Returns:
-        (context_service, event_bus, llm_service, dashboard_server,
+        (event_bus, llm_service, dashboard_server,
          event_recorder, collector_manager, agent_manager,
          simulator_service, sqlite_store, storage_ledger, session_manager,
          tool_registry, health_monitor)
@@ -360,12 +355,6 @@ async def create_app_components(
     # 请求历史落库目标注入（全局单例可能已被惰性创建，须显式 attach）
     get_global_request_history_manager().attach_store(sqlite_store)
     logger.info("已创建 LLM 服务实例")
-
-    # --- ContextService（L1 对话配对窗口，内置默认配置）---
-    logger.info("初始化上下文服务...")
-    context_service = ContextService()
-    await context_service.initialize()
-    logger.info("已创建上下文服务实例")
 
     # --- 上下文组装器配置归位至 [agents.streamer.context]；下游组装路径直接读 cfg.context ---
     # CoreService 构造走内置默认。
@@ -524,7 +513,6 @@ async def create_app_components(
             config_service,
             llm_service,
             event_bus,
-            context_service,
             tool_registry,
             memory,
             task_tracker,
@@ -667,7 +655,6 @@ async def create_app_components(
             dashboard_config,
             dev_webui,
             event_bus,
-            context_service,
             config_service,
             collector_manager,
             agent_manager,
@@ -699,7 +686,6 @@ async def create_app_components(
 
     # --- 组件装配完成 ---
     return (
-        context_service,
         event_bus,
         llm_service,
         dashboard_server,
@@ -826,7 +812,6 @@ async def _register_agents_from_config(
     config_service,
     llm_service,
     event_bus,
-    context_service,
     tool_registry=None,
     memory=None,
     task_tracker=None,
@@ -888,7 +873,6 @@ async def _register_agents_from_config(
                 config=cfg_obj,
                 llm_manager=llm_service,
                 prompt_manager=get_prompt_manager(),
-                context_service=context_service,
                 event_bus=event_bus,
                 tool_registry=tool_registry,
                 memory=memory,
@@ -967,7 +951,6 @@ async def _start_dashboard(
     dashboard_config: Dict[str, Any],
     dev_webui: bool,
     event_bus: EventBus,
-    context_service: ContextService,
     config_service: ConfigService,
     collector_manager: Optional["CollectorManager"] = None,
     agent_manager: Optional["AgentManager"] = None,
@@ -985,7 +968,6 @@ async def _start_dashboard(
 
         dashboard_server = DashboardServer(
             event_bus=event_bus,
-            context_service=context_service,
             config_service=config_service,
             dashboard_config=typed_dashboard_config,
             collector_manager=collector_manager,
@@ -1064,7 +1046,6 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
 
 
 async def run_shutdown(
-    context_service: ContextService,
     event_bus: EventBus,
     llm_service: LLMManager,
     dashboard_server: Optional["DashboardServer"],
@@ -1080,7 +1061,7 @@ async def run_shutdown(
     health_monitor: Optional[ToolHealthMonitor] = None,
     task_tracker: Optional[TaskTracker] = None,
 ) -> None:
-    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），最后 EventBus/ContextService/LLMManager 清理，SQLiteStore.close 收尾落盘。"""
+    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），最后 EventBus/LLMManager 清理，SQLiteStore.close 收尾落盘。"""
     _saw_cancelled = False
 
     async def safe_log(coro, name: str):
@@ -1180,10 +1161,6 @@ async def run_shutdown(
         await safe_log(llm_service.cleanup(), "LLMManager.cleanup")
     logger.info("核心服务已关闭")
 
-    logger.info("正在清理 ContextService...")
-    if context_service is not None:
-        await safe_log(context_service.cleanup(), "ContextService.cleanup")
-
     if sqlite_store is not None:
         logger.info("正在关闭 SQLiteStore...")
         await safe_log(sqlite_store.close(), "SQLiteStore.close")
@@ -1215,7 +1192,6 @@ async def main() -> None:
     logger.info(f"核心事件注册完成，共 {len(list_registered_events())} 个事件")
 
     (
-        context_service,
         event_bus,
         llm_service,
         dashboard_server,
@@ -1249,7 +1225,6 @@ async def main() -> None:
         logger.info("--dry 模式：仅验证组合根构造，组件已构造但不进入主循环")
         logger.info("（此模式用于快速检查 wiring 是否完整，关闭后退出）")
         await run_shutdown(
-            context_service,
             event_bus,
             llm_service,
             dashboard_server,
@@ -1297,7 +1272,6 @@ async def main() -> None:
 
     restore_signal_handlers(orig_sigint, orig_sigterm)
     await run_shutdown(
-        context_service,
         event_bus,
         llm_service,
         dashboard_server,

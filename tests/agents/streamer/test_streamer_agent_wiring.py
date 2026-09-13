@@ -89,16 +89,13 @@ def _build_streamer_agent(
     llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
     llm.chat = AsyncMock()  # 兼容旧调用（不应被实际触发）
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
-    context = MagicMock()
-    context.get_history = AsyncMock(return_value=[])
+    prompt.render = MagicMock(return_value="PROMPT")
 
     config = _make_agent_config()
     return StreamerAgent(
         config=config,
         llm_manager=llm,
         prompt_manager=prompt,
-        context_service=context,
         event_bus=None,
         tool_registry=tool_registry,
         speech_config=speech_config,
@@ -580,16 +577,13 @@ async def test_decision_loop_unaffected_when_tts_disabled():
     llm = MagicMock()
     llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
-    context = MagicMock()
-    context.get_history = AsyncMock(return_value=[])
+    prompt.render = MagicMock(return_value="PROMPT")
 
     config = _make_agent_config(profanity_enabled=False)
     agent = StreamerAgent(
         config=config,
         llm_manager=llm,
         prompt_manager=prompt,
-        context_service=context,
         event_bus=None,
         tool_registry=ToolRegistry(),
         speech_config={"enabled": False},
@@ -628,7 +622,6 @@ async def test_decision_loop_unaffected_when_tts_disabled():
     )
     agent._reply_provider = ReplyToolProvider(
         replyer=replyer,
-        persona={},
         history_provider=None,
     )
 

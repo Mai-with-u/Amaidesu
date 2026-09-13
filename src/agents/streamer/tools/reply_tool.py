@@ -19,21 +19,19 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerVerdictPayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
-from src.modules.types.emotion_vocab import Emotion
 
 from ..plan import DecisionPlan
 from ..replyer import Replyer
 
 __all__ = [
     "build_reply_tool_spec",
-    "build_reply_function_def",
 ]
 
 
@@ -97,55 +95,6 @@ _REPLY_TOOL_FULL_NAME = build_reply_tool_spec().full_name
 
 
 # ---------------------------------------------------------------------------
-# OpenAI function 定义（replyer 内部协议，供 LLM call_tools 使用）
-#
-# 与 build_reply_tool_spec() 的区别：
-# - build_reply_tool_spec() 是 ToolRegistry 注册形态（Planner 触发 reply_tool.invoke）
-# - build_reply_function_def() 是标准 function calling 形态（Replyer 内 LLM 直接产出
-#   speech/emotion，不进 ToolRegistry）
-# ---------------------------------------------------------------------------
-
-
-_REPLY_FUNCTION_PARAMETERS_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "speech": {
-            "type": "string",
-            "description": "要说的台词（1-2 句话，口语化，符合人设语气）",
-        },
-        "emotion": {
-            "type": "string",
-            "enum": [e.value for e in Emotion],
-            "description": "情绪（12 枚举之一）",
-        },
-        "intensity": {
-            "type": "number",
-            "minimum": 0.0,
-            "maximum": 1.0,
-            "description": "情绪强度（0.0-1.0，缺省 0.5；驱动虚拟形象表情幅度）",
-        },
-    },
-    "required": ["speech"],
-}
-
-
-def build_reply_function_def() -> Dict[str, Any]:
-    """构造 reply 工具的 OpenAI function 定义（供 Replyer.call_tools 使用）。
-
-    reply 是主播 Agent 内部协议工具——只服务主播自身 LLM 会话，不进 ToolRegistry。
-    """
-    return {
-        "name": _REPLY_TOOL_NAME,
-        "description": (
-            "主播发言：输出你要对直播间说的话和情绪。"
-            "必填：speech（1-2 句口语化文本）；可选：emotion（12 枚举之一，缺省 neutral）。"
-            "调用此工具即代表你决定本轮发言；如需同时触发动作，可继续调用对应动作工具。"
-        ),
-        "parameters": _REPLY_FUNCTION_PARAMETERS_SCHEMA,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Provider 类
 # ---------------------------------------------------------------------------
 
@@ -161,13 +110,11 @@ class ReplyToolProvider:
         self,
         *,
         replyer: Replyer,
-        persona: Union[dict[str, Any], Any, None],
         history_provider: Optional[Any] = None,
         rundown_text_provider: Optional[Any] = None,
         event_bus: Optional[Any] = None,
     ) -> None:
         self._replyer = replyer
-        self._persona = persona
         self._history_provider = history_provider
         self._rundown_text_provider = rundown_text_provider
         # 本轮思考流回调（LLM 层形态 on_delta）；由 Planner 在 reply 调用前设置、
@@ -230,16 +177,6 @@ class ReplyToolProvider:
             return await result  # type: ignore[no-any-return]
         return result
 
-    async def _resolve_persona(self) -> dict[str, Any]:
-        if callable(self._persona):
-            resolved = await self._await_maybe(self._persona())
-            if not isinstance(resolved, dict):
-                return {}
-            return resolved
-        if isinstance(self._persona, dict):
-            return self._persona
-        return {}
-
     async def _resolve_history(self) -> Optional[List[Any]]:
         if self._history_provider is None:
             return None
@@ -281,8 +218,8 @@ class ReplyToolProvider:
 
         topic_summary = str(args.get("topic_summary", "") or "")
         reply_guidance = str(args.get("reply_guidance", "") or "")
-        target_raw = args.get("target", None)
-        target = target_raw if isinstance(target_raw, str) else None
+        raw_target = args.get("target", None)
+        target = raw_target if isinstance(raw_target, str) else None
         confidence_raw = args.get("confidence", 0.9)
         try:
             confidence = float(confidence_raw) if confidence_raw is not None else 0.9
@@ -303,7 +240,6 @@ class ReplyToolProvider:
         )
 
         try:
-            persona_dict = await self._resolve_persona()
             history = await self._resolve_history()
             rundown = await self._resolve_rundown()
         except Exception as exc:
@@ -321,7 +257,6 @@ class ReplyToolProvider:
             result = await self._replyer.generate(
                 plan=plan,
                 batch=batch,
-                persona=persona_dict,
                 history=history,
                 rundown=rundown,
                 on_delta=thinking_callback,

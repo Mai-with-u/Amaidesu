@@ -36,7 +36,6 @@ def _make_minimal_agent(*, event_bus: Optional[EventBus] = None) -> StreamerAgen
         config=config,
         llm_manager=MagicMock(),
         prompt_manager=MagicMock(),
-        context_service=None,
         event_bus=event_bus,
         tool_registry=None,
         speech_config=None,

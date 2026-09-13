@@ -4,8 +4,8 @@
 - speech 非空 + TTS 关闭：仍 emit ``streamer.speech``（业务事实与 TTS 启用正交）
 - speech 非空 + TTS 启用：emit ``streamer.speech`` 且 utterance_id 与 TTS 队列复用同一 id
 - speech 空 / 仅空白：不 emit（业务事实不存在）
-- speech 非空 + context_service 注入：ContextService.add_message 收到 ASSISTANT 消息
-- 缺 context_service：跳过历史写入，不抛异常
+- 发言落库（live_chat assistant 行）由 StorageLedger 订阅 streamer.speech 完成，
+  不在本文件覆盖面内
 
 Y 模型契约：``_dispatch_speech_and_emotion`` 入参 = ``reply_result.structured_content``（dict），
 不是 JSON 字符串（reply_tool 已把 Replyer.generate 返回 dict 装入 structured_content）。
@@ -24,7 +24,6 @@ import pytest
 
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
-from src.modules.context.models import MessageRole
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
@@ -45,26 +44,19 @@ def _build_streamer_agent_with_bus(
     event_bus: Optional[EventBus] = None,
     speech_config: Optional[Dict[str, Any]] = None,
     tts_engine: Optional[Any] = None,
-    context_service: Optional[Any] = None,
 ) -> StreamerAgent:
-    """构造最小化 StreamerAgent：注入真 EventBus + 可选 TTS / context。"""
+    """构造最小化 StreamerAgent：注入真 EventBus + 可选 TTS。"""
     llm = MagicMock()
     llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
     llm.chat = AsyncMock()  # 兼容旧调用（不应被实际触发）
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
-    if context_service is None:
-        ctx = MagicMock()
-        ctx.get_history = AsyncMock(return_value=[])
-        ctx.add_message = AsyncMock(return_value=None)
-        context_service = ctx
+    prompt.render = MagicMock(return_value="PROMPT")
 
     config = _make_agent_config()
     return StreamerAgent(
         config=config,
         llm_manager=llm,
         prompt_manager=prompt,
-        context_service=context_service,
         event_bus=event_bus,
         tool_registry=None,
         speech_config=speech_config,
@@ -245,98 +237,5 @@ async def test_empty_speech_does_not_emit_streamer_speech():
         # 不应有 STREAMER_SPEECH 事件（即使有 emotion 也不触发 streamer.speech，
         # streamer.speech 只表达 speech 业务事实）
         assert agent._utterance_seq == 0
-    finally:
-        await agent._on_stop()
-
-# ---------------------------------------------------------------------------
-# context_service 写入历史
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_streamer_speech_writes_to_context_history():
-    """speech 非空 + context_service 注入 → add_message 收到 ASSISTANT 消息。"""
-    bus = EventBus()
-    ctx = MagicMock()
-    ctx.get_history = AsyncMock(return_value=[])
-    ctx.add_message = AsyncMock(return_value=None)
-
-    agent = _build_streamer_agent_with_bus(
-        event_bus=bus,
-        context_service=ctx,
-        tts_engine=None,
-        speech_config={"enabled": False},
-    )
-    await agent._on_start()
-    try:
-        payload_dict = {
-            "speech": "写入历史",
-            "emotion": {"name": "happy", "intensity": 0.5},
-            "actions": [],
-            "metadata": {},
-        }
-        agent._dispatch_speech_and_emotion(payload_dict)
-
-        # 等 fire-and-forget 历史写入任务跑完
-        for _ in range(50):
-            if ctx.add_message.await_count >= 1:
-                break
-            await asyncio.sleep(0.01)
-
-        assert ctx.add_message.await_count == 1
-        kwargs = ctx.add_message.await_args.kwargs
-        assert kwargs["session_id"] == "live"
-        assert kwargs["role"] == MessageRole.ASSISTANT
-        assert kwargs["content"] == "写入历史"
-        assert kwargs["emotion"] == "happy"
-    finally:
-        await agent._on_stop()
-
-@pytest.mark.asyncio
-async def test_streamer_speech_skips_context_when_service_missing():
-    """context_service=None → 跳过历史写入，不抛异常。"""
-    bus = EventBus()
-    # context_service=None 直接通过 _build_streamer_agent_with_bus 不传
-    llm = MagicMock()
-    llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
-    llm.chat = AsyncMock()  # 兼容旧调用（不应被实际触发）
-    prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
-
-    agent = StreamerAgent(
-        config=_make_agent_config(),
-        llm_manager=llm,
-        prompt_manager=prompt,
-        context_service=None,  # 故意不注入
-        event_bus=bus,
-        tool_registry=None,
-        speech_config={"enabled": False},
-        tts_engine=None,
-    )
-    await agent._on_start()
-    try:
-        payload_dict = {
-            "speech": "无 ctx 也行",
-            "emotion": "",
-            "actions": [],
-            "metadata": {},
-        }
-        # 不应抛异常
-        agent._dispatch_speech_and_emotion(payload_dict)
-        await asyncio.sleep(0.05)
-
-        # 仍 emit 业务事件（与 context 缺失正交）
-        received: List[StreamerSpeechPayload] = []
-        event = asyncio.Event()
-
-        async def _capture(event_name: str, payload: Any, source: Optional[str] = None) -> None:
-            if isinstance(payload, StreamerSpeechPayload):
-                received.append(payload)
-                event.set()
-
-        bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
-        # 重新触发一次确保订阅能接到（前面那次可能已被 fire-and-forget 跑过）
-        agent._dispatch_speech_and_emotion(payload_dict)
-        await asyncio.wait_for(event.wait(), timeout=2.0)
-        assert len(received) >= 1
     finally:
         await agent._on_stop()

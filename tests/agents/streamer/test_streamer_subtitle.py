@@ -51,16 +51,12 @@ def _build_streamer_agent(
     llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
     llm.chat = AsyncMock()  # 兼容旧调用（不应被实际触发）
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
-    ctx = MagicMock()
-    ctx.get_history = AsyncMock(return_value=[])
-    ctx.add_message = AsyncMock(return_value=None)
+    prompt.render = MagicMock(return_value="PROMPT")
 
     return StreamerAgent(
         config=_make_agent_config(),
         llm_manager=llm,
         prompt_manager=prompt,
-        context_service=ctx,
         event_bus=event_bus,
         tool_registry=None,
         speech_config=speech_config,

@@ -36,9 +36,7 @@ def _build_agent(thinking_sink: Optional[Any], enabled: bool = True) -> Streamer
 
     llm.chat_messages = AsyncMock(side_effect=_chat_messages)
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
-    context = MagicMock()
-    context.get_history = AsyncMock(return_value=[])
+    prompt.render = MagicMock(return_value="PROMPT")
 
     config = StreamerConfig.from_dict(
         {
@@ -51,7 +49,6 @@ def _build_agent(thinking_sink: Optional[Any], enabled: bool = True) -> Streamer
         config=config,
         llm_manager=llm,
         prompt_manager=prompt,
-        context_service=context,
         event_bus=None,
         thinking_sink=thinking_sink,
     )

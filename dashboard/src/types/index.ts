@@ -273,24 +273,6 @@ export interface DebugSessionEvent {
   data?: Record<string, unknown>;
 }
 
-// ==================== ContextService / 会话历史 ====================
-
-export interface MessageItem {
-  id: string;
-  session_id: string;
-  role: string;
-  content: string;
-  timestamp: number;
-  metadata?: Record<string, unknown>;
-}
-
-export interface MessageListResponse {
-  messages: MessageItem[];
-  has_more: boolean;
-  next_cursor?: number;
-  limit: number;
-}
-
 // ==================== WebSocket ====================
 
 /**

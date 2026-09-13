@@ -89,7 +89,7 @@ def _make_replyer(
     llm.chat = AsyncMock()
 
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
+    prompt.render = MagicMock(return_value="PROMPT")
 
     tool_registry = tool_registry if tool_registry is not None else None
     if action_tools is not None:
@@ -122,9 +122,7 @@ class TestReplyerGenerate:
             ),
         )
         plan = _make_plan()
-        persona = {"bot_name": "麦麦", "personality": "活泼", "style_constraints": "口语化"}
-
-        result = await r.generate(plan, [], persona)
+        result = await r.generate(plan, [])
 
         assert result is not None
         assert isinstance(result, dict)
@@ -136,22 +134,21 @@ class TestReplyerGenerate:
 
     @pytest.mark.asyncio
     async def test_replyer_persona_in_prompt(self) -> None:
-        """断言 prompt 渲染入参包含 $personality / $style_constraints / $bot_name。"""
+        """断言 prompt 渲染入包含构造 config 注入的 $personality / $style_constraints / $bot_name。"""
         r, _llm, prompt = _make_replyer(
             llm_response=_make_llm_response(
                 tool_calls=[_tool_call_reply()],
             ),
+            config={
+                "bot_name": "麦麦",
+                "personality": "活泼开朗，有些调皮",
+                "style_constraints": "口语化、简短",
+            },
         )
         plan = _make_plan()
-        persona = {
-            "bot_name": "麦麦",
-            "personality": "活泼开朗，有些调皮",
-            "style_constraints": "口语化、简短",
-        }
+        await r.generate(plan, [])
 
-        await r.generate(plan, [], persona)
-
-        kwargs = prompt.render_safe.call_args.kwargs
+        kwargs = prompt.render.call_args.kwargs
         assert "personality" in kwargs
         assert kwargs["personality"] == "活泼开朗，有些调皮"
         assert "style_constraints" in kwargs
@@ -170,9 +167,7 @@ class TestReplyerGenerate:
             llm_response=_make_llm_response(tool_calls=[_tool_call_reply()]),
         )
         plan = _make_plan()
-        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
-
-        await r.generate(plan, [], persona)
+        await r.generate(plan, [])
 
         assert llm.call_tools.await_args.kwargs.get("client_type") == "llm"
 
@@ -192,9 +187,7 @@ class TestReplyerGenerate:
             tool_registry=registry,
         )
         plan = _make_plan()
-        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
-
-        await r.generate(plan, [], persona)
+        await r.generate(plan, [])
 
         kwargs = llm.call_tools.await_args.kwargs
         tool_names = [t["name"] for t in kwargs["tools"]]
@@ -213,9 +206,7 @@ class TestReplyerGenerate:
             ),
         )
         plan = _make_plan()
-        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
-
-        result = await r.generate(plan, [], persona)
+        result = await r.generate(plan, [])
 
         assert result is not None
         assert result["speech"] == "好的"
@@ -231,9 +222,7 @@ class TestReplyerGenerate:
             ),
         )
         plan = _make_plan()
-        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
-
-        result = await r.generate(plan, [], persona)
+        result = await r.generate(plan, [])
 
         assert result is not None
         assert result["emotion"]["name"] == "neutral"
@@ -248,9 +237,7 @@ class TestReplyerGenerate:
             ),
         )
         plan = _make_plan()
-        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
-
-        result = await r.generate(plan, [], persona)
+        result = await r.generate(plan, [])
 
         assert result is None
 
@@ -263,9 +250,7 @@ class TestReplyerGenerate:
             ),
         )
         plan = _make_plan()
-        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
-
-        result = await r.generate(plan, [], persona)
+        result = await r.generate(plan, [])
 
         assert result is None
 
@@ -274,9 +259,7 @@ class TestReplyerGenerate:
         """LLM 调用抛异常 → 返回 None（silent 降级），不抛出。"""
         r, _llm, _prompt = _make_replyer(llm_side_effect=RuntimeError("LLM 挂了"))
         plan = _make_plan()
-        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
-
-        result = await r.generate(plan, [], persona)
+        result = await r.generate(plan, [])
 
         assert result is None
 
@@ -287,9 +270,7 @@ class TestReplyerGenerate:
             llm_response=_make_llm_response(success=False, error="upstream error"),
         )
         plan = _make_plan()
-        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
-
-        result = await r.generate(plan, [], persona)
+        result = await r.generate(plan, [])
 
         assert result is None
 
@@ -300,9 +281,7 @@ class TestReplyerGenerate:
             llm_response=_make_llm_response(tool_calls=[_tool_call_reply()]),
         )
         plan = _make_plan(should_reply=False)
-        persona = {"bot_name": "麦麦", "personality": "p", "style_constraints": "s"}
-
-        result = await r.generate(plan, [], persona)
+        result = await r.generate(plan, [])
 
         assert result is None
         llm.call_tools.assert_not_called()
@@ -340,9 +319,7 @@ class TestReplyerWordFilter:
             word_filter=flt,
         )
         plan = _make_plan()
-        persona = {"bot_name": "x", "personality": "p", "style_constraints": "s"}
-
-        result = await r.generate(plan, [], persona)
+        result = await r.generate(plan, [])
 
         assert result is None
 
@@ -357,9 +334,7 @@ class TestReplyerWordFilter:
             word_filter=flt,
         )
         plan = _make_plan()
-        persona = {"bot_name": "x", "personality": "p", "style_constraints": "s"}
-
-        result = await r.generate(plan, [], persona)
+        result = await r.generate(plan, [])
 
         assert result is not None
         assert result["speech"] == "这是***测试"

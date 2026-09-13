@@ -41,7 +41,7 @@ def _make_planner(
     llm.chat_messages = AsyncMock(side_effect=list(chat_responses) if chat_responses else [])
 
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="SYSTEM_PROMPT")
+    prompt.render = MagicMock(return_value="SYSTEM_PROMPT")
 
     # 缺省真注册表 + 注册 mock reply（统一调用路径：reply 经 registry.invoke）
     reg = registry if registry is not None else ToolRegistry()
@@ -293,39 +293,40 @@ async def test_react_llm_error_outcome() -> None:
 
 @pytest.mark.asyncio
 async def test_context_bare_path_when_disabled() -> None:
-    """context_enabled=False → 裸消息路径（直播流窗口文本作 user 消息）。"""
+    """context_enabled=False → 裸消息路径（本批为原生 user 消息，参考段仅情境标注）。"""
     planner, llm, prompt = _make_planner(chat_responses=[_resp()], context_enabled=False)
 
     await planner.plan([_msg("主播好")], history=[])
 
-    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
-    assert user_msg["role"] == "user"
-    assert "主播好" in user_msg["content"]
+    messages = llm.chat_messages.await_args.kwargs["messages"]
+    assert messages[1]["role"] == "user"
+    assert "主播好" in messages[1]["content"]
     # 系统提示词只渲染 behavior_style（无 context_block 变量）
-    prompt.render_safe.assert_called_once()
-    assert prompt.render_safe.call_args.args[0] == "amaidesu_planner_react"
+    prompt.render.assert_called_once()
+    assert prompt.render.call_args.args[0] == "amaidesu_planner_react"
 
 
 @pytest.mark.asyncio
-async def test_context_forced_annotation_in_user_message() -> None:
-    """forced 情境标注进首轮 user 消息。"""
+async def test_context_forced_annotation_in_reference_tail() -> None:
+    """forced 情境标注进参考段（消息序列尾的 user 消息）。"""
     planner, llm, _prompt = _make_planner(chat_responses=[_resp()])
 
     await planner.plan([_msg()], forced=True)
 
-    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
-    assert "强制回应" in user_msg["content"]
+    ref_msg = _reference_message(llm)
+    assert ref_msg is not None
+    assert "强制回应" in ref_msg["content"]
 
 
 @pytest.mark.asyncio
-async def test_context_game_narrative_in_user_message() -> None:
-    """游戏叙事注入首轮 user 消息。"""
+async def test_context_game_narrative_in_reference_tail() -> None:
+    """游戏叙事注入参考段（消息序列尾）。"""
     planner, llm, _prompt = _make_planner(chat_responses=[_resp()])
 
     await planner.plan([_msg()], game_narrative="刚挖到钻石")
 
-    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
-    assert "刚挖到钻石" in user_msg["content"]
+    ref_msg = _reference_message(llm)
+    assert "刚挖到钻石" in ref_msg["content"]
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +385,7 @@ async def test_observability_fields_reset_and_populated() -> None:
 async def test_prompt_render_failure_degrades() -> None:
     """提示词渲染失败 → prompt_render_failed outcome（不抛异常）。"""
     planner, _llm, prompt = _make_planner(chat_responses=[_resp()])
-    prompt.render_safe = MagicMock(side_effect=RuntimeError("template missing"))
+    prompt.render = MagicMock(side_effect=RuntimeError("template missing"))
 
     outcome = await planner.plan([_msg()])
 
@@ -394,60 +395,73 @@ async def test_prompt_render_failure_degrades() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 直播流渲染：中文角色标签 / 尾部去重 / 字符级 topics 摘除
+# 消息构成：原生角色 / 顺序 / 尾部去重（canonical 映射）
 # ---------------------------------------------------------------------------
 
 
-def _history_msg(role: str, content: str) -> Any:
+def _reference_message(llm: Any) -> Any:
+    """参考段 = 发给 LLM 的消息序列中最后一条 user 消息（序列尾，循环追加在其后）。"""
+    messages = llm.chat_messages.await_args.kwargs["messages"]
+    return next((m for m in reversed(messages) if m["role"] == "user"), None)
+
+
+def _history_msg(role: str, content: str, *, message_id: str = "") -> Any:
     msg = MagicMock()
     msg.role = MagicMock(value=role)
     msg.content = content
+    msg.sender_name = "观众A" if role == "user" else "主播"
+    msg.message_type = "danmaku" if role == "user" else "speak"
+    msg.message_id = message_id
     return msg
 
 
-def test_render_history_chinese_role_labels() -> None:
-    """历史角色渲染为中文标签，不透传 LLM 角色标记。"""
+def test_dialogue_messages_native_roles_in_order() -> None:
+    """历史（user/assistant 原生角色）在前、本批（user）在后，canonical 内容同形。"""
+    planner, _llm, _prompt = _make_planner()
     history = [
-        _history_msg("user", "来个落地水"),
-        _history_msg("assistant", "好嘞这就来"),
+        _history_msg("user", "大家好呀", message_id="m1"),
+        _history_msg("assistant", "晚上好啊", message_id="m2"),
     ]
 
-    text = Planner._render_history(history)
+    messages = planner._build_dialogue_messages([_msg("主播好", mid="m9")], history)
 
-    assert "观众: 来个落地水" in text
-    assert "主播: 好嘞这就来" in text
-    assert "user:" not in text
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert "大家好呀" in messages[0]["content"]
+    assert "晚上好啊" in messages[1]["content"]
+    assert "主播好" in messages[2]["content"] and "[id:m9]" in messages[2]["content"]
 
 
-def test_render_history_tail_dedup_only_strips_trailing_matches() -> None:
-    """尾部与本批同文本的消息剔除；更早的不连续同文保留。"""
+def test_dialogue_messages_tail_dedup_only_strips_trailing_matches() -> None:
+    """历史尾部与本批同 content（canonical 全同形，含 id）的消息剔除；更早的同文保留。"""
+    planner, _llm, _prompt = _make_planner()
     history = [
-        _history_msg("user", "上次也说过落地水"),
-        _history_msg("user", "来个落地水"),
-        _history_msg("user", "来个落地水"),
+        _history_msg("user", "上次也说过落地水", message_id="m1"),
+        _history_msg("user", "来个落地水", message_id="m9"),
     ]
 
-    text = Planner._render_history(history, exclude_tail_texts={"来个落地水"})
+    messages = planner._build_dialogue_messages([_msg("来个落地水", mid="m9")], history)
 
-    assert "来个落地水" not in text
-    assert "上次也说过落地水" in text
+    joined = "\n".join(m["content"] for m in messages)
+    assert joined.count("来个落地水") == 1  # 只剩本批一条（历史尾部同 id 消息被剔除）
+    assert "上次也说过落地水" in joined
 
 
 @pytest.mark.asyncio
 async def test_context_dedups_batch_from_history_tail() -> None:
-    """弹幕先落库再决策：直播流窗口内本批弹幕不与历史重复渲染。"""
+    """弹幕先落库再决策：消息序列内本批弹幕不与历史尾部重复。"""
     planner, llm, _prompt = _make_planner(chat_responses=[_resp()])
     history = [
-        _history_msg("user", "大家好呀"),
-        _history_msg("user", "来个落地水"),
+        _history_msg("user", "大家好呀", message_id="m1"),
+        _history_msg("user", "来个落地水", message_id="m9"),
     ]
 
     await planner.plan([_msg("来个落地水", mid="m9")], history=history)
 
-    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
-    assert user_msg["content"].count("来个落地水") == 1
-    assert "观众: 大家好呀" in user_msg["content"]
-    assert "user:" not in user_msg["content"]
+    msgs = llm.chat_messages.await_args.kwargs["messages"]
+    dialogue = [m for m in msgs if m["role"] in ("user", "assistant")][:-1]  # 去掉参考段
+    joined = "\n".join(m["content"] for m in dialogue)
+    assert joined.count("来个落地水") == 1
+    assert "大家好呀" in joined
 
 
 @pytest.mark.asyncio
@@ -459,8 +473,8 @@ async def test_context_omits_char_level_topics() -> None:
 
     await planner.plan([_msg("来个落地水")])
 
-    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
-    assert "关键变化" not in user_msg["content"]
+    ref_msg = llm.chat_messages.await_args.kwargs["messages"][-1]
+    assert "关键变化" not in ref_msg["content"]
 
 
 # ---------------------------------------------------------------------------
@@ -478,8 +492,8 @@ async def test_context_includes_elapsed_live_duration() -> None:
 
     await planner.plan([_msg()])
 
-    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
-    assert "已开播时长: 1 小时 15 分钟" in user_msg["content"]
+    ref_msg = _reference_message(llm)
+    assert "已开播时长: 1 小时 15 分钟" in ref_msg["content"]
 
 
 @pytest.mark.asyncio
@@ -489,8 +503,8 @@ async def test_context_elapsed_provider_missing_omits_line() -> None:
 
     await planner.plan([_msg()])
 
-    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
-    assert "已开播时长" not in user_msg["content"]
+    ref_msg = _reference_message(llm)
+    assert "已开播时长" not in ref_msg["content"]
 
 
 @pytest.mark.asyncio
@@ -506,6 +520,6 @@ async def test_context_elapsed_provider_failure_degrades() -> None:
 
     outcome = await planner.plan([_msg()])
 
-    user_msg = llm.chat_messages.await_args.kwargs["messages"][1]
-    assert "已开播时长" not in user_msg["content"]
+    ref_msg = _reference_message(llm)
+    assert "已开播时长" not in ref_msg["content"]
     assert outcome["silent_reason"] == "natural"

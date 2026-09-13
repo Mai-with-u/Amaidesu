@@ -24,16 +24,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.modules.logging import get_logger
 from src.modules.types.emotion_vocab import Emotion
 
+from . import canonical
 from .message_buffer import MessageBuffer
 from .plan import DecisionPlan
 
-# 默认人设兜底值（persona dict 缺字段时使用）
+# 默认人设兜底值（cold-start 兜底：构造 config 未提供对应字段时使用）
 #
-# 优先级链：persona dict 中的同名键（来自 StreamerConfig.persona，由装配根
-# main._register_agents_from_config 拉取后透传给 StreamerAgent.persona_provider，
-# 再经 ReplyToolProvider._resolve_persona 解析后传给 Replyer.generate(persona=...)）
-# > StreamerConfig.persona 对应字段（agents.toml 显式覆盖）
-# > 本模块 _DEFAULT_* 常量（仅当 persona dict 完全缺失/字段缺位时兜底，避免冷启动崩）。
+# 人设唯一来源是 StreamerAgent 构造期注入的 config（agents.toml
+# [agents.streamer.persona]）；本模块 _DEFAULT_* 常量仅在构造 config
+# 完全缺失/字段缺位时兜底，避免冷启动崩。
 #
 # _DEFAULT_BOT_NAME = '麦麦'、personality/style_constraints 文本与
 # StreamerConfig.persona 默认值对齐；不允许 config 模块反向依赖 agents 层，
@@ -53,7 +52,7 @@ _REPLY_FUNCTION_NAME = "reply"
 class Replyer:
     """表达引擎：消费 DecisionPlan + 弹幕 + 人设，生成实际回复。
 
-    通过标准 function calling 协议一次性产出 speech + emotion + actions；
+    通过标准 function calling 协议产出 speech + emotion（reply 是唯一出口）；
     返回 ``Optional[dict]``，由 reply_tool 包装后返回给 LLM。
     """
 
@@ -69,10 +68,11 @@ class Replyer:
 
         Args:
             config: 配置字典（兼容 StreamerConfig 的子集字段），
-                    读取 enable_action_selection / bot_name / audience_salutation。
+                    读取 profile / bot_name / personality / style_constraints /
+                    audience_salutation（人设四件套由 StreamerAgent 构造期注入）。
             llm_service: LLM 管理器（使用 profile 指定的高质量客户端）。
             prompt_service: 提示词管理器（渲染 amaidesu_replyer 模板）。
-            tool_registry: 工具注册表（可选，用于收集动作工具的 function 定义）。
+            tool_registry: 工具注册表（仅作占位注入，表达引擎自身不消费工具列表）。
             word_filter: 敏感词过滤器（输出端净化入口；None 表示不净化）。
         """
         self._config: Dict[str, Any] = config or {}
@@ -80,6 +80,8 @@ class Replyer:
         # 保留为实例属性以兼容工具列表与日志输出（仅展示用）。
         self.profile: str = self._config.get("profile", "llm")
         self._bot_name: str = self._config.get("bot_name", _DEFAULT_BOT_NAME)
+        self._personality: str = self._config.get("personality", _DEFAULT_PERSONALITY)
+        self._style_constraints: str = self._config.get("style_constraints", _DEFAULT_STYLE_CONSTRAINTS)
         self._audience_salutation: str = self._config.get("audience_salutation", _DEFAULT_AUDIENCE_SALUTATION)
 
         self._llm_service = llm_service
@@ -92,23 +94,22 @@ class Replyer:
         self,
         plan: DecisionPlan,
         batch: List[Any],
-        persona: Dict[str, Any],
         history: Optional[List[Any]] = None,
         rundown: Optional[str] = None,
         on_delta: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
-        """根据 Planner 的决策计划 + 弹幕批次 + 人设，生成实际回复。
+        """根据 Planner 的决策计划 + 弹幕批次，生成本方人设下的实际回复。
 
         流程：注入人设渲染 'amaidesu_replyer'（含 $personality/$style_constraints/
         $bot_name）→ 调用高质量 LLM（profile，**call_tools 标准接口**，
-        tools=[reply_fn_def] + action_fn_defs）→ 解析 response.tool_calls 提取
-        reply(speech/emotion) 与 actions → 情绪降级 neutral → 敏感词净化 →
-        返回 dict（不发布事件；reply_tool 负责 ToolExecutionResult 包装）。
+        tools=[reply_fn_def]，reply 是唯一 function 定义）→ 解析
+        response.tool_calls 提取 reply(speech/emotion/intensity) → 情绪降级
+        neutral → 敏感词净化 → 返回 dict（不发布事件；reply_tool 负责
+        ToolExecutionResult 包装）。
 
         Args:
             plan: Planner 产出的决策计划（should_reply=True 时才应到达此处）。
             batch: 本批弹幕（NormalizedMessage 列表）。
-            persona: 人设字典（bot_name / personality / style_constraints）。
             history: 可选的最近会话历史（鸭子类型对象列表，需有 ``role`` 和 ``content`` 属性）；
                      role 可能是枚举（取 ``.value``），content 是 str。None 表示无历史可用，
                      渲染为占位文本。
@@ -119,7 +120,7 @@ class Replyer:
             on_delta: 思考流回调（LLM 层形态 (kind, text_delta)）。
 
         Returns:
-            Dict 实例（含 speech/emotion/actions/metadata）；LLM 异常、tool_calls 缺失
+            Dict 实例（含 speech/emotion/metadata）；LLM 异常、tool_calls 缺失
             reply call、或 speech 为空时返回 None（silent 降级）。
             reply_tool 直接将此 dict 包装进 ToolExecutionResult 返回给 LLM。
         """
@@ -129,9 +130,9 @@ class Replyer:
             return None
 
         # 注入人设 + 决策意图 + 弹幕上下文 + 会话历史 + 流程单上下文，渲染 prompt
-        prompt = self._render_prompt(plan, batch, persona, history, rundown)
+        prompt = self._render_prompt(plan, batch, history, rundown)
 
-        # reply 是唯一工具——表达引擎不持有信息/动作工具列表
+        # reply 是唯一工具——表达引擎不持有任何信息/动作类工具列表
         tools = [self._build_reply_function_def()]
 
         try:
@@ -196,28 +197,28 @@ class Replyer:
         self,
         plan: DecisionPlan,
         batch: List[Any],
-        persona: Dict[str, Any],
         history: Optional[List[Any]] = None,
         rundown: Optional[str] = None,
     ) -> str:
         """渲染 Replyer prompt，注入人设三件套 + 计划 + 弹幕 + 会话历史 + 流程单上下文。
 
-        人设分离承诺的另一半：$personality / $style_constraints / $bot_name 必须传给模板。
+        人设分离承诺的另一半：$personality / $style_constraints / $bot_name 必须传给模板；
+        四个字段均读构造期注入的自身人设（StreamerAgent 从 config.persona 单点构建）。
         会话历史用于让 Replyer 看到自己最近说过的话，避免冷场反复生成相同句式。
         流程单上下文（$rundown）是任务上下文注入（当前环节 / 整场进度），由调用方拼装后传入；
         None / 空串时用占位文本，避免模板出现字面 $rundown。
         """
         # 流程单上下文：None / 空串时用占位文本，与 Planner 对齐
         rundown_render = rundown if rundown else "（当前无流程单）"
-        return self._prompt_service.render_safe(
+        return self._prompt_service.render(
             _REPLYER_TEMPLATE,
-            bot_name=persona.get("bot_name", self._bot_name),
-            personality=persona.get("personality", _DEFAULT_PERSONALITY),
-            style_constraints=persona.get("style_constraints", _DEFAULT_STYLE_CONSTRAINTS),
-            audience_salutation=persona.get("audience_salutation", self._audience_salutation),
+            bot_name=self._bot_name,
+            personality=self._personality,
+            style_constraints=self._style_constraints,
+            audience_salutation=self._audience_salutation,
             plan=_render_plan_text(plan),
-            danmaku_batch=_render_batch_text(batch),
-            conversation_history=_render_history_text(history),
+            danmaku_batch=_batch_prompt_text(batch),
+            conversation_history=_history_prompt_text(history),
             rundown=rundown_render,
         )
 
@@ -228,14 +229,16 @@ class Replyer:
         """构造 reply function 定义（OpenAI function calling 形态）。
 
         reply 是 Agent 内部协议工具——只服务主播自身 LLM 会话，不进 ToolRegistry。
-        LLM 通过调用此函数输出 speech + emotion（emotion 是 emotion_vocab 12 枚举之一）。
+        LLM 通过调用此函数输出 speech + emotion（emotion 是 emotion_vocab 12 枚举之一）
+        + intensity（情绪强度，驱动下游 VTS 表情权重）。
         """
         return {
             "name": _REPLY_FUNCTION_NAME,
             "description": (
                 "主播发言：输出你要对直播间说的话和情绪。"
-                "必填：speech（1-2 句口语化文本）；可选：emotion（12 枚举之一，缺省 neutral）。"
-                "调用此工具即代表你决定本轮发言；如需同时触发动作，可继续调用对应动作工具。"
+                "必填：speech（1-2 句口语化文本）；可选：emotion（12 枚举之一，缺省 neutral）、"
+                "intensity（0.0-1.0 情绪强度，缺省 0.5）。"
+                "调用此工具即代表你决定本轮发言；reply 是你唯一的输出出口。"
             ),
             "parameters": {
                 "type": "object",
@@ -248,6 +251,12 @@ class Replyer:
                         "type": "string",
                         "enum": [e.value for e in Emotion],
                         "description": "情绪（12 枚举之一）",
+                    },
+                    "intensity": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "description": "情绪强度（0.0-1.0，缺省 0.5；驱动虚拟形象表情幅度）",
                     },
                 },
                 "required": ["speech"],
@@ -455,35 +464,23 @@ def _render_plan_text(plan: DecisionPlan) -> str:
     )
 
 
-def _render_batch_text(batch: List[Any]) -> str:
+def _batch_prompt_text(batch: List[Any]) -> str:
     """把弹幕批次渲染为文本（复用 MessageBuffer.render_batch_text）。"""
     if not batch:
         return "（本批无弹幕）"
     return MessageBuffer.render_batch_text(batch)
 
 
-def _render_history_text(history: Optional[List[Any]]) -> str:
-    """把会话历史渲染为供 prompt 使用的多行文本。
+def _history_prompt_text(history: Optional[List[Any]]) -> str:
+    """把会话历史渲染为供 prompt 使用的多行文本（委托 canonical 映射 + 标签文本视图）。
 
-    每条消息渲染为 ``<role>: <content>`` 一行，从旧到新换行拼接。
-    - role 可能是枚举对象（用 ``getattr(role, "value", str(role))`` 取值）；
-    - 元素是鸭子类型（只需 ``role`` / ``content`` 两个属性），不绑定具体类型。
+    - 元素是鸭子类型（``role`` / ``content`` 必需，昵称/类型/ID 可选），不绑定具体类型；
+    - 与 Planner 消息构造、后台摘要同源（canonical 单一映射），批与历史同形。
     - history 为 None 或空时返回占位文本，避免 LLM 拿到空字符串误以为没有上下文。
     """
     if not history:
         return "（暂无对话历史）"
-    lines: List[str] = []
-    for msg in history:
-        role = getattr(msg, "role", None)
-        role_str = getattr(role, "value", str(role)) if role else "user"
-        content = getattr(msg, "content", "") or ""
-        # 主动发言的 user 占位（"（主动发言，主题：...）"）是系统元数据而非观众弹幕，
-        # 渲染为 [系统] 标注，避免 Replyer 误当成观众消息（与 Planner 渲染逻辑对齐）。
-        if role_str == "user" and content.startswith("（主动发言"):
-            lines.append(f"[系统] {content}")
-            continue
-        lines.append(f"{role_str}: {content}")
-    return "\n".join(lines)
+    return canonical.to_text_view([canonical.turn_to_message(msg) for msg in history])
 
 
 __all__ = ["Replyer", "WordFilter"]

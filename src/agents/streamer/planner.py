@@ -24,9 +24,10 @@
 数据流：
     batch + room_state.snapshot + history + forced/proactive + behavior_style
         ──▶ render('amaidesu_planner_react')（系统提示词）
-        ──▶ 首轮 user 消息 = context_block（组装器/裸消息路径）+ 情境标注
+        ──▶ 消息序列 = [system] + 历史消息（user=观众 / assistant=主播，
+            canonical 映射）+ 本批消息（user）+ 参考段（user，固定序列尾）
         ──▶ llm_service.chat_messages(messages, tools=工具列表, client_type=planner_profile)
-        ──▶ 循环：tool_calls 串行执行（reply → 局部 Provider；其余 → registry）
+        ──▶ 循环：assistant/tool 消息 append-only 追加在参考段之后
         ──▶ outcome dict（replied / speech / silent_reason / steps / tool_trace）
 """
 
@@ -36,14 +37,13 @@ import json
 from typing import Any, Callable, Dict, List, Optional
 
 from src.modules.config.schemas.base import BaseConfig
-from src.modules.context.assembler import AssemblerInputs, PlannerAssembler
-from src.modules.context.snapshot import EnvironmentBlock
+from src.agents.streamer import canonical
+from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler
 from src.modules.llm.manager import normalize_tool_calls_for_protocol
 from src.modules.logging import get_logger
 from src.modules.memory.models import MemoryHit
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolInvocation
-from src.modules.types.message_type import require_message_type
 
 from .room_state import RoomState, RoomStateSnapshot
 from .thinking_stream import ThinkingStreamContext
@@ -65,16 +65,15 @@ _RECALL_HIT_TEXT_CHARS: int = 80
 #: 单条工具观察作为观察返回的最大字符数（超长观察截断，控上下文体积）。
 _OBSERVATION_MAX_CHARS: int = 2000
 
+#: 历史消息总字符预算：12000 由 32K 窗口倒推——最坏输入 = 系统提示词 1.5K
+#: + 参考段 ≤2.6K（含游戏叙事满格）+ 工具观察 ≤16K（8 步 × 2000）+ 对话
+#: ≤12K ≈ 32K 字符（约 21-23K token），留余量防越窗；正常 30 条历史约
+#: 1.5-2.4K 字符，预算只兜长内容病理输入。与条数上限 history_limit=30
+#: 构成双上限、先到先丢（成块丢最旧，见 canonical.drop_oldest_blocks）。
+_HISTORY_CHAR_BUDGET: int = 12000
+
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
 _DEFAULT_MAX_STEPS: int = 8
-
-#: 会话历史角色 → 直播流渲染标签：直播流是多对一弹幕墙，
-#: 透传 LLM 角色标记（user:/assistant:）会污染 user 消息内的文本结构
-_HISTORY_ROLE_LABELS: Dict[str, str] = {
-    "user": "观众",
-    "assistant": "主播",
-    "system": "系统",
-}
 
 
 class _PlannerConfig(BaseConfig):
@@ -97,6 +96,11 @@ def _spec_to_fn_def(spec: Any) -> Dict[str, Any]:
     if spec.parameters_schema is not None:
         entry["parameters"] = spec.parameters_schema
     return entry
+
+
+def _as_id_str(value: Any) -> str:
+    """消息 ID 字段收敛：仅接受 str，其余（None/Mock 等）按空处理。"""
+    return value if isinstance(value, str) else ""
 
 
 def _tool_call_parts(call: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
@@ -145,9 +149,9 @@ class Planner:
             config: 配置字典或已解析对象（profile / planner_max_steps）。
             llm_service: LLM 管理器，需提供
                 ``async chat_messages(messages, tools=..., client_type=...) -> LLMResponse``。
-            prompt_service: 提示词管理器，需提供 ``render_safe(name, **vars) -> str``。
+            prompt_service: 提示词管理器，需提供 ``render(name, **vars) -> str``。
             room_state: 直播间态势规则层实例。
-            tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作工具）。
+            tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
             memory: 记忆后端（鸭子类型 ``MemoryProvider``）；None 时无记忆决策。
             recall_top_k: 每轮注入 prompt 的最大命中条数。
             context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
@@ -274,19 +278,22 @@ class Planner:
             outcome["silent_reason"] = "prompt_render_failed"
             return outcome
 
-        context_block = await self._assemble_context(batch, history, rundown_text)
-        if context_block is None:
+        reference_text = await self._assemble_reference(batch, history, rundown_text, forced, proactive, game_narrative)
+        if reference_text is None:
             outcome["error"] = self.last_failure
             outcome["silent_reason"] = "assembler_failed"
             return outcome
 
-        user_message = self._render_situational_message(context_block, forced, proactive, game_narrative)
-
         tool_list = self._build_tool_list()
-        messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ]
+        # 消息序列：[system] + 历史（user/assistant 原生消息）+ 本批（user）+ 参考段（user，序列尾）；
+        # ReAct 循环的 assistant/tool 消息 append-only 追加在参考段之后，绝不插中间。
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        messages.extend(self._build_dialogue_messages(batch, history))
+        if reference_text:
+            messages.append({"role": "user", "content": reference_text})
+        elif len(messages) == 1:
+            # 空窗兜底：对话与参考全空时保底一条 user 消息（部分协议要求非 system 消息存在）
+            messages.append({"role": "user", "content": "（本窗无对话与参考内容）"})
 
         steps = 0
         while steps < self.max_steps:
@@ -368,7 +375,7 @@ class Planner:
         """渲染 ReAct 系统提示词（行为准则 + 工具守则）。"""
         behavior_style_render = self._behavior_style or "（未配置行动准则，请依据直播间态势与对话历史自行决策）"
         try:
-            return self._prompt_service.render_safe(
+            return self._prompt_service.render(
                 self.TEMPLATE_NAME,
                 behavior_style=behavior_style_render,
             )
@@ -377,30 +384,37 @@ class Planner:
             self.last_failure = f"prompt_render_failed: {e}"
             return None
 
-    async def _assemble_context(
+    async def _assemble_reference(
         self,
         batch: List[Any],
         history: Optional[List[Any]],
         rundown_text: Optional[str],
+        forced: bool,
+        proactive: bool,
+        game_narrative: str,
     ) -> Optional[str]:
-        """组装决策上下文块（组装器路径 / 裸消息路径）。"""
-        snapshot = self._room_state.get_snapshot()
-        danmaku_text = self._render_batch(batch)
-        batch_texts = {
-            (getattr(msg, "text", "") or "").strip() for msg in batch if (getattr(msg, "text", "") or "").strip()
-        }
-        history_text = self._render_history(history, exclude_tail_texts=batch_texts)
+        """构造参考段（一条 user 消息，固定在消息序列尾）。
 
-        recent_chat_parts: List[str] = []
-        if history_text and history_text != "（暂无对话历史）":
-            recent_chat_parts.append(history_text)
-        if danmaku_text and danmaku_text != "（本批无弹幕）":
-            recent_chat_parts.append(danmaku_text)
-        recent_chat_window = "\n\n".join(recent_chat_parts) if recent_chat_parts else "（暂无）"
+        内容 = 情境标注（强制/主动）+ 游戏叙事 + 组装器元数据段
+        （环节描述 / 直播间快照 / 记忆召回）。对话内容不在此处——历史与本批
+        走 canonical 映射的原生消息通道。
+        """
+        lines: List[str] = []
+        if forced:
+            lines.append("【情境】本批为强制回应触发（SC / 礼物 / 上舰）——观众付费点名，应优先回应。")
+        if proactive:
+            lines.append("【情境】本窗为主动发言触发（冷场/定时）——弹幕可能为空，基于房间态势决定是否主动开口。")
+        if game_narrative:
+            # 叙事是注入到参考段的单项内容，同样受单项 2000 字符帽约束
+            # （canonical.SINGLE_ITEM_MAX_CHARS，与消息单项截断同一规则）。
+            lines.append(f"【游戏叙事】{canonical.truncate_item(game_narrative)}")
+        situation_text = "\n".join(lines)
 
         if not self._context_enabled:
-            return recent_chat_window
+            # 裸消息路径：跳过环境快照与记忆召回，仅保留情境标注与叙事
+            return situation_text
 
+        snapshot = self._room_state.get_snapshot()
         current_ms = now_ms()
         duration_so_far_ms = 0
         if self._elapsed_live_provider is not None:
@@ -422,45 +436,52 @@ class Planner:
 
         try:
             assembler_inputs = AssemblerInputs(
-                persona="",
-                tool_definitions_block="",
-                current_stage_label=None,
                 stage_descriptions=rundown_text or "",
-                timeline_blocks=[],
-                recent_chat_window=recent_chat_window,
                 environment=env_block,
-                working_memory=None,
                 memory_recall_section=memory_recall_section,
-                reply_intent="",
-                topic_subset="",
-                agent_kind="planner",
             )
-            snapshot_assembled = self._assembler.assemble(assembler_inputs)
+            assembled_text = self._assembler.assemble(assembler_inputs)
         except Exception as e:
             self.logger.error(f"PlannerAssembler 组装失败: {e}", exc_info=True)
             self.last_failure = f"assembler_failed: {e}"
             return None
-        return snapshot_assembled.rendered_text
 
-    def _render_situational_message(
+        parts = [block for block in (situation_text, assembled_text) if block]
+        return "\n\n".join(parts)
+
+    def _build_dialogue_messages(
         self,
-        context_block: str,
-        forced: bool,
-        proactive: bool,
-        game_narrative: str,
-    ) -> str:
-        """情境标注 + 上下文块 → 首轮 user 消息。"""
-        lines: List[str] = []
-        if forced:
-            lines.append("【情境】本批为强制回应触发（SC / 礼物 / 上舰）——观众付费点名，应优先回应。")
-        if proactive:
-            lines.append("【情境】本窗为主动发言触发（冷场/定时）——弹幕可能为空，基于房间态势决定是否主动开口。")
-        if game_narrative:
-            lines.append(f"【游戏叙事】{game_narrative}")
-        if lines:
-            lines.append("")
-        lines.append(context_block)
-        return "\n".join(lines)
+        batch: List[Any],
+        history: Optional[List[Any]],
+    ) -> List[Dict[str, Any]]:
+        """历史 + 本批 → 原生消息序列（user=观众 / assistant=主播）。
+
+        均经 canonical 单一映射（批与历史同形）；历史尾部与本批同源的消息
+        剔除——弹幕先落库再进入决策，窗口尾部会与本批重复（按消息 ID 精确
+        匹配、原始文本兜底；仅剔尾部连续命中段，更早的同文历史保留为有效
+        上下文）。去重在 canonical 化之前做：昵称渲染差异不影响判定。
+        """
+        batch_messages = [canonical.batch_item_to_message(msg) for msg in batch]
+        if not history:
+            return batch_messages
+
+        batch_ids = {_as_id_str(getattr(msg, "message_id", None)) for msg in batch} - {""}
+        batch_texts = {(getattr(msg, "text", "") or "").strip() for msg in batch} - {""}
+        end = len(history)
+        while end > 0:
+            turn = history[end - 1]
+            turn_id = _as_id_str(getattr(turn, "message_id", None))
+            turn_text = (getattr(turn, "content", "") or "").strip()
+            if (turn_id and turn_id in batch_ids) or (turn_text and turn_text in batch_texts):
+                end -= 1
+            else:
+                break
+
+        history_messages = [canonical.turn_to_message(turn) for turn in history[:end]]
+        # 字符预算（成块丢最旧，与条数上限 history_limit=30 双上限先到先丢）：
+        # 条数上限在历史读取处已生效，此处补字符维度——超预算时从最旧整条丢弃。
+        history_messages = canonical.drop_oldest_blocks(history_messages, _HISTORY_CHAR_BUDGET)
+        return history_messages + batch_messages
 
     # ==================== 工具列表与执行 ====================
 
@@ -586,14 +607,14 @@ class Planner:
         """调记忆后端召回相关历史片段，格式化为 prompt 注入文本。
 
         - 基础 query = RoomState.topic_summary（非空时）+ 本批弹幕前 200 字符
-        - 无 memory / 无 hits / 异常 → 空串；Assembler 兜底 "（暂无）"
+        - 无 memory / 无 hits / 异常 → 空串；Assembler 对空段整段省略
         """
         if self._memory is None:
             return ""
 
         topic_summary = (getattr(snapshot, "topic_summary", "") or "").strip()
-        batch_text = self._render_batch(batch)
-        batch_head = (batch_text or "").strip()[:_RECALL_QUERY_BATCH_CHARS]
+        batch_messages = [canonical.batch_item_to_message(msg) for msg in batch]
+        batch_head = "\n".join(m["content"] for m in batch_messages).strip()[:_RECALL_QUERY_BATCH_CHARS]
         query_parts = [p for p in (topic_summary, batch_head) if p]
         query = "\n".join(query_parts) if query_parts else ""
         if not query:
@@ -618,56 +639,4 @@ class Planner:
             source = metadata.get("source", "unknown")
             lines.append(f"- [{score:.2f} | src={source}] {text}")
 
-        return "\n".join(lines)
-
-    def _render_batch(self, batch: List[Any]) -> str:
-        """将一批弹幕渲染为文本块（每行带 [id:...] 编号，供 reply target 引用）。"""
-        if not batch:
-            return "（本批无弹幕）"
-
-        lines: List[str] = []
-        for msg in batch:
-            text = getattr(msg, "text", None) or str(msg)
-            nickname = getattr(msg, "user_nickname", None) or getattr(msg, "user_id", None) or "观众"
-            data_type = getattr(msg, "data_type", "text") or "text"
-            spec = require_message_type(data_type)
-            line = spec.prompt_template.format(text=text, nickname=nickname)
-            message_id = getattr(msg, "message_id", None)
-            if message_id:
-                line = f"{line} [id:{message_id}]"
-            lines.append(line)
-        return "\n".join(lines)
-
-    @staticmethod
-    def _render_history(history: Optional[List[Any]], exclude_tail_texts: Optional[set] = None) -> str:
-        """将会话历史渲染为直播流文本块（中文角色标签；主动发言占位标注 [系统]）。
-
-        exclude_tail_texts：从尾部剔除与本批弹幕同文本的消息——弹幕先落库
-        再进入决策，窗口内会与本批渲染重复；仅剔尾部连续命中段，更早的同文
-        历史保留（高频弹幕如"666"的更早记录仍是有效上下文）。
-        """
-        if not history:
-            return "（暂无对话历史）"
-
-        excluded = exclude_tail_texts or set()
-        end = len(history)
-        while end > 0:
-            tail_content = (getattr(history[end - 1], "content", "") or "").strip()
-            if tail_content and tail_content in excluded:
-                end -= 1
-            else:
-                break
-
-        lines: List[str] = []
-        for msg in history[:end]:
-            role = getattr(msg, "role", None)
-            role_str = getattr(role, "value", str(role)) if role else "user"
-            content = getattr(msg, "content", "") or ""
-            # 主动发言写入历史的 user 占位是系统元数据，非观众弹幕——
-            # 渲染为 [系统] 标注避免反重复误判
-            if role_str == "user" and content.startswith("（主动发言"):
-                lines.append(f"[系统] {content}")
-                continue
-            label = _HISTORY_ROLE_LABELS.get(role_str, role_str)
-            lines.append(f"{label}: {content}")
         return "\n".join(lines)

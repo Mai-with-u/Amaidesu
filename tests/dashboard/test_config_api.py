@@ -55,7 +55,6 @@ def dashboard_server(config_service):
         input_manager=None,
         decision_manager=None,
         output_manager=None,
-        context_service=None,  # type: ignore[arg-type]
         config_service=config_service,
         dashboard_config=cfg,
     )

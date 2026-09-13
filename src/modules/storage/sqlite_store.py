@@ -595,27 +595,31 @@ class SQLiteStore:
         live_session_id: int,
         limit: int = 30,
         before_timestamp_ms: Optional[int] = None,
+        sender_role: Optional[str] = None,
     ) -> List[sqlite3.Row]:
         """取指定场次最近的 ``limit`` 条消息，按时间**正序**返回（旧→新）。
 
         实现：先 ``ORDER BY timestamp_ms DESC LIMIT ?`` 拿最新窗口，再 Python 内
         ``list(reversed(...))`` 反转。``before_timestamp_ms`` 用于分页/窗口截断
-        （仅取 < 该时间的消息）。
+        （仅取 < 该时间的消息）。``sender_role`` 可选过滤发送方角色
+        （``"viewer"``=观众 / ``"assistant"``=主播）。
         """
 
         def _exec() -> List[sqlite3.Row]:
+            clauses = ["live_session_id=?"]
+            params: List[Any] = [live_session_id]
+            if sender_role is not None:
+                clauses.append("sender_role=?")
+                params.append(sender_role)
+            if before_timestamp_ms is not None:
+                clauses.append("timestamp_ms<?")
+                params.append(before_timestamp_ms)
+            params.append(limit)
             with self._manager.transaction() as conn:
-                if before_timestamp_ms is None:
-                    cur = conn.execute(
-                        "SELECT * FROM live_chat WHERE live_session_id=? ORDER BY timestamp_ms DESC LIMIT ?",
-                        (live_session_id, limit),
-                    )
-                else:
-                    cur = conn.execute(
-                        "SELECT * FROM live_chat WHERE live_session_id=? "
-                        "AND timestamp_ms < ? ORDER BY timestamp_ms DESC LIMIT ?",
-                        (live_session_id, before_timestamp_ms, limit),
-                    )
+                cur = conn.execute(
+                    "SELECT * FROM live_chat WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms DESC LIMIT ?",
+                    params,
+                )
                 rows = cur.fetchall()
             # DESC 取到的是 [新→旧]，反转回 [旧→新] 满足调用方约定
             return list(reversed(rows))

@@ -61,7 +61,6 @@ def client(tmp_path: Path):
 
     server = DashboardServer(
         event_bus=None,  # type: ignore[arg-type]
-        context_service=None,  # type: ignore[arg-type]
         config_service=svc,
         dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
         collector_manager=cm,

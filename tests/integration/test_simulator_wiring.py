@@ -100,22 +100,20 @@ class TestSimulatorWiring:
             config_service=config_service,
             dev_webui=False,
         )
-        # 组合根契约（create_app_components 返回元组，共 14 项）：
-        # 第 8 项 (index=7) 是 simulator_service；第 11 项 (index=10) 是 session_manager；
-        # 末尾三项 (index=11/12/13) 是工具系统重设计后追加的
+        # 组合根契约（create_app_components 返回元组，共 13 项）：
+        # 第 7 项 (index=6) 是 simulator_service；第 10 项 (index=9) 是 session_manager；
+        # 末尾三项 (index=10/11/12) 是工具系统重设计后追加的
         # tool_registry / health_monitor / task_tracker
-        assert len(result) == 14, f"组合根元组应返回 14 项，实际 {len(result)}"
-        simulator_service = result[7]
+        assert len(result) == 13, f"组合根元组应返回 13 项，实际 {len(result)}"
+        simulator_service = result[6]
         assert simulator_service is None, "enabled=false 时 simulator_service 应为 None（零装配）"
-        session_manager = result[10]
+        session_manager = result[9]
         assert session_manager is not None, "session_manager 应始终被装配"
 
         # 清理已装配的资源
-        await result[1].cleanup()  # event_bus
-        if result[0] is not None:
-            await result[0].cleanup()  # context_service
-        if result[2] is not None:
-            await result[2].cleanup()  # llm_service
+        await result[0].cleanup()  # event_bus
+        if result[1] is not None:
+            await result[1].cleanup()  # llm_service
 
     @pytest.mark.asyncio
     async def test_enabled_dry_mode_no_llm_call(self, config_service_factory, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -134,7 +132,7 @@ class TestSimulatorWiring:
             dev_webui=False,
             simulator_auto_start=False,
         )
-        simulator_service = result[7]
+        simulator_service = result[6]
         assert simulator_service is not None, "enabled=true 时 simulator_service 应被装配"
         assert simulator_service.is_running is False, (
             "auto_start=False 时 simulator_service.is_running 应为 False（不启动主循环）"
@@ -142,11 +140,9 @@ class TestSimulatorWiring:
 
         # 清理
         await simulator_service.cleanup()
-        await result[1].cleanup()
-        if result[0] is not None:
-            await result[0].cleanup()
-        if result[2] is not None:
-            await result[2].cleanup()
+        await result[0].cleanup()
+        if result[1] is not None:
+            await result[1].cleanup()
 
     @pytest.mark.asyncio
     async def test_enabled_runs_when_auto_started(
@@ -166,18 +162,16 @@ class TestSimulatorWiring:
             dev_webui=False,
             simulator_auto_start=True,
         )
-        simulator_service = result[7]
+        simulator_service = result[6]
         assert simulator_service is not None
         assert simulator_service.is_running is True, "enabled=true + auto_start=True 时 simulator_service 应已自动启动"
 
         # 清理：先 stop 主循环再 cleanup
         await simulator_service.cleanup()
         assert simulator_service.is_running is False
-        await result[1].cleanup()
-        if result[0] is not None:
-            await result[0].cleanup()
-        if result[2] is not None:
-            await result[2].cleanup()
+        await result[0].cleanup()
+        if result[1] is not None:
+            await result[1].cleanup()
 
 
 class TestMainDryModeShutdown:
@@ -213,20 +207,19 @@ class TestMainDryModeShutdown:
             dev_webui=False,
             simulator_auto_start=False,  # --dry 模式
         )
-        simulator_service = result[7]
+        simulator_service = result[6]
         assert simulator_service is not None
         assert simulator_service.is_running is False, "--dry 模式下 simulator_service 不应启动主循环"
 
         # run_shutdown 也应正常关闭（不抛错）
         await run_shutdown(
-            context_service=result[0],
-            event_bus=result[1],
-            llm_service=result[2],
-            dashboard_server=result[3],
-            event_recorder=result[4],
-            collector_manager=result[5],
-            agent_manager=result[6],
+            event_bus=result[0],
+            llm_service=result[1],
+            dashboard_server=result[2],
+            event_recorder=result[3],
+            collector_manager=result[4],
+            agent_manager=result[5],
             simulator_service=simulator_service,
-            sqlite_store=result[8],
-            storage_ledger=result[9],
+            sqlite_store=result[7],
+            storage_ledger=result[8],
         )

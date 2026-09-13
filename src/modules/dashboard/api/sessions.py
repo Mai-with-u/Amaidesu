@@ -1,7 +1,7 @@
 """直播场次 API
 
 提供场次的查询与生命周期控制（``/api/v1/live-sessions/*``；
-与 ContextService 的 ``/sessions`` 会话列表互不相干）：
+与弹幕消息流 live_chat 无关，仅管理场次生命周期）：
 - ``GET  /sessions``           场次列表（倒序 + 消息数，供控制台场次侧边栏）
 - ``POST /sessions/open``      开启新场次（进行中场次先自动结束）
 - ``POST /sessions/{id}/close`` 结束指定场次（须为当前进行中场次）

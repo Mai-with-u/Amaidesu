@@ -54,7 +54,6 @@ def _make_maintainer(store: SQLiteStore, pk: int = 777) -> BackgroundMaintainer:
         live_session_store=store,
         session_manager=_FakeSessionManager(pk),
         sqlite_store=store,
-        session_id="live",
     )
 
 
@@ -106,7 +105,6 @@ async def test_persist_skipped_without_store() -> None:
         {},
         room_state=RoomState(),
         sqlite_store=None,
-        session_id="live",
     )
     # 不注入 sqlite_store：整体跳过，不抛异常
     await maintainer._persist_topic_snapshot("摘要", now_ms=1_000, previous_summary_ms=0)

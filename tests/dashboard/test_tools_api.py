@@ -146,7 +146,6 @@ def _build_server(config_dir: Path, registry):
     svc.initialize()
     return DashboardServer(
         event_bus=None,  # type: ignore[arg-type]
-        context_service=None,  # type: ignore[arg-type]
         config_service=svc,
         dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
         tool_registry=registry,  # type: ignore[arg-type]
@@ -626,7 +625,6 @@ def _build_health_server(config_dir: Path, registry):
     svc.initialize()
     return DashboardServer(
         event_bus=None,  # type: ignore[arg-type]
-        context_service=None,  # type: ignore[arg-type]
         config_service=svc,
         dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
         tool_registry=registry,  # type: ignore[arg-type]

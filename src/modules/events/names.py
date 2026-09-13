@@ -82,7 +82,7 @@ class CoreEvents:
 
     # ========== v2 语义域事件（streamer 主播发言业务事实） ==========
     # 主播 Agent 已生成一条发言的业务事实：与 TTS 启用与否正交，下游消费者
-    # （Simulator 节奏唤醒、ContextService 历史写入、字幕器、未来回放）拿到
+    # （Simulator 节奏唤醒、存储记账落库、字幕器、未来回放）拿到
     # 同一份业务信号，不依赖声卡/TTS 引擎是否存在。
     # utterance_id 与 tts.utterance.* 共用同一关联键（编排层生成，全链路串联）。
     STREAMER_SPEECH = "streamer.speech"

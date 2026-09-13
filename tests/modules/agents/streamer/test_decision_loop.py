@@ -115,7 +115,7 @@ def _setup_agent(
     llm.call_tools = AsyncMock(return_value=replyer_resp)
 
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
+    prompt.render = MagicMock(return_value="PROMPT")
 
     config = StreamerConfig.from_dict({
         "batch": {"batch_window_ms": 100, "tick_interval_ms": 50},
@@ -125,14 +125,11 @@ def _setup_agent(
 
     bus = EventBus()
     registry = ToolRegistry()
-    context = MagicMock()
-    context.get_history = AsyncMock(return_value=[])
 
     agent = StreamerAgent(
         config=config,
         llm_manager=llm,
         prompt_manager=prompt,
-        context_service=context,
         event_bus=bus,
         tool_registry=registry,
     )
@@ -193,7 +190,7 @@ async def test_decision_loop_planner_no_reply_path():
     llm.call_tools = AsyncMock()
 
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
+    prompt.render = MagicMock(return_value="PROMPT")
 
     config = StreamerConfig.from_dict({
         "proactive": {"enabled": False},
@@ -202,14 +199,11 @@ async def test_decision_loop_planner_no_reply_path():
 
     bus = EventBus()
     registry = ToolRegistry()
-    context = MagicMock()
-    context.get_history = AsyncMock(return_value=[])
 
     agent = StreamerAgent(
         config=config,
         llm_manager=llm,
         prompt_manager=prompt,
-        context_service=context,
         event_bus=bus,
         tool_registry=registry,
     )
@@ -320,7 +314,7 @@ async def test_decision_loop_handle_message_direct():
     llm.chat_messages = AsyncMock(return_value=_planner_react_response([]))
     llm.call_tools = AsyncMock(return_value=_replyer_response("OK", emotion="happy"))
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="PROMPT")
+    prompt.render = MagicMock(return_value="PROMPT")
 
     config = StreamerConfig.from_dict({
         "proactive": {"enabled": False},
@@ -330,7 +324,6 @@ async def test_decision_loop_handle_message_direct():
         config=config,
         llm_manager=llm,
         prompt_manager=prompt,
-        context_service=None,
         event_bus=None,
         tool_registry=ToolRegistry(),
     )

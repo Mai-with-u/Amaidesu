@@ -68,7 +68,6 @@ def client(config_dir: Path):
 
     server = DashboardServer(
         event_bus=event_bus,  # type: ignore[arg-type]
-        context_service=None,  # type: ignore[arg-type]
         config_service=svc,
         dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
         collector_manager=MagicMock(),
@@ -157,7 +156,6 @@ def test_status_event_bus_empty_when_stats_disabled(config_dir: Path) -> None:
 
     server = DashboardServer(
         event_bus=bus,
-        context_service=None,  # type: ignore[arg-type]
         config_service=svc,
         dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
     )

@@ -13,8 +13,8 @@ MessageBuffer - 弹幕聚合缓冲（StreamerAgent 内部批状态）
 
 from typing import List, Optional, Tuple
 
+from src.agents.streamer import canonical
 from src.modules.types.base.normalized_message import NormalizedMessage
-from src.modules.types.message_type import require_message_type
 
 
 class MessageBuffer:
@@ -191,18 +191,12 @@ class MessageBuffer:
 
     @staticmethod
     def render_batch_text(messages: List[NormalizedMessage]) -> str:
-        """将一批消息渲染为带昵称/类型前缀的文本块，供 prompt 使用。
+        """将一批消息渲染为文本块（委托 canonical 映射，与历史同形）。
 
         Args:
             messages: 消息列表
 
         Returns:
-            多行文本，每行形如 "[醒目留言] 昵称: 内容"
+            多行文本，每行形如 "[礼物] 昵称: 内容 [id:…]"（canonical content）
         """
-        lines: List[str] = []
-        for message in messages:
-            spec = require_message_type(message.data_type)
-            nickname = message.user_nickname or message.user_id or "观众"
-            line = spec.prompt_template.format(text=message.text, nickname=nickname)
-            lines.append(line)
-        return "\n".join(lines)
+        return canonical.to_text_view([canonical.batch_item_to_message(m) for m in messages])

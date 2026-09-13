@@ -9,7 +9,6 @@ from src.modules.dashboard.api import (
     components,
     config,
     debug,
-    messages,
     sessions,
     simulator,
     system,
@@ -19,7 +18,6 @@ from src.modules.dashboard.api import (
 __all__ = [
     "system",
     "components",
-    "messages",
     "config",
     "debug",
     "simulator",

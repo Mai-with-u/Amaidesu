@@ -1,13 +1,15 @@
-"""人设供应链端到端防回退测试。
+"""人设供应链端到端防回退测试（配置→提示词）。
 
-沿"装配 → Planner → Replyer"路径断言 persona 段被正确注入：
-  1. 装配层：agent._persona_provider == 特征 dict（装配根把 persona 段喂给 StreamerAgent）
-  2. Replyer：prompt 渲染含特征 bot_name/personality/style_constraints（表达侧注入）
-  3. Planner：prompt 渲染含特征 behavior_style，不含特征 personality（决策/表达侧分离）
-  4. bot_name 默认值全库统一为 "麦麦"，历史 "爱德丝" 禁止（默认值防漂移）
+人设唯一来源是 agents.toml ``[agents.streamer.persona]``（StreamerPersonaConfig）：
+  1. 表达侧：StreamerAgent 构造期把 bot_name/personality/style_constraints/
+     audience_salutation 四字段注入 Replyer，prompt 渲染 kwargs 必须等于配置值
+     （非 _DEFAULT_* 硬编码兜底）。
+  2. 决策侧：behavior_style 仅注入 Planner；Planner 渲染 kwargs 不得含
+     personality/style_constraints/bot_name（决策/表达分离契约的反向断言）。
+  3. bot_name 默认值全库统一为 "麦麦"，历史 "爱德丝" 禁止（默认值防漂移）。
 
-测试入口：factory.instantiate_agent（与 main._register_agents_from_config 同源）。
-任一项回退（装配不传 / 默认值漂移 / 注入漏字段）都会在对应断言点失败。
+测试入口：factory.instantiate_agent（与 manager 动态启用路径同源）。
+任一项回退（配置断达 / 默认值漂移 / 分离契约被破坏）都会在对应断言点失败。
 """
 
 from __future__ import annotations
@@ -20,140 +22,120 @@ import pytest
 
 from src.modules.agents.factory import instantiate_agent
 
-
-# 特征 persona dict（独立于 core.toml 真实值，特征串让回归错误一眼可见）
-_PERSONA_SENTINEL = {
+# 特征 persona（非默认值，特征串让"落回硬编码默认"的回归一眼可见）
+_PERSONA_CONFIG = {
     "bot_name": "测试娘",
     "personality": "毒舌测试人格",
     "style_constraints": "简短犀利测试风格",
-    "user_name": "测试观众",
-    "max_response_length": 42,
-    "emotion_intensity": 9,
     "behavior_style": "沉默寡言测试准则",
+    "audience_salutation": "各位测试观众",
 }
 
 
-def _make_llm_mock(content: str) -> MagicMock:
-    """构造 mock LLMManager：call_tools 返回给定内容（新契约走 LLMResponse/tool_calls）。"""
-    from src.modules.llm.manager import LLMResponse
-
+def _make_llm_mock() -> MagicMock:
     llm = MagicMock()
-    resp = LLMResponse(
-        success=True,
-        content="",
-        tool_calls=[{"name": "produce_plan", "arguments": content}],
-    )
-    llm.call_tools = AsyncMock(return_value=resp)
+    llm.call_tools = AsyncMock()
     return llm
 
 
 def _make_prompt_mock() -> MagicMock:
-    """构造 mock PromptManager：render_safe 透传变量名为 kwargs。"""
+    """构造 mock PromptManager：render 透传变量名为 kwargs。"""
     prompt = MagicMock()
-    prompt.render_safe = MagicMock(return_value="RENDERED_PROMPT")
+    prompt.render = MagicMock(return_value="RENDERED_PROMPT")
     return prompt
 
 
-def _make_agent_with_mock_deps(persona_provider: Any) -> tuple[Any, MagicMock, MagicMock]:
-    """用 mock 依赖构造 StreamerAgent（绕过真实 LLM/PromptManager 注册）。
+def _make_agent_with_persona_config() -> tuple[Any, MagicMock, MagicMock]:
+    """经 factory.instantiate_agent 构造带特征 persona 配置的 StreamerAgent。
 
-    Returns:
-        (StreamerAgent 实例, llm mock, prompt mock)
+    入口与 manager 动态启用路径同源（配置 dict → StreamerConfig → StreamerAgent），
+    保证测的是真实装配链而非绕过生产来源的手工注入。
     """
-    llm = _make_llm_mock("{}")
+    llm = _make_llm_mock()
     prompt = _make_prompt_mock()
     agent = instantiate_agent(
         "streamer",
-        None,
+        {"persona": _PERSONA_CONFIG},
         llm_manager=llm,
         prompt_manager=prompt,
         event_bus=MagicMock(),
-        context_service=MagicMock(),
         tool_registry=MagicMock(),
-        persona_provider=persona_provider,
     )
     assert agent is not None, "instantiate_agent('streamer') 应返回非 None"
     return agent, llm, prompt
 
 
-class TestPersonaPipelineEndToEnd:
-    """B2 修复端到端防回退：装配 → Planner → Replyer 全路径。"""
+def _replyer_llm_response(speech: str = "测试回复") -> object:
+    # 用例内导入（测试可 mock 性）：按用例独立构造桩响应，模块导入期不绑定 LLM 类型
+    from src.modules.llm.manager import LLMResponse
 
-    def test_assembly_wires_persona_provider_to_streamer_agent(self) -> None:
-        """P0：装配根必须把 persona dict 喂给 StreamerAgent.persona_provider（防断链）。"""
-        agent, _llm, _prompt = _make_agent_with_mock_deps(persona_provider=_PERSONA_SENTINEL)
+    payload = json.dumps({"speech": speech, "emotion": "neutral"}, ensure_ascii=False)
+    return LLMResponse(success=True, content="", tool_calls=[{"name": "reply", "arguments": payload}])
 
-        # 装配层接线断言：特征 dict 必须原样落进 agent._persona_provider
-        assert agent._persona_provider == _PERSONA_SENTINEL, (
-            f"StreamerAgent.persona_provider 装配失败：\n  期望: {_PERSONA_SENTINEL}\n  实际: {agent._persona_provider}"
-        )
+
+class TestPersonaConfigToPromptEndToEnd:
+    """配置→提示词端到端：表达侧四字段必须来自配置而非硬编码默认。"""
 
     @pytest.mark.asyncio
-    async def test_replyer_renders_sentinel_persona_into_prompt(self) -> None:
-        """Replyer prompt 必须含特征 bot_name/personality/style_constraints（验证表达侧注入）。
+    async def test_replyer_renders_config_persona_into_prompt(self) -> None:
+        """Replyer 渲染 kwargs 的四字段必须全部等于配置值（非 _DEFAULT_*）。"""
+        agent, llm, prompt = _make_agent_with_persona_config()
 
-        走 reply_tool.invoke() 触发 Replyer.generate()，捕获 prompt 渲染 kwargs，
-        断言三个表达侧人设键均为特征值。注意 reply_tool 在 _register_tools 才会构造，
-        这里直接拿 agent._replyer（Stage 2 表达引擎）调用 generate()，与工具入口等价。
-        """
-        agent, _llm, prompt = _make_agent_with_mock_deps(persona_provider=_PERSONA_SENTINEL)
+        llm.call_tools = AsyncMock(return_value=_replyer_llm_response())
 
-        # _register_tools 在 _on_start 中调用才会构造 Provider；这里直接复刻装配根传
-        # persona 的关键路径——Replyer.generate(plan, batch, persona, ...)。
-        replyer = agent._replyer
-
-        # mock LLM 返回合法 Replyer tool_call（reply + speech/emotion）
-        from src.modules.llm.manager import LLMResponse
-
-        replyer_payload = json.dumps(
-            {"speech": "测试回复", "emotion": "neutral"},
-            ensure_ascii=False,
-        )
-        replyer._llm_service.call_tools = AsyncMock(
-            return_value=LLMResponse(
-                success=True,
-                content="",
-                tool_calls=[{"name": "reply", "arguments": replyer_payload}],
-            )
-        )
-
+        # 用例内导入（测试可 mock 性）：决策计划在本用例内独立构造，不与模块导入期耦合
         from src.agents.streamer.plan import DecisionPlan
 
         plan = DecisionPlan(
             should_reply=True,
             target="all",
             topic_summary="测试话题",
-            reply_guidance="按特征 persona 回答",
+            reply_guidance="按配置 persona 回答",
             confidence=0.9,
         )
-        result = await replyer.generate(plan, [], _PERSONA_SENTINEL)
-
-        # Replyer 应至少生成出 speech 字段（mock LLM 返回合法 JSON）
+        result = await agent._replyer.generate(plan, [])
         assert result is not None, "Replyer.generate 返回 None（mock LLM 应能生成结果）"
 
-        # 捕获 prompt 渲染 kwargs（最后一次调用即 generate 的那次）
-        kwargs = prompt.render_safe.call_args.kwargs
-        assert kwargs.get("bot_name") == "测试娘", (
-            f"Replyer prompt 注入的 bot_name 应为特征值，实际: {kwargs.get('bot_name')!r}"
-        )
-        assert kwargs.get("personality") == "毒舌测试人格", (
-            f"Replyer prompt 注入的 personality 应为特征值，实际: {kwargs.get('personality')!r}"
-        )
-        assert kwargs.get("style_constraints") == "简短犀利测试风格", (
-            f"Replyer prompt 注入的 style_constraints 应为特征值，实际: {kwargs.get('style_constraints')!r}"
-        )
+        kwargs = prompt.render.call_args.kwargs
+        for field in ("bot_name", "personality", "style_constraints", "audience_salutation"):
+            expected = _PERSONA_CONFIG[field]
+            assert kwargs.get(field) == expected, (
+                f"Replyer prompt 注入的 {field} 应为配置值 {expected!r}，实际: {kwargs.get(field)!r}"
+            )
 
     @pytest.mark.asyncio
-    async def test_planner_injects_sentinel_behavior_style_only(self) -> None:
-        """P3-b：Planner prompt 必须含特征 behavior_style；不**含**特征 personality。
+    async def test_replyer_does_not_render_behavior_style(self) -> None:
+        """反向锁定：behavior_style 只进 Planner，不进 Replyer（决策/表达侧分离契约）。"""
+        agent, llm, prompt = _make_agent_with_persona_config()
 
-        验证 MaiBot 三层人格拆分的 Amaidesu 映射契约：
-        personality/style_constraints/bot_name → 仅进 Replyer（表达侧）
-        behavior_style → 仅进 Planner（决策侧）
-        """
-        agent, llm, prompt = _make_agent_with_mock_deps(persona_provider=_PERSONA_SENTINEL)
+        llm.call_tools = AsyncMock(return_value=_replyer_llm_response(speech="ok"))
 
-        # mock LLM 返回合法 Planner JSON（decision plan）
+        # 用例内导入（测试可 mock 性）：决策计划在本用例内独立构造，不与模块导入期耦合
+        from src.agents.streamer.plan import DecisionPlan
+
+        plan = DecisionPlan(
+            should_reply=True,
+            target="all",
+            topic_summary="t",
+            reply_guidance="g",
+            confidence=0.9,
+        )
+        await agent._replyer.generate(plan, [])
+
+        kwargs = prompt.render.call_args.kwargs
+        assert "behavior_style" not in kwargs, (
+            f"Replyer prompt 不得注入 behavior_style（仅 Planner 决策侧消费），实际 kwargs={sorted(kwargs.keys())}"
+        )
+
+
+class TestDecisionExpressionSeparation:
+    """决策/表达分离反向断言：Planner 侧只见 behavior_style。"""
+
+    @pytest.mark.asyncio
+    async def test_planner_injects_behavior_style_only(self) -> None:
+        """Planner 渲染 kwargs 必须含配置 behavior_style；不得含表达侧三字段。"""
+        agent, llm, prompt = _make_agent_with_persona_config()
+
         planner_payload = json.dumps(
             {
                 "should_reply": True,
@@ -164,20 +146,17 @@ class TestPersonaPipelineEndToEnd:
             },
             ensure_ascii=False,
         )
+        # 用例内导入（测试可 mock 性）：按用例独立构造桩响应，模块导入期不绑定 LLM 类型
         from src.modules.llm.manager import LLMResponse
 
         llm.call_tools = AsyncMock(
             return_value=LLMResponse(
-                success=True,
-                content="",
-                tool_calls=[{"name": "produce_plan", "arguments": planner_payload}],
+                success=True, content="", tool_calls=[{"name": "produce_plan", "arguments": planner_payload}]
             )
         )
 
         from src.modules.types.base.normalized_message import NormalizedMessage
 
-        # 触发 planner.plan()；StreamerAgent 持有的 Planner 在 __init__ 时已注入
-        # behavior_style（来自装配根透传的 persona_provider）。
         msg = NormalizedMessage(
             text="测试弹幕",
             source="test",
@@ -188,69 +167,23 @@ class TestPersonaPipelineEndToEnd:
             user_nickname="测试观众",
         )
         result = await agent._planner.plan([msg], forced=False)
-
         assert result is not None, "Planner.plan 返回 None（mock LLM 应能生成决策）"
 
-        # 决策侧：behavior_style 必须注入且为特征值
-        kwargs = prompt.render_safe.call_args.kwargs
-        assert kwargs.get("behavior_style") == "沉默寡言测试准则", (
-            f"Planner prompt 注入的 behavior_style 应为特征值，实际: {kwargs.get('behavior_style')!r}"
+        kwargs = prompt.render.call_args.kwargs
+        # 决策侧：behavior_style 必须注入且为配置值
+        assert kwargs.get("behavior_style") == _PERSONA_CONFIG["behavior_style"], (
+            f"Planner prompt 注入的 behavior_style 应为配置值，实际: {kwargs.get('behavior_style')!r}"
         )
-
-        # 表达侧隔离：personality/style_constraints/bot_name 必须**不**进 Planner
+        # 表达侧隔离：bot_name/personality/style_constraints 不得进 Planner
         assert "personality" not in kwargs, "Planner prompt 不得注入 personality（仅 Replyer 表达侧消费）"
         assert "style_constraints" not in kwargs, "Planner prompt 不得注入 style_constraints（仅 Replyer 表达侧消费）"
         assert "bot_name" not in kwargs, "Planner prompt 不得注入 bot_name（仅 Replyer 表达侧消费）"
 
-    @pytest.mark.asyncio
-    async def test_replyer_does_not_render_behavior_style(self) -> None:
-        """反向锁定：behavior_style 只进 Planner，**不**进 Replyer（决策/表达侧分离契约）。"""
-        agent, _llm, prompt = _make_agent_with_mock_deps(persona_provider=_PERSONA_SENTINEL)
 
-        # 触发 Replyer.generate（路径与 test_replyer_renders_sentinel_persona_into_prompt 同）
-        replyer_payload = json.dumps(
-            {"speech": "ok", "emotion": "neutral"},
-            ensure_ascii=False,
-        )
-        from src.modules.llm.manager import LLMResponse
-
-        replyer = agent._replyer
-        replyer._llm_service.call_tools = AsyncMock(
-            return_value=LLMResponse(
-                success=True,
-                content="",
-                tool_calls=[{"name": "reply", "arguments": replyer_payload}],
-            )
-        )
-
-        from src.agents.streamer.plan import DecisionPlan
-
-        plan = DecisionPlan(
-            should_reply=True,
-            target="all",
-            topic_summary="t",
-            reply_guidance="g",
-            confidence=0.9,
-        )
-        await replyer.generate(plan, [], _PERSONA_SENTINEL)
-
-        kwargs = prompt.render_safe.call_args.kwargs
-        # behavior_style 绝不能漏到 Replyer——防止未来"全部塞进 prompt"的回退
-        assert "behavior_style" not in kwargs, (
-            f"Replyer prompt 不得注入 behavior_style（仅 Planner 决策侧消费），实际 kwargs={sorted(kwargs.keys())}"
-        )
+class TestPersonaDefaults:
+    """默认值防漂移：全库统一 '麦麦'，历史 '爱德丝' 禁止。"""
 
     def test_default_bot_name_is_maiamai_not_ides(self) -> None:
-        """P1：bot_name 默认值全库统一为 '麦麦'，历史 '爱德丝' 禁止（防回退断言）。
-
-        验证权威默认值源已对齐（persona 权威已迁至
-        agents/streamer/config.py StreamerPersonaConfig；core_schemas.PersonaConfig
-        只是占位兼容壳，bot_name 默认空串，不再承载默认值）：
-          1. StreamerPersonaConfig.bot_name（persona 段权威）
-          2. agents_schemas.AgentsConfig.streamer.persona.bot_name（包内权威 StreamerConfig）
-          3. src.agents.streamer.config.StreamerConfig.persona.bot_name
-          4. replyer._DEFAULT_BOT_NAME
-        """
         from src.agents.streamer import replyer
         from src.agents.streamer.config import StreamerConfig, StreamerPersonaConfig
         from src.modules.config.agents_schemas import AgentsConfig

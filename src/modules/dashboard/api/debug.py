@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.modules.context.models import MessageRole
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.debug import (
     EventBusStatsResponse,
@@ -40,8 +39,8 @@ async def inject_message(
 ) -> InjectMessageResponse:
     """注入测试消息到系统（发布 room.message.danmaku，走真实弹幕链路）。
 
-    会话语义：消息写入 ContextService 的 ``live`` 会话——主播 Agent 的
-    决策历史固定读 ``live``，写入其他会话会让注入弹幕永远不进决策上下文。
+    会话语义：弹幕经 StorageLedger 落 live_chat（单一事实源），主播
+    Agent 决策/表达历史直接读 live_chat——注入消息天然进入决策上下文。
     """
     event_bus = server.event_bus
     if not event_bus:
@@ -74,17 +73,6 @@ async def inject_message(
             payload,
             source="dashboard.debug",
         )
-
-        context_service = server.context_service
-        if context_service:
-            try:
-                await context_service.add_message(
-                    session_id="live",
-                    role=MessageRole.USER,
-                    content=request.text,
-                )
-            except Exception as e:
-                logger.warning(f"存储消息到 ContextService 失败: {e}")
 
         logger.info(f"注入消息成功: {message_id}")
         return InjectMessageResponse(success=True, message_id=message_id)
