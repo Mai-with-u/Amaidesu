@@ -29,7 +29,8 @@
 |------|------|
 | [组件开发指南](development/component-guide.md) | 采集器/工具/Agent 三范式开发详解 |
 | [事件系统](architecture/event-system.md#事件拦截器interceptor) | EventBus 与事件拦截器（含开发指南） |
-| [提示词管理](development/prompt-management.md) | PromptManager 使用 |
+| [提示词管理](development/prompt-management.md) | PromptManager 使用与 strict-only 渲染契约 |
+| [主播上下文构成](development/streamer-context.md) | 主播 Agent 决策窗消息形态、参考段、缓存硬要求与输入预算 |
 | [依赖注入](development/dependency-injection.md) | 依赖注入约定与决策清单 |
 | [测试指南](development/testing-guide.md) | 测试规范和最佳实践 |
 | [模拟直播间工具](development/simulator-guide.md) | 模拟直播间服务（SimulatorService）使用 |

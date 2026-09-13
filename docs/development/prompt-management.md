@@ -6,24 +6,23 @@
 
 ## 提示词管理
 
-### 1. PromptManager 概述
+### PromptManager 概述
 
 项目使用 **PromptManager** 统一管理所有 LLM 提示词。PromptManager 提供模板加载、变量替换、元数据解析等功能。
 
 **核心特性：**
 - 从多个扫描根加载 `.md` 模板文件（组件内聚 `prompts/` 目录 + 中央目录）
 - 解析 YAML Frontmatter 元数据，以 `name` 字段作为声明式注册键
-- 使用 `$variable` 语法进行变量替换
-- 支持严格模式和安全模式渲染
-- 支持模板 Section 提取
+- 使用 `$variable` 语法进行**严格渲染**（缺变量抛错，render 是唯一渲染路径）
+- 加载期校验：frontmatter `variables` 声明与正文占位符核对（不一致告警）；frontmatter 解析失败与单文件加载失败 fail-fast
 - 键重复注册 fail-fast（抛 ValueError，防止静默覆盖）
 
-### 2. 快速开始
+### 快速开始
 
 ```python
 from src.modules.prompts import get_prompt_manager
 
-# 获取全局单例（推荐）
+# 获取全局单例（推荐，启用 src/**/prompts/ 约定扫描）
 pm = get_prompt_manager()
 
 # 或者手动创建实例（不启用 src 约定扫描，用于测试隔离）
@@ -32,50 +31,49 @@ pm = PromptManager()
 pm.load_all()
 ```
 
-### 3. 模板目录结构（内聚式）
+### 模板目录结构（内聚式）
 
-提示词文件**内聚在消费组件的 `prompts/` 目录下**，由 PromptManager 按
-`src/**/prompts/` 约定自动发现；模板键来自 frontmatter 的 `name` 字段，
-与文件位置解耦。
+提示词文件**内聚在消费组件的 `prompts/` 目录下**，扫描范围为 `src/**/prompts/`：
+组件把提示词放在自己包内的 `prompts/` 子目录即可被自动发现（全局单例
+`get_prompt_manager` 默认开启约定扫描）。模板键来自 frontmatter 的 `name`
+字段，与文件位置解耦。
 
-```
-src/
-├── agents/streamer/prompts/          # 主播 Agent 提示词
-│   ├── amaidesu_planner.md           # Planner 模板（两阶段，零人设注入）
-│   ├── amaidesu_replyer.md           # Replyer 模板
-│   └── agenda_expand.md              # 大纲环节动态扩展模板
-├── modules/tools/output/vts/prompts/
-│   └── vts_hotkey.md                 # VTS 热键模板
-└── modules/simulator/prompts/        # 模拟直播间提示词
-    ├── passerby_message.md           # 临时路人消息
-    ├── persona_generation.md         # 常驻观众人设批量生成
-    ├── sc_message.md                 # Super Chat 消息
-    ├── viewer_message.md             # 观众消息
-    └── warmup_message.md             # 暖场期消息
-```
+当前全部模板清单：
+
+| 模板键 | 位置 | 用途 |
+|--------|------|------|
+| `amaidesu_planner_react` | `src/agents/streamer/prompts/` | Planner ReAct 循环系统提示词（行为准则，工具面经 LLM 请求注入，不在模板内） |
+| `amaidesu_replyer` | `src/agents/streamer/prompts/` | Replyer 回复生成模板（人设注入 + reply 工具调用契约） |
+| `summary_system` | `src/agents/streamer/prompts/` | 后台维护者话题摘要的系统提示词 |
+| `amaidesu_minecraft_agent` | `src/agents/minecraft/prompts/` | MinecraftAgent 系统提示词（事件驱动 ReAct AI 玩家） |
+| `screen_vlm_system` | `src/modules/collectors/screen/prompts/` | 屏幕感知 VLM 的 system message |
+| `screen_vlm_prompt` | `src/modules/collectors/screen/prompts/` | 屏幕感知 VLM 的用户 prompt |
+| `viewer_message` | `src/modules/simulator/prompts/` | 模拟观众发言生成（常驻人设） |
+| `sc_message` | `src/modules/simulator/prompts/` | SuperChat 付费留言生成 |
+| `passerby_message` | `src/modules/simulator/prompts/` | 路人观众随机弹幕生成（无固定人设） |
+| `warmup_message` | `src/modules/simulator/prompts/` | 暖场期弹幕生成（主播尚未开口） |
+| `persona_generation` | `src/modules/simulator/prompts/` | 常驻观众人设批量生成 |
 
 跨组件共享的提示词可放中央目录 `src/modules/prompts/templates/`（按相对路径
-作为兜底键），但优先推荐内聚到消费方。
+作为兜底键）；该目录不存在时加载跳过，不报错。优先推荐内聚到消费方。
 
-### 4. 模板格式 (YAML Frontmatter)
+### 模板格式 (YAML Frontmatter)
 
 每个模板文件使用 YAML Frontmatter 定义元数据：
 
 ```yaml
 ---
 name: amaidesu_replyer
-version: "1.1"
-description: "Amaidesu 直播回复生成模板 - 基于 Planner 的 DecisionPlan 生成实际回复 JSON {text, emotion, action, action_parameters}（含人设注入）"
+description: "Amaidesu 直播回复生成模板"
 author: Amaidesu
 tags: [decision, live, vtuber, replyer, persona]
 variables:
   - bot_name
   - personality
   - style_constraints
-  - plan
 ---
 
-# 模板内容...
+模板正文...
 你叫 $bot_name，是一位正在 B 站进行实时直播的 AI VTuber。
 ```
 
@@ -84,117 +82,40 @@ variables:
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `name` | string | 是 | **模板注册键**（全局唯一，消费方 render 时使用；重复声明会在加载时抛 ValueError） |
-| `version` | string | 否 | 模板版本 |
 | `description` | string | 否 | 模板描述 |
 | `author` | string | 否 | 作者 |
 | `tags` | list[string] | 否 | 标签列表 |
-| `variables` | list[string] | 否 | 模板变量列表 |
+| `variables` | list[string] | 否 | 模板变量声明列表（与正文占位符核对，见下文加载期校验） |
 
-> 未声明 `name` 的模板以相对扫描根的路径为兜底键（如中央目录下
+> 未声明 `name` 的模板以相对扫描根的路径为兜底键（如某扫描根下
 > `decision/llm.md` → 键 `decision/llm`），但**推荐始终显式声明 name**。
 
-### 5. 使用方式
+### strict-only 渲染契约
 
-#### 5.1 获取原始模板
-
-```python
-# 获取原始模板内容（含 Frontmatter）
-raw_template = pm.get_raw("amaidesu_replyer")
-```
-
-#### 5.2 渲染模板（严格模式）
+`render` 是**唯一渲染路径**，全系统不存在安全模式/容错渲染。
 
 ```python
-# 渲染模板，缺失变量会抛出 KeyError
-prompt = pm.render("amaidesu_replyer", bot_name="麦麦", personality="活泼开朗", style_constraints="...", plan={})
+# 渲染模板，缺失变量抛出 KeyError
+prompt = pm.render("amaidesu_replyer", bot_name="麦麦", personality="活泼开朗", style_constraints="...")
 ```
 
-**严格模式特点：**
-- 缺失必需变量会抛出 `KeyError` 异常
-- 适用于需要所有变量都必须提供的场景
+契约语义：
 
-#### 5.3 安全模式渲染
+- **缺变量抛错且带定位信息**：渲染时缺少必需变量抛 `KeyError`，错误信息含
+  模板名与完整缺失变量清单（不只是第一个缺失项）。
+- **加载期声明核对**：`load_all` 完成后核对每个模板的 frontmatter
+  `variables` 声明与正文 `$占位符`——不一致记录 `logger.warning`（列出未声明
+  与声明未使用的差异），不阻断启动。声明漂移不影响严格渲染的正确性，但会
+  误导维护者对模板变量面的判断。
+- **解析/加载失败 fail-fast**：frontmatter 解析失败、单文件加载异常、模板键
+  冲突均在 `load_all` 阶段抛出——坏模板让启动失败，而不是带着残缺提示词运行。
+- **中央目录不存在 → 跳过**：`src/modules/prompts/templates/` 不存在时记
+  debug 日志跳过，属既有语义（该目录为可选的共享提示词位置）。
 
-```python
-# 安全模式渲染，缺失变量保留原样
-prompt = pm.render_safe("amaidesu_replyer", bot_name="麦麦")
-```
+变量替换基于 `string.Template`：`$variable` / `${variable}` 为占位符，`$$`
+转义为字面 `$`。加载期占位符提取复用同一模式，保证核对与渲染行为严格一致。
 
-**安全模式特点：**
-- 缺失变量不会抛出异常，保留为 `$variable` 形式
-- 适用于部分变量可选的场景
-
-#### 5.4 提取特定 Section
-
-```python
-# 提取并渲染模板中的特定 section
-system_msg = pm.extract_section(
-    "amaidesu_replyer",`n    "System Prompt",
-    bot_name="麦麦",
-    personality="活泼开朗"
-)
-```
-
-**Section 提取特点：**
-- 使用 Markdown `## Section 名称` 格式标记
-- 先渲染整个模板，再提取指定 section
-- 如果 section 不存在，返回空字符串
-
-#### 5.5 排除特定 Section
-
-```python
-# 获取排除指定 section 的内容（如排除 User Message 获取系统提示）
-system_prompt = pm.extract_content_without_section(
-    "amaidesu_replyer",`n    "User Message",
-    text="你好",
-    bot_name="麦麦"
-)
-```
-
-#### 5.6 列表和元数据
-
-```python
-# 列出所有已加载的模板
-templates = pm.list_templates()
-# ['agenda_expand', 'amaidesu_planner', 'amaidesu_replyer', 'vts_hotkey', ...]
-
-# 获取模板元数据
-metadata = pm.get_metadata("amaidesu_replyer")
-# TemplateMetadata(name='amaidesu_replyer', version='1.1', ...)
-```
-
-### 6. 模板示例
-
-#### 6.1 回复生成模板示例（节选自 amaidesu_replyer.md）
-
-```yaml
----
-name: amaidesu_replyer
-version: "1.1"
-description: "Amaidesu 直播回复生成模板"
-variables:
-  - bot_name
-  - personality
-  - style_constraints
-  - plan
-tags: [decision, live, vtuber, replyer, persona]
----
-
-# ① 人设注入层
-
-你叫 $bot_name，是一位正在 B 站进行实时直播的 AI VTuber。
-
-## 人设特征
-性格：$personality
-
-## 风格约束
-$style_constraints
-
-## 决策计划
-$plan
-```
-
-### 7. 在组件中使用
+### 在组件中使用
 
 ```python
 from src.modules.prompts import get_prompt_manager
@@ -205,21 +126,23 @@ class MyComponent:
 
     def build_prompt(self) -> str:
         # 渲染模板（键 = 模板 frontmatter 的 name）
-        prompt = self._prompt_mgr.render_safe(
+        return self._prompt_mgr.render(
             "amaidesu_replyer",
             bot_name="麦麦",
             personality="活泼开朗",
             style_constraints="口语化、简短",
-            plan="{}",
         )
-        return prompt
 ```
+
+组件对渲染失败的处理按自身语义决定：核心提示词渲染失败通常意味着配置或
+模板损坏，应记录日志并走自身的失败路径（如 Planner 本轮静默），而不是
+带着空提示词继续。
 
 ---
 
 ## 配置管理
 
-### 1. ConfigService 概述
+### ConfigService 概述
 
 **ConfigService** 是项目的统一配置管理服务，负责：
 
@@ -228,7 +151,7 @@ class MyComponent:
 - 提供配置合并策略（Schema 默认值 + 配置覆盖）
 - 支持配置文件热重载（file watcher）
 
-### 2. 快速开始
+### 快速开始
 
 ```python
 from src.modules.config.service import ConfigService
@@ -248,7 +171,7 @@ input_config = config_service.get_config_with_defaults(
 
 > 配置文件的完整结构与 LLM provider/profile 两层模型见 [快速开始 - 编辑配置文件](../getting-started.md#25-编辑配置文件)。
 
-### 3. 配置文件结构
+### 配置文件结构
 
 配置为**六文件**结构（`config/` 目录），按领域拆分，每文件自带 `[meta].version`：
 
@@ -261,7 +184,7 @@ input_config = config_service.get_config_with_defaults(
 | `storage.toml` | 顶层扁平存储（`[sqlite]` / `[memory]`） |
 | `infra.toml` | 基础设施（`[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` / `[interceptors.*]` / `[simulator]`） |
 
-### 4. 组件启用配置
+### 组件启用配置
 
 在对应配置文件的启用列表中添加组件名称：
 
@@ -277,7 +200,7 @@ enabled = ["perception", "output"]
 
 每个组件的独立配置节位于对应工具包/Agent 段内（Schema 权威定义见 `src/modules/config/*_schemas.py`，Pydantic Schema 驱动生成/校验/迁移）。
 
-### 5. 配置合并
+### 配置合并
 
 ConfigService 支持**配置合并**，优先级如下：
 
@@ -285,7 +208,7 @@ ConfigService 支持**配置合并**，优先级如下：
 Schema 默认值（优先级低） → 配置文件覆盖（优先级高）
 ```
 
-#### 5.1 获取合并后的配置
+#### 获取合并后的配置
 
 ```python
 # 获取带默认值合并的组件配置（phase 为兼容参数：input=采集器 / output=渲染工具）
@@ -297,7 +220,7 @@ config = config_service.get_config_with_defaults(
 
 > Schema 权威定义在 `src/modules/config/{core,model,agents,tools,memory,storage,background}_schemas.py`（Pydantic），组件嵌套配置类随所属域定义，由 `multi_file_loader` 的漂移写回闭环自动补齐用户文件缺失字段。
 
-### 6. 配置 API
+### 配置 API
 
 ```python
 # 获取顶层配置节
@@ -319,7 +242,7 @@ if config_service.is_interceptor_enabled("rate_limit"):
     # ...
 ```
 
-### 7. 配置文件生成与重载
+### 配置文件生成与重载
 
 - **首次运行**：`ConfigService.initialize()` 经加载管线自动生成 `config/` 六文件并按 Schema 校验
 - **重载**：`FileWatcher` 监听六文件变更（管线自写经自写压标跳过）；`reload_config` 按段策略分流——`infra` 为 hot 段即时回调生效，其余五文件提示待重启；重载失败保留旧配置继续运行
@@ -336,10 +259,10 @@ uv run python main.py
 ## 相关文档
 
 - [组件开发指南](component-guide.md) - 如何开发自定义采集器/工具/Agent
+- [主播上下文构成](streamer-context.md) - 主播 Agent 决策窗的消息形态、参考段与输入预算
 - [事件拦截器](../architecture/event-system.md#事件拦截器interceptor) - 如何开发自定义拦截器
 - [开发规范](../development-guide.md) - 代码风格和约定
 - [架构总览](../architecture/overview.md) - v2.0.0 架构设计总览
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南
 
 ---
-

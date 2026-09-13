@@ -110,7 +110,6 @@ Amaidesu/
 │       │   ├── interceptors/    #   EventInterceptor 协议 + InterceptorChain
 │       │   └── payloads/        #   Payload 按域分包（v2.0.10 新增 utterance.py 承载 tts.utterance.* 三事件）
 │       ├── config/              # 配置管理（多文件 Schema 驱动 + 升级钩子）
-│       ├── context/             # ContextService（L1 对话配对窗口：DialogueTurn 存取 + 启动时从 live_chat 重新写入）
 │       ├── dashboard/           # Web Dashboard（FastAPI + WebSocket）
 │       ├── di/                  # 依赖注入工具
 │       ├── llm/                 # LLM 服务（provider + profile 两层）
@@ -137,7 +136,6 @@ sequenceDiagram
     autonumber
     participant Main as main.py
     participant LLM as LLMManager
-    participant Ctx as ContextService
     participant Bus as EventBus
     participant Int as 拦截器链
     participant Rec as EventHistoryRecorder
@@ -153,7 +151,6 @@ sequenceDiagram
     Main->>Main: exit_if_config_created
     Main->>Main: register_core_events (EventBus 构造前)
     Main->>LLM: 1) setup(config)
-    Main->>Ctx: 2) initialize()
     Main->>Bus: 3) 创建 EventBus
     Main->>Int: 3) register_event_interceptors（rate_limit + similar_filter）
     Main->>Rec: 3) EventHistoryRecorder.start
@@ -192,7 +189,6 @@ sequenceDiagram
     participant Rec as EventHistoryRecorder
     participant Bus as EventBus
     participant LLM as LLMManager
-    participant Ctx as ContextService
 
     Main->>Col: 1) stop_all() + cleanup_all()
     Main->>Sim: 1.5) stop() + cleanup()（条件：装配了 SimulatorService）
@@ -201,7 +197,6 @@ sequenceDiagram
     Main->>Rec: 4) stop() + event_history.cleanup()
     Main->>Bus: 5) cleanup()
     Main->>LLM: 6) cleanup()
-    Main->>Ctx: 7) cleanup()
 ```
 
 每个步骤包在 `safe_log` 里捕获异常与 `CancelledError`，任意失败不影响后续步骤；全局 `_saw_cancelled` 在最后重抛 `CancelledError` 以便上层感知。
@@ -243,12 +238,13 @@ sequenceDiagram
 | **主动发言规则** | `proactive_trigger.py`（纯规则触发器，主循环直接驱动；经 `tools/proactive_tool.py` 包装为工具供 LLM 查询） |
 | **流程单（Rundown）** | `rundown/` 子包：`rundown.py`（数据契约 + 内置默认流程单）/ `rundown_state.py`（游标 + 计时 + 唯一变更边界）/ `rundown_tool.py`（Agent 推进工具）；备忘录 + 闹钟——环节推进由 Agent 经工具自主决定，超时闹钟并入 ProactiveTrigger 只提醒不执法 |
 | **房间与消息** | `room_state.py`（直播间状态聚合）、`message_buffer.py`（弹幕聚合窗口：默认 3s/20 条） |
+| **对话映射与参考段** | `canonical.py`（live_chat 行/弹幕批 → 原生消息的单一序列化点 + 成块丢最旧截断）、`planner_context.py`（Planner 参考段纯函数组装，固定在消息序列尾部） |
 | **后台维护** | `background.py`（双任务 BackgroundMaintainer 取代旧 RoomStateLoop） |
 | **发言管线** | `utterance_queue.py`（v2.0.10 新增：`UtteranceQueue` FIFO 串行队列，丢最旧 / 单 worker / 渲染超时看门狗；构造期注入 `speak` 可调用对象（绑定 `tts_engine.handle_speech`），后台串行直接 `await speak(text, utterance_id)`，不再经 ToolRegistry） |
 | **工具壳层** | `tools/` 子包：`reply_tool.py`（`reply`）、`proactive_tool.py`（`should_speak_proactively`）、`command_tool.py`（`parse_command`）——Agent 专属 builtin 工具入口，只包装顶层内部件，不含决策/表达逻辑 |
 | **时序门** | `timing_gate.py` |
 | **命令解析** | `command/command.py` + `command/command_parser.py` + `command/command_registry.py`（`tools/command_tool.py` 的底层纯解析原语） |
-| **提示词** | `prompts/amaidesu_planner_react.md` + `prompts/amaidesu_replyer.md` |
+| **提示词** | `prompts/amaidesu_planner_react.md` + `prompts/amaidesu_replyer.md` + `prompts/summary_system.md` |
 
 `src/agents/text_adv/` 文字冒险 GameAgent 范例：`agent.py`（继承 `BaseAgent`）、`state.py`（剧情状态）、`tools.py`（游戏侧 dispatch）、`content_engine/` 子包（引擎 Protocol + Stub/Fake，**包内私有**：构造注入、Agent 与工具直连调用，不注册不暴露），构造时注入 `content_engine=StubContentEngine(engine_kind="text_adv")`。
 
@@ -325,7 +321,7 @@ v2 不再支持"插件系统"——`src/modules/plugins/` 已移除。新功能�
 
 ### ③ 依赖注入
 
-服务对象（`EventBus` / `LLMManager` / `PromptManager` / `ContextService` / `ConfigService`）一律构造器注入；数据对象（Payload、配置 dict）走参数或 `**kwargs`。**禁止**把服务塞进 Context 容器传递。
+服务对象（`EventBus` / `LLMManager` / `PromptManager` / `ConfigService`）一律构造器注入；数据对象（Payload、配置 dict）走参数或 `**kwargs`。**禁止**把服务塞进 Context 容器传递。
 
 ```python
 # v2 实例：StreamerAgent 构造（main.py:_register_agents_from_config）
@@ -333,7 +329,6 @@ agent = StreamerAgent(
     config=cfg_obj,
     llm_manager=llm_service,
     prompt_manager=get_prompt_manager(),
-    context_service=context_service,
     event_bus=event_bus,
     # tool_registry / capabilities_provider / sqlite_store 视构造器签名
 )
