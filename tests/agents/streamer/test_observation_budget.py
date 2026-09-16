@@ -110,7 +110,8 @@ def test_single_huge_section_is_named_not_silently_dropped() -> None:
 
 
 def test_non_mapping_payload_falls_back_to_marked_prefix_cut() -> None:
-    rendered = _render_observation(["x" * 5000])
+    # 非对象形态没有段可丢：退回前缀截断保住硬上限（载荷按当前上限动态构造）
+    rendered = _render_observation(["x" * (_OBSERVATION_MAX_CHARS + 1000)])
     assert len(rendered) == _OBSERVATION_MAX_CHARS + len("…（截断）")
     assert rendered.endswith("…（截断）")
 
