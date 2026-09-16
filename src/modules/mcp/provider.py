@@ -68,11 +68,15 @@ class McpToolProvider(BaseToolProvider):
         self._client = client
         self.server_name = server_name
         self._provider = provider or server_name
-        self._task_query_tool = task_query_tool
-        self._task_status_map = dict(task_status_map) if task_status_map else None
-        self._attention_uri = attention_uri
-        self._attention_read_tool = attention_read_tool
-        self._attention_read_arguments = dict(attention_read_arguments) if attention_read_arguments else None
+        # 适配器声明用**公开属性**：绑定处（Agent / 采集器）要等 setup() 拉到工具清单后
+        # 才认得出工具全名，只能在构造之后赋值。曾把字段写成私有、绑定处赋公开名，
+        # 两边不同名 → 适配器静默失效（查询恒 None、订阅恒不建立），且测试用替身
+        # provider 时完全看不见；故此处与绑定处的名字必须一致。
+        self.task_query_tool = task_query_tool
+        self.task_status_map = dict(task_status_map) if task_status_map else None
+        self.attention_uri = attention_uri
+        self.attention_read_tool = attention_read_tool
+        self.attention_read_arguments = dict(attention_read_arguments) if attention_read_arguments else None
         # 通知订阅是**多订阅方**通道（跟踪循环核实任务、Agent 观察身体事件各一份）：
         # 资源订阅只建一次，最后一个订阅方退订时才真正断开。
         self._notification_callbacks: List[Any] = []
@@ -155,9 +159,9 @@ class McpToolProvider(BaseToolProvider):
         server 原始状态经 ``task_status_map`` 映射为任务词表状态；未声明
         查询工具或查询失败返回 ``None``（跟踪循环按无新事实处理）。
         """
-        if not self._task_query_tool:
+        if not self.task_query_tool:
             return None
-        spec = next((s for s in self._specs if s.full_name == self._task_query_tool), None)
+        spec = next((s for s in self._specs if s.full_name == self.task_query_tool), None)
         if spec is None:
             return None
         try:
@@ -166,12 +170,12 @@ class McpToolProvider(BaseToolProvider):
             raise RuntimeError(f"MCP 任务查询失败（{spec.name}）: {type(exc).__name__}: {exc}") from exc
         from src.modules.mcp.mapper import to_result
 
-        exec_result = to_result(result, tool_name=self._task_query_tool)
+        exec_result = to_result(result, tool_name=self.task_query_tool)
         if not exec_result.success:
             return None  # server 业务错误（如任务不存在）→ 无新事实
         structured = exec_result.structured_content if isinstance(exec_result.structured_content, dict) else {}
         raw_status = str(structured.get("state") or structured.get("status") or "")
-        mapped = (self._task_status_map or {}).get(raw_status, raw_status)
+        mapped = (self.task_status_map or {}).get(raw_status, raw_status)
         snapshot = dict(structured)
         return {"status": mapped, "snapshot": snapshot, "summary": f"{raw_status} -> {mapped}" if raw_status else ""}
 
@@ -192,12 +196,12 @@ class McpToolProvider(BaseToolProvider):
             工具、工具缺失或读取失败返回 ``None``——调用方据此按"这一轮没读到"
             处理，绝不能读成"没有事件"（等待期与失败期必须区分开）。
         """
-        if not self._attention_read_tool:
+        if not self.attention_read_tool:
             return None
-        spec = next((s for s in self._specs if s.full_name == self._attention_read_tool), None)
+        spec = next((s for s in self._specs if s.full_name == self.attention_read_tool), None)
         if spec is None:
             return None
-        arguments = dict(self._attention_read_arguments or {})
+        arguments = dict(self.attention_read_arguments or {})
         arguments["after_cursor"] = int(after_cursor)
         arguments["limit"] = int(limit)
         arguments["wait_ms"] = 0
@@ -209,7 +213,7 @@ class McpToolProvider(BaseToolProvider):
             raise RuntimeError(f"MCP 注意流读取失败（{spec.name}）: {type(exc).__name__}: {exc}") from exc
         from src.modules.mcp.mapper import to_result
 
-        exec_result = to_result(result, tool_name=self._attention_read_tool)
+        exec_result = to_result(result, tool_name=self.attention_read_tool)
         if not exec_result.success:
             logger.warning(f"注意流读取返回业务错误（{spec.name}）: {exec_result.error_message}")
             return None
@@ -222,7 +226,7 @@ class McpToolProvider(BaseToolProvider):
         多订阅方共用一条资源订阅：每个订阅方拿到自己的退订句柄，最后一个退订时
         才真正断开。通知本身不带内容（举旗级），拿事实的一方各自去读。
         """
-        if not self._attention_uri:
+        if not self.attention_uri:
             return None
         self._notification_callbacks.append(callback)
         self._ensure_notification_subscription()
@@ -254,7 +258,7 @@ class McpToolProvider(BaseToolProvider):
         pending: dict = {}
 
         async def _subscribe() -> None:
-            pending["unsub"] = await self._client.subscribe_resource(self._attention_uri, _on_notify)  # type: ignore[arg-type]
+            pending["unsub"] = await self._client.subscribe_resource(self.attention_uri, _on_notify)  # type: ignore[arg-type]
 
         try:
             loop = asyncio.get_running_loop()
