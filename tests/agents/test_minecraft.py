@@ -1,7 +1,7 @@
 """MinecraftAgent 测试：工具契约 / ReAct 循环 / 事件 / send_prompt / handoff / 装配"""
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -16,6 +16,10 @@ from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    # 注解用前向引用：真实导入留在用到它的辅助函数内，测试模块级不拉起任务基建
+    from src.modules.tools.tasks import TaskTracker
 
 
 def _make_state() -> MinecraftAgentState:
