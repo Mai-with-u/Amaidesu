@@ -63,8 +63,11 @@ _RECALL_QUERY_BATCH_CHARS: int = 200
 #: 单条召回 hit 文本截断长度（控制 prompt 体积）。
 _RECALL_HIT_TEXT_CHARS: int = 80
 
-#: 单条工具观察作为观察返回的最大字符数（超长观察截断，控上下文体积）。
-_OBSERVATION_MAX_CHARS: int = 2000
+#: 单条工具观察作为观察返回的最大字符数（超长观察按体量丢弃并自证，控上下文体积）。
+#: 6144 的来历：完整游戏状态快照（surroundings 一类，含地形缩略与诊断段）实测上万字符，
+#: 2000 会把电梯楼层这类稀缺字段整段切掉；抬到能装下完整快照后，正常观察不再被截断，
+#: 上限只兜病理输入。代价是最坏窗口变大（8 步 × 6144 ≈ 49K 字符），据此重算历史预算见下。
+_OBSERVATION_MAX_CHARS: int = 6144
 
 #: 观察截断标记（与 canonical 单项截断同文，保持全局口径一致）。
 _TRUNCATION_MARK: str = "…（截断）"
@@ -121,9 +124,9 @@ def _render_observation(data: Any) -> str:
     return rendered[:_OBSERVATION_MAX_CHARS] + _TRUNCATION_MARK
 
 
-#: 历史消息总字符预算：12000 由 32K 窗口倒推——最坏输入 = 系统提示词 1.5K
-#: + 参考段 ≤2.6K（含游戏叙事满格）+ 工具观察 ≤16K（8 步 × 2000）+ 对话
-#: ≤12K ≈ 32K 字符（约 21-23K token），留余量防越窗；正常 30 条历史约
+#: 历史消息总字符预算：12000 由窗口倒推——最坏输入 = 系统提示词 1.5K
+#: + 参考段 ≤2.6K（含游戏叙事与身体近况满格）+ 工具观察 ≤49K（8 步 × 6144）
+#: + 对话 ≤12K ≈ 65K 字符（约 45K token），留余量防越窗；正常 30 条历史约
 #: 1.5-2.4K 字符，预算只兜长内容病理输入。与条数上限 history_limit=30
 #: 构成双上限、先到先丢（成块丢最旧，见 canonical.drop_oldest_blocks）。
 _HISTORY_CHAR_BUDGET: int = 12000
@@ -265,6 +268,7 @@ class Planner:
         history: Optional[List[Any]] = None,
         rundown_text: Optional[str] = None,
         game_narrative: str = "",
+        body_narrative: str = "",
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
     ) -> Dict[str, Any]:
@@ -277,6 +281,7 @@ class Planner:
             history: 最近对话历史（可选；反重复用）。
             rundown_text: 当前流程单渲染文本（可选）。
             game_narrative: 游戏叙事文本（game.* 事件摘要；可主动经工具查询更多）。
+            body_narrative: 身体侧近况（game.body.* 摘要：被袭击/死亡/重生/紧急反应）。
             thinking: 思考流上下文（可选；提供时每次 LLM 调用的 reasoning
                 增量经旁路通道外发）。
             round_id: 决策轮次 ID（工具调用经 ToolInvocation.round_id 透传到
@@ -323,7 +328,9 @@ class Planner:
             outcome["silent_reason"] = "prompt_render_failed"
             return outcome
 
-        reference_text = await self._assemble_reference(batch, history, rundown_text, forced, proactive, game_narrative)
+        reference_text = await self._assemble_reference(
+            batch, history, rundown_text, forced, proactive, game_narrative, body_narrative
+        )
         if reference_text is None:
             outcome["error"] = self.last_failure
             outcome["silent_reason"] = "assembler_failed"
@@ -449,10 +456,11 @@ class Planner:
         forced: bool,
         proactive: bool,
         game_narrative: str,
+        body_narrative: str = "",
     ) -> Optional[str]:
         """构造参考段（一条 user 消息，固定在消息序列尾）。
 
-        内容 = 情境标注（强制/主动）+ 游戏叙事 + 组装器元数据段
+        内容 = 情境标注（强制/主动）+ 游戏叙事 + 身体侧近况 + 组装器元数据段
         （环节描述 / 直播间快照 / 记忆召回）。对话内容不在此处——历史与本批
         走 canonical 映射的原生消息通道。
         """
@@ -465,6 +473,10 @@ class Planner:
             # 叙事是注入到参考段的单项内容，同样受单项 2000 字符帽约束
             # （canonical.SINGLE_ITEM_MAX_CHARS，与消息单项截断同一规则）。
             lines.append(f"【游戏叙事】{canonical.truncate_item(game_narrative)}")
+        if body_narrative:
+            # 身体侧近况：单独一段，不与游戏叙事混排——两者形状与更新频率不同，
+            # 混在一起会让高频的遭遇把进展叙事挤掉。
+            lines.append(f"【身体近况】{canonical.truncate_item(body_narrative)}")
         situation_text = "\n".join(lines)
 
         if not self._context_enabled:

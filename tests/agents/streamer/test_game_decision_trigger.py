@@ -16,9 +16,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.config import StreamerConfig
-from src.agents.streamer.streamer_agent import StreamerAgent
+from src.agents.streamer.streamer_agent import StreamerAgent, _MAX_BODY_NARRATIVE
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.client import LLMResponse
 from src.modules.llm.payload import Response
@@ -138,6 +139,68 @@ async def test_game_report_triggers_proactive_round_when_live():
     assert "[minecraft·report] 迷宫尽头有两个门：左或右？" in agent._game_narrative_text()
     # pending 一次性消费
     assert agent._game_decision_pending is False
+
+    await bus.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_body_event_feeds_the_body_narrative_line() -> None:
+    """game.body.* → 独立"身体近况"缓冲（与游戏叙事分两条线）。"""
+    bus = EventBus()
+    agent = _build_streamer_agent(event_bus=bus)
+    agent._subscribe_events()
+    agent._live_active = True
+
+    await bus.emit(
+        CoreEvents.GAME_BODY_ATTACKED,
+        BodyEventPayload(
+            kind="attacked",
+            summary="正在被僵尸攻击（已命中 2 次）",
+            source_event_type="agent.damaged",
+            attacker="minecraft:zombie",
+            hits=2,
+        ),
+        source="maicraft_attention",
+    )
+    await bus.emit(
+        CoreEvents.GAME_BODY_ATTACK_ENDED,
+        BodyEventPayload(
+            kind="attack_ended",
+            summary="摆脱了僵尸的攻击（共命中 2 次）",
+            source_event_type="agent.damaged",
+            resolved=True,
+        ),
+        source="maicraft_attention",
+    )
+    await _wait_until(lambda: len(agent._body_narrative_blocks) == 2)
+
+    text = agent._body_narrative_text()
+    assert "[minecraft·attacked] 正在被僵尸攻击（已命中 2 次）" in text
+    assert "[minecraft·attack_ended] 摆脱了僵尸的攻击（共命中 2 次）（已结束）" in text
+    # 两条线互不混排：身体近况不写进游戏叙事缓冲，反之亦然
+    assert agent._game_narrative_text() == ""
+    # 身体事件不触发决策轮（它只是素材；是否开口由决策窗自己判断）
+    assert agent._game_decision_pending is False
+
+    await bus.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_body_narrative_buffer_is_bounded() -> None:
+    """身体近况缓冲有上限：高频遭遇不挤占、不无界增长。"""
+    bus = EventBus()
+    agent = _build_streamer_agent(event_bus=bus)
+    agent._subscribe_events()
+
+    for index in range(8):
+        await bus.emit(
+            CoreEvents.GAME_BODY_REFLEX_STARTED,
+            BodyEventPayload(kind="reflex_started", summary=f"紧急反应接管（{index}）"),
+            source="maicraft_attention",
+        )
+    await _wait_until(lambda: len(agent._body_narrative_blocks) == _MAX_BODY_NARRATIVE)
+    assert len(agent._body_narrative_blocks) == _MAX_BODY_NARRATIVE
+    assert "（7）" in agent._body_narrative_text(), "保留最近的，丢最旧的"
 
     await bus.cleanup()
 

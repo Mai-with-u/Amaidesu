@@ -39,6 +39,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
@@ -71,6 +72,8 @@ __all__ = ["StreamerAgent", "StreamerConfig"]
 
 # 游戏叙事摘要保留条数（近期叙事够用；进 Planner 上下文）
 _MAX_GAME_NARRATIVE = 10
+# 身体近况缓冲更小：它更新快、且只服务于"刚发生了什么"的叙述，不需要长记忆
+_MAX_BODY_NARRATIVE = 5
 
 # LLM profile 用途名（与 [llm_profiles.<name>] 三层结构对齐；model.toml 必填 6 成员）
 _PROFILE_PLANNER = "planner"
@@ -335,6 +338,7 @@ class StreamerAgent(BaseAgent):
 
         # 游戏叙事摘要（订阅 game.* 收集，最多保留 N 条；进 Planner 上下文）
         self._game_narrative_blocks: List[str] = []
+        self._body_narrative_blocks: List[str] = []
 
         # 观众命令接线（最小接线：玩法待扩展）。enabled + mappings 非空才激活；
         # mappings 即白名单，限频窗口/次数 config 化。命令路由是代码直连的
@@ -371,6 +375,7 @@ class StreamerAgent(BaseAgent):
             history_provider=self._read_history,
             rundown_text_provider=self._build_rundown_text,
             game_narrative_provider=self._game_narrative_text,
+            body_narrative_provider=self._body_narrative_text,
             logger=self._logger,
         )
 
@@ -546,6 +551,13 @@ class StreamerAgent(BaseAgent):
             self._on_game_event,
             model_class=GamePayload,
         )
+        # 身体侧近况（AI 玩家遭遇：被袭击/死亡/重生/紧急反应）——采集器分类后的事件，
+        # 与上面的 game.* 叙事分两条线；通配订阅覆盖 8 类，按 payload.kind 便于扩展
+        self._event_bus.on(
+            CoreEvents.GAME_BODY_WILDCARD,
+            self._on_body_event,
+            model_class=BodyEventPayload,
+        )
         # 场次边界事件：开播放行主动发言，下播收闸（开场白属于场次，不属于进程）
         self._event_bus.on(
             CoreEvents.LIVE_STARTED,
@@ -609,6 +621,33 @@ class StreamerAgent(BaseAgent):
     def _game_narrative_text(self) -> str:
         """导出最近游戏叙事摘要文本（Planner 上下文用）。"""
         return "\n".join(self._game_narrative_blocks)
+
+    async def _on_body_event(
+        self,
+        event_name: str,
+        payload: BodyEventPayload,
+        source: str,
+    ) -> None:
+        """``game.body.*`` 回调：收集 AI 玩家身体侧近况（独立小缓冲，进 Planner 上下文）。
+
+        与游戏叙事分两条线：``game.*`` 是低频进展/上报（含任务上下文），
+        ``game.body.*`` 是身体侧的遭遇（被袭击/死亡/重生/紧急反应）。
+        两者形状不同、更新频率不同，混在一条缓冲里会让高频的遭遇把进展挤掉，
+        所以各留各的；同一件事若两条线都报（任务中遭遇攻击），由提示词规定
+        只讲一次、以带任务上下文的那条为准。
+        """
+        try:
+            marker = "（已结束）" if getattr(payload, "resolved", False) else ""
+            line = f"[{payload.game}·{payload.kind}] {payload.summary}{marker}"
+            self._body_narrative_blocks.append(line)
+            if len(self._body_narrative_blocks) > _MAX_BODY_NARRATIVE:
+                self._body_narrative_blocks = self._body_narrative_blocks[-_MAX_BODY_NARRATIVE:]
+        except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
+            self._logger.warning(f"收集身体近况失败: {exc}")
+
+    def _body_narrative_text(self) -> str:
+        """导出最近身体侧近况文本（Planner 上下文用）。"""
+        return "\n".join(self._body_narrative_blocks)
 
     async def _on_room_message_received(
         self,

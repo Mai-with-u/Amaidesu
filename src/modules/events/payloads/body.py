@@ -14,7 +14,7 @@
   只陈述有证据的部分。
 """
 
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import ConfigDict, Field
 
@@ -64,8 +64,10 @@ class BodyEventPayload(BasePayload):
     """
 
     # 判别字段：EventBus 在 emit 期校验"事件名末段 == 该字段值"，
-    # 八重注册共享一类，挂错事件名直接报错
-    _DISCRIMINANT_FIELD = "kind"
+    # 八重注册共享一类，挂错事件名直接报错。
+    # 必须标 ClassVar：否则 pydantic 会把它当成私有属性（ModelPrivateAttr），
+    # 校验期取属性名会直接抛 TypeError。
+    _DISCRIMINANT_FIELD: ClassVar[str] = "kind"
 
     live_session_id: int = Field(
         default=0,
