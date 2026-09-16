@@ -112,6 +112,14 @@ class CoreEvents:
     # 一站式落业务表。
     ROOM_MESSAGE_WILDCARD = "room.message.#"
 
+    # ========== v2 语义域事件（game.body.* 身体事件通配订阅模式） ==========
+    # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
+    # 如 "game.body.agent_damaged"（末段 = 上游注意流事件类型，点号折叠为下划线，
+    # 见 payloads/body.py 的 body_event_name）。
+    # 用三层而非 "game.*"：单层通配是游戏 Agent 的低频里程碑通道（StorageLedger
+    # 落 game_events、主播订阅 game.*），身体事件是高频流，不与之混层。
+    GAME_BODY_WILDCARD = "game.body.#"
+
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:
         """

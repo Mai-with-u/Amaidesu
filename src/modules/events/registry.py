@@ -251,6 +251,7 @@ def register_core_events() -> None:
     """
     # noqa: F401 —— 仅为触发模块级 @register_event 执行
     from src.modules.events.payloads import (  # noqa: F401
+        body as _body_payloads,  # noqa: F401
         core as _core_payloads,  # noqa: F401
         game as _game_payloads,  # noqa: F401
         live as _live_payloads,  # noqa: F401
@@ -265,7 +266,7 @@ def register_core_events() -> None:
     )
 
     # 动态事件族登记（函数内 import 规避循环：payloads 子模块依赖本模块的
-    # register_event 装饰器）
+    # register_event 装饰器）。game.body.* 由 payloads/body.py 自行登记。
     from src.modules.events.payloads.tool_health import ToolHealthPayload
     from src.modules.events.payloads.tool_result import ToolResultPayload
 

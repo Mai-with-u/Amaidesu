@@ -197,6 +197,7 @@ event_bus.reset_stats(event_name=None)
 - **`tts.utterance.*`**：终点广播，消费者不得触发新一轮决策（防环；与 TTS 是否启用正交）
 - **`streamer.speech`**：业务信号，与 TTS 启用正交；`utterance_id` 与 `tts.utterance.*` 共用关联键
 - **`tool.result.<tool_name>`**：事件名 emit 时动态填（`ToolSpec.result_event` 可定制）；工具执行完成即广播（无论成败）
+- **`game.body.<上游事件类型>`**：事件名 emit 时动态填（`body_event_name`，上游点号折叠为下划线）；发布方是 `maicraft_attention` 采集器，它常驻订阅 Mod 的注意流资源、按游标增量读取并转发 `important` 身体事件（挨打/死亡/紧急反应）。用三层名而非 `game.*`：单层通配是游戏 Agent 的低频里程碑通道（落 `game_events`、主播订阅），身体事件是高频流，不与之混层；订阅方用 `CoreEvents.GAME_BODY_WILDCARD`（`game.body.#`）一站式监听
 
 新增/删除/重命名事件：先改 `CoreEvents` + Payload 注册（启动硬检查会守住契约），再补/删对应调用点——文档不再手抄。
 
@@ -217,7 +218,7 @@ Dashboard WebSocket 的 `type` 字段 = **事件名直通**；唯一例外是 `r
 | 一事件一个类 | `LiveStartedPayload` / `LiveEndedPayload`（字段本就不同） | `live.started` / `live.ended` |
 | 一事件一个类 | `CoreStartupPayload` / `CoreShutdownPayload` / `CoreErrorPayload` / `RundownChangedPayload` / `TaskChangedPayload` / `PlannerDecisionPayload` / `PlannerVerdictPayload` / `StreamerStagePayload` / `StreamerSpeechPayload` | 各自对应 |
 | 一事件一个类（形状不同） | `UtteranceStartedPayload` / `UtteranceFinishedPayload` / `UtteranceFailedPayload` | `tts.utterance.*` 三事件 |
-| 不绑定具体名（动态族） | `ToolResultPayload` / `ToolHealthPayload` | `tool.result.<name>` / `tool.health.<name>` |
+| 不绑定具体名（动态族） | `ToolResultPayload` / `ToolHealthPayload` / `BodyEventPayload` | `tool.result.<name>` / `tool.health.<name>` / `game.body.<上游事件类型>` |
 | 开放载荷 | `OpenPayload`（`extra="allow"`，保留任意字段） | 无绑定事件；通用消费者（记录器）的 model_class |
 
 > `tts.utterance.*` 三事件是终点广播：消费者不得基于这些事件触发新一轮决策（防环，见[边界规则](#边界规则)）。
