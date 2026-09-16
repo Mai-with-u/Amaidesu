@@ -66,6 +66,61 @@ _RECALL_HIT_TEXT_CHARS: int = 80
 #: 单条工具观察作为观察返回的最大字符数（超长观察截断，控上下文体积）。
 _OBSERVATION_MAX_CHARS: int = 2000
 
+#: 观察截断标记（与 canonical 单项截断同文，保持全局口径一致）。
+_TRUNCATION_MARK: str = "…（截断）"
+
+#: 观察被丢弃内容的自证字段：LLM 必须能区分"这个字段是空"与"这个字段这次没读到"。
+#: 只删不改的截断（前缀切）会让后者伪装成前者——"没读到电梯"曾被答成"没有电梯"。
+_OBSERVATION_TRUNCATED_KEY: str = "_truncated"
+_OBSERVATION_OMITTED_KEY: str = "_omitted"
+
+
+def _observation_fits(kept: Dict[str, Any], omitted: List[str]) -> bool:
+    """剩余段加上自证字段后是否落回观察预算。"""
+    candidate = {**kept, _OBSERVATION_TRUNCATED_KEY: True, _OBSERVATION_OMITTED_KEY: omitted}
+    return len(json.dumps(candidate, ensure_ascii=False, default=str)) <= _OBSERVATION_MAX_CHARS
+
+
+def _render_observation(data: Any) -> str:
+    """工具结果 → 观察文本：超预算时整段丢弃体量最大的段，并把丢弃事实写进观察本身。
+
+    与历史"成块丢最旧"同一立场——只整段丢弃、不切半段，剩余段的字节与全量形态
+    逐字一致。改用按体量丢弃（而不是按插入顺序前缀切）的理由：前缀切总是切掉排在
+    后面的段，而排在后面的往往正是稀缺字段（游戏状态快照里的电梯楼层就排在
+    地形缩略之后），且被切的一方无从知道内容丢过。丢掉的键名写进 ``_omitted``，
+    调用方据此改问法（如点名所需段）而不是编造否定结论。
+
+    非对象形态（列表/字符串等）没有段可丢，退回前缀截断并追加统一截断标记。
+    """
+    text = json.dumps(data, ensure_ascii=False, default=str)
+    if len(text) <= _OBSERVATION_MAX_CHARS:
+        return text
+    if not isinstance(data, dict):
+        return text[:_OBSERVATION_MAX_CHARS] + _TRUNCATION_MARK
+
+    by_size = sorted(
+        ((len(json.dumps(value, ensure_ascii=False, default=str)), key) for key, value in data.items()),
+        key=lambda item: (-item[0], item[1]),
+    )
+    kept: Dict[str, Any] = dict(data)
+    omitted: List[str] = []
+    for _, key in by_size:
+        if _observation_fits(kept, omitted):
+            break
+        kept.pop(key)
+        omitted.append(key)
+
+    rendered = json.dumps(
+        {**kept, _OBSERVATION_TRUNCATED_KEY: True, _OBSERVATION_OMITTED_KEY: omitted},
+        ensure_ascii=False,
+        default=str,
+    )
+    if len(rendered) <= _OBSERVATION_MAX_CHARS:
+        return rendered
+    # 病理输入（键极多且值极小）：段全丢完仍装不下，退回带标记的前缀截断保住硬上限。
+    return rendered[:_OBSERVATION_MAX_CHARS] + _TRUNCATION_MARK
+
+
 #: 历史消息总字符预算：12000 由 32K 窗口倒推——最坏输入 = 系统提示词 1.5K
 #: + 参考段 ≤2.6K（含游戏叙事满格）+ 工具观察 ≤16K（8 步 × 2000）+ 对话
 #: ≤12K ≈ 32K 字符（约 21-23K token），留余量防越窗；正常 30 条历史约
@@ -581,10 +636,7 @@ class Planner:
             data = result.structured_content if isinstance(result.structured_content, dict) else {"ok": True}
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
-        text = json.dumps(data, ensure_ascii=False, default=str)
-        if len(text) > _OBSERVATION_MAX_CHARS:
-            text = text[:_OBSERVATION_MAX_CHARS] + "…（截断）"
-        return text
+        return _render_observation(data)
 
     # ==================== 记忆召回与渲染 ====================
 
