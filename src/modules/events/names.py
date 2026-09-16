@@ -112,12 +112,25 @@ class CoreEvents:
     # 一站式落业务表。
     ROOM_MESSAGE_WILDCARD = "room.message.#"
 
-    # ========== v2 语义域事件（game.body.* 身体事件通配订阅模式） ==========
-    # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
-    # 如 "game.body.agent_damaged"（末段 = 上游注意流事件类型，点号折叠为下划线，
-    # 见 payloads/body.py 的 body_event_name）。
-    # 用三层而非 "game.*"：单层通配是游戏 Agent 的低频里程碑通道（StorageLedger
-    # 落 game_events、主播订阅 game.*），身体事件是高频流，不与之混层。
+    # ========== v2 语义域事件（game.body.* AI 玩家身体事件） ==========
+    # 上游是 MaiCraft 的注意流（内容很杂），由 maicraft_attention 采集器分类：
+    # 只把"值得向观众叙述的遭遇"转成下面 8 个事件，遥测（血量/坐标/游标）不入事件。
+    # kind 是判别字段（与事件名末段一致），未知上游类型归 game.body.unknown 并留
+    # source_event_type——所以事件面不随上游漂移。
+    # 用三层名而非 "game.*"：单层通配是游戏 Agent 的低频里程碑通道（落 game_events、
+    # 进主播叙事缓冲），身体事件是流，不与之混层。
+    GAME_BODY_ATTACKED = "game.body.attacked"
+    GAME_BODY_ATTACK_ENDED = "game.body.attack_ended"
+    GAME_BODY_DIED = "game.body.died"
+    GAME_BODY_RESPAWNED = "game.body.respawned"
+    GAME_BODY_REFLEX_STARTED = "game.body.reflex_started"
+    GAME_BODY_REFLEX_FINISHED = "game.body.reflex_finished"
+    GAME_BODY_DIMENSION_CHANGED = "game.body.dimension_changed"
+    GAME_BODY_UNKNOWN = "game.body.unknown"
+
+    # ========== v2 语义域事件（game.body.* 通配订阅模式） ==========
+    # **这是通配订阅模式专用**，不是被 emit 的具体事件名：订阅方用它一站式
+    # 监听上面 8 类身体事件（emit 时用具体常量）。
     GAME_BODY_WILDCARD = "game.body.#"
 
     @classmethod

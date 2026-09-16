@@ -266,7 +266,7 @@ def register_core_events() -> None:
     )
 
     # 动态事件族登记（函数内 import 规避循环：payloads 子模块依赖本模块的
-    # register_event 装饰器）。game.body.* 由 payloads/body.py 自行登记。
+    # register_event 装饰器）
     from src.modules.events.payloads.tool_health import ToolHealthPayload
     from src.modules.events.payloads.tool_result import ToolResultPayload
 

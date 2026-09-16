@@ -30,14 +30,17 @@ from typing import Any, AsyncIterator, Dict, Literal, Optional
 
 from pydantic import Field
 
+from src.agents.minecraft.attention_matrix import (
+    KIND_TO_EVENT,
+    RESOLVED_KINDS,
+    classify,
+    summarize,
+    upstream_timestamp_ms,
+)
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.payloads.body import (
-    BodyEventPayload,
-    body_event_name,
-    upstream_timestamp_ms,
-)
+from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.logging import get_logger
 
 
@@ -246,26 +249,41 @@ class MaicraftAttentionCollector(BaseCollector):
         for event in events:
             if event.get("priority") != "important":
                 continue  # 任务事件由任务通道承载；background 只是世界时间/天气
-            await self._forward(event)
-            forwarded += 1
+            if await self._forward(event):
+                forwarded += 1
         if forwarded:
             self.logger.info(f"身体事件转发 {forwarded} 条（cursor={self._cursor}）")
 
-    async def _forward(self, event: Dict[str, Any]) -> None:
-        """一条上游事件 → ``game.body.<类型>`` 事件。"""
-        event_type = str(event.get("type") or "")
+    async def _forward(self, event: Dict[str, Any]) -> bool:
+        """一条上游事件 → 一条叙事化 ``game.body.*`` 事件；不该讲的返回 False。
+
+        分类是这一层的核心职责：上游流里既有"被僵尸袭击"（值得向观众叙述），
+        也有血量数值、坐标、游标这类遥测（对叙述没有意义）。只把前者转出去，
+        遥测留在上游——需要时主播用工具直读游戏状态，叙事通道保持干净。
+        """
+        source_type = str(event.get("type") or "")
+        facts = event.get("data") if isinstance(event.get("data"), dict) else {}
+        phase = str(facts.get("phase") or "")
+        kind = classify(source_type, phase)
+        if kind is None:
+            return False  # 已知的非叙事类型（世界时间/天气等）不占用叙事通道
+
+        cause = facts.get("cause") if isinstance(facts.get("cause"), dict) else {}
+        repeat = facts.get("repeat") if isinstance(facts.get("repeat"), dict) else {}
+        hits = repeat.get("hits")
         payload = BodyEventPayload(
             game="minecraft",
-            event_type=event_type,
-            priority=str(event.get("priority") or "important"),
-            message=str(event.get("message") or ""),
-            facts=event.get("data") if isinstance(event.get("data"), dict) else {},
-            cursor=int(event.get("cursor") or 0),
-            stream_id=str(event.get("stream_id") or self._stream_id or ""),
+            kind=kind,
+            summary=summarize(kind, source_type, facts),
+            source_event_type=source_type,
+            attacker=str(cause.get("causing_entity_type_id") or ""),
+            hits=int(hits) if isinstance(hits, int) and hits > 0 else 0,
+            resolved=kind in RESOLVED_KINDS,
             occurred_at_ms=upstream_timestamp_ms(event.get("timestamp")),
         )
-        await self.emit_event(body_event_name(event_type), payload, source=self.name)
+        await self.emit_event(KIND_TO_EVENT[kind], payload, source=self.name)
         self._emitted_total += 1
+        return True
 
 
 __all__ = ["MaicraftAttentionCollector"]

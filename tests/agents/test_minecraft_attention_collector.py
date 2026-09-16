@@ -14,15 +14,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Dict, List, Optional
 
 import pytest
 
 from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
+from src.agents.minecraft.attention_matrix import attacker_label, classify, summarize
 from src.modules.collectors.base import BaseCollector, CollectorState
 from src.modules.collectors.factory import SUPPORTED_COLLECTORS, instantiate_collector
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.body import BodyEventPayload, body_event_name
+from src.modules.events.payloads.body import BodyEventPayload
 
 
 class _FakeEventBus:
@@ -113,18 +115,35 @@ def _page(
     }
 
 
-def _damage(cursor: int, *, priority: str = "important") -> Dict[str, Any]:
+def _damage(
+    cursor: int,
+    *,
+    priority: str = "important",
+    phase: str = "",
+    hits: int = 0,
+    source_type: str = "agent.damaged",
+    timestamp: str = "2026-09-16T10:16:23.580633Z",
+) -> Dict[str, Any]:
+    """一条上游注意流事件（形状与 mod 的 agent.damaged 一致）。"""
+    data: Dict[str, Any] = {
+        "cause": {"causing_entity_type_id": "minecraft:zombie"},
+        "defense": {"policy": "instinct", "would_engage": True},
+        # 遥测：本不该进叙事事件（测试据此断言它没被带出去）
+        "current_health": 18.0,
+        "absorption": 0.0,
+        "position": {"x": 1.0, "y": 135.0, "z": 2.0},
+    }
+    if phase:
+        data["phase"] = phase
+    if hits:
+        data["repeat"] = {"hits": hits, "damage_total": 2.0 * hits}
     return {
         "cursor": cursor,
-        "type": "agent.damaged",
+        "type": source_type,
         "priority": priority,
-        "timestamp": "2026-09-16T10:16:23.580633Z",
+        "timestamp": timestamp,
         "message": "The agent took damage",
-        "data": {
-            "current_health": 18.0,
-            "cause": {"causing_entity_type_id": "minecraft:zombie"},
-            "defense": {"policy": "instinct", "would_engage": True},
-        },
+        "data": data,
     }
 
 
@@ -163,16 +182,60 @@ def test_config_defaults() -> None:
     assert cfg.page_limit >= 1 and cfg.idle_poll_ms >= 1000
 
 
-def test_body_event_name_folds_upstream_type() -> None:
-    """上游类型 → 事件名末段必须是单个词元，且落在 game.body.# 通配下。"""
-    assert body_event_name("agent.damaged") == "game.body.agent_damaged"
-    assert body_event_name("world.time_phase_changed") == "game.body.world_time_phase_changed"
-    assert body_event_name("") == "game.body.unknown"
+def test_classification_covers_narratable_and_drops_the_rest() -> None:
+    """分类表：只有"值得向观众叙述的遭遇"进叙事通道，遥测与背景不进。"""
+    assert classify("agent.damaged", "started") == "attacked"
+    assert classify("agent.damaged", "finished") == "attack_ended"
+    assert classify("agent.damaged", "") == "attacked", "老版本没有阶段字段也要能讲"
+    assert classify("agent.died", "") == "died"
+    assert classify("agent.respawned", "") == "respawned"
+    assert classify("agent.reflex", "started") == "reflex_started"
+    assert classify("agent.reflex", "finished") == "reflex_finished"
+    assert classify("agent.dimension_changed", "") == "dimension_changed"
+    assert classify("world.time_phase_changed", "") is None, "世界时刻对叙述没有意义"
+    assert classify("agent.respawn_requested", "") is None, "重生请求由 died/respawned 覆盖"
+    assert classify("agent.something_new", "") == "unknown", "上游新增类型不丢，但事件面保持封闭"
+    assert classify("", "") is None
+
+
+def test_summary_states_only_evidenced_facts() -> None:
+    """摘要只陈述有证据的部分：攻击者类型与命中次数；不写"正在反击"。"""
+    facts = {
+        "cause": {"causing_entity_type_id": "minecraft:zombie"},
+        "repeat": {"hits": 3},
+        "defense": {"would_engage": True},
+    }
+    assert summarize("attacked", "agent.damaged", facts) == "正在被僵尸攻击（已命中 3 次）"
+    assert summarize("attack_ended", "agent.damaged", facts) == "摆脱了僵尸的攻击（共命中 3 次）"
+    assert "反击" not in summarize("attacked", "agent.damaged", facts)
+    assert summarize("attacked", "agent.damaged", {}) == "受到了伤害", "没有攻击者证据就不编来源"
+    assert summarize("died", "agent.died", {}) == "死了"
+    assert summarize("unknown", "agent.something_new", {}) == "身体事件：agent.something_new"
+    assert attacker_label("minecraft:creeper") == "苦力怕"
+    assert attacker_label("some_mod:weird_thing") == "weird_thing", "查不到就用 id 路径段，不猜中文"
+
+
+def test_body_event_names_are_the_closed_kind_set() -> None:
+    """8 个具名事件与判别字段一一对应，通配订阅仍然可用。"""
+    from src.agents.minecraft.attention_matrix import KIND_TO_EVENT
+
     assert CoreEvents.GAME_BODY_WILDCARD == "game.body.#"
+    assert set(KIND_TO_EVENT.values()) == {
+        CoreEvents.GAME_BODY_ATTACKED,
+        CoreEvents.GAME_BODY_ATTACK_ENDED,
+        CoreEvents.GAME_BODY_DIED,
+        CoreEvents.GAME_BODY_RESPAWNED,
+        CoreEvents.GAME_BODY_REFLEX_STARTED,
+        CoreEvents.GAME_BODY_REFLEX_FINISHED,
+        CoreEvents.GAME_BODY_DIMENSION_CHANGED,
+        CoreEvents.GAME_BODY_UNKNOWN,
+    }
+    for kind, event_name in KIND_TO_EVENT.items():
+        assert event_name.rsplit(".", 1)[-1] == kind, "判别字段必须等于事件名末段"
 
 
-def test_body_payload_requires_event_type() -> None:
-    payload = BodyEventPayload(event_type="agent.damaged", message="x", facts={"a": 1})
+def test_body_payload_requires_kind() -> None:
+    payload = BodyEventPayload(kind="attacked", summary="正在被僵尸攻击")
     assert payload.game == "minecraft" and payload.timestamp_ms > 0
 
 
@@ -197,7 +260,8 @@ async def test_first_read_primes_cursor_without_forwarding() -> None:
 
 
 @pytest.mark.asyncio
-async def test_incremental_read_forwards_only_important() -> None:
+async def test_incremental_read_forwards_only_narratable_events() -> None:
+    """增量读取：只把叙事化的遭遇转出去，遥测与背景事件不进事件面。"""
     bus = _FakeEventBus()
     collector = _collector(bus)
     await collector._ensure_ready()
@@ -206,14 +270,29 @@ async def test_incremental_read_forwards_only_important() -> None:
     client.pages.append(_page([_damage(5)], cursor=5))
     await collector._drain()
 
-    client.pages.append(_page([_damage(6), _damage(7, priority="background")], cursor=7))
+    client.pages.append(
+        _page(
+            [
+                _damage(6, phase="started", hits=3),
+                _damage(7, priority="background"),
+                _damage(8, source_type="world.weather_changed", priority="important"),
+            ],
+            cursor=8,
+        )
+    )
     await collector._drain()
 
-    assert [name for name, _ in bus.events] == ["game.body.agent_damaged"]
+    assert [name for name, _ in bus.events] == [CoreEvents.GAME_BODY_ATTACKED]
     _, payload = bus.events[0]
-    assert payload.event_type == "agent.damaged" and payload.cursor == 6
-    assert payload.facts["current_health"] == 18.0
+    assert payload.kind == "attacked" and payload.source_event_type == "agent.damaged"
+    assert payload.summary == "正在被僵尸攻击（已命中 3 次）"
+    assert payload.attacker == "minecraft:zombie" and payload.hits == 3
+    assert payload.resolved is False
     assert payload.occurred_at_ms > 0, "上游 ISO-8601 时刻要解析成毫秒"
+    # 遥测不入事件：血量/坐标/游标不是叙事素材
+    dumped = payload.model_dump()
+    assert "facts" not in dumped and "cursor" not in dumped and "stream_id" not in dumped
+    assert "18.0" not in json.dumps(dumped, ensure_ascii=False)
     # 增量语义：第二次读取带上游标与流编号
     second = client.read_calls[-1]["arguments"]
     assert second["after_cursor"] == 5 and second["stream_id"] == "stream-A"

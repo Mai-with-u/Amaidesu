@@ -50,7 +50,7 @@
 | **core** | 系统级核心状态（启动 / 关闭 / 错误）。**不属于任何业务域**，仅供系统组件订阅 | `core.startup` / `core.shutdown` / `core.error` |
 | **live** | 直播场次生命周期（开播 / 下播）。**唯一含时间窗锚点**的域，所有 room/game 事件均需携带 `live_session_id` | `live.started` / `live.ended` |
 | **room** | 直播间行为流 / 状态。**子层强制**：行为流走 `.message.*`（已发生事实），状态走 `.state.*`（当前属性快照，预留层） | `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.guard` / `room.message.enter` / `room.message.partner_speech` |
-| **game** | 游戏里程碑 / 异常 / 上报。**低频**，只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 交付总结）。`live_session_id` 为 int 场次主键：发布方不填，由场次盖章拦截器注入。另有 `game.body.*` 动态族：MaiCraft 注意流的身体事件（挨打/死亡/紧急反应），由 `maicraft_attention` 采集器转发，高频、与 `game.*` 不混层 | `game.milestone` / `game.attention_required` / `game.error` / `game.report`；`game.body.agent_damaged`（动态族） |
+| **game** | 游戏里程碑 / 异常 / 上报。**低频**，只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 交付总结）。`live_session_id` 为 int 场次主键：发布方不填，由场次盖章拦截器注入。另有 `game.body.*`（8 类）：MaiCraft 注意流经采集器**分类**后的 AI 玩家遭遇（被袭击/死亡/重生/紧急反应/切维度），高频、与 `game.*` 不混层 | `game.milestone` / `game.attention_required` / `game.error` / `game.report`；`game.body.attacked` 等 8 类 |
 | **rundown** | 流程单（Rundown）状态变更（加载 / 跳转 / 推进 / 暂停 / 恢复）。**单事件 + payload 判别，仅变更即发**，不是周期性状态广播 | `rundown.changed` |
 | **planner** | 主播决策轮记录：轮末一条 `planner.decision`（决策卡数据源）；裁决时刻即时一条 `planner.verdict`（reply 被调用时、表达生成之前） | `planner.decision` / `planner.verdict` |
 | **streamer** | 主播 Agent 管线阶段与发言业务事实：`streamer.stage`（决策管线阶段变化）/ `streamer.speech`（一条发言已生成，与 TTS 启用与否正交） | `streamer.stage` / `streamer.speech` |
@@ -252,7 +252,16 @@ class CoreEvents:
     TOOL_RESULT_WILDCARD = "tool.result.#"
     TOOL_HEALTH_WILDCARD = "tool.health.#"
     ROOM_MESSAGE_WILDCARD = "room.message.#"
-    # 身体事件动态族（emit 用具体名 game.body.<上游事件类型>）
+    # AI 玩家遭遇（8 类具名 + 一条通配；判别字段 kind）
+    GAME_BODY_ATTACKED = "game.body.attacked"
+    GAME_BODY_ATTACK_ENDED = "game.body.attack_ended"
+    GAME_BODY_DIED = "game.body.died"
+    GAME_BODY_RESPAWNED = "game.body.respawned"
+    GAME_BODY_REFLEX_STARTED = "game.body.reflex_started"
+    GAME_BODY_REFLEX_FINISHED = "game.body.reflex_finished"
+    GAME_BODY_DIMENSION_CHANGED = "game.body.dimension_changed"
+    GAME_BODY_UNKNOWN = "game.body.unknown"
+    # 通配订阅专用（emit 用上面的具体常量）
     GAME_BODY_WILDCARD = "game.body.#"
 ```
 

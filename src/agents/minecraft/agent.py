@@ -38,7 +38,7 @@ from src.agents.minecraft.tools import (
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.body import upstream_timestamp_ms
+from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.modules.events.payloads.game import GamePayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolInvocation, ToolSpec
