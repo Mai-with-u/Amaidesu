@@ -16,6 +16,7 @@
 """
 
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from pydantic import ConfigDict, Field
@@ -27,6 +28,9 @@ from src.modules.time_utils import now_ms
 #: 动态族前缀（register_event_family 要求以点号结尾）
 GAME_BODY_FAMILY_PREFIX = "game.body."
 
+#: 上游时间戳格式（Mod 侧 ISO-8601，带 Z 后缀；带/不带毫秒两种）
+_UPSTREAM_TIME_FORMATS = ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ")
+
 
 def body_event_name(event_type: str) -> str:
     """上游事件类型 → 事件名：``agent.damaged`` → ``game.body.agent_damaged``。
@@ -36,6 +40,24 @@ def body_event_name(event_type: str) -> str:
     """
     token = re.sub(r"[^a-z0-9_]+", "_", str(event_type or "").strip().lower()).strip("_")
     return f"{GAME_BODY_FAMILY_PREFIX}{token or 'unknown'}"
+
+
+def upstream_timestamp_ms(raw: Any) -> int:
+    """上游注意流时间戳（ISO-8601 带 Z）→ Unix 毫秒；无法解析返回 0。
+
+    消费方（采集器转发、Agent 记录任务上下文）共用这一处解析：时间戳只做搬运，
+    解析不出来宁可写 0（未知），也不拿"现在"冒充上游时刻。
+    """
+    if not isinstance(raw, str) or not raw:
+        return 0
+    text = raw.strip()
+    for fmt in _UPSTREAM_TIME_FORMATS:
+        try:
+            parsed = datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+            return int(parsed.timestamp() * 1000)
+        except ValueError:
+            continue
+    return 0
 
 
 class BodyEventPayload(BasePayload):

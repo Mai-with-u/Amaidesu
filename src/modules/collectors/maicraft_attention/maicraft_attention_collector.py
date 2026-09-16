@@ -18,7 +18,6 @@ MaicraftAttentionCollector —— AI 玩家身体事件采集器
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, Literal, Optional
 
 from pydantic import Field
@@ -26,11 +25,12 @@ from pydantic import Field
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.payloads.body import BodyEventPayload, body_event_name
+from src.modules.events.payloads.body import (
+    BodyEventPayload,
+    body_event_name,
+    upstream_timestamp_ms,
+)
 from src.modules.logging import get_logger
-
-#: 上游事件时间戳格式（Mod 侧为 ISO-8601，带 Z 后缀）
-_UPSTREAM_TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 class MaicraftAttentionCollector(BaseCollector):
@@ -254,24 +254,10 @@ class MaicraftAttentionCollector(BaseCollector):
             facts=event.get("data") if isinstance(event.get("data"), dict) else {},
             cursor=int(event.get("cursor") or 0),
             stream_id=str(event.get("stream_id") or self._stream_id or ""),
-            occurred_at_ms=_parse_upstream_ms(event.get("timestamp")),
+            occurred_at_ms=upstream_timestamp_ms(event.get("timestamp")),
         )
         await self.emit_event(body_event_name(event_type), payload, source=self.name)
         self._emitted_total += 1
-
-
-def _parse_upstream_ms(raw: Any) -> int:
-    """上游 ISO-8601 时刻 → Unix 毫秒；无法解析返回 0（不编造时间）。"""
-    if not isinstance(raw, str) or not raw:
-        return 0
-    text = raw.strip()
-    for fmt in (_UPSTREAM_TIME_FORMAT, "%Y-%m-%dT%H:%M:%SZ"):
-        try:
-            parsed = datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
-            return int(parsed.timestamp() * 1000)
-        except ValueError:
-            continue
-    return 0
 
 
 __all__ = ["MaicraftAttentionCollector"]

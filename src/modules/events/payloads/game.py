@@ -11,7 +11,7 @@
 - ``report_kind`` 仅 report 事件使用：delivery=交付总结 / escalation=升级决策
 """
 
-from typing import ClassVar, Literal, Optional
+from typing import Any, ClassVar, Dict, List, Literal, Optional
 
 from pydantic import ConfigDict, Field
 
@@ -66,6 +66,21 @@ class GamePayload(BasePayload):
     report_kind: Optional[Literal["delivery", "escalation"]] = Field(
         default=None,
         description="上报种类（仅 event_type='report' 时有值：delivery=交付总结 / escalation=升级决策）",
+    )
+    # 任务上下文（超集形状：四类事件共用，缺省即"本次与身体事件无关"）。
+    # 身体事件来自 MaiCraft 注意流（挨打/死亡/紧急反应），由游戏 Agent 观察后随上报携带；
+    # 主播据此说"你在进行 xx 任务的时候遭遇了僵尸的攻击"，而不必自己去猜时间与结局。
+    occurred_at_ms: int = Field(
+        default=0,
+        description="所述事实的发生时刻（Unix 毫秒；0 = 不适用或未知，不得编造）",
+    )
+    already_resolved: bool = Field(
+        default=False,
+        description="所述状况在上报时刻是否已经结束（供主播措辞滞后：已结束就不说'正在被攻击'）",
+    )
+    body_events: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="相关身体事件（本批任务期间观察到的注意流事实，最多若干条；空 = 无）",
     )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),

@@ -1442,15 +1442,16 @@ def _attention_page(
     }
 
 
-def _damage_event(cursor: int, *, priority: str = "important") -> Dict[str, Any]:
+def _damage_event(cursor: int, *, priority: str = "important", phase: str = "started") -> Dict[str, Any]:
     """一条 agent.damaged 事件（S1 之后的字段形状）。"""
     return {
         "cursor": cursor,
         "type": "agent.damaged",
         "priority": priority,
+        "timestamp": "2026-09-16T10:16:23.580633Z",
         "message": "The agent took damage",
         "data": {
-            "phase": "started",
+            "phase": phase,
             "evidence": "damage_packet",
             "current_health": 18.0,
             "cause": {"causing_entity_type_id": "minecraft:zombie", "causing_entity_distance": 1.5},
@@ -1828,3 +1829,98 @@ async def test_own_tool_invoke_emits_tool_result_event() -> None:
             await agent.stop()
     finally:
         await bus.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# S3：上报契约（任务上下文 + 发生时刻 + 是否已结束）
+# ---------------------------------------------------------------------------
+
+
+class _CapturingBus:
+    """捕获 GamePayload 的 bus 替身（上报契约测试用）。"""
+
+    def __init__(self) -> None:
+        self.payloads: List[GamePayload] = []
+
+    async def emit(self, event_name: str, payload: Any, **kwargs: Any) -> None:
+        if isinstance(payload, GamePayload):
+            self.payloads.append(payload)
+
+
+@pytest.mark.asyncio
+async def test_report_carries_batch_body_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """上报要带本批任务期间的身体事件上下文，主播才说得出"执行任务时遭遇了攻击"。"""
+    agent = await _agent_with_fake_mcp(monkeypatch)
+    bus = _CapturingBus()
+    agent._event_bus = bus
+    provider = agent._attention_provider
+
+    # 建游标的首读发生在任务之前（生产里只在首次接入时发生）→ 不属于本批上下文
+    provider.attention_pages.append(_attention_page([_damage_event(5)], cursor=5))
+    await agent._drain_attention()
+
+    agent._batch_active = True
+    # 一次遭遇：片段开始（mod 侧只在首次命中发 started）→ 收尾（finished）
+    provider.attention_pages.append(_attention_page([_damage_event(6, phase="started")], cursor=6))
+    await agent._drain_attention()
+
+    started = [p for p in bus.payloads if p.event_type == "attention_required"]
+    assert len(started) == 1, "片段开始通报一次"
+    assert "遭遇身体事件" in started[0].message
+    assert started[0].already_resolved is False
+    assert started[0].occurred_at_ms > 0, "带上游发生时刻，而不是本系统时间"
+    assert started[0].body_events and started[0].body_events[0]["event_type"] == "agent.damaged"
+
+    provider.attention_pages.append(_attention_page([_damage_event(7, phase="finished")], cursor=7))
+    await agent._drain_attention()
+    resolved = [p for p in bus.payloads if p.event_type == "attention_required"][-1]
+    assert resolved.already_resolved is True, "结束通报要标出已结束，主播措辞才能自然滞后"
+
+    # 任务完成时的交付总结同样带上下文，并能判出"已结束"
+    await agent._emit_game_event("report", "任务完成", report_kind="delivery")
+    report = [p for p in bus.payloads if p.event_type == "report"][-1]
+    assert report.already_resolved is True
+    assert len(report.body_events) == 2, "本批的开始与收尾都要带上"
+    assert report.occurred_at_ms == report.body_events[0]["occurred_at_ms"]
+
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_unfinished_body_episode_is_not_reported_as_resolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """只见到片段开始、没见到收尾时，不得把"可能还在挨打"说成已结束。"""
+    agent = await _agent_with_fake_mcp(monkeypatch)
+    bus = _CapturingBus()
+    agent._event_bus = bus
+    provider = agent._attention_provider
+
+    agent._batch_active = True
+    provider.attention_pages.append(_attention_page([_damage_event(6, phase="started")], cursor=6))
+    await agent._drain_attention()
+    await agent._emit_game_event("report", "任务完成", report_kind="delivery")
+
+    report = [p for p in bus.payloads if p.event_type == "report"][-1]
+    assert report.already_resolved is False, "未收尾就报已结束，主播会说错话"
+
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_idle_body_events_do_not_make_the_agent_talk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """空闲时的身体事件归采集器那条通道，游戏 Agent 不越位通报。"""
+    agent = await _agent_with_fake_mcp(monkeypatch)
+    bus = _CapturingBus()
+    agent._event_bus = bus
+    provider = agent._attention_provider
+
+    provider.attention_pages.append(_attention_page([_damage_event(5)], cursor=5))
+    await agent._drain_attention()
+    provider.attention_pages.append(_attention_page([_damage_event(6, phase="started")], cursor=6))
+    await agent._drain_attention()
+
+    assert bus.payloads == [], "空闲（无任务批）时不得由游戏 Agent 通报身体事件"
+    assert agent._batch_body_events, "但事实仍要留存，供下一次任务的上下文使用"
+
+    await agent.stop()

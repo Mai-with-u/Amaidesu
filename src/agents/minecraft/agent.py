@@ -38,6 +38,7 @@ from src.agents.minecraft.tools import (
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.body import upstream_timestamp_ms
 from src.modules.events.payloads.game import GamePayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolInvocation, ToolSpec
@@ -58,6 +59,9 @@ _MAX_DELIVERY_TEXT = 800
 
 # 身体事件单页上限：一次增量读取最多取几条注意流事件（超出部分下次接着读）
 _ATTENTION_PAGE_LIMIT = 10
+
+# 本批任务期间保留的身体事件条数上限（上报携带的任务上下文，多了只会淹没重点）
+_MAX_BATCH_BODY_EVENTS = 5
 
 # MaiCraft 原始状态 → 任务词表状态映射（绑定处适配声明的一部分；词表）
 _MAICRAFT_TASK_STATUS_MAP = {
@@ -164,6 +168,10 @@ class MinecraftAgent(BaseAgent):
         self._attention_primed: bool = False
         # 本批 ReAct 是否正在跑（决定通知到达时要不要读身体事件）
         self._batch_active: bool = False
+        # 本批任务期间观察到的身体事件（上报时随 payload 带上任务上下文）
+        self._batch_body_events: List[Dict[str, Any]] = []
+        # 本批已经就"开始/结束"告知过主播的身体事件类型（每个类型各一次，防刷屏）
+        self._body_notified: set = set()
 
         # 本批次 LLM 是否已 report（delivery/escalation 终止语义判定）
         self._task_reported = False
@@ -419,6 +427,9 @@ class MinecraftAgent(BaseAgent):
             await self.emit_error("无法执行任务：LLM 未注入")
             return
         self._batch_active = True
+        # 本批的身体事件上下文归本批：上一批的攻击不该被算进这一批的交付总结
+        self._batch_body_events.clear()
+        self._body_notified.clear()
         try:
             await self._run_task_batch()
         finally:
@@ -744,9 +755,47 @@ class MinecraftAgent(BaseAgent):
             if event.get("priority") != "important":
                 continue  # 任务事件走 task.changed 通道；background 只是世界时间/天气
             self._inject_wakeup_message(self._attention_event_message(event))
+            await self._record_body_event(event)
             injected += 1
         if injected:
             self._logger.info(f"身体事件注入 {injected} 条（cursor={self._attention_cursor}）")
+
+    async def _record_body_event(self, event: dict) -> None:
+        """记下本批任务期间的身体事件，并决定是否即时告知主播。
+
+        上报要能说"你在进行 xx 任务的时候遭遇了僵尸的攻击，正在处理"，
+        所以身体事实要在本批内留存；同时按"片段开始/结束"各通报一次——
+        片段由 mod 侧聚合（一次遭遇最多两条），因此不会刷屏。
+        """
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        event_type = str(event.get("type") or "")
+        phase = str(data.get("phase") or "")
+        record = {
+            "event_type": event_type,
+            "phase": phase,
+            "cursor": int(event.get("cursor") or 0),
+            "occurred_at_ms": upstream_timestamp_ms(event.get("timestamp")),
+            "message": str(event.get("message") or ""),
+            "facts": data,
+        }
+        self._batch_body_events.append(record)
+        if len(self._batch_body_events) > _MAX_BATCH_BODY_EVENTS:
+            self._batch_body_events = self._batch_body_events[-_MAX_BATCH_BODY_EVENTS:]
+
+        if not self._batch_active:
+            return  # 空闲时身体事件由采集器那条通道交给主播，游戏 Agent 不插话
+        key = (event_type, phase)
+        if phase not in ("started", "finished") or key in self._body_notified:
+            return
+        self._body_notified.add(key)
+        notice = f"执行任务期间遭遇身体事件：{event_type}" if phase == "started" else f"身体事件已结束：{event_type}"
+        await self._emit_game_event(
+            "attention_required",
+            notice,
+            scene="",
+            occurred_at_ms=record["occurred_at_ms"],
+            already_resolved=phase == "finished",
+        )
 
     @staticmethod
     def _attention_event_message(event: dict) -> str:
@@ -837,6 +886,25 @@ class MinecraftAgent(BaseAgent):
     # 事件上报（三通道·事件；GamePayload(game="minecraft")）
     # ==================================================================
 
+    @staticmethod
+    def _batch_body_resolved(events: List[Dict[str, Any]]) -> bool:
+        """本批身体事件是否都已收尾。
+
+        片段在 mod 侧成对发出（started → finished），所以按事件类型配对计数：
+        每个 started 都有对应 finished 才算收尾；还有未收尾的片段就返回 False，
+        宁可说"可能还在进行"，也不把未结束说成已结束。
+        """
+        started: Dict[str, int] = {}
+        finished: Dict[str, int] = {}
+        for item in events:
+            kind = str(item.get("event_type") or "")
+            phase = str(item.get("phase") or "")
+            if phase == "started":
+                started[kind] = started.get(kind, 0) + 1
+            elif phase == "finished":
+                finished[kind] = finished.get(kind, 0) + 1
+        return all(finished.get(kind, 0) >= count for kind, count in started.items())
+
     async def _emit_game_event(
         self,
         event_type: Literal["report", "attention_required", "error"],
@@ -844,16 +912,36 @@ class MinecraftAgent(BaseAgent):
         *,
         scene: str = "",
         report_kind: Optional[Literal["delivery", "escalation"]] = None,
+        occurred_at_ms: int = 0,
+        already_resolved: bool = False,
     ) -> None:
-        """emit game.* 事件（统一 payload 构造）。"""
+        """emit game.* 事件（统一 payload 构造）。
+
+        叙事面事件（report / attention_required）自动带上**本批任务期间**观察到的
+        身体事件上下文：主播据此说"你在进行 xx 任务的时候遭遇了僵尸的攻击"，
+        而不必自己去猜时间与结局。已结束的状况用 ``already_resolved`` 标出，
+        让措辞能自然滞后（不说"正在被攻击"而说"刚才"）。
+        """
         if self._event_bus is None:
             return
+        body_events: List[Dict[str, Any]] = []
+        if event_type in ("report", "attention_required"):
+            body_events = [dict(item) for item in self._batch_body_events]
+            if body_events and not occurred_at_ms:
+                stamps = [int(item.get("occurred_at_ms") or 0) for item in body_events]
+                known = [stamp for stamp in stamps if stamp > 0]
+                occurred_at_ms = min(known) if known else 0
+            if body_events and not already_resolved:
+                already_resolved = self._batch_body_resolved(body_events)
         payload = GamePayload(
             game="minecraft",
             event_type=event_type,
             message=message,
             scene=scene,
             report_kind=report_kind,
+            occurred_at_ms=occurred_at_ms,
+            already_resolved=already_resolved,
+            body_events=body_events,
         )
         if event_type == "report":
             # 上报事件同步进内存（minecraft_get_state 的 recent_reports 数据源）
