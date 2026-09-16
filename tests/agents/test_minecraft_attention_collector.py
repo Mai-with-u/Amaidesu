@@ -1,5 +1,7 @@
 """maicraft_attention 采集器测试：注意流增量读取与事件转发。
 
+采集器代码归属 Minecraft Agent 包（游戏相关适配器内聚），装配走采集器框架。
+
 覆盖：
 - 元数据/继承/配置默认值
 - 增量语义：首读只建游标，之后按游标读取且只转发 ``important``
@@ -16,9 +18,9 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
 from src.modules.collectors.base import BaseCollector, CollectorState
 from src.modules.collectors.factory import SUPPORTED_COLLECTORS, instantiate_collector
-from src.modules.collectors.maicraft_attention import MaicraftAttentionCollector
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload, body_event_name
 

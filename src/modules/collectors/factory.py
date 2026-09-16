@@ -51,7 +51,8 @@ def instantiate_collector(
 
         return ConsoleInputCollector(config=config or {}, event_bus=event_bus)
     if name == "maicraft_attention":
-        from src.modules.collectors.maicraft_attention import MaicraftAttentionCollector
+        # 代码归属 Minecraft Agent 包（游戏相关外部世界适配器内聚），装配仍走本工厂
+        from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
 
         return MaicraftAttentionCollector(config=config or {}, event_bus=event_bus)
     if name == "stt":

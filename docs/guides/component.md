@@ -290,11 +290,13 @@ async def asyncio_sleep_ms(ms: int) -> None:
 
 | 步骤 | 位置 | 操作 |
 |------|------|------|
-| ① 放代码 | `src/modules/collectors/<your_name>/<your_name>_collector.py` | 类名 `XxxCollector`，`name = "<注册名>"` |
+| ① 放代码 | `src/modules/collectors/<your_name>/<your_name>_collector.py` | 类名 `XxxCollector`，`name = "<注册名>"`。**例外**：读的是某个**游戏/具体内容**的流（如 MaiCraft 注意流）时，按"游戏内容逻辑内聚 `src/agents/<Agent 名>/`"放在该 Agent 包内——代码归属跟随内容，装配路径不变 |
 | ② 注册工厂 | `src/modules/collectors/factory.py` | 加一行 `if name == "<注册名>":` → `return XxxCollector(config, event_bus)`；同时把 `<注册名>` 加进 `SUPPORTED_COLLECTORS` 元组 |
 | ③ 写配置 | `config/collectors.toml` | 顶层 `enabled` 加 `"<注册名>"`；同名子段 `[<注册名>]` 放具体参数（由该采集器包内 ConfigSchema 校验） |
 | ④ 启停接口 | 自动接入 | `CollectorManager.enable_collector(name, config, event_bus)` 会走工厂 `instantiate_collector` 实例化；`disable_collector` 停止+移除 |
 | ⑤ Dashboard | 自动可见 | 组件管理页从 `SUPPORTED_COLLECTORS` 拉清单；通过 `src/modules/dashboard/api/components.py` 的 `_sync_enabled_config` 写回 `enabled` 列表 |
+
+**代码归属 ≠ 装配路径**：无论代码放在 `src/modules/collectors/` 还是游戏 Agent 包内，装配一律走工厂 + `collectors.toml`，生命周期都挂装配期（不随 Agent 起停）——"待机时该流是否还在"由这个生命周期决定，不由代码位置决定。
 
 **谁调用注册？** `main.py` 的 `_register_collectors_from_config` 在启动装配时遍历 `collectors.toml` 顶层 `enabled` 列表逐个 `instantiate_collector` → `CollectorManager.register` → `CollectorManager.start_all`；未知名走 warn + 跳过，不 raise。
 
