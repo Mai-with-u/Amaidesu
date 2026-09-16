@@ -264,7 +264,7 @@ class MaicraftAttentionCollector(BaseCollector):
         source_type = str(event.get("type") or "")
         facts = event.get("data") if isinstance(event.get("data"), dict) else {}
         phase = str(facts.get("phase") or "")
-        kind = classify(source_type, phase)
+        kind = classify(source_type, phase, str(facts.get("evidence") or ""))
         if kind is None:
             return False  # 已知的非叙事类型（世界时间/天气等）不占用叙事通道
 
@@ -282,6 +282,9 @@ class MaicraftAttentionCollector(BaseCollector):
             occurred_at_ms=upstream_timestamp_ms(event.get("timestamp")),
         )
         await self.emit_event(KIND_TO_EVENT[kind], payload, source=self.name)
+        # 与日志同处落一条：事件面给程序看，日志给人复盘看
+        # （在 data/logs 的时间轴上就能看到"这一场被打了几次、怎么脱身的"）。
+        self.logger.info(f"[身体事件] {payload.summary}（{payload.source_event_type}）")
         self._emitted_total += 1
         return True
 

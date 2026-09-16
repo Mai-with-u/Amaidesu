@@ -66,6 +66,38 @@ _NON_NARRATIVE_TYPES = frozenset(
     }
 )
 
+#: 伤害类型名 → 叙述用词（**仅用于生成叙述**；没有攻击者的伤害靠它讲清是什么伤）
+_DAMAGE_TYPE_PHRASES: Dict[str, str] = {
+    "fall": "摔了一下",
+    "drowning": "溺水了",
+    "lava": "被岩浆烫到",
+    "fire": "着火了",
+    "on_fire": "着火了",
+    "cactus": "被仙人掌扎到",
+    "sweet_berry_bush": "被浆果丛扎到",
+    "starve": "饿得掉血了",
+    "in_wall": "被卡住窒息",
+    "freeze": "冻伤了",
+    "hot_floor": "踩到热地面",
+    "lightning_bolt": "被雷劈了",
+    "falling_block": "被落物砸到",
+    "anvil": "被铁砧砸到",
+    "fly_into_wall": "撞到墙上",
+    "out_of_world": "掉出了世界",
+    "explosion": "被炸到",
+    "player_explosion": "被炸到",
+    "magic": "中了魔法伤害",
+    "wither": "凋零效果发作",
+    "poison": "中毒了",
+    "sonic_boom": "被音爆打到",
+    "mob_attack": "遭到了近战攻击",
+    "mob_attack_no_aggro": "被撞了一下",
+    "arrow": "中箭了",
+    "trident": "被三叉戟扎到",
+    "thrown": "被投掷物打到",
+    "player_attack": "被玩家攻击",
+}
+
 #: 常见攻击者的中文名（**仅用于生成叙述用词**，不参与任何判定）
 #: 查不到就回落到实体 id 的路径段（如 minecraft:zombie → zombie），不猜中文
 _ATTACKER_LABELS: Dict[str, str] = {
@@ -98,11 +130,18 @@ _ATTACKER_LABELS: Dict[str, str] = {
 }
 
 
-def classify(source_event_type: str, phase: str = "") -> Optional[str]:
-    """上游类型（+ 片段阶段）→ 叙事种类；不进入叙事通道返回 ``None``。"""
+def classify(source_event_type: str, phase: str = "", evidence: str = "") -> Optional[str]:
+    """上游类型（+ 片段阶段、证据口径）→ 叙事种类；不进入叙事通道返回 ``None``。
+
+    **没被伤害包确认的掉血不算"遭遇攻击"**：那条路径只说明"血量数字变小了"
+    （吸收黄心到期也会让它变小），讲成"受到了伤害"就是无证据的断言，
+    所以归 ``unknown`` 留痕而不叙事化。
+    """
     source = str(source_event_type or "")
     if not source or source in _NON_NARRATIVE_TYPES:
         return None
+    if str(evidence or "") == "health_drop_without_packet":
+        return "unknown"
     phases = _SOURCE_KINDS.get(source)
     if phases is None:
         return "unknown"  # 上游新增类型：留痕但不丢，事件面保持封闭
@@ -117,6 +156,19 @@ def attacker_label(entity_type_id: str) -> str:
     return _ATTACKER_LABELS.get(path, path)
 
 
+def damage_type_phrase(damage_type: str) -> str:
+    """伤害类型名 → 一句叙述（``fall`` → ``摔了一下``）。
+
+    没有攻击者的伤害（摔落/溺水/仙人掌）只能靠类型说清是什么伤；
+    查不到的类型回落到"受到了 xx 伤害"，不猜具体情境。
+    """
+    key = str(damage_type or "").strip()
+    phrase = _DAMAGE_TYPE_PHRASES.get(key)
+    if phrase:
+        return phrase
+    return f"受到了 {key} 伤害" if key else "受到了伤害"
+
+
 def summarize(kind: str, source_event_type: str, facts: Dict[str, Any]) -> str:
     """叙事种类 + 上游事实 → 一句可直接讲给观众的话（只陈述有证据的部分）。"""
     cause = facts.get("cause") if isinstance(facts.get("cause"), dict) else {}
@@ -129,6 +181,10 @@ def summarize(kind: str, source_event_type: str, facts: Dict[str, Any]) -> str:
     if kind == "attacked":
         if label:
             return f"正在被{label}攻击" + (f"（已命中 {hits} 次）" if hits else "")
+        # 没有攻击者（摔落/溺水/仙人掌等）：伤害类型能说清是什么伤，就不含糊地说"受到了伤害"
+        damage_type = str(cause.get("damage_type") or "")
+        if damage_type:
+            return damage_type_phrase(damage_type) + (f"（已命中 {hits} 次）" if hits else "")
         return "受到了伤害" + (f"（已命中 {hits} 次）" if hits else "")
     if kind == "attack_ended":
         if label:
@@ -147,6 +203,8 @@ def summarize(kind: str, source_event_type: str, facts: Dict[str, Any]) -> str:
     if kind == "dimension_changed":
         to_dimension = str(facts.get("to_dimension") or "")
         return f"进入了 {to_dimension}" if to_dimension else "换了个维度"
+    if str(facts.get("evidence") or "") == "health_drop_without_packet":
+        return "血量下降了（原因不明）"
     return f"身体事件：{source_event_type}" if source_event_type else "身体事件"
 
 
