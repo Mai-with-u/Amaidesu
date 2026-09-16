@@ -19,6 +19,7 @@ EXPECTED_COMPONENTS: tuple[str, ...] = (
     "bili_danmaku",
     "bili_danmaku_official",
     "console_input",
+    "maicraft_attention",
     "stt",
     # Agent（配置宿主 agents.toml）
     "minecraft",
@@ -32,12 +33,14 @@ def _fill_collectors() -> dict[str, type[BaseConfig]]:
         BiliDanmakuOfficialCollector,
     )
     from src.modules.collectors.console.console_input_collector import ConsoleInputCollector
+    from src.modules.collectors.maicraft_attention import MaicraftAttentionCollector
     from src.modules.collectors.stt.stt_collector import STTCollector
 
     return {
         "bili_danmaku": BiliDanmakuCollector.ConfigSchema,
         "bili_danmaku_official": BiliDanmakuOfficialCollector.ConfigSchema,
         "console_input": ConsoleInputCollector.ConfigSchema,
+        "maicraft_attention": MaicraftAttentionCollector.ConfigSchema,
         "stt": STTCollector.ConfigSchema,
     }
 
