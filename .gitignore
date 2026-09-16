@@ -231,3 +231,5 @@ config.toml.backup*
 /*.webm
 .playwright-mcp/
 .zcode/
+
+MaiCraftMod/
