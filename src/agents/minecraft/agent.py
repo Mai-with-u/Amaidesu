@@ -56,6 +56,9 @@ _OBSERVATION_KEEP = 10
 # 交付/上报文本截断（事件 payload 与兜底交付共用）
 _MAX_DELIVERY_TEXT = 800
 
+# 身体事件单页上限：一次增量读取最多取几条注意流事件（超出部分下次接着读）
+_ATTENTION_PAGE_LIMIT = 10
+
 # MaiCraft 原始状态 → 任务词表状态映射（绑定处适配声明的一部分；词表）
 _MAICRAFT_TASK_STATUS_MAP = {
     "pending": "accepted",
@@ -153,6 +156,14 @@ class MinecraftAgent(BaseAgent):
         self._task_tracker: Optional[Any] = task_tracker
         # Agent 私有 MCP（_on_start 装配成功时持有）：资源订阅接线用
         self._mcp_client: Optional[Any] = None
+        # 注意流读取适配器（装配成功时持有）+ 本 Agent 自己的增量游标：
+        # 游标属于"谁消费事件谁持有"，跨任务批次保留，避免每次重读最新一页。
+        self._attention_provider: Optional[Any] = None
+        self._attention_stream_id: Optional[str] = None
+        self._attention_cursor: int = 0
+        self._attention_primed: bool = False
+        # 本批 ReAct 是否正在跑（决定通知到达时要不要读身体事件）
+        self._batch_active: bool = False
 
         # 本批次 LLM 是否已 report（delivery/escalation 终止语义判定）
         self._task_reported = False
@@ -256,6 +267,23 @@ class MinecraftAgent(BaseAgent):
                 prov.task_status_map = _MAICRAFT_TASK_STATUS_MAP
                 break
         prov.attention_uri = "maicraft://attention"
+        # 身体事件读取：工具名与固定入参都在这一处声明，provider 只补游标与页大小。
+        # 本 Agent 另订阅同一条通知通道（举旗级），只在有进行中工作时才真去读——
+        # 空闲时通知到达即返回，不产生 MCP 调用也不唤 LLM。
+        for spec in prov.list_tools():
+            if spec.name.endswith("perceive"):
+                prov.attention_read_tool = spec.full_name
+                prov.attention_read_arguments = {"view": "attention"}
+                break
+        self._attention_provider = prov if getattr(prov, "attention_read_tool", None) else None
+        if self._attention_provider is not None:
+            # 可选钩子（与 TaskTracker 同一处约定）：无通知能力的提供者只是失去"被推醒"，
+            # 任务步内的增量读取照常工作——不能因为缺钩子就整个装配失败。
+            subscribe = getattr(prov, "subscribe_task_notifications", None)
+            if callable(subscribe):
+                subscribe(self._on_attention_notification)
+            else:
+                self._logger.warning("MCP provider 无通知适配器：身体事件只能靠任务步内增量读取发现")
         self._logger.info(f"Agent 私有 MCP（名单 fail-closed）装配完成：新注册 {new_count}/{count} 个工具")
 
     @staticmethod
@@ -390,7 +418,14 @@ class MinecraftAgent(BaseAgent):
         if self._llm is None:
             await self.emit_error("无法执行任务：LLM 未注入")
             return
+        self._batch_active = True
+        try:
+            await self._run_task_batch()
+        finally:
+            self._batch_active = False
 
+    async def _run_task_batch(self) -> None:
+        """任务批主体：ReAct 有界循环，直到批次终止语义命中。"""
         self._task_reported = False
         system_prompt = self._system_prompt()
         # 工具列表 = 注册表按可见名单计算（for_agent，每任务重新拉取）——
@@ -424,6 +459,9 @@ class MinecraftAgent(BaseAgent):
                 messages.append({"role": "user", "content": _content})
             # 本批委派任务进入进行中（agent 型单写者：执行 Agent 写）
             self._mark_delegated_running()
+
+            # --- 身体事件增量读取（任务跑着的时候才知道自己正被谁打）---
+            await self._drain_attention()
 
             # --- 对话历史规整（旧观察 → 占位符）---
             self._compact_observations(messages)
@@ -637,6 +675,101 @@ class MinecraftAgent(BaseAgent):
         """系统消息入队 + 唤醒 worker（非委派来源，任务号空串）。"""
         self._message_queue.append(("", content))
         self._wake_event.set()
+
+    # ==================================================================
+    # 身体事件（注意流增量读取）
+    # ==================================================================
+
+    def _on_attention_notification(self, task_id: str = "") -> None:
+        """注意流资源通知（举旗级、可丢）：有进行中工作时才去读身体事件。
+
+        空闲时直接返回——身体事件的日常值守归主播侧采集器，"游戏 Agent 只在干活时
+        需要知道身体受威胁"，这样"空闲零消耗"仍然成立（通知到达不产生 MCP 调用与 LLM 推理）。
+        """
+        if not (self._batch_active or self._pending_task_count() > 0):
+            return
+        try:
+            asyncio.get_running_loop().create_task(self._drain_attention())
+        except RuntimeError:
+            # 没有事件循环（同步上下文）：通知只是提示，丢弃不补
+            self._logger.warning("注意流通知到达时无事件循环，本次提示丢弃")
+
+    async def _drain_attention(self) -> None:
+        """按游标增量读一页注意流，把重要的身体事件注入待吸收消息。
+
+        规格三条：
+        - **增量**：带 stream_id 与 after_cursor，只取新事件，不重读最新一页；
+        - **首读只对游标**：第一次读到的是一页历史，注入会把陈年事件灌进上下文，
+          所以首读只记录游标、不注入；
+        - **重新同步不注入**：换世界/流重置/历史已丢（resync_required）时同样只重置
+          游标，旧世界的身体事件不属于当前这条命。
+        读取失败按"这一轮没读到"处理并记日志，绝不当作"身体没事"。
+        """
+        provider = self._attention_provider
+        if provider is None:
+            return
+        try:
+            page = await provider.read_attention(
+                stream_id=self._attention_stream_id,
+                after_cursor=self._attention_cursor,
+                limit=_ATTENTION_PAGE_LIMIT,
+            )
+        except Exception as exc:  # noqa: BLE001 - 读取失败只降级，不打断任务
+            self._logger.warning(f"身体事件读取失败（本轮按未读到处理）: {exc}")
+            return
+        if not isinstance(page, dict):
+            return
+
+        resync = bool(page.get("resync_required") or page.get("history_lost") or page.get("stream_reset"))
+        stream_id = page.get("stream_id")
+        if isinstance(stream_id, str) and stream_id:
+            self._attention_stream_id = stream_id
+        cursor = page.get("cursor")
+        if isinstance(cursor, int):
+            self._attention_cursor = cursor
+
+        events = page.get("events")
+        events = [e for e in events if isinstance(e, dict)] if isinstance(events, list) else []
+        if resync or not self._attention_primed:
+            self._attention_primed = True
+            self._logger.info(
+                f"身体事件游标{'重新同步' if resync else '首次建立'}："
+                f"stream={self._attention_stream_id}, cursor={self._attention_cursor}, "
+                f"本页 {len(events)} 条不注入"
+            )
+            return
+
+        injected = 0
+        for event in events:
+            if event.get("priority") != "important":
+                continue  # 任务事件走 task.changed 通道；background 只是世界时间/天气
+            self._inject_wakeup_message(self._attention_event_message(event))
+            injected += 1
+        if injected:
+            self._logger.info(f"身体事件注入 {injected} 条（cursor={self._attention_cursor}）")
+
+    @staticmethod
+    def _attention_event_message(event: dict) -> str:
+        """把一条注意流事件压成一句可读事实：只陈述事件里真有的字段。"""
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        cause = data.get("cause") if isinstance(data.get("cause"), dict) else {}
+        repeat = data.get("repeat") if isinstance(data.get("repeat"), dict) else {}
+        defense = data.get("defense") if isinstance(data.get("defense"), dict) else {}
+        parts = [f"[身体事件] {event.get('message') or event.get('type') or '未知事件'}"]
+        attacker = cause.get("causing_entity_type_id")
+        if attacker:
+            distance = cause.get("causing_entity_distance")
+            parts.append(f"来源 {attacker}" + (f"（距离 {distance}）" if distance is not None else ""))
+        if repeat:
+            parts.append(f"本片段命中 {repeat.get('hits')} 次、累计掉血 {repeat.get('damage_total')}")
+        if data.get("current_health") is not None:
+            parts.append(f"当前血量 {data['current_health']}")
+        if defense:
+            parts.append("自卫链本次可接管" if defense.get("would_engage") else "自卫链本次不接管")
+        if data.get("evidence") == "health_drop_without_packet":
+            parts.append("（只是观察到掉血，没有伤害包，来源未知）")
+        parts.append("这是观察不是命令；需要行动时自行决定，并按需上报主播")
+        return "；".join(parts)
 
     def _mark_delegated_running(self) -> None:
         """把本批吸收的委派任务标记为进行中（写回任务记录表）。
