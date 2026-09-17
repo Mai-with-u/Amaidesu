@@ -8,9 +8,8 @@ mock McpClient（不发真实网络请求）——验证：
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
-
-import pytest
 
 from src.modules.mcp.client import McpClient
 from src.modules.mcp.provider import McpToolProvider
@@ -179,3 +178,114 @@ class TestProvider:
         # 覆盖 provider → 单名与全名前缀随之改变
         assert prov.name == "game"
         assert list(prov.list_tools())[0].full_name == "game_perceive"
+
+
+class AdapterFakeClient(FakeMcpClient):
+    """适配器测试替身：可记录订阅/退订，返回可配的结构化结果。"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.subscribed: List[str] = []
+        self.unsubscribed: List[str] = []
+        self.callbacks: List[Any] = []
+        self.structured: Any = {"state": "running", "task_id": "t1"}
+
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+        self.called.append({"name": tool_name, "arguments": arguments})
+        return FakeResult(content=[], structured=self.structured)
+
+    async def subscribe_resource(self, uri: str, callback: Any) -> Any:
+        self.subscribed.append(uri)
+        self.callbacks.append(callback)
+
+        async def unsubscribe() -> None:
+            self.unsubscribed.append(uri)
+
+        return unsubscribe
+
+
+class TestAdapterDeclarations:
+    """适配器声明的绑定契约。
+
+    绑定处（Agent / 采集器）只能在 ``setup()`` 拉到工具清单之后才认得出工具全名，
+    因此适配器字段必须支持"构造后按公开名赋值"。曾经字段是私有的、绑定处赋公开名，
+    两边不同名 → 查询适配器恒返回 None、资源订阅恒不建立，且不报错；
+    替身 provider 的测试完全看不见，只有这条真实 provider + 真实赋值的测试能拦住。
+    """
+
+    def _bind(self, provider: str = "maicraft") -> tuple[AdapterFakeClient, McpToolProvider]:
+        client = AdapterFakeClient(name=provider, config=AnyConfig())
+        prov = McpToolProvider(client=client, server_name=provider, provider=provider)
+        return client, prov
+
+    async def test_public_declarations_after_setup_drive_the_adapters(self) -> None:
+        client, prov = self._bind()
+        client.set_tools([FakeTool("task", "任务"), FakeTool("perceive", "观察")])
+        await prov.setup()
+
+        # 绑定处的写法：构造后按公开名声明
+        prov.task_query_tool = "maicraft_task"
+        prov.task_status_map = {"running": "running"}
+        prov.attention_uri = "maicraft://attention"
+        prov.attention_read_tool = "maicraft_perceive"
+        prov.attention_read_arguments = {"view": "attention"}
+
+        snapshot = await prov.query_task("t1")
+        assert snapshot is not None, "查询适配器必须真的调用 server 侧工具，而不是恒返回 None"
+        assert client.called[-1] == {"name": "task", "arguments": {"action": "get", "task_id": "t1"}}
+        assert snapshot["status"] == "running"
+
+        page = await prov.read_attention(stream_id="s-1", after_cursor=3, limit=5)
+        assert page == client.structured
+        arguments = client.called[-1]["arguments"]
+        assert arguments == {
+            "view": "attention",
+            "after_cursor": 3,
+            "limit": 5,
+            "wait_ms": 0,
+            "stream_id": "s-1",
+        }
+
+        handle = prov.subscribe_task_notifications(lambda task_id: None)
+        assert handle is not None, "声明了 attention_uri 就必须建立资源订阅"
+        await asyncio.sleep(0)
+        assert client.subscribed == ["maicraft://attention"]
+
+    async def test_notification_fans_out_and_last_unsubscribe_drops_it(self) -> None:
+        client, prov = self._bind()
+        client.set_tools([FakeTool("task", "任务")])
+        await prov.setup()
+        prov.attention_uri = "maicraft://attention"
+
+        first: List[str] = []
+        second: List[str] = []
+        drop_first = prov.subscribe_task_notifications(lambda task_id: first.append(task_id))
+        drop_second = prov.subscribe_task_notifications(lambda task_id: second.append(task_id))
+        await asyncio.sleep(0)
+        assert client.subscribed == ["maicraft://attention"], "多个订阅方共用一条资源订阅"
+
+        # 上游通知 → 每个订阅方各自收到举旗
+        for callback in client.callbacks:
+            callback("maicraft://attention")
+        assert first == [""] and second == [""]
+
+        # 退掉一个：订阅仍在，另一个照常收到
+        assert drop_first is not None
+        drop_first()
+        for callback in client.callbacks:
+            callback("maicraft://attention")
+        assert first == [""] and second == ["", ""]
+        assert client.unsubscribed == [], "还有订阅方时不得断开资源订阅"
+
+        # 退掉最后一个：才真正退订
+        assert drop_second is not None
+        drop_second()
+        await asyncio.sleep(0)
+        assert client.unsubscribed == ["maicraft://attention"]
+
+    async def test_read_attention_returns_none_without_declaration(self) -> None:
+        client, prov = self._bind()
+        client.set_tools([FakeTool("perceive", "观察")])
+        await prov.setup()
+        assert await prov.read_attention() is None
+        assert client.called == [], "未声明读取工具时不得猜测工具名去调用"

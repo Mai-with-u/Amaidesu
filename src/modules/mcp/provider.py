@@ -44,6 +44,10 @@ class McpToolProvider(BaseToolProvider):
             （绑定处声明，server 特有知识不进本类）
         attention_uri: 可选——任务通知资源 URI（如 ``maicraft://attention``）；
             提供后 ``subscribe_task_notifications`` 订阅该资源
+        attention_read_tool: 可选——server 侧注意流读取工具的**全名**；
+            提供后 ``read_attention`` 按游标增量读一页事件
+        attention_read_arguments: 可选——读取该工具所需的固定入参
+            （server 特有参数形状由绑定处声明，本类只补游标与页大小）
     """
 
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
@@ -58,13 +62,25 @@ class McpToolProvider(BaseToolProvider):
         task_query_tool: Optional[str] = None,
         task_status_map: Optional[dict] = None,
         attention_uri: Optional[str] = None,
+        attention_read_tool: Optional[str] = None,
+        attention_read_arguments: Optional[dict] = None,
     ) -> None:
         self._client = client
         self.server_name = server_name
         self._provider = provider or server_name
-        self._task_query_tool = task_query_tool
-        self._task_status_map = dict(task_status_map) if task_status_map else None
-        self._attention_uri = attention_uri
+        # 适配器声明用**公开属性**：绑定处（Agent / 采集器）要等 setup() 拉到工具清单后
+        # 才认得出工具全名，只能在构造之后赋值。曾把字段写成私有、绑定处赋公开名，
+        # 两边不同名 → 适配器静默失效（查询恒 None、订阅恒不建立），且测试用替身
+        # provider 时完全看不见；故此处与绑定处的名字必须一致。
+        self.task_query_tool = task_query_tool
+        self.task_status_map = dict(task_status_map) if task_status_map else None
+        self.attention_uri = attention_uri
+        self.attention_read_tool = attention_read_tool
+        self.attention_read_arguments = dict(attention_read_arguments) if attention_read_arguments else None
+        # 通知订阅是**多订阅方**通道（跟踪循环核实任务、Agent 观察身体事件各一份）：
+        # 资源订阅只建一次，最后一个订阅方退订时才真正断开。
+        self._notification_callbacks: List[Any] = []
+        self._notification_unsubscribe: Optional[Any] = None
         self._specs: List[ToolSpec] = []
         self._synced = False
 
@@ -82,7 +98,8 @@ class McpToolProvider(BaseToolProvider):
         if not self._client.connected:
             ok = await self._client.connect()
             if not ok:
-                logger.warning(f"MCP Provider '{self.server_name}' 连接失败，工具列表为空")
+                # 原因已由 McpClient 记过（含同因去重）；此处只补"因此工具列表为空"这一后果
+                logger.debug(f"MCP Provider '{self.server_name}' 连接失败，工具列表为空")
                 self._specs = []
                 self._synced = True
                 return 0
@@ -143,9 +160,9 @@ class McpToolProvider(BaseToolProvider):
         server 原始状态经 ``task_status_map`` 映射为任务词表状态；未声明
         查询工具或查询失败返回 ``None``（跟踪循环按无新事实处理）。
         """
-        if not self._task_query_tool:
+        if not self.task_query_tool:
             return None
-        spec = next((s for s in self._specs if s.full_name == self._task_query_tool), None)
+        spec = next((s for s in self._specs if s.full_name == self.task_query_tool), None)
         if spec is None:
             return None
         try:
@@ -154,32 +171,101 @@ class McpToolProvider(BaseToolProvider):
             raise RuntimeError(f"MCP 任务查询失败（{spec.name}）: {type(exc).__name__}: {exc}") from exc
         from src.modules.mcp.mapper import to_result
 
-        exec_result = to_result(result, tool_name=self._task_query_tool)
+        exec_result = to_result(result, tool_name=self.task_query_tool)
         if not exec_result.success:
             return None  # server 业务错误（如任务不存在）→ 无新事实
         structured = exec_result.structured_content if isinstance(exec_result.structured_content, dict) else {}
         raw_status = str(structured.get("state") or structured.get("status") or "")
-        mapped = (self._task_status_map or {}).get(raw_status, raw_status)
+        mapped = (self.task_status_map or {}).get(raw_status, raw_status)
         snapshot = dict(structured)
         return {"status": mapped, "snapshot": snapshot, "summary": f"{raw_status} -> {mapped}" if raw_status else ""}
 
-    def subscribe_task_notifications(self, callback) -> Optional[Any]:
-        """通知适配器：订阅 ``attention_uri`` 资源（举旗级；返回退订句柄）。"""
-        if not self._attention_uri:
+    async def read_attention(
+        self,
+        *,
+        stream_id: Optional[str] = None,
+        after_cursor: int = 0,
+        limit: int = 10,
+    ) -> Optional[dict]:
+        """身体事件适配器：经注意流读取工具（``attention_read_tool`` 全名）增量读一页。
+
+        固定入参由绑定处声明（``attention_read_arguments``），本方法只补游标、
+        页大小与"不等新事件"：调用方拿到的是**增量**，不是每次重读最新一页。
+
+        Returns:
+            读取包（含 ``stream_id`` / ``cursor`` / ``events`` 等键）；未声明读取
+            工具、工具缺失或读取失败返回 ``None``——调用方据此按"这一轮没读到"
+            处理，绝不能读成"没有事件"（等待期与失败期必须区分开）。
+        """
+        if not self.attention_read_tool:
             return None
+        spec = next((s for s in self._specs if s.full_name == self.attention_read_tool), None)
+        if spec is None:
+            return None
+        arguments = dict(self.attention_read_arguments or {})
+        arguments["after_cursor"] = int(after_cursor)
+        arguments["limit"] = int(limit)
+        arguments["wait_ms"] = 0
+        if stream_id:
+            arguments["stream_id"] = stream_id
+        try:
+            result = await self._client.call_tool(spec.name, arguments)
+        except Exception as exc:  # noqa: BLE001 - 读取异常按"没读到"上抛给调用方记日志
+            raise RuntimeError(f"MCP 注意流读取失败（{spec.name}）: {type(exc).__name__}: {exc}") from exc
+        from src.modules.mcp.mapper import to_result
+
+        exec_result = to_result(result, tool_name=self.attention_read_tool)
+        if not exec_result.success:
+            logger.warning(f"注意流读取返回业务错误（{spec.name}）: {exec_result.error_message}")
+            return None
+        structured = exec_result.structured_content
+        return structured if isinstance(structured, dict) else None
+
+    def subscribe_task_notifications(self, callback) -> Optional[Any]:
+        """通知适配器：订阅 ``attention_uri`` 资源（举旗级；返回退订句柄）。
+
+        多订阅方共用一条资源订阅：每个订阅方拿到自己的退订句柄，最后一个退订时
+        才真正断开。通知本身不带内容（举旗级），拿事实的一方各自去读。
+        """
+        if not self.attention_uri:
+            return None
+        self._notification_callbacks.append(callback)
+        self._ensure_notification_subscription()
+
+        def _unsubscribe() -> None:
+            try:
+                self._notification_callbacks.remove(callback)
+            except ValueError:
+                return
+            if self._notification_callbacks:
+                return
+            self._drop_notification_subscription()
+
+        return _unsubscribe
+
+    def _ensure_notification_subscription(self) -> None:
+        """首次订阅方到达时建立资源订阅；已有订阅或无法取到事件循环则跳过。"""
+        if self._notification_unsubscribe is not None:
+            return
 
         def _on_notify(uri: str) -> None:
-            callback("")  # 资源通知不知道具体任务号——空串举旗，核实交给跟踪循环
+            # 资源通知不知道具体任务号——空串举旗，事实由各自读取获得。
+            for callback in list(self._notification_callbacks):
+                try:
+                    callback("")
+                except Exception as exc:  # noqa: BLE001 - 单个订阅方异常不影响其它订阅方
+                    logger.warning(f"attention 通知回调异常（忽略）: {type(exc).__name__}: {exc}")
 
         pending: dict = {}
 
         async def _subscribe() -> None:
-            pending["unsub"] = await self._client.subscribe_resource(self._attention_uri, _on_notify)  # type: ignore[arg-type]
+            pending["unsub"] = await self._client.subscribe_resource(self.attention_uri, _on_notify)  # type: ignore[arg-type]
 
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            return None
+            self._notification_callbacks.pop()
+            return
         loop.create_task(_subscribe())
 
         def _unsubscribe() -> None:
@@ -194,7 +280,15 @@ class McpToolProvider(BaseToolProvider):
             except Exception as exc:  # noqa: BLE001 - 退订失败不阻断
                 logger.warning(f"attention 资源退订异常（忽略）: {exc}")
 
-        return _unsubscribe
+        self._notification_unsubscribe = _unsubscribe
+
+    def _drop_notification_subscription(self) -> None:
+        """最后一个订阅方离开后断开资源订阅。"""
+        unsubscribe = self._notification_unsubscribe
+        self._notification_unsubscribe = None
+        if unsubscribe is None:
+            return
+        unsubscribe()
 
     async def health_check(self) -> bool:
         """探活钩子：MCP server 粒度——同一 server 的全部工具共用一条连接，

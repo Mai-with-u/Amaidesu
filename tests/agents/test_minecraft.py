@@ -1,7 +1,7 @@
 """MinecraftAgent 测试：工具契约 / ReAct 循环 / 事件 / send_prompt / handoff / 装配"""
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -16,6 +16,10 @@ from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    # 注解用前向引用：真实导入留在用到它的辅助函数内，测试模块级不拉起任务基建
+    from src.modules.tools.tasks import TaskTracker
 
 
 def _make_state() -> MinecraftAgentState:
@@ -1287,6 +1291,11 @@ class _FakeMcpProvider:
         self._setup_called = False
         # 强制构造一次工具列表：模拟 server 暴露 2 个 maicraft 工具
         self._tool_count = 2
+        # 注意流适配（身体事件增量读取）：可配页、可注入读取异常、记录每次读取入参
+        self.attention_pages: List[Dict[str, Any]] = []
+        self.attention_reads: List[Dict[str, Any]] = []
+        self.attention_callbacks: List[Any] = []
+        self.attention_read_error: Exception | None = None
 
     @property
     def name(self) -> str:
@@ -1310,6 +1319,22 @@ class _FakeMcpProvider:
 
     async def invoke(self, invocation: ToolInvocation) -> Any:
         return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
+
+    async def read_attention(
+        self, *, stream_id: str | None = None, after_cursor: int = 0, limit: int = 10
+    ) -> Dict[str, Any] | None:
+        self.attention_reads.append({"stream_id": stream_id, "after_cursor": after_cursor, "limit": limit})
+        if self.attention_read_error is not None:
+            raise self.attention_read_error
+        return self.attention_pages.pop(0) if self.attention_pages else None
+
+    def subscribe_task_notifications(self, callback) -> Any:
+        self.attention_callbacks.append(callback)
+
+        def _unsubscribe() -> None:
+            self.attention_callbacks.remove(callback)
+
+        return _unsubscribe
 
     async def close(self) -> None:
         await self.client.close()
@@ -1387,6 +1412,161 @@ async def test_on_start_binds_agent_owned_mcp_with_visible_list(monkeypatch: pyt
     assert registry.visible_to_of("minecraft_todo") == ["minecraft"]
     # 装配成功：client 引用留给 handoff 订阅接线
     assert agent._mcp_client is not None
+
+    await agent.stop()
+
+
+# ---------------------------------------------------------------------------
+# 身体事件：注意流增量读取（S2）
+# ---------------------------------------------------------------------------
+
+
+def _attention_page(
+    events: List[Dict[str, Any]],
+    *,
+    cursor: int,
+    stream_id: str = "stream-A",
+    resync: bool = False,
+) -> Dict[str, Any]:
+    """一份注意流读取包（形状与 mod 的 attention 读取一致）。"""
+    return {
+        "stream_id": stream_id,
+        "cursor": cursor,
+        "latest_cursor": cursor,
+        "oldest_cursor": 1,
+        "has_more": False,
+        "history_lost": False,
+        "stream_reset": False,
+        "resync_required": resync,
+        "events": events,
+    }
+
+
+def _damage_event(cursor: int, *, priority: str = "important", phase: str = "started") -> Dict[str, Any]:
+    """一条 agent.damaged 事件（S1 之后的字段形状）。"""
+    return {
+        "cursor": cursor,
+        "type": "agent.damaged",
+        "priority": priority,
+        "timestamp": "2026-09-16T10:16:23.580633Z",
+        "message": "The agent took damage",
+        "data": {
+            "phase": phase,
+            "evidence": "damage_packet",
+            "current_health": 18.0,
+            "cause": {"causing_entity_type_id": "minecraft:zombie", "causing_entity_distance": 1.5},
+            "repeat": {"hits": 2, "damage_total": 4.0},
+            "defense": {"policy": "instinct", "would_engage": True},
+        },
+    }
+
+
+async def _agent_with_fake_mcp(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """启动一个挂了假 MCP provider 的 MinecraftAgent（身体事件测试用）。"""
+    _patch_mcp(monkeypatch, _FakeMcpProvider)
+
+    from src.modules.mcp.config import McpServerConfig
+
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=True, url="http://127.0.0.1:8766/mcp")),
+        llm_manager=MagicMock(),
+        event_bus=MagicMock(),
+        tool_registry=ToolRegistry(),
+    )
+    await agent.start()
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_attention_drain_primes_cursor_then_injects_only_important(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """首读只建游标（一页历史不注入），之后按游标增量读，且只注入 important。"""
+    agent = await _agent_with_fake_mcp(monkeypatch)
+    provider = agent._attention_provider
+    assert provider is not None, "perceive 工具在场时必须接上身体事件读取"
+
+    provider.attention_pages.append(
+        _attention_page([_damage_event(5), _damage_event(6, priority="background")], cursor=6)
+    )
+    await agent._drain_attention()
+    assert agent._attention_stream_id == "stream-A" and agent._attention_cursor == 6
+    assert not agent._message_queue, "首读拿到的是历史页，注入等于把陈年事件灌进上下文"
+
+    provider.attention_pages.append(
+        _attention_page([_damage_event(7), _damage_event(8, priority="background")], cursor=8)
+    )
+    await agent._drain_attention()
+    assert len(agent._message_queue) == 1, "只注入 important 身体事件"
+    _, content = agent._message_queue[0]
+    assert "minecraft:zombie" in content and "当前血量 18.0" in content
+    assert "自卫链本次可接管" in content, "注入内容只陈述事件里真有的字段"
+    assert agent._attention_cursor == 8
+
+    # 增量语义：第二次读取带上了游标与流编号，不是重读最新一页
+    assert provider.attention_reads[1]["after_cursor"] == 6
+    assert provider.attention_reads[1]["stream_id"] == "stream-A"
+    assert provider.attention_reads[1]["limit"] == 10
+
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_attention_drain_resync_resets_cursor_without_injecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """换世界/流重置（resync_required）：只重置游标，不把旧世界的身体事件当成现在的。"""
+    agent = await _agent_with_fake_mcp(monkeypatch)
+    provider = agent._attention_provider
+
+    provider.attention_pages.append(_attention_page([_damage_event(5)], cursor=5))
+    await agent._drain_attention()
+    provider.attention_pages.append(_attention_page([_damage_event(9)], cursor=9, stream_id="stream-B", resync=True))
+    await agent._drain_attention()
+
+    assert not agent._message_queue, "重新同步的那一页不注入"
+    assert agent._attention_stream_id == "stream-B" and agent._attention_cursor == 9
+
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_attention_read_failure_keeps_cursor_and_does_not_claim_safety(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """读取失败按"这一轮没读到"处理：游标不动、不注入、也不抛断任务。"""
+    agent = await _agent_with_fake_mcp(monkeypatch)
+    provider = agent._attention_provider
+
+    provider.attention_pages.append(_attention_page([_damage_event(5)], cursor=5))
+    await agent._drain_attention()
+    provider.attention_read_error = RuntimeError("boom")
+
+    await agent._drain_attention()  # 不抛异常
+
+    assert agent._attention_cursor == 5, "读取失败不能推进游标（否则那一段事件永久丢失）"
+    assert not agent._message_queue
+
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_attention_notification_reads_only_while_working(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """通知是举旗级：空闲时到达不读（保持空闲零消耗），干活时才真去读。"""
+    agent = await _agent_with_fake_mcp(monkeypatch)
+    provider = agent._attention_provider
+
+    agent._on_attention_notification()
+    await asyncio.sleep(0)
+    assert provider.attention_reads == [], "空闲时通知不产生任何 MCP 读取"
+
+    provider.attention_pages.append(_attention_page([_damage_event(5)], cursor=5))
+    agent._batch_active = True
+    agent._on_attention_notification()
+    await asyncio.sleep(0.05)
+    assert len(provider.attention_reads) == 1, "有进行中工作时通知才触发增量读取"
 
     await agent.stop()
 
@@ -1649,3 +1829,98 @@ async def test_own_tool_invoke_emits_tool_result_event() -> None:
             await agent.stop()
     finally:
         await bus.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# S3：上报契约（任务上下文 + 发生时刻 + 是否已结束）
+# ---------------------------------------------------------------------------
+
+
+class _CapturingBus:
+    """捕获 GamePayload 的 bus 替身（上报契约测试用）。"""
+
+    def __init__(self) -> None:
+        self.payloads: List[GamePayload] = []
+
+    async def emit(self, event_name: str, payload: Any, **kwargs: Any) -> None:
+        if isinstance(payload, GamePayload):
+            self.payloads.append(payload)
+
+
+@pytest.mark.asyncio
+async def test_report_carries_batch_body_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """上报要带本批任务期间的身体事件上下文，主播才说得出"执行任务时遭遇了攻击"。"""
+    agent = await _agent_with_fake_mcp(monkeypatch)
+    bus = _CapturingBus()
+    agent._event_bus = bus
+    provider = agent._attention_provider
+
+    # 建游标的首读发生在任务之前（生产里只在首次接入时发生）→ 不属于本批上下文
+    provider.attention_pages.append(_attention_page([_damage_event(5)], cursor=5))
+    await agent._drain_attention()
+
+    agent._batch_active = True
+    # 一次遭遇：片段开始（mod 侧只在首次命中发 started）→ 收尾（finished）
+    provider.attention_pages.append(_attention_page([_damage_event(6, phase="started")], cursor=6))
+    await agent._drain_attention()
+
+    started = [p for p in bus.payloads if p.event_type == "attention_required"]
+    assert len(started) == 1, "片段开始通报一次"
+    assert "遭遇身体事件" in started[0].message
+    assert started[0].already_resolved is False
+    assert started[0].occurred_at_ms > 0, "带上游发生时刻，而不是本系统时间"
+    assert started[0].body_events and started[0].body_events[0]["event_type"] == "agent.damaged"
+
+    provider.attention_pages.append(_attention_page([_damage_event(7, phase="finished")], cursor=7))
+    await agent._drain_attention()
+    resolved = [p for p in bus.payloads if p.event_type == "attention_required"][-1]
+    assert resolved.already_resolved is True, "结束通报要标出已结束，主播措辞才能自然滞后"
+
+    # 任务完成时的交付总结同样带上下文，并能判出"已结束"
+    await agent._emit_game_event("report", "任务完成", report_kind="delivery")
+    report = [p for p in bus.payloads if p.event_type == "report"][-1]
+    assert report.already_resolved is True
+    assert len(report.body_events) == 2, "本批的开始与收尾都要带上"
+    assert report.occurred_at_ms == report.body_events[0]["occurred_at_ms"]
+
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_unfinished_body_episode_is_not_reported_as_resolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """只见到片段开始、没见到收尾时，不得把"可能还在挨打"说成已结束。"""
+    agent = await _agent_with_fake_mcp(monkeypatch)
+    bus = _CapturingBus()
+    agent._event_bus = bus
+    provider = agent._attention_provider
+
+    agent._batch_active = True
+    provider.attention_pages.append(_attention_page([_damage_event(6, phase="started")], cursor=6))
+    await agent._drain_attention()
+    await agent._emit_game_event("report", "任务完成", report_kind="delivery")
+
+    report = [p for p in bus.payloads if p.event_type == "report"][-1]
+    assert report.already_resolved is False, "未收尾就报已结束，主播会说错话"
+
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_idle_body_events_do_not_make_the_agent_talk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """空闲时的身体事件归采集器那条通道，游戏 Agent 不越位通报。"""
+    agent = await _agent_with_fake_mcp(monkeypatch)
+    bus = _CapturingBus()
+    agent._event_bus = bus
+    provider = agent._attention_provider
+
+    provider.attention_pages.append(_attention_page([_damage_event(5)], cursor=5))
+    await agent._drain_attention()
+    provider.attention_pages.append(_attention_page([_damage_event(6, phase="started")], cursor=6))
+    await agent._drain_attention()
+
+    assert bus.payloads == [], "空闲（无任务批）时不得由游戏 Agent 通报身体事件"
+    assert agent._batch_body_events, "但事实仍要留存，供下一次任务的上下文使用"
+
+    await agent.stop()

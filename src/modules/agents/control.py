@@ -33,45 +33,32 @@ logger = get_logger("AgentControl")
 
 # -------------------- 工具规格 --------------------
 
+#: 委派工具的固定说明（可委派对象随名册动态追加，见 AgentControlProvider.list_tools）
+_DELEGATE_DESCRIPTION = (
+    "把一项工作委派给另一个 Agent：给目标与自然语言指令（不给步骤），"
+    "立刻返回受理回执（accepted + task_id）。任务状态变化会以事件通知你；"
+    "随时可用 framework_task_status 按 task_id 查询进度与快照。"
+    "目标忙时会排队，无须等待。"
+)
 
-_AGENT_CONTROL_SPECS: List[ToolSpec] = [
-    ToolSpec(
-        name="delegate",
-        description=(
-            "把一项工作委派给另一个 Agent：给目标与自然语言指令（不给步骤），"
-            "立刻返回受理回执（accepted + task_id）。任务状态变化会以事件通知你；"
-            "随时可用 framework_task_status 按 task_id 查询进度与快照。"
-            "目标忙时会排队，无须等待。"
-        ),
-        parameters_schema={
-            "type": "object",
-            "properties": {
-                "agent": {"type": "string", "description": "目标 Agent 注册名"},
-                "instruction": {"type": "string", "description": "工作指令（自然语言：目标与约束，不规定步骤）"},
-            },
-            "required": ["agent", "instruction"],
-        },
-        kind="sync",
-        provider="framework",
+#: 任务状态工具规格
+_TASK_STATUS_SPEC: ToolSpec = ToolSpec(
+    name="task_status",
+    description=(
+        "按任务号查询异步任务（委派 / 回执型工具受理）的当前状态与快照。"
+        "查询玩家工作文档（todo/notebook/近期上报）用各游戏 Agent 的读取工具，"
+        "两者不重复。"
     ),
-    ToolSpec(
-        name="task_status",
-        description=(
-            "按任务号查询异步任务（委派 / 回执型工具受理）的当前状态与快照。"
-            "查询玩家工作文档（todo/notebook/近期上报）用各游戏 Agent 的读取工具，"
-            "两者不重复。"
-        ),
-        parameters_schema={
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "受理回执返回的任务号"},
-            },
-            "required": ["task_id"],
+    parameters_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "受理回执返回的任务号"},
         },
-        kind="sync",
-        provider="framework",
-    ),
-]
+        "required": ["task_id"],
+    },
+    kind="sync",
+    provider="framework",
+)
 
 
 # -------------------- AgentControl 工具（写形式，可直接 await） --------------------
@@ -155,7 +142,49 @@ class AgentControlProvider(BaseToolProvider):
         return "framework"
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        return list(_AGENT_CONTROL_SPECS)
+        """委派工具 + 任务状态工具。
+
+        **可委派对象取自当前名册**（AgentManager 注册表）：主 Agent 不写死任何
+        游戏名——接的是哪个游戏由配置里的 enabled 名单决定，换游戏只需换 Agent，
+        提示词与框架零改动。名册每个决策窗重新拉取，随启停实时变化。
+        """
+        return [self._delegate_spec(), _TASK_STATUS_SPEC]
+
+    def _delegate_spec(self) -> ToolSpec:
+        """构造委派规格：把名册（注册名 + 描述）写进 agent 参数说明与枚举。"""
+        roster: Dict[str, str] = {}
+        list_agents = getattr(self.manager, "list_agents", None)
+        descriptions = getattr(self.manager, "descriptions", {}) or {}
+        if callable(list_agents):
+            roster = {name: str(descriptions.get(name, "") or "") for name in list_agents()}
+        if roster:
+            listed = "；".join(f"{name}={desc or '（无描述）'}" for name, desc in roster.items())
+            agent_description = (
+                f"目标 Agent 注册名（当前可委派：{listed}；留空 = 当前唯一启用的游戏 Agent，"
+                "有多个候选时必须点名；不能派给自己）"
+            )
+        else:
+            agent_description = "目标 Agent 注册名（当前名册为空，省略即派给当前唯一启用的游戏 Agent）"
+        schema: Dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string", "description": agent_description},
+                "instruction": {
+                    "type": "string",
+                    "description": "工作指令（自然语言：目标与约束，不规定步骤与次序）",
+                },
+            },
+            "required": ["instruction"],
+        }
+        if roster:
+            schema["properties"]["agent"]["enum"] = sorted(roster)
+        return ToolSpec(
+            name="delegate",
+            description=_DELEGATE_DESCRIPTION,
+            parameters_schema=schema,
+            kind="sync",
+            provider="framework",
+        )
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         args = invocation.arguments or {}
@@ -187,19 +216,34 @@ class AgentControlProvider(BaseToolProvider):
         return f"deleg_{now_ms()}_{self._task_seq}"
 
     async def _invoke_delegate(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
-        """受理委派：名册校验 → 禁自派 → 目标接收入口 → 登记记录表 → 回执。
+        """受理委派：目标解析 → 名册校验 → 禁自派 → 目标接收入口 → 登记记录表 → 回执。
+
+        目标留空时按**当前唯一启用的游戏 Agent** 解析：接的是哪个游戏由配置的
+        enabled 名单决定，这里不写死任何游戏名；候选不唯一就拒绝并要求点名，
+        避免把活派错游戏。
 
         受理失败（本方法内返回的 failure）与任务失败（执行中写入记录表的
         failed 终态）严格分开——回执只承诺"目标已接收"，不承诺"能干成"。
         """
         target_name = str(args.get("agent", "") or "")
         instruction = str(args.get("instruction", "") or "")
-        if not target_name or not instruction:
+        if not instruction:
             return ToolExecutionResult(
                 tool_name="framework_delegate",
                 success=False,
-                error_message="delegate 需要 agent（目标注册名）与 instruction（自然语言指令）",
+                error_message="delegate 需要 instruction（自然语言指令）",
             )
+        # 留空目标 = 当前唯一启用的游戏 Agent（默认值的兜底在框架层，不在调用方）
+        if not target_name:
+            candidates = [name for name in self.manager.list_agents() if name != caller]
+            if len(candidates) != 1:
+                detail = "当前没有其他已启用的 Agent" if not candidates else f"当前启用多个（{'、'.join(candidates)}）"
+                return ToolExecutionResult(
+                    tool_name="framework_delegate",
+                    success=False,
+                    error_message=f"受理失败：未指定目标，且{detail}——请点名目标注册名",
+                )
+            target_name = candidates[0]
         if self.task_ledger is None:
             return ToolExecutionResult(
                 tool_name="framework_delegate",

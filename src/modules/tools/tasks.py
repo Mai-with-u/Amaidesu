@@ -517,34 +517,23 @@ class TaskTracker:
 # ---------------------------------------------------------------------------
 
 
-def resolve_tasks_config(
-    tools_cfg: Optional[Dict[str, Any]],
-    agents_cfg: Optional[Dict[str, Any]],
-) -> tuple[int, int]:
+def resolve_tasks_config(tools_cfg: Optional[Dict[str, Any]]) -> tuple[int, int]:
     """解析任务基建节拍配置：``(poll_interval_ms, wait_timeout_ms)``。
 
-    读取顺序（新键优先，旧键过渡兼容，最后默认）：
-    1. ``[tools.tasks].poll_interval_ms / wait_timeout_ms``（正式段，配置线落）
-    2. ``[agents.minecraft].execute_poll_interval_ms / execute_wait_timeout_ms``
-       （旧键上收来源；minecraft 侧沿用多年）
-    3. 默认 ``(2000, 1800000)``
+    读取顺序：``[tools.tasks]`` 正式段 → 默认 ``(2000, 1800000)``。
+    节拍只认本模块自己的段：游戏 Agent 的执行节奏是它自己的事，
+    框架不读任何游戏 Agent 的配置段（换游戏与框架无关）。
     """
     tools = tools_cfg if isinstance(tools_cfg, dict) else {}
-    agents = agents_cfg if isinstance(agents_cfg, dict) else {}
 
     tasks = tools.get("tasks")
     tasks = tasks if isinstance(tasks, dict) else {}
-    minecraft = agents.get("minecraft")
-    minecraft = minecraft if isinstance(minecraft, dict) else {}
 
-    def _pick(new_val: Any, old_val: Any, default: int) -> int:
-        for v in (new_val, old_val):
-            if isinstance(v, int) and v > 0:
-                return v
-        return default
+    def _pick(value: Any, default: int) -> int:
+        return value if isinstance(value, int) and value > 0 else default
 
-    poll = _pick(tasks.get("poll_interval_ms"), minecraft.get("execute_poll_interval_ms"), 2000)
-    wait_timeout = _pick(tasks.get("wait_timeout_ms"), minecraft.get("execute_wait_timeout_ms"), 1_800_000)
+    poll = _pick(tasks.get("poll_interval_ms"), 2000)
+    wait_timeout = _pick(tasks.get("wait_timeout_ms"), 1_800_000)
     return poll, wait_timeout
 
 

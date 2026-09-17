@@ -51,7 +51,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from pydantic import Field
 
@@ -230,7 +230,13 @@ class StreamerCommandConfig(BaseConfig):
         default_factory=dict,
         description="命令名 → 委派语义目标（给游戏 Agent 的自然语言指令，作为 framework_delegate 的 instruction）",
     )
-    target_agent: str = Field(default="minecraft", description="委派目标 Agent 注册名")
+    target_agent: Optional[str] = Field(
+        default=None,
+        description=(
+            "委派目标 Agent 注册名；留空 = 由框架委派原语解析为当前唯一启用的游戏 Agent"
+            "（换游戏时只需改 agents.enabled，不必回来改这里）"
+        ),
+    )
     rate_window_ms: int = Field(default=60_000, ge=1, description="限频时间窗（毫秒）")
     rate_max: int = Field(default=3, ge=1, description="同一用户在时间窗内允许的命令条数上限")
 

@@ -79,8 +79,10 @@ _AGENT_CATEGORIES: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
     ("framework", (("framework", "框架内置（framework_*，如 AgentControl）"),)),
 )
 
-# 工具分类 "game" 在 Agent 扁平化后对应任意游戏 Agent 启用
-_GAME_AGENT_NAMES: Tuple[str, ...] = ("minecraft", "text_adv")
+# 工具分类 "game" 的判据：名册里除框架自己的主播 Agent 之外，剩下的都是游戏 Agent
+# （主播 Agent 唯一且自我驱动，游戏 Agent 命令驱动）。这里不列举任何具体游戏名——
+# 接哪款游戏由 agents.enabled 决定，后端分类不随游戏增减而改。
+_NON_GAME_AGENT_NAMES: Tuple[str, ...] = ("streamer",)
 
 # 分类级开关的成员（键与分类名相同，配置段为 [tools.<分类>]）。
 _CATEGORY_LEVEL_KEYS = {"vision", "memory"}
@@ -391,7 +393,7 @@ async def list_tool_categories(
     agents_enabled = agents_enabled if isinstance(agents_enabled, list) else []
     for category, members in _AGENT_CATEGORIES:
         if category == "game":
-            enabled = any(name in agents_enabled for name in _GAME_AGENT_NAMES)
+            enabled = any(name not in _NON_GAME_AGENT_NAMES for name in agents_enabled)
         else:
             enabled = category in agents_enabled
         categories.append(

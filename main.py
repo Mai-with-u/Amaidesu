@@ -407,10 +407,12 @@ async def create_app_components(
     )
 
     # --- CollectorManager ---
-    # 采集器配置位于 collectors.toml 的 [collectors] 段（按 enabled 名单装配）
+    # 采集器配置位于 collectors.toml：根键 = enabled 名单 + 各采集器同名子段
+    # （该文件没有 [collectors] 包裹表，拍平视图里取不到"这一个文件的这一段"，
+    #  故按文件名取原始命名空间——用 get_section("collectors") 会拿到空 dict，
+    #  采集器一个都不会装配）
     collector_manager: Optional["CollectorManager"] = None
-    collectors_root = config.get("collectors", {}) if isinstance(config, dict) else {}
-    collectors_config = collectors_root if isinstance(collectors_root, dict) else {}
+    collectors_config = config_service.get_file_section("collectors")
     if collectors_config:
         logger.info("初始化 CollectorManager（src/modules/collectors/）...")
         collector_manager = CollectorManager()
@@ -507,13 +509,12 @@ async def create_app_components(
             buffer_max=int(_thinking_sub.get("buffer_max", 400) or 400),
         )
 
-        # --- 通用任务基建（[tools.tasks] 兜底读取：新键 → 旧键 → 默认；ADR-013）---
+        # --- 通用任务基建（[tools.tasks] 段读取，缺省用默认节拍；ADR-013）---
         # 记录表挂事件总线（task.changed 广播）；跟踪循环与 Agent 生命周期同步启停。
         _tools_cfg_tmp = (config.get("tools") or {}) if isinstance(config, dict) else {}
         task_ledger = TaskLedger(event_bus=event_bus)
         tasks_poll_ms, tasks_wait_ms = resolve_tasks_config(
             _tools_cfg_tmp if isinstance(_tools_cfg_tmp, dict) else None,
-            agents_config,
         )
         task_tracker = TaskTracker(
             tool_registry,

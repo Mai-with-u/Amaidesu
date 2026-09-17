@@ -146,12 +146,19 @@ class TestPipelineMarksSelfWrite:
         assert consume_self_write(temp_config_dir / "infra.toml") is False
 
 
-def _replace_enabled(config_dir, file_name: str, old: str, new: str) -> None:
-    """原地替换既有 enabled 行（文件尾追加会落入最后一张子表，位置不对）。"""
+def _replace_enabled(config_dir, file_name: str, new: str) -> None:
+    """原地替换 enabled 整行（文件尾追加会落入最后一张子表，位置不对）。
+
+    默认名单会随组件增减变化，所以不按旧值匹配、只按"整行"定位：
+    文件里必须恰好有一行 ``enabled = [...]``。
+    """
     path = config_dir / file_name
     content = path.read_text(encoding="utf-8-sig")
-    assert content.count(old) == 1, f"锚点行不唯一: {old!r}"
-    path.write_text(content.replace(old, new), encoding="utf-8-sig")
+    lines = content.splitlines(keepends=True)
+    targets = [i for i, line in enumerate(lines) if line.strip().startswith("enabled = [")]
+    assert len(targets) == 1, f"enabled 行不唯一: {targets!r}"
+    lines[targets[0]] = f"{new}\n"
+    path.write_text("".join(lines), encoding="utf-8-sig")
 
 
 class _LoguruCapture:
@@ -188,7 +195,6 @@ class TestValidationHardFail:
         _replace_enabled(
             temp_config_dir,
             "agents.toml",
-            'enabled = ["streamer"]',
             'enabled = "not-a-list"',
         )
 
@@ -212,8 +218,7 @@ class TestValidationHardFail:
         _replace_enabled(
             temp_config_dir,
             "collectors.toml",
-            'enabled = ["console_input"]',
-            'enabled = ["console_input", "no_such_collector"]',
+            'enabled = ["console_input", "maicraft_attention", "no_such_collector"]',
         )
 
         with _LoguruCapture() as cap:
