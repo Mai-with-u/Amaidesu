@@ -18,6 +18,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 import pytest
+from pydantic import ValidationError
 
 from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
 from src.agents.minecraft.attention_matrix import attacker_label, classify, summarize
@@ -234,9 +235,12 @@ def test_body_event_names_are_the_closed_kind_set() -> None:
         assert event_name.rsplit(".", 1)[-1] == kind, "判别字段必须等于事件名末段"
 
 
-def test_body_payload_requires_kind() -> None:
-    payload = BodyEventPayload(kind="attacked", summary="正在被僵尸攻击")
+def test_body_payload_requires_game_and_kind() -> None:
+    """游戏标识由发布方给定（框架不假定是哪款游戏），缺 game 直接报错。"""
+    payload = BodyEventPayload(game="minecraft", kind="attacked", summary="正在被僵尸攻击")
     assert payload.game == "minecraft" and payload.timestamp_ms > 0
+    with pytest.raises(ValidationError):
+        BodyEventPayload(kind="attacked", summary="正在被僵尸攻击")
 
 
 # ---------------------------------------------------------------------------

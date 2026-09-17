@@ -159,9 +159,12 @@ class AgentControlProvider(BaseToolProvider):
             roster = {name: str(descriptions.get(name, "") or "") for name in list_agents()}
         if roster:
             listed = "；".join(f"{name}={desc or '（无描述）'}" for name, desc in roster.items())
-            agent_description = f"目标 Agent 注册名（当前可委派：{listed}；不能派给自己）"
+            agent_description = (
+                f"目标 Agent 注册名（当前可委派：{listed}；留空 = 当前唯一启用的游戏 Agent，"
+                "有多个候选时必须点名；不能派给自己）"
+            )
         else:
-            agent_description = "目标 Agent 注册名（当前名册为空）"
+            agent_description = "目标 Agent 注册名（当前名册为空，省略即派给当前唯一启用的游戏 Agent）"
         schema: Dict[str, Any] = {
             "type": "object",
             "properties": {
@@ -171,7 +174,7 @@ class AgentControlProvider(BaseToolProvider):
                     "description": "工作指令（自然语言：目标与约束，不规定步骤与次序）",
                 },
             },
-            "required": ["agent", "instruction"],
+            "required": ["instruction"],
         }
         if roster:
             schema["properties"]["agent"]["enum"] = sorted(roster)
@@ -213,19 +216,34 @@ class AgentControlProvider(BaseToolProvider):
         return f"deleg_{now_ms()}_{self._task_seq}"
 
     async def _invoke_delegate(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
-        """受理委派：名册校验 → 禁自派 → 目标接收入口 → 登记记录表 → 回执。
+        """受理委派：目标解析 → 名册校验 → 禁自派 → 目标接收入口 → 登记记录表 → 回执。
+
+        目标留空时按**当前唯一启用的游戏 Agent** 解析：接的是哪个游戏由配置的
+        enabled 名单决定，这里不写死任何游戏名；候选不唯一就拒绝并要求点名，
+        避免把活派错游戏。
 
         受理失败（本方法内返回的 failure）与任务失败（执行中写入记录表的
         failed 终态）严格分开——回执只承诺"目标已接收"，不承诺"能干成"。
         """
         target_name = str(args.get("agent", "") or "")
         instruction = str(args.get("instruction", "") or "")
-        if not target_name or not instruction:
+        if not instruction:
             return ToolExecutionResult(
                 tool_name="framework_delegate",
                 success=False,
-                error_message="delegate 需要 agent（目标注册名）与 instruction（自然语言指令）",
+                error_message="delegate 需要 instruction（自然语言指令）",
             )
+        # 留空目标 = 当前唯一启用的游戏 Agent（默认值的兜底在框架层，不在调用方）
+        if not target_name:
+            candidates = [name for name in self.manager.list_agents() if name != caller]
+            if len(candidates) != 1:
+                detail = "当前没有其他已启用的 Agent" if not candidates else f"当前启用多个（{'、'.join(candidates)}）"
+                return ToolExecutionResult(
+                    tool_name="framework_delegate",
+                    success=False,
+                    error_message=f"受理失败：未指定目标，且{detail}——请点名目标注册名",
+                )
+            target_name = candidates[0]
         if self.task_ledger is None:
             return ToolExecutionResult(
                 tool_name="framework_delegate",

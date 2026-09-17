@@ -1,7 +1,7 @@
 """观众命令接线测试（最小接线：接入 + 安全闸 + 委派）。
 
 覆盖需求：
-- /come、/sleep → framework_delegate invoke（agent=minecraft，instruction=映射
+- /come、/sleep → framework_delegate invoke（目标留空交给框架解析、instruction=映射
   语义目标，source=streamer），命令消息不进决策缓冲
 - 白名单外命令（/admin）静默丢弃，不触发 invoke
 - 同一用户窗口内连发超阈值被限频拒绝
@@ -100,7 +100,7 @@ async def test_whitelisted_command_delegates(text: str, expected_instruction: st
     registry.invoke.assert_awaited_once()
     invocation = _last_invocation(registry)
     assert invocation.tool_name == "framework_delegate"
-    assert invocation.arguments == {"agent": "minecraft", "instruction": expected_instruction}
+    assert invocation.arguments == {"agent": "", "instruction": expected_instruction}
     assert invocation.source == "streamer"
     # 命令被消费：不进决策缓冲、不进弹幕计数
     assert agent._buffer.size == 0
@@ -150,7 +150,7 @@ async def test_restored_mapping_reenables_command() -> None:
     await agent.handle_message(_make_danmaku("/sleep"))  # type: ignore[arg-type]
 
     registry.invoke.assert_awaited_once()
-    assert _last_invocation(registry).arguments == {"agent": "minecraft", "instruction": "回床睡觉"}
+    assert _last_invocation(registry).arguments == {"agent": "", "instruction": "回床睡觉"}
 
 
 @pytest.mark.asyncio

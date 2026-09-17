@@ -509,13 +509,12 @@ async def create_app_components(
             buffer_max=int(_thinking_sub.get("buffer_max", 400) or 400),
         )
 
-        # --- 通用任务基建（[tools.tasks] 兜底读取：新键 → 旧键 → 默认；ADR-013）---
+        # --- 通用任务基建（[tools.tasks] 段读取，缺省用默认节拍；ADR-013）---
         # 记录表挂事件总线（task.changed 广播）；跟踪循环与 Agent 生命周期同步启停。
         _tools_cfg_tmp = (config.get("tools") or {}) if isinstance(config, dict) else {}
         task_ledger = TaskLedger(event_bus=event_bus)
         tasks_poll_ms, tasks_wait_ms = resolve_tasks_config(
             _tools_cfg_tmp if isinstance(_tools_cfg_tmp, dict) else None,
-            agents_config,
         )
         task_tracker = TaskTracker(
             tool_registry,

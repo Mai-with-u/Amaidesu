@@ -64,7 +64,9 @@ class FakeReceiptProvider(BaseToolProvider):
         return _unsubscribe
 
 
-def _setup(states: List[Dict[str, Any]] | None = None) -> tuple[ToolRegistry, TaskLedger, TaskTracker, EventBus, FakeReceiptProvider]:
+def _setup(
+    states: List[Dict[str, Any]] | None = None,
+) -> tuple[ToolRegistry, TaskLedger, TaskTracker, EventBus, FakeReceiptProvider]:
     bus = EventBus(enable_stats=False)
     registry = ToolRegistry(event_bus=bus)
     provider = FakeReceiptProvider(states)
@@ -210,28 +212,23 @@ async def test_wakeup_flag_triggers_step_without_poll() -> None:
 
 
 # ---------------------------------------------------------------------------
-# [tools.tasks] 三档兜底读取
+# [tools.tasks] 节拍读取（本段缺省用默认）
 # ---------------------------------------------------------------------------
 
 
 def test_resolve_tasks_config_new_key_wins() -> None:
-    poll, wait = resolve_tasks_config(
-        {"tasks": {"poll_interval_ms": 500, "wait_timeout_ms": 60000}},
-        {"minecraft": {"execute_poll_interval_ms": 2000, "execute_wait_timeout_ms": 1800000}},
-    )
+    poll, wait = resolve_tasks_config({"tasks": {"poll_interval_ms": 500, "wait_timeout_ms": 60000}})
     assert (poll, wait) == (500, 60000)
 
 
-def test_resolve_tasks_config_falls_back_to_legacy_key() -> None:
-    poll, wait = resolve_tasks_config(
-        {"memory": {"enabled": True}},
-        {"minecraft": {"execute_poll_interval_ms": 1500, "execute_wait_timeout_ms": 900000}},
-    )
-    assert (poll, wait) == (1500, 900000)
+def test_resolve_tasks_config_partial_section_fills_defaults() -> None:
+    """段内只给一项时，另一项回落默认（不读任何游戏 Agent 的配置段）。"""
+    poll, wait = resolve_tasks_config({"tasks": {"poll_interval_ms": 1500}})
+    assert (poll, wait) == (1500, 1_800_000)
 
 
 def test_resolve_tasks_config_defaults_when_missing() -> None:
-    poll, wait = resolve_tasks_config(None, None)
+    poll, wait = resolve_tasks_config(None)
     assert (poll, wait) == (2000, 1_800_000)
 
 

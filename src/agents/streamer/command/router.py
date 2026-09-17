@@ -55,7 +55,7 @@ class CommandRouter:
         self._hits: Dict[str, List[int]] = {}
         self._logger.info(
             f"观众命令接线已激活: 前缀='{config.prefix}' "
-            f"白名单={self._registry.get_supported_commands()} 目标='{config.target_agent}'"
+            f"白名单={self._registry.get_supported_commands()} 目标='{config.target_agent or '自动'}'"
         )
 
     async def try_dispatch(self, msg: RoomMessagePayload) -> bool:
@@ -86,21 +86,24 @@ class CommandRouter:
         hits.append(now)
         self._hits[user_id] = hits
 
-        # 危险同意位零携带：instruction 就是映射的语义目标原文
+        # 危险同意位零携带：instruction 就是映射的语义目标原文。
+        # 目标留空交给框架委派原语解析（当前唯一启用的游戏 Agent），
+        # 主播侧不写死任何游戏名——换游戏只改 agents.enabled。
         if self._tool_registry is None:
             self._logger.warning(f"命令 /{command.name} 无法委派：工具注册表未注入")
             return True
+        target = self._target_agent or ""
         invocation = ToolInvocation(
             tool_name="framework_delegate",
-            arguments={"agent": self._target_agent, "instruction": action},
+            arguments={"agent": target, "instruction": action},
             source="streamer",
         )
         result = await self._tool_registry.invoke(invocation)
         if not result.success:
             # 目标不在名册 / 拒收等受理失败：拒绝执行，不崩、不进决策链
             self._logger.warning(
-                f"命令 /{command.name} 委派受理失败（目标 '{self._target_agent}'）: {result.error_message}"
+                f"命令 /{command.name} 委派受理失败（目标 '{target or '自动'}'）: {result.error_message}"
             )
             return True
-        self._logger.info(f"观众命令已委派: /{command.name} -> '{self._target_agent}'（用户 {user_id}）")
+        self._logger.info(f"观众命令已委派: /{command.name} -> '{target or '自动'}'（用户 {user_id}）")
         return True

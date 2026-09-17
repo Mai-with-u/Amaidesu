@@ -5,6 +5,7 @@
   task_status 查询 → 终态移除
 - 受理失败与任务失败分开：目标不存在 / 默认拒收（未实现入口）/ 自派 →
   受理失败（不登记）；执行失败 → 记录表 failed 终态
+- 目标留空 → 解析为当前唯一启用的游戏 Agent；候选不唯一 → 拒绝并要求点名
 - 未知任务号查询 → 失败结果
 - minecraft 接收委派（入队带任务号 + 唤醒 + 批次状态写回）
 """
@@ -66,7 +67,9 @@ class _StubAgent(BaseAgent):
             )
 
 
-def _setup(refuse_target: bool = False, fail_target: bool = False) -> tuple[ToolRegistry, TaskLedger, EventBus, _StubAgent, _StubAgent]:
+def _setup(
+    refuse_target: bool = False, fail_target: bool = False
+) -> tuple[ToolRegistry, TaskLedger, EventBus, _StubAgent, _StubAgent]:
     bus = EventBus(enable_stats=False)
     registry = ToolRegistry(event_bus=bus)
     ledger = TaskLedger(event_bus=bus)
@@ -186,6 +189,35 @@ async def test_default_refusal_when_no_receive_entry() -> None:
     res = await registry.invoke(_inv("framework_delegate", {"agent": "agent_c", "instruction": "试试"}))
     assert res.success is False and "拒收" in res.error_message
     assert len(ledger) == 0, "默认拒收不登记"
+
+
+async def test_empty_target_resolves_sole_game_agent() -> None:
+    """目标留空 → 解析为当前唯一启用的游戏 Agent（框架不写死任何游戏名）。"""
+    registry, ledger, _bus, _a, b = _setup()
+
+    res = await registry.invoke(_inv("framework_delegate", {"agent": "", "instruction": "去挖矿"}))
+
+    assert res.success is True
+    assert res.structured_content["executor"] == "agent_b"
+    assert b.received and b.received[0][1] == "去挖矿"
+    assert len(ledger) == 1
+
+
+async def test_empty_target_rejects_ambiguous_roster() -> None:
+    """目标留空但候选不唯一 → 拒绝并要求点名，不猜目标（避免派错游戏）。"""
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    ledger = TaskLedger(event_bus=bus)
+    manager = AgentManager()
+    for name in ("agent_a", "agent_b", "agent_c"):
+        manager.register(_StubAgent(name))
+    registry.register_provider(build_agent_control_provider(manager, ledger))
+
+    res = await registry.invoke(_inv("framework_delegate", {"agent": "", "instruction": "去挖矿"}))
+
+    assert res.success is False
+    assert "点名" in res.error_message and "agent_b" in res.error_message
+    assert len(ledger) == 0
 
 
 async def test_task_failure_distinct_from_acceptance_failure() -> None:

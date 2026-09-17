@@ -90,15 +90,31 @@ async def test_rate_limit_drops_excess_commands() -> None:
 
 @pytest.mark.asyncio
 async def test_whitelisted_command_delegates_with_contract_arguments() -> None:
-    """命中白名单：framework_delegate 收到 agent/instruction 契约参数与 source=streamer。"""
+    """命中白名单：framework_delegate 收到 agent/instruction 契约参数与 source=streamer。
+
+    目标未配置时留空——由框架委派原语解析为当前唯一启用的游戏 Agent，
+    主播侧不写死任何游戏名。
+    """
     registry = _ok_registry()
     router = _make_router(registry)
     assert await router.try_dispatch(_make_danmaku("/sleep")) is True
     registry.invoke.assert_awaited_once()
     invocation = registry.invoke.call_args.args[0]
     assert invocation.tool_name == "framework_delegate"
-    assert invocation.arguments == {"agent": "minecraft", "instruction": "回床睡觉"}
+    assert invocation.arguments == {"agent": "", "instruction": "回床睡觉"}
     assert invocation.source == "streamer"
+
+
+@pytest.mark.asyncio
+async def test_configured_target_passed_through() -> None:
+    """显式配置的目标注册名原样透传（多游戏并存时点名用）。"""
+    registry = _ok_registry()
+    router = _make_router(registry, target_agent="text_adv")
+    assert await router.try_dispatch(_make_danmaku("/sleep")) is True
+    assert registry.invoke.call_args.args[0].arguments == {
+        "agent": "text_adv",
+        "instruction": "回床睡觉",
+    }
 
 
 @pytest.mark.asyncio

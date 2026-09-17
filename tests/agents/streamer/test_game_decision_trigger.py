@@ -154,6 +154,7 @@ async def test_body_event_feeds_the_body_narrative_line() -> None:
     await bus.emit(
         CoreEvents.GAME_BODY_ATTACKED,
         BodyEventPayload(
+            game="minecraft",
             kind="attacked",
             summary="正在被僵尸攻击（已命中 2 次）",
             source_event_type="agent.damaged",
@@ -165,6 +166,7 @@ async def test_body_event_feeds_the_body_narrative_line() -> None:
     await bus.emit(
         CoreEvents.GAME_BODY_ATTACK_ENDED,
         BodyEventPayload(
+            game="minecraft",
             kind="attack_ended",
             summary="摆脱了僵尸的攻击（共命中 2 次）",
             source_event_type="agent.damaged",
@@ -195,7 +197,7 @@ async def test_body_narrative_buffer_is_bounded() -> None:
     for index in range(8):
         await bus.emit(
             CoreEvents.GAME_BODY_REFLEX_STARTED,
-            BodyEventPayload(kind="reflex_started", summary=f"紧急反应接管（{index}）"),
+            BodyEventPayload(game="minecraft", kind="reflex_started", summary=f"紧急反应接管（{index}）"),
             source="maicraft_attention",
         )
     await _wait_until(lambda: len(agent._body_narrative_blocks) == _MAX_BODY_NARRATIVE)

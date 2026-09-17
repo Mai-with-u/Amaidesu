@@ -52,7 +52,7 @@ class BodyEventPayload(BasePayload):
     Attributes:
         live_session_id: 场次主键（int）。发布方不填（保持默认 0），
           由场次盖章拦截器注入当前场次的存储主键；0 表示未归属
-        game: 游戏标识（当前只有 "minecraft"）
+        game: 游戏标识（发布方必填，如 "minecraft"）
         kind: 叙事种类（判别字段；与事件名末段一致）
         summary: 一句可直接讲述的中文事实（只陈述有证据的部分）
         source_event_type: 上游注意流事件类型（如 ``agent.damaged``），留痕用
@@ -73,7 +73,7 @@ class BodyEventPayload(BasePayload):
         default=0,
         description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入",
     )
-    game: str = Field(default="minecraft", description="游戏标识")
+    game: str = Field(..., description="游戏标识（发布方必填：框架不假定是哪款游戏）")
     kind: BodyKind = Field(..., description="叙事种类（与事件名末段一致）")
     summary: str = Field(default="", description="一句可直接讲述的中文事实")
     source_event_type: str = Field(default="", description="上游注意流事件类型（留痕）")
