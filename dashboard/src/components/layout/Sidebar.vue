@@ -72,13 +72,13 @@
     </nav>
 
     <div class="sidebar-footer">
-      <span class="version">v0.1.0</span>
+      <span v-if="version" class="version">v{{ version }}</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   Monitor,
@@ -96,9 +96,17 @@ import {
   List,
   MagicStick,
 } from '@element-plus/icons-vue';
+import { useSystemStore } from '@/stores';
 
 const route = useRoute();
 const currentRoute = computed(() => route.path);
+
+const systemStore = useSystemStore();
+const version = computed(() => systemStore.status?.version ?? '');
+onMounted(() => {
+  // 轮询由各视图按需启动，侧边栏在无状态时主动取一次保证版本号可见
+  if (!systemStore.status) void systemStore.fetchStatus();
+});
 </script>
 
 <style scoped>
