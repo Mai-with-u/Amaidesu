@@ -1,7 +1,7 @@
 """采集器配置根模型（config/collectors.toml）
 
 框架按 ``[collectors].enabled`` 名单装配采集器；各采集器的
-配置段（``[collectors.<name>]``）由其包内 ConfigSchema 定义，
+配置段（``[<name>]``，与 ``enabled`` 同级）由其包内 ConfigSchema 定义，
 经组件注册表动态装配进本根模型的动态段。
 """
 
@@ -18,9 +18,9 @@ class CollectorsRootConfig(BaseConfig):
     - ``meta``：文件元数据（版本号 + 描述，独立于配置本体）
     - ``enabled``：启用的采集器列表（名单驱动装配）
 
-    各采集器的具体配置段（``[collectors.console_input]`` 等）由
+    各采集器的具体配置段（``[console_input]`` 等，与 ``enabled`` 同级）由
     ``extra="allow"`` 透传——因为 5 个采集器的 ConfigSchema 类型各异，
-    无法在静态类定义里聚合。每个 ``[collectors.<name>]`` 子段的具体形状
+    无法在静态类定义里聚合。每个 ``[<name>]`` 子段的具体形状
     由对应采集器包内 ConfigSchema 验证，multi_file_loader 在加载时按
     注册表分发校验与漂移检测。
     """

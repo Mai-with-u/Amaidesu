@@ -217,17 +217,23 @@ class TestEnabledUnknownName:
     """``enabled`` 名单出现未注册采集器名（如退役 ``screen``）→
     加载不抛 + warn；与 Task 1 的 `instantiate_collector` skip+warn 行为对齐。"""
 
+    @staticmethod
+    def _append_enabled(config_dir, extra: str) -> None:
+        """往 enabled 名单追加一个名字（按整行定位，不写死默认名单内容）。"""
+        path = config_dir / "collectors.toml"
+        lines = path.read_text(encoding="utf-8-sig").splitlines(keepends=True)
+        targets = [i for i, line in enumerate(lines) if line.strip().startswith("enabled = [")]
+        assert len(targets) == 1, f"enabled 行不唯一: {targets!r}"
+        current = lines[targets[0]].strip()
+        names = current[len("enabled = [") : -1]
+        merged = f"{names}, {extra}" if names.strip() else extra
+        lines[targets[0]] = f"enabled = [{merged}]\n"
+        path.write_text("".join(lines), encoding="utf-8-sig")
+
     def test_unknown_enabled_screen_loaded_without_raise(self, temp_config_dir):
         generate_default_configs(temp_config_dir)
-        collectors_path = temp_config_dir / "collectors.toml"
-        original = collectors_path.read_text(encoding="utf-8-sig")
         # enabled 列表追加已退役的 "screen"
-        patched = original.replace(
-            'enabled = ["console_input"]',
-            'enabled = ["console_input", "screen"]',
-        )
-        assert patched != original
-        collectors_path.write_text(patched, encoding="utf-8-sig")
+        self._append_enabled(temp_config_dir, '"screen"')
 
         with _LoguruCapture() as cap:
             cfg, _report = load_config_dir(temp_config_dir)
@@ -238,13 +244,7 @@ class TestEnabledUnknownName:
     def test_unknown_typo_enabled_loaded_without_raise(self, temp_config_dir):
         """未知名不仅限退役名；任意拼写错的 enabled 项同样 warn + 跳过。"""
         generate_default_configs(temp_config_dir)
-        collectors_path = temp_config_dir / "collectors.toml"
-        original = collectors_path.read_text(encoding="utf-8-sig")
-        patched = original.replace(
-            'enabled = ["console_input"]',
-            'enabled = ["console_input", "typo_collector_xyz"]',
-        )
-        collectors_path.write_text(patched, encoding="utf-8-sig")
+        self._append_enabled(temp_config_dir, '"typo_collector_xyz"')
 
         with _LoguruCapture() as cap:
             cfg, _report = load_config_dir(temp_config_dir)

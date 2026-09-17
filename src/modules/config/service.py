@@ -100,6 +100,9 @@ class ConfigService:
         self._main_config: Dict[str, Any] = {}
         self._main_config_copied = False
         self._initialized = False
+        # 按文件的原始视图（拍平前）：多文件模式下由 _try_multi_file_init 填充；
+        # 单文件/未初始化路径保持空 dict，get_file_section 才有确定行为
+        self._file_sections: Dict[str, Any] = {}
         # 热重载状态
         self._reload_callbacks: List[ConfigReloadCallback] = []
         self._file_watcher: Optional["FileWatcher"] = None
@@ -161,6 +164,11 @@ class ConfigService:
             if isinstance(section_data, dict):
                 for key, value in section_data.items():
                     self._main_config[key] = value
+        # 拍平会丢掉"哪个键属于哪个文件"，而部分消费方需要的正是**按文件**的视图：
+        # collectors.toml 的根键就是 enabled + 各采集器同名表（没有 [collectors] 包裹表），
+        # 拍平后顶层只剩 enabled 与各采集器名，取不到"这一个文件的这一段"。
+        # 保留原始多文件视图供 get_file_section() 使用。
+        self._file_sections: Dict[str, Any] = dict(multi_config)
 
         return True, was_created
 
@@ -197,6 +205,31 @@ class ConfigService:
     def _check_schema_registry_coverage(self) -> None:
         """空实现，兼容旧调用方。"""
         self._last_coverage_result = None
+
+    def get_file_section(self, file_stem: str, default: Any = None) -> Dict[str, Any]:
+        """按**文件**取配置段（多文件模式下的原始命名空间）。
+
+        与 ``get_section`` 的区别：``get_section`` 查的是拍平后的合并视图，
+        而每个文件在拍平前各自是一棵独立的树。需要"某文件这一段"时必须用本方法：
+
+        - ``file_stem="collectors"`` → ``{enabled: [...], <采集器名>: {...}, ...}``
+          （collectors.toml 的根键就是 enabled 与各采集器同名表，没有包裹表，
+          拍平后顶层只剩 enabled 与各采集器名，用 ``get_section`` 取不到）
+        - ``file_stem="agents"`` → ``{agents: {...}}``（该文件有 ``[agents]`` 包裹表）
+
+        Args:
+            file_stem: 配置文件名（不含扩展名，如 "collectors"）
+            default: 文件不存在或未初始化时的返回值（缺省空 dict）
+
+        Returns:
+            该文件的配置树（meta 已在加载期剥离）
+        """
+        empty = {} if default is None else default
+        if not self._initialized:
+            self.logger.warning("ConfigService 未初始化，返回空配置")
+            return empty
+        section = self._file_sections.get(file_stem)
+        return section if isinstance(section, dict) else empty
 
     def get_section(self, section: str, default: Any = None) -> Dict[str, Any]:
         """

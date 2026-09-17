@@ -407,10 +407,12 @@ async def create_app_components(
     )
 
     # --- CollectorManager ---
-    # 采集器配置位于 collectors.toml 的 [collectors] 段（按 enabled 名单装配）
+    # 采集器配置位于 collectors.toml：根键 = enabled 名单 + 各采集器同名子段
+    # （该文件没有 [collectors] 包裹表，拍平视图里取不到"这一个文件的这一段"，
+    #  故按文件名取原始命名空间——用 get_section("collectors") 会拿到空 dict，
+    #  采集器一个都不会装配）
     collector_manager: Optional["CollectorManager"] = None
-    collectors_root = config.get("collectors", {}) if isinstance(config, dict) else {}
-    collectors_config = collectors_root if isinstance(collectors_root, dict) else {}
+    collectors_config = config_service.get_file_section("collectors")
     if collectors_config:
         logger.info("初始化 CollectorManager（src/modules/collectors/）...")
         collector_manager = CollectorManager()

@@ -110,8 +110,8 @@ def test_status_groups_count_correctly(client: TestClient) -> None:
     resp = client.get("/api/v1/system/status").json()
 
     collectors = resp["groups"]["collectors"]
-    assert collectors["total"] == 1  # 生成基线无预置采集器段，仅 enabled 名单的 console_input
-    assert collectors["enabled"] == 1  # console_input 启用
+    assert collectors["total"] == 2  # 生成基线的默认 enabled：console_input + maicraft_attention
+    assert collectors["enabled"] == 2  # 两者都启用
 
     agents = resp["groups"]["agents"]
     assert agents["total"] == 3  # streamer + minecraft + text_adv（Schema 三 Agent 全占位）
