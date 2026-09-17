@@ -29,18 +29,15 @@ task/*  ──收口──▶  v2.0.0（开发主线）──发布──▶  ta
 
 ## CHANGELOG
 
-根目录 `CHANGELOG.md`，首次发布时创建，发布时手写。素材从 `git log v上一版..HEAD --oneline` 的 conventional commits 提炼归类：
+根目录 `CHANGELOG.md`，首次发布时创建，发布时手写。素材从 `git log v上一版..HEAD --oneline` 的 conventional commits 提炼归类，按架构子模块分组（整体架构 / 各 Agent / 工具系统 / 事件系统等），条目用短句，一条只说一件事：
 
 ```markdown
 # Changelog
 
 ## [2.1.0] - 2026-XX-XX
 
-### 🌟 主要更新
-- （面向用户的功能亮点，2~5 条）
-
-### 细节更改
-- （修复、优化、依赖等）
+### <子模块>
+- （该模块的变化，按需分组，无变化的模块不出现在本版）
 
 ### 升级注意
 - （有配置迁移 hook / SCHEMA_VERSION 升位时必写；无则省略此节）
