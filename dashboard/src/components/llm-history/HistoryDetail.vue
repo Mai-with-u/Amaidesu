@@ -43,14 +43,20 @@
       </el-descriptions>
 
       <!-- 提示词预览：messages 按序卡片化渲染完整对话流 -->
-      <div v-if="promptMessages.length || promptFallback" class="detail-section">
+      <div v-if="promptMessages.length || promptSystem || promptFallback" class="detail-section">
         <h4 class="section-title">提示词预览</h4>
         <div class="prompt-preview">
+          <div v-if="promptSystem" class="message-card">
+            <div class="message-header">
+              <span class="prompt-role is-system">system</span>
+            </div>
+            <div class="prompt-message-body" v-html="renderMarkdown(promptSystem)"></div>
+          </div>
           <div v-for="(m, i) in promptMessages" :key="i" class="message-card">
             <div class="message-header">
               <span class="prompt-role" :class="`is-${m.role}`">{{ m.role }}</span>
-              <span v-if="m.tool_call_id" class="message-meta" title="对应请求的 tool_call_id"
-                >↩ {{ shortId(m.tool_call_id) }}</span
+              <span v-if="m.toolCallId" class="message-meta" title="对应请求的 tool_call_id"
+                >↩ {{ shortId(m.toolCallId) }}</span
               >
             </div>
             <!-- tool 返回是 JSON 字符串，用代码块美化；其余走 markdown -->
@@ -63,15 +69,13 @@
               class="prompt-message-body"
               v-html="renderMarkdown(m.content)"
             ></div>
-            <div v-if="m.tool_calls?.length" class="tool-calls-list">
-              <div v-for="tc in m.tool_calls" :key="tc.id" class="tool-call-item">
+            <div v-if="m.toolCalls.length" class="tool-calls-list">
+              <div v-for="tc in m.toolCalls" :key="tc.id ?? tc.name" class="tool-call-item">
                 <div class="tool-call-head">
-                  <span class="tool-call-name">{{ tc.function?.name || 'unknown' }}</span>
+                  <span class="tool-call-name">{{ tc.name }}</span>
                   <span class="message-meta" :title="tc.id">{{ shortId(tc.id) }}</span>
                 </div>
-                <pre
-                  class="tool-call-args"
-                ><code>{{ formatArguments(tc.function?.arguments) }}</code></pre>
+                <pre class="tool-call-args"><code>{{ formatArguments(tc.arguments) }}</code></pre>
               </div>
             </div>
           </div>
@@ -155,6 +159,7 @@ import { ElMessage } from 'element-plus';
 import { CopyDocument } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
+import { normalizeMessage, type PreviewMessage } from '@/utils/llmMessage';
 import type { LLMRequestHistory } from '@/types';
 
 interface Props {
@@ -169,39 +174,17 @@ interface Emits {
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
-interface ToolCall {
-  id?: string;
-  function?: { name?: string; arguments?: string };
-}
+// 提示词消息按序完整渲染（含 assistant 的 tool_calls 与 tool 返回）
+const promptMessages = computed<PreviewMessage[]>(() => {
+  const messages = props.detail?.request_params?.messages;
+  if (!Array.isArray(messages)) return [];
+  return messages.map(normalizeMessage);
+});
 
-interface PromptMessage {
-  role: string;
-  content?: string;
-  tool_call_id?: string;
-  tool_calls?: ToolCall[];
-}
-
-// 提示词消息按序完整渲染（含 assistant 的 tool_calls 与 tool 返回），content 为原始 markdown
-const promptMessages = computed<PromptMessage[]>(() => {
-  const messages = props.detail?.request_params?.messages as
-    | Array<{ role?: string; content?: unknown; tool_call_id?: string; tool_calls?: ToolCall[] }>
-    | undefined;
-
-  if (messages && Array.isArray(messages)) {
-    return messages.map(m => ({
-      role: m.role || 'unknown',
-      // content 理论上为字符串，非字符串形态（多模态 parts 等）退化为 JSON 文本
-      content:
-        typeof m.content === 'string'
-          ? m.content
-          : m.content
-            ? JSON.stringify(m.content, null, 2)
-            : '',
-      tool_call_id: m.tool_call_id,
-      tool_calls: m.tool_calls,
-    }));
-  }
-  return [];
+// 中立契约的 system 不在 messages 里，独立成键，置顶单独成卡
+const promptSystem = computed<string>(() => {
+  const system = props.detail?.request_params?.system;
+  return typeof system === 'string' ? system : '';
 });
 
 // 非 messages 形态的请求（纯 prompt 字段）兜底展示

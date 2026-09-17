@@ -802,6 +802,8 @@ class LLMManager:
         }
         if request_params["messages"] is None and kwargs.get("request") is not None:
             # 中立 payload 契约路径：消息以 GenerateRequest 承载
+            # system 不在 messages 里，单独快照，否则提示词预览缺主提示词
+            request_params["system"] = kwargs["request"].system
             request_params["messages"] = [m.model_dump() for m in kwargs["request"].messages]
             request_params["tools"] = [t.model_dump() for t in kwargs["request"].tools] or None
         return {k: v for k, v in request_params.items() if v is not None}

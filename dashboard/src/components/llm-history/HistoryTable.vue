@@ -103,6 +103,7 @@
 
 <script setup lang="ts">
 import type { LLMRequestHistory, LLMHistoryQueryParams } from '@/types';
+import { messageText } from '@/utils/llmMessage';
 
 interface Props {
   loading: boolean;
@@ -186,18 +187,16 @@ function truncateText(text: string, maxLength: number): string {
   return text.substring(0, maxLength) + '...';
 }
 
-// 获取 Prompt 预览
+// 获取 Prompt 预览（取最后一条有正文的消息）
 function getPromptPreview(row: LLMRequestHistory): string {
   const params = row.request_params;
   if (!params) return '-';
 
-  // 尝试从不同字段获取 prompt
-  const messages = params.messages as Array<{ content?: string }> | undefined;
+  const messages = params.messages as Array<Record<string, unknown>> | undefined;
   if (messages && Array.isArray(messages)) {
-    // 获取最后一条用户消息
-    const lastUserMessage = [...messages].reverse().find(m => typeof m.content === 'string');
-    if (lastUserMessage?.content) {
-      return truncateText(lastUserMessage.content, 50);
+    const lastWithContent = [...messages].reverse().find(m => messageText(m).trim());
+    if (lastWithContent) {
+      return truncateText(messageText(lastWithContent), 50);
     }
   }
 
