@@ -424,7 +424,7 @@ async def test_get_viewer_stats_hit_and_miss(store: SQLiteDatabase) -> None:
 
 @pytest.mark.asyncio
 async def test_list_viewer_stats_order_by_whitelist(store: SQLiteDatabase) -> None:
-    """list_viewer_stats：合法 order_by 排序、limit 生效；非法值抛 ValueError。"""
+    """list_viewer_stats：合法 order_by 排序、limit/offset 生效、total 全计数；非法值抛 ValueError。"""
     # 准备 3 个不同指标的观众
     await store.viewers.upsert_viewer_message(user_id="u_msg", user_name="msg 用户", timestamp_ms=1_700_000_000_000)
     await store.viewers.upsert_viewer_message(user_id="u_msg", user_name="msg 用户", timestamp_ms=1_700_000_001_000)
@@ -434,29 +434,33 @@ async def test_list_viewer_stats_order_by_whitelist(store: SQLiteDatabase) -> No
     await store.viewers.upsert_viewer_replied(user_id="u_repl", timestamp_ms=1_700_000_005_000)
     await store.viewers.upsert_viewer_replied(user_id="u_repl", timestamp_ms=1_700_000_006_000)
 
-    # 默认 order_by=message_count：u_msg 排第一
-    rows = await store.viewers.list_viewer_stats()
+    # 默认 order_by=message_count：u_msg 排第一；total 为全计数
+    rows, total = await store.viewers.list_viewer_stats()
     assert len(rows) == 3
+    assert total == 3
     assert int(rows[0]["message_count"]) == 2
     assert str(rows[0]["user_id"]) == "u_msg"
 
     # 切到 gift_count
-    rows_gift = await store.viewers.list_viewer_stats(order_by="gift_count")
+    rows_gift, _ = await store.viewers.list_viewer_stats(order_by="gift_count")
     assert str(rows_gift[0]["user_id"]) == "u_gift"
     assert int(rows_gift[0]["gift_count"]) == 3
 
     # 切到 last_active_ms
-    rows_active = await store.viewers.list_viewer_stats(order_by="last_active_ms")
+    rows_active, _ = await store.viewers.list_viewer_stats(order_by="last_active_ms")
     assert str(rows_active[0]["user_id"]) == "u_repl"
 
     # 切到 replied_count
-    rows_repl = await store.viewers.list_viewer_stats(order_by="replied_count")
+    rows_repl, _ = await store.viewers.list_viewer_stats(order_by="replied_count")
     assert str(rows_repl[0]["user_id"]) == "u_repl"
     assert int(rows_repl[0]["replied_count"]) == 2
 
-    # limit 生效
-    rows_limited = await store.viewers.list_viewer_stats(limit=2)
+    # limit / offset 生效，total 不随分页变化
+    rows_limited, total_limited = await store.viewers.list_viewer_stats(limit=2)
     assert len(rows_limited) == 2
+    assert total_limited == 3
+    rows_offset, _ = await store.viewers.list_viewer_stats(limit=2, offset=2)
+    assert len(rows_offset) == 1
 
     # 非法 order_by → ValueError
     with pytest.raises(ValueError):

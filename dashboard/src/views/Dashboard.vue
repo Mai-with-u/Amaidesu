@@ -502,8 +502,9 @@ async function refreshSnapshot(): Promise<void> {
 
   // 观众数字独立取数：失败只保留旧值，不拖累上方整体快照
   try {
-    const viewersResp = await viewersApi.get({ limit: 5 });
-    viewerCount.value = viewersResp.data.count;
+    // total 为全量观众数（旧行为读返回行数，limit=5 时最多显示 5）
+    const viewersResp = await viewersApi.list({ limit: 1 });
+    viewerCount.value = viewersResp.data.total;
   } catch {
     // 观众接口失败时保留旧值（显示 0）
   }

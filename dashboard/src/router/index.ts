@@ -54,6 +54,23 @@ const router = createRouter({
       component: () => import('@/views/LiveObserver.vue'),
     },
     {
+      // 静态段须先于 /viewers/:userId 声明，避免被动态段吞掉
+      path: '/viewers/insights',
+      name: 'viewer-insights',
+      component: () => import('@/views/ViewerInsights.vue'),
+    },
+    {
+      path: '/viewers',
+      name: 'viewers',
+      component: () => import('@/views/Viewers.vue'),
+    },
+    {
+      path: '/viewers/:userId',
+      name: 'viewer-detail',
+      component: () => import('@/views/ViewerDetail.vue'),
+      props: true,
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/Settings.vue'),

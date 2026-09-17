@@ -71,6 +71,7 @@ class DashboardServer:
         simulator_service: Optional["SimulatorService"] = None,
         session_manager: Optional[Any] = None,
         viewer_repo: Optional[Any] = None,
+        chat_repo: Optional[Any] = None,
         llm_repo: Optional[Any] = None,
         rundown_repo: Optional[Any] = None,
     ):
@@ -95,6 +96,9 @@ class DashboardServer:
         # 未注入时相关端点返回 is_available=false，不影响其余 API。
         self.session_manager = session_manager
         self.viewer_repo = viewer_repo
+        # 注入 ChatRepo 让 `/api/v1/viewers/*` 的观众明细聚合（对话交织 /
+        # 贡献 / 参与场次）直查 live_chat 三表；未注入时相关端点返回 503
+        self.chat_repo = chat_repo
         # 注入 LLMRepo 让 `/api/v1/llm/usage*` 从 SQLite 聚合用量；未注入时相关端点返回空数据
         self.llm_repo = llm_repo
         # 注入 RundownRepo 让 `/api/v1/agenda/rundowns*` 承载流程单库 CRUD；

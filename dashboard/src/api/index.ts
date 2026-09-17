@@ -56,7 +56,12 @@ import type {
   TriggerProactiveResponse,
   LiveSessionListResponse,
   SessionTimelineResponse,
-  ViewerStatsResponse,
+  ViewerListResponse,
+  ViewerInsights,
+  ViewerDetail,
+  ViewerDialogueResponse,
+  ViewerContributions,
+  ViewerSessionsResponse,
   WebSocketMessage,
 } from '@/types';
 
@@ -213,11 +218,26 @@ export const eventsApi = {
 
 // ===== 观众统计（只读） =====
 //
-// `GET /viewers`：viewers 表 top-N 汇总行（count = 返回行数）。
-// 首页"今日统计条"的"观众"数字来源，不做列表/表格消费面。
+// ===== 观众（列表 / 分析 / 档案 / 对话 / 贡献 / 场次） =====
+//
+// `GET /viewers`：观众列表（搜索/排序/分页，total 为命中搜索的全计数——
+// 首页"观众总数"也取 total，而非旧行为的返回行数）。
+// `GET /viewers/insights`：活跃分桶 + 回复覆盖 + 按天弹幕量（互动分析页）。
+// `GET /viewers/{userId}...`：单观众档案与明细聚合（详情页三 tab 的数据面）。
 export const viewersApi = {
-  get: (params?: { limit?: number; order_by?: string }) =>
-    api.get<ViewerStatsResponse>('/viewers', { params }),
+  list: (params?: { search?: string; order_by?: string; limit?: number; offset?: number }) =>
+    api.get<ViewerListResponse>('/viewers', { params }),
+  insights: (params?: { days?: number }) =>
+    api.get<ViewerInsights>('/viewers/insights', { params }),
+  detail: (userId: string) => api.get<ViewerDetail>(`/viewers/${encodeURIComponent(userId)}`),
+  messages: (userId: string, params?: { before_timestamp_ms?: number; limit?: number }) =>
+    api.get<ViewerDialogueResponse>(`/viewers/${encodeURIComponent(userId)}/messages`, { params }),
+  contributions: (userId: string, params?: { limit?: number }) =>
+    api.get<ViewerContributions>(`/viewers/${encodeURIComponent(userId)}/contributions`, {
+      params,
+    }),
+  sessions: (userId: string) =>
+    api.get<ViewerSessionsResponse>(`/viewers/${encodeURIComponent(userId)}/sessions`),
 };
 
 // ===== Streamer 测试台（主播发言调试） =====

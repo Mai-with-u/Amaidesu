@@ -12,7 +12,8 @@ RoomMessagePayload → 表的写入入口与常见读路径；表结构权威在
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, List, Optional
+from datetime import datetime, time as dt_time, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.modules.storage.repos._base import BaseRepo
 
@@ -281,6 +282,169 @@ class ChatRepo(BaseRepo):
                     conn.execute(
                         "SELECT * FROM super_chats WHERE live_session_id=? ORDER BY timestamp_ms ASC LIMIT ?",
                         (live_session_id, limit),
+                    ).fetchall()
+                )
+
+        return await self._run_in_executor(_exec)
+
+    async def list_user_dialogue(
+        self,
+        *,
+        user_id: str,
+        before_timestamp_ms: Optional[int] = None,
+        limit: int = 30,
+    ) -> List[sqlite3.Row]:
+        """按观众取"对话批次"：其消息 + 主播对这些消息的回复，时间正序交织。
+
+        分页以观众消息为主轴：先取该观众 ``limit`` 条消息（``before_timestamp_ms``
+        为游标，DESC LIMIT 后反转），再按本批 ``message_id`` 反查
+        ``sender_role='assistant' AND reply_to_message_id IN (...)`` 的回复行，
+        两者按 ``(timestamp_ms, id)`` 合并正序返回。回复行时间必不早于其
+        对应消息，因此交织序列单调。游标翻页时回复行不会跨批重复——每批
+        只反查本批消息的关联回复。
+        """
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                clauses = ["sender_id=?", "sender_role='viewer'"]
+                params: List[Any] = [user_id]
+                if before_timestamp_ms is not None:
+                    clauses.append("timestamp_ms<?")
+                    params.append(before_timestamp_ms)
+                params.append(limit)
+                cur = conn.execute(
+                    "SELECT * FROM live_chat WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms DESC LIMIT ?",
+                    params,
+                )
+                viewer_rows = list(reversed(cur.fetchall()))
+                message_ids = [row["message_id"] for row in viewer_rows if row["message_id"]]
+                if not message_ids:
+                    return viewer_rows
+                placeholders = ",".join("?" * len(message_ids))
+                reply_rows = conn.execute(
+                    f"SELECT * FROM live_chat WHERE sender_role='assistant'"  # noqa: S608
+                    f" AND reply_to_message_id IN ({placeholders}) ORDER BY timestamp_ms ASC",
+                    message_ids,
+                ).fetchall()
+                merged = [*viewer_rows, *reply_rows]
+                merged.sort(key=lambda row: (row["timestamp_ms"], row["id"]))
+                return merged
+
+        return await self._run_in_executor(_exec)
+
+    async def get_user_activity_bounds(self, *, user_id: str) -> Optional[Tuple[int, int]]:
+        """观众在明细三表中的时间边界 ``(first_ms, last_ms)``；无任何明细返回 None。
+
+        覆盖 live_chat（发言）/ gifts / super_chats 三源取最小与最大——只送过
+        礼没发过言的观众同样有"首次出现"可考。
+        """
+
+        def _exec() -> Optional[Tuple[int, int]]:
+            with self._manager.transaction() as conn:
+                row = conn.execute(
+                    "SELECT MIN(m) AS first_ms, MAX(m) AS last_ms FROM ("
+                    " SELECT timestamp_ms AS m FROM live_chat WHERE sender_id=? AND sender_role='viewer'"
+                    " UNION ALL SELECT timestamp_ms FROM gifts WHERE user_id=?"
+                    " UNION ALL SELECT timestamp_ms FROM super_chats WHERE user_id=?"
+                    ")",
+                    (user_id, user_id, user_id),
+                ).fetchone()
+                if row is None or row["first_ms"] is None:
+                    return None
+                return int(row["first_ms"]), int(row["last_ms"])
+
+        return await self._run_in_executor(_exec)
+
+    async def list_user_gifts(self, *, user_id: str, limit: int = 100) -> List[sqlite3.Row]:
+        """取观众的礼物明细行（时间倒序，最新在前）。"""
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT * FROM gifts WHERE user_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                        (user_id, limit),
+                    ).fetchall()
+                )
+
+        return await self._run_in_executor(_exec)
+
+    async def list_user_super_chats(self, *, user_id: str, limit: int = 100) -> List[sqlite3.Row]:
+        """取观众的 SC 明细行（时间倒序，最新在前）。"""
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT * FROM super_chats WHERE user_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                        (user_id, limit),
+                    ).fetchall()
+                )
+
+        return await self._run_in_executor(_exec)
+
+    async def summarize_user_contributions(self, *, user_id: str) -> Dict[str, float]:
+        """观众贡献汇总：礼物总件数、SC 总额（元）与 SC 条数。"""
+
+        def _exec() -> Dict[str, float]:
+            with self._manager.transaction() as conn:
+                gift_row = conn.execute(
+                    "SELECT COALESCE(SUM(gift_count), 0) AS n FROM gifts WHERE user_id=?",
+                    (user_id,),
+                ).fetchone()
+                sc_row = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0.0) AS amount, COUNT(*) AS n FROM super_chats WHERE user_id=?",
+                    (user_id,),
+                ).fetchone()
+                return {
+                    "gift_total_count": int(gift_row["n"]) if gift_row else 0,
+                    "sc_total_amount": float(sc_row["amount"]) if sc_row else 0.0,
+                    "sc_total_count": int(sc_row["n"]) if sc_row else 0,
+                }
+
+        return await self._run_in_executor(_exec)
+
+    async def list_user_sessions(self, *, user_id: str) -> List[sqlite3.Row]:
+        """观众参与过的场次：按场次聚合发言数与时间范围，最近参与在前。
+
+        join ``live_sessions`` 取标题；场次行可能已删除（明细级联删除保证
+        不会，标题缺省仍以 NULL 容忍历史数据）。
+        """
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT lc.live_session_id, ls.title, COUNT(*) AS message_count,"
+                        " MIN(lc.timestamp_ms) AS first_ms, MAX(lc.timestamp_ms) AS last_ms"
+                        " FROM live_chat lc LEFT JOIN live_sessions ls ON ls.id=lc.live_session_id"
+                        " WHERE lc.sender_id=? AND lc.sender_role='viewer'"
+                        " GROUP BY lc.live_session_id"
+                        " ORDER BY first_ms DESC",
+                        (user_id,),
+                    ).fetchall()
+                )
+
+        return await self._run_in_executor(_exec)
+
+    async def daily_danmaku_counts(self, *, days: int = 30) -> List[sqlite3.Row]:
+        """按本地日期聚合观众弹幕量（互动分析页折线数据），日期正序。
+
+        只看 ``message_type='danmaku'``；``days`` 天前的本地零点起算。
+        """
+
+        start_dt = datetime.now() - timedelta(days=days)
+        start_ms = int(datetime.combine(start_dt.date(), dt_time.min).timestamp() * 1000)
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS day,"
+                        " COUNT(*) AS count"
+                        " FROM live_chat WHERE message_type='danmaku' AND timestamp_ms>=?"
+                        " GROUP BY day ORDER BY day",
+                        (start_ms,),
                     ).fetchall()
                 )
 

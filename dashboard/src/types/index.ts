@@ -708,8 +708,8 @@ export interface SessionTimelineResponse {
   items: SessionTimelineItem[];
 }
 
-/** 单行观众统计（GET /api/v1/viewers） */
-export interface ViewerStatItem {
+/** 单行观众统计（viewers 表行投影） */
+export interface ViewerListItem {
   user_id: string;
   user_name: string;
   message_count: number;
@@ -719,8 +719,99 @@ export interface ViewerStatItem {
   last_active_ms: number;
 }
 
-export interface ViewerStatsResponse {
-  /** = top 行数（受 limit 约束，非全表行数） */
+export interface ViewerListResponse {
+  /** 命中搜索条件的全量行数（分页器 total） */
+  total: number;
+  items: ViewerListItem[];
+}
+
+/** 按天弹幕量点（本地日期 YYYY-MM-DD） */
+export interface DailyDanmakuPoint {
+  day: string;
   count: number;
-  top: ViewerStatItem[];
+}
+
+/** 互动分析聚合（GET /api/v1/viewers/insights）；活跃分桶互斥 */
+export interface ViewerInsights {
+  total_viewers: number;
+  active_today: number;
+  active_week: number;
+  active_month: number;
+  active_older: number;
+  never_replied: number;
+  gift_viewers: number;
+  daily_danmaku: DailyDanmakuPoint[];
+}
+
+/** 单观众档案（GET /api/v1/viewers/{userId}） */
+export interface ViewerDetail {
+  user_id: string;
+  user_name: string;
+  message_count: number;
+  gift_count: number;
+  replied_count: number;
+  interaction_count: number;
+  last_active_ms: number;
+  first_seen_ms: number | null;
+  gift_total_count: number;
+  sc_total_amount: number;
+  sc_total_count: number;
+  session_count: number;
+}
+
+/** 对话交织行：viewer=观众消息 / reply=主播对其的回复 */
+export interface ViewerDialogueItem {
+  id: number;
+  kind: 'viewer' | 'reply';
+  content: string;
+  timestamp_ms: number;
+  live_session_id: number | null;
+  message_type: string | null;
+  message_id: string | null;
+  reply_to_message_id: string | null;
+  simulated: boolean;
+}
+
+export interface ViewerDialogueResponse {
+  items: ViewerDialogueItem[];
+  /** 下一批游标（观众消息主轴），无更多为 null */
+  next_before: number | null;
+}
+
+export interface ViewerGiftItem {
+  timestamp_ms: number;
+  live_session_id: number | null;
+  gift_name: string;
+  gift_count: number;
+  simulated: boolean;
+}
+
+export interface ViewerSuperChatItem {
+  timestamp_ms: number;
+  live_session_id: number | null;
+  amount: number;
+  message: string;
+  simulated: boolean;
+}
+
+/** 观众贡献：汇总 + 明细（GET /api/v1/viewers/{userId}/contributions） */
+export interface ViewerContributions {
+  gift_total_count: number;
+  sc_total_amount: number;
+  sc_total_count: number;
+  gifts: ViewerGiftItem[];
+  super_chats: ViewerSuperChatItem[];
+}
+
+/** 观众参与的单个场次聚合行 */
+export interface ViewerSessionItem {
+  live_session_id: number;
+  title: string | null;
+  message_count: number;
+  first_ms: number;
+  last_ms: number;
+}
+
+export interface ViewerSessionsResponse {
+  items: ViewerSessionItem[];
 }

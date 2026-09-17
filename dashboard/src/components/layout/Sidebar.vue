@@ -10,6 +10,10 @@
           <el-icon><VideoCamera /></el-icon>
           <span>直播控制台</span>
         </el-menu-item>
+        <el-menu-item index="/viewers">
+          <el-icon><User /></el-icon>
+          <span>观众</span>
+        </el-menu-item>
         <el-menu-item index="/collectors">
           <el-icon><Connection /></el-icon>
           <span>采集器</span>
@@ -95,6 +99,7 @@ import {
   VideoCamera,
   List,
   MagicStick,
+  User,
 } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/stores';
 
