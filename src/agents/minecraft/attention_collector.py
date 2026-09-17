@@ -43,6 +43,10 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.logging import get_logger
 
+#: 连接失败的退避上限（秒）。Mod 常年不开时按最短间隔硬重连纯属空转：
+#: 退避到 60 秒一次，游戏后启动仍能在 1 分钟内接上。
+_RETRY_MAX_S: float = 60.0
+
 
 class MaicraftAttentionCollector(BaseCollector):
     """AI 玩家身体事件采集器（常驻订阅 maicraft://attention）。"""
@@ -93,6 +97,8 @@ class MaicraftAttentionCollector(BaseCollector):
         self._cursor: int = 0
         self._primed: bool = False
         self._emitted_total: int = 0
+        # 不可用原因特征串：Mod 长期不在时同因失败只报一次，避免常驻刷屏
+        self._unavailable_reason: str = ""
 
     # ==================== 生命周期 ====================
 
@@ -109,13 +115,19 @@ class MaicraftAttentionCollector(BaseCollector):
 
         单轮异常不外抛：基类消费任务遇异常会终止循环，采集中断会静默丢事件流；
         这里逐轮兜底并把连接拆掉，下一轮重新连接（游戏可能后启动）。
+
+        连接失败按指数退避重试（5 → 10 → 20 → 40 → 60 秒封顶），连上一次即复位：
+        采集器是常驻件，"Mod 没开"是常态而非事故，按最短间隔硬重连只会空转并刷屏。
         """
-        retry_s = self.typed_config.retry_interval_ms / 1000
+        base_s = self.typed_config.retry_interval_ms / 1000
         idle_s = self.typed_config.idle_poll_ms / 1000
+        retry_s = base_s
         while True:
             if not await self._ensure_ready():
                 await asyncio.sleep(retry_s)
+                retry_s = min(retry_s * 2, _RETRY_MAX_S)
                 continue
+            retry_s = base_s
             try:
                 await asyncio.wait_for(self._signal.wait(), timeout=idle_s)
             except asyncio.TimeoutError:
@@ -126,9 +138,25 @@ class MaicraftAttentionCollector(BaseCollector):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - 单轮失败降级重连，不终止采集
-                self.logger.warning(f"身体事件读取失败，将重连后重试: {exc}")
+                self._report_unavailable(f"读取失败（{type(exc).__name__}: {exc}）")
                 await self._teardown()
+                await asyncio.sleep(retry_s)
             yield None
+
+    def _report_unavailable(self, reason: str) -> None:
+        """记录"注意流不可用"：同因只 warning 一次，重复降 debug。
+
+        常驻采集器的失败会反复出现（Mod 没开、还没进世界），每次都 warning
+        会把日志刷成噪声，反而盖掉真正的信号；原因变了、或恢复后再次失败，
+        才值得重新喊一次。恢复时 ``_ensure_ready`` 复位特征串。
+        """
+        if reason == self._unavailable_reason:
+            self.logger.debug(f"注意流仍不可用（同因）: {reason}")
+            return
+        self._unavailable_reason = reason
+        self.logger.warning(
+            f"注意流不可用（{reason}）：身体事件暂时采不到，将退避重试（最长 {_RETRY_MAX_S:.0f} 秒一次）"
+        )
 
     # ==================== 连接与订阅 ====================
 
@@ -153,11 +181,11 @@ class MaicraftAttentionCollector(BaseCollector):
         try:
             count = await provider.setup()
         except Exception as exc:  # noqa: BLE001 - 连接失败只降级重试
-            self.logger.warning(f"注意流连接失败（{self.typed_config.url}），稍后重试: {exc}")
+            self._report_unavailable(f"连接失败（{type(exc).__name__}: {exc}）")
             await self._close_client(client)
             return False
         if count == 0:
-            self.logger.warning(f"注意流连接不可用或 Mod 未暴露工具（{self.typed_config.url}），稍后重试")
+            self._report_unavailable("连接成功但 Mod 未暴露任何工具")
             await self._close_client(client)
             return False
 
@@ -168,7 +196,7 @@ class MaicraftAttentionCollector(BaseCollector):
                 provider.attention_read_arguments = {"view": "attention"}
                 break
         if not getattr(provider, "attention_read_tool", None):
-            self.logger.warning("Mod 未暴露 perceive 工具，注意流无法读取")
+            self._report_unavailable("Mod 未暴露 perceive 工具，注意流无法读取")
             await self._close_client(client)
             return False
 
@@ -180,6 +208,7 @@ class MaicraftAttentionCollector(BaseCollector):
 
         self._client = client
         self._provider = provider
+        self._unavailable_reason = ""  # 接上了：失败特征串复位
         self.logger.info(f"注意流已接入（{self.typed_config.url}，页面上限 {self.typed_config.page_limit}）")
         return True
 

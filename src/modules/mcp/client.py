@@ -51,6 +51,8 @@ class McpClient:
         self._connected = False
         # 活跃资源订阅（uri → 举旗回调）：持久于实例，重连成功后据此重发订阅请求
         self._subscriptions: Dict[str, ResourceUpdateCallback] = {}
+        # 最近一次连接失败的特征串：长驻调用方会周期性重试，同因失败只该喊一次
+        self._connect_failure = ""
 
     @staticmethod
     def _build_message_handler(subscriptions: Dict[str, ResourceUpdateCallback]) -> Any:
@@ -128,6 +130,10 @@ class McpClient:
     async def connect(self, timeout_seconds: Optional[float] = None) -> bool:
         """建立连接并预拉工具列表（连接成功与否的核心判据）。
 
+        失败按**特征串去重**记日志：调用方可能每几秒重试一次，同一个
+        server 因同一个原因连不上，warning 只该出现一次；原因变了（如从
+        拒绝连接变成超时）或成功连上一次之后再失败，才重新 warning。
+
         Returns:
             是否连接成功（连接/预拉失败均返回 False，不抛异常）
         """
@@ -146,11 +152,17 @@ class McpClient:
             await client.__aenter__()
             self._client = client
             self._connected = True
+            self._connect_failure = ""  # 连上了：失败特征串复位，下次失败重新 warning
             logger.info(f"MCP server '{self.name}' 已连接（transport={self.config.transport}）")
             await self._resubscribe_all()
             return True
         except Exception as exc:  # noqa: BLE001 - 连接边界兜底
-            logger.warning(f"MCP server '{self.name}' 连接失败: {type(exc).__name__}: {exc}")
+            failure = f"{type(exc).__name__}: {exc}"
+            if failure == self._connect_failure:
+                logger.debug(f"MCP server '{self.name}' 仍然连接失败（同因）: {failure}")
+            else:
+                self._connect_failure = failure
+                logger.warning(f"MCP server '{self.name}' 连接失败（后续同因失败降为 debug）: {failure}")
             self._client = None
             self._connected = False
             return False

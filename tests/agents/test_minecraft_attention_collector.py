@@ -372,3 +372,58 @@ async def test_collect_loop_survives_unavailable_game(monkeypatch: pytest.Monkey
     await asyncio.sleep(0.05)
     await collector.stop()
     assert collector.state == CollectorState.STOPPED
+
+
+# ---------------------------------------------------------------------------
+# 常驻重试：不刷屏、不硬撞
+# ---------------------------------------------------------------------------
+
+
+def _unavailable_warnings(cap: Any) -> List[Dict[str, Any]]:
+    return [r for r in cap.records if r["level"] == "WARNING" and "注意流不可用" in r["message"]]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_reported_once_per_reason(loguru_capture: Any) -> None:
+    """同因不可用只 warning 一次；理由变化、或接上之后再次失败，才重新报。"""
+    collector = _collector(_FakeEventBus())
+    cap = loguru_capture  # fixture 已进入捕获，不要再 with（会重复计数）
+
+    collector._report_unavailable("连接失败（RuntimeError: boom）")
+    collector._report_unavailable("连接失败（RuntimeError: boom）")
+    assert len(_unavailable_warnings(cap)) == 1, "Mod 没开是常态，不该按最短间隔重复 warning"
+
+    collector._report_unavailable("Mod 未暴露 perceive 工具，注意流无法读取")
+    assert len(_unavailable_warnings(cap)) == 2, "失败理由变了要重新报"
+
+    assert await collector._ensure_ready() is True
+    collector._report_unavailable("连接失败（RuntimeError: boom）")
+    assert len(_unavailable_warnings(cap)) == 3, "接上过之后再断属新事故"
+
+    await collector._close_client(collector._client)
+
+
+@pytest.mark.asyncio
+async def test_connect_failure_backs_off_up_to_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """连不上时按 2 倍退避重试、60 秒封顶（不按最短间隔硬撞）。"""
+    collector = MaicraftAttentionCollector(  # type: ignore[arg-type]
+        config={"retry_interval_ms": 1000},
+        event_bus=_FakeEventBus(),
+    )
+    slept: List[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        if len(slept) >= 8:
+            raise asyncio.CancelledError
+
+    async def _never_ready() -> bool:
+        return False
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(collector, "_ensure_ready", _never_ready)
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in collector.collect():
+            pass
+
+    assert slept == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0, 60.0]

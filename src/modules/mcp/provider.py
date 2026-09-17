@@ -98,7 +98,8 @@ class McpToolProvider(BaseToolProvider):
         if not self._client.connected:
             ok = await self._client.connect()
             if not ok:
-                logger.warning(f"MCP Provider '{self.server_name}' 连接失败，工具列表为空")
+                # 原因已由 McpClient 记过（含同因去重）；此处只补"因此工具列表为空"这一后果
+                logger.debug(f"MCP Provider '{self.server_name}' 连接失败，工具列表为空")
                 self._specs = []
                 self._synced = True
                 return 0
