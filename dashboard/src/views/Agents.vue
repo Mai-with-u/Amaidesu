@@ -13,8 +13,9 @@
             <h2 class="list-title">Agent</h2>
             <span class="list-count">
               <span class="list-count-running">{{ startedCount }}</span>
-              <span class="list-count-divider">/</span>
-              <span class="list-count-total">{{ totalCount }}</span>
+              <span class="list-count-unit">运行</span>
+              <span class="list-count-divider">·</span>
+              <span class="list-count-total">共 {{ totalCount }}</span>
             </span>
           </div>
           <div class="batch-actions">
@@ -25,10 +26,10 @@
               class="batch-btn"
               :loading="batchLoading === 'start'"
               :disabled="totalCount === 0 || startedCount === totalCount"
-              title="启动全部"
+              title="启动全部 Agent"
               @click="runBatch('start')"
             >
-              启动
+              全部启动
             </el-button>
             <el-button
               size="small"
@@ -37,10 +38,10 @@
               class="batch-btn"
               :loading="batchLoading === 'stop'"
               :disabled="totalCount === 0 || startedCount === 0"
-              title="停止全部"
+              title="停止全部 Agent"
               @click="runBatch('stop')"
             >
-              停止
+              全部停止
             </el-button>
           </div>
         </header>
@@ -109,92 +110,79 @@
               </p>
             </div>
             <div class="detail-actions">
+              <!-- 启动/停止互斥：同一时刻只渲染可用的一项 -->
               <el-button
+                v-if="!selectedAgent.is_started"
                 type="primary"
                 size="default"
-                :disabled="selectedAgent.is_started"
                 :loading="actionLoading[`${selectedAgent.name}-start`]"
                 @click="handleControl('start')"
               >
                 启动
               </el-button>
               <el-button
+                v-else
                 size="default"
-                :disabled="!selectedAgent.is_started"
                 :loading="actionLoading[`${selectedAgent.name}-stop`]"
                 @click="handleControl('stop')"
               >
                 停止
               </el-button>
+              <!-- 暂停/恢复互斥：同理只渲染可用的一项 -->
               <el-button
-                type="warning"
+                v-if="selectedState !== 'paused'"
                 size="default"
                 plain
-                :loading="actionLoading[`${selectedAgent.name}-restart`]"
-                @click="handleRestartWithConfirm"
-              >
-                重启
-              </el-button>
-              <el-button
-                size="default"
-                plain
-                :disabled="!agentStateOf(selectedAgent.name) || selectedState === 'paused'"
+                :disabled="!agentStateOf(selectedAgent.name)"
                 :loading="controlLoading[`${selectedAgent.name}-pause`]"
                 @click="handleAgentControl('pause')"
               >
                 暂停
               </el-button>
               <el-button
+                v-else
                 size="default"
+                type="warning"
                 plain
-                :disabled="selectedState !== 'paused'"
                 :loading="controlLoading[`${selectedAgent.name}-resume`]"
                 @click="handleAgentControl('resume')"
               >
                 恢复
               </el-button>
-              <el-button
-                type="danger"
-                size="default"
-                plain
-                :loading="controlLoading[`${selectedAgent.name}-shutdown`]"
-                @click="handleAgentControl('shutdown')"
-              >
-                关机
-              </el-button>
+              <!-- 重启/关机为低频高风险动作，收进下拉（点击后仍有确认框） -->
+              <el-dropdown class="more-actions" trigger="click" @command="onMoreCommand">
+                <el-button size="default" plain :loading="moreActionsLoading">
+                  更多
+                  <el-icon class="el-icon--right"><arrow-down /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="restart">重启…</el-dropdown-item>
+                    <el-dropdown-item command="shutdown" divided>关机…</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
           </header>
 
-          <!-- 2. 元信息条：已启用 / 运行中 / 状态 / 心跳 / 存活 / 重启次数 / 最近决策 -->
+          <!-- 2. 元信息条：状态 / 心跳 / 重启 / 最近决策（启停与存活由标题 tag 与心跳新鲜度表达） -->
           <div class="details-strip" aria-label="状态摘要">
-            <div class="stat-chip">
-              <span class="chip-label">已启用</span>
-              <span class="chip-value" :class="selectedAgent.is_enabled ? 'chip-yes' : 'chip-no'">
-                {{ selectedAgent.is_enabled ? '是' : '否' }}
-              </span>
-            </div>
-            <div class="stat-chip">
-              <span class="chip-label">运行中</span>
-              <span class="chip-value" :class="selectedAgent.is_started ? 'chip-yes' : 'chip-no'">
-                {{ selectedAgent.is_started ? '是' : '否' }}
-              </span>
-            </div>
             <div class="stat-chip">
               <span class="chip-label">状态</span>
               <span class="chip-value mono">{{ selectedState }}</span>
             </div>
             <div class="stat-chip">
               <span class="chip-label">心跳</span>
-              <span class="chip-value mono">{{ heartbeatLabel }}</span>
-            </div>
-            <div class="stat-chip">
-              <span class="chip-label">存活</span>
-              <span class="chip-value" :class="selectedInfo?.is_alive ? 'chip-yes' : 'chip-no'">
-                {{ selectedInfo ? (selectedInfo.is_alive ? '是' : '否') : '—' }}
+              <span
+                class="chip-value mono"
+                :class="heartbeatTone"
+                title="距上次心跳的时间；超时由守护线程判定失活"
+              >
+                {{ heartbeatLabel }}
               </span>
             </div>
             <div class="stat-chip">
-              <span class="chip-label">重启次数</span>
+              <span class="chip-label">重启</span>
               <span class="chip-value mono">{{ selectedInfo?.restart_count ?? '—' }}</span>
             </div>
             <div class="stat-chip stat-chip--accent">
@@ -204,11 +192,12 @@
             <el-button
               size="small"
               text
-              :loading="stateRefreshing"
+              aria-label="刷新状态"
               title="刷新状态"
-              @click="refreshAgentStates"
+              :loading="stateRefreshing"
+              @click="refreshAgentStates()"
             >
-              刷新
+              <el-icon><refresh /></el-icon>
             </el-button>
           </div>
 
@@ -219,12 +208,14 @@
                 <div class="stream-title-block">
                   <span class="stream-pulse" aria-hidden="true" />
                   <h3 class="stream-title">运行轨迹</h3>
-                  <span class="stream-subtitle">
-                    · 按事件族归属（单 Agent 场景精确，多 Agent 并行时按时间近似）
-                  </span>
-                  <el-tag size="small" type="info" effect="plain" class="stream-count">
-                    {{ displayedEntries.length }} / {{ STREAM_CAP }}
-                  </el-tag>
+                  <el-tooltip
+                    content="轨迹按事件族归属：单 Agent 场景精确，多 Agent 并行时按时间近似"
+                    placement="top"
+                  >
+                    <el-tag size="small" type="info" effect="plain" class="stream-count">
+                      {{ displayedEntries.length }} / {{ STREAM_CAP }}
+                    </el-tag>
+                  </el-tooltip>
                 </div>
                 <div class="stream-controls">
                   <el-button
@@ -256,11 +247,6 @@
                 </el-check-tag>
               </div>
             </header>
-
-            <p class="stream-note">
-              三族合并：planner.*（想）/ rundown.changed（程）/ tool.result.*（做）； tool.result
-              失败时显示红色 badge 与错误摘要。
-            </p>
 
             <div ref="streamScrollRef" class="stream-scroll">
               <div v-if="displayedEntries.length === 0" class="stream-empty">
@@ -305,33 +291,22 @@
         </div>
       </main>
     </div>
-
-    <!-- 4. 规划中笔记（页面底部，muted） -->
-    <div class="page-notes" aria-label="规划中提示">
-      <p class="page-note">Agent 内部指标（缓冲/置信度/回复延迟）需后端暴露——规划中</p>
-      <p class="page-note">声明工具清单与工具审计需后端只读端点——规划中</p>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * Agents 页面 —— Master-Detail 版（与 Collectors.vue 镜像）
+ * Agents 页面 —— Master-Detail 布局：左 240px Agent 列表 + 右详情三段
+ * （详情头 / 状态摘要条 / 运行轨迹）。
  *
- * 改动要点（vs 旧版）：
- * - 旧版：counts header + 批量按钮 + 卡片网格 + 侧栏决策脉搏。
- * - 新版：左 240px Agent 列表 + 右详情三段（详情头 / 元信息条 / 运行轨迹）。
- *   旧版侧栏 feed 升格为页面主角（flex-1）；批量按钮下放到左列表头。
- *
- * 数据流归因：
- * - 运行轨迹按三事件族（planner.* / rundown.changed / tool.result.*）合并，
- *   对每个 entry 标 stage badge（想/程/做）+ 失败标记（tool.result 红色）。
- * - 单 Agent 场景下三族前缀与目标 Agent 强相关（planner/rundown 由 Agent 触发，
- *   tool.result 由 Agent 调用）；多 Agent 并行时按时间近似归属（见 subtitle）。
- * - 后端后续票：事件负载增加 agent-identity 字段可消除近似归因。
+ * 运行轨迹按三事件族合并（planner.* / rundown.changed / tool.result.*），
+ * 每条带阶段 badge（想/程/做）与失败标记（tool.result 失败标红）。
+ * 事件负载暂无 agent 身份字段：单 Agent 场景归因精确，多 Agent 并行时
+ * 按时间近似；消除近似需后端在事件负载中增加 agent-identity 字段。
  */
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { ArrowDown, Refresh } from '@element-plus/icons-vue';
 import { storeToRefs } from 'pinia';
 import { useComponentsStore, useEventsStore } from '@/stores';
 import { agentsApi } from '@/api';
@@ -449,21 +424,29 @@ function statusLabel(a: ComponentSummary): string {
 // Agent 控制面（/api/v1/agents）：运行状态 + pause/resume/shutdown
 // ============================================================
 
-// 运行状态名册：name → AgentInfo（进页面拉一次，操作后与手动刷新时更新）
+// 运行状态名册：name → AgentInfo（进页面拉一次，此后轮询 + 操作后刷新）
 const agentStates = ref<Record<string, AgentInfo>>({});
 const stateRefreshing = ref(false);
 
-async function refreshAgentStates(): Promise<void> {
-  stateRefreshing.value = true;
+// 后台轮询静默失败（不打扰用户），手动刷新失败才弹错
+const STATE_POLL_INTERVAL_MS = 8000;
+let statePollTimer: ReturnType<typeof setInterval> | null = null;
+
+async function refreshAgentStates(silent = false): Promise<void> {
+  if (!silent) stateRefreshing.value = true;
   try {
     const res = await agentsApi.listAgents();
     const next: Record<string, AgentInfo> = {};
     for (const a of res.data.agents) next[a.name] = a;
     agentStates.value = next;
   } catch (error) {
-    ElMessage.error(extractAgentError(error, '获取 Agent 状态失败'));
+    if (silent) {
+      console.warn('Agent 状态轮询失败（等待下轮重试）:', error);
+    } else {
+      ElMessage.error(extractAgentError(error, '获取 Agent 状态失败'));
+    }
   } finally {
-    stateRefreshing.value = false;
+    if (!silent) stateRefreshing.value = false;
   }
 }
 
@@ -477,10 +460,27 @@ const selectedInfo = computed<AgentInfo | null>(() =>
 
 const selectedState = computed<string>(() => selectedInfo.value?.state ?? '—');
 
-const heartbeatLabel = computed<string>(() => {
+// 相对时间的时钟源：低频 tick 驱动心跳/轨迹/最近决策的时间自动更新
+const nowMs = ref(Date.now());
+
+// heartbeat_ms 是 Unix epoch 毫秒时刻（非时长）→ 折算"距上次心跳多久"
+const heartbeatAgeSec = computed<number | null>(() => {
   const info = selectedInfo.value;
-  if (!info) return '—';
-  return `${info.heartbeat_ms} ms`;
+  if (!info || !info.heartbeat_ms) return null;
+  return Math.max(0, Math.floor((nowMs.value - info.heartbeat_ms) / 1000));
+});
+
+const heartbeatLabel = computed<string>(() => {
+  if (heartbeatAgeSec.value === null) return '—';
+  return relativeDuration(heartbeatAgeSec.value);
+});
+
+// 新鲜度着色：失活（守护判定）红色；失活与否未知但明显滞后（>60s，默认心跳间隔 10s 的 6 倍）黄色
+const heartbeatTone = computed<string>(() => {
+  const info = selectedInfo.value;
+  if (!info || heartbeatAgeSec.value === null) return '';
+  if (!info.is_alive) return 'chip-dead';
+  return heartbeatAgeSec.value > 60 ? 'chip-stale' : 'chip-ok';
 });
 
 // 从 axios 错误中提取后端中文 detail（400 风险说明 / 404 / 500 均为中文）
@@ -542,6 +542,21 @@ async function handleRestartWithConfirm(): Promise<void> {
   await handleControl('restart');
 }
 
+// "更多"下拉：重启/关机均带确认框，此处只做分发
+function onMoreCommand(command: string): void {
+  if (command === 'restart') {
+    void handleRestartWithConfirm();
+  } else if (command === 'shutdown') {
+    void handleAgentControl('shutdown');
+  }
+}
+
+const moreActionsLoading = computed<boolean>(() => {
+  const name = selectedName.value;
+  if (!name) return false;
+  return Boolean(actionLoading[`${name}-restart`] || controlLoading[`${name}-shutdown`]);
+});
+
 // ============================================================
 // "最近决策"指标：planner.* 最新事件的相对时间
 // ============================================================
@@ -566,9 +581,9 @@ type FilterKind = 'all' | StageKind;
 
 const filterOptions: { value: FilterKind; label: string }[] = [
   { value: 'all', label: '全部' },
-  { value: 'planner', label: '想' },
-  { value: 'rundown', label: '程' },
-  { value: 'tool', label: '做' },
+  { value: 'planner', label: '想 · 决策' },
+  { value: 'rundown', label: '程 · 流程' },
+  { value: 'tool', label: '做 · 工具' },
 ];
 
 const stageLabels: Record<StageKind, string> = {
@@ -675,11 +690,7 @@ watch(displayedEntries, async () => {
 // 工具：相对时间
 // ============================================================
 
-function relativeTime(timestampMs: number): string {
-  // 后端事件 timestamp 是 Unix 秒（参见 utils/eventSummary.ts 注释）
-  const nowSec = Date.now() / 1000;
-  const tsSec = timestampMs > 1e12 ? timestampMs / 1000 : timestampMs;
-  const diffSec = Math.max(0, Math.floor(nowSec - tsSec));
+function relativeDuration(diffSec: number): string {
   if (diffSec < 5) return '刚刚';
   if (diffSec < 60) return `${diffSec}s 前`;
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m 前`;
@@ -687,13 +698,33 @@ function relativeTime(timestampMs: number): string {
   return `${Math.floor(diffSec / 86400)}d 前`;
 }
 
+function relativeTime(timestampMs: number): string {
+  // 后端事件 timestamp 是 Unix 秒（参见 utils/eventSummary.ts 注释）
+  const nowSec = nowMs.value / 1000;
+  const tsSec = timestampMs > 1e12 ? timestampMs / 1000 : timestampMs;
+  return relativeDuration(Math.max(0, Math.floor(nowSec - tsSec)));
+}
+
 // ============================================================
 // 生命周期
 // ============================================================
 
+let nowTickTimer: ReturnType<typeof setInterval> | null = null;
+
 onMounted(() => {
   componentsStore.fetchComponents();
-  refreshAgentStates();
+  void refreshAgentStates();
+  // 状态轮询：心跳/存活/状态随时间自动保鲜
+  statePollTimer = setInterval(() => void refreshAgentStates(true), STATE_POLL_INTERVAL_MS);
+  // 相对时间 tick：驱动心跳与轨迹时间戳的展示自动更新
+  nowTickTimer = setInterval(() => {
+    nowMs.value = Date.now();
+  }, 30_000);
+});
+
+onUnmounted(() => {
+  if (statePollTimer) clearInterval(statePollTimer);
+  if (nowTickTimer) clearInterval(nowTickTimer);
 });
 </script>
 
@@ -761,7 +792,7 @@ onMounted(() => {
   color: var(--text-secondary);
   display: inline-flex;
   align-items: baseline;
-  gap: 2px;
+  gap: 3px;
 }
 
 .list-count-running {
@@ -967,7 +998,12 @@ onMounted(() => {
 
 .detail-actions {
   display: flex;
+  align-items: center;
   gap: var(--spacing-sm);
+  flex-shrink: 0;
+}
+
+.more-actions {
   flex-shrink: 0;
 }
 
@@ -1008,12 +1044,16 @@ onMounted(() => {
   font-weight: 600;
 }
 
-.chip-yes {
+.chip-ok {
   color: var(--color-success);
 }
 
-.chip-no {
-  color: var(--text-placeholder);
+.chip-stale {
+  color: var(--color-warning);
+}
+
+.chip-dead {
+  color: var(--color-danger);
 }
 
 /* ----- 3. 运行轨迹：主角 ----- */
@@ -1091,16 +1131,6 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-.stream-subtitle {
-  font-size: 11px;
-  color: var(--text-placeholder);
-  font-style: italic;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .stream-count {
   flex-shrink: 0;
   font-family: var(--font-mono);
@@ -1111,6 +1141,7 @@ onMounted(() => {
   gap: 6px;
   flex-shrink: 0;
 }
+
 .filter-label {
   font-size: 11px;
   color: var(--text-secondary);
@@ -1120,17 +1151,7 @@ onMounted(() => {
 }
 
 .filter-chip {
-  font-family: var(--font-mono);
-}
-
-.stream-note {
-  font-size: 11px;
-  color: var(--text-placeholder);
-  margin: 0;
-  padding: var(--spacing-xs) var(--spacing-lg);
-  background: var(--bg-page);
-  border-bottom: 1px solid var(--border-color-light);
-  line-height: 1.5;
+  font-size: 12px;
 }
 
 .stream-scroll {
@@ -1229,6 +1250,7 @@ onMounted(() => {
   background: var(--color-agent-bg);
   border-color: var(--color-agent);
 }
+
 .stage-badge--tool {
   color: var(--color-tool);
   background: var(--color-tool-bg);
@@ -1280,26 +1302,6 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-/* ============================================================ */
-/* 规划中笔记（页面底部）                                         */
-/* ============================================================ */
-.page-notes {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: var(--spacing-sm) var(--spacing-md);
-  border-top: 1px dashed var(--border-color-light);
-  flex-shrink: 0;
-}
-
-.page-note {
-  margin: 0;
-  font-size: 11px;
-  color: var(--text-placeholder);
-  font-style: italic;
-  line-height: 1.5;
 }
 
 /* ============================================================ */
