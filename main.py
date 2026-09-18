@@ -977,12 +977,13 @@ async def _start_dashboard(
             event_history=(event_recorder.event_history if event_recorder else None),
         )
         await dashboard_server.start()
-        logger.info(f"Dashboard 已启动: http://{typed_dashboard_config.host}:{typed_dashboard_config.port}")
+        # 端口回退后配置值会偏离实际绑定端口，地址一律取服务器实况
+        logger.info(f"Dashboard 已启动: {dashboard_server.get_url()}")
         if typed_dashboard_config.auto_open_browser:
             if typed_dashboard_config.dev_mode:
                 dashboard_url = f"http://localhost:{typed_dashboard_config.vite_dev_port}"
             else:
-                dashboard_url = f"http://{typed_dashboard_config.host}:{typed_dashboard_config.port}"
+                dashboard_url = dashboard_server.get_url()
             webbrowser.open(dashboard_url)
             logger.info(f"已自动打开浏览器: {dashboard_url}")
         return dashboard_server

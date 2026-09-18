@@ -53,6 +53,9 @@ from src.modules.dashboard.websocket.handler import WebSocketHandler
 class DashboardServer:
     """Dashboard 服务器主类"""
 
+    # 配置端口被占用时的回退候选数（含配置端口本身，即依次试 port..port+9）
+    _PORT_FALLBACK_CANDIDATES = 10
+
     def __init__(
         self,
         event_bus: "EventBus",
@@ -248,19 +251,42 @@ class DashboardServer:
         self.logger.info(f"Dashboard 已启动: {self.get_url()}")
 
     def _bind_socket(self) -> socket.socket:
-        """预绑定 Dashboard 端口，端口被占用时抛 RuntimeError（避免“已启动”假象）
+        """预绑定 Dashboard 端口；配置端口被占用时依次回退尝试后续端口
+
+        回退成功即更新 ``self.port`` 并告警（访问地址随之变化，OBS 浏览器源 /
+        书签等旧地址引用需手动更新）；开发模式不回退——vite 代理目标硬编码
+        配置端口，换口后前端代理断链，保持立即报错。
 
         注意：不设置 SO_REUSEADDR——Windows 上该选项允许绑定已被监听的端口，
         会使端口占用检测失效；与 asyncio.create_server（uvicorn）行为保持一致。
         """
         family = socket.AF_INET6 if ":" in self.host else socket.AF_INET
-        sock = socket.socket(family, socket.SOCK_STREAM)
-        try:
-            sock.bind((self.host, self.port))
-        except OSError as e:
-            sock.close()
-            raise RuntimeError(f"Dashboard 端口绑定失败（{self.host}:{self.port} 可能被占用）: {e}") from e
-        return sock
+        candidates = (
+            (self.port,)
+            if self.dev_mode
+            else tuple(self.port + offset for offset in range(self._PORT_FALLBACK_CANDIDATES))
+        )
+        last_error: Optional[OSError] = None
+        for candidate in candidates:
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            try:
+                sock.bind((self.host, candidate))
+            except OSError as e:
+                sock.close()
+                last_error = e
+                continue
+            if candidate != self.port:
+                self.logger.warning(
+                    f"Dashboard 端口 {self.host}:{self.port} 被占用，已回退到 {self.host}:{candidate}，"
+                    f"访问地址变为 http://{self.host}:{candidate}（旧端口的地址引用需手动更新）"
+                )
+                self.port = candidate
+            return sock
+        if self.dev_mode:
+            detail = f"{self.host}:{self.port} 被占用（开发模式不回退换口，vite 代理硬编码该端口）"
+        else:
+            detail = f"{self.host}:{self.port} 起连续 {self._PORT_FALLBACK_CANDIDATES} 个候选端口均被占用"
+        raise RuntimeError(f"Dashboard 端口绑定失败（{detail}）: {last_error}") from last_error
 
     async def stop(self) -> None:
         """停止 Dashboard 服务器"""
