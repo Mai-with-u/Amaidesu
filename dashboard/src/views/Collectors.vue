@@ -218,11 +218,12 @@
  * （payloads/base.py）均无 source 字段，运行轨迹按事件族近似归属；
  * COLLECTOR_EVENT_FAMILIES 依据 collectors/*.py 的实际 emit 代码核对。
  */
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { Setting } from '@element-plus/icons-vue';
 import { useComponentsStore, useEventsStore } from '@/stores';
+import { useScrollFollow } from '@/composables/useScrollFollow';
 import type { ComponentControlAction, ComponentSummary } from '@/types';
 import { summarizeEvent } from '@/utils/eventSummary';
 import { relativeTime as relativeTimeLabel, toSeconds } from '@/utils/liveFeed';
@@ -450,23 +451,7 @@ function clearStream(): void {
 
 // 自动滚动：新条目追加时滚到底部，除非用户已向上滚动
 
-const streamScrollRef = ref<HTMLElement | null>(null);
-// 距底 < 32px 视为"在底部"
-const SCROLL_BOTTOM_THRESHOLD_PX = 32;
-
-function isAtBottom(el: HTMLElement): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX;
-}
-
-watch(streamEntries, async () => {
-  await nextTick();
-  const el = streamScrollRef.value;
-  if (!el) return;
-  // 用户滚到底 → 跟到底；用户向上滚动则不强制。
-  if (isAtBottom(el)) {
-    el.scrollTop = el.scrollHeight;
-  }
-});
+const { scrollRef: streamScrollRef } = useScrollFollow(streamEntries);
 
 // 工具
 

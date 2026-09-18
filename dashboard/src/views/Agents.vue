@@ -298,13 +298,14 @@
  * 事件负载暂无 agent 身份字段：单 Agent 场景归因精确，多 Agent 并行时
  * 按时间近似；消除近似需后端在事件负载中增加 agent-identity 字段。
  */
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { ArrowDown, Refresh } from '@element-plus/icons-vue';
 import { storeToRefs } from 'pinia';
 import { useComponentsStore, useEventsStore } from '@/stores';
 import { agentsApi } from '@/api';
+import { useScrollFollow } from '@/composables/useScrollFollow';
 import type {
   AgentControlActionType,
   AgentInfo,
@@ -645,23 +646,7 @@ function clearStream(): void {
 
 // 自动滚动：新条目追加时滚到底部，除非用户已向上滚动
 
-const streamScrollRef = ref<HTMLElement | null>(null);
-// 距底 < 32px 视为"在底部"
-const SCROLL_BOTTOM_THRESHOLD_PX = 32;
-
-function isAtBottom(el: HTMLElement): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX;
-}
-
-watch(displayedEntries, async () => {
-  await nextTick();
-  const el = streamScrollRef.value;
-  if (!el) return;
-  // 用户滚到底 → 跟到底；用户向上滚动则不强制。
-  if (isAtBottom(el)) {
-    el.scrollTop = el.scrollHeight;
-  }
-});
+const { scrollRef: streamScrollRef } = useScrollFollow(displayedEntries);
 
 // 工具：相对时间
 

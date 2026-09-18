@@ -318,6 +318,7 @@ import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useEventsStore, useWebSocketStore } from '@/stores';
 import { debugApi, liveSessionsApi, simulatorApi, streamerApi } from '@/api';
+import { useScrollFollow } from '@/composables/useScrollFollow';
 import {
   STAGE_LABEL,
   MAX_ENTRIES,
@@ -345,7 +346,6 @@ import type { LiveSessionItem, ThinkingDelta, WebSocketMessage } from '@/types';
 // 常量
 
 /** 距底 ≤ 此距离视为"贴底"，可自动跟随 */
-const BOTTOM_THRESHOLD_PX = 40;
 
 const SOURCE_LABEL: Record<string, string> = {
   manual: '手动',
@@ -987,26 +987,14 @@ async function submitTriggerProactive(): Promise<void> {
 
 // 滚动跟随：贴底自动跟随；上滚时冒出"回到最新"
 
-const scrollRef = ref<HTMLElement | null>(null);
-const atBottom = ref(true);
 const unseen = ref(0);
 let resizeObserver: ResizeObserver | null = null;
 
-function isAtBottom(el: HTMLElement): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD_PX;
-}
+const { scrollRef, atBottom, onScroll: followOnScroll, scrollToBottom } = useScrollFollow();
 
 function onScroll(): void {
-  const el = scrollRef.value;
-  if (!el) return;
-  atBottom.value = isAtBottom(el);
+  followOnScroll();
   if (atBottom.value) unseen.value = 0;
-}
-
-function scrollToBottom(): void {
-  const el = scrollRef.value;
-  if (!el) return;
-  el.scrollTop = el.scrollHeight;
 }
 
 function jumpToLatest(): void {
