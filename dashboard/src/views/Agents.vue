@@ -209,7 +209,7 @@
                   <span class="stream-pulse" aria-hidden="true" />
                   <h3 class="stream-title">运行轨迹</h3>
                   <el-tooltip
-                    content="轨迹按事件族归属：单 Agent 场景精确，多 Agent 并行时按时间近似"
+                    content="轨迹由三族事件构成：决策（planner.*）/ 流程（rundown.changed）/ 工具（tool.result.*）；单 Agent 归因精确，多 Agent 并行时按时间近似"
                     placement="top"
                   >
                     <el-tag size="small" type="info" effect="plain" class="stream-count">
@@ -300,7 +300,7 @@
  * （详情头 / 状态摘要条 / 运行轨迹）。
  *
  * 运行轨迹按三事件族合并（planner.* / rundown.changed / tool.result.*），
- * 每条带阶段 badge（想/程/做）与失败标记（tool.result 失败标红）。
+ * 每条带阶段 badge（决策/流程/工具）与失败标记（tool.result 失败标红）。
  * 事件负载暂无 agent 身份字段：单 Agent 场景归因精确，多 Agent 并行时
  * 按时间近似；消除近似需后端在事件负载中增加 agent-identity 字段。
  */
@@ -581,15 +581,15 @@ type FilterKind = 'all' | StageKind;
 
 const filterOptions: { value: FilterKind; label: string }[] = [
   { value: 'all', label: '全部' },
-  { value: 'planner', label: '想 · 决策' },
-  { value: 'rundown', label: '程 · 流程' },
-  { value: 'tool', label: '做 · 工具' },
+  { value: 'planner', label: '决策' },
+  { value: 'rundown', label: '流程' },
+  { value: 'tool', label: '工具' },
 ];
 
 const stageLabels: Record<StageKind, string> = {
-  planner: '想',
-  rundown: '程',
-  tool: '做',
+  planner: '决策',
+  rundown: '流程',
+  tool: '工具',
 };
 
 function stageLabel(stage: StageKind): string {
@@ -1234,7 +1234,7 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  width: 36px;
   height: 22px;
   border-radius: var(--radius-sm);
   font-size: 11px;
@@ -1249,6 +1249,12 @@ onUnmounted(() => {
   color: var(--color-agent);
   background: var(--color-agent-bg);
   border-color: var(--color-agent);
+}
+
+.stage-badge--rundown {
+  color: var(--color-agenda);
+  background: var(--color-agenda-bg);
+  border-color: var(--color-agenda);
 }
 
 .stage-badge--tool {
@@ -1319,6 +1325,11 @@ onUnmounted(() => {
   .stream-item {
     grid-template-columns: 32px 100px minmax(0, 1fr) auto;
   }
+
+  .stage-badge {
+    width: 30px;
+    font-size: 10px;
+  }
 }
 
 @media (max-width: 768px) {
@@ -1343,6 +1354,12 @@ onUnmounted(() => {
   .stream-item {
     grid-template-columns: 28px minmax(0, 1fr) auto;
     row-gap: 2px;
+  }
+
+  .stage-badge {
+    width: 28px;
+    font-size: 10px;
+    letter-spacing: 0;
   }
 
   .stream-item-type {
