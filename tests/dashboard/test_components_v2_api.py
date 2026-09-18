@@ -116,9 +116,6 @@ def test_component_list_response_serializes_v2_groups() -> None:
     )
     data = resp.model_dump()
     assert set(data["collectors"][0].keys()) >= {"name", "group", "phase", "type", "is_started", "is_enabled"}
-    assert data["input"] == []
-    assert data["decision"] == []
-    assert data["output"] == []
 
 
 def test_agents_section_without_enabled_still_lists_children() -> None:

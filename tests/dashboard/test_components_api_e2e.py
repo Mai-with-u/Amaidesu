@@ -85,7 +85,7 @@ def test_list_components_returns_all_groups_with_disabled(client) -> None:
     data = resp.json()
 
     # 工具不在组件清单（域开关单元归 tools API 的 categories 端点管）
-    assert set(data) == {"collectors", "agents", "input", "decision", "output"}
+    assert set(data) == {"collectors", "agents"}
 
     collectors = {c["name"]: c for c in data["collectors"]}
     # 新契约：全集 = collectors.toml 顶层段 ∪ enabled 名单（console_input 仅在名单中）

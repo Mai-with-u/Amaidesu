@@ -126,7 +126,6 @@ async def test_start_subscribes_all_room_message_events() -> None:
 async def test_on_input_message_roundtrip() -> None:
     """端到端：事件回调 → 转换 → 入队 → 广播（回归无 AttributeError/NoneType）"""
     svc = _make_service()
-    svc._broadcast_callback = AsyncMock()
     svc._danmaku_callback = AsyncMock()
     await svc._on_input_message("room.message.danmaku", _make_payload(), "console")
     assert len(svc.messages) == 1
@@ -136,6 +135,5 @@ async def test_on_input_message_roundtrip() -> None:
 @pytest.mark.asyncio
 async def test_on_input_message_missing_user_fallback() -> None:
     svc = _make_service()
-    svc._broadcast_callback = AsyncMock()
     await svc._on_input_message("room.message.danmaku", _make_payload(), "console")
     assert svc.messages[0].user_name == "观众A"

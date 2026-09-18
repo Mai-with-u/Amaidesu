@@ -52,9 +52,6 @@ def dashboard_server(config_service):
     cfg = DashboardConfig(host="127.0.0.1", port=60214)
     server = DashboardServer(
         event_bus=None,  # type: ignore[arg-type]
-        input_manager=None,
-        decision_manager=None,
-        output_manager=None,
         config_service=config_service,
         dashboard_config=cfg,
     )

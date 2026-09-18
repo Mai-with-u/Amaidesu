@@ -1318,36 +1318,6 @@ watch(
   color: var(--text-secondary);
   line-height: 1.6;
 }
-
-.load-row {
-  display: flex;
-  gap: var(--spacing-sm);
-  align-items: center;
-}
-
-.load-input {
-  flex: 1;
-  min-width: 0;
-}
-
-.load-default-hint {
-  margin: var(--spacing-sm) 0 0;
-  font-size: 11px;
-  color: var(--text-placeholder);
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  flex-wrap: wrap;
-}
-
-.load-default-hint code {
-  font-family: var(--font-mono);
-  background: var(--bg-hover);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  color: var(--text-regular);
-}
-
 /* ============================================================ */
 /* 总览 KPI 行（沿用 Tools.vue 的 total-card 风格）                */
 /* ============================================================ */
@@ -1420,11 +1390,6 @@ watch(
 }
 
 .total-status .paused-tag,
-.total-status .override-tag {
-  font-size: 10px;
-  font-weight: 600;
-}
-
 /* ---- title 卡 ---- */
 .total-title .title-value {
   font-family: var(--font-family);
@@ -1451,28 +1416,12 @@ watch(
   font-weight: 600;
   color: var(--text-primary);
 }
-
-.total-progress .progress-sep {
-  color: var(--text-placeholder);
-  font-weight: 400;
-}
-
 .total-progress .progress-percent {
   margin-left: auto;
   font-size: 12px;
   color: var(--color-agenda);
   font-weight: 700;
 }
-
-.flag-yes {
-  color: var(--color-success);
-  font-weight: 600;
-}
-
-.flag-no {
-  color: var(--text-placeholder);
-}
-
 /* ============================================================ */
 /* 当前环节大卡                                                  */
 /* ============================================================ */
@@ -1522,15 +1471,6 @@ watch(
   color: var(--text-primary);
   word-break: break-word;
 }
-
-.expansion-tag {
-  flex-shrink: 0;
-}
-
-.unload-btn {
-  flex-shrink: 0;
-}
-
 .grow {
   flex: 1;
   min-width: 0;
@@ -1674,12 +1614,6 @@ watch(
 .segment-label {
   font-weight: 500;
 }
-
-.source-cell {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
 /* ============================================================ */
 /* 推进历史时间线                                                  */
 /* ============================================================ */
@@ -1768,34 +1702,11 @@ watch(
 }
 
 .key-points,
-.talking-points {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 .key-point,
-.talking-point {
-  display: flex;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--text-regular);
-  line-height: 1.6;
-}
-
 .key-point-bullet {
   color: var(--color-agenda);
   font-weight: 700;
 }
-
-.talking-bullet {
-  color: var(--color-agenda);
-  flex-shrink: 0;
-}
-
 .meta-grid {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -1812,39 +1723,6 @@ watch(
   margin: 0;
   color: var(--text-regular);
 }
-
-.expanded-content {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-  background: var(--color-agenda-bg);
-  padding: var(--spacing-sm) var(--spacing-md);
-  border-radius: var(--radius-md);
-  border-left: 2px solid var(--color-agenda);
-}
-
-.expanded-block {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.expanded-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  color: var(--color-agenda);
-  text-transform: uppercase;
-}
-
-.expanded-text {
-  font-size: 13px;
-  color: var(--text-primary);
-  margin: 0;
-  line-height: 1.6;
-  white-space: pre-wrap;
-}
-
 .drawer-footer {
   display: flex;
   justify-content: flex-end;

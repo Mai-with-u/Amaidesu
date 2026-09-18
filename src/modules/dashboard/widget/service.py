@@ -10,7 +10,7 @@ WebSocket 客户端；字幕显示由字幕基础设施 ``SubtitleService`` 通�
 
 from collections import deque
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Deque, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Deque, List, Optional
 
 from src.modules.dashboard.widget.models import (
     MessageType,
@@ -51,7 +51,6 @@ class DanmakuWidgetService:
 
         self._danmaku_callback: Optional[Callable[[dict], Any]] = None
         self._subtitle_callback: Optional[Callable[[dict], Any]] = None
-        self._broadcast_callback: Optional[Callable[[dict], Any]] = None
 
         self._is_running = False
 
@@ -64,9 +63,6 @@ class DanmakuWidgetService:
 
     def set_subtitle_callback(self, callback: Callable[[dict], Any]) -> None:
         self._subtitle_callback = callback
-
-    def set_broadcast_callback(self, callback: Callable[[dict], Any]) -> None:
-        self._broadcast_callback = callback
 
     async def start(self) -> None:
         if self._is_running:
@@ -114,10 +110,6 @@ class DanmakuWidgetService:
             self.logger.debug(f"收到弹幕: {text[:50]}, user={payload.user.name if payload.user else ''}")
             widget_msg = self._convert_payload_to_widget(payload)
             if widget_msg is None:
-                # 退化：尝试从 payload.model_dump() 取字段
-                dump = payload.model_dump() if hasattr(payload, "model_dump") else {}
-                widget_msg = self._convert_dict_to_widget(dump)
-            if widget_msg is None:
                 return
 
             if not self._should_display(widget_msg):
@@ -134,9 +126,9 @@ class DanmakuWidgetService:
         """显示一条字幕（字幕基础设施 Backend 的调用入口）。
 
         构造 ``SubtitleWidgetMessage`` 并追加到字幕队列，然后通过
-        ``_subtitle_callback`` / ``_broadcast_callback`` 推送给前端
-        WebSocket 客户端（``/ws/subtitle``）。由 ``DashboardBackend.show``
-        在 ``SubtitleService.show`` 广播路径上调用。
+        ``_subtitle_callback`` 推送给前端 WebSocket 客户端
+        （``/ws/subtitle``）。由 ``DashboardBackend.show`` 在
+        ``SubtitleService.show`` 广播路径上调用。
 
         Args:
             text: 字幕文本内容。
@@ -171,12 +163,6 @@ class DanmakuWidgetService:
             except Exception as e:
                 self.logger.error(f"广播字幕到subtitle端失败: {e}", exc_info=True)
 
-        if self._broadcast_callback:
-            try:
-                await self._broadcast_callback(data)
-            except Exception as e:
-                self.logger.error(f"广播字幕失败: {e}", exc_info=True)
-
     async def clear_subtitle(self) -> None:
         """清空当前字幕显示（字幕基础设施 Backend 的调用入口）。
 
@@ -207,12 +193,6 @@ class DanmakuWidgetService:
                 await self._subtitle_callback(data)
             except Exception as e:
                 self.logger.error(f"广播清空字幕到subtitle端失败: {e}", exc_info=True)
-
-        if self._broadcast_callback:
-            try:
-                await self._broadcast_callback(data)
-            except Exception as e:
-                self.logger.error(f"广播清空字幕失败: {e}", exc_info=True)
 
     def _convert_payload_to_widget(
         self,
@@ -289,122 +269,6 @@ class DanmakuWidgetService:
             self.logger.error(f"转换 RoomMessagePayload 失败: {e}", exc_info=True)
             return None
 
-    def _convert_dict_to_widget(self, msg_dict: Dict[str, Any]) -> Optional[DanmakuWidgetMessage]:
-        try:
-            metadata = msg_dict.get("metadata", {})
-            user_name = (
-                metadata.get("username") or msg_dict.get("user_nickname") or msg_dict.get("nickname") or "匿名用户"
-            )
-            user_id = metadata.get("user_id") or msg_dict.get("user_id") or ""
-            platform = msg_dict.get("platform") or "unknown"
-            room_id = msg_dict.get("room_id")
-            importance = msg_dict.get("importance", 0.5)
-            timestamp = msg_dict.get("timestamp")
-            text = msg_dict.get("text", "")
-            data_type = msg_dict.get("data_type", "text")
-
-            dt_timestamp = datetime.fromtimestamp(timestamp) if timestamp else datetime.now()
-
-            raw = msg_dict.get("raw") or msg_dict.get("raw_data") or {}
-
-            if data_type == "text":
-                return DanmakuWidgetMessage(
-                    user_name=user_name,
-                    user_id=user_id,
-                    content=text,
-                    message_type=MessageType.TEXT,
-                    timestamp=dt_timestamp,
-                    importance=importance,
-                    platform=platform,
-                    room_id=room_id,
-                    simulated=bool(msg_dict.get("simulated", False)),
-                )
-
-            elif data_type == "gift":
-                gift_name = raw.get("gift_name")
-                gift_count = raw.get("gift_num")
-                gift_price = raw.get("price")
-
-                return DanmakuWidgetMessage(
-                    user_name=user_name,
-                    user_id=user_id,
-                    content=text,
-                    message_type=MessageType.GIFT,
-                    timestamp=dt_timestamp,
-                    importance=importance,
-                    gift_name=gift_name,
-                    gift_count=gift_count,
-                    gift_price=float(gift_price) if gift_price else None,
-                    platform=platform,
-                    room_id=room_id,
-                    simulated=bool(msg_dict.get("simulated", False)),
-                )
-
-            elif data_type == "super_chat":
-                sc_price = raw.get("rmb")
-                sc_message = raw.get("message")
-
-                return DanmakuWidgetMessage(
-                    user_name=user_name,
-                    user_id=user_id,
-                    content=text,
-                    message_type=MessageType.SUPER_CHAT,
-                    timestamp=dt_timestamp,
-                    importance=importance,
-                    sc_price=float(sc_price) if sc_price else None,
-                    sc_message=sc_message,
-                    platform=platform,
-                    room_id=room_id,
-                    simulated=bool(msg_dict.get("simulated", False)),
-                )
-
-            elif data_type == "guard":
-                guard_level = raw.get("guard_level")
-
-                return DanmakuWidgetMessage(
-                    user_name=user_name,
-                    user_id=user_id,
-                    content=text,
-                    message_type=MessageType.GUARD,
-                    timestamp=dt_timestamp,
-                    importance=importance,
-                    guard_level=guard_level,
-                    platform=platform,
-                    room_id=room_id,
-                    simulated=bool(msg_dict.get("simulated", False)),
-                )
-
-            elif data_type == "enter":
-                return DanmakuWidgetMessage(
-                    user_name=user_name,
-                    user_id=user_id,
-                    content=text,
-                    message_type=MessageType.ENTER,
-                    timestamp=dt_timestamp,
-                    importance=importance,
-                    platform=platform,
-                    room_id=room_id,
-                    simulated=bool(msg_dict.get("simulated", False)),
-                )
-
-            else:
-                self.logger.debug(f"未知消息类型: {data_type}")
-                return DanmakuWidgetMessage(
-                    user_name=user_name,
-                    user_id=user_id,
-                    content=text,
-                    message_type=MessageType.TEXT,
-                    timestamp=dt_timestamp,
-                    importance=importance,
-                    platform=platform,
-                    room_id=room_id,
-                    simulated=bool(msg_dict.get("simulated", False)),
-                )
-
-        except Exception as e:
-            self.logger.error(f"转换消息失败: {e}", exc_info=True)
-            return None
-
     def _should_display(self, msg: DanmakuWidgetMessage) -> bool:
         if msg.importance < self.config.min_importance:
             return False
@@ -435,12 +299,6 @@ class DanmakuWidgetService:
                 await self._danmaku_callback(data)
             except Exception as e:
                 self.logger.error(f"广播消息到danmaku端失败: {e}", exc_info=True)
-
-        if self._broadcast_callback:
-            try:
-                await self._broadcast_callback(data)
-            except Exception as e:
-                self.logger.error(f"广播消息失败: {e}", exc_info=True)
 
     def get_recent_messages(self, count: int = 15) -> List[dict]:
         messages = list(self.messages)[-count:]

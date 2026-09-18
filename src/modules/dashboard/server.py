@@ -19,7 +19,6 @@ from src.modules.agents.control import AgentControl
 from src.modules.dashboard.api.router import create_app, setup_cors
 from src.modules.dashboard.dependencies import set_dashboard_server
 from src.modules.config.core_schemas import DashboardConfig
-from src.modules.dashboard.schemas.manager_protocol import ManagerStatusProvider
 from src.modules.dashboard.widget import DanmakuWidgetService
 from src.modules.dashboard.widget.models import DanmakuWidgetConfig, SubtitleWidgetConfig
 from src.modules.logging import get_logger
@@ -61,9 +60,6 @@ class DashboardServer:
         event_bus: "EventBus",
         config_service: "ConfigService",
         dashboard_config: DashboardConfig,
-        input_manager: Optional[ManagerStatusProvider] = None,
-        decision_manager: Optional[ManagerStatusProvider] = None,
-        output_manager: Optional[ManagerStatusProvider] = None,
         collector_manager: Optional[Any] = None,
         agent_manager: Optional[Any] = None,
         tool_registry: Optional[Any] = None,
@@ -79,9 +75,6 @@ class DashboardServer:
         rundown_repo: Optional[Any] = None,
     ):
         self.event_bus = event_bus
-        self.input_manager = input_manager
-        self.decision_manager = decision_manager
-        self.output_manager = output_manager
         self.collector_manager = collector_manager
         self.agent_manager = agent_manager
         # AgentControl 是 /api/v1/agents 控制面（pause/resume/shutdown/state）的
@@ -364,28 +357,6 @@ class DashboardServer:
         """获取访问 URL"""
         return f"http://{self.host}:{self.port}"
 
-    def get_config_path(self, section: Optional[str] = None) -> Optional[str]:
-        """获取配置文件路径（六文件树，自描述协议解析）
-
-        Args:
-            section: 配置 scope（agents/collectors/tools/model/storage/infra，
-                即文件名去后缀）。
-
-        Returns:
-            对应 TOML 文件的绝对路径字符串；scope 未知或 ``config_service``
-            不可用时返回 ``None``。
-        """
-        if not (self.config_service and hasattr(self.config_service, "base_dir")):
-            return None
-
-        from src.modules.config.multi_file_loader import resolve_root_schema
-
-        root_cls = resolve_root_schema(section or "")
-        if root_cls is None:
-            return None
-        config_dir = Path(self.config_service.base_dir) / "config"
-        return str(config_dir / root_cls.__file_name__)
-
     async def _start_vite_dev_server(self) -> None:
         """启动 Vite 开发服务器子进程（开发模式专用）"""
         dashboard_dir = Path(__file__).parent.parent.parent.parent / "dashboard"
@@ -597,23 +568,6 @@ class DashboardServer:
                 disconnected.add(client)
 
         self._subtitle_clients -= disconnected
-
-    async def _broadcast_to_widget_clients(self, data: dict) -> None:
-        """广播消息到所有 widget 客户端"""
-        if not self._widget_clients:
-            return
-
-        message = json.dumps(data, ensure_ascii=False, default=str)
-        disconnected = set()
-
-        for client in self._widget_clients:
-            try:
-                await client.send_text(message)
-            except Exception as e:
-                self.logger.debug(f"广播时客户端已断开: {e}")
-                disconnected.add(client)
-
-        self._widget_clients -= disconnected
 
     def _get_widget_html(self) -> str:
         """返回 widget 页面 HTML"""

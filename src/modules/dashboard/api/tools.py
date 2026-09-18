@@ -92,22 +92,11 @@ _CATEGORY_LEVEL_KEYS = {"vision", "memory"}
 # MCP 分类（提供者 = 各 server，动态来自 [tools.mcp.config.servers]）。
 _MCP_CATEGORY = "mcp"
 
-# 关键内部件停用保护清单：控制类工具（暂停/恢复/关闭/重启/状态内省）已移出
-# LLM 工具面，控制面由 DashboardServer 直调 AgentControl，不经工具停用开关；
-# 委派原语（delegate/task_status）停用只影响 LLM 委派能力，无自我控制锁死
-# 风险，不列入。当前清单为空，警示确认语义保留供后续关键工具复用。
-_CRITICAL_TOOL_NAMES: Tuple[str, ...] = ()
-
 
 class ProviderControlRequest(BaseModel):
-    """提供者/工具开关控制请求体。
-
-    ``confirm``：停用关键内部件（``_CRITICAL_TOOL_NAMES``）时的警示确认
-    标记；缺省 False，非关键工具不要求。
-    """
+    """提供者/工具开关控制请求体。"""
 
     action: Literal["enable", "disable"]
-    confirm: bool = False
 
 
 def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
@@ -508,9 +497,6 @@ async def control_tool(
     停用的工具仍保留在注册表中（工具页可见全集），但对 LLM 不可见且调用被
     拒绝；写盘后不触发热重载，重启后生效。工具名必须在运行时注册表中存在
     （防止拼写错误静默写入无效条目，404）。
-
-    关键内部件（``_CRITICAL_TOOL_NAMES``）停用走警示确认：缺 ``confirm=true``
-    时返回 400 并附中文风险说明；非关键工具不受影响。
     """
     enable = request.action == "enable"
     registry = _get_registry(server)
@@ -520,15 +506,6 @@ async def control_tool(
         known = set()
     if not enable and name not in known:
         raise HTTPException(status_code=404, detail=f"运行时未注册工具: {name}")
-    if not enable and name in _CRITICAL_TOOL_NAMES and not request.confirm:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"工具 {name} 是宿主 Agent 运行控制的关键内部件，停用会导致 Agent "
-                "失去自我控制通道（暂停/恢复/关闭/重启不可用）。如确认停用，请携带 "
-                "confirm: true 重新提交。"
-            ),
-        )
 
     config_dir = _config_dir(server)
     doc = _read_tools_doc(config_dir)

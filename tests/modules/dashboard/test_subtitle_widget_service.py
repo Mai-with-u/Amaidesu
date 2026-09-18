@@ -3,8 +3,7 @@
 覆盖：
 
 - ``show_subtitle`` 公开方法：构造 ``SubtitleWidgetMessage``、追加
-  到 ``subtitle_messages``、通过 ``_subtitle_callback`` /
-  ``_broadcast_callback`` 广播
+  到 ``subtitle_messages``、通过 ``_subtitle_callback`` 广播
 - ``show_subtitle`` 的 ``duration_ms`` 参数透传；``None`` 时回退到
   ``subtitle_config.auto_hide_after_ms``
 - ``clear_subtitle`` 公开方法：清空 ``subtitle_messages``、广播清空
@@ -42,7 +41,7 @@ def _make_service(
 
 
 # ---------------------------------------------------------------------------
-# show_subtitle：公开方法 + 队列追加 + 双 callback 广播
+# show_subtitle：公开方法 + 队列追加 + callback 广播
 # ---------------------------------------------------------------------------
 
 
@@ -82,17 +81,6 @@ class TestShowSubtitle:
         assert data["duration_ms"] == 5000
 
     @pytest.mark.asyncio
-    async def test_broadcast_callback_receives_subtitle_payload(self):
-        """``_broadcast_callback`` 同样收到 ``type='subtitle'`` data 字典。"""
-        svc = _make_service()
-        svc._broadcast_callback = AsyncMock()
-        await svc.show_subtitle("hello")
-        svc._broadcast_callback.assert_awaited_once()
-        data = svc._broadcast_callback.await_args.args[0]
-        assert data["type"] == "subtitle"
-        assert data["text"] == "hello"
-
-    @pytest.mark.asyncio
     async def test_no_callbacks_does_not_raise(self):
         """未注册 callback 时 ``show_subtitle`` 不抛错（仅入队）。"""
         svc = _make_service()
@@ -112,11 +100,9 @@ class TestShowSubtitleDisabled:
         ——不追加消息、不广播。"""
         svc = _make_service(subtitle_enabled=False)
         svc._subtitle_callback = AsyncMock()
-        svc._broadcast_callback = AsyncMock()
         await svc.show_subtitle("hello")
         assert len(svc.subtitle_messages) == 0
         svc._subtitle_callback.assert_not_awaited()
-        svc._broadcast_callback.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -141,19 +127,13 @@ class TestClearSubtitle:
         """``clear_subtitle`` 广播 ``text=''`` 且 ``duration_ms=0`` 的清空消息。"""
         svc = _make_service()
         svc._subtitle_callback = AsyncMock()
-        svc._broadcast_callback = AsyncMock()
 
         await svc.clear_subtitle()
 
-        # 两次 callback 都收到清空信号
         subtitle_data = svc._subtitle_callback.await_args.args[0]
-        broadcast_data = svc._broadcast_callback.await_args.args[0]
         assert subtitle_data["type"] == "subtitle"
         assert subtitle_data["text"] == ""
         assert subtitle_data["duration_ms"] == 0
-        assert broadcast_data["type"] == "subtitle"
-        assert broadcast_data["text"] == ""
-        assert broadcast_data["duration_ms"] == 0
 
 
 # ---------------------------------------------------------------------------

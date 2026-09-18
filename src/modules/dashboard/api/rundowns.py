@@ -65,8 +65,7 @@ class _RundownApplyCallable(Protocol):
 
 def _get_repo(server: "DashboardServer") -> Optional[Any]:
     """取组合根注入的 RundownRepo（未注入返回 None，端点降级）。"""
-    repo = getattr(server, "rundown_repo", None)
-    return repo if repo is not None else None
+    return getattr(server, "rundown_repo", None)
 
 
 def _resolve_streamer_agent(server: "DashboardServer") -> Optional[Any]:

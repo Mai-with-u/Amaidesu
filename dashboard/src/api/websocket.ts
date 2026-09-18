@@ -113,17 +113,6 @@ class WebSocketClient {
     }
   }
 
-  unsubscribe(events: string[]) {
-    events.forEach(e => this.subscribedEvents.delete(e));
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const request: SubscribeRequest = {
-        action: 'unsubscribe',
-        events,
-      };
-      this.ws.send(JSON.stringify(request));
-    }
-  }
-
   private sendSubscribe(events: string[]) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const request: SubscribeRequest = {
@@ -159,5 +148,3 @@ class WebSocketClient {
 
 // Singleton instance
 export const wsClient = new WebSocketClient();
-
-export default wsClient;

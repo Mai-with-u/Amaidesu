@@ -4,27 +4,12 @@ Dashboard Schema 模块
 定义 API 请求和响应的数据模型。
 """
 
-from src.modules.dashboard.schemas.config import (
-    ConfigResponse,
-    ConfigUpdateRequest,
-    ConfigUpdateResponse,
-)
-from src.modules.dashboard.schemas.config_schema import (
-    ConfigFieldType,
-    ConfigFieldSchema,
-    ConfigGroupSchema,
-    ConfigSchemaResponse,
-    ConfigUpdateRequest as ConfigSchemaUpdateRequest,
-    ConfigUpdateResponse as ConfigSchemaUpdateResponse,
-    ValidationRule,
-)
 from src.modules.dashboard.schemas.debug import (
     EventBusStatsResponse,
     InjectMessageRequest,
     InjectMessageResponse,
 )
 from src.modules.dashboard.schemas.event import (
-    ClientInfo,
     SubscribeRequest,
     SubscribeResponse,
     WebSocketMessage,
@@ -91,18 +76,6 @@ __all__ = [
     "RundownStateResponse",
     "RundownControlRequest",
     "RundownControlResponse",
-    # Config
-    "ConfigResponse",
-    "ConfigUpdateRequest",
-    "ConfigUpdateResponse",
-    # Config Schema
-    "ConfigFieldType",
-    "ConfigFieldSchema",
-    "ConfigGroupSchema",
-    "ConfigSchemaResponse",
-    "ConfigSchemaUpdateRequest",
-    "ConfigSchemaUpdateResponse",
-    "ValidationRule",
     # Debug
     "InjectMessageRequest",
     "InjectMessageResponse",
@@ -111,7 +84,6 @@ __all__ = [
     "WebSocketMessage",
     "SubscribeRequest",
     "SubscribeResponse",
-    "ClientInfo",
     # Agent 控制面
     "AgentControlAction",
     "AgentControlRequest",

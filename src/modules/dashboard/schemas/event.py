@@ -39,11 +39,3 @@ class SubscribeResponse(BaseModel):
     success: bool
     subscribed_events: List[str]
     message: str
-
-
-class ClientInfo(BaseModel):
-    """客户端信息"""
-
-    client_id: str
-    connected_at: float
-    subscribed_events: List[str]

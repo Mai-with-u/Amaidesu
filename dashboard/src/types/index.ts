@@ -76,17 +76,6 @@ export interface ComponentListResponse {
   agents: ComponentSummary[];
 }
 
-export interface ComponentDetail {
-  name: string;
-  group: 'collectors' | 'agents';
-  type: string;
-  description?: string;
-  is_started: boolean;
-  is_enabled: boolean;
-  config?: Record<string, unknown>;
-  stats?: Record<string, unknown>;
-}
-
 export type ComponentControlAction = 'start' | 'stop' | 'restart';
 
 export interface ComponentControlRequest {
@@ -129,12 +118,6 @@ export type AgentState = Omit<AgentInfo, 'enabled'>;
 /** Agent 框架级控制动作（pause/resume 即时生效；shutdown/restart 高风险需 confirm） */
 export type AgentControlActionType = 'pause' | 'resume' | 'shutdown' | 'restart';
 
-export interface AgentControlRequest {
-  action: AgentControlActionType;
-  /** shutdown / restart 缺 confirm=true 时后端以 400 拒绝并附中文风险说明 */
-  confirm?: boolean;
-}
-
 export interface AgentControlResponse {
   success: boolean;
   action: string;
@@ -144,16 +127,9 @@ export interface AgentControlResponse {
 }
 
 // ==================== 配置 ====================
-
-/**
- * 配置响应（v2）。
- *
- * 后端 `/api/v1/config` 返回 7 文件合并的扁平 dict（core / model / agents / tools /
- * memory / storage / background）。
- */
-export interface ConfigResponse {
-  config: Record<string, unknown>;
-}
+//
+// 配置读写经 stores/settings.ts 直连 `/api/v1/config/*`（响应形状内联于
+// store），前端无独立 ConfigResponse 类型。
 
 // ==================== 调试注入 ====================
 
@@ -307,17 +283,6 @@ export interface ThinkingDelta {
 export interface SubscribeRequest {
   action: 'subscribe' | 'unsubscribe';
   events: string[];
-}
-
-/** 历史事件记录（由后端通过 events.history 消息推送） */
-export interface EventRecord {
-  id: string;
-  type: string;
-  timestamp: number;
-  level: 'info' | 'warn' | 'error';
-  source: string;
-  summary: string;
-  data: Record<string, unknown>;
 }
 
 // ==================== Tools ====================

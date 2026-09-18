@@ -1111,14 +1111,6 @@ onMounted(() => {
   gap: 6px;
   flex-shrink: 0;
 }
-
-.stream-filter {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 .filter-label {
   font-size: 11px;
   color: var(--text-secondary);
@@ -1237,13 +1229,6 @@ onMounted(() => {
   background: var(--color-agent-bg);
   border-color: var(--color-agent);
 }
-
-.stage-badge--agenda {
-  color: var(--color-agenda);
-  background: var(--color-agenda-bg);
-  border-color: var(--color-agenda);
-}
-
 .stage-badge--tool {
   color: var(--color-tool);
   background: var(--color-tool-bg);

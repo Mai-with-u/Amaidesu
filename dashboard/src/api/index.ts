@@ -16,14 +16,10 @@ import type {
   ComponentListResponse,
   ComponentControlRequest,
   ComponentControlResponse,
-  ConfigResponse,
   InjectMessageRequest,
   InjectMessageResponse,
   EventBusStatsResponse,
-  ConfigSchemaResponse,
   ConfigUpdateResponse,
-  ConfigBatchUpdateRequest,
-  ConfigBatchUpdateResponse,
   LLMUsageStats,
   LLMUsageSummary,
   LLMUsageTrendsResponse,
@@ -92,14 +88,10 @@ export const componentApi = {
 
 // ===== 配置 =====
 //
-// 后端 `/api/v1/config` 返回 7 文件合并的扁平 dict（core / model / agents / tools /
-// memory / storage / background）；`/api/v1/config/schema` 返回按文件归类的 groups。
-// `/api/v1/config/batch` 为原子批量保存，全部成功才落盘。
+// 后端 `/api/v1/config` 返回六文件合并的扁平 dict；`/api/v1/config/schema`
+// 返回按文件归组的 groups。读写由 stores/settings.ts 直连（裸 axios 实例），
+// 此处仅暴露 AppLayout 顶栏使用的重启触发。
 export const configApi = {
-  get: () => api.get<ConfigResponse>('/config'),
-  getSchema: () => api.get<ConfigSchemaResponse>('/config/schema'),
-  batchUpdate: (request: ConfigBatchUpdateRequest) =>
-    api.post<ConfigBatchUpdateResponse>('/config/batch', request),
   restart: () => api.post<ConfigUpdateResponse>('/config/restart'),
 };
 

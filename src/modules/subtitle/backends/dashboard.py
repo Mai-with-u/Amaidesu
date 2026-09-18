@@ -19,8 +19,8 @@
 生命周期：
 
 - Backend **不**实例化 widget——装配层在构造 ``DashboardServer``
-  并 ``start()`` 后，由 widget 自身持有 ``subtitle_callback`` /
-  ``broadcast_callback`` 注册到内部，本 Backend 仅通过 ``widget_service``
+  并 ``start()`` 后，widget 自身的 ``subtitle_callback`` 已由 server
+  注册到 ``/ws/subtitle`` 广播链，本 Backend 仅通过 ``widget_service``
   引用调用其公开方法
 - Backend 自身无 ``setup`` / ``cleanup``；本协议未要求生命周期方法
 """

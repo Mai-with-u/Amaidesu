@@ -77,7 +77,7 @@
 
 <script setup lang="ts">
 import { Sunny, Moon, SwitchButton } from '@element-plus/icons-vue';
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onUnmounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import Sidebar from './Sidebar.vue';
 import RestartOverlay from './RestartOverlay.vue';
@@ -232,8 +232,6 @@ function handleRetry() {
 function handleRefreshPage() {
   window.location.reload();
 }
-
-onMounted(() => {});
 
 onUnmounted(() => {
   clearAllTimers();

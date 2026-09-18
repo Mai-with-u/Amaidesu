@@ -13,7 +13,6 @@ from typing import Awaitable, Callable, Dict, List, Optional, Set
 from fastapi import WebSocket, WebSocketDisconnect
 
 from src.modules.dashboard.schemas.event import (
-    ClientInfo,
     SubscribeRequest,
     SubscribeResponse,
     WebSocketMessage,
@@ -35,7 +34,6 @@ class WebSocketHandler:
     def __init__(self, heartbeat_interval: int = 30):
         self.heartbeat_interval = heartbeat_interval
         self._clients: Dict[str, WebSocket] = {}
-        self._client_info: Dict[str, ClientInfo] = {}
         self._client_subscriptions: Dict[str, Set[str]] = {}
         self._last_pong: Dict[str, float] = {}
         self._send_queues: Dict[str, asyncio.Queue[WebSocketMessage]] = {}
@@ -54,11 +52,6 @@ class WebSocketHandler:
         client_id = str(uuid.uuid4())
         self._clients[client_id] = websocket
         self._client_subscriptions[client_id] = set()
-        self._client_info[client_id] = ClientInfo(
-            client_id=client_id,
-            connected_at=time.time(),
-            subscribed_events=[],
-        )
         self._last_pong[client_id] = time.time()
 
         # 每连接独立发送队列 + 单 writer task：串行发送，避免多协程并发写同一 socket
@@ -87,7 +80,6 @@ class WebSocketHandler:
         """从注册表移除客户端（writer 异常清理与 disconnect 共用；不取消 writer task）"""
         self._clients.pop(client_id, None)
         self._client_subscriptions.pop(client_id, None)
-        self._client_info.pop(client_id, None)
         self._last_pong.pop(client_id, None)
 
     async def disconnect(self, client_id: str) -> None:
@@ -138,9 +130,6 @@ class WebSocketHandler:
             message = f"已取消订阅事件: {request.events}"
         else:
             message = f"未知操作: {request.action}"
-
-        # 更新客户端信息
-        self._client_info[client_id].subscribed_events = list(self._client_subscriptions[client_id])
 
         # 发送确认
         await self._send_to_client(
@@ -289,7 +278,3 @@ class WebSocketHandler:
             logger.error(f"客户端 {client_id} 连接异常: {e}")
         finally:
             await self.disconnect(client_id)
-
-    def get_client_infos(self) -> List[ClientInfo]:
-        """获取所有客户端信息"""
-        return list(self._client_info.values())

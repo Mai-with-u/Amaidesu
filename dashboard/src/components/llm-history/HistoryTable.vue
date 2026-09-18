@@ -1,14 +1,7 @@
 <template>
   <section class="table-section">
-    <el-table
-      v-loading="loading"
-      :data="historyData"
-      stripe
-      style="width: 100%"
-      :default-sort="{ prop: 'timestamp', order: 'descending' }"
-      @sort-change="handleSortChange"
-    >
-      <el-table-column prop="timestamp" label="时间" width="170" sortable custom>
+    <el-table v-loading="loading" :data="historyData" stripe style="width: 100%">
+      <el-table-column prop="timestamp" label="时间" width="170">
         <template #default="{ row }">
           <span class="mono">{{ formatDateTime(row.timestamp) }}</span>
         </template>
@@ -55,13 +48,13 @@
         </template>
       </el-table-column>
 
-      <el-table-column prop="cost" label="费用" width="90" align="right" sortable custom>
+      <el-table-column prop="cost" label="费用" width="90" align="right">
         <template #default="{ row }">
           <span class="cost">{{ formatCost(row.cost) }}</span>
         </template>
       </el-table-column>
 
-      <el-table-column prop="latency_ms" label="延迟" width="90" align="right" sortable custom>
+      <el-table-column prop="latency_ms" label="延迟" width="90" align="right">
         <template #default="{ row }">
           <span :class="['latency', getLatencyClass(row.latency_ms)]">
             {{ formatLatency(row.latency_ms) }}
@@ -207,10 +200,6 @@ function getPromptPreview(row: LLMRequestHistory): string {
   }
 
   return '-';
-}
-
-function handleSortChange({ prop, order }: { prop: string; order: string | null }) {
-  console.log('Sort change:', prop, order);
 }
 
 function handleShowDetail(row: LLMRequestHistory) {
