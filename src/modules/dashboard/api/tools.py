@@ -24,7 +24,6 @@ Web UI），AI 主播不可决策；写回后需重启应用让组合根按新�
 判定）。
 """
 
-import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
@@ -34,6 +33,7 @@ from pydantic import BaseModel
 from src.modules.config.errors import ConfigValidationError
 from src.modules.config.multi_file_loader import update_config_values
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.utils.component_helper import config_dir, read_toml_dict
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -407,30 +407,6 @@ async def list_tool_categories(
     return {"categories": categories}
 
 
-def _config_dir(server: "DashboardServer") -> Path:
-    """从 config_service 推导 config/ 目录（不可用时抛 503）。"""
-    svc = server.config_service
-    if not (svc and hasattr(svc, "base_dir")):
-        raise HTTPException(status_code=503, detail="配置服务不可用")
-    return Path(svc.base_dir) / "config"
-
-
-def _read_tools_doc(config_dir: Path) -> Dict[str, Any]:
-    """读 tools.toml 原始文档（只读，缺失/解析失败时返回空 dict）。
-
-    配置管线落盘带 BOM，以 utf-8-sig 剥除后再交给 tomllib（tomllib 拒绝 BOM）。
-    """
-    path = config_dir / "tools.toml"
-    if not path.exists():
-        return {}
-    try:
-        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
-    except Exception as exc:  # noqa: BLE001 - 只读边界：坏文件按空文档处理
-        logger.warning(f"读取 tools.toml 失败，按空文档处理: {exc}")
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def _write_tools_updates(config_dir: Path, updates: Dict[str, Any]) -> None:
     """经统一写回器把变更并入 tools.toml（Schema 校验 + 备份 + 注释重生成）。
 
@@ -475,8 +451,8 @@ async def control_tool_provider(
         raise HTTPException(status_code=400, detail=f"未知工具提供者: {category}/{key}")
 
     enable = request.action == "enable"
-    config_dir = _config_dir(server)
-    _write_tools_updates(config_dir, {dotted_key: enable})
+    cfg_dir = config_dir(server)
+    _write_tools_updates(cfg_dir, {dotted_key: enable})
 
     action_text = "启用" if enable else "停用"
     return {
@@ -507,8 +483,8 @@ async def control_tool(
     if not enable and name not in known:
         raise HTTPException(status_code=404, detail=f"运行时未注册工具: {name}")
 
-    config_dir = _config_dir(server)
-    doc = _read_tools_doc(config_dir)
+    cfg_dir = config_dir(server)
+    doc = read_toml_dict(cfg_dir / "tools.toml")
     tools_section = doc.get("tools")
     tools_section = tools_section if isinstance(tools_section, dict) else {}
     raw = tools_section.get("disabled_tools")
@@ -524,7 +500,7 @@ async def control_tool(
     if unknown:
         logger.warning(f"disabled_tools 含运行时未注册的工具名（重启后若仍不存在则不生效）: {unknown}")
 
-    _write_tools_updates(config_dir, {"tools.disabled_tools": disabled})
+    _write_tools_updates(cfg_dir, {"tools.disabled_tools": disabled})
 
     action_text = "启用" if enable else "停用"
     return {

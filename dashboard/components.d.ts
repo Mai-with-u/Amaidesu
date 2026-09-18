@@ -13,7 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppLayout: typeof import('./src/components/layout/AppLayout.vue')['default']
     ArrayEditor: typeof import('./src/components/settings/ArrayEditor.vue')['default']
-    ComponentCard: typeof import('./src/components/component-cards/ComponentCard.vue')['default']
+    ComponentCard: typeof import('./src/components/settings/ComponentCard.vue')['default']
     ComponentCardList: typeof import('./src/components/settings/ComponentCardList.vue')['default']
     DictEditor: typeof import('./src/components/settings/DictEditor.vue')['default']
     DynamicForm: typeof import('./src/components/settings/DynamicForm.vue')['default']

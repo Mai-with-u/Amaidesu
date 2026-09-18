@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, Protocol, cast
 
 from fastapi import APIRouter, Depends
 
+from src.modules.dashboard.api.common import resolve_streamer_agent
 from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.streamer import (
@@ -60,17 +61,6 @@ class _DebugTestDecisionCallable(Protocol):
     ) -> Dict[str, Any]: ...
 
 
-def _resolve_streamer_agent(server: "DashboardServer") -> Optional[Any]:
-    """从 agent_manager 中取出 ``streamer`` 实例；无则返回 None。"""
-    am = getattr(server, "agent_manager", None)
-    if am is None:
-        return None
-    try:
-        return am.get_agent_by_name("streamer")
-    except Exception:
-        return None
-
-
 def _read_streamer_config(server: "DashboardServer") -> Dict[str, Any]:
     """从 main_config 读 agents.streamer 关键字段；缺字段用默认值。
 
@@ -94,7 +84,7 @@ def _read_streamer_config(server: "DashboardServer") -> Dict[str, Any]:
 @router.get("/status", response_model=StreamerStatusResponse)
 async def get_streamer_status(server: ServerDep) -> StreamerStatusResponse:
     """主播 Agent 状态（降级安全：未注册返回 available=false，不抛 404）。"""
-    agent = _resolve_streamer_agent(server)
+    agent = resolve_streamer_agent(server)
     if agent is None:
         return StreamerStatusResponse(
             available=False,
@@ -126,7 +116,7 @@ async def test_decision(
     - 决策失败（Planner 拒绝/LLM 异常/reply 失败）→ ``success=true`` 但
       ``error``/``plan`` 如实回传——"没回复"本身是有效测试结果
     """
-    agent = _resolve_streamer_agent(server)
+    agent = resolve_streamer_agent(server)
     if agent is None:
         return StreamerTestDecisionResponse(success=False, message="主播 Agent 未启用")
     if not callable(getattr(agent, "debug_test_decision", None)):
@@ -194,7 +184,7 @@ async def toggle_proactive(
     server: ServerDep,
 ) -> ProactiveToggleResponse:
     """切换主动发言总开关（运行时立即生效；配置落盘保持，重启不丢）。"""
-    agent = _resolve_streamer_agent(server)
+    agent = resolve_streamer_agent(server)
     if agent is not None:
         setter = getattr(agent, "set_proactive_enabled", None)
         if callable(setter):
@@ -221,7 +211,7 @@ async def trigger_proactive(
     任一不满足则静默丢弃——这是**有意保留的真实行为**（测限流本身）；
     想绕过限流立即开口请用 ``/test-decision`` 的 proactive 模式。
     """
-    agent = _resolve_streamer_agent(server)
+    agent = resolve_streamer_agent(server)
     if agent is None:
         return TriggerProactiveResponse(success=False, message="主播 Agent 未启用")
     if not callable(getattr(agent, "trigger_external_proactive", None)):

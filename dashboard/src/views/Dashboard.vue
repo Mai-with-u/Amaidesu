@@ -178,6 +178,7 @@ import type {
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import PulseChart from '@/components/dashboard/PulseChart.vue';
 import { buildLiveEntries, type FeedEvent, type ShowEntry } from '@/utils/liveFeed';
+import { toSeconds } from '@/utils/liveFeed';
 
 const router = useRouter();
 const systemStore = useSystemStore();
@@ -313,7 +314,7 @@ const heartbeat = computed<{ text: string; tone: 'live' | 'fresh' | 'stale' | 's
     if (event.timestamp > latest) latest = event.timestamp;
   }
   // 后端 timestamp 已是秒；毫秒值兜底换算
-  const latestSec = latest > 1e12 ? latest / 1000 : latest;
+  const latestSec = toSeconds(latest);
   if (latestSec === 0) return { text: '尚未触发', tone: 'silent' };
   const diff = Math.max(0, Math.floor(Date.now() / 1000 - latestSec));
   if (diff < 60) return { text: `${diff}s 前`, tone: 'live' };
@@ -347,7 +348,7 @@ function buildPulse(events: FeedEvent[]): BucketWindow {
       `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
   for (const event of events) {
-    const ts = event.timestamp > 1e12 ? event.timestamp / 1000 : event.timestamp;
+    const ts = toSeconds(event.timestamp);
     if (ts < windowStart || ts > windowEnd + PULSE_BUCKET_SEC) continue;
     const idx = Math.floor((ts - windowStart) / PULSE_BUCKET_SEC);
     if (idx < 0 || idx >= PULSE_BUCKETS) continue;
@@ -420,7 +421,7 @@ const verdict = computed<Verdict>(() => {
   const nowSec = Date.now() / 1000;
   const recentError = (eventsStore.events as unknown as FeedEvent[]).find(event => {
     if (event.type !== 'core.error') return false;
-    const ts = event.timestamp > 1e12 ? event.timestamp / 1000 : event.timestamp;
+    const ts = toSeconds(event.timestamp);
     return nowSec - ts <= ERROR_WINDOW_SEC;
   });
   if (recentError) {
@@ -608,15 +609,6 @@ onUnmounted(() => {
 .card-link:hover {
   color: var(--color-primary-light);
 }
-.grow {
-  flex: 1;
-  min-width: 0;
-}
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
 /* 行 1：结论条 */
 .verdict-bar {
   display: flex;

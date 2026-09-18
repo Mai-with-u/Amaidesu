@@ -661,6 +661,33 @@ export interface SessionTimelineResponse {
   items: SessionTimelineItem[];
 }
 
+// ==================== Vision（视觉捕获） ====================
+
+/** 单台显示器（mss 枚举；index=0 为虚拟合屏，不参与选择） */
+export interface VisionMonitor {
+  index: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  is_primary: boolean;
+}
+
+/** `GET /vision/monitors` 响应 */
+export interface VisionMonitorsResponse {
+  count: number;
+  monitors: VisionMonitor[];
+}
+
+/** `GET /vision/preview` 响应（抓帧 + region 叠框标注） */
+export interface VisionPreviewResponse {
+  image_b64: string;
+  width: number;
+  height: number;
+  monitor_index: number;
+  region: number[] | null;
+}
+
 /** 单行观众统计（viewers 表行投影） */
 export interface ViewerListItem {
   user_id: string;

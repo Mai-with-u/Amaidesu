@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, Protocol, cast
 from fastapi import APIRouter, Depends
 
 from src.agents.streamer.rundown.rundown import DEFAULT_RUNDOWN, Rundown
+from src.modules.dashboard.api.common import resolve_streamer_agent
 from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.agenda import (
@@ -71,17 +72,6 @@ def _get_repo(server: "DashboardServer") -> Optional[Any]:
     return getattr(server, "rundown_repo", None)
 
 
-def _resolve_streamer_agent(server: "DashboardServer") -> Optional[Any]:
-    """从 agent_manager 中取出 ``streamer`` 实例；无则返回 None。"""
-    am = getattr(server, "agent_manager", None)
-    if am is None:
-        return None
-    try:
-        return am.get_agent_by_name("streamer")
-    except Exception:
-        return None
-
-
 def _read_config_rundown_id(server: "DashboardServer") -> str:
     """读 agents.streamer.rundown_id 配置（当前流程单指向；缺字段用空串）。"""
     main_config = server.config_service.main_config if server.config_service else {}
@@ -115,7 +105,7 @@ async def _apply_to_runtime(
 
     返回提示信息（None = 无需写穿或写穿成功）；Agent 缺席视为无需写穿。
     """
-    agent = _resolve_streamer_agent(server)
+    agent = resolve_streamer_agent(server)
     if agent is None:
         return None
     apply_raw = getattr(agent, "apply_rundown_definition", None)

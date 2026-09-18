@@ -299,7 +299,8 @@
  * 按时间近似；消除近似需后端在事件负载中增加 agent-identity 字段。
  */
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import { confirmAction } from '@/utils/confirmAction';
 import { ArrowDown, Refresh } from '@element-plus/icons-vue';
 import { storeToRefs } from 'pinia';
 import { useComponentsStore, useEventsStore } from '@/stores';
@@ -312,6 +313,8 @@ import type {
   WebSocketMessage,
 } from '@/types';
 import { summarizeEvent } from '@/utils/eventSummary';
+import { relativeTime as relativeTimeLabel, toSeconds } from '@/utils/liveFeed';
+import { formatDurationShort } from '@/utils/format';
 
 // Store + 基础状态
 
@@ -493,15 +496,10 @@ async function handleAgentControl(action: AgentControlActionType): Promise<void>
   };
   const hint = riskHints[action];
   if (hint) {
-    try {
-      await ElMessageBox.confirm(`确认对「${name}」执行关机？${hint}`, '高风险操作确认', {
-        type: 'warning',
-        confirmButtonText: '确认关机',
-        cancelButtonText: '取消',
-      });
-    } catch {
-      return;
-    }
+    const ok = await confirmAction(`确认对「${name}」执行关机？${hint}`, '高风险操作确认', {
+      confirmButtonText: '确认关机',
+    });
+    if (!ok) return;
   }
   const key = `${name}-${action}`;
   controlLoading[key] = true;
@@ -520,15 +518,10 @@ async function handleAgentControl(action: AgentControlActionType): Promise<void>
 async function handleRestartWithConfirm(): Promise<void> {
   const name = selectedName.value;
   if (!name) return;
-  try {
-    await ElMessageBox.confirm(`确认重启「${name}」？将停止当前实例并重新构造启动`, '重启确认', {
-      type: 'warning',
-      confirmButtonText: '确认重启',
-      cancelButtonText: '取消',
-    });
-  } catch {
-    return;
-  }
+  const ok = await confirmAction(`确认重启「${name}」？将停止当前实例并重新构造启动`, '重启确认', {
+    confirmButtonText: '确认重启',
+  });
+  if (!ok) return;
   await handleControl('restart');
 }
 
@@ -673,18 +666,12 @@ watch(displayedEntries, async () => {
 // 工具：相对时间
 
 function relativeDuration(diffSec: number): string {
-  if (diffSec < 5) return '刚刚';
-  if (diffSec < 60) return `${diffSec}s 前`;
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m 前`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h 前`;
-  return `${Math.floor(diffSec / 86400)}d 前`;
+  return formatDurationShort(diffSec);
 }
 
 function relativeTime(timestampMs: number): string {
-  // 后端事件 timestamp 是 Unix 秒（参见 utils/eventSummary.ts 注释）
-  const nowSec = nowMs.value / 1000;
-  const tsSec = timestampMs > 1e12 ? timestampMs / 1000 : timestampMs;
-  return relativeDuration(Math.max(0, Math.floor(nowSec - tsSec)));
+  // 后端事件 timestamp 秒/毫秒并存，归一后走共享短标签
+  return relativeTimeLabel(toSeconds(timestampMs), nowMs.value / 1000);
 }
 
 // 生命周期

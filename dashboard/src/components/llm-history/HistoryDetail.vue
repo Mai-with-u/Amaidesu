@@ -161,6 +161,7 @@ import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import { normalizeMessage, type PreviewMessage } from '@/utils/llmMessage';
 import type { LLMRequestHistory } from '@/types';
+import { formatDateTime, formatLatency, getClientTypeLabel } from '@/utils/format';
 
 interface Props {
   visible: boolean;
@@ -213,38 +214,10 @@ function formatArguments(args?: string): string {
 }
 
 // 格式化日期时间
-function formatDateTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
 
 // 格式化延迟
-function formatLatency(ms: number): string {
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-  return `${(ms / 1000).toFixed(2)}s`;
-}
 
 // 获取客户端类型标签文字
-function getClientTypeLabel(type: string): string {
-  const labelMap: Record<string, string> = {
-    planner: '主 LLM',
-    replyer: '回复',
-    summary: '摘要',
-    minecraft: '游戏',
-    vision: '视觉',
-    simulator: '模拟',
-  };
-  return labelMap[type] || type;
-}
 
 // 复制区域 JSON 到剪贴板
 async function copyJson(data: unknown): Promise<void> {
@@ -323,10 +296,8 @@ function handleClose(value: boolean) {
 }
 
 .mono {
-  font-family: var(--font-mono);
   font-size: 12px;
 }
-
 .code-block {
   background: var(--bg-elevated);
   border: 1px solid var(--border-color-light);

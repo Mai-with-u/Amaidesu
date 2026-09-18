@@ -461,16 +461,6 @@ async function copyText(text: string): Promise<void> {
 
 <style scoped>
 /* 工具类：grow / mono 在行模板里被广泛使用，scoped 内保留副本       */
-.grow {
-  flex: 1;
-  min-width: 0;
-}
-
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
 /* 空态                                                          */
 .stage-empty {
   height: 100%;

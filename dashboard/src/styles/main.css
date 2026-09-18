@@ -145,3 +145,15 @@ a:hover {
     display: none !important;
   }
 }
+
+/* ==================== 通用工具类（各页面 scoped 副本的单一事实源） ==================== */
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}

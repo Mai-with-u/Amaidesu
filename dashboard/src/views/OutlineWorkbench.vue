@@ -576,7 +576,8 @@
  * 3. 运行中（status=running|paused|done）：KPI 行 + 当前环节卡 + 环节表 + 历史时间线
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import { confirmAction } from '@/utils/confirmAction';
 import {
   ArrowRightBold,
   EditPen,
@@ -1089,17 +1090,14 @@ function saveSegmentDialog(): void {
 
 async function removeRundown(def: RundownDefinition): Promise<void> {
   const referenced = def.rundown_id === currentRundownId.value;
-  try {
-    await ElMessageBox.confirm(
-      referenced
-        ? `确定删除「${def.title}」？当前配置仍指向它，重启主播 Agent 后将回退内置默认流程单。`
-        : `确定删除「${def.title}」？`,
-      '删除流程单',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
-    );
-  } catch {
-    return;
-  }
+  const ok = await confirmAction(
+    referenced
+      ? `确定删除「${def.title}」？当前配置仍指向它，重启主播 Agent 后将回退内置默认流程单。`
+      : `确定删除「${def.title}」？`,
+    '删除流程单',
+    { confirmButtonText: '删除' },
+  );
+  if (!ok) return;
   try {
     const res = await rundownApi.remove(def.rundown_id);
     if (!res.data.success) {
@@ -1443,11 +1441,6 @@ watch(
   color: var(--text-primary);
   word-break: break-word;
 }
-.grow {
-  flex: 1;
-  min-width: 0;
-}
-
 .current-times {
   display: flex;
   align-items: baseline;

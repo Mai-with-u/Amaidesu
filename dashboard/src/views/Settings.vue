@@ -184,7 +184,8 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import { confirmAction } from '@/utils/confirmAction';
 import { Check, RefreshLeft, Loading, Search } from '@element-plus/icons-vue';
 import {
   Setting,
@@ -498,17 +499,12 @@ async function handleSave() {
 
 async function handleDiscard() {
   if (!settingsStore.hasChanges) return;
-  try {
-    await ElMessageBox.confirm('确定要丢弃所有未保存的更改吗？', '确认丢弃', {
-      confirmButtonText: '丢弃',
-      cancelButtonText: '取消',
-      type: 'warning',
-    });
-    settingsStore.discardChanges();
-    ElMessage.info('已丢弃所有更改');
-  } catch {
-    /* 用户取消 */
-  }
+  const ok = await confirmAction('确定要丢弃所有未保存的更改吗？', '确认丢弃', {
+    confirmButtonText: '丢弃',
+  });
+  if (!ok) return;
+  settingsStore.discardChanges();
+  ElMessage.info('已丢弃所有更改');
 }
 
 async function handleRestart() {

@@ -9,7 +9,7 @@
       <code class="mono profile-id" :title="detail.user_id">{{ detail.user_id }}</code>
       <span class="head-badge">发言 {{ detail.message_count }}</span>
       <span class="head-badge">被回复 {{ detail.replied_count }}</span>
-      <span class="head-badge">最后活跃 {{ relativeTime(detail.last_active_ms) }}</span>
+      <span class="head-badge">最后活跃 {{ relativeAge(detail.last_active_ms) }}</span>
     </header>
     <header v-else class="profile-head">
       <router-link class="back-link" to="/viewers">← 观众列表</router-link>
@@ -204,6 +204,7 @@
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { viewersApi } from '@/api';
+import { relativeAge } from '@/utils/format';
 import type {
   ViewerContributions,
   ViewerDetail,
@@ -258,15 +259,6 @@ function formatTime(ms: number): string {
   });
 }
 
-function relativeTime(ms: number): string {
-  if (!ms) return '—';
-  const diffSec = Math.floor((Date.now() - ms) / 1000);
-  if (diffSec < 60) return '刚刚';
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
-  if (diffSec < 86_400) return `${Math.floor(diffSec / 3600)} 小时前`;
-  if (diffSec < 30 * 86_400) return `${Math.floor(diffSec / 86_400)} 天前`;
-  return new Date(ms).toLocaleDateString('zh-CN');
-}
 
 async function loadDetail(): Promise<void> {
   detail.value = null;
@@ -369,11 +361,6 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
-}
-
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
 }
 
 .profile-head {

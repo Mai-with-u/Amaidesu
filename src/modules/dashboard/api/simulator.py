@@ -217,40 +217,30 @@ async def start_simulator(server: ServerDep, request: Optional[SimulatorStartReq
     """
     enabled = _config_enabled(server)
     if not enabled:
-        return {
-            "success": False,
-            "message": "[simulator].enabled=false；无法启动。请修改配置后重启应用。",
-        }
+        return _result(False, "[simulator].enabled=false；无法启动。请修改配置后重启应用。")
     service = _get_service(server)
     if service is None:
-        return {
-            "success": False,
-            "message": "SimulatorService 未注入（通常因存储仓储/LLMManager 缺失或 --dry 模式）。",
-        }
+        return _result(False, "SimulatorService 未注入（通常因存储仓储/LLMManager 缺失或 --dry 模式）。")
     if getattr(service, "is_running", False):
-        return {"success": True, "message": "模拟器已在运行", "is_running": True}
+        return _result(True, "模拟器已在运行", is_running=True)
 
     replay_date = request.replay_date if request is not None else None
     try:
         await service.start(replay_date=replay_date)
     except Exception as exc:  # noqa: BLE001 - 边界
         logger.error(f"模拟器启动失败: {exc}", exc_info=True)
-        return {"success": False, "message": f"启动失败: {exc}"}
+        return _result(False, f"启动失败: {exc}")
 
     if not getattr(service, "is_running", False):
-        return {
-            "success": False,
-            "message": "启动未生效（mode=off 或 replay 缺少可用录制日期），详见应用日志。",
-            "is_running": False,
-        }
+        return _result(False, "启动未生效（mode=off 或 replay 缺少可用录制日期），详见应用日志。", is_running=False)
 
-    return {
-        "success": True,
-        "message": "模拟器已启动",
-        "is_running": True,
-        "mode": getattr(service, "mode", "off"),
-        "replay_progress": getattr(service, "replay_progress", None),
-    }
+    return _result(
+        True,
+        "模拟器已启动",
+        is_running=True,
+        mode=getattr(service, "mode", "off"),
+        replay_progress=getattr(service, "replay_progress", None),
+    )
 
 
 @router.post("/stop", summary="停止模拟器生成循环（幂等）")
@@ -259,25 +249,17 @@ async def stop_simulator(server: ServerDep) -> Dict[str, Any]:
     service = _get_service(server)
     if service is None:
         # 未注入等价于未运行 —— 幂等返回成功，避免前端反复点停出现误导
-        return {
-            "success": True,
-            "message": "SimulatorService 未注入，视为未运行",
-            "is_running": False,
-        }
+        return _result(True, "SimulatorService 未注入，视为未运行", is_running=False)
     if not getattr(service, "is_running", False):
-        return {"success": True, "message": "模拟器未运行", "is_running": False}
+        return _result(True, "模拟器未运行", is_running=False)
 
     try:
         await service.stop()
     except Exception as exc:  # noqa: BLE001 - 边界
         logger.error(f"模拟器停止失败: {exc}", exc_info=True)
-        return {"success": False, "message": f"停止失败: {exc}"}
+        return _result(False, f"停止失败: {exc}")
 
-    return {
-        "success": True,
-        "message": "模拟器已停止",
-        "is_running": bool(getattr(service, "is_running", False)),
-    }
+    return _result(True, "模拟器已停止", is_running=bool(getattr(service, "is_running", False)))
 
 
 # ------------------------------------------------------------------ #
@@ -299,6 +281,13 @@ async def list_replay_dates(server: ServerDep) -> Dict[str, Any]:
 # ------------------------------------------------------------------ #
 # 常驻人设 CRUD（经 PersonaPool 写穿 DB）                             #
 # ------------------------------------------------------------------ #
+
+
+def _result(success: bool, message: str, **extra: Any) -> Dict[str, Any]:
+    """写操作端点统一响应包络：{success, message} + 附加字段。"""
+    out: Dict[str, Any] = {"success": success, "message": message}
+    out.update(extra)
+    return out
 
 
 def _require_pool(server: "DashboardServer") -> Any:
@@ -336,7 +325,7 @@ async def create_persona(server: ServerDep, request: PersonaCreateRequest) -> Di
 
     pool = _require_pool(server)
     if pool is None:
-        return {"success": False, "message": "模拟器未装配（enabled=false 或未 setup）"}
+        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
     persona = Persona(
         user_id=f"sim_{uuid.uuid4().hex[:8]}",
         user_nickname=request.user_nickname,
@@ -349,34 +338,34 @@ async def create_persona(server: ServerDep, request: PersonaCreateRequest) -> Di
     )
     added = await pool.add_personas([persona])
     if added == 0:
-        return {"success": False, "message": f"昵称已存在: {request.user_nickname}"}
+        return _result(False, f"昵称已存在: {request.user_nickname}")
     logger.info(f"已新增常驻人设: {request.user_nickname}")
-    return {"success": True, "message": "已新增", "persona": _persona_dump(persona)}
+    return _result(True, "已新增", persona=_persona_dump(persona))
 
 
 @router.patch("/personas/{user_id}", summary="更新常驻人设（仅传入字段被更新）")
 async def update_persona(server: ServerDep, user_id: str, request: PersonaUpdateRequest) -> Dict[str, Any]:
     pool = _require_pool(server)
     if pool is None:
-        return {"success": False, "message": "模拟器未装配（enabled=false 或未 setup）"}
+        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
     fields = {k: v for k, v in request.model_dump().items() if v is not None}
     if not fields:
-        return {"success": False, "message": "无可更新字段"}
+        return _result(False, "无可更新字段")
     updated = await pool.update_persona(user_id, fields)
     if not updated:
-        return {"success": False, "message": f"人设不存在: {user_id}"}
-    return {"success": True, "message": "已更新"}
+        return _result(False, f"人设不存在: {user_id}")
+    return _result(True, "已更新")
 
 
 @router.delete("/personas/{user_id}", summary="删除常驻人设")
 async def delete_persona(server: ServerDep, user_id: str) -> Dict[str, Any]:
     pool = _require_pool(server)
     if pool is None:
-        return {"success": False, "message": "模拟器未装配（enabled=false 或未 setup）"}
+        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
     deleted = await pool.delete_persona(user_id)
     if not deleted:
-        return {"success": False, "message": f"人设不存在: {user_id}"}
-    return {"success": True, "message": "已删除"}
+        return _result(False, f"人设不存在: {user_id}")
+    return _result(True, "已删除")
 
 
 # ------------------------------------------------------------------ #
@@ -401,7 +390,7 @@ async def create_gift(server: ServerDep, request: GiftCreateRequest) -> Dict[str
 
     gen = _require_gift_generator(server)
     if gen is None:
-        return {"success": False, "message": "模拟器未装配（enabled=false 或未 setup）"}
+        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
     gift = GiftItem(
         gift_id=request.gift_id,
         gift_name=request.gift_name,
@@ -412,34 +401,34 @@ async def create_gift(server: ServerDep, request: GiftCreateRequest) -> Dict[str
     )
     added = await gen.add_gift(gift)
     if not added:
-        return {"success": False, "message": f"gift_id 已存在: {request.gift_id}"}
+        return _result(False, f"gift_id 已存在: {request.gift_id}")
     logger.info(f"已新增礼物: {request.gift_name}")
-    return {"success": True, "message": "已新增", "gift": gift.model_dump()}
+    return _result(True, "已新增", gift=gift.model_dump())
 
 
 @router.patch("/gifts/{gift_id}", summary="更新礼物（仅传入字段被更新）")
 async def update_gift(server: ServerDep, gift_id: str, request: GiftUpdateRequest) -> Dict[str, Any]:
     gen = _require_gift_generator(server)
     if gen is None:
-        return {"success": False, "message": "模拟器未装配（enabled=false 或未 setup）"}
+        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
     fields = {k: v for k, v in request.model_dump().items() if v is not None}
     if not fields:
-        return {"success": False, "message": "无可更新字段"}
+        return _result(False, "无可更新字段")
     try:
         updated = await gen.update_gift(gift_id, fields)
     except ValueError as exc:
-        return {"success": False, "message": str(exc)}
+        return _result(False, str(exc))
     if not updated:
-        return {"success": False, "message": f"礼物不存在: {gift_id}"}
-    return {"success": True, "message": "已更新"}
+        return _result(False, f"礼物不存在: {gift_id}")
+    return _result(True, "已更新")
 
 
 @router.delete("/gifts/{gift_id}", summary="删除礼物")
 async def delete_gift(server: ServerDep, gift_id: str) -> Dict[str, Any]:
     gen = _require_gift_generator(server)
     if gen is None:
-        return {"success": False, "message": "模拟器未装配（enabled=false 或未 setup）"}
+        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
     deleted = await gen.delete_gift(gift_id)
     if not deleted:
-        return {"success": False, "message": f"礼物不存在: {gift_id}"}
-    return {"success": True, "message": "已删除"}
+        return _result(False, f"礼物不存在: {gift_id}")
+    return _result(True, "已删除")

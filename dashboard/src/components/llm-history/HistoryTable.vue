@@ -97,6 +97,7 @@
 <script setup lang="ts">
 import type { LLMRequestHistory, LLMHistoryQueryParams } from '@/types';
 import { messageText } from '@/utils/llmMessage';
+import { formatDateTime, formatLatency, getClientTypeLabel, formatCost, getLatencyClass, getClientTypeTag, truncateText } from '@/utils/format';
 
 interface Props {
   loading: boolean;
@@ -115,70 +116,18 @@ const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
 // 格式化日期时间
-function formatDateTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
 
 // 格式化延迟
-function formatLatency(ms: number): string {
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-  return `${(ms / 1000).toFixed(2)}s`;
-}
 
 // 格式化费用
-function formatCost(cost: number): string {
-  return `¥${cost.toFixed(6)}`;
-}
 
 // 获取延迟样式类
-function getLatencyClass(ms: number): string {
-  if (ms < 1000) return 'fast';
-  if (ms < 5000) return 'normal';
-  return 'slow';
-}
 
 // 获取客户端类型标签
-function getClientTypeTag(type: string): string {
-  const typeMap: Record<string, string> = {
-    planner: 'primary',
-    replyer: 'success',
-    summary: 'warning',
-    vision: 'danger',
-    minecraft: 'info',
-    simulator: 'info',
-  };
-  return typeMap[type] || 'info';
-}
 
 // 获取客户端类型标签文字
-function getClientTypeLabel(type: string): string {
-  const labelMap: Record<string, string> = {
-    planner: '主 LLM',
-    replyer: '回复',
-    summary: '摘要',
-    minecraft: '游戏',
-    vision: '视觉',
-    simulator: '模拟',
-  };
-  return labelMap[type] || type;
-}
 
 // 截断文本
-function truncateText(text: string, maxLength: number): string {
-  if (!text) return '-';
-  if (text.length <= maxLength) return text;
-  return text.substring(0, maxLength) + '...';
-}
 
 // 获取 Prompt 预览（取最后一条有正文的消息）
 function getPromptPreview(row: LLMRequestHistory): string {
@@ -226,10 +175,8 @@ function handleCurrentChange(page: number) {
 }
 
 .mono {
-  font-family: var(--font-mono);
   font-size: 12px;
 }
-
 .model-name {
   font-family: var(--font-mono);
   font-size: 12px;

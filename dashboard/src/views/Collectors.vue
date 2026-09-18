@@ -225,6 +225,7 @@ import { Setting } from '@element-plus/icons-vue';
 import { useComponentsStore, useEventsStore } from '@/stores';
 import type { ComponentControlAction, ComponentSummary } from '@/types';
 import { summarizeEvent } from '@/utils/eventSummary';
+import { relativeTime as relativeTimeLabel, toSeconds } from '@/utils/liveFeed';
 
 // 归因映射：采集器名 → 消息族白名单（payload.message_type 判别）
 //
@@ -470,15 +471,8 @@ watch(streamEntries, async () => {
 // 工具
 
 function relativeTime(timestampMs: number): string {
-  // 后端事件 timestamp 是 Unix 秒（参见 utils/eventSummary.ts 注释）
-  const nowSec = Date.now() / 1000;
-  const tsSec = timestampMs > 1e12 ? timestampMs / 1000 : timestampMs;
-  const diffSec = Math.max(0, Math.floor(nowSec - tsSec));
-  if (diffSec < 5) return '刚刚';
-  if (diffSec < 60) return `${diffSec}s 前`;
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m 前`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h 前`;
-  return `${Math.floor(diffSec / 86400)}d 前`;
+  // 后端事件 timestamp 秒/毫秒并存，归一后走共享短标签
+  return relativeTimeLabel(toSeconds(timestampMs), Date.now() / 1000);
 }
 
 // 生命周期

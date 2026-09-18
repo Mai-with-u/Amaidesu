@@ -165,29 +165,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { visionApi } from '@/api';
+import type { VisionMonitor } from '@/types';
 import api from '@/api';
-
-interface MonitorItem {
-  index: number;
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-  is_primary: boolean;
-}
-
-interface MonitorsResponse {
-  count: number;
-  monitors: MonitorItem[];
-}
-
-interface PreviewResponse {
-  image_b64: string;
-  width: number;
-  height: number;
-  monitor_index: number;
-  region: number[] | null;
-}
 
 interface ConfigBatchChange {
   key: string;
@@ -202,7 +181,7 @@ interface ConfigBatchUpdateResponse {
 
 // 显示器状态
 
-const monitors = ref<MonitorItem[]>([]);
+const monitors = ref<VisionMonitor[]>([]);
 const monitorsLoading = ref(false);
 const monitorIndex = ref<number>(1);
 
@@ -213,7 +192,7 @@ const currentMonitor = computed(
   () => physicalMonitors.value.find(m => m.index === monitorIndex.value) ?? null,
 );
 
-function formatMonitorLabel(m: MonitorItem): string {
+function formatMonitorLabel(m: VisionMonitor): string {
   const tag = m.is_primary ? '（主屏）' : '';
   return `显示器 ${m.index} · ${m.width} × ${m.height}${tag}`;
 }
@@ -292,7 +271,7 @@ async function loadMonitors() {
   monitorsLoading.value = true;
   try {
     const resp = await visionApi.listMonitors();
-    const data = resp.data as MonitorsResponse;
+    const data = resp.data;
     monitors.value = data.monitors ?? [];
     // 若当前 monitorIndex 不在新列表里，回退到首个物理显示器
     if (!physicalMonitors.value.some(m => m.index === monitorIndex.value)) {
@@ -367,7 +346,7 @@ async function loadPreview() {
     // 不传 max_width：让后端返回原图，便于拖框坐标精确换算
     const resp = await visionApi.preview(params);
     if (mySeq !== previewSeq) return; // 已被更新的请求覆盖
-    const data = resp.data as PreviewResponse;
+    const data = resp.data;
     previewSrc.value = `data:image/png;base64,${data.image_b64}`;
     previewSize.value = { width: data.width, height: data.height };
   } catch (e) {

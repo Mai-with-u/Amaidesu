@@ -11,6 +11,7 @@
 
 import { summarizeEvent } from './eventSummary';
 import type { WebSocketMessage } from '@/types';
+import { formatDurationShort } from '@/utils/format';
 
 // 常量
 
@@ -579,12 +580,7 @@ export function buildLiveEntries(events: FeedEvent[], hiddenIds: Set<string>): S
  * 调用方传入当前 Unix 秒（FeedTimeline 内部 1s tick 维护）即可。
  */
 export function relativeTime(nowSec: number, tsSec: number): string {
-  const diff = Math.max(0, Math.floor(nowSec - tsSec));
-  if (diff < 5) return '刚刚';
-  if (diff < 60) return `${diff}s 前`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m 前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h 前`;
-  return `${Math.floor(diff / 86400)}d 前`;
+  return formatDurationShort(Math.max(0, Math.floor(nowSec - tsSec)));
 }
 
 // 会话模式：对话优先的行序（过程行折叠成每轮一条过程条）

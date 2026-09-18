@@ -1109,16 +1109,6 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-.grow {
-  flex: 1;
-  min-width: 0;
-}
-
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
 /* 顶栏                                                          */
 .console-head {
   display: flex;

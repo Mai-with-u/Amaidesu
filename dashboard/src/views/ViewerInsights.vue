@@ -200,11 +200,6 @@ onMounted(() => {
   gap: var(--spacing-md);
 }
 
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
 .page-header {
   display: flex;
   align-items: flex-end;
