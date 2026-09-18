@@ -8,6 +8,7 @@ import type {
   ConfigSchemaResponse,
   ConfigGroupSchema,
   ConfigUpdateResponse,
+  ConfigFieldSchema,
   PendingChange,
 } from '@/types/settings';
 import api from '@/api';
@@ -132,6 +133,43 @@ export const useSettingsStore = defineStore('settings', () => {
     pendingChanges.value = changes;
   }
 
+  /** 按点分路径读原始值（路径缺失返回 undefined） */
+  function originalValueAt(key: string): unknown {
+    let current: unknown = originalValues.value;
+    for (const k of key.split('.')) {
+      if (current && typeof current === 'object' && k in current) {
+        current = (current as Record<string, unknown>)[k];
+      } else {
+        return undefined;
+      }
+    }
+    return current;
+  }
+
+  /**
+   * 单字段变更状态机：新值等于原始值时撤销该条记录，否则按 key upsert。
+   * Settings 页的字段编辑统一入口（原两视图各持一份逐字实现）。
+   */
+  function applyFieldChange(field: ConfigFieldSchema, newValue: unknown, oldValue: unknown) {
+    const existingIndex = pendingChanges.value.findIndex(c => c.key === field.key);
+    if (JSON.stringify(newValue) === JSON.stringify(oldValue)) {
+      if (existingIndex >= 0) {
+        const next = [...pendingChanges.value];
+        next.splice(existingIndex, 1);
+        pendingChanges.value = next;
+      }
+      return;
+    }
+    const change: PendingChange = { key: field.key, oldValue, newValue, field };
+    if (existingIndex >= 0) {
+      const next = [...pendingChanges.value];
+      next[existingIndex] = change;
+      pendingChanges.value = next;
+    } else {
+      pendingChanges.value = [...pendingChanges.value, change];
+    }
+  }
+
   // 辅助函数
   // 递归展开 fields（含 children），用嵌套结构存入 values
   function flattenFields(
@@ -181,5 +219,7 @@ export const useSettingsStore = defineStore('settings', () => {
     discardChanges,
     updateCurrentValues,
     updatePendingChanges,
+    originalValueAt,
+    applyFieldChange,
   };
 });

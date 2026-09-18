@@ -16,7 +16,6 @@ declare module 'vue' {
     ComponentCard: typeof import('./src/components/settings/ComponentCard.vue')['default']
     ComponentCardList: typeof import('./src/components/settings/ComponentCardList.vue')['default']
     DictEditor: typeof import('./src/components/settings/DictEditor.vue')['default']
-    DynamicForm: typeof import('./src/components/settings/DynamicForm.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']
     ElBadge: typeof import('element-plus/es')['ElBadge']

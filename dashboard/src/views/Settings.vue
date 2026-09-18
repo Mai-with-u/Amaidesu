@@ -95,7 +95,7 @@
                 <SubFieldGroup
                   :fields="match.fields"
                   :get-value="getFieldValue"
-                  :get-original="getOriginalValue"
+                  :get-original="settingsStore.originalValueAt"
                   :update-value="updateFieldValue"
                   :get-change-count="getPendingChangeCount"
                 />
@@ -141,7 +141,7 @@
                   :fields="section.fields"
                   :enabled-field-key="`${section.key}.enabled`"
                   :get-value="getFieldValue"
-                  :get-original="getOriginalValue"
+                  :get-original="settingsStore.originalValueAt"
                   :update-value="updateFieldValue"
                   :get-change-count="getPendingChangeCount"
                 />
@@ -149,7 +149,7 @@
                   v-else
                   :fields="section.fields"
                   :get-value="getFieldValue"
-                  :get-original="getOriginalValue"
+                  :get-original="settingsStore.originalValueAt"
                   :update-value="updateFieldValue"
                   :get-change-count="getPendingChangeCount"
                 />
@@ -208,7 +208,7 @@ import {
   WarningFilled,
 } from '@element-plus/icons-vue';
 import { useSettingsStore } from '@/stores/settings';
-import type { ConfigFieldSchema, ConfigGroupSchema, PendingChange } from '@/types/settings';
+import type { ConfigFieldSchema, ConfigGroupSchema } from '@/types/settings';
 import SubFieldGroup from '@/components/settings/SubFieldGroup.vue';
 import ComponentCardList from '@/components/settings/ComponentCardList.vue';
 
@@ -422,19 +422,6 @@ function getFieldValue(key: string): unknown {
   return current;
 }
 
-function getOriginalValue(key: string): unknown {
-  const keys = key.split('.');
-  let current: unknown = settingsStore.originalValues;
-  for (const k of keys) {
-    if (current && typeof current === 'object' && k in current) {
-      current = (current as Record<string, unknown>)[k];
-    } else {
-      return undefined;
-    }
-  }
-  return current;
-}
-
 function updateFieldValue(field: ConfigFieldSchema, value: unknown) {
   const keys = field.key.split('.');
   const newValues = { ...settingsStore.currentValues };
@@ -453,29 +440,7 @@ function updateFieldValue(field: ConfigFieldSchema, value: unknown) {
 }
 
 function updatePendingChanges(field: ConfigFieldSchema, newValue: unknown) {
-  const oldValue = getOriginalValue(field.key);
-  const existingIndex = settingsStore.pendingChanges.findIndex(c => c.key === field.key);
-  if (JSON.stringify(newValue) === JSON.stringify(oldValue)) {
-    if (existingIndex >= 0) {
-      const newChanges = [...settingsStore.pendingChanges];
-      newChanges.splice(existingIndex, 1);
-      settingsStore.updatePendingChanges(newChanges);
-    }
-    return;
-  }
-  const change: PendingChange = {
-    key: field.key,
-    oldValue,
-    newValue,
-    field,
-  };
-  if (existingIndex >= 0) {
-    const newChanges = [...settingsStore.pendingChanges];
-    newChanges[existingIndex] = change;
-    settingsStore.updatePendingChanges(newChanges);
-  } else {
-    settingsStore.updatePendingChanges([...settingsStore.pendingChanges, change]);
-  }
+  settingsStore.applyFieldChange(field, newValue, settingsStore.originalValueAt(field.key));
 }
 
 // ── 保存 / 重置 / 重启 ──────────────────────────────────
