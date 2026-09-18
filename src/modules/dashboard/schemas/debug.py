@@ -10,12 +10,14 @@ from pydantic import BaseModel
 
 
 class InjectMessageRequest(BaseModel):
-    """注入消息请求"""
+    """注入消息请求
+
+    ``source`` 在直播间语境即观众昵称（payload 的 user.id/user.name 同取此值）；
+    消息恒按模拟数据处理（``simulated=True``），无类型/权重概念。
+    """
 
     source: str = "debug_inject"
     text: str
-    data_type: str = "text"
-    importance: float = 0.5
 
 
 class InjectMessageResponse(BaseModel):

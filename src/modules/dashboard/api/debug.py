@@ -40,6 +40,8 @@ async def inject_message(
 
     会话语义：弹幕经 StorageLedger 落 live_chat（单一事实源），主播
     Agent 决策/表达历史直接读 live_chat——注入消息天然进入决策上下文。
+    注入属手动测试行为，payload 恒标记 ``simulated=True``：统计口径中
+    不算真实观众（"模拟观众不是观众"），批量造数请走世界模拟器。
     """
     event_bus = server.event_bus
     if not event_bus:
@@ -61,6 +63,7 @@ async def inject_message(
             ),
             content=request.text,
             timestamp_ms=now_ms(),
+            simulated=True,
         )
         await event_bus.emit(
             CoreEvents.ROOM_MESSAGE_DANMAKU,
