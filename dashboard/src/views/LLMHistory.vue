@@ -83,6 +83,8 @@ async function fetchStatistics() {
 }
 const dateRange = ref<[number, number] | null>(null);
 
+const route = useRoute();
+
 // 查询参数
 const queryParams = reactive<LLMHistoryQueryParams>({
   page: 1,
@@ -93,6 +95,13 @@ const queryParams = reactive<LLMHistoryQueryParams>({
   end_time: undefined,
   success_only: undefined,
 });
+
+// 直达筛选：外部页面（如 LLM 用量表）经 ?model_name= 跳入时预置模型筛选，
+// 须在 setup 期（首拉之前）同步写入，避免初始化请求与筛选变更请求并发
+const queryModelName = String(route.query.model_name ?? '').trim();
+if (queryModelName) {
+  queryParams.model_name = queryModelName;
+}
 
 // 获取历史数据
 async function fetchHistory() {
@@ -153,7 +162,6 @@ async function showDetail(row: LLMRequestHistory) {
 }
 
 // 直达详情：外部页面（如直播控制台决策卡）经 ?request_id= 跳入时自动打开
-const route = useRoute();
 async function openFromQuery() {
   const requestId = String(route.query.request_id ?? '').trim();
   if (!requestId) return;

@@ -1,9 +1,10 @@
 """
 LLM 管理 API
 
-提供 LLM 用量统计和请求历史的查询接口。
+提供 LLM 用量统计、用量趋势图表和请求历史的查询接口。
 """
 
+from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -16,6 +17,9 @@ from src.modules.dashboard.schemas.llm import (
     LLMRequestHistoryResponse,
     LLMUsageStatsResponse,
     LLMUsageSummaryResponse,
+    LLMUsageTrendModelPoint,
+    LLMUsageTrendPoint,
+    LLMUsageTrendsResponse,
     TokenUsageSchema,
 )
 from src.modules.llm.request_history_manager import get_global_request_history_manager
@@ -27,6 +31,18 @@ router = APIRouter()
 
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
+
+
+def _cache_hit_rate(cache_hit_tokens: float, cache_miss_tokens: float) -> Optional[float]:
+    """由缓存命中/未命中 token 计算命中率（0-1）。
+
+    两者同时为 0 视为上游从未上报缓存用量，返回 None 而非 0——
+    落库口径把未上报记 0，0/0 无法与真实零命中区分，交给前端显示"未上报"。
+    """
+    total = cache_hit_tokens + cache_miss_tokens
+    if total <= 0:
+        return None
+    return cache_hit_tokens / total
 
 
 @router.get("/usage", response_model=Dict[str, LLMUsageStatsResponse])
@@ -43,6 +59,8 @@ async def get_all_models_usage(server: ServerDep) -> Dict[str, LLMUsageStatsResp
     result: Dict[str, LLMUsageStatsResponse] = {}
     for row in rows:
         model_name = row.get("model_name") or "unknown"
+        hit = int(row.get("cache_hit_tokens", 0))
+        miss = int(row.get("cache_miss_tokens", 0))
         result[model_name] = LLMUsageStatsResponse(
             model_name=model_name,
             total_prompt_tokens=int(row.get("total_prompt_tokens", 0)),
@@ -50,14 +68,72 @@ async def get_all_models_usage(server: ServerDep) -> Dict[str, LLMUsageStatsResp
             total_tokens=int(row.get("total_tokens", 0)),
             total_calls=int(row.get("total_calls", 0)),
             total_cost=float(row.get("total_cost", 0.0)),
-            cache_hit_tokens=int(row.get("cache_hit_tokens", 0)),
-            cache_miss_tokens=int(row.get("cache_miss_tokens", 0)),
+            cache_hit_tokens=hit,
+            cache_miss_tokens=miss,
+            cache_hit_rate=_cache_hit_rate(hit, miss),
             first_call_time=row.get("first_call_time"),
             last_call_time=row.get("last_call_time"),
             last_updated=row.get("last_updated"),
         )
 
     return result
+
+
+@router.get("/usage/trends", response_model=LLMUsageTrendsResponse)
+async def get_usage_trends(
+    server: ServerDep,
+    days: Annotated[int, Query(ge=1, le=365, description="回看天数")] = 30,
+) -> LLMUsageTrendsResponse:
+    """获取近 N 天逐日用量趋势（图表数据源；缺失日期补零对齐时间轴）。"""
+    points: List[LLMUsageTrendPoint] = []
+    model_points: List[LLMUsageTrendModelPoint] = []
+
+    llm_repo = server.llm_repo
+    if llm_repo is not None:
+        # 起点取窗口首日本地零点，与仓储按本地日分组的口径一致
+        first_day = date.today() - timedelta(days=days - 1)
+        start_ms = int(datetime.combine(first_day, time.min).timestamp() * 1000)
+        trends = await llm_repo.llm_usage_daily_trends(start_ms=start_ms)
+
+        daily_by_date = {row["day"]: row for row in trends.get("daily", [])}
+        for offset in range(days):
+            day = first_day + timedelta(days=offset)
+            day_str = day.isoformat()
+            row = daily_by_date.get(day_str, {})
+            hit = int(row.get("cache_hit_tokens", 0))
+            miss = int(row.get("cache_miss_tokens", 0))
+            points.append(
+                LLMUsageTrendPoint(
+                    date=day_str,
+                    timestamp_ms=int(datetime.combine(day, time.min).timestamp() * 1000),
+                    total_calls=int(row.get("total_calls", 0)),
+                    prompt_tokens=int(row.get("prompt_tokens", 0)),
+                    completion_tokens=int(row.get("completion_tokens", 0)),
+                    total_tokens=int(row.get("total_tokens", 0)),
+                    cost=float(row.get("cost", 0.0)),
+                    cache_hit_tokens=hit,
+                    cache_miss_tokens=miss,
+                    cache_hit_rate=_cache_hit_rate(hit, miss),
+                )
+            )
+
+        for row in trends.get("by_model", []):
+            hit = int(row.get("cache_hit_tokens", 0))
+            miss = int(row.get("cache_miss_tokens", 0))
+            model_points.append(
+                LLMUsageTrendModelPoint(
+                    date=str(row.get("day", "")),
+                    model_name=str(row.get("model_name") or "unknown"),
+                    total_calls=int(row.get("total_calls", 0)),
+                    total_tokens=int(row.get("total_tokens", 0)),
+                    cost=float(row.get("cost", 0.0)),
+                    cache_hit_tokens=hit,
+                    cache_miss_tokens=miss,
+                    cache_hit_rate=_cache_hit_rate(hit, miss),
+                )
+            )
+
+    return LLMUsageTrendsResponse(days=days, points=points, model_points=model_points)
 
 
 @router.get("/usage/summary", response_model=LLMUsageSummaryResponse)
@@ -68,14 +144,17 @@ async def get_usage_summary(server: ServerDep) -> LLMUsageSummaryResponse:
         return LLMUsageSummaryResponse()
 
     summary = await llm_repo.llm_usage_summary()
+    hit = int(summary.get("cache_hit_tokens", 0))
+    miss = int(summary.get("cache_miss_tokens", 0))
     return LLMUsageSummaryResponse(
         total_cost=float(summary.get("total_cost", 0.0)),
         total_prompt_tokens=int(summary.get("total_prompt_tokens", 0)),
         total_completion_tokens=int(summary.get("total_completion_tokens", 0)),
         total_tokens=int(summary.get("total_tokens", 0)),
         total_calls=int(summary.get("total_calls", 0)),
-        cache_hit_tokens=int(summary.get("cache_hit_tokens", 0)),
-        cache_miss_tokens=int(summary.get("cache_miss_tokens", 0)),
+        cache_hit_tokens=hit,
+        cache_miss_tokens=miss,
+        cache_hit_rate=_cache_hit_rate(hit, miss),
         model_count=int(summary.get("model_count", 0)),
     )
 
@@ -134,12 +213,15 @@ async def get_statistics(
     # 转换 model_stats
     model_stats: Dict[str, LLMHistoryStatisticsModelStats] = {}
     for model_name, model_data in stats.get("model_stats", {}).items():
+        model_hit = model_data.get("cache_hit_tokens", 0)
+        model_miss = model_data.get("cache_miss_tokens", 0)
         model_stats[model_name] = LLMHistoryStatisticsModelStats(
             count=model_data.get("count", 0),
             total_tokens=model_data.get("total_tokens", 0),
             total_cost=model_data.get("total_cost", 0.0),
-            cache_hit_tokens=model_data.get("cache_hit_tokens", 0),
-            cache_miss_tokens=model_data.get("cache_miss_tokens", 0),
+            cache_hit_tokens=model_hit,
+            cache_miss_tokens=model_miss,
+            cache_hit_rate=_cache_hit_rate(model_hit, model_miss),
         )
 
     return LLMHistoryStatisticsResponse(
@@ -153,6 +235,7 @@ async def get_statistics(
         total_cost=stats.get("total_cost", 0.0),
         cache_hit_tokens=stats.get("cache_hit_tokens", 0),
         cache_miss_tokens=stats.get("cache_miss_tokens", 0),
+        cache_hit_rate=_cache_hit_rate(stats.get("cache_hit_tokens", 0), stats.get("cache_miss_tokens", 0)),
         avg_latency_ms=stats.get("avg_latency_ms", 0.0),
         model_stats=model_stats,
         client_stats=stats.get("client_stats", {}),

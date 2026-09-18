@@ -14,6 +14,8 @@ export interface LLMUsageStats {
   cache_hit_tokens: number;
   /** 缓存未命中 token；0 可能代表"未上报"而非真实零命中 */
   cache_miss_tokens: number;
+  /** 缓存命中率（0-1，hit/(hit+miss)）；null 表示上游从未上报缓存用量 */
+  cache_hit_rate: number | null;
   first_call_time: number | null;
   last_call_time: number | null;
   last_updated: number | null;
@@ -30,7 +32,45 @@ export interface LLMUsageSummary {
   cache_hit_tokens: number;
   /** 缓存未命中 token；0 可能代表"未上报"而非真实零命中 */
   cache_miss_tokens: number;
+  /** 缓存命中率（0-1）；null 表示上游从未上报缓存用量 */
+  cache_hit_rate: number | null;
   model_count: number;
+}
+
+// 用量趋势：单日聚合点（后端已补零对齐连续时间轴）
+export interface LLMUsageTrendPoint {
+  /** 本地日期 YYYY-MM-DD */
+  date: string;
+  /** 当日本地零点的毫秒时间戳 */
+  timestamp_ms: number;
+  total_calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost: number;
+  cache_hit_tokens: number;
+  cache_miss_tokens: number;
+  /** 缓存命中率（0-1）；null 表示当日无缓存用量上报 */
+  cache_hit_rate: number | null;
+}
+
+// 用量趋势：单日单模型聚合点（仅有数据的日子）
+export interface LLMUsageTrendModelPoint {
+  date: string;
+  model_name: string;
+  total_calls: number;
+  total_tokens: number;
+  cost: number;
+  cache_hit_tokens: number;
+  cache_miss_tokens: number;
+  cache_hit_rate: number | null;
+}
+
+// 用量趋势响应（GET /llm/usage/trends?days=N）
+export interface LLMUsageTrendsResponse {
+  days: number;
+  points: LLMUsageTrendPoint[];
+  model_points: LLMUsageTrendModelPoint[];
 }
 
 // Token 用量详情
@@ -103,11 +143,15 @@ export interface LLMHistoryStatistics {
       /** 0 可能代表"未上报"而非真实零命中（落库口径把未上报记 0） */
       cache_hit_tokens: number;
       cache_miss_tokens: number;
+      /** 缓存命中率（0-1）；null 表示窗口内无缓存用量上报 */
+      cache_hit_rate: number | null;
     }
   >;
   /** 缓存命中 token 总量；0 可能代表"未上报"而非真实零命中 */
   cache_hit_tokens: number;
   cache_miss_tokens: number;
+  /** 缓存命中率（0-1）；null 表示窗口内无缓存用量上报 */
+  cache_hit_rate: number | null;
   client_stats: Record<string, number>;
   /** 统计窗口起止；全量统计时两端均为 null */
   time_range: { start: number | null; end: number | null };

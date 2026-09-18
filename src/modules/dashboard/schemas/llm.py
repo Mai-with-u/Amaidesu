@@ -28,6 +28,8 @@ class LLMUsageStatsResponse(BaseModel):
     total_cost: float = 0.0
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    # 缓存命中率（hit / (hit+miss)，0-1）；None 表示上游从未上报缓存用量
+    cache_hit_rate: Optional[float] = None
     first_call_time: Optional[int] = None
     last_call_time: Optional[int] = None
     last_updated: Optional[int] = None
@@ -43,6 +45,8 @@ class LLMUsageSummaryResponse(BaseModel):
     total_calls: int = 0
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    # 缓存命中率（hit / (hit+miss)，0-1）；None 表示上游从未上报缓存用量
+    cache_hit_rate: Optional[float] = None
     model_count: int = 0
 
 
@@ -82,6 +86,8 @@ class LLMHistoryStatisticsModelStats(BaseModel):
     total_cost: float = 0.0
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    # 缓存命中率（0-1）；None 表示窗口内上游从未上报缓存用量
+    cache_hit_rate: Optional[float] = None
 
 
 class LLMHistoryStatisticsResponse(BaseModel):
@@ -98,7 +104,45 @@ class LLMHistoryStatisticsResponse(BaseModel):
     total_cost: float = 0.0
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    # 缓存命中率（0-1）；None 表示窗口内上游从未上报缓存用量
+    cache_hit_rate: Optional[float] = None
     avg_latency_ms: float = 0.0
     model_stats: Dict[str, LLMHistoryStatisticsModelStats] = {}
     client_stats: Dict[str, int] = {}
     time_range: Optional[Dict[str, Optional[int]]] = None
+
+
+class LLMUsageTrendPoint(BaseModel):
+    """单日用量聚合点（补零对齐后的连续时间轴）"""
+
+    date: str
+    timestamp_ms: int
+    total_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost: float = 0.0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+    cache_hit_rate: Optional[float] = None
+
+
+class LLMUsageTrendModelPoint(BaseModel):
+    """单日单模型用量聚合点（仅有数据的日子）"""
+
+    date: str
+    model_name: str
+    total_calls: int = 0
+    total_tokens: int = 0
+    cost: float = 0.0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+    cache_hit_rate: Optional[float] = None
+
+
+class LLMUsageTrendsResponse(BaseModel):
+    """用量趋势响应（近 N 天逐日聚合）"""
+
+    days: int
+    points: List[LLMUsageTrendPoint] = []
+    model_points: List[LLMUsageTrendModelPoint] = []

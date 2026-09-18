@@ -156,15 +156,18 @@ def test_usage_and_summary_aggregate_cache(client: TestClient) -> None:
     model_a = body[MODEL_A]
     assert model_a["cache_hit_tokens"] == 500
     assert model_a["cache_miss_tokens"] == 1500
+    assert model_a["cache_hit_rate"] == pytest.approx(0.25)
     assert model_a["total_calls"] == 2
     assert model_a["total_prompt_tokens"] == 200
     assert model_a["first_call_time"] is not None
     assert model_a["last_call_time"] is not None
     assert body[MODEL_B]["cache_hit_tokens"] == 0
+    assert body[MODEL_B]["cache_hit_rate"] == 0.0
 
     summary = client.get("/api/v1/llm/usage/summary").json()
     assert summary["cache_hit_tokens"] == 500
     assert summary["cache_miss_tokens"] == 2000
+    assert summary["cache_hit_rate"] == pytest.approx(500 / 2500)
     assert summary["total_calls"] == 3
     assert summary["model_count"] == 2
     assert abs(summary["total_cost"] - 0.04) < 1e-9
@@ -187,8 +190,10 @@ def test_statistics_aggregate_cache(client: TestClient) -> None:
     stats = client.get("/api/v1/llm/history/statistics").json()
     assert stats["cache_hit_tokens"] == 400
     assert stats["cache_miss_tokens"] == 1100
+    assert stats["cache_hit_rate"] == pytest.approx(400 / 1500)
     assert stats["model_stats"][MODEL_A]["cache_hit_tokens"] == 300
     assert stats["model_stats"][MODEL_B]["cache_miss_tokens"] == 400
+    assert stats["model_stats"][MODEL_B]["cache_hit_rate"] == pytest.approx(0.2)
 
     # 时间窗只含 s2 时 cache 聚合随之收窄
     windowed = client.get(
@@ -197,3 +202,91 @@ def test_statistics_aggregate_cache(client: TestClient) -> None:
     ).json()
     assert windowed["cache_hit_tokens"] == 100
     assert windowed["cache_miss_tokens"] == 400
+
+
+def test_usage_trends_daily_aggregation(client: TestClient) -> None:
+    """/usage/trends 逐日聚合 + 缺失日期补零 + 命中率计算。"""
+    from datetime import datetime, timedelta
+
+    store = _server_ref_cache["store"]
+    # 今天与昨天各造两次调用（含跨模型），命中率 400/(400+600)=0.4
+    today_ms = int(datetime.now().timestamp() * 1000)
+    yesterday_ms = today_ms - timedelta(days=1).total_seconds() * 1000
+    _seed_call(
+        store,
+        request_id="t1",
+        model_name=MODEL_A,
+        cache_hit=300,
+        cache_miss=200,
+        cost=0.03,
+        timestamp_ms=yesterday_ms,
+    )
+    _seed_call(
+        store,
+        request_id="t2",
+        model_name=MODEL_A,
+        cache_hit=100,
+        cache_miss=0,
+        cost=0.01,
+        timestamp_ms=yesterday_ms + 60_000,
+    )
+    _seed_call(
+        store,
+        request_id="t3",
+        model_name=MODEL_B,
+        cache_hit=0,
+        cache_miss=400,
+        cost=0.02,
+        timestamp_ms=today_ms,
+    )
+
+    body = client.get("/api/v1/llm/usage/trends", params={"days": 7}).json()
+    assert body["days"] == 7
+    assert len(body["points"]) == 7  # 补零后时间轴连续
+
+    points = {p["date"]: p for p in body["points"]}
+    today_str = datetime.now().date().isoformat()
+    yesterday_str = (datetime.now().date() - timedelta(days=1)).isoformat()
+
+    today = points[today_str]
+    assert today["total_calls"] == 1
+    assert today["cache_hit_tokens"] == 0
+    assert today["cache_miss_tokens"] == 400
+    assert today["cache_hit_rate"] == 0.0
+    assert abs(today["cost"] - 0.02) < 1e-9
+
+    yesterday = points[yesterday_str]
+    assert yesterday["total_calls"] == 2
+    assert yesterday["cache_hit_tokens"] == 400
+    assert yesterday["cache_miss_tokens"] == 200
+    assert yesterday["cache_hit_rate"] == pytest.approx(400 / 600)
+
+    # 补零日期：无数据的日期全零且命中率 None（未上报 ≠ 零命中）
+    empty = points[(datetime.now().date() - timedelta(days=3)).isoformat()]
+    assert empty["total_calls"] == 0
+    assert empty["total_tokens"] == 0
+    assert empty["cache_hit_rate"] is None
+
+    # 按模型细分只有有数据的日子
+    model_points = body["model_points"]
+    assert {(p["date"], p["model_name"]) for p in model_points} == {
+        (yesterday_str, MODEL_A),
+        (today_str, MODEL_B),
+    }
+    model_a_point = next(p for p in model_points if p["model_name"] == MODEL_A)
+    assert model_a_point["total_calls"] == 2
+    assert model_a_point["cache_hit_rate"] == pytest.approx(400 / 600)
+
+    # days 参数越界被校验拒绝
+    assert client.get("/api/v1/llm/usage/trends", params={"days": 0}).status_code == 422
+    assert client.get("/api/v1/llm/usage/trends", params={"days": 366}).status_code == 422
+
+
+def test_usage_trends_empty_db(client: TestClient) -> None:
+    """冷启动：库空时 /usage/trends 返回补零时间轴（非 500）。"""
+    body = client.get("/api/v1/llm/usage/trends", params={"days": 3}).json()
+    assert body["days"] == 3
+    assert len(body["points"]) == 3
+    assert all(p["total_calls"] == 0 for p in body["points"])
+    assert all(p["cache_hit_rate"] is None for p in body["points"])
+    assert body["model_points"] == []

@@ -382,6 +382,47 @@ class LLMRepo(BaseRepo):
         )
         return [dict(row) for row in rows]
 
+    async def llm_usage_daily_trends(self, *, start_ms: int) -> Dict[str, Any]:
+        """按本地日聚合 ``llm_usage`` 用量趋势（图表数据源）。
+
+        返回 ``{"daily": [...], "by_model": [...]}``：daily 为整体逐日聚合
+        （日期字符串 day + 调用/token/cache/费用），by_model 在 daily 维度上
+        多一列 model_name。无数据的日期不产出行，由调用方补零对齐时间轴。
+        """
+
+        def _exec() -> Dict[str, Any]:
+            with self._manager.transaction() as conn:
+                daily = conn.execute(
+                    "SELECT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS day,"
+                    " COUNT(*) AS total_calls,"
+                    " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+                    " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+                    " COALESCE(SUM(total_tokens), 0) AS total_tokens,"
+                    " COALESCE(SUM(cost), 0) AS cost,"
+                    " COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,"
+                    " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens"
+                    " FROM llm_usage WHERE timestamp_ms >= ?"
+                    " GROUP BY day ORDER BY day",
+                    (start_ms,),
+                ).fetchall()
+                by_model = conn.execute(
+                    "SELECT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS day,"
+                    " model_name, COUNT(*) AS total_calls,"
+                    " COALESCE(SUM(total_tokens), 0) AS total_tokens,"
+                    " COALESCE(SUM(cost), 0) AS cost,"
+                    " COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,"
+                    " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens"
+                    " FROM llm_usage WHERE timestamp_ms >= ?"
+                    " GROUP BY day, model_name ORDER BY day",
+                    (start_ms,),
+                ).fetchall()
+                return {
+                    "daily": [dict(row) for row in daily],
+                    "by_model": [dict(row) for row in by_model],
+                }
+
+        return await self._run_in_executor(_exec)
+
     async def llm_usage_summary(self) -> Dict[str, Any]:
         """聚合 ``llm_usage`` 全量摘要（dashboard /usage/summary 数据源）。"""
 

@@ -71,6 +71,84 @@
           <span class="stat-value">{{ summary?.model_count || 0 }}</span>
         </div>
       </div>
+
+      <div class="stat-card rate">
+        <div class="stat-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+            <polyline points="22 4 12 14.01 9 11.01" />
+          </svg>
+        </div>
+        <div class="stat-content">
+          <span class="stat-label">
+            缓存命中率
+            <el-tooltip content="命中 / (命中 + 未命中)；「未上报」表示上游从未上报缓存用量" placement="top">
+              <el-icon class="cache-help"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
+          <span class="stat-value">{{ hitRateText }}</span>
+          <span class="stat-sub" :title="cacheSubFullText">{{ cacheSubText }}</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 用量趋势图表 -->
+    <section v-loading="loading" class="charts-section">
+      <div class="section-header">
+        <h2 class="section-title">用量趋势</h2>
+        <el-radio-group v-model="rangeDays" size="small" @change="onRangeChange">
+          <el-radio-button v-for="option in RANGE_OPTIONS" :key="option" :label="option">
+            近 {{ option }} 天
+          </el-radio-button>
+        </el-radio-group>
+      </div>
+
+      <div class="chart-grid">
+        <div class="chart-card">
+          <h3 class="chart-title">每日费用与调用次数</h3>
+          <TrendChart
+            :labels="trendLabels"
+            :bars="callBarSeries"
+            :line="costLineSeries"
+            :line-tick-format="costYuan"
+            :tooltips="costTooltips"
+            empty-text="暂无调用记录"
+          />
+        </div>
+
+        <div class="chart-card">
+          <h3 class="chart-title">每日 Token 构成</h3>
+          <TrendChart
+            :labels="trendLabels"
+            :bars="tokenBarSeries"
+            :left-tick-format="compactNumber"
+            :tooltips="tokenTooltips"
+            empty-text="暂无调用记录"
+          />
+        </div>
+
+        <div class="chart-card">
+          <h3 class="chart-title">
+            每日缓存命中率
+            <el-tooltip content="命中率 = 命中 / (命中 + 未命中)；断线表示当日无缓存用量上报" placement="top">
+              <el-icon class="cache-help"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </h3>
+          <TrendChart
+            :labels="trendLabels"
+            :line="rateLineSeries"
+            :line-max="100"
+            :line-tick-format="percentTick"
+            :tooltips="rateTooltips"
+            empty-text="暂无缓存用量上报"
+          />
+        </div>
+
+        <div class="chart-card">
+          <h3 class="chart-title">模型费用占比</h3>
+          <ModelCostDonut :items="donutItems" total-label="总费用" :format-value="costYuan" />
+        </div>
+      </div>
     </section>
 
     <!-- 模型用量表格 -->
@@ -89,7 +167,11 @@
       >
         <el-table-column prop="model_name" label="模型名称" min-width="200" fixed>
           <template #default="{ row }">
-            <div class="model-name-cell">
+            <div
+              class="model-name-cell model-name-link"
+              title="查看该模型的调用历史"
+              @click="goToModelHistory(row.model_name)"
+            >
               <span class="model-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M12 2L2 7l10 5 10-5-10-5z" />
@@ -156,6 +238,24 @@
           </template>
         </el-table-column>
 
+        <el-table-column width="120" align="right">
+          <template #header>
+            <span class="cache-header">
+              命中率
+              <el-tooltip
+                content="命中 / (命中 + 未命中)；「未上报」表示上游从未上报缓存用量"
+                placement="top"
+              >
+                <el-icon class="cache-help"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <template #default="{ row }">
+            <span v-if="row.cache_hit_rate == null" class="cache-value">未上报</span>
+            <span v-else class="hit-rate-value">{{ (row.cache_hit_rate * 100).toFixed(1) }}%</span>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="total_cost" label="费用" width="110" align="right">
           <template #default="{ row }">
             <span class="cost-value">¥{{ row.total_cost.toFixed(4) }}</span>
@@ -185,19 +285,126 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { Refresh, Document, QuestionFilled } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { llmApi } from '@/api';
-import type { LLMUsageStats, LLMUsageSummary } from '@/types';
+import type { LLMUsageStats, LLMUsageSummary, LLMUsageTrendsResponse } from '@/types';
+import TrendChart from '@/components/llm/TrendChart.vue';
+import ModelCostDonut from '@/components/llm/ModelCostDonut.vue';
+import { compactNumber, costYuan } from '@/utils/chartFormat';
+
+// 趋势图时间窗选项（天）
+const RANGE_OPTIONS = [7, 30, 90];
+
+const router = useRouter();
 
 const loading = ref(false);
 const usageData = ref<Record<string, LLMUsageStats>>({});
 const summary = ref<LLMUsageSummary | null>(null);
+const trends = ref<LLMUsageTrendsResponse | null>(null);
+const rangeDays = ref(30);
 
 // 将对象转换为数组用于表格显示
 const tableData = computed(() => {
   return Object.values(usageData.value).sort((a, b) => b.total_cost - a.total_cost);
 });
+
+// 总体缓存命中率：null 表示上游从未上报缓存用量（≠ 真实零命中）
+const hitRateText = computed(() => {
+  const rate = summary.value?.cache_hit_rate;
+  return rate === null || rate === undefined ? '未上报' : `${(rate * 100).toFixed(1)}%`;
+});
+
+// 卡片副行用紧凑数字保证五卡布局下不截断；精确值经 title 悬停查看
+const cacheSubText = computed(() => {
+  if (!summary.value) return '-';
+  return `命中 ${compactNumber(summary.value.cache_hit_tokens)} · 未命中 ${compactNumber(
+    summary.value.cache_miss_tokens,
+  )}`;
+});
+
+const cacheSubFullText = computed(() => {
+  if (!summary.value) return '';
+  return `命中 ${formatNumber(summary.value.cache_hit_tokens)} · 未命中 ${formatNumber(
+    summary.value.cache_miss_tokens,
+  )}`;
+});
+
+// ===== 趋势图表派生数据（后端已补零对齐连续时间轴） =====
+const trendPoints = computed(() => trends.value?.points ?? []);
+
+const trendLabels = computed(() => trendPoints.value.map(point => point.date.slice(5))); // MM-DD
+
+const callBarSeries = computed(() => [
+  { name: '调用次数', color: '#8b5cf6', values: trendPoints.value.map(point => point.total_calls) },
+]);
+
+const costLineSeries = computed(() => ({
+  name: '费用',
+  color: '#10b981',
+  values: trendPoints.value.map(point => point.cost),
+}));
+
+const costTooltips = computed(() =>
+  trendPoints.value.map(
+    point =>
+      `${point.date}\n调用 ${formatNumber(point.total_calls)} 次\n费用 ¥${point.cost.toFixed(4)}`,
+  ),
+);
+
+const tokenBarSeries = computed(() => [
+  {
+    name: '输入 Token',
+    color: '#3b82f6',
+    values: trendPoints.value.map(point => point.prompt_tokens),
+  },
+  {
+    name: '输出 Token',
+    color: '#8b5cf6',
+    values: trendPoints.value.map(point => point.completion_tokens),
+  },
+]);
+
+const tokenTooltips = computed(() =>
+  trendPoints.value.map(
+    point =>
+      `${point.date}\n输入 ${formatNumber(point.prompt_tokens)}\n输出 ${formatNumber(
+        point.completion_tokens,
+      )}`,
+  ),
+);
+
+// 命中率折到 0-100 展示；null（无上报）断线
+const rateLineSeries = computed(() => ({
+  name: '缓存命中率',
+  color: '#10b981',
+  values: trendPoints.value.map(point =>
+    point.cache_hit_rate === null ? null : point.cache_hit_rate * 100,
+  ),
+}));
+
+const rateTooltips = computed(() =>
+  trendPoints.value.map(point => {
+    if (point.cache_hit_rate === null) {
+      return `${point.date}\n无缓存用量上报`;
+    }
+    return `${point.date}\n命中率 ${(point.cache_hit_rate * 100).toFixed(1)}%\n命中 ${formatNumber(
+      point.cache_hit_tokens,
+    )} · 未命中 ${formatNumber(point.cache_miss_tokens)}`;
+  }),
+);
+
+const percentTick = (value: number): string => `${Math.round(value)}%`;
+
+const donutItems = computed(() =>
+  tableData.value.map(model => ({ name: model.model_name, value: model.total_cost })),
+);
+
+// 跳转 LLM 历史页并按模型预置筛选（历史页读取 ?model_name=）
+function goToModelHistory(modelName: string): void {
+  void router.push({ path: '/llm/history', query: { model_name: modelName } });
+}
 
 // 格式化数字（添加千分位分隔符）
 function formatNumber(num: number): string {
@@ -218,21 +425,38 @@ function formatTime(timestamp: number | null): string {
 }
 
 // 获取数据
+async function fetchTrends(): Promise<LLMUsageTrendsResponse> {
+  const response = await llmApi.getUsageTrends(rangeDays.value);
+  return response.data;
+}
+
 async function fetchData() {
   loading.value = true;
   try {
-    const [usageResponse, summaryResponse] = await Promise.all([
+    const [usageResponse, summaryResponse, trendsData] = await Promise.all([
       llmApi.getUsage(),
       llmApi.getUsageSummary(),
+      fetchTrends(),
     ]);
 
     usageData.value = usageResponse.data;
     summary.value = summaryResponse.data;
+    trends.value = trendsData;
   } catch (error) {
     console.error('Failed to fetch LLM usage data:', error);
     ElMessage.error('获取 LLM 用量数据失败');
   } finally {
     loading.value = false;
+  }
+}
+
+// 切换时间窗只重拉趋势接口（汇总/明细与窗口无关）
+async function onRangeChange() {
+  try {
+    trends.value = await fetchTrends();
+  } catch (error) {
+    console.error('Failed to fetch LLM usage trends:', error);
+    ElMessage.error('获取 LLM 用量趋势失败');
   }
 }
 
@@ -281,7 +505,7 @@ onMounted(() => {
 /* 统计卡片 */
 .stats-cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: var(--spacing-md);
   margin-bottom: var(--spacing-lg);
 }
@@ -331,6 +555,10 @@ onMounted(() => {
   background: linear-gradient(180deg, #f59e0b, #d97706);
 }
 
+.stat-card.rate::before {
+  background: linear-gradient(180deg, #06b6d4, #0891b2);
+}
+
 .stat-icon {
   width: 48px;
   height: 48px;
@@ -366,6 +594,11 @@ onMounted(() => {
   color: #f59e0b;
 }
 
+.stat-card.rate .stat-icon {
+  background: rgba(6, 182, 212, 0.1);
+  color: #06b6d4;
+}
+
 .stat-content {
   display: flex;
   flex-direction: column;
@@ -388,6 +621,55 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.stat-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 用量趋势图表 */
+.charts-section {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color-light);
+  padding: var(--spacing-lg);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: var(--spacing-lg);
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--spacing-lg);
+}
+
+.chart-card {
+  min-width: 0;
+  padding: var(--spacing-md);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+.chart-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 var(--spacing-md);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hit-rate-value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: #06b6d4;
 }
 
 /* 用量表格 */
@@ -450,6 +732,18 @@ onMounted(() => {
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 13px;
+}
+
+/* 模型名可点击：跳转历史页并预置筛选 */
+.model-name-link {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-normal);
+}
+
+.model-name-link:hover .model-name {
+  color: var(--color-primary);
+  text-decoration: underline;
 }
 
 .token-value {
@@ -521,9 +815,19 @@ onMounted(() => {
 }
 
 /* 响应式 */
+@media (max-width: 1400px) {
+  .stats-cards {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
 @media (max-width: 1200px) {
   .stats-cards {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .chart-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -543,6 +847,10 @@ onMounted(() => {
 
   .stat-value {
     font-size: 20px;
+  }
+
+  .chart-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -66,12 +66,14 @@ declare module 'vue' {
     HistoryDetail: typeof import('./src/components/llm-history/HistoryDetail.vue')['default']
     HistoryFilter: typeof import('./src/components/llm-history/HistoryFilter.vue')['default']
     HistoryTable: typeof import('./src/components/llm-history/HistoryTable.vue')['default']
+    ModelCostDonut: typeof import('./src/components/llm/ModelCostDonut.vue')['default']
     PulseChart: typeof import('./src/components/dashboard/PulseChart.vue')['default']
     RestartOverlay: typeof import('./src/components/layout/RestartOverlay.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     Sidebar: typeof import('./src/components/layout/Sidebar.vue')['default']
     SubFieldGroup: typeof import('./src/components/settings/SubFieldGroup.vue')['default']
+    TrendChart: typeof import('./src/components/llm/TrendChart.vue')['default']
     VisionCapturePanel: typeof import('./src/components/vision/VisionCapturePanel.vue')['default']
   }
   export interface GlobalDirectives {

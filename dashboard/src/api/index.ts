@@ -26,6 +26,7 @@ import type {
   ConfigBatchUpdateResponse,
   LLMUsageStats,
   LLMUsageSummary,
+  LLMUsageTrendsResponse,
   LLMHistoryQueryParams,
   LLMHistoryResponse,
   LLMHistoryStatistics,
@@ -116,6 +117,8 @@ export const debugApi = {
 export const llmApi = {
   getUsage: () => api.get<Record<string, LLMUsageStats>>('/llm/usage'),
   getUsageSummary: () => api.get<LLMUsageSummary>('/llm/usage/summary'),
+  getUsageTrends: (days: number) =>
+    api.get<LLMUsageTrendsResponse>('/llm/usage/trends', { params: { days } }),
   getHistory: (params: LLMHistoryQueryParams) =>
     api.get<LLMHistoryResponse>('/llm/history', { params }),
   getStatistics: (params?: { start_time?: number; end_time?: number }) =>
