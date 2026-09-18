@@ -63,7 +63,11 @@ _ATTENTION_PAGE_LIMIT = 10
 # 本批任务期间保留的身体事件条数上限（上报携带的任务上下文，多了只会淹没重点）
 _MAX_BATCH_BODY_EVENTS = 5
 
-# MaiCraft 原始状态 → 任务词表状态映射（绑定处适配声明的一部分；词表）
+# MaiCraft 状态名 → 任务词表状态映射（绑定处适配声明的一部分；词表）
+# 两组键各服务一条来路，互不冲突：
+# - 状态名（pending/success/…）：轮询查询拿到的任务快照字段
+# - 事件类型名（started/completed/…）：注意流任务事件（priority="task"）
+#   两套名字都翻译到同一份任务词表，避免在 Agent 里并存两张词表
 _MAICRAFT_TASK_STATUS_MAP = {
     "pending": "accepted",
     "running": "running",
@@ -72,7 +76,21 @@ _MAICRAFT_TASK_STATUS_MAP = {
     "failed": "failed",
     "timeout": "timeout",
     "cancelled": "cancelled",
+    # 注意流任务事件名（Mod 结算/推进时发布的事件类型）
+    # 只列能明确折进词表状态的：started/completed/failed/cancelled 一目了然，
+    # decision 对应"停在决策点等应答"。
+    # 故意不映射 paused/resumed/plan_changed：paused 在 Mod 侧既有"等人回答"
+    # 也有"系统暂停（掉线等）"两种来源，事件类型本身分不出来，硬折成
+    # waiting_for_decision 会把系统暂停谎报成待应答；这些事件留给任务快照去核实。
+    "started": "running",
+    "completed": "succeeded",
+    "decision": "waiting_for_decision",
 }
+
+# 任务词表里可折进记录表的全部状态（写入前校验，挡住认不出来的事件类型）
+_TASK_EVENT_STATUSES = frozenset(
+    {"accepted", "running", "waiting_for_decision", "succeeded", "failed", "cancelled", "timeout"}
+)
 
 
 def _spec_to_fn(spec: ToolSpec) -> Dict[str, Any]:
@@ -706,7 +724,15 @@ class MinecraftAgent(BaseAgent):
             self._logger.warning("注意流通知到达时无事件循环，本次提示丢弃")
 
     async def _drain_attention(self) -> None:
-        """按游标增量读一页注意流，把重要的身体事件注入待吸收消息。
+        """按游标增量读一页注意流，按事件归属分流。
+
+        注意流同时承载两类事件，本方法就是分流点：
+
+        - **任务事件**（带 ``task_id``，Mod 侧标 ``priority="task"``）→ 写任务记录表
+          （``_absorb_task_event``）：任务归本 Agent 管，"干完了"这件事由这里落账，
+          不依赖轮询查询。
+        - **身体事件**（``priority="important"``）→ 注入待吸收消息，供本 Agent 判断
+          要不要因此调整手里的活。
 
         规格三条：
         - **增量**：带 stream_id 与 after_cursor，只取新事件，不重读最新一页；
@@ -752,8 +778,13 @@ class MinecraftAgent(BaseAgent):
 
         injected = 0
         for event in events:
+            if event.get("task_id"):
+                # 任务类事件（priority="task"）归任务跟踪：写记录表，终态即"活干完了"。
+                # 不进消息队列——记录表写入本身经 task.changed 唤醒本 Agent，重复注入是两遍。
+                self._absorb_task_event(event)
+                continue
             if event.get("priority") != "important":
-                continue  # 任务事件走 task.changed 通道；background 只是世界时间/天气
+                continue  # background 只是世界时间/天气
             self._inject_wakeup_message(self._attention_event_message(event))
             await self._record_body_event(event)
             injected += 1
@@ -819,6 +850,45 @@ class MinecraftAgent(BaseAgent):
             parts.append("（只是观察到掉血，没有伤害包，来源未知）")
         parts.append("这是观察不是命令；需要行动时自行决定，并按需上报主播")
         return "；".join(parts)
+
+    def _absorb_task_event(self, event: Dict[str, Any]) -> None:
+        """把一条任务类注意流事件落进任务记录表（本 Agent 自己的后台任务）。
+
+        「任务干完了」这个事实的权威来源是 Mod 的注意流，不是轮询查询：
+        事件本身带着 ``task_id`` 与结算内容（Mod 在结算时把任务结果压进 ``data``），
+        所以这里不需要再发一次 MCP 查询。
+
+        只在**记录表里已有该任务号**时写入——记录表是本 Agent 自己登记的后台任务
+        台账，对不在册的任务号建条目会造出没人认领的幽灵任务。写入后由记录表自己
+        广播 ``task.changed`` 唤醒本 Agent：终态从记录表移除（交付门禁随之为 0），
+        决策点/暂停则注入消息让本 Agent 处理。
+
+        状态词表：Mod 的事件类型名与任务词表多数重合，不重合的（如 ``completed``）
+        由 ``_MAICRAFT_TASK_STATUS_MAP`` 翻译——与轮询查询共用同一张表，不另立词表。
+        """
+        task_id = str(event.get("task_id") or "")
+        event_type = str(event.get("type") or "")
+        status = _MAICRAFT_TASK_STATUS_MAP.get(event_type, event_type)
+        if not task_id or status not in _TASK_EVENT_STATUSES:
+            return
+        tracker = self._task_tracker
+        ledger = getattr(tracker, "ledger", None) if tracker is not None else None
+        if ledger is None or ledger.get(task_id) is None:
+            return
+        written = ledger.update(
+            task_id,
+            status,
+            snapshot={"event_type": event_type},
+            summary=self._task_event_summary(event_type, event),
+        )
+        if written is not None:
+            self._logger.info(f"任务事件落账（注意流）: task_id={task_id} status={status} type={event_type}")
+
+    @staticmethod
+    def _task_event_summary(event_type: str, event: Dict[str, Any]) -> str:
+        """任务事件压成一句可读事实：只陈述事件里真有的字段。"""
+        message = str(event.get("message") or "").strip()
+        return message or f"注意流任务事件：{event_type or '未知'}"
 
     def _mark_delegated_running(self) -> None:
         """把本批吸收的委派任务标记为进行中（写回任务记录表）。

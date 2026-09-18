@@ -1477,6 +1477,110 @@ async def _agent_with_fake_mcp(monkeypatch: pytest.MonkeyPatch) -> Any:
     return agent
 
 
+def _task_event(
+    cursor: int,
+    *,
+    task_id: str,
+    event_type: str,
+    message: str = "The task reached a settlement.",
+) -> Dict[str, Any]:
+    """一条任务类注意流事件（带 task_id → mod 侧标 priority="task"）。"""
+    return {
+        "cursor": cursor,
+        "type": event_type,
+        "priority": "task",
+        "task_id": task_id,
+        "timestamp": "2026-09-16T10:16:23.580633Z",
+        "message": message,
+        "data": {"success": True, "message": message},
+    }
+
+
+async def _task_agent_with_fake_mcp(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """挂了假 MCP provider + 真实任务记录表的 MinecraftAgent（任务事件落账测试用）。"""
+    import uuid as _uuid
+
+    from src.modules.events.event_bus import EventBus
+    from src.modules.mcp.config import McpServerConfig
+    from src.modules.tools.tasks import TaskLedger, TaskTracker
+
+    _patch_mcp(monkeypatch, _FakeMcpProvider)
+
+    registry = ToolRegistry()
+    bus = EventBus(enable_stats=False)
+    ledger = TaskLedger(event_bus=bus)
+    tracker = TaskTracker(registry, ledger, poll_interval_ms=20, wait_timeout_ms=1_800_000)
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=True, url="http://127.0.0.1:8766/mcp")),
+        llm_manager=MagicMock(),
+        event_bus=bus,
+        tool_registry=registry,
+        task_tracker=tracker,
+    )
+    tracker.start()
+    await agent.start()
+    ledger.register(
+        task_id=str(_uuid.uuid4()),
+        provider="maicraft",
+        tool="maicraft_execute",
+        initiator=agent.name,
+        executor="maicraft",
+        source="provider",
+    )
+    return agent, tracker
+
+
+@pytest.mark.asyncio
+async def test_task_event_settles_ledger_and_frees_delivery_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """任务类事件（priority="task"）落进记录表；终态移除条目并让交付门禁回零。
+
+    这是"干完了汇报不出来"的正面断言：结算事实来自注意流，不经过轮询查询。
+    """
+    agent, tracker = await _task_agent_with_fake_mcp(monkeypatch)
+    provider = agent._attention_provider
+    assert provider is not None
+
+    task_id = next(iter(tracker.ledger.active_task_ids()))
+    assert agent._pending_task_count() == 1, "登记后应有一个未决任务"
+
+    provider.attention_pages.append(_attention_page([_task_event(5, task_id=task_id, event_type="started")], cursor=5))
+    await agent._drain_attention()  # 首读只建游标，不落账
+    assert tracker.ledger.get(task_id) is not None, "首读是历史页，不应落账"
+
+    provider.attention_pages.append(
+        _attention_page([_task_event(6, task_id=task_id, event_type="completed", message="房子建好了")], cursor=6)
+    )
+    await agent._drain_attention()
+
+    assert tracker.ledger.get(task_id) is None, "终态应从记录表移除"
+    assert agent._pending_task_count() == 0, "交付门禁必须随结算回零"
+    assert not agent._message_queue, "任务事件不进消息队列——记录表写入自己会经 task.changed 唤醒"
+
+    await agent.stop()
+    await tracker.stop()
+
+
+@pytest.mark.asyncio
+async def test_task_event_unknown_id_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """不在册的任务号不建条目、不落账（只跟本 Agent 自己登记的后台任务）。"""
+    agent, tracker = await _task_agent_with_fake_mcp(monkeypatch)
+    provider = agent._attention_provider
+
+    provider.attention_pages.append(_attention_page([_damage_event(4)], cursor=4))
+    await agent._drain_attention()
+    provider.attention_pages.append(
+        _attention_page(
+            [_task_event(5, task_id="3f1d0b8e-0000-4000-8000-000000000000", event_type="completed")], cursor=5
+        )
+    )
+    await agent._drain_attention()
+
+    assert tracker.ledger.get("3f1d0b8e-0000-4000-8000-000000000000") is None
+
+    await agent.stop()
+    await tracker.stop()
+
+
 @pytest.mark.asyncio
 async def test_attention_drain_primes_cursor_then_injects_only_important(
     monkeypatch: pytest.MonkeyPatch,
