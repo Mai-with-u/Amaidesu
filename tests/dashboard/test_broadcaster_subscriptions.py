@@ -6,7 +6,8 @@
 2. 订阅 CoreEvents.RUNDOWN_CHANGED 并以 "rundown.changed" WS type 转发
 3. 订阅 CoreEvents.TOOL_RESULT_WILDCARD 通配模式，WS type 沿用具体事件名
 4. 订阅 CoreEvents.TOOL_HEALTH_WILDCARD 通配模式，WS type 沿用具体事件名
-5. 取消订阅（stop）正常
+5. 订阅 game.* 四事件并以具体事件名直通转发（游戏 Agent 上报进直播时间线）
+6. 取消订阅（stop）正常
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import pytest
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
+    GamePayload,
     RoomMessagePayload,
     RoomMessageUser,
     RundownChangedPayload,
@@ -236,6 +238,56 @@ async def test_streamer_speech_broadcast_as_streamer_speech_type(bus_and_handler
     assert call.args[1]["text"] == "欢迎来到直播间！"
     assert call.args[1]["emotion"] == "happy"
     assert call.kwargs.get("message_id") == payload.id
+
+
+@pytest.mark.asyncio
+async def test_broadcaster_subscribes_to_game_events(bus_and_handler) -> None:
+    """start() 应订阅 game.* 四事件（游戏 Agent 的汇报/求助/异常/里程碑进直播时间线）。"""
+    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
+
+    bus, ws = bus_and_handler
+    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
+    await broadcaster.start()
+
+    for event_name in (
+        CoreEvents.GAME_REPORT,
+        CoreEvents.GAME_ATTENTION_REQUIRED,
+        CoreEvents.GAME_ERROR,
+        CoreEvents.GAME_MILESTONE,
+    ):
+        assert event_name in bus.subscribed, f"未订阅 {event_name}"
+
+    await broadcaster.stop()
+
+
+@pytest.mark.asyncio
+async def test_game_events_broadcast_as_concrete_event_name(bus_and_handler) -> None:
+    """game.* 四事件直通：ws type = 具体事件名，payload 字段透传。"""
+    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
+
+    bus, ws = bus_and_handler
+    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
+    await broadcaster.start()
+
+    cases = [
+        (CoreEvents.GAME_REPORT, "report", {"report_kind": "delivery"}),
+        (CoreEvents.GAME_ATTENTION_REQUIRED, "attention_required", {}),
+        (CoreEvents.GAME_ERROR, "error", {}),
+        (CoreEvents.GAME_MILESTONE, "milestone", {}),
+    ]
+    for event_name, event_type, extra in cases:
+        payload = GamePayload(game="minecraft", event_type=event_type, message="交付总结", **extra)  # type: ignore[arg-type]
+        handler, _model_cls = bus.subscribed[event_name]
+        await handler(event_name, payload, source="test")
+
+        call = ws.broadcast.await_args
+        assert call.args[0] == event_name, f"{event_name} 应以具体事件名直通"
+        assert call.args[1]["event_type"] == event_type
+        assert call.args[1]["message"] == "交付总结"
+        assert call.kwargs.get("message_id") == payload.id
+
+    assert ws.broadcast.await_count == 4
+    await broadcaster.stop()
 
 
 @pytest.mark.asyncio

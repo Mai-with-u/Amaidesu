@@ -11,6 +11,8 @@ WS 类型规则：``type = 事件名``（精确直通）；唯一例外是 ``roo
 - 决策可观测：``planner.decision`` / ``planner.verdict`` / ``streamer.stage``
 - 场次生命周期：``live.started`` / ``live.ended``
 - ``rundown.changed`` / ``streamer.speech``（直通）
+- 游戏上报：``game.report`` / ``game.attention_required`` / ``game.error`` /
+  ``game.milestone``（直通；游戏 Agent 的汇报/求助/异常/里程碑进直播时间线）
 - ``core.startup`` / ``core.shutdown`` / ``core.error``（直通）
 - ``tool.result.#`` / ``tool.health.#`` 通配 → type 为具体事件名
 """
@@ -26,6 +28,7 @@ from src.modules.events.payloads import (
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
+    GamePayload,
     LiveEndedPayload,
     LiveStartedPayload,
     PlannerDecisionPayload,
@@ -119,6 +122,10 @@ class EventBroadcaster:
         CoreEvents.LIVE_ENDED: (None, LiveEndedPayload),
         CoreEvents.RUNDOWN_CHANGED: (None, RundownChangedPayload),
         CoreEvents.STREAMER_SPEECH: (None, StreamerSpeechPayload),
+        CoreEvents.GAME_REPORT: (None, GamePayload),
+        CoreEvents.GAME_ATTENTION_REQUIRED: (None, GamePayload),
+        CoreEvents.GAME_ERROR: (None, GamePayload),
+        CoreEvents.GAME_MILESTONE: (None, GamePayload),
         CoreEvents.TOOL_RESULT_WILDCARD: (None, ToolResultPayload),
         CoreEvents.TOOL_HEALTH_WILDCARD: (None, ToolHealthPayload),
         CoreEvents.CORE_STARTUP: (None, CoreStartupPayload),
