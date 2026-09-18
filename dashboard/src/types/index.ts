@@ -136,8 +136,6 @@ export interface AgentControlResponse {
 export interface InjectMessageRequest {
   source?: string;
   text: string;
-  data_type?: string;
-  importance?: number;
 }
 
 export interface InjectMessageResponse {
@@ -220,7 +218,6 @@ export interface StreamerStatusResponse {
   statistics: Record<string, number>;
 }
 
-/** `POST /api/v1/streamer/trigger-proactive` 请求体。 */
 /** `POST /api/v1/streamer/proactive-toggle` 请求体。 */
 export interface ProactiveToggleRequest {
   enabled: boolean;
@@ -232,6 +229,7 @@ export interface ProactiveToggleResponse {
   message: string;
 }
 
+/** `POST /api/v1/streamer/trigger-proactive` 请求体。 */
 export interface TriggerProactiveRequest {
   topic_hint?: string;
 }
@@ -240,14 +238,6 @@ export interface TriggerProactiveRequest {
 export interface TriggerProactiveResponse {
   success: boolean;
   message: string;
-}
-
-/** WS `streamer.speech` 事件 payload（StreamerSpeechPayload.model_dump）。 */
-export interface StreamerSpeechEventData {
-  utterance_id: string;
-  text: string;
-  emotion?: string | null;
-  timestamp_ms?: number;
 }
 
 // ==================== WebSocket ====================

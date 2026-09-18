@@ -272,6 +272,25 @@
           <el-checkbox v-model="testForced">强制回应（豁免低置信度降级）</el-checkbox>
           <el-checkbox v-model="testProactive">主动发言（无弹幕批次）</el-checkbox>
         </div>
+        <div class="test-real-proactive">
+          <el-input
+            v-model="proactiveTopicHint"
+            size="small"
+            placeholder="话题提示（可选，仅用于日志）"
+          />
+          <el-button
+            size="small"
+            type="warning"
+            :loading="triggeringProactive"
+            @click="submitTriggerProactive"
+          >
+            置位主动发言（走真实限流）
+          </el-button>
+          <p class="test-hint">
+            仅置位 pending：下个 flush tick 由 ProactiveTrigger 判定（防接龙 / 每小时上限 /
+            话题要求），任一不满足则静默丢弃——用于测试限流本身，与上方「执行」的直跑模式互不影响。
+          </p>
+        </div>
       </div>
       <template #footer>
         <el-button @click="testDialogVisible = false">取消</el-button>
@@ -294,7 +313,8 @@
  * - 顶栏：连接状态、决策管线阶段徽章、模拟器模式徽章
  *
  * 干预入口（复用既有 API）：注入弹幕（debug/inject-message，与真实弹幕同链路）、
- * 决策测试（streamer/test-decision，结果以决策卡形式落进时间线）。
+ * 决策测试（streamer/test-decision，结果以决策卡形式落进时间线）、
+ * 主动发言真实链路置位（streamer/trigger-proactive，仅置位、走 ProactiveTrigger 限流）。
  *
  * 数据来源：
  * - 实时：events store（全局 WS + 游标回填，刷新/断线不丢时间线）
@@ -924,7 +944,6 @@ async function submitInject(): Promise<void> {
     const response = await debugApi.injectMessage({
       source: injectSource.value.trim() || '测试观众',
       text,
-      data_type: 'text',
     });
     if (response.data.success) {
       ElMessage.success('已注入——观察下方决策与发言');
@@ -976,6 +995,27 @@ async function submitTestDecision(): Promise<void> {
     ElMessage.error(error instanceof Error ? error.message : '测试执行失败');
   } finally {
     testing.value = false;
+  }
+}
+
+const proactiveTopicHint = ref('');
+const triggeringProactive = ref(false);
+
+async function submitTriggerProactive(): Promise<void> {
+  triggeringProactive.value = true;
+  try {
+    const response = await streamerApi.triggerProactive({
+      topic_hint: proactiveTopicHint.value.trim() || undefined,
+    });
+    if (response.data.success) {
+      ElMessage.info(response.data.message || '已置位，等待下个 flush tick 判定');
+    } else {
+      ElMessage.warning(response.data.message || '置位未生效');
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '触发失败');
+  } finally {
+    triggeringProactive.value = false;
   }
 }
 
@@ -1590,6 +1630,19 @@ onUnmounted(() => {
 .test-options {
   display: flex;
   gap: 16px;
+}
+.test-real-proactive {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-color-light);
+}
+.test-hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--text-placeholder);
 }
 
 /* ============================================================ */

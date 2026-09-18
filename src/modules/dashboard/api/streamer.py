@@ -1,6 +1,6 @@
 """Streamer 测试台 API（主播发言调试）
 
-提供主播 Agent 手动触发与状态观测端点，服务于 DevTools「主播发言测试」：
+提供主播 Agent 手动触发与状态观测端点，服务于直播控制台「主播决策测试」：
 
 - ``GET  /api/v1/streamer/status``         主播 Agent 状态 + 运行统计 + 配置摘要
 - ``POST /api/v1/streamer/test-decision``  手动驱动一次两阶段决策（Planner → Replyer）

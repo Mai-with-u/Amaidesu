@@ -7,6 +7,43 @@
         <p class="page-subtitle">实时监控系统事件流</p>
       </div>
       <div class="header-actions">
+        <el-popover placement="bottom-end" :width="380" trigger="click" @show="fetchBusStats">
+          <template #reference>
+            <el-tag type="info" effect="plain" size="small" class="bus-stats-tag">
+              累计发射 {{ busStats?.total_events ?? 0 }} 次
+            </el-tag>
+          </template>
+          <div class="bus-stats">
+            <div class="bus-stats-header">
+              <span>EventBus 累计（进程启动以来）</span>
+              <el-button
+                size="small"
+                text
+                :icon="Refresh"
+                :loading="busStatsLoading"
+                @click="fetchBusStats"
+              />
+            </div>
+            <div class="bus-stats-summary">
+              共 {{ busStats?.total_events ?? 0 }} 次发射 · {{ busStats?.total_subscribers ?? 0 }}
+              个订阅
+            </div>
+            <el-table
+              v-if="busStatsByName.length > 0"
+              :data="busStatsByName"
+              size="small"
+              max-height="320"
+            >
+              <el-table-column prop="name" label="事件名">
+                <template #default="{ row }">
+                  <code class="bus-event-name">{{ row.name }}</code>
+                </template>
+              </el-table-column>
+              <el-table-column prop="count" label="发射次数" width="90" align="right" />
+            </el-table>
+            <el-empty v-else description="暂无统计" :image-size="60" />
+          </div>
+        </el-popover>
         <el-tag type="info" effect="plain" size="small">
           {{ filteredEvents.length }} / {{ events.length }} 条事件
         </el-tag>
@@ -106,10 +143,12 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, markRaw } from 'vue';
-import { Document, VideoPause, VideoPlay, Search, Delete } from '@element-plus/icons-vue';
+import { Document, VideoPause, VideoPlay, Search, Delete, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
+import { debugApi } from '@/api';
+import type { EventBusStatsResponse } from '@/types';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/core';
 import json from 'highlight.js/lib/languages/json';
@@ -147,6 +186,29 @@ const availableEventTypes = computed(() => {
 // 获取某个事件类型的数量
 function getEventTypeCount(type: string): number {
   return events.value.filter(e => e.type === type).length;
+}
+
+// EventBus 累计统计（进程启动以来的发射/订阅计数；与上方会话内实时流计数互补）
+const busStats = ref<EventBusStatsResponse | null>(null);
+const busStatsLoading = ref(false);
+
+const busStatsByName = computed(() => {
+  const byName = busStats.value?.events_by_name ?? {};
+  return Object.entries(byName)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+});
+
+async function fetchBusStats(): Promise<void> {
+  busStatsLoading.value = true;
+  try {
+    const response = await debugApi.getEventBusStats();
+    busStats.value = response.data;
+  } catch (error) {
+    console.error('获取 EventBus 统计失败:', error);
+  } finally {
+    busStatsLoading.value = false;
+  }
 }
 
 // 筛选后的事件列表
@@ -289,6 +351,7 @@ onMounted(() => {
       scrollToBottom();
     }
   });
+  void fetchBusStats();
 });
 
 onUnmounted(() => {
@@ -329,6 +392,33 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
+}
+
+/* EventBus 累计统计 */
+.bus-stats-tag {
+  cursor: pointer;
+}
+
+.bus-stats-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-xs);
+}
+
+.bus-stats-summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.bus-event-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
 }
 
 /* 筛选工具栏 */

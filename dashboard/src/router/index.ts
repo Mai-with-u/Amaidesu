@@ -39,11 +39,6 @@ const router = createRouter({
       component: () => import('@/views/LogViewer.vue'),
     },
     {
-      path: '/devtools',
-      name: 'devtools',
-      component: () => import('@/views/DevTools.vue'),
-    },
-    {
       // 会话调试页已收编为直播控制台的会话显示模式，旧路径重定向避免死链
       path: '/session',
       redirect: '/live',

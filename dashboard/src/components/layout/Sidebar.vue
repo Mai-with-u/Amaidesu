@@ -45,10 +45,6 @@
           <el-icon><MagicStick /></el-icon>
           <span>世界模拟器</span>
         </el-menu-item>
-        <el-menu-item index="/devtools">
-          <el-icon><Cpu /></el-icon>
-          <span>开发者工具</span>
-        </el-menu-item>
         <el-menu-item index="/llm/usage">
           <el-icon><TrendCharts /></el-icon>
           <span>LLM 用量</span>
