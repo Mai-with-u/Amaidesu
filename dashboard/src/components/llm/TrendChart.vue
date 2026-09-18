@@ -12,7 +12,13 @@
 -->
 <template>
   <div ref="containerRef" class="trend-chart" :style="{ height: `${height}px` }">
-    <svg v-if="plotWidth > 0" :width="plotWidth" :height="height" role="img" :aria-label="ariaLabel">
+    <svg
+      v-if="plotWidth > 0"
+      :width="plotWidth"
+      :height="height"
+      role="img"
+      :aria-label="ariaLabel"
+    >
       <!-- 水平网格线 + 左轴刻度（无柱时左轴归折线使用；空态整体隐藏） -->
       <g v-if="!isEmpty">
         <g v-for="tick in axisTicks" :key="`grid-${tick.ratio}`">
@@ -106,7 +112,14 @@
       </g>
 
       <!-- 空态 -->
-      <text v-if="isEmpty" class="tc-empty" :x="padLeft + plotInnerWidth / 2" :y="height / 2" text-anchor="middle" dominant-baseline="middle">
+      <text
+        v-if="isEmpty"
+        class="tc-empty"
+        :x="padLeft + plotInnerWidth / 2"
+        :y="height / 2"
+        text-anchor="middle"
+        dominant-baseline="middle"
+      >
         {{ emptyText }}
       </text>
     </svg>
@@ -234,9 +247,7 @@ const axisTicks = computed(() => {
     const ratio = i / 4;
     const y = padTop + (1 - ratio) * plotInnerHeight.value;
     const value = leftAxisMax.value * ratio;
-    const text = hasBars.value
-      ? props.leftTickFormat(value)
-      : props.lineTickFormat(value);
+    const text = hasBars.value ? props.leftTickFormat(value) : props.lineTickFormat(value);
     ticks.push({ ratio, y, text });
   }
   return ticks;
@@ -343,11 +354,8 @@ const xLabels = computed(() => {
 });
 
 const isEmpty = computed(() => {
-  const barsAllZero = props.bars.every(series =>
-    series.values.every(v => (v ?? 0) === 0),
-  );
-  const lineEmpty =
-    !props.line || props.line.values.every(v => v === null || v === 0);
+  const barsAllZero = props.bars.every(series => series.values.every(v => (v ?? 0) === 0));
+  const lineEmpty = !props.line || props.line.values.every(v => v === null || v === 0);
   return barsAllZero && lineEmpty;
 });
 

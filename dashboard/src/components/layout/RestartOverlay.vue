@@ -68,7 +68,7 @@
 import { computed } from 'vue';
 import { Loading, CircleCheck, CircleClose, Refresh, RefreshRight } from '@element-plus/icons-vue';
 
-// ===== Props =====
+// Props
 const props = withDefaults(
   defineProps<{
     visible: boolean;
@@ -84,13 +84,13 @@ const props = withDefaults(
   },
 );
 
-// ===== Emits =====
+// Emits
 const emit = defineEmits<{
   retry: [];
   refreshPage: [];
 }>();
 
-// ===== Computed =====
+// Computed
 const isRunning = computed(() => ['requesting', 'restarting', 'checking'].includes(props.status));
 
 const showProgress = computed(() => props.status !== 'failed');
@@ -134,7 +134,7 @@ const tipText = computed(() => {
   return tips[props.status] || '';
 });
 
-// ===== Helpers =====
+// Helpers
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
@@ -143,7 +143,7 @@ function formatTime(seconds: number): string {
 </script>
 
 <style scoped>
-/* ===== Overlay ===== */
+/* Overlay */
 .restart-overlay {
   position: fixed;
   inset: 0;
@@ -167,7 +167,7 @@ function formatTime(seconds: number): string {
   opacity: 0;
 }
 
-/* ===== Content ===== */
+/* Content */
 .overlay-content {
   position: relative;
   z-index: 10;
@@ -180,7 +180,7 @@ function formatTime(seconds: number): string {
   gap: 2rem;
 }
 
-/* ===== Status Section ===== */
+/* Status Section */
 .status-section {
   display: flex;
   flex-direction: column;
@@ -233,7 +233,7 @@ function formatTime(seconds: number): string {
   line-height: 1.5;
 }
 
-/* ===== Progress ===== */
+/* Progress */
 .progress-section {
   width: 100%;
   display: flex;
@@ -248,7 +248,7 @@ function formatTime(seconds: number): string {
   color: rgba(255, 255, 255, 0.45);
 }
 
-/* ===== Tips ===== */
+/* Tips */
 .tips-box {
   width: 100%;
   padding: 0.75rem 1rem;
@@ -264,7 +264,7 @@ function formatTime(seconds: number): string {
   text-align: center;
 }
 
-/* ===== Action Buttons ===== */
+/* Action Buttons */
 .action-buttons {
   display: flex;
   gap: 0.75rem;
@@ -275,7 +275,7 @@ function formatTime(seconds: number): string {
   flex: 1;
 }
 
-/* ===== Background Animation ===== */
+/* Background Animation */
 .bg-animation {
   position: absolute;
   inset: 0;
@@ -340,7 +340,7 @@ function formatTime(seconds: number): string {
   animation-delay: 1s;
 }
 
-/* ===== Keyframes ===== */
+/* Keyframes */
 @keyframes spin {
   from {
     transform: rotate(0deg);

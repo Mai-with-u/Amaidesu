@@ -94,7 +94,7 @@
 
     <!-- 运行态：status ∈ {running, paused, done} -->
     <template v-else-if="snapshot">
-      <!-- 1. 总览 KPI 行 -->
+      <!-- 总览 KPI 行 -->
       <section class="totals-row">
         <article class="total-card total-status">
           <div class="total-label">状态</div>
@@ -140,7 +140,7 @@
         </article>
       </section>
 
-      <!-- 2. 当前环节大卡 -->
+      <!-- 当前环节大卡 -->
       <section
         v-if="snapshot.current"
         class="current-card"
@@ -202,7 +202,7 @@
         class="state-block"
       />
 
-      <!-- 3. 环节清单 -->
+      <!-- 环节清单 -->
       <section class="segments-section">
         <header class="section-bar">
           <h3 class="section-title">环节清单</h3>
@@ -248,7 +248,7 @@
         </el-table>
       </section>
 
-      <!-- 4. 推进历史 -->
+      <!-- 推进历史 -->
       <section class="history-section">
         <header class="section-bar">
           <h3 class="section-title">推进历史</h3>
@@ -600,9 +600,7 @@ import type {
   WebSocketMessage,
 } from '@/types';
 
-// ============================================================
 // 响应式状态
-// ============================================================
 
 const state = ref<RundownStateResponse | null>(null);
 const initialLoading = ref(true);
@@ -613,9 +611,7 @@ const actionLoading = ref<RundownControlAction | null>(null);
 // 本地 1s tick：仅重算当前环节 elapsed/remaining 展示
 const nowTickMs = ref(Date.now());
 
-// ============================================================
 // 抽屉
-// ============================================================
 
 const drawerOpen = ref(false);
 const activeSegment = ref<RundownSegmentView | null>(null);
@@ -631,9 +627,7 @@ function openDrawer(row: RundownSegmentView) {
   drawerOpen.value = true;
 }
 
-// ============================================================
 // 派生状态
-// ============================================================
 
 const snapshot = computed<RundownSnapshot | null>(() => state.value?.snapshot ?? null);
 
@@ -708,9 +702,7 @@ const nextSegment = computed<RundownSegmentView | null>(() => {
   return state.value?.segments[s.index + 1] ?? null;
 });
 
-// ============================================================
 // 段状态 / 来源 / 时间格式化
-// ============================================================
 
 function segmentStatusOf(seg: RundownSegmentView): 'done' | 'current' | 'pending' {
   const cur = currentSegment.value;
@@ -783,9 +775,7 @@ function historyDotType(
   return 'info';
 }
 
-// ============================================================
 // 数据加载
-// ============================================================
 
 async function fetchState(opts: { silent?: boolean } = {}): Promise<void> {
   if (!opts.silent) loadingState.value = true;
@@ -793,7 +783,7 @@ async function fetchState(opts: { silent?: boolean } = {}): Promise<void> {
   try {
     const res = await rundownApi.getState();
     state.value = res.data;
-    // 记录本次拉取的基线时刻，用于本地 tick 漂移
+    // 本地 tick 从该基准起算已播时长，吸收取数耗时造成的漂移
     snapshotBaselineMs.value = Date.now();
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : '无法加载流程单状态';
@@ -808,9 +798,7 @@ function refresh(): void {
   void fetchState();
 }
 
-// ============================================================
 // 控制操作
-// ============================================================
 
 async function performControl(
   action: RundownControlAction,
@@ -857,9 +845,7 @@ function handleJump(seg: RundownSegmentView): void {
   void performControl('goto', { segment_id: seg.id });
 }
 
-// ============================================================
 // 流程单库与编辑器
-// ============================================================
 // 编辑保存（upsert）写入存储；保存的是直播运行中的那份流程单时，
 // 后端写穿运行态（进度按环节 id 对齐），本页经既有 rundown.changed
 // 防抖重拉机制自动刷新，无需额外订阅。
@@ -1155,9 +1141,7 @@ async function activateRundown(def: RundownDefinition): Promise<void> {
   }
 }
 
-// ============================================================
 // WS 订阅 + 防抖重拉
-// ============================================================
 
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -1195,9 +1179,7 @@ function stopWs(): void {
   }
 }
 
-// ============================================================
 // 生命周期
-// ============================================================
 
 onMounted(() => {
   startWs();
@@ -1226,9 +1208,7 @@ watch(
   margin: 0 auto;
 }
 
-/* ============================================================ */
 /* 顶部                                                          */
-/* ============================================================ */
 
 .page-header {
   display: flex;
@@ -1264,9 +1244,7 @@ watch(
   flex-shrink: 0;
 }
 
-/* ============================================================ */
 /* 通用：状态块 / 骨架 / 错误 / 不可用                             */
-/* ============================================================ */
 
 .state-block {
   background: var(--bg-card);
@@ -1291,9 +1269,7 @@ watch(
   color: var(--text-regular);
 }
 
-/* ============================================================ */
 /* 未加载态：窄卡                                                  */
-/* ============================================================ */
 
 .load-card {
   background: var(--bg-card);
@@ -1318,9 +1294,7 @@ watch(
   color: var(--text-secondary);
   line-height: 1.6;
 }
-/* ============================================================ */
 /* 总览 KPI 行（沿用 Tools.vue 的 total-card 风格）                */
-/* ============================================================ */
 
 .totals-row {
   display: grid;
@@ -1422,9 +1396,7 @@ watch(
   color: var(--color-agenda);
   font-weight: 700;
 }
-/* ============================================================ */
 /* 当前环节大卡                                                  */
-/* ============================================================ */
 
 .current-card {
   background: var(--bg-card);
@@ -1555,9 +1527,7 @@ watch(
   margin-left: auto;
 }
 
-/* ============================================================ */
 /* 区段通用（segments / history）                                */
-/* ============================================================ */
 
 .section-bar {
   display: flex;
@@ -1590,9 +1560,7 @@ watch(
   padding: var(--spacing-md);
 }
 
-/* ============================================================ */
 /* 环节表格                                                      */
-/* ============================================================ */
 
 .segments-table {
   cursor: pointer;
@@ -1614,9 +1582,7 @@ watch(
 .segment-label {
   font-weight: 500;
 }
-/* ============================================================ */
 /* 推进历史时间线                                                  */
-/* ============================================================ */
 
 .history-empty {
   display: flex;
@@ -1662,9 +1628,7 @@ watch(
   font-size: 11.5px;
 }
 
-/* ============================================================ */
 /* 抽屉                                                          */
-/* ============================================================ */
 
 .drawer-body {
   padding: 0 var(--spacing-md) var(--spacing-md);
@@ -1731,9 +1695,7 @@ watch(
   margin-top: auto;
 }
 
-/* ============================================================ */
 /* 流程单库与编辑器                                                */
-/* ============================================================ */
 
 .section-tools {
   display: flex;
@@ -1844,9 +1806,7 @@ watch(
   color: var(--text-secondary);
 }
 
-/* ============================================================ */
 /* 响应式                                                        */
-/* ============================================================ */
 
 @media (max-width: 1100px) {
   .totals-row {

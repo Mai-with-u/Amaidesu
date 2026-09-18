@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, Protocol, cast
 
 from fastapi import APIRouter, Depends
 
+from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.streamer import (
     ProactiveToggleRequest,
@@ -199,10 +200,7 @@ async def toggle_proactive(
         if callable(setter):
             setter(request.enabled)
 
-    # 落盘复用 config PATCH 的统一管线写回（Schema 校验 + 注释重生成）；函数内
-    # import 属可选重型依赖延迟加载（config 模块体量大，仅落盘时需要）
-    from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
-
+    # 落盘复用 config PATCH 的统一管线写回（Schema 校验 + 注释重生成）
     update = await update_config(
         ConfigUpdateRequest(key="agents.agents.streamer.proactive.enabled", value=request.enabled),
         server,

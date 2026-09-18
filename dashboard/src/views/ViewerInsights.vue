@@ -1,8 +1,6 @@
 <template>
   <div class="insights-page">
-    <!-- ============================================================ -->
     <!-- 页面头                                                        -->
-    <!-- ============================================================ -->
     <header class="page-header">
       <div class="header-left">
         <h1 class="page-title">互动分析</h1>
@@ -20,9 +18,7 @@
     </header>
 
     <template v-if="data">
-      <!-- ============================================================ -->
       <!-- 统计卡行                                                      -->
-      <!-- ============================================================ -->
       <section class="stat-cards">
         <div class="stat-card">
           <span class="stat-value mono">{{ data.total_viewers }}</span>
@@ -43,9 +39,7 @@
       </section>
 
       <div class="main-grid">
-        <!-- ============================================================ -->
         <!-- 左列：活跃分桶 + 弹幕量                                        -->
-        <!-- ============================================================ -->
         <div class="left-column">
           <section class="card">
             <div class="card-head">
@@ -77,9 +71,7 @@
           </section>
         </div>
 
-        <!-- ============================================================ -->
         <!-- 右列：Top 榜                                                  -->
-        <!-- ============================================================ -->
         <div class="right-column">
           <section class="card">
             <div class="card-head">
@@ -319,7 +311,7 @@ onMounted(() => {
   color: var(--text-placeholder);
 }
 
-/* ===== 活跃分桶条形 ===== */
+/* 活跃分桶条形 */
 
 .bucket-list {
   display: flex;
@@ -361,7 +353,7 @@ onMounted(() => {
   text-align: right;
 }
 
-/* ===== Top 榜 ===== */
+/* Top 榜 */
 
 .top-list {
   list-style: none;

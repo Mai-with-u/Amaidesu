@@ -5,10 +5,10 @@ import type { SystemStatusResponse } from '@/types';
 import { useComponentsStore } from './components';
 
 /**
- * 系统状态 store（v2.0）
+ * 系统状态 store
  *
  * `/api/v1/system/status` 返回 running/uptime/version/python_version + groups.{collectors,agents,tools}
- * + event_bus.total_events。旧 input/decision/output 三阶段字段已删除，前端读 groups。
+ * + event_bus.total_events。
  */
 export const useSystemStore = defineStore('system', () => {
   const status = ref<SystemStatusResponse | null>(null);

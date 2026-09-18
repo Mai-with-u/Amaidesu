@@ -1,8 +1,6 @@
 <template>
   <div class="detail-page">
-    <!-- ============================================================ -->
     <!-- 档案头：返回 + 身份 + 统计徽章                                  -->
-    <!-- ============================================================ -->
     <header v-if="detail" class="profile-head">
       <router-link class="back-link" to="/viewers">← 观众列表</router-link>
       <h1 class="profile-name" :title="detail.user_name || '（未留名）'">
@@ -18,9 +16,7 @@
       <span class="profile-name loading-name">{{ loadError ?? '加载中…' }}</span>
     </header>
 
-    <!-- ============================================================ -->
     <!-- 统计卡行：礼物 / SC / 场次 / 首次出现                           -->
-    <!-- ============================================================ -->
     <section v-if="detail" class="stat-cards">
       <div class="stat-card">
         <span class="stat-value mono">{{ detail.gift_total_count }}</span>
@@ -40,12 +36,10 @@
       </div>
     </section>
 
-    <!-- ============================================================ -->
     <!-- 三区：对话 / 贡献 / 场次                                        -->
-    <!-- ============================================================ -->
     <section v-if="detail" class="tabs-card">
       <el-tabs v-model="activeTab">
-        <!-- ===== 对话：观众消息与主播回复交织 ===== -->
+        <!-- 对话：观众消息与主播回复交织 -->
         <el-tab-pane label="对话" name="dialogue">
           <div class="dialogue-wrap">
             <div class="dialogue-toolbar">
@@ -96,7 +90,7 @@
           </div>
         </el-tab-pane>
 
-        <!-- ===== 贡献：礼物与 SC 明细 ===== -->
+        <!-- 贡献：礼物与 SC 明细 -->
         <el-tab-pane label="贡献" name="contributions">
           <div v-loading="contribLoading" class="contrib-wrap">
             <p class="scope-hint">明细按现存记录展示；列表计数为历史累计，含已清理的场次</p>
@@ -160,7 +154,7 @@
           </div>
         </el-tab-pane>
 
-        <!-- ===== 场次：参与历史 ===== -->
+        <!-- 场次：参与历史 -->
         <el-tab-pane label="场次" name="sessions">
           <div v-loading="sessionsLoading" class="sessions-wrap">
             <el-table
@@ -463,7 +457,7 @@ onMounted(async () => {
   border-radius: var(--radius-lg);
 }
 
-/* ===== 对话区 ===== */
+/* 对话区 */
 
 .dialogue-wrap {
   display: flex;
@@ -572,7 +566,7 @@ onMounted(async () => {
   word-break: break-word;
 }
 
-/* ===== 贡献 / 场次 ===== */
+/* 贡献 / 场次 */
 
 .contrib-wrap,
 .sessions-wrap {

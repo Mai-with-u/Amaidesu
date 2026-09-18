@@ -215,23 +215,18 @@ async function fetchBusStats(): Promise<void> {
 const filteredEvents = computed(() => {
   let result = events.value;
 
-  // 1. 过滤隐藏的系统事件
   if (!showHiddenEvents.value) {
     result = result.filter(event => !isHiddenEvent(event.type));
   }
 
-  // 2. 按事件类型筛选
   if (selectedTypes.value.length > 0) {
     result = result.filter(event => selectedTypes.value.includes(event.type));
   }
 
-  // 3. 按搜索关键词筛选
   if (searchQuery.value.trim()) {
     const query = searchQuery.value.toLowerCase();
     result = result.filter(event => {
-      // 搜索事件类型
       if (event.type.toLowerCase().includes(query)) return true;
-      // 搜索事件数据
       const dataStr = JSON.stringify(event.data).toLowerCase();
       return dataStr.includes(query);
     });

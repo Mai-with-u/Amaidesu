@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, Protocol, cast
 
 from fastapi import APIRouter, Depends
 
+from src.agents.streamer.rundown.rundown import DEFAULT_RUNDOWN, Rundown
+from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.agenda import (
     RundownDefinition,
@@ -35,6 +37,7 @@ from src.modules.dashboard.schemas.agenda import (
     RundownSegmentView,
     RundownTemplateResponse,
 )
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -96,13 +99,7 @@ def _definition_from_rundown(rundown: Any) -> RundownDefinition:
 
 
 def _validate_definition(payload: RundownDefinition) -> Optional[str]:
-    """用领域模型校验定义完整性，返回错误原因（None = 通过）。
-
-    函数体内 import 属循环 import 规避：顶层导入 ``src.agents.streamer.`` 包
-    会触发 StreamerAgent 装配链（该链反向依赖 storage 仓储）。
-    """
-    from src.agents.streamer.rundown.rundown import Rundown  # noqa: PLC0415
-
+    """用领域模型校验定义完整性，返回错误原因（None = 通过）。"""
     try:
         Rundown.model_validate(payload.model_dump())
     except Exception as exc:
@@ -155,9 +152,6 @@ async def list_rundowns(server: ServerDep) -> RundownListResponse:
 async def get_rundown_template(server: ServerDep) -> RundownTemplateResponse:
     """内置默认流程单（新建预填模板；虚拟存在不写库）。"""
     del server  # 配置无关的静态模板，占位参数保持依赖注入形态一致
-    # 函数体内 import 属循环 import 规避（同 _validate_definition）
-    from src.agents.streamer.rundown.rundown import DEFAULT_RUNDOWN  # noqa: PLC0415
-
     return RundownTemplateResponse(success=True, definition=_definition_from_rundown(DEFAULT_RUNDOWN))
 
 
@@ -173,9 +167,6 @@ async def upsert_rundown(definition: RundownDefinition, server: ServerDep) -> Ru
         return RundownMutateResponse(
             success=False, message=f"流程单定义不合法: {error}", rundown_id=definition.rundown_id
         )
-
-    # 函数体内 import 属循环 import 规避（同 _validate_definition）
-    from src.agents.streamer.rundown.rundown import Rundown  # noqa: PLC0415
 
     try:
         await repo.upsert_rundown(Rundown.model_validate(definition.model_dump()))
@@ -219,9 +210,6 @@ async def duplicate_rundown(rundown_id: str, server: ServerDep) -> RundownMutate
     if source is None:
         return RundownMutateResponse(success=False, message=f"流程单 '{rundown_id}' 不存在", rundown_id=rundown_id)
 
-    # 函数体内 import 属循环 import 规避（同 _validate_definition）
-    from src.modules.time_utils import now_ms  # noqa: PLC0415
-
     new_id = f"{rundown_id}_copy_{now_ms() % 100_000:05d}"
     source.rundown_id = new_id
     source.title = f"{source.title} 副本"
@@ -244,10 +232,6 @@ async def activate_rundown(rundown_id: str, server: ServerDep) -> RundownMutateR
         return RundownMutateResponse(success=False, message=f"读取流程单失败: {exc}", rundown_id=rundown_id)
     if exists is None:
         return RundownMutateResponse(success=False, message=f"流程单 '{rundown_id}' 不存在", rundown_id=rundown_id)
-
-    # 函数体内 import 属可选重型依赖延迟加载（config 管线仅落盘时需要），
-    # 与 streamer.py proactive-toggle 的落盘写法一致
-    from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config  # noqa: PLC0415
 
     update = await update_config(
         ConfigUpdateRequest(key="agents.agents.streamer.rundown_id", value=rundown_id),

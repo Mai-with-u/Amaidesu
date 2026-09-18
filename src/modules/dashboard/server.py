@@ -185,10 +185,9 @@ class DashboardServer:
 
         set_dashboard_server(self)
 
-        # 初始化 WebSocket 处理器
         self.ws_handler = WebSocketHandler(heartbeat_interval=self.websocket_heartbeat)
 
-        # 初始化事件广播器（仅用于 WS 推送，不负责记录事件）
+        # 事件广播仅走 WS 推送，不负责记录（记录所有权在 EventHistoryService）
         self.event_broadcaster = EventBroadcaster(
             event_bus=self.event_bus,
             ws_handler=self.ws_handler,
@@ -197,19 +196,15 @@ class DashboardServer:
         )
         await self.event_broadcaster.start()
 
-        # 初始化日志流广播器（使用外部传入的或创建新的）
         if self._external_log_streamer:
-            # 外部传入的 log_streamer 需要更新 ws_handler
             self._external_log_streamer.ws_handler = self.ws_handler
             self.log_streamer = self._external_log_streamer
-            # 如果还未启动，则启动
             if not hasattr(self.log_streamer, "_is_running") or not self.log_streamer._is_running:
                 await self.log_streamer.start()
         else:
             self.log_streamer = LogStreamer(ws_handler=self.ws_handler, min_level="DEBUG")
             await self.log_streamer.start()
 
-        # 添加 WebSocket 路由
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
             ws_handler = self.ws_handler
@@ -228,10 +223,8 @@ class DashboardServer:
 
             await ws_handler.run_client_handler(websocket, on_connected=push_history)
 
-        # 启动心跳任务
         self._heartbeat_task = asyncio.create_task(self._run_heartbeat())
 
-        # 初始化弹幕叠加服务
         await self._setup_widget_service()
 
         if self.dev_mode:
@@ -520,7 +513,6 @@ class DashboardServer:
             finally:
                 self._widget_clients.discard(websocket)
 
-        # 添加 widget API 端点
         @self.app.get("/api/widget/messages")
         async def get_widget_messages():
             return {"messages": self.widget_service.get_recent_messages(15)}

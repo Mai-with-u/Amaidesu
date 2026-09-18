@@ -200,7 +200,7 @@ interface ConfigBatchUpdateResponse {
   requires_restart?: boolean;
 }
 
-// ===== 显示器状态 =====
+// 显示器状态
 
 const monitors = ref<MonitorItem[]>([]);
 const monitorsLoading = ref(false);
@@ -218,7 +218,7 @@ function formatMonitorLabel(m: MonitorItem): string {
   return `显示器 ${m.index} · ${m.width} × ${m.height}${tag}`;
 }
 
-// ===== 预览状态 =====
+// 预览状态
 
 const previewImg = ref<HTMLImageElement | null>(null);
 const previewWrap = ref<HTMLDivElement | null>(null);
@@ -231,7 +231,7 @@ const dragRectPx = ref<{ left: number; top: number; width: number; height: numbe
 const isDragging = ref(false);
 const dragStart = ref<{ x: number; y: number } | null>(null);
 
-// ===== 区域状态 =====
+// 区域状态
 
 // 显示器相对坐标 [x1, y1, x2, y2]；null = 全屏（无区域）
 const regionMonitor = ref<[number, number, number, number] | null>(null);
@@ -264,7 +264,7 @@ watch(
   { deep: true },
 );
 
-// ===== 保存状态 =====
+// 保存状态
 
 const initialMonitorIndex = ref<number | null>(null);
 const initialRegion = ref<[number, number, number, number] | null>(null);
@@ -281,12 +281,12 @@ const hasPendingChange = computed(() => {
   return cur.some((v, i) => v !== init[i]);
 });
 
-// ===== 配置键（与后端约定一致：scope + 文件内点分路径） =====
+// 配置键（与后端约定一致：scope + 文件内点分路径）
 
 const KEY_MONITOR = 'tools.tools.vision.config.monitor_index';
 const KEY_REGION = 'tools.tools.vision.config.default_region';
 
-// ===== 加载显示器 =====
+// 加载显示器
 
 async function loadMonitors() {
   monitorsLoading.value = true;
@@ -307,7 +307,7 @@ async function loadMonitors() {
   }
 }
 
-// ===== 加载初始配置 =====
+// 加载初始配置
 
 async function loadInitialConfig() {
   try {
@@ -348,7 +348,7 @@ async function loadInitialConfig() {
   }
 }
 
-// ===== 加载预览 =====
+// 加载预览
 
 let previewSeq = 0;
 
@@ -380,7 +380,7 @@ async function loadPreview() {
   }
 }
 
-// ===== 显示器 / 区域变化时刷新预览（节流） =====
+// 显示器 / 区域变化时刷新预览（节流）
 
 let previewTimer: number | null = null;
 function schedulePreviewRefresh() {
@@ -402,7 +402,7 @@ watch(regionMonitor, () => {
   schedulePreviewRefresh();
 });
 
-// ===== 拖框坐标换算 =====
+// 拖框坐标换算
 
 /**
  * 鼠标 client 坐标 → 图内 CSS 像素坐标。
@@ -481,7 +481,7 @@ function onDragEnd() {
   // 保留 overlay 显示至下一次刷新
 }
 
-// ===== 保存 =====
+// 保存
 
 async function saveConfig() {
   if (saving.value) return;
@@ -514,7 +514,7 @@ function clearRegion() {
   dragRectPx.value = null;
 }
 
-// ===== 工具 =====
+// 工具
 
 function extractError(e: unknown): string {
   const ax = e as { response?: { data?: { detail?: string; message?: string } }; message?: string };
@@ -539,7 +539,7 @@ function formatTime(ms: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// ===== 生命周期 =====
+// 生命周期
 
 onMounted(async () => {
   // 并行启动：显示器枚举 + 配置加载

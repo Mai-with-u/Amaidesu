@@ -460,9 +460,7 @@ async function copyText(text: string): Promise<void> {
 </script>
 
 <style scoped>
-/* ============================================================ */
 /* 工具类：grow / mono 在行模板里被广泛使用，scoped 内保留副本       */
-/* ============================================================ */
 .grow {
   flex: 1;
   min-width: 0;
@@ -473,9 +471,7 @@ async function copyText(text: string): Promise<void> {
   font-variant-numeric: tabular-nums;
 }
 
-/* ============================================================ */
 /* 空态                                                          */
-/* ============================================================ */
 .stage-empty {
   height: 100%;
   display: flex;
@@ -496,9 +492,7 @@ async function copyText(text: string): Promise<void> {
   color: var(--text-placeholder);
 }
 
-/* ============================================================ */
 /* 流：单列居左时间轴脊线——所有条目沿轴排布，靠样式区分             */
-/* ============================================================ */
 .feed {
   position: relative;
   list-style: none;
@@ -542,9 +536,7 @@ async function copyText(text: string): Promise<void> {
   white-space: nowrap;
 }
 
-/* ============================================================ */
 /* 观众发声：气泡                                                */
-/* ============================================================ */
 .chat {
   display: flex;
   align-items: flex-start;
@@ -676,9 +668,7 @@ async function copyText(text: string): Promise<void> {
   color: var(--text-primary);
 }
 
-/* ============================================================ */
 /* 安静单行：进场 / 阶段状态                                      */
-/* ============================================================ */
 .whisper {
   display: flex;
   align-items: center;
@@ -713,9 +703,7 @@ async function copyText(text: string): Promise<void> {
   color: var(--color-agent);
 }
 
-/* ============================================================ */
 /* 决策记录：居左宽卡——本轮为什么这么做                            */
-/* ============================================================ */
 .decision {
   margin-left: 38px; /* 28px 头像 + 10px 间距：与气泡体对齐 */
   max-width: 92%;
@@ -947,9 +935,7 @@ async function copyText(text: string): Promise<void> {
   vertical-align: 1px;
 }
 
-/* ============================================================ */
 /* 主播动作：居左卡（工具结果 / 发言）                             */
-/* ============================================================ */
 .act {
   margin-left: 38px; /* 与决策卡同列对齐 */
   max-width: 92%;
@@ -1148,9 +1134,7 @@ async function copyText(text: string): Promise<void> {
   color: var(--color-tool);
 }
 
-/* ============================================================ */
 /* 环节推进 / 场次边界：横贯分隔行                                 */
-/* ============================================================ */
 .beat {
   display: flex;
   align-items: center;
@@ -1207,9 +1191,7 @@ async function copyText(text: string): Promise<void> {
   text-overflow: ellipsis;
 }
 
-/* ============================================================ */
 /* 里程碑：庆祝行                                                */
-/* ============================================================ */
 .milestone {
   display: flex;
   align-items: center;
@@ -1242,9 +1224,7 @@ async function copyText(text: string): Promise<void> {
   color: var(--text-secondary);
 }
 
-/* ============================================================ */
 /* 紧凑模式（首页缩略视图）                                        */
-/* ============================================================ */
 .feed-timeline.is-compact .feed {
   gap: 6px;
 }
@@ -1265,9 +1245,7 @@ async function copyText(text: string): Promise<void> {
   font-size: 9px;
 }
 
-/* ============================================================ */
 /* 会话布局：观众左 / 主播右 / 过程行居中——对话流优先的显示模式      */
-/* ============================================================ */
 .feed-timeline.is-chat .feed::before {
   display: none;
 }
@@ -1354,9 +1332,7 @@ async function copyText(text: string): Promise<void> {
   background: var(--color-agent-bg);
 }
 
-/* ============================================================ */
 /* 窄屏                                                          */
-/* ============================================================ */
 @media (max-width: 860px) {
   .chat,
   .chat--gift,

@@ -185,17 +185,14 @@ function getModuleCount(module: string): number {
 const filteredLogs = computed(() => {
   let result = logs.value;
 
-  // 1. 按日志级别筛选
   if (selectedLevels.value.length > 0) {
     result = result.filter(log => selectedLevels.value.includes(log.level));
   }
 
-  // 2. 按模块筛选
   if (selectedModules.value.length > 0) {
     result = result.filter(log => selectedModules.value.includes(log.module));
   }
 
-  // 3. 按搜索关键词筛选
   if (searchQuery.value.trim()) {
     const query = searchQuery.value.toLowerCase();
     result = result.filter(log => {

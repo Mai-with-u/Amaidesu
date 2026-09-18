@@ -12,7 +12,7 @@
 -->
 <template>
   <div class="dashboard">
-    <!-- 1. 结论条 -->
+    <!-- 结论条 -->
     <header class="verdict-bar" :class="`is-${verdict.tone}`">
       <div class="verdict-lamp">
         <span
@@ -46,7 +46,7 @@
       </div>
     </header>
 
-    <!-- 2. 主网格：直播对话流（hero） + 主播体征 / 活动脉搏（右列） -->
+    <!-- 主网格：直播对话流（hero） + 主播体征 / 活动脉搏（右列） -->
     <section class="main-grid">
       <article class="card feed-card">
         <div class="card-head">
@@ -107,7 +107,7 @@
       </div>
     </section>
 
-    <!-- 3. 今日统计条 -->
+    <!-- 今日统计条 -->
     <section class="stats-strip" aria-label="今日统计">
       <template v-for="(item, idx) in statsStrip" :key="item.key">
         <div v-if="idx > 0" class="stat-divider" aria-hidden="true" />
@@ -121,7 +121,7 @@
       <span class="stat-strip-tail">本地缓冲窗口</span>
     </section>
 
-    <!-- 4. 基座一行 -->
+    <!-- 基座一行 -->
     <footer class="infra-row" aria-label="基座状态">
       <a class="infra-link" @click.prevent="router.push('/collectors')">
         <span>采集</span>
@@ -184,11 +184,11 @@ const systemStore = useSystemStore();
 const eventsStore = useEventsStore();
 const { status } = storeToRefs(systemStore);
 
-// ====== 运行状态（持续取自 system store） ======
+// 运行状态（持续取自 system store）
 
 const uptimeSec = computed(() => status.value?.uptime_seconds ?? 0);
 
-// ====== 组件 / 工具 / 主播 / 流程单 / 场次（REST 周期刷） ======
+// 组件 / 工具 / 主播 / 流程单 / 场次（REST 周期刷）
 
 interface CollectorSummary {
   name: string;
@@ -221,7 +221,7 @@ const sessions = ref<LiveSessionListResponse | null>(null);
 
 const streamerAvailable = computed(() => streamerStatus.value?.available === true);
 
-// ====== LLM 今日统计 + 累计兜底 ======
+// LLM 今日统计 + 累计兜底
 
 const llmStats = ref<LLMHistoryStatistics | null>(null);
 const llmSummary = ref<LLMUsageSummary | null>(null);
@@ -265,7 +265,7 @@ const todayCallsText = computed(() => {
   return `${stats.total_requests} 次 · 成功率 ${rate}%`;
 });
 
-// ====== 直播对话流：把 events 折叠成 ShowEntry 后取尾 15 ======
+// 直播对话流：把 events 折叠成 ShowEntry 后取尾 15
 
 const liveEntries = computed<ShowEntry[]>(() => {
   const events = eventsStore.events as unknown as FeedEvent[];
@@ -273,7 +273,7 @@ const liveEntries = computed<ShowEntry[]>(() => {
   return list.slice(-15);
 });
 
-// ====== 主播体征：决策心跳 + 漏斗 + 失败计数 ======
+// 主播体征：决策心跳 + 漏斗 + 失败计数
 
 const stats = computed(() => {
   const s = streamerStatus.value?.statistics ?? {};
@@ -322,7 +322,7 @@ const heartbeat = computed<{ text: string; tone: 'live' | 'fresh' | 'stale' | 's
   return { text, tone: 'stale' };
 });
 
-// ====== 活动脉搏：60 分钟按分钟分桶的弹幕 / 发言双系列 ======
+// 活动脉搏：60 分钟按分钟分桶的弹幕 / 发言双系列
 
 const PULSE_BUCKETS = 60;
 const PULSE_BUCKET_SEC = 60;
@@ -367,7 +367,7 @@ const pulseWindow = computed(() => buildPulse(eventsStore.events as unknown as F
 const pulseSeries = computed(() => pulseWindow.value.series);
 const pulseLabels = computed(() => pulseWindow.value.labels);
 
-// ====== 今日缓冲窗口按类型分桶（仅取 room.message） ======
+// 今日缓冲窗口按类型分桶（仅取 room.message）
 
 const bufferCounts = computed(() => {
   const result = { danmaku: 0, gift: 0, superChat: 0, enter: 0 };
@@ -400,7 +400,7 @@ const statsStrip = computed<StatItem[]>(() => [
   { key: 'proactive', label: '主动', value: stats.value.proactive, window: '启动以来' },
 ]);
 
-// ====== 结论条：异常 > 降级 > 直播中 > 空闲 ======
+// 结论条：异常 > 降级 > 直播中 > 空闲
 
 const ERROR_WINDOW_SEC = 300;
 
@@ -447,7 +447,7 @@ const verdict = computed<Verdict>(() => {
   return { tone: 'idle', phrase: '空闲', detail: '系统就绪 · 等待场次' };
 });
 
-// ====== 基座一行：采集、工具熔断、节目 ======
+// 基座一行：采集、工具熔断、节目
 
 const infra = computed(() => {
   const total = collectors.value.length;
@@ -476,7 +476,7 @@ const infra = computed(() => {
   };
 });
 
-// ====== 周期刷新（采集/工具/主播/节目/场次） ======
+// 周期刷新（采集/工具/主播/节目/场次）
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -502,7 +502,7 @@ async function refreshSnapshot(): Promise<void> {
 
   // 观众数字独立取数：失败只保留旧值，不拖累上方整体快照
   try {
-    // total 为全量观众数（旧行为读返回行数，limit=5 时最多显示 5）
+    // total 为全量观众数
     const viewersResp = await viewersApi.list({ limit: 1 });
     viewerCount.value = viewersResp.data.total;
   } catch {
@@ -532,7 +532,7 @@ watch(
   },
 );
 
-// ====== 工具函数 ======
+// 工具函数
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -547,7 +547,7 @@ function goEventLog(): void {
   router.push('/eventlog');
 }
 
-// ====== 生命周期 ======
+// 生命周期
 
 onMounted(async () => {
   await systemStore.fetchStatus();

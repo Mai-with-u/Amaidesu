@@ -1,8 +1,6 @@
 <template>
   <div class="tools-page">
-    <!-- ============================================================== -->
     <!-- LEFT：分类列表（narrow, 240px）                                   -->
-    <!-- ============================================================== -->
     <aside class="list-panel" aria-label="工具提供者分类">
       <header class="list-header">
         <div class="list-header-main">
@@ -56,12 +54,10 @@
       </ul>
     </aside>
 
-    <!-- ============================================================== -->
     <!-- RIGHT：分类详情 + 提供者分组                                      -->
-    <!-- ============================================================== -->
     <main class="detail-panel" aria-label="分类详情">
       <template v-if="activeCategoryData">
-        <!-- 1. 分类头：名称 + 描述 + 搜索 -->
+        <!-- 分类头：名称 + 描述 + 搜索 -->
         <header class="detail-header">
           <div class="detail-title-block">
             <div class="detail-title-row">
@@ -90,7 +86,7 @@
           </div>
         </header>
 
-        <!-- 2. 元信息条 -->
+        <!-- 元信息条 -->
         <div class="details-strip" aria-label="状态摘要">
           <div class="stat-chip">
             <span class="chip-label">工具</span>
@@ -110,7 +106,7 @@
           </div>
         </div>
 
-        <!-- 3. 提供者分组：THE MAIN SPACE -->
+        <!-- 提供者分组 -->
         <section class="provider-panel" aria-label="提供者列表">
           <!-- 视觉分类专属：显示器选择 + 预览叠框 + 拖框落盘（独立组件） -->
           <VisionCapturePanel v-if="activeCategory === 'vision'" class="vision-panel-mount" />
@@ -349,7 +345,7 @@ import type {
   WebSocketMessage,
 } from '@/types';
 
-// ===== 分类元数据 =====
+// 分类元数据
 
 const CATEGORY_META: Record<string, { label: string; description: string }> = {
   avatar: {
@@ -368,7 +364,7 @@ function categoryMeta(category: string) {
   return CATEGORY_META[category] ?? { label: category, description: '' };
 }
 
-// ===== 数据加载 =====
+// 数据加载
 
 const categories = ref<ToolCategoryView[]>([]);
 const tools = ref<ToolEntry[]>([]);
@@ -392,7 +388,7 @@ async function refreshAll() {
   }
 }
 
-// ===== 分类列表（左侧） =====
+// 分类列表（左侧）
 
 const activeCategory = ref('');
 
@@ -443,11 +439,11 @@ const pendingRestartCount = computed(
     ).length,
 );
 
-// ===== 提供者开关 =====
+// 提供者开关
 
 const toggling = reactive(new Set<string>());
 
-// ===== 分类总开关（聚合操作：一键开/关全部提供者） =====
+// 分类总开关（聚合操作：一键开/关全部提供者）
 
 const bulkSwitchable = computed(() =>
   (activeCategoryData.value?.providers ?? []).some(p => p.switchable),
@@ -488,7 +484,7 @@ async function onBulkToggle(next: boolean) {
   }
 }
 
-// ===== 工具级停用 =====
+// 工具级停用
 
 const toolToggling = reactive(new Set<string>());
 
@@ -524,7 +520,7 @@ async function onToggle(unit: ToolProviderUnit, next: boolean) {
   }
 }
 
-// ===== 工具提供者手动重连 =====
+// 工具提供者手动重连
 //
 // 按 provider 维度防重：同一 Provider 下多行触发同一调用，按行名防重会出现
 // loading 不同步；用 provider_id 做 Set 键，保证任意一行触发都共享 loading。
@@ -560,7 +556,7 @@ async function onReconnect(providerId: string) {
   }
 }
 
-// ===== 工具过滤 =====
+// 工具过滤
 
 const searchQuery = ref('');
 
@@ -579,7 +575,7 @@ const visibleProviders = computed<ToolProviderUnit[]>(() => {
   return units.filter(unit => toolsOf(unit).length > 0);
 });
 
-// ===== 抽屉详情 =====
+// 抽屉详情
 
 const drawerOpen = ref(false);
 const activeTool = ref<ToolEntry | null>(null);
@@ -622,7 +618,7 @@ watch(activeCategory, () => {
   searchQuery.value = '';
 });
 
-// ===== 实时熔断状态（WS tool.health.*） =====
+// 实时熔断状态（WS tool.health.*）
 
 function applyHealthUpdate(toolName: string, next: ToolHealth | null): void {
   const target = tools.value.find(t => t.name === toolName);
@@ -666,9 +662,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* ============================================================ */
 /* 页面布局：左 240 + 右 flex-1（与采集器 / Agent 页同构）          */
-/* ============================================================ */
 .tools-page {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -677,9 +671,7 @@ onBeforeUnmount(() => {
   min-height: 640px;
 }
 
-/* ============================================================ */
 /* LEFT：分类列表                                                */
-/* ============================================================ */
 .list-panel {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -841,9 +833,7 @@ onBeforeUnmount(() => {
   line-height: 16px;
 }
 
-/* ============================================================ */
 /* RIGHT：详情面板                                               */
-/* ============================================================ */
 .detail-panel {
   display: flex;
   flex-direction: column;
@@ -1112,9 +1102,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-/* ============================================================ */
 /* Empty                                                         */
-/* ============================================================ */
 .detail-empty {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -1130,9 +1118,7 @@ onBeforeUnmount(() => {
   min-height: 320px;
 }
 
-/* ============================================================ */
 /* 抽屉                                                          */
-/* ============================================================ */
 
 .drawer-body {
   padding: 0 var(--spacing-md) var(--spacing-md);
@@ -1228,9 +1214,7 @@ onBeforeUnmount(() => {
   color: var(--text-regular);
 }
 
-/* ============================================================ */
 /* Responsive                                                    */
-/* ============================================================ */
 @media (max-width: 1023px) {
   .tools-page {
     grid-template-columns: 200px minmax(0, 1fr);

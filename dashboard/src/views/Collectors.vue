@@ -1,8 +1,6 @@
 <template>
   <div class="collectors-page">
-    <!-- ============================================================== -->
     <!-- LEFT：采集器列表（narrow, 240px）                                  -->
-    <!-- ============================================================== -->
     <aside class="list-panel" aria-label="采集器列表">
       <header class="list-header">
         <div class="list-header-main">
@@ -74,12 +72,10 @@
       </ul>
     </aside>
 
-    <!-- ============================================================== -->
     <!-- RIGHT：详情 + 数据流（flex-1, the star）                          -->
-    <!-- ============================================================== -->
     <main class="detail-panel" aria-label="采集器详情">
       <template v-if="selectedCollector">
-        <!-- 1. 详情头：名称 + 状态 + 操作 -->
+        <!-- 详情头：名称 + 状态 + 操作 -->
         <header class="detail-header">
           <div class="detail-title-block">
             <div class="detail-title-row">
@@ -140,7 +136,7 @@
           </div>
         </header>
 
-        <!-- 2. 元信息条：compact stat chips -->
+        <!-- 元信息条：compact stat chips -->
         <div class="details-strip" aria-label="状态摘要">
           <div class="stat-chip">
             <span class="chip-label">已启用</span>
@@ -164,7 +160,7 @@
           </div>
         </div>
 
-        <!-- 3. 数据流：THE MAIN SPACE -->
+        <!-- 数据流 -->
         <section class="stream-panel" aria-label="采集数据流">
           <header class="stream-header">
             <div class="stream-title-block">
@@ -187,7 +183,7 @@
 
           <p class="stream-note">
             精确归因需事件负载增加
-            <code>source</code> 字段（后端后续票）——此处按采集器已知事件族做近似匹配
+            <code>source</code> 字段——此处按采集器已知事件族做近似匹配
           </p>
 
           <div ref="streamScrollRef" class="stream-scroll">
@@ -218,18 +214,9 @@
 /**
  * Collectors 页面 —— Master-Detail 版
  *
- * 改动要点（vs 旧版）：
- * - 旧版：counts header + 批量按钮 + 卡片网格 + 侧栏 room.message.* 流。
- * - 新版：左 240px 采集器列表 + 右详情三段（头 / 元信息条 / 数据流）。
- *   旧版被用户拒绝的「侧栏 feed」升格为页面主角；批量按钮下放到左列表头。
- *
- * 数据流归因：
- * - 调查：RoomMessagePayload（payloads/room.py）+ BasePayload（payloads/base.py）
- *   均无 `source` / collector-identity 字段。
- * - 结论：Case B（按事件族近似归属）。下表 COLLECTOR_EVENT_FAMILIES 是基于
- *   collectors/*.py 的实际 emit 代码人工核对得出。
- *
- * 后端后续票：Payload 增加 source 字段即可消除近似归因。
+ * 数据流归因：RoomMessagePayload（payloads/room.py）与 BasePayload
+ * （payloads/base.py）均无 source 字段，运行轨迹按事件族近似归属；
+ * COLLECTOR_EVENT_FAMILIES 依据 collectors/*.py 的实际 emit 代码核对。
  */
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -239,9 +226,7 @@ import { useComponentsStore, useEventsStore } from '@/stores';
 import type { ComponentControlAction, ComponentSummary } from '@/types';
 import { summarizeEvent } from '@/utils/eventSummary';
 
-// ============================================================
 // 归因映射：采集器名 → 消息族白名单（payload.message_type 判别）
-// ============================================================
 //
 // 核对来源（采集器在 EventBus 上发 room.message.* 事件；Dashboard WS 层把
 // 4 种事件统一广播为 "room.message"，消息种类由 payload.message_type 携带）：
@@ -311,9 +296,7 @@ function matchesRoomMessageFamily(
   return typeof messageType === 'string' && families.includes(messageType);
 }
 
-// ============================================================
 // Store + 状态
-// ============================================================
 
 const componentsStore = useComponentsStore();
 const eventsStore = useEventsStore();
@@ -414,9 +397,7 @@ function statusLabel(c: ComponentSummary): string {
   return '未启用';
 }
 
-// ============================================================
 // 数据流：基于归因映射过滤 + 本地缓冲 + 暂停/清空 + 自动滚动
-// ============================================================
 
 interface StreamItem {
   id: string;
@@ -466,9 +447,7 @@ function clearStream(): void {
   streamBuffer.value = [];
 }
 
-// ============================================================
 // 自动滚动：新条目追加时滚到底部，除非用户已向上滚动
-// ============================================================
 
 const streamScrollRef = ref<HTMLElement | null>(null);
 // 距底 < 32px 视为"在底部"
@@ -488,9 +467,7 @@ watch(streamEntries, async () => {
   }
 });
 
-// ============================================================
 // 工具
-// ============================================================
 
 function relativeTime(timestampMs: number): string {
   // 后端事件 timestamp 是 Unix 秒（参见 utils/eventSummary.ts 注释）
@@ -504,9 +481,7 @@ function relativeTime(timestampMs: number): string {
   return `${Math.floor(diffSec / 86400)}d 前`;
 }
 
-// ============================================================
 // 生命周期
-// ============================================================
 
 onMounted(() => {
   componentsStore.fetchComponents();
@@ -514,9 +489,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* ============================================================ */
 /* 页面布局：左 240 + 右 flex-1                                  */
-/* ============================================================ */
 .collectors-page {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -525,9 +498,7 @@ onMounted(() => {
   min-height: 640px;
 }
 
-/* ============================================================ */
 /* LEFT：列表                                                    */
-/* ============================================================ */
 .list-panel {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -707,9 +678,7 @@ onMounted(() => {
   line-height: 16px;
 }
 
-/* ============================================================ */
 /* RIGHT：详情面板                                              */
-/* ============================================================ */
 .detail-panel {
   display: flex;
   flex-direction: column;
@@ -1041,9 +1010,7 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-/* ============================================================ */
 /* Empty 详情                                                    */
-/* ============================================================ */
 .detail-empty {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -1054,9 +1021,7 @@ onMounted(() => {
   justify-content: center;
 }
 
-/* ============================================================ */
 /* Responsive                                                   */
-/* ============================================================ */
 @media (max-width: 1023px) {
   .collectors-page {
     grid-template-columns: 200px minmax(0, 1fr);

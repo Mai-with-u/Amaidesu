@@ -1,7 +1,7 @@
 // v2 类型定义 — 对应后端新架构
 // 历史事件名（input.*/decision.*/output.*）在 v2 已删除，请使用语义域事件名。
 
-// ==================== 系统状态 ====================
+// 系统状态
 
 /**
  * 单个组件分组（collectors / agents / tools）的运行统计。
@@ -24,14 +24,12 @@ export interface EventBusStats {
 }
 
 /**
- * 系统状态响应（v2.0）。
+ * 系统状态响应。
  *
  * 字段说明（与后端 `/api/v1/system/status` 对齐）：
  * - `running` / `uptime_seconds` / `version` / `python_version`：运行时元信息
  * - `groups`：三组组件运行统计（collectors / agents / tools）
  * - `event_bus`：EventBus 全局吞吐
- *
- * 旧 input/decision/output 三阶段字段已删除，前端读 `groups.<name>`。
  */
 export interface SystemStatusResponse {
   running: boolean;
@@ -46,10 +44,10 @@ export interface SystemStatusResponse {
   event_bus: EventBusStats;
 }
 
-// ==================== 组件 ====================
+// 组件
 
 /**
- * 组件摘要（v2）。
+ * 组件摘要。
  *
  * 字段：
  * - `name`：组件名（控制路径用）
@@ -87,7 +85,7 @@ export interface ComponentControlResponse {
   message: string;
 }
 
-// ==================== Agent 控制面 ====================
+// Agent 控制面
 
 /**
  * Agent 运行名册条目（`GET /api/v1/agents`）。
@@ -126,12 +124,12 @@ export interface AgentControlResponse {
   state?: string | null;
 }
 
-// ==================== 配置 ====================
+// 配置
 //
 // 配置读写经 stores/settings.ts 直连 `/api/v1/config/*`（响应形状内联于
 // store），前端无独立 ConfigResponse 类型。
 
-// ==================== 调试注入 ====================
+// 调试注入
 
 export interface InjectMessageRequest {
   source?: string;
@@ -150,7 +148,7 @@ export interface EventBusStatsResponse {
   events_by_name: Record<string, number>;
 }
 
-// ==================== Streamer 测试台（主播发言调试） ====================
+// Streamer 测试台（主播发言调试）
 
 /**
  * 模拟弹幕（单条）。nickname 空时后端用「测试观众」占位。
@@ -240,10 +238,10 @@ export interface TriggerProactiveResponse {
   message: string;
 }
 
-// ==================== WebSocket ====================
+// WebSocket
 
 /**
- * WebSocket 消息（v2）。
+ * WebSocket 消息。
  *
  * `type` 字段是 WS 广播类型：4 种 room.message.* EventBus 事件统一广播为
  * `room.message`（消息种类由 payload.message_type 判别）；其余沿用事件名
@@ -275,7 +273,7 @@ export interface SubscribeRequest {
   events: string[];
 }
 
-// ==================== Tools ====================
+// Tools
 
 export type ParameterType = 'string' | 'number' | 'integer' | 'boolean';
 
@@ -411,7 +409,7 @@ export interface ToolReconnectResponse {
   still_tripped: string[];
 }
 
-// ==================== Simulator 控制面（ADR-006） ====================
+// Simulator 控制面（ADR-006）
 
 /**
  * SimulatorService 实时状态（`/api/v1/simulator/status` 响应）。
@@ -478,7 +476,7 @@ export interface SimulatorControlResponse {
   is_running?: boolean;
 }
 
-// ==================== Rundown（流程单编排页） ====================
+// Rundown（流程单编排页）
 
 /**
  * 流程单运行时快照（`/api/v1/agenda/state` 的 `snapshot` 字段）。
@@ -579,7 +577,7 @@ export interface RundownControlResponse {
   snapshot: RundownSnapshot | null;
 }
 
-// ==================== Rundown 流程单库（编辑器） ====================
+// Rundown 流程单库（编辑器）
 
 /**
  * 流程单完整定义——库列表项与保存请求体共用同一形状。
@@ -615,12 +613,12 @@ export interface RundownMutateResponse {
   rundown_id: string | null;
 }
 
-// ==================== 导出 settings / llm 子模块 ====================
+// 导出 settings / llm 子模块
 
 export * from './settings';
 export * from './llm';
 
-// ===== 直播场次（直播控制台） =====
+// 直播场次（直播控制台）
 
 /** 场次列表条目（GET /api/v1/live-sessions） */
 export interface LiveSessionItem {

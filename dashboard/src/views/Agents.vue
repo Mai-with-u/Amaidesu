@@ -1,12 +1,8 @@
 <template>
   <div class="agents-shell">
-    <!-- ============================================================== -->
     <!-- 主网格：左 240px Agent 列表 + 右 flex-1 详情                       -->
-    <!-- ============================================================== -->
     <div class="agents-page">
-      <!-- ============================================================ -->
       <!-- LEFT：Agent 列表（narrow, 240px）                              -->
-      <!-- ============================================================ -->
       <aside class="list-panel" aria-label="Agent 列表">
         <header class="list-header">
           <div class="list-header-main">
@@ -79,12 +75,10 @@
         </ul>
       </aside>
 
-      <!-- ============================================================ -->
       <!-- RIGHT：详情 + 运行轨迹（flex-1, the star）                       -->
-      <!-- ============================================================ -->
       <main class="detail-panel" aria-label="Agent 详情">
         <template v-if="selectedAgent">
-          <!-- 1. 详情头：名称 + 状态 + 操作 -->
+          <!-- 详情头：名称 + 状态 + 操作 -->
           <header class="detail-header">
             <div class="detail-title-block">
               <div class="detail-title-row">
@@ -165,7 +159,7 @@
             </div>
           </header>
 
-          <!-- 2. 元信息条：状态 / 心跳 / 重启 / 最近决策（启停与存活由标题 tag 与心跳新鲜度表达） -->
+          <!-- 元信息条：状态 / 心跳 / 重启 / 最近决策（启停与存活由标题 tag 与心跳新鲜度表达） -->
           <div class="details-strip" aria-label="状态摘要">
             <div class="stat-chip">
               <span class="chip-label">状态</span>
@@ -201,7 +195,7 @@
             </el-button>
           </div>
 
-          <!-- 3. 运行轨迹：THE MAIN SPACE -->
+          <!-- 运行轨迹 -->
           <section class="stream-panel" aria-label="运行轨迹">
             <header class="stream-header">
               <div class="stream-header-row stream-header-row--main">
@@ -319,9 +313,7 @@ import type {
 } from '@/types';
 import { summarizeEvent } from '@/utils/eventSummary';
 
-// ============================================================
 // Store + 基础状态
-// ============================================================
 
 const componentsStore = useComponentsStore();
 const eventsStore = useEventsStore();
@@ -420,9 +412,7 @@ function statusLabel(a: ComponentSummary): string {
   return '未启用';
 }
 
-// ============================================================
 // Agent 控制面（/api/v1/agents）：运行状态 + pause/resume/shutdown
-// ============================================================
 
 // 运行状态名册：name → AgentInfo（进页面拉一次，此后轮询 + 操作后刷新）
 const agentStates = ref<Record<string, AgentInfo>>({});
@@ -557,9 +547,7 @@ const moreActionsLoading = computed<boolean>(() => {
   return Boolean(actionLoading[`${name}-restart`] || controlLoading[`${name}-shutdown`]);
 });
 
-// ============================================================
 // "最近决策"指标：planner.* 最新事件的相对时间
-// ============================================================
 
 const latestDecisionLabel = computed<string>(() => {
   // events store 按 timestamp 升序；末条即最新。逆序找第一条 planner.*。
@@ -572,9 +560,7 @@ const latestDecisionLabel = computed<string>(() => {
   return '—';
 });
 
-// ============================================================
 // 运行轨迹：三族合并 + 阶段 badge + 失败标记
-// ============================================================
 
 type StageKind = 'planner' | 'rundown' | 'tool';
 type FilterKind = 'all' | StageKind;
@@ -664,9 +650,7 @@ function clearStream(): void {
   streamBuffer.value = [];
 }
 
-// ============================================================
 // 自动滚动：新条目追加时滚到底部，除非用户已向上滚动
-// ============================================================
 
 const streamScrollRef = ref<HTMLElement | null>(null);
 // 距底 < 32px 视为"在底部"
@@ -686,9 +670,7 @@ watch(displayedEntries, async () => {
   }
 });
 
-// ============================================================
 // 工具：相对时间
-// ============================================================
 
 function relativeDuration(diffSec: number): string {
   if (diffSec < 5) return '刚刚';
@@ -705,9 +687,7 @@ function relativeTime(timestampMs: number): string {
   return relativeDuration(Math.max(0, Math.floor(nowSec - tsSec)));
 }
 
-// ============================================================
 // 生命周期
-// ============================================================
 
 let nowTickTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -729,9 +709,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* ============================================================ */
 /* 页面布局：flex shell 包裹 grid（左 240 + 右 1）              */
-/* ============================================================ */
 .agents-shell {
   display: flex;
   flex-direction: column;
@@ -748,9 +726,7 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-/* ============================================================ */
 /* LEFT：列表                                                    */
-/* ============================================================ */
 .list-panel {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -930,9 +906,7 @@ onUnmounted(() => {
   line-height: 16px;
 }
 
-/* ============================================================ */
 /* RIGHT：详情面板                                              */
-/* ============================================================ */
 .detail-panel {
   display: flex;
   flex-direction: column;
@@ -1297,9 +1271,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-/* ============================================================ */
 /* Empty 详情                                                    */
-/* ============================================================ */
 .detail-empty {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -1310,9 +1282,7 @@ onUnmounted(() => {
   justify-content: center;
 }
 
-/* ============================================================ */
 /* Responsive                                                   */
-/* ============================================================ */
 @media (max-width: 1023px) {
   .agents-page {
     grid-template-columns: 200px minmax(0, 1fr);

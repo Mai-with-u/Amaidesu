@@ -82,7 +82,10 @@
         <div class="stat-content">
           <span class="stat-label">
             缓存命中率
-            <el-tooltip content="命中 / (命中 + 未命中)；「未上报」表示上游从未上报缓存用量" placement="top">
+            <el-tooltip
+              content="命中 / (命中 + 未命中)；「未上报」表示上游从未上报缓存用量"
+              placement="top"
+            >
               <el-icon class="cache-help"><QuestionFilled /></el-icon>
             </el-tooltip>
           </span>
@@ -130,7 +133,10 @@
         <div class="chart-card">
           <h3 class="chart-title">
             每日缓存命中率
-            <el-tooltip content="命中率 = 命中 / (命中 + 未命中)；断线表示当日无缓存用量上报" placement="top">
+            <el-tooltip
+              content="命中率 = 命中 / (命中 + 未命中)；断线表示当日无缓存用量上报"
+              placement="top"
+            >
               <el-icon class="cache-help"><QuestionFilled /></el-icon>
             </el-tooltip>
           </h3>
@@ -331,7 +337,7 @@ const cacheSubFullText = computed(() => {
   )}`;
 });
 
-// ===== 趋势图表派生数据（后端已补零对齐连续时间轴） =====
+// 趋势图表派生数据（后端已补零对齐连续时间轴）
 const trendPoints = computed(() => trends.value?.points ?? []);
 
 const trendLabels = computed(() => trendPoints.value.map(point => point.date.slice(5))); // MM-DD

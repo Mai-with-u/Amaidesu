@@ -12,9 +12,7 @@
 import { summarizeEvent } from './eventSummary';
 import type { WebSocketMessage } from '@/types';
 
-// ============================================================
 // 常量
-// ============================================================
 
 export const MAX_ENTRIES = 400;
 /** 结果载荷里可作"主播说了什么"的字段候选（按优先级） */
@@ -33,9 +31,7 @@ export const STAGE_LABEL: Record<string, string> = {
   idle: '空闲',
 };
 
-// ============================================================
 // 类型
-// ============================================================
 
 export type EntryKind =
   | 'danmaku'
@@ -97,9 +93,7 @@ export interface ThinkingStep {
   text: string;
 }
 
-// ============================================================
 // 通用取值助手
-// ============================================================
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -173,9 +167,7 @@ export function agentGroupOf(entry: ShowEntry): AgentGroup {
   return 'room';
 }
 
-// ============================================================
 // 事件 → 时间线条目
-// ============================================================
 
 export function makeEntry(base: {
   id: string;
@@ -501,9 +493,7 @@ export function toEntry(event: FeedEvent): ShowEntry | null {
   return null;
 }
 
-// ============================================================
 // 决策卡取值助手（detail 字段安全读取）
-// ============================================================
 
 export function decisionDetail(entry: ShowEntry): Record<string, unknown> {
   return isRecord(entry.detail) ? entry.detail : {};
@@ -540,9 +530,7 @@ export function rawOf(entry: ShowEntry): string {
   return str(decisionDetail(entry).planner_raw);
 }
 
-// ============================================================
 // 纯逻辑：实时事件 → 时间线条目（含 verdict/decision 按轮回填）
-// ============================================================
 
 /**
  * 把 events store 的事件流折叠成时间线条目。
@@ -584,9 +572,7 @@ export function buildLiveEntries(events: FeedEvent[], hiddenIds: Set<string>): S
   return next.slice(-MAX_ENTRIES);
 }
 
-// ============================================================
 // 相对时间标签
-// ============================================================
 
 /**
  * 时间线条目的相对时间戳（如"刚刚/12s 前/3m 前/2h 前/1d 前"）。
@@ -601,9 +587,7 @@ export function relativeTime(nowSec: number, tsSec: number): string {
   return `${Math.floor(diff / 86400)}d 前`;
 }
 
-// ============================================================
 // 会话模式：对话优先的行序（过程行折叠成每轮一条过程条）
-// ============================================================
 
 /** 会话模式里会被折叠进过程条的过程行类型 */
 const CHAT_PROCESS_KINDS: ReadonlySet<EntryKind> = new Set<EntryKind>([
