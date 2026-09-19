@@ -31,8 +31,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Literal, Optional, cast
 
-from src.agents.streamer.rundown.rundown import Rundown, RundownSegment
 from src.modules.logging import get_logger
+from src.modules.storage.models.rundown import Rundown, RundownSegment
 from src.modules.time_utils import now_ms as _real_now_ms
 
 

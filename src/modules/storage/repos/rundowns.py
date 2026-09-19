@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import TYPE_CHECKING, List, Optional
+from typing import List, Optional
 
+from src.modules.storage.models.rundown import Rundown, RundownSegment
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.time_utils import now_ms
-
-if TYPE_CHECKING:
-    from src.agents.streamer.rundown.rundown import Rundown
 
 
 class RundownRepo(BaseRepo):
@@ -29,11 +27,6 @@ class RundownRepo(BaseRepo):
     @staticmethod
     def _deserialize_rundown(row: sqlite3.Row) -> Rundown:
         """从 rundowns 行重建 :class:`Rundown`（逐段 ``RundownSegment.model_validate``）。"""
-        # 函数体内 import 限 5 种情形之一——此处属"循环 import 规避"：
-        # 仓储顶层导入 rundown 会触发 src.agents.streamer/__init__.py 装配链
-        # （StreamerAgent → Planner → memory → 本仓储）的循环。
-        from src.agents.streamer.rundown.rundown import Rundown, RundownSegment  # noqa: PLC0415
-
         segments_data = json.loads(str(row["segments_json"]))
         segments = [RundownSegment.model_validate(item) for item in segments_data]
         return Rundown(

@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, Protocol, cast
 
 from fastapi import APIRouter, Depends
 
-from src.agents.streamer.rundown.rundown import DEFAULT_RUNDOWN, Rundown
 from src.modules.dashboard.api.common import resolve_streamer_agent
 from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
 from src.modules.dashboard.dependencies import get_dashboard_server
@@ -38,6 +37,7 @@ from src.modules.dashboard.schemas.rundown import (
     RundownSegmentView,
     RundownTemplateResponse,
 )
+from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown
 from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:

@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from src.agents.streamer.rundown.rundown import (
+from src.modules.storage.models.rundown import (
     DEFAULT_RUNDOWN,
     Rundown,
     RundownSegment,

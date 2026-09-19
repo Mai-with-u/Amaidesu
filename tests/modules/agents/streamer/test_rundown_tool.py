@@ -15,7 +15,6 @@ import pytest
 
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.rundown.rundown import Rundown, RundownSegment, DEFAULT_RUNDOWN
 from src.agents.streamer.rundown.rundown_state import RundownState
 from src.agents.streamer.tools.rundown_tool import (
     RundownControlProvider,
@@ -23,6 +22,7 @@ from src.agents.streamer.tools.rundown_tool import (
 )
 from src.modules.llm.payload import Response as PayloadResponse
 from src.modules.llm.payload import ToolCall as PayloadToolCall
+from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown, RundownSegment
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 

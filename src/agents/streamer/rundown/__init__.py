@@ -1,11 +1,10 @@
-"""主播 Agent 流程单（Rundown）子系统子包。
+"""主播 Agent 流程单（Rundown）行为侧子包。
 
-Rundown 子系统是主播 Agent 的**内部契约与编排**（不跨 Agent 共享、不注册为工具）。
+承载流程单的**运行时行为**：数据契约（``Rundown`` / ``RundownSegment`` /
+``DEFAULT_RUNDOWN``）已下沉为持久化契约，位于
+``src/modules/storage/models/rundown.py``，由本子包、storage 仓储与
+Dashboard API 共同消费；控制工具提供者在 ``../tools/rundown_tool.py``。
 
-模块按数据流分层：
-
-- ``rundown``       - 流程单数据契约（``Rundown`` / ``RundownSegment``）+ 内置默认流程单 ``DEFAULT_RUNDOWN``
-
-切片 1（数据契约 + 存储）只交付 ``rundown.py``。运行时状态、工具、闹钟等组件
-在后续切片内聚，本子包不预先暴露。
+- ``rundown_state`` - 流程单运行时状态机（唯一变更边界，``rundown.changed`` 事件源）
+- ``presentation``  - 控制动作执行与流程单情境视图构建（供 Planner / 提示词消费）
 """

@@ -19,13 +19,13 @@ from typing import AsyncGenerator, Generator
 
 import pytest
 
-from src.agents.streamer.rundown.rundown import (
+from src.modules.storage import SCHEMA_VERSION, list_expected_tables
+from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.rundown import (
     DEFAULT_RUNDOWN,
     Rundown,
     RundownSegment,
 )
-from src.modules.storage import SCHEMA_VERSION, list_expected_tables
-from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.schema import build_schema_sql
 from src.modules.time_utils import now_ms
 

@@ -10,8 +10,8 @@ from typing import Any, List, Tuple
 
 import pytest
 
-from src.agents.streamer.rundown.rundown import Rundown, RundownSegment
 from src.agents.streamer.rundown.rundown_state import RundownReject, RundownState
+from src.modules.storage.models.rundown import Rundown, RundownSegment
 
 
 # ---------------------------------------------------------------------------

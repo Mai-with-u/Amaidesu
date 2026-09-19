@@ -41,13 +41,13 @@ from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayloa
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.logging import get_logger
+from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown
 from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.time_utils import now_ms
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 from .rundown.presentation import apply_rundown_control, build_rundown_view
-from .rundown.rundown import DEFAULT_RUNDOWN, Rundown
 from .rundown.rundown_state import RundownState
 from .tools.rundown_tool import RundownControlProvider, build_rundown_tool_provider
 from .background import BackgroundMaintainer

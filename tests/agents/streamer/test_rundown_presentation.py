@@ -10,8 +10,8 @@ from __future__ import annotations
 import pytest
 
 from src.agents.streamer.rundown.presentation import apply_rundown_control, build_rundown_view
-from src.agents.streamer.rundown.rundown import DEFAULT_RUNDOWN
 from src.agents.streamer.rundown.rundown_state import RundownState
+from src.modules.storage.models.rundown import DEFAULT_RUNDOWN
 
 
 def _loaded_state() -> RundownState:
