@@ -24,8 +24,6 @@ from src.modules.dashboard.schemas.component import (
     ComponentControlAction,
     ComponentControlRequest,
     ComponentControlResponse,
-    ComponentDetail,
-    ComponentDetailResponse,
     ComponentListResponse,
 )
 from src.modules.dashboard.utils.component_helper import (
@@ -104,22 +102,6 @@ async def list_components(server: ServerDep) -> ComponentListResponse:
         collectors=grouped["collectors"],
         agents=grouped["agents"],
     )
-
-
-@router.get("/{group}/{name}", response_model=ComponentDetailResponse)
-async def get_component(
-    group: str,
-    name: str,
-    server: ServerDep,
-) -> ComponentDetailResponse:
-    """获取单个组件详情（group ∈ {collectors, agents}）"""
-    if group not in _GROUP_TO_FILE:
-        raise HTTPException(status_code=404, detail=f"Unknown component group: {group}")
-    grouped = get_v2_component_list(build_config_view(server), server)
-    for summary in grouped.get(group, []):
-        if summary.name == name:
-            return ComponentDetailResponse(component=ComponentDetail(**summary.model_dump()))
-    raise HTTPException(status_code=404, detail=f"Component not found: {group}/{name}")
 
 
 @router.post("/{group}/{name}/control", response_model=ComponentControlResponse)

@@ -5,7 +5,7 @@
 """
 
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -30,18 +30,6 @@ class ComponentSummary(BaseModel):
     description: str = ""  # 描述（来自管理器注册/工具规格；前端可选展示）
 
 
-class ComponentDetail(BaseModel):
-    """组件详情"""
-
-    name: str
-    phase: str
-    type: str
-    is_started: bool
-    is_enabled: bool
-    config: Optional[Dict[str, Any]] = None
-    stats: Optional[Dict[str, Any]] = None
-
-
 class ComponentListResponse(BaseModel):
     """组件列表响应（v2：collectors / agents 两组）
 
@@ -50,12 +38,6 @@ class ComponentListResponse(BaseModel):
 
     collectors: list[ComponentSummary] = []
     agents: list[ComponentSummary] = []
-
-
-class ComponentDetailResponse(BaseModel):
-    """组件详情响应"""
-
-    component: ComponentDetail
 
 
 class ComponentControlRequest(BaseModel):

@@ -43,10 +43,41 @@ from src.modules.dashboard.schemas.component import (
     ComponentControlAction,
     ComponentControlRequest,
     ComponentControlResponse,
-    ComponentDetail,
-    ComponentDetailResponse,
     ComponentListResponse,
     ComponentSummary,
+)
+from src.modules.dashboard.schemas.event import (
+    EventHistoryItem,
+    EventListResponse,
+    EventStatsResponse,
+)
+from src.modules.dashboard.schemas.session import (
+    SessionActionResponse,
+    SessionItem,
+    SessionListResponse,
+    SessionOpenRequest,
+    SessionOpenResponse,
+    SessionTimelineResponse,
+)
+from src.modules.dashboard.schemas.simulator import (
+    GiftCreateRequest,
+    GiftCreateResponse,
+    GiftListResponse,
+    GiftUpdateRequest,
+    PersonaCreateRequest,
+    PersonaCreateResponse,
+    PersonaListResponse,
+    PersonaUpdateRequest,
+    ReplayDatesResponse,
+    SimulatorOperationResponse,
+    SimulatorRunStateResponse,
+    SimulatorStartRequest,
+    SimulatorStatusResponse,
+)
+from src.modules.dashboard.schemas.tool_catalog import (
+    ProviderCard,
+    ToolCatalogCategory,
+    ToolCatalogResponse,
 )
 from src.modules.dashboard.schemas.system import (
     EventBusStats,
@@ -64,9 +95,7 @@ __all__ = [
     # 组件
     "ComponentControlAction",
     "ComponentSummary",
-    "ComponentDetail",
     "ComponentListResponse",
-    "ComponentDetailResponse",
     "ComponentControlRequest",
     "ComponentControlResponse",
     # Rundown
@@ -84,6 +113,34 @@ __all__ = [
     "WebSocketMessage",
     "SubscribeRequest",
     "SubscribeResponse",
+    "EventHistoryItem",
+    "EventListResponse",
+    "EventStatsResponse",
+    # 场次
+    "SessionItem",
+    "SessionListResponse",
+    "SessionOpenRequest",
+    "SessionOpenResponse",
+    "SessionActionResponse",
+    "SessionTimelineResponse",
+    # 模拟器
+    "SimulatorStartRequest",
+    "SimulatorStatusResponse",
+    "SimulatorRunStateResponse",
+    "SimulatorOperationResponse",
+    "ReplayDatesResponse",
+    "PersonaCreateRequest",
+    "PersonaUpdateRequest",
+    "PersonaListResponse",
+    "PersonaCreateResponse",
+    "GiftCreateRequest",
+    "GiftUpdateRequest",
+    "GiftListResponse",
+    "GiftCreateResponse",
+    # 工具目录
+    "ProviderCard",
+    "ToolCatalogCategory",
+    "ToolCatalogResponse",
     # Agent 控制面
     "AgentControlAction",
     "AgentControlRequest",
