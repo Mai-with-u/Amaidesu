@@ -120,7 +120,7 @@ class StreamerAgent(BaseAgent):
     description = "Streamer Agent - 主播决策 + 表达 + 后台维护"
 
     # -----事件族声明（可选）-----
-    emits_events = ("rundown.changed",)
+    emits_events = (CoreEvents.RUNDOWN_CHANGED,)
 
     def __init__(
         self,
