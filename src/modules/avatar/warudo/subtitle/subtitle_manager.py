@@ -92,8 +92,8 @@ class WarudoSubtitleManager:
             if self.runner:
                 try:
                     await self.runner.cleanup()
-                except Exception:
-                    pass
+                except Exception as e:
+                    self.logger.warning(f"清理 Web 服务器 runner 失败: {e}")
             self.app = None
             self.runner = None
             self.site = None

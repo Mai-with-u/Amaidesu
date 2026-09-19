@@ -114,5 +114,5 @@ class TypingActionTask:
                 await self.send_action_callback(
                     "body_action", {"action_type": "phone_position", "data": {"x": 0, "y": 0, "z": 0}}
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.warning(f"结束零位发送失败: {e}")

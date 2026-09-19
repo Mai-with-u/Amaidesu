@@ -31,6 +31,10 @@ except ImportError:
     ctk = None
     CTK_AVAILABLE = False
 
+# 字体解析等不依赖实例状态的辅助路径用模块级 logger：测试会经 __new__ 构造
+# 未初始化实例，self.logger 不保证可用
+logger = get_logger("OutlineLabel")
+
 
 class OutlineLabel:
     """PIL 二值渲染的描边标签。
@@ -235,20 +239,21 @@ class OutlineLabel:
             return None
         try:
             return ImageFont.truetype(self.font_obj[0], self._font_px)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"按字体族名加载失败，退化目录匹配: {e}")
         family_key = (self.font_obj[0] or "").lower().replace(" ", "")
         try:
             for path in glob.glob(r"C:\Windows\Fonts\*.tt[cf]"):
                 name = os.path.basename(path).lower().replace(" ", "")
                 if family_key in name:
                     return ImageFont.truetype(path, self._font_px)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"按 Fonts 目录匹配失败，退化内置兜底字体: {e}")
         for fallback in ("msyh.ttc", "msyhbd.ttc", "simhei.ttf", "simsun.ttc"):
             try:
                 return ImageFont.truetype(fallback, self._font_px)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"兜底字体 {fallback} 加载失败: {e}")
                 continue
         return None
 

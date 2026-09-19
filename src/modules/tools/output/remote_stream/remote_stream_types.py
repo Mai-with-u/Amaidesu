@@ -18,6 +18,10 @@ from typing import Any, Callable, Dict, Optional
 
 from pydantic import BaseModel
 
+from src.modules.logging import get_logger
+
+logger = get_logger("RemoteStreamTypes")
+
 
 class MessageType(str, Enum):
     """WebSocket 消息类型"""
@@ -131,13 +135,13 @@ class RemoteStreamTypes:
                 if audio_data:
                     try:
                         message.data["audio"] = AudioConfig(**audio_data).model_dump()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"audio 配置规范化失败，按原始数据分发: {e}")
                 if image_data:
                     try:
                         message.data["image"] = ImageConfig(**image_data).model_dump()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"image 配置规范化失败，按原始数据分发: {e}")
                 on_config(message.data)
             return
         if mt == MessageType.AUDIO_DATA:
@@ -146,8 +150,8 @@ class RemoteStreamTypes:
                     try:
                         binary_data = base64.b64decode(message.data["audio"])
                         message.data["binary"] = binary_data
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"audio base64 解码失败，跳过二进制附加: {e}")
                 on_audio_data(message.data)
             return
         if mt == MessageType.IMAGE_DATA:
@@ -157,13 +161,16 @@ class RemoteStreamTypes:
                         binary_data = base64.b64decode(message.data["image"])
                         message.data["binary"] = binary_data
                         try:
+                            # PIL 为可选重型依赖，仅尝试附加解码结果，缺失时降级
                             from PIL import Image as _PILImage
 
                             message.data["pil_image"] = _PILImage.open(io.BytesIO(binary_data))
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
+                        except ImportError:
+                            logger.debug("PIL 未安装，跳过 pil_image 附加")
+                        except Exception as e:
+                            logger.warning(f"图片解码失败，按原始二进制分发: {e}")
+                    except Exception as e:
+                        logger.warning(f"image base64 解码失败，跳过二进制附加: {e}")
                 on_image_data(message.data)
             return
         if mt == MessageType.IMAGE_REQUEST:
