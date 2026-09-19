@@ -15,15 +15,16 @@ from typing import Any, ClassVar, Dict, List, Literal, Optional
 
 from pydantic import ConfigDict, Field
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
 from src.modules.time_utils import now_ms
 
 
-@register_event("game.milestone")
-@register_event("game.attention_required")
-@register_event("game.error")
-@register_event("game.report")
+@register_event(CoreEvents.GAME_MILESTONE)
+@register_event(CoreEvents.GAME_ATTENTION_REQUIRED)
+@register_event(CoreEvents.GAME_ERROR)
+@register_event(CoreEvents.GAME_REPORT)
 class GamePayload(BasePayload):
     """
     游戏事件 Payload（统一形状 + event_type 判别）

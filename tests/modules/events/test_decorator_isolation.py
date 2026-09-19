@@ -164,6 +164,33 @@ class TestDecoratorFrameworkContract:
                     delattr(cls, "_registered_event_name")
 
 
+class TestEventNameValidation:
+    """register_event 校验事件名以 CoreEvents 为唯一事实源"""
+
+    def test_unregistered_event_name_raises(self):
+        """未在 CoreEvents 登记的事件名在注册期直接拒绝（拼写漂移即时暴露）"""
+
+        with pytest.raises(ValueError, match="未在 CoreEvents"):
+            @register_event("typo.room.mesage")
+            class _TypoPayload(BaseModel):
+                value: int = 0
+
+    def test_test_prefix_synthetic_name_allowed(self):
+        """``test.`` 前缀保留给测试合成事件名，豁免 CoreEvents 校验"""
+        test_event_name = "test.isolation.validation_exempt"
+
+        @register_event(test_event_name)
+        class _SyntheticPayload(BaseModel):
+            value: int = 0
+
+        try:
+            assert EVENT_REGISTRY[test_event_name] is _SyntheticPayload
+        finally:
+            EVENT_REGISTRY.pop(test_event_name, None)
+            if hasattr(_SyntheticPayload, "_registered_event_name"):
+                delattr(_SyntheticPayload, "_registered_event_name")
+
+
 class TestStartupHookContract:
     """验证 register_core_events() 启动钩子的契约"""
 

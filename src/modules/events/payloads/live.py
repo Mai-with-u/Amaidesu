@@ -22,12 +22,13 @@ from typing import Optional
 
 from pydantic import Field
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
 from src.modules.time_utils import now_ms
 
 
-@register_event("live.started")
+@register_event(CoreEvents.LIVE_STARTED)
 class LiveStartedPayload(BasePayload):
     """
     直播场次开始事件 Payload
@@ -61,7 +62,7 @@ class LiveStartedPayload(BasePayload):
     )
 
 
-@register_event("live.ended")
+@register_event(CoreEvents.LIVE_ENDED)
 class LiveEndedPayload(BasePayload):
     """
     直播场次结束事件 Payload

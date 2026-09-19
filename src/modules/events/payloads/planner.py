@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
 from src.modules.time_utils import now_ms
@@ -31,7 +32,7 @@ class PlannerBatchItem(BaseModel):
     text: str = Field(default="", description="弹幕文本（截断展示）")
 
 
-@register_event("planner.decision")
+@register_event(CoreEvents.PLANNER_DECISION)
 class PlannerDecisionPayload(BasePayload):
     """
     决策轮记录事件 Payload（每轮两阶段决策结束发一条，成功/失败/降级全覆盖）
@@ -112,7 +113,7 @@ class PlannerDecisionPayload(BasePayload):
     )
 
 
-@register_event("streamer.stage")
+@register_event(CoreEvents.STREAMER_STAGE)
 class StreamerStagePayload(BasePayload):
     """
     决策管线阶段状态事件 Payload（状态变化即发射，观察器渲染状态条）
@@ -139,7 +140,7 @@ class StreamerStagePayload(BasePayload):
     )
 
 
-@register_event("planner.verdict")
+@register_event(CoreEvents.PLANNER_VERDICT)
 class PlannerVerdictPayload(BasePayload):
     """
     裁决事件：Planner 决定回应并触发 reply 工具的时刻发出（表达生成之前）。

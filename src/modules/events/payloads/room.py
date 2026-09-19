@@ -18,6 +18,7 @@ from typing import ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
 from src.modules.time_utils import now_ms
@@ -78,12 +79,12 @@ class SuperChatInfo(BaseModel):
     )
 
 
-@register_event("room.message.danmaku")
-@register_event("room.message.gift")
-@register_event("room.message.super_chat")
-@register_event("room.message.guard")
-@register_event("room.message.enter")
-@register_event("room.message.partner_speech")
+@register_event(CoreEvents.ROOM_MESSAGE_DANMAKU)
+@register_event(CoreEvents.ROOM_MESSAGE_GIFT)
+@register_event(CoreEvents.ROOM_MESSAGE_SUPER_CHAT)
+@register_event(CoreEvents.ROOM_MESSAGE_GUARD)
+@register_event(CoreEvents.ROOM_MESSAGE_ENTER)
+@register_event(CoreEvents.ROOM_MESSAGE_PARTNER_SPEECH)
 class RoomMessagePayload(BasePayload):
     """
     直播间行为流事件 Payload（统一形状 + message_type 判别）

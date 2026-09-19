@@ -26,12 +26,13 @@ from typing import Optional
 
 from pydantic import Field
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
 from src.modules.time_utils import now_ms
 
 
-@register_event("tts.utterance.started")
+@register_event(CoreEvents.TTS_UTTERANCE_STARTED)
 class UtteranceStartedPayload(BasePayload):
     """
     一次发声开始事件 Payload
@@ -66,7 +67,7 @@ class UtteranceStartedPayload(BasePayload):
     )
 
 
-@register_event("tts.utterance.finished")
+@register_event(CoreEvents.TTS_UTTERANCE_FINISHED)
 class UtteranceFinishedPayload(BasePayload):
     """
     一次发声播放完成事件 Payload
@@ -94,7 +95,7 @@ class UtteranceFinishedPayload(BasePayload):
     )
 
 
-@register_event("tts.utterance.failed")
+@register_event(CoreEvents.TTS_UTTERANCE_FAILED)
 class UtteranceFailedPayload(BasePayload):
     """
     一次发声失败事件 Payload

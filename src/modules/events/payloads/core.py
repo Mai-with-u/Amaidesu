@@ -9,11 +9,12 @@ from typing import Any, Optional
 
 from pydantic import Field
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
 
 
-@register_event("core.startup")
+@register_event(CoreEvents.CORE_STARTUP)
 class CoreStartupPayload(BasePayload):
     """系统启动事件 Payload"""
 
@@ -22,7 +23,7 @@ class CoreStartupPayload(BasePayload):
     data: Any = Field(default=None, description="附加数据")
 
 
-@register_event("core.shutdown")
+@register_event(CoreEvents.CORE_SHUTDOWN)
 class CoreShutdownPayload(BasePayload):
     """系统关闭事件 Payload"""
 
@@ -31,7 +32,7 @@ class CoreShutdownPayload(BasePayload):
     data: Any = Field(default=None, description="附加数据")
 
 
-@register_event("core.error")
+@register_event(CoreEvents.CORE_ERROR)
 class CoreErrorPayload(BasePayload):
     """系统错误事件 Payload"""
 

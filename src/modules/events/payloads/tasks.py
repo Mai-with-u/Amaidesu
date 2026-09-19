@@ -12,11 +12,12 @@ from typing import Any, Dict
 
 from pydantic import Field
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
 
 
-@register_event("task.changed")
+@register_event(CoreEvents.TASK_CHANGED)
 class TaskChangedPayload(BasePayload):
     """异步任务状态变化（task.changed）。
 

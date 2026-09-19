@@ -127,30 +127,39 @@ def register_event(event_name: str) -> Callable[[T], T]:
     - 测试断言 ``reverse_name == event_name`` 对所有已注册事件名都成立
 
     Args:
-        event_name: 事件名称（如 ``"room.message.danmaku"``）。
+        event_name: 事件名称（如 ``"room.message.danmaku"``）。必须是
+            :class:`CoreEvents` 已登记的常量值——事件名以 ``names.py`` 为
+            唯一事实源，拼写漂移在此处直接暴露。``"test."`` 前缀保留给
+            测试合成事件名，豁免校验。
 
     Returns:
         装饰器函数。被装饰的类原样返回。
 
     Raises:
-        ValueError: ``event_name`` 已被注册为**不同的**类型。
+        ValueError: ``event_name`` 未在 :class:`CoreEvents` 登记，
+            或已被注册为**不同的**类型。
 
     Example:
         ::
 
-            @register_event("room.message.danmaku")
+            @register_event(CoreEvents.ROOM_MESSAGE_DANMAKU)
             class RoomMessagePayload(BaseModel): ...
 
 
             assert RoomMessagePayload._registered_event_name == "room.message.danmaku"
 
 
-            @register_event("live.started")
-            @register_event("live.ended")
+            @register_event(CoreEvents.LIVE_STARTED)
+            @register_event(CoreEvents.LIVE_ENDED)
             class LivePayload(BasePayload): ...
     """
 
     def decorator(cls: T) -> T:
+        if event_name not in CoreEvents.ALL_EVENTS and not event_name.startswith("test."):
+            raise ValueError(
+                f"事件名 '{event_name}' 未在 CoreEvents（names.py）登记；"
+                "事件名以 CoreEvents 常量为唯一事实源，请先在 names.py 增补常量"
+            )
         existing = EVENT_REGISTRY.get(event_name)
         if existing is not None and existing is not cls:
             raise ValueError(f"事件 '{event_name}' 已被注册为 {existing.__name__}，不能再次注册为 {cls.__name__}")

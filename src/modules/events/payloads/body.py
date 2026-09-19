@@ -18,6 +18,7 @@ from typing import ClassVar, Literal
 
 from pydantic import ConfigDict, Field
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
 from src.modules.time_utils import now_ms
@@ -35,14 +36,14 @@ BodyKind = Literal[
 ]
 
 
-@register_event("game.body.attacked")
-@register_event("game.body.attack_ended")
-@register_event("game.body.died")
-@register_event("game.body.respawned")
-@register_event("game.body.reflex_started")
-@register_event("game.body.reflex_finished")
-@register_event("game.body.dimension_changed")
-@register_event("game.body.unknown")
+@register_event(CoreEvents.GAME_BODY_ATTACKED)
+@register_event(CoreEvents.GAME_BODY_ATTACK_ENDED)
+@register_event(CoreEvents.GAME_BODY_DIED)
+@register_event(CoreEvents.GAME_BODY_RESPAWNED)
+@register_event(CoreEvents.GAME_BODY_REFLEX_STARTED)
+@register_event(CoreEvents.GAME_BODY_REFLEX_FINISHED)
+@register_event(CoreEvents.GAME_BODY_DIMENSION_CHANGED)
+@register_event(CoreEvents.GAME_BODY_UNKNOWN)
 class BodyEventPayload(BasePayload):
     """AI 玩家身体事件（已分类、已叙事化）。
 
