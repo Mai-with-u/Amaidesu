@@ -1,4 +1,4 @@
-"""ADR-006 SimulatorService 组合根装配测试。
+"""SimulatorService 组合根装配测试。
 
 测试目标：验证 main.create_app_components 中 SimulatorService 装配契约：
 
@@ -69,7 +69,7 @@ def config_service_factory(tmp_path: Path):
 
 
 class TestSimulatorWiring:
-    """SimulatorService 组合根装配契约测试（ADR-006）。"""
+    """SimulatorService 组合根装配契约测试。"""
 
     @pytest.fixture(autouse=True)
     def _stub_llm_setup(self, monkeypatch: pytest.MonkeyPatch) -> None:

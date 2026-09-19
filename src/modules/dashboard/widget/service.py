@@ -2,10 +2,9 @@
 弹幕小部件服务。
 
 订阅 ``room.message.*`` 四种语义域事件（弹幕/礼物/SC/进场）并广播给前端
-WebSocket 客户端；字幕显示由字幕基础设施 ``SubtitleService`` 通过
-``DashboardBackend`` 驱动——本服务暴露 ``show_subtitle`` /
-``clear_subtitle`` 公开方法供 Backend 调用，自身仅做弹幕叠加，不订阅
-``planner.checkpoint`` 等业务事件做字幕拉取。
+WebSocket 客户端。本服务的订阅面收敛在 ``room.message.*``；字幕显示由
+字幕基础设施 ``SubtitleService`` 通过 ``DashboardBackend`` 驱动——本服务
+暴露 ``show_subtitle`` / ``clear_subtitle`` 公开方法供 Backend 调用。
 """
 
 from collections import deque

@@ -4,7 +4,6 @@ ConsoleInputCollector —— 控制台输入采集器
 - 继承 ``BaseCollector``（流型感知者）
 - 支持命令：exit() / /gift / /sc / /guard / /help
 - 主动推事件：start() 开后台任务读 stdin → emit room.message.*（volatile）
-- 保留 ``collect()`` AsyncIterator 出口兼容旧 InputCollectorManager
 """
 
 from __future__ import annotations
@@ -82,23 +81,6 @@ class ConsoleInputCollector(BaseCollector):
         # 主动推事件：后台输入循环任务
         self._input_task: Optional[asyncio.Task] = None
         self._input_lock = asyncio.Lock()
-
-    # ------------------------------------------------------------------
-    # 旧 InputCollectorManager 兼容接口
-    # ------------------------------------------------------------------
-
-    def stream(self) -> AsyncIterator[RoomMessagePayload]:
-        if not self.is_started:
-            raise RuntimeError("Collector 未启动，请先调用 start()")
-
-        async def _generate():
-            try:
-                async for message in self.collect():
-                    yield message
-            finally:
-                self.is_started = False
-
-        return _generate()
 
     async def start(self) -> None:
         """启动：开后台任务循环 stdin → emit room.message.*（主动推）。"""

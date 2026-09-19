@@ -3,7 +3,6 @@ BiliDanmakuOfficialCollector —— Bilibili 官方弹幕采集器
 
 - 继承 ``BaseCollector``（流型感知者，世界→系统入口，主动推事件）
 - 默认 emit ``room.message.*`` 语义域事件（danmaku/gift/super_chat/guard/enter）
-- 仍保留 ``collect()`` AsyncIterator 出口，供旧 InputCollectorManager 过渡期复用
 """
 
 from __future__ import annotations
@@ -44,8 +43,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
     """Bilibili 官方弹幕采集器
 
     使用官方 WebSocket API 实时接收弹幕/SC/礼物/上舰/进房事件，emit
-    ``room.message.*`` 语义域事件（默认）；同时仍 yield 事件载荷
-    以兼容旧 InputCollectorManager 过渡期。
+    ``room.message.*`` 语义域事件（默认）；``collect()`` 由 BaseCollector 后台任务消费。
     """
 
     name = "bili_danmaku_official"
@@ -92,7 +90,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         self.message_type_config = BiliMessageTypeConfig(self.config)
 
         self.websocket_client: Optional[BiliWebSocketClient] = None
-        self.is_started = False  # 兼容旧 InputCollectorManager 的 is_started 检查
+        self.is_started = False  # CollectorManager 以本标志判定运行态
 
         # context_tags 处理
         self.context_tags: Optional[list] = self.typed_config.context_tags
@@ -113,24 +111,6 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 self.logger.warning(
                     "BiliDanmakuOfficial 配置启用了 template_info，但在 config/input.toml 中未找到 template_items。"
                 )
-
-    # ------------------------------------------------------------------
-    # 旧 InputCollectorManager 兼容接口
-    # ------------------------------------------------------------------
-
-    def stream(self) -> AsyncIterator[RoomMessagePayload]:
-        """返回 room.message.* 事件载荷流（旧 InputCollectorManager 过渡期使用）"""
-        if not self.is_started:
-            raise RuntimeError("Collector 未启动，请先调用 start()")
-
-        async def _generate():
-            try:
-                async for message in self.collect():
-                    yield message
-            finally:
-                self.is_started = False
-
-        return _generate()
 
     async def start(self) -> None:
         """启动：开后台任务消费 collect()（内部 emit room.message.*）。"""

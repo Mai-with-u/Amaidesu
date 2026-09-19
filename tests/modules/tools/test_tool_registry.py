@@ -446,7 +446,7 @@ async def test_invoke_without_event_bus_skips_emit(registry: ToolRegistry) -> No
 
 
 # =============================================================================
-# 可见名单（visible_to，ADR-012）
+# 可见名单（visible_to，fail-closed）
 #
 # - 注册处逐工具声明（值 = Agent 注册名列表或 ["*"]；未声明默认全员）
 # - for_agent 按名单计算工具列表；不传 for_agent = 运营全集
@@ -541,7 +541,7 @@ async def test_invoke_not_in_visible_list_is_not_blocked(registry: ToolRegistry)
     """名单只管可见性：不在名单内的 Agent 编名直调仍按"已知工具"路径执行。
 
     LLM 幻觉编名直调保留工具是已知的受众治理边界，此测试固定该契约
-    （与 ADR-009/012 的 invoke 不查身份一致）。
+    （invoke 调用期不查身份，可见名单在注册期收敛）。
     """
     provider = _SampleProvider()
     registry.register_provider(provider, visible_to={"game_p_a": ["minecraft"]})

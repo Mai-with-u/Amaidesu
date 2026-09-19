@@ -1,4 +1,4 @@
-"""思考流旁路通道测试（ADR-008）。
+"""思考流旁路通道测试。
 
 覆盖：
 - ThinkingStreamContext：reasoning 转发 + seq 递增 + content 丢弃 + 多阶段

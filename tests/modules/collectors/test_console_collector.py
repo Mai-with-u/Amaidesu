@@ -35,11 +35,11 @@ def test_console_metadata() -> None:
     assert "控制台" in ConsoleInputCollector.description
 
 
-def test_console_has_old_compat_interface() -> None:
-    """旧 InputCollectorManager 兼容接口存在"""
-    methods = ("start", "stop", "cleanup", "stream", "collect")
+def test_console_standard_interface() -> None:
+    """采集器标准接口完整"""
+    methods = ("start", "stop", "cleanup", "collect")
     for m in methods:
-        assert hasattr(ConsoleInputCollector, m), f"缺少兼容方法 {m}"
+        assert hasattr(ConsoleInputCollector, m), f"缺少标准方法 {m}"
 
 
 def test_console_config_defaults() -> None:

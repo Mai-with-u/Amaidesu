@@ -1,4 +1,4 @@
-"""StreamerAgent 思考流端到端接线测试（ADR-008）。
+"""StreamerAgent 思考流端到端接线测试（思考流旁路，不经 LLM 工具表）。
 
 链路：thinking_sink 注入 → _decide_round 构造 ThinkingStreamContext →
 Planner.plan → LLM on_delta → sink 收到组装后的增量。

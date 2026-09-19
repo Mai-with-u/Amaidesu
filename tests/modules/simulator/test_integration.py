@@ -1,4 +1,4 @@
-"""SimulatorService 集成测试（ADR-006）
+"""SimulatorService 集成测试
 
 测试目标：验证 SimulatorService 作为"开发基础设施"的真实行为契约：
 

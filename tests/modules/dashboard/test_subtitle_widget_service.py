@@ -1,4 +1,4 @@
-"""测试 DanmakuWidgetService 字幕公开方法 + 不再订阅 planner.checkpoint
+"""测试 DanmakuWidgetService 弹幕叠加与字幕公开方法
 
 覆盖：
 
@@ -10,8 +10,8 @@
   消息（``text == ""`` 且 ``duration_ms == 0``）
 - ``subtitle_config.enabled=False`` 时 ``show_subtitle`` /
   ``clear_subtitle`` 不广播（仅 ``clear_subtitle`` 内部清理 deque）
-- ``start()`` 不再订阅 ``planner.checkpoint`` 事件（历史 handler
-  永远 ``return``——``CheckpointPayload`` 无 ``speech`` 字段）
+- ``start()`` 订阅面收敛在 ``room.message.*``（弹幕叠加是本服务唯一
+  订阅职责，字幕显示由 ``SubtitleService`` 驱动）
 """
 
 from __future__ import annotations
@@ -137,22 +137,20 @@ class TestClearSubtitle:
 
 
 # ---------------------------------------------------------------------------
-# start() / stop()：不再订阅 planner.checkpoint
+# start() / stop()：订阅面收敛在 room.message.*
 # ---------------------------------------------------------------------------
 
 
 class TestSubscriptions:
     @pytest.mark.asyncio
-    async def test_start_does_not_subscribe_planner_checkpoint(self):
-        """``start()`` 仅订阅 ``room.message.danmaku``，不再订阅
-        ``planner.checkpoint``（字幕源已迁移到 ``SubtitleService``）。"""
+    async def test_start_does_not_subscribe_other_domains(self):
+        """``start()`` 订阅面收敛在 ``room.message.*``：业务决策/流程单域
+        事件不进本服务（字幕显示由 ``SubtitleService`` 驱动）。"""
         svc = _make_service()
         await svc.start()
 
-        # 字幕订阅由 SubtitleService 主动驱动，EventBus 上不应再有
-        # planner.checkpoint 的处理器
-        handlers = svc.event_bus._handlers.get("planner.checkpoint", [])
-        assert len(handlers) == 0
+        for outsider in ("planner.decision", "streamer.speech", "rundown.changed"):
+            assert len(svc.event_bus._handlers.get(outsider, [])) == 0
 
         await svc.stop()
 

@@ -2,7 +2,6 @@
 STTCollector —— 语音转文字采集器
 
 - 继承 ``BaseCollector``（流型感知者）
-- 保留 ``collect()`` AsyncIterator 出口兼容旧 InputCollectorManager
 - 技术栈：讯飞 WebSocket 流式 ASR、Silero VAD、音频采集
 """
 
@@ -218,23 +217,6 @@ class STTCollector(BaseCollector):
             self.logger.error(f"查找音频设备时出错: {e}", exc_info=True)
 
         return None
-
-    # ------------------------------------------------------------------
-    # 旧 InputCollectorManager 兼容接口
-    # ------------------------------------------------------------------
-
-    def stream(self) -> AsyncIterator[RoomMessagePayload]:
-        if not self.is_started:
-            raise RuntimeError("Collector 未启动，请先调用 start()")
-
-        async def _generate():
-            try:
-                async for message in self.collect():
-                    yield message
-            finally:
-                self.is_started = False
-
-        return _generate()
 
     async def start(self) -> None:
         """启动：开后台任务消费 collect()（collect 内直发 room.message.*）。"""

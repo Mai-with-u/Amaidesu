@@ -1,4 +1,4 @@
-"""委派原语集成测试（framework_delegate / framework_task_status，ADR-013）。
+"""委派原语集成测试（framework_delegate / framework_task_status）。
 
 覆盖：
 - 委派全程：回执 accepted+task_id → 状态推进（task.changed 按发起方过滤）→

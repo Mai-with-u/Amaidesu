@@ -1,4 +1,4 @@
-"""StreamPreviewHub 测试：缓冲 + 合帧推送 + 生命周期（ADR-008）。"""
+"""StreamPreviewHub 测试：缓冲 + 合帧推送 + 生命周期。"""
 
 from __future__ import annotations
 

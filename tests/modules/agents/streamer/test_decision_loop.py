@@ -168,7 +168,7 @@ async def test_decision_loop_danmaku_to_reply_provider():
 
     reply 是真工具：注册进 ToolRegistry（名单 [streamer]）；Planner 循环内暂仍经
     _reply_provider.invoke 直连（调用统一在后续任务收口）。proactive/command 是
-    代码直连的内部件，不注册（§5 判据）。
+    代码直连的内部件，不注册——无自身过程与推进权，属被动原语。
     """
     agent, bus, registry, llm, prompt = _setup_agent()
 

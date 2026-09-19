@@ -588,5 +588,4 @@ class EventBus:
         序列化结果做整类重复验证；仅对未注册事件写一条 debug 提示。
         """
         if EventRegistry.get(event_name) is None:
-            if not event_name.startswith("plugin.") and not event_name.startswith("internal."):
-                self.logger.debug(f"未注册的非插件事件: {event_name}")
+            self.logger.debug(f"未注册 Payload 的事件名 emit: {event_name}")

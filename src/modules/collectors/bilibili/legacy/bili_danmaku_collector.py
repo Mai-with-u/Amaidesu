@@ -3,7 +3,6 @@ BiliDanmakuCollector —— Bilibili 旧版弹幕采集器
 
 - 与官方版（``official/``）并列保留，旧版 WebSocket 作为备选采集器
 - 继承 ``BaseCollector``，emit ``room.message.danmaku`` 语义事件
-- 保留 ``collect()`` AsyncIterator 出口，供旧 InputCollectorManager 过渡期
 """
 
 from __future__ import annotations
@@ -49,7 +48,7 @@ class BiliDanmakuCollector(BaseCollector):
     """Bilibili 直播弹幕采集器（轮询旧版 API）
 
     通过轮询 Bilibili 旧版 API 获取直播间弹幕，emit ``room.message.danmaku``
-    语义事件；保留 ``collect()`` AsyncIterator 出口兼容旧 InputCollectorManager。
+    语义事件；``collect()`` 由 BaseCollector 后台任务消费。
     """
 
     name = "bili_danmaku"
@@ -98,24 +97,6 @@ class BiliDanmakuCollector(BaseCollector):
         self._latest_timestamp_s: float = time.time()
         self._session: Optional[aiohttp.ClientSession] = None
         self.is_started: bool = False
-
-    # ------------------------------------------------------------------
-    # 旧 InputCollectorManager 兼容接口
-    # ------------------------------------------------------------------
-
-    def stream(self) -> AsyncIterator[RoomMessagePayload]:
-        """返回事件载荷数据流（旧 InputCollectorManager 过渡期）"""
-        if not self.is_started:
-            raise RuntimeError("Collector 未启动，请先调用 start()")
-
-        async def _generate():
-            try:
-                async for message in self.collect():
-                    yield message
-            finally:
-                self.is_started = False
-
-        return _generate()
 
     async def start(self) -> None:
         """启动：开后台任务消费 collect()（内部 emit room.message.*）。"""

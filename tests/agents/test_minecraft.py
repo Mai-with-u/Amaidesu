@@ -1382,7 +1382,7 @@ def _patch_mcp(monkeypatch: pytest.MonkeyPatch, provider_cls: type) -> Dict[str,
 @pytest.mark.asyncio
 async def test_on_start_binds_agent_owned_mcp_with_visible_list(monkeypatch: pytest.MonkeyPatch) -> None:
     """_on_start 启用 mcp 时：McpClient/McpToolProvider 被实例化、setup 调用、
-    工具以逐工具可见名单（ADR-012，fail-closed）注册进 ToolRegistry：
+    工具以逐工具可见名单（fail-closed）注册进 ToolRegistry：
     读工具 perceive 给主播+自己；执行类仅 minecraft；域内查询照常可见。"""
     _patch_mcp(monkeypatch, _FakeMcpProvider)
 
