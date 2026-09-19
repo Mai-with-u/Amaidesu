@@ -1,7 +1,8 @@
 # Bilibili WebSocket 协议处理器
 
-import logging
 import struct
+
+from src.modules.logging import get_logger
 
 
 class Proto:
@@ -15,7 +16,7 @@ class Proto:
         self.seq = 0
         self.body = ""
         self.max_body = 2048
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger("Proto")
 
     def pack(self) -> bytes:
         """打包消息"""

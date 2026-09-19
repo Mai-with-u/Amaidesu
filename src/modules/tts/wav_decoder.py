@@ -3,12 +3,13 @@ WAV 解码工具模块
 """
 
 import base64
-import logging
 from typing import Optional
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+from src.modules.logging import get_logger
+
+logger = get_logger("WavDecoder")
 
 
 def extract_pcm_from_wav(wav_data: bytes) -> bytes:
