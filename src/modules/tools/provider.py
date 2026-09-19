@@ -174,6 +174,10 @@ class BaseToolProvider(ABC):
     # tools.toml 段 = 配置地址。子类可覆写具体值；默认空串（未分类）。
     category: ClassVar[str] = ""
 
+    # 最近一次连接失败摘要（``connect`` 失败时写、成功时清空）。仅供运营面
+    # 展示降级原因；无连接语 Provider 恒为空串。
+    last_error: str = ""
+
     @abstractmethod
     def list_tools(self) -> Iterable[ToolSpec]:
         """列出本 Provider 暴露的所有 ToolSpec——子类必须实现。"""

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.mcp import mapper
@@ -47,7 +47,14 @@ class McpToolProvider(BaseToolProvider):
         attention_read_tool: 可选——server 侧注意流读取工具的**全名**；
             提供后 ``read_attention`` 按游标增量读一页事件
         attention_read_arguments: 可选——读取该工具所需的固定入参
-            （server 特有参数形状由绑定处声明，本类只补游标与页大小）
+            （绑定处声明，本类只补游标与页大小）
+        on_tools_refreshed: 可选——工具清单（重）同步成功后的回调
+            ``(count) -> None``（构造后由绑定处赋值）；初次装配 / 降级恢复 /
+            手动重连三条路径统一经它触发适配器（重）绑定
+        switch_config: 可选——提供者开关的配置地址
+            （``{"file": "agents.toml", "key": "agents.minecraft.mcp.enabled"}``，
+            构造后由绑定处赋值）；Agent 私有 MCP 的开关不在 tools.toml，
+            工具页据此渲染开关并把写回路由到正确文件
     """
 
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
@@ -83,6 +90,10 @@ class McpToolProvider(BaseToolProvider):
         self._notification_unsubscribe: Optional[Any] = None
         self._specs: List[ToolSpec] = []
         self._synced = False
+        # 与 task_query_tool 同一约定：绑定处要等 setup() 拉到清单（或决定降级
+        # 重试）后才能赋值，只能在构造之后声明，故为公开属性
+        self.on_tools_refreshed: Optional[Callable[[int], None]] = None
+        self.switch_config: Optional[Dict[str, str]] = None
 
     @property
     def name(self) -> str:
@@ -93,7 +104,9 @@ class McpToolProvider(BaseToolProvider):
         """连接并预拉工具列表 → 填充缓存 specs（装配时调用一次）。
 
         Returns:
-            缓存的工具数量；连接失败时为 0（list_tools 返回空）
+            缓存的工具数量；连接失败时为 0（list_tools 返回空）。
+            数量 > 0 时经 ``on_tools_refreshed`` 回调绑定处——适配器绑定与
+            降级恢复收尾统一走这一个入口，初次装配与后台重试不分叉。
         """
         if not self._client.connected:
             ok = await self._client.connect()
@@ -102,7 +115,16 @@ class McpToolProvider(BaseToolProvider):
                 logger.debug(f"MCP Provider '{self.server_name}' 连接失败，工具列表为空")
                 self._specs = []
                 self._synced = True
+                self.last_error = self._client.last_connect_error or "连接失败"
                 return 0
+        self.last_error = ""
+        count = await self._sync_specs()
+        if count > 0:
+            self._notify_refreshed(count)
+        return count
+
+    async def _sync_specs(self) -> int:
+        """拉取 server 工具清单并刷新本地 specs 缓存。返回缓存数量。"""
         tools = await self._client.list_tools()
         self._specs = [mapper.to_spec(t, provider=self._provider) for t in tools]
         self._synced = True
@@ -110,6 +132,19 @@ class McpToolProvider(BaseToolProvider):
             f"MCP Provider '{self.server_name}' 工具缓存就绪（{len(self._specs)} 个，provider={self._provider}）"
         )
         return len(self._specs)
+
+    def _notify_refreshed(self, count: int) -> None:
+        """通知绑定处工具清单已（重）同步；回调异常只记日志不推翻同步结果。"""
+        callback = self.on_tools_refreshed
+        if callback is None:
+            return
+        try:
+            callback(count)
+        except Exception as exc:  # noqa: BLE001 - 绑定处异常不推翻清单同步
+            logger.error(
+                f"MCP Provider '{self.server_name}' on_tools_refreshed 回调异常: {type(exc).__name__}: {exc}",
+                exc_info=True,
+            )
 
     def list_tools(self) -> Iterable[ToolSpec]:
         """同步返回缓存的 ToolSpec（连接时预拉；未 setup 时为空）。"""
@@ -305,11 +340,14 @@ class McpToolProvider(BaseToolProvider):
         """
         if self._client.connected:
             logger.info(f"MCP Provider '{self.server_name}' 已连接，跳过手动 connect")
+            self.last_error = ""
             return True
         ok = await self._client.connect()
         if ok:
+            self.last_error = ""
             logger.info(f"MCP Provider '{self.server_name}' 手动连接成功")
         else:
+            self.last_error = self._client.last_connect_error or "连接失败"
             logger.warning(f"MCP Provider '{self.server_name}' 手动连接失败（详见 McpClient 日志）")
         return ok
 
@@ -322,6 +360,26 @@ class McpToolProvider(BaseToolProvider):
         """
         logger.info(f"MCP Provider '{self.server_name}' 手动断开连接")
         await self._client.close()
+        return True
+
+    async def reconnect(self) -> bool:
+        """手动重连：断开通道 → 重建连接 → 重拉工具清单（specs 缓存换血）。
+
+        基类默认组合只管通道；MCP 的工具清单是**连接时预拉缓存**——降级
+        登记（0 工具）与 server 侧清单变化都靠本方法重拉，重拉后经
+        ``refresh_provider_tools``（registry 侧）与 ``on_tools_refreshed``
+        （绑定侧适配器重绑定）两侧各就各位。清单拉到但为空视为重连未成
+        （server 在但未暴露工具），返回 False 交上层按失败处理。
+        """
+        await self.disconnect()
+        if not await self.connect():
+            return False
+        count = await self._sync_specs()
+        if count == 0:
+            self.last_error = "server 已连接但未暴露任何工具"
+            logger.warning(f"MCP Provider '{self.server_name}' 重连成功但 server 未暴露工具")
+            return False
+        self._notify_refreshed(count)
         return True
 
 

@@ -28,7 +28,7 @@ import asyncio
 import inspect
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Literal, Optional, Union
 
 from src.modules.events.payloads.tool_health import ToolHealthPayload
 from src.modules.events.payloads.tool_result import ToolResultPayload
@@ -46,6 +46,11 @@ if TYPE_CHECKING:
 
 # 工具实现签名：接受 ToolInvocation，返回 await ToolExecutionResult
 ToolImplCallable = Callable[[ToolInvocation], Awaitable[ToolExecutionResult]]
+
+# 可见名单来源：静态名单 dict，或按工具集重新派生名单的策略 callable。
+# fail-closed 名单必须走策略形态——工具集刷新时对新工具重跑派生，
+# 否则新工具落"未列出 = 全员"默认，会对所有 Agent 泄露可见性。
+VisibleToSource = Union[Dict[str, List[str]], Callable[[List[ToolSpec]], Dict[str, List[str]]]]
 
 
 logger = get_logger("ToolRegistry")
@@ -149,6 +154,12 @@ class ToolRegistry:
         # 值为 Agent 注册名列表或 ["*"]；只约束可见性（for_agent 计算），
         # invoke 不校验（编名直调是已知边界）。
         self._visible_to: Dict[str, List[str]] = {}
+        # 提供者名 → 可见名单来源（静态 dict 或 ``(specs) -> dict`` 策略
+        # callable）。名单是注册期的快照，工具集刷新（refresh_provider_tools）
+        # 时需要按来源对**新**工具集重新派生名单——尤其 fail-closed 名单：
+        # 新出现的工具若套用旧快照 + "未列出 = 全员"默认，会对所有 Agent
+        # 泄露可见性，因此策略必须可重跑而非存快照。
+        self._visible_to_source: Dict[str, Any] = {}
 
     # -------------------- 注册 --------------------
 
@@ -171,7 +182,7 @@ class ToolRegistry:
         self,
         provider: ToolProvider,
         *,
-        visible_to: Optional[Dict[str, List[str]]] = None,
+        visible_to: Optional[VisibleToSource] = None,
     ) -> int:
         """注册一个 Provider 的全部工具。返回新注册数（去重不计）。
 
@@ -179,20 +190,24 @@ class ToolRegistry:
         唯一实现见 ``ToolSpec.full_name``）；spec **原样存储**（声明名保持
         裸名，不做任何改名拷贝）。provider 自声明的 ``category`` 一并记录
         （按 spec.provider 提供者名归组，供 ``list_categories()`` /
-        ``list_tools(category=)`` 查询）。
+        ``list_tools(category=)`` 查询）。0 工具的 Provider 也照常登记
+        （降级登记：连接失败的 MCP provider 先占位，恢复后经
+        ``refresh_provider_tools`` 补注册）。
 
         提供者单名校验（fail-fast）：Provider 的 ``name`` 必须与其全部
         spec 的 ``provider`` 同值（同值同源）——不一致直接抛 ``ValueError``。
         这是"一个提供者一个短名"的注册期保证；探活/关闭/归属仍按对象
         引用（``_tool_owner``）工作，不依赖字符串。
 
-        可见名单（``visible_to``，生产侧声明）：键 = 本次注册项声明的**工具
-        全名**，值 = 可见的 Agent 注册名列表或 ``["*"]``（全员）。校验
-        fail-fast：值非空且元素为非空字符串、``"*"`` 只能单独出现、键必须
-        命中本注册项声明的工具全名（拼错即报错）。**未列出的工具默认
-        ``["*"]``**（共享常态，全局注册零负担）。名单只约束可见性
-        （``list_tools(for_agent=...)`` 按它计算工具列表）；``invoke()``
-        不校验——LLM 幻觉编名直调保留工具是已知的受众治理边界。
+        可见名单（``visible_to``，生产侧声明）：静态 dict 键 = 本次注册项
+        声明的**工具全名**，值 = 可见的 Agent 注册名列表或 ``["*"]``（全员）；
+        或传 ``(specs) -> dict`` **策略 callable**——注册期先对当前工具集
+        求值出静态名单，来源保存供 ``refresh_provider_tools`` 对新工具集
+        重新派生。校验 fail-fast：值非空且元素为非空字符串、``"*"`` 只能
+        单独出现、键必须命中本注册项声明的工具全名（拼错即报错）。
+        **未列出的工具默认 ``["*"]``**（共享常态，全局注册零负担）。名单只
+        约束可见性（``list_tools(for_agent=...)`` 按它计算工具列表）；
+        ``invoke()`` 不校验——LLM 幻觉编名直调保留工具是已知的受众治理边界。
 
         迁移完整性提示：传入对象非 ``BaseToolProvider`` 子类时记 WARNING
         （每次注册都记——迁移未完成的持续信号，提示补齐 BaseToolProvider 继承）。
@@ -210,7 +225,8 @@ class ToolRegistry:
                 f"但声明了不同的 provider 值 [{detail}]"
             )
         declared_full_names = {s.full_name for s in specs}
-        validated_lists = self._validate_visible_to(visible_to, declared_full_names)
+        visible_map = visible_to(specs) if callable(visible_to) else visible_to
+        validated_lists = self._validate_visible_to(visible_map, declared_full_names)
         if not isinstance(provider, BaseToolProvider):
             logger.warning(
                 f"Provider '{provider.name}'（class={type(provider).__name__}）"
@@ -218,7 +234,11 @@ class ToolRegistry:
                 "请继承 BaseToolProvider 并按需覆写 health_check"
             )
         self._providers.append(provider)
+        # 名单来源原样保存（dict / callable）：工具集刷新时按来源对新工具集重派名单
+        self._visible_to_source[provider.name] = visible_to
         category = getattr(provider, "category", "") or ""
+        # 分类在登记期就落账（0 工具降级登记也要可见于分类目录）
+        self._record_category(provider.name, category)
         new_count = 0
         for spec in specs:
             registered_name = spec.full_name
@@ -265,8 +285,122 @@ class ToolRegistry:
             self._visible_to.pop(name, None)
             self._health.pop(name, None)
         self._categories.pop(provider.name, None)
+        self._visible_to_source.pop(provider.name, None)
         logger.info(f"Provider '{provider.name}' 已移除（摘除 {len(owned)} 个工具，总数={len(self._tools)}）")
         return len(owned)
+
+    def refresh_provider_tools(self, provider: ToolProvider) -> Dict[str, Any]:
+        """重新登记已注册 Provider 的工具集（连接恢复 / 工具清单变化后的补注册）。
+
+        与 ``register_provider`` 的分工：register 是首次装配（新增 Provider），
+        refresh 是**常驻登记前提下的工具集换血**——摘除该 Provider 名下旧条目
+        （工具 / 归属 / 可见名单；消失的工具连带清除熔断状态，存续工具保留
+        "熔断待探活复位"），按 provider 当前 ``list_tools()`` 结果重新登记。
+        Provider 对象与其分类记录保留（``_providers`` 不动）。
+        可见名单按注册时保存的来源重新派生：策略 callable 对新工具集重跑
+        （fail-closed 名单的正确形态）；静态 dict 过滤掉已消失的工具键后沿用
+        （键全靠手工维护的共享名单，新工具落"未列出 = 全员"默认）。
+
+        前提：provider 自身的 specs 缓存已先行刷新（如 ``McpToolProvider``.
+        ``reconnect`` 重拉工具清单后）才调用本方法。
+
+        Returns:
+            ``{"ok": True, "provider_id", "added": [新登记全名],
+            "removed": [已消失全名], "count": 该 Provider 当前工具总数}``；
+            未注册 → ``{"ok": False, "error": ...}``。名单派生非法
+            （校验不过）抛 ``ValueError``，由调用方兜底。
+        """
+        if provider not in self._providers:
+            logger.warning(f"工具集刷新失败：未注册 Provider '{provider.name}'")
+            return {"ok": False, "error": f"未注册 Provider: {provider.name}"}
+        specs = list(provider.list_tools())
+        mismatched = [s for s in specs if s.provider != provider.name]
+        if mismatched:
+            detail = ", ".join(f"spec({s.provider!r}, {s.name!r})" for s in mismatched)
+            return {
+                "ok": False,
+                "error": f"Provider 名与其 spec.provider 必须同值同源: [{detail}]",
+            }
+        declared_full_names = {s.full_name for s in specs}
+        old_names = self._tools_owned_by(provider)
+        new_names = declared_full_names
+        for name in old_names:
+            self._tools.pop(name, None)
+            self._tool_owner.pop(name, None)
+            self._visible_to.pop(name, None)
+            if name not in new_names:
+                # 熔断历史只随工具消失而清除；存续工具保留"待探活复位"状态，
+                # 不能借刷新把"熔断待核实"洗成"健康"（reconnect 流程随后探活）
+                self._health.pop(name, None)
+        # 分类落账保鲜（0 工具换血也不丢分类归属）
+        category = getattr(provider, "category", "") or ""
+        self._record_category(provider.name, category)
+        source = self._visible_to_source.get(provider.name)
+        if callable(source):
+            validated_lists = self._validate_visible_to(source(specs), declared_full_names)
+        elif isinstance(source, dict):
+            stale = [k for k in source if k not in declared_full_names]
+            if stale:
+                logger.warning(f"Provider '{provider.name}' 静态可见名单含已消失的工具键（已忽略）: {sorted(stale)}")
+            validated_lists = self._validate_visible_to(
+                {k: v for k, v in source.items() if k in declared_full_names},
+                declared_full_names,
+            )
+        else:
+            validated_lists = None
+        # added 语义 = 新旧集合差（不是注册器去重计数——换血路径旧条目已摘除，
+        # 存续工具也会重新走一遍 register）
+        added = [n for n in new_names if n not in set(old_names)]
+        for spec in specs:
+            registered_name = spec.full_name
+            self.register(spec, provider.invoke)
+            if isinstance(provider, BaseToolProvider):
+                self._tool_owner[registered_name] = provider
+            if validated_lists is not None:
+                self._visible_to[registered_name] = validated_lists[registered_name]
+        removed = [n for n in old_names if n not in declared_full_names]
+        logger.info(
+            f"Provider '{provider.name}' 工具集已刷新"
+            f"（旧 {len(old_names)} → 新 {len(specs)}，新增 {len(added)}，移除 {len(removed)}）"
+        )
+        return {
+            "ok": True,
+            "provider_id": provider.name,
+            "added": added,
+            "removed": removed,
+            "count": len(specs),
+        }
+
+    def list_providers(self) -> List[Dict[str, Any]]:
+        """列出全部已登记 Provider 的运营摘要（工具页提供者卡片数据源）。
+
+        每项：``name`` / ``category``（自声明，未声明空串）/ ``tool_count``
+        （当前登记工具数，含停用与熔断）/ ``disabled_count`` /
+        ``supports_reconnect`` / ``last_error``（Provider 侧最近一次连接失败
+        摘要，无则空串）/ ``switch``（提供者开关地址声明，如 Agent 私有
+        MCP 的 ``{"file", "key"}``，未声明为 None）。**0 工具的 Provider
+        也在列**——降级登记（连接失败）的 Provider 靠这条在工具页保持
+        可见、可手动重连。
+        """
+        result: List[Dict[str, Any]] = []
+        for p in self._providers:
+            owned = [name for name, owner in self._tool_owner.items() if owner is p]
+            if not owned:
+                # 非 BaseToolProvider 注册无归属记录：按 spec.provider 名兜底
+                owned = [name for name, (spec, _) in self._tools.items() if spec.provider == p.name]
+            switch = getattr(p, "switch_config", None)
+            result.append(
+                {
+                    "name": p.name,
+                    "category": self._categories.get(p.name, ""),
+                    "tool_count": len(owned),
+                    "disabled_count": sum(1 for n in owned if n in self._disabled),
+                    "supports_reconnect": isinstance(p, BaseToolProvider) and bool(p.supports_reconnect),
+                    "last_error": str(getattr(p, "last_error", "") or ""),
+                    "switch": dict(switch) if isinstance(switch, dict) else None,
+                }
+            )
+        return result
 
     @staticmethod
     def _validate_visible_to(
@@ -759,6 +893,17 @@ class ToolRegistry:
                 "provider_id": provider_id,
             }
 
+        # 重连成功先刷新工具集（MCP 降级登记 0 工具 → 重连后补注册；server
+        # 侧清单变化 → 换血），再对归属工具做熔断探活复位
+        try:
+            refresh = self.refresh_provider_tools(provider)
+        except Exception as exc:  # noqa: BLE001 - 刷新异常不推翻重连成果，报告携带原因
+            logger.error(
+                f"Provider '{provider_id}' 重连后工具集刷新异常: {type(exc).__name__}: {exc}",
+                exc_info=True,
+            )
+            refresh = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
         recovered: List[str] = []
         still_tripped: List[str] = []
         for tool_name in self._tools_owned_by(provider):
@@ -772,12 +917,20 @@ class ToolRegistry:
         logger.info(
             f"Provider '{provider_id}' 重连成功，恢复 {len(recovered)} 个熔断工具"
             + (f"，仍有 {len(still_tripped)} 个未通过探活" if still_tripped else "")
+            + (f"，工具集新增 {len(refresh.get('added', []))} 个" if refresh.get("ok") else "")
         )
         return {
             "ok": True,
             "provider_id": provider_id,
             "recovered": recovered,
             "still_tripped": still_tripped,
+            "refreshed": {
+                "added": refresh.get("added", []),
+                "removed": refresh.get("removed", []),
+                "count": refresh.get("count", 0),
+            }
+            if refresh.get("ok")
+            else None,
         }
 
     async def invoke_many(
@@ -830,6 +983,7 @@ class ToolRegistry:
         self._health.clear()
         self._tool_owner.clear()
         self._visible_to.clear()
+        self._visible_to_source.clear()
         logger.debug("ToolRegistry 已清空")
 
     # 兼容 inspect / debug

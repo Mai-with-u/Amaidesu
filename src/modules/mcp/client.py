@@ -101,6 +101,11 @@ class McpClient:
         """是否已建立连接。"""
         return self._connected
 
+    @property
+    def last_connect_error(self) -> str:
+        """最近一次连接失败的特征串（无失败历史为空串；运营面展示降级原因用）。"""
+        return self._connect_failure
+
     def _build_transport(self) -> Any:
         """构造 FastMCP transport 对象（按配置的传输方式）。
 
