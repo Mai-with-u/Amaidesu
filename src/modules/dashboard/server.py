@@ -5,22 +5,22 @@ Dashboard 服务器主类
 """
 
 import asyncio
-import json
 import socket
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from fastapi import WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import WebSocket
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.modules.agents.control import AgentControl
 from src.modules.dashboard.api.router import create_app, setup_cors
 from src.modules.dashboard.dependencies import set_dashboard_server
 from src.modules.config.core_schemas import DashboardConfig
+from src.modules.dashboard.vite_dev import ViteDevServer
 from src.modules.dashboard.widget import DanmakuWidgetService
 from src.modules.dashboard.widget.models import DanmakuWidgetConfig, SubtitleWidgetConfig
+from src.modules.dashboard.widget.routes import WidgetGateway, create_widget_router
 from src.modules.logging import get_logger
 from src.modules.logging.log_streamer import LogStreamer
 
@@ -122,14 +122,11 @@ class DashboardServer:
         self._external_log_streamer = log_streamer
         self.log_streamer: Optional[LogStreamer] = None
 
-        self.widget_service: Optional[DanmakuWidgetService] = None
-        self._widget_clients: set[WebSocket] = set()
-        self._danmaku_clients: set[WebSocket] = set()
-        self._subtitle_clients: set[WebSocket] = set()
+        self.widget_gateway = WidgetGateway()
 
         self.dev_mode: bool = dashboard_config.dev_mode
         self.vite_dev_port: int = dashboard_config.vite_dev_port
-        self._vite_process: Optional[asyncio.subprocess.Process] = None
+        self._vite_dev: Optional[ViteDevServer] = None
 
     async def start(self) -> None:
         """启动 Dashboard 服务器"""
@@ -206,7 +203,7 @@ class DashboardServer:
             await self.log_streamer.start()
 
         @self.app.websocket("/ws")
-        async def websocket_endpoint(websocket: WebSocket):
+        async def websocket_endpoint(websocket: WebSocket) -> None:
             ws_handler = self.ws_handler
             # 防御: dashboard.cleanup() 可能已把 ws_handler 置 None（孤儿 WS task 场景），
             # 直接调用会抛 AttributeError -> starlette traceback
@@ -228,7 +225,9 @@ class DashboardServer:
         await self._setup_widget_service()
 
         if self.dev_mode:
-            await self._start_vite_dev_server()
+            dashboard_dir = Path(__file__).parent.parent.parent.parent / "dashboard"
+            self._vite_dev = ViteDevServer(dashboard_dir=dashboard_dir, port=self.vite_dev_port)
+            await self._vite_dev.start()
 
         # socket 已预绑定，serve 直接复用，不会再绑定端口
         self._server_task = asyncio.create_task(server.serve(sockets=[bound_socket]))
@@ -279,18 +278,8 @@ class DashboardServer:
         self.logger.info("Dashboard 服务器停止中...")
         self._is_running = False
 
-        # 停止弹幕小部件服务
-        if self.widget_service:
-            await self.widget_service.stop()
-            self.widget_service = None
-
-        # 关闭 widget WebSocket 客户端
-        for client in list(self._widget_clients):
-            try:
-                await client.close()
-            except Exception as e:
-                self.logger.debug(f"关闭 widget WebSocket 客户端失败（已忽略）: {e}")
-        self._widget_clients.clear()
+        # 停止弹幕小部件服务并关闭 widget 客户端
+        await self.widget_gateway.stop()
 
         # 停止日志流广播器
         if self.log_streamer:
@@ -332,8 +321,8 @@ class DashboardServer:
             self._server = None
             self._server_task = None
 
-        if self._vite_process:
-            await self._stop_vite_dev_server()
+        if self._vite_dev:
+            await self._vite_dev.stop()
 
     async def cleanup(self) -> None:
         """清理资源"""
@@ -343,56 +332,11 @@ class DashboardServer:
         self.event_history = None
         self.ws_handler = None
         self.log_streamer = None
-        self.widget_service = None
-        self._widget_clients.clear()
+        self.widget_gateway.reset()
 
     def get_url(self) -> str:
         """获取访问 URL"""
         return f"http://{self.host}:{self.port}"
-
-    async def _start_vite_dev_server(self) -> None:
-        """启动 Vite 开发服务器子进程（开发模式专用）"""
-        dashboard_dir = Path(__file__).parent.parent.parent.parent / "dashboard"
-        if not dashboard_dir.exists():
-            self.logger.error(f"dashboard 目录不存在: {dashboard_dir}")
-            return
-
-        npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
-        self.logger.info(f"开发模式：启动 Vite 开发服务器 (cwd={dashboard_dir}, port={self.vite_dev_port})")
-        try:
-            self._vite_process = await asyncio.create_subprocess_exec(
-                npm_cmd,
-                "run",
-                "dev",
-                cwd=str(dashboard_dir),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            self.logger.info(f"Vite 已启动 (pid={self._vite_process.pid})，访问 http://localhost:{self.vite_dev_port}")
-        except FileNotFoundError:
-            self.logger.error(f"未找到 {npm_cmd}，请先安装 Node.js 与 npm")
-            self._vite_process = None
-        except Exception as e:
-            self.logger.error(f"启动 Vite 失败: {e}")
-            self._vite_process = None
-
-    async def _stop_vite_dev_server(self) -> None:
-        """终止 Vite 开发服务器子进程"""
-        if not self._vite_process:
-            return
-        self.logger.info(f"停止 Vite 开发服务器 (pid={self._vite_process.pid})...")
-        try:
-            self._vite_process.terminate()
-            try:
-                await asyncio.wait_for(self._vite_process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                self.logger.warning("Vite 未在 5s 内退出，强制 kill")
-                self._vite_process.kill()
-                await self._vite_process.wait()
-        except Exception as e:
-            self.logger.error(f"停止 Vite 失败: {e}")
-        finally:
-            self._vite_process = None
 
     async def _run_heartbeat(self) -> None:
         """心跳任务"""
@@ -402,7 +346,7 @@ class DashboardServer:
                 await self.ws_handler.send_heartbeat()
 
     async def _setup_widget_service(self) -> None:
-        """初始化弹幕小部件服务"""
+        """初始化弹幕小部件服务并挂载 widget 族路由"""
         danmaku_widget_config = self.dashboard_config.danmaku_widget
         subtitle_widget_config = self.dashboard_config.subtitle_widget
 
@@ -435,209 +379,24 @@ class DashboardServer:
             position=subtitle_widget_config.position,
         )
 
-        self.widget_service = DanmakuWidgetService(
+        widget_service = DanmakuWidgetService(
             event_bus=self.event_bus,
             config=widget_config,
             subtitle_config=subtitle_config,
         )
+        self.widget_gateway.widget_service = widget_service
+        widget_service.set_danmaku_callback(self.widget_gateway.broadcast_danmaku)
+        widget_service.set_subtitle_callback(self.widget_gateway.broadcast_subtitle)
 
-        self.widget_service.set_danmaku_callback(self._broadcast_to_danmaku_clients)
-        self.widget_service.set_subtitle_callback(self._broadcast_to_subtitle_clients)
-
-        await self.widget_service.start()
+        await widget_service.start()
         self.logger.info(f"弹幕小部件服务已启动 (max_messages={widget_config.max_messages})")
 
-        if widget_config.enable_html_page:
-
-            @self.app.get("/widget", response_class=HTMLResponse)
-            async def widget_page():
-                return self._get_widget_html()
-
-        @self.app.websocket("/ws/danmaku")
-        async def danmaku_websocket(websocket: WebSocket):
-            await self._run_widget_socket(websocket, self._danmaku_clients, with_history=True)
-
-        @self.app.websocket("/ws/subtitle")
-        async def subtitle_websocket(websocket: WebSocket):
-            await self._run_widget_socket(websocket, self._subtitle_clients, with_history=False)
-
-        @self.app.websocket("/ws/widget")
-        async def widget_websocket(websocket: WebSocket):
-            await self._run_widget_socket(websocket, self._widget_clients, with_history=True)
-
-        @self.app.get("/api/widget/messages")
-        async def get_widget_messages():
-            return {"messages": self.widget_service.get_recent_messages(15)}
-
-        @self.app.get("/api/widget/subtitles")
-        async def get_widget_subtitles():
-            return {"subtitles": self.widget_service.get_recent_subtitles(5)}
-
-        @self.app.get("/api/widget/stats")
-        async def get_widget_stats():
-            return self.widget_service.get_stats()
-
+        self.app.include_router(create_widget_router(self.widget_gateway, include_page=widget_config.enable_html_page))
         self.logger.info("弹幕小部件路由已注册: /danmaku, /subtitle, /widget, /ws/danmaku, /ws/subtitle, /ws/widget")
 
-    async def _run_widget_socket(self, websocket: WebSocket, clients: set[WebSocket], *, with_history: bool) -> None:
-        """widget 族 WebSocket 端点的公共收发循环（accept → 可选历史 → 保活 → 清理）。"""
-        await websocket.accept()
-        clients.add(websocket)
-
-        try:
-            if with_history and self.widget_service is not None:
-                history = self.widget_service.get_recent_messages(15)
-                await websocket.send_json({"type": "history", "messages": history})
-
-            while True:
-                await websocket.receive_text()
-        except WebSocketDisconnect:
-            pass
-        except asyncio.CancelledError:
-            # 关闭信号：静默退出（finally 负责清理 client 集合）
-            pass
-        except Exception as e:
-            self.logger.debug(f"Widget WebSocket 错误: {e}")
-        finally:
-            clients.discard(websocket)
-
-    async def _broadcast_to_clients(self, clients: set[WebSocket], data: dict) -> None:
-        """广播消息到一组 widget 客户端，发送失败的连接被移出集合。"""
-        if not clients:
-            return
-
-        message = json.dumps(data, ensure_ascii=False, default=str)
-        disconnected = set()
-
-        for client in clients:
-            try:
-                await client.send_text(message)
-            except Exception as e:
-                self.logger.debug(f"广播时客户端已断开: {e}")
-                disconnected.add(client)
-
-        clients -= disconnected
-
-    async def _broadcast_to_danmaku_clients(self, data: dict) -> None:
-        """广播弹幕消息到所有 danmaku 客户端"""
-        await self._broadcast_to_clients(self._danmaku_clients, data)
-
-    async def _broadcast_to_subtitle_clients(self, data: dict) -> None:
-        """广播字幕到所有 subtitle 客户端"""
-        await self._broadcast_to_clients(self._subtitle_clients, data)
-
-    def _get_widget_html(self) -> str:
-        """返回 widget 页面 HTML"""
-        return """<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>弹幕小部件</title>
-    <style>
-        html, body {
-            background: transparent !important;
-            margin: 0;
-            padding: 15px 20px;
-            font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
-            color: #fff;
-            overflow: hidden;
-            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
-        }
-        #messages {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        .message {
-            padding: 8px 14px;
-            border-radius: 6px;
-            animation: slideIn 0.4s ease-out;
-            backdrop-filter: blur(4px);
-        }
-        .message.danmaku {
-            background: rgba(0, 0, 0, 0.45);
-            border-left: 3px solid #00ff88;
-        }
-        .message.gift {
-            background: rgba(255, 136, 0, 0.35);
-            border-left: 3px solid #ff8800;
-        }
-        .message.superchat {
-            background: linear-gradient(90deg, rgba(255,107,107,0.4), rgba(107,255,107,0.3));
-            border-left: 3px solid #ff6b6b;
-            animation: slideIn 0.4s ease-out, rainbow 3s ease infinite;
-            background-size: 200% 200%;
-        }
-        .message.guard {
-            background: rgba(78, 205, 196, 0.35);
-            border-left: 3px solid #4ecdc4;
-        }
-        .message.enter {
-            background: rgba(100, 100, 100, 0.3);
-            border-left: 3px solid #888;
-        }
-        .username {
-            color: #00ff88;
-            font-weight: 600;
-            margin-right: 6px;
-        }
-        .content {
-            color: #fff;
-        }
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateX(-20px); }
-            to { opacity: 1; transform: translateX(0); }
-        }
-        @keyframes rainbow {
-            0%, 100% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-        }
-    </style>
-</head>
-<body>
-    <div id="messages"></div>
-    <script>
-        const container = document.getElementById('messages');
-        const maxMessages = 15;
-        let ws;
-
-        function connect() {
-            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(protocol + '//' + location.host + '/ws/widget');
-
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.type === 'new_message') {
-                    addMessage(data.message);
-                } else if (data.type === 'history') {
-                    container.innerHTML = '';
-                    data.messages.forEach(addMessage);
-                }
-            };
-
-            ws.onclose = () => setTimeout(connect, 3000);
-            ws.onerror = () => ws.close();
-        }
-
-        function addMessage(msg) {
-            const div = document.createElement('div');
-            div.className = 'message ' + msg.message_type;
-            div.innerHTML = '<span class="username">' + escapeHtml(msg.user_name) + '：</span>' +
-                           '<span class="content">' + escapeHtml(msg.content) + '</span>';
-            container.appendChild(div);
-
-            while (container.children.length > maxMessages) {
-                container.removeChild(container.firstChild);
-            }
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text || '';
-            return div.innerHTML;
-        }
-
-        connect();
-    </script>
-</body>
-</html>"""
+    async def _run_heartbeat(self) -> None:
+        """心跳任务"""
+        while self._is_running:
+            await asyncio.sleep(self.websocket_heartbeat)
+            if self.ws_handler:
+                await self.ws_handler.send_heartbeat()
