@@ -71,8 +71,9 @@ export const useEventsStore = defineStore('events', () => {
   const cursor = ref<string>(loadCursor());
   const backfillDone = ref(false);
 
+  /** 断线/刷新续传游标（最后收到的事件 id）；合成条目（stub-*）不入游标 */
   function advanceCursor(id?: string): void {
-    if (!id) return;
+    if (!id || !/^\d+$/.test(id)) return;
     cursor.value = id;
     saveCursor(id);
   }
@@ -101,7 +102,8 @@ export const useEventsStore = defineStore('events', () => {
   async function backfill(): Promise<void> {
     if (backfillDone.value) return;
     backfillDone.value = true;
-    if (!cursor.value) return;
+    // 合成条目（stub-*）不是后端事件，不能当续传游标
+    if (!cursor.value || !/^\d+$/.test(cursor.value)) return;
     try {
       const response = await eventsApi.list({ since_id: cursor.value, limit: MAX_EVENTS });
       const gap = toLoggedEvents(response.data.events);

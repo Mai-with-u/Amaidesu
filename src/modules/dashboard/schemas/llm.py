@@ -68,10 +68,26 @@ class LLMRequestHistoryResponse(BaseModel):
     latency_ms: int = 0
 
 
+class LLMRequestHistoryListItem(BaseModel):
+    """历史列表行摘要；完整参数与响应正文经详情接口按行获取"""
+
+    request_id: str
+    timestamp_ms: int
+    client_type: str
+    model_name: str
+    prompt_preview: str = ""
+    response_preview: str = ""
+    usage: Optional[TokenUsageSchema] = None
+    cost: float = 0.0
+    success: bool = True
+    error: Optional[str] = None
+    latency_ms: int = 0
+
+
 class LLMHistoryListResponse(BaseModel):
     """LLM 请求历史列表响应"""
 
-    items: List[LLMRequestHistoryResponse]
+    items: List[LLMRequestHistoryListItem]
     total: int
     page: int
     page_size: int

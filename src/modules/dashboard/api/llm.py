@@ -13,6 +13,7 @@ from src.modules.dashboard.schemas.llm import (
     LLMHistoryListResponse,
     LLMHistoryStatisticsModelStats,
     LLMHistoryStatisticsResponse,
+    LLMRequestHistoryListItem,
     LLMRequestHistoryResponse,
     LLMUsageStatsResponse,
     LLMUsageSummaryResponse,
@@ -122,9 +123,9 @@ async def get_history(
         page_size=page_size,
     )
 
-    items: List[LLMRequestHistoryResponse] = []
+    items: List[LLMRequestHistoryListItem] = []
     for record in result.get("records", []):
-        items.append(_convert_record_to_response(record))
+        items.append(_build_list_item(record))
 
     return LLMHistoryListResponse(
         items=items,
@@ -196,17 +197,72 @@ async def get_request_by_id(request_id: str) -> Optional[LLMRequestHistoryRespon
     return _convert_record_to_response(record)
 
 
+def _convert_usage(usage_data: Any) -> Optional[TokenUsageSchema]:
+    """记录内的 usage 字典转 TokenUsage，缺省字段补 0"""
+    if not usage_data:
+        return None
+    return TokenUsageSchema(
+        prompt_tokens=usage_data.get("prompt_tokens", 0),
+        completion_tokens=usage_data.get("completion_tokens", 0),
+        total_tokens=usage_data.get("total_tokens", 0),
+    )
+
+
+def _preview(text: Any, limit: int = 80) -> str:
+    """截断为列表预览文本；非字符串（空值/结构化内容）折叠为空串"""
+    if not isinstance(text, str):
+        return ""
+    return text.strip()[:limit]
+
+
+def _message_text(message: Any) -> str:
+    """中立契约消息（{role, parts, ...}）的正文文本：拼接 parts 片段，图像片段以占位符呈现"""
+    if not isinstance(message, dict) or not isinstance(message.get("parts"), list):
+        return ""
+    lines: List[str] = []
+    for piece in message["parts"]:
+        if isinstance(piece, str):
+            lines.append(piece)
+        elif isinstance(piece, dict):
+            if isinstance(piece.get("text"), str):
+                lines.append(piece["text"])
+            elif piece.get("type") == "image":
+                lines.append("[图片内容已省略]")
+    return "\n".join(lines)
+
+
+def _build_list_item(record: Dict[str, Any]) -> LLMRequestHistoryListItem:
+    """列表行摘要：prompt/response 只携带截断预览，完整内容由详情接口按行获取。
+
+    request_params 的 messages 里最后一条有正文的消息即列表展示的 Prompt 预览。
+    """
+    prompt_preview = ""
+    params = record.get("request_params")
+    messages = params.get("messages") if isinstance(params, dict) else None
+    if isinstance(messages, list):
+        for message in reversed(messages):
+            text = _message_text(message).strip()
+            if text:
+                prompt_preview = _preview(text)
+                break
+
+    return LLMRequestHistoryListItem(
+        request_id=record.get("request_id", ""),
+        timestamp_ms=record.get("timestamp", 0),
+        client_type=record.get("client_type", ""),
+        model_name=record.get("model_name", ""),
+        prompt_preview=prompt_preview,
+        response_preview=_preview(record.get("response_content")),
+        usage=_convert_usage(record.get("usage")),
+        cost=record.get("cost", 0.0),
+        success=record.get("success", True),
+        error=record.get("error"),
+        latency_ms=record.get("latency_ms", 0),
+    )
+
+
 def _convert_record_to_response(record: Dict[str, Any]) -> LLMRequestHistoryResponse:
     """将请求记录字典转换为响应模型"""
-    usage = None
-    usage_data = record.get("usage")
-    if usage_data:
-        usage = TokenUsageSchema(
-            prompt_tokens=usage_data.get("prompt_tokens", 0),
-            completion_tokens=usage_data.get("completion_tokens", 0),
-            total_tokens=usage_data.get("total_tokens", 0),
-        )
-
     return LLMRequestHistoryResponse(
         request_id=record.get("request_id", ""),
         timestamp_ms=record.get("timestamp", 0),
@@ -216,7 +272,7 @@ def _convert_record_to_response(record: Dict[str, Any]) -> LLMRequestHistoryResp
         response_content=record.get("response_content"),
         reasoning_content=record.get("reasoning_content"),
         tool_calls=record.get("tool_calls"),
-        usage=usage,
+        usage=_convert_usage(record.get("usage")),
         cost=record.get("cost", 0.0),
         success=record.get("success", True),
         error=record.get("error"),

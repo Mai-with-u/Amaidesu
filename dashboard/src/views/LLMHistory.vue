@@ -49,14 +49,19 @@ import { ref, reactive, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { llmApi } from '@/api';
-import type { LLMRequestHistory, LLMHistoryQueryParams, LLMHistoryStatistics } from '@/types';
+import type {
+  LLMRequestHistory,
+  LLMRequestHistorySummary,
+  LLMHistoryQueryParams,
+  LLMHistoryStatistics,
+} from '@/types';
 import HistoryFilter from '@/components/llm-history/HistoryFilter.vue';
 import HistoryTable from '@/components/llm-history/HistoryTable.vue';
 import HistoryDetail from '@/components/llm-history/HistoryDetail.vue';
 
 // 状态
 const loading = ref(false);
-const historyData = ref<LLMRequestHistory[]>([]);
+const historyData = ref<LLMRequestHistorySummary[]>([]);
 const totalRecords = ref(0);
 const detailVisible = ref(false);
 const currentDetail = ref<LLMRequestHistory | null>(null);
@@ -107,10 +112,10 @@ if (queryModelName) {
 async function fetchHistory() {
   loading.value = true;
   try {
-    // 处理日期范围
+    // 处理日期范围（时间选择器即毫秒，后端按毫秒比较，无需换算）
     if (dateRange.value && dateRange.value.length === 2) {
-      queryParams.start_time = Math.floor(dateRange.value[0] / 1000);
-      queryParams.end_time = Math.floor(dateRange.value[1] / 1000);
+      queryParams.start_time = dateRange.value[0];
+      queryParams.end_time = dateRange.value[1];
     } else {
       queryParams.start_time = undefined;
       queryParams.end_time = undefined;
@@ -150,8 +155,8 @@ function handleReset() {
   fetchHistory();
 }
 
-// 显示详情
-async function showDetail(row: LLMRequestHistory) {
+// 显示详情（行只带摘要，完整内容按 request_id 拉取）
+async function showDetail(row: LLMRequestHistorySummary) {
   try {
     const response = await llmApi.getRequestById(row.request_id);
     currentDetail.value = response.data;

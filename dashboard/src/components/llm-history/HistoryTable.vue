@@ -23,16 +23,16 @@
 
       <el-table-column label="Prompt" min-width="180">
         <template #default="{ row }">
-          <div class="truncate-text" :title="getPromptPreview(row)">
-            {{ getPromptPreview(row) }}
+          <div class="truncate-text" :title="row.prompt_preview">
+            {{ row.prompt_preview || '-' }}
           </div>
         </template>
       </el-table-column>
 
       <el-table-column label="Response" min-width="180">
         <template #default="{ row }">
-          <div class="truncate-text" :title="row.response_content || row.error || '-'">
-            {{ truncateText(row.response_content || row.error || '-', 50) }}
+          <div class="truncate-text" :title="row.response_preview || row.error || '-'">
+            {{ row.response_preview || row.error || '-' }}
           </div>
         </template>
       </el-table-column>
@@ -95,8 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import type { LLMRequestHistory, LLMHistoryQueryParams } from '@/types';
-import { messageText } from '@/utils/llmMessage';
+import type { LLMRequestHistorySummary, LLMHistoryQueryParams } from '@/types';
 import {
   formatDateTime,
   formatLatency,
@@ -104,62 +103,25 @@ import {
   formatCost,
   getLatencyClass,
   getClientTypeTag,
-  truncateText,
 } from '@/utils/format';
 
 interface Props {
   loading: boolean;
-  historyData: LLMRequestHistory[];
+  historyData: LLMRequestHistorySummary[];
   totalRecords: number;
   queryParams: LLMHistoryQueryParams;
 }
 
 interface Emits {
   (e: 'update:queryParams', value: LLMHistoryQueryParams): void;
-  (e: 'show-detail', row: LLMRequestHistory): void;
+  (e: 'show-detail', row: LLMRequestHistorySummary): void;
   (e: 'page-change'): void;
 }
 
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
-// 格式化日期时间
-
-// 格式化延迟
-
-// 格式化费用
-
-// 获取延迟样式类
-
-// 获取客户端类型标签
-
-// 获取客户端类型标签文字
-
-// 截断文本
-
-// 获取 Prompt 预览（取最后一条有正文的消息）
-function getPromptPreview(row: LLMRequestHistory): string {
-  const params = row.request_params;
-  if (!params) return '-';
-
-  const messages = params.messages as Array<Record<string, unknown>> | undefined;
-  if (messages && Array.isArray(messages)) {
-    const lastWithContent = [...messages].reverse().find(m => messageText(m).trim());
-    if (lastWithContent) {
-      return truncateText(messageText(lastWithContent), 50);
-    }
-  }
-
-  // 尝试直接获取 prompt 字段
-  const prompt = params.prompt as string | undefined;
-  if (prompt) {
-    return truncateText(prompt, 50);
-  }
-
-  return '-';
-}
-
-function handleShowDetail(row: LLMRequestHistory) {
+function handleShowDetail(row: LLMRequestHistorySummary) {
   emit('show-detail', row);
 }
 

@@ -81,6 +81,23 @@ export interface LLMTokenUsage {
 }
 
 // 请求历史记录
+/** 历史列表行摘要；完整参数与响应正文经 /llm/history/{id} 详情获取 */
+export interface LLMRequestHistorySummary {
+  request_id: string;
+  /** 请求时刻（Unix 毫秒） */
+  timestamp_ms: number;
+  client_type: string;
+  model_name: string;
+  prompt_preview: string;
+  response_preview: string;
+  usage: LLMTokenUsage | null;
+  cost: number;
+  success: boolean;
+  error: string | null;
+  latency_ms: number;
+}
+
+/** 单条请求历史完整记录（GET /llm/history/{id} 详情） */
 export interface LLMRequestHistory {
   request_id: string;
   /** 请求时刻（Unix 毫秒） */
@@ -98,7 +115,7 @@ export interface LLMRequestHistory {
   latency_ms: number;
 }
 
-// 历史查询参数
+// 历史查询参数（start_time/end_time 为 Unix 毫秒）
 export interface LLMHistoryQueryParams {
   page?: number;
   page_size?: number;
@@ -111,7 +128,7 @@ export interface LLMHistoryQueryParams {
 
 // 历史列表响应
 export interface LLMHistoryResponse {
-  items: LLMRequestHistory[];
+  items: LLMRequestHistorySummary[];
   total: number;
   page: number;
   page_size: number;
