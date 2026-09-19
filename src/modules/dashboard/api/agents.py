@@ -15,7 +15,7 @@ agent_manager 生成）。enabled 标记读 agents.toml ``[agents].enabled`` 名
 Agent 404。
 """
 
-from typing import TYPE_CHECKING, Annotated, Any, List, Optional
+from typing import TYPE_CHECKING, Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -35,6 +35,7 @@ from src.modules.logging import get_logger
 if TYPE_CHECKING:
     from src.modules.agents.control import AgentControl
     from src.modules.dashboard.server import DashboardServer
+    from src.modules.agents.manager import AgentManager
 
 logger = get_logger("DashboardAgentsAPI")
 
@@ -58,7 +59,7 @@ def _get_agent_control(server: "DashboardServer") -> "AgentControl":
     return control
 
 
-def _get_agent_manager(server: "DashboardServer") -> Optional[Any]:
+def _get_agent_manager(server: "DashboardServer") -> Optional["AgentManager"]:
     """取 AgentManager（descriptions / rebuild 数据源）；未注入时返回 None。"""
     return getattr(server, "agent_manager", None)
 
