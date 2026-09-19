@@ -24,11 +24,6 @@ const router = createRouter({
       component: () => import('@/views/Tools.vue'),
     },
     {
-      // 旧路径兼容：跳转到采集器管理页
-      path: '/components',
-      redirect: '/collectors',
-    },
-    {
       path: '/eventlog',
       name: 'eventlog',
       component: () => import('@/views/EventLog.vue'),
@@ -37,11 +32,6 @@ const router = createRouter({
       path: '/logs',
       name: 'logs',
       component: () => import('@/views/LogViewer.vue'),
-    },
-    {
-      // 会话调试入口在直播控制台，旧路径重定向避免死链
-      path: '/session',
-      redirect: '/live',
     },
     {
       path: '/live',
