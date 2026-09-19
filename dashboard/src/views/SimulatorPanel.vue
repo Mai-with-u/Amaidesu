@@ -646,9 +646,11 @@ async function savePersona() {
         context_window_size: personaForm.context_window_size ?? null,
       };
       const res = await simulatorApi.updatePersona(personaFormOriginalId.value, payload);
-      res.data.success
-        ? ElMessage.success('已保存')
-        : ElMessage.warning(res.data.message || '保存失败');
+      if (res.data.success) {
+        ElMessage.success('已保存');
+      } else {
+        ElMessage.warning(res.data.message || '保存失败');
+      }
     } else {
       const res = await simulatorApi.createPersona({
         user_nickname: personaForm.user_nickname,
@@ -659,9 +661,11 @@ async function savePersona() {
         guard_level: personaForm.guard_level,
         context_window_size: personaForm.context_window_size ?? null,
       });
-      res.data.success
-        ? ElMessage.success('已新增')
-        : ElMessage.warning(res.data.message || '新增失败');
+      if (res.data.success) {
+        ElMessage.success('已新增');
+      } else {
+        ElMessage.warning(res.data.message || '新增失败');
+      }
     }
     personaDialogVisible.value = false;
     await fetchPersonas();
@@ -677,9 +681,11 @@ async function removePersona(row: SimPersona) {
   if (!ok) return;
   try {
     const res = await simulatorApi.deletePersona(row.user_id);
-    res.data.success
-      ? ElMessage.success('已删除')
-      : ElMessage.warning(res.data.message || '删除失败');
+    if (res.data.success) {
+      ElMessage.success('已删除');
+    } else {
+      ElMessage.warning(res.data.message || '删除失败');
+    }
     await fetchPersonas();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '删除失败');
@@ -714,9 +720,11 @@ async function saveGift() {
         sc_amount_rmb: giftForm.sc_amount_rmb ?? null,
       };
       const res = await simulatorApi.updateGift(giftFormOriginalId.value, payload);
-      res.data.success
-        ? ElMessage.success('已保存')
-        : ElMessage.warning(res.data.message || '保存失败');
+      if (res.data.success) {
+        ElMessage.success('已保存');
+      } else {
+        ElMessage.warning(res.data.message || '保存失败');
+      }
     } else {
       const res = await simulatorApi.createGift({
         gift_id: giftForm.gift_id,
@@ -726,9 +734,11 @@ async function saveGift() {
         data_type: giftForm.data_type,
         sc_amount_rmb: giftForm.sc_amount_rmb ?? null,
       });
-      res.data.success
-        ? ElMessage.success('已新增')
-        : ElMessage.warning(res.data.message || '新增失败');
+      if (res.data.success) {
+        ElMessage.success('已新增');
+      } else {
+        ElMessage.warning(res.data.message || '新增失败');
+      }
     }
     giftDialogVisible.value = false;
     await fetchGifts();
@@ -744,9 +754,11 @@ async function removeGift(row: SimGift) {
   if (!ok) return;
   try {
     const res = await simulatorApi.deleteGift(row.gift_id);
-    res.data.success
-      ? ElMessage.success('已删除')
-      : ElMessage.warning(res.data.message || '删除失败');
+    if (res.data.success) {
+      ElMessage.success('已删除');
+    } else {
+      ElMessage.warning(res.data.message || '删除失败');
+    }
     await fetchGifts();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '删除失败');

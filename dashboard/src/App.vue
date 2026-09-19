@@ -10,7 +10,7 @@ import AppLayout from '@/components/layout/AppLayout.vue';
         <component :is="Component" />
       </keep-alive>
     </AppLayout>
-    <component v-else :is="Component" />
+    <component :is="Component" v-else />
   </router-view>
 </template>
 

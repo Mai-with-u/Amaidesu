@@ -140,7 +140,7 @@
         </div>
 
         <div class="control-actions">
-          <el-button @click="clearRegion" data-testid="vision-clear-region"> 清空区域 </el-button>
+          <el-button data-testid="vision-clear-region" @click="clearRegion"> 清空区域 </el-button>
           <el-button
             type="primary"
             :loading="saving"
