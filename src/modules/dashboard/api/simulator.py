@@ -68,15 +68,13 @@ def _config_summary(server: "DashboardServer") -> Dict[str, Any]:
     """从 [simulator] 段派生只读配置摘要（前端只展示，不修改）。
 
     服务尚未 ``setup()`` 时只能从配置 dict 读 key-value；setup 完成后
-    优先以 ``service._config_obj.model_dump()`` 返回 Pydantic 校验过的字段集。
+    优先以 ``SimulatorService.config_snapshot()`` 返回 Pydantic 校验过的字段集。
     """
     service = _get_service(server)
-    if service is not None and getattr(service, "_config_obj", None) is not None:
-        try:
-            dump = service._config_obj.model_dump()
-            return {k: dump.get(k) for k in _CONFIG_SUMMARY_KEYS if k in dump}
-        except Exception as exc:  # noqa: BLE001 - 边界
-            logger.debug(f"simulator._config_obj.model_dump 失败，回退 raw dict: {exc}")
+    if service is not None:
+        snapshot = service.config_snapshot()
+        if snapshot is not None:
+            return {k: snapshot.get(k) for k in _CONFIG_SUMMARY_KEYS if k in snapshot}
 
     if not server.config_service:
         return {}

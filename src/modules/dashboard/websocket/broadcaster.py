@@ -184,6 +184,6 @@ class EventBroadcaster:
             data={"events": [e.model_dump() for e in recent]},
         )
         try:
-            await self.ws_handler._send_to_client(client_id, message)
+            await self.ws_handler.send_to_client(client_id, message)
         except Exception as e:
             logger.debug(f"推送事件历史到客户端 {client_id} 失败: {e}")

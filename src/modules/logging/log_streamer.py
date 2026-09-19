@@ -214,7 +214,7 @@ class LogStreamer:
                 data=log_entry,
             )
             try:
-                await self.ws_handler._send_to_client(client_id, message)
+                await self.ws_handler.send_to_client(client_id, message)
                 count += 1
             except Exception as e:
                 loguru_logger.bind(module="LogStreamer").debug(f"WS broadcast to client {client_id} failed: {e!r}")

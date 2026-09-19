@@ -599,6 +599,15 @@ class SimulatorService:
         """回放引擎（setup 后可用；Dashboard 回放日期/进度访问面）。"""
         return self._replay_engine
 
+    def config_snapshot(self) -> Optional[Dict[str, Any]]:
+        """当前生效配置的快照（setup 后可用；Dashboard 控制面只读展示用）。
+
+        返回 ``SimulatorConfigSchema`` 校验后的字段集，未完成 setup 时返回 None。
+        """
+        if self._config_obj is None:
+            return None
+        return self._config_obj.model_dump()
+
     @property
     def replay_progress(self) -> Optional[Dict[str, Any]]:
         """回放进度（replay 模式运行中返回 date/total/remaining，否则 None）。"""

@@ -62,7 +62,7 @@ class WebSocketHandler:
         logger.info(f"WebSocket 客户端连接: {client_id}，当前连接数: {self.client_count}")
 
         # 发送欢迎消息（入队，由 writer task 串行发送）
-        await self._send_to_client(
+        await self.send_to_client(
             client_id,
             WebSocketMessage(
                 type="connected",
@@ -132,7 +132,7 @@ class WebSocketHandler:
             message = f"未知操作: {request.action}"
 
         # 发送确认
-        await self._send_to_client(
+        await self.send_to_client(
             client_id,
             WebSocketMessage(
                 type="subscribe_response",
@@ -160,7 +160,7 @@ class WebSocketHandler:
             logger.error(f"发送消息到客户端 {client_id} 失败（将清理连接）: {e}")
             self._remove_client(client_id)
 
-    async def _send_to_client(self, client_id: str, message: WebSocketMessage) -> bool:
+    async def send_to_client(self, client_id: str, message: WebSocketMessage) -> bool:
         """将消息入队到客户端发送队列（非阻塞）。
 
         队列满时丢弃最旧的消息以保证新消息不丢失。返回 True 表示已入队
@@ -197,7 +197,7 @@ class WebSocketHandler:
         for client_id, events in list(self._client_subscriptions.items()):
             # 检查客户端是否订阅了该事件
             if event_type in events or "*" in events:
-                if await self._send_to_client(client_id, message):
+                if await self.send_to_client(client_id, message):
                     success_count += 1
 
         return success_count
@@ -217,7 +217,7 @@ class WebSocketHandler:
 
         success_count = 0
         for client_id in list(self._clients.keys()):
-            if await self._send_to_client(client_id, message):
+            if await self.send_to_client(client_id, message):
                 success_count += 1
 
         return success_count
@@ -235,7 +235,7 @@ class WebSocketHandler:
         stale_clients: List[str] = []
 
         for client_id in list(self._clients.keys()):
-            await self._send_to_client(client_id, message)
+            await self.send_to_client(client_id, message)
             if now - self._last_pong.get(client_id, 0.0) > timeout:
                 stale_clients.append(client_id)
 
