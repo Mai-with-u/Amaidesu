@@ -136,6 +136,27 @@ def test_health_endpoint_still_present(client: TestClient) -> None:
     assert resp.json()["status"] == "ok"
 
 
+def test_changelog_returns_markdown_content(client: TestClient) -> None:
+    """/system/changelog 返回仓库根 CHANGELOG.md 原文。"""
+    resp = client.get("/api/v1/system/changelog")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert set(data) == {"content"}
+    # 与仓库根真实文件比对，端点读的就是同一份
+    repo_changelog = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
+    assert data["content"] == repo_changelog.read_text(encoding="utf-8")
+
+
+def test_changelog_missing_file_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CHANGELOG 文件缺失时降级 503，不抛 500。"""
+    import src.modules.dashboard.api.system as system_api
+
+    monkeypatch.setattr(system_api, "_CHANGELOG_PATH", Path("<nonexistent>") / "CHANGELOG.md")
+    resp = client.get("/api/v1/system/changelog")
+    assert resp.status_code == 503
+
+
 def test_status_event_bus_empty_when_stats_disabled(config_dir: Path) -> None:
     """EventBus 无 get_all_stats() 时 total_events 兜底为 0。"""
     from src.modules.config.core_schemas import DashboardConfig

@@ -37,3 +37,9 @@ class HealthResponse(BaseModel):
 
     status: str = "ok"
     timestamp: float
+
+
+class ChangelogResponse(BaseModel):
+    """更新日志响应（CHANGELOG.md 原文，WebUI 侧渲染 markdown）。"""
+
+    content: str

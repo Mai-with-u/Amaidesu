@@ -72,13 +72,16 @@
     </nav>
 
     <div class="sidebar-footer">
-      <span v-if="version" class="version">v{{ version }}</span>
+      <span v-if="version" class="version" title="查看更新日志" @click="changelogVisible = true"
+        >v{{ version }}</span
+      >
     </div>
+    <ChangelogDialog v-model="changelogVisible" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   Monitor,
@@ -98,12 +101,14 @@ import {
   User,
 } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/stores';
+import ChangelogDialog from './ChangelogDialog.vue';
 
 const route = useRoute();
 const currentRoute = computed(() => route.path);
 
 const systemStore = useSystemStore();
 const version = computed(() => systemStore.status?.version ?? '');
+const changelogVisible = ref(false);
 onMounted(() => {
   // 轮询由各视图按需启动，侧边栏在无状态时主动取一次保证版本号可见
   if (!systemStore.status) void systemStore.fetchStatus();
@@ -191,5 +196,11 @@ onMounted(() => {
   font-size: 11px;
   color: var(--text-placeholder);
   font-family: var(--font-mono);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.version:hover {
+  color: var(--color-primary);
 }
 </style>

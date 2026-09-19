@@ -44,8 +44,14 @@ export interface SystemStatusResponse {
   event_bus: EventBusStats;
 }
 
-// 组件
+/**
+ * 更新日志响应：CHANGELOG.md 原文（markdown），前端渲染。
+ */
+export interface ChangelogResponse {
+  content: string;
+}
 
+// 组件
 /**
  * 组件摘要。
  *

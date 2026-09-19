@@ -13,6 +13,7 @@ import type {
   AgentListResponse,
   AgentState,
   SystemStatusResponse,
+  ChangelogResponse,
   ComponentListResponse,
   ComponentControlRequest,
   ComponentControlResponse,
@@ -77,6 +78,7 @@ const api = axios.create({
 export const systemApi = {
   getStatus: () => api.get<SystemStatusResponse>('/system/status'),
   getHealth: () => api.get<{ status: string; timestamp: number }>('/system/health'),
+  getChangelog: () => api.get<ChangelogResponse>('/system/changelog'),
 };
 
 // 组件

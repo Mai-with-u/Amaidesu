@@ -6,12 +6,14 @@
 
 import sys
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.system import (
+    ChangelogResponse,
     EventBusStats,
     GroupStatus,
     HealthResponse,
@@ -26,6 +28,9 @@ router = APIRouter()
 
 # 全局启动时间
 _startup_time: float = time.time()
+
+# CHANGELOG 位于仓库根（api → dashboard → modules → src → 仓库根）
+_CHANGELOG_PATH = Path(__file__).resolve().parents[4] / "CHANGELOG.md"
 
 
 # 类型别名，用于依赖注入
@@ -116,3 +121,16 @@ def _get_app_version() -> str:
 async def health_check() -> HealthResponse:
     """健康检查"""
     return HealthResponse(status="ok", timestamp=time.time())
+
+
+@router.get("/changelog", response_model=ChangelogResponse)
+async def get_changelog() -> ChangelogResponse:
+    """读取 CHANGELOG.md 原文，供 WebUI 版本号弹窗渲染。
+
+    每次请求现读文件（体量小），发布更新 CHANGELOG 后无需重启即可见。
+    """
+    try:
+        content = _CHANGELOG_PATH.read_text(encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(status_code=503, detail=f"CHANGELOG 文件不可读: {e}") from e
+    return ChangelogResponse(content=content)
