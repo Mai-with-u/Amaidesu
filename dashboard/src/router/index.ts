@@ -107,14 +107,21 @@ const router = createRouter({
 
 // 后端重建后懒加载 chunk 的 hash 已更换，长开标签页里旧引用的 import 会 404；
 // 整页跳转目标路由，让浏览器拉取新 index 与新 chunk 完成自愈。
+// 30 秒窗口内只自愈一次：服务端持续异常时避免整页刷新死循环。
+const SELF_HEAL_THROTTLE_KEY = 'router-chunk-self-heal-at';
+
 router.onError((error, to) => {
   const message = error instanceof Error ? error.message : String(error);
   if (
-    message.includes('Failed to fetch dynamically imported module') ||
-    message.includes('Importing a module script failed')
+    !message.includes('Failed to fetch dynamically imported module') &&
+    !message.includes('Importing a module script failed')
   ) {
-    window.location.href = to.fullPath;
+    return;
   }
+  const lastHealAt = Number(sessionStorage.getItem(SELF_HEAL_THROTTLE_KEY) ?? 0);
+  if (Number.isFinite(lastHealAt) && Date.now() - lastHealAt < 30_000) return;
+  sessionStorage.setItem(SELF_HEAL_THROTTLE_KEY, String(Date.now()));
+  window.location.href = to.fullPath;
 });
 
 export default router;
