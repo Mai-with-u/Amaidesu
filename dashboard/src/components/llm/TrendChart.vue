@@ -6,13 +6,8 @@
 -->
 <template>
   <div class="trend-chart">
-    <div
-      ref="containerRef"
-      class="trend-canvas"
-      :style="{ height: `${height}px` }"
-      role="img"
-      :aria-label="ariaLabel"
-    >
+    <div class="trend-stage" :style="{ height: `${height}px` }" role="img" :aria-label="ariaLabel">
+      <div ref="containerRef" class="trend-canvas"></div>
       <div v-if="isEmpty" class="trend-empty">{{ emptyText }}</div>
     </div>
   </div>
@@ -237,9 +232,15 @@ const ariaLabel = computed(() => {
   width: 100%;
 }
 
-.trend-canvas {
+.trend-stage {
   position: relative;
   width: 100%;
+}
+
+/* echarts 独占此节点：容器内不渲染任何 Vue 子节点，避免 patch 撞上 canvas */
+.trend-canvas {
+  position: absolute;
+  inset: 0;
 }
 
 .trend-empty {

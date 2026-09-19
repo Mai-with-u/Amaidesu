@@ -11,7 +11,8 @@
       </div>
     </div>
 
-    <div ref="containerRef" class="pulse-canvas" role="img" :aria-label="ariaLabel">
+    <div class="pulse-stage" role="img" :aria-label="ariaLabel">
+      <div ref="containerRef" class="pulse-canvas"></div>
       <div v-if="isEmpty" class="pulse-empty">{{ emptyText }}</div>
     </div>
   </div>
@@ -171,13 +172,19 @@ const ariaLabel = computed(() => {
   white-space: nowrap;
 }
 
-.pulse-canvas {
+.pulse-stage {
   position: relative;
   width: 100%;
   height: var(--pulse-height);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
+}
+
+/* echarts 独占此节点：容器内不渲染任何 Vue 子节点，避免 patch 撞上 canvas */
+.pulse-canvas {
+  position: absolute;
+  inset: 0;
 }
 
 .pulse-empty {
