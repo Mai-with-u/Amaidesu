@@ -29,22 +29,35 @@ class WidgetGateway:
         self._subtitle_clients: set[WebSocket] = set()
 
     async def stop(self) -> None:
-        """停止小部件服务并关闭 widget 页面客户端连接。"""
+        """停止小部件服务并关闭全部三组客户端连接。"""
         if self.widget_service:
             await self.widget_service.stop()
             self.widget_service = None
 
-        for client in list(self._widget_clients):
+        for client in list(self._widget_clients) + list(self._danmaku_clients) + list(self._subtitle_clients):
             try:
                 await client.close()
             except Exception as e:
                 logger.debug(f"关闭 widget WebSocket 客户端失败（已忽略）: {e}")
         self._widget_clients.clear()
+        self._danmaku_clients.clear()
+        self._subtitle_clients.clear()
 
     def reset(self) -> None:
-        """释放服务引用并清空 widget 客户端集合（不主动关连接）。"""
+        """释放服务引用并清空全部客户端集合（不主动关连接）。"""
         self.widget_service = None
         self._widget_clients.clear()
+        self._danmaku_clients.clear()
+        self._subtitle_clients.clear()
+
+    async def run_danmaku_socket(self, websocket: WebSocket) -> None:
+        await self._run_socket(websocket, self._danmaku_clients, with_history=True)
+
+    async def run_subtitle_socket(self, websocket: WebSocket) -> None:
+        await self._run_socket(websocket, self._subtitle_clients, with_history=False)
+
+    async def run_widget_socket(self, websocket: WebSocket) -> None:
+        await self._run_socket(websocket, self._widget_clients, with_history=True)
 
     async def _run_socket(self, websocket: WebSocket, clients: set[WebSocket], *, with_history: bool) -> None:
         """widget 族 WebSocket 端点的公共收发循环（accept → 可选历史 → 保活 → 清理）。"""
@@ -106,26 +119,32 @@ def create_widget_router(gateway: WidgetGateway, *, include_page: bool) -> APIRo
 
     @router.websocket("/ws/danmaku")
     async def danmaku_websocket(websocket: WebSocket) -> None:
-        await gateway._run_socket(websocket, gateway._danmaku_clients, with_history=True)
+        await gateway.run_danmaku_socket(websocket)
 
     @router.websocket("/ws/subtitle")
     async def subtitle_websocket(websocket: WebSocket) -> None:
-        await gateway._run_socket(websocket, gateway._subtitle_clients, with_history=False)
+        await gateway.run_subtitle_socket(websocket)
 
     @router.websocket("/ws/widget")
     async def widget_websocket(websocket: WebSocket) -> None:
-        await gateway._run_socket(websocket, gateway._widget_clients, with_history=True)
+        await gateway.run_widget_socket(websocket)
 
     @router.get("/api/widget/messages")
     async def get_widget_messages() -> dict:
+        if gateway.widget_service is None:
+            return {"messages": []}
         return {"messages": gateway.widget_service.get_recent_messages(15)}
 
     @router.get("/api/widget/subtitles")
     async def get_widget_subtitles() -> dict:
+        if gateway.widget_service is None:
+            return {"subtitles": []}
         return {"subtitles": gateway.widget_service.get_recent_subtitles(5)}
 
     @router.get("/api/widget/stats")
     async def get_widget_stats() -> dict:
+        if gateway.widget_service is None:
+            return {"is_running": False}
         return gateway.widget_service.get_stats()
 
     return router
