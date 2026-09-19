@@ -6,8 +6,8 @@
 //   - 控制台不再承载业务规则，可专心做注入面板、滚动跟随、回看模式
 //   - 首页可直接复用 FeedTimeline 组件，传入 buildLiveEntries 的输出
 //
-// 注意：所有时间戳以 Unix 秒为内部单位（后端事件 timestamp 为秒；
-// toSeconds 把毫秒值兜底换算）；调用方如需展示相对时间请使用 relativeTime。
+// 注意：所有时间戳以 Unix 毫秒为内部单位（与后端 timestamp_ms 一致）；
+// 调用方如需展示相对时间请使用 relativeTime。
 
 import { summarizeEvent } from './eventSummary';
 import type { WebSocketMessage } from '@/types';
@@ -58,8 +58,8 @@ export type FeedEvent = WebSocketMessage & { id: string };
 export interface ShowEntry {
   id: string;
   kind: EntryKind;
-  /** Unix 秒（后端事件 timestamp 为秒，毫秒亦兼容） */
-  tsSec: number;
+  /** Unix 毫秒（与后端 timestamp_ms 同单位） */
+  tsMs: number;
   /** 观众昵称 / 工具名 / 环节名 */
   actor: string;
   /** 主体文案 */
@@ -110,11 +110,6 @@ export function num(value: unknown): number | null {
 
 export function bool(value: unknown): boolean {
   return value === true;
-}
-
-/** 时间戳归一到 Unix 秒（后端为秒；毫秒值兜底换算） */
-export function toSeconds(value: number): number {
-  return value > 1e12 ? value / 1000 : value;
 }
 
 export function formatAmount(amount: number): string {
@@ -173,7 +168,7 @@ export function agentGroupOf(entry: ShowEntry): AgentGroup {
 export function makeEntry(base: {
   id: string;
   kind: EntryKind;
-  tsSec: number;
+  tsMs: number;
   actor?: string;
   text: string;
   note?: string;
@@ -192,7 +187,7 @@ export function makeEntry(base: {
   return {
     id: base.id,
     kind: base.kind,
-    tsSec: base.tsSec,
+    tsMs: base.tsMs,
     actor,
     text: base.text,
     note: base.note ?? '',
@@ -212,7 +207,7 @@ export function makeEntry(base: {
 
 /** 观众行为流：room.message（RoomMessagePayload 扁平载荷，message_type 判别） */
 function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const tsSec = toSeconds(event.timestamp);
+  const tsMs = event.timestamp_ms;
   const actor = userLabel(data.user);
   const content = str(data.content);
   const fallback = () => content || summarizeEvent(event.type, data);
@@ -226,7 +221,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
     return makeEntry({
       id: event.id,
       kind: 'gift',
-      tsSec,
+      tsMs,
       actor,
       text: giftName ? `送出 ${giftName} ×${count}` : fallback(),
       badge: '礼物',
@@ -240,7 +235,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
     return makeEntry({
       id: event.id,
       kind: 'super_chat',
-      tsSec,
+      tsMs,
       actor,
       text: fallback(),
       badge: 'SC',
@@ -253,7 +248,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
     return makeEntry({
       id: event.id,
       kind: 'enter',
-      tsSec,
+      tsMs,
       actor,
       text: `${actor} 进入直播间`,
     });
@@ -262,7 +257,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
   return makeEntry({
     id: event.id,
     kind: 'danmaku',
-    tsSec,
+    tsMs,
     actor,
     text: fallback(),
     messageId,
@@ -299,7 +294,7 @@ function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEn
   return makeEntry({
     id: event.id,
     kind: 'tool',
-    tsSec: toSeconds(event.timestamp),
+    tsMs: event.timestamp_ms,
     actor: toolName,
     // 正文只在有实质内容时出现（speak 工具的播报文本）；成败已由徽标承载，不重复成行
     text: spoken,
@@ -319,7 +314,7 @@ function fromSpeech(event: FeedEvent, data: Record<string, unknown>): ShowEntry 
   return makeEntry({
     id: event.id,
     kind: 'speech',
-    tsSec: toSeconds(event.timestamp),
+    tsMs: event.timestamp_ms,
     actor: '主播',
     text: str(data.text) || summarizeEvent(event.type, data),
     note: emotion,
@@ -331,7 +326,7 @@ function fromSpeech(event: FeedEvent, data: Record<string, unknown>): ShowEntry 
 
 /** 决策记录：planner.decision（PlannerDecisionPayload）。
  * 决策卡只承载裁决语义（决定回应什么话题/为何沉默）；发言文本由 streamer.speech 发言卡承载 */
-export function fromDecision(id: string, tsSec: number, data: Record<string, unknown>): ShowEntry {
+export function fromDecision(id: string, tsMs: number, data: Record<string, unknown>): ShowEntry {
   const error = str(data.error);
   const shouldReply = bool(data.should_reply);
   const silentReason = str(data.silent_reason);
@@ -349,7 +344,7 @@ export function fromDecision(id: string, tsSec: number, data: Record<string, unk
   return makeEntry({
     id,
     kind: 'decision',
-    tsSec,
+    tsMs,
     actor: '决策',
     text,
     note,
@@ -363,11 +358,11 @@ export function fromDecision(id: string, tsSec: number, data: Record<string, unk
 }
 
 /** 裁决卡：planner.verdict（reply 调用时刻的即时裁决；轮末 decision 按轮回填统计） */
-function fromVerdict(id: string, tsSec: number, data: Record<string, unknown>): ShowEntry {
+function fromVerdict(id: string, tsMs: number, data: Record<string, unknown>): ShowEntry {
   return makeEntry({
     id,
     kind: 'verdict',
-    tsSec,
+    tsMs,
     actor: '决策',
     text: str(data.topic_summary) || '决定发言',
     badge: '回应',
@@ -378,14 +373,14 @@ function fromVerdict(id: string, tsSec: number, data: Record<string, unknown>): 
 }
 
 /** 阶段状态：streamer.stage（StreamerStagePayload） */
-export function fromStage(id: string, tsSec: number, data: Record<string, unknown>): ShowEntry {
+export function fromStage(id: string, tsMs: number, data: Record<string, unknown>): ShowEntry {
   const stage = str(data.stage);
   const running = str(data.agent_state) === 'running';
   const label = STAGE_LABEL[stage] ?? (stage || '阶段变化');
   return makeEntry({
     id,
     kind: 'stage',
-    tsSec,
+    tsMs,
     text: `阶段：${label}`,
     note: str(data.detail),
     speak: running,
@@ -400,7 +395,7 @@ function fromLiveBoundary(event: FeedEvent, data: Record<string, unknown>): Show
   return makeEntry({
     id: event.id,
     kind: 'boundary',
-    tsSec: toSeconds(event.timestamp),
+    tsMs: event.timestamp_ms,
     text: started ? '场次开启' : '场次结束',
     badge: started ? str(data.source) : bool(data.empty_discarded) ? '空场次已丢弃' : '',
     note: title || reason,
@@ -416,7 +411,7 @@ function fromRundown(event: FeedEvent, data: Record<string, unknown>): ShowEntry
   return makeEntry({
     id: event.id,
     kind: 'rundown',
-    tsSec: toSeconds(event.timestamp),
+    tsMs: event.timestamp_ms,
     text: str(data.segment_title) || (finished ? '流程单完成' : '环节切换'),
     note: finished ? '' : index != null && total != null ? `环节 ${index}/${total}` : '',
     badge: by === 'human' ? '手动' : by === 'system' ? '系统' : 'Agent',
@@ -429,7 +424,7 @@ function fromMilestone(event: FeedEvent, data: Record<string, unknown>): ShowEnt
   return makeEntry({
     id: event.id,
     kind: 'milestone',
-    tsSec: toSeconds(event.timestamp),
+    tsMs: event.timestamp_ms,
     text: str(data.message) || summarizeEvent(event.type, data),
     note: meta,
   });
@@ -458,7 +453,7 @@ export function toGameEntry(event: FeedEvent): ShowEntry | null {
   return makeEntry({
     id: event.id,
     kind: 'game',
-    tsSec: toSeconds(event.timestamp),
+    tsMs: event.timestamp_ms,
     actor: str(data.game) || eventType,
     text: str(data.message) || summarizeEvent(event.type, data),
     note: noteParts.join(' · '),
@@ -475,10 +470,10 @@ export function toEntry(event: FeedEvent): ShowEntry | null {
   if (event.type === 'room.message') return fromRoomMessage(event, data);
   if (event.type === 'streamer.speech') return fromSpeech(event, data);
   if (event.type === 'planner.verdict')
-    return fromVerdict(event.id, toSeconds(event.timestamp), data);
+    return fromVerdict(event.id, event.timestamp_ms, data);
   if (event.type === 'planner.decision')
-    return fromDecision(event.id, toSeconds(event.timestamp), data);
-  if (event.type === 'streamer.stage') return fromStage(event.id, toSeconds(event.timestamp), data);
+    return fromDecision(event.id, event.timestamp_ms, data);
+  if (event.type === 'streamer.stage') return fromStage(event.id, event.timestamp_ms, data);
   if (event.type === 'live.started' || event.type === 'live.ended')
     return fromLiveBoundary(event, data);
   if (event.type.startsWith('tool.result.')) return fromToolResult(event, data);
@@ -577,10 +572,10 @@ export function buildLiveEntries(events: FeedEvent[], hiddenIds: Set<string>): S
 
 /**
  * 时间线条目的相对时间戳（如"刚刚/12s 前/3m 前/2h 前/1d 前"）。
- * 调用方传入当前 Unix 秒（FeedTimeline 内部 1s tick 维护）即可。
+ * 调用方传入当前 Unix 毫秒时刻（FeedTimeline 内部 1s tick 维护）即可。
  */
-export function relativeTime(nowSec: number, tsSec: number): string {
-  return formatDurationShort(Math.max(0, Math.floor(nowSec - tsSec)));
+export function relativeTime(nowMs: number, tsMs: number): string {
+  return formatDurationShort(Math.max(0, Math.floor((nowMs - tsMs) / 1000)));
 }
 
 // 会话模式：对话优先的行序（过程行折叠成每轮一条过程条）
@@ -661,7 +656,7 @@ export function buildChatRows(
       makeEntry({
         id: key,
         kind: 'process_group',
-        tsSec: process[process.length - 1].tsSec,
+        tsMs: process[process.length - 1].tsMs,
         text: chatProcessSummary(process),
         note: String(process.length),
       }),

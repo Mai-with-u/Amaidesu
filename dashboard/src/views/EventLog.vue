@@ -116,22 +116,22 @@
         <div v-else class="events-container">
           <div
             v-for="event in visibleEvents"
-            :key="event.timestamp + event.type"
+            :key="event.timestamp_ms + event.type"
             class="event-row"
-            @click="toggleEventExpand(event.timestamp + event.type)"
+            @click="toggleEventExpand(event.timestamp_ms + event.type)"
           >
-            <span class="event-time mono">{{ formatTime(event.timestamp) }}</span>
+            <span class="event-time mono">{{ formatTime(event.timestamp_ms) }}</span>
             <span class="event-type" :class="getEventClass(event.type)">{{ event.type }}</span>
             <div class="event-data-wrapper">
               <pre
                 class="event-data"
-                :class="{ expanded: expandedEvents.has(event.timestamp + event.type) }"
+                :class="{ expanded: expandedEvents.has(event.timestamp_ms + event.type) }"
                 v-html="
-                  formatEventDataHtml(event.data, expandedEvents.has(event.timestamp + event.type))
+                  formatEventDataHtml(event.data, expandedEvents.has(event.timestamp_ms + event.type))
                 "
               ></pre>
               <span v-if="shouldShowExpand(event.data)" class="expand-hint">
-                {{ expandedEvents.has(event.timestamp + event.type) ? '点击收起' : '点击展开' }}
+                {{ expandedEvents.has(event.timestamp_ms + event.type) ? '点击收起' : '点击展开' }}
               </span>
             </div>
           </div>
@@ -265,8 +265,8 @@ function clearEvents() {
 }
 
 // 格式化时间
-function formatTime(timestamp: number): string {
-  const date = new Date(timestamp * 1000);
+function formatTime(timestampMs: number): string {
+  const date = new Date(timestampMs);
   return date.toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',

@@ -16,7 +16,8 @@ export interface ComponentStreamItem {
   id: string;
   eventType: string;
   summary: string;
-  timestamp: number;
+  /** 事件时刻（Unix 毫秒，随事件流单位） */
+  timestampMs: number;
 }
 
 /** 事件存储条目形状（WebSocketMessage + 去重 id） */

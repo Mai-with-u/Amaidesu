@@ -34,7 +34,7 @@
             <span v-if="entry.note" class="beat-note">{{ entry.note }}</span>
           </span>
           <span class="beat-rule" aria-hidden="true" />
-          <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
+          <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
         </div>
 
         <!-- 里程碑：庆祝行 -->
@@ -44,7 +44,7 @@
             <p class="milestone-text">{{ entry.text }}</p>
             <p v-if="entry.note" class="milestone-meta mono">{{ entry.note }}</p>
           </div>
-          <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
+          <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
         </div>
 
         <!-- 阶段状态：安静单行（决策管线在做什么/卡在哪） -->
@@ -54,7 +54,7 @@
             {{ entry.text }}<template v-if="entry.note"> · {{ entry.note }}</template>
           </span>
           <span class="grow" />
-          <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
+          <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
         </div>
 
         <!-- 进场：安静单行 -->
@@ -62,7 +62,7 @@
           <span class="whisper-dot" aria-hidden="true" />
           <span class="whisper-text">{{ entry.text }}</span>
           <span class="grow" />
-          <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
+          <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
         </div>
 
         <!-- 决策卡：verdict（实时裁决）+ decision（沉默/失败轮或统计回填后）共用 -->
@@ -85,7 +85,7 @@
               {{ entry.badge }}
             </span>
             <span class="grow" />
-            <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
+            <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
           </div>
           <div v-if="entry.replyTo" class="reply-quote">
             <template v-if="replyQuoteOf(entry)">
@@ -156,7 +156,7 @@
             <!-- 来源徽标（中性色，与状态徽标区分不抢视觉） -->
             <span v-if="entry.source" class="act-source">{{ entry.source }}</span>
             <span class="grow" />
-            <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
+            <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
           </div>
           <p v-if="entry.text" class="act-text">{{ entry.text }}</p>
           <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
@@ -221,7 +221,7 @@
             <span class="act-kind act-kind--speech">主播</span>
             <span v-if="entry.note" class="act-emotion">{{ entry.note }}</span>
             <span class="grow" />
-            <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
+            <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
           </div>
           <div v-if="entry.replyTo" class="reply-quote">
             <template v-if="replyQuoteOf(entry)">
@@ -256,7 +256,7 @@
               {{ entry.badge }}
             </span>
             <span class="grow" />
-            <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
+            <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
           </div>
           <p class="act-text">{{ entry.text }}</p>
           <p v-if="entry.note" class="act-note is-game-note">{{ entry.note }}</p>
@@ -271,7 +271,7 @@
               <span v-if="entry.badge" class="chip">{{ entry.badge }}</span>
               <span v-if="entry.money" class="money mono">{{ entry.money }}</span>
               <span class="grow" />
-              <time class="stamp mono">{{ relativeTime(nowSec, entry.tsSec) }}</time>
+              <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
             </div>
             <p class="say">{{ entry.text }}</p>
           </div>
@@ -376,10 +376,9 @@ function rowAlignClass(entry: ShowEntry): string {
 
 // 1s tick：让相对时间标签（"刚刚 / 12s 前"）每秒刷新一次；独立维护不依赖父组件
 const nowMs = useNowTick();
-const nowSec = computed(() => Math.floor(nowMs.value / 1000));
 
 /** 弹幕 message_id → 时间线条目（用于发言/决策卡回复引用反查）。
- * 仅索引观众消息类（弹幕 / SC / 礼物）；同一 ID 重复出现时取首次，时间线按 tsSec 正序遍历保证幂等。 */
+ * 仅索引观众消息类（弹幕 / SC / 礼物）；同一 ID 重复出现时取首次，时间线按 tsMs 正序遍历保证幂等。 */
 const messageIndex = computed<Map<string, ShowEntry>>(() => {
   const map = new Map<string, ShowEntry>();
   for (const item of props.entries) {

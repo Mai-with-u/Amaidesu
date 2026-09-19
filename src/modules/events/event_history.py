@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import time
 import uuid
 from collections import deque
 from typing import Any, Deque, Dict, List, Optional
@@ -21,6 +20,7 @@ from typing import Any, Deque, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 
 
 # 默认参数
@@ -40,8 +40,7 @@ class EventRecord(BaseModel):
       事件名直通,唯一例外 room.message.* 折叠）
     - `event_name`: EventBus 精确事件名（如 ``room.message.danmaku``）；
       空字符串表示未知,落库时退回 `type`
-    - `timestamp`: 事件时刻(Unix 秒),默认 `time.time()`
-    - `timestamp_ms`: 事件时刻(Unix 毫秒);空则落库时由 `timestamp` 换算
+    - `timestamp_ms`: 事件时刻(Unix 毫秒),默认 `now_ms()`
     - `level`: 严重级别,限定为 "info" | "warn" | "error"
     - `source`: 数据源标识,如 "bili_danmaku" / "dashboard"
     - `summary`: 人类可读的一行摘要,不超过 200 字符
@@ -51,8 +50,7 @@ class EventRecord(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="事件唯一 ID(uuid4)")
     type: str = Field(..., description="事件类型名,如 room.message / planner.decision")
     event_name: str = Field(default="", description="EventBus 精确事件名;空则落库退回 type")
-    timestamp: float = Field(default_factory=time.time, description="事件时刻,Unix 秒(time.time())")
-    timestamp_ms: Optional[int] = Field(default=None, description="事件时刻,Unix 毫秒;空则由 timestamp 换算")
+    timestamp_ms: int = Field(default_factory=now_ms, description="事件时刻,Unix 毫秒")
     level: str = Field(default="info", description="严重级别,info | warn | error")
     source: str = Field(..., description="数据源标识,如 bili_danmaku / dashboard")
     summary: str = Field(
@@ -176,13 +174,13 @@ class EventHistoryService:
         *,
         types: Optional[List[str]] = None,
         level: Optional[str] = None,
-        before_timestamp: Optional[float] = None,
+        before_timestamp_ms: Optional[int] = None,
         limit: int = 100,
     ) -> List[EventRecord]:
         """基于内存环形缓冲的过滤查询(不读库)。
 
-        结果按时间倒序(最新在前)。当 `before_timestamp` 指定时,只返回
-        严格 `timestamp < before_timestamp` 的事件(用于分页游标)。
+        结果按时间倒序(最新在前)。当 `before_timestamp_ms` 指定时,只返回
+        严格 `timestamp_ms < before_timestamp_ms` 的事件(用于分页游标)。
         """
         if limit <= 0:
             return []
@@ -194,7 +192,7 @@ class EventHistoryService:
                 continue
             if level is not None and record.level != level:
                 continue
-            if before_timestamp is not None and record.timestamp >= before_timestamp:
+            if before_timestamp_ms is not None and record.timestamp_ms >= before_timestamp_ms:
                 continue
             results.append(record)
             if len(results) >= limit:
@@ -207,15 +205,15 @@ class EventHistoryService:
         level_counts: Dict[str, int] = {}
         source_counts: Dict[str, int] = {}
 
-        oldest_ts: Optional[float] = None
-        newest_ts: Optional[float] = None
+        oldest_ts: Optional[int] = None
+        newest_ts: Optional[int] = None
 
         for record in self._buffer:
             type_counts[record.type] = type_counts.get(record.type, 0) + 1
             level_counts[record.level] = level_counts.get(record.level, 0) + 1
             source_counts[record.source] = source_counts.get(record.source, 0) + 1
 
-            ts = record.timestamp
+            ts = record.timestamp_ms
             if oldest_ts is None or ts < oldest_ts:
                 oldest_ts = ts
             if newest_ts is None or ts > newest_ts:
@@ -227,8 +225,8 @@ class EventHistoryService:
             "by_type": type_counts,
             "by_level": level_counts,
             "by_source": source_counts,
-            "oldest_timestamp": oldest_ts,
-            "newest_timestamp": newest_ts,
+            "oldest_timestamp_ms": oldest_ts,
+            "newest_timestamp_ms": newest_ts,
         }
 
     def cleanup(self) -> None:

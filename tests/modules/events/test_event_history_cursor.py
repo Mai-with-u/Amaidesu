@@ -13,7 +13,7 @@ def _record(n: int, *, session: int | None = None) -> EventRecord:
         source=str(session or ""),
         summary=f"事件{n}",
         data={"live_session_id": session, "n": n} if session is not None else {"n": n},
-        timestamp=1_700_000_000.0 + n,
+        timestamp_ms=1_700_000_000_000 + n,
     )
 
 

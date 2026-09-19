@@ -262,7 +262,7 @@
                     {{ item.summary }}
                   </span>
                   <span class="md-stream-item-time mono">
-                    {{ relativeTime(item.timestamp) }}
+                    {{ relativeTime(item.timestampMs) }}
                   </span>
                 </li>
               </ul>
@@ -306,7 +306,7 @@ import {
 } from '@/composables/useComponentMasterDetail';
 import type { AgentControlActionType, AgentInfo, WebSocketMessage } from '@/types';
 import { summarizeEvent } from '@/utils/eventSummary';
-import { relativeTime as relativeTimeLabel, toSeconds } from '@/utils/liveFeed';
+import { relativeTime as relativeTimeLabel } from '@/utils/liveFeed';
 import { formatDurationShort } from '@/utils/format';
 import '@/styles/component-master-detail.css';
 
@@ -471,11 +471,11 @@ const moreActionsLoading = computed<boolean>(() => {
 // "最近决策"指标：planner.* 最新事件的相对时间
 
 const latestDecisionLabel = computed<string>(() => {
-  // events store 按 timestamp 升序；末条即最新。逆序找第一条 planner.*。
+  // events store 按 timestamp_ms 升序；末条即最新。逆序找第一条 planner.*。
   const all = events.value;
   for (let i = all.length - 1; i >= 0; i--) {
     if (all[i].type.startsWith('planner.')) {
-      return relativeTime(all[i].timestamp);
+      return relativeTime(all[i].timestamp_ms);
     }
   }
   return '—';
@@ -528,7 +528,7 @@ function mapStreamEvent(e: ComponentEvent): AgentStreamItem | null {
     eventType: e.type,
     stage,
     summary: summarizeEvent(e.type, e.data),
-    timestamp: e.timestamp,
+    timestampMs: e.timestamp_ms,
     failed: stage === 'tool' && isToolFailed(e.data),
   };
 }
@@ -548,8 +548,7 @@ const { scrollRef: streamScrollRef } = useScrollFollow(displayedEntries);
 // 工具：相对时间
 
 function relativeTime(timestampMs: number): string {
-  // 后端事件 timestamp 秒/毫秒并存，归一后走共享短标签
-  return relativeTimeLabel(toSeconds(timestampMs), nowMs.value / 1000);
+  return relativeTimeLabel(nowMs.value, timestampMs);
 }
 
 // 生命周期

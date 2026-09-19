@@ -17,7 +17,6 @@ WS 类型规则：``type = 事件名``（精确直通）；唯一例外是 ``roo
 - ``tool.result.#`` / ``tool.health.#`` 通配 → type 为具体事件名
 """
 
-import time
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set
 
 from pydantic import BaseModel
@@ -42,6 +41,7 @@ from src.modules.events.payloads import (
 )
 from src.modules.events.payloads.base import BasePayload
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.dashboard.websocket.handler import WebSocketHandler
@@ -180,7 +180,7 @@ class EventBroadcaster:
 
         message = WebSocketMessage(
             type="events.history",
-            timestamp=time.time(),
+            timestamp_ms=now_ms(),
             data={"events": [e.model_dump() for e in recent]},
         )
         try:

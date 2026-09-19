@@ -19,7 +19,31 @@ function mergeEvents(history: LoggedEvent[], current: LoggedEvent[]): LoggedEven
   for (const event of [...current, ...history]) {
     byId.set(event.id, event);
   }
-  return [...byId.values()].sort((a, b) => a.timestamp - b.timestamp).slice(-MAX_EVENTS);
+  return [...byId.values()].sort((a, b) => a.timestamp_ms - b.timestamp_ms).slice(-MAX_EVENTS);
+}
+
+/**
+ * 后端 events.history 载荷 / REST 回填条目（EventRecord 转储）→ LoggedEvent。
+ * 按最小形状（id/type/timestamp_ms/data）校验，过滤异常条目，替代裸类型断言。
+ */
+function toLoggedEvent(value: unknown): LoggedEvent | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== 'string' || record.id === '') return null;
+  if (typeof record.type !== 'string') return null;
+  if (typeof record.timestamp_ms !== 'number' || !Number.isFinite(record.timestamp_ms)) return null;
+  return {
+    type: record.type,
+    timestamp_ms: record.timestamp_ms,
+    data: (typeof record.data === 'object' && record.data !== null ? record.data : {}) as Record<string, unknown>,
+    id: record.id,
+  };
+}
+
+/** 未知条目数组 → LoggedEvent 列表（逐条校验，丢弃不合规项） */
+function toLoggedEvents(value: unknown): LoggedEvent[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(toLoggedEvent).filter((event): event is LoggedEvent => event !== null);
 }
 
 function loadCursor(): string {
@@ -55,7 +79,7 @@ export const useEventsStore = defineStore('events', () => {
     if (message.kind === 'stream') return;
     // 后端初始历史：与当前条目合并（幂等，任意到达顺序，避免替换吞掉已到达的实时事件）
     if (message.type === 'events.history') {
-      const history = (message.data.events as LoggedEvent[]) ?? [];
+      const history = toLoggedEvents(message.data.events);
       events.value = mergeEvents(history, events.value);
       return;
     }
@@ -77,7 +101,7 @@ export const useEventsStore = defineStore('events', () => {
     if (!cursor.value) return;
     try {
       const response = await eventsApi.list({ since_id: cursor.value, limit: MAX_EVENTS });
-      const gap = (response.data.events ?? []) as LoggedEvent[];
+      const gap = toLoggedEvents(response.data.events);
       if (gap.length > 0) {
         events.value = mergeEvents(gap, events.value);
         advanceCursor(gap[gap.length - 1]?.id);

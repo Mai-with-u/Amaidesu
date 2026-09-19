@@ -18,6 +18,7 @@ from src.modules.dashboard.schemas.event import (
     WebSocketMessage,
 )
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 
 logger = get_logger("WebSocketHandler")
 
@@ -66,7 +67,7 @@ class WebSocketHandler:
             client_id,
             WebSocketMessage(
                 type="connected",
-                timestamp=time.time(),
+                timestamp_ms=now_ms(),
                 data={
                     "client_id": client_id,
                     "heartbeat_interval": self.heartbeat_interval,
@@ -136,7 +137,7 @@ class WebSocketHandler:
             client_id,
             WebSocketMessage(
                 type="subscribe_response",
-                timestamp=time.time(),
+                timestamp_ms=now_ms(),
                 data=SubscribeResponse(
                     success=True,
                     subscribed_events=list(self._client_subscriptions[client_id]),
@@ -186,7 +187,7 @@ class WebSocketHandler:
         """广播消息到所有订阅了该事件的客户端（入队，由各客户端 writer task 串行发送）"""
         message = WebSocketMessage(
             type=event_type,
-            timestamp=time.time(),
+            timestamp_ms=now_ms(),
             data=data,
             id=message_id,
         )
@@ -211,7 +212,7 @@ class WebSocketHandler:
         message = WebSocketMessage(
             kind="stream",
             type=stream_type,
-            timestamp=time.time(),
+            timestamp_ms=now_ms(),
             data=data,
         )
 
@@ -226,7 +227,7 @@ class WebSocketHandler:
         """发送心跳到所有客户端，并踢出超过超时阈值未响应 pong 的连接"""
         message = WebSocketMessage(
             type="ping",
-            timestamp=time.time(),
+            timestamp_ms=now_ms(),
             data={},
         )
 

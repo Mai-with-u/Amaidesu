@@ -2,7 +2,7 @@
  * 展示格式化工具（多页面共享的单一事实源）
  *
  * 从 llm-history 两组件、观众页与 Agents/Collectors 的本地复刻收敛而来。
- * 时间戳归一与事件短标签在 utils/liveFeed.ts（toSeconds / relativeTime）。
+ * 事件短标签（相对时间）在 utils/liveFeed.ts（relativeTime，毫秒入参）。
  */
 
 // ==================== 时间与时长 ====================

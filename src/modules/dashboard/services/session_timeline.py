@@ -58,7 +58,7 @@ def build_timeline_items(
                 {
                     "kind": "event",
                     "event_type": record.type,
-                    "ts_ms": int(record.timestamp * 1000),
+                    "ts_ms": record.timestamp_ms,
                     "data": record.data,
                 }
             )

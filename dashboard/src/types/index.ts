@@ -257,7 +257,8 @@ export interface WebSocketMessage {
   /** 消息类别："event"=事件广播（缺省，进事件缓冲）；"stream"=观测流（独立缓冲，不入事件通道） */
   kind?: string;
   type: string;
-  timestamp: number;
+  /** 消息时刻（Unix 毫秒） */
+  timestamp_ms: number;
   data: Record<string, unknown>;
   /** 事件唯一 ID（前端幂等去重依据） */
   id?: string;

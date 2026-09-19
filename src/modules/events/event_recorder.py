@@ -13,7 +13,7 @@ EventHistoryService。与 Dashboard / EventBroadcaster 解耦——即使 WebUI
 - ``data``：经开放载荷（``OpenPayload``）原样保留完整字段
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
@@ -21,6 +21,7 @@ from src.modules.events.event_history import EventRecord, EventHistoryService, i
 from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE
 from src.modules.events.payloads.base import BasePayload, OpenPayload
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -83,10 +84,10 @@ class EventHistoryRecorder:
             logger.warning(f"记录 {event_name} 事件失败: {e}")
 
     @staticmethod
-    def _payload_timestamp_ms(data: Any) -> Optional[int]:
-        """从载荷提取毫秒时刻；载荷未携带时返回 None（落记录时刻换算）。"""
+    def _payload_timestamp_ms(data: Any) -> int:
+        """从载荷提取毫秒时刻；载荷未携带时退回当前时刻（now_ms）。"""
         value = data.get("timestamp_ms") if isinstance(data, dict) else None
-        return int(value) if isinstance(value, (int, float)) else None
+        return int(value) if isinstance(value, (int, float)) else now_ms()
 
     @staticmethod
     def _build_summary(event_name: str, dict_data: dict) -> str:

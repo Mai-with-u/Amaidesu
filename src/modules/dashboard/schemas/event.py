@@ -18,7 +18,7 @@ class WebSocketMessage(BaseModel):
         "如 thinking.delta，best-effort 直推，前端独立缓冲，不入事件通道）",
     )
     type: str
-    timestamp: float
+    timestamp_ms: int
     data: Dict[str, Any]
     id: Optional[str] = Field(
         default=None,

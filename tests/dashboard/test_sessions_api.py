@@ -181,7 +181,7 @@ def test_session_timeline_merges_details_and_events(client: TestClient) -> None:
                         "speech": "今天玩《双人成行》！",
                         "reply_to_message_id": "msg_seed_1",
                     },
-                    timestamp=1_700_000_004.0,
+                    timestamp_ms=1_700_000_004_000,
                 )
             )
 

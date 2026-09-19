@@ -202,7 +202,7 @@
                 <span class="stream-item-dot" aria-hidden="true" />
                 <span class="md-stream-item-type mono">{{ item.eventType }}</span>
                 <span class="md-stream-item-content">{{ item.summary }}</span>
-                <span class="md-stream-item-time mono">{{ relativeTime(item.timestamp) }}</span>
+                <span class="md-stream-item-time mono">{{ relativeTime(item.timestampMs) }}</span>
               </li>
             </ul>
           </div>
@@ -238,7 +238,7 @@ import {
   type ComponentStreamItem,
 } from '@/composables/useComponentMasterDetail';
 import { summarizeEvent } from '@/utils/eventSummary';
-import { relativeTime as relativeTimeLabel, toSeconds } from '@/utils/liveFeed';
+import { relativeTime as relativeTimeLabel } from '@/utils/liveFeed';
 import '@/styles/component-master-detail.css';
 
 // 归因映射：采集器名 → 消息族白名单（payload.message_type 判别）
@@ -343,7 +343,7 @@ function mapStreamEvent(
     id: e.id,
     eventType: e.type,
     summary: summarizeEvent(e.type, e.data),
-    timestamp: e.timestamp,
+    timestampMs: e.timestamp_ms,
   };
 }
 
@@ -369,8 +369,7 @@ const { scrollRef: streamScrollRef } = useScrollFollow(streamEntries);
 // 工具
 
 function relativeTime(timestampMs: number): string {
-  // 后端事件 timestamp 秒/毫秒并存，归一后走共享短标签
-  return relativeTimeLabel(toSeconds(timestampMs), Date.now() / 1000);
+  return relativeTimeLabel(Date.now(), timestampMs);
 }
 
 // 生命周期

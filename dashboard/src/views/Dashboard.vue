@@ -178,7 +178,6 @@ import type {
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import PulseChart from '@/components/dashboard/PulseChart.vue';
 import { buildLiveEntries, type FeedEvent, type ShowEntry } from '@/utils/liveFeed';
-import { toSeconds } from '@/utils/liveFeed';
 
 const router = useRouter();
 const systemStore = useSystemStore();
@@ -269,7 +268,7 @@ const todayCallsText = computed(() => {
 // 直播对话流：把 events 折叠成 ShowEntry 后取尾 15
 
 const liveEntries = computed<ShowEntry[]>(() => {
-  const events = eventsStore.events as unknown as FeedEvent[];
+  const events = eventsStore.events;
   const list = buildLiveEntries(events, new Set<string>());
   return list.slice(-15);
 });
@@ -306,27 +305,26 @@ const failItems = computed(() => [
 ]);
 
 const heartbeat = computed<{ text: string; tone: 'live' | 'fresh' | 'stale' | 'silent' }>(() => {
-  const events = eventsStore.events as unknown as FeedEvent[];
+  const events = eventsStore.events;
   let latest = 0;
   for (const event of events) {
     if (event.type === 'streamer.stage') continue;
     if (!event.type.startsWith('planner.') && event.type !== 'streamer.speech') continue;
-    if (event.timestamp > latest) latest = event.timestamp;
+    if (event.timestamp_ms > latest) latest = event.timestamp_ms;
   }
-  // 后端 timestamp 已是秒；毫秒值兜底换算
-  const latestSec = toSeconds(latest);
-  if (latestSec === 0) return { text: '尚未触发', tone: 'silent' };
-  const diff = Math.max(0, Math.floor(Date.now() / 1000 - latestSec));
-  if (diff < 60) return { text: `${diff}s 前`, tone: 'live' };
-  if (diff < 300) return { text: `${Math.floor(diff / 60)}m ${diff % 60}s 前`, tone: 'fresh' };
-  const text = diff < 3600 ? `${Math.floor(diff / 60)}m 前` : `${Math.floor(diff / 3600)}h 前`;
+  if (latest === 0) return { text: '尚未触发', tone: 'silent' };
+  const diffSec = Math.max(0, Math.floor((Date.now() - latest) / 1000));
+  if (diffSec < 60) return { text: `${diffSec}s 前`, tone: 'live' };
+  if (diffSec < 300) return { text: `${Math.floor(diffSec / 60)}m ${diffSec % 60}s 前`, tone: 'fresh' };
+  const text = diffSec < 3600 ? `${Math.floor(diffSec / 60)}m 前` : `${Math.floor(diffSec / 3600)}h 前`;
   return { text, tone: 'stale' };
 });
 
 // 活动脉搏：60 分钟按分钟分桶的弹幕 / 发言双系列
 
 const PULSE_BUCKETS = 60;
-const PULSE_BUCKET_SEC = 60;
+/** 活动脉搏分桶宽度（毫秒）：按分钟分桶 */
+const PULSE_BUCKET_MS = 60_000;
 
 interface BucketWindow {
   labels: string[];
@@ -335,22 +333,22 @@ interface BucketWindow {
 
 function buildPulse(events: FeedEvent[]): BucketWindow {
   // 当前分钟对齐到 60s 边界；窗口 = [now-59min, now]，labels[i] = 窗口内第 i 分钟 HH:MM
-  const nowSec = Math.floor(Date.now() / 1000);
-  const windowEnd = Math.floor(nowSec / PULSE_BUCKET_SEC) * PULSE_BUCKET_SEC;
-  const windowStart = windowEnd - (PULSE_BUCKETS - 1) * PULSE_BUCKET_SEC;
+  const nowMs = Date.now();
+  const windowEnd = Math.floor(nowMs / PULSE_BUCKET_MS) * PULSE_BUCKET_MS;
+  const windowStart = windowEnd - (PULSE_BUCKETS - 1) * PULSE_BUCKET_MS;
 
   const audience = new Array<number>(PULSE_BUCKETS).fill(0);
   const streamer = new Array<number>(PULSE_BUCKETS).fill(0);
   const labels = new Array<string>(PULSE_BUCKETS);
   for (let i = 0; i < PULSE_BUCKETS; i++) {
-    const d = new Date((windowStart + i * PULSE_BUCKET_SEC) * 1000);
+    const d = new Date(windowStart + i * PULSE_BUCKET_MS);
     labels[i] =
       `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
   for (const event of events) {
-    const ts = toSeconds(event.timestamp);
-    if (ts < windowStart || ts > windowEnd + PULSE_BUCKET_SEC) continue;
-    const idx = Math.floor((ts - windowStart) / PULSE_BUCKET_SEC);
+    const ts = event.timestamp_ms;
+    if (ts < windowStart || ts > windowEnd + PULSE_BUCKET_MS) continue;
+    const idx = Math.floor((ts - windowStart) / PULSE_BUCKET_MS);
     if (idx < 0 || idx >= PULSE_BUCKETS) continue;
     if (event.type === 'room.message') audience[idx] += 1;
     else if (event.type === 'streamer.speech') streamer[idx] += 1;
@@ -364,7 +362,7 @@ function buildPulse(events: FeedEvent[]): BucketWindow {
   };
 }
 
-const pulseWindow = computed(() => buildPulse(eventsStore.events as unknown as FeedEvent[]));
+const pulseWindow = computed(() => buildPulse(eventsStore.events));
 const pulseSeries = computed(() => pulseWindow.value.series);
 const pulseLabels = computed(() => pulseWindow.value.labels);
 
@@ -372,7 +370,7 @@ const pulseLabels = computed(() => pulseWindow.value.labels);
 
 const bufferCounts = computed(() => {
   const result = { danmaku: 0, gift: 0, superChat: 0, enter: 0 };
-  for (const event of eventsStore.events as unknown as FeedEvent[]) {
+  for (const event of eventsStore.events) {
     if (event.type !== 'room.message') continue;
     const data = event.data as Record<string, unknown> | undefined;
     const mt = (data?.message_type ?? '') as string;
@@ -403,7 +401,8 @@ const statsStrip = computed<StatItem[]>(() => [
 
 // 结论条：异常 > 降级 > 直播中 > 空闲
 
-const ERROR_WINDOW_SEC = 300;
+/** core.error 判新的回看窗口（毫秒） */
+const ERROR_WINDOW_MS = 300_000;
 
 interface Verdict {
   tone: 'error' | 'warn' | 'live' | 'idle';
@@ -418,11 +417,10 @@ const verdict = computed<Verdict>(() => {
     const head = tripped[0];
     return { tone: 'error', phrase: '异常', detail: `工具 ${head.name} 熔断` };
   }
-  const nowSec = Date.now() / 1000;
-  const recentError = (eventsStore.events as unknown as FeedEvent[]).find(event => {
+  const nowMs = Date.now();
+  const recentError = eventsStore.events.find(event => {
     if (event.type !== 'core.error') return false;
-    const ts = toSeconds(event.timestamp);
-    return nowSec - ts <= ERROR_WINDOW_SEC;
+    return nowMs - event.timestamp_ms <= ERROR_WINDOW_MS;
   });
   if (recentError) {
     return { tone: 'error', phrase: '异常', detail: '最近 5 分钟内出现系统错误' };

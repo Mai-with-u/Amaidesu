@@ -25,7 +25,7 @@ async def list_events(
     limit: int = Query(50, ge=1, le=500, description="最大返回条数"),
     type: Optional[str] = Query(None, description="事件类型筛选，逗号分隔"),
     level: Optional[str] = Query(None, description="严重级别筛选"),
-    before_timestamp: Optional[float] = Query(None, description="游标：返回此时间戳之前的事件"),
+    before_timestamp_ms: Optional[int] = Query(None, description="游标：返回此时间戳（Unix 毫秒）之前的事件"),
     since_id: Optional[str] = Query(None, description="游标：返回此事件 id 之后的事件（断线/刷新续传）"),
     server: ServerDep = ...,
 ):
@@ -44,7 +44,7 @@ async def list_events(
     events = history_service.query(
         types=types_list,
         level=level,
-        before_timestamp=before_timestamp,
+        before_timestamp_ms=before_timestamp_ms,
         limit=limit + 1,
     )
 

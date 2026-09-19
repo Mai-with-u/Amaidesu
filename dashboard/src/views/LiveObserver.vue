@@ -104,7 +104,7 @@
               预计 {{ rundownBanner.expectedLabel }}
             </span>
             <span class="slate-meta mono">{{
-              relativeTime(nowSec, rundownBanner.changedAtSec)
+              relativeTime(nowTick, rundownBanner.changedAtMs)
             }}</span>
           </template>
           <span v-else class="slate-idle">流程单未运行或未接入</span>
@@ -335,7 +335,6 @@ import {
   relativeTime,
   str,
   toGameEntry,
-  toSeconds,
   type AgentGroup,
   type FeedEvent,
   type ShowEntry,
@@ -363,7 +362,7 @@ interface RundownBanner {
   note: string;
   startLabel: string;
   expectedLabel: string;
-  changedAtSec: number;
+  changedAtMs: number;
 }
 
 // 思考流（WS kind="stream"；ADR-008 best-effort 观测通道）
@@ -620,7 +619,7 @@ const replayEntries = ref<ShowEntry[]>([]);
 const replayLoading = ref(false);
 
 function decisionEntryFromData(id: string, tsMs: number, data: Record<string, unknown>): ShowEntry {
-  return fromDecision(id, tsMs / 1000, data);
+  return fromDecision(id, tsMs, data);
 }
 
 async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
@@ -642,7 +641,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
             makeEntry({
               id,
               kind: 'boundary',
-              tsSec: entry.ts_ms / 1000,
+              tsMs: entry.ts_ms,
               text: type === 'live.started' ? '场次开启' : '场次结束',
               note: str(data.title) || str(data.reason),
             }),
@@ -655,7 +654,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
             makeEntry({
               id,
               kind: 'rundown',
-              tsSec: entry.ts_ms / 1000,
+              tsMs: entry.ts_ms,
               text: str(data.segment_title) || (finished ? '流程单完成' : '环节切换'),
               note: finished ? '流程单已全部完成' : `环节 ${index}/${total}`,
               badge:
@@ -667,7 +666,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
             makeEntry({
               id,
               kind: 'milestone',
-              tsSec: entry.ts_ms / 1000,
+              tsMs: entry.ts_ms,
               text: str(data.message),
               note: [str(data.game), str(data.scene)].filter(Boolean).join(' · '),
             }),
@@ -682,7 +681,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
           const gameEntry = toGameEntry({
             id,
             type,
-            timestamp: entry.ts_ms,
+            timestamp_ms: entry.ts_ms,
             data,
           } as FeedEvent);
           if (gameEntry) next.push(gameEntry);
@@ -694,7 +693,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
           makeEntry({
             id,
             kind: 'speech',
-            tsSec: entry.ts_ms / 1000,
+            tsMs: entry.ts_ms,
             actor: '主播',
             text: str(entry.text),
             speak: true,
@@ -708,7 +707,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
           makeEntry({
             id,
             kind: 'gift',
-            tsSec: entry.ts_ms / 1000,
+            tsMs: entry.ts_ms,
             actor: str(entry.user_name) || '匿名观众',
             text: `送出 ${str(entry.gift_name)} ×${num(entry.gift_count) ?? 1}`,
             badge: '礼物',
@@ -723,7 +722,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
           makeEntry({
             id,
             kind: 'super_chat',
-            tsSec: entry.ts_ms / 1000,
+            tsMs: entry.ts_ms,
             actor: str(entry.user_name) || '匿名观众',
             text: str(entry.content),
             badge: 'SC',
@@ -738,7 +737,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
         makeEntry({
           id,
           kind: entry.kind === 'enter' ? 'enter' : 'danmaku',
-          tsSec: entry.ts_ms / 1000,
+          tsMs: entry.ts_ms,
           actor: str(entry.user_name) || '匿名观众',
           text:
             entry.kind === 'enter'
@@ -845,7 +844,7 @@ const rundownBanner = computed<RundownBanner | null>(() => {
       note: '',
       startLabel: '',
       expectedLabel: '',
-      changedAtSec: changedAtMs != null ? changedAtMs / 1000 : toSeconds(event.timestamp),
+      changedAtMs: changedAtMs ?? event.timestamp_ms,
     };
   }
   return null;
@@ -1041,7 +1040,6 @@ watch(entries, async (next, prev) => {
 const nowTick = useNowTick();
 
 /** 当前 Unix 秒（相对时间标签入参；FeedTimeline 自带 tick，这里仅供顶部环节横幅使用） */
-const nowSec = computed(() => Math.floor(nowTick.value / 1000));
 
 const wallClock = computed(() =>
   new Date(nowTick.value).toLocaleTimeString('zh-CN', {
