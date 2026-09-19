@@ -469,10 +469,8 @@ export function toEntry(event: FeedEvent): ShowEntry | null {
   // WS 广播把 4 种 room.message.* 统一为 "room.message"，种类由 payload.message_type 判别
   if (event.type === 'room.message') return fromRoomMessage(event, data);
   if (event.type === 'streamer.speech') return fromSpeech(event, data);
-  if (event.type === 'planner.verdict')
-    return fromVerdict(event.id, event.timestamp_ms, data);
-  if (event.type === 'planner.decision')
-    return fromDecision(event.id, event.timestamp_ms, data);
+  if (event.type === 'planner.verdict') return fromVerdict(event.id, event.timestamp_ms, data);
+  if (event.type === 'planner.decision') return fromDecision(event.id, event.timestamp_ms, data);
   if (event.type === 'streamer.stage') return fromStage(event.id, event.timestamp_ms, data);
   if (event.type === 'live.started' || event.type === 'live.ended')
     return fromLiveBoundary(event, data);

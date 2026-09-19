@@ -315,8 +315,10 @@ const heartbeat = computed<{ text: string; tone: 'live' | 'fresh' | 'stale' | 's
   if (latest === 0) return { text: '尚未触发', tone: 'silent' };
   const diffSec = Math.max(0, Math.floor((Date.now() - latest) / 1000));
   if (diffSec < 60) return { text: `${diffSec}s 前`, tone: 'live' };
-  if (diffSec < 300) return { text: `${Math.floor(diffSec / 60)}m ${diffSec % 60}s 前`, tone: 'fresh' };
-  const text = diffSec < 3600 ? `${Math.floor(diffSec / 60)}m 前` : `${Math.floor(diffSec / 3600)}h 前`;
+  if (diffSec < 300)
+    return { text: `${Math.floor(diffSec / 60)}m ${diffSec % 60}s 前`, tone: 'fresh' };
+  const text =
+    diffSec < 3600 ? `${Math.floor(diffSec / 60)}m 前` : `${Math.floor(diffSec / 3600)}h 前`;
   return { text, tone: 'stale' };
 });
 

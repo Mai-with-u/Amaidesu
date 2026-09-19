@@ -127,7 +127,10 @@
                 class="event-data"
                 :class="{ expanded: expandedEvents.has(event.timestamp_ms + event.type) }"
                 v-html="
-                  formatEventDataHtml(event.data, expandedEvents.has(event.timestamp_ms + event.type))
+                  formatEventDataHtml(
+                    event.data,
+                    expandedEvents.has(event.timestamp_ms + event.type),
+                  )
                 "
               ></pre>
               <span v-if="shouldShowExpand(event.data)" class="expand-hint">

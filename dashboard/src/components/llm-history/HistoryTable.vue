@@ -97,7 +97,15 @@
 <script setup lang="ts">
 import type { LLMRequestHistory, LLMHistoryQueryParams } from '@/types';
 import { messageText } from '@/utils/llmMessage';
-import { formatDateTime, formatLatency, getClientTypeLabel, formatCost, getLatencyClass, getClientTypeTag, truncateText } from '@/utils/format';
+import {
+  formatDateTime,
+  formatLatency,
+  getClientTypeLabel,
+  formatCost,
+  getLatencyClass,
+  getClientTypeTag,
+  truncateText,
+} from '@/utils/format';
 
 interface Props {
   loading: boolean;

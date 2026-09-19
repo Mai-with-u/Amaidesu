@@ -35,7 +35,10 @@ function toLoggedEvent(value: unknown): LoggedEvent | null {
   return {
     type: record.type,
     timestamp_ms: record.timestamp_ms,
-    data: (typeof record.data === 'object' && record.data !== null ? record.data : {}) as Record<string, unknown>,
+    data: (typeof record.data === 'object' && record.data !== null ? record.data : {}) as Record<
+      string,
+      unknown
+    >,
     id: record.id,
   };
 }
