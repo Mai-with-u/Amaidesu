@@ -230,6 +230,7 @@ import { computed, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { Setting } from '@element-plus/icons-vue';
 import { useComponentsStore, useEventsStore } from '@/stores';
+import { useNowTick } from '@/composables/useNowTick';
 import { useScrollFollow } from '@/composables/useScrollFollow';
 import {
   STREAM_CAP,
@@ -368,8 +369,11 @@ const { scrollRef: streamScrollRef } = useScrollFollow(streamEntries);
 
 // 工具
 
+// 响应式时钟驱动相对时间自动刷新（此前用 Date.now() 非响应式，空闲时标签冻结）
+const nowMs = useNowTick();
+
 function relativeTime(timestampMs: number): string {
-  return relativeTimeLabel(Date.now(), timestampMs);
+  return relativeTimeLabel(nowMs.value, timestampMs);
 }
 
 // 生命周期

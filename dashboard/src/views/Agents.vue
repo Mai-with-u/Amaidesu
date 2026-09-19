@@ -297,6 +297,7 @@ import { ArrowDown, Refresh } from '@element-plus/icons-vue';
 import { storeToRefs } from 'pinia';
 import { useComponentsStore, useEventsStore } from '@/stores';
 import { agentsApi } from '@/api';
+import { useNowTick } from '@/composables/useNowTick';
 import { useScrollFollow } from '@/composables/useScrollFollow';
 import {
   STREAM_CAP,
@@ -381,8 +382,8 @@ const selectedInfo = computed<AgentInfo | null>(() =>
 
 const selectedState = computed<string>(() => selectedInfo.value?.state ?? '—');
 
-// 相对时间的时钟源：低频 tick 驱动心跳/轨迹/最近决策的时间自动更新
-const nowMs = ref(Date.now());
+// 相对时间的时钟源：共享 tick 驱动心跳/轨迹/最近决策的时间自动更新
+const nowMs = useNowTick();
 
 // heartbeat_ms 是 Unix epoch 毫秒时刻（非时长）→ 折算"距上次心跳多久"
 const heartbeatAgeSec = computed<number | null>(() => {
@@ -553,22 +554,15 @@ function relativeTime(timestampMs: number): string {
 
 // 生命周期
 
-let nowTickTimer: ReturnType<typeof setInterval> | null = null;
-
 onMounted(() => {
   componentsStore.fetchComponents();
   void refreshAgentStates();
   // 状态轮询：心跳/存活/状态随时间自动保鲜
   statePollTimer = setInterval(() => void refreshAgentStates(true), STATE_POLL_INTERVAL_MS);
-  // 相对时间 tick：驱动心跳与轨迹时间戳的展示自动更新
-  nowTickTimer = setInterval(() => {
-    nowMs.value = Date.now();
-  }, 30_000);
 });
 
 onUnmounted(() => {
   if (statePollTimer) clearInterval(statePollTimer);
-  if (nowTickTimer) clearInterval(nowTickTimer);
 });
 </script>
 
