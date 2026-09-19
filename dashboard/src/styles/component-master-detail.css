@@ -4,7 +4,7 @@
  * 页面在根元素注入强调色变量：--md-accent / --md-accent-bg / --md-pulse-ring。
  */
 
-/* ---------- 左列：列表 ---------- */
+/* 左列：列表 */
 .md-list-panel {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -184,7 +184,7 @@
   line-height: 16px;
 }
 
-/* ---------- 右列：详情面板 ---------- */
+/* 右列：详情面板 */
 .md-detail-panel {
   display: flex;
   flex-direction: column;
@@ -254,7 +254,7 @@
   flex-shrink: 0;
 }
 
-/* ---------- 元信息条 ---------- */
+/* 元信息条 */
 .md-details-strip {
   display: flex;
   align-items: center;
@@ -311,7 +311,7 @@
   color: var(--text-placeholder);
 }
 
-/* ---------- 事件流面板 ---------- */
+/* 事件流面板 */
 .md-stream-panel {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -467,7 +467,7 @@
   white-space: nowrap;
 }
 
-/* ---------- 空详情 ---------- */
+/* 空详情 */
 .md-detail-empty {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -478,7 +478,7 @@
   justify-content: center;
 }
 
-/* ---------- 响应式（两页共有的部分） ---------- */
+/* 响应式（两页共有的部分） */
 @media (max-width: 768px) {
   .md-list-panel {
     max-height: 280px;
