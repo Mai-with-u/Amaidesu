@@ -77,7 +77,7 @@ const api = axios.create({
 
 export const systemApi = {
   getStatus: () => api.get<SystemStatusResponse>('/system/status'),
-  getHealth: () => api.get<{ status: string; timestamp: number }>('/system/health'),
+  getHealth: () => api.get<{ status: string; timestamp_ms: number }>('/system/health'),
   getChangelog: () => api.get<ChangelogResponse>('/system/changelog'),
 };
 

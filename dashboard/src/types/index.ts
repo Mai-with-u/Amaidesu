@@ -26,13 +26,14 @@ export interface EventBusStats {
  * 系统状态响应。
  *
  * 字段说明（与后端 `/api/v1/system/status` 对齐）：
- * - `running` / `uptime_seconds` / `version` / `python_version`：运行时元信息
+ * - `running` / `uptime_ms` / `version` / `python_version`：运行时元信息
  * - `groups`：三组组件运行统计（collectors / agents / tools）
  * - `event_bus`：EventBus 全局吞吐
  */
 export interface SystemStatusResponse {
   running: boolean;
-  uptime_seconds: number;
+  /** 进程运行时长（毫秒） */
+  uptime_ms: number;
   version: string;
   python_version: string;
   groups: {

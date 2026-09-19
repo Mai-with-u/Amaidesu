@@ -25,7 +25,7 @@ class SystemStatusResponse(BaseModel):
     """系统状态响应（v2：采集器/Agent/工具三组 + EventBus 总吞吐）。"""
 
     running: bool
-    uptime_seconds: float
+    uptime_ms: int
     version: str
     python_version: str
     groups: dict[str, GroupStatus]
@@ -36,7 +36,7 @@ class HealthResponse(BaseModel):
     """健康检查响应"""
 
     status: str = "ok"
-    timestamp: float
+    timestamp_ms: int
 
 
 class ChangelogResponse(BaseModel):

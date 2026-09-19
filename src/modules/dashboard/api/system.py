@@ -5,7 +5,6 @@
 """
 
 import sys
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Dict
 
@@ -21,6 +20,7 @@ from src.modules.dashboard.schemas.system import (
 )
 from src.modules.dashboard.utils.component_helper import build_config_view, get_v2_component_list
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -28,8 +28,8 @@ if TYPE_CHECKING:
 router = APIRouter()
 logger = get_logger("SystemAPI")
 
-# 全局启动时间
-_startup_time: float = time.time()
+# 进程启动时刻（Unix 毫秒），运行时长由当前时刻回推
+_startup_time_ms: int = now_ms()
 
 # CHANGELOG 位于仓库根（api → dashboard → modules → src → 仓库根）
 _CHANGELOG_PATH = Path(__file__).resolve().parents[4] / "CHANGELOG.md"
@@ -42,7 +42,7 @@ ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 @router.get("/status", response_model=SystemStatusResponse)
 async def get_system_status(server: ServerDep) -> SystemStatusResponse:
     """获取系统整体状态（v2：基于采集器/Agent/工具三组 + EventBus 统计）。"""
-    uptime = time.time() - _startup_time
+    uptime_ms = now_ms() - _startup_time_ms
 
     # 组件视图经公共构建器：collectors 来自 collectors.toml 直读（拍平主配置
     # 没有 "collectors" scope），agents 来自拍平主配置
@@ -58,7 +58,7 @@ async def get_system_status(server: ServerDep) -> SystemStatusResponse:
 
     return SystemStatusResponse(
         running=server._is_running,
-        uptime_seconds=uptime,
+        uptime_ms=uptime_ms,
         version=_get_app_version(),
         python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         groups=groups,
@@ -124,7 +124,7 @@ def _get_app_version() -> str:
 @router.get("/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
     """健康检查"""
-    return HealthResponse(status="ok", timestamp=time.time())
+    return HealthResponse(status="ok", timestamp_ms=now_ms())
 
 
 @router.get("/changelog", response_model=ChangelogResponse)

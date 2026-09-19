@@ -24,7 +24,7 @@
         <span v-if="verdict.detail" class="verdict-detail">{{ verdict.detail }}</span>
       </div>
       <div class="verdict-meta">
-        <span class="verdict-meta-item mono">运行时长 {{ formatUptime(uptimeSec) }}</span>
+        <span class="verdict-meta-item mono">运行时长 {{ formatUptime(uptimeMs) }}</span>
         <span class="verdict-meta-sep" aria-hidden="true">·</span>
         <span class="verdict-meta-item mono">今日成本 {{ todayCostText }}</span>
         <span v-if="todayCostSubText" class="verdict-meta-sub mono">{{ todayCostSubText }}</span>
@@ -186,7 +186,7 @@ const { status } = storeToRefs(systemStore);
 
 // 运行状态（持续取自 system store）
 
-const uptimeSec = computed(() => status.value?.uptime_seconds ?? 0);
+const uptimeMs = computed(() => status.value?.uptime_ms ?? 0);
 
 // 组件 / 工具 / 主播 / 流程单 / 场次（REST 周期刷）
 
@@ -533,10 +533,11 @@ watch(
 
 // 工具函数
 
-function formatUptime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
+function formatUptime(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;

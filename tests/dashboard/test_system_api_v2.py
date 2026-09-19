@@ -83,7 +83,7 @@ def test_status_shape_matches_v2_contract(client: TestClient) -> None:
     data = resp.json()
 
     assert data["running"] is True
-    assert isinstance(data["uptime_seconds"], (int, float))
+    assert isinstance(data["uptime_ms"], int)
     assert isinstance(data["version"], str)
     assert isinstance(data["python_version"], str)
 

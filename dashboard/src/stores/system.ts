@@ -7,7 +7,7 @@ import { useComponentsStore } from './components';
 /**
  * 系统状态 store
  *
- * `/api/v1/system/status` 返回 running/uptime/version/python_version + groups.{collectors,agents,tools}
+ * `/api/v1/system/status` 返回 running/uptime_ms/version/python_version + groups.{collectors,agents,tools}
  * + event_bus.total_events。
  */
 export const useSystemStore = defineStore('system', () => {
