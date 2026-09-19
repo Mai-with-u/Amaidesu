@@ -4,8 +4,10 @@
 """
 
 import asyncio
-import logging
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
+
+if TYPE_CHECKING:
+    from loguru import Logger
 
 # ==================== 常量定义 ====================
 
@@ -66,7 +68,7 @@ ALL_MOUTH_STATE = {
 class SightState:
     """视线状态管理"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.first_layer = {
             "camera": 0.0,
             "danmu": 0.0,
@@ -74,7 +76,7 @@ class SightState:
         }
         self.changed = True
 
-    async def send_state(self, send_action_callback):
+    async def send_state(self, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
         """发送视线状态
 
         Args:
@@ -94,7 +96,7 @@ class SightState:
                     result[k] = self.first_layer[k]
         return result
 
-    def set_state(self, key: str, intensity: float):
+    def set_state(self, key: str, intensity: float) -> None:
         """设置视线状态
 
         Args:
@@ -110,7 +112,7 @@ class SightState:
 class EyebrowState:
     """眉毛状态管理"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.first_layer = {
             "eyebrow_happy_weak": 0.0,
             "eyebrow_happy_strong": 0.0,
@@ -121,7 +123,7 @@ class EyebrowState:
         }
         self.changed = True
 
-    async def send_state(self, send_action_callback):
+    async def send_state(self, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
         """发送眉毛状态
 
         Args:
@@ -140,7 +142,7 @@ class EyebrowState:
                     result[k] = self.first_layer[k]
         return result
 
-    def set_first_layer(self, key: str, weight: float = 1.0):
+    def set_first_layer(self, key: str, weight: float = 1.0) -> None:
         """设置第一层状态
 
         Args:
@@ -156,7 +158,7 @@ class EyebrowState:
 class EyeState:
     """眼睛状态管理"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.first_layer = {
             "eye_happy_strong": 0.0,
             "eye_close": 0.0,
@@ -175,7 +177,7 @@ class EyeState:
             return False
         return True
 
-    async def send_state(self, send_action_callback):
+    async def send_state(self, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
         """发送眼睛状态
 
         Args:
@@ -185,7 +187,7 @@ class EyeState:
         for k, v in state.items():
             await send_action_callback(k, v)
 
-    def set_blinking(self, is_blinking: bool):
+    def set_blinking(self, is_blinking: bool) -> None:
         """设置眨眼状态
 
         Args:
@@ -194,7 +196,7 @@ class EyeState:
         self.is_blinking = is_blinking
         self.changed = True
 
-    def set_first_layer(self, key: str, weight: float = 1.0):
+    def set_first_layer(self, key: str, weight: float = 1.0) -> None:
         """设置第一层状态
 
         Args:
@@ -229,7 +231,7 @@ class EyeState:
 class PupilState:
     """瞳孔状态管理"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.first_layer = {
             "eye_shift_left": 0.0,
             "eye_shift_right": 0.0,
@@ -238,7 +240,7 @@ class PupilState:
         }
         self.changed = True
 
-    async def send_state(self, send_action_callback):
+    async def send_state(self, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
         """发送瞳孔状态
 
         Args:
@@ -257,7 +259,7 @@ class PupilState:
                     result[k] = self.first_layer[k]
         return result
 
-    def set_state(self, direction: str, intensity: float):
+    def set_state(self, direction: str, intensity: float) -> None:
         """设置瞳孔状态
 
         Args:
@@ -271,7 +273,7 @@ class PupilState:
 class MouthState:
     """嘴巴状态管理，获取状态时，如果有口型，会优先只返回口型状态"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.first_layer = {
             "mouth_happy_strong": 0.0,
             "mouth_angry_weak": 0.0,
@@ -289,7 +291,7 @@ class MouthState:
         }
         self.changed = True
 
-    async def send_state(self, send_action_callback):
+    async def send_state(self, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
         """发送嘴巴状态
 
         Args:
@@ -299,7 +301,7 @@ class MouthState:
         for k, v in state.items():
             await send_action_callback(k, v)
 
-    def set_first_layer(self, key: str, weight: float = 1.0):
+    def set_first_layer(self, key: str, weight: float = 1.0) -> None:
         """设置第一层状态
 
         Args:
@@ -328,7 +330,7 @@ class MouthState:
                     result[k] = self.second_layer[k]
         return result
 
-    def set_vowel_state(self, lip_sync_states: Dict[str, float]):
+    def set_vowel_state(self, lip_sync_states: Dict[str, float]) -> None:
         """设置口型状态
 
         Args:
@@ -351,7 +353,7 @@ class WarudoStateManager:
     管理所有面部状态，并定期检查并发送变化到 Warudo。
     """
 
-    def __init__(self, logger: logging.Logger, send_action_callback):
+    def __init__(self, logger: "Logger", send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
         """初始化状态管理器
 
         Args:
@@ -381,7 +383,7 @@ class WarudoStateManager:
 
         self.logger.info("Warudo 状态管理器已初始化")
 
-    def start_monitoring(self):
+    def start_monitoring(self) -> None:
         """启动状态监控循环
 
         启动一个后台任务，每 0.1 秒检查一次所有状态，如果状态有变化则发送到 Warudo。
@@ -394,7 +396,7 @@ class WarudoStateManager:
         self._monitoring_task = asyncio.create_task(self._check_and_send_state_loop())
         self.logger.info("状态监控已启动")
 
-    def stop_monitoring(self):
+    def stop_monitoring(self) -> None:
         """停止状态监控循环"""
         if not self._is_monitoring:
             return
@@ -407,7 +409,7 @@ class WarudoStateManager:
 
         self.logger.info("状态监控已停止")
 
-    async def _check_and_send_state_loop(self):
+    async def _check_and_send_state_loop(self) -> None:
         """状态检查和发送循环"""
         try:
             while self._is_monitoring:
@@ -421,7 +423,7 @@ class WarudoStateManager:
         except Exception as e:
             self.logger.error(f"状态监控循环出错: {e}", exc_info=True)
 
-    async def _send_changed_states(self):
+    async def _send_changed_states(self) -> None:
         """发送所有变化的状态"""
         # 嘴巴状态
         if self.mouth_state.changed:

@@ -14,7 +14,7 @@ import os
 import queue
 import threading
 import tkinter as tk
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageColor, ImageFilter, ImageFont, ImageTk
 from pydantic import Field
@@ -22,6 +22,9 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
+
+if TYPE_CHECKING:
+    from loguru import Logger
 
 try:
     import customtkinter as ctk
@@ -47,17 +50,17 @@ class OutlineLabel:
 
     def __init__(
         self,
-        master,
-        text="",
-        font=None,
-        text_color="white",
-        outline_color="black",
-        outline_width=2,
-        outline_enabled=True,
-        background_color="gray15",
-        logger=None,
-        **kwargs,
-    ):
+        master: Any,
+        text: str = "",
+        font: Optional[Tuple[str, int, str]] = None,
+        text_color: str = "white",
+        outline_color: str = "black",
+        outline_width: int = 2,
+        outline_enabled: bool = True,
+        background_color: str = "gray15",
+        logger: Optional["Logger"] = None,
+        **kwargs: Any,
+    ) -> None:
         if not CTK_AVAILABLE or ctk is None:
             raise ImportError("CustomTkinter not available")
 
@@ -101,26 +104,26 @@ class OutlineLabel:
         self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.container_frame.after(1, self._draw_text)
 
-    def pack(self, **kwargs):
+    def pack(self, **kwargs: Any) -> None:
         self.container_frame.pack(**kwargs)
 
-    def bind(self, event, callback):
+    def bind(self, event: str, callback: Callable[..., Any]) -> None:
         self.container_frame.bind(event, callback)
 
-    def cget(self, option):
+    def cget(self, option: str) -> Optional[Any]:
         try:
             return self.container_frame.cget(option)
         except Exception:
             self.logger.error(f"获取 Canvas 选项 '{option}' 失败", exc_info=True)
             return None
 
-    def after(self, delay, callback):
+    def after(self, delay: int, callback: Callable[[], Any]) -> Any:
         return self.container_frame.after(delay, callback)
 
-    def _on_canvas_configure(self, event):
+    def _on_canvas_configure(self, event: tk.Event) -> None:
         self._draw_text()
 
-    def _draw_text(self):
+    def _draw_text(self) -> None:
         self.canvas.delete("all")
         self._photo = None
         if not self.display_text:
@@ -225,7 +228,15 @@ class OutlineLabel:
             y += line_h
         return img
 
-    def _paste_mask(self, img: Image.Image, mask_l: Image.Image, x: int, y: int, text_rgb, outline_rgb) -> None:
+    def _paste_mask(
+        self,
+        img: Image.Image,
+        mask_l: Image.Image,
+        x: int,
+        y: int,
+        text_rgb: Tuple[int, int, int],
+        outline_rgb: Tuple[int, int, int],
+    ) -> None:
         """把一段 ink 掩码按"先描边后填充"合成到画布。"""
         if self.outline_enabled and self.outline_width > 0:
             outline_l = mask_l.filter(ImageFilter.MaxFilter(self.outline_width * 2 + 1))
@@ -315,7 +326,7 @@ class OutlineLabel:
                 segments.append((ch, is_emoji))
         return segments
 
-    def _wrap_lines(self, font, max_width: int) -> List[str]:
+    def _wrap_lines(self, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
         text = (self.display_text or "").strip()
         if not text:
             return []
@@ -337,7 +348,7 @@ class OutlineLabel:
             lines.append(current)
         return lines
 
-    def configure_text(self, text="", **kwargs):
+    def configure_text(self, text: str = "", **kwargs: Any) -> None:
         if text != "":
             self.display_text = text
         if "text_color" in kwargs:
@@ -391,7 +402,7 @@ class SubtitleGuiService:
         window_minimizable: bool = Field(default=True, description="窗口是否可最小化")
         show_waiting_text: bool = Field(default=False, description="是否显示等待文字")
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any]) -> None:
         self.config = config
         self.logger = get_logger("SubtitleGuiService")
 
@@ -544,7 +555,7 @@ class SubtitleGuiService:
             )
             self.text_label.pack(expand=True, fill="both", padx=10, pady=5)
 
-            def bind_drag_events(widget):
+            def bind_drag_events(widget: Any) -> None:
                 widget.bind("<Button-1>", self._start_move)
                 widget.bind("<B1-Motion>", self._on_move)
                 widget.bind("<Button-3>", self._show_context_menu)
@@ -580,7 +591,7 @@ class SubtitleGuiService:
                     self.root.quit()
             self._gui_running = False
 
-    def _check_queue(self):
+    def _check_queue(self) -> None:
         if not self._gui_running:
             return
         try:
@@ -631,7 +642,7 @@ class SubtitleGuiService:
             if not w_ok:
                 w_scale = self.root.winfo_width() / max(w_req, 1)
 
-    def _update_subtitle_display(self, text: str):
+    def _update_subtitle_display(self, text: str) -> None:
         if not self.text_label or not self._gui_running:
             return
         try:
@@ -651,7 +662,7 @@ class SubtitleGuiService:
         except Exception as e:
             self.logger.warning(f"更新字幕显示时出错: {e}", exc_info=True)
 
-    def _check_auto_hide(self):
+    def _check_auto_hide(self) -> None:
         if not self._gui_running:
             return
         try:
@@ -683,7 +694,7 @@ class SubtitleGuiService:
             if self._gui_running and self.root:
                 self.root.after(100, self._check_auto_hide)
 
-    def _on_closing(self):
+    def _on_closing(self) -> None:
         self.logger.info("Subtitle 窗口关闭请求...")
         self._gui_running = False
         if self.root:
@@ -693,11 +704,11 @@ class SubtitleGuiService:
                 self.logger.warning(f"销毁 subtitle 窗口时出错: {e}", exc_info=True)
         self.root = None
 
-    def _start_move(self, event):
+    def _start_move(self, event: tk.Event) -> None:
         self._move_x = event.x
         self._move_y = event.y
 
-    def _on_move(self, event):
+    def _on_move(self, event: tk.Event) -> None:
         if self.root:
             deltax = event.x - self._move_x
             deltay = event.y - self._move_y
@@ -705,7 +716,7 @@ class SubtitleGuiService:
             y = self.root.winfo_y() + deltay
             self.root.geometry(f"+{x}+{y}")
 
-    def _show_context_menu(self, event):
+    def _show_context_menu(self, event: tk.Event) -> None:
         if not self.root:
             return
         try:
@@ -727,7 +738,7 @@ class SubtitleGuiService:
         except Exception as e:
             self.logger.debug(f"显示右键菜单时出错: {e}")
 
-    def _minimize_window(self):
+    def _minimize_window(self) -> None:
         if self.root and self.always_show_window:
             if self.obs_friendly_mode:
                 # 无边框窗口没有任务栏图标，iconify 无法恢复——改为隐藏，
@@ -737,12 +748,12 @@ class SubtitleGuiService:
             else:
                 self.root.iconify()
 
-    def _show_window(self):
+    def _show_window(self) -> None:
         if self.root:
             self.root.deiconify()
             self.is_visible = True
 
-    def _toggle_topmost(self):
+    def _toggle_topmost(self) -> None:
         if self.root:
             current = self.root.attributes("-topmost")
             new_topmost = not current
@@ -751,7 +762,7 @@ class SubtitleGuiService:
             status = "置顶" if new_topmost else "取消置顶"
             self.logger.info(f"窗口已{status} (always_on_top: {self.always_on_top})")
 
-    def _adjust_opacity(self):
+    def _adjust_opacity(self) -> None:
         if self.root:
             current_alpha = self.root.attributes("-alpha")
             alpha_values = [1.0, 0.8, 0.6, 0.4]
@@ -764,12 +775,12 @@ class SubtitleGuiService:
             self.root.attributes("-alpha", new_alpha)
             self.logger.info(f"窗口透明度已调整为: {new_alpha}")
 
-    def _show_test_message(self):
+    def _show_test_message(self) -> None:
         if self.root:
             self._update_subtitle_display("OBS 测试消息 - 窗口可见性检查")
             self.logger.info("已显示 OBS 测试消息，请检查窗口是否在 OBS 窗口捕获列表中出现")
 
-    def _clear_content(self):
+    def _clear_content(self) -> None:
         if self.text_label:
             if self.always_show_window and self.show_waiting_text:
                 self.text_label.configure_text(text="等待语音/弹幕输入...")
