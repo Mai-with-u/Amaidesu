@@ -13,12 +13,12 @@ ToolRegistry / 业务事件总线。对齐 ``EventBus._background_tasks`` 正典
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Coroutine, Dict, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
-from src.modules.logging import get_logger
+from src.modules.logging import ModuleLogger, get_logger
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolInvocation
 
@@ -59,7 +59,7 @@ class SpeechDispatcher:
         tool_registry: Optional[Any],
         tts_engine: Optional[Any],
         speech_config: Optional[Dict[str, Any]] = None,
-        logger=None,
+        logger: Optional[ModuleLogger] = None,
     ) -> None:
         """``speech_config`` 形态见 StreamerAgent 构造参数文档
         （enabled / max_queue / render_timeout_ms）；``None`` 或
@@ -82,7 +82,7 @@ class SpeechDispatcher:
         # 事件循环的弱引用导致任务被 GC；停止时限期汇合防止悬挂）。
         self._bg_tasks: set = set()
 
-    def _spawn(self, coro, *, label: str) -> None:
+    def _spawn(self, coro: Coroutine[Any, Any, Any], *, label: str) -> None:
         """把后台 coroutine 创建并纳入强引用持有（决策循环同步返回，不等待）。
 
         行为对齐 ``EventBus._background_tasks`` 正典模式：

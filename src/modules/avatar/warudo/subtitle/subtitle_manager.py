@@ -17,12 +17,11 @@ HTTP 路由:
 
 import asyncio
 import json
-import logging
 from typing import Any, Dict, List, Optional
 
 from aiohttp import WSMsgType, web
 
-from src.modules.logging import get_logger
+from src.modules.logging import ModuleLogger, get_logger
 from src.modules.avatar.warudo.subtitle.templates import render_subtitle_html
 
 
@@ -36,8 +35,8 @@ class WarudoSubtitleManager:
         self,
         port: int = 8766,
         show_status: bool = False,
-        logger: Optional[logging.Logger] = None,
-    ):
+        logger: Optional[ModuleLogger] = None,
+    ) -> None:
         """
         初始化字幕管理器
 

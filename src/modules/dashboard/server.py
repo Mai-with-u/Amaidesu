@@ -10,7 +10,7 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from fastapi import WebSocket
 from fastapi.responses import FileResponse
@@ -76,7 +76,7 @@ class DashboardServer:
         chat_repo: Optional[Any] = None,
         llm_repo: Optional[Any] = None,
         rundown_repo: Optional[Any] = None,
-    ):
+    ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
         self.agent_manager = agent_manager
@@ -151,7 +151,7 @@ class DashboardServer:
                 self.app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
             @self.app.get("/{full_path:path}")
-            async def serve_spa(full_path: str):
+            async def serve_spa(full_path: str) -> FileResponse | Dict[str, str]:
                 if full_path.startswith("api/") or full_path == "ws":
                     return {"detail": "Not Found"}
                 # no-cache 强制每次重验（未变时 304）：后端重建后标签页必须拿到新 index，
@@ -162,7 +162,7 @@ class DashboardServer:
         else:
 
             @self.app.get("/")
-            async def root():
+            async def root() -> Dict[str, str]:
                 return {
                     "name": "Amaidesu Dashboard API",
                     "version": "1.0.0",

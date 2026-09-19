@@ -29,6 +29,7 @@ from src.modules.dashboard.services.session_timeline import build_timeline_items
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
+    from src.modules.session.manager import LiveSessionManager
     from src.modules.dashboard.server import DashboardServer
 
 router = APIRouter()
@@ -38,7 +39,7 @@ logger = get_logger("SessionsAPI")
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
-def _require_session_manager(server: "DashboardServer"):
+def _require_session_manager(server: "DashboardServer") -> Optional["LiveSessionManager"]:
     """取 session_manager，未装配时返回 None。"""
     return getattr(server, "session_manager", None)
 

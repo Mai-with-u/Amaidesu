@@ -19,7 +19,7 @@ class TokenBudgetController:
     - 硬上限（100%）：is_budget_exceeded()
     """
 
-    def __init__(self, budget_per_hour: int = 50000):
+    def __init__(self, budget_per_hour: int = 50000) -> None:
         self._budget = budget_per_hour
         self._usage: "deque[Tuple[float, int]]" = deque()
 

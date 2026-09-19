@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional, TYPE_CHECKING
 
 import numpy as np
 from pydantic import Field
@@ -73,7 +73,7 @@ class OmniTTSProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-    ):
+    ) -> None:
         self.config = config
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)
@@ -225,7 +225,7 @@ class OmniTTSProvider:
             )
             raise
 
-    def _tts_stream(self, text: str):
+    def _tts_stream(self, text: str) -> Iterator[bytes]:
         """HTTP 流式 TTS 请求"""
         params = {
             "text": text,
@@ -262,7 +262,7 @@ class OmniTTSProvider:
 
         return response.iter_content(chunk_size=4096)
 
-    def _decode_to_pcm(self, wav_chunk) -> Optional[np.ndarray]:
+    def _decode_to_pcm(self, wav_chunk: bytes) -> Optional[np.ndarray]:
         """解码 WAV 块为 int16 numpy 数组，失败返回 None。
 
         整块解码后交给 AudioDeviceManager 流式播放。

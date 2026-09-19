@@ -34,7 +34,7 @@ class BiliMessageTypeConfig:
         BiliMessageType.SUPER_CHAT.value: "handle_superchat_messages",
     }
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any]) -> None:
         """
         初始化消息类型配置
 

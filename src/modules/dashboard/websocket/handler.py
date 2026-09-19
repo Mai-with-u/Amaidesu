@@ -32,7 +32,7 @@ class WebSocketHandler:
     # 单连接发送队列上限：满时丢弃最旧保新，防止慢客户端导致内存无限增长
     MAX_QUEUE_SIZE = 1024
 
-    def __init__(self, heartbeat_interval: int = 30):
+    def __init__(self, heartbeat_interval: int = 30) -> None:
         self.heartbeat_interval = heartbeat_interval
         self._clients: Dict[str, WebSocket] = {}
         self._client_subscriptions: Dict[str, Set[str]] = {}

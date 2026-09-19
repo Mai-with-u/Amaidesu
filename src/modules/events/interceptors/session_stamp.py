@@ -11,10 +11,13 @@
 依据 0 值由 StorageLedger 跳过。
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from src.modules.events.interceptors.base import EventInterceptor
 from src.modules.logging import get_logger
+
+if TYPE_CHECKING:
+    from src.modules.session.manager import LiveSessionManager
 
 logger = get_logger("SessionStampInterceptor")
 
@@ -46,7 +49,7 @@ class SessionStampInterceptor(EventInterceptor):
     # 被净化丢弃的消息不消耗归属解析
     priority = 200
 
-    def __init__(self, session_manager) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, session_manager: "LiveSessionManager") -> None:
         self._session_manager = session_manager
 
     @property

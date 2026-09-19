@@ -6,6 +6,7 @@ import asyncio
 from functools import partial
 
 from src.modules.storage.connection import SQLiteConnectionManager
+from typing import Any, Callable
 
 
 class BaseRepo:
@@ -20,7 +21,7 @@ class BaseRepo:
     def __init__(self, manager: SQLiteConnectionManager) -> None:
         self._manager = manager
 
-    async def _run_in_executor(self, fn, /, *args, **kwargs):
+    async def _run_in_executor(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
         """统一 ``asyncio.to_thread`` 防漏（仓储内所有同步调用都走这里）。"""
         if asyncio.iscoroutinefunction(fn):
             # 不应该到这里（避免失误）；直接 await

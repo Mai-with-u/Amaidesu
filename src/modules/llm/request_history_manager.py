@@ -119,7 +119,7 @@ class RequestHistoryManager:
         cache_size: int = CACHE_SIZE,
         enabled: bool = True,
         llm_repo: Optional["LLMRepo"] = None,
-    ):
+    ) -> None:
         """初始化请求历史记录管理器
 
         Args:

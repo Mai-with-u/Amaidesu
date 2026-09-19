@@ -23,7 +23,7 @@ class ExpressionController:
         logger_name: str,
         is_connected: Callable[[], bool],
         vts_request: Callable[..., Coroutine[Any, Any, Any]],
-    ):
+    ) -> None:
         self.logger = get_logger(logger_name)
         self._is_connected = is_connected
         self._vts_request = vts_request

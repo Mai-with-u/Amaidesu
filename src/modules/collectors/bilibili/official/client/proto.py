@@ -8,7 +8,7 @@ from src.modules.logging import get_logger
 class Proto:
     """Bilibili WebSocket 协议处理器"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.packet_len = 0
         self.header_len = 16
         self.ver = 0
@@ -29,7 +29,7 @@ class Proto:
         buf += self.body.encode()
         return buf
 
-    def unpack(self, buf: bytes):
+    def unpack(self, buf: bytes) -> None:
         """解包消息"""
         try:
             if len(buf) < self.header_len:

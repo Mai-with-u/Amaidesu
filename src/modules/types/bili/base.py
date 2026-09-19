@@ -13,7 +13,7 @@ from typing import Any, Dict
 
 from pydantic import BaseModel, ConfigDict
 
-from src.modules.logging import get_logger
+from src.modules.logging import ModuleLogger, get_logger
 
 
 class BiliMessageType(Enum):
@@ -41,6 +41,6 @@ class BiliBaseMessage(BaseModel, ABC):
     raw_data: Dict[str, Any] = {}
 
     @cached_property
-    def logger(self):
+    def logger(self) -> ModuleLogger:
         """获取 logger 实例（延迟初始化）"""
         return get_logger(self.__class__.__name__)

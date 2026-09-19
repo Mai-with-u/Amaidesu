@@ -13,6 +13,7 @@ import asyncio
 from enum import Enum
 from typing import Any, AsyncIterator, Optional
 
+from src.modules.events.payloads.base import BasePayload
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 
@@ -164,7 +165,7 @@ class BaseCollector:
     async def emit_event(
         self,
         event_name: str,
-        payload,
+        payload: BasePayload,
         source: Optional[str] = None,
     ) -> None:
         """封装 emit：子类直接调，无需关心 bus 是否为 None。"""

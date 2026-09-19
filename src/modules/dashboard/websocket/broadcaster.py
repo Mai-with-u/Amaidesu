@@ -61,7 +61,7 @@ class EventBroadcaster:
         subscribe_events: Optional[List[str]] = None,
         event_history: Optional["EventHistoryService"] = None,
         history_push_limit: int = 100,
-    ):
+    ) -> None:
         self.event_bus = event_bus
         self.ws_handler = ws_handler
         self.subscribe_events = subscribe_events or []

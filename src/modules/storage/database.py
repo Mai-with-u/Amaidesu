@@ -28,7 +28,7 @@ import time
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.storage.connection import SQLiteConnectionManager
@@ -259,7 +259,7 @@ class SQLiteDatabase:
 
     # -------------------- 内部 --------------------
 
-    async def _run_in_executor(self, fn, /, *args, **kwargs):
+    async def _run_in_executor(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
         """统一 ``asyncio.to_thread`` 防漏（内部所有同步调用都走这里）。"""
         if asyncio.iscoroutinefunction(fn):
             # 不应该到这里（避免失误）；直接 await

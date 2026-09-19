@@ -256,7 +256,7 @@ class McpToolProvider(BaseToolProvider):
         structured = exec_result.structured_content
         return structured if isinstance(structured, dict) else None
 
-    def subscribe_task_notifications(self, callback) -> Optional[Any]:
+    def subscribe_task_notifications(self, callback: Callable[[str], None]) -> Optional[Any]:
         """通知适配器：订阅 ``attention_uri`` 资源（举旗级；返回退订句柄）。
 
         多订阅方共用一条资源订阅：每个订阅方拿到自己的退订句柄，最后一个退订时

@@ -35,6 +35,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, Optional
 
+from src.modules.events.payloads.base import BasePayload
+from src.modules.events.payloads.tasks import TaskChangedPayload
+
 from src.modules.config.core_schemas import AgentSupervisorConfig
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
@@ -237,7 +240,7 @@ class BaseAgent(abc.ABC):
         """
         return f"{self.name or type(self).__name__} 不接收委派（未实现接收入口或明确拒收）"
 
-    def on_task_notification(self, payload) -> None:
+    def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """任务变化通知钩子（``task.changed``，仅发起方是自己时被调）。
 
         默认实现只记日志。子类覆写做**注入消息 + 唤醒**（把任务变化送进
@@ -382,7 +385,7 @@ class BaseAgent(abc.ABC):
     async def emit_event(
         self,
         event_name: str,
-        payload,
+        payload: BasePayload,
         source: Optional[str] = None,
     ) -> None:
         """封装 emit：子类直接调，无需关心 bus 是否为 None。"""

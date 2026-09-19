@@ -21,6 +21,7 @@ import json
 from typing import Any, Dict
 
 from src.modules.logging import get_logger
+from src.modules.tools import ToolInvocation
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
 
@@ -75,7 +76,7 @@ def build_rundown_tool_provider(provider: "RundownControlProvider") -> ToolProvi
     完整进入观察文本与 tool.result 事件，消费方拿到的信息与直连返回一致。
     """
 
-    async def _run(inv):  # type: ignore[no-untyped-def]
+    async def _run(inv: ToolInvocation) -> ToolExecutionResult:
         text = provider.invoke(dict(inv.arguments or {}))
         return ToolExecutionResult(
             tool_name=_CONTROL_SPEC.full_name,

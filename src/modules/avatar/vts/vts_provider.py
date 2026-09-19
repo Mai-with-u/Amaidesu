@@ -228,7 +228,7 @@ class VTSProvider(BaseToolProvider):
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-    ):
+    ) -> None:
         # 配置
         self.config = config
         self.event_bus = event_bus
@@ -683,18 +683,18 @@ class VTSProvider(BaseToolProvider):
         vts_request_builder = pyvts.VTSRequest()
 
         class VTSRequestProxy:
-            async def __call__(self, request):
+            async def __call__(self, request: Dict[str, Any]) -> Dict[str, Any]:
                 async with handler._vts_api_lock:
                     return await handler._vts.request(request)
 
             @property
-            def vts_request(self):
+            def vts_request(self) -> Any:
                 return vts_request_builder
 
-            def requestHotKeyList(self):
+            def requestHotKeyList(self) -> Dict[str, Any]:
                 return vts_request_builder.requestHotKeyList()
 
-            def requestTriggerHotKey(self, **kwargs):
+            def requestTriggerHotKey(self, **kwargs: Any) -> Dict[str, Any]:
                 return vts_request_builder.requestTriggerHotKey(**kwargs)
 
         return VTSRequestProxy()

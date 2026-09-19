@@ -6,9 +6,12 @@ LipSyncProcessor - VTS 口型同步处理器
 
 import asyncio
 import time
-from typing import Any, Callable, Coroutine, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Optional
 
 from src.modules.logging import get_logger
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 class LipSyncProcessor:
@@ -38,7 +41,7 @@ class LipSyncProcessor:
         vowel_decay: float = 0.4,
         min_mouth_delta: float = 0.005,
         expression_rest_values: Optional[Dict[str, float]] = None,
-    ):
+    ) -> None:
         self._logger_name = logger_name
         self.logger = get_logger(logger_name)
         self._sample_rate = sample_rate
@@ -195,7 +198,7 @@ class LipSyncProcessor:
 
         await self._update_lip_sync_parameters(volume, vowel_values)
 
-    def _detect_vowels(self, audio_array, sample_rate: int = 16000) -> Dict[str, float]:
+    def _detect_vowels(self, audio_array: "np.ndarray", sample_rate: int = 16000) -> Dict[str, float]:
         try:
             import numpy as np
         except ImportError:

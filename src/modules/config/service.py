@@ -95,7 +95,7 @@ class ConfigService:
         await config_service.start_file_watcher()
     """
 
-    def __init__(self, base_dir: str):
+    def __init__(self, base_dir: str) -> None:
         self.base_dir = base_dir
         self._main_config: Dict[str, Any] = {}
         self._main_config_copied = False

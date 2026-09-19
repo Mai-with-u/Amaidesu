@@ -11,12 +11,11 @@ Warudo TalkingHeadTask - 说话时的随机头部动作任务
 """
 
 import asyncio
-import logging
 import math
 import random
 from typing import Callable, Coroutine, Optional, Any
 
-from src.modules.logging import get_logger
+from src.modules.logging import ModuleLogger, get_logger
 
 
 class TalkingHeadTask:
@@ -25,9 +24,9 @@ class TalkingHeadTask:
     def __init__(
         self,
         send_action_callback: Callable[[str, Any], Coroutine[Any, Any, bool]],
-        logger: Optional[logging.Logger] = None,
+        logger: Optional[ModuleLogger] = None,
         min_interval: float = 0.1,
-    ):
+    ) -> None:
         """
         初始化头部动作任务
 

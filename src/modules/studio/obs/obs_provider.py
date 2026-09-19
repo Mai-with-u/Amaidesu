@@ -85,7 +85,7 @@ class OBSProvider(BaseToolProvider):
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-    ):
+    ) -> None:
         self.config = config
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)

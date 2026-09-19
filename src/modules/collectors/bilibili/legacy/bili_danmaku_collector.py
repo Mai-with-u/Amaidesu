@@ -69,7 +69,7 @@ class BiliDanmakuCollector(BaseCollector):
         self,
         config: Optional[Dict[str, Any]] = None,
         event_bus: Optional[EventBus] = None,
-    ):
+    ) -> None:
         """初始化 BiliDanmakuCollector
 
         Args:

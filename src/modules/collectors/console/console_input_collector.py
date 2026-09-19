@@ -66,7 +66,7 @@ class ConsoleInputCollector(BaseCollector):
         self,
         config: Optional[Dict[str, Any]] = None,
         event_bus: Optional[EventBus] = None,
-    ):
+    ) -> None:
         super().__init__(event_bus=event_bus)
         self.config = config or {}
         self.logger = get_logger(self.__class__.__name__)

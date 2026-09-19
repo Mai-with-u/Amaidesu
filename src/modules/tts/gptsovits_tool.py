@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections import deque
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from typing import Any, AsyncIterator, Dict, Optional, TYPE_CHECKING, cast
 
 import numpy as np
 from pydantic import Field
@@ -101,7 +101,7 @@ class GPTSoVITSProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-    ):
+    ) -> None:
         self.config = config
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)
@@ -289,7 +289,7 @@ class GPTSoVITSProvider:
             )
             raise
 
-    async def _process_audio_stream(self, audio_stream):
+    async def _process_audio_stream(self, audio_stream: Any) -> AsyncIterator[np.ndarray]:
         """处理音频流（同步/异步迭代器）"""
         # 函数体内导入：单元测试 patch wav_decoder.decode_wav_chunk 拦截解码，
         # 顶部导入会使 patch 失效

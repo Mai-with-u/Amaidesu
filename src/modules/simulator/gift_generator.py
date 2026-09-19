@@ -40,7 +40,7 @@ class GiftGenerator:
         sim_repo: SimRepo,
         llm_wrapper: Any = None,
         rng: Optional[random.Random] = None,
-    ):
+    ) -> None:
         self._config = config
         self._sim = sim_repo
         self._llm_wrapper = llm_wrapper

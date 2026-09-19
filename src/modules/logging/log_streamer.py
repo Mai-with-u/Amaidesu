@@ -34,7 +34,7 @@ class LogStreamer:
         persist_dir: str = DEFAULT_PERSIST_DIR,
         persist_min_level: str = "INFO",
         persist_retention_days: int = 14,
-    ):
+    ) -> None:
         """
         Args:
             ws_handler: WebSocket 处理器实例（可选，可延迟设置）

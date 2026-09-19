@@ -40,7 +40,7 @@ class AxisWander:
         pause_probability: float,
         max_pause: float,
         min_target: float = 0.3,
-    ):
+    ) -> None:
         self._rng = rng
         self._min_dur = min_duration
         self._max_dur = max_duration
@@ -124,7 +124,7 @@ class IdleMotionController:
         extra_params: Optional[Dict[str, float]] = None,
         extra_speed: Optional[float] = None,
         rng: Optional[random.Random] = None,
-    ):
+    ) -> None:
         self._logger_name = logger_name
         self.logger = get_logger(logger_name)
         self._is_connected = is_connected

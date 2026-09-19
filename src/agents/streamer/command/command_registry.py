@@ -12,7 +12,7 @@ class CommandRegistry:
     支持多个命令名称映射到同一个动作。
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = get_logger(self.__class__.__name__)
         self._command_to_action: Dict[str, str] = {}
 

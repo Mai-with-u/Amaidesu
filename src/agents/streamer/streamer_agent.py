@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
+from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from src.modules.agents.base import BaseAgent
 from src.modules.events.event_bus import EventBus
@@ -966,7 +966,7 @@ class StreamerAgent(BaseAgent):
     # 历史读取（duck-typed 鸭子接口）
     # ==================================================================
 
-    def _read_history_sync(self):
+    def _read_history_sync(self) -> "Coroutine[Any, Any, Any]":
         """reply_tool.history_provider 鸭子接口（返回 awaitable）。
 
         实际实现是返回 coroutine（不是同步 list），由 ReplyToolProvider 检测 awaitable 并 await。

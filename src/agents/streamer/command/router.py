@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from src.modules.events.payloads.room import RoomMessagePayload
-from src.modules.logging import get_logger
+from src.modules.logging import ModuleLogger, get_logger
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolInvocation
 
@@ -39,7 +39,7 @@ class CommandRouter:
         self,
         config: StreamerCommandConfig,
         tool_registry: Optional[Any],
-        logger=None,
+        logger: Optional[ModuleLogger] = None,
     ) -> None:
         """``tool_registry`` 为鸭子注解（仅调 ``invoke``）——命令接线
         消费工具面但不属于工具面，不引入该类型依赖。"""

@@ -5,16 +5,18 @@
 """
 
 import asyncio
-import logging
 import random
 import time
 from typing import Optional
+
+from src.modules.avatar.warudo.state.warudo_state_manager import WarudoStateManager
+from src.modules.logging import ModuleLogger
 
 
 class ShiftTask:
     """眼部左右移动定时任务"""
 
-    def __init__(self, state_manager, logger: logging.Logger):
+    def __init__(self, state_manager: WarudoStateManager, logger: ModuleLogger) -> None:
         """
         初始化眼部移动任务
 
@@ -37,7 +39,7 @@ class ShiftTask:
 
         self.logger.info(f"眼部移动任务已初始化，间隔范围: {self.min_interval}-{self.max_interval}秒")
 
-    async def start(self):
+    async def start(self) -> None:
         """启动眼部移动任务"""
         if self.running:
             self.logger.warning("眼部移动任务已在运行中")
@@ -47,7 +49,7 @@ class ShiftTask:
         self.task = asyncio.create_task(self._run_loop())
         self.logger.info("眼部移动任务已启动")
 
-    async def stop(self):
+    async def stop(self) -> None:
         """停止眼部移动任务"""
         if not self.running:
             return
@@ -64,7 +66,7 @@ class ShiftTask:
 
         self.logger.info("眼部移动任务已停止")
 
-    async def _run_loop(self):
+    async def _run_loop(self) -> None:
         """眼部移动任务主循环"""
         self.logger.debug("眼部移动任务循环开始")
 
@@ -93,7 +95,7 @@ class ShiftTask:
         except Exception as e:
             self.logger.exception(f"眼部移动任务循环出错: {e}")
 
-    async def _perform_shift(self):
+    async def _perform_shift(self) -> None:
         """执行一次眼部移动动作"""
         try:
             # 随机选择移动方向

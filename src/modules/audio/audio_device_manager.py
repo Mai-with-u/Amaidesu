@@ -31,7 +31,7 @@ class AudioDeviceManager:
     管理音频输出设备和音频播放。
     """
 
-    def __init__(self, sample_rate: int = 32000, channels: int = 1, dtype: type = np.int16):
+    def __init__(self, sample_rate: int = 32000, channels: int = 1, dtype: type = np.int16) -> None:
         """
         初始化音频设备管理器
 

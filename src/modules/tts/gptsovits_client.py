@@ -31,7 +31,7 @@ class GPTSoVITSClient:
     封装 GPT-SoVITS API 调用逻辑，提供同步和流式 TTS 功能。
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9880):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9880) -> None:
         """
         初始化 GPT-SoVITS 客户端
 

@@ -28,7 +28,7 @@ class PersonaPool:
     ]
     _PASSERBY_POOL_CAP = 50
 
-    def __init__(self, sim_repo: SimRepo, rng: Optional[random.Random] = None):
+    def __init__(self, sim_repo: SimRepo, rng: Optional[random.Random] = None) -> None:
         self._rng = rng or random.Random()
         self._residents: List[Persona] = []
         self._passersby: List[Persona] = []  # temporary

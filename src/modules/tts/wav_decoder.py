@@ -3,7 +3,7 @@ WAV 解码工具模块
 """
 
 import base64
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -45,7 +45,7 @@ def extract_pcm_from_wav(wav_data: bytes) -> bytes:
         return wav_data
 
 
-async def decode_wav_chunk(wav_chunk: bytes, dtype=np.int16) -> Optional[np.ndarray]:
+async def decode_wav_chunk(wav_chunk: bytes, dtype: Any = np.int16) -> Optional[np.ndarray]:
     """
     解码 WAV 数据块
 

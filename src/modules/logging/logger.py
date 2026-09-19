@@ -13,7 +13,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger as loguru_logger
 
@@ -26,7 +26,7 @@ _HANDLER_IDS: list[int] = []  # 追踪处理器 ID 以便清理
 _DEFAULT_HANDLER_ID: int | None = None  # 追踪默认处理器
 
 
-def _ensure_default_handler():
+def _ensure_default_handler() -> None:
     """确保默认 stderr 处理器存在（延迟初始化）。
 
     若 configure_from_config() 尚未被调用，则创建一个默认的 stderr 处理器。
@@ -103,7 +103,7 @@ def configure_from_config(config_dict: dict | None = None) -> None:
             # 如果是列表，创建过滤器函数
             filter_modules = set(filter_config)
 
-            def module_filter(record):
+            def module_filter(record: Any) -> bool:
                 """只允许指定模块的日志通过，WARNING 及以上级别总是显示"""
                 module = record["extra"].get("module", "unknown")
                 # 如果模块在过滤列表中，或者日志级别 >= WARNING，则显示
@@ -132,7 +132,7 @@ def configure_from_config(config_dict: dict | None = None) -> None:
                 return
 
         # 定义自定义 JSONL sink
-        def json_sink(message):
+        def json_sink(message: Any) -> None:
             """自定义 JSONL sink，每行写入一个 JSON 对象；异常日志附带完整堆栈。"""
             record = message.record
             log_obj = {

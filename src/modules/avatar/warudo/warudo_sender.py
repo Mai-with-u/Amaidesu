@@ -21,7 +21,7 @@ class ActionSender:
     以实例形式注入持有(避免每次调用都新建实例)。
     """
 
-    def __init__(self, websocket: Optional[Any] = None):
+    def __init__(self, websocket: Optional[Any] = None) -> None:
         self.websocket = websocket
 
     def set_websocket(self, websocket: Any) -> None:

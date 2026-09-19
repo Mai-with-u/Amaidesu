@@ -54,7 +54,7 @@ class STTCollector(BaseCollector):
         self,
         config: Optional[Dict[str, Any]] = None,
         event_bus: Optional[EventBus] = None,
-    ):
+    ) -> None:
         super().__init__(event_bus=event_bus)
         self.config = config or {}
         self.logger = get_logger(self.__class__.__name__)
@@ -259,7 +259,7 @@ class STTCollector(BaseCollector):
 
         input_device_index = self._find_device_index(self.input_device_name, kind="input")
 
-        def audio_callback(indata, frame_count, time_info, status):
+        def audio_callback(indata: "np.ndarray", frame_count: int, time_info: dict, status: Any) -> None:
             """sounddevice 音频回调"""
             if status:
                 self.logger.warning(f"音频输入状态: {status}")
@@ -543,7 +543,7 @@ class STTCollector(BaseCollector):
             if receiver_task_to_await and not receiver_task_to_await.done():
                 receiver_task_to_await.cancel()
 
-    async def _iflytek_receiver(self, ws) -> None:
+    async def _iflytek_receiver(self, ws: Any) -> None:
         """接收讯飞 WebSocket 消息并处理识别结果"""
         self.logger.debug("讯飞接收器任务启动")
         self.full_text = ""

@@ -39,7 +39,7 @@ class DanmakuWidgetService:
         event_bus: "EventBus",
         config: Optional[DanmakuWidgetConfig] = None,
         subtitle_config: Optional[SubtitleWidgetConfig] = None,
-    ):
+    ) -> None:
         self.event_bus = event_bus
         self.config = config or DanmakuWidgetConfig()
         self.subtitle_config = subtitle_config or SubtitleWidgetConfig()

@@ -48,7 +48,7 @@ class OpenAIClient(BaseLLMClient):
     retry/timeout），model 由每次调用通过 ``model`` 参数传入。
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
         self.logger = get_logger(self.__class__.__name__)
         client_config = build_openai_compatible_client_config(config)

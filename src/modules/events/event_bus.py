@@ -91,7 +91,7 @@ class EventBus:
     - 生命周期管理(cleanup方法)
     """
 
-    def __init__(self, enable_stats: bool = True):
+    def __init__(self, enable_stats: bool = True) -> None:
         """
         初始化事件总线
 
@@ -278,7 +278,7 @@ class EventBus:
         self._active_emits[emit_id] = complete_event
 
         # 定义带跟踪的 emit 逻辑
-        async def emit_with_tracking():
+        async def emit_with_tracking() -> None:
             try:
                 # 并发执行所有处理器；_call_handler 内部已捕获异常，
                 # gather 仅作汇合点（return_exceptions 防御取消之外的漏网异常）
@@ -384,7 +384,7 @@ class EventBus:
         # 创建包装器，自动反序列化。payload 验证失败在此处闭环（数据问题，
         # 记日志后放弃本条）；处理器执行异常原样冒泡，由 _call_handler 统一
         # 计数并写日志
-        async def typed_wrapper(event_name: str, dict_data: Dict[str, Any], source: str):
+        async def typed_wrapper(event_name: str, dict_data: Dict[str, Any], source: str) -> None:
             try:
                 typed_data = model_class.model_validate(dict_data)
             except ValidationError as e:
@@ -471,7 +471,7 @@ class EventBus:
         self._stats.clear()
         self.logger.info("已清除所有事件监听器和统计信息")
 
-    async def cleanup(self, timeout: float = 5.0, force: bool = False):
+    async def cleanup(self, timeout: float = 5.0, force: bool = False) -> None:
         """
         清理 EventBus
 
@@ -568,7 +568,7 @@ class EventBus:
         # 返回深拷贝以避免外部修改影响内部数据
         return {k: copy.deepcopy(v) for k, v in self._stats.items()}
 
-    def reset_stats(self, event_name: Optional[str] = None):
+    def reset_stats(self, event_name: Optional[str] = None) -> None:
         """
         重置统计信息
 

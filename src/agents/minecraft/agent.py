@@ -40,6 +40,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
@@ -473,7 +474,7 @@ class MinecraftAgent(BaseAgent):
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到指令注入：{content[:60]}")
 
-    def receive_delegation(self, *, instruction: str, task_id: str):
+    def receive_delegation(self, *, instruction: str, task_id: str) -> None:
         """接收委派入口（framework_delegate 调用）：指令入队（带任务号）+ 唤醒。
 
         指令不可拒绝；队列项带任务号供任务批次把状态写回任务记录表
@@ -756,7 +757,7 @@ class MinecraftAgent(BaseAgent):
             if (rec := ledger.get(task_id)) is not None and rec.initiator == self.name
         )
 
-    def on_task_notification(self, payload) -> None:
+    def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """task.changed 到达（发起方是自己）：注入快照消息 + 唤醒 worker。
 
         等价原 handoff 行为：状态真变化（含决策点/暂停/终态）与停滞告警

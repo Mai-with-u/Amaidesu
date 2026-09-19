@@ -22,6 +22,7 @@
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.time_utils import now_ms as _real_now_ms
 
 __all__ = ["RoomStateSnapshot", "RoomState"]
@@ -133,7 +134,7 @@ class RoomState:
     # 弹幕更新
     # ------------------------------------------------------------------
 
-    def update(self, message, *, now_ms: Optional[int] = None) -> None:
+    def update(self, message: RoomMessagePayload, *, now_ms: Optional[int] = None) -> None:
         """记录一条弹幕消息,维护热度窗口。
 
         Args:

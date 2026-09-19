@@ -11,12 +11,11 @@ Warudo TypingActionTask - 打字时的手机抖动动作
 """
 
 import asyncio
-import logging
 import math
 import random
 from typing import Any, Callable, Coroutine, Optional
 
-from src.modules.logging import get_logger
+from src.modules.logging import ModuleLogger, get_logger
 
 
 class TypingActionTask:
@@ -25,9 +24,9 @@ class TypingActionTask:
     def __init__(
         self,
         send_action_callback: Callable[[str, Any], Coroutine[Any, Any, bool]],
-        logger: Optional[logging.Logger] = None,
+        logger: Optional[ModuleLogger] = None,
         min_interval: float = 0.1,
-    ):
+    ) -> None:
         self.send_action_callback = send_action_callback
         self.logger = logger or get_logger("WarudoTypingAction")
         self.min_interval = min_interval

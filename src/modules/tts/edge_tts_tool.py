@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING, Tuple
 
 import numpy as np
 from pydantic import Field
@@ -65,7 +65,7 @@ class EdgeTTSProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
-    ):
+    ) -> None:
         self.config = config
         self.event_bus = event_bus
         self.logger = get_logger(self.__class__.__name__)
@@ -179,7 +179,7 @@ class EdgeTTSProvider:
             self.logger.exception(f"TTS 渲染失败: {e}")
             raise
 
-    async def _edge_tts_synthesize(self, text: str):
+    async def _edge_tts_synthesize(self, text: str) -> Tuple[np.ndarray, int]:
         """调用 Edge TTS 合成"""
         if "edge_tts" not in globals():
             raise RuntimeError("Edge TTS 未安装")

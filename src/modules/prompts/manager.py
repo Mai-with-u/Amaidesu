@@ -110,7 +110,7 @@ class PromptManager:
         self,
         templates_dir: Optional[str] = None,
         auto_scan_src: bool = False,
-    ):
+    ) -> None:
         """
         初始化 Prompt 管理器
 

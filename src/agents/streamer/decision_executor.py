@@ -22,7 +22,7 @@ from src.modules.events.payloads.planner import (
     StreamerStagePayload,
 )
 from src.modules.events.payloads.room import RoomMessagePayload
-from src.modules.logging import get_logger
+from src.modules.logging import ModuleLogger, get_logger
 from src.modules.time_utils import now_ms
 
 from .planner import Planner
@@ -107,7 +107,7 @@ class DecisionRoundExecutor:
         rundown_text_provider: Callable[[], Optional[str]],
         game_narrative_provider: Callable[[], str],
         body_narrative_provider: Optional[Callable[[], str]] = None,
-        logger=None,
+        logger: Optional[ModuleLogger] = None,
     ) -> None:
         """``history_provider`` 等 provider 返回值形态：
 

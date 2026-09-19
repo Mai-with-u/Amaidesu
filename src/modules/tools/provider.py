@@ -197,7 +197,7 @@ class BaseToolProvider(ABC):
         """
         return None
 
-    def subscribe_task_notifications(self, callback) -> Optional[Callable[[], None]]:
+    def subscribe_task_notifications(self, callback: Callable[[str], None]) -> Optional[Callable[[], None]]:
         """通知适配器（可选，默认不支持）：订阅执行侧任务提示。
 
         覆写时返回退订句柄（无参可调用）；收到提示即调 ``callback(task_id)``

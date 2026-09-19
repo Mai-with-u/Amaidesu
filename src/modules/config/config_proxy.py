@@ -56,7 +56,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 # 用于识别内部属性的名称集合。访问这些属性走 object.__getattribute__ 路径,
@@ -147,7 +147,7 @@ class ConfigProxy:
         """``key in proxy`` — 成员检查"""
         return key in object.__getattribute__(self, "_getter")()
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Any]:
         """``iter(proxy)`` — 迭代内部配置的键"""
         return iter(object.__getattribute__(self, "_getter")())
 

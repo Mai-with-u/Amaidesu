@@ -15,7 +15,7 @@ from .command import Command
 class CommandParser:
     """命令解析器，负责解析命令格式并创建Command对象"""
 
-    def __init__(self, command_prefix: str = "/"):
+    def __init__(self, command_prefix: str = "/") -> None:
         self.command_prefix = command_prefix
         self.logger = get_logger(self.__class__.__name__)
 

@@ -10,7 +10,7 @@ import json
 import random
 import time
 from hashlib import sha256
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import requests
 import urllib3
@@ -38,7 +38,7 @@ _RECONNECT_MAX_ATTEMPTS = 0  # 最大重连次数，0 = 无限
 class BiliWebSocketClient:
     """Bilibili官方WebSocket客户端"""
 
-    def __init__(self, id_code: str, app_id: int, access_key: str, access_key_secret: str, api_host: str):
+    def __init__(self, id_code: str, app_id: int, access_key: str, access_key_secret: str, api_host: str) -> None:
         self.id_code = id_code
         self.app_id = app_id
         self.access_key = access_key
@@ -53,7 +53,7 @@ class BiliWebSocketClient:
         self.app_heartbeat_task = None
         self.recv_task = None
 
-    async def run(self, message_handler: Callable, queue: asyncio.Queue = None):
+    async def run(self, message_handler: Callable[..., Any], queue: Optional[asyncio.Queue] = None) -> None:
         """运行WebSocket客户端（带自动重连）
 
         Args:
@@ -112,7 +112,7 @@ class BiliWebSocketClient:
             self.logger.info("WebSocket 连接断开，准备重连...")
             await self._reconnect_delay(attempt if attempt > 0 else 1)
 
-    async def close(self):
+    async def close(self) -> None:
         """关闭WebSocket连接"""
         self.logger.debug("正在关闭WebSocket连接...")
         self.is_started = False
@@ -199,7 +199,7 @@ class BiliWebSocketClient:
             self.logger.exception(f"获取WebSocket信息失败: {e}")
             return None, None
 
-    async def _send_app_heartbeat(self):
+    async def _send_app_heartbeat(self) -> None:
         """发送应用心跳"""
         if not self.game_id:
             return
@@ -221,7 +221,7 @@ class BiliWebSocketClient:
         except Exception as e:
             self.logger.warning(f"发送应用心跳时出错: {e}")
 
-    async def _end_app(self):
+    async def _end_app(self) -> None:
         """结束应用"""
         if not self.game_id:
             return
@@ -243,7 +243,7 @@ class BiliWebSocketClient:
         except Exception as e:
             self.logger.warning(f"结束应用时出错: {e}")
 
-    async def _auth(self, websocket, auth_body: str):
+    async def _auth(self, websocket: Any, auth_body: str) -> None:
         """WebSocket认证"""
         try:
             proto = Proto()
@@ -291,7 +291,7 @@ class BiliWebSocketClient:
             self.logger.exception(f"建立WebSocket连接时出错: {e}")
             return None
 
-    async def _heartbeat_loop(self):
+    async def _heartbeat_loop(self) -> None:
         """WebSocket心跳循环"""
         while self.is_started and self.websocket:
             try:
@@ -309,7 +309,7 @@ class BiliWebSocketClient:
                 self.logger.warning(f"发送WebSocket心跳时出错: {e}")
                 break
 
-    async def _app_heartbeat_loop(self):
+    async def _app_heartbeat_loop(self) -> None:
         """应用心跳循环"""
         while self.is_started:
             try:
@@ -320,7 +320,7 @@ class BiliWebSocketClient:
                 self.logger.warning(f"应用心跳循环出错: {e}")
                 break
 
-    async def _recv_loop(self, message_handler: Callable, queue: asyncio.Queue = None):
+    async def _recv_loop(self, message_handler: Callable, queue: asyncio.Queue = None) -> None:
         """接收消息循环"""
         while self.is_started and self.websocket:
             try:
@@ -352,7 +352,7 @@ class BiliWebSocketClient:
                 self.logger.exception(f"接收消息时出错: {e}")
                 break
 
-    async def _cleanup(self):
+    async def _cleanup(self) -> None:
         """清理资源"""
         if self.websocket:
             try:
@@ -362,7 +362,7 @@ class BiliWebSocketClient:
             finally:
                 self.websocket = None
 
-    async def _reconnect_delay(self, attempt: int):
+    async def _reconnect_delay(self, attempt: int) -> None:
         """重连等待（指数退避），连接断开后根据尝试次数递增等待时间。
 
         Args:

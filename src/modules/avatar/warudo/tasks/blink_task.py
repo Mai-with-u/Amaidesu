@@ -5,16 +5,18 @@
 """
 
 import asyncio
-import logging
 import random
 import time
 from typing import Optional
+
+from src.modules.avatar.warudo.state.warudo_state_manager import WarudoStateManager
+from src.modules.logging import ModuleLogger
 
 
 class BlinkTask:
     """眨眼定时任务"""
 
-    def __init__(self, state_manager, logger: logging.Logger):
+    def __init__(self, state_manager: WarudoStateManager, logger: ModuleLogger) -> None:
         """
         初始化眨眼任务
 
@@ -40,7 +42,7 @@ class BlinkTask:
 
         self.logger.info(f"眨眼任务已初始化，间隔范围: {self.min_interval}-{self.max_interval}秒")
 
-    async def start(self):
+    async def start(self) -> None:
         """启动眨眼任务"""
         if self.running:
             self.logger.warning("眨眼任务已在运行中")
@@ -50,7 +52,7 @@ class BlinkTask:
         self.task = asyncio.create_task(self._run_loop())
         self.logger.info("眨眼任务已启动")
 
-    async def stop(self):
+    async def stop(self) -> None:
         """停止眨眼任务"""
         if not self.running:
             return
@@ -67,7 +69,7 @@ class BlinkTask:
 
         self.logger.info("眨眼任务已停止")
 
-    async def _run_loop(self):
+    async def _run_loop(self) -> None:
         """眨眼任务主循环"""
         self.logger.debug("眨眼任务循环开始")
 
@@ -98,7 +100,7 @@ class BlinkTask:
         finally:
             self.logger.debug("眨眼任务循环结束")
 
-    async def _perform_blink(self):
+    async def _perform_blink(self) -> None:
         """执行一次眨眼动作"""
         try:
             # 检查是否有其他眼部动作正在进行

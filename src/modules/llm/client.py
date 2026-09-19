@@ -52,7 +52,7 @@ class BaseLLMClient(abc.ABC):
     ``clients/<vendor>/`` 目录 + 调度表追加一行），本模块不做注册。
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any]) -> None:
         """保存客户端的原始 provider 配置（连接信息/鉴权/超时/重试/默认 headers）。"""
         self.config = config
 

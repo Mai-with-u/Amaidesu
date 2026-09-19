@@ -321,7 +321,7 @@ class LLMManager:
         ```
     """
 
-    def __init__(self, llm_repo: Optional[LLMRepo] = None):
+    def __init__(self, llm_repo: Optional[LLMRepo] = None) -> None:
         self.logger = get_logger("LLMManager")
         # provider_name -> provider 配置 + 客户端实例（共享连接）
         self._providers: Dict[str, Tuple[Dict[str, Any], Any]] = {}

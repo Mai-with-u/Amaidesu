@@ -9,11 +9,10 @@ Warudo ThrowFishTask - 抛鱼动画(单次触发)
 - 冷却机制由调用方控制(或外部检查 last_throw_time)
 """
 
-import logging
 import time
 from typing import Any, Callable, Coroutine, Optional
 
-from src.modules.logging import get_logger
+from src.modules.logging import ModuleLogger, get_logger
 
 
 class ThrowFishTask:
@@ -22,9 +21,9 @@ class ThrowFishTask:
     def __init__(
         self,
         send_action_callback: Callable[[str, Any], Coroutine[Any, Any, bool]],
-        logger: Optional[logging.Logger] = None,
+        logger: Optional[ModuleLogger] = None,
         cooldown_seconds: float = 5.0,
-    ):
+    ) -> None:
         """
         初始化抛鱼任务
 
