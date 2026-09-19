@@ -338,6 +338,11 @@ class DashboardServer:
         """获取访问 URL"""
         return f"http://{self.host}:{self.port}"
 
+    @property
+    def widget_service(self) -> Optional[DanmakuWidgetService]:
+        """弹幕小部件服务；danmaku_widget 未启用或未启动时为 None"""
+        return self.widget_gateway.widget_service
+
     async def _run_heartbeat(self) -> None:
         """心跳任务"""
         while self._is_running:
