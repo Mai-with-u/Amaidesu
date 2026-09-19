@@ -141,7 +141,7 @@ class BaseAgent(abc.ABC):
             await self._on_start()
         except Exception as exc:  # noqa: BLE001 - 边界
             self._state = AgentState.ERRORED
-            logger.error(f"Agent '{self.name}' 启动失败: {exc}", exc_info=True)
+            logger.exception(f"Agent '{self.name}' 启动失败: {exc}")
             raise
 
         self._subscribe_task_wakeup()
@@ -164,7 +164,7 @@ class BaseAgent(abc.ABC):
             await self._on_stop()
         except Exception as exc:  # noqa: BLE001 - 边界
             self._state = AgentState.ERRORED
-            logger.error(f"Agent '{self.name}' 停止失败: {exc}", exc_info=True)
+            logger.exception(f"Agent '{self.name}' 停止失败: {exc}")
             raise
 
         self._unsubscribe_task_wakeup()

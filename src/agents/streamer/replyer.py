@@ -150,7 +150,7 @@ class Replyer:
                 on_delta=on_delta,
             )
         except Exception as e:
-            self.logger.error(f"Replyer LLM 调用异常: {e}", exc_info=True)
+            self.logger.exception(f"Replyer LLM 调用异常: {e}")
             return None
 
         if not getattr(response, "success", False):

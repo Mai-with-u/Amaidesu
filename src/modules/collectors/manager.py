@@ -113,7 +113,7 @@ class CollectorManager:
         try:
             await collector.start()
         except Exception as exc:  # noqa: BLE001 - 边界
-            logger.error(f"Collector '{name}' 单实例启动失败: {exc}", exc_info=True)
+            logger.exception(f"Collector '{name}' 单实例启动失败: {exc}")
             return False
         return getattr(collector, "is_started", False) or collector.state == CollectorState.RUNNING
 
@@ -125,7 +125,7 @@ class CollectorManager:
         try:
             await reg.collector.stop()
         except Exception as exc:  # noqa: BLE001 - 边界
-            logger.error(f"Collector '{name}' 单实例停止失败: {exc}", exc_info=True)
+            logger.exception(f"Collector '{name}' 单实例停止失败: {exc}")
             return False
         return True
 
@@ -175,7 +175,7 @@ class CollectorManager:
             try:
                 await reg.collector.start()
             except Exception as exc:  # noqa: BLE001 - 边界
-                logger.error(f"Collector '{name}' 启动失败: {exc}", exc_info=True)
+                logger.exception(f"Collector '{name}' 启动失败: {exc}")
 
     async def stop_all(self) -> None:
         """按注册逆序停止（LIFO）。"""
@@ -186,14 +186,14 @@ class CollectorManager:
             try:
                 await reg.collector.stop()
             except Exception as exc:  # noqa: BLE001 - 边界
-                logger.error(f"Collector '{name}' 停止失败: {exc}", exc_info=True)
+                logger.exception(f"Collector '{name}' 停止失败: {exc}")
 
     async def cleanup_all(self) -> None:
         for name, reg in self._collectors.items():
             try:
                 await reg.collector.cleanup()
             except Exception as exc:  # noqa: BLE001 - 边界
-                logger.error(f"Collector '{name}' cleanup 失败: {exc}", exc_info=True)
+                logger.exception(f"Collector '{name}' cleanup 失败: {exc}")
 
     # -------------------- 健康监控 --------------------
 

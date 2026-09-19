@@ -376,7 +376,7 @@ class SimulatorService:
             self.logger.debug("模拟器生成循环被取消")
             raise
         except Exception as exc:
-            self.logger.error(f"模拟器生成循环异常: {exc}", exc_info=True)
+            self.logger.exception(f"模拟器生成循环异常: {exc}")
 
     async def _fetch_world_window(self, *, persona: Any) -> List[str]:
         """按 persona 关注度读取 live_chat 最近公共流窗口。
@@ -441,7 +441,7 @@ class SimulatorService:
             self.logger.debug("模拟器回放循环被取消")
             raise
         except Exception as exc:
-            self.logger.error(f"模拟器回放循环异常: {exc}", exc_info=True)
+            self.logger.exception(f"模拟器回放循环异常: {exc}")
 
     # message_type → room.message.* 事件名映射；未知类型回退弹幕事件
     _MESSAGE_TYPE_EVENT: Dict[str, str] = {

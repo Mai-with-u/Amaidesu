@@ -91,7 +91,7 @@ class ShiftTask:
         except asyncio.CancelledError:
             self.logger.debug("眼部移动任务循环被取消")
         except Exception as e:
-            self.logger.error(f"眼部移动任务循环出错: {e}", exc_info=True)
+            self.logger.exception(f"眼部移动任务循环出错: {e}")
 
     async def _perform_shift(self):
         """执行一次眼部移动动作"""
@@ -114,4 +114,4 @@ class ShiftTask:
             self.logger.debug(f"执行眼部移动: 停止向{direction_name}移动")
 
         except Exception as e:
-            self.logger.error(f"执行眼部移动动作时出错: {e}", exc_info=True)
+            self.logger.exception(f"执行眼部移动动作时出错: {e}")

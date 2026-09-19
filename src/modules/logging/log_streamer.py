@@ -6,6 +6,7 @@ import asyncio
 import json
 import sys
 import time as time_mod
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -232,6 +233,12 @@ class LogStreamer:
                 "module": record["extra"].get("module", "unknown"),
                 "message": record["message"],
             }
+            # exc=True 在无活动异常时会留下 (None, None, None) 占位，type 非空才真正带堆栈
+            exc = record["exception"]
+            if exc is not None and exc.type is not None:
+                log_entry["exception"] = "".join(traceback.format_exception(exc.type, exc.value, exc.traceback)).rstrip(
+                    "\n"
+                )
             # 添加到缓冲区
             try:
                 loop = asyncio.get_running_loop()

@@ -94,30 +94,30 @@ class PyGetWindowBackend:
     def focus(self, win: WindowInfo) -> bool:
         target = self._resolve(win)
         if target is None:
-            logger.warning("夺焦失败：窗口句柄无效，title=%r", win.title)
+            logger.warning(f"夺焦失败：窗口句柄无效，title={win.title!r}")
             return False
         try:
             target.activate()
             return True
         except Exception:
-            logger.error("夺焦失败：activate 抛出异常，title=%r", win.title, exc_info=True)
+            logger.exception(f"夺焦失败：activate 抛出异常，title={win.title!r}")
             return False
 
     def rect(self, win: WindowInfo) -> Optional[WindowRect]:
         target = self._resolve(win)
         if target is None:
-            logger.warning("读取几何失败：窗口句柄无效，title=%r", win.title)
+            logger.warning(f"读取几何失败：窗口句柄无效，title={win.title!r}")
             return None
         try:
             return (target.left, target.top, target.width, target.height)
         except Exception:
-            logger.error("读取几何失败：窗口可能已关闭，title=%r", win.title, exc_info=True)
+            logger.exception(f"读取几何失败：窗口可能已关闭，title={win.title!r}")
             return None
 
     def is_foreground(self, win: WindowInfo) -> bool:
         target = self._resolve(win)
         if target is None:
-            logger.warning("前台判定失败：窗口句柄无效，title=%r", win.title)
+            logger.warning(f"前台判定失败：窗口句柄无效，title={win.title!r}")
             return False
         foreground_handle = self._get_foreground_handle()
         if foreground_handle is None:
@@ -190,7 +190,7 @@ class FakeWindowBackend:
 
     def focus(self, win: WindowInfo) -> bool:
         if win.handle is None:
-            logger.warning("FakeWindowBackend 夺焦失败：handle 为空，title=%r", win.title)
+            logger.warning(f"FakeWindowBackend 夺焦失败：handle 为空，title={win.title!r}")
             return False
         return self._focus_ok
 

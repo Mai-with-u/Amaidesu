@@ -356,7 +356,7 @@ class IdleMotionController:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            self.logger.error(f"idle 动画后台循环异常: {e}", exc_info=True)
+            self.logger.exception(f"idle 动画后台循环异常: {e}")
 
     def _compute_targets(self, speaking: bool = False) -> Dict[str, float]:
         """计算当前时刻的目标 idle 参数值（随机漫步，归一化值 × 各轴幅度）

@@ -124,7 +124,7 @@ async def get_rundown_state(server: ServerDep) -> RundownStateResponse:
             if not is_available():
                 return _empty_state_response(server, message="流程单未加载", cfg=cfg)
         except Exception:
-            logger.warning("流程单可用性检查失败，按未加载降级", exc_info=True)
+            logger.warning("流程单可用性检查失败，按未加载降级", exc=True)
             return _empty_state_response(server, message="流程单未加载", cfg=cfg)
 
     view_getter_raw = getattr(agent, "get_rundown_view", None)

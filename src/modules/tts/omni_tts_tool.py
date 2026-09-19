@@ -210,11 +210,11 @@ class OmniTTSProvider:
             # 协程取消不会自动关闭声卡流，超时取消时必须显式截断
             if self.audio_manager:
                 self.audio_manager.stop_stream()
-            self.logger.warning("TTS 渲染被取消（已截断播放）: utterance_id=: {}", utterance_id)
+            self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except Exception as e:
             self.error_count += 1
-            self.logger.error("TTS 播放失败: : {}", e)
+            self.logger.error(f"TTS 播放失败: {e}")
             if self.audio_manager:
                 self.audio_manager.stop_stream()
             await emit_utterance_failed(
@@ -282,7 +282,7 @@ class OmniTTSProvider:
                 return None
             return np.frombuffer(pcm_data, dtype=self.dtype)
         except Exception as e:
-            self.logger.warning("解码音频块失败，跳过该块: : {}", e)
+            self.logger.warning(f"解码音频块失败，跳过该块: {e}")
             return None
 
     def get_stats(self) -> Dict[str, Any]:

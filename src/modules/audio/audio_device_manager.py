@@ -191,7 +191,7 @@ class AudioDeviceManager:
             self.logger.debug("音频播放完成")
 
         except Exception as e:
-            self.logger.error(f"音频播放失败: {e}", exc_info=True)
+            self.logger.exception(f"音频播放失败: {e}")
             self.is_playing = False
             raise
 

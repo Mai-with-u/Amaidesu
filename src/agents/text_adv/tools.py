@@ -97,7 +97,7 @@ def _query_monitor_geometry(monitor_index: int) -> Optional[MonitorGeometry]:
                 height=int(mon["height"]),
             )
     except Exception as exc:  # noqa: BLE001 - 坐标链路不可用按拒绝处理，不上抛
-        logger.error(f"监视器原点查询失败（monitor={monitor_index}）: {type(exc).__name__}: {exc}", exc_info=True)
+        logger.exception(f"监视器原点查询失败（monitor={monitor_index}）: {type(exc).__name__}: {exc}")
         return None
 
 
@@ -273,7 +273,7 @@ class TextAdvToolProvider(BaseToolProvider):
                 return self._snapshot_result("text_adv_get_state", started_ms)
             return self._fail(name, started_ms, f"未知 TextAdv 工具 '{name}'")
         except Exception as exc:  # noqa: BLE001 - 工具边界兜底，异常转失败结果
-            logger.error(f"TextAdv 工具 '{name}' 执行异常: {type(exc).__name__}: {exc}", exc_info=True)
+            logger.exception(f"TextAdv 工具 '{name}' 执行异常: {type(exc).__name__}: {exc}")
             return self._fail(name, started_ms, f"{type(exc).__name__}: {exc}")
 
     # ==================================================================
@@ -290,7 +290,7 @@ class TextAdvToolProvider(BaseToolProvider):
         try:
             self.input_backend.press(key)
         except Exception as exc:  # noqa: BLE001 - 注入失败转失败结果
-            logger.error(f"推进按键失败（key={key}）: {type(exc).__name__}: {exc}", exc_info=True)
+            logger.exception(f"推进按键失败（key={key}）: {type(exc).__name__}: {exc}")
             return self._fail("text_adv_advance", started_ms, f"推进按键失败: {type(exc).__name__}: {exc}")
 
         stable = await self._stable_frame()
@@ -361,7 +361,7 @@ class TextAdvToolProvider(BaseToolProvider):
         try:
             self.input_backend.click(abs_xy[0], abs_xy[1])
         except Exception as exc:  # noqa: BLE001 - 注入失败转失败结果
-            logger.error(f"选项点击失败（{abs_xy}）: {type(exc).__name__}: {exc}", exc_info=True)
+            logger.exception(f"选项点击失败（{abs_xy}）: {type(exc).__name__}: {exc}")
             return self._fail("text_adv_choose", started_ms, f"选项点击失败: {type(exc).__name__}: {exc}")
 
         # 点击后验证：等稳定后重读，选项屏应消失或正文文本变化；不过则不二次点击
@@ -412,7 +412,7 @@ class TextAdvToolProvider(BaseToolProvider):
             try:
                 self.input_backend.click(abs_xy[0], abs_xy[1])
             except Exception as exc:  # noqa: BLE001 - 点击失败不翻标志
-                logger.error(f"AUTO 按钮点击失败（{abs_xy}）: {type(exc).__name__}: {exc}", exc_info=True)
+                logger.exception(f"AUTO 按钮点击失败（{abs_xy}）: {type(exc).__name__}: {exc}")
                 return self._fail("text_adv_set_auto", started_ms, f"AUTO 按钮点击失败: {type(exc).__name__}: {exc}")
         else:
             notice = "未标定 AUTO 按钮坐标，仅切换观察循环"

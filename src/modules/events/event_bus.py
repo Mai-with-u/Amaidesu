@@ -346,7 +346,7 @@ class EventBus:
             # 处理器级别的错误记录（每个 handler 独立，无需锁）
             wrapper.error_count += 1
             wrapper.last_error = str(e)
-            self.logger.error(f"事件处理器执行错误 (事件: {event_name}, 来源: {source}): {e}", exc_info=True)
+            self.logger.exception(f"事件处理器执行错误 (事件: {event_name}, 来源: {source}): {e}")
             # 事件级统计（使用锁保护）
             if self.enable_stats:
                 async with self._stats_lock:
@@ -388,9 +388,9 @@ class EventBus:
             try:
                 typed_data = model_class.model_validate(dict_data)
             except ValidationError as e:
+                # 不记堆栈：ValidationError 的消息已包含验证详情
                 self.logger.error(
                     f"类型化事件数据验证失败 ({event_name}, 期望类型: {model_class.__name__}): {e}",
-                    exc_info=False,  # 不需要完整堆栈，ValidationError 已包含详细信息
                 )
                 return
             await handler(event_name, typed_data, source)
@@ -505,7 +505,7 @@ class EventBus:
                 else:
                     self.logger.warning(f"等待 emit 完成超时（{timeout}秒），强制清理 {remaining} 个活跃任务")
             except Exception as e:
-                self.logger.error(f"等待 emit 完成时发生错误: {e}", exc_info=True)
+                self.logger.exception(f"等待 emit 完成时发生错误: {e}")
 
         # 后台任务处理
         if self._background_tasks:

@@ -496,7 +496,7 @@ class MinecraftAgent(BaseAgent):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - 任务失败不杀死 worker
-                self._logger.error(f"任务执行异常: {exc}", exc_info=True)
+                self._logger.exception(f"任务执行异常: {exc}")
                 await self.emit_error(f"任务执行异常: {exc}")
 
     async def _run_task(self) -> None:

@@ -145,7 +145,7 @@ class BiliDanmakuCollector(BaseCollector):
                         async for message in self._fetch_and_process():
                             yield message
                     except Exception as e:
-                        self.logger.error(f"采集弹幕时出错: {e}", exc_info=True)
+                        self.logger.exception(f"采集弹幕时出错: {e}")
 
                     # 等待下次轮询
                     try:
@@ -156,7 +156,7 @@ class BiliDanmakuCollector(BaseCollector):
         except asyncio.CancelledError:
             self.logger.info("采集被取消")
         except Exception as e:
-            self.logger.error(f"数据采集出错: {e}", exc_info=True)
+            self.logger.exception(f"数据采集出错: {e}")
         finally:
             self.is_started = False
             self.logger.info("Bilibili 弹幕采集已停止")
@@ -232,7 +232,7 @@ class BiliDanmakuCollector(BaseCollector):
             # 场次归属由场次盖章拦截器统一注入；message_id 透传（回复关联键）
             await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
         except Exception as e:
-            self.logger.debug(f"emit 语义事件失败: {e}", exc_info=True)
+            self.logger.debug(f"emit 语义事件失败: {e}", exc=True)
 
     async def _create_danmaku_message(self, item: Dict[str, Any]) -> Optional[RoomMessagePayload]:
         """

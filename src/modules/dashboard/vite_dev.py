@@ -49,7 +49,7 @@ class ViteDevServer:
             logger.error(f"未找到 {npm_cmd}，请先安装 Node.js 与 npm")
             self._process = None
         except Exception as e:
-            logger.error(f"启动 Vite 失败: {e}", exc_info=True)
+            logger.exception(f"启动 Vite 失败: {e}")
             self._process = None
 
     async def stop(self) -> None:
@@ -69,7 +69,7 @@ class ViteDevServer:
                 self._process.kill()
                 await self._process.wait()
         except Exception as e:
-            logger.error(f"停止 Vite 失败: {e}", exc_info=True)
+            logger.exception(f"停止 Vite 失败: {e}")
         finally:
             self._process = None
             if self._log_file:

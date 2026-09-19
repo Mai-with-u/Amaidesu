@@ -115,7 +115,7 @@ class InterceptorChain:
                 # 异常隔离：捕获 + 日志 + 视为 pass-through（不影响后续拦截器/handler）
                 self.logger.error(
                     f"拦截器 '{interceptor.name}' 执行异常（事件: {event_name}, 来源: {source}），视为 pass-through: {e}",
-                    exc_info=True,
+                    exc=True,
                 )
                 continue
             if result is None:

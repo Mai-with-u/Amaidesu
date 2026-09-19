@@ -58,7 +58,7 @@ def _config_enabled(server: "DashboardServer") -> bool:
     try:
         section = server.config_service.get_section("simulator", default={}) or {}
     except Exception:
-        logger.warning("读取 [simulator] 配置段失败，按未启用处理", exc_info=True)
+        logger.warning("读取 [simulator] 配置段失败，按未启用处理", exc=True)
         return False
     if not isinstance(section, dict):
         return False
@@ -82,7 +82,7 @@ def _config_summary(server: "DashboardServer") -> Dict[str, Any]:
     try:
         section = server.config_service.get_section("simulator", default={}) or {}
     except Exception:
-        logger.warning("读取 [simulator] 配置段失败，按空摘要处理", exc_info=True)
+        logger.warning("读取 [simulator] 配置段失败，按空摘要处理", exc=True)
         return {}
     if not isinstance(section, dict):
         return {}
@@ -228,7 +228,7 @@ async def start_simulator(server: ServerDep, request: Optional[SimulatorStartReq
     try:
         await service.start(replay_date=replay_date)
     except Exception as exc:  # noqa: BLE001 - 边界
-        logger.error(f"模拟器启动失败: {exc}", exc_info=True)
+        logger.exception(f"模拟器启动失败: {exc}")
         return _result(False, f"启动失败: {exc}")
 
     if not getattr(service, "is_running", False):
@@ -256,7 +256,7 @@ async def stop_simulator(server: ServerDep) -> Dict[str, Any]:
     try:
         await service.stop()
     except Exception as exc:  # noqa: BLE001 - 边界
-        logger.error(f"模拟器停止失败: {exc}", exc_info=True)
+        logger.exception(f"模拟器停止失败: {exc}")
         return _result(False, f"停止失败: {exc}")
 
     return _result(True, "模拟器已停止", is_running=bool(getattr(service, "is_running", False)))

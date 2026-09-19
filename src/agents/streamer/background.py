@@ -303,7 +303,7 @@ class BackgroundMaintainer:
                 try:
                     await self._light_tick()
                 except Exception as exc:
-                    self._logger.error(f"BackgroundMaintainer 轻循环 tick 异常: {exc}", exc_info=True)
+                    self._logger.exception(f"BackgroundMaintainer 轻循环 tick 异常: {exc}")
         except asyncio.CancelledError:
             raise
 
@@ -398,7 +398,7 @@ class BackgroundMaintainer:
                 try:
                     await self._handle_compress_task(task)
                 except Exception as exc:
-                    self._logger.error(f"压缩 worker 处理失败: {exc}", exc_info=True)
+                    self._logger.exception(f"压缩 worker 处理失败: {exc}")
         except asyncio.CancelledError:
             raise
 

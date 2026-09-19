@@ -122,7 +122,7 @@ class RundownControlProvider:
             else:
                 return json.dumps({"ok": False, "error": f"未知 action={action!r}"}, ensure_ascii=False)
         except Exception as exc:
-            self._logger.warning(f"rundown_control 执行异常: {exc}", exc_info=True)
+            self._logger.warning(f"rundown_control 执行异常: {exc}", exc=True)
             return json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False)
 
         if reject is not None:

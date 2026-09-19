@@ -170,7 +170,7 @@ class TextAdvGameAgent(BaseAgent):
         退出语义：
         - 窗口护栏未通过：记日志 + 一条 ``game.error`` + auto 回落 False，循环终止
         - 感知失败（采集异常/空图/解析失败）：只记日志，循环继续
-        - 整体异常退出：记日志（exc_info）+ 恰好一条 ``game.error`` + auto 回落 False
+        - 整体异常退出：记日志（带堆栈）+ 恰好一条 ``game.error`` + auto 回落 False
         """
         try:
             win = self._window_backend.find(self.typed_config.game_window_title_keyword)
@@ -260,12 +260,12 @@ class TextAdvGameAgent(BaseAgent):
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 循环整体死亡路径
-            self._logger.error(f"观察循环异常退出: {type(exc).__name__}: {exc}", exc_info=True)
+            self._logger.exception(f"观察循环异常退出: {type(exc).__name__}: {exc}")
             self._auto = False
             try:
                 await self.emit_error(f"观察循环异常退出: {type(exc).__name__}: {exc}")
             except Exception:  # noqa: BLE001 - 错误上报失败不再二次上抛
-                self._logger.error("观察循环死亡的 game.error 上报也失败", exc_info=True)
+                self._logger.exception("观察循环死亡的 game.error 上报也失败")
 
     async def _wait_stable_quietly(self, region: Optional[Tuple[int, int, int, int]]) -> Optional[StableFrameResult]:
         """等待画面稳定；采集后端抛异常按感知失败降级（返回 None，不外抛）。"""

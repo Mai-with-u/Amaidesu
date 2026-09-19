@@ -169,13 +169,13 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 except asyncio.TimeoutError:
                     continue
                 except Exception as e:
-                    self.logger.error(f"从队列获取消息时出错: {e}", exc_info=True)
+                    self.logger.exception(f"从队列获取消息时出错: {e}")
                     break
 
         except asyncio.CancelledError:
             self.logger.info("采集被取消")
         except Exception as e:
-            self.logger.error(f"数据采集出错: {e}", exc_info=True)
+            self.logger.exception(f"数据采集出错: {e}")
         finally:
             self.is_started = False
             ws_task.cancel()
@@ -190,7 +190,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         try:
             await self.websocket_client.run(self._handle_message_from_bili, message_queue)
         except Exception as e:
-            self.logger.error(f"WebSocket运行出错: {e}", exc_info=True)
+            self.logger.exception(f"WebSocket运行出错: {e}")
         finally:
             await message_queue.put(None)
 
@@ -218,9 +218,9 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 await message_queue.put(payload)
 
         except Exception as e:
-            # 异常文本可能含花括号（如校验错误的 dict repr），用占位符交给 loguru 格式化，避免二次 format 崩溃
-            self.logger.error("处理消息时出错: {}", e)
-            self.logger.debug("失败消息数据: cmd={}", message_data.get("cmd"))
+            # f-string 插值先行完成，异常文本中的花括号不会再被日志层二次 format
+            self.logger.error(f"处理消息时出错: {e}")
+            self.logger.debug(f"失败消息数据: cmd={message_data.get('cmd')}")
 
     async def _emit_semantic_event(self, payload: RoomMessagePayload) -> None:
         """按载荷的 message_type 选事件名并 emit room.message.* 事件。"""

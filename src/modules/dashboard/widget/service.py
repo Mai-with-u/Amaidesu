@@ -119,7 +119,7 @@ class DanmakuWidgetService:
             await self._broadcast_new_message(widget_msg)
 
         except Exception as e:
-            self.logger.error(f"处理输入消息失败: {e}", exc_info=True)
+            self.logger.exception(f"处理输入消息失败: {e}")
 
     async def show_subtitle(self, text: str, duration_ms: Optional[int] = None) -> None:
         """显示一条字幕（字幕基础设施 Backend 的调用入口）。
@@ -160,7 +160,7 @@ class DanmakuWidgetService:
             try:
                 await self._subtitle_callback(data)
             except Exception as e:
-                self.logger.error(f"广播字幕到subtitle端失败: {e}", exc_info=True)
+                self.logger.exception(f"广播字幕到subtitle端失败: {e}")
 
     async def clear_subtitle(self) -> None:
         """清空当前字幕显示（字幕基础设施 Backend 的调用入口）。
@@ -191,7 +191,7 @@ class DanmakuWidgetService:
             try:
                 await self._subtitle_callback(data)
             except Exception as e:
-                self.logger.error(f"广播清空字幕到subtitle端失败: {e}", exc_info=True)
+                self.logger.exception(f"广播清空字幕到subtitle端失败: {e}")
 
     def _convert_payload_to_widget(
         self,
@@ -263,7 +263,7 @@ class DanmakuWidgetService:
             )
 
         except Exception as e:
-            self.logger.error(f"转换 RoomMessagePayload 失败: {e}", exc_info=True)
+            self.logger.exception(f"转换 RoomMessagePayload 失败: {e}")
             return None
 
     def _should_display(self, msg: DanmakuWidgetMessage) -> bool:
@@ -295,7 +295,7 @@ class DanmakuWidgetService:
             try:
                 await self._danmaku_callback(data)
             except Exception as e:
-                self.logger.error(f"广播消息到danmaku端失败: {e}", exc_info=True)
+                self.logger.exception(f"广播消息到danmaku端失败: {e}")
 
     def get_recent_messages(self, count: int = 15) -> List[dict]:
         messages = list(self.messages)[-count:]

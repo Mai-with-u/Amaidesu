@@ -115,5 +115,5 @@ def apply_rundown_control(
         return False, str(exc), _snap()
     except Exception as exc:
         # 状态机内部错误统一兜底，避免 dashboard 500
-        _logger.warning(f"rundown_control {action!r} 异常: {exc}", exc_info=True)
+        _logger.warning(f"rundown_control {action!r} 异常: {exc}", exc=True)
         return False, f"控制失败: {exc}", _snap()

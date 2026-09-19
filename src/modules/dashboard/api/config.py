@@ -83,7 +83,7 @@ async def get_config(server: ServerDep) -> ConfigResponse:
         masked_config = _mask_sensitive_values(raw_config)
         return ConfigResponse(config=masked_config)
     except Exception as e:
-        logger.error(f"获取配置失败: {e}", exc_info=True)
+        logger.exception(f"获取配置失败: {e}")
         return ConfigResponse()
 
 
@@ -103,7 +103,7 @@ async def get_config_schema(server: ServerDep) -> SchemaGroupsResponse:
         result = _build_frontend_groups(config_service)
         return SchemaGroupsResponse(**result)
     except Exception as e:
-        logger.error(f"获取配置 Schema 失败: {e}", exc_info=True)
+        logger.exception(f"获取配置 Schema 失败: {e}")
         return SchemaGroupsResponse()
 
 
@@ -215,7 +215,7 @@ async def restart_service(server: ServerDep) -> ConfigUpdateResponse:
             requires_restart=False,
         )
     except Exception as e:
-        logger.error(f"重启服务失败: {e}", exc_info=True)
+        logger.exception(f"重启服务失败: {e}")
         return ConfigUpdateResponse(
             success=False,
             message=f"重启服务失败: {str(e)}",

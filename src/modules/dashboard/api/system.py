@@ -101,7 +101,7 @@ def _build_event_bus_stats(server: "DashboardServer") -> EventBusStats:
     try:
         stats = getter()
     except Exception:
-        logger.warning("读取 EventBus 统计失败，按零吞吐展示", exc_info=True)
+        logger.warning("读取 EventBus 统计失败，按零吞吐展示", exc=True)
         return EventBusStats(total_events=0)
     total = 0
     for entry in stats.values():
@@ -117,7 +117,7 @@ def _get_app_version() -> str:
 
         return version("amaidesu")
     except Exception:
-        logger.warning("读取 amaidesu 包版本失败，按未知版本展示", exc_info=True)
+        logger.warning("读取 amaidesu 包版本失败，按未知版本展示", exc=True)
         return "0.0.0"
 
 

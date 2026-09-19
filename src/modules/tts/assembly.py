@@ -111,7 +111,7 @@ def build_tts_infrastructure(
         logger.error(
             f"build_tts_infrastructure: 构造 {provider} 引擎失败（{_PROVIDER_DESCRIPTIONS[provider]}）"
             f"：{type(exc).__name__}: {exc}",
-            exc_info=True,
+            exc=True,
         )
         return None
 

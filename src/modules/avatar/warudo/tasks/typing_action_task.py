@@ -107,7 +107,7 @@ class TypingActionTask:
         except asyncio.CancelledError:
             self.logger.debug("TypingActionTask 循环被取消")
         except Exception as e:
-            self.logger.error(f"TypingActionTask 循环异常: {e}", exc_info=True)
+            self.logger.exception(f"TypingActionTask 循环异常: {e}")
         finally:
             # 结束时发送一次零位
             try:

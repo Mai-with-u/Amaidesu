@@ -483,7 +483,7 @@ class VTSProvider(BaseToolProvider):
                 f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'",
             )
         except Exception as exc:  # noqa: BLE001 — Provider 边界兜底
-            self.logger.error(f"VTS 工具 {invocation.tool_name} 调用异常: {exc}", exc_info=True)
+            self.logger.exception(f"VTS 工具 {invocation.tool_name} 调用异常: {exc}")
             return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
 
     # ===== 生命周期 =====
@@ -638,7 +638,7 @@ class VTSProvider(BaseToolProvider):
             self.logger.warning(f"道具加载失败: {response}")
             return None
         except Exception as e:
-            self.logger.error(f"加载道具失败: {e}", exc_info=True)
+            self.logger.exception(f"加载道具失败: {e}")
             return None
 
     def _set_idle_enabled(self, enabled: bool) -> None:
@@ -811,7 +811,7 @@ class VTSProvider(BaseToolProvider):
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            self.logger.error(f"VTS 自动重连循环异常: {e}", exc_info=True)
+            self.logger.exception(f"VTS 自动重连循环异常: {e}")
 
     async def _disconnect(self) -> None:
         if self._reconnect_task and not self._reconnect_task.done():

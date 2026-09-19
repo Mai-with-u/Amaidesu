@@ -201,7 +201,7 @@ class AgentControlProvider(BaseToolProvider):
                 error_message=f"未知 AgentControl 工具 '{name}'",
             )
         except Exception as exc:  # noqa: BLE001 - 边界兜底
-            logger.error(f"AgentControl 工具 '{name}' 执行失败: {exc}", exc_info=True)
+            logger.exception(f"AgentControl 工具 '{name}' 执行失败: {exc}")
             return ToolExecutionResult(
                 tool_name=name,
                 success=False,

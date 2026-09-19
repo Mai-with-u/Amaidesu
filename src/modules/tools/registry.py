@@ -611,7 +611,7 @@ class ToolRegistry:
         except Exception as exc:  # noqa: BLE001 - 兜底边界
             logger.error(
                 f"ToolRegistry 调用工具 '{invocation.tool_name}' 时抛出异常: {exc}",
-                exc_info=True,
+                exc=True,
             )
             result = ToolExecutionResult(
                 tool_name=invocation.tool_name,
@@ -878,7 +878,7 @@ class ToolRegistry:
         except Exception as exc:  # noqa: BLE001 - 重连边界兜底，不上抛
             logger.error(
                 f"Provider '{provider_id}' 重连异常: {type(exc).__name__}: {exc}",
-                exc_info=True,
+                exc=True,
             )
             return {
                 "ok": False,
@@ -900,7 +900,7 @@ class ToolRegistry:
         except Exception as exc:  # noqa: BLE001 - 刷新异常不推翻重连成果，报告携带原因
             logger.error(
                 f"Provider '{provider_id}' 重连后工具集刷新异常: {type(exc).__name__}: {exc}",
-                exc_info=True,
+                exc=True,
             )
             refresh = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 

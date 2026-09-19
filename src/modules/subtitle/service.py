@@ -134,7 +134,7 @@ class SubtitleService:
             if isinstance(result, BaseException):
                 self.logger.error(
                     f"字幕后端 {type(backend).__name__} show 失败: {result}",
-                    exc_info=result,
+                    exc=result,
                 )
 
     async def clear(self) -> None:
@@ -154,7 +154,7 @@ class SubtitleService:
             if isinstance(result, BaseException):
                 self.logger.error(
                     f"字幕后端 {type(backend).__name__} clear 失败: {result}",
-                    exc_info=result,
+                    exc=result,
                 )
 
 

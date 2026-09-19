@@ -184,7 +184,7 @@ class STTCollector(BaseCollector):
                 torch.hub.set_dir(original_hub_dir)
 
         except Exception as e:
-            self.logger.error(f"加载 Silero VAD 模型失败: {e}", exc_info=True)
+            self.logger.exception(f"加载 Silero VAD 模型失败: {e}")
             self.vad_enabled = False
 
     def _find_device_index(self, device_name: Optional[str], kind: str = "input") -> Optional[int]:
@@ -214,7 +214,7 @@ class STTCollector(BaseCollector):
                 return default_index
 
         except Exception as e:
-            self.logger.error(f"查找音频设备时出错: {e}", exc_info=True)
+            self.logger.exception(f"查找音频设备时出错: {e}")
 
         return None
 
@@ -284,7 +284,7 @@ class STTCollector(BaseCollector):
             except asyncio.QueueFull:
                 pass
             except Exception as e:
-                self.logger.error(f"音频回调出错: {e}", exc_info=True)
+                self.logger.exception(f"音频回调出错: {e}")
 
         try:
             if not self.use_remote_stream:
@@ -346,7 +346,7 @@ class STTCollector(BaseCollector):
                     is_speech = speech_prob > self.vad_threshold
 
                 except Exception as e:
-                    self.logger.error(f"VAD 处理出错: {e}", exc_info=True)
+                    self.logger.exception(f"VAD 处理出错: {e}")
                     continue
 
                 now = time.monotonic()
@@ -370,7 +370,7 @@ class STTCollector(BaseCollector):
                                 speech_chunk_count += 1
                                 self.logger.debug("已发送第一帧")
                             except Exception as e:
-                                self.logger.error(f"发送第一帧失败: {e}", exc_info=True)
+                                self.logger.exception(f"发送第一帧失败: {e}")
                                 await self._close_iflytek_connection(send_last_frame=False)
                                 self._is_speaking = False
                                 speech_chunk_count = 0
@@ -383,7 +383,7 @@ class STTCollector(BaseCollector):
                             speech_chunk_count += 1
                             self._last_audio_chunk = audio_chunk_bytes
                         except Exception as e:
-                            self.logger.error(f"发送音频帧失败: {e}", exc_info=True)
+                            self.logger.exception(f"发送音频帧失败: {e}")
                             await self._close_iflytek_connection(send_last_frame=False)
                             self._is_speaking = False
                             speech_chunk_count = 0
@@ -399,7 +399,7 @@ class STTCollector(BaseCollector):
                                 data_frame = self._build_iflytek_frame(STATUS_CONTINUE_FRAME, audio_chunk_bytes)
                                 await asyncio.wait_for(self._active_ws.send_bytes(data_frame), timeout=1.0)
                             except Exception as e:
-                                self.logger.error(f"发送静音帧失败: {e}", exc_info=True)
+                                self.logger.exception(f"发送静音帧失败: {e}")
                                 await self._close_iflytek_connection(send_last_frame=False)
                                 self._silence_started_time = None
                                 speech_chunk_count = 0
@@ -427,7 +427,7 @@ class STTCollector(BaseCollector):
                     pass
 
         except Exception as e:
-            self.logger.error(f"STT worker 循环出错: {e}", exc_info=True)
+            self.logger.exception(f"STT worker 循环出错: {e}")
 
         finally:
             self.logger.info("STT worker 循环结束，清理资源...")
@@ -438,7 +438,7 @@ class STTCollector(BaseCollector):
                     stream.close()
                     self.logger.debug("本地麦克风流已停止并关闭")
                 except Exception as e:
-                    self.logger.error(f"停止麦克流出错: {e}", exc_info=True)
+                    self.logger.exception(f"停止麦克流出错: {e}")
 
             await self._close_iflytek_connection(send_last_frame=False)
 
@@ -456,7 +456,7 @@ class STTCollector(BaseCollector):
                 self._session = self.aiohttp.ClientSession()
                 self.logger.info("已创建新的 aiohttp session")
             except Exception as e:
-                self.logger.error(f"创建 aiohttp session 失败: {e}", exc_info=True)
+                self.logger.exception(f"创建 aiohttp session 失败: {e}")
                 return False
 
         try:
@@ -484,7 +484,7 @@ class STTCollector(BaseCollector):
             return True
 
         except Exception as e:
-            self.logger.error(f"建立讯飞连接失败: {e}", exc_info=True)
+            self.logger.exception(f"建立讯飞连接失败: {e}")
             if self._active_ws and not self._active_ws.closed:
                 await self._active_ws.close()
             self._active_ws = None
@@ -532,13 +532,13 @@ class STTCollector(BaseCollector):
                 except asyncio.TimeoutError:
                     receiver_task_to_await.cancel()
                 except Exception as e:
-                    self.logger.error(f"等待接收器任务出错: {e}", exc_info=True)
+                    self.logger.exception(f"等待接收器任务出错: {e}")
 
             await ws_to_close.close()
             self.logger.debug(f"讯飞连接已关闭 (代码: {ws_to_close.close_code})")
 
         except Exception as e:
-            self.logger.error(f"关闭连接出错: {e}", exc_info=True)
+            self.logger.exception(f"关闭连接出错: {e}")
         finally:
             if receiver_task_to_await and not receiver_task_to_await.done():
                 receiver_task_to_await.cancel()
@@ -605,7 +605,7 @@ class STTCollector(BaseCollector):
                         utterance_failed = True
                         break
                     except Exception as e:
-                        self.logger.error(f"处理讯飞消息出错: {e}", exc_info=True)
+                        self.logger.exception(f"处理讯飞消息出错: {e}")
                         utterance_failed = True
                         break
 
@@ -622,7 +622,7 @@ class STTCollector(BaseCollector):
         except asyncio.CancelledError:
             self.logger.info("讯飞接收器任务被取消")
         except Exception as e:
-            self.logger.error(f"讯飞接收器任务异常: {e}", exc_info=True)
+            self.logger.exception(f"讯飞接收器任务异常: {e}")
         finally:
             self.logger.debug("讯飞接收器任务结束")
 

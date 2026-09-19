@@ -265,12 +265,12 @@ class GPTSoVITSProvider:
             # 队列看门狗超时取消：声卡流必须显式关闭，否则已写入的
             # PCM 会继续播出，与下一条 utterance 的音频重叠
             self.audio_manager.stop_stream()
-            self.logger.warning("TTS 渲染被取消（已截断播放）: utterance_id=: {}", utterance_id)
+            self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except GPTSoVITSServiceError as e:
             # 服务未启动等环境故障是预期内的：简短告警即可，不打全量 traceback
             self.error_count += 1
-            self.logger.warning("TTS 渲染失败: {}（本条放弃，等待服务恢复）", e)
+            self.logger.warning(f"TTS 渲染失败: {e}（本条放弃，等待服务恢复）")
             await emit_utterance_failed(
                 self.event_bus,
                 utterance_id=utterance_id,
@@ -280,7 +280,7 @@ class GPTSoVITSProvider:
             raise
         except Exception as e:
             self.error_count += 1
-            self.logger.opt(exception=True).error("TTS 渲染失败: {}", e)
+            self.logger.exception(f"TTS 渲染失败: {e}")
             await emit_utterance_failed(
                 self.event_bus,
                 utterance_id=utterance_id,
@@ -319,7 +319,7 @@ class GPTSoVITSProvider:
                     if audio_chunk is not None:
                         yield audio_chunk
         except Exception as e:
-            self.logger.opt(exception=True).error("处理音频流失败: : {}", e)
+            self.logger.exception(f"处理音频流失败: {e}")
             raise
 
     def get_stats(self) -> Dict[str, Any]:

@@ -178,7 +178,7 @@ class OBSProvider(BaseToolProvider):
                 return _ok(n, True)
             return _fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
         except Exception as exc:  # noqa: BLE001
-            self.logger.error(f"OBS 工具 {invocation.tool_name} 调用异常: {exc}", exc_info=True)
+            self.logger.exception(f"OBS 工具 {invocation.tool_name} 调用异常: {exc}")
             return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
 
     # ===== 生命周期 =====

@@ -196,7 +196,7 @@ class BiliWebSocketClient:
             return wss_link, auth_body
 
         except Exception as e:
-            self.logger.error(f"获取WebSocket信息失败: {e}", exc_info=True)
+            self.logger.exception(f"获取WebSocket信息失败: {e}")
             return None, None
 
     async def _send_app_heartbeat(self):
@@ -288,7 +288,7 @@ class BiliWebSocketClient:
             return websocket
 
         except Exception as e:
-            self.logger.error(f"建立WebSocket连接时出错: {e}", exc_info=True)
+            self.logger.exception(f"建立WebSocket连接时出错: {e}")
             return None
 
     async def _heartbeat_loop(self):
@@ -339,7 +339,7 @@ class BiliWebSocketClient:
                     except json.JSONDecodeError as e:
                         self.logger.warning(f"解析消息JSON失败: {e}, 原始数据: {proto.body}")
                     except Exception as e:
-                        self.logger.error(f"处理消息时出错: {e}", exc_info=True)
+                        self.logger.exception(f"处理消息时出错: {e}")
                 elif proto.op == 3:  # 心跳回复
                     self.logger.debug("收到WebSocket心跳回复")
                 else:
@@ -349,7 +349,7 @@ class BiliWebSocketClient:
                 self.logger.warning("WebSocket连接已关闭")
                 break
             except Exception as e:
-                self.logger.error(f"接收消息时出错: {e}", exc_info=True)
+                self.logger.exception(f"接收消息时出错: {e}")
                 break
 
     async def _cleanup(self):

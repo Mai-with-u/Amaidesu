@@ -165,7 +165,7 @@ class VRChatProvider(BaseToolProvider):
                 return _ok(n, True, self.get_stats())
             return _fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
         except Exception as exc:  # noqa: BLE001
-            self.logger.error(f"VRChat 工具 {invocation.tool_name} 调用异常: {exc}", exc_info=True)
+            self.logger.exception(f"VRChat 工具 {invocation.tool_name} 调用异常: {exc}")
             return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
 
     # ===== 生命周期 =====
@@ -235,7 +235,7 @@ class VRChatProvider(BaseToolProvider):
             self._is_connected = True
             self.logger.info(f"VRChat OSC 客户端已创建: {self.vrc_host}:{self.vrc_out_port}")
         except Exception as e:
-            self.logger.error(f"创建 VRChat OSC 客户端失败: {e}", exc_info=True)
+            self.logger.exception(f"创建 VRChat OSC 客户端失败: {e}")
             self._is_connected = False
             raise
 

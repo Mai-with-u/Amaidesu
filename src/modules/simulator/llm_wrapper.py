@@ -331,7 +331,7 @@ class SimulatorLLMWrapper:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self._logger.error(f"LLM 调用异常: {exc!r}", exc_info=True)
+            self._logger.exception(f"LLM 调用异常: {exc!r}")
             return None
 
         if not response.success:

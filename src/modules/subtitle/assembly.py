@@ -84,7 +84,7 @@ def build_subtitle_infrastructure(
         except Exception as exc:
             logger.error(
                 f"build_subtitle_infrastructure: 构造 SubtitleGuiService 失败：{type(exc).__name__}: {exc}",
-                exc_info=True,
+                exc=True,
             )
             return service
 
@@ -97,7 +97,7 @@ def build_subtitle_infrastructure(
             except Exception as exc:
                 logger.error(
                     f"build_subtitle_infrastructure: 启动 SubtitleGuiService Tk 线程失败：{type(exc).__name__}: {exc}",
-                    exc_info=True,
+                    exc=True,
                 )
         else:
             logger.info("build_subtitle_infrastructure: CustomTkinter 不可用，GUI 后端 disabled（Tk 线程未启动）")

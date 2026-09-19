@@ -254,7 +254,7 @@ class StorageLedger:
             logger.error(
                 f"StorageLedger 写入失败（event={event_name}, message_type={getattr(payload, 'message_type', '?')}, "
                 f"simulated={getattr(payload, 'simulated', '?')}): {exc}",
-                exc_info=True,
+                exc=True,
             )
 
     async def _on_streamer_speech(
@@ -305,7 +305,7 @@ class StorageLedger:
             logger.error(
                 f"StorageLedger 写入主播发言失败（event={event_name}, "
                 f"utterance_id={getattr(payload, 'utterance_id', '?')}）：{exc}",
-                exc_info=True,
+                exc=True,
             )
 
     async def _on_game_event(
@@ -338,7 +338,7 @@ class StorageLedger:
             logger.error(
                 f"StorageLedger 写入游戏事件失败（event={event_name}, "
                 f"event_type={getattr(payload, 'event_type', '?')}）：{exc}",
-                exc_info=True,
+                exc=True,
             )
 
     # -------------------- 场次归属解析 --------------------

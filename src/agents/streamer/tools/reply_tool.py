@@ -234,7 +234,7 @@ class ReplyToolProvider(BaseToolProvider):
             history = await self._resolve_history()
             rundown = await self._resolve_rundown()
         except Exception as exc:
-            self._logger.error(f"reply_tool: 解析依赖失败: {exc}", exc_info=True)
+            self._logger.exception(f"reply_tool: 解析依赖失败: {exc}")
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,
@@ -253,7 +253,7 @@ class ReplyToolProvider(BaseToolProvider):
                 on_delta=thinking_callback,
             )
         except Exception as exc:
-            self._logger.error(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}", exc_info=True)
+            self._logger.exception(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}")
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,

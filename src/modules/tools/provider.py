@@ -286,7 +286,7 @@ def as_tool_impl(
             value = await fn(invocation)
         except Exception as exc:  # noqa: BLE001 - 工具边界兜底，异常转失败结果
             finished_ms = now_ms()
-            _logger.error(f"工具 '{tool_name}' 执行抛出异常: {type(exc).__name__}: {exc}", exc_info=True)
+            _logger.exception(f"工具 '{tool_name}' 执行抛出异常: {type(exc).__name__}: {exc}")
             return ToolExecutionResult(
                 tool_name=tool_name,
                 success=False,

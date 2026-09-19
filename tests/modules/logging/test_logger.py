@@ -67,7 +67,7 @@ class TestJSONLFormat:
         configure_from_config(config)
 
         test_logger = get_logger("test_module")
-        test_logger.info("Test message", extra_context={"key": "value"})
+        test_logger.info("Test message")
 
         # 读取生成的日志文件
         log_files = list(Path(temp_log_dir).glob("*.jsonl"))
@@ -572,3 +572,66 @@ class TestConsoleLevelConfiguration:
         assert "Info message" in content
         assert "Warning message" in content
         assert "Error message" in content
+
+
+class TestExceptionField:
+    """异常日志应在 JSONL 中携带完整堆栈，普通日志不引入 exception 字段。"""
+
+    def test_jsonl_exception_traceback(self, temp_log_dir):
+        """exception() 写出的条目应含格式化 traceback。"""
+        from src.modules.logging import configure_from_config, get_logger
+
+        configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
+        log = get_logger("exc_test")
+
+        try:
+            raise ValueError("boom-root-cause")
+        except ValueError:
+            log.exception("记录异常")
+
+        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
+        entry = json.loads(log_files[0].read_text(encoding="utf-8").splitlines()[0])
+        assert entry["level"] == "ERROR", "exception() 应为 ERROR 级"
+        assert "Traceback (most recent call last)" in entry["exception"], "应含 traceback 头"
+        assert "ValueError: boom-root-cause" in entry["exception"], "应含异常类型与消息"
+
+    def test_jsonl_plain_entry_has_no_exception_key(self, temp_log_dir):
+        """无异常日志的字段集应与旧版一致（timestamp/level/module/message）。"""
+        from src.modules.logging import configure_from_config, get_logger
+
+        configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
+        log = get_logger("plain_test")
+        log.info("plain entry")
+
+        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
+        entry = json.loads(log_files[0].read_text(encoding="utf-8").splitlines()[0])
+        assert set(entry.keys()) == {"timestamp", "level", "module", "message"}
+
+    def test_jsonl_warning_with_exc_keeps_level(self, temp_log_dir):
+        """warning(exc=True) 应保持 WARNING 级且带堆栈。"""
+        from src.modules.logging import configure_from_config, get_logger
+
+        configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
+        log = get_logger("warn_exc_test")
+
+        try:
+            raise KeyError("missing-key")
+        except KeyError:
+            log.warning("工具执行异常", exc=True)
+
+        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
+        entry = json.loads(log_files[0].read_text(encoding="utf-8").splitlines()[0])
+        assert entry["level"] == "WARNING", "exc=True 不应改变日志级别"
+        assert "KeyError: 'missing-key'" in entry["exception"]
+
+    def test_jsonl_exc_true_outside_except_no_junk(self, temp_log_dir):
+        """exc=True 落在无活动异常处时，JSONL 不应出现占位堆栈字段。"""
+        from src.modules.logging import configure_from_config, get_logger
+
+        configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
+        log = get_logger("noop_exc_test")
+        log.error("无活动异常的 exc=True", exc=True)
+
+        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
+        entry = json.loads(log_files[0].read_text(encoding="utf-8").splitlines()[0])
+        assert "exception" not in entry, "占位异常不应写入 JSONL"

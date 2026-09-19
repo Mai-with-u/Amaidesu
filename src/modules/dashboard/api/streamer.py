@@ -148,7 +148,7 @@ async def test_decision(
             proactive=request.proactive,
         )
     except Exception as exc:
-        logger.error(f"test-decision 调用异常: {exc}", exc_info=True)
+        logger.exception(f"test-decision 调用异常: {exc}")
         return StreamerTestDecisionResponse(
             success=False,
             forced=request.forced,
@@ -224,7 +224,7 @@ async def trigger_proactive(
     try:
         agent.trigger_external_proactive(request.topic_hint)
     except Exception as exc:
-        logger.error(f"trigger-proactive 调用异常: {exc}", exc_info=True)
+        logger.exception(f"trigger-proactive 调用异常: {exc}")
         return TriggerProactiveResponse(success=False, message=f"触发失败: {exc}")
 
     enabled_getter = getattr(agent, "is_proactive_enabled", None)

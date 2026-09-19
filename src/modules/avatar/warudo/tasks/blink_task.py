@@ -94,7 +94,7 @@ class BlinkTask:
         except asyncio.CancelledError:
             self.logger.debug("眨眼任务循环被取消")
         except Exception as e:
-            self.logger.error(f"眨眼任务循环出错: {e}", exc_info=True)
+            self.logger.exception(f"眨眼任务循环出错: {e}")
         finally:
             self.logger.debug("眨眼任务循环结束")
 
@@ -117,4 +117,4 @@ class BlinkTask:
             self.logger.debug("执行眨眼: 睁眼")
 
         except Exception as e:
-            self.logger.error(f"执行眨眼动作时出错: {e}", exc_info=True)
+            self.logger.exception(f"执行眨眼动作时出错: {e}")

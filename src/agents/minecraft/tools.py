@@ -267,7 +267,7 @@ class MinecraftToolProvider(BaseToolProvider):
                     duration_ms=int(time.time() * 1000) - started_ms,
                 )
         except Exception as exc:  # noqa: BLE001 - 工具边界兜底
-            logger.error(f"Minecraft 工具 '{tool_name}' 执行失败: {exc}", exc_info=True)
+            logger.exception(f"Minecraft 工具 '{tool_name}' 执行失败: {exc}")
             return ToolExecutionResult(
                 tool_name=tool_name,
                 success=False,

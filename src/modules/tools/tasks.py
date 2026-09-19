@@ -387,7 +387,7 @@ class TaskTracker:
                 try:
                     await self.step()
                 except Exception as exc:  # noqa: BLE001 - 单步失败不杀循环
-                    logger.error(f"TaskTracker 单步核实异常: {exc}", exc_info=True)
+                    logger.exception(f"TaskTracker 单步核实异常: {exc}")
                 # 先做后等：睡中到来的通知不会丢失（Event 在 wait 前已置位则立即醒）
                 try:
                     await asyncio.wait_for(self._wakeup.wait(), timeout=self._poll_interval_ms / 1000)

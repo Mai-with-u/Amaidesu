@@ -205,7 +205,7 @@ class UtteranceQueue:
             except asyncio.CancelledError:
                 pass
             except Exception as exc:
-                self._logger.warning("worker 停止时抛出异常（已忽略）: {}", exc)
+                self._logger.warning(f"worker 停止时抛出异常（已忽略）: {exc}")
 
         self._logger.info(
             f"UtteranceQueue 已停止（enqueued={self._total_enqueued}, "
@@ -262,7 +262,7 @@ class UtteranceQueue:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - worker 边界兜底
-            self._logger.opt(exception=True).error("worker 循环异常退出: {}", exc)
+            self._logger.exception(f"worker 循环异常退出: {exc}")
 
     async def _dispatch(self, item: _UtteranceItem) -> None:
         """单条 utterance 的处理入口（speak + 超时保护 + 错误兜底）。

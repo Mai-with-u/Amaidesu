@@ -4,14 +4,21 @@
 应在应用启动时（main.py）调用 configure_from_config() 进行配置。
 """
 
+from __future__ import annotations
+
 import datetime
 import json
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from loguru import logger as loguru_logger
+
+if TYPE_CHECKING:
+    from loguru import Logger
 
 # 模块级状态变量
 _CONFIGURED = False  # 追踪 configure_from_config() 是否已被调用
@@ -125,19 +132,21 @@ def configure_from_config(config_dict: dict | None = None) -> None:
                 return
 
         # 定义自定义 JSONL sink
-        # loguru 的 serialize=True 会传递包含 {"text": "...", "record": {...}} 的 JSON 字符串
         def json_sink(message):
-            """自定义 JSONL sink，每行写入一个 JSON 对象。"""
-            data = json.loads(message)  # {"text": "...", "record": {...}}
-            record = data["record"]  # 实际的记录对象
-            # 使用 ISO 格式的时间戳字符串，更简洁易读
-            timestamp_str = record["time"]["repr"]
+            """自定义 JSONL sink，每行写入一个 JSON 对象；异常日志附带完整堆栈。"""
+            record = message.record
             log_obj = {
-                "timestamp": timestamp_str,
-                "level": record["level"]["name"],
+                "timestamp": str(record["time"]),
+                "level": record["level"].name,
                 "module": record["extra"].get("module", "unknown"),
                 "message": record["message"],
             }
+            # exc=True 在无活动异常时会留下 (None, None, None) 占位，type 非空才真正带堆栈
+            exc = record["exception"]
+            if exc is not None and exc.type is not None:
+                log_obj["exception"] = "".join(traceback.format_exception(exc.type, exc.value, exc.traceback)).rstrip(
+                    "\n"
+                )
             # 追加到文件
             with open(file_path_for_json, "a", encoding="utf-8") as f:
                 f.write(json.dumps(log_obj, ensure_ascii=False) + "\n")
@@ -158,7 +167,6 @@ def configure_from_config(config_dict: dict | None = None) -> None:
             file_handler_id = loguru_logger.add(
                 json_sink,
                 level=level,
-                serialize=True,  # 序列化为 JSON
             )
             _HANDLER_IDS.append(file_handler_id)
             return  # JSONL 格式已处理，直接返回
@@ -185,7 +193,54 @@ def configure_from_config(config_dict: dict | None = None) -> None:
             _HANDLER_IDS.append(file_handler_id)
 
 
-def get_logger(module_name: str):
+class ModuleLogger:
+    """项目日志门面：调用点只认识这里定义的方法，loguru 细节不外泄。
+
+    loguru 原生用法（opt/bind 及标准库风格的异常标记参数等）仅限
+    src/modules/logging/ 内部使用，契约测试强制；调用点需要新能力时在这里
+    加方法，一次性场景走 raw()。
+    """
+
+    def __init__(self, module_name: str) -> None:
+        self._logger: Logger = loguru_logger.bind(module=module_name)
+
+    def debug(self, message: str, *, exc: bool | BaseException = False) -> None:
+        """debug 级日志；exc 传 True 记录当前 except 块异常的堆栈，或直接传异常对象。"""
+        if exc:
+            self._logger.opt(exception=exc).debug(message)
+        else:
+            self._logger.debug(message)
+
+    def info(self, message: str, *, exc: bool | BaseException = False) -> None:
+        if exc:
+            self._logger.opt(exception=exc).info(message)
+        else:
+            self._logger.info(message)
+
+    def warning(self, message: str, *, exc: bool | BaseException = False) -> None:
+        """warning 级日志；exc 含义同 debug。"""
+        if exc:
+            self._logger.opt(exception=exc).warning(message)
+        else:
+            self._logger.warning(message)
+
+    def error(self, message: str, *, exc: bool | BaseException = False) -> None:
+        """error 级日志；exc 含义同 warning。"""
+        if exc:
+            self._logger.opt(exception=exc).error(message)
+        else:
+            self._logger.error(message)
+
+    def exception(self, message: str) -> None:
+        """error 级日志，附带当前 except 块中异常的完整堆栈。"""
+        self._logger.opt(exception=True).error(message)
+
+    def raw(self) -> Logger:
+        """返回底层 loguru logger。某个用法在这里高频出现，即是给门面加方法的信号。"""
+        return self._logger
+
+
+def get_logger(module_name: str) -> ModuleLogger:
     """获取绑定了模块名的 logger 实例。
 
     若尚未调用 configure_from_config()，则会自动创建一个默认的 stderr 处理器。
@@ -194,11 +249,11 @@ def get_logger(module_name: str):
         module_name: 模块名称，用于标识日志来源
 
     Returns:
-        绑定了模块名的 loguru logger 实例
+        绑定了模块名的项目日志门面实例
     """
     # 若尚未配置，确保默认处理器存在
     _ensure_default_handler()
-    return loguru_logger.bind(module=module_name)
+    return ModuleLogger(module_name)
 
 
 # 导出配置好的 logger 获取函数

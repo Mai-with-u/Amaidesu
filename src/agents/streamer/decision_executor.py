@@ -276,7 +276,7 @@ class DecisionRoundExecutor:
                 round_id=round_id,
             )
         except Exception as exc:
-            self._logger.error(f"Planner 调用异常: {exc}", exc_info=True)
+            self._logger.exception(f"Planner 调用异常: {exc}")
             outcome = None
             result["error"] = f"planner_failed: {exc}"
         result["planner_duration_ms"] = now_ms() - planner_started_ms

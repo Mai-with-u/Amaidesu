@@ -62,7 +62,7 @@ def runtime_tool_counts(registry: Any) -> Dict[Tuple[str, str], Tuple[int, int]]
             total, disabled = counts.get(key, (0, 0))
             counts[key] = (total + 1, disabled + (1 if registry.is_disabled(spec.name) else 0))
     except Exception:
-        logger.warning("统计运行态工具计数失败，提供者卡片按 0 工具展示", exc_info=True)
+        logger.warning("统计运行态工具计数失败，提供者卡片按 0 工具展示", exc=True)
     return counts
 
 
@@ -74,7 +74,7 @@ def safe_list_providers(registry: Any) -> List[Dict[str, Any]]:
     try:
         records = fn()
     except Exception:  # noqa: BLE001 - 兼容层兜底
-        logger.warning("list_providers 调用失败，按空提供者列表处理", exc_info=True)
+        logger.warning("list_providers 调用失败，按空提供者列表处理", exc=True)
         return []
     return [r for r in records if isinstance(r, dict)]
 

@@ -157,7 +157,7 @@ class ConsoleInputCollector(BaseCollector):
                 self.logger.info("控制台输入循环被取消")
                 break
             except Exception as e:
-                self.logger.error(f"控制台输入循环出错: {e}", exc_info=True)
+                self.logger.exception(f"控制台输入循环出错: {e}")
                 await asyncio.sleep(_ERROR_RETRY_INTERVAL_S)
 
         self.logger.info("控制台输入循环结束")
@@ -222,7 +222,7 @@ class ConsoleInputCollector(BaseCollector):
                     self.logger.info("控制台输入循环被取消")
                     break
                 except Exception as e:
-                    self.logger.error(f"控制台输入循环出错: {e}", exc_info=True)
+                    self.logger.exception(f"控制台输入循环出错: {e}")
                     await asyncio.sleep(_ERROR_RETRY_INTERVAL_S)
 
             self.logger.info("控制台输入循环结束")

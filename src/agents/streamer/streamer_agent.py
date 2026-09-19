@@ -751,7 +751,7 @@ class StreamerAgent(BaseAgent):
                     proactive=proactive,
                 )
         except Exception as exc:
-            self._logger.error(f"调试决策执行异常: {exc}", exc_info=True)
+            self._logger.exception(f"调试决策执行异常: {exc}")
             return {"success": False, "error": f"debug_test_decision 执行异常: {exc}"}
 
         result["success"] = True
@@ -771,7 +771,7 @@ class StreamerAgent(BaseAgent):
                 try:
                     await self._maybe_flush()
                 except Exception as exc:
-                    self._logger.error(f"批次决策异常: {exc}", exc_info=True)
+                    self._logger.exception(f"批次决策异常: {exc}")
         except asyncio.CancelledError:
             raise
 

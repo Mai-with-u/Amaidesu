@@ -188,7 +188,7 @@ def bind_core_tools(
         except Exception:  # noqa: BLE001 - 单成员隔离边界
             logger.error(
                 f"bind_core_tools: 加载 '{key}' 的 register 函数失败（{description}）",
-                exc_info=True,
+                exc=True,
             )
             report[key] = 0
             continue
@@ -198,7 +198,7 @@ def bind_core_tools(
         except Exception as exc:  # noqa: BLE001 - 单成员隔离边界
             logger.error(
                 f"bind_core_tools: 绑定 '{key}' 失败（{description}）: {type(exc).__name__}: {exc}",
-                exc_info=True,
+                exc=True,
             )
             report[key] = 0
             continue

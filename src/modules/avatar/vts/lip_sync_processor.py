@@ -164,7 +164,7 @@ class LipSyncProcessor:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            self.logger.error(f"口型同步后台循环异常: {e}", exc_info=True)
+            self.logger.exception(f"口型同步后台循环异常: {e}")
 
     async def _analyze_audio_state(self) -> None:
         volume = 0.0

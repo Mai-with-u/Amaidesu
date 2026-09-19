@@ -412,7 +412,7 @@ class LookAtScreenProvider(BaseToolProvider):
                 max_width=max_width,
             )
         except Exception as exc:  # noqa: BLE001 - 边界处兜底
-            logger.warning(f"look_at_screen 采集失败: {exc}", exc_info=True)
+            logger.warning(f"look_at_screen 采集失败: {exc}", exc=True)
             return self._build_capture_failed_result(
                 tool_name=tool_name,
                 started_ms=started_ms,
@@ -439,7 +439,7 @@ class LookAtScreenProvider(BaseToolProvider):
                     question=question,
                 )
             except Exception as exc:  # noqa: BLE001 - 边界处兜底（不抛）
-                logger.warning(f"look_at_screen TextReader 失败: {exc}", exc_info=True)
+                logger.warning(f"look_at_screen TextReader 失败: {exc}", exc=True)
                 text = ""
                 vlm_error = f"vlm_failed: {type(exc).__name__}: {exc}"
 
@@ -752,7 +752,7 @@ class LlmVisionTextReader:
             logger.warning(f"LlmVisionTextReader VLM 调用超时 (>{self._timeout_s:.1f}s); 降级为空文本")
             return ""
         except Exception as exc:  # noqa: BLE001 - 边界处兜底（不抛）
-            logger.warning(f"LlmVisionTextReader VLM 调用异常: {exc}", exc_info=True)
+            logger.warning(f"LlmVisionTextReader VLM 调用异常: {exc}", exc=True)
             return ""
 
         if not getattr(response, "success", False):

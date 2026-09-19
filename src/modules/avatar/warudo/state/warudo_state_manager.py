@@ -4,10 +4,9 @@
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
-if TYPE_CHECKING:
-    from loguru import Logger
+from src.modules.logging import ModuleLogger
 
 # ==================== 常量定义 ====================
 
@@ -353,7 +352,7 @@ class WarudoStateManager:
     管理所有面部状态，并定期检查并发送变化到 Warudo。
     """
 
-    def __init__(self, logger: "Logger", send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
+    def __init__(self, logger: ModuleLogger, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
         """初始化状态管理器
 
         Args:
@@ -421,7 +420,7 @@ class WarudoStateManager:
         except asyncio.CancelledError:
             self.logger.debug("状态监控循环被取消")
         except Exception as e:
-            self.logger.error(f"状态监控循环出错: {e}", exc_info=True)
+            self.logger.exception(f"状态监控循环出错: {e}")
 
     async def _send_changed_states(self) -> None:
         """发送所有变化的状态"""

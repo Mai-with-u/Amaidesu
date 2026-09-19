@@ -160,7 +160,7 @@ class AgentManager:
         try:
             await reg.agent.start()
         except Exception as exc:  # noqa: BLE001 - 边界
-            logger.error(f"Agent '{name}' 单实例启动失败: {exc}", exc_info=True)
+            logger.exception(f"Agent '{name}' 单实例启动失败: {exc}")
             return False
         return reg.agent.state == AgentState.RUNNING
 
@@ -172,7 +172,7 @@ class AgentManager:
         try:
             await reg.agent.stop()
         except Exception as exc:  # noqa: BLE001 - 边界
-            logger.error(f"Agent '{name}' 单实例停止失败: {exc}", exc_info=True)
+            logger.exception(f"Agent '{name}' 单实例停止失败: {exc}")
             return False
         return True
 
@@ -355,7 +355,7 @@ class AgentManager:
             try:
                 await self._supervise_once()
             except Exception as exc:  # noqa: BLE001 - 单轮巡检失败不终止守护
-                logger.warning(f"Agent 巡检单轮异常（忽略，下轮继续）: {type(exc).__name__}: {exc}", exc_info=True)
+                logger.warning(f"Agent 巡检单轮异常（忽略，下轮继续）: {type(exc).__name__}: {exc}", exc=True)
 
     async def _supervise_once(self) -> None:
         """单轮巡检：对 STARTING/RUNNING/PAUSED 的 Agent 判死，超时则自动重建。"""
@@ -421,7 +421,7 @@ class AgentManager:
             try:
                 await reg.agent.start()
             except Exception as exc:  # noqa: BLE001 - 边界
-                logger.error(f"Agent '{name}' 启动失败: {exc}", exc_info=True)
+                logger.exception(f"Agent '{name}' 启动失败: {exc}")
 
     async def stop_all(self) -> None:
         """按注册**逆序**停止所有 Agent（LIFO 风格）。"""
@@ -432,7 +432,7 @@ class AgentManager:
             try:
                 await reg.agent.stop()
             except Exception as exc:  # noqa: BLE001 - 边界
-                logger.error(f"Agent '{name}' 停止失败: {exc}", exc_info=True)
+                logger.exception(f"Agent '{name}' 停止失败: {exc}")
 
     async def cleanup_all(self) -> None:
         """清理所有 Agent 资源。"""
@@ -440,7 +440,7 @@ class AgentManager:
             try:
                 await reg.agent.cleanup()
             except Exception as exc:  # noqa: BLE001 - 边界
-                logger.error(f"Agent '{name}' cleanup 失败: {exc}", exc_info=True)
+                logger.exception(f"Agent '{name}' cleanup 失败: {exc}")
 
     # -------------------- 工具审计 --------------------
 
@@ -473,7 +473,7 @@ class AgentManager:
             except Exception as exc:  # noqa: BLE001 - 审计边界，失败不中断
                 logger.warning(
                     f"Agent '{agent_name}' 的 list_tools() 抛异常，已跳过审计: {exc}",
-                    exc_info=True,
+                    exc=True,
                 )
                 continue
 

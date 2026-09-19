@@ -441,5 +441,5 @@ class GPTSoVITSClient:
                 self.logger.warning(f"GPT-SoVITS 服务器响应异常: {response.status_code}")
             return is_connected
         except Exception as e:
-            self.logger.error("检查 GPT-SoVITS 连接失败: {}", e)
+            self.logger.error(f"检查 GPT-SoVITS 连接失败: {e}")
             return False

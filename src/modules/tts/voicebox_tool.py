@@ -115,7 +115,7 @@ class VoiceboxProvider:
             async with self._session.get(f"{self.base_url}/health", timeout=aiohttp.ClientTimeout(total=5)):
                 self.logger.info("Voicebox 服务连接成功")
         except Exception as e:
-            self.logger.warning("Voicebox 健康检查失败: : {}", e)
+            self.logger.warning(f"Voicebox 健康检查失败: {e}")
 
         self._has_started = True
         self._is_connected = True
@@ -200,11 +200,11 @@ class VoiceboxProvider:
             # 协程取消不会停止已提交给声卡的播放，超时取消时必须显式截断
             if self.audio_manager:
                 self.audio_manager.stop_audio()
-            self.logger.warning("TTS 渲染被取消（已截断播放）: utterance_id=: {}", utterance_id)
+            self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except Exception as e:
             self.error_count += 1
-            self.logger.opt(exception=True).error("Voicebox 合成/播放失败: : {}", e)
+            self.logger.exception(f"Voicebox 合成/播放失败: {e}")
             await emit_utterance_failed(
                 self.event_bus,
                 utterance_id=utterance_id,

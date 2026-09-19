@@ -68,7 +68,7 @@ class BaseCollector:
             await self._on_start()
         except Exception as exc:  # noqa: BLE001 - 边界
             self._state = CollectorState.ERRORED
-            logger.error(f"Collector '{self.name}' 启动失败: {exc}", exc_info=True)
+            logger.exception(f"Collector '{self.name}' 启动失败: {exc}")
             raise
         async with self._lock:
             self._state = CollectorState.RUNNING
@@ -84,7 +84,7 @@ class BaseCollector:
             await self._on_stop()
         except Exception as exc:  # noqa: BLE001 - 边界
             self._state = CollectorState.ERRORED
-            logger.error(f"Collector '{self.name}' 停止失败: {exc}", exc_info=True)
+            logger.exception(f"Collector '{self.name}' 停止失败: {exc}")
             raise
         async with self._lock:
             self._state = CollectorState.STOPPED
@@ -120,7 +120,7 @@ class BaseCollector:
             except asyncio.CancelledError:
                 pass
             except Exception:
-                logger.debug(f"Collector '{self.name}' 后台任务异常（已吞）", exc_info=True)
+                logger.debug(f"Collector '{self.name}' 后台任务异常（已吞）", exc=True)
 
     async def _consume_collect(self) -> None:
         """迭代 ``collect()`` 生成器（采集器自产自发）。
@@ -134,7 +134,7 @@ class BaseCollector:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 边界
-            logger.error(f"Collector '{self.name}' collect() 后台消费循环异常: {exc}", exc_info=True)
+            logger.exception(f"Collector '{self.name}' collect() 后台消费循环异常: {exc}")
 
     # ----- 子类可选钩子 -----
 

@@ -143,7 +143,7 @@ class McpToolProvider(BaseToolProvider):
         except Exception as exc:  # noqa: BLE001 - 绑定处异常不推翻清单同步
             logger.error(
                 f"MCP Provider '{self.server_name}' on_tools_refreshed 回调异常: {type(exc).__name__}: {exc}",
-                exc_info=True,
+                exc=True,
             )
 
     def list_tools(self) -> Iterable[ToolSpec]:

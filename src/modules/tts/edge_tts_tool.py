@@ -166,7 +166,7 @@ class EdgeTTSProvider:
             # 事件循环），超时取消时必须显式截断，否则与下一条语音重叠
             if self.audio_manager:
                 self.audio_manager.stop_audio()
-            self.logger.warning("TTS 渲染被取消（已截断播放）: utterance_id=: {}", utterance_id)
+            self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except Exception as e:
             self.error_count += 1
@@ -176,7 +176,7 @@ class EdgeTTSProvider:
                 engine=self.PROVIDER_NAME,
                 error_message=f"{type(e).__name__}: {e}",
             )
-            self.logger.opt(exception=True).error("TTS 渲染失败: : {}", e)
+            self.logger.exception(f"TTS 渲染失败: {e}")
             raise
 
     async def _edge_tts_synthesize(self, text: str):
@@ -193,7 +193,7 @@ class EdgeTTSProvider:
             audio_array, samplerate = await asyncio.to_thread(sf.read, tmp_filename, dtype="float32")
             return audio_array, samplerate
         except Exception as e:
-            self.logger.opt(exception=True).error("Edge TTS 合成失败: : {}", e)
+            self.logger.exception(f"Edge TTS 合成失败: {e}")
             return np.zeros(44100, dtype=np.float32), 16000
         finally:
             if tmp_filename:

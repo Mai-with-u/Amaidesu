@@ -14,17 +14,14 @@ import os
 import queue
 import threading
 import tkinter as tk
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageColor, ImageFilter, ImageFont, ImageTk
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
-from src.modules.logging import get_logger
+from src.modules.logging import ModuleLogger, get_logger
 from src.modules.time_utils import now_ms
-
-if TYPE_CHECKING:
-    from loguru import Logger
 
 try:
     import customtkinter as ctk
@@ -58,7 +55,7 @@ class OutlineLabel:
         outline_width: int = 2,
         outline_enabled: bool = True,
         background_color: str = "gray15",
-        logger: Optional["Logger"] = None,
+        logger: Optional[ModuleLogger] = None,
         **kwargs: Any,
     ) -> None:
         if not CTK_AVAILABLE or ctk is None:
@@ -114,7 +111,7 @@ class OutlineLabel:
         try:
             return self.container_frame.cget(option)
         except Exception:
-            self.logger.error(f"获取 Canvas 选项 '{option}' 失败", exc_info=True)
+            self.logger.exception(f"获取 Canvas 选项 '{option}' 失败")
             return None
 
     def after(self, delay: int, callback: Callable[[], Any]) -> Any:
@@ -144,7 +141,7 @@ class OutlineLabel:
             self._photo = ImageTk.PhotoImage(img)
             self.canvas.create_image(canvas_width // 2, canvas_height // 2, image=self._photo)
         except Exception:
-            self.logger.error("PIL 字幕渲染失败（ImageTk 不可用？）", exc_info=True)
+            self.logger.exception("PIL 字幕渲染失败（ImageTk 不可用？）")
 
     def _line_height(self) -> int:
         return int(self._font_px * 1.35)
@@ -485,7 +482,7 @@ class SubtitleGuiService:
         try:
             self.text_queue.put(text)
         except Exception as e:
-            self.logger.error(f"放入字幕队列时出错: {e}", exc_info=True)
+            self.logger.exception(f"放入字幕队列时出错: {e}")
 
     def _run_gui(self) -> None:
         """Tk GUI 主循环（长驻线程入口）"""
@@ -507,7 +504,7 @@ class SubtitleGuiService:
                 try:
                     self.root.attributes("-transparentcolor", self.chroma_key_color)
                 except Exception:
-                    self.logger.error("设置透明背景失败（-transparentcolor 不可用）", exc_info=True)
+                    self.logger.exception("设置透明背景失败（-transparentcolor 不可用）")
                 self.root.attributes("-alpha", 1.0)
             else:
                 self.root.attributes("-alpha", self.window_alpha)
@@ -523,7 +520,7 @@ class SubtitleGuiService:
                 try:
                     self.root.attributes("-toolwindow", True)
                 except Exception:
-                    self.logger.error("设置工具窗口属性失败", exc_info=True)
+                    self.logger.exception("设置工具窗口属性失败")
 
             screen_width = self.root.winfo_screenwidth()
             screen_height = self.root.winfo_screenheight()
@@ -539,7 +536,7 @@ class SubtitleGuiService:
             try:
                 self.root.configure(fg_color=effective_background)
             except Exception:
-                self.logger.error("设置背景颜色失败", exc_info=True)
+                self.logger.exception("设置背景颜色失败")
 
             font_tuple = (self.font_family, self.font_size, self.font_weight)
             self.text_label = OutlineLabel(
@@ -583,7 +580,7 @@ class SubtitleGuiService:
             self.logger.info("Subtitle GUI 启动成功")
             self.root.mainloop()
         except Exception as e:
-            self.logger.error(f"运行 Subtitle GUI 时出错: {e}", exc_info=True)
+            self.logger.exception(f"运行 Subtitle GUI 时出错: {e}")
         finally:
             self.logger.info("Subtitle GUI 线程结束")
             if self.root:
@@ -601,7 +598,7 @@ class SubtitleGuiService:
         except queue.Empty:
             pass
         except Exception as e:
-            self.logger.warning(f"检查字幕队列时出错: {e}", exc_info=True)
+            self.logger.warning(f"检查字幕队列时出错: {e}", exc=True)
         if self._gui_running and self.root:
             self.root.after(100, self._check_queue)
 
@@ -660,7 +657,7 @@ class SubtitleGuiService:
                 self.root.withdraw()
                 self.is_visible = False
         except Exception as e:
-            self.logger.warning(f"更新字幕显示时出错: {e}", exc_info=True)
+            self.logger.warning(f"更新字幕显示时出错: {e}", exc=True)
 
     def _check_auto_hide(self) -> None:
         if not self._gui_running:
@@ -690,7 +687,7 @@ class SubtitleGuiService:
             if self._gui_running and self.root:
                 self.root.after(100, self._check_auto_hide)
         except Exception as e:
-            self.logger.warning(f"检查自动隐藏时出错: {e}", exc_info=True)
+            self.logger.warning(f"检查自动隐藏时出错: {e}", exc=True)
             if self._gui_running and self.root:
                 self.root.after(100, self._check_auto_hide)
 
@@ -701,7 +698,7 @@ class SubtitleGuiService:
             try:
                 self.root.destroy()
             except Exception as e:
-                self.logger.warning(f"销毁 subtitle 窗口时出错: {e}", exc_info=True)
+                self.logger.warning(f"销毁 subtitle 窗口时出错: {e}", exc=True)
         self.root = None
 
     def _start_move(self, event: tk.Event) -> None:

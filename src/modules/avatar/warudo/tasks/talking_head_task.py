@@ -107,4 +107,4 @@ class TalkingHeadTask:
         except asyncio.CancelledError:
             self.logger.debug("TalkingHeadTask 循环被取消")
         except Exception as e:
-            self.logger.error(f"TalkingHeadTask 循环异常: {e}", exc_info=True)
+            self.logger.exception(f"TalkingHeadTask 循环异常: {e}")

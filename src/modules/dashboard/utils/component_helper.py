@@ -124,7 +124,7 @@ def _running_names(manager: Any, method: str) -> set[str]:
     try:
         return set(getter())
     except TypeError:
-        logger.warning(f"读取 {method} 运行名单失败（返回值不可迭代），按空名单处理", exc_info=True)
+        logger.warning(f"读取 {method} 运行名单失败（返回值不可迭代），按空名单处理", exc=True)
         return set()
 
 

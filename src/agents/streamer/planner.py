@@ -444,7 +444,7 @@ class Planner:
                 behavior_style=behavior_style_render,
             )
         except Exception as e:
-            self.logger.error(f"渲染 Planner 系统提示词失败: {e}", exc_info=True)
+            self.logger.exception(f"渲染 Planner 系统提示词失败: {e}")
             self.last_failure = f"prompt_render_failed: {e}"
             return None
 
@@ -511,7 +511,7 @@ class Planner:
             )
             assembled_text = self._assembler.assemble(assembler_inputs)
         except Exception as e:
-            self.logger.error(f"PlannerAssembler 组装失败: {e}", exc_info=True)
+            self.logger.exception(f"PlannerAssembler 组装失败: {e}")
             self.last_failure = f"assembler_failed: {e}"
             return None
 
@@ -598,7 +598,7 @@ class Planner:
                 ToolInvocation(tool_name="streamer_reply", arguments=args, source="planner-react", round_id=round_id)
             )
         except Exception as e:
-            self.logger.warning(f"reply 工具执行异常: {e}", exc_info=True)
+            self.logger.warning(f"reply 工具执行异常: {e}", exc=True)
             outcome["reply_duration_ms"] += now_ms() - invoke_started_ms
             outcome["reply_failures"] += 1
             return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False), False
@@ -641,7 +641,7 @@ class Planner:
                 ToolInvocation(tool_name=name, arguments=args, source="planner-react", round_id=round_id)
             )
         except Exception as e:
-            self.logger.warning(f"工具 '{name}' 执行异常: {e}", exc_info=True)
+            self.logger.warning(f"工具 '{name}' 执行异常: {e}", exc=True)
             return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
 
         if result.success:
