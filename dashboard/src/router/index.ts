@@ -105,4 +105,16 @@ const router = createRouter({
   ],
 });
 
+// 后端重建后懒加载 chunk 的 hash 已更换，长开标签页里旧引用的 import 会 404；
+// 整页跳转目标路由，让浏览器拉取新 index 与新 chunk 完成自愈。
+router.onError((error, to) => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.includes('Failed to fetch dynamically imported module') ||
+    message.includes('Importing a module script failed')
+  ) {
+    window.location.href = to.fullPath;
+  }
+});
+
 export default router;
