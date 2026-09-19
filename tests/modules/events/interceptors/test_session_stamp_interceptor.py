@@ -8,6 +8,7 @@ import pytest
 
 from src.modules.events.interceptors.chain import InterceptorChain
 from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
+from src.modules.events.payloads.rundown import RundownChangedPayload
 
 
 class _FakeSessionManager:
@@ -60,10 +61,10 @@ async def test_skips_when_already_stamped() -> None:
 
 @pytest.mark.asyncio
 async def test_skips_payload_without_field() -> None:
-    """无 live_session_id 字段的同域事件（如 planner.checkpoint）不被注入未知键。"""
+    """无 live_session_id 字段的 payload 不被注入未知键（域前缀 + 字段双重过滤）。"""
     ic = SessionStampInterceptor(_FakeSessionManager(42))
     payload: Dict[str, Any] = {"timeline_summary": "x"}
-    out = await ic.intercept("planner.checkpoint", payload, "test")
+    out = await ic.intercept("planner.decision", payload, "test")
     assert out is not None
     assert "live_session_id" not in out
 
@@ -101,3 +102,19 @@ async def test_scope_prefixes_filter_via_chain() -> None:
     out = await chain.apply("planner.decision", {"live_session_id": 0}, "test")
     assert out is not None
     assert out["live_session_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_stamps_rundown_changed_via_chain() -> None:
+    """rundown.changed 域在盖章作用域内：流程单变更可归属到单场回看时间线。"""
+    sm = _FakeSessionManager(42)
+    chain = InterceptorChain()
+    chain.register(SessionStampInterceptor(sm))
+
+    payload = RundownChangedPayload(rundown_id="default_first_stream").model_dump()
+    assert payload["live_session_id"] == 0
+
+    out = await chain.apply("rundown.changed", payload, "RundownState")
+    assert out is not None
+    assert out["live_session_id"] == 42
+    assert sm.calls == 1

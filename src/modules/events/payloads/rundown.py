@@ -45,6 +45,7 @@ class RundownChangedPayload(BasePayload):
         total: 流程单总环节数
         by: 变更触发主体（``"agent"`` / ``"human"`` / ``"system"``）
         at_ms: 变更时刻（Unix 毫秒）
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
     """
 
     rundown_id: str = Field(..., description="流程单 id")
@@ -64,6 +65,10 @@ class RundownChangedPayload(BasePayload):
         default_factory=lambda: now_ms(),
         description="变更时刻（Unix 毫秒）",
     )
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -75,6 +80,7 @@ class RundownChangedPayload(BasePayload):
                 "total": 4,
                 "by": "agent",
                 "at_ms": 1706745600000,
+                "live_session_id": 0,
             }
         }
     )
