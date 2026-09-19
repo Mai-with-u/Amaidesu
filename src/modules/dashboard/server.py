@@ -400,10 +400,3 @@ class DashboardServer:
 
         self.app.include_router(create_widget_router(self.widget_gateway, include_page=widget_config.enable_html_page))
         self.logger.info("弹幕小部件路由已注册: /danmaku, /subtitle, /widget, /ws/danmaku, /ws/subtitle, /ws/widget")
-
-    async def _run_heartbeat(self) -> None:
-        """心跳任务"""
-        while self._is_running:
-            await asyncio.sleep(self.websocket_heartbeat)
-            if self.ws_handler:
-                await self.ws_handler.send_heartbeat()
