@@ -54,7 +54,7 @@ class LLMRequestHistoryResponse(BaseModel):
     """单个 LLM 请求历史记录响应"""
 
     request_id: str
-    timestamp: int
+    timestamp_ms: int
     client_type: str
     model_name: str
     request_params: Dict[str, Any] = {}

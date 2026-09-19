@@ -83,7 +83,8 @@ export interface LLMTokenUsage {
 // 请求历史记录
 export interface LLMRequestHistory {
   request_id: string;
-  timestamp: number;
+  /** 请求时刻（Unix 毫秒） */
+  timestamp_ms: number;
   client_type: string;
   model_name: string;
   request_params: Record<string, unknown>;

@@ -14,7 +14,7 @@
           <span class="mono">{{ detail.request_id }}</span>
         </el-descriptions-item>
         <el-descriptions-item label="时间">
-          {{ formatDateTime(detail.timestamp) }}
+          {{ formatDateTime(detail.timestamp_ms) }}
         </el-descriptions-item>
         <el-descriptions-item label="客户端类型">
           <el-tag size="small" effect="plain">

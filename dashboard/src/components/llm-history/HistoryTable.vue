@@ -3,7 +3,7 @@
     <el-table v-loading="loading" :data="historyData" stripe style="width: 100%">
       <el-table-column prop="timestamp" label="时间" width="170">
         <template #default="{ row }">
-          <span class="mono">{{ formatDateTime(row.timestamp) }}</span>
+          <span class="mono">{{ formatDateTime(row.timestamp_ms) }}</span>
         </template>
       </el-table-column>
 

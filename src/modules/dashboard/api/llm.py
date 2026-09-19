@@ -209,7 +209,7 @@ def _convert_record_to_response(record: Dict[str, Any]) -> LLMRequestHistoryResp
 
     return LLMRequestHistoryResponse(
         request_id=record.get("request_id", ""),
-        timestamp=record.get("timestamp", 0),
+        timestamp_ms=record.get("timestamp", 0),
         client_type=record.get("client_type", ""),
         model_name=record.get("model_name", ""),
         request_params=record.get("request_params", {}),
