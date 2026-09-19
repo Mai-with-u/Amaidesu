@@ -18,13 +18,14 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerVerdictPayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
+from src.modules.tools.provider import BaseToolProvider
 
 from ..plan import DecisionPlan
 from ..replyer import Replyer
@@ -94,7 +95,7 @@ _REPLY_TOOL_FULL_NAME = build_reply_tool_spec().full_name
 # ---------------------------------------------------------------------------
 
 
-class ReplyToolProvider:
+class ReplyToolProvider(BaseToolProvider):
     """reply 工具的 Provider（满足 ``ToolProvider`` 协议）。
 
     StreamerAgent 直接 ``registry.register_provider(reply_tool_provider)`` 注册。
@@ -158,7 +159,7 @@ class ReplyToolProvider:
     def name(self) -> str:
         return "streamer"
 
-    def list_tools(self):
+    def list_tools(self) -> Iterable[ToolSpec]:
         return [build_reply_tool_spec()]
 
     async def _await_maybe(self, result: Any) -> Any:
