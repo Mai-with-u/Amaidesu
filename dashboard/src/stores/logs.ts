@@ -51,10 +51,22 @@ export const useLogsStore = defineStore('logs', () => {
     return cachedModules;
   });
 
+  function isLogEntry(value: unknown): value is LogEntry {
+    if (!value || typeof value !== 'object') return false;
+    const d = value as Record<string, unknown>;
+    return (
+      typeof d.timestamp === 'string' &&
+      typeof d.level === 'string' &&
+      typeof d.module === 'string' &&
+      typeof d.message === 'string'
+    );
+  }
+
   function handleLog(message: WebSocketMessage) {
     if (isPaused.value) return;
     if (message.type === 'log.entry' && message.data) {
-      const logEntry = message.data as unknown as LogEntry;
+      if (!isLogEntry(message.data)) return;
+      const logEntry = message.data;
       if (isDuplicate(logEntry)) return;
       const newLogs = [...logs.value, logEntry];
       if (newLogs.length > maxLogs) {

@@ -24,7 +24,7 @@ export interface PreviewMessage {
 type RawRecord = Record<string, unknown>;
 
 /** 单条消息正文：拼接 parts 文本片段，图像片段替换为占位符 */
-export function messageText(message: RawRecord | undefined | null): string {
+function messageText(message: RawRecord | undefined | null): string {
   if (!message || !Array.isArray(message.parts)) return '';
   const lines: string[] = [];
   for (const piece of message.parts) {

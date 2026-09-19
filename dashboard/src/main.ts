@@ -21,4 +21,6 @@ useWebSocketStore().init();
 // 显式实例化懒加载 store，让消息处理器在启动时注册（否则进入对应页面才开始接收数据）
 useEventsStore();
 useLogsStore();
+// 断线/刷新续传游标回填：显式触发而非 store 工厂体内隐式执行
+void useEventsStore().backfill();
 useWebSocketStore().connect();

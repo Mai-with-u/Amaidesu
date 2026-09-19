@@ -121,7 +121,6 @@ export const useEventsStore = defineStore('events', () => {
   }
 
   // 启动即回填（fire-and-forget）：有游标则补缺口，无游标由 WS events.history 兜底
-  void backfill();
 
   return {
     events,

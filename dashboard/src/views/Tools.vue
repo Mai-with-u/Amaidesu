@@ -647,10 +647,20 @@ function applyHealthUpdate(toolName: string, next: ToolHealth | null): void {
   target.health = next;
 }
 
+function isToolHealthEventData(data: unknown): data is ToolHealthEventData {
+  if (!data || typeof data !== 'object') return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.tool_name === 'string' &&
+    typeof d.state === 'string' &&
+    typeof d.timestamp_ms === 'number'
+  );
+}
+
 function handleHealthMessage(msg: WebSocketMessage): void {
   if (!msg.type.startsWith('tool.health.')) return;
-  const payload = msg.data as unknown as ToolHealthEventData;
-  if (!payload || typeof payload.tool_name !== 'string') return;
+  if (!isToolHealthEventData(msg.data)) return;
+  const payload = msg.data;
   if (payload.state === 'open') {
     applyHealthUpdate(payload.tool_name, {
       state: 'tripped',
