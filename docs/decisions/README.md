@@ -43,3 +43,5 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-017：主播 Agent 分包按接缝抽厚簇（执行抽、调度不抽）](017-streamer-agent-seam-split.md)
 - [ADR-018：游戏无关边界——框架与主播侧不出现具体游戏名](018-game-agnostic-boundary.md)
 - [ADR-019：ToolRegistry Provider 常驻登记与工具集刷新（工具页注册表驱动）](019-tool-registry-provider-refresh.md)
+- [ADR-020：dashboard 服务层分层（api 协议转换 / services 业务逻辑 / schemas 契约）](020-dashboard-service-layer.md)
+- [ADR-021：全站时间字段毫秒统一（Unix epoch 毫秒 int，原子切换）](021-millisecond-time-unification.md)
