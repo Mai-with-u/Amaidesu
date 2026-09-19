@@ -305,14 +305,6 @@ class DanmakuWidgetService:
         subtitles = list(self.subtitle_messages)[-count:]
         return [msg.model_dump(mode="json") for msg in subtitles]
 
-    def clear_messages(self) -> None:
-        self.messages.clear()
-        self.logger.info("消息队列已清空")
-
-    def clear_subtitles(self) -> None:
-        self.subtitle_messages.clear()
-        self.logger.info("字幕队列已清空")
-
     def get_stats(self) -> dict:
         return {
             "is_running": self._is_running,

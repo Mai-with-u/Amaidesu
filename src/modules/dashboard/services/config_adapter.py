@@ -6,8 +6,8 @@
 """
 
 from collections import defaultdict
-from dataclasses import dataclass
 import dataclasses
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple, Union, get_args, get_origin
 
@@ -19,6 +19,8 @@ from src.modules.config.multi_file_loader import (
     update_config_values,
     validate_config_updates,
 )
+from src.modules.config.registry import COMPONENT_SCHEMAS
+from src.modules.config.schema_generator import ConfigSchemaGenerator, collect_all_fields
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -74,8 +76,6 @@ def _walk_schema(model_cls: type[BaseModel], parts: list[str]) -> Optional[tuple
         # extra="allow" 的宿主（collectors 根）：未知段是采集器子段，
         # 权威 Schema 在组件注册表中，按注册表继续下钻
         if extra_allow and rest:
-            from src.modules.config.registry import COMPONENT_SCHEMAS
-
             sub_cls = COMPONENT_SCHEMAS.get(segment)
             if sub_cls is not None:
                 return _walk_schema(sub_cls, rest)
@@ -351,10 +351,6 @@ def _build_frontend_groups(config_service: "ConfigService") -> dict:
     （``__section_label__`` / ``__file_name__``），无手写映射表。
     字段 key 在文件内路径前加 scope 前缀，与合并视图寻址一致。
     """
-    from src.modules.config.schema_generator import (
-        ConfigSchemaGenerator,
-        collect_all_fields,
-    )
 
     main_config = config_service.main_config or {}
 

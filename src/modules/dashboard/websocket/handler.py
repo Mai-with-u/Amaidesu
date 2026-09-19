@@ -114,7 +114,7 @@ class WebSocketHandler:
                 self._last_pong[client_id] = time.time()
                 logger.debug(f"收到客户端 {client_id} 心跳响应")
             else:
-                logger.warning(f"未知消息类型: {data}")
+                logger.warning(f"客户端 {client_id} 发送未知消息类型: {data.get('type')}")
 
         except json.JSONDecodeError:
             logger.error(f"无效的 JSON 消息: {message}")
