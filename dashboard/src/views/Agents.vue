@@ -1198,9 +1198,9 @@ onUnmounted(() => {
 }
 
 .stage-badge--rundown {
-  color: var(--color-agenda);
-  background: var(--color-agenda-bg);
-  border-color: var(--color-agenda);
+  color: var(--color-rundown);
+  background: var(--color-rundown-bg);
+  border-color: var(--color-rundown);
 }
 
 .stage-badge--tool {

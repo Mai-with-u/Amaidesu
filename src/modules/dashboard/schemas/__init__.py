@@ -31,7 +31,7 @@ from src.modules.dashboard.schemas.agent import (
     AgentStateResponse,
     AgentSummary,
 )
-from src.modules.dashboard.schemas.agenda import (
+from src.modules.dashboard.schemas.rundown import (
     RundownConfigView,
     RundownControlAction,
     RundownControlRequest,
@@ -69,7 +69,7 @@ __all__ = [
     "ComponentDetailResponse",
     "ComponentControlRequest",
     "ComponentControlResponse",
-    # Agenda
+    # Rundown
     "RundownControlAction",
     "RundownConfigView",
     "RundownSegmentView",

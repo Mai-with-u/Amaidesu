@@ -479,7 +479,7 @@ export interface SimulatorControlResponse {
 // Rundown（流程单编排页）
 
 /**
- * 流程单运行时快照（`/api/v1/agenda/state` 的 `snapshot` 字段）。
+ * 流程单运行时快照（`/api/v1/rundown/state` 的 `snapshot` 字段）。
  *
  * - `status` 为后端派生值：`idle`（未加载）/ `running` / `paused` / `done`；
  *   前端据此切换"未加载"/"运行中"/"已暂停"/"已结束"布局。
@@ -509,7 +509,7 @@ export interface RundownCurrentSegment {
   remaining_ms: number;
 }
 
-/** 流程单环节完整定义（`/api/v1/agenda/state` 的 `segments` 字段）。 */
+/** 流程单环节完整定义（`/api/v1/rundown/state` 的 `segments` 字段）。 */
 export interface RundownSegmentView {
   id: string;
   title: string;
@@ -534,7 +534,7 @@ export interface RundownConfig {
 }
 
 /**
- * `GET /api/v1/agenda/state` 完整响应。
+ * `GET /api/v1/rundown/state` 完整响应。
  *
  * - `available=false` 表示后端未加载流程单（agent 未启动等），
  *   前端按"不可用态"渲染引导用户去编排页新建。
@@ -559,14 +559,14 @@ export interface RundownStateResponse {
  */
 export type RundownControlAction = 'pause' | 'resume' | 'next' | 'goto';
 
-/** `POST /api/v1/agenda/control` 请求体。 */
+/** `POST /api/v1/rundown/control` 请求体。 */
 export interface RundownControlRequest {
   action: RundownControlAction;
   segment_id?: string;
 }
 
 /**
- * `POST /api/v1/agenda/control` 响应。
+ * `POST /api/v1/rundown/control` 响应。
  *
  * `success=false` 时 `message` 填拒绝/错误原因（前端用 ElMessage 弹窗）；成功时
  * `snapshot` 是控制后最新快照（前端用其刷新展示，避免 WS 抖动期的闪烁）。
@@ -591,7 +591,7 @@ export interface RundownDefinition {
   segments: RundownSegmentView[];
 }
 
-/** `GET /api/v1/agenda/rundowns` 响应；`current_id` 为空表示配置未选单（走内置默认流程单）。 */
+/** `GET /api/v1/rundowns` 响应；`current_id` 为空表示配置未选单（走内置默认流程单）。 */
 export interface RundownListResponse {
   success: boolean;
   message: string;
@@ -599,7 +599,7 @@ export interface RundownListResponse {
   current_id: string;
 }
 
-/** `GET /api/v1/agenda/rundowns/template` 响应（内置默认流程单，新建预填模板）。 */
+/** `GET /api/v1/rundowns/template` 响应（内置默认流程单，新建预填模板）。 */
 export interface RundownTemplateResponse {
   success: boolean;
   message: string;

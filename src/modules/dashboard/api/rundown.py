@@ -2,8 +2,8 @@
 
 提供主播 Agent 流程单状态查询与手动控制端点：
 
-- ``GET  /api/v1/agenda/state``   — 整场快照 + 变更历史 + 环节清单
-- ``POST /api/v1/agenda/control`` — pause / resume / next / goto
+- ``GET  /api/v1/rundown/state``   — 整场快照 + 变更历史 + 环节清单
+- ``POST /api/v1/rundown/control`` — pause / resume / next / goto
 
 数据来源
 --------
@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends
 
 from src.modules.dashboard.api.common import resolve_streamer_agent
 from src.modules.dashboard.dependencies import get_dashboard_server
-from src.modules.dashboard.schemas.agenda import (
+from src.modules.dashboard.schemas.rundown import (
     RundownConfigView,
     RundownControlRequest,
     RundownControlResponse,

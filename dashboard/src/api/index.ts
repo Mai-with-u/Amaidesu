@@ -268,29 +268,29 @@ export const visionApi = {
 
 // Rundown（流程单编排页）
 //
-// `GET /agenda/state`：当前流程单运行时快照（available / snapshot / transitions /
+// `GET /rundown/state`：当前流程单运行时快照（available / snapshot / transitions /
 // segments / config）。available=false 时 snapshot=null，前端按不可用态渲染。
-// `POST /agenda/control`：手动控制（pause / resume / next / goto，by="human"），
+// `POST /rundown/control`：手动控制（pause / resume / next / goto，by="human"），
 // 返回最新 snapshot；前端只在收到响应后做错误提示，正常状态由后端通过
 // `rundown.changed` 事件推上来。
 export const rundownApi = {
-  getState: () => api.get<RundownStateResponse>('/agenda/state'),
+  getState: () => api.get<RundownStateResponse>('/rundown/state'),
   control: (request: RundownControlRequest) =>
-    api.post<RundownControlResponse>('/agenda/control', request),
+    api.post<RundownControlResponse>('/rundown/control', request),
 
   // 流程单库（列表 / 模板 / upsert / 删除 / 复制 / 设为当前）
   //
   // upsert 保存的流程单正是直播运行中的那份时，后端会写穿运行态
   // （进度按环节 id 对齐）；activate 只落盘配置，重启主播 Agent 后生效。
-  listRundowns: () => api.get<RundownListResponse>('/agenda/rundowns'),
-  getTemplate: () => api.get<RundownTemplateResponse>('/agenda/rundowns/template'),
+  listRundowns: () => api.get<RundownListResponse>('/rundowns'),
+  getTemplate: () => api.get<RundownTemplateResponse>('/rundowns/template'),
   upsert: (definition: RundownDefinition) =>
-    api.post<RundownMutateResponse>('/agenda/rundowns', definition),
-  remove: (rundownId: string) => api.delete<RundownMutateResponse>(`/agenda/rundowns/${rundownId}`),
+    api.post<RundownMutateResponse>('/rundowns', definition),
+  remove: (rundownId: string) => api.delete<RundownMutateResponse>(`/rundowns/${rundownId}`),
   duplicate: (rundownId: string) =>
-    api.post<RundownMutateResponse>(`/agenda/rundowns/${rundownId}/duplicate`),
+    api.post<RundownMutateResponse>(`/rundowns/${rundownId}/duplicate`),
   activate: (rundownId: string) =>
-    api.post<RundownMutateResponse>(`/agenda/rundowns/${rundownId}/activate`),
+    api.post<RundownMutateResponse>(`/rundowns/${rundownId}/activate`),
 };
 
 export default api;

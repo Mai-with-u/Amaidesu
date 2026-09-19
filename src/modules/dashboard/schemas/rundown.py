@@ -46,7 +46,7 @@ class RundownConfigView(BaseModel):
 
 
 class RundownStateResponse(BaseModel):
-    """``GET /api/v1/agenda/state`` 响应。"""
+    """``GET /api/v1/rundown/state`` 响应。"""
 
     available: bool
     message: Optional[str] = None
@@ -57,14 +57,14 @@ class RundownStateResponse(BaseModel):
 
 
 class RundownControlRequest(BaseModel):
-    """``POST /api/v1/agenda/control`` 请求体。"""
+    """``POST /api/v1/rundown/control`` 请求体。"""
 
     action: RundownControlAction
     segment_id: Optional[str] = None
 
 
 class RundownControlResponse(BaseModel):
-    """``POST /api/v1/agenda/control`` 响应。"""
+    """``POST /api/v1/rundown/control`` 响应。"""
 
     success: bool
     message: str
@@ -72,7 +72,7 @@ class RundownControlResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 流程单库 CRUD（/api/v1/agenda/rundowns*）
+# 流程单库 CRUD（/api/v1/rundowns*）
 # ---------------------------------------------------------------------------
 
 
@@ -89,7 +89,7 @@ class RundownDefinition(BaseModel):
 
 
 class RundownListResponse(BaseModel):
-    """``GET /api/v1/agenda/rundowns`` 响应。"""
+    """``GET /api/v1/rundowns`` 响应。"""
 
     success: bool
     message: str = ""
@@ -98,7 +98,7 @@ class RundownListResponse(BaseModel):
 
 
 class RundownTemplateResponse(BaseModel):
-    """``GET /api/v1/agenda/rundowns/template`` 响应（新建预填模板）。"""
+    """``GET /api/v1/rundowns/template`` 响应（新建预填模板）。"""
 
     success: bool
     message: str = ""

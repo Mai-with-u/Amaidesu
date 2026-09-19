@@ -97,7 +97,7 @@ class DashboardServer:
         self.chat_repo = chat_repo
         # 注入 LLMRepo 让 `/api/v1/llm/usage*` 从 SQLite 聚合用量；未注入时相关端点返回空数据
         self.llm_repo = llm_repo
-        # 注入 RundownRepo 让 `/api/v1/agenda/rundowns*` 承载流程单库 CRUD；
+        # 注入 RundownRepo 让 `/api/v1/rundowns*` 承载流程单库 CRUD；
         # 未注入（极简启动/测试）时相关端点降级 success=false
         self.rundown_repo = rundown_repo
 

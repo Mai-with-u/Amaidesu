@@ -22,7 +22,7 @@ class EnvironmentBlock:
 
     minute_bucket_ms: int  # 分钟级时刻（避免秒级毒化缓存）
     duration_so_far_ms: int
-    current_stage_label: Optional[str] = None  # 当前环节（agenda_runtime.current）
+    current_stage_label: Optional[str] = None  # 当前环节标题（RundownState 当前环节）
     unread_summary: str = ""  # 未读行为流摘要
     key_changes: List[str] = field(default_factory=list)
 

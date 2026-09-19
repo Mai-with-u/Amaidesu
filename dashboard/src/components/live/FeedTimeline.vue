@@ -1133,7 +1133,7 @@ async function copyText(text: string): Promise<void> {
 }
 .beat-rule {
   height: 1px;
-  background: var(--color-agenda);
+  background: var(--color-rundown);
   opacity: 0.45;
 }
 .beat-rule:first-child {
@@ -1153,7 +1153,7 @@ async function copyText(text: string): Promise<void> {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 1.6px;
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   flex-shrink: 0;
 }
 .beat-label {
@@ -1169,8 +1169,8 @@ async function copyText(text: string): Promise<void> {
   border-radius: 999px;
   font-size: 10px;
   font-weight: 700;
-  background: var(--color-agenda-bg);
-  color: var(--color-agenda);
+  background: var(--color-rundown-bg);
+  color: var(--color-rundown);
   flex-shrink: 0;
 }
 .beat-note {

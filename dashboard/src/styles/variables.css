@@ -82,8 +82,8 @@
   --color-agent-bg: rgba(139, 92, 246, 0.1);
   --color-tool: #10b981;
   --color-tool-bg: rgba(16, 185, 129, 0.1);
-  --color-agenda: #f59e0b;
-  --color-agenda-bg: rgba(245, 158, 11, 0.1);
+  --color-rundown: #f59e0b;
+  --color-rundown-bg: rgba(245, 158, 11, 0.1);
   --color-planner: #6366f1;
   --color-planner-bg: rgba(99, 102, 241, 0.1);
   --color-game: #ec4899;
@@ -155,8 +155,8 @@
   --color-agent-bg: rgba(163, 113, 247, 0.15);
   --color-tool: #3fb950;
   --color-tool-bg: rgba(63, 185, 80, 0.15);
-  --color-agenda: #fbbf24;
-  --color-agenda-bg: rgba(251, 191, 36, 0.15);
+  --color-rundown: #fbbf24;
+  --color-rundown-bg: rgba(251, 191, 36, 0.15);
   --color-planner: #818cf8;
   --color-planner-bg: rgba(129, 140, 248, 0.15);
   --color-game: #f472b6;

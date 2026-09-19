@@ -2,12 +2,12 @@
 
 承载 Dashboard 编排页的流程单库管理端点：
 
-- ``GET    /api/v1/agenda/rundowns``            — 库列表（完整定义）+ 当前配置指向
-- ``GET    /api/v1/agenda/rundowns/template``   — 内置默认流程单（新建预填模板）
-- ``POST   /api/v1/agenda/rundowns``            — upsert（新建与保存共用）
-- ``DELETE /api/v1/agenda/rundowns/{id}``       — 删除
-- ``POST   /api/v1/agenda/rundowns/{id}/duplicate`` — 复制
-- ``POST   /api/v1/agenda/rundowns/{id}/activate``  — 设为当前（写配置）
+- ``GET    /api/v1/rundowns``            — 库列表（完整定义）+ 当前配置指向
+- ``GET    /api/v1/rundowns/template``   — 内置默认流程单（新建预填模板）
+- ``POST   /api/v1/rundowns``            — upsert（新建与保存共用）
+- ``DELETE /api/v1/rundowns/{id}``       — 删除
+- ``POST   /api/v1/rundowns/{id}/duplicate`` — 复制
+- ``POST   /api/v1/rundowns/{id}/activate``  — 设为当前（写配置）
 
 数据来源与职责切分
 ------------------
@@ -31,7 +31,7 @@ from src.agents.streamer.rundown.rundown import DEFAULT_RUNDOWN, Rundown
 from src.modules.dashboard.api.common import resolve_streamer_agent
 from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
 from src.modules.dashboard.dependencies import get_dashboard_server
-from src.modules.dashboard.schemas.agenda import (
+from src.modules.dashboard.schemas.rundown import (
     RundownDefinition,
     RundownListResponse,
     RundownMutateResponse,
@@ -121,7 +121,7 @@ async def _apply_to_runtime(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/rundowns", response_model=RundownListResponse)
+@router.get("", response_model=RundownListResponse)
 async def list_rundowns(server: ServerDep) -> RundownListResponse:
     """流程单库列表（完整定义；每单 3-10 环节，全量返回无分页负担）。"""
     repo = _get_repo(server)
@@ -138,14 +138,14 @@ async def list_rundowns(server: ServerDep) -> RundownListResponse:
     )
 
 
-@router.get("/rundowns/template", response_model=RundownTemplateResponse)
+@router.get("/template", response_model=RundownTemplateResponse)
 async def get_rundown_template(server: ServerDep) -> RundownTemplateResponse:
     """内置默认流程单（新建预填模板；虚拟存在不写库）。"""
     del server  # 配置无关的静态模板，占位参数保持依赖注入形态一致
     return RundownTemplateResponse(success=True, definition=_definition_from_rundown(DEFAULT_RUNDOWN))
 
 
-@router.post("/rundowns", response_model=RundownMutateResponse)
+@router.post("", response_model=RundownMutateResponse)
 async def upsert_rundown(definition: RundownDefinition, server: ServerDep) -> RundownMutateResponse:
     """新建或整体保存一份流程单（repo 落盘；运行中的同 id 单即时写穿）。"""
     repo = _get_repo(server)
@@ -168,7 +168,7 @@ async def upsert_rundown(definition: RundownDefinition, server: ServerDep) -> Ru
     return RundownMutateResponse(success=True, message=message, rundown_id=definition.rundown_id)
 
 
-@router.delete("/rundowns/{rundown_id}", response_model=RundownMutateResponse)
+@router.delete("/{rundown_id}", response_model=RundownMutateResponse)
 async def delete_rundown(rundown_id: str, server: ServerDep) -> RundownMutateResponse:
     """删除流程单（运行态不动：Agent 内存副本继续用，重启后按回退语义走默认单）。"""
     repo = _get_repo(server)
@@ -187,7 +187,7 @@ async def delete_rundown(rundown_id: str, server: ServerDep) -> RundownMutateRes
     return RundownMutateResponse(success=True, message=message, rundown_id=rundown_id)
 
 
-@router.post("/rundowns/{rundown_id}/duplicate", response_model=RundownMutateResponse)
+@router.post("/{rundown_id}/duplicate", response_model=RundownMutateResponse)
 async def duplicate_rundown(rundown_id: str, server: ServerDep) -> RundownMutateResponse:
     """复制一份流程单（新 id 自动生成，标题追加"副本"）。"""
     repo = _get_repo(server)
@@ -210,7 +210,7 @@ async def duplicate_rundown(rundown_id: str, server: ServerDep) -> RundownMutate
     return RundownMutateResponse(success=True, message="副本已创建", rundown_id=new_id)
 
 
-@router.post("/rundowns/{rundown_id}/activate", response_model=RundownMutateResponse)
+@router.post("/{rundown_id}/activate", response_model=RundownMutateResponse)
 async def activate_rundown(rundown_id: str, server: ServerDep) -> RundownMutateResponse:
     """设为当前流程单（写配置落盘；重启主播 Agent 后生效，不热切运行中的单）。"""
     repo = _get_repo(server)

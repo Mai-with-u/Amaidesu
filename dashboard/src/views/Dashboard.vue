@@ -217,7 +217,7 @@ async function onProactiveToggle(value: string | number | boolean) {
   }
 }
 const viewerCount = ref<number>(0);
-const agendaState = ref<RundownStateResponse | null>(null);
+const rundownState = ref<RundownStateResponse | null>(null);
 const sessions = ref<LiveSessionListResponse | null>(null);
 
 const streamerAvailable = computed(() => streamerStatus.value?.available === true);
@@ -456,24 +456,24 @@ const infra = computed(() => {
   const idle = collectors.value.filter(c => !c.is_started).map(c => c.name);
   const tripped = tools.value.filter(t => t.health?.state === 'tripped').length;
 
-  let agendaText = '未加载';
+  let rundownText = '未加载';
   let unavailable = false;
-  const snap = agendaState.value?.snapshot ?? null;
+  const snap = rundownState.value?.snapshot ?? null;
   if (snap?.status === 'running' || snap?.status === 'paused') {
     const cur = snap.current;
-    agendaText = `环节 ${snap.index + 1}/${snap.total} · ${cur?.title ?? '环节'}`;
-    if (snap.status === 'paused') agendaText += ' · 已暂停';
+    rundownText = `环节 ${snap.index + 1}/${snap.total} · ${cur?.title ?? '环节'}`;
+    if (snap.status === 'paused') rundownText += ' · 已暂停';
   } else if (snap?.status === 'done') {
-    agendaText = '已完结';
+    rundownText = '已完结';
   } else {
     unavailable = true;
-    agendaText = '未加载';
+    rundownText = '未加载';
   }
 
   return {
     collectors: { total, started, idleNames: idle.slice(0, 3) },
     tools: { tripped },
-    rundown: { text: agendaText, unavailable },
+    rundown: { text: rundownText, unavailable },
   };
 });
 
@@ -495,7 +495,7 @@ async function refreshSnapshot(): Promise<void> {
     tools.value = toolsResp.data.tools ?? [];
     streamerStatus.value = streamerResp.data;
     proactiveEnabled.value = streamerResp.data.config?.proactive_enabled ?? false;
-    agendaState.value = rundownResp.data;
+    rundownState.value = rundownResp.data;
     sessions.value = sessionsResp.data;
   } catch {
     // 任一接口失败都保留旧值；结论条自然按缺失数据降级（直播中/降级/空闲）
@@ -529,7 +529,7 @@ watch(
   () => eventsStore.events[eventsStore.events.length - 1]?.type,
   type => {
     if (type === 'rundown.changed')
-      void rundownApi.getState().then(r => (agendaState.value = r.data));
+      void rundownApi.getState().then(r => (rundownState.value = r.data));
   },
 );
 

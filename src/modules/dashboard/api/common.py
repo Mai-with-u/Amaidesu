@@ -1,6 +1,6 @@
 """Dashboard API 层共享辅助函数
 
-供 agenda / rundowns / streamer 等 API 模块共用的最小工具集；
+供 rundown / rundowns / streamer 等 API 模块共用的最小工具集；
 从各模块的本地复刻收敛而来，新增共用逻辑优先放这里。
 """
 

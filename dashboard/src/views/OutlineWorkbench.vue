@@ -1,5 +1,5 @@
 <template>
-  <div class="agenda-workbench">
+  <div class="rundown-workbench">
     <!-- 顶部：标题 + 副标题 + 刷新 -->
     <header class="page-header">
       <div class="header-left">
@@ -566,7 +566,7 @@
  * 流程单编排页 —— 流程单实时状态 + 手动控制
  *
  * 数据来源：
- * - REST 轮询：GET /api/v1/agenda/state（300ms 防抖 + WS 触发）
+ * - REST 轮询：GET /api/v1/rundown/state（300ms 防抖 + WS 触发）
  * - WebSocket：rundown.changed（onMessage 过滤，触发重拉）
  * - 本地 1s setInterval：仅用于重算当前环节的 elapsed/remaining 倒计时显示
  *
@@ -665,7 +665,7 @@ const progressPercent = computed(() => {
 
 const progressColor = computed(() => {
   if (snapshot.value?.status === 'done') return 'var(--color-info)';
-  return 'var(--color-agenda)';
+  return 'var(--color-rundown)';
 });
 
 const currentSegment = computed<RundownCurrentSegment | null>(
@@ -1198,7 +1198,7 @@ watch(
 </script>
 
 <style scoped>
-.agenda-workbench {
+.rundown-workbench {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
@@ -1319,7 +1319,7 @@ watch(
   left: 0;
   right: 0;
   height: 3px;
-  background: var(--color-agenda);
+  background: var(--color-rundown);
 }
 
 .total-label {
@@ -1391,7 +1391,7 @@ watch(
 .total-progress .progress-percent {
   margin-left: auto;
   font-size: 12px;
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   font-weight: 700;
 }
 /* 当前环节大卡                                                  */
@@ -1399,7 +1399,7 @@ watch(
 .current-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
-  border-left: 3px solid var(--color-agenda);
+  border-left: 3px solid var(--color-rundown);
   border-radius: var(--radius-lg);
   padding: var(--spacing-lg);
   display: flex;
@@ -1426,7 +1426,7 @@ watch(
   font-weight: 700;
   letter-spacing: 1.6px;
   text-transform: uppercase;
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   flex-shrink: 0;
 }
 
@@ -1515,7 +1515,7 @@ watch(
 }
 
 .next-arrow {
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   font-weight: 700;
   margin-left: auto;
 }
@@ -1560,7 +1560,7 @@ watch(
 }
 
 .segments-table :deep(tr.is-current-row) {
-  background: var(--color-agenda-bg) !important;
+  background: var(--color-rundown-bg) !important;
 }
 
 .segments-table :deep(tr.is-current-row td) {
@@ -1568,7 +1568,7 @@ watch(
 }
 
 .order-cell {
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   font-weight: 600;
 }
 
@@ -1602,8 +1602,8 @@ watch(
 .history-event {
   font-size: 11px;
   font-weight: 700;
-  color: var(--color-agenda);
-  background: var(--color-agenda-bg);
+  color: var(--color-rundown);
+  background: var(--color-rundown-bg);
   padding: 1px 8px;
   border-radius: var(--radius-sm);
   letter-spacing: 0.5px;
@@ -1661,7 +1661,7 @@ watch(
 .key-points,
 .key-point,
 .key-point-bullet {
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   font-weight: 700;
 }
 .meta-grid {
@@ -1762,7 +1762,7 @@ watch(
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--color-agenda);
+  background: var(--color-rundown);
   color: #fff;
   font-size: 12px;
   font-weight: 700;

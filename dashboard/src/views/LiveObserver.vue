@@ -1335,8 +1335,8 @@ onUnmounted(() => {
   border: 1px solid var(--border-color-light);
 }
 .session-badge.is-replay {
-  color: var(--color-agenda);
-  border-color: var(--color-agenda);
+  color: var(--color-rundown);
+  border-color: var(--color-rundown);
 }
 
 .session-meta {
@@ -1388,9 +1388,9 @@ onUnmounted(() => {
   min-height: 48px;
   padding: var(--spacing-sm) var(--spacing-md);
   border: 1px solid var(--border-color-light);
-  border-left: 3px solid var(--color-agenda);
+  border-left: 3px solid var(--color-rundown);
   border-radius: var(--radius-md);
-  background: var(--color-agenda-bg);
+  background: var(--color-rundown-bg);
 }
 .slate.is-idle {
   border-left-color: var(--border-color-dark);
@@ -1401,7 +1401,7 @@ onUnmounted(() => {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 1.6px;
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   flex-shrink: 0;
 }
 .slate.is-idle .slate-eyebrow {
@@ -1428,10 +1428,10 @@ onUnmounted(() => {
 .slate-action {
   padding: 1px 8px;
   border-radius: 999px;
-  border: 1px solid var(--color-agenda);
+  border: 1px solid var(--color-rundown);
   font-size: 11px;
   font-weight: 600;
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   flex-shrink: 0;
 }
 
