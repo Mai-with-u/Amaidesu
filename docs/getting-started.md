@@ -125,7 +125,7 @@ enabled = ["streamer", "text_adv"]
 
 #### 启用采集器
 
-采集器配置宿主是 `config/collectors.toml`（顶层 `enabled` 名单驱动装配）。默认已启用"控制台输入"，零依赖就能对话：
+采集器配置宿主是 `config/collectors.toml`（顶层 `enabled` 名单驱动装配）。默认已启用"控制台输入"与游戏注意流 `maicraft_attention`（游戏未运行时空转、无感），零依赖就能对话：
 
 ```toml
 # config/collectors.toml
@@ -210,6 +210,7 @@ uv run python main.py --dry
 | `bili_danmaku` | B 站 legacy 弹幕（轮询） | `room_id` / `poll_interval` |
 | `bili_danmaku_official` | B 站官方长连弹幕 | `id_code` / `app_id` / `access_key(_secret)` / `api_host` |
 | `stt` | 语音转文字（讯飞 ASR + VAD） | 包内 ConfigSchema（iflytek_asr / vad / audio） |
+| `maicraft_attention` | 游戏注意流：观察 Minecraft 身体遭遇（受伤/死亡等），分类叙事化后发布 | 同名子段（实现位于游戏 Agent 包 `src/agents/minecraft/`） |
 
 
 #### 业务 Agent（`SUPPORTED_AGENTS`）
@@ -348,7 +349,7 @@ pnpm run dev                     # → Vite 启动在 http://localhost:60315
 [dashboard]
 enabled = true                                      # 是否启用 Dashboard
 host = "127.0.0.1"                                  # 监听地址
-port = 60214                                        # 监听端口
+port = 60214                                        # 监听端口（被占用时自动回退 port+1..+9，开发模式不回退）
 cors_origins = ["http://localhost:60315", "http://127.0.0.1:60315"]  # 允许的跨域来源
 max_history_messages = 1000                         # WebSocket 推送的最大历史消息数
 websocket_heartbeat = 30                            # WebSocket 心跳间隔（秒）
@@ -359,11 +360,16 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 
 #### 功能特性
 
-- **实时事件流**（`/ws`）：EventBus 上的事件实时推送，可按类型过滤
-- **组件管理页**：采集器与 Agent 的动态启停 / 健康状态查看
+- **运行总览**：采集器 / Agent / 工具三组健康状态与 EventBus 吞吐
+- **直播控制台**：直播中编排（环节进度 / 手动切换 / 插入环节）、主播决策测试
+- **观众**：观众列表（搜索 / 排序 / 分页）、单观众档案（对话交织）、互动分析
+- **采集器 / Agent / 工具页**：组件启停与健康状态、工具提供者开关与故障重连
+- **事件流 / 日志**：实时事件流（`/ws` 推送，可按类型过滤）与运行日志
+- **流程单工作台**：流程单库编辑，直播中编辑写穿数据库
+- **世界模拟器**：模拟弹幕生成与录制回放
+- **LLM 用量 / LLM 历史**：token 用量统计、命中率与趋势图表、请求级 prompt 明细
 - **配置在线编辑**：在线修改配置并经统一管线写回（infra 段即时重载，其余待重启）
-- **LLM 对话调试**：直接在 UI 里向指定 profile 发请求，看完整 prompt 与 token 消耗
-- **会话历史**：按 session 维度查看观众消息、AI 回复、工具调用
+- **更新日志**：侧边栏左下角版本号点击查看
 
 ## 5. 快速验证
 

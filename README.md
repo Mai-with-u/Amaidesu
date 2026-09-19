@@ -17,6 +17,7 @@ Amaidesu!
 ![issues](https://img.shields.io/github/issues/Mai-with-u/Amaidesu)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Mai-with-u/Amaidesu)
 
+</div>
 
 ## 项目简介
 
@@ -31,9 +32,7 @@ Amaidesu 是一个 AI 虚拟主播框架：采集直播间弹幕与语音输入�
 - **记忆**：SQLite 持久化场次、消息、礼物、醒目留言与流程单；跨场关键词记忆召回并按相关性注入决策上下文
 - **直播编排**：Rundown 流程单定义直播环节与节奏，可在 Web Dashboard 中编辑流程单库
 - **游戏 Agent**：命令驱动型 Agent，任务完成即停（Minecraft 经 MCP 接入，另有一个文字冒险示例）
-- **Web Dashboard**：实时事件流、组件启停与健康状态、配置在线编辑、LLM 对话调试、会话历史
-
-</div>
+- **Web Dashboard**：直播控制台、实时事件流、观众数据、LLM 用量与请求历史、组件启停与健康状态、配置在线编辑
 
 ## 架构概述
 
