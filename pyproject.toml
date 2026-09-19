@@ -1,6 +1,6 @@
 [project]
 name = "amaidesu"
-version = "2.0.0"
+version = "2.0.1"
 description = "MaiBot VTuber - AI VTuber Assistant with MaiBot Integration"
 readme = "README.md"
 license = { text = "MIT" }
