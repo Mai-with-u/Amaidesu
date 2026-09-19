@@ -359,16 +359,26 @@ export interface ToolProviderUnit {
   /** 工具 provider 标识（通常与 key 相同，例外：obs → obs_control） */
   provider_name: string;
   description: string;
-  /** 配置态：[tools.<分类>.<键>].enabled */
+  /** 配置态：开关状态（位置由后端路由——tools.toml 段或提供者声明的 agents.toml 键） */
   enabled: boolean;
   /** 该提供者是否在配置中声明过（false = 已知成员但配置未写，可首次开启） */
   in_config: boolean;
-  /** Agent 自声明分类（game）不可开关 */
+  /** 随 Agent 启用的分类（game / framework）不可开关 */
   switchable: boolean;
   /** 运行态：registry 中该提供者已注册的工具数（含停用） */
   tool_count: number;
   /** 其中停用的工具数 */
   disabled_count: number;
+  /** registry 中有该 Provider 的登记记录（false = 仅配置声明，待重启装配） */
+  registered?: boolean;
+  /** 已登记但 0 工具（通常连接失败降级登记；配合 last_error 展示原因） */
+  degraded?: boolean;
+  /** Provider 侧最近一次连接失败摘要（无失败历史为空串） */
+  last_error?: string;
+  /** Provider 级手动重连按钮可见性（无连接语义的 Provider 为 false） */
+  supports_reconnect?: boolean;
+  /** 随卡片展示的管理提示（如 Agent 私有 MCP 停用后采集器仍会连接） */
+  notice?: string;
 }
 
 /** 工具提供者分类（GET /api/v1/tools/categories） */
@@ -407,6 +417,8 @@ export interface ToolReconnectResponse {
   provider_id: string;
   recovered: string[];
   still_tripped: string[];
+  /** 工具集刷新报告（降级登记补注册 / server 清单换血）；刷新异常时为 null */
+  refreshed?: { added: string[]; removed: string[]; count: number } | null;
 }
 
 // Simulator 控制面（ADR-006）

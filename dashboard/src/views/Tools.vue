@@ -128,8 +128,19 @@
                   {{ unit.tool_count }} 个工具
                 </el-tag>
                 <el-tooltip
-                  v-if="unit.switchable && unit.enabled && unit.tool_count === 0"
-                  content="配置已启用但运行时没有工具——改动后尚未重启，重启后才会装配"
+                  v-if="unit.degraded"
+                  :content="
+                    unit.last_error ||
+                    'Provider 已登记但 0 个工具（连接失败降级登记，恢复后自动补注册）'
+                  "
+                  placement="top"
+                  :show-after="100"
+                >
+                  <el-tag size="small" type="danger" effect="light">连接失败</el-tag>
+                </el-tooltip>
+                <el-tooltip
+                  v-else-if="unit.switchable && unit.enabled && unit.registered === false"
+                  content="配置已启用但 Provider 未装配——重启后生效"
                   placement="top"
                   :show-after="100"
                 >
@@ -143,6 +154,14 @@
                 >
                   <el-tag size="small" type="warning" effect="light">重启后卸载</el-tag>
                 </el-tooltip>
+                <el-button
+                  v-if="unit.supports_reconnect"
+                  size="small"
+                  :loading="reconnecting.has(unit.key)"
+                  @click="onReconnect(unit.key)"
+                >
+                  重连
+                </el-button>
                 <el-switch
                   v-if="unit.switchable"
                   :model-value="unit.enabled"
@@ -152,6 +171,7 @@
                 <el-tag v-else size="small" effect="plain">随 Agent 启用</el-tag>
               </div>
             </header>
+            <p v-if="unit.notice" class="provider-notice">{{ unit.notice }}</p>
 
             <el-table
               v-if="toolsOf(unit).length > 0"
@@ -435,7 +455,7 @@ const activeEnabledCount = computed(
 const pendingRestartCount = computed(
   () =>
     (activeCategoryData.value?.providers ?? []).filter(
-      p => p.switchable && (p.enabled ? p.tool_count === 0 : p.tool_count > 0),
+      p => p.switchable && (p.enabled ? p.registered === false : p.tool_count > 0),
     ).length,
 );
 
@@ -474,9 +494,7 @@ async function onBulkToggle(next: boolean) {
     if (failed > 0) {
       ElMessage.warning(`部分提供者写回失败（${failed}/${units.length}），请重试`);
     } else {
-      ElMessage.success(
-        `${next ? '启用' : '停用'} ${units.length} 个提供者（写入 tools.toml），重启后生效`,
-      );
+      ElMessage.success(`${next ? '启用' : '停用'} ${units.length} 个提供者，重启后生效`);
     }
   } finally {
     bulkToggling.value = false;
@@ -539,10 +557,13 @@ async function onReconnect(providerId: string) {
     const resp = await toolsApi.reconnectProvider(providerId);
     const recoveredCount = resp.data.recovered.length;
     const stillTrippedCount = resp.data.still_tripped.length;
+    const addedCount = resp.data.refreshed?.added.length ?? 0;
     if (stillTrippedCount > 0) {
       ElMessage.warning(
         `重连成功但 ${stillTrippedCount} 个工具探活未通过：${resp.data.still_tripped.join('、')}`,
       );
+    } else if (addedCount > 0) {
+      ElMessage.success(`重连成功，补注册 ${addedCount} 个工具（降级装配已恢复）`);
     } else if (recoveredCount > 0) {
       ElMessage.success(`已恢复 ${recoveredCount} 个工具`);
     } else {
@@ -1030,6 +1051,15 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: var(--spacing-md);
   padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.provider-notice {
+  margin: 0;
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-size: 12px;
+  color: var(--text-secondary);
   background: var(--bg-hover);
   border-bottom: 1px solid var(--border-color-light);
 }
