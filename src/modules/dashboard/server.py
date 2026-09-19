@@ -151,7 +151,9 @@ class DashboardServer:
             async def serve_spa(full_path: str):
                 if full_path.startswith("api/") or full_path == "ws":
                     return {"detail": "Not Found"}
-                return FileResponse(str(DASHBOARD_DIST / "index.html"))
+                # no-cache 强制每次重验（未变时 304）：后端重建后标签页必须拿到新 index，
+                # 否则启发式缓存会让旧入口引用已被清掉的 chunk hash，懒加载路由卡死
+                return FileResponse(str(DASHBOARD_DIST / "index.html"), headers={"Cache-Control": "no-cache"})
 
             self.logger.info(f"前端静态文件已挂载: {DASHBOARD_DIST}")
         else:
