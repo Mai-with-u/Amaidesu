@@ -139,7 +139,6 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleString('zh-CN', { hour12: false });
 }
 
-
 async function load(): Promise<void> {
   loading.value = true;
   try {

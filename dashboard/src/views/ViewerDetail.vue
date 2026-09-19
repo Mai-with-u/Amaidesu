@@ -259,7 +259,6 @@ function formatTime(ms: number): string {
   });
 }
 
-
 async function loadDetail(): Promise<void> {
   detail.value = null;
   loadError.value = '';
