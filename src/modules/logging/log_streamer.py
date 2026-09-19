@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger as loguru_logger
 
+from src.modules.time_utils import now_ms
+
 if TYPE_CHECKING:
     from src.modules.dashboard.websocket.handler import WebSocketHandler
 
@@ -210,7 +212,7 @@ class LogStreamer:
         for log_entry in history:
             message = WebSocketMessage(
                 type="log.entry",
-                timestamp=time_mod.time(),  # 使用当前时间作为消息发送时间
+                timestamp_ms=now_ms(),
                 data=log_entry,
             )
             try:
