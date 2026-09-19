@@ -169,18 +169,19 @@ async def test_reconnect_provider_failure_returns_error_with_id(registry: ToolRe
 
 
 async def test_reconnect_provider_success_recover_tripped_tools(registry: ToolRegistry) -> None:
-    """重连成功 → 探活归属工具，通过且熔断的复位；探活未通过的留在 still_tripped。"""
+    """重连成功 → 先刷新工具集（存续工具保留熔断历史），再探活复位；
+    探活未通过的留在 still_tripped。"""
     provider = _ConnectableProvider(connect_ok=True)
+    # Provider 声明两个工具：重连刷新（按 list_tools 换血）后两者都存续，
+    # 熔断历史不因刷新洗白，交由 reconnect 的探活复位流程裁决
+    provider.list_tools = lambda: [  # type: ignore[method-assign]
+        ToolSpec(name="a", description="a", kind="sync", provider="conn"),
+        ToolSpec(name="a_fail", description="f", kind="sync", provider="conn"),
+    ]
     registry.register_provider(provider)
 
     # 人为制造一个熔断中 + 一个探活失败的归属工具
     registry._health["conn_a"] = _tripped()
-    # 通过伪造另一个工具名，但归属同一 provider：测试用 helper
-    registry._tools["conn_a_fail"] = (
-        ToolSpec(name="conn_a_fail", description="f", kind="sync", provider="conn"),
-        provider.invoke,
-    )
-    registry._tool_owner["conn_a_fail"] = provider
     registry._health["conn_a_fail"] = _tripped()
 
     # 把 conn_a 的 health_check 改成 True；conn_a_fail 的 health_check 改成 False

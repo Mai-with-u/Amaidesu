@@ -1,6 +1,6 @@
 """流程单库 Dashboard API 测试套件
 
-覆盖 ``/api/v1/agenda/rundowns*`` 六端点：
+覆盖 ``/api/v1/rundowns*`` 六端点：
 1. ``GET  /rundowns`` — repo 缺席降级 / 空库 / 列表含完整定义与 current_id。
 2. ``GET  /rundowns/template`` — 返回内置默认流程单预填模板。
 3. ``POST /rundowns`` — 新建落库 / 非法定义（环节 id 重复）拒绝 / 运行中写穿。
@@ -155,7 +155,7 @@ def config_dir(tmp_path: Path) -> Path:
 
 def test_list_rundowns_repo_missing_degrades(config_dir: Path) -> None:
     client = _make_client(config_dir, repo=None)
-    resp = client.get("/api/v1/agenda/rundowns")
+    resp = client.get("/api/v1/rundowns")
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is False
@@ -165,10 +165,10 @@ def test_list_rundowns_repo_missing_degrades(config_dir: Path) -> None:
 def test_list_rundowns_returns_definitions_and_current_id(config_dir: Path) -> None:
     repo = FakeRundownRepo()
     client = _make_client(config_dir, repo=repo)
-    assert client.post("/api/v1/agenda/rundowns", json=_make_definition("rd_a")).json()["success"]
-    assert client.post("/api/v1/agenda/rundowns", json=_make_definition("rd_b")).json()["success"]
+    assert client.post("/api/v1/rundowns", json=_make_definition("rd_a")).json()["success"]
+    assert client.post("/api/v1/rundowns", json=_make_definition("rd_b")).json()["success"]
 
-    resp = client.get("/api/v1/agenda/rundowns")
+    resp = client.get("/api/v1/rundowns")
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
@@ -186,7 +186,7 @@ def test_list_rundowns_returns_definitions_and_current_id(config_dir: Path) -> N
 
 def test_get_template_returns_default_rundown(config_dir: Path) -> None:
     client = _make_client(config_dir, repo=FakeRundownRepo())
-    resp = client.get("/api/v1/agenda/rundowns/template")
+    resp = client.get("/api/v1/rundowns/template")
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
@@ -205,7 +205,7 @@ def test_upsert_creates_and_persists(config_dir: Path) -> None:
     repo = FakeRundownRepo()
     client = _make_client(config_dir, repo=repo, agent=FakeStreamerAgent(running_id=None))
 
-    resp = client.post("/api/v1/agenda/rundowns", json=_make_definition("rd_new"))
+    resp = client.post("/api/v1/rundowns", json=_make_definition("rd_new"))
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
@@ -220,7 +220,7 @@ def test_upsert_duplicate_segment_ids_rejected(config_dir: Path) -> None:
     repo = FakeRundownRepo()
     client = _make_client(config_dir, repo=repo)
 
-    resp = client.post("/api/v1/agenda/rundowns", json=_make_definition("rd_bad", dup_segment_ids=True))
+    resp = client.post("/api/v1/rundowns", json=_make_definition("rd_bad", dup_segment_ids=True))
     body = resp.json()
     assert body["success"] is False
     assert "不合法" in body["message"]
@@ -231,7 +231,7 @@ def test_upsert_writes_through_to_running_agent(config_dir: Path) -> None:
     agent = FakeStreamerAgent(running_id="rd_a")
     client = _make_client(config_dir, repo=FakeRundownRepo(), agent=agent)
 
-    resp = client.post("/api/v1/agenda/rundowns", json=_make_definition("rd_a"))
+    resp = client.post("/api/v1/rundowns", json=_make_definition("rd_a"))
     body = resp.json()
     assert body["success"] is True
     assert "即时生效" in body["message"]
@@ -243,7 +243,7 @@ def test_upsert_other_running_rundown_keeps_runtime(config_dir: Path) -> None:
     agent = FakeStreamerAgent(running_id="rd_other")
     client = _make_client(config_dir, repo=FakeRundownRepo(), agent=agent)
 
-    body = client.post("/api/v1/agenda/rundowns", json=_make_definition("rd_a")).json()
+    body = client.post("/api/v1/rundowns", json=_make_definition("rd_a")).json()
     assert body["success"] is True
     # 门面被调用（由门面自行判定异 id 不动运行态）
     assert len(agent.applied) == 1
@@ -257,13 +257,13 @@ def test_upsert_other_running_rundown_keeps_runtime(config_dir: Path) -> None:
 def test_delete_existing_and_missing(config_dir: Path) -> None:
     repo = FakeRundownRepo()
     client = _make_client(config_dir, repo=repo)
-    client.post("/api/v1/agenda/rundowns", json=_make_definition("rd_a"))
+    client.post("/api/v1/rundowns", json=_make_definition("rd_a"))
 
-    ok = client.delete("/api/v1/agenda/rundowns/rd_a").json()
+    ok = client.delete("/api/v1/rundowns/rd_a").json()
     assert ok["success"] is True
     assert "rd_a" not in repo._store
 
-    missing = client.delete("/api/v1/agenda/rundowns/rd_a").json()
+    missing = client.delete("/api/v1/rundowns/rd_a").json()
     assert missing["success"] is False
     assert "不存在" in missing["message"]
 
@@ -274,9 +274,9 @@ def test_delete_referenced_by_config_mentions_fallback(config_dir: Path) -> None
     update_config_values(config_dir, "agents.toml", {"agents.streamer.rundown_id": "rd_ref"})
     # 配置落盘后需刷新 ConfigService 的 main_config（服务在 client 构造时初始化）
     client = _make_client(config_dir, repo=FakeRundownRepo())
-    client.post("/api/v1/agenda/rundowns", json=_make_definition("rd_ref"))
+    client.post("/api/v1/rundowns", json=_make_definition("rd_ref"))
 
-    ok = client.delete("/api/v1/agenda/rundowns/rd_ref").json()
+    ok = client.delete("/api/v1/rundowns/rd_ref").json()
     assert ok["success"] is True
     assert "回退" in ok["message"]
 
@@ -289,9 +289,9 @@ def test_delete_referenced_by_config_mentions_fallback(config_dir: Path) -> None
 def test_duplicate_creates_copy(config_dir: Path) -> None:
     repo = FakeRundownRepo()
     client = _make_client(config_dir, repo=repo)
-    client.post("/api/v1/agenda/rundowns", json=_make_definition("rd_src"))
+    client.post("/api/v1/rundowns", json=_make_definition("rd_src"))
 
-    body = client.post("/api/v1/agenda/rundowns/rd_src/duplicate").json()
+    body = client.post("/api/v1/rundowns/rd_src/duplicate").json()
     assert body["success"] is True
     new_id = body["rundown_id"]
     assert new_id is not None and new_id.startswith("rd_src_copy_")
@@ -300,7 +300,7 @@ def test_duplicate_creates_copy(config_dir: Path) -> None:
     assert copy.title == "测试流程单 副本"
     assert [s.id for s in copy.segments] == ["seg_a", "seg_b"]
 
-    missing = client.post("/api/v1/agenda/rundowns/rd_ghost/duplicate").json()
+    missing = client.post("/api/v1/rundowns/rd_ghost/duplicate").json()
     assert missing["success"] is False
 
 
@@ -312,9 +312,9 @@ def test_duplicate_creates_copy(config_dir: Path) -> None:
 def test_activate_persists_config(config_dir: Path) -> None:
     repo = FakeRundownRepo()
     client = _make_client(config_dir, repo=repo)
-    client.post("/api/v1/agenda/rundowns", json=_make_definition("rd_pick"))
+    client.post("/api/v1/rundowns", json=_make_definition("rd_pick"))
 
-    body = client.post("/api/v1/agenda/rundowns/rd_pick/activate").json()
+    body = client.post("/api/v1/rundowns/rd_pick/activate").json()
     assert body["success"] is True
 
     # 写回的 agents.toml 带 UTF-8 BOM（写回器现状），读取用 utf-8-sig
@@ -324,6 +324,6 @@ def test_activate_persists_config(config_dir: Path) -> None:
 
 def test_activate_unknown_id_rejected(config_dir: Path) -> None:
     client = _make_client(config_dir, repo=FakeRundownRepo())
-    body = client.post("/api/v1/agenda/rundowns/rd_ghost/activate").json()
+    body = client.post("/api/v1/rundowns/rd_ghost/activate").json()
     assert body["success"] is False
     assert "不存在" in body["message"]

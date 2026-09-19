@@ -87,6 +87,7 @@ def build_rundown_tool_provider(provider: "RundownControlProvider") -> ToolProvi
     return make_provider_from_specs(
         "rundown",
         [(_CONTROL_SPEC, as_tool_impl(_CONTROL_SPEC.full_name, _run))],
+        category="framework",
     )
 
 

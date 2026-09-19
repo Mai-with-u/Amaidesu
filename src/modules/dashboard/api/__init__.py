@@ -5,7 +5,7 @@ Dashboard API 路由模块
 """
 
 from src.modules.dashboard.api import (
-    agenda,
+    rundown,
     components,
     config,
     debug,
@@ -22,7 +22,7 @@ __all__ = [
     "config",
     "debug",
     "simulator",
-    "agenda",
+    "rundown",
     "sessions",
     "viewers",
     "vision",

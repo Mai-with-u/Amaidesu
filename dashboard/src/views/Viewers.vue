@@ -1,8 +1,6 @@
 <template>
   <div class="viewers-page">
-    <!-- ============================================================ -->
     <!-- 页面头：身份 + 总数 + 互动分析入口                              -->
-    <!-- ============================================================ -->
     <header class="page-header">
       <div class="header-left">
         <h1 class="page-title">观众</h1>
@@ -18,9 +16,7 @@
       </div>
     </header>
 
-    <!-- ============================================================ -->
     <!-- 工具条：搜索（防抖）+ 排序                                      -->
-    <!-- ============================================================ -->
     <div class="toolbar">
       <el-input
         v-model="searchText"
@@ -41,9 +37,7 @@
       <span class="count-hint mono">{{ shownRange }} / {{ total }}</span>
     </div>
 
-    <!-- ============================================================ -->
     <!-- 观众表                                                        -->
-    <!-- ============================================================ -->
     <section class="table-card">
       <el-table
         v-loading="loading"
@@ -72,7 +66,7 @@
         <el-table-column label="最后活跃" width="130">
           <template #default="{ row }">
             <span :title="formatTime(row.last_active_ms)">{{
-              relativeTime(row.last_active_ms)
+              relativeAge(row.last_active_ms)
             }}</span>
           </template>
         </el-table-column>
@@ -113,6 +107,7 @@ import { useRouter } from 'vue-router';
 import { Search } from '@element-plus/icons-vue';
 import { viewersApi } from '@/api';
 import type { ViewerListItem } from '@/types';
+import { relativeAge } from '@/utils/format';
 
 const router = useRouter();
 
@@ -144,15 +139,6 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleString('zh-CN', { hour12: false });
 }
 
-function relativeTime(ms: number): string {
-  if (!ms) return '—';
-  const diffSec = Math.floor((Date.now() - ms) / 1000);
-  if (diffSec < 60) return '刚刚';
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
-  if (diffSec < 86_400) return `${Math.floor(diffSec / 3600)} 小时前`;
-  if (diffSec < 30 * 86_400) return `${Math.floor(diffSec / 86_400)} 天前`;
-  return formatTime(ms).split(' ')[0];
-}
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -203,15 +189,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
-}
-
-.grow {
-  flex: 1;
-}
-
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
 }
 
 .page-header {

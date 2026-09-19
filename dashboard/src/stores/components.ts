@@ -11,7 +11,7 @@ import type {
 export type ComponentGroup = 'collectors' | 'agents';
 
 /**
- * 组件管理 store（v2.0）
+ * 组件管理 store
  *
  * - 数据源：`GET /api/v1/components` 返回 `collectors / agents` 两组。
  *   工具不在此清单：工具以"提供者开关"管理（toolsApi.listCategories，工具页消费）。
@@ -55,7 +55,7 @@ export const useComponentsStore = defineStore('components', () => {
     }
   }
 
-  // ===== Getters（共享给 Dashboard / Collectors / Agents 页面） =====
+  // Getters（共享给 Dashboard / Collectors / Agents 页面）
 
   const collectorsList = computed<ComponentSummary[]>(() => components.value?.collectors ?? []);
   const agentsList = computed<ComponentSummary[]>(() => components.value?.agents ?? []);

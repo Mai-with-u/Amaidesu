@@ -7,7 +7,7 @@
   ``segment_started_at_ms`` / ``paused_at_ms`` / ``rundown_started_at_ms``。
   加上若干私有字段（累计暂停 ms / 推进历史 deque / 注入时钟 / 注入回调）。
 - **status 派生**：``"idle"`` / ``"running"`` / ``"paused"`` / ``"done"`` 由
-  上述字段即时算出，不另存枚举——切片 1 已删除 v2 五值状态机。
+  上述字段即时算出，不另存枚举。
 - **变更方法统一五步走**：validate → mutate → append transition →
   emit ``rundown.changed`` → invoke ``on_changed``。
 - **拒绝结构化**：未知环节 id / 未达 ``min_duration_ms`` 不抛异常，返回
@@ -19,10 +19,9 @@
   全部 fail-soft（None → no-op）；不依赖 ProactiveTrigger / 工具 / 配置 / Dashboard。
 
 不在此处
-- 调度循环（v2 AgendaIdle 删除；节奏归 ProactiveTrigger 的 ``rundown_overdue``
-  触发源，本切片未涉及）
-- 工具调用接口（v3 ``RundownControlTool`` 在切片 3）
-- 持久化（v3 取消运行进度表，重启从头读）
+- 调度循环（节奏提醒由 ProactiveTrigger 的 ``rundown_overdue`` 触发源承担）
+- 工具调用接口（控制动作经 ``RundownControlTool`` 触达）
+- 持久化（不设运行进度表，重启从头读）
 - EventBus 订阅（仅 `` emit ``，不订阅）
 """
 

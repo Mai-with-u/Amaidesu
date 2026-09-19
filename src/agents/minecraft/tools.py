@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
+from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, Optional
 
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
@@ -212,6 +212,10 @@ class MinecraftToolProvider(BaseToolProvider):
     ``report_callback`` 由 Agent 注入——minecraft_report 上报经它发射事件并做
     交付门禁校验（返回拒绝原因字符串；None=受理）。
     """
+
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）：
+    # 本体工具随游戏 Agent 归 game 分组（工具页按此聚卡）
+    category: ClassVar[str] = "game"
 
     state: MinecraftAgentState
     report_callback: Optional[ReportCallback] = None

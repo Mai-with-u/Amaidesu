@@ -3,15 +3,10 @@
 
 数据流：collectors emit → agent subscribe（room.message.*）→ tool invoke（reply tool）。
 
-事件约定（src/modules/events/names.py 定义）：
-- 行为流（Input Domain emit）：
-    - room.message.danmaku / gift / super_chat / enter / partner_speech
-- Agent Domain subscribe：
-    - room.message.*（消费弹幕驱动 Planner）
-- Agent Domain emit：
-    - planner.checkpoint（空转探测器）
-    - agenda.update（节目单变更）
-- Tool Domain 不订阅任何 room.message.*（工具是被动调用）
+约束以 AST 扫描源码订阅点核验；事件名清单以 ``CoreEvents``
+（src/modules/events/names.py）为唯一事实源，此处不手抄。核心边界：
+Tool 域是被动调用面，不得订阅行为流事件与 Agent 域输出事件；Agent 域
+订阅行为流之外只允许场次生命周期 / 游戏事件族 / 工具结果等基础设施事件。
 """
 
 import ast
@@ -31,12 +26,15 @@ INPUT_EVENTS = {
 # Agent 域允许的非输入订阅：场次生命周期（主动发言场次闸门）与游戏事件族
 AGENT_ALLOWED_PREFIXES = ("live.started", "live.ended", "game.", "tool.result.")
 
+# Agent 域输出事件（决策 / 流程 / 发言 / 任务事实）——Tool 域不得订阅
 DECISION_EVENTS = {
-    "planner.checkpoint",
-    "agenda.update",
+    "rundown.changed",
+    "planner.decision",
+    "planner.verdict",
+    "streamer.speech",
+    "streamer.stage",
+    "task.changed",
 }
-
-OUTPUT_EVENTS: set[str] = set()  # v2 暂无 Output Domain 事件订阅
 
 
 def _load_core_events_name_to_value() -> Dict[str, str]:

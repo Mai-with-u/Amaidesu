@@ -49,9 +49,7 @@
       />
 
       <el-tabs v-else v-model="activeTab" class="workbench-tabs">
-        <!-- ============================================================ -->
         <!-- Tab 1：世界控制（模式 + 回放）                                -->
-        <!-- ============================================================ -->
         <el-tab-pane label="世界控制" name="control">
           <el-row :gutter="16">
             <el-col :span="12">
@@ -141,9 +139,7 @@
           </el-row>
         </el-tab-pane>
 
-        <!-- ============================================================ -->
         <!-- Tab 2：常驻人设                                               -->
-        <!-- ============================================================ -->
         <el-tab-pane label="常驻人设" name="personas">
           <el-card shadow="never">
             <template #header>
@@ -194,9 +190,7 @@
           </el-card>
         </el-tab-pane>
 
-        <!-- ============================================================ -->
         <!-- Tab 3：礼物目录                                               -->
-        <!-- ============================================================ -->
         <el-tab-pane label="礼物目录" name="gifts">
           <el-card shadow="never">
             <template #header>
@@ -238,9 +232,7 @@
           </el-card>
         </el-tab-pane>
 
-        <!-- ============================================================ -->
         <!-- Tab 4：配置与说明                                             -->
-        <!-- ============================================================ -->
         <el-tab-pane label="配置与说明" name="config">
           <el-row :gutter="16">
             <el-col :span="12">
@@ -309,9 +301,7 @@
       <p v-if="lastError" class="error-hint">{{ lastError }}</p>
     </div>
 
-    <!-- ============================================================ -->
     <!-- 人设编辑对话框                                                -->
-    <!-- ============================================================ -->
     <el-dialog
       v-model="personaDialogVisible"
       :title="personaForm.user_id ? '编辑人设' : '新增人设'"
@@ -356,9 +346,7 @@
       </template>
     </el-dialog>
 
-    <!-- ============================================================ -->
     <!-- 礼物编辑对话框                                                -->
-    <!-- ============================================================ -->
     <el-dialog
       v-model="giftDialogVisible"
       :title="giftForm.gift_id ? '编辑礼物' : '新增礼物'"
@@ -413,7 +401,8 @@
  * 人设与礼物 CRUD 写穿 SQLite；回放日期来自事件历史录制目录。
  */
 import { onMounted, onUnmounted, reactive, ref, computed } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import { confirmAction } from '@/utils/confirmAction';
 import { simulatorApi } from '@/api';
 import type { SimulatorReplayProgress, SimPersona, SimGift } from '@/types';
 
@@ -694,13 +683,8 @@ async function savePersona() {
 }
 
 async function removePersona(row: SimPersona) {
-  try {
-    await ElMessageBox.confirm(`确认删除人设「${row.user_nickname}」？`, '删除确认', {
-      type: 'warning',
-    });
-  } catch {
-    return;
-  }
+  const ok = await confirmAction(`确认删除人设「${row.user_nickname}」？`, '删除确认');
+  if (!ok) return;
   try {
     const res = await simulatorApi.deletePersona(row.user_id);
     res.data.success
@@ -766,13 +750,8 @@ async function saveGift() {
 }
 
 async function removeGift(row: SimGift) {
-  try {
-    await ElMessageBox.confirm(`确认删除礼物「${row.gift_name}」？`, '删除确认', {
-      type: 'warning',
-    });
-  } catch {
-    return;
-  }
+  const ok = await confirmAction(`确认删除礼物「${row.gift_name}」？`, '删除确认');
+  if (!ok) return;
   try {
     const res = await simulatorApi.deleteGift(row.gift_id);
     res.data.success

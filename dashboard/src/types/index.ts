@@ -1,7 +1,7 @@
 // v2 类型定义 — 对应后端新架构
 // 历史事件名（input.*/decision.*/output.*）在 v2 已删除，请使用语义域事件名。
 
-// ==================== 系统状态 ====================
+// 系统状态
 
 /**
  * 单个组件分组（collectors / agents / tools）的运行统计。
@@ -24,14 +24,12 @@ export interface EventBusStats {
 }
 
 /**
- * 系统状态响应（v2.0）。
+ * 系统状态响应。
  *
  * 字段说明（与后端 `/api/v1/system/status` 对齐）：
  * - `running` / `uptime_seconds` / `version` / `python_version`：运行时元信息
  * - `groups`：三组组件运行统计（collectors / agents / tools）
  * - `event_bus`：EventBus 全局吞吐
- *
- * 旧 input/decision/output 三阶段字段已删除，前端读 `groups.<name>`。
  */
 export interface SystemStatusResponse {
   running: boolean;
@@ -46,10 +44,10 @@ export interface SystemStatusResponse {
   event_bus: EventBusStats;
 }
 
-// ==================== 组件 ====================
+// 组件
 
 /**
- * 组件摘要（v2）。
+ * 组件摘要。
  *
  * 字段：
  * - `name`：组件名（控制路径用）
@@ -87,7 +85,7 @@ export interface ComponentControlResponse {
   message: string;
 }
 
-// ==================== Agent 控制面 ====================
+// Agent 控制面
 
 /**
  * Agent 运行名册条目（`GET /api/v1/agents`）。
@@ -126,12 +124,12 @@ export interface AgentControlResponse {
   state?: string | null;
 }
 
-// ==================== 配置 ====================
+// 配置
 //
 // 配置读写经 stores/settings.ts 直连 `/api/v1/config/*`（响应形状内联于
 // store），前端无独立 ConfigResponse 类型。
 
-// ==================== 调试注入 ====================
+// 调试注入
 
 export interface InjectMessageRequest {
   source?: string;
@@ -150,7 +148,7 @@ export interface EventBusStatsResponse {
   events_by_name: Record<string, number>;
 }
 
-// ==================== Streamer 测试台（主播发言调试） ====================
+// Streamer 测试台（主播发言调试）
 
 /**
  * 模拟弹幕（单条）。nickname 空时后端用「测试观众」占位。
@@ -240,10 +238,10 @@ export interface TriggerProactiveResponse {
   message: string;
 }
 
-// ==================== WebSocket ====================
+// WebSocket
 
 /**
- * WebSocket 消息（v2）。
+ * WebSocket 消息。
  *
  * `type` 字段是 WS 广播类型：4 种 room.message.* EventBus 事件统一广播为
  * `room.message`（消息种类由 payload.message_type 判别）；其余沿用事件名
@@ -275,7 +273,7 @@ export interface SubscribeRequest {
   events: string[];
 }
 
-// ==================== Tools ====================
+// Tools
 
 export type ParameterType = 'string' | 'number' | 'integer' | 'boolean';
 
@@ -361,16 +359,26 @@ export interface ToolProviderUnit {
   /** 工具 provider 标识（通常与 key 相同，例外：obs → obs_control） */
   provider_name: string;
   description: string;
-  /** 配置态：[tools.<分类>.<键>].enabled */
+  /** 配置态：开关状态（位置由后端路由——tools.toml 段或提供者声明的 agents.toml 键） */
   enabled: boolean;
   /** 该提供者是否在配置中声明过（false = 已知成员但配置未写，可首次开启） */
   in_config: boolean;
-  /** Agent 自声明分类（game）不可开关 */
+  /** 随 Agent 启用的分类（game / framework）不可开关 */
   switchable: boolean;
   /** 运行态：registry 中该提供者已注册的工具数（含停用） */
   tool_count: number;
   /** 其中停用的工具数 */
   disabled_count: number;
+  /** registry 中有该 Provider 的登记记录（false = 仅配置声明，待重启装配） */
+  registered?: boolean;
+  /** 已登记但 0 工具（通常连接失败降级登记；配合 last_error 展示原因） */
+  degraded?: boolean;
+  /** Provider 侧最近一次连接失败摘要（无失败历史为空串） */
+  last_error?: string;
+  /** Provider 级手动重连按钮可见性（无连接语义的 Provider 为 false） */
+  supports_reconnect?: boolean;
+  /** 随卡片展示的管理提示（如 Agent 私有 MCP 停用后采集器仍会连接） */
+  notice?: string;
 }
 
 /** 工具提供者分类（GET /api/v1/tools/categories） */
@@ -409,9 +417,11 @@ export interface ToolReconnectResponse {
   provider_id: string;
   recovered: string[];
   still_tripped: string[];
+  /** 工具集刷新报告（降级登记补注册 / server 清单换血）；刷新异常时为 null */
+  refreshed?: { added: string[]; removed: string[]; count: number } | null;
 }
 
-// ==================== Simulator 控制面（ADR-006） ====================
+// Simulator 控制面（ADR-006）
 
 /**
  * SimulatorService 实时状态（`/api/v1/simulator/status` 响应）。
@@ -478,10 +488,10 @@ export interface SimulatorControlResponse {
   is_running?: boolean;
 }
 
-// ==================== Rundown（流程单编排页） ====================
+// Rundown（流程单编排页）
 
 /**
- * 流程单运行时快照（`/api/v1/agenda/state` 的 `snapshot` 字段）。
+ * 流程单运行时快照（`/api/v1/rundown/state` 的 `snapshot` 字段）。
  *
  * - `status` 为后端派生值：`idle`（未加载）/ `running` / `paused` / `done`；
  *   前端据此切换"未加载"/"运行中"/"已暂停"/"已结束"布局。
@@ -511,7 +521,7 @@ export interface RundownCurrentSegment {
   remaining_ms: number;
 }
 
-/** 流程单环节完整定义（`/api/v1/agenda/state` 的 `segments` 字段）。 */
+/** 流程单环节完整定义（`/api/v1/rundown/state` 的 `segments` 字段）。 */
 export interface RundownSegmentView {
   id: string;
   title: string;
@@ -536,7 +546,7 @@ export interface RundownConfig {
 }
 
 /**
- * `GET /api/v1/agenda/state` 完整响应。
+ * `GET /api/v1/rundown/state` 完整响应。
  *
  * - `available=false` 表示后端未加载流程单（agent 未启动等），
  *   前端按"不可用态"渲染引导用户去编排页新建。
@@ -561,14 +571,14 @@ export interface RundownStateResponse {
  */
 export type RundownControlAction = 'pause' | 'resume' | 'next' | 'goto';
 
-/** `POST /api/v1/agenda/control` 请求体。 */
+/** `POST /api/v1/rundown/control` 请求体。 */
 export interface RundownControlRequest {
   action: RundownControlAction;
   segment_id?: string;
 }
 
 /**
- * `POST /api/v1/agenda/control` 响应。
+ * `POST /api/v1/rundown/control` 响应。
  *
  * `success=false` 时 `message` 填拒绝/错误原因（前端用 ElMessage 弹窗）；成功时
  * `snapshot` 是控制后最新快照（前端用其刷新展示，避免 WS 抖动期的闪烁）。
@@ -579,7 +589,7 @@ export interface RundownControlResponse {
   snapshot: RundownSnapshot | null;
 }
 
-// ==================== Rundown 流程单库（编辑器） ====================
+// Rundown 流程单库（编辑器）
 
 /**
  * 流程单完整定义——库列表项与保存请求体共用同一形状。
@@ -593,7 +603,7 @@ export interface RundownDefinition {
   segments: RundownSegmentView[];
 }
 
-/** `GET /api/v1/agenda/rundowns` 响应；`current_id` 为空表示配置未选单（走内置默认流程单）。 */
+/** `GET /api/v1/rundowns` 响应；`current_id` 为空表示配置未选单（走内置默认流程单）。 */
 export interface RundownListResponse {
   success: boolean;
   message: string;
@@ -601,7 +611,7 @@ export interface RundownListResponse {
   current_id: string;
 }
 
-/** `GET /api/v1/agenda/rundowns/template` 响应（内置默认流程单，新建预填模板）。 */
+/** `GET /api/v1/rundowns/template` 响应（内置默认流程单，新建预填模板）。 */
 export interface RundownTemplateResponse {
   success: boolean;
   message: string;
@@ -615,12 +625,12 @@ export interface RundownMutateResponse {
   rundown_id: string | null;
 }
 
-// ==================== 导出 settings / llm 子模块 ====================
+// 导出 settings / llm 子模块
 
 export * from './settings';
 export * from './llm';
 
-// ===== 直播场次（直播控制台） =====
+// 直播场次（直播控制台）
 
 /** 场次列表条目（GET /api/v1/live-sessions） */
 export interface LiveSessionItem {
@@ -661,6 +671,33 @@ export interface SessionTimelineItem {
 export interface SessionTimelineResponse {
   live_session_id: number;
   items: SessionTimelineItem[];
+}
+
+// ==================== Vision（视觉捕获） ====================
+
+/** 单台显示器（mss 枚举；index=0 为虚拟合屏，不参与选择） */
+export interface VisionMonitor {
+  index: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  is_primary: boolean;
+}
+
+/** `GET /vision/monitors` 响应 */
+export interface VisionMonitorsResponse {
+  count: number;
+  monitors: VisionMonitor[];
+}
+
+/** `GET /vision/preview` 响应（抓帧 + region 叠框标注） */
+export interface VisionPreviewResponse {
+  image_b64: string;
+  width: number;
+  height: number;
+  monitor_index: number;
+  region: number[] | null;
 }
 
 /** 单行观众统计（viewers 表行投影） */

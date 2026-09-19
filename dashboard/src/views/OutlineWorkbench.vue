@@ -1,5 +1,5 @@
 <template>
-  <div class="agenda-workbench">
+  <div class="rundown-workbench">
     <!-- 顶部：标题 + 副标题 + 刷新 -->
     <header class="page-header">
       <div class="header-left">
@@ -94,7 +94,7 @@
 
     <!-- 运行态：status ∈ {running, paused, done} -->
     <template v-else-if="snapshot">
-      <!-- 1. 总览 KPI 行 -->
+      <!-- 总览 KPI 行 -->
       <section class="totals-row">
         <article class="total-card total-status">
           <div class="total-label">状态</div>
@@ -140,7 +140,7 @@
         </article>
       </section>
 
-      <!-- 2. 当前环节大卡 -->
+      <!-- 当前环节大卡 -->
       <section
         v-if="snapshot.current"
         class="current-card"
@@ -202,7 +202,7 @@
         class="state-block"
       />
 
-      <!-- 3. 环节清单 -->
+      <!-- 环节清单 -->
       <section class="segments-section">
         <header class="section-bar">
           <h3 class="section-title">环节清单</h3>
@@ -248,7 +248,7 @@
         </el-table>
       </section>
 
-      <!-- 4. 推进历史 -->
+      <!-- 推进历史 -->
       <section class="history-section">
         <header class="section-bar">
           <h3 class="section-title">推进历史</h3>
@@ -566,7 +566,7 @@
  * 流程单编排页 —— 流程单实时状态 + 手动控制
  *
  * 数据来源：
- * - REST 轮询：GET /api/v1/agenda/state（300ms 防抖 + WS 触发）
+ * - REST 轮询：GET /api/v1/rundown/state（300ms 防抖 + WS 触发）
  * - WebSocket：rundown.changed（onMessage 过滤，触发重拉）
  * - 本地 1s setInterval：仅用于重算当前环节的 elapsed/remaining 倒计时显示
  *
@@ -576,7 +576,8 @@
  * 3. 运行中（status=running|paused|done）：KPI 行 + 当前环节卡 + 环节表 + 历史时间线
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import { confirmAction } from '@/utils/confirmAction';
 import {
   ArrowRightBold,
   EditPen,
@@ -600,9 +601,7 @@ import type {
   WebSocketMessage,
 } from '@/types';
 
-// ============================================================
 // 响应式状态
-// ============================================================
 
 const state = ref<RundownStateResponse | null>(null);
 const initialLoading = ref(true);
@@ -613,9 +612,7 @@ const actionLoading = ref<RundownControlAction | null>(null);
 // 本地 1s tick：仅重算当前环节 elapsed/remaining 展示
 const nowTickMs = ref(Date.now());
 
-// ============================================================
 // 抽屉
-// ============================================================
 
 const drawerOpen = ref(false);
 const activeSegment = ref<RundownSegmentView | null>(null);
@@ -631,9 +628,7 @@ function openDrawer(row: RundownSegmentView) {
   drawerOpen.value = true;
 }
 
-// ============================================================
 // 派生状态
-// ============================================================
 
 const snapshot = computed<RundownSnapshot | null>(() => state.value?.snapshot ?? null);
 
@@ -670,7 +665,7 @@ const progressPercent = computed(() => {
 
 const progressColor = computed(() => {
   if (snapshot.value?.status === 'done') return 'var(--color-info)';
-  return 'var(--color-agenda)';
+  return 'var(--color-rundown)';
 });
 
 const currentSegment = computed<RundownCurrentSegment | null>(
@@ -708,9 +703,7 @@ const nextSegment = computed<RundownSegmentView | null>(() => {
   return state.value?.segments[s.index + 1] ?? null;
 });
 
-// ============================================================
 // 段状态 / 来源 / 时间格式化
-// ============================================================
 
 function segmentStatusOf(seg: RundownSegmentView): 'done' | 'current' | 'pending' {
   const cur = currentSegment.value;
@@ -783,9 +776,7 @@ function historyDotType(
   return 'info';
 }
 
-// ============================================================
 // 数据加载
-// ============================================================
 
 async function fetchState(opts: { silent?: boolean } = {}): Promise<void> {
   if (!opts.silent) loadingState.value = true;
@@ -793,7 +784,7 @@ async function fetchState(opts: { silent?: boolean } = {}): Promise<void> {
   try {
     const res = await rundownApi.getState();
     state.value = res.data;
-    // 记录本次拉取的基线时刻，用于本地 tick 漂移
+    // 本地 tick 从该基准起算已播时长，吸收取数耗时造成的漂移
     snapshotBaselineMs.value = Date.now();
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : '无法加载流程单状态';
@@ -808,9 +799,7 @@ function refresh(): void {
   void fetchState();
 }
 
-// ============================================================
 // 控制操作
-// ============================================================
 
 async function performControl(
   action: RundownControlAction,
@@ -857,9 +846,7 @@ function handleJump(seg: RundownSegmentView): void {
   void performControl('goto', { segment_id: seg.id });
 }
 
-// ============================================================
 // 流程单库与编辑器
-// ============================================================
 // 编辑保存（upsert）写入存储；保存的是直播运行中的那份流程单时，
 // 后端写穿运行态（进度按环节 id 对齐），本页经既有 rundown.changed
 // 防抖重拉机制自动刷新，无需额外订阅。
@@ -1103,17 +1090,14 @@ function saveSegmentDialog(): void {
 
 async function removeRundown(def: RundownDefinition): Promise<void> {
   const referenced = def.rundown_id === currentRundownId.value;
-  try {
-    await ElMessageBox.confirm(
-      referenced
-        ? `确定删除「${def.title}」？当前配置仍指向它，重启主播 Agent 后将回退内置默认流程单。`
-        : `确定删除「${def.title}」？`,
-      '删除流程单',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
-    );
-  } catch {
-    return;
-  }
+  const ok = await confirmAction(
+    referenced
+      ? `确定删除「${def.title}」？当前配置仍指向它，重启主播 Agent 后将回退内置默认流程单。`
+      : `确定删除「${def.title}」？`,
+    '删除流程单',
+    { confirmButtonText: '删除' },
+  );
+  if (!ok) return;
   try {
     const res = await rundownApi.remove(def.rundown_id);
     if (!res.data.success) {
@@ -1155,9 +1139,7 @@ async function activateRundown(def: RundownDefinition): Promise<void> {
   }
 }
 
-// ============================================================
 // WS 订阅 + 防抖重拉
-// ============================================================
 
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -1195,9 +1177,7 @@ function stopWs(): void {
   }
 }
 
-// ============================================================
 // 生命周期
-// ============================================================
 
 onMounted(() => {
   startWs();
@@ -1218,7 +1198,7 @@ watch(
 </script>
 
 <style scoped>
-.agenda-workbench {
+.rundown-workbench {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
@@ -1226,9 +1206,7 @@ watch(
   margin: 0 auto;
 }
 
-/* ============================================================ */
 /* 顶部                                                          */
-/* ============================================================ */
 
 .page-header {
   display: flex;
@@ -1264,9 +1242,7 @@ watch(
   flex-shrink: 0;
 }
 
-/* ============================================================ */
 /* 通用：状态块 / 骨架 / 错误 / 不可用                             */
-/* ============================================================ */
 
 .state-block {
   background: var(--bg-card);
@@ -1291,9 +1267,7 @@ watch(
   color: var(--text-regular);
 }
 
-/* ============================================================ */
 /* 未加载态：窄卡                                                  */
-/* ============================================================ */
 
 .load-card {
   background: var(--bg-card);
@@ -1318,9 +1292,7 @@ watch(
   color: var(--text-secondary);
   line-height: 1.6;
 }
-/* ============================================================ */
 /* 总览 KPI 行（沿用 Tools.vue 的 total-card 风格）                */
-/* ============================================================ */
 
 .totals-row {
   display: grid;
@@ -1347,7 +1319,7 @@ watch(
   left: 0;
   right: 0;
   height: 3px;
-  background: var(--color-agenda);
+  background: var(--color-rundown);
 }
 
 .total-label {
@@ -1419,17 +1391,15 @@ watch(
 .total-progress .progress-percent {
   margin-left: auto;
   font-size: 12px;
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   font-weight: 700;
 }
-/* ============================================================ */
 /* 当前环节大卡                                                  */
-/* ============================================================ */
 
 .current-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
-  border-left: 3px solid var(--color-agenda);
+  border-left: 3px solid var(--color-rundown);
   border-radius: var(--radius-lg);
   padding: var(--spacing-lg);
   display: flex;
@@ -1456,7 +1426,7 @@ watch(
   font-weight: 700;
   letter-spacing: 1.6px;
   text-transform: uppercase;
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   flex-shrink: 0;
 }
 
@@ -1471,11 +1441,6 @@ watch(
   color: var(--text-primary);
   word-break: break-word;
 }
-.grow {
-  flex: 1;
-  min-width: 0;
-}
-
 .current-times {
   display: flex;
   align-items: baseline;
@@ -1550,14 +1515,12 @@ watch(
 }
 
 .next-arrow {
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   font-weight: 700;
   margin-left: auto;
 }
 
-/* ============================================================ */
 /* 区段通用（segments / history）                                */
-/* ============================================================ */
 
 .section-bar {
   display: flex;
@@ -1590,16 +1553,14 @@ watch(
   padding: var(--spacing-md);
 }
 
-/* ============================================================ */
 /* 环节表格                                                      */
-/* ============================================================ */
 
 .segments-table {
   cursor: pointer;
 }
 
 .segments-table :deep(tr.is-current-row) {
-  background: var(--color-agenda-bg) !important;
+  background: var(--color-rundown-bg) !important;
 }
 
 .segments-table :deep(tr.is-current-row td) {
@@ -1607,16 +1568,14 @@ watch(
 }
 
 .order-cell {
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   font-weight: 600;
 }
 
 .segment-label {
   font-weight: 500;
 }
-/* ============================================================ */
 /* 推进历史时间线                                                  */
-/* ============================================================ */
 
 .history-empty {
   display: flex;
@@ -1643,8 +1602,8 @@ watch(
 .history-event {
   font-size: 11px;
   font-weight: 700;
-  color: var(--color-agenda);
-  background: var(--color-agenda-bg);
+  color: var(--color-rundown);
+  background: var(--color-rundown-bg);
   padding: 1px 8px;
   border-radius: var(--radius-sm);
   letter-spacing: 0.5px;
@@ -1662,9 +1621,7 @@ watch(
   font-size: 11.5px;
 }
 
-/* ============================================================ */
 /* 抽屉                                                          */
-/* ============================================================ */
 
 .drawer-body {
   padding: 0 var(--spacing-md) var(--spacing-md);
@@ -1704,7 +1661,7 @@ watch(
 .key-points,
 .key-point,
 .key-point-bullet {
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   font-weight: 700;
 }
 .meta-grid {
@@ -1731,9 +1688,7 @@ watch(
   margin-top: auto;
 }
 
-/* ============================================================ */
 /* 流程单库与编辑器                                                */
-/* ============================================================ */
 
 .section-tools {
   display: flex;
@@ -1807,7 +1762,7 @@ watch(
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--color-agenda);
+  background: var(--color-rundown);
   color: #fff;
   font-size: 12px;
   font-weight: 700;
@@ -1844,9 +1799,7 @@ watch(
   color: var(--text-secondary);
 }
 
-/* ============================================================ */
 /* 响应式                                                        */
-/* ============================================================ */
 
 @media (max-width: 1100px) {
   .totals-row {

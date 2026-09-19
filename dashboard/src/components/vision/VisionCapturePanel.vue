@@ -165,29 +165,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { visionApi } from '@/api';
+import type { VisionMonitor } from '@/types';
 import api from '@/api';
-
-interface MonitorItem {
-  index: number;
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-  is_primary: boolean;
-}
-
-interface MonitorsResponse {
-  count: number;
-  monitors: MonitorItem[];
-}
-
-interface PreviewResponse {
-  image_b64: string;
-  width: number;
-  height: number;
-  monitor_index: number;
-  region: number[] | null;
-}
 
 interface ConfigBatchChange {
   key: string;
@@ -200,9 +179,9 @@ interface ConfigBatchUpdateResponse {
   requires_restart?: boolean;
 }
 
-// ===== 显示器状态 =====
+// 显示器状态
 
-const monitors = ref<MonitorItem[]>([]);
+const monitors = ref<VisionMonitor[]>([]);
 const monitorsLoading = ref(false);
 const monitorIndex = ref<number>(1);
 
@@ -213,12 +192,12 @@ const currentMonitor = computed(
   () => physicalMonitors.value.find(m => m.index === monitorIndex.value) ?? null,
 );
 
-function formatMonitorLabel(m: MonitorItem): string {
+function formatMonitorLabel(m: VisionMonitor): string {
   const tag = m.is_primary ? '（主屏）' : '';
   return `显示器 ${m.index} · ${m.width} × ${m.height}${tag}`;
 }
 
-// ===== 预览状态 =====
+// 预览状态
 
 const previewImg = ref<HTMLImageElement | null>(null);
 const previewWrap = ref<HTMLDivElement | null>(null);
@@ -231,7 +210,7 @@ const dragRectPx = ref<{ left: number; top: number; width: number; height: numbe
 const isDragging = ref(false);
 const dragStart = ref<{ x: number; y: number } | null>(null);
 
-// ===== 区域状态 =====
+// 区域状态
 
 // 显示器相对坐标 [x1, y1, x2, y2]；null = 全屏（无区域）
 const regionMonitor = ref<[number, number, number, number] | null>(null);
@@ -264,7 +243,7 @@ watch(
   { deep: true },
 );
 
-// ===== 保存状态 =====
+// 保存状态
 
 const initialMonitorIndex = ref<number | null>(null);
 const initialRegion = ref<[number, number, number, number] | null>(null);
@@ -281,18 +260,18 @@ const hasPendingChange = computed(() => {
   return cur.some((v, i) => v !== init[i]);
 });
 
-// ===== 配置键（与后端约定一致：scope + 文件内点分路径） =====
+// 配置键（与后端约定一致：scope + 文件内点分路径）
 
 const KEY_MONITOR = 'tools.tools.vision.config.monitor_index';
 const KEY_REGION = 'tools.tools.vision.config.default_region';
 
-// ===== 加载显示器 =====
+// 加载显示器
 
 async function loadMonitors() {
   monitorsLoading.value = true;
   try {
     const resp = await visionApi.listMonitors();
-    const data = resp.data as MonitorsResponse;
+    const data = resp.data;
     monitors.value = data.monitors ?? [];
     // 若当前 monitorIndex 不在新列表里，回退到首个物理显示器
     if (!physicalMonitors.value.some(m => m.index === monitorIndex.value)) {
@@ -307,7 +286,7 @@ async function loadMonitors() {
   }
 }
 
-// ===== 加载初始配置 =====
+// 加载初始配置
 
 async function loadInitialConfig() {
   try {
@@ -348,7 +327,7 @@ async function loadInitialConfig() {
   }
 }
 
-// ===== 加载预览 =====
+// 加载预览
 
 let previewSeq = 0;
 
@@ -367,7 +346,7 @@ async function loadPreview() {
     // 不传 max_width：让后端返回原图，便于拖框坐标精确换算
     const resp = await visionApi.preview(params);
     if (mySeq !== previewSeq) return; // 已被更新的请求覆盖
-    const data = resp.data as PreviewResponse;
+    const data = resp.data;
     previewSrc.value = `data:image/png;base64,${data.image_b64}`;
     previewSize.value = { width: data.width, height: data.height };
   } catch (e) {
@@ -380,7 +359,7 @@ async function loadPreview() {
   }
 }
 
-// ===== 显示器 / 区域变化时刷新预览（节流） =====
+// 显示器 / 区域变化时刷新预览（节流）
 
 let previewTimer: number | null = null;
 function schedulePreviewRefresh() {
@@ -402,7 +381,7 @@ watch(regionMonitor, () => {
   schedulePreviewRefresh();
 });
 
-// ===== 拖框坐标换算 =====
+// 拖框坐标换算
 
 /**
  * 鼠标 client 坐标 → 图内 CSS 像素坐标。
@@ -481,7 +460,7 @@ function onDragEnd() {
   // 保留 overlay 显示至下一次刷新
 }
 
-// ===== 保存 =====
+// 保存
 
 async function saveConfig() {
   if (saving.value) return;
@@ -514,7 +493,7 @@ function clearRegion() {
   dragRectPx.value = null;
 }
 
-// ===== 工具 =====
+// 工具
 
 function extractError(e: unknown): string {
   const ax = e as { response?: { data?: { detail?: string; message?: string } }; message?: string };
@@ -539,7 +518,7 @@ function formatTime(ms: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// ===== 生命周期 =====
+// 生命周期
 
 onMounted(async () => {
   // 并行启动：显示器枚举 + 配置加载

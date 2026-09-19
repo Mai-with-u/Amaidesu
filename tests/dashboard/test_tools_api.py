@@ -55,12 +55,22 @@ def _make_spec(
 class _FakeToolRegistry:
     """按名查分类的最小 registry 替身（list_tools + category_of + 停用集）。"""
 
-    def __init__(self, specs, categories: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        specs,
+        categories: dict[str, str] | None = None,
+        providers: list[dict] | None = None,
+    ) -> None:
         self._specs = list(specs)
         self._categories = dict(categories or {})
         self._disabled: set[str] = set()
         self._scoped_owner: dict[str, str] = {}
         self._supports_reconnect: dict[str, bool] = {}
+        self._providers_view = list(providers or [])
+
+    def list_providers(self) -> list[dict]:
+        """Provider 运营摘要（注册表驱动工具页的卡片数据源）。"""
+        return list(self._providers_view)
 
     def list_tools(
         self,
@@ -397,7 +407,7 @@ def test_categories_lists_static_members(tools_client: TestClient) -> None:
 
 
 def test_categories_lists_mcp_servers_dynamically(tools_client: TestClient) -> None:
-    """mcp 分类提供者 = 配置声明的各 server。"""
+    """mcp 分类提供者 = 配置声明的各 server（注册表无该 Provider 时为声明态卡片）。"""
     resp = tools_client.get("/api/v1/tools/categories")
     by_category = {c["category"]: c for c in resp.json()["categories"]}
     mcp_providers = {p["key"]: p for p in by_category["mcp"]["providers"]}
@@ -411,6 +421,11 @@ def test_categories_lists_mcp_servers_dynamically(tools_client: TestClient) -> N
             "switchable": True,
             "tool_count": 0,
             "disabled_count": 0,
+            "registered": False,
+            "degraded": False,
+            "supports_reconnect": False,
+            "last_error": "",
+            "notice": "",
         }
     }
 
@@ -418,22 +433,15 @@ def test_categories_lists_mcp_servers_dynamically(tools_client: TestClient) -> N
 def test_categories_agent_categories_not_switchable(tools_client: TestClient) -> None:
     """game / framework 随 agents.toml 启用列表存在，不可开关。
 
-    新契约：game 分类提供者来自注册表动态归属（content_engine 显示条目已删除，
-    game 成员 = 注册表实际存在的游戏 Agent 自声明工具集）。
+    新契约：随 Agent 分类的提供者由注册表动态发现（``list_providers``），
+    不做静态预设——旧注册表替身（无 list_providers）下两类均为空列表，
+    空分类仍输出以保持侧边栏稳定。
     """
     resp = tools_client.get("/api/v1/tools/categories")
     by_category = {c["category"]: c for c in resp.json()["categories"]}
 
-    game = by_category["game"]
-    assert [p["key"] for p in game["providers"]] == ["text_adv"]
-    for p in game["providers"]:
-        assert p["switchable"] is False
-        assert p["enabled"] is False  # 测试配置未启用 game Agent
-        assert p["tool_count"] == 0  # fake registry 中无 game 分类工具
-
-    framework = by_category["framework"]
-    assert [p["key"] for p in framework["providers"]] == ["framework"]
-    assert framework["providers"][0]["switchable"] is False
+    assert by_category["game"]["providers"] == []
+    assert by_category["framework"]["providers"] == []
 
 
 def test_categories_runtime_count_uses_registry_category(tools_client: TestClient) -> None:
@@ -443,6 +451,73 @@ def test_categories_runtime_count_uses_registry_category(tools_client: TestClien
     avatar_keys = {p["key"]: p for p in by_category["avatar"]["providers"]}
     assert avatar_keys["vts"]["tool_count"] == 1
     assert avatar_keys["warudo"]["tool_count"] == 0
+
+
+def _registry_with_degraded_mcp() -> "_FakeToolRegistry":
+    """带降级 MCP Provider 记录的 registry 替身（Agent 私有 maicraft 形态）。"""
+    return _FakeToolRegistry(
+        [],
+        categories={},
+        providers=[
+            {
+                "name": "maicraft",
+                "category": "mcp",
+                "tool_count": 0,
+                "disabled_count": 0,
+                "supports_reconnect": True,
+                "last_error": "RuntimeError: Client failed to connect",
+                "switch": {"file": "agents.toml", "key": "agents.minecraft.mcp.enabled"},
+            }
+        ],
+    )
+
+
+def test_categories_registry_provider_card_degraded(config_dir: Path) -> None:
+    """注册表驱动的降级卡片：连接失败 0 工具的 Provider 也可见（degraded + 原因）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    server = _build_server(config_dir, _registry_with_degraded_mcp())
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools/categories")
+        assert resp.status_code == 200
+        by_category = {c["category"]: c for c in resp.json()["categories"]}
+        mcp = {p["key"]: p for p in by_category["mcp"]["providers"]}
+        card = mcp["maicraft"]
+        assert card["registered"] is True
+        assert card["degraded"] is True, "已登记但 0 工具 = 降级态"
+        assert card["supports_reconnect"] is True
+        assert "Client failed to connect" in card["last_error"]
+        assert "身体事件采集器" in card["notice"], "Agent 私有 MCP 卡片带采集器提示"
+        assert card["enabled"] is True, "开关状态读自 agents.minecraft.mcp.enabled（基线默认启用）"
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_control_agent_private_mcp_routes_to_agents_toml(
+    tools_config_dir: Path,
+) -> None:
+    """Agent 私有 MCP 开关：按 switch 声明写回 agents.toml（非 tools.toml）。"""
+    import tomllib
+
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    server = _build_server(tools_config_dir, _registry_with_degraded_mcp())
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post(
+            "/api/v1/tools/categories/mcp/maicraft/control",
+            json={"action": "disable"},
+        )
+        assert resp.status_code == 200
+        assert "agents.toml" in resp.json()["message"]
+        text = (tools_config_dir / "agents.toml").read_text(encoding="utf-8-sig")
+        doc = tomllib.loads(text)
+        assert doc["agents"]["minecraft"]["mcp"]["enabled"] is False
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
 
 
 # ==================== POST /tools/categories/.../control ====================

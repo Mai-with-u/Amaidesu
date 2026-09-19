@@ -35,7 +35,7 @@ logger = get_logger("AgentControl")
 
 #: 委派工具的固定说明（可委派对象随名册动态追加，见 AgentControlProvider.list_tools）
 _DELEGATE_DESCRIPTION = (
-    "把一项工作委派给另一个 Agent：给目标与自然语言指令（不给步骤），"
+    "把一项工作委派给目标 Agent：给目标与自然语言指令（不给步骤），"
     "立刻返回受理回执（accepted + task_id）。任务状态变化会以事件通知你；"
     "随时可用 framework_task_status 按 task_id 查询进度与快照。"
     "目标忙时会排队，无须等待。"

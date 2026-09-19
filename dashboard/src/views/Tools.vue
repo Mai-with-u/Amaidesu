@@ -1,8 +1,6 @@
 <template>
   <div class="tools-page">
-    <!-- ============================================================== -->
     <!-- LEFT：分类列表（narrow, 240px）                                   -->
-    <!-- ============================================================== -->
     <aside class="list-panel" aria-label="工具提供者分类">
       <header class="list-header">
         <div class="list-header-main">
@@ -56,12 +54,10 @@
       </ul>
     </aside>
 
-    <!-- ============================================================== -->
     <!-- RIGHT：分类详情 + 提供者分组                                      -->
-    <!-- ============================================================== -->
     <main class="detail-panel" aria-label="分类详情">
       <template v-if="activeCategoryData">
-        <!-- 1. 分类头：名称 + 描述 + 搜索 -->
+        <!-- 分类头：名称 + 描述 + 搜索 -->
         <header class="detail-header">
           <div class="detail-title-block">
             <div class="detail-title-row">
@@ -90,7 +86,7 @@
           </div>
         </header>
 
-        <!-- 2. 元信息条 -->
+        <!-- 元信息条 -->
         <div class="details-strip" aria-label="状态摘要">
           <div class="stat-chip">
             <span class="chip-label">工具</span>
@@ -110,7 +106,7 @@
           </div>
         </div>
 
-        <!-- 3. 提供者分组：THE MAIN SPACE -->
+        <!-- 提供者分组 -->
         <section class="provider-panel" aria-label="提供者列表">
           <!-- 视觉分类专属：显示器选择 + 预览叠框 + 拖框落盘（独立组件） -->
           <VisionCapturePanel v-if="activeCategory === 'vision'" class="vision-panel-mount" />
@@ -132,8 +128,19 @@
                   {{ unit.tool_count }} 个工具
                 </el-tag>
                 <el-tooltip
-                  v-if="unit.switchable && unit.enabled && unit.tool_count === 0"
-                  content="配置已启用但运行时没有工具——改动后尚未重启，重启后才会装配"
+                  v-if="unit.degraded"
+                  :content="
+                    unit.last_error ||
+                    'Provider 已登记但 0 个工具（连接失败降级登记，恢复后自动补注册）'
+                  "
+                  placement="top"
+                  :show-after="100"
+                >
+                  <el-tag size="small" type="danger" effect="light">连接失败</el-tag>
+                </el-tooltip>
+                <el-tooltip
+                  v-else-if="unit.switchable && unit.enabled && unit.registered === false"
+                  content="配置已启用但 Provider 未装配——重启后生效"
                   placement="top"
                   :show-after="100"
                 >
@@ -147,6 +154,14 @@
                 >
                   <el-tag size="small" type="warning" effect="light">重启后卸载</el-tag>
                 </el-tooltip>
+                <el-button
+                  v-if="unit.supports_reconnect"
+                  size="small"
+                  :loading="reconnecting.has(unit.key)"
+                  @click="onReconnect(unit.key)"
+                >
+                  重连
+                </el-button>
                 <el-switch
                   v-if="unit.switchable"
                   :model-value="unit.enabled"
@@ -156,6 +171,7 @@
                 <el-tag v-else size="small" effect="plain">随 Agent 启用</el-tag>
               </div>
             </header>
+            <p v-if="unit.notice" class="provider-notice">{{ unit.notice }}</p>
 
             <el-table
               v-if="toolsOf(unit).length > 0"
@@ -349,7 +365,7 @@ import type {
   WebSocketMessage,
 } from '@/types';
 
-// ===== 分类元数据 =====
+// 分类元数据
 
 const CATEGORY_META: Record<string, { label: string; description: string }> = {
   avatar: {
@@ -368,7 +384,7 @@ function categoryMeta(category: string) {
   return CATEGORY_META[category] ?? { label: category, description: '' };
 }
 
-// ===== 数据加载 =====
+// 数据加载
 
 const categories = ref<ToolCategoryView[]>([]);
 const tools = ref<ToolEntry[]>([]);
@@ -392,7 +408,7 @@ async function refreshAll() {
   }
 }
 
-// ===== 分类列表（左侧） =====
+// 分类列表（左侧）
 
 const activeCategory = ref('');
 
@@ -439,15 +455,15 @@ const activeEnabledCount = computed(
 const pendingRestartCount = computed(
   () =>
     (activeCategoryData.value?.providers ?? []).filter(
-      p => p.switchable && (p.enabled ? p.tool_count === 0 : p.tool_count > 0),
+      p => p.switchable && (p.enabled ? p.registered === false : p.tool_count > 0),
     ).length,
 );
 
-// ===== 提供者开关 =====
+// 提供者开关
 
 const toggling = reactive(new Set<string>());
 
-// ===== 分类总开关（聚合操作：一键开/关全部提供者） =====
+// 分类总开关（聚合操作：一键开/关全部提供者）
 
 const bulkSwitchable = computed(() =>
   (activeCategoryData.value?.providers ?? []).some(p => p.switchable),
@@ -478,9 +494,7 @@ async function onBulkToggle(next: boolean) {
     if (failed > 0) {
       ElMessage.warning(`部分提供者写回失败（${failed}/${units.length}），请重试`);
     } else {
-      ElMessage.success(
-        `${next ? '启用' : '停用'} ${units.length} 个提供者（写入 tools.toml），重启后生效`,
-      );
+      ElMessage.success(`${next ? '启用' : '停用'} ${units.length} 个提供者，重启后生效`);
     }
   } finally {
     bulkToggling.value = false;
@@ -488,7 +502,7 @@ async function onBulkToggle(next: boolean) {
   }
 }
 
-// ===== 工具级停用 =====
+// 工具级停用
 
 const toolToggling = reactive(new Set<string>());
 
@@ -524,7 +538,7 @@ async function onToggle(unit: ToolProviderUnit, next: boolean) {
   }
 }
 
-// ===== 工具提供者手动重连 =====
+// 工具提供者手动重连
 //
 // 按 provider 维度防重：同一 Provider 下多行触发同一调用，按行名防重会出现
 // loading 不同步；用 provider_id 做 Set 键，保证任意一行触发都共享 loading。
@@ -543,10 +557,13 @@ async function onReconnect(providerId: string) {
     const resp = await toolsApi.reconnectProvider(providerId);
     const recoveredCount = resp.data.recovered.length;
     const stillTrippedCount = resp.data.still_tripped.length;
+    const addedCount = resp.data.refreshed?.added.length ?? 0;
     if (stillTrippedCount > 0) {
       ElMessage.warning(
         `重连成功但 ${stillTrippedCount} 个工具探活未通过：${resp.data.still_tripped.join('、')}`,
       );
+    } else if (addedCount > 0) {
+      ElMessage.success(`重连成功，补注册 ${addedCount} 个工具（降级装配已恢复）`);
     } else if (recoveredCount > 0) {
       ElMessage.success(`已恢复 ${recoveredCount} 个工具`);
     } else {
@@ -560,7 +577,7 @@ async function onReconnect(providerId: string) {
   }
 }
 
-// ===== 工具过滤 =====
+// 工具过滤
 
 const searchQuery = ref('');
 
@@ -579,7 +596,7 @@ const visibleProviders = computed<ToolProviderUnit[]>(() => {
   return units.filter(unit => toolsOf(unit).length > 0);
 });
 
-// ===== 抽屉详情 =====
+// 抽屉详情
 
 const drawerOpen = ref(false);
 const activeTool = ref<ToolEntry | null>(null);
@@ -622,7 +639,7 @@ watch(activeCategory, () => {
   searchQuery.value = '';
 });
 
-// ===== 实时熔断状态（WS tool.health.*） =====
+// 实时熔断状态（WS tool.health.*）
 
 function applyHealthUpdate(toolName: string, next: ToolHealth | null): void {
   const target = tools.value.find(t => t.name === toolName);
@@ -666,9 +683,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* ============================================================ */
 /* 页面布局：左 240 + 右 flex-1（与采集器 / Agent 页同构）          */
-/* ============================================================ */
 .tools-page {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -677,9 +692,7 @@ onBeforeUnmount(() => {
   min-height: 640px;
 }
 
-/* ============================================================ */
 /* LEFT：分类列表                                                */
-/* ============================================================ */
 .list-panel {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -841,9 +854,7 @@ onBeforeUnmount(() => {
   line-height: 16px;
 }
 
-/* ============================================================ */
 /* RIGHT：详情面板                                               */
-/* ============================================================ */
 .detail-panel {
   display: flex;
   flex-direction: column;
@@ -1044,6 +1055,15 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--border-color-light);
 }
 
+.provider-notice {
+  margin: 0;
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border-color-light);
+}
+
 .provider-title {
   display: flex;
   align-items: baseline;
@@ -1112,9 +1132,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-/* ============================================================ */
 /* Empty                                                         */
-/* ============================================================ */
 .detail-empty {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -1130,9 +1148,7 @@ onBeforeUnmount(() => {
   min-height: 320px;
 }
 
-/* ============================================================ */
 /* 抽屉                                                          */
-/* ============================================================ */
 
 .drawer-body {
   padding: 0 var(--spacing-md) var(--spacing-md);
@@ -1228,9 +1244,7 @@ onBeforeUnmount(() => {
   color: var(--text-regular);
 }
 
-/* ============================================================ */
 /* Responsive                                                    */
-/* ============================================================ */
 @media (max-width: 1023px) {
   .tools-page {
     grid-template-columns: 200px minmax(0, 1fr);

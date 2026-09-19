@@ -78,7 +78,8 @@
 <script setup lang="ts">
 import { Sunny, Moon, SwitchButton } from '@element-plus/icons-vue';
 import { ref, onUnmounted } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import { confirmAction } from '@/utils/confirmAction';
 import Sidebar from './Sidebar.vue';
 import RestartOverlay from './RestartOverlay.vue';
 import { useThemeStore, useWebSocketStore } from '@/stores';
@@ -129,20 +130,15 @@ function startProgressAnimation() {
 }
 
 async function handleRestart() {
-  try {
-    await ElMessageBox.confirm(
-      '重启后服务将短暂不可用，WebSocket 会自动重连。确定要重启吗？',
-      '重启服务',
-      {
-        confirmButtonText: '确认重启',
-        cancelButtonText: '取消',
-        type: 'warning',
-        confirmButtonClass: 'el-button--danger',
-      },
-    );
-  } catch {
-    return;
-  }
+  const ok = await confirmAction(
+    '重启后服务将短暂不可用，WebSocket 会自动重连。确定要重启吗？',
+    '重启服务',
+    {
+      confirmButtonText: '确认重启',
+      confirmButtonClass: 'el-button--danger',
+    },
+  );
+  if (!ok) return;
 
   restarting.value = true;
   overlayVisible.value = true;

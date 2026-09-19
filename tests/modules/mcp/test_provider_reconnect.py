@@ -163,13 +163,14 @@ async def test_mcp_disconnect_is_idempotent() -> None:
 
 
 # =============================================================================
-# reconnect 默认组合（不覆写 → disconnect + connect）
+# reconnect 覆写（disconnect + connect + specs 重拉换血）
 # =============================================================================
 
 
-async def test_mcp_reconnect_default_compose() -> None:
-    """reconnect 默认组合：先 disconnect 后 connect，透传 connect bool。"""
+async def test_mcp_reconnect_rebuilds_channel_and_resyncs_specs() -> None:
+    """reconnect：先 disconnect 后 connect，并重拉工具清单（specs 缓存换血）。"""
     client, prov = _provider()
+    client.set_tools([FakeTool("t1")])
     client.close_calls = 0
     client.connect_calls = 0
     # disconnect 会把 client._connected 置 False；connect 注入一次 True
@@ -177,3 +178,33 @@ async def test_mcp_reconnect_default_compose() -> None:
     assert await prov.reconnect() is True
     assert client.close_calls == 1
     assert client.connect_calls == 1
+    assert [s.name for s in prov.list_tools()] == ["t1"], "重连后 specs 缓存按 server 清单重拉"
+
+
+async def test_mcp_reconnect_connect_failure_returns_false() -> None:
+    """connect 失败 → reconnect False（不拉清单）。"""
+    client, prov = _provider()
+    client._connected = False
+    client._next_connect_result = False
+    assert await prov.reconnect() is False
+
+
+async def test_mcp_reconnect_empty_tool_list_returns_false() -> None:
+    """连上但 server 未暴露工具 → 视为重连未成（False）。"""
+    client, prov = _provider()
+    client._connected = False
+    client._next_connect_result = True
+    assert await prov.reconnect() is False
+    assert prov.list_tools() == []
+
+
+async def test_mcp_reconnect_fires_refresh_callback() -> None:
+    """重拉成功后经 on_tools_refreshed 通知绑定处（适配器重绑定统一入口）。"""
+    client, prov = _provider()
+    client.set_tools([FakeTool("t1"), FakeTool("t2")])
+    client._connected = False
+    client._next_connect_result = True
+    seen: list[int] = []
+    prov.on_tools_refreshed = seen.append
+    assert await prov.reconnect() is True
+    assert seen == [2]

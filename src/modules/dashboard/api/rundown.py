@@ -2,8 +2,8 @@
 
 提供主播 Agent 流程单状态查询与手动控制端点：
 
-- ``GET  /api/v1/agenda/state``   — 整场快照 + 变更历史 + 环节清单
-- ``POST /api/v1/agenda/control`` — pause / resume / next / goto
+- ``GET  /api/v1/rundown/state``   — 整场快照 + 变更历史 + 环节清单
+- ``POST /api/v1/rundown/control`` — pause / resume / next / goto
 
 数据来源
 --------
@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING, Annotated, Any, Callable, Dict, Optional, Prot
 
 from fastapi import APIRouter, Depends
 
+from src.modules.dashboard.api.common import resolve_streamer_agent
 from src.modules.dashboard.dependencies import get_dashboard_server
-from src.modules.dashboard.schemas.agenda import (
+from src.modules.dashboard.schemas.rundown import (
     RundownConfigView,
     RundownControlRequest,
     RundownControlResponse,
@@ -57,17 +58,6 @@ class _RundownControlCallable(Protocol):
 # ---------------------------------------------------------------------------
 # 内部辅助：定位 StreamerAgent + 解析流程单配置
 # ---------------------------------------------------------------------------
-
-
-def _resolve_streamer_agent(server: "DashboardServer") -> Optional[Any]:
-    """从 agent_manager 中取出 ``streamer`` 实例；无则返回 None。"""
-    am = getattr(server, "agent_manager", None)
-    if am is None:
-        return None
-    try:
-        return am.get_agent_by_name("streamer")
-    except Exception:
-        return None
 
 
 def _read_streamer_rundown_config(server: "DashboardServer") -> Dict[str, Any]:
@@ -121,7 +111,7 @@ async def get_rundown_state(server: ServerDep) -> RundownStateResponse:
     降级响应（snapshot/transitions/segments 均为空，config 尽力填充）。
     """
     cfg = _read_streamer_rundown_config(server)
-    agent = _resolve_streamer_agent(server)
+    agent = resolve_streamer_agent(server)
     if agent is None:
         return _empty_state_response(server, message="主播 Agent 未启用", cfg=cfg)
 
@@ -163,7 +153,7 @@ async def control_rundown(
     - goto 缺 ``segment_id`` → ``success=false`` + 字段校验消息
     - 状态机结构化拒绝（最少停留未到等）→ ``success=false`` + 拒绝原因
     """
-    agent = _resolve_streamer_agent(server)
+    agent = resolve_streamer_agent(server)
     if agent is None:
         return RundownControlResponse(success=False, message="主播 Agent 未启用", snapshot=None)
 

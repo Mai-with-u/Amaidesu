@@ -1,8 +1,6 @@
 <template>
   <div class="console-page">
-    <!-- ============================================================ -->
     <!-- 顶栏：页面身份 + 阶段状态 + 模拟器徽章 + 实时脉冲 + 时钟         -->
-    <!-- ============================================================ -->
     <header class="console-head">
       <span class="pulse" :class="wsConnected ? 'is-live' : 'is-dead'" aria-hidden="true" />
       <h1 class="console-title">直播控制台</h1>
@@ -31,9 +29,7 @@
     </header>
 
     <div class="console-body">
-      <!-- ============================================================ -->
       <!-- 左栏：场次侧边栏（当前 + 历史回看 + 生命周期开关）               -->
-      <!-- ============================================================ -->
       <aside class="sessions" aria-label="直播场次">
         <header class="sessions-head">
           <h2 class="sessions-title">场次</h2>
@@ -89,9 +85,7 @@
         </p>
       </aside>
 
-      <!-- ============================================================ -->
       <!-- 右区：环节横幅 + 时间线                                        -->
-      <!-- ============================================================ -->
       <section class="console-main">
         <section class="slate" :class="{ 'is-idle': !rundownBanner }" aria-label="当前环节">
           <span class="slate-eyebrow">当前环节</span>
@@ -257,9 +251,7 @@
       </section>
     </div>
 
-    <!-- ============================================================ -->
     <!-- 决策测试对话框（手动驱动一次两阶段决策）                         -->
-    <!-- ============================================================ -->
     <el-dialog v-model="testDialogVisible" title="主播决策测试" width="480px">
       <div class="test-form">
         <el-input
@@ -326,6 +318,7 @@ import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useEventsStore, useWebSocketStore } from '@/stores';
 import { debugApi, liveSessionsApi, simulatorApi, streamerApi } from '@/api';
+import { useScrollFollow } from '@/composables/useScrollFollow';
 import {
   STAGE_LABEL,
   MAX_ENTRIES,
@@ -350,12 +343,9 @@ import {
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import type { LiveSessionItem, ThinkingDelta, WebSocketMessage } from '@/types';
 
-// ============================================================
 // 常量
-// ============================================================
 
 /** 距底 ≤ 此距离视为"贴底"，可自动跟随 */
-const BOTTOM_THRESHOLD_PX = 40;
 
 const SOURCE_LABEL: Record<string, string> = {
   manual: '手动',
@@ -363,9 +353,7 @@ const SOURCE_LABEL: Record<string, string> = {
   legacy: '历史',
 };
 
-// ============================================================
 // 类型
-// ============================================================
 
 interface RundownBanner {
   order: number;
@@ -377,9 +365,7 @@ interface RundownBanner {
   changedAtSec: number;
 }
 
-// ============================================================
 // 思考流（WS kind="stream"；ADR-008 best-effort 观测通道）
-// ============================================================
 
 const THINKING_ROUNDS_MAX = 20;
 /** 每决策轮的思考聚合：planner 按步骤分段（与工具卡时间交织），replyer 独立一段。
@@ -483,9 +469,7 @@ function handleThinkingMessage(message: WebSocketMessage): void {
   }
 }
 
-// ============================================================
 // Store 与全局状态
-// ============================================================
 
 const eventsStore = useEventsStore();
 const wsStore = useWebSocketStore();
@@ -504,9 +488,7 @@ watch(wsConnected, (connected, previous) => {
   }
 });
 
-// ============================================================
 // 通用取值助手（侧栏时钟/时长；事件→条目取值助手见 utils/liveFeed.ts）
-// ============================================================
 
 function clockLabel(ms: number): string {
   return new Date(ms).toLocaleTimeString('zh-CN', {
@@ -516,14 +498,10 @@ function clockLabel(ms: number): string {
   });
 }
 
-// ============================================================
 // 事件 → 时间线条目（折叠规则与取值助手统一在 utils/liveFeed.ts；
 // 回看时间线仍按条目类型直接调 makeEntry / fromDecision / fromStage）
-// ============================================================
 
-// ============================================================
 // 场次侧边栏：列表 / 生命周期 / 回看
-// ============================================================
 
 const sessions = ref<LiveSessionItem[]>([]);
 /** 进行中的显式场次主键（来自 API 响应，不受侧边栏筛选影响——筛选只是视图） */
@@ -635,9 +613,7 @@ function backToLive(): void {
   selectedSession.value = null;
 }
 
-// ============================================================
 // 回看时间线：REST 明细 + 事件历史 → ShowEntry
-// ============================================================
 
 const replayEntries = ref<ShowEntry[]>([]);
 const replayLoading = ref(false);
@@ -790,9 +766,7 @@ watch(
   { immediate: true },
 );
 
-// ============================================================
 // 实时时间线：暂停 / 清空水位 / 条目缓冲
-// ============================================================
 
 const paused = ref(false);
 /** 清空水位：记下当时缓冲区里的事件 id，之后重建时永久跳过（store 仍不丢数据） */
@@ -840,9 +814,7 @@ function clearTimeline(): void {
   unseen.value = 0;
 }
 
-// ============================================================
 // 场次生命周期事件 → 侧边栏刷新
-// ============================================================
 
 watch(events, list => {
   for (let i = list.length - 1; i >= Math.max(0, list.length - 5); i -= 1) {
@@ -854,9 +826,7 @@ watch(events, list => {
   }
 });
 
-// ============================================================
 // 当前环节横幅：取最近一条 rundownBanner.update
-// ============================================================
 
 const rundownBanner = computed<RundownBanner | null>(() => {
   const list = events.value;
@@ -880,9 +850,7 @@ const rundownBanner = computed<RundownBanner | null>(() => {
   return null;
 });
 
-// ============================================================
 // 顶栏徽章：决策管线阶段 + 模拟器模式
-// ============================================================
 
 const stageChip = computed<{ label: string; running: boolean; detail: string } | null>(() => {
   const list = events.value;
@@ -924,9 +892,7 @@ async function loadSimulatorStatus(): Promise<void> {
   }
 }
 
-// ============================================================
 // 干预：注入弹幕 + 决策测试
-// ============================================================
 
 const injecting = ref(false);
 const injectOpen = ref(false);
@@ -1019,30 +985,16 @@ async function submitTriggerProactive(): Promise<void> {
   }
 }
 
-// ============================================================
 // 滚动跟随：贴底自动跟随；上滚时冒出"回到最新"
-// ============================================================
 
-const scrollRef = ref<HTMLElement | null>(null);
-const atBottom = ref(true);
 const unseen = ref(0);
 let resizeObserver: ResizeObserver | null = null;
 
-function isAtBottom(el: HTMLElement): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD_PX;
-}
+const { scrollRef, atBottom, onScroll: followOnScroll, scrollToBottom } = useScrollFollow();
 
 function onScroll(): void {
-  const el = scrollRef.value;
-  if (!el) return;
-  atBottom.value = isAtBottom(el);
+  followOnScroll();
   if (atBottom.value) unseen.value = 0;
-}
-
-function scrollToBottom(): void {
-  const el = scrollRef.value;
-  if (!el) return;
-  el.scrollTop = el.scrollHeight;
 }
 
 function jumpToLatest(): void {
@@ -1083,9 +1035,7 @@ watch(entries, async (next, prev) => {
   if (added > 0) unseen.value += added;
 });
 
-// ============================================================
 // 秒级时钟：驱动相对时间与台上时钟刷新
-// ============================================================
 
 const nowTick = ref(Date.now());
 let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -1102,9 +1052,7 @@ const wallClock = computed(() =>
   }),
 );
 
-// ============================================================
 // 生命周期
-// ============================================================
 
 onMounted(async () => {
   tickTimer = setInterval(() => {
@@ -1136,9 +1084,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* ============================================================ */
 /* 版面：顶栏常驻；左场次栏 + 右时间线                             */
-/* ============================================================ */
 /* 高度直接铺满父容器 .app-main 的内容盒（它已扣掉顶栏与自身内边距）。
    早先用 100vh 自算高度并加 min-height 夹底，矮窗口下会反超父容器：外层
    .app-main 冒出第二条几乎无用的滚动条，而时间线仍被 .stage 的
@@ -1151,19 +1097,7 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-.grow {
-  flex: 1;
-  min-width: 0;
-}
-
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ============================================================ */
 /* 顶栏                                                          */
-/* ============================================================ */
 .console-head {
   display: flex;
   align-items: baseline;
@@ -1284,9 +1218,7 @@ onUnmounted(() => {
   color: var(--color-primary);
 }
 
-/* ============================================================ */
 /* 双栏：场次侧边栏 + 主区                                        */
-/* ============================================================ */
 .console-body {
   flex: 1;
   min-height: 0;
@@ -1294,9 +1226,7 @@ onUnmounted(() => {
   gap: var(--spacing-sm);
 }
 
-/* ============================================================ */
 /* 场次侧边栏                                                    */
-/* ============================================================ */
 .sessions {
   width: 250px;
   flex-shrink: 0;
@@ -1405,8 +1335,8 @@ onUnmounted(() => {
   border: 1px solid var(--border-color-light);
 }
 .session-badge.is-replay {
-  color: var(--color-agenda);
-  border-color: var(--color-agenda);
+  color: var(--color-rundown);
+  border-color: var(--color-rundown);
 }
 
 .session-meta {
@@ -1439,9 +1369,7 @@ onUnmounted(() => {
   border-top: 1px solid var(--border-color-light);
 }
 
-/* ============================================================ */
 /* 主区                                                          */
-/* ============================================================ */
 .console-main {
   flex: 1;
   min-width: 0;
@@ -1451,9 +1379,7 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-/* ============================================================ */
 /* 环节横幅（常驻，不滚动）                                       */
-/* ============================================================ */
 .slate {
   display: flex;
   align-items: center;
@@ -1462,9 +1388,9 @@ onUnmounted(() => {
   min-height: 48px;
   padding: var(--spacing-sm) var(--spacing-md);
   border: 1px solid var(--border-color-light);
-  border-left: 3px solid var(--color-agenda);
+  border-left: 3px solid var(--color-rundown);
   border-radius: var(--radius-md);
-  background: var(--color-agenda-bg);
+  background: var(--color-rundown-bg);
 }
 .slate.is-idle {
   border-left-color: var(--border-color-dark);
@@ -1475,7 +1401,7 @@ onUnmounted(() => {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 1.6px;
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   flex-shrink: 0;
 }
 .slate.is-idle .slate-eyebrow {
@@ -1502,10 +1428,10 @@ onUnmounted(() => {
 .slate-action {
   padding: 1px 8px;
   border-radius: 999px;
-  border: 1px solid var(--color-agenda);
+  border: 1px solid var(--color-rundown);
   font-size: 11px;
   font-weight: 600;
-  color: var(--color-agenda);
+  color: var(--color-rundown);
   flex-shrink: 0;
 }
 
@@ -1538,9 +1464,7 @@ onUnmounted(() => {
   color: var(--text-placeholder);
 }
 
-/* ============================================================ */
 /* 时间线容器                                                    */
-/* ============================================================ */
 .stage {
   flex: 1;
   min-height: 0;
@@ -1645,9 +1569,7 @@ onUnmounted(() => {
   color: var(--text-placeholder);
 }
 
-/* ============================================================ */
 /* 滚动体 + 顶部渐隐 + 回到最新                                   */
-/* ============================================================ */
 .stage-body {
   position: relative;
   flex: 1;
@@ -1719,7 +1641,7 @@ onUnmounted(() => {
   font-size: 10px;
   color: var(--text-placeholder);
 }
-/* 控制台独占：thinking-live 头部的小圆点（行圆点的 running 变体；行本体已迁到 FeedTimeline） */
+/* 控制台独占：thinking-live 头部的小圆点（行圆点的 running 变体） */
 .thinking-live .whisper-dot {
   width: 28px;
   height: 12px;
@@ -1750,7 +1672,7 @@ onUnmounted(() => {
   max-height: 96px;
   overflow-y: auto;
 }
-/* 控制台独占：thinking-live 内的 Replyer/Planner 标签徽章（行体已迁到 FeedTimeline） */
+/* 控制台独占：thinking-live 内的 Replyer/Planner 标签徽章 */
 .thinking-live .d-thinking-tag {
   display: inline-block;
   margin-right: 6px;
@@ -1764,12 +1686,7 @@ onUnmounted(() => {
   vertical-align: 1px;
 }
 
-/* 时间线行的具体样式（feed/beat/milestone/whisper/decision/act/chat 等）
- * 已迁出至 components/live/FeedTimeline.vue；本页只保留控制台独占的滚动体与面板样式 */
-
-/* ============================================================ */
 /* 窄屏                                                          */
-/* ============================================================ */
 @media (max-width: 1100px) {
   .sessions {
     width: 200px;

@@ -42,3 +42,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-016：版本号与发布模型（pyproject 单一声明 + tag 事实源 + main 发布线）](016-versioning-and-release-model.md)
 - [ADR-017：主播 Agent 分包按接缝抽厚簇（执行抽、调度不抽）](017-streamer-agent-seam-split.md)
 - [ADR-018：游戏无关边界——框架与主播侧不出现具体游戏名](018-game-agnostic-boundary.md)
+- [ADR-019：ToolRegistry Provider 常驻登记与工具集刷新（工具页注册表驱动）](019-tool-registry-provider-refresh.md)

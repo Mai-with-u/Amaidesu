@@ -1,5 +1,5 @@
 /**
- * Dashboard API 客户端（v2）
+ * Dashboard API 客户端
  *
  * 模拟直播能力控制面：
  * - ``simulatorApi`` → ``/api/v1/simulator/*``：世界模拟器 SimulatorService
@@ -55,6 +55,8 @@ import type {
   SessionTimelineResponse,
   ViewerListResponse,
   ViewerInsights,
+  VisionMonitorsResponse,
+  VisionPreviewResponse,
   ViewerDetail,
   ViewerDialogueResponse,
   ViewerContributions,
@@ -70,14 +72,14 @@ const api = axios.create({
   },
 });
 
-// ===== 系统 =====
+// 系统
 
 export const systemApi = {
   getStatus: () => api.get<SystemStatusResponse>('/system/status'),
   getHealth: () => api.get<{ status: string; timestamp: number }>('/system/health'),
 };
 
-// ===== 组件 =====
+// 组件
 //
 // 后端 `/api/v1/components` 按 v2 分组 `collectors / agents / tools` 返回组件清单；// 控制端点路径参数为 `group`。
 export const componentApi = {
@@ -86,7 +88,7 @@ export const componentApi = {
     api.post<ComponentControlResponse>(`/components/${group}/${name}/control`, request),
 };
 
-// ===== 配置 =====
+// 配置
 //
 // 后端 `/api/v1/config` 返回六文件合并的扁平 dict；`/api/v1/config/schema`
 // 返回按文件归组的 groups。读写由 stores/settings.ts 直连（裸 axios 实例），
@@ -95,7 +97,7 @@ export const configApi = {
   restart: () => api.post<ConfigUpdateResponse>('/config/restart'),
 };
 
-// ===== 调试注入 =====
+// 调试注入
 //
 // `injectMessage` 发布 `room.message.danmaku` 走真实弹幕链路（消息写入
 // `live` 会话，主播 Agent 决策历史可读）。
@@ -105,7 +107,7 @@ export const debugApi = {
   getEventBusStats: () => api.get<EventBusStatsResponse>('/debug/event-bus/stats'),
 };
 
-// ===== LLM =====
+// LLM
 export const llmApi = {
   getUsage: () => api.get<Record<string, LLMUsageStats>>('/llm/usage'),
   getUsageSummary: () => api.get<LLMUsageSummary>('/llm/usage/summary'),
@@ -118,7 +120,7 @@ export const llmApi = {
   getRequestById: (requestId: string) => api.get<LLMRequestHistory>(`/llm/history/${requestId}`),
 };
 
-// ===== Tools（工具清单 + 提供者分类面板） =====
+// Tools（工具清单 + 提供者分类面板）
 // 提供者开关写回 tools.toml 后需重启应用生效（工具注册发生在组合根装配期）。
 export const toolsApi = {
   list: () => api.get<ToolsView>('/tools'),
@@ -133,7 +135,7 @@ export const toolsApi = {
     api.post<ToolReconnectResponse>(`/tools/providers/${providerId}/reconnect`),
 };
 
-// ===== Agent 控制面（运行态观测 + 框架级控制） =====
+// Agent 控制面（运行态观测 + 框架级控制）
 //
 // `GET /agents`：已注册 Agent 名册（state / heartbeat_ms / is_alive /
 // restart_count / enabled）。`POST /agents/{name}/control`：pause / resume
@@ -146,7 +148,7 @@ export const agentsApi = {
     api.post<AgentControlResponse>(`/agents/${name}/control`, { action, confirm }),
 };
 
-// ===== Simulator 控制面（世界模拟器：generate 生成 / replay 回放） =====
+// Simulator 控制面（世界模拟器：generate 生成 / replay 回放）
 //
 // 控制 SimulatorService 的启停与状态查询，以及运行时数据（常驻人设 /
 // 礼物目录 CRUD、回放日期选择）。enabled=false 时 status 仍返回（不抛
@@ -182,7 +184,7 @@ export const simulatorApi = {
     api.delete<{ success: boolean; message?: string }>(`/simulator/gifts/${giftId}`),
 };
 
-// ===== 直播场次（直播控制台） =====
+// 直播场次（直播控制台）
 //
 // `GET /live-sessions`：场次列表（倒序 + 消息数）。
 // `POST /live-sessions/open`：开启新场次（进行中场次自动结束）。
@@ -201,7 +203,7 @@ export const liveSessionsApi = {
     api.get<SessionTimelineResponse>(`/live-sessions/${id}/timeline`, { params: { limit } }),
 };
 
-// ===== 事件历史（游标续传） =====
+// 事件历史（游标续传）
 //
 // `GET /events?since_id=`：返回游标之后的事件缺口（断线/刷新后由 store 调用补齐）。
 export const eventsApi = {
@@ -211,12 +213,10 @@ export const eventsApi = {
     }),
 };
 
-// ===== 观众统计（只读） =====
+// 观众（列表 / 分析 / 档案 / 对话 / 贡献 / 场次）
 //
-// ===== 观众（列表 / 分析 / 档案 / 对话 / 贡献 / 场次） =====
-//
-// `GET /viewers`：观众列表（搜索/排序/分页，total 为命中搜索的全计数——
-// 首页"观众总数"也取 total，而非旧行为的返回行数）。
+// `GET /viewers`：观众列表（搜索/排序/分页，total 为命中搜索的全计数，
+// 首页"观众总数"也取 total）。
 // `GET /viewers/insights`：活跃分桶 + 回复覆盖 + 按天弹幕量（互动分析页）。
 // `GET /viewers/{userId}...`：单观众档案与明细聚合（详情页三 tab 的数据面）。
 export const viewersApi = {
@@ -235,7 +235,7 @@ export const viewersApi = {
     api.get<ViewerSessionsResponse>(`/viewers/${encodeURIComponent(userId)}/sessions`),
 };
 
-// ===== Streamer 测试台（主播发言调试） =====
+// Streamer 测试台（主播发言调试）
 //
 // `GET /streamer/status`：主播 Agent 状态 + 运行统计 + 配置摘要（agent 未注册时
 // available=false，前端按空态渲染）。
@@ -255,42 +255,42 @@ export const streamerApi = {
     api.post<TriggerProactiveResponse>('/streamer/trigger-proactive', request),
 };
 
-// ===== Vision（视觉捕获：显示器枚举 + 预览叠框） =====
+// Vision（视觉捕获：显示器枚举 + 预览叠框）
 //
 // `GET /vision/monitors` 列显示器（mss 枚举；含 index/left/top/width/height/
 // is_primary）；`GET /vision/preview` 抓一帧并按 region 在图上叠红框。
 // 后端不调 VLM、不缓存、不轮询、不视频流——纯抓帧。
 export const visionApi = {
-  listMonitors: () => api.get<unknown>('/vision/monitors'),
+  listMonitors: () => api.get<VisionMonitorsResponse>('/vision/monitors'),
   preview: (params: { monitor_index: number; region?: string; max_width?: number }) =>
-    api.get<unknown>('/vision/preview', { params }),
+    api.get<VisionPreviewResponse>('/vision/preview', { params }),
 };
 
-// ===== Rundown（流程单编排页） =====
+// Rundown（流程单编排页）
 //
-// `GET /agenda/state`：当前流程单运行时快照（available / snapshot / transitions /
+// `GET /rundown/state`：当前流程单运行时快照（available / snapshot / transitions /
 // segments / config）。available=false 时 snapshot=null，前端按不可用态渲染。
-// `POST /agenda/control`：手动控制（pause / resume / next / goto，by="human"），
+// `POST /rundown/control`：手动控制（pause / resume / next / goto，by="human"），
 // 返回最新 snapshot；前端只在收到响应后做错误提示，正常状态由后端通过
 // `rundown.changed` 事件推上来。
 export const rundownApi = {
-  getState: () => api.get<RundownStateResponse>('/agenda/state'),
+  getState: () => api.get<RundownStateResponse>('/rundown/state'),
   control: (request: RundownControlRequest) =>
-    api.post<RundownControlResponse>('/agenda/control', request),
+    api.post<RundownControlResponse>('/rundown/control', request),
 
-  // ===== 流程单库（列表 / 模板 / upsert / 删除 / 复制 / 设为当前） =====
+  // 流程单库（列表 / 模板 / upsert / 删除 / 复制 / 设为当前）
   //
   // upsert 保存的流程单正是直播运行中的那份时，后端会写穿运行态
   // （进度按环节 id 对齐）；activate 只落盘配置，重启主播 Agent 后生效。
-  listRundowns: () => api.get<RundownListResponse>('/agenda/rundowns'),
-  getTemplate: () => api.get<RundownTemplateResponse>('/agenda/rundowns/template'),
+  listRundowns: () => api.get<RundownListResponse>('/rundowns'),
+  getTemplate: () => api.get<RundownTemplateResponse>('/rundowns/template'),
   upsert: (definition: RundownDefinition) =>
-    api.post<RundownMutateResponse>('/agenda/rundowns', definition),
-  remove: (rundownId: string) => api.delete<RundownMutateResponse>(`/agenda/rundowns/${rundownId}`),
+    api.post<RundownMutateResponse>('/rundowns', definition),
+  remove: (rundownId: string) => api.delete<RundownMutateResponse>(`/rundowns/${rundownId}`),
   duplicate: (rundownId: string) =>
-    api.post<RundownMutateResponse>(`/agenda/rundowns/${rundownId}/duplicate`),
+    api.post<RundownMutateResponse>(`/rundowns/${rundownId}/duplicate`),
   activate: (rundownId: string) =>
-    api.post<RundownMutateResponse>(`/agenda/rundowns/${rundownId}/activate`),
+    api.post<RundownMutateResponse>(`/rundowns/${rundownId}/activate`),
 };
 
 export default api;

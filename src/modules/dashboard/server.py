@@ -97,7 +97,7 @@ class DashboardServer:
         self.chat_repo = chat_repo
         # 注入 LLMRepo 让 `/api/v1/llm/usage*` 从 SQLite 聚合用量；未注入时相关端点返回空数据
         self.llm_repo = llm_repo
-        # 注入 RundownRepo 让 `/api/v1/agenda/rundowns*` 承载流程单库 CRUD；
+        # 注入 RundownRepo 让 `/api/v1/rundowns*` 承载流程单库 CRUD；
         # 未注入（极简启动/测试）时相关端点降级 success=false
         self.rundown_repo = rundown_repo
 
@@ -185,10 +185,9 @@ class DashboardServer:
 
         set_dashboard_server(self)
 
-        # 初始化 WebSocket 处理器
         self.ws_handler = WebSocketHandler(heartbeat_interval=self.websocket_heartbeat)
 
-        # 初始化事件广播器（仅用于 WS 推送，不负责记录事件）
+        # 事件广播仅走 WS 推送，不负责记录（记录所有权在 EventHistoryService）
         self.event_broadcaster = EventBroadcaster(
             event_bus=self.event_bus,
             ws_handler=self.ws_handler,
@@ -197,19 +196,15 @@ class DashboardServer:
         )
         await self.event_broadcaster.start()
 
-        # 初始化日志流广播器（使用外部传入的或创建新的）
         if self._external_log_streamer:
-            # 外部传入的 log_streamer 需要更新 ws_handler
             self._external_log_streamer.ws_handler = self.ws_handler
             self.log_streamer = self._external_log_streamer
-            # 如果还未启动，则启动
             if not hasattr(self.log_streamer, "_is_running") or not self.log_streamer._is_running:
                 await self.log_streamer.start()
         else:
             self.log_streamer = LogStreamer(ws_handler=self.ws_handler, min_level="DEBUG")
             await self.log_streamer.start()
 
-        # 添加 WebSocket 路由
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
             ws_handler = self.ws_handler
@@ -228,10 +223,8 @@ class DashboardServer:
 
             await ws_handler.run_client_handler(websocket, on_connected=push_history)
 
-        # 启动心跳任务
         self._heartbeat_task = asyncio.create_task(self._run_heartbeat())
 
-        # 初始化弹幕叠加服务
         await self._setup_widget_service()
 
         if self.dev_mode:
@@ -462,65 +455,16 @@ class DashboardServer:
 
         @self.app.websocket("/ws/danmaku")
         async def danmaku_websocket(websocket: WebSocket):
-            await websocket.accept()
-            self._danmaku_clients.add(websocket)
-
-            try:
-                history = self.widget_service.get_recent_messages(15)
-                await websocket.send_json({"type": "history", "messages": history})
-
-                while True:
-                    await websocket.receive_text()
-            except WebSocketDisconnect:
-                pass
-            except asyncio.CancelledError:
-                # 关闭信号：静默退出（finally 负责清理 client 集合）
-                pass
-            except Exception as e:
-                self.logger.debug(f"Danmaku WebSocket 错误: {e}")
-            finally:
-                self._danmaku_clients.discard(websocket)
+            await self._run_widget_socket(websocket, self._danmaku_clients, with_history=True)
 
         @self.app.websocket("/ws/subtitle")
         async def subtitle_websocket(websocket: WebSocket):
-            await websocket.accept()
-            self._subtitle_clients.add(websocket)
-
-            try:
-                while True:
-                    await websocket.receive_text()
-            except WebSocketDisconnect:
-                pass
-            except asyncio.CancelledError:
-                # 关闭信号：静默退出（finally 负责清理 client 集合）
-                pass
-            except Exception as e:
-                self.logger.debug(f"Subtitle WebSocket 错误: {e}")
-            finally:
-                self._subtitle_clients.discard(websocket)
+            await self._run_widget_socket(websocket, self._subtitle_clients, with_history=False)
 
         @self.app.websocket("/ws/widget")
         async def widget_websocket(websocket: WebSocket):
-            await websocket.accept()
-            self._widget_clients.add(websocket)
+            await self._run_widget_socket(websocket, self._widget_clients, with_history=True)
 
-            try:
-                history = self.widget_service.get_recent_messages(15)
-                await websocket.send_json({"type": "history", "messages": history})
-
-                while True:
-                    await websocket.receive_text()
-            except WebSocketDisconnect:
-                pass
-            except asyncio.CancelledError:
-                # 关闭信号：静默退出（finally 负责清理 client 集合）
-                pass
-            except Exception as e:
-                self.logger.debug(f"Widget WebSocket 错误: {e}")
-            finally:
-                self._widget_clients.discard(websocket)
-
-        # 添加 widget API 端点
         @self.app.get("/api/widget/messages")
         async def get_widget_messages():
             return {"messages": self.widget_service.get_recent_messages(15)}
@@ -535,39 +479,52 @@ class DashboardServer:
 
         self.logger.info("弹幕小部件路由已注册: /danmaku, /subtitle, /widget, /ws/danmaku, /ws/subtitle, /ws/widget")
 
-    async def _broadcast_to_danmaku_clients(self, data: dict) -> None:
-        """广播弹幕消息到所有 danmaku 客户端"""
-        if not self._danmaku_clients:
+    async def _run_widget_socket(self, websocket: WebSocket, clients: set[WebSocket], *, with_history: bool) -> None:
+        """widget 族 WebSocket 端点的公共收发循环（accept → 可选历史 → 保活 → 清理）。"""
+        await websocket.accept()
+        clients.add(websocket)
+
+        try:
+            if with_history and self.widget_service is not None:
+                history = self.widget_service.get_recent_messages(15)
+                await websocket.send_json({"type": "history", "messages": history})
+
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        except asyncio.CancelledError:
+            # 关闭信号：静默退出（finally 负责清理 client 集合）
+            pass
+        except Exception as e:
+            self.logger.debug(f"Widget WebSocket 错误: {e}")
+        finally:
+            clients.discard(websocket)
+
+    async def _broadcast_to_clients(self, clients: set[WebSocket], data: dict) -> None:
+        """广播消息到一组 widget 客户端，发送失败的连接被移出集合。"""
+        if not clients:
             return
 
         message = json.dumps(data, ensure_ascii=False, default=str)
         disconnected = set()
 
-        for client in self._danmaku_clients:
+        for client in clients:
             try:
                 await client.send_text(message)
             except Exception as e:
                 self.logger.debug(f"广播时客户端已断开: {e}")
                 disconnected.add(client)
 
-        self._danmaku_clients -= disconnected
+        clients -= disconnected
+
+    async def _broadcast_to_danmaku_clients(self, data: dict) -> None:
+        """广播弹幕消息到所有 danmaku 客户端"""
+        await self._broadcast_to_clients(self._danmaku_clients, data)
 
     async def _broadcast_to_subtitle_clients(self, data: dict) -> None:
         """广播字幕到所有 subtitle 客户端"""
-        if not self._subtitle_clients:
-            return
-
-        message = json.dumps(data, ensure_ascii=False, default=str)
-        disconnected = set()
-
-        for client in self._subtitle_clients:
-            try:
-                await client.send_text(message)
-            except Exception as e:
-                self.logger.debug(f"广播时客户端已断开: {e}")
-                disconnected.add(client)
-
-        self._subtitle_clients -= disconnected
+        await self._broadcast_to_clients(self._subtitle_clients, data)
 
     def _get_widget_html(self) -> str:
         """返回 widget 页面 HTML"""

@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -158,13 +159,13 @@ async def close_session(session_id: int, server: ServerDep) -> SessionActionResp
 # 事件记录仅补充明细表没有的决策与状态事实
 _TIMELINE_EVENT_TYPES = frozenset(
     {
-        "planner.decision",
-        "streamer.stage",
-        "live.started",
-        "live.ended",
-        "agenda.update",
-        "game.milestone",
-        "game.report",
+        CoreEvents.PLANNER_DECISION,
+        CoreEvents.STREAMER_STAGE,
+        CoreEvents.LIVE_STARTED,
+        CoreEvents.LIVE_ENDED,
+        CoreEvents.RUNDOWN_CHANGED,
+        CoreEvents.GAME_MILESTONE,
+        CoreEvents.GAME_REPORT,
     }
 )
 

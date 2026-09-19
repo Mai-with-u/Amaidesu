@@ -12,7 +12,7 @@
 -->
 <template>
   <div class="dashboard">
-    <!-- 1. 结论条 -->
+    <!-- 结论条 -->
     <header class="verdict-bar" :class="`is-${verdict.tone}`">
       <div class="verdict-lamp">
         <span
@@ -46,7 +46,7 @@
       </div>
     </header>
 
-    <!-- 2. 主网格：直播对话流（hero） + 主播体征 / 活动脉搏（右列） -->
+    <!-- 主网格：直播对话流（hero） + 主播体征 / 活动脉搏（右列） -->
     <section class="main-grid">
       <article class="card feed-card">
         <div class="card-head">
@@ -107,7 +107,7 @@
       </div>
     </section>
 
-    <!-- 3. 今日统计条 -->
+    <!-- 今日统计条 -->
     <section class="stats-strip" aria-label="今日统计">
       <template v-for="(item, idx) in statsStrip" :key="item.key">
         <div v-if="idx > 0" class="stat-divider" aria-hidden="true" />
@@ -121,7 +121,7 @@
       <span class="stat-strip-tail">本地缓冲窗口</span>
     </section>
 
-    <!-- 4. 基座一行 -->
+    <!-- 基座一行 -->
     <footer class="infra-row" aria-label="基座状态">
       <a class="infra-link" @click.prevent="router.push('/collectors')">
         <span>采集</span>
@@ -178,17 +178,18 @@ import type {
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import PulseChart from '@/components/dashboard/PulseChart.vue';
 import { buildLiveEntries, type FeedEvent, type ShowEntry } from '@/utils/liveFeed';
+import { toSeconds } from '@/utils/liveFeed';
 
 const router = useRouter();
 const systemStore = useSystemStore();
 const eventsStore = useEventsStore();
 const { status } = storeToRefs(systemStore);
 
-// ====== 运行状态（持续取自 system store） ======
+// 运行状态（持续取自 system store）
 
 const uptimeSec = computed(() => status.value?.uptime_seconds ?? 0);
 
-// ====== 组件 / 工具 / 主播 / 流程单 / 场次（REST 周期刷） ======
+// 组件 / 工具 / 主播 / 流程单 / 场次（REST 周期刷）
 
 interface CollectorSummary {
   name: string;
@@ -216,12 +217,12 @@ async function onProactiveToggle(value: string | number | boolean) {
   }
 }
 const viewerCount = ref<number>(0);
-const agendaState = ref<RundownStateResponse | null>(null);
+const rundownState = ref<RundownStateResponse | null>(null);
 const sessions = ref<LiveSessionListResponse | null>(null);
 
 const streamerAvailable = computed(() => streamerStatus.value?.available === true);
 
-// ====== LLM 今日统计 + 累计兜底 ======
+// LLM 今日统计 + 累计兜底
 
 const llmStats = ref<LLMHistoryStatistics | null>(null);
 const llmSummary = ref<LLMUsageSummary | null>(null);
@@ -265,7 +266,7 @@ const todayCallsText = computed(() => {
   return `${stats.total_requests} 次 · 成功率 ${rate}%`;
 });
 
-// ====== 直播对话流：把 events 折叠成 ShowEntry 后取尾 15 ======
+// 直播对话流：把 events 折叠成 ShowEntry 后取尾 15
 
 const liveEntries = computed<ShowEntry[]>(() => {
   const events = eventsStore.events as unknown as FeedEvent[];
@@ -273,7 +274,7 @@ const liveEntries = computed<ShowEntry[]>(() => {
   return list.slice(-15);
 });
 
-// ====== 主播体征：决策心跳 + 漏斗 + 失败计数 ======
+// 主播体征：决策心跳 + 漏斗 + 失败计数
 
 const stats = computed(() => {
   const s = streamerStatus.value?.statistics ?? {};
@@ -313,7 +314,7 @@ const heartbeat = computed<{ text: string; tone: 'live' | 'fresh' | 'stale' | 's
     if (event.timestamp > latest) latest = event.timestamp;
   }
   // 后端 timestamp 已是秒；毫秒值兜底换算
-  const latestSec = latest > 1e12 ? latest / 1000 : latest;
+  const latestSec = toSeconds(latest);
   if (latestSec === 0) return { text: '尚未触发', tone: 'silent' };
   const diff = Math.max(0, Math.floor(Date.now() / 1000 - latestSec));
   if (diff < 60) return { text: `${diff}s 前`, tone: 'live' };
@@ -322,7 +323,7 @@ const heartbeat = computed<{ text: string; tone: 'live' | 'fresh' | 'stale' | 's
   return { text, tone: 'stale' };
 });
 
-// ====== 活动脉搏：60 分钟按分钟分桶的弹幕 / 发言双系列 ======
+// 活动脉搏：60 分钟按分钟分桶的弹幕 / 发言双系列
 
 const PULSE_BUCKETS = 60;
 const PULSE_BUCKET_SEC = 60;
@@ -347,7 +348,7 @@ function buildPulse(events: FeedEvent[]): BucketWindow {
       `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
   for (const event of events) {
-    const ts = event.timestamp > 1e12 ? event.timestamp / 1000 : event.timestamp;
+    const ts = toSeconds(event.timestamp);
     if (ts < windowStart || ts > windowEnd + PULSE_BUCKET_SEC) continue;
     const idx = Math.floor((ts - windowStart) / PULSE_BUCKET_SEC);
     if (idx < 0 || idx >= PULSE_BUCKETS) continue;
@@ -367,7 +368,7 @@ const pulseWindow = computed(() => buildPulse(eventsStore.events as unknown as F
 const pulseSeries = computed(() => pulseWindow.value.series);
 const pulseLabels = computed(() => pulseWindow.value.labels);
 
-// ====== 今日缓冲窗口按类型分桶（仅取 room.message） ======
+// 今日缓冲窗口按类型分桶（仅取 room.message）
 
 const bufferCounts = computed(() => {
   const result = { danmaku: 0, gift: 0, superChat: 0, enter: 0 };
@@ -400,7 +401,7 @@ const statsStrip = computed<StatItem[]>(() => [
   { key: 'proactive', label: '主动', value: stats.value.proactive, window: '启动以来' },
 ]);
 
-// ====== 结论条：异常 > 降级 > 直播中 > 空闲 ======
+// 结论条：异常 > 降级 > 直播中 > 空闲
 
 const ERROR_WINDOW_SEC = 300;
 
@@ -420,7 +421,7 @@ const verdict = computed<Verdict>(() => {
   const nowSec = Date.now() / 1000;
   const recentError = (eventsStore.events as unknown as FeedEvent[]).find(event => {
     if (event.type !== 'core.error') return false;
-    const ts = event.timestamp > 1e12 ? event.timestamp / 1000 : event.timestamp;
+    const ts = toSeconds(event.timestamp);
     return nowSec - ts <= ERROR_WINDOW_SEC;
   });
   if (recentError) {
@@ -447,7 +448,7 @@ const verdict = computed<Verdict>(() => {
   return { tone: 'idle', phrase: '空闲', detail: '系统就绪 · 等待场次' };
 });
 
-// ====== 基座一行：采集、工具熔断、节目 ======
+// 基座一行：采集、工具熔断、节目
 
 const infra = computed(() => {
   const total = collectors.value.length;
@@ -455,28 +456,28 @@ const infra = computed(() => {
   const idle = collectors.value.filter(c => !c.is_started).map(c => c.name);
   const tripped = tools.value.filter(t => t.health?.state === 'tripped').length;
 
-  let agendaText = '未加载';
+  let rundownText = '未加载';
   let unavailable = false;
-  const snap = agendaState.value?.snapshot ?? null;
+  const snap = rundownState.value?.snapshot ?? null;
   if (snap?.status === 'running' || snap?.status === 'paused') {
     const cur = snap.current;
-    agendaText = `环节 ${snap.index + 1}/${snap.total} · ${cur?.title ?? '环节'}`;
-    if (snap.status === 'paused') agendaText += ' · 已暂停';
+    rundownText = `环节 ${snap.index + 1}/${snap.total} · ${cur?.title ?? '环节'}`;
+    if (snap.status === 'paused') rundownText += ' · 已暂停';
   } else if (snap?.status === 'done') {
-    agendaText = '已完结';
+    rundownText = '已完结';
   } else {
     unavailable = true;
-    agendaText = '未加载';
+    rundownText = '未加载';
   }
 
   return {
     collectors: { total, started, idleNames: idle.slice(0, 3) },
     tools: { tripped },
-    rundown: { text: agendaText, unavailable },
+    rundown: { text: rundownText, unavailable },
   };
 });
 
-// ====== 周期刷新（采集/工具/主播/节目/场次） ======
+// 周期刷新（采集/工具/主播/节目/场次）
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -494,7 +495,7 @@ async function refreshSnapshot(): Promise<void> {
     tools.value = toolsResp.data.tools ?? [];
     streamerStatus.value = streamerResp.data;
     proactiveEnabled.value = streamerResp.data.config?.proactive_enabled ?? false;
-    agendaState.value = rundownResp.data;
+    rundownState.value = rundownResp.data;
     sessions.value = sessionsResp.data;
   } catch {
     // 任一接口失败都保留旧值；结论条自然按缺失数据降级（直播中/降级/空闲）
@@ -502,7 +503,7 @@ async function refreshSnapshot(): Promise<void> {
 
   // 观众数字独立取数：失败只保留旧值，不拖累上方整体快照
   try {
-    // total 为全量观众数（旧行为读返回行数，limit=5 时最多显示 5）
+    // total 为全量观众数
     const viewersResp = await viewersApi.list({ limit: 1 });
     viewerCount.value = viewersResp.data.total;
   } catch {
@@ -528,11 +529,11 @@ watch(
   () => eventsStore.events[eventsStore.events.length - 1]?.type,
   type => {
     if (type === 'rundown.changed')
-      void rundownApi.getState().then(r => (agendaState.value = r.data));
+      void rundownApi.getState().then(r => (rundownState.value = r.data));
   },
 );
 
-// ====== 工具函数 ======
+// 工具函数
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -547,7 +548,7 @@ function goEventLog(): void {
   router.push('/eventlog');
 }
 
-// ====== 生命周期 ======
+// 生命周期
 
 onMounted(async () => {
   await systemStore.fetchStatus();
@@ -608,15 +609,6 @@ onUnmounted(() => {
 .card-link:hover {
   color: var(--color-primary-light);
 }
-.grow {
-  flex: 1;
-  min-width: 0;
-}
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
 /* 行 1：结论条 */
 .verdict-bar {
   display: flex;

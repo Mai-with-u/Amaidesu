@@ -178,6 +178,12 @@ class MinecraftAgent(BaseAgent):
         self._task_tracker: Optional[Any] = task_tracker
         # Agent 私有 MCP（_on_start 装配成功时持有）：资源订阅接线用
         self._mcp_client: Optional[Any] = None
+        # 私有 MCP provider（_on_start 常驻登记，连接失败时以 0 工具降级登记）
+        # 与其降级恢复循环：连不上不再丢弃，后台退避重试直至装配成功
+        self._mcp_provider: Optional[Any] = None
+        self._mcp_recover_task: Optional[asyncio.Task[None]] = None
+        # 适配器是否已绑定：通知订阅只建一次，恢复重绑定不得重复订阅
+        self._mcp_adapters_bound: bool = False
         # 注意流读取适配器（装配成功时持有）+ 本 Agent 自己的增量游标：
         # 游标属于"谁消费事件谁持有"，跨任务批次保留，避免每次重读最新一页。
         self._attention_provider: Optional[Any] = None
@@ -221,18 +227,19 @@ class MinecraftAgent(BaseAgent):
         self._logger.info("MinecraftAgent 已启动（命令驱动：等待委派指令）")
 
     async def _bind_agent_owned_mcp(self) -> None:
-        """装配 Agent 私有 MCP server（[agents.minecraft.mcp]）。
+        """装配 Agent 私有 MCP server（[agents.minecraft.mcp]）——失败常驻重试。
 
         启用条件：registry 非空且 ``typed_config.mcp.enabled`` 为 True。
-        装配：以逐工具可见名单注册到 ToolRegistry（fail-closed：
-        每个工具默认仅 minecraft 可见；读工具 perceive 放开给主播直读），
-        MinecraftAgent 通过 ``list_tools(provider="maicraft")`` 域内查询可见。
-        失败语义：整个装配 try/except 包裹，连接失败/装配异常仅 warning 不阻断
-        Agent 启动——Agent 是命令驱动，MCP 不可用只降级（无 maicraft 工具可调）。
-        关闭：本 Agent 在 ``_on_stop`` 摘除自己注册的 provider 并关闭登记的
-        MCP 客户端（经基类登记入口）；全局 ``close_mcp_providers`` 仍保留
-        供 main.py 全量停机兜底。
-        装配成功时把 client 引用留给 handoff 订阅接线（``_mcp_client``）。
+        装配：provider **常驻登记**到 ToolRegistry（可见名单以策略 callable
+        声明，fail-closed：每个工具默认仅 minecraft 可见，读工具 perceive
+        放开给主播直读；恢复刷新时对新工具集重派名单，不落"未列出=全员"
+        默认）。连接失败/装配异常不再丢弃——provider 以 0 工具降级登记
+        （工具页可见、可手动重连），后台退避重试直至装配成功（对齐
+        MaicraftAttentionCollector 的失败语义："Mod 没开"是常态而非事故）。
+        Agent 启动不阻断——Agent 是命令驱动，MCP 不可用只降级。
+        关闭：本 Agent 在 ``_on_stop`` 取消恢复循环、摘除 provider 并关闭
+        登记的 MCP 客户端（经基类登记入口）；全局 ``close_mcp_providers``
+        仍保留供组合根全量停机兜底。
         """
         if self._tool_registry is None:
             return
@@ -252,41 +259,54 @@ class MinecraftAgent(BaseAgent):
             server_name=server_name,
             provider=server_name,  # spec.provider = "maicraft"，与历史契约一致
         )
+        self._mcp_provider = prov
+        # 绑定处声明在 setup 之前就位：初次装配 / 恢复重试 / 手动重连三条
+        # 路径的适配器绑定统一经 on_tools_refreshed 回调，单一入口不分叉
+        prov.on_tools_refreshed = self._on_mcp_tools_ready
+        prov.switch_config = {"file": "agents.toml", "key": "agents.minecraft.mcp.enabled"}
         try:
             count = await prov.setup()
-        except Exception as exc:  # noqa: BLE001 - 装配异常仅降级
+        except Exception as exc:  # noqa: BLE001 - 装配异常按连接失败同径降级
             self._logger.warning(f"Agent 私有 MCP（名单 fail-closed）装配异常: {type(exc).__name__}: {exc}")
-            self._mcp_client = None
-            try:
-                await client.close()
-            except Exception:  # noqa: BLE001 - 关闭失败不二次上抛
-                pass
-            return
-        if count == 0:
-            # 对齐 bind_mcp_tools 的隔离风格：连接失败或 server 无工具 → 不注册
-            self._logger.warning("Agent 私有 MCP（名单 fail-closed）连接失败或 server 未暴露工具，未注册")
-            self._mcp_client = None
-            try:
-                await client.close()
-            except Exception:  # noqa: BLE001
-                pass
-            return
+            count = 0
         try:
-            new_count = self.register_tool_provider(
-                prov, registry=self._tool_registry, visible_to=self._maicraft_visible_to(prov.list_tools())
-            )
+            self.register_tool_provider(prov, registry=self._tool_registry, visible_to=self._maicraft_visible_to)
         except Exception as exc:  # noqa: BLE001 - 注册异常兜底
             self._logger.warning(f"Agent 私有 MCP（名单 fail-closed）注册失败: {type(exc).__name__}: {exc}")
-            self._mcp_client = None
-            try:
-                await client.close()
-            except Exception:  # noqa: BLE001
-                pass
             return
-        # 注册成功后客户端纳入基类登记（stop/重建路径统一关闭）
+        # 客户端纳入基类登记（stop/重建路径统一关闭）
         self.register_mcp_client(client)
-        # 绑定处适配声明：任务查询工具（原始名后缀定位，server
-        # 特有知识留在此处）+ 状态映射 + attention 通知资源；订阅起停归跟踪循环
+        if count > 0:
+            # setup 成功路径：_on_mcp_tools_ready 回调已完成适配器绑定与装配日志
+            return
+        self._logger.warning(
+            "Agent 私有 MCP（名单 fail-closed）连接失败或 server 未暴露工具，已降级登记（0 工具），后台退避重试装配"
+        )
+        self._start_mcp_recover_loop(prov)
+
+    def _on_mcp_tools_ready(self, count: int) -> None:
+        """工具清单（重）同步成功回调（provider 三条路径统一入口）。
+
+        绑定适配器并按首次/恢复分别记日志；首次经 setup 内部调用（此时
+        provider 尚在注册流程中，只做绑定不碰 registry），恢复路径由重试
+        循环 / 手动重连的 registry 刷新随后完成工具补注册。
+        """
+        prov = self._mcp_provider
+        if prov is None:
+            return
+        first = not self._mcp_adapters_bound
+        self._bind_mcp_adapters(prov)
+        if first:
+            self._logger.info(f"Agent 私有 MCP（名单 fail-closed）适配器绑定完成：{count} 个工具")
+        else:
+            self._logger.info(f"Agent 私有 MCP 装配恢复：{count} 个工具（适配器已重绑定）")
+
+    def _bind_mcp_adapters(self, prov: Any) -> None:
+        """绑定处适配声明（幂等）：任务查询 + 状态映射 + attention 读取 + 通知订阅。
+
+        工具名按原始名后缀定位（server 特有知识留在此处）；通知订阅只在
+        首次绑定建立（多订阅方通道，恢复重绑定不得重复入队）。
+        """
         for spec in prov.list_tools():
             if spec.name.endswith("maicraft_task"):
                 prov.task_query_tool = spec.full_name
@@ -302,6 +322,8 @@ class MinecraftAgent(BaseAgent):
                 prov.attention_read_arguments = {"view": "attention"}
                 break
         self._attention_provider = prov if getattr(prov, "attention_read_tool", None) else None
+        if self._mcp_adapters_bound:
+            return
         if self._attention_provider is not None:
             # 可选钩子（与 TaskTracker 同一处约定）：无通知能力的提供者只是失去"被推醒"，
             # 任务步内的增量读取照常工作——不能因为缺钩子就整个装配失败。
@@ -310,7 +332,46 @@ class MinecraftAgent(BaseAgent):
                 subscribe(self._on_attention_notification)
             else:
                 self._logger.warning("MCP provider 无通知适配器：身体事件只能靠任务步内增量读取发现")
-        self._logger.info(f"Agent 私有 MCP（名单 fail-closed）装配完成：新注册 {new_count}/{count} 个工具")
+        self._mcp_adapters_bound = True
+
+    def _start_mcp_recover_loop(self, prov: Any) -> None:
+        """启动私有 MCP 降级恢复循环（已存在则跳过）。"""
+        if self._mcp_recover_task is not None and not self._mcp_recover_task.done():
+            return
+        self._mcp_recover_task = asyncio.create_task(self._mcp_recover_loop(prov))
+
+    async def _mcp_recover_loop(self, prov: Any) -> None:
+        """私有 MCP 降级恢复循环：退避重试装配（5s 起步 60s 封顶，连上即止）。
+
+        "Mod 没开"是常态而非事故——同因告警去重已在 McpClient，本循环安静
+        重试；setup 成功即经回调完成适配器绑定，再刷新 registry 工具集
+        （0 工具降级登记 → 换血补注册）后退出。Agent 停止即退出。
+        """
+        delay = 5.0
+        while self._running:
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60.0)
+            if not self._running:
+                return
+            try:
+                count = await prov.setup()
+            except Exception as exc:  # noqa: BLE001 - 单轮失败安静重试
+                self._logger.debug(f"Agent 私有 MCP 恢复重试失败: {type(exc).__name__}: {exc}")
+                continue
+            if count == 0:
+                continue
+            # 工具清单到手：registry 补注册（适配器绑定已在 setup 回调内完成）
+            try:
+                report = self._tool_registry.refresh_provider_tools(prov)
+            except Exception as exc:  # noqa: BLE001 - 刷新失败下轮再试
+                self._logger.warning(f"Agent 私有 MCP 恢复刷新失败: {type(exc).__name__}: {exc}")
+                continue
+            if not report.get("ok"):
+                continue
+            self._logger.info(
+                f"Agent 私有 MCP（名单 fail-closed）装配恢复：{count} 个工具（新增 {len(report.get('added', []))}）"
+            )
+            return
 
     @staticmethod
     def _maicraft_visible_to(specs: Iterable[ToolSpec]) -> Dict[str, List[str]]:
@@ -338,6 +399,19 @@ class MinecraftAgent(BaseAgent):
             except Exception as exc:  # noqa: BLE001 - 边界兜底
                 self._logger.warning(f"命令 worker 退出异常: {exc}")
             self._worker_task = None
+        # 私有 MCP 恢复循环随停机取消；provider 引用与适配器状态一并复位
+        if self._mcp_recover_task is not None:
+            self._mcp_recover_task.cancel()
+            try:
+                await self._mcp_recover_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # noqa: BLE001 - 边界兜底
+                self._logger.warning(f"私有 MCP 恢复循环退出异常: {exc}")
+            self._mcp_recover_task = None
+        self._mcp_provider = None
+        self._attention_provider = None
+        self._mcp_adapters_bound = False
         # 资源清理契约：摘除本 Agent 注册的 provider + 关闭登记的 MCP 客户端
         removed = self.unregister_tool_providers()
         await self.close_mcp_clients()

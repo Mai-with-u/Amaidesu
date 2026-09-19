@@ -1,12 +1,8 @@
 <template>
   <div class="agents-shell">
-    <!-- ============================================================== -->
     <!-- 主网格：左 240px Agent 列表 + 右 flex-1 详情                       -->
-    <!-- ============================================================== -->
     <div class="agents-page">
-      <!-- ============================================================ -->
       <!-- LEFT：Agent 列表（narrow, 240px）                              -->
-      <!-- ============================================================ -->
       <aside class="list-panel" aria-label="Agent 列表">
         <header class="list-header">
           <div class="list-header-main">
@@ -79,12 +75,10 @@
         </ul>
       </aside>
 
-      <!-- ============================================================ -->
       <!-- RIGHT：详情 + 运行轨迹（flex-1, the star）                       -->
-      <!-- ============================================================ -->
       <main class="detail-panel" aria-label="Agent 详情">
         <template v-if="selectedAgent">
-          <!-- 1. 详情头：名称 + 状态 + 操作 -->
+          <!-- 详情头：名称 + 状态 + 操作 -->
           <header class="detail-header">
             <div class="detail-title-block">
               <div class="detail-title-row">
@@ -165,7 +159,7 @@
             </div>
           </header>
 
-          <!-- 2. 元信息条：状态 / 心跳 / 重启 / 最近决策（启停与存活由标题 tag 与心跳新鲜度表达） -->
+          <!-- 元信息条：状态 / 心跳 / 重启 / 最近决策（启停与存活由标题 tag 与心跳新鲜度表达） -->
           <div class="details-strip" aria-label="状态摘要">
             <div class="stat-chip">
               <span class="chip-label">状态</span>
@@ -201,7 +195,7 @@
             </el-button>
           </div>
 
-          <!-- 3. 运行轨迹：THE MAIN SPACE -->
+          <!-- 运行轨迹 -->
           <section class="stream-panel" aria-label="运行轨迹">
             <header class="stream-header">
               <div class="stream-header-row stream-header-row--main">
@@ -304,12 +298,14 @@
  * 事件负载暂无 agent 身份字段：单 Agent 场景归因精确，多 Agent 并行时
  * 按时间近似；消除近似需后端在事件负载中增加 agent-identity 字段。
  */
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
+import { confirmAction } from '@/utils/confirmAction';
 import { ArrowDown, Refresh } from '@element-plus/icons-vue';
 import { storeToRefs } from 'pinia';
 import { useComponentsStore, useEventsStore } from '@/stores';
 import { agentsApi } from '@/api';
+import { useScrollFollow } from '@/composables/useScrollFollow';
 import type {
   AgentControlActionType,
   AgentInfo,
@@ -318,10 +314,10 @@ import type {
   WebSocketMessage,
 } from '@/types';
 import { summarizeEvent } from '@/utils/eventSummary';
+import { relativeTime as relativeTimeLabel, toSeconds } from '@/utils/liveFeed';
+import { formatDurationShort } from '@/utils/format';
 
-// ============================================================
 // Store + 基础状态
-// ============================================================
 
 const componentsStore = useComponentsStore();
 const eventsStore = useEventsStore();
@@ -420,9 +416,7 @@ function statusLabel(a: ComponentSummary): string {
   return '未启用';
 }
 
-// ============================================================
 // Agent 控制面（/api/v1/agents）：运行状态 + pause/resume/shutdown
-// ============================================================
 
 // 运行状态名册：name → AgentInfo（进页面拉一次，此后轮询 + 操作后刷新）
 const agentStates = ref<Record<string, AgentInfo>>({});
@@ -503,15 +497,10 @@ async function handleAgentControl(action: AgentControlActionType): Promise<void>
   };
   const hint = riskHints[action];
   if (hint) {
-    try {
-      await ElMessageBox.confirm(`确认对「${name}」执行关机？${hint}`, '高风险操作确认', {
-        type: 'warning',
-        confirmButtonText: '确认关机',
-        cancelButtonText: '取消',
-      });
-    } catch {
-      return;
-    }
+    const ok = await confirmAction(`确认对「${name}」执行关机？${hint}`, '高风险操作确认', {
+      confirmButtonText: '确认关机',
+    });
+    if (!ok) return;
   }
   const key = `${name}-${action}`;
   controlLoading[key] = true;
@@ -530,15 +519,10 @@ async function handleAgentControl(action: AgentControlActionType): Promise<void>
 async function handleRestartWithConfirm(): Promise<void> {
   const name = selectedName.value;
   if (!name) return;
-  try {
-    await ElMessageBox.confirm(`确认重启「${name}」？将停止当前实例并重新构造启动`, '重启确认', {
-      type: 'warning',
-      confirmButtonText: '确认重启',
-      cancelButtonText: '取消',
-    });
-  } catch {
-    return;
-  }
+  const ok = await confirmAction(`确认重启「${name}」？将停止当前实例并重新构造启动`, '重启确认', {
+    confirmButtonText: '确认重启',
+  });
+  if (!ok) return;
   await handleControl('restart');
 }
 
@@ -557,9 +541,7 @@ const moreActionsLoading = computed<boolean>(() => {
   return Boolean(actionLoading[`${name}-restart`] || controlLoading[`${name}-shutdown`]);
 });
 
-// ============================================================
 // "最近决策"指标：planner.* 最新事件的相对时间
-// ============================================================
 
 const latestDecisionLabel = computed<string>(() => {
   // events store 按 timestamp 升序；末条即最新。逆序找第一条 planner.*。
@@ -572,9 +554,7 @@ const latestDecisionLabel = computed<string>(() => {
   return '—';
 });
 
-// ============================================================
 // 运行轨迹：三族合并 + 阶段 badge + 失败标记
-// ============================================================
 
 type StageKind = 'planner' | 'rundown' | 'tool';
 type FilterKind = 'all' | StageKind;
@@ -664,50 +644,22 @@ function clearStream(): void {
   streamBuffer.value = [];
 }
 
-// ============================================================
 // 自动滚动：新条目追加时滚到底部，除非用户已向上滚动
-// ============================================================
 
-const streamScrollRef = ref<HTMLElement | null>(null);
-// 距底 < 32px 视为"在底部"
-const SCROLL_BOTTOM_THRESHOLD_PX = 32;
+const { scrollRef: streamScrollRef } = useScrollFollow(displayedEntries);
 
-function isAtBottom(el: HTMLElement): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX;
-}
-
-watch(displayedEntries, async () => {
-  await nextTick();
-  const el = streamScrollRef.value;
-  if (!el) return;
-  // 用户滚到底 → 跟到底；用户向上滚动则不强制。
-  if (isAtBottom(el)) {
-    el.scrollTop = el.scrollHeight;
-  }
-});
-
-// ============================================================
 // 工具：相对时间
-// ============================================================
 
 function relativeDuration(diffSec: number): string {
-  if (diffSec < 5) return '刚刚';
-  if (diffSec < 60) return `${diffSec}s 前`;
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m 前`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h 前`;
-  return `${Math.floor(diffSec / 86400)}d 前`;
+  return formatDurationShort(diffSec);
 }
 
 function relativeTime(timestampMs: number): string {
-  // 后端事件 timestamp 是 Unix 秒（参见 utils/eventSummary.ts 注释）
-  const nowSec = nowMs.value / 1000;
-  const tsSec = timestampMs > 1e12 ? timestampMs / 1000 : timestampMs;
-  return relativeDuration(Math.max(0, Math.floor(nowSec - tsSec)));
+  // 后端事件 timestamp 秒/毫秒并存，归一后走共享短标签
+  return relativeTimeLabel(toSeconds(timestampMs), nowMs.value / 1000);
 }
 
-// ============================================================
 // 生命周期
-// ============================================================
 
 let nowTickTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -729,9 +681,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* ============================================================ */
 /* 页面布局：flex shell 包裹 grid（左 240 + 右 1）              */
-/* ============================================================ */
 .agents-shell {
   display: flex;
   flex-direction: column;
@@ -748,9 +698,7 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-/* ============================================================ */
 /* LEFT：列表                                                    */
-/* ============================================================ */
 .list-panel {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -930,9 +878,7 @@ onUnmounted(() => {
   line-height: 16px;
 }
 
-/* ============================================================ */
 /* RIGHT：详情面板                                              */
-/* ============================================================ */
 .detail-panel {
   display: flex;
   flex-direction: column;
@@ -1252,9 +1198,9 @@ onUnmounted(() => {
 }
 
 .stage-badge--rundown {
-  color: var(--color-agenda);
-  background: var(--color-agenda-bg);
-  border-color: var(--color-agenda);
+  color: var(--color-rundown);
+  background: var(--color-rundown-bg);
+  border-color: var(--color-rundown);
 }
 
 .stage-badge--tool {
@@ -1297,9 +1243,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-/* ============================================================ */
 /* Empty 详情                                                    */
-/* ============================================================ */
 .detail-empty {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -1310,9 +1254,7 @@ onUnmounted(() => {
   justify-content: center;
 }
 
-/* ============================================================ */
 /* Responsive                                                   */
-/* ============================================================ */
 @media (max-width: 1023px) {
   .agents-page {
     grid-template-columns: 200px minmax(0, 1fr);

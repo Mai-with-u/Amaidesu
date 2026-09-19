@@ -1289,6 +1289,8 @@ class _FakeMcpProvider:
         self._provider = provider or server_name
         self._specs: list = []
         self._setup_called = False
+        # 对齐真实 McpToolProvider：清单（重）同步成功后的绑定回调（绑定处赋值）
+        self.on_tools_refreshed: Any = None
         # 强制构造一次工具列表：模拟 server 暴露 2 个 maicraft 工具
         self._tool_count = 2
         # 注意流适配（身体事件增量读取）：可配页、可注入读取异常、记录每次读取入参
@@ -1312,7 +1314,10 @@ class _FakeMcpProvider:
             )
             for tool_name in ("perceive", "execute")
         ]
-        return self._tool_count
+        count = self._tool_count
+        if count > 0 and self.on_tools_refreshed is not None:
+            self.on_tools_refreshed(count)
+        return count
 
     def list_tools(self):
         return list(self._specs)
@@ -1715,7 +1720,11 @@ async def test_on_start_disabled_mcp_skips_binding(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_on_start_setup_failure_does_not_block_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """setup() 抛异常：装配被 try/except 兜底，Agent 仍正常 start（命令驱动降级）。"""
+    """setup() 抛异常：装配被 try/except 兜底，Agent 仍正常 start（命令驱动降级）。
+
+    新契约：失败不再丢弃——provider 以 0 工具降级登记（工具页可见、可手动
+    重连），并启动后台恢复循环；stop() 取消循环并摘除 provider。
+    """
     _patch_mcp(monkeypatch, _RaisingProvider)
 
     from src.modules.mcp.config import McpServerConfig
@@ -1731,17 +1740,27 @@ async def test_on_start_setup_failure_does_not_block_agent(monkeypatch: pytest.M
     )
 
     await agent.start()  # 不抛即通过
-    assert registry.list_tools(provider="maicraft") == [], "setup 抛异常时不应有工具被注册"
+    assert registry.list_tools(provider="maicraft") == [], "setup 抛异常时不注册任何工具"
     assert agent._running is True, "Agent 仍应进入运行态（MCP 不可用仅降级）"
-    assert agent._mcp_client is None, "装配失败的 client 引用应被撤回"
+    assert agent._mcp_client is not None, "降级保留 client 引用（恢复重试复用同一连接设施）"
+    records = {r["name"]: r for r in registry.list_providers()}
+    assert records["maicraft"]["tool_count"] == 0, "provider 以 0 工具降级登记"
+    assert agent._mcp_recover_task is not None, "降级后启动后台恢复循环"
     await agent.stop()
+    assert agent._mcp_recover_task is None, "stop() 取消恢复循环"
+    assert all(r["name"] != "maicraft" for r in registry.list_providers()), "stop() 摘除降级 provider"
 
 
 @pytest.mark.asyncio
-async def test_on_start_zero_tools_closes_client_and_skips_register(
+async def test_on_start_zero_tools_registers_degraded_and_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """setup() 返回 0（连接失败 / server 无工具）：close client、不注册——对齐通用通道的隔离风格。"""
+    """setup() 返回 0（连接失败 / server 无工具）：降级登记 + 后台退避重试装配。
+
+    新契约：连接失败不再 close-and-drop——provider 常驻登记（0 工具，工具页
+    可见、可手动重连），恢复循环连上后刷新 registry 工具集；stop() 取消循环
+    并摘除 provider。
+    """
     _patch_mcp(monkeypatch, _ZeroToolProvider)
 
     from src.modules.mcp.config import McpServerConfig
@@ -1755,9 +1774,14 @@ async def test_on_start_zero_tools_closes_client_and_skips_register(
     )
 
     await agent.start()
-    assert registry.list_tools(provider="maicraft") == [], "count=0 时不应注册到 registry"
-    assert agent._mcp_client is None, "装配失败的 client 引用应被撤回"
+    assert registry.list_tools(provider="maicraft") == [], "count=0 时不注册任何工具"
+    assert agent._mcp_client is not None, "降级保留 client 引用"
+    assert agent._mcp_recover_task is not None, "降级后启动后台恢复循环"
+    records = {r["name"]: r for r in registry.list_providers()}
+    assert records["maicraft"]["tool_count"] == 0, "provider 以 0 工具降级登记（工具页可见）"
     await agent.stop()
+    assert agent._mcp_recover_task is None, "stop() 取消恢复循环"
+    assert all(r["name"] != "maicraft" for r in registry.list_providers()), "stop() 摘除降级 provider"
 
 
 class _RecordingSink:

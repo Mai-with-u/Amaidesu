@@ -8,13 +8,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.modules.dashboard.api import (
-    agenda,
     agents,
     components,
     config,
     debug,
     events,
     llm,
+    rundown,
     rundowns,
     sessions,
     simulator,
@@ -30,7 +30,7 @@ def create_app() -> FastAPI:
     """创建 FastAPI 应用。
 
     路由域：system / components / config / debug / llm / tools / events /
-    agenda / rundowns / streamer / simulator / live-sessions / viewers /
+    rundown / rundowns / streamer / simulator / live-sessions / viewers /
     agents / vision，全部挂在 ``/api/v1`` 前缀下。
     """
     app = FastAPI(
@@ -47,9 +47,10 @@ def create_app() -> FastAPI:
     app.include_router(llm.router, prefix="/api/v1/llm", tags=["LLM"])
     app.include_router(tools.router, prefix="/api/v1", tags=["Tools"])
     app.include_router(events.router, prefix="/api/v1", tags=["Events"])
-    app.include_router(agenda.router, prefix="/api/v1/agenda", tags=["Agenda"])
+    # 流程单运行态（状态视图 / 手动控制）
+    app.include_router(rundown.router, prefix="/api/v1/rundown", tags=["Rundown"])
     # 流程单库 CRUD（列表 / 模板 / upsert / 删除 / 复制 / 设为当前）
-    app.include_router(rundowns.router, prefix="/api/v1/agenda", tags=["Agenda"])
+    app.include_router(rundowns.router, prefix="/api/v1/rundowns", tags=["Rundown"])
     app.include_router(streamer.router, prefix="/api/v1/streamer", tags=["Streamer"])
 
     # 模拟器控制面（generate / replay 三模式工作台）

@@ -526,7 +526,7 @@ async def test_context_elapsed_provider_failure_degrades() -> None:
     """provider 抛异常 → 降级为 0（省略该行），不阻断决策。"""
 
     def _boom() -> int:
-        raise RuntimeError("agenda down")
+        raise RuntimeError("rundown down")
 
     planner, llm, _prompt = _make_planner(
         chat_responses=[_resp()],

@@ -326,7 +326,7 @@ class BaseAgent(abc.ABC):
         provider: Any,
         *,
         registry: Any,
-        visible_to: Optional[Dict[str, Any]] = None,
+        visible_to: Any = None,
     ) -> int:
         """经基类入口把 provider 注册进 ToolRegistry 并登记归属。
 
@@ -334,6 +334,9 @@ class BaseAgent(abc.ABC):
         登记后 ``unregister_tool_providers`` 可在 stop 路径逐一摘除，
         避免 disable/重建时 registry 里残留本 Agent 的工具。
         registry 为 None（未注入）时不注册也不登记，返回 0。
+        ``visible_to`` 形态随 registry 契约：静态名单 dict，或
+        ``(specs) -> dict`` 策略 callable（工具集刷新时按来源重派，见
+        ``ToolRegistry.register_provider``）；透传不解释。
         """
         if registry is None:
             return 0
