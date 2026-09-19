@@ -30,6 +30,11 @@ TIMELINE_EVENT_TYPES = frozenset(
 )
 
 
+# 明细行 kind → 前端卡片 kind 的映射（gift_row/super_chat_row 为仓储层的
+# 行类型标记，出时间线时折叠为卡片语义）
+_KIND_MAP = {"gift_row": "gift", "super_chat_row": "super_chat"}
+
+
 def build_timeline_items(
     detail_rows: List[Dict[str, Any]],
     event_history: Optional[_EventHistory],
@@ -40,15 +45,13 @@ def build_timeline_items(
 
     礼物/SC 明细行与 room.message 事件同义，统一映射为前端卡片 kind；
     事件历史为内存环形缓冲，重启后事件侧条目不可回看（明细行不受影响）。
+    入参 ``detail_rows`` 不被修改——kind 映射落在浅拷贝的新条目上。
     """
     items: List[Dict[str, Any]] = []
-    for item in detail_rows:
-        kind = item["kind"]
-        if kind == "gift_row":
-            item["kind"] = "gift"
-        elif kind == "super_chat_row":
-            item["kind"] = "super_chat"
-        items.append(item)
+    for row in detail_rows:
+        entry = dict(row)
+        entry["kind"] = _KIND_MAP.get(row["kind"], row["kind"])
+        items.append(entry)
 
     if event_history is not None:
         for record in event_history.get_by_session(session_id, limit=limit):
