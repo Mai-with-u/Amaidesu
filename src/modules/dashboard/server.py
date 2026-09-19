@@ -333,6 +333,10 @@ class DashboardServer:
         self.event_broadcaster = None
         self.event_history = None
         self.ws_handler = None
+        # 必须先 stop 注销 loguru sink 再丢引用：只置 None 会让 sink 永久残留，
+        # 后续新实例再注册时同一日志被写出多份
+        if self.log_streamer:
+            await self.log_streamer.stop()
         self.log_streamer = None
         self.widget_gateway.reset()
 
