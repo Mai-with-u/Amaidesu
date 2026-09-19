@@ -140,7 +140,7 @@
                 注入弹幕
               </el-button>
               <el-button size="small" @click="testDialogVisible = true">决策测试</el-button>
-              <!-- 显示模式：时间线=单列沿脊线；会话=观众左/主播右气泡对齐（原会话调试页收编） -->
+              <!-- 显示模式：时间线=单列沿脊线；会话=观众左/主播右气泡对齐 -->
               <el-radio-group v-model="displayMode" size="small">
                 <el-radio-button value="timeline">时间线</el-radio-button>
                 <el-radio-button value="chat">会话</el-radio-button>
@@ -318,6 +318,7 @@ import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useEventsStore, useWebSocketStore } from '@/stores';
 import { debugApi, liveSessionsApi, simulatorApi, streamerApi } from '@/api';
+import { useNowTick } from '@/composables/useNowTick';
 import { useScrollFollow } from '@/composables/useScrollFollow';
 import {
   STAGE_LABEL,
@@ -1037,8 +1038,7 @@ watch(entries, async (next, prev) => {
 
 // 秒级时钟：驱动相对时间与台上时钟刷新
 
-const nowTick = ref(Date.now());
-let tickTimer: ReturnType<typeof setInterval> | null = null;
+const nowTick = useNowTick();
 
 /** 当前 Unix 秒（相对时间标签入参；FeedTimeline 自带 tick，这里仅供顶部环节横幅使用） */
 const nowSec = computed(() => Math.floor(nowTick.value / 1000));
@@ -1055,9 +1055,6 @@ const wallClock = computed(() =>
 // 生命周期
 
 onMounted(async () => {
-  tickTimer = setInterval(() => {
-    nowTick.value = Date.now();
-  }, 1000);
   void loadSessions();
   void loadSimulatorStatus();
   await nextTick();
@@ -1076,10 +1073,6 @@ onUnmounted(() => {
   wsStore.unsubscribe(handleThinkingMessage);
   resizeObserver?.disconnect();
   resizeObserver = null;
-  if (tickTimer) {
-    clearInterval(tickTimer);
-    tickTimer = null;
-  }
 });
 </script>
 

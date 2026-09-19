@@ -589,6 +589,7 @@ import {
 } from '@element-plus/icons-vue';
 import { rundownApi } from '@/api';
 import { wsClient } from '@/api/websocket';
+import { useNowTick } from '@/composables/useNowTick';
 import type {
   RundownControlAction,
   RundownControlResponse,
@@ -610,7 +611,7 @@ const loadError = ref<string | null>(null);
 const actionLoading = ref<RundownControlAction | null>(null);
 
 // 本地 1s tick：仅重算当前环节 elapsed/remaining 展示
-const nowTickMs = ref(Date.now());
+const nowTickMs = useNowTick();
 
 // 抽屉
 
@@ -1142,7 +1143,6 @@ async function activateRundown(def: RundownDefinition): Promise<void> {
 // WS 订阅 + 防抖重拉
 
 let reloadTimer: ReturnType<typeof setTimeout> | null = null;
-let tickTimer: ReturnType<typeof setInterval> | null = null;
 let wsActive = false;
 
 function onWsMessage(msg: WebSocketMessage): void {
@@ -1159,10 +1159,6 @@ function onWsMessage(msg: WebSocketMessage): void {
 function startWs(): void {
   wsActive = true;
   wsClient.onMessage(onWsMessage);
-  if (tickTimer) clearInterval(tickTimer);
-  tickTimer = setInterval(() => {
-    nowTickMs.value = Date.now();
-  }, 1000);
 }
 
 function stopWs(): void {
@@ -1170,10 +1166,6 @@ function stopWs(): void {
   if (reloadTimer) {
     clearTimeout(reloadTimer);
     reloadTimer = null;
-  }
-  if (tickTimer) {
-    clearInterval(tickTimer);
-    tickTimer = null;
   }
 }
 

@@ -303,7 +303,7 @@
  * 控制台独占能力（思考流尾部、暂停/清空、注入面板、滚动跟随）留在 LiveObserver；
  * 本组件只负责"按条目渲染"，对上游数据来源无要求，可被任何 Vue 页面复用。
  */
-import { computed, onUnmounted, ref } from 'vue';
+import { computed, ref } from 'vue';
 import { CopyDocument, Monitor } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
@@ -322,6 +322,7 @@ import {
   type ShowEntry,
   type ThinkingStep,
 } from '@/utils/liveFeed';
+import { useNowTick } from '@/composables/useNowTick';
 
 interface Props {
   /** 已折叠好的时间线条目（顺序即展示顺序） */
@@ -373,15 +374,9 @@ function rowAlignClass(entry: ShowEntry): string {
   return '';
 }
 
-// 1s tick：让相对时间标签（"刚刚 / 12s 前"）每秒刷新一次；首页独立维护不依赖父组件
-const nowMs = ref(Date.now());
+// 1s tick：让相对时间标签（"刚刚 / 12s 前"）每秒刷新一次；独立维护不依赖父组件
+const nowMs = useNowTick();
 const nowSec = computed(() => Math.floor(nowMs.value / 1000));
-const tickTimer = setInterval(() => {
-  nowMs.value = Date.now();
-}, 1000);
-onUnmounted(() => {
-  clearInterval(tickTimer);
-});
 
 /** 弹幕 message_id → 时间线条目（用于发言/决策卡回复引用反查）。
  * 仅索引观众消息类（弹幕 / SC / 礼物）；同一 ID 重复出现时取首次，时间线按 tsSec 正序遍历保证幂等。 */
