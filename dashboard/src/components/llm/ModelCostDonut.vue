@@ -1,44 +1,22 @@
 <!--
-  ModelCostDonut - 手写 SVG 环形占比图（无第三方图表库）
-
-  用 stroke-dasharray 分段圆环展示各模型费用占比，中心放总额；
-  图例为 HTML 侧栏（名称 + 金额 + 占比）。悬停提示走原生 <title>。
+  ModelCostDonut - 环形占比图
+  圆环由 ECharts 饼图渲染，中心总额用容器内浮层排版；
+  图例保留 HTML 侧栏（名称 + 金额 + 占比）。
 -->
 <template>
   <div class="donut-chart">
-    <svg :width="size" :height="size" role="img" aria-label="模型费用占比环形图">
-      <!-- 底环：空态或占比不满时提供视觉基座 -->
-      <circle
-        :cx="center"
-        :cy="center"
-        :r="radius"
-        fill="none"
-        class="dc-track"
-        :stroke-width="strokeWidth"
-      />
-      <g :transform="`rotate(-90 ${center} ${center})`">
-        <circle
-          v-for="segment in segments"
-          :key="segment.model"
-          :cx="center"
-          :cy="center"
-          :r="radius"
-          fill="none"
-          :stroke="segment.color"
-          :stroke-width="strokeWidth"
-          :stroke-dasharray="`${segment.length} ${circumference - segment.length}`"
-          :stroke-dashoffset="segment.offset"
-        >
-          <title>{{ segment.tooltip }}</title>
-        </circle>
-      </g>
-      <text :x="center" :y="center - 6" text-anchor="middle" class="dc-total-label">
-        {{ totalLabel }}
-      </text>
-      <text :x="center" :y="center + 12" text-anchor="middle" class="dc-total-value">
-        {{ totalText }}
-      </text>
-    </svg>
+    <div
+      ref="containerRef"
+      class="dc-canvas"
+      :style="{ width: `${size}px`, height: `${size}px` }"
+      role="img"
+      aria-label="模型费用占比环形图"
+    >
+      <div class="dc-center">
+        <span class="dc-total-label">{{ totalLabel }}</span>
+        <span class="dc-total-value">{{ totalText }}</span>
+      </div>
+    </div>
 
     <ul class="dc-legend">
       <li v-for="item in legendItems" :key="item.model" class="dc-legend-item">
@@ -52,7 +30,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
+import type { EChartsCoreOption } from 'echarts/core';
+import { useChartPalette, useECharts } from '@/composables/useECharts';
 
 /** 单个占比条目（value 需非负；全 0 时渲染空态底环） */
 interface DonutItem {
@@ -79,38 +59,12 @@ const props = withDefaults(
   },
 );
 
-const strokeWidth = 18;
-const center = props.size / 2;
-const radius = (props.size - strokeWidth) / 2 - 2;
-const circumference = 2 * Math.PI * radius;
+const containerRef = ref<HTMLElement | null>(null);
+const palette = useChartPalette();
 
 const total = computed(() => props.items.reduce((sum, item) => sum + Math.max(0, item.value), 0));
 
-interface DonutSegment {
-  model: string;
-  length: number;
-  offset: number;
-  color: string;
-  tooltip: string;
-}
-
-/** 圆环分段：dashoffset 沿圆周累进（SVG dashoffset 正值逆时针回退，形成首尾相接） */
-const segments = computed<DonutSegment[]>(() => {
-  if (total.value <= 0) return [];
-  let consumed = 0;
-  return props.items.map((item, index) => {
-    const ratio = Math.max(0, item.value) / total.value;
-    const segment: DonutSegment = {
-      model: item.name,
-      length: ratio * circumference,
-      offset: -consumed * circumference,
-      color: props.colors[index % props.colors.length],
-      tooltip: `${item.name}：${props.formatValue(item.value)}（${(ratio * 100).toFixed(1)}%）`,
-    };
-    consumed += ratio;
-    return segment;
-  });
-});
+const totalText = computed(() => props.formatValue(total.value));
 
 const legendItems = computed(() =>
   props.items.map((item, index) => {
@@ -124,7 +78,52 @@ const legendItems = computed(() =>
   }),
 );
 
-const totalText = computed(() => props.formatValue(total.value));
+const option = computed<EChartsCoreOption>(() => {
+  const paletteValue = palette.value;
+  const data = props.items.map((item, index) => ({
+    name: item.name,
+    value: Math.max(0, item.value),
+    itemStyle: { color: props.colors[index % props.colors.length] },
+  }));
+
+  return {
+    animation: false,
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: paletteValue.hoverBg,
+      borderColor: paletteValue.borderColorLight,
+      textStyle: { color: paletteValue.textColor, fontSize: 12, fontFamily: paletteValue.monoFont },
+      formatter: (params: unknown): string => {
+        const p = params as { name: string; value: number; percent: number };
+        return `${p.name}：${props.formatValue(p.value)}（${p.percent}%）`;
+      },
+    },
+    series: [
+      {
+        type: 'pie',
+        radius: ['65%', '87%'],
+        center: ['50%', '50%'],
+        label: { show: false },
+        emphasis: { scale: false },
+        data,
+      },
+      {
+        // 底环：空态或占比不满时提供视觉基座
+        type: 'pie',
+        radius: ['65%', '87%'],
+        center: ['50%', '50%'],
+        silent: true,
+        label: { show: false },
+        tooltip: { show: false },
+        emphasis: { scale: false },
+        data: [{ value: 1, itemStyle: { color: paletteValue.hoverBg } }],
+        z: 0,
+      },
+    ],
+  };
+});
+
+useECharts(containerRef, option);
 </script>
 
 <style scoped>
@@ -135,17 +134,29 @@ const totalText = computed(() => props.formatValue(total.value));
   flex-wrap: wrap;
 }
 
-.dc-track {
-  stroke: var(--bg-hover);
+.dc-canvas {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.dc-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  pointer-events: none;
 }
 
 .dc-total-label {
-  fill: var(--text-secondary);
+  color: var(--text-secondary);
   font-size: 11px;
 }
 
 .dc-total-value {
-  fill: var(--text-primary);
+  color: var(--text-primary);
   font-size: 15px;
   font-weight: 700;
   font-family: var(--font-mono);

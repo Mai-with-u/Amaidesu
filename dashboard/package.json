@@ -20,6 +20,7 @@
     "@vueuse/core": "^10.7.0",
     "axios": "^1.6.0",
     "dompurify": "^3.3.1",
+    "echarts": "^6.1.0",
     "element-plus": "^2.5.0",
     "highlight.js": "^11.11.1",
     "marked": "^18.0.12",
