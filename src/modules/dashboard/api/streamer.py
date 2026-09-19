@@ -19,10 +19,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, Protocol, cast
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from src.modules.dashboard.api.common import resolve_streamer_agent
-from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.streamer import (
     ProactiveToggleRequest,
@@ -33,6 +32,8 @@ from src.modules.dashboard.schemas.streamer import (
     TriggerProactiveRequest,
     TriggerProactiveResponse,
 )
+from src.modules.dashboard.services.config_adapter import apply_config_updates
+from src.modules.dashboard.utils.component_helper import config_dir as resolve_config_dir
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -191,11 +192,14 @@ async def toggle_proactive(
             setter(request.enabled)
 
     # 落盘复用 config PATCH 的统一管线写回（Schema 校验 + 注释重生成）
-    update = await update_config(
-        ConfigUpdateRequest(key="agents.agents.streamer.proactive.enabled", value=request.enabled),
-        server,
+    if not server.config_service:
+        raise HTTPException(status_code=503, detail="Config service 不可用")
+    outcome = await apply_config_updates(
+        server.config_service,
+        resolve_config_dir(server),
+        [("agents.agents.streamer.proactive.enabled", request.enabled)],
     )
-    message = "主动发言已切换" if update.success else f"已切换（运行时生效），配置保存失败: {update.message}"
+    message = "主动发言已切换" if outcome.success else f"已切换（运行时生效），配置保存失败: {outcome.message}"
     return ProactiveToggleResponse(enabled=request.enabled, message=message)
 
 

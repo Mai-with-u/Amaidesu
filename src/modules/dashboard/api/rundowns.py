@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, Protocol, cast
 from fastapi import APIRouter, Depends
 
 from src.modules.dashboard.api.common import resolve_streamer_agent
-from src.modules.dashboard.api.config import ConfigUpdateRequest, update_config
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.rundown import (
     RundownDefinition,
@@ -37,6 +36,8 @@ from src.modules.dashboard.schemas.rundown import (
     RundownSegmentView,
     RundownTemplateResponse,
 )
+from src.modules.dashboard.services.config_adapter import apply_config_updates
+from src.modules.dashboard.utils.component_helper import config_dir as resolve_config_dir
 from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown
 from src.modules.time_utils import now_ms
 
@@ -223,12 +224,17 @@ async def activate_rundown(rundown_id: str, server: ServerDep) -> RundownMutateR
     if exists is None:
         return RundownMutateResponse(success=False, message=f"流程单 '{rundown_id}' 不存在", rundown_id=rundown_id)
 
-    update = await update_config(
-        ConfigUpdateRequest(key="agents.agents.streamer.rundown_id", value=rundown_id),
-        server,
+    if not server.config_service:
+        return RundownMutateResponse(
+            success=False, message="配置写入失败: Config service 不可用", rundown_id=rundown_id
+        )
+    outcome = await apply_config_updates(
+        server.config_service,
+        resolve_config_dir(server),
+        [("agents.agents.streamer.rundown_id", rundown_id)],
     )
-    if not update.success:
-        return RundownMutateResponse(success=False, message=f"配置写入失败: {update.message}", rundown_id=rundown_id)
+    if not outcome.success:
+        return RundownMutateResponse(success=False, message=f"配置写入失败: {outcome.message}", rundown_id=rundown_id)
     return RundownMutateResponse(
         success=True,
         message="已设为当前流程单（重启主播 Agent 后生效，当前直播不受影响）",
