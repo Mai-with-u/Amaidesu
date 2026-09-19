@@ -12,13 +12,20 @@
 显式场次。
 """
 
-from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
 
 from src.modules.dashboard.dependencies import get_dashboard_server
-from src.modules.events.names import CoreEvents
+from src.modules.dashboard.schemas.session import (
+    SessionActionResponse,
+    SessionItem,
+    SessionListResponse,
+    SessionOpenRequest,
+    SessionOpenResponse,
+    SessionTimelineResponse,
+)
+from src.modules.dashboard.services.session_timeline import build_timeline_items
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -29,48 +36,6 @@ logger = get_logger("SessionsAPI")
 
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
-
-
-class SessionItem(BaseModel):
-    """场次列表条目"""
-
-    live_session_id: int = Field(..., description="场次主键（live_sessions.id）")
-    source: str = Field(default="manual", description="场次来源：manual / replay / legacy")
-    title: Optional[str] = Field(default=None, description="场次标题")
-    room_id: str = Field(default="", description="房间/频道标识（普通属性）")
-    platform: str = Field(default="", description="平台标识")
-    started_at_ms: int = Field(..., description="开始时刻（Unix 毫秒）")
-    ended_at_ms: Optional[int] = Field(default=None, description="结束时刻（Unix 毫秒）；NULL=进行中")
-    message_count: int = Field(default=0, description="本场次消息数（live_chat 行数）")
-    is_active: bool = Field(default=False, description="是否为当前进行中的显式场次")
-
-
-class SessionListResponse(BaseModel):
-    """场次列表响应"""
-
-    items: List[SessionItem] = Field(default_factory=list)
-    active_session_id: Optional[int] = Field(default=None, description="当前进行中的显式场次主键")
-
-
-class SessionOpenRequest(BaseModel):
-    """开启场次请求"""
-
-    title: Optional[str] = Field(default=None, description="场次标题（可选）")
-    room_id: Optional[str] = Field(default=None, description="房间/频道标识（可选，缺省用装配默认值）")
-    platform: Optional[str] = Field(default=None, description="平台标识（可选，缺省用装配默认值）")
-
-
-class SessionOpenResponse(BaseModel):
-    """开启场次响应"""
-
-    live_session_id: int = Field(..., description="新场次主键")
-
-
-class SessionActionResponse(BaseModel):
-    """场次动作通用响应"""
-
-    success: bool = Field(default=True, description="动作是否成功")
-    detail: str = Field(default="", description="动作结果说明")
 
 
 def _require_session_manager(server: "DashboardServer"):
@@ -155,31 +120,16 @@ async def close_session(session_id: int, server: ServerDep) -> SessionActionResp
     return SessionActionResponse(success=closed, detail="场次已结束" if closed else "结束失败")
 
 
-# 回看时间线只消费事件历史中的这些类型——消息/发言已由明细行承载，
-# 事件记录仅补充明细表没有的决策与状态事实
-_TIMELINE_EVENT_TYPES = frozenset(
-    {
-        CoreEvents.PLANNER_DECISION,
-        CoreEvents.STREAMER_STAGE,
-        CoreEvents.LIVE_STARTED,
-        CoreEvents.LIVE_ENDED,
-        CoreEvents.RUNDOWN_CHANGED,
-        CoreEvents.GAME_MILESTONE,
-        CoreEvents.GAME_REPORT,
-    }
-)
-
-
-@router.get("/{session_id}/timeline")
+@router.get("/{session_id}/timeline", response_model=SessionTimelineResponse)
 async def session_timeline(
     session_id: int,
     server: ServerDep,
     limit: Annotated[int, Query(ge=1, le=2000, description="最多返回条数")] = 500,
-) -> Dict[str, Any]:
+) -> SessionTimelineResponse:
     """单场时间线回看：明细行（消息/发言/礼物/SC）+ 事件历史（决策/阶段/边界）按时间合并。
 
     与实时视图（WS 推送）共用同一条目形状的语义：前端用同一套卡片渲染。
-    事件历史为内存环形缓冲，重启后事件侧条目不可回看（明细行不受影响）。
+    条目装配（kind 映射、事件过滤、合并排序）见 ``services.session_timeline``。
     """
     manager = _require_session_manager(server)
     if manager is None:
@@ -188,32 +138,9 @@ async def session_timeline(
     if row is None:
         raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
 
-    items: list[dict] = []
-    for item in await manager.get_session_details(session_id, limit=limit):
-        # 礼物/SC 明细行与 room.message 事件同义，统一映射为前端卡片 kind
-        kind = item["kind"]
-        if kind == "gift_row":
-            item["kind"] = "gift"
-        elif kind == "super_chat_row":
-            item["kind"] = "super_chat"
-        items.append(item)
-
-    event_history = getattr(server, "event_history", None)
-    if event_history is not None:
-        for record in event_history.get_by_session(session_id, limit=limit):
-            if record.type not in _TIMELINE_EVENT_TYPES:
-                continue
-            items.append(
-                {
-                    "kind": "event",
-                    "event_type": record.type,
-                    "ts_ms": int(record.timestamp * 1000),
-                    "data": record.data,
-                }
-            )
-
-    items.sort(key=lambda item: item["ts_ms"])
-    return {"live_session_id": session_id, "items": items[-limit:]}
+    detail_rows = await manager.get_session_details(session_id, limit=limit)
+    items = build_timeline_items(detail_rows, getattr(server, "event_history", None), session_id, limit)
+    return SessionTimelineResponse(live_session_id=session_id, items=items)
 
 
 @router.delete("/{session_id}", response_model=SessionActionResponse)
