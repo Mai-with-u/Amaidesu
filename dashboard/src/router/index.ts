@@ -24,7 +24,7 @@ const router = createRouter({
       component: () => import('@/views/Tools.vue'),
     },
     {
-      // v2 路由拆分后保留旧路径兼容：直接跳转到采集器管理页
+      // 旧路径兼容：跳转到采集器管理页
       path: '/components',
       redirect: '/collectors',
     },
@@ -39,7 +39,7 @@ const router = createRouter({
       component: () => import('@/views/LogViewer.vue'),
     },
     {
-      // 会话调试页已收编为直播控制台的会话显示模式，旧路径重定向避免死链
+      // 会话调试入口在直播控制台，旧路径重定向避免死链
       path: '/session',
       redirect: '/live',
     },

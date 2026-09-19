@@ -187,7 +187,7 @@ async function handleRestart() {
         }
       }
     }, 2000);
-  } catch (e: any) {
+  } catch (e) {
     clearAllTimers();
     overlayStatus.value = 'failed';
     ElMessage.error(`重启失败: ${e instanceof Error ? e.message : '网络错误'}`);

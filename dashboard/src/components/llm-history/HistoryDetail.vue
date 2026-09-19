@@ -38,7 +38,7 @@
           {{ detail.usage.total_tokens }}
         </el-descriptions-item>
         <el-descriptions-item v-if="detail.cost !== undefined" label="费用">
-          ¥{{ detail.cost.toFixed(6) }}
+          {{ formatCost(detail.cost) }}
         </el-descriptions-item>
       </el-descriptions>
 
@@ -161,7 +161,7 @@ import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import { normalizeMessage, type PreviewMessage } from '@/utils/llmMessage';
 import type { LLMRequestHistory } from '@/types';
-import { formatDateTime, formatLatency, getClientTypeLabel } from '@/utils/format';
+import { formatCost, formatDateTime, formatLatency, getClientTypeLabel } from '@/utils/format';
 
 interface Props {
   visible: boolean;

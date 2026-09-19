@@ -529,17 +529,7 @@ function formatPercent(v: unknown): string {
 async function fetchStatus() {
   try {
     const res = await simulatorApi.getStatus();
-    const data = res.data;
-    status.enabled = !!data.enabled;
-    status.is_available = !!data.is_available;
-    status.is_running = !!data.is_running;
-    status.mode = typeof data.mode === 'string' ? data.mode : 'off';
-    status.replay_progress = data.replay_progress ?? null;
-    status.message = typeof data.message === 'string' ? data.message : '';
-    status.config =
-      data.config && typeof data.config === 'object' && !Array.isArray(data.config)
-        ? (data.config as Record<string, unknown>)
-        : {};
+    Object.assign(status, res.data);
     lastError.value = '';
   } catch (err) {
     lastError.value = err instanceof Error ? `状态获取失败：${err.message}` : '状态获取失败';

@@ -1,8 +1,9 @@
 // 图表数值格式化共享工具
 //
-// LLM 用量页的手写 SVG 图表（TrendChart / ModelCostDonut）与页面卡片
-// 共用同一套数值→文本规则，避免坐标轴刻度、悬停提示、图例各自维护
-// 造成口径漂移。
+// LLM 用量页的图表（TrendChart / ModelCostDonut）与页面卡片共用同一套
+// 数值→文本规则，避免坐标轴刻度、悬停提示、图例各自维护造成口径漂移。
+
+import { formatCost } from '@/utils/format';
 
 /** 大数紧凑格式：1234 → 1.2k，3456000 → 3.5M；千以内原样 */
 export function compactNumber(value: number): string {
@@ -16,14 +17,9 @@ export function compactNumber(value: number): string {
   return `${Math.round(value)}`;
 }
 
-/** 费用格式：固定两位小数，带人民币符号 */
+/** 费用格式：图表轴专用短格式（两位小数），位数口径委托 formatCost */
 export function costYuan(value: number): string {
-  return `¥${value.toFixed(2)}`;
-}
-
-/** 百分比格式：0-1 比例 → "12.5%"（入参为 0-100 时会失真，调用方注意口径） */
-export function percentFromRatio(ratio: number): string {
-  return `${(ratio * 100).toFixed(1)}%`;
+  return formatCost(value, 2);
 }
 
 /**

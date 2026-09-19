@@ -83,7 +83,8 @@ export const systemApi = {
 
 // 组件
 //
-// 后端 `/api/v1/components` 按 v2 分组 `collectors / agents / tools` 返回组件清单；// 控制端点路径参数为 `group`。
+// 后端 `/api/v1/components` 按分组 `collectors / agents / tools` 返回组件清单；
+// 控制端点路径参数为 `group`。
 export const componentApi = {
   getAll: () => api.get<ComponentListResponse>('/components'),
   control: (group: string, name: string, request: ComponentControlRequest) =>

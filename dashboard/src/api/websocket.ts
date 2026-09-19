@@ -36,7 +36,6 @@ class WebSocketClient {
         this.ws = new WebSocket(this.url);
 
         this.ws.onopen = () => {
-          console.log('WebSocket connected');
           this.reconnectDelay = 3000;
 
           if (this.subscribedEvents.size > 0) {
@@ -63,7 +62,6 @@ class WebSocketClient {
         };
 
         this.ws.onclose = () => {
-          console.log('WebSocket disconnected');
           this.disconnectCallbacks.forEach(cb => cb());
           if (!this.manualClose) {
             this.scheduleReconnect();

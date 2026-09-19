@@ -47,10 +47,10 @@ export function formatLatency(ms: number): string {
 // ==================== LLM 历史页 ====================
 
 /**
- * 费用 → "¥0.001234"（保留 6 位小数）。
+ * 费用 → "¥0.001234"（缺省 6 位小数；图表轴等短格式场景可收窄位数）。
  */
-export function formatCost(cost: number): string {
-  return `¥${cost.toFixed(6)}`;
+export function formatCost(cost: number, fractionDigits = 6): string {
+  return `¥${cost.toFixed(fractionDigits)}`;
 }
 
 /** 延迟档位样式类（fast / normal / slow） */
@@ -92,7 +92,7 @@ export function getClientTypeLabel(type: string): string {
 export function truncateText(text: string, maxLength: number): string {
   if (!text) return '-';
   if (text.length <= maxLength) return text;
-  return text.substring(0, maxLength) + '...';
+  return `${text.substring(0, maxLength)}…`;
 }
 
 // ==================== 观众档案 ====================

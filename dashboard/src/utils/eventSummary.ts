@@ -15,6 +15,8 @@
 // 注意：事件 timestamp 是 Unix 秒（与 Dashboard/LiveObserver 既有用法一致），
 // 调用方如需展示相对时间请自行换算。
 
+import { truncateText } from '@/utils/format';
+
 /**
  * 按业务族抽取事件的人类可读摘要。
  *
@@ -75,12 +77,7 @@
   return type;
 }
 
-function truncate(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  return `${text.slice(0, maxLen)}…`;
-}
-
 function pickString(value: unknown, maxLen = 24): string {
   if (typeof value !== 'string' || value.length === 0) return '';
-  return truncate(value, maxLen);
+  return truncateText(value, maxLen);
 }
