@@ -22,9 +22,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated
 import asyncio
-import os
-import subprocess
-import sys
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -195,20 +192,14 @@ async def batch_update_config(
 
 @router.post("/restart", response_model=ConfigUpdateResponse)
 async def restart_service(server: ServerDep) -> ConfigUpdateResponse:
+    """触发整个服务进程重启。
+
+    编排逻辑（拉起新进程 → 优雅清理 → 退出）在 ``DashboardServer.graceful_restart``，
+    本端点只负责触发并先行返回响应。
+    """
     try:
         logger.info("收到重启服务请求")
-
-        async def _restart():
-            await asyncio.sleep(0.5)
-            subprocess.Popen(
-                [sys.executable] + sys.argv,
-                cwd=os.getcwd(),
-                close_fds=True,
-            )
-            os._exit(0)
-
-        asyncio.create_task(_restart())
-
+        asyncio.create_task(server.graceful_restart())
         return ConfigUpdateResponse(
             success=True,
             message="正在重启服务...",

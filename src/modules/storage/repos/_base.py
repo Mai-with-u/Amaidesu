@@ -32,5 +32,13 @@ class BaseRepo:
             return await asyncio.to_thread(fn, *args)
         return await asyncio.to_thread(fn)
 
+    async def close(self) -> None:
+        """关闭共享连接管理器持有的全部连接（幂等，落盘 WAL/事务）。
+
+        各域仓储共享同一管理器，任一仓储关闭一次即可；调用方应先停止所有
+        使用该管理器的后台任务。
+        """
+        await self._run_in_executor(self._manager.close_all)
+
 
 __all__ = ["BaseRepo"]

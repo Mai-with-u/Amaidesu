@@ -5,7 +5,10 @@ Dashboard 服务器主类
 """
 
 import asyncio
+import os
 import socket
+import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -343,6 +346,47 @@ class DashboardServer:
     def get_url(self) -> str:
         """获取访问 URL"""
         return f"http://{self.host}:{self.port}"
+
+    async def graceful_restart(self) -> None:
+        """重启整个服务进程：拉起新实例 → 优雅清理当前进程 → os._exit 收口。
+
+        先拉起新进程再清理旧进程：旧进程的 stop/清理序列只需几百毫秒即可完成，
+        而新进程的 Python 解释器冷启动加应用装配需要数秒，新进程绑定端口时旧
+        进程监听 socket 早已释放，不会冲突。
+
+        终态必须用 ``os._exit``：运行在 ``asyncio.run`` 内，``sys.exit`` 会转为
+        异常沿事件循环传播走非干净路径；os._exit 跳过的清理由前面的优雅清理
+        序列补齐（WS/广播/日志 sink/vite 子进程/SQLite 连接落盘）。
+        """
+        self.logger.info("准备重启服务进程...")
+        await asyncio.sleep(0.5)
+        try:
+            subprocess.Popen(
+                [sys.executable] + sys.argv,
+                cwd=os.getcwd(),
+                close_fds=True,
+            )
+        except Exception:
+            self.logger.exception("拉起新进程失败，放弃重启（当前进程保持运行）")
+            return
+
+        await self.stop()
+        await self.cleanup()
+        await self._close_shared_storage()
+        self.logger.info("重启清理完成，进程即将退出")
+        os._exit(0)
+
+    async def _close_shared_storage(self) -> None:
+        """关闭注入仓储共享的 SQLite 连接管理器，确保 WAL/事务落盘。
+
+        各仓储构造时注入同一连接管理器，关闭一次即可（close_all 幂等）。
+        """
+        repos = (self.viewer_repo, self.chat_repo, self.llm_repo, self.rundown_repo)
+        for repo in repos:
+            if repo is not None:
+                await repo.close()
+                return
+        self.logger.debug("无注入仓储，跳过 SQLite 连接关闭")
 
     @property
     def widget_service(self) -> Optional[DanmakuWidgetService]:
