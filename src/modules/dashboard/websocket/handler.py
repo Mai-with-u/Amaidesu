@@ -60,7 +60,10 @@ class WebSocketHandler:
         self._send_queues[client_id] = queue
         self._writer_tasks[client_id] = asyncio.create_task(self._writer_loop(client_id, websocket, queue))
 
-        logger.info(f"WebSocket 客户端连接: {client_id}，当前连接数: {self.client_count}")
+        # 取 UA 尾段（含浏览器专属标识如 Edg/xxx、Chrome/xxx、OBS 等）区分连接来源
+        ua_full = websocket.headers.get("user-agent") or "unknown"
+        ua = ua_full.split()[-1] if ua_full.split() else ua_full
+        logger.info(f"WebSocket 客户端连接: {client_id}，当前连接数: {self.client_count}，UA尾段: {ua}")
 
         # 发送欢迎消息（入队，由 writer task 串行发送）
         await self.send_to_client(
@@ -270,8 +273,9 @@ class WebSocketHandler:
             while True:
                 message = await websocket.receive_text()
                 await self.handle_message(client_id, message)
-        except WebSocketDisconnect:
-            logger.info(f"客户端 {client_id} 主动断开连接")
+        except WebSocketDisconnect as e:
+            # 关闭码区分来源：1001 页面卸载/导航，1000 JS 主动 close，其余见 RFC 6455
+            logger.info(f"客户端 {client_id} 主动断开连接 (close code: {e.code})")
         except asyncio.CancelledError:
             # 关闭信号：静默退出（finally 负责 disconnect，避免 starlette 打印 ASGI traceback）
             pass
