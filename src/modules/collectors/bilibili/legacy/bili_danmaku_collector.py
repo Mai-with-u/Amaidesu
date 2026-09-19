@@ -95,7 +95,7 @@ class BiliDanmakuCollector(BaseCollector):
         self.api_url = f"https://api.live.bilibili.com/xlive/web-room/v1/dM/gethistory?roomid={self.room_id}"
 
         # 状态变量
-        self._latest_timestamp: float = time.time()
+        self._latest_timestamp_s: float = time.time()
         self._session: Optional[aiohttp.ClientSession] = None
         self.is_started: bool = False
 
@@ -190,7 +190,7 @@ class BiliDanmakuCollector(BaseCollector):
             self.logger.warning("aiohttp session 未初始化或已关闭，跳过本次轮询。")
             return
 
-        new_max_timestamp = self._latest_timestamp
+        new_max_timestamp = self._latest_timestamp_s
 
         try:
             self.logger.debug(f"轮询 Bilibili API: {self.api_url}")
@@ -214,7 +214,7 @@ class BiliDanmakuCollector(BaseCollector):
                         timestamp = item.get("check_info", {}).get("ts")
                         item.get("uid")
 
-                        if timestamp and timestamp > self._latest_timestamp:
+                        if timestamp and timestamp > self._latest_timestamp_s:
                             new_danmakus.append(item)
                             new_max_timestamp = max(new_max_timestamp, timestamp)
 
@@ -232,7 +232,7 @@ class BiliDanmakuCollector(BaseCollector):
                     else:
                         self.logger.debug("没有新的弹幕")
 
-                    self._latest_timestamp = new_max_timestamp
+                    self._latest_timestamp_s = new_max_timestamp
                 else:
                     self.logger.warning(
                         f"Bilibili API 返回错误: code={data.get('code')}, message={data.get('message')}"
