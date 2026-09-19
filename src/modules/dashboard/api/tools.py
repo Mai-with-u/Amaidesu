@@ -43,6 +43,7 @@ from src.modules.dashboard.services.tool_catalog import (
     build_tool_catalog,
     safe_list_providers,
 )
+from src.modules.dashboard.schemas.tool_catalog import ToolCatalogResponse
 from src.modules.dashboard.utils.component_helper import config_dir, read_toml_dict
 from src.modules.logging import get_logger
 
@@ -259,10 +260,12 @@ async def list_tools(
     return {"tools": tools}
 
 
-@router.get("/tools/categories", summary="工具提供者分类目录（注册表运行态 ∪ 配置声明态）")
+@router.get(
+    "/tools/categories", response_model=ToolCatalogResponse, summary="工具提供者分类目录（注册表运行态 ∪ 配置声明态）"
+)
 async def list_tool_categories(
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> ToolCatalogResponse:
     """工具页侧边栏与提供者分组的数据源。
 
     提供者卡片以**运行时注册表为事实源**，∪ 配置声明态；卡片字段与分类
@@ -271,7 +274,7 @@ async def list_tool_categories(
     registry = _get_registry(server)
     tools_cfg = _get_tools_config(server)
     main_config = server.config_service.main_config if server.config_service else {}
-    return build_tool_catalog(registry, tools_cfg, main_config)
+    return ToolCatalogResponse.model_validate(build_tool_catalog(registry, tools_cfg, main_config))
 
 
 def _write_config_updates(config_dir: Path, file_name: str, updates: Dict[str, Any]) -> None:
