@@ -204,6 +204,7 @@ def _supports_reconnect(registry: Any, tool_name: str) -> bool:
     try:
         return bool(fn(tool_name))
     except Exception:  # noqa: BLE001 - 兼容层兜底
+        logger.warning(f"provider_supports_reconnect 查询失败，按不支持重连处理: {tool_name}", exc_info=True)
         return False
 
 

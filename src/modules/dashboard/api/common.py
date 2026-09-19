@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
+from src.modules.logging import get_logger
+
+logger = get_logger("DashboardAPICommon")
+
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
 
@@ -20,4 +24,5 @@ def resolve_streamer_agent(server: "DashboardServer") -> Optional[Any]:
     try:
         return am.get_agent_by_name("streamer")
     except Exception:
+        logger.warning("解析 streamer Agent 实例失败，按未装配处理", exc_info=True)
         return None

@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends
 
 from src.modules.dashboard.api.common import resolve_streamer_agent
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.logging import get_logger
 from src.modules.dashboard.schemas.rundown import (
     RundownConfigView,
     RundownControlRequest,
@@ -32,6 +33,8 @@ from src.modules.dashboard.schemas.rundown import (
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
 
+
+logger = get_logger("DashboardRundownAPI")
 
 router = APIRouter()
 
@@ -121,6 +124,7 @@ async def get_rundown_state(server: ServerDep) -> RundownStateResponse:
             if not is_available():
                 return _empty_state_response(server, message="流程单未加载", cfg=cfg)
         except Exception:
+            logger.warning("流程单可用性检查失败，按未加载降级", exc_info=True)
             return _empty_state_response(server, message="流程单未加载", cfg=cfg)
 
     view_getter_raw = getattr(agent, "get_rundown_view", None)

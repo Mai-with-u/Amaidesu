@@ -58,6 +58,7 @@ def _config_enabled(server: "DashboardServer") -> bool:
     try:
         section = server.config_service.get_section("simulator", default={}) or {}
     except Exception:
+        logger.warning("读取 [simulator] 配置段失败，按未启用处理", exc_info=True)
         return False
     if not isinstance(section, dict):
         return False
@@ -81,6 +82,7 @@ def _config_summary(server: "DashboardServer") -> Dict[str, Any]:
     try:
         section = server.config_service.get_section("simulator", default={}) or {}
     except Exception:
+        logger.warning("读取 [simulator] 配置段失败，按空摘要处理", exc_info=True)
         return {}
     if not isinstance(section, dict):
         return {}

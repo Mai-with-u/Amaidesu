@@ -6,12 +6,9 @@
 HTTP 语义（503 / 400 / 写回映射）留在 api 层。
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from src.modules.logging import get_logger
-
-if TYPE_CHECKING:
-    pass
 
 logger = get_logger("ToolCatalog")
 
@@ -77,6 +74,7 @@ def safe_list_providers(registry: Any) -> List[Dict[str, Any]]:
     try:
         records = fn()
     except Exception:  # noqa: BLE001 - 兼容层兜底
+        logger.warning("list_providers 调用失败，按空提供者列表处理", exc_info=True)
         return []
     return [r for r in records if isinstance(r, dict)]
 
