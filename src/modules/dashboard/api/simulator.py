@@ -21,6 +21,7 @@ Simulator API（世界模拟器三模式控制面）
   而不是 404 —— 控制面要与"未启用"区分清楚。
 - 人设/礼物 CRUD 走 ``SimulatorService`` 持有的 ``PersonaPool`` / ``GiftGenerator``
   （DB 写穿 + 内存缓存刷新），Dashboard 不直接持有存储连接。
+- 请求/响应契约定义在 ``schemas.simulator``，本模块只留路由与依赖注入。
 """
 
 from __future__ import annotations
@@ -29,15 +30,33 @@ import uuid
 from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
 
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.schemas.simulator import (
+    GiftCreateRequest,
+    GiftCreateResponse,
+    GiftListResponse,
+    GiftOut,
+    GiftUpdateRequest,
+    PersonaCreateRequest,
+    PersonaCreateResponse,
+    PersonaListResponse,
+    PersonaOut,
+    PersonaUpdateRequest,
+    ReplayDatesResponse,
+    SimulatorOperationResponse,
+    SimulatorReplayProgress,
+    SimulatorRunStateResponse,
+    SimulatorStartRequest,
+    SimulatorStatusResponse,
+)
 from src.modules.logging import get_logger
 from src.modules.storage.database import sqlite_database as get_default_db
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
     from src.modules.simulator.service import SimulatorService
+    from src.modules.simulator.types import Persona
 
 
 router = APIRouter()
@@ -113,72 +132,21 @@ _CONFIG_SUMMARY_KEYS = (
 )
 
 
-class SimulatorStartRequest(BaseModel):
-    """启动请求体（replay 模式的录制日期覆盖，其余模式忽略）。"""
-
-    replay_date: Optional[str] = Field(default=None, description="录制日期 YYYY-MM-DD（replay 模式用）")
-
-
-class PersonaCreateRequest(BaseModel):
-    """新增常驻人设请求体（user_id 由服务端生成）。"""
-
-    user_nickname: str = Field(min_length=1, max_length=50)
-    role: str = Field(pattern="^(fan|teaser|newcomer|hater|veteran|passerby)$")
-    personality: str = Field(min_length=1)
-    speaking_style: str = Field(min_length=1)
-    fans_medal_level: int = Field(default=0, ge=0, le=40)
-    guard_level: int = Field(default=0, ge=0, le=3)
-    context_window_size: Optional[int] = Field(default=None, ge=1, le=50)
-
-
-class PersonaUpdateRequest(BaseModel):
-    """按字段更新常驻人设请求体（None 字段不更新）。"""
-
-    user_nickname: Optional[str] = Field(default=None, min_length=1, max_length=50)
-    role: Optional[str] = Field(default=None, pattern="^(fan|teaser|newcomer|hater|veteran|passerby)$")
-    personality: Optional[str] = None
-    speaking_style: Optional[str] = None
-    fans_medal_level: Optional[int] = Field(default=None, ge=0, le=40)
-    guard_level: Optional[int] = Field(default=None, ge=0, le=3)
-    context_window_size: Optional[int] = Field(default=None, ge=1, le=50)
-    is_active: Optional[bool] = None
-
-
-class GiftCreateRequest(BaseModel):
-    """新增礼物请求体。"""
-
-    gift_id: str = Field(min_length=1, max_length=64, pattern="^[a-zA-Z0-9_]+$")
-    gift_name: str = Field(min_length=1, max_length=50)
-    category: str = Field(pattern="^(normal|medium|premium|sc)$")
-    weight: int = Field(default=1, ge=1)
-    data_type: str = Field(default="gift", pattern="^(gift|super_chat)$")
-    sc_amount_rmb: Optional[int] = Field(default=None, ge=1)
-
-
-class GiftUpdateRequest(BaseModel):
-    """按字段更新礼物请求体（None 字段不更新）。"""
-
-    gift_name: Optional[str] = Field(default=None, min_length=1, max_length=50)
-    category: Optional[str] = Field(default=None, pattern="^(normal|medium|premium|sc)$")
-    weight: Optional[int] = Field(default=None, ge=1)
-    data_type: Optional[str] = Field(default=None, pattern="^(gift|super_chat)$")
-    sc_amount_rmb: Optional[int] = Field(default=None, ge=1)
+def _replay_progress_of(service: Optional["SimulatorService"]) -> Optional[SimulatorReplayProgress]:
+    """读服务的回放进度并落为响应模型（无进度返回 None）。"""
+    raw = getattr(service, "replay_progress", None) if service is not None else None
+    if not isinstance(raw, dict):
+        return None
+    return SimulatorReplayProgress(
+        date=raw.get("date"),
+        total=int(raw.get("total") or 0),
+        remaining=int(raw.get("remaining") or 0),
+    )
 
 
 @router.get("/status", summary="模拟器状态（enabled / is_available / is_running / mode + 回放进度 + 配置摘要）")
-async def get_simulator_status(server: ServerDep) -> Dict[str, Any]:
+async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
     """读取模拟器当前状态。
-
-    返回：
-        {
-            "enabled":          bool,      # [simulator].enabled 开关
-            "is_available":     bool,      # SimulatorService 实例是否存在（setup 后即 True）
-            "is_running":       bool,      # 当前是否在世界循环里
-            "mode":             str,       # 当前运行模式（off/generate/replay）
-            "replay_progress":  dict|null, # replay 模式进度（date/total/remaining）
-            "message":          str,       # 给前端的状态说明
-            "config":           { ... },   # 只读配置摘要
-        }
 
     不会抛 404——enabled=false 时返回 ``is_available=false``，前端可据此渲染空态引导。
     """
@@ -187,7 +155,6 @@ async def get_simulator_status(server: ServerDep) -> Dict[str, Any]:
     is_available = service is not None
     is_running = bool(getattr(service, "is_running", False))
     mode = str(getattr(service, "mode", "off"))
-    replay_progress = getattr(service, "replay_progress", None)
 
     if not enabled:
         message = "[simulator].enabled=false；模拟器未启用。请在 config/core.toml 的 [simulator] 段将 enabled 设为 true 并重启。"
@@ -198,68 +165,88 @@ async def get_simulator_status(server: ServerDep) -> Dict[str, Any]:
     else:
         message = "模拟器已装配但未运行。"
 
-    return {
-        "enabled": enabled,
-        "is_available": is_available,
-        "is_running": is_running,
-        "mode": mode,
-        "replay_progress": replay_progress,
-        "message": message,
-        "config": _config_summary(server),
-    }
+    return SimulatorStatusResponse(
+        enabled=enabled,
+        is_available=is_available,
+        is_running=is_running,
+        mode=mode,
+        replay_progress=_replay_progress_of(service),
+        message=message,
+        config=_config_summary(server),
+    )
 
 
-@router.post("/start", summary="按当前 mode 启动世界循环（generate/replay）")
-async def start_simulator(server: ServerDep, request: Optional[SimulatorStartRequest] = None) -> Dict[str, Any]:
+@router.post(
+    "/start",
+    response_model=SimulatorRunStateResponse,
+    response_model_exclude_none=True,
+    summary="按当前 mode 启动世界循环（generate/replay）",
+)
+async def start_simulator(
+    server: ServerDep, request: Optional[SimulatorStartRequest] = None
+) -> SimulatorRunStateResponse:
     """启动模拟器（需 enabled；幂等：已在运行时返回 success=True）。
 
     replay 模式可传 ``replay_date`` 覆盖配置中的默认录制日期。
     """
     enabled = _config_enabled(server)
     if not enabled:
-        return _result(False, "[simulator].enabled=false；无法启动。请修改配置后重启应用。")
+        return SimulatorRunStateResponse(
+            success=False, message="[simulator].enabled=false；无法启动。请修改配置后重启应用。"
+        )
     service = _get_service(server)
     if service is None:
-        return _result(False, "SimulatorService 未注入（通常因存储仓储/LLMManager 缺失或 --dry 模式）。")
+        return SimulatorRunStateResponse(
+            success=False, message="SimulatorService 未注入（通常因存储仓储/LLMManager 缺失或 --dry 模式）。"
+        )
     if getattr(service, "is_running", False):
-        return _result(True, "模拟器已在运行", is_running=True)
+        return SimulatorRunStateResponse(success=True, message="模拟器已在运行", is_running=True)
 
     replay_date = request.replay_date if request is not None else None
     try:
         await service.start(replay_date=replay_date)
     except Exception as exc:  # noqa: BLE001 - 边界
         logger.exception(f"模拟器启动失败: {exc}")
-        return _result(False, f"启动失败: {exc}")
+        return SimulatorRunStateResponse(success=False, message=f"启动失败: {exc}")
 
     if not getattr(service, "is_running", False):
-        return _result(False, "启动未生效（mode=off 或 replay 缺少可用录制日期），详见应用日志。", is_running=False)
+        return SimulatorRunStateResponse(
+            success=False, message="启动未生效（mode=off 或 replay 缺少可用录制日期），详见应用日志。", is_running=False
+        )
 
-    return _result(
-        True,
-        "模拟器已启动",
+    return SimulatorRunStateResponse(
+        success=True,
+        message="模拟器已启动",
         is_running=True,
-        mode=getattr(service, "mode", "off"),
-        replay_progress=getattr(service, "replay_progress", None),
+        mode=str(getattr(service, "mode", "off")),
+        replay_progress=_replay_progress_of(service),
     )
 
 
-@router.post("/stop", summary="停止模拟器生成循环（幂等）")
-async def stop_simulator(server: ServerDep) -> Dict[str, Any]:
+@router.post(
+    "/stop",
+    response_model=SimulatorRunStateResponse,
+    response_model_exclude_none=True,
+    summary="停止模拟器生成循环（幂等）",
+)
+async def stop_simulator(server: ServerDep) -> SimulatorRunStateResponse:
     """停止模拟器（幂等：未运行时返回 success=True）。"""
     service = _get_service(server)
     if service is None:
         # 未注入等价于未运行 —— 幂等返回成功，避免前端反复点停出现误导
-        return _result(True, "SimulatorService 未注入，视为未运行", is_running=False)
+        return SimulatorRunStateResponse(success=True, message="SimulatorService 未注入，视为未运行", is_running=False)
     if not getattr(service, "is_running", False):
-        return _result(True, "模拟器未运行", is_running=False)
+        return SimulatorRunStateResponse(success=True, message="模拟器未运行", is_running=False)
 
     try:
         await service.stop()
     except Exception as exc:  # noqa: BLE001 - 边界
         logger.exception(f"模拟器停止失败: {exc}")
-        return _result(False, f"停止失败: {exc}")
+        return SimulatorRunStateResponse(success=False, message=f"停止失败: {exc}")
 
-    return _result(True, "模拟器已停止", is_running=bool(getattr(service, "is_running", False)))
+    return SimulatorRunStateResponse(
+        success=True, message="模拟器已停止", is_running=bool(getattr(service, "is_running", False))
+    )
 
 
 # ------------------------------------------------------------------ #
@@ -267,27 +254,20 @@ async def stop_simulator(server: ServerDep) -> Dict[str, Any]:
 # ------------------------------------------------------------------ #
 
 
-@router.get("/replay/dates", summary="可回放的录制日期列表（live_chat 业务表）")
-async def list_replay_dates(server: ServerDep) -> Dict[str, Any]:
+@router.get("/replay/dates", response_model=ReplayDatesResponse, summary="可回放的录制日期列表（live_chat 业务表）")
+async def list_replay_dates(server: ServerDep) -> ReplayDatesResponse:
     """列出有弹幕记录的日期（按时间正序），供回放选择器使用。
 
     数据源为 ``live_chat`` 业务表（消息流单一事实源，与 SimulatorService
     实例无关），经默认数据库工厂取明细仓储；enabled=false 也可用。
     """
     dates = await get_default_db().chat.list_chat_dates()
-    return {"dates": dates}
+    return ReplayDatesResponse(dates=dates)
 
 
 # ------------------------------------------------------------------ #
 # 常驻人设 CRUD（经 PersonaPool 写穿 DB）                             #
 # ------------------------------------------------------------------ #
-
-
-def _result(success: bool, message: str, **extra: Any) -> Dict[str, Any]:
-    """写操作端点统一响应包络：{success, message} + 附加字段。"""
-    out: Dict[str, Any] = {"success": success, "message": message}
-    out.update(extra)
-    return out
 
 
 def _require_pool(server: "DashboardServer") -> Any:
@@ -304,28 +284,31 @@ def _require_gift_generator(server: "DashboardServer") -> Any:
     return getattr(service, "gift_generator", None)
 
 
-def _persona_dump(persona: Any) -> Dict[str, Any]:
-    return persona.model_dump()
+def _persona_out(persona: "Persona") -> PersonaOut:
+    """Persona 模型 → 响应条目（role 枚举落其字符串值）。"""
+    return PersonaOut.model_validate(persona.model_dump())
 
 
-@router.get("/personas", summary="常驻人设列表")
-async def list_personas(server: ServerDep) -> Dict[str, Any]:
+@router.get("/personas", response_model=PersonaListResponse, summary="常驻人设列表")
+async def list_personas(server: ServerDep) -> PersonaListResponse:
     pool = _require_pool(server)
     if pool is None:
-        return {"personas": [], "is_available": False}
-    return {
-        "personas": [_persona_dump(p) for p in pool.list_residents()],
-        "is_available": True,
-    }
+        return PersonaListResponse(personas=[], is_available=False)
+    return PersonaListResponse(
+        personas=[_persona_out(p) for p in pool.list_residents()],
+        is_available=True,
+    )
 
 
-@router.post("/personas", summary="新增常驻人设")
-async def create_persona(server: ServerDep, request: PersonaCreateRequest) -> Dict[str, Any]:
+@router.post(
+    "/personas", response_model=PersonaCreateResponse, response_model_exclude_none=True, summary="新增常驻人设"
+)
+async def create_persona(server: ServerDep, request: PersonaCreateRequest) -> PersonaCreateResponse:
     from src.modules.simulator.types import Persona, PersonaRole
 
     pool = _require_pool(server)
     if pool is None:
-        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
+        return PersonaCreateResponse(success=False, message="模拟器未装配（enabled=false 或未 setup）")
     persona = Persona(
         user_id=f"sim_{uuid.uuid4().hex[:8]}",
         user_nickname=request.user_nickname,
@@ -338,34 +321,38 @@ async def create_persona(server: ServerDep, request: PersonaCreateRequest) -> Di
     )
     added = await pool.add_personas([persona])
     if added == 0:
-        return _result(False, f"昵称已存在: {request.user_nickname}")
+        return PersonaCreateResponse(success=False, message=f"昵称已存在: {request.user_nickname}")
     logger.info(f"已新增常驻人设: {request.user_nickname}")
-    return _result(True, "已新增", persona=_persona_dump(persona))
+    return PersonaCreateResponse(success=True, message="已新增", persona=_persona_out(persona))
 
 
-@router.patch("/personas/{user_id}", summary="更新常驻人设（仅传入字段被更新）")
-async def update_persona(server: ServerDep, user_id: str, request: PersonaUpdateRequest) -> Dict[str, Any]:
+@router.patch(
+    "/personas/{user_id}",
+    response_model=SimulatorOperationResponse,
+    summary="更新常驻人设（仅传入字段被更新）",
+)
+async def update_persona(server: ServerDep, user_id: str, request: PersonaUpdateRequest) -> SimulatorOperationResponse:
     pool = _require_pool(server)
     if pool is None:
-        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
+        return SimulatorOperationResponse(success=False, message="模拟器未装配（enabled=false 或未 setup）")
     fields = {k: v for k, v in request.model_dump().items() if v is not None}
     if not fields:
-        return _result(False, "无可更新字段")
+        return SimulatorOperationResponse(success=False, message="无可更新字段")
     updated = await pool.update_persona(user_id, fields)
     if not updated:
-        return _result(False, f"人设不存在: {user_id}")
-    return _result(True, "已更新")
+        return SimulatorOperationResponse(success=False, message=f"人设不存在: {user_id}")
+    return SimulatorOperationResponse(success=True, message="已更新")
 
 
-@router.delete("/personas/{user_id}", summary="删除常驻人设")
-async def delete_persona(server: ServerDep, user_id: str) -> Dict[str, Any]:
+@router.delete("/personas/{user_id}", response_model=SimulatorOperationResponse, summary="删除常驻人设")
+async def delete_persona(server: ServerDep, user_id: str) -> SimulatorOperationResponse:
     pool = _require_pool(server)
     if pool is None:
-        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
+        return SimulatorOperationResponse(success=False, message="模拟器未装配（enabled=false 或未 setup）")
     deleted = await pool.delete_persona(user_id)
     if not deleted:
-        return _result(False, f"人设不存在: {user_id}")
-    return _result(True, "已删除")
+        return SimulatorOperationResponse(success=False, message=f"人设不存在: {user_id}")
+    return SimulatorOperationResponse(success=True, message="已删除")
 
 
 # ------------------------------------------------------------------ #
@@ -373,24 +360,24 @@ async def delete_persona(server: ServerDep, user_id: str) -> Dict[str, Any]:
 # ------------------------------------------------------------------ #
 
 
-@router.get("/gifts", summary="礼物目录列表")
-async def list_gifts(server: ServerDep) -> Dict[str, Any]:
+@router.get("/gifts", response_model=GiftListResponse, summary="礼物目录列表")
+async def list_gifts(server: ServerDep) -> GiftListResponse:
     gen = _require_gift_generator(server)
     if gen is None:
-        return {"gifts": [], "is_available": False}
-    return {
-        "gifts": [g.model_dump() for g in gen.list_gifts()],
-        "is_available": True,
-    }
+        return GiftListResponse(gifts=[], is_available=False)
+    return GiftListResponse(
+        gifts=[GiftOut.model_validate(g.model_dump()) for g in gen.list_gifts()],
+        is_available=True,
+    )
 
 
-@router.post("/gifts", summary="新增礼物")
-async def create_gift(server: ServerDep, request: GiftCreateRequest) -> Dict[str, Any]:
+@router.post("/gifts", response_model=GiftCreateResponse, response_model_exclude_none=True, summary="新增礼物")
+async def create_gift(server: ServerDep, request: GiftCreateRequest) -> GiftCreateResponse:
     from src.modules.simulator.types import GiftItem
 
     gen = _require_gift_generator(server)
     if gen is None:
-        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
+        return GiftCreateResponse(success=False, message="模拟器未装配（enabled=false 或未 setup）")
     gift = GiftItem(
         gift_id=request.gift_id,
         gift_name=request.gift_name,
@@ -401,34 +388,34 @@ async def create_gift(server: ServerDep, request: GiftCreateRequest) -> Dict[str
     )
     added = await gen.add_gift(gift)
     if not added:
-        return _result(False, f"gift_id 已存在: {request.gift_id}")
+        return GiftCreateResponse(success=False, message=f"gift_id 已存在: {request.gift_id}")
     logger.info(f"已新增礼物: {request.gift_name}")
-    return _result(True, "已新增", gift=gift.model_dump())
+    return GiftCreateResponse(success=True, message="已新增", gift=GiftOut.model_validate(gift.model_dump()))
 
 
-@router.patch("/gifts/{gift_id}", summary="更新礼物（仅传入字段被更新）")
-async def update_gift(server: ServerDep, gift_id: str, request: GiftUpdateRequest) -> Dict[str, Any]:
+@router.patch("/gifts/{gift_id}", response_model=SimulatorOperationResponse, summary="更新礼物（仅传入字段被更新）")
+async def update_gift(server: ServerDep, gift_id: str, request: GiftUpdateRequest) -> SimulatorOperationResponse:
     gen = _require_gift_generator(server)
     if gen is None:
-        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
+        return SimulatorOperationResponse(success=False, message="模拟器未装配（enabled=false 或未 setup）")
     fields = {k: v for k, v in request.model_dump().items() if v is not None}
     if not fields:
-        return _result(False, "无可更新字段")
+        return SimulatorOperationResponse(success=False, message="无可更新字段")
     try:
         updated = await gen.update_gift(gift_id, fields)
     except ValueError as exc:
-        return _result(False, str(exc))
+        return SimulatorOperationResponse(success=False, message=str(exc))
     if not updated:
-        return _result(False, f"礼物不存在: {gift_id}")
-    return _result(True, "已更新")
+        return SimulatorOperationResponse(success=False, message=f"礼物不存在: {gift_id}")
+    return SimulatorOperationResponse(success=True, message="已更新")
 
 
-@router.delete("/gifts/{gift_id}", summary="删除礼物")
-async def delete_gift(server: ServerDep, gift_id: str) -> Dict[str, Any]:
+@router.delete("/gifts/{gift_id}", response_model=SimulatorOperationResponse, summary="删除礼物")
+async def delete_gift(server: ServerDep, gift_id: str) -> SimulatorOperationResponse:
     gen = _require_gift_generator(server)
     if gen is None:
-        return _result(False, "模拟器未装配（enabled=false 或未 setup）")
+        return SimulatorOperationResponse(success=False, message="模拟器未装配（enabled=false 或未 setup）")
     deleted = await gen.delete_gift(gift_id)
     if not deleted:
-        return _result(False, f"礼物不存在: {gift_id}")
-    return _result(True, "已删除")
+        return SimulatorOperationResponse(success=False, message=f"礼物不存在: {gift_id}")
+    return SimulatorOperationResponse(success=True, message="已删除")
