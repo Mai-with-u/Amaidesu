@@ -9,7 +9,6 @@ WebSocket 客户端；字幕显示由字幕基础设施 ``SubtitleService`` 通�
 """
 
 from collections import deque
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Deque, List, Optional
 
 from src.modules.dashboard.widget.models import (
@@ -22,6 +21,7 @@ from src.modules.dashboard.widget.models import (
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RoomMessagePayload
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -202,9 +202,7 @@ class DanmakuWidgetService:
         try:
             user_name = payload.user.name if payload.user else "匿名用户"
             user_id = payload.user.id if payload.user else ""
-            timestamp = (
-                datetime.fromtimestamp(payload.timestamp_ms / 1000.0) if payload.timestamp_ms else datetime.now()
-            )
+            timestamp = payload.timestamp_ms if payload.timestamp_ms else now_ms()
             importance = 0.5
             platform = "unknown"
             # 场次主键（int）转字符串承载（DanmakuWidgetMessage.room_id 为 str；0=未归属 → None）
@@ -216,7 +214,7 @@ class DanmakuWidgetService:
                     user_id=user_id,
                     content=payload.content or "",
                     message_type=MessageType.GIFT,
-                    timestamp=timestamp,
+                    timestamp_ms=timestamp,
                     importance=importance,
                     gift_name=payload.gift.name if payload.gift else None,
                     gift_count=payload.gift.count if payload.gift else None,
@@ -231,7 +229,7 @@ class DanmakuWidgetService:
                     user_id=user_id,
                     content=payload.content or "",
                     message_type=MessageType.SUPER_CHAT,
-                    timestamp=timestamp,
+                    timestamp_ms=timestamp,
                     importance=importance,
                     sc_price=payload.sc.amount if payload.sc else None,
                     sc_message=payload.content or None,
@@ -246,7 +244,7 @@ class DanmakuWidgetService:
                     user_id=user_id,
                     content=payload.content or "",
                     message_type=MessageType.ENTER,
-                    timestamp=timestamp,
+                    timestamp_ms=timestamp,
                     importance=importance,
                     platform=platform,
                     room_id=room_id,
@@ -258,7 +256,7 @@ class DanmakuWidgetService:
                 user_id=user_id,
                 content=payload.content or "",
                 message_type=MessageType.TEXT,
-                timestamp=timestamp,
+                timestamp_ms=timestamp,
                 importance=importance,
                 platform=platform,
                 room_id=room_id,

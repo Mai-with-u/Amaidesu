@@ -5,18 +5,18 @@
 用于 Warudo 等虚拟形象软件的网页道具场景。
 """
 
-from datetime import datetime
 from enum import StrEnum
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.modules.time_utils import now_ms
 from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
 
 
 class SubtitleWidgetMessage(BaseModel):
     text: str = Field(description="字幕文本")
-    timestamp: datetime = Field(default_factory=datetime.now, description="消息时间")
+    timestamp_ms: int = Field(default_factory=now_ms, description="消息时间（Unix 毫秒）")
     duration_ms: int = Field(default=5000, ge=1000, le=30000, description="显示持续时间（毫秒）")
 
 
@@ -76,7 +76,7 @@ class DanmakuWidgetMessage(BaseModel):
     user_id: str = Field(default="", description="用户 ID")
     content: str = Field(description="消息内容")
     message_type: MessageType = Field(description="消息类型")
-    timestamp: datetime = Field(default_factory=datetime.now, description="消息时间")
+    timestamp_ms: int = Field(default_factory=now_ms, description="消息时间（Unix 毫秒）")
     importance: float = Field(default=0.5, ge=0.0, le=1.0, description="重要性评分")
 
     # 礼物专属字段
