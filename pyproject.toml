@@ -13,10 +13,11 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "requests>=2.31.0",
+    "packaging>=24.0",
+    "urllib3>=2.0.0",
     "websockets>=10.0",
     # 日志和配置
     "loguru>=0.7.0",
-    "toml>=0.10.0",
     # 数据验证
     "pydantic>=2.0",
     # VTube Studio 控制
@@ -55,33 +56,8 @@ stt = [
     "torchaudio>=2.0.0",
 ]
 
-# 开发依赖
-dev = [
-    "ruff>=0.1.0",
-    "pytest>=9.0.2",
-    "pytest-asyncio>=0.21.0",
-    "pytest-cov>=5.0.0",
-    "setuptools>=68.0.0",
-]
-
-# 所有可选依赖
-all = [
-    "amaidesu[stt]",
-    "amaidesu[dev]",
-]
-
 [project.scripts]
 amaidesu = "main:main"
-
-[tool.uv]
-# 开发模式下默认安装开发依赖
-dev-dependencies = [
-    "ruff>=0.1.0",
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "pytest-cov>=5.0.0",
-    "setuptools>=68.0.0",
-]
 
 [tool.ruff]
 include = ["*.py"]
@@ -139,8 +115,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
+# 开发依赖唯一声明处（uv 标准；工具链版本下限以实际解析为准）
 dev = [
     "pre-commit>=4.5.1",
+    "ruff>=0.1.0",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=5.0.0",
+    "setuptools>=68.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
