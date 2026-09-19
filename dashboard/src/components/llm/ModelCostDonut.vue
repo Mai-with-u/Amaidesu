@@ -6,12 +6,12 @@
 <template>
   <div class="donut-chart">
     <div
-      ref="containerRef"
-      class="dc-canvas"
+      class="dc-stage"
       :style="{ width: `${size}px`, height: `${size}px` }"
       role="img"
       aria-label="模型费用占比环形图"
     >
+      <div ref="containerRef" class="dc-canvas"></div>
       <div class="dc-center">
         <span class="dc-total-label">{{ totalLabel }}</span>
         <span class="dc-total-value">{{ totalText }}</span>
@@ -134,9 +134,15 @@ useECharts(containerRef, option);
   flex-wrap: wrap;
 }
 
-.dc-canvas {
+.dc-stage {
   position: relative;
   flex-shrink: 0;
+}
+
+/* echarts 独占此节点：容器内不渲染任何 Vue 子节点，避免 patch 撞上 canvas */
+.dc-canvas {
+  position: absolute;
+  inset: 0;
 }
 
 .dc-center {
