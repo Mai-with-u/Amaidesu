@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
 from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional, Protocol, cast
 
 from fastapi import APIRouter, Depends
@@ -39,7 +40,6 @@ from src.modules.dashboard.schemas.rundown import (
 from src.modules.dashboard.services.config_adapter import apply_config_updates
 from src.modules.dashboard.utils.component_helper import config_dir as resolve_config_dir
 from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown
-from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -201,7 +201,7 @@ async def duplicate_rundown(rundown_id: str, server: ServerDep) -> RundownMutate
     if source is None:
         return RundownMutateResponse(success=False, message=f"流程单 '{rundown_id}' 不存在", rundown_id=rundown_id)
 
-    new_id = f"{rundown_id}_copy_{now_ms() % 100_000:05d}"
+    new_id = f"{rundown_id}_copy_{uuid4().hex[:8]}"
     source.rundown_id = new_id
     source.title = f"{source.title} 副本"
     try:

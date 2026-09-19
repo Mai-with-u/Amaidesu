@@ -65,7 +65,7 @@ def runtime_tool_counts(registry: Any) -> Dict[Tuple[str, str], Tuple[int, int]]
             total, disabled = counts.get(key, (0, 0))
             counts[key] = (total + 1, disabled + (1 if registry.is_disabled(spec.name) else 0))
     except Exception:
-        pass
+        logger.warning("统计运行态工具计数失败，提供者卡片按 0 工具展示", exc_info=True)
     return counts
 
 

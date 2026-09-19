@@ -77,7 +77,7 @@ async def inject_message(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"注入消息失败: {e}")
+        logger.error(f"注入消息失败: {e}", exc_info=True)
         return InjectMessageResponse(success=False, error=str(e))
 
 
@@ -108,5 +108,5 @@ async def get_event_bus_stats(
             events_by_name=events_by_name,
         )
     except Exception as e:
-        logger.error(f"获取 EventBus 统计失败: {e}")
+        logger.error(f"获取 EventBus 统计失败: {e}", exc_info=True)
         return EventBusStatsResponse()

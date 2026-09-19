@@ -167,6 +167,7 @@ def _safe_tool_health_snapshot(registry: Any) -> Dict[str, Dict[str, Any]]:
     try:
         result = snapshot()
     except Exception:
+        logger.warning("tool_health_snapshot 调用失败，按无健康数据处理", exc_info=True)
         return {}
     return result if isinstance(result, dict) else {}
 
@@ -238,6 +239,7 @@ async def list_tools(
             include_scoped=True,  # Dashboard 工具页是运营面：可见一切
         )
     except Exception:
+        logger.warning("list_tools 调用失败，按空工具清单处理", exc_info=True)
         specs = []
 
     health_snapshot = _safe_tool_health_snapshot(registry)
@@ -367,6 +369,7 @@ async def control_tool(
     try:
         known = {s.name for s in registry.list_tools(include_disabled=True, include_tripped=True)}
     except Exception:
+        logger.warning("读取注册表工具名失败，按空名册处理（停用校验将放行未知名）", exc_info=True)
         known = set()
     if not enable and name not in known:
         raise HTTPException(status_code=404, detail=f"运行时未注册工具: {name}")

@@ -15,7 +15,7 @@ agent_manager 生成）。enabled 标记读 agents.toml ``[agents].enabled`` 名
 Agent 404。
 """
 
-from typing import TYPE_CHECKING, Annotated, List
+from typing import TYPE_CHECKING, Annotated, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -33,6 +33,7 @@ from src.modules.dashboard.utils.component_helper import config_dir, read_toml_d
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
+    from src.modules.agents.control import AgentControl
     from src.modules.dashboard.server import DashboardServer
 
 logger = get_logger("DashboardAgentsAPI")
@@ -46,7 +47,7 @@ ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 _RISKY_ACTIONS = (AgentControlAction.SHUTDOWN, AgentControlAction.RESTART)
 
 
-def _get_agent_control(server: "DashboardServer"):
+def _get_agent_control(server: "DashboardServer") -> "AgentControl":
     """取 AgentControl；未注入（极简启动/测试场景）时抛 503。"""
     control = getattr(server, "agent_control", None)
     if control is None:
@@ -57,7 +58,7 @@ def _get_agent_control(server: "DashboardServer"):
     return control
 
 
-def _get_agent_manager(server: "DashboardServer"):
+def _get_agent_manager(server: "DashboardServer") -> Optional[Any]:
     """取 AgentManager（descriptions / rebuild 数据源）；未注入时返回 None。"""
     return getattr(server, "agent_manager", None)
 

@@ -20,11 +20,13 @@ from src.modules.dashboard.schemas.system import (
     SystemStatusResponse,
 )
 from src.modules.dashboard.utils.component_helper import build_config_view, get_v2_component_list
+from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
 
 router = APIRouter()
+logger = get_logger("SystemAPI")
 
 # 全局启动时间
 _startup_time: float = time.time()
@@ -99,6 +101,7 @@ def _build_event_bus_stats(server: "DashboardServer") -> EventBusStats:
     try:
         stats = getter()
     except Exception:
+        logger.warning("读取 EventBus 统计失败，按零吞吐展示", exc_info=True)
         return EventBusStats(total_events=0)
     total = 0
     for entry in stats.values():
@@ -114,6 +117,7 @@ def _get_app_version() -> str:
 
         return version("amaidesu")
     except Exception:
+        logger.warning("读取 amaidesu 包版本失败，按未知版本展示", exc_info=True)
         return "0.0.0"
 
 
