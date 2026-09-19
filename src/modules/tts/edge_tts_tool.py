@@ -199,8 +199,8 @@ class EdgeTTSProvider:
             if tmp_filename:
                 try:
                     os.remove(tmp_filename)
-                except Exception:
-                    pass
+                except Exception as e:
+                    self.logger.debug(f"临时音频文件清理失败: {tmp_filename}: {e}")
 
     def _setup_audio_device(self) -> None:
         """初始化音频设备管理器（统一走系统默认输出设备）"""

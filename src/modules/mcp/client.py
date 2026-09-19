@@ -150,8 +150,8 @@ class McpClient:
                 # 重连前先释放旧实例，避免上下文泄漏
                 try:
                     await self._client.__aexit__(None, None, None)
-                except Exception:  # noqa: BLE001 - 旧实例释放失败不阻断重连
-                    pass
+                except Exception as e:  # noqa: BLE001 - 旧实例释放失败不阻断重连
+                    logger.debug(f"旧 MCP 实例释放失败（继续重连）: {e}")
             transport = self._build_transport()
             client = Client(transport, message_handler=self._build_message_handler(self._subscriptions))
             await client.__aenter__()

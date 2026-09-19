@@ -284,7 +284,8 @@ class OutlineLabel:
                 try:
                     font = ImageFont.truetype(path, self._font_px)
                     break
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Segoe UI Emoji 备选路径加载失败: {path}: {e}")
                     continue
         self._emoji_font_obj = font if font is not None else False
         return font

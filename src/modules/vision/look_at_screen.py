@@ -326,8 +326,8 @@ class LookAtScreenProvider(BaseToolProvider):
         if current == DEFAULT_VLM_TIMEOUT_S:
             try:
                 reader._timeout_s = float(timeout_s)
-            except Exception:  # noqa: BLE001 - 防御：自定义 reader 不一定有该字段
-                pass
+            except Exception as e:  # noqa: BLE001 - 防御：自定义 reader 不一定有该字段
+                logger.debug(f"reader 超时覆盖跳过（非默认 reader 或字段不可写）: {e}")
 
     @property
     def name(self) -> str:
