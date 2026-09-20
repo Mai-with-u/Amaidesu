@@ -104,14 +104,14 @@ async def test_list_recent_live_chat_role_filter(store: SQLiteDatabase) -> None:
     assert [r["content"] for r in rows] == ["你好"]
 
 
-def _make_agent(store: SQLiteDatabase, session_manager) -> StreamerAgent:
+def _make_agent(store: SQLiteDatabase, session_manager, *, history_limit: int = 30) -> StreamerAgent:
     llm = MagicMock()
     llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
     llm.generate = AsyncMock(return_value=Response(success=False, error="not used"))
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="PROMPT")
     return StreamerAgent(
-        config=StreamerConfig.from_dict({"proactive": {"enabled": False}}),
+        config=StreamerConfig.from_dict({"proactive": {"enabled": False}, "history_limit": history_limit}),
         llm_manager=llm,
         prompt_manager=prompt,
         event_bus=None,
@@ -162,6 +162,80 @@ async def test_read_history_returns_turns_in_chronological_order(store: SQLiteDa
         ("viewer", "先问"),
         ("assistant", "后答"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# 历史窗口滞回：满窗后成块推进，窗口内前缀逐字稳定（前缀缓存前提）
+# ---------------------------------------------------------------------------
+
+
+async def _insert_turns(store: SQLiteDatabase, count: int, *, start_index: int, session_id: int = 1) -> None:
+    """按时间序插入 count 条带 message_id 的观众行，message_id 即断言用的窗口锚点。"""
+    for i in range(start_index, start_index + count):
+        await store.chat.insert_live_chat(
+            live_session_id=session_id,
+            timestamp_ms=1000 + i,
+            sender_role="viewer",
+            sender_name="观众",
+            content=f"消息{i}",
+            message_type="danmaku",
+            message_id=f"m{i}",
+        )
+
+
+@pytest.mark.asyncio
+async def test_history_window_grows_append_only_before_limit(store: SQLiteDatabase) -> None:
+    """未满窗时全量返回且只追加：旧消息跨读逐字稳定。"""
+    agent = _make_agent(store, _FakeSessionManager(1), history_limit=5)
+    await _insert_turns(store, 3, start_index=1)
+    first = await agent._read_history()
+    assert [t.message_id for t in first] == ["m1", "m2", "m3"]
+
+    await _insert_turns(store, 2, start_index=4)
+    second = await agent._read_history()
+    assert [t.message_id for t in second] == ["m1", "m2", "m3", "m4", "m5"]
+
+
+@pytest.mark.asyncio
+async def test_history_window_holds_then_advances_in_block(store: SQLiteDatabase) -> None:
+    """满窗后新消息先追加在尾部（最旧不丢），攒满一个步长才推进到最新 limit 条。
+
+    limit=5、步长 10：窗口长到 15 条才成块推进，历史段 miss 从每窗一次
+    摊薄到每步长一窗。
+    """
+    agent = _make_agent(store, _FakeSessionManager(1), history_limit=5)
+    await _insert_turns(store, 5, start_index=1)
+    await agent._read_history()  # 满窗，锚 = m1
+
+    await _insert_turns(store, 1, start_index=6)
+    grown = await agent._read_history()
+    assert [t.message_id for t in grown] == ["m1", "m2", "m3", "m4", "m5", "m6"]
+
+    # 窗口达到 limit+步长=15 → 成块推进到最新 5 条，重锚 m11
+    await _insert_turns(store, 9, start_index=7)
+    advanced = await agent._read_history()
+    assert [t.message_id for t in advanced] == ["m11", "m12", "m13", "m14", "m15"]
+
+    # 推进后继续只追加：从新锚 m11 起窗口逐条生长
+    await _insert_turns(store, 1, start_index=16)
+    regrown = await agent._read_history()
+    assert [t.message_id for t in regrown] == ["m11", "m12", "m13", "m14", "m15", "m16"]
+
+
+@pytest.mark.asyncio
+async def test_history_window_reset_on_session_switch(store: SQLiteDatabase) -> None:
+    """场次切换（新开播）：旧场次锚点作废，新场次从空窗重新生长。"""
+    session = _FakeSessionManager(1)
+    agent = _make_agent(store, session, history_limit=5)
+    await _insert_turns(store, 6, start_index=1)
+    await agent._read_history()
+
+    session._pk = 2
+    assert await agent._read_history() == []
+
+    await _insert_turns(store, 2, start_index=101, session_id=2)
+    fresh = await agent._read_history()
+    assert [t.message_id for t in fresh] == ["m101", "m102"]
 
 
 # ---------------------------------------------------------------------------
