@@ -34,6 +34,8 @@ export interface ConfigFieldSchema {
   validation?: ValidationRule;
   properties?: Record<string, ConfigFieldSchema>;
   items?: ConfigFieldSchema;
+  /** 对象数组的元素子字段树（items.type === 'object' 时由后端下发） */
+  fields?: ConfigFieldSchema[];
   children?: ConfigFieldSchema[];
   required: boolean;
   sensitive: boolean;

@@ -97,7 +97,12 @@
 
       <!-- 数组类型 -->
       <template v-else-if="field.type === 'array'">
-        <ArrayEditor v-model="localValue" :field="field" @change="handleChange" />
+        <ArrayEditor
+          v-model="localValue"
+          :field="field"
+          :original-value="originalValue"
+          @change="handleChange"
+        />
       </template>
 
       <!-- 对象类型：有 properties 时递归渲染子字段 -->

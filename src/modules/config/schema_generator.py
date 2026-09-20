@@ -263,7 +263,14 @@ class ConfigSchemaGenerator:
         origin = get_origin(unwrapped_annotation)
         args = get_args(unwrapped_annotation)
         if origin in {list, set} and args:
-            schema["items"] = {"type": cls._map_field_type(args[0])}
+            inner = args[0]
+            if _is_basemodel_subclass(inner):
+                # 对象数组（TOML array-of-tables）：items 携带元素子字段树，
+                # 前端据此渲染元素卡片编辑器（数组是一等公民，不做降维展开）
+                item_schema = cls.generate_config_schema(inner, include_nested=False)
+                schema["items"] = {"type": "object", "fields": item_schema.get("fields", [])}
+            else:
+                schema["items"] = {"type": cls._map_field_type(inner)}
         # dict 暂不递归展开 items，由 nested 接管
         if origin in {tuple} and args:
             schema["items"] = {"type": cls._map_field_type(args[0])}
@@ -402,9 +409,16 @@ def collect_all_fields(
     schema: Dict[str, Any],
     prefix: str = "",
 ) -> List[Dict[str, Any]]:
-    """把嵌套 schema 铺平为 ``prefix.field_name`` 形式的字段列表。"""
+    """把嵌套 schema 铺平为 ``prefix.field_name`` 形式的字段列表。
+
+    对象数组（list[BaseModel]）不降维：数组字段自身就是可编辑的一等字段
+    （元素子字段树在 ``items.fields``），其元素字段不展开为独立键——
+    否则会生成无法寻址写回的伪键（如 ``llm_providers.api_key``）。
+    """
     out: List[Dict[str, Any]] = []
-    for field in schema.get("fields", []):
+    fields = schema.get("fields", [])
+    array_names = {f["name"] for f in fields if f.get("type") == "array"}
+    for field in fields:
         out.append(
             {
                 "key": f"{prefix}.{field['name']}" if prefix else field["name"],
@@ -413,6 +427,8 @@ def collect_all_fields(
         )
     nested = schema.get("nested") or {}
     for field_name, sub_schema in nested.items():
+        if field_name in array_names:
+            continue
         out.extend(
             collect_all_fields(
                 sub_schema,

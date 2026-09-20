@@ -5,15 +5,18 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 from src.modules.dashboard.services.config_adapter import (
     _build_frontend_groups,
+    _fill_array_placeholders,
     _find_placeholder_write,
     _mask_sensitive_values,
     _walk_schema,
+    apply_config_updates,
 )
 from src.modules.config.registry import COMPONENT_SCHEMAS
 from src.modules.config.multi_file_loader import resolve_root_schema
@@ -182,10 +185,13 @@ class TestWalkSchema:
 
 
 class _FakeConfigService:
-    """_build_frontend_groups 只读 main_config 属性，无需真实服务。"""
+    """只读 main_config 属性；reload_config 为写链路尾部调用提供空实现。"""
 
     def __init__(self, main_config: dict[str, Any]) -> None:
         self.main_config = main_config
+
+    async def reload_config(self, changed_scopes=None):
+        return True
 
 
 class TestBuildFrontendGroups:
@@ -222,7 +228,9 @@ class TestBuildFrontendGroups:
         assert version["value"] == "9.9.9"
 
     def test_敏感字段值替换为占位且带标记(self) -> None:
-        result = _build_frontend_groups(_FakeConfigService({"model": {"api_key": "sk-plain"}}))
+        result = _build_frontend_groups(
+            _FakeConfigService({"llm_providers": [{"name": "deepseek", "api_key": "sk-plain"}]})
+        )
 
         def _iter_fields(nodes: list[dict]) -> list[dict]:
             out = []
@@ -232,17 +240,20 @@ class TestBuildFrontendGroups:
             return out
 
         model_group = next(g for g in result["groups"] if g["key"] == "model")
-        sensitive = [f for f in _iter_fields(model_group["fields"]) if f["sensitive"]]
-        assert sensitive, "model 分组应存在敏感字段（api_key）"
-        # 有真实值的占位为"已设置"；配置缺失（None）的字段如实返回 None，不伪造"已设置"
-        assert all(f["value"] == "已设置" for f in sensitive if f["value"] is not None)
-        assert any(f["value"] is None for f in sensitive)
+        fields = _iter_fields(model_group["fields"])
+        # 对象数组是一等字段：元素子字段树在 items.fields，不再降维出 llm_providers.api_key 伪键
+        assert not any(f["key"] == "model.llm_providers.api_key" for f in fields)
+        array_field = next(f for f in fields if f["key"] == "model.llm_providers")
+        assert array_field["type"] == "array"
+        item_names = [f["key"] for f in array_field["items"]["fields"]]
+        assert "api_key" in item_names and "name" in item_names
+        # 数组值照常返回，元素内敏感字符串遮蔽为占位
+        assert array_field["value"][0]["name"] == "deepseek"
+        assert array_field["value"][0]["api_key"] == "已设置"
 
     def test_数字敏感名字段值照实返回(self) -> None:
         """schema 的 value 占位只针对字符串凭据；数字预算参数照实返回（占位文本撑爆数字输入控件）。"""
-        result = _build_frontend_groups(
-            _FakeConfigService({"simulator": {"token_budget_per_hour": 50000}})
-        )
+        result = _build_frontend_groups(_FakeConfigService({"simulator": {"token_budget_per_hour": 50000}}))
 
         def _iter_fields(nodes: list[dict]) -> list[dict]:
             out = []
@@ -262,3 +273,59 @@ class TestBuildFrontendGroups:
         service.main_config = None
         result = _build_frontend_groups(service)
         assert len(result["groups"]) == 6
+
+
+class TestFillArrayPlaceholders:
+    """对象数组整值提交的占位回填：未编辑的敏感字段从磁盘现值按索引补回。"""
+
+    def test_改非敏感字段时占位回填真实值(self) -> None:
+        old = {"llm_providers": [{"name": "deepseek", "api_key": "sk-real"}]}
+        new_value = [{"name": "deepseek2", "api_key": "已设置"}]
+        filled = _fill_array_placeholders("model.llm_providers", new_value, old)
+        assert filled == [{"name": "deepseek2", "api_key": "sk-real"}]
+
+    def test_显式填入的新值不被回填覆盖(self) -> None:
+        old = {"llm_providers": [{"name": "deepseek", "api_key": "sk-real"}]}
+        new_value = [{"name": "deepseek", "api_key": "sk-new"}]
+        filled = _fill_array_placeholders("model.llm_providers", new_value, old)
+        assert filled[0]["api_key"] == "sk-new"
+
+    def test_新增元素无磁盘对应时占位原样保留(self) -> None:
+        """新元素超出磁盘列表长度（zip 截断），占位原样保留 → 交给占位写检查拒绝。"""
+        old = {"llm_providers": [{"name": "deepseek", "api_key": "sk-real"}]}
+        new_value = [
+            {"name": "deepseek", "api_key": "已设置"},
+            {"name": "newcomer", "api_key": "已设置"},
+        ]
+        filled = _fill_array_placeholders("model.llm_providers", new_value, old)
+        assert filled[0]["api_key"] == "sk-real"
+        assert filled[1]["api_key"] == "已设置"
+
+    def test_非列表值原样返回(self) -> None:
+        old = {"port": 60214}
+        assert _fill_array_placeholders("infra.dashboard.port", 60215, old) == 60215
+        assert _fill_array_placeholders("infra.dashboard.port", "x", {}) == "x"
+
+
+class TestApplyArrayUpdates:
+    """端到端：整列表提交 → 占位回填 → 校验通过（占位不落盘）。"""
+
+    def test_整列表提交改字段保留真实key(self, tmp_path) -> None:
+        toml_text = '[[llm_providers]]\nname = "default"\napi_key = "sk-real"\nbase_url = "u"\n'
+        (tmp_path / "model.toml").write_text(toml_text, encoding="utf-8")
+        service = _FakeConfigService({"llm_providers": [{"name": "default", "api_key": "sk-real", "base_url": "u"}]})
+        outcome = asyncio.run(
+            apply_config_updates(
+                service,
+                tmp_path,
+                # 保留 name：根 Schema 一致性校验要求 llm_models 引用的 provider 存在
+                [("model.llm_providers", [{"name": "default", "api_key": "已设置", "base_url": "u2"}])],
+            )
+        )
+        assert outcome.success, outcome.message
+        applied_value = outcome.applied[0][1]
+        assert applied_value[0]["api_key"] == "sk-real"
+        assert applied_value[0]["base_url"] == "u2"
+        # 落盘复核：占位不落盘，真实 key 保留
+        written = (tmp_path / "model.toml").read_text(encoding="utf-8")
+        assert "sk-real" in written and "已设置" not in written

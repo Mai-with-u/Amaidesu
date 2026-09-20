@@ -273,6 +273,10 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
     dotted_key = field.get("key", "")
     raw_value = _display_value(dotted_key, main_config)
     is_sensitive = _is_sensitive_field(dotted_key)
+    if isinstance(raw_value, list):
+        # 对象数组整值返回：元素内敏感字符串按完整路径递归遮蔽（与 GET /config 同规则）
+        scope, _, path_in_file = dotted_key.partition(".")
+        raw_value = _mask_sensitive_values({path_in_file: raw_value}, scope)[path_in_file]
     gfield: dict = {
         "key": dotted_key,
         "label": _extract_label(field),
@@ -295,7 +299,19 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
     if validation:
         gfield["validation"] = validation
     if field.get("items"):
-        gfield["items"] = field["items"]
+        items_schema = field["items"]
+        if isinstance(items_schema, dict) and items_schema.get("type") == "object":
+            # 元素子字段树同样走规范化（label/validation 等），key 为元素内相对字段名，
+            # 前端据此在数组元素对象内寻址
+            sub_fields = []
+            for sub in items_schema.get("fields", []) or []:
+                sub_name = str(sub.get("name", ""))
+                sub_converted = _convert_to_api_field({**sub, "key": f"{dotted_key}.{sub_name}"}, {})
+                sub_converted["key"] = sub_name
+                sub_fields.append(sub_converted)
+            gfield["items"] = {"type": "object", "fields": sub_fields}
+        else:
+            gfield["items"] = items_schema
     return gfield
 
 
@@ -364,7 +380,10 @@ def _build_frontend_groups(config_service: "ConfigService") -> dict:
         if root_cls is None:
             continue
         schema = ConfigSchemaGenerator.generate_config_schema(root_cls)
-        leaf_fields = [f for f in collect_all_fields(schema) if "." in str(f.get("key", ""))]
+        collected = collect_all_fields(schema)
+        leaf_fields = [f for f in collected if "." in str(f.get("key", ""))]
+        # 对象数组是一等可编辑字段（元素子字段树在 items.fields），与叶子一起进组
+        leaf_fields.extend(f for f in collected if f.get("type") == "array")
         group_fields: list[dict] = []
         for field in leaf_fields:
             # 文件内路径 → scope 前缀的 API 键
@@ -437,6 +456,41 @@ async def _apply_and_reload(
     return True, not hot_applied, None
 
 
+def _fill_array_placeholders(key: str, value: Any, main_config: dict) -> Any:
+    """对象数组整值提交的占位回填。
+
+    前端整列表提交时，元素内未编辑的敏感字段仍是 GET 下发的"已设置"占位
+    （前端不持有真实凭据）。按索引对齐磁盘现值回填真实值，占位文本才不会
+    落盘覆盖凭据。回填后仍残留占位（如新元素未填写）交由占位写检查拒绝。
+    """
+    if not isinstance(value, list):
+        return value
+    path_in_file = key.split(".", 1)[1] if "." in key else key
+    current = _get_nested_value(main_config, path_in_file)
+    if not isinstance(current, list):
+        return value
+    filled: list[Any] = []
+    for index, new_item in enumerate(value):
+        # 磁盘越界（新增元素）原样保留：占位交由占位写检查拒绝，不能静默丢弃元素
+        old_item = current[index] if index < len(current) else None
+        filled.append(_restore_masked(new_item, old_item) if isinstance(new_item, dict) else new_item)
+    return filled
+
+
+def _restore_masked(new_item: dict, old_item: Any) -> dict:
+    """递归恢复 new_item 中值为占位符的敏感字段（取 old_item 同名真实值）。"""
+    restored: dict = {}
+    for field_name, field_value in new_item.items():
+        old_value = old_item.get(field_name) if isinstance(old_item, dict) else None
+        if field_value == _SENSITIVE_PLACEHOLDER and old_value is not None:
+            restored[field_name] = old_value
+        elif isinstance(field_value, dict):
+            restored[field_name] = _restore_masked(field_value, old_value)
+        else:
+            restored[field_name] = field_value
+    return restored
+
+
 async def apply_config_updates(
     config_service: "ConfigService",
     config_dir: Path,
@@ -453,7 +507,10 @@ async def apply_config_updates(
     deduped: Dict[str, Any] = {}
     for key, value in changes:
         deduped[key] = value
-    normalized: list[tuple[str, Any]] = list(deduped.items())
+    main_config = config_service.main_config or {}
+    normalized: list[tuple[str, Any]] = [
+        (key, _fill_array_placeholders(key, value, main_config)) for key, value in deduped.items()
+    ]
 
     errors: list[tuple[str, str]] = []
     for key, value in normalized:
