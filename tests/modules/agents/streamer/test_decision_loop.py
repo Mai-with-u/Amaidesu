@@ -13,6 +13,7 @@ profile="replyer")``。测试 mock 按 profile 分流：
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -323,14 +324,25 @@ async def test_decision_loop_proactive_gated_after_live_ended():
 
 
 @pytest.mark.asyncio
-async def test_decision_loop_danmaku_reply_not_gated_by_live_session():
+async def test_decision_loop_danmaku_reply_not_gated_by_live_session() -> None:
     """场次闸只挡主动发言分支：弹幕回复路径不受开播状态影响。"""
     agent, bus, registry, llm, prompt = _setup_agent()
+
+    # 验证的是弹幕是否进入决策，不把机器能否在 200 毫秒内调度完协程当作开播门控。
+    planner_started = asyncio.Event()
+    dispatch = llm.generate.side_effect
+
+    async def observe_generate(*args: Any, **kwargs: Any) -> PayloadResponse:
+        if kwargs.get("profile") == "planner":
+            planner_started.set()
+        return await dispatch(*args, **kwargs)
+
+    llm.generate.side_effect = observe_generate
 
     await agent.start()
     try:
         await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, _make_payload("主播好可爱！"), source="bilibili")
-        await asyncio.sleep(0.2)
+        await asyncio.wait_for(planner_started.wait(), timeout=3.0)
         assert len(_planner_calls(llm)) >= 1, "未开播时弹幕回复不应被门控"
     finally:
         await agent.cleanup()
