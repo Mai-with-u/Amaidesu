@@ -85,8 +85,8 @@ class TestModelConfig:
         provider = m.llm_providers[0]
         assert provider.api_key == "", "provider.api_key should be empty string by default"
 
-    def test_required_profile_names_exposed(self):
-        """llm_profiles 封闭集合：显式字段成员固定为六用途"""
+    def test_required_profile_names_exposed(self) -> None:
+        """独立建筑设计用途由配置 Schema 声明，其他用途保持原顺序。"""
         from src.modules.config.model_schemas import LLMProfilesConfig
 
         assert tuple(LLMProfilesConfig.model_fields) == (
@@ -94,6 +94,7 @@ class TestModelConfig:
             "replyer",
             "summary",
             "minecraft",
+            "minecraft_builder",
             "vision",
             "simulator",
         )

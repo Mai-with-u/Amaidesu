@@ -28,14 +28,15 @@ def _base_model_raw() -> dict:
 
 
 class TestClosedSet:
-    def test_default_seeds_all_six(self):
-        """缺省种子覆盖全部六用途（"缺"由字段默认值保证）"""
+    def test_default_seeds_all_profiles(self) -> None:
+        """缺省种子包含独立建造用途，设计预算不再影响游戏决策。"""
         profiles = LLMProfilesConfig()
         assert set(profiles.model_dump().keys()) == {
             "planner",
             "replyer",
             "summary",
             "minecraft",
+            "minecraft_builder",
             "vision",
             "simulator",
         }

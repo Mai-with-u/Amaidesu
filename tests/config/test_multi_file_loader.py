@@ -56,7 +56,7 @@ class TestGeneration:
         assert "[[llm_providers]]" in model_content
         assert "[[llm_models]]" in model_content
         # dict 形态的 llm_profiles 按 key 展开为子表（每用途一段）
-        for profile in ("planner", "replyer", "summary", "minecraft", "vision", "simulator"):
+        for profile in ("planner", "replyer", "summary", "minecraft", "minecraft_builder", "vision", "simulator"):
             assert f"[llm_profiles.{profile}]" in model_content
 
     def test_generated_infra_has_sections(self, temp_config_dir):

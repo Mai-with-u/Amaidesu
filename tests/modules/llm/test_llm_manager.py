@@ -40,7 +40,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.modules.llm.bootstrap import ProfileNames
+from src.modules.llm.bootstrap import KNOWN_PROFILE_NAMES, ProfileNames
 from src.modules.llm.client import LLMResponse
 from src.modules.llm.clients import _CLIENT_DISPATCH as _CLIENT_DISPATCH
 from src.modules.llm.clients.openai.compat import normalize_tool_calls_for_protocol
@@ -856,15 +856,14 @@ def test_llm_response_error_case():
 # =============================================================================
 
 
-def test_profile_names_includes_all_six_purposes():
-    """六个用途命名常量与封闭集合权威源（配置 schema 字段）一致"""
-    from src.modules.llm.bootstrap import KNOWN_PROFILE_NAMES
-
+def test_profile_names_includes_all_purposes() -> None:
+    """用途命名常量包含独立建筑设计，且与配置 Schema 的封闭集合一致。"""
     assert KNOWN_PROFILE_NAMES == {
         ProfileNames.PLANNER,
         ProfileNames.REPLYER,
         ProfileNames.SUMMARY,
         ProfileNames.MINECRAFT,
+        ProfileNames.MINECRAFT_BUILDER,
         ProfileNames.VISION,
         ProfileNames.SIMULATOR,
     }

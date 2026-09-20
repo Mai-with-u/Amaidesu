@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
+from src.agents.minecraft.builder.config import MinecraftBuilderConfig
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.mcp.config import McpServerConfig
 
@@ -24,6 +25,8 @@ class MinecraftConfig(BaseConfig):
     """
 
     max_steps: int = Field(default=50, ge=1, description="单任务 ReAct 循环最大步数（超出挂起上报）")
+    # 设计任务从属于当前游戏，关闭 Minecraft 时不单独装配建造 Agent。
+    builder: MinecraftBuilderConfig = Field(default_factory=MinecraftBuilderConfig, description="按需建筑设计 Agent")
     execute_poll_interval_ms: int = Field(
         default=2000,
         ge=100,

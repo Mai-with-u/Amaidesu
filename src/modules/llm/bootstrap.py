@@ -48,6 +48,7 @@ class ProfileNames:
     REPLYER = "replyer"
     SUMMARY = "summary"
     MINECRAFT = "minecraft"
+    MINECRAFT_BUILDER = "minecraft_builder"
     VISION = "vision"
     SIMULATOR = "simulator"
 

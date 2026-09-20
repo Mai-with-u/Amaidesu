@@ -5,7 +5,7 @@
 - ``[[llm_providers]]``：API 提供商（连接信息 / 鉴权 / 重试参数）
 - ``[[llm_models]]``：模型注册表（model_identifier / api_provider / 价格）
 - ``[llm_profiles.<name>]``：用途 profile（planner / replyer / summary /
-  minecraft / vision / simulator）；引用 model_list，由 LLMManager 做选择
+  minecraft / minecraft_builder / vision / simulator）；引用 model_list，由 LLMManager 做选择
   与故障切换
 
 判据（谁改它的结构）：
@@ -173,6 +173,12 @@ _PROFILE_PRESETS: dict[str, dict[str, Any]] = {
     "replyer": {"hard_timeout_ms": 60_000, "slow_threshold_ms": 8_000, "temperature": 0.2, "max_tokens": 2048},
     "summary": {"hard_timeout_ms": 180_000, "slow_threshold_ms": 30_000, "temperature": 0.3, "max_tokens": 2048},
     "minecraft": {"hard_timeout_ms": 180_000, "slow_threshold_ms": 15_000, "temperature": 0.2, "max_tokens": 4096},
+    "minecraft_builder": {
+        "hard_timeout_ms": 180_000,
+        "slow_threshold_ms": 15_000,
+        "temperature": 0.5,
+        "max_tokens": 8192,
+    },
     "vision": {"hard_timeout_ms": 60_000, "slow_threshold_ms": 10_000, "temperature": 0.3, "max_tokens": 1024},
     "simulator": {"hard_timeout_ms": 60_000, "slow_threshold_ms": 15_000, "temperature": 0.9, "max_tokens": 1024},
 }
@@ -186,9 +192,9 @@ def _seed_profile(name: str) -> LLMProfileConfig:
 class LLMProfilesConfig(BaseConfig):
     """``[llm_profiles]`` 封闭用途集合
 
-    用途集合是显式封闭的：成员由本模型的六个字段定义，``extra="forbid"``
+    用途集合是显式封闭的：成员由本模型的字段定义，``extra="forbid"``
     拒绝未知键（配置加载期硬错）；"缺"由字段缺省种子保证（全新安装
-    六用途即可用），不依赖加载期的显式必填清单校验。
+    各用途即可用），不依赖加载期的显式必填清单校验。
     """
 
     planner: LLMProfileConfig = Field(
@@ -207,6 +213,10 @@ class LLMProfilesConfig(BaseConfig):
         default_factory=lambda: _seed_profile("minecraft"),
         description="游戏 Agent profile（Minecraft 决策循环）",
     )
+    minecraft_builder: LLMProfileConfig = Field(
+        default_factory=lambda: _seed_profile("minecraft_builder"),
+        description="按需建筑设计 profile（独立于游戏决策的生成预算）",
+    )
     vision: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("vision"),
         description="视觉 profile（屏幕/图像理解，少 token）",
@@ -216,6 +226,25 @@ class LLMProfilesConfig(BaseConfig):
         description="模拟 profile（虚拟用户消息生成，高温活跃）",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def seed_builder_models(cls, data: Any) -> Any:
+        """已有安装新增设计用途时沿用游戏模型引用，避免引用不存在的 default 模型。"""
+        if not isinstance(data, dict) or "minecraft_builder" in data:
+            return data
+        minecraft = data.get("minecraft", {})
+        if isinstance(minecraft, LLMProfileConfig):
+            minecraft = minecraft.model_dump()
+        if not isinstance(minecraft, dict) or not isinstance(minecraft.get("model_list"), list):
+            return data
+        return {
+            **data,
+            "minecraft_builder": {
+                **_PROFILE_PRESETS["minecraft_builder"],
+                "model_list": list(minecraft["model_list"]),
+            },
+        }
+
 
 class ModelRootConfig(BaseConfig):
     """模型配置根类
@@ -224,7 +253,7 @@ class ModelRootConfig(BaseConfig):
     - ``llm_providers``：provider 列表（API 连接共享）
     - ``llm_models``：模型注册表（model_identifier + 价格）
     - ``llm_profiles``：用途 profile 字典（planner / replyer / summary /
-      minecraft / vision / simulator）；key 必填 6 成员
+      minecraft / minecraft_builder / vision / simulator）；成员由用途 Schema 定义
     """
 
     __file_name__ = "model.toml"
@@ -241,7 +270,7 @@ class ModelRootConfig(BaseConfig):
     )
     llm_profiles: LLMProfilesConfig = Field(
         default_factory=LLMProfilesConfig,
-        description=("用途 profile 封闭集合（planner / replyer / summary / minecraft / vision / simulator）"),
+        description=("用途 profile 封闭集合（包含游戏决策与独立的建筑设计用途）"),
         json_schema_extra={"x-ui-type": "object"},
     )
 
