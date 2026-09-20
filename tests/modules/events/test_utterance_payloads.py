@@ -145,14 +145,16 @@ class TestFailedPayloadConstruction:
     """UtteranceFailedPayload：合法字段构造"""
 
     def test_construct_with_required_fields(self):
-        """必填字段：utterance_id / engine / error_message / timestamp_ms"""
+        """必填字段：utterance_id / speech_text / engine / error_message / timestamp_ms"""
         payload = UtteranceFailedPayload(
             utterance_id="utt_1700000000000_2",
+            speech_text="这句话没播出来",
             engine="gptsovits",
             error_message="WebSocket disconnected before first chunk",
             timestamp_ms=1700000000000,
         )
         assert payload.utterance_id == "utt_1700000000000_2"
+        assert payload.speech_text == "这句话没播出来"
         assert payload.engine == "gptsovits"
         assert payload.error_message == "WebSocket disconnected before first chunk"
         assert payload.timestamp_ms == 1700000000000
@@ -162,7 +164,18 @@ class TestFailedPayloadConstruction:
         with pytest.raises(Exception):
             UtteranceFailedPayload(  # type: ignore[call-arg]
                 utterance_id="utt_x",
+                speech_text="hi",
                 engine="edge",
+                timestamp_ms=1700000000000,
+            )
+
+    def test_speech_text_required(self):
+        """failed 的 speech_text 是必填：失败也必带原文（无声音时照常显示文本）"""
+        with pytest.raises(Exception):
+            UtteranceFailedPayload(  # type: ignore[call-arg]
+                utterance_id="utt_x",
+                engine="edge",
+                error_message="boom",
                 timestamp_ms=1700000000000,
             )
 
@@ -231,6 +244,7 @@ class TestSerializationRoundTrip:
         """UtteranceFailedPayload 序列化往返"""
         original = UtteranceFailedPayload(
             utterance_id="utt_1",
+            speech_text="合成超时的那句",
             engine="gptsovits",
             error_message="synthesis timeout",
             timestamp_ms=1700000000000,
@@ -238,6 +252,7 @@ class TestSerializationRoundTrip:
         restored = self._roundtrip(original)
         assert isinstance(restored, UtteranceFailedPayload)
         assert restored.utterance_id == original.utterance_id
+        assert restored.speech_text == original.speech_text
         assert restored.engine == original.engine
         assert restored.error_message == original.error_message
         assert restored.timestamp_ms == original.timestamp_ms

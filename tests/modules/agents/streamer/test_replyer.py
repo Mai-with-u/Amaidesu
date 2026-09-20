@@ -308,7 +308,7 @@ class TestReplyerGenerate:
 
     @pytest.mark.asyncio
     async def test_replyer_invalid_emotion_degrades(self) -> None:
-        """非法 emotion（不在 12 枚举内）→ 降级为 neutral，speech 保留。"""
+        """非法 emotion（不在 17 枚举内）→ 降级为 neutral，speech 保留。"""
         r, _llm, _prompt = _make_replyer(
             llm_response=_make_llm_response(
                 tool_calls=[_tool_call_reply(speech="嗯嗯", emotion="这不是情绪")],

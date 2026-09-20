@@ -129,7 +129,7 @@ async def test_emit_streamer_speech_passes_target():
     bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
 
     agent = _make_minimal_agent(event_bus=bus)
-    agent._speech._emit_streamer_speech("utt_1", "你好", "neutral", "viewer123")
+    agent._speech._emit_streamer_speech("utt_1", "你好", "neutral", 0.5, "viewer123")
 
     await asyncio.wait_for(captured_event.wait(), timeout=2.0)
     assert len(captured) == 1

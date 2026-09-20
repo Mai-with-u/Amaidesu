@@ -132,7 +132,8 @@ async def test_streamer_speech_event_triggers_cadence_notify(
         payload = StreamerSpeechPayload(
             utterance_id="utt_test_1",
             text="hello",
-            emotion=None,
+            emotion="neutral",
+            emotion_intensity=0.5,
         )
         await event_bus.emit(CoreEvents.STREAMER_SPEECH, payload, source="test")
         await asyncio.sleep(0.05)
@@ -168,7 +169,8 @@ async def test_stop_unsubscribes_streamer_speech_handler(
     payload = StreamerSpeechPayload(
         utterance_id="utt_after_stop_1",
         text="late",
-        emotion=None,
+        emotion="neutral",
+            emotion_intensity=0.5,
     )
     await event_bus.emit(CoreEvents.STREAMER_SPEECH, payload, source="test")
     # cadence 状态保持 IDLE（未被唤醒）
@@ -223,7 +225,8 @@ async def test_handler_only_calls_notify_no_llm_side_effect(
         payload = StreamerSpeechPayload(
             utterance_id="utt_no_loop_1",
             text="防环验证",
-            emotion=None,
+            emotion="neutral",
+            emotion_intensity=0.5,
         )
         await event_bus.emit(CoreEvents.STREAMER_SPEECH, payload, source="test")
         await asyncio.sleep(0.05)

@@ -122,7 +122,9 @@ async def test_streamer_speech_emitted_when_tts_disabled():
         captured = await _wait_for_speech_event(bus)
         assert captured is not None, "TTS 关闭时仍应收到 streamer.speech"
         assert captured.text == "今天好冷"
-        assert captured.emotion is None
+        # emotion 必有值契约：旧空串输入按生产者同款语义规范化为 neutral
+        assert captured.emotion == "neutral"
+        assert captured.emotion_intensity == 0.5
         assert captured.utterance_id.startswith("utt_")
         # TTS 关闭时 _utterance_queue 仍为 None
         assert agent._speech.utterance_queue is None

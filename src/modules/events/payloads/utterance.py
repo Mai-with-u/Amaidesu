@@ -17,8 +17,8 @@
 
 设计要点：
 - 三个事件分别对应不同的 Payload 类（started 含 ``speech_text`` 与 ``duration_ms``
-  可选；finished 强调播放时长；failed 强调错误信息）——形状不同，分开定义比
-  统一形状加判别字段更易读、更不易误填。
+  可选；finished 强调播放时长；failed 强调错误信息并必带 ``speech_text`` 原文，
+  供无声音时照常显示文本）——形状不同，分开定义比统一形状加判别字段更易读、更不易误填。
 - ``@register_event`` 装饰器是幂等的；此处分别把三个类登记到对应事件名。
 """
 
@@ -109,6 +109,8 @@ class UtteranceFailedPayload(BasePayload):
     Attributes:
         utterance_id: 一次发声实例的唯一 ID（与 started 事件对应；若失败发生在
             started 之前则为编排层预生成）。
+        speech_text: 本次发声对应的文本内容（合成失败也必带原文，供字幕等
+            消费者在无声音时照常显示文本）。
         engine: TTS 引擎标识。
         error_message: 失败原因描述（异常 message / 错误码 / 阶段标记），
             供编排层兜底决策与日志对账使用。
@@ -116,6 +118,7 @@ class UtteranceFailedPayload(BasePayload):
     """
 
     utterance_id: str = Field(..., description="一次发声实例的唯一 ID（与 started 事件对应）")
+    speech_text: str = Field(..., description="本次发声对应的文本内容（失败也必带原文）")
     engine: str = Field(..., description="TTS 引擎标识")
     error_message: str = Field(..., description="失败原因描述（异常 message / 错误码 / 阶段标记）")
     timestamp_ms: int = Field(

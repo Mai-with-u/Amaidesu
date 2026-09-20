@@ -168,6 +168,7 @@ async def emit_utterance_failed(
     event_bus: Optional["EventBus"],
     *,
     utterance_id: Optional[str],
+    speech_text: str,
     engine: str,
     error_message: str,
 ) -> None:
@@ -179,6 +180,7 @@ async def emit_utterance_failed(
     Args:
         event_bus: 事件总线（None 时静默跳过）。
         utterance_id: 一次发声实例的唯一 ID（None 时静默跳过）。
+        speech_text: 本次发声对应的文本内容（合成失败也必带原文）。
         engine: TTS 引擎标识。
         error_message: 失败原因描述（异常 message / 错误码 / 阶段标记）。
     """
@@ -186,6 +188,7 @@ async def emit_utterance_failed(
         return
     payload = UtteranceFailedPayload(
         utterance_id=utterance_id,
+        speech_text=speech_text,
         engine=engine,
         error_message=error_message,
         timestamp_ms=now_ms(),

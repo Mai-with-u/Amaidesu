@@ -226,6 +226,7 @@ async def test_streamer_speech_broadcast_as_streamer_speech_type(bus_and_handler
         utterance_id="utt_1700000000000_1",
         text="欢迎来到直播间！",
         emotion="happy",
+        emotion_intensity=0.5,
     )
     handler, _model_cls = bus.subscribed[CoreEvents.STREAMER_SPEECH]
     await handler(CoreEvents.STREAMER_SPEECH, payload, source="test")

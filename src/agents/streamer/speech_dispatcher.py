@@ -210,7 +210,8 @@ class SpeechDispatcher:
         Args:
             reply_payload: ``ToolExecutionResult.structured_content``（dict），
                 形态 ``{speech, emotion, actions}``；emotion 为
-                ``{"name": str, "intensity": float}``。
+                ``{"name": str, "intensity": float}``（name 必为合法枚举值、
+                intensity 已 clamp，由 replyer 保证）。
             target_user_id: 本次回复的观众 user_id（可选；透传到
                 ``streamer.speech`` 业务事件，None 表示主动发言/无特定对象）。
             reply_to_message_id: 本次回复所指向弹幕的 message_id（可选；
@@ -236,22 +237,20 @@ class SpeechDispatcher:
             return None
 
         speech = reply_payload.get("speech", "")
-        emotion = reply_payload.get("emotion", "")
+        emotion = reply_payload.get("emotion", {})
         actions = reply_payload.get("actions", [])
 
         cleaned_speech = speech.strip() if isinstance(speech, str) else ""
-        # emotion 新契约为 {name, intensity}；兼容旧字符串形态（防御）
-        cleaned_emotion_intensity = 0.5
-        if isinstance(emotion, dict):
-            cleaned_emotion: Optional[str] = str(emotion.get("name", "") or "").strip() or None
-            try:
-                cleaned_emotion_intensity = min(1.0, max(0.0, float(emotion.get("intensity", 0.5))))
-            except (TypeError, ValueError):
-                cleaned_emotion_intensity = 0.5
-        elif isinstance(emotion, str):
-            cleaned_emotion = emotion.strip() or None
-        else:
-            cleaned_emotion = None
+        # 情绪契约：replyer 保证 emotion 为 {name, intensity} 且 name 已降级为
+        # 合法枚举值（缺失→neutral）、intensity 已 clamp——此处规范化后透传，
+        # 使 ``streamer.speech`` 事件的 emotion/emotion_intensity 必有值；
+        # 键缺失时按生产者同款语义取 neutral / 0.5（dispatch 永不抛异常边界）。
+        emotion_obj = emotion if isinstance(emotion, dict) else {}
+        cleaned_emotion = str(emotion_obj.get("name") or "").strip() or "neutral"
+        try:
+            cleaned_emotion_intensity = min(1.0, max(0.0, float(emotion_obj.get("intensity", 0.5))))
+        except (TypeError, ValueError):
+            cleaned_emotion_intensity = 0.5
 
         # 动作类工具调用（异步扇出不阻塞决策循环；任务强引用持有，停止时限期汇合）
         self._schedule_actions(actions)
@@ -270,6 +269,7 @@ class SpeechDispatcher:
                 utterance_id,
                 cleaned_speech,
                 cleaned_emotion,
+                cleaned_emotion_intensity,
                 target_user_id,
                 reply_to_message_id=reply_to_message_id,
                 round_id=round_id,
@@ -292,7 +292,8 @@ class SpeechDispatcher:
         self,
         utterance_id: str,
         text: str,
-        emotion: Optional[str],
+        emotion: str,
+        emotion_intensity: float,
         target_user_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
         round_id: str = "",
@@ -306,6 +307,7 @@ class SpeechDispatcher:
             round_id=round_id or None,
             text=text,
             emotion=emotion,
+            emotion_intensity=emotion_intensity,
             target_user_id=target_user_id,
             reply_to_message_id=reply_to_message_id,
         )

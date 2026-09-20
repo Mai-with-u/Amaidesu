@@ -18,7 +18,9 @@
   Planner 决策输出——"主播回应了哪条观众消息"的关联事实，与 live_chat
   观众行的 message_id 构成外键关系，供互动分析查询；None 表示主动发言
   或未指向特定弹幕。
-- ``emotion`` 可选：存在则带上，不存在显式 None，便于下游按字段过滤。
+- ``emotion`` / ``emotion_intensity`` 必选：回复器对非法/缺失情绪降级
+  ``neutral``、强度缺省 0.5 并 clamp 到 0–1，生产者保证必有值，故本事件
+  的每条发言都携带完整情绪事实（17 枚举之一 + 强度）。
 - ``target_user_id`` 可选：代表"这条发言回复的观众 user_id"，
   None 表示主动发言/无特定回复对象。下游存储记账器据此顺路维护
   viewers 的 ``replied_count`` 写穿。
@@ -54,7 +56,9 @@ class StreamerSpeechPayload(BasePayload):
         reply_to_message_id: 本条发言回复的那条弹幕的 message_id（可选）；
             None 表示主动发言或未指向特定弹幕。
         text: 主播发言文本（已 strip；空字符串不触发本事件）。
-        emotion: 关联情绪标签（可选；有则带上）。
+        emotion: 关联情绪标签（``Emotion`` 17 枚举值之一，小写；非法/缺失
+            由回复器降级为 ``neutral``，生产者保证必有值）。
+        emotion_intensity: 情绪强度（0.0–1.0；缺省 0.5，生产者已 clamp）。
         target_user_id: 这条发言回复的观众 user_id（可选；主动发言/无特定
             对象时为 ``None``）。下游落库组件可据此维护 viewers 的
             ``replied_count`` 写穿。
@@ -76,7 +80,13 @@ class StreamerSpeechPayload(BasePayload):
         description="本条发言回复的那条弹幕的 message_id；None 表示主动发言或未指向特定弹幕",
     )
     text: str = Field(..., description="主播发言文本")
-    emotion: Optional[str] = Field(default=None, description="关联情绪标签（可选）")
+    emotion: str = Field(..., description="关联情绪标签（Emotion 17 枚举值之一，小写；必有值）")
+    emotion_intensity: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="情绪强度（0.0–1.0；生产者保证必有值，缺省 0.5）",
+    )
     target_user_id: Optional[str] = Field(
         default=None,
         description="这条发言回复的观众 user_id（主动发言/无特定对象时为 None）",

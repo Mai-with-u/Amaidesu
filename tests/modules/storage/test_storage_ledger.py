@@ -376,6 +376,7 @@ async def test_ledger_streamer_speech_writes_live_chat_with_assistant_role(
             utterance_id="utt_test_1",
             text="大家好，欢迎来到直播间",
             emotion="happy",
+            emotion_intensity=0.5,
             timestamp_ms=1_700_000_000_000,
         )
         await event_bus.emit(CoreEvents.STREAMER_SPEECH, payload, source="t")
@@ -405,6 +406,8 @@ async def test_ledger_streamer_speech_skips_when_session_id_is_none(event_bus: E
     try:
         payload = StreamerSpeechPayload(
             utterance_id="utt_skip",
+            emotion="neutral",
+            emotion_intensity=0.5,
             text="这条不应落库",
             timestamp_ms=1,
         )
@@ -446,6 +449,8 @@ async def test_ledger_streamer_speech_swallows_handler_exception(
     try:
         bad = StreamerSpeechPayload(
             utterance_id="utt_bad",
+            emotion="neutral",
+            emotion_intensity=0.5,
             text="第一次会失败",
             timestamp_ms=10,
         )
@@ -455,6 +460,8 @@ async def test_ledger_streamer_speech_swallows_handler_exception(
 
         good = StreamerSpeechPayload(
             utterance_id="utt_good",
+            emotion="neutral",
+            emotion_intensity=0.5,
             text="第二次应落库",
             timestamp_ms=20,
         )
@@ -631,6 +638,8 @@ async def test_streamer_speech_with_target_upserts_replied(
     try:
         payload = StreamerSpeechPayload(
             utterance_id="utt_target",
+            emotion="neutral",
+            emotion_intensity=0.5,
             text="回复观众",
             target_user_id="u123",
             timestamp_ms=1_700_000_000_010,
@@ -679,6 +688,8 @@ async def test_streamer_speech_without_target_skips_replied(
     try:
         payload = StreamerSpeechPayload(
             utterance_id="utt_no_target",
+            emotion="neutral",
+            emotion_intensity=0.5,
             text="主动发言，无对象",
             timestamp_ms=1_700_000_000_011,
         )
@@ -717,6 +728,8 @@ async def test_streamer_speech_upsert_failure_isolated(
     try:
         payload = StreamerSpeechPayload(
             utterance_id="utt_replied_exc",
+            emotion="neutral",
+            emotion_intensity=0.5,
             text="upsert 会炸",
             target_user_id="u_exc",
             timestamp_ms=1_700_000_000_012,
@@ -915,6 +928,8 @@ async def test_ledger_streamer_speech_persists_reply_to_message_id(event_bus: Ev
 
         speech = StreamerSpeechPayload(
             utterance_id="utt_reply_1",
+            emotion="neutral",
+            emotion_intensity=0.5,
             text="今天玩《双人成行》！",
             target_user_id="viewer_1",
             reply_to_message_id="msg_viewer_1",
@@ -1038,6 +1053,8 @@ async def test_ledger_streamer_speech_skipped_when_no_active_session(event_bus: 
     try:
         payload = StreamerSpeechPayload(
             utterance_id="utt_no_session",
+            emotion="neutral",
+            emotion_intensity=0.5,
             text="无场次发言",
             timestamp_ms=1,
         )

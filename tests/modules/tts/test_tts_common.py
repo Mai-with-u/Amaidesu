@@ -284,6 +284,7 @@ class TestEmitUtteranceFailed:
         await emit_utterance_failed(
             event_bus,
             utterance_id="utt_1",
+            speech_text="这句没播出来",
             engine="gptsovits",
             error_message="WebSocket closed",
         )
@@ -291,6 +292,7 @@ class TestEmitUtteranceFailed:
 
         assert len(captured) == 1
         assert captured[0].utterance_id == "utt_1"
+        assert captured[0].speech_text == "这句没播出来"
         assert captured[0].engine == "gptsovits"
         assert captured[0].error_message == "WebSocket closed"
 
@@ -298,6 +300,7 @@ class TestEmitUtteranceFailed:
         await emit_utterance_failed(
             None,  # type: ignore[arg-type]
             utterance_id="utt_x",
+            speech_text="hi",
             engine="edge",
             error_message="boom",
         )
@@ -313,6 +316,7 @@ class TestEmitUtteranceFailed:
         await emit_utterance_failed(
             event_bus,
             utterance_id=None,
+            speech_text="hi",
             engine="edge",
             error_message="boom",
         )

@@ -258,14 +258,14 @@ class Replyer:
         """构造 reply function 定义（OpenAI function calling 形态）。
 
         reply 是 Agent 内部协议工具——只服务主播自身 LLM 会话，不进 ToolRegistry。
-        LLM 通过调用此函数输出 speech + emotion（emotion 是 emotion_vocab 12 枚举之一）
-        + intensity（情绪强度，驱动下游 VTS 表情权重）。
+        LLM 通过调用此函数输出 speech + emotion（emotion 是 emotion_vocab 17 枚举之一）
+        + intensity（情绪强度，驱动下游皮套表情权重）。
         """
         return {
             "name": _REPLY_FUNCTION_NAME,
             "description": (
                 "主播发言：输出你要对直播间说的话和情绪。"
-                "必填：speech（1-2 句口语化文本）；可选：emotion（12 枚举之一，缺省 neutral）、"
+                "必填：speech（1-2 句口语化文本）；可选：emotion（17 枚举之一，缺省 neutral）、"
                 "intensity（0.0-1.0 情绪强度，缺省 0.5）。"
                 "调用此工具即代表你决定本轮发言；reply 是你唯一的输出出口。"
             ),
@@ -279,7 +279,7 @@ class Replyer:
                     "emotion": {
                         "type": "string",
                         "enum": [e.value for e in Emotion],
-                        "description": "情绪（12 枚举之一）",
+                        "description": "情绪（17 枚举之一）",
                     },
                     "intensity": {
                         "type": "number",

@@ -173,6 +173,7 @@ class EdgeTTSProvider:
             await emit_utterance_failed(
                 self.event_bus,
                 utterance_id=utterance_id,
+                speech_text=text,
                 engine=self.PROVIDER_NAME,
                 error_message=f"{type(e).__name__}: {e}",
             )
