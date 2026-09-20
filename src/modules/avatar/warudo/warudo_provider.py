@@ -33,7 +33,6 @@ from src.modules.types.emotion_vocab import Emotion
 
 from .lip_sync_renderer import WarudoLipSyncRenderer
 from .state.warudo_state_manager import WarudoStateManager
-from .subtitle.subtitle_manager import WarudoSubtitleManager
 from .tasks.blink_task import BlinkTask
 from .tasks.shift_task import ShiftTask
 from .tasks.talking_head_task import TalkingHeadTask
@@ -147,18 +146,17 @@ class WarudoProvider(BaseToolProvider):
     category = "avatar"
 
     class ConfigSchema(BaseConfig):
-        """Warudo 配置（WebSocket + 字幕 + 后台任务 + 动作目录）
+        """Warudo 配置（WebSocket + 后台任务 + 动作目录）
 
         TOML 段位：[tools.avatar.warudo].config
+        （历史 subtitle_enabled/subtitle_port/subtitle_show_status 三键随
+        8766 字幕面删除而移除，字幕收敛为 Dashboard /subtitle 一面。）
         """
 
         type: str = "warudo"
         ws_host: str = Field(default="localhost", description="Warudo WebSocket 主机地址")
         ws_port: int = Field(default=19190, ge=1, le=65535, description="Warudo WebSocket 端口")
         reconnect_delay_seconds: float = Field(default=5.0, ge=0.0, description="断线重连间隔秒数")
-        subtitle_enabled: bool = Field(default=True, description="是否启用 Warudo 字幕服务")
-        subtitle_port: int = Field(default=8766, ge=1, le=65535, description="字幕服务端口")
-        subtitle_show_status: bool = Field(default=False, description="字幕窗口是否显示状态")
         talking_head_enabled: bool = Field(default=True, description="是否启用 TalkingHead 后台任务")
         talking_head_interval: float = Field(default=0.1, ge=0.01, description="TalkingHead 最小间隔秒数")
         throw_fish_cooldown: float = Field(default=5.0, ge=0.0, description="抛鱼动画冷却秒数")
@@ -190,9 +188,6 @@ class WarudoProvider(BaseToolProvider):
         self.ws_host: str = self.typed_config.ws_host
         self.ws_port: int = self.typed_config.ws_port
         self.reconnect_delay_seconds: float = self.typed_config.reconnect_delay_seconds
-        self.subtitle_enabled: bool = self.typed_config.subtitle_enabled
-        self.subtitle_port: int = self.typed_config.subtitle_port
-        self.subtitle_show_status: bool = self.typed_config.subtitle_show_status
         self.talking_head_enabled: bool = self.typed_config.talking_head_enabled
         self.talking_head_interval: float = self.typed_config.talking_head_interval
         self.throw_fish_cooldown: float = self.typed_config.throw_fish_cooldown
@@ -233,14 +228,6 @@ class WarudoProvider(BaseToolProvider):
             send_action_callback=send_action_callback,
             logger=self.logger,
         )
-
-        self.subtitle_manager: Optional[WarudoSubtitleManager] = None
-        if self.subtitle_enabled:
-            self.subtitle_manager = WarudoSubtitleManager(
-                port=self.subtitle_port,
-                show_status=self.subtitle_show_status,
-                logger=self.logger,
-            )
 
         self._is_connected = False
         self._has_started = False
@@ -464,12 +451,6 @@ class WarudoProvider(BaseToolProvider):
         except Exception as e:
             self.logger.error(f"停止状态监控失败: {e}")
 
-        if self.subtitle_manager is not None:
-            try:
-                await self.subtitle_manager.stop_server()
-            except Exception as e:
-                self.logger.error(f"停止字幕服务器失败: {e}")
-
         # 取消 WebSocket 重连循环
         self._should_stop = True
         if self._connection_task and not self._connection_task.done():
@@ -497,24 +478,12 @@ class WarudoProvider(BaseToolProvider):
 
     # ===== 业务方法 =====
 
-    async def push_subtitle(self, speech: str, user_name: str = "MaiBot") -> None:
-        if not self.subtitle_manager or not speech:
-            return
-        try:
-            await self.subtitle_manager.start_generation(user_name)
-            await self.subtitle_manager.add_chunk(speech)
-            await self.subtitle_manager.complete_generation()
-            self.logger.debug(f"字幕已推送: {speech[:50]}...")
-        except Exception as e:
-            self.logger.error(f"字幕推送失败: {e}")
-
     def get_stats(self) -> Dict[str, Any]:
         return {
             "name": self.__class__.__name__,
             "is_connected": self._is_connected,
             "render_count": self.render_count,
             "error_count": self.error_count,
-            "subtitle_enabled": self.subtitle_manager is not None,
             "talking_head_running": self.talking_head_task.running if self.talking_head_task else False,
         }
 

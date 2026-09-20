@@ -8,7 +8,6 @@ from .state.warudo_state_manager import (
     SightState,
     WarudoStateManager,
 )
-from .subtitle.subtitle_manager import WarudoSubtitleManager
 from .tasks.blink_task import BlinkTask
 from .tasks.shift_task import ShiftTask
 from .tasks.talking_head_task import TalkingHeadTask
@@ -27,7 +26,6 @@ __all__ = [
     "EyeState",
     "PupilState",
     "MouthState",
-    "WarudoSubtitleManager",
     "BlinkTask",
     "ShiftTask",
     "TalkingHeadTask",

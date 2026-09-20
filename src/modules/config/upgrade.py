@@ -264,6 +264,30 @@ def _upgrade_vts_lipsync_to_infra(host_data: Dict[str, Any], target_data: Dict[s
 register_cross_file_hook("tools.toml", "infra.toml", "vts_lipsync_to_infra", "2.0.36", _upgrade_vts_lipsync_to_infra)
 
 
+def _drop_warudo_subtitle_keys(data: Dict[str, Any]) -> List[str]:
+    """tools.toml v2.0.37：删 [tools.avatar.warudo].config 三个字幕键。
+
+    Warudo 8766 字幕面整体删除（与 Dashboard /subtitle 页重叠），字幕收敛
+    为"一源 → 三面"；三键失去消费者。对已迁移数据零变更（幂等）。
+    """
+    tools = data.get("tools")
+    avatar = tools.get("avatar") if isinstance(tools, dict) else None
+    warudo = avatar.get("warudo") if isinstance(avatar, dict) else None
+    warudo_config = warudo.get("config") if isinstance(warudo, dict) else None
+    if not isinstance(warudo_config, dict):
+        return []
+    changed: List[str] = []
+    for key in ("subtitle_enabled", "subtitle_port", "subtitle_show_status"):
+        if key in warudo_config:
+            del warudo_config[key]
+            changed.append(f"tools.avatar.warudo.config.{key}")
+    return changed
+
+
+# 生产钩子登记：tools.toml v2.0.37（Warudo 字幕三键删除，8766 面退役）
+register_file_hook("tools.toml", "drop_warudo_subtitle_keys", "2.0.37", _drop_warudo_subtitle_keys)
+
+
 def _version_tuple(version: str) -> tuple[int, ...]:
     """版本号 → 可比较元组（"2.0.31" → (2, 0, 31)）；解析失败按 0 处理"""
     try:

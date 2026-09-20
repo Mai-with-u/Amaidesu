@@ -517,6 +517,18 @@ async def create_app_components(
         # 构造链注入播放器分接（播放器对所有 sink 调用 fail-soft）。
         tts_engine = build_tts_infrastructure(tts_section, event_bus=event_bus, audio_sink=lipsync_analyzer)
 
+        # 字幕源择流（装配期取事实，两种模式互斥）：TTS 引擎在位 → 字幕跟随
+        # 播放事件（started/failed 显示、finished 清空），编排层不再派发直出；
+        # 无引擎（禁用或构建失败）→ 保持派发直出（现状路径）。
+        subtitle_follows_playback = tts_engine is not None
+        if subtitle_follows_playback:
+            from src.modules.subtitle.playback_follower import bind_playback_subtitle
+
+            _playback_subtitle_handlers = bind_playback_subtitle(event_bus, subtitle_service, logger)
+            logger.info("字幕源已择流：跟随 TTS 播放事件（tts.utterance.*）")
+        else:
+            logger.info("字幕源已择流：编排层派发直出（无 TTS 引擎）")
+
         # 思考流旁路 hub（ADR-008；观察面专用）：Agent 装配先于 dashboard 启动，
         # ws 通道延迟绑定（dashboard 就绪后 attach_ws）；未绑定期间 delta 丢弃。
         # 配置从 [agents.streamer.thinking_stream] 子段读取（嵌套结构）。
@@ -554,7 +566,8 @@ async def create_app_components(
             task_tracker,
             tts_section=tts_section,
             tts_engine=tts_engine,
-            subtitle_service=subtitle_service,
+            # 有 TTS 时字幕走播放事件跟随器，编排层不再直出（互斥择流）
+            subtitle_service=None if subtitle_follows_playback else subtitle_service,
             session_manager=session_manager,
             thinking_sink=thinking_hub,
         )
@@ -948,6 +961,7 @@ async def _register_agents_from_config(
             thinking_sink=thinking_sink,
             speech_config=speech_cfg,
             tts_engine=tts_engine,
+            # 调用方已按装配期择流传入（有 TTS → None，字幕走播放事件跟随器）
             subtitle_service=subtitle_service,
             session_manager=session_manager,
             # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
