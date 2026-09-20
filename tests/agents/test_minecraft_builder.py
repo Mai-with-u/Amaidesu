@@ -263,6 +263,47 @@ async def test_idle_visibility_and_parent_stop(harness: Harness) -> None:
     assert not any(spec.provider.startswith("minecraft_builder") for spec in harness.registry.list_tools())
 
 
+@pytest.mark.parametrize("reason", ["length", "content_filter", None])
+async def test_incomplete_model_turn_never_reaches_mod(harness: Harness, reason: str | None) -> None:
+    """即使参数恰好是合法 JSON，只要模型未正常结束，本轮就不能进入 Mod。"""
+    incomplete = valid_design()[0].model_copy(update={"finish_reason": reason})
+    harness.llm.generate.side_effect = [incomplete, *valid_design()]
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    assert harness.builder._jobs[task_id].status == "succeeded"
+    assert len(harness.mod.operations("create_scene")) == 1
+    assert harness.llm.generate.call_args.kwargs["omit_output_token_limit"] is True
+    assert harness.llm.generate.call_args.kwargs["strict_tool_arguments"] is True
+
+
+async def test_bad_arguments_invalidate_entire_turn_and_old_candidate(harness: Harness) -> None:
+    """同轮出现不完整补丁时，不能先执行 finish 把上一个候选交付出去。"""
+    broken = Response(
+        success=True,
+        finish_reason="tool_calls",
+        tool_calls=[
+            ToolCall(id="finish", name="minecraft_builder_work_finish", arguments={"summary": "过早交付"}),
+            ToolCall(
+                id="broken",
+                name="minecraft_builder_work_validate",
+                arguments={},
+                raw_arguments='{"design":',
+                arguments_error="JSON 未结束",
+            ),
+        ],
+    )
+    harness.llm.generate.side_effect = [
+        valid_design()[0],
+        broken,
+        valid_design()[1],
+        response("minecraft_builder_work_fail", {"reason": "完整设计尚未重新校验"}),
+    ]
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    assert harness.builder._jobs[task_id].status == "failed"
+    assert harness.builder._jobs[task_id].result is None
+
+
 async def test_disabled_builder_has_no_tools_or_prompt() -> None:
     """显式关闭建造功能时父 Agent 不宣传或装配它。"""
     parent = MinecraftAgent(
@@ -585,6 +626,78 @@ async def test_second_design_does_not_start_competing_construction(harness: Harn
     conflict = await harness.call("minecraft_builder_task", {"task_id": second, "action": "execute"})
     assert not conflict.success and "另一份设计" in conflict.error_message
     assert len(harness.mod.operations("build")) == 1
+
+
+async def test_mod_acceptance_is_not_design_success(harness: Harness) -> None:
+    """Mod 接收无效设计后返回失败终态，客户端不能把 accepted 当作已校验产物。"""
+    harness.mod.valid = False
+    harness.llm.generate.side_effect = [
+        *valid_design(),
+        response("minecraft_builder_work_fail", {"reason": "无法编译"}),
+    ]
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    assert harness.builder._jobs[task_id].status == "failed"
+    assert harness.builder._jobs[task_id].result is None
+    assert not harness.mod.saved_scenes
+
+
+async def test_pending_mod_design_waits_without_extra_model_calls(harness: Harness) -> None:
+    """设计操作尚未终结时由代码等待，不能花推理轮次轮询受理回执。"""
+    harness.builder._config.operation_poll_interval_ms = 1
+    harness.mod.pending_design_queries = 2
+    harness.llm.generate.side_effect = valid_design()
+    await harness.request(intent="design")
+    await harness.finish_worker()
+    assert harness.llm.generate.await_count == 2
+    assert len([call for call in harness.mod.calls if call.arguments.get("action") == "get"]) == 3
+
+
+async def test_named_edit_creates_new_scene_without_copying_full_model(harness: Harness) -> None:
+    """对象补丁由 Mod 合并，新的场景引用取代候选，旧场景继续存在。"""
+    edits = {"objects": [{"name": "screen", "pattern": {"rows": ["01", "10"]}}]}
+    harness.llm.generate.side_effect = [
+        valid_design()[0],
+        response("minecraft_builder_work_update", {"edits": edits}),
+        response("minecraft_builder_work_inspect", {"kind": "object", "name": "screen", "page": 1}),
+        valid_design()[1],
+    ]
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    result = harness.builder._jobs[task_id].result
+    assert result.artifact_ref == "draft-2" and result.design is None
+    assert result.validation["parent_scene_id"] == "draft-1"
+    assert "draft-1" in harness.mod.saved_scenes
+    update = harness.mod.operations("update_scene")[0].arguments["goal"]
+    assert update["ability"] == "maicraft:design_build"
+    assert update["parameters"]["edits"] == edits and "scene" not in update["parameters"]
+    assert "target" not in update
+    inspect = harness.mod.operations("get_object_info")[0].arguments["goal"]["parameters"]
+    assert inspect["object_name"] == "screen" and inspect["page"] == 1
+
+
+async def test_same_design_retry_reuses_key_distinct_from_construction(harness: Harness) -> None:
+    """同内容重试不会产生重复场景，施工使用单独的稳定键。"""
+    harness.llm.generate.side_effect = [valid_design()[0], *valid_design()]
+    task_id = await harness.request()
+    await harness.finish_worker()
+    await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "execute"})
+    keys = [call.arguments["request_key"] for call in harness.mod.operations("create_scene")]
+    assert keys[0] == keys[1] and len(harness.mod.saved_scenes) == 1
+    assert keys[0] != harness.mod.operations("build")[0].arguments["request_key"]
+
+
+async def test_invalid_named_edit_is_rejected_before_mod(harness: Harness) -> None:
+    """编辑格式也使用 Mod 指定的局部 Schema，错误补丁不能进入场景存储。"""
+    harness.llm.generate.side_effect = [
+        valid_design()[0],
+        response("minecraft_builder_work_update", {"edits": {"objects": "不是数组"}}),
+        response("minecraft_builder_work_fail", {"reason": "无法修正对象列表"}),
+    ]
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    assert not harness.mod.operations("update_scene")
+    assert harness.builder._jobs[task_id].result is None
 
 
 async def test_real_completion_event_wakes_parent_once_with_design_reference(harness: Harness) -> None:

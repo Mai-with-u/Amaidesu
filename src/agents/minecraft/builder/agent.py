@@ -197,6 +197,8 @@ class MinecraftBuilderAgent(BaseAgent):
                 messages,
                 profile="minecraft_builder",
                 interrupt=self._interrupt,
+                omit_output_token_limit=True,
+                strict_tool_arguments=True,
                 tools=[
                     {"name": spec.full_name, "description": spec.description, "parameters": spec.parameters_schema}
                     for spec in specs
@@ -207,7 +209,30 @@ class MinecraftBuilderAgent(BaseAgent):
             if not response.success:
                 raise ValueError(response.error or "建筑设计模型调用失败")
             calls = response.tool_calls or []
+            # 只有正常结束且参数完整的一整轮调用才可执行，避免半份模型或补丁改变设计。
+            incomplete = ""
+            if response.finish_reason not in {"stop", "tool_calls", "function_call"}:
+                incomplete = f"模型输出未确认完整结束（结束原因：{response.finish_reason or '未提供'}）"
+            elif any(call.arguments_error for call in calls):
+                incomplete = "工具参数不是完整合法的 JSON：" + "; ".join(
+                    call.arguments_error for call in calls if call.arguments_error
+                )
+            if incomplete:
+                self._candidate = None
+                logger.warning(f"建筑设计 {self.job.task_id} 拒绝未完整输出：{incomplete}")
+            correction = incomplete + (
+                "；本轮所有工具均未执行。请重新输出完整调用，不要补括号后使用半份设计。"
+                "输出过长时先创建有效场景，再用具名对象编辑分次提交完整 JSON 调用。"
+            )
             if not calls:
+                if incomplete:
+                    history.extend(
+                        [
+                            {"role": "assistant", "content": response.content or ""},
+                            {"role": "user", "content": correction},
+                        ]
+                    )
+                    continue
                 raise ValueError("建造 Agent 未通过 finish 交付已校验设计")
             history.append(
                 {
@@ -217,7 +242,12 @@ class MinecraftBuilderAgent(BaseAgent):
                         {
                             "id": call.id,
                             "type": "function",
-                            "function": {"name": call.name, "arguments": json_text(call.arguments)},
+                            "function": {
+                                "name": call.name,
+                                "arguments": (
+                                    call.raw_arguments if call.raw_arguments is not None else json_text(call.arguments)
+                                ),
+                            },
                         }
                         for call in calls
                     ],
@@ -225,7 +255,9 @@ class MinecraftBuilderAgent(BaseAgent):
             )
             for call in calls:
                 await self._resume.wait()
-                if call.name not in allowed:
+                if incomplete:
+                    observation = {"ok": False, "error": correction}
+                elif call.name not in allowed:
                     observation = {"ok": False, "error": "该工具未授予建造 Agent"}
                 else:
                     result = await self._registry.invoke(
