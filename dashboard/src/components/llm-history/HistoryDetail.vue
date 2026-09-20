@@ -37,6 +37,10 @@
           {{ detail.usage.completion_tokens }} / 总计:
           {{ detail.usage.total_tokens }}
         </el-descriptions-item>
+        <el-descriptions-item v-if="cacheReported" label="缓存命中">
+          命中 {{ detail.cache_hit_tokens.toLocaleString() }} / 未中
+          {{ detail.cache_miss_tokens.toLocaleString() }}（{{ cacheRateText }}）
+        </el-descriptions-item>
         <el-descriptions-item v-if="detail.cost !== undefined" label="费用">
           {{ formatCost(detail.cost) }}
         </el-descriptions-item>
@@ -192,6 +196,21 @@ const promptSystem = computed<string>(() => {
 const promptFallback = computed(() => {
   const prompt = props.detail?.request_params?.prompt as string | undefined;
   return prompt || '';
+});
+
+// 缓存命中：上游上报了（hit+miss>0）才展示，0/0 是"未上报"而非零命中
+const cacheReported = computed(() => {
+  const d = props.detail;
+  if (!d) return false;
+  return d.cache_hit_tokens + d.cache_miss_tokens > 0;
+});
+
+const cacheRateText = computed(() => {
+  const d = props.detail;
+  if (!d) return '—';
+  const total = d.cache_hit_tokens + d.cache_miss_tokens;
+  if (total <= 0) return '—';
+  return `${((d.cache_hit_tokens / total) * 100).toFixed(1)}%`;
 });
 
 // 长标识截短展示，完整值走悬浮提示

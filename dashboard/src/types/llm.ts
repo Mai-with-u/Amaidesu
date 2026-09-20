@@ -95,6 +95,9 @@ export interface LLMRequestHistorySummary {
   success: boolean;
   error: string | null;
   latency_ms: number;
+  /** 缓存命中 token；与未中均为 0 表示上游未上报（≠零命中） */
+  cache_hit_tokens: number;
+  cache_miss_tokens: number;
 }
 
 /** 单条请求历史完整记录（GET /llm/history/{id} 详情） */
@@ -113,6 +116,9 @@ export interface LLMRequestHistory {
   success: boolean;
   error: string | null;
   latency_ms: number;
+  /** 缓存命中 token；与未中均为 0 表示上游未上报（≠零命中） */
+  cache_hit_tokens: number;
+  cache_miss_tokens: number;
 }
 
 // 历史查询参数（start_time/end_time 为 Unix 毫秒）

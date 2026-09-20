@@ -4,6 +4,7 @@ LLM 管理 API
 提供 LLM 用量统计、用量趋势图表和请求历史的查询接口。
 """
 
+import json
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -215,6 +216,37 @@ def _preview(text: Any, limit: int = 80) -> str:
     return text.strip()[:limit]
 
 
+def _tool_calls_preview(tool_calls: Any, limit: int = 80) -> str:
+    """工具调用型响应的列表预览：首个调用的「[调用 函数名] 参数摘要」。
+
+    Planner/Replyer 的响应以 tool_calls 承载（response_content 为空），
+    只看 response_content 会整列显示为空。
+    """
+    if not isinstance(tool_calls, list):
+        return ""
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        func = call.get("function")
+        if not isinstance(func, dict):
+            continue
+        name = str(func.get("name") or "").strip()
+        args = func.get("arguments")
+        if isinstance(args, str):
+            args_text = args
+        elif args is None:
+            args_text = ""
+        else:
+            try:
+                args_text = json.dumps(args, ensure_ascii=False)
+            except TypeError:
+                args_text = str(args)
+        combined = f"[调用 {name}] {args_text}".strip()
+        if combined != "[调用]" and combined:
+            return _preview(combined, limit)
+    return ""
+
+
 def _message_text(message: Any) -> str:
     """中立契约消息（{role, parts, ...}）的正文文本：拼接 parts 片段，图像片段以占位符呈现"""
     if not isinstance(message, dict) or not isinstance(message.get("parts"), list):
@@ -246,18 +278,23 @@ def _build_list_item(record: Dict[str, Any]) -> LLMRequestHistoryListItem:
                 prompt_preview = _preview(text)
                 break
 
+    response_preview = _preview(record.get("response_content"))
+    if not response_preview:
+        response_preview = _tool_calls_preview(record.get("tool_calls"))
     return LLMRequestHistoryListItem(
         request_id=record.get("request_id", ""),
         timestamp_ms=record.get("timestamp", 0),
         client_type=record.get("client_type", ""),
         model_name=record.get("model_name", ""),
         prompt_preview=prompt_preview,
-        response_preview=_preview(record.get("response_content")),
+        response_preview=response_preview,
         usage=_convert_usage(record.get("usage")),
         cost=record.get("cost", 0.0),
         success=record.get("success", True),
         error=record.get("error"),
         latency_ms=record.get("latency_ms", 0),
+        cache_hit_tokens=int(record.get("cache_hit_tokens") or 0),
+        cache_miss_tokens=int(record.get("cache_miss_tokens") or 0),
     )
 
 
@@ -277,4 +314,6 @@ def _convert_record_to_response(record: Dict[str, Any]) -> LLMRequestHistoryResp
         success=record.get("success", True),
         error=record.get("error"),
         latency_ms=record.get("latency_ms", 0),
+        cache_hit_tokens=int(record.get("cache_hit_tokens") or 0),
+        cache_miss_tokens=int(record.get("cache_miss_tokens") or 0),
     )

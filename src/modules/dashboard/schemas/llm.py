@@ -66,6 +66,9 @@ class LLMRequestHistoryResponse(BaseModel):
     success: bool = True
     error: Optional[str] = None
     latency_ms: int = 0
+    # 上游上报的缓存 token 明细；二者均为 0 表示上游未上报（≠零命中）
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
 
 
 class LLMRequestHistoryListItem(BaseModel):
@@ -82,6 +85,9 @@ class LLMRequestHistoryListItem(BaseModel):
     success: bool = True
     error: Optional[str] = None
     latency_ms: int = 0
+    # 上游上报的缓存 token 明细；二者均为 0 表示上游未上报（≠零命中）
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
 
 
 class LLMHistoryListResponse(BaseModel):

@@ -279,6 +279,8 @@ class RequestHistoryManager:
             "success": bool(row.get("success", 1)),
             "error": row.get("error"),
             "latency_ms": int(row.get("latency_ms", 0)),
+            "cache_hit_tokens": int(row.get("cache_hit_tokens") or 0),
+            "cache_miss_tokens": int(row.get("cache_miss_tokens") or 0),
         }
 
     async def get_request_by_id(self, request_id: str) -> Optional[Dict[str, Any]]:

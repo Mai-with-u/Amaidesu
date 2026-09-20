@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -290,3 +291,62 @@ def test_usage_trends_empty_db(client: TestClient) -> None:
     assert all(p["total_calls"] == 0 for p in body["points"])
     assert all(p["cache_hit_rate"] is None for p in body["points"])
     assert body["model_points"] == []
+
+
+def test_history_list_response_preview_falls_back_to_tool_calls(client: TestClient) -> None:
+    """响应以 tool_calls 承载（response_content 空）时，列表预览回退为首条工具调用摘要。"""
+    store = _server_ref_cache["store"]
+
+    async def _seed() -> None:
+        await store.llm.insert_llm_call(
+            usage=LLMUsageInsert(
+                model_name=MODEL_A,
+                provider_name="test",
+                request_type="chat",
+                prompt_tokens=100,
+                completion_tokens=50,
+                total_tokens=150,
+                cost=0.01,
+                request_id="tc1",
+                timestamp_ms=1_700_000_000_000,
+                cache_hit_tokens=3840,
+                cache_miss_tokens=84,
+            ),
+            request=LLMRequestInsert(
+                request_id="tc1",
+                timestamp_ms=1_700_000_000_000,
+                client_type="planner",
+                model_name=MODEL_A,
+                tool_calls_json=json.dumps(
+                    [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "reply",
+                                "arguments": {"speech": "今天开的就是《我的世界》"},
+                            },
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                cache_hit_tokens=3840,
+                cache_miss_tokens=84,
+            ),
+        )
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(_seed())
+    loop.close()
+
+    body = client.get("/api/v1/llm/history", params={"page": 1, "page_size": 10}).json()
+    row = next(item for item in body["items"] if item["request_id"] == "tc1")
+    assert row["response_preview"].startswith("[调用 reply]")
+    assert "我的世界" in row["response_preview"]
+    # 逐条缓存明细随行返回，前端据此算命中率（0/0 = 未上报 ≠ 零命中）
+    assert row["cache_hit_tokens"] == 3840
+    assert row["cache_miss_tokens"] == 84
+
+    detail = client.get("/api/v1/llm/history/tc1").json()
+    assert detail["cache_hit_tokens"] == 3840
+    assert detail["cache_miss_tokens"] == 84

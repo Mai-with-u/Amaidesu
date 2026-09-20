@@ -62,6 +62,19 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="缓存" width="80" align="right">
+        <template #default="{ row }">
+          <el-tooltip
+            v-if="cacheRate(row) !== null"
+            :content="`命中 ${row.cache_hit_tokens.toLocaleString()} / 未中 ${row.cache_miss_tokens.toLocaleString()} tokens`"
+            placement="top"
+          >
+            <span class="cache-rate">{{ cacheRateText(row) }}</span>
+          </el-tooltip>
+          <span v-else class="text-muted" title="上游未上报缓存用量">—</span>
+        </template>
+      </el-table-column>
+
       <el-table-column prop="success" label="状态" width="80" align="center">
         <template #default="{ row }">
           <el-tag :type="row.success ? 'success' : 'danger'" size="small" effect="plain">
@@ -125,6 +138,18 @@ function handleShowDetail(row: LLMRequestHistorySummary) {
   emit('show-detail', row);
 }
 
+/** 逐条缓存命中率（0-100）；hit+miss 均为 0 表示上游未上报，返回 null */
+function cacheRate(row: LLMRequestHistorySummary): number | null {
+  const total = row.cache_hit_tokens + row.cache_miss_tokens;
+  if (total <= 0) return null;
+  return (row.cache_hit_tokens / total) * 100;
+}
+
+function cacheRateText(row: LLMRequestHistorySummary): string {
+  const rate = cacheRate(row);
+  return rate === null ? '—' : `${rate.toFixed(1)}%`;
+}
+
 function handleSizeChange(size: number) {
   emit('update:queryParams', { ...props.queryParams, page_size: size, page: 1 });
   emit('page-change');
@@ -145,6 +170,11 @@ function handleCurrentChange(page: number) {
 }
 
 .mono {
+  font-size: 12px;
+}
+
+.cache-rate {
+  font-variant-numeric: tabular-nums;
   font-size: 12px;
 }
 .model-name {
