@@ -15,13 +15,18 @@ from pathlib import Path
 from src.agents.streamer import replyer as replyer_module
 from src.agents.streamer.replyer import Replyer
 
-_TEMPLATE_PATH = Path(replyer_module.__file__).parent / "prompts" / "amaidesu_replyer.md"
+_PROMPTS_DIR = Path(replyer_module.__file__).parent / "prompts"
+_TEMPLATE_PATHS = [
+    _PROMPTS_DIR / "amaidesu_replyer_system.md",
+    _PROMPTS_DIR / "amaidesu_replyer.md",
+]
 
 
 def test_template_no_action_tool_mention():
-    """模板正文不含"动作工具"字样。"""
-    text = _TEMPLATE_PATH.read_text(encoding="utf-8")
-    assert "动作工具" not in text
+    """两份模板（system 稳定段 / 本轮输入段）正文均不含"动作工具"字样。"""
+    for path in _TEMPLATE_PATHS:
+        text = path.read_text(encoding="utf-8")
+        assert "动作工具" not in text, f"{path.name} 含'动作工具'字样"
 
 
 def test_function_def_props_match_parser():

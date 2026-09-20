@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,11 +13,26 @@ from src.agents.streamer.replyer import WordFilter, Replyer
 from src.modules.llm.payload import Response, ToolCall
 
 
-def _make_plan(should_reply: bool = True) -> DecisionPlan:
+@dataclass(frozen=True)
+class FakeTurn:
+    """live_chat 行的历史视图（同 _LiveChatTurn 全字段，鸭子类型替身）。"""
+
+    role: str
+    content: str
+    sender_name: str = ""
+    message_type: str = "danmaku"
+    message_id: str = ""
+
+
+def _make_plan(
+    should_reply: bool = True,
+    target: str = "m1",
+    topic_summary: str = "打游戏",
+) -> DecisionPlan:
     return DecisionPlan(
         should_reply=should_reply,
-        target="m1",
-        topic_summary="打游戏",
+        target=target,
+        topic_summary=topic_summary,
         reply_guidance="回应夸奖，带点得意",
         confidence=0.9,
     )
@@ -130,8 +146,12 @@ class TestReplyerGenerate:
         assert result["metadata"]["topic_summary"] == "打游戏"
 
     @pytest.mark.asyncio
-    async def test_replyer_persona_in_prompt(self) -> None:
-        """断言 prompt 渲染入包含构造 config 注入的 $personality / $style_constraints / $bot_name。"""
+    async def test_replyer_persona_in_system_and_data_in_turn_input(self) -> None:
+        """稳定段渲染入参含构造 config 注入的人设四件套；变化段渲染入参含决策与弹幕。
+
+        system 模板（amaidesu_replyer_system）承载人设/风格等全程稳定段，
+        本轮输入模板（amaidesu_replyer）只承载每轮变化的决策与弹幕。
+        """
         r, _llm, prompt = _make_replyer(
             llm_response=_make_llm_response(
                 tool_calls=[_tool_call_reply()],
@@ -145,17 +165,81 @@ class TestReplyerGenerate:
         plan = _make_plan()
         await r.generate(plan, [])
 
-        kwargs = prompt.render.call_args.kwargs
-        assert "personality" in kwargs
-        assert kwargs["personality"] == "活泼开朗，有些调皮"
-        assert "style_constraints" in kwargs
-        assert kwargs["style_constraints"] == "口语化、简短"
-        assert "bot_name" in kwargs
-        assert kwargs["bot_name"] == "麦麦"
-        assert "plan" in kwargs
-        assert "danmaku_batch" in kwargs
+        by_template = {call.args[0]: call.kwargs for call in prompt.render.call_args_list}
+        system_kwargs = by_template["amaidesu_replyer_system"]
+        assert system_kwargs["personality"] == "活泼开朗，有些调皮"
+        assert system_kwargs["style_constraints"] == "口语化、简短"
+        assert system_kwargs["bot_name"] == "麦麦"
+        assert system_kwargs["audience_salutation"] == "大家"
+        assert "plan" not in system_kwargs and "danmaku_batch" not in system_kwargs
+
+        user_kwargs = by_template["amaidesu_replyer"]
+        assert user_kwargs["plan"] is not None
+        assert user_kwargs["danmaku_batch"] is not None
+        assert user_kwargs["rundown"] == "（当前无流程单）"
+        assert "personality" not in user_kwargs and "bot_name" not in user_kwargs
         # Y 模型：移除 $action_list（actions 走 tool_calls）
-        assert "action_list" not in kwargs
+        assert all("action_list" not in kwargs for kwargs in by_template.values())
+
+    @pytest.mark.asyncio
+    async def test_replyer_history_as_native_messages(self) -> None:
+        """对话历史经 canonical 走原生消息通道：历史消息在前逐条映射，本轮输入 user 消息收尾。"""
+        r, llm, _prompt = _make_replyer(
+            llm_response=_make_llm_response(tool_calls=[_tool_call_reply()]),
+        )
+        history = [
+            FakeTurn(role="user", content="大家好呀", sender_name="小明", message_id="m1"),
+            FakeTurn(role="assistant", content="晚上好", message_type="speak", message_id="m2"),
+        ]
+        await r.generate(_make_plan(), [], history=history)
+
+        messages = llm.generate.await_args.args[0]
+        assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+        assert messages[0] == {"role": "user", "content": "小明: 大家好呀 [id:m1]"}
+        assert messages[1] == {"role": "assistant", "content": "晚上好"}
+        assert messages[-1]["role"] == "user"
+        assert "PROMPT" in messages[-1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_replyer_message_prefix_byte_stable_across_requests(self) -> None:
+        """缓存契约：同一段历史在两次请求中逐字一致，只有末条本轮输入变化。
+
+        system + 历史构成请求稳定前缀，供应商前缀缓存据此命中；本轮输入
+        （决策/弹幕/流程单）只允许出现在序列尾。
+        """
+        r, llm, prompt = _make_replyer(
+            llm_response=_make_llm_response(tool_calls=[_tool_call_reply()]),
+        )
+        # 渲染 mock 按模板区分返回值，使两次请求的本轮输入内容可区分
+        prompt.render = MagicMock(
+            side_effect=lambda name, **kwargs: "SYSTEM-STABLE"
+            if name.endswith("_system")
+            else f"TURN<{kwargs.get('plan')}>"
+        )
+        history = [
+            FakeTurn(role="user", content="大家好呀", sender_name="小明", message_id="m1"),
+            FakeTurn(role="assistant", content="晚上好", message_type="speak", message_id="m2"),
+        ]
+
+        await r.generate(_make_plan(target="m1", topic_summary="聊吉他"), [], history=history)
+        await r.generate(_make_plan(target="m9", topic_summary="聊晚饭"), [], history=history)
+
+        first = llm.generate.await_args_list[0].args[0]
+        second = llm.generate.await_args_list[1].args[0]
+        assert second[:-1] == first[:-1]
+        assert first[-1]["content"] != second[-1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_replyer_passes_system_and_reply_tools(self) -> None:
+        """generate 以 system 参数携带稳定段；工具面仅 reply 一项。"""
+        r, llm, _prompt = _make_replyer(
+            llm_response=_make_llm_response(tool_calls=[_tool_call_reply()]),
+        )
+        await r.generate(_make_plan(), [])
+
+        kwargs = llm.generate.await_args.kwargs
+        assert kwargs.get("system") == "PROMPT"
+        assert [t["name"] for t in kwargs["tools"]] == ["reply"]
 
     @pytest.mark.asyncio
     async def test_replyer_uses_replyer_profile(self) -> None:
