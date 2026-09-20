@@ -477,6 +477,8 @@ async def create_app_components(
 
     # --- AgentManager + StreamerAgent ---
     agent_manager: Optional["AgentManager"] = None
+    # 无 [agents] 段时不进装配分支，但后续 provider 启动段仍会引用，须预置
+    tool_registry: Optional[ToolRegistry] = None
     thinking_hub: Optional[StreamPreviewHub] = None
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
     if agents_config:
