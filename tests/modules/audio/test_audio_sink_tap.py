@@ -103,7 +103,7 @@ def test_full_playback_taps_sink():
     try:
         import asyncio
 
-        asyncio.get_event_loop().run_until_complete(mgr.play_audio(audio, samplerate=16000))
+        asyncio.run(mgr.play_audio(audio, samplerate=16000))
     except Exception:
         pass  # 声卡依赖缺失/播放失败的路径：播放异常与分接正交
 

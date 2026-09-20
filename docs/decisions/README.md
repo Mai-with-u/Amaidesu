@@ -46,3 +46,7 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-020：dashboard 服务层分层（api 协议转换 / services 业务逻辑 / schemas 契约）](020-dashboard-service-layer.md)
 - [ADR-021：全站时间字段毫秒统一（Unix epoch 毫秒 int，原子切换）](021-millisecond-time-unification.md)
 - [ADR-022：列表型配置是一等公民——整值编辑与索引回填](022-list-config-as-first-class.md)
+- [ADR-023：皮套平台无关边界——平台差异全关进适配器](023-avatar-platform-agnostic-boundary.md)
+- [ADR-024：口型帧级通道——AudioSink 分接 + 共享分析器 + 平台渲染器](024-lipsync-frame-channel.md)
+- [ADR-025：字幕单一源——装配期择流 + Warudo 字幕面退役](025-subtitle-single-source.md)
+- [ADR-026：皮套工具面契约——语义参数、发现协议与结构类型规范](026-avatar-tool-surface-contract.md)

@@ -40,7 +40,7 @@ v2 主体性架构确立后，Amaidesu 已形成 Agent + 工具 + 存储 + 编�
    - `tools.toml` **零 TTS 段**——TTS 引擎作为基础模块后连接/合成参数不再外泄到工具配置；迁移由 `CROSS_FILE_MIGRATIONS`（`multi_file_loader.py`）从 `tools.toml [tools.output.config.<engine>]` 整体搬运到 `infra.toml [tts.<engine>]`，源段被切除
    - 配置版本由各文件 `[meta].version` 独立推进（TTS 段随 `infra.toml`）
 5. **消费者通道三分法**（与语音的时间耦合度匹配）：
-   - **帧级耦合**（未来）皮套口型精准同步 → 工具 invoke 参数流式接口（**留白**，YAGNI 暂不建，待真需求）
+   - **帧级耦合**（未来）皮套口型精准同步 → 工具 invoke 参数流式接口（**留白**，YAGNI 暂不建，待真需求；后经 ADR-024 以播放器分接形态兑现）
    - **起止对齐**（字幕、记账）→ 订阅 `tts.utterance.{started,finished,failed}` 三事件
    - **无耦合**（emotion 表情）→ StreamerAgent 直接 invoke `vts_set_expression`，不经事件、不入队列
    三分法依据详见 [数据流规则 - 通信机制选型](../architecture/data-flow.md) 节中的"TTS 消费者的通道三分法"。
@@ -101,9 +101,11 @@ v2 主体性架构确立后，Amaidesu 已形成 Agent + 工具 + 存储 + 编�
   - **`tts.utterance.*` 事件精度百毫秒级**（不是 DAC 采样点精度）。声卡硬件缓冲残余**不在**信号内——事件是引擎回调信号而非播放端物理信号；记账消费者应明确这点（百毫秒级足够会计时）。
   - **配置层级多一段**。`infra.toml` 新增 `[tts]` 段是必要的（独立基础设施级调度字段 + 引擎子段），但增加了配置面；与 `tools.toml` 的边界需在文档中明确（详见 [v2 架构叙事 - 配置：六文件 + 每文件版本 + 包内权威 + 单一管线](../architecture/v2-architecture.md)）。
 - **遗留**：
-  - **帧级 PCM 流接口留白**。皮套口型精准同步的帧级消费者接口未建，待真需求；当前由皮套软件自取本地音频流兜底。
+  - **帧级 PCM 流接口留白**（已兑现，见下）。皮套口型精准同步的帧级消费者接口未建，待真需求；当前由皮套软件自取本地音频流兜底。
+    > 兑现记录（ADR-024）：消费者出现后接口已建——播放器分接（AudioSink 协议）+ 共享口型分析器 + 平台渲染器。
   - **`action` 字段仍未消费**。本次范围明确不接入决策调用（独立议题——"是否需要 LLM 决策驱动具体动作执行"是更大讨论），StreamerAgent 解析但 `_ = action` 显式标注未使用。
-  - **`tts.utterance.*` 订阅接线待实现**。当前生产代码**暂无订阅者**——字幕 Provider 由 StreamerAgent 通过 `speech` 文本直接 fire-and-forget，不订阅 utterance 事件（事件与字幕存在双轨，待字幕子系统接入事件总线后可统一）；详见[架构叙事](../architecture/v2-architecture.md)。接入后的事件契约本身已就绪，不需要再次改动 ADR-007。
+  - **`tts.utterance.*` 订阅接线待实现**（已统一，见下）。当前生产代码**暂无订阅者**——字幕 Provider 由 StreamerAgent 通过 `speech` 文本直接 fire-and-forget，不订阅 utterance 事件（事件与字幕存在双轨，待字幕子系统接入事件总线后可统一）；详见[架构叙事](../architecture/v2-architecture.md)。接入后的事件契约本身已就绪，不需要再次改动 ADR-007。
+    > 统一记录（ADR-025）：字幕双轨已消除——字幕收敛为"一源 → 三面"，TTS 在位时跟随 `tts.utterance.*` 播放事件（started/failed 显示、finished 清空），无引擎时派发直出，装配期择流互斥。
 
 ## 修订（2026-09-05，TTS 从工具修正为基础设施）
 

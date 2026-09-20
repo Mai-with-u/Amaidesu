@@ -230,13 +230,13 @@ v2 中不同数据走不同通道，不要混用：
 
 | 耦合度 | 通道 | 典型消费方 | 数据形态 |
 |--------|------|-----------|---------|
-| **帧级**（需要逐块 PCM 同步） | **工具 invoke 参数**（流式）—— 暂留白，详见 ADR-007 | （未来）皮套口型精准同步 | 原始音频块 |
+| **帧级**（需要逐块 PCM 同步） | **播放器分接（AudioSink 协议）**——已建，详见 ADR-024 | 皮套口型分析（共享分析器） | 原始音频块 |
 | **起止对齐**（与播放区间对齐） | **订阅 `tts.utterance.started` / `finished`** | （预留）字幕写入器、播放耗时记账器 | `UtteranceStartedPayload` / `UtteranceFinishedPayload` |
 | **无耦合**（独立于播放时机） | **直接 invoke 工具**（不经 TTS 队列、不经事件） | emotion → `vts_set_expression`、action → （暂未接线） | 工具自身契约 |
 
 设计要点：
 
-- **帧级通道未建**：口型同步当前由皮套软件自取本地音频流（系统声音 / WASAPI loopback）兜底，invoke 参数流式接口留白待真需求；预建立会引入 YAGNI 风险。
+- **帧级通道已建**：口型同步经播放器分接（AudioSink 协议）承接——播放器把音频复制递入共享口型分析器，各平台渲染器把口型信号翻译为本平台参数（ADR-024，ADR-007 决策 5 的留白已兑现）。
 - **事件通道是终点广播**：消费者不得基于 `tts.utterance.*` 触发新一轮决策（"TTS→决策→TTS"会成环）；可做的记账 / 释放锁 / 字幕对齐不构成新决策。
 - **直接 invoke 由 Agent 包内完成**：StreamerAgent 解析 `reply.result.content` 后，speech 走 UtteranceQueue → 注入的 `tts_engine.handle_speech`（装配期直连，零 ToolRegistry）；emotion 走直接 `vts_set_expression`（仍在 ToolRegistry 中）；action 当前范围明确不接入决策（独立议题）。
 

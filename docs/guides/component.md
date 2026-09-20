@@ -412,8 +412,9 @@ def build_my_tool() -> ToolProvider:
 ```python
 registry.register_provider(
     build_my_tool(),
-    # 名单（ADR-012）：默认 ["*"] 全员可省略；Agent 专属工具填 ["<Agent 注册名>"]
-    visible_to={"my_my_tool": ["*"]},
+    # 名单（ADR-012）：默认仅主播（DEFAULT_VISIBLE_TO，fail-closed）；
+    # 共享工具显式 ["*"]，其他 Agent 专属工具填 ["<Agent 注册名>"]
+    visible_to={"my_my_tool": ["streamer"]},
 )
 ```
 
@@ -422,7 +423,7 @@ registry.register_provider(
 | 步骤 | 位置 | 操作 |
 |------|------|------|
 | ① 放代码 | `src/modules/<domain>/…`（avatar/studio/vision/memory 等公用域工具）或 `src/agents/<name>/tools.py`（Agent 专属） | Provider 类 `XxxToolProvider` + `build_xxx_spec()` |
-| ② 注册（带名单） | Agent 专属：在该 Agent 的 `_register_tools` 中 `self._tool_registry.register_provider(provider, visible_to=...)`；公用：在装配根 `main.py` 注册（默认全员） | 名单是注册处代码事实（ADR-012）：值 = Agent 注册名列表或 `["*"]`；未列工具默认全员 |
+| ② 注册（带名单） | Agent 专属：在该 Agent 的 `_register_tools` 中 `self._tool_registry.register_provider(provider, visible_to=...)`；公用：在装配根 `main.py` 注册（默认全员） | 名单是注册处代码事实（ADR-012）：值 = Agent 注册名列表或 `["*"]`；未列工具默认仅主播（fail-closed） |
 | ③ 配置（可选） | Agent 专属工具一般无独立配置段（行为由 Agent 配置决定）；公用工具按分类开关（`[tools.<domain>.<key>].enabled`） | |
 | ④ 列出与转换 | `ToolRegistry.to_llm_definitions()` 自动从 `ToolSpec.parameters_schema` 派生 OpenAI 风格 function calling 定义供 LLM 看 | |
 | ⑤ 调用 | `ToolRegistry.invoke(ToolInvocation(tool_name, arguments, call_id, source))`；**永不抛异常**——失败返回 `ToolExecutionResult(success=False, error_message=...)` | |
@@ -491,7 +492,7 @@ registry.register_provider(
     visible_to={
         "minecraft_todo": ["minecraft"],       # 仅自己
         "maicraft_perceive": ["streamer", "minecraft"],  # 读工具放开给主播
-        # 未列出的工具默认 ["*"]（全员，共享常态）
+        # 未列出的工具默认仅主播（DEFAULT_VISIBLE_TO，fail-closed）
     },
 )
 ```
@@ -499,7 +500,7 @@ registry.register_provider(
 | 规则 | 说明 |
 |------|------|
 | 值 | Agent 注册名列表或 `["*"]`（单独出现 = 全员） |
-| 默认 | `["*"]`——不写即全员，全局注册零负担（fail-open，有意取舍） |
+| 默认 | `["streamer"]`（`DEFAULT_VISIBLE_TO`）——不写即仅主播，fail-closed；共享工具由注册处显式 `["*"]` |
 | 校验（fail-fast） | 值非空、`"*"` 单独出现、键必须命中本注册项声明的工具全名（拼错即报错） |
 | 计算接口 | `list_tools(for_agent="<Agent 名>")`——该 Agent 的工具列表；全体消费方统一从这里拿 |
 | 运营全集 | `list_tools()`（不传 `for_agent`）——Dashboard 工具页看一切 |
@@ -857,12 +858,14 @@ class MyToolProvider(ToolProvider):
 11. ToolExecutionResult{success=True, structured_content={speech, emotion, metadata}}
          ↓
 12. Planner 循环收到 reply 成功即收尾 → outcome{replied/speech/...} → Agent 解析 speech 生成 utterance_id 入 UtteranceQueue（fire-and-forget，不阻塞决策循环）；
-    emotion → 直调 vts_set_expression 工具（仍是 ToolRegistry 中的工具）
+    emotion → 随 streamer.speech 业务事件发布；皮套适配器订阅后自行反射
+   （自动情绪路径，主播域零平台知识——见 ADR-023）
          ↓
 13. 队列 worker 串行 await speak(text, utterance_id)（speak 是构造期注入的适配器，绑定装配期由 build_tts_infrastructure 选中的 tts_engine.handle_speech）→ 引擎合成 + 播放
     （TTS 引擎自身——基础模块，非工具——发布 tts.utterance.started/finished/failed 事件供字幕等消费者订阅；ToolRegistry 中零 TTS 条目）
          ↓
-14. 音频经 AudioDeviceManager（src/modules/audio/）输出到扬声器
+14. 音频经 AudioDeviceManager（src/modules/audio/）输出到扬声器；播放器分接（AudioSink
+    协议）把音频复制递入口型分析器（共享件，[avatar.lipsync]）——见 ADR-024
 ```
 
 **关键要点**：
