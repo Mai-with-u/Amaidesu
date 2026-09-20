@@ -532,6 +532,16 @@ class RequestHistoryManager:
             return []
         return await self._llm_repo.llm_request_available_dates()
 
+    async def get_available_models(self) -> List[str]:
+        """获取历史记录中出现过的模型名列表
+
+        Returns:
+            模型名列表（去重升序）；无存储时返回空列表
+        """
+        if self._llm_repo is None:
+            return []
+        return await self._llm_repo.llm_request_models()
+
     def get_cache_size(self) -> int:
         """获取当前缓存大小
 

@@ -350,3 +350,14 @@ def test_history_list_response_preview_falls_back_to_tool_calls(client: TestClie
     detail = client.get("/api/v1/llm/history/tc1").json()
     assert detail["cache_hit_tokens"] == 3840
     assert detail["cache_miss_tokens"] == 84
+
+
+def test_history_models_dedup_sorted(client: TestClient) -> None:
+    """模型筛选候选走 distinct 查询：全库去重升序，与当前页内容无关。"""
+    store = _server_ref_cache["store"]
+    _seed_call(store, request_id="m1", model_name="z-model", client_type="planner")
+    _seed_call(store, request_id="m2", model_name="a-model", client_type="replyer")
+    _seed_call(store, request_id="m3", model_name="a-model", client_type="planner")
+
+    body = client.get("/api/v1/llm/history/models").json()
+    assert body == ["a-model", "z-model"]

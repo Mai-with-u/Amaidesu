@@ -128,8 +128,8 @@ async function fetchHistory() {
     // 历史列表与统计共用筛选时间窗，列表刷新后同步刷新统计
     void fetchStatistics();
 
-    // 提取可用模型列表
-    const models = new Set<string>();
+    // 提取本页出现过的模型（兜底）：候选全量来自 /history/models，接口不可用时仍可筛当前页
+    const models = new Set<string>(availableModels.value);
     response.data.items.forEach(item => {
       if (item.model_name) {
         models.add(item.model_name);
@@ -183,7 +183,18 @@ async function openFromQuery() {
   }
 }
 
+// 模型筛选候选：全量来自后端 distinct 查询（与当前页内容无关），失败静默由页内提取兜底
+async function fetchAvailableModels() {
+  try {
+    const response = await llmApi.getHistoryModels();
+    availableModels.value = response.data;
+  } catch {
+    // 候选拉取失败不打断主流程：fetchHistory 的页内提取会补齐当前页出现过的模型
+  }
+}
+
 onMounted(() => {
+  void fetchAvailableModels();
   void openFromQuery();
 });
 

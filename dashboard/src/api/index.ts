@@ -118,6 +118,7 @@ export const llmApi = {
     api.get<LLMUsageTrendsResponse>('/llm/usage/trends', { params: { days } }),
   getHistory: (params: LLMHistoryQueryParams) =>
     api.get<LLMHistoryResponse>('/llm/history', { params }),
+  getHistoryModels: () => api.get<string[]>('/llm/history/models'),
   getStatistics: (params?: { start_time?: number; end_time?: number }) =>
     api.get<LLMHistoryStatistics>('/llm/history/statistics', { params }),
   getRequestById: (requestId: string) => api.get<LLMRequestHistory>(`/llm/history/${requestId}`),

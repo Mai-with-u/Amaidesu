@@ -309,6 +309,13 @@ class LLMRepo(BaseRepo):
         )
         return [str(row["d"]) for row in rows if row["d"] is not None]
 
+    async def llm_request_models(self) -> List[str]:
+        """列出请求历史中出现过的模型名（去重升序；空名不返回）。"""
+        rows = await self._execute(
+            "SELECT DISTINCT model_name FROM llm_requests WHERE model_name != '' ORDER BY model_name"
+        )
+        return [str(row["model_name"]) for row in rows]
+
     async def llm_request_statistics(
         self,
         *,

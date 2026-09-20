@@ -144,6 +144,13 @@ async def get_available_dates() -> List[str]:
     return await history_manager.get_available_dates()
 
 
+@router.get("/history/models", response_model=List[str])
+async def get_available_models() -> List[str]:
+    """获取历史记录中出现过的模型名（去重升序；供筛选下拉全量候选项）"""
+    history_manager = get_global_request_history_manager()
+    return await history_manager.get_available_models()
+
+
 @router.get("/history/statistics", response_model=LLMHistoryStatisticsResponse)
 async def get_statistics(
     start_time: Annotated[Optional[int], Query(description="开始时间（毫秒时间戳）")] = None,
