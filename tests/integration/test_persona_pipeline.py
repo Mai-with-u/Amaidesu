@@ -82,7 +82,11 @@ class TestPersonaConfigToPromptEndToEnd:
 
     @pytest.mark.asyncio
     async def test_replyer_renders_config_persona_into_prompt(self) -> None:
-        """Replyer 渲染 kwargs 的四字段必须全部等于配置值（非 _DEFAULT_*）。"""
+        """Replyer system 渲染的四字段必须全部等于配置值（非 _DEFAULT_*）。
+
+        人设经 system 模板（amaidesu_replyer_system）注入；本轮输入模板
+        不承载人设字段。
+        """
         agent, llm, prompt = _make_agent_with_persona_config()
 
         llm.generate = AsyncMock(return_value=_replyer_llm_response())
@@ -100,11 +104,15 @@ class TestPersonaConfigToPromptEndToEnd:
         result = await agent._replyer.generate(plan, [])
         assert result is not None, "Replyer.generate 返回 None（mock LLM 应能生成结果）"
 
-        kwargs = prompt.render.call_args.kwargs
+        by_template = {call.args[0]: call.kwargs for call in prompt.render.call_args_list}
+        assert "amaidesu_replyer_system" in by_template, (
+            f"Replyer 应渲染 system 模板，实际渲染调用: {sorted(by_template)}"
+        )
+        system_kwargs = by_template["amaidesu_replyer_system"]
         for field in ("bot_name", "personality", "style_constraints", "audience_salutation"):
             expected = _PERSONA_CONFIG[field]
-            assert kwargs.get(field) == expected, (
-                f"Replyer prompt 注入的 {field} 应为配置值 {expected!r}，实际: {kwargs.get(field)!r}"
+            assert system_kwargs.get(field) == expected, (
+                f"Replyer system 注入的 {field} 应为配置值 {expected!r}，实际: {system_kwargs.get(field)!r}"
             )
 
     @pytest.mark.asyncio
@@ -126,10 +134,10 @@ class TestPersonaConfigToPromptEndToEnd:
         )
         await agent._replyer.generate(plan, [])
 
-        kwargs = prompt.render.call_args.kwargs
-        assert "behavior_style" not in kwargs, (
-            f"Replyer prompt 不得注入 behavior_style（仅 Planner 决策侧消费），实际 kwargs={sorted(kwargs.keys())}"
-        )
+        for kwargs in (call.kwargs for call in prompt.render.call_args_list):
+            assert "behavior_style" not in kwargs, (
+                f"Replyer prompt 不得注入 behavior_style（仅 Planner 决策侧消费），实际 kwargs={sorted(kwargs.keys())}"
+            )
 
 
 class TestDecisionExpressionSeparation:
