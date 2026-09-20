@@ -253,3 +253,32 @@ def test_gift_create_duplicate_rejected(client: TestClient) -> None:
     body = resp.json()
     assert body["success"] is False
     assert "已存在" in body["message"]
+
+
+def test_persona_update_null_clears_optional_field(client: TestClient) -> None:
+    """PATCH 显式 null = 清空回默认（context_window_size 落 NULL）；未传字段不受影响。"""
+    resp = client.post(
+        "/api/v1/simulator/personas",
+        json={
+            "user_nickname": "清空测试观众",
+            "role": "fan",
+            "personality": "平静",
+            "speaking_style": "简洁",
+            "context_window_size": 9,
+        },
+    )
+    assert resp.json()["success"] is True
+    user_id = resp.json()["persona"]["user_id"]
+
+    # 只传 context_window_size: null → 清空；昵称未传 → 保持
+    resp = client.patch(
+        f"/api/v1/simulator/personas/{user_id}",
+        json={"context_window_size": None},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+    listed = client.get("/api/v1/simulator/personas").json()["personas"]
+    target = next(p for p in listed if p["user_id"] == user_id)
+    assert target["context_window_size"] is None
+    assert target["user_nickname"] == "清空测试观众"

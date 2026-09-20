@@ -335,7 +335,9 @@ async def update_persona(server: ServerDep, user_id: str, request: PersonaUpdate
     pool = _require_pool(server)
     if pool is None:
         return SimulatorOperationResponse(success=False, message="模拟器未装配（enabled=false 或未 setup）")
-    fields = {k: v for k, v in request.model_dump().items() if v is not None}
+    # exclude_unset 区分"未传"与"显式 null"：未传不更新；显式 null 走池层清空回默认
+    # （如 context_window_size 清空后回落角色默认窗口）
+    fields = {k: v for k, v in request.model_dump(exclude_unset=True).items()}
     if not fields:
         return SimulatorOperationResponse(success=False, message="无可更新字段")
     updated = await pool.update_persona(user_id, fields)
