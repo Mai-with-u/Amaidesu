@@ -2,28 +2,36 @@
   <div class="simulator-page">
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">世界模拟器（开发基础设施）</h1>
+        <h1 class="page-title">模拟器（开发基础设施）</h1>
         <p class="page-subtitle">
-          <code>SimulatorService</code> 是唯一的模拟消息发射器，三模式切换：
-          <strong>generate</strong>（LLM 生成）/ <strong>replay</strong>（录制回放）/
-          <strong>off</strong>。仅在 <code>[simulator].enabled = true</code> 时装配。
+          向直播事件流注入模拟观众消息（弹幕 / 礼物 / SC）：
+          <strong>generate</strong>（LLM 实时生成）或 <strong>replay</strong>
+          （按录制节奏回放历史弹幕）。装配开关与模式见
+          <code>config/infra.toml</code> 的 <code>[simulator]</code> 段，修改需重启。
         </p>
       </div>
       <div class="header-actions">
+        <el-tooltip
+          v-if="status.enabled && status.is_available && !status.is_running && configMode === 'off'"
+          content="配置 [simulator].mode = off，启动会被拒绝；改为 generate/replay 并重启后再试"
+          placement="bottom"
+        >
+          <el-button type="success" disabled>启动模拟循环</el-button>
+        </el-tooltip>
         <el-button
-          v-if="status.enabled && status.is_available"
+          v-else-if="status.enabled && status.is_available"
           :type="status.is_running ? 'danger' : 'success'"
           :loading="toggling !== null"
           @click="toggleSimulator"
         >
-          {{ status.is_running ? '停止世界循环' : '启动世界循环' }}
+          {{ headerActionLabel }}
         </el-button>
         <el-tag v-if="!status.enabled" type="info" size="large" effect="plain"> 未启用 </el-tag>
         <el-tag v-else-if="!status.is_available" type="warning" size="large" effect="plain">
           未注入
         </el-tag>
         <el-tag v-else-if="status.is_running" type="success" size="large" effect="dark">
-          运行中 · {{ modeLabel }}
+          运行中 · {{ runtimeModeLabel }}
         </el-tag>
         <el-tag v-else type="warning" size="large" effect="plain">已停止</el-tag>
       </div>
@@ -49,8 +57,8 @@
       />
 
       <el-tabs v-else v-model="activeTab" class="workbench-tabs">
-        <!-- Tab 1：世界控制（模式 + 回放）                                -->
-        <el-tab-pane label="世界控制" name="control">
+        <!-- Tab 1：运行控制（模式 + 回放）                                -->
+        <el-tab-pane label="运行控制" name="control">
           <el-row :gutter="16">
             <el-col :span="12">
               <el-card shadow="never">
@@ -61,7 +69,7 @@
                   <el-form-item label="录制日期">
                     <el-select
                       v-model="selectedReplayDate"
-                      placeholder="选择 data/events 下的录制日期"
+                      placeholder="选择有弹幕记录的日期"
                       style="width: 100%"
                       :loading="loadingDates"
                     >
@@ -71,7 +79,7 @@
                   <el-form-item>
                     <el-button
                       type="primary"
-                      :disabled="status.is_running || !selectedReplayDate"
+                      :disabled="replayStartDisabled"
                       :loading="toggling === 'start'"
                       @click="startReplay"
                     >
@@ -86,6 +94,18 @@
                     </el-button>
                   </el-form-item>
                 </el-form>
+                <el-alert
+                  v-if="!status.is_running && configMode !== 'replay'"
+                  type="info"
+                  :closable="false"
+                  show-icon
+                  title="当前配置 mode 不是 replay，启动回放会被拒绝"
+                  :description="
+                    configMode === 'generate'
+                      ? 'generate 模式下「启动」走 LLM 实时生成。要回放历史弹幕，请将 config/infra.toml 的 [simulator].mode 改为 replay 并重启。'
+                      : '请将 config/infra.toml 的 [simulator].mode 设为 replay 并重启。'
+                  "
+                />
                 <div
                   v-if="status.is_running && status.mode === 'replay' && replayProgress"
                   class="replay-progress"
@@ -101,9 +121,10 @@
                   />
                 </div>
                 <p class="hint">
-                  回放读取
-                  <code>data/events/YYYY-MM-DD.jsonl</code>（事件历史录制），按原节奏重放弹幕；
-                  回放消息带 <code>simulated</code> 标记，落库时间戳刷新为当前时刻。
+                  回放数据来自 SQLite <code>live_chat</code> 表中该日期的弹幕记录（配置
+                  <code>replay_simulated_only = true</code> 时仅回放模拟消息），按录制节奏重放；
+                  回放消息带
+                  <code>simulated</code> 标记，时间戳刷新为当前时刻。运行中需先停止才能再启动。
                 </p>
               </el-card>
             </el-col>
@@ -113,14 +134,13 @@
                   <span>当前状态</span>
                 </template>
                 <el-descriptions :column="1" size="small" border>
-                  <el-descriptions-item label="运行模式">
-                    <el-tag size="small" :type="modeTagType">{{ modeLabel }}</el-tag>
-                  </el-descriptions-item>
-                  <el-descriptions-item label="运行中">
-                    {{ status.is_running ? '是' : '否' }}
+                  <el-descriptions-item label="运行状态">
+                    <el-tag size="small" :type="status.is_running ? 'success' : 'info'">
+                      {{ status.is_running ? `运行中 · ${runtimeModeLabel}` : '已停止' }}
+                    </el-tag>
                   </el-descriptions-item>
                   <el-descriptions-item label="配置 mode（重启生效）">
-                    {{ status.config.mode ?? 'generate' }}
+                    {{ configMode || '未设置' }}
                   </el-descriptions-item>
                   <el-descriptions-item label="LLM client">
                     {{ status.config.llm_client_type || 'simulator' }}
@@ -130,9 +150,8 @@
                   </el-descriptions-item>
                 </el-descriptions>
                 <p class="hint">
-                  启动按
-                  <code>[simulator].mode</code>
-                  走生成或回放；此处选日期启动回放可在运行期临时指定录制日。
+                  启动方式由 <code>[simulator].mode</code> 决定；replay
+                  模式下可在左侧临时指定录制日（不选则用配置的 <code>replay_date</code>）。
                 </p>
               </el-card>
             </el-col>
@@ -260,7 +279,7 @@
                     {{ status.config.language || 'zh' }}
                   </el-descriptions-item>
                   <el-descriptions-item label="回放默认日期">
-                    {{ status.config.replay_date ?? '—' }}
+                    {{ status.config.replay_date || '—' }}
                   </el-descriptions-item>
                   <el-descriptions-item label="回放速度">
                     {{ formatNumber(status.config.replay_speed) }}x
@@ -279,16 +298,16 @@
                 </template>
                 <div class="explain-block">
                   <p>
-                    模拟器的消息以 <code>room.message.*</code> 事件推送到 EventBus，payload 携带
+                    模拟消息以 <code>room.message.*</code> 事件进入 EventBus，payload 携带
                     <code>simulated: true</code> 溯源标记；统计查询会主动排除模拟数据。
                   </p>
                   <p>
-                    观众上下文（世界窗口）从 SQLite
-                    <code>live_chat</code> 公共流读取——弹幕与主播发言同表， per-persona
-                    窗口大小按"角色天性 → 人设覆盖"两级裁剪。
+                    观众上下文从 SQLite <code>live_chat</code>
+                    公共流读取——弹幕与主播发言同表，每个人设的窗口大小按"角色天性 →
+                    人设覆盖"两级裁剪。
                   </p>
                   <p>
-                    预算耗尽（<code>token_budget_per_hour</code>）时，模拟器进入 5s
+                    generate 模式预算耗尽（<code>token_budget_per_hour</code>）时，模拟器进入 5s
                     等待恢复，期间不产生新消息但仍响应启停信号。
                   </p>
                 </div>
@@ -298,7 +317,14 @@
         </el-tab-pane>
       </el-tabs>
 
-      <p v-if="lastError" class="error-hint">{{ lastError }}</p>
+      <el-alert
+        v-if="lastError"
+        type="error"
+        :title="lastError"
+        show-icon
+        class="error-alert"
+        @close="lastError = ''"
+      />
     </div>
 
     <!-- 人设编辑对话框                                                -->
@@ -307,19 +333,25 @@
       :title="personaForm.user_id ? '编辑人设' : '新增人设'"
       width="520px"
     >
-      <el-form :model="personaForm" label-width="110px" size="default">
-        <el-form-item label="昵称" required>
+      <el-form
+        ref="personaFormRef"
+        :model="personaForm"
+        :rules="personaRules"
+        label-width="110px"
+        size="default"
+      >
+        <el-form-item label="昵称" prop="user_nickname">
           <el-input v-model="personaForm.user_nickname" maxlength="50" />
         </el-form-item>
-        <el-form-item label="角色" required>
+        <el-form-item label="角色" prop="role">
           <el-select v-model="personaForm.role" style="width: 100%">
             <el-option v-for="r in personaRoles" :key="r.value" :label="r.label" :value="r.value" />
           </el-select>
         </el-form-item>
-        <el-form-item label="性格" required>
+        <el-form-item label="性格" prop="personality">
           <el-input v-model="personaForm.personality" type="textarea" :rows="2" />
         </el-form-item>
-        <el-form-item label="说话风格" required>
+        <el-form-item label="说话风格" prop="speaking_style">
           <el-input v-model="personaForm.speaking_style" type="textarea" :rows="2" />
         </el-form-item>
         <el-form-item label="粉丝牌等级">
@@ -346,24 +378,30 @@
       </template>
     </el-dialog>
 
-    <!-- 礼物编辑对话框                                                -->
+    <!-- 礼物编辑对话框（标题按编辑态判断，不能用表单里的 gift_id——新填的 ID 会误翻标题） -->
     <el-dialog
       v-model="giftDialogVisible"
-      :title="giftForm.gift_id ? '编辑礼物' : '新增礼物'"
+      :title="giftFormOriginalId ? '编辑礼物' : '新增礼物'"
       width="480px"
     >
-      <el-form :model="giftForm" label-width="110px" size="default">
-        <el-form-item label="礼物 ID" required>
+      <el-form
+        ref="giftFormRef"
+        :model="giftForm"
+        :rules="giftRules"
+        label-width="110px"
+        size="default"
+      >
+        <el-form-item label="礼物 ID" prop="gift_id">
           <el-input
             v-model="giftForm.gift_id"
             :disabled="!!giftFormOriginalId"
             placeholder="英文/数字/下划线"
           />
         </el-form-item>
-        <el-form-item label="名称" required>
+        <el-form-item label="名称" prop="gift_name">
           <el-input v-model="giftForm.gift_name" maxlength="50" />
         </el-form-item>
-        <el-form-item label="类别" required>
+        <el-form-item label="类别" prop="category">
           <el-select v-model="giftForm.category" style="width: 100%">
             <el-option label="normal 普通" value="normal" />
             <el-option label="medium 中级" value="medium" />
@@ -394,14 +432,14 @@
 
 <script setup lang="ts">
 /**
- * SimulatorPanel —— 世界模拟器工作台
+ * SimulatorPanel —— 弹幕模拟器工作台
  *
  * 数据源：`/api/v1/simulator/*`（详见 src/modules/dashboard/api/simulator.py）。
- * 形态：Tabs 工作台（世界控制 / 常驻人设 / 礼物目录 / 配置说明）。
+ * 形态：Tabs 工作台（运行控制 / 常驻人设 / 礼物目录 / 配置说明）。
  * 人设与礼物 CRUD 写穿 SQLite；回放日期来自事件历史录制目录。
  */
 import { onMounted, onUnmounted, reactive, ref, computed } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { simulatorApi } from '@/api';
 import type { SimulatorReplayProgress, SimPersona, SimGift } from '@/types';
@@ -467,6 +505,12 @@ const emptyPersonaForm = () => ({
 });
 
 const personaForm = reactive(emptyPersonaForm());
+const personaFormRef = ref<FormInstance>();
+const personaRules: FormRules = {
+  user_nickname: [{ required: true, message: '请输入昵称', trigger: 'blur' }],
+  personality: [{ required: true, message: '请输入性格描述', trigger: 'blur' }],
+  speaking_style: [{ required: true, message: '请输入说话风格', trigger: 'blur' }],
+};
 
 const emptyGiftForm = () => ({
   gift_id: '',
@@ -478,18 +522,34 @@ const emptyGiftForm = () => ({
 });
 
 const giftForm = reactive(emptyGiftForm());
+const giftFormRef = ref<FormInstance>();
+const giftRules: FormRules = {
+  gift_id: [
+    { required: true, message: '请输入礼物 ID', trigger: 'blur' },
+    { pattern: /^[A-Za-z0-9_]+$/, message: '仅限英文/数字/下划线', trigger: 'blur' },
+  ],
+  gift_name: [{ required: true, message: '请输入礼物名称', trigger: 'blur' }],
+};
 
-const modeLabel = computed(() => {
-  if (!status.is_running) return status.config.mode === 'replay' ? 'REPLAY(待启动)' : 'OFF';
+const configMode = computed(() => (status.config.mode as string) ?? '');
+
+// 运行中的实际模式（服务未运行时无运行态可言，落 OFF）
+const runtimeModeLabel = computed(() => {
   if (status.mode === 'generate') return 'GENERATE';
   if (status.mode === 'replay') return 'REPLAY';
   return 'OFF';
 });
 
-const modeTagType = computed(() => {
-  if (!status.is_running) return 'info' as const;
-  return status.mode === 'replay' ? ('warning' as const) : ('success' as const);
+// 页头主按钮：运行中=停止；未运行按配置模式给出将发生的动作
+const headerActionLabel = computed(() => {
+  if (status.is_running) return '停止模拟循环';
+  return configMode.value === 'replay' ? '启动回放' : '启动生成';
 });
+
+// 回放启动前置条件：未运行 + 配置 mode=replay + 已选日期
+const replayStartDisabled = computed(
+  () => status.is_running || configMode.value !== 'replay' || !selectedReplayDate.value,
+);
 
 const replayProgress = computed<SimulatorReplayProgress | null>(() => status.replay_progress);
 
@@ -541,6 +601,10 @@ async function fetchReplayDates() {
   try {
     const res = await simulatorApi.listReplayDates();
     replayDates.value = Array.isArray(res.data.dates) ? res.data.dates : [];
+    // 唯一日期直接预选：省一次点选，也避免"有日期却因未选而启动失败"
+    if (replayDates.value.length === 1) {
+      selectedReplayDate.value = replayDates.value[0] ?? '';
+    }
   } catch {
     replayDates.value = [];
   } finally {
@@ -567,17 +631,26 @@ async function fetchGifts() {
 }
 
 async function startReplay() {
+  if (configMode.value !== 'replay') {
+    lastError.value =
+      '当前配置 mode 不是 replay，启动回放会被拒绝；请修改 config/infra.toml 并重启。';
+    ElMessage.warning('配置 mode 不是 replay，已阻止启动回放');
+    return;
+  }
   if (!selectedReplayDate.value) return;
   toggling.value = 'start';
   try {
     const res = await simulatorApi.start(selectedReplayDate.value);
     if (res.data.success) {
+      lastError.value = '';
       ElMessage.success('回放已启动');
     } else {
+      lastError.value = res.data.message || '启动被拒绝';
       ElMessage.warning(res.data.message || '启动被拒绝');
     }
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '启动失败');
+    lastError.value = err instanceof Error ? `启动失败：${err.message}` : '启动失败';
+    ElMessage.error(lastError.value);
   } finally {
     toggling.value = null;
     await fetchStatus();
@@ -589,14 +662,23 @@ async function toggleSimulator() {
   const action = status.is_running ? 'stop' : 'start';
   toggling.value = action;
   try {
-    const res = action === 'start' ? await simulatorApi.start() : await simulatorApi.stop();
+    // replay 模式携带所选日期，避免未配置 replay_date 时主按钮必然失败
+    const res =
+      action === 'start'
+        ? await simulatorApi.start(
+            configMode.value === 'replay' ? selectedReplayDate.value : undefined,
+          )
+        : await simulatorApi.stop();
     if (res.data.success) {
+      lastError.value = '';
       ElMessage.success(res.data.message || (action === 'start' ? '已启动' : '已停止'));
     } else {
+      lastError.value = res.data.message || '操作被拒绝';
       ElMessage.warning(res.data.message || '操作被拒绝');
     }
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '操作失败');
+    lastError.value = err instanceof Error ? `操作失败：${err.message}` : '操作失败';
+    ElMessage.error(lastError.value);
   } finally {
     toggling.value = null;
     await fetchStatus();
@@ -606,8 +688,17 @@ async function toggleSimulator() {
 async function stopSimulator() {
   toggling.value = 'stop';
   try {
-    await simulatorApi.stop();
-    ElMessage.success('已停止');
+    const res = await simulatorApi.stop();
+    if (res.data.success) {
+      lastError.value = '';
+      ElMessage.success(res.data.message || '已停止');
+    } else {
+      lastError.value = res.data.message || '停止被拒绝';
+      ElMessage.warning(res.data.message || '停止被拒绝');
+    }
+  } catch (err) {
+    lastError.value = err instanceof Error ? `停止失败：${err.message}` : '停止失败';
+    ElMessage.error(lastError.value);
   } finally {
     toggling.value = null;
     await fetchStatus();
@@ -633,6 +724,8 @@ function openPersonaDialog(row?: SimPersona) {
 }
 
 async function savePersona() {
+  const valid = await personaFormRef.value?.validate().catch(() => false);
+  if (!valid) return;
   saving.value = true;
   try {
     if (personaFormOriginalId.value) {
@@ -709,6 +802,8 @@ function openGiftDialog(row?: SimGift) {
 }
 
 async function saveGift() {
+  const valid = await giftFormRef.value?.validate().catch(() => false);
+  if (!valid) return;
   saving.value = true;
   try {
     if (giftFormOriginalId.value) {
@@ -868,10 +963,8 @@ onUnmounted(() => {
   font-style: normal;
 }
 
-.error-hint {
-  font-size: 12px;
-  color: var(--color-danger, #f56c6c);
-  margin: var(--spacing-sm) 0 0;
+.error-alert {
+  margin-top: var(--spacing-sm);
 }
 
 code {
