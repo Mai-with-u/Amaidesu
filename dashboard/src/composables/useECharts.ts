@@ -19,6 +19,9 @@ export interface ChartPalette {
   borderColorLight: string;
   hoverBg: string;
   monoFont: string;
+  primaryColor: string;
+  collectorColor: string;
+  agentColor: string;
 }
 
 /**
@@ -38,6 +41,9 @@ export function useChartPalette(): Ref<ChartPalette> {
       borderColorLight: read('--border-color-light'),
       hoverBg: read('--bg-hover'),
       monoFont: read('--font-mono'),
+      primaryColor: read('--color-primary'),
+      collectorColor: read('--color-collector'),
+      agentColor: read('--color-agent'),
     };
   });
 }
