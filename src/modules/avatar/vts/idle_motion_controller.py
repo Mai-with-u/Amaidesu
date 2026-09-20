@@ -16,6 +16,10 @@ from typing import Any, Callable, Coroutine, Dict, Optional
 
 from src.modules.logging import get_logger
 
+# VTS 注入值保鲜间隔（秒）：注入值约 1 秒不被刷新即过期归零（模型瞬移回
+# 默认姿态），值稳定保持期间必须按不高于此间隔补写。须低于 1 秒留足余量。
+_PARAM_REFRESH_INTERVAL_S = 0.5
+
 
 def _smootherstep(x: float) -> float:
     """smootherstep 缓动（0~1 两端速度与加速度均为 0，运动无顿挫）"""
@@ -197,6 +201,8 @@ class IdleMotionController:
 
         # 失败参数记录，避免重复刷屏日志
         self._failed_params: set[str] = set()
+        # 各参数最近一次成功写入时刻（注入保鲜：hold 期间防 VTS 过期归零）
+        self._last_write: Dict[str, float] = {}
 
         self._task: Optional[asyncio.Task] = None
         self._start_time = time.time()
@@ -240,6 +246,7 @@ class IdleMotionController:
 
         self._current_values.clear()
         self._target_values.clear()
+        self._last_write.clear()
         self._zero_target = {name: 0.0 for name in self._all_param_names()}
         self._failed_params.clear()
         self._log_shared_params()
@@ -301,6 +308,7 @@ class IdleMotionController:
                 except Exception as e:
                     self.logger.warning(f"idle 停止归零失败 {name}: {e}")
         self._current_values.clear()
+        self._last_write.clear()
         self._failed_params.clear()
         self.logger.info("VTS idle 动画已停止")
 
@@ -325,6 +333,7 @@ class IdleMotionController:
                     targets = self._compute_targets(speaking=is_speaking)
 
                 # 平滑插值到目标值
+                now = time.time()
                 for name, target in targets.items():
                     current = self._current_values.get(name, 0.0)
                     diff = target - current
@@ -334,25 +343,22 @@ class IdleMotionController:
                         new_value = current + diff * self._fade_speed
                     self._current_values[name] = new_value
 
-                    # 基线参数每 tick 强制写入，防止被外部覆盖后无法纠正
-                    force = name in self._baseline_params
-                    if force or abs(new_value - current) >= 0.0005 or abs(new_value) < 0.001:
-                        if name in self._failed_params:
-                            continue
-                        try:
-                            success = await self._set_parameter(name, new_value)
-                            if not success:
-                                self._failed_params.add(name)
-                                self.logger.warning(
-                                    f"idle 参数 {name} 设置未成功，可能是模型中不存在该参数；"
-                                    f"已暂停对此参数的 idle 写入，请检查 [handlers.vts] idle 参数名配置。"
-                                )
-                        except Exception as e:
+                    if name in self._failed_params or not self._should_write(name, new_value, current, now):
+                        continue
+                    try:
+                        if await self._set_parameter(name, new_value):
+                            self._last_write[name] = now
+                        else:
                             self._failed_params.add(name)
                             self.logger.warning(
-                                f"idle 参数 {name} 写入失败: {e}。"
-                                f"已暂停对此参数的 idle 写入，请检查模型是否支持该参数。"
+                                f"idle 参数 {name} 设置未成功，可能是模型中不存在该参数；"
+                                f"已暂停对此参数的 idle 写入，请检查 [handlers.vts] idle 参数名配置。"
                             )
+                    except Exception as e:
+                        self._failed_params.add(name)
+                        self.logger.warning(
+                            f"idle 参数 {name} 写入失败: {e}。已暂停对此参数的 idle 写入，请检查模型是否支持该参数。"
+                        )
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -413,6 +419,20 @@ class IdleMotionController:
             targets[name] = max(-limit, min(limit, targets[name] + value))
         else:
             targets[name] = value
+
+    def _should_write(self, name: str, new_value: float, current: float, now: float) -> bool:
+        """本 tick 是否需要写入该参数。
+
+        - 基线参数每 tick 强制写（防止被外部覆盖后无法纠正）
+        - 值在变化或近零维持：沿用原节流条件，省流量
+        - 注入保鲜：值稳定保持超过保鲜间隔也必须补写——VTS 注入值约 1 秒
+          不刷新即过期归零，否则停留阶段模型会瞬移回默认姿态
+        """
+        if name in self._baseline_params:
+            return True
+        if now - self._last_write.get(name, 0.0) >= _PARAM_REFRESH_INTERVAL_S:
+            return True
+        return abs(new_value - current) >= 0.0005 or abs(new_value) < 0.001
 
     def get_stats(self) -> Dict[str, Any]:
         """返回统计信息"""
