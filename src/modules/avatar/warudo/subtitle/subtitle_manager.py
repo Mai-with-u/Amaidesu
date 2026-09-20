@@ -85,7 +85,7 @@ class WarudoSubtitleManager:
             await self.runner.setup()
             self.site = web.TCPSite(self.runner, "localhost", self.port)
             await self.site.start()
-            self.logger.info(f"🌐 字幕 Web 服务器已启动: http://localhost:{self.port}")
+            self.logger.info(f"字幕 Web 服务器已启动: http://localhost:{self.port}")
         except Exception as e:
             self.logger.error(f"启动字幕 Web 服务器失败: {e}")
             if self.runner:

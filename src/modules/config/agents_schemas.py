@@ -113,7 +113,7 @@ class AgentsRootConfig(BaseConfig):
     """
 
     __file_name__ = "agents.toml"
-    __section_label__ = "🤖 业务 Agent"
+    __section_label__ = "业务 Agent"
 
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
     agents: AgentsConfig = Field(

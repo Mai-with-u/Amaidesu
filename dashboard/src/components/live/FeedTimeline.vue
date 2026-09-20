@@ -15,7 +15,6 @@
           :aria-expanded="expandedChatGroups.has(entry.id)"
           @click="toggleChatGroup(entry.id)"
         >
-          <span class="chat-process-mark" aria-hidden="true">⚙</span>
           <span class="chat-process-summary">{{ entry.note }} 个过程记录 · {{ entry.text }}</span>
           <span class="grow" />
           <span class="chat-process-action">{{
@@ -39,7 +38,6 @@
 
         <!-- 里程碑：庆祝行 -->
         <div v-else-if="entry.kind === 'milestone'" class="milestone">
-          <span class="milestone-mark" aria-hidden="true">★</span>
           <div class="milestone-body">
             <p class="milestone-text">{{ entry.text }}</p>
             <p v-if="entry.note" class="milestone-meta mono">{{ entry.note }}</p>
@@ -230,7 +228,7 @@
             </template>
             <span v-else class="reply-quote-fallback">回复了一条弹幕</span>
           </div>
-          <p class="act-text">🎤 {{ entry.text }}</p>
+          <p class="act-text">{{ entry.text }}</p>
           <details v-if="replyerThinking && replyerThinking(entry.roundId)" class="d-thinking">
             <summary>生成思考</summary>
             <p class="d-thinking-phase">
@@ -1186,11 +1184,6 @@ async function copyText(text: string): Promise<void> {
   background: var(--color-game-bg);
   border: 1px dashed var(--color-game);
 }
-.milestone-mark {
-  font-size: 15px;
-  color: var(--color-game);
-  flex-shrink: 0;
-}
 .milestone-body {
   flex: 1;
   min-width: 0;
@@ -1286,17 +1279,9 @@ async function copyText(text: string): Promise<void> {
   border-color: var(--color-agent);
   color: var(--color-agent);
 }
-.chat-process-mark,
 .chat-process-action,
 .chat-process-arrow {
   flex-shrink: 0;
-}
-.chat-process-mark {
-  font-size: 12px;
-  color: var(--text-placeholder);
-}
-.chat-process-strip[aria-expanded='true'] .chat-process-mark {
-  color: var(--color-agent);
 }
 .chat-process-action {
   font-size: 10px;

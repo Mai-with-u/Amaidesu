@@ -37,7 +37,7 @@ class InfraRootConfig(BaseConfig):
     """
 
     __file_name__ = "infra.toml"
-    __section_label__ = "🚀 基础设施"
+    __section_label__ = "基础设施"
 
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
     tts: TTSConfig = Field(

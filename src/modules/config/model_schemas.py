@@ -257,7 +257,7 @@ class ModelRootConfig(BaseConfig):
     """
 
     __file_name__ = "model.toml"
-    __section_label__ = "🧠 模型"
+    __section_label__ = "模型"
 
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
     llm_providers: List[LLMProviderConfig] = Field(
