@@ -562,17 +562,25 @@ watch([sessionQuery, sessionSourceFilter], () => {
 });
 
 async function openSession(): Promise<void> {
+  let title: string | undefined;
   try {
     const { value } = await ElMessageBox.prompt('为新的直播场次起个标题（可留空）', '开启场次', {
       confirmButtonText: '开启',
       cancelButtonText: '取消',
       inputPlaceholder: '例如：周五晚间场',
     });
-    await liveSessionsApi.open({ title: value?.trim() || undefined });
-    ElMessage.success('场次已开启');
+    title = value?.trim() || undefined;
   } catch {
     return; // 取消输入
   }
+  try {
+    await liveSessionsApi.open({ title });
+    ElMessage.success('场次已开启');
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? `开启场次失败：${error.message}` : '开启场次失败');
+    return;
+  }
+  backToLive(); // 开了新场次即回到实时视图，避免停留在旧场次的回看里
   await loadSessions();
 }
 
@@ -796,12 +804,14 @@ watch(
   { immediate: true },
 );
 
-/** 展示条目：实时模式按 agentFilter 过滤；回看模式取 REST 时间线全量 */
+/** 展示条目：实时模式按 agentFilter 过滤；回看模式取 REST 时间线全量。
+ *  过滤只针对 Agent 产生的卡，观众消息与场次边界（room 组）始终可见 */
 const entries = computed<ShowEntry[]>(() => {
   const list = sessionMode.value === 'live' ? liveEntries.value : replayEntries.value;
-  if (sessionMode.value === 'replay') return list;
-  if (agentFilter.value === 'all') return list;
-  return list.filter(entry => agentGroupOf(entry) === agentFilter.value);
+  if (sessionMode.value === 'replay' || agentFilter.value === 'all') return list;
+  return list.filter(
+    entry => agentGroupOf(entry) === 'room' || agentGroupOf(entry) === agentFilter.value,
+  );
 });
 
 function togglePause(): void {
