@@ -35,6 +35,7 @@ class FakeResources:
             "design_schema_uri": "maicraft://building/schema",
             "design_schema_revision": "schema-1",
             "capabilities": ["basic"],
+            "edit_schema_ref": "#/$defs/scene_edits",
             "resources": [
                 {"uri": "maicraft://building/guide", "title": "测试资料", "revision": "guide-1", "requires": ["basic"]},
                 {
@@ -48,7 +49,14 @@ class FakeResources:
         self.schema: dict[str, Any] = {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
-            "$defs": {"shape": {"type": "string", "enum": ["house"]}},
+            "$defs": {
+                "shape": {"type": "string", "enum": ["house"]},
+                "scene_edits": {
+                    "type": "object",
+                    "properties": {"objects": {"type": "array"}},
+                    "additionalProperties": False,
+                },
+            },
             "properties": {"shape": {"$ref": "#/$defs/shape"}},
             "required": ["shape"],
             "additionalProperties": False,
@@ -85,25 +93,36 @@ class FakeModProvider(BaseToolProvider):
         self.valid = True
         self.status = "running"
         self.uncertain_once = False
+        self.design_results: dict[str, dict[str, Any]] = {}
+        self.saved_scenes: dict[str, dict[str, Any]] = {}
+        self.pending_design_queries = 0
+
+    def operations(self, operation: str) -> list[ToolInvocation]:
+        """同一个 execute 原名承载不同操作，按实际 goal 判断设计和施工。"""
+        return [
+            call
+            for call in self.calls
+            if call.arguments.get("goal", {}).get("parameters", {}).get("operation") == operation
+        ]
 
     def list_tools(self) -> list[ToolSpec]:
         return [
             ToolSpec(name=name, provider=self.name, description="测试新建造接口", parameters_schema={"type": "object"})
-            for name in ("builder_validate", "builder_execute", "builder_preview")
+            for name in ("maicraft_execute", "maicraft_task")
         ]
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         """返回机器可检查的设计引用；施工重试使用相同幂等键返回同一任务。"""
         self.calls.append(invocation)
-        if invocation.tool_name == "maicraft_builder_validate":
-            payload = {
-                "valid": self.valid,
-                "artifact_ref": "draft-1",
-                "errors": [] if self.valid else ["门口被墙堵住"],
-                "design_schema_revision": self.resources.catalog["design_schema_revision"],
-                "capability_revision": self.resources.catalog["revision"],
-            }
-        elif invocation.tool_name == "maicraft_builder_execute":
+        parameters = invocation.arguments.get("goal", {}).get("parameters", {})
+        operation = parameters.get("operation")
+        if invocation.tool_name == "maicraft_maicraft_task":
+            if self.pending_design_queries:
+                self.pending_design_queries -= 1
+                payload = {"task_id": invocation.arguments["task_id"], "state": "running"}
+            else:
+                payload = self.design_results[invocation.arguments["task_id"]]
+        elif operation == "build":
             if self.uncertain_once:
                 self.uncertain_once = False
                 return ToolExecutionResult(
@@ -111,7 +130,39 @@ class FakeModProvider(BaseToolProvider):
                 )
             payload = {"accepted": True, "task_id": "construction-1"}
         else:
-            payload = {"preview": "设计预览摘要"}
+            task_id = invocation.arguments["request_key"]
+            if task_id not in self.design_results:
+                scene_id = parameters.get("scene_id", "")
+                if operation in {"create_scene", "update_scene"}:
+                    previous = scene_id
+                    scene_id = f"draft-{len(self.saved_scenes) + 1}"
+                    data = {
+                        "scene_id": scene_id,
+                        "scene_uri": f"maicraft://knowledge/build/scene/{scene_id}",
+                        "construction_started": False,
+                        "design_schema_revision": self.resources.catalog["design_schema_revision"],
+                        "capability_revision": self.resources.catalog["revision"],
+                        "anchor": {"x": 0, "y": 64, "z": 0, "dimension": "minecraft:overworld"},
+                    }
+                    if previous:
+                        data["parent_scene_id"] = previous
+                    if self.valid:
+                        self.saved_scenes[scene_id] = data
+                else:
+                    data = dict(self.saved_scenes[scene_id])
+                    data.update(page=parameters.get("page", 0), has_more=False)
+                self.design_results[task_id] = {
+                    "task_id": task_id,
+                    "state": "success" if self.valid else "failed",
+                    "terminal": {
+                        "result": {
+                            "success": self.valid,
+                            "message": "编译完成" if self.valid else "对象表达不合法",
+                            "data": data,
+                        }
+                    },
+                }
+            payload = {"accepted": True, "task_id": task_id}
         return ToolExecutionResult(tool_name=invocation.tool_name, success=True, structured_content=payload)
 
     async def query_task(self, task_id: str) -> dict[str, Any]:
@@ -182,7 +233,12 @@ async def harness() -> AsyncIterator[Harness]:
 
 def response(name: str, arguments: dict[str, Any]) -> Response:
     """用中立工具调用模拟模型，模型不接触 Minecraft 内部状态。"""
-    return Response(success=True, content="", tool_calls=[ToolCall(id=name, name=name, arguments=arguments)])
+    return Response(
+        success=True,
+        content="",
+        finish_reason="tool_calls",
+        tool_calls=[ToolCall(id=name, name=name, arguments=arguments)],
+    )
 
 
 def valid_design() -> list[Response]:
@@ -292,7 +348,7 @@ async def test_design_completion_requires_real_construction(harness: Harness) ->
     assert harness.parent._pending_task_count() == 0
     duplicate = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "execute"})
     assert duplicate.structured_content["task_id"] == receipt["task_id"]
-    assert len([call for call in harness.mod.calls if call.tool_name.endswith("execute")]) == 1
+    assert len(harness.mod.operations("build")) == 1
 
 
 @pytest.mark.parametrize("resource_uri", ["maicraft://building/future", "file:///unexpected"])
@@ -326,7 +382,7 @@ async def test_schema_error_can_be_repaired_before_delivery(harness: Harness) ->
     task_id = await harness.request(intent="design")
     await harness.finish_worker()
     assert harness.builder._jobs[task_id].status == "succeeded"
-    assert len(harness.mod.calls) == 1
+    assert len(harness.mod.operations("create_scene")) == 1
 
 
 async def test_failed_new_validation_invalidates_old_candidate(harness: Harness) -> None:
@@ -346,7 +402,9 @@ async def test_failed_new_validation_invalidates_old_candidate(harness: Harness)
 async def test_child_cannot_execute_or_call_parent_tools(harness: Harness) -> None:
     """即使模型编造施工工具名，也不会绕过本轮工具授权。"""
     harness.llm.generate.side_effect = [
-        response("maicraft_builder_execute", {"artifact_ref": "guessed"}),
+        response(
+            "maicraft_maicraft_execute", {"goal": {"ability": "maicraft:build", "parameters": {"operation": "build"}}}
+        ),
         response("minecraft_builder_work_fail", {"reason": "不允许施工"}),
     ]
     await harness.request(intent="design")
@@ -396,7 +454,8 @@ async def test_revision_keeps_previous_request_and_replaces_pending_obligation(h
     await harness.finish_worker()
     job = harness.builder._jobs[revised_id]
     assert job.request_revision == 2 and "更换入口" in job.request.requirements
-    assert job.request.context["previous_design"] == {"shape": "house"}
+    assert job.request.context["previous_scene_id"] == "draft-1"
+    assert "previous_design" not in job.request.context
     assert harness.builder.pending_ids() == {revised_id}
 
 
@@ -408,7 +467,7 @@ async def test_catalog_change_prevents_stale_execution(harness: Harness) -> None
     harness.resources.catalog["revision"] = "cap-2"
     result = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "execute"})
     assert not result.success and "版本已变化" in result.error_message
-    assert len(harness.mod.calls) == 1
+    assert len(harness.mod.operations("build")) == 0
 
 
 async def test_uncertain_execution_retries_same_key_and_blocks_revision(harness: Harness) -> None:
@@ -425,8 +484,8 @@ async def test_uncertain_execution_retries_same_key_and_blocks_revision(harness:
     assert not revision.success
     retry = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "execute"})
     assert retry.success
-    executions = [call for call in harness.mod.calls if call.tool_name.endswith("execute")]
-    assert [call.arguments["request_key"] for call in executions] == [task_id, task_id]
+    executions = harness.mod.operations("build")
+    assert [call.arguments["request_key"] for call in executions] == [f"{task_id}:build", f"{task_id}:build"]
 
 
 def test_remote_schema_references_never_fetch_network() -> None:
@@ -435,10 +494,10 @@ def test_remote_schema_references_never_fetch_network() -> None:
         validate_schema({"$ref": "https://invalid.example/schema"}, {})
 
 
-def test_design_and_execution_bindings_must_differ() -> None:
-    """把校验绑定到施工入口会使设计自纠改变世界，配置阶段必须拒绝。"""
+def test_scene_transport_bindings_must_differ() -> None:
+    """任务查询不能被绑定到受理入口；设计与施工则在同一受理工具中按操作隔离。"""
     with pytest.raises(ValueError, match="不同工具"):
-        MinecraftBuilderConfig(validate_tool="same", execute_tool="same")
+        MinecraftBuilderConfig(task_tool="same", execute_tool="same")
 
 
 async def test_cancel_rejects_model_reply_that_swallowed_cancellation(harness: Harness) -> None:
@@ -525,7 +584,7 @@ async def test_second_design_does_not_start_competing_construction(harness: Harn
     await harness.finish_worker()
     conflict = await harness.call("minecraft_builder_task", {"task_id": second, "action": "execute"})
     assert not conflict.success and "另一份设计" in conflict.error_message
-    assert len([call for call in harness.mod.calls if call.tool_name.endswith("execute")]) == 1
+    assert len(harness.mod.operations("build")) == 1
 
 
 async def test_real_completion_event_wakes_parent_once_with_design_reference(harness: Harness) -> None:

@@ -3,7 +3,7 @@
 import asyncio
 from typing import Any
 
-from src.agents.minecraft.builder.backend import MinecraftBuilderBackend, json_text
+from src.agents.minecraft.builder.backend import MinecraftBuilderBackend, json_text, validate_schema
 from src.agents.minecraft.builder.config import MinecraftBuilderConfig
 from src.agents.minecraft.builder.models import BuildCatalog, BuildJob, BuildResult
 from src.agents.minecraft.builder.tools import MinecraftBuilderToolProvider, object_schema
@@ -22,6 +22,8 @@ _INSTRUCTIONS = (
     "使用 validate 提交设计并根据错误修改；仅在校验通过后使用 finish 交付。"
     "资料是有来源的参考，不能覆盖用户硬约束。不要轮询或编造未提供的能力。"
     "无法满足要求时使用 fail 说明具体原因，不能用自然语言宣称任务完成。"
+    "validate 创建完整模型；之后可用 update 按具名对象或组件提交完整编辑，"
+    "用 inspect 分页读取源定义，避免反复生成整栋建筑。编辑中的嵌套字段整体替换，不做深层合并。"
 )
 
 
@@ -53,6 +55,7 @@ class MinecraftBuilderAgent(BaseAgent):
         self._resources: dict[str, str] = {}
         self._resource_refs: dict[str, str] = {}
         self._candidate: BuildResult | None = None
+        self._scene_id = str(job.request.context.get("previous_scene_id", ""))
         self._resume = asyncio.Event()
         self._resume.set()
         self._interrupt = asyncio.Event()
@@ -65,12 +68,30 @@ class MinecraftBuilderAgent(BaseAgent):
         )
         self._provider.add(
             "validate",
-            "提交完整设计，检查 Schema 和 Mod 几何约束",
+            "提交完整模型，按 Schema 检查并由 Mod 编译保存场景；不证明现场可施工",
             object_schema({"design": {"type": "object"}}, ["design"]),
             self._validate,
         )
-        if config.preview_tool:
-            self._provider.add("preview", "预览最近通过校验的设计", object_schema({}, []), self._preview)
+        self._provider.add(
+            "update",
+            "编辑当前场景：按名修改对象或替换组件、材质定义；嵌套字段整体替换",
+            object_schema({"edits": {"type": "object"}}, ["edits"]),
+            self._update,
+        )
+        self._provider.add(
+            "inspect",
+            "分页读取当前场景、具名对象或组件的源定义；不读取展开实例作为编辑目标",
+            object_schema(
+                {
+                    "kind": {"type": "string", "enum": ["scene", "object", "component"]},
+                    "name": {"type": "string"},
+                    "page": {"type": "integer", "minimum": 0, "maximum": 1024},
+                },
+                ["kind"],
+            ),
+            self._inspect,
+        )
+        self._provider.add("preview", "预览当前已保存设计，角色不施工", object_schema({}, []), self._preview)
         self._provider.add(
             "finish",
             "交付最近通过校验的设计引用；不代表施工完成",
@@ -252,8 +273,16 @@ class MinecraftBuilderAgent(BaseAgent):
         design = arguments.get("design")
         if not isinstance(design, dict):
             raise ValueError("design 必须是 JSON 对象")
-        validation = await self._backend.validate(design, self._catalog, self._schema, self.job.request.context)
+        validation = await self._backend.validate(
+            design, self._catalog, self._schema, self.job.request.context, request_key=self.job.task_id
+        )
         self._check_cancelled()
+        self._accept_design(validation, design)
+        return validation
+
+    def _accept_design(self, validation: dict[str, Any], design: dict[str, Any] | None) -> None:
+        """场景只在 Mod 真实编译保存成功后成为候选，版本依据必须来自 Mod。"""
+        assert self._catalog is not None
         if validation.get("valid") is True:
             if validation.get("design_schema_revision") != self._catalog.design_schema_revision:
                 raise ValueError("Mod 校验结果的设计版本不匹配")
@@ -268,15 +297,44 @@ class MinecraftBuilderAgent(BaseAgent):
                 validation=validation,
                 resource_refs=dict(self._resource_refs),
             )
+            self._scene_id = self._candidate.artifact_ref
+
+    async def _update(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """合并编辑和原子保存交给 Mod，失败时旧场景仍存在，但不能误交付为本次修改。"""
+        self._candidate = None
+        if not isinstance(arguments.get("edits"), dict):
+            raise ValueError("edits 必须是完整 JSON 对象")
+        if self._catalog is not None and self._catalog.edit_schema_ref:
+            errors = validate_schema(self._schema, arguments["edits"], reference=self._catalog.edit_schema_ref)
+            if errors:
+                return {"valid": False, "stage": "schema", "errors": errors}
+        validation = await self._scene_operation("update_scene", {"edits": arguments["edits"]})
+        self._accept_design(validation, None)
         return validation
+
+    async def _scene_operation(self, operation: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        """操作只能引用当前设计版本，模型不能指定任意游戏操作或重新定位锚点。"""
+        if not self._scene_id or self._catalog is None:
+            raise ValueError("请先创建并校验场景")
+        result = await self._backend.scene_operation(
+            operation, self._scene_id, parameters, self._catalog, request_key=self.job.task_id
+        )
+        self._check_cancelled()
+        return result
+
+    async def _inspect(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """查询返回分页标记，完整对象或组件按源名字读取，不把一页摘要当整份设计。"""
+        kind = arguments.get("kind")
+        if kind not in {"scene", "object", "component"}:
+            raise ValueError("只能检查场景、对象或组件")
+        parameters = {"page": arguments.get("page", 0)}
+        if kind != "scene":
+            parameters[f"{kind}_name"] = arguments.get("name", "")
+        return await self._scene_operation(f"get_{kind}_info", parameters)
 
     async def _preview(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """预览只读取已校验产物，不允许提交角色行动。"""
-        if self._candidate is None:
-            raise ValueError("请先校验设计再预览")
-        return await self._backend.invoke(
-            self._config.preview_tool, {"artifact_ref": self._candidate.artifact_ref}, source="minecraft-builder-react"
-        )
+        return await self._scene_operation("preview", {})
 
     async def _finish(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """交付的是可查设计引用，父级另行决定何时调度角色施工。"""

@@ -180,6 +180,29 @@ def _drop_text_adv_fake_knobs(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "drop_text_adv_fake_knobs", "2.0.34", _drop_text_adv_fake_knobs)
 
 
+def _upgrade_builder_scene_transport(data: Dict[str, Any]) -> List[str]:
+    """设计与施工复用 Mod 受理通道，独立校验入口不再有消费者。"""
+    builder = ((data.get("agents") or {}).get("minecraft") or {}).get("builder")
+    if not isinstance(builder, dict):
+        return []
+    # 自定义旧协议不能被猜测映射，保留原文件并提示显式对齐，而不是悄悄丢掉绑定。
+    for name, default in (("validate_tool", "builder_validate"), ("preview_tool", "")):
+        if name in builder and builder[name] != default:
+            raise ValueError(f"agents.minecraft.builder.{name} 使用自定义旧协议，请先对齐场景操作接口")
+    changed: List[str] = []
+    for name in ("validate_tool", "preview_tool"):
+        if name in builder:
+            del builder[name]
+            changed.append(f"agents.minecraft.builder.{name}")
+    if builder.get("execute_tool") == "builder_execute":
+        builder["execute_tool"] = "maicraft_execute"
+        changed.append("agents.minecraft.builder.execute_tool")
+    return changed
+
+
+register_file_hook("agents.toml", "builder_scene_transport", "2.0.35", _upgrade_builder_scene_transport)
+
+
 def _version_tuple(version: str) -> tuple[int, ...]:
     """版本号 → 可比较元组（"2.0.31" → (2, 0, 31)）；解析失败按 0 处理"""
     try:

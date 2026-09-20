@@ -9,6 +9,7 @@ from referencing import Registry
 
 from src.agents.minecraft.builder.config import MinecraftBuilderConfig
 from src.agents.minecraft.builder.models import BuildCatalog, BuildJob
+from src.agents.minecraft.builder.scene_protocol import MinecraftSceneProtocol, scene_goal
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 
@@ -26,13 +27,16 @@ def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def validate_schema(schema: dict[str, Any], value: Any) -> list[dict[str, str]]:
+def validate_schema(schema: dict[str, Any], value: Any, *, reference: str = "") -> list[dict[str, str]]:
     """本地先查格式；外部引用不联网获取，未提供的定义必须明确报错。"""
     dialect = validator_for(schema, default=None) if "$schema" in schema else validator_for(schema)
     if dialect is None:
         raise ValueError("Mod 使用了当前客户端不支持的 JSON Schema 方言")
     dialect.check_schema(schema)
     validator = dialect(schema, registry=Registry())
+    if reference:
+        # 编辑格式引用同一份 Mod Schema 的局部定义，保持根解析作用域，不复制部件字段。
+        validator = validator.evolve(schema={"$ref": reference})
     return [
         {"path": "/" + "/".join(str(part) for part in error.absolute_path), "message": error.message}
         for error in list(validator.iter_errors(value))[:10]
@@ -51,6 +55,7 @@ class MinecraftBuilderBackend:
         self.config = config
         self._registry = registry
         self._client = client
+        self._scenes = MinecraftSceneProtocol(config, self.invoke)
 
     async def read_text(self, uri: str) -> str:
         """兼容 MCP 的内容列表与结果封装，拒绝空资料和超出预算的内容。"""
@@ -84,7 +89,8 @@ class MinecraftBuilderBackend:
             raise ValueError("建造设计 Schema 必须是 JSON 对象")
         # 初始化即验证方言和 Schema，避免让模型在不可执行的契约上反复设计。
         validate_schema(schema, {})
-        self.tool(self.config.validate_tool)
+        self.tool(self.config.execute_tool)
+        self.tool(self.config.task_tool)
         return catalog, schema
 
     def tool(self, raw_name: str) -> ToolSpec:
@@ -121,21 +127,34 @@ class MinecraftBuilderBackend:
         return payload
 
     async def validate(
-        self, design: dict[str, Any], catalog: BuildCatalog, schema: dict[str, Any], context: dict[str, Any]
+        self,
+        design: dict[str, Any],
+        catalog: BuildCatalog,
+        schema: dict[str, Any],
+        context: dict[str, Any],
+        *,
+        request_key: str,
     ) -> dict[str, Any]:
         """先检查设计格式，再由 Mod 检查真实几何与游戏约束。"""
         errors = validate_schema(schema, design)
         if errors:
             return {"valid": False, "errors": errors, "stage": "schema"}
-        return await self.invoke(
-            self.config.validate_tool,
-            {
-                "design": design,
-                "design_schema_revision": catalog.design_schema_revision,
-                "capability_revision": catalog.revision,
-                "context": context,
-            },
-            source="minecraft-builder-react",
+        return await self._scenes.design_operation(
+            "create_scene", {"scene": design}, catalog, context, request_key=request_key
+        )
+
+    async def scene_operation(
+        self,
+        operation: str,
+        scene_id: str,
+        parameters: dict[str, Any],
+        catalog: BuildCatalog,
+        *,
+        request_key: str,
+    ) -> dict[str, Any]:
+        """局部修改与检查沿用原场景锚点，参数由受管工具固定，不接受任意游戏目标。"""
+        return await self._scenes.design_operation(
+            operation, {**parameters, "scene_id": scene_id}, catalog, {}, request_key=request_key
         )
 
     async def execute(self, job: BuildJob) -> tuple[ToolSpec, dict[str, Any]]:
@@ -155,11 +174,8 @@ class MinecraftBuilderBackend:
         payload = await self.invoke(
             self.config.execute_tool,
             {
-                "artifact_ref": result.artifact_ref,
-                "design_schema_revision": result.design_schema_revision,
-                "capability_revision": result.capability_revision,
-                "context": job.request.context,
-                "request_key": job.task_id,
+                "goal": scene_goal("build", {"scene_id": result.artifact_ref}, current, job.request.context),
+                "request_key": f"{job.task_id}:build",
             },
             source="minecraft-react",
         )

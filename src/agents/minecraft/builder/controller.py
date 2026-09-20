@@ -165,7 +165,11 @@ class MinecraftBuilderController:
                 return job.snapshot()
             context = dict(job.request.context)
             if job.result is not None:
-                context["previous_design"] = job.result.design
+                # 修改使用 Mod 中的不可变场景，不把整栋 JSON 再交给父模型复制。
+                context["previous_scene_id"] = job.result.artifact_ref
+                anchor = job.result.validation.get("anchor")
+                if isinstance(anchor, dict):
+                    context["target"] = {"kind": "coordinates", "position": anchor}
             request = job.request.model_copy(
                 update={
                     "requirements": f"{job.request.requirements}\n修改要求：{requirements}",
