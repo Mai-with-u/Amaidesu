@@ -7,7 +7,7 @@
 //   - streamer.speech → "发言: {text}"
 //   - tool.result.<name> → "{tool_name} · {status} [+ error tail]"
 //   - rundown.changed → "环节切换/流程单完成"
-//   - planner.* → 1-2 个最有意义的 kv（active/next 或 timeline_summary 截断）
+//   - planner.* → 决策结论一行：失败/沉默/回应（decision）或裁决意图+置信度（verdict）
 //   - game.* → "{message}" + scene；live.* → session/platform 摘要
 //   - core.* → message 或 event 名
 //   - 其余：原样返回事件 type
@@ -46,6 +46,24 @@ import { truncateText } from '@/utils/format';
     const status = pickString(d.status, 8) || '—';
     const errTail = pickString(d.error_message, 24);
     return errTail ? `${toolName} · ${status} · ${errTail}` : `${toolName} · ${status}`;
+  }
+
+  if (type.startsWith('planner.')) {
+    // decision 是轮末汇总（失败/沉默/回应三态互斥），verdict 只在决定回应时发。
+    // target 是用户 id 哈希（无名字映射），一行摘要里不展示。
+    const conf =
+      typeof d.confidence === 'number' && d.confidence > 0
+        ? `（${Math.round(d.confidence * 100)}%）`
+        : '';
+    if (type === 'planner.decision') {
+      const err = pickString(d.error, 24);
+      if (err) return `决策失败 · ${err}`;
+      if (d.should_reply === false) {
+        return d.silent_reason === 'low_confidence' ? '低置信压制，本轮沉默' : '本轮不回应';
+      }
+      return `回应: ${pickString(d.topic_summary, 24)}${conf}`.trim();
+    }
+    return `裁决: ${pickString(d.topic_summary, 24)}${conf}`.trim();
   }
 
   if (type === 'rundown.changed') {
