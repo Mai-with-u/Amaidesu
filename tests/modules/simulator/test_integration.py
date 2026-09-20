@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Generator, List, Optional
 
@@ -294,3 +295,67 @@ class TestCancelledErrorPropagation:
         with pytest.raises(asyncio.CancelledError):
             await service._task
         await service.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# ⑤ 回放自然完成收场（队列耗尽 → 落场复位，可再次启动）
+# ---------------------------------------------------------------------------
+
+
+class TestReplayNaturalFinish:
+    """回放队列耗尽后服务必须自动落场：is_running 复位、task 清空、可立即再启动。"""
+
+    @pytest.mark.asyncio
+    async def test_natural_finish_resets_running_and_restartable(self, sim_store: SQLiteDatabase) -> None:
+        event_bus = EventBus()
+        received: List[RoomMessagePayload] = []
+
+        async def _capture(event_name: str, payload: Any, source: Optional[str] = None) -> None:
+            if isinstance(payload, RoomMessagePayload):
+                received.append(payload)
+
+        event_bus.on(CoreEvents.ROOM_MESSAGE_DANMAKU, _capture, model_class=RoomMessagePayload)
+
+        # 种入同一本地日期的两条弹幕（相邻 1s；replay_speed=100 近似全速回放）
+        date_str = "2026-09-01"
+        base_ms = int(datetime.strptime(date_str, "%Y-%m-%d").timestamp() * 1000)
+        for i, (name, content) in enumerate([("观众甲", "第一条"), ("观众乙", "第二条")]):
+            await sim_store.chat.insert_live_chat(
+                live_session_id=1,
+                timestamp_ms=base_ms + i * 1000,
+                sender_role="viewer",
+                sender_id=f"uid_{name}",
+                sender_name=name,
+                content=content,
+                message_type="danmaku",
+                simulated=False,
+            )
+
+        fake_llm = _FakeLLMService()
+        service = SimulatorService(
+            event_bus=event_bus,
+            sim_repo=sim_store.sim,
+            chat_repo=sim_store.chat,
+            services_by_type={type(fake_llm): fake_llm},
+        )
+        await service.setup(
+            _FakeConfigService(_enabled_config(mode="replay", replay_date=date_str, replay_speed=100.0))
+        )
+        try:
+            assert service.is_running is True, "replay 模式 + 默认日期就绪，setup 应自动启动回放"
+
+            # 队列仅 2 条且全速回放：等服务自然落场（5s 上限兜底）
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while service.is_running and asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.05)
+
+            assert len(received) == 2, f"两条录制弹幕都应被回放（实际 {len(received)} 条）"
+            assert service.is_running is False, "回放自然完成后 is_running 必须复位，不得永久挂 true"
+            assert service._active_mode == "off"
+            assert service._task is None
+
+            # 落场后应可立即再次启动（重建回放队列）
+            await service.start()
+            assert service.is_running is True
+        finally:
+            await service.cleanup()

@@ -434,6 +434,7 @@ class SimulatorService:
                 payload = engine.pop_next()
                 if payload is None:
                     self.logger.info(f"回放完成: date={replay_date} 共 {engine.total} 条")
+                    await self._finish_replay_naturally()
                     break
 
                 await self._emit_replay_payload(payload)
@@ -442,6 +443,30 @@ class SimulatorService:
             raise
         except Exception as exc:
             self.logger.exception(f"模拟器回放循环异常: {exc}")
+
+    async def _finish_replay_naturally(self) -> None:
+        """回放队列耗尽后的自然收场：与 stop() 同一套落场动作，但不 cancel 自身。
+
+        不收场的后果是 is_running 永久挂 true、自动开启的回放场次悬着，
+        页面卡在"运行中"且无法再启动（须手动停止才能恢复）。
+        """
+        self._is_started = False
+        self._stop_event.set()
+        self._unsubscribe_streamer_speech()
+        self._task = None
+        await self._close_replay_session()
+        self._active_mode = "off"
+        self.logger.info("模拟器服务已停止（回放自然完成）")
+
+    async def _close_replay_session(self) -> None:
+        """收口回放启动时自动开启的场次（幂等；失败不阻断收场）。"""
+        if self._opened_session_pk is None or self._session_manager is None:
+            return
+        try:
+            await self._session_manager.close_session(reason="回放结束")
+        except Exception as exc:  # noqa: BLE001 收口失败不阻断停止
+            self.logger.warning(f"回放场次收口失败（已忽略）: {exc}")
+        self._opened_session_pk = None
 
     # message_type → room.message.* 事件名映射；未知类型回退弹幕事件
     _MESSAGE_TYPE_EVENT: Dict[str, str] = {
@@ -547,12 +572,7 @@ class SimulatorService:
             self._task = None
 
         # 回放场次收口（自动开启的场次随回放结束自动结束）
-        if self._opened_session_pk is not None and self._session_manager is not None:
-            try:
-                await self._session_manager.close_session(reason="回放结束")
-            except Exception as exc:  # noqa: BLE001 收口失败不阻断停止
-                self.logger.warning(f"回放场次收口失败（已忽略）: {exc}")
-            self._opened_session_pk = None
+        await self._close_replay_session()
 
         self._active_mode = "off"
         self.logger.info("模拟器服务已停止")
