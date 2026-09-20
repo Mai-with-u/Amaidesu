@@ -45,3 +45,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-019：ToolRegistry Provider 常驻登记与工具集刷新（工具页注册表驱动）](019-tool-registry-provider-refresh.md)
 - [ADR-020：dashboard 服务层分层（api 协议转换 / services 业务逻辑 / schemas 契约）](020-dashboard-service-layer.md)
 - [ADR-021：全站时间字段毫秒统一（Unix epoch 毫秒 int，原子切换）](021-millisecond-time-unification.md)
+- [ADR-022：列表型配置是一等公民——整值编辑与索引回填](022-list-config-as-first-class.md)
