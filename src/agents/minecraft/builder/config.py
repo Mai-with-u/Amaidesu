@@ -15,6 +15,8 @@ class MinecraftBuilderConfig(BaseConfig):
     execute_tool: str = Field(
         default="builder_execute", min_length=1, description="Mod 施工受理工具原名，仅父 Agent 使用"
     )
+    task_tool: str = Field(default="maicraft_task", min_length=1, description="Mod 任务查询工具原名")
+    operation_poll_interval_ms: int = Field(default=1000, ge=1, description="等待已受理设计操作终态的间隔")
     max_steps: int = Field(default=12, ge=1, le=100, description="单个设计任务最多推理轮数")
     task_timeout_ms: int = Field(default=600_000, ge=1000, description="设计总时限，包含资料读取、模型重试与校验")
     max_resource_chars: int = Field(default=24_000, ge=1000, description="单份资料最大字符数")

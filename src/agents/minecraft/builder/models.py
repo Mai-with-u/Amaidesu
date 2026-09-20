@@ -37,6 +37,10 @@ class BuildCatalog(BaseModel):
     revision: Text
     design_schema_uri: Text
     design_schema_revision: Text
+    edit_schema_ref: str = ""
+    # 预算与版本覆盖范围来自 Mod，契约一致不代表场地、库存或可达性已验证。
+    planning_budget: dict[str, int] = Field(default_factory=dict)
+    revision_scope: str = ""
     capabilities: list[str] = Field(default_factory=list)
     resources: list[BuildResource] = Field(default_factory=list)
 
@@ -46,7 +50,8 @@ class BuildResult(BaseModel):
 
     artifact_ref: Text
     summary: Text
-    design: dict[str, Any]
+    # 对象编辑后的完整模型保存在 Mod 场景资源中，不在客户端重写一套合并算法。
+    design: dict[str, Any] | None = None
     capability_revision: str
     design_schema_revision: str
     validation: dict[str, Any]
