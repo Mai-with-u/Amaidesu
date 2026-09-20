@@ -148,6 +148,7 @@ def bind_core_tools(
     registry: ToolRegistry,
     config: Dict[str, Any] | None = None,
     event_bus: Any | None = None,
+    lipsync_analyzer: Any | None = None,
 ) -> Dict[str, int]:
     """绑定 Amaidesu 核心分类工具包到 ``registry``。
 
@@ -163,6 +164,8 @@ def bind_core_tools(
             传 ``None`` 表示所有分类走"空配置"，一律不装配
         event_bus: 事件总线（皮套适配器的被动半订阅 streamer.speech /
             tts.utterance.* 需要；组合根透传，None 时适配器退化为仅工具面）
+        lipsync_analyzer: 共享口型分析器（avatar 域渲染器接线；组合根透传，
+            None = 不渲染口型；统一装配签名，studio 域忽略）
 
     Returns:
         ``{member_key: new_tool_count}`` 报告，只含**实际尝试装配**的成员
@@ -197,7 +200,12 @@ def bind_core_tools(
             continue
 
         try:
-            register_fn(registry=registry, config=provider_config, event_bus=event_bus)
+            register_fn(
+                registry=registry,
+                config=provider_config,
+                event_bus=event_bus,
+                lipsync_analyzer=lipsync_analyzer,
+            )
         except Exception as exc:  # noqa: BLE001 - 单成员隔离边界
             logger.error(
                 f"bind_core_tools: 绑定 '{key}' 失败（{description}）: {type(exc).__name__}: {exc}",

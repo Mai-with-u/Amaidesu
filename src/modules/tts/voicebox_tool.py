@@ -64,9 +64,12 @@ class VoiceboxProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
+        audio_sink: Optional[Any] = None,
     ) -> None:
         self.config = config
         self.event_bus = event_bus
+        # 音频分接（AudioSink 协议形状；口型分析等消费者经装配链注入）
+        self.audio_sink = audio_sink
         self.logger = get_logger(self.__class__.__name__)
 
         self.typed_config = self.ConfigSchema.from_dict(config)
@@ -108,6 +111,7 @@ class VoiceboxProvider:
             sample_rate=self.sample_rate,
             channels=CHANNELS,
             dtype=DTYPE,
+            sink=self.audio_sink,
         )
         self.audio_manager = manager
 
@@ -296,6 +300,7 @@ class VoiceboxProvider:
 def create_voicebox_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    audio_sink: Optional[Any] = None,
 ) -> VoiceboxProvider:
     """工厂：构造 ``VoiceboxProvider`` 实例。
 
@@ -304,6 +309,7 @@ def create_voicebox_provider(
     return VoiceboxProvider(
         config=config,
         event_bus=event_bus,
+        audio_sink=audio_sink,
     )
 
 

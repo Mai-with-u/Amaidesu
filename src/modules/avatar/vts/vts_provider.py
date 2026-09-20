@@ -3,8 +3,9 @@ VTSProvider - VTS 虚拟形象工具集
 
 ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动半）：
 
-- 引擎子件（``LipSyncProcessor`` / ``ExpressionController`` / ``HotkeyMatcher``
-  / ``IdleMotionController``）经 callback 解耦，可独立复用。
+- 引擎子件（``ExpressionController`` / ``HotkeyMatcher`` / ``IdleMotionController``）
+  经 callback 解耦，可独立复用；口型渲染（``VtsLipSyncRenderer``）挂在共享
+  分析器（``avatar.lipsync``）上。
 - 暴露的工具（同语义跨后端同名同参数形状，契约见 ``avatar.protocol``）：
   - ``vts_set_expression``        - 设置情绪（17 枚举值 + 强度）
   - ``vts_list_preset_actions``   - 列出可演预设（VTS 热键目录）
@@ -38,7 +39,7 @@ from src.modules.types.emotion_vocab import Emotion
 from .expression_controller import ExpressionController
 from .hotkey_matcher import HotkeyMatcher
 from .idle_motion_controller import IdleMotionController
-from .lip_sync_processor import LipSyncProcessor
+from .lip_sync_renderer import VtsLipSyncRenderer
 
 if TYPE_CHECKING:
     pass
@@ -123,7 +124,7 @@ class VTSProvider(BaseToolProvider):
     }
 
     class ConfigSchema(BaseConfig):
-        """VTS 配置（连接 + LipSync + Idle 三大段）
+        """VTS 配置（连接 + Idle 两段；口型分析调参已迁 infra ``[avatar.lipsync]``）
 
         TOML 段位：[tools.avatar.vts].config
 
@@ -135,22 +136,6 @@ class VTSProvider(BaseToolProvider):
         # 连接
         vts_host: str = Field(default="localhost", description="VTS WebSocket 主机地址")
         vts_port: int = Field(default=8001, ge=1, le=65535, description="VTS WebSocket 端口")
-        lip_sync_enabled: bool = Field(default=True, description="是否启用 LipSync")
-        sample_rate: int = Field(default=16000, ge=8000, le=48000, description="LipSync 采样率 Hz")
-        # LipSync 详细（命名 *_ms 实际单位 = float 秒，行为保真）
-        volume_threshold: float = Field(default=0.01, ge=0.0, description="LipSync 音量阈值")
-        smoothing_factor: float = Field(default=0.3, ge=0.0, le=1.0, description="LipSync 平滑系数")
-        vowel_detection_sensitivity: float = Field(default=0.5, ge=0.0, le=1.0, description="LipSync 元音检测灵敏度")
-        volume_gain: float = Field(default=1.0, ge=0.0, description="LipSync 音量增益")
-        max_mouth_open: float = Field(default=0.6, ge=0.0, le=1.0, description="LipSync 最大张嘴度")
-        silence_threshold: float = Field(default=0.02, ge=0.0, description="LipSync 静音阈值")
-        close_mouth_threshold: float = Field(default=0.06, ge=0.0, description="LipSync 闭嘴阈值（低于此值触发闭嘴）")
-        power_curve: float = Field(default=1.0, ge=0.0, description="LipSync 功率曲线指数")
-        vowel_open_weight: float = Field(default=0.5, ge=0.0, description="LipSync 元音张嘴权重")
-        update_interval_ms: float = Field(default=30.0, ge=0.0, description="LipSync 更新间隔（秒；命名沿用）")
-        mouth_open_lerp_speed: float = Field(default=0.35, ge=0.0, description="LipSync 张嘴插值速度")
-        vowel_decay: float = Field(default=0.4, ge=0.0, description="LipSync 元音衰减")
-        min_mouth_delta: float = Field(default=0.005, ge=0.0, description="LipSync 最小张嘴变化阈值")
         base_smile: float = Field(default=0.3, ge=-1.0, le=1.0, description="MouthSmile 静止基线值")
         # Idle 运动
         idle_enabled: bool = Field(default=True, description="是否启用 Idle 拟人动画")
@@ -180,10 +165,13 @@ class VTSProvider(BaseToolProvider):
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
+        lipsync_analyzer: Optional[Any] = None,
     ) -> None:
         # 配置
         self.config = config
         self.event_bus = event_bus
+        # 共享口型分析器（装配注入；setup 时挂 VTS 渲染器，None = 不渲染口型）
+        self.lipsync_analyzer = lipsync_analyzer
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置（typed；空 dict = 全默认；失败 log+raise）
@@ -195,8 +183,6 @@ class VTSProvider(BaseToolProvider):
 
         self.vts_host: str = self.typed_config.vts_host
         self.vts_port: int = self.typed_config.vts_port
-        self.lip_sync_enabled: bool = self.typed_config.lip_sync_enabled
-        self.sample_rate: int = self.typed_config.sample_rate
 
         # 情绪 → VTS 参数映射（词表 17 值全覆盖；键取 Emotion.value 小写）。
         # VTS 可驱动的面部参数用足（嘴/眼/眉/脸颊/舌头/水平嘴/FaceAngry），
@@ -288,35 +274,12 @@ class VTSProvider(BaseToolProvider):
         # 事件订阅句柄（setup 时绑定，cleanup 时退订）
         self._speech_emotion_handler: Optional[Any] = None
         self._speaking_state_handles: Optional[Any] = None
+        # 口型渲染器（setup 时挂到共享分析器，cleanup 时摘除）
+        self._lip_renderer: Optional[VtsLipSyncRenderer] = None
 
         self.render_count = 0
         self.error_count = 0
 
-        # 子组件（消费侧 typed 化：self.typed_config.<field> 替代裸 config.get）
-        self.lip_sync = LipSyncProcessor(
-            logger_name=f"{self.__class__.__name__}.LipSync",
-            sample_rate=self.sample_rate,
-            volume_threshold=self.typed_config.volume_threshold,
-            smoothing_factor=self.typed_config.smoothing_factor,
-            vowel_detection_sensitivity=self.typed_config.vowel_detection_sensitivity,
-            vts_set_parameter=self._expression_set_param_proxy,
-            is_connected=lambda: self._is_connected,
-            volume_gain=self.typed_config.volume_gain,
-            max_mouth_open=self.typed_config.max_mouth_open,
-            silence_threshold=self.typed_config.silence_threshold,
-            close_mouth_threshold=self.typed_config.close_mouth_threshold,
-            power_curve=self.typed_config.power_curve,
-            vowel_open_weight=self.typed_config.vowel_open_weight,
-            update_interval_ms=self.typed_config.update_interval_ms,
-            mouth_open_lerp_speed=self.typed_config.mouth_open_lerp_speed,
-            vowel_decay=self.typed_config.vowel_decay,
-            min_mouth_delta=self.typed_config.min_mouth_delta,
-            expression_rest_values={
-                self.PARAM_MOUTH_SMILE: self.typed_config.base_smile,
-                self.PARAM_EYE_OPEN_LEFT: 1.0,
-                self.PARAM_EYE_OPEN_RIGHT: 1.0,
-            },
-        )
         self.hotkey_matcher = HotkeyMatcher(
             logger_name=f"{self.__class__.__name__}.Hotkey",
             is_connected=lambda: self._is_connected,
@@ -462,6 +425,14 @@ class VTSProvider(BaseToolProvider):
         self._speech_emotion_handler = bind_speech_emotion(self.event_bus, self, self.logger)
         self._speaking_state_handles = bind_speaking_state(self.event_bus, self.logger, on_change=self._set_speaking)
 
+        # 口型渲染：挂到共享分析器（说话时 MouthOpen 跟随信号 + 常驻微笑基线维护）
+        if self.lipsync_analyzer is not None:
+            self._lip_renderer = VtsLipSyncRenderer(
+                set_parameter=self._expression_set_param_proxy,
+                base_expressions={self.PARAM_MOUTH_SMILE: float(self.typed_config.base_smile)},
+            )
+            self.lipsync_analyzer.add_renderer(self._lip_renderer)
+
         self._has_started = True
 
     async def cleanup(self) -> None:
@@ -484,6 +455,10 @@ class VTSProvider(BaseToolProvider):
                 except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
                     self.logger.debug(f"tts.utterance.* 退订失败（已忽略）: {exc}")
                 self._speaking_state_handles = None
+
+        if self.lipsync_analyzer is not None and self._lip_renderer is not None:
+            self.lipsync_analyzer.remove_renderer(self._lip_renderer)
+            self._lip_renderer = None
 
         await self._disconnect()
         self._has_started = False
@@ -659,7 +634,6 @@ class VTSProvider(BaseToolProvider):
             "render_count": self.render_count,
             "error_count": self.error_count,
             "hotkey_count": len(self.hotkey_matcher.hotkey_list),
-            "lip_sync_enabled": self.lip_sync_enabled,
         }
 
     # ===== 内部辅助 =====
@@ -935,11 +909,13 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_vts_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    lipsync_analyzer: Optional[Any] = None,
 ) -> VTSProvider:
     """构造 VTSProvider 实例（不启动，由调用方 setup）"""
     return VTSProvider(
         config=config,
         event_bus=event_bus,
+        lipsync_analyzer=lipsync_analyzer,
     )
 
 
@@ -947,11 +923,13 @@ def register_vts_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    lipsync_analyzer: Optional[Any] = None,
 ) -> VTSProvider:
     """构造 VTSProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。"""
     provider = create_vts_provider(
         config=config,
         event_bus=event_bus,
+        lipsync_analyzer=lipsync_analyzer,
     )
     registry.register_provider(provider)
     return provider

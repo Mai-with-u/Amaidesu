@@ -313,7 +313,9 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_vrchat_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    lipsync_analyzer: Optional[Any] = None,
 ) -> VRChatProvider:
+    # lipsync_analyzer：统一装配签名；VRChat 无标准 viseme 通道，不接口型渲染
     return VRChatProvider(
         config=config,
         event_bus=event_bus,
@@ -324,6 +326,7 @@ def register_vrchat_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    lipsync_analyzer: Optional[Any] = None,
 ) -> VRChatProvider:
     provider = create_vrchat_provider(
         config=config,

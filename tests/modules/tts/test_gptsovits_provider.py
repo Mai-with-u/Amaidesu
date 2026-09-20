@@ -235,7 +235,7 @@ class TestUtteranceEventsStreaming:
         await event_bus_async.cleanup()
 
         # 流式 API 顺序调用
-        mgr.start_stream.assert_called_once_with()
+        mgr.start_stream.assert_called_once_with(utterance_id="utt_gptsovits_1")
         assert mgr.write_chunk.call_count == 2
         mgr.stop_stream.assert_called_once_with()
 
@@ -352,7 +352,7 @@ class TestStreamingPlaybackOrder:
 
         call_log: list[str] = []
 
-        def record_start() -> None:
+        def record_start(utterance_id: str = "") -> None:
             call_log.append("start")
 
         def record_write(chunk: np.ndarray) -> None:

@@ -174,7 +174,7 @@ class TestAssemblyFailFast:
         class BrokenEngine:
             PROVIDER_NAME = "broken"
 
-        def broken_factory(config, event_bus=None):
+        def broken_factory(config, event_bus=None, **kwargs):
             return BrokenEngine()
 
         original = assembly._PROVIDER_FACTORIES["edge_tts"]

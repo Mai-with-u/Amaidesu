@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -173,7 +173,7 @@ class TestStreamingPlayback:
                 await provider.handle_speech("你好", utterance_id="utt_omni_1")
 
         # 跳过空块 + 调用 2 次 write_chunk
-        mgr.start_stream.assert_called_once_with()
+        mgr.start_stream.assert_called_once_with(utterance_id=ANY)
         assert mgr.write_chunk.call_count == 2
         mgr.stop_stream.assert_called_once_with()
         assert mock_decode.call_count == 2
@@ -196,7 +196,7 @@ class TestStreamingPlayback:
                 await provider.handle_speech("x", utterance_id="utt_omni_empty")
 
         mock_decode.assert_not_called()
-        mgr.start_stream.assert_called_once_with()
+        mgr.start_stream.assert_called_once_with(utterance_id=ANY)
         mgr.stop_stream.assert_called_once_with()
 
 

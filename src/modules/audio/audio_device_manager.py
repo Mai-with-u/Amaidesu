@@ -28,10 +28,18 @@ class AudioDeviceManager:
     """
     音频设备管理器
 
-    管理音频输出设备和音频播放。
+    管理音频输出设备和音频播放。可挂载一个 ``AudioSink`` 分接（全量与
+    流式两种播法都会把音频复制递入；分接是装饰性路径，任何 sink 异常
+    只记日志，不影响播放）。
     """
 
-    def __init__(self, sample_rate: int = 32000, channels: int = 1, dtype: type = np.int16) -> None:
+    def __init__(
+        self,
+        sample_rate: int = 32000,
+        channels: int = 1,
+        dtype: type = np.int16,
+        sink: Optional[Any] = None,
+    ) -> None:
         """
         初始化音频设备管理器
 
@@ -39,22 +47,52 @@ class AudioDeviceManager:
             sample_rate: 采样率
             channels: 声道数
             dtype: 数据类型
+            sink: 可选音频分接接收方（``AudioSink`` 协议形状；口型分析等
+                消费者经构造链注入）
         """
         self.logger = get_logger("AudioDeviceManager")
         self.sample_rate = sample_rate
         self.channels = channels
         self.dtype = dtype
+        self._sink = sink
 
         # 设备配置
         self.output_device_name: Optional[str] = None
         self.output_device_index: Optional[int] = None
 
-        # 播放状态
+        # 播放状态（_stream 由 start_stream 创建；未启动时 write/stop 静默跳过）
         self.is_playing = False
         self.current_stream: Optional[Any] = None
+        self._stream: Optional[Any] = None
 
         if not DEPENDENCIES_OK:
             self.logger.error("音频依赖缺失，请安装: pip install sounddevice soundfile")
+
+    # -----分接（复制音频给注入的 sink；装饰性路径 fail-soft）-----
+
+    def _sink_start(self, utterance_id: str = "") -> None:
+        if self._sink is None:
+            return
+        try:
+            self._sink.start(utterance_id)
+        except Exception as e:
+            self.logger.warning(f"音频分接 start 异常（已忽略）: {e}")
+
+    def _sink_feed(self, chunk: "np.ndarray", sample_rate: int) -> None:
+        if self._sink is None:
+            return
+        try:
+            self._sink.feed(chunk, sample_rate)
+        except Exception as e:
+            self.logger.warning(f"音频分接 feed 异常（已忽略）: {e}")
+
+    def _sink_stop(self) -> None:
+        if self._sink is None:
+            return
+        try:
+            self._sink.stop()
+        except Exception as e:
+            self.logger.warning(f"音频分接 stop 异常（已忽略）: {e}")
 
     def find_device_index(self, device_name: Optional[str]) -> Optional[int]:
         """
@@ -169,6 +207,10 @@ class AudioDeviceManager:
 
         self.logger.debug(f"开始播放音频 (设备索引: {device_index}, 采样率: {samplerate})...")
 
+        # 分接：开播同步开 session，整段音频一次递入（全量播法）
+        self._sink_start()
+        self._sink_feed(audio_array, samplerate)
+
         try:
             # 停止现有播放
             sd.stop()
@@ -187,15 +229,18 @@ class AudioDeviceManager:
             # 确保播放停止
             sd.stop()
             self.is_playing = False
+            # 分接：播完同步收 session
+            self._sink_stop()
 
             self.logger.debug("音频播放完成")
 
         except Exception as e:
             self.logger.exception(f"音频播放失败: {e}")
             self.is_playing = False
+            self._sink_stop()
             raise
 
-    def start_stream(self) -> None:
+    def start_stream(self, utterance_id: str = "") -> None:
         """启动流式播放,创建 OutputStream 准备接收音频块。"""
         if not DEPENDENCIES_OK:
             self.logger.error("sounddevice 库不可用")
@@ -209,10 +254,13 @@ class AudioDeviceManager:
             )
             self._stream.start()
             self.is_playing = True
+            # 分接：开播同步开 session（流式播法逐块 feed）
+            self._sink_start(utterance_id)
             self.logger.debug("流式播放已启动")
         except Exception as e:
             self.logger.error(f"启动流式播放失败: {e}")
             self._stream = None
+            self._sink_stop()
 
     def write_chunk(self, chunk: np.ndarray) -> None:
         """向流写入一个音频块,立即输出到扬声器。
@@ -220,6 +268,8 @@ class AudioDeviceManager:
         Args:
             chunk: 音频数据块 (1D 或 2D ndarray)
         """
+        # 分接：逐块复制递入（同步、非阻塞，fail-soft）
+        self._sink_feed(chunk, self.sample_rate)
         if not DEPENDENCIES_OK:
             return
         if self._stream is None:
@@ -243,6 +293,8 @@ class AudioDeviceManager:
         finally:
             self._stream = None
             self.is_playing = False
+            # 分接：播完同步收 session
+            self._sink_stop()
             self.logger.debug("流式播放已停止")
 
     def stop_audio(self) -> None:

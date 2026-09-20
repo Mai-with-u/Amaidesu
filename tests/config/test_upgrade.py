@@ -67,11 +67,16 @@ class TestAdvanceFileVersions:
 
     def setup_method(self) -> None:
         self._saved_agents_hooks = upgrade._FILE_HOOKS.pop("agents.toml", None)
+        # tools.toml 的生产钩子一并隔离：本类把 tools.toml 当"无钩子对照文件"
+        self._saved_tools_hooks = upgrade._FILE_HOOKS.pop("tools.toml", None)
 
     def teardown_method(self) -> None:
         upgrade._FILE_HOOKS.pop("agents.toml", None)
         if self._saved_agents_hooks is not None:
             upgrade._FILE_HOOKS["agents.toml"] = self._saved_agents_hooks
+        upgrade._FILE_HOOKS.pop("tools.toml", None)
+        if self._saved_tools_hooks is not None:
+            upgrade._FILE_HOOKS["tools.toml"] = self._saved_tools_hooks
 
     def test_advances_to_last_executed_hook_target(self):
         """有适用钩子的文件推进到最后一个已执行钩子的 target（不是基线）"""
@@ -110,10 +115,14 @@ class TestAdvanceFileVersions:
             "tools.toml": {"meta": {"version": "2.0.30"}, "tools": {}},
         }
         upgrade.register_file_hook("agents.toml", "sample", "2.0.31", sample_hook_v2_0_31)
+        # 隔离 tools.toml 的生产钩子（本用例要求它是"无钩子文件"）
+        saved_tools_hooks = upgrade._FILE_HOOKS.pop("tools.toml", None)
         try:
             changed = advance_file_versions(raw)
         finally:
             upgrade._FILE_HOOKS.pop("agents.toml", None)
+            if saved_tools_hooks is not None:
+                upgrade._FILE_HOOKS["tools.toml"] = saved_tools_hooks
 
         # 只有 A（有钩子）推进；B（无钩子）保持原值
         assert raw["agents.toml"]["meta"]["version"] == "2.0.31"
@@ -173,10 +182,14 @@ class TestAdvanceFileVersions:
             "tools.toml": {"meta": {"version": "2.0.30"}, "tools": {}},
         }
         upgrade.register_cross_file_hook("agents.toml", "tools.toml", "mover", "2.0.31", sample_cross_hook)
+        # 隔离 tools.toml 的生产钩子（本用例要求目标文件版本只受演示钩子驱动）
+        saved_tools_hooks = upgrade._FILE_HOOKS.pop("tools.toml", None)
         try:
             changed = advance_file_versions(raw)
         finally:
             upgrade._FILE_HOOKS.pop("agents.toml", None)
+            if saved_tools_hooks is not None:
+                upgrade._FILE_HOOKS["tools.toml"] = saved_tools_hooks
 
         # 宿主：标记搬走 + 版本推进到钩子 target
         assert "sample_migrated" not in raw["agents.toml"]["agents"]
@@ -193,13 +206,17 @@ class TestAdvanceFileVersions:
             "tools.toml": {"meta": {"version": "2.0.31"}, "tools": {}},
         }
         upgrade.register_cross_file_hook("agents.toml", "tools.toml", "mover", "2.0.31", sample_cross_hook)
+        saved_tools_hooks = upgrade._FILE_HOOKS.pop("tools.toml", None)
         try:
             changed = advance_file_versions(raw)
         finally:
             upgrade._FILE_HOOKS.pop("agents.toml", None)
+            if saved_tools_hooks is not None:
+                upgrade._FILE_HOOKS["tools.toml"] = saved_tools_hooks
 
         assert raw["tools.toml"]["meta"]["version"] == "2.0.31"
-        assert "tools.toml" not in changed
+        # 版本不回退；但钩子改写了目标数据 → 标记写回（无 meta.version 项）
+        assert changed["tools.toml"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -216,11 +233,16 @@ class TestVersionPipeline:
 
     def setup_method(self) -> None:
         self._saved_agents_hooks = upgrade._FILE_HOOKS.pop("agents.toml", None)
+        # tools.toml 的生产钩子一并隔离：本类把 tools.toml 当"无钩子对照文件"
+        self._saved_tools_hooks = upgrade._FILE_HOOKS.pop("tools.toml", None)
 
     def teardown_method(self) -> None:
         upgrade._FILE_HOOKS.pop("agents.toml", None)
         if self._saved_agents_hooks is not None:
             upgrade._FILE_HOOKS["agents.toml"] = self._saved_agents_hooks
+        upgrade._FILE_HOOKS.pop("tools.toml", None)
+        if self._saved_tools_hooks is not None:
+            upgrade._FILE_HOOKS["tools.toml"] = self._saved_tools_hooks
 
     def _write_version(self, config_dir: Path, file_name: str, version: str) -> None:
         path = config_dir / file_name

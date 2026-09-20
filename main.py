@@ -498,9 +498,24 @@ async def create_app_components(
         supervisor_config = AgentSupervisorConfig.from_dict(supervisor_section)
         agent_manager = AgentManager(tool_registry=tool_registry, memory=memory, supervisor_config=supervisor_config)
 
+        # 口型分析器（avatar 共享件，调参 [avatar.lipsync]）：在 TTS 装配前构造，
+        # 作为音频分接经构造链注入播放器；enabled=False / 配置非法时为 None（不分接）。
+        lipsync_analyzer = None
+        avatar_infra = config.get("avatar", {}) if isinstance(config, dict) else {}
+        lipsync_cfg = avatar_infra.get("lipsync", {}) if isinstance(avatar_infra, dict) else {}
+        if isinstance(lipsync_cfg, dict) and lipsync_cfg.get("enabled", True):
+            try:
+                from src.modules.avatar.lipsync import LipSyncAnalyzer
+
+                lipsync_analyzer = LipSyncAnalyzer(config=dict(lipsync_cfg))
+                logger.info("口型分析器已构造（[avatar.lipsync]）")
+            except Exception as exc:
+                logger.warning(f"口型分析器构造失败（口型不分接）: {type(exc).__name__}: {exc}")
+
         # TTS 引擎实例（基础设施，不经 ToolRegistry）：按 [tts] 段装配；
-        # 失败 / 关闭时返回 None，StreamerAgent 走 TTS 关闭路径。
-        tts_engine = build_tts_infrastructure(tts_section, event_bus=event_bus)
+        # 失败 / 关闭时返回 None，StreamerAgent 走 TTS 关闭路径。口型分析器经
+        # 构造链注入播放器分接（播放器对所有 sink 调用 fail-soft）。
+        tts_engine = build_tts_infrastructure(tts_section, event_bus=event_bus, audio_sink=lipsync_analyzer)
 
         # 思考流旁路 hub（ADR-008；观察面专用）：Agent 装配先于 dashboard 启动，
         # ws 通道延迟绑定（dashboard 就绪后 attach_ws）；未绑定期间 delta 丢弃。
@@ -557,6 +572,7 @@ async def create_app_components(
             tool_registry,
             tools_section,
             event_bus=event_bus,
+            lipsync_analyzer=lipsync_analyzer,
         )
         from src.modules.tools.bootstrap import CORE_MEMBER_COUNT
 

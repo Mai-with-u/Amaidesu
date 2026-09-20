@@ -39,7 +39,9 @@ def test_window_threshold_dropped_and_written_back(tmp_path: Path):
     doc = tomlkit.parse((tmp_path / "agents.toml").read_text(encoding="utf-8-sig"))
     background = doc["agents"]["streamer"]["background"]
     assert "window_event_threshold" not in background
-    assert get_config_version(tmp_path, "agents.toml") == CONFIG_BASELINE_VERSION
+    # agents.toml 版本流独立：只推进到本文件最后一个钩子 target，
+    # 不随其他文件（如 tools.toml 2.0.36）前进而前进
+    assert get_config_version(tmp_path, "agents.toml") == "2.0.35"
 
 
 def test_migration_idempotent_on_second_load(tmp_path: Path):

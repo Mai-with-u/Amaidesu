@@ -363,6 +363,7 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_obs_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    lipsync_analyzer: Optional[Any] = None,
 ) -> OBSProvider:
     return OBSProvider(config=config, event_bus=event_bus)
 
@@ -371,6 +372,7 @@ def register_obs_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    lipsync_analyzer: Optional[Any] = None,
 ) -> OBSProvider:
     provider = create_obs_provider(config=config, event_bus=event_bus)
     registry.register_provider(provider)

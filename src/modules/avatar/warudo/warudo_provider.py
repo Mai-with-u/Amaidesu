@@ -31,6 +31,7 @@ from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSp
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.types.emotion_vocab import Emotion
 
+from .lip_sync_renderer import WarudoLipSyncRenderer
 from .state.warudo_state_manager import WarudoStateManager
 from .subtitle.subtitle_manager import WarudoSubtitleManager
 from .tasks.blink_task import BlinkTask
@@ -172,9 +173,12 @@ class WarudoProvider(BaseToolProvider):
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
+        lipsync_analyzer: Optional[Any] = None,
     ) -> None:
         self.config = config
         self.event_bus = event_bus
+        # 共享口型分析器（装配注入；setup 时挂 Warudo 渲染器，None = 不渲染口型）
+        self.lipsync_analyzer = lipsync_analyzer
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置（typed；空 dict = 全默认；失败 log+raise）
@@ -245,6 +249,8 @@ class WarudoProvider(BaseToolProvider):
         # 事件订阅句柄（setup 时绑定，cleanup 时退订）
         self._speech_emotion_handler: Optional[Any] = None
         self._speaking_state_handles: Optional[Any] = None
+        # 口型渲染器（setup 时挂到共享分析器，cleanup 时摘除）
+        self._lip_renderer: Optional[WarudoLipSyncRenderer] = None
 
     # ===== ToolProvider 协议 =====
 
@@ -384,8 +390,23 @@ class WarudoProvider(BaseToolProvider):
         self._speech_emotion_handler = bind_speech_emotion(self.event_bus, self, self.logger)
         self._speaking_state_handles = bind_speaking_state(self.event_bus, self.logger, on_change=self._set_speaking)
 
+        # 口型渲染：挂到共享分析器（元音成分 → VowelA~O 通道；启用时应关闭 Warudo 原生口型）
+        if self.lipsync_analyzer is not None:
+            self._lip_renderer = WarudoLipSyncRenderer(set_mouth_channel=self._set_mouth_channel)
+            self.lipsync_analyzer.add_renderer(self._lip_renderer)
+
         self._has_started = True
         self.logger.info(f"{self.__class__.__name__} 已启动")
+
+    def _set_mouth_channel(self, key: str, weight: float) -> None:
+        """嘴部单键写入（渲染器回调）：空键清空全部元音通道，否则 set_first_layer。"""
+        mouth_state = self.state_manager.mouth_state
+        if not key:
+            for existing in list(mouth_state.first_layer):
+                mouth_state.first_layer[existing] = 0.0
+            mouth_state.changed = True
+            return
+        mouth_state.set_first_layer(key, weight)
 
     def _set_speaking(self, speaking: bool) -> None:
         """说话状态回调：说话时点头（talking-head 任务），停说即恢复。"""
@@ -411,6 +432,10 @@ class WarudoProvider(BaseToolProvider):
                 except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
                     self.logger.debug(f"tts.utterance.* 退订失败（已忽略）: {exc}")
                 self._speaking_state_handles = None
+
+        if self.lipsync_analyzer is not None and self._lip_renderer is not None:
+            self.lipsync_analyzer.remove_renderer(self._lip_renderer)
+            self._lip_renderer = None
 
         # 停止后台任务
         try:
@@ -674,10 +699,12 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 def create_warudo_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    lipsync_analyzer: Optional[Any] = None,
 ) -> WarudoProvider:
     return WarudoProvider(
         config=config,
         event_bus=event_bus,
+        lipsync_analyzer=lipsync_analyzer,
     )
 
 
@@ -685,10 +712,12 @@ def register_warudo_tools(
     registry: Any,
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    lipsync_analyzer: Optional[Any] = None,
 ) -> WarudoProvider:
     provider = create_warudo_provider(
         config=config,
         event_bus=event_bus,
+        lipsync_analyzer=lipsync_analyzer,
     )
     registry.register_provider(provider)
     return provider

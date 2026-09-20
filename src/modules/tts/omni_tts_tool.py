@@ -73,9 +73,12 @@ class OmniTTSProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
+        audio_sink: Optional[Any] = None,
     ) -> None:
         self.config = config
         self.event_bus = event_bus
+        # 音频分接（AudioSink 协议形状；口型分析等消费者经装配链注入）
+        self.audio_sink = audio_sink
         self.logger = get_logger(self.__class__.__name__)
 
         self.typed_config = self.ConfigSchema.from_dict(config)
@@ -125,6 +128,7 @@ class OmniTTSProvider:
             sample_rate=self.sample_rate,
             channels=self.channels,
             dtype=self.dtype,
+            sink=self.audio_sink,
         )
         self.audio_manager = manager
 
@@ -178,7 +182,7 @@ class OmniTTSProvider:
         try:
             # 同步 requests 调用（连接+等待响应头）放线程池：推理等待不能冻结事件循环
             audio_stream = await asyncio.to_thread(self._tts_stream, text)
-            self.audio_manager.start_stream()
+            self.audio_manager.start_stream(utterance_id=utterance_id)
 
             # requests 流式生成器的 next() 会同步阻塞读 socket，逐块放线程池迭代：
             # 服务端推理间隙（chunk 间隔可达数十秒）是冻结事件循环的元凶
@@ -298,6 +302,7 @@ class OmniTTSProvider:
 def create_omni_tts_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    audio_sink: Optional[Any] = None,
 ) -> OmniTTSProvider:
     """工厂：构造 ``OmniTTSProvider`` 实例。
 
@@ -306,6 +311,7 @@ def create_omni_tts_provider(
     return OmniTTSProvider(
         config=config,
         event_bus=event_bus,
+        audio_sink=audio_sink,
     )
 
 

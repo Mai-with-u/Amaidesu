@@ -65,9 +65,12 @@ class EdgeTTSProvider:
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
+        audio_sink: Optional[Any] = None,
     ) -> None:
         self.config = config
         self.event_bus = event_bus
+        # 音频分接（AudioSink 协议形状；口型分析等消费者经装配链注入）
+        self.audio_sink = audio_sink
         self.logger = get_logger(self.__class__.__name__)
 
         self.typed_config = self.ConfigSchema.from_dict(config)
@@ -207,7 +210,7 @@ class EdgeTTSProvider:
         """初始化音频设备管理器（统一走系统默认输出设备）"""
         from src.modules.audio import AudioDeviceManager
 
-        manager = AudioDeviceManager(sample_rate=48000, channels=1, dtype=np.float32)
+        manager = AudioDeviceManager(sample_rate=48000, channels=1, dtype=np.float32, sink=self.audio_sink)
         self.audio_manager = manager
 
     def get_stats(self) -> Dict[str, Any]:
@@ -222,6 +225,7 @@ class EdgeTTSProvider:
 def create_edge_tts_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
+    audio_sink: Optional[Any] = None,
 ) -> EdgeTTSProvider:
     """工厂：构造 ``EdgeTTSProvider`` 实例。
 
@@ -230,6 +234,7 @@ def create_edge_tts_provider(
     return EdgeTTSProvider(
         config=config,
         event_bus=event_bus,
+        audio_sink=audio_sink,
     )
 
 

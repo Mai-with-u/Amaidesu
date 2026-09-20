@@ -203,6 +203,67 @@ def _upgrade_builder_scene_transport(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "builder_scene_transport", "2.0.35", _upgrade_builder_scene_transport)
 
 
+# 口型调参键：tools.toml [tools.avatar.vts].config → infra.toml [avatar.lipsync]
+# （口型分析器升为共享基础设施，调参随其架构类别离开 provider 命名空间；
+# 开关键 lip_sync_enabled 正名为 enabled；其余键原样搬迁不改名）
+_LIPSYNC_KEYS = (
+    "sample_rate",
+    "volume_threshold",
+    "smoothing_factor",
+    "vowel_detection_sensitivity",
+    "volume_gain",
+    "max_mouth_open",
+    "silence_threshold",
+    "close_mouth_threshold",
+    "power_curve",
+    "vowel_open_weight",
+    "update_interval_ms",
+    "mouth_open_lerp_speed",
+    "vowel_decay",
+    "min_mouth_delta",
+)
+
+
+def _upgrade_vts_lipsync_to_infra(host_data: Dict[str, Any], target_data: Dict[str, Any]) -> List[str]:
+    """tools.toml v2.0.36：VTS lip-sync 调参键跨文件搬至 infra [avatar.lipsync]。
+
+    用户显式设置值原样搬迁（不改名、不改值）；仅值等于旧默认的键同样搬迁
+    （口径统一：VTS provider 不再消费这些键，留在原处即成死键）。开关键
+    ``lip_sync_enabled`` 正名为 ``enabled``。对已迁移数据零变更（幂等）。
+    """
+    tools = host_data.get("tools")
+    avatar = tools.get("avatar") if isinstance(tools, dict) else None
+    vts = avatar.get("vts") if isinstance(avatar, dict) else None
+    vts_config = vts.get("config") if isinstance(vts, dict) else None
+    if not isinstance(vts_config, dict):
+        return []
+
+    changed: List[str] = []
+    target_avatar = target_data.setdefault("avatar", {})
+    if not isinstance(target_avatar, dict):
+        target_avatar = {}
+        target_data["avatar"] = target_avatar
+    lipsync = target_avatar.setdefault("lipsync", {})
+    if not isinstance(lipsync, dict):
+        lipsync = {}
+        target_avatar["lipsync"] = lipsync
+
+    # 直接赋值：目标段只可能带新字段的基线默认落盘，同一名下用户的唯一
+    # 配置事实在源键（tools 侧旧字段），搬迁即覆盖
+    if "lip_sync_enabled" in vts_config:
+        lipsync["enabled"] = vts_config.pop("lip_sync_enabled")
+        changed.append("tools.avatar.vts.config.lip_sync_enabled -> avatar.lipsync.enabled")
+    for key in _LIPSYNC_KEYS:
+        if key in vts_config:
+            lipsync[key] = vts_config.pop(key)
+            changed.append(f"tools.avatar.vts.config.{key} -> avatar.lipsync.{key}")
+    return changed
+
+
+# 生产钩子登记：tools.toml v2.0.36（VTS lip-sync 键跨文件迁 infra [avatar.lipsync]）
+register_cross_file_hook("tools.toml", "infra.toml", "vts_lipsync_to_infra", "2.0.36", _upgrade_vts_lipsync_to_infra)
+
+
 def _version_tuple(version: str) -> tuple[int, ...]:
     """版本号 → 可比较元组（"2.0.31" → (2, 0, 31)）；解析失败按 0 处理"""
     try:
@@ -251,7 +312,8 @@ def advance_file_versions(raw_docs: Dict[str, Dict[str, Any]]) -> Dict[str, List
                 if target_data is None:
                     logger.warning(f"跨文件钩子 {hook.name} 的目标文件 {hook.target_file} 不存在，跳过")
                     continue
-                file_changed.extend(hook.run(data, target_data))
+                target_changed = hook.run(data, target_data)
+                file_changed.extend(target_changed)
                 # 双版本同升：目标文件推进到该钩子的 target；已超前的目标文件不回退
                 target_meta = target_data.get("meta")
                 if isinstance(target_meta, dict):
@@ -262,6 +324,11 @@ def advance_file_versions(raw_docs: Dict[str, Dict[str, Any]]) -> Dict[str, List
                         logger.info(
                             f"{hook.target_file} 版本推进（跨文件钩子 {hook.name}）: {target_old} → {hook.target_version}"
                         )
+                    elif target_changed:
+                        # 版本已在基线（不推进）但钩子改写了数据 → 仍标记目标文件需写回，
+                        # 否则搬迁值停留在内存、磁盘保留基线默认
+                        changed.setdefault(hook.target_file, [])
+                        logger.info(f"{hook.target_file} 数据变更（跨文件钩子 {hook.name}，版本已在基线不推进）")
 
         if last_target is None:
             continue

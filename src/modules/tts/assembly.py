@@ -59,6 +59,7 @@ _PROVIDER_DESCRIPTIONS = {
 def build_tts_infrastructure(
     tts_config: Any,
     event_bus: Optional["EventBus"] = None,
+    audio_sink: Optional[Any] = None,
 ) -> Optional[TTSProvider]:
     """按 ``[tts]`` 配置构造选中的 TTS 引擎实例；未启用返回 ``None``。
 
@@ -67,6 +68,8 @@ def build_tts_infrastructure(
             ``provider``；缺失或非字典视为未启用。
         event_bus: 可选事件总线，传入后引擎内会发布 ``tts.utterance.*``
             生命周期事件；为 None 时引擎静默跳过事件发布（手动 / 直调场景）。
+        audio_sink: 可选音频分接接收方（``AudioSink`` 协议形状），经构造链
+            注入到引擎的播放器（口型分析等消费者）；None 表示不分接。
 
     Returns:
         构造成功的 ``TTSProvider`` 协议实例（结构契约见 ``protocol.py``）；
@@ -106,7 +109,7 @@ def build_tts_infrastructure(
         sub_config = {}
 
     try:
-        engine = factory(config=dict(sub_config), event_bus=event_bus)
+        engine = factory(config=dict(sub_config), event_bus=event_bus, audio_sink=audio_sink)
     except Exception as exc:
         logger.error(
             f"build_tts_infrastructure: 构造 {provider} 引擎失败（{_PROVIDER_DESCRIPTIONS[provider]}）"
