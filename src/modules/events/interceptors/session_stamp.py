@@ -21,11 +21,11 @@ if TYPE_CHECKING:
 
 logger = get_logger("SessionStampInterceptor")
 
-# 需要场次归属的事件域前缀：观众行为流、主播发言、决策轮、阶段状态、工具结果、游戏事件、流程单变更
+# 需要场次归属的事件域前缀：观众行为流、主播发言、决策轮（decision/verdict）、阶段状态、工具结果、游戏事件、流程单变更
 _STAMPED_PREFIXES: Tuple[str, ...] = (
     "room.message.",
     "streamer.",
-    "planner.decision",
+    "planner.",
     "tool.result.",
     "game.",
     "rundown.",

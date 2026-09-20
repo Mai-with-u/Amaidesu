@@ -49,6 +49,16 @@ async def test_stamps_game_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stamps_planner_verdict() -> None:
+    """planner 域整体盖章（含 verdict）：裁决与决策同轮归属同一场次，回看归因不缺卡。"""
+    ic = SessionStampInterceptor(_FakeSessionManager(42))
+    payload: Dict[str, Any] = {"live_session_id": 0, "topic_summary": "回应开场弹幕"}
+    out = await ic.intercept("planner.verdict", payload, "test")
+    assert out is not None
+    assert out["live_session_id"] == 42
+
+
+@pytest.mark.asyncio
 async def test_skips_when_already_stamped() -> None:
     sm = _FakeSessionManager(42)
     ic = SessionStampInterceptor(sm)
