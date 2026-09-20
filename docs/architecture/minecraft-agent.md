@@ -13,7 +13,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 - 系统提示词 + 工具列表 = 全部"编程"，不发明任何特殊协议
 - 主播 Agent 是它的用户：发指令（跨 Agent 派活走框架委派 `framework_delegate`）/读工作文档（`minecraft_get_work_log`）/收上报（`game.report`）
-- execute 受理异步是唯一系统特判：`maicraft_execute` 返回受理回执（task_id），真实执行由 Mod 后台 tick 驱动（分钟级）——系统登记 handoff 跟踪，事件驱动唤醒（见下节），LLM 不用推理步数轮询
+- 异步任务统一采用受理回执：Mod 施工由后台 tick 驱动，建筑设计由包内子 Agent 推进；系统跟踪任务并在有结果时唤醒游戏 Agent，LLM 不用推理步数轮询
 - LLM 可一次返回多个 tool_calls（批量请求 → 串行执行 → 批量作为观察返回，标准 function calling 循环）
 
 ## 任务生命周期（事件驱动 ReAct）
@@ -58,6 +58,19 @@ execute 受理 ≠ 完成：等待期 LLM 自由行动（推进其他 todo / 记
 - 终态（success/failed/timeout/cancelled）注入后移除跟踪；决策点（waiting_for_decision）/暂停注入后保留跟踪（LLM 用 `maicraft_task(action="answer")` 应答后任务恢复后台跑）
 
 ## 工具契约
+
+### 按需建筑设计
+
+Minecraft Agent 把建筑设计委派给包内的 `MinecraftBuilderAgent`，收到回执后继续处理游戏工作。
+子 Agent 具有独立的模型用途、对话历史和总任务预算；根据 Mod 资源目录按需读取资料，生成并校验设计。
+子 Agent 不控制角色、不启动施工；设计交付后由父 Agent 按产物引用发起 Mod 施工任务，核实真实施工终态后才报告建好。
+
+受理与结果复用通用任务账本，设计任务由执行 Agent 写入状态，施工任务由 Mod 查询适配器核实。
+设计结果保存在 Minecraft 当前会话，账本移除终态条目后仍可查询；完整建筑内容不随任务通知复制到父级对话。
+父 Agent 停止时先收束子任务再关闭共享 MCP，未启用 Minecraft 时建造入口也不存在。
+
+这类受管子 Agent 不独立加入顶层名册，配置与业务代码内聚于 Minecraft 包。
+能力与工具协议见[新建造器接入指南](../guides/minecraft-builder.md)，具体参数以该指南链接的代码契约为准。
 
 **注册名 = `<Provider名字>_<工具名字>`**，分隔符 `_`（满足 LLM function calling 工具名字符集约束）。Provider 名全局唯一、用全名（`minecraft` 禁缩写）；工具名 Provider 内唯一、语义化。前缀由模块声明（provider 值）、ToolRegistry 一处拼接——工具名里不手写前缀。
 

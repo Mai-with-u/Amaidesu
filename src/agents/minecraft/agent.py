@@ -7,12 +7,12 @@
   ReAct 循环（LLM 推理 → 工具调用串行执行 → 观察作为观察返回），批次终止语义见
   ``_run_task``——无存在性心跳、无时间循环
 - 系统提示词 + 工具列表 = 全部"编程"，不发明任何特殊协议
-- execute 受理异步唯一特判：maicraft_execute 返回受理回执（task_id），真实执行
+- 异步受理：Mod 施工与包内建筑设计返回受理回执（task_id），真实施工
   由游戏 tick 后台驱动（分钟级）——系统登记 handoff 跟踪，经资源订阅通知 +
   周期兜底核实任务快照，状态真迁移才注入消息唤醒 LLM（通知是提示可丢，
   task get 是事实源）；等待期 LLM 自由行动或让出回合，零空耗
-- agent 零 maicraft 接口知识：工具列表经 registry 动态发现（list_tools(provider="maicraft)")，
-  任务查询工具按原始名后缀匹配发现（注册名前缀形态不定）
+- 通用游戏工具经 registry 动态发现；建筑设计的新协议由包内适配器对接，
+  施工进度继续走通用任务跟踪。
 
 继承 ``BaseAgent``（协议六项全部实现），构造注入依赖。
 局部工具（todo/notebook/get_work_log/report，注册名 minecraft_*）声明 →
@@ -27,6 +27,8 @@ import uuid
 from collections import deque
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
+from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
+from src.agents.minecraft.builder.controller import MinecraftBuilderController
 from src.agents.minecraft.state import MinecraftAgentState
 from src.agents.minecraft.tools import (
     MinecraftToolProvider,
@@ -38,7 +40,6 @@ from src.agents.minecraft.tools import (
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
@@ -49,7 +50,7 @@ from .config import MinecraftConfig
 
 __all__ = ["MinecraftAgent"]
 
-# 决策调用的 LLM profile 绑定（封闭六成员之一）：由代码显式声明，配置不承载绑定
+# 游戏决策使用独立用途；建筑设计的模型预算由子 Agent 自己声明。
 MINECRAFT_PROFILE = "minecraft"
 
 # 旧观察规整：最近 N 条工具结果保留原文，更早的替换为占位符（防上下文膨胀）
@@ -207,6 +208,18 @@ class MinecraftAgent(BaseAgent):
 
         self._running = False
 
+        # 建造器只持有本游戏的设计任务；关闭 Minecraft 时不独立装配或借用其他连接。
+        self._builder: Optional[MinecraftBuilderController] = None
+        if config.builder.enabled and tool_registry is not None:
+            self._builder = MinecraftBuilderController(
+                config.builder,
+                llm=llm_manager,
+                registry=tool_registry,
+                tracker=task_tracker,
+                client=lambda: self._mcp_client,
+                parent_task=lambda: (self._delegated_batch_ids + self._delegated_finished_ids or [""])[-1],
+            )
+
         self._logger = get_logger("MinecraftAgent")
         self._logger.info(
             f"MinecraftAgent 已构造 (max_steps={config.max_steps}, "
@@ -224,6 +237,8 @@ class MinecraftAgent(BaseAgent):
             await self._bind_agent_owned_mcp()
 
         self._running = True
+        if self._builder is not None:
+            self._builder.open()
         self._worker_task = asyncio.create_task(self._worker())
         self._logger.info("MinecraftAgent 已启动（命令驱动：等待委派指令）")
 
@@ -400,6 +415,9 @@ class MinecraftAgent(BaseAgent):
             except Exception as exc:  # noqa: BLE001 - 边界兜底
                 self._logger.warning(f"命令 worker 退出异常: {exc}")
             self._worker_task = None
+        # 先收束设计子任务，再释放它借用的 MCP，避免停机后仍读取资料或产生新设计。
+        if self._builder is not None:
+            await self._builder.close()
         # 私有 MCP 恢复循环随停机取消；provider 引用与适配器状态一并复位
         if self._mcp_recover_task is not None:
             self._mcp_recover_task.cancel()
@@ -422,10 +440,14 @@ class MinecraftAgent(BaseAgent):
     async def _on_pause(self) -> None:
         """暂停钩子：任务循环在步骤间挂起（不打断当前工具调用）。"""
         self._paused.clear()
+        if self._builder is not None:
+            self._builder.set_paused(True)
 
     async def _on_resume(self) -> None:
         """恢复钩子：任务循环继续。"""
         self._paused.set()
+        if self._builder is not None:
+            self._builder.set_paused(False)
 
     # ==================================================================
     # 工具提供（list_tools）
@@ -433,12 +455,15 @@ class MinecraftAgent(BaseAgent):
 
     def list_tools(self) -> Iterable[ToolSpec]:
         """声明 Agent 专属工具（provider="minecraft"）。"""
-        return [
+        specs = [
             build_todo_spec(),
             build_notebook_spec(),
             build_get_work_log_spec(),
             build_report_spec(),
         ]
+        if self._builder is not None:
+            specs.extend(self._builder.provider.list_tools())
+        return specs
 
     # 局部工具可见名单（注册处声明）：本地件只有 minecraft 自己可见；
     # get_work_log 是主播的叙事素材读服务。派活走框架委派原语（framework_delegate）。
@@ -456,6 +481,13 @@ class MinecraftAgent(BaseAgent):
         self.register_tool_provider(
             self._tool_provider, registry=self._tool_registry, visible_to=dict(self._LOCAL_VISIBLE_TO)
         )
+        if self._builder is not None:
+            provider = self._builder.provider
+            self.register_tool_provider(
+                provider,
+                registry=self._tool_registry,
+                visible_to={spec.full_name: [self.name] for spec in provider.list_tools()},
+            )
         self._logger.info(
             "MinecraftAgent 工具已注册：minecraft_todo / minecraft_notebook / minecraft_get_work_log / minecraft_report"
         )
@@ -726,6 +758,9 @@ class MinecraftAgent(BaseAgent):
         （通知=提示、查询=事实源），状态真变化经 ``task.changed`` 回来
         （见 ``on_task_notification``）。无 tracker（未注入）时只记日志。
         """
+        # 建造入口已经区分本地 agent 任务与 Mod 施工任务，不能再按 wrapper provider 登记。
+        if self._builder is not None and self._builder.owns_tool(tool_full_name):
+            return
         if not isinstance(observation, dict) or observation.get("accepted") is not True:
             return
         raw_task_id = observation.get("task_id")
@@ -748,14 +783,15 @@ class MinecraftAgent(BaseAgent):
 
     def _pending_task_count(self) -> int:
         """自己发起的进行中后台任务数（交付门禁与批次让出判定用）。"""
-        if self._task_tracker is None:
-            return 0
-        ledger = self._task_tracker.ledger
-        return sum(
-            1
-            for task_id in ledger.active_task_ids()
-            if (rec := ledger.get(task_id)) is not None and rec.initiator == self.name
-        )
+        pending = self._builder.pending_ids() if self._builder is not None else set()
+        if self._task_tracker is not None:
+            ledger = self._task_tracker.ledger
+            pending.update(
+                task_id
+                for task_id in ledger.active_task_ids()
+                if (rec := ledger.get(task_id)) is not None and rec.initiator == self.name
+            )
+        return len(pending)
 
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """task.changed 到达（发起方是自己）：注入快照消息 + 唤醒 worker。
@@ -763,6 +799,17 @@ class MinecraftAgent(BaseAgent):
         等价原 handoff 行为：状态真变化（含决策点/暂停/终态）与停滞告警
         （payload.alert）都送进消息队列，由下一次推理吸收。
         """
+        if self._builder is not None:
+            self._builder.absorb(payload)
+        if payload.executor == "minecraft_builder":
+            # 设计任务号只在本地查询；施工仍需父 Agent 显式发起，不能当作已经建好。
+            if self._running:
+                self._inject_wakeup_message(
+                    f"[系统] 建造设计 {payload.task_id}：{payload.status}，{payload.summary}。"
+                    "用 minecraft_builder_task 查询结果；要求建好时再用 action=execute 发起施工。"
+                    "设计完成不代表建筑完成；失败时修订要求、明确取消或上报困难。"
+                )
+            return
         snapshot_text = ""
         if getattr(payload, "snapshot", None):
             snapshot_text = "\n任务快照：" + json.dumps(payload.snapshot, ensure_ascii=False, default=str)
@@ -1014,10 +1061,10 @@ class MinecraftAgent(BaseAgent):
         """系统提示词：渲染 prompt_manager 模板（无则用内建兜底）。"""
         if self._prompt is not None:
             try:
-                return self._prompt.render("amaidesu_minecraft_agent")
+                return self._with_builder_prompt(self._prompt.render("amaidesu_minecraft_agent"))
             except Exception as exc:  # noqa: BLE001 - 渲染失败降级内建
                 self._logger.warning(f"MinecraftAgent 提示词渲染失败，降级内建: {type(exc).__name__}: {exc}")
-        return (
+        return self._with_builder_prompt(
             "你是 Minecraft 世界中的 AI 玩家。用工具玩 Minecraft："
             "minecraft_todo 管理目标与进度、minecraft_notebook 记录关键信息，"
             "其余工具（maicraft_*）是你在游戏内的操作能力。"
@@ -1025,6 +1072,18 @@ class MinecraftAgent(BaseAgent):
             "全部完成后用 minecraft_report(kind=delivery) 交付总结再结束；"
             "确实无法自行解决时用 minecraft_report(kind=escalation) 上报后停止。"
             "工具调用：一次可调多个工具（它们会依次执行）；执行串行但你可一次发出多个请求。"
+        )
+
+    def _with_builder_prompt(self, prompt: str) -> str:
+        """仅在本游戏装配建造入口时告知委派方式，教程不进入父级上下文。"""
+        if self._builder is None:
+            return prompt
+        return prompt + (
+            "\n建筑设计交给 minecraft_builder_request：传自然语言 requirements 和已知现场 context，"
+            "不要自己生成完整建筑 JSON。intent=build 要求建好，intent=design 只要设计。"
+            "它立即返回任务号，不要轮询等待；完成事件会通知你。"
+            "用 minecraft_builder_task 查询、修改、取消设计；设计通过后用 action=execute 按引用施工，"
+            "再跟进 Mod 施工任务，核实完成后才能交付。"
         )
 
     # ==================================================================
