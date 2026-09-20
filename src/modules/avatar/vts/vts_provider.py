@@ -503,7 +503,8 @@ class VTSProvider(BaseToolProvider):
             plugin_info = {
                 "plugin_name": "Amaidesu_VTS_ToolProvider",
                 "developer": "Wave 4 Implementation",
-                "authentication_token_path": "./vts_token.txt",
+                # token 与其他运行时数据统一落 data/（该目录已整目录不入库）
+                "authentication_token_path": "data/vts_token.txt",
                 "vts_host": self.vts_host,
                 "vts_port": self.vts_port,
             }
@@ -513,7 +514,9 @@ class VTSProvider(BaseToolProvider):
                 "name": "VTubeStudioPublicAPI",
                 "version": "1.0",
             }
-            self._vts = vts(vts_plugin_info=plugin_info, vts_api_info=vts_api_info)
+            # 形参名必须是 plugin_info：pyvts 以 **kwargs 吞掉拼错的键并静默退回
+            # 库默认（曾致插件身份显示为 pyvts/genteki、token 落盘根目录）
+            self._vts = vts(plugin_info=plugin_info, vts_api_info=vts_api_info)
             self.logger.info("pyvts 实例创建成功")
         except ImportError:
             self.logger.error("pyvts 库不可用，VTSProvider 将被禁用")
