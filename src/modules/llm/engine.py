@@ -145,10 +145,14 @@ def _tool_calls_from_protocol(raw: Any) -> List[ToolCall]:
         if not isinstance(function, dict):
             continue
         arguments = function.get("arguments", {})
+        raw_arguments = None
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments) if arguments else {}
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError) as exc:
+                # 失败调用的原始参数需要原样喂回，不能用空对象掩盖模型上一次输出的问题。
+                get_logger("LLMProtocol").debug(f"历史工具参数保留原文供模型自纠：{exc}", exc=True)
+                raw_arguments = arguments
                 arguments = {}
         if not isinstance(arguments, dict):
             arguments = {}
@@ -157,6 +161,7 @@ def _tool_calls_from_protocol(raw: Any) -> List[ToolCall]:
                 id=str(item.get("id", "") or ""),
                 name=str(function.get("name", "") or ""),
                 arguments=arguments,
+                raw_arguments=raw_arguments,
             )
         )
     return calls
@@ -253,9 +258,19 @@ def _payload_response_to_legacy(resp: Response) -> LLMResponse:
             else None
         ),
         tool_calls=[
-            {"id": tc.id, "type": "function", "function": {"name": tc.name, "arguments": tc.arguments}}
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.name, "arguments": tc.arguments},
+                **(
+                    {"raw_arguments": tc.raw_arguments, "arguments_error": tc.arguments_error}
+                    if tc.arguments_error is not None
+                    else {}
+                ),
+            }
             for tc in resp.tool_calls
         ],
+        finish_reason=resp.finish_reason,
         reasoning_content=resp.reasoning_content,
         error=resp.error,
         request_id=resp.request_id,
@@ -269,6 +284,8 @@ def _legacy_response_to_payload(result: LLMResponse) -> Response:
             id=tc.get("id", ""),
             name=tc.get("function", {}).get("name", ""),
             arguments=tc.get("function", {}).get("arguments", {}),
+            raw_arguments=tc.get("raw_arguments"),
+            arguments_error=tc.get("arguments_error"),
         )
         for tc in (result.tool_calls or [])
         if isinstance(tc, dict)
@@ -286,6 +303,7 @@ def _legacy_response_to_payload(result: LLMResponse) -> Response:
         success=result.success,
         content=result.content,
         tool_calls=tool_calls,
+        finish_reason=result.finish_reason,
         usage=usage,
         model=result.model,
         reasoning_content=result.reasoning_content,
@@ -433,6 +451,8 @@ class LLMManager:
         tools: Optional[List[Union[ToolSpec, Dict[str, Any]]]] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        omit_output_token_limit: bool = False,
+        strict_tool_arguments: bool = False,
         on_delta: Optional[Callable[[str, str], None]] = None,
         interrupt: Optional[asyncio.Event] = None,
     ) -> Response:
@@ -442,11 +462,15 @@ class LLMManager:
         中立 ``Message`` 列表或 OpenAI 风格 dict 列表——Engine 统一归一化
         到 payload 再调度，消费方不必为迁就契约改自己的输入形状。
         ``temperature`` / ``max_tokens`` 缺省时回退 profile 档位。
+        需要完整结构化产物时可省略宿主输出额度，并要求严格解析工具参数；
+        响应结束原因原样保留，由调用方拒绝未完成的产物。
         """
         profile_name = self._resolve_profile_name(profile)
         request = _normalize_generate_input(
             input, system=system, tools=tools, temperature=temperature, max_tokens=max_tokens
         )
+        request.omit_output_token_limit = omit_output_token_limit
+        request.strict_tool_arguments = strict_tool_arguments
         result = await self._call_with_failover(
             profile_name,
             method="generate",
@@ -648,6 +672,10 @@ class LLMManager:
             call_kwargs["temperature"] = profile.temperature
         if call_kwargs.get("max_tokens") is None:
             call_kwargs["max_tokens"] = profile.max_tokens
+        # 调用方明确要求完整输出时，不再用用途配置的额度限制生成长度。
+        request = call_kwargs.get("request")
+        if request is not None and request.omit_output_token_limit:
+            call_kwargs["max_tokens"] = None
 
         # 流式增量直通：收到即转调消费方（首 token 前后分支判据在 gate.started）
         gate = _StreamGate(call_kwargs.get("on_delta"))
@@ -806,6 +834,11 @@ class LLMManager:
             request_params["system"] = kwargs["request"].system
             request_params["messages"] = [m.model_dump() for m in kwargs["request"].messages]
             request_params["tools"] = [t.model_dump() for t in kwargs["request"].tools] or None
+            if kwargs["request"].omit_output_token_limit:
+                request_params.pop("max_tokens", None)
+                request_params["omit_output_token_limit"] = True
+            if kwargs["request"].strict_tool_arguments:
+                request_params["strict_tool_arguments"] = True
         return {k: v for k, v in request_params.items() if v is not None}
 
     async def _persist_llm_call(

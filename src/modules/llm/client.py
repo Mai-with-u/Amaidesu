@@ -34,6 +34,8 @@ class LLMResponse(BaseModel):
     model: Optional[str] = None
     usage: Optional[Dict[str, int]] = None
     tool_calls: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    # 结束原因在新旧响应转换之间保留，避免把容量上限中断误判为正常交付。
+    finish_reason: Optional[str] = None
     reasoning_content: Optional[str] = None
     error: Optional[str] = None
     # 本次调用的请求历史 ID（request_history_manager 落库键）。调用方（如
@@ -74,6 +76,8 @@ class BaseLLMClient(abc.ABC):
         请求内同名字段缺省时生效。
         ``on_delta`` 非 None 时实现方应走流式传输并逐帧回调增量，
         最终仍返回完整 Response（传输层流式、语义层整段）。
+        实现方需要遵守 request 的输出额度省略与严格参数解析策略，
+        并保留结束原因；未完成的工具参数必须交回错误，不能猜测补齐后执行。
         """
         raise NotImplementedError
 

@@ -44,12 +44,15 @@ class ToolCall(BaseModel):
     注意这不是任何厂商协议的原始形状（如嵌套的
     ``{"function": {"name": ..., "arguments": ...}}`` dict）——协议形状
     由 ``clients/<vendor>/`` 适配端负责双向转换。
-    ``arguments`` 已解析为对象（JSON 解析失败由适配端兜底修复）。
+    ``arguments`` 已解析为对象；严格调用保留解析错误与原始文本供调用方自纠。
     """
 
     id: str = ""
     name: str
     arguments: Dict[str, Any] = Field(default_factory=dict)
+    # 严格调用保留失败的原始参数，调用方可以反馈重试，但不能执行自动补齐的半份数据。
+    raw_arguments: Optional[str] = None
+    arguments_error: Optional[str] = None
 
 
 class Message(BaseModel):
@@ -108,6 +111,9 @@ class GenerateRequest(BaseModel):
     tools: List[ToolSpec] = Field(default_factory=list)
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
+    # 完整结构化产物不受宿主的固定输出额度裁剪；服务端仍有自己的容量边界。
+    omit_output_token_limit: bool = False
+    strict_tool_arguments: bool = False
 
 
 class Response(BaseModel):

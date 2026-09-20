@@ -14,19 +14,19 @@ import os
 from io import BytesIO
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from json_repair import repair_json
 from openai import (
     APIConnectionError,
-    APITimeoutError,
     APIStatusError,
+    APITimeoutError,
     AsyncOpenAI,
     RateLimitError,
 )
 from PIL import Image
 
 from src.modules.llm.client import BaseLLMClient, LLMResponse
+from src.modules.llm.clients.openai.arguments import decode_tool_call
 from src.modules.llm.clients.openai.compat import build_openai_compatible_client_config
-from src.modules.llm.errors import LLMError, LLMTimeoutError, FatalError, RetryableError
+from src.modules.llm.errors import FatalError, LLMError, LLMTimeoutError, RetryableError
 from src.modules.llm.interrupt import await_with_timeout_and_interrupt
 from src.modules.llm.payload import GenerateRequest, ImagePart, Message, Response, TextPart, ToolCall, ToolSpec, Usage
 from src.modules.llm.reasoning import ReasoningParseMode, parse_reasoning
@@ -205,7 +205,9 @@ class OpenAIClient(BaseLLMClient):
                     "type": "function",
                     "function": {
                         "name": call.name,
-                        "arguments": json.dumps(call.arguments, ensure_ascii=False, default=str),
+                        "arguments": call.raw_arguments
+                        if call.raw_arguments is not None
+                        else json.dumps(call.arguments, ensure_ascii=False, default=str),
                     },
                 }
                 for call in message.tool_calls
@@ -284,6 +286,8 @@ class OpenAIClient(BaseLLMClient):
                 id=tc.get("id", ""),
                 name=tc.get("function", {}).get("name", ""),
                 arguments=tc.get("function", {}).get("arguments", {}),
+                raw_arguments=tc.get("raw_arguments"),
+                arguments_error=tc.get("arguments_error"),
             )
             for tc in (result.tool_calls or [])
             if isinstance(tc, dict)
@@ -292,6 +296,7 @@ class OpenAIClient(BaseLLMClient):
             success=result.success,
             content=result.content,
             tool_calls=tool_calls,
+            finish_reason=result.finish_reason,
             usage=cls._usage_to_payload(result.usage),
             model=result.model,
             reasoning_content=result.reasoning_content,
@@ -322,6 +327,8 @@ class OpenAIClient(BaseLLMClient):
             tools=tools,
             interrupt_flag=interrupt_flag,
             on_delta=on_delta,
+            omit_output_token_limit=request.omit_output_token_limit,
+            strict_tool_arguments=request.strict_tool_arguments,
         )
         return self._to_payload_response(result)
 
@@ -393,6 +400,8 @@ class OpenAIClient(BaseLLMClient):
         tools: Optional[List[Dict[str, Any]]] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
         on_delta: Optional[Callable[[str, str], None]] = None,
+        omit_output_token_limit: bool = False,
+        strict_tool_arguments: bool = False,
     ) -> LLMResponse:
         """聊天调用实现：SDK 异常翻译为错误分类异常后抛出（不自行重试）。
 
@@ -410,6 +419,8 @@ class OpenAIClient(BaseLLMClient):
                     tools=tools,
                     interrupt_flag=interrupt_flag,
                     on_delta=on_delta,
+                    omit_output_token_limit=omit_output_token_limit,
+                    strict_tool_arguments=strict_tool_arguments,
                 )
             except asyncio.CancelledError:
                 raise
@@ -426,9 +437,9 @@ class OpenAIClient(BaseLLMClient):
             if tools:
                 request_params["tools"] = self._normalize_tool_definitions(tools)
                 request_params["tool_choice"] = "auto"
-            if max_tokens:
+            if not omit_output_token_limit and max_tokens:
                 request_params["max_tokens"] = max_tokens
-            elif self.max_tokens:
+            elif not omit_output_token_limit and self.max_tokens:
                 request_params["max_tokens"] = self.max_tokens
             self.logger.debug(f"发送 LLM 请求: {request_params}")
             task = asyncio.create_task(self.client.chat.completions.create(**request_params))
@@ -445,22 +456,23 @@ class OpenAIClient(BaseLLMClient):
             )
             usage = self._extract_usage(response.usage)
             result = LLMResponse(
-                success=True, content=content, model=response.model, usage=usage, reasoning_content=reasoning_content
+                success=True,
+                content=content,
+                model=response.model,
+                usage=usage,
+                reasoning_content=reasoning_content,
+                finish_reason=getattr(response.choices[0], "finish_reason", None),
             )
             if message.tool_calls:
                 result.tool_calls = []
                 for tool_call in message.tool_calls:
-                    arguments = tool_call.function.arguments
-                    try:
-                        parsed_arguments = json.loads(arguments)
-                    except (json.JSONDecodeError, TypeError):
-                        parsed_arguments = repair_json(arguments, return_objects=True)
                     result.tool_calls.append(
-                        {
-                            "id": tool_call.id,
-                            "type": tool_call.type,
-                            "function": {"name": tool_call.function.name, "arguments": parsed_arguments},
-                        }
+                        decode_tool_call(
+                            tool_call.id,
+                            tool_call.function.name,
+                            tool_call.function.arguments,
+                            strict=strict_tool_arguments,
+                        )
                     )
             self._ensure_not_empty(result)
             return result
@@ -482,12 +494,14 @@ class OpenAIClient(BaseLLMClient):
         tools: Optional[List[Dict[str, Any]]],
         interrupt_flag: Optional[asyncio.Event],
         on_delta: Callable[[str, str], None],
+        omit_output_token_limit: bool = False,
+        strict_tool_arguments: bool = False,
     ) -> LLMResponse:
         """流式传输路径：SSE 逐帧接收，reasoning/content 增量实时回调，最终组装完整响应。
 
         增量三分：reasoning 外发回调；content 外发回调（调用方自行取舍）；
         tool call arguments 碎片只在客户端拼接成完整 JSON，不外发。
-        拼接语义与非流式一致：arguments JSON 解析失败走 repair_json 兜底。
+        拼接语义与非流式一致：严格调用保留 JSON 解析错误，普通调用沿用语法修复。
         """
         request_params: Dict[str, Any] = {
             "model": model,
@@ -501,9 +515,9 @@ class OpenAIClient(BaseLLMClient):
         if tools:
             request_params["tools"] = self._normalize_tool_definitions(tools)
             request_params["tool_choice"] = "auto"
-        if max_tokens:
+        if not omit_output_token_limit and max_tokens:
             request_params["max_tokens"] = max_tokens
-        elif self.max_tokens:
+        elif not omit_output_token_limit and self.max_tokens:
             request_params["max_tokens"] = self.max_tokens
 
         stream = await self.client.chat.completions.create(**request_params)
@@ -513,15 +527,19 @@ class OpenAIClient(BaseLLMClient):
         tool_states: Dict[int, Dict[str, Any]] = {}
         usage: Optional[Dict[str, int]] = None
         model_name: Optional[str] = None
+        finish_reason: Optional[str] = None
         try:
             async for chunk in stream:
                 if interrupt_flag is not None and interrupt_flag.is_set():
-                    break
+                    # 中断不构成完整响应，不能把已经接收的部分参数交给工具执行器。
+                    raise asyncio.CancelledError
                 if getattr(chunk, "usage", None) is not None:
                     usage = self._extract_usage(chunk.usage)
                 choices = getattr(chunk, "choices", None)
                 if not choices:
                     continue
+                if getattr(choices[0], "finish_reason", None) is not None:
+                    finish_reason = choices[0].finish_reason
                 model_name = getattr(chunk, "model", None) or model_name
                 delta = choices[0].delta
                 # 原生 reasoning 字段（DeepSeek R1 系）；<think> 内嵌型不走此路径，
@@ -562,22 +580,15 @@ class OpenAIClient(BaseLLMClient):
             model=model_name or model,
             usage=usage,
             reasoning_content=reasoning_content,
+            finish_reason=finish_reason,
         )
         if tool_states:
             result.tool_calls = []
             for index in sorted(tool_states):
                 state = tool_states[index]
                 raw_arguments = "".join(state["arguments"])
-                try:
-                    parsed_arguments = json.loads(raw_arguments) if raw_arguments else {}
-                except (json.JSONDecodeError, TypeError):
-                    parsed_arguments = repair_json(raw_arguments, return_objects=True)
                 result.tool_calls.append(
-                    {
-                        "id": state["id"],
-                        "type": "function",
-                        "function": {"name": state["name"], "arguments": parsed_arguments},
-                    }
+                    decode_tool_call(state["id"], state["name"], raw_arguments, strict=strict_tool_arguments)
                 )
         self._ensure_not_empty(result)
         return result
