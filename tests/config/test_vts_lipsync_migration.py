@@ -66,9 +66,10 @@ def test_lipsync_keys_moved_to_infra_and_written_back(tmp_path: Path):
     for key in _LIPSYNC_SAMPLE:
         assert key not in vts_config, f"{key} 应已搬离 tools.toml"
 
-    # 双文件版本推进（跨文件钩子 target = 2.0.36）
-    assert get_config_version(tmp_path, "tools.toml") == "2.0.36"
-    assert get_config_version(tmp_path, "infra.toml") == "2.0.36"
+    # tools.toml 推进到本文件钩子链尾 target（2.0.36 迁移 + 2.0.37 删键）；
+    # infra.toml 基线种子即 2.0.37（高于 2.0.36 跨文件钩子 target，不回退）
+    assert get_config_version(tmp_path, "tools.toml") == "2.0.37"
+    assert get_config_version(tmp_path, "infra.toml") == "2.0.37"
 
 
 def test_migration_idempotent_on_second_load(tmp_path: Path):
