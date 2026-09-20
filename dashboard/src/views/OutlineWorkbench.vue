@@ -844,7 +844,10 @@ function handleNext(): void {
 }
 
 function handleJump(seg: RundownSegmentView): void {
-  void performControl('goto', { segment_id: seg.id });
+  void performControl('goto', { segment_id: seg.id }).then(snapshot => {
+    // 跳转成功即收起抽屉，避免遮挡主区；失败（null）时保留现场供重试
+    if (snapshot) drawerOpen.value = false;
+  });
 }
 
 // 流程单库与编辑器
@@ -1134,7 +1137,9 @@ async function activateRundown(def: RundownDefinition): Promise<void> {
       return;
     }
     ElMessage.success(res.data.message || '已设为当前');
-    await fetchLibrary();
+    // 同步刷新页面 state：当前标记 / 按钮禁用 / 删除确认文案都读 config.rundown_id，
+    // 只刷库列表会让它们停留在旧值
+    await Promise.all([fetchLibrary(), fetchState({ silent: true })]);
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '设置失败');
   }
