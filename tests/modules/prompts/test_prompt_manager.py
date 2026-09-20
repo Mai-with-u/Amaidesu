@@ -391,6 +391,7 @@ class TestRealRepoTemplates:
             manager = get_prompt_manager()
             assert set(manager.list_templates()) == {
                 "amaidesu_planner_react",
+                "amaidesu_replyer_system",
                 "amaidesu_replyer",
                 "viewer_message",
                 "sc_message",

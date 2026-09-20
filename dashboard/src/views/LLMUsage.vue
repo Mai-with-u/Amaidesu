@@ -100,7 +100,7 @@
       <div class="section-header">
         <h2 class="section-title">用量趋势</h2>
         <el-radio-group v-model="rangeDays" size="small" @change="onRangeChange">
-          <el-radio-button v-for="option in RANGE_OPTIONS" :key="option" :label="option">
+          <el-radio-button v-for="option in RANGE_OPTIONS" :key="option" :value="option">
             近 {{ option }} 天
           </el-radio-button>
         </el-radio-group>

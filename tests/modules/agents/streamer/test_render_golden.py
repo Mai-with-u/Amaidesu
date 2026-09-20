@@ -34,11 +34,10 @@ message_buffer.render_batch_text / replyer._render_batch_text）已收敛到
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
 
 from src.agents.streamer import canonical
 from src.agents.streamer.message_buffer import MessageBuffer
-from src.agents.streamer.replyer import _batch_prompt_text, _history_prompt_text
+from src.agents.streamer.replyer import _batch_prompt_text
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 
@@ -150,28 +149,6 @@ def test_golden_replyer_batch_wrapper_bytes() -> None:
     """replyer 批包装：空批占位文案原样保留；非空委托 MessageBuffer。"""
     assert _batch_prompt_text([]) == "（本批无弹幕）"
     assert _batch_prompt_text([_batch_msg("hi", "m1")]) == "小明: hi [id:m1]"
-
-
-# ---------------------------------------------------------------------------
-# golden：历史文本（replyer 包装）
-# ---------------------------------------------------------------------------
-
-
-def test_golden_replyer_history_empty_placeholder() -> None:
-    """空历史占位文案字节钉死。"""
-    assert _history_prompt_text(None) == "（暂无对话历史）"
-    assert _history_prompt_text([]) == "（暂无对话历史）"
-
-
-def test_golden_replyer_history_bytes() -> None:
-    """历史文本 = to_text_view(turn_to_message(…))（差异清单第 3/7 条落地处：
-    turn 通道 user 行带昵称前缀，占位文本不会命中 [系统] 分支）。"""
-    history: List[FakeTurn] = [
-        FakeTurn(role="user", content="大家好", sender_name="小明", message_id="m1"),
-        FakeTurn(role="user", content="（主动发言，主题：闲聊）"),
-        FakeTurn(role="assistant", content="晚上好", message_type="speak", message_id="m2"),
-    ]
-    assert _history_prompt_text(history) == ("小明: 大家好 [id:m1]\n观众: （主动发言，主题：闲聊）\n主播: 晚上好")
 
 
 # ---------------------------------------------------------------------------

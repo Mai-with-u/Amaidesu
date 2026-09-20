@@ -11,13 +11,13 @@ class SimulatorConfigSchema(BaseConfig):
     enabled: bool = Field(default=False, description="是否启用模拟器（装配开关；false 时零装配）")
     mode: str = Field(
         default="generate",
-        description="世界模式: generate=LLM 生成 / replay=录制回放 / off=装配但不运行",
+        description="运行模式: generate=LLM 生成 / replay=录制回放 / off=装配但不运行",
         pattern="^(generate|replay|off)$",
     )
     # ---- replay 模式参数 ----
     replay_date: str = Field(
         default="",
-        description="replay 模式默认回放的录制日期（YYYY-MM-DD，对应 data/events/{date}.jsonl）；空串 = 不指定",
+        description="replay 模式默认回放的录制日期（YYYY-MM-DD，取 live_chat 表该日弹幕）；空串 = 不指定",
     )
     replay_speed: float = Field(
         default=1.0,

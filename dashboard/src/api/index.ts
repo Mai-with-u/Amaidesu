@@ -2,8 +2,8 @@
  * Dashboard API 客户端
  *
  * 模拟直播能力控制面：
- * - ``simulatorApi`` → ``/api/v1/simulator/*``：世界模拟器 SimulatorService
- *   （generate 生成 / replay 录制回放三模式）
+ * - ``simulatorApi`` → ``/api/v1/simulator/*``：模拟器 SimulatorService
+ *   （generate 生成 / replay 回放）
  */
 
 import axios from 'axios';
@@ -151,7 +151,7 @@ export const agentsApi = {
     api.post<AgentControlResponse>(`/agents/${name}/control`, { action, confirm }),
 };
 
-// Simulator 控制面（世界模拟器：generate 生成 / replay 回放）
+// Simulator 控制面（模拟器：generate 生成 / replay 回放）
 //
 // 控制 SimulatorService 的启停与状态查询，以及运行时数据（常驻人设 /
 // 礼物目录 CRUD、回放日期选择）。enabled=false 时 status 仍返回（不抛

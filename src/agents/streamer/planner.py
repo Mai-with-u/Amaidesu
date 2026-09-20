@@ -129,7 +129,8 @@ def _render_observation(data: Any) -> str:
 #: + 对话 ≤12K ≈ 65K 字符（约 45K token），留余量防越窗；正常 30 条历史约
 #: 1.5-2.4K 字符，预算只兜长内容病理输入。与条数上限 history_limit=30
 #: 构成双上限、先到先丢（成块丢最旧，见 canonical.drop_oldest_blocks）。
-_HISTORY_CHAR_BUDGET: int = 12000
+#: 常量本体在 canonical.HISTORY_CHAR_BUDGET（与 Replyer 历史通道共用一条规则）。
+_HISTORY_CHAR_BUDGET: int = canonical.HISTORY_CHAR_BUDGET
 
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
 _DEFAULT_MAX_STEPS: int = 8

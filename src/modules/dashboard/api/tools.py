@@ -248,7 +248,8 @@ async def list_tools(
     tools = [
         _build_action_entry(
             spec,
-            category=registry.category_of(spec.name),
+            # category_of 按注册表索引键（全名）反查，传短名会落空返回空分类
+            category=registry.category_of(spec.full_name),
             disabled=registry.is_disabled(spec.name),
             owner_agent=getattr(registry, "scoped_owner_of", lambda _n: "")(spec.name),
             supports_reconnect=_supports_reconnect(registry, spec.name),

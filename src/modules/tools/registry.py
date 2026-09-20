@@ -160,6 +160,8 @@ class ToolRegistry:
         # 新出现的工具若套用旧快照 + "未列出 = 全员"默认，会对所有 Agent
         # 泄露可见性，因此策略必须可重跑而非存快照。
         self._visible_to_source: Dict[str, Any] = {}
+        # 生命周期批量启停的一次性旗标（start_providers/stop_providers 幂等守卫）
+        self._providers_started: bool = False
 
     # -------------------- 注册 --------------------
 
@@ -288,6 +290,68 @@ class ToolRegistry:
         self._visible_to_source.pop(provider.name, None)
         logger.info(f"Provider '{provider.name}' 已移除（摘除 {len(owned)} 个工具，总数={len(self._tools)}）")
         return len(owned)
+
+    async def start_providers(self) -> Dict[str, bool]:
+        """批量启动 Provider 生命周期（组合根在全部装配完成后调用一次）。
+
+        对每个注册的 ``BaseToolProvider`` 调用 ``setup()``：维护外部连接的
+        Provider 在其中建立连接、启动后台循环（如 VTS 建连 + 断线重连 +
+        idle 动画）；无状态 Provider 沿用基类默认（no-op）。
+        ``manages_own_lifecycle=True`` 的 Provider（MCP：装配期自行 setup 并
+        回调收尾）跳过，避免同一连接被建立两次。
+
+        单 Provider 失败不阻断其余（逐个异常隔离，失败记 ERROR 并入报告；
+        连接型 Provider 自身应带后台重连兜底，启动失败不等于永久不可用）。
+        幂等：进程内一次性——重复调用返回空报告（Provider 的 setup 亦各有
+        自身短路守卫）。
+
+        Returns:
+            ``{provider名: 是否成功}``，只含本次实际调用的 Provider；
+            已启动过（幂等短路）返回 ``{}``。
+        """
+        if self._providers_started:
+            return {}
+        self._providers_started = True
+        report: Dict[str, bool] = {}
+        for provider in list(self._providers):
+            if not isinstance(provider, BaseToolProvider) or provider.manages_own_lifecycle:
+                continue
+            try:
+                await provider.setup()
+                report[provider.name] = True
+            except Exception as exc:  # noqa: BLE001 — 单 Provider 隔离边界
+                report[provider.name] = False
+                logger.error(
+                    f"Provider '{provider.name}' setup 失败（不阻断其余，交由其重连机制兜底）: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+        if report:
+            ok_names = [name for name, ok in report.items() if ok]
+            fail_names = [name for name, ok in report.items() if not ok]
+            summary = f"Provider 生命周期启动完成: 成功 {len(ok_names)}/{len(report)}"
+            if fail_names:
+                summary += f"，失败: {fail_names}"
+            logger.info(summary)
+        return report
+
+    async def stop_providers(self) -> None:
+        """批量收尾 Provider 生命周期（停机路径调用，与 ``start_providers`` 对称）。
+
+        对同一集合（``BaseToolProvider`` 且非自管理）逐个 ``cleanup()``，
+        异常隔离不阻断其余；未启动过时跳过（装配失败中途退出的场景，
+        Provider 自身无资源可释放）。MCP 的子进程关闭仍由
+        ``close_mcp_providers`` 专责处理，不在此处。
+        """
+        if not self._providers_started:
+            return
+        self._providers_started = False
+        for provider in list(self._providers):
+            if not isinstance(provider, BaseToolProvider) or provider.manages_own_lifecycle:
+                continue
+            try:
+                await provider.cleanup()
+            except Exception as exc:  # noqa: BLE001 — 单 Provider 隔离边界
+                logger.error(f"Provider '{provider.name}' cleanup 失败（继续其余）: {type(exc).__name__}: {exc}")
 
     def refresh_provider_tools(self, provider: ToolProvider) -> Dict[str, Any]:
         """重新登记已注册 Provider 的工具集（连接恢复 / 工具清单变化后的补注册）。

@@ -8,7 +8,7 @@
   **不**持有任何工具列表（reply 是唯一 function 定义，纯结构化输出口）。
 
 职责边界：
-- 调用 LLMManager.generate(prompt, tools=[reply_fn_def], profile=...)——LLM 只见 reply。
+- 调用 LLMManager.generate(messages, system=稳定段, tools=[reply_fn_def], profile=...)——LLM 只见 reply。
 - 解析 response.tool_calls（中立 payload.ToolCall 扁平形状）：reply call 取
   speech/emotion/intensity；其余忽略。
 - **敏感词净化**（输出端）：内置 WordFilter 做"嘴"端净化——speech 输出前
@@ -43,7 +43,11 @@ _DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和观众互动"
 _DEFAULT_STYLE_CONSTRAINTS = "口语化，使用网络流行语，避免机械式回复，适当使用emoji"
 _DEFAULT_AUDIENCE_SALUTATION = "大家"
 
-# Replyer 模板名（含 $personality/$style_constraints/$bot_name 人设注入）
+# Replyer 模板名：system 模板承载全程稳定段（人设/风格/规则），本轮输入
+# 模板承载每轮变化段（决策/弹幕/流程单）。稳定段独立成模板进 system 参数，
+# 变化段渲染为本轮 user 消息——请求前缀（system + 对话历史）跨轮逐字稳定，
+# LLM 供应商的前缀缓存才能命中。
+_REPLYER_SYSTEM_TEMPLATE = "amaidesu_replyer_system"
 _REPLYER_TEMPLATE = "amaidesu_replyer"
 
 # reply function 名称（Agent 内部协议工具，与 tools/reply_tool.py 的 _REPLY_TOOL_NAME 对齐）
@@ -77,7 +81,8 @@ class Replyer:
                     audience_salutation（人设四件套由 StreamerAgent 构造期注入；
                     LLM profile 绑定不读配置，固定 REPLYER_PROFILE 常量）。
             llm_service: LLM 管理器（使用 profile 指定的高质量客户端）。
-            prompt_service: 提示词管理器（渲染 amaidesu_replyer 模板）。
+            prompt_service: 提示词管理器（渲染 amaidesu_replyer_system /
+                    amaidesu_replyer 两个模板，分别承载 system 稳定段与本轮变化段）。
             tool_registry: 工具注册表（仅作占位注入，表达引擎自身不消费工具列表）。
             word_filter: 敏感词过滤器（输出端净化入口；None 表示不净化）。
         """
@@ -106,37 +111,46 @@ class Replyer:
     ) -> Optional[Dict[str, Any]]:
         """根据 Planner 的决策计划 + 弹幕批次，生成本方人设下的实际回复。
 
-        流程：注入人设渲染 'amaidesu_replyer'（含 $personality/$style_constraints/
-        $bot_name）→ 调用 LLM（profile 固定 REPLYER_PROFILE，**generate 标准接口**，
-        tools=[reply_fn_def]，reply 是唯一 function 定义）→ 解析
+        流程：system 渲染稳定段（amaidesu_replyer_system，含 $personality/
+        $style_constraints/$bot_name）+ 本轮输入渲染变化段（amaidesu_replyer）→
+        消息序列 = 对话历史（canonical 原生消息，append-only）+ 本轮输入（序列尾）
+        → 调用 LLM（profile 固定 REPLYER_PROFILE，**generate 标准接口**，
+        system=稳定段，tools=[reply_fn_def]，reply 是唯一 function 定义）→ 解析
         response.tool_calls（中立 payload.ToolCall）提取 reply(speech/emotion/intensity)
         → 情绪降级 neutral → 敏感词净化 → 返回 dict（不发布事件；reply_tool
         负责 ToolExecutionResult 包装）。
 
-        Args:
-            plan: Planner 产出的决策计划（should_reply=True 时才应到达此处）。
-            batch: 本批弹幕（RoomMessagePayload 列表）。
-            history: 可选的最近会话历史（鸭子类型对象列表，需有 ``role`` 和 ``content`` 属性）；
-                     role 可能是枚举（取 ``.value``），content 是 str。None 表示无历史可用，
-                     渲染为占位文本。
-            rundown: 当前流程单的渲染文本（可选）。由调用方（如 StreamerAgent
-                主循环）从 ``RundownState`` 拼装后传入，描述当前环节的
-                title / task_description / key_points / 环节剩余时长 + 整场进度。
-                透传到 prompt 的 ``$rundown`` 变量。
-            on_delta: 思考流回调（LLM 层形态 (kind, text_delta)）。
+            Args:
+                plan: Planner 产出的决策计划（should_reply=True 时才应到达此处）。
+                batch: 本批弹幕（RoomMessagePayload 列表）。
+                history: 可选的最近会话历史（鸭子类型对象列表，需有 ``role`` 和 ``content`` 属性）；
+                         role 可能是枚举（取 ``.value``），content 是 str。None 表示无历史可用，
+                         渲染为占位文本。
+                rundown: 当前流程单的渲染文本（可选）。由调用方（如 StreamerAgent
+                    主循环）从 ``RundownState`` 拼装后传入，描述当前环节的
+                    title / task_description / key_points / 环节剩余时长 + 整场进度。
+                    透传到 prompt 的 ``$rundown`` 变量。
+                on_delta: 思考流回调（LLM 层形态 (kind, text_delta)）。
 
-        Returns:
-            Dict 实例（含 speech/emotion/metadata）；LLM 异常、tool_calls 缺失
-            reply call、或 speech 为空时返回 None（silent 降级）。
-            reply_tool 直接将此 dict 包装进 ToolExecutionResult 返回给 LLM。
+            Returns:
+                Dict 实例（含 speech/emotion/metadata）；LLM 异常、tool_calls 缺失
+                reply call、或 speech 为空时返回 None（silent 降级）。
+                reply_tool 直接将此 dict 包装进 ToolExecutionResult 返回给 LLM。
         """
         # 防御：Planner 已裁决 should_reply=True 才会进入此处；False 直接放弃。
         if not plan.should_reply:
             self.logger.debug("DecisionPlan.should_reply=False，Replyer 跳过生成")
             return None
 
-        # 注入人设 + 决策意图 + 弹幕上下文 + 会话历史 + 流程单上下文，渲染 prompt
-        prompt = self._render_prompt(plan, batch, history, rundown)
+        # 注入人设 + 决策意图 + 弹幕上下文 + 会话历史 + 流程单上下文
+        system_prompt = self._render_system_prompt()
+        turn_input = self._render_turn_input(plan, batch, rundown)
+        # 对话历史走原生消息通道（canonical 单一映射，与 Planner 同源）：
+        # 历史段跨轮逐字稳定、只追加不重排，是请求前缀缓存命中的前提；
+        # 文本拍平进单条 user 消息会让每轮请求前缀全变，缓存无从命中。
+        history_messages = [canonical.turn_to_message(msg) for msg in (history or [])]
+        history_messages = canonical.drop_oldest_blocks(history_messages, canonical.HISTORY_CHAR_BUDGET)
+        messages: List[Dict[str, Any]] = [*history_messages, {"role": "user", "content": turn_input}]
 
         # reply 是唯一工具——表达引擎不持有任何信息/动作类工具列表
         tools = [self._build_reply_function_def()]
@@ -144,7 +158,8 @@ class Replyer:
         try:
             self.logger.info(f"Replyer 生成回复中 (plan.target={plan.target!r}, client={self.profile})")
             response = await self._llm_service.generate(
-                prompt,
+                messages,
+                system=system_prompt,
                 tools=tools,
                 profile=self.profile,
                 on_delta=on_delta,
@@ -199,32 +214,40 @@ class Replyer:
 
     # ==================== prompt 渲染（人设注入核心） ====================
 
-    def _render_prompt(
+    def _render_system_prompt(self) -> str:
+        """渲染 system 提示词（全程稳定段）。
+
+        人设分离承诺：$personality / $style_constraints / $bot_name /
+        $audience_salutation 四个字段均读构造期注入的自身人设（StreamerAgent
+        从 config.persona 单点构建）。稳定段每轮渲染结果逐字一致——请求前缀
+        缓存命中靠它。
+        """
+        return self._prompt_service.render(
+            _REPLYER_SYSTEM_TEMPLATE,
+            bot_name=self._bot_name,
+            personality=self._personality,
+            style_constraints=self._style_constraints,
+            audience_salutation=self._audience_salutation,
+        )
+
+    def _render_turn_input(
         self,
         plan: DecisionPlan,
         batch: List[Any],
-        history: Optional[List[Any]] = None,
         rundown: Optional[str] = None,
     ) -> str:
-        """渲染 Replyer prompt，注入人设三件套 + 计划 + 弹幕 + 会话历史 + 流程单上下文。
+        """渲染本轮 user 消息（每轮变化段）：Planner 决策 + 弹幕批 + 流程单上下文。
 
-        人设分离承诺的另一半：$personality / $style_constraints / $bot_name 必须传给模板；
-        四个字段均读构造期注入的自身人设（StreamerAgent 从 config.persona 单点构建）。
-        会话历史用于让 Replyer 看到自己最近说过的话，避免冷场反复生成相同句式。
-        流程单上下文（$rundown）是任务上下文注入（当前环节 / 整场进度），由调用方拼装后传入；
-        None / 空串时用占位文本，避免模板出现字面 $rundown。
+        会话历史不在此渲染——历史经 canonical 走原生消息通道（见 generate）。
+        流程单上下文（$rundown）是任务上下文注入（当前环节 / 整场进度），由
+        调用方拼装后传入；None / 空串时用占位文本，避免模板出现字面 $rundown。
         """
         # 流程单上下文：None / 空串时用占位文本，与 Planner 对齐
         rundown_render = rundown if rundown else "（当前无流程单）"
         return self._prompt_service.render(
             _REPLYER_TEMPLATE,
-            bot_name=self._bot_name,
-            personality=self._personality,
-            style_constraints=self._style_constraints,
-            audience_salutation=self._audience_salutation,
             plan=_render_plan_text(plan),
             danmaku_batch=_batch_prompt_text(batch),
-            conversation_history=_history_prompt_text(history),
             rundown=rundown_render,
         )
 
@@ -472,18 +495,6 @@ def _batch_prompt_text(batch: List[Any]) -> str:
     if not batch:
         return "（本批无弹幕）"
     return MessageBuffer.render_batch_text(batch)
-
-
-def _history_prompt_text(history: Optional[List[Any]]) -> str:
-    """把会话历史渲染为供 prompt 使用的多行文本（委托 canonical 映射 + 标签文本视图）。
-
-    - 元素是鸭子类型（``role`` / ``content`` 必需，昵称/类型/ID 可选），不绑定具体类型；
-    - 与 Planner 消息构造、后台摘要同源（canonical 单一映射），批与历史同形。
-    - history 为 None 或空时返回占位文本，避免 LLM 拿到空字符串误以为没有上下文。
-    """
-    if not history:
-        return "（暂无对话历史）"
-    return canonical.to_text_view([canonical.turn_to_message(msg) for msg in history])
 
 
 __all__ = ["Replyer", "WordFilter"]

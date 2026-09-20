@@ -101,6 +101,13 @@ class _LiveChatTurn:
     message_id: str = ""
 
 
+#: 历史窗口滞回步长（条）：满窗后攒满该条数才成块推进窗口，读入上限相应
+#: 放宽到 history_limit + 步长。逐条滑窗（每来一条新消息窗口就前移一位）
+#: 会让历史段缓存前缀每窗失效一次；成块推进把它摊薄到每步长一窗，代价是
+#: 窗口内历史最多滞后步长条（上限 40 条规模，对"最近说过什么"的语义无损）。
+_HISTORY_WINDOW_STEP: int = 10
+
+
 class StreamerAgent(BaseAgent):
     """主播 Agent：编排 Planner + Replyer + 工具 + 后台任务 + 流程单。
 
@@ -207,6 +214,10 @@ class StreamerAgent(BaseAgent):
         self._thinking_sink = thinking_sink
         # 记忆后端（可选；None 时记忆相关功能整体降级）
         self._memory = memory
+        # 历史窗口滞回状态：窗口最旧一条的 message_id + 所属场次主键
+        # （见 _apply_history_window；场次切换时作废重锚）
+        self._history_window_pk: Optional[int] = None
+        self._history_window_anchor: str = ""
         self._logger = get_logger("StreamerAgent")
 
         # ===== 内部子组件 =====
@@ -979,6 +990,9 @@ class StreamerAgent(BaseAgent):
         场次主键经 ``LiveSessionManager.resolve_pk()`` 解析——与写路径
         （StorageLedger 落库）同源；无显式场次（首场/未开播）或存储缺失时
         返回空列表，不抛错（首场首决定窗的空读是常态而非异常）。
+
+        读入条数放宽到 history_limit + 步长，交 ``_apply_history_window``
+        做滞回裁剪——逐条滑窗会把历史段缓存前缀每窗打断一次。
         """
         if self._chat is None or self._session_manager is None:
             return None
@@ -988,12 +1002,12 @@ class StreamerAgent(BaseAgent):
                 return []
             rows = await self._chat.list_recent_live_chat(
                 live_session_id=live_pk,
-                limit=self.typed_config.history_limit,
+                limit=self.typed_config.history_limit + _HISTORY_WINDOW_STEP,
             )
         except Exception as exc:
             self._logger.warning(f"读取会话历史失败: {exc}")
             return None
-        return [
+        turns = [
             _LiveChatTurn(
                 role=row["sender_role"],
                 content=row["content"],
@@ -1003,6 +1017,38 @@ class StreamerAgent(BaseAgent):
             )
             for row in rows
         ]
+        return self._apply_history_window(live_pk, turns)
+
+    def _apply_history_window(self, live_pk: int, turns: List[_LiveChatTurn]) -> List[_LiveChatTurn]:
+        """历史窗口滞回：满窗后不逐条前移，攒满一个步长才成块推进。
+
+        逐条滑窗（读最近 limit 条）每来一条新消息窗口就前移一位——最旧一条
+        一换位，其后整段历史在请求里全部错位，前缀缓存从历史段起点起全部
+        落空。改为锚定窗口最旧一条：新消息只追加在窗口尾部（前缀逐字稳定），
+        攒满步长才推进到最新 limit 条并重锚——历史段 miss 从每窗一次摊薄到
+        每步长一窗。锚丢失（跨场次残留 / 行无 message_id / 长时间间隔跳变）
+        时退回"全量过读 + 立即推进"，窗口仍有界（limit + 步长）。
+        """
+        limit = self.typed_config.history_limit
+        if limit <= 0:
+            return []
+        if live_pk != self._history_window_pk:
+            self._history_window_pk = live_pk
+            self._history_window_anchor = ""
+        if len(turns) <= limit:
+            self._history_window_anchor = turns[0].message_id if turns else ""
+            return turns
+        start = 0
+        if self._history_window_anchor:
+            start = next(
+                (i for i, t in enumerate(turns) if t.message_id and t.message_id == self._history_window_anchor),
+                0,
+            )
+        included = turns[start:]
+        if len(included) >= limit + _HISTORY_WINDOW_STEP:
+            included = turns[-limit:]
+            self._history_window_anchor = included[0].message_id
+        return included
 
     # ==================================================================
     # 统计信息

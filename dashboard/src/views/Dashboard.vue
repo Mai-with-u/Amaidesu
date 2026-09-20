@@ -177,6 +177,7 @@ import type {
 } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import PulseChart from '@/components/dashboard/PulseChart.vue';
+import { useChartPalette } from '@/composables/useECharts';
 import { buildLiveEntries, type FeedEvent, type ShowEntry } from '@/utils/liveFeed';
 
 const router = useRouter();
@@ -328,6 +329,9 @@ const PULSE_BUCKETS = 60;
 /** 活动脉搏分桶宽度（毫秒）：按分钟分桶 */
 const PULSE_BUCKET_MS = 60_000;
 
+// 柱色经 palette 运行时取值：canvas 不解析 CSS 变量
+const chartPalette = useChartPalette();
+
 interface BucketWindow {
   labels: string[];
   series: { label: string; color: string; values: number[] }[];
@@ -358,8 +362,8 @@ function buildPulse(events: FeedEvent[]): BucketWindow {
   return {
     labels,
     series: [
-      { label: '观众消息', color: 'var(--color-collector)', values: audience },
-      { label: '主播发言', color: 'var(--color-agent)', values: streamer },
+      { label: '观众消息', color: chartPalette.value.collectorColor, values: audience },
+      { label: '主播发言', color: chartPalette.value.agentColor, values: streamer },
     ],
   };
 }

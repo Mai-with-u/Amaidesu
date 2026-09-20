@@ -58,7 +58,8 @@ def runtime_tool_counts(registry: Any) -> Dict[Tuple[str, str], Tuple[int, int]]
     counts: Dict[Tuple[str, str], Tuple[int, int]] = {}
     try:
         for spec in registry.list_tools(include_disabled=True, include_tripped=True):
-            key = (registry.category_of(spec.name), getattr(spec, "provider", "") or "")
+            # category_of 按注册表索引键（全名）反查，传短名会落空导致计数归错类
+            key = (registry.category_of(spec.full_name), getattr(spec, "provider", "") or "")
             total, disabled = counts.get(key, (0, 0))
             counts[key] = (total + 1, disabled + (1 if registry.is_disabled(spec.name) else 0))
     except Exception:

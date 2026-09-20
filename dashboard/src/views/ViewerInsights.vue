@@ -132,6 +132,7 @@ import { computed, onMounted, ref } from 'vue';
 import { viewersApi } from '@/api';
 import PulseChart from '@/components/dashboard/PulseChart.vue';
 import type { PulseSeries } from '@/components/dashboard/PulseChart.vue';
+import { useChartPalette } from '@/composables/useECharts';
 import type { ViewerInsights, ViewerListItem } from '@/types';
 
 const days = ref(30);
@@ -164,10 +165,13 @@ const buckets = computed(() => {
   return rows.map(row => ({ ...row, percent: (row.value / max) * 100 }));
 });
 
+// 柱色经 palette 运行时取值：canvas 不解析 CSS 变量（直传 var() 会画成黑色）
+const chartPalette = useChartPalette();
+
 const danmakuSeries = computed<PulseSeries[]>(() => [
   {
     label: '弹幕',
-    color: 'var(--color-primary)',
+    color: chartPalette.value.primaryColor,
     values: data.value?.daily_danmaku.map(p => p.count) ?? [],
   },
 ]);

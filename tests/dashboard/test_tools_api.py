@@ -88,7 +88,11 @@ class _FakeToolRegistry:
         return specs
 
     def category_of(self, name: str) -> str:
-        return self._categories.get(name, "")
+        """语义对齐真实 registry：按注册键（全名）查 spec，再按 provider 反查分类。"""
+        spec = next((s for s in self._specs if s.full_name == name), None)
+        if spec is None:
+            return ""
+        return self._categories.get(spec.provider, "")
 
     def apply_disabled(self, names) -> int:
         self._disabled = {n for n in names if any(s.name == n for s in self._specs)}
@@ -141,10 +145,11 @@ def _default_specs():
 
 
 def _default_categories() -> dict[str, str]:
+    # 键 = provider 名（分类按 provider 归账，对齐真实 registry 的 _categories 形状）
     return {
-        "vts_trigger_hotkey": "avatar",
-        "reply_to_user": "streamer",
-        "framework_delegate": "framework",
+        "vts": "avatar",
+        "streamer": "streamer",
+        "framework": "framework",
     }
 
 

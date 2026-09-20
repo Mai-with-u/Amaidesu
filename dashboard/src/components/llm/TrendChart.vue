@@ -194,6 +194,7 @@ const option = computed<EChartsCoreOption>(() => {
 
   return {
     animation: false,
+    // ECharts 6 对 containLabel 打迁移提示（LOG 级、仍兼容）；outerBounds 形态在 6.1 会崩，暂不动
     grid: { left: 8, right: 8, top: 12, bottom: 4, containLabel: true },
     xAxis: {
       type: 'category',

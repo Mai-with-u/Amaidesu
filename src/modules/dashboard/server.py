@@ -150,7 +150,8 @@ class DashboardServer:
             if assets_dir.exists():
                 self.app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
-            @self.app.get("/{full_path:path}")
+            # FileResponse|dict 混合返回无法生成 Pydantic 响应模型，须显式关闭
+            @self.app.get("/{full_path:path}", response_model=None)
             async def serve_spa(full_path: str) -> FileResponse | Dict[str, str]:
                 if full_path.startswith("api/") or full_path == "ws":
                     return {"detail": "Not Found"}

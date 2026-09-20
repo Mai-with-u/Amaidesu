@@ -35,6 +35,11 @@ from src.modules.logging import get_logger
 # 具体的 SDK 异常集合：Client 翻译处只捕获这些类型并翻译为分类异常
 _TRANSLATABLE_SDK_ERRORS = (APITimeoutError, APIConnectionError, RateLimitError, APIStatusError)
 
+# 无参数工具的协议兜底 schema：OpenAI 兼容端点普遍严格要求 function.parameters
+# 为 type:object 的 JSON Schema（DeepSeek 对 null/缺失直接 400 拒绝整个请求），
+# 中立 ToolSpec 允许 parameters=None（"无参数"），由本适配层负责补齐协议形态
+_EMPTY_OBJECT_SCHEMA: Dict[str, Any] = {"type": "object", "properties": {}}
+
 # 非 SDK 契约路径的刻意兜底（流式降级 / legacy 失败包装 / 流关闭清理）：
 # 兼容端点的失败形态无法枚举，这些位置任何异常都不得逃出 legacy 语义；
 # 错误翻译路径不走此处——那里对 SDK 异常类型的捕获是具体的
@@ -132,7 +137,9 @@ class OpenAIClient(BaseLLMClient):
                         "function": {
                             "name": tool.get("name", ""),
                             "description": tool.get("description", ""),
-                            "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+                            # 缺键 / None / 空 dict 都不是合法 JSON Schema，
+                            # 统一兜底为空对象 schema（严格端点会 400 拒收）
+                            "parameters": tool.get("parameters") or _EMPTY_OBJECT_SCHEMA,
                         },
                     }
                 )
@@ -227,8 +234,16 @@ class OpenAIClient(BaseLLMClient):
 
     @staticmethod
     def _tool_spec_to_openai(spec: ToolSpec) -> Dict[str, Any]:
-        """中立 ToolSpec → 项目内扁平工具定义（chat 内再做 OpenAI 协议包装）"""
-        return {"name": spec.name, "description": spec.description, "parameters": spec.parameters}
+        """中立 ToolSpec → 项目内扁平工具定义（chat 内再做 OpenAI 协议包装）
+
+        ``parameters`` 空值（None/{} = 无参数工具）兜底为空对象 schema——
+        严格端点（DeepSeek 等）对非 object schema 直接 400 拒绝整个请求。
+        """
+        return {
+            "name": spec.name,
+            "description": spec.description,
+            "parameters": spec.parameters or _EMPTY_OBJECT_SCHEMA,
+        }
 
     @staticmethod
     def _extract_usage(vendor_usage: Any) -> Optional[Dict[str, int]]:

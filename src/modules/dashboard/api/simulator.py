@@ -157,7 +157,7 @@ async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
     mode = str(getattr(service, "mode", "off"))
 
     if not enabled:
-        message = "[simulator].enabled=false；模拟器未启用。请在 config/core.toml 的 [simulator] 段将 enabled 设为 true 并重启。"
+        message = "[simulator].enabled=false；模拟器未启用。请在 config/infra.toml 的 [simulator] 段将 enabled 设为 true 并重启。"
     elif not is_available:
         message = "配置启用但 SimulatorService 未注入（存储仓储/LLMManager 缺失或 --dry 模式）。"
     elif is_running:
