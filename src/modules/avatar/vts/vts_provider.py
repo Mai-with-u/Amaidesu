@@ -265,6 +265,8 @@ class VTSProvider(BaseToolProvider):
         self._reconnect_task: Optional[asyncio.Task] = None
         self._is_connected = False
         self._has_started = False
+        # idle 归一化值 → 参数原生量纲的缩放表（连接后按 VTS 实际范围构建；未知 = 1.0）
+        self._idle_param_scale: Dict[str, float] = {}
 
         self.render_count = 0
         self.error_count = 0
@@ -670,7 +672,53 @@ class VTSProvider(BaseToolProvider):
     async def _idle_set_param_proxy(self, parameter_name: str, value: float) -> bool:
         if not parameter_name:
             return False
-        return await self.expression.set_parameter(parameter_name, value, weight=1, silent=True)
+        scaled = value * self._idle_param_scale.get(parameter_name, 1.0)
+        return await self.expression.set_parameter(parameter_name, scaled, weight=1, silent=True)
+
+    @staticmethod
+    def _idle_scale_for(ranges: Dict[str, tuple[float, float]], names: List[str]) -> Dict[str, float]:
+        """按参数原生范围计算 idle 归一化值的缩放系数（范围未知 = 原值 1.0）。
+
+        idle 控制器产出零中心归一化值（约 ±1 × 幅度配置），注入须落在参数
+        原生量纲内：取 ``max(|min|, |max|)`` 为半幅放大（FaceAngleX ±30 →
+        ±0.05 变 ±1.5°）；[0,1]/[-1,1] 类参数半幅 ≤ 1，行为不变。
+        """
+        scales: Dict[str, float] = {}
+        for name in names:
+            if not name:
+                continue
+            bounds = ranges.get(name)
+            if bounds is None:
+                continue
+            half_span = max(abs(bounds[0]), abs(bounds[1]))
+            scales[name] = half_span if half_span > 0 else 1.0
+        return scales
+
+    async def _refresh_idle_param_scale(self, resolved: Dict[str, str]) -> None:
+        """拉取 VTS 参数原生范围并构建 idle 写入缩放表（失败降级为全原值）。"""
+        try:
+            ranges = await self.expression.list_parameter_ranges()
+        except Exception as e:
+            self.logger.warning(f"拉取 VTS 参数范围失败，idle 按原值写入: {e}")
+            self._idle_param_scale = {}
+            return
+        if not ranges:
+            self.logger.warning("VTS 未返回参数范围，idle 按原值写入")
+            self._idle_param_scale = {}
+            return
+        names = [
+            resolved.get("head_x"),
+            resolved.get("head_y"),
+            resolved.get("head_z"),
+            resolved.get("body_x"),
+            resolved.get("body_y"),
+            resolved.get("body_z"),
+            self.PARAM_MOUTH_SMILE,
+            *self.typed_config.idle_extra_params.keys(),
+        ]
+        self._idle_param_scale = self._idle_scale_for(ranges, [n for n in names if n])
+        scaled = {n: s for n, s in self._idle_param_scale.items() if s != 1.0}
+        self.logger.info(f"idle 参数量纲缩放表: {scaled or '全部 1.0（无角度类参数）'}")
 
     async def _expression_set_param_proxy(self, parameter_name: str, value: float, weight: float = 1) -> bool:
         return await self.expression.set_parameter(parameter_name, value, weight)
@@ -757,6 +805,7 @@ class VTSProvider(BaseToolProvider):
                 param_body_y=resolved.get("body_y"),
                 param_body_z=resolved.get("body_z"),
             )
+            await self._refresh_idle_param_scale(resolved)
 
             if self.idle_enabled_cfg:
                 try:

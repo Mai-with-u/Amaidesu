@@ -13,6 +13,11 @@ PARAM_MOUTH_OPEN = "MouthOpen"
 PARAM_EYE_OPEN_LEFT = "EyeOpenLeft"
 PARAM_EYE_OPEN_RIGHT = "EyeOpenRight"
 
+# 注入参数时必须声明"脸部已捕捉"：faceFound=false 会让 VTS 周期性触发
+# "失去捕捉"行为（模型被重置回默认姿态后插件再接管，表现为肉眼可见的瞬移）。
+# 插件接管驱动期间持续声明 true；停止注入后 VTS 约 1 秒自行回到未捕捉状态。
+FACE_FOUND = True
+
 
 class ExpressionController:
     """VTS 表情/参数控制器"""
@@ -70,7 +75,9 @@ class ExpressionController:
             return False
         try:
             response = await self._vts_request(
-                self._vts_request.vts_request.requestSetParameterValue(parameter_name, value, weight)
+                self._vts_request.vts_request.requestSetParameterValue(
+                    parameter_name, value, weight, face_found=FACE_FOUND
+                )
             )
             if response and response.get("messageType") == "InjectParameterDataResponse":
                 if not silent:
@@ -126,6 +133,42 @@ class ExpressionController:
             self.logger.error(f"获取VTS参数列表异常: {e}")
             return []
 
+    async def list_parameter_ranges(self) -> Dict[str, "tuple[float, float]"]:
+        """获取 VTS 当前可用参数的原生范围 ``{参数名: (min, max)}``。
+
+        与 ``list_tracking_parameters`` 同源（同一 InputParameterList 响应），
+        额外解析每项的 min/max——注入值必须落在参数原生量纲内（如 FaceAngleX
+        为 ±30 角度制），否则写入虽被接受但量级不可见。单项 min/max 缺失或
+        非法时跳过该参数（调用方按未知范围处理）。
+        """
+        if not self._is_connected():
+            return {}
+        try:
+            response = await self._vts_request(self._vts_request.vts_request.requestTrackingParameterList())
+            if response and response.get("messageType") in (
+                "InputParameterListResponse",
+                "TrackingParameterListResponse",
+            ):
+                data = response.get("data", {})
+                params = (
+                    data.get("defaultParameters", [])
+                    + data.get("customParameters", [])
+                    + data.get("model_parameters", [])
+                )
+                ranges: Dict[str, tuple[float, float]] = {}
+                for p in params:
+                    name = str(p.get("name") or "")
+                    try:
+                        ranges[name] = (float(p["min"]), float(p["max"]))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                return ranges
+            self.logger.warning(f"获取VTS参数范围失败: {response}")
+            return {}
+        except Exception as e:
+            self.logger.error(f"获取VTS参数范围异常: {e}")
+            return {}
+
     async def set_multi_parameter(
         self,
         parameter_values: Dict[str, float],
@@ -153,7 +196,9 @@ class ExpressionController:
         values = list(parameter_values.values())
         try:
             response = await self._vts_request(
-                self._vts_request.vts_request.requestSetMultiParameterValue(names, values, weight)
+                self._vts_request.vts_request.requestSetMultiParameterValue(
+                    names, values, weight, face_found=FACE_FOUND
+                )
             )
             if response and response.get("messageType") == "InjectParameterDataResponse":
                 self.logger.debug(f"VTS 多参数已设置: {names}")
