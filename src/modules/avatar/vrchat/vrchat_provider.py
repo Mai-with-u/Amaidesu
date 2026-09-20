@@ -15,8 +15,10 @@ from typing import Any, Dict, Optional
 
 from pydantic import Field
 
+from src.modules.avatar.speech_binding import bind_speech_emotion
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
@@ -120,6 +122,8 @@ class VRChatProvider(BaseToolProvider):
         self._has_started = False
         self.render_count = 0
         self.error_count = 0
+        # 事件订阅句柄（setup 时绑定，cleanup 时退订）
+        self._speech_emotion_handler: Optional[Any] = None
 
     # ===== ToolProvider 协议 =====
 
@@ -219,12 +223,21 @@ class VRChatProvider(BaseToolProvider):
         if self._has_started:
             return
         await self._connect()
+        # 被动半事件订阅：情绪反射（streamer.speech；set_expression 当前不渲染
+        # 情绪面，订阅保持契约一致性，未来接入表情通道无需改装配）
+        self._speech_emotion_handler = bind_speech_emotion(self.event_bus, self, self.logger)
         self._has_started = True
         self.logger.info(f"{self.__class__.__name__} 已启动")
 
     async def cleanup(self) -> None:
         if not self._has_started:
             return
+        if self.event_bus is not None and self._speech_emotion_handler is not None:
+            try:
+                self.event_bus.off(CoreEvents.STREAMER_SPEECH, self._speech_emotion_handler)
+            except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
+                self.logger.debug(f"streamer.speech 退订失败（已忽略）: {exc}")
+            self._speech_emotion_handler = None
         await self._disconnect()
         self._has_started = False
         self.logger.info(f"{self.__class__.__name__} 已停止")

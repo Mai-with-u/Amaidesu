@@ -556,6 +556,7 @@ async def create_app_components(
         core_report = bind_core_tools(
             tool_registry,
             tools_section,
+            event_bus=event_bus,
         )
         from src.modules.tools.bootstrap import CORE_MEMBER_COUNT
 

@@ -22,8 +22,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pydantic import Field
 
+from src.modules.avatar.speech_binding import bind_speech_emotion, bind_speaking_state
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
     ToolExecutionResult,
@@ -281,6 +283,11 @@ class VTSProvider(BaseToolProvider):
         self._has_started = False
         # idle 归一化值 → 参数原生量纲的缩放表（连接后按 VTS 实际范围构建；未知 = 1.0）
         self._idle_param_scale: Dict[str, float] = {}
+        # 说话状态（tts.utterance.started/finished 订阅驱动；idle 据此暂停摇摆）
+        self._is_speaking: bool = False
+        # 事件订阅句柄（setup 时绑定，cleanup 时退订）
+        self._speech_emotion_handler: Optional[Any] = None
+        self._speaking_state_handles: Optional[Any] = None
 
         self.render_count = 0
         self.error_count = 0
@@ -323,7 +330,8 @@ class VTSProvider(BaseToolProvider):
         self.idle_motion = IdleMotionController(
             logger_name=f"{self.__class__.__name__}.IdleMotion",
             is_connected=lambda: self._is_connected,
-            is_speaking=lambda: self.lip_sync.is_speaking,
+            # 说话状态由 tts.utterance.* 订阅驱动（setup 时绑定），不在口型件里兼任
+            is_speaking=lambda: self._is_speaking,
             set_parameter=self._idle_set_param_proxy,
             param_head_x=self.typed_config.idle_param_head_x,
             param_head_y=self.typed_config.idle_param_head_y,
@@ -449,6 +457,11 @@ class VTSProvider(BaseToolProvider):
         self._reconnect_task = asyncio.create_task(self._reconnect_loop())
         self._reconnect_task.set_name(f"{self.__class__.__name__}.reconnect_loop")
 
+        # 被动半事件订阅：情绪反射（streamer.speech）+ 说话状态（tts.utterance.*，
+        # 驱动 idle"说话时暂停摇摆"）
+        self._speech_emotion_handler = bind_speech_emotion(self.event_bus, self, self.logger)
+        self._speaking_state_handles = bind_speaking_state(self.event_bus, self.logger, on_change=self._set_speaking)
+
         self._has_started = True
 
     async def cleanup(self) -> None:
@@ -456,9 +469,29 @@ class VTSProvider(BaseToolProvider):
         if not self._has_started:
             return
 
+        if self.event_bus is not None:
+            if self._speech_emotion_handler is not None:
+                try:
+                    self.event_bus.off(CoreEvents.STREAMER_SPEECH, self._speech_emotion_handler)
+                except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
+                    self.logger.debug(f"streamer.speech 退订失败（已忽略）: {exc}")
+                self._speech_emotion_handler = None
+            if self._speaking_state_handles is not None:
+                started_handler, finished_handler = self._speaking_state_handles
+                try:
+                    self.event_bus.off(CoreEvents.TTS_UTTERANCE_STARTED, started_handler)
+                    self.event_bus.off(CoreEvents.TTS_UTTERANCE_FINISHED, finished_handler)
+                except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
+                    self.logger.debug(f"tts.utterance.* 退订失败（已忽略）: {exc}")
+                self._speaking_state_handles = None
+
         await self._disconnect()
         self._has_started = False
         self.logger.info(f"{self.__class__.__name__} 已停止")
+
+    def _set_speaking(self, speaking: bool) -> None:
+        """说话状态回调（bind_speaking_state 驱动；idle 据此暂停摇摆）。"""
+        self._is_speaking = speaking
 
     # ===== 业务方法 =====
 

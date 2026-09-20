@@ -1,13 +1,14 @@
-"""发言管线（speech → TTS / emotion → VTS / 字幕）。
+"""发言管线（speech → TTS / 字幕）。
 
 决策循环消费 reply 结构化结果后的全部下游扇出收在这里：
-业务事件 ``streamer.speech``、TTS 编排队列、字幕推送、VTS 表情。
-TTS 队列生命周期由本组件自持（``start``/``stop``），
-失败一律降级不阻断决策循环。
+业务事件 ``streamer.speech``、TTS 编排队列、字幕推送。情绪渲染不在
+本管线扇出——皮套适配器订阅 ``streamer.speech`` 自行反射（自动情绪
+路径），主播域不携带任何皮套平台知识。TTS 队列生命周期由本组件自持
+（``start``/``stop``），失败一律降级不阻断决策循环。
 
 扇出策略：异步扇出不阻塞决策循环；任务强引用持有（``_bg_tasks`` 集合），
 ``stop()`` 末尾限期 2 秒汇合，防止悬挂任务在进程退出/重启窗口继续调用
-ToolRegistry / 业务事件总线。对齐 ``EventBus._background_tasks`` 正典模式。
+业务事件总线。对齐 ``EventBus._background_tasks`` 正典模式。
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import ModuleLogger, get_logger
 from src.modules.time_utils import now_ms
-from src.modules.tools.models import ToolInvocation
 
 from .utterance_queue import (
     DEFAULT_MAX_QUEUE,
@@ -29,23 +29,6 @@ from .utterance_queue import (
 )
 
 __all__ = ["SpeechDispatcher"]
-
-# emotion → VTS 表情参数映射（与 VTSProvider._emotion_map 形态一致）。
-# 独立保留一份是为了让发言管线在不持有 VTSProvider 实例时
-# 也能把 emotion 翻译为可调用参数；与 VTSProvider 的真实映射解耦
-# 也便于单测直接断言。
-_EMOTION_TO_VTS_PARAMS: Dict[str, Dict[str, float]] = {
-    "happy": {"MouthSmile": 1.0},
-    "surprised": {"EyeOpenLeft": 1.0, "EyeOpenRight": 1.0, "MouthOpen": 0.5},
-    "sad": {"MouthSmile": -0.3, "EyeOpenLeft": 0.7, "EyeOpenRight": 0.7},
-    "angry": {"EyeOpenLeft": 0.6, "EyeOpenRight": 0.6, "MouthSmile": -0.5},
-    "shy": {"MouthSmile": 0.3, "EyeOpenLeft": 0.8, "EyeOpenRight": 0.8},
-    "love": {"MouthSmile": 0.8, "EyeOpenLeft": 0.9, "EyeOpenRight": 0.9},
-    "excited": {"MouthSmile": 1.0, "EyeOpenLeft": 1.0, "EyeOpenRight": 1.0},
-    "confused": {"EyeOpenLeft": 0.7, "EyeOpenRight": 0.7, "MouthOpen": 0.2},
-    "scared": {"EyeOpenLeft": 0.5, "EyeOpenRight": 0.5, "MouthOpen": 0.3},
-    "neutral": {},
-}
 
 
 class SpeechDispatcher:
@@ -56,19 +39,17 @@ class SpeechDispatcher:
         *,
         event_bus: Optional[EventBus],
         subtitle_service: Optional[Any],
-        tool_registry: Optional[Any],
         tts_engine: Optional[Any],
         speech_config: Optional[Dict[str, Any]] = None,
         logger: Optional[ModuleLogger] = None,
     ) -> None:
         """``speech_config`` 形态见 StreamerAgent 构造参数文档
         （enabled / max_queue / render_timeout_ms）；``None`` 或
-        ``enabled=False`` 时管线整体关闭。``tool_registry`` /
-        ``subtitle_service`` / ``tts_engine`` 均鸭子消费（仅调公开方法）。
+        ``enabled=False`` 时管线整体关闭。``subtitle_service`` /
+        ``tts_engine`` 均鸭子消费（仅调公开方法）。
         """
         self._logger = logger or get_logger("StreamerAgent.SpeechDispatcher")
         self._event_bus = event_bus
-        self._tool_registry = tool_registry
         speech_cfg = speech_config or {}
         self._tts_enabled: bool = bool(speech_cfg.get("enabled", False))
         self._speech_max_queue: int = int(speech_cfg.get("max_queue", DEFAULT_MAX_QUEUE))
@@ -163,8 +144,8 @@ class SpeechDispatcher:
         """停止发言管线：先停 TTS 队列，再汇合在飞扇出任务；可重复调用。
 
         顺序：``utterance_queue.stop()`` → ``wait_for(gather(_bg_tasks))``。
-        队列 worker 持有的 invoke 会先被取消，剩余扇出（业务事件 / 字幕 / VTS /
-        动作）在 2 秒内汇合；超时 WARN 不抛，避免阻塞停止流程。
+        队列 worker 持有的 invoke 会先被取消，剩余扇出（业务事件 / 字幕）
+        在 2 秒内汇合；超时 WARN 不抛，避免阻塞停止流程。
         """
         if self._utterance_queue is not None:
             try:
@@ -229,8 +210,7 @@ class SpeechDispatcher:
           （TTS 启用与否与主播发言业务事实正交；下游消费者仅依赖业务事件）
         - speech 非空 → 生成 utterance_id + 发布业务事件 + 写入历史；TTS 启用时
           复用同一 utterance_id 入 TTS 队列（与 ``tts.utterance.*`` 共用关联键）
-        - emotion → ``_spawn`` 派发 VTS 表情工具（异步扇出不阻塞决策循环；
-          跟随 TTS 启用门）
+        - emotion 随业务事件发布，由皮套适配器订阅反射（本管线不做情绪扇出）
         """
         if not isinstance(reply_payload, dict):
             self._logger.warning(f"reply structured_content 非 dict，跳过发言管线: {type(reply_payload).__name__}")
@@ -250,12 +230,6 @@ class SpeechDispatcher:
             cleaned_emotion_intensity = min(1.0, max(0.0, float(emotion_obj.get("intensity", 0.5))))
         except (TypeError, ValueError):
             cleaned_emotion_intensity = 0.5
-
-        # emotion → VTS 表情调用跟随 TTS 启用门：TTS 关闭（无语音/无声卡场景）
-        # 时 avatar 表情随同关闭，避免与管线整体退化语义漂移。
-        # 与 speech 派发独立（speech 空但 emotion 非空时仍可触发）。
-        if cleaned_emotion and self._tts_enabled and self._utterance_queue is not None:
-            self._schedule_vts_emotion(cleaned_emotion, intensity=cleaned_emotion_intensity)
 
         # speech 非空：先发布业务事件 + 写历史（与 TTS 启用与否正交），
         # TTS 启用时复用同一 utterance_id 入 TTS 队列。
@@ -343,52 +317,3 @@ class SpeechDispatcher:
                 self._logger.warning(f"字幕 show 异常（已忽略）: utterance_id={utterance_id}, err={exc}")
 
         self._spawn(_do_show(), label=f"subtitle show (utt={utterance_id})")
-
-    def _schedule_vts_emotion(self, emotion: str, intensity: float = 0.5) -> None:
-        """异步触发 VTS 表情调用（异步扇出不阻塞决策循环；任务强引用持有，停止时限期汇合）。
-
-        VTS 工具契约（vts_set_expression）::
-
-            arguments = {
-                "parameters": {param_name: value, ...},  # 表情参数映射
-                "weight": float,                         # 混合权重（情绪强度驱动）
-            }
-
-        若 emotion 不在已知映射表中，DEBUG 日志提示"无映射"并跳过；
-        已知映射但参数为空（如 ``neutral``）也照样发起调用，让 VTS
-        工具自身的静默处理逻辑统一接管（不做空表达式的特判短路）。
-
-        Args:
-            emotion: 情绪枚举名（映射表键）。
-            intensity: Replyer 输出的情绪强度 [0.0, 1.0]，直接映射为表情混合权重。
-        """
-        vts_params = _EMOTION_TO_VTS_PARAMS.get(emotion)
-        if vts_params is None:
-            self._logger.debug(f"emotion '{emotion}' 未在已知映射表中，跳过 VTS 调用")
-            return
-
-        # 在闭包外捕获 registry 引用：避免 LSP 跨闭包推断失败，
-        # 同时确保 _invoke_vts 在工具尚未注入时不会抛 AttributeError。
-        registry = self._tool_registry
-        if registry is None:
-            self._logger.debug(f"emotion '{emotion}' 触发条件不满足（tool_registry 缺失），跳过")
-            return
-
-        invocation = ToolInvocation(
-            tool_name="vts_set_expression",
-            arguments={
-                "parameters": dict(vts_params),
-                "weight": float(min(1.0, max(0.0, intensity))),
-            },
-            source="streamer_agent.emotion",
-        )
-
-        async def _invoke_vts() -> None:
-            try:
-                await registry.invoke(invocation)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 异步背景任务边界
-                self._logger.warning(f"VTS 表情调用异常（已忽略）: emotion={emotion}, err={exc}")
-
-        self._spawn(_invoke_vts(), label=f"VTS 表情 (emotion={emotion})")
