@@ -4,26 +4,20 @@ WarudoProvider - Warudo 虚拟形象工具集
 ToolProvider 协议实现，编排各引擎子件（``WarudoStateManager`` / 后台任务 /
 ``WarudoSubtitleManager`` / ``ActionSender``）：
 
-- 暴露的工具：
-  - ``warudo_set_expression``   - 设置 blendshape 表情参数
-  - ``warudo_trigger_hotkey``   - 触发热键
-  - ``warudo_trigger_body``     - 触发身体动作
-  - ``warudo_trigger_head``     - 触发头部动作
-  - ``warudo_trigger_action``   - 直接动作（蓝图节点名）
-  - ``warudo_set_subtitle``     - 推送字幕文本
-  - ``warudo_throw_fish``       - 抛鱼动画（带冷却）
-  - ``warudo_set_sight``        - 设置视线状态
-  - ``warudo_set_eyebrow``      - 设置眉毛状态
-  - ``warudo_set_eye``          - 设置眼睛状态
-  - ``warudo_set_pupil``        - 设置瞳孔方向
-  - ``warudo_set_mouth``        - 设置嘴巴第一层状态
-  - ``warudo_get_stats``        - 读取状态统计
+- 暴露的工具（同语义跨后端同名同参数形状，契约见 ``avatar.protocol``）：
+  - ``warudo_set_expression``        - 设置情绪（17 枚举值 + 强度）
+  - ``warudo_list_preset_actions``   - 列出可演预设（动作目录 + 内置条目）
+  - ``warudo_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）
+  - ``warudo_set_sight``             - 设置视线（看镜头/看弹幕/看手机）
+
+眉毛/眼睛/瞳孔/嘴部等 blendshape 状态件是情绪映射与氛围任务的内部通道
+（方法保留供机件调用），不再对 LLM 暴露。被收敛的历史工具的方法保留，
+仅撤 LLM 工具注册。
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import Field
@@ -33,6 +27,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
+from src.modules.types.emotion_vocab import Emotion
 
 from .state.warudo_state_manager import WarudoStateManager
 from .subtitle.subtitle_manager import WarudoSubtitleManager
@@ -64,62 +59,72 @@ except ImportError:
 _WARUDO_SET_EXPRESSION_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "name": {"type": "string", "description": "blendshape 参数名"},
-        "value": {"type": "number", "description": "目标值"},
+        "emotion": {
+            "type": "string",
+            "enum": [e.value for e in Emotion],
+            "description": "情绪（17 枚举值之一，小写）",
+        },
+        "intensity": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "default": 0.5,
+            "description": "情绪强度（0.0–1.0；1.0 为该情绪的完整幅度）",
+        },
     },
-    "required": ["name", "value"],
+    "required": ["emotion"],
 }
 
-_WARUDO_TRIGGER_HOTKEY_SCHEMA: Dict[str, Any] = {
+_WARUDO_TRIGGER_PRESET_ACTION_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "hotkey_id": {"type": "string", "description": "热键 ID（动作名）"},
-    },
-    "required": ["hotkey_id"],
-}
-
-_WARUDO_BODY_ACTION_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action": {"type": "string", "description": "身体动作（中文）"},
+        "action": {
+            "type": "string",
+            "description": "预设动作名（取自 warudo_list_preset_actions 返回的目录）",
+        },
     },
     "required": ["action"],
 }
 
-_WARUDO_HEAD_ACTION_SCHEMA: Dict[str, Any] = {
+_WARUDO_SET_SIGHT_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "action": {"type": "string", "description": "头部动作（中文）"},
+        "target": {
+            "type": "string",
+            "enum": ["camera", "danmu", "phone"],
+            "description": "视线目标：camera=看镜头 / danmu=看弹幕 / phone=看手机",
+        },
     },
-    "required": ["action"],
+    "required": ["target"],
 }
 
-_WARUDO_DIRECT_ACTION_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action": {"type": "string", "description": "直接动作（蓝图节点名）"},
-        "data": {"type": "number", "description": "Integer 数据"},
-    },
-    "required": ["action"],
+
+# 情绪 → Warudo blendshape 状态映射（词表 17 值全覆盖）。
+# 值 = {通道: (状态键, 满幅权重)}；状态键是 Warudo 项目的 blendshape 预设名
+# （与 warudo_state_manager 的 ALL_*_STATE 常量对齐），强度在 set_expression
+# 中按线性缩放施加。解析细节是适配器实现自由，架构不约束映射结果。
+_WARUDO_EMOTION_STATES: Dict[str, Dict[str, tuple]] = {
+    "neutral": {},
+    "happy": {"mouth": ("mouth_happy_strong", 1.0), "eyebrow": ("eyebrow_happy_weak", 0.8)},
+    "sad": {"mouth": ("mouth_sad_weak", 1.0), "eyebrow": ("eyebrow_sad_weak", 0.9)},
+    "angry": {"mouth": ("mouth_angry_weak", 1.0), "eyebrow": ("eyebrow_angry_strong", 0.9)},
+    "surprised": {"mouth": ("mouth_smlie_teeth", 0.6), "eyebrow": ("eyebrow_happy_strong", 1.0)},
+    "scared": {"eyebrow": ("eyebrow_sad_strong", 1.0), "eye": ("eye_happy_strong", 0.5)},
+    "disgusted": {"mouth": ("mouth_angry_weak", 0.6), "eyebrow": ("eyebrow_angry_weak", 0.7)},
+    "shy": {"mouth": ("mouth_smlie_2", 0.8), "eyebrow": ("eyebrow_happy_weak", 0.4)},
+    "embarrassed": {"mouth": ("mouth_smlie_3", 0.7), "eyebrow": ("eyebrow_sad_weak", 0.3)},
+    "confused": {"eyebrow": ("eyebrow_sad_weak", 0.6), "mouth": ("mouth_smlie_2", 0.2)},
+    "love": {"mouth": ("mouth_happy_strong", 0.9), "eye": ("eye_happy_strong", 1.0)},
+    "excited": {"mouth": ("mouth_smlie_teeth", 1.0), "eyebrow": ("eyebrow_happy_strong", 0.9)},
+    "smug": {"mouth": ("mouth_smlie_3", 0.9), "eyebrow": ("eyebrow_happy_weak", 0.5)},
+    "serious": {"eyebrow": ("eyebrow_angry_weak", 0.5), "mouth": ("mouth_angry_weak", 0.3)},
+    "tired": {"eye": ("eye_close", 0.6), "mouth": ("mouth_smlie_2", 0.1)},
+    "crying": {"eye": ("eye_close", 0.8), "mouth": ("mouth_sad_weak", 1.0), "eyebrow": ("eyebrow_sad_strong", 0.8)},
+    "speechless": {"eyebrow": ("eyebrow_angry_weak", 0.2)},
 }
 
-_WARUDO_PUSH_SUBTITLE_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "speech": {"type": "string", "description": "字幕文本"},
-        "user_name": {"type": "string", "default": "MaiBot", "description": "用户名"},
-    },
-    "required": ["speech"],
-}
-
-_WARUDO_STATE_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "key": {"type": "string", "description": "状态键"},
-        "intensity": {"type": "number", "description": "强度（0.0~1.0）"},
-    },
-    "required": ["key"],
-}
+# 内置预设动作（除配置 action_catalog 外固定可演的条目）
+_THROW_FISH_ACTION = "throw_fish"
 
 
 # =============================================================================
@@ -242,108 +247,40 @@ class WarudoProvider(BaseToolProvider):
     def name(self) -> str:
         return self.PROVIDER_NAME
 
-    def _action_catalog_summary(self) -> str:
-        """生成动作目录文本（拼入动作类工具描述，LLM 据此选动作名调用）。
-
-        Warudo 侧无法枚举蓝图动作，目录来自 ``[tools.avatar.warudo.config]
-        action_catalog`` 配置预声明；未配置时返回空串（描述退化为基础版）。
-        """
-        if not self.action_catalog:
-            return ""
-        items = "、".join(f"{name}（{desc}）" if desc else name for name, desc in self.action_catalog.items())
-        return f"。可用动作：{items}"
+    def _preset_action_catalog(self) -> list:
+        """预设动作目录：配置 ``action_catalog`` 条目 + 内置条目（抛鱼，带冷却）。"""
+        catalog = [{"name": name, "description": desc} for name, desc in self.action_catalog.items()]
+        catalog.append({"name": _THROW_FISH_ACTION, "description": "抛鱼动画（内置，带冷却）"})
+        return catalog
 
     def list_tools(self) -> list[ToolSpec]:
-        catalog = self._action_catalog_summary()
         return [
             ToolSpec(
                 name="set_expression",
-                description="Warudo 设置 blendshape 表情参数",
+                description="Warudo 设置主播当前情绪（17 枚举值 + 强度，持续生效直至下次设置）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_SET_EXPRESSION_SCHEMA,
             ),
             ToolSpec(
-                name="trigger_hotkey",
-                description="Warudo 触发热键（按动作名）" + catalog,
+                name="list_preset_actions",
+                description="列出 Warudo 可演的预设动作目录（配置登记的蓝图动作 + 内置条目）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_TRIGGER_HOTKEY_SCHEMA,
             ),
             ToolSpec(
-                name="trigger_body",
-                description="Warudo 触发身体动作（姿势.json 蓝图）" + catalog,
+                name="trigger_preset_action",
+                description="触发一个预设动作（动作名取自 warudo_list_preset_actions 返回的目录）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_BODY_ACTION_SCHEMA,
-            ),
-            ToolSpec(
-                name="trigger_head",
-                description="Warudo 触发头部动作（头部动态.json 蓝图）" + catalog,
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_HEAD_ACTION_SCHEMA,
-            ),
-            ToolSpec(
-                name="trigger_action",
-                description="Warudo 直接动作（蓝图节点名）" + catalog,
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_DIRECT_ACTION_SCHEMA,
-            ),
-            ToolSpec(
-                name="set_subtitle",
-                description="Warudo 推送字幕文本（one-shot 模式）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_PUSH_SUBTITLE_SCHEMA,
-            ),
-            ToolSpec(
-                name="throw_fish",
-                description="Warudo 抛鱼动画（带冷却）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
+                parameters_schema=_WARUDO_TRIGGER_PRESET_ACTION_SCHEMA,
             ),
             ToolSpec(
                 name="set_sight",
-                description="Warudo 设置视线状态（camera/danmu/phone）",
+                description="Warudo 设置视线目标（看镜头/看弹幕/看手机）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_STATE_SCHEMA,
-            ),
-            ToolSpec(
-                name="set_eyebrow",
-                description="Warudo 设置眉毛状态",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_STATE_SCHEMA,
-            ),
-            ToolSpec(
-                name="set_eye",
-                description="Warudo 设置眼睛状态",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_STATE_SCHEMA,
-            ),
-            ToolSpec(
-                name="set_pupil",
-                description="Warudo 设置瞳孔方向",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_STATE_SCHEMA,
-            ),
-            ToolSpec(
-                name="set_mouth",
-                description="Warudo 设置嘴巴第一层状态",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_STATE_SCHEMA,
-            ),
-            ToolSpec(
-                name="get_stats",
-                description="读取 Warudo 状态统计",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
+                parameters_schema=_WARUDO_SET_SIGHT_SCHEMA,
             ),
         ]
 
@@ -352,46 +289,81 @@ class WarudoProvider(BaseToolProvider):
         try:
             n = invocation.tool_name
             if n == "warudo_set_expression":
-                return _ok(n, True, await self._send_expression(str(args["name"]), float(args["value"])))
-            if n == "warudo_trigger_hotkey":
-                return _ok(n, True, await self._send_hotkey(str(args["hotkey_id"])))
-            if n == "warudo_trigger_body":
-                return _ok(n, True, await self._send_action_internal("body_action", str(args["action"])))
-            if n == "warudo_trigger_head":
-                return _ok(n, True, await self._send_action_internal("head_action", str(args["action"])))
-            if n == "warudo_trigger_action":
-                return _ok(
-                    n,
-                    True,
-                    await self._send_action_internal(str(args["action"]), int(args.get("data", 1))),
-                )
-            if n == "warudo_set_subtitle":
-                await self.push_subtitle(str(args["speech"]), str(args.get("user_name", "MaiBot")))
-                return _ok(n, True)
-            if n == "warudo_throw_fish":
-                await self.throw_fish_task.throw_fish()
-                return _ok(n, True)
+                return await self.set_expression(str(args.get("emotion", "")), float(args.get("intensity", 0.5)))
+            if n == "warudo_list_preset_actions":
+                return await self.list_preset_actions()
+            if n == "warudo_trigger_preset_action":
+                return await self.trigger_preset_action(str(args.get("action", "")))
             if n == "warudo_set_sight":
-                self.state_manager.sight_state.set_state(str(args["key"]), float(args.get("intensity", 1.0)))
-                return _ok(n, True)
-            if n == "warudo_set_eyebrow":
-                self.state_manager.eyebrow_state.set_first_layer(str(args["key"]), float(args.get("intensity", 1.0)))
-                return _ok(n, True)
-            if n == "warudo_set_eye":
-                self.state_manager.eye_state.set_first_layer(str(args["key"]), float(args.get("intensity", 1.0)))
-                return _ok(n, True)
-            if n == "warudo_set_pupil":
-                self.state_manager.pupil_state.set_state(str(args["key"]), float(args.get("intensity", 1.0)))
-                return _ok(n, True)
-            if n == "warudo_set_mouth":
-                self.state_manager.mouth_state.set_first_layer(str(args["key"]), float(args.get("intensity", 1.0)))
-                return _ok(n, True)
-            if n == "warudo_get_stats":
-                return _ok(n, True, self.get_stats())
+                return await self.set_sight(str(args.get("target", "")))
             return _fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
         except Exception as exc:  # noqa: BLE001 — Provider 边界兜底
             self.logger.exception(f"Warudo 工具 {invocation.tool_name} 调用异常: {exc}")
             return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
+
+    # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
+
+    async def set_expression(self, emotion: str, intensity: float) -> ToolExecutionResult:
+        """设置当前情绪：查映射表 → 按强度缩放 → 写 blendshape 状态件。
+
+        状态件的写入经监控循环推送到 Warudo（``changed`` 标志驱动）；
+        换情绪时各通道 ``set_first_layer`` 自带清零，旧状态不残留。
+        """
+        states = _WARUDO_EMOTION_STATES.get(emotion)
+        if states is None:
+            return _fail("warudo_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
+        factor = min(1.0, max(0.0, float(intensity)))
+        applied: Dict[str, Any] = {}
+        state_manager = self.state_manager
+        channels = {
+            "eyebrow": state_manager.eyebrow_state,
+            "eye": state_manager.eye_state,
+            "mouth": state_manager.mouth_state,
+        }
+        for channel, (key, weight) in states.items():
+            component = channels.get(channel)
+            if component is None:
+                continue
+            component.set_first_layer(key, weight * factor)
+            applied[channel] = {"key": key, "weight": round(weight * factor, 4)}
+        return _ok("warudo_set_expression", True, {"emotion": emotion, "intensity": factor, "applied": applied})
+
+    async def list_preset_actions(self) -> ToolExecutionResult:
+        """列出可演预设目录（配置 ``action_catalog`` + 内置条目）。"""
+        return _ok("warudo_list_preset_actions", True, {"actions": self._preset_action_catalog()})
+
+    async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
+        """触发一个预设动作；未知名把目录随失败结果返回（失败即发现）。
+
+        内置条目 ``throw_fish`` 走冷却任务（冷却中经结果载荷告知）；其余
+        条目按配置登记的动作名直发蓝图。
+        """
+        action = action.strip()
+        if action == _THROW_FISH_ACTION:
+            fired = await self.throw_fish_task.throw_fish()
+            return _ok(
+                "warudo_trigger_preset_action",
+                True,
+                {"action": action, "fired": bool(fired), "cooldown_seconds": self.throw_fish_cooldown},
+            )
+        if action in self.action_catalog:
+            await self._send_action_internal(action, 1)
+            return _ok("warudo_trigger_preset_action", True, {"action": action})
+        catalog = [entry["name"] for entry in self._preset_action_catalog()]
+        return ToolExecutionResult(
+            tool_name="warudo_trigger_preset_action",
+            success=False,
+            error_message=f"未知预设动作 '{action}'",
+            structured_content={"available_actions": catalog},
+            content=str(catalog),
+        )
+
+    async def set_sight(self, target: str) -> ToolExecutionResult:
+        """设置视线目标（camera/danmu/phone）；程度由适配器定（满幅）。"""
+        if target not in ("camera", "danmu", "phone"):
+            return _fail("warudo_set_sight", f"未知视线目标 '{target}'（应为 camera/danmu/phone）")
+        self.state_manager.sight_state.set_state(target, 1.0)
+        return _ok("warudo_set_sight", True, {"target": target})
 
     # ===== 生命周期 =====
 
@@ -510,38 +482,6 @@ class WarudoProvider(BaseToolProvider):
             await self._action_sender.send_action(action, data)
         except Exception as e:
             self.logger.error(f"发送动作失败: {action}: {e}")
-
-    async def _send_expression(self, param_name: str, param_value: float) -> bool:
-        if not self._is_ready_to_send():
-            self.logger.warning(f"Warudo 未连接，无法设置参数: {param_name} = {param_value}")
-            return False
-        try:
-            message = {"action": param_name, "data": param_value}
-            if hasattr(self.websocket, "send_json"):
-                await self.websocket.send_json(message)
-            else:
-                await self.websocket.send(json.dumps(message))
-            self.logger.debug(f"设置 Warudo 参数: {param_name} = {param_value}")
-            return True
-        except Exception as e:
-            self.logger.error(f"设置 Warudo 参数失败: {param_name}: {e}")
-            return False
-
-    async def _send_hotkey(self, hotkey_id: str) -> bool:
-        if not self._is_ready_to_send():
-            self.logger.warning(f"Warudo 未连接，无法触发热键: {hotkey_id}")
-            return False
-        try:
-            message = {"action": hotkey_id, "data": ""}
-            if hasattr(self.websocket, "send_json"):
-                await self.websocket.send_json(message)
-            else:
-                await self.websocket.send(json.dumps(message))
-            self.logger.debug(f"触发热键: {hotkey_id}")
-            return True
-        except Exception as e:
-            self.logger.error(f"触发热键失败: {hotkey_id}: {e}")
-            return False
 
     def _is_ready_to_send(self) -> bool:
         if not self._is_connected or self.websocket is None:

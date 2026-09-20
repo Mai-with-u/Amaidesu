@@ -1,23 +1,18 @@
 """
 VTSProvider - VTS 虚拟形象工具集
 
-ToolProvider 协议实现，把 VTS 全家桶能力封装为工具：
+ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动半）：
 
 - 引擎子件（``LipSyncProcessor`` / ``ExpressionController`` / ``HotkeyMatcher``
   / ``IdleMotionController``）经 callback 解耦，可独立复用。
-- 暴露的工具：
-  - ``vts_smile``             - 设置 MouthSmile 参数
-  - ``vts_close_eyes``        - 闭眼
-  - ``vts_open_eyes``         - 睁眼
-  - ``vts_set_expression``    - 设置多个表情参数（multi-parameter）
-  - ``vts_set_parameter_value`` - 设置单参数
-  - ``vts_get_parameter_value``  - 读取参数
-  - ``vts_trigger_hotkey``    - 触发热键
-  - ``vts_load_item``         - 加载 VTS 道具/贴纸
-  - ``vts_load_sticker``      - 直接调用加载贴纸文件（file_name 为 VTS 可访问路径）
-  - ``vts_set_idle_enabled``  - 启停 idle 拟人动画
-  - ``vts_reconnect``         - 手动触发重连
-  - ``vts_get_stats``         - 读取状态统计
+- 暴露的工具（同语义跨后端同名同参数形状，契约见 ``avatar.protocol``）：
+  - ``vts_set_expression``        - 设置情绪（17 枚举值 + 强度）
+  - ``vts_list_preset_actions``   - 列出可演预设（VTS 热键目录）
+  - ``vts_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）
+  - ``vts_set_idle_enabled``      - 启停 idle 拟人动画
+
+被收敛的历史工具（微旋钮 / 运维件 / 不可发现件）的 Python 方法保留供
+内部机件调用，仅撤 LLM 工具注册。
 """
 
 from __future__ import annotations
@@ -36,6 +31,7 @@ from src.modules.tools.models import (
     ToolSpec,
 )
 from src.modules.tools.provider import BaseToolProvider
+from src.modules.types.emotion_vocab import Emotion
 
 from .expression_controller import ExpressionController
 from .hotkey_matcher import HotkeyMatcher
@@ -50,80 +46,34 @@ if TYPE_CHECKING:
 # 工具的 JSON Schema 描述
 # =============================================================================
 
-_VTS_SMILE_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "value": {
-            "type": "number",
-            "default": 1.0,
-            "minimum": -1.0,
-            "maximum": 1.0,
-            "description": "MouthSmile 参数值",
-        }
-    },
-}
-
 _VTS_SET_EXPRESSION_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "parameters": {
-            "type": "object",
-            "description": "参数名 -> 数值 映射",
-            "additionalProperties": {"type": "number"},
+        "emotion": {
+            "type": "string",
+            "enum": [e.value for e in Emotion],
+            "description": "情绪（17 枚举值之一，小写）",
         },
-        "weight": {
+        "intensity": {
             "type": "number",
-            "default": 1.0,
-            "description": "VTS 权重参数（与跟踪输入的混合权重）",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "default": 0.5,
+            "description": "情绪强度（0.0–1.0；1.0 为该情绪的完整幅度）",
         },
     },
-    "required": ["parameters"],
+    "required": ["emotion"],
 }
 
-_VTS_SET_PARAMETER_SCHEMA: Dict[str, Any] = {
+_VTS_TRIGGER_PRESET_ACTION_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "name": {"type": "string", "description": "VTS 参数名"},
-        "value": {"type": "number", "description": "目标值"},
-        "weight": {"type": "number", "default": 1.0, "description": "权重"},
+        "action": {
+            "type": "string",
+            "description": "预设动作名（取自 vts_list_preset_actions 返回的目录）",
+        },
     },
-    "required": ["name", "value"],
-}
-
-_VTS_GET_PARAMETER_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string", "description": "VTS 参数名"},
-    },
-    "required": ["name"],
-}
-
-_VTS_TRIGGER_HOTKEY_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string", "description": "VTS 热键名称（优先；连接后可从工具描述中的可用热键清单选取）"},
-        "hotkey_id": {"type": "string", "description": "VTS 热键 ID（兜底；name 未匹配时使用）"},
-    },
-}
-
-_VTS_LOAD_ITEM_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "file_name": {"type": "string", "default": "filename.png"},
-        "position_x": {"type": "number", "default": 0},
-        "position_y": {"type": "number", "default": 0.5},
-        "size": {"type": "number", "default": 0.33},
-        "rotation": {"type": "number", "default": 90},
-        "fade_time": {"type": "number", "default": 0.5},
-        "order": {"type": "integer", "default": 4},
-        "fail_if_order_taken": {"type": "boolean", "default": False},
-        "smoothing": {"type": "number", "default": 0},
-        "censored": {"type": "boolean", "default": False},
-        "flipped": {"type": "boolean", "default": False},
-        "locked": {"type": "boolean", "default": False},
-        "unload_when_plugin_disconnects": {"type": "boolean", "default": True},
-        "custom_data_base64": {"type": "string", "default": ""},
-    },
+    "required": ["action"],
 }
 
 _VTS_SET_IDLE_SCHEMA: Dict[str, Any] = {
@@ -246,17 +196,81 @@ class VTSProvider(BaseToolProvider):
         self.lip_sync_enabled: bool = self.typed_config.lip_sync_enabled
         self.sample_rate: int = self.typed_config.sample_rate
 
-        self._emotion_map = {
-            "happy": {"MouthSmile": 1.0},
-            "surprised": {"EyeOpenLeft": 1.0, "EyeOpenRight": 1.0, "MouthOpen": 0.5},
-            "sad": {"MouthSmile": -0.3, "EyeOpenLeft": 0.7, "EyeOpenRight": 0.7},
-            "angry": {"EyeOpenLeft": 0.6, "EyeOpenRight": 0.6, "MouthSmile": -0.5},
-            "shy": {"MouthSmile": 0.3, "EyeOpenLeft": 0.8, "EyeOpenRight": 0.8},
-            "love": {"MouthSmile": 0.8, "EyeOpenLeft": 0.9, "EyeOpenRight": 0.9},
-            "excited": {"MouthSmile": 1.0, "EyeOpenLeft": 1.0, "EyeOpenRight": 1.0},
-            "confused": {"EyeOpenLeft": 0.7, "EyeOpenRight": 0.7, "MouthOpen": 0.2},
-            "scared": {"EyeOpenLeft": 0.5, "EyeOpenRight": 0.5, "MouthOpen": 0.3},
+        # 情绪 → VTS 参数映射（词表 17 值全覆盖；键取 Emotion.value 小写）。
+        # VTS 可驱动的面部参数用足（嘴/眼/眉/脸颊/舌头/水平嘴/FaceAngry），
+        # 各值落在不同的参数组合上；强度在 set_expression 中按线性缩放施加。
+        self._emotion_map: Dict[str, Dict[str, float]] = {
             "neutral": {},
+            "happy": {"MouthSmile": 0.8, "BrowLeftY": 0.6, "BrowRightY": 0.6},
+            "sad": {"MouthSmile": -0.4, "BrowLeftY": 0.15, "BrowRightY": 0.15, "EyeOpenLeft": 0.6, "EyeOpenRight": 0.6},
+            "angry": {"MouthSmile": -0.6, "FaceAngry": 0.9, "BrowLeftY": 0.2, "BrowRightY": 0.2, "MouthOpen": 0.1},
+            "surprised": {
+                "EyeOpenLeft": 1.0,
+                "EyeOpenRight": 1.0,
+                "MouthOpen": 0.5,
+                "BrowLeftY": 1.0,
+                "BrowRightY": 1.0,
+            },
+            "scared": {
+                "EyeOpenLeft": 0.7,
+                "EyeOpenRight": 0.7,
+                "MouthOpen": 0.4,
+                "BrowLeftY": 0.9,
+                "BrowRightY": 0.5,
+                "FaceAngry": -0.4,
+            },
+            "disgusted": {
+                "MouthX": -0.3,
+                "TongueOut": 0.2,
+                "FaceAngry": 0.4,
+                "EyeOpenLeft": 0.5,
+                "EyeOpenRight": 0.5,
+                "CheekPuff": 0.2,
+            },
+            "shy": {"MouthSmile": 0.35, "EyeOpenLeft": 0.55, "EyeOpenRight": 0.55, "CheekPuff": 0.15},
+            "embarrassed": {"MouthSmile": 0.2, "MouthX": 0.25, "EyeOpenLeft": 0.5, "EyeOpenRight": 0.65},
+            "confused": {
+                "EyeOpenLeft": 0.75,
+                "EyeOpenRight": 0.95,
+                "BrowLeftY": 0.95,
+                "BrowRightY": 0.4,
+                "MouthX": 0.15,
+            },
+            "love": {"MouthSmile": 0.9, "EyeOpenLeft": 0.35, "EyeOpenRight": 0.35, "CheekPuff": 0.2},
+            "excited": {
+                "MouthSmile": 1.0,
+                "EyeOpenLeft": 1.0,
+                "EyeOpenRight": 1.0,
+                "MouthOpen": 0.4,
+                "BrowLeftY": 0.85,
+                "BrowRightY": 0.85,
+            },
+            "smug": {"MouthSmile": 0.5, "EyeOpenLeft": 0.3, "EyeOpenRight": 0.45, "BrowLeftY": 0.7, "BrowRightY": 0.3},
+            "serious": {
+                "MouthSmile": -0.1,
+                "BrowLeftY": 0.15,
+                "BrowRightY": 0.15,
+                "EyeOpenLeft": 0.85,
+                "EyeOpenRight": 0.85,
+                "FaceAngry": 0.25,
+            },
+            "tired": {"EyeOpenLeft": 0.3, "EyeOpenRight": 0.25, "MouthOpen": 0.12, "BrowLeftY": 0.1, "BrowRightY": 0.1},
+            "crying": {
+                "EyeOpenLeft": 0.2,
+                "EyeOpenRight": 0.2,
+                "MouthOpen": 0.35,
+                "MouthSmile": -0.5,
+                "BrowLeftY": 0.1,
+                "BrowRightY": 0.1,
+            },
+            "speechless": {
+                "MouthSmile": 0.0,
+                "MouthOpen": 0.06,
+                "EyeOpenLeft": 0.8,
+                "EyeOpenRight": 0.8,
+                "BrowLeftY": 0.3,
+                "BrowRightY": 0.3,
+            },
         }
 
         self._vts: Any = None
@@ -339,86 +353,34 @@ class VTSProvider(BaseToolProvider):
         return self.PROVIDER_NAME
 
     def list_tools(self) -> List[ToolSpec]:
-        """声明本 Provider 暴露的工具列表（热键描述按连接状态动态携带可用清单）"""
+        """声明本 Provider 暴露的工具列表（预设目录走 list_preset_actions 结果，不进描述）"""
         return [
             ToolSpec(
-                name="smile",
-                description="设置 VTS MouthSmile 表情参数",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_VTS_SMILE_SCHEMA,
-            ),
-            ToolSpec(
-                name="close_eyes",
-                description="VTS 闭眼动作（EyeOpenLeft/Right=0）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-            ),
-            ToolSpec(
-                name="open_eyes",
-                description="VTS 睁眼动作（EyeOpenLeft/Right=1）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-            ),
-            ToolSpec(
                 name="set_expression",
-                description="VTS 批量设置表情参数（multi-parameter 写入）",
+                description="VTS 设置主播当前情绪（17 枚举值 + 强度，持续生效直至下次设置）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_SET_EXPRESSION_SCHEMA,
             ),
             ToolSpec(
-                name="set_parameter_value",
-                description="VTS 设置单个参数值",
+                name="list_preset_actions",
+                description="列出 VTS 可演的预设动作目录（连接后的热键清单；贴纸/道具已绑成热键的也在列）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
-                parameters_schema=_VTS_SET_PARAMETER_SCHEMA,
             ),
             ToolSpec(
-                name="get_parameter_value",
-                description="VTS 读取参数当前值",
+                name="trigger_preset_action",
+                description="触发一个预设动作（动作名取自 vts_list_preset_actions 返回的目录）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
-                parameters_schema=_VTS_GET_PARAMETER_SCHEMA,
-            ),
-            ToolSpec(
-                name="trigger_hotkey",
-                description="VTS 触发热键（按热键名 name 优先，hotkey_id 兜底）" + self._hotkey_catalog_summary(),
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_VTS_TRIGGER_HOTKEY_SCHEMA,
-            ),
-            ToolSpec(
-                name="load_item",
-                description="VTS 加载道具（VTube Studio ItemLoadRequest）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_VTS_LOAD_ITEM_SCHEMA,
-            ),
-            ToolSpec(
-                name="load_sticker",
-                description="VTS 加载贴纸文件（file_name 为 VTS 可访问路径）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
+                parameters_schema=_VTS_TRIGGER_PRESET_ACTION_SCHEMA,
             ),
             ToolSpec(
                 name="set_idle_enabled",
-                description="VTS 启停 idle 拟人动画",
+                description="VTS 启停 idle 拟人动画（呼吸/摆头/身体摇摆）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_SET_IDLE_SCHEMA,
-            ),
-            ToolSpec(
-                name="reconnect",
-                description="手动触发 VTS 重连循环",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-            ),
-            ToolSpec(
-                name="get_stats",
-                description="读取 VTS 状态统计信息",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
             ),
         ]
 
@@ -426,60 +388,18 @@ class VTSProvider(BaseToolProvider):
         """ToolProvider.invoke：分发到对应的 handler 方法。"""
         args = invocation.arguments or {}
         try:
-            if invocation.tool_name == "vts_smile":
-                return _ok("vts_smile", await self.smile(float(args.get("value", 1.0))))
-            if invocation.tool_name == "vts_close_eyes":
-                return _ok("vts_close_eyes", await self.close_eyes())
-            if invocation.tool_name == "vts_open_eyes":
-                return _ok("vts_open_eyes", await self.open_eyes())
             if invocation.tool_name == "vts_set_expression":
-                return _ok(
-                    "vts_set_expression",
-                    await self.expression.set_multi_parameter(
-                        dict(args.get("parameters", {})),
-                        float(args.get("weight", 1.0)),
-                    ),
+                return await self.set_expression(
+                    str(args.get("emotion", "")),
+                    float(args.get("intensity", 0.5)),
                 )
-            if invocation.tool_name == "vts_set_parameter_value":
-                return _ok(
-                    "vts_set_parameter_value",
-                    await self.set_parameter_value(
-                        str(args["name"]), float(args["value"]), float(args.get("weight", 1.0))
-                    ),
-                )
-            if invocation.tool_name == "vts_get_parameter_value":
-                value = await self.get_parameter_value(str(args["name"]))
-                return _ok("vts_get_parameter_value", value is not None, {"value": value})
-            if invocation.tool_name == "vts_trigger_hotkey":
-                return _ok(
-                    "vts_trigger_hotkey",
-                    await self.trigger_hotkey(
-                        name=str(args.get("name", "") or ""),
-                        hotkey_id=str(args.get("hotkey_id", "") or ""),
-                    ),
-                )
-            if invocation.tool_name == "vts_load_item":
-                instance_id = await self.load_item(**{k: v for k, v in args.items() if k != ""})
-                return _ok("vts_load_item", instance_id is not None, {"instance_id": instance_id})
-            if invocation.tool_name == "vts_load_sticker":
-                instance_id = await self.load_item(
-                    file_name=str(args.get("file_name", "sticker.png")),
-                    custom_data_base64=str(args.get("image_base64", "")),
-                    size=float(args.get("size", 0.33)),
-                    rotation=int(args.get("rotation", 0)),
-                    position_x=float(args.get("position_x", 0.0)),
-                    position_y=float(args.get("position_y", 0.0)),
-                )
-                return _ok("vts_load_sticker", instance_id is not None, {"instance_id": instance_id})
+            if invocation.tool_name == "vts_list_preset_actions":
+                return await self.list_preset_actions()
+            if invocation.tool_name == "vts_trigger_preset_action":
+                return await self.trigger_preset_action(str(args.get("action", "")))
             if invocation.tool_name == "vts_set_idle_enabled":
                 self._set_idle_enabled(bool(args["enabled"]))
                 return _ok("vts_set_idle_enabled", True)
-            if invocation.tool_name == "vts_reconnect":
-                if self._is_connected:
-                    self._is_connected = False
-                return _ok("vts_reconnect", True)
-            if invocation.tool_name == "vts_get_stats":
-                return _ok("vts_get_stats", True, self.get_stats())
             return _fail(
                 invocation.tool_name,
                 f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'",
@@ -557,16 +477,55 @@ class VTSProvider(BaseToolProvider):
     async def get_parameter_value(self, parameter_name: str) -> Optional[float]:
         return await self.expression.get_parameter(parameter_name)
 
-    def _hotkey_catalog_summary(self) -> str:
-        """生成可用热键清单文本（拼入 vts_trigger_hotkey 描述，LLM 据此选名调用）。
+    # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
 
-        热键列表在 VTS 连接后由 ``HotkeyMatcher.load_hotkeys`` 加载；未连接 /
-        未加载时返回空串（描述退化为不含清单的基础版）。
+    async def set_expression(self, emotion: str, intensity: float) -> ToolExecutionResult:
+        """设置当前情绪：查映射表 → 按强度线性缩放 → 批量写入 VTS 参数。
+
+        强度语义：0.0 收回全部表情参数，1.0 为映射表完整幅度，线性内插；
+        ``neutral`` 映射为空参数表（表情交回 idle/基线渲染）。映射表外的
+        情绪名按失败结果返回（词表编译期已知，出现未知名即调用方契约破坏）。
         """
-        names = [str(hotkey.get("name", "")) for hotkey in self.hotkey_matcher.hotkey_list if hotkey.get("name")]
-        if not names:
-            return ""
-        return f"。当前可用热键：{'、'.join(names)}"
+        params = self._emotion_map.get(emotion)
+        if params is None:
+            return _fail("vts_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
+        factor = min(1.0, max(0.0, float(intensity)))
+        scaled = {name: value * factor for name, value in params.items()}
+        success = await self.expression.set_multi_parameter(scaled, 1.0)
+        return _ok(
+            "vts_set_expression",
+            bool(success),
+            {"emotion": emotion, "intensity": factor, "parameters": scaled},
+        )
+
+    async def list_preset_actions(self) -> ToolExecutionResult:
+        """列出可演预设目录（VTS 热键清单；未连接/未加载时为空列表）。
+
+        贴纸/道具在 VTS 内绑成热键后自然出现在目录中（``load_sticker``
+        的承载方式），不再单列工具。
+        """
+        actions = [
+            {"name": str(hotkey.get("name", "")), "type": str(hotkey.get("type", ""))}
+            for hotkey in self.hotkey_matcher.hotkey_list
+            if hotkey.get("name")
+        ]
+        return _ok("vts_list_preset_actions", True, {"actions": actions})
+
+    async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
+        """触发一个预设动作（按名解析热键）；未知名把目录随失败结果返回。"""
+        action = action.strip()
+        resolved = self.hotkey_matcher.find_by_name(action) if action else None
+        if not resolved:
+            catalog = [a["name"] for a in (await self.list_preset_actions()).structured_content["actions"]]
+            return ToolExecutionResult(
+                tool_name="vts_trigger_preset_action",
+                success=False,
+                error_message=f"未知预设动作 '{action}'",
+                structured_content={"available_actions": catalog},
+                content=str(catalog),
+            )
+        success = await self.hotkey_matcher.trigger_hotkey(resolved)
+        return _ok("vts_trigger_preset_action", bool(success), {"action": action})
 
     async def trigger_hotkey(self, name: str = "", hotkey_id: str = "") -> bool:
         """触发热键：按热键名解析（``find_by_name``）优先，``hotkey_id`` 兜底。

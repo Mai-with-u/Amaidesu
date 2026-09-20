@@ -3,10 +3,10 @@ VRChatProvider - VRChat OSC 虚拟形象工具集
 
 - 引擎：OSC 客户端初始化、参数写入、手势触发
 - ToolProvider 协议由本类自身实现
-- 暴露的工具：
-  - ``vrchat_set_expression``  - 设置 VRChat OSC 表情参数
-  - ``vrchat_trigger_gesture`` - 触发 VRChat 手势
-  - ``vrchat_get_stats``       - 读取统计信息
+- 暴露的工具（同语义跨后端同名同参数形状，契约见 ``avatar.protocol``）：
+  - ``vrchat_set_expression``        - 设置情绪（VRChat 无标准表情参数体系，返回未应用结果）
+  - ``vrchat_list_preset_actions``   - 列出可演预设（手势 enum）
+  - ``vrchat_trigger_preset_action`` - 触发预设手势（未知名随结果返回目录）
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
+from src.modules.types.emotion_vocab import Emotion
 
 # python-osc 软降级
 try:
@@ -34,32 +35,31 @@ except ImportError:
 _VRCHAT_SET_EXPRESSION_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "name": {"type": "string", "description": "VRChat OSC 参数名"},
-        "value": {"type": "number", "description": "目标值"},
-    },
-    "required": ["name", "value"],
-}
-
-_VRCHAT_TRIGGER_GESTURE_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "gesture": {
+        "emotion": {
             "type": "string",
-            "description": "VRChat 手势名（Neutral/Wave/Peace/...）",
-            "enum": [
-                "Neutral",
-                "Wave",
-                "Peace",
-                "ThumbsUp",
-                "RocknRoll",
-                "HandGun",
-                "Point",
-                "Victory",
-                "Cross",
-            ],
+            "enum": [e.value for e in Emotion],
+            "description": "情绪（17 枚举值之一，小写）",
+        },
+        "intensity": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "default": 0.5,
+            "description": "情绪强度（0.0–1.0）",
         },
     },
-    "required": ["gesture"],
+    "required": ["emotion"],
+}
+
+_VRCHAT_TRIGGER_PRESET_ACTION_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "description": "预设动作名（取自 vrchat_list_preset_actions 返回的手势目录）",
+        },
+    },
+    "required": ["action"],
 }
 
 
@@ -131,23 +131,27 @@ class VRChatProvider(BaseToolProvider):
         return [
             ToolSpec(
                 name="set_expression",
-                description="VRChat 设置 OSC 表情参数",
+                description=(
+                    "VRChat 设置主播当前情绪（17 枚举值 + 强度）。"
+                    "VRChat OSC 参数每 avatar 自定义、无标准表情通道，当前不渲染情绪面，"
+                    "手势类表达走 vrchat_trigger_preset_action"
+                ),
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VRCHAT_SET_EXPRESSION_SCHEMA,
             ),
             ToolSpec(
-                name="trigger_gesture",
-                description="VRChat 触发手势",
+                name="list_preset_actions",
+                description="列出 VRChat 可演的预设动作目录（手势清单）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
-                parameters_schema=_VRCHAT_TRIGGER_GESTURE_SCHEMA,
             ),
             ToolSpec(
-                name="get_stats",
-                description="读取 VRChat 状态统计",
+                name="trigger_preset_action",
+                description="触发一个预设动作（动作名取自 vrchat_list_preset_actions 返回的目录）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
+                parameters_schema=_VRCHAT_TRIGGER_PRESET_ACTION_SCHEMA,
             ),
         ]
 
@@ -156,17 +160,58 @@ class VRChatProvider(BaseToolProvider):
         try:
             n = invocation.tool_name
             if n == "vrchat_set_expression":
-                self._send_parameter(str(args["name"]), float(args["value"]))
-                return _ok(n, True)
-            if n == "vrchat_trigger_gesture":
-                self._trigger_gesture(str(args["gesture"]))
-                return _ok(n, True)
-            if n == "vrchat_get_stats":
-                return _ok(n, True, self.get_stats())
+                return await self.set_expression(str(args.get("emotion", "")), float(args.get("intensity", 0.5)))
+            if n == "vrchat_list_preset_actions":
+                return await self.list_preset_actions()
+            if n == "vrchat_trigger_preset_action":
+                return await self.trigger_preset_action(str(args.get("action", "")))
             return _fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
         except Exception as exc:  # noqa: BLE001
             self.logger.exception(f"VRChat 工具 {invocation.tool_name} 调用异常: {exc}")
             return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
+
+    # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
+
+    async def set_expression(self, emotion: str, intensity: float) -> ToolExecutionResult:
+        """设置当前情绪（能力差异的优雅降级面）。
+
+        VRChat OSC 参数体系每 avatar 自定义、无标准表情通道，本后端不渲染
+        情绪面：合法情绪名返回成功但 ``applied=False``（诚实告知未应用），
+        映射表外的情绪名按失败结果返回。手势类表达走 trigger_preset_action。
+        """
+        if emotion not in {e.value for e in Emotion}:
+            return _fail("vrchat_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
+        factor = min(1.0, max(0.0, float(intensity)))
+        return _ok(
+            "vrchat_set_expression",
+            True,
+            {
+                "emotion": emotion,
+                "intensity": factor,
+                "applied": False,
+                "reason": "VRChat OSC 无标准表情参数通道，情绪面不渲染",
+            },
+        )
+
+    async def list_preset_actions(self) -> ToolExecutionResult:
+        """列出可演预设目录（VRChat 内置手势 enum）。"""
+        actions = [{"name": name, "type": "gesture"} for name in self.GESTURE_MAP if name != "Neutral"]
+        return _ok("vrchat_list_preset_actions", True, {"actions": actions})
+
+    async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
+        """触发一个预设手势；未知名把目录随失败结果返回（失败即发现）。"""
+        action = action.strip()
+        if action in self.GESTURE_MAP and action != "Neutral":
+            self._trigger_gesture(action)
+            return _ok("vrchat_trigger_preset_action", True, {"action": action})
+        catalog = [entry["name"] for entry in (await self.list_preset_actions()).structured_content["actions"]]
+        return ToolExecutionResult(
+            tool_name="vrchat_trigger_preset_action",
+            success=False,
+            error_message=f"未知预设动作 '{action}'",
+            structured_content={"available_actions": catalog},
+            content=str(catalog),
+        )
 
     # ===== 生命周期 =====
 
@@ -185,17 +230,6 @@ class VRChatProvider(BaseToolProvider):
         self.logger.info(f"{self.__class__.__name__} 已停止")
 
     # ===== 业务方法 =====
-
-    def _send_parameter(self, param_name: str, value: float) -> None:
-        if not self._is_connected or not self.osc_client:
-            self.logger.warning("OSC 客户端未连接，无法发送参数")
-            return
-        try:
-            address = f"/avatar/parameters/{param_name}"
-            self.osc_client.send_message(address, value)
-            self.logger.debug(f"发送 OSC: {address} = {value}")
-        except Exception as e:
-            self.logger.error(f"发送 OSC 参数失败: {param_name} = {value}: {e}")
 
     def _trigger_gesture(self, gesture_name: str) -> None:
         if not self._is_connected or not self.osc_client:

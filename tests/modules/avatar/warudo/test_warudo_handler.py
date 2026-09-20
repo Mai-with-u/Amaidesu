@@ -44,21 +44,31 @@ class TestWarudoProviderRendering:
     @pytest.mark.asyncio
     async def test_invoke_set_expression(self, warudo_config, mock_event_bus):
         provider = WarudoProvider(warudo_config, event_bus=mock_event_bus)
-        mock_ws = MagicMock()
-        mock_ws.close_code = None
-        mock_ws.closed = False
-        mock_ws.send_json = AsyncMock()
-        provider.websocket = mock_ws
-        provider._is_connected = True
 
         result = await provider.invoke(
             ToolInvocation(
                 tool_name="warudo_set_expression",
-                arguments={"name": "mouth_smlie_3", "value": 1.0},
+                arguments={"emotion": "happy", "intensity": 1.0},
             )
         )
-        assert mock_ws.send_json.call_count >= 1
         assert result.success is True
+        # 情绪写入 blendshape 状态件（监控循环推送），不直连 WebSocket
+        assert result.structured_content["applied"]["mouth"] == {"key": "mouth_happy_strong", "weight": 1.0}
+
+    @pytest.mark.asyncio
+    async def test_invoke_sight_semantic_target(self, warudo_config, mock_event_bus):
+        """set_sight 语义参数：target 三值合法，程度由适配器定（满幅）。"""
+        provider = WarudoProvider(warudo_config, event_bus=mock_event_bus)
+
+        result = await provider.invoke(
+            ToolInvocation(tool_name="warudo_set_sight", arguments={"target": "camera"})
+        )
+        assert result.success is True
+
+        bad = await provider.invoke(
+            ToolInvocation(tool_name="warudo_set_sight", arguments={"target": "wall"})
+        )
+        assert bad.success is False
 
     @pytest.mark.asyncio
     async def test_invoke_returns_failure_when_not_connected(self, warudo_config, mock_event_bus):
@@ -69,8 +79,8 @@ class TestWarudoProviderRendering:
         # 关键：不应抛异常
         result = await provider.invoke(
             ToolInvocation(
-                tool_name="warudo_set_expression",
-                arguments={"name": "mouth_smlie_3", "value": 1.0},
+                tool_name="warudo_trigger_preset_action",
+                arguments={"action": "wave"},
             )
         )
         assert result is not None
