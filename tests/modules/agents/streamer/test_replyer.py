@@ -141,7 +141,6 @@ class TestReplyerGenerate:
         assert isinstance(result, dict)
         assert result["speech"] == "好耶！"
         assert result["emotion"]["name"] == "happy"
-        assert result["actions"] == []
         assert result["metadata"]["target"] == "m1"
         assert result["metadata"]["topic_summary"] == "打游戏"
 
@@ -289,7 +288,7 @@ class TestReplyerGenerate:
 
     @pytest.mark.asyncio
     async def test_replyer_ignores_non_reply_tool_calls(self) -> None:
-        """LLM 偶发非 reply 调用（工具面只有 reply，理论不该发生）→ 忽略，actions 恒空。"""
+        """LLM 偶发非 reply 调用（工具面只有 reply，理论不该发生）→ 忽略，正常产出。"""
         r, _llm, _prompt = _make_replyer(
             llm_response=_make_llm_response(
                 tool_calls=[
@@ -304,7 +303,6 @@ class TestReplyerGenerate:
         assert result is not None
         assert result["speech"] == "好的"
         assert result["emotion"]["name"] == "excited"
-        assert result["actions"] == []
 
     @pytest.mark.asyncio
     async def test_replyer_invalid_emotion_degrades(self) -> None:

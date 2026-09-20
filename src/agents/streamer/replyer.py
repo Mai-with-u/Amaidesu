@@ -184,14 +184,12 @@ class Replyer:
             self.logger.warning(f"Replyer 情绪 '{emotion_name}' 不在枚举中，降级为 neutral")
             emotion_name = "neutral"
 
-        # actions 恒空——动作执行归 Planner ReAct 循环的 registry 工具调用
         result = {
             "speech": speech,
             "emotion": {
                 "name": emotion_name,
                 "intensity": emotion_intensity,
             },
-            "actions": [],
             "metadata": {
                 "source_id": "streamer_agent",
                 "target": plan.target,
@@ -207,9 +205,7 @@ class Replyer:
             self.logger.warning("Replyer 输出被 word filter 丢弃（drop_on_match=True）")
             return None
 
-        self.logger.info(
-            f"Replyer 生成回复: speech={result.get('speech', '')[:50]!r}, actions={len(result.get('actions', []))}"
-        )
+        self.logger.info(f"Replyer 生成回复: speech={result.get('speech', '')[:50]!r}")
         return result
 
     # ==================== prompt 渲染（人设注入核心） ====================
@@ -351,7 +347,7 @@ class Replyer:
         """敏感词净化（Replyer 表达引擎内部净化）。
 
         Args:
-            result: 待净化的回复 dict（含 speech / emotion / actions）
+            result: 待净化的回复 dict（含 speech / emotion）
 
         Returns:
             净化后的 result；``drop_on_match=True`` 且命中时返回 None（丢弃整条）。

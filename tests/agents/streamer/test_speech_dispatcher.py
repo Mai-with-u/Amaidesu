@@ -1,8 +1,8 @@
-"""SpeechDispatcher 单元测试：派发五路扇出 + TTS 队列生命周期降级。
+"""SpeechDispatcher 单元测试：派发扇出 + TTS 队列生命周期降级。
 
 Agent 级端到端行为（事件形状 / 序号 / 降级）由 ``test_streamer_agent_wiring``
 等覆盖；本文件直接打 dispatcher，锁定组件级契约：
-- dispatch 消费 reply 结构化结果：业务事件 / 字幕 / VTS / 动作工具 / 返回三元组
+- dispatch 消费 reply 结构化结果：业务事件 / 字幕 / VTS / 返回三元组
 - start：启用但无引擎 → 降级关闭不抛；stop 幂等
 """
 
@@ -49,7 +49,7 @@ def _registry_with_vts_and_action() -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_dispatch_fans_out_to_all_downstreams():
-    """speech+emotion+actions 齐备：五路输出逐一到位，返回三元组。"""
+    """speech+emotion 齐备：业务事件 / 字幕 / 表情各路逐一到位，返回三元组。"""
     bus = EventBus()
     captured: list[StreamerSpeechPayload] = []
     captured_event = asyncio.Event()
@@ -79,7 +79,6 @@ async def test_dispatch_fans_out_to_all_downstreams():
         {
             "speech": "你好",
             "emotion": {"name": "happy", "intensity": 0.8},
-            "actions": [{"name": "do_thing", "parameters": {"k": "v"}}],
         },
         target_user_id="u1",
         reply_to_message_id="m9",
@@ -106,13 +105,8 @@ async def test_dispatch_fans_out_to_all_downstreams():
     subtitle.show.assert_awaited_once()
     assert subtitle.show.await_args.args[0] == "你好"
 
-    # 动作工具
-    invocations = [c.args[0] for c in registry.invoke.await_args_list]
-    names = [inv.tool_name for inv in invocations]
-    assert "do_thing" in names
-    action_inv = next(inv for inv in invocations if inv.tool_name == "do_thing")
-    assert action_inv.arguments == {"k": "v"}
-    assert action_inv.source == "streamer_agent.action"
+    # TTS 未接线（engine=None）→ start 已降级关闭，不产生 vts 表情调用
+    assert registry.invoke.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -133,7 +127,7 @@ async def test_dispatch_vts_follows_tts_gate_and_emits_emotion_source():
     assert dispatcher.tts_enabled is True
     assert dispatcher.utterance_queue is not None
 
-    result = dispatcher.dispatch({"speech": "你好", "emotion": {"name": "happy", "intensity": 0.8}, "actions": []})
+    result = dispatcher.dispatch({"speech": "你好", "emotion": {"name": "happy", "intensity": 0.8}})
     await asyncio.sleep(0.05)  # fire-and-forget 任务调度
 
     invocations = [c.args[0] for c in registry.invoke.await_args_list]
@@ -179,7 +173,7 @@ async def test_start_degrades_when_enabled_but_no_engine():
     assert dispatcher.tts_enabled is False
     assert dispatcher.utterance_queue is None
 
-    result = dispatcher.dispatch({"speech": "仍在说话", "emotion": "", "actions": []})
+    result = dispatcher.dispatch({"speech": "仍在说话", "emotion": ""})
     await asyncio.wait_for(captured_event.wait(), timeout=2.0)
     assert result is not None and result[0] == "仍在说话"
 
@@ -222,7 +216,7 @@ async def test_disabled_config_never_builds_queue():
 async def test_stop_drains_inflight_fanout_without_pending_warnings():
     """dispatch 后立即 stop：在飞扇出任务被汇合，无 "Task was destroyed but it is pending"。
 
-    覆盖：业务事件 emit / 字幕 show / VTS 表情 / 动作工具四路。汇合点为
+    覆盖：业务事件 emit / 字幕 show / VTS 表情三路。汇合点为
     ``SpeechDispatcher.stop()``，限 2 秒；超时不抛（本用例不构造超时场景）。
     """
     bus = EventBus()
@@ -250,12 +244,11 @@ async def test_stop_drains_inflight_fanout_without_pending_warnings():
     await dispatcher.start()
     assert dispatcher.tts_enabled is True
 
-    # 五路扇出（speech/emotion/actions/业务事件/字幕）一次性触发，立即 stop 模拟"决策循环立刻回收"
+    # 各路扇出（speech/emotion/业务事件/字幕）一次性触发，立即 stop 模拟"决策循环立刻回收"
     dispatcher.dispatch(
         {
             "speech": "你好",
             "emotion": {"name": "happy", "intensity": 0.8},
-            "actions": [{"name": "do_thing", "parameters": {"k": "v"}}],
         },
         round_id="rnd_drain",
     )
@@ -302,7 +295,7 @@ async def test_dispatch_returns_synchronously_without_awaiting_slow_invoke():
 
     t0 = time.monotonic()
     result = dispatcher.dispatch(
-        {"speech": "x", "emotion": {"name": "happy", "intensity": 0.8}, "actions": []},
+        {"speech": "x", "emotion": {"name": "happy", "intensity": 0.8}},
     )
     elapsed = time.monotonic() - t0
 
@@ -345,7 +338,7 @@ async def test_stop_is_bounded_when_invoke_hangs_longer_than_timeout():
     )
     await dispatcher.start()
 
-    dispatcher.dispatch({"speech": "y", "emotion": {"name": "happy", "intensity": 0.5}, "actions": []})
+    dispatcher.dispatch({"speech": "y", "emotion": {"name": "happy", "intensity": 0.5}})
     await asyncio.wait_for(started.wait(), timeout=1.0)
 
     import time

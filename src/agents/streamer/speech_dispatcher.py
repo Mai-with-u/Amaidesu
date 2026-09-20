@@ -1,8 +1,8 @@
-"""发言管线（speech → TTS / emotion → VTS / 字幕 / 动作工具）。
+"""发言管线（speech → TTS / emotion → VTS / 字幕）。
 
 决策循环消费 reply 结构化结果后的全部下游扇出收在这里：
-业务事件 ``streamer.speech``、TTS 编排队列、字幕推送、VTS 表情、
-动作类工具调用。TTS 队列生命周期由本组件自持（``start``/``stop``），
+业务事件 ``streamer.speech``、TTS 编排队列、字幕推送、VTS 表情。
+TTS 队列生命周期由本组件自持（``start``/``stop``），
 失败一律降级不阻断决策循环。
 
 扇出策略：异步扇出不阻塞决策循环；任务强引用持有（``_bg_tasks`` 集合），
@@ -49,7 +49,7 @@ _EMOTION_TO_VTS_PARAMS: Dict[str, Dict[str, float]] = {
 
 
 class SpeechDispatcher:
-    """发言管线编排：业务事件 + TTS 队列 + 字幕 + 表情 + 动作。"""
+    """发言管线编排：业务事件 + TTS 队列 + 字幕 + 表情。"""
 
     def __init__(
         self,
@@ -209,7 +209,7 @@ class SpeechDispatcher:
 
         Args:
             reply_payload: ``ToolExecutionResult.structured_content``（dict），
-                形态 ``{speech, emotion, actions}``；emotion 为
+                形态 ``{speech, emotion}``；emotion 为
                 ``{"name": str, "intensity": float}``（name 必为合法枚举值、
                 intensity 已 clamp，由 replyer 保证）。
             target_user_id: 本次回复的观众 user_id（可选；透传到
@@ -229,8 +229,8 @@ class SpeechDispatcher:
           （TTS 启用与否与主播发言业务事实正交；下游消费者仅依赖业务事件）
         - speech 非空 → 生成 utterance_id + 发布业务事件 + 写入历史；TTS 启用时
           复用同一 utterance_id 入 TTS 队列（与 ``tts.utterance.*`` 共用关联键）
-        - emotion 非空 → ``_spawn`` 派发 VTS 表情工具（异步扇出不阻塞决策循环）
-        - actions 非空 → 逐条 ``_spawn`` 派发工具注册表调用（异步扇出不阻塞）
+        - emotion → ``_spawn`` 派发 VTS 表情工具（异步扇出不阻塞决策循环；
+          跟随 TTS 启用门）
         """
         if not isinstance(reply_payload, dict):
             self._logger.warning(f"reply structured_content 非 dict，跳过发言管线: {type(reply_payload).__name__}")
@@ -238,7 +238,6 @@ class SpeechDispatcher:
 
         speech = reply_payload.get("speech", "")
         emotion = reply_payload.get("emotion", {})
-        actions = reply_payload.get("actions", [])
 
         cleaned_speech = speech.strip() if isinstance(speech, str) else ""
         # 情绪契约：replyer 保证 emotion 为 {name, intensity} 且 name 已降级为
@@ -251,9 +250,6 @@ class SpeechDispatcher:
             cleaned_emotion_intensity = min(1.0, max(0.0, float(emotion_obj.get("intensity", 0.5))))
         except (TypeError, ValueError):
             cleaned_emotion_intensity = 0.5
-
-        # 动作类工具调用（异步扇出不阻塞决策循环；任务强引用持有，停止时限期汇合）
-        self._schedule_actions(actions)
 
         # emotion → VTS 表情调用跟随 TTS 启用门：TTS 关闭（无语音/无声卡场景）
         # 时 avatar 表情随同关闭，避免与管线整体退化语义漂移。
@@ -396,50 +392,3 @@ class SpeechDispatcher:
                 self._logger.warning(f"VTS 表情调用异常（已忽略）: emotion={emotion}, err={exc}")
 
         self._spawn(_invoke_vts(), label=f"VTS 表情 (emotion={emotion})")
-
-    def _schedule_actions(self, actions: Any) -> None:
-        """异步触发动作类工具调用（异步扇出不阻塞决策循环；任务强引用持有，停止时限期汇合）。
-
-        ``actions`` 契约：``[{name: str, parameters: dict}, ...]``（来自
-        Replyer 的 tool_calls 非 reply 部分；LLM 通过标准 function calling
-        选择的动作类工具）。
-
-        与 ``_schedule_vts_emotion`` 同模式：
-        - 每条动作独立 ``_spawn`` 派发（互不阻塞，强引用持有）
-        - 注册表缺失时静默跳过
-        - 工具失败只记 WARN（注册表 invoke 本身不抛异常，双保险）
-        """
-        if not isinstance(actions, list) or not actions:
-            return
-
-        registry = self._tool_registry
-        if registry is None:
-            self._logger.debug(f"actions 触发条件不满足（tool_registry 缺失），跳过 {len(actions)} 条")
-            return
-
-        for action in actions:
-            if not isinstance(action, dict):
-                self._logger.debug(f"action 条目非 dict，跳过: {action!r}")
-                continue
-            name = str(action.get("name", "") or "").strip()
-            if not name:
-                self._logger.debug("action 条目缺 name，跳过")
-                continue
-            arguments = action.get("parameters") or action.get("arguments") or {}
-            if not isinstance(arguments, dict):
-                arguments = {}
-            invocation = ToolInvocation(
-                tool_name=name,
-                arguments=arguments,
-                source="streamer_agent.action",
-            )
-
-            async def _invoke_action(inv: ToolInvocation = invocation) -> None:
-                try:
-                    await registry.invoke(inv)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 - 异步背景任务边界
-                    self._logger.warning(f"动作类工具调用异常（已忽略）: tool={inv.tool_name}, err={exc}")
-
-            self._spawn(_invoke_action(), label=f"动作工具 (tool={name})")

@@ -9,7 +9,7 @@
 - ``planner``           - 决策核心（决策循环，调 Planner profile）
 - ``replyer``           - 表达引擎（调 Replyer profile + WordFilter）
 - ``decision_executor`` - 决策轮执行器（两阶段决策执行半：round_id + stage/decision 事件 + 发言派发；调度半留 streamer_agent）
-- ``speech_dispatcher`` - 发言管线编排（streamer.speech 事件 + TTS 队列生命周期 + 字幕/VTS/动作扇出）
+- ``speech_dispatcher`` - 发言管线编排（streamer.speech 事件 + TTS 队列生命周期 + 字幕/VTS 扇出）
 - ``stats``             - 运行时统计（7 项计数器，Agent 与决策执行器共享）
 - ``proactive_trigger`` - 主动发言纯规则触发器（主循环直接驱动）
 - ``room_state``        - 直播间态势规则层（纯规则，60s 滑动窗口）
