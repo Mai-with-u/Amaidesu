@@ -293,3 +293,284 @@ async def test_design_completion_requires_real_construction(harness: Harness) ->
     duplicate = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "execute"})
     assert duplicate.structured_content["task_id"] == receipt["task_id"]
     assert len([call for call in harness.mod.calls if call.tool_name.endswith("execute")]) == 1
+
+
+@pytest.mark.parametrize("resource_uri", ["maicraft://building/future", "file:///unexpected"])
+async def test_unavailable_or_unknown_resources_are_not_read(harness: Harness, resource_uri: str) -> None:
+    """缺少技法能力或猜出的 URI 都不能被当作有效教材。"""
+    harness.llm.generate.side_effect = [
+        response("minecraft_builder_work_read_resource", {"uri": resource_uri}),
+        response("minecraft_builder_work_fail", {"reason": "没有可用资料"}),
+    ]
+    await harness.request(intent="design")
+    await harness.finish_worker()
+    assert resource_uri not in harness.resources.reads
+
+
+async def test_old_mod_fails_before_model_inference(harness: Harness) -> None:
+    """旧 Mod 无目录时明确失败，不能调用旧语义建造工具或浪费模型推理。"""
+    harness.resources.available = False
+    task_id = await harness.request()
+    await harness.finish_worker()
+    job = harness.builder._jobs[task_id]
+    assert job.status == "failed" and "尚未发布" in job.summary
+    assert not harness.llm.generate.called and not harness.mod.calls
+
+
+async def test_schema_error_can_be_repaired_before_delivery(harness: Harness) -> None:
+    """格式错误直接回给设计循环自纠，不让非法草稿进入 Mod。"""
+    harness.llm.generate.side_effect = [
+        response("minecraft_builder_work_validate", {"design": {"shape": "bad"}}),
+        *valid_design(),
+    ]
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    assert harness.builder._jobs[task_id].status == "succeeded"
+    assert len(harness.mod.calls) == 1
+
+
+async def test_failed_new_validation_invalidates_old_candidate(harness: Harness) -> None:
+    """修改后的非法草稿不能借上一次校验通过的结果交付。"""
+    harness.llm.generate.side_effect = [
+        valid_design()[0],
+        response("minecraft_builder_work_validate", {"design": {"shape": "bad"}}),
+        valid_design()[1],
+        response("minecraft_builder_work_fail", {"reason": "无法修复"}),
+    ]
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    assert harness.builder._jobs[task_id].status == "failed"
+    assert harness.builder._jobs[task_id].result is None
+
+
+async def test_child_cannot_execute_or_call_parent_tools(harness: Harness) -> None:
+    """即使模型编造施工工具名，也不会绕过本轮工具授权。"""
+    harness.llm.generate.side_effect = [
+        response("maicraft_builder_execute", {"artifact_ref": "guessed"}),
+        response("minecraft_builder_work_fail", {"reason": "不允许施工"}),
+    ]
+    await harness.request(intent="design")
+    await harness.finish_worker()
+    assert not harness.mod.calls
+    result = await harness.call("minecraft_builder_request", {"requirements": "越界请求"}, source="streamer-react")
+    assert not result.success
+
+
+async def test_cancel_before_child_starts_clears_ledger(harness: Harness) -> None:
+    """首个调度点前取消也产生终态，之后不再调用模型。"""
+    task_id = await harness.request()
+    result = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "cancel"})
+    assert result.success and result.structured_content["status"] == "cancelled"
+    assert harness.tracker.ledger.get(task_id) is None
+    assert harness.parent._pending_task_count() == 0 and not harness.llm.generate.called
+
+
+async def test_stop_cancels_inflight_design_and_removes_work_tools(harness: Harness) -> None:
+    """父级停机收束长推理，不留下子 Agent 的工具或活跃任务。"""
+    started = asyncio.Event()
+
+    async def slow(*args: Any, **kwargs: Any) -> Response:
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("不应到达")
+
+    harness.llm.generate.side_effect = slow
+    task_id = await harness.request()
+    await asyncio.wait_for(started.wait(), 2)
+    await harness.parent.stop()
+    assert harness.tracker.ledger.get(task_id) is None
+    assert harness.builder._jobs[task_id].status == "cancelled"
+    assert not any(spec.provider.startswith("minecraft_builder") for spec in harness.registry.list_tools())
+
+
+async def test_revision_keeps_previous_request_and_replaces_pending_obligation(harness: Harness) -> None:
+    """完成的设计可以按追加要求修订，新任务拥有独立版本且旧结果不再阻挡交付。"""
+    harness.llm.generate.side_effect = valid_design() * 2
+    task_id = await harness.request()
+    await harness.finish_worker()
+    result = await harness.call(
+        "minecraft_builder_task", {"task_id": task_id, "action": "revise", "requirements": "更换入口"}
+    )
+    assert result.success, result.error_message
+    revised_id = result.structured_content["task_id"]
+    await harness.finish_worker()
+    job = harness.builder._jobs[revised_id]
+    assert job.request_revision == 2 and "更换入口" in job.request.requirements
+    assert job.request.context["previous_design"] == {"shape": "house"}
+    assert harness.builder.pending_ids() == {revised_id}
+
+
+async def test_catalog_change_prevents_stale_execution(harness: Harness) -> None:
+    """设计后 Mod 能力变更时，旧图不能在新语义下悄悄施工。"""
+    harness.llm.generate.side_effect = valid_design()
+    task_id = await harness.request()
+    await harness.finish_worker()
+    harness.resources.catalog["revision"] = "cap-2"
+    result = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "execute"})
+    assert not result.success and "版本已变化" in result.error_message
+    assert len(harness.mod.calls) == 1
+
+
+async def test_uncertain_execution_retries_same_key_and_blocks_revision(harness: Harness) -> None:
+    """施工受理结果不明时禁止换图，重试沿用同一幂等键。"""
+    harness.llm.generate.side_effect = valid_design()
+    task_id = await harness.request()
+    await harness.finish_worker()
+    harness.mod.uncertain_once = True
+    first = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "execute"})
+    assert not first.success
+    revision = await harness.call(
+        "minecraft_builder_task", {"task_id": task_id, "action": "revise", "requirements": "重建"}
+    )
+    assert not revision.success
+    retry = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "execute"})
+    assert retry.success
+    executions = [call for call in harness.mod.calls if call.tool_name.endswith("execute")]
+    assert [call.arguments["request_key"] for call in executions] == [task_id, task_id]
+
+
+def test_remote_schema_references_never_fetch_network() -> None:
+    """缺失定义直接失败，不把 Mod Schema 的远程引用变成隐式网络请求。"""
+    with pytest.raises(Exception, match="Unresolvable"):
+        validate_schema({"$ref": "https://invalid.example/schema"}, {})
+
+
+def test_design_and_execution_bindings_must_differ() -> None:
+    """把校验绑定到施工入口会使设计自纠改变世界，配置阶段必须拒绝。"""
+    with pytest.raises(ValueError, match="不同工具"):
+        MinecraftBuilderConfig(validate_tool="same", execute_tool="same")
+
+
+async def test_cancel_rejects_model_reply_that_swallowed_cancellation(harness: Harness) -> None:
+    """底层客户端迟到返回时，显式取消标记仍阻止后续 Mod 校验。"""
+    started = asyncio.Event()
+
+    async def stubborn(*args: Any, **kwargs: Any) -> Response:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # 模拟远端结果与本地取消竞态，不能因此重新激活这份设计。
+            return valid_design()[0]
+        raise AssertionError("不应到达")
+
+    harness.llm.generate.side_effect = stubborn
+    task_id = await harness.request()
+    await asyncio.wait_for(started.wait(), 2)
+    result = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "cancel"})
+    assert result.success and harness.builder._jobs[task_id].status == "cancelled"
+    assert not harness.mod.calls
+
+
+async def test_parent_pause_holds_design_actions_until_resume(harness: Harness) -> None:
+    """长推理完成时若游戏已暂停，设计工具也要等父级恢复后才执行。"""
+    started, release, returned = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def delayed(*args: Any, **kwargs: Any) -> Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+            returned.set()
+            return valid_design()[0]
+        return valid_design()[1]
+
+    harness.llm.generate.side_effect = delayed
+    task_id = await harness.request(intent="design")
+    await asyncio.wait_for(started.wait(), 2)
+    await harness.parent._on_pause()
+    release.set()
+    await asyncio.wait_for(returned.wait(), 2)
+    await asyncio.sleep(0)
+    assert not harness.mod.calls
+    await harness.parent._on_resume()
+    await harness.finish_worker()
+    assert harness.builder._jobs[task_id].status == "succeeded"
+
+
+async def test_design_total_timeout_includes_llm_wait(harness: Harness) -> None:
+    """不依赖模型内部超时，任务预算到期会终止设计并保存可读原因。"""
+    harness.builder._config.task_timeout_ms = 1000
+
+    async def forever(*args: Any, **kwargs: Any) -> Response:
+        await asyncio.Event().wait()
+        raise AssertionError("不应到达")
+
+    harness.llm.generate.side_effect = forever
+    task_id = await harness.request()
+    await harness.finish_worker()
+    assert harness.builder._jobs[task_id].status == "timeout"
+    assert harness.tracker.ledger.get(task_id) is None
+    assert not harness.registry.list_tools(provider="minecraft_builder_work")
+
+
+async def test_paused_design_can_be_cancelled(harness: Harness) -> None:
+    """暂停不应迫使用户先恢复长推理才能取消任务。"""
+    task_id = await harness.request()
+    await harness.parent._on_pause()
+    cancelled = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "cancel"})
+    assert cancelled.success and harness.tracker.ledger.get(task_id) is None
+
+
+async def test_second_design_does_not_start_competing_construction(harness: Harness) -> None:
+    """角色施工时可以准备另一份设计，但第二份施工必须等身体空闲。"""
+    harness.llm.generate.side_effect = valid_design() * 2
+    first = await harness.request()
+    await harness.finish_worker()
+    started = await harness.call("minecraft_builder_task", {"task_id": first, "action": "execute"})
+    assert started.success
+    second = await harness.request()
+    await harness.finish_worker()
+    conflict = await harness.call("minecraft_builder_task", {"task_id": second, "action": "execute"})
+    assert not conflict.success and "另一份设计" in conflict.error_message
+    assert len([call for call in harness.mod.calls if call.tool_name.endswith("execute")]) == 1
+
+
+async def test_real_completion_event_wakes_parent_once_with_design_reference(harness: Harness) -> None:
+    """任务完成走真实事件总线，父级不把本地任务号拿去 Mod 查询或自动报告建好。"""
+    await harness.parent.stop()
+    bus = EventBus()
+    ledger = TaskLedger(bus)
+    tracker = TaskTracker(harness.registry, ledger)
+    parent_called = asyncio.Event()
+    changes: list[TaskChangedPayload] = []
+    design_calls = 0
+
+    async def observe(event_name: str, payload: TaskChangedPayload, source: str) -> None:
+        changes.append(payload)
+
+    async def generate(messages: list[dict[str, Any]], **kwargs: Any) -> Response:
+        nonlocal design_calls
+        if kwargs["profile"] == "minecraft_builder":
+            result = valid_design()[design_calls]
+            design_calls += 1
+            return result
+        assert any("minecraft_builder_task" in item.get("content", "") for item in messages if item["role"] == "user")
+        parent_called.set()
+        return Response(success=True, content="收到设计，尚未施工", tool_calls=[])
+
+    llm = MagicMock()
+    llm.generate = AsyncMock(side_effect=generate)
+    parent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=False)),
+        llm_manager=llm,
+        tool_registry=harness.registry,
+        task_tracker=tracker,
+        event_bus=bus,
+    )
+    bus.on(CoreEvents.TASK_CHANGED, observe, model_class=TaskChangedPayload)
+    await parent.start()
+    parent._mcp_client = harness.resources
+    try:
+        receipt = await parent._execute_tool("minecraft_builder_request", {"requirements": "建一座房子"})
+        assert receipt["accepted"] is True
+        await asyncio.wait_for(parent_called.wait(), 2)
+        assert len(changes) == 1 and changes[0].executor == "minecraft_builder"
+        assert changes[0].snapshot["result"]["artifact_ref"] == "draft-1"
+        assert parent.get_state_snapshot()["recent_reports"] == []
+        assert parent._pending_task_count() == 1
+    finally:
+        await parent.stop()
+        await bus.cleanup()
