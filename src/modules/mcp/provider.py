@@ -60,6 +60,10 @@ class McpToolProvider(BaseToolProvider):
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category = "mcp"
 
+    # 生命周期自管理：setup 返回工具数且在装配期自调（工具清单拉取 + 降级
+    # 登记收尾都经它），不走组合根的批量启停——否则同一连接被建立两次。
+    manages_own_lifecycle = True
+
     def __init__(
         self,
         *,

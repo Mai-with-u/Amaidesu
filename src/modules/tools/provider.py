@@ -157,6 +157,10 @@ class BaseToolProvider(ABC):
     提供：
     - ``category`` ClassVar 收敛（实现方可继续用子类声明的具体值覆盖）
     - ``health_check`` 探活钩子默认实现（返回 True，语义见模块注释）
+    - 生命周期契约默认实现（``setup`` / ``cleanup`` = no-op）：维护外部连接的
+      Provider 覆写 ``setup`` 建立连接并启动后台循环，由组合根经
+      ``ToolRegistry.start_providers`` 批量驱动；自管理生命周期的 Provider
+      （装配期自行 setup，如 MCP）以 ``manages_own_lifecycle`` 退出批量启停
     - 连接动作契约默认实现（``connect`` / ``disconnect`` 沿用基类 = 不支持；
       ``reconnect`` = ``disconnect`` + ``connect``）；维护外部连接的 Provider
       覆写 ``connect`` 即可同时获得重连支持，``supports_reconnect`` 按"本类是
@@ -173,6 +177,11 @@ class BaseToolProvider(ABC):
     # framework 等）。三个概念正交：provider = 提供者名、category = 分组、
     # tools.toml 段 = 配置地址。子类可覆写具体值；默认空串（未分类）。
     category: ClassVar[str] = ""
+
+    # 生命周期自管理标记：装配期自行 setup 并驱动注册对接的 Provider 置 True
+    # （MCP——其 setup 返回工具数、由装配回调收尾），组合根的批量启停据此跳过，
+    # 避免同一 Provider 被启动两次。
+    manages_own_lifecycle: ClassVar[bool] = False
 
     # 最近一次连接失败摘要（``connect`` 失败时写、成功时清空）。仅供运营面
     # 展示降级原因；无连接语 Provider 恒为空串。
@@ -214,6 +223,25 @@ class BaseToolProvider(ABC):
         Provider 沿用默认实现——熔断后冷却期满即恢复，再失败再熔断，由流量决定。
         """
         return True
+
+    async def setup(self) -> None:
+        """生命周期启动默认实现：no-op（无资源可建）。
+
+        组合根在全部 Provider 注册完成后经 ``ToolRegistry.start_providers``
+        逐个调用：维护外部连接的 Provider 覆写它建立连接、启动后台循环
+        （幂等，重复调用自行短路）；无状态 Provider 沿用默认实现。
+        ``McpToolProvider.setup``（返回工具数、装配期自调）是另一套语义，
+        该类以 ``manages_own_lifecycle = True`` 退出批量启停，不与本钩子冲突。
+        """
+        return None
+
+    async def cleanup(self) -> None:
+        """生命周期收尾默认实现：no-op（无资源可释放）。
+
+        停机时经 ``ToolRegistry.stop_providers`` 逐个调用，释放 ``setup``
+        建立的连接与后台任务；实现须幂等（重复调用安全）。
+        """
+        return None
 
     async def connect(self) -> bool:
         """建立通道连接（默认实现 = 不支持）。

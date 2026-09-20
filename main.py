@@ -315,6 +315,7 @@ async def create_app_components(
     simulator_auto_start: bool = True,
     storage_ledger_auto_start: bool = True,
     session_manager_auto_start: bool = True,
+    providers_auto_start: bool = True,
 ) -> Tuple[
     EventBus,
     LLMManager,
@@ -690,6 +691,13 @@ async def create_app_components(
             logger.warning(f"审计发现 {len(missing)} 个已声明但缺失实现的工具: {missing}")
         else:
             logger.info("工具审计通过：所有 Agent 声明的工具均已在 ToolRegistry 中找到实现")
+
+    # --- Provider 生命周期启动（连接型 Provider 建立外部连接）---
+    # 逐个调用 setup（VTS 建连 + 断线重连循环 + idle 动画等）；MCP 等自管理
+    # 生命周期者由 registry 内部跳过。dry 模式仅构造不启动（与其余
+    # auto_start 参数语义一致）。单 Provider 失败已隔离，不阻断启动。
+    if tool_registry is not None and providers_auto_start:
+        await tool_registry.start_providers()
 
     # --- DashboardServer ---
     dashboard_server: Optional["DashboardServer"] = None
@@ -1141,6 +1149,10 @@ async def run_shutdown(
         logger.info("ToolHealthMonitor 已停止")
 
     if tool_registry is not None:
+        # 先收尾连接型 Provider 生命周期（VTS 等断开外部连接、停后台循环），
+        # 再关闭 MCP stdio 子进程（MCP 自管理生命周期，由下方专责关闭）。
+        logger.info("正在停止工具 Provider 生命周期...")
+        await safe_log(tool_registry.stop_providers(), "ToolRegistry.stop_providers")
         logger.info("正在关闭 MCP Provider（修停机泄漏）...")
         # 函数体内 import：fastmcp 为可选重型依赖（避免停机路径强制加载）
         from src.modules.mcp import close_mcp_providers
@@ -1210,6 +1222,7 @@ async def main() -> None:
         simulator_auto_start=not args.dry,
         storage_ledger_auto_start=not args.dry,
         session_manager_auto_start=not args.dry,
+        providers_auto_start=not args.dry,
     )
 
     # 启动完成广播：此时 EventHistoryRecorder 已就绪，core.startup 会进事件历史
