@@ -10,7 +10,7 @@ ToolRegistry —— 工具注册中心
 - 可选熔断器：连续失败计数达阈值则摘除工具（tripped），
   配套 ``ToolHealthMonitor`` 做探活恢复（``src/modules/tools/health.py``）
 - 可见名单：``register_provider(visible_to=...)`` 注册处逐工具声明
-  可见给哪些 Agent（默认 ``["*"]`` 全员）；``list_tools(for_agent=...)`` 按
+  可见给哪些 Agent（默认 ``DEFAULT_VISIBLE_TO``，仅主播）；``list_tools(for_agent=...)`` 按
   Agent 计算工具列表。名单只约束可见性，``invoke()`` 不校验。
 
 接口约定：register（去重保留先注册）/ register_provider（注册键 = 派生全名 +
@@ -49,8 +49,14 @@ ToolImplCallable = Callable[[ToolInvocation], Awaitable[ToolExecutionResult]]
 
 # 可见名单来源：静态名单 dict，或按工具集重新派生名单的策略 callable。
 # fail-closed 名单必须走策略形态——工具集刷新时对新工具重跑派生，
-# 否则新工具落"未列出 = 全员"默认，会对所有 Agent 泄露可见性。
+# 否则新工具落默认名单，会对预期外的 Agent 泄露可见性。
 VisibleToSource = Union[Dict[str, List[str]], Callable[[List[ToolSpec]], Dict[str, List[str]]]]
+
+# 可见名单默认值：未显式声明 visible_to 的工具只对主播可见（fail-closed）。
+# 主播 Agent 是本项目核心、非热插拔（框架级事实，同 agents/factory 的
+# SUPPORTED_AGENTS 常量）；绝大多数工具只属主播，特殊共享需求
+# （如 vision_look_at_screen）由注册处显式声明 ``["*"]``。
+DEFAULT_VISIBLE_TO: List[str] = ["streamer"]
 
 
 logger = get_logger("ToolRegistry")
@@ -150,9 +156,9 @@ class ToolRegistry:
         # 探活按此直查归属，避免 provider.name 与 spec.provider 的字符串耦合）
         self._tool_owner: Dict[str, BaseToolProvider] = {}
         # 注册名 → 可见名单（register_provider 的 visible_to 声明；未声明的
-        # 工具不在表中，等价 ["*"] 全员可见）。名单是生产侧代码事实：
-        # 值为 Agent 注册名列表或 ["*"]；只约束可见性（for_agent 计算），
-        # invoke 不校验（编名直调是已知边界）。
+        # 工具不在表中，按 DEFAULT_VISIBLE_TO 默认名单计算可见性）。名单是
+        # 生产侧代码事实：值为 Agent 注册名列表或 ["*"]；只约束可见性
+        # （for_agent 计算），invoke 不校验（编名直调是已知边界）。
         self._visible_to: Dict[str, List[str]] = {}
         # 提供者名 → 可见名单来源（静态 dict 或 ``(specs) -> dict`` 策略
         # callable）。名单是注册期的快照，工具集刷新（refresh_provider_tools）
@@ -207,7 +213,8 @@ class ToolRegistry:
         求值出静态名单，来源保存供 ``refresh_provider_tools`` 对新工具集
         重新派生。校验 fail-fast：值非空且元素为非空字符串、``"*"`` 只能
         单独出现、键必须命中本注册项声明的工具全名（拼错即报错）。
-        **未列出的工具默认 ``["*"]``**（共享常态，全局注册零负担）。名单只
+        **未列出的工具默认 ``DEFAULT_VISIBLE_TO``**（仅主播；共享工具由
+        注册处显式声明 ``["*"]``）。名单只
         约束可见性（``list_tools(for_agent=...)`` 按它计算工具列表）；
         ``invoke()`` 不校验——LLM 幻觉编名直调保留工具是已知的受众治理边界。
 
@@ -471,7 +478,7 @@ class ToolRegistry:
         visible_to: Optional[Dict[str, List[str]]],
         declared_full_names: set[str],
     ) -> Optional[Dict[str, List[str]]]:
-        """校验可见名单并按全名补全（未列工具填默认 ``["*"]``）；非法即抛错。
+        """校验可见名单并按全名补全（未列工具填默认 ``DEFAULT_VISIBLE_TO``）；非法即抛错。
 
         校验规则（fail-fast）：
         - 值必须是非空列表，元素为非空字符串（Agent 注册名）
@@ -488,7 +495,7 @@ class ToolRegistry:
                 f"{sorted(unknown_keys)}；本注册项声明: {sorted(declared_full_names)}"
             )
         for full_name in declared_full_names:
-            entries = visible_to.get(full_name, ["*"])
+            entries = visible_to.get(full_name, DEFAULT_VISIBLE_TO)
             if not isinstance(entries, list) or not entries:
                 raise ValueError(f"visible_to['{full_name}'] 必须是非空列表，得到 {entries!r}")
             if any((not isinstance(e, str)) or (not e) for e in entries):
@@ -558,10 +565,10 @@ class ToolRegistry:
         return specs
 
     def _is_visible_to(self, full_name: str, agent_name: str) -> bool:
-        """名单判定：未声明（不在表中）= 全员可见；声明则须命中该 Agent 名或 "*"。"""
+        """名单判定：未声明（不在表中）= 默认名单（仅主播）；声明则须命中该 Agent 名或 "*"。"""
         entries = self._visible_to.get(full_name)
         if entries is None:
-            return True
+            return agent_name in DEFAULT_VISIBLE_TO
         return "*" in entries or agent_name in entries
 
     def list_categories(self) -> List[str]:
@@ -589,13 +596,13 @@ class ToolRegistry:
         return self._categories.get(spec.provider, "")
 
     def visible_to_of(self, full_name: str) -> List[str]:
-        """返回工具的可见名单（未声明 = 全员，返回 ``["*"]`` 快照）。
+        """返回工具的可见名单（未声明 = 默认名单，返回 ``DEFAULT_VISIBLE_TO`` 快照）。
 
         供运营面（Dashboard 等）标注"这个工具谁能看见"。名单只约束
         可见性，``invoke()`` 不校验（编名直调是已知边界）。
         """
         entries = self._visible_to.get(full_name)
-        return list(entries) if entries is not None else ["*"]
+        return list(entries) if entries is not None else list(DEFAULT_VISIBLE_TO)
 
     # -------------------- 停用 --------------------
 

@@ -56,8 +56,8 @@ def test_unregister_removes_all_internal_maps() -> None:
     assert "echo_alpha" not in registry._tool_owner
     assert "echo_alpha" not in registry._visible_to
     assert "echo" not in registry._categories
-    # 可见性查询口径同步消失（unknown → 默认全员，不悬挂旧名单）
-    assert registry.visible_to_of("echo_alpha") == ["*"]
+    # 可见性查询口径同步消失（unknown → 默认名单，不悬挂旧名单）
+    assert registry.visible_to_of("echo_alpha") == ["streamer"]
     assert registry.provider_of_tool("echo_alpha") is None
 
 

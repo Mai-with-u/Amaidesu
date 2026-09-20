@@ -448,14 +448,63 @@ async def test_invoke_without_event_bus_skips_emit(registry: ToolRegistry) -> No
 # =============================================================================
 # 可见名单（visible_to，fail-closed）
 #
-# - 注册处逐工具声明（值 = Agent 注册名列表或 ["*"]；未声明默认全员）
+# - 注册处逐工具声明（值 = Agent 注册名列表或 ["*"]；未声明默认 DEFAULT_VISIBLE_TO 仅主播）
 # - for_agent 按名单计算工具列表；不传 for_agent = 运营全集
 # - invoke() 不查名单——受众治理只管可见性（编名直调是已知边界）
 # =============================================================================
 
 
+def test_unregistered_visible_to_defaults_to_streamer(registry: ToolRegistry) -> None:
+    """未声明 visible_to 的工具默认仅主播可见（fail-closed 默认翻转契约）。"""
+
+    class PlainProvider(BaseToolProvider):
+        @property
+        def name(self) -> str:
+            return "plain"
+
+        def list_tools(self):
+            return [ToolSpec(name="knob", description="k", kind="sync", provider="plain")]
+
+        async def invoke(self, invocation: ToolInvocation):
+            return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
+
+    registry.register_provider(PlainProvider())
+
+    assert registry.visible_to_of("plain_knob") == ["streamer"]
+    streamer_face = {s.full_name for s in registry.list_tools(for_agent="streamer")}
+    assert "plain_knob" in streamer_face
+    minecraft_face = {s.full_name for s in registry.list_tools(for_agent="minecraft")}
+    assert "plain_knob" not in minecraft_face
+
+
+def test_vision_look_at_screen_declares_wildcard(registry: ToolRegistry) -> None:
+    """vision_look_at_screen 注册处显式 ["*"]：公共读屏工具对全员可见。
+
+    text_adv 的观察循环经 RegistryVisionReader 调用它，不吃默认名单。
+    """
+
+    class FakeVisionProvider(BaseToolProvider):
+        @property
+        def name(self) -> str:
+            return "vision"
+
+        def list_tools(self):
+            return [ToolSpec(name="look_at_screen", description="l", kind="sync", provider="vision")]
+
+        async def invoke(self, invocation: ToolInvocation):
+            return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
+
+    # 与 main.py 组合根注册同款声明
+    registry.register_provider(FakeVisionProvider(), visible_to={"vision_look_at_screen": ["*"]})
+
+    assert registry.visible_to_of("vision_look_at_screen") == ["*"]
+    for agent_name in ("streamer", "minecraft", "text_adv"):
+        face = {s.full_name for s in registry.list_tools(for_agent=agent_name)}
+        assert "vision_look_at_screen" in face, f"{agent_name} 应能看到 vision_look_at_screen"
+
+
 def test_visible_to_recorded_and_for_agent_filters(registry: ToolRegistry) -> None:
-    """visible_to 注册处声明生效：for_agent 按名单计算工具列表；未列工具默认全员。"""
+    """visible_to 注册处声明生效：for_agent 按名单计算工具列表；未列工具默认仅主播。"""
 
     class MixedProvider(BaseToolProvider):
         @property
@@ -476,13 +525,13 @@ def test_visible_to_recorded_and_for_agent_filters(registry: ToolRegistry) -> No
     )
 
     # 名单查询
-    assert registry.visible_to_of("mixed_open") == ["*"]  # 未声明 = 全员
+    assert registry.visible_to_of("mixed_open") == ["streamer"]  # 未声明 = 默认仅主播
     assert registry.visible_to_of("mixed_secret") == ["minecraft"]
     # for_agent 计算工具列表
     streamer_face = {s.full_name for s in registry.list_tools(for_agent="streamer")}
-    assert streamer_face == {"mixed_open"}  # secret 对主播不可见
+    assert streamer_face == {"mixed_open"}  # secret 对主播不可见（open 落默认名单）
     minecraft_face = {s.full_name for s in registry.list_tools(for_agent="minecraft")}
-    assert minecraft_face == {"mixed_open", "mixed_secret"}
+    assert minecraft_face == {"mixed_secret"}  # open 未声明，对 minecraft 不可见
     # 不传 for_agent = 运营全集
     everything = {s.full_name for s in registry.list_tools()}
     assert everything == {"mixed_open", "mixed_secret"}
@@ -534,7 +583,7 @@ def test_clear_resets_visible_to(registry: ToolRegistry) -> None:
     assert registry.visible_to_of("game_p_a") == ["minecraft"]
 
     registry.clear()
-    assert registry.visible_to_of("game_p_a") == ["*"]
+    assert registry.visible_to_of("game_p_a") == ["streamer"]  # unknown → 默认名单
 
 
 async def test_invoke_not_in_visible_list_is_not_blocked(registry: ToolRegistry) -> None:

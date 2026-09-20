@@ -454,7 +454,8 @@ async def test_react_mcp_tool_via_registry_passthrough() -> None:
                 tool_name=invocation.tool_name, success=True, structured_content={"ok": True, "view": "situation"}
             )
 
-    registry.register_provider(FakeMcpProvider())
+    # MCP 透传工具显式声明可见名单（默认名单仅主播，minecraft 需显式可见）
+    registry.register_provider(FakeMcpProvider(), visible_to={"maicraft_perceive": ["minecraft"]})
 
     async def fake(messages, **kwargs):
         fake.calls += 1
