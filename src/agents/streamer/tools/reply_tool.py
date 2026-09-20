@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, ClassVar, Dict, Iterable, List, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerVerdictPayload
@@ -101,6 +101,10 @@ class ReplyToolProvider(BaseToolProvider):
     StreamerAgent 直接 ``registry.register_provider(reply_tool_provider)`` 注册。
     实现 ``invoke`` 时按 ``invocation.tool_name == 全名（streamer_reply）`` 分发到 ``Replyer``。
     """
+
+    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）：
+    # 主播是框架核心 Agent，工具页归随 Agent 的 framework 分类（同 Minecraft 归 game）
+    category: ClassVar[str] = "framework"
 
     def __init__(
         self,
