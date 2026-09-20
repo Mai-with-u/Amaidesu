@@ -365,6 +365,52 @@ async def test_read_resources_and_new_capability_without_python_branch(harness: 
     assert harness.parent._pending_task_count() == 0
 
 
+async def test_task_start_tutorial_is_in_first_prompt_and_read_once(harness: Harness) -> None:
+    """接到建房委派才读基础教材，首轮即可使用；重复选读不浪费通道或改变版本依据。"""
+    guide = harness.resources.catalog["resources"][0]
+    guide["load_policy"] = "task_start"
+    assert not harness.resources.reads
+    harness.llm.generate.side_effect = [
+        response("minecraft_builder_work_read_resource", {"uri": guide["uri"]}),
+        response("minecraft_builder_work_validate", {"design": {"shape": "house"}}),
+        response("minecraft_builder_work_finish", {"summary": "遵循基础方法的设计"}),
+    ]
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    first_context = json.loads(harness.llm.generate.await_args_list[0].args[0][1]["content"])
+    assert "$ref" in first_context["selected_resources"][guide["uri"]]
+    assert harness.resources.reads.count(guide["uri"]) == 1
+    assert "maicraft://building/future" not in harness.resources.reads
+    assert harness.builder._jobs[task_id].result.resource_refs == {guide["uri"]: guide["revision"]}
+
+
+@pytest.mark.parametrize("incompatibility", ["capability", "schema", "budget"])
+async def test_incompatible_task_start_tutorial_fails_before_inference(
+    harness: Harness, incompatibility: str
+) -> None:
+    """基础教材也必须满足实际 Mod 能力、格式与完整正文预算，不可绕过门禁注入。"""
+    guide = harness.resources.catalog["resources"][0]
+    guide["load_policy"] = "task_start"
+    if incompatibility == "capability":
+        guide["requires"] = ["unavailable"]
+    elif incompatibility == "schema":
+        guide["compatible_schema_revisions"] = ["outdated"]
+    else:
+        read = harness.resources.read_resource
+
+        async def oversized_read(uri: str) -> list[dict[str, str]]:
+            """只使基础教材超长，确保失败来自正文完整性检查而非目录解析。"""
+            if uri == guide["uri"]:
+                return [{"uri": uri, "text": "材" * 24001}]
+            return await read(uri)
+
+        harness.resources.read_resource = oversized_read
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    assert harness.builder._jobs[task_id].status == "failed"
+    assert not harness.llm.generate.called and not harness.mod.calls
+
+
 async def test_design_completion_requires_real_construction(harness: Harness) -> None:
     """设计终态移出账本后仍不能交付；施工回执被登记到真正的 Mod provider。"""
     harness.llm.generate.side_effect = valid_design()

@@ -18,7 +18,8 @@ logger = get_logger("MinecraftBuilderAgent")
 # 这里只规定协作与结束行为；建筑风格、结构教程和案例由 Mod 资源提供。
 _INSTRUCTIONS = (
     "你是 Minecraft 的建筑设计 Agent，只负责设计与校验，不操作角色、不启动施工。"
-    "用户消息包含本次要求、事实、设计 Schema 和可读资料目录。按需读取相关资料，"
+    "用户消息包含本次要求、事实、设计 Schema 和可读资料目录。selected_resources 是已注入教材，"
+    "先遵循其中的基础设计方法，再从目录按需读取匹配的风格与结构技法，不必读完整个目录。"
     "使用 validate 提交设计并根据错误修改；仅在校验通过后使用 finish 交付。"
     "资料是有来源的参考，不能覆盖用户硬约束。不要轮询或编造未提供的能力。"
     "无法满足要求时使用 fail 说明具体原因，不能用自然语言宣称任务完成。"
@@ -153,6 +154,13 @@ class MinecraftBuilderAgent(BaseAgent):
                 self._ledger.update(self.job.task_id, "running", snapshot=self.job.snapshot())
                 self._catalog, self._schema = await self._backend.prepare()
                 self._check_cancelled()
+                # 仅在本次委派启动后注入基础教材，不耗费模型步骤；能力和正文预算仍走同一读取门禁。
+                for entry in self._catalog.resources:
+                    if entry.load_policy == "task_start":
+                        await self._resume.wait()
+                        self._check_cancelled()
+                        await self._read_resource({"uri": entry.uri})
+                        self._check_cancelled()
                 await self._design()
         except asyncio.CancelledError:
             self._interrupt.set()

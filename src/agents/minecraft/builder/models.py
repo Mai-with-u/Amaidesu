@@ -20,12 +20,14 @@ class BuildRequest(BaseModel):
 
 
 class BuildResource(BaseModel):
-    """教程目录只先提供摘要，任务选择后才读取正文。"""
+    """目录声明任务基础教材，其余教程在任务选择后才读取正文。"""
 
     uri: Text
     title: Text
     summary: str = ""
     revision: Text
+    # 建房基础方法在任务启动时读取，风格和技法保持按需选择；旧目录沿用按需行为。
+    load_policy: Literal["task_start", "on_demand"] = "on_demand"
     requires: list[str] = Field(default_factory=list)
     compatible_schema_revisions: list[str] = Field(default_factory=list)
 
