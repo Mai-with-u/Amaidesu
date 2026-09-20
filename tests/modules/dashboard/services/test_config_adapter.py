@@ -76,6 +76,15 @@ class TestMaskSensitiveValues:
         config = {"bot_name": "阿妈", "enabled": True, "port": 8000}
         assert _mask_sensitive_values(config) == config
 
+    def test_数字型敏感名键不遮蔽(self) -> None:
+        """凭据均为字符串：数字预算参数（token_budget_per_hour 等）键名含敏感词也不遮蔽，
+        否则占位文本会撑爆前端的数字输入控件且字段不可读。"""
+        config = {"simulator": {"token_budget_per_hour": 50000, "api_key": "sk-real", "enabled": True}}
+        masked = _mask_sensitive_values(config)
+        assert masked["simulator"]["token_budget_per_hour"] == 50000
+        assert masked["simulator"]["api_key"] == "已设置"
+        assert masked["simulator"]["enabled"] is True
+
 
 # ---------------------------------------------------------------------------
 # _find_placeholder_write
@@ -225,7 +234,28 @@ class TestBuildFrontendGroups:
         model_group = next(g for g in result["groups"] if g["key"] == "model")
         sensitive = [f for f in _iter_fields(model_group["fields"]) if f["sensitive"]]
         assert sensitive, "model 分组应存在敏感字段（api_key）"
-        assert all(f["value"] == "已设置" for f in sensitive)
+        # 有真实值的占位为"已设置"；配置缺失（None）的字段如实返回 None，不伪造"已设置"
+        assert all(f["value"] == "已设置" for f in sensitive if f["value"] is not None)
+        assert any(f["value"] is None for f in sensitive)
+
+    def test_数字敏感名字段值照实返回(self) -> None:
+        """schema 的 value 占位只针对字符串凭据；数字预算参数照实返回（占位文本撑爆数字输入控件）。"""
+        result = _build_frontend_groups(
+            _FakeConfigService({"simulator": {"token_budget_per_hour": 50000}})
+        )
+
+        def _iter_fields(nodes: list[dict]) -> list[dict]:
+            out = []
+            for node in nodes:
+                out.append(node)
+                out.extend(_iter_fields(node.get("children", [])))
+            return out
+
+        infra_group = next(g for g in result["groups"] if g["key"] == "infra")
+        budget = next(
+            f for f in _iter_fields(infra_group["fields"]) if f["key"] == "infra.simulator.token_budget_per_hour"
+        )
+        assert budget["value"] == 50000
 
     def test_main_config为None时按空配置处理(self) -> None:
         service = _FakeConfigService({})

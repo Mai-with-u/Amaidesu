@@ -173,7 +173,9 @@ def _mask_sensitive_values(config: dict, path_prefix: str = "") -> dict:
         elif isinstance(v, list):
             masked[k] = [_mask_sensitive_values(item, full_key) if isinstance(item, dict) else item for item in v]
         else:
-            masked[k] = _SENSITIVE_PLACEHOLDER if _is_sensitive_field(full_key) else v
+            # 凭据均为字符串：数字/布尔值（如 token_budget_per_hour 预算参数）无论键名
+            # 都不遮蔽——数字被替换成占位文本既不可读，还会撑爆前端的数字输入控件
+            masked[k] = _SENSITIVE_PLACEHOLDER if isinstance(v, str) and _is_sensitive_field(full_key) else v
     return masked
 
 
@@ -277,7 +279,9 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
         "description": field.get("description", ""),
         "type": _map_gen_type(field.get("type", "string")),
         "default": field.get("default"),
-        "value": _SENSITIVE_PLACEHOLDER if is_sensitive else raw_value,
+        # 占位只针对字符串凭据：数字预算参数（如 token_budget_per_hour）照实返回，
+        # 占位文本会撑爆前端的数字输入控件
+        "value": _SENSITIVE_PLACEHOLDER if is_sensitive and isinstance(raw_value, str) else raw_value,
         "required": field.get("required", False),
         "sensitive": is_sensitive,
         # 透传 schema_generator 从 json_schema_extra 解析出的 readonly 标记，与写接口的拒绝逻辑共用同一信号
