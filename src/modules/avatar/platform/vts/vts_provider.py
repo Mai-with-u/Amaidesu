@@ -180,26 +180,27 @@ class VTSProvider(BaseToolProvider):
         self.vts_port: int = self.typed_config.vts_port
 
         # 情绪 → VTS 参数映射（词表 17 值全覆盖；键取 Emotion.value 小写）。
-        # VTS 可驱动的面部参数用足（嘴/眼/眉/脸颊/舌头/水平嘴/FaceAngry），
-        # 各值落在不同的参数组合上；强度在 set_expression 中按线性缩放施加。
+        # 眉部统一走联合插座 Brows（模型生态 11/17 绑定）：分侧输入
+        # BrowLeftY/BrowRightY 在真实模型上近乎零绑定，写入成功但不可见；
+        # 三处原分侧不对称情绪（scared/confused/smug）取较大值近似，
+        # 单挑眉细节需求属未来情绪覆盖层。FaceAngry 保留（语义独特零成本）；
+        # 强度在 set_expression 中按线性缩放施加。
         self._emotion_map: Dict[str, Dict[str, float]] = {
             "neutral": {},
-            "happy": {"MouthSmile": 0.8, "BrowLeftY": 0.6, "BrowRightY": 0.6},
-            "sad": {"MouthSmile": -0.4, "BrowLeftY": 0.15, "BrowRightY": 0.15, "EyeOpenLeft": 0.6, "EyeOpenRight": 0.6},
-            "angry": {"MouthSmile": -0.6, "FaceAngry": 0.9, "BrowLeftY": 0.2, "BrowRightY": 0.2, "MouthOpen": 0.1},
+            "happy": {"MouthSmile": 0.8, "Brows": 0.6},
+            "sad": {"MouthSmile": -0.4, "Brows": 0.15, "EyeOpenLeft": 0.6, "EyeOpenRight": 0.6},
+            "angry": {"MouthSmile": -0.6, "FaceAngry": 0.9, "Brows": 0.2, "MouthOpen": 0.1},
             "surprised": {
                 "EyeOpenLeft": 1.0,
                 "EyeOpenRight": 1.0,
                 "MouthOpen": 0.5,
-                "BrowLeftY": 1.0,
-                "BrowRightY": 1.0,
+                "Brows": 1.0,
             },
             "scared": {
                 "EyeOpenLeft": 0.7,
                 "EyeOpenRight": 0.7,
                 "MouthOpen": 0.4,
-                "BrowLeftY": 0.9,
-                "BrowRightY": 0.5,
+                "Brows": 0.9,
                 "FaceAngry": -0.4,
             },
             "disgusted": {
@@ -215,8 +216,7 @@ class VTSProvider(BaseToolProvider):
             "confused": {
                 "EyeOpenLeft": 0.75,
                 "EyeOpenRight": 0.95,
-                "BrowLeftY": 0.95,
-                "BrowRightY": 0.4,
+                "Brows": 0.95,
                 "MouthX": 0.15,
             },
             "love": {"MouthSmile": 0.9, "EyeOpenLeft": 0.35, "EyeOpenRight": 0.35, "CheekPuff": 0.2},
@@ -225,34 +225,30 @@ class VTSProvider(BaseToolProvider):
                 "EyeOpenLeft": 1.0,
                 "EyeOpenRight": 1.0,
                 "MouthOpen": 0.4,
-                "BrowLeftY": 0.85,
-                "BrowRightY": 0.85,
+                "Brows": 0.85,
             },
-            "smug": {"MouthSmile": 0.5, "EyeOpenLeft": 0.3, "EyeOpenRight": 0.45, "BrowLeftY": 0.7, "BrowRightY": 0.3},
+            "smug": {"MouthSmile": 0.5, "EyeOpenLeft": 0.3, "EyeOpenRight": 0.45, "Brows": 0.7},
             "serious": {
                 "MouthSmile": -0.1,
-                "BrowLeftY": 0.15,
-                "BrowRightY": 0.15,
+                "Brows": 0.15,
                 "EyeOpenLeft": 0.85,
                 "EyeOpenRight": 0.85,
                 "FaceAngry": 0.25,
             },
-            "tired": {"EyeOpenLeft": 0.3, "EyeOpenRight": 0.25, "MouthOpen": 0.12, "BrowLeftY": 0.1, "BrowRightY": 0.1},
+            "tired": {"EyeOpenLeft": 0.3, "EyeOpenRight": 0.25, "MouthOpen": 0.12, "Brows": 0.1},
             "crying": {
                 "EyeOpenLeft": 0.2,
                 "EyeOpenRight": 0.2,
                 "MouthOpen": 0.35,
                 "MouthSmile": -0.5,
-                "BrowLeftY": 0.1,
-                "BrowRightY": 0.1,
+                "Brows": 0.1,
             },
             "speechless": {
                 "MouthSmile": 0.0,
                 "MouthOpen": 0.06,
                 "EyeOpenLeft": 0.8,
                 "EyeOpenRight": 0.8,
-                "BrowLeftY": 0.3,
-                "BrowRightY": 0.3,
+                "Brows": 0.3,
             },
         }
 

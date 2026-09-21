@@ -63,7 +63,7 @@ async def test_speech_reflected_to_vts_parameters():
 
     args = provider.expression.set_multi_parameter.await_args
     written = args.args[0]
-    assert written == {"MouthSmile": 0.8 * 0.8, "BrowLeftY": 0.6 * 0.8, "BrowRightY": 0.6 * 0.8}
+    assert written == {"MouthSmile": 0.8 * 0.8, "Brows": 0.6 * 0.8}
 
 
 @pytest.mark.asyncio

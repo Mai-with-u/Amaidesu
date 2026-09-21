@@ -188,7 +188,7 @@ async def test_set_expression_scales_params_by_intensity():
     assert result.success is True
     args = provider.expression.set_multi_parameter.await_args
     written = args.args[0]
-    assert written == {"MouthSmile": 0.4, "BrowLeftY": 0.3, "BrowRightY": 0.3}
+    assert written == {"MouthSmile": 0.4, "Brows": 0.3}
 
 
 @pytest.mark.asyncio
