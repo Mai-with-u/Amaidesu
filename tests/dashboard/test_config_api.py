@@ -4,7 +4,8 @@
 
 1. **GET /api/v1/config** — 返回六 scope 合并视图，敏感字段"已设置"占位
 2. **PATCH /api/v1/config** — scope 首段路由到对应 TOML 文件，经统一管线写盘；
-   未知项 / 只读字段 / 类型违约 / 占位回写一律 422 + 中文消息
+   未知项 / 只读字段 / 类型违约 / 残留占位回写一律 422 + 中文消息；
+   整列表回显中已有元素的占位按 ADR-022 还原为磁盘真实值（200 写入）
 3. **POST /api/v1/config/batch** — 多文件事务语义：任一失败磁盘零写入
 4. **GET /api/v1/config/schema** — 六个根 Schema 的自描述分组
 
@@ -209,14 +210,36 @@ class TestPatchConfigEndpoint:
         )
         assert resp.status_code == 422
 
-    def test_patch_sensitive_placeholder_rejected_422(self, client):
-        """回写"已设置"占位 → 422（防前端回显覆盖真实值）"""
-        resp = client.patch(
-            "/api/v1/config",
-            json={"key": "model.llm_providers", "value": [{"name": "default", "api_key": "已设置"}]},
-        )
+    def test_patch_list_echo_placeholder_restored_200(self, client, config_dir):
+        """整列表回显的已有元素占位 → 还原为磁盘真实值写入（ADR-022）
+
+        前端整列表提交时未编辑的敏感字段仍是 GET 下发的"已设置"占位；
+        按索引对齐磁盘现值回填真实值后写入，占位不落盘覆盖凭据。
+        """
+        providers = [{"name": "default", "client_type": "openai", "base_url": "https://x/v1", "api_key": "sk-real"}]
+        wrote = client.patch("/api/v1/config", json={"key": "model.llm_providers", "value": providers})
+        assert wrote.status_code == 200
+
+        echoed = [{"name": "default", "client_type": "openai", "base_url": "https://x/v1", "api_key": "已设置"}]
+        resp = client.patch("/api/v1/config", json={"key": "model.llm_providers", "value": echoed})
+
+        assert resp.status_code == 200
+        disk = (config_dir / "model.toml").read_text(encoding="utf-8-sig")
+        assert "sk-real" in disk
+        assert "已设置" not in disk
+
+    def test_patch_list_residual_placeholder_rejected_422(self, client, config_dir):
+        """残留占位（新元素无磁盘对位）→ 422（占位文本不得落盘）"""
+        providers = [
+            {"name": "default", "client_type": "openai", "base_url": "https://x/v1", "api_key": "sk-real"},
+            {"name": "second", "client_type": "openai", "base_url": "https://y/v1", "api_key": "已设置"},
+        ]
+        before = (config_dir / "model.toml").read_bytes()
+        resp = client.patch("/api/v1/config", json={"key": "model.llm_providers", "value": providers})
+
         assert resp.status_code == 422
         assert "占位" in resp.json()["detail"]
+        assert (config_dir / "model.toml").read_bytes() == before
 
     def test_patch_sensitive_explicit_new_value_writes(self, client, config_dir):
         """敏感字段显式提交新值 → 正常写入"""
