@@ -646,7 +646,14 @@ class Planner:
             return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
 
         if result.success:
-            data = result.structured_content if isinstance(result.structured_content, dict) else {"ok": True}
+            # 结构化结果优先（reply / rundown 等结构化工具的既有契约）。content
+            # 文本一并透传：信息获取型工具（web_search / web_fetch_url 等）的
+            # 产出就在 content，只回 {"ok": true} 会让 LLM 看不到任何内容。空
+            # content 不带键——动作执行型工具的观察形态维持原样。
+            data = dict(result.structured_content) if isinstance(result.structured_content, dict) else {}
+            data.setdefault("ok", True)
+            if result.content and "content" not in data:
+                data["content"] = result.content
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
         return _render_observation(data)

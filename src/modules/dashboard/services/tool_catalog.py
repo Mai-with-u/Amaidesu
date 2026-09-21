@@ -14,7 +14,7 @@ logger = get_logger("ToolCatalog")
 
 # 分类展示顺序（固定词表；注册表出现词表外分类时按名排序追加在后）。
 # 提供者成员不再静态硬编码——注册表（运行态）∪ 配置段键（声明态）。
-CATEGORY_ORDER: Tuple[str, ...] = ("avatar", "studio", "vision", "memory", "mcp", "game", "framework")
+CATEGORY_ORDER: Tuple[str, ...] = ("avatar", "studio", "vision", "memory", "web", "mcp", "game", "framework")
 
 # 已知提供者的展示描述（(分类, 提供者键) → 文案）。仅为显示元数据，不构成
 # 成员事实；查不到的提供者按分类给默认描述。
@@ -25,13 +25,14 @@ PROVIDER_DESCRIPTIONS: Dict[Tuple[str, str], str] = {
     ("studio", "obs"): "OBS Studio 控制",
     ("vision", "vision"): "视觉感知（vision_look_at_screen）",
     ("memory", "memory"): "记忆检索（memory_query_memory）",
+    ("web", "search"): "联网搜索（web_search / web_fetch_url）",
     ("game", "text_adv"): "文字冒险游戏（text_adv_*）",
     ("framework", "framework"): "框架内置（framework_*，如 AgentControl）",
 }
 
 # 成员来自 [tools.<分类>] 直接子段键的分类（enabled / config 之外的子键 =
 # 提供者声明；enabled=false 的声明提供者也展示——"配置已声明、重启后装配"）。
-_CONFIG_MEMBER_CATEGORIES: Tuple[str, ...] = ("avatar", "studio")
+_CONFIG_MEMBER_CATEGORIES: Tuple[str, ...] = ("avatar", "studio", "web")
 
 # 工具分类 "game" 的判据：名册里除框架自己的主播 Agent 之外，剩下的都是游戏 Agent
 # （主播 Agent 唯一且自我驱动，游戏 Agent 命令驱动）。这里不列举任何具体游戏名——

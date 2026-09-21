@@ -133,3 +133,56 @@ async def test_registry_observation_goes_through_the_renderer() -> None:
     assert len(observed) <= _OBSERVATION_MAX_CHARS
     assert parsed[_OBSERVATION_TRUNCATED_KEY] is True
     assert "elevators" in parsed
+
+
+async def test_text_only_tool_result_reaches_the_observation() -> None:
+    """信息获取型工具（content 文本产出、无 structured_content）的内容必须进观察。
+
+    回归锚点：web_search 上线时 LLM 只看到 {"ok": true}，搜索结果文本在
+    观察构造处被丢弃（工具执行侧与 tool.result 事件里内容完好）。
+    """
+    registry = MagicMock()
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="web_search",
+            success=True,
+            content="[1] Minecraft 官网\n    https://www.minecraft.net",
+        )
+    )
+    planner = _make_planner(registry)
+
+    observed = await planner._invoke_registry_tool("web_search", {"query": "minecraft"})
+    parsed = json.loads(observed)
+
+    assert parsed["ok"] is True
+    assert "Minecraft 官网" in parsed["content"]
+
+
+async def test_structured_and_text_content_coexist_in_observation() -> None:
+    """结构化结果与 content 文本并存时两者都可见（结构化键不被覆盖）。"""
+    registry = MagicMock()
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="some_tool",
+            success=True,
+            content="补充文本",
+            structured_content={"status": "done", "content": "结构化自带 content"},
+        )
+    )
+    planner = _make_planner(registry)
+
+    observed = await planner._invoke_registry_tool("some_tool", {})
+    parsed = json.loads(observed)
+
+    assert parsed["status"] == "done"
+    assert parsed["content"] == "结构化自带 content"
+
+
+async def test_action_tool_with_empty_content_keeps_ok_only_shape() -> None:
+    """空 content 的动作型工具维持 {"ok": true} 形态（不引入噪音键）。"""
+    registry = MagicMock()
+    registry.invoke = AsyncMock(return_value=ToolExecutionResult(tool_name="some_action", success=True, content=""))
+    planner = _make_planner(registry)
+
+    observed = await planner._invoke_registry_tool("some_action", {})
+    assert json.loads(observed) == {"ok": True}

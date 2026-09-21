@@ -48,7 +48,13 @@ EXPECTED_TOOL_PROVIDERS: tuple[tuple[str, str], ...] = (
     ("avatar", "vrchat"),
     ("avatar", "warudo"),
     ("studio", "obs"),
+    ("web", "search"),
 )
+
+# tools.toml 动态分类域清单（从期望清单派生：每个分类域至少有一个在册成员）。
+# 这些域在加载期走注册表校验与默认值补全、渲染期走注释化 provider 表、
+# WebUI 写入口按注册表下钻校验；静态命名段（vision/memory/mcp 等）不走此路径。
+TOOL_PROVIDER_DOMAINS: tuple[str, ...] = tuple(dict.fromkeys(d for d, _ in EXPECTED_TOOL_PROVIDERS))
 
 
 def _fill_collectors() -> dict[str, type[BaseConfig]]:
@@ -92,12 +98,14 @@ def _fill_tool_providers() -> dict[tuple[str, str], type[BaseConfig]]:
     from src.modules.avatar.vts.vts_provider import VTSProvider
     from src.modules.avatar.warudo.warudo_provider import WarudoProvider
     from src.modules.studio.obs.obs_provider import OBSProvider
+    from src.modules.web.search_provider import WebSearchProvider
 
     return {
         ("avatar", "vts"): VTSProvider.ConfigSchema,
         ("avatar", "vrchat"): VRChatProvider.ConfigSchema,
         ("avatar", "warudo"): WarudoProvider.ConfigSchema,
         ("studio", "obs"): OBSProvider.ConfigSchema,
+        ("web", "search"): WebSearchProvider.ConfigSchema,
     }
 
 
@@ -146,6 +154,7 @@ __all__ = [
     "TOOL_PROVIDER_SCHEMAS",
     "EXPECTED_COMPONENTS",
     "EXPECTED_TOOL_PROVIDERS",
+    "TOOL_PROVIDER_DOMAINS",
     "assert_components_registered",
     "ensure_component_registry",
     "fill_component_schemas",

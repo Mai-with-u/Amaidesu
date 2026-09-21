@@ -38,6 +38,7 @@ report = bind_core_tools(registry, config=tools_section_dict)
 | ``[tools.avatar.vrchat]`` | ``register_vrchat_tools`` | VRChat OSC 桥接 |
 | ``[tools.avatar.warudo]`` | ``register_warudo_tools`` | Warudo 控制 |
 | ``[tools.studio.obs]`` | ``register_obs_tools`` | OBS Studio 控制 |
+| ``[tools.web.search]`` | ``register_web_search_tools`` | 联网搜索（web_search / web_fetch_url） |
 
 注意：
 
@@ -100,6 +101,12 @@ def _load_obs() -> Callable[..., Any]:
     return register_obs_tools
 
 
+def _load_web_search() -> Callable[..., Any]:
+    from src.modules.web.search_provider import register_web_search_tools
+
+    return register_web_search_tools
+
+
 # 工具分类成员表：每个提供者绑定其分类段（avatar.vts / avatar.warudo / studio.obs）。
 # 分类段缺失或 enabled=false 时不装配（开关控制权归属人类：配置 + Web UI）。
 _DOMAIN_MEMBERS: List[_EntrySpec] = [
@@ -107,6 +114,7 @@ _DOMAIN_MEMBERS: List[_EntrySpec] = [
     (("avatar", "vrchat"), "VRChat OSC 桥接", _load_vrchat),
     (("avatar", "warudo"), "Warudo 控制", _load_warudo),
     (("studio", "obs"), "OBS Studio 控制", _load_obs),
+    (("web", "search"), "联网搜索", _load_web_search),
 ]
 
 

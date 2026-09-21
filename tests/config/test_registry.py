@@ -73,6 +73,15 @@ class TestToolProviderRegistry:
         assert "avatar.vts" in message
         assert "studio.obs" in message
 
+    def test_provider_domains_derived_from_expected(self):
+        """动态分类域清单从期望清单派生：每个域至少一个在册成员、可被加载管线引用。"""
+        registry.fill_component_schemas()
+        assert registry.TOOL_PROVIDER_DOMAINS
+        for domain in registry.TOOL_PROVIDER_DOMAINS:
+            assert any(d == domain for d, _ in registry.EXPECTED_TOOL_PROVIDERS), (
+                f"动态分类域 {domain} 无在册成员：TOOL_PROVIDER_DOMAINS 与期望清单脱节"
+            )
+
 
 class TestBootstrapRegistryContract:
     def test_every_assembly_member_has_schema(self):

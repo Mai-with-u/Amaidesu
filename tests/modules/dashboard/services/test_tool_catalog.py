@@ -181,6 +181,6 @@ class TestBuildToolCatalog:
         catalog = _catalog(registry, {})
         categories = [c["category"] for c in catalog["categories"]]
         # 固定词表全量在前（保序），词表外按名排序追加在后
-        assert categories[:7] == ["avatar", "studio", "vision", "memory", "mcp", "game", "framework"]
-        assert categories[7:] == sorted(categories[7:])
+        assert categories[:8] == ["avatar", "studio", "vision", "memory", "web", "mcp", "game", "framework"]
+        assert categories[8:] == sorted(categories[8:])
         assert "custom" in categories

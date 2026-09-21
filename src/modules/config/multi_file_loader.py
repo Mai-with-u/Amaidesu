@@ -274,7 +274,10 @@ def _table_from_model(instance: BaseModel) -> Any:
             for item in value:
                 inner.append(_table_from_model(item))
         elif isinstance(value, dict):
-            if is_tool_sections_host and sub_name in ("avatar", "studio"):
+            # 函数内 import 规避循环依赖：注册表会拉起各 provider 包
+            from src.modules.config.registry import TOOL_PROVIDER_DOMAINS
+
+            if is_tool_sections_host and sub_name in TOOL_PROVIDER_DOMAINS:
                 inner = _tool_provider_sections_table(value, domain=sub_name)
             else:
                 inner = _dict_to_toml_table(value)
@@ -542,11 +545,11 @@ def _validate_tool_provider_sections(
       从运行期装配失败前移到加载期
     """
     # 函数内 import 规避循环依赖：注册表会拉起各 provider 包
-    from src.modules.config.registry import TOOL_PROVIDER_SCHEMAS
+    from src.modules.config.registry import TOOL_PROVIDER_DOMAINS, TOOL_PROVIDER_SCHEMAS
 
     known = sorted(f"{d}.{k}" for d, k in TOOL_PROVIDER_SCHEMAS)
     tools = root_instance.tools
-    for domain in ("avatar", "studio"):
+    for domain in TOOL_PROVIDER_DOMAINS:
         sections = getattr(tools, domain, None) or {}
         for key in sorted(sections):
             provider_cfg = sections[key]

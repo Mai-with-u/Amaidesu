@@ -19,7 +19,7 @@ from src.modules.config.multi_file_loader import (
     update_config_values,
     validate_config_updates,
 )
-from src.modules.config.registry import COMPONENT_SCHEMAS, TOOL_PROVIDER_SCHEMAS
+from src.modules.config.registry import COMPONENT_SCHEMAS, TOOL_PROVIDER_DOMAINS, TOOL_PROVIDER_SCHEMAS
 from src.modules.config.schema_generator import ConfigSchemaGenerator, collect_all_fields
 from src.modules.config.tools_schemas import ToolsConfig
 from src.modules.logging import get_logger
@@ -94,9 +94,10 @@ def _walk_schema(model_cls: type[BaseModel], parts: list[str]) -> Optional[tuple
         elem_args = get_args(annotation)
         elem = _unwrap_optional(elem_args[-1]) if elem_args else None
         if isinstance(elem, type) and issubclass(elem, BaseModel):
-            # tools 动态分类段（avatar/studio）：rest[0] 是提供者名，其 config
-            # 子段的权威 Schema 在工具提供者注册表——按注册表下钻做字段级校验
-            if model_cls is ToolsConfig and segment in ("avatar", "studio") and len(rest) >= 2 and rest[1] == "config":
+            # tools 动态分类域（avatar/studio/web，清单见注册表）：rest[0] 是
+            # 提供者名，其 config 子段的权威 Schema 在工具提供者注册表——
+            # 按注册表下钻做字段级校验
+            if model_cls is ToolsConfig and segment in TOOL_PROVIDER_DOMAINS and len(rest) >= 2 and rest[1] == "config":
                 provider_schema = TOOL_PROVIDER_SCHEMAS.get((segment, rest[0]))
                 if provider_schema is not None:
                     deeper = rest[2:]

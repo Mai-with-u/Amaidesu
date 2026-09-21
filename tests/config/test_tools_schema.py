@@ -25,6 +25,7 @@ from src.modules.config.tools_schemas import (
     ToolsRootConfig,
     ToolsTasksConfig,
     VisionProviderConfig,
+    WebProviderConfig,
 )
 
 
@@ -87,6 +88,7 @@ class TestToolsConfigDomains:
         cfg = ToolsConfig()
         assert cfg.avatar == {}
         assert cfg.studio == {}
+        assert cfg.web == {}
         assert cfg.vision.enabled is False
         assert cfg.memory.enabled is True
         assert isinstance(cfg.mcp, McpProviderConfig)
@@ -112,6 +114,11 @@ class TestAvatarStudioDomains:
     def test_studio_accepts_dynamic_subdomains(self):
         cfg = ToolsConfig(studio={"obs": {"enabled": True, "config": {}}})
         assert cfg.studio["obs"].enabled is True
+
+    def test_web_accepts_dynamic_subdomains(self):
+        cfg = ToolsConfig(web={"search": {"enabled": True, "config": {}}})
+        assert cfg.web["search"].enabled is True
+        assert isinstance(cfg.web["search"], WebProviderConfig)
 
     def test_domain_extra_allowed(self):
         cfg = AvatarProviderConfig(enabled=True, extra_field="x")

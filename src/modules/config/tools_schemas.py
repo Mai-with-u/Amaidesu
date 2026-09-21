@@ -36,6 +36,11 @@
     enabled = true
     config.servers = {...}
 
+    # web 分类（联网信息获取；每个提供者 = 一个 enabled 开关）
+    [tools.web.search]
+    enabled = false
+    config = {...}
+
     # 工具熔断器健康监控
     [tools.health]
     enabled = true
@@ -142,6 +147,16 @@ class McpProviderConfig(ToolProviderConfig):
     model_config = ConfigDict(extra="allow")
 
 
+class WebProviderConfig(ToolProviderConfig):
+    """web 分类（工具出口 web_search / web_fetch_url；联网信息获取）
+
+    ``[tools.web.search]`` 等动态段：每个提供者 = 一个开关单元，
+    开 = 其全部工具进入可见集。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
 class ToolsTasksConfig(BaseConfig):
     """异步任务基建配置（``[tools.tasks]`` 段）
 
@@ -195,7 +210,7 @@ class ToolsHealthConfig(BaseConfig):
 class ToolsConfig(BaseConfig):
     """[tools] 段聚合
 
-    包含工具提供者开关（avatar/studio/vision/memory/mcp）+ 异步任务基建 +
+    包含工具提供者开关（avatar/studio/vision/memory/mcp/web）+ 异步任务基建 +
     工具熔断器配置 + disabled_tools 平铺列表。使用 ``extra="forbid"`` 拒绝未知子段。
     """
 
@@ -208,7 +223,7 @@ class ToolsConfig(BaseConfig):
         json_schema_extra={"x-ui-type": "object"},
     )
 
-    # 工具提供者开关（单一事实源；动态子段：avatar.<name> / studio.<name>）
+    # 工具提供者开关（单一事实源；动态子段：avatar.<name> / studio.<name> / web.<name>）
     # 禁 None 政策：段缺省 = 空容器 / 关态实例，全量写出可往返
     avatar: Dict[str, AvatarProviderConfig] = Field(
         default_factory=dict,
@@ -233,6 +248,11 @@ class ToolsConfig(BaseConfig):
     mcp: McpProviderConfig = Field(
         default_factory=McpProviderConfig,
         description="通用 MCP 外部工具源（config.servers 声明连接；enabled=true 时注册其工具）",
+        json_schema_extra={"x-ui-type": "object"},
+    )
+    web: Dict[str, WebProviderConfig] = Field(
+        default_factory=dict,
+        description="web 分类（联网搜索等，enabled 控制各提供者工具）",
         json_schema_extra={"x-ui-type": "object"},
     )
 
@@ -281,6 +301,7 @@ __all__ = [
     "VisionProviderConfig",
     "MemoryProviderConfig",
     "McpProviderConfig",
+    "WebProviderConfig",
     # 异步任务基建
     "ToolsTasksConfig",
     # 工具熔断器健康监控

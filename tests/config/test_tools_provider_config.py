@@ -43,6 +43,13 @@ enabled = true
 [tools.avatar.vts.config]
 """
 
+_WEB_SEARCH_SECTION = """
+[tools.web.search]
+enabled = true
+
+[tools.web.search.config]
+"""
+
 
 class TestProviderConfigBackfill:
     def test_empty_config_backfills_defaults_to_disk(self, temp_config_dir):
@@ -180,3 +187,36 @@ some_key = 1
 
         retired = config["tools"]["tools"]["avatar"]["retired_thing"]
         assert retired["config"]["some_key"] == 1
+
+
+class TestWebSearchProviderConfig:
+    """web 动态分类域（[tools.web.search]）与 avatar/studio 同管线的锚点用例。"""
+
+    def _add_web_search_section(self, config_dir, section_text: str) -> None:
+        path = config_dir / "tools.toml"
+        content = path.read_text(encoding="utf-8-sig")
+        path.write_text(content + section_text.strip("\n") + "\n", encoding="utf-8-sig")
+
+    def test_empty_config_backfills_defaults_to_disk(self, temp_config_dir):
+        """空 config 段 → 默认值补齐并写回落盘（web 域走注册表管线的验收锚点）。"""
+        generate_default_configs(temp_config_dir)
+        self._add_web_search_section(temp_config_dir, _WEB_SEARCH_SECTION)
+
+        load_config_dir(temp_config_dir)
+
+        content = (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
+        assert 'base_url = "https://cn.bing.com/search"' in content
+        assert "timeout_ms = 10000" in content
+        assert "max_fetch_chars = 4000" in content
+
+    def test_update_path_type_violation_raises(self, temp_config_dir):
+        """WebUI 写入口：web.search.config 字段类型违约经统一校验事务拒绝。"""
+        generate_default_configs(temp_config_dir)
+        self._add_web_search_section(temp_config_dir, _WEB_SEARCH_SECTION)
+
+        with pytest.raises(ConfigValidationError):
+            validate_config_updates(
+                temp_config_dir,
+                "tools.toml",
+                {"tools.web.search.config.timeout_ms": "not-a-number"},
+            )
