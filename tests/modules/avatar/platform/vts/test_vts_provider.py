@@ -16,8 +16,8 @@ from src.modules.avatar.platform.vts.vts_provider import VTSProvider, create_vts
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 
 
-def _build_provider(hotkey_list: Optional[List[Dict[str, Any]]] = None) -> VTSProvider:
-    provider = create_vts_provider(config={"vts_host": "localhost", "vts_port": 8001})
+def _build_provider(config: Optional[Dict[str, Any]] = None, hotkey_list: Optional[List[Dict[str, Any]]] = None) -> VTSProvider:
+    provider = create_vts_provider(config={"vts_host": "localhost", "vts_port": 8001, **(config or {})})
     # 替换热键匹配器为受控 stub（不触网）
     matcher = MagicMock()
     matcher.hotkey_list = hotkey_list or []
@@ -209,3 +209,72 @@ async def test_set_expression_covers_seventeen_emotions():
 
     provider = _build_provider()
     assert set(provider._emotion_map.keys()) == {e.value for e in Emotion}
+
+
+# =============================================================================
+# idle 绑定解析：纯配置（无候选猜测）、空停用、缺失警告停写
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_resolve_idle_bindings_config_only_and_unavailable_reported():
+    """绑定名解析纯配置：配置名原样返回，注入面外的名字进不可用清单。"""
+    provider = _build_provider()
+    provider.expression.list_tracking_parameters = AsyncMock(
+        return_value=["FaceAngleX", "FaceAngleY", "FaceAngleZ", "MouthOpen"]
+    )
+
+    resolved, unavailable = await provider._resolve_idle_parameter_names()
+
+    assert resolved["head_x"] == "FaceAngleX"
+    assert unavailable == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_idle_bindings_empty_means_disabled():
+    """空配置名 = 该轴停用（不进不可用清单、不产生警告）。"""
+    provider = _build_provider(config={"idle_param_body_x": "", "idle_param_head_x": ""})
+    provider.expression.list_tracking_parameters = AsyncMock(
+        return_value=["FaceAngleX", "FaceAngleY", "FaceAngleZ"]
+    )
+
+    resolved, unavailable = await provider._resolve_idle_parameter_names()
+
+    assert resolved["head_x"] == ""
+    assert resolved["body_x"] == ""
+    assert unavailable == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_idle_bindings_unavailable_name_flagged():
+    """非空名不在注入面 → 返回不可用清单（调用方预置 failed_params 停写）。"""
+    provider = _build_provider(config={"idle_param_body_x": "TorsoX"})
+    provider.expression.list_tracking_parameters = AsyncMock(
+        return_value=["FaceAngleX", "FaceAngleY", "FaceAngleZ"]
+    )
+
+    _resolved, unavailable = await provider._resolve_idle_parameter_names()
+
+    assert unavailable == ["TorsoX"]
+
+
+def test_mark_failed_params_preset_stops_writes():
+    """解析期预置的失败参数：idle 循环停写（复用既有失败集机制）。"""
+    controller = _build_idle_controller()
+    controller.mark_failed_params(["TorsoX", ""])
+    assert "TorsoX" in controller._failed_params
+    assert "" not in controller._failed_params
+
+
+def _build_idle_controller():
+    from src.modules.avatar.platform.vts.idle_motion_controller import IdleMotionController
+
+    async def _fake_set_parameter(name: str, value: float) -> bool:
+        return True
+
+    return IdleMotionController(
+        logger_name="test.idle.mark",
+        is_connected=lambda: True,
+        is_speaking=lambda: False,
+        set_parameter=_fake_set_parameter,
+    )

@@ -111,12 +111,12 @@ class IdleMotionController:
         is_connected: Callable[[], bool],
         is_speaking: Callable[[], bool],
         set_parameter: Callable[[str, float], Coroutine[Any, Any, bool]],
-        param_head_x: str = "HeadAngleX",
-        param_head_y: str = "HeadAngleY",
-        param_head_z: str = "HeadAngleZ",
-        param_body_x: str = "BodyX",
-        param_body_y: str = "BodyY",
-        param_body_z: str = "BodyZ",
+        param_head_x: str = "FaceAngleX",
+        param_head_y: str = "FaceAngleY",
+        param_head_z: str = "FaceAngleZ",
+        param_body_x: str = "",
+        param_body_y: str = "",
+        param_body_z: str = "",
         head_amplitude: float = 0.05,
         body_amplitude: float = 0.02,
         speed: float = 1.0,
@@ -254,6 +254,10 @@ class IdleMotionController:
     def set_baseline_params(self, params: Dict[str, float]) -> None:
         """设置常驻基线参数（如 MouthSmile=0.3），每 tick 持续维持。"""
         self._baseline_params = {k: float(v) for k, v in (params or {}).items() if k}
+
+    def mark_failed_params(self, names: list[str]) -> None:
+        """把解析期判定为不可用的参数名预置进失败集（loop 内停写、不逐 tick 刷屏）。"""
+        self._failed_params.update(n for n in names if n)
 
     def set_baseline_overrides(self, expressions: Dict[str, float]) -> None:
         """设置当前 Intent 占用的表情参数名：这些参数不写入基线值。"""

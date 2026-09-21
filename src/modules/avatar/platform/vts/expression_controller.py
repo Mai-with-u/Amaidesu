@@ -133,6 +133,28 @@ class ExpressionController:
             self.logger.error(f"获取VTS参数列表异常: {e}")
             return []
 
+    async def list_live2d_parameters(self) -> List[str]:
+        """获取当前模型 rig 参数名清单（``Live2DParameterListRequest``）。
+
+        注入面清单（``list_tracking_parameters``）回答"能写什么"，本清单
+        回答"模型上有什么"——两者交集才有可见效果；绑定率（注入面 → rig
+        的映射）无 API，用户从本清单选取 idle 绑定名改配置。
+        """
+        if not self._is_connected():
+            return []
+        try:
+            response = await self._vts_request(
+                self._vts_request.vts_request.BaseRequest(message_type="Live2DParameterListRequest")
+            )
+            if response and response.get("messageType") == "Live2DParameterListResponse":
+                params = response.get("data", {}).get("parameters", [])
+                return [str(p.get("name")) for p in params if p.get("name")]
+            self.logger.debug(f"获取 Live2D 参数清单失败: {response}")
+            return []
+        except Exception as e:
+            self.logger.debug(f"获取 Live2D 参数清单异常: {e}")
+            return []
+
     async def list_parameter_ranges(self) -> Dict[str, "tuple[float, float]"]:
         """获取 VTS 当前可用参数的原生范围 ``{参数名: (min, max)}``。
 

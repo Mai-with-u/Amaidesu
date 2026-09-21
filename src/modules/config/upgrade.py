@@ -297,7 +297,7 @@ def _upgrade_avatar_platform_graduation(host_data: Dict[str, Any], target_data: 
     ``.config`` 中间层直接铺参数键；``enabled`` 布尔换算为
     ``[avatar.platform].enabled`` 启用名单的成员（对齐 agents/collectors
     域根名单约定；段缺 enabled 键按装配侧"缺省不装配"口径处理）。
-    用户显式值原样搬迁不改名。宿主侧旧段整体删除。对已迁移数据零变更（幂等）。
+    VTS 成员段的 idle 六轴绑定旧默认随迁移同步改写。其余用户显式值原样搬迁不改名。宿主侧旧段整体删除。对已迁移数据零变更（幂等）。
     """
     tools = host_data.get("tools")
     avatar = tools.get("avatar") if isinstance(tools, dict) else None
@@ -315,7 +315,23 @@ def _upgrade_avatar_platform_graduation(host_data: Dict[str, Any], target_data: 
     for name, member in avatar.items():
         member_cfg = member if isinstance(member, dict) else {}
         config = member_cfg.get("config")
-        platform[name] = dict(config) if isinstance(config, dict) else {}
+        member_section = dict(config) if isinstance(config, dict) else {}
+        if name == "vts":
+            # idle 六轴绑定旧默认随迁移改写（数据变换随搬家一次完成；avatar.toml
+            # 是新生成文件、版本直接落基线，挂在其自身链上的改写钩子永远够不着
+            # 迁移数据）。仅改写旧默认落盘值，用户显式配置原样保留。
+            for key, old_default, new_default in (
+                ("idle_param_head_x", "HeadAngleX", "FaceAngleX"),
+                ("idle_param_head_y", "HeadAngleY", "FaceAngleY"),
+                ("idle_param_head_z", "HeadAngleZ", "FaceAngleZ"),
+                ("idle_param_body_x", "BodyX", ""),
+                ("idle_param_body_y", "BodyY", ""),
+                ("idle_param_body_z", "BodyZ", ""),
+            ):
+                if member_section.get(key) == old_default:
+                    member_section[key] = new_default
+                    changed.append(f"platform.vts.{key}: {old_default} -> {new_default!r}")
+        platform[name] = member_section
         if member_cfg.get("enabled", False) is True and name not in enabled_names:
             enabled_names.append(name)
         changed.append(f"tools.avatar.{name} -> avatar.platform.{name}")
@@ -353,6 +369,7 @@ def _upgrade_avatar_lipsync_graduation(host_data: Dict[str, Any], target_data: D
 register_cross_file_hook(
     "tools.toml", "avatar.toml", "avatar_platform_graduation", "2.0.38", _upgrade_avatar_platform_graduation
 )
+
 
 # 生产钩子登记：infra.toml v2.0.38（[avatar.lipsync] 迁往 avatar.toml）。
 # target 取 2.0.38：存量 infra.toml 版本曾被 tools→infra 跨文件钩子推到

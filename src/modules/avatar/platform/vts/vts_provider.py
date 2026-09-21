@@ -114,15 +114,6 @@ class VTSProvider(BaseToolProvider):
     # VTS 断线自动重连间隔（秒）：覆盖 Amaidesu 先于 VTS 启动、VTS 中途重启两种场景
     _RECONNECT_INTERVAL_S = 5.0
 
-    _IDLE_PARAM_FALLBACKS: Dict[str, tuple[str, ...]] = {
-        "head_x": ("HeadAngleX", "HeadX", "FaceAngleX", "FaceX", "NeckAngleX"),
-        "head_y": ("HeadAngleY", "HeadY", "FaceAngleY", "FaceY", "NeckAngleY"),
-        "head_z": ("HeadAngleZ", "HeadZ", "FaceAngleZ", "FaceZ", "NeckAngleZ"),
-        "body_x": ("BodyAngleX", "BodyX", "BodyRotationX", "torsoAngleX", "BodyPositionX"),
-        "body_y": ("BodyAngleY", "BodyY", "BodyRotationY", "torsoAngleY", "BodyPositionY"),
-        "body_z": ("BodyAngleZ", "BodyZ", "BodyRotationZ", "torsoAngleZ", "BodyPositionZ"),
-    }
-
     class ConfigSchema(BaseConfig):
         """VTS 配置（连接 + Idle 两段；口型分析调参在 ``[avatar.lipsync]`` 共享件段）
 
@@ -130,6 +121,10 @@ class VTSProvider(BaseToolProvider):
 
         说明：vts 字段多沿用历史命名（如 ``*_ms`` 实际单位是 float 秒）；
         本批保持行为保真（默认值 + 类型逐一等价），不顺手改单位/命名。
+        idle 六轴绑定纯配置（无候选猜测）：头部默认 FaceAngleX/Y/Z（VTS
+        内置输入，模型生态实证近乎全绑定）；身体默认空串停用——VTS 无
+        通用躯干输入插座，任何非空默认都是猜测；空名 = 该轴零写入零警告，
+        非空名缺失 = 一次性警告 + 停写。
         """
 
         type: str = "vts"
@@ -139,12 +134,12 @@ class VTSProvider(BaseToolProvider):
         base_smile: float = Field(default=0.3, ge=-1.0, le=1.0, description="MouthSmile 静止基线值")
         # Idle 运动
         idle_enabled: bool = Field(default=True, description="是否启用 Idle 拟人动画")
-        idle_param_head_x: str = Field(default="HeadAngleX", description="Idle 头部 X 参数名")
-        idle_param_head_y: str = Field(default="HeadAngleY", description="Idle 头部 Y 参数名")
-        idle_param_head_z: str = Field(default="HeadAngleZ", description="Idle 头部 Z 参数名")
-        idle_param_body_x: str = Field(default="BodyX", description="Idle 身体 X 参数名")
-        idle_param_body_y: str = Field(default="BodyY", description="Idle 身体 Y 参数名")
-        idle_param_body_z: str = Field(default="BodyZ", description="Idle 身体 Z 参数名")
+        idle_param_head_x: str = Field(default="FaceAngleX", description="Idle 头部 X 参数名（空串停用该轴）")
+        idle_param_head_y: str = Field(default="FaceAngleY", description="Idle 头部 Y 参数名（空串停用该轴）")
+        idle_param_head_z: str = Field(default="FaceAngleZ", description="Idle 头部 Z 参数名（空串停用该轴）")
+        idle_param_body_x: str = Field(default="", description="Idle 身体 X 参数名（空串停用；按模型配置躯干输入）")
+        idle_param_body_y: str = Field(default="", description="Idle 身体 Y 参数名（空串停用；按模型配置躯干输入）")
+        idle_param_body_z: str = Field(default="", description="Idle 身体 Z 参数名（空串停用；按模型配置躯干输入）")
         idle_head_amplitude: float = Field(default=0.05, ge=0.0, description="Idle 头部摆动幅度")
         idle_body_amplitude: float = Field(default=0.02, ge=0.0, description="Idle 身体摆动幅度")
         idle_speed: float = Field(default=1.0, ge=0.0, description="Idle 摆动速度系数")
@@ -716,36 +711,36 @@ class VTSProvider(BaseToolProvider):
 
         return VTSRequestProxy()
 
-    async def _resolve_idle_parameter_names(self) -> Dict[str, str]:
+    async def _resolve_idle_parameter_names(self) -> tuple[Dict[str, str], List[str]]:
+        """解析 idle 六轴绑定名（纯配置，无候选猜测）。
+
+        - 空配置名 = 该轴停用（零写入零警告）；
+        - 非空名不在当前注入面清单 → 记入返回的不可用清单（调用方在
+          ``set_parameter_names`` 之后预置 failed_params 实现一次性警告 +
+          停写；注入面与模型 rig 的映射无 API，绑定不可见只能靠用户观察
+          配置修正）。
+
+        Returns:
+            (轴名 → 绑定名（空串 = 停用）, 不可用绑定名清单)
+        """
         available = set(await self.expression.list_tracking_parameters())
         config_names = {
-            "head_x": str(self.config.get("idle_param_head_x", "HeadAngleX")),
-            "head_y": str(self.config.get("idle_param_head_y", "HeadAngleY")),
-            "head_z": str(self.config.get("idle_param_head_z", "HeadAngleZ")),
-            "body_x": str(self.config.get("idle_param_body_x", "BodyX")),
-            "body_y": str(self.config.get("idle_param_body_y", "BodyY")),
-            "body_z": str(self.config.get("idle_param_body_z", "BodyZ")),
+            "head_x": str(self.typed_config.idle_param_head_x or ""),
+            "head_y": str(self.typed_config.idle_param_head_y or ""),
+            "head_z": str(self.typed_config.idle_param_head_z or ""),
+            "body_x": str(self.typed_config.idle_param_body_x or ""),
+            "body_y": str(self.typed_config.idle_param_body_y or ""),
+            "body_z": str(self.typed_config.idle_param_body_z or ""),
         }
-        if not available:
-            self.logger.warning("无法获取 VTS 参数列表，idle 动画将使用配置中的参数名")
-            return config_names
-
-        resolved: Dict[str, str] = {}
-        for axis, user_name in config_names.items():
-            candidates = (user_name,) + self._IDLE_PARAM_FALLBACKS.get(axis, ())
-            chosen = next((name for name in candidates if name in available), None)
-            if chosen:
-                resolved[axis] = chosen
-                if chosen != user_name:
-                    self.logger.info(f"idle 参数回退：{axis} 配置名 '{user_name}' 在 VTS 中不可用，自动使用 '{chosen}'")
-            else:
-                resolved[axis] = user_name
-                available_sample = sorted(available)[:30]
-                self.logger.warning(
-                    f"idle 参数 {axis} 在 VTS 中无可用候选（配置名 '{user_name}'，"
-                    f"回退表 {candidates} 均不可用）。当前可用参数示例：{available_sample}。"
-                )
-        return resolved
+        resolved = {axis: name for axis, name in config_names.items()}
+        unavailable = sorted({name for name in config_names.values() if name and available and name not in available})
+        if unavailable:
+            self.logger.warning(
+                f"idle 绑定 {unavailable} 不在当前 VTS 注入面清单（模型未绑定该输入或名字有误），"
+                f"对应轴将停写。当前可用参数示例：{sorted(available)[:30]}；"
+                f"模型 rig 参数清单见 debug 日志，可从中选取绑定名改配置。"
+            )
+        return resolved, unavailable
 
     async def _connect(self) -> None:
         if self._is_connecting or self._is_connected:
@@ -763,18 +758,7 @@ class VTSProvider(BaseToolProvider):
             self._is_connected = True
             self.logger.info("VTS 连接成功")
 
-            await self.hotkey_matcher.load_hotkeys()
-
-            resolved = await self._resolve_idle_parameter_names()
-            self.idle_motion.set_parameter_names(
-                param_head_x=resolved.get("head_x"),
-                param_head_y=resolved.get("head_y"),
-                param_head_z=resolved.get("head_z"),
-                param_body_x=resolved.get("body_x"),
-                param_body_y=resolved.get("body_y"),
-                param_body_z=resolved.get("body_z"),
-            )
-            await self._refresh_idle_param_scale(resolved)
+            await self._reload_model_state()
 
             if self.idle_enabled_cfg:
                 try:
@@ -782,21 +766,52 @@ class VTSProvider(BaseToolProvider):
                     self.logger.info("VTS idle 动画已启动")
                 except Exception as e:
                     self.logger.error(f"启动 idle 动画失败: {e}")
-
-            try:
-                await self.expression.set_parameter(
-                    self.PARAM_MOUTH_SMILE,
-                    float(self.config.get("base_smile", 0.3)),
-                    weight=1,
-                    silent=True,
-                )
-            except Exception as e:
-                self.logger.warning(f"应用常驻微笑基线失败: {e}")
         except Exception as e:
             self.logger.error(f"VTS 连接失败: {e}")
             self._is_connected = False
         finally:
             self._is_connecting = False
+
+    async def _reload_model_state(self) -> None:
+        """模型相关状态解析链：热键重拉 → idle 绑定解析 → 量纲缩放重建 → 基线重写。
+
+        连接建立与换模跟随共用；idle 循环在跑时更新绑定名即时生效，新模型
+        上写不进的参数经 failed_params 停写并警告。模型选择权在 VTS/人侧，
+        本链只做适配。
+        """
+        await self.hotkey_matcher.load_hotkeys()
+
+        try:
+            live2d_names = await self.expression.list_live2d_parameters()
+            if live2d_names:
+                self.logger.debug(f"当前模型 Live2D 参数清单（{len(live2d_names)} 项）: {sorted(live2d_names)}")
+        except Exception as e:
+            self.logger.debug(f"拉取 Live2D 参数清单失败（忽略）: {e}")
+
+        resolved, unavailable = await self._resolve_idle_parameter_names()
+        self.idle_motion.set_parameter_names(
+            param_head_x=resolved.get("head_x"),
+            param_head_y=resolved.get("head_y"),
+            param_head_z=resolved.get("head_z"),
+            param_body_x=resolved.get("body_x"),
+            param_body_y=resolved.get("body_y"),
+            param_body_z=resolved.get("body_z"),
+        )
+        if unavailable:
+            # 复用 idle 循环的失败停写集：预置后不写入、不逐 tick 刷屏
+            self.idle_motion.mark_failed_params(unavailable)
+
+        await self._refresh_idle_param_scale(resolved)
+
+        try:
+            await self.expression.set_parameter(
+                self.PARAM_MOUTH_SMILE,
+                float(self.typed_config.base_smile),
+                weight=1,
+                silent=True,
+            )
+        except Exception as e:
+            self.logger.warning(f"应用常驻微笑基线失败: {e}")
 
     async def _vts_health_check(self) -> bool:
         try:

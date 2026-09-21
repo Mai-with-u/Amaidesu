@@ -112,3 +112,45 @@ def test_graduation_idempotent_on_second_load(tmp_path: Path):
     assert not report.has_drift
     for name, content in snapshot.items():
         assert (tmp_path / name).read_text(encoding="utf-8-sig") == content
+
+
+def test_idle_bindings_old_defaults_retuned(tmp_path: Path):
+    """idle 绑定旧默认落盘值改写为新默认（2.0.39）；用户显式值原样保留。"""
+    from src.modules.config.multi_file_loader import generate_default_configs
+
+    generate_default_configs(tmp_path)
+    _seed_old_tools_avatar(tmp_path)
+    # 在 vts 成员段（种子 config 尾键 idle_extra_params 行后）补齐旧默认绑定
+    path = tmp_path / "tools.toml"
+    content = path.read_text(encoding="utf-8-sig")
+    anchor = 'idle_extra_params = { "SleeveL" = 0.3 }'
+    assert anchor in content
+    content = content.replace(
+        anchor,
+        anchor + '\n'
+        + 'idle_param_head_x = "HeadAngleX"\n'
+        + 'idle_param_head_y = "HeadAngleY"\n'
+        + 'idle_param_head_z = "HeadAngleZ"\n'
+        + 'idle_param_body_x = "BodyX"\n'
+        + 'idle_param_body_y = "BodyY"\n'
+        + 'idle_param_body_z = "BodyZ"\n',
+        1,
+    )
+    path.write_text(content, encoding="utf-8-sig")
+
+    load_config_dir(tmp_path)
+
+    avatar_doc = tomlkit.parse((tmp_path / "avatar.toml").read_text(encoding="utf-8-sig"))
+    vts = avatar_doc["platform"]["vts"]
+    # head 旧默认 → FaceAngle 系
+    assert vts["idle_param_head_x"] == "FaceAngleX"
+    assert vts["idle_param_head_y"] == "FaceAngleY"
+    assert vts["idle_param_head_z"] == "FaceAngleZ"
+    # body 旧默认 → 空串停用
+    assert vts["idle_param_body_x"] == ""
+    assert vts["idle_param_body_y"] == ""
+    assert vts["idle_param_body_z"] == ""
+    # 非旧默认的键不受影响（用户显式配置保护）
+    assert vts["vts_host"] == "127.0.0.1"
+    assert vts["idle_extra_params"]["SleeveL"] == 0.3
+    assert get_config_version(tmp_path, "avatar.toml") == CONFIG_BASELINE_VERSION
