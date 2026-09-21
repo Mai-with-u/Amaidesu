@@ -18,9 +18,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.modules.avatar.speech_binding import bind_speech_emotion, bind_speaking_state
-from src.modules.avatar.vts.vts_provider import VTSProvider
-from src.modules.avatar.warudo.warudo_provider import WarudoProvider
-from src.modules.avatar.vrchat.vrchat_provider import VRChatProvider
+from src.modules.avatar.platform.vts.vts_provider import VTSProvider
+from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider
+from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload

@@ -148,7 +148,7 @@ class WarudoProvider(BaseToolProvider):
     class ConfigSchema(BaseConfig):
         """Warudo 配置（WebSocket + 后台任务 + 动作目录）
 
-        TOML 段位：[tools.avatar.warudo].config
+        TOML 段位：[avatar.platform.warudo]（成员段直接铺键）
         （历史 subtitle_enabled/subtitle_port/subtitle_show_status 三键随
         8766 字幕面删除而移除，字幕收敛为 Dashboard /subtitle 一面。）
         """

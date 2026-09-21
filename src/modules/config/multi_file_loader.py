@@ -1,8 +1,8 @@
 """多文件配置加载器（阶段化管线）
 
-从 config/ 目录加载 6 个 TOML 配置文件，按固定阶段序执行：
+从 config/ 目录加载 7 个 TOML 配置文件，按固定阶段序执行：
 
-    ① read_all_raw      6 文件全读为 dict（缺失文件先行按 Schema 生成）
+    ① read_all_raw      全部文件读为 dict（缺失文件先行按 Schema 生成）
     ②③ 版本推进 + 升级钩子  每文件链跑区间钩子；跨文件钩子双写 + 双版本同升
     ④ Pydantic 校验     硬错——类型违约直接抛出（含字段 dotted path）
     ⑤ 漂移写回          全量写出 + 备份；采集器子段按注册表校验与补全
@@ -12,6 +12,7 @@
     config/agents.toml      - 业务 Agent（含主播人设/上下文/后台维护段）
     config/collectors.toml  - 采集器（enabled 名单 + 各采集器段）
     config/tools.toml       - 工具提供者启用/配置
+    config/avatar.toml      - 皮套（平台启用名单 + 平台成员段 + 口型共享件）
     config/model.toml       - LLM/VLM 模型配置（三层：providers/models/profiles）
     config/storage.toml     - 存储（顶层 [sqlite] + [memory]）
     config/infra.toml       - 基础设施（tts/subtitle/events/interceptors/dashboard/logging/simulator）
@@ -43,6 +44,7 @@ from pydantic import BaseModel
 
 from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_value
 from src.modules.config.agents_schemas import AgentsRootConfig
+from src.modules.config.avatar_schemas import AvatarPlatformConfig, AvatarRootConfig, PLATFORM_NAMES
 from src.modules.config.collectors_schemas import CollectorsRootConfig
 from src.modules.config.tools_schemas import ToolsConfig, ToolsRootConfig
 from src.modules.config.errors import ConfigValidationError
@@ -54,11 +56,15 @@ from src.modules.logging import get_logger
 
 logger = get_logger("MultiFileLoader")
 
-# 配置文件清单（按域划分）：agents / collectors / tools / model / storage / infra
+# 配置文件清单（按域划分）：agents / collectors / tools / avatar / model / storage / infra。
+# avatar.toml 排在 tools.toml 之后：毕业跨文件钩子（tools/infra → avatar）以
+# avatar.toml 为目标文件，目标 dict 在阶段①已就位；宿主文件（tools/infra）
+# 先于 avatar 自身钩子被遍历，"先搬家、后做数据变换"的次序由此保证。
 _CONFIG_FILES = [
     "agents.toml",
     "collectors.toml",
     "tools.toml",
+    "avatar.toml",
     "model.toml",
     "storage.toml",
     "infra.toml",
@@ -69,6 +75,7 @@ _FILE_SCOPES: dict[str, str] = {
     "agents.toml": "agents",
     "collectors.toml": "collectors",
     "tools.toml": "tools",
+    "avatar.toml": "avatar",
     "model.toml": "model",
     "storage.toml": "storage",
     "infra.toml": "infra",
@@ -79,6 +86,7 @@ _ROOT_SCHEMAS: dict[str, type[BaseConfig]] = {
     "agents.toml": AgentsRootConfig,
     "collectors.toml": CollectorsRootConfig,
     "tools.toml": ToolsRootConfig,
+    "avatar.toml": AvatarRootConfig,
     "model.toml": ModelConfig,
     "storage.toml": StorageRootConfig,
     "infra.toml": InfraRootConfig,
@@ -89,6 +97,7 @@ _FILE_COMMENTS: dict[str, str] = {
     "agents.toml": "业务 Agent 配置 - Amaidesu",
     "collectors.toml": "采集器配置 - Amaidesu",
     "tools.toml": "工具配置 - Amaidesu",
+    "avatar.toml": "皮套配置 - Amaidesu",
     "model.toml": "模型配置 - LLM/VLM 参数",
     "storage.toml": "存储配置 - Amaidesu",
     "infra.toml": "基础设施配置 - Amaidesu",
@@ -260,7 +269,7 @@ def _table_from_model(instance: BaseModel) -> Any:
     ``if field_value is None: continue`` 同源惯例）。
     """
     table = tomlkit.table()
-    # tools 动态分类段（avatar/studio）的 dict 值走注册表注释化渲染
+    # tools 动态分类段（studio）的 dict 值走注册表注释化渲染
     is_tool_sections_host = isinstance(instance, ToolsConfig)
     for sub_name, sub_info in type(instance).model_fields.items():
         value = getattr(instance, sub_name)
@@ -278,6 +287,7 @@ def _table_from_model(instance: BaseModel) -> Any:
             from src.modules.config.registry import TOOL_PROVIDER_DOMAINS
 
             if is_tool_sections_host and sub_name in TOOL_PROVIDER_DOMAINS:
+)
                 inner = _tool_provider_sections_table(value, domain=sub_name)
             else:
                 inner = _dict_to_toml_table(value)
@@ -291,6 +301,12 @@ def _table_from_model(instance: BaseModel) -> Any:
         if sub_info.description and not is_nested_table:
             table.add(tomlkit.comment(sub_info.description))
         table[sub_name] = inner
+
+    # avatar 平台组段的未注册残留段（extra="allow" 保留在 extras，不在
+    # model_fields 里）：原样输出，不因未注册而静默丢弃用户数据
+    if isinstance(instance, AvatarPlatformConfig):
+        for extra_name, extra_value in (instance.__pydantic_extra__ or {}).items():
+            table[extra_name] = _dict_to_toml_table(extra_value) if isinstance(extra_value, dict) else extra_value
     return table
 
 
@@ -550,6 +566,7 @@ def _validate_tool_provider_sections(
     known = sorted(f"{d}.{k}" for d, k in TOOL_PROVIDER_SCHEMAS)
     tools = root_instance.tools
     for domain in TOOL_PROVIDER_DOMAINS:
+)
         sections = getattr(tools, domain, None) or {}
         for key in sorted(sections):
             provider_cfg = sections[key]
@@ -576,6 +593,37 @@ def _validate_tool_provider_sections(
             # 剥 None 再回填：Optional 字段的 None 不落盘（TOML 无 null 字面量），
             # 序列化侧的裸 dict 渲染路径不做 None 兜底
             provider_cfg.config = {k: v for k, v in sub_instance.model_dump().items() if v is not None}
+
+
+def _validate_avatar_platform_sections(root_instance: AvatarRootConfig, report: DriftReport) -> None:
+    """校验 ``[avatar.platform]`` 启用名单与残留段（阶段④ 的 avatar 分支）。
+
+    成员段的漂移检测（缺键补默认、未知键剥离）由根 Schema 的递归
+    ``from_dict_with_drift_check`` 经 typed 引用自动完成，本分支只补两类：
+
+    - ``enabled`` 名单出现合法清单外的平台名 → 硬错。平台名封闭三值且
+      无退役史（不同于采集器的退役名容忍跳过），表外名字装配期必然
+      查不到 provider，错误前移到加载期并给出合法名单。
+    - ``extra="allow"`` 保留下来的未注册成员段（如迁移残留的拼写错误段）
+      → warning 提示人工复核，数据原样保留（序列化侧同步保留输出，
+      不因未注册而静默丢弃）。
+    """
+    platform = root_instance.platform
+    unknown = sorted(n for n in platform.enabled if n not in PLATFORM_NAMES)
+    if unknown:
+        raise ConfigValidationError(
+            "avatar.toml",
+            "avatar.platform.enabled",
+            f"未注册平台名 {unknown}（合法名单：{sorted(PLATFORM_NAMES)}）",
+        )
+    extras = platform.__pydantic_extra__ or {}
+    for name in sorted(extras):
+        logger.warning(
+            f"avatar.toml 残留未注册平台段 [avatar.platform.{name}]（合法名单：{sorted(PLATFORM_NAMES)}），"
+            f"跳过校验，原样保留供人工复核。"
+        )
+    if extras:
+        report.redundant.extend(f"platform.{name}" for name in sorted(extras))
 
 
 def _validate_llm_profiles_closed_set(raw_data: dict[str, Any]) -> None:
@@ -626,6 +674,8 @@ def _validate_file(file_name: str, raw_data: dict[str, Any]) -> tuple[BaseConfig
         _validate_collectors_sections(instance, report)
     if isinstance(instance, ToolsRootConfig):
         _validate_tool_provider_sections(instance, report)
+    if isinstance(instance, AvatarRootConfig):
+        _validate_avatar_platform_sections(instance, report)
     if isinstance(instance, ModelRootConfig):
         _validate_llm_profiles_closed_set(raw_data)
     return instance, report
@@ -678,7 +728,7 @@ def load_config_dir(
 
     # --- 阶段① read_all_raw ---
     raw_docs: dict[str, dict[str, Any]] = {fname: _read_toml_dict(config_dir / fname) for fname in _CONFIG_FILES}
-    logger.info("[加载管线] 阶段① read_all_raw 完成（6 文件）")
+    logger.info(f"[加载管线] 阶段① read_all_raw 完成（{len(_CONFIG_FILES)} 文件）")
 
     # --- 阶段②③ 版本推进 + 升级钩子（每文件链；跨文件钩子双写 + 双版本同升）---
     # 函数内 import：upgrade 模块的注册表被测试 patch，顶部 import 会使
@@ -698,7 +748,7 @@ def load_config_dir(
     for fname in _CONFIG_FILES:
         instance, report = _validate_file(fname, raw_docs[fname])
         validated[fname] = (instance, report)
-    logger.info("[加载管线] 阶段④ Pydantic 校验完成（6 文件，硬错语义）")
+    logger.info(f"[加载管线] 阶段④ Pydantic 校验完成（{len(_CONFIG_FILES)} 文件，硬错语义）")
 
     batch_id: str | None = None
     residuals: dict[str, DriftReport] = {}

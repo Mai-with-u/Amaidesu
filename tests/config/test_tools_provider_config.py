@@ -1,6 +1,7 @@
 """工具提供者 config 子段的注册表校验与默认值补全测试
 
-覆盖 tools 动态分类段（[tools.avatar.<name>] / [tools.studio.<name>]）的
+覆盖 tools 动态分类段（[tools.studio.<name>]；avatar 分类已毕业为 avatar.toml
+[avatar.platform.*]，平台段校验见 test_avatar_graduation_migration.py）的
 加载期行为：默认值补齐落盘（含注释渲染）、未知键剥离、类型违约硬错、
 残留段容忍、WebUI 写入口校验。机制与采集器子段（_validate_collectors_
 sections）同构，断言形状对齐 test_writeback_pipeline 的既有用例。
@@ -30,17 +31,17 @@ def temp_config_dir(tmp_path):
 
 
 def _add_vts_section(config_dir, section_text: str) -> None:
-    """在 tools.toml 尾部追加 [tools.avatar.vts] 段（绝对表头，尾追安全）。"""
+    """在 tools.toml 尾部追加 [tools.studio.obs] 段（绝对表头，尾追安全）。"""
     path = config_dir / "tools.toml"
     content = path.read_text(encoding="utf-8-sig")
     path.write_text(content + section_text.strip("\n") + "\n", encoding="utf-8-sig")
 
 
 _VTS_SECTION = """
-[tools.avatar.vts]
+[tools.studio.obs]
 enabled = true
 
-[tools.avatar.vts.config]
+[tools.studio.obs.config]
 """
 
 _WEB_SEARCH_SECTION = """
@@ -60,10 +61,9 @@ class TestProviderConfigBackfill:
         _config, _report = load_config_dir(temp_config_dir)
 
         content = (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
-        assert "base_smile = 0.3" in content
-        assert 'vts_host = "localhost"' in content
-        assert "vts_port = 8001" in content
-        assert "idle_param_head_x" in content
+        assert 'host = "localhost"' in content
+        assert "port = 4455" in content
+        assert "text_source_name" in content
 
     def test_backfilled_config_reaches_merged_view(self, temp_config_dir):
         """补全后的 config 进入运行时配置树（装配侧消费同一份数据）。
@@ -76,9 +76,9 @@ class TestProviderConfigBackfill:
 
         config, _report = load_config_dir(temp_config_dir)
 
-        vts_config = config["tools"]["tools"]["avatar"]["vts"]["config"]
-        assert vts_config["base_smile"] == 0.3
-        assert vts_config["idle_param_head_x"] == "HeadAngleX"
+        obs_config = config["tools"]["tools"]["studio"]["obs"]["config"]
+        assert obs_config["text_source_name"] == "text"
+        assert obs_config["port"] == 4455
 
     def test_defaults_render_with_field_comments(self, temp_config_dir):
         """写回的 config 子表带字段级注释（ConfigSchema description 落盘）。"""
@@ -88,8 +88,8 @@ class TestProviderConfigBackfill:
         load_config_dir(temp_config_dir)
 
         content = (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
-        assert "# VTS WebSocket 主机地址" in content
-        assert "# VTS WebSocket 端口" in content
+        assert "# OBS WebSocket 主机地址" in content
+        assert "# OBS WebSocket 端口" in content
 
     def test_second_load_is_stable(self, temp_config_dir):
         """补全写回后再加载：无残余漂移、不再改写文件（写回短路）。"""
@@ -114,7 +114,7 @@ class TestProviderConfigDrift:
             raw = tomlkit.load(f).unwrap()
         _instance, report = _validate_file("tools.toml", raw)
 
-        assert "tools.avatar.vts.config.stale_key" in report.redundant
+        assert "tools.studio.obs.config.stale_key" in report.redundant
         # 落盘后物理消失
         load_config_dir(temp_config_dir)
         assert "stale_key" not in (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
@@ -125,11 +125,11 @@ class TestProviderConfigDrift:
         _add_vts_section(
             temp_config_dir,
             """
-[tools.avatar.vts]
+[tools.studio.obs]
 enabled = true
 enbled_typo = false
 
-[tools.avatar.vts.config]
+[tools.studio.obs.config]
 """,
         )
 
@@ -139,20 +139,20 @@ enbled_typo = false
             raw = tomlkit.load(f).unwrap()
         _instance, report = _validate_file("tools.toml", raw)
 
-        assert "tools.avatar.vts.enbled_typo" in report.redundant
+        assert "tools.studio.obs.enbled_typo" in report.redundant
 
 
 class TestProviderConfigHardFail:
     def test_type_violation_raises_with_dotted_path(self, temp_config_dir):
-        """类型违约 → 加载期硬错，路径含 tools.avatar.vts.config（前移自运行期）。"""
+        """类型违约 → 加载期硬错，路径含 tools.studio.obs.config（前移自运行期）。"""
         generate_default_configs(temp_config_dir)
-        _add_vts_section(temp_config_dir, _VTS_SECTION + 'vts_port = "abc"\n')
+        _add_vts_section(temp_config_dir, _VTS_SECTION + 'port = "abc"\n')
 
         with pytest.raises(ConfigValidationError) as exc_info:
             load_config_dir(temp_config_dir)
 
         message = str(exc_info.value)
-        assert "tools.avatar.vts.config" in message
+        assert "tools.studio.obs.config" in message
 
     def test_update_path_type_violation_raises(self, temp_config_dir):
         """WebUI 写入口：错误类型经统一校验事务拒绝（磁盘零写入）。"""
@@ -163,7 +163,7 @@ class TestProviderConfigHardFail:
             validate_config_updates(
                 temp_config_dir,
                 "tools.toml",
-                {"tools.avatar.vts.config.vts_port": "not-a-port"},
+                {"tools.studio.obs.config.port": "not-a-port"},
             )
 
 
@@ -174,10 +174,10 @@ class TestUnregisteredSectionTolerance:
         _add_vts_section(
             temp_config_dir,
             """
-[tools.avatar.retired_thing]
+[tools.studio.retired_thing]
 enabled = false
 
-[tools.avatar.retired_thing.config]
+[tools.studio.retired_thing.config]
 some_key = 1
 """,
         )
@@ -185,7 +185,7 @@ some_key = 1
         # 不抛错即通过（残留容忍）；段保留在合并视图
         config, _report = load_config_dir(temp_config_dir)
 
-        retired = config["tools"]["tools"]["avatar"]["retired_thing"]
+        retired = config["tools"]["tools"]["studio"]["retired_thing"]
         assert retired["config"]["some_key"] == 1
 
 

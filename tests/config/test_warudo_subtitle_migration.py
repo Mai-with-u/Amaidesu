@@ -31,7 +31,7 @@ def _seed_old_warudo_subtitle(config_dir: Path) -> None:
 
 
 def test_warudo_subtitle_keys_dropped_and_written_back(tmp_path: Path):
-    """旧配置构造 → 加载 → 磁盘写回已删三键、ws_port 保留、版本推进 2.0.37。"""
+    """旧配置构造 → 加载 → 三键已删、ws_port 随段毕业迁 avatar.toml、版本推进 2.0.38。"""
     from src.modules.config.multi_file_loader import generate_default_configs
 
     generate_default_configs(tmp_path)
@@ -39,13 +39,18 @@ def test_warudo_subtitle_keys_dropped_and_written_back(tmp_path: Path):
 
     load_config_dir(tmp_path)
 
-    doc = tomlkit.parse((tmp_path / "tools.toml").read_text(encoding="utf-8-sig"))
-    warudo_config = doc["tools"]["avatar"]["warudo"]["config"]
+    # 删键钩子（2.0.37）先跑，毕业钩子（2.0.38）随后把残段整体迁往 avatar.toml：
+    # tools.toml 侧 [tools.avatar] 不复存在，ws_port 等存活键落在 [platform.warudo]
+    tools_doc = tomlkit.parse((tmp_path / "tools.toml").read_text(encoding="utf-8-sig"))
+    assert "avatar" not in tools_doc["tools"]
+
+    avatar_doc = tomlkit.parse((tmp_path / "avatar.toml").read_text(encoding="utf-8-sig"))
+    warudo_config = avatar_doc["platform"]["warudo"]
     for key in ("subtitle_enabled", "subtitle_port", "subtitle_show_status"):
         assert key not in warudo_config, f"{key} 应已删除"
     # 同段非字幕键不受影响
     assert warudo_config["ws_port"] == 19190
-    assert get_config_version(tmp_path, "tools.toml") == "2.0.37"
+    assert get_config_version(tmp_path, "tools.toml") == "2.0.38"
 
 
 def test_migration_idempotent_on_second_load(tmp_path: Path):

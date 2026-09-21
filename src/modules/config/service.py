@@ -57,6 +57,7 @@ _CONFIG_FILE_TO_SCOPE: Dict[str, str] = {
     "agents.toml": "agents",
     "collectors.toml": "collectors",
     "tools.toml": "tools",
+    "avatar.toml": "avatar",
     "model.toml": "model",
     "storage.toml": "storage",
     "infra.toml": "infra",
@@ -70,6 +71,7 @@ _SCOPE_RELOAD_POLICY: Dict[str, str] = {
     "agents": "restart",
     "collectors": "restart",
     "tools": "restart",
+    "avatar": "restart",
     "model": "restart",
     "storage": "restart",
     "infra": "hot",
@@ -159,7 +161,7 @@ class ConfigService:
                 self.logger.info(f"漂移检测: 补充缺失配置项 '{key}'")
 
         self._main_config = {}
-        for category in ("agents", "collectors", "tools", "model", "storage", "infra"):
+        for category in ("agents", "collectors", "tools", "avatar", "model", "storage", "infra"):
             section_data = multi_config.get(category, {})
             if isinstance(section_data, dict):
                 for key, value in section_data.items():
@@ -622,7 +624,7 @@ class ConfigService:
         multi_config, _drift = load_config_dir(config_dir)
 
         flattened: Dict[str, Any] = {}
-        for category in ("agents", "collectors", "tools", "model", "storage", "infra"):
+        for category in ("agents", "collectors", "tools", "avatar", "model", "storage", "infra"):
             section_data = multi_config.get(category, {})
             if isinstance(section_data, dict):
                 for key, value in section_data.items():

@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.modules.avatar.warudo.warudo_provider import WarudoProvider
+from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider
 
 
 @pytest.fixture

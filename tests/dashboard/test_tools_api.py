@@ -169,8 +169,9 @@ def _build_server(config_dir: Path, registry):
 
 
 def _prepare_config(config_dir: Path) -> None:
-    """首启生成六文件基线，再经统一写回器铺出覆盖全部成员形态的 tools 态：
-    分类成员（avatar/studio）+ 分类级开关（vision）+ mcp server（通用通道）。"""
+    """首启生成七文件基线，再经统一写回器铺出覆盖全部成员形态的配置态：
+    avatar 平台名单（avatar.toml）+ 分类成员（studio）+ 分类级开关（vision）
+    + mcp server（通用通道）。"""
     from src.modules.config.multi_file_loader import update_config_values
     from src.modules.config.service import ConfigService
 
@@ -179,12 +180,16 @@ def _prepare_config(config_dir: Path) -> None:
         config_dir,
         "tools.toml",
         {
-            "tools.avatar.vts": {"enabled": True},
             "tools.studio.obs": {"enabled": False},
             "tools.vision.enabled": True,
             "tools.mcp.enabled": False,
             "tools.mcp.config.servers.generic_mcp": {"enabled": True},
         },
+    )
+    update_config_values(
+        config_dir,
+        "avatar.toml",
+        {"platform.enabled": ["vts"]},
     )
 
 
@@ -529,6 +534,7 @@ def test_control_agent_private_mcp_routes_to_agents_toml(
 
 
 def test_control_disables_avatar_member(tools_client: TestClient, tools_config_dir: Path) -> None:
+    """avatar 平台开关 = 启用名单增删（写 avatar.toml [avatar.platform].enabled）。"""
     resp = tools_client.post("/api/v1/tools/categories/avatar/vts/control", json={"action": "disable"})
     assert resp.status_code == 200
     body = resp.json()
@@ -536,8 +542,9 @@ def test_control_disables_avatar_member(tools_client: TestClient, tools_config_d
     assert body["enabled"] is False
     assert "重启后生效" in body["message"]
 
-    # 新契约：写盘经统一写回器，落盘形态用 tomllib 只读断言
-    assert _load_tools_toml(tools_config_dir)["tools"]["avatar"]["vts"]["enabled"] is False
+    # 落盘形态用 tomllib 只读断言：名单移除 vts（文件根即 AvatarRootConfig）
+    text = (tools_config_dir / "avatar.toml").read_text(encoding="utf-8-sig")
+    assert "vts" not in tomllib.loads(text)["platform"]["enabled"]
 
 
 def test_control_enables_studio_member(tools_client: TestClient, tools_config_dir: Path) -> None:

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.modules.avatar.vts.vts_provider import VTSProvider, create_vts_provider
+from src.modules.avatar.platform.vts.vts_provider import VTSProvider, create_vts_provider
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 
 

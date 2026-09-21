@@ -94,9 +94,9 @@ def _fill_tool_providers() -> dict[tuple[str, str], type[BaseConfig]]:
     成员身份 (分类段, 提供者键) 与装配侧 ``tools.bootstrap._DOMAIN_MEMBERS``
     同构；两表一致性由契约测试守护。
     """
-    from src.modules.avatar.vrchat.vrchat_provider import VRChatProvider
-    from src.modules.avatar.vts.vts_provider import VTSProvider
-    from src.modules.avatar.warudo.warudo_provider import WarudoProvider
+    from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
+    from src.modules.avatar.platform.vts.vts_provider import VTSProvider
+    from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider
     from src.modules.studio.obs.obs_provider import OBSProvider
     from src.modules.web.search_provider import WebSearchProvider
 

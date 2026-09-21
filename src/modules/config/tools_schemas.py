@@ -9,14 +9,6 @@
     poll_interval_ms = 2000
     wait_timeout_ms = 1800000
 
-    # 虚拟形象分类（每形象一 provider 实例；enabled 控制其工具可见性）
-    [tools.avatar.vts]
-    enabled = true
-    config = {...}
-
-    [tools.avatar.warudo]
-    enabled = false
-
     # 演播室分类
     [tools.studio.obs]
     enabled = true
@@ -48,10 +40,11 @@
     probe_interval_ms = 30000
 
 设计原则：
-- 工具提供者为「开关单元」：一个形象 / 一个 MCP server = 一个 enabled 开关。
+- 工具提供者为「开关单元」：一个 OBS / 一个 MCP server = 一个 enabled 开关。
   开 = 其全部工具进入可见集；关 = 全部消失。开关控制权归属人类（配置 + Web UI）。
 - 感知已迁出至 ``collectors.toml``（``[collectors]`` 段）；输出已迁出至
-  ``infra.toml``（``[tts]``/``[subtitle]``/``[dashboard.subtitle_widget]`` 等段）。
+  ``infra.toml``（``[tts]``/``[subtitle]``/``[dashboard.subtitle_widget]`` 等段）；
+  虚拟形象已毕业为独立文件 ``avatar.toml``（``[avatar.platform.*]``）。
   本文件只承载工具域开关与异步任务基建。
 - 组件字段由具体 Tool Provider 的 ConfigSchema 验证；本文件为聚合容器与元数据。
 """
@@ -77,7 +70,7 @@ class ToolProviderConfig(BaseConfig):
 
     Attributes:
         enabled: 是否启用该提供者（开 = 其工具全部可见）
-        config: 提供者具体配置。动态键段（avatar/studio 分类下的成员）由
+        config: 提供者具体配置。动态键段（studio 分类下的成员）由
             加载管线按 ``registry.TOOL_PROVIDER_SCHEMAS`` 分发校验与默认值
             补全（静态命名段如 vision 走 typed 引用，见 VisionProviderConfig）
     """
@@ -87,16 +80,6 @@ class ToolProviderConfig(BaseConfig):
         default_factory=dict,
         description="提供者具体配置（加载期按工具提供者注册表校验与补全默认值）",
     )
-
-
-class AvatarProviderConfig(ToolProviderConfig):
-    """虚拟形象分类的提供者开关（每个形象一实例：[tools.avatar].<name>.enabled）
-
-    ``[tools.avatar.vts]`` / ``[tools.avatar.warudo]`` 等动态段：
-    每个形象 = 一个开关单元，开 = 其全部工具进入可见集。
-    """
-
-    model_config = ConfigDict(extra="allow")
 
 
 class StudioProviderConfig(ToolProviderConfig):
@@ -210,7 +193,8 @@ class ToolsHealthConfig(BaseConfig):
 class ToolsConfig(BaseConfig):
     """[tools] 段聚合
 
-    包含工具提供者开关（avatar/studio/vision/memory/mcp/web）+ 异步任务基建 +
+    包含工具提供者开关（studio/vision/memory/mcp/web）+ 异步任务基建 +
+)
     工具熔断器配置 + disabled_tools 平铺列表。使用 ``extra="forbid"`` 拒绝未知子段。
     """
 
@@ -223,13 +207,9 @@ class ToolsConfig(BaseConfig):
         json_schema_extra={"x-ui-type": "object"},
     )
 
-    # 工具提供者开关（单一事实源；动态子段：avatar.<name> / studio.<name> / web.<name>）
+    # 工具提供者开关（单一事实源；动态子段：studio.<name> / web.<name>）
+)
     # 禁 None 政策：段缺省 = 空容器 / 关态实例，全量写出可往返
-    avatar: Dict[str, AvatarProviderConfig] = Field(
-        default_factory=dict,
-        description="虚拟形象分类（每形象一实例：vts / warudo / vrchat ...，enabled 控制各形象工具）",
-        json_schema_extra={"x-ui-type": "object"},
-    )
     studio: Dict[str, StudioProviderConfig] = Field(
         default_factory=dict,
         description="演播室分类（obs 等，enabled 控制各演播工具）",
@@ -296,7 +276,6 @@ __all__ = [
     # 工具提供者开关基类
     "ToolProviderConfig",
     # 分类配置
-    "AvatarProviderConfig",
     "StudioProviderConfig",
     "VisionProviderConfig",
     "MemoryProviderConfig",

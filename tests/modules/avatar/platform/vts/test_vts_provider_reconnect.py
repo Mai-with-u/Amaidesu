@@ -11,7 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 
-from src.modules.avatar.vts.vts_provider import VTSProvider, create_vts_provider
+from src.modules.avatar.platform.vts.vts_provider import VTSProvider, create_vts_provider
 
 
 def _build_provider() -> VTSProvider:

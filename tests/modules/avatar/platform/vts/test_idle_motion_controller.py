@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from src.modules.avatar.vts.idle_motion_controller import AxisWander, IdleMotionController
+from src.modules.avatar.platform.vts.idle_motion_controller import AxisWander, IdleMotionController
 
 
 @pytest.fixture

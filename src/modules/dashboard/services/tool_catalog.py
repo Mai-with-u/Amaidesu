@@ -32,7 +32,8 @@ PROVIDER_DESCRIPTIONS: Dict[Tuple[str, str], str] = {
 
 # 成员来自 [tools.<分类>] 直接子段键的分类（enabled / config 之外的子键 =
 # 提供者声明；enabled=false 的声明提供者也展示——"配置已声明、重启后装配"）。
-_CONFIG_MEMBER_CATEGORIES: Tuple[str, ...] = ("avatar", "studio", "web")
+# （avatar 分类已迁出：成员段在 avatar.toml [avatar.platform]，下方单独补卡。）
+_CONFIG_MEMBER_CATEGORIES: Tuple[str, ...] = ("studio", "web"))
 
 # 工具分类 "game" 的判据：名册里除框架自己的主播 Agent 之外，剩下的都是游戏 Agent
 # （主播 Agent 唯一且自我驱动，游戏 Agent 命令驱动）。这里不列举任何具体游戏名——
@@ -160,6 +161,17 @@ def build_tool_catalog(
             if key in ("enabled", "config") or not isinstance(member_cfg, dict):
                 continue
             entries.setdefault((category, key), _config_only_card(category, key, counts))
+
+    # avatar 平台声明补卡：成员段 = avatar.toml [platform] 下除 enabled 名单外的表
+    # （合并视图拍平后 avatar.toml 顶层段直接在 main_config 顶层：platform / lipsync）
+    avatar_platform = main_config.get("platform")
+    avatar_platform = avatar_platform if isinstance(avatar_platform, dict) else {}
+    avatar_enabled = avatar_platform.get("enabled", [])
+    avatar_enabled = avatar_enabled if isinstance(avatar_enabled, list) else []
+    for key, member_cfg in avatar_platform.items():
+        if key == "enabled" or not isinstance(member_cfg, dict):
+            continue
+        entries.setdefault(("avatar", key), _config_only_card("avatar", key, counts))
     for category in sorted(CATEGORY_LEVEL_KEYS):
         section = tools_cfg.get(category)
         if isinstance(section, dict) and section:
@@ -212,6 +224,12 @@ def build_tool_catalog(
             cfg = servers_cfg.get(key)
             entry["enabled"] = bool((cfg or {}).get("enabled", True)) if isinstance(cfg, dict) else True
             entry["in_config"] = isinstance(cfg, dict) and bool(cfg)
+            entry["notice"] = ""
+        elif category == "avatar":
+            # avatar 平台开合 = 启用名单的成员关系；名单即声明（typed 成员段
+            # 因禁 None 全量落盘，段存在不等于用户声明，名单外 = 待开启）
+            entry["enabled"] = key in avatar_enabled
+            entry["in_config"] = key in avatar_enabled
             entry["notice"] = ""
         else:
             category_cfg = tools_cfg.get(category)

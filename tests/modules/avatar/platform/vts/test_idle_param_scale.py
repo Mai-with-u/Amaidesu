@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.modules.avatar.vts.vts_provider import VTSProvider
+from src.modules.avatar.platform.vts.vts_provider import VTSProvider
 
 
 def test_scale_uses_half_span_of_native_range() -> None:

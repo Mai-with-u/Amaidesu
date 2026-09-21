@@ -498,11 +498,11 @@ async def create_app_components(
         supervisor_config = AgentSupervisorConfig.from_dict(supervisor_section)
         agent_manager = AgentManager(tool_registry=tool_registry, memory=memory, supervisor_config=supervisor_config)
 
-        # 口型分析器（avatar 共享件，调参 [avatar.lipsync]）：在 TTS 装配前构造，
+        # 口型分析器（avatar 共享件，调参 [avatar.lipsync]；拍平后顶层键 lipsync）：
+        # 在 TTS 装配前构造，
         # 作为音频分接经构造链注入播放器；enabled=False / 配置非法时为 None（不分接）。
         lipsync_analyzer = None
-        avatar_infra = config.get("avatar", {}) if isinstance(config, dict) else {}
-        lipsync_cfg = avatar_infra.get("lipsync", {}) if isinstance(avatar_infra, dict) else {}
+        lipsync_cfg = config.get("lipsync", {}) if isinstance(config, dict) else {}
         if isinstance(lipsync_cfg, dict) and lipsync_cfg.get("enabled", True):
             try:
                 from src.modules.avatar.lipsync import LipSyncAnalyzer
@@ -572,20 +572,23 @@ async def create_app_components(
             thinking_sink=thinking_hub,
         )
 
-        # --- 核心域工具（avatar/studio 域开关，L2 Provider）---
+        # --- 核心域工具（avatar 平台名单 / studio 域开关，L2 Provider）---
         # 在 agent_manager.start_all() 之前完成 → StreamerAgent._on_start()
         # 调用 _register_tools() 时 registry 已就绪，可与 L2 工具同台。
-        # 配置：bind_core_tools 读取 [tools] 段的域开关（avatar.vts / studio.obs 等），
-        # 每个域段 enabled=true 才装配该提供者。TTS/字幕装配由核心 [tts]/[subtitle]
-        # 段驱动（见各自 build 入口），不在本段。
+        # 配置：bind_core_tools 读取 [tools] 段的域开关（studio.obs 等）与
+        # avatar.toml 的平台启用名单（[avatar.platform].enabled），名单/开关
+        # 命中才装配该提供者。TTS/字幕装配由核心 [tts]/[subtitle] 段驱动
+        # （见各自 build 入口），不在本段。
         tools_cfg = (config.get("tools") or {}) if isinstance(config, dict) else {}
         tools_section = tools_cfg if isinstance(tools_cfg, dict) else {}
+        avatar_section = (config.get("avatar") or {}) if isinstance(config, dict) else {}
 
         core_report = bind_core_tools(
             tool_registry,
             tools_section,
             event_bus=event_bus,
             lipsync_analyzer=lipsync_analyzer,
+            avatar_section=avatar_section,
         )
         from src.modules.tools.bootstrap import CORE_MEMBER_COUNT
 

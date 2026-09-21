@@ -304,7 +304,8 @@ async def control_tool_provider(
     写回位置按成员类型区分（点分键，不含 scope 前缀）：
     - 提供者自带开关地址（``switch_config``，如 Agent 私有 MCP）：写声明
       的文件与键（``agents.minecraft.mcp.enabled`` → agents.toml）
-    - avatar / studio 成员：``tools.<分类>.<键>.enabled``
+    - avatar 平台成员：``platform.enabled`` 启用名单增删（avatar.toml 文件内路径）
+    - studio 成员：``tools.<分类>.<键>.enabled``
     - vision / memory（键与分类名相同）：``tools.<分类>.enabled``
     - mcp 全局 server：``tools.mcp.config.servers.<键>.enabled``
     - game / framework 等随 Agent 分类不可开关（400）
@@ -342,6 +343,26 @@ async def control_tool_provider(
 
     if category == MCP_CATEGORY:
         dotted_key = f"tools.{MCP_CATEGORY}.config.servers.{key}.enabled"
+    elif category == "avatar":
+        # avatar 平台开合 = avatar.toml 启用名单增删（文件根即 AvatarRootConfig，
+        # 文件内路径为 platform.enabled，无 avatar 前缀）
+        doc = read_toml_dict(cfg_dir / "avatar.toml")
+        platform = doc.get("platform")
+        platform = platform if isinstance(platform, dict) else {}
+        raw = platform.get("enabled", [])
+        names = [n for n in raw if isinstance(n, str)] if isinstance(raw, list) else []
+        if enable:
+            if key not in names:
+                names.append(key)
+        else:
+            names = [n for n in names if n != key]
+        _write_config_updates(cfg_dir, "avatar.toml", {"platform.enabled": names})
+        action_text = "启用" if enable else "停用"
+        return {
+            "success": True,
+            "enabled": enable,
+            "message": f"皮套平台 {category}.{key} 已{action_text}（写入 avatar.toml），重启后生效",
+        }
     elif (category, key) in PROVIDER_DESCRIPTIONS:
         dotted_key = f"tools.{category}.enabled" if key in CATEGORY_LEVEL_KEYS else f"tools.{category}.{key}.enabled"
     else:

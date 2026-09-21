@@ -8,7 +8,7 @@
 import pytest
 
 from src.modules.avatar.lipsync import MouthSignal
-from src.modules.avatar.vts.lip_sync_renderer import VtsLipSyncRenderer
+from src.modules.avatar.platform.vts.lip_sync_renderer import VtsLipSyncRenderer
 
 
 @pytest.fixture

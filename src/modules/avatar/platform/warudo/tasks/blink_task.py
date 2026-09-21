@@ -9,7 +9,7 @@ import random
 import time
 from typing import Optional
 
-from src.modules.avatar.warudo.state.warudo_state_manager import WarudoStateManager
+from src.modules.avatar.platform.warudo.state.warudo_state_manager import WarudoStateManager
 from src.modules.logging import ModuleLogger
 
 

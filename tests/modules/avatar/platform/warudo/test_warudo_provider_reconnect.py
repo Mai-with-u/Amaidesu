@@ -11,7 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 
-from src.modules.avatar.warudo.warudo_provider import WarudoProvider, create_warudo_provider
+from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider, create_warudo_provider
 
 
 def _build_provider() -> WarudoProvider:

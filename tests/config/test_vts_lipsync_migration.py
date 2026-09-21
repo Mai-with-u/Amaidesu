@@ -51,25 +51,29 @@ def test_lipsync_keys_moved_to_infra_and_written_back(tmp_path: Path):
 
     load_config_dir(tmp_path)
 
-    # infra 侧：键到位 + 开关正名 + 用户显式值保真
-    infra_doc = tomlkit.parse((tmp_path / "infra.toml").read_text(encoding="utf-8-sig"))
-    lipsync = infra_doc["avatar"]["lipsync"]
+    # avatar.toml 侧：键到位 + 开关正名 + 用户显式值保真。
+    # 迁移钩子的目标随 avatar 域毕业直接写 avatar.toml（infra 的 avatar 段
+    # 已从 Schema 移除，写入即被校验剥离成数据丢失）
+    avatar_doc = tomlkit.parse((tmp_path / "avatar.toml").read_text(encoding="utf-8-sig"))
+    lipsync = avatar_doc["lipsync"]
     assert lipsync["enabled"] is False
     assert lipsync["sample_rate"] == 22050
     assert lipsync["volume_threshold"] == 0.03
     assert lipsync["max_mouth_open"] == 0.75
     assert lipsync["min_mouth_delta"] == 0.008
 
-    # tools 侧：旧键消失
+    # tools 侧：avatar 段已整体毕业至 avatar.toml（2.0.38 毕业钩子）
     tools_doc = tomlkit.parse((tmp_path / "tools.toml").read_text(encoding="utf-8-sig"))
-    vts_config = tools_doc["tools"]["avatar"]["vts"]["config"]
-    for key in _LIPSYNC_SAMPLE:
-        assert key not in vts_config, f"{key} 应已搬离 tools.toml"
+    assert "avatar" not in tools_doc["tools"]
+    assert "vts" in avatar_doc["platform"]["enabled"]
+    # infra 侧零残留（旧中间站段已从 Schema 移除）
+    infra_doc = tomlkit.parse((tmp_path / "infra.toml").read_text(encoding="utf-8-sig"))
+    assert "avatar" not in infra_doc
 
-    # tools.toml 推进到本文件钩子链尾 target（2.0.36 迁移 + 2.0.37 删键）；
-    # infra.toml 基线种子即 2.0.37（高于 2.0.36 跨文件钩子 target，不回退）
-    assert get_config_version(tmp_path, "tools.toml") == "2.0.37"
-    assert get_config_version(tmp_path, "infra.toml") == "2.0.37"
+    # tools.toml 推进到本文件钩子链尾 target（2.0.36 迁移 + 2.0.37 删键
+    # + 2.0.38 毕业）；infra.toml 保持新生成基线版本
+    assert get_config_version(tmp_path, "tools.toml") == "2.0.38"
+    assert get_config_version(tmp_path, "infra.toml") == CONFIG_BASELINE_VERSION
 
 
 def test_migration_idempotent_on_second_load(tmp_path: Path):

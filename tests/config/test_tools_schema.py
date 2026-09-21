@@ -1,13 +1,13 @@
-"""Tools 配置 Schema 测试（v2.0.31 工具域重构后）
+"""Tools 配置 Schema 测试
 
 测试 src/modules/config/tools_schemas.py：
 1. ToolsRootConfig 根结构（tools 子段）
-2. ToolsConfig 聚合：异步任务基建 + 各提供者分类（avatar/studio/vision/memory/mcp）
+2. ToolsConfig 聚合：异步任务基建 + 各提供者分类（studio/vision/memory/mcp）
 3. ToolProviderConfig 开关语义（enabled + config）
-4. avatar/studio 动态子段（Dict[str, ProviderConfig]）
+4. studio 动态子段（Dict[str, ProviderConfig]）
 5. [tools.tasks] 段定义 + 默认值
 6. [tools.memory].enabled 默认 true
-7. 顶层禁用 perception/output（已迁出）
+7. 已迁出段拒收（perception/output 顶层禁用；avatar 已毕业为 avatar.toml）
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ import pytest
 from pydantic import ValidationError
 
 from src.modules.config.tools_schemas import (
-    AvatarProviderConfig,
     McpProviderConfig,
     MemoryProviderConfig,
     StudioProviderConfig,
@@ -86,7 +85,6 @@ class TestToolsConfigDomains:
         memory 缺省 enabled=true（与消费端兜底对齐）。
         """
         cfg = ToolsConfig()
-        assert cfg.avatar == {}
         assert cfg.studio == {}
         assert cfg.web == {}
         assert cfg.vision.enabled is False
@@ -107,9 +105,12 @@ class TestToolProviderConfig:
 
 
 class TestAvatarStudioDomains:
-    def test_avatar_accepts_dynamic_subdomains(self):
-        cfg = ToolsConfig(avatar={"vts": {"enabled": True, "config": {}}})
-        assert cfg.avatar["vts"].enabled is True
+    def test_avatar_section_rejected(self):
+        """avatar 分类已毕业为独立文件 avatar.toml（[avatar.platform.*]），
+        tools.toml 里残留 avatar 段被 extra=forbid 拒绝"""
+        with pytest.raises(ValidationError) as exc_info:
+            ToolsConfig.model_validate({"avatar": {"vts": {"enabled": True, "config": {}}}})
+        assert "avatar" in str(exc_info.value).lower()
 
     def test_studio_accepts_dynamic_subdomains(self):
         cfg = ToolsConfig(studio={"obs": {"enabled": True, "config": {}}})
@@ -121,7 +122,7 @@ class TestAvatarStudioDomains:
         assert isinstance(cfg.web["search"], WebProviderConfig)
 
     def test_domain_extra_allowed(self):
-        cfg = AvatarProviderConfig(enabled=True, extra_field="x")
+        cfg = StudioProviderConfig(enabled=True, extra_field="x")
         assert cfg.extra_field == "x"
 
 

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from src.modules.avatar.vts.idle_motion_controller import (
+from src.modules.avatar.platform.vts.idle_motion_controller import (
     _PARAM_REFRESH_INTERVAL_S,
     IdleMotionController,
 )
