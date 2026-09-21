@@ -2,7 +2,7 @@
 
 覆盖 Dashboard 配置管理 API 在六文件配置结构下的行为:
 
-1. **GET /api/v1/config** — 返回六 scope 合并视图，敏感字段"已设置"占位
+1. **GET /api/v1/config** — 返回七 scope 合并视图，敏感字段"已设置"占位
 2. **PATCH /api/v1/config** — scope 首段路由到对应 TOML 文件，经统一管线写盘；
    未知项 / 只读字段 / 类型违约 / 残留占位回写一律 422 + 中文消息；
    整列表回显中已有元素的占位按 ADR-022 还原为磁盘真实值（200 写入）
@@ -362,18 +362,19 @@ class TestGetConfigSchemaEndpoint:
         walk(group["fields"])
         return out
 
-    def test_get_schema_returns_six_groups(self, client):
+    def test_get_schema_returns_seven_groups(self, client):
         """每个根 Schema 一个分组（自描述协议，无手写映射表）"""
         resp = client.get("/api/v1/config/schema")
         assert resp.status_code == 200
         body = resp.json()
         assert body["version"] == "1.0.0"
         groups = body["groups"]
-        assert len(groups) == 6
+        assert len(groups) == 7
         assert {g["key"] for g in groups} == {
             "agents",
             "collectors",
             "tools",
+            "avatar",
             "model",
             "storage",
             "infra",

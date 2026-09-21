@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 logger = get_logger("ConfigAdapter")
 
 # 六文件 scope 清单（= 文件名去后缀；顺序即 Schema 分组展示顺序）
-_SCOPES = ("agents", "collectors", "tools", "model", "storage", "infra")
+_SCOPES = ("agents", "collectors", "tools", "avatar", "model", "storage", "infra")
 
 # GET 响应中敏感字段的占位文案：明文不下发，回写同值会被拒绝
 _SENSITIVE_PLACEHOLDER = "已设置"

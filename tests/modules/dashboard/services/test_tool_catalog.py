@@ -52,8 +52,16 @@ class _BrokenRegistry:
 _EMPTY_TOOLS_CFG: dict[str, Any] = {}
 
 
-def _catalog(registry: Any, tools_cfg: dict[str, Any], agents_enabled: list[str] | None = None) -> dict[str, Any]:
+def _catalog(
+    registry: Any,
+    tools_cfg: dict[str, Any],
+    agents_enabled: list[str] | None = None,
+    avatar_platform: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     main_config: dict[str, Any] = {"agents": {"enabled": agents_enabled or []}}
+    if avatar_platform is not None:
+        # avatar.toml 拍平后顶层键为 platform（启用名单 + 各平台成员段）
+        main_config["platform"] = avatar_platform
     return build_tool_catalog(registry, tools_cfg, main_config)
 
 
@@ -112,14 +120,14 @@ class TestBuildToolCatalog:
                 }
             ]
         )
-        catalog = _catalog(registry, {"avatar": {"vts": {"enabled": True}}})
+        catalog = _catalog(registry, {}, avatar_platform={"enabled": ["vts"], "vts": {"vts_port": 8001}})
         card = _providers_by_category(catalog)["vts"]
         assert card["registered"] is True
         assert card["degraded"] is False
         assert card["tool_count"] == 3
         assert card["disabled_count"] == 1
         assert card["supports_reconnect"] is True
-        # 配置态：成员段存在 → in_config + enabled 跟随配置
+        # 配置态：名单成员 → in_config + enabled 均为 True（名单即声明）
         assert card["in_config"] is True
         assert card["enabled"] is True
         assert card["switchable"] is True
@@ -131,13 +139,14 @@ class TestBuildToolCatalog:
         assert card["degraded"] is True
 
     def test_配置声明态补卡_enabled_false也展示(self) -> None:
+        """名单外的平台段仍补卡展示（段存在 = 声明；名单外 = 未启用可开启）。"""
         registry = _FakeRegistry()
-        tools_cfg = {"avatar": {"warudo": {"enabled": False}}}
-        card = _providers_by_category(_catalog(registry, tools_cfg))["warudo"]
+        avatar_platform = {"enabled": [], "warudo": {"ws_port": 19190}}
+        card = _providers_by_category(_catalog(registry, {}, avatar_platform=avatar_platform))["warudo"]
         assert card["registered"] is False
         assert card["degraded"] is False
         assert card["enabled"] is False
-        assert card["in_config"] is True
+        assert card["in_config"] is False
         # 静态元数据表补描述
         assert card["description"] == "Warudo 控制"
 

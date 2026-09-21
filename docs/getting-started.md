@@ -41,13 +41,14 @@ uv sync
 uv run python main.py
 ```
 
-首次运行会检测 `config/` 目录。目录不存在时，程序按 Schema 自动生成 **六文件配置树**（每文件自带 `[meta].version` 结构版本）：
+首次运行会检测 `config/` 目录。目录不存在时，程序按 Schema 自动生成 **七文件配置树**（每文件自带 `[meta].version` 结构版本）：
 
 ```
 config/
 ├── agents.toml      # 业务 Agent（[agents] 启用名单 + streamer/minecraft/text_adv 子树）
 ├── collectors.toml  # 采集器（顶层 enabled 名单 + 各采集器子段）
 ├── tools.toml       # 工具域（[tools] 提供者开关 / disabled_tools / [tools.tasks]）
+├── avatar.toml      # 皮套（[avatar.platform] 启用名单 + 各平台成员段 + [avatar.lipsync] 口型共享件）
 ├── model.toml       # 三层模型结构（[[llm_providers]] / [[llm_models]] / [llm_profiles]）
 ├── storage.toml     # 存储与记忆（顶层 [sqlite] / [memory]）
 └── infra.toml       # 基础设施（[tts] / [subtitle] / [dashboard] / [logging] / [interceptors.*] / [simulator]）
@@ -69,7 +70,7 @@ config/
 
 ### 2.5 编辑配置
 
-六文件各自只承担一个域，本节只列首次成功运行所必需的最小集。其他字段保留默认值即可。
+七文件各自只承担一个域，本节只列首次成功运行所必需的最小集。其他字段保留默认值即可。
 
 #### LLM 配置（必需）
 
@@ -144,12 +145,12 @@ user_nickname = "控制台"
 
 #### 启用渲染输出（可选）
 
-字幕 / 皮套 / OBS 等渲染工具由 `config/tools.toml` 的提供者开关控制（开一个提供者 = 其全部工具进入可见集）；**TTS 是基础设施**，由 `config/infra.toml` 的 `[tts]` 段独立控制（`enabled = true` 即主播每句话自动合成播出，`provider` 单选引擎；ToolRegistry 中零 TTS 条目），详见 [ADR-007](decisions/007-tts-infrastructure-pipeline.md)。
+字幕 / 皮套 / OBS 等渲染工具由 `config/avatar.toml`（皮套）与 `config/tools.toml`（演播）的装配开关控制（开一个提供者 = 其全部工具进入可见集）；**TTS 是基础设施**，由 `config/infra.toml` 的 `[tts]` 段独立控制（`enabled = true` 即主播每句话自动合成播出，`provider` 单选引擎；ToolRegistry 中零 TTS 条目），详见 [ADR-007](decisions/007-tts-infrastructure-pipeline.md)。
 
 ```toml
-# config/tools.toml —— 提供者开关（avatar=皮套 / studio=演播）
-[tools.avatar.vts]
-enabled = false                      # 开启后 vts_* 工具可见
+# config/avatar.toml —— 皮套平台启用（名单成员 = 平台工具全部可见）
+[platform]
+enabled = ["vts"]                    # 合法名: vts / warudo / vrchat
 
 # config/infra.toml —— TTS 基础设施
 [tts]
@@ -173,13 +174,14 @@ uv run python main.py --dry
 
 ## 3. 配置说明
 
-### 3.1 主要配置段（六文件 ↔ 顶层段权威表）
+### 3.1 主要配置段（七文件 ↔ 顶层段权威表）
 
 | 配置文件 | 顶层段/键 | 说明 |
 |---------|--------|------|
 | `agents.toml` | `[meta]` / `[agents].enabled` / `[agents.<name>]` | 业务 Agent 启用与子树配置（streamer 子树含 persona/context/proactive/background/command 等） |
 | `collectors.toml` | `enabled` + 各采集器同名段 | 采集器名单驱动装配；子段由包内 ConfigSchema 校验 |
-| `tools.toml` | `[tools]` | 提供者开关（`[tools.avatar.*]` / `[tools.studio.*]` / `[tools.vision]` / `[tools.memory]` / `[tools.mcp]`）+ `disabled_tools` + `[tools.tasks]` / `[tools.health]` |
+| `tools.toml` | `[tools]` | 提供者开关（`[tools.studio.*]` / `[tools.vision]` / `[tools.memory]` / `[tools.mcp]`）+ `disabled_tools` + `[tools.tasks]` / `[tools.health]` |
+| `avatar.toml` | `[avatar.platform]` / `[avatar.platform.<名>]` / `[avatar.lipsync]` | 皮套平台（enabled 启用名单 + 各平台成员段直接铺键 + 口型分析共享件调参） |
 | `model.toml` | `[[llm_providers]]` / `[[llm_models]]` / `[llm_profiles.<用途>]` | 三层模型结构；六用途 profile（planner/replyer/summary/minecraft/vision/simulator）必填 |
 | `storage.toml` | `[sqlite]` / `[memory]` | SQLite 连接（db_path / busy_timeout_ms）与记忆后端（backend="simple"） |
 | `infra.toml` | `[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` / `[simulator]` / `[events]` / `[agent_supervisor]` / `[interceptors.*]` | 基础设施段集（hot 段：写后即时重载） |
@@ -231,7 +233,7 @@ uv run python main.py --dry
 | 工具包（`[tools.<pack>]`） | 代表工具 | 说明 |
 |----------------------------|---------|------|
 | `vision` | `vision_look_at_screen` | 屏幕感知（mss 多显示器抓屏 + 可选区域 + VLM 转文本） |
-| `avatar.*`（vts / vrchat / warudo） | `vts_trigger_hotkey` / VRChat OSC 工具 / Warudo 工具 | 皮套控制族（由 `[tools.avatar.<key>].enabled` 分类开关装配） |
+| `avatar.*`（vts / vrchat / warudo） | `vts_trigger_hotkey` / VRChat OSC 工具 / Warudo 工具 | 皮套控制族（由 avatar.toml `[avatar.platform].enabled` 名单装配） |
 | `studio.obs` | `obs_switch_scene` | 演播控制族（由 `[tools.studio.obs].enabled` 分类开关装配） |
 | Streamer 自带 | `streamer_reply` / `rundown_control` | 主播自有工具（开 `streamer` 即生效；`rundown_control` 随 rundown 注册项声明） |
 | `framework`（AgentControl） | `framework_delegate` / `framework_task_status` | 框架级委派与任务状态查询（随任一 Agent 启用生效） |
@@ -415,6 +417,6 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 
 ### 已知限制
 
-- **TTS 已基础模块化**（TTS 提升为基础设施）：在 `config/infra.toml` 的 `[tts]` 段设 `enabled = true` 后，主播每句回复自动合成播出（引擎由 `provider` 选择，默认 `gptsovits` 需本地服务在跑；无本地服务可用 `edge_tts`，仅需网络）。字幕 / 皮套 / OBS 等渲染工具走新分类开关：`[tools.avatar.<key>]` / `[tools.studio.<key>]` 控制皮套与演播装配，`[subtitle]`（infra 段）驱动字幕基础设施。
+- **TTS 已基础模块化**（TTS 提升为基础设施）：在 `config/infra.toml` 的 `[tts]` 段设 `enabled = true` 后，主播每句回复自动合成播出（引擎由 `provider` 选择，默认 `gptsovits` 需本地服务在跑；无本地服务可用 `edge_tts`，仅需网络）。字幕 / 皮套 / OBS 等渲染工具走装配开关：avatar.toml `[avatar.platform].enabled` 名单与 `[tools.studio.obs].enabled` 控制皮套与演播装配，`[subtitle]`（infra 段）驱动字幕基础设施。
 - **控制台交互**已可用；弹幕采集、屏幕识别、语音转写需对应第三方凭据（id_code / appid / VLM API Key 等）。
 - 完整字段定义在 `src/modules/config/*_schemas.py`；本指南只覆盖"首次跑通"的最小集。

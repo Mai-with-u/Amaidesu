@@ -140,15 +140,15 @@ def _resolve_domain_config(tools_cfg: Dict[str, Any], domain: str, key: str) -> 
     return dict(cfg) if isinstance(cfg, dict) else {}
 
 
-def _avatar_platform_state(avatar_section: Dict[str, Any], key: str) -> Tuple[bool, Dict[str, Any]]:
-    """从 avatar.toml 合并视图读平台装配态：``[avatar.platform]`` 名单 + 成员段。
+def _avatar_platform_state(avatar_platform: Dict[str, Any], key: str) -> Tuple[bool, Dict[str, Any]]:
+    """读平台装配态：``[avatar.platform]`` 启用名单 + 成员段。
 
-    返回 (是否启用, 成员配置)：名单含 ``key`` 即启用；成员段缺省 = 空配置
-    （provider 侧走全默认构造，与 Schema 缺段补默认一致）。成员段直接铺
-    参数键，无 ``.config`` 中间层。
+    ``avatar_platform`` 为 avatar.toml 在拍平合并视图中的顶层 ``platform``
+    段。返回 (是否启用, 成员配置)：名单含 ``key`` 即启用；成员段缺省 =
+    空配置（provider 侧走全默认构造，与 Schema 缺段补默认一致）。成员段
+    直接铺参数键，无 ``.config`` 中间层。
     """
-    platform = avatar_section.get("platform") if isinstance(avatar_section, dict) else None
-    platform = platform if isinstance(platform, dict) else {}
+    platform = avatar_platform if isinstance(avatar_platform, dict) else {}
     enabled = platform.get("enabled", [])
     enabled = enabled if isinstance(enabled, list) else []
     member = platform.get(key)
@@ -174,7 +174,7 @@ def bind_core_tools(
     config: Dict[str, Any] | None = None,
     event_bus: Any | None = None,
     lipsync_analyzer: Any | None = None,
-    avatar_section: Dict[str, Any] | None = None,
+    avatar_platform: Dict[str, Any] | None = None,
 ) -> Dict[str, int]:
     """绑定 Amaidesu 核心分类工具包到 ``registry``。
 
@@ -189,8 +189,9 @@ def bind_core_tools(
         registry: 目标注册器（由调用方构造并持有）
         config: ``[tools]`` 段（分类开关容器），键名见 ``_DOMAIN_MEMBERS``；
             传 ``None`` 表示所有分类走"空配置"，一律不装配
-        avatar_section: avatar.toml 合并视图（``avatar`` scope，平台名单 +
-            成员段）；``None`` 表示 avatar 域未提供配置，平台一律不装配
+        avatar_platform: avatar.toml 拍平合并视图中的顶层 ``platform`` 段
+            （启用名单 + 各平台成员段）；``None`` 表示 avatar 域未提供配置，
+            平台一律不装配
         event_bus: 事件总线（皮套适配器的被动半订阅 streamer.speech /
             tts.utterance.* 需要；组合根透传，None 时适配器退化为仅工具面）
         lipsync_analyzer: 共享口型分析器（avatar 域渲染器接线；组合根透传，
@@ -205,7 +206,7 @@ def bind_core_tools(
         raise TypeError(f"bind_core_tools: registry 必须是 ToolRegistry 实例，得到 {type(registry).__name__}")
 
     tools_cfg: Dict[str, Any] = config if isinstance(config, dict) else {}
-    avatar_cfg: Dict[str, Any] = avatar_section if isinstance(avatar_section, dict) else {}
+    avatar_cfg: Dict[str, Any] = avatar_platform if isinstance(avatar_platform, dict) else {}
 
     report: Dict[str, int] = {}
 

@@ -146,7 +146,7 @@ class MyComponent:
 
 **ConfigService** 是项目的统一配置管理服务，负责：
 
-- 加载 `config/` 目录下的六文件配置（`agents` / `collectors` / `tools` / `model` / `storage` / `infra`）
+- 加载 `config/` 目录下的七文件配置（`agents` / `collectors` / `tools` / `avatar` / `model` / `storage` / `infra`）
 - 首次运行从 Pydantic Schema 自动生成缺失的配置文件
 - 提供配置合并策略（Schema 默认值 + 配置覆盖）
 - 支持配置文件热重载（file watcher）
@@ -173,13 +173,14 @@ input_config = config_service.get_config_with_defaults(
 
 ### 配置文件结构
 
-配置为**六文件**结构（`config/` 目录），按领域拆分，每文件自带 `[meta].version`：
+配置为**七文件**结构（`config/` 目录），按领域拆分，每文件自带 `[meta].version`：
 
 | 文件 | 内容 |
 |------|------|
 | `agents.toml` | 业务 Agent（`[agents].enabled` + streamer/minecraft/text_adv 子树） |
 | `collectors.toml` | 采集器（顶层 `enabled` 名单 + 各采集器子段） |
 | `tools.toml` | 工具域（`[tools]` 提供者开关 / `disabled_tools` / `[tools.tasks]` 异步任务基建） |
+| `avatar.toml` | 皮套域（`[avatar.platform]` 启用名单 + 各平台成员段 + `[avatar.lipsync]` 口型共享件） |
 | `model.toml` | 三层模型结构（`[[llm_providers]]` / `[[llm_models]]` / `[llm_profiles]` 六用途 profile） |
 | `storage.toml` | 顶层扁平存储（`[sqlite]` / `[memory]`） |
 | `infra.toml` | 基础设施（`[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` / `[interceptors.*]` / `[simulator]`） |
@@ -193,9 +194,9 @@ input_config = config_service.get_config_with_defaults(
 [agents]
 enabled = ["streamer"]        # 可选: streamer / minecraft / text_adv
 
-# config/tools.toml —— 工具包启用（按域独立 enabled；如下所示）
-[tools.avatar.vts]
-enabled = false               # 单域提供者开关
+# config/avatar.toml —— 皮套平台启用（名单成员 = 平台工具全部可见）
+[platform]
+enabled = ["vts"]             # 合法名: vts / warudo / vrchat
 
 [tools.vision]
 enabled = true                # vision_look_at_screen（mss 抓屏 + VLM 转文本）
@@ -250,12 +251,12 @@ if config_service.is_interceptor_enabled("rate_limit"):
 
 ### 配置文件生成与重载
 
-- **首次运行**：`ConfigService.initialize()` 经加载管线自动生成 `config/` 六文件并按 Schema 校验
-- **重载**：`FileWatcher` 监听六文件变更（管线自写经自写压标跳过）；`reload_config` 按段策略分流——`infra` 为 hot 段即时回调生效，其余五文件提示待重启；重载失败保留旧配置继续运行
+- **首次运行**：`ConfigService.initialize()` 经加载管线自动生成 `config/` 七文件并按 Schema 校验
+- **重载**：`FileWatcher` 监听七文件变更（管线自写经自写压标跳过）；`reload_config` 按段策略分流——`infra` 为 hot 段即时回调生效，其余六文件提示待重启；重载失败保留旧配置继续运行
 - **版本升级**：`upgrade.py` 升级钩子注册表按 `[meta].version` 区间推进（缺失版本硬错）
 
 ```bash
-# 首次运行自动生成 config/ 六文件
+# 首次运行自动生成 config/ 七文件
 uv run python main.py
 # → 生成 agents.toml, collectors.toml, tools.toml, model.toml, storage.toml, infra.toml
 ```

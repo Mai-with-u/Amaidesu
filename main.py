@@ -581,14 +581,14 @@ async def create_app_components(
         # （见各自 build 入口），不在本段。
         tools_cfg = (config.get("tools") or {}) if isinstance(config, dict) else {}
         tools_section = tools_cfg if isinstance(tools_cfg, dict) else {}
-        avatar_section = (config.get("avatar") or {}) if isinstance(config, dict) else {}
+        avatar_platform = (config.get("platform") or {}) if isinstance(config, dict) else {}
 
         core_report = bind_core_tools(
             tool_registry,
             tools_section,
             event_bus=event_bus,
             lipsync_analyzer=lipsync_analyzer,
-            avatar_section=avatar_section,
+            avatar_platform=avatar_platform,
         )
         from src.modules.tools.bootstrap import CORE_MEMBER_COUNT
 

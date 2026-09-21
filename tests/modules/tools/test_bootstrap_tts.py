@@ -63,30 +63,24 @@ class TestNonTTSPackagesUnchanged:
         assert registry.list_tools() == [], "无域开关配置，bootstrap 不应注册任何工具"
 
     def test_avatar_vts_enabled_registers_vts_tools(self):
-        """[tools.avatar.vts].enabled=true：应注册 vts_* 工具。"""
+        """平台名在 avatar.toml 启用名单内：应注册 vts_* 工具。"""
         registry = ToolRegistry()
         report = bind_core_tools(
             registry,
-            config={
-                "avatar": {
-                    "vts": {"enabled": True, "config": {}},
-                },
-            },
+            config={},
+            avatar_platform={"enabled": ["vts"], "vts": {"vts_port": 8001}},
         )
         vts_tools = [n.full_name for n in registry.list_tools() if n.full_name.startswith("vts_")]
         assert vts_tools != [], "avatar.vts 已启用应被注册"
         assert report.get("vts", 0) > 0
 
     def test_avatar_vts_disabled_registers_none(self):
-        """[tools.avatar.vts].enabled=false：不注册 vts_* 工具。"""
+        """平台名不在启用名单：不注册 vts_* 工具。"""
         registry = ToolRegistry()
         report = bind_core_tools(
             registry,
-            config={
-                "avatar": {
-                    "vts": {"enabled": False, "config": {}},
-                },
-            },
+            config={},
+            avatar_platform={"enabled": [], "vts": {"vts_port": 8001}},
         )
         vts_tools = [n.full_name for n in registry.list_tools() if n.full_name.startswith("vts_")]
         assert vts_tools == [], "avatar.vts 未启用不应注册"

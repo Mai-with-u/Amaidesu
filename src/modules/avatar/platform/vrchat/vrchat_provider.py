@@ -3,7 +3,7 @@ VRChatProvider - VRChat OSC 虚拟形象工具集
 
 - 引擎：OSC 客户端初始化、参数写入、手势触发
 - ToolProvider 协议由本类自身实现
-- 暴露的工具（同语义跨后端同名同参数形状，契约见 ``avatar.protocol``）：
+- 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
   - ``vrchat_set_expression``        - 设置情绪（VRChat 无标准表情参数体系，返回未应用结果）
   - ``vrchat_list_preset_actions``   - 列出可演预设（手势 enum）
   - ``vrchat_trigger_preset_action`` - 触发预设手势（未知名随结果返回目录）
@@ -179,7 +179,7 @@ class VRChatProvider(BaseToolProvider):
     async def set_expression(self, emotion: str, intensity: float) -> ToolExecutionResult:
         """设置当前情绪（能力差异的优雅降级面）。
 
-        VRChat OSC 参数体系每 avatar 自定义、无标准表情通道，本后端不渲染
+        VRChat OSC 参数体系每 avatar 自定义、无标准表情通道，本平台不渲染
         情绪面：合法情绪名返回成功但 ``applied=False``（诚实告知未应用），
         映射表外的情绪名按失败结果返回。手势类表达走 trigger_preset_action。
         """

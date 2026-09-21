@@ -6,7 +6,7 @@ ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动半）：
 - 引擎子件（``ExpressionController`` / ``HotkeyMatcher`` / ``IdleMotionController``）
   经 callback 解耦，可独立复用；口型渲染（``VtsLipSyncRenderer``）挂在共享
   分析器（``avatar.lipsync``）上。
-- 暴露的工具（同语义跨后端同名同参数形状，契约见 ``avatar.protocol``）：
+- 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
   - ``vts_set_expression``        - 设置情绪（17 枚举值 + 强度）
   - ``vts_list_preset_actions``   - 列出可演预设（VTS 热键目录）
   - ``vts_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）

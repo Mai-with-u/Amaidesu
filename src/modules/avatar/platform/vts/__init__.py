@@ -8,7 +8,7 @@ VTubeStudio 虚拟形象工具集:
 - 引擎子件 ``ExpressionController`` / ``HotkeyMatcher`` /
   ``IdleMotionController`` 经 callback 解耦，可独立复用。
 
-VRChat OSC 桥接是独立形象后端，位于 ``src/modules/avatar/vrchat/``。
+VRChat OSC 桥接是独立皮套平台，位于 ``src/modules/avatar/platform/vrchat/``。
 """
 
 from .expression_controller import ExpressionController

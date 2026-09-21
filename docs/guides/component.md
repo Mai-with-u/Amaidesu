@@ -431,8 +431,8 @@ registry.register_provider(
 **谁调用注册？**
 
 - **Agent 专属工具**：Agent 子类 `_register_tools()` 方法（参考 `StreamerAgent._register_tools`、`TextAdvGameAgent._register_tools`）。在 Agent `_on_start` 阶段调用。
-- **公用域工具**：装配根按域装配——avatar/studio 分类经 `bind_core_tools(registry, tools_cfg)` 按开关注册，memory 经 `bind_memory_tools`，vision（`vision_look_at_screen`）由组合根注入 mss 抓屏 + VLM 文本读取后端后注册。
-- **工具注册聚合**：生产路径下不存在任何 manager 级聚合函数——Agent 子类在 `_register_tools()` 中自己 `registry.register_provider(provider, visible_to=...)`；avatar/studio 分类工具由 `main.py` 的 `bind_core_tools(registry, tools_cfg)` 按域开关装配；启动结束后 `audit_tools(registry)` 只做只读审计（声明与注册按派生全名对账），不参与注入。
+- **公用域工具**：装配根按域装配——avatar 平台经 `bind_core_tools(..., avatar_section=...)` 按 avatar.toml 启用名单注册、studio 分类按 `[tools.<域>.<键>].enabled` 开关注册，memory 经 `bind_memory_tools`，vision（`vision_look_at_screen`）由组合根注入 mss 抓屏 + VLM 文本读取后端后注册。
+- **工具注册聚合**：生产路径下不存在任何 manager 级聚合函数——Agent 子类在 `_register_tools()` 中自己 `registry.register_provider(provider, visible_to=...)`；avatar/studio 分类工具由 `main.py` 的 `bind_core_tools(..., avatar_section=...)` 按平台名单与域开关装配；启动结束后 `audit_tools(registry)` 只做只读审计（声明与注册按派生全名对账），不参与注入。
 
 ### 测试要点
 

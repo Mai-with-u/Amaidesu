@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 class ConfigResponse(BaseModel):
     """完整配置响应 (合并视图)
 
-    顶层键为六个 scope：agents / collectors / tools / model / storage / infra。
+    顶层键为七个 scope：agents / collectors / tools / avatar / model / storage / infra。
     """
 
     config: Dict[str, Any] = Field(default_factory=dict, description="完整配置字典")

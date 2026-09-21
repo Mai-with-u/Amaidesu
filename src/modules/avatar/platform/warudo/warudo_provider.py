@@ -4,7 +4,7 @@ WarudoProvider - Warudo 虚拟形象工具集
 ToolProvider 协议实现，编排各引擎子件（``WarudoStateManager`` / 后台任务 /
 ``WarudoSubtitleManager`` / ``ActionSender``）：
 
-- 暴露的工具（同语义跨后端同名同参数形状，契约见 ``avatar.protocol``）：
+- 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
   - ``warudo_set_expression``        - 设置情绪（17 枚举值 + 强度）
   - ``warudo_list_preset_actions``   - 列出可演预设（动作目录 + 内置条目）
   - ``warudo_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）

@@ -190,7 +190,7 @@ class TestWalkSchemaToolProviders:
     def test_provider_config_叶子字段定位成功(self) -> None:
         root = resolve_root_schema("tools")
         assert root is not None
-        result = _walk_schema(root, ["tools", "avatar", "vts", "config", "vts_port"])
+        result = _walk_schema(root, ["tools", "studio", "obs", "config", "port"])
         assert result is not None
         kind, payload = result
         assert kind == "leaf"
@@ -199,25 +199,35 @@ class TestWalkSchemaToolProviders:
     def test_provider_config_未知键返回None(self) -> None:
         root = resolve_root_schema("tools")
         assert root is not None
-        assert _walk_schema(root, ["tools", "avatar", "vts", "config", "no_such_key"]) is None
+        assert _walk_schema(root, ["tools", "studio", "obs", "config", "no_such_key"]) is None
 
     def test_provider_config_整对象更新返回free_dict(self) -> None:
         """config 整对象更新不拆字段，交由加载器整体校验。"""
         root = resolve_root_schema("tools")
         assert root is not None
-        assert _walk_schema(root, ["tools", "avatar", "vts", "config"]) == ("free_dict", None)
+        assert _walk_schema(root, ["tools", "studio", "obs", "config"]) == ("free_dict", None)
 
     def test_provider段内enabled仍走通用叶子路径(self) -> None:
         root = resolve_root_schema("tools")
         assert root is not None
-        result = _walk_schema(root, ["tools", "avatar", "vts", "enabled"])
+        result = _walk_schema(root, ["tools", "studio", "obs", "enabled"])
         assert result is not None
         assert result[0] == "leaf"
 
     def test_未注册provider的config回退free_dict(self) -> None:
         root = resolve_root_schema("tools")
         assert root is not None
-        assert _walk_schema(root, ["tools", "avatar", "ghost", "config", "x"]) == ("free_dict", None)
+        assert _walk_schema(root, ["tools", "studio", "ghost", "config", "x"]) == ("free_dict", None)
+
+    def test_avatar平台成员段typed字段下钻(self) -> None:
+        """avatar.toml 平台成员段直接铺键（无 .config 层），typed 引用递归下钻。"""
+        root = resolve_root_schema("avatar")
+        assert root is not None
+        result = _walk_schema(root, ["platform", "vts", "vts_port"])
+        assert result is not None
+        kind, payload = result
+        assert kind == "leaf"
+        assert payload[1].annotation is int
 
 
 # ---------------------------------------------------------------------------
@@ -236,12 +246,12 @@ class _FakeConfigService:
 
 
 class TestBuildFrontendGroups:
-    """前端分组构建：六 scope 分组、敏感值占位、只读标注。"""
+    """前端分组构建：七 scope 分组、敏感值占位、只读标注。"""
 
-    def test_六个scope各生成一个分组(self) -> None:
+    def test_七个scope各生成一个分组(self) -> None:
         result = _build_frontend_groups(_FakeConfigService({}))
         group_keys = [g["key"] for g in result["groups"]]
-        assert group_keys == ["agents", "collectors", "tools", "model", "storage", "infra"]
+        assert group_keys == ["agents", "collectors", "tools", "avatar", "model", "storage", "infra"]
         assert result["version"]
 
     def test_分组label与文件名来自根类自描述(self) -> None:
@@ -313,7 +323,7 @@ class TestBuildFrontendGroups:
         service = _FakeConfigService({})
         service.main_config = None
         result = _build_frontend_groups(service)
-        assert len(result["groups"]) == 6
+        assert len(result["groups"]) == 7
 
 
 class TestFillArrayPlaceholders:

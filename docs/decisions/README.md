@@ -51,3 +51,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-025：字幕单一源——装配期择流 + Warudo 字幕面退役](025-subtitle-single-source.md)
 - [ADR-026：皮套工具面契约——语义参数、发现协议与结构类型规范](026-avatar-tool-surface-contract.md)
 - [ADR-027：动态配置段统一注册表机制——工具提供者 config 纳入校验与默认值补全](027-dynamic-config-section-registry.md)
+- [ADR-028：avatar 域配置毕业——七文件布局与皮套配置结构](028-avatar-domain-config-graduation.md)

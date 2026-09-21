@@ -58,7 +58,7 @@
 | 服务注册机制，依赖运行时才暴露问题 | 无服务注册；构造器注入 + 事件/工具契约 |
 | 24 个插件互相依赖成石山 | 游戏 Agent 之间零依赖，经事件（`game.*`）/状态（工具，如 text_adv_get_state）/指令（framework_delegate 委派原语）三通道松耦合 |
 | 消息流经中心中转，链路不清 | Agent → 工具/事件/存储直达，单向清晰 |
-| 全局/插件级配置混乱 | 六文件按领域拆分 + Pydantic Schema 校验 |
+| 全局/插件级配置混乱 | 七文件按领域拆分 + Pydantic Schema 校验 |
 
 ### Agent 包边界硬规则
 
@@ -121,9 +121,9 @@ flowchart TB
 
 输入净化职责由 EventBus 分发层的**事件拦截器**承担（限流、相似过滤）。
 
-### 配置：六文件 + 每文件版本 + 包内权威 + 单一管线
+### 配置：七文件 + 每文件版本 + 包内权威 + 单一管线
 
-`agents / collectors / tools / model / storage / infra` 六文件按领域拆分（`config/` 目录）；每文件自带 `[meta].version` 结构版本，经升级钩子注册表按区间独立推进（缺失硬错）。组件配置权威在各组件包内的 `ConfigSchema`（中央树只留槽位与聚合段），加载走单一管线（read → 版本推进 → Pydantic 校验硬错 → 漂移写回（备份 + 自写压标）→ 合并视图）。启用开关收敛为两处：`[agents].enabled` 与 `collectors.toml` 顶层 `enabled`；全局工具停用名单为 `[tools].disabled_tools`（重启生效）。设计决策见 [ADR-014](../decisions/014-config-six-file-refactor.md)。
+`agents / collectors / tools / avatar / model / storage / infra` 七文件按领域拆分（`config/` 目录）；每文件自带 `[meta].version` 结构版本，经升级钩子注册表按区间独立推进（缺失硬错）。avatar 从 tools 分类毕业为域文件、域文件数边界由 [ADR-028](../decisions/028-avatar-domain-config-graduation.md) 修订（域毕业判据：域内多 provider 实例 + 自有协议/模块目录 + 配置跨文件溢出）。组件配置权威在各组件包内的 `ConfigSchema`（中央树只留槽位与聚合段），加载走单一管线（read → 版本推进 → Pydantic 校验硬错 → 漂移写回（备份 + 自写压标）→ 合并视图）。启用开关收敛为两处：`[agents].enabled` 与 `collectors.toml` 顶层 `enabled`；全局工具停用名单为 `[tools].disabled_tools`（重启生效）。设计决策见 [ADR-014](../decisions/014-config-six-file-refactor.md)。
 
 ### 错误隔离：让边界守边界，不让一处失败扩散成全局停摆
 
