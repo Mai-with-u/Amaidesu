@@ -44,7 +44,7 @@
   开 = 其全部工具进入可见集；关 = 全部消失。开关控制权归属人类（配置 + Web UI）。
 - 感知已迁出至 ``collectors.toml``（``[collectors]`` 段）；输出已迁出至
   ``infra.toml``（``[tts]``/``[subtitle]``/``[dashboard.subtitle_widget]`` 等段）；
-  虚拟形象已毕业为独立文件 ``avatar.toml``（``[avatar.platform.*]``）。
+  虚拟形象已迁出为独立文件 ``avatar.toml``（``[avatar.platform.*]``）。
   本文件只承载工具域开关与异步任务基建。
 - 组件字段由具体 Tool Provider 的 ConfigSchema 验证；本文件为聚合容器与元数据。
 """

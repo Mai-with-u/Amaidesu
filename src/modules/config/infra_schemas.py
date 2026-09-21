@@ -2,7 +2,7 @@
 
 聚合一切支撑设施段：TTS / 字幕 / 事件 / 拦截器 / 面板 / 日志 /
 模拟直播间。段名与键名保持既有形态——文件重组不改键。
-（口型分析共享件段已随 avatar 域毕业迁往 avatar.toml ``[avatar.lipsync]``。）
+（口型分析共享件段已迁往 avatar.toml ``[avatar.lipsync]``。）
 """
 
 from typing import Any

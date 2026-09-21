@@ -33,8 +33,7 @@ PROVIDER_DESCRIPTIONS: Dict[Tuple[str, str], str] = {
 # 成员来自 [tools.<分类>] 直接子段键的分类（enabled / config 之外的子键 =
 # 提供者声明；enabled=false 的声明提供者也展示——"配置已声明、重启后装配"）。
 # （avatar 分类已迁出：成员段在 avatar.toml [avatar.platform]，下方单独补卡。）
-_CONFIG_MEMBER_CATEGORIES: Tuple[str, ...] = ("studio", "web"))
-
+_CONFIG_MEMBER_CATEGORIES: Tuple[str, ...] = ("studio", "web")
 # 工具分类 "game" 的判据：名册里除框架自己的主播 Agent 之外，剩下的都是游戏 Agent
 # （主播 Agent 唯一且自我驱动，游戏 Agent 命令驱动）。这里不列举任何具体游戏名——
 # 接哪款游戏由 agents.enabled 决定，后端分类不随游戏增减而改。

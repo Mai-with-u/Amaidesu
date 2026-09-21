@@ -7,7 +7,7 @@
 4. studio 动态子段（Dict[str, ProviderConfig]）
 5. [tools.tasks] 段定义 + 默认值
 6. [tools.memory].enabled 默认 true
-7. 已迁出段拒收（perception/output 顶层禁用；avatar 已毕业为 avatar.toml）
+7. 已迁出段拒收（perception/output 顶层禁用；avatar 已迁出为 avatar.toml）
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ class TestToolProviderConfig:
 
 class TestAvatarStudioDomains:
     def test_avatar_section_rejected(self):
-        """avatar 分类已毕业为独立文件 avatar.toml（[avatar.platform.*]），
+        """avatar 分类已迁出为独立文件 avatar.toml（[avatar.platform.*]），
         tools.toml 里残留 avatar 段被 extra=forbid 拒绝"""
         with pytest.raises(ValidationError) as exc_info:
             ToolsConfig.model_validate({"avatar": {"vts": {"enabled": True, "config": {}}}})

@@ -46,7 +46,7 @@ def test_events_persist_dropped_and_written_back(tmp_path: Path):
     events = doc["events"]
     assert "persist" not in events
     assert events["history_size"] == 5000
-    # 版本流按文件独立：infra.toml 的钩子链止于 2.0.38（avatar.lipsync 毕业钩子），
+    # 版本流按文件独立：infra.toml 的钩子链止于 2.0.38（avatar.lipsync 迁移钩子），
     # 不随基线种子推进
     assert doc["meta"]["version"] == "2.0.38"
 

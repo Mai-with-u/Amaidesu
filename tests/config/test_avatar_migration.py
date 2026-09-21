@@ -1,4 +1,4 @@
-"""avatar 域配置毕业跨文件迁移测试（tools.toml / infra.toml v2.0.38 → avatar.toml）
+"""avatar 配置迁出 tools/infra 的跨文件迁移测试（v2.0.38 → avatar.toml）
 
 覆盖：
 - [tools.avatar.*] → [avatar.platform.*]：成员段去 .config 层平铺、enabled
@@ -19,7 +19,7 @@ from src.modules.config.multi_file_loader import get_config_version, load_config
 
 
 def _seed_old_tools_avatar(config_dir: Path) -> None:
-    """给 tools.toml 追加旧 [tools.avatar.*] 段并拨回毕业前版本。"""
+    """给 tools.toml 追加旧 [tools.avatar.*] 段并拨回迁移前版本。"""
     path = config_dir / "tools.toml"
     content = path.read_text(encoding="utf-8-sig")
     content = content.replace(f'version = "{CONFIG_BASELINE_VERSION}"', 'version = "2.0.37"', 1)
@@ -34,7 +34,7 @@ def _seed_old_tools_avatar(config_dir: Path) -> None:
 
 
 def _seed_old_infra_lipsync(config_dir: Path) -> None:
-    """给 infra.toml 追加旧 [avatar.lipsync] 段并拨回毕业前版本。"""
+    """给 infra.toml 追加旧 [avatar.lipsync] 段并拨回迁移前版本。"""
     path = config_dir / "infra.toml"
     content = path.read_text(encoding="utf-8-sig")
     content = content.replace(f'version = "{CONFIG_BASELINE_VERSION}"', 'version = "2.0.37"', 1)
@@ -69,7 +69,7 @@ def test_platform_graduation_migrates_and_written_back(tmp_path: Path):
     tools_doc = tomlkit.parse((tmp_path / "tools.toml").read_text(encoding="utf-8-sig"))
     assert "avatar" not in tools_doc["tools"]
 
-    # 版本推进：tools 链尾 2.0.38（毕业钩子 target），目标文件跟进不回退基线
+    # 版本推进：tools 链尾 2.0.38（迁移钩子 target），目标文件跟进不回退基线
     assert get_config_version(tmp_path, "tools.toml") == "2.0.38"
     assert get_config_version(tmp_path, "avatar.toml") == CONFIG_BASELINE_VERSION
 

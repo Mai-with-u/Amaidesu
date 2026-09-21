@@ -205,7 +205,7 @@ register_file_hook("agents.toml", "builder_scene_transport", "2.0.35", _upgrade_
 
 # 口型调参键：tools.toml [tools.avatar.vts].config → avatar.toml [avatar.lipsync]
 # （口型分析器升为共享基础设施时调参先落 infra [avatar.lipsync]，avatar 域
-# 毕业为第七配置文件后，本钩子的目标随配置之家改为 avatar.toml 同名段；
+# avatar 独立为第七配置文件后，本钩子的迁移目标改为 avatar.toml 同名段；
 # 开关键 lip_sync_enabled 正名为 enabled；其余键原样搬迁不改名）
 _LIPSYNC_KEYS = (
     "sample_rate",
@@ -233,8 +233,8 @@ def _upgrade_vts_lipsync_to_infra(host_data: Dict[str, Any], target_data: Dict[s
     ``lip_sync_enabled`` 正名为 ``enabled``。对已迁移数据零变更（幂等）。
 
     目标文件为 avatar.toml（段 ``[avatar.lipsync]`` 即根字段 ``lipsync``）：
-    infra 的 avatar 段已随域毕业从 Schema 移除，写入 infra 的键会被校验
-    剥离成数据丢失，目标必须与配置之家的现状一致。
+    infra 的 avatar 段已随域迁出从 Schema 移除，写入 infra 的键会被校验
+    剥离成数据丢失，目标必须与配置实际所在文件一致。
     """
     tools = host_data.get("tools")
     avatar = tools.get("avatar") if isinstance(tools, dict) else None
@@ -262,7 +262,7 @@ def _upgrade_vts_lipsync_to_infra(host_data: Dict[str, Any], target_data: Dict[s
 
 
 # 生产钩子登记：tools.toml v2.0.36（VTS lip-sync 键跨文件迁 [avatar.lipsync]，
-# 目标文件随域毕业为 avatar.toml）
+# 目标文件随域迁出改为 avatar.toml）
 register_cross_file_hook("tools.toml", "avatar.toml", "vts_lipsync_to_infra", "2.0.36", _upgrade_vts_lipsync_to_infra)
 
 
@@ -290,8 +290,8 @@ def _drop_warudo_subtitle_keys(data: Dict[str, Any]) -> List[str]:
 register_file_hook("tools.toml", "drop_warudo_subtitle_keys", "2.0.37", _drop_warudo_subtitle_keys)
 
 
-def _upgrade_avatar_platform_graduation(host_data: Dict[str, Any], target_data: Dict[str, Any]) -> List[str]:
-    """tools.toml v2.0.38：``[tools.avatar.*]`` 整体毕业至 avatar.toml ``[avatar.platform.*]``。
+def _upgrade_avatar_platform_to_avatar_file(host_data: Dict[str, Any], target_data: Dict[str, Any]) -> List[str]:
+    """tools.toml v2.0.38：``[tools.avatar.*]`` 整体迁至 avatar.toml ``[avatar.platform.*]``。
 
     avatar 从 tools 域独立为第七配置文件：成员段去掉 tools 动态键机制的
     ``.config`` 中间层直接铺参数键；``enabled`` 布尔换算为
@@ -343,10 +343,10 @@ def _upgrade_avatar_platform_graduation(host_data: Dict[str, Any], target_data: 
     return changed
 
 
-def _upgrade_avatar_lipsync_graduation(host_data: Dict[str, Any], target_data: Dict[str, Any]) -> List[str]:
+def _upgrade_avatar_lipsync_to_avatar_file(host_data: Dict[str, Any], target_data: Dict[str, Any]) -> List[str]:
     """infra.toml v2.0.34：``[avatar.lipsync]`` 段跨文件迁至 avatar.toml 同名段。
 
-    口型分析共享件的配置之家从 infra 收编进 avatar 域文件（组件代码住哪、
+    口型分析共享件的配置从 infra 迁入 avatar 域文件（组件代码住哪、
     配置段跟哪）；键名原样搬迁不改名，用户显式值即唯一事实。宿主侧
     ``[avatar]`` 段删除。对已迁移数据零变更（幂等）。
     """
@@ -365,9 +365,9 @@ def _upgrade_avatar_lipsync_graduation(host_data: Dict[str, Any], target_data: D
     return changed
 
 
-# 生产钩子登记：tools.toml v2.0.38（[tools.avatar.*] 毕业至 avatar.toml [avatar.platform.*]）
+# 生产钩子登记：tools.toml v2.0.38（[tools.avatar.*] 迁至 avatar.toml [avatar.platform.*]）
 register_cross_file_hook(
-    "tools.toml", "avatar.toml", "avatar_platform_graduation", "2.0.38", _upgrade_avatar_platform_graduation
+    "tools.toml", "avatar.toml", "avatar_platform_to_avatar_file", "2.0.38", _upgrade_avatar_platform_to_avatar_file
 )
 
 
@@ -375,7 +375,7 @@ register_cross_file_hook(
 # target 取 2.0.38：存量 infra.toml 版本曾被 tools→infra 跨文件钩子推到
 # 2.0.36、新生成文件基线种子 2.0.37，低于两者的钩子 target 永不执行
 register_cross_file_hook(
-    "infra.toml", "avatar.toml", "avatar_lipsync_graduation", "2.0.38", _upgrade_avatar_lipsync_graduation
+    "infra.toml", "avatar.toml", "avatar_lipsync_to_avatar_file", "2.0.38", _upgrade_avatar_lipsync_to_avatar_file
 )
 
 

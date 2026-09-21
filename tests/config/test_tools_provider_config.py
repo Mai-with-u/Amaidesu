@@ -1,7 +1,7 @@
 """工具提供者 config 子段的注册表校验与默认值补全测试
 
-覆盖 tools 动态分类段（[tools.studio.<name>]；avatar 分类已毕业为 avatar.toml
-[avatar.platform.*]，平台段校验见 test_avatar_graduation_migration.py）的
+覆盖 tools 动态分类段（[tools.studio.<name>]；avatar 分类已迁出为 avatar.toml
+[avatar.platform.*]，平台段校验见 test_avatar_migration.py）的
 加载期行为：默认值补齐落盘（含注释渲染）、未知键剥离、类型违约硬错、
 残留段容忍、WebUI 写入口校验。机制与采集器子段（_validate_collectors_
 sections）同构，断言形状对齐 test_writeback_pipeline 的既有用例。

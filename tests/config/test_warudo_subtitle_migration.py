@@ -31,7 +31,7 @@ def _seed_old_warudo_subtitle(config_dir: Path) -> None:
 
 
 def test_warudo_subtitle_keys_dropped_and_written_back(tmp_path: Path):
-    """旧配置构造 → 加载 → 三键已删、ws_port 随段毕业迁 avatar.toml、版本推进 2.0.38。"""
+    """旧配置构造 → 加载 → 三键已删、ws_port 随段迁往 avatar.toml、版本推进 2.0.38。"""
     from src.modules.config.multi_file_loader import generate_default_configs
 
     generate_default_configs(tmp_path)
@@ -39,7 +39,7 @@ def test_warudo_subtitle_keys_dropped_and_written_back(tmp_path: Path):
 
     load_config_dir(tmp_path)
 
-    # 删键钩子（2.0.37）先跑，毕业钩子（2.0.38）随后把残段整体迁往 avatar.toml：
+    # 删键钩子（2.0.37）先跑，迁移钩子（2.0.38）随后把残段整体迁往 avatar.toml：
     # tools.toml 侧 [tools.avatar] 不复存在，ws_port 等存活键落在 [platform.warudo]
     tools_doc = tomlkit.parse((tmp_path / "tools.toml").read_text(encoding="utf-8-sig"))
     assert "avatar" not in tools_doc["tools"]

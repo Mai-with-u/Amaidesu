@@ -136,9 +136,9 @@ class ExpressionController:
     async def list_live2d_parameters(self) -> List[str]:
         """获取当前模型 rig 参数名清单（``Live2DParameterListRequest``）。
 
-        注入面清单（``list_tracking_parameters``）回答"能写什么"，本清单
-        回答"模型上有什么"——两者交集才有可见效果；绑定率（注入面 → rig
-        的映射）无 API，用户从本清单选取 idle 绑定名改配置。
+        VTS 可注入参数清单（``list_tracking_parameters``）回答"能写什么"，
+        本清单回答"模型上有什么"——两者交集才有可见效果；参数到模型部位
+        的绑定关系没有 API 可查，用户从本清单选取 idle 绑定名改配置。
         """
         if not self._is_connected():
             return []

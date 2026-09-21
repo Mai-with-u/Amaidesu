@@ -1,6 +1,6 @@
 """Avatar 配置 Schema 定义
 
-定义 ``config/avatar.toml`` 的 Pydantic 聚合模型——avatar 域的单一配置之家。
+定义 ``config/avatar.toml`` 的 Pydantic 聚合模型——avatar 相关配置统一放在这一个文件。
 
 段树结构（TOML 视角）::
 

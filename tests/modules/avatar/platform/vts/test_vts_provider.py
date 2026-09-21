@@ -218,7 +218,7 @@ async def test_set_expression_covers_seventeen_emotions():
 
 @pytest.mark.asyncio
 async def test_resolve_idle_bindings_config_only_and_unavailable_reported():
-    """绑定名解析纯配置：配置名原样返回，注入面外的名字进不可用清单。"""
+    """绑定名解析纯配置：配置名原样返回，VTS 参数清单之外的名字进不可用清单。"""
     provider = _build_provider()
     provider.expression.list_tracking_parameters = AsyncMock(
         return_value=["FaceAngleX", "FaceAngleY", "FaceAngleZ", "MouthOpen"]
@@ -245,7 +245,7 @@ async def test_resolve_idle_bindings_empty_means_disabled():
 
 @pytest.mark.asyncio
 async def test_resolve_idle_bindings_unavailable_name_flagged():
-    """非空名不在注入面 → 返回不可用清单（调用方预置 failed_params 停写）。"""
+    """非空名不在 VTS 参数清单 → 返回不可用清单（调用方预置 failed_params 停写）。"""
     provider = _build_provider(config={"idle_param_body_x": "TorsoX"})
     provider.expression.list_tracking_parameters = AsyncMock(return_value=["FaceAngleX", "FaceAngleY", "FaceAngleZ"])
 

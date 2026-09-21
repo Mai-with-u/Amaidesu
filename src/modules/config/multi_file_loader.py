@@ -57,7 +57,7 @@ from src.modules.logging import get_logger
 logger = get_logger("MultiFileLoader")
 
 # 配置文件清单（按域划分）：agents / collectors / tools / avatar / model / storage / infra。
-# avatar.toml 排在 tools.toml 之后：毕业跨文件钩子（tools/infra → avatar）以
+# avatar.toml 排在 tools.toml 之后：avatar 迁出跨文件钩子（tools/infra → avatar）以
 # avatar.toml 为目标文件，目标 dict 在阶段①已就位；宿主文件（tools/infra）
 # 先于 avatar 自身钩子被遍历，"先搬家、后做数据变换"的次序由此保证。
 _CONFIG_FILES = [
@@ -287,7 +287,6 @@ def _table_from_model(instance: BaseModel) -> Any:
             from src.modules.config.registry import TOOL_PROVIDER_DOMAINS
 
             if is_tool_sections_host and sub_name in TOOL_PROVIDER_DOMAINS:
-)
                 inner = _tool_provider_sections_table(value, domain=sub_name)
             else:
                 inner = _dict_to_toml_table(value)
@@ -565,8 +564,9 @@ def _validate_tool_provider_sections(
 
     known = sorted(f"{d}.{k}" for d, k in TOOL_PROVIDER_SCHEMAS)
     tools = root_instance.tools
+    # avatar 域的成员段已迁出为独立文件 avatar.toml（ToolsConfig 无 avatar
+    # 字段），该域在此循环自然空转
     for domain in TOOL_PROVIDER_DOMAINS:
-)
         sections = getattr(tools, domain, None) or {}
         for key in sorted(sections):
             provider_cfg = sections[key]

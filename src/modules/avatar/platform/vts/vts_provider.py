@@ -121,10 +121,11 @@ class VTSProvider(BaseToolProvider):
 
         说明：vts 字段多沿用历史命名（如 ``*_ms`` 实际单位是 float 秒）；
         本批保持行为保真（默认值 + 类型逐一等价），不顺手改单位/命名。
-        idle 六轴绑定纯配置（无候选猜测）：头部默认 FaceAngleX/Y/Z（VTS
-        内置输入，模型生态实证近乎全绑定）；身体默认空串停用——VTS 无
-        通用躯干输入插座，任何非空默认都是猜测；空名 = 该轴零写入零警告，
-        非空名缺失 = 一次性警告 + 停写。
+        idle 六轴绑定完全由配置决定（不做候选猜测）：头部默认
+        FaceAngleX/Y/Z（VTS 内置参数，实测 17 个模型里 16 个绑定了它）；
+        身体默认空串停用——VTS 没有通用的躯干输入参数，任何非空默认
+        都是猜测；空名 = 该轴零写入零警告，非空名缺失 = 一次性警告 +
+        停写。
         """
 
         type: str = "vts"
@@ -180,11 +181,12 @@ class VTSProvider(BaseToolProvider):
         self.vts_port: int = self.typed_config.vts_port
 
         # 情绪 → VTS 参数映射（词表 17 值全覆盖；键取 Emotion.value 小写）。
-        # 眉部统一走联合插座 Brows（模型生态 11/17 绑定）：分侧输入
-        # BrowLeftY/BrowRightY 在真实模型上近乎零绑定，写入成功但不可见；
-        # 三处原分侧不对称情绪（scared/confused/smug）取较大值近似，
-        # 单挑眉细节需求属未来情绪覆盖层。FaceAngry 保留（语义独特零成本）；
-        # 强度在 set_expression 中按线性缩放施加。
+        # 眉部统一写 Brows（一个参数同时控制双眉，实测 17 个模型里 11 个
+        # 绑定了它）：分侧参数 BrowLeftY/BrowRightY 在真实模型上几乎没人
+        # 绑定，写入成功但看不到效果；scared/confused/smug 三个情绪原来
+        # 左右眉幅度不同，改用 Brows 后取较大值（左右眉不同的细节效果
+        # 留待将来做情绪参数自定义时再补）。FaceAngry 保留（语义独特、
+        # 写了不亏）；强度在 set_expression 中按线性缩放施加。
         self._emotion_map: Dict[str, Dict[str, float]] = {
             "neutral": {},
             "happy": {"MouthSmile": 0.8, "Brows": 0.6},
@@ -713,10 +715,10 @@ class VTSProvider(BaseToolProvider):
         """解析 idle 六轴绑定名（纯配置，无候选猜测）。
 
         - 空配置名 = 该轴停用（零写入零警告）；
-        - 非空名不在当前注入面清单 → 记入返回的不可用清单（调用方在
+        - 非空名不在 VTS 可注入参数清单 → 记入返回的不可用清单（调用方在
           ``set_parameter_names`` 之后预置 failed_params 实现一次性警告 +
-          停写；注入面与模型 rig 的映射无 API，绑定不可见只能靠用户观察
-          配置修正）。
+          停写；哪个输入参数被模型绑定到哪个部位没有 API 可查，写入是否
+          有可见效果只能靠用户观察后自行改配置）。
 
         Returns:
             (轴名 → 绑定名（空串 = 停用）, 不可用绑定名清单)
@@ -734,9 +736,9 @@ class VTSProvider(BaseToolProvider):
         unavailable = sorted({name for name in config_names.values() if name and available and name not in available})
         if unavailable:
             self.logger.warning(
-                f"idle 绑定 {unavailable} 不在当前 VTS 注入面清单（模型未绑定该输入或名字有误），"
-                f"对应轴将停写。当前可用参数示例：{sorted(available)[:30]}；"
-                f"模型 rig 参数清单见 debug 日志，可从中选取绑定名改配置。"
+                f"idle 绑定 {unavailable} 不在 VTS 可注入参数清单（模型未绑定该输入或名字有误），"
+                f"对应轴将停写。当前可注入参数示例：{sorted(available)[:30]}；"
+                f"模型自身参数清单见 debug 日志，可从中选取绑定名改配置。"
             )
         return resolved, unavailable
 
