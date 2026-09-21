@@ -19,8 +19,9 @@ from src.modules.config.multi_file_loader import (
     update_config_values,
     validate_config_updates,
 )
-from src.modules.config.registry import COMPONENT_SCHEMAS
+from src.modules.config.registry import COMPONENT_SCHEMAS, TOOL_PROVIDER_SCHEMAS
 from src.modules.config.schema_generator import ConfigSchemaGenerator, collect_all_fields
+from src.modules.config.tools_schemas import ToolsConfig
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -93,6 +94,16 @@ def _walk_schema(model_cls: type[BaseModel], parts: list[str]) -> Optional[tuple
         elem_args = get_args(annotation)
         elem = _unwrap_optional(elem_args[-1]) if elem_args else None
         if isinstance(elem, type) and issubclass(elem, BaseModel):
+            # tools 动态分类段（avatar/studio）：rest[0] 是提供者名，其 config
+            # 子段的权威 Schema 在工具提供者注册表——按注册表下钻做字段级校验
+            if model_cls is ToolsConfig and segment in ("avatar", "studio") and len(rest) >= 2 and rest[1] == "config":
+                provider_schema = TOOL_PROVIDER_SCHEMAS.get((segment, rest[0]))
+                if provider_schema is not None:
+                    deeper = rest[2:]
+                    if not deeper:
+                        # config 整对象更新：字段级不拆分，交由加载器整体校验
+                        return ("free_dict", None)
+                    return _walk_schema(provider_schema, deeper)
             # dict[str, 子模型]：rest[0] 是动态键（如 planner / mcp server 名），
             # 不参与字段校验，跳过后继续走值类型
             return _walk_schema(elem, rest[1:])

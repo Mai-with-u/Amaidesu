@@ -179,6 +179,47 @@ class TestWalkSchema:
         assert _walk_schema(_HostConfig, []) is None
 
 
+class TestWalkSchemaToolProviders:
+    """tools 动态分类段：config 子键经工具提供者注册表下钻校验。"""
+
+    def setup_method(self) -> None:
+        from src.modules.config.registry import fill_component_schemas
+
+        fill_component_schemas()
+
+    def test_provider_config_叶子字段定位成功(self) -> None:
+        root = resolve_root_schema("tools")
+        assert root is not None
+        result = _walk_schema(root, ["tools", "avatar", "vts", "config", "vts_port"])
+        assert result is not None
+        kind, payload = result
+        assert kind == "leaf"
+        assert payload[1].annotation is int
+
+    def test_provider_config_未知键返回None(self) -> None:
+        root = resolve_root_schema("tools")
+        assert root is not None
+        assert _walk_schema(root, ["tools", "avatar", "vts", "config", "no_such_key"]) is None
+
+    def test_provider_config_整对象更新返回free_dict(self) -> None:
+        """config 整对象更新不拆字段，交由加载器整体校验。"""
+        root = resolve_root_schema("tools")
+        assert root is not None
+        assert _walk_schema(root, ["tools", "avatar", "vts", "config"]) == ("free_dict", None)
+
+    def test_provider段内enabled仍走通用叶子路径(self) -> None:
+        root = resolve_root_schema("tools")
+        assert root is not None
+        result = _walk_schema(root, ["tools", "avatar", "vts", "enabled"])
+        assert result is not None
+        assert result[0] == "leaf"
+
+    def test_未注册provider的config回退free_dict(self) -> None:
+        root = resolve_root_schema("tools")
+        assert root is not None
+        assert _walk_schema(root, ["tools", "avatar", "ghost", "config", "x"]) == ("free_dict", None)
+
+
 # ---------------------------------------------------------------------------
 # _build_frontend_groups
 # ---------------------------------------------------------------------------

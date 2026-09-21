@@ -21,9 +21,13 @@
   （ConfigService）翻译为启动失败。
 - **meta 隔离**——每文件的 ``[meta]`` 段是文件私有元数据，合并视图装入前
   剥离；版本按文件独立读取（``get_config_version``）。
-- **free-form 子段的权威在组件包**——采集器子段经组件注册表
-  （``COMPONENT_SCHEMAS``）分发校验；TTS 引擎/字幕后端子段为 free-form
-  dict，其编辑链路由 WebUI 侧的 provider Schema 承担，加载管线不做补全。
+- **动态键子段的权威在组件包**——采集器/Agent 子段经组件注册表
+  （``COMPONENT_SCHEMAS``）、工具提供者 ``config`` 子段经工具提供者注册表
+  （``TOOL_PROVIDER_SCHEMAS``）分发校验与默认值补全（见
+  ``_validate_collectors_sections`` / ``_validate_tool_provider_sections``）；
+  静态命名段直接 typed 引用包内 Schema（如 ``VisionProviderConfig.config``）。
+  TTS 引擎/字幕后端子段为 free-form dict，其编辑链路由 WebUI 侧的
+  provider Schema 承担，加载管线不做补全。
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ from pydantic import BaseModel
 from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_value
 from src.modules.config.agents_schemas import AgentsRootConfig
 from src.modules.config.collectors_schemas import CollectorsRootConfig
-from src.modules.config.tools_schemas import ToolsRootConfig
+from src.modules.config.tools_schemas import ToolsConfig, ToolsRootConfig
 from src.modules.config.errors import ConfigValidationError
 from src.modules.config.model_schemas import LLMProfilesConfig, ModelConfig, ModelRootConfig
 from src.modules.config.storage_schemas import StorageRootConfig
@@ -256,6 +260,8 @@ def _table_from_model(instance: BaseModel) -> Any:
     ``if field_value is None: continue`` 同源惯例）。
     """
     table = tomlkit.table()
+    # tools 动态分类段（avatar/studio）的 dict 值走注册表注释化渲染
+    is_tool_sections_host = isinstance(instance, ToolsConfig)
     for sub_name, sub_info in type(instance).model_fields.items():
         value = getattr(instance, sub_name)
         if value is None:
@@ -268,7 +274,10 @@ def _table_from_model(instance: BaseModel) -> Any:
             for item in value:
                 inner.append(_table_from_model(item))
         elif isinstance(value, dict):
-            inner = _dict_to_toml_table(value)
+            if is_tool_sections_host and sub_name in ("avatar", "studio"):
+                inner = _tool_provider_sections_table(value, domain=sub_name)
+            else:
+                inner = _dict_to_toml_table(value)
         else:
             inner = value
         # 嵌套表（BaseModel / AoT）由 tomlkit 渲染到父段之后，行内注释会
@@ -296,6 +305,36 @@ def _dict_to_toml_table(data: dict[str, Any]) -> Any:
             table[key] = _dict_to_toml_table(value)
         else:
             table[key] = value
+    return table
+
+
+def _tool_provider_sections_table(sections: dict[str, Any], domain: str) -> Any:
+    """把 tools 动态分类段（avatar/studio）序列化为 tomlkit Table。
+
+    provider 段本体（enabled 等）走通用模型序列化；``config`` 子表经注册表
+    查到包内 ConfigSchema 后按模型重建——字段 description 成为行前注释，
+    落盘文件里选项含义可读。注册表未命中（残留段）或重建失败时降级为
+    裸 dict 渲染并记日志：注释是可读性增益，不构成硬错理由。
+    """
+    # 函数内 import 规避循环依赖（与校验分支同款）
+    from src.modules.config.registry import TOOL_PROVIDER_SCHEMAS
+
+    table = tomlkit.table()
+    for key, provider_cfg in sections.items():
+        if isinstance(provider_cfg, BaseModel):
+            inner = _table_from_model(provider_cfg)
+        elif isinstance(provider_cfg, dict):
+            inner = _dict_to_toml_table(provider_cfg)
+        else:
+            inner = provider_cfg
+        schema_cls = TOOL_PROVIDER_SCHEMAS.get((domain, key))
+        config_dict = getattr(provider_cfg, "config", None) if isinstance(provider_cfg, BaseModel) else None
+        if schema_cls is not None and isinstance(config_dict, dict):
+            try:
+                inner["config"] = _table_from_model(schema_cls.from_dict(config_dict))
+            except Exception as e:
+                logger.warning(f"tools.{domain}.{key}.config 注释化序列化失败，降级为裸键: {e}")
+        table[key] = inner
     return table
 
 
@@ -486,6 +525,56 @@ def _validate_collectors_sections(
         root_instance.__pydantic_extra__[name] = sub_instance.model_dump()
 
 
+def _validate_tool_provider_sections(
+    root_instance: ToolsRootConfig,
+    report: DriftReport,
+) -> None:
+    """按工具提供者注册表校验 ``[tools.<domain>.<key>].config`` 子段（阶段④ 的 tools 分支）。
+
+    与采集器分支同构（``_validate_collectors_sections``）：
+
+    - 在册提供者段 → 包内 ConfigSchema 校验 + 漂移检测（缺键补默认、
+      未知键剥离），漂移路径以 ``tools.<domain>.<key>.config.<字段>``
+      前缀并入宿主文件报告；补全后的干净 dict 回填 ``.config`` 字段，
+      供阶段⑤ 全量写回与运行时装配消费
+    - 未注册段（已退役或残留）→ warning 跳过，原样保留，不抛硬错
+    - 类型违约 → ConfigValidationError（携带完整 dotted path），错误
+      从运行期装配失败前移到加载期
+    """
+    # 函数内 import 规避循环依赖：注册表会拉起各 provider 包
+    from src.modules.config.registry import TOOL_PROVIDER_SCHEMAS
+
+    known = sorted(f"{d}.{k}" for d, k in TOOL_PROVIDER_SCHEMAS)
+    tools = root_instance.tools
+    for domain in ("avatar", "studio"):
+        sections = getattr(tools, domain, None) or {}
+        for key in sorted(sections):
+            provider_cfg = sections[key]
+            schema_cls = TOOL_PROVIDER_SCHEMAS.get((domain, key))
+            if schema_cls is None:
+                logger.warning(
+                    f"tools.toml 残留未注册提供者段 [tools.{domain}.{key}]（合法名单：{known}），"
+                    f"config 子段跳过校验与补全，原样保留供人工复核。"
+                )
+                continue
+            # 段本体未知键（enabled/config 之外的拼写错误等）：extra="allow" 保留、
+            # 序列化时丢弃——计入报告让这次清理在日志与写回中可见
+            section_extras = getattr(provider_cfg, "__pydantic_extra__", None) or {}
+            report.redundant.extend(f"tools.{domain}.{key}.{k}" for k in sorted(section_extras))
+            try:
+                sub_instance, sub_report = schema_cls.from_dict_with_drift_check(provider_cfg.config)
+            except Exception as exc:
+                raise ConfigValidationError(
+                    "tools.toml",
+                    f"tools.{domain}.{key}.config",
+                    f"提供者 config 子段校验失败: {exc}",
+                ) from exc
+            report.merge(f"tools.{domain}.{key}.config", sub_report)
+            # 剥 None 再回填：Optional 字段的 None 不落盘（TOML 无 null 字面量），
+            # 序列化侧的裸 dict 渲染路径不做 None 兜底
+            provider_cfg.config = {k: v for k, v in sub_instance.model_dump().items() if v is not None}
+
+
 def _validate_llm_profiles_closed_set(raw_data: dict[str, Any]) -> None:
     """``[llm_profiles]`` 封闭集合校验（加载期，未知用途即硬错）。
 
@@ -532,6 +621,8 @@ def _validate_file(file_name: str, raw_data: dict[str, Any]) -> tuple[BaseConfig
     _filter_optional_container_missing(report, schema_cls)
     if isinstance(instance, CollectorsRootConfig):
         _validate_collectors_sections(instance, report)
+    if isinstance(instance, ToolsRootConfig):
+        _validate_tool_provider_sections(instance, report)
     if isinstance(instance, ModelRootConfig):
         _validate_llm_profiles_closed_set(raw_data)
     return instance, report

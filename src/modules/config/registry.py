@@ -6,12 +6,29 @@ ConfigSchema 在自己包内定义，是唯一权威。
 注册方式为组合根对各组件包的**显式 import**——不做装饰器
 注册副作用，import 链断裂或组件缺 Schema 会在启动期被断言
 拦下（缺失清单随异常给出），杜绝静默漏注册。
+
+两张表对应两类动态键段（加载期按表分发校验与默认值补全，见
+``multi_file_loader``）：
+
+- ``COMPONENT_SCHEMAS``：单层名键——采集器（``[collectors.<name>]``）
+  与 Agent（``[agents.<name>]``）；
+- ``TOOL_PROVIDER_SCHEMAS``：二层身份键——工具提供者
+  （``[tools.<domain>.<key>].config``），键形与装配侧
+  ``tools.bootstrap._DOMAIN_MEMBERS`` 的成员身份同构；
+  两表一致性由契约测试守护（装配成员必须有 Schema，否则该
+  provider 的 config 段退化为无校验、无默认值补全的自由 dict）。
+
+静态命名段不走注册表——直接在聚合 Schema 里 typed 引用包内
+ConfigSchema（先例：``VisionProviderConfig.config``）。
 """
 
 from src.modules.config.schemas.base import BaseConfig
 
 # 组件名 → 该组件包内权威 ConfigSchema
 COMPONENT_SCHEMAS: dict[str, type[BaseConfig]] = {}
+
+# 工具提供者身份 (分类段, 提供者键) → 包内权威 ConfigSchema
+TOOL_PROVIDER_SCHEMAS: dict[tuple[str, str], type[BaseConfig]] = {}
 
 # 必须在册的组件清单（新增组件时在此登记——漏登记会在启动断言暴露）
 EXPECTED_COMPONENTS: tuple[str, ...] = (
@@ -23,6 +40,14 @@ EXPECTED_COMPONENTS: tuple[str, ...] = (
     "stt",
     # Agent（配置宿主 agents.toml）
     "minecraft",
+)
+
+# 必须在册的工具提供者清单（新增 provider 时在此与 bootstrap 成员表两处登记）
+EXPECTED_TOOL_PROVIDERS: tuple[tuple[str, str], ...] = (
+    ("avatar", "vts"),
+    ("avatar", "vrchat"),
+    ("avatar", "warudo"),
+    ("studio", "obs"),
 )
 
 
@@ -57,6 +82,25 @@ def _fill_agents() -> dict[str, type[BaseConfig]]:
     return {"minecraft": MinecraftConfig}
 
 
+def _fill_tool_providers() -> dict[tuple[str, str], type[BaseConfig]]:
+    """从各工具提供者包显式收集 ConfigSchema（provider 类内嵌定义）。
+
+    成员身份 (分类段, 提供者键) 与装配侧 ``tools.bootstrap._DOMAIN_MEMBERS``
+    同构；两表一致性由契约测试守护。
+    """
+    from src.modules.avatar.vrchat.vrchat_provider import VRChatProvider
+    from src.modules.avatar.vts.vts_provider import VTSProvider
+    from src.modules.avatar.warudo.warudo_provider import WarudoProvider
+    from src.modules.studio.obs.obs_provider import OBSProvider
+
+    return {
+        ("avatar", "vts"): VTSProvider.ConfigSchema,
+        ("avatar", "vrchat"): VRChatProvider.ConfigSchema,
+        ("avatar", "warudo"): WarudoProvider.ConfigSchema,
+        ("studio", "obs"): OBSProvider.ConfigSchema,
+    }
+
+
 def fill_component_schemas() -> dict[str, type[BaseConfig]]:
     """全量重建注册表（幂等）。
 
@@ -68,20 +112,25 @@ def fill_component_schemas() -> dict[str, type[BaseConfig]]:
     schemas.update(_fill_agents())
     COMPONENT_SCHEMAS.clear()
     COMPONENT_SCHEMAS.update(schemas)
+    TOOL_PROVIDER_SCHEMAS.clear()
+    TOOL_PROVIDER_SCHEMAS.update(_fill_tool_providers())
     return COMPONENT_SCHEMAS
 
 
 def assert_components_registered() -> None:
-    """启动断言：期望清单内的组件必须全部在册。
+    """启动断言：期望清单内的组件与工具提供者必须全部在册。
 
     Raises:
-        RuntimeError: 存在缺失时抛出，信息含缺失组件清单——
-            通常意味着显式 import 链断裂或组件包未定义 ConfigSchema。
+        RuntimeError: 存在缺失时抛出，信息含缺失清单——
+            通常意味着显式 import 链断裂或组件包未定义 ConfigSchema
     """
     missing = [name for name in EXPECTED_COMPONENTS if name not in COMPONENT_SCHEMAS]
-    if missing:
+    provider_missing = [f"{d}.{k}" for d, k in EXPECTED_TOOL_PROVIDERS if (d, k) not in TOOL_PROVIDER_SCHEMAS]
+    if missing or provider_missing:
         raise RuntimeError(
-            f"组件配置 Schema 注册缺失: {sorted(missing)}（组合根显式 import 链断裂，或组件包内未定义 ConfigSchema）"
+            f"组件配置 Schema 注册缺失: {sorted(missing) or '无'}，"
+            f"工具提供者 Schema 注册缺失: {provider_missing or '无'}"
+            f"（组合根显式 import 链断裂，或 provider 包内未定义 ConfigSchema）"
         )
 
 
@@ -94,7 +143,9 @@ def ensure_component_registry() -> dict[str, type[BaseConfig]]:
 
 __all__ = [
     "COMPONENT_SCHEMAS",
+    "TOOL_PROVIDER_SCHEMAS",
     "EXPECTED_COMPONENTS",
+    "EXPECTED_TOOL_PROVIDERS",
     "assert_components_registered",
     "ensure_component_registry",
     "fill_component_schemas",

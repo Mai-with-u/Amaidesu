@@ -82,6 +82,7 @@
 - 修改既有字段的默认值只影响新生成的配置文件——已落盘文件保留现值，漂移写回不会写入新默认；需要存量配置跟随的默认值变更按数据变换档处理（升版本 + hook + 迁移测试），hook 内区分"用户显式设置值"与"旧默认落盘值"（如仅值等于旧默认时才改写），不得覆盖用户显式配置
 - **升版本 ≠ 迁移生效**：提交前实际验证迁移写回落盘（跑 `tests/config/` 或手动触发配置加载检查升级日志）——"只改 Schema 不升版本/不验证迁移"是本区最高频事故形态，此类提交视为未完成
 - 存储表结构变更升 `SCHEMA_VERSION`，迁移记录幂等推进
+- 动态键配置段（键名运行期确定、每键一份 Schema，如 `[tools.avatar.<name>].config`）的校验与默认值补全走注册表（采集器/Agent 段 `COMPONENT_SCHEMAS`、工具提供者段 `TOOL_PROVIDER_SCHEMAS`）；静态命名段走 typed 引用（先例 `VisionProviderConfig.config`）。**新增工具 provider 两处登记**：`tools/bootstrap.py` 成员表 + `src/modules/config/registry.py` 注册表与 EXPECTED 清单（契约测试守护两表一致，漏登记 = 该 provider 的 config 段退化为无校验自由 dict）
 - 组件嵌套配置（采集器/Agent/工具包）变更时同步更新对应 schema 测试
 
 ### 文档维护

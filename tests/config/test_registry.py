@@ -52,3 +52,39 @@ class TestRegistryAssert:
 
         with pytest.raises(RuntimeError):
             registry.ensure_component_registry()
+
+
+class TestToolProviderRegistry:
+    def test_fill_populates_all_expected_providers(self):
+        registry.fill_component_schemas()
+        for identity in registry.EXPECTED_TOOL_PROVIDERS:
+            assert identity in registry.TOOL_PROVIDER_SCHEMAS, f"期望工具提供者 {identity} 未注册"
+            assert issubclass(registry.TOOL_PROVIDER_SCHEMAS[identity], registry.BaseConfig)
+
+    def test_provider_registry_assert_lists_missing(self, monkeypatch):
+        """负例：工具提供者注册表被清空 → 断言信息含 provider 缺失清单。"""
+        registry.fill_component_schemas()
+        monkeypatch.setattr(registry, "TOOL_PROVIDER_SCHEMAS", {})
+
+        with pytest.raises(RuntimeError) as exc_info:
+            registry.assert_components_registered()
+
+        message = str(exc_info.value)
+        assert "avatar.vts" in message
+        assert "studio.obs" in message
+
+
+class TestBootstrapRegistryContract:
+    def test_every_assembly_member_has_schema(self):
+        """契约：bootstrap 装配成员表的每个成员必须在注册表有 ConfigSchema。
+
+        只登记装配、不登记 Schema 的 provider，其 config 段会退化为无校验、
+        无默认值补全的自由 dict——正是本机制修复前的缺陷形态。
+        """
+        from src.modules.tools.bootstrap import _DOMAIN_MEMBERS
+
+        registry.fill_component_schemas()
+        for (domain, key), _description, _loader in _DOMAIN_MEMBERS:
+            assert (domain, key) in registry.TOOL_PROVIDER_SCHEMAS, (
+                f"装配成员 {domain}.{key} 未在 TOOL_PROVIDER_SCHEMAS 注册：其 config 段将不做校验与默认值补全"
+            )

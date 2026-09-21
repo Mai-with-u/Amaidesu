@@ -68,17 +68,19 @@ from src.modules.vision.look_at_screen import LookAtScreenProvider
 
 
 class ToolProviderConfig(BaseConfig):
-    """工具提供者开关基类（提供者级 enabled + 自由 config）
+    """工具提供者开关基类（提供者级 enabled + config）
 
     Attributes:
         enabled: 是否启用该提供者（开 = 其工具全部可见）
-        config: 提供者具体配置（动态键，由对应 Tool Provider 注入 Schema 验证）
+        config: 提供者具体配置。动态键段（avatar/studio 分类下的成员）由
+            加载管线按 ``registry.TOOL_PROVIDER_SCHEMAS`` 分发校验与默认值
+            补全（静态命名段如 vision 走 typed 引用，见 VisionProviderConfig）
     """
 
     enabled: bool = Field(default=True, description="是否启用该工具提供者（开=其工具全部可见）")
     config: Dict[str, Any] = Field(
         default_factory=dict,
-        description="提供者具体配置（由对应 Tool Provider 注入 Schema 后验证）",
+        description="提供者具体配置（加载期按工具提供者注册表校验与补全默认值）",
     )
 
 
