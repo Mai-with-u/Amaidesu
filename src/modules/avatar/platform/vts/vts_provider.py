@@ -264,6 +264,8 @@ class VTSProvider(BaseToolProvider):
         self._has_started = False
         # idle 归一化值 → 参数原生量纲的缩放表（连接后按 VTS 实际范围构建；未知 = 1.0）
         self._idle_param_scale: Dict[str, float] = {}
+        # 换模跟随基线：上次解析链对应的模型名（空 = 未知，连接后记录）
+        self._current_model_name: str = ""
         # 说话状态（tts.utterance.started/finished 订阅驱动；idle 据此暂停摇摆）
         self._is_speaking: bool = False
         # 事件订阅句柄（setup 时绑定，cleanup 时退订）
@@ -759,6 +761,7 @@ class VTSProvider(BaseToolProvider):
             self.logger.info("VTS 连接成功")
 
             await self._reload_model_state()
+            self._current_model_name = await self._query_current_model_name()
 
             if self.idle_enabled_cfg:
                 try:
@@ -813,6 +816,37 @@ class VTSProvider(BaseToolProvider):
         except Exception as e:
             self.logger.warning(f"应用常驻微笑基线失败: {e}")
 
+    async def _query_current_model_name(self) -> str:
+        """查询 VTS 当前加载的模型名（AvailableModelsRequest 一次含清单与加载态）。"""
+        try:
+            proxy = self._make_vts_request_proxy()
+            response = await proxy(proxy.vts_request.BaseRequest(message_type="AvailableModelsRequest"))
+            if response and response.get("messageType") == "AvailableModelsResponse":
+                for model in response.get("data", {}).get("availableModels", []):
+                    if model.get("modelLoaded"):
+                        return str(model.get("modelName") or "")
+        except Exception as e:
+            self.logger.debug(f"查询当前模型名失败: {e}")
+        return ""
+
+    async def _follow_model_switch(self) -> None:
+        """换模跟随：检测到模型切换后重跑解析链（热键/绑定/缩放/基线全部刷新）。
+
+        触发用健康心跳内的模型名轮询而非 ModelLoadedEvent 订阅：pyvts 的
+        request 是"单次 send+recv"形态、无常驻接收循环，并行接收任务会与
+        请求路径抢包。轮询复用既有心跳节拍，AvailableModelsRequest 单请求
+        同时返回清单与加载态；换模是 VTS/人侧的低频操作，5 秒级跟随足够。
+        """
+        current = await self._query_current_model_name()
+        if not current or current == self._current_model_name:
+            return
+        self.logger.info(f"检测到 VTS 模型切换: {self._current_model_name or '(未知)'} → {current}，重跑解析链")
+        self._current_model_name = current
+        try:
+            await self._reload_model_state()
+        except Exception:
+            self.logger.exception("换模后解析链重跑失败")
+
     async def _vts_health_check(self) -> bool:
         try:
             proxy = self._make_vts_request_proxy()
@@ -841,6 +875,9 @@ class VTSProvider(BaseToolProvider):
                         await self._vts.close()
                     except Exception as e:
                         self.logger.debug(f"关闭旧 VTS 连接异常（忽略）: {e}")
+                    continue
+                # 连接健康时的换模跟随（与断线检测同一节拍）
+                await self._follow_model_switch()
         except asyncio.CancelledError:
             pass
         except Exception as e:

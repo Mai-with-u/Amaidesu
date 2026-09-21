@@ -13,10 +13,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.modules.avatar.platform.vts.vts_provider import VTSProvider, create_vts_provider
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation
+from src.modules.tools.models import ToolInvocation
 
 
-def _build_provider(config: Optional[Dict[str, Any]] = None, hotkey_list: Optional[List[Dict[str, Any]]] = None) -> VTSProvider:
+def _build_provider(
+    config: Optional[Dict[str, Any]] = None, hotkey_list: Optional[List[Dict[str, Any]]] = None
+) -> VTSProvider:
     provider = create_vts_provider(config={"vts_host": "localhost", "vts_port": 8001, **(config or {})})
     # 替换热键匹配器为受控 stub（不触网）
     matcher = MagicMock()
@@ -163,9 +165,7 @@ async def test_invoke_trigger_preset_action_unknown_name_returns_catalog():
 async def test_invoke_trigger_preset_action_without_args_fails_gracefully():
     provider = _build_provider()
 
-    result = await provider.invoke(
-        ToolInvocation(tool_name="vts_trigger_preset_action", arguments={}, source="test")
-    )
+    result = await provider.invoke(ToolInvocation(tool_name="vts_trigger_preset_action", arguments={}, source="test"))
 
     assert result.success is False
 
@@ -234,9 +234,7 @@ async def test_resolve_idle_bindings_config_only_and_unavailable_reported():
 async def test_resolve_idle_bindings_empty_means_disabled():
     """空配置名 = 该轴停用（不进不可用清单、不产生警告）。"""
     provider = _build_provider(config={"idle_param_body_x": "", "idle_param_head_x": ""})
-    provider.expression.list_tracking_parameters = AsyncMock(
-        return_value=["FaceAngleX", "FaceAngleY", "FaceAngleZ"]
-    )
+    provider.expression.list_tracking_parameters = AsyncMock(return_value=["FaceAngleX", "FaceAngleY", "FaceAngleZ"])
 
     resolved, unavailable = await provider._resolve_idle_parameter_names()
 
@@ -249,9 +247,7 @@ async def test_resolve_idle_bindings_empty_means_disabled():
 async def test_resolve_idle_bindings_unavailable_name_flagged():
     """非空名不在注入面 → 返回不可用清单（调用方预置 failed_params 停写）。"""
     provider = _build_provider(config={"idle_param_body_x": "TorsoX"})
-    provider.expression.list_tracking_parameters = AsyncMock(
-        return_value=["FaceAngleX", "FaceAngleY", "FaceAngleZ"]
-    )
+    provider.expression.list_tracking_parameters = AsyncMock(return_value=["FaceAngleX", "FaceAngleY", "FaceAngleZ"])
 
     _resolved, unavailable = await provider._resolve_idle_parameter_names()
 
@@ -278,3 +274,49 @@ def _build_idle_controller():
         is_speaking=lambda: False,
         set_parameter=_fake_set_parameter,
     )
+
+
+# =============================================================================
+# 换模跟随：健康心跳内模型名轮询 → 解析链重跑
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_follow_model_switch_reruns_reload_chain():
+    """模型名变化 → 记录新名并重跑解析链（热键重拉等）。"""
+    provider = _build_provider()
+    provider._current_model_name = "ModelA"
+    provider._query_current_model_name = AsyncMock(return_value="ModelB")
+    provider._reload_model_state = AsyncMock()
+
+    await provider._follow_model_switch()
+
+    assert provider._current_model_name == "ModelB"
+    provider._reload_model_state.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_follow_model_switch_skips_when_same_model():
+    """模型名未变 → 不重跑解析链。"""
+    provider = _build_provider()
+    provider._current_model_name = "ModelA"
+    provider._query_current_model_name = AsyncMock(return_value="ModelA")
+    provider._reload_model_state = AsyncMock()
+
+    await provider._follow_model_switch()
+
+    provider._reload_model_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_follow_model_switch_skips_when_name_unknown():
+    """查询不到当前模型名（连接异常等）→ 不触发重跑、不清基线。"""
+    provider = _build_provider()
+    provider._current_model_name = "ModelA"
+    provider._query_current_model_name = AsyncMock(return_value="")
+    provider._reload_model_state = AsyncMock()
+
+    await provider._follow_model_switch()
+
+    assert provider._current_model_name == "ModelA"
+    provider._reload_model_state.assert_not_awaited()
