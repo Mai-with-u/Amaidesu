@@ -69,6 +69,10 @@ _SHARED_SERVICES: dict[str, Any] = {
     "tts_engine": object(),
     "subtitle_service": object(),
     "session_manager": object(),
+    "rundown_repo": object(),
+    "chat_repo": object(),
+    "sessions_repo": object(),
+    "topic_repo": object(),
     "context_assembler_config": None,
     "task_tracker": object(),
 }
@@ -101,6 +105,10 @@ async def test_startup_and_enable_paths_pass_same_kwarg_names(recorded_factory) 
             tts_engine=_SHARED_SERVICES["tts_engine"],
             subtitle_service=_SHARED_SERVICES["subtitle_service"],
             session_manager=_SHARED_SERVICES["session_manager"],
+            rundown_repo=_SHARED_SERVICES["rundown_repo"],
+            chat_repo=_SHARED_SERVICES["chat_repo"],
+            sessions_repo=_SHARED_SERVICES["sessions_repo"],
+            topic_repo=_SHARED_SERVICES["topic_repo"],
             thinking_sink=_SHARED_SERVICES["thinking_sink"],
         )
     finally:
@@ -182,3 +190,64 @@ async def test_streamer_infra_kwargs_forwarded() -> None:
     assert agent._speech._subtitle_service is subtitle_obj
     assert agent._thinking_sink is sink_obj
     assert agent._speech._speech_max_queue == 5
+
+
+# ---------------------------------------------------------------------------
+# 工厂仓储透传（对话历史/流程单/场次状态/话题快照四件；缺失 = 历史读取短路）
+# ---------------------------------------------------------------------------
+
+
+def test_streamer_repos_forwarded() -> None:
+    """工厂把仓储四件透传给 StreamerAgent（历史读取与后台维护的数据面）。"""
+    from unittest.mock import MagicMock
+
+    rundown_repo = object()
+    chat_repo = object()
+    sessions_repo = object()
+    topic_repo = object()
+    agent = instantiate_agent(
+        "streamer",
+        {},
+        llm_manager=MagicMock(),
+        prompt_manager=MagicMock(),
+        rundown_repo=rundown_repo,
+        chat_repo=chat_repo,
+        sessions_repo=sessions_repo,
+        topic_repo=topic_repo,
+    )
+    assert agent is not None
+    assert agent._rundowns is rundown_repo
+    assert agent._chat is chat_repo
+    assert agent._background._sessions_repo is sessions_repo
+    assert agent._background._topic_repo is topic_repo
+    # 历史读取入口可用：chat_repo 缺失时历史读取在入口守卫处整体短路
+    # （_read_history 首行 _chat is None 即返回 None），此断言守住透传不回退
+    assert agent._chat is not None
+
+
+@pytest.mark.asyncio
+async def test_enable_agent_repos_fall_back_to_manager_members() -> None:
+    """enable_agent 未显式传仓储时回退构造成员（Dashboard 动态启用路径）。"""
+    from unittest.mock import patch
+
+    calls: list[dict[str, Any]] = []
+
+    def _fake(name, config, **kwargs):
+        calls.append(kwargs)
+        return _make_stub_agent(name)
+
+    manager = AgentManager(
+        tool_registry=ToolRegistry(),
+        rundown_repo=object(),
+        chat_repo=object(),
+        sessions_repo=object(),
+        topic_repo=object(),
+    )
+    with patch("src.modules.agents.factory.instantiate_agent", side_effect=_fake):
+        ok = await manager.enable_agent("streamer", {}, llm_manager=object(), prompt_manager=object())
+    assert ok
+    assert calls, "工厂应被调用"
+    assert calls[0]["rundown_repo"] is manager._rundown_repo
+    assert calls[0]["chat_repo"] is manager._chat_repo
+    assert calls[0]["sessions_repo"] is manager._sessions_repo
+    assert calls[0]["topic_repo"] is manager._topic_repo

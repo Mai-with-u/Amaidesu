@@ -496,7 +496,18 @@ async def create_app_components(
         if not isinstance(supervisor_section, dict):
             supervisor_section = {}
         supervisor_config = AgentSupervisorConfig.from_dict(supervisor_section)
-        agent_manager = AgentManager(tool_registry=tool_registry, memory=memory, supervisor_config=supervisor_config)
+        # 仓储四件随构造注入成员：Dashboard 动态启用 Agent 时 enable_agent
+        # 回退到这些成员（与 tool_registry/memory 同一回退模式），
+        # 保证动态启用的 StreamerAgent 与启动装配拿到同一批仓储
+        agent_manager = AgentManager(
+            tool_registry=tool_registry,
+            memory=memory,
+            rundown_repo=database.rundowns,
+            chat_repo=database.chat,
+            sessions_repo=database.sessions,
+            topic_repo=database.topics,
+            supervisor_config=supervisor_config,
+        )
 
         # 口型分析器（avatar 共享件，调参 [avatar.lipsync]；拍平后顶层键 lipsync）：
         # 在 TTS 装配前构造，
@@ -569,6 +580,10 @@ async def create_app_components(
             # 有 TTS 时字幕走播放事件跟随器，编排层不再直出（互斥择流）
             subtitle_service=None if subtitle_follows_playback else subtitle_service,
             session_manager=session_manager,
+            rundown_repo=database.rundowns,
+            chat_repo=database.chat,
+            sessions_repo=database.sessions,
+            topic_repo=database.topics,
             thinking_sink=thinking_hub,
         )
 
@@ -912,6 +927,10 @@ async def _register_agents_from_config(
     tts_engine: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
     session_manager: Optional[Any] = None,
+    rundown_repo: Optional[Any] = None,
+    chat_repo: Optional[Any] = None,
+    sessions_repo: Optional[Any] = None,
+    topic_repo: Optional[Any] = None,
     thinking_sink: Optional[Any] = None,
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
@@ -967,6 +986,12 @@ async def _register_agents_from_config(
             # 调用方已按装配期择流传入（有 TTS → None，字幕走播放事件跟随器）
             subtitle_service=subtitle_service,
             session_manager=session_manager,
+            # 仓储四件（对话历史/流程单/场次状态/话题快照的读侧面）；
+            # chat_repo 缺失 = StreamerAgent 历史读取整体短路
+            rundown_repo=rundown_repo,
+            chat_repo=chat_repo,
+            sessions_repo=sessions_repo,
+            topic_repo=topic_repo,
             # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
             context_assembler_config=None,
             task_tracker=task_tracker,

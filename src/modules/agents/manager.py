@@ -50,6 +50,10 @@ class AgentManager:
         memory: 构造时注入的默认 ``MemoryProvider`` 实例；Agent（如
             ``StreamerAgent``）构造时需要它做观众画像/长记忆读写。Dashboard
             动态启用 Agent 时如未显式传 ``memory``，回退到此成员。
+        rundown_repo / chat_repo / sessions_repo / topic_repo: 构造时注入的
+            默认仓储（直播对话历史的单一事实源在 live_chat 表，StreamerAgent
+            的历史读取/后台维护依赖这四件）。回退语义同 tool_registry/memory
+            ——Dashboard 动态启用不传时回退成员，避免 Agent 拿 None 降级。
     """
 
     def __init__(
@@ -57,6 +61,10 @@ class AgentManager:
         *,
         tool_registry: Optional[ToolRegistry] = None,
         memory: Optional[Any] = None,
+        rundown_repo: Optional[Any] = None,
+        chat_repo: Optional[Any] = None,
+        sessions_repo: Optional[Any] = None,
+        topic_repo: Optional[Any] = None,
         supervisor_config: Optional[AgentSupervisorConfig] = None,
     ) -> None:
         self._agents: Dict[str, AgentRegistration] = {}
@@ -65,6 +73,10 @@ class AgentManager:
         self._enable_args: Dict[str, Dict[str, Any]] = {}
         self._tool_registry = tool_registry
         self._memory = memory
+        self._rundown_repo = rundown_repo
+        self._chat_repo = chat_repo
+        self._sessions_repo = sessions_repo
+        self._topic_repo = topic_repo
         self._lock = asyncio.Lock()
         # ----- 守护（心跳巡检 + 自动重建 + 风暴保护）-----
         self._supervisor_config = supervisor_config if supervisor_config is not None else AgentSupervisorConfig()
@@ -191,6 +203,10 @@ class AgentManager:
         tts_engine: Optional[Any] = None,
         subtitle_service: Optional[Any] = None,
         session_manager: Optional[Any] = None,
+        rundown_repo: Optional[Any] = None,
+        chat_repo: Optional[Any] = None,
+        sessions_repo: Optional[Any] = None,
+        topic_repo: Optional[Any] = None,
         context_assembler_config: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
     ) -> bool:
@@ -204,13 +220,18 @@ class AgentManager:
         （speech/tts/subtitle/session/thinking/task_tracker 等）按需透传，
         Dashboard 场景无对应基建时保持 None（Agent 各自降级）。
 
-        ``tool_registry`` / ``memory`` 未显式传入时回退到 ``__init__`` 成员；
-        Dashboard 动态启停场景一般不传这两个，回退保证 Agent 不再拿到 None。
+        ``tool_registry`` / ``memory`` / 四仓储未显式传入时回退到
+        ``__init__`` 成员；Dashboard 动态启停场景一般不传这些，回退保证
+        Agent 不再拿到 None。
         """
         from src.modules.agents.factory import instantiate_agent
 
         effective_registry = tool_registry if tool_registry is not None else self._tool_registry
         effective_memory = memory if memory is not None else self._memory
+        effective_rundown_repo = rundown_repo if rundown_repo is not None else self._rundown_repo
+        effective_chat_repo = chat_repo if chat_repo is not None else self._chat_repo
+        effective_sessions_repo = sessions_repo if sessions_repo is not None else self._sessions_repo
+        effective_topic_repo = topic_repo if topic_repo is not None else self._topic_repo
 
         instance = instantiate_agent(
             name,
@@ -225,6 +246,10 @@ class AgentManager:
             tts_engine=tts_engine,
             subtitle_service=subtitle_service,
             session_manager=session_manager,
+            rundown_repo=effective_rundown_repo,
+            chat_repo=effective_chat_repo,
+            sessions_repo=effective_sessions_repo,
+            topic_repo=effective_topic_repo,
             context_assembler_config=context_assembler_config,
             task_tracker=task_tracker,
         )
@@ -258,6 +283,10 @@ class AgentManager:
             "tts_engine": tts_engine,
             "subtitle_service": subtitle_service,
             "session_manager": session_manager,
+            "rundown_repo": rundown_repo,
+            "chat_repo": chat_repo,
+            "sessions_repo": sessions_repo,
+            "topic_repo": topic_repo,
             "context_assembler_config": context_assembler_config,
             "task_tracker": task_tracker,
         }
