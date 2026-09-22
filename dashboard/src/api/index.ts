@@ -30,6 +30,7 @@ import type {
   LLMRequestHistory,
   ToolsView,
   ToolCategoriesView,
+  ToolInvokeResult,
   ToolProviderControlAction,
   ToolControlResponse,
   ToolProviderControlResponse,
@@ -135,6 +136,11 @@ export const toolsApi = {
     }),
   controlTool: (name: string, action: ToolProviderControlAction) =>
     api.post<ToolControlResponse>(`/tools/${name}/control`, { action }),
+  // 调试调用：与 Agent 同路径经 registry 真实执行（full_name 为注册表调用键）
+  invoke: (fullName: string, args: Record<string, unknown>) =>
+    api.post<ToolInvokeResult>(`/tools/${encodeURIComponent(fullName)}/invoke`, {
+      arguments: args,
+    }),
   reconnectProvider: (providerId: string) =>
     api.post<ToolReconnectResponse>(`/tools/providers/${providerId}/reconnect`),
 };

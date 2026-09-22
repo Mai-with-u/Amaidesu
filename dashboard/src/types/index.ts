@@ -282,7 +282,8 @@ export interface SubscribeRequest {
 
 // Tools
 
-export type ParameterType = 'string' | 'number' | 'integer' | 'boolean';
+/** json = array/object/未声明 type 的复杂参数（JSON 文本域承载，提交时解析） */
+export type ParameterType = 'string' | 'number' | 'integer' | 'boolean' | 'json';
 
 export interface ParameterSpec {
   type: ParameterType;
@@ -332,6 +333,8 @@ export interface ToolHealthEventData {
  */
 export interface ToolEntry {
   name: string;
+  /** 注册表调用键（`<provider>_<工具名>`）；停用开关与调试调用都以它为标识 */
+  full_name: string;
   description?: string;
   parameters: Record<string, ParameterSpec>;
   /** 工具提供者标识（vts / warudo / obs / vision / memory / text_adv / framework / <mcp server 名>） */
@@ -357,6 +360,22 @@ export interface ToolEntry {
 
 export interface ToolsView {
   tools: ToolEntry[];
+}
+
+/**
+ * 工具调试调用响应（POST /tools/{full_name}/invoke）。
+ *
+ * ToolExecutionResult 的 HTTP 形态：sync 工具即最终结果；async 工具为受理
+ * 回执，真实结果经 WS `tool.result.<full_name>` 事件回传。
+ */
+export interface ToolInvokeResult {
+  success: boolean;
+  content: string;
+  blocks: { kind: 'text' | 'image'; text: string; data: string; mime_type: string }[];
+  error_message: string;
+  structured_content?: unknown;
+  duration_ms: number;
+  timestamp_ms: number;
 }
 
 /** 工具提供者（GET /api/v1/tools/categories 中分类下的成员） */

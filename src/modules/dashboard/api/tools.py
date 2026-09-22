@@ -7,7 +7,8 @@ Tools API（工具内省与提供者开关端点）
 工具提供者面板（观测 + 控制）：
 - GET  /api/v1/tools/categories                          -> 提供者分类目录（分类 → 提供者 → 开关 + 运行态计数）
 - POST /api/v1/tools/categories/{category}/{key}/control -> 提供者开关写回声明配置（重启后生效）
-- POST /api/v1/tools/{name}/control                      -> 单个工具停用/启用（写 [tools].disabled_tools，重启后生效）
+- POST /api/v1/tools/{full_name}/control                 -> 单个工具停用/启用（写 [tools].disabled_tools，重启后生效）
+- POST /api/v1/tools/{full_name}/invoke                  -> 调试调用工具（与 Agent 同路径经 registry 真实执行）
 - POST /api/v1/tools/providers/{provider_id}/reconnect   -> 手动重连指定 Provider（重连 + 工具集刷新 + 探活复位熔断）
 
 数据源：**运行时注册表为事实源**（``DashboardServer.tool_registry``，含连接
@@ -26,11 +27,13 @@ server 清单变化换血），再对归属该 Provider 的已熔断工具做探
 （按 ``supports_reconnect`` 判定）。
 """
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.modules.config.errors import ConfigValidationError
 from src.modules.config.multi_file_loader import update_config_values
@@ -46,6 +49,8 @@ from src.modules.dashboard.services.tool_catalog import (
 from src.modules.dashboard.schemas.tool_catalog import ToolCatalogResponse
 from src.modules.dashboard.utils.component_helper import config_dir, read_toml_dict
 from src.modules.logging import get_logger
+from src.modules.time_utils import now_ms
+from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -56,7 +61,8 @@ router = APIRouter()
 
 
 # JSON Schema 类型 → 前端 ParameterType 的映射。
-# 仅支持 spec 实际使用的标量类型（string/integer/number/boolean）。
+# 标量类型映射为对应控件；array/object/缺失 type 等一律落 "json"
+# （前端渲染 JSON 文本域，提交时解析）——参数不允许被静默丢弃。
 _TYPE_MAP: Dict[str, str] = {
     "string": "string",
     "integer": "integer",
@@ -74,6 +80,12 @@ class ProviderControlRequest(BaseModel):
     action: Literal["enable", "disable"]
 
 
+class ToolInvokeRequest(BaseModel):
+    """工具调试调用请求体（arguments 形状由目标工具的 parameters_schema 约定）。"""
+
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+
+
 def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
     """把 JSON Schema 形态的 parameters_schema 转成前端 ParameterSpec 字典。
 
@@ -85,6 +97,8 @@ def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
         {"k": {"type": "string", "required": True, "description": "...",
                "default": ..., "minimum": ..., "maximum": ...}}
 
+    标量类型按 _TYPE_MAP 映射；array/object/缺失 type 等非标量一律落
+    "json"（MCP 工具的复杂参数经此保留完整形态，前端以 JSON 文本域承载）。
     非 dict 输入返回空 dict；缺 properties 时返回空 dict。
     """
     if not isinstance(schema, dict):
@@ -97,13 +111,15 @@ def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
 
     result: Dict[str, Dict[str, Any]] = {}
     for key, prop in properties.items():
-        if not isinstance(key, str) or not isinstance(prop, dict):
+        if not isinstance(key, str):
             continue
-        json_type = prop.get("type")
+        prop_dict = prop if isinstance(prop, dict) else {}
+        json_type = prop_dict.get("type")
         param_type = _TYPE_MAP.get(json_type) if isinstance(json_type, str) else None
         if param_type is None:
-            # 未知/缺失类型 — 跳过（前端只接受四种标量类型）
-            continue
+            # array/object/缺失 type 等非标量 → json（前端 JSON 文本域承载），
+            # 参数不允许被静默丢弃——MCP 工具普遍带复杂参数
+            param_type = "json"
         entry: Dict[str, Any] = {"type": param_type, "required": key in required_set}
         for src_key, dst_key in (
             ("description", "description"),
@@ -111,8 +127,8 @@ def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
             ("minimum", "minimum"),
             ("maximum", "maximum"),
         ):
-            if src_key in prop:
-                entry[dst_key] = prop[src_key]
+            if src_key in prop_dict:
+                entry[dst_key] = prop_dict[src_key]
         result[key] = entry
     return result
 
@@ -126,6 +142,9 @@ def _build_action_entry(
 ) -> Dict[str, Any]:
     """构造单个工具条目（工具清单视图，供前端展示）。
 
+    ``full_name`` 是注册表调用键（``<provider>_<工具名>``），前端调试调用与
+    停用开关都以它为标识——裸名仅作展示。
+
     ``owner_agent`` 由调用方从 registry 传入（scoped_owner_of）；空串表示无
     归属限定（通用工具）。前端"归属列展示"留待后续——目前默认返回全部已含。
 
@@ -135,6 +154,7 @@ def _build_action_entry(
     """
     entry: Dict[str, Any] = {
         "name": spec.name,
+        "full_name": spec.full_name,
         "description": getattr(spec, "description", "") or "",
         "parameters": _convert_parameters_schema(getattr(spec, "parameters_schema", None)),
         "provider": getattr(spec, "provider", "") or "",
@@ -250,7 +270,8 @@ async def list_tools(
             spec,
             # category_of 按注册表索引键（全名）反查，传短名会落空返回空分类
             category=registry.category_of(spec.full_name),
-            disabled=registry.is_disabled(spec.name),
+            # 停用集合按注册表索引键（全名）存储，必须用全名判定
+            disabled=registry.is_disabled(spec.full_name),
             owner_agent=getattr(registry, "scoped_owner_of", lambda _n: "")(spec.name),
             supports_reconnect=_supports_reconnect(registry, spec.name),
         )
@@ -378,27 +399,29 @@ async def control_tool_provider(
     }
 
 
-@router.post("/tools/{name}/control", summary="单个工具停用/启用（写 [tools].disabled_tools，重启后生效）")
+@router.post("/tools/{full_name}/control", summary="单个工具停用/启用（写 [tools].disabled_tools，重启后生效）")
 async def control_tool(
-    name: str,
+    full_name: str,
     request: ProviderControlRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
 ) -> Dict[str, Any]:
-    """把工具名加入/移出 ``tools.disabled_tools`` 停用列表（统一写回器落盘）。
+    """把工具加入/移出 ``tools.disabled_tools`` 停用列表（统一写回器落盘）。
 
     停用的工具仍保留在注册表中（工具页可见全集），但对 LLM 不可见且调用被
-    拒绝；写盘后不触发热重载，重启后生效。工具名必须在运行时注册表中存在
-    （防止拼写错误静默写入无效条目，404）。
+    拒绝；写盘后不触发热重载，重启后生效。``full_name`` 是注册表调用键
+    （``<provider>_<工具名>``，工具清单接口的 ``full_name`` 字段），与
+    ``registry.apply_disabled`` 的过滤口径一致；工具必须在运行时注册表中
+    存在（防止拼写错误静默写入无效条目，404）。
     """
     enable = request.action == "enable"
     registry = _get_registry(server)
     try:
-        known = {s.name for s in registry.list_tools(include_disabled=True, include_tripped=True)}
+        known = {s.full_name for s in registry.list_tools(include_disabled=True, include_tripped=True)}
     except Exception:
         logger.warning("读取注册表工具名失败，按空名册处理（停用校验将放行未知名）", exc=True)
         known = set()
-    if not enable and name not in known:
-        raise HTTPException(status_code=404, detail=f"运行时未注册工具: {name}")
+    if not enable and full_name not in known:
+        raise HTTPException(status_code=404, detail=f"运行时未注册工具: {full_name}")
 
     cfg_dir = config_dir(server)
     doc = read_toml_dict(cfg_dir / "tools.toml")
@@ -408,9 +431,9 @@ async def control_tool(
     disabled = [n for n in raw if isinstance(n, str)] if isinstance(raw, list) else []
 
     if enable:
-        disabled = [n for n in disabled if n != name]
-    elif name not in disabled:
-        disabled.append(name)
+        disabled = [n for n in disabled if n != full_name]
+    elif full_name not in disabled:
+        disabled.append(full_name)
     disabled = sorted(set(disabled))
 
     unknown = [n for n in disabled if n not in known]
@@ -423,8 +446,90 @@ async def control_tool(
     return {
         "success": True,
         "enabled": enable,
-        "message": f"工具 {name} 已{action_text}（写入 tools.toml），重启后生效",
+        "message": f"工具 {full_name} 已{action_text}（写入 tools.toml），重启后生效",
     }
+
+
+# 调试调用 arguments 的体积上限（字节）：registry 完成调用后会把 arguments
+# 全文放进 tool.result 事件 payload（WS 广播 + event_recorder 落库），在调试
+# 输入口掐掉大文本，防事件流被超大参数污染。LLM 路径天然受输出 token 约束，
+# 无需此限制。
+_MAX_ARGUMENTS_BYTES = 64 * 1024
+
+
+def _json_safe(value: Any) -> Any:
+    """把工具返回值收敛为 JSON 可序列化形态（dict/list 递归，其余兜底 str()）。"""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return str(value)
+
+
+def _serialize_execution_result(result: ToolExecutionResult) -> Dict[str, Any]:
+    """ToolExecutionResult（dataclass）→ 调试调用响应 dict（blocks 原样透出）。"""
+    return {
+        "success": result.success,
+        "content": result.content,
+        "blocks": [
+            {
+                "kind": block.kind,
+                "text": block.text,
+                "data": block.data,
+                "mime_type": block.mime_type,
+            }
+            for block in result.blocks
+        ],
+        "error_message": result.error_message,
+        "structured_content": _json_safe(result.structured_content),
+        "duration_ms": result.duration_ms,
+        "timestamp_ms": result.timestamp_ms,
+    }
+
+
+@router.post("/tools/{full_name}/invoke", summary="调试调用工具（与 Agent 同路径经 registry 真实执行）")
+async def invoke_tool(
+    full_name: str,
+    request: ToolInvokeRequest,
+    server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
+) -> Dict[str, Any]:
+    """人手调试调用：走 ``registry.invoke``，与 Planner/Agent 完全同路径。
+
+    停用/熔断短路、熔断计数、``tool.result`` 事件广播全部真实生效——调试
+    看到的就是 Agent 会经历的（含"调试失败推进熔断"这一真实行为）。
+    ``source="dashboard-debug"`` 标记人手调用，事件流与日志可据此与 Agent
+    调用区分。``full_name`` 是注册表调用键（工具清单接口的 ``full_name``
+    字段）。
+
+    HTTP 语义：200 = 调用已执行（工具级失败也是 200 + ``success=false``，
+    失败结果是有效调试产出）；400 = arguments 超限/不可序列化；404 = 工具
+    不存在。同步工具响应即最终结果；异步工具响应是受理回执，真实结果经
+    ``tool.result`` 事件（WS 直通）异步回传。
+    """
+    registry = _get_registry(server)
+    if not registry.has(full_name):
+        raise HTTPException(status_code=404, detail=f"运行时未注册工具: {full_name}")
+    try:
+        arguments_bytes = len(json.dumps(request.arguments, ensure_ascii=False, default=str).encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"arguments 无法 JSON 序列化: {exc}") from exc
+    if arguments_bytes > _MAX_ARGUMENTS_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"arguments 超限: {arguments_bytes} 字节 > 上限 {_MAX_ARGUMENTS_BYTES} 字节",
+        )
+    invocation = ToolInvocation(
+        tool_name=full_name,
+        arguments=request.arguments,
+        call_id=uuid4().hex[:12],
+        invoked_at_ms=now_ms(),
+        source="dashboard-debug",
+    )
+    logger.info(f"调试调用工具 '{full_name}'（call_id={invocation.call_id}，arguments {arguments_bytes} 字节）")
+    result = await registry.invoke(invocation)
+    return _serialize_execution_result(result)
 
 
 @router.post(

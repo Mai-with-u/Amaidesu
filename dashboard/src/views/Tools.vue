@@ -181,12 +181,12 @@
               :row-class-name="rowClass"
               @row-click="openDetail"
             >
-              <el-table-column label="工具名" min-width="220">
+              <el-table-column label="工具名" width="170">
                 <template #default="{ row }">
                   <code class="tool-name mono">{{ row.name }}</code>
                 </template>
               </el-table-column>
-              <el-table-column label="描述" min-width="260">
+              <el-table-column label="描述" min-width="360">
                 <template #default="{ row }">
                   <span class="tool-desc">{{ row.description || '—' }}</span>
                 </template>
@@ -238,10 +238,14 @@
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="80" align="center">
+              <el-table-column label="操作" width="170" align="center">
                 <template #default="{ row }">
-                  <div v-if="row.supports_reconnect" class="cell-action" @click.stop>
+                  <div class="cell-action" @click.stop>
+                    <el-button link type="primary" size="small" @click="openDetail(row)">
+                      详情 / 调试
+                    </el-button>
                     <el-tooltip
+                      v-if="row.supports_reconnect"
                       content="重连其所属工具提供者并恢复熔断工具"
                       placement="top"
                       :show-after="100"
@@ -271,20 +275,20 @@
       </div>
     </main>
 
-    <!-- 参数详情抽屉 -->
-    <el-drawer
-      v-model="drawerOpen"
-      direction="rtl"
-      size="420px"
-      :with-header="true"
-      :title="drawerTitle"
-      class="param-drawer"
+    <!-- 工具详情对话框 -->
+    <el-dialog
+      v-model="detailOpen"
+      :title="detailTitle"
+      width="min(1100px, 95%)"
+      :close-on-click-modal="false"
+      destroy-on-close
+      class="tool-detail-dialog"
     >
-      <div v-if="activeTool" class="drawer-body">
-        <section class="drawer-section">
-          <h4 class="drawer-h">名称</h4>
-          <code class="tool-name drawer-name">{{ activeTool.name }}</code>
-          <div class="drawer-tags">
+      <div v-if="activeTool" class="detail-pane">
+        <section class="detail-section">
+          <div class="detail-title-row">
+            <code class="tool-name detail-name">{{ activeTool.name }}</code>
+            <code class="detail-fullname mono">{{ activeTool.full_name }}</code>
             <el-tag v-if="activeTool.provider" size="small" effect="plain" type="info" class="mono">
               {{ activeTool.provider }}
             </el-tag>
@@ -296,71 +300,125 @@
               {{ activeTool.kind ?? 'sync' }}
             </el-tag>
           </div>
-          <p v-if="activeTool.kind === 'async'" class="drawer-result-event">
+          <p v-if="activeTool.kind === 'async'" class="detail-result-event">
             结果回传：
             <code class="mono">{{
-              activeTool.result_event ?? `tool.result.${activeTool.name}`
+              activeTool.result_event ?? `tool.result.${activeTool.full_name}`
             }}</code>
           </p>
+          <p
+            ref="descRef"
+            class="detail-desc"
+            :class="{ 'is-expanded': descExpanded, 'is-toggleable': descClamped || descExpanded }"
+            @click="toggleDesc"
+          >
+            {{ activeTool.description || '（无描述）' }}
+          </p>
+          <span v-if="descClamped || descExpanded" class="desc-toggle" @click="toggleDesc">
+            {{ descExpanded ? '收起' : '展开全文' }}
+          </span>
         </section>
 
-        <section class="drawer-section">
-          <h4 class="drawer-h">描述</h4>
-          <p class="drawer-desc">{{ activeTool.description || '（无描述）' }}</p>
-        </section>
-
-        <section class="drawer-section">
-          <h4 class="drawer-h">参数（只读）</h4>
-          <div v-if="paramEntries.length === 0" class="drawer-empty">
-            <el-empty description="该工具无参数声明" :image-size="60" />
+        <section class="detail-section params-section">
+          <h4 class="detail-h">参数</h4>
+          <div class="params-scroll">
+            <div v-if="paramEntries.length === 0" class="detail-none">
+              <el-empty description="该工具无参数声明" :image-size="60" />
+            </div>
+            <ul v-else class="param-list">
+              <li v-for="entry in paramEntries" :key="entry.key" class="param-item">
+                <div class="param-item-head">
+                  <span class="param-key mono">{{ entry.key }}</span>
+                  <el-tag v-if="entry.spec.required" size="small" type="danger" effect="plain">
+                    必填
+                  </el-tag>
+                  <el-tag size="small" effect="plain" type="info">{{ entry.spec.type }}</el-tag>
+                </div>
+                <p v-if="entry.spec.description" class="param-desc" :title="entry.spec.description">
+                  {{ entry.spec.description }}
+                </p>
+                <div class="param-input">
+                  <el-switch v-if="entry.spec.type === 'boolean'" v-model="formModel[entry.key]" />
+                  <el-input-number
+                    v-else-if="entry.spec.type === 'integer' || entry.spec.type === 'number'"
+                    v-model="formModel[entry.key]"
+                    class="param-number"
+                    :step="entry.spec.type === 'integer' ? 1 : 0.1"
+                    :precision="entry.spec.type === 'integer' ? 0 : undefined"
+                    :min="entry.spec.minimum"
+                    :max="entry.spec.maximum"
+                  />
+                  <el-input
+                    v-else
+                    v-model="formModel[entry.key]"
+                    type="textarea"
+                    :autosize="{ minRows: 1, maxRows: 6 }"
+                    :placeholder="
+                      entry.spec.type === 'json' ? JSON_PARAM_PLACEHOLDER : '字符串参数'
+                    "
+                  />
+                </div>
+              </li>
+            </ul>
           </div>
-          <ul v-else class="param-list">
-            <li v-for="entry in paramEntries" :key="entry.key" class="param-item">
-              <div class="param-item-head">
-                <span class="param-key mono">{{ entry.key }}</span>
-                <el-tag v-if="entry.spec.required" size="small" type="danger" effect="plain">
-                  必填
-                </el-tag>
-                <el-tag size="small" effect="plain" type="info">{{ entry.spec.type }}</el-tag>
-              </div>
-              <p v-if="entry.spec.description" class="param-desc">
-                {{ entry.spec.description }}
-              </p>
-              <dl v-if="hasConstraints(entry.spec)" class="param-constraints">
-                <template v-if="entry.spec.default !== undefined && entry.spec.default !== null">
-                  <dt>默认值</dt>
-                  <dd class="mono">{{ formatDefault(entry.spec.default) }}</dd>
-                </template>
-                <template v-if="entry.spec.minimum !== undefined && entry.spec.minimum !== null">
-                  <dt>最小值</dt>
-                  <dd class="mono">{{ entry.spec.minimum }}</dd>
-                </template>
-                <template v-if="entry.spec.maximum !== undefined && entry.spec.maximum !== null">
-                  <dt>最大值</dt>
-                  <dd class="mono">{{ entry.spec.maximum }}</dd>
-                </template>
-              </dl>
-            </li>
-          </ul>
+        </section>
+        <!-- 执行按钮在参数滚动区之外：填多少参数都常驻可见 -->
+        <div class="invoke-bar">
+          <el-button type="primary" size="small" :loading="invoking" @click="onInvoke">
+            执行调用
+          </el-button>
+          <span v-if="isInternalTool" class="invoke-hint">内部工具，调用真实生效</span>
+        </div>
+
+        <!-- 结果区：面板内自行滚动，对话框高度不随之增长 -->
+        <section v-if="invokeResult" class="detail-section result-section">
+          <h4 class="detail-h">执行结果</h4>
+          <div class="result-head">
+            <el-tag :type="invokeResult.success ? 'success' : 'danger'" size="small">
+              {{ invokeResult.success ? '成功' : '失败' }}
+            </el-tag>
+            <span class="result-meta mono">{{ invokeResult.duration_ms }} ms</span>
+          </div>
+          <p v-if="invokeResult.error_message" class="result-error">
+            {{ invokeResult.error_message }}
+          </p>
+          <template v-for="view in resultViews" :key="view">
+            <img
+              v-if="view.kind === 'image'"
+              class="result-image"
+              :src="`data:${view.mime || 'image/png'};base64,${view.data}`"
+              alt="工具返回图像"
+            />
+            <!-- deep=2：更深层默认折叠、点击展开（同 LLM 历史详情的可折叠约定） -->
+            <div v-else-if="view.isJson" class="result-json-tree">
+              <VueJsonPretty :data="view.jsonData" :deep="2" theme="dark" show-line />
+            </div>
+            <pre v-else class="result-block mono">{{ view.text }}</pre>
+          </template>
+          <p v-if="waitingAsyncResult" class="result-waiting">
+            异步工具：以上为受理回执，等待事件回传…
+          </p>
         </section>
       </div>
-    </el-drawer>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
+import VueJsonPretty from 'vue-json-pretty';
+import 'vue-json-pretty/lib/styles.css';
 import { toolsApi } from '@/api';
 import { useWebSocketStore } from '@/stores/websocket';
 import VisionCapturePanel from '@/components/vision/VisionCapturePanel.vue';
 import type {
-  ParameterSpec,
   ToolCategoryView,
   ToolEntry,
   ToolHealth,
   ToolHealthEventData,
+  ToolInvokeResult,
   ToolProviderUnit,
   WebSocketMessage,
 } from '@/types';
@@ -509,7 +567,8 @@ const toolToggling = reactive(new Set<string>());
 async function onToolToggle(row: ToolEntry, next: boolean) {
   toolToggling.add(row.name);
   try {
-    const response = await toolsApi.controlTool(row.name, next ? 'enable' : 'disable');
+    // 停用集合按注册表全名索引，必须传 full_name（裸名会被 apply_disabled 过滤丢弃）
+    const response = await toolsApi.controlTool(row.full_name, next ? 'enable' : 'disable');
     row.disabled = !next;
     ElMessage.success(response.data.message ?? '已写回配置，重启后生效');
   } catch (e) {
@@ -598,16 +657,21 @@ const visibleProviders = computed<ToolProviderUnit[]>(() => {
 
 // 抽屉详情
 
-const drawerOpen = ref(false);
+const detailOpen = ref(false);
 const activeTool = ref<ToolEntry | null>(null);
 
-const drawerTitle = computed(() =>
+const detailTitle = computed(() =>
   activeTool.value ? `工具详情 · ${activeTool.value.name}` : '工具详情',
 );
 
 function openDetail(row: ToolEntry) {
   activeTool.value = row;
-  drawerOpen.value = true;
+  detailOpen.value = true;
+  // 等 DOM 渲染后测描述是否溢出（决定"展开全文"入口是否显示）
+  void nextTick(() => {
+    descExpanded.value = false;
+    measureDescClamp();
+  });
 }
 
 function rowClass({ row }: { row: ToolEntry }): string {
@@ -621,19 +685,218 @@ const paramEntries = computed(() => {
     .map(([key, spec]) => ({ key, spec }));
 });
 
-function hasConstraints(spec: ParameterSpec): boolean {
-  return (
-    (spec.default !== undefined && spec.default !== null) ||
-    spec.minimum !== undefined ||
-    spec.maximum !== undefined
-  );
+// 调试调用（与 Agent 同路径经 registry 真实执行）
+//
+// formModel 形状由工具的 parameters 决定：default 预填，boolean 落 false，
+// 数字型落 undefined（el-input-number 空态）、字符串落空串。
+const invoking = ref(false);
+const formModel = ref<Record<string, unknown>>({});
+const invokeResult = ref<ToolInvokeResult | null>(null);
+// async 工具受理后等待 WS tool.result 回传：true 期间监听 asyncEventName
+const waitingAsyncResult = ref(false);
+const asyncEventName = ref('');
+
+const JSON_PARAM_PLACEHOLDER = 'JSON 对象/数组，如 {"k": 1}';
+
+const isInternalTool = computed(() => {
+  const cat = activeTool.value?.category;
+  return cat === 'framework' || cat === 'game';
+});
+
+function resetInvokeState() {
+  const next: Record<string, unknown> = {};
+  for (const [key, spec] of Object.entries(activeTool.value?.parameters ?? {})) {
+    if (spec.type === 'json') {
+      // JSON 参数以文本承载：default 对象序列化预填，提交时解析回值
+      next[key] =
+        spec.default !== undefined && spec.default !== null
+          ? JSON.stringify(spec.default, null, 2)
+          : '';
+    } else if (spec.default !== undefined && spec.default !== null) {
+      next[key] = spec.default;
+    } else if (spec.type === 'boolean') next[key] = false;
+    else if (spec.type === 'integer' || spec.type === 'number') next[key] = undefined;
+    else next[key] = '';
+  }
+  formModel.value = next;
+  invokeResult.value = null;
+  waitingAsyncResult.value = false;
+  asyncEventName.value = '';
 }
 
-function formatDefault(value: unknown): string {
-  if (typeof value === 'string') return JSON.stringify(value);
-  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
-  return JSON.stringify(value);
+watch(activeTool, resetInvokeState);
+
+// 工具描述折叠/展开：默认两行省略，溢出时点击或点"展开全文"看全文
+const descRef = ref<HTMLElement | null>(null);
+const descClamped = ref(false);
+const descExpanded = ref(false);
+
+function measureDescClamp(): void {
+  // scrollHeight > clientHeight = 两行放不下、出现了省略
+  descClamped.value = descRef.value
+    ? descRef.value.scrollHeight > descRef.value.clientHeight + 1
+    : false;
 }
+
+async function toggleDesc(): Promise<void> {
+  if (!descClamped.value && !descExpanded.value) return;
+  descExpanded.value = !descExpanded.value;
+  if (!descExpanded.value) {
+    // 收起后重测：窗口尺寸变化可能已不再溢出
+    await nextTick();
+    measureDescClamp();
+  }
+}
+
+function extractInvokeDetail(err: unknown): string {
+  // axios 错误：后端 400/404 返回 {detail: "..."}，穿透 axios 默认 message
+  const ax = err as { response?: { data?: { detail?: string } } };
+  return ax?.response?.data?.detail ?? (err instanceof Error ? err.message : '调用失败');
+}
+
+async function onInvoke() {
+  const tool = activeTool.value;
+  if (!tool || invoking.value) return;
+  // 组装 arguments：json 参数解析文本为值（MCP 复杂参数），其余原样透传
+  const args: Record<string, unknown> = {};
+  for (const [key, spec] of Object.entries(tool.parameters ?? {})) {
+    const raw = formModel.value[key];
+    if (spec.type === 'json') {
+      const text = typeof raw === 'string' ? raw.trim() : '';
+      if (!text) {
+        if (spec.required) {
+          ElMessage.warning(`必填参数 ${key} 未填写`);
+          return;
+        }
+        continue;
+      }
+      try {
+        args[key] = JSON.parse(text);
+      } catch {
+        ElMessage.warning(`参数 ${key} 不是合法 JSON`);
+        return;
+      }
+      continue;
+    }
+    if (spec.required && (raw === undefined || raw === null || raw === '')) {
+      ElMessage.warning(`必填参数 ${key} 未填写`);
+      return;
+    }
+    args[key] = raw;
+  }
+  invoking.value = true;
+  try {
+    const resp = await toolsApi.invoke(tool.full_name, args);
+    invokeResult.value = resp.data;
+    if (tool.kind === 'async') {
+      waitingAsyncResult.value = true;
+      asyncEventName.value = tool.result_event ?? `tool.result.${tool.full_name}`;
+    }
+  } catch (e) {
+    ElMessage.error(extractInvokeDetail(e));
+  } finally {
+    invoking.value = false;
+  }
+}
+
+// WS 回传（tool.result.<full_name>）覆盖受理回执（async 工具专用）
+function handleToolResultMessage(msg: WebSocketMessage): void {
+  const tool = activeTool.value;
+  if (!tool || !waitingAsyncResult.value || msg.type !== asyncEventName.value) return;
+  const d = msg.data;
+  const name = typeof d.tool_name === 'string' ? d.tool_name : '';
+  if (name && name !== tool.full_name && name !== tool.name) return;
+  waitingAsyncResult.value = false;
+  invokeResult.value = {
+    success: d.status === 'success',
+    content: '',
+    blocks: [],
+    error_message: typeof d.error_message === 'string' ? d.error_message : '',
+    structured_content: d.result ?? null,
+    duration_ms: 0,
+    timestamp_ms: typeof d.timestamp_ms === 'number' ? d.timestamp_ms : 0,
+  };
+}
+
+// 结果区视图合成
+//
+// ToolExecutionResult 的 content / blocks / structured_content 三处可能携带
+// 同源内容（如 MCP mapper 把同一段 JSON 同时填进三处），按规范化形态去重；
+// 能解析为 JSON 的文本走 vue-json-pretty 树渲染（同 LLM 历史详情页约定），
+// 其余原样。
+// vue-json-pretty data prop 的容许类型（包内 JSONDataType 的等价内联）
+type JsonTreeData = string | number | boolean | unknown[] | Record<string, unknown> | null;
+
+interface ResultView {
+  kind: 'text' | 'image';
+  /** JSON 视图的数据源（isJson 为 true 时有效） */
+  jsonData: JsonTreeData;
+  isJson: boolean;
+  /** 非 JSON 文本原样内容 */
+  text: string;
+  /** 图像 base64 与 MIME（kind = 'image' 时有效） */
+  data: string;
+  mime: string;
+}
+
+function normalizeForResult(t: string): string {
+  try {
+    return JSON.stringify(JSON.parse(t));
+  } catch {
+    return t.trim();
+  }
+}
+
+function tryParseJson(t: string): { ok: boolean; value: JsonTreeData } {
+  try {
+    return { ok: true, value: JSON.parse(t) as JsonTreeData };
+  } catch {
+    return { ok: false, value: null };
+  }
+}
+
+const resultViews = computed<ResultView[]>(() => {
+  const result = invokeResult.value;
+  if (!result) return [];
+  const views: ResultView[] = [];
+  const seen = new Set<string>();
+  const pushText = (raw: string) => {
+    if (!raw || !raw.trim() || seen.has(normalizeForResult(raw))) return;
+    seen.add(normalizeForResult(raw));
+    const parsed = tryParseJson(raw);
+    if (parsed.ok) {
+      views.push({
+        kind: 'text',
+        jsonData: parsed.value,
+        isJson: true,
+        text: '',
+        data: '',
+        mime: '',
+      });
+    } else {
+      views.push({ kind: 'text', jsonData: null, isJson: false, text: raw, data: '', mime: '' });
+    }
+  };
+  pushText(result.content);
+  for (const block of result.blocks) {
+    if (block.kind === 'image' && block.data) {
+      views.push({
+        kind: 'image',
+        jsonData: null,
+        isJson: false,
+        text: '',
+        data: block.data,
+        mime: block.mime_type,
+      });
+    } else {
+      pushText(block.text);
+    }
+  }
+  if (result.structured_content !== null && result.structured_content !== undefined) {
+    pushText(JSON.stringify(result.structured_content));
+  }
+  return views;
+});
 
 watch(activeCategory, () => {
   searchQuery.value = '';
@@ -684,11 +947,13 @@ const wsStore = useWebSocketStore();
 
 onMounted(() => {
   wsStore.subscribe(handleHealthMessage);
+  wsStore.subscribe(handleToolResultMessage);
   void refreshAll();
 });
 
 onBeforeUnmount(() => {
   wsStore.unsubscribe(handleHealthMessage);
+  wsStore.unsubscribe(handleToolResultMessage);
 });
 </script>
 
@@ -1110,6 +1375,11 @@ onBeforeUnmount(() => {
   height: 40px;
 }
 
+/* 行可点击：hover 高亮整行，配合"详情 / 调试"按钮提示可进 */
+.provider-table :deep(.el-table__row:hover > td) {
+  background: var(--bg-hover) !important;
+}
+
 .provider-table :deep(.is-disabled-row) .tool-name,
 .provider-table :deep(.is-disabled-row) .tool-desc {
   color: var(--text-placeholder);
@@ -1128,7 +1398,7 @@ onBeforeUnmount(() => {
   color: var(--text-primary);
 }
 
-.drawer-name {
+.detail-name {
   font-size: 14px;
 }
 
@@ -1160,15 +1430,43 @@ onBeforeUnmount(() => {
 
 /* 抽屉                                                          */
 
-.drawer-body {
-  padding: 0 var(--spacing-md) var(--spacing-md);
+/* 对话框主体：限高防纵向滚动——参数区超限时内部滚动，结果区吃满剩余高度 */
+.detail-pane {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(90vh - 110px);
+  overflow: auto;
 }
 
-.drawer-section {
-  margin-bottom: var(--spacing-lg);
+/* 参数区：高度确定（内部滚动盒 280px 封顶），不参与 flex 压缩——
+   压缩会导致 section 与内部滚动盒高度脱钩、视觉溢出叠到相邻区块上 */
+.params-section {
+  flex: 0 0 auto;
+  margin-bottom: var(--spacing-sm);
 }
 
-.drawer-h {
+.params-scroll {
+  max-height: 280px;
+  overflow: auto;
+}
+
+.detail-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs) var(--spacing-sm);
+}
+
+.detail-fullname {
+  font-size: 11px;
+  color: var(--text-placeholder);
+}
+
+.detail-section {
+  margin-bottom: var(--spacing-md);
+}
+
+.detail-h {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
@@ -1177,27 +1475,41 @@ onBeforeUnmount(() => {
   margin: 0 0 var(--spacing-xs);
 }
 
-.drawer-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-xs);
-  margin-top: var(--spacing-xs);
-}
-
-.drawer-result-event {
+.detail-result-event {
   font-size: 12px;
   color: var(--text-secondary);
   margin: var(--spacing-xs) 0 0;
 }
 
-.drawer-desc {
+.detail-desc {
   font-size: 13px;
   color: var(--text-regular);
-  margin: 0;
-  line-height: 1.6;
+  margin: var(--spacing-xs) 0 0;
+  line-height: 1.5;
+  /* 长描述折叠为两行；可点击展开全文 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.drawer-empty {
+.detail-desc.is-expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.detail-desc.is-toggleable {
+  cursor: pointer;
+}
+
+.desc-toggle {
+  font-size: 12px;
+  color: var(--color-primary, #409eff);
+  cursor: pointer;
+  user-select: none;
+}
+
+.detail-none {
   background: var(--bg-hover);
   border-radius: var(--radius-md);
 }
@@ -1206,15 +1518,16 @@ onBeforeUnmount(() => {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  /* 双列网格：参数并排，压缩纵向占用 */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--spacing-sm);
 }
 
 .param-item {
   background: var(--bg-hover);
   border-radius: var(--radius-md);
-  padding: var(--spacing-sm) var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-sm);
 }
 
 .param-item-head {
@@ -1235,6 +1548,10 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   margin: 4px 0 0;
   line-height: 1.5;
+  /* 描述单行省略，全文悬停可见（title） */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .param-constraints {
@@ -1252,6 +1569,88 @@ onBeforeUnmount(() => {
 .param-constraints dd {
   margin: 0;
   color: var(--text-regular);
+}
+
+.param-input {
+  margin-top: var(--spacing-xs);
+}
+
+.param-number {
+  width: 100%;
+}
+
+.invoke-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+}
+
+.invoke-hint {
+  font-size: 12px;
+  color: var(--color-warning, #e6a23c);
+}
+
+.result-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-xs);
+}
+
+.result-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.result-error {
+  font-size: 12px;
+  color: var(--color-danger, #f56c6c);
+  margin: 0 0 var(--spacing-xs);
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.result-block {
+  background: var(--bg-hover);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0 0 var(--spacing-xs);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.result-image {
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  margin-bottom: var(--spacing-xs);
+}
+
+/* 结果区：对话框内唯一滚动区——高度增长不推动对话框本身 */
+/* 结果区：吃掉面板剩余高度（至少 180px）并在内部滚动，对话框高度不随之增长 */
+.result-section {
+  flex: 1 1 auto;
+  min-height: 180px;
+  overflow: auto;
+}
+
+/* JSON 树容器（vue-json-pretty，同 LLM 历史详情约定）；滚动交给结果区统一处理 */
+.result-json-tree {
+  background: #1e1e1e;
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  font-size: 13px;
+  margin-bottom: var(--spacing-xs);
+}
+
+.result-waiting {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
 }
 
 /* Responsive                                                    */
