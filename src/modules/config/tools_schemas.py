@@ -194,7 +194,6 @@ class ToolsConfig(BaseConfig):
     """[tools] 段聚合
 
     包含工具提供者开关（studio/vision/memory/mcp/web）+ 异步任务基建 +
-)
     工具熔断器配置 + disabled_tools 平铺列表。使用 ``extra="forbid"`` 拒绝未知子段。
     """
 
@@ -208,7 +207,6 @@ class ToolsConfig(BaseConfig):
     )
 
     # 工具提供者开关（单一事实源；动态子段：studio.<name> / web.<name>）
-)
     # 禁 None 政策：段缺省 = 空容器 / 关态实例，全量写出可往返
     studio: Dict[str, StudioProviderConfig] = Field(
         default_factory=dict,

@@ -392,7 +392,7 @@ def test_categories_lists_static_members(tools_client: TestClient) -> None:
     resp = tools_client.get("/api/v1/tools/categories")
     assert resp.status_code == 200
     by_category = {c["category"]: c for c in resp.json()["categories"]}
-    assert list(by_category) == ["avatar", "studio", "vision", "memory", "mcp", "game", "framework"]
+    assert list(by_category) == ["avatar", "studio", "vision", "memory", "web", "mcp", "game", "framework"]
 
     avatar_keys = {p["key"]: p for p in by_category["avatar"]["providers"]}
     assert set(avatar_keys) == {"vts", "vrchat", "warudo"}
