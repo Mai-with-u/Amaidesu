@@ -15,7 +15,7 @@ A/I/U/E/O + 音量），分发给注册的渲染器（VTS / Warudo / VRChat 各�
   广播是事后通知、拿不到正在播的音频）；停止后嘴部信号收静止值；
 - **fail-soft**——渲染器异常吞掉记日志，不影响播放与其他渲染器。
 
-调参来自 ``[avatar.lipsync]``（infra.toml 顶层）：口型分析器是共享基础
+调参来自 ``avatar.toml`` 顶层 ``[lipsync]`` 段：口型分析器是共享基础
 设施、非 provider，调参不进 provider 命名空间。
 """
 
@@ -28,12 +28,20 @@ from pydantic import BaseModel, Field
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.logging import get_logger
 
+# 静音/低音量需持续此时长才执行闭嘴：真实语音的音节间隙（百毫秒级）若
+# 立即压嘴会表现为嘴部高频塌陷抖动；短暂低音量期间保持当前张嘴度。
+_SILENCE_CLOSE_HOLD_SECONDS = 0.2
+
+# RMS → 音量的满刻度参考：典型 TTS 输出 RMS 在 0.03–0.1 量级，
+# 该值决定多大声算"满响度"（映射到 max_mouth_open）。
+_FULL_VOLUME_RMS = 0.083
+
 if TYPE_CHECKING:
     import numpy as np
 
 
 class LipSyncConfig(BaseConfig):
-    """口型分析调参（TOML 段位：infra.toml ``[avatar.lipsync]``）
+    """口型分析调参（TOML 段位：avatar.toml 顶层 ``[lipsync]``）
 
     键名沿用历史 VTS 配置命名（跨文件搬迁不改键，行为保真）；
     ``*_ms`` 命名实际单位是 float 秒（历史形态，保持）。
@@ -144,6 +152,8 @@ class LipSyncAnalyzer:
         # 最近一帧信号（观察面 / 测试）
         self.last_signal = MouthSignal()
         self._last_emit_time = 0.0
+        # 低音量持续起点（None = 当前不处于低音量）；用于静音闭嘴的持续判定
+        self._low_volume_since: Optional[float] = None
 
         self.vowel_formants = {
             "A": [730, 1090],
@@ -243,7 +253,7 @@ class LipSyncAnalyzer:
 
     def _trim_audio_buffer(self) -> None:
         """仅保留最近一段时间的音频，防止内存无限增长"""
-        max_bytes = int(self._max_buffer_seconds * self._sample_rate * 2)  # int16 = 2 bytes
+        max_bytes = int(self._max_buffer_seconds * self._buffer_sample_rate * 2)  # int16 = 2 bytes
         if len(self._audio_buffer) > max_bytes:
             self._audio_buffer = self._audio_buffer[-max_bytes:]
 
@@ -286,18 +296,19 @@ class LipSyncAnalyzer:
             # 无 await 点），无交错可能，不需要加锁
             buffer_len = len(self._audio_buffer)
             if buffer_len >= 1024:
-                # 只分析最近一个窗口的音频，反应当前播放位置（真实时间游标）
-                window_bytes = int(self._analysis_window_seconds * self._sample_rate * 2)
+                # 只分析最近一个窗口的音频，反应当前播放位置（真实时间游标）；
+                # 窗口换算用实际喂入采样率（feed 报告值），与配置值解耦
+                window_bytes = int(self._analysis_window_seconds * self._buffer_sample_rate * 2)
                 audio_bytes = bytes(self._audio_buffer[-window_bytes:])
 
                 audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
                 audio_array = audio_array / 32768.0
 
                 rms = float(np.sqrt(np.mean(audio_array**2)))
-                volume = min(1.0, rms * 6)
+                volume = min(1.0, rms / _FULL_VOLUME_RMS)
 
                 if volume > self._volume_threshold * 0.3:
-                    vowel_values = self._detect_vowels(audio_array, sample_rate=self._sample_rate)
+                    vowel_values = self._detect_vowels(audio_array, sample_rate=self._buffer_sample_rate)
 
         await self._emit(volume, vowel_values)
 
@@ -310,6 +321,14 @@ class LipSyncAnalyzer:
             return
         self._last_emit_time = now
 
+        # 低音量持续判定：短暂低音量（音节间隙）不触发闭嘴/衰减
+        if volume >= self._close_mouth_threshold:
+            self._low_volume_since = None
+        elif self._low_volume_since is None:
+            self._low_volume_since = now
+        low_volume_held = now - (self._low_volume_since if self._low_volume_since is not None else now)
+        sustained_low = low_volume_held >= _SILENCE_CLOSE_HOLD_SECONDS
+
         current = self.last_signal
         vowels: Dict[str, float] = {}
         for vowel in ("A", "I", "U", "E", "O"):
@@ -317,9 +336,9 @@ class LipSyncAnalyzer:
             smoothed = self._smoothing_factor * incoming + (1 - self._smoothing_factor) * current.vowels.get(vowel, 0.0)
             vowels[vowel] = max(current.vowels.get(vowel, 0.0) * self._vowel_decay, smoothed)
 
-        # 静音检测：音量极低时直接闭嘴
+        # 静音检测：持续静音才闭嘴；短暂静音保持当前张嘴度
         if volume < self._silence_threshold:
-            mouth_open = 0.0
+            mouth_open = 0.0 if sustained_low else current.mouth_open
         else:
             scaled_volume = min(1.0, volume * self._volume_gain)
             volume_open = (scaled_volume**self._power_curve) * self._max_mouth_open
@@ -330,9 +349,12 @@ class LipSyncAnalyzer:
 
             mouth_open = max(volume_open, vowel_open)
 
-            # 低音量时额外衰减，让句子中的气口/停顿自然闭嘴
+            # 低音量额外衰减（让长气口自然闭嘴）：仅对持续低音量生效
             if volume < self._close_mouth_threshold:
-                mouth_open *= 0.2 + 0.8 * (volume / self._close_mouth_threshold)
+                if sustained_low:
+                    mouth_open *= 0.2 + 0.8 * (volume / self._close_mouth_threshold)
+                else:
+                    mouth_open = max(mouth_open, current.mouth_open)
 
             mouth_open = min(self._max_mouth_open, mouth_open)
 
