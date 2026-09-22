@@ -23,6 +23,7 @@
 - [事件命名](architecture/event-naming.md)
 - [流程单机制](architecture/rundown.md)
 - [游戏 Agent（Minecraft）](architecture/minecraft-agent.md)
+- [虚拟形象（Avatar）](architecture/avatar-platform.md)
 - [主播上下文构成](architecture/streamer-context.md)
 
 ## 架构决策记录
