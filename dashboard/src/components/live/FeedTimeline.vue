@@ -156,7 +156,14 @@
             <span class="grow" />
             <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
           </div>
-          <p v-if="entry.text" class="act-text">{{ entry.text }}</p>
+          <!-- 参数药丸：入参轮廓一眼可扫；入参为空/非对象时回退纯文本正文 -->
+          <div v-if="entry.argPills.length > 0" class="act-args">
+            <span v-for="pill in entry.argPills" :key="pill.key" class="arg-pill">
+              <span class="arg-key">{{ pill.key }}</span>
+              <span class="arg-value">{{ pill.value }}</span>
+            </span>
+          </div>
+          <p v-else-if="entry.text" class="act-text">{{ entry.text }}</p>
           <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
           <!-- 参数/结果折叠区：compact 下不渲染（首页保持紧凑）；detail 为空时整段不渲染。
                JSON 树与复制交互对齐 LLM 历史页（vue-json-pretty + 剪贴板） -->
@@ -940,6 +947,49 @@ async function copyText(text: string): Promise<void> {
  * 状态由左边线色 + 徽标承载；卡体统一中性面板底（继承 .act 默认的 --color-tool-bg） */
 .act.is-tool-neutral {
   background: var(--bg-card);
+}
+/* 工具卡正文（入参摘要）钳制两行：长值全文在"参数/结果"折叠面板，正文只保留调用轮廓 */
+.act.is-tool-neutral .act-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+/* 参数药丸：键灰值亮的圆角浅底块——入参轮廓一眼可扫，全文在"参数/结果"折叠面板 */
+.act-args {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 2px 0 0;
+}
+.arg-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-active);
+  border: 1px solid var(--border-color-light);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.arg-key {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.arg-key::after {
+  content: '·';
+  margin-left: 6px;
+  color: var(--text-secondary);
+}
+.arg-value {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 36ch;
 }
 .act.is-tool-neutral.is-failed {
   background: var(--bg-card);

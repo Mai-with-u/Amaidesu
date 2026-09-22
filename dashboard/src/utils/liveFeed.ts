@@ -16,7 +16,7 @@ import { formatDurationShort } from '@/utils/format';
 // 常量
 
 export const MAX_ENTRIES = 400;
-/** 结果载荷里可作"主播说了什么"的字段候选（按优先级） */
+/** 正文回退字段候选：入参缺失的旧事件从结果载荷抠可读文本（按优先级） */
 export const TOOL_TEXT_KEYS = [
   'speech_text',
   'text',
@@ -86,12 +86,20 @@ export interface ShowEntry {
   llmRequestId: string;
   /** 来源标签文本（工具调用的归属 Agent / 游戏 Agent 上报）。空串表示无来源 */
   source: string;
+  /** 工具卡参数药丸。空数组表示无入参或入参非对象，正文回退 text */
+  argPills: ToolArgPill[];
 }
 
 /** 单步思考段（与工具卡时间交织的实时思考流片段） */
 export interface ThinkingStep {
   step: number;
   text: string;
+}
+
+/** 工具卡参数药丸（view-ready：键 + 截断后的值文本） */
+export interface ToolArgPill {
+  key: string;
+  value: string;
 }
 
 // 通用取值助手
@@ -123,6 +131,44 @@ export function pickToolText(result: unknown): string {
     if (text) return text;
   }
   return '';
+}
+
+/** 入参值文本：字符串超长省略，对象/数组压 JSON 片段，其余原样 */
+function argValueText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.length > 48 ? `${value.slice(0, 48)}…` : value;
+  }
+  if (value === null || typeof value === 'object') {
+    const json = JSON.stringify(value) ?? 'null';
+    return json.length > 80 ? `${json.slice(0, 80)}…` : json;
+  }
+  return String(value);
+}
+
+/** 入参单值渲染（文本摘要用）：字符串带引号 */
+function renderArgValue(value: unknown): string {
+  const text = argValueText(value);
+  return typeof value === 'string' ? `"${text}"` : text;
+}
+
+/** 入参紧凑摘要（key="value" 逗号连接）——无药丸时的正文回退，完整 JSON 留给折叠面板 */
+export function summarizeToolArgs(args: unknown): string {
+  if (!isRecord(args)) return '';
+  const joined = Object.entries(args)
+    .map(([key, value]) => `${key}=${renderArgValue(value)}`)
+    .join(', ');
+  return joined.length > 200 ? `${joined.slice(0, 200)}…` : joined;
+}
+
+/** 参数药丸（上限 6 枚，超出合并为计数药丸）——入参轮廓一眼可扫，全文留给折叠面板 */
+export function toolArgPills(args: unknown): ToolArgPill[] {
+  if (!isRecord(args)) return [];
+  const entries = Object.entries(args);
+  const pills = entries.slice(0, 6).map(([key, value]) => ({ key, value: argValueText(value) }));
+  if (entries.length > 6) {
+    pills.push({ key: `+${entries.length - 6}`, value: '其余参数见折叠面板' });
+  }
+  return pills;
 }
 
 /** RoomMessageUser → 展示名（与 summarizeEvent 的取名口径一致） */
@@ -182,6 +228,7 @@ export function makeEntry(base: {
   detail?: Record<string, unknown> | null;
   llmRequestId?: string;
   source?: string;
+  argPills?: ToolArgPill[];
 }): ShowEntry {
   const actor = base.actor ?? '';
   return {
@@ -202,6 +249,7 @@ export function makeEntry(base: {
     detail: base.detail ?? null,
     llmRequestId: base.llmRequestId ?? '',
     source: base.source ?? '',
+    argPills: base.argPills ?? [],
   };
 }
 
@@ -280,6 +328,9 @@ function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEn
   const status = str(data.status);
   const failed = status === 'error';
   const spoken = pickToolText(data.result);
+  // 正文承载入参（对齐主流 agent：工具卡主体是"调了什么"）；药丸优先，入参缺失时回退结果文本
+  const argsSummary = summarizeToolArgs(data.arguments);
+  const argPills = toolArgPills(data.arguments);
   const source = callerSourceLabel(str(data.caller_source));
   // 状态徽标与来源徽标拆双槽：有 status 时恒为成功/失败，无 status 留空避免抢视觉
   const badge = status ? (failed ? '失败' : '成功') : '';
@@ -296,8 +347,8 @@ function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEn
     kind: 'tool',
     tsMs: event.timestamp_ms,
     actor: toolName,
-    // 正文只在有实质内容时出现（speak 工具的播报文本）；成败已由徽标承载，不重复成行
-    text: spoken,
+    // 正文只在有实质内容时出现；成败已由徽标承载，不重复成行
+    text: argsSummary || spoken,
     note: failed ? errorText : '',
     badge,
     failed,
@@ -305,6 +356,7 @@ function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEn
     roundId: str(data.round_id),
     source,
     detail,
+    argPills,
   });
 }
 
