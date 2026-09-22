@@ -65,7 +65,7 @@ async def test_dispatch_fans_out_to_all_downstreams():
     # 无 TTS 引擎 → start 降级关闭；业务事件与字幕不依赖队列启用
     await dispatcher.start()
 
-    result = dispatcher.dispatch(
+    result = await dispatcher.dispatch(
         {
             "speech": "你好",
             "emotion": {"name": "happy", "intensity": 0.8},
@@ -101,7 +101,7 @@ async def test_dispatch_fans_out_to_all_downstreams():
 @pytest.mark.asyncio
 async def test_dispatch_non_dict_payload_returns_none():
     dispatcher = _make_dispatcher()
-    assert dispatcher.dispatch(["speech", "emotion"]) is None
+    assert await dispatcher.dispatch(["speech", "emotion"]) is None
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ async def test_start_degrades_when_enabled_but_no_engine():
     assert dispatcher.tts_enabled is False
     assert dispatcher.utterance_queue is None
 
-    result = dispatcher.dispatch({"speech": "仍在说话", "emotion": {"name": "neutral", "intensity": 0.5}})
+    result = await dispatcher.dispatch({"speech": "仍在说话", "emotion": {"name": "neutral", "intensity": 0.5}})
     await asyncio.wait_for(captured_event.wait(), timeout=2.0)
     assert result is not None and result[0] == "仍在说话"
 
@@ -201,7 +201,7 @@ async def test_stop_drains_inflight_fanout_without_pending_warnings():
     assert dispatcher.tts_enabled is True
 
     # 各路扇出（speech/emotion/业务事件/字幕）一次性触发，立即 stop 模拟"决策循环立刻回收"
-    dispatcher.dispatch(
+    await dispatcher.dispatch(
         {
             "speech": "你好",
             "emotion": {"name": "happy", "intensity": 0.8},
@@ -243,7 +243,7 @@ async def test_dispatch_returns_synchronously_without_awaiting_slow_invoke():
     await dispatcher.start()
 
     t0 = time.monotonic()
-    result = dispatcher.dispatch({"speech": "x", "emotion": {"name": "happy", "intensity": 0.8}})
+    result = await dispatcher.dispatch({"speech": "x", "emotion": {"name": "happy", "intensity": 0.8}})
     elapsed = time.monotonic() - t0
 
     # dispatch 必须几乎瞬时返回（远小于 1s 的 sleep）；扇出慢路径不阻塞决策循环
@@ -285,7 +285,7 @@ async def test_stop_is_bounded_when_speak_hangs_longer_than_timeout():
     )
     await dispatcher.start()
 
-    dispatcher.dispatch({"speech": "y", "emotion": {"name": "happy", "intensity": 0.5}})
+    await dispatcher.dispatch({"speech": "y", "emotion": {"name": "happy", "intensity": 0.5}})
     await asyncio.wait_for(started.wait(), timeout=1.0)
 
     t0 = time.monotonic()

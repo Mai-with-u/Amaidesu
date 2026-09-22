@@ -33,7 +33,6 @@ from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.llm.client import LLMResponse
 from src.modules.llm.payload import Response
-from src.modules.tools import ToolExecutionResult, ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 
 
@@ -145,7 +144,7 @@ async def test_speech_enqueued_with_correct_utterance_id_format():
             "actions": [],
             "metadata": {},
         }
-        agent._speech.dispatch(payload)
+        await agent._speech.dispatch(payload)
 
         assert agent._speech.utterance_queue is not None
         for _ in range(50):
@@ -192,7 +191,7 @@ async def test_utterance_seq_increments_per_call():
                 "actions": [],
                 "metadata": {},
             }
-            agent._speech.dispatch(payload)
+            await agent._speech.dispatch(payload)
 
         await asyncio.sleep(0.05)
 
@@ -228,7 +227,7 @@ async def test_payload_not_dict_logs_and_skips(loguru_capture):
     )
     await agent._on_start()
     try:
-        agent._speech.dispatch(["speech", "emotion"])  # list 而非 dict
+        await agent._speech.dispatch(["speech", "emotion"])  # list 而非 dict
 
         await asyncio.sleep(0.05)
         assert agent._speech.utterance_queue.get_stats()["enqueued"] == 0
@@ -272,7 +271,7 @@ async def test_tts_disabled_means_no_enqueue_and_no_vts_call():
             called["vts"] = True
 
         agent._speech._schedule_vts_emotion = _spy  # type: ignore[method-assign]
-        agent._speech.dispatch(payload)
+        await agent._speech.dispatch(payload)
 
         await asyncio.sleep(0.05)
         assert called["vts"] is False, "TTS disabled 时不应触发 VTS 调用"
@@ -324,7 +323,7 @@ async def test_empty_speech_does_not_enqueue():
             "actions": [],
             "metadata": {},
         }
-        agent._speech.dispatch(payload)
+        await agent._speech.dispatch(payload)
         await asyncio.sleep(0.2)
 
         assert agent._speech.utterance_queue.get_stats()["enqueued"] == 0

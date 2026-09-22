@@ -58,7 +58,8 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
         planner.last_request_id = "req_1"
 
     speech = MagicMock()
-    speech.dispatch = MagicMock(return_value=("你好呀", "happy", "utt_1_1"))
+    # dispatch 现为 async（发言事件同步发出契约）；返回值三元组不变
+    speech.dispatch = AsyncMock(return_value=("你好呀", "happy", "utt_1_1"))
 
     room_state = MagicMock()
     proactive_trigger = MagicMock()

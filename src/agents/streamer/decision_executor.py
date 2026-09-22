@@ -318,7 +318,8 @@ class DecisionRoundExecutor:
 
         # reply 已在 Planner ReAct 循环内经 reply 工具完成（Planner 阶段耗时含
         # 表达生成）；此处仅把产出送发言管线（speech → TTS / emotion → VTS）。
-        speech_info = self._speech.dispatch(
+        # await 保证 streamer.speech 先于本轮 planner.decision 与 idle 状态发出
+        speech_info = await self._speech.dispatch(
             outcome.get("reply_payload"),
             target_user_id=self._resolve_reply_target_user(outcome, batch),
             reply_to_message_id=outcome.get("reply_to"),

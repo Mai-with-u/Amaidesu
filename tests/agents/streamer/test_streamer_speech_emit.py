@@ -23,9 +23,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.config import StreamerConfig
+from src.agents.streamer.decision_executor import DecisionRoundExecutor
+from src.agents.streamer.speech_dispatcher import SpeechDispatcher
+from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.llm.client import LLMResponse
 from src.modules.llm.payload import Response
@@ -77,8 +81,8 @@ class _MockTTSEngine:
         self.handle_speech_calls.append((text, utterance_id))
 
 
-async def _wait_for_speech_event(event_bus: EventBus, timeout: float = 2.0) -> Optional[StreamerSpeechPayload]:
-    """辅助：等待 fire-and-forget 任务把 STREAMER_SPEECH 推出去。"""
+def _subscribe_speech(event_bus: EventBus) -> tuple[asyncio.Event, List[StreamerSpeechPayload]]:
+    """订阅 ``streamer.speech``，返回 (完成事件, 捕获列表)；dispatch 前调用。"""
     received: List[StreamerSpeechPayload] = []
     event = asyncio.Event()
 
@@ -88,6 +92,13 @@ async def _wait_for_speech_event(event_bus: EventBus, timeout: float = 2.0) -> O
             event.set()
 
     event_bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
+    return event, received
+
+
+async def _wait_speech(
+    event: asyncio.Event, received: List[StreamerSpeechPayload], timeout: float = 2.0
+) -> Optional[StreamerSpeechPayload]:
+    """等待已订阅的 speech 事件落地；超时返回 None。"""
     try:
         await asyncio.wait_for(event.wait(), timeout=timeout)
     except asyncio.TimeoutError:
@@ -117,9 +128,10 @@ async def test_streamer_speech_emitted_when_tts_disabled():
             "actions": [],
             "metadata": {},
         }
-        agent._speech.dispatch(payload_dict)
+        speech_event, received = _subscribe_speech(bus)
+        await agent._speech.dispatch(payload_dict)
 
-        captured = await _wait_for_speech_event(bus)
+        captured = await _wait_speech(speech_event, received)
         assert captured is not None, "TTS 关闭时仍应收到 streamer.speech"
         assert captured.text == "今天好冷"
         # emotion 必有值契约：旧空串输入按生产者同款语义规范化为 neutral
@@ -155,9 +167,10 @@ async def test_streamer_speech_emitted_when_tts_enabled_and_no_engine():
             "actions": [],
             "metadata": {},
         }
-        agent._speech.dispatch(payload_dict)
+        speech_event, received = _subscribe_speech(bus)
+        await agent._speech.dispatch(payload_dict)
 
-        captured = await _wait_for_speech_event(bus)
+        captured = await _wait_speech(speech_event, received)
         assert captured is not None, "tts_engine 缺失降级时仍应 emit 业务事件"
         assert captured.text == "降级模式"
     finally:
@@ -197,7 +210,7 @@ async def test_streamer_speech_and_tts_share_same_utterance_id():
             "actions": [],
             "metadata": {},
         }
-        agent._speech.dispatch(payload_dict)
+        await agent._speech.dispatch(payload_dict)
 
         await asyncio.wait_for(event.wait(), timeout=2.0)
         # 等 TTS 引擎取走
@@ -243,7 +256,7 @@ async def test_empty_speech_does_not_emit_streamer_speech():
                 "actions": [],
                 "metadata": {},
             }
-            agent._speech.dispatch(payload_dict)
+            await agent._speech.dispatch(payload_dict)
 
         # 等 fire-and-forget 任务全部跑完
         await asyncio.sleep(0.05)
@@ -253,3 +266,74 @@ async def test_empty_speech_does_not_emit_streamer_speech():
         assert agent._speech.utterance_seq == 0
     finally:
         await agent._on_stop()
+
+
+# ---------------------------------------------------------------------------
+# 顺序契约：speech 先于轮末 decision 与 idle 状态发出
+# ---------------------------------------------------------------------------
+
+_REPLY_OUTCOME = {
+    "replied": True,
+    "target": "m1",
+    "reply_to": "m1",
+    "topic_summary": "闲聊",
+    "reply_guidance": "热情一点",
+    "confidence": 0.9,
+    "silent_reason": None,
+    "reply_duration_ms": 12,
+    "reply_payload": {"speech": "你好呀", "emotion": {"name": "happy", "intensity": 0.5}, "actions": []},
+}
+
+
+@pytest.mark.asyncio
+async def test_speech_event_emitted_before_round_end_events():
+    """``streamer.speech`` 同步发出：先于本轮 ``planner.decision`` 与 idle 状态。
+
+    控制台时间线按实际发生顺序渲染依赖该先后契约。用真 EventBus + 真
+    SpeechDispatcher 跑一轮决策，按事件到达序断言（emit 后台 handler
+    在首个 await 前先入队，FIFO 顺序即发布顺序）。
+    """
+    bus = EventBus()
+    dispatcher = SpeechDispatcher(event_bus=bus, subtitle_service=None, tts_engine=None, speech_config=None)
+    planner = MagicMock()
+    planner.plan = AsyncMock(return_value=dict(_REPLY_OUTCOME))
+    planner.last_raw_content = "RAW"
+    planner.last_request_id = "req_1"
+    executor = DecisionRoundExecutor(
+        planner=planner,
+        speech=dispatcher,
+        event_bus=bus,
+        room_state=MagicMock(),
+        proactive_trigger=MagicMock(),
+        stats=StreamerStats(),
+        thinking_sink=None,
+        thinking_enabled=False,
+        history_provider=AsyncMock(return_value=[]),
+        rundown_text_provider=MagicMock(return_value=None),
+        game_narrative_provider=MagicMock(return_value=""),
+    )
+
+    order: List[str] = []
+
+    def _make_capture(label: str):
+        async def _capture(event_name: str, payload: Any, source: Optional[str] = None) -> None:
+            order.append(label)
+
+        return _capture
+
+    bus.on(CoreEvents.STREAMER_STAGE, _make_capture("stage"), model_class=StreamerStagePayload)
+    bus.on(CoreEvents.STREAMER_SPEECH, _make_capture("speech"), model_class=StreamerSpeechPayload)
+    bus.on(CoreEvents.PLANNER_DECISION, _make_capture("decision"), model_class=PlannerDecisionPayload)
+
+    batch = [MagicMock(message_id="m1", content="主播好", user=MagicMock(id="u1", name="观众"))]
+    result = await executor.execute(batch, forced=False, trigger_reason="batch:flush")
+    assert result["speech"] == "你好呀"
+
+    # 事件 handler 是 emit 派发的后台任务，让出一拍等它们全部落地
+    for _ in range(50):
+        if len(order) >= 4:
+            break
+        await asyncio.sleep(0.01)
+
+    # planning 状态 → 发言 → 轮末决策记录 → idle 状态
+    assert order == ["stage", "speech", "decision", "stage"]

@@ -6,9 +6,12 @@
 路径），主播域不携带任何皮套平台知识。TTS 队列生命周期由本组件自持
 （``start``/``stop``），失败一律降级不阻断决策循环。
 
-扇出策略：异步扇出不阻塞决策循环；任务强引用持有（``_bg_tasks`` 集合），
-``stop()`` 末尾限期 2 秒汇合，防止悬挂任务在进程退出/重启窗口继续调用
-业务事件总线。对齐 ``EventBus._background_tasks`` 正典模式。
+扇出策略：``streamer.speech`` 业务事件在派发路径上同步 ``await`` 发出——
+观察端时间线按实际发生顺序渲染，依赖"发言先于轮末决策记录与空闲状态"
+的先后契约，不能延后一拍；字幕推送与 TTS 入队仍为异步扇出（任务强引用
+持有 ``_bg_tasks`` 集合，``stop()`` 末尾限期 2 秒汇合，防止悬挂任务在
+进程退出/重启窗口继续调用业务事件总线），对齐 ``EventBus._background_tasks``
+正典模式。
 """
 
 from __future__ import annotations
@@ -178,7 +181,7 @@ class SpeechDispatcher:
         self._utterance_seq += 1
         return f"utt_{now_ms()}_{self._utterance_seq}"
 
-    def dispatch(
+    async def dispatch(
         self,
         reply_payload: Any,
         *,
@@ -210,6 +213,8 @@ class SpeechDispatcher:
           （TTS 启用与否与主播发言业务事实正交；下游消费者仅依赖业务事件）
         - speech 非空 → 生成 utterance_id + 发布业务事件 + 写入历史；TTS 启用时
           复用同一 utterance_id 入 TTS 队列（与 ``tts.utterance.*`` 共用关联键）
+        - 业务事件同步 await 发出，先于本轮 ``planner.decision`` 与 idle 状态——
+          观察端时间线按实际发生顺序渲染依赖该先后关系
         - emotion 随业务事件发布，由皮套适配器订阅反射（本管线不做情绪扇出）
         """
         if not isinstance(reply_payload, dict):
@@ -235,7 +240,7 @@ class SpeechDispatcher:
         # TTS 启用时复用同一 utterance_id 入 TTS 队列。
         if cleaned_speech:
             utterance_id = self._next_utterance_id()
-            self._emit_streamer_speech(
+            await self._emit_streamer_speech(
                 utterance_id,
                 cleaned_speech,
                 cleaned_emotion,
@@ -255,10 +260,10 @@ class SpeechDispatcher:
         return None
 
     # ==================================================================
-    # 下游扇出（异步扇出不阻塞决策循环；任务强引用持有，停止时限期汇合）
+    # 下游扇出（业务事件同步发出；字幕/TTS 异步扇出不阻塞决策循环）
     # ==================================================================
 
-    def _emit_streamer_speech(
+    async def _emit_streamer_speech(
         self,
         utterance_id: str,
         text: str,
@@ -268,7 +273,7 @@ class SpeechDispatcher:
         reply_to_message_id: Optional[str] = None,
         round_id: str = "",
     ) -> None:
-        """发布 ``streamer.speech`` 业务事件（异步扇出不阻塞决策循环；任务强引用持有，停止时限期汇合）。"""
+        """发布 ``streamer.speech`` 业务事件（同步 await 发出，保证先于轮末决策记录与空闲状态；失败不反噬决策循环）。"""
         event_bus = self._event_bus
         if event_bus is None:
             return
@@ -282,19 +287,16 @@ class SpeechDispatcher:
             reply_to_message_id=reply_to_message_id,
         )
 
-        async def _do_emit() -> None:
-            try:
-                await event_bus.emit(
-                    CoreEvents.STREAMER_SPEECH,
-                    payload,
-                    source="streamer_agent.speech",
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 异步背景任务边界
-                self._logger.warning(f"streamer.speech 发布失败（已忽略）: utterance_id={utterance_id}, err={exc}")
-
-        self._spawn(_do_emit(), label=f"streamer.speech emit (utt={utterance_id})")
+        try:
+            await event_bus.emit(
+                CoreEvents.STREAMER_SPEECH,
+                payload,
+                source="streamer_agent.speech",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 观测事件不阻断决策循环
+            self._logger.warning(f"streamer.speech 发布失败（已忽略）: utterance_id={utterance_id}, err={exc}")
 
     def _schedule_subtitle_show(self, text: str, utterance_id: str) -> None:
         """异步触发字幕推送（异步扇出不阻塞决策循环；任务强引用持有，停止时限期汇合）。

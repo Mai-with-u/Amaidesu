@@ -28,10 +28,12 @@ from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 def _make_minimal_agent(*, event_bus: Optional[EventBus] = None) -> StreamerAgent:
     """构造测试用最小 StreamerAgent（不调 _on_start）。"""
-    config = StreamerConfig.from_dict({
-        "proactive": {"enabled": False},
-        "batch": {"batch_window_ms": 100, "tick_interval_ms": 50},
-    })
+    config = StreamerConfig.from_dict(
+        {
+            "proactive": {"enabled": False},
+            "batch": {"batch_window_ms": 100, "tick_interval_ms": 50},
+        }
+    )
     return StreamerAgent(
         config=config,
         llm_manager=MagicMock(),
@@ -129,7 +131,7 @@ async def test_emit_streamer_speech_passes_target():
     bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
 
     agent = _make_minimal_agent(event_bus=bus)
-    agent._speech._emit_streamer_speech("utt_1", "你好", "neutral", 0.5, "viewer123")
+    await agent._speech._emit_streamer_speech("utt_1", "你好", "neutral", 0.5, "viewer123")
 
     await asyncio.wait_for(captured_event.wait(), timeout=2.0)
     assert len(captured) == 1
@@ -178,7 +180,7 @@ class TestReplyToMessageIdResolution:
             "actions": [],
             "metadata": {},
         }
-        agent._speech.dispatch(reply_payload, target_user_id="u1", reply_to_message_id="m9")
+        await agent._speech.dispatch(reply_payload, target_user_id="u1", reply_to_message_id="m9")
         await asyncio.sleep(0.05)
         await bus.cleanup()
 
