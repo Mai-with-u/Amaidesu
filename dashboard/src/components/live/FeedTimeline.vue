@@ -63,6 +63,19 @@
           <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
         </div>
 
+        <!-- 思考行：ReAct 各步/生成段思考流（视图层合成条目）。
+             默认折叠只留单行预览，流式期间预览实时增长；展开看全文 -->
+        <details v-else-if="entry.kind === 'thinking'" class="think">
+          <summary>
+            <span class="think-caret" aria-hidden="true">▸</span>
+            <span class="think-label">{{ entry.actor }}</span>
+            <span class="think-preview">{{ entry.text }}</span>
+            <span class="grow" />
+            <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+          </summary>
+          <pre class="think-body">{{ entry.text }}</pre>
+        </details>
+
         <!-- 决策卡：verdict（实时裁决）+ decision（沉默/失败轮或统计回填后）共用 -->
         <div
           v-else-if="entry.kind === 'decision' || entry.kind === 'verdict'"
@@ -107,20 +120,6 @@
             >
               完整请求 ↗
             </a>
-            <details
-              v-if="plannerThinking && plannerThinking(entry.roundId).length > 0"
-              class="d-thinking"
-            >
-              <summary>思考过程</summary>
-              <p
-                v-for="seg in plannerThinking!(entry.roundId)"
-                :key="seg.step"
-                class="d-thinking-phase"
-              >
-                <span class="d-thinking-tag">Planner · 步骤 {{ seg.step }}</span>
-                <span class="mono">{{ seg.text }}</span>
-              </p>
-            </details>
             <details v-if="rawOf(entry)" class="d-raw">
               <summary>原始输出</summary>
               <pre class="mono">{{ rawOf(entry) }}</pre>
@@ -236,13 +235,6 @@
             <span v-else class="reply-quote-fallback">回复了一条弹幕</span>
           </div>
           <p class="act-text">{{ entry.text }}</p>
-          <details v-if="replyerThinking && replyerThinking(entry.roundId)" class="d-thinking">
-            <summary>生成思考</summary>
-            <p class="d-thinking-phase">
-              <span class="d-thinking-tag">Replyer</span>
-              <span class="mono">{{ replyerThinking!(entry.roundId) }}</span>
-            </p>
-          </details>
         </div>
 
         <!-- 游戏 Agent 上报（game.* / 走 toGameEntry）：绿色系左边线，act 变体 -->
@@ -299,13 +291,14 @@
 /**
  * 直播时间线视图（直播控制台 + 首页共用）
  *
- * 输入：已折叠的 ShowEntry[]（控制台走 buildLiveEntries，首页可只取最近 N 条）
+ * 输入：已折叠的 ShowEntry[]（顺序即展示顺序——上游负责按时间归并，
+ *      控制台把思考行合成进事件条目流，首页只取事件条目）
  * 渲染：所有控制台当前支持的行类型——环节/边界、里程碑、阶段、进场、
- *      决策/裁决、工具调用、主播发言、弹幕/礼物/SC 气泡。
+ *      思考行、决策/裁决、工具调用、主播发言、弹幕/礼物/SC 气泡。
  * 布局：timeline 单列沿脊线；chat 会话模式（观众左 / 主播右 / 过程行居中），
  *      同一套行卡片只换对齐方式，内容渲染不分叉。
  *
- * 控制台独占能力（思考流尾部、暂停/清空、注入面板、滚动跟随）留在 LiveObserver；
+ * 控制台独占能力（暂停/清空、注入面板、滚动跟随）留在 LiveObserver；
  * 本组件只负责"按条目渲染"，对上游数据来源无要求，可被任何 Vue 页面复用。
  */
 import { computed, ref } from 'vue';
@@ -325,7 +318,6 @@ import {
   relativeTime,
   replyMsOf,
   type ShowEntry,
-  type ThinkingStep,
 } from '@/utils/liveFeed';
 import { useNowTick } from '@/composables/useNowTick';
 
@@ -336,10 +328,6 @@ interface Props {
   compact?: boolean;
   /** 行布局：timeline=单列沿脊线的时间线；chat=会话模式（观众左 / 主播右 / 过程行居中） */
   layout?: 'timeline' | 'chat';
-  /** 决策卡"思考过程"折叠面板的数据源；缺失则该面板永不渲染 */
-  plannerThinking?: (roundId: string) => ThinkingStep[];
-  /** 发言卡"生成思考"折叠面板的文本；缺失则该面板永不渲染 */
-  replyerThinking?: (roundId: string) => string;
   /** entries 为空时的提示语 */
   emptyText?: string;
 }
@@ -347,8 +335,6 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   compact: false,
   layout: 'timeline',
-  plannerThinking: undefined,
-  replyerThinking: undefined,
   emptyText: '静候消息与决策',
 });
 
@@ -888,32 +874,34 @@ async function copyText(text: string): Promise<void> {
   overflow-y: auto;
 }
 
-/* 思考过程：决策卡内回看（同 d-raw 形态） */
-.d-thinking {
-  flex-basis: 100%;
+/* 思考行：ReAct 各步/生成段思考流（默认折叠，预览行随流式增量增长） */
+.think {
+  margin-left: 38px; /* 28px 头像 + 10px 间距：与气泡体对齐 */
+  max-width: 92%;
+  min-width: 0;
 }
-.d-thinking summary {
+.think summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
   cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.think summary::-webkit-details-marker {
+  display: none;
+}
+.think-caret {
   font-size: 10px;
   color: var(--text-placeholder);
-  user-select: none;
+  transition: transform var(--transition-fast);
+  flex-shrink: 0;
 }
-.d-thinking-phase {
-  margin: 6px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  font-size: 10px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 180px;
-  overflow-y: auto;
+.think[open] .think-caret {
+  transform: rotate(90deg);
 }
-.d-thinking-tag {
-  display: inline-block;
-  margin-right: 6px;
+.think-label {
   padding: 0 5px;
   border-radius: var(--radius-sm);
   background: var(--color-agent-bg);
@@ -921,7 +909,33 @@ async function copyText(text: string): Promise<void> {
   font-size: 9px;
   font-weight: 600;
   line-height: 16px;
-  vertical-align: 1px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.think-preview {
+  font-size: 11px;
+  color: var(--text-placeholder);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.think[open] .think-preview {
+  display: none;
+}
+.think-body {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 /* 主播动作：居左卡（工具结果 / 发言）                             */

@@ -208,34 +208,12 @@
               <FeedTimeline
                 :entries="entries"
                 :layout="displayMode"
-                :planner-thinking="plannerThinkingOf"
-                :replyer-thinking="replyerThinkingOf"
                 :empty-text="
                   sessionMode === 'live'
                     ? '静候消息与决策——注入一条弹幕试试'
                     : '该场次暂无可回看条目'
                 "
               />
-
-              <!-- 活动思考区：当前步骤的 reasoning 实时滚动（与工具卡时间交织） -->
-              <div v-if="activeThinking && sessionMode === 'live'" class="thinking-live">
-                <div class="thinking-live-head">
-                  <span class="whisper-dot is-running" aria-hidden="true" />
-                  <span class="thinking-live-title">{{ activeThinking.label }}</span>
-                  <span class="grow" />
-                  <code class="mono">{{ activeThinking.roundId }}</code>
-                </div>
-                <p class="thinking-live-phase">
-                  <span class="d-thinking-tag">{{
-                    activeThinking.phase === 'replyer'
-                      ? 'Replyer'
-                      : activeThinking.phase === 'minecraft'
-                        ? '游戏 Agent'
-                        : 'Planner'
-                  }}</span>
-                  <span class="mono">{{ activeThinking.segment }}</span>
-                </p>
-              </div>
             </div>
 
             <button
@@ -309,8 +287,9 @@
  * 主动发言真实链路置位（streamer/trigger-proactive，仅置位、走 ProactiveTrigger 限流）。
  *
  * 数据来源：
- * - 实时：events store（全局 WS + 游标回填，刷新/断线不丢时间线）
- * - 回看：GET /live-sessions/{id}/timeline（明细行 + 事件历史按时间合并）
+ * - 实时：events store（全局 WS + 游标回填，刷新/断线不丢时间线）+ 思考流旁路
+ *   （kind="stream"，仅视图层合成思考行、按时间归并进时间线，不入 store 不回看）
+ * - 回看：GET /live-sessions/{id}/timeline（明细行 + 事件历史按时间合并；无思考数据）
  * 渲染字段一律取自后端真实 Payload（src/modules/events/payloads/），不臆造字段。
  */
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
@@ -325,12 +304,14 @@ import {
   MAX_ENTRIES,
   agentGroupOf,
   buildLiveEntries,
+  buildThinkingRow,
   bool,
   formatAmount,
   fromDecision,
   fromStage,
   isRecord,
   makeEntry,
+  mergeEntriesByTime,
   num,
   relativeTime,
   str,
@@ -338,6 +319,7 @@ import {
   type AgentGroup,
   type FeedEvent,
   type ShowEntry,
+  type ThinkingSegmentInput,
   type ThinkingStep,
 } from '@/utils/liveFeed';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
@@ -366,65 +348,23 @@ interface RundownBanner {
 }
 
 // 思考流（WS kind="stream"；ADR-008 best-effort 观测通道）
+//
+// 只在视图层消费：按 (round_id, phase, step) 累积思考段，再合成 kind='thinking'
+// 的时间线行与事件条目按时间归并（不进 events store、不落库、不回看）。
 
 const THINKING_ROUNDS_MAX = 20;
-/** 每决策轮的思考聚合：planner 按步骤分段（与工具卡时间交织），replyer 独立一段。
- * plannerDone/replyerDone 分别由 verdict（裁决落地）与 speech（发言落地）驱动 */
+/** 每决策轮的思考聚合：planner 按步骤分段（与工具卡时间交织），replyer 独立一段 */
 interface ThinkingRound {
   steps: ThinkingStep[];
   replyerText: string;
-  /** 最后活动的段："planner:<step>" | "replyer" | "minecraft:<step>" */
-  lastSegment: string;
-  /** 最后一条 delta 的 phase（planner / replyer / minecraft），用于 activeThinking 渲染与标签区分 */
-  lastPhase: string;
-  plannerDone: boolean;
-  replyerDone: boolean;
+  /** replyer 段首增量到达时刻（Unix 毫秒；0 = 尚未开始） */
+  replyerTsMs: number;
 }
 const thinkingRounds = reactive(new Map<string, ThinkingRound>());
 
-function thinkingOf(roundId: string): ThinkingRound | undefined {
-  return roundId ? thinkingRounds.get(roundId) : undefined;
-}
-
-/** 决策卡回看用：Planner 各步骤思考段（replyer 段归发言卡） */
-function plannerThinkingOf(roundId: string): ThinkingStep[] {
-  const round = thinkingOf(roundId);
-  if (!round) return [];
-  return round.steps.filter(s => s.text);
-}
-
-/** 发言卡回看用：Replyer 思考段文本（空串返回空，模板不渲染 details） */
-function replyerThinkingOf(roundId: string): string {
-  return thinkingOf(roundId)?.replyerText ?? '';
-}
-
-/** 活动中的思考段（时间线尾部实时滚动区），显示最后活动且未完结的段 */
-const activeThinking = computed<{
-  roundId: string;
-  round: ThinkingRound;
-  segment: string;
-  label: string;
-  phase: string;
-} | null>(() => {
-  for (const [roundId, round] of thinkingRounds) {
-    if (!round.plannerDone && !round.replyerDone) continue;
-    if (round.lastSegment === 'replyer') {
-      if (round.replyerDone) continue;
-      return { roundId, round, segment: round.replyerText, label: '生成发言中', phase: 'replyer' };
-    }
-    if (round.plannerDone) continue;
-    const step = Number(round.lastSegment.split(':')[1] ?? 1);
-    const seg = round.steps.find(s => s.step === step);
-    return {
-      roundId,
-      round,
-      segment: seg?.text ?? '',
-      label: round.lastPhase === 'minecraft' ? '游戏 Agent·思考' : `思考中 · 步骤 ${step}`,
-      phase: round.lastPhase,
-    };
-  }
-  return null;
-});
+/** 思考行隐藏水位：清空时间线时记下当前思考行最大时刻，此前的思考行一并隐藏
+ *  （思考行不进 hiddenIds 体系——它不是事件，没有事件 id） */
+const thinkingHiddenBeforeMs = ref(0);
 
 function handleThinkingMessage(message: WebSocketMessage): void {
   if (message.kind !== 'stream' || message.type !== 'thinking.delta') return;
@@ -435,13 +375,10 @@ function handleThinkingMessage(message: WebSocketMessage): void {
       round = reactive({
         steps: [],
         replyerText: '',
-        lastSegment: '',
-        lastPhase: delta.phase,
-        plannerDone: false,
-        replyerDone: false,
+        replyerTsMs: 0,
       });
       thinkingRounds.set(delta.round_id, round);
-      // 上限保尾：只保留最近 N 轮供决策卡回看，更早的文本随轮淘汰
+      // 上限保尾：只保留最近 N 轮供时间线回看，更早的文本随轮淘汰
       while (thinkingRounds.size > THINKING_ROUNDS_MAX) {
         const oldest = thinkingRounds.keys().next().value;
         if (oldest === undefined) break;
@@ -449,25 +386,49 @@ function handleThinkingMessage(message: WebSocketMessage): void {
       }
     }
     if (delta.phase === 'replyer') {
+      if (!round.replyerTsMs) round.replyerTsMs = message.timestamp_ms;
       round.replyerText += delta.text_delta;
-      round.lastSegment = 'replyer';
-      round.lastPhase = 'replyer';
-      round.replyerDone = false;
     } else {
       // planner 与 minecraft 共享 step-based 累积：同 Map 同段索引；
-      // phase 由 lastPhase 区分，渲染端按 phase 显示「Planner / 游戏 Agent」
+      // 行标签按 phase 区分（minecraft 段当前不存在，预留）
       let seg = round.steps.find(s => s.step === delta.step);
       if (!seg) {
-        seg = reactive({ step: delta.step, text: '' });
+        seg = reactive({ step: delta.step, text: '', tsMs: message.timestamp_ms });
         round.steps.push(seg);
       }
       seg.text += delta.text_delta;
-      round.lastSegment = `${delta.phase}:${delta.step}`;
-      round.lastPhase = delta.phase;
-      round.plannerDone = false;
     }
   }
 }
+
+/** 当前全部思考行（buildThinkingRow 内 id 稳定，流式增量原地刷新；升序交给归并函数）。
+ *  仅实时模式使用——思考流不落库，回看场次的 REST 时间线没有思考数据 */
+const liveThinkingRows = computed<ShowEntry[]>(() => {
+  const watermark = thinkingHiddenBeforeMs.value;
+  const segments: ThinkingSegmentInput[] = [];
+  for (const [roundId, round] of thinkingRounds) {
+    for (const step of round.steps) {
+      if (!step.text || step.tsMs <= watermark) continue;
+      segments.push({
+        roundId,
+        phase: 'planner',
+        step: step.step,
+        tsMs: step.tsMs,
+        text: step.text,
+      });
+    }
+    if (round.replyerText && round.replyerTsMs > watermark) {
+      segments.push({
+        roundId,
+        phase: 'replyer',
+        step: 1,
+        tsMs: round.replyerTsMs,
+        text: round.replyerText,
+      });
+    }
+  }
+  return segments.map(buildThinkingRow);
+});
 
 // Store 与全局状态
 
@@ -477,16 +438,6 @@ const { events } = storeToRefs(eventsStore);
 const { isConnected: wsConnected } = storeToRefs(wsStore);
 
 wsStore.subscribe(handleThinkingMessage);
-
-// 重连清理：思考流无回填，断线期间的增量已不可得，重连后清空悬空活动段
-watch(wsConnected, (connected, previous) => {
-  if (connected && previous === false) {
-    for (const round of thinkingRounds.values()) {
-      round.plannerDone = true;
-      round.replyerDone = true;
-    }
-  }
-});
 
 // 通用取值助手（侧栏时钟/时长；事件→条目取值助手见 utils/liveFeed.ts）
 
@@ -781,6 +732,10 @@ const paused = ref(false);
 const hiddenIds = ref<Set<string>>(new Set());
 const liveEntries = ref<ShowEntry[]>([]);
 
+/** 暂停期思考行快照：暂停时锁存当前思考行，恢复后回到实时
+ *  （事件流靠 watch 跳过重建实现冻结，思考行是 computed、需单独锁存） */
+const frozenThinkingRows = ref<ShowEntry[] | null>(null);
+
 /** 时间线显示模式：timeline=单列沿脊线；chat=会话模式（观众左/主播右气泡对齐，
  * 原独立会话调试页的显示形态） */
 const displayMode = ref<'timeline' | 'chat'>('timeline');
@@ -804,23 +759,35 @@ watch(
   { immediate: true },
 );
 
-/** 展示条目：实时模式按 agentFilter 过滤；回看模式取 REST 时间线全量。
+/** 展示条目：实时模式把思考行与事件条目按时间归并后过 agentFilter；
+ *  回看模式取 REST 时间线全量（思考流不落库，回看没有思考行）。
  *  过滤只针对 Agent 产生的卡，观众消息与场次边界（room 组）始终可见 */
 const entries = computed<ShowEntry[]>(() => {
-  const list = sessionMode.value === 'live' ? liveEntries.value : replayEntries.value;
-  if (sessionMode.value === 'replay' || agentFilter.value === 'all') return list;
+  if (sessionMode.value === 'replay') return replayEntries.value;
+  const thinkingRows = paused.value ? (frozenThinkingRows.value ?? []) : liveThinkingRows.value;
+  const list = mergeEntriesByTime(liveEntries.value, thinkingRows);
+  if (agentFilter.value === 'all') return list;
   return list.filter(
     entry => agentGroupOf(entry) === 'room' || agentGroupOf(entry) === agentFilter.value,
   );
 });
 
 function togglePause(): void {
-  paused.value = !paused.value;
+  const next = !paused.value;
+  // 暂停沿锁存当前思考行，恢复沿放回实时流（事件条目的冻结由 watch 跳过重建实现）
+  frozenThinkingRows.value = next ? liveThinkingRows.value : null;
+  paused.value = next;
 }
 
 function clearTimeline(): void {
   hiddenIds.value = new Set(events.value.map(event => event.id));
   liveEntries.value = [];
+  // 思考行按时间水位隐藏（与 hiddenIds 同语义：只藏不删）
+  const rows = paused.value ? (frozenThinkingRows.value ?? []) : liveThinkingRows.value;
+  thinkingHiddenBeforeMs.value = rows.reduce(
+    (max, row) => Math.max(max, row.tsMs),
+    thinkingHiddenBeforeMs.value,
+  );
   unseen.value = 0;
 }
 
@@ -1022,19 +989,6 @@ function countAdded(next: ShowEntry[], prev: ShowEntry[]): number {
 }
 
 watch(entries, async (next, prev) => {
-  if (sessionMode.value === 'live') {
-    // 思考段终态联动：verdict/decision 落地 → planner 段结束；speech 落地 → replyer 段结束
-    const prevKinds = new Set((prev ?? []).map(entry => `${entry.kind}:${entry.roundId}`));
-    for (const entry of next) {
-      if (!entry.roundId) continue;
-      const round = thinkingRounds.get(entry.roundId);
-      if (!round) continue;
-      const key = `${entry.kind}:${entry.roundId}`;
-      if (prevKinds.has(key)) continue;
-      if (entry.kind === 'verdict' || entry.kind === 'decision') round.plannerDone = true;
-      if (entry.kind === 'speech') round.replyerDone = true;
-    }
-  }
   const added = countAdded(next, prev ?? []);
   await nextTick();
   if (atBottom.value) {
@@ -1622,69 +1576,6 @@ onUnmounted(() => {
 .jump:hover {
   background: var(--bg-active);
   transform: translateX(-50%) translateY(-1px);
-}
-
-/* 活动思考区：时间线尾部的实时滚动卡（生成中观感） */
-.thinking-live {
-  margin: 10px 0 0 38px;
-  max-width: 92%;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  background: var(--color-agent-bg);
-  border-left: 2px solid var(--color-agent);
-  opacity: 0.85;
-}
-.thinking-live-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-  font-size: 10px;
-  color: var(--text-placeholder);
-}
-/* 控制台独占：thinking-live 头部的小圆点（行圆点的 running 变体） */
-.thinking-live .whisper-dot {
-  width: 28px;
-  height: 12px;
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  z-index: 1;
-}
-.thinking-live .whisper-dot::before {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--color-agent);
-  box-shadow: 0 0 0 3px var(--bg-card);
-}
-.thinking-live-title {
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-.thinking-live-phase {
-  margin: 4px 0 0;
-  font-size: 10px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 96px;
-  overflow-y: auto;
-}
-/* 控制台独占：thinking-live 内的 Replyer/Planner 标签徽章 */
-.thinking-live .d-thinking-tag {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  background: var(--color-agent-bg);
-  color: var(--color-agent);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 16px;
-  vertical-align: 1px;
 }
 
 /* 窄屏                                                          */

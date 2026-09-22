@@ -49,7 +49,9 @@ export type EntryKind =
   | 'boundary'
   | 'game'
   /** 会话模式的过程折叠条（合成展示条目，不对应任何事件） */
-  | 'process_group';
+  | 'process_group'
+  /** 思考行：ReAct 各步/生成段思考流（视图层合成条目，不对应事件；流式期间文本原地增长） */
+  | 'thinking';
 
 /** 事件缓冲条目：events store 在 WebSocketMessage 上补了去重 id */
 export type FeedEvent = WebSocketMessage & { id: string };
@@ -94,6 +96,8 @@ export interface ShowEntry {
 export interface ThinkingStep {
   step: number;
   text: string;
+  /** 段首增量到达时刻（Unix 毫秒，取 WS 信封 timestamp_ms；思考行时间线定位用） */
+  tsMs: number;
 }
 
 /** 工具卡参数药丸（view-ready：键 + 截断后的值文本） */
@@ -187,7 +191,7 @@ function initialOf(actor: string): string {
 
 /** 时间线条目归到三类 Agent 组之一：'streamer' 主播管线 / 'game' 游戏 Agent / 'room' 房间事件。
  *  工具条目按 source 归类：主播决策→streamer，游戏 Agent→game，其他有值 source 按前缀 minecraft 判 game 否则 streamer；
- *  speech/decision/verdict/stage→streamer；game→game；其余 kind→room */
+ *  speech/decision/verdict/stage/thinking→streamer；game→game；其余 kind→room */
 export type AgentGroup = 'streamer' | 'game' | 'room';
 
 export function agentGroupOf(entry: ShowEntry): AgentGroup {
@@ -196,7 +200,8 @@ export function agentGroupOf(entry: ShowEntry): AgentGroup {
     entry.kind === 'speech' ||
     entry.kind === 'decision' ||
     entry.kind === 'verdict' ||
-    entry.kind === 'stage'
+    entry.kind === 'stage' ||
+    entry.kind === 'thinking'
   ) {
     return 'streamer';
   }
@@ -618,6 +623,62 @@ export function buildLiveEntries(events: FeedEvent[], hiddenIds: Set<string>): S
   return next.slice(-MAX_ENTRIES);
 }
 
+// 思考行：视图层从思考流旁路状态合成（不进事件 store，不回看——ADR-008 边界不变）
+
+/** 思考行输入段：视图层从思考流旁路状态提取（时间戳取段首 WS 信封时刻） */
+export interface ThinkingSegmentInput {
+  /** 决策轮次 ID */
+  roundId: string;
+  /** 段归属：planner（按 ReAct 步分段）/ replyer（表达生成，恒一段）/ minecraft */
+  phase: string;
+  /** 段号：planner 为步号；replyer 恒 1 */
+  step: number;
+  /** 段首增量到达时刻（Unix 毫秒） */
+  tsMs: number;
+  /** 已累积的思考文本 */
+  text: string;
+}
+
+/** 思考段 → 时间线合成条目。id 由轮次/段归属/段号派生且稳定——流式增量到达时
+ * 同 id 原地刷新文本，不产生新行 */
+export function buildThinkingRow(seg: ThinkingSegmentInput): ShowEntry {
+  const label =
+    seg.phase === 'replyer'
+      ? '生成思考'
+      : seg.phase === 'minecraft'
+        ? '游戏 Agent · 思考'
+        : `思考 · 步骤 ${seg.step}`;
+  return makeEntry({
+    id: `think:${seg.roundId}:${seg.phase}:${seg.step}`,
+    kind: 'thinking',
+    tsMs: seg.tsMs,
+    actor: label,
+    text: seg.text,
+    roundId: seg.roundId,
+  });
+}
+
+/** 事件条目与思考行按时间归并（事件流本身升序，思考行副本就地排序）。
+ *  同毫秒思考行在前——思考先于同刻落地的事件（思考结束才有工具结果/裁决）。 */
+export function mergeEntriesByTime(entries: ShowEntry[], thinkingRows: ShowEntry[]): ShowEntry[] {
+  const rows = [...thinkingRows].sort((a, b) => a.tsMs - b.tsMs);
+  const merged: ShowEntry[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < entries.length && j < rows.length) {
+    if (rows[j].tsMs <= entries[i].tsMs) {
+      merged.push(rows[j]);
+      j += 1;
+    } else {
+      merged.push(entries[i]);
+      i += 1;
+    }
+  }
+  merged.push(...entries.slice(i));
+  merged.push(...rows.slice(j));
+  return merged;
+}
+
 // 相对时间标签
 
 /**
@@ -640,6 +701,7 @@ const CHAT_PROCESS_KINDS: ReadonlySet<EntryKind> = new Set<EntryKind>([
   'milestone',
   'rundown',
   'boundary',
+  'thinking',
 ]);
 
 /** 过程条合成条目 id 前缀（与事件条目 id 区分，避免 key 冲突） */
@@ -654,6 +716,7 @@ const CHAT_PROCESS_LABEL: Record<string, string> = {
   milestone: '里程碑',
   rundown: '环节',
   boundary: '场次',
+  thinking: '思考',
 };
 
 /** 该条目在会话模式是否属于过程行（折叠进过程条） */
