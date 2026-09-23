@@ -11,9 +11,10 @@
         />
         <el-input
           v-model="entry.display"
-          size="small"
-          placeholder="值"
+          type="textarea"
+          :autosize="{ minRows: 1, maxRows: 10 }"
           class="dict-value-input"
+          placeholder="值"
           @input="handleValueEdit(index)"
         />
         <el-button type="danger" size="small" text :icon="Delete" @click="removeRow(index)" />
@@ -52,10 +53,10 @@ const emit = defineEmits<{
   change: [];
 }>();
 
-/** 渲染时非字符串值通过 JSON 展示给用户。 */
+/** 渲染时非字符串值通过 JSON 展示给用户；嵌套对象多行缩进，避免长配置挤成一行不可读。 */
 function valueToDisplay(value: unknown): string {
   if (typeof value === 'string') return value;
-  return JSON.stringify(value);
+  return JSON.stringify(value, null, 2);
 }
 
 /** 编辑时尝试把用户输入解析回原类型；空字符串或解析失败时回退为字符串。 */
@@ -159,7 +160,7 @@ function handleUpdate() {
 
 .dict-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--spacing-xs);
 }
 
@@ -169,6 +170,12 @@ function handleUpdate() {
 
 .dict-value-input {
   flex: 1;
+  min-width: 0;
+}
+
+.dict-value-input :deep(.el-textarea__inner) {
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .dict-actions {

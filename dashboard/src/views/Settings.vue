@@ -52,6 +52,16 @@
           size="default"
           class="search-input"
         />
+        <div class="toolbar-actions">
+          <el-button size="default" @click="issueExpandCommand('expand')">
+            <el-icon><Expand /></el-icon>
+            全部展开
+          </el-button>
+          <el-button size="default" @click="issueExpandCommand('collapse')">
+            <el-icon><Fold /></el-icon>
+            全部收起
+          </el-button>
+        </div>
       </div>
 
       <!-- 文件 Tab 导航 -->
@@ -123,7 +133,12 @@
                     /></el-icon>
                   </div>
                   <div class="section-title-area">
-                    <h3 class="section-title">{{ section.label }}</h3>
+                    <div class="section-title-row">
+                      <h3 class="section-title">{{ section.label }}</h3>
+                      <el-tag v-if="section.version" size="small" type="info" effect="plain">
+                        v{{ section.version }}
+                      </el-tag>
+                    </div>
                     <p v-if="section.description" class="section-desc">{{ section.description }}</p>
                   </div>
                 </div>
@@ -134,24 +149,15 @@
                 />
               </div>
               <div class="section-fields">
+                <!-- 浏览模式统一走卡片列表：实体卡 + 分类分组 + 紧凑元数据条 -->
                 <ComponentCardList
-                  v-if="
-                    ['collectors', 'deciders', 'handlers', 'agents', 'tools'].includes(section.key)
-                  "
-                  :fields="section.fields"
-                  :enabled-field-key="`${section.key}.enabled`"
+                  :fields="getSectionFields(section)"
+                  :enabled-field-key="ENABLED_LIST_KEYS[section.key] ?? null"
                   :get-value="getFieldValue"
                   :get-original="settingsStore.originalValueAt"
                   :update-value="updateFieldValue"
                   :get-change-count="getPendingChangeCount"
-                />
-                <SubFieldGroup
-                  v-else
-                  :fields="section.fields"
-                  :get-value="getFieldValue"
-                  :get-original="settingsStore.originalValueAt"
-                  :update-value="updateFieldValue"
-                  :get-change-count="getPendingChangeCount"
+                  :expand-command="cardExpandCommand"
                 />
               </div>
             </div>
@@ -206,6 +212,8 @@ import {
   Connection,
   Management,
   WarningFilled,
+  Expand,
+  Fold,
 } from '@element-plus/icons-vue';
 import { useSettingsStore } from '@/stores/settings';
 import type { ConfigFieldSchema, ConfigGroupSchema } from '@/types/settings';
@@ -232,6 +240,13 @@ const FALLBACK_FILE_TABS = [
     restart: true,
   },
   { key: 'tools.toml', label: '工具包', icon: Tools, desc: '工具域开关与提供者', restart: true },
+  {
+    key: 'avatar.toml',
+    label: '皮套',
+    icon: Picture,
+    desc: '虚拟形象平台 / 口型同步',
+    restart: true,
+  },
   {
     key: 'model.toml',
     label: '模型',
@@ -279,6 +294,14 @@ const restarting = ref(false);
 const searchQuery = ref('');
 const activeFileTab = ref('agents.toml');
 
+/** 工具栏「全部展开/全部收起」命令：seq 递增保证同方向连点也能触发子组件 watch */
+const cardExpandCommand = ref<{ action: 'expand' | 'collapse'; seq: number } | null>(null);
+let expandCommandSeq = 0;
+
+function issueExpandCommand(action: 'expand' | 'collapse') {
+  cardExpandCommand.value = { action, seq: ++expandCommandSeq };
+}
+
 // ── 计算属性 ──────────────────────────────────────────────
 // 所有 group 按后端返回的 file_name 分组
 const groupsByFile = computed(() => {
@@ -295,6 +318,27 @@ const groupsByFile = computed(() => {
 // 获取某个文件下的 sections（排序后）
 function getFileSections(fileName: string): ConfigGroupSchema[] {
   return (groupsByFile.value.get(fileName) || []).sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
+}
+
+// ── 卡片级启用名单寻址（仅名单驱动的文件有；其余文件卡片走各自布尔 enabled 子字段） ──
+const ENABLED_LIST_KEYS: Record<string, string> = {
+  collectors: 'collectors.enabled',
+  agents: 'agents.agents.enabled',
+};
+
+/**
+ * 浏览模式的分区字段整形：
+ * - meta 容器只装只读版本号，不占卡片——版本改由分组头角标展示；
+ * - 仅剩一个与 scope 同名的容器时（agents.agents / tools.tools）解包一层，
+ *   让真正的实体（Agent / 工具提供者分类）直接成为卡片。
+ */
+function getSectionFields(section: ConfigGroupSchema): ConfigFieldSchema[] {
+  const fields = section.fields.filter(f => !f.key.endsWith('.meta'));
+  const containers = fields.filter(f => f.children && f.children.length > 0);
+  if (containers.length === 1 && containers[0].key === `${section.key}.${section.key}`) {
+    return fields.filter(f => f.key !== containers[0].key).concat(containers[0].children ?? []);
+  }
+  return fields;
 }
 
 // 初始化：默认选中第一个非空 Tab
@@ -560,10 +604,21 @@ async function handleRestart() {
   box-shadow: var(--shadow-sm);
 }
 
-/* 顶部栏：搜索框 */
+/* 顶部栏：搜索框 + 全局展开/收起 */
 .settings-toolbar {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
   padding: var(--spacing-md) var(--spacing-lg) 0;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-shrink: 0;
 }
 
 .search-input {
@@ -723,6 +778,12 @@ async function handleRestart() {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
 }
 
 .section-title {

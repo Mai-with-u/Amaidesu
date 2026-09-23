@@ -12,17 +12,29 @@
             <el-icon class="sub-card-icon"><FolderOpened /></el-icon>
             <span class="sub-card-title">{{ field.label || field.key }}</span>
           </div>
-          <el-badge
-            v-if="getChildrenChangeCount(field) > 0"
-            :value="getChildrenChangeCount(field)"
-            type="warning"
-            size="small"
-          />
+          <div class="sub-card-header-right">
+            <!-- 容器自带的布尔 enabled 子字段提为卡头开关（如 streamer.background.enabled） -->
+            <el-switch
+              v-if="enabledLeaf(field)"
+              :model-value="getValue(enabledLeaf(field)!.key) === true"
+              size="small"
+              active-text="启用"
+              inactive-text="禁用"
+              @click.stop
+              @change="(v: boolean) => toggleSubEnabled(field, v)"
+            />
+            <el-badge
+              v-if="getChildrenChangeCount(field) > 0"
+              :value="getChildrenChangeCount(field)"
+              type="warning"
+              size="small"
+            />
+          </div>
         </div>
         <div v-if="field.description" class="sub-card-desc">{{ field.description }}</div>
         <div v-show="expanded.has(field.key)" class="sub-card-body">
           <SubFieldGroup
-            :fields="field.children"
+            :fields="bodyFields(field)"
             :get-value="getValue"
             :get-original="getOriginal"
             :update-value="updateValue"
@@ -65,8 +77,9 @@ const props = defineProps<{
 const expanded = ref<Set<string>>(new Set());
 
 function initExpanded() {
+  // 默认全部展开：与实体卡一致，内容即页面主体
   for (const f of props.fields) {
-    if (f.children && f.children.length <= 3 && f.children.length > 0) {
+    if (f.children && f.children.length > 0) {
       expanded.value.add(f.key);
     }
   }
@@ -79,6 +92,25 @@ function toggleCard(key: string) {
   } else {
     expanded.value.add(key);
   }
+}
+
+/** 容器字段自带的布尔 enabled 叶子（key 恰为 `<容器>.enabled`）；无则 undefined */
+function enabledLeaf(field: ConfigFieldSchema): ConfigFieldSchema | undefined {
+  return (field.children ?? []).find(
+    c => !c.children?.length && c.type === 'boolean' && c.key === `${field.key}.enabled`,
+  );
+}
+
+/** 卡体子字段：卡头开关已接管 enabled 叶子时不重复渲染 */
+function bodyFields(field: ConfigFieldSchema): ConfigFieldSchema[] {
+  const leaf = enabledLeaf(field);
+  const children = field.children ?? [];
+  return leaf ? children.filter(c => c !== leaf) : children;
+}
+
+function toggleSubEnabled(field: ConfigFieldSchema, val: boolean) {
+  const leaf = enabledLeaf(field);
+  if (leaf) props.updateValue(leaf, val);
 }
 
 /**
@@ -178,6 +210,13 @@ function getChildrenChangeCount(field: ConfigFieldSchema): number {
   gap: var(--spacing-sm);
 }
 
+.sub-card-header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-shrink: 0;
+}
+
 .sub-card-toggle {
   font-size: 14px;
   color: var(--text-secondary);
@@ -187,7 +226,6 @@ function getChildrenChangeCount(field: ConfigFieldSchema): number {
 .sub-card-icon {
   font-size: 16px;
   color: var(--color-primary);
-  flex-shrink: 0;
 }
 
 .sub-card-title {
@@ -200,8 +238,6 @@ function getChildrenChangeCount(field: ConfigFieldSchema): number {
   padding: var(--spacing-sm) var(--spacing-md) var(--spacing-md);
   border-top: 1px solid var(--border-color-light);
   background: var(--bg-elevated);
-  max-height: 360px;
-  overflow-y: auto;
 }
 
 /* 子卡片内部的 field-card 调整 */
