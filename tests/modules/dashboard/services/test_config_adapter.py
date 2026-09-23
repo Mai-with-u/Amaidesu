@@ -236,10 +236,24 @@ class TestWalkSchemaToolProviders:
 
 
 class _FakeConfigService:
-    """只读 main_config 属性；reload_config 为写链路尾部调用提供空实现。"""
+    """只读 main_config 属性；reload_config 为写链路尾部调用提供空实现。
 
-    def __init__(self, main_config: dict[str, Any]) -> None:
+    ``file_sections`` 模拟按文件视图（ConfigService.get_file_section 的数据源），
+    动态段实例枚举依赖它；``base_dir`` 供版本号直读定位 config 目录。
+    """
+
+    def __init__(
+        self,
+        main_config: dict[str, Any],
+        file_sections: dict[str, dict] | None = None,
+        base_dir: Any = "",
+    ) -> None:
         self.main_config = main_config
+        self._file_sections = file_sections or {}
+        self.base_dir = base_dir
+
+    def get_file_section(self, file_stem: str, default: Any = None) -> dict:
+        return self._file_sections.get(file_stem, default if default is not None else {})
 
     async def reload_config(self, changed_scopes=None):
         return True
@@ -324,6 +338,131 @@ class TestBuildFrontendGroups:
         service.main_config = None
         result = _build_frontend_groups(service)
         assert len(result["groups"]) == 7
+
+
+def _iter_all_fields(nodes: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for node in nodes:
+        out.append(node)
+        out.extend(_iter_all_fields(node.get("children", [])))
+    return out
+
+
+class TestNoGhostFields:
+    """回归：数组字段不得重复收集产生 scope 前缀翻倍的幽灵子树。
+
+    幽灵键（如 tools.tools.tools.disabled_tools）读路径指向不存在的配置段
+    （渲染为空）、编辑后保存必报"未知配置项"，是历史双重前缀缺陷的化石。
+    """
+
+    GHOST_KEYS = [
+        "tools.tools.tools.disabled_tools",
+        "agents.agents.agents.enabled",
+        "model.model.llm_profiles.planner.model_list",
+        "infra.infra.logging.filter",
+        "avatar.avatar.platform.enabled",
+    ]
+
+    def test_全scope字段键无幽灵且全局唯一(self) -> None:
+        result = _build_frontend_groups(_FakeConfigService({}))
+        all_keys: list[str] = []
+        for group in result["groups"]:
+            for field in _iter_all_fields(group["fields"]):
+                all_keys.append(field["key"])
+        for ghost in self.GHOST_KEYS:
+            assert ghost not in all_keys, f"幽灵字段键复活: {ghost}"
+        assert len(all_keys) == len(set(all_keys)), "字段键存在重复（同一字段被收集两次）"
+
+
+class TestDynamicInstanceFields:
+    """动态段实例枚举：采集器段与工具提供者实例按磁盘现值补进前端分组。"""
+
+    def setup_method(self) -> None:
+        from src.modules.config.registry import fill_component_schemas
+
+        fill_component_schemas()
+
+    def test_已注册采集器段展开typed子字段(self) -> None:
+        service = _FakeConfigService(
+            {"console_input": {"user_id": "u-42"}},
+            file_sections={
+                "collectors": {"meta": {}, "enabled": ["console_input"], "console_input": {"user_id": "u-42"}}
+            },
+        )
+        result = _build_frontend_groups(service)
+        collectors = next(g for g in result["groups"] if g["key"] == "collectors")
+        fields = _iter_all_fields(collectors["fields"])
+        leaf = next(f for f in fields if f["key"] == "collectors.console_input.user_id")
+        assert leaf["type"] == "string"
+        assert leaf["value"] == "u-42"
+
+    def test_未注册采集器段回退自由dict叶(self) -> None:
+        service = _FakeConfigService(
+            {"custom_thing": {"x": 1}},
+            file_sections={"collectors": {"custom_thing": {"x": 1}}},
+        )
+        result = _build_frontend_groups(service)
+        collectors = next(g for g in result["groups"] if g["key"] == "collectors")
+        leaf = next(f for f in collectors["fields"] if f["key"] == "collectors.custom_thing")
+        assert leaf["type"] == "object"
+        assert leaf.get("children") is None
+
+    def test_工具提供者实例展开enabled与typed_config(self) -> None:
+        config_value = {"base_url": "https://cn.bing.com/search", "timeout_ms": 10000}
+        service = _FakeConfigService(
+            {"tools": {"web": {"search": {"enabled": True, "config": config_value}}}},
+            file_sections={
+                "tools": {
+                    "meta": {"version": "2.0.38"},
+                    "tools": {"web": {"search": {"enabled": True, "config": config_value}}},
+                }
+            },
+        )
+        result = _build_frontend_groups(service)
+        tools = next(g for g in result["groups"] if g["key"] == "tools")
+        fields = _iter_all_fields(tools["fields"])
+        enabled = next(f for f in fields if f["key"] == "tools.tools.web.search.enabled")
+        assert enabled["type"] == "boolean"
+        assert enabled["value"] is True
+        base_url = next(f for f in fields if f["key"] == "tools.tools.web.search.config.base_url")
+        assert base_url["value"] == "https://cn.bing.com/search"
+
+    def test_磁盘缺省的注册表成员出卡走默认值(self, tmp_path) -> None:
+        """studio 磁盘为空但注册表在册 obs：分类出 obs 实例卡（首次保存时才写盘）。"""
+        service = _FakeConfigService(
+            {"tools": {"studio": {}}},
+            file_sections={"tools": {"tools": {"studio": {}}}},
+            base_dir=str(tmp_path),
+        )
+        result = _build_frontend_groups(service)
+        tools = next(g for g in result["groups"] if g["key"] == "tools")
+        fields = _iter_all_fields(tools["fields"])
+        enabled = next(f for f in fields if f["key"] == "tools.tools.studio.obs.enabled")
+        assert enabled["type"] == "boolean"
+        assert enabled["default"] is False  # 未落盘 = 未装配，开关默认关
+        assert "首次保存时创建" in (enabled["description"] or "")
+
+    def test_avatar域不按注册表兜底出卡(self, tmp_path) -> None:
+        """avatar 平台装配开关在 avatar.toml，tools.avatar 段不驱动装配：
+        磁盘缺段时工具包页不出 avatar 实例卡，避免用户编辑无效开关。"""
+        service = _FakeConfigService(
+            {"tools": {}},
+            file_sections={"tools": {"tools": {}}},
+            base_dir=str(tmp_path),
+        )
+        result = _build_frontend_groups(service)
+        tools = next(g for g in result["groups"] if g["key"] == "tools")
+        fields = _iter_all_fields(tools["fields"])
+        assert not any(f["key"].startswith("tools.tools.avatar.") for f in fields)
+
+    def test_分组透出文件meta版本号(self, tmp_path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "tools.toml").write_text('[meta]\nversion = "2.0.38"\n', encoding="utf-8")
+        service = _FakeConfigService({}, base_dir=str(tmp_path))
+        result = _build_frontend_groups(service)
+        tools = next(g for g in result["groups"] if g["key"] == "tools")
+        assert tools["version"] == "2.0.38"
 
 
 class TestFillArrayPlaceholders:

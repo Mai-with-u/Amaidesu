@@ -9,6 +9,7 @@ from collections import defaultdict
 import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
+import tomllib
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple, Union, get_args, get_origin
 
 from pydantic import BaseModel
@@ -302,6 +303,8 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
         "sensitive": is_sensitive,
         # 透传 schema_generator 从 json_schema_extra 解析出的 readonly 标记，与写接口的拒绝逻辑共用同一信号
         "readonly": bool(field.get("readonly", False)),
+        # x-ui-advanced 标记的字段（鉴权细节、重试参数等）由前端收进默认折叠的"高级"区
+        "advanced": bool(field.get("x-ui-advanced", False)),
     }
     validation: dict = {}
     for k in ("minValue", "maxValue", "options", "pattern"):
@@ -382,6 +385,9 @@ def _build_frontend_groups(config_service: "ConfigService") -> dict:
     每个根 Schema 一个分组；分组 label / 文件归属来自根类的自描述协议
     （``__section_label__`` / ``__file_name__``），无手写映射表。
     字段 key 在文件内路径前加 scope 前缀，与合并视图寻址一致。
+    静态 Schema 枚举不出的动态段实例（采集器段、工具提供者分类成员）
+    由 ``_dynamic_instance_fields`` 按磁盘现值补齐，读路径与写路径的
+    注册表下钻能力对称。
     """
 
     main_config = config_service.main_config or {}
@@ -394,14 +400,19 @@ def _build_frontend_groups(config_service: "ConfigService") -> dict:
         schema = ConfigSchemaGenerator.generate_config_schema(root_cls)
         collected = collect_all_fields(schema)
         leaf_fields = [f for f in collected if "." in str(f.get("key", ""))]
-        # 对象数组是一等可编辑字段（元素子字段树在 items.fields），与叶子一起进组
-        leaf_fields.extend(f for f in collected if f.get("type") == "array")
+        # 对象数组是一等可编辑字段（元素子字段树在 items.fields），与叶子一起进组。
+        # 只补 key 无点的顶级数组：含点数组已在叶子集合里，重复加入会让同一 dict
+        # 在下方前缀循环中被变异两次（scope 前缀翻倍，产出编辑即保存失败的幽灵子树）
+        leaf_fields.extend(f for f in collected if f.get("type") == "array" and "." not in str(f.get("key", "")))
         group_fields: list[dict] = []
         for field in leaf_fields:
             # 文件内路径 → scope 前缀的 API 键
             field["key"] = f"{scope}.{field['key']}"
             group_fields.append(_convert_to_api_field(field, main_config))
+        group_fields.extend(_dynamic_instance_fields(scope, config_service, main_config))
         group_fields = _group_into_children(group_fields)
+
+        version = _read_file_version(Path(config_service.base_dir) / "config", scope)
 
         groups.append(
             {
@@ -413,10 +424,163 @@ def _build_frontend_groups(config_service: "ConfigService") -> dict:
                 "fields": group_fields,
                 "file_name": root_cls.__file_name__,
                 "file_label": root_cls.__section_label__ or root_cls.__file_name__,
+                "version": version,
             }
         )
 
     return {"groups": groups, "version": "1.0.0"}
+
+
+# 动态段实例枚举（读路径）
+
+
+def _object_leaf_field(key: str, value: Any, description: str) -> dict:
+    """构造自由 dict 叶字段的 API 形态（无注册 Schema 时的 DictEditor 兜底）。"""
+    return {
+        "key": key,
+        "label": key.rsplit(".", 1)[-1],
+        "description": description,
+        "type": "object",
+        "default": None,
+        "value": value,
+        "required": False,
+        "sensitive": False,
+        "readonly": False,
+    }
+
+
+def _schema_instance_fields(prefix: str, schema_cls: type, main_config: dict) -> list[dict]:
+    """按注册表 Schema 展开 ``<prefix>.<字段路径>`` 的 typed 叶字段列表。"""
+    sub_schema = ConfigSchemaGenerator.generate_config_schema(schema_cls)
+    fields: list[dict] = []
+    for sub_field in collect_all_fields(sub_schema):
+        sub_field["key"] = f"{prefix}.{sub_field['key']}"
+        fields.append(_convert_to_api_field(sub_field, main_config))
+    return fields
+
+
+# 工具提供者枚举：注册表在册成员兜底出卡（缺段 = 首次保存时创建）仅适用于
+# 装配开关真正落在 tools.toml 的分类域。avatar 平台成员的装配态读
+# avatar.toml ``[avatar.platform]`` 名单（bootstrap._avatar_platform_state），
+# ``[tools.avatar.*]`` 不驱动装配——该域只展示磁盘上实际存在的段。
+TOOL_UNION_DOMAINS = tuple(d for d in TOOL_PROVIDER_DOMAINS if d != "avatar")
+
+
+def _dynamic_instance_fields(scope: str, config_service: "ConfigService", main_config: dict) -> list[dict]:
+    """按磁盘现值 + 注册表清单枚举动态段实例，补齐静态 Schema 枚举不到的字段。
+
+    - collectors 根（extra=allow）的各采集器配置段：候选名单取 enabled 字段
+      的 options（与装配同名），叠加磁盘上实际存在的段；有注册 Schema 的展开
+      typed 子字段树，未注册的回退自由 dict 叶；
+    - tools 分类域（studio/web 等注册表域）的提供者实例：注册表在册成员 ∪
+      磁盘实例，每个实例展开 enabled 开关叶 + config 子段（config 按
+      ``TOOL_PROVIDER_SCHEMAS`` 展开，未注册实例回退自由 dict 叶）。
+      avatar 域例外：装配开关不在 tools.toml，只展示磁盘实例（见
+      ``TOOL_UNION_DOMAINS``）。
+
+    磁盘上不存在的实例同样出卡（值回落 Schema 默认，enabled 默认关——
+    与 bootstrap「缺省不装配」语义一致），首次保存时才写入配置文件——
+    这是"新增提供者/采集器"的入口。注入的叶字段经 ``_group_into_children``
+    归位成容器；与静态 object 叶同 key 的（如空的 studio 分类）由容器的
+    "排除同 key 扁平字段"规则自然合并，无需特判。
+    """
+    file_section = config_service.get_file_section(scope)
+    if not isinstance(file_section, dict):
+        return []
+
+    fields: list[dict] = []
+    if scope == "collectors":
+        disk_names = [k for k in file_section if k not in ("meta", "enabled")]
+        known_names = _collector_candidate_names(scope, config_service)
+        for name in sorted(set(disk_names) | set(known_names)):
+            value = file_section.get(name)
+            if value is not None and not isinstance(value, dict):
+                continue
+            schema_cls = COMPONENT_SCHEMAS.get(name)
+            if schema_cls is None:
+                # 未注册且磁盘无段：无 Schema 可依据，不出卡；磁盘有段则 dict 叶兜底
+                if isinstance(value, dict):
+                    fields.append(
+                        _object_leaf_field(f"collectors.{name}", value, f"{name} 配置（未注册 Schema，键值对编辑）")
+                    )
+                continue
+            fields.extend(_schema_instance_fields(f"collectors.{name}", schema_cls, main_config))
+        return fields
+
+    if scope == "tools":
+        tools_section = file_section.get("tools")
+        if not isinstance(tools_section, dict):
+            return []
+        for domain in TOOL_PROVIDER_DOMAINS:
+            disk_members = tools_section.get(domain)
+            disk_keys = set(disk_members) if isinstance(disk_members, dict) else set()
+            union_keys = {k for d, k in TOOL_PROVIDER_SCHEMAS if d == domain} if domain in TOOL_UNION_DOMAINS else set()
+            for name in sorted(disk_keys | union_keys):
+                value = disk_members.get(name) if isinstance(disk_members, dict) else None
+                if value is not None and not isinstance(value, dict):
+                    continue
+                prefix = f"tools.tools.{domain}.{name}"
+                on_disk = isinstance(value, dict)
+                enabled_field = {
+                    "name": "enabled",
+                    "key": f"{prefix}.enabled",
+                    "label": "enabled",
+                    "type": "boolean",
+                    # 落盘实例展示现值；未落盘实例默认关——bootstrap 对缺段按未装配处理
+                    "default": on_disk,
+                    "description": "是否启用该工具提供者（开=其工具全部可见）"
+                    if on_disk
+                    else "尚未写入配置文件，首次保存时创建；开=其工具全部可见",
+                }
+                fields.append(_convert_to_api_field(enabled_field, main_config))
+                provider_schema = TOOL_PROVIDER_SCHEMAS.get((domain, name))
+                if provider_schema is None:
+                    fields.append(
+                        _object_leaf_field(
+                            f"{prefix}.config",
+                            value.get("config") if on_disk else None,
+                            f"{name} 提供者配置（未注册 Schema，键值对编辑）",
+                        )
+                    )
+                else:
+                    fields.extend(_schema_instance_fields(f"{prefix}.config", provider_schema, main_config))
+        return fields
+
+    return []
+
+
+def _collector_candidate_names(scope: str, config_service: "ConfigService") -> list[str]:
+    """采集器候选名单：根 Schema enabled 字段的 options（与装配侧同名清单同源）。"""
+    root_cls = resolve_root_schema(scope)
+    if root_cls is None:
+        return []
+    schema = ConfigSchemaGenerator.generate_config_schema(root_cls)
+    for field in schema.get("fields", []):
+        if field.get("name") == "enabled":
+            options = field.get("options") or []
+            return [str(o) for o in options]
+    return []
+
+
+def _read_file_version(config_dir: Path, file_stem: str) -> Optional[str]:
+    """直读配置文件 ``[meta].version``（加载期合并视图已剥离 meta，只能从文件取）。
+
+    Windows 编辑器常落 UTF-8 BOM，tomllib 拒绝带 BOM 字节，读取前剥除。
+    """
+    path = config_dir / f"{file_stem}.toml"
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raw = raw[3:]
+        data = tomllib.loads(raw.decode("utf-8"))
+    except Exception:
+        logger.warning(f"读取配置文件版本失败: {path}", exc=True)
+        return None
+    meta = data.get("meta")
+    version = meta.get("version") if isinstance(meta, dict) else None
+    return str(version) if version is not None else None
 
 
 # 写路径编排
