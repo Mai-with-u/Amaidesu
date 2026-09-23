@@ -34,7 +34,6 @@ from src.agents.minecraft.tools import (
     MinecraftToolProvider,
     build_get_work_log_spec,
     build_notebook_spec,
-    build_observation_spec,
     build_report_spec,
     build_todo_spec,
 )
@@ -324,8 +323,6 @@ class MinecraftAgent(BaseAgent):
         工具名按原始名后缀定位（server 特有知识留在此处）；通知订阅只在
         首次绑定建立（多订阅方通道，恢复重绑定不得重复入队）。
         """
-        # 连接恢复后能力目录可能变化，只作废静态查询缓存，保留已收到的观察原文。
-        self._mc_state.observations.invalidate_static()
         for spec in prov.list_tools():
             if spec.name.endswith("maicraft_task"):
                 prov.task_query_tool = spec.full_name
@@ -463,7 +460,6 @@ class MinecraftAgent(BaseAgent):
             build_notebook_spec(),
             build_get_work_log_spec(),
             build_report_spec(),
-            build_observation_spec(),
         ]
         if self._builder is not None:
             specs.extend(self._builder.provider.list_tools())
@@ -475,7 +471,6 @@ class MinecraftAgent(BaseAgent):
         "minecraft_todo": ["minecraft"],
         "minecraft_notebook": ["minecraft"],
         "minecraft_report": ["minecraft"],
-        "minecraft_observation": ["minecraft"],
         "minecraft_get_work_log": ["streamer"],
     }
 
@@ -672,9 +667,6 @@ class MinecraftAgent(BaseAgent):
 
                 observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
                 self._track_receipt(call.name, observation)
-                # 先登记真实受理回执，再决定模型看到的表示；大正文不会挤进下一轮输入。
-                if call.name != "minecraft_observation" and not observation.get("reused_observation"):
-                    observation = self._mc_state.observations.present(call.name, arguments, observation)
                 messages.append(
                     {
                         "role": "tool",
@@ -723,9 +715,6 @@ class MinecraftAgent(BaseAgent):
         """
         if self._tool_registry is None:
             return {"ok": False, "error": "工具执行失败：tool_registry 未注入", "tool": name}
-        cached = self._mc_state.observations.cached(name, arguments)
-        if cached is not None:
-            return cached
         result = await self._tool_registry.invoke(
             ToolInvocation(tool_name=name, arguments=arguments, source="minecraft-react", round_id=round_id)
         )
