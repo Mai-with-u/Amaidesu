@@ -5,7 +5,7 @@
 
 不建模游戏世界数据（health/food/坐标等）——那是 maicraft 执行层的事；
 maicraft 返回原样给 LLM 读，本状态只承载 Agent 自己的"指令 + 待办 + 记录"。
-任务上下文（用户命令原文、执行历史）在对话消息里，不在本状态。
+任务原始指令、执行阶段与步数由 MinecraftAgent 随逻辑任务保留，不属于这些可编辑工作文档。
 """
 
 from __future__ import annotations

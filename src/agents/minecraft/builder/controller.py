@@ -230,6 +230,20 @@ class MinecraftBuilderController:
         """设计完成后继续保留施工义务，供父 Agent 的交付门禁检查。"""
         return {task_id for job in self._jobs.values() if (task_id := job.pending_id())}
 
+    def actionable_ids(self) -> set[str]:
+        """设计完成但未开工、设计失败或施工待决策都需要父级处理，不能当作仍在后台运行。"""
+        return {
+            pending
+            for job in self._jobs.values()
+            if (pending := job.pending_id())
+            and (
+                job.status in {"failed", "timeout", "waiting_for_decision"}
+                or job.status == "succeeded"
+                and job.request.intent == "build"
+                and job.execution_status not in {"accepted", "running"}
+            )
+        }
+
     def set_paused(self, paused: bool) -> None:
         """父子共享暂停边界，不创建额外轮询协程。"""
         self._paused = paused

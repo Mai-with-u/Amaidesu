@@ -37,15 +37,19 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 暂停语义：平台 pause 在步骤间与工具调用间挂起（不打断当前执行中的工具调用），resume 后继续。
 
+后台唤醒会恢复同一逻辑任务的原始指令、待办、笔记和已受理任务编号。推理步数跨批次累计；到达上限或上报困难后，系统通知只能更新状态，新的主播指令才能恢复行动并重新给予有界预算。任务交付后，新指令建立新任务；通知不会独立创建游戏目标。
+
 ### 批次终止语义
 
 | # | 情形 | 行为 |
 |---|------|------|
-| 1 | LLM 调 `minecraft_report(kind=delivery)` | 停止；工具内交付门禁：有未决 handoff → 拒绝并返回错误观察（LLM 自纠） |
+| 1 | LLM 调 `minecraft_report(kind=delivery)` | 有未决 handoff 或未完成待办时拒绝交付，返回错误观察；通过门禁后停止 |
 | 2 | LLM 调 `minecraft_report(kind=escalation)` | 停止，静默等主播委派 |
-| 3 | 自然终止，无 report、无未决 handoff | 系统兜底把终止文本包装为一次 delivery（主播必收到一次且仅一次交付） |
-| 4 | 自然终止，有未决 handoff | 静默让出回合，等 handoff 唤醒 |
-| 5 | 步数超 max_steps | `game.attention_required` 挂起 |
+| 3 | 自然终止，无 report、无未决 handoff 且待办完成 | 系统兜底交付，并结算原委派任务 |
+| 4 | 自然终止，仅剩实际运行中的 handoff | 静默让出回合，等 handoff 唤醒 |
+| 5 | 步数超上限，或仍需行动却在提醒后继续停顿 | `game.attention_required` 挂起，保留原任务等待继续指令 |
+
+待决策、设计已交付但尚未施工、以及没有执行者推进的待办属于需要行动的状态。模型仅输出文本结束时，父循环先要求它调用工具推进或上报具体阻塞；连续不行动才挂起，不把这些状态误当作后台仍在运行。
 
 ### handoff 跟踪（受理 → 唤醒）
 
@@ -66,6 +70,7 @@ Minecraft Agent 把建筑设计委派给包内的 `MinecraftBuilderAgent`，收�
 建造生成不施加宿主的固定输出 token 上限；非正常结束或任一工具参数不完整时，整轮不执行并反馈重试。
 设计通过现有 Mod 场景操作创建、按名编辑和检查，受理后必须核实终态；对象编辑允许分次提交完整 JSON。
 子 Agent 不控制角色、不启动施工；设计交付后由父 Agent 按产物引用发起 Mod 施工任务，核实真实施工终态后才报告建好。
+用户已经要求建好且设计可用、符合要求时，父 Agent 继续备料与施工；用户只要求设计时保持只设计。审阅的成功回执必须结合实际可施工性判断，不能代替施工或产出验收。
 
 受理与结果复用通用任务账本，设计任务由执行 Agent 写入状态，施工任务由 Mod 查询适配器核实。
 设计结果保存在 Minecraft 当前会话，账本移除终态条目后仍可查询；完整建筑内容不随任务通知复制到父级对话。
@@ -94,7 +99,7 @@ Minecraft Agent 把建筑设计委派给包内的 `MinecraftBuilderAgent`，收�
 | 事件 | 触发 |
 |---|---|
 | `game.report` | LLM 调 `minecraft_report`（delivery/escalation）或批次终止系统兜底交付；kind 见 `GamePayload.report_kind` |
-| `game.attention_required` | 步数超上限挂起 |
+| `game.attention_required` | 步数超上限，或任务需要行动但模型经提醒仍未推进 |
 | `game.error` | 工具执行异常 / LLM 调用失败 / 无 LLM fail-fast |
 
 事件 payload 复用 `GamePayload`（`game="minecraft"`）；上报同时进内存 `recent_reports`（状态查询数据源，保留最近 10 条）。`game.milestone` 不再由本 Agent 发射（todo-diff 自动里程碑已移除，防主播叙事刷屏）。

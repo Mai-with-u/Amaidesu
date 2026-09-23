@@ -751,11 +751,13 @@ async def test_react_multi_tool_calls_batch_execute() -> None:
     )
     await agent.start()
     await agent.send_prompt("批量任务")
-    await _wait_until(lambda: calls == 2)
+    # 两个工具都执行后即可核对状态；仍有施工待办时，父循环可以继续提醒推进而不是虚报完成。
+    await _wait_until(lambda: calls >= 2)
 
     snapshot = agent.get_state_snapshot()
     assert snapshot["notebook"] == "笔记 A"
     assert snapshot["todo"] == [{"content": "任务 B", "status": "in_progress"}]
+    assert not snapshot["recent_reports"]
     await agent.stop()
 
 
@@ -1083,6 +1085,7 @@ async def test_design_completion_resumes_original_build_goal() -> None:
         await agent.send_prompt(instruction)
         await _wait_until(lambda: len(llm.captured) == 2)
         agent._mc_state.set_notebook("公共木料箱已定位")
+        assert any(task["task_id"] == "design-1" for task in agent._current_task_context()["background_tasks"])
         provider.task_states["design-1"].update(state="success", buildable=True)
         provider.fire_attention()
         await _wait_until(lambda: len(llm.captured) == 4)
@@ -1132,6 +1135,7 @@ async def test_unfinished_todos_block_natural_and_explicit_delivery() -> None:
                 ]
             ),
             _resp("完成了"),
+            _resp("仍然没有实际动作"),
         ]
     )
     bus = MagicMock()

@@ -567,9 +567,9 @@ class MinecraftAgent(BaseAgent):
         批次终止语义（五条，全部系统可判定）：
         1. LLM 调 minecraft_report(kind=delivery) → 停止（工具内交付门禁校验）
         2. LLM 调 minecraft_report(kind=escalation) → 停止，静默等主播委派
-        3. 自然终止，无 report、无未决 handoff → 系统兜底把终止文本包装为一次 delivery
-        4. 自然终止，有未决 handoff → 静默让出，等 handoff 唤醒
-        5. 步数超 max_steps → game.attention_required 挂起（不变）
+        3. 自然终止，无 report、无未决 handoff 且待办完成 → 系统兜底交付
+        4. 仅剩实际运行中的 handoff → 静默让出；待开工或待决策则提醒推进
+        5. 步数超 max_steps 或提醒后仍不行动 → 挂起，系统通知不能重给预算
         """
         if self._llm is None:
             await self.emit_error("无法执行任务：LLM 未注入")
@@ -613,6 +613,7 @@ class MinecraftAgent(BaseAgent):
         steps = 0
         mc_round = f"mc_{uuid.uuid4().hex[:12]}" if self._thinking_sink is not None else ""
         mc_seq_box = [0]
+        action_reminded = False
         while self._running:
             # 步骤间挂起（平台 pause）
             await self._paused.wait()
@@ -694,19 +695,32 @@ class MinecraftAgent(BaseAgent):
 
             # --- 自然终止（情形 3/4）：LLM 无 tool_calls ---
             if not tool_calls:
-                if self._pending_task_count() > 0:
+                pending = self._pending_task_count()
+                actionable = self._actionable_task_ids()
+                if actionable or not pending and self._unfinished_todos():
+                    # 已有设计等开工、任务等决策或仍有未派发待办时，等通知不会推进；先给模型一次纠正机会。
+                    if not action_reminded:
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": "[任务尚需行动] 仍有未完成待办或需要处理的后台任务："
+                                + ", ".join(sorted(actionable))
+                                + "。请调用工具推进下一阶段或处理决策；设计完成不等于已施工。确实无法推进时上报 escalation，不能只说完成或继续等待。",
+                            }
+                        )
+                        action_reminded = True
+                        continue
+                    self._task_suspended = True
+                    await self.emit_attention_required(
+                        "模型未推进需要行动的任务；已保留原目标、待办和任务编号，等待继续指令"
+                    )
+                    return
+                if pending > 0:
                     # 情形 4：有未决 handoff——静默让出回合，等 handoff 唤醒（零空耗）
                     self._logger.info(
                         f"任务批次自然终止（{steps} 步），{self._pending_task_count()} 个后台任务跟踪中，静默让出"
                     )
                 elif not self._task_reported:
-                    # 模型停说话不等于施工完毕；未完成待办须保留，不能包装成成功交付。
-                    if self._unfinished_todos():
-                        self._task_suspended = True
-                        await self.emit_attention_required(
-                            "模型停止行动，但还有未完成待办；已保留任务上下文，等待继续指令"
-                        )
-                        return
                     # 情形 3：无 report 无 handoff——系统兜底，主播必收到一次且仅一次交付
                     delivery = (response.content or "").strip()
                     await self._emit_report("delivery", delivery[:_MAX_DELIVERY_TEXT] if delivery else "任务完成")
@@ -718,6 +732,7 @@ class MinecraftAgent(BaseAgent):
                 return
 
             # --- 工具执行与观察作为观察返回 ---
+            action_reminded = False
             for call in tool_calls:
                 await self._paused.wait()
                 # 扁平 ToolCall：name/arguments(id 关联观察回填)；arguments 已是解析后的 dict
@@ -740,11 +755,22 @@ class MinecraftAgent(BaseAgent):
 
     def _current_task_context(self) -> Dict[str, Any]:
         """恢复原任务时附上玩家原文与工作阶段；只在批次起点恢复，不改工具观察的压缩策略。"""
+        progress = dict(self._task_progress)
+        ledger = getattr(self._task_tracker, "ledger", None)
+        if ledger is not None:
+            # accepted -> running 通常没有唤醒通知，仍须从现有账本带回已经受理的任务编号。
+            for task_id in ledger.active_task_ids():
+                record = ledger.get(task_id)
+                if record is not None and record.initiator == self.name:
+                    progress[task_id] = {**progress.get(task_id, {}), "task_id": task_id, "status": record.status}
+        if self._builder is not None:
+            for task_id in self._builder.pending_ids():
+                progress.setdefault(task_id, {"task_id": task_id, "status": "pending"})
         return {
             "original_instructions": list(self._task_instructions),
             "todo": self._mc_state.todo_doc()["todos"],
             "notebook": self._mc_state.notebook,
-            "background_tasks": list(self._task_progress.values()),
+            "background_tasks": list(progress.values()),
             "reasoning_steps_used": self._task_steps,
         }
 
@@ -860,6 +886,20 @@ class MinecraftAgent(BaseAgent):
                 if (rec := ledger.get(task_id)) is not None and rec.initiator == self.name
             )
         return len(pending)
+
+    def _actionable_task_ids(self) -> set[str]:
+        """等待施工启动或玩家决策的任务须继续处理；仅 accepted/running 才能静默等通知。"""
+        pending = self._builder.actionable_ids() if self._builder is not None else set()
+        ledger = getattr(self._task_tracker, "ledger", None)
+        if ledger is not None:
+            pending.update(
+                task_id
+                for task_id in ledger.active_task_ids()
+                if (record := ledger.get(task_id)) is not None
+                and record.initiator == self.name
+                and record.status == "waiting_for_decision"
+            )
+        return pending
 
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """task.changed 到达（发起方是自己）：注入快照消息 + 唤醒 worker。

@@ -415,10 +415,13 @@ async def test_design_completion_requires_real_construction(harness: Harness) ->
     task_id = await harness.request()
     await harness.finish_worker()
     assert harness.parent._pending_task_count() == 1
+    # 审阅完成后需要主动发起施工，不能睡等一个尚未创建的施工任务。
+    assert harness.parent._actionable_task_ids() == {task_id}
     assert await harness.parent._handle_report("delivery", "已经建好", "") is not None
     result = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "execute"})
     assert result.success, result.error_message
     receipt = result.structured_content
+    assert harness.parent._actionable_task_ids() == set(), "真实施工已受理时才可以等待后台进展"
     harness.parent._track_receipt("minecraft_builder_task", receipt)
     record = harness.tracker.ledger.get(receipt["task_id"])
     assert record.source == "provider" and record.provider == "maicraft"
@@ -744,7 +747,10 @@ async def test_invalid_named_edit_is_rejected_before_mod(harness: Harness) -> No
     assert harness.builder._jobs[task_id].result is None
 
 
-async def test_real_completion_event_wakes_parent_once_with_design_reference(harness: Harness) -> None:
+@pytest.mark.parametrize("stall_at_completion", [False, True])
+async def test_real_completion_event_wakes_parent_once_with_design_reference(
+    harness: Harness, stall_at_completion: bool
+) -> None:
     """任务完成走真实事件总线，父级不把本地任务号拿去 Mod 查询或自动报告建好。"""
     await harness.parent.stop()
     bus = EventBus()
@@ -763,7 +769,15 @@ async def test_real_completion_event_wakes_parent_once_with_design_reference(har
             result = valid_design()[design_calls]
             design_calls += 1
             return result
+        if any(item.get("tool_call_id") == "minecraft_builder_task" for item in messages):
+            parent_called.set()
+            return Response(success=True, content="施工已受理，等待真实进展", tool_calls=[])
         if any("minecraft_builder_task" in item.get("content", "") for item in messages if item["role"] == "user"):
+            if stall_at_completion:
+                # 模拟模型误以为设计结束后会自动施工；父循环应指出仍需行动，随后真的提交施工。
+                if any("[任务尚需行动]" in item.get("content", "") for item in messages):
+                    return response("minecraft_builder_task", {"task_id": changes[0].task_id, "action": "execute"})
+                return Response(success=True, content="继续等自动施工", tool_calls=[])
             parent_called.set()
             return Response(success=True, content="收到设计，尚未施工", tool_calls=[])
         if not any(item.get("role") == "tool" for item in messages):
@@ -790,6 +804,9 @@ async def test_real_completion_event_wakes_parent_once_with_design_reference(har
         assert changes[0].snapshot["result"]["artifact_ref"] == "draft-1"
         assert parent.get_state_snapshot()["recent_reports"] == []
         assert parent._pending_task_count() == 1
+        if stall_at_completion:
+            assert len(harness.mod.operations("build")) == 1
+            assert parent._actionable_task_ids() == set()
     finally:
         await parent.stop()
         await bus.cleanup()
