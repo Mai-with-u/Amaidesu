@@ -223,14 +223,17 @@ class SQLiteDatabase:
         self,
         sql: str,
         params: Any = (),
-    ) -> sqlite3.Row:
-        """执行 INSERT/UPDATE/DELETE 并 RETURNING 一行（如 last_insert_rowid）。"""
+    ) -> Optional[sqlite3.Row]:
+        """执行 INSERT/UPDATE/DELETE 并 RETURNING 一行（如 last_insert_rowid）。
 
-        def _exec() -> sqlite3.Row:
+        RETURNING 未产生行（如 DELETE 未命中任何行）时返回 ``None``，
+        调用方以 ``None`` 判定"无行受影响"。
+        """
+
+        def _exec() -> Optional[sqlite3.Row]:
             with self._manager.transaction() as conn:
                 cursor = conn.execute(sql, params if params is not None else ())
-                row = cursor.fetchone()
-                return row if row is not None else sqlite3.Row()  # type: ignore[arg-type]
+                return cursor.fetchone()
 
         return await self._run_in_executor(_exec)
 
