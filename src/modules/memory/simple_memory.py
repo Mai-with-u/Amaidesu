@@ -26,7 +26,9 @@ SimpleMemory —— 关键词召回实现
 - 不区分停用词（"的/了/是"会被当 2-gram 命中）
 - 无词性标注、无归一化（"弹幕"/"彈幕" 视为不同 token）
 
-对外接口 = ``recall``（召回）与 ``ingest``（写入），签名即承诺面。
+对外接口 = 召回/写入承诺面（``recall`` / ``ingest``，经 ``MemoryProvider``
+Protocol 面向 Agent 侧）+ 管理面（``list_facts`` / ``update_fact`` /
+``delete_fact`` / ``stats``，面向 WebUI 记忆管理页的检索与清理）。
 
 ## 存储说明
 本模块使用 SQLiteDatabase 数据库里 1 张**模块私有表**（``_`` 前缀表达"非业务
@@ -44,10 +46,10 @@ schema.py，避免两处 DDL 漂移。
 from __future__ import annotations
 
 import re
-from typing import Any, List
+from typing import Any, List, Optional, Tuple
 
 from src.modules.logging import get_logger
-from src.modules.memory.models import MemoryHit, MemoryWriteResult
+from src.modules.memory.models import MemoryFact, MemoryHit, MemoryStats, MemoryWriteResult
 from src.modules.memory.provider import MemoryProvider
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.time_utils import now_ms
@@ -206,16 +208,133 @@ class SimpleMemory(MemoryProvider):
         ts = int(timestamp_ms or now_ms())
         tags_str = ",".join(tags) if isinstance(tags, (list, tuple)) else (str(tags) if tags else "")
 
-        rows = await self._store.execute_returning(
+        row = await self._store.execute_returning(
             "INSERT INTO _memory_facts(text, source, tags, importance, timestamp_ms) "
             "VALUES (?, ?, ?, ?, ?) RETURNING id",
             (text, source, tags_str, int(importance), ts),
         )
-        try:
-            new_id = int(rows["id"])
-        except (KeyError, TypeError, ValueError):
-            new_id = -1
+        new_id = -1
+        if row is not None:
+            try:
+                new_id = int(row["id"])
+            except (KeyError, TypeError, ValueError):
+                new_id = -1
         return MemoryWriteResult(memory_id=new_id, accepted=True)
+
+    # -------------------- 管理面（WebUI 记忆管理页消费） --------------------
+
+    # 列表排序白名单：列名无法参数化，仅允许这几个确定性映射，防注入
+    _LIST_ORDER_COLUMNS = {"timestamp_ms": "timestamp_ms", "importance": "importance"}
+
+    @staticmethod
+    def _row_to_fact(row: Any) -> MemoryFact:
+        """``_memory_facts`` 查询行 → ``MemoryFact``（管理面统一投影）。"""
+        return MemoryFact(
+            memory_id=int(row["id"]),
+            text=str(row["text"]),
+            source=str(row["source"]),
+            tags=str(row["tags"]),
+            importance=int(row["importance"]),
+            timestamp_ms=int(row["timestamp_ms"]),
+        )
+
+    async def list_facts(
+        self,
+        *,
+        search: str = "",
+        order_by: str = "timestamp_ms",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[int, List[MemoryFact]]:
+        """管理面列表：搜索 + 排序 + 分页，返回 ``(命中总数, 当页行)``。
+
+        - ``search`` 非空时对 text / source / tags 做 LIKE 匹配（单关键词，
+          与 recall 同为子串语义）
+        - ``order_by`` 仅接受 ``timestamp_ms`` / ``importance``（白名单），
+          其余值回落 ``timestamp_ms``；同为倒序
+        - ``limit`` 收敛到 1..200，``offset`` 非负
+        """
+        where = ""
+        params: List[Any] = []
+        keyword = search.strip()
+        if keyword:
+            where = "WHERE text LIKE ? OR source LIKE ? OR tags LIKE ?"
+            like = f"%{keyword}%"
+            params = [like, like, like]
+
+        order_col = self._LIST_ORDER_COLUMNS.get(order_by, "timestamp_ms")
+
+        total_row = await self._store.execute_fetchone(
+            f"SELECT COUNT(*) AS n FROM _memory_facts {where}", tuple(params)
+        )
+        total = int(total_row["n"]) if total_row is not None else 0
+
+        rows = await self._store.execute(
+            f"SELECT id, text, source, tags, importance, timestamp_ms FROM _memory_facts {where} "
+            f"ORDER BY {order_col} DESC, id DESC LIMIT ? OFFSET ?",
+            tuple(params) + (max(1, min(int(limit), 200)), max(0, int(offset))),
+        )
+        return total, [self._row_to_fact(row) for row in rows]
+
+    async def update_fact(
+        self,
+        memory_id: int,
+        *,
+        text: Optional[str] = None,
+        tags: Any = None,
+        importance: Optional[int] = None,
+    ) -> bool:
+        """管理面更新：仅落给定的字段（``None`` = 保持不变），返回是否有行被更新。
+
+        - ``text`` 传空白串视为无效更新（记忆条目不允许空文本），返回 ``False``
+        - ``tags`` 传列表/元组 → 逗号连接覆盖；空列表 → 清空；其余按字符串覆盖
+        - id 不存在或无任何字段给出 → 返回 ``False``
+        """
+        assignments: List[str] = []
+        params: List[Any] = []
+        if text is not None:
+            stripped = text.strip()
+            if not stripped:
+                return False
+            assignments.append("text = ?")
+            params.append(stripped)
+        if tags is not None:
+            assignments.append("tags = ?")
+            params.append(",".join(tags) if isinstance(tags, (list, tuple)) else str(tags))
+        if importance is not None:
+            assignments.append("importance = ?")
+            params.append(int(importance))
+        if not assignments:
+            return False
+        params.append(int(memory_id))
+        row = await self._store.execute_returning(
+            f"UPDATE _memory_facts SET {', '.join(assignments)} WHERE id = ? RETURNING id",
+            tuple(params),
+        )
+        return row is not None
+
+    async def delete_fact(self, memory_id: int) -> bool:
+        """管理面删除：返回是否确有行被删除（id 不存在时 ``False``，幂等安全）。"""
+        row = await self._store.execute_returning(
+            "DELETE FROM _memory_facts WHERE id = ? RETURNING id",
+            (int(memory_id),),
+        )
+        return row is not None
+
+    async def stats(self) -> MemoryStats:
+        """管理面统计：总数 + 各来源计数（降序）+ 最新写入时刻（空库为 0）。"""
+        total_row = await self._store.execute_fetchone(
+            "SELECT COUNT(*) AS n, MAX(timestamp_ms) AS latest FROM _memory_facts"
+        )
+        total = int(total_row["n"]) if total_row is not None else 0
+        latest_raw = total_row["latest"] if total_row is not None else None
+        latest_ms = int(latest_raw) if latest_raw is not None else 0
+
+        source_rows = await self._store.execute(
+            "SELECT source, COUNT(*) AS n FROM _memory_facts GROUP BY source ORDER BY n DESC"
+        )
+        sources = [(str(row["source"]), int(row["n"])) for row in source_rows]
+        return MemoryStats(total_facts=total, sources=sources, latest_ms=latest_ms)
 
 
 __all__ = ["SimpleMemory"]

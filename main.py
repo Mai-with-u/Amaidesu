@@ -774,6 +774,8 @@ async def create_app_components(
             # 观众域只读消费面：列表 / 档案 / 对话 / 贡献聚合直查存储层
             viewer_repo=database.viewers,
             chat_repo=database.chat,
+            # 记忆栈实例：/api/v1/memory/* 管理面与 Agent 共用同一 SimpleMemory
+            memory=memory,
         )
 
     # Dashboard 字幕后端注册：StreamerAgent 与 Dashboard 共享同一
@@ -1019,6 +1021,7 @@ async def _start_dashboard(
     rundown_repo=None,
     viewer_repo=None,
     chat_repo=None,
+    memory=None,
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
@@ -1044,6 +1047,8 @@ async def _start_dashboard(
             # 观众域仓储：统计表（viewers）与明细三表（live_chat 族）
             viewer_repo=viewer_repo,
             chat_repo=chat_repo,
+            # 记忆栈实例：/api/v1/memory/* 管理面（检索/增改/删除/召回测试）
+            memory=memory,
             # 事件历史服务所有权在 EventHistoryRecorder，这里共享引用供
             # REST（/events、/traces）与 WS（events.history 推送）读取
             event_history=(event_recorder.event_history if event_recorder else None),

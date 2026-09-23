@@ -14,6 +14,7 @@ from src.modules.dashboard.api import (
     debug,
     events,
     llm,
+    memory,
     rundown,
     rundowns,
     sessions,
@@ -31,7 +32,7 @@ def create_app() -> FastAPI:
 
     路由域：system / components / config / debug / llm / tools / events /
     rundown / rundowns / streamer / simulator / live-sessions / viewers /
-    agents / vision，全部挂在 ``/api/v1`` 前缀下。
+    agents / vision / memory，全部挂在 ``/api/v1`` 前缀下。
     """
     app = FastAPI(
         title="Amaidesu Dashboard API",
@@ -64,6 +65,9 @@ def create_app() -> FastAPI:
 
     # Agent 控制面（运行态观测 + 框架级控制）
     app.include_router(agents.router, prefix="/api/v1/agents", tags=["Agents"])
+
+    # 记忆管理面（列表检索 / 手工增改 / 删除 / 召回测试 / 统计）
+    app.include_router(memory.router, prefix="/api/v1/memory", tags=["Memory"])
 
     # 视觉感知端点（mss 显示器枚举 + 预览抓帧），无 VLM / 不缓存
     app.include_router(vision.router, prefix="/api/v1/vision", tags=["Vision"])

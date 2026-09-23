@@ -5,6 +5,11 @@ MemoryProvider / SimpleMemory 单元测试
 - MemoryProvider 接口（Protocol）可被实现/检查
 - SimpleMemory（SQLite 关键词召回）：
   - ingest 写入后 recall 能命中
+- SimpleMemory 管理面（WebUI 记忆管理页消费）：
+  - list_facts 搜索 / 排序白名单 / 分页 / total 全计数
+  - update_fact 部分更新语义（None 不动 / tags 覆盖与清空 / 空文本拒绝）
+  - delete_fact 幂等（重复删除 False）
+  - stats 总数 / 来源计数 / 最新写入
 - query_memory 工具：注册入 ToolRegistry 后 invoke 返回文本
 - CJK 召回（CJK-aware ``_extract_keywords``）：
   - 中文短句 query 能召回已 ingest 的中文事实（主场景：弹幕直播间）
@@ -336,3 +341,152 @@ async def test_recall_cjk_topk_limits_results(memory: SimpleMemory) -> None:
         await memory.ingest(f"弹幕互动 笔记{i}", source=f"test{i}")
     hits = await memory.recall("弹幕互动", top_k=2)
     assert len(hits) == 2
+
+
+# =============================================================================
+# SimpleMemory 管理面（WebUI 记忆管理页消费：列表 / 更新 / 删除 / 统计）
+# =============================================================================
+
+
+async def _seed_facts(memory: SimpleMemory, count: int = 5) -> None:
+    """造数：交替来源与重要度，便于排序 / 搜索断言。"""
+    for i in range(count):
+        await memory.ingest(
+            f"事实条目{i} 关键词kw{i}",
+            source="seed" if i % 2 == 0 else "webui",
+            importance=i,
+            tags=[f"tag{i}"],
+        )
+
+
+async def test_list_facts_total_and_pagination(memory: SimpleMemory) -> None:
+    """total 为全计数，limit/offset 切页。"""
+    await _seed_facts(memory, 5)
+    total, page1 = await memory.list_facts(limit=2, offset=0)
+    total2, page2 = await memory.list_facts(limit=2, offset=2)
+    assert total == 5
+    assert total2 == 5
+    assert len(page1) == 2
+    assert len(page2) == 2
+    # 默认按 timestamp_ms 倒序：后写入的在前面（id 递增）
+    assert page1[0].memory_id > page1[1].memory_id
+    assert page2[0].memory_id < page1[-1].memory_id
+
+
+async def test_list_facts_search_matches_text_source_tags(memory: SimpleMemory) -> None:
+    """search 单关键词对 text / source / tags 三列 LIKE。"""
+    await memory.ingest("主播喜欢的游戏是 Minecraft", source="seed")
+    await memory.ingest("另一条", source="minecraft")
+    await memory.ingest("第三条", source="seed", tags=["minecraft"])
+    await memory.ingest("无关条目", source="seed")
+
+    total, facts = await memory.list_facts(search="minecraft")
+    assert total == 3
+    assert {f.memory_id for f in facts} >= {1, 2, 3}
+
+
+async def test_list_facts_order_by_importance(memory: SimpleMemory) -> None:
+    """order_by=importance 按重要度倒序。"""
+    await _seed_facts(memory, 5)
+    _, facts = await memory.list_facts(order_by="importance", limit=3)
+    importances = [f.importance for f in facts]
+    assert importances == sorted(importances, reverse=True)
+    assert importances[0] == 4
+
+
+async def test_list_facts_order_whitelist_falls_back(memory: SimpleMemory) -> None:
+    """白名单外的 order_by 回落 timestamp_ms（不抛错、不注入）。"""
+    await _seed_facts(memory, 3)
+    _, facts = await memory.list_facts(order_by="1; DROP TABLE _memory_facts")
+    assert len(facts) == 3
+    assert await memory._store.table_exists("_memory_facts") is True
+    assert [f.memory_id for f in facts] == sorted((f.memory_id for f in facts), reverse=True)
+
+
+async def test_list_facts_limit_clamped(memory: SimpleMemory) -> None:
+    """limit 收敛到 1..200、offset 非负（防御异常入参）。"""
+    await _seed_facts(memory, 3)
+    _, facts = await memory.list_facts(limit=999)
+    assert len(facts) == 3
+    _, facts = await memory.list_facts(limit=0)
+    assert len(facts) == 1
+    total, _ = await memory.list_facts(offset=-5)
+    assert total == 3
+
+
+async def test_update_fact_partial_fields(memory: SimpleMemory) -> None:
+    """只更新给定字段，未提及字段保持不变。"""
+    res = await memory.ingest("原始文本", source="seed", importance=3, tags=["旧"])
+    fact_id = res.memory_id
+
+    assert await memory.update_fact(fact_id, importance=9) is True
+    _, facts = await memory.list_facts(search="原始文本")
+    assert facts[0].importance == 9
+    assert facts[0].text == "原始文本"
+    assert facts[0].tags == "旧"
+    assert facts[0].source == "seed"
+
+
+async def test_update_fact_tags_semantics(memory: SimpleMemory) -> None:
+    """tags 列表覆盖、空列表清空、字符串原样覆盖。"""
+    res = await memory.ingest("标签语义", tags=["a", "b"])
+    fact_id = res.memory_id
+
+    await memory.update_fact(fact_id, tags=["x", "y"])
+    _, facts = await memory.list_facts(search="标签语义")
+    assert facts[0].tags == "x,y"
+
+    await memory.update_fact(fact_id, tags=[])
+    _, facts = await memory.list_facts(search="标签语义")
+    assert facts[0].tags == ""
+
+    await memory.update_fact(fact_id, tags="单串")
+    _, facts = await memory.list_facts(search="标签语义")
+    assert facts[0].tags == "单串"
+
+
+async def test_update_fact_empty_text_rejected(memory: SimpleMemory) -> None:
+    """空白文本更新被拒绝（返回 False，原文本保留）。"""
+    res = await memory.ingest("保留原文")
+    assert await memory.update_fact(res.memory_id, text="   ") is False
+    _, facts = await memory.list_facts(search="保留原文")
+    assert facts[0].text == "保留原文"
+
+
+async def test_update_fact_no_fields_returns_false(memory: SimpleMemory) -> None:
+    """无任何字段给出 → False（无事可做）。"""
+    res = await memory.ingest("无字段更新")
+    assert await memory.update_fact(res.memory_id) is False
+
+
+async def test_update_delete_missing_id_returns_false(memory: SimpleMemory) -> None:
+    """id 不存在时 update / delete 都返回 False（幂等安全）。"""
+    assert await memory.update_fact(424242, text="改") is False
+    assert await memory.delete_fact(424242) is False
+
+
+async def test_delete_fact_removes_row(memory: SimpleMemory) -> None:
+    """删除后行消失，重复删除返回 False。"""
+    res = await memory.ingest("待删除条目")
+    fact_id = res.memory_id
+    assert await memory.delete_fact(fact_id) is True
+    total, _ = await memory.list_facts(search="待删除条目")
+    assert total == 0
+    assert await memory.delete_fact(fact_id) is False
+
+
+async def test_stats_shape(memory: SimpleMemory) -> None:
+    """统计：总数 / 来源计数降序 / 最新写入时刻；空库 latest_ms=0。"""
+    empty = await memory.stats()
+    assert empty.total_facts == 0
+    assert empty.sources == []
+    assert empty.latest_ms == 0
+
+    # 计数刻意不打平：避免 GROUP BY 平序时行序不稳定
+    for i in range(3):
+        await memory.ingest(f"seed 来源条目{i}", source="seed")
+    await memory.ingest("webui 来源条目", source="webui")
+    stats = await memory.stats()
+    assert stats.total_facts == 4
+    assert stats.sources == [("seed", 3), ("webui", 1)]
+    assert stats.latest_ms > 0

@@ -26,6 +26,10 @@
           <el-icon><Tools /></el-icon>
           <span>工具</span>
         </el-menu-item>
+        <el-menu-item index="/memory">
+          <el-icon><Collection /></el-icon>
+          <span>记忆</span>
+        </el-menu-item>
         <el-menu-item index="/eventlog">
           <el-icon><Document /></el-icon>
           <span>事件流</span>
@@ -99,6 +103,7 @@ import {
   List,
   MagicStick,
   User,
+  Collection,
 } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/stores';
 import ChangelogDialog from './ChangelogDialog.vue';

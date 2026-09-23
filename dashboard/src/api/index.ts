@@ -63,6 +63,14 @@ import type {
   ViewerDialogueResponse,
   ViewerContributions,
   ViewerSessionsResponse,
+  MemoryFactListResponse,
+  MemoryFactCreatePayload,
+  MemoryFactCreateResponse,
+  MemoryFactUpdatePayload,
+  MemoryMutationResponse,
+  MemoryStatsResponse,
+  MemoryRecallPayload,
+  MemoryRecallResponse,
   WebSocketMessage,
 } from '@/types';
 
@@ -301,6 +309,27 @@ export const rundownApi = {
     api.post<RundownMutateResponse>(`/rundowns/${rundownId}/duplicate`),
   activate: (rundownId: string) =>
     api.post<RundownMutateResponse>(`/rundowns/${rundownId}/activate`),
+};
+
+// 记忆管理（_memory_facts 管理消费面）
+//
+// 读写全部经后端 SimpleMemory 管理面（私有表契约：仅 SimpleMemory 触碰该表）。
+// `GET /memory/facts`：列表（搜索 / 排序白名单 / 分页，total 全计数）。
+// `POST /memory/facts`：手工新增（source 固定 webui）。
+// `PATCH / DELETE /memory/facts/{id}`：部分更新（缺省字段不变）/ 删除。
+// `POST /memory/recall`：召回测试，与 Agent 侧 query_memory 工具同链路。
+// `GET /memory/stats`：总量统计（总数 / 来源计数 / 最新写入）。
+export const memoryApi = {
+  listFacts: (params?: { search?: string; order_by?: string; limit?: number; offset?: number }) =>
+    api.get<MemoryFactListResponse>('/memory/facts', { params }),
+  createFact: (payload: MemoryFactCreatePayload) =>
+    api.post<MemoryFactCreateResponse>('/memory/facts', payload),
+  updateFact: (id: number, payload: MemoryFactUpdatePayload) =>
+    api.patch<MemoryMutationResponse>(`/memory/facts/${id}`, payload),
+  deleteFact: (id: number) => api.delete<MemoryMutationResponse>(`/memory/facts/${id}`),
+  recall: (payload: MemoryRecallPayload) =>
+    api.post<MemoryRecallResponse>('/memory/recall', payload),
+  getStats: () => api.get<MemoryStatsResponse>('/memory/stats'),
 };
 
 export default api;
