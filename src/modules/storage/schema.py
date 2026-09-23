@@ -1,9 +1,8 @@
 """
 存储 Schema 定义
 
-本模块是全部 SQLite 表的**单一事实源**：13 张业务表（10 张核心直播表 +
-2 张模拟器运行时表 + 1 张流程单表）+ 模块私有表（当前为 SimpleMemory 的
-``_memory_facts``）+ ``schema_migrations``。
+本模块是全部 SQLite 表的**单一事实源**：16 张业务表（11 张核心直播表 +
+2 张模拟器运行时表 + 1 张流程单表 + 2 张观众画像表）+ ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
 表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
 
@@ -18,9 +17,22 @@
   回复了哪条观众弹幕"的关联键（互动分析数据面）
 - ``live_chat.sender_role`` 取值：``viewer``（观众弹幕）/ ``assistant``（主播
   发言）/ ``partner``（联动对象发言——不计观众统计）
-- ``live_chat`` / ``gifts`` / ``super_chats`` 表加 ``simulated`` 贯穿列
-  （模拟数据用 False 默认 / True 标记，消费方 WHERE ``simulated=0`` 排除模拟数据）
-- 模块私有表以 ``_`` 前缀命名，表达"非业务数据平面、仅所属模块读写"
+- ``live_chat`` / ``gifts`` / ``super_chats`` / ``guards`` 表加 ``simulated``
+  贯穿列（模拟数据用 False 默认 / True 标记，消费方 WHERE ``simulated=0``
+  排除模拟数据）；``simulated`` 与 ``platform`` 正交——模拟器造的是 B 站
+  格式数据（platform=bilibili + simulated=1），过滤假数据靠 simulated
+- **观众身份键 = ``(platform, user_id)`` 复合键**（观众画像/统计/明细表统一）。
+  platform 是本项目自定的稳定键：平台名（``bilibili`` / ``douyin`` / …）+
+  调试保留字（``console`` / ``simulator``），由采集器作为装配期常量注入。
+  不同平台账号视为不同的人，付费/统计天然按平台隔离，不跨平台聚合
+- 付费明细三表（gifts / super_chats / guards）金额单位 = **平台最小虚拟
+  货币单位**（B 站金瓜子，1000 金瓜子 = 1 元），取值口径 = 标价（实付另记
+  ``paid_price``）；``currency`` 带平台前缀（``bilibili_gold_coin`` /
+  ``bilibili_silver_coin``），银瓜子（免费礼物）照常落库、付费统计按
+  currency 过滤。付费事件不可复刻，三表存 ``raw_data`` 兜底（可修复解析后
+  重放补数）；弹幕可复刻故不存
+- 所有数据库表统一纳管：无 ``_`` 私有前缀表（私有表机制已废除——伪隔离，
+  物理同库无隔离机制，且"免检"是伪豁免）
 
 ## Schema 迁移机制
 - ``schema_migrations(version PK, applied_at_ms)``
@@ -29,9 +41,8 @@
   条目）。``SQLiteDatabase`` 推进版本时从注册表按序执行；回调原地修改、幂等，
   用列存在性检查保证对新建库与已迁移库安全
 - ``build_schema_sql()`` 返回完整建表 DDL（IF NOT EXISTS 幂等，含最新列）
-- ``list_expected_tables()`` 返回启动自检必须存在的业务表名（不含私有表：
-  私有表随所属模块后端启用与否而变化，不纳入"缺一即拒启"的闸门）
-- ``list_private_tables()`` 返回模块私有表名（所属模块自检用）
+- ``list_expected_tables()`` 返回启动自检必须存在的业务表名（缺一即拒启）
+- 私有表机制已废除：所有表都进 ``list_expected_tables()`` 统一闸门
 """
 
 from __future__ import annotations
@@ -39,18 +50,21 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 9
+SCHEMA_VERSION: int = 10
 
 
 # =============================================================================
-# 业务表 + 模块私有表 + schema_migrations
+# 业务表 + schema_migrations
 # =============================================================================
 # - live_sessions           场次 + 直播实时状态（一场一行）
 # - live_chat               全量直播消息流（行业 live chat）
 # - gifts                   礼物明细（独立副表）
 # - super_chats             SC 明细（独立副表）
+# - guards                  大航海开通/续费明细（购买事件表）
 # - topics                  话题（每行一个，1NF）
 # - viewers                 观众统计（跨场客观数字）
+# - viewer_facts            观众事实（画像原料：从弹幕/SC 提取的"关于观众的事实"）
+# - viewer_profiles         观众画像（LLM 压缩后的画像文本，主播认人的依据）
 # - game_events             游戏里程碑事件
 # - timeline_summary        摘要层
 # - llm_usage               LLM 调用记录
@@ -58,7 +72,6 @@ SCHEMA_VERSION: int = 9
 # - sim_personas            模拟器常驻观众人设（运行时数据，WebUI 管理）
 # - sim_gifts               模拟器礼物目录（运行时数据，WebUI 管理）
 # - rundowns                流程单（rundown 子系统）
-# - _memory_facts           SimpleMemory 事实记忆（模块私有）
 # - schema_migrations       版本管理
 # =============================================================================
 
@@ -78,11 +91,20 @@ def build_schema_sql() -> str:
         # super_chats —— SC 明细（带 simulated 贯穿列）
         + _SUPER_CHATS_SQL
         + "\n"
+        # guards —— 大航海开通/续费明细
+        + _GUARDS_SQL
+        + "\n"
         # topics —— 话题
         + _TOPICS_SQL
         + "\n"
         # viewers —— 观众统计
         + _VIEWERS_SQL
+        + "\n"
+        # viewer_facts —— 观众事实（画像原料）
+        + _VIEWER_FACTS_SQL
+        + "\n"
+        # viewer_profiles —— 观众画像
+        + _VIEWER_PROFILES_SQL
         + "\n"
         # rundowns —— 流程单
         + _RUNDOWNS_SQL
@@ -105,9 +127,6 @@ def build_schema_sql() -> str:
         # sim_gifts —— 模拟器礼物目录
         + _SIM_GIFTS_SQL
         + "\n"
-        # _memory_facts —— SimpleMemory 模块私有表（含索引）
-        + _MEMORY_FACTS_SQL
-        + "\n"
         # schema_migrations —— 版本管理
         + _SCHEMA_MIGRATIONS_SQL
     )
@@ -120,8 +139,11 @@ def list_expected_tables() -> List[str]:
         "live_chat",
         "gifts",
         "super_chats",
+        "guards",
         "topics",
         "viewers",
+        "viewer_facts",
+        "viewer_profiles",
         "rundowns",
         "game_events",
         "timeline_summary",
@@ -130,13 +152,6 @@ def list_expected_tables() -> List[str]:
         "sim_personas",
         "sim_gifts",
         "schema_migrations",
-    ]
-
-
-def list_private_tables() -> List[str]:
-    """返回模块私有表名（``_`` 前缀），供所属模块自检；不进入启动闸门。"""
-    return [
-        "_memory_facts",
     ]
 
 
@@ -168,6 +183,7 @@ CREATE TABLE IF NOT EXISTS live_chat (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     live_session_id  INTEGER NOT NULL,
     timestamp_ms     INTEGER NOT NULL,
+    platform         TEXT NOT NULL DEFAULT '',
     sender_role      TEXT NOT NULL,
     sender_id        TEXT,
     sender_name      TEXT,
@@ -184,29 +200,78 @@ CREATE INDEX IF NOT EXISTS idx_live_chat_session_ts ON live_chat(live_session_id
 
 _GIFTS_SQL = """
 CREATE TABLE IF NOT EXISTS gifts (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    timestamp_ms     INTEGER NOT NULL,
-    user_id          TEXT NOT NULL,
-    user_name        TEXT NOT NULL,
-    gift_name        TEXT NOT NULL,
-    gift_count       INTEGER NOT NULL,
-    simulated        INTEGER NOT NULL DEFAULT 0
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id   INTEGER NOT NULL,
+    timestamp_ms      INTEGER NOT NULL,
+    platform          TEXT NOT NULL DEFAULT '',
+    user_id           TEXT NOT NULL,
+    user_name         TEXT NOT NULL,
+    gift_id           INTEGER NOT NULL DEFAULT 0,
+    gift_name         TEXT NOT NULL,
+    quantity          INTEGER NOT NULL,
+    unit_price        INTEGER NOT NULL DEFAULT 0,
+    total_price       INTEGER NOT NULL DEFAULT 0,
+    paid_price        INTEGER NOT NULL DEFAULT 0,
+    currency          TEXT NOT NULL DEFAULT '',
+    guard_level       INTEGER NOT NULL DEFAULT 0,
+    fans_medal_level  INTEGER NOT NULL DEFAULT 0,
+    fans_medal_name   TEXT NOT NULL DEFAULT '',
+    combo_id          TEXT NOT NULL DEFAULT '',
+    combo_count       INTEGER NOT NULL DEFAULT 0,
+    combo_gift        INTEGER NOT NULL DEFAULT 0,
+    blind_gift_id     INTEGER NOT NULL DEFAULT 0,
+    msg_id            TEXT NOT NULL DEFAULT '',
+    raw_data          TEXT,
+    simulated         INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_gifts_user ON gifts(user_id);
 """.strip()
 
 
 _SUPER_CHATS_SQL = """
 CREATE TABLE IF NOT EXISTS super_chats (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL,
-    timestamp_ms     INTEGER NOT NULL,
-    user_id          TEXT NOT NULL,
-    user_name        TEXT NOT NULL,
-    amount           REAL NOT NULL,
-    message          TEXT NOT NULL,
-    simulated        INTEGER NOT NULL DEFAULT 0
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id   INTEGER NOT NULL,
+    timestamp_ms      INTEGER NOT NULL,
+    platform          TEXT NOT NULL DEFAULT '',
+    user_id           TEXT NOT NULL,
+    user_name         TEXT NOT NULL,
+    message           TEXT NOT NULL,
+    total_price       INTEGER NOT NULL DEFAULT 0,
+    currency          TEXT NOT NULL DEFAULT '',
+    start_time        INTEGER NOT NULL DEFAULT 0,
+    end_time          INTEGER NOT NULL DEFAULT 0,
+    guard_level       INTEGER NOT NULL DEFAULT 0,
+    fans_medal_level  INTEGER NOT NULL DEFAULT 0,
+    fans_medal_name   TEXT NOT NULL DEFAULT '',
+    message_id        TEXT NOT NULL DEFAULT '',
+    raw_data          TEXT,
+    simulated         INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_super_chats_user ON super_chats(user_id);
+""".strip()
+
+
+_GUARDS_SQL = """
+CREATE TABLE IF NOT EXISTS guards (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id   INTEGER NOT NULL,
+    timestamp_ms      INTEGER NOT NULL,
+    platform          TEXT NOT NULL DEFAULT '',
+    user_id           TEXT NOT NULL,
+    user_name         TEXT NOT NULL,
+    guard_level       INTEGER NOT NULL DEFAULT 0,
+    guard_num         INTEGER NOT NULL DEFAULT 0,
+    guard_unit        TEXT NOT NULL DEFAULT '',
+    total_price       INTEGER NOT NULL DEFAULT 0,
+    currency          TEXT NOT NULL DEFAULT '',
+    fans_medal_level  INTEGER NOT NULL DEFAULT 0,
+    fans_medal_name   TEXT NOT NULL DEFAULT '',
+    msg_id            TEXT NOT NULL DEFAULT '',
+    raw_data          TEXT,
+    simulated         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_guards_user ON guards(user_id);
 """.strip()
 
 
@@ -227,13 +292,53 @@ CREATE TABLE IF NOT EXISTS topics (
 _VIEWERS_SQL = """
 CREATE TABLE IF NOT EXISTS viewers (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id             TEXT NOT NULL UNIQUE,
+    platform            TEXT NOT NULL DEFAULT '',
+    user_id             TEXT NOT NULL,
     user_name           TEXT NOT NULL,
     message_count       INTEGER NOT NULL DEFAULT 0,
     gift_count          INTEGER NOT NULL DEFAULT 0,
     replied_count       INTEGER NOT NULL DEFAULT 0,
     interaction_count   INTEGER NOT NULL DEFAULT 0,
-    last_active_ms      INTEGER NOT NULL
+    paid_count          INTEGER NOT NULL DEFAULT 0,
+    paid_amount         INTEGER NOT NULL DEFAULT 0,
+    last_active_ms      INTEGER NOT NULL,
+    UNIQUE(platform, user_id)
+);
+""".strip()
+
+
+# --- viewer_facts —— 观众事实（画像原料）---
+# 每行一条"关于某观众的事实"（由后台循环从弹幕/SC 批提取），归属程序化：
+# 提取输出 message_id → 批内消息 → (platform, user_id)，不靠 LLM 报人名。
+# 身份快照/付费明细等结构化原料直读明细表，不入本表。
+
+_VIEWER_FACTS_SQL = """
+CREATE TABLE IF NOT EXISTS viewer_facts (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform           TEXT NOT NULL,
+    user_id            TEXT NOT NULL,
+    fact_text          TEXT NOT NULL,
+    source_message_id  TEXT NOT NULL DEFAULT '',
+    created_at_ms      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_viewer_facts_identity ON viewer_facts(platform, user_id);
+CREATE INDEX IF NOT EXISTS idx_viewer_facts_created ON viewer_facts(created_at_ms);
+""".strip()
+
+
+# --- viewer_profiles —— 观众画像 ---
+# 每观众一行 LLM 压缩画像；``last_compressed_at_ms`` 是增量压缩水位
+# （只把水位后的新原料喂给下次压缩）。有画像才注入 planner——主播由此认人。
+
+_VIEWER_PROFILES_SQL = """
+CREATE TABLE IF NOT EXISTS viewer_profiles (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform               TEXT NOT NULL,
+    user_id                TEXT NOT NULL,
+    profile_text           TEXT NOT NULL,
+    last_compressed_at_ms  INTEGER NOT NULL DEFAULT 0,
+    updated_at_ms          INTEGER NOT NULL,
+    UNIQUE(platform, user_id)
 );
 """.strip()
 
@@ -324,26 +429,10 @@ CREATE TABLE IF NOT EXISTS sim_gifts (
     weight           INTEGER NOT NULL DEFAULT 1,
     data_type        TEXT NOT NULL,
     sc_amount_rmb    INTEGER,
+    unit_price       INTEGER NOT NULL DEFAULT 0,
     created_at_ms    INTEGER NOT NULL,
     updated_at_ms    INTEGER NOT NULL
 );
-""".strip()
-
-
-# --- SimpleMemory 模块私有表（关键词召回的事实记忆）---
-# 索引随表建立：召回按时间倒序取窗口、按来源过滤，两者都是热路径。
-
-_MEMORY_FACTS_SQL = """
-CREATE TABLE IF NOT EXISTS _memory_facts (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    text          TEXT NOT NULL,
-    source        TEXT NOT NULL DEFAULT '',
-    tags          TEXT NOT NULL DEFAULT '',
-    importance    INTEGER NOT NULL DEFAULT 0,
-    timestamp_ms  INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_memory_facts_timestamp ON _memory_facts(timestamp_ms);
-CREATE INDEX IF NOT EXISTS idx_memory_facts_source ON _memory_facts(source);
 """.strip()
 
 
@@ -394,5 +483,4 @@ __all__ = [
     "SCHEMA_VERSION",
     "build_schema_sql",
     "list_expected_tables",
-    "list_private_tables",
 ]

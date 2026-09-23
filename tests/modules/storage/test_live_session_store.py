@@ -145,7 +145,7 @@ async def test_count_and_cascade_delete(store: SQLiteDatabase) -> None:
         user_id="u1",
         user_name="观众",
         gift_name="小星星",
-        gift_count=1,
+        quantity=1,
     )
     assert await store.chat.count_session_details(live_session_id=pk) == 2
 

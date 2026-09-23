@@ -12,12 +12,15 @@ from typing import Any, AsyncIterator, Dict, Optional
 
 from pydantic import Field
 
+import json
+
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import (
     GiftInfo,
+    GuardInfo,
     RoomMessagePayload,
     RoomMessageUser,
     SuperChatInfo,
@@ -37,6 +40,17 @@ from src.modules.types.bili import (
 from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
 
 from .client.websocket_client import BiliWebSocketClient
+
+# 本采集器服务的平台标识（身份键组成部分，装配期常量——所有 payload 统一盖章，
+# 不是发布方逐条手填的配置项）
+_PLATFORM = "bilibili"
+
+# B 站币种标识（currency 带平台前缀：{platform}_{unit}）
+_CURRENCY_GOLD = "bilibili_gold_coin"
+_CURRENCY_SILVER = "bilibili_silver_coin"
+
+# SC 官方单位换算：rmb 字段是人民币元，1 元 = 1000 金瓜子（整数无损）
+_RMB_TO_GOLD_COIN = 1000
 
 
 class BiliDanmakuOfficialCollector(BaseCollector):
@@ -258,7 +272,8 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         """从 B 站消息构造 room.message.* 事件载荷。
 
         场次归属（live_session_id）由事件总线的场次盖章拦截器统一注入，
-        采集器不感知"当前是哪一场"。
+        采集器不感知"当前是哪一场"；平台归属（platform）是本采集器的
+        装配期常量，逐条盖章。
         """
         user_id = str(getattr(bili_msg, "open_id", None) or "unknown")
         user_name = str(getattr(bili_msg, "uname", None) or "unknown")
@@ -268,6 +283,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             self.logger.debug(f"[弹幕] {bili_msg.uname}: {bili_msg.msg}")
             return RoomMessagePayload(
                 message_type="danmaku",
+                platform=_PLATFORM,
                 user=RoomMessageUser(id=user_id, name=user_name),
                 content=bili_msg.msg,
                 timestamp_ms=timestamp_ms,
@@ -277,20 +293,43 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             self.logger.debug(f"[进入] {bili_msg.uname} 进入了直播间")
             return RoomMessagePayload(
                 message_type="enter",
+                platform=_PLATFORM,
                 user=RoomMessageUser(id=user_id, name=user_name),
                 content="",
                 timestamp_ms=timestamp_ms,
             )
 
         if isinstance(bili_msg, GiftMessage):
+            # 数量规则遗留：B 站连击消息的推送模式（每条都推 vs 只推终结）未实测，
+            # 暂维持 max(gift_num, combo_count)；combo_id 已结构化，具备后续按
+            # 连击归并的去重条件。raw_data 落全量原始消息供实测后修正规则。
             actual_num = max(bili_msg.gift_num, bili_msg.combo_info.combo_count)
             gift_name = bili_msg.gift_name or "礼物"
+            currency = _CURRENCY_GOLD if bili_msg.paid else _CURRENCY_SILVER
             self.logger.debug(f"[礼物] {bili_msg.uname} 送出了 {actual_num} 个 {gift_name}")
             return RoomMessagePayload(
                 message_type="gift",
+                platform=_PLATFORM,
                 user=RoomMessageUser(id=user_id, name=user_name),
                 content="",
-                gift=GiftInfo(name=gift_name, count=actual_num),
+                gift=GiftInfo(
+                    name=gift_name,
+                    count=actual_num,
+                    gift_id=bili_msg.gift_id,
+                    unit_price=bili_msg.price,
+                    total_price=bili_msg.price * actual_num,
+                    paid_price=bili_msg.r_price * actual_num,
+                    currency=currency,
+                    combo_id=bili_msg.combo_info.combo_id,
+                    combo_count=bili_msg.combo_info.combo_count,
+                    combo_gift=bili_msg.combo_gift,
+                    blind_gift_id=bili_msg.blind_gift.blind_gift_id,
+                    guard_level=bili_msg.guard_level,
+                    fans_medal_level=bili_msg.fans_medal_level,
+                    fans_medal_name=bili_msg.fans_medal_name,
+                    msg_id=bili_msg.msg_id,
+                    raw_data=json.dumps(bili_msg.raw_data, ensure_ascii=False) if bili_msg.raw_data else "",
+                ),
                 timestamp_ms=timestamp_ms,
             )
 
@@ -298,9 +337,20 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             self.logger.debug(f"[SC] {bili_msg.uname}: {bili_msg.message}")
             return RoomMessagePayload(
                 message_type="super_chat",
+                platform=_PLATFORM,
                 user=RoomMessageUser(id=user_id, name=user_name),
                 content=bili_msg.message,
-                sc=SuperChatInfo(amount=float(bili_msg.rmb)),
+                sc=SuperChatInfo(
+                    total_price=bili_msg.rmb * _RMB_TO_GOLD_COIN,
+                    currency=_CURRENCY_GOLD,
+                    start_time=bili_msg.start_time,
+                    end_time=bili_msg.end_time,
+                    guard_level=bili_msg.guard_level,
+                    fans_medal_level=bili_msg.fans_medal_level,
+                    fans_medal_name=bili_msg.fans_medal_name,
+                    message_id=str(bili_msg.message_id) if bili_msg.message_id else "",
+                    raw_data=json.dumps(bili_msg.raw_data, ensure_ascii=False) if bili_msg.raw_data else "",
+                ),
                 timestamp_ms=timestamp_ms,
             )
 
@@ -309,8 +359,20 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             self.logger.debug(f"[上舰] {bili_msg.uname} 开通了{guard_name}")
             return RoomMessagePayload(
                 message_type="guard",
+                platform=_PLATFORM,
                 user=RoomMessageUser(id=user_id, name=user_name),
                 content=f"{bili_msg.uname} 开通了{guard_name}",
+                guard=GuardInfo(
+                    guard_level=bili_msg.guard_level,
+                    guard_num=bili_msg.guard_num,
+                    guard_unit=bili_msg.guard_unit,
+                    total_price=bili_msg.price,
+                    currency=_CURRENCY_GOLD,
+                    fans_medal_level=bili_msg.fans_medal_level,
+                    fans_medal_name=bili_msg.fans_medal_name,
+                    msg_id=bili_msg.msg_id,
+                    raw_data=json.dumps(bili_msg.raw_data, ensure_ascii=False) if bili_msg.raw_data else "",
+                ),
                 timestamp_ms=timestamp_ms,
             )
 

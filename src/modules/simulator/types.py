@@ -49,6 +49,7 @@ class GiftItem(BaseModel):
     weight: int = Field(default=1, ge=1)
     data_type: str
     sc_amount_rmb: Optional[int] = None
+    unit_price: int = Field(default=0, ge=0, description="礼物标价（金瓜子）；SC 类礼物金额走 sc_amount_rmb")
 
 
 class StreamerContextSnapshot(BaseModel):

@@ -1,36 +1,37 @@
-"""
-MemoryProvider 数据类
+"""Memory 模块数据类
 
-- ``MemoryHit``：召回结果（一次命中）
-- ``MemoryWriteResult``：写入结果
-- ``MemoryFact``：记忆条目全量行（管理面列表 / 增删改查用）
-- ``MemoryStats``：记忆库总量统计（管理面概览用）
+- ``MemoryHit`` / ``MemoryWriteResult``：``MemoryProvider`` Protocol 的接口
+  形态（当前无实现者——SimpleMemory 已转为观众事实/画像读写服务；Protocol
+  作为"未来外部记忆后端再入口"的门保留，数据类随接口保留）
+- ``ViewerFact``：一条"关于某观众的事实"（``viewer_facts`` 表行投影）
+- ``ViewerProfile``：一份观众画像（``viewer_profiles`` 表行投影）
+- ``ViewerProfileSummary``：画像候选行（画像增量生成的待处理清单条目）
 
 ## 命名准则
-- 写入时刻 / 重要度都用毫秒 int（``*_ms``）
+- 时间字段一律毫秒 int（``*_ms``）
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
 
 @dataclass(slots=True)
 class MemoryHit:
-    """单条召回命中
+    """单条召回命中（``MemoryProvider`` 接口形态，未来后端实现用）
 
     Attributes:
         memory_id: 记忆条目唯一 id
-        kind: 记忆类型（当前为 "fact"，即事实/事件记忆）
+        kind: 记忆类型
         text: 文本内容
         score: 相关度分数（越大越相关）
         timestamp_ms: 写入时刻（毫秒 int）
-        metadata: 额外元数据（标签、来源等）
+        metadata: 额外元数据
     """
 
     memory_id: int
-    kind: str  # "fact"
+    kind: str
     text: str
     score: float
     timestamp_ms: int
@@ -39,7 +40,7 @@ class MemoryHit:
 
 @dataclass(slots=True)
 class MemoryWriteResult:
-    """写入结果
+    """写入结果（``MemoryProvider`` 接口形态，未来后端实现用）
 
     Attributes:
         memory_id: 新写入条目 id（自增）
@@ -53,39 +54,67 @@ class MemoryWriteResult:
 
 
 @dataclass(slots=True)
-class MemoryFact:
-    """记忆条目全量行（``_memory_facts`` 表一行的内存投影）
+class ViewerFact:
+    """一条观众事实（``viewer_facts`` 表一行的内存投影）
 
     Attributes:
-        memory_id: 条目唯一 id（表主键）
-        text: 文本内容
-        source: 写入来源（如 agent 工具名 / "webui"）
-        tags: 逗号连接的标签串（存储态；展示层自行拆分）
-        importance: 重要度（召回排序权重，越大越靠前）
-        timestamp_ms: 写入时刻（毫秒 int）
+        fact_id: 条目唯一 id（表主键）
+        platform: 平台标识（身份键组成部分）
+        user_id: 平台用户 ID（身份键组成部分）
+        fact_text: 事实文本（必须由本人原话直接支持）
+        source_message_id: 证据消息 ID（批内弹幕/SC 的 message_id，可溯源）
+        created_at_ms: 提取落库时刻（毫秒 int）
     """
 
-    memory_id: int
-    text: str
-    source: str
-    tags: str
-    importance: int
-    timestamp_ms: int
+    fact_id: int
+    platform: str
+    user_id: str
+    fact_text: str
+    source_message_id: str
+    created_at_ms: int
 
 
 @dataclass(slots=True)
-class MemoryStats:
-    """记忆库总量统计（管理面概览）
+class ViewerProfile:
+    """一份观众画像（``viewer_profiles`` 表一行的内存投影）
 
     Attributes:
-        total_facts: 条目总数
-        sources: 各来源条目计数（按计数降序，``[(source, count), ...]``）
-        latest_ms: 最新一条写入时刻（空库为 0）
+        platform: 平台标识（身份键组成部分）
+        user_id: 平台用户 ID（身份键组成部分）
+        profile_text: 画像文本（LLM 增量压缩产物）
+        last_compressed_at_ms: 增量压缩水位（该时刻前的原料已摄入画像）
+        updated_at_ms: 最近更新时刻（毫秒 int）
     """
 
-    total_facts: int
-    sources: List[Tuple[str, int]] = field(default_factory=list)
-    latest_ms: int = 0
+    platform: str
+    user_id: str
+    profile_text: str
+    last_compressed_at_ms: int
+    updated_at_ms: int
 
 
-__all__ = ["MemoryHit", "MemoryWriteResult", "MemoryFact", "MemoryStats"]
+@dataclass(slots=True)
+class ViewerProfileSummary:
+    """画像候选行：水位后有新事实、且互动量达门槛的观众。
+
+    画像增量生成的待处理清单条目——``need_rebuild`` 判定依据是
+    最新事实时刻晚于画像水位（无画像行视为水位 0）。
+
+    Attributes:
+        platform: 平台标识
+        user_id: 平台用户 ID
+        interaction_count: viewers 表互动计数（门槛过滤字段）
+    """
+
+    platform: str
+    user_id: str
+    interaction_count: int
+
+
+__all__ = [
+    "MemoryHit",
+    "MemoryWriteResult",
+    "ViewerFact",
+    "ViewerProfile",
+    "ViewerProfileSummary",
+]

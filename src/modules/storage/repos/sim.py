@@ -34,6 +34,7 @@ class SimRepo(BaseRepo):
             "weight",
             "data_type",
             "sc_amount_rmb",
+            "unit_price",
         }
     )
 
@@ -170,18 +171,22 @@ class SimRepo(BaseRepo):
         weight: int = 1,
         data_type: str,
         sc_amount_rmb: Optional[int] = None,
+        unit_price: int = 0,
     ) -> int:
-        """插入一条礼物目录条目，返回 lastrowid；``gift_id`` 冲突抛 IntegrityError。"""
+        """插入一条礼物目录条目，返回 lastrowid；``gift_id`` 冲突抛 IntegrityError。
+
+        ``unit_price`` 为礼物标价（金瓜子）；SC 类礼物金额走 ``sc_amount_rmb``。
+        """
         now_ms = int(time.time() * 1000)
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO sim_gifts("
-                    "gift_id, gift_name, category, weight, data_type, sc_amount_rmb,"
+                    "gift_id, gift_name, category, weight, data_type, sc_amount_rmb, unit_price,"
                     " created_at_ms, updated_at_ms"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (gift_id, gift_name, category, weight, data_type, sc_amount_rmb, now_ms, now_ms),
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (gift_id, gift_name, category, weight, data_type, sc_amount_rmb, unit_price, now_ms, now_ms),
                 )
                 return int(cur.lastrowid or 0)
 

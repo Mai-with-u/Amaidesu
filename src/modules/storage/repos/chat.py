@@ -1,8 +1,9 @@
-"""ChatRepo —— 直播明细三表仓储（live_chat + gifts + super_chats）。
+"""ChatRepo —— 直播明细表仓储（live_chat + gifts + super_chats + guards）。
 
-三表均带 simulated 贯穿列，详见 schema.py "命名硬规则"。本仓储承接
+四张明细表均带 simulated 贯穿列，详见 schema.py "命名硬规则"。本仓储承接
 RoomMessagePayload → 表的写入入口与常见读路径；表结构权威在 schema.py，
-本层不复制。
+本层不复制。付费三表（gifts / super_chats / guards）金额单位 = 平台最小
+虚拟货币单位（B 站金瓜子），跨表聚合直接 SUM。
 
 排序不变量：所有时间序列查询以 ``timestamp_ms`` 排序，禁止依赖 INSERT 顺序。
 取"最近 N 条"必须先 DESC LIMIT，再 Python 内反转；直接 ASC LIMIT 会取到
@@ -31,6 +32,7 @@ class ChatRepo(BaseRepo):
         message_type: str,
         sender_id: Optional[str] = None,
         sender_name: Optional[str] = None,
+        platform: str = "",
         message_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
         tool_result: Optional[str] = None,
@@ -46,12 +48,13 @@ class ChatRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO live_chat ("
-                    "live_session_id, timestamp_ms, sender_role, sender_id, sender_name,"
+                    "live_session_id, timestamp_ms, platform, sender_role, sender_id, sender_name,"
                     " content, message_type, message_id, reply_to_message_id, tool_result, simulated"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
+                        platform,
                         sender_role,
                         sender_id,
                         sender_name,
@@ -72,28 +75,65 @@ class ChatRepo(BaseRepo):
         *,
         live_session_id: int,
         timestamp_ms: int,
+        platform: str = "",
         user_id: str,
         user_name: str,
         gift_name: str,
-        gift_count: int,
+        quantity: int,
+        gift_id: int = 0,
+        unit_price: int = 0,
+        total_price: int = 0,
+        paid_price: int = 0,
+        currency: str = "",
+        guard_level: int = 0,
+        fans_medal_level: int = 0,
+        fans_medal_name: str = "",
+        combo_id: str = "",
+        combo_count: int = 0,
+        combo_gift: bool = False,
+        blind_gift_id: int = 0,
+        msg_id: str = "",
+        raw_data: Optional[str] = None,
         simulated: bool = False,
     ) -> int:
-        """插入一条 gifts 行，返回 lastrowid。"""
+        """插入一条 gifts 行（付费明细全字段），返回 lastrowid。
+
+        金额单位 = 平台最小虚拟货币单位（B 站金瓜子）；``total_price`` 取
+        标价口径，实付另记 ``paid_price``；银瓜子（免费礼物）照常落库，
+        付费统计按 ``currency`` 过滤。``raw_data`` 兜底完整原始 JSON。
+        """
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO gifts ("
-                    "live_session_id, timestamp_ms, user_id, user_name,"
-                    " gift_name, gift_count, simulated"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "live_session_id, timestamp_ms, platform, user_id, user_name,"
+                    " gift_id, gift_name, quantity, unit_price, total_price, paid_price, currency,"
+                    " guard_level, fans_medal_level, fans_medal_name,"
+                    " combo_id, combo_count, combo_gift, blind_gift_id, msg_id, raw_data, simulated"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
+                        platform,
                         user_id,
                         user_name,
+                        gift_id,
                         gift_name,
-                        gift_count,
+                        quantity,
+                        unit_price,
+                        total_price,
+                        paid_price,
+                        currency,
+                        guard_level,
+                        fans_medal_level,
+                        fans_medal_name,
+                        combo_id,
+                        combo_count,
+                        1 if combo_gift else 0,
+                        blind_gift_id,
+                        msg_id,
+                        raw_data,
                         1 if simulated else 0,
                     ),
                 )
@@ -106,28 +146,106 @@ class ChatRepo(BaseRepo):
         *,
         live_session_id: int,
         timestamp_ms: int,
+        platform: str = "",
         user_id: str,
         user_name: str,
-        amount: float,
         message: str,
+        total_price: int = 0,
+        currency: str = "",
+        start_time: int = 0,
+        end_time: int = 0,
+        guard_level: int = 0,
+        fans_medal_level: int = 0,
+        fans_medal_name: str = "",
+        message_id: str = "",
+        raw_data: Optional[str] = None,
         simulated: bool = False,
     ) -> int:
-        """插入一条 super_chats 行，返回 lastrowid。"""
+        """插入一条 super_chats 行（付费明细全字段），返回 lastrowid。
+
+        ``total_price`` 单位 = 平台最小虚拟货币单位（B 站金瓜子）；
+        ``start_time`` / ``end_time`` 为 SC 置顶周期（平台原值，Unix 秒）。
+        """
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO super_chats ("
-                    "live_session_id, timestamp_ms, user_id, user_name,"
-                    " amount, message, simulated"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "live_session_id, timestamp_ms, platform, user_id, user_name, message,"
+                    " total_price, currency, start_time, end_time,"
+                    " guard_level, fans_medal_level, fans_medal_name, message_id, raw_data, simulated"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
+                        platform,
                         user_id,
                         user_name,
-                        amount,
                         message,
+                        total_price,
+                        currency,
+                        start_time,
+                        end_time,
+                        guard_level,
+                        fans_medal_level,
+                        fans_medal_name,
+                        message_id,
+                        raw_data,
+                        1 if simulated else 0,
+                    ),
+                )
+                return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
+    async def insert_guard(
+        self,
+        *,
+        live_session_id: int,
+        timestamp_ms: int,
+        platform: str = "",
+        user_id: str,
+        user_name: str,
+        guard_level: int = 0,
+        guard_num: int = 0,
+        guard_unit: str = "",
+        total_price: int = 0,
+        currency: str = "",
+        fans_medal_level: int = 0,
+        fans_medal_name: str = "",
+        msg_id: str = "",
+        raw_data: Optional[str] = None,
+        simulated: bool = False,
+    ) -> int:
+        """插入一条 guards 行（大航海开通/续费购买事件），返回 lastrowid。
+
+        每次上舰/续费一条记录；"当前舰长"由应用层从最后记录 + 周期派生，
+        周期存平台原值（``guard_num`` / ``guard_unit``）。
+        """
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "INSERT INTO guards ("
+                    "live_session_id, timestamp_ms, platform, user_id, user_name,"
+                    " guard_level, guard_num, guard_unit, total_price, currency,"
+                    " fans_medal_level, fans_medal_name, msg_id, raw_data, simulated"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        live_session_id,
+                        timestamp_ms,
+                        platform,
+                        user_id,
+                        user_name,
+                        guard_level,
+                        guard_num,
+                        guard_unit,
+                        total_price,
+                        currency,
+                        fans_medal_level,
+                        fans_medal_name,
+                        msg_id,
+                        raw_data,
                         1 if simulated else 0,
                     ),
                 )
@@ -384,23 +502,58 @@ class ChatRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def summarize_user_contributions(self, *, user_id: str) -> Dict[str, float]:
-        """观众贡献汇总：礼物总件数、SC 总额（元）与 SC 条数。"""
+        """观众贡献汇总：礼物总件数、付费总额（金瓜子，含礼物/SC）与 SC 条数。
+
+        金额单位 = 平台最小虚拟货币单位（B 站金瓜子），礼物 ``total_price``
+        与 SC ``total_price`` 同单位直接 SUM；展示层 ÷1000 = 元。
+        """
 
         def _exec() -> Dict[str, float]:
             with self._manager.transaction() as conn:
                 gift_row = conn.execute(
-                    "SELECT COALESCE(SUM(gift_count), 0) AS n FROM gifts WHERE user_id=?",
+                    "SELECT COALESCE(SUM(quantity), 0) AS n FROM gifts WHERE user_id=?",
                     (user_id,),
                 ).fetchone()
                 sc_row = conn.execute(
-                    "SELECT COALESCE(SUM(amount), 0.0) AS amount, COUNT(*) AS n FROM super_chats WHERE user_id=?",
+                    "SELECT COALESCE(SUM(total_price), 0) AS amount, COUNT(*) AS n FROM super_chats WHERE user_id=?",
+                    (user_id,),
+                ).fetchone()
+                gift_amount_row = conn.execute(
+                    "SELECT COALESCE(SUM(total_price), 0) AS amount FROM gifts WHERE user_id=?",
                     (user_id,),
                 ).fetchone()
                 return {
                     "gift_total_count": int(gift_row["n"]) if gift_row else 0,
-                    "sc_total_amount": float(sc_row["amount"]) if sc_row else 0.0,
+                    "gift_total_amount": int(gift_amount_row["amount"]) if gift_amount_row else 0,
+                    "sc_total_amount": int(sc_row["amount"]) if sc_row else 0,
                     "sc_total_count": int(sc_row["n"]) if sc_row else 0,
                 }
+
+        return await self._run_in_executor(_exec)
+
+    async def list_super_chats_since(
+        self,
+        *,
+        live_session_id: int,
+        since_ms: int,
+        limit: int = 100,
+    ) -> List[sqlite3.Row]:
+        """取指定场次 ``since_ms`` 之后的 SC 明细行（时间正序）。
+
+        事实提取的数据源之一：SC 不落 ``live_chat``，但它是观众主动说的
+        完整话（最有价值的事实源），提取输入须额外并入时间窗内的 SC。
+        """
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT * FROM super_chats"
+                        " WHERE live_session_id=? AND timestamp_ms>=?"
+                        " ORDER BY timestamp_ms ASC LIMIT ?",
+                        (live_session_id, since_ms, limit),
+                    ).fetchall()
+                )
 
         return await self._run_in_executor(_exec)
 

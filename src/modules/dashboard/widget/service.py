@@ -230,7 +230,8 @@ class DanmakuWidgetService:
                     message_type=MessageType.SUPER_CHAT,
                     timestamp_ms=timestamp,
                     importance=importance,
-                    sc_price=payload.sc.amount if payload.sc else None,
+                    # payload 金额是金瓜子（平台最小虚拟货币单位），widget 展示 ÷1000 = 元
+                    sc_price=(payload.sc.total_price / 1000) if payload.sc else None,
                     sc_message=payload.content or None,
                     platform=platform,
                     room_id=room_id,

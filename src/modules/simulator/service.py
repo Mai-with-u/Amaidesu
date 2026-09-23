@@ -31,7 +31,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.room import (
+    GiftInfo,
+    GuardInfo,
+    RoomMessagePayload,
+    RoomMessageUser,
+    SuperChatInfo,
+)
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
 from src.modules.simulator.cadence import CadenceGenerator
@@ -48,6 +54,21 @@ from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.config.service import ConfigService
+
+
+# 模拟数据的平台标识：模拟器造的是 B 站格式数据（platform=bilibili），
+# 与 simulated=True 溯源标记正交——统计过滤假数据靠 simulated，身份隔离靠 platform
+_SIM_PLATFORM = "bilibili"
+
+# B 站币种与单位换算（SC 的 rmb 元 ×1000 = 金瓜子）
+_CURRENCY_GOLD = "bilibili_gold_coin"
+_RMB_TO_GOLD_COIN = 1000
+
+# 上舰模拟消息的固定形态（与 GiftGenerator 的舰长默认形态一致）
+_GUARD_LEVEL_CAPTAIN = 3
+_GUARD_NUM_MONTHLY = 1
+_GUARD_UNIT_MONTH = "月"
+_GUARD_CAPTAIN_PRICE_GOLD = 138_000
 
 
 # 角色默认世界窗口（条数）：表达"该角色对直播间的关注度"的天性，
@@ -342,15 +363,40 @@ class SimulatorService:
                 window = await self._fetch_world_window(persona=persona)
                 context.recent_messages = window
 
-                # 概率触发礼物事件（否则走普通弹幕）
+                # 概率触发付费事件（礼物 / SC / 上舰），否则走普通弹幕
                 gift_roll = random.random()
                 if gift_roll < self._config_obj.gift_probability:
+                    pay_roll = random.random()
+                    # 小概率上舰（付费明细链路的模拟数据源：guards 表落库 + 付费统计）
+                    if pay_roll < 0.05:
+                        guard_event = await self._gift_generator.generate_guard(context=context)
+                        await self._emit_message(
+                            message_type="guard",
+                            text="",
+                            persona=guard_event.persona,
+                            gift_event=guard_event,
+                        )
+                        self._persona_pool.record_message(guard_event.persona)
+                        continue
+                    # SC 分支（SC 文本经 LLM 生成；LLM 不可用时仅发金额载荷）
+                    if pay_roll < 0.20:
+                        sc_event = await self._gift_generator.generate_sc(context=context)
+                        if sc_event is not None:
+                            await self._emit_message(
+                                message_type="super_chat",
+                                text=sc_event.text,
+                                persona=sc_event.persona,
+                                gift_event=sc_event,
+                            )
+                            self._persona_pool.record_message(sc_event.persona)
+                            continue
                     gift_event = await self._gift_generator.generate_gift(context=context)
                     if gift_event is not None:
                         await self._emit_message(
                             message_type=gift_event.data_type or "gift",
                             text=gift_event.text,
                             persona=gift_event.persona,
+                            gift_event=gift_event,
                         )
                         self._persona_pool.record_message(gift_event.persona)
                         continue
@@ -514,22 +560,57 @@ class SimulatorService:
         message_type: str,
         text: str,
         persona: Any,
+        gift_event: Optional[Any] = None,
     ) -> None:
         """构造带 simulated=True 溯源标记的 RoomMessagePayload 并 emit。
 
         场次归属（live_session_id）不在此填写——由事件总线的场次盖章拦截器
         统一注入当前场次；message_id 现场生成，作为回复关联键落库。
+        ``gift_event`` 为礼物/SC 生成产物（``GeneratedMessage``），付费消息经
+        它填充结构化金额载荷（金瓜子口径），缺失时仅构造文本载荷。
         未知 message_type 回退为弹幕（事件名与 payload 同步钳制），不抛错。
         """
         known_type = message_type if message_type in self._MESSAGE_TYPE_EVENT else "danmaku"
+        gift_payload: Optional[GiftInfo] = None
+        sc_payload: Optional[SuperChatInfo] = None
+        guard_payload: Optional[GuardInfo] = None
+        if known_type == "gift" and gift_event is not None and gift_event.gift is not None:
+            unit_price = int(gift_event.gift.unit_price or 0)
+            gift_payload = GiftInfo(
+                name=gift_event.gift.gift_name,
+                count=1,
+                gift_id=0,
+                unit_price=unit_price,
+                total_price=unit_price,
+                paid_price=unit_price,
+                currency=_CURRENCY_GOLD,
+            )
+        elif known_type == "super_chat" and gift_event is not None:
+            amount_rmb = int(gift_event.sc_amount_rmb or 0)
+            sc_payload = SuperChatInfo(
+                total_price=amount_rmb * _RMB_TO_GOLD_COIN,
+                currency=_CURRENCY_GOLD,
+            )
+        elif known_type == "guard":
+            guard_payload = GuardInfo(
+                guard_level=_GUARD_LEVEL_CAPTAIN,
+                guard_num=_GUARD_NUM_MONTHLY,
+                guard_unit=_GUARD_UNIT_MONTH,
+                total_price=_GUARD_CAPTAIN_PRICE_GOLD,
+                currency=_CURRENCY_GOLD,
+            )
         payload = RoomMessagePayload(
             message_id=uuid.uuid4().hex,
             message_type=known_type,  # type: ignore[arg-type]
+            platform=_SIM_PLATFORM,
             user=RoomMessageUser(
                 id=str(getattr(persona, "user_id", "") or f"sim-{uuid.uuid4().hex[:6]}"),
                 name=str(getattr(persona, "user_nickname", "") or "模拟观众"),
             ),
             content=str(text or ""),
+            gift=gift_payload,
+            sc=sc_payload,
+            guard=guard_payload,
             timestamp_ms=now_ms(),
             simulated=True,  # 数据溯源标记：模拟/回放源，统计与入库需过滤
         )

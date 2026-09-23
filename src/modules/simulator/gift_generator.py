@@ -24,7 +24,13 @@ from src.modules.simulator.types import (
 from src.modules.storage.repos import SimRepo
 
 # sim_gifts 允许通过 update_gift 更新的字段（与 DB 白名单一致的运行时防线）
-_GIFT_UPDATABLE_FIELDS = frozenset({"gift_name", "category", "weight", "data_type", "sc_amount_rmb"})
+_GIFT_UPDATABLE_FIELDS = frozenset({"gift_name", "category", "weight", "data_type", "sc_amount_rmb", "unit_price"})
+
+# 上舰事件的默认形态：舰长 / 1 个月 / 138000 金瓜子（138 元，官方价）
+_GUARD_LEVEL_CAPTAIN = 3
+_GUARD_NUM_MONTHLY = 1
+_GUARD_UNIT_MONTH = "月"
+_GUARD_CAPTAIN_PRICE_GOLD = 138_000
 
 
 class GiftGenerator:
@@ -60,6 +66,7 @@ class GiftGenerator:
                 weight=row["weight"],
                 data_type=row["data_type"],
                 sc_amount_rmb=row["sc_amount_rmb"],
+                unit_price=row["unit_price"],
             )
             for row in rows
         ]
@@ -83,6 +90,7 @@ class GiftGenerator:
             weight=gift.weight,
             data_type=gift.data_type,
             sc_amount_rmb=gift.sc_amount_rmb,
+            unit_price=gift.unit_price,
         )
         self._gifts.append(gift)
         self._weights.append(gift.weight)
@@ -110,6 +118,7 @@ class GiftGenerator:
                 weight=row["weight"],
                 data_type=row["data_type"],
                 sc_amount_rmb=row["sc_amount_rmb"],
+                unit_price=row["unit_price"],
             )
             self._gifts[self._gifts.index(target)] = refreshed
             self._weights = [g.weight for g in self._gifts]
@@ -203,6 +212,22 @@ class GiftGenerator:
             gift=sc_gift,
             sc_amount_rmb=sc_gift.sc_amount_rmb,
             tokens_used=tokens_used,
+        )
+
+    async def generate_guard(self, context: StreamerContextSnapshot) -> GeneratedMessage:
+        """生成一条上舰消息（舰长 / 1 个月 / 138000 金瓜子固定形态）。
+
+        付费明细链路的模拟数据源：上舰在真实链路是独立购买事件（guards 表），
+        模拟器需要能造出它才能端到端验证落库与付费统计。
+        """
+        persona = self._pick_persona_for_gift()
+        return GeneratedMessage(
+            text="",
+            persona=persona,
+            data_type="guard",
+            gift=None,
+            sc_amount_rmb=None,
+            tokens_used=0,
         )
 
     def _pick_persona_for_gift(self) -> Persona:

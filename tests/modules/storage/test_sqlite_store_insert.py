@@ -103,14 +103,14 @@ async def test_insert_gift_basic(store: SQLiteDatabase) -> None:
         user_id="u_777",
         user_name="大佬",
         gift_name="小星星",
-        gift_count=10,
+        quantity=10,
         simulated=False,
     )
     rows = await store.execute("SELECT * FROM gifts WHERE id=?", (rowid,))
     row = rows[0]
     assert str(row["user_name"]) == "大佬"
     assert str(row["gift_name"]) == "小星星"
-    assert int(row["gift_count"]) == 10
+    assert int(row["quantity"]) == 10
     assert int(row["simulated"]) == 0
 
 
@@ -122,7 +122,7 @@ async def test_insert_gift_simulated_true(store: SQLiteDatabase) -> None:
         user_id="u_sim",
         user_name="模拟观众",
         gift_name="小星星",
-        gift_count=1,
+        quantity=1,
         simulated=True,
     )
     rows = await store.execute("SELECT simulated FROM gifts WHERE id=?", (rowid,))
@@ -139,14 +139,15 @@ async def test_insert_super_chat_basic(store: SQLiteDatabase) -> None:
         timestamp_ms=1_700_000_001_000,
         user_id="u_sc_001",
         user_name="SC哥",
-        amount=88.5,
+        total_price=88_500,
+        currency="bilibili_gold_coin",
         message="辛苦主播",
         simulated=False,
     )
     rows = await store.execute("SELECT * FROM super_chats WHERE id=?", (rowid,))
     row = rows[0]
     assert str(row["user_name"]) == "SC哥"
-    assert float(row["amount"]) == 88.5
+    assert int(row["total_price"]) == 88_500
     assert str(row["message"]) == "辛苦主播"
     assert int(row["simulated"]) == 0
 
@@ -158,7 +159,8 @@ async def test_insert_super_chat_simulated_true(store: SQLiteDatabase) -> None:
         timestamp_ms=1_700_000_001_001,
         user_id="u_sc_sim",
         user_name="模拟SC",
-        amount=10.0,
+        total_price=10_000,
+        currency="bilibili_gold_coin",
         message="模拟SC消息",
         simulated=True,
     )
@@ -181,17 +183,17 @@ async def test_where_simulated_zero_excludes_simulated_rows(store: SQLiteDatabas
     )
     # gifts
     await store.chat.insert_gift(
-        live_session_id=10, timestamp_ms=10, user_id="u", user_name="n", gift_name="g", gift_count=1
+        live_session_id=10, timestamp_ms=10, user_id="u", user_name="n", gift_name="g", quantity=1
     )
     await store.chat.insert_gift(
-        live_session_id=10, timestamp_ms=11, user_id="u", user_name="n", gift_name="g", gift_count=1, simulated=True
+        live_session_id=10, timestamp_ms=11, user_id="u", user_name="n", gift_name="g", quantity=1, simulated=True
     )
     # super_chats
     await store.chat.insert_super_chat(
-        live_session_id=10, timestamp_ms=20, user_id="u", user_name="n", amount=1, message="真"
+        live_session_id=10, timestamp_ms=20, user_id="u", user_name="n", total_price=1000, message="真"
     )
     await store.chat.insert_super_chat(
-        live_session_id=10, timestamp_ms=21, user_id="u", user_name="n", amount=1, message="假", simulated=True
+        live_session_id=10, timestamp_ms=21, user_id="u", user_name="n", total_price=1000, message="假", simulated=True
     )
 
     real_chat = await store.execute("SELECT * FROM live_chat WHERE simulated=0")

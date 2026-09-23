@@ -222,6 +222,14 @@ class LiveSessionManager:
         """当前显式场次的来源（manual / replay）；无显式场次为空串。"""
         return self._active_source
 
+    @property
+    def platform(self) -> str:
+        """本管理器的平台标识（装配期常量，open_session 未显式指定时使用）。
+
+        主播发言等无平台字段的落库行经此取 platform 归属。
+        """
+        return self._platform
+
     async def list_sessions(
         self,
         *,
@@ -283,7 +291,8 @@ class LiveSessionManager:
                     "user_name": row["user_name"],
                     "user_id": row["user_id"],
                     "gift_name": row["gift_name"],
-                    "gift_count": int(row["gift_count"]),
+                    "gift_count": int(row["quantity"]),
+                    "total_price": int(row["total_price"] or 0),
                     "simulated": bool(row["simulated"]),
                 }
             )
@@ -296,7 +305,7 @@ class LiveSessionManager:
                     "user_name": row["user_name"],
                     "user_id": row["user_id"],
                     "content": row["message"],
-                    "amount": float(row["amount"]),
+                    "amount": float(int(row["total_price"] or 0) / 1000),
                     "simulated": bool(row["simulated"]),
                 }
             )
