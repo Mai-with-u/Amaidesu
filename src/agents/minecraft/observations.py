@@ -135,7 +135,11 @@ class MinecraftObservations:
         entry = self._entries.get(ref)
         if entry is None:
             raise ValueError("观察引用已过期或不属于当前任务，请查询索引或重新取得实际资料")
-        value = entry["value"]
+        source = arguments.get("source", "result")
+        if source not in {"result", "request"}:
+            raise ValueError("source 必须是 result 或 request")
+        # 请求原件也能补读，整理历史后仍可定位当时提交的目标、蓝图与约束。
+        value = entry["arguments"] if source == "request" else entry["value"]
         path = str(arguments.get("path") or "")
         if path and not path.startswith("/"):
             raise ValueError("path 必须为空或以 / 开头的 JSON Pointer")
@@ -162,6 +166,7 @@ class MinecraftObservations:
             "ref": ref,
             "path": path,
             "source_tool": entry["tool"],
+            "source": source,
             "observed_at_ms": entry["observed_at_ms"],
             "text": text[offset:end],
             "offset": offset,

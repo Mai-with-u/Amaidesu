@@ -19,6 +19,12 @@ def build_observation_spec() -> ToolSpec:
             "type": "object",
             "properties": {
                 "ref": {"type": "string", "description": "观察返回的原文引用"},
+                "source": {
+                    "type": "string",
+                    "enum": ["result", "request"],
+                    "default": "result",
+                    "description": "读取原始结果或当时的完整工具参数",
+                },
                 "path": {"type": "string", "default": "", "description": "JSON Pointer，如 /data/content"},
                 "query": {"type": "string", "maxLength": 256},
                 "offset": {"type": "integer", "minimum": 0, "default": 0},

@@ -22,16 +22,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from collections import deque
+from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
 from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.agents.minecraft.builder.controller import MinecraftBuilderController
 from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
 from src.agents.minecraft.design_progress import MachineDesignProgress
-from src.agents.minecraft.observations import MinecraftObservations
+from src.agents.minecraft.observations import MinecraftObservations, json_text
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
@@ -197,6 +199,8 @@ class MinecraftAgent(BaseAgent):
         # 原始指令和执行阶段跟随逻辑任务，不能因一次后台通知重新开批就丢失。
         self._task_instructions: List[str] = []
         self._task_progress: Dict[str, Dict[str, Any]] = {}
+        self._recent_results: Deque[Dict[str, Any]] = deque(maxlen=6)
+        self._task_notice_fingerprints: Dict[str, str] = {}
         self._task_steps = 0
         self._task_finished = True
         self._task_suspended = False
@@ -641,6 +645,8 @@ class MinecraftAgent(BaseAgent):
                     if self._task_finished:
                         self._task_instructions.clear()
                         self._task_progress.clear()
+                        self._recent_results.clear()
+                        self._task_notice_fingerprints.clear()
                         messages[:] = [{"role": "system", "content": system_prompt}]
                         self._context_compactor.checkpoints = 0
                         self._mc_state.set_todos([])
@@ -773,6 +779,7 @@ class MinecraftAgent(BaseAgent):
                     if call.name == "minecraft_observation"
                     else self._observations.present(call.name, arguments, observation)
                 )
+                self._remember_result(call.name, arguments, observation, shown)
                 messages.append(
                     {
                         "role": "tool",
@@ -813,6 +820,37 @@ class MinecraftAgent(BaseAgent):
         """每次从当前任务取原文，避免新任务仍绑定上一任务的观察集合。"""
         return self._observations.read(arguments)
 
+    def _remember_result(
+        self, tool: str, arguments: Dict[str, Any], original: Dict[str, Any], shown: Dict[str, Any]
+    ) -> None:
+        """把子任务的请求与结果引用串起来，局部审阅目标不能覆盖玩家的最终要求。"""
+        ref = shown.get("_observation", {}).get("ref")
+        if original.get("accepted") is True and original.get("task_id"):
+            task_id = str(original["task_id"])
+            record = self._task_progress.setdefault(task_id, {"task_id": task_id, "status": "accepted"})
+            goal = arguments.get("goal")
+            record.setdefault("request_ref", ref)
+            if isinstance(goal, dict):
+                record.setdefault(
+                    "requested_goal",
+                    {key: deepcopy(goal[key]) for key in ("ability", "outcome", "target") if key in goal},
+                )
+            while len(self._task_progress) > 64:
+                self._task_progress.pop(next(iter(self._task_progress)))
+        if not tool.startswith("minecraft_") and not shown.get("_observation", {}).get("same_request_and_result"):
+            # 整理时仍保留近期失败与结果未知的区别，详细过程从同一引用恢复。
+            self._recent_results.append(
+                {
+                    "tool": tool,
+                    "ref": ref,
+                    **{
+                        key: shown[key]
+                        for key in ("ok", "success", "accepted", "error", "complete", "buildable", "outcome_known")
+                        if key in shown
+                    },
+                }
+            )
+
     def _current_task_context(self) -> Dict[str, Any]:
         """恢复与集中整理都保留玩家原文、当前工作文档、任务阶段和可补读的证据。"""
         progress = dict(self._task_progress)
@@ -833,6 +871,7 @@ class MinecraftAgent(BaseAgent):
             "background_tasks": list(progress.values()),
             "reasoning_steps_used": self._task_steps,
             "observations": self._observations.index(),
+            "recent_results": list(self._recent_results),
         }
 
     def _unfinished_todos(self) -> bool:
@@ -971,30 +1010,44 @@ class MinecraftAgent(BaseAgent):
         等价原 handoff 行为：状态真变化（含决策点/暂停/终态）与停滞告警
         （payload.alert）都送进消息队列，由下一次推理吸收。
         """
+        if self._builder is not None:
+            self._builder.absorb(payload)
+        signature = hashlib.sha256(json_text([payload.status, payload.summary, payload.snapshot]).encode()).hexdigest()
+        if not payload.alert and self._task_notice_fingerprints.get(payload.task_id) == signature:
+            return
+        self._task_notice_fingerprints[payload.task_id] = signature
+        while len(self._task_notice_fingerprints) > 64:
+            self._task_notice_fingerprints.pop(next(iter(self._task_notice_fingerprints)))
         if not self._task_finished:
             # 任务事件记成工作阶段，下一次醒来仍知道哪个设计或施工任务走到了哪里。
             self._task_progress[payload.task_id] = {
+                **self._task_progress.get(payload.task_id, {}),
                 "task_id": payload.task_id,
                 "status": payload.status,
                 "summary": payload.summary,
             }
             while len(self._task_progress) > 64:
                 self._task_progress.pop(next(iter(self._task_progress)))
-        if self._builder is not None:
-            self._builder.absorb(payload)
+        # 受理转运行和普通进度由宿主记账，只有决策点、终态或停滞告警才需要模型判断。
+        if payload.status in {"accepted", "running"} and not payload.alert:
+            return
+        snapshot_text = ""
+        if payload.snapshot:
+            shown = self._observations.present("task_notification", {"task_id": payload.task_id}, payload.snapshot)
+            snapshot_text = "\n任务快照：" + json_text(shown)
+            if payload.task_id in self._task_progress:
+                self._task_progress[payload.task_id]["result_ref"] = shown["_observation"]["ref"]
         if payload.executor == "minecraft_builder":
             # 设计任务号只在本地查询；施工仍需父 Agent 显式发起，不能当作已经建好。
             if self._running:
                 self._inject_wakeup_message(
                     f"[系统] 建造设计 {payload.task_id}：{payload.status}，{payload.summary}。"
-                    "用 minecraft_builder_task 查询结果；要求建好时再用 action=execute 发起施工。"
-                    "设计完成不代表建筑完成；失败时修订要求、明确取消或上报困难。"
+                    + snapshot_text
+                    + "按原目标处理已交付产物；要求建好且设计有效时用 minecraft_builder_task(action=execute) 发起施工。"
+                    "只有缺少具体信息时才查询结果；设计完成不代表建筑完成，失败时处理已知阻塞。"
                 )
             return
-        snapshot_text = ""
-        if getattr(payload, "snapshot", None):
-            snapshot_text = "\n任务快照：" + json.dumps(payload.snapshot, ensure_ascii=False, default=str)
-        hint = "（waiting_for_decision 用任务查询工具 answer 应答；终态请决定后续并按需上报主播）"
+        hint = "（已有核实快照请直接使用；waiting_for_decision 用任务查询工具 answer 应答；终态沿原目标推进下一待办，缺少具体证据才补查）"
         if getattr(payload, "alert", False):
             content = f"[系统] 后台任务 {payload.task_id} 停滞告警：{payload.summary}{snapshot_text}。请核查该任务。"
         else:
