@@ -28,7 +28,7 @@
         </el-menu-item>
         <el-menu-item index="/memory">
           <el-icon><Collection /></el-icon>
-          <span>记忆</span>
+          <span>观众画像</span>
         </el-menu-item>
         <el-menu-item index="/eventlog">
           <el-icon><Document /></el-icon>

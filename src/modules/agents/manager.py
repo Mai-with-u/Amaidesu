@@ -61,6 +61,7 @@ class AgentManager:
         *,
         tool_registry: Optional[ToolRegistry] = None,
         memory: Optional[Any] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
         rundown_repo: Optional[Any] = None,
         chat_repo: Optional[Any] = None,
         sessions_repo: Optional[Any] = None,
@@ -73,6 +74,7 @@ class AgentManager:
         self._enable_args: Dict[str, Dict[str, Any]] = {}
         self._tool_registry = tool_registry
         self._memory = memory
+        self._memory_policy = memory_policy
         self._rundown_repo = rundown_repo
         self._chat_repo = chat_repo
         self._sessions_repo = sessions_repo
@@ -198,6 +200,7 @@ class AgentManager:
         event_bus: Optional[object] = None,
         tool_registry: Optional[ToolRegistry] = None,
         memory: Optional[Any] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
         thinking_sink: Optional[Any] = None,
         speech_config: Optional[Dict[str, Any]] = None,
         tts_engine: Optional[Any] = None,
@@ -228,6 +231,7 @@ class AgentManager:
 
         effective_registry = tool_registry if tool_registry is not None else self._tool_registry
         effective_memory = memory if memory is not None else self._memory
+        effective_memory_policy = memory_policy if memory_policy is not None else self._memory_policy
         effective_rundown_repo = rundown_repo if rundown_repo is not None else self._rundown_repo
         effective_chat_repo = chat_repo if chat_repo is not None else self._chat_repo
         effective_sessions_repo = sessions_repo if sessions_repo is not None else self._sessions_repo
@@ -241,6 +245,7 @@ class AgentManager:
             event_bus=event_bus,
             tool_registry=effective_registry,
             memory=effective_memory,
+            memory_policy=effective_memory_policy,
             thinking_sink=thinking_sink,
             speech_config=speech_config,
             tts_engine=tts_engine,

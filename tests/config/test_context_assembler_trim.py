@@ -50,8 +50,9 @@ class TestContextAssemblerFieldTrim:
         context_cfg = config["agents"]["agents"]["streamer"]["context"]
         assert "memory_recall_viewers" not in context_cfg
         assert "cache_ttl_ms" not in context_cfg
+        # memory_recall_long_term 已随画像注入重构从 Schema 移除——写回同样清理
+        assert "memory_recall_long_term" not in context_cfg
         assert "enabled" in context_cfg
-        assert "memory_recall_long_term" in context_cfg
         assert context_cfg["enabled"] is True
 
         written = agents_path.read_text(encoding="utf-8-sig")
@@ -74,5 +75,6 @@ class TestContextAssemblerFieldTrim:
         config, _ = load_config_dir(config_dir)
 
         context_cfg = config["agents"]["agents"]["streamer"]["context"]
+        # 保留字段（enabled）的用户值不被默认覆盖；移除字段（召回条数改 7）写回剥离
         assert context_cfg["enabled"] is False
-        assert context_cfg["memory_recall_long_term"] == 7
+        assert "memory_recall_long_term" not in context_cfg

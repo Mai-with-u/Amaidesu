@@ -100,6 +100,7 @@ def _msg(text: str = "hi", mid: str = "m1") -> Any:
     msg.content = text
     msg.message_id = mid
     msg.message_type = "danmaku"
+    msg.platform = "bilibili"
     msg.user.name = "观众"
     msg.user.id = "u_观众"
     return msg
@@ -349,26 +350,22 @@ async def test_context_game_narrative_in_reference_tail() -> None:
 
 
 @pytest.mark.asyncio
-async def test_memory_recall_hits_in_context() -> None:
-    """记忆命中 → 注入组装器（context_enabled 路径经 AssemblerInputs）。"""
+async def test_person_profile_hits_in_context() -> None:
+    """本批发言人有画像 → 注入组装器（person_profile_section 路径）。"""
     memory = MagicMock()
-    hit = MagicMock()
-    hit.text = "上周聊过工作台"
-    hit.score = 0.8
-    hit.metadata = {"source": "test"}
-    memory.recall = AsyncMock(return_value=[hit])
+    memory.get_viewer_profile = AsyncMock(return_value="老粉，喜欢工作台话题")
     planner, llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory)
 
     await planner.plan([_msg("工作台")])
 
-    memory.recall.assert_awaited_once()
+    memory.get_viewer_profile.assert_awaited()
 
 
 @pytest.mark.asyncio
-async def test_memory_recall_failure_not_blocking() -> None:
-    """记忆召回异常 → 不阻断决策（静默降级）。"""
+async def test_person_profile_failure_not_blocking() -> None:
+    """画像查询异常 → 不阻断决策（静默降级）。"""
     memory = MagicMock()
-    memory.recall = AsyncMock(side_effect=RuntimeError("db down"))
+    memory.get_viewer_profile = AsyncMock(side_effect=RuntimeError("db down"))
     planner, _llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory)
 
     outcome = await planner.plan([_msg()])
