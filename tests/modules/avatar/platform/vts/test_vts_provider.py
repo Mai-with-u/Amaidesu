@@ -112,6 +112,7 @@ async def test_list_preset_actions_lists_hotkey_names():
 def test_list_tools_description_does_not_carry_catalog():
     """描述不承载目录（目录走 list_preset_actions 现取，注册期快照缺陷不再必要）。"""
     provider = _build_provider(hotkey_list=[{"name": "Wave", "hotkeyID": "u1"}])
+    provider._is_connected = True  # 工具表仅连接态非空；未连接降级另测
 
     names = {s.full_name for s in provider.list_tools()}
     assert names == {
@@ -126,8 +127,16 @@ def test_list_tools_description_does_not_carry_catalog():
 
 def test_list_tools_provider_identifier():
     provider = _build_provider()
+    provider._is_connected = True
     for spec in provider.list_tools():
         assert spec.provider == "vts"
+
+
+def test_list_tools_empty_when_disconnected():
+    """未连接（含装配期）→ 工具表为空：降级登记，Agent 不可见不可调。"""
+    provider = _build_provider()
+    assert provider._is_connected is False
+    assert provider.list_tools() == []
 
 
 # =============================================================================

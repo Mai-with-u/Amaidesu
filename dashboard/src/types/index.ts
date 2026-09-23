@@ -833,3 +833,76 @@ export interface ViewerSessionItem {
 export interface ViewerSessionsResponse {
   items: ViewerSessionItem[];
 }
+
+// ===== 记忆管理（/api/v1/memory） =====
+
+/** 单条记忆条目（_memory_facts 行投影，tags 已拆为列表） */
+export interface MemoryFactItem {
+  id: number;
+  text: string;
+  source: string;
+  tags: string[];
+  importance: number;
+  timestamp_ms: number;
+}
+
+export interface MemoryFactListResponse {
+  /** 命中搜索条件的全量行数（分页器用） */
+  total: number;
+  items: MemoryFactItem[];
+}
+
+/** 手工新增记忆（来源由服务端固定为 webui） */
+export interface MemoryFactCreatePayload {
+  text: string;
+  tags?: string[];
+  importance?: number;
+}
+
+export interface MemoryFactCreateResponse {
+  memory_id: number;
+  accepted: boolean;
+  message: string;
+}
+
+/** 部分更新：undefined 字段保持不变；tags 传空数组即清空 */
+export interface MemoryFactUpdatePayload {
+  text?: string;
+  tags?: string[];
+  importance?: number;
+}
+
+export interface MemoryMutationResponse {
+  success: boolean;
+}
+
+export interface MemorySourceCount {
+  source: string;
+  count: number;
+}
+
+export interface MemoryStatsResponse {
+  total_facts: number;
+  sources: MemorySourceCount[];
+  /** 最新一条写入时刻，空库为 0 */
+  latest_ms: number;
+}
+
+export interface MemoryRecallPayload {
+  query: string;
+  top_k?: number;
+}
+
+export interface MemoryRecallHit {
+  memory_id: number;
+  text: string;
+  score: number;
+  timestamp_ms: number;
+  source: string;
+  tags: string[];
+}
+
+export interface MemoryRecallResponse {
+  query: string;
+  hits: MemoryRecallHit[];
+}

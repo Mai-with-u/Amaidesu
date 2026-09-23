@@ -1,125 +1,149 @@
 <template>
   <div class="array-editor">
-    <div class="array-items">
-      <div v-for="(_, index) in items" :key="index" class="array-item">
-        <!-- 简单类型数组项 -->
-        <template v-if="!itemSchema || itemSchema.type === 'string'">
-          <el-input
-            v-model="items[index]"
-            size="small"
-            :placeholder="String(itemSchema?.default || '值')"
-            @input="handleUpdate"
-          />
-        </template>
+    <!-- 字符串/枚举数组：单控件多选标签（回车创建、下拉候选、标签可删），不逐行编辑 -->
+    <el-select
+      v-if="isTagSelect"
+      :model-value="tagValues"
+      multiple
+      filterable
+      allow-create
+      default-first-option
+      :placeholder="tagPlaceholder"
+      class="tag-select"
+      style="width: 100%"
+      @update:model-value="setTagValues($event as string[])"
+    >
+      <el-option v-for="option in optionPool" :key="option" :label="option" :value="option" />
+    </el-select>
 
-        <template v-else-if="itemSchema.type === 'integer'">
-          <el-input-number
-            v-model="items[index]"
-            size="small"
-            :min="itemSchema.validation?.min"
-            :max="itemSchema.validation?.max"
-            controls-position="right"
-            @change="handleUpdate"
-          />
-        </template>
-
-        <template v-else-if="itemSchema.type === 'float'">
-          <el-input-number
-            v-model="items[index]"
-            size="small"
-            :min="itemSchema.validation?.min"
-            :max="itemSchema.validation?.max"
-            :step="0.1"
-            :precision="2"
-            controls-position="right"
-            @change="handleUpdate"
-          />
-        </template>
-
-        <template v-else-if="itemSchema.type === 'boolean'">
-          <el-switch v-model="items[index]" @change="handleUpdate" />
-        </template>
-
-        <template v-else-if="itemSchema.type === 'select'">
-          <el-select v-model="items[index]" size="small" @change="handleUpdate">
-            <el-option
-              v-for="option in itemOptions"
-              :key="option"
-              :label="option"
-              :value="option"
-            />
-          </el-select>
-        </template>
-
-        <!-- 对象项（元素子字段树可用）：折叠卡片 + 递归字段渲染；无子字段树时退化为 JSON 文本框 -->
-        <template v-if="isObjectWithFields(itemSchema)">
-          <div class="object-item" :class="{ 'is-expanded': expandedItems.has(index) }">
-            <button
-              type="button"
-              class="object-item-header"
-              :aria-expanded="expandedItems.has(index)"
-              @click="toggleItem(index)"
-            >
-              <el-icon class="object-item-arrow"
-                ><component :is="expandedItems.has(index) ? ArrowDown : ArrowRight"
-              /></el-icon>
-              <span class="object-item-title">{{ itemTitle(index) }}</span>
-              <el-button
-                type="danger"
-                size="small"
-                text
-                :icon="Delete"
-                class="object-item-delete"
-                @click.stop="removeItem(index)"
-              />
-            </button>
-            <div v-if="expandedItems.has(index)" class="object-item-body">
-              <FieldRenderer
-                v-for="sub in itemSchema?.fields"
-                :key="sub.key"
-                :field="sub"
-                :model-value="getItemValue(items[index], sub.key)"
-                :original-value="getItemValue(originalItems[index], sub.key)"
-                @update:model-value="setItemValue(index, sub.key, $event)"
-              />
+    <!-- 其余类型：逐项编辑 -->
+    <template v-else>
+      <div class="array-items">
+        <div v-for="(_, index) in items" :key="index" class="array-item">
+          <!-- 对象项（元素子字段树可用）：折叠卡片 + 递归字段渲染；无子字段树时退化为 JSON 文本框 -->
+          <template v-if="isObjectWithFields(itemSchema)">
+            <div class="object-item" :class="{ 'is-expanded': expandedItems.has(index) }">
+              <button
+                type="button"
+                class="object-item-header"
+                :aria-expanded="expandedItems.has(index)"
+                @click="toggleItem(index)"
+              >
+                <el-icon class="object-item-arrow"
+                  ><component :is="expandedItems.has(index) ? ArrowDown : ArrowRight"
+                /></el-icon>
+                <span class="object-item-title">{{ itemTitle(index) }}</span>
+                <el-button
+                  type="danger"
+                  size="small"
+                  text
+                  :icon="Delete"
+                  class="object-item-delete"
+                  @click.stop="removeItem(index)"
+                />
+              </button>
+              <div v-if="expandedItems.has(index)" class="object-item-body">
+                <FieldRenderer
+                  v-for="sub in normalItemFields"
+                  :key="sub.key"
+                  :field="sub"
+                  :model-value="getItemValue(items[index], sub.key)"
+                  :original-value="getItemValue(originalItems[index], sub.key)"
+                  @update:model-value="setItemValue(index, sub.key, $event)"
+                />
+                <!-- 高级参数：鉴权细节、重试参数等低频字段，默认折叠 -->
+                <div v-if="advancedItemFields.length > 0" class="advanced-block">
+                  <button
+                    type="button"
+                    class="advanced-toggle"
+                    :aria-expanded="advancedOpen.has(index)"
+                    @click="toggleAdvanced(index)"
+                  >
+                    <el-icon class="advanced-arrow">
+                      <component :is="advancedOpen.has(index) ? ArrowDown : ArrowRight" />
+                    </el-icon>
+                    高级参数（{{ advancedItemFields.length }}）
+                  </button>
+                  <div v-show="advancedOpen.has(index)" class="advanced-body">
+                    <FieldRenderer
+                      v-for="sub in advancedItemFields"
+                      :key="sub.key"
+                      :field="sub"
+                      :model-value="getItemValue(items[index], sub.key)"
+                      :original-value="getItemValue(originalItems[index], sub.key)"
+                      @update:model-value="setItemValue(index, sub.key, $event)"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        </template>
+          </template>
 
-        <template v-else-if="isJsonItemType(itemSchema?.type)">
-          <div class="json-item-wrapper">
-            <el-input
-              v-model="jsonDisplays[index]"
-              type="textarea"
-              :rows="2"
+          <template v-else-if="itemSchema?.type === 'integer'">
+            <el-input-number
+              v-model="items[index]"
               size="small"
-              placeholder="JSON 文本"
-              @input="handleJsonEdit(index)"
+              :min="itemSchema.validation?.min"
+              :max="itemSchema.validation?.max"
+              controls-position="right"
+              @change="handleUpdate"
             />
-            <p v-if="jsonErrors[index]" class="json-item-error">JSON 解析失败，保持上一次合法值</p>
-          </div>
-        </template>
+          </template>
 
-        <!-- 未知类型 -->
-        <template v-else>
-          <el-input
-            v-model="items[index]"
-            size="small"
-            :placeholder="`类型: ${itemSchema?.type}`"
-            @input="handleUpdate"
-          />
-        </template>
+          <template v-else-if="itemSchema?.type === 'float'">
+            <el-input-number
+              v-model="items[index]"
+              size="small"
+              :min="itemSchema.validation?.min"
+              :max="itemSchema.validation?.max"
+              :step="0.1"
+              :precision="2"
+              controls-position="right"
+              @change="handleUpdate"
+            />
+          </template>
 
-        <!-- 删除按钮 -->
-        <el-button type="danger" size="small" text :icon="Delete" @click="removeItem(index)" />
+          <template v-else-if="itemSchema?.type === 'boolean'">
+            <el-switch v-model="items[index]" @change="handleUpdate" />
+          </template>
+
+          <template v-else-if="isJsonItemType(itemSchema?.type)">
+            <div class="json-item-wrapper">
+              <el-input
+                v-model="jsonDisplays[index]"
+                type="textarea"
+                :rows="2"
+                size="small"
+                placeholder="JSON 文本"
+                @input="handleJsonEdit(index)"
+              />
+              <p v-if="jsonErrors[index]" class="json-item-error">
+                JSON 解析失败，保持上一次合法值
+              </p>
+            </div>
+          </template>
+
+          <!-- 未知类型 -->
+          <template v-else>
+            <el-input
+              v-model="items[index]"
+              size="small"
+              :placeholder="`类型: ${itemSchema?.type}`"
+              @input="handleUpdate"
+            />
+          </template>
+
+          <!-- 删除按钮 -->
+          <el-button type="danger" size="small" text :icon="Delete" @click="removeItem(index)" />
+        </div>
       </div>
-    </div>
 
-    <!-- 添加按钮 -->
-    <div class="array-actions">
-      <el-button type="primary" size="small" :icon="Plus" @click="addItem"> 添加项 </el-button>
-      <span v-if="items.length === 0" class="empty-hint">暂无项目</span>
-    </div>
+      <!-- 添加按钮 -->
+      <div class="array-actions">
+        <el-button type="primary" size="small" :icon="Plus" @click="addItem"> 添加项 </el-button>
+        <span v-if="items.length === 0" class="empty-hint">暂无项目</span>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -148,8 +172,57 @@ function isObjectWithFields(schema?: ConfigFieldSchema): boolean {
   return schema?.type === 'object' && Array.isArray(schema.fields) && schema.fields.length > 0;
 }
 
+/** 字符串/枚举元素的多选标签形态：单控件承载增删，替代逐行编辑 */
+function isTagSelectArray(): boolean {
+  if (isObjectWithFields(itemSchema.value)) return false;
+  const type = itemSchema.value?.type;
+  return !type || type === 'string' || type === 'select';
+}
+const isTagSelect = computed(isTagSelectArray);
+
+// 候选池：字段/元素级 options + 现值（现值不在候选内时标签仍可正常显示与反选）
+const optionPool = computed<string[]>(() => {
+  const options = itemSchema.value?.validation?.options || props.field.validation?.options || [];
+  const current = Array.isArray(props.modelValue)
+    ? props.modelValue.filter((v): v is string => typeof v === 'string')
+    : [];
+  return [...new Set([...options.map(String), ...current])];
+});
+
+const tagValues = computed<string[]>(() =>
+  Array.isArray(props.modelValue)
+    ? props.modelValue.map(v => (typeof v === 'string' ? v : String(v)))
+    : [],
+);
+
+function setTagValues(values: string[]): void {
+  items.value = [...values];
+  handleUpdate();
+}
+
+const tagPlaceholder = computed(() =>
+  optionPool.value.length > 0 ? '选择或输入后回车添加' : '输入后回车添加',
+);
+
 // 展开状态（按索引跟踪；删除项时随索引重排统一重置）
 const expandedItems = ref<Set<number>>(new Set([0]));
+
+/** 高级参数折叠状态（按索引；x-ui-advanced 字段收进此处，默认收起） */
+const advancedOpen = ref<Set<number>>(new Set());
+
+function toggleAdvanced(index: number): void {
+  const next = new Set(advancedOpen.value);
+  if (next.has(index)) {
+    next.delete(index);
+  } else {
+    next.add(index);
+  }
+  advancedOpen.value = next;
+}
+
+/** 元素子字段按 x-ui-advanced 拆分：常规字段直出，高级字段进折叠区 */
+const normalItemFields = computed(() => (itemSchema.value?.fields ?? []).filter(f => !f.advanced));
+const advancedItemFields = computed(() => (itemSchema.value?.fields ?? []).filter(f => f.advanced));
 
 function toggleItem(index: number): void {
   const next = new Set(expandedItems.value);
@@ -191,11 +264,6 @@ function setItemValue(index: number, name: string, value: unknown): void {
 // 提交整列表时的原始值参照（元素字段的"已修改"判断用）
 const originalItems = computed<unknown[]>(() => {
   return Array.isArray(props.originalValue) ? props.originalValue : [];
-});
-
-// 选择选项
-const itemOptions = computed(() => {
-  return itemSchema.value?.validation?.options || [];
 });
 
 /** 对象/数组项的 JSON 展示串和错误标记，索引对齐 items。 */
@@ -307,6 +375,12 @@ function removeItem(index: number) {
     else if (ki > index) shiftedExpanded.add(ki - 1);
   }
   expandedItems.value = shiftedExpanded;
+  const shiftedAdvanced = new Set<number>();
+  for (const ki of advancedOpen.value) {
+    if (ki < index) shiftedAdvanced.add(ki);
+    else if (ki > index) shiftedAdvanced.add(ki - 1);
+  }
+  advancedOpen.value = shiftedAdvanced;
   handleUpdate();
 }
 
@@ -336,6 +410,11 @@ function handleJsonEdit(index: number) {
   background: var(--bg-hover);
   border-radius: var(--radius-sm);
   padding: var(--spacing-sm);
+}
+
+/* 多选标签形态：单控件占满行宽 */
+.tag-select {
+  width: 100%;
 }
 
 .array-items {
@@ -381,8 +460,10 @@ function handleJsonEdit(index: number) {
   color: var(--color-danger);
 }
 
-/* 对象项折叠卡片 */
+/* 对象项折叠卡片：占满行宽（flex 容器内默认收缩到内容宽，13 字段的 provider 卡会被挤成窄条） */
 .object-item {
+  flex: 1 1 auto;
+  min-width: 0;
   border: 1px solid var(--border-color-light);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
@@ -431,5 +512,38 @@ function handleJsonEdit(index: number) {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
+}
+
+/* 高级参数折叠区 */
+.advanced-block {
+  border-top: 1px dashed var(--border-color-light);
+  padding-top: var(--spacing-xs);
+}
+
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.advanced-toggle:hover {
+  color: var(--color-primary);
+}
+
+.advanced-arrow {
+  font-size: 12px;
+}
+
+.advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  padding-top: var(--spacing-xs);
 }
 </style>

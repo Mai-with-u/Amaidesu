@@ -41,6 +41,8 @@ export interface ConfigFieldSchema {
   sensitive: boolean;
   group?: string;
   readonly?: boolean;
+  /** x-ui-advanced 标记：收进默认折叠的「高级参数」区（鉴权细节、重试参数等） */
+  advanced?: boolean;
 }
 
 // 配置分组 Schema
@@ -53,6 +55,8 @@ export interface ConfigGroupSchema {
   order: number;
   file_name?: string;
   file_label?: string;
+  /** 文件 [meta].version（只读，分组头角标展示） */
+  version?: string;
 }
 
 // 配置 Schema 响应

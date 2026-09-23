@@ -67,13 +67,30 @@ class LLMProviderConfig(BaseConfig):
         description="鉴权方式：bearer / header / query / none",
         json_schema_extra={"x-ui-type": "select", "x-options": ["bearer", "header", "query", "none"]},
     )
-    auth_header_name: str = Field(default="Authorization", description="header 鉴权时的 header 名")
-    auth_header_prefix: str = Field(default="Bearer", description="header 鉴权时值的前缀")
-    auth_query_name: str = Field(default="api_key", description="query 鉴权时的 query 参数名")
+    # auth_* 三兄弟只在非默认鉴权方式下才有意义，标 x-ui-advanced 让 WebUI 收进折叠区
+    auth_header_name: str = Field(
+        default="Authorization",
+        description="header 鉴权时的 header 名",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    auth_header_prefix: str = Field(
+        default="Bearer",
+        description="header 鉴权时值的前缀",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    auth_query_name: str = Field(
+        default="api_key",
+        description="query 鉴权时的 query 参数名",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     default_headers: dict[str, str] = Field(default_factory=dict, description="每次请求附加的默认 header")
     timeout: int = Field(default=60, ge=1, description="单次请求超时时间（秒）")
-    max_retries: int = Field(default=3, ge=0, description="请求失败时的最大重试次数")
-    retry_delay: float = Field(default=1.0, ge=0.0, description="重试间隔时间（秒）")
+    max_retries: int = Field(
+        default=3, ge=0, description="请求失败时的最大重试次数", json_schema_extra={"x-ui-advanced": True}
+    )
+    retry_delay: float = Field(
+        default=1.0, ge=0.0, description="重试间隔时间（秒）", json_schema_extra={"x-ui-advanced": True}
+    )
     reasoning_parse_mode: str = Field(
         default="auto",
         description="推理内容解析模式：auto / native / think_tag / none",

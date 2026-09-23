@@ -11,7 +11,9 @@
         <span class="card-title">{{ label }}</span>
       </div>
       <div class="card-header-right">
+        <!-- 开关仅在具备语义时显示：布尔 enabled 子字段，或名单驱动的文件 -->
         <el-switch
+          v-if="booleanEnabledKey || hasListSemantics"
           :model-value="enabled"
           size="small"
           active-text="启用"
@@ -26,7 +28,7 @@
     <!-- 组件描述 -->
     <div v-if="description" class="card-desc">{{ description }}</div>
 
-    <!-- 卡片体：展开时显示子字段，始终可展开（禁用时也可查看配置） -->
+    <!-- 卡片体：展开时显示子字段（禁用时也可查看配置） -->
     <div v-if="componentFields.length > 0 && expanded" class="card-body">
       <SubFieldGroup
         :fields="componentFields"
@@ -40,7 +42,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { ArrowRight, ArrowDown, Coin } from '@element-plus/icons-vue';
 import type { ConfigFieldSchema } from '@/types/settings';
 import SubFieldGroup from './SubFieldGroup.vue';
@@ -50,6 +52,10 @@ const props = defineProps<{
   description?: string;
   componentKey: string;
   enabledList: string[];
+  /** 非空时卡片开关绑定该布尔字段（如 tools.studio.obs.enabled），优先于名单模式 */
+  booleanEnabledKey?: string | null;
+  /** 卡片处于名单驱动文件（collectors/agents）：开关写启用名单 */
+  hasListSemantics?: boolean;
   componentFields: ConfigFieldSchema[];
   getValue: (key: string) => unknown;
   getOriginal: (key: string) => unknown;
@@ -57,12 +63,26 @@ const props = defineProps<{
   onToggle: (name: string, newEnabled: boolean) => void;
   /** 透传给内部 SubFieldGroup 的子卡片徽标查询函数 */
   getChangeCount?: (key: string) => number;
+  /** 工具栏「全部展开/全部收起」命令；seq 递增触发执行 */
+  expandCommand?: { action: 'expand' | 'collapse'; seq: number } | null;
 }>();
 
+// 默认展开：配置卡内容即页面主体，折叠与否交给工具栏命令
 const expanded = ref(true);
 
+watch(
+  () => props.expandCommand,
+  cmd => {
+    if (!cmd) return;
+    expanded.value = cmd.action === 'expand';
+  },
+);
+
 const compName = computed(() => props.componentKey.split('.').pop() || '');
-const enabled = computed(() => props.enabledList.includes(compName.value));
+const enabled = computed(() => {
+  if (props.booleanEnabledKey) return props.getValue(props.booleanEnabledKey) === true;
+  return props.enabledList.includes(compName.value);
+});
 
 const changeCount = computed(() => {
   let count = 0;
@@ -88,6 +108,11 @@ function toggleExpand() {
 }
 
 function toggleEnabled(val: boolean) {
+  if (props.booleanEnabledKey) {
+    // 合成最小字段对象：写路径只消费 key 与 label
+    props.updateValue({ key: props.booleanEnabledKey, label: 'enabled' } as ConfigFieldSchema, val);
+    return;
+  }
   props.onToggle(props.componentKey, val);
 }
 </script>
@@ -165,11 +190,12 @@ function toggleEnabled(val: boolean) {
   flex-shrink: 0;
 }
 
+/* 卡体固定高度：展开时不超过此限，卡内滚动，页面节奏可预期 */
 .card-body {
   border-top: 1px solid var(--border-color-light);
   padding: var(--spacing-md) var(--spacing-lg);
   background: var(--bg-elevated);
-  max-height: 400px;
+  max-height: 420px;
   overflow-y: auto;
 }
 

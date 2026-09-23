@@ -12,6 +12,11 @@ ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动半）：
   - ``vts_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）
   - ``vts_set_idle_enabled``      - 启停 idle 拟人动画
 
+工具表随连接态动态变化（MCP 降级登记同款机制）：未连接时 ``list_tools``
+返回空（装配期降级登记 0 工具，Agent 不可见不可调），连接建立后经
+``on_connection_changed`` 回调驱动注册表 ``refresh_provider_tools`` 补注册；
+断连时同样经回调摘除。
+
 被收敛的历史工具（微旋钮 / 运维件 / 不可发现件）的 Python 方法保留供
 内部机件调用，仅撤 LLM 工具注册。
 """
@@ -19,7 +24,7 @@ ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动半）：
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from pydantic import Field
 
@@ -260,6 +265,10 @@ class VTSProvider(BaseToolProvider):
         self._reconnect_task: Optional[asyncio.Task] = None
         self._is_connected = False
         self._has_started = False
+        # 连接态变化回调（注册接线方注入：True=已连接 / False=已断开）。
+        # 注册表据此 refresh_provider_tools 换血工具集——未连接降级登记 0 工具，
+        # 连接成功补注册，断连摘除；None = 未接线（工具表停在装配期快照）。
+        self.on_connection_changed: Optional[Callable[[bool], None]] = None
         # idle 归一化值 → 参数原生量纲的缩放表（连接后按 VTS 实际范围构建；未知 = 1.0）
         self._idle_param_scale: Dict[str, float] = {}
         # 换模跟随基线：上次解析链对应的模型名（空 = 未知，连接后记录）
@@ -319,7 +328,13 @@ class VTSProvider(BaseToolProvider):
         return self.PROVIDER_NAME
 
     def list_tools(self) -> List[ToolSpec]:
-        """声明本 Provider 暴露的工具列表（预设目录走 list_preset_actions 结果，不进描述）"""
+        """声明本 Provider 暴露的工具列表（预设目录走 list_preset_actions 结果，不进描述）。
+
+        随连接态动态：未连接返回空（降级登记，Agent 工具表不含 vts_*）；
+        连接建立后由连接态回调驱动注册表刷新补注册。
+        """
+        if not self._is_connected:
+            return []
         return [
             ToolSpec(
                 name="set_expression",
@@ -373,6 +388,16 @@ class VTSProvider(BaseToolProvider):
         except Exception as exc:  # noqa: BLE001 — Provider 边界兜底
             self.logger.exception(f"VTS 工具 {invocation.tool_name} 调用异常: {exc}")
             return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
+
+    async def health_check(self) -> bool:
+        """探活钩子（BaseToolProvider 契约：维护外部连接者必须真实检查）。
+
+        委托 ``_vts_health_check`` 做一次真实 VTS 请求往返（3 秒超时）：
+        连接可用才返回 True，断连 / 超时 / 异常一律 False。熔断工具的探活
+        恢复与手动重连后的复位都走此判定——不得沿用基类默认（恒 True 会把
+        已死连接上的熔断工具反复复位）。
+        """
+        return await self._vts_health_check()
 
     # ===== 生命周期 =====
 
@@ -462,6 +487,20 @@ class VTSProvider(BaseToolProvider):
     def _set_speaking(self, speaking: bool) -> None:
         """说话状态回调（bind_speaking_state 驱动；idle 据此暂停摇摆）。"""
         self._is_speaking = speaking
+
+    def _fire_connection_changed(self, connected: bool) -> None:
+        """连接态变化通知（仅真实迁移时调用）：驱动注册表刷新工具集。
+
+        回调异常隔离记录不上抛——通知失败只影响工具表刷新时机（下轮重连
+        循环迁移时再触发），不反噬连接流程。未接线（None）时静默跳过。
+        """
+        callback = self.on_connection_changed
+        if callback is None:
+            return
+        try:
+            callback(connected)
+        except Exception as exc:  # noqa: BLE001 - 通知旁路，不反噬连接流程
+            self.logger.error(f"VTS 连接态回调异常（已忽略）: {type(exc).__name__}: {exc}", exc=True)
 
     # ===== 业务方法 =====
 
@@ -748,6 +787,7 @@ class VTSProvider(BaseToolProvider):
         self._is_connecting = True
         try:
             if not self._vts:
+                self.last_error = "pyvts 未初始化"
                 self.logger.error("pyvts 未初始化")
                 return
 
@@ -756,7 +796,10 @@ class VTSProvider(BaseToolProvider):
             await self._vts.request_authenticate_token()
             await self._vts.request_authenticate()
             self._is_connected = True
+            self.last_error = ""
             self.logger.info("VTS 连接成功")
+            # 连接态换血：装配期降级登记的 0 工具在此补注册（回调由注册接线方提供）
+            self._fire_connection_changed(True)
 
             await self._reload_model_state()
             self._current_model_name = await self._query_current_model_name()
@@ -768,6 +811,7 @@ class VTSProvider(BaseToolProvider):
                 except Exception as e:
                     self.logger.error(f"启动 idle 动画失败: {e}")
         except Exception as e:
+            self.last_error = f"VTS 连接失败: {e}"
             self.logger.error(f"VTS 连接失败: {e}")
             self._is_connected = False
         finally:
@@ -869,6 +913,8 @@ class VTSProvider(BaseToolProvider):
                 if not await self._vts_health_check():
                     self.logger.warning("VTS 连接已断开（VTS 可能已重启），准备自动重连")
                     self._is_connected = False
+                    # 连接态换血：摘除断连工具（Agent 工具表不再包含 vts_*）
+                    self._fire_connection_changed(False)
                     try:
                         await self._vts.close()
                     except Exception as e:
@@ -904,6 +950,8 @@ class VTSProvider(BaseToolProvider):
             self.logger.warning(f"关闭 VTS 连接异常: {e}")
         finally:
             self._is_connected = False
+            # 连接态换血：手动断开 / cleanup 前先摘除工具（走到这里必是 True→False 迁移）
+            self._fire_connection_changed(False)
 
     async def connect(self) -> bool:
         """手动建立 VTS 连接（手动重连的"建立"半步）。
@@ -975,11 +1023,17 @@ def register_vts_tools(
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
 ) -> VTSProvider:
-    """构造 VTSProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。"""
+    """构造 VTSProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。
+
+    注册接线：装配期未连接 → 降级登记 0 工具（MCP 同款）；连接态回调驱动
+    ``registry.refresh_provider_tools``——连接成功补注册、断连摘除，工具表
+    始终与真实连接态一致。
+    """
     provider = create_vts_provider(
         config=config,
         event_bus=event_bus,
         lipsync_analyzer=lipsync_analyzer,
     )
     registry.register_provider(provider)
+    provider.on_connection_changed = lambda _connected: registry.refresh_provider_tools(provider)
     return provider

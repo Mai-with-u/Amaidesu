@@ -24,6 +24,11 @@ const router = createRouter({
       component: () => import('@/views/Tools.vue'),
     },
     {
+      path: '/memory',
+      name: 'memory',
+      component: () => import('@/views/Memory.vue'),
+    },
+    {
       path: '/eventlog',
       name: 'eventlog',
       component: () => import('@/views/EventLog.vue'),

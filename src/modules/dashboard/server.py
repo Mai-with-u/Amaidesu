@@ -76,6 +76,7 @@ class DashboardServer:
         chat_repo: Optional[Any] = None,
         llm_repo: Optional[Any] = None,
         rundown_repo: Optional[Any] = None,
+        memory: Optional[Any] = None,
     ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
@@ -103,6 +104,9 @@ class DashboardServer:
         # 注入 RundownRepo 让 `/api/v1/rundowns*` 承载流程单库 CRUD；
         # 未注入（极简启动/测试）时相关端点降级 success=false
         self.rundown_repo = rundown_repo
+        # 注入 SimpleMemory 让 `/api/v1/memory/*` 承载记忆管理面（检索/增改/
+        # 删除/召回测试）；未注入（极简启动/测试）时相关端点返回 503
+        self.memory = memory
 
         self.port = dashboard_config.port
         self.host = dashboard_config.host
