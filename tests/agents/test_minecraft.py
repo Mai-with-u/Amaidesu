@@ -11,6 +11,7 @@ from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftAgentState
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
@@ -1043,6 +1044,123 @@ async def test_task_terminal_wakes_worker_with_snapshot() -> None:
     finally:
         await tracker.stop()
         await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_design_completion_resumes_original_build_goal() -> None:
+    """真实通知链恢复原指令和待办后发起施工，不能把设计成功当成交付或重新询问建造授权。"""
+    provider = _FakeMaiCraftProvider()
+    registry = ToolRegistry()
+    registry.register_provider(provider)
+    turn = 0
+    instruction = "建好木屋；只能使用公共木料箱，保护旁边菜地"
+
+    async def script(messages: list[dict], **kwargs: Any) -> Response:
+        nonlocal turn
+        turn += 1
+        if turn == 1:
+            return _resp(
+                tool_calls=[
+                    _tool_call(
+                        "minecraft_todo",
+                        {"action": "write", "todos": [{"content": "设计后施工并验收", "status": "in_progress"}]},
+                        "todo",
+                    ),
+                    _tool_call("maicraft_maicraft_execute", {"task_id": "design-1"}, "design"),
+                ]
+            )
+        if turn == 3:
+            restored = "\n".join(message.get("content", "") for message in messages if message["role"] == "user")
+            assert instruction in restored and "设计后施工并验收" in restored and "公共木料箱已定位" in restored
+            return _resp(tool_calls=[_tool_call("maicraft_maicraft_execute", {"task_id": "build-1"}, "build")])
+        return _resp("等待后台执行进展")
+
+    llm = _RecordingLlm(script)
+    agent, tracker = _make_task_agent(llm, registry)
+    tracker.start()
+    await agent.start()
+    try:
+        await agent.send_prompt(instruction)
+        await _wait_until(lambda: len(llm.captured) == 2)
+        agent._mc_state.set_notebook("公共木料箱已定位")
+        provider.task_states["design-1"].update(state="success", buildable=True)
+        provider.fire_attention()
+        await _wait_until(lambda: len(llm.captured) == 4)
+        assert tracker.ledger.get("build-1") is not None
+        assert agent._task_steps == 4 and not agent._task_finished
+        assert not agent.get_state_snapshot()["recent_reports"]
+    finally:
+        await tracker.stop()
+        await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_task_notifications_cannot_reset_exhausted_step_budget() -> None:
+    """预算耗尽后到来的施工通知只更新工作状态；玩家明确继续才恢复原任务并重新给预算。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(return_value=_resp(tool_calls=[_tool_call("minecraft_todo", {"action": "read"})]))
+    bus = MagicMock()
+    bus.emit = AsyncMock()
+    agent = MinecraftAgent(MinecraftConfig(max_steps=2), llm_manager=llm, event_bus=bus)
+    await agent.start()
+    try:
+        await agent.send_prompt("建造小屋，不碰私人箱子")
+        await _wait_until(lambda: agent._task_suspended)
+        agent.on_task_notification(
+            TaskChangedPayload(task_id="design-1", status="succeeded", initiator="minecraft", summary="设计检查结束")
+        )
+        await asyncio.sleep(0.1)
+        assert llm.generate.await_count == 2
+        await agent.send_prompt("继续，保持原先取料限制")
+        await _wait_until(lambda: llm.generate.await_count == 4 and agent._task_suspended)
+        assert agent._task_instructions == ["建造小屋，不碰私人箱子", "继续，保持原先取料限制"]
+    finally:
+        await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_unfinished_todos_block_natural_and_explicit_delivery() -> None:
+    """模型停下或声称完成，都不能把仍在施工的待办伪装成成功；真实完成后才可交付。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(
+        side_effect=[
+            _resp(
+                tool_calls=[
+                    _tool_call(
+                        "minecraft_todo", {"action": "write", "todos": [{"content": "施工", "status": "in_progress"}]}
+                    )
+                ]
+            ),
+            _resp("完成了"),
+        ]
+    )
+    bus = MagicMock()
+    bus.emit = AsyncMock()
+    agent = MinecraftAgent(MinecraftConfig(), llm_manager=llm, event_bus=bus, tool_registry=ToolRegistry())
+    await agent.start()
+    try:
+        await agent.send_prompt("建好房屋")
+        await _wait_until(lambda: agent._task_suspended)
+        assert not agent.get_state_snapshot()["recent_reports"]
+        assert "未完成待办" in await agent._handle_report("delivery", "已建好", "")
+        agent._mc_state.set_todos([{"content": "施工", "status": "done"}])
+        assert await agent._handle_report("delivery", "施工已验证完成", "") is None
+        assert agent._task_finished
+    finally:
+        await agent.stop()
+
+
+def test_task_event_keeps_decision_facts_in_ledger() -> None:
+    """注意流本来就带着的决策事实要保留，不能只存一个 decision 事件类型。"""
+    tracker = MagicMock()
+    agent = MinecraftAgent(MinecraftConfig(), event_bus=MagicMock(), task_tracker=tracker)
+    data = {
+        "decision_id": "choice-1",
+        "context": {"failure_code": "missing_material"},
+        "options": [{"choice": "retry"}],
+    }
+    agent._absorb_task_event({"type": "decision", "task_id": "build-1", "data": data})
+    assert tracker.ledger.update.call_args.kwargs["snapshot"]["data"] == data
 
 
 @pytest.mark.asyncio

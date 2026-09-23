@@ -29,7 +29,7 @@ from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
 from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.agents.minecraft.builder.controller import MinecraftBuilderController
-from src.agents.minecraft.state import MinecraftAgentState
+from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.tools import (
     MinecraftToolProvider,
     build_get_work_log_spec,
@@ -64,6 +64,18 @@ _ATTENTION_PAGE_LIMIT = 10
 
 # 本批任务期间保留的身体事件条数上限（上报携带的任务上下文，多了只会淹没重点）
 _MAX_BATCH_BODY_EVENTS = 5
+
+# 模板与无提示词管理器的运行环境共用这些边界，确保角色在缺料和设计完成后采取同样的行动。
+_GAMEPLAY_RULES = (
+    "\n执行边界：缺料不授权探索陌生箱子。仅在玩家明确要求搜索，或告示牌、可信记忆、聊天说明、"
+    "真实历史观察指向具体容器与目标材料时，才使用定向 use_container/manage_container；"
+    "说明访问依据并遵守取用权限与保护范围。附近有箱子、地标名称和缺料本身都不是授权。"
+    "无合规库存来源时按已允许的合成或采集路线继续，确实无法取得时报告材料缺口。"
+    "设计审阅 success 只表示检查结束，必须核对 buildable/physical_layout_compiled 等真实结果。"
+    "用户要求建好且设计可用、符合要求时，下一步是备料和施工，无需重复询问相同建造授权；"
+    "用户只要设计时保持只设计。设计不可建时处理具体阻塞，不能把审阅完成当作工程完成。"
+    "原任务会随后台唤醒恢复，沿原待办和最新阶段继续；没有其他可推进事项时让出本轮等待任务通知。"
+)
 
 # MaiCraft 状态名 → 任务词表状态映射（绑定处适配声明的一部分；词表）
 # 两组键各服务一条来路，互不冲突：
@@ -172,6 +184,12 @@ class MinecraftAgent(BaseAgent):
         # 指令队列（委派接收 / 系统注入投递；元素 = (task_id, content)，
         # task_id 空串表示非委派来源；任务执行中也可追加——LLM 下一次推理吸收）
         self._message_queue: Deque[tuple] = deque()
+        # 原始指令和执行阶段跟随逻辑任务，不能因一次后台通知重新开批就丢失。
+        self._task_instructions: List[str] = []
+        self._task_progress: Dict[str, Dict[str, Any]] = {}
+        self._task_steps = 0
+        self._task_finished = True
+        self._task_suspended = False
         # 本批已吸收的委派任务号（进入 running）与待写终态的委派任务号
         self._delegated_batch_ids: List[str] = []
         self._delegated_finished_ids: List[str] = []
@@ -502,7 +520,7 @@ class MinecraftAgent(BaseAgent):
         原 minecraft_send_prompt 工具的内部职能；工具已退役，跨 Agent
         派活走 framework_delegate → receive_delegation。
         """
-        self._message_queue.append(("", content))
+        self._message_queue.append(MinecraftInstruction("", content))
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到指令注入：{content[:60]}")
 
@@ -512,7 +530,7 @@ class MinecraftAgent(BaseAgent):
         指令不可拒绝；队列项带任务号供任务批次把状态写回任务记录表
         （开始 → running；交付/升级 → 终态）。
         """
-        self._message_queue.append((task_id, instruction))
+        self._message_queue.append(MinecraftInstruction(task_id, instruction))
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到委派（task_id={task_id}）：{instruction[:60]}")
         return None  # 已接收
@@ -523,6 +541,11 @@ class MinecraftAgent(BaseAgent):
             await self._wake_event.wait()
             self._wake_event.clear()
             if not (self._running and self._message_queue):
+                continue
+            # 达到预算或上报困难后只等玩家的新指令；身体事件和任务通知不能自动续一份推理预算。
+            if (self._task_finished or self._task_suspended) and not any(
+                isinstance(message, MinecraftInstruction) for message in self._message_queue
+            ):
                 continue
             try:
                 await self._run_task()
@@ -577,24 +600,50 @@ class MinecraftAgent(BaseAgent):
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ]
+        if not self._task_finished and self._task_instructions:
+            # 后台任务完成后先恢复原目标、待办与当前阶段，再让模型解释这次通知。
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "[继续原游戏任务]\n"
+                    + json.dumps(self._current_task_context(), ensure_ascii=False, default=str),
+                }
+            )
 
         steps = 0
         mc_round = f"mc_{uuid.uuid4().hex[:12]}" if self._thinking_sink is not None else ""
         mc_seq_box = [0]
-        while self._running and steps < self.typed_config.max_steps:
-            steps += 1
-
+        while self._running:
             # 步骤间挂起（平台 pause）
             await self._paused.wait()
 
             # --- 消息 flush（执行中追加的委派指令 / 任务通知在下一次推理前吸收）---
             while self._message_queue:
-                _tid, _content = self._message_queue.popleft()
+                queued = self._message_queue.popleft()
+                _tid, _content = queued
+                if isinstance(queued, MinecraftInstruction):
+                    if self._task_finished:
+                        self._task_instructions.clear()
+                        self._task_progress.clear()
+                        messages[:] = [{"role": "system", "content": system_prompt}]
+                        self._mc_state.set_todos([])
+                    self._task_instructions.append(_content)
+                    self._task_finished = False
+                    self._task_suspended = False
+                    self._task_steps = 0
                 if _tid:
                     self._delegated_batch_ids.append(_tid)
                 messages.append({"role": "user", "content": _content})
             # 本批委派任务进入进行中（agent 型单写者：执行 Agent 写）
             self._mark_delegated_running()
+            if self._task_steps >= self.typed_config.max_steps:
+                self._task_suspended = True
+                await self.emit_attention_required(
+                    f"任务超过 {self.typed_config.max_steps} 步上限，已挂起；需要新指令才能继续"
+                )
+                return
+            steps += 1
+            self._task_steps += 1
 
             # --- 身体事件增量读取（任务跑着的时候才知道自己正被谁打）---
             await self._drain_attention()
@@ -651,9 +700,18 @@ class MinecraftAgent(BaseAgent):
                         f"任务批次自然终止（{steps} 步），{self._pending_task_count()} 个后台任务跟踪中，静默让出"
                     )
                 elif not self._task_reported:
+                    # 模型停说话不等于施工完毕；未完成待办须保留，不能包装成成功交付。
+                    if self._unfinished_todos():
+                        self._task_suspended = True
+                        await self.emit_attention_required(
+                            "模型停止行动，但还有未完成待办；已保留任务上下文，等待继续指令"
+                        )
+                        return
                     # 情形 3：无 report 无 handoff——系统兜底，主播必收到一次且仅一次交付
                     delivery = (response.content or "").strip()
                     await self._emit_report("delivery", delivery[:_MAX_DELIVERY_TEXT] if delivery else "任务完成")
+                    self._task_finished = True
+                    self._finish_delegated("succeeded", summary=delivery[:80] or "任务完成")
                     self._logger.info(f"任务批次自然终止（{steps} 步），系统兜底交付")
                 else:
                     self._logger.info(f"任务批次结束（{steps} 步，已上报）")
@@ -680,9 +738,19 @@ class MinecraftAgent(BaseAgent):
                 self._logger.info(f"LLM 已上报（delivery/escalation），任务批次结束（{steps} 步）")
                 return
 
-        # 情形 5：超步挂起
-        if self._running:
-            await self.emit_attention_required(f"任务超过 {self.typed_config.max_steps} 步上限，已挂起")
+    def _current_task_context(self) -> Dict[str, Any]:
+        """恢复原任务时附上玩家原文与工作阶段；只在批次起点恢复，不改工具观察的压缩策略。"""
+        return {
+            "original_instructions": list(self._task_instructions),
+            "todo": self._mc_state.todo_doc()["todos"],
+            "notebook": self._mc_state.notebook,
+            "background_tasks": list(self._task_progress.values()),
+            "reasoning_steps_used": self._task_steps,
+        }
+
+    def _unfinished_todos(self) -> bool:
+        """施工、备料或核验仍有待办时，交付必须继续等待这些事项完成。"""
+        return any(todo.status != "done" for todo in self._mc_state.todos)
 
     def _compact_observations(self, messages: List[Dict[str, Any]]) -> None:
         """规整对话历史：保留**最后** N 条工具结果，更早的替换为占位符。
@@ -799,6 +867,15 @@ class MinecraftAgent(BaseAgent):
         等价原 handoff 行为：状态真变化（含决策点/暂停/终态）与停滞告警
         （payload.alert）都送进消息队列，由下一次推理吸收。
         """
+        if not self._task_finished:
+            # 任务事件记成工作阶段，下一次醒来仍知道哪个设计或施工任务走到了哪里。
+            self._task_progress[payload.task_id] = {
+                "task_id": payload.task_id,
+                "status": payload.status,
+                "summary": payload.summary,
+            }
+            while len(self._task_progress) > 64:
+                self._task_progress.pop(next(iter(self._task_progress)))
         if self._builder is not None:
             self._builder.absorb(payload)
         if payload.executor == "minecraft_builder":
@@ -1000,7 +1077,8 @@ class MinecraftAgent(BaseAgent):
         written = ledger.update(
             task_id,
             status,
-            snapshot={"event_type": event_type},
+            # 完成与决策事件已有真实结果，不能只留下事件类型再让父 Agent 猜下一步。
+            snapshot={"event_type": event_type, "task_id": task_id, "data": event.get("data") or {}},
             summary=self._task_event_summary(event_type, event),
         )
         if written is not None:
@@ -1051,8 +1129,12 @@ class MinecraftAgent(BaseAgent):
                 f"仍有 {pending} 个后台任务未决（跟踪中），"
                 "不能交付——先用任务查询工具处理它们，或改用 escalation 说明情况"
             )
+        if kind == "delivery" and self._unfinished_todos():
+            return "仍有未完成待办，不能交付；继续推进备料、施工或验证，确实受阻时使用 escalation"
         await self._emit_report(kind, content, scene=scene)
         self._task_reported = True
+        self._task_finished = kind == "delivery"
+        self._task_suspended = kind == "escalation"
         # 委派任务终态：交付 = 成功；升级 = 失败（需发起方介入）
         self._finish_delegated("succeeded" if kind == "delivery" else "failed", summary=f"{kind}: {content[:80]}")
         return None
@@ -1061,10 +1143,10 @@ class MinecraftAgent(BaseAgent):
         """系统提示词：渲染 prompt_manager 模板（无则用内建兜底）。"""
         if self._prompt is not None:
             try:
-                return self._with_builder_prompt(self._prompt.render("amaidesu_minecraft_agent"))
+                return self._with_gameplay_prompt(self._prompt.render("amaidesu_minecraft_agent"))
             except Exception as exc:  # noqa: BLE001 - 渲染失败降级内建
                 self._logger.warning(f"MinecraftAgent 提示词渲染失败，降级内建: {type(exc).__name__}: {exc}")
-        return self._with_builder_prompt(
+        return self._with_gameplay_prompt(
             "你是 Minecraft 世界中的 AI 玩家。用工具玩 Minecraft："
             "minecraft_todo 管理目标与进度、minecraft_notebook 记录关键信息，"
             "其余工具（maicraft_*）是你在游戏内的操作能力。"
@@ -1074,8 +1156,9 @@ class MinecraftAgent(BaseAgent):
             "工具调用：一次可调多个工具（它们会依次执行）；执行串行但你可一次发出多个请求。"
         )
 
-    def _with_builder_prompt(self, prompt: str) -> str:
-        """仅在本游戏装配建造入口时告知委派方式，教程不进入父级上下文。"""
+    def _with_gameplay_prompt(self, prompt: str) -> str:
+        """所有环境都保留访问与阶段边界；装配建筑设计入口时再附加委派方式。"""
+        prompt += _GAMEPLAY_RULES
         if self._builder is None:
             return prompt
         return prompt + (

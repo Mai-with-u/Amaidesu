@@ -385,9 +385,7 @@ async def test_task_start_tutorial_is_in_first_prompt_and_read_once(harness: Har
 
 
 @pytest.mark.parametrize("incompatibility", ["capability", "schema", "budget"])
-async def test_incompatible_task_start_tutorial_fails_before_inference(
-    harness: Harness, incompatibility: str
-) -> None:
+async def test_incompatible_task_start_tutorial_fails_before_inference(harness: Harness, incompatibility: str) -> None:
     """基础教材也必须满足实际 Mod 能力、格式与完整正文预算，不可绕过门禁注入。"""
     guide = harness.resources.catalog["resources"][0]
     guide["load_policy"] = "task_start"
@@ -765,9 +763,12 @@ async def test_real_completion_event_wakes_parent_once_with_design_reference(har
             result = valid_design()[design_calls]
             design_calls += 1
             return result
-        assert any("minecraft_builder_task" in item.get("content", "") for item in messages if item["role"] == "user")
-        parent_called.set()
-        return Response(success=True, content="收到设计，尚未施工", tool_calls=[])
+        if any("minecraft_builder_task" in item.get("content", "") for item in messages if item["role"] == "user"):
+            parent_called.set()
+            return Response(success=True, content="收到设计，尚未施工", tool_calls=[])
+        if not any(item.get("role") == "tool" for item in messages):
+            return response("minecraft_builder_request", {"requirements": "建一座房子"})
+        return Response(success=True, content="等待设计完成", tool_calls=[])
 
     llm = MagicMock()
     llm.generate = AsyncMock(side_effect=generate)
@@ -782,8 +783,8 @@ async def test_real_completion_event_wakes_parent_once_with_design_reference(har
     await parent.start()
     parent._mcp_client = harness.resources
     try:
-        receipt = await parent._execute_tool("minecraft_builder_request", {"requirements": "建一座房子"})
-        assert receipt["accepted"] is True
+        # 从真正的玩家指令启动父任务，后台通知只能继续它，不能凭空创建新的游戏任务。
+        await parent.send_prompt("建一座房子")
         await asyncio.wait_for(parent_called.wait(), 2)
         assert len(changes) == 1 and changes[0].executor == "minecraft_builder"
         assert changes[0].snapshot["result"]["artifact_ref"] == "draft-1"

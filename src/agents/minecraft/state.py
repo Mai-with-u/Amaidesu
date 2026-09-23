@@ -11,10 +11,17 @@ maicraft 返回原样给 LLM 读，本状态只承载 Agent 自己的"指令 + �
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, NamedTuple
 
 # 近期上报保留条数（主播状态查询够用）
 MAX_REPORTS = 10
+
+
+class MinecraftInstruction(NamedTuple):
+    """玩家指令保留原二元组协议，系统通知不能冒充新指令来恢复已挂起的任务。"""
+
+    task_id: str
+    content: str
 
 
 @dataclass(slots=True)
