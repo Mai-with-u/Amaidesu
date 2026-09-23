@@ -207,7 +207,6 @@ class MinecraftBuilderAgent(BaseAgent):
                 for spec in sorted(specs, key=lambda item: item.full_name)
             ]
             if context_chars(messages, tools) > self._config.max_context_chars:
-                used_steps += 1
                 await compactor.compact(
                     messages,
                     tools,
@@ -218,7 +217,9 @@ class MinecraftBuilderAgent(BaseAgent):
                         if self._candidate
                         else None,
                     },
+                    max_attempts=self._config.max_steps - used_steps,
                 )
+                used_steps += compactor.last_calls
                 if used_steps >= self._config.max_steps:
                     break
             await self._resume.wait()

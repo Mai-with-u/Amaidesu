@@ -627,6 +627,7 @@ class MinecraftAgent(BaseAgent):
                     "role": "user",
                     "content": "[继续原游戏任务]\n"
                     + json.dumps(self._current_task_context(), ensure_ascii=False, default=str),
+                    "_minecraft_context_facts": True,
                 }
             )
 
@@ -883,9 +884,13 @@ class MinecraftAgent(BaseAgent):
         """历史超预算才生成检查点，失败保留原件并挂起，避免无上下文地继续操作游戏。"""
         if context_chars(messages, tools) <= self.typed_config.context.max_context_chars:
             return True
-        self._task_steps += 1
         try:
-            await self._context_compactor.compact(messages, tools, self._current_task_context())
+            await self._context_compactor.compact(
+                messages,
+                tools,
+                self._current_task_context(),
+                max_attempts=self.typed_config.max_steps - self._task_steps,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 整理失败保留任务，不用半份摘要继续游戏
@@ -893,6 +898,9 @@ class MinecraftAgent(BaseAgent):
             self._task_suspended = True
             await self.emit_attention_required(f"上下文整理失败，任务已保留：{exc}")
             return False
+        finally:
+            # 首次摘要和修订都是真实调用，重写不能悄悄增加一份任务预算。
+            self._task_steps += self._context_compactor.last_calls
         if self._task_steps >= self.typed_config.max_steps:
             self._task_suspended = True
             await self.emit_attention_required("历史已整理，但本任务推理预算已用完；等待新指令后继续")

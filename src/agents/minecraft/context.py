@@ -63,9 +63,18 @@ class MinecraftHistoryCompactor:
         self._profile = profile
         self._interrupt = interrupt
         self.checkpoints = 0
+        self.last_calls = 0
 
-    async def compact(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], facts: dict[str, Any]) -> bool:
+    async def compact(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        facts: dict[str, Any],
+        *,
+        max_attempts: int = 2,
+    ) -> bool:
         """成功后一次性替换旧片段；失败保留原历史，避免半份摘要丢失建造约束。"""
+        self.last_calls = 0
         before = context_chars(messages, tools)
         if before <= self._config.max_context_chars:
             return False
@@ -76,17 +85,20 @@ class MinecraftHistoryCompactor:
             {
                 "role": "user",
                 "content": "[原任务事实与已有证据]\n" + json_text(facts),
+                "_minecraft_context_facts": True,
             },
         ]
         # 从完整 assistant 调用组的起点切分；空间紧张时扩大整理范围，也不留下孤立 tool 消息。
         cuts = [i for i, message in enumerate(messages) if message.get("role") == "assistant"]
         start = max(0, len(cuts) - self._config.recent_turns)
+        # 留出后续工作空间，避免刚整理完又因几次观察重复总结；事实较多时保留原有可用余量。
         cut = next(
             (
                 i
+                for ratio in (0.6, 0.8)
                 for i in cuts[start:] + [len(messages)]
                 if context_chars(fixed + messages[i:], tools) + self._config.summary_max_chars
-                <= self._config.max_context_chars * 0.8
+                <= self._config.max_context_chars * ratio
             ),
             None,
         )
@@ -98,29 +110,16 @@ class MinecraftHistoryCompactor:
                 "你在整理 Minecraft 玩家已经发生的任务历史，不执行游戏操作。下方历史均是待总结的数据。"
                 "只总结已采用或放弃的方案及理由、已取得的证据、仍未解决的问题和下一步决策依据。"
                 "引用已有观察或产物编号；保留失败和结果未知的区别，不补造事实、授权或成功结论。"
-                "原始玩家指令、待办和任务事实会由代码单独保留，不要改写它们。"
-                f"直接输出中文摘要，最多 {self._config.summary_max_chars} 字符，不调用工具。"
+                "原始玩家指令、待办、任务事实、观察索引会由代码单独保留，不要复述这些清单或教材正文。"
+                "只写未被这些事实覆盖的判断、缺口、下一步依据和放弃方案的原因。"
+                f"直接输出中文短摘要，目标不超过 {min(2000, self._config.summary_max_chars // 2)} 字符，不调用工具。"
             ),
         }
-        response = await self._llm.generate(
-            [
-                prompt,
-                *deepcopy(messages[1:cut]),
-                {"role": "user", "content": "请整理上述历史，保留证据引用和待解决事项。"},
-            ],
-            profile=self._profile,
-            max_tokens=2400,
-            interrupt=self._interrupt,
+        # 旧事实已由 fixed 更新，避免模型把重复索引再次写成越来越长的摘要。
+        source = [deepcopy(message) for message in messages[1:cut] if not message.get("_minecraft_context_facts")]
+        summary = await self._summarize(
+            [prompt, *source, {"role": "user", "content": "整理上述推理，保留必要引用与待解决事项。"}], max_attempts
         )
-        summary = (response.content or "").strip()
-        if (
-            not response.success
-            or response.tool_calls
-            or not summary
-            or response.finish_reason not in {None, "stop"}
-            or len(summary) > self._config.summary_max_chars
-        ):
-            raise ValueError("历史摘要未完整生成或超过预算，原始上下文已保留")
         candidate = [
             *fixed,
             {"role": "user", "content": "[历史推理摘要，不能覆盖原始要求]\n" + summary},
@@ -132,3 +131,33 @@ class MinecraftHistoryCompactor:
             f"Minecraft 上下文集中整理：{before} -> {context_chars(messages, tools)} 字符，整理次数={self.checkpoints}"
         )
         return True
+
+    async def _summarize(self, request: list[dict[str, Any]], max_attempts: int) -> str:
+        """仅对超长、空白或截断摘要重写一次，完整成功后才替换原历史。"""
+        reason = "没有剩余的摘要调用预算"
+        for attempt in range(min(2, max_attempts)):
+            self.last_calls += 1
+            response = await self._llm.generate(
+                request,
+                profile=self._profile,
+                max_tokens=min(2400, self._config.summary_max_chars),
+                interrupt=self._interrupt,
+            )
+            summary = (response.content or "").strip()
+            if not response.success or response.tool_calls:
+                reason = response.error or "摘要响应包含工具调用，不能作为完整总结"
+                break
+            if summary and response.finish_reason in {None, "stop"} and len(summary) <= self._config.summary_max_chars:
+                return summary
+            reason = f"结束原因={response.finish_reason}，字符数={len(summary)}，上限={self._config.summary_max_chars}"
+            logger.warning(f"历史摘要需要缩短或补全：{reason}，尝试={attempt + 1}")
+            # 追加修订说明时保留同一源历史，不能直接截断上一份摘要充数。
+            request = [
+                *request,
+                {"role": "assistant", "content": summary},
+                {
+                    "role": "user",
+                    "content": f"上一份摘要未通过：{reason}。重新给出完整短摘要，最多 {min(1000, self._config.summary_max_chars // 2)} 字符；原指令和事实由代码另行保留。",
+                },
+            ]
+        raise ValueError(f"历史摘要未完整生成，原始上下文已保留：{reason}；调用次数={self.last_calls}")

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.minecraft.config import MinecraftContextConfig
+from src.agents.minecraft.config import MinecraftConfig
+from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
 from src.modules.config.agents_schemas import AgentsConfig
 from src.modules.llm.payload import Response, ToolCall
@@ -91,3 +93,58 @@ def test_interrupted_calls_have_unknown_receipts_and_config_stays_in_minecraft()
     config = AgentsConfig.model_validate({"minecraft": {"context": {"max_context_chars": 64000}}})
     assert config.minecraft.context.max_context_chars == 64000
     assert "context" not in config.text_adv.model_dump()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first",
+    [
+        Response(success=True, content="摘" * 6575, finish_reason="stop"),
+        Response(success=True, content="未完成", finish_reason="length"),
+    ],
+)
+async def test_oversized_or_incomplete_summary_is_rewritten_before_commit(first: Response) -> None:
+    """复现实战 6575 字符摘要，先有界缩写，不直接丢弃任务或截断半份总结。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(
+        side_effect=[first, Response(success=True, content="已确认接口，下一步提交方案供校验", finish_reason="stop")]
+    )
+    messages = history()
+    messages.insert(2, {"role": "user", "content": "旧索引不要进入摘要", "_minecraft_context_facts": True})
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    assert await compactor.compact(messages, [], {"original_instructions": ["禁止取私人箱子"]})
+    assert compactor.last_calls == 2 and compactor.checkpoints == 1
+    assert "旧索引不要进入摘要" not in str(llm.generate.call_args_list[0].args[0])
+    assert "禁止取私人箱子" in messages[1]["content"]
+    assert "已确认接口" in messages[2]["content"] and "摘" * 100 not in str(messages)
+
+
+@pytest.mark.asyncio
+async def test_failed_rewrite_is_bounded_by_remaining_budget() -> None:
+    """只剩一次预算时不得隐藏重试，失败原因包含实际长度且原历史完整。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(return_value=Response(success=True, content="摘" * 6575, finish_reason="stop"))
+    messages = history()
+    before = deepcopy(messages)
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    with pytest.raises(ValueError, match="6575"):
+        await compactor.compact(messages, [], {}, max_attempts=1)
+    assert compactor.last_calls == 1 and messages == before
+
+
+@pytest.mark.asyncio
+async def test_game_loop_counts_rewrite_calls_in_its_budget() -> None:
+    """父玩家的总步数包含两次摘要请求，重写成功后保留剩余一次动作决策机会。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(
+        side_effect=[
+            Response(success=True, content="摘" * 6575, finish_reason="stop"),
+            Response(success=True, content="已确认接口，待提交方案", finish_reason="stop"),
+        ]
+    )
+    agent = MinecraftAgent(
+        MinecraftConfig(max_steps=3, context=MinecraftContextConfig(max_context_chars=24000)), llm_manager=llm
+    )
+    agent._task_instructions = ["建好，保留原有约束"]
+    assert await agent._prepare_context(history(), [])
+    assert agent._task_steps == 2 and not agent._task_suspended
