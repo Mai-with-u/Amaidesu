@@ -30,9 +30,7 @@ class TestBootstrapNoLongerHandlesTTS:
     def test_bind_core_tools_signature_has_no_tts_config_param(self):
         """``bind_core_tools`` 不再接受 ``tts_config`` 形参。"""
         sig = inspect.signature(bind_core_tools)
-        assert "tts_config" not in sig.parameters, (
-            "TTS 装配已迁出 bootstrap，bind_core_tools 不应再有 tts_config 形参"
-        )
+        assert "tts_config" not in sig.parameters, "TTS 装配已迁出 bootstrap，bind_core_tools 不应再有 tts_config 形参"
 
     def test_tts_provider_does_not_register_anything(self):
         """``bind_core_tools`` 不应注册任何 TTS 相关工具（TTS 由装配入口负责）。"""
@@ -63,7 +61,11 @@ class TestNonTTSPackagesUnchanged:
         assert registry.list_tools() == [], "无域开关配置，bootstrap 不应注册任何工具"
 
     def test_avatar_vts_enabled_registers_vts_tools(self):
-        """平台名在 avatar.toml 启用名单内：应注册 vts_* 工具。"""
+        """平台名在 avatar.toml 启用名单内：装配 Provider（降级登记 0 工具）。
+
+        装配期未连接 → 降级登记（Provider 在册、0 工具，连接成功后经
+        on_connection_changed 回调补注册，见 test_vts_provider_reconnect）。
+        """
         registry = ToolRegistry()
         report = bind_core_tools(
             registry,
@@ -71,8 +73,11 @@ class TestNonTTSPackagesUnchanged:
             avatar_platform={"enabled": ["vts"], "vts": {"vts_port": 8001}},
         )
         vts_tools = [n.full_name for n in registry.list_tools() if n.full_name.startswith("vts_")]
-        assert vts_tools != [], "avatar.vts 已启用应被注册"
-        assert report.get("vts", 0) > 0
+        assert vts_tools == [], "装配期未连接，vts_* 应降级登记为 0 工具"
+        cards = [c for c in registry.list_providers() if c["name"] == "vts"]
+        assert len(cards) == 1, "avatar.vts 已启用：Provider 应在册（降级登记也保持可见可重连）"
+        assert cards[0]["tool_count"] == 0
+        assert report.get("vts", 0) == 0
 
     def test_avatar_vts_disabled_registers_none(self):
         """平台名不在启用名单：不注册 vts_* 工具。"""
@@ -105,9 +110,7 @@ class TestNonTTSPackagesUnchanged:
         registry = ToolRegistry()
         bind_core_tools(registry, config={})
         for prefix in ("vts_", "warudo_", "obs_", "vrchat_"):
-            assert not any(
-                n.name.startswith(prefix) for n in registry.list_tools()
-            ), f"{prefix} 不应被装配"
+            assert not any(n.name.startswith(prefix) for n in registry.list_tools()), f"{prefix} 不应被装配"
 
     def test_non_registry_argument_raises_type_error(self):
         with pytest.raises(TypeError):

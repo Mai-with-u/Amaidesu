@@ -253,7 +253,12 @@ def bind_core_tools(
         if new_count > 0:
             logger.info(f"bind_core_tools: '{key}' 已绑定，新增 {new_count} 个工具（{description}）")
         else:
-            logger.warning(f"bind_core_tools: '{key}' 调用成功但未新增任何工具（{description}）")
+            # 连接型 Provider（VTS 等）装配期未连接 → 降级登记 0 工具属预期；
+            # 静态 Provider 0 工具仍是异常信号，保留 warning 提示排查
+            logger.warning(
+                f"bind_core_tools: '{key}' 装配成功但 0 工具（{description}）；"
+                "连接型 Provider 降级登记属预期（连接成功后自动补注册），静态 Provider 需排查注册实现"
+            )
 
     return report
 
