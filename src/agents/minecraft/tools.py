@@ -138,6 +138,27 @@ def build_notebook_spec() -> ToolSpec:
     )
 
 
+def build_observation_spec() -> ToolSpec:
+    """大型游戏回执的定向读取入口，避免为了查一个材料缺口重读全部勘测。"""
+    return ToolSpec(
+        name="observation",
+        description="按观察编号和 JSON Pointer 路径读取完整原文；摘要足够时不调用。用 next_offset 继续分页。",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "observation_id": {"type": "string"},
+                "path": {"type": "string", "default": "", "description": "例如 /task/decision 或 /blocks/0"},
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 8000, "default": 4000},
+            },
+            "required": ["observation_id"],
+            "additionalProperties": False,
+        },
+        kind="sync",
+        provider=PROVIDER_NAME,
+    )
+
+
 def build_report_spec() -> ToolSpec:
     """``minecraft_report`` 工具规格——上报通道（玩家→主播，交付/升级）"""
     return ToolSpec(
@@ -230,6 +251,7 @@ class MinecraftToolProvider(BaseToolProvider):
             build_notebook_spec(),
             build_get_work_log_spec(),
             build_report_spec(),
+            build_observation_spec(),
         ]
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -259,6 +281,11 @@ class MinecraftToolProvider(BaseToolProvider):
                 result = await self._invoke_get_work_log(args)
             elif matched.name == "report":
                 result = await self._invoke_report(args)
+            elif matched.name == "observation":
+                # 仅读已有任务记录，不把查询详情伪装成一次新的世界观察。
+                result = self.state.observations.read(
+                    args["observation_id"], args.get("path", ""), args.get("offset", 0), args.get("limit", 4000)
+                )
             else:
                 return ToolExecutionResult(
                     tool_name=tool_name,

@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from src.agents.minecraft.observations import MinecraftObservations
+
 # 近期上报保留条数（主播状态查询够用）
 MAX_REPORTS = 10
 
@@ -38,6 +40,8 @@ class MinecraftAgentState:
     todos: List[TodoItem] = field(default_factory=list)
     notebook: str = ""
     reports: List[Dict[str, str]] = field(default_factory=list)
+    # 大勘测和任务详情留在模型上下文外，只有明确需要某个字段时才分页取回。
+    observations: MinecraftObservations = field(default_factory=MinecraftObservations)
 
     # ---- todo 文档操作 ----
 

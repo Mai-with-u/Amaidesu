@@ -1205,7 +1205,8 @@ def test_factory_instantiates_minecraft() -> None:
     )
     assert isinstance(agent, MinecraftAgent)
     assert agent.typed_config.max_steps == 9
-    assert [s.name for s in agent.list_tools()] == ["todo", "notebook", "get_work_log", "report"]
+    # 新建游戏 Agent 同时提供观察详情入口，模型无需重复读取整份游戏快照。
+    assert [s.name for s in agent.list_tools()] == ["todo", "notebook", "get_work_log", "report", "observation"]
 
 
 def test_factory_rejects_legacy_game_name() -> None:
