@@ -145,6 +145,10 @@ class ToolRegistry:
         # 停用的工具名集合：工具仍保留在注册表中（工具页可见全集），
         # 但对 LLM 不可见（list_tools 默认排除）且调用被拒绝
         self._disabled: set[str] = set()
+        # 已声明停用但尚未注册的工具名（[tools].disabled_tools 中指向
+        # 降级登记 Provider 的条目，如连接失败时的 vts_*）：工具日后经
+        # register 进场时自动转正为停用，配置声明不因注册时序而失灵
+        self._disabled_pending: set[str] = set()
         # 可选事件总线：挂载后每次调用完成 emit tool.result.<name>
         # 熔断/恢复时额外 emit tool.health.<name>
         self._event_bus = event_bus
@@ -183,6 +187,12 @@ class ToolRegistry:
             logger.debug(f"工具 '{registered_name}' 已注册（保留先注册，跳过本次 provider={spec.provider}）")
             return False
         self._tools[registered_name] = (spec, impl)
+        # 停用声明转正：apply_disabled 先于本工具注册（连接型 Provider 降级
+        # 登记后补注册）时，在此承接停用态，配置声明不因注册时序而失灵
+        if registered_name in self._disabled_pending:
+            self._disabled_pending.discard(registered_name)
+            self._disabled.add(registered_name)
+            logger.info(f"工具 '{registered_name}' 注册时承接既有的停用声明")
         logger.debug(f"工具 '{registered_name}' 已注册（provider={spec.provider}, kind={spec.kind}）")
         return True
 
@@ -609,17 +619,24 @@ class ToolRegistry:
     def apply_disabled(self, names: Iterable[str]) -> int:
         """整体设置停用集合（组合根装配完成后调用）。
 
-        未匹配任何已注册工具的条目记一行 warning 并列出（防止工具改名后
-        配置里的停用条目静默失效）；已存在的名字正常生效。
+        未匹配任何已注册工具的条目进入**待生效集**（``_disabled_pending``）：
+        连接型 Provider 降级登记（连接失败先注册 0 工具、连接成功后补注册）
+        时，指向其工具的停用条目在声明期尚未注册——进待生效集，待工具注册
+        时自动转正为停用，配置声明不因注册时序而失灵。长期不注册仍可能是
+        工具改名/拼错，记 warning 提示排查。
 
         Returns:
-            实际生效的停用工具数（即注册表中存在的名字数）。
+            已注册且立即生效的停用工具数（待生效集不计入）。
         """
         name_set = set(names)
         self._disabled = {n for n in name_set if n in self._tools}
-        unmatched = sorted(name_set - self._disabled)
+        self._disabled_pending = name_set - self._disabled
+        unmatched = sorted(self._disabled_pending)
         if unmatched:
-            logger.warning(f"停用列表中有 {len(unmatched)} 个未注册工具（可能已改名或拼错，本次不生效）: {unmatched}")
+            logger.warning(
+                f"停用列表中有 {len(unmatched)} 个未注册工具（可能已改名或拼错；"
+                f"连接型 Provider 降级登记时属预期，注册后自动生效）: {unmatched}"
+            )
         if self._disabled:
             logger.info(f"ToolRegistry 已停用 {len(self._disabled)} 个工具: {sorted(self._disabled)}")
         return len(self._disabled)
@@ -1051,6 +1068,7 @@ class ToolRegistry:
         self._providers.clear()
         self._categories.clear()
         self._disabled.clear()
+        self._disabled_pending.clear()
         self._health.clear()
         self._tool_owner.clear()
         self._visible_to.clear()

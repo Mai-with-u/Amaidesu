@@ -520,9 +520,7 @@ def test_visible_to_recorded_and_for_agent_filters(registry: ToolRegistry) -> No
         async def invoke(self, invocation: ToolInvocation):
             return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
 
-    registry.register_provider(
-        MixedProvider(), visible_to={"mixed_secret": ["minecraft"]}
-    )
+    registry.register_provider(MixedProvider(), visible_to={"mixed_secret": ["minecraft"]})
 
     # 名单查询
     assert registry.visible_to_of("mixed_open") == ["streamer"]  # 未声明 = 默认仅主播
@@ -642,3 +640,27 @@ def test_apply_disabled_warns_on_unmatched_names(
     assert registry.is_disabled("game_p_a") is True
     assert registry.disabled_tools == ["game_p_a"]
     assert any("不存在的工具名" in m for m in messages), "未匹配条目应出现在 warning 日志"
+
+
+def test_apply_disabled_pending_takes_effect_on_late_registration(
+    registry: ToolRegistry,
+) -> None:
+    """未注册的停用条目进待生效集：工具日后注册时自动承接停用态。
+
+    场景：连接型 Provider 降级登记（连接失败 0 工具）时 apply_disabled 先行，
+    停用声明不得因注册时序而失灵（连接成功补注册后仍须停用）。
+    """
+    provider = _SampleProvider()
+    registry.register_provider(provider)
+    registry.apply_disabled(["game_late_tool"])
+
+    # 声明期尚未注册：不在停用集（is_disabled 只对已注册工具有意义）
+    assert registry.is_disabled("game_late_tool") is False
+
+    # 日后注册（如连接成功 refresh 补注册）：自动承接停用
+    registry.register(
+        ToolSpec(name="late_tool", description="d", kind="sync", provider="game"),
+        provider.invoke,
+    )
+    assert registry.is_disabled("game_late_tool") is True
+    assert all(s.full_name != "game_late_tool" for s in registry.list_tools()), "待生效停用转正后，工具应对 LLM 不可见"
