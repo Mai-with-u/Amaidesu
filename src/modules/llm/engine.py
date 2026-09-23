@@ -666,14 +666,14 @@ class LLMManager:
         """
         call_kwargs = dict(kwargs)
         call_kwargs["model"] = model_identifier
-        # profile 生成参数为具体值（禁 None）：调用方未显式给值时用 profile 档位
+        # 单次请求的显式额度和温度优先；只有未指定时才采用用途默认值，避免摘要额度被覆盖。
         profile = self._get_profile(profile_name)
-        if call_kwargs.get("temperature") is None:
-            call_kwargs["temperature"] = profile.temperature
-        if call_kwargs.get("max_tokens") is None:
-            call_kwargs["max_tokens"] = profile.max_tokens
-        # 调用方明确要求完整输出时，不再用用途配置的额度限制生成长度。
         request = call_kwargs.get("request")
+        for parameter in ("temperature", "max_tokens"):
+            if call_kwargs.get(parameter) is None:
+                explicit = getattr(request, parameter, None)
+                call_kwargs[parameter] = explicit if explicit is not None else getattr(profile, parameter)
+        # 调用方明确要求完整输出时，不再用用途配置的额度限制生成长度。
         if request is not None and request.omit_output_token_limit:
             call_kwargs["max_tokens"] = None
 

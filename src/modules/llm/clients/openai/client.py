@@ -447,7 +447,8 @@ class OpenAIClient(BaseLLMClient):
             request_params: Dict[str, Any] = {
                 "model": model,
                 "messages": messages,
-                "temperature": temperature or self.temperature,
+                # 显式零温度也是调用方选择，只有 None 才采用客户端默认值。
+                "temperature": self.temperature if temperature is None else temperature,
             }
             if tools:
                 request_params["tools"] = self._normalize_tool_definitions(tools)
@@ -521,7 +522,8 @@ class OpenAIClient(BaseLLMClient):
         request_params: Dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": temperature or self.temperature,
+            # 流式与普通调用采用同样的优先级，不能把零温度误判成缺省。
+            "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
             # usage 随末帧返回；不支持该参数的兼容端点会在 create 阶段抛错，
             # 由调用方（chat）降级为非流式路径兜底
@@ -647,7 +649,8 @@ class OpenAIClient(BaseLLMClient):
             request_params: Dict[str, Any] = {
                 "model": model,
                 "messages": vision_messages,
-                "temperature": temperature or self.temperature,
+                # 视觉请求同样保留调用方显式给出的零温度。
+                "temperature": self.temperature if temperature is None else temperature,
             }
             if max_tokens:
                 request_params["max_tokens"] = max_tokens
