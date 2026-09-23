@@ -29,6 +29,7 @@ from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
 from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.agents.minecraft.builder.controller import MinecraftBuilderController
+from src.agents.minecraft.design_progress import MachineDesignProgress
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.tools import (
     MinecraftToolProvider,
@@ -80,6 +81,10 @@ _GAMEPLAY_RULES = (
     "不要用产品专用工作站模板替代组合设计，不要因为已有另一条简单配方就改变目标产物。"
     "有具体产物要求时将实际目标写入 expected_output，禁用模组写入 constraints.forbidden_mods；"
     "比较连续产量、用料和占地时区分估算与实测，缺少运行证据不能声称效率最优。"
+    "传送带可声明带段或折线路径，由 Mod 展开端轴；读取返回的 power_ports 选择端点或中间带轮接入动力。"
+    "计划端口存在不表示现场已供电，转角物品交接也不表示动力相连。安装附件时声明最终方块形态。"
+    "设计被拒绝时按 design_diagnostics 或 validation.issues 修订原蓝图，保留目标与禁用模组；"
+    "修改后的 execute 请求使用新 request_key。相同拒绝没有新证据时应改变方案或上报阻塞，勿反复原样提交或查询无关观察。"
 )
 
 # MaiCraft 状态名 → 任务词表状态映射（绑定处适配声明的一部分；词表）
@@ -195,6 +200,7 @@ class MinecraftAgent(BaseAgent):
         self._task_steps = 0
         self._task_finished = True
         self._task_suspended = False
+        self._design_progress = MachineDesignProgress()
         # 本批已吸收的委派任务号（进入 running）与待写终态的委派任务号
         self._delegated_batch_ids: List[str] = []
         self._delegated_finished_ids: List[str] = []
@@ -637,6 +643,7 @@ class MinecraftAgent(BaseAgent):
                     self._task_finished = False
                     self._task_suspended = False
                     self._task_steps = 0
+                    self._design_progress.reset()
                 if _tid:
                     self._delegated_batch_ids.append(_tid)
                 messages.append({"role": "user", "content": _content})
@@ -752,6 +759,13 @@ class MinecraftAgent(BaseAgent):
                         "content": json.dumps(observation, ensure_ascii=False, default=str),
                     }
                 )
+                blocked_design = self._design_progress.observe(call.name, arguments, observation)
+                if blocked_design:
+                    # 已知拒绝尚未产生游戏动作，停止当前批次并保存原任务，避免继续消耗推理去重放同一错误。
+                    self._task_suspended = True
+                    self._logger.warning(blocked_design)
+                    await self.emit_attention_required(blocked_design)
+                    return
 
             # 情形 1/2：LLM 已 report——本轮工具执行完后停止（delivery/escalation 语义）
             if self._task_reported:
@@ -819,6 +833,11 @@ class MinecraftAgent(BaseAgent):
         )
         if result.success:
             return result.structured_content if isinstance(result.structured_content, dict) else {"ok": True}
+        if isinstance(result.structured_content, dict) and result.structured_content:
+            # 错误通道保留 Mod 的坐标、规则和结果不确定性；工具失败仍由外层 ok=false 明确标记。
+            observation = {**result.structured_content, "ok": False, "tool": name}
+            observation.setdefault("error", result.error_message or "工具执行失败")
+            return observation
         return {"ok": False, "error": result.error_message or "工具执行失败", "tool": name}
 
     def _build_thinking_callback(self, round_id: str, step: int, seq_box: List[int]) -> Any:
