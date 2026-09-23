@@ -646,21 +646,25 @@ async def test_llm_call_failure_emits_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_react_observation_compaction() -> None:
-    """旧观察压缩：超过保留条数的 tool 消息替换为占位符，保留最近 N 条。"""
+async def test_react_small_history_keeps_old_observations() -> None:
+    """超过十条观察仍保留已发送消息，只有体积超预算才集中整理。"""
     agent = MinecraftAgent(MinecraftConfig(), event_bus=MagicMock())
-    messages: list[dict] = [{"role": "tool", "tool_call_id": f"c{i}", "content": f"obs-{i}"} for i in range(12)]
-    agent._compact_observations(messages)
-
-    tools = [m for m in messages if m["role"] == "tool"]
-    assert len(tools) == 12
-    # 最早的 2 条（12-10）被压缩
-    compressed = [m for m in tools if m["content"] == "[观察已压缩]"]
-    assert len(compressed) == 2
-    assert compressed[0]["tool_call_id"] == "c0"
-    # 最近 10 条保留原文
-    assert tools[2]["content"] == "obs-2"
-    assert tools[-1]["content"] == "obs-11"
+    messages: list[dict] = [{"role": "system", "content": "玩家任务"}]
+    for i in range(12):
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"id": f"c{i}", "type": "function", "function": {"name": "observe", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": f"c{i}", "content": f"obs-{i}"},
+            ]
+        )
+    before = [message.copy() for message in messages]
+    assert await agent._prepare_context(messages, [])
+    assert messages == before and agent._context_compactor.checkpoints == 0
 
 
 @pytest.mark.asyncio

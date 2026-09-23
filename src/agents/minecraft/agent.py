@@ -29,6 +29,7 @@ from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
 from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.agents.minecraft.builder.controller import MinecraftBuilderController
+from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
 from src.agents.minecraft.design_progress import MachineDesignProgress
 from src.agents.minecraft.observations import MinecraftObservations
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
@@ -49,9 +50,6 @@ __all__ = ["MinecraftAgent"]
 # 游戏决策使用独立用途；建筑设计的模型预算由子 Agent 自己声明。
 MINECRAFT_PROFILE = "minecraft"
 
-# 旧观察规整：最近 N 条工具结果保留原文，更早的替换为占位符（防上下文膨胀）
-_OBSERVATION_KEEP = 10
-
 # 交付/上报文本截断（事件 payload 与兜底交付共用）
 _MAX_DELIVERY_TEXT = 800
 
@@ -71,6 +69,8 @@ _GAMEPLAY_RULES = (
     "用户要求建好且设计可用、符合要求时，下一步是备料和施工，无需重复询问相同建造授权；"
     "用户只要设计时保持只设计。设计不可建时处理具体阻塞，不能把审阅完成当作工程完成。"
     "原任务会随后台唤醒恢复，沿原待办和最新阶段继续；没有其他可推进事项时让出本轮等待任务通知。"
+    "宿主监控已登记的后台任务；没有独立事项时单独调用 minecraft_wait，不用 attention 超时反复轮询。"
+    "复用最新待办和有效资料；大观察的 deferred 字段用 minecraft_observation 按 ref/path 展开，不能当成空数据。"
     "机器组合由你选择具体设备、工件承载面、输送和回流关系：先读 maicraft://knowledge/machine_assembly、"
     "组件原生接口和实际配方定义，再给 design_machine/build_machine 提交显式 blueprint 与 assembly。"
     "不要用产品专用工作站模板替代组合设计，不要因为已有另一条简单配方就改变目标产物。"
@@ -201,6 +201,9 @@ class MinecraftAgent(BaseAgent):
         self._task_finished = True
         self._task_suspended = False
         self._design_progress = MachineDesignProgress()
+        # 同一逻辑任务跨后台等待沿用历史，只有新任务或集中整理才重建前缀。
+        self._messages: List[Dict[str, Any]] = []
+        self._context_compactor = MinecraftHistoryCompactor(llm_manager, config.context)
         # 本批已吸收的委派任务号（进入 running）与待写终态的委派任务号
         self._delegated_batch_ids: List[str] = []
         self._delegated_finished_ids: List[str] = []
@@ -569,7 +572,7 @@ class MinecraftAgent(BaseAgent):
 
         循环每步：
         1. flush 命令/系统注入消息 → 追加 user 消息
-        2. 规整对话历史（旧观察 → 占位符）
+        2. 按预算集中整理历史，普通轮次保留既有消息
         3. LLM 推理（generate + 工具列表）→ tool_calls（可多个）
         4. 串行执行：统一经 ToolRegistry（观测/停用/熔断复用既有机制）
         5. 工具结果作为观察作为观察返回（OpenAI tool role + tool_call_id）
@@ -605,11 +608,13 @@ class MinecraftAgent(BaseAgent):
             tool_defs: List[Dict[str, Any]] = []
         else:
             specs = self._tool_registry.list_tools(for_agent=self.name)
-            tool_defs = [_spec_to_fn(s) for s in specs]
+            # 注册顺序的偶然变化不能改变同一组工具的发送顺序。
+            tool_defs = [_spec_to_fn(s) for s in sorted(specs, key=lambda spec: spec.full_name)]
 
-        messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-        ]
+        if not self._messages:
+            self._messages.append({"role": "system", "content": system_prompt})
+        messages = self._messages
+        close_interrupted_calls(messages)
         if not self._task_finished and self._task_instructions:
             # 后台任务完成后先恢复原目标、待办与当前阶段，再让模型解释这次通知。
             messages.append(
@@ -637,6 +642,7 @@ class MinecraftAgent(BaseAgent):
                         self._task_instructions.clear()
                         self._task_progress.clear()
                         messages[:] = [{"role": "system", "content": system_prompt}]
+                        self._context_compactor.checkpoints = 0
                         self._mc_state.set_todos([])
                         # 原文引用只属于本次逻辑任务；后台唤醒和同任务补充要求继续使用已有证据。
                         context = self.typed_config.context
@@ -660,13 +666,14 @@ class MinecraftAgent(BaseAgent):
                 )
                 return
             steps += 1
-            self._task_steps += 1
 
             # --- 身体事件增量读取（任务跑着的时候才知道自己正被谁打）---
             await self._drain_attention()
 
-            # --- 对话历史规整（旧观察 → 占位符）---
-            self._compact_observations(messages)
+            # 集中整理也计入本任务推理预算；大观察已在回填时缩小，正常轮次只追加。
+            if not await self._prepare_context(messages, tool_defs):
+                return
+            self._task_steps += 1
 
             # --- LLM 推理 ---
             on_delta = self._build_thinking_callback(mc_round, steps, mc_seq_box) if mc_round else None
@@ -807,7 +814,7 @@ class MinecraftAgent(BaseAgent):
         return self._observations.read(arguments)
 
     def _current_task_context(self) -> Dict[str, Any]:
-        """恢复原任务时附上玩家原文与工作阶段；只在批次起点恢复，不改工具观察的压缩策略。"""
+        """恢复与集中整理都保留玩家原文、当前工作文档、任务阶段和可补读的证据。"""
         progress = dict(self._task_progress)
         ledger = getattr(self._task_tracker, "ledger", None)
         if ledger is not None:
@@ -832,27 +839,25 @@ class MinecraftAgent(BaseAgent):
         """施工、备料或核验仍有待办时，交付必须继续等待这些事项完成。"""
         return any(todo.status != "done" for todo in self._mc_state.todos)
 
-    def _compact_observations(self, messages: List[Dict[str, Any]]) -> None:
-        """规整对话历史：保留**最后** N 条工具结果，更早的替换为占位符。
-
-        只替换 tool role 消息（观察），user/assistant 保留——上下文长度受控，
-        关键信息由 notebook 承载（提示词引导）。
-        """
-        total = sum(1 for m in messages if m.get("role") == "tool")
-        excess = total - _OBSERVATION_KEEP
-        if excess <= 0:
-            return
-        seen = 0
-        for i, msg in enumerate(messages):
-            if msg.get("role") != "tool":
-                continue
-            seen += 1
-            if seen <= excess:
-                messages[i] = {
-                    "role": "tool",
-                    "tool_call_id": msg.get("tool_call_id", ""),
-                    "content": "[观察已压缩]",
-                }
+    async def _prepare_context(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> bool:
+        """历史超预算才生成检查点，失败保留原件并挂起，避免无上下文地继续操作游戏。"""
+        if context_chars(messages, tools) <= self.typed_config.context.max_context_chars:
+            return True
+        self._task_steps += 1
+        try:
+            await self._context_compactor.compact(messages, tools, self._current_task_context())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 整理失败保留任务，不用半份摘要继续游戏
+            self._logger.warning(f"Minecraft 历史整理失败，原任务已保留：{exc}", exc=True)
+            self._task_suspended = True
+            await self.emit_attention_required(f"上下文整理失败，任务已保留：{exc}")
+            return False
+        if self._task_steps >= self.typed_config.max_steps:
+            self._task_suspended = True
+            await self.emit_attention_required("历史已整理，但本任务推理预算已用完；等待新指令后继续")
+            return False
+        return True
 
     async def _execute_tool(self, name: str, arguments: Dict[str, Any], *, round_id: str = "") -> Dict[str, Any]:
         """串行执行单个工具调用：统一经 ToolRegistry（观测/停用/熔断复用既有机制）。

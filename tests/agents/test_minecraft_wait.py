@@ -52,6 +52,7 @@ async def test_wait_preserves_task_and_only_completion_needs_another_decision() 
     assert llm.generate.await_count == 1
     assert agent._wait_requested and not agent._task_finished
     assert not agent._task_reported and agent._task_steps == 1
+    sent_history = deepcopy(agent._messages)
     for _ in range(4):
         tracker.ledger.update("work", "running", snapshot={"progress": 20})
         await tracker.step()
@@ -66,6 +67,12 @@ async def test_wait_preserves_task_and_only_completion_needs_another_decision() 
     llm.generate.return_value = Response(success=True, content="已核验施工完成")
     await agent._run_task_batch()
     assert llm.generate.await_count == 2 and agent._task_finished
+    # 等待完成恢复时原有调用与回执仍为完全相同的前缀，新任务才清空旧任务的上下文。
+    assert agent._messages[:len(sent_history)] == sent_history
+    await agent.send_prompt("报告当前位置")
+    await agent._run_task_batch()
+    assert "按已批准设计施工" not in str(agent._messages)
+    assert agent._context_compactor.checkpoints == 0
 
 
 def test_wait_requires_running_dependency_and_no_unhandled_decision() -> None:
