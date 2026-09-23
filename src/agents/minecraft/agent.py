@@ -75,6 +75,11 @@ _GAMEPLAY_RULES = (
     "用户要求建好且设计可用、符合要求时，下一步是备料和施工，无需重复询问相同建造授权；"
     "用户只要设计时保持只设计。设计不可建时处理具体阻塞，不能把审阅完成当作工程完成。"
     "原任务会随后台唤醒恢复，沿原待办和最新阶段继续；没有其他可推进事项时让出本轮等待任务通知。"
+    "机器组合由你选择具体设备、工件承载面、输送和回流关系：先读 maicraft://knowledge/machine_assembly、"
+    "组件原生接口和实际配方定义，再给 design_machine/build_machine 提交显式 blueprint 与 assembly。"
+    "不要用产品专用工作站模板替代组合设计，不要因为已有另一条简单配方就改变目标产物。"
+    "有具体产物要求时将实际目标写入 expected_output，禁用模组写入 constraints.forbidden_mods；"
+    "比较连续产量、用料和占地时区分估算与实测，缺少运行证据不能声称效率最优。"
 )
 
 # MaiCraft 状态名 → 任务词表状态映射（绑定处适配声明的一部分；词表）
@@ -1202,7 +1207,7 @@ class MinecraftAgent(BaseAgent):
         if self._builder is None:
             return prompt
         return prompt + (
-            "\n建筑设计交给 minecraft_builder_request：传自然语言 requirements 和已知现场 context，"
+            "\n房屋与外观结构设计交给 minecraft_builder_request：传自然语言 requirements 和已知现场 context，"
             "不要自己生成完整建筑 JSON。intent=build 要求建好，intent=design 只要设计。"
             "它立即返回任务号，不要轮询等待；完成事件会通知你。"
             "用 minecraft_builder_task 查询、修改、取消设计；设计通过后用 action=execute 按引用施工，"

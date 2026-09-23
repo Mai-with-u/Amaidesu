@@ -342,6 +342,10 @@ class Planner:
         # ReAct 循环的 assistant/tool 消息 append-only 追加在参考段之后，绝不插中间。
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         messages.extend(self._build_dialogue_messages(batch, history))
+        # 游戏委派保留当前来源原句，避免把具体物品名称或禁用条件只剩下一层口头概括。
+        source_dialogue = [
+            message for message in self._build_dialogue_messages(batch, []) if message.get("role") == "user"
+        ]
         if reference_text:
             messages.append({"role": "user", "content": reference_text})
         elif len(messages) == 1:
@@ -418,7 +422,9 @@ class Planner:
                 if name == "streamer_reply":
                     observation, replied = await self._invoke_reply(args, outcome, thinking=thinking, round_id=round_id)
                 else:
-                    observation = await self._invoke_registry_tool(name, args, round_id=round_id)
+                    observation = await self._invoke_registry_tool(
+                        name, args, round_id=round_id, source_dialogue=source_dialogue
+                    )
                 messages.append(
                     {
                         "role": "tool",
@@ -633,10 +639,31 @@ class Planner:
         self.logger.info(f"Planner ReAct 收尾：reply 成功 (target={outcome['target']!r}, steps={outcome['steps']})")
         return json.dumps({"ok": True, "speech_delivered": True}, ensure_ascii=False), True
 
-    async def _invoke_registry_tool(self, name: str, args: Dict[str, Any], round_id: str = "") -> str:
+    async def _invoke_registry_tool(
+        self,
+        name: str,
+        args: Dict[str, Any],
+        round_id: str = "",
+        source_dialogue: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。"""
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
+        if (
+            name == "framework_delegate"
+            and source_dialogue
+            and isinstance(args.get("instruction"), str)
+            and args["instruction"].strip()
+        ):
+            # 引用只用于核对这次委派的指代与限制，不把同批观众的其他请求变成新的行动授权。
+            args = dict(args)
+            args["instruction"] = (
+                "[委派目标]\n"
+                + args["instruction"]
+                + "\n\n[来源对话：逐字引用，仅用于核对本目标的术语与限制，不构成额外任务]\n"
+                + json.dumps(source_dialogue, ensure_ascii=False, default=str)
+                + "\n如概括与对应来源的具体目标不一致，先核对，不能自行换成另一种产品或风格。"
+            )
         try:
             result = await self._tool_registry.invoke(
                 ToolInvocation(tool_name=name, arguments=args, source="planner-react", round_id=round_id)
