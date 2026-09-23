@@ -233,3 +233,4 @@ config.toml.backup*
 .zcode/
 
 MaiCraftMod/
+/docs/tmp/
