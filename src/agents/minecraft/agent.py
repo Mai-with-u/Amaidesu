@@ -36,6 +36,7 @@ from src.agents.minecraft.design_progress import MachineDesignProgress
 from src.agents.minecraft.observations import MinecraftObservations, json_text
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.tools import MinecraftToolProvider
+from src.agents.minecraft.tool_content import failed_observation, successful_observation
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -911,13 +912,9 @@ class MinecraftAgent(BaseAgent):
             ToolInvocation(tool_name=name, arguments=arguments, source="minecraft-react", round_id=round_id)
         )
         if result.success:
-            return result.structured_content if isinstance(result.structured_content, dict) else {"ok": True}
-        if isinstance(result.structured_content, dict) and result.structured_content:
-            # 错误通道保留 Mod 的坐标、规则和结果不确定性；工具失败仍由外层 ok=false 明确标记。
-            observation = {**result.structured_content, "ok": False, "tool": name}
-            observation.setdefault("error", result.error_message or "工具执行失败")
-            return observation
-        return {"ok": False, "error": result.error_message or "工具执行失败", "tool": name}
+            # 知识正文可能只在文本通道中，先完整拼装再交给原文保存与呈现层。
+            return successful_observation(result, arguments)
+        return failed_observation(result, name)
 
     def _build_thinking_callback(self, round_id: str, step: int, seq_box: List[int]) -> Any:
         """构造 LLM 层增量回调（duck-typed sink），只转发 reasoning 增量。
