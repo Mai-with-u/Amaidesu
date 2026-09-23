@@ -1327,7 +1327,8 @@ def test_factory_instantiates_minecraft() -> None:
     )
     assert isinstance(agent, MinecraftAgent)
     assert agent.typed_config.max_steps == 9
-    assert [s.name for s in agent.list_tools()] == ["todo", "notebook", "get_work_log", "report"]
+    # 工厂创建的玩家也暴露让出能力，等待是否可用由真实后台依赖决定。
+    assert [s.name for s in agent.list_tools()] == ["todo", "notebook", "get_work_log", "report", "wait"]
 
 
 def test_factory_rejects_legacy_game_name() -> None:

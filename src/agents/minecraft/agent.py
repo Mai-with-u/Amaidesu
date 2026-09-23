@@ -31,13 +31,7 @@ from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.agents.minecraft.builder.controller import MinecraftBuilderController
 from src.agents.minecraft.design_progress import MachineDesignProgress
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
-from src.agents.minecraft.tools import (
-    MinecraftToolProvider,
-    build_get_work_log_spec,
-    build_notebook_spec,
-    build_report_spec,
-    build_todo_spec,
-)
+from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -186,6 +180,7 @@ class MinecraftAgent(BaseAgent):
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
             report_callback=self._handle_report,
+            wait_callback=self._request_wait,
         )
 
         # 命令驱动运行骨架：worker 等命令信号，任务内有界 ReAct 循环
@@ -230,6 +225,7 @@ class MinecraftAgent(BaseAgent):
 
         # 本批次 LLM 是否已 report（delivery/escalation 终止语义判定）
         self._task_reported = False
+        self._wait_requested = False
 
         # 平台暂停支持（AgentControl pause/resume 经 _on_pause/_on_resume 进入）
         self._paused = asyncio.Event()
@@ -484,12 +480,7 @@ class MinecraftAgent(BaseAgent):
 
     def list_tools(self) -> Iterable[ToolSpec]:
         """声明 Agent 专属工具（provider="minecraft"）。"""
-        specs = [
-            build_todo_spec(),
-            build_notebook_spec(),
-            build_get_work_log_spec(),
-            build_report_spec(),
-        ]
+        specs = list(self._tool_provider.list_tools())
         if self._builder is not None:
             specs.extend(self._builder.provider.list_tools())
         return specs
@@ -500,6 +491,7 @@ class MinecraftAgent(BaseAgent):
         "minecraft_todo": ["minecraft"],
         "minecraft_notebook": ["minecraft"],
         "minecraft_report": ["minecraft"],
+        "minecraft_wait": ["minecraft"],
         "minecraft_get_work_log": ["streamer"],
     }
 
@@ -597,6 +589,7 @@ class MinecraftAgent(BaseAgent):
     async def _run_task_batch(self) -> None:
         """任务批主体：ReAct 有界循环，直到批次终止语义命中。"""
         self._task_reported = False
+        self._wait_requested = False
         system_prompt = self._system_prompt()
         # 工具列表 = 注册表按可见名单计算（for_agent，每任务重新拉取）——
         # minecraft 名单内含本地件 todo/notebook/report 与 maicraft_*，共享工具
@@ -750,7 +743,11 @@ class MinecraftAgent(BaseAgent):
                 # 扁平 ToolCall：name/arguments(id 关联观察回填)；arguments 已是解析后的 dict
                 arguments = call.arguments if isinstance(call.arguments, dict) else {}
 
-                observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
+                # 等待必须独占本轮，防止同批后续动作与“已让出”回执相互矛盾。
+                if call.name == "minecraft_wait" and len(tool_calls) != 1:
+                    observation = {"ok": False, "error": "minecraft_wait 必须单独调用；先完成本轮其他动作"}
+                else:
+                    observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
                 self._track_receipt(call.name, observation)
                 messages.append(
                     {
@@ -771,6 +768,22 @@ class MinecraftAgent(BaseAgent):
             if self._task_reported:
                 self._logger.info(f"LLM 已上报（delivery/escalation），任务批次结束（{steps} 步）")
                 return
+
+            if self._wait_requested and not self._message_queue:
+                # 工具结果已完整回填；等待期间不再调用模型，真实通知保留原目标并唤醒下一批。
+                return
+            self._wait_requested = False
+
+    def _request_wait(self) -> Dict[str, Any]:
+        """只允许对已有后台依赖让出执行，待开工和待决策不能靠等待推进。"""
+        if self._actionable_task_ids():
+            return {"ok": False, "error": "仍有待开工或待决策任务，请先推进或说明具体阻塞"}
+        if self._pending_task_count() == 0:
+            return {"ok": False, "error": "没有已登记的后台任务；请继续执行待办或上报阻塞"}
+        if self._message_queue:
+            return {"ok": True, "waiting": False, "reason": "已有新消息，请处理最新事实"}
+        self._wait_requested = True
+        return {"ok": True, "waiting": True, "monitor": "host", "resume_on": "task_event_or_instruction"}
 
     def _current_task_context(self) -> Dict[str, Any]:
         """恢复原任务时附上玩家原文与工作阶段；只在批次起点恢复，不改工具观察的压缩策略。"""

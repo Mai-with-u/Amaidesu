@@ -36,6 +36,7 @@ from src.modules.tools.models import (
 )
 from src.modules.tools.provider import BaseToolProvider
 
+from .runtime_tools import build_wait_spec
 from .state import MinecraftAgentState
 
 logger = get_logger("MinecraftTools")
@@ -61,7 +62,7 @@ def build_todo_spec() -> ToolSpec:
             "待办文档（全量读写，无 id）。管理 Minecraft 玩家自己的目标与进度："
             "read 返回当前 todo 全文；write 提交新全文（覆盖）。"
             "任务的分解与推进由你自己决定：把收到的上级指令分解为任务，"
-            "逐项推进并标记 done。每轮决策应 read 一次最新全文。"
+            "逐项推进并标记 done。刚读写过且没有变化时复用已有全文，只在缺少当前内容时 read。"
         ),
         parameters_schema={
             "type": "object",
@@ -219,18 +220,23 @@ class MinecraftToolProvider(BaseToolProvider):
 
     state: MinecraftAgentState
     report_callback: Optional[ReportCallback] = None
+    # 等待只改变本玩家的调度状态，真正的任务监控由已有跟踪器承担。
+    wait_callback: Optional[Callable[[], Dict[str, Any]]] = None
 
     @property
     def name(self) -> str:
         return PROVIDER_NAME
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        return [
+        specs = [
             build_todo_spec(),
             build_notebook_spec(),
             build_get_work_log_spec(),
             build_report_spec(),
         ]
+        if self.wait_callback is not None:
+            specs.append(build_wait_spec())
+        return specs
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         started_ms = int(time.time() * 1000)
@@ -259,6 +265,8 @@ class MinecraftToolProvider(BaseToolProvider):
                 result = await self._invoke_get_work_log(args)
             elif matched.name == "report":
                 result = await self._invoke_report(args)
+            elif matched.name == "wait" and self.wait_callback is not None:
+                result = self.wait_callback()
             else:
                 return ToolExecutionResult(
                     tool_name=tool_name,
