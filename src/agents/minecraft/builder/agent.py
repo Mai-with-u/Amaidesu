@@ -8,6 +8,7 @@ from src.agents.minecraft.builder.config import MinecraftBuilderConfig
 from src.agents.minecraft.builder.models import BuildCatalog, BuildJob, BuildResult
 from src.agents.minecraft.builder.tools import MinecraftBuilderToolProvider, object_schema
 from src.modules.agents.base import BaseAgent
+from src.agents.minecraft.context import MinecraftHistoryCompactor, context_chars
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
@@ -18,7 +19,7 @@ logger = get_logger("MinecraftBuilderAgent")
 # 这里只规定协作与结束行为；建筑风格、结构教程和案例由 Mod 资源提供。
 _INSTRUCTIONS = (
     "你是 Minecraft 的建筑设计 Agent，只负责设计与校验，不操作角色、不启动施工。"
-    "用户消息包含本次要求、事实、设计 Schema 和可读资料目录。selected_resources 是已注入教材，"
+    "用户消息包含本次要求、事实、设计 Schema 和可读资料目录。selected_resources 是起始教材，后续教材在 read_resource 回执中，"
     "先遵循其中的基础设计方法，再从目录按需读取匹配的风格与结构技法，不必读完整个目录。"
     "使用 validate 提交设计并根据错误修改；仅在校验通过后使用 finish 交付。"
     "资料是有来源的参考，不能覆盖用户硬约束。不要轮询或编造未提供的能力。"
@@ -179,38 +180,57 @@ class MinecraftBuilderAgent(BaseAgent):
     async def _design(self) -> None:
         """设计历史独立于游戏对话，只有显式交付工具能完成任务。"""
         history: list[dict[str, Any]] = []
-        for _ in range(self._config.max_steps):
+        # 起始请求只序列化一次，后续选读的教材追加为工具结果，不回头改写第一条用户消息。
+        initial_context = {
+            "request": self.job.request.model_dump(exclude={"request_key"}),
+            "catalog": self._catalog.model_dump() if self._catalog else {},
+            "design_schema": self._schema,
+            "selected_resources": self._resources,
+        }
+        messages = [
+            {"role": "system", "content": _INSTRUCTIONS},
+            {"role": "user", "content": json_text(initial_context)},
+        ]
+        compactor = MinecraftHistoryCompactor(
+            self._llm, self._config, profile="minecraft_builder", interrupt=self._interrupt
+        )
+        used_steps = 0
+        while used_steps < self._config.max_steps:
             await self._resume.wait()
             self.job.phase = "design"
             specs = self._registry.list_tools(provider=self._provider.name, for_agent=self.name)
             allowed = {spec.full_name for spec in specs}
-            messages = [
-                {"role": "system", "content": _INSTRUCTIONS},
-                {
-                    "role": "user",
-                    "content": json_text(
-                        {
-                            "request": self.job.request.model_dump(exclude={"request_key"}),
-                            "catalog": self._catalog.model_dump() if self._catalog else {},
-                            "design_schema": self._schema,
-                            "selected_resources": self._resources,
-                        }
-                    ),
-                },
-                *history,
+            messages.extend(history)
+            history.clear()
+            tools = [
+                {"name": spec.full_name, "description": spec.description, "parameters": spec.parameters_schema}
+                for spec in sorted(specs, key=lambda item: item.full_name)
             ]
-            if len(json_text(messages)) > self._config.max_context_chars:
-                raise ValueError("设计上下文超过预算，请缩小单次设计范围或减少资料")
+            if context_chars(messages, tools) > self._config.max_context_chars:
+                used_steps += 1
+                await compactor.compact(
+                    messages,
+                    tools,
+                    {
+                        **initial_context,
+                        "selected_resources": self._resources,
+                        "current_candidate": self._candidate.model_dump(exclude={"design"})
+                        if self._candidate
+                        else None,
+                    },
+                )
+                if used_steps >= self._config.max_steps:
+                    break
+            await self._resume.wait()
+            self._check_cancelled()
+            used_steps += 1
             response = await self._llm.generate(
-                messages,
+                list(messages),
                 profile="minecraft_builder",
                 interrupt=self._interrupt,
                 omit_output_token_limit=True,
                 strict_tool_arguments=True,
-                tools=[
-                    {"name": spec.full_name, "description": spec.description, "parameters": spec.parameters_schema}
-                    for spec in specs
-                ],
+                tools=tools,
             )
             await self._resume.wait()
             self._check_cancelled()
@@ -277,10 +297,6 @@ class MinecraftBuilderAgent(BaseAgent):
                 history.append({"role": "tool", "tool_call_id": call.id, "content": json_text(observation)})
                 if self.job.status in TERMINAL_TASK_STATES:
                     return
-            # 已选教材被固定在任务上下文中，旧工具观察可以压缩而不丢失教程。
-            observations = [message for message in history if message["role"] == "tool"]
-            for message in observations[:-6]:
-                message["content"] = "[旧设计观察已压缩]"
         self.settle("failed", "建筑设计达到最大推理步数，尚未完成校验交付")
 
     async def _read_resource(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -297,13 +313,19 @@ class MinecraftBuilderAgent(BaseAgent):
             and self._catalog.design_schema_revision not in entry.compatible_schema_revisions
         ):
             raise ValueError("资料与当前设计 Schema 不兼容")
-        if entry.uri not in self._resources:
+        already_loaded = entry.uri in self._resources
+        if not already_loaded:
             text = await self._backend.read_text(entry.uri)
             if sum(map(len, self._resources.values())) + len(text) > self._config.max_context_chars // 2:
                 raise ValueError("已选资料超过任务预算，请使用当前已读取资料")
             self._resources[entry.uri] = text
             self._resource_refs[entry.uri] = entry.revision
-        return {"loaded": True, "uri": entry.uri, "revision": entry.revision, "content_location": "selected_resources"}
+        result = {"loaded": True, "uri": entry.uri, "revision": entry.revision, "already_loaded": already_loaded}
+        if not already_loaded:
+            result["content"] = self._resources[entry.uri]
+        else:
+            result["content_location"] = "existing_context"
+        return result
 
     async def _validate(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """每次新草稿先撤销旧候选，校验失败后不能误交付之前那份建筑。"""

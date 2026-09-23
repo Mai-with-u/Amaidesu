@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from typing import Any
 
 from src.agents.minecraft.config import MinecraftContextConfig
+from src.agents.minecraft.builder.config import MinecraftBuilderConfig
 from src.agents.minecraft.observations import json_text
 from src.modules.logging import get_logger
 
@@ -47,9 +49,19 @@ def close_interrupted_calls(messages: list[dict[str, Any]]) -> None:
 class MinecraftHistoryCompactor:
     """只在工作历史超预算时调用模型总结推理，任务事实由调用方原样提供。"""
 
-    def __init__(self, llm: Any, config: MinecraftContextConfig) -> None:
+    def __init__(
+        self,
+        llm: Any,
+        config: MinecraftContextConfig | MinecraftBuilderConfig,
+        *,
+        profile: str = "minecraft",
+        interrupt: asyncio.Event | None = None,
+    ) -> None:
         self._llm = llm
         self._config = config
+        # 建筑设计仍使用自己的模型预算和取消信号，整理能力只在 Minecraft 包内复用。
+        self._profile = profile
+        self._interrupt = interrupt
         self.checkpoints = 0
 
     async def compact(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], facts: dict[str, Any]) -> bool:
@@ -96,8 +108,9 @@ class MinecraftHistoryCompactor:
                 *deepcopy(messages[1:cut]),
                 {"role": "user", "content": "请整理上述历史，保留证据引用和待解决事项。"},
             ],
-            profile="minecraft",
+            profile=self._profile,
             max_tokens=2400,
+            interrupt=self._interrupt,
         )
         summary = (response.content or "").strip()
         if (

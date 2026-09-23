@@ -355,8 +355,11 @@ async def test_read_resources_and_new_capability_without_python_branch(harness: 
     job = harness.builder._jobs[task_id]
     assert job.status == "succeeded" and job.result.design == {"shape": "net_pattern"}
     assert harness.builder._active is None
-    second_context = json.loads(harness.llm.generate.await_args_list[1].args[0][1]["content"])
-    assert "$ref" in second_context["selected_resources"]["maicraft://building/guide"]
+    # 后选教材追加在回执中，第一条用户上下文不会随着选读而变化。
+    second_messages = harness.llm.generate.await_args_list[1].args[0]
+    second_context = json.loads(second_messages[1]["content"])
+    assert "maicraft://building/guide" not in second_context["selected_resources"]
+    assert any("$ref" in message.get("content", "") for message in second_messages if message["role"] == "tool")
     assert job.result.resource_refs == {"maicraft://building/guide": "guide-1"}
     assert harness.tracker.ledger.get(task_id) is None
     result = await harness.call("minecraft_builder_task", {"task_id": task_id, "action": "status"})
@@ -382,6 +385,40 @@ async def test_task_start_tutorial_is_in_first_prompt_and_read_once(harness: Har
     assert harness.resources.reads.count(guide["uri"]) == 1
     assert "maicraft://building/future" not in harness.resources.reads
     assert harness.builder._jobs[task_id].result.resource_refs == {guide["uri"]: guide["revision"]}
+
+
+async def test_design_history_appends_without_rewriting_old_resources(harness: Harness) -> None:
+    """超过六轮工具往返后教材和旧回执仍稳定，重复选读复用同一份已加载教材。"""
+    harness.llm.generate.side_effect = [
+        *[response("minecraft_builder_work_read_resource", {"uri": "maicraft://building/guide"}) for _ in range(8)],
+        *valid_design(),
+    ]
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    inputs = [call.args[0] for call in harness.llm.generate.await_args_list]
+    assert all(new[: len(old)] == old for old, new in zip(inputs, inputs[1:], strict=False))
+    assert "旧设计观察已压缩" not in str(inputs[-1])
+    assert harness.resources.reads.count("maicraft://building/guide") == 1
+    assert harness.builder._jobs[task_id].status == "succeeded"
+
+
+async def test_design_checkpoint_uses_own_profile_and_preserves_loaded_resources(harness: Harness) -> None:
+    """长设计推理触发一次集中整理，教材与有效候选由代码保留，随后仍能交付。"""
+    harness.builder._config.max_context_chars = 24000
+    first = response("minecraft_builder_work_read_resource", {"uri": "maicraft://building/guide"})
+    first.content = "候选方案分析" * 7000
+    harness.llm.generate.side_effect = [
+        first,
+        Response(success=True, content="已读取教材，下一步验证方案", finish_reason="stop"),
+        *valid_design(),
+    ]
+    task_id = await harness.request(intent="design")
+    await harness.finish_worker()
+    calls = harness.llm.generate.await_args_list
+    assert len(calls) == 4 and calls[1].kwargs["profile"] == "minecraft_builder"
+    assert calls[1].kwargs["max_tokens"] == 2400
+    assert "maicraft://building/guide" in str(calls[2].args[0])
+    assert harness.builder._jobs[task_id].status == "succeeded"
 
 
 @pytest.mark.parametrize("incompatibility", ["capability", "schema", "budget"])

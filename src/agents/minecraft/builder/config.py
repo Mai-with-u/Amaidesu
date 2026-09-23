@@ -19,6 +19,9 @@ class MinecraftBuilderConfig(BaseConfig):
     task_timeout_ms: int = Field(default=600_000, ge=1000, description="设计总时限，包含资料读取、模型重试与校验")
     max_resource_chars: int = Field(default=24_000, ge=1000, description="单份资料最大字符数")
     max_context_chars: int = Field(default=96_000, ge=4000, description="单次设计推理的上下文字符上限")
+    # 教材及已验证产物由代码保留，预算不足时只集中整理先前的设计推理。
+    recent_turns: int = Field(default=6, ge=1, le=20, description="整理设计历史时优先保留的完整决策轮数")
+    summary_max_chars: int = Field(default=6000, ge=1000, le=12000, description="设计推理摘要的最大字符数")
     retained_jobs: int = Field(default=10, ge=1, le=100, description="会话中保留的已收尾设计数")
 
     @model_validator(mode="after")

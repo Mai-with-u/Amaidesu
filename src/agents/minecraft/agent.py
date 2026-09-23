@@ -685,7 +685,7 @@ class MinecraftAgent(BaseAgent):
             on_delta = self._build_thinking_callback(mc_round, steps, mc_seq_box) if mc_round else None
             try:
                 response = await self._llm.generate(
-                    messages,
+                    list(messages),
                     profile=MINECRAFT_PROFILE,
                     tools=tool_defs,
                     on_delta=on_delta,
