@@ -1,10 +1,16 @@
 """验证大型游戏资料可展开、错误证据保留，以及历史观察不会被改写为新事实。"""
 
 from copy import deepcopy
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.agents.minecraft.observations import MinecraftObservations, json_text
+from src.agents.minecraft.agent import MinecraftAgent
+from src.agents.minecraft.config import MinecraftConfig
+from src.modules.llm.payload import Response, ToolCall
+from src.modules.tools.models import ToolInvocation
+from src.modules.tools.registry import ToolRegistry
 
 
 def test_large_reference_keeps_decision_evidence_and_lossless_original() -> None:
@@ -64,3 +70,37 @@ def test_pointer_search_and_expired_references_are_explicit() -> None:
     with pytest.raises(ValueError, match="已过期"):
         history.read({"ref": ref})
     assert len(json_text(history.index())) < 1000
+
+
+@pytest.mark.asyncio
+async def test_react_tracks_original_before_presentation_and_reads_through_local_tool() -> None:
+    """任务账本获得完整回执，模型看到缩小结果后能通过注册工具补读原文。"""
+    raw = {"complete": False, "content": "已审阅的组件规则" * 5000}
+    llm = MagicMock()
+    llm.generate = AsyncMock(
+        side_effect=[
+            Response(
+                success=True,
+                tool_calls=[ToolCall(id="read", name="maicraft_perceive", arguments={"view": "knowledge"})],
+            ),
+            Response(success=True, content="资料已读取"),
+        ]
+    )
+    bus = MagicMock()
+    bus.emit = AsyncMock()
+    registry = ToolRegistry()
+    agent = MinecraftAgent(MinecraftConfig(), llm_manager=llm, tool_registry=registry, event_bus=bus)
+    agent._execute_tool = AsyncMock(return_value=raw)
+    agent._track_receipt = MagicMock()
+    agent._running = True
+    agent._register_tools()
+    await agent.send_prompt("读取组件资料")
+    await agent._run_task_batch()
+    agent._track_receipt.assert_called_once_with("maicraft_perceive", raw)
+    ref = agent._observations.index()[0]["ref"]
+    result = await registry.invoke(
+        ToolInvocation(tool_name="minecraft_observation", arguments={"ref": ref, "path": "/content", "limit": 100})
+    )
+    assert result.success and result.structured_content["text"] == raw["content"][:100]
+    assert result.structured_content["next_offset"] == 100
+    assert "minecraft_observation" not in {s.full_name for s in registry.list_tools(for_agent="streamer")}

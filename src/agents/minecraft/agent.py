@@ -30,6 +30,7 @@ from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.agents.minecraft.builder.controller import MinecraftBuilderController
 from src.agents.minecraft.design_progress import MachineDesignProgress
+from src.agents.minecraft.observations import MinecraftObservations
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
@@ -176,11 +177,15 @@ class MinecraftAgent(BaseAgent):
 
         # Agent 内部状态（内存，不持久化）
         self._mc_state: MinecraftAgentState = MinecraftAgentState()
+        self._observations = MinecraftObservations(
+            config.context.observation_inline_chars, config.context.archive_max_chars
+        )
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
             report_callback=self._handle_report,
             wait_callback=self._request_wait,
+            observation_reader=self._read_observation,
         )
 
         # 命令驱动运行骨架：worker 等命令信号，任务内有界 ReAct 循环
@@ -492,6 +497,7 @@ class MinecraftAgent(BaseAgent):
         "minecraft_notebook": ["minecraft"],
         "minecraft_report": ["minecraft"],
         "minecraft_wait": ["minecraft"],
+        "minecraft_observation": ["minecraft"],
         "minecraft_get_work_log": ["streamer"],
     }
 
@@ -632,6 +638,11 @@ class MinecraftAgent(BaseAgent):
                         self._task_progress.clear()
                         messages[:] = [{"role": "system", "content": system_prompt}]
                         self._mc_state.set_todos([])
+                        # 原文引用只属于本次逻辑任务；后台唤醒和同任务补充要求继续使用已有证据。
+                        context = self.typed_config.context
+                        self._observations = MinecraftObservations(
+                            context.observation_inline_chars, context.archive_max_chars
+                        )
                     self._task_instructions.append(_content)
                     self._task_finished = False
                     self._task_suspended = False
@@ -749,11 +760,17 @@ class MinecraftAgent(BaseAgent):
                 else:
                     observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
                 self._track_receipt(call.name, observation)
+                # 业务跟踪先读完整原件，模型再读呈现版本；阅读工具本身不再次套上原文引用。
+                shown = (
+                    observation
+                    if call.name == "minecraft_observation"
+                    else self._observations.present(call.name, arguments, observation)
+                )
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": call.id,
-                        "content": json.dumps(observation, ensure_ascii=False, default=str),
+                        "content": json.dumps(shown, ensure_ascii=False, default=str),
                     }
                 )
                 blocked_design = self._design_progress.observe(call.name, arguments, observation)
@@ -785,6 +802,10 @@ class MinecraftAgent(BaseAgent):
         self._wait_requested = True
         return {"ok": True, "waiting": True, "monitor": "host", "resume_on": "task_event_or_instruction"}
 
+    def _read_observation(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """每次从当前任务取原文，避免新任务仍绑定上一任务的观察集合。"""
+        return self._observations.read(arguments)
+
     def _current_task_context(self) -> Dict[str, Any]:
         """恢复原任务时附上玩家原文与工作阶段；只在批次起点恢复，不改工具观察的压缩策略。"""
         progress = dict(self._task_progress)
@@ -804,6 +825,7 @@ class MinecraftAgent(BaseAgent):
             "notebook": self._mc_state.notebook,
             "background_tasks": list(progress.values()),
             "reasoning_steps_used": self._task_steps,
+            "observations": self._observations.index(),
         }
 
     def _unfinished_todos(self) -> bool:

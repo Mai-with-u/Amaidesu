@@ -36,7 +36,7 @@ from src.modules.tools.models import (
 )
 from src.modules.tools.provider import BaseToolProvider
 
-from .runtime_tools import build_wait_spec
+from .runtime_tools import build_observation_spec, build_wait_spec
 from .state import MinecraftAgentState
 
 logger = get_logger("MinecraftTools")
@@ -222,6 +222,8 @@ class MinecraftToolProvider(BaseToolProvider):
     report_callback: Optional[ReportCallback] = None
     # 等待只改变本玩家的调度状态，真正的任务监控由已有跟踪器承担。
     wait_callback: Optional[Callable[[], Dict[str, Any]]] = None
+    # 原始观察由当前逻辑任务持有，工具只负责按引用读取，不自行查询或缓存世界。
+    observation_reader: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
 
     @property
     def name(self) -> str:
@@ -236,6 +238,8 @@ class MinecraftToolProvider(BaseToolProvider):
         ]
         if self.wait_callback is not None:
             specs.append(build_wait_spec())
+        if self.observation_reader is not None:
+            specs.append(build_observation_spec())
         return specs
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -267,6 +271,8 @@ class MinecraftToolProvider(BaseToolProvider):
                 result = await self._invoke_report(args)
             elif matched.name == "wait" and self.wait_callback is not None:
                 result = self.wait_callback()
+            elif matched.name == "observation" and self.observation_reader is not None:
+                result = self.observation_reader(args)
             else:
                 return ToolExecutionResult(
                     tool_name=tool_name,

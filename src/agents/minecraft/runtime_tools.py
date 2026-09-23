@@ -3,6 +3,32 @@
 from src.modules.tools.models import ToolSpec
 
 
+def build_observation_spec() -> ToolSpec:
+    """给模型一个只读历史证据的入口，补读正文不需要再次向游戏查询同一资料。"""
+    return ToolSpec(
+        name="observation",
+        provider="minecraft",
+        kind="sync",
+        description=(
+            "读取本任务已经取得的原始观察。省略 ref 列出最近证据，可用 query 筛选来源或请求。"
+            "指定 ref 后用 path（JSON Pointer）选字段，用 offset/limit 分页；query 在该字段中查找文字。"
+            "deferred 表示正文尚未展开，不是空数据；需要那部分细节时必须读取。"
+            "这是历史证据，不证明当前库存、位置或现场仍未变化；需要刷新时正常调用 Mod。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string", "description": "观察返回的原文引用"},
+                "path": {"type": "string", "default": "", "description": "JSON Pointer，如 /data/content"},
+                "query": {"type": "string", "maxLength": 256},
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 12000, "default": 4000},
+            },
+            "additionalProperties": False,
+        },
+    )
+
+
 def build_wait_spec() -> ToolSpec:
     """让模型结束本批推理，后台监控继续等待真实游戏进展。"""
     return ToolSpec(
