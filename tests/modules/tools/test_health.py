@@ -177,6 +177,25 @@ async def test_success_resets_consecutive_counter() -> None:
     assert entry["failure_count"] == 1
 
 
+async def test_business_rejection_breaks_execution_failure_streak() -> None:
+    """业务拒绝确认服务可应答，前后的传输故障不能拼成一次连续故障。"""
+    registry = ToolRegistry(failure_threshold=2)
+    replies = iter([
+        ToolExecutionResult(tool_name="p_read", success=False, error_message="connection reset"),
+        ToolExecutionResult(tool_name="p_read", success=False, error_message="invalid request", failure_kind="business"),
+        ToolExecutionResult(tool_name="p_read", success=False, error_message="connection reset"),
+    ])
+
+    async def respond(invocation: ToolInvocation) -> ToolExecutionResult:
+        return next(replies)
+
+    registry.register(ToolSpec(name="read", description="", provider="p"), respond)
+    for _ in range(3):
+        assert not (await registry.invoke(ToolInvocation(tool_name="p_read"))).success
+    assert not registry.is_tripped("p_read")
+    assert registry.tool_health_snapshot()["p_read"]["failure_count"] == 1
+
+
 async def test_trip_emits_open_event_recover_emits_closed_event() -> None:
     """熔断→emit state=open；recover_tool→emit state=closed。"""
     bus = EventBus(enable_stats=False)

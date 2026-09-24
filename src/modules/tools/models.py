@@ -90,13 +90,14 @@ class ToolExecutionResult:
 
     Attributes:
         tool_name: 工具名
-        success: 是否成功（执行成功/失败，而非业务层面）
+        success: 调用是否成功；业务拒绝也返回 False，供调用者修正请求
         content: 文本内容/历史摘要
         blocks: 多模态块列表（同步结果给 LLM；历史中已摘要化文本）
         error_message: 错误信息（success=False 时非空）
         structured_content: 结构化结果（如 dict，保留以备校验/未来使用）
         duration_ms: 执行耗时（毫秒）
         timestamp_ms: 完成时刻（毫秒）
+        failure_kind: 业务拒绝或执行故障；未分类的失败沿用执行故障的健康计数
     """
 
     tool_name: str
@@ -107,6 +108,8 @@ class ToolExecutionResult:
     structured_content: Any = None
     duration_ms: int = 0
     timestamp_ms: int = 0
+    # 已收到业务拒绝说明服务可以应答，不能因调用者传错参数而摘除工具。
+    failure_kind: Optional[Literal["business", "execution"]] = None
 
 
 @dataclass(slots=True)

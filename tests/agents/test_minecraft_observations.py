@@ -104,3 +104,24 @@ async def test_react_tracks_original_before_presentation_and_reads_through_local
     assert result.success and result.structured_content["text"] == raw["content"][:100]
     assert result.structured_content["next_offset"] == 100
     assert "minecraft_observation" not in {s.full_name for s in registry.list_tools(for_agent="streamer")}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_arguments", [{"ref": "missing"}, {"path": "/missing"}])
+async def test_invalid_observation_reads_remain_correctable(bad_arguments: dict) -> None:
+    """错误引用或路径只拒绝该次读取，修正后仍能取得已归档的真实游戏资料。"""
+    registry = ToolRegistry(failure_threshold=3)
+    agent = MinecraftAgent(
+        MinecraftConfig(), llm_manager=MagicMock(), tool_registry=registry, event_bus=MagicMock()
+    )
+    agent._register_tools()
+    shown = agent._observations.present("maicraft_perceive", {}, {"position": {"x": 3}})
+    ref = shown["_observation"]["ref"]
+    for _ in range(4):
+        result = await registry.invoke(ToolInvocation(
+            tool_name="minecraft_observation", arguments={"ref": ref, **bad_arguments}
+        ))
+        assert not result.success
+        assert not registry.is_tripped("minecraft_observation")
+    result = await registry.invoke(ToolInvocation(tool_name="minecraft_observation", arguments={"ref": ref}))
+    assert result.success and '"x":3' in result.structured_content["text"]

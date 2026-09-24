@@ -182,6 +182,8 @@ class McpToolProvider(BaseToolProvider):
                 tool_name=full_name,
                 success=False,
                 error_message=f"MCP 业务错误: {exc}",
+                # SDK 已确认服务返回业务拒绝，让调用者自纠而不触发服务熔断。
+                failure_kind="business",
                 duration_ms=duration_ms,
             )
         duration_ms = int(time.time() * 1000) - started_ms

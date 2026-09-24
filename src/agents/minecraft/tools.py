@@ -280,6 +280,16 @@ class MinecraftToolProvider(BaseToolProvider):
                     error_message=f"未知工具: '{tool_name}'",
                     duration_ms=int(time.time() * 1000) - started_ms,
                 )
+        except ValueError as exc:
+            # 观察引用或资料路径写错时，玩家应纠正读取参数，不能把自己的资料工具熔断摘除。
+            logger.warning(f"Minecraft 工具 '{tool_name}' 请求被拒绝: {exc}", exc=True)
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message=f"{type(exc).__name__}: {exc}",
+                failure_kind="business",
+                duration_ms=int(time.time() * 1000) - started_ms,
+            )
         except Exception as exc:  # noqa: BLE001 - 工具边界兜底
             logger.exception(f"Minecraft 工具 '{tool_name}' 执行失败: {exc}")
             return ToolExecutionResult(

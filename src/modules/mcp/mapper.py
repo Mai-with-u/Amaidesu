@@ -119,6 +119,7 @@ def to_result(
             tool_name=tool_name,
             success=False,
             error_message="MCP 调用失败（连接断开或服务器错误）",
+            failure_kind="execution",
             duration_ms=duration_ms,
         )
 
@@ -135,6 +136,7 @@ def to_result(
     text_content = "\n".join(text_parts)
 
     if is_error:
+        # MCP 的工具错误回执属于业务层；它与未取得回执的连接故障分开计数。
         return ToolExecutionResult(
             tool_name=tool_name,
             success=False,
@@ -142,6 +144,7 @@ def to_result(
             blocks=blocks,
             error_message=text_content or "MCP 服务器返回错误（无文本内容）",
             structured_content=structured,
+            failure_kind="business",
             duration_ms=duration_ms,
         )
 

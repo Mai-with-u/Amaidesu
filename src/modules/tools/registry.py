@@ -662,8 +662,8 @@ class ToolRegistry:
         熔断器联动：
         - 未知/停用短路返回 **不** 触达健康状态（与旧契约一致）
         - 熔断短路返回 **不** emit ``tool.result.<name>``（与未知/停用短路一致）
-        - 实施方成功 → 重置 ``consecutive_failures`` 为 0
-        - 实施方失败（含抛异常）→ ``consecutive_failures += 1``、记 ``last_error``，
+        - 实施方成功或明确业务拒绝 → 重置 ``consecutive_failures`` 为 0
+        - 执行故障（含抛异常和未分类失败）→ ``consecutive_failures += 1``、记 ``last_error``，
           达到阈值且未跳闸 → 标记 tripped、emit ``tool.health.<name>``（state=open）
         """
         pair = self._tools.get(invocation.tool_name)
@@ -751,11 +751,12 @@ class ToolRegistry:
     async def _record_health(self, spec: ToolSpec, result: ToolExecutionResult) -> None:
         """在 ``invoke`` 主路径上更新单工具熔断器状态。
 
-        - 成功 → 重置连续失败
-        - 失败 → 递增计数、记录最近错误；达到阈值且未跳闸 → 触发熔断并广播
+        - 成功或明确业务拒绝 → 服务已应答，重置连续故障
+        - 执行故障或未分类失败 → 递增计数；达到阈值且未跳闸 → 触发熔断并广播
         """
         health = self._ensure_health(spec.full_name)
-        if result.success:
+        # 业务拒绝仍作为失败结果返回和广播；仅健康计数认定服务已正常应答。
+        if result.success or result.failure_kind == "business":
             health.consecutive_failures = 0
             health.last_error = ""
             return
