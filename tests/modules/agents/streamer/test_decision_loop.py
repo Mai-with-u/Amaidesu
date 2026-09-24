@@ -104,6 +104,17 @@ def _replyer_calls(llm: MagicMock) -> list:
     return [c for c in llm.generate.await_args_list if c.kwargs.get("profile") == "replyer"]
 
 
+def _decision_finished(bus: EventBus) -> asyncio.Event:
+    """收到一轮决策的完成事件后再断言，避免把机器调度延迟误判为主播没有处理弹幕。"""
+    finished = asyncio.Event()
+
+    async def on_decision(name: str, payload: PlannerDecisionPayload, source: str) -> None:
+        finished.set()
+
+    bus.on(CoreEvents.PLANNER_DECISION, on_decision, model_class=PlannerDecisionPayload)
+    return finished
+
+
 # ---------------------------------------------------------------------------
 # Agent 装配（Planner ReAct + Replyer 均走 generate）
 # ---------------------------------------------------------------------------
@@ -172,6 +183,7 @@ async def test_decision_loop_danmaku_to_reply_provider():
     代码直连的内部件，不注册——无自身过程与推进权，属被动原语。
     """
     agent, bus, registry, llm, prompt = _setup_agent()
+    finished = _decision_finished(bus)
 
     await agent.start()
     try:
@@ -188,8 +200,8 @@ async def test_decision_loop_danmaku_to_reply_provider():
         payload = _make_payload("主播好可爱！")
         await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, payload, source="bilibili")
 
-        # 给 Agent 一些时间处理事件 + flush 循环
-        await asyncio.sleep(0.2)
+        # 等实际决策回执，超时仍会失败；不再把调度必须快于 200 毫秒当成业务要求。
+        await asyncio.wait_for(finished.wait(), timeout=2)
 
         # 2. Planner ReAct 至少一轮 generate
         assert len(_planner_calls(llm)) >= 1, "Planner 应至少调一次 generate"
@@ -227,6 +239,7 @@ async def test_decision_loop_planner_no_reply_path():
     )
 
     bus = EventBus()
+    finished = _decision_finished(bus)
     registry = ToolRegistry()
 
     agent = StreamerAgent(
@@ -245,7 +258,8 @@ async def test_decision_loop_planner_no_reply_path():
             source="bilibili",
         )
 
-        await asyncio.sleep(0.2)
+        # 静默也是一次完成的决策，收到其回执后才核对模型次数和无动作计数。
+        await asyncio.wait_for(finished.wait(), timeout=2)
 
         # Planner 恰好 1 轮 generate（自然终止），Replyer 不调
         assert len(_planner_calls(llm)) == 1, "自然终止应恰好 1 轮"
