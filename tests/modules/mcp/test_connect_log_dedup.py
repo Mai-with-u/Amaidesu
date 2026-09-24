@@ -20,7 +20,7 @@ from src.modules.mcp.config import McpServerConfig
 class _FakeFastmcpClient:
     """fastmcp.Client 替身：只满足 connect() 用到的上下文管理协议。"""
 
-    def __init__(self, transport: Any, message_handler: Any = None) -> None:
+    def __init__(self, transport: Any, message_handler: Any = None, init_timeout: float | None = None) -> None:
         self.session = None
 
     async def __aenter__(self) -> "_FakeFastmcpClient":
@@ -71,5 +71,6 @@ async def test_same_failure_warns_once_and_resets_after_success(monkeypatch, log
     assert await client.connect() is True
 
     monkeypatch.setattr(client, "_build_transport", _raise_with("boom"))
+    client._connected = False  # 模拟已连接的服务再次断开，才会进入重连分支。
     assert await client.connect() is False
     assert len(_connect_failures(cap)) == 3, "连上过之后再断，属新事故，要重新 warning"

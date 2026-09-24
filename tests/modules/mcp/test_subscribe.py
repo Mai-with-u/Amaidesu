@@ -58,7 +58,7 @@ class _FakeFastmcpClient:
 
     instances: List["_FakeFastmcpClient"] = []
 
-    def __init__(self, transport: Any, message_handler: Any = None) -> None:
+    def __init__(self, transport: Any, message_handler: Any = None, init_timeout: float | None = None) -> None:
         self.transport = transport
         self.message_handler = message_handler
         self.session = _FakeSession()

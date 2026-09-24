@@ -23,7 +23,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+import asyncio
+from functools import partial
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.mcp.config import DEFAULT_REQUEST_TIMEOUT_MS, McpServerConfig
@@ -55,6 +57,12 @@ class McpClient:
         self._connect_failure = ""
         # 只使用通道配置设置期限，不读取工具参数来猜测游戏动作需要等待多久。
         self._request_timeout_ms = getattr(config, "request_timeout_ms", DEFAULT_REQUEST_TIMEOUT_MS)
+        # 兼容既有配置的秒单位，进入通道后统一保存毫秒，直到 SDK 边界才换算。
+        self._connection_timeout_ms = int(
+            getattr(config, "timeout_seconds", McpServerConfig.model_fields["timeout_seconds"].default) * 1000
+        )
+        # 多个消费者发现断线时串行建立会话，避免后来的连接请求关闭刚恢复的通道。
+        self._connection_lock = asyncio.Lock()
 
     @staticmethod
     def _build_message_handler(subscriptions: Dict[str, ResourceUpdateCallback]) -> Any:
@@ -93,8 +101,11 @@ class McpClient:
             return
         for uri in list(self._subscriptions):
             try:
-                await session.subscribe_resource(uri)
+                await self._request("resources/subscribe", partial(session.subscribe_resource, uri))
                 logger.info(f"MCP server '{self.name}' 重连后重发订阅 '{uri}'")
+            except McpRequestTimeout:
+                # 通道已因无回执失效，结束本次建连；不能把订阅恢复超时报告成连接就绪。
+                raise
             except Exception as exc:  # noqa: BLE001 - 单订阅失败不阻断其余
                 logger.warning(f"MCP server '{self.name}' 重连后重订阅 '{uri}' 失败: {type(exc).__name__}: {exc}")
 
@@ -107,6 +118,18 @@ class McpClient:
     def last_connect_error(self) -> str:
         """最近一次连接失败的特征串（无失败历史为空串；运营面展示降级原因用）。"""
         return self._connect_failure
+
+    async def _request(self, operation: str, call: Callable[[], Awaitable[Any]]) -> Any:
+        """所有协议请求共用总期限；超时只使所用会话失效，供后续调用重新连接。"""
+        active_client = self._client
+        try:
+            return await bounded_request(
+                call, server=self.name, operation=operation, timeout_ms=self._request_timeout_ms
+            )
+        except McpRequestTimeout:
+            if self._client is active_client:
+                self._connected = False
+            raise
 
     def _build_transport(self) -> Any:
         """构造 FastMCP transport 对象（按配置的传输方式）。
@@ -135,44 +158,59 @@ class McpClient:
         )
 
     async def connect(self, timeout_seconds: Optional[float] = None) -> bool:
-        """建立连接并预拉工具列表（连接成功与否的核心判据）。
+        """有界建立会话并恢复订阅，工具目录仍由 Provider 随后拉取。
 
         失败按**特征串去重**记日志：调用方可能每几秒重试一次，同一个
         server 因同一个原因连不上，warning 只该出现一次；原因变了（如从
         拒绝连接变成超时）或成功连上一次之后再失败，才重新 warning。
 
         Returns:
-            是否连接成功（连接/预拉失败均返回 False，不抛异常）
+            是否连接成功；失败返回 False，调用者主动中断继续向上传播
         """
+        timeout_ms = self._connection_timeout_ms if timeout_seconds is None else int(timeout_seconds * 1000)
         try:
-            # 延迟 import FastMCP Client
-            from fastmcp import Client
-
-            if self._client is not None:
-                # 重连前先释放旧实例，避免上下文泄漏
-                try:
-                    await self._client.__aexit__(None, None, None)
-                except Exception as e:  # noqa: BLE001 - 旧实例释放失败不阻断重连
-                    logger.debug(f"旧 MCP 实例释放失败（继续重连）: {e}")
-            transport = self._build_transport()
-            client = Client(transport, message_handler=self._build_message_handler(self._subscriptions))
-            await client.__aenter__()
-            self._client = client
-            self._connected = True
-            self._connect_failure = ""  # 连上了：失败特征串复位，下次失败重新 warning
-            logger.info(f"MCP server '{self.name}' 已连接（transport={self.config.transport}）")
-            await self._resubscribe_all()
-            return True
+            # 期限覆盖锁等待、旧实例退出、握手和订阅恢复，不只覆盖建立套接字的阶段。
+            async with asyncio.timeout(timeout_ms / 1000):
+                async with self._connection_lock:
+                    if self._connected and self._client is not None:
+                        return True
+                    return await self._connect_once(timeout_ms)
         except Exception as exc:  # noqa: BLE001 - 连接边界兜底
-            failure = f"{type(exc).__name__}: {exc}"
+            failure = f"{type(exc).__name__}: {exc} (timeout_ms={timeout_ms})"
             if failure == self._connect_failure:
                 logger.debug(f"MCP server '{self.name}' 仍然连接失败（同因）: {failure}")
             else:
                 self._connect_failure = failure
-                logger.warning(f"MCP server '{self.name}' 连接失败（后续同因失败降为 debug）: {failure}")
-            self._client = None
-            self._connected = False
+                logger.warning(f"MCP server '{self.name}' 连接失败（后续同因失败降为 debug）: {failure}", exc=exc)
             return False
+
+    async def _connect_once(self, timeout_ms: int) -> bool:
+        """在生命周期锁内回收旧会话，再建立新会话；失败时留下可清理的实例。"""
+        # FastMCP 是可选依赖，只在连接服务时加载。
+        from fastmcp import Client
+
+        try:
+            if self._client is not None:
+                old, self._client = self._client, None
+                try:
+                    await old.__aexit__(None, None, None)
+                except Exception as exc:  # noqa: BLE001 - 旧会话失败不能阻止尝试恢复
+                    logger.debug(f"旧 MCP 实例释放失败（继续重连）: {exc}", exc=exc)
+            self._client = Client(
+                self._build_transport(),
+                message_handler=self._build_message_handler(self._subscriptions),
+                init_timeout=timeout_ms / 1000,
+            )
+            await self._client.__aenter__()
+            await self._resubscribe_all()
+            self._connected = True
+            self._connect_failure = ""
+            logger.info(f"MCP server '{self.name}' 已连接（transport={self.config.transport}）")
+            return self._connected
+        except (Exception, asyncio.CancelledError):
+            # 在释放锁之前登记失败，避免迟到的失败覆盖另一个消费者刚恢复的连接。
+            self._connected = False
+            raise
 
     async def list_tools(self) -> List[Any]:
         """拉取 server 暴露的工具元数据列表（FastMCP Tool 对象）。
@@ -184,7 +222,7 @@ class McpClient:
             logger.warning(f"MCP server '{self.name}' 未连接，list_tools 返回空")
             return []
         try:
-            tools = await self._client.list_tools()
+            tools = await self._request("tools/list", self._client.list_tools)
             return list(tools or [])
         except Exception as exc:  # noqa: BLE001 - 通道边界兜底
             logger.warning(f"MCP server '{self.name}' list_tools 失败: {type(exc).__name__}: {exc}")
@@ -230,7 +268,7 @@ class McpClient:
         session = getattr(self._client, "session", None)
         if session is None:
             raise RuntimeError(f"MCP server '{self.name}' fastmcp session 不可用，无法订阅资源 '{uri}'")
-        await session.subscribe_resource(uri)
+        await self._request("resources/subscribe", lambda: session.subscribe_resource(uri))
         self._subscriptions[uri] = callback
         logger.info(f"MCP server '{self.name}' 已订阅资源 '{uri}'")
 
@@ -240,7 +278,7 @@ class McpClient:
                 current = getattr(self._client, "session", None)
                 if current is not None:
                     try:
-                        await current.unsubscribe_resource(uri)
+                        await self._request("resources/unsubscribe", lambda: current.unsubscribe_resource(uri))
                     except Exception as exc:  # noqa: BLE001 - 退订失败不影响本地除名
                         logger.warning(f"MCP server '{self.name}' 退订 '{uri}' 失败: {type(exc).__name__}: {exc}")
             logger.info(f"MCP server '{self.name}' 已退订资源 '{uri}'")
@@ -257,7 +295,7 @@ class McpClient:
             logger.warning(f"MCP server '{self.name}' 未连接，read_resource 返回 None")
             return None
         try:
-            return await self._client.read_resource(uri)
+            return await self._request("resources/read", lambda: self._client.read_resource(uri))
         except Exception as exc:  # noqa: BLE001 - 通道边界兜底
             logger.warning(f"MCP server '{self.name}' read_resource '{uri}' 失败: {type(exc).__name__}: {exc}")
             return None
@@ -272,7 +310,7 @@ class McpClient:
             logger.warning(f"MCP server '{self.name}' 未连接，list_resources 返回空")
             return []
         try:
-            resources = await self._client.list_resources()
+            resources = await self._request("resources/list", self._client.list_resources)
             return list(resources or [])
         except Exception as exc:  # noqa: BLE001 - 通道边界兜底
             logger.warning(f"MCP server '{self.name}' list_resources 失败: {type(exc).__name__}: {exc}")
@@ -302,16 +340,9 @@ class McpClient:
 
         active_client = self._client
         try:
-            return await bounded_request(
-                lambda: active_client.call_tool(tool_name, arguments),
-                server=self.name,
-                operation=f"tools/call {tool_name}",
-                timeout_ms=self._request_timeout_ms,
-            )
+            return await self._request(f"tools/call {tool_name}", lambda: active_client.call_tool(tool_name, arguments))
         except McpRequestTimeout:
-            # 只使本次使用的连接失效；保留旧实例供重连清理，迟到错误不能污染已经换好的连接。
-            if self._client is active_client:
-                self._connected = False
+            # 工具超时需要保留远端结果未知，不能在这里降格成缺少诊断的 None。
             raise
         except ToolError as exc:
             # server 正常应答的业务错误（参数错/状态冲突等）：round-trip 完整，连接无恙——
@@ -326,14 +357,17 @@ class McpClient:
             return None
 
     async def close(self) -> None:
-        """关闭连接（幂等；未连接时无事可做）。"""
-        if self._client is not None:
-            try:
-                await self._client.__aexit__(None, None, None)
-            except Exception as exc:  # noqa: BLE001 - 关闭边界兜底
-                logger.warning(f"MCP server '{self.name}' 关闭连接时异常: {type(exc).__name__}: {exc}")
-        self._client = None
-        self._connected = False
+        """串行且有界关闭连接，远端不退出也不能永久阻塞宿主停止。"""
+        try:
+            async with asyncio.timeout(self._connection_timeout_ms / 1000):
+                async with self._connection_lock:
+                    old, self._client = self._client, None
+                    self._connected = False
+                    if old is not None:
+                        await old.__aexit__(None, None, None)
+        except Exception as exc:  # noqa: BLE001 - 关闭边界兜底
+            logger.warning(f"MCP server '{self.name}' 关闭连接时异常: {type(exc).__name__}: {exc}", exc=exc)
+            return
         logger.info(f"MCP server '{self.name}' 已关闭")
 
 

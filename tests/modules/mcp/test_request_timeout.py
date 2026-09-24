@@ -6,6 +6,8 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from src.modules.mcp.client import McpClient
 from src.modules.mcp.provider import McpToolProvider
 from src.modules.tools import ToolInvocation, ToolRegistry, ToolSpec
@@ -26,7 +28,7 @@ class SilentEndpoint:
             self.cancelled = True
 
 
-async def test_silent_tool_returns_unknown_outcome_without_automatic_replay() -> None:
+async def test_silent_tool_returns_unknown_outcome_without_automatic_replay(loguru_capture: Any) -> None:
     """远端可能已经执行操作；本地超时只结束等待，不能声称未执行或自动再发一次。"""
     endpoint = SilentEndpoint()
     client = McpClient("reference", SimpleNamespace(request_timeout_ms=25, timeout_seconds=1))
@@ -43,6 +45,10 @@ async def test_silent_tool_returns_unknown_outcome_without_automatic_replay() ->
     error = result.structured_content["error"]
     assert error["code"] == "mcp_request_timeout" and error["outcome_known"] is False
     assert error["timeout_ms"] == 25 and error["request_id"]
+    # 同一关联编号同时出现开始与超时结束，排查时才能定位没有返回的那次请求。
+    messages = [entry["message"] for entry in loguru_capture.records if error["request_id"] in entry["message"]]
+    assert any("开始" in message for message in messages)
+    assert any("结束 status=timeout" in message for message in messages)
     assert endpoint.calls == 1 and endpoint.cancelled
     assert not client.connected
     assert client._client is endpoint  # 下一次重连仍需释放旧会话，不能丢失清理入口。
@@ -64,3 +70,18 @@ async def test_caller_cancellation_remains_cancellation() -> None:
     else:
         raise AssertionError("caller cancellation must propagate")
     assert endpoint.calls == 1 and endpoint.cancelled
+
+
+@pytest.mark.parametrize("method,arguments,expected", [
+    ("list_tools", (), []), ("list_resources", (), []), ("read_resource", ("resource://sample",), None),
+])
+async def test_discovery_and_resource_reads_are_bounded(method: str, arguments: tuple, expected: Any) -> None:
+    """读取目录或订阅后的资源快照也可能不回包，不能只保护模型直接调用的工具。"""
+    async def silent(*args: Any) -> Any:
+        await asyncio.Event().wait()
+
+    client = McpClient("reference", SimpleNamespace(request_timeout_ms=25, timeout_seconds=1))
+    client._client = SimpleNamespace(**{method: silent})
+    client._connected = True
+    result = await asyncio.wait_for(getattr(client, method)(*arguments), timeout=1)
+    assert result == expected and not client.connected
