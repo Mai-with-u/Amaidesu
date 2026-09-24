@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.modules.llm.clients.openai.client import OpenAIClient
+from src.modules.llm.errors import RetryableError
 from src.modules.llm.payload import GenerateRequest, Message, ToolCall
 
 
@@ -389,6 +390,26 @@ async def test_chat_streaming_falls_back_to_non_streaming_on_create_error():
     assert result.content == "fallback"
     assert received == []  # 降级路径不产生增量
     assert sdk_client.chat.completions.create.await_count == 2
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+async def test_empty_completed_stream_is_left_to_engine_retry(finish_reason: str) -> None:
+    """完整收流后没有正文或工具调用，由 Engine 决定重试，客户端不能再暗中发一份请求。"""
+    client, sdk_client = _make_client()
+    final = _stream_chunk(usage=SimpleNamespace(prompt_tokens=8000, completion_tokens=4096, total_tokens=12096))
+    final.choices[0].finish_reason = finish_reason
+    stream = _FakeStream([_stream_chunk(_delta(reasoning="考虑当前任务")), final])
+    sdk_client.chat.completions.create.side_effect = [stream, _response(content="unwanted fallback")]
+    request = GenerateRequest(messages=[Message(role="user", parts=["推进任务"])])
+    with pytest.raises(RetryableError) as error:
+        await client.generate(request, model="test-model", on_delta=lambda kind, text: None)
+    assert sdk_client.chat.completions.create.await_count == 1
+    assert stream.closed
+    # 保留失败原因和计费量级，不把模型思考正文写进异常日志。
+    assert f"finish_reason={finish_reason}" in str(error.value)
+    assert "completion_tokens=4096" in str(error.value)
+    assert "reasoning_chars=6" in str(error.value)
+    assert "考虑当前任务" not in str(error.value)
 
 
 # ---------------------------------------------------------------------------

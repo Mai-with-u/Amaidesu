@@ -173,7 +173,12 @@ class OpenAIClient(BaseLLMClient):
     def _ensure_not_empty(result: LLMResponse) -> None:
         """空响应（无内容且无工具调用）视为临时性失败，归入 Retryable 由 Engine 重试。"""
         if not result.content and not result.tool_calls:
-            raise RetryableError("响应内容为空（可能是临时性问题）")
+            # 只记录诊断量级，让调用者区分输出上限与正常结束的空回执，不暴露思考正文。
+            completion_tokens = (result.usage or {}).get("completion_tokens", "unknown")
+            raise RetryableError(
+                f"响应内容为空（finish_reason={result.finish_reason or 'unknown'}, "
+                f"completion_tokens={completion_tokens}, reasoning_chars={len(result.reasoning_content or '')}）"
+            )
 
     @staticmethod
     def _part_to_openai(part: Any) -> Dict[str, Any]:
@@ -438,6 +443,9 @@ class OpenAIClient(BaseLLMClient):
                     strict_tool_arguments=strict_tool_arguments,
                 )
             except asyncio.CancelledError:
+                raise
+            except LLMError:
+                # 完整收流后的内容校验已完成错误分类，统一交给 Engine 重试，避免每轮再加一次非流式请求。
                 raise
             except _LEGACY_FALLBACK_ERRORS as e:
                 self.logger.warning(f"流式请求失败，降级为非流式: {e}")
