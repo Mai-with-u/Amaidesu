@@ -42,10 +42,16 @@ async def test_checkpoint_preserves_facts_and_recent_protocol_groups_then_stays_
     config = MinecraftContextConfig(max_context_chars=24000, recent_turns=2)
     compactor = MinecraftHistoryCompactor(llm, config)
     messages = history()
-    facts = {"original_instructions": ["建好；禁止取私人箱子"], "outcome_known": False, "artifact_ref": "design-1"}
+    # 当前计划独立于旧笔记保存；真正整理历史后，编号和 ready 状态仍留在事实区。
+    facts = {
+        "original_instructions": ["建好；禁止取私人箱子"], "outcome_known": False, "artifact_ref": "design-1",
+        "notebook": "旧笔记：方案尚待校验",
+        "plan_facts": [{"plan_id": "validated-plan", "state": "ready", "result_ref": "plan-observation"}],
+    }
     assert await compactor.compact(messages, [], facts)
     assert context_chars(messages, []) < config.max_context_chars
     assert "禁止取私人箱子" in messages[1]["content"] and '"outcome_known":false' in messages[1]["content"]
+    assert '"plan_id":"validated-plan"' in messages[1]["content"] and '"state":"ready"' in messages[1]["content"]
     pending = set()
     for message in messages:
         if message["role"] == "assistant":

@@ -34,6 +34,7 @@ from src.agents.minecraft.builder.controller import MinecraftBuilderController
 from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
 from src.agents.minecraft.design_progress import MachineDesignProgress
 from src.agents.minecraft.observations import MinecraftObservations, json_text
+from src.agents.minecraft.plan_facts import MinecraftPlanFacts
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.agents.minecraft.tool_content import failed_observation, successful_observation
@@ -68,6 +69,8 @@ _GAMEPLAY_RULES = (
     "真实历史观察指向具体容器与目标材料时，才使用定向 use_container/manage_container；"
     "说明访问依据并遵守取用权限与保护范围。附近有箱子、地标名称和缺料本身都不是授权。"
     "无合规库存来源时按已允许的合成或采集路线继续，确实无法取得时报告材料缺口。"
+    "缺口按真实原因处理：no_space/inventory_capacity 先解决容量；已取得物品但 outcome_uncertain 时核验原生收尾，"
+    "不能再次领取同一份材料。目录搜索零命中时按 suggested_queries 缩短为单个关键词。"
     "设计审阅 success 只表示检查结束，必须核对 buildable/physical_layout_compiled 等真实结果。"
     "用户要求建好且方案可用、符合要求时，交给相应 Mod 施工入口完成供料和建造，无需重复询问相同建造授权；"
     "用户只要设计时保持只设计。设计不可建时处理具体阻塞，不能把审阅完成当作工程完成。"
@@ -84,6 +87,8 @@ _GAMEPLAY_RULES = (
     "库存尚未备齐、现场尚未供电、产出尚未实测不阻止生成蓝图或提交 plan；"
     "供料与施工检查由 Mod 执行，实际供电和产出按声明的运行要求验证。"
     "已有场地回执直接作为施工锚点，plan 通过后继续 execute；仅在具体诊断或相关现场变化要求时补查。"
+    "plan_facts 和 _pending_execution 是 Mod 回执确认的计划阶段，优先于笔记中旧的待校验描述；"
+    "原任务要求执行且计划 ready 时继续提交，施工之后的接线与验收查询不应挡住已可执行的计划。"
     "不要用产品专用工作站模板替代组合设计，不要因为已有另一条简单配方就改变目标产物。"
     "有具体产物要求时将实际目标写入 expected_output，禁用模组写入 constraints.forbidden_mods；"
     "比较连续产量、用料和占地时区分估算与实测，缺少运行证据不能声称效率最优。"
@@ -209,6 +214,7 @@ class MinecraftAgent(BaseAgent):
         self._task_instructions: List[str] = []
         self._task_progress: Dict[str, Dict[str, Any]] = {}
         self._recent_results: Deque[Dict[str, Any]] = deque(maxlen=6)
+        self._plan_facts = MinecraftPlanFacts()
         self._task_notice_fingerprints: Dict[str, str] = {}
         self._task_steps = 0
         self._task_finished = True
@@ -656,6 +662,7 @@ class MinecraftAgent(BaseAgent):
                         self._task_instructions.clear()
                         self._task_progress.clear()
                         self._recent_results.clear()
+                        self._plan_facts.clear()
                         self._task_notice_fingerprints.clear()
                         messages[:] = [{"role": "system", "content": system_prompt}]
                         self._context_compactor.checkpoints = 0
@@ -835,6 +842,12 @@ class MinecraftAgent(BaseAgent):
     ) -> None:
         """把子任务的请求与结果引用串起来，局部审阅目标不能覆盖玩家的最终要求。"""
         ref = shown.get("_observation", {}).get("ref")
+        self._absorb_resume_receipt(arguments, original)
+        self._plan_facts.observe(tool, arguments, original, ref)
+        pending_plans = self._plan_facts.pending()
+        if pending_plans:
+            # 连续查询和阅读旧原文时保留当前待执行编号，避免模型把历史疑问误当成还没通过规划。
+            shown["_pending_execution"] = pending_plans
         if original.get("accepted") is True and original.get("task_id"):
             task_id = str(original["task_id"])
             record = self._task_progress.setdefault(task_id, {"task_id": task_id, "status": "accepted"})
@@ -893,6 +906,7 @@ class MinecraftAgent(BaseAgent):
             "reasoning_steps_used": self._task_steps,
             "observations": self._observations.index(),
             "recent_results": list(self._recent_results),
+            "plan_facts": self._plan_facts.snapshot(),
         }
 
     def _unfinished_todos(self) -> bool:
@@ -1036,7 +1050,12 @@ class MinecraftAgent(BaseAgent):
         """
         if self._builder is not None:
             self._builder.absorb(payload)
-        signature = hashlib.sha256(json_text([payload.status, payload.summary, payload.snapshot]).encode()).hexdigest()
+        # 同一决策从查询和注意流抵达时只处理一次；新的 decision_id 即使仍是待决策状态也必须交给模型。
+        decision_id = self._decision_id(payload.snapshot) if payload.status == "waiting_for_decision" else ""
+        fingerprint = (
+            [payload.status, decision_id] if decision_id else [payload.status, payload.summary, payload.snapshot]
+        )
+        signature = hashlib.sha256(json_text(fingerprint).encode()).hexdigest()
         if not payload.alert and self._task_notice_fingerprints.get(payload.task_id) == signature:
             return
         self._task_notice_fingerprints[payload.task_id] = signature
@@ -1253,8 +1272,10 @@ class MinecraftAgent(BaseAgent):
             return
         tracker = self._task_tracker
         ledger = getattr(tracker, "ledger", None) if tracker is not None else None
-        if ledger is None or ledger.get(task_id) is None:
+        record = ledger.get(task_id) if ledger is not None else None
+        if record is None:
             return
+        prior_status = record.status
         written = ledger.update(
             task_id,
             status,
@@ -1264,6 +1285,41 @@ class MinecraftAgent(BaseAgent):
         )
         if written is not None:
             self._logger.info(f"任务事件落账（注意流）: task_id={task_id} status={status} type={event_type}")
+        elif status == prior_status == "waiting_for_decision" and record.initiator == self.name:
+            # 通用台账对同状态更新静默；Minecraft 仍须交付这次新的原生决策，不能漏掉恢复步骤里的再次失败。
+            self.on_task_notification(
+                TaskChangedPayload(
+                    task_id=task_id,
+                    status=status,
+                    initiator=self.name,
+                    executor=record.executor,
+                    snapshot={"event_type": event_type, "task_id": task_id, "data": event.get("data") or {}},
+                    summary=self._task_event_summary(event_type, event),
+                )
+            )
+
+    @staticmethod
+    def _decision_id(snapshot: Dict[str, Any]) -> str:
+        """只从原生决策位置读取编号，不把蓝图等任意嵌套内容当成待应答事实。"""
+        decision = snapshot.get("decision")
+        if not isinstance(decision, dict) and snapshot.get("event_type") == "decision":
+            decision = snapshot.get("data")
+        return str(decision.get("decision_id") or "") if isinstance(decision, dict) else ""
+
+    def _absorb_resume_receipt(self, arguments: Dict[str, Any], receipt: Dict[str, Any]) -> None:
+        """恢复答复已被 Mod 受理时立即解除旧待决策事实，不等待轮询才允许零推理等待。"""
+        task_id = receipt.get("task_id")
+        if arguments.get("action") not in {"answer", "resume"} or task_id != arguments.get("task_id"):
+            return
+        if receipt.get("state") != "running" or receipt.get("error") or receipt.get("success") is False:
+            return
+        ledger = getattr(self._task_tracker, "ledger", None)
+        record = ledger.get(task_id) if ledger is not None else None
+        if record is None or record.initiator != self.name:
+            return
+        ledger.update(task_id, "running", snapshot=receipt, summary="原任务恢复请求已受理")
+        progress = self._task_progress.setdefault(task_id, {"task_id": task_id})
+        progress.update(status="running", summary="原任务恢复请求已受理")
 
     @staticmethod
     def _task_event_summary(event_type: str, event: Dict[str, Any]) -> str:

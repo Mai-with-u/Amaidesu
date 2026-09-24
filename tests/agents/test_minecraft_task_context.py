@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.modules.events.payloads.tasks import TaskChangedPayload
@@ -80,6 +82,46 @@ def test_compaction_keeps_ready_plan_for_direct_execution() -> None:
     agent._remember_result("maicraft_plan", request, result, shown)
     recent = agent._current_task_context()["recent_results"][-1]
     assert recent["plan_id"] == "compiled-plan" and recent["ready_to_execute"] is True
+    # 复现生产环境：规划后连续读取能力，旧笔记仍有“待校验”；有效计划不能被六条近期回执淘汰。
+    agent._mc_state.notebook = "当前蓝图待校验"
+    for index in range(9):
+        query = {"view": "abilities", "query": str(index)}
+        observed = {"semantic_abilities": [], "total_matches": 0}
+        display = agent._observations.present("maicraft_perceive", query, observed)
+        agent._remember_result("maicraft_perceive", query, observed, display)
+        assert display["_pending_execution"][0]["plan_id"] == "compiled-plan"
+    context = agent._current_task_context()
+    assert all("plan_id" not in result for result in context["recent_results"])
+    assert context["plan_facts"][0]["state"] == "ready"
+    assert context["plan_facts"][0]["result_ref"] == shown["_observation"]["ref"]
+
+
+@pytest.mark.parametrize(
+    ("receipt", "state"),
+    [
+        ({"accepted": True, "task_id": "build"}, "submitted"),
+        ({"ok": False, "error": {"outcome_known": True}}, "execution_rejected"),
+        ({"ok": False, "error": {"outcome_known": False}}, "execution_unknown"),
+    ],
+)
+def test_plan_execution_receipt_removes_pending_hint(receipt: dict, state: str) -> None:
+    """执行受理或结果未知都不能继续提示直接开工，防止等待期间或失败后重复施工。"""
+    agent = make_agent()
+    goal = {"ability": "maicraft:build_machine", "outcome": "建造"}
+    agent._remember_result("maicraft_plan", {"goal": goal}, {"plan_id": "plan", "ready_to_execute": True}, {})
+    agent._remember_result("maicraft_execute", {"plan_id": "plan"}, receipt, {})
+    assert agent._current_task_context()["plan_facts"][0]["state"] == state
+    assert not agent._plan_facts.pending()
+
+
+def test_rejected_revision_does_not_revive_previous_plan() -> None:
+    """同一目标的新版本未通过时保留旧编号作为历史，避免按过时约束开工。"""
+    agent = make_agent()
+    goal = {"ability": "maicraft:build_machine", "outcome": "建造"}
+    agent._remember_result("maicraft_plan", {"goal": goal}, {"plan_id": "old", "ready_to_execute": True}, {})
+    agent._remember_result("maicraft_plan", {"goal": goal}, {"ready_to_execute": False}, {})
+    assert agent._current_task_context()["plan_facts"][0]["state"] == "superseded"
+    assert not agent._plan_facts.pending()
 
 
 def test_builder_completion_delivers_artifact_without_automatic_execution() -> None:

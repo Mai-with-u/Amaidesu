@@ -95,6 +95,35 @@ def test_wait_requires_running_dependency_and_no_unhandled_decision() -> None:
     assert not agent._wait_requested
 
 
+def test_accepted_recovery_immediately_allows_host_wait() -> None:
+    """恢复回执已是 running 时无需多查一次任务，旧决策不能继续阻止宿主等待。"""
+    agent, llm, tracker = make_agent()
+    tracker.ledger.update("work", "waiting_for_decision")
+    agent._task_progress["work"] = {"task_id": "work", "status": "waiting_for_decision"}
+    agent._remember_result(
+        "maicraft_task", {"action": "answer", "task_id": "work"},
+        {"task_id": "work", "state": "running"}, {},
+    )
+    assert tracker.ledger.get("work").status == "running"
+    assert agent._current_task_context()["background_tasks"][0]["status"] == "running"
+    assert agent._request_wait()["waiting"] is True
+    llm.generate.assert_not_called()
+
+
+def test_new_decision_in_same_status_is_delivered_once() -> None:
+    """恢复期间再次缺料会产生新决策，即使台账漏过 running 窗口也不能丢失这次通知。"""
+    agent, llm, tracker = make_agent()
+    agent._task_finished = False
+    tracker.ledger.update("work", "waiting_for_decision")
+    for decision_id in ("capacity", "capacity", "restore", "restore"):
+        agent._absorb_task_event(
+            {"type": "decision", "task_id": "work", "data": {"decision_id": decision_id}, "message": "处理当前缺口"}
+        )
+    assert len(agent._message_queue) == 2
+    assert "capacity" in agent._message_queue[0][1] and "restore" in agent._message_queue[1][1]
+    llm.generate.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_wait_mixed_with_actions_returns_all_results_without_yielding() -> None:
     """模型把等待和记笔记并排提交时，拒绝等待并保留每项回执供下一轮纠正。"""

@@ -51,6 +51,11 @@ _DECISION_FIELDS = frozenset(
         "snapshot_id",
         "plan_id",
         "ready_to_execute",
+        # 嵌套机器失败的直接恢复依据保持可见，避免完整蓝图把容量或菜单失败原因淹没。
+        "inventory_capacity",
+        "cause_code",
+        "failure_type",
+        "detail",
     }
 )
 
