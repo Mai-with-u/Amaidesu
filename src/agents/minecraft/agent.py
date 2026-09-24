@@ -90,6 +90,14 @@ _GAMEPLAY_RULES = (
     "plan_facts 和 _pending_execution 是 Mod 回执确认的计划阶段，优先于笔记中旧的待校验描述；"
     "原任务要求执行且计划 ready 时继续提交，施工之后的接线与验收查询不应挡住已可执行的计划。"
     "不要用产品专用工作站模板替代组合设计，不要因为已有另一条简单配方就改变目标产物。"
+    "Ponder 的创造马达、无限物品/流体/能量源表示演示环境提供的资源 IN；保留机构与真实接收口，"
+    "不要照搬演示发生器。只允许某模组并不授权使用该模组的创造资源。"
+    "优先从附近已有传动网接入动力；传动部件的轴口也可提供接入点，不必寻找独立发电机。"
+    "施工勘测的范围不代表整个平台；范围内没看见动力口不能断言附近没有网络。"
+    "需要找动力时调用 perceive(view=kinetic_sources,query=短名称或ID,radius=水平范围)，由 Mod 按已加载区块索引筛选接口。"
+    "候选只属于当前作业高度附近的可见范围；发现不代表取用许可，只连接用户授权施工区或有依据的共用网络。"
+    "没有候选或扫描未完成时保持未知，不扩大到地下、隔墙或私人区域去寻找动力。"
+    "用 blueprint.external_inputs 声明真实接收口，施工后由 Mod 的 connect_external_input 调查并连接已有网络。"
     "有具体产物要求时将实际目标写入 expected_output，禁用模组写入 constraints.forbidden_mods；"
     "比较连续产量、用料和占地时区分估算与实测，缺少运行证据不能声称效率最优。"
     "传送带可声明带段或折线路径，由 Mod 展开端轴；读取返回的 power_ports 选择端点或中间带轮接入动力。"
@@ -710,10 +718,15 @@ class MinecraftAgent(BaseAgent):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - 单步失败转错误事件
-                self._logger.warning(f"MinecraftAgent LLM 推理异常: {type(exc).__name__}: {exc}")
-                await self.emit_error(f"LLM 推理异常: {type(exc).__name__}: {exc}")
+                # 未完成的生成没有派发工具；保留已验证计划并暂停，身体通知不能在中断后悄悄重启同一轮推理。
+                self._task_suspended = True
+                self._logger.warning(f"MinecraftAgent LLM 推理异常: {type(exc).__name__}: {exc}", exc=True)
+                await self.emit_error(
+                    f"LLM 推理异常: {type(exc).__name__}: {exc}；本任务与已有回执已保留，等待新指令继续"
+                )
                 return
             if not response.success:
+                self._task_suspended = True
                 await self.emit_error(f"LLM 调用失败: {response.error or '未知错误'}")
                 return
 

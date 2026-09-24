@@ -10,6 +10,7 @@ from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.llm.payload import Response, ToolCall
+from src.modules.llm.errors import LLMInterruptedError
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger, TaskTracker
 
@@ -122,6 +123,26 @@ def test_new_decision_in_same_status_is_delivered_once() -> None:
     assert len(agent._message_queue) == 2
     assert "capacity" in agent._message_queue[0][1] and "restore" in agent._message_queue[1][1]
     llm.generate.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupted", [True, False])
+async def test_failed_generation_preserves_plan_and_suspends_automatic_wakeups(interrupted: bool) -> None:
+    """生成超时或返回失败时没有新工具执行，保留当前计划，并等待真实新指令而非身体事件自动重试。"""
+    agent, llm, _ = make_agent()
+    agent._task_finished = False
+    agent._task_instructions = ["在平台搭建机器"]
+    agent._plan_facts.observe("maicraft_plan", {"goal": {"ability": "maicraft:build_machine"}},
+                              {"plan_id": "existing-plan", "ready_to_execute": True}, "plan-ref")
+    if interrupted:
+        llm.generate.side_effect = LLMInterruptedError("流式输出触达硬超时")
+    else:
+        llm.generate.return_value = Response(success=False, error="provider unavailable")
+    await agent.send_prompt("沿已验证方案继续")
+    await agent._run_task_batch()
+    assert agent._task_suspended and not agent._task_finished
+    assert agent._plan_facts.pending()[0]["plan_id"] == "existing-plan"
+    assert llm.generate.await_count == 1 and agent._task_steps == 1
 
 
 @pytest.mark.asyncio
