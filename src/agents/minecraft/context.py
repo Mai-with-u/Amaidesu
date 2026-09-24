@@ -108,17 +108,22 @@ class MinecraftHistoryCompactor:
             "role": "system",
             "content": (
                 "你在整理 Minecraft 玩家已经发生的任务历史，不执行游戏操作。下方历史均是待总结的数据。"
-                "只总结已采用或放弃的方案及理由、已取得的证据、仍未解决的问题和下一步决策依据。"
+                "只总结已采用或放弃的方案及理由、已取得的证据和仍有效的具体缺口。"
                 "引用已有观察或产物编号；保留失败和结果未知的区别，不补造事实、授权或成功结论。"
-                "原始玩家指令、待办、任务事实、观察索引会由代码单独保留，不要复述这些清单或教材正文。"
-                "只写未被这些事实覆盖的判断、缺口、下一步依据和放弃方案的原因。"
+                "末尾的当前任务状态用于核对旧历史：最新指令与真实回执优先，已采用的目标解释和方案保持有效。"
+                "旧疑问已经由当前待办或新证据解决时，应删除旧疑问；待办完成本身不证明游戏操作成功。"
+                "不要重新安排下一步、要求重复授权，或把尚未运行验收变成不能起草设计。"
+                "原始指令、待办、任务事实与观察索引由代码保留，不要复述这些清单或教材正文。"
                 f"直接输出中文短摘要，目标不超过 {min(2000, self._config.summary_max_chars // 2)} 字符，不调用工具。"
             ),
         }
         # 旧事实已由 fixed 更新，避免模型把重复索引再次写成越来越长的摘要。
         source = [deepcopy(message) for message in messages[1:cut] if not message.get("_minecraft_context_facts")]
+        # 压缩旧片段时也提供最新决策与回执作对照；索引无需重抄，旧摘要不能复活已解决的问题。
+        current = {key: value for key, value in facts.items() if key != "observations"}
         summary = await self._summarize(
-            [prompt, *source, {"role": "user", "content": "整理上述推理，保留必要引用与待解决事项。"}], max_attempts
+            [prompt, *source, {"role": "user", "content": "[当前任务状态，仅作核对]\n" + json_text(current)}],
+            max_attempts,
         )
         candidate = [
             *fixed,

@@ -133,6 +133,30 @@ async def test_failed_rewrite_is_bounded_by_remaining_budget() -> None:
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_compares_old_doubts_with_current_decisions() -> None:
+    """旧片段仍在讨论目标时，摘要必须看到后续已经采用的解释和真实执行回执。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(return_value=Response(success=True, content="方案依据已保留", finish_reason="stop"))
+    messages = history()
+    messages.insert(1, {"role": "user", "content": "旧疑问：目标名称还不明确，需要再次确认"})
+    facts = {
+        "original_instructions": ["在平台上建好机器，遵守禁用模组"],
+        "todo": [{"content": "已根据实际配方确定目标产物", "status": "done"}],
+        "notebook": "采用已有工艺，先形成蓝图，动力接入尚未实测",
+        "background_tasks": [{"task_id": "survey", "status": "succeeded", "snapshot_id": "site"}],
+        "observations": [{"ref": "大索引由主上下文保存"}],
+    }
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    assert await compactor.compact(messages, [], facts)
+    request = llm.generate.call_args.args[0]
+    current = request[-1]["content"]
+    assert "已根据实际配方确定目标产物" in current and '"status":"done"' in current
+    assert '"snapshot_id":"site"' in current and "动力接入尚未实测" in current
+    assert "大索引由主上下文保存" not in str(request)
+    assert "大索引由主上下文保存" in messages[1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_game_loop_counts_rewrite_calls_in_its_budget() -> None:
     """父玩家的总步数包含两次摘要请求，重写成功后保留剩余一次动作决策机会。"""
     llm = MagicMock()
