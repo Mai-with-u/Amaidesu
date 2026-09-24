@@ -49,6 +49,8 @@ _DECISION_FIELDS = frozenset(
         "artifact_ref",
         "blueprint_id",
         "snapshot_id",
+        "plan_id",
+        "ready_to_execute",
     }
 )
 
@@ -86,7 +88,18 @@ class MinecraftObservations:
             oldest = next(iter(self._entries))
             del self._entries[oldest]
             self._total_chars -= self._sizes.pop(oldest)
-        result = self._project(value, ref, "", self.inline_chars)
+        # 明确选中的单份工艺/蓝图资料优先作为完整阅读单元；整本目录和超大文档仍按引用展开。
+        resources = value.get("resources")
+        selected_document = (
+            tool == "maicraft_perceive"
+            and arguments.get("view") == "knowledge"
+            and bool(arguments.get("resource_uri"))
+            and value.get("content_loaded") is True
+            and isinstance(resources, list)
+            and len(resources) == 1
+        )
+        budget = min(24_000, self.inline_chars * 4) if selected_document else self.inline_chars
+        result = self._project(value, ref, "", budget)
         result["_observation"] = {
             "ref": ref,
             "observed_at_ms": entry["observed_at_ms"],

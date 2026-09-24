@@ -56,6 +56,23 @@ def test_repeat_marker_requires_identical_request_and_actual_result() -> None:
     assert len(history.index("inventory")) == 2
 
 
+def test_selected_process_document_is_read_as_one_unit() -> None:
+    """单份一万三千字资料已被明确选中时完整呈现，目录查询仍遵守普通呈现预算。"""
+    history = MinecraftObservations()
+    uri = "maicraft://knowledge/recipes/example/output"
+    body = {"process": "工艺定义" * 3300, "loops": 5, "sequence": ["a", "b", "c"]}
+    original = {"resources": [{"uri": uri, "content": body}], "content_loaded": True}
+    request = {"view": "knowledge", "resource_uri": uri}
+    shown = history.present("maicraft_perceive", request, original)
+    assert shown["resources"][0]["content"] == body
+    catalog = history.present("maicraft_perceive", {"view": "knowledge"}, original)
+    assert catalog["resources"]["deferred"] is True
+    large = deepcopy(original)
+    large["resources"][0]["content"]["process"] *= 3
+    deferred = history.present("maicraft_perceive", request, large)
+    assert deferred["resources"]["deferred"] is True
+
+
 def test_pointer_search_and_expired_references_are_explicit() -> None:
     """包含斜线的字段仍能寻址；过期引用只能报错，不能误读另一份原文。"""
     history = MinecraftObservations(archive_chars=500)
@@ -111,16 +128,14 @@ async def test_react_tracks_original_before_presentation_and_reads_through_local
 async def test_invalid_observation_reads_remain_correctable(bad_arguments: dict) -> None:
     """错误引用或路径只拒绝该次读取，修正后仍能取得已归档的真实游戏资料。"""
     registry = ToolRegistry(failure_threshold=3)
-    agent = MinecraftAgent(
-        MinecraftConfig(), llm_manager=MagicMock(), tool_registry=registry, event_bus=MagicMock()
-    )
+    agent = MinecraftAgent(MinecraftConfig(), llm_manager=MagicMock(), tool_registry=registry, event_bus=MagicMock())
     agent._register_tools()
     shown = agent._observations.present("maicraft_perceive", {}, {"position": {"x": 3}})
     ref = shown["_observation"]["ref"]
     for _ in range(4):
-        result = await registry.invoke(ToolInvocation(
-            tool_name="minecraft_observation", arguments={"ref": ref, **bad_arguments}
-        ))
+        result = await registry.invoke(
+            ToolInvocation(tool_name="minecraft_observation", arguments={"ref": ref, **bad_arguments})
+        )
         assert not result.success
         assert not registry.is_tripped("minecraft_observation")
     result = await registry.invoke(ToolInvocation(tool_name="minecraft_observation", arguments={"ref": ref}))

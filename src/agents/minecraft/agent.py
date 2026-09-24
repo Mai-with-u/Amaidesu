@@ -69,7 +69,7 @@ _GAMEPLAY_RULES = (
     "说明访问依据并遵守取用权限与保护范围。附近有箱子、地标名称和缺料本身都不是授权。"
     "无合规库存来源时按已允许的合成或采集路线继续，确实无法取得时报告材料缺口。"
     "设计审阅 success 只表示检查结束，必须核对 buildable/physical_layout_compiled 等真实结果。"
-    "用户要求建好且设计可用、符合要求时，下一步是备料和施工，无需重复询问相同建造授权；"
+    "用户要求建好且方案可用、符合要求时，交给相应 Mod 施工入口完成供料和建造，无需重复询问相同建造授权；"
     "用户只要设计时保持只设计。设计不可建时处理具体阻塞，不能把审阅完成当作工程完成。"
     "原任务会随后台唤醒恢复，沿原待办和最新阶段继续；没有其他可推进事项时让出本轮等待任务通知。"
     "宿主监控已登记的后台任务；没有独立事项时单独调用 minecraft_wait，不用 attention 超时反复轮询。"
@@ -855,7 +855,18 @@ class MinecraftAgent(BaseAgent):
                     "ref": ref,
                     **{
                         key: shown[key]
-                        for key in ("ok", "success", "accepted", "error", "complete", "buildable", "outcome_known")
+                        for key in (
+                            "ok",
+                            "success",
+                            "accepted",
+                            "error",
+                            "complete",
+                            "buildable",
+                            "outcome_known",
+                            "plan_id",
+                            "ready_to_execute",
+                            "snapshot_id",
+                        )
                         if key in shown
                     },
                 }

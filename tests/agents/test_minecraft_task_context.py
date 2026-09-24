@@ -71,6 +71,17 @@ def test_running_progress_is_silent_and_decision_includes_existing_evidence() ->
     assert len(agent._message_queue) == 1 and "已授权材料来源" in agent._message_queue[0][1]
 
 
+def test_compaction_keeps_ready_plan_for_direct_execution() -> None:
+    """规划后即使整理历史，模型仍拿得到计划编号，不需要重查蓝图或再发起设计审阅。"""
+    agent = make_agent()
+    request = {"goal": {"ability": "maicraft:build_machine", "parameters": {"snapshot_id": "site"}}}
+    result = {"plan_id": "compiled-plan", "ready_to_execute": True, "status": "compiled"}
+    shown = agent._observations.present("maicraft_plan", request, result)
+    agent._remember_result("maicraft_plan", request, result, shown)
+    recent = agent._current_task_context()["recent_results"][-1]
+    assert recent["plan_id"] == "compiled-plan" and recent["ready_to_execute"] is True
+
+
 def test_builder_completion_delivers_artifact_without_automatic_execution() -> None:
     """建筑产物引用随完成通知交付，父模型可直接决策执行，无需先空查一次状态。"""
     agent = make_agent()

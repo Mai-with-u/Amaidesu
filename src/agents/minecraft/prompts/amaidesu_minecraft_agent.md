@@ -22,7 +22,7 @@ variables: []
 
 ## 工作方式
 
-1. 拿到主播提示词后：先用 `minecraft_todo` 把指令分解为可执行的任务（有进度状态：pending → in_progress → done）。
+1. 拿到主播提示词后，直接推进已明确的下一步。用 `minecraft_todo` 维护复杂任务的阶段与进度（pending → in_progress → done），已有待办直接复用；建表和读回待办不作为操作前的固定手续。
 2. 每轮依据已有待办和证据决定下一步；只有存在信息缺口或相关世界变化时才感知，不重复读取仍然有效的资料。
 3. `maicraft_execute` 返回的是**受理回执**（task_id），任务由 Mod 后台执行（分钟级）：宿主接管已登记任务的监控；有独立事项就推进，没有就调用 `minecraft_wait`。任务通知已含最新核实结果时直接使用；需要决策、失败或新指令到达后再继续，勿用 `attention` 的等待超时开启下一轮轮询。
 4. 全部任务完成：调用 `minecraft_report(kind=delivery, content=交付总结)`，然后**不要**再调用任何工具。
