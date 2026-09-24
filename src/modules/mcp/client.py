@@ -23,11 +23,11 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any, Callable, Dict, List, Optional
 
 from src.modules.logging import get_logger
-from src.modules.mcp.config import McpServerConfig
+from src.modules.mcp.config import DEFAULT_REQUEST_TIMEOUT_MS, McpServerConfig
+from src.modules.mcp.requests import McpRequestTimeout, bounded_request
 
 logger = get_logger("McpClient")
 
@@ -53,6 +53,8 @@ class McpClient:
         self._subscriptions: Dict[str, ResourceUpdateCallback] = {}
         # 最近一次连接失败的特征串：长驻调用方会周期性重试，同因失败只该喊一次
         self._connect_failure = ""
+        # 只使用通道配置设置期限，不读取工具参数来猜测游戏动作需要等待多久。
+        self._request_timeout_ms = getattr(config, "request_timeout_ms", DEFAULT_REQUEST_TIMEOUT_MS)
 
     @staticmethod
     def _build_message_handler(subscriptions: Dict[str, ResourceUpdateCallback]) -> Any:
@@ -298,12 +300,19 @@ class McpClient:
         # fastmcp 为可选重型依赖：业务异常类在调用点延迟获取（与 connect 的延迟导入同策略）
         from fastmcp.exceptions import ToolError
 
+        active_client = self._client
         try:
-            started = time.time()
-            result = await self._client.call_tool(tool_name, arguments)
-            duration_ms = int((time.time() - started) * 1000)
-            logger.debug(f"MCP 调用 {self.name}.{tool_name} 完成（{duration_ms}ms）")
-            return result
+            return await bounded_request(
+                lambda: active_client.call_tool(tool_name, arguments),
+                server=self.name,
+                operation=f"tools/call {tool_name}",
+                timeout_ms=self._request_timeout_ms,
+            )
+        except McpRequestTimeout:
+            # 只使本次使用的连接失效；保留旧实例供重连清理，迟到错误不能污染已经换好的连接。
+            if self._client is active_client:
+                self._connected = False
+            raise
         except ToolError as exc:
             # server 正常应答的业务错误（参数错/状态冲突等）：round-trip 完整，连接无恙——
             # 保持连接不断开，错误上抛由 Provider 转述给调用方（LLM 据此自纠）
@@ -312,8 +321,8 @@ class McpClient:
         except Exception as exc:  # noqa: BLE001 - 通道边界兜底
             # 传输层故障（断线/服务重启）：标记断开，下次调用触发重连
             logger.warning(f"MCP server '{self.name}' 调用工具 '{tool_name}' 失败: {type(exc).__name__}: {exc}")
-            self._connected = False
-            self._client = None
+            if self._client is active_client:
+                self._connected = False
             return None
 
     async def close(self) -> None:

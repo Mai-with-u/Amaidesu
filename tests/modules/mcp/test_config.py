@@ -35,6 +35,10 @@ class TestServerConfig:
     def test_timeout_default(self) -> None:
         cfg = McpServerConfig(transport="http", url="http://x/mcp")
         assert cfg.timeout_seconds >= 1.0
+        # 默认请求期限容纳主动等待；纯新增字段在既有配置中自动取得默认值。
+        assert cfg.request_timeout_ms == 90_000
+        with pytest.raises(ValidationError):
+            McpServerConfig(request_timeout_ms=0)
 
 
 class TestExternalConfig:

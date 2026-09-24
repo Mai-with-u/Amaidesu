@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.mcp import mapper
+from src.modules.mcp.requests import McpRequestTimeout
 from src.modules.mcp.client import McpClient
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
@@ -175,6 +176,25 @@ class McpToolProvider(BaseToolProvider):
         try:
             # spec.name = server 原始名，原样直呼（无任何名字解析）
             result = await self._client.call_tool(spec.name, dict(invocation.arguments or {}))
+        except McpRequestTimeout as exc:
+            # 没有回执不能宣称远端未执行；把不确定性完整交给调用者，通道不代替它重试动作。
+            return ToolExecutionResult(
+                tool_name=full_name,
+                success=False,
+                failure_kind="execution",
+                error_message=str(exc),
+                structured_content={
+                    "error": {
+                        "code": "mcp_request_timeout",
+                        "message": str(exc),
+                        "outcome_known": False,
+                        "request_id": exc.request_id,
+                        "timeout_ms": exc.timeout_ms,
+                        "elapsed_ms": exc.elapsed_ms,
+                    }
+                },
+                duration_ms=int(time.time() * 1000) - started_ms,
+            )
         except ToolError as exc:
             # server 业务错误透传给调用方（LLM 据此自纠）；连接由 client 层保持，不断开
             duration_ms = int(time.time() * 1000) - started_ms

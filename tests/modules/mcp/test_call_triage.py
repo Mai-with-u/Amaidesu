@@ -58,7 +58,8 @@ async def test_transport_error_marks_disconnected_and_returns_none() -> None:
     client = _TriagedClient(ConnectionError("connection reset"), name="triage", config=AnyConfig())
     assert await client.call_tool("t", {}) is None
     assert client._connected is False
-    assert client._client is None
+    # 断开的实例仍需由重连或关闭路径释放，不能丢掉唯一的上下文清理入口。
+    assert client._client is not None
 
 
 @pytest.mark.asyncio

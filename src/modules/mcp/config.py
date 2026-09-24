@@ -36,6 +36,9 @@ from src.modules.config.schemas.base import BaseConfig
 # transport 类型：http（Streamable HTTP，生产推荐）/ stdio（子进程）
 McpTransportType = Literal["http", "stdio"]
 
+# 请求上限要容纳服务端主动等待；需要更长作业的服务可单独配置，无需让通道认识业务参数。
+DEFAULT_REQUEST_TIMEOUT_MS = 90_000
+
 
 class McpServerConfig(BaseModel):
     """单个 MCP server 的连接配置。
@@ -51,6 +54,7 @@ class McpServerConfig(BaseModel):
         headers: http 传输时附加的 HTTP 头（如 Authorization）
         reconnect: 是否启用自动重连（连接中断后按退避策略重试）
         timeout_seconds: 连接超时（秒）
+        request_timeout_ms: 单次请求的完整等待上限，包含服务端主动等待
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -70,6 +74,9 @@ class McpServerConfig(BaseModel):
     headers: Dict[str, str] = Field(default_factory=dict, description="http 传输附加请求头")
     reconnect: bool = Field(default=True, description="连接中断后自动重连")
     timeout_seconds: float = Field(default=30.0, ge=1.0, description="连接超时（秒）")
+    request_timeout_ms: int = Field(
+        default=DEFAULT_REQUEST_TIMEOUT_MS, ge=1, description="单次 MCP 请求总等待上限（毫秒，包含服务端主动等待）"
+    )
 
     @field_validator("url")
     @classmethod
