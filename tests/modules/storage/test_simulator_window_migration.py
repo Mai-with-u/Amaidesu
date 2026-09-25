@@ -20,7 +20,9 @@ async def test_existing_persona_survives_window_column_removal(tmp_path: Path) -
     )
     await store.execute("ALTER TABLE sim_personas ADD COLUMN context_window_size INTEGER")
     await store.execute("UPDATE sim_personas SET context_window_size=5")
-    await store.execute("DELETE FROM schema_migrations WHERE version=11")
+    # v11 的 DROP COLUMN 语义是本测试的验证对象；把 v11 及之后所有版本都从迁移记录里删掉，
+    # 让重开重初始化时 v11 真正重新跑一次（覆盖 SCHEMA_VERSION 后续 bump 的影响）
+    await store.execute("DELETE FROM schema_migrations WHERE version >= 11")
     await store.close()
     for _ in range(2):
         reopened = SQLiteDatabase(path)
@@ -31,6 +33,6 @@ async def test_existing_persona_survives_window_column_removal(tmp_path: Path) -
             rows = await reopened.sim.list_sim_personas()
             assert len(rows) == 1 and rows[0]["user_nickname"] == "老观众"
             assert rows[0]["messages_generated"] == 23
-            assert await reopened.get_schema_version() == 11
+            assert await reopened.get_schema_version() >= 11
         finally:
             await reopened.close()

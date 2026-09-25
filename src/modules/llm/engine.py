@@ -221,6 +221,7 @@ def _payload_response_to_legacy(resp: Response) -> LLMResponse:
                     "total_tokens": resp.usage.total_tokens,
                     "cache_hit_tokens": resp.usage.cache_hit_tokens,
                     "cache_miss_tokens": resp.usage.cache_miss_tokens,
+                    "reasoning_tokens": resp.usage.reasoning_tokens,
                 }.items()
                 if v is not None
             }
@@ -244,6 +245,7 @@ def _payload_response_to_legacy(resp: Response) -> LLMResponse:
         reasoning_content=resp.reasoning_content,
         error=resp.error,
         request_id=resp.request_id,
+        usage_raw_json=resp.usage_raw_json,
     )
 
 
@@ -268,6 +270,7 @@ def _legacy_response_to_payload(result: LLMResponse) -> Response:
             total_tokens=result.usage.get("total_tokens", 0),
             cache_hit_tokens=result.usage.get("cache_hit_tokens"),
             cache_miss_tokens=result.usage.get("cache_miss_tokens"),
+            reasoning_tokens=result.usage.get("reasoning_tokens"),
         )
     return Response(
         success=result.success,
@@ -279,6 +282,7 @@ def _legacy_response_to_payload(result: LLMResponse) -> Response:
         reasoning_content=result.reasoning_content,
         error=result.error,
         request_id=result.request_id,
+        usage_raw_json=result.usage_raw_json,
     )
 
 
@@ -326,6 +330,8 @@ class LLMManager:
         self._config: Dict[str, Any] = {}
         # 价格表（{model_identifier: {price_in, price_out, ...}}），费用计算唯一口径
         self._model_prices: Dict[str, Dict[str, Any]] = {}
+        # 上下文窗口（{model_identifier: token 总量}）；0 = 未配置（dashboard 隐藏）
+        self._model_context_windows: Dict[str, int] = {}
         self._retry_config = RetryConfig()
         # 注入后每次成功调用旁路写一条 llm_usage（失败降级不阻断调用）；None 时不落库
         self._llm_repo = llm_repo
@@ -372,6 +378,7 @@ class LLMManager:
         self._model_call_counts.clear()
         self._rng = None
         self._model_prices = {}
+        self._model_context_windows = {}
 
         provider_configs = config.get("llm_providers") or []
         if not provider_configs:
@@ -400,6 +407,13 @@ class LLMManager:
             }
             for mname, (mcfg, _prov) in self._models.items()
             if mcfg.get("price_in", 0.0) > 0 or mcfg.get("price_out", 0.0) > 0
+        }
+
+        # 上下文窗口按 model_identifier 键入（与价格表同口径）；0 仍保留，
+        # dashboard 据此判定是否渲染水位（>0 才展示，0 = 未配置 = 隐藏）
+        self._model_context_windows = {
+            mcfg.get("model_identifier") or mname: int(mcfg.get("context_window", 0) or 0)
+            for mname, (mcfg, _prov) in self._models.items()
         }
 
         self.logger.info(
@@ -474,6 +488,16 @@ class LLMManager:
     def _resolve_profile_name(self, profile: Optional[str]) -> str:
         """把调用方传入的 profile 参数解析为已配置 profile 名（解析规则见 bootstrap 模块）。"""
         return resolve_profile_name(profile, self._profiles, self.logger)
+
+    # === 公开查询：装配期模型信息（Dashboard 等只读消费方使用） ===
+
+    def get_model_context_window(self, model_identifier: str) -> int:
+        """按 model_identifier 取上下文窗口 token 总量；未配置返回 0（= 不展示）。"""
+        return self._model_context_windows.get(model_identifier, 0)
+
+    def get_model_context_windows(self) -> Dict[str, int]:
+        """返回 ``{model_identifier: context_window}`` 浅拷贝（0 值保留，标识"未配置"）。"""
+        return dict(self._model_context_windows)
 
     def _get_profile(self, profile_name: str) -> _ResolvedProfile:
         if profile_name not in self._profiles:
@@ -590,7 +614,7 @@ class LLMManager:
         )
         self._record_request_history(
             request_id=request_id,
-            client_type=profile_name,
+            profile_name=profile_name,
             result=result,
             kwargs=kwargs,
             start_time=start_time,
@@ -614,12 +638,17 @@ class LLMManager:
         """等待当前模型完成，调用方取消时回收整个请求和重试任务。"""
         call_kwargs = dict(kwargs)
         call_kwargs["model"] = model_identifier
-        # 完整等待模型生成；只让单次温度覆盖用途默认值，主动中断仍立即回收连接。
+        # 完整等待模型生成；只让单次温度/思考强度覆盖用途默认值，主动中断仍立即回收连接。
         profile = self._get_profile(profile_name)
         request = call_kwargs.get("request")
         if call_kwargs.get("temperature") is None:
             explicit = getattr(request, "temperature", None)
             call_kwargs["temperature"] = explicit if explicit is not None else profile.temperature
+        if call_kwargs.get("reasoning_effort") is None:
+            explicit = getattr(request, "reasoning_effort", None)
+            call_kwargs["reasoning_effort"] = (
+                explicit if isinstance(explicit, str) and explicit else profile.reasoning_effort
+            )
         return await guarded_call(
             lambda: self._retry_loop(
                 method=method,
@@ -739,7 +768,7 @@ class LLMManager:
                 self.logger.warning(f"两账落库包装失败: {exc}")
         self._record_request_history(
             request_id=request_id,
-            client_type=profile_name,
+            profile_name=profile_name,
             result=result,
             kwargs=kwargs,
             start_time=start_time,
@@ -747,12 +776,20 @@ class LLMManager:
 
     @staticmethod
     def _build_request_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        """从调用 kwargs 提取请求参数快照（两账落库与请求历史共用）。"""
+        """从调用 kwargs 提取请求参数快照（两账落库与请求历史共用）。
+
+        思考强度档位（reasoning_effort）按白名单语义入快照：None / 缺省 / 空串
+        均不进快照（避免把"未配置"误显示为"显式置 None"）；其他生成参数按
+        既有温度 / 工具白名单路径处理。
+        """
         request_params = {
             "messages": kwargs.get("messages"),
             "temperature": kwargs.get("temperature"),
             "tools": kwargs.get("tools"),
         }
+        reasoning_effort = kwargs.get("reasoning_effort")
+        if isinstance(reasoning_effort, str) and reasoning_effort:
+            request_params["reasoning_effort"] = reasoning_effort
         if request_params["messages"] is None and kwargs.get("request") is not None:
             # 中立 payload 契约路径：消息以 GenerateRequest 承载
             # system 不在 messages 里，单独快照，否则提示词预览缺主提示词
@@ -761,6 +798,9 @@ class LLMManager:
             request_params["tools"] = [t.model_dump() for t in kwargs["request"].tools] or None
             if kwargs["request"].strict_tool_arguments:
                 request_params["strict_tool_arguments"] = True
+            req_reasoning = getattr(kwargs["request"], "reasoning_effort", None)
+            if isinstance(req_reasoning, str) and req_reasoning and "reasoning_effort" not in request_params:
+                request_params["reasoning_effort"] = req_reasoning
         return {k: v for k, v in request_params.items() if v is not None}
 
     async def _persist_llm_call(
@@ -782,6 +822,8 @@ class LLMManager:
         ``observation.calculate_cost``（请求历史同口径）；任何写入失败只记
         warning，绝不阻断 LLM 调用链。
         """
+        if self._llm_repo is None:
+            return
         try:
             usage = result.usage or {}
             cost = 0.0
@@ -791,6 +833,8 @@ class LLMManager:
                     result.model or model_name,
                     usage.get("prompt_tokens", 0),
                     usage.get("completion_tokens", 0),
+                    cache_hit_tokens=int(usage.get("cache_hit_tokens", 0) or 0),
+                    cache_miss_tokens=int(usage.get("cache_miss_tokens", 0) or 0),
                 )
                 cost = float(cost_info.get("cost", 0.0))
             provider_name = "unknown"
@@ -802,7 +846,7 @@ class LLMManager:
             request_row = LLMRequestInsert(
                 request_id=request_id,
                 timestamp_ms=int(time.time() * 1000),
-                client_type=profile_name,
+                profile_name=profile_name,
                 model_name=result.model or model_name,
                 request_params_json=json.dumps(self._build_request_params(kwargs), ensure_ascii=False, default=str),
                 response_content=result.content,
@@ -813,10 +857,12 @@ class LLMManager:
                 total_tokens=int(usage.get("total_tokens", 0)),
                 cache_hit_tokens=int(usage.get("cache_hit_tokens", 0)),
                 cache_miss_tokens=int(usage.get("cache_miss_tokens", 0)),
+                reasoning_tokens=int(usage.get("reasoning_tokens") or 0),
                 cost=cost,
                 success=result.success,
                 error=result.error,
                 latency_ms=duration_ms,
+                usage_raw_json=result.usage_raw_json,
             )
             # 落库统一走 observation.record_usage（两表唯一写入点）；携带明细
             # 载荷即两账同事务，缓存列与成本入参的处理收敛在 observation 侧
@@ -837,12 +883,18 @@ class LLMManager:
     def _record_request_history(
         self,
         request_id: str,
-        client_type: str,
+        profile_name: str,
         result: LLMResponse,
         kwargs: Dict[str, Any],
         start_time: float,
     ) -> None:
-        """记录请求历史（成功 / 失败路径均调用）"""
+        """记录请求历史（成功 / 失败路径均调用）
+
+        profile_name 是请求落入的 LLM 用途（planner / replyer / summary / minecraft
+        / minecraft_builder / vision / simulator）；与 ``LLMProviderConfig.client_type``
+        （客户端实现标识）概念不同——两者曾共用 ``client_type`` 字段名导致历史值域
+        混杂，现已将落库列改名为 ``profile_name``。
+        """
         try:
             # 必须函数体内 import：测试用 patch 拦截该路径，顶部 import 会使 patch 失效
             from src.modules.llm.request_history_manager import (
@@ -866,12 +918,20 @@ class LLMManager:
 
             cost = 0.0
             if usage:
-                cost_info = calculate_cost(self._model_prices, model_name, usage.prompt_tokens, usage.completion_tokens)
+                vendor_usage = result.usage or {}
+                cost_info = calculate_cost(
+                    self._model_prices,
+                    model_name,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    cache_hit_tokens=int(vendor_usage.get("cache_hit_tokens", 0) or 0),
+                    cache_miss_tokens=int(vendor_usage.get("cache_miss_tokens", 0) or 0),
+                )
                 cost = cost_info.get("cost", 0.0)
 
             record = RequestRecord(
                 request_id=request_id,
-                client_type=client_type,
+                profile_name=profile_name,
                 model_name=model_name,
                 request_params=request_params,
                 response_content=result.content,
@@ -911,3 +971,4 @@ class LLMManager:
         self._profile_call_counts.clear()
         self._model_call_counts.clear()
         self._model_prices.clear()
+        self._model_context_windows.clear()

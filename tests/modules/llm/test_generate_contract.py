@@ -54,6 +54,7 @@ class FakeVendorClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         on_delta: Any = None,
         interrupt_flag: Any = None,
     ) -> Response:
@@ -74,6 +75,7 @@ class FakeVendorClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         interrupt_flag: Any = None,
     ) -> Response:
         self.requests.append(request)

@@ -31,6 +31,7 @@ class LLMUsageInsert:
     total_tokens: int = 0
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    reasoning_tokens: int = 0
     cost: float = 0.0
     duration_ms: int = 0
     profile_name: Optional[str] = None
@@ -42,11 +43,17 @@ class LLMUsageInsert:
 
 @dataclass
 class LLMRequestInsert:
-    """``llm_requests`` 单行插入载荷（JSON 列由调用方序列化好传入）。"""
+    """``llm_requests`` 单行插入载荷（JSON 列由调用方序列化好传入）。
+
+    ``profile_name`` 替换历史 ``client_type``（§2 扩容正名）：该列实际承载的
+    是 LLM 用途 profile 名，与 ``LLMProviderConfig.client_type``（客户端实现
+    标识）概念不同。旧值域 ``llm/llm_fast/llm_summary/vlm`` 原样保留以备
+    历史查询（不映射），新行一律为 profile 闭集合成员。
+    """
 
     request_id: str
     timestamp_ms: int
-    client_type: str = ""
+    profile_name: str = ""
     model_name: str = ""
     request_params_json: Optional[str] = None
     response_content: Optional[str] = None
@@ -57,10 +64,12 @@ class LLMRequestInsert:
     total_tokens: int = 0
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    reasoning_tokens: int = 0
     cost: float = 0.0
     success: bool = True
     error: Optional[str] = None
     latency_ms: int = 0
+    usage_raw_json: Optional[str] = None
 
 
 class LLMRepo(BaseRepo):
@@ -82,6 +91,7 @@ class LLMRepo(BaseRepo):
             row.total_tokens,
             row.cache_hit_tokens,
             row.cache_miss_tokens,
+            row.reasoning_tokens,
             row.cost,
             row.duration_ms,
             ts,
@@ -94,8 +104,9 @@ class LLMRepo(BaseRepo):
             "INSERT INTO llm_usage ("
             "live_session_id, model_name, assign_name, profile_name, provider_name,"
             " request_type, prompt_tokens, completion_tokens, total_tokens,"
-            " cache_hit_tokens, cache_miss_tokens, cost, duration_ms, timestamp_ms, request_id"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " cache_hit_tokens, cache_miss_tokens, reasoning_tokens, cost, duration_ms,"
+            " timestamp_ms, request_id"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
 
     @staticmethod
@@ -104,7 +115,7 @@ class LLMRepo(BaseRepo):
         return (
             row.request_id,
             row.timestamp_ms,
-            row.client_type,
+            row.profile_name,
             row.model_name,
             row.request_params_json,
             row.response_content,
@@ -115,20 +126,23 @@ class LLMRepo(BaseRepo):
             row.total_tokens,
             row.cache_hit_tokens,
             row.cache_miss_tokens,
+            row.reasoning_tokens,
             row.cost,
             1 if row.success else 0,
             row.error,
             row.latency_ms,
+            row.usage_raw_json,
         )
 
     @staticmethod
     def _request_insert_sql() -> str:
         return (
             "INSERT OR IGNORE INTO llm_requests ("
-            "request_id, timestamp_ms, client_type, model_name, request_params, response_content,"
+            "request_id, timestamp_ms, profile_name, model_name, request_params, response_content,"
             " reasoning_content, tool_calls, prompt_tokens, completion_tokens, total_tokens,"
-            " cache_hit_tokens, cache_miss_tokens, cost, success, error, latency_ms"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " cache_hit_tokens, cache_miss_tokens, reasoning_tokens, cost, success, error,"
+            " latency_ms, usage_raw_json"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
 
     async def insert_llm_usage_row(self, row: LLMUsageInsert) -> int:
@@ -150,7 +164,7 @@ class LLMRepo(BaseRepo):
         *,
         request_id: str,
         timestamp_ms: int,
-        client_type: str = "",
+        profile_name: str = "",
         model_name: str = "",
         request_params_json: Optional[str] = None,
         response_content: Optional[str] = None,
@@ -161,10 +175,12 @@ class LLMRepo(BaseRepo):
         total_tokens: int = 0,
         cache_hit_tokens: int = 0,
         cache_miss_tokens: int = 0,
+        reasoning_tokens: int = 0,
         cost: float = 0.0,
         success: bool = True,
         error: Optional[str] = None,
         latency_ms: int = 0,
+        usage_raw_json: Optional[str] = None,
     ) -> bool:
         """插入一条请求历史行；``request_id`` 冲突时忽略（幂等）。
 
@@ -174,7 +190,7 @@ class LLMRepo(BaseRepo):
         row = LLMRequestInsert(
             request_id=request_id,
             timestamp_ms=timestamp_ms,
-            client_type=client_type,
+            profile_name=profile_name,
             model_name=model_name,
             request_params_json=request_params_json,
             response_content=response_content,
@@ -185,10 +201,12 @@ class LLMRepo(BaseRepo):
             total_tokens=total_tokens,
             cache_hit_tokens=cache_hit_tokens,
             cache_miss_tokens=cache_miss_tokens,
+            reasoning_tokens=reasoning_tokens,
             cost=cost,
             success=success,
             error=error,
             latency_ms=latency_ms,
+            usage_raw_json=usage_raw_json,
         )
 
         def _exec() -> bool:
@@ -222,7 +240,7 @@ class LLMRepo(BaseRepo):
     @staticmethod
     def _llm_request_where(
         *,
-        client_type: Optional[str],
+        profile_name: Optional[str],
         model_name: Optional[str],
         start_time: Optional[int],
         end_time: Optional[int],
@@ -231,9 +249,9 @@ class LLMRepo(BaseRepo):
         """组装 llm_requests 查询的 WHERE 子句（子句全部为代码内常量）。"""
         clauses: List[str] = []
         params: List[Any] = []
-        if client_type:
-            clauses.append("client_type = ?")
-            params.append(client_type)
+        if profile_name:
+            clauses.append("profile_name = ?")
+            params.append(profile_name)
         if model_name:
             clauses.append("model_name = ?")
             params.append(model_name)
@@ -252,7 +270,7 @@ class LLMRepo(BaseRepo):
     async def query_llm_requests(
         self,
         *,
-        client_type: Optional[str] = None,
+        profile_name: Optional[str] = None,
         model_name: Optional[str] = None,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
@@ -262,7 +280,7 @@ class LLMRepo(BaseRepo):
     ) -> Dict[str, Any]:
         """按条件分页查询请求历史（时间倒序），返回 ``{"total", "rows"}``（原始 dict 行）。"""
         where, params = self._llm_request_where(
-            client_type=client_type,
+            profile_name=profile_name,
             model_name=model_name,
             start_time=start_time,
             end_time=end_time,
@@ -322,9 +340,9 @@ class LLMRepo(BaseRepo):
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """聚合请求历史统计：总体指标 + 按模型 + 按客户端类型（一次方法三次查询）。"""
+        """聚合请求历史统计：总体指标 + 按模型 + 按 profile_name（一次方法三次查询）。"""
         where, params = self._llm_request_where(
-            client_type=None,
+            profile_name=None,
             model_name=None,
             start_time=start_time,
             end_time=end_time,
@@ -339,6 +357,7 @@ class LLMRepo(BaseRepo):
                     " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
                     " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
                     " COALESCE(SUM(total_tokens), 0) AS total_tokens,"
+                    " COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,"
                     " COALESCE(SUM(cost), 0) AS total_cost,"
                     " COALESCE(AVG(latency_ms), 0) AS avg_latency,"
                     " COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,"
@@ -356,7 +375,7 @@ class LLMRepo(BaseRepo):
                     tuple(params),
                 ).fetchall()
                 client_rows = conn.execute(
-                    f"SELECT client_type, COUNT(*) AS count FROM llm_requests{where} GROUP BY client_type",  # noqa: S608 子句为代码内常量
+                    f"SELECT profile_name, COUNT(*) AS count FROM llm_requests{where} GROUP BY profile_name",  # noqa: S608 子句为代码内常量
                     tuple(params),
                 ).fetchall()
                 return {
@@ -382,12 +401,33 @@ class LLMRepo(BaseRepo):
             " COALESCE(SUM(cost), 0) AS total_cost,"
             " COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,"
             " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens,"
+            " COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,"
             " MIN(timestamp_ms) AS first_call_time,"
             " MAX(timestamp_ms) AS last_call_time,"
             " MAX(timestamp_ms) AS last_updated"
             " FROM llm_usage GROUP BY model_name ORDER BY total_cost DESC"
         )
         return [dict(row) for row in rows]
+
+    async def llm_usage_latest_prompt_tokens(self) -> Dict[str, int]:
+        """每模型最近一次调用的 prompt_tokens（按 ``timestamp_ms`` 取最大值那行）。
+
+        返回 ``{model_name: prompt_tokens}``；无记录时不返回键。
+        用于 Dashboard 模型用量详情"上下文水位"分子（与 context_window 配对比率）。
+        """
+        rows = await self._execute(
+            "SELECT model_name, prompt_tokens FROM llm_usage t1"
+            " WHERE timestamp_ms = ("
+            " SELECT MAX(timestamp_ms) FROM llm_usage t2 WHERE t2.model_name = t1.model_name"
+            " )"
+        )
+        result: Dict[str, int] = {}
+        for row in rows:
+            name = str(row["model_name"] or "")
+            if not name:
+                continue
+            result[name] = int(row["prompt_tokens"] or 0)
+        return result
 
     async def llm_usage_daily_trends(self, *, start_ms: int) -> Dict[str, Any]:
         """按本地日聚合 ``llm_usage`` 用量趋势（图表数据源）。
@@ -407,7 +447,8 @@ class LLMRepo(BaseRepo):
                     " COALESCE(SUM(total_tokens), 0) AS total_tokens,"
                     " COALESCE(SUM(cost), 0) AS cost,"
                     " COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,"
-                    " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens"
+                    " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens,"
+                    " COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens"
                     " FROM llm_usage WHERE timestamp_ms >= ?"
                     " GROUP BY day ORDER BY day",
                     (start_ms,),
@@ -418,7 +459,8 @@ class LLMRepo(BaseRepo):
                     " COALESCE(SUM(total_tokens), 0) AS total_tokens,"
                     " COALESCE(SUM(cost), 0) AS cost,"
                     " COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,"
-                    " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens"
+                    " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens,"
+                    " COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens"
                     " FROM llm_usage WHERE timestamp_ms >= ?"
                     " GROUP BY day, model_name ORDER BY day",
                     (start_ms,),
@@ -443,7 +485,8 @@ class LLMRepo(BaseRepo):
                     " COUNT(*) AS total_calls,"
                     " COUNT(DISTINCT model_name) AS model_count,"
                     " COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,"
-                    " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens"
+                    " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens,"
+                    " COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens"
                     " FROM llm_usage"
                 ).fetchone()
                 return dict(row) if row else {}

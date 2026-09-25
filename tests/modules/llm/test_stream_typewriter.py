@@ -11,7 +11,7 @@ on_delta 收到增量立即转调消费方，Engine 侧不做缓冲。
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -37,6 +37,7 @@ def _make_typewriter_client(received_event: asyncio.Event) -> type:
             *,
             model: str,
             temperature: Any = None,
+            reasoning_effort: Optional[str] = None,
             on_delta: Any = None,
             interrupt_flag: Any = None,
         ) -> Response:

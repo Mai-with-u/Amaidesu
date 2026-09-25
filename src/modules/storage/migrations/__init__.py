@@ -30,6 +30,7 @@ from src.modules.storage.migrations import (
     v9_drop_event_history_table,
     v10_payment_details_platform_identity,
     v11_drop_simulator_context_window,
+    v12_llm_observation_and_profile_rename,
 )
 
 SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
@@ -44,6 +45,7 @@ SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     9: v9_drop_event_history_table.migrate,
     10: v10_payment_details_platform_identity.migrate,
     11: v11_drop_simulator_context_window.migrate,
+    12: v12_llm_observation_and_profile_rename.migrate,
 }
 
 __all__ = ["SCHEMA_MIGRATIONS"]

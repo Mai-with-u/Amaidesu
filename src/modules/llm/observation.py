@@ -44,14 +44,25 @@ def calculate_cost(
     model_name: str,
     prompt_tokens: int,
     completion_tokens: int,
+    *,
+    cache_hit_tokens: int = 0,
+    cache_miss_tokens: int = 0,
 ) -> Dict[str, Any]:
-    """计算 token 使用费用
+    """计算 token 使用费用。
+
+    缓存命中按 ``cache_price_in`` 单独计费，未命中按 ``price_in`` 计费；
+    仅当价格表条目声明 ``cache`` 类型且 ``cache_price_in > 0`` 时启用分段
+    口径——这是修复"缓存命中 token 按全价记账"的既有缺陷。OpenAI 风格
+    单字段上报由 Client 层反推 miss 后传 ``cache_miss_tokens``，DeepSeek
+    双字段直取两个值；调用方负责从 usage dict 取值传入。
 
     Args:
         model_prices: 价格表（``{model_identifier: {price_in, price_out, ...}}``）
         model_name: 模型名称
         prompt_tokens: 输入token数量
         completion_tokens: 输出token数量
+        cache_hit_tokens: 缓存命中输入 token 数量（未上报按 0）
+        cache_miss_tokens: 缓存未命中输入 token 数量（未上报按 0）
 
     Returns:
         费用计算信息字典
@@ -71,9 +82,13 @@ def calculate_cost(
     # 价格单位：每1000000个token的价格（通常是美元）
     price_in = price_config.get("price_in", 0.0)
     price_out = price_config.get("price_out", 0.0)
-
-    # 计算费用（转换为每token的价格）
-    cost_in = (prompt_tokens / 1000000.0) * price_in
+    cache_price_in = float(price_config.get("cache_price_in", 0.0) or 0.0)
+    cache_type = price_config.get("cache", "") or ""
+    use_segmented = bool(cache_type) and cache_price_in > 0
+    if use_segmented:
+        cost_in = (cache_hit_tokens / 1000000.0) * cache_price_in + (cache_miss_tokens / 1000000.0) * price_in
+    else:
+        cost_in = (prompt_tokens / 1000000.0) * price_in
     cost_out = (completion_tokens / 1000000.0) * price_out
     total_cost = cost_in + cost_out
 
@@ -115,6 +130,7 @@ async def record_usage(
     u = usage or {}
     hit = u.get("cache_hit_tokens")
     miss = u.get("cache_miss_tokens")
+    reasoning = u.get("reasoning_tokens")
     usage_row = LLMUsageInsert(
         model_name=model_name,
         provider_name=provider_name,
@@ -124,6 +140,7 @@ async def record_usage(
         total_tokens=int(u.get("total_tokens", 0)),
         cache_hit_tokens=int(hit) if hit is not None else 0,
         cache_miss_tokens=int(miss) if miss is not None else 0,
+        reasoning_tokens=int(reasoning) if reasoning is not None else 0,
         cost=float(cost),
         duration_ms=duration_ms,
         profile_name=profile_name,
@@ -139,7 +156,7 @@ async def record_request(repo: LLMRepo, row: LLMRequestInsert) -> bool:
     return await repo.insert_llm_request(
         request_id=row.request_id,
         timestamp_ms=row.timestamp_ms,
-        client_type=row.client_type,
+        profile_name=row.profile_name,
         model_name=row.model_name,
         request_params_json=row.request_params_json,
         response_content=row.response_content,
@@ -150,10 +167,12 @@ async def record_request(repo: LLMRepo, row: LLMRequestInsert) -> bool:
         total_tokens=row.total_tokens,
         cache_hit_tokens=row.cache_hit_tokens,
         cache_miss_tokens=row.cache_miss_tokens,
+        reasoning_tokens=row.reasoning_tokens,
         cost=row.cost,
         success=row.success,
         error=row.error,
         latency_ms=row.latency_ms,
+        usage_raw_json=row.usage_raw_json,
     )
 
 

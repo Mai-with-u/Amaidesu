@@ -54,14 +54,22 @@ class TokenUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    reasoning_tokens: Optional[int] = None
 
 
 class RequestRecord(BaseModel):
-    """LLM 请求记录"""
+    """LLM 请求记录
+
+    ``profile_name`` 替换历史 ``client_type``（§2 扩容正名）：该字段实际承载
+    的是 LLM 用途 profile 名（planner / replyer / summary / minecraft /
+    minecraft_builder / vision / simulator）；与 ``LLMProviderConfig.client_type``
+    （客户端实现标识）概念不同。历史行 client_type 值（llm / llm_fast /
+    llm_summary / vlm）原样保留以备历史查询（不映射）。
+    """
 
     request_id: str = Field(default_factory=lambda: f"req_{uuid.uuid4().hex[:12]}")
     timestamp: int = Field(default_factory=lambda: now_ms())
-    client_type: str  # llm, llm_fast, vlm, llm_local
+    profile_name: str
     model_name: str
     request_params: Dict[str, Any] = Field(default_factory=dict)
     response_content: Optional[str] = None
@@ -72,13 +80,15 @@ class RequestRecord(BaseModel):
     success: bool = True
     error: Optional[str] = None
     latency_ms: int = 0
+    # 厂商原始 usage JSON（解析即弃链路唯一兜底，落库 ``llm_requests.usage_raw_json``）
+    usage_raw_json: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
         return {
             "request_id": self.request_id,
             "timestamp": self.timestamp,
-            "client_type": self.client_type,
+            "profile_name": self.profile_name,
             "model_name": self.model_name,
             "request_params": self.request_params,
             "response_content": self.response_content,
@@ -89,13 +99,14 @@ class RequestRecord(BaseModel):
             "success": self.success,
             "error": self.error,
             "latency_ms": self.latency_ms,
+            "usage_raw_json": self.usage_raw_json,
         }
 
 
 class HistoryFilter(BaseModel):
     """历史记录查询过滤器"""
 
-    client_type: Optional[str] = None
+    profile_name: Optional[str] = None
     model_name: Optional[str] = None
     start_time: Optional[int] = None  # 毫秒时间戳
     end_time: Optional[int] = None  # 毫秒时间戳
@@ -197,8 +208,11 @@ class RequestHistoryManager:
         """写单条请求到 ``llm_requests`` 表；失败仅告警（记账旁路语义）。
 
         SQLite 写入统一走 observation（两表唯一写入者），本方法只负责把
-        请求记录字典整理成插入载荷。
+        请求记录字典整理成插入载荷。profile_name 字段承载 LLM 用途 profile
+        名；历史数据经 v12 迁移后该列已改名，传入字段名仍维持 ``profile_name``。
         """
+        if self._llm_repo is None:
+            return
         usage = record_dict.get("usage") or {}
         try:
             await record_request(
@@ -206,7 +220,7 @@ class RequestHistoryManager:
                 LLMRequestInsert(
                     request_id=record_dict["request_id"],
                     timestamp_ms=record_dict.get("timestamp", 0),
-                    client_type=record_dict.get("client_type", ""),
+                    profile_name=record_dict.get("profile_name", ""),
                     model_name=record_dict.get("model_name", ""),
                     request_params_json=json.dumps(
                         record_dict.get("request_params") or {}, ensure_ascii=False, default=str
@@ -219,10 +233,12 @@ class RequestHistoryManager:
                     total_tokens=int(usage.get("total_tokens", 0)),
                     cache_hit_tokens=int(usage.get("cache_hit_tokens", 0)),
                     cache_miss_tokens=int(usage.get("cache_miss_tokens", 0)),
+                    reasoning_tokens=int(usage.get("reasoning_tokens") or 0),
                     cost=float(record_dict.get("cost", 0.0)),
                     success=bool(record_dict.get("success", True)),
                     error=record_dict.get("error"),
                     latency_ms=int(record_dict.get("latency_ms", 0)),
+                    usage_raw_json=record_dict.get("usage_raw_json"),
                 ),
             )
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
@@ -248,13 +264,18 @@ class RequestHistoryManager:
 
     @staticmethod
     def _row_to_record(row: Dict[str, Any]) -> Dict[str, Any]:
-        """DB 行 → 历史记录字典（usage 嵌套与 JSON 列还原）。"""
+        """DB 行 → 历史记录字典（usage 嵌套与 JSON 列还原）。
+
+        读取 ``profile_name`` 列（v12 迁移后该列已改名）；同时回带 reasoning_tokens
+        与 usage_raw_json（解析即弃链路唯一兜底）。
+        """
         usage = None
         if row.get("prompt_tokens") or row.get("completion_tokens") or row.get("total_tokens"):
             usage = {
                 "prompt_tokens": int(row.get("prompt_tokens", 0)),
                 "completion_tokens": int(row.get("completion_tokens", 0)),
                 "total_tokens": int(row.get("total_tokens", 0)),
+                "reasoning_tokens": (int(row["reasoning_tokens"]) if row.get("reasoning_tokens") is not None else None),
             }
 
         def _load_json(text: Any, fallback: Any) -> Any:
@@ -268,7 +289,7 @@ class RequestHistoryManager:
         return {
             "request_id": row.get("request_id", ""),
             "timestamp": row.get("timestamp_ms", 0),
-            "client_type": row.get("client_type", ""),
+            "profile_name": row.get("profile_name", ""),
             "model_name": row.get("model_name", ""),
             "request_params": _load_json(row.get("request_params"), {}),
             "response_content": row.get("response_content"),
@@ -281,6 +302,7 @@ class RequestHistoryManager:
             "latency_ms": int(row.get("latency_ms", 0)),
             "cache_hit_tokens": int(row.get("cache_hit_tokens") or 0),
             "cache_miss_tokens": int(row.get("cache_miss_tokens") or 0),
+            "usage_raw_json": row.get("usage_raw_json"),
         }
 
     async def get_request_by_id(self, request_id: str) -> Optional[Dict[str, Any]]:
@@ -304,7 +326,7 @@ class RequestHistoryManager:
 
     async def get_history(
         self,
-        client_type: Optional[str] = None,
+        profile_name: Optional[str] = None,
         model_name: Optional[str] = None,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
@@ -328,7 +350,7 @@ class RequestHistoryManager:
         """
         if self._llm_repo is not None:
             result = await self._llm_repo.query_llm_requests(
-                client_type=client_type,
+                profile_name=profile_name,
                 model_name=model_name,
                 start_time=start_time,
                 end_time=end_time,
@@ -342,7 +364,7 @@ class RequestHistoryManager:
             # 无存储：过滤内存缓存
             filtered = []
             for record in self._cache:
-                if client_type and record.get("client_type") != client_type:
+                if profile_name and record.get("profile_name") != profile_name:
                     continue
                 if model_name and record.get("model_name") != model_name:
                     continue
@@ -448,8 +470,8 @@ class RequestHistoryManager:
             model_stats[model_name]["total_tokens"] += usage.get("total_tokens", 0)
             model_stats[model_name]["total_cost"] += record.get("cost", 0)
 
-            client_type = record.get("client_type", "unknown")
-            client_stats[client_type] = client_stats.get(client_type, 0) + 1
+            profile_name = record.get("profile_name", "unknown")
+            client_stats[profile_name] = client_stats.get(profile_name, 0) + 1
 
         return {
             "total_requests": total_requests,
@@ -502,7 +524,7 @@ class RequestHistoryManager:
             }
 
         client_stats: Dict[str, int] = {
-            (row.get("client_type") or "unknown"): int(row.get("count", 0)) for row in stats["by_client"]
+            (row.get("profile_name") or "unknown"): int(row.get("count", 0)) for row in stats["by_client"]
         }
 
         return {

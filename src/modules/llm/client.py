@@ -41,6 +41,9 @@ class LLMResponse(BaseModel):
     # 本次调用的请求历史 ID（request_history_manager 落库键）。调用方（如
     # Planner 决策事件）用它作为"查看完整请求"的指针；失败路径同样回填。
     request_id: str = ""
+    # 厂商原始 usage dict 的 JSON 序列化字符串：追溯重放唯一兜底，解析即弃
+    # 链路上保留原始字节，存库字段 ``llm_requests.usage_raw_json`` 由此填充
+    usage_raw_json: Optional[str] = None
 
 
 class BaseLLMClient(abc.ABC):
@@ -65,6 +68,7 @@ class BaseLLMClient(abc.ABC):
         *,
         model: str,
         temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         on_delta: Optional[OnDeltaCallback] = None,
         interrupt_flag: Optional[Any] = None,
     ) -> Response:
@@ -73,6 +77,8 @@ class BaseLLMClient(abc.ABC):
         ``model`` 必填：客户端不持有默认模型，由 Engine 按 profile 选定后传入。
         ``temperature`` 为 Engine 按 profile 档位填充的生成参数，
         请求内同名字段缺省时生效。
+        ``reasoning_effort`` 为 Engine 按 profile 档位填充的思考强度档位，
+        请求内同名字段缺省时生效；None = 不控制 = 适配端不向请求体注入该键。
         ``on_delta`` 非 None 时实现方应走流式传输并逐帧回调增量，
         最终仍返回完整 Response（传输层流式、语义层整段）。
         实现方需要遵守 request 的输出额度省略与严格参数解析策略，
@@ -87,6 +93,7 @@ class BaseLLMClient(abc.ABC):
         *,
         model: str,
         temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         interrupt_flag: Optional[Any] = None,
     ) -> Response:
         """执行视觉请求（中立契约）；不支持时由默认实现明确报告。model 必填。"""

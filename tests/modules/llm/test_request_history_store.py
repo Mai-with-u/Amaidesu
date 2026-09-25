@@ -43,7 +43,7 @@ def _record(request_id: str, *, ts_ms: int, model: str = "glm-x", success: bool 
     return RequestRecord(
         request_id=request_id,
         timestamp=ts_ms,
-        client_type="llm",
+        profile_name="planner",
         model_name=model,
         request_params={"messages": [{"role": "user", "content": "hi"}]},
         response_content="回复" if success else None,
@@ -97,7 +97,11 @@ async def test_get_history_from_store_pagination(store: SQLiteDatabase) -> None:
     assert [r["request_id"] for r in page["records"]] == ["req-2", "req-1"]
 
     first = page["records"][0]
-    assert first["usage"] == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    assert first["usage"]["prompt_tokens"] == 10
+    assert first["usage"]["completion_tokens"] == 5
+    assert first["usage"]["total_tokens"] == 15
+    # 未上报的思考 token 经 schema 落 0；reasoning_tokens 字段随新 schema 一定存在
+    assert "reasoning_tokens" in first["usage"]
     assert first["request_params"] == {"messages": [{"role": "user", "content": "hi"}]}
 
 
@@ -129,6 +133,69 @@ async def test_get_request_by_id_from_store(store: SQLiteDatabase) -> None:
 
 
 @pytest.mark.asyncio
+async def test_record_request_persists_v12_columns(store: SQLiteDatabase) -> None:
+    """v12 三列（reasoning_tokens / usage_raw_json / profile_name）落库与还原完整。"""
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
+    record = RequestRecord(
+        request_id="req-v12",
+        timestamp=6_000,
+        profile_name="planner",
+        model_name="glm-x",
+        request_params={"reasoning_effort": "medium"},
+        response_content="ok",
+        usage=TokenUsage(
+            prompt_tokens=12,
+            completion_tokens=4,
+            total_tokens=16,
+            reasoning_tokens=3,
+        ),
+        cost=0.01,
+        success=True,
+        error=None,
+        latency_ms=80,
+    )
+    record_dict = record.to_dict()
+    record_dict["usage_raw_json"] = (
+        '{"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16,'
+        ' "completion_tokens_details": {"reasoning_tokens": 3}}'
+    )
+    manager.record_request_from_dict(record_dict)
+    await _wait_for_count(store, 1)
+
+    rows = await store.execute(
+        "SELECT profile_name, reasoning_tokens, usage_raw_json FROM llm_requests"
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["profile_name"] == "planner"
+    assert int(row["reasoning_tokens"]) == 3
+    import json
+
+    raw = json.loads(row["usage_raw_json"]) if row["usage_raw_json"] else {}
+    assert raw["completion_tokens_details"]["reasoning_tokens"] == 3
+
+    # 还原：profile_name / reasoning_tokens / usage_raw_json 都透传
+    fetched = await manager.get_request_by_id("req-v12")
+    assert fetched is not None
+    assert fetched["profile_name"] == "planner"
+    assert fetched["usage"]["reasoning_tokens"] == 3
+    assert fetched["usage_raw_json"] is not None
+
+
+@pytest.mark.asyncio
+async def test_get_history_profile_name_filter(store: SQLiteDatabase) -> None:
+    """profile_name 筛选生效（替代历史的 client_type 筛选语义）。"""
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
+    manager.record_request_from_dict({**_record("req-planner", ts_ms=1_000).to_dict(), "profile_name": "planner"})
+    manager.record_request_from_dict({**_record("req-replyer", ts_ms=2_000).to_dict(), "profile_name": "replyer"})
+    await _wait_for_count(store, 2)
+
+    planner_only = await manager.get_history(profile_name="planner")
+    assert [r["request_id"] for r in planner_only["records"]] == ["req-planner"]
+    assert planner_only["total"] == 1
+
+
+@pytest.mark.asyncio
 async def test_get_statistics_from_store(store: SQLiteDatabase) -> None:
     """统计接口走 SQL 聚合，model_stats/client_stats 形状与旧实现一致。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -143,7 +210,7 @@ async def test_get_statistics_from_store(store: SQLiteDatabase) -> None:
     assert stats["success_rate"] == pytest.approx(0.5)
     assert stats["total_tokens"] == 15  # 失败请求 usage 为空不计
     assert stats["model_stats"]["glm-x"]["count"] == 2
-    assert stats["client_stats"]["llm"] == 2
+    assert stats["client_stats"]["planner"] == 2
     assert stats["time_range"] == {"start": None, "end": None}
 
 

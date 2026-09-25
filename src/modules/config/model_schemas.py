@@ -45,6 +45,7 @@ class LLMProviderConfig(BaseConfig):
         max_retries: 请求失败时的最大重试次数
         retry_delay: 重试间隔（秒）
         reasoning_parse_mode: 推理内容解析模式（auto/native/think_tag/none）
+        extra_body: provider 级方言逃生舱（自由 dict 原样合并进请求体；空 dict=不注入）
     """
 
     name: str = Field(default="default", description="provider 唯一名称（被 model.api_provider 引用）")
@@ -94,6 +95,13 @@ class LLMProviderConfig(BaseConfig):
         description="推理内容解析模式：auto / native / think_tag / none",
         json_schema_extra={"x-ui-type": "select", "x-options": ["auto", "native", "think_tag", "none"]},
     )
+    # provider 级方言逃生舱：原样合并进请求体的自由字段集（仅适配端消费，
+    # 引擎不读不传不存；空 dict = 不注入；非空 dict 由适配端合并进 JSON body）
+    extra_body: dict[str, Any] = Field(
+        default_factory=dict,
+        description="provider 级方言逃生舱：自由 dict 原样合并进请求体（OpenAI SDK create 的 extra_body 参数；空 dict=不注入）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
 
 class LLMModelConfig(BaseConfig):
@@ -106,8 +114,9 @@ class LLMModelConfig(BaseConfig):
         visual: 是否支持视觉（影响 chat_vision 是否装配）
         price_in: 输入 token 单价（per 1k，缺失时 cost 计为 0）
         price_out: 输出 token 单价（per 1k）
-        cache: 缓存类型（"" 表示无缓存；"anthropic" 等按 provider 约定）
+        cache: 缓存类型（非空 = 按缓存价计费，命中 token 走 cache_price_in；空 = 无缓存）
         cache_price_in: 缓存输入 token 单价（per 1k；cache 为空时忽略）
+        context_window: 上下文窗口 token 总量（用于 Dashboard 水位展示；0 = 不展示）
     """
 
     name: str = Field(default="default", description="模型唯一名（被 profile.model_list 引用）")
@@ -122,8 +131,15 @@ class LLMModelConfig(BaseConfig):
     visual: bool = Field(default=False, description="是否支持视觉（影响 chat_vision 是否装配）")
     price_in: float = Field(default=0.0, ge=0.0, description="输入 token 单价（每百万 token）")
     price_out: float = Field(default=0.0, ge=0.0, description="输出 token 单价（每百万 token）")
-    cache: str = Field(default="", description="缓存类型（空=无；'anthropic' 等按 provider 约定）")
+    cache: str = Field(
+        default="", description="缓存类型（非空 = 按缓存价计费，命中 token 走 cache_price_in；空 = 无缓存）"
+    )
     cache_price_in: float = Field(default=0.0, ge=0.0, description="缓存输入 token 单价（每百万 token）")
+    context_window: int = Field(
+        default=0,
+        ge=0,
+        description="上下文窗口 token 总量（用于 Dashboard 水位展示；0 = 不展示）",
+    )
 
 
 class LLMSelectionStrategy(BaseConfig):
@@ -146,6 +162,7 @@ class LLMProfileConfig(BaseConfig):
         selection_strategy: 选择策略
         slow_threshold_ms: 慢调用阈值（毫秒）；超阈值仅告警，不切换
         temperature: 生成温度（0.0-2.0）
+        reasoning_effort: 思考强度档位（自由字符串，如 low/medium/high；取值看模型支持；空串=不控制=请求不含该字段）
     """
 
     model_list: List[str] = Field(
@@ -167,6 +184,10 @@ class LLMProfileConfig(BaseConfig):
         le=2.0,
         description="生成温度 (0.0-2.0)",
         json_schema_extra={"x-ui-type": "number"},
+    )
+    reasoning_effort: str = Field(
+        default="",
+        description="思考强度档位（自由字符串，如 low/medium/high；取值看模型支持；空串=不控制=请求不含该字段）",
     )
 
 

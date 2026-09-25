@@ -12,7 +12,7 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Generator
+from typing import Dict, Generator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,7 +46,7 @@ def _seed_call(
     completion: int = 50,
     cost: float = 0.01,
     timestamp_ms: int = 1_700_000_000_000,
-    client_type: str = "streamer",
+    profile_name: str = "streamer",
 ) -> None:
     """直连 store 造一次带 cache 用量的 LLM 调用（聚合账 + 请求明细）。"""
 
@@ -68,7 +68,7 @@ def _seed_call(
             request=LLMRequestInsert(
                 request_id=request_id,
                 timestamp_ms=timestamp_ms,
-                client_type=client_type,
+                profile_name=profile_name,
                 model_name=model_name,
                 prompt_tokens=prompt,
                 completion_tokens=completion,
@@ -184,7 +184,7 @@ def test_statistics_aggregate_cache(client: TestClient) -> None:
         model_name=MODEL_B,
         cache_hit=100,
         cache_miss=400,
-        client_type="game",
+        profile_name="game",
         timestamp_ms=1_700_000_005_000,
     )
 
@@ -296,6 +296,10 @@ def test_usage_trends_empty_db(client: TestClient) -> None:
 def test_history_list_response_preview_falls_back_to_tool_calls(client: TestClient) -> None:
     """响应以 tool_calls 承载（response_content 空）时，列表预览回退为首条工具调用摘要。"""
     store = _server_ref_cache["store"]
+    raw_usage = json.dumps(
+        {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        ensure_ascii=False,
+    )
 
     async def _seed() -> None:
         await store.llm.insert_llm_call(
@@ -315,7 +319,7 @@ def test_history_list_response_preview_falls_back_to_tool_calls(client: TestClie
             request=LLMRequestInsert(
                 request_id="tc1",
                 timestamp_ms=1_700_000_000_000,
-                client_type="planner",
+                profile_name="planner",
                 model_name=MODEL_A,
                 tool_calls_json=json.dumps(
                     [
@@ -330,8 +334,13 @@ def test_history_list_response_preview_falls_back_to_tool_calls(client: TestClie
                     ],
                     ensure_ascii=False,
                 ),
+                prompt_tokens=100,
+                completion_tokens=50,
+                total_tokens=150,
                 cache_hit_tokens=3840,
                 cache_miss_tokens=84,
+                reasoning_tokens=42,
+                usage_raw_json=raw_usage,
             ),
         )
 
@@ -346,18 +355,131 @@ def test_history_list_response_preview_falls_back_to_tool_calls(client: TestClie
     # 逐条缓存明细随行返回，前端据此算命中率（0/0 = 未上报 ≠ 零命中）
     assert row["cache_hit_tokens"] == 3840
     assert row["cache_miss_tokens"] == 84
+    # 正名：列表行承载 profile_name（非旧 client_type）
+    assert row["profile_name"] == "planner"
+    assert "client_type" not in row
+    # 新字段：思考 token 与上游原始 usage 字典随行透出
+    assert row["reasoning_tokens"] == 42
+    assert row["usage_raw_json"] == raw_usage
 
     detail = client.get("/api/v1/llm/history/tc1").json()
     assert detail["cache_hit_tokens"] == 3840
     assert detail["cache_miss_tokens"] == 84
+    assert detail["profile_name"] == "planner"
+    assert "client_type" not in detail
+    assert detail["reasoning_tokens"] == 42
+    assert detail["usage_raw_json"] == raw_usage
 
 
 def test_history_models_dedup_sorted(client: TestClient) -> None:
     """模型筛选候选走 distinct 查询：全库去重升序，与当前页内容无关。"""
     store = _server_ref_cache["store"]
-    _seed_call(store, request_id="m1", model_name="z-model", client_type="planner")
-    _seed_call(store, request_id="m2", model_name="a-model", client_type="replyer")
-    _seed_call(store, request_id="m3", model_name="a-model", client_type="planner")
+    _seed_call(store, request_id="m1", model_name="z-model", profile_name="planner")
+    _seed_call(store, request_id="m2", model_name="a-model", profile_name="replyer")
+    _seed_call(store, request_id="m3", model_name="a-model", profile_name="planner")
 
     body = client.get("/api/v1/llm/history/models").json()
     assert body == ["a-model", "z-model"]
+
+
+# === context_window + last_call_prompt_tokens：Dashboard 水位展示数据源 ===
+#
+# 切片 4 验收点：
+# - /usage 返回每模型 context_window（来自 LLMManager 装配期索引）
+# - /usage 返回每模型最近一次调用的 prompt_tokens（≠ SUM 聚合，是水位分子）
+# - 未注入 llm_manager（或未配置 context_window）时一律返回 0，前端据此隐藏水位
+
+
+def test_usage_returns_zero_context_window_without_llm_manager(client: TestClient) -> None:
+    """默认装配（无 llm_manager 注入）：/usage 行的 context_window 全 0。"""
+    store = _server_ref_cache["store"]
+    _seed_call(store, request_id="cw0-a", model_name=MODEL_A, prompt=100)
+    _seed_call(store, request_id="cw0-b", model_name=MODEL_B, prompt=200)
+
+    body = client.get("/api/v1/llm/usage").json()
+    assert body[MODEL_A]["context_window"] == 0
+    assert body[MODEL_B]["context_window"] == 0
+    # last_call_prompt_tokens 仍按仓储最新一条返回（不依赖 llm_manager）
+    assert body[MODEL_A]["last_call_prompt_tokens"] == 100
+    assert body[MODEL_B]["last_call_prompt_tokens"] == 200
+
+
+def test_usage_exposes_latest_prompt_tokens_not_aggregate(client: TestClient) -> None:
+    """``last_call_prompt_tokens`` = 该模型最新一条 prompt_tokens（不是 SUM 聚合）。"""
+    store = _server_ref_cache["store"]
+    # 同模型三条：最早 100、中间 400、最新 800 → 水位分子取 800 而非 1300
+    _seed_call(store, request_id="lp-1", model_name=MODEL_A, prompt=100, timestamp_ms=1_700_000_000_000)
+    _seed_call(store, request_id="lp-2", model_name=MODEL_A, prompt=400, timestamp_ms=1_700_000_010_000)
+    _seed_call(store, request_id="lp-3", model_name=MODEL_A, prompt=800, timestamp_ms=1_700_000_020_000)
+
+    body = client.get("/api/v1/llm/usage").json()
+    assert body[MODEL_A]["total_prompt_tokens"] == 1300  # 累加和未变
+    assert body[MODEL_A]["last_call_prompt_tokens"] == 800  # 取最新一条
+
+
+@pytest.fixture
+def client_with_context_window(temp_db_path: Path) -> Generator[TestClient, None, None]:
+    """额外注入带 context_windows 的假 llm_manager；用于验证 /usage 把窗口从引擎装配期带出。"""
+    from src.modules.config.core_schemas import DashboardConfig
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+    from src.modules.dashboard.server import DashboardServer
+
+    class _FakeLLMManager:
+        """测试桩：仅暴露切片 4 关心的 ``get_model_context_windows`` 接口。"""
+
+        def __init__(self, windows: Dict[str, int]) -> None:
+            self._windows = dict(windows)
+
+        def get_model_context_windows(self) -> Dict[str, int]:
+            return dict(self._windows)
+
+    async def _build():
+        store = SQLiteDatabase(temp_db_path)
+        await store.initialize()
+        bus = EventBus()
+        server = DashboardServer(
+            event_bus=bus,
+            config_service=None,  # type: ignore[arg-type]
+            dashboard_config=DashboardConfig(host="127.0.0.1", port=60217),
+            llm_repo=store.llm,
+            llm_manager=_FakeLLMManager({MODEL_A: 128_000, MODEL_B: 0}),
+        )
+        return store, bus, server
+
+    loop = asyncio.new_event_loop()
+    store, bus, server = loop.run_until_complete(_build())
+    loop.close()
+
+    _server_ref_cache["server_cw"] = server
+    _server_ref_cache["store_cw"] = store
+    set_dashboard_server(server)
+    app = create_app()
+    with TestClient(app) as c:
+        yield c
+
+    set_dashboard_server(None)
+
+    async def _teardown():
+        await bus.cleanup()
+        await store.close()
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(_teardown())
+    loop.close()
+
+
+def test_usage_threads_context_window_from_engine_assembly(client_with_context_window: TestClient) -> None:
+    """/usage 透出 llm_manager.get_model_context_windows() 提供的每模型 context_window。"""
+    store = _server_ref_cache["store_cw"]
+    _seed_call(store, request_id="cw-a1", model_name=MODEL_A, prompt=10_000)
+    _seed_call(store, request_id="cw-a2", model_name=MODEL_A, prompt=20_000)
+    _seed_call(store, request_id="cw-b1", model_name=MODEL_B, prompt=300)
+
+    body = client_with_context_window.get("/api/v1/llm/usage").json()
+    # MODEL_A 配 128_000；MODEL_B 未配（0）→ 前端据此隐藏水位
+    assert body[MODEL_A]["context_window"] == 128_000
+    assert body[MODEL_B]["context_window"] == 0
+    # 水位分子：取该模型最新一条 prompt_tokens
+    assert body[MODEL_A]["last_call_prompt_tokens"] == 20_000
+    assert body[MODEL_B]["last_call_prompt_tokens"] == 300

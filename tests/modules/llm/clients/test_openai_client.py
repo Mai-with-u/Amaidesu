@@ -444,6 +444,136 @@ async def test_generate_payload_path_folds_bare_string_parts():
     ]
 
 
+# ---------------------------------------------------------------------------
+# 思考 token 捕获 + 原始 usage 兜底（§2 决策第 1/2 条）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("completion_details", "expected"),
+    [
+        (SimpleNamespace(reasoning_tokens=123), 123),
+        ({"reasoning_tokens": 456}, 456),
+    ],
+)
+def test_extract_usage_captures_openai_reasoning_tokens(completion_details, expected):
+    """OpenAI 风格 completion_tokens_details.reasoning_tokens → usage dict 键。"""
+    vendor_usage = SimpleNamespace(
+        prompt_tokens=100,
+        completion_tokens=20,
+        total_tokens=120,
+        completion_tokens_details=completion_details,
+    )
+    usage = OpenAIClient._extract_usage(vendor_usage)
+    assert usage is not None
+    assert usage["reasoning_tokens"] == expected
+
+
+def test_extract_usage_captures_deepseek_reasoning_tokens():
+    """DeepSeek 风格 completion_reasoning_tokens / reasoning_tokens 同名字段直取。"""
+    vendor_usage = SimpleNamespace(
+        prompt_tokens=100,
+        completion_tokens=20,
+        total_tokens=120,
+        completion_reasoning_tokens=77,
+    )
+    usage = OpenAIClient._extract_usage(vendor_usage)
+    assert usage is not None
+    assert usage["reasoning_tokens"] == 77
+
+
+def test_extract_usage_omits_reasoning_tokens_when_not_reported():
+    """未上报思考 token 时 dict 不含 reasoning_tokens（与 cache_*_tokens 同语义）。"""
+    vendor_usage = SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    usage = OpenAIClient._extract_usage(vendor_usage)
+    assert usage is not None
+    assert "reasoning_tokens" not in usage
+
+
+@pytest.mark.asyncio
+async def test_chat_response_captures_usage_raw_json():
+    """chat 返回的 Response.usage_raw_json 是厂商原始 usage 的 JSON 序列化字符串。"""
+    client, sdk_client = _make_client()
+    # 模拟真实 OpenAI SDK CompletionUsage：model_dump 输出 dict（含嵌套对象），
+    # 同时属性访问也能拿到嵌套字段（SDK 对象自身暴露命名属性）
+    class _FakeUsage:
+        def __init__(self, data):
+            self._data = data
+            for key, value in data.items():
+                setattr(self, key, value)
+
+        def model_dump(self):
+            return self._data
+
+    vendor_usage = _FakeUsage(
+        {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "completion_tokens_details": {"reasoning_tokens": 42},
+        }
+    )
+    sdk_client.chat.completions.create.return_value = _response(usage=vendor_usage)
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["hi"])])
+    result = await client.generate(request, model="test-model")
+
+    assert result.usage is not None
+    assert result.usage.reasoning_tokens == 42
+    assert result.usage_raw_json is not None
+    import json
+
+    raw = json.loads(result.usage_raw_json)
+    assert raw["completion_tokens_details"]["reasoning_tokens"] == 42
+
+
+@pytest.mark.asyncio
+async def test_streaming_response_captures_usage_raw_json_at_final_chunk():
+    """流式末帧的 usage 对象的 JSON 序列化也带出 usage_raw_json。"""
+    client, sdk_client = _make_client()
+
+    class _FakeUsage:
+        def __init__(self, data):
+            self._data = data
+            for key, value in data.items():
+                setattr(self, key, value)
+
+        def model_dump(self):
+            return self._data
+
+    final_usage = _FakeUsage(
+        {
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+            "total_tokens": 10,
+            "completion_tokens_details": {"reasoning_tokens": 5},
+        }
+    )
+    stream = _FakeStream(
+        [
+            _stream_chunk(_delta(content="ok")),
+            _stream_chunk(usage=final_usage),
+        ]
+    )
+    sdk_client.chat.completions.create.return_value = stream
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["hi"])])
+    result = await client.generate(
+        request,
+        model="test-model",
+        on_delta=lambda kind, text: None,
+    )
+
+    assert result.success is True
+    assert result.usage is not None
+    assert result.usage.reasoning_tokens == 5
+    assert result.usage_raw_json is not None
+    import json
+
+    raw = json.loads(result.usage_raw_json)
+    assert raw["completion_tokens_details"]["reasoning_tokens"] == 5
+
+
 @pytest.mark.asyncio
 async def test_generate_payload_path_restores_tool_context():
     """assistant tool_calls 还原协议嵌套形态（arguments 回 JSON 字符串），tool 观察带 tool_call_id。"""
@@ -467,3 +597,150 @@ async def test_generate_payload_path_restores_tool_context():
         {"id": "c1", "type": "function", "function": {"name": "query_memory", "arguments": '{"q": "x"}'}}
     ]
     assert messages[1] == {"role": "tool", "tool_call_id": "c1", "content": '{"ok": true}'}
+
+
+# ---------------------------------------------------------------------------
+# 思考强度档位 + provider 级方言逃生舱：非流式 / 流式 / 视觉三处请求参数拼装两态断言
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chat_includes_reasoning_effort_and_extra_body_when_set():
+    """非流式 chat：reasoning_effort 与 extra_body 都显式传入 → request_params 两键都在。"""
+    client, sdk_client = _make_client({"extra_body": {"vendor_x": {"nested": True}, "flag": "on"}})
+    sdk_client.chat.completions.create.return_value = _response()
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["hi"])])
+    await client.generate(request, model="test-model", reasoning_effort="medium")
+
+    sent = sdk_client.chat.completions.create.await_args.kwargs
+    assert sent["reasoning_effort"] == "medium"
+    assert sent["extra_body"] == {"vendor_x": {"nested": True}, "flag": "on"}
+
+
+@pytest.mark.asyncio
+async def test_chat_omits_reasoning_effort_and_extra_body_when_unset():
+    """非流式 chat：未配置 → request_params 两键都不出现（设了才发）。"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response()
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["hi"])])
+    await client.generate(request, model="test-model")
+
+    sent = sdk_client.chat.completions.create.await_args.kwargs
+    assert "reasoning_effort" not in sent
+    assert "extra_body" not in sent
+
+
+@pytest.mark.asyncio
+async def test_chat_omits_reasoning_effort_when_empty_string():
+    """非流式 chat：reasoning_effort 显式空串 → 视为未配置（不发出）。"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response()
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["hi"])])
+    await client.generate(request, model="test-model", reasoning_effort="")
+
+    sent = sdk_client.chat.completions.create.await_args.kwargs
+    assert "reasoning_effort" not in sent
+
+
+@pytest.mark.asyncio
+async def test_chat_omits_extra_body_when_empty_dict():
+    """非流式 chat：provider extra_body 空 dict → 视为未配置（不发出）。"""
+    client, sdk_client = _make_client({"extra_body": {}})
+    sdk_client.chat.completions.create.return_value = _response()
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["hi"])])
+    await client.generate(request, model="test-model", reasoning_effort="high")
+
+    sent = sdk_client.chat.completions.create.await_args.kwargs
+    assert sent["reasoning_effort"] == "high"
+    assert "extra_body" not in sent
+
+
+@pytest.mark.asyncio
+async def test_chat_streaming_includes_reasoning_effort_and_extra_body_when_set():
+    """流式 chat：reasoning_effort 与 extra_body 都显式传入 → request_params 两键都在。"""
+    client, sdk_client = _make_client({"extra_body": {"vendor_stream": 1}})
+    stream = _FakeStream(
+        [
+            _stream_chunk(_delta(content="ok")),
+            _stream_chunk(
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            ),
+        ]
+    )
+    sdk_client.chat.completions.create.return_value = stream
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["hi"])])
+    await client.generate(
+        request,
+        model="test-model",
+        reasoning_effort="low",
+        on_delta=lambda kind, text: None,
+    )
+
+    sent = sdk_client.chat.completions.create.await_args.kwargs
+    assert sent["reasoning_effort"] == "low"
+    assert sent["extra_body"] == {"vendor_stream": 1}
+
+
+@pytest.mark.asyncio
+async def test_chat_streaming_omits_reasoning_effort_and_extra_body_when_unset():
+    """流式 chat：未配置 → 两键都不出现。"""
+    client, sdk_client = _make_client()
+    stream = _FakeStream(
+        [
+            _stream_chunk(_delta(content="ok")),
+            _stream_chunk(
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            ),
+        ]
+    )
+    sdk_client.chat.completions.create.return_value = stream
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["hi"])])
+    await client.generate(
+        request,
+        model="test-model",
+        on_delta=lambda kind, text: None,
+    )
+
+    sent = sdk_client.chat.completions.create.await_args.kwargs
+    assert "reasoning_effort" not in sent
+    assert "extra_body" not in sent
+
+
+@pytest.mark.asyncio
+async def test_vision_includes_reasoning_effort_and_extra_body_when_set():
+    """vision 调用：reasoning_effort 与 extra_body 都显式传入 → request_params 两键都在。"""
+    client, sdk_client = _make_client({"extra_body": {"vendor_vision": True}})
+    sdk_client.chat.completions.create.return_value = _response(
+        content="image-desc",
+        usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5),
+    )
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["描述这张图"])])
+    await client.generate_vision(request, [b"img"], model="test-model", reasoning_effort="high")
+
+    sent = sdk_client.chat.completions.create.await_args.kwargs
+    assert sent["reasoning_effort"] == "high"
+    assert sent["extra_body"] == {"vendor_vision": True}
+
+
+@pytest.mark.asyncio
+async def test_vision_omits_reasoning_effort_and_extra_body_when_unset():
+    """vision 调用：未配置 → 两键都不出现。"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response(
+        content="image-desc",
+        usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5),
+    )
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["描述这张图"])])
+    await client.generate_vision(request, [b"img"], model="test-model")
+
+    sent = sdk_client.chat.completions.create.await_args.kwargs
+    assert "reasoning_effort" not in sent
+    assert "extra_body" not in sent

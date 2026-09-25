@@ -92,8 +92,8 @@ class ToolSpec(BaseModel):
 class Usage(BaseModel):
     """一次调用的 token 消耗
 
-    ``cache_hit_tokens`` / ``cache_miss_tokens`` 为可空（Optional）：
-    None 表示 provider 未上报缓存信息，与"上报了 0"严格区分。
+    ``cache_hit_tokens`` / ``cache_miss_tokens`` / ``reasoning_tokens`` 为可空
+    （Optional）：None 表示 provider 未上报该项，与"上报了 0"严格区分。
     """
 
     prompt_tokens: int = 0
@@ -101,6 +101,7 @@ class Usage(BaseModel):
     total_tokens: int = 0
     cache_hit_tokens: Optional[int] = None
     cache_miss_tokens: Optional[int] = None
+    reasoning_tokens: Optional[int] = None
 
 
 class GenerateRequest(BaseModel):
@@ -111,6 +112,7 @@ class GenerateRequest(BaseModel):
     tools: List[ToolSpec] = Field(default_factory=list)
     temperature: Optional[float] = None
     strict_tool_arguments: bool = False
+    reasoning_effort: Optional[str] = None
 
 
 class Response(BaseModel):
@@ -127,6 +129,9 @@ class Response(BaseModel):
     error: Optional[str] = None
     # 本次调用的请求历史 ID（账本落库键）；失败路径同样回填
     request_id: str = ""
+    # 厂商原始 usage dict 的 JSON 序列化字符串：用于追溯重放（如解析字段更新后回填）；
+    # 解析即弃链路唯一兜底，不做任何加工（包含未上报字段、嵌套对象原样保留）
+    usage_raw_json: Optional[str] = None
 
 
 __all__ = [

@@ -251,15 +251,38 @@ class OpenAIClient(BaseLLMClient):
             "parameters": spec.parameters or _EMPTY_OBJECT_SCHEMA,
         }
 
+    def _apply_reasoning_effort_and_extra_body(
+        self,
+        request_params: Dict[str, Any],
+        reasoning_effort: Optional[str],
+    ) -> None:
+        """把思考强度档位与 provider 级方言逃生舱按"设了才发"原则合入请求参数。
+
+        ``reasoning_effort`` 非 None 且非空串 → ``request_params["reasoning_effort"]`` 带上；
+        ``self.config["extra_body"]`` 为非空 dict → ``request_params["extra_body"]`` 带上。
+        任一未配置则对应键完全不出现（OpenAI SDK 缺省不发送）。
+        """
+        if isinstance(reasoning_effort, str) and reasoning_effort:
+            request_params["reasoning_effort"] = reasoning_effort
+        extra_body = self.config.get("extra_body")
+        if isinstance(extra_body, dict) and extra_body:
+            request_params["extra_body"] = extra_body
+
     @staticmethod
     def _extract_usage(vendor_usage: Any) -> Optional[Dict[str, int]]:
-        """厂商响应 usage → 遗留 usage dict（缓存字段归一化在此完成）。
+        """厂商响应 usage → 遗留 usage dict（缓存 / 思考字段归一化在此完成）。
 
         缓存上报两种风格都收：
-        - OpenAI 风格 ``prompt_tokens_details.cached_tokens`` → ``cache_hit_tokens``（miss 无对应字段，视为未上报）
+        - OpenAI 风格 ``prompt_tokens_details.cached_tokens`` → ``cache_hit_tokens``；
+          OpenAI 不上报 miss 时按 ``max(prompt_tokens - hit, 0)`` 反推填充
+          ``cache_miss_tokens``，避免分段计价把 hit 也按全价算
         - DeepSeek 风格 ``prompt_cache_hit_tokens`` / ``prompt_cache_miss_tokens`` 同名直取
-        未上报的字段不进 dict（下游转 payload.Usage 时映射为 None = 未上报）；
-        响应对象属性缺失一律用 getattr 兜底，兼容 SDK 模型与测试桩。
+        双字段路径不走反推（DeepSeek 自报 miss）；响应对象属性缺失一律用
+        getattr 兜底，兼容 SDK 模型与测试桩。
+
+        思考 token 两种风格都收（OpenAI 风格 ``completion_tokens_details.reasoning_tokens``
+        与 DeepSeek 同名）；未上报则不进 dict——下游转 ``payload.Usage`` 映射为
+        None = 未上报，与 ``cache_*_tokens`` 的"未上报不进 dict"语义一致。
         """
         if vendor_usage is None:
             return None
@@ -276,19 +299,35 @@ class OpenAIClient(BaseLLMClient):
         }
         details = _get("prompt_tokens_details")
         cached = details.get("cached_tokens") if isinstance(details, dict) else getattr(details, "cached_tokens", None)
-        if cached is not None:
-            usage["cache_hit_tokens"] = int(cached)
         ds_hit = _get("prompt_cache_hit_tokens")
+        ds_miss = _get("prompt_cache_miss_tokens")
         if ds_hit is not None:
             usage["cache_hit_tokens"] = int(ds_hit)
-        ds_miss = _get("prompt_cache_miss_tokens")
+        elif cached is not None:
+            usage["cache_hit_tokens"] = int(cached)
         if ds_miss is not None:
             usage["cache_miss_tokens"] = int(ds_miss)
+        elif cached is not None and "cache_hit_tokens" in usage:
+            # OpenAI 单字段：未报 miss 时按 prompt_tokens 减去 hit 反推，保证分段计价有 miss 部分
+            usage["cache_miss_tokens"] = max(int(usage["prompt_tokens"]) - int(usage["cache_hit_tokens"]), 0)
+        # 思考 token：OpenAI 风格走 completion_tokens_details；DeepSeek 同名字段。
+        # 两条路径任一上报即写入 dict；未上报则不进 dict（与缓存字段同语义）。
+        completion_details = _get("completion_tokens_details")
+        comp_reasoning = (
+            completion_details.get("reasoning_tokens")
+            if isinstance(completion_details, dict)
+            else getattr(completion_details, "reasoning_tokens", None)
+        )
+        deepseek_reasoning = _get("completion_reasoning_tokens") or _get("reasoning_tokens")
+        if deepseek_reasoning is not None:
+            usage["reasoning_tokens"] = int(deepseek_reasoning)
+        elif comp_reasoning is not None:
+            usage["reasoning_tokens"] = int(comp_reasoning)
         return usage
 
     @staticmethod
     def _usage_to_payload(usage: Optional[Dict[str, int]]) -> Optional[Usage]:
-        """遗留 usage dict → 中立 Usage（缓存键缺省视为未上报）"""
+        """遗留 usage dict → 中立 Usage（缓存 / 思考键缺省视为未上报）"""
         if usage is None:
             return None
         return Usage(
@@ -297,7 +336,35 @@ class OpenAIClient(BaseLLMClient):
             total_tokens=usage.get("total_tokens", 0),
             cache_hit_tokens=usage.get("cache_hit_tokens"),
             cache_miss_tokens=usage.get("cache_miss_tokens"),
+            reasoning_tokens=usage.get("reasoning_tokens"),
         )
+
+    @staticmethod
+    def _vendor_usage_to_raw_json(vendor_usage: Any) -> Optional[str]:
+        """厂商响应 usage → JSON 字符串（落库 ``usage_raw_json`` 唯一兜底）。
+
+        SDK 模型对象（``CompletionUsage``）经 ``model_dump`` 转 dict 再 JSON 化；
+        dict 直接 JSON 化；其他兜底为空字符串序列化为 None。失败仅记 debug，
+        返回 None 时上层视为无 raw 可用——不阻断调用链。
+        """
+        if vendor_usage is None:
+            return None
+        payload: Any
+        if isinstance(vendor_usage, dict):
+            payload = vendor_usage
+        elif hasattr(vendor_usage, "model_dump"):
+            try:
+                payload = vendor_usage.model_dump()
+            except Exception:
+                return None
+        elif hasattr(vendor_usage, "__dict__"):
+            payload = vars(vendor_usage)
+        else:
+            return None
+        try:
+            return json.dumps(payload, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return None
 
     @classmethod
     def _to_payload_response(cls, result: LLMResponse) -> Response:
@@ -323,6 +390,7 @@ class OpenAIClient(BaseLLMClient):
             reasoning_content=result.reasoning_content,
             error=result.error,
             request_id=result.request_id,
+            usage_raw_json=result.usage_raw_json,
         )
 
     async def generate(
@@ -331,6 +399,7 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         on_delta: Optional[Callable[[str, str], None]] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
     ) -> Response:
@@ -343,6 +412,7 @@ class OpenAIClient(BaseLLMClient):
             self._request_to_openai_messages(request),
             model=model,
             temperature=temperature if temperature is not None else request.temperature,
+            reasoning_effort=reasoning_effort if reasoning_effort is not None else request.reasoning_effort,
             tools=tools,
             interrupt_flag=interrupt_flag,
             on_delta=on_delta,
@@ -357,6 +427,7 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
     ) -> Response:
         """中立契约视觉请求：payload → OpenAI 协议翻译后复用既有 vision 能力。
@@ -368,6 +439,7 @@ class OpenAIClient(BaseLLMClient):
             images,
             model=model,
             temperature=temperature if temperature is not None else request.temperature,
+            reasoning_effort=reasoning_effort if reasoning_effort is not None else request.reasoning_effort,
         )
         return self._to_payload_response(result)
 
@@ -410,6 +482,7 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
         on_delta: Optional[Callable[[str, str], None]] = None,
@@ -427,6 +500,7 @@ class OpenAIClient(BaseLLMClient):
                     messages,
                     model=model,
                     temperature=temperature,
+                    reasoning_effort=reasoning_effort,
                     tools=tools,
                     interrupt_flag=interrupt_flag,
                     on_delta=on_delta,
@@ -448,6 +522,7 @@ class OpenAIClient(BaseLLMClient):
                 # 显式零温度也是调用方选择，只有 None 才采用客户端默认值。
                 "temperature": self.temperature if temperature is None else temperature,
             }
+            self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort)
             if tools:
                 request_params["tools"] = self._normalize_tool_definitions(tools)
                 request_params["tool_choice"] = "auto"
@@ -470,6 +545,7 @@ class OpenAIClient(BaseLLMClient):
                 usage=usage,
                 reasoning_content=reasoning_content,
                 finish_reason=getattr(response.choices[0], "finish_reason", None),
+                usage_raw_json=self._vendor_usage_to_raw_json(response.usage),
             )
             if message.tool_calls:
                 result.tool_calls = []
@@ -498,6 +574,7 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float],
+        reasoning_effort: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]],
         interrupt_flag: Optional[asyncio.Event],
         on_delta: Callable[[str, str], None],
@@ -519,6 +596,7 @@ class OpenAIClient(BaseLLMClient):
             # 由调用方（chat）降级为非流式路径兜底
             "stream_options": {"include_usage": True},
         }
+        self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort)
         if tools:
             request_params["tools"] = self._normalize_tool_definitions(tools)
             request_params["tool_choice"] = "auto"
@@ -529,6 +607,7 @@ class OpenAIClient(BaseLLMClient):
         # index -> {"id": str, "name": str, "arguments": list[str]}（arguments 碎片按序拼接）
         tool_states: Dict[int, Dict[str, Any]] = {}
         usage: Optional[Dict[str, int]] = None
+        usage_raw: Optional[str] = None
         model_name: Optional[str] = None
         finish_reason: Optional[str] = None
         try:
@@ -538,6 +617,7 @@ class OpenAIClient(BaseLLMClient):
                     raise asyncio.CancelledError
                 if getattr(chunk, "usage", None) is not None:
                     usage = self._extract_usage(chunk.usage)
+                    usage_raw = self._vendor_usage_to_raw_json(chunk.usage)
                 choices = getattr(chunk, "choices", None)
                 if not choices:
                     continue
@@ -584,6 +664,7 @@ class OpenAIClient(BaseLLMClient):
             usage=usage,
             reasoning_content=reasoning_content,
             finish_reason=finish_reason,
+            usage_raw_json=usage_raw,
         )
         if tool_states:
             result.tool_calls = []
@@ -624,6 +705,7 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> LLMResponse:
         """视觉理解实现：SDK 异常翻译为错误分类异常后抛出（不自行重试）。"""
         try:
@@ -635,6 +717,7 @@ class OpenAIClient(BaseLLMClient):
                 # 视觉请求同样保留调用方显式给出的零温度。
                 "temperature": self.temperature if temperature is None else temperature,
             }
+            self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort)
             response = await self.client.chat.completions.create(**request_params)
             usage = self._extract_usage(response.usage)
             result = LLMResponse(
@@ -643,6 +726,7 @@ class OpenAIClient(BaseLLMClient):
                 model=response.model,
                 usage=usage,
                 reasoning_content=getattr(response.choices[0].message, "reasoning_content", None),
+                usage_raw_json=self._vendor_usage_to_raw_json(response.usage),
             )
             self._ensure_not_empty(result)
             return result

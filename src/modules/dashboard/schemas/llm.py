@@ -33,6 +33,10 @@ class LLMUsageStatsResponse(BaseModel):
     first_call_time: Optional[int] = None
     last_call_time: Optional[int] = None
     last_updated: Optional[int] = None
+    # 上下文窗口 token 总量（来自 [[llm_models]]）；0 = 未配置，前端隐藏水位
+    context_window: int = 0
+    # 最近一次调用的输入 token（上下文水位分子）；无记录时 None
+    last_call_prompt_tokens: Optional[int] = None
 
 
 class LLMUsageSummaryResponse(BaseModel):
@@ -55,7 +59,9 @@ class LLMRequestHistoryResponse(BaseModel):
 
     request_id: str
     timestamp_ms: int
-    client_type: str
+    # LLM 用途 profile 名（planner/replyer/vision/minecraft/simulator/...）；
+    # 与 LLMProviderConfig.client_type（客户端实现标识）概念不同
+    profile_name: str
     model_name: str
     request_params: Dict[str, Any] = {}
     response_content: Optional[str] = None
@@ -69,6 +75,10 @@ class LLMRequestHistoryResponse(BaseModel):
     # 上游上报的缓存 token 明细；二者均为 0 表示上游未上报（≠零命中）
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    # 思考 token 数（OpenAI completion_tokens_details.reasoning_tokens）；None = 上游未上报
+    reasoning_tokens: Optional[int] = None
+    # 上游原始 usage 字典（JSON 字符串）；解析失败链路兜底，详情展开 JSON 查看
+    usage_raw_json: Optional[str] = None
 
 
 class LLMRequestHistoryListItem(BaseModel):
@@ -76,7 +86,7 @@ class LLMRequestHistoryListItem(BaseModel):
 
     request_id: str
     timestamp_ms: int
-    client_type: str
+    profile_name: str
     model_name: str
     prompt_preview: str = ""
     response_preview: str = ""
@@ -88,6 +98,8 @@ class LLMRequestHistoryListItem(BaseModel):
     # 上游上报的缓存 token 明细；二者均为 0 表示上游未上报（≠零命中）
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    reasoning_tokens: Optional[int] = None
+    usage_raw_json: Optional[str] = None
 
 
 class LLMHistoryListResponse(BaseModel):

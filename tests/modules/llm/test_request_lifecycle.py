@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import patch
 
 import pytest
@@ -29,6 +29,7 @@ async def _manager(behavior: Callable[..., Coroutine[Any, Any, None]]) -> LLMMan
             *,
             model: str,
             temperature: float | None = None,
+            reasoning_effort: Optional[str] = None,
             on_delta: Any = None,
             interrupt_flag: Any = None,
         ) -> Response:

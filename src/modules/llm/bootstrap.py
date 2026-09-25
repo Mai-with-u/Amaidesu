@@ -93,6 +93,7 @@ class _ResolvedProfile(BaseModel):
     selection_strategy: str  # sequential / balance / random
     seed: int  # random 策略用；0 表示不固定
     temperature: float = 0.3
+    reasoning_effort: str = ""
     models: List[_ResolvedModel] = Field(default_factory=list)
 
     model_config = {"frozen": True}
@@ -193,6 +194,7 @@ def build_resolved_profile(
         selection_strategy=strategy_name,
         seed=seed,
         temperature=pcfg.get("temperature", 0.3),
+        reasoning_effort=pcfg.get("reasoning_effort", "") or "",
         models=resolved_models,
     )
 

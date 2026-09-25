@@ -44,11 +44,22 @@ async def get_all_models_usage(server: ServerDep) -> Dict[str, LLMUsageStatsResp
         return {}
 
     rows = await llm_repo.llm_usage_by_model()
+    # 最近一次调用的输入 token：单独一条子查询拿到每模型最新一条记录的
+    # prompt_tokens（不等同于 SUM 聚合，是水位分子）
+    latest_prompt_tokens: Dict[str, int] = await llm_repo.llm_usage_latest_prompt_tokens()
+    # 上下文窗口：装配期由 LLMManager 按 model_identifier 建索引；未注入
+    # / 未配置时一律取 0，前端据此隐藏水位（不显示 0%）
+    context_windows: Dict[str, int] = {}
+    llm_manager = getattr(server, "llm_manager", None)
+    if llm_manager is not None and hasattr(llm_manager, "get_model_context_windows"):
+        context_windows = llm_manager.get_model_context_windows()
+
     result: Dict[str, LLMUsageStatsResponse] = {}
     for row in rows:
         model_name = row.get("model_name") or "unknown"
         hit = int(row.get("cache_hit_tokens", 0))
         miss = int(row.get("cache_miss_tokens", 0))
+        latest_prompt = latest_prompt_tokens.get(model_name)
         result[model_name] = LLMUsageStatsResponse(
             model_name=model_name,
             total_prompt_tokens=int(row.get("total_prompt_tokens", 0)),
@@ -62,6 +73,8 @@ async def get_all_models_usage(server: ServerDep) -> Dict[str, LLMUsageStatsResp
             first_call_time=row.get("first_call_time"),
             last_call_time=row.get("last_call_time"),
             last_updated=row.get("last_updated"),
+            context_window=int(context_windows.get(model_name, 0)),
+            last_call_prompt_tokens=latest_prompt,
         )
 
     return result
@@ -107,7 +120,7 @@ async def get_history(
     page: Annotated[int, Query(ge=1, description="页码")] = 1,
     page_size: Annotated[int, Query(ge=1, le=100, description="每页数量")] = 50,
     model_name: Annotated[Optional[str], Query(description="模型名称筛选")] = None,
-    client_type: Annotated[Optional[str], Query(description="客户端类型筛选")] = None,
+    profile_name: Annotated[Optional[str], Query(description="用途筛选")] = None,
     start_time: Annotated[Optional[int], Query(description="开始时间（毫秒时间戳）")] = None,
     end_time: Annotated[Optional[int], Query(description="结束时间（毫秒时间戳）")] = None,
     success_only: Annotated[Optional[bool], Query(description="只返回成功的请求")] = None,
@@ -115,7 +128,7 @@ async def get_history(
     """获取请求历史列表"""
     history_manager = get_global_request_history_manager()
     result = await history_manager.get_history(
-        client_type=client_type,
+        profile_name=profile_name,
         model_name=model_name,
         start_time=start_time,
         end_time=end_time,
@@ -216,6 +229,14 @@ def _convert_usage(usage_data: Any) -> Optional[TokenUsageSchema]:
     )
 
 
+def _extract_reasoning_tokens(usage_data: Any) -> Optional[int]:
+    """从已解析的 usage 字典中取 reasoning_tokens；上游未上报则 None。"""
+    if not isinstance(usage_data, dict):
+        return None
+    value = usage_data.get("reasoning_tokens")
+    return int(value) if value is not None else None
+
+
 def _preview(text: Any) -> str:
     """完整提供列表文本，避免列表接口丢失请求或响应尾部。"""
     if not isinstance(text, str):
@@ -291,7 +312,7 @@ def _build_list_item(record: Dict[str, Any]) -> LLMRequestHistoryListItem:
     return LLMRequestHistoryListItem(
         request_id=record.get("request_id", ""),
         timestamp_ms=record.get("timestamp", 0),
-        client_type=record.get("client_type", ""),
+        profile_name=record.get("profile_name", ""),
         model_name=record.get("model_name", ""),
         prompt_preview=prompt_preview,
         response_preview=response_preview,
@@ -302,6 +323,8 @@ def _build_list_item(record: Dict[str, Any]) -> LLMRequestHistoryListItem:
         latency_ms=record.get("latency_ms", 0),
         cache_hit_tokens=int(record.get("cache_hit_tokens") or 0),
         cache_miss_tokens=int(record.get("cache_miss_tokens") or 0),
+        reasoning_tokens=_extract_reasoning_tokens(record.get("usage")),
+        usage_raw_json=record.get("usage_raw_json"),
     )
 
 
@@ -310,7 +333,7 @@ def _convert_record_to_response(record: Dict[str, Any]) -> LLMRequestHistoryResp
     return LLMRequestHistoryResponse(
         request_id=record.get("request_id", ""),
         timestamp_ms=record.get("timestamp", 0),
-        client_type=record.get("client_type", ""),
+        profile_name=record.get("profile_name", ""),
         model_name=record.get("model_name", ""),
         request_params=record.get("request_params", {}),
         response_content=record.get("response_content"),
@@ -323,4 +346,6 @@ def _convert_record_to_response(record: Dict[str, Any]) -> LLMRequestHistoryResp
         latency_ms=record.get("latency_ms", 0),
         cache_hit_tokens=int(record.get("cache_hit_tokens") or 0),
         cache_miss_tokens=int(record.get("cache_miss_tokens") or 0),
+        reasoning_tokens=_extract_reasoning_tokens(record.get("usage")),
+        usage_raw_json=record.get("usage_raw_json"),
     )

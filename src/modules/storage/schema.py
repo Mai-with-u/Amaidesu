@@ -52,7 +52,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 11
+SCHEMA_VERSION: int = 12
 
 
 # =============================================================================
@@ -395,6 +395,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     total_tokens       INTEGER NOT NULL,
     cache_hit_tokens   INTEGER NOT NULL,
     cache_miss_tokens  INTEGER NOT NULL,
+    reasoning_tokens   INTEGER NOT NULL DEFAULT 0,
     cost               REAL NOT NULL,
     duration_ms        INTEGER NOT NULL,
     timestamp_ms       INTEGER NOT NULL,
@@ -438,14 +439,16 @@ CREATE TABLE IF NOT EXISTS sim_gifts (
 
 
 # --- llm_requests —— LLM 请求历史（RequestHistoryManager 落库）---
-# usage 拆平为三列以便 SQL 聚合（statistics/费用汇总）；request_params 与
+# usage 拆平为多列以便 SQL 聚合（statistics/费用汇总）；request_params 与
 # tool_calls 结构不定，存 JSON 文本。dashboard 历史页按时间倒序分页查询。
+# ``profile_name`` 替换历史 ``client_type`` 列（§2 扩容正名）；新增
+# ``reasoning_tokens`` 思考量列与 ``usage_raw_json`` 解析即弃唯一兜底。
 
 _LLM_REQUESTS_SQL = """
 CREATE TABLE IF NOT EXISTS llm_requests (
     request_id          TEXT PRIMARY KEY,
     timestamp_ms        INTEGER NOT NULL,
-    client_type         TEXT NOT NULL DEFAULT '',
+    profile_name        TEXT NOT NULL DEFAULT '',
     model_name          TEXT NOT NULL DEFAULT '',
     request_params      TEXT,
     response_content    TEXT,
@@ -456,10 +459,12 @@ CREATE TABLE IF NOT EXISTS llm_requests (
     total_tokens        INTEGER NOT NULL DEFAULT 0,
     cache_hit_tokens    INTEGER NOT NULL DEFAULT 0,
     cache_miss_tokens   INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens    INTEGER NOT NULL DEFAULT 0,
     cost                REAL NOT NULL DEFAULT 0,
     success             INTEGER NOT NULL DEFAULT 1,
     error               TEXT,
-    latency_ms          INTEGER NOT NULL DEFAULT 0
+    latency_ms          INTEGER NOT NULL DEFAULT 0,
+    usage_raw_json      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_llm_requests_ts ON llm_requests(timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_llm_requests_model ON llm_requests(model_name);
