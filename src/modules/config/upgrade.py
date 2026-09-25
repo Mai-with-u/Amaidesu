@@ -217,6 +217,81 @@ def _drop_minecraft_max_steps(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "drop_minecraft_max_steps", "2.0.39", _drop_minecraft_max_steps)
 
 
+def _drop_config_paths(data: Dict[str, Any], paths: tuple[str, ...]) -> List[str]:
+    """清理已移除的输入裁剪选项，保留同段的业务配置和摘要参数。"""
+    changed: List[str] = []
+    for path in paths:
+        parts = path.split(".")
+        section = data
+        for part in parts[:-1]:
+            section = section.get(part) if isinstance(section, dict) else None
+        if isinstance(section, dict) and parts[-1] in section:
+            del section[parts[-1]]
+            changed.append(path)
+    return changed
+
+
+def _drop_model_generation_limits(data: Dict[str, Any]) -> List[str]:
+    """模型生成不再受宿主额度或时钟终止，旧自定义上限一并退役。"""
+    changed: List[str] = []
+    profiles = data.get("llm_profiles")
+    if isinstance(profiles, dict):
+        for name, profile in profiles.items():
+            if isinstance(profile, dict):
+                changed.extend(
+                    f"llm_profiles.{name}.{path}"
+                    for path in _drop_config_paths(profile, ("max_tokens", "hard_timeout_ms"))
+                )
+    for index, provider in enumerate(data.get("llm_providers") or []):
+        if isinstance(provider, dict):
+            changed.extend(
+                f"llm_providers[{index}].{path}" for path in _drop_config_paths(provider, ("max_tokens", "timeout"))
+            )
+    return changed
+
+
+def _drop_agent_input_limits(data: Dict[str, Any]) -> List[str]:
+    """直播历史与建造资料完整读取，任务历史的自动摘要配置继续保留。"""
+    return _drop_config_paths(
+        data,
+        (
+            "agents.streamer.history_limit",
+            "agents.minecraft.builder.max_resource_chars",
+            "agents.minecraft.context.observation_inline_chars",
+            "agents.minecraft.context.archive_max_chars",
+        ),
+    )
+
+
+def _drop_simulator_text_limits(data: Dict[str, Any]) -> List[str]:
+    """模拟观众使用完整场次上下文，发言不再按字符数裁短。"""
+    return _drop_config_paths(data, ("simulator.context_window_size", "simulator.max_message_chars"))
+
+
+def _drop_tool_input_limits(data: Dict[str, Any]) -> List[str]:
+    """网页返回完整正文，视觉识别默认使用原图并等待模型完成。"""
+    return _drop_config_paths(
+        data,
+        (
+            "tools.web.search.config.max_fetch_chars",
+            "tools.vision.config.vlm_timeout_ms",
+            "tools.vision.config.default_max_width",
+        ),
+    )
+
+
+def _drop_memory_injection_limit(data: Dict[str, Any]) -> List[str]:
+    """本批观众的已有画像全部可见，画像生成策略继续保留。"""
+    return _drop_config_paths(data, ("memory.profile_injection_max",))
+
+
+register_file_hook("model.toml", "drop_generation_limits", "2.0.40", _drop_model_generation_limits)
+register_file_hook("agents.toml", "drop_input_limits", "2.0.40", _drop_agent_input_limits)
+register_file_hook("infra.toml", "drop_simulator_text_limits", "2.0.40", _drop_simulator_text_limits)
+register_file_hook("tools.toml", "drop_tool_input_limits", "2.0.40", _drop_tool_input_limits)
+register_file_hook("storage.toml", "drop_memory_injection_limit", "2.0.40", _drop_memory_injection_limit)
+
+
 # 口型调参键：tools.toml [tools.avatar.vts].config → avatar.toml [avatar.lipsync]
 # （口型分析器升为共享基础设施时调参先落 infra [avatar.lipsync]，avatar 域
 # avatar 独立为第七配置文件后，本钩子的迁移目标改为 avatar.toml 同名段；

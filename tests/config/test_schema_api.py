@@ -145,10 +145,8 @@ class TestSixRootSchemas:
         assert {
             "model_list",
             "selection_strategy",
-            "hard_timeout_ms",
             "slow_threshold_ms",
             "temperature",
-            "max_tokens",
         } <= field_names
         assert "provider" not in field_names
         assert "model" not in field_names

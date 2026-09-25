@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 import pytest
 
 
@@ -97,11 +99,13 @@ class TestGetConfigEndpoint:
         api_key = config["llm_providers"][0]["api_key"]
         assert api_key == "已设置"
 
-    def test_get_config_does_not_mask_budget_tokens(self, client):
-        """max_tokens 等预算类参数不是凭据，正常显示数值（QA 发现的误伤修复）"""
+    def test_get_config_omits_retired_generation_limits(self, client: TestClient) -> None:
+        """配置接口只公开仍有作用的模型参数，额度与时限不再作为可编辑字段。"""
         resp = client.get("/api/v1/config")
         config = resp.json()["config"]
-        assert isinstance(config["llm_profiles"]["planner"]["max_tokens"], int)
+        assert "max_tokens" not in config["llm_profiles"]["planner"]
+        assert "hard_timeout_ms" not in config["llm_profiles"]["planner"]
+        assert isinstance(config["llm_profiles"]["planner"]["temperature"], float)
 
     def test_get_config_values_match_toml(self, client, config_dir):
         """合并视图值与磁盘 TOML 一致（dashboard.port）"""

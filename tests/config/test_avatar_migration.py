@@ -70,7 +70,7 @@ def test_platform_graduation_migrates_and_written_back(tmp_path: Path):
     assert "avatar" not in tools_doc["tools"]
 
     # 版本推进：tools 链尾 2.0.38（迁移钩子 target），目标文件跟进不回退基线
-    assert get_config_version(tmp_path, "tools.toml") == "2.0.38"
+    assert get_config_version(tmp_path, "tools.toml") == "2.0.40"
     assert get_config_version(tmp_path, "avatar.toml") == CONFIG_BASELINE_VERSION
 
 
@@ -90,7 +90,7 @@ def test_lipsync_graduation_migrates_and_written_back(tmp_path: Path):
     infra_doc = tomlkit.parse((tmp_path / "infra.toml").read_text(encoding="utf-8-sig"))
     assert "avatar" not in infra_doc
 
-    assert get_config_version(tmp_path, "infra.toml") == "2.0.38"
+    assert get_config_version(tmp_path, "infra.toml") == "2.0.40"
 
 
 def test_graduation_idempotent_on_second_load(tmp_path: Path):
@@ -103,8 +103,7 @@ def test_graduation_idempotent_on_second_load(tmp_path: Path):
 
     load_config_dir(tmp_path)
     snapshot = {
-        name: (tmp_path / name).read_text(encoding="utf-8-sig")
-        for name in ("tools.toml", "infra.toml", "avatar.toml")
+        name: (tmp_path / name).read_text(encoding="utf-8-sig") for name in ("tools.toml", "infra.toml", "avatar.toml")
     }
 
     _config, report = load_config_dir(tmp_path)
@@ -127,7 +126,8 @@ def test_idle_bindings_old_defaults_retuned(tmp_path: Path):
     assert anchor in content
     content = content.replace(
         anchor,
-        anchor + '\n'
+        anchor
+        + "\n"
         + 'idle_param_head_x = "HeadAngleX"\n'
         + 'idle_param_head_y = "HeadAngleY"\n'
         + 'idle_param_head_z = "HeadAngleZ"\n'

@@ -39,7 +39,7 @@ def test_step_limit_removal_is_written_back_only_to_agents(tmp_path: Path, old_v
 
     migrated = tomlkit.parse(agents_path.read_text(encoding="utf-8-sig"))
     minecraft = migrated["agents"]["minecraft"]
-    assert migrated["meta"]["version"] == "2.0.39"
+    assert migrated["meta"]["version"] == "2.0.40"
     assert "max_steps" not in minecraft
     assert minecraft["execute_poll_interval_ms"] == 4000 and minecraft["builder"]["max_steps"] == 9
     assert all(path.read_bytes() == content for path, content in others.items())

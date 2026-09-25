@@ -72,7 +72,7 @@ def test_lipsync_keys_moved_to_infra_and_written_back(tmp_path: Path):
 
     # tools.toml 推进到本文件钩子链尾 target（2.0.36 迁移 + 2.0.37 删键
     # + 2.0.38 迁移）；infra.toml 保持新生成基线版本
-    assert get_config_version(tmp_path, "tools.toml") == "2.0.38"
+    assert get_config_version(tmp_path, "tools.toml") == "2.0.40"
     assert get_config_version(tmp_path, "infra.toml") == CONFIG_BASELINE_VERSION
 
 

@@ -42,7 +42,6 @@ class LLMProviderConfig(BaseConfig):
         auth_header_prefix: header 鉴权时值的前缀
         auth_query_name: query 鉴权时的 query 参数名
         default_headers: 每次请求附加的默认 header
-        timeout: 单次请求超时时间（秒）
         max_retries: 请求失败时的最大重试次数
         retry_delay: 重试间隔（秒）
         reasoning_parse_mode: 推理内容解析模式（auto/native/think_tag/none）
@@ -84,7 +83,6 @@ class LLMProviderConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
     default_headers: dict[str, str] = Field(default_factory=dict, description="每次请求附加的默认 header")
-    timeout: int = Field(default=60, ge=1, description="单次请求超时时间（秒）")
     max_retries: int = Field(
         default=3, ge=0, description="请求失败时的最大重试次数", json_schema_extra={"x-ui-advanced": True}
     )
@@ -146,10 +144,8 @@ class LLMProfileConfig(BaseConfig):
     Attributes:
         model_list: 引用的模型名列表（对应 llm_models[].name）
         selection_strategy: 选择策略
-        hard_timeout_ms: 硬超时（毫秒）；到点取消当前请求并切下一个模型
         slow_threshold_ms: 慢调用阈值（毫秒）；超阈值仅告警，不切换
         temperature: 生成温度（0.0-2.0）
-        max_tokens: 最大生成 token 数
     """
 
     model_list: List[str] = Field(
@@ -159,11 +155,6 @@ class LLMProfileConfig(BaseConfig):
     selection_strategy: LLMSelectionStrategy = Field(
         default_factory=LLMSelectionStrategy,
         description="model_list 选择策略",
-    )
-    hard_timeout_ms: int = Field(
-        default=180_000,
-        ge=1000,
-        description="硬超时（毫秒）；到点取消当前请求并切下一个模型",
     )
     slow_threshold_ms: int = Field(
         default=15_000,
@@ -177,27 +168,19 @@ class LLMProfileConfig(BaseConfig):
         description="生成温度 (0.0-2.0)",
         json_schema_extra={"x-ui-type": "number"},
     )
-    max_tokens: int = Field(
-        default=4096,
-        ge=1,
-        description="最大生成 token 数",
-        json_schema_extra={"x-ui-type": "integer"},
-    )
 
 
 _PROFILE_PRESETS: dict[str, dict[str, Any]] = {
-    "planner": {"hard_timeout_ms": 90_000, "slow_threshold_ms": 15_000, "temperature": 0.7, "max_tokens": 4096},
-    "replyer": {"hard_timeout_ms": 60_000, "slow_threshold_ms": 8_000, "temperature": 0.2, "max_tokens": 2048},
-    "summary": {"hard_timeout_ms": 180_000, "slow_threshold_ms": 30_000, "temperature": 0.3, "max_tokens": 2048},
-    "minecraft": {"hard_timeout_ms": 180_000, "slow_threshold_ms": 15_000, "temperature": 0.2, "max_tokens": 4096},
+    "planner": {"slow_threshold_ms": 15_000, "temperature": 0.7},
+    "replyer": {"slow_threshold_ms": 8_000, "temperature": 0.2},
+    "summary": {"slow_threshold_ms": 30_000, "temperature": 0.3},
+    "minecraft": {"slow_threshold_ms": 15_000, "temperature": 0.2},
     "minecraft_builder": {
-        "hard_timeout_ms": 180_000,
         "slow_threshold_ms": 15_000,
         "temperature": 0.5,
-        "max_tokens": 8192,
     },
-    "vision": {"hard_timeout_ms": 60_000, "slow_threshold_ms": 10_000, "temperature": 0.3, "max_tokens": 1024},
-    "simulator": {"hard_timeout_ms": 60_000, "slow_threshold_ms": 15_000, "temperature": 0.9, "max_tokens": 1024},
+    "vision": {"slow_threshold_ms": 10_000, "temperature": 0.3},
+    "simulator": {"slow_threshold_ms": 15_000, "temperature": 0.9},
 }
 
 

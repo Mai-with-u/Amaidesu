@@ -13,19 +13,19 @@ from src.modules.config.multi_file_loader import generate_default_configs, load_
 
 def test_missing_builder_profile_uses_existing_minecraft_models() -> None:
     """用户没有名为 default 的模型时，新增设计用途仍引用已有游戏模型。"""
-    profiles = LLMProfilesConfig(minecraft={"model_list": ["custom-game"], "max_tokens": 1234})
+    profiles = LLMProfilesConfig(minecraft={"model_list": ["custom-game"], "temperature": 0.1})
     assert profiles.minecraft_builder.model_list == ["custom-game"]
-    assert profiles.minecraft.max_tokens == 1234
-    assert profiles.minecraft_builder.max_tokens != profiles.minecraft.max_tokens
+    assert profiles.minecraft.temperature == 0.1
+    assert profiles.minecraft_builder.temperature != profiles.minecraft.temperature
 
 
 def test_explicit_builder_profile_is_preserved() -> None:
     """明确选择的设计模型不能被游戏模型的默认继承覆盖。"""
     profiles = LLMProfilesConfig(
-        minecraft={"model_list": ["game"]}, minecraft_builder={"model_list": ["designer"], "max_tokens": 5678}
+        minecraft={"model_list": ["game"]}, minecraft_builder={"model_list": ["designer"], "temperature": 0.9}
     )
     assert profiles.minecraft_builder.model_list == ["designer"]
-    assert profiles.minecraft_builder.max_tokens == 5678
+    assert profiles.minecraft_builder.temperature == 0.9
 
 
 @pytest.mark.parametrize("builder", [{"max_steps": 0}, {"task_timeout_ms": 0}, {"retained_jobs": 0}])

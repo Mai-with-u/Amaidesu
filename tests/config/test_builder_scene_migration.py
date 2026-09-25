@@ -27,8 +27,8 @@ def test_incompatible_custom_design_binding_fails_without_mutation() -> None:
     assert builder["validate_tool"] == "my_validate" and builder["execute_tool"] == "builder_execute"
 
 
-def test_scene_transport_written_back_only_advances_agents_version(tmp_path: Path) -> None:
-    """真实加载旧配置，改写默认绑定并补查询工具，其他文件版本与模型选择保持原值。"""
+def test_scene_transport_written_back_with_independent_file_migrations(tmp_path: Path) -> None:
+    """真实加载旧配置并补全绑定，各文件执行自己的迁移且保留用户的模型选择。"""
     generate_default_configs(tmp_path)
     agents_path, model_path = tmp_path / "agents.toml", tmp_path / "model.toml"
     agents = tomlkit.parse(agents_path.read_text(encoding="utf-8-sig"))
@@ -49,6 +49,6 @@ def test_scene_transport_written_back_only_advances_agents_version(tmp_path: Pat
     assert builder["execute_tool"] == "maicraft_execute" and builder["task_tool"] == "maicraft_task"
     assert "validate_tool" not in builder and "preview_tool" not in builder
     assert builder["max_steps"] == 9
-    assert agents["meta"]["version"] == "2.0.39" and model["meta"]["version"] == "2.0.34"
+    assert agents["meta"]["version"] == "2.0.40" and model["meta"]["version"] == "2.0.40"
     _, report = load_config_dir(tmp_path)
     assert not report.missing
