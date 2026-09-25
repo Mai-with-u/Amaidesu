@@ -19,6 +19,10 @@ export interface LLMUsageStats {
   first_call_time: number | null;
   last_call_time: number | null;
   last_updated: number | null;
+  /** 上下文窗口 token 总量（来自 [[llm_models]]）；0 = 未配置，前端据此隐藏水位 */
+  context_window: number;
+  /** 最近一次调用的输入 token（上下文水位分子）；无记录时 null */
+  last_call_prompt_tokens: number | null;
 }
 
 // 总费用摘要
@@ -86,7 +90,8 @@ export interface LLMRequestHistorySummary {
   request_id: string;
   /** 请求时刻（Unix 毫秒） */
   timestamp_ms: number;
-  client_type: string;
+  /** LLM 用途 profile 名（planner/replyer/vision/minecraft/simulator/...） */
+  profile_name: string;
   model_name: string;
   prompt_preview: string;
   response_preview: string;
@@ -98,6 +103,10 @@ export interface LLMRequestHistorySummary {
   /** 缓存命中 token；与未中均为 0 表示上游未上报（≠零命中） */
   cache_hit_tokens: number;
   cache_miss_tokens: number;
+  /** 思考 token（OpenAI completion_tokens_details.reasoning_tokens）；null = 上游未上报 */
+  reasoning_tokens: number | null;
+  /** 上游原始 usage 字典（JSON 字符串），详情展开 JSON 查看 */
+  usage_raw_json: string | null;
 }
 
 /** 单条请求历史完整记录（GET /llm/history/{id} 详情） */
@@ -105,7 +114,8 @@ export interface LLMRequestHistory {
   request_id: string;
   /** 请求时刻（Unix 毫秒） */
   timestamp_ms: number;
-  client_type: string;
+  /** LLM 用途 profile 名（planner/replyer/vision/minecraft/simulator/...） */
+  profile_name: string;
   model_name: string;
   request_params: Record<string, unknown>;
   response_content: string | null;
@@ -119,6 +129,10 @@ export interface LLMRequestHistory {
   /** 缓存命中 token；与未中均为 0 表示上游未上报（≠零命中） */
   cache_hit_tokens: number;
   cache_miss_tokens: number;
+  /** 思考 token（OpenAI completion_tokens_details.reasoning_tokens）；null = 上游未上报 */
+  reasoning_tokens: number | null;
+  /** 上游原始 usage 字典（JSON 字符串），详情展开 JSON 查看 */
+  usage_raw_json: string | null;
 }
 
 // 历史查询参数（start_time/end_time 为 Unix 毫秒）
@@ -126,7 +140,8 @@ export interface LLMHistoryQueryParams {
   page?: number;
   page_size?: number;
   model_name?: string;
-  client_type?: string;
+  /** 用途 profile 名筛选 */
+  profile_name?: string;
   start_time?: number;
   end_time?: number;
   success_only?: boolean;

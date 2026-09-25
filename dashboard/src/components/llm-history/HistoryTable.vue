@@ -7,10 +7,10 @@
         </template>
       </el-table-column>
 
-      <el-table-column prop="client_type" label="客户端" width="110">
+      <el-table-column prop="profile_name" label="用途" width="110">
         <template #default="{ row }">
-          <el-tag size="small" effect="plain" :type="getClientTypeTag(row.client_type)">
-            {{ getClientTypeLabel(row.client_type) }}
+          <el-tag size="small" effect="plain" :type="getProfileNameTag(row.profile_name)">
+            {{ getProfileNameLabel(row.profile_name) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -112,10 +112,10 @@ import type { LLMRequestHistorySummary, LLMHistoryQueryParams } from '@/types';
 import {
   formatDateTime,
   formatLatency,
-  getClientTypeLabel,
+  getProfileNameLabel,
   formatCost,
   getLatencyClass,
-  getClientTypeTag,
+  getProfileNameTag,
 } from '@/utils/format';
 
 interface Props {

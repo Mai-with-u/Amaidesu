@@ -95,7 +95,7 @@ const queryParams = reactive<LLMHistoryQueryParams>({
   page: 1,
   page_size: 20,
   model_name: undefined,
-  client_type: undefined,
+  profile_name: undefined,
   start_time: undefined,
   end_time: undefined,
   success_only: undefined,
@@ -146,7 +146,7 @@ async function fetchHistory() {
 // 重置
 function handleReset() {
   queryParams.model_name = undefined;
-  queryParams.client_type = undefined;
+  queryParams.profile_name = undefined;
   queryParams.start_time = undefined;
   queryParams.end_time = undefined;
   queryParams.success_only = undefined;
@@ -216,7 +216,7 @@ function debouncedFetchHistory() {
 watch(
   [
     () => queryParams.model_name,
-    () => queryParams.client_type,
+    () => queryParams.profile_name,
     dateRange,
     () => queryParams.success_only,
   ],

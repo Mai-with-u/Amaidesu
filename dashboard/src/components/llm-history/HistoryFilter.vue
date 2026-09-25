@@ -16,13 +16,13 @@
       </div>
 
       <div class="filter-item">
-        <label class="filter-label">客户端类型</label>
+        <label class="filter-label">用途</label>
         <el-select
-          :model-value="queryParams.client_type"
+          :model-value="queryParams.profile_name"
           placeholder="全部类型"
           clearable
           style="width: 160px"
-          @update:model-value="handleClientTypeChange"
+          @update:model-value="handleProfileNameChange"
         >
           <el-option label="主 LLM" value="planner" />
           <el-option label="回复" value="replyer" />
@@ -127,8 +127,8 @@ function handleModelChange(value: string | undefined) {
   emit('filter-change');
 }
 
-function handleClientTypeChange(value: string | undefined) {
-  emit('update:queryParams', { ...props.queryParams, client_type: value, page: 1 });
+function handleProfileNameChange(value: string | undefined) {
+  emit('update:queryParams', { ...props.queryParams, profile_name: value, page: 1 });
   emit('filter-change');
 }
 

@@ -196,6 +196,44 @@
           </template>
         </el-table-column>
 
+        <el-table-column label="上下文水位" width="180" align="left">
+          <template #header>
+            <span class="cache-header">
+              上下文水位
+              <el-tooltip
+                content="最近一次调用的输入 token 占模型上下文窗口的比例；分母未配置时不展示"
+                placement="top"
+              >
+                <el-icon class="cache-help"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <template #default="{ row }">
+            <template v-if="row.context_window > 0 && row.last_call_prompt_tokens != null">
+              <div class="water-level">
+                <el-progress
+                  :percentage="
+                    Math.min(100, (row.last_call_prompt_tokens / row.context_window) * 100)
+                  "
+                  :stroke-width="10"
+                  :format="() => ''"
+                  :color="waterLevelColor(row.last_call_prompt_tokens / row.context_window)"
+                  :show-text="false"
+                />
+                <span
+                  class="water-level-text"
+                  :class="{ warn: row.last_call_prompt_tokens / row.context_window > 0.8 }"
+                  >{{ formatNumber(row.last_call_prompt_tokens) }} /
+                  {{ formatNumber(row.context_window) }} ({{
+                    ((row.last_call_prompt_tokens / row.context_window) * 100).toFixed(1)
+                  }}%)</span
+                >
+              </div>
+            </template>
+            <span v-else class="water-level-empty">—</span>
+          </template>
+        </el-table-column>
+
         <el-table-column
           prop="total_completion_tokens"
           label="输出 Token"
@@ -415,6 +453,11 @@ function goToModelHistory(modelName: string): void {
 // 格式化数字（添加千分位分隔符）
 function formatNumber(num: number): string {
   return num.toLocaleString();
+}
+
+// 上下文水位色阶：≤80% 蓝色（安全），>80% 警告橙（即将溢出）
+function waterLevelColor(ratio: number): string {
+  return ratio > 0.8 ? '#f59e0b' : '#3b82f6';
 }
 
 // 格式化时间戳
@@ -789,6 +832,33 @@ onMounted(() => {
 }
 
 .cache-value {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+/* 上下文水位：进度条 + 分子/分母百分比；>80% 警示色 */
+.water-level {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.water-level-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.water-level-text.warn {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.water-level-empty {
   font-family: var(--font-mono);
   color: var(--text-secondary);
 }

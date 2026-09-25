@@ -60,9 +60,9 @@ export function getLatencyClass(ms: number): string {
   return 'slow';
 }
 
-/** 客户端类型 → el-tag 类型色 */
-export function getClientTypeTag(type: string): string {
-  const typeMap: Record<string, string> = {
+/** LLM 用途 profile 名 → el-tag 类型色。映射之外的 profile 原样回退 info */
+export function getProfileNameTag(profileName: string): string {
+  const tagMap: Record<string, string> = {
     planner: 'primary',
     replyer: 'success',
     summary: 'warning',
@@ -70,11 +70,11 @@ export function getClientTypeTag(type: string): string {
     minecraft: 'info',
     simulator: 'info',
   };
-  return typeMap[type] || 'info';
+  return tagMap[profileName] || 'info';
 }
 
-/** 客户端类型 → 中文标签 */
-export function getClientTypeLabel(type: string): string {
+/** LLM 用途 profile 名 → 中文标签；映射之外的 profile 原样回退 */
+export function getProfileNameLabel(profileName: string): string {
   const labelMap: Record<string, string> = {
     planner: '主 LLM',
     replyer: '回复',
@@ -83,7 +83,7 @@ export function getClientTypeLabel(type: string): string {
     vision: '视觉',
     simulator: '模拟',
   };
-  return labelMap[type] || type;
+  return labelMap[profileName] || profileName;
 }
 
 /**

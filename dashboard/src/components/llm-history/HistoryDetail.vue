@@ -16,9 +16,9 @@
         <el-descriptions-item label="时间">
           {{ formatDateTime(detail.timestamp_ms) }}
         </el-descriptions-item>
-        <el-descriptions-item label="客户端类型">
+        <el-descriptions-item label="用途">
           <el-tag size="small" effect="plain">
-            {{ getClientTypeLabel(detail.client_type) }}
+            {{ getProfileNameLabel(detail.profile_name) }}
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="模型">
@@ -36,6 +36,9 @@
           Prompt: {{ detail.usage.prompt_tokens }} / Completion:
           {{ detail.usage.completion_tokens }} / 总计:
           {{ detail.usage.total_tokens }}
+        </el-descriptions-item>
+        <el-descriptions-item v-if="detail.reasoning_tokens != null" label="思考 token">
+          {{ detail.reasoning_tokens.toLocaleString() }}
         </el-descriptions-item>
         <el-descriptions-item v-if="cacheReported" label="缓存命中">
           命中 {{ detail.cache_hit_tokens.toLocaleString() }} / 未中
@@ -121,6 +124,25 @@
         </div>
       </div>
 
+      <!-- 原始 usage 单（解析即弃链路唯一兜底） -->
+      <div v-if="detail.usage_raw_json" class="detail-section">
+        <div class="section-header">
+          <h4 class="section-title">原始用量单</h4>
+          <el-icon class="copy-icon" title="复制 JSON" @click="copyJson(detail.usage_raw_json)">
+            <CopyDocument />
+          </el-icon>
+        </div>
+        <div class="usage-raw-block">
+          <VueJsonPretty
+            v-if="parsedUsageRaw !== null"
+            :data="parsedUsageRaw"
+            theme="dark"
+            show-line
+          />
+          <pre v-else class="code-block"><code>{{ detail.usage_raw_json }}</code></pre>
+        </div>
+      </div>
+
       <!-- 错误信息 -->
       <div v-if="detail.error" class="detail-section">
         <h4 class="section-title error-title">错误信息</h4>
@@ -165,7 +187,7 @@ import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import { normalizeMessage, type PreviewMessage } from '@/utils/llmMessage';
 import type { LLMRequestHistory } from '@/types';
-import { formatCost, formatDateTime, formatLatency, getClientTypeLabel } from '@/utils/format';
+import { formatCost, formatDateTime, formatLatency, getProfileNameLabel } from '@/utils/format';
 
 interface Props {
   visible: boolean;
@@ -211,6 +233,19 @@ const cacheRateText = computed(() => {
   const total = d.cache_hit_tokens + d.cache_miss_tokens;
   if (total <= 0) return '—';
   return `${((d.cache_hit_tokens / total) * 100).toFixed(1)}%`;
+});
+
+// 原始 usage 单：JSON 字符串解析成功则用 JSON 树展示，失败回退原文
+type JsonValue = string | number | boolean | null | { [k: string]: JsonValue } | JsonValue[];
+
+const parsedUsageRaw = computed<JsonValue | null>(() => {
+  const raw = props.detail?.usage_raw_json;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as JsonValue;
+  } catch {
+    return null;
+  }
 });
 
 // 长标识截短展示，完整值走悬浮提示
