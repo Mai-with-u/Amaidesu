@@ -28,7 +28,7 @@ def json_text(value: Any) -> str:
 
 
 def validate_schema(schema: dict[str, Any], value: Any, *, reference: str = "") -> list[dict[str, str]]:
-    """本地先查格式；外部引用不联网获取，未提供的定义必须明确报错。"""
+    """完整返回设计格式错误，模型能一次看到全部待修正部件；外部定义须显式提供。"""
     dialect = validator_for(schema, default=None) if "$schema" in schema else validator_for(schema)
     if dialect is None:
         raise ValueError("Mod 使用了当前客户端不支持的 JSON Schema 方言")
@@ -39,7 +39,7 @@ def validate_schema(schema: dict[str, Any], value: Any, *, reference: str = "") 
         validator = validator.evolve(schema={"$ref": reference})
     return [
         {"path": "/" + "/".join(str(part) for part in error.absolute_path), "message": error.message}
-        for error in list(validator.iter_errors(value))[:10]
+        for error in validator.iter_errors(value)
     ]
 
 
@@ -58,7 +58,7 @@ class MinecraftBuilderBackend:
         self._scenes = MinecraftSceneProtocol(config, self.invoke)
 
     async def read_text(self, uri: str) -> str:
-        """兼容 MCP 的内容列表与结果封装，拒绝空资料和超出预算的内容。"""
+        """兼容 MCP 的内容列表与结果封装，拒绝空资料并保留完整正文。"""
         client = self._client()
         if client is None:
             raise ValueError("Minecraft MCP 未连接，无法读取新建造器资料")
@@ -70,8 +70,8 @@ class MinecraftBuilderBackend:
         if not texts or any(not isinstance(item, str) for item in texts):
             raise ValueError(f"建造资源不是受支持的文本内容：{uri}")
         text = "\n".join(texts)
-        if not text.strip() or len(text) > self.config.max_resource_chars:
-            raise ValueError(f"建造资源为空或超过字符预算：{uri}")
+        if not text.strip():
+            raise ValueError(f"建造资源为空：{uri}")
         return text
 
     async def prepare(self) -> tuple[BuildCatalog, dict[str, Any]]:
@@ -122,8 +122,6 @@ class MinecraftBuilderBackend:
         payload = result.structured_content
         if payload.get("ok") is False or payload.get("success") is False:
             raise ValueError(str(payload.get("error") or "Mod 拒绝建造请求"))
-        if len(json_text(payload)) > self.config.max_context_chars:
-            raise ValueError("Mod 建造结果超过上下文预算")
         return payload
 
     async def validate(

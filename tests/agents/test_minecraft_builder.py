@@ -25,6 +25,12 @@ from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger, TaskTracker
 
 
+def test_all_design_errors_are_returned_to_the_model() -> None:
+    """部件数量超过旧错误条数上限时，最后一个部件的格式问题仍可见。"""
+    errors = validate_schema({"type": "array", "items": {"type": "integer"}}, ["无效部件"] * 25)
+    assert [error["path"] for error in errors] == [f"/{index}" for index in range(25)]
+
+
 class FakeResources:
     """模拟新 Mod 的资源协议，支持在测试中发布新 Schema 与能力。"""
 
@@ -272,7 +278,7 @@ async def test_incomplete_model_turn_never_reaches_mod(harness: Harness, reason:
     await harness.finish_worker()
     assert harness.builder._jobs[task_id].status == "succeeded"
     assert len(harness.mod.operations("create_scene")) == 1
-    assert harness.llm.generate.call_args.kwargs["omit_output_token_limit"] is True
+    assert "max_tokens" not in harness.llm.generate.call_args.kwargs
     assert harness.llm.generate.call_args.kwargs["strict_tool_arguments"] is True
 
 
@@ -416,14 +422,16 @@ async def test_design_checkpoint_uses_own_profile_and_preserves_loaded_resources
     await harness.finish_worker()
     calls = harness.llm.generate.await_args_list
     assert len(calls) == 4 and calls[1].kwargs["profile"] == "minecraft_builder"
-    assert calls[1].kwargs["max_tokens"] == 2400
+    assert "max_tokens" not in calls[1].kwargs
     assert "maicraft://building/guide" in str(calls[2].args[0])
     assert harness.builder._jobs[task_id].status == "succeeded"
 
 
-@pytest.mark.parametrize("incompatibility", ["capability", "schema", "budget"])
-async def test_incompatible_task_start_tutorial_fails_before_inference(harness: Harness, incompatibility: str) -> None:
-    """基础教材也必须满足实际 Mod 能力、格式与完整正文预算，不可绕过门禁注入。"""
+@pytest.mark.parametrize("incompatibility", ["capability", "schema", "large"])
+async def test_task_start_tutorial_preserves_compatibility_and_full_text(
+    harness: Harness, incompatibility: str
+) -> None:
+    """不兼容教材在推理前拒绝，长教材完整注入后可以正常完成设计。"""
     guide = harness.resources.catalog["resources"][0]
     guide["load_policy"] = "task_start"
     if incompatibility == "capability":
@@ -434,16 +442,21 @@ async def test_incompatible_task_start_tutorial_fails_before_inference(harness: 
         read = harness.resources.read_resource
 
         async def oversized_read(uri: str) -> list[dict[str, str]]:
-            """只使基础教材超长，确保失败来自正文完整性检查而非目录解析。"""
+            """正文超过旧资料上限时仍保留最后一项具体设计要求。"""
             if uri == guide["uri"]:
-                return [{"uri": uri, "text": "材" * 24001}]
+                return [{"uri": uri, "text": "材" * 24001 + "保留入口"}]
             return await read(uri)
 
         harness.resources.read_resource = oversized_read
+        harness.llm.generate.side_effect = valid_design()
     task_id = await harness.request(intent="design")
     await harness.finish_worker()
-    assert harness.builder._jobs[task_id].status == "failed"
-    assert not harness.llm.generate.called and not harness.mod.calls
+    if incompatibility == "large":
+        assert harness.builder._jobs[task_id].status == "succeeded"
+        assert "材" * 24001 + "保留入口" in str(harness.llm.generate.call_args_list[0].args[0])
+    else:
+        assert harness.builder._jobs[task_id].status == "failed"
+        assert not harness.llm.generate.called and not harness.mod.calls
 
 
 async def test_design_completion_requires_real_construction(harness: Harness) -> None:

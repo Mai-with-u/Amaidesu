@@ -19,10 +19,6 @@ class MinecraftContextConfig(BaseModel):
     max_context_chars: int = Field(default=120_000, ge=24_000, description="触发集中整理的消息与工具声明字符预算")
     recent_turns: int = Field(default=6, ge=1, le=20, description="集中整理时优先保留的近期完整决策轮数")
     summary_max_chars: int = Field(default=6000, ge=1000, le=12000, description="推理摘要的最大字符数")
-    observation_inline_chars: int = Field(default=6000, ge=1000, description="大观察展开前的呈现预算，决策证据可超出")
-    archive_max_chars: int = Field(
-        default=8_000_000, ge=12000, description="当前任务原始观察的字符预算，至少保留最新原文"
-    )
 
 
 class MinecraftConfig(BaseConfig):

@@ -1,6 +1,6 @@
 """验证阶段通知复用已有成果、保留原目标，且不替模型决定开工。"""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -16,6 +16,17 @@ def make_agent() -> MinecraftAgent:
     agent._task_finished = False
     agent._task_instructions = ["建好机器；禁用 Mek；禁止搜索私人箱子"]
     return agent
+
+
+async def test_delivery_keeps_complete_explanation_for_delegator() -> None:
+    """玩家交付较长施工说明时，主播收到完整尾部验收结果。"""
+    agent = make_agent()
+    agent._emit_report = AsyncMock()
+    agent._finish_delegated = MagicMock()
+    content = "施工说明" * 1000 + "最后确认入口畅通"
+    assert await agent._handle_report("delivery", content, "施工现场") is None
+    agent._emit_report.assert_awaited_once_with("delivery", content, scene="施工现场")
+    agent._finish_delegated.assert_called_once_with("succeeded", summary=f"delivery: {content}")
 
 
 def test_design_result_retains_original_goal_and_links_exact_request() -> None:
@@ -42,7 +53,8 @@ def test_design_result_retains_original_goal_and_links_exact_request() -> None:
     agent.on_task_notification(notice)
     assert len(agent._message_queue) == 1
     message = agent._message_queue[0][1]
-    assert "bp1" in message and "沿原目标" in message and len(message) < 8000
+    assert "bp1" in message and "沿原目标" in message
+    assert "场地细节" * 5000 in message
     context = agent._current_task_context()
     assert context["original_instructions"] == ["建好机器；禁用 Mek；禁止搜索私人箱子"]
     stage = context["background_tasks"][0]

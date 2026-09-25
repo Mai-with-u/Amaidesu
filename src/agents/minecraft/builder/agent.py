@@ -316,8 +316,6 @@ class MinecraftBuilderAgent(BaseAgent):
         already_loaded = entry.uri in self._resources
         if not already_loaded:
             text = await self._backend.read_text(entry.uri)
-            if sum(map(len, self._resources.values())) + len(text) > self._config.max_context_chars // 2:
-                raise ValueError("已选资料超过任务预算，请使用当前已读取资料")
             self._resources[entry.uri] = text
             self._resource_refs[entry.uri] = entry.revision
         result = {"loaded": True, "uri": entry.uri, "revision": entry.revision, "already_loaded": already_loaded}

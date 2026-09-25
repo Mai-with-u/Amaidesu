@@ -14,8 +14,8 @@ from src.modules.tools.registry import ToolRegistry
 
 
 def test_large_reference_keeps_decision_evidence_and_lossless_original() -> None:
-    """长教材只缩小呈现，失败位置、材料缺口和部分覆盖仍直接可见。"""
-    history = MinecraftObservations(inline_chars=800)
+    """长教材、失败位置和材料缺口完整返回，原始数据的后续修改不影响已有证据。"""
+    history = MinecraftObservations()
     original = {
         "ok": False,
         "complete": False,
@@ -28,7 +28,7 @@ def test_large_reference_keeps_decision_evidence_and_lossless_original() -> None
     shown = history.present("maicraft_perceive", {"resource_uri": "maicraft://knowledge/test"}, original)
     assert shown["ok"] is False and shown["complete"] is False
     assert shown["error"] == original["error"] and shown["missing_materials"] == original["missing_materials"]
-    assert shown["data"]["content"]["deferred"] is True
+    assert shown["data"]["content"] == original["data"]["content"]
     ref = shown["_observation"]["ref"]
     parts, offset = [], 0
     while True:
@@ -57,7 +57,7 @@ def test_repeat_marker_requires_identical_request_and_actual_result() -> None:
 
 
 def test_selected_process_document_is_read_as_one_unit() -> None:
-    """单份一万三千字资料已被明确选中时完整呈现，目录查询仍遵守普通呈现预算。"""
+    """单份工艺、目录和超大资料都完整呈现，尾部要求不会被折叠。"""
     history = MinecraftObservations()
     uri = "maicraft://knowledge/recipes/example/output"
     body = {"process": "工艺定义" * 3300, "loops": 5, "sequence": ["a", "b", "c"]}
@@ -66,16 +66,16 @@ def test_selected_process_document_is_read_as_one_unit() -> None:
     shown = history.present("maicraft_perceive", request, original)
     assert shown["resources"][0]["content"] == body
     catalog = history.present("maicraft_perceive", {"view": "knowledge"}, original)
-    assert catalog["resources"]["deferred"] is True
+    assert catalog["resources"] == original["resources"]
     large = deepcopy(original)
     large["resources"][0]["content"]["process"] *= 3
     deferred = history.present("maicraft_perceive", request, large)
-    assert deferred["resources"]["deferred"] is True
+    assert deferred["resources"] == large["resources"]
 
 
 def test_pointer_search_and_expired_references_are_explicit() -> None:
     """包含斜线的字段仍能寻址；过期引用只能报错，不能误读另一份原文。"""
-    history = MinecraftObservations(archive_chars=500)
+    history = MinecraftObservations()
     shown = history.present("knowledge", {}, {"a/b": {"~key": "前文" * 200 + "目标材料" + "后文" * 200}})
     ref = shown["_observation"]["ref"]
     found = history.read({"ref": ref, "path": "/a~1b/~0key", "query": "目标材料", "limit": 40})
@@ -84,14 +84,35 @@ def test_pointer_search_and_expired_references_are_explicit() -> None:
     with pytest.raises(ValueError, match="不存在路径"):
         history.read({"ref": ref, "path": "/missing"})
     history.present("knowledge", {"page": "next"}, {"content": "新的正文" * 200})
+    assert history.read({"ref": ref})["complete"] is True
+    assert len(history.index()) == 2
     with pytest.raises(ValueError, match="已过期"):
-        history.read({"ref": ref})
-    assert len(json_text(history.index())) < 1000
+        history.read({"ref": "来自其他任务"})
+    assert "knowledge" in json_text(history.index())
+
+
+def test_full_read_and_index_preserve_long_results_and_early_requests() -> None:
+    """默认读取完整正文，超过旧索引条数后仍可找到首条带长参数的请求。"""
+    history = MinecraftObservations()
+    arguments = {"requirement": "保留现场结构" * 300}
+    content = "工艺正文" * 6000 + "尾部验收要求"
+    shown = history.present("knowledge", arguments, {"content": content})
+    ref = shown["_observation"]["ref"]
+    for index in range(25):
+        history.present("knowledge", {"index": index}, {"content": str(index)})
+    assert len(history.index()) == 26
+    assert history.index()[-1]["request_preview"] == json_text(arguments)
+    full = history.read({"ref": ref, "path": "/content"})
+    assert full["text"] == content and full["complete"] is True
+    found = history.read({"ref": ref, "path": "/content", "query": "尾部验收要求"})
+    assert found["text"].endswith("尾部验收要求") and found["next_offset"] is None
+    selected = history.read({"ref": ref, "path": "/content", "limit": len(content)})
+    assert selected["text"] == content
 
 
 @pytest.mark.asyncio
 async def test_react_tracks_original_before_presentation_and_reads_through_local_tool() -> None:
-    """任务账本获得完整回执，模型看到缩小结果后能通过注册工具补读原文。"""
+    """任务账本获得完整回执，模型完整读取回执后仍能通过注册工具查询原文。"""
     raw = {"complete": False, "content": "已审阅的组件规则" * 5000}
     llm = MagicMock()
     llm.generate = AsyncMock(

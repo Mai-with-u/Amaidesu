@@ -10,9 +10,8 @@ def build_observation_spec() -> ToolSpec:
         provider="minecraft",
         kind="sync",
         description=(
-            "读取本任务已经取得的原始观察。省略 ref 列出最近证据，可用 query 筛选来源或请求。"
-            "指定 ref 后用 path（JSON Pointer）选字段，用 offset/limit 分页；query 在该字段中查找文字。"
-            "deferred 表示正文尚未展开，不是空数据；需要那部分细节时必须读取。"
+            "读取本任务已经取得的原始观察。省略 ref 列出本任务全部证据，可用 query 筛选来源或请求。"
+            "指定 ref 后完整返回原文；可用 path（JSON Pointer）选字段，或显式设置 offset/limit 分页；query 查找文字。"
             "这是历史证据，不证明当前库存、位置或现场仍未变化；需要刷新时正常调用 Mod。"
         ),
         parameters_schema={
@@ -26,9 +25,9 @@ def build_observation_spec() -> ToolSpec:
                     "description": "读取原始结果或当时的完整工具参数",
                 },
                 "path": {"type": "string", "default": "", "description": "JSON Pointer，如 /data/content"},
-                "query": {"type": "string", "maxLength": 256},
+                "query": {"type": "string"},
                 "offset": {"type": "integer", "minimum": 0, "default": 0},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 12000, "default": 4000},
+                "limit": {"type": "integer", "minimum": 1, "description": "可选分页大小；省略则返回剩余全文"},
             },
             "additionalProperties": False,
         },

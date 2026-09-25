@@ -15,65 +15,17 @@ def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
-# 判断能否施工、能否重试和能否取料的证据始终直接呈现；大教材与枚举可按引用展开。
-_DECISION_FIELDS = frozenset(
-    {
-        "error",
-        "errors",
-        "issues",
-        "diagnostics",
-        "design_diagnostics",
-        "validation",
-        "missing",
-        "missing_materials",
-        "material_deficits",
-        "pending_decision",
-        "decision",
-        "decisions",
-        "constraints",
-        "authorization",
-        "permissions",
-        "forbidden_mods",
-        "expected_output",
-        "blockers",
-        "ok",
-        "success",
-        "accepted",
-        "status",
-        "state",
-        "complete",
-        "buildable",
-        "outcome_known",
-        "physical_layout_compiled",
-        "task_id",
-        "artifact_ref",
-        "blueprint_id",
-        "snapshot_id",
-        "plan_id",
-        "ready_to_execute",
-        # 嵌套机器失败的直接恢复依据保持可见，避免完整蓝图把容量或菜单失败原因淹没。
-        "inventory_capacity",
-        "cause_code",
-        "failure_type",
-        "detail",
-    }
-)
-
-
 class MinecraftObservations:
     """只保存本玩家已经取得的证据，重复查询仍真实执行，旧观察不会冒充最新世界状态。"""
 
-    def __init__(self, inline_chars: int = 6000, archive_chars: int = 8_000_000) -> None:
-        self.inline_chars = inline_chars
-        self.archive_chars = archive_chars
+    def __init__(self) -> None:
         self._entries: dict[str, dict[str, Any]] = {}
         self._sizes: dict[str, int] = {}
         self._scope = uuid.uuid4().hex[:8]
-        self._total_chars = 0
         self.repeated_results = 0
 
     def present(self, tool: str, arguments: dict[str, Any], value: dict[str, Any]) -> dict[str, Any]:
-        """先保存完整回执再投影；相同请求得到相同内容时复用正文引用并明确指出重复。"""
+        """完整保存并返回回执；相同请求与结果复用引用并标明重复。"""
         body = json_text(value)
         request = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)
         digest = hashlib.sha256((tool + request + body).encode()).hexdigest()[:24]
@@ -85,26 +37,10 @@ class MinecraftObservations:
         else:
             entry = {"value": json.loads(body), "tool": tool, "arguments": deepcopy(arguments)}
             self._sizes[ref] = len(body) + len(request)
-            self._total_chars += self._sizes[ref]
         entry["observed_at_ms"] = int(time.time() * 1000)
         self._entries[ref] = entry
-        # 优先淘汰最久未用的原文；最新一次巨大回执仍可读，过期引用明确报错而不返回别的资料。
-        while self._total_chars > self.archive_chars and len(self._entries) > 1:
-            oldest = next(iter(self._entries))
-            del self._entries[oldest]
-            self._total_chars -= self._sizes.pop(oldest)
-        # 明确选中的单份工艺/蓝图资料优先作为完整阅读单元；整本目录和超大文档仍按引用展开。
-        resources = value.get("resources")
-        selected_document = (
-            tool == "maicraft_perceive"
-            and arguments.get("view") == "knowledge"
-            and bool(arguments.get("resource_uri"))
-            and value.get("content_loaded") is True
-            and isinstance(resources, list)
-            and len(resources) == 1
-        )
-        budget = min(24_000, self.inline_chars * 4) if selected_document else self.inline_chars
-        result = self._project(value, ref, "", budget)
+        # 当前任务的回执与参数完整保留；正文直接进入模型，集中摘要后仍可按引用查询原文。
+        result = deepcopy(entry["value"])
         result["_observation"] = {
             "ref": ref,
             "observed_at_ms": entry["observed_at_ms"],
@@ -116,33 +52,6 @@ class MinecraftObservations:
         if repeated:
             result["_observation"]["hint"] = "本次真实查询没有新增内容；复用已有证据，或说明还缺少哪个具体字段。"
         return result
-
-    def _project(self, value: Any, ref: str, path: str, budget: int) -> Any:
-        """保留对象外形与决策字段，大正文明确换成可定位的阅读入口。"""
-        text = json_text(value)
-        if len(text) <= max(budget, 256) or not isinstance(value, (dict, list, str)):
-            return deepcopy(value)
-        if isinstance(value, dict):
-            result: dict[str, Any] = {}
-            remaining = budget
-            for key, child in value.items():
-                pointer = path + "/" + key.replace("~", "~0").replace("/", "~1")
-                shown = deepcopy(child) if key in _DECISION_FIELDS else self._project(child, ref, pointer, remaining)
-                result[key] = shown
-                remaining -= len(json_text(shown)) + len(key)
-            return result
-        marker: dict[str, Any] = {"deferred": True, "ref": ref, "path": path, "type": type(value).__name__}
-        if isinstance(value, str):
-            marker.update(chars=len(value), preview=value[: min(1000, max(0, budget // 3))])
-            headings = [line[:160] for line in value.splitlines() if line.startswith("#")]
-            if headings:
-                marker["headings"] = headings[:12]
-        else:
-            marker.update(
-                items=len(value),
-                preview=[self._project(child, ref, f"{path}/{index}", 256) for index, child in enumerate(value[:2])],
-            )
-        return marker
 
     def read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """通过 JSON Pointer 定位并分页阅读历史原文，搜索结果也保留可继续读取的偏移。"""
@@ -170,15 +79,16 @@ class MinecraftObservations:
             else:
                 raise ValueError(f"原始观察中不存在路径 {path}")
         text = value if isinstance(value, str) else json_text(value)
-        offset, limit = int(arguments.get("offset", 0)), int(arguments.get("limit", 4000))
-        if offset < 0 or not 1 <= limit <= 12000:
-            raise ValueError("offset 必须非负，limit 必须在 1 到 12000 之间")
+        offset = int(arguments.get("offset", 0))
+        limit = int(arguments["limit"]) if arguments.get("limit") is not None else None
+        if offset < 0 or (limit is not None and limit < 1):
+            raise ValueError("offset 必须非负，显式指定的 limit 必须为正数")
         if query:
             found = text.find(query, offset)
             if found < 0:
                 return {"ok": True, "ref": ref, "path": path, "found": False, "total_chars": len(text)}
-            offset = max(offset, found - min(200, limit // 4))
-        end = min(len(text), offset + limit)
+            offset = max(offset, found - (200 if limit is None else min(200, limit // 4)))
+        end = len(text) if limit is None else min(len(text), offset + limit)
         return {
             "ok": True,
             "ref": ref,
@@ -195,7 +105,7 @@ class MinecraftObservations:
         }
 
     def index(self, query: str = "") -> list[dict[str, Any]]:
-        """只列最近或匹配的证据入口，不把所有原件再次灌入上下文。"""
+        """列出本任务全部匹配证据及完整请求，保留原文引用供整理历史后查阅。"""
         entries = []
         for ref, entry in reversed(self._entries.items()):
             request = json_text(entry["arguments"])
@@ -205,11 +115,9 @@ class MinecraftObservations:
                 {
                     "ref": ref,
                     "tool": entry["tool"],
-                    "request_preview": request[:350],
+                    "request_preview": request,
                     "observed_at_ms": entry["observed_at_ms"],
                     "original_chars": self._sizes[ref],
                 }
             )
-            if len(entries) >= 20:
-                break
         return entries

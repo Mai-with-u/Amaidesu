@@ -54,9 +54,6 @@ __all__ = ["MinecraftAgent"]
 # 游戏决策使用独立用途；建筑设计的模型预算由子 Agent 自己声明。
 MINECRAFT_PROFILE = "minecraft"
 
-# 交付/上报文本截断（事件 payload 与兜底交付共用）
-_MAX_DELIVERY_TEXT = 800
-
 # 身体事件单页上限：一次增量读取最多取几条注意流事件（超出部分下次接着读）
 _ATTENTION_PAGE_LIMIT = 10
 
@@ -77,11 +74,11 @@ _GAMEPLAY_RULES = (
     "目标写入 expected_output，禁用模组写入 constraints.forbidden_mods。供料、安装与施工检查交给 Mod；"
     "库存、供电和产出实测不是设计前置条件，design_machine 仅为可选审阅。"
     "plan_facts 或 _pending_execution 确认 ready 的计划直接提交；具体诊断或相关现场变化才触发补查与修订。"
-    "\n资源与动力：Ponder 的创造发生器表示外部资源 IN，蓝图保留真实接收口并声明 external_inputs，"
+    "\n资源与动力：Ponder 的创造发生器表示外部资源 (应力) IN，蓝图保留真实接收口并声明 external_inputs，"
     "不照搬演示发生器；允许某模组不等于授权创造资源。优先接入附近已授权的传动网，"
     "需要寻找时用 perceive(view=kinetic_sources,query=短名称或ID)，施工后用 connect_external_input 接线；"
     "局部勘测未发现接口不证明附近没有动力，发现候选也不授权连接地下、隔墙或私人网络。"
-    "缺料不授权翻陌生箱子；仅在玩家明确要求搜索，或告示牌、可信记忆、聊天说明、真实历史观察"
+    "缺料优先使用AE网络，不授权翻陌生箱子；仅在玩家明确要求搜索，或告示牌、可信记忆、聊天说明、真实历史观察"
     "指向具体容器与目标材料时才定向取用，并遵守权限与保护范围。无合规库存来源时走已允许的合成或采集。"
     "no_space/inventory_capacity 先解决容量；已取得物品但 outcome_uncertain 时核验收尾，避免重复领取。"
 )
@@ -181,9 +178,7 @@ class MinecraftAgent(BaseAgent):
 
         # Agent 内部状态（内存，不持久化）
         self._mc_state: MinecraftAgentState = MinecraftAgentState()
-        self._observations = MinecraftObservations(
-            config.context.observation_inline_chars, config.context.archive_max_chars
-        )
+        self._observations = MinecraftObservations()
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
@@ -654,10 +649,7 @@ class MinecraftAgent(BaseAgent):
                         self._context_compactor.checkpoints = 0
                         self._mc_state.set_todos([])
                         # 原文引用只属于本次逻辑任务；后台唤醒和同任务补充要求继续使用已有证据。
-                        context = self.typed_config.context
-                        self._observations = MinecraftObservations(
-                            context.observation_inline_chars, context.archive_max_chars
-                        )
+                        self._observations = MinecraftObservations()
                     self._task_instructions.append(_content)
                     self._task_finished = False
                     self._task_suspended = False
@@ -754,9 +746,9 @@ class MinecraftAgent(BaseAgent):
                 elif not self._task_reported:
                     # 情形 3：无 report 无 handoff——系统兜底，主播必收到一次且仅一次交付
                     delivery = (response.content or "").strip()
-                    await self._emit_report("delivery", delivery[:_MAX_DELIVERY_TEXT] if delivery else "任务完成")
+                    await self._emit_report("delivery", delivery or "任务完成")
                     self._task_finished = True
-                    self._finish_delegated("succeeded", summary=delivery[:80] or "任务完成")
+                    self._finish_delegated("succeeded", summary=delivery or "任务完成")
                     self._logger.info(f"任务批次自然终止（{steps} 步），系统兜底交付")
                 else:
                     self._logger.info(f"任务批次结束（{steps} 步，已上报）")
@@ -1352,8 +1344,8 @@ class MinecraftAgent(BaseAgent):
         self._task_reported = True
         self._task_finished = kind == "delivery"
         self._task_suspended = kind == "escalation"
-        # 委派任务终态：交付 = 成功；升级 = 失败（需发起方介入）
-        self._finish_delegated("succeeded" if kind == "delivery" else "failed", summary=f"{kind}: {content[:80]}")
+        # 委派终态保留完整交付结论或受阻原因，主播据此处理尾部的材料与现场要求。
+        self._finish_delegated("succeeded" if kind == "delivery" else "failed", summary=f"{kind}: {content}")
         return None
 
     def _system_prompt(self) -> str:
@@ -1372,7 +1364,7 @@ class MinecraftAgent(BaseAgent):
             "全部完成后用 minecraft_report(kind=delivery) 交付总结再结束；"
             "确实无法自行解决时用 minecraft_report(kind=escalation) 上报后停止。"
             "execute 受理后复用宿主任务通知，无独立事项时调用 minecraft_wait；"
-            "观察中 deferred 的正文按 ref/path 用 minecraft_observation 补读。"
+            "历史整理后需要核对原始回执或请求时，按 ref/path 用 minecraft_observation 阅读。"
             "工具调用：一次可调多个工具（它们会依次执行）；执行串行但你可一次发出多个请求。"
         )
 
