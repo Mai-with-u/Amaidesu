@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -58,7 +59,7 @@ async def test_chat_basic():
         usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15)
     )
 
-    result = await client.chat(MESSAGES, model="test-model", temperature=0.7, max_tokens=99)
+    result = await client.chat(MESSAGES, model="test-model", temperature=0.7)
 
     assert result.success is True
     assert result.content == "world"
@@ -68,25 +69,26 @@ async def test_chat_basic():
         model="test-model",
         messages=MESSAGES,
         temperature=0.7,
-        max_tokens=99,
     )
 
 
 @pytest.mark.asyncio
-async def test_chat_timeout():
-    client, sdk_client = _make_client({"timeout": 0.1})
+async def test_chat_waits_past_legacy_provider_timeout() -> None:
+    """较慢的完整回复不会因旧 provider 时限被取消。"""
+    client, sdk = _make_client({"timeout": 0.001})
+    response = _response()
 
-    async def slow_create(**_kwargs: object) -> object:
-        await asyncio.sleep(10)
-        return _response()
+    async def complete() -> Any:
+        await asyncio.sleep(0.03)
+        return response
 
-    sdk_client.chat.completions.create.side_effect = slow_create
+    # AsyncMock 的异步 side_effect 负责模拟服务端持续生成。
+    async def delayed(**kwargs: Any) -> Any:
+        return await complete()
 
+    sdk.chat.completions.create.side_effect = delayed
     result = await client.chat(MESSAGES, model="test-model")
-
-    assert result.success is False
-    assert result.error is not None
-    assert "超时" in result.error
+    assert result.success and result.content == "world"
 
 
 @pytest.mark.asyncio
@@ -208,6 +210,7 @@ def test_auth_bearer():
         base_url="https://api.example.com/v1",
         default_headers=None,
         default_query=None,
+        timeout=None,
     )
 
 
@@ -228,6 +231,7 @@ def test_auth_header():
         base_url="https://api.example.com/v1",
         default_headers={"X-API-Key": "secret"},
         default_query=None,
+        timeout=None,
     )
 
 
@@ -247,6 +251,7 @@ def test_auth_query():
         base_url="https://api.example.com/v1",
         default_headers=None,
         default_query={"key": "secret"},
+        timeout=None,
     )
 
 
@@ -265,6 +270,7 @@ def test_auth_none():
         base_url="https://api.example.com/v1",
         default_headers=None,
         default_query=None,
+        timeout=None,
     )
 
 

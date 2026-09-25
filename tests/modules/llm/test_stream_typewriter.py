@@ -37,7 +37,6 @@ def _make_typewriter_client(received_event: asyncio.Event) -> type:
             *,
             model: str,
             temperature: Any = None,
-            max_tokens: Any = None,
             on_delta: Any = None,
             interrupt_flag: Any = None,
         ) -> Response:

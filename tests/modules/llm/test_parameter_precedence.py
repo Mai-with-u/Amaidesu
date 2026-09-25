@@ -12,16 +12,14 @@ from tests.modules.llm.test_output_integrity import sdk_response
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("supplied", "expected_limit", "expected_temperature"),
+    ("supplied", "expected_temperature"),
     [
-        ({"max_tokens": 2400, "temperature": 0.0}, 2400, 0.0),
-        ({}, 4096, 0.7),
+        ({"temperature": 0.0}, 0.0),
+        ({}, 0.7),
     ],
 )
-async def test_explicit_parameters_and_profile_defaults_reach_sdk(
-    supplied: dict, expected_limit: int, expected_temperature: float
-) -> None:
-    """调用方的零温度和摘要额度保持原值，未指定时继续采用原 profile 默认值。"""
+async def test_explicit_parameters_and_profile_defaults_reach_sdk(supplied: dict, expected_temperature: float) -> None:
+    """零温度穿过引擎与客户端，普通请求也不会注入旧输出额度。"""
     client, sdk = _make_client()
     sdk.close = AsyncMock()
     reply = sdk_response("{}", "stop", "短摘要")
@@ -43,5 +41,5 @@ async def test_explicit_parameters_and_profile_defaults_reach_sdk(
             await manager.cleanup()
     assert result.success
     sent = sdk.chat.completions.create.call_args.kwargs
-    assert sent["max_tokens"] == expected_limit
+    assert "max_tokens" not in sent
     assert sent["temperature"] == expected_temperature

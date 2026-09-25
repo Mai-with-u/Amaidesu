@@ -12,11 +12,10 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import Generator
 
 import pytest
 
-from src.modules.llm.client import LLMResponse
 from src.modules.llm.bootstrap import _ResolvedModel, _ResolvedProfile
 from src.modules.llm.engine import LLMManager
 from src.modules.llm.payload import Response as PayloadResponse
@@ -106,12 +105,10 @@ def _make_manager_with_fake_client(store: SQLiteDatabase, monkeypatch) -> LLMMan
     )
     manager._profiles["planner"] = _ResolvedProfile(
         profile_name="planner",
-        hard_timeout_ms=90_000,
         slow_threshold_ms=15_000,
         selection_strategy="sequential",
         seed=0,
         temperature=0.3,
-        max_tokens=4096,
         models=[_ResolvedModel(model_name="glm-4.7", model_identifier="glm-4.7", provider_name="zhipu")],
     )
     manager._model_call_counts["planner"] = {}
@@ -147,12 +144,10 @@ async def test_call_without_store_does_not_persist(monkeypatch) -> None:
     )
     manager._profiles["planner"] = _ResolvedProfile(
         profile_name="planner",
-        hard_timeout_ms=90_000,
         slow_threshold_ms=15_000,
         selection_strategy="sequential",
         seed=0,
         temperature=0.3,
-        max_tokens=4096,
         models=[_ResolvedModel(model_name="glm-4.7", model_identifier="glm-4.7", provider_name="zhipu")],
     )
     manager._model_call_counts["planner"] = {}

@@ -72,7 +72,6 @@ def _make_policy_client(behavior: Callable[[str], Optional[Exception]]) -> type:
             *,
             model: str,
             temperature: Any = None,
-            max_tokens: Any = None,
             on_delta: Any = None,
             interrupt_flag: Any = None,
         ) -> Response:

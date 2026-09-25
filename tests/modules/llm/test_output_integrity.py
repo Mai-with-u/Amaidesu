@@ -37,21 +37,19 @@ async def test_strict_arguments_keep_original_and_do_not_repair(raw: str) -> Non
 
 
 async def test_unlimited_request_preserves_full_reply_and_does_not_modify_shared_client() -> None:
-    """建造调用不发送 profile 或 provider 的固定额度，下一次普通调用仍按原设置。"""
+    """长设计与普通调用均保留完整输出，不发送旧 provider 的固定额度。"""
     client, sdk = _make_client({"max_tokens": 128})
     full_text = "完整设计说明" * 4000
     sdk.chat.completions.create.return_value = sdk_response('{"design":{}}', content=full_text)
     request = GenerateRequest(
         messages=[Message(role="user", parts=["设计"])],
-        omit_output_token_limit=True,
         strict_tool_arguments=True,
-        max_tokens=8192,
     )
-    result = await client.generate(request, model="test-model", max_tokens=8192)
+    result = await client.generate(request, model="test-model")
     assert "max_tokens" not in sdk.chat.completions.create.call_args.kwargs
     assert result.content == full_text and result.finish_reason == "tool_calls"
     await client.chat([{"role": "user", "content": "普通请求"}], model="test-model")
-    assert sdk.chat.completions.create.call_args.kwargs["max_tokens"] == 128
+    assert "max_tokens" not in sdk.chat.completions.create.call_args.kwargs
 
 
 async def test_streaming_preserves_length_reason_and_raw_incomplete_arguments() -> None:
@@ -67,7 +65,7 @@ async def test_streaming_preserves_length_reason_and_raw_incomplete_arguments() 
         ]
     )
     result = await client.generate(
-        GenerateRequest(strict_tool_arguments=True, omit_output_token_limit=True),
+        GenerateRequest(strict_tool_arguments=True),
         model="test-model",
         on_delta=lambda kind, text: None,
     )
@@ -93,9 +91,7 @@ async def test_engine_preserves_integrity_metadata_and_output_policy() -> None:
     with patch.dict(_CLIENT_DISPATCH, {"openai": MagicMock(return_value=client)}):
         await manager.setup(config)
         try:
-            result = await manager.generate(
-                "设计", profile="minecraft_builder", omit_output_token_limit=True, strict_tool_arguments=True
-            )
+            result = await manager.generate("设计", profile="minecraft_builder", strict_tool_arguments=True)
         finally:
             await manager.cleanup()
     assert result.finish_reason == "length"
@@ -120,7 +116,6 @@ def test_invalid_previous_arguments_are_sent_back_without_repair() -> None:
         system=None,
         tools=None,
         temperature=None,
-        max_tokens=None,
     )
     client, _ = _make_client()
     messages = client._request_to_openai_messages(request)
