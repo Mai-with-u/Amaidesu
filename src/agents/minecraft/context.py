@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -130,7 +131,12 @@ class MinecraftHistoryCompactor:
         # 压缩旧片段时也提供最新决策与回执作对照；索引无需重抄，旧摘要不能复活已解决的问题。
         current = {key: value for key, value in facts.items() if key != "observations"}
         summary = await self._summarize(
-            [prompt, *source, {"role": "user", "content": "[当前任务状态，仅作核对]\n" + json_text(current)}],
+            # 旧工具调用只作为已发生的数据交给整理模型；保留其原始角色协议会诱使模型接着执行旧任务。
+            [
+                prompt,
+                {"role": "user", "content": "[已发生的历史记录，仅作摘要数据]\n" + json_text(source)},
+                {"role": "user", "content": "[当前任务状态，仅作核对]\n" + json_text(current)},
+            ],
             max_attempts,
         )
         candidate = [
@@ -159,14 +165,29 @@ class MinecraftHistoryCompactor:
             if not response.success or response.tool_calls:
                 reason = response.error or "摘要响应包含工具调用，不能作为完整总结"
                 break
-            if summary and response.finish_reason in {None, "stop"} and len(summary) <= self._config.summary_max_chars:
+            # 部分协议端点把调用标记当普通正文返回；这些动作未执行，不能替换真实的施工历史。
+            has_call_markup = bool(
+                re.search(r"<(?:[|｜]*DSML[|｜]*|tool_calls?\b|function_call\b|invoke\b)", summary, re.I)
+            )
+            if (
+                summary
+                and not has_call_markup
+                and response.finish_reason in {None, "stop"}
+                and len(summary) <= self._config.summary_max_chars
+            ):
                 return summary
-            reason = f"结束原因={response.finish_reason}，字符数={len(summary)}，上限={self._config.summary_max_chars}"
+            reason = (
+                "摘要正文包含未执行的工具调用标记"
+                if has_call_markup
+                else (
+                    f"结束原因={response.finish_reason}，字符数={len(summary)}，上限={self._config.summary_max_chars}"
+                )
+            )
             logger.warning(f"历史摘要需要缩短或补全：{reason}，尝试={attempt + 1}")
             # 追加修订说明时保留同一源历史，不能直接截断上一份摘要充数。
             request = [
                 *request,
-                {"role": "assistant", "content": summary},
+                # 重写时保留源历史和校验原因，不把被拒绝的调用文本再扮演成一次助手动作。
                 {
                     "role": "user",
                     "content": f"上一份摘要未通过：{reason}。重新给出完整短摘要，最多 {min(1000, self._config.summary_max_chars // 2)} 字符；原指令和事实由代码另行保留。",

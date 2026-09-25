@@ -43,7 +43,9 @@ async def test_checkpoint_preserves_facts_and_recent_protocol_groups_then_stays_
     messages = history()
     # 当前计划独立于旧笔记保存；真正整理历史后，编号和 ready 状态仍留在事实区。
     facts = {
-        "original_instructions": ["建好；禁止取私人箱子"], "outcome_known": False, "artifact_ref": "design-1",
+        "original_instructions": ["建好；禁止取私人箱子"],
+        "outcome_known": False,
+        "artifact_ref": "design-1",
         "notebook": "旧笔记：方案尚待校验",
         "plan_facts": [{"plan_id": "validated-plan", "state": "ready", "result_ref": "plan-observation"}],
     }
@@ -138,6 +140,42 @@ async def test_failed_rewrite_is_bounded_by_remaining_budget() -> None:
 
 
 @pytest.mark.asyncio
+async def test_summary_reads_inert_history_and_rejects_textual_tool_calls() -> None:
+    """复现 DSML 混入摘要：旧调用只作为数据读取，模型写出的未执行动作必须被拒绝后重写。"""
+    llm = MagicMock()
+    malformed = '<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name="maicraft_task">get</invoke>'
+    llm.generate = AsyncMock(
+        side_effect=[
+            Response(success=True, content=malformed, finish_reason="stop"),
+            Response(success=True, content="十九个准备目标已匹配，缺少一根横向传动轴。", finish_reason="stop"),
+        ]
+    )
+    messages = history()
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    assert await compactor.compact(messages, [], {"original_instructions": ["在原平台建好机器"]})
+    request = llm.generate.call_args_list[0].args[0]
+    assert [item["role"] for item in request] == ["system", "user", "user"]
+    assert '"tool_calls"' in request[1]["content"] and '"role":"tool"' in request[1]["content"]
+    assert compactor.last_calls == 2 and malformed not in str(messages)
+    assert "十九个准备目标" in messages[2]["content"]
+
+
+@pytest.mark.asyncio
+async def test_repeated_textual_calls_do_not_replace_history() -> None:
+    """连续两次伪调用都不能覆盖未完成机器的原要求、方块证据和工具回执。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(
+        return_value=Response(success=True, content='<tool_call name="execute"/>', finish_reason="stop")
+    )
+    messages = history()
+    before = deepcopy(messages)
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    with pytest.raises(ValueError, match="工具调用标记"):
+        await compactor.compact(messages, [], {"original_instructions": ["建好"]})
+    assert messages == before and compactor.last_calls == 2
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_compares_old_doubts_with_current_decisions() -> None:
     """旧片段仍在讨论目标时，摘要必须看到后续已经采用的解释和真实执行回执。"""
     llm = MagicMock()
@@ -173,9 +211,7 @@ async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: i
             Response(success=True, content="施工已核验，目标完成", finish_reason="stop"),
         ]
     )
-    agent = MinecraftAgent(
-        MinecraftConfig(context=MinecraftContextConfig(max_context_chars=24000)), llm_manager=llm
-    )
+    agent = MinecraftAgent(MinecraftConfig(context=MinecraftContextConfig(max_context_chars=24000)), llm_manager=llm)
     agent._task_instructions = ["建好，保留原有约束"]
     agent._task_finished = False
     agent._task_steps = used_steps
