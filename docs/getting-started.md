@@ -124,6 +124,8 @@ enabled = ["streamer"]
 enabled = ["streamer", "text_adv"]
 ```
 
+`text_adv` 的完整用法（含必须开启的 `[tools.vision]` 前置依赖与典型直播流程）见[文字冒险 Agent 使用指南](guides/text-adv-agent.md)。
+
 #### 启用采集器
 
 采集器配置宿主是 `config/collectors.toml`（顶层 `enabled` 名单驱动装配）。默认已启用"控制台输入"与游戏注意流 `maicraft_attention`（游戏未运行时空转、无感），零依赖就能对话：
