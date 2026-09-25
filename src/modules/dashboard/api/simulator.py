@@ -385,6 +385,7 @@ async def create_gift(server: ServerDep, request: GiftCreateRequest) -> GiftCrea
         weight=request.weight,
         data_type=request.data_type,
         sc_amount_rmb=request.sc_amount_rmb,
+        unit_price=request.unit_price,
     )
     added = await gen.add_gift(gift)
     if not added:

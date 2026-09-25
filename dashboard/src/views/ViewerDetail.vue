@@ -27,6 +27,10 @@
         <span class="stat-label">SC 总额（{{ detail.sc_total_count }} 条）</span>
       </div>
       <div class="stat-card">
+        <span class="stat-value mono">¥{{ (detail.paid_amount / 1000).toFixed(2) }}</span>
+        <span class="stat-label">付费总额（{{ detail.paid_count }} 次，礼物/SC/上舰）</span>
+      </div>
+      <div class="stat-card">
         <span class="stat-value mono">{{ detail.session_count }}</span>
         <span class="stat-label">参与场次</span>
       </div>
@@ -112,6 +116,11 @@
                 </el-table-column>
                 <el-table-column prop="gift_name" label="礼物" min-width="120" />
                 <el-table-column prop="gift_count" label="件数" width="80" />
+                <el-table-column label="金额" width="100">
+                  <template #default="{ row }">
+                    <span class="mono">¥{{ (row.total_price / 1000).toFixed(2) }}</span>
+                  </template>
+                </el-table-column>
                 <el-table-column label="场次" width="90">
                   <template #default="{ row }">
                     <span class="mono">#{{ row.live_session_id ?? '—' }}</span>

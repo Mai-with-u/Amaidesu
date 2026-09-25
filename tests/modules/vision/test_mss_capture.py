@@ -24,6 +24,7 @@ from src.modules.vision.mss_capture import (
     MonitorInfo,
     MssScreenCapture,
     _derive_is_primary,
+    _per_monitor_dpi_thread,
 )
 
 
@@ -447,9 +448,7 @@ class TestGracefulDegradation:
     def test_mss_not_installed_returns_empty_result(self, monkeypatch):
         # 模拟"import mss 失败"：把模块标记成 _mss=None 且 _MSS_IMPORT_ERROR 有值
         monkeypatch.setattr(mss_capture_module, "_mss", None, raising=False)
-        monkeypatch.setattr(
-            mss_capture_module, "_MSS_IMPORT_ERROR", ImportError("no mss"), raising=False
-        )
+        monkeypatch.setattr(mss_capture_module, "_MSS_IMPORT_ERROR", ImportError("no mss"), raising=False)
         cap = MssScreenCapture()
         result = cap.capture(monitor_index=1)
         assert result.image is None
@@ -513,6 +512,68 @@ class TestRegionOutputInResult:
         cap = MssScreenCapture()
         result = cap.capture(monitor_index=0)
         assert result.region is None
+
+
+# ---------------------------------------------------------------------------
+# 线程级 DPI 上下文（混合 DPI 坐标自洽）
+# ---------------------------------------------------------------------------
+
+
+class TestPerMonitorDpiThread:
+    @staticmethod
+    def _current_thread_dpi_context() -> int | None:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        user32.GetThreadDpiAwarenessContext.argtypes = []
+        ctx = user32.GetThreadDpiAwarenessContext()
+        return int(ctx) if ctx else None
+
+    def test_context_restored_after_exit(self):
+        # Windows 上进出上下文后，线程 DPI 上下文应还原
+        before = self._current_thread_dpi_context()
+        with _per_monitor_dpi_thread():
+            pass
+        after = self._current_thread_dpi_context()
+        assert before == after
+
+    def test_nested_context_restore(self):
+        # 嵌套使用（capture 内 list_monitors + grab 两处包裹）也应正确还原
+        before = self._current_thread_dpi_context()
+        with _per_monitor_dpi_thread():
+            with _per_monitor_dpi_thread():
+                pass
+        assert before == self._current_thread_dpi_context()
+
+    def test_yields_on_non_windows(self, monkeypatch):
+        # 非 Windows 平台：API 缺失时按原行为直通（不抛、正常 yield）
+        monkeypatch.setattr(mss_capture_module.sys, "platform", "linux")
+        entered = False
+        with _per_monitor_dpi_thread():
+            entered = True
+        assert entered
+
+    def test_list_monitors_and_capture_are_wrapped(self, monkeypatch):
+        # 枚举与抓图的 mss 调用都必须在 DPI 上下文内执行
+        fake_sct = _FakeSct(
+            monitors=[{"left": 0, "top": 0, "width": 800, "height": 600}],
+        )
+        _install_fake_mss(monkeypatch, fake_sct)
+
+        real_cm = _per_monitor_dpi_thread
+        enter_count = {"n": 0}
+
+        def _counting_cm():
+            enter_count["n"] += 1
+            return real_cm()
+
+        monkeypatch.setattr(mss_capture_module, "_per_monitor_dpi_thread", _counting_cm)
+
+        cap = MssScreenCapture()
+        cap.list_monitors()  # 1 次
+        cap.capture(monitor_index=1)  # capture 内部再调 list_monitors + grab，共 2 次
+        assert enter_count["n"] == 3
 
 
 # ---------------------------------------------------------------------------

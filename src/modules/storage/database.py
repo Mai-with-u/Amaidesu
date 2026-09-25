@@ -83,8 +83,8 @@ class SQLiteDatabase:
         await db.initialize()
         # 领域读写经仓储（组合根按消费者需要分发）
         rows = await db.chat.list_recent_live_chat(live_session_id=1)
-        # 私有表自管模块的原始执行面（仅此用途）
-        rows = await db.execute("SELECT * FROM _memory_facts")
+        # 模块自管表/自定义查询的原始执行面
+        rows = await db.execute("SELECT * FROM viewer_facts WHERE user_id = ?", ("123",))
         await db.close()
 
     多实例场景（不同 DB 文件）可独立创建；共用一个文件的不同实例

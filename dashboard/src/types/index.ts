@@ -501,6 +501,7 @@ export interface SimGift {
   category: string;
   weight: number;
   data_type: string;
+  unit_price: number;
   sc_amount_rmb: number | null;
 }
 
@@ -733,6 +734,10 @@ export interface ViewerListItem {
   gift_count: number;
   replied_count: number;
   interaction_count: number;
+  /** 付费次数 = 礼物 + SC + 上舰（B 站不计银瓜子免费礼物） */
+  paid_count: number;
+  /** 付费总额（金瓜子，展示层 ÷1000 = 元） */
+  paid_amount: number;
   last_active_ms: number;
 }
 
@@ -768,6 +773,10 @@ export interface ViewerDetail {
   gift_count: number;
   replied_count: number;
   interaction_count: number;
+  /** 付费次数 = 礼物 + SC + 上舰 */
+  paid_count: number;
+  /** 付费总额（金瓜子，展示层 ÷1000 = 元） */
+  paid_amount: number;
   last_active_ms: number;
   first_seen_ms: number | null;
   gift_total_count: number;
@@ -800,6 +809,8 @@ export interface ViewerGiftItem {
   live_session_id: number | null;
   gift_name: string;
   gift_count: number;
+  /** 标价总额（金瓜子，展示层 ÷1000 = 元） */
+  total_price: number;
   simulated: boolean;
 }
 

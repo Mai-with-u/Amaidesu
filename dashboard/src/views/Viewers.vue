@@ -63,6 +63,13 @@
         <el-table-column prop="gift_count" label="礼物" width="90" />
         <el-table-column prop="replied_count" label="被回复" width="90" />
         <el-table-column prop="interaction_count" label="互动" width="90" />
+        <el-table-column label="付费金额" width="110" align="right">
+          <template #default="{ row }">
+            <span class="mono" :title="`${row.paid_count} 次付费（礼物+SC+上舰）`">
+              ¥{{ (row.paid_amount / 1000).toFixed(2) }}
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column label="最后活跃" width="130">
           <template #default="{ row }">
             <span :title="formatTime(row.last_active_ms)">{{
@@ -116,6 +123,7 @@ const ORDER_OPTIONS = [
   { label: '按礼物数', value: 'gift_count' },
   { label: '按被回复', value: 'replied_count' },
   { label: '按互动数', value: 'interaction_count' },
+  { label: '按付费', value: 'paid_amount' },
   { label: '按最近活跃', value: 'last_active_ms' },
 ] as const;
 

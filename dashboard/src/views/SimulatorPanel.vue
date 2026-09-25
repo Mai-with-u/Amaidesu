@@ -227,6 +227,11 @@
               </el-table-column>
               <el-table-column prop="weight" label="权重" width="80" />
               <el-table-column prop="data_type" label="事件类型" width="120" />
+              <el-table-column label="标价" width="90">
+                <template #default="{ row }">
+                  {{ row.unit_price > 0 ? `¥${(row.unit_price / 1000).toFixed(2)}` : '—' }}
+                </template>
+              </el-table-column>
               <el-table-column label="SC 金额" width="90">
                 <template #default="{ row }">
                   {{ row.sc_amount_rmb != null ? `¥${row.sc_amount_rmb}` : '—' }}
@@ -402,6 +407,9 @@
             <el-option label="super_chat 醒目留言" value="super_chat" />
           </el-select>
         </el-form-item>
+        <el-form-item label="标价(金瓜子)">
+          <el-input-number v-model="giftForm.unit_price" :min="0" />
+        </el-form-item>
         <el-form-item v-if="giftForm.category === 'sc'" label="SC 金额(元)">
           <el-input-number v-model="giftForm.sc_amount_rmb" :min="1" />
         </el-form-item>
@@ -501,6 +509,7 @@ const emptyGiftForm = () => ({
   category: 'normal',
   weight: 1,
   data_type: 'gift',
+  unit_price: 0,
   sc_amount_rmb: undefined as number | undefined,
 });
 
@@ -776,6 +785,7 @@ function openGiftDialog(row?: SimGift) {
     giftForm.category = row.category;
     giftForm.weight = row.weight;
     giftForm.data_type = row.data_type;
+    giftForm.unit_price = row.unit_price;
     giftForm.sc_amount_rmb = row.sc_amount_rmb ?? undefined;
   }
   giftDialogVisible.value = true;
@@ -792,6 +802,7 @@ async function saveGift() {
         category: giftForm.category,
         weight: giftForm.weight,
         data_type: giftForm.data_type,
+        unit_price: giftForm.unit_price,
         sc_amount_rmb: giftForm.sc_amount_rmb ?? null,
       };
       const res = await simulatorApi.updateGift(giftFormOriginalId.value, payload);
@@ -807,6 +818,7 @@ async function saveGift() {
         category: giftForm.category,
         weight: giftForm.weight,
         data_type: giftForm.data_type,
+        unit_price: giftForm.unit_price,
         sc_amount_rmb: giftForm.sc_amount_rmb ?? null,
       });
       if (res.data.success) {
