@@ -197,3 +197,29 @@ async def test_invalid_observation_reads_remain_correctable(bad_arguments: dict)
         assert not registry.is_tripped("minecraft_observation")
     result = await registry.invoke(ToolInvocation(tool_name="minecraft_observation", arguments={"ref": ref}))
     assert result.success and '"x":3' in result.structured_content["text"]
+
+
+def test_attention_cursor_does_not_turn_same_failed_task_into_new_evidence() -> None:
+    """旁边的身体事件推动订阅游标时，反复查询同一失败格仍应被识别为重复，原回执则逐份完整保存。"""
+    history = MinecraftObservations()
+    args = {"action": "get", "task_id": "machine-1", "path": "/terminal/result/data"}
+    receipt = {
+        "task_id": "machine-1",
+        "state": "failed",
+        "failure_code": "placement_no_progress",
+        "next_attention": {"after_cursor": 1},
+    }
+    first = history.present("maicraft_task", args, receipt)
+    changed_cursor = deepcopy(receipt)
+    changed_cursor["next_attention"]["after_cursor"] = 2
+    second = history.present("maicraft_task", args, changed_cursor)
+    assert not first["_observation"]["same_request_and_result"]
+    assert second["_observation"]["same_request_and_result"]
+    assert first["_observation"]["ref"] != second["_observation"]["ref"]
+    reordered = dict(reversed(list(changed_cursor.items())))
+    assert history.present("maicraft_task", args, reordered)["_observation"]["same_request_and_result"]
+    original = history.read({"ref": second["_observation"]["ref"], "path": "/next_attention"})
+    assert '"after_cursor":2' in original["text"]
+    # 真正的施工失败发生变化时，允许模型重新判断，不能因任务编号相同就丢弃新的诊断。
+    changed_cursor["failure_code"] = "material_exhausted"
+    assert not history.present("maicraft_task", args, changed_cursor)["_observation"]["same_request_and_result"]

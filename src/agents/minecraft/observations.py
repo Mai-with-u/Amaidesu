@@ -42,6 +42,7 @@ class MinecraftObservations:
         self._scope = uuid.uuid4().hex[:8]
         self.repeated_results = 0
         self._read_fingerprints: set[str] = set()
+        self._evidence_fingerprints: set[str] = set()
 
     def present(self, tool: str, arguments: dict[str, Any], value: dict[str, Any]) -> dict[str, Any]:
         """完整保存并返回回执；相同请求与结果复用引用并标明重复。"""
@@ -49,9 +50,23 @@ class MinecraftObservations:
         request = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)
         digest = hashlib.sha256((tool + request + body).encode()).hexdigest()[:24]
         ref = f"obs_{self._scope}_{digest}"
-        repeated = ref in self._entries
+        # 失败任务的 next_attention 游标会随别的事件前进；它只是继续订阅的地址，不是这次施工出现了新结果。
+        reading_task = tool == "maicraft_task" and arguments.get("action") in {"get", "list"}
+        reading_plan = tool == "maicraft_plan" and arguments.get("plan_id") and "goal" not in arguments
+        evidence = (
+            {key: item for key, item in value.items() if key != "next_attention"}
+            if reading_task or reading_plan
+            else value
+        )
+        # JSON 对象字段重排也不产生新施工事实，原始字段顺序仍保存在独立回执中。
+        canonical = json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        signature = hashlib.sha256((tool + request + canonical).encode()).hexdigest()
+        repeated = signature in self._evidence_fingerprints
+        self._evidence_fingerprints.add(signature)
         if repeated:
             self.repeated_results += 1
+        # 原件仍按完整回执保存，游标变化后的新引用不能被旧原件替代；重复标记只用于判断是否取得新施工证据。
+        if ref in self._entries:
             entry = self._entries.pop(ref)
         else:
             entry = {"value": json.loads(body), "tool": tool, "arguments": deepcopy(arguments)}

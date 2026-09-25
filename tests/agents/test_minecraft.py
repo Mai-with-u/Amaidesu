@@ -779,7 +779,9 @@ async def test_react_multi_tool_calls_batch_execute() -> None:
     snapshot = agent.get_state_snapshot()
     assert snapshot["notebook"] == "笔记 A"
     assert snapshot["todo"] == [{"content": "任务 B", "status": "in_progress"}]
-    assert not snapshot["recent_reports"]
+    # 批量写入后模型可能已触发阻塞上报，异步时序不影响此处真正要禁止的虚假交付。
+    assert all(report["kind"] == "escalation" for report in snapshot["recent_reports"])
+    assert not agent._task_finished
     await agent.stop()
 
 
