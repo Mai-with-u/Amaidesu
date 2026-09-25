@@ -140,6 +140,17 @@
             >
               {{ modelNameOf(entry) }}
             </span>
+            <span
+              v-if="ctxRatioOf(entry) !== null"
+              class="d-pill d-pill--ctx"
+              :class="{ 'is-warn': (ctxRatioOf(entry) ?? 0) > 0.8 }"
+              :title="ctxTitleOf(entry)"
+            >
+              <span class="d-pill-ctx-bar">
+                <span class="d-pill-ctx-bar-fill" :style="ctxBarStyleOf(entry)"></span>
+              </span>
+              上下文 {{ ctxLabelOf(entry) }}
+            </span>
             <a
               v-if="entry.llmRequestId"
               class="d-link"
@@ -295,6 +306,17 @@
               :title="modelNameOf(entry)"
             >
               {{ modelNameOf(entry) }}
+            </span>
+            <span
+              v-if="ctxRatioOf(entry) !== null"
+              class="d-pill d-pill--ctx"
+              :class="{ 'is-warn': (ctxRatioOf(entry) ?? 0) > 0.8 }"
+              :title="ctxTitleOf(entry)"
+            >
+              <span class="d-pill-ctx-bar">
+                <span class="d-pill-ctx-bar-fill" :style="ctxBarStyleOf(entry)"></span>
+              </span>
+              上下文 {{ ctxLabelOf(entry) }}
             </span>
             <a
               class="d-link"
@@ -506,6 +528,7 @@ watch(
         void fetchTokenStats(requestId);
       }
     }
+    if (visible.size > 0) void ensureContextWindows();
     // 懒渲染集合同步收缩：只保留当前在列条目，避免长会话下随事件 id 无限增长
     if (openedPayloads.value.size > 0) {
       const liveIds = new Set(entries.map(entry => entry.id));
@@ -561,6 +584,65 @@ function tokensTitleOf(entry: ShowEntry): string {
 /** 模型名徽标：本轮 Planner 请求实际使用的模型标识（空串不渲染） */
 function modelNameOf(entry: ShowEntry): string {
   return statsOf(entry)?.modelName ?? '';
+}
+
+/** 模型上下文窗口（model_name → token 总量，取自 GET /llm/usage 装配期快照）。
+ * 整页只取一次——窗口来自 [[llm_models]].context_window 配置，改配置需重启应用，
+ * 运行期不变。未配置（0）的模型不进映射，水位胶囊按 v-if 隐藏（与用量页一致）。 */
+const contextWindows = ref<Map<string, number>>(new Map());
+let contextWindowsLoading = false;
+let contextWindowsLoaded = false;
+
+async function ensureContextWindows(): Promise<void> {
+  if (contextWindowsLoaded || contextWindowsLoading) return;
+  contextWindowsLoading = true;
+  try {
+    const response = await llmApi.getUsage();
+    const next = new Map<string, number>();
+    for (const [model, stats] of Object.entries(response.data ?? {})) {
+      if (stats.context_window > 0) next.set(model, stats.context_window);
+    }
+    contextWindows.value = next;
+    contextWindowsLoaded = true;
+  } catch (e) {
+    console.warn('[FeedTimeline] 模型上下文窗口获取失败（下一条目到达时重试）', e);
+  } finally {
+    contextWindowsLoading = false;
+  }
+}
+
+/** 本条目请求所用模型的上下文窗口（未配置/未加载返回 0） */
+function contextWindowOf(entry: ShowEntry): number {
+  const stats = statsOf(entry);
+  if (!stats || !stats.modelName) return 0;
+  return contextWindows.value.get(stats.modelName) ?? 0;
+}
+
+/** 上下文水位（prompt_tokens / context_window）；窗口未配置返回 null（胶囊不渲染） */
+function ctxRatioOf(entry: ShowEntry): number | null {
+  const stats = statsOf(entry);
+  const win = contextWindowOf(entry);
+  if (!stats || win <= 0) return null;
+  return stats.promptTokens / win;
+}
+
+/** 上下文进度条填充宽度（钳到 100%） */
+function ctxBarStyleOf(entry: ShowEntry): string {
+  const ratio = ctxRatioOf(entry) ?? 0;
+  return `width: ${Math.min(100, ratio * 100).toFixed(1)}%`;
+}
+
+/** 上下文徽标文案（"上下文 31%"） */
+function ctxLabelOf(entry: ShowEntry): string {
+  const ratio = ctxRatioOf(entry) ?? 0;
+  return `${Math.round(ratio * 100)}%`;
+}
+
+/** 上下文徽标悬浮提示：分子/分母绝对值 */
+function ctxTitleOf(entry: ShowEntry): string {
+  const stats = statsOf(entry);
+  const win = contextWindowOf(entry);
+  return `本轮输入 ${(stats?.promptTokens ?? 0).toLocaleString()} / 窗口 ${win.toLocaleString()} tokens`;
 }
 
 /** 弹幕 message_id → 时间线条目（用于发言/决策卡回复引用反查）。
@@ -1064,7 +1146,7 @@ async function copyText(text: string): Promise<void> {
   text-decoration: underline;
 }
 
-/* 统计胶囊：底色块让三项统计在元信息行里一眼可分（缓存=绿 / 用量=蓝 / 模型=中性描边） */
+/* 统计胶囊：底色块让各项统计在元信息行里一眼可分（缓存=绿 / 用量=蓝 / 模型=中性描边 / 水位=蓝） */
 .d-pill {
   padding: 0 6px;
   border-radius: var(--radius-sm);
@@ -1086,6 +1168,31 @@ async function copyText(text: string): Promise<void> {
   background: var(--bg-card);
   color: var(--text-secondary);
   border: 1px solid var(--border-color-light);
+}
+/* 上下文水位胶囊：迷你进度条 + 百分比；>80% 转警告橙（色阶与用量页水位条一致） */
+.d-pill--ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(64, 158, 255, 0.12);
+  color: var(--color-primary);
+}
+.d-pill--ctx.is-warn {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+.d-pill-ctx-bar {
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(127, 127, 127, 0.3);
+  overflow: hidden;
+}
+.d-pill-ctx-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: currentColor;
 }
 
 .d-raw {
