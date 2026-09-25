@@ -132,14 +132,28 @@
             </span>
             <span class="grow" />
             <template v-if="sessionMode === 'live'">
-              <el-button
-                size="small"
-                :type="injectOpen ? 'primary' : 'default'"
-                @click="injectOpen = !injectOpen"
-              >
-                注入弹幕
-              </el-button>
-              <el-button size="small" @click="testDialogVisible = true">决策测试</el-button>
+              <!-- 测试干预按钮组：两个入口一个考全链路（异步、可能限流不回应）、
+                一个直驱决策（同步、立即出结果），语义差异靠 tooltip 与面板内说明承载 -->
+              <el-button-group>
+                <el-tooltip
+                  content="模拟一名观众发弹幕，走与真实弹幕完全相同的链路（攒批 → 限流 → 主播自行决定是否回应）；回应异步出现，可能因限流不回应"
+                  placement="bottom"
+                >
+                  <el-button
+                    size="small"
+                    :type="injectOpen ? 'primary' : 'default'"
+                    @click="injectOpen = !injectOpen"
+                  >
+                    注入弹幕
+                  </el-button>
+                </el-tooltip>
+                <el-tooltip
+                  content="跳过攒批与限流，把弹幕直接交给主播当场跑一次决策，结果立即以决策卡出现"
+                  placement="bottom"
+                >
+                  <el-button size="small" @click="testDialogVisible = true">立即决策测试</el-button>
+                </el-tooltip>
+              </el-button-group>
               <!-- 显示模式：时间线=单列沿脊线；会话=观众左/主播右气泡对齐 -->
               <el-radio-group v-model="displayMode" size="small">
                 <el-radio-button value="timeline">时间线</el-radio-button>
@@ -193,7 +207,10 @@
                 placeholder="弹幕内容——走与真实弹幕完全相同的处理链路"
               />
               <div class="inject-actions">
-                <span class="inject-hint">消息经真实弹幕链路进入决策，结果以决策卡落在时间线</span>
+                <span class="inject-hint">
+                  模拟一名观众发弹幕：与真实弹幕走完全相同的链路（攒批 → 限流 →
+                  主播自行决定是否回应），回应异步出现，可能因限流不回应
+                </span>
                 <span class="grow" />
                 <el-button size="small" @click="injectOpen = false">收起</el-button>
                 <el-button size="small" type="primary" :loading="injecting" @click="submitInject">
@@ -230,13 +247,17 @@
     </div>
 
     <!-- 决策测试对话框（手动驱动一次两阶段决策）                         -->
-    <el-dialog v-model="testDialogVisible" title="主播决策测试" width="480px">
+    <el-dialog v-model="testDialogVisible" title="立即决策测试" width="480px">
       <div class="test-form">
+        <p class="test-intro">
+          与「注入弹幕」不同：本操作跳过攒批窗口与主动发言限流，把弹幕直接交给主播当场跑一次完整决策——
+          Planner / Replyer 与真实链路同一份代码，结果立即以决策卡落在时间线。
+        </p>
         <el-input
           v-model="testText"
           type="textarea"
           :rows="3"
-          placeholder="测试弹幕文本（作为一批弹幕进入真实决策链路）"
+          placeholder="测试弹幕文本（直接交给主播当场决策，不进攒批窗口）"
         />
         <div class="test-options">
           <el-checkbox v-model="testForced">强制回应（豁免低置信度降级）</el-checkbox>
@@ -283,7 +304,7 @@
  * - 顶栏：连接状态、决策管线阶段徽章、模拟器模式徽章
  *
  * 干预入口（复用既有 API）：注入弹幕（debug/inject-message，与真实弹幕同链路）、
- * 决策测试（streamer/test-decision，结果以决策卡形式落进时间线）、
+ * 立即决策测试（streamer/test-decision，结果以决策卡形式落进时间线）、
  * 主动发言真实链路置位（streamer/trigger-proactive，仅置位、走 ProactiveTrigger 限流）。
  *
  * 数据来源：
@@ -692,6 +713,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
             text: `送出 ${str(entry.gift_name)} ×${num(entry.gift_count) ?? 1}`,
             badge: '礼物',
             messageId: str(entry.message_id),
+            simulated: entry.simulated === true,
           }),
         );
         return;
@@ -708,6 +730,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
             badge: 'SC',
             money: amount != null ? `¥${formatAmount(amount)}` : '',
             messageId: str(entry.message_id),
+            simulated: entry.simulated === true,
           }),
         );
         return;
@@ -724,6 +747,7 @@ async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
               ? `${str(entry.user_name) || '观众'} 进入直播间`
               : str(entry.content),
           messageId: str(entry.message_id),
+          simulated: entry.simulated === true,
         }),
       );
     });
@@ -1546,6 +1570,15 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+.test-intro {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
 }
 .test-options {
   display: flex;

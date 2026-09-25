@@ -95,6 +95,13 @@
             >
               {{ entry.badge }}
             </span>
+            <span
+              v-if="entry.simulated"
+              class="act-source"
+              title="由「立即决策测试」手动驱动，非真实弹幕触发"
+            >
+              测试
+            </span>
             <span class="grow" />
             <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
           </div>
@@ -328,6 +335,9 @@
             <div class="bubble-head">
               <span class="who" :title="entry.actor">{{ entry.actor }}</span>
               <span v-if="entry.badge" class="chip">{{ entry.badge }}</span>
+              <span v-if="entry.simulated" class="chip" title="来自控制台注入的模拟消息">
+                模拟
+              </span>
               <span v-if="entry.money" class="money mono">{{ entry.money }}</span>
               <span class="grow" />
               <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>

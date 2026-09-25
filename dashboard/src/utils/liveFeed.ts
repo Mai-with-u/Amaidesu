@@ -88,6 +88,8 @@ export interface ShowEntry {
   llmRequestId: string;
   /** 来源标签文本（工具调用的归属 Agent / 游戏 Agent 上报）。空串表示无来源 */
   source: string;
+  /** 调试来源标记：弹幕来自控制台注入（simulated）、决策由「立即决策测试」手动驱动 */
+  simulated: boolean;
   /** 工具卡参数药丸。空数组表示无入参或入参非对象，正文回退 text */
   argPills: ToolArgPill[];
 }
@@ -235,6 +237,7 @@ export function makeEntry(base: {
   detail?: Record<string, unknown> | null;
   llmRequestId?: string;
   source?: string;
+  simulated?: boolean;
   argPills?: ToolArgPill[];
 }): ShowEntry {
   const actor = base.actor ?? '';
@@ -256,6 +259,7 @@ export function makeEntry(base: {
     detail: base.detail ?? null,
     llmRequestId: base.llmRequestId ?? '',
     source: base.source ?? '',
+    simulated: base.simulated ?? false,
     argPills: base.argPills ?? [],
   };
 }
@@ -281,6 +285,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
       text: giftName ? `送出 ${giftName} ×${count}` : fallback(),
       badge: '礼物',
       messageId,
+      simulated: bool(data.simulated),
     });
   }
 
@@ -296,6 +301,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
       badge: 'SC',
       money: amount != null ? `¥${formatAmount(amount)}` : '',
       messageId,
+      simulated: bool(data.simulated),
     });
   }
 
@@ -316,6 +322,7 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
     actor,
     text: fallback(),
     messageId,
+    simulated: bool(data.simulated),
   });
 }
 
@@ -416,6 +423,7 @@ export function fromDecision(id: string, tsMs: number, data: Record<string, unkn
     replyTo: str(data.reply_to_message_id),
     detail: data,
     llmRequestId: str(data.llm_request_id),
+    simulated: str(data.trigger_reason) === 'dashboard:debug_test',
   });
 }
 
@@ -431,6 +439,7 @@ function fromVerdict(id: string, tsMs: number, data: Record<string, unknown>): S
     roundId: str(data.round_id),
     replyTo: str(data.reply_to_message_id),
     detail: data,
+    simulated: str(data.trigger_reason) === 'dashboard:debug_test',
   });
 }
 
@@ -611,10 +620,12 @@ export function buildLiveEntries(events: FeedEvent[], hiddenIds: Set<string>): S
     } else if (entry.kind === 'decision' && entry.roundId) {
       const verdict = verdictByRound.get(entry.roundId);
       if (verdict) {
-        // decision 的统计/失败信息回填裁决卡；decision 自身不再成卡
+        // decision 的统计/失败信息回填裁决卡；decision 自身不再成卡。
+        // simulated 一并回填：verdict 载荷不带 trigger_reason，测试标记只能在轮末补上
         verdict.detail = decisionDetail(entry) || verdict.detail;
         verdict.llmRequestId = entry.llmRequestId || verdict.llmRequestId;
         verdict.failed = entry.failed;
+        verdict.simulated = verdict.simulated || entry.simulated;
         if (entry.failed) {
           verdict.text = entry.text;
           verdict.badge = '失败';
