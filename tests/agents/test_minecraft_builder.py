@@ -856,7 +856,17 @@ async def test_real_completion_event_wakes_parent_once_with_design_reference(
         await asyncio.wait_for(parent_called.wait(), 2)
         assert len(changes) == 1 and changes[0].executor == "minecraft_builder"
         assert changes[0].snapshot["result"]["artifact_ref"] == "draft-1"
-        assert parent.get_state_snapshot()["recent_reports"] == []
+        if not stall_at_completion:
+            # 设计已有结果而父模型连续不发起施工时，应上报需要定夺，不能默默停在工地或宣称建好。
+            async def wait_for_suspension() -> None:
+                while not parent._task_suspended:
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(wait_for_suspension(), 2)
+            assert parent.get_state_snapshot()["recent_reports"][-1]["kind"] == "escalation"
+            assert not parent._task_finished
+        else:
+            assert parent.get_state_snapshot()["recent_reports"] == []
         assert parent._pending_task_count() == 1
         if stall_at_completion:
             assert len(harness.mod.operations("build")) == 1

@@ -784,9 +784,8 @@ class MinecraftAgent(BaseAgent):
                 blocked_design = self._design_progress.observe(call.name, arguments, observation)
                 if blocked_design:
                     # 已知拒绝尚未产生游戏动作，停止当前批次并保存原任务，避免继续消耗推理去重放同一错误。
-                    self._task_suspended = True
                     self._logger.warning(blocked_design)
-                    await self.emit_attention_required(blocked_design)
+                    await self._suspend_with_report(blocked_design)
                     return
 
             # 情形 1/2：LLM 已 report——本轮工具执行完后停止（delivery/escalation 语义）
@@ -811,9 +810,8 @@ class MinecraftAgent(BaseAgent):
     async def _continue_after_no_progress(self, messages: List[Dict[str, Any]], reminded: bool, reason: str) -> bool:
         """先带着当前决策提示模型推进；仍空转时保留任务并让出，避免反复读回执和生成摘要。"""
         if reminded:
-            self._task_suspended = True
             self._logger.warning(f"Minecraft 任务无新进展：{reason}")
-            await self.emit_attention_required(
+            await self._suspend_with_report(
                 f"模型未推进需要行动的任务：{reason}；已保留原目标、待办和任务编号，等待继续指令"
             )
             return False
@@ -972,8 +970,7 @@ class MinecraftAgent(BaseAgent):
             raise
         except Exception as exc:  # noqa: BLE001 - 整理失败保留任务，不用半份摘要继续游戏
             self._logger.warning(f"Minecraft 历史整理失败，原任务已保留：{exc}", exc=True)
-            self._task_suspended = True
-            await self.emit_attention_required(f"上下文整理失败，任务已保留：{exc}")
+            await self._suspend_with_report(f"上下文整理失败，任务已保留：{exc}")
             return False
         finally:
             # 首次摘要和修订都计入进展统计，整理成功后继续处理原游戏目标。
@@ -1432,6 +1429,9 @@ class MinecraftAgent(BaseAgent):
         if self._task_tracker is None:
             self._delegated_batch_ids.clear()
             return
+        # 收到继续指令后，旧委派与新补充指令共同恢复运行，直到最终交付才移除原委派。
+        for tid in self._delegated_finished_ids:
+            self._task_tracker.ledger.update(tid, "running", summary="执行 Agent 已恢复原任务")
         for tid in self._delegated_batch_ids:
             self._task_tracker.ledger.update(tid, "running", summary="执行 Agent 已开始处理")
             self._delegated_finished_ids.append(tid)
@@ -1444,6 +1444,19 @@ class MinecraftAgent(BaseAgent):
         for tid in self._delegated_finished_ids:
             self._task_tracker.ledger.update(tid, status, summary=summary)
         self._delegated_finished_ids.clear()
+
+    async def _suspend_with_report(self, reason: str) -> None:
+        """角色已停止自动行动时主动上报待定夺，并保留原委派，不能让主播仍把它当成正在施工。"""
+        self._task_suspended = True
+        if self._task_tracker is not None:
+            for task_id in self._delegated_finished_ids:
+                self._task_tracker.ledger.update(
+                    task_id,
+                    "waiting_for_decision",
+                    summary=reason,
+                    snapshot={"waiting_for_instruction": True, "reason": reason},
+                )
+        await self._emit_report("escalation", reason)
 
     # ==================================================================
     # 上报通道（玩家→主播：delivery/escalation）

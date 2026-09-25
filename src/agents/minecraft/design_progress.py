@@ -23,12 +23,23 @@ class MachineDesignProgress:
         goal = arguments.get("goal")
         if name not in {"maicraft_plan", "maicraft_execute"} or not isinstance(goal, dict):
             return None
-        if goal.get("ability") != "maicraft:design_machine":
+        # 机器可以直接经 build_machine 编译；修改既有工地也必须受同一重复拒绝判断保护。
+        if goal.get("ability") not in {"maicraft:design_machine", "maicraft:build_machine", "maicraft:modify_machine"}:
             return None
         error = observation.get("error")
+        validation = observation.get("validation")
+        if isinstance(validation, dict) and validation.get("valid") is False:
+            # 编译器的 needs_revision 回执没有传输错误，仍明确表示这份蓝图尚未通过校验。
+            error = {
+                "code": "invalid_semantic_goal",
+                "message": "machine_blueprint_requires_revision",
+                "design_diagnostics": validation,
+                "outcome_known": True,
+            }
         if (
             observation.get("accepted")
-            or observation.get("ok") is not False
+            or not isinstance(error, dict)
+            and observation.get("ok") is not False
             and observation.get("success") is not False
         ):
             self.reset()
@@ -40,8 +51,12 @@ class MachineDesignProgress:
         # 请求键和消息措辞不是设计变化；保留完整方案及规则诊断，允许模型真正修改后重新审阅。
         signature = json.dumps(
             {
+                "ability": goal.get("ability"),
                 "target": goal.get("target"),
-                "parameters": goal.get("parameters"),
+                # 换现场观察编号并没有修改被拒绝的蓝图；实际选址或参数变化仍保留在指纹里。
+                "parameters": {
+                    key: value for key, value in (goal.get("parameters") or {}).items() if key != "snapshot_id"
+                },
                 "code": error.get("code"),
                 "message": error.get("message"),
                 "diagnostics": error.get("design_diagnostics"),

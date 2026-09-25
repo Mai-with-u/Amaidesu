@@ -1186,7 +1186,10 @@ async def test_unfinished_todos_block_natural_and_explicit_delivery() -> None:
     try:
         await agent.send_prompt("建好房屋")
         await _wait_until(lambda: agent._task_suspended)
-        assert not agent.get_state_snapshot()["recent_reports"]
+        # 停止自动行动必须上报阻塞；它仍不能冒充施工完成，也不能清除尚未完成的目标。
+        reports = agent.get_state_snapshot()["recent_reports"]
+        assert reports and all(report["kind"] == "escalation" for report in reports)
+        assert not agent._task_finished
         assert "未完成待办" in await agent._handle_report("delivery", "已建好", "")
         agent._mc_state.set_todos([{"content": "施工", "status": "done"}])
         assert await agent._handle_report("delivery", "施工已验证完成", "") is None
