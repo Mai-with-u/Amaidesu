@@ -46,7 +46,6 @@ class SimulatorConfigSchema(BaseConfig):
     temp_passerby_ratio: float = Field(default=0.3, ge=0.0, le=1.0, description="临时路人比例")
     gift_probability: float = Field(default=0.05, ge=0.0, le=0.5, description="每条消息是礼物的概率")
     sc_probability: float = Field(default=0.01, ge=0.0, le=0.1, description="每条消息是 SC 的概率")
-    context_window_size: int = Field(default=5, ge=1, le=20, description="读取主播上下文的消息数")
     idle_threshold_s: float = Field(
         default=300.0,
         ge=60.0,
@@ -59,7 +58,6 @@ class SimulatorConfigSchema(BaseConfig):
         description="idle 模式下的生成率倍率",
     )
     warmup_duration_s: float = Field(default=300.0, ge=0.0, description="启动暖场期时长（秒）")
-    max_message_chars: int = Field(default=50, ge=10, le=200, description="单条消息最大字符数")
     llm_temperature: float = Field(default=0.9, ge=0.0, le=2.0)
     token_budget_per_hour: int = Field(default=50000, ge=1000, description="每小时 token 硬上限")
     max_concurrent_llm: int = Field(default=8, ge=1, le=32, description="最大并发 LLM 请求数")

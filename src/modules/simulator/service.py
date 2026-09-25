@@ -48,7 +48,7 @@ from src.modules.simulator.persona_pool import PersonaPool
 from src.modules.simulator.replay_engine import ReplayEngine
 from src.modules.simulator.seed_data import seed_simulator_data
 from src.modules.simulator.token_budget import TokenBudgetController
-from src.modules.simulator.types import PersonaRole, StreamerContextSnapshot
+from src.modules.simulator.types import StreamerContextSnapshot
 from src.modules.storage.repos import ChatRepo, SimRepo
 from src.modules.time_utils import now_ms
 
@@ -69,18 +69,6 @@ _GUARD_LEVEL_CAPTAIN = 3
 _GUARD_NUM_MONTHLY = 1
 _GUARD_UNIT_MONTH = "月"
 _GUARD_CAPTAIN_PRICE_GOLD = 138_000
-
-
-# 角色默认世界窗口（条数）：表达"该角色对直播间的关注度"的天性，
-# persona.context_window_size 可逐人覆盖，config.context_window_size 兜底
-_ROLE_WINDOW_DEFAULTS: Dict[PersonaRole, int] = {
-    PersonaRole.VETERAN: 12,
-    PersonaRole.FAN: 10,
-    PersonaRole.TEASER: 8,
-    PersonaRole.NEWCOMER: 5,
-    PersonaRole.HATER: 8,
-    PersonaRole.PASSERBY: 2,
-}
 
 
 class SimulatorService:
@@ -425,27 +413,14 @@ class SimulatorService:
             self.logger.exception(f"模拟器生成循环异常: {exc}")
 
     async def _fetch_world_window(self, *, persona: Any) -> List[str]:
-        """按 persona 关注度读取 live_chat 最近公共流窗口。
-
-        窗口大小优先级：persona.context_window_size（个性）> 角色默认（天性）
-        > config.context_window_size（全局兜底）。公共流同时包含观众弹幕与
-        主播发言（sender_role=viewer/assistant），即"这个观众眼中的直播间"。
-        场次归属经 LiveSessionManager 解析当前场次（未显式开场次时为临时
-        兜底场次）；管理器缺失或读取失败时返回空窗口（本轮无上下文）。
-        """
+        """读取当前场次完整公共对话，让模拟观众能看到全部发言。"""
         if self._chat is None or self._config_obj is None or self._session_manager is None:
             return []
-        role = getattr(persona, "role", None)
-        limit = (
-            getattr(persona, "context_window_size", None)
-            or (_ROLE_WINDOW_DEFAULTS.get(role) if role is not None else None)
-            or self._config_obj.context_window_size
-        )
         try:
             live_pk = await self._session_manager.resolve_pk()
             rows = await self._chat.list_recent_live_chat(
                 live_session_id=live_pk,
-                limit=limit,
+                limit=None,
             )
         except Exception as exc:
             self.logger.warning(f"世界窗口读取失败（本轮无上下文）: {exc}")

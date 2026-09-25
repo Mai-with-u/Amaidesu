@@ -24,7 +24,6 @@ class PersonaCreateRequest(BaseModel):
     speaking_style: str = Field(min_length=1)
     fans_medal_level: int = Field(default=0, ge=0, le=40)
     guard_level: int = Field(default=0, ge=0, le=3)
-    context_window_size: Optional[int] = Field(default=None, ge=1, le=50)
 
 
 class PersonaUpdateRequest(BaseModel):
@@ -36,7 +35,6 @@ class PersonaUpdateRequest(BaseModel):
     speaking_style: Optional[str] = None
     fans_medal_level: Optional[int] = Field(default=None, ge=0, le=40)
     guard_level: Optional[int] = Field(default=None, ge=0, le=3)
-    context_window_size: Optional[int] = Field(default=None, ge=1, le=50)
     is_active: Optional[bool] = None
 
 
@@ -114,7 +112,6 @@ class PersonaOut(BaseModel):
     speaking_style: str
     fans_medal_level: int
     guard_level: int
-    context_window_size: Optional[int] = None
     is_temporary: bool = False
     is_active: bool = True
     messages_generated: int = 0

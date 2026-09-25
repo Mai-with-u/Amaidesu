@@ -50,7 +50,6 @@ class PersonaPool:
                 speaking_style=row["speaking_style"],
                 fans_medal_level=row["fans_medal_level"],
                 guard_level=row["guard_level"],
-                context_window_size=row["context_window_size"],
                 is_active=bool(row["is_active"]),
                 messages_generated=row["messages_generated"],
             )
@@ -138,7 +137,6 @@ class PersonaPool:
                 speaking_style=persona.speaking_style,
                 fans_medal_level=persona.fans_medal_level,
                 guard_level=persona.guard_level,
-                context_window_size=persona.context_window_size,
             )
         self._all_residents.extend(fresh)
         self._apply_resident_filter()

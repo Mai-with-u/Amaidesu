@@ -1,4 +1,4 @@
-"""世界窗口（观众上下文）测试：live_chat 读取 + per-persona 裁剪 + 格式化。"""
+"""世界窗口（观众上下文）测试：live_chat 读取 + 完整场次 + 格式化。"""
 
 from __future__ import annotations
 
@@ -48,7 +48,9 @@ class _FakeConfigService:
 
 async def _setup_service(store: SQLiteDatabase) -> SimulatorService:
     """构造并 setup 一个不自动启动的 SimulatorService"""
-    service = SimulatorService(event_bus=EventBus(), sim_repo=store.sim, chat_repo=store.chat, session_manager=_FakeSessionManager())
+    service = SimulatorService(
+        event_bus=EventBus(), sim_repo=store.sim, chat_repo=store.chat, session_manager=_FakeSessionManager()
+    )
     await service.setup(_FakeConfigService())
     return service
 
@@ -72,14 +74,13 @@ async def _seed_chat(store: SQLiteDatabase, count: int = 20) -> None:
         )
 
 
-def _persona(role: PersonaRole, window: int | None = None) -> Persona:
+def _persona(role: PersonaRole) -> Persona:
     return Persona(
         user_id="test_user",
         user_nickname="测试观众",
         role=role,
         personality="p",
         speaking_style="s",
-        context_window_size=window,
     )
 
 
@@ -98,27 +99,25 @@ async def test_window_reads_mixed_stream(store: SQLiteDatabase) -> None:
 
 @pytest.mark.asyncio
 async def test_window_per_role_defaults(store: SQLiteDatabase) -> None:
-    """角色默认窗口：veteran 看得多、passerby 看得少。"""
+    """不同角色都读取完整公共对话，由人设决定如何回应。"""
     await _seed_chat(store, count=20)
     service = await _setup_service(store)
 
     veteran_window = await service._fetch_world_window(persona=_persona(PersonaRole.VETERAN))
     passerby_window = await service._fetch_world_window(persona=_persona(PersonaRole.PASSERBY))
 
-    assert len(veteran_window) == 12
-    assert len(passerby_window) == 2
+    assert len(veteran_window) == 20
+    assert len(passerby_window) == 20
 
 
 @pytest.mark.asyncio
-async def test_window_persona_override_wins(store: SQLiteDatabase) -> None:
-    """persona 级 context_window_size 覆盖角色默认。"""
-    await _seed_chat(store, count=20)
+async def test_context_preserves_all_messages_beyond_old_window(store: SQLiteDatabase) -> None:
+    """超过原有条数上限的场次也完整返回，首条与末条都能读取。"""
+    await _seed_chat(store, count=60)
     service = await _setup_service(store)
-
-    window = await service._fetch_world_window(
-        persona=_persona(PersonaRole.VETERAN, window=3),
-    )
-    assert len(window) == 3
+    window = await service._fetch_world_window(persona=_persona(PersonaRole.VETERAN))
+    assert len(window) == 60
+    assert window[0].endswith("消息0") and window[-1].endswith("消息59")
 
 
 @pytest.mark.asyncio

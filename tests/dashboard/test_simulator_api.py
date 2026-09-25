@@ -182,7 +182,7 @@ def test_persona_create_list_update_delete(client: TestClient) -> None:
     # 更新
     resp = client.patch(
         f"/api/v1/simulator/personas/{user_id}",
-        json={"user_nickname": "API改名观众", "context_window_size": 7},
+        json={"user_nickname": "API改名观众", "speaking_style": "自然"},
     )
     assert resp.status_code == 200
     assert resp.json()["success"] is True
@@ -190,7 +190,7 @@ def test_persona_create_list_update_delete(client: TestClient) -> None:
     listed = client.get("/api/v1/simulator/personas").json()["personas"]
     target = next(p for p in listed if p["user_id"] == user_id)
     assert target["user_nickname"] == "API改名观众"
-    assert target["context_window_size"] == 7
+    assert target["speaking_style"] == "自然"
 
     # 删除
     resp = client.delete(f"/api/v1/simulator/personas/{user_id}")
@@ -255,30 +255,21 @@ def test_gift_create_duplicate_rejected(client: TestClient) -> None:
     assert "已存在" in body["message"]
 
 
-def test_persona_update_null_clears_optional_field(client: TestClient) -> None:
-    """PATCH 显式 null = 清空回默认（context_window_size 落 NULL）；未传字段不受影响。"""
-    resp = client.post(
+def test_persona_partial_update_preserves_other_fields(client: TestClient) -> None:
+    """修改发言风格只改变对应字段，人设 API 不再暴露上下文窗口。"""
+    response = client.post(
         "/api/v1/simulator/personas",
         json={
-            "user_nickname": "清空测试观众",
+            "user_nickname": "编辑观众",
             "role": "fan",
             "personality": "平静",
             "speaking_style": "简洁",
-            "context_window_size": 9,
         },
     )
-    assert resp.json()["success"] is True
-    user_id = resp.json()["persona"]["user_id"]
-
-    # 只传 context_window_size: null → 清空；昵称未传 → 保持
-    resp = client.patch(
-        f"/api/v1/simulator/personas/{user_id}",
-        json={"context_window_size": None},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["success"] is True
-
-    listed = client.get("/api/v1/simulator/personas").json()["personas"]
-    target = next(p for p in listed if p["user_id"] == user_id)
-    assert target["context_window_size"] is None
-    assert target["user_nickname"] == "清空测试观众"
+    assert response.json()["success"] is True
+    user_id = response.json()["persona"]["user_id"]
+    updated = client.patch(f"/api/v1/simulator/personas/{user_id}", json={"speaking_style": "自然"})
+    assert updated.json()["success"] is True
+    target = next(p for p in client.get("/api/v1/simulator/personas").json()["personas"] if p["user_id"] == user_id)
+    assert target["user_nickname"] == "编辑观众" and target["speaking_style"] == "自然"
+    assert "context_window_size" not in target

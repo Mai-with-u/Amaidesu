@@ -32,7 +32,6 @@ class Persona(BaseModel):
     fans_medal_level: int = Field(default=0, ge=0, le=40)
     guard_level: int = Field(default=0, ge=0, le=3)
     # 上下文窗口大小覆盖（None=按角色默认；表达"该角色对直播间的关注度"）
-    context_window_size: Optional[int] = Field(default=None, ge=1, le=50)
     is_temporary: bool = False
     is_active: bool = True
     messages_generated: int = 0

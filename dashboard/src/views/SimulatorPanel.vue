@@ -190,11 +190,6 @@
               />
               <el-table-column prop="fans_medal_level" label="牌级" width="70" />
               <el-table-column prop="guard_level" label="舰" width="60" />
-              <el-table-column prop="context_window_size" label="窗口" width="70">
-                <template #default="{ row }">
-                  {{ row.context_window_size ?? '默认' }}
-                </template>
-              </el-table-column>
               <el-table-column label="操作" width="130" fixed="right">
                 <template #default="{ row }">
                   <el-button link type="primary" size="small" @click="openPersonaDialog(row)"
@@ -360,17 +355,6 @@
         <el-form-item label="舰长等级">
           <el-input-number v-model="personaForm.guard_level" :min="0" :max="3" />
         </el-form-item>
-        <el-form-item label="上下文窗口">
-          <el-input-number
-            v-model="personaForm.context_window_size"
-            :min="1"
-            :max="50"
-            placeholder="留空=角色默认"
-          />
-          <span class="hint" style="margin-left: 8px"
-            >留空 = 按角色默认（老观众看得多、路人看得少）</span
-          >
-        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="personaDialogVisible = false">取消</el-button>
@@ -501,7 +485,6 @@ const emptyPersonaForm = () => ({
   speaking_style: '',
   fans_medal_level: 0,
   guard_level: 0,
-  context_window_size: undefined as number | undefined,
 });
 
 const personaForm = reactive(emptyPersonaForm());
@@ -718,7 +701,6 @@ function openPersonaDialog(row?: SimPersona) {
     personaForm.speaking_style = row.speaking_style;
     personaForm.fans_medal_level = row.fans_medal_level;
     personaForm.guard_level = row.guard_level;
-    personaForm.context_window_size = row.context_window_size ?? undefined;
   }
   personaDialogVisible.value = true;
 }
@@ -736,7 +718,6 @@ async function savePersona() {
         speaking_style: personaForm.speaking_style,
         fans_medal_level: personaForm.fans_medal_level,
         guard_level: personaForm.guard_level,
-        context_window_size: personaForm.context_window_size ?? null,
       };
       const res = await simulatorApi.updatePersona(personaFormOriginalId.value, payload);
       if (res.data.success) {
@@ -752,7 +733,6 @@ async function savePersona() {
         speaking_style: personaForm.speaking_style,
         fans_medal_level: personaForm.fans_medal_level,
         guard_level: personaForm.guard_level,
-        context_window_size: personaForm.context_window_size ?? null,
       });
       if (res.data.success) {
         ElMessage.success('已新增');

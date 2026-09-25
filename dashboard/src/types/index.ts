@@ -489,7 +489,6 @@ export interface SimPersona {
   speaking_style: string;
   fans_medal_level: number;
   guard_level: number;
-  context_window_size: number | null;
   is_temporary: boolean;
   is_active: boolean;
   messages_generated: number;

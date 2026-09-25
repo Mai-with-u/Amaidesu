@@ -66,11 +66,9 @@ replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，�
 | `temp_passerby_ratio` | `0.3` | 路人比例（`ge=0.0, le=1.0`） |
 | `gift_probability` | `0.05` | 每条消息是礼物的概率 |
 | `sc_probability` | `0.01` | 每条消息是 SC 的概率 |
-| `context_window_size` | `5` | 世界窗口兜底条数（角色/人设未指定时） |
 | `idle_threshold_s` | `300.0` | 主播无活动进入 IDLE 的阈值 |
 | `idle_rate_multiplier` | `0.2` | IDLE 态生成率倍率 |
 | `warmup_duration_s` | `300.0` | 启动暖场期时长 |
-| `max_message_chars` | `50` | 单条消息最大字符数 |
 | `llm_temperature` | `0.9` | LLM 采样温度 |
 | `token_budget_per_hour` | `50000` | 1 小时滑动窗口 token 硬上限 |
 | `max_concurrent_llm` | `8` | 最大并发 LLM 请求数 |
@@ -99,13 +97,13 @@ replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，�
 - **写穿**：`PersonaPool` / `GiftGenerator` 持内存缓存，Dashboard CRUD 即时落库并刷新缓存；
 - **临时路人**（`temp_passerby_ratio` 控制比例，池上限 50）是瞬时对象，仅存内存、不持久化——身份生命周期分层：常驻=持久实体，路人=瞬时对象。
 
-**per-persona 上下文窗口**：`sim_personas.context_window_size`（可选字段）覆盖角色默认窗口（veteran 12 / fan 10 / teaser 8 / newcomer 5 / hater 8 / passerby 2），表达"该角色对直播间的关注度"这一性格属性；两级都未指定时回落全局 `context_window_size`。
+模拟观众读取当前场次的完整公共对话，角色人设决定回应风格。
 
-## 4. 观众上下文：世界窗口
+## 4. 观众上下文：场次对话
 
-观众生成消息前读取"这个观众眼中的直播间"——**SQLite `live_chat` 公共流最近窗口**（观众弹幕 + 主播发言同表，场次隔离）：
+观众生成消息前读取"这个观众眼中的直播间"——**SQLite `live_chat` 公共流完整历史**（观众弹幕 + 主播发言同表，场次隔离）：
 
-- 窗口读取：`ChatRepo.list_recent_live_chat(live_session_id, limit)`，`live_session_id` 为盖章注入的场次 int 主键；
+- 窗口读取：`ChatRepo.list_recent_live_chat(live_session_id, limit=None)`，`live_session_id` 为盖章注入的场次 int 主键；
 - 一致性语义：弱一致——emit 与落库之间有毫秒级时序差，秒级生成节奏下可忽略；
 - 重启不丢：世界状态唯一事实源在 SQLite，模拟器不维护第二份内存状态；
 - **token 预算**：窗口注入按"每字符 2 token"粗估计入 `TokenBudgetController`，与生成消耗共享同一硬上限。

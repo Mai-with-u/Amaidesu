@@ -22,7 +22,6 @@ class SimRepo(BaseRepo):
             "speaking_style",
             "fans_medal_level",
             "guard_level",
-            "context_window_size",
             "is_active",
             "messages_generated",
         }
@@ -71,7 +70,6 @@ class SimRepo(BaseRepo):
         speaking_style: str,
         fans_medal_level: int = 0,
         guard_level: int = 0,
-        context_window_size: Optional[int] = None,
         is_active: bool = True,
         messages_generated: int = 0,
     ) -> int:
@@ -83,9 +81,9 @@ class SimRepo(BaseRepo):
                 cur = conn.execute(
                     "INSERT INTO sim_personas("
                     "user_id, user_nickname, role, personality, speaking_style,"
-                    " fans_medal_level, guard_level, context_window_size,"
+                    " fans_medal_level, guard_level,"
                     " is_active, messages_generated, created_at_ms, updated_at_ms"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         user_id,
                         user_nickname,
@@ -94,7 +92,6 @@ class SimRepo(BaseRepo):
                         speaking_style,
                         fans_medal_level,
                         guard_level,
-                        context_window_size,
                         1 if is_active else 0,
                         messages_generated,
                         now_ms,
