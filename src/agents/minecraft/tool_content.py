@@ -27,6 +27,8 @@ def failed_observation(result: ToolExecutionResult, name: str) -> dict[str, Any]
     details = result.structured_content
     if not isinstance(details, dict) and result.error_message.startswith("MCP 业务错误:"):
         details = _decode_text(result.error_message.split(":", 1)[1].strip())
+    elif not isinstance(details, dict):
+        details = _decode_text(result.content.strip() or result.error_message.strip())
     observation = deepcopy(details) if isinstance(details, dict) else {}
     observation.update(ok=False, tool=name)
     observation.setdefault("error", result.error_message or "工具执行失败")
@@ -40,14 +42,20 @@ def successful_observation(result: ToolExecutionResult, arguments: dict[str, Any
     if not texts and result.content.strip():
         texts = [result.content]
     resources = observation.get("resources")
-    reading = arguments.get("view") == "knowledge" and bool(arguments.get("resource_uri"))
+    reading = arguments.get("view") in {None, "knowledge"} and bool(arguments.get("resource_uri"))
     if reading and isinstance(resources, list):
         if len(texts) == len(resources) and texts and all(isinstance(item, dict) for item in resources):
             # MaiCraft 依同一顺序提供文档正文和 URI 元数据，逐份配对而不丢失多文档内容。
             observation["resources"] = [
                 {**metadata, "content": _decode_text(text)} for metadata, text in zip(resources, texts, strict=True)
             ]
-            observation["content_loaded"] = True
+            partial = any(
+                isinstance(item["content"], dict) and item["content"].get("response_partial") is True
+                for item in observation["resources"]
+            )
+            observation["content_loaded"] = not partial
+            if partial:
+                observation["content_partial"] = True
             return observation
         if not texts and not any(isinstance(item, dict) and "content" in item for item in resources):
             return {
@@ -69,5 +77,5 @@ def successful_observation(result: ToolExecutionResult, arguments: dict[str, Any
         elif decoded != observation:
             observation["text"] = content
         if reading:
-            observation["content_loaded"] = True
+            observation["content_loaded"] = observation.get("response_partial") is not True
     return observation or {"ok": True}

@@ -75,3 +75,17 @@ def test_sdk_business_error_keeps_uncertain_outcome_and_diagnostics() -> None:
     observed = failed_observation(result, "maicraft_execute")
     assert observed["ok"] is False and observed["error"]["outcome_known"] is False
     assert observed["error"]["path"] == "materials"
+
+
+def test_implicit_knowledge_read_preserves_partial_reference_state() -> None:
+    """只给 URI 也要配对正文；归档索引不能被标成已读取完整教材。"""
+    uri = "maicraft://knowledge/large"
+    result = ToolExecutionResult(
+        tool_name="read",
+        success=True,
+        structured_content={"resources": [{"uri": uri}]},
+        content='{"source_uri":"maicraft://knowledge/large","response_partial":true,"text":{"omitted":true,"resource_uri":"maicraft://receipts/ref"}}',
+    )
+    observed = successful_observation(result, {"resource_uri": uri})
+    assert observed["content_loaded"] is False and observed["content_partial"] is True
+    assert observed["resources"][0]["content"]["text"]["resource_uri"] == "maicraft://receipts/ref"
