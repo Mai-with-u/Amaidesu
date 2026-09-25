@@ -1,12 +1,4 @@
-"""工具观察预算单测——超预算按体量整段丢弃 + 自证标记。
-
-覆盖：
-- 未超预算：观察原样返回，不带任何自证字段
-- 超预算：丢弃体量最大的段，稀缺段（电梯楼层）必须留下，且落回预算内
-- 自证：被丢的键名全部写入 ``_omitted``，观察里不做"静默丢失"
-- 非对象形态：没有段可丢，退回带标记的前缀截断
-- 调用点：``_invoke_registry_tool`` 走同一渲染路径（截断口径只有一处实现）
-"""
+"""完整工具观察进入 Planner，超长字段和尾部证据都不丢失。"""
 
 from __future__ import annotations
 
@@ -15,16 +7,11 @@ from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.streamer.planner import (
-    _OBSERVATION_MAX_CHARS,
-    _OBSERVATION_OMITTED_KEY,
-    _OBSERVATION_TRUNCATED_KEY,
     Planner,
     _render_observation,
 )
 from src.agents.streamer.room_state import RoomState
 from src.modules.tools.models import ToolExecutionResult
-
-_MARKERS = {_OBSERVATION_TRUNCATED_KEY, _OBSERVATION_OMITTED_KEY}
 
 
 def _surroundings_shaped() -> Dict[str, Any]:
@@ -69,70 +56,34 @@ def _make_planner(tool_registry: Any) -> Planner:
     )
 
 
-def test_observation_within_budget_is_returned_untouched() -> None:
-    data = {"ok": True, "floors": [{"id": "floor:10"}]}
-    rendered = _render_observation(data)
-    assert rendered == json.dumps(data, ensure_ascii=False)
-    assert _OBSERVATION_TRUNCATED_KEY not in rendered
-
-
-def test_oversized_observation_keeps_the_scarce_section() -> None:
-    """电梯楼层排在两段大体量诊断之后，按插入顺序前缀切时它必被切掉。"""
+def test_observation_keeps_every_field() -> None:
+    """电梯楼层和大体积地形诊断完整共存，不能靠丢段减小观察。"""
     payload = _surroundings_shaped()
-    assert len(json.dumps(payload, ensure_ascii=False)) > _OBSERVATION_MAX_CHARS
-
-    rendered = _render_observation(payload)
-    parsed = json.loads(rendered)
-
-    assert len(rendered) <= _OBSERVATION_MAX_CHARS
-    assert parsed["elevators"]["elevators"][0]["floor_list_state"] == "synchronized"
-    assert parsed[_OBSERVATION_TRUNCATED_KEY] is True
-    assert "terrain_overview" in parsed[_OBSERVATION_OMITTED_KEY]
+    assert len(json.dumps(payload, ensure_ascii=False)) > 6144
+    assert json.loads(_render_observation(payload)) == payload
 
 
-def test_omitted_names_exactly_what_was_dropped() -> None:
-    """观察里不做静默丢失：留下的段与点名的段合起来就是原始键全集。"""
-    payload = _surroundings_shaped()
-    parsed = json.loads(_render_observation(payload))
-
-    kept = set(parsed) - _MARKERS
-    omitted = set(parsed[_OBSERVATION_OMITTED_KEY])
-    assert kept | omitted == set(payload)
-    assert not kept & omitted
-    assert len(parsed[_OBSERVATION_OMITTED_KEY]) == len(omitted)
+def test_single_large_field_and_non_mapping_results_remain_valid() -> None:
+    """大字段、字符串和数组仍是完整 JSON，尾部任务条件可以被解析。"""
+    for payload in ({"tasks": ["任务" * 10000 + "保留入口"]}, ["x" * 9000], "内容" * 9000):
+        assert json.loads(_render_observation(payload)) == payload
 
 
-def test_single_huge_section_is_named_not_silently_dropped() -> None:
-    payload = {"ok": True, "tasks": ["t" * 9000]}
-    parsed = json.loads(_render_observation(payload))
-    assert parsed[_OBSERVATION_OMITTED_KEY] == ["tasks"]
-    assert "tasks" not in parsed
-
-
-def test_non_mapping_payload_falls_back_to_marked_prefix_cut() -> None:
-    # 非对象形态没有段可丢：退回前缀截断保住硬上限（载荷按当前上限动态构造）
-    rendered = _render_observation(["x" * (_OBSERVATION_MAX_CHARS + 1000)])
-    assert len(rendered) == _OBSERVATION_MAX_CHARS + len("…（截断）")
-    assert rendered.endswith("…（截断）")
-
-
-async def test_registry_observation_goes_through_the_renderer() -> None:
+async def test_registry_observation_preserves_long_content() -> None:
+    """真实工具回调后的结构化结果与补充文本都完整交给 Planner。"""
     registry = MagicMock()
+    payload = _surroundings_shaped()
+    supplement = "补充事实" * 10000
     registry.invoke = AsyncMock(
         return_value=ToolExecutionResult(
             tool_name="maicraft_perceive",
             success=True,
-            structured_content=_surroundings_shaped(),
+            structured_content=payload,
+            content=supplement,
         )
     )
-    planner = _make_planner(registry)
-
-    observed = await planner._invoke_registry_tool("maicraft_perceive", {"view": "surroundings"})
-    parsed = json.loads(observed)
-
-    assert len(observed) <= _OBSERVATION_MAX_CHARS
-    assert parsed[_OBSERVATION_TRUNCATED_KEY] is True
-    assert "elevators" in parsed
+    observed = await _make_planner(registry)._invoke_registry_tool("maicraft_perceive", {"view": "surroundings"})
+    assert json.loads(observed) == {**payload, "ok": True, "content": supplement}
 
 
 async def test_text_only_tool_result_reaches_the_observation() -> None:

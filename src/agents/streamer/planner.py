@@ -52,76 +52,10 @@ __all__ = ["Planner"]
 #: Planner 绑定的 LLM profile（代码显式声明，配置不承载绑定，无静默兜底）。
 PLANNER_PROFILE: str = "planner"
 
-#: 每轮决策注入画像的观众数上限（可配 profile_max；超出截断）。
-#: 配置面在 [memory].profile_injection_max——画像行为参数集中在记忆段。
-_DEFAULT_PROFILE_MAX: int = 3
-
-#: 单条画像文本注入截断长度（控制 prompt 体积；画像生成长度上限 400 字之上兜一层）。
-_PROFILE_TEXT_MAX_CHARS: int = 500
-
-#: 人物画像整段字符帽（决策 ~1.6K）：超帽的候选整条丢弃，防止画像段挤占
-#: 参考段其他内容与对话预算。
-_PROFILE_SECTION_MAX_CHARS: int = 1600
-
-#: 单条工具观察作为观察返回的最大字符数（超长观察按体量丢弃并自证，控上下文体积）。
-#: 6144 的来历：完整游戏状态快照（含地图缩略与诊断段）实测上万字符，2000 会把
-#: 排在靠后的稀缺字段整段切掉；抬到能装下完整快照后，正常观察不再被截断，
-#: 上限只兜病理输入。代价是最坏窗口变大（8 步 × 6144 ≈ 49K 字符），据此重算历史预算见下。
-_OBSERVATION_MAX_CHARS: int = 6144
-
-#: 观察截断标记（与 canonical 单项截断同文，保持全局口径一致）。
-_TRUNCATION_MARK: str = "…（截断）"
-
-#: 观察被丢弃内容的自证字段：LLM 必须能区分"这个字段是空"与"这个字段这次没读到"。
-#: 只删不改的截断（前缀切）会让后者伪装成前者——"这个字段没读到"曾被答成"这个字段是空"。
-_OBSERVATION_TRUNCATED_KEY: str = "_truncated"
-_OBSERVATION_OMITTED_KEY: str = "_omitted"
-
-
-def _observation_fits(kept: Dict[str, Any], omitted: List[str]) -> bool:
-    """剩余段加上自证字段后是否落回观察预算。"""
-    candidate = {**kept, _OBSERVATION_TRUNCATED_KEY: True, _OBSERVATION_OMITTED_KEY: omitted}
-    return len(json.dumps(candidate, ensure_ascii=False, default=str)) <= _OBSERVATION_MAX_CHARS
-
 
 def _render_observation(data: Any) -> str:
-    """工具结果 → 观察文本：超预算时整段丢弃体量最大的段，并把丢弃事实写进观察本身。
-
-    与历史"成块丢最旧"同一立场——只整段丢弃、不切半段，剩余段的字节与全量形态
-    逐字一致。改用按体量丢弃（而不是按插入顺序前缀切）的理由：前缀切总是切掉排在
-    后面的段，而排在后面的往往正是稀缺字段（游戏状态快照里排在靠后的字段就在
-    大体量段之后），且被切的一方无从知道内容丢过。丢掉的键名写进 ``_omitted``，
-    调用方据此改问法（如点名所需段）而不是编造否定结论。
-
-    非对象形态（列表/字符串等）没有段可丢，退回前缀截断并追加统一截断标记。
-    """
-    text = json.dumps(data, ensure_ascii=False, default=str)
-    if len(text) <= _OBSERVATION_MAX_CHARS:
-        return text
-    if not isinstance(data, dict):
-        return text[:_OBSERVATION_MAX_CHARS] + _TRUNCATION_MARK
-
-    by_size = sorted(
-        ((len(json.dumps(value, ensure_ascii=False, default=str)), key) for key, value in data.items()),
-        key=lambda item: (-item[0], item[1]),
-    )
-    kept: Dict[str, Any] = dict(data)
-    omitted: List[str] = []
-    for _, key in by_size:
-        if _observation_fits(kept, omitted):
-            break
-        kept.pop(key)
-        omitted.append(key)
-
-    rendered = json.dumps(
-        {**kept, _OBSERVATION_TRUNCATED_KEY: True, _OBSERVATION_OMITTED_KEY: omitted},
-        ensure_ascii=False,
-        default=str,
-    )
-    if len(rendered) <= _OBSERVATION_MAX_CHARS:
-        return rendered
-    # 病理输入（键极多且值极小）：段全丢完仍装不下，退回带标记的前缀截断保住硬上限。
-    return rendered[:_OBSERVATION_MAX_CHARS] + _TRUNCATION_MARK
+    """完整保留工具结果，让模型读取所有字段及其真实值。"""
+    return json.dumps(data, ensure_ascii=False, default=str)
 
 
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
@@ -183,7 +117,6 @@ class Planner:
         tool_registry: Any = None,
         memory: Any = None,
         viewer_repo: Any = None,
-        profile_max: int = _DEFAULT_PROFILE_MAX,
         context_enabled: bool = True,
         behavior_style: str = "",
         reply_provider: Any = None,
@@ -201,7 +134,6 @@ class Planner:
             memory: 观众画像/事实读写服务（鸭子类型 ``SimpleMemory``）；None 时无画像注入。
             viewer_repo: ``ViewerRepo``（观众统计仓储）——画像注入时经它实时取
                 昵称（昵称会漂移不进画像文本）；None 时注入行回退 platform/user_id。
-            profile_max: 每轮注入 prompt 的画像人数上限。
             context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
             behavior_style: 人设行为准则（决策侧）。
             reply_provider: reply 局部工具的 Provider（ReplyToolProvider）；
@@ -231,7 +163,6 @@ class Planner:
         self._tool_registry = tool_registry
         self._memory = memory
         self._viewer_repo = viewer_repo
-        self._profile_max = max(1, int(profile_max))
         self._context_enabled = context_enabled
         self._behavior_style: str = behavior_style or ""
         self._reply_provider = reply_provider
@@ -374,7 +305,7 @@ class Planner:
                 outcome["silent_reason"] = "llm_failed"
                 return outcome
 
-            self.last_raw_content = (getattr(response, "content", None) or "")[:2000]
+            self.last_raw_content = getattr(response, "content", None) or ""
             self.last_request_id = getattr(response, "request_id", None) or None
 
             # engine 返回的中立 ToolCall（扁平对象）收敛为内部扁平 dict，供本模块消费与协议喂回
@@ -684,19 +615,7 @@ class Planner:
         self,
         batch: List[Any],
     ) -> str:
-        """收集本批发言人的画像并渲染为参考段文本（有画像才注入）。
-
-        - 候选 = 本批弹幕发言人（sender 去重，按发言时间倒序）
-        - 逐人查 ``viewer_profiles``：无画像的跳过且**不占位**——候选遍历
-          不会因前几人无画像而提前停，有画像的凑满 ``profile_max`` 人才停
-        - 昵称从 ``viewers`` 实时取（决策：昵称会漂移不进画像文本，注入时
-          才解析），让画像段与本批弹幕的"昵称: 内容"对得上号；无统计行
-          回退 platform/user_id
-        - 整段硬帽 ``_PROFILE_SECTION_MAX_CHARS``：超帽的候选整条丢弃
-          （只整段丢弃、不切半，与历史截断同立场）
-        - 无 memory / 无画像 / 异常 → 空串；Assembler 对空段整段省略，
-          不阻断决策
-        """
+        """按本批发言时间倒序注入全部已有画像，完整保留人物经历与偏好。"""
         if self._memory is None or not batch:
             return ""
 
@@ -719,10 +638,7 @@ class Planner:
             return ""
 
         lines: List[str] = []
-        section_chars = 0
         for platform, user_id in candidates:
-            if len(lines) >= self._profile_max:
-                break  # 有画像者凑满即停
             try:
                 profile_text = await self._memory.get_viewer_profile(platform=platform, user_id=user_id)
             except Exception as exc:
@@ -731,14 +647,9 @@ class Planner:
             if not profile_text:
                 continue  # 无画像不注入、不占位
             text = profile_text.replace("\n", " ").strip()
-            if len(text) > _PROFILE_TEXT_MAX_CHARS:
-                text = text[:_PROFILE_TEXT_MAX_CHARS].rstrip() + "…"
             display = await self._viewer_nickname(platform, user_id) or f"{platform}/{user_id}"
             line = f"- {display}: {text}"
-            if section_chars + len(line) > _PROFILE_SECTION_MAX_CHARS:
-                break  # 整段硬帽：装不下的候选整条丢弃
             lines.append(line)
-            section_chars += len(line)
 
         if not lines:
             return ""

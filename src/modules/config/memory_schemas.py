@@ -9,7 +9,6 @@
     fact_extraction_enabled = true
     profile_min_interactions = 3
     profile_max_length = 400
-    profile_injection_max = 3
     facts_per_batch = 5
 
 > 单一事实源原则：``db_path`` **不在此定义**——存储与记忆共用同一 SQLite
@@ -69,12 +68,6 @@ class MemoryConfig(BaseConfig):
         ge=100,
         le=1000,
         description="画像文本长度上限（字符；提示词约束 LLM 压缩篇幅）",
-    )
-    profile_injection_max: int = Field(
-        default=3,
-        ge=1,
-        le=10,
-        description="每轮决策注入画像的观众数上限",
     )
     facts_per_batch: int = Field(
         default=5,

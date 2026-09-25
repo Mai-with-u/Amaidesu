@@ -261,7 +261,6 @@ class StreamerAgent(BaseAgent):
             tool_registry=tool_registry,
             memory=memory,
             viewer_repo=viewer_repo,
-            profile_max=int(self._memory_policy.get("profile_injection_max", 3) or 3),
             context_enabled=bool(_context_enabled),
             behavior_style=_behavior_style,
         )

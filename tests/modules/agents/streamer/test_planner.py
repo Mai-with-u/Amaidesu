@@ -390,9 +390,9 @@ async def test_person_profile_no_placeholder_for_portraitless() -> None:
 
 @pytest.mark.asyncio
 async def test_person_profile_section_hard_cap() -> None:
-    """整段超硬帽时候选整条丢弃(不切半)。"""
+    """本批全部观众画像完整注入，不丢掉尾部经历。"""
     memory = MagicMock()
-    memory.get_viewer_profile = AsyncMock(return_value="画" * 900)  # 单条截断到 500 字
+    memory.get_viewer_profile = AsyncMock(return_value="画" * 900)
     planner, _llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory)
 
     batch = [_msg(f"第{i}条") for i in range(5)]
@@ -401,8 +401,8 @@ async def test_person_profile_section_hard_cap() -> None:
     section = await planner._collect_person_profiles(batch)
 
     assert section.startswith("（内部参考")
-    # 1600 字帽:header(~45) + 500 字条目最多 3 条,第 4 条装不下整条丢弃
-    assert section.count("- ") <= 3
+    assert section.count("- ") == 5
+    assert section.count("画" * 900) == 5
 
 
 @pytest.mark.asyncio
