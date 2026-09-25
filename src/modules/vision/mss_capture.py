@@ -28,15 +28,22 @@ mss 库以"**虚拟桌面绝对坐标**"表达显示器位置：
   ``image=None`` + ``captured_at_ms``（不抛），沿用既有"空快照"语义。
 - 单屏降级：``monitor_index`` 不存在 → 回退到 ``1``（首个物理显示器）+
   warning；**不得**回退到 ``0=合屏``。
+- 混合 DPI 自洽：枚举与抓图均在线程级 per-monitor DPI 上下文内执行
+  （``_per_monitor_dpi_thread``），使 mss 枚举坐标与 BitBlt 抓图恒为同一
+  物理像素空间——进程级感知被其他组件（如 tkinter）设为 system-aware 时
+  副屏不发生坐标虚拟化错位。
 - 真缩放：``max_width`` 非 None 且图像宽 > ``max_width`` 时用 PIL 等比
   缩放（高按比例）。
 """
 
 from __future__ import annotations
 
+import contextlib
+import ctypes
+import sys
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 from PIL import Image
 
@@ -53,6 +60,40 @@ except Exception as exc:  # noqa: BLE001 - 后端边界：缺包/系统层不可
     _MSS_IMPORT_ERROR: Optional[BaseException] = exc
 else:
     _MSS_IMPORT_ERROR = None
+
+# Win10 1607+ 的线程级 DPI 上下文句柄（-4 = PER_MONITOR_AWARE_V2 伪句柄）
+_DPI_CONTEXT_PER_MONITOR_V2 = -4
+
+
+@contextlib.contextmanager
+def _per_monitor_dpi_thread() -> Iterator[None]:
+    """线程级切换到 per-monitor DPI 感知，保证枚举坐标与 BitBlt 抓图同为物理像素。
+
+    mss 的显示器枚举坐标跟随调用线程的 DPI 感知上下文做虚拟化，而 BitBlt
+    抓屏 DC 恒按物理像素取数。当进程 DPI 感知被其他组件（如 tkinter 字幕窗）
+    抢先设为 system-aware、且主屏缩放与副屏不一致（混合 DPI）时，副屏枚举
+    坐标会被按"系统 DPI / 屏幕 DPI"放大，抓图区域随之错位（内容偏移 + 黑边）。
+    线程级上下文只影响本线程的枚举/抓图调用，不改动进程内其他组件（Tk 窗口
+    等）的感知设置；API 缺失（早于 Win10 1607）或切换失败时保持调用线程
+    原有行为。
+    """
+    user32 = None
+    prev: Optional[int] = None
+    if sys.platform == "win32":
+        try:
+            user32 = ctypes.windll.user32
+            user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+            user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+            prev = user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(_DPI_CONTEXT_PER_MONITOR_V2))
+        except Exception as exc:  # noqa: BLE001 - 上下文不可用则保持原行为
+            logger.debug(f"线程 DPI 上下文切换不可用，按调用线程默认行为继续: {exc}")
+            user32 = None
+            prev = None
+    try:
+        yield
+    finally:
+        if prev and user32 is not None:
+            user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(prev))
 
 
 @dataclass(slots=True)
@@ -121,7 +162,7 @@ class MssScreenCapture:
         if not self._ensure_mss():
             return []
         try:
-            with _mss.mss() as sct:  # type: ignore[misc]
+            with _per_monitor_dpi_thread(), _mss.mss() as sct:  # type: ignore[misc]
                 raw_monitors = sct.monitors
         except Exception as exc:  # noqa: BLE001 - 后端边界：枚举失败走降级
             logger.warning(f"mss 枚举显示器失败: {type(exc).__name__}: {exc}")
@@ -285,7 +326,7 @@ class MssScreenCapture:
             grab_dict["height"] = resolved[3]
 
         try:
-            with _mss.mss() as sct:  # type: ignore[misc]
+            with _per_monitor_dpi_thread(), _mss.mss() as sct:  # type: ignore[misc]
                 sct_img = sct.grab(grab_dict)
                 img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
         except Exception as exc:  # noqa: BLE001 - 后端边界：抓取失败走降级
