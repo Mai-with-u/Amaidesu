@@ -36,8 +36,9 @@ from src.agents.minecraft.design_progress import MachineDesignProgress
 from src.agents.minecraft.observations import MinecraftObservations, json_text
 from src.agents.minecraft.plan_facts import MinecraftPlanFacts
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
-from src.agents.minecraft.tools import MinecraftToolProvider
+from src.agents.minecraft.task_facts import decision_facts, task_decision
 from src.agents.minecraft.tool_content import failed_observation, successful_observation
+from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -837,6 +838,8 @@ class MinecraftAgent(BaseAgent):
                 )
             while len(self._task_progress) > 64:
                 self._task_progress.pop(next(iter(self._task_progress)))
+        if tool in {"maicraft_task", "maicraft_execute", "maicraft_perceive"}:
+            self._remember_task_snapshot(original, ref)
         if not tool.startswith("minecraft_") and not shown.get("_observation", {}).get("same_request_and_result"):
             # 整理时仍保留近期失败与结果未知的区别，详细过程从同一引用恢复。
             self._recent_results.append(
@@ -864,7 +867,7 @@ class MinecraftAgent(BaseAgent):
 
     def _current_task_context(self) -> Dict[str, Any]:
         """恢复与集中整理都保留玩家原文、当前工作文档、任务阶段和可补读的证据。"""
-        progress = dict(self._task_progress)
+        progress = deepcopy(self._task_progress)
         ledger = getattr(self._task_tracker, "ledger", None)
         if ledger is not None:
             # accepted -> running 通常没有唤醒通知，仍须从现有账本带回已经受理的任务编号。
@@ -872,6 +875,8 @@ class MinecraftAgent(BaseAgent):
                 record = ledger.get(task_id)
                 if record is not None and record.initiator == self.name:
                     progress[task_id] = {**progress.get(task_id, {}), "task_id": task_id, "status": record.status}
+                    if record.status != "waiting_for_decision":
+                        progress[task_id].pop("decision", None)
         if self._builder is not None:
             for task_id in self._builder.pending_ids():
                 progress.setdefault(task_id, {"task_id": task_id, "status": "pending"})
@@ -889,6 +894,34 @@ class MinecraftAgent(BaseAgent):
     def _unfinished_todos(self) -> bool:
         """施工、备料或核验仍有待办时，交付必须继续等待这些事项完成。"""
         return any(todo.status != "done" for todo in self._mc_state.todos)
+
+    def _remember_task_snapshot(self, snapshot: Dict[str, Any], ref: str | None = None) -> None:
+        """查询拿到的新决策立即进入任务事实；完整编号和缺口不依赖下一次历史摘要复述。"""
+        task = snapshot.get("task", snapshot)
+        if not isinstance(task, dict) or snapshot.get("error"):
+            return
+        task_id = task.get("task_id")
+        raw_status = task.get("state", task.get("status"))
+        status = _MAICRAFT_TASK_STATUS_MAP.get(raw_status, raw_status) if isinstance(raw_status, str) else ""
+        if not isinstance(task_id, str) or status not in _TASK_EVENT_STATUSES:
+            return
+        progress = self._task_progress.setdefault(task_id, {"task_id": task_id})
+        progress["status"] = status
+        if ref:
+            progress["result_ref"] = ref
+        if status == "waiting_for_decision":
+            facts = decision_facts(snapshot, progress.get("summary", ""))
+            if facts:
+                if ref:
+                    facts["result_ref"] = ref
+                progress["decision"] = facts
+        else:
+            # 恢复受理或任务结束后删除旧应答编号，下一次决策只能使用新回执提供的编号。
+            progress.pop("decision", None)
+        ledger = getattr(self._task_tracker, "ledger", None)
+        record = ledger.get(task_id) if ledger is not None else None
+        if record is not None and record.initiator == self.name:
+            ledger.update(task_id, status, snapshot=snapshot)
 
     async def _prepare_context(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> bool:
         """历史超预算才生成检查点，失败保留原件并挂起，避免无上下文地继续操作游戏。"""
@@ -1041,6 +1074,12 @@ class MinecraftAgent(BaseAgent):
                 "status": payload.status,
                 "summary": payload.summary,
             }
+            if payload.status == "waiting_for_decision":
+                facts = decision_facts(payload.snapshot or {}, payload.summary)
+                if facts:
+                    self._task_progress[payload.task_id]["decision"] = facts
+            else:
+                self._task_progress[payload.task_id].pop("decision", None)
             while len(self._task_progress) > 64:
                 self._task_progress.pop(next(iter(self._task_progress)))
         # 受理转运行和普通进度由宿主记账，只有决策点、终态或停滞告警才需要模型判断。
@@ -1052,6 +1091,9 @@ class MinecraftAgent(BaseAgent):
             snapshot_text = "\n任务快照：" + json_text(shown)
             if payload.task_id in self._task_progress:
                 self._task_progress[payload.task_id]["result_ref"] = shown["_observation"]["ref"]
+                if payload.status == "waiting_for_decision" and "decision" in self._task_progress[payload.task_id]:
+                    # 决策自己的引用随原始快照保存，后续普通查询不能让诊断路径指向另一份回执。
+                    self._task_progress[payload.task_id]["decision"]["result_ref"] = shown["_observation"]["ref"]
         if payload.executor == "minecraft_builder":
             # 设计任务号只在本地查询；施工仍需父 Agent 显式发起，不能当作已经建好。
             if self._running:
@@ -1273,10 +1315,7 @@ class MinecraftAgent(BaseAgent):
     @staticmethod
     def _decision_id(snapshot: Dict[str, Any]) -> str:
         """只从原生决策位置读取编号，不把蓝图等任意嵌套内容当成待应答事实。"""
-        decision = snapshot.get("decision")
-        if not isinstance(decision, dict) and snapshot.get("event_type") == "decision":
-            decision = snapshot.get("data")
-        return str(decision.get("decision_id") or "") if isinstance(decision, dict) else ""
+        return str(task_decision(snapshot).get("decision_id") or "")
 
     def _absorb_resume_receipt(self, arguments: Dict[str, Any], receipt: Dict[str, Any]) -> None:
         """恢复答复已被 Mod 受理时立即解除旧待决策事实，不等待轮询才允许零推理等待。"""
@@ -1292,6 +1331,7 @@ class MinecraftAgent(BaseAgent):
         ledger.update(task_id, "running", snapshot=receipt, summary="原任务恢复请求已受理")
         progress = self._task_progress.setdefault(task_id, {"task_id": task_id})
         progress.update(status="running", summary="原任务恢复请求已受理")
+        progress.pop("decision", None)
 
     @staticmethod
     def _task_event_summary(event_type: str, event: Dict[str, Any]) -> str:
