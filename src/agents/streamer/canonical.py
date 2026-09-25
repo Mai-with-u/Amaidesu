@@ -21,13 +21,10 @@ from src.modules.logging import get_logger
 
 __all__ = [
     "ROLE_LABELS",
-    "SINGLE_ITEM_MAX_CHARS",
     "batch_item_to_message",
     "canonical_content",
-    "drop_oldest_blocks",
     "live_chat_row_to_message",
     "to_text_view",
-    "truncate_item",
     "turn_to_message",
 ]
 
@@ -57,26 +54,6 @@ ROLE_LABELS: Dict[str, str] = {
     "assistant": "主播",
     "system": "系统",
 }
-
-#: 单条消息内容上限（字符）：2000 ≥ 最长正常来源（高档 SC 千字量级）——
-#: 正常内容永不截断，只兜病理输入（如无上限的控制台注入）；与 Planner
-#: 工具观察帽同值（_OBSERVATION_MAX_CHARS = 2000），统一"单项 ≤2000"一条规则。
-SINGLE_ITEM_MAX_CHARS: int = 2000
-
-#: 历史字符预算（Planner / Replyer 共用）：历史消息总字符超预算时成块丢最旧
-#: （drop_oldest_blocks）。条数上限（history_limit）在历史读取处生效，本预算
-#: 补字符维度兜长内容病理输入。
-HISTORY_CHAR_BUDGET: int = 12000
-
-#: 截断标记（与 Planner 观察截断完全同文，保持全局口径一致）。
-_TRUNCATION_SUFFIX = "…（截断）"
-
-
-def truncate_item(text: str) -> str:
-    """单条内容超长截断：超出上限时裁剪至 2000 字符并追加"…（截断）"标记。"""
-    if len(text) > SINGLE_ITEM_MAX_CHARS:
-        return text[:SINGLE_ITEM_MAX_CHARS] + _TRUNCATION_SUFFIX
-    return text
 
 
 def _as_str(value: Any) -> str:
@@ -110,7 +87,8 @@ def canonical_content(
         content = line
         if message_id:
             content = f"{content} [id:{message_id}]"
-    return truncate_item(content)
+    # 弹幕、昵称与消息标识完整进入上下文，避免长消息丢失尾部要求。
+    return content
 
 
 def live_chat_row_to_message(row: Any) -> Dict[str, str]:
@@ -186,16 +164,3 @@ def to_text_view(messages: List[Any]) -> str:
         else:
             lines.append(f"{ROLE_LABELS.get(role, role)}: {content}")
     return "\n".join(lines)
-
-
-def drop_oldest_blocks(messages: List[Dict[str, str]], max_chars: int) -> List[Dict[str, str]]:
-    """历史字符预算的截断机制：**成块丢最旧**（块 = 单条消息，整条丢弃）。
-
-    从头部整条移除直到总字符数落回预算内——只丢整块、不切分内容，保证
-    被保留的前缀与全量形态逐字一致（append-only 缓存友好的截断方式）。
-    预算参数由调用方传入（Planner / Replyer 用 canonical.HISTORY_CHAR_BUDGET）。
-    """
-    kept = list(messages)
-    while kept and sum(len(m["content"]) for m in kept) > max_chars:
-        kept.pop(0)
-    return kept

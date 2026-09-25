@@ -149,7 +149,6 @@ class Replyer:
         # 历史段跨轮逐字稳定、只追加不重排，是请求前缀缓存命中的前提；
         # 文本拍平进单条 user 消息会让每轮请求前缀全变，缓存无从命中。
         history_messages = [canonical.turn_to_message(msg) for msg in (history or [])]
-        history_messages = canonical.drop_oldest_blocks(history_messages, canonical.HISTORY_CHAR_BUDGET)
         messages: List[Dict[str, Any]] = [*history_messages, {"role": "user", "content": turn_input}]
 
         # reply 是唯一工具——表达引擎不持有任何信息/动作类工具列表

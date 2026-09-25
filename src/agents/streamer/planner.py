@@ -124,14 +124,6 @@ def _render_observation(data: Any) -> str:
     return rendered[:_OBSERVATION_MAX_CHARS] + _TRUNCATION_MARK
 
 
-#: 历史消息总字符预算：12000 由窗口倒推——最坏输入 = 系统提示词 1.5K
-#: + 参考段 ≤2.6K（含游戏叙事与身体近况满格）+ 工具观察 ≤49K（8 步 × 6144）
-#: + 对话 ≤12K ≈ 65K 字符（约 45K token），留余量防越窗；正常 30 条历史约
-#: 1.5-2.4K 字符，预算只兜长内容病理输入。与条数上限 history_limit=30
-#: 构成双上限、先到先丢（成块丢最旧，见 canonical.drop_oldest_blocks）。
-#: 常量本体在 canonical.HISTORY_CHAR_BUDGET（与 Replyer 历史通道共用一条规则）。
-_HISTORY_CHAR_BUDGET: int = canonical.HISTORY_CHAR_BUDGET
-
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
 _DEFAULT_MAX_STEPS: int = 8
 
@@ -481,13 +473,12 @@ class Planner:
         if proactive:
             lines.append("【情境】本窗为主动发言触发（冷场/定时）——弹幕可能为空，基于房间态势决定是否主动开口。")
         if game_narrative:
-            # 叙事是注入到参考段的单项内容，同样受单项 2000 字符帽约束
-            # （canonical.SINGLE_ITEM_MAX_CHARS，与消息单项截断同一规则）。
-            lines.append(f"【游戏叙事】{canonical.truncate_item(game_narrative)}")
+            # 游戏进度保留完整叙述，使施工结果和未解决的问题都能进入本轮决策。
+            lines.append(f"【游戏叙事】{game_narrative}")
         if body_narrative:
             # 身体侧近况：单独一段，不与游戏叙事混排——两者形状与更新频率不同，
             # 混在一起会让高频的遭遇把进展叙事挤掉。
-            lines.append(f"【身体近况】{canonical.truncate_item(body_narrative)}")
+            lines.append(f"【身体近况】{body_narrative}")
         situation_text = "\n".join(lines)
 
         if not self._context_enabled:
@@ -558,9 +549,6 @@ class Planner:
                 break
 
         history_messages = [canonical.turn_to_message(turn) for turn in history[:end]]
-        # 字符预算（成块丢最旧，与条数上限 history_limit=30 双上限先到先丢）：
-        # 条数上限在历史读取处已生效，此处补字符维度——超预算时从最旧整条丢弃。
-        history_messages = canonical.drop_oldest_blocks(history_messages, _HISTORY_CHAR_BUDGET)
         return history_messages + batch_messages
 
     # ==================== 工具列表与执行 ====================
