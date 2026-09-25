@@ -25,6 +25,7 @@
 - [游戏 Agent（Minecraft）](architecture/minecraft-agent.md)
 - [虚拟形象（Avatar）](architecture/avatar-platform.md)
 - [主播上下文构成](architecture/streamer-context.md)
+- [观众画像](architecture/viewer-profile.md)
 
 ## 架构决策记录
 
