@@ -207,7 +207,7 @@ class TestWebSearchProviderConfig:
         content = (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
         assert 'base_url = "https://cn.bing.com/search"' in content
         assert "timeout_ms = 10000" in content
-        assert "max_fetch_chars = 4000" in content
+        assert "max_fetch_chars" not in content
 
     def test_update_path_type_violation_raises(self, temp_config_dir):
         """WebUI 写入口：web.search.config 字段类型违约经统一校验事务拒绝。"""

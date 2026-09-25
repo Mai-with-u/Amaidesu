@@ -8,7 +8,7 @@ web 分类的被动工具：LLM 需要外部信息时调用，拿到文本结果
   HTML（默认 Bing 网页版，免 API key），返回标题+网址+摘要文本列表；
   ``base_url`` 可指向其他同构搜索引擎入口
 - ``web_fetch_url(url)``：抓取指定网址正文——去除脚本/样式标签后提取
-  纯文本，压缩空白并按配置截断，用于阅读搜索结果中的具体页面
+  纯文本，压缩空白并完整返回，用于阅读搜索结果中的具体页面
 
 TOML 段位：``[tools.web.search].config``；经 ``tools.bootstrap`` 按
 分类开关装配，ConfigSchema 登记于 ``config/registry.TOOL_PROVIDER_SCHEMAS``。
@@ -117,11 +117,6 @@ class WebSearchProvider(BaseToolProvider):
             le=10,
             description="搜索结果默认返回条数（调用方可用 max_results 覆盖）",
         )
-        max_fetch_chars: int = Field(
-            default=4000,
-            ge=200,
-            description="网页正文最大返回字符数（超出截断并附提示）",
-        )
 
     def __init__(self, config: Optional["WebSearchProvider.ConfigSchema"] = None) -> None:
         self._config = config or self.ConfigSchema()
@@ -192,7 +187,7 @@ class WebSearchProvider(BaseToolProvider):
         return "\n".join(lines)
 
     async def _run_fetch(self, args: Dict[str, Any]) -> str:
-        """抓取网址正文：scheme 校验 → 拉取 → 纯文本化 → 截断。"""
+        """抓取网址正文：scheme 校验 → 拉取 → 完整提取正文。"""
         url = str(args.get("url", "")).strip()
         scheme = urlparse(url).scheme.lower()
         if scheme not in ("http", "https"):
@@ -200,9 +195,6 @@ class WebSearchProvider(BaseToolProvider):
 
         html = await self._http_get(url)
         text = html_to_text(html)
-        limit = self._config.max_fetch_chars
-        if len(text) > limit:
-            return text[:limit] + f"\n（正文过长，已截断至前 {limit} 字符）"
         if not text:
             return "（页面无可提取正文，可能需要浏览器渲染）"
         return text

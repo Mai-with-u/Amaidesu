@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+
 import pytest
 
 from src.modules.tools.models import ToolInvocation
@@ -109,15 +110,15 @@ class TestInvoke:
         assert result.success is False
         assert "http/https" in result.error_message
 
-    async def test_fetch_truncates_long_content(self, monkeypatch):
-        provider = WebSearchProvider(config=WebSearchProvider.ConfigSchema(max_fetch_chars=200))
-        self._mock_http(monkeypatch, provider, "<html><body>" + "字" * 500 + "</body></html>")
+    async def test_fetch_preserves_long_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """网页中的尾部信息完整返回，供模型继续阅读。"""
+        provider = WebSearchProvider(config=WebSearchProvider.ConfigSchema())
+        self._mock_http(monkeypatch, provider, "<html><body>" + "字" * 12000 + "</body></html>")
 
         result = await provider.invoke(_invocation("web_fetch_url", {"url": "https://example.com/long"}))
 
         assert result.success is True
-        assert "已截断" in result.content
-        assert len(result.content) < 500
+        assert result.content == "字" * 12000
 
     async def test_empty_query_returns_hint_without_http(self):
         provider = self._provider()
