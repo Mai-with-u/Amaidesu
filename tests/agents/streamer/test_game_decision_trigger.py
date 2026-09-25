@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.config import StreamerConfig
-from src.agents.streamer.streamer_agent import StreamerAgent, _MAX_BODY_NARRATIVE
+from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
@@ -188,8 +188,8 @@ async def test_body_event_feeds_the_body_narrative_line() -> None:
 
 
 @pytest.mark.asyncio
-async def test_body_narrative_buffer_is_bounded() -> None:
-    """身体近况缓冲有上限：高频遭遇不挤占、不无界增长。"""
+async def test_body_narrative_keeps_all_events() -> None:
+    """连续身体事件全部保留，主播能看到最初遇险与最新反应。"""
     bus = EventBus()
     agent = _build_streamer_agent(event_bus=bus)
     agent._subscribe_events()
@@ -200,9 +200,9 @@ async def test_body_narrative_buffer_is_bounded() -> None:
             BodyEventPayload(game="minecraft", kind="reflex_started", summary=f"紧急反应接管（{index}）"),
             source="maicraft_attention",
         )
-    await _wait_until(lambda: len(agent._body_narrative_blocks) == _MAX_BODY_NARRATIVE)
-    assert len(agent._body_narrative_blocks) == _MAX_BODY_NARRATIVE
-    assert "（7）" in agent._body_narrative_text(), "保留最近的，丢最旧的"
+    await _wait_until(lambda: len(agent._body_narrative_blocks) == 8)
+    assert len(agent._body_narrative_blocks) == 8
+    assert all(f"（{i}）" in agent._body_narrative_text() for i in range(8))
 
     await bus.cleanup()
 

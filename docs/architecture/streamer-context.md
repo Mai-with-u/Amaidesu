@@ -1,6 +1,6 @@
 # 主播 Agent 决策窗上下文
 
-本文档描述 StreamerAgent 每次 Planner 决策窗喂给 LLM 的完整输入构成：消息形态、参考段、缓存硬要求与输入上限，以及历史读取的单一事实源。实现入口：`src/agents/streamer/planner.py`（消息序列组装）、`src/agents/streamer/canonical.py`（canonical 映射与截断机制）、`src/agents/streamer/planner_context.py`(参考段组装）、`src/agents/streamer/streamer_agent.py`（历史读取链）。
+本文档描述 StreamerAgent 每次 Planner 决策窗喂给 LLM 的完整输入构成：消息形态、参考段、缓存要求与完整输入契约，以及历史读取的单一事实源。实现入口：`src/agents/streamer/planner.py`（消息序列组装）、`src/agents/streamer/canonical.py`（canonical 映射）、`src/agents/streamer/planner_context.py`(参考段组装）、`src/agents/streamer/streamer_agent.py`（历史读取链）。
 
 ## 消息形态
 
@@ -8,7 +8,7 @@
 
 ```
 [system]  Planner ReAct 系统提示词（amaidesu_planner_react 模板渲染）
-[user]    历史对话（live_chat 最近窗口，user/assistant 原生消息，旧→新）
+[user]    历史对话（live_chat 当前场次完整历史，user/assistant 原生消息，旧→新）
 [user]    本批弹幕（当前聚合窗内的观众消息，user 原生消息）
 [user]    参考段（元数据参考内容，固定在序列尾部）
 ```
@@ -36,23 +36,16 @@
 服务端 LLM 前缀缓存能命中，依赖以下三条硬约束（代码与模板改动都不得破坏）：
 
 1. **跨窗逐字稳定**：同一历史消息跨决策窗的序列化结果必须字节一致。canonical 映射只依赖行自身字段（角色/昵称/内容/类型/消息 ID），不含时间等易变量；直播间快照内部时刻取分钟桶，避免秒级抖动毒化前缀。
-2. **成块丢最旧**：历史超预算时从头部整条移除（块 = 单条消息），只丢整块、不切分内容——被保留的前缀与全量形态逐字一致，截断本身不破坏缓存。
+2. **历史只追加**：当前场次的已有消息完整保留，新消息追加到尾部；相同消息跨轮逐字一致。
 3. **参考段不插中**：参考段固定在基座消息序列尾部，对话只在其前追加；运行期动态内容一律进参考段或其后的 ReAct 消息，不修改既有消息。
 
-## 输入上限清单
+## 输入完整性
 
-| 项 | 上限 | 超出行为 |
-|----|------|---------|
-| 单项内容（弹幕/历史消息/游戏叙事等单条内容） | 2000 字符 | 裁剪至 2000 字符并追加"…（截断）"标记（与工具观察口径逐字统一） |
-| 历史消息条数 | 30 条（`history_limit` 配置默认值） | 双上限先到先丢，成块丢最旧 |
-| 历史消息总字符 | 12000 字符 | 同上 |
-| 工具观察（单次） | 6144 字符 | 按体量整段丢弃顶层字段，并写入 `_truncated` 与 `_omitted`（被丢弃键名清单） |
+对话历史、本批弹幕、游戏叙事和观众画像均完整注入。消息尾部的要求、身份与目标标识不会因字符数被移除。历史按当前直播场次隔离，整场对话保持时间正序。
 
-双上限语义：条数与字符预算**先到先丢**——任一超限即从历史头部成块移除最旧整条，直到落回两项预算内。数值为常量（不引入 tokenizer，不做精确 token 计数；12000 字符历史预算按窗口倒推留余量）。
+工具观察保留完整字段与正文，序列化后直接追加到 ReAct 消息序列。读取某个字段的结果由工具真实返回值决定，Planner 不再自行丢弃字段或替换成截断标记。
 
-工具观察的丢弃口径与单项内容不同：单项内容按前缀裁剪（内存里没有可丢弃的结构单元），工具观察是结构化对象，因此**丢弃体量最大的整个顶层字段**，并把被丢弃的键名写进观察自身的 `_omitted`。理由有两条——前缀裁剪总是切掉排在后面的字段，而排在后面的往往是稀缺字段（游戏状态快照里的电梯楼层排在数段大体量诊断之后，实测每次都被整段切掉）；且被裁掉的一方无从知道内容丢过，会把"没读到"当成"没有"，据此编造"这里没有电梯"这类否定结论。自证标记把这种情况变成"这个字段这次没读到"，提示改问法（如只取所需段）而不是下结论。非对象形态的观察没有字段可丢，退回前缀裁剪并追加"…（截断）"。
-
-单条观察上限取 6144 的依据：完整游戏状态快照实测上万字符，2000 必然切掉稀缺字段；抬到能装下完整快照后正常观察不再触发截断，上限只兜病理输入。代价是最坏窗口随之变大（`planner_max_steps` 步 × 6144 字符），窗口预算需按此重算。
+LLM 请求完整发送消息与工具声明，宿主不设置生成 token 上限或请求截止时间。调用方主动取消时回收请求，服务端返回失败时按原有错误分类处理。
 
 ## live_chat 单一事实源
 
@@ -60,7 +53,7 @@
 
 - **表**：SQLite `live_chat`（全量直播消息流，含 `sender_role` / `sender_name` / `content` / `message_type` / `message_id` / `simulated` 等列），由 `StorageLedger` 订阅 `room.message.#` + `streamer.speech` 唯一写入。
 - **索引**：`idx_live_chat_session_ts (live_session_id, timestamp_ms)`——按场次取最近窗口的组合索引。
-- **读取链**：Planner 决策窗 / reply 工具 / 后台摘要均经 `StreamerAgent._read_history()` → `LiveSessionManager.resolve_pk()` 解析当前场次主键（与写路径 `StorageLedger` 落库同源）→ `SQLiteStore.list_recent_live_chat(live_session_id, limit=history_limit)` 按时间正序返回最近窗口。
+- **读取链**：Planner 决策窗 / reply 工具 / 后台摘要均经 `StreamerAgent._read_history()` → `LiveSessionManager.resolve_pk()` 解析当前场次主键（与写路径 `StorageLedger` 落库同源）→ `ChatRepo.list_recent_live_chat(live_session_id, limit=None)` 按时间正序返回当前场次完整对话。
 - **空读语义**：无显式场次（首场/未开播）或存储缺失时返回空列表，**不抛错**——首场首决定窗的空读是常态而非异常；读取异常记录 warning 并走各消费方自身的失败路径。
 
 ## 相关文档

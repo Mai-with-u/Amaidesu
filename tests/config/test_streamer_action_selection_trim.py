@@ -41,7 +41,7 @@ class TestEnableActionSelectionTrim:
         config, _ = load_config_dir(config_dir)
         streamer_cfg = config["agents"]["agents"]["streamer"]
         assert "enable_action_selection" not in streamer_cfg
-        assert "history_limit" in streamer_cfg
+        assert "history_limit" not in streamer_cfg
 
         # 写回落盘后文件中不再含该键
         written = agents_path.read_text(encoding="utf-8-sig")

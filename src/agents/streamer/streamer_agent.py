@@ -70,11 +70,6 @@ if TYPE_CHECKING:
 
 __all__ = ["StreamerAgent", "StreamerConfig"]
 
-# 游戏叙事摘要保留条数（近期叙事够用；进 Planner 上下文）
-_MAX_GAME_NARRATIVE = 10
-# 身体近况缓冲更小：它更新快、且只服务于"刚发生了什么"的叙述，不需要长记忆
-_MAX_BODY_NARRATIVE = 5
-
 # LLM profile 用途名（与 [llm_profiles.<name>] 三层结构对齐；model.toml 必填 6 成员）
 _PROFILE_PLANNER = "planner"
 _PROFILE_REPLYER = "replyer"
@@ -99,13 +94,6 @@ class _LiveChatTurn:
     sender_name: str = ""
     message_type: str = "danmaku"
     message_id: str = ""
-
-
-#: 历史窗口滞回步长（条）：满窗后攒满该条数才成块推进窗口，读入上限相应
-#: 放宽到 history_limit + 步长。逐条滑窗（每来一条新消息窗口就前移一位）
-#: 会让历史段缓存前缀每窗失效一次；成块推进把它摊薄到每步长一窗，代价是
-#: 窗口内历史最多滞后步长条（上限 40 条规模，对"最近说过什么"的语义无损）。
-_HISTORY_WINDOW_STEP: int = 10
 
 
 class StreamerAgent(BaseAgent):
@@ -174,7 +162,7 @@ class StreamerAgent(BaseAgent):
                 BackgroundMaintainer 跳过事实写入。这是契约保证的"功能
                 可关闭"而非"崩溃友好"。
             memory_policy: 可选画像行为策略（核心 ``[memory]`` 段，storage.toml）。
-                形如 ``{"profile_injection_max": 3, "profile_min_interactions": 3, ...}``；
+                形如 ``{"profile_min_interactions": 3, ...}``；
                 Planner 注入上限与后台事实提取/画像生成参数同源。``None`` 时
                 各参数走内置默认。
             speech_config: 可选发言管线配置（来自核心 ``[tts]`` 段）。
@@ -223,12 +211,8 @@ class StreamerAgent(BaseAgent):
         self._memory = memory
         # 观众统计仓储（Planner 注入画像时实时取昵称用；None 时回退 platform/user_id）
         self._viewer_repo = viewer_repo
-        # 画像行为策略（[memory] 段；Planner 注入上限与后台提取参数同源）
+        # 画像行为策略（[memory] 段；控制后台事实提取与画像生成）
         self._memory_policy = memory_policy if isinstance(memory_policy, dict) else {}
-        # 历史窗口滞回状态：窗口最旧一条的 message_id + 所属场次主键
-        # （见 _apply_history_window；场次切换时作废重锚）
-        self._history_window_pk: Optional[int] = None
-        self._history_window_anchor: str = ""
         self._logger = get_logger("StreamerAgent")
 
         # ===== 内部子组件 =====
@@ -623,7 +607,7 @@ class StreamerAgent(BaseAgent):
         payload: GamePayload,
         source: str,
     ) -> None:
-        """game.* 事件回调：收集最近游戏叙事（保留 N 条，进 Planner 上下文）。
+        """game.* 事件回调：完整收集游戏叙事，供 Planner 理解已有进展。
 
         叙事行带事件类型标记（``[game·event_type]``），Planner 据此区分
         "剧情推进"（milestone）与"需要定夺"（report）；message 本体不变。
@@ -633,8 +617,6 @@ class StreamerAgent(BaseAgent):
         try:
             line = f"[{payload.game}·{payload.event_type}] {payload.message}"
             self._game_narrative_blocks.append(line)
-            if len(self._game_narrative_blocks) > _MAX_GAME_NARRATIVE:
-                self._game_narrative_blocks = self._game_narrative_blocks[-_MAX_GAME_NARRATIVE:]
             if payload.event_type == "report":
                 self._game_decision_pending = True
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
@@ -650,7 +632,7 @@ class StreamerAgent(BaseAgent):
         payload: BodyEventPayload,
         source: str,
     ) -> None:
-        """``game.body.*`` 回调：收集 AI 玩家身体侧近况（独立小缓冲，进 Planner 上下文）。
+        """``game.body.*`` 回调：完整收集 AI 玩家身体侧事件，供 Planner 理解连续遭遇。
 
         与游戏叙事分两条线：``game.*`` 是低频进展/上报（含任务上下文），
         ``game.body.*`` 是身体侧的遭遇（被袭击/死亡/重生/紧急反应）。
@@ -662,8 +644,6 @@ class StreamerAgent(BaseAgent):
             marker = "（已结束）" if getattr(payload, "resolved", False) else ""
             line = f"[{payload.game}·{payload.kind}] {payload.summary}{marker}"
             self._body_narrative_blocks.append(line)
-            if len(self._body_narrative_blocks) > _MAX_BODY_NARRATIVE:
-                self._body_narrative_blocks = self._body_narrative_blocks[-_MAX_BODY_NARRATIVE:]
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集身体近况失败: {exc}")
 
@@ -996,15 +976,7 @@ class StreamerAgent(BaseAgent):
         return self._read_history()
 
     async def _read_history(self) -> Optional[List[Any]]:
-        """读当前场次最近对话历史（live_chat 单一事实源）。
-
-        场次主键经 ``LiveSessionManager.resolve_pk()`` 解析——与写路径
-        （StorageLedger 落库）同源；无显式场次（首场/未开播）或存储缺失时
-        返回空列表，不抛错（首场首决定窗的空读是常态而非异常）。
-
-        读入条数放宽到 history_limit + 步长，交 ``_apply_history_window``
-        做滞回裁剪——逐条滑窗会把历史段缓存前缀每窗打断一次。
-        """
+        """按时间正序读取当前直播场次完整对话，保留早期要求与已有承诺。"""
         if self._chat is None or self._session_manager is None:
             return None
         try:
@@ -1013,7 +985,7 @@ class StreamerAgent(BaseAgent):
                 return []
             rows = await self._chat.list_recent_live_chat(
                 live_session_id=live_pk,
-                limit=self.typed_config.history_limit + _HISTORY_WINDOW_STEP,
+                limit=None,
             )
         except Exception as exc:
             self._logger.warning(f"读取会话历史失败: {exc}")
@@ -1028,38 +1000,7 @@ class StreamerAgent(BaseAgent):
             )
             for row in rows
         ]
-        return self._apply_history_window(live_pk, turns)
-
-    def _apply_history_window(self, live_pk: int, turns: List[_LiveChatTurn]) -> List[_LiveChatTurn]:
-        """历史窗口滞回：满窗后不逐条前移，攒满一个步长才成块推进。
-
-        逐条滑窗（读最近 limit 条）每来一条新消息窗口就前移一位——最旧一条
-        一换位，其后整段历史在请求里全部错位，前缀缓存从历史段起点起全部
-        落空。改为锚定窗口最旧一条：新消息只追加在窗口尾部（前缀逐字稳定），
-        攒满步长才推进到最新 limit 条并重锚——历史段 miss 从每窗一次摊薄到
-        每步长一窗。锚丢失（跨场次残留 / 行无 message_id / 长时间间隔跳变）
-        时退回"全量过读 + 立即推进"，窗口仍有界（limit + 步长）。
-        """
-        limit = self.typed_config.history_limit
-        if limit <= 0:
-            return []
-        if live_pk != self._history_window_pk:
-            self._history_window_pk = live_pk
-            self._history_window_anchor = ""
-        if len(turns) <= limit:
-            self._history_window_anchor = turns[0].message_id if turns else ""
-            return turns
-        start = 0
-        if self._history_window_anchor:
-            start = next(
-                (i for i, t in enumerate(turns) if t.message_id and t.message_id == self._history_window_anchor),
-                0,
-            )
-        included = turns[start:]
-        if len(included) >= limit + _HISTORY_WINDOW_STEP:
-            included = turns[-limit:]
-            self._history_window_anchor = included[0].message_id
-        return included
+        return turns
 
     # ==================================================================
     # 统计信息

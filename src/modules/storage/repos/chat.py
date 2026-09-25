@@ -304,17 +304,11 @@ class ChatRepo(BaseRepo):
         self,
         *,
         live_session_id: int,
-        limit: int = 30,
+        limit: Optional[int] = 30,
         before_timestamp_ms: Optional[int] = None,
         sender_role: Optional[str] = None,
     ) -> List[sqlite3.Row]:
-        """取指定场次最近的 ``limit`` 条消息，按时间**正序**返回（旧→新）。
-
-        实现：先 ``ORDER BY timestamp_ms DESC LIMIT ?`` 拿最新窗口，再 Python 内
-        ``list(reversed(...))`` 反转。``before_timestamp_ms`` 用于分页/窗口截断
-        （仅取 < 该时间的消息）。``sender_role`` 可选过滤发送方角色
-        （``"viewer"``=观众 / ``"assistant"``=主播）。
-        """
+        """按时间正序返回场次消息；limit=None 时完整读取，分页调用可指定条数。"""
 
         def _exec() -> List[sqlite3.Row]:
             clauses = ["live_session_id=?"]
@@ -325,10 +319,14 @@ class ChatRepo(BaseRepo):
             if before_timestamp_ms is not None:
                 clauses.append("timestamp_ms<?")
                 params.append(before_timestamp_ms)
-            params.append(limit)
+            # LLM 上下文读取完整场次；需要分页的界面仍可显式指定读取数量。
+            suffix = ""
+            if limit is not None:
+                suffix = " LIMIT ?"
+                params.append(limit)
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "SELECT * FROM live_chat WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms DESC LIMIT ?",
+                    "SELECT * FROM live_chat WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms DESC" + suffix,
                     params,
                 )
                 rows = cur.fetchall()

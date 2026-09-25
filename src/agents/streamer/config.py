@@ -5,7 +5,7 @@
 段树结构（TOML 视角）::
 
     [agents.streamer]
-    rundown_id, planner_max_steps, history_limit
+    rundown_id, planner_max_steps
 
     [agents.streamer.persona]
     bot_name, personality, style_constraints, behavior_style, audience_salutation
@@ -277,11 +277,6 @@ class StreamerConfig(BaseConfig):
         default=8,
         ge=1,
         description="Planner 单决策窗 ReAct 循环最大步数（超出静默收场，防失控）",
-    )
-    history_limit: int = Field(
-        default=30,
-        ge=0,
-        description="构建 prompt 时引用的历史消息条数",
     )
 
     # 子段

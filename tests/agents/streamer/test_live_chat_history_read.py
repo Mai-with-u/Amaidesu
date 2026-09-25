@@ -104,14 +104,14 @@ async def test_list_recent_live_chat_role_filter(store: SQLiteDatabase) -> None:
     assert [r["content"] for r in rows] == ["你好"]
 
 
-def _make_agent(store: SQLiteDatabase, session_manager, *, history_limit: int = 30) -> StreamerAgent:
+def _make_agent(store: SQLiteDatabase, session_manager) -> StreamerAgent:
     llm = MagicMock()
     llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
     llm.generate = AsyncMock(return_value=Response(success=False, error="not used"))
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="PROMPT")
     return StreamerAgent(
-        config=StreamerConfig.from_dict({"proactive": {"enabled": False}, "history_limit": history_limit}),
+        config=StreamerConfig.from_dict({"proactive": {"enabled": False}}),
         llm_manager=llm,
         prompt_manager=prompt,
         event_bus=None,
@@ -186,7 +186,7 @@ async def _insert_turns(store: SQLiteDatabase, count: int, *, start_index: int, 
 @pytest.mark.asyncio
 async def test_history_window_grows_append_only_before_limit(store: SQLiteDatabase) -> None:
     """未满窗时全量返回且只追加：旧消息跨读逐字稳定。"""
-    agent = _make_agent(store, _FakeSessionManager(1), history_limit=5)
+    agent = _make_agent(store, _FakeSessionManager(1))
     await _insert_turns(store, 3, start_index=1)
     first = await agent._read_history()
     assert [t.message_id for t in first] == ["m1", "m2", "m3"]
@@ -197,36 +197,23 @@ async def test_history_window_grows_append_only_before_limit(store: SQLiteDataba
 
 
 @pytest.mark.asyncio
-async def test_history_window_holds_then_advances_in_block(store: SQLiteDatabase) -> None:
-    """满窗后新消息先追加在尾部（最旧不丢），攒满一个步长才推进到最新 limit 条。
-
-    limit=5、步长 10：窗口长到 15 条才成块推进，历史段 miss 从每窗一次
-    摊薄到每步长一窗。
-    """
-    agent = _make_agent(store, _FakeSessionManager(1), history_limit=5)
-    await _insert_turns(store, 5, start_index=1)
-    await agent._read_history()  # 满窗，锚 = m1
-
-    await _insert_turns(store, 1, start_index=6)
-    grown = await agent._read_history()
-    assert [t.message_id for t in grown] == ["m1", "m2", "m3", "m4", "m5", "m6"]
-
-    # 窗口达到 limit+步长=15 → 成块推进到最新 5 条，重锚 m11
-    await _insert_turns(store, 9, start_index=7)
-    advanced = await agent._read_history()
-    assert [t.message_id for t in advanced] == ["m11", "m12", "m13", "m14", "m15"]
-
-    # 推进后继续只追加：从新锚 m11 起窗口逐条生长
-    await _insert_turns(store, 1, start_index=16)
-    regrown = await agent._read_history()
-    assert [t.message_id for t in regrown] == ["m11", "m12", "m13", "m14", "m15", "m16"]
+async def test_history_keeps_early_messages_after_many_new_turns(store: SQLiteDatabase) -> None:
+    """读取跨过旧条数限制后，最初指令仍在场次前缀中。"""
+    agent = _make_agent(store, _FakeSessionManager(1))
+    await _insert_turns(store, 45, start_index=1)
+    first = await agent._read_history()
+    assert [turn.message_id for turn in first] == [f"m{i}" for i in range(1, 46)]
+    await _insert_turns(store, 3, start_index=46)
+    second = await agent._read_history()
+    assert [turn.message_id for turn in second] == [f"m{i}" for i in range(1, 49)]
+    assert second[:45] == first
 
 
 @pytest.mark.asyncio
 async def test_history_window_reset_on_session_switch(store: SQLiteDatabase) -> None:
     """场次切换（新开播）：旧场次锚点作废，新场次从空窗重新生长。"""
     session = _FakeSessionManager(1)
-    agent = _make_agent(store, session, history_limit=5)
+    agent = _make_agent(store, session)
     await _insert_turns(store, 6, start_index=1)
     await agent._read_history()
 
