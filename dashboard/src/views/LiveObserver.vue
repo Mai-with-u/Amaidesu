@@ -366,10 +366,26 @@ const thinkingRounds = reactive(new Map<string, ThinkingRound>());
  *  （思考行不进 hiddenIds 体系——它不是事件，没有事件 id） */
 const thinkingHiddenBeforeMs = ref(0);
 
+/** 思考流增量合批：WS 每消息触发一次落状态会带起整条时间线重渲染，复杂任务期间
+ * 思考增量高频涌入时把页面拖死——先缓冲，按固定间隔一次性落进 reactive 状态，
+ * 渲染频率与消息频率解耦；缓冲条目携带信封时间戳（段首定位用） */
+const THINKING_FLUSH_INTERVAL_MS = 150;
+const pendingDeltas: Array<{ delta: ThinkingDelta; tsMs: number }> = [];
+let thinkingFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
 function handleThinkingMessage(message: WebSocketMessage): void {
   if (message.kind !== 'stream' || message.type !== 'thinking.delta') return;
   const deltas = (message.data.deltas ?? []) as ThinkingDelta[];
-  for (const delta of deltas) {
+  for (const delta of deltas) pendingDeltas.push({ delta, tsMs: message.timestamp_ms });
+  if (thinkingFlushTimer) return;
+  thinkingFlushTimer = setTimeout(() => {
+    thinkingFlushTimer = null;
+    applyThinkingDeltas(pendingDeltas.splice(0, pendingDeltas.length));
+  }, THINKING_FLUSH_INTERVAL_MS);
+}
+
+function applyThinkingDeltas(batch: Array<{ delta: ThinkingDelta; tsMs: number }>): void {
+  for (const { delta, tsMs } of batch) {
     let round = thinkingRounds.get(delta.round_id);
     if (!round) {
       round = reactive({
@@ -386,14 +402,14 @@ function handleThinkingMessage(message: WebSocketMessage): void {
       }
     }
     if (delta.phase === 'replyer') {
-      if (!round.replyerTsMs) round.replyerTsMs = message.timestamp_ms;
+      if (!round.replyerTsMs) round.replyerTsMs = tsMs;
       round.replyerText += delta.text_delta;
     } else {
       // planner 与 minecraft 共享 step-based 累积：同 Map 同段索引；
       // 行标签按 phase 区分（minecraft 段当前不存在，预留）
       let seg = round.steps.find(s => s.step === delta.step);
       if (!seg) {
-        seg = reactive({ step: delta.step, text: '', tsMs: message.timestamp_ms });
+        seg = reactive({ step: delta.step, text: '', tsMs });
         round.steps.push(seg);
       }
       seg.text += delta.text_delta;
@@ -750,11 +766,29 @@ function handleAgentChip(value: 'all' | AgentGroup, checked: boolean): void {
   if (checked) agentFilter.value = value;
 }
 
+/** 条目重建节流：每条事件到达都会触发 buildLiveEntries 全量折叠，复杂任务期间
+ * 工具结果高频涌入时按固定间隔合并重建（尾沿触发，静默后最终态仍会落地） */
+const REBUILD_INTERVAL_MS = 250;
+let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+let lastRebuildMs = 0;
+let pendingRebuild: Array<FeedEvent[]> | null = null;
+let pendingHidden: Set<string> | null = null;
+
 watch(
   [events, paused, hiddenIds],
   ([list, isPaused, hidden]) => {
     if (isPaused) return;
-    liveEntries.value = buildLiveEntries(list as FeedEvent[], hidden);
+    pendingRebuild = [list as FeedEvent[]];
+    pendingHidden = hidden;
+    if (rebuildTimer) return;
+    const wait = Math.max(0, REBUILD_INTERVAL_MS - (Date.now() - lastRebuildMs));
+    rebuildTimer = setTimeout(() => {
+      rebuildTimer = null;
+      lastRebuildMs = Date.now();
+      // 暂停期不重建（与原 watch 跳过重建的冻结语义一致）；恢复时 watch 会再排程
+      if (paused.value || !pendingRebuild || pendingHidden === null) return;
+      liveEntries.value = buildLiveEntries(pendingRebuild[0], pendingHidden);
+    }, wait);
   },
   { immediate: true },
 );
@@ -1033,6 +1067,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   wsStore.unsubscribe(handleThinkingMessage);
+  if (thinkingFlushTimer) clearTimeout(thinkingFlushTimer);
+  if (rebuildTimer) clearTimeout(rebuildTimer);
   resizeObserver?.disconnect();
   resizeObserver = null;
 });

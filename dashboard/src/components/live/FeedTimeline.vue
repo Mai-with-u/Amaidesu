@@ -191,52 +191,61 @@
             v-if="!compact && hasToolDetail(entry)"
             class="t-payload"
             :class="{ 'is-failed': entry.failed }"
+            @toggle="onPayloadToggle(entry.id, $event)"
           >
             <summary>参数 / 结果</summary>
-            <!-- 失败时错误文本优先展示（开发者定位异常最直接的线索） -->
-            <div v-if="entry.failed && toolErrorOf(entry)" class="t-payload-block">
-              <div class="t-payload-head">
-                <span class="t-payload-tag t-payload-tag--error">错误</span>
-                <el-icon class="copy-icon" title="复制" @click="copyText(toolErrorOf(entry))">
-                  <CopyDocument />
-                </el-icon>
+            <!-- 载荷懒渲染：展开过才挂载（details 折叠态下子节点仍会进 DOM，
+                 大 JSON 树在高频重渲染的时间线里是主要渲染成本） -->
+            <template v-if="openedPayloads.has(entry.id)">
+              <!-- 失败时错误文本优先展示（开发者定位异常最直接的线索） -->
+              <div v-if="entry.failed && toolErrorOf(entry)" class="t-payload-block">
+                <div class="t-payload-head">
+                  <span class="t-payload-tag t-payload-tag--error">错误</span>
+                  <el-icon class="copy-icon" title="复制" @click="copyText(toolErrorOf(entry))">
+                    <CopyDocument />
+                  </el-icon>
+                </div>
+                <pre class="t-payload-text mono">{{ toolErrorOf(entry) }}</pre>
               </div>
-              <pre class="t-payload-text mono">{{ toolErrorOf(entry) }}</pre>
-            </div>
-            <div v-if="hasToolArgs(entry)" class="t-payload-block">
-              <div class="t-payload-head">
-                <span class="t-payload-tag">参数</span>
-                <el-icon
-                  class="copy-icon"
-                  title="复制 JSON"
-                  @click="copyJson(toolDetail(entry).args)"
-                >
-                  <CopyDocument />
-                </el-icon>
+              <div v-if="hasToolArgs(entry)" class="t-payload-block">
+                <div class="t-payload-head">
+                  <span class="t-payload-tag">参数</span>
+                  <el-icon
+                    class="copy-icon"
+                    title="复制 JSON"
+                    @click="copyJson(toolDetail(entry).args)"
+                  >
+                    <CopyDocument />
+                  </el-icon>
+                </div>
+                <div class="t-payload-json">
+                  <VueJsonPretty
+                    :data="toJsonData(toolDetail(entry).args)"
+                    theme="dark"
+                    show-line
+                  />
+                </div>
               </div>
-              <div class="t-payload-json">
-                <VueJsonPretty :data="toJsonData(toolDetail(entry).args)" theme="dark" show-line />
+              <div v-if="hasToolResult(entry)" class="t-payload-block">
+                <div class="t-payload-head">
+                  <span class="t-payload-tag">结果</span>
+                  <el-icon
+                    class="copy-icon"
+                    title="复制 JSON"
+                    @click="copyJson(toolDetail(entry).result)"
+                  >
+                    <CopyDocument />
+                  </el-icon>
+                </div>
+                <div class="t-payload-json">
+                  <VueJsonPretty
+                    :data="toJsonData(toolDetail(entry).result)"
+                    theme="dark"
+                    show-line
+                  />
+                </div>
               </div>
-            </div>
-            <div v-if="hasToolResult(entry)" class="t-payload-block">
-              <div class="t-payload-head">
-                <span class="t-payload-tag">结果</span>
-                <el-icon
-                  class="copy-icon"
-                  title="复制 JSON"
-                  @click="copyJson(toolDetail(entry).result)"
-                >
-                  <CopyDocument />
-                </el-icon>
-              </div>
-              <div class="t-payload-json">
-                <VueJsonPretty
-                  :data="toJsonData(toolDetail(entry).result)"
-                  theme="dark"
-                  show-line
-                />
-              </div>
-            </div>
+            </template>
           </details>
         </div>
 
@@ -404,6 +413,10 @@ interface RoundTokenStats {
 const roundTokenStats = ref<Map<string, RoundTokenStats>>(new Map());
 const tokenStatsFetching = new Set<string>();
 
+/** 已展开过载荷折叠区的条目 id：展开时才挂载 JSON 树，收起后保留已挂载内容不卸载。
+ * 声明在下方 immediate watch 之前——watch 首次同步执行就会读它 */
+const openedPayloads = ref<Set<string>>(new Set());
+
 async function fetchTokenStats(requestId: string): Promise<void> {
   tokenStatsFetching.add(requestId);
   try {
@@ -445,6 +458,17 @@ watch(
       if (!roundTokenStats.value.has(requestId) && !tokenStatsFetching.has(requestId)) {
         void fetchTokenStats(requestId);
       }
+    }
+    // 懒渲染集合同步收缩：只保留当前在列条目，避免长会话下随事件 id 无限增长
+    if (openedPayloads.value.size > 0) {
+      const liveIds = new Set(entries.map(entry => entry.id));
+      let pruned = false;
+      const next = new Set<string>();
+      for (const id of openedPayloads.value) {
+        if (liveIds.has(id)) next.add(id);
+        else pruned = true;
+      }
+      if (pruned) openedPayloads.value = next;
     }
   },
   { immediate: true },
@@ -547,10 +571,28 @@ function toolErrorOf(entry: ShowEntry): string {
 }
 
 /** vue-json-pretty 的 data 仅接受 JSON 结构；事件 payload 来自线上数据用 JSON 往返归一化
- * （剥掉 undefined / 函数等非 JSON 值），避免直接强转掩盖真实脏数据 */
+ * （剥掉 undefined / 函数等非 JSON 值），避免直接强转掩盖真实脏数据。
+ * 序列化结果按载荷对象引用缓存（WeakMap）：同一事件的 args/result 在缓冲区里引用稳定，
+ * 列表每次重渲染不必对全量载荷重复 JSON 往返——高频流式更新下的主要 CPU 开销来源 */
 type JsonData = string | number | boolean | null | JsonData[] | { [key: string]: JsonData };
+const jsonDataCache = new WeakMap<object, JsonData>();
 function toJsonData(value: unknown): JsonData {
-  return JSON.parse(JSON.stringify(value ?? null)) as JsonData;
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object') return JSON.parse(JSON.stringify(value)) as JsonData;
+  const cached = jsonDataCache.get(value);
+  if (cached !== undefined) return cached;
+  const parsed = JSON.parse(JSON.stringify(value)) as JsonData;
+  jsonDataCache.set(value, parsed);
+  return parsed;
+}
+
+/** details 原生 toggle 事件：首次展开时把条目 id 记入懒渲染集合 */
+function onPayloadToggle(entryId: string, event: Event): void {
+  if (!(event.target as HTMLDetailsElement).open) return;
+  if (openedPayloads.value.has(entryId)) return;
+  const next = new Set(openedPayloads.value);
+  next.add(entryId);
+  openedPayloads.value = next;
 }
 
 /** 复制交互与 LLM 历史页一致：剪贴板写入格式化 JSON；循环引用等异常落兜底文本 */
