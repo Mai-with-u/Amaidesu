@@ -181,7 +181,8 @@ class McpClient:
                 logger.debug(f"MCP server '{self.name}' 仍然连接失败（同因）: {failure}")
             else:
                 self._connect_failure = failure
-                logger.warning(f"MCP server '{self.name}' 连接失败（后续同因失败降为 debug）: {failure}", exc=exc)
+                # 首次失败是可预期告警（服务端未启动等），failure 串已含异常类型与原因，不附堆栈
+                logger.warning(f"MCP server '{self.name}' 连接失败（后续同因失败降为 debug）: {failure}")
             return False
 
     async def _connect_once(self, timeout_ms: int) -> bool:
