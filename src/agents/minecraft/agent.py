@@ -35,9 +35,11 @@ from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interr
 from src.agents.minecraft.design_progress import MachineDesignProgress
 from src.agents.minecraft.observations import MinecraftObservations, json_text, repeated_read
 from src.agents.minecraft.plan_facts import MinecraftPlanFacts
+from src.agents.minecraft.readback import is_reference, read_receipt
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.task_facts import decision_facts, task_decision
 from src.agents.minecraft.tool_content import failed_observation, successful_observation
+from src.agents.minecraft.tool_names import find_mod_tool
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.events.event_bus import EventBus
@@ -227,6 +229,8 @@ class MinecraftAgent(BaseAgent):
         self._attention_provider: Optional[Any] = None
         self._attention_stream_id: Optional[str] = None
         self._attention_cursor: int = 0
+        # 通知与任务步都可能同时读取，串行确认游标，防止较慢的旧快照把新位置覆盖回去。
+        self._attention_read_lock = asyncio.Lock()
         self._attention_primed: bool = False
         # 本批 ReAct 是否正在跑（决定通知到达时要不要读身体事件）
         self._batch_active: bool = False
@@ -354,23 +358,19 @@ class MinecraftAgent(BaseAgent):
     def _bind_mcp_adapters(self, prov: Any) -> None:
         """绑定处适配声明（幂等）：任务查询 + 状态映射 + attention 读取 + 通知订阅。
 
-        工具名按原始名后缀定位（server 特有知识留在此处）；通知订阅只在
+        工具名按当前声明与已知旧别名定位（server 特有知识留在此处）；通知订阅只在
         首次绑定建立（多订阅方通道，恢复重绑定不得重复入队）。
         """
-        for spec in prov.list_tools():
-            if spec.name.endswith("maicraft_task"):
-                prov.task_query_tool = spec.full_name
-                prov.task_status_map = _MAICRAFT_TASK_STATUS_MAP
-                break
+        spec = find_mod_tool(prov.list_tools(), "task")
+        prov.task_query_tool = spec.full_name if spec is not None else None
+        prov.task_status_map = _MAICRAFT_TASK_STATUS_MAP
         prov.attention_uri = "maicraft://attention"
         # 身体事件读取：工具名与固定入参都在这一处声明，provider 只补游标与页大小。
         # 本 Agent 另订阅同一条通知通道（举旗级），只在有进行中工作时才真去读——
         # 空闲时通知到达即返回，不产生 MCP 调用也不唤 LLM。
-        for spec in prov.list_tools():
-            if spec.name.endswith("perceive"):
-                prov.attention_read_tool = spec.full_name
-                prov.attention_read_arguments = {"view": "attention"}
-                break
+        spec = find_mod_tool(prov.list_tools(), "perceive")
+        prov.attention_read_tool = spec.full_name if spec is not None else None
+        prov.attention_read_arguments = {"view": "attention"}
         self._attention_provider = prov if getattr(prov, "attention_read_tool", None) else None
         if self._mcp_adapters_bound:
             return
@@ -433,7 +433,9 @@ class MinecraftAgent(BaseAgent):
         """
         visible: Dict[str, List[str]] = {}
         for spec in specs:
-            visible[spec.full_name] = ["streamer", "minecraft"] if spec.name.endswith("perceive") else ["minecraft"]
+            visible[spec.full_name] = (
+                ["streamer", "minecraft"] if spec.name in {"perceive", "maicraft_perceive"} else ["minecraft"]
+            )
         return visible
 
     async def _on_stop(self) -> None:
@@ -919,6 +921,7 @@ class MinecraftAgent(BaseAgent):
             "background_tasks": list(progress.values()),
             "reasoning_steps_used": self._task_steps,
             "observations": self._observations.index(),
+            "observation_count": self._observations.count,
             "recent_results": list(self._recent_results),
             "plan_facts": self._plan_facts.snapshot(),
         }
@@ -1169,13 +1172,17 @@ class MinecraftAgent(BaseAgent):
             self._logger.warning("注意流通知到达时无事件循环，本次提示丢弃")
 
     async def _drain_attention(self) -> None:
+        """共用一个游标读取者，分页补读期间到达的通知按顺序核实。"""
+        async with self._attention_read_lock:
+            await self._read_attention_page()
+
+    async def _read_attention_page(self) -> None:
         """按游标增量读一页注意流，按事件归属分流。
 
         注意流同时承载两类事件，本方法就是分流点：
 
-        - **任务事件**（带 ``task_id``，Mod 侧标 ``priority="task"``）→ 写任务记录表
-          （``_absorb_task_event``）：任务归本 Agent 管，"干完了"这件事由这里落账，
-          不依赖轮询查询。
+        - **任务事件**（带 ``task_id``）→ 完整回执可直接落账；简短通知先查询当前任务，
+          确认终态或待答问题后才更新本人的工作事实。
         - **身体事件**（``priority="important"``）→ 注入待吸收消息，供本 Agent 判断
           要不要因此调整手里的活。
 
@@ -1196,10 +1203,17 @@ class MinecraftAgent(BaseAgent):
                 after_cursor=self._attention_cursor,
                 limit=_ATTENTION_PAGE_LIMIT,
             )
+            if not isinstance(page, dict):
+                return
+            events = page.get("events")
+            if is_reference(events):
+                if self._mcp_client is None:
+                    raise ValueError("注意流事件需要补读，但 MCP 连接不可用")
+                events = await read_receipt(self._mcp_client, events)
+            if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+                raise ValueError("注意流缺少完整事件数组")
         except Exception as exc:  # noqa: BLE001 - 读取失败只降级，不打断任务
-            self._logger.warning(f"身体事件读取失败（本轮按未读到处理）: {exc}")
-            return
-        if not isinstance(page, dict):
+            self._logger.warning(f"身体事件读取失败（本轮按未读到处理）: {exc}", exc=exc)
             return
 
         resync = bool(page.get("resync_required") or page.get("history_lost") or page.get("stream_reset"))
@@ -1210,8 +1224,6 @@ class MinecraftAgent(BaseAgent):
         if isinstance(cursor, int):
             self._attention_cursor = cursor
 
-        events = page.get("events")
-        events = [e for e in events if isinstance(e, dict)] if isinstance(events, list) else []
         if resync or not self._attention_primed:
             self._attention_primed = True
             self._logger.info(
@@ -1222,8 +1234,16 @@ class MinecraftAgent(BaseAgent):
             return
 
         injected = 0
+        verified_tasks: set[str] = set()
         for event in events:
             if event.get("task_id"):
+                if page.get("schema_version", 1) >= 3:
+                    # 简短通知不含完整决策；先核实当前任务，不能凭门铃移除交付门禁或覆盖已有失败事实。
+                    task_id = str(event["task_id"])
+                    if task_id not in verified_tasks:
+                        await self._verify_short_task_event(event)
+                        verified_tasks.add(task_id)
+                    continue
                 # 任务类事件（priority="task"）归任务跟踪：写记录表，终态即"活干完了"。
                 # 不进消息队列——记录表写入本身经 task.changed 唤醒本 Agent，重复注入是两遍。
                 self._absorb_task_event(event)
@@ -1235,6 +1255,38 @@ class MinecraftAgent(BaseAgent):
             injected += 1
         if injected:
             self._logger.info(f"身体事件注入 {injected} 条（cursor={self._attention_cursor}）")
+
+    async def _verify_short_task_event(self, event: Dict[str, Any]) -> None:
+        """只核实本人在册任务；查询失败交给既有跟踪器继续等待，不将缺少回执判成已完成。"""
+        task_id = str(event.get("task_id") or "")
+        tracker = self._task_tracker
+        ledger = getattr(tracker, "ledger", None)
+        record = ledger.get(task_id) if ledger is not None else None
+        if record is None or record.initiator != self.name:
+            return
+        try:
+            result = await self._attention_provider.query_task(task_id)
+            snapshot = result.get("snapshot") if isinstance(result, dict) else None
+            if not isinstance(snapshot, dict) or snapshot.get("task_id") != task_id:
+                raise ValueError("任务查询未返回同一任务的可读快照")
+            self._remember_task_snapshot(snapshot)
+            if result.get("status") == "waiting_for_decision":
+                # 待答期间可能改成新的死亡恢复问题；同状态轮询不会广播，因此按新决策编号补一次通知。
+                self.on_task_notification(
+                    TaskChangedPayload(
+                        task_id=task_id,
+                        status="waiting_for_decision",
+                        initiator=self.name,
+                        executor=record.executor,
+                        snapshot=snapshot,
+                        summary=str(result.get("summary") or ""),
+                    )
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._logger.warning(f"简短任务通知尚未取得核实结果（task_id={task_id}）", exc=exc)
+            tracker.notify(task_id)
 
     async def _record_body_event(self, event: dict) -> None:
         """记下本批任务期间的身体事件，并决定是否即时告知主播。

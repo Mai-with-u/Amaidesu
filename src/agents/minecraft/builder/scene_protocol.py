@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from src.agents.minecraft.builder.config import MinecraftBuilderConfig
 from src.agents.minecraft.builder.models import BuildCatalog
+from src.agents.minecraft.readback import has_references, read_value
 
 
 class SceneInvoker(Protocol):
@@ -90,7 +91,10 @@ class MinecraftSceneProtocol:
             state = snapshot.get("state")
             terminal = snapshot.get("terminal")
             if isinstance(terminal, dict):
-                result = terminal.get("result")
+                # 当前摘要足够显示进度；设计交付须核对完整版本和施工标记，缺省略值时只读取原任务证据。
+                result = (
+                    await self._terminal_result(task_id, state) if has_references(terminal) else terminal.get("result")
+                )
                 if not isinstance(result, dict):
                     raise ValueError("Mod 终态缺少结构化 result")
                 if state != "success" or result.get("success") is not True:
@@ -134,3 +138,25 @@ class MinecraftSceneProtocol:
                 }
             # 等待的是已受理设计操作，整个循环受外层设计任务总预算和取消控制。
             await asyncio.sleep(self._config.operation_poll_interval_ms / 1000)
+
+    async def _terminal_result(self, task_id: str, state: str) -> dict[str, Any]:
+        """找回已结束设计的确切结果，分页只走 get，不因丢失上下文再次执行设计或施工。"""
+
+        async def page(path: str, offset: int) -> dict[str, Any]:
+            response = await self._invoke(
+                self._config.task_tool,
+                {"action": "get", "task_id": task_id, "path": path, "offset": offset, "limit": 20},
+                source="minecraft-builder-react",
+            )
+            if (
+                response.get("task_id") != task_id
+                or response.get("state") != state
+                or not isinstance(response.get("detail"), dict)
+            ):
+                raise ValueError("设计证据不属于同一个已结束任务")
+            return response["detail"]
+
+        result = await read_value(page, "/terminal/result")
+        if not isinstance(result, dict):
+            raise ValueError("设计任务没有完整的结果对象")
+        return result

@@ -37,6 +37,8 @@ from src.agents.minecraft.attention_matrix import (
     summarize,
     upstream_timestamp_ms,
 )
+from src.agents.minecraft.readback import is_reference, read_receipt
+from src.agents.minecraft.tool_names import find_mod_tool
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -138,6 +140,7 @@ class MaicraftAttentionCollector(BaseCollector):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - 单轮失败降级重连，不终止采集
+                self.logger.debug("注意流读取未完成，保留读取位置后重连", exc=exc)
                 self._report_unavailable(f"读取失败（{type(exc).__name__}: {exc}）")
                 await self._teardown()
                 await asyncio.sleep(retry_s)
@@ -166,8 +169,8 @@ class MaicraftAttentionCollector(BaseCollector):
             return True
         # 函数内 import：mcp 模块涉及 fastmcp 重型依赖，且仅在本采集器启用时使用
         from src.modules.mcp.client import McpClient
-        from src.modules.mcp.provider import McpToolProvider
         from src.modules.mcp.config import McpServerConfig
+        from src.modules.mcp.provider import McpToolProvider
 
         server = McpServerConfig(
             enabled=True,
@@ -190,11 +193,10 @@ class MaicraftAttentionCollector(BaseCollector):
             return False
 
         # 上游工具名与固定入参在装配处声明（server 特有知识不进通用 MCP 层）
-        for spec in provider.list_tools():
-            if spec.name.endswith("perceive"):
-                provider.attention_read_tool = spec.full_name
-                provider.attention_read_arguments = {"view": "attention"}
-                break
+        spec = find_mod_tool(provider.list_tools(), "perceive")
+        if spec is not None:
+            provider.attention_read_tool = spec.full_name
+            provider.attention_read_arguments = {"view": "attention"}
         if not getattr(provider, "attention_read_tool", None):
             self._report_unavailable("Mod 未暴露 perceive 工具，注意流无法读取")
             await self._close_client(client)
@@ -257,6 +259,14 @@ class MaicraftAttentionCollector(BaseCollector):
             return
 
         resync = bool(page.get("resync_required") or page.get("history_lost") or page.get("stream_reset"))
+        events = page.get("events")
+        if is_reference(events):
+            if self._client is None:
+                raise ValueError("注意流事件需要读取冻结回执，但连接已不可用")
+            events = await read_receipt(self._client, events)
+        # 先取得完整事件页再确认游标；引用失效或页面不完整不能被当作“没有事件”而永久跳过。
+        if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+            raise ValueError("注意流未返回完整事件数组，游标保持不变")
         stream_id = page.get("stream_id")
         if isinstance(stream_id, str) and stream_id:
             self._stream_id = stream_id
@@ -264,8 +274,6 @@ class MaicraftAttentionCollector(BaseCollector):
         if isinstance(cursor, int):
             self._cursor = cursor
 
-        events = page.get("events")
-        events = [e for e in events if isinstance(e, dict)] if isinstance(events, list) else []
         if resync or not self._primed:
             self._primed = True
             self.logger.info(

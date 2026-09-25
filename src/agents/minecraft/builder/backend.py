@@ -10,6 +10,7 @@ from referencing import Registry
 from src.agents.minecraft.builder.config import MinecraftBuilderConfig
 from src.agents.minecraft.builder.models import BuildCatalog, BuildJob
 from src.agents.minecraft.builder.scene_protocol import MinecraftSceneProtocol, scene_goal
+from src.agents.minecraft.tool_names import find_mod_tool
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 
@@ -29,6 +30,9 @@ def json_text(value: Any) -> str:
 
 def validate_schema(schema: dict[str, Any], value: Any, *, reference: str = "") -> list[dict[str, str]]:
     """完整返回设计格式错误，模型能一次看到全部待修正部件；外部定义须显式提供。"""
+    # 归档清单虽然也是 JSON 对象，却不是约束设计的 Schema；不能把未知关键字当成允许任意设计。
+    if schema.get("response_partial") is True or schema.get("omitted") is True:
+        raise ValueError("建造 Schema 只有省略引用，必须通过标准资源接口取得完整原文")
     dialect = validator_for(schema, default=None) if "$schema" in schema else validator_for(schema)
     if dialect is None:
         raise ValueError("Mod 使用了当前客户端不支持的 JSON Schema 方言")
@@ -95,14 +99,7 @@ class MinecraftBuilderBackend:
 
     def tool(self, raw_name: str) -> ToolSpec:
         """按生产处配置的 Mod 原名取工具，不接受教材指定其他可执行入口。"""
-        spec = next(
-            (
-                item
-                for item in self._registry.list_tools(provider="maicraft", for_agent="minecraft")
-                if item.name == raw_name
-            ),
-            None,
-        )
+        spec = find_mod_tool(self._registry.list_tools(provider="maicraft", for_agent="minecraft"), raw_name)
         if spec is None or spec.kind != "sync":
             raise ValueError(f"新建造器工具尚不可用：{raw_name}")
         return spec
