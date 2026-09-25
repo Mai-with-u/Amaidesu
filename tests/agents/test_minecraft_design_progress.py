@@ -64,7 +64,7 @@ async def test_react_preserves_diagnostics_and_stops_identical_design_rejections
     )
     bus = MagicMock()
     bus.emit = AsyncMock()
-    agent = MinecraftAgent(MinecraftConfig(max_steps=10), llm_manager=llm, event_bus=bus, tool_registry=registry)
+    agent = MinecraftAgent(MinecraftConfig(), llm_manager=llm, event_bus=bus, tool_registry=registry)
     result = await agent._execute_tool("maicraft_execute", _request())
     assert result["ok"] is False and result["error"] == _rejected()["error"]
     registry.invoke.reset_mock()

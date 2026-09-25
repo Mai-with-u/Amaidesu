@@ -59,7 +59,7 @@ def test_text_adv_knobs_dropped_and_new_fields_written_back(tmp_path: Path):
     assert "auto_button_xy" not in text_adv
     # agents.toml 版本流独立：只推进到本文件最后一个钩子 target，
     # 不随其他文件（如 tools.toml 2.0.36）前进而前进
-    assert get_config_version(tmp_path, "agents.toml") == "2.0.35"
+    assert get_config_version(tmp_path, "agents.toml") == "2.0.39"
 
 
 def test_text_adv_migration_idempotent_on_second_load(tmp_path: Path):

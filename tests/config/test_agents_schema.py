@@ -65,11 +65,11 @@ class TestAgentsConfigSubConfigs:
         assert cfg.streamer.persona.bot_name == "麦麦"
         assert cfg.streamer.persona.audience_salutation == "大家"
 
-    def test_minecraft_subconfig_self_contained(self):
+    def test_minecraft_subconfig_self_contained(self) -> None:
         """minecraft 是顶级子配置，类型由包内权威 MinecraftConfig 提供。"""
-        cfg = AgentsConfig(minecraft={"max_steps": 80})
+        cfg = AgentsConfig(minecraft={"execute_poll_interval_ms": 4000})
         assert isinstance(cfg.minecraft, MinecraftConfig)
-        assert cfg.minecraft.max_steps == 80
+        assert cfg.minecraft.execute_poll_interval_ms == 4000
 
     def test_text_adv_subconfig_self_contained(self):
         cfg = AgentsConfig(text_adv={"monitor_index": 0})
@@ -114,17 +114,22 @@ class TestMinecraftPackageConfig:
         cfg = AgentsConfig()
         assert isinstance(cfg.minecraft, MinecraftConfig)
 
-    def test_defaults(self):
+    def test_defaults(self) -> None:
+        """游戏主任务配置保留上下文预算，界面与生成配置均不再暴露累计步数限制。"""
         cfg = AgentsConfig()
-        assert cfg.minecraft.max_steps == 50
+        assert cfg.minecraft.context.max_context_chars == 120_000
+        assert "max_steps" not in cfg.minecraft.model_dump()
+        assert "max_steps" not in MinecraftConfig.model_json_schema()["properties"]
 
-    def test_field_overrides(self):
-        cfg = AgentsConfig(minecraft={"max_steps": 120})
-        assert cfg.minecraft.max_steps == 120
+    def test_field_overrides(self) -> None:
+        """自定义后台核查间隔随玩家子配置保留。"""
+        cfg = AgentsConfig(minecraft={"execute_poll_interval_ms": 4000})
+        assert cfg.minecraft.execute_poll_interval_ms == 4000
 
-    def test_max_steps_below_minimum_rejected(self):
+    def test_removed_step_limit_rejected(self) -> None:
+        """旧步数键须经配置迁移清理，不能成为仍可编辑但不生效的参数。"""
         with pytest.raises(ValidationError):
-            AgentsConfig(minecraft={"max_steps": 0})
+            AgentsConfig(minecraft={"max_steps": 50})
 
 
 class TestTextAdvPackageConfig:
@@ -169,11 +174,12 @@ class TestAgentsConfigRoundTrip:
         cfg2 = AgentsConfig.model_validate(dumped)
         assert cfg2.streamer.persona.bot_name == "测试"
 
-    def test_game_agent_round_trip(self):
-        cfg = AgentsConfig(minecraft={"max_steps": 66})
+    def test_game_agent_round_trip(self) -> None:
+        """序列化再加载后保留游戏后台核查节奏。"""
+        cfg = AgentsConfig(minecraft={"execute_poll_interval_ms": 4000})
         dumped = cfg.model_dump()
         cfg2 = AgentsConfig.model_validate(dumped)
-        assert cfg2.minecraft.max_steps == 66
+        assert cfg2.minecraft.execute_poll_interval_ms == 4000
 
 
 class TestAgentTypeLiteral:

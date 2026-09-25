@@ -15,15 +15,13 @@ from __future__ import annotations
 import asyncio
 from typing import List
 
-import pytest
-
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.control import build_agent_control_provider
 from src.modules.agents.manager import AgentManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.tasks import TaskChangedPayload
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger, TaskTracker
 
@@ -264,7 +262,7 @@ async def test_minecraft_receives_delegation_and_reports_terminal() -> None:
     llm = MagicMock()
     llm.chat_messages = AsyncMock(side_effect=[])
     minecraft = MinecraftAgent(
-        MinecraftConfig(max_steps=5, mcp=McpServerConfig(enabled=False)),
+        MinecraftConfig(mcp=McpServerConfig(enabled=False)),
         llm_manager=llm,
         event_bus=bus,
         tool_registry=registry,

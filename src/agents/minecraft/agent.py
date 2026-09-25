@@ -3,7 +3,7 @@
 核心意象：一个用 MCP 工具玩 Minecraft 的普通 ReAct Agent。
 - 主播 Agent 是它的用户：framework_delegate 委派派活、minecraft_get_work_log 读工作文档、
   minecraft_report 收上报
-- 命令驱动（类 Code Agent）：空闲零消耗；委派指令唤醒任务，任务内有界
+- 命令驱动（类 Code Agent）：空闲零消耗；委派指令唤醒任务，任务内持续推进
   ReAct 循环（LLM 推理 → 工具调用串行执行 → 观察作为观察返回），批次终止语义见
   ``_run_task``——无存在性心跳、无时间循环
 - 系统提示词 + 工具列表 = 全部"编程"，不发明任何特殊协议
@@ -192,7 +192,7 @@ class MinecraftAgent(BaseAgent):
             observation_reader=self._read_observation,
         )
 
-        # 命令驱动运行骨架：worker 等命令信号，任务内有界 ReAct 循环
+        # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
         self._worker_task: Optional[asyncio.Task[None]] = None
         self._wake_event: asyncio.Event = asyncio.Event()
         # 指令队列（委派接收 / 系统注入投递；元素 = (task_id, content)，
@@ -204,6 +204,7 @@ class MinecraftAgent(BaseAgent):
         self._recent_results: Deque[Dict[str, Any]] = deque(maxlen=6)
         self._plan_facts = MinecraftPlanFacts()
         self._task_notice_fingerprints: Dict[str, str] = {}
+        # 累计推理次数供恢复任务时观察进展，持续施工不会因次数达到固定值而中断。
         self._task_steps = 0
         self._task_finished = True
         self._task_suspended = False
@@ -261,10 +262,7 @@ class MinecraftAgent(BaseAgent):
             )
 
         self._logger = get_logger("MinecraftAgent")
-        self._logger.info(
-            f"MinecraftAgent 已构造 (max_steps={config.max_steps}, "
-            f"llm={'已注入' if llm_manager else '无'}@{MINECRAFT_PROFILE})"
-        )
+        self._logger.info(f"MinecraftAgent 已构造 (llm={'已注入' if llm_manager else '无'}@{MINECRAFT_PROFILE})")
 
     # ==================================================================
     # 生命周期
@@ -530,7 +528,7 @@ class MinecraftAgent(BaseAgent):
         )
 
     # ==================================================================
-    # 命令驱动 ReAct（命令 → 消息队列 → 任务内有界循环 → 回空闲）
+    # 命令驱动 ReAct（命令 → 消息队列 → 持续推进任务 → 回空闲）
     # ==================================================================
 
     async def send_prompt(self, content: str) -> None:
@@ -561,7 +559,7 @@ class MinecraftAgent(BaseAgent):
             self._wake_event.clear()
             if not (self._running and self._message_queue):
                 continue
-            # 达到预算或上报困难后只等玩家的新指令；身体事件和任务通知不能自动续一份推理预算。
+            # 任务交付、上报困难或执行中断后等待玩家新指令，后台通知只补充已知状态。
             if (self._task_finished or self._task_suspended) and not any(
                 isinstance(message, MinecraftInstruction) for message in self._message_queue
             ):
@@ -575,7 +573,7 @@ class MinecraftAgent(BaseAgent):
                 await self.emit_error(f"任务执行异常: {exc}")
 
     async def _run_task(self) -> None:
-        """执行单个任务批：ReAct 有界循环，直到批次终止语义命中。
+        """执行单个任务批：围绕当前指令持续推进，直到批次终止语义命中。
 
         循环每步：
         1. flush 命令/系统注入消息 → 追加 user 消息
@@ -588,7 +586,7 @@ class MinecraftAgent(BaseAgent):
         2. LLM 调 minecraft_report(kind=escalation) → 停止，静默等主播委派
         3. 自然终止，无 report、无未决 handoff 且待办完成 → 系统兜底交付
         4. 仅剩实际运行中的 handoff → 静默让出；待开工或待决策则提醒推进
-        5. 步数超 max_steps 或提醒后仍不行动 → 挂起，系统通知不能重给预算
+        5. 提醒后仍不行动 → 挂起，等待玩家指令处理实际阻塞
         """
         if self._llm is None:
             await self.emit_error("无法执行任务：LLM 未注入")
@@ -603,7 +601,7 @@ class MinecraftAgent(BaseAgent):
             self._batch_active = False
 
     async def _run_task_batch(self) -> None:
-        """任务批主体：ReAct 有界循环，直到批次终止语义命中。"""
+        """任务批主体：持续调用工具推进当前任务，直到交付、等待或真实阻塞。"""
         self._task_reported = False
         self._wait_requested = False
         system_prompt = self._system_prompt()
@@ -670,18 +668,12 @@ class MinecraftAgent(BaseAgent):
                 messages.append({"role": "user", "content": _content})
             # 本批委派任务进入进行中（agent 型单写者：执行 Agent 写）
             self._mark_delegated_running()
-            if self._task_steps >= self.typed_config.max_steps:
-                self._task_suspended = True
-                await self.emit_attention_required(
-                    f"任务超过 {self.typed_config.max_steps} 步上限，已挂起；需要新指令才能继续"
-                )
-                return
             steps += 1
 
             # --- 身体事件增量读取（任务跑着的时候才知道自己正被谁打）---
             await self._drain_attention()
 
-            # 集中整理也计入本任务推理预算；大观察已在回填时缩小，正常轮次只追加。
+            # 历史过长时先整理上下文再继续游戏行动，普通轮次只追加消息。
             if not await self._prepare_context(messages, tool_defs):
                 return
             self._task_steps += 1
@@ -915,7 +907,6 @@ class MinecraftAgent(BaseAgent):
                 messages,
                 tools,
                 self._current_task_context(),
-                max_attempts=self.typed_config.max_steps - self._task_steps,
             )
         except asyncio.CancelledError:
             raise
@@ -925,12 +916,8 @@ class MinecraftAgent(BaseAgent):
             await self.emit_attention_required(f"上下文整理失败，任务已保留：{exc}")
             return False
         finally:
-            # 首次摘要和修订都是真实调用，重写不能悄悄增加一份任务预算。
+            # 首次摘要和修订都计入进展统计，整理成功后继续处理原游戏目标。
             self._task_steps += self._context_compactor.last_calls
-        if self._task_steps >= self.typed_config.max_steps:
-            self._task_suspended = True
-            await self.emit_attention_required("历史已整理，但本任务推理预算已用完；等待新指令后继续")
-            return False
         return True
 
     async def _execute_tool(self, name: str, arguments: Dict[str, Any], *, round_id: str = "") -> Dict[str, Any]:

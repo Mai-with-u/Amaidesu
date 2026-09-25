@@ -240,5 +240,6 @@ class TestPersonaDefaults:
         assert isinstance(cfg.streamer, StreamerConfig)
         assert cfg.streamer.persona.bot_name == "麦麦"
         assert isinstance(cfg.minecraft, MinecraftConfig)
-        assert cfg.minecraft.max_steps == 50
+        # 玩家配置的默认子树仍完整生成，累计推理步数不再成为可配置的停止条件。
+        assert "max_steps" not in cfg.minecraft.model_dump()
         assert isinstance(cfg.text_adv, TextAdvConfig)

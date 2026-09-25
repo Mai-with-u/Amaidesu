@@ -85,7 +85,7 @@ async def test_process_site_blueprint_plan_execute_then_wait() -> None:
     bus = MagicMock()
     bus.emit = AsyncMock()
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=8), llm_manager=llm, tool_registry=registry, task_tracker=tracker, event_bus=bus
+        MinecraftConfig(), llm_manager=llm, tool_registry=registry, task_tracker=tracker, event_bus=bus
     )
     agent._running = True
     agent._register_tools()

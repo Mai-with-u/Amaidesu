@@ -5,9 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.minecraft.config import MinecraftContextConfig
-from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.agent import MinecraftAgent
+from src.agents.minecraft.config import MinecraftConfig, MinecraftContextConfig
 from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
 from src.modules.config.agents_schemas import AgentsConfig
 from src.modules.llm.payload import Response, ToolCall
@@ -163,18 +162,26 @@ async def test_checkpoint_compares_old_doubts_with_current_decisions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_game_loop_counts_rewrite_calls_in_its_budget() -> None:
-    """父玩家的总步数包含两次摘要请求，重写成功后保留剩余一次动作决策机会。"""
+@pytest.mark.parametrize("used_steps", [49, 50, 75])
+async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: int) -> None:
+    """长任务接近或超过五十步时仍可重写摘要，随后继续核验并交付原游戏目标。"""
     llm = MagicMock()
     llm.generate = AsyncMock(
         side_effect=[
             Response(success=True, content="摘" * 6575, finish_reason="stop"),
             Response(success=True, content="已确认接口，待提交方案", finish_reason="stop"),
+            Response(success=True, content="施工已核验，目标完成", finish_reason="stop"),
         ]
     )
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=3, context=MinecraftContextConfig(max_context_chars=24000)), llm_manager=llm
+        MinecraftConfig(context=MinecraftContextConfig(max_context_chars=24000)), llm_manager=llm
     )
     agent._task_instructions = ["建好，保留原有约束"]
-    assert await agent._prepare_context(history(), [])
-    assert agent._task_steps == 2 and not agent._task_suspended
+    agent._task_finished = False
+    agent._task_steps = used_steps
+    agent._messages = history()
+    agent._running = True
+    await agent._run_task_batch()
+    assert agent._task_steps == used_steps + 3 and not agent._task_suspended
+    assert agent._task_finished and llm.generate.await_count == 3
+    assert agent._context_compactor.last_calls == 2

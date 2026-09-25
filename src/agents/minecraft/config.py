@@ -29,14 +29,12 @@ class MinecraftConfig(BaseConfig):
     """MinecraftAgent 运行时配置
 
     Attributes:
-        max_steps: 单任务内 ReAct 循环（LLM 推理步数）上限——防失控挂起
         mcp: Agent 私有 MCP server 配置（位置即归属）。enabled=true 时
             _on_start 装配 McpToolProvider 并以逐工具可见名单（
             fail-closed）注册进 ToolRegistry；false 时不装配（Agent 命令
             驱动，MCP 不可用即降级）。
     """
 
-    max_steps: int = Field(default=50, ge=1, description="单任务 ReAct 循环最大步数（超出挂起上报）")
     # 设计任务从属于当前游戏，关闭 Minecraft 时不单独装配建造 Agent。
     context: MinecraftContextConfig = Field(default_factory=MinecraftContextConfig, description="游戏任务上下文预算")
     builder: MinecraftBuilderConfig = Field(default_factory=MinecraftBuilderConfig, description="按需建筑设计 Agent")

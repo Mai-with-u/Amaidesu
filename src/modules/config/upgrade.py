@@ -203,6 +203,20 @@ def _upgrade_builder_scene_transport(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "builder_scene_transport", "2.0.35", _upgrade_builder_scene_transport)
 
 
+def _drop_minecraft_max_steps(data: Dict[str, Any]) -> List[str]:
+    """游戏主任务持续推进到交付或实际阻塞，清理会使长任务中途挂起的旧步数配置。"""
+    agents = data.get("agents")
+    minecraft = agents.get("minecraft") if isinstance(agents, dict) else None
+    if not isinstance(minecraft, dict) or "max_steps" not in minecraft:
+        return []
+    # 父玩家的累计步数不再决定任务终止；建筑设计子任务的独立配置仍归子 Agent 使用。
+    del minecraft["max_steps"]
+    return ["agents.minecraft.max_steps"]
+
+
+register_file_hook("agents.toml", "drop_minecraft_max_steps", "2.0.39", _drop_minecraft_max_steps)
+
+
 # 口型调参键：tools.toml [tools.avatar.vts].config → avatar.toml [avatar.lipsync]
 # （口型分析器升为共享基础设施时调参先落 infra [avatar.lipsync]，avatar 域
 # avatar 独立为第七配置文件后，本钩子的迁移目标改为 avatar.toml 同名段；

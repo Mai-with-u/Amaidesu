@@ -222,7 +222,7 @@ uv run python main.py --dry
 | 名称 | 用途 | 关键子配置 |
 |------|------|-----------|
 | `streamer` | 主播 Agent（Planner ReAct 决策循环 + Replyer 表达引擎） | `[agents.streamer]` 子树（persona / context / proactive / background / command / word_filter） |
-| `minecraft` | 游戏 Agent（MCP 工具玩 Minecraft，事件驱动 ReAct） | `[agents.minecraft]`（max_steps / execute_* / mcp） |
+| `minecraft` | 游戏 Agent（MCP 工具玩 Minecraft，事件驱动 ReAct） | `[agents.minecraft]`（[包内配置 Schema](../src/agents/minecraft/config.py)） |
 
 > `text_adv`（文字冒险示例，零依赖开箱可玩）同属 Agent 清单；完整名单见 `src/modules/agents/factory.py` 的 `SUPPORTED_AGENTS`。
 

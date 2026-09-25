@@ -11,7 +11,8 @@ from src.modules.config.schemas.base import BaseConfig
 
 # 新生成配置文件的初始版本种子（仅作为 FileMetaConfig.version 的 default
 # 落盘；既有文件的推进由升级钩子调度决定，此常量不参与调度）
-CONFIG_BASELINE_VERSION = "2.0.38"
+# 新模板直接标记当前结构，首次加载无需为已完成的结构变更再次写回文件。
+CONFIG_BASELINE_VERSION = "2.0.39"
 
 
 class FileMetaConfig(BaseConfig):

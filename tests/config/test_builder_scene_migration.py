@@ -49,6 +49,6 @@ def test_scene_transport_written_back_only_advances_agents_version(tmp_path: Pat
     assert builder["execute_tool"] == "maicraft_execute" and builder["task_tool"] == "maicraft_task"
     assert "validate_tool" not in builder and "preview_tool" not in builder
     assert builder["max_steps"] == 9
-    assert agents["meta"]["version"] == "2.0.35" and model["meta"]["version"] == "2.0.34"
+    assert agents["meta"]["version"] == "2.0.39" and model["meta"]["version"] == "2.0.34"
     _, report = load_config_dir(tmp_path)
     assert not report.missing

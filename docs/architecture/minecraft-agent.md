@@ -4,7 +4,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 ## 驱动原则
 
-- 只有主播 Agent 自我驱动；游戏 Agent 命令驱动（类 Code Agent）——收到命令启动任务内有界循环，完成即停、空闲零消耗
+- 只有主播 Agent 自我驱动；游戏 Agent 命令驱动（类 Code Agent）——收到命令启动任务循环，完成即停、空闲零消耗
 - 因有自身状态与任务内自主决策，游戏 Agent 仍是 Agent 而非工具（三分判据见 [v2-architecture.md](v2-architecture.md)）
 
 ## 核心意象
@@ -37,7 +37,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 暂停语义：平台 pause 在步骤间与工具调用间挂起（不打断当前执行中的工具调用），resume 后继续。
 
-后台唤醒会恢复同一逻辑任务的原始指令、待办、笔记和已受理任务编号。推理步数跨批次累计；到达上限或上报困难后，系统通知只能更新状态，新的主播指令才能恢复行动并重新给予有界预算。任务交付后，新指令建立新任务；通知不会独立创建游戏目标。
+后台唤醒会恢复同一逻辑任务的原始指令、待办、笔记和已受理任务编号。推理步数跨批次累计用于记录进展，任务持续推进到交付、等待后台结果或实际阻塞。上报困难或执行中断后，系统通知只能更新状态，新的主播指令才能恢复行动。任务交付后，新指令建立新任务；通知不会独立创建游戏目标。
 
 ### 批次终止语义
 
@@ -47,7 +47,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | 2 | LLM 调 `minecraft_report(kind=escalation)` | 停止，静默等主播委派 |
 | 3 | 自然终止，无 report、无未决 handoff 且待办完成 | 系统兜底交付，并结算原委派任务 |
 | 4 | 自然终止，仅剩实际运行中的 handoff | 静默让出回合，等 handoff 唤醒 |
-| 5 | 步数超上限，或仍需行动却在提醒后继续停顿 | `game.attention_required` 挂起，保留原任务等待继续指令 |
+| 5 | 仍需行动却在提醒后继续停顿 | `game.attention_required` 挂起，保留原任务等待继续指令 |
 
 待决策、设计已交付但尚未施工、以及没有执行者推进的待办属于需要行动的状态。模型仅输出文本结束时，父循环先要求它调用工具推进或上报具体阻塞；连续不行动才挂起，不把这些状态误当作后台仍在运行。
 
@@ -99,7 +99,7 @@ Minecraft Agent 把建筑设计委派给包内的 `MinecraftBuilderAgent`，收�
 | 事件 | 触发 |
 |---|---|
 | `game.report` | LLM 调 `minecraft_report`（delivery/escalation）或批次终止系统兜底交付；kind 见 `GamePayload.report_kind` |
-| `game.attention_required` | 步数超上限，或任务需要行动但模型经提醒仍未推进 |
+| `game.attention_required` | 任务需要行动但模型经提醒仍未推进，或上下文整理失败 |
 | `game.error` | 工具执行异常 / LLM 调用失败 / 无 LLM fail-fast |
 
 事件 payload 复用 `GamePayload`（`game="minecraft"`）；上报同时进内存 `recent_reports`（状态查询数据源，保留最近 10 条）。`game.milestone` 不再由本 Agent 发射（todo-diff 自动里程碑已移除，防主播叙事刷屏）。
@@ -114,7 +114,6 @@ Minecraft Agent 把建筑设计委派给包内的 `MinecraftBuilderAgent`，收�
 
 ```toml
 [agents.minecraft]
-max_steps = 50                    # 单任务 ReAct 循环最大步数（超出挂起上报，防失控）
 execute_poll_interval_ms = 2000   # handoff 周期兜底核实间隔
 execute_wait_timeout_ms = 1800000 # 后台任务单轮 wait_timeout 上限（告警不杀任务）
 
@@ -128,7 +127,7 @@ url = "http://127.0.0.1:8766/mcp"
 ## 解耦边界
 
 - agent 领域核心零 maicraft 接口知识：工具列表经 registry 动态发现（任务查询工具按原始名后缀匹配，注册名前缀形态不定）；MCP server 连接由通道层路由（`McpToolProvider` 绑定 server 的 client），agent 不感知
-- 工具失败作为错误观察作为观察返回 LLM（ReAct 标准，LLM 自调整）；连续失败由 max_steps 兜底
+- 工具失败作为错误观察返回 LLM，由模型根据错误原因调整行动，确实无法推进时上报具体阻塞
 - 内容特有逻辑内聚 `src/agents/minecraft/` 包（加内容=加包+配置，框架零改动）
 
 ## 相关文档

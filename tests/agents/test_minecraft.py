@@ -2,16 +2,16 @@
 
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftAgentState
 from src.agents.minecraft.tools import MinecraftToolProvider
+from src.modules.agents.factory import instantiate_agent
 from src.modules.events.payloads.game import GamePayload
-from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
@@ -237,7 +237,7 @@ async def test_react_natural_termination_fallback_delivery() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=10),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
     )
@@ -276,7 +276,7 @@ async def test_react_report_delivery_stops_batch() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=10),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
         tool_registry=ToolRegistry(),
@@ -306,7 +306,7 @@ async def test_react_report_escalation_stops_and_waits() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=10),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
         tool_registry=ToolRegistry(),
@@ -330,27 +330,37 @@ async def test_react_report_escalation_stops_and_waits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_react_max_steps_emits_attention() -> None:
-    """情形 5：LLM 恒调用工具 → 步数超上限 → attention_required 挂起。"""
+async def test_react_continues_past_fifty_steps_until_delivery() -> None:
+    """角色连续记录施工进展超过五十轮后仍能交付，无需玩家追加继续指令。"""
     llm = MagicMock()
-    llm.generate = AsyncMock(return_value=_resp(tool_calls=[_tool_call("minecraft_todo", {"action": "read"})]))
+    llm.generate = AsyncMock(
+        side_effect=[
+            _resp(tool_calls=[_tool_call("minecraft_notebook", {"action": "write", "content": f"施工进展 {step}"})])
+            for step in range(1, 61)
+        ]
+        + [_resp("施工验收完成")]
+    )
     event_bus = MagicMock()
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=3),
+        MinecraftConfig(mcp=McpServerConfig(enabled=False)),
         llm_manager=llm,
         event_bus=event_bus,
+        tool_registry=ToolRegistry(),
     )
     await agent.start()
-    await agent.send_prompt("循环任务")
-    await _wait_until(lambda: llm.generate.await_count == 3)
-
-    emitted = [c.args[1] for c in event_bus.emit.await_args_list]
-    attention = [p for p in emitted if isinstance(p, GamePayload) and p.event_type == "attention_required"]
-    assert len(attention) == 1
-    assert "上限" in attention[0].message
-    await agent.stop()
+    try:
+        await agent.send_prompt("完成施工并验收")
+        await _wait_until(lambda: llm.generate.await_count == 61 and agent._task_finished)
+        emitted = [c.args[1] for c in event_bus.emit.await_args_list]
+        assert not [p for p in emitted if isinstance(p, GamePayload) and p.event_type == "attention_required"]
+        assert agent._task_steps == 61 and not agent._task_suspended
+        assert agent.get_state_snapshot()["notebook"] == "施工进展 60"
+        reports = _reports(emitted)
+        assert len(reports) == 1 and reports[0].report_kind == "delivery"
+    finally:
+        await agent.stop()
 
 
 @pytest.mark.asyncio
@@ -376,7 +386,7 @@ async def test_react_todo_done_no_longer_emits_milestone() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=10),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
     )
@@ -397,8 +407,11 @@ async def test_react_full_format_feedback_and_id_association() -> None:
     """完整 OpenAI 格式作为观察返回：assistant.tool_calls + tool role + tool_call_id 关联。"""
     captured: list[dict] = []
 
-    async def fake(messages, **kwargs):
+    async def fake(messages: list[dict], **kwargs: Any) -> Response:
         captured.append(messages.copy())
+        # 第二轮读取已写入的探索坐标后结束本任务，协议检查只需要一次真实工具往返。
+        if len(captured) > 1:
+            return _resp("探索坐标已记录")
         return _resp(
             tool_calls=[_tool_call("minecraft_notebook", {"action": "write", "content": "坐标 (10,20)"}, "call_x")]
         )
@@ -409,7 +422,7 @@ async def test_react_full_format_feedback_and_id_association() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=5),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
         tool_registry=ToolRegistry(),
@@ -475,7 +488,7 @@ async def test_react_mcp_tool_via_registry_passthrough() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=5),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
         tool_registry=registry,
@@ -493,10 +506,10 @@ async def test_react_pause_suspends_loop() -> None:
     """平台 pause：任务循环在步骤间挂起（不调 LLM），resume 后继续。"""
     call_count = 0
 
-    async def fake(messages, **kwargs):
+    async def fake(messages: list[dict], **kwargs: Any) -> Response:
         nonlocal call_count
         call_count += 1
-        await asyncio.sleep(0.005)  # 每步微延迟：pause 窗口内不跑满 max_steps
+        await asyncio.sleep(0.005)  # 模拟推理等待，让平台暂停命令能在下一次游戏行动前到达。
         return _resp(tool_calls=[_tool_call("minecraft_todo", {"action": "read"})])
 
     llm = MagicMock()
@@ -505,7 +518,7 @@ async def test_react_pause_suspends_loop() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=1000),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
     )
@@ -538,7 +551,7 @@ async def test_instruction_injection_wakes_worker_full_chain() -> None:
 
     registry = ToolRegistry()
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=5),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
         tool_registry=registry,
@@ -567,7 +580,7 @@ async def test_agent_reusable_after_goal_completes() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=5),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
     )
@@ -708,7 +721,7 @@ async def test_react_tool_failure_fed_back_to_llm() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=5),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
         tool_registry=registry,
@@ -748,7 +761,7 @@ async def test_react_multi_tool_calls_batch_execute() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=5),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
         tool_registry=ToolRegistry(),
@@ -780,7 +793,7 @@ async def test_command_after_task_reaches_messages() -> None:
     event_bus.emit = AsyncMock()
 
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=10),
+        MinecraftConfig(),
         llm_manager=llm,
         event_bus=event_bus,
     )
@@ -971,7 +984,7 @@ def _make_task_agent(
     ledger = TaskLedger(event_bus=bus)
     tracker = TaskTracker(registry, ledger, poll_interval_ms=poll_interval_ms, wait_timeout_ms=wait_timeout_ms)
     agent = MinecraftAgent(
-        MinecraftConfig(max_steps=10, mcp=McpServerConfig(enabled=False)),
+        MinecraftConfig(mcp=McpServerConfig(enabled=False)),
         llm_manager=llm,
         event_bus=bus,
         tool_registry=registry,
@@ -1102,26 +1115,45 @@ async def test_design_completion_resumes_original_build_goal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_notifications_cannot_reset_exhausted_step_budget() -> None:
-    """预算耗尽后到来的施工通知只更新工作状态；玩家明确继续才恢复原任务并重新给预算。"""
-    llm = MagicMock()
-    llm.generate = AsyncMock(return_value=_resp(tool_calls=[_tool_call("minecraft_todo", {"action": "read"})]))
-    bus = MagicMock()
-    bus.emit = AsyncMock()
-    agent = MinecraftAgent(MinecraftConfig(max_steps=2), llm_manager=llm, event_bus=bus)
+async def test_task_notification_resumes_after_fifty_steps_without_new_instruction() -> None:
+    """累计五十轮后让出等待施工，真实完成通知直接唤醒角色继续核验原任务。"""
+    provider = _FakeMaiCraftProvider()
+    registry = ToolRegistry()
+    registry.register_provider(provider)
+    turn = 0
+    instruction = "建造小屋，不碰私人箱子"
+
+    async def script(messages: list[dict], **kwargs: Any) -> Response:
+        nonlocal turn
+        turn += 1
+        if turn == 1:
+            return _resp(tool_calls=[_tool_call("maicraft_maicraft_execute", {"task_id": "build-1"})])
+        if turn == 50:
+            return _resp(tool_calls=[_tool_call("minecraft_wait", {"reason": "等待小屋施工完成"})])
+        if turn <= 60:
+            return _resp(
+                tool_calls=[_tool_call("minecraft_notebook", {"action": "write", "content": f"核验进展 {turn}"})]
+            )
+        assert instruction in str(messages)
+        return _resp("小屋已验收")
+
+    llm = _RecordingLlm(script)
+    agent, tracker = _make_task_agent(llm, registry)
+    tracker.start()
     await agent.start()
     try:
-        await agent.send_prompt("建造小屋，不碰私人箱子")
-        await _wait_until(lambda: agent._task_suspended)
-        agent.on_task_notification(
-            TaskChangedPayload(task_id="design-1", status="succeeded", initiator="minecraft", summary="设计检查结束")
-        )
-        await asyncio.sleep(0.1)
-        assert llm.generate.await_count == 2
-        await agent.send_prompt("继续，保持原先取料限制")
-        await _wait_until(lambda: llm.generate.await_count == 4 and agent._task_suspended)
-        assert agent._task_instructions == ["建造小屋，不碰私人箱子", "继续，保持原先取料限制"]
+        await agent.send_prompt(instruction)
+        await _wait_until(lambda: agent._wait_requested and not agent._batch_active)
+        assert agent._task_steps == 50 and not agent._task_suspended
+        # Mod 完成施工后通过已有任务跟踪通道通知父玩家，无需第二条主播指令。
+        provider.task_states["build-1"]["state"] = "success"
+        provider.fire_attention()
+        await _wait_until(lambda: agent._task_finished)
+        assert len(llm.captured) == 61 and agent._task_steps == 61
+        assert not agent._task_suspended and agent._task_instructions == [instruction]
+        assert agent.get_state_snapshot()["recent_reports"][-1]["kind"] == "delivery"
     finally:
+        await tracker.stop()
         await agent.stop()
 
 
@@ -1318,26 +1350,24 @@ async def test_delivery_gate_rejects_with_pending_task() -> None:
 
 
 def test_factory_instantiates_minecraft() -> None:
-    """factory 按顶级名分派 minecraft → MinecraftAgent（声明确认 + max_steps 透传）。"""
-    from src.modules.agents.factory import instantiate_agent
+    """工厂按游戏注册名创建玩家，并透传其后台等待参数。"""
 
     agent = instantiate_agent(
         "minecraft",
-        {"max_steps": 9},
+        {"execute_poll_interval_ms": 4000},
         llm_manager=None,
         prompt_manager=None,
         event_bus=MagicMock(),
         tool_registry=None,
     )
     assert isinstance(agent, MinecraftAgent)
-    assert agent.typed_config.max_steps == 9
+    assert agent.typed_config.execute_poll_interval_ms == 4000
     # 工厂创建的玩家也暴露让出能力，等待是否可用由真实后台依赖决定。
     assert [s.name for s in agent.list_tools()] == ["todo", "notebook", "get_work_log", "report", "wait", "observation"]
 
 
 def test_factory_rejects_legacy_game_name() -> None:
     """分类层已移除，旧注册名 "game" 不再可实例化（防分类层复活）。"""
-    from src.modules.agents.factory import instantiate_agent
 
     agent = instantiate_agent(
         "game",
@@ -1357,7 +1387,6 @@ def test_factory_minecraft_schema_defaults() -> None:
     MinecraftConfig 上以保 handoff 跟踪循环运行期可读；全局任务基建的节拍
     另由 [tools.tasks] 段承载（两者同名约定区分：Agent 私有带 execute_ 前缀）。
     """
-    from src.modules.agents.factory import instantiate_agent
 
     agent = instantiate_agent(
         "minecraft",
@@ -1368,7 +1397,7 @@ def test_factory_minecraft_schema_defaults() -> None:
         tool_registry=None,
     )
     assert isinstance(agent, MinecraftAgent)
-    assert agent.typed_config.max_steps == 50
+    assert "max_steps" not in agent.typed_config.model_dump()
     assert agent.typed_config.execute_poll_interval_ms == 2000
     assert agent.typed_config.execute_wait_timeout_ms == 1_800_000
 
@@ -1949,10 +1978,8 @@ def _build_sink_agent(llm: Any, sink: Optional[Any], capturing: _CapturingToolPr
     registry = ToolRegistry()
     registry.register_provider(capturing)
 
-    from src.modules.mcp.config import McpServerConfig
-
     return MinecraftAgent(
-        MinecraftConfig(max_steps=5, mcp=McpServerConfig(enabled=False)),
+        MinecraftConfig(mcp=McpServerConfig(enabled=False)),
         llm_manager=llm,
         event_bus=_make_event_bus(),
         tool_registry=registry,
