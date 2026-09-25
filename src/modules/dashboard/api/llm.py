@@ -216,14 +216,14 @@ def _convert_usage(usage_data: Any) -> Optional[TokenUsageSchema]:
     )
 
 
-def _preview(text: Any, limit: int = 80) -> str:
-    """截断为列表预览文本；非字符串（空值/结构化内容）折叠为空串"""
+def _preview(text: Any) -> str:
+    """完整提供列表文本，避免列表接口丢失请求或响应尾部。"""
     if not isinstance(text, str):
         return ""
-    return text.strip()[:limit]
+    return text.strip()
 
 
-def _tool_calls_preview(tool_calls: Any, limit: int = 80) -> str:
+def _tool_calls_preview(tool_calls: Any) -> str:
     """工具调用型响应的列表预览：首个调用的「[调用 函数名] 参数摘要」。
 
     Planner/Replyer 的响应以 tool_calls 承载（response_content 为空），
@@ -250,7 +250,7 @@ def _tool_calls_preview(tool_calls: Any, limit: int = 80) -> str:
                 args_text = str(args)
         combined = f"[调用 {name}] {args_text}".strip()
         if combined != "[调用]" and combined:
-            return _preview(combined, limit)
+            return _preview(combined)
     return ""
 
 
@@ -271,7 +271,7 @@ def _message_text(message: Any) -> str:
 
 
 def _build_list_item(record: Dict[str, Any]) -> LLMRequestHistoryListItem:
-    """列表行摘要：prompt/response 只携带截断预览，完整内容由详情接口按行获取。
+    """列表行保留所选消息和首个工具调用的完整文本；详情接口提供完整请求。
 
     request_params 的 messages 里最后一条有正文的消息即列表展示的 Prompt 预览。
     """

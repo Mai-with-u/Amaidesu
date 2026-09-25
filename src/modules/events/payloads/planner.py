@@ -23,13 +23,13 @@ class PlannerBatchItem(BaseModel):
         message_id: 弹幕消息 ID（与 live_chat.message_id / reply_to_message_id 同键空间）
         user_id: 观众 user_id
         user_name: 观众昵称
-        text: 弹幕文本（截断后的展示文本）
+        text: 弹幕完整文本
     """
 
     message_id: str = Field(default="", description="弹幕消息 ID")
     user_id: str = Field(default="", description="观众 user_id")
     user_name: str = Field(default="", description="观众昵称")
-    text: str = Field(default="", description="弹幕文本（截断展示）")
+    text: str = Field(default="", description="弹幕完整文本")
 
 
 @register_event(CoreEvents.PLANNER_DECISION)
@@ -65,7 +65,7 @@ class PlannerDecisionPayload(BasePayload):
         emotion: 关联情绪标签（可选）
         utterance_id: 发言实例 ID（成功且有发言时）
         error: 失败原因（planner_failed / reply_tool_failed 及细节；成功为 None）
-        planner_raw: Planner LLM 原始返回文本（截断展示；完整内容经 llm_request_id 查请求历史）
+        planner_raw: Planner LLM 原始返回文本；请求详情经 llm_request_id 查询
         llm_request_id: 本轮 Planner LLM 调用的请求历史 ID（跳转完整请求的指针）
         planner_duration_ms: Planner 阶段耗时（毫秒）
         reply_duration_ms: Replyer 阶段耗时（毫秒；未进入回复阶段为 0）
@@ -99,7 +99,7 @@ class PlannerDecisionPayload(BasePayload):
     emotion: Optional[str] = Field(default=None, description="关联情绪标签（可选）")
     utterance_id: Optional[str] = Field(default=None, description="发言实例 ID（成功且有发言时）")
     error: Optional[str] = Field(default=None, description="失败原因；成功为 None")
-    planner_raw: str = Field(default="", description="Planner LLM 原始返回文本（截断展示）")
+    planner_raw: str = Field(default="", description="Planner LLM 完整返回文本")
     llm_request_id: Optional[str] = Field(
         default=None,
         description="本轮 Planner LLM 调用的请求历史 ID（完整请求指针）",

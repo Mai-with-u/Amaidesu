@@ -62,9 +62,6 @@ IN_PROGRESS_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decisio
 # 事实源归属：provider 型 = 跟踪循环写；agent 型 = 执行 Agent 写
 TaskSource = Literal["provider", "agent"]
 
-# 摘要截断（事件 payload 防膨胀）
-_MAX_SUMMARY_CHARS = 200
-
 
 @dataclass(slots=True)
 class TaskRecord:
@@ -207,7 +204,7 @@ class TaskLedger:
         payload = TaskChangedPayload(
             task_id=task_id,
             status=status,
-            summary=text[:_MAX_SUMMARY_CHARS],
+            summary=text,
             initiator=record.initiator,
             executor=record.executor,
             snapshot=dict(record.snapshot),
@@ -237,7 +234,7 @@ class TaskLedger:
         payload = TaskChangedPayload(
             task_id=task_id,
             status=record.status,
-            summary=summary[:_MAX_SUMMARY_CHARS],
+            summary=summary,
             initiator=record.initiator,
             executor=record.executor,
             snapshot=dict(record.snapshot),

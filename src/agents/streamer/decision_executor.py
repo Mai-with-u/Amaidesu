@@ -172,7 +172,7 @@ class DecisionRoundExecutor:
                     "reply_to_message_id": str | None,  # 回复关联键
                     "silent_reason": str | None,  # low_confidence=低置信度压制
                     "error": str | None,  # planner/reply 失败原因，成功为 None
-                    "planner_raw": str,  # Planner LLM 原始输出（截断）
+                    "planner_raw": str,  # Planner LLM 原始输出（完整内容）
                     "llm_request_id": str | None,  # LLM 请求历史指针
                     "planner_duration_ms": int,
                     "reply_duration_ms": int,
@@ -280,7 +280,7 @@ class DecisionRoundExecutor:
             outcome = None
             result["error"] = f"planner_failed: {exc}"
         result["planner_duration_ms"] = now_ms() - planner_started_ms
-        result["planner_raw"] = (getattr(self._planner, "last_raw_content", "") or "")[:2000]
+        result["planner_raw"] = getattr(self._planner, "last_raw_content", "") or ""
         result["llm_request_id"] = getattr(self._planner, "last_request_id", None)
 
         if outcome is None:
@@ -438,7 +438,7 @@ class DecisionRoundExecutor:
                     message_id=str(getattr(msg, "message_id", "") or ""),
                     user_id=str(getattr(msg.user, "id", "") or ""),
                     user_name=str(getattr(msg.user, "name", "") or ""),
-                    text=(str(getattr(msg, "content", "") or ""))[:120],
+                    text=str(getattr(msg, "content", "") or ""),
                 )
                 for msg in batch or []
             ],

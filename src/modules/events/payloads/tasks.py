@@ -25,7 +25,7 @@ class TaskChangedPayload(BasePayload):
         task_id: 任务号（回执型工具受理时分配；全链路关联键）
         status: 新状态（accepted / running / waiting_for_decision /
             succeeded / failed / cancelled / timeout）
-        summary: 人可读摘要（变化要点或终态结论；截断防膨胀）
+        summary: 人可读摘要（变化要点或终态结论）
         initiator: 发起方 Agent 注册名（有变化通知谁——唤醒过滤键）
         executor: 执行者（provider 型 = 提供者名；agent 型 = 执行 Agent 名）
         live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
@@ -35,7 +35,7 @@ class TaskChangedPayload(BasePayload):
 
     task_id: str = Field(..., description="任务号（受理回执分配，全链路关联键）")
     status: str = Field(..., description="新状态（词表见 tasks.py）")
-    summary: str = Field(default="", description="变化摘要（人可读，截断防膨胀）")
+    summary: str = Field(default="", description="变化摘要（完整的人可读摘要）")
     initiator: str = Field(..., description="发起方 Agent 注册名（唤醒过滤键）")
     executor: str = Field(default="", description="执行者（提供者名或执行 Agent 名）")
     live_session_id: int = Field(
