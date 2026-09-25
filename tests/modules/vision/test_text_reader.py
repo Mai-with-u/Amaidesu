@@ -1,16 +1,4 @@
-"""LlmVisionTextReader 异步契约 + 超时/失败降级测试（Task 5 验收）。
-
-覆盖场景：
-- VLM 成功 → 返回 content（trim 过）
-- VLM 调用超时 → 返回空串（注入极短 timeout_s，不真等）
-- VLM 返回 success=False → 返回空串
-- VLM 调用抛异常 → 返回空串
-
-设计要点：
-- prompt_manager 用 stub/mock，不依赖真实模板文件（screen_vlm_prompt 正被并行任务挪位置）
-- llm_manager 用 SimpleNamespace / AsyncMock 替身，零外部依赖
-- 超时通过构造参数 ``timeout_s=0.05`` 加速，避免真等 15s
-"""
+"""视觉识别完整返回长文本，失败降级与主动取消各自保持语义。"""
 
 from __future__ import annotations
 
@@ -18,8 +6,9 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any, List, Optional
 
+import pytest
+
 from src.modules.vision.look_at_screen import (
-    DEFAULT_VLM_TIMEOUT_S,
     LlmVisionTextReader,
 )
 
@@ -87,7 +76,7 @@ class FakeLlmManager:
         if self._raise is not None:
             raise self._raise
         if self._hang:
-            # 永远挂起；wait_for 触发 TimeoutError
+            # 模拟持续生成，由调用方主动取消测试结束。
             await asyncio.Event().wait()
         if not self._responses:
             return SimpleNamespace(success=False, content=None, error="no_response_queued")
@@ -99,9 +88,14 @@ class FakeLlmManager:
 # ---------------------------------------------------------------------------
 
 
-def test_default_timeout_constant_is_15s() -> None:
-    """DEFAULT_VLM_TIMEOUT_S = 15.0（下游契约重写任务可能改为可配置）。"""
-    assert DEFAULT_VLM_TIMEOUT_S == 15.0
+async def test_long_question_and_answer_are_preserved() -> None:
+    """长识别要求与完整画面文字经过 reader 后仍保留尾部。"""
+    text = "文字" * 8000 + "最后一行"
+    question = "识别" * 800 + "列出按钮"
+    llm = FakeLlmManager(responses=[SimpleNamespace(success=True, content=text)])
+    reader = LlmVisionTextReader(llm_manager=llm)
+    assert await reader.read(b"image", question=question) == text
+    assert llm.calls[0]["prompt"] == question
 
 
 # ---------------------------------------------------------------------------
@@ -159,22 +153,15 @@ async def test_read_works_without_prompt_manager() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_read_degrades_to_empty_on_timeout() -> None:
-    """VLM 调用挂起 > timeout_s → 返回空串（不抛）。"""
+async def test_active_read_propagates_parent_cancellation() -> None:
+    """调用方停止读屏时取消识别，不把主动取消伪装成空白画面。"""
     llm = FakeLlmManager(hang=True)
-    reader = LlmVisionTextReader(
-        llm_manager=llm,
-        prompt_manager=StubPromptManager(),
-        timeout_s=0.05,  # 50ms 极短超时，不真等 15s
-    )
-
-    started = asyncio.get_event_loop().time()
-    out = await reader.read(b"\x89PNG", question="q")
-    elapsed = asyncio.get_event_loop().time() - started
-
-    assert out == ""
-    # 真触发了超时（而不是别的失败）：elapsed 应在 0.05s 附近，且没超过 1s
-    assert elapsed < 1.0
+    task = asyncio.create_task(LlmVisionTextReader(llm_manager=llm).read(b"image"))
+    await asyncio.sleep(0)
+    assert llm.calls and not task.done()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 # ---------------------------------------------------------------------------

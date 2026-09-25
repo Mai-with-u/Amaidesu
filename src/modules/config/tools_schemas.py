@@ -94,7 +94,7 @@ class VisionProviderConfig(ToolProviderConfig):
     ``config`` 直接复用 ``LookAtScreenProvider.ConfigSchema``——provider
     包内的 schema 是默认值与字段权威的唯一事实源，配置层只持有引用，
     保证漂移写回自动补齐 ``monitor_index`` / ``default_region`` /
-    ``vlm_timeout_ms`` / ``default_max_width`` 等字段。
+    显示器与默认截屏区域等字段。
     """
 
     config: LookAtScreenProvider.ConfigSchema = Field(

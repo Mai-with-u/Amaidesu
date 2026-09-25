@@ -1,32 +1,13 @@
-"""LookAtScreenProvider 契约测试（Task 6 重写验收）。
-
-覆盖：
-- LOOK_AT_SCREEN_SPEC 形态（description 含"何时用"、parameters 四个字段及边界、
-  output 字段、required==[]、provider=vision、name 全名稳定）
-- 零参调用 ``invoke(arguments={})`` → success=True 且 ``structured_content["text"]`` 为 str
-  （text_adv Agent 兼容锚点）
-- 入参透传：``question``→reader、``monitor_index``/``region``/``max_width``→capture
-- 失败降级：capture 抛异常 / 空图 / reader 超时 / reader 异常 → success=True + error
-  字段、不抛
-- ConfigSchema 新字段（monitor_index/default_region/vlm_timeout_ms）+ 配置驱动的
-  ``LlmVisionTextReader._timeout_s`` 覆盖
-- 图片生命周期：image 在 ``structured_content["image"]`` + blocks 里，调用结束后无缓存
-
-参考：tests/modules/vision/test_text_reader.py / test_mss_capture.py 的 fake 模式。
-"""
+"""视觉工具完整传递识别问题与结果，默认读取原图，显式区域及缩放参数按请求执行。"""
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
-import pytest
 
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.vision.look_at_screen import (
-    DEFAULT_VLM_TIMEOUT_MS,
-    DEFAULT_VLM_TIMEOUT_S,
     LOOK_AT_SCREEN_SPEC,
     LlmVisionTextReader,
     LookAtScreenProvider,
@@ -75,7 +56,7 @@ class TestLookAtScreenSpec:
         q = (LOOK_AT_SCREEN_SPEC.parameters_schema or {})["properties"]["question"]
         assert q["type"] == "string"
         assert q.get("minLength") == 1
-        assert q.get("maxLength") == 500
+        assert "maxLength" not in q
 
     def test_region_constraints(self) -> None:
         r = (LOOK_AT_SCREEN_SPEC.parameters_schema or {})["properties"]["region"]
@@ -117,27 +98,17 @@ class TestLookAtScreenSpec:
 
 class TestConfigSchema:
     def test_default_fields(self) -> None:
-        """默认 monitor_index=1, vlm_timeout_ms=15000, default_max_width=1280, default_region=None。"""
+        """默认捕获完整显示器，生成没有宿主时限或自动缩放。"""
         cfg = LookAtScreenProvider.ConfigSchema.from_dict({})
-        assert cfg.monitor_index == 1
-        assert cfg.default_region is None
-        assert cfg.vlm_timeout_ms == DEFAULT_VLM_TIMEOUT_MS
-        assert cfg.default_max_width == 1280
+        assert cfg.monitor_index == 1 and cfg.default_region is None
+        assert "vlm_timeout_ms" not in cfg.model_dump()
+        assert "default_max_width" not in cfg.model_dump()
 
     def test_overrides_apply(self) -> None:
-        """覆盖字段生效。"""
-        cfg = LookAtScreenProvider.ConfigSchema.from_dict(
-            {
-                "monitor_index": 2,
-                "default_region": [10, 20, 110, 120],
-                "vlm_timeout_ms": 5000,
-                "default_max_width": 800,
-            }
-        )
+        """显示器和显式区域继续按用户选择生效。"""
+        cfg = LookAtScreenProvider.ConfigSchema.from_dict({"monitor_index": 2, "default_region": [10, 20, 110, 120]})
         assert cfg.monitor_index == 2
         assert cfg.default_region == [10, 20, 110, 120]
-        assert cfg.vlm_timeout_ms == 5000
-        assert cfg.default_max_width == 800
 
     def test_extra_fields_stripped_silently(self) -> None:
         """未知字段被 from_dict 静默剥离（不抛）；BaseConfig.from_dict 行为约定。"""
@@ -147,44 +118,26 @@ class TestConfigSchema:
         # 实例上不存在该字段
         assert not hasattr(cfg, "unknown_field")
 
-    def test_vlm_timeout_drives_reader_default(self) -> None:
-        """ConfigSchema.vlm_timeout_ms 推给 LlmVisionTextReader._timeout_s（替换模块默认）。"""
-
-        class _FakePromptManager:
-            def render(self, template_name: str, **kw: Any) -> str:
-                return ""
-
-        reader = LlmVisionTextReader(llm_manager=object(), prompt_manager=_FakePromptManager())
-        # 构造时默认 15s
-        assert reader._timeout_s == DEFAULT_VLM_TIMEOUT_S
-
-        LookAtScreenProvider(
-            config={"vlm_timeout_ms": 5000},
-            screen_capture=None,
+    async def test_legacy_config_does_not_resize_capture(self) -> None:
+        """即使旧配置残留缩放或时限字段，画面仍按原始尺寸交给识别。"""
+        capture = FakeScreenCapture()
+        capture.queue_png(b"image", width=2560, height=1440)
+        reader = FakeTextReader()
+        reader.queue_text("完整画面")
+        provider = LookAtScreenProvider(
+            config={"vlm_timeout_ms": 1, "default_max_width": 800},
+            screen_capture=capture,
             text_reader=reader,
         )
-        # provider 推一次 → 变成 5s
-        assert reader._timeout_s == pytest.approx(5.0)
+        result = await provider.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}))
+        assert result.structured_content["width"] == 2560
+        assert capture.calls[-1]["max_width"] is None
 
-    def test_vlm_timeout_preserves_caller_override(self) -> None:
-        """调用方已自定义 reader._timeout_s 时 provider 不覆盖。"""
-
-        class _FakePromptManager:
-            def render(self, template_name: str, **kw: Any) -> str:
-                return ""
-
-        reader = LlmVisionTextReader(
-            llm_manager=object(),
-            prompt_manager=_FakePromptManager(),
-            timeout_s=3.0,
-        )
-        LookAtScreenProvider(
-            config={"vlm_timeout_ms": 10000},
-            screen_capture=None,
-            text_reader=reader,
-        )
-        # 调用方已自定义 → 保持 3s
-        assert reader._timeout_s == pytest.approx(3.0)
+    def test_provider_does_not_inject_reader_deadline(self) -> None:
+        """装配视觉工具时不再给 reader 写入时钟截止配置。"""
+        reader = LlmVisionTextReader(llm_manager=object())
+        LookAtScreenProvider(config={}, text_reader=reader)
+        assert not hasattr(reader, "_timeout_s")
 
 
 # ===========================================================================
@@ -230,7 +183,7 @@ class TestZeroArgumentCompatibility:
 
         assert capture.calls[0]["monitor_index"] == 2
         assert capture.calls[0]["region"] == (10, 10, 100, 100)
-        assert capture.calls[0]["max_width"] == 640
+        assert capture.calls[0]["max_width"] is None
 
 
 # ===========================================================================
@@ -592,10 +545,10 @@ class TestProviderRegistrationContract:
 
 
 class TestModuleExports:
-    def test_default_vlm_timeout_constants(self) -> None:
-        """DEFAULT_VLM_TIMEOUT_S = 15.0；DEFAULT_VLM_TIMEOUT_MS = 15000。"""
-        assert DEFAULT_VLM_TIMEOUT_S == 15.0
-        assert DEFAULT_VLM_TIMEOUT_MS == 15000
+    def test_vlm_controls_are_not_exposed(self) -> None:
+        """配置界面从 Schema 生成，已删除的生成限制不能再次显示。"""
+        fields = LookAtScreenProvider.ConfigSchema.model_fields
+        assert "vlm_timeout_ms" not in fields and "default_max_width" not in fields
 
     def test_template_keys_unchanged(self) -> None:
         """模板键名保留（Task 3 迁移后）。"""

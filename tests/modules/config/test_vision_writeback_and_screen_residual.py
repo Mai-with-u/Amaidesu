@@ -1,14 +1,4 @@
-"""Task 7 验证：[tools.vision].config 漂移写回 + 采集器残留容忍
-
-覆盖三组用例：
-- (a) vision 新字段（monitor_index / default_region / vlm_timeout_ms /
-  default_max_width）通过配置层 Schema 自动生成默认值并落盘到
-  ``[tools.vision].config``；drift report 在写回后归零。
-- (b) 残留 ``[collectors.screen]`` 段加载不抛，warning 含跳过原因；
-  CollectorsRootConfig.extra="allow" 保留该段不删除。
-- (c) ``enabled`` 含未知名（如已退役 ``screen``）加载不抛，warning
-  含跳过原因；与 ``factory.instantiate_collector`` 的 skip+warn 行为对齐。
-"""
+"""视觉配置由提供者 Schema 生成和写回，同时容忍已停用采集器的历史配置残留。"""
 
 from __future__ import annotations
 
@@ -83,8 +73,8 @@ class TestVisionConfigDefaults:
         assert isinstance(cfg.config, LookAtScreenProvider.ConfigSchema)
         assert cfg.config.monitor_index == provider_schema.monitor_index == 1
         assert cfg.config.default_region is None
-        assert cfg.config.vlm_timeout_ms == provider_schema.vlm_timeout_ms == 15000
-        assert cfg.config.default_max_width == provider_schema.default_max_width == 1280
+        assert "vlm_timeout_ms" not in cfg.config.model_dump()
+        assert "default_max_width" not in cfg.config.model_dump()
 
     def test_empty_vision_config_section_populated_on_load(self, temp_config_dir):
         """空 ``[tools.vision].config`` 经加载管线后写入全部默认字段（除 None 字段）。"""
@@ -96,8 +86,8 @@ class TestVisionConfigDefaults:
         tools_text = (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
         # monitor_index / vlm_timeout_ms / default_max_width 必须落盘
         assert "monitor_index = 1" in tools_text
-        assert "vlm_timeout_ms = 15000" in tools_text
-        assert "default_max_width = 1280" in tools_text
+        assert "vlm_timeout_ms" not in tools_text
+        assert "default_max_width" not in tools_text
         # type 标记也写入（class marker，provider ConfigSchema 自带）
         assert 'type = "vision"' in tools_text
         # default_region = None 遵循 _set_toml_value / _table_from_model 兜底：不落盘
@@ -125,8 +115,8 @@ class TestVisionConfigDefaults:
         # monitor_index 保留为 2（用户值）
         assert vision_cfg["monitor_index"] == 2
         # 其他字段走默认
-        assert vision_cfg["vlm_timeout_ms"] == 15000
-        assert vision_cfg["default_max_width"] == 1280
+        assert "vlm_timeout_ms" not in vision_cfg
+        assert "default_max_width" not in vision_cfg
         # 用户修改后写回不丢用户值
         disk_text = tools_path.read_text(encoding="utf-8-sig")
         assert "monitor_index = 2" in disk_text
@@ -143,8 +133,8 @@ class TestVisionConfigDefaults:
         original = tools_path.read_text(encoding="utf-8-sig")
         # 在 [tools.vision.config] 段尾追加未知字段（替换最近的已有字段以避免重复键）
         patched = original.replace(
-            "default_max_width = 1280",
-            'default_max_width = 1280\nunknown_field = "x"',
+            "monitor_index = 1",
+            'monitor_index = 1\nunknown_field = "x"',
         )
         assert patched != original
         tools_path.write_text(patched, encoding="utf-8-sig")

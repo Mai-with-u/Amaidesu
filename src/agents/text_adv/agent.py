@@ -55,7 +55,6 @@ class FrameCapture(Protocol):
 
 
 # 上报正文的摘要长度上限（字符），避免 report message 过长
-_BODY_SUMMARY_MAX_CHARS = 120
 
 
 class TextAdvGameAgent(BaseAgent):
@@ -302,11 +301,7 @@ class TextAdvGameAgent(BaseAgent):
 
     async def _emit_milestone(self, reading: ScreenReading) -> None:
         """新叙事屏上报：``game.milestone``（message 自述当前屏文本）。"""
-        summary = (
-            reading.text
-            if len(reading.text) <= _BODY_SUMMARY_MAX_CHARS
-            else reading.text[:_BODY_SUMMARY_MAX_CHARS] + "…"
-        )
+        summary = reading.text
         payload = GamePayload(
             game=self.name,
             event_type="milestone",
@@ -316,11 +311,7 @@ class TextAdvGameAgent(BaseAgent):
 
     async def _emit_report(self, reading: ScreenReading) -> None:
         """选项屏上报：``game.report``（escalation 语义，引导主播调 choose 工具）。"""
-        summary = (
-            reading.text
-            if len(reading.text) <= _BODY_SUMMARY_MAX_CHARS
-            else reading.text[:_BODY_SUMMARY_MAX_CHARS] + "…"
-        )
+        summary = reading.text
         listed = "\n".join(f"{i}. {opt.label}" for i, opt in enumerate(reading.options, start=1))
         message = (
             f"画面出现待定夺的选项。当前正文：{summary}\n"

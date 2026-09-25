@@ -35,9 +35,6 @@ TEXT_ADV_VLM_QUESTION_KEY = "text_adv_vlm_question"
 # 注册到 ToolRegistry 的全名（vision_look_at_screen）
 VISION_TOOL_NAME = f"{PROVIDER_NAME}_{TOOL_NAME}"
 
-# vision_look_at_screen 的 question 参数硬上限（字符数）
-QUESTION_MAX_CHARS = 500
-
 # want_options=True 时注入模板的选项段引导（要求标签 + 中心像素坐标）
 _OPTIONS_DIRECTIVE = (
     "选项：\n"
@@ -129,13 +126,10 @@ def build_question(*, want_options: bool) -> str:
         want_options: 是否要求 VLM 列出选项（纯叙事屏传 False 可省 token）
 
     Returns:
-        渲染后的 question 文本（防御性截断到 500 字符上限内）
+        完整的 question 文本，保留识别要求与选项坐标说明
     """
     directive = _OPTIONS_DIRECTIVE if want_options else _NO_OPTIONS_DIRECTIVE
     question = _render_question_template(directive).strip()
-    if len(question) > QUESTION_MAX_CHARS:
-        logger.warning(f"question 超出 {QUESTION_MAX_CHARS} 字符上限 (len={len(question)}); 截断")
-        question = question[:QUESTION_MAX_CHARS]
     return question
 
 
@@ -288,7 +282,7 @@ class RegistryVisionReader:
     """经 ToolRegistry 调用 ``vision_look_at_screen`` 的 VisionReader 实现。
 
     与仓内 text_adv Agent 的感知调用先例一致：构造注入 ToolRegistry，调用时
-    携带模板渲染的 question 与 max_width；从 structured_content 取识别文本
+    携带完整的 question 并读取原始分辨率画面；从 structured_content 取识别文本
     （硬约束键）与实际发送宽度（缩放后图像宽，供坐标校验与反算）。
     """
 
@@ -297,7 +291,6 @@ class RegistryVisionReader:
         tool_registry: VisionToolRegistry,
         *,
         source: str = "text_adv",
-        max_width: int = 1280,
         prompt_manager: Optional[PromptManager] = None,
     ) -> None:
         """构造注入注册表与调用参数。
@@ -305,12 +298,10 @@ class RegistryVisionReader:
         Args:
             tool_registry: ToolRegistry 实例（经它调用 vision_look_at_screen）
             source: ToolInvocation 的 source 标识（调用方 Agent 名）
-            max_width: 图像缩放最大宽度（像素）；决定坐标所在的像素空间
             prompt_manager: 可选 PromptManager（不传则用全局单例渲染模板）
         """
         self._tool_registry = tool_registry
         self._source = source
-        self._max_width = int(max_width)
         self._prompt_manager = prompt_manager
 
     def _build_question(self, *, want_options: bool) -> str:
@@ -324,14 +315,14 @@ class RegistryVisionReader:
                 question = _FALLBACK_TEMPLATE.format(options_directive=directive).strip()
         else:
             question = build_question(want_options=want_options)
-        return question[:QUESTION_MAX_CHARS]
+        return question
 
     async def read_screen(self, *, want_options: bool) -> ScreenReading:
         """调一次 vision_look_at_screen 并解析回复；失败返回可判定结果。"""
         question = self._build_question(want_options=want_options)
         invocation = ToolInvocation(
             tool_name=VISION_TOOL_NAME,
-            arguments={"question": question, "max_width": self._max_width},
+            arguments={"question": question},
             source=self._source,
         )
         result = await self._tool_registry.invoke(invocation)
@@ -391,5 +382,4 @@ __all__ = [
     "parse_reply",
     "TEXT_ADV_VLM_QUESTION_KEY",
     "VISION_TOOL_NAME",
-    "QUESTION_MAX_CHARS",
 ]

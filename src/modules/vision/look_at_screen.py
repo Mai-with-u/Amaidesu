@@ -49,11 +49,6 @@ from src.modules.tools.provider import BaseToolProvider
 
 logger = get_logger("look_at_screen")
 
-# VLM 调用的默认超时（秒）。生产路径改为 ``LookAtScreenProvider.ConfigSchema.vlm_timeout_ms``
-# 驱动（毫秒），保留此常量作模块级默认值与 ``LlmVisionTextReader`` 构造的兜底。
-DEFAULT_VLM_TIMEOUT_S: float = 15.0
-DEFAULT_VLM_TIMEOUT_MS: int = 15000
-
 # LlmVisionTextReader 的 VLM 调用模板键（由 Task 3 迁移到 vision/prompts/）。
 SCREEN_VLM_PROMPT_KEY = "screen_vlm_prompt"
 SCREEN_VLM_SYSTEM_KEY = "screen_vlm_system"
@@ -171,7 +166,6 @@ LOOK_AT_SCREEN_SPEC = ToolSpec(
                 "type": "string",
                 "description": '本次识别想问的问题（如"屏幕上显示什么"）；不传则走默认提示',
                 "minLength": 1,
-                "maxLength": 500,
             },
             "region": {
                 "type": "array",
@@ -242,7 +236,7 @@ class LookAtScreenProvider(BaseToolProvider):
 
     Example:
         >>> provider = LookAtScreenProvider(
-        ...     config={"default_max_width": 1280, "vlm_timeout_ms": 15000},
+        ...     config={},
         ...     screen_capture=MssScreenCapture(),
         ...     text_reader=LlmVisionTextReader(llm_manager=llm_mgr),
         ... )
@@ -270,18 +264,6 @@ class LookAtScreenProvider(BaseToolProvider):
             default=None,
             description="默认区域 [x1, y1, x2, y2]（相对显示器左上角）；None = 全屏",
         )
-        # VLM 调用超时（毫秒）；传给 LlmVisionTextReader；默认 15000
-        vlm_timeout_ms: int = Field(
-            default=DEFAULT_VLM_TIMEOUT_MS,
-            ge=1,
-            description="VLM 调用超时（毫秒）；失败/超时一律降级为空文本，不抛",
-        )
-        # 图像缩放最大宽度（像素，0=不缩放；省 token 用）
-        default_max_width: int = Field(
-            default=1280,
-            ge=0,
-            description="图像缩放最大宽度（像素，0=不缩放；省 token 用）",
-        )
 
     def __init__(
         self,
@@ -293,7 +275,6 @@ class LookAtScreenProvider(BaseToolProvider):
         # 配置转 typed（config: dict 必填；空 dict = 全部默认；失败 log+raise）
         self._config_raw = dict(config) if config is not None else {}
         self.typed_config = self.ConfigSchema.from_dict(self._config_raw)
-        self._default_max_width = int(self.typed_config.default_max_width)
         self._default_monitor_index = int(self.typed_config.monitor_index)
         self._default_region: Optional[Tuple[int, int, int, int]] = None
         if self.typed_config.default_region is not None:
@@ -303,31 +284,11 @@ class LookAtScreenProvider(BaseToolProvider):
                     self._default_region = (int(r[0]), int(r[1]), int(r[2]), int(r[3]))
             except (TypeError, ValueError):
                 self._default_region = None
-        self._vlm_timeout_s = max(0.001, self.typed_config.vlm_timeout_ms / 1000.0)
 
         self._capture = screen_capture
         self._reader = text_reader
-        # 若注入的是 LlmVisionTextReader 且未指定 timeout_s，则用配置驱动的超时覆盖
-        self._apply_timeout_to_reader(self._reader, self._vlm_timeout_s)
 
         self._call_count = 0
-
-    @staticmethod
-    def _apply_timeout_to_reader(reader: Optional[TextReader], timeout_s: float) -> None:
-        """若 reader 是 LlmVisionTextReader 且未自定义 timeout_s，覆盖为 provider 默认。
-
-        LlmVisionTextReader 构造时默认 15s；此处按 provider 配置（vlm_timeout_ms）
-        推一次，保证 provider 配置真正驱动 reader 超时。其他 reader 类型不修改。
-        """
-        if reader is None:
-            return
-        current = getattr(reader, "_timeout_s", None)
-        # 仅在 reader 仍是模块默认（15.0）时才覆盖——若调用方已自定义则尊重之
-        if current == DEFAULT_VLM_TIMEOUT_S:
-            try:
-                reader._timeout_s = float(timeout_s)
-            except Exception as e:  # noqa: BLE001 - 防御：自定义 reader 不一定有该字段
-                logger.debug(f"reader 超时覆盖跳过（非默认 reader 或字段不可写）: {e}")
 
     @property
     def name(self) -> str:
@@ -393,7 +354,8 @@ class LookAtScreenProvider(BaseToolProvider):
         if max_width_arg is not None and max_width_arg > 0:
             max_width = max_width_arg
         else:
-            max_width = self._default_max_width
+            # 默认读取原始画面，只有调用方明确请求缩放时才改变像素尺寸。
+            max_width = None
 
         # 采集后端不可用 → 优雅降级（不抛，返回成功 + 空文本 + error）
         if self._capture is None:
@@ -678,32 +640,16 @@ class FakeTextReader:
 
 
 class LlmVisionTextReader:
-    """通过 LLMManager.generate_vision 把图像转文本（异步，默认 15s 超时降级）。
-
-    降级语义：
-    - 成功 → 返回 response.content（已 strip）
-    - 超时 → 返回 ``""`` + warning 日志
-    - success=False → 返回 ``""`` + warning 日志
-    - 异常 → 返回 ``""`` + warning 日志
-
-    不抛、不缓存、不重试；超时由构造参数 ``timeout_s`` 控制（LookAtScreenProvider
-    会按 ConfigSchema.vlm_timeout_ms 推一次默认值）。
-
-    Example:
-        >>> reader = LlmVisionTextReader(llm_manager=llm_mgr, prompt_manager=prompt_mgr)
-        >>> text = await reader.read(image_bytes, question="屏幕上有几个选项？")
-    """
+    """完整等待视觉模型识别画面，生成失败时记录原因并返回空文本。"""
 
     def __init__(
         self,
         *,
         llm_manager: Any,
         prompt_manager: Optional[PromptManager] = None,
-        timeout_s: float = DEFAULT_VLM_TIMEOUT_S,
     ) -> None:
         self._llm_manager = llm_manager
         self._prompt_manager = prompt_manager
-        self._timeout_s = float(timeout_s)
 
     def _render_user_prompt(self, question: Optional[str]) -> str:
         """user prompt：优先用调用方传入的 question，否则渲染默认模板。"""
@@ -735,22 +681,17 @@ class LlmVisionTextReader:
         mime_type: str = "image/png",
         question: Optional[str] = None,
     ) -> str:
-        """调一次 VLM；成功返回 content，失败/超时/异常返回 ``""``。"""
+        """等待完整识别结果；生成失败时返回空文本。"""
         prompt = self._render_user_prompt(question)
         system = self._render_system_prompt()
         try:
-            response = await asyncio.wait_for(
-                self._llm_manager.generate_vision(
-                    prompt,
-                    [image_bytes],
-                    profile=ProfileNames.VISION,
-                    system=system,
-                ),
-                timeout=self._timeout_s,
+            # 读屏可能包含较长文字；等待模型完整返回，并继承父任务的主动取消。
+            response = await self._llm_manager.generate_vision(
+                prompt,
+                [image_bytes],
+                profile=ProfileNames.VISION,
+                system=system,
             )
-        except asyncio.TimeoutError:
-            logger.warning(f"LlmVisionTextReader VLM 调用超时 (>{self._timeout_s:.1f}s); 降级为空文本")
-            return ""
         except Exception as exc:  # noqa: BLE001 - 边界处兜底（不抛）
             logger.warning(f"LlmVisionTextReader VLM 调用异常: {exc}", exc=True)
             return ""
@@ -776,8 +717,6 @@ __all__ = [
     "FakeScreenCapture",
     "FakeTextReader",
     "LlmVisionTextReader",
-    "DEFAULT_VLM_TIMEOUT_S",
-    "DEFAULT_VLM_TIMEOUT_MS",
     "SCREEN_VLM_PROMPT_KEY",
     "SCREEN_VLM_SYSTEM_KEY",
 ]
