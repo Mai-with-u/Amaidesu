@@ -409,21 +409,25 @@ async def test_design_history_appends_without_rewriting_old_resources(harness: H
 
 
 async def test_design_checkpoint_uses_own_profile_and_preserves_loaded_resources(harness: Harness) -> None:
-    """长设计推理触发一次集中整理，教材与有效候选由代码保留，随后仍能交付。"""
+    """新教材先用于校验方案，再整理旧分析；教材与有效候选保留，随后仍能交付。"""
     harness.builder._config.max_context_chars = 24000
     first = response("minecraft_builder_work_read_resource", {"uri": "maicraft://building/guide"})
     first.content = "候选方案分析" * 7000
+    validate, finish = valid_design()
     harness.llm.generate.side_effect = [
         first,
+        validate,
         Response(success=True, content="已读取教材，下一步验证方案", finish_reason="stop"),
-        *valid_design(),
+        finish,
     ]
     task_id = await harness.request(intent="design")
     await harness.finish_worker()
     calls = harness.llm.generate.await_args_list
-    assert len(calls) == 4 and calls[1].kwargs["profile"] == "minecraft_builder"
-    assert "max_tokens" not in calls[1].kwargs
-    assert "maicraft://building/guide" in str(calls[2].args[0])
+    # 首次工具回执未经摘要交给第二次设计决策，第三次调用才整理已经读过的分析。
+    assert len(calls) == 4 and calls[2].kwargs["profile"] == "minecraft_builder"
+    assert "max_tokens" not in calls[2].kwargs
+    assert first.content in str(calls[1].args[0])
+    assert "maicraft://building/guide" in str(calls[3].args[0])
     assert harness.builder._jobs[task_id].status == "succeeded"
 
 

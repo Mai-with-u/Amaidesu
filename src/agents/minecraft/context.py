@@ -88,22 +88,27 @@ class MinecraftHistoryCompactor:
                 "_minecraft_context_facts": True,
             },
         ]
-        # 从完整 assistant 调用组的起点切分；空间紧张时扩大整理范围，也不留下孤立 tool 消息。
+        # 最新调用组尚未交给决策模型阅读，必须连同完整回执保留；只整理它之前已处理的历史。
         cuts = [i for i, message in enumerate(messages) if message.get("role") == "assistant"]
+        if len(cuts) < 2:
+            return False
+        protected_start = cuts[-1]
         start = max(0, len(cuts) - self._config.recent_turns)
         # 留出后续工作空间，避免刚整理完又因几次观察重复总结；事实较多时保留原有可用余量。
         cut = next(
             (
                 i
                 for ratio in (0.6, 0.8)
-                for i in cuts[start:] + [len(messages)]
+                for i in cuts[start:]
                 if context_chars(fixed + messages[i:], tools) + self._config.summary_max_chars
                 <= self._config.max_context_chars * ratio
             ),
             None,
         )
-        if cut is None or cut <= 1:
-            raise ValueError("原指令、工作文档或工具声明已经超过上下文预算，请缩小任务范围或提高本游戏预算")
+        # 单份新回执很大时，触发阈值允许暂时超出；先让模型读完，下一轮再整理已读回执。
+        # 不能为了压到目标体积，把刚查到的决策编号和失败详情先交给摘要模型删掉。
+        if cut is None:
+            cut = protected_start
         prompt = {
             "role": "system",
             "content": (
