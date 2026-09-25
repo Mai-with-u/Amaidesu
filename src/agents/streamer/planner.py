@@ -468,7 +468,7 @@ class Planner:
             return batch_messages
 
         batch_ids = {_as_id_str(getattr(msg, "message_id", None)) for msg in batch} - {""}
-        batch_texts = {(getattr(msg, "text", "") or "").strip() for msg in batch} - {""}
+        batch_texts = {(getattr(msg, "content", "") or "").strip() for msg in batch} - {""}
         end = len(history)
         while end > 0:
             turn = history[end - 1]

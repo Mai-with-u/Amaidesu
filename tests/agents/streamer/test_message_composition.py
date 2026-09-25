@@ -181,6 +181,29 @@ async def test_react_messages_appended_after_reference() -> None:
     assert sum(1 for m in second if m.get("content") == ref_content) == 1
 
 
+@pytest.mark.asyncio
+async def test_dedup_text_fallback_without_message_id() -> None:
+    """message_id 为空的行靠文本兜底去重：历史尾部同文行剔除，弹幕只注入一次。
+
+    落库副本可能缺 message_id（采集器对空平台 ID 落空串）——此时按 message_id
+    匹配不中，须退回原始文本匹配，否则该弹幕在历史尾部与本批各出现一次。
+    """
+    planner, llm, captured = _make_planner()
+    # 尾部两条与批同源：一条有 id（id 匹配剔除），一条无 id（文本兜底剔除）
+    history = [
+        FakeTurn(role="user", content="大家好", sender_name="小明", message_id="m1"),
+        FakeTurn(role="user", content="来个落地水", sender_name="小明", message_id="m2"),
+        FakeTurn(role="user", content="上大分", sender_name="小明", message_id=""),
+    ]
+    batch = [_batch_msg("来个落地水", "m2"), _batch_msg("上大分", "")]
+
+    await planner.plan(batch, history=history)
+
+    user_contents = [m["content"] for m in captured[0] if m["role"] == "user" and "## " not in m["content"]]
+    # 历史只留 m1 一条；本批两条各出现一次（无重复）
+    assert user_contents == ["小明: 大家好 [id:m1]", "小明: 来个落地水 [id:m2]", "小明: 上大分"]
+
+
 # ---------------------------------------------------------------------------
 # 跨窗逐字稳定（缓存硬要求）
 # ---------------------------------------------------------------------------
