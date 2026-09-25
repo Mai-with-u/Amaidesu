@@ -17,14 +17,14 @@ from src.modules.tools import ToolRegistry
 
 store, memory = await build_memory_stack(config)  # 注入 [memory] / [sqlite]
 registry = ToolRegistry()
-bind_memory_tools(registry, memory)  # 注册 query_memory 工具
+bind_memory_tools(registry, memory, viewer_repo=database.viewers)
 ```
 
 ## 当前支持的 backend
 
 | backend | 说明 | 路径 |
 |---|---|---|
-| ``"simple"`` | SQLite + 关键词召回（本模块） | → ``SimpleMemory(store)`` |
+| ``"simple"`` | SQLite + 观众事实/画像读写（本模块） | → ``SimpleMemory(store)`` |
 
 其它 backend 值：``raise ValueError("...当前仅支持 backend='simple'")``，
 fail-fast 由组合根捕获并退出（避免启动后才发现 memory 缺失）。
@@ -40,8 +40,7 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 from src.modules.logging import get_logger
-from src.modules.memory.provider import MemoryProvider
-from src.modules.memory.query_tool import build_query_memory_tool
+from src.modules.memory.query_tool import build_memory_tools
 from src.modules.memory.simple_memory import SimpleMemory
 from src.modules.storage._default_path import DEFAULT_DB_PATH
 from src.modules.storage.database import SQLiteDatabase
@@ -102,7 +101,7 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteDatabase, Si
     Returns:
         ``(store, memory)`` 元组：
         - ``store``：已 ``initialize()`` 的 SQLiteDatabase
-        - ``memory``：已 ``initialize()`` 的 SimpleMemory（私有表已就绪）
+        - ``memory``：已 ``initialize()`` 的 SimpleMemory（表自检通过）
 
     Raises:
         ValueError: ``config['memory']['backend']`` 不是 ``"simple"`` 时
@@ -132,19 +131,23 @@ async def build_memory_stack(config: Dict[str, Any]) -> Tuple[SQLiteDatabase, Si
     await store.initialize()
     logger.info(f"记忆栈：SQLiteDatabase 已初始化 path={db_path} timeout={busy_timeout_s}s")
 
-    # SimpleMemory 装配 + 私有表初始化
+    # SimpleMemory 装配 + 表自检
     memory = SimpleMemory(store)
     await memory.initialize()
-    logger.info("记忆栈：SimpleMemory 私有表（_memory_facts）已就绪")
+    logger.info("记忆栈：SimpleMemory 已就绪（viewer_facts / viewer_profiles）")
 
     return store, memory
 
 
-def bind_memory_tools(registry: ToolRegistry, memory: MemoryProvider) -> int:
-    """把 ``query_memory`` 工具注册到 ``registry``。
+def bind_memory_tools(
+    registry: ToolRegistry,
+    memory: SimpleMemory,
+    viewer_repo: Any = None,
+) -> int:
+    """把记忆域双工具（query_memory / query_viewer_profile）注册到 ``registry``。
 
-    经 ``build_query_memory_tool(memory)`` 构造 Provider（简单工具正典路径
-    样板，见 ``query_tool.py``）并 ``registry.register_provider(provider)``；
+    经 ``build_memory_tools(memory, viewer_repo)`` 构造 Provider（简单工具
+    正典路径样板，见 ``query_tool.py``）并 ``registry.register_provider``；
     返回新增工具数。
 
     **禁止**全局单例路径——生产装配必须由组合根构造注册表并传入，
@@ -152,7 +155,8 @@ def bind_memory_tools(registry: ToolRegistry, memory: MemoryProvider) -> int:
 
     Args:
         registry: 调用方构造的 ``ToolRegistry``（必须非 None）
-        memory: ``MemoryProvider`` 实例（当前为 ``SimpleMemory``）
+        memory: ``SimpleMemory`` 实例（画像/事实读写服务）
+        viewer_repo: ``ViewerRepo`` 实例（昵称反查；可选但建议注入）
 
     Returns:
         本次新注册的工具数（重复注册则返回 0）。
@@ -162,10 +166,10 @@ def bind_memory_tools(registry: ToolRegistry, memory: MemoryProvider) -> int:
     if memory is None:
         raise ValueError("bind_memory_tools: memory 不能为 None；请先调用 build_memory_stack")
 
-    provider = build_query_memory_tool(memory)
+    provider = build_memory_tools(memory, viewer_repo)
     new_count = registry.register_provider(provider)
     if new_count > 0:
-        logger.info(f"记忆工具已绑定: provider='{provider.name}' 新增 {new_count} 个工具（query_memory）")
+        logger.info(f"记忆工具已绑定: provider='{provider.name}' 新增 {new_count} 个工具")
     else:
         # 重复注册不报错
         logger.debug(f"记忆工具 '{provider.name}' 注册未新增（可能已注册或 spec name 冲突）")

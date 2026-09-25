@@ -141,7 +141,9 @@ class StreamerAgent(BaseAgent):
         chat_repo: Optional[Any] = None,
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
+        viewer_repo: Optional[Any] = None,
         memory: Any = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
         context_assembler_config: Optional[Any] = None,
         speech_config: Optional[Dict[str, Any]] = None,
         tts_engine: Optional["TTSProvider"] = None,
@@ -163,13 +165,18 @@ class StreamerAgent(BaseAgent):
             chat_repo: 可选 ``ChatRepo``（live_chat 会话历史读取，reply tool 历史源）
             sessions_repo: 可选 ``SessionRepo``（live_sessions 实时状态，转交后台维护器）
             topic_repo: 可选 ``TopicRepo``（摘要/话题快照落地，转交后台维护器）
+            viewer_repo: 可选 ``ViewerRepo``（观众统计仓储）——Planner 画像注入
+                时经它实时取观众昵称；None 时注入行回退 platform/user_id
             context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
                 控制 Planner 组装路径开关与长记忆召回条数；None 时 Planner 走内置默认）
-            memory: 可选记忆后端（实现 ``MemoryProvider`` 协议，含
-                ``recall(query, top_k)`` / ``ingest(text, source, tags)``）。
-                传 ``None`` 时记忆相关功能整体降级——Planner 走无记忆路径，
-                BackgroundMaintainer 跳过 ingest 写入。这是契约保证的"功能
+            memory: 可选观众事实/画像读写服务（``SimpleMemory`` 结构契约）。
+                传 ``None`` 时记忆相关功能整体降级——Planner 走无画像注入路径，
+                BackgroundMaintainer 跳过事实写入。这是契约保证的"功能
                 可关闭"而非"崩溃友好"。
+            memory_policy: 可选画像行为策略（核心 ``[memory]`` 段，storage.toml）。
+                形如 ``{"profile_injection_max": 3, "profile_min_interactions": 3, ...}``；
+                Planner 注入上限与后台事实提取/画像生成参数同源。``None`` 时
+                各参数走内置默认。
             speech_config: 可选发言管线配置（来自核心 ``[tts]`` 段）。
                 形态::
 
@@ -214,6 +221,10 @@ class StreamerAgent(BaseAgent):
         self._thinking_sink = thinking_sink
         # 记忆后端（可选；None 时记忆相关功能整体降级）
         self._memory = memory
+        # 观众统计仓储（Planner 注入画像时实时取昵称用；None 时回退 platform/user_id）
+        self._viewer_repo = viewer_repo
+        # 画像行为策略（[memory] 段；Planner 注入上限与后台提取参数同源）
+        self._memory_policy = memory_policy if isinstance(memory_policy, dict) else {}
         # 历史窗口滞回状态：窗口最旧一条的 message_id + 所属场次主键
         # （见 _apply_history_window；场次切换时作废重锚）
         self._history_window_pk: Optional[int] = None
@@ -237,9 +248,8 @@ class StreamerAgent(BaseAgent):
         # Planner（决策核心，Agent 内部件——非工具）
         # 行为准则（behavior_style）只读包内配置权威 config.persona（决策侧通道）
         _behavior_style = config.persona.behavior_style or ""
-        # context 组装器路径开关与召回条数——直接读包内权威
+        # context 组装器路径开关——直接读包内权威；注入上限读 [memory] 策略段
         _context_enabled = config.context.enabled
-        _recall_top_k = config.context.memory_recall_long_term
         self._planner = Planner(
             config={
                 "profile": _PROFILE_PLANNER,
@@ -250,7 +260,8 @@ class StreamerAgent(BaseAgent):
             room_state=self._room_state,
             tool_registry=tool_registry,
             memory=memory,
-            recall_top_k=int(_recall_top_k or 3),
+            viewer_repo=viewer_repo,
+            profile_max=int(self._memory_policy.get("profile_injection_max", 3) or 3),
             context_enabled=bool(_context_enabled),
             behavior_style=_behavior_style,
         )
@@ -323,10 +334,11 @@ class StreamerAgent(BaseAgent):
             sessions_repo=sessions_repo,  # live_sessions 实时状态落库（按 session_manager 解析的当前场次）
             chat_repo=chat_repo,  # 话题摘要读 live_chat 最近观众行
             session_manager=session_manager,  # 场次归属解析（None 时心跳降级跳过）
-            memory=memory,  # 记忆写入面：摘要 → ingest；None 时降级
-            event_bus=event_bus,  # 高价值事件（礼物/SC）→ ingest
+            memory=memory,  # 事实提取/画像生成写入面；None 时降级
+            memory_policy=self._memory_policy,  # [memory] 段策略（提取开关/门槛/长度/条数）
+            event_bus=event_bus,
             topic_repo=topic_repo,  # 摘要落地：timeline_summary + topics 快照
-            prompt_manager=self._prompt,  # 摘要系统提示词渲染（复用 Agent 持有的 PromptManager）
+            prompt_manager=self._prompt,  # 摘要/画像系统提示词渲染（复用 Agent 持有的 PromptManager）
         )
 
         # 后台 flush 循环（Agent 主循环）

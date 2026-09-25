@@ -8,12 +8,15 @@ StorageLedger —— 直播间消息流落库记账器
 ## 职责
 - 订阅 ``room.message.#``（MQTT 风格通配），按 payload.message_type 分发：
   - ``danmaku``   → live_chat（+ 顺路 upsert viewers.message_count）
-  - ``gift``      → gifts（+ 顺路 upsert viewers.gift_count）
-  - ``super_chat`` → super_chats（SC 属 high-value，统计计数走 SimpleMemory 语义层，不混入 viewers）
-  - ``guard``     → live_chat（message_type="guard"；content 即人读描述，不计观众发言统计）
+  - ``gift``      → gifts 全字段（+ 顺路 upsert viewers.gift_count；金瓜子
+    礼物另计付费统计 paid_count/paid_amount，银瓜子免费礼物不计）
+  - ``super_chat`` → super_chats 全字段（+ upsert viewers 付费统计——SC 与
+    礼物同为付费行为，处理一致；此前 SC 只写明细、统计空白是缺陷）
+  - ``guard``     → guards 购买事件表（+ 付费统计），live_chat 保留 guard 行
+    （message_type="guard"；content 即人读描述，不计观众发言统计）
   - ``partner_speech`` → live_chat（sender_role="partner"，**不**计观众统计）
   - ``enter``     → 当前 schema 无 enter 明细表 → debug 日志后丢弃（场次状态归 LiveSessionManager，不在本层职责）
-- viewers 写穿伴随：选在主表落库同点 upsert，避免后台 tick 的重复扫描与时序问题；SC 不计入保持现有行为
+- viewers 写穿伴随：选在主表落库同点 upsert，避免后台 tick 的重复扫描与时序问题
 - 订阅 ``streamer.speech`` 业务事件（主播发言），写入 live_chat（sender_role="assistant"，message_type="speak"）。
   场次归属取 payload.live_session_id（场次盖章拦截器已注入；0 时回退 LiveSessionManager 解析）。
   若 payload.target_user_id 非空，顺路调用 upsert_viewer_replied 把该观众的
@@ -23,6 +26,8 @@ StorageLedger —— 直播间消息流落库记账器
 - 订阅 ``game.*``（milestone / attention_required / error，按 payload.event_type 判别），写入 game_events 表。
   游戏代理（AI 玩家）尚未上线，当前无发布方——写链先行接通，事件出现即落库。
 - 端到端贯通 ``simulated`` 字段：payload.simulated → 表列 simulated INTEGER（主播发言/游戏事件天然非模拟，记 False）
+- 平台归属：payload.platform（采集器装配期常量注入）落明细行 platform 列；
+  viewers 行身份键 = (platform, user_id)。主播发言行经 LiveSessionManager.platform 取值。
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环（即使记账器挂了，直播流也跑）
 
 ## 不做什么
@@ -139,6 +144,16 @@ class StorageLedger:
         self._started = False
         logger.info("StorageLedger 已停止")
 
+    # -------------------- 付费判定 --------------------
+
+    # 银瓜子 = 免费礼物币种，不计付费统计；空币种（无金额语义的调试数据）同样排除
+    _SILVER_CURRENCIES = frozenset({"bilibili_silver_coin"})
+
+    @staticmethod
+    def _is_paid_currency(currency: str) -> bool:
+        """币种是否计付费：银瓜子（免费礼物）与空币种（调试数据）不计。"""
+        return bool(currency) and currency not in StorageLedger._SILVER_CURRENCIES
+
     # -------------------- 分发：payload → 表 --------------------
 
     async def _on_room_message(
@@ -164,6 +179,7 @@ class StorageLedger:
                 await self.chat_repo.insert_live_chat(
                     live_session_id=live_pk,
                     timestamp_ms=payload.timestamp_ms,
+                    platform=payload.platform,
                     sender_role="viewer",
                     sender_id=payload.user.id,
                     sender_name=payload.user.name,
@@ -173,6 +189,7 @@ class StorageLedger:
                     simulated=payload.simulated,
                 )
                 await self.viewer_repo.upsert_viewer_message(
+                    platform=payload.platform,
                     user_id=payload.user.id,
                     user_name=payload.user.name,
                     timestamp_ms=payload.timestamp_ms,
@@ -186,17 +203,41 @@ class StorageLedger:
                 await self.chat_repo.insert_gift(
                     live_session_id=live_pk,
                     timestamp_ms=payload.timestamp_ms,
+                    platform=payload.platform,
                     user_id=payload.user.id,
                     user_name=payload.user.name,
                     gift_name=gift.name,
-                    gift_count=int(gift.count),
+                    quantity=int(gift.count),
+                    gift_id=gift.gift_id,
+                    unit_price=gift.unit_price,
+                    total_price=gift.total_price,
+                    paid_price=gift.paid_price,
+                    currency=gift.currency,
+                    guard_level=gift.guard_level,
+                    fans_medal_level=gift.fans_medal_level,
+                    fans_medal_name=gift.fans_medal_name,
+                    combo_id=gift.combo_id,
+                    combo_count=gift.combo_count,
+                    combo_gift=gift.combo_gift,
+                    blind_gift_id=gift.blind_gift_id,
+                    msg_id=gift.msg_id,
+                    raw_data=gift.raw_data or None,
                     simulated=payload.simulated,
                 )
                 await self.viewer_repo.upsert_viewer_gift(
+                    platform=payload.platform,
                     user_id=payload.user.id,
                     user_name=payload.user.name,
                     timestamp_ms=payload.timestamp_ms,
                 )
+                if self._is_paid_currency(gift.currency):
+                    await self.viewer_repo.upsert_viewer_paid(
+                        platform=payload.platform,
+                        user_id=payload.user.id,
+                        user_name=payload.user.name,
+                        amount=gift.total_price,
+                        timestamp_ms=payload.timestamp_ms,
+                    )
                 return
             if msg_type == "super_chat":
                 sc = payload.sc
@@ -206,19 +247,68 @@ class StorageLedger:
                 await self.chat_repo.insert_super_chat(
                     live_session_id=live_pk,
                     timestamp_ms=payload.timestamp_ms,
+                    platform=payload.platform,
                     user_id=payload.user.id,
                     user_name=payload.user.name,
-                    amount=float(sc.amount),
                     message=payload.content or "",
+                    total_price=sc.total_price,
+                    currency=sc.currency,
+                    start_time=sc.start_time,
+                    end_time=sc.end_time,
+                    guard_level=sc.guard_level,
+                    fans_medal_level=sc.fans_medal_level,
+                    fans_medal_name=sc.fans_medal_name,
+                    message_id=sc.message_id,
+                    raw_data=sc.raw_data or None,
                     simulated=payload.simulated,
                 )
+                # SC 与礼物同为付费行为，统计处理保持一致（此前 SC 不进 viewers
+                # 是两级缺陷：明细不写统计表、事实层不按人组织，观众统计空白）
+                if self._is_paid_currency(sc.currency):
+                    await self.viewer_repo.upsert_viewer_paid(
+                        platform=payload.platform,
+                        user_id=payload.user.id,
+                        user_name=payload.user.name,
+                        amount=sc.total_price,
+                        timestamp_ms=payload.timestamp_ms,
+                    )
                 return
             if msg_type == "guard":
-                # 上舰：无独立明细表也无结构化子载荷，content 即人读描述，
-                # 落 live_chat（sender_role="viewer"），不计观众发言统计
+                # 上舰：guards 购买事件表落结构化明细；live_chat 保留 guard 行
+                # （sender_role="viewer"，content 即人读描述，不计观众发言统计）
+                guard = payload.guard
+                if guard is not None:
+                    await self.chat_repo.insert_guard(
+                        live_session_id=live_pk,
+                        timestamp_ms=payload.timestamp_ms,
+                        platform=payload.platform,
+                        user_id=payload.user.id,
+                        user_name=payload.user.name,
+                        guard_level=guard.guard_level,
+                        guard_num=guard.guard_num,
+                        guard_unit=guard.guard_unit,
+                        total_price=guard.total_price,
+                        currency=guard.currency,
+                        fans_medal_level=guard.fans_medal_level,
+                        fans_medal_name=guard.fans_medal_name,
+                        msg_id=guard.msg_id,
+                        raw_data=guard.raw_data or None,
+                        simulated=payload.simulated,
+                    )
+                    if self._is_paid_currency(guard.currency):
+                        await self.viewer_repo.upsert_viewer_paid(
+                            platform=payload.platform,
+                            user_id=payload.user.id,
+                            user_name=payload.user.name,
+                            amount=guard.total_price,
+                            timestamp_ms=payload.timestamp_ms,
+                        )
+                else:
+                    logger.debug("guard 事件 payload.guard 为空，仅落 live_chat 文本行")
                 await self.chat_repo.insert_live_chat(
                     live_session_id=live_pk,
                     timestamp_ms=payload.timestamp_ms,
+                    platform=payload.platform,
                     sender_role="viewer",
                     sender_id=payload.user.id,
                     sender_name=payload.user.name,
@@ -234,6 +324,7 @@ class StorageLedger:
                 await self.chat_repo.insert_live_chat(
                     live_session_id=live_pk,
                     timestamp_ms=payload.timestamp_ms,
+                    platform=payload.platform,
                     sender_role="partner",
                     sender_id=payload.user.id,
                     sender_name=payload.user.name,
@@ -289,6 +380,7 @@ class StorageLedger:
             await self.chat_repo.insert_live_chat(
                 live_session_id=live_pk,
                 timestamp_ms=payload.timestamp_ms,
+                platform=self._speech_platform(),
                 sender_role="assistant",
                 sender_name="主播",
                 content=payload.text,
@@ -298,6 +390,7 @@ class StorageLedger:
             )
             if payload.target_user_id:
                 await self.viewer_repo.upsert_viewer_replied(
+                    platform=self._speech_platform(),
                     user_id=payload.target_user_id,
                     timestamp_ms=payload.timestamp_ms,
                 )
@@ -342,6 +435,12 @@ class StorageLedger:
             )
 
     # -------------------- 场次归属解析 --------------------
+
+    def _speech_platform(self) -> str:
+        """主播发言行的平台归属：取会话管理器的装配期平台常量。"""
+        if self._session_manager is None:
+            return ""
+        return getattr(self._session_manager, "platform", "") or ""
 
     async def _resolve_live_pk(self, stamped_pk: int = 0) -> Optional[int]:
         """解析明细行的场次主键。

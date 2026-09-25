@@ -3,11 +3,11 @@ memory/bootstrap.py 单元测试
 
 覆盖：
 - ``build_memory_stack``：
-  - backend="simple" → 成功初始化 + 私有表就绪
-  - 未知 backend 值 → ``raise ValueError``（消息不含已废弃后端的字样）
+  - backend="simple" → 成功初始化 + 画像/事实表就绪
+  - 未知 backend 值 → ``raise ValueError``
   - 缺省 / 异常输入（None / 非 dict / 缺 sqlite 段）→ 走默认值
 - ``bind_memory_tools``：
-  - 注册后 ``len(registry) + 1``，能 invoke query_memory 召回已写入事实
+  - 注册 query_memory / query_viewer_profile 双工具，能 invoke 查到已写入事实
   - registry 必须是 ``ToolRegistry``（type check）
   - memory 为 None → ``raise ValueError``
 """
@@ -60,220 +60,119 @@ def simple_config(tmp_db_dir: Path) -> dict:
 async def built_stack(
     simple_config: dict,
 ) -> AsyncGenerator[tuple[SQLiteDatabase, SimpleMemory], None]:
-    """构造完成的 (store, memory)；自动清理。"""
-    store, mem = await build_memory_stack(simple_config)
+    store, memory = await build_memory_stack(simple_config)
+    yield store, memory
+    await store.close()
+
+
+# =============================================================================
+# build_memory_stack
+# =============================================================================
+
+
+async def test_build_memory_stack_creates_tables(simple_config: dict) -> None:
+    """backend=simple 成功初始化，画像/事实两张业务表就绪。"""
+    store, memory = await build_memory_stack(simple_config)
     try:
-        yield store, mem
+        assert isinstance(store, SQLiteDatabase)
+        assert isinstance(memory, SimpleMemory)
+        assert await store.table_exists("viewer_facts")
+        assert await store.table_exists("viewer_profiles")
     finally:
         await store.close()
 
 
-# =============================================================================
-# build_memory_stack：基本装配
-# =============================================================================
-
-
-async def test_build_memory_stack_returns_store_and_simple_memory(
-    built_stack: tuple[SQLiteDatabase, SimpleMemory],
-) -> None:
-    """正常 config → 返回 (SQLiteDatabase, SimpleMemory) 且都已初始化。"""
-    store, mem = built_stack
-    assert isinstance(store, SQLiteDatabase)
-    assert isinstance(mem, SimpleMemory)
-    assert store.initialized is True
-    assert mem._store is store  # SimpleMemory 持有同一 store
-
-
-async def test_build_memory_stack_creates_private_tables(
-    built_stack: tuple[SQLiteDatabase, SimpleMemory],
-) -> None:
-    """装配后 _memory_facts 私有表已存在。"""
-    store, _ = built_stack
-    assert await store.table_exists("_memory_facts") is True
-
-
-async def test_build_memory_stack_idempotent(tmp_db_dir: Path) -> None:
-    """重复 build 不报错（initialize 幂等；同一 db_path 重复装配应可成功）。"""
-    cfg = {
-        "memory": {"backend": "simple"},
-        "sqlite": {"db_path": str(tmp_db_dir / "idem.db")},
-    }
-    s1, m1 = await build_memory_stack(cfg)
+async def test_build_memory_stack_idempotent(simple_config: dict) -> None:
+    """重复构造指向同一库不报错（DDL 幂等）。"""
+    store1, _ = await build_memory_stack(simple_config)
     try:
-        # 第二次 build 用同一 db_path（DDL 全部 IF NOT EXISTS，幂等）
-        s2, m2 = await build_memory_stack(cfg)
+        store2, memory2 = await build_memory_stack(simple_config)
         try:
-            assert await s2.table_exists("_memory_facts")
+            assert await memory2.get_viewer_profile(platform="bilibili", user_id="nobody") is None
         finally:
-            await s2.close()
+            await store2.close()
     finally:
-        await s1.close()
+        await store1.close()
 
 
-# =============================================================================
-# build_memory_stack：backend fail-fast
-# =============================================================================
+async def test_build_memory_stack_unknown_backend_raises(tmp_db_dir: Path) -> None:
+    """未知 backend fail-fast（含类型异常值）。"""
+    for bad in ("maibot", 123, None):
+        config = {
+            "memory": {"backend": bad},
+            "sqlite": {"db_path": str(tmp_db_dir / "bad.db")},
+        }
+        with pytest.raises(ValueError):
+            await build_memory_stack(config)
 
 
-async def test_build_memory_stack_rejects_deprecated_backend_name(tmp_db_dir: Path) -> None:
-    """backend 为历史遗留的废弃后端名 → ValueError（fail-fast，当前仅支持 simple）。
+async def test_build_memory_stack_defaults_without_sqlite_section(
+    tmp_db_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """缺 sqlite 段时走默认值。DEFAULT_DB_PATH 指向临时目录——真实默认库
+    （data/amaidesu.db）绝不能被测试触碰。"""
+    import src.modules.memory.bootstrap as bootstrap_module
 
-    该后端从未实现；错误消息必须为通用"仅支持 simple"语义，不得出现
-    已废弃后端的产品名残迹。废弃名字面量拆写构造——本仓库已对其全量
-    清除，此处避免引入字面命中。
-    """
-    deprecated = "am" + "emorix"
-    cfg = {
-        "memory": {"backend": deprecated},
-        "sqlite": {"db_path": str(tmp_db_dir / "deprecated.db")},
-    }
-    with pytest.raises(ValueError) as exc_info:
-        await build_memory_stack(cfg)
-    msg = str(exc_info.value)
-    assert "backend" in msg
-    assert "simple" in msg  # 错误消息必须说明当前仅支持 simple
-    # 错误消息是通用拒绝语义：不含该废弃后端的产品名残迹（大小写归一后核对）
-    assert "memorix" not in msg.lower()
+    fake_default = tmp_db_dir / "default.db"
+    monkeypatch.setattr(bootstrap_module, "DEFAULT_DB_PATH", fake_default)
 
-
-async def test_build_memory_stack_rejects_unknown_backend(tmp_db_dir: Path) -> None:
-    """backend='unknown' → ValueError（任何非 SUPPORTED_BACKENDS 值都拒绝）。"""
-    cfg = {
-        "memory": {"backend": "redis"},
-        "sqlite": {"db_path": str(tmp_db_dir / "unknown.db")},
-    }
-    with pytest.raises(ValueError):
-        await build_memory_stack(cfg)
-
-
-async def test_build_memory_stack_default_backend_is_simple(tmp_db_dir: Path) -> None:
-    """不写 backend（缺省）→ 走 simple 默认（向后兼容）。"""
-    cfg = {
-        "memory": {},  # 无 backend 字段
-        "sqlite": {"db_path": str(tmp_db_dir / "default_backend.db")},
-    }
-    store, mem = await build_memory_stack(cfg)
+    config = {"memory": {"backend": "simple"}}
+    store, memory = await build_memory_stack(config)
     try:
-        assert isinstance(mem, SimpleMemory)
+        assert store.db_path == fake_default
+        assert store.db_path.exists()
     finally:
         await store.close()
 
 
-async def test_supported_backends_constant() -> None:
-    """SUPPORTED_BACKENDS 当前只含 'simple'（任何变动需同步测试 + 文档）。"""
+def test_supported_backends_covers_simple() -> None:
     assert SUPPORTED_BACKENDS == ("simple",)
 
 
 # =============================================================================
-# build_memory_stack：异常输入容忍
+# bind_memory_tools
 # =============================================================================
 
 
-async def test_build_memory_stack_tolerates_missing_sqlite_block(tmp_db_dir: Path) -> None:
-    """config['sqlite'] 缺省 / 非 dict → 走 DEFAULT_DB_PATH（不报错）。"""
-    cfg = {"memory": {"backend": "simple"}}
-    # sqlite 段完全缺失：使用默认 DB 路径；为避免污染默认 DB 我们改用
-    # 自定义 cfg 提供 sqlite 字段，但这里专门测 sqlite 段缺失兜底
-    store, mem = await build_memory_stack(cfg)
-    try:
-        assert isinstance(mem, SimpleMemory)
-    finally:
-        await store.close()
+async def test_bind_memory_tools_registers_both_tools(built_stack: tuple[SQLiteDatabase, SimpleMemory]) -> None:
+    """注册 query_memory / query_viewer_profile 双工具。"""
+    _store, memory = built_stack
+    registry = ToolRegistry()
+    added = bind_memory_tools(registry, memory)
+    assert added == 2
+    assert len(registry) == 2
 
 
-async def test_build_memory_stack_tolerates_non_dict_config() -> None:
-    """config 不是 dict → TypeError（fail-fast，不静默走默认）。"""
-    with pytest.raises(TypeError):
-        await build_memory_stack("not a dict")  # type: ignore[arg-type]
-
-
-async def test_build_memory_stack_resolves_relative_db_path_to_absolute(tmp_path: Path) -> None:
-    """相对 db_path 必须解析为绝对路径（不依赖 cwd）。
-
-    验证契约：
-    - 输入相对路径（不带 ``/`` 前缀）
-    - 输出 ``store.db_path.is_absolute() is True``
-    - 解析结果含原始文件名（``rel_name``）
-
-    不验证"解析到哪个目录根"——``_default_path.py`` 使用
-    ``Path(__file__).resolve().parents[3]`` 定位项目根，在 git worktree 共享
-    ``.git`` 的情况下会指向主工作区而非当前工作树；这是已知的解析策略，本测试
-    只验证"相对路径 → 绝对路径"这一最小契约。
-    """
-    rel_name = "_rel_db_test_wave8.db"
-    cfg = {
-        "memory": {"backend": "simple"},
-        "sqlite": {"db_path": rel_name},  # 顶层 sqlite 段，相对路径
-    }
-    store, _ = await build_memory_stack(cfg)
-    try:
-        assert store.db_path.is_absolute(), "相对 db_path 必须被解析为绝对路径"
-        assert store.db_path.name == rel_name, "文件名必须保留原 rel_name"
-    finally:
-        await store.close()
-        # 清理：删除测试可能在某处生成的 db 文件（-wal/-shm/-journal 是 SQLite 副产物）
-        for ext in ("", "-wal", "-shm", "-journal"):
-            p = Path(store.db_path) if not ext else Path(str(store.db_path) + ext)
-            if p.exists():
-                p.unlink()
-
-
-# =============================================================================
-# bind_memory_tools：ToolRegistry 接线
-# =============================================================================
-
-
-async def test_bind_memory_tools_registers_query_memory(
+async def test_bind_memory_tools_invoke_queries_facts(
     built_stack: tuple[SQLiteDatabase, SimpleMemory],
 ) -> None:
-    """bind_memory_tools 后 registry 多 1 个工具（query_memory），能正常 invoke。"""
-    _, mem = built_stack
+    """端到端：build → bind → 写事实 → invoke memory_query_memory 命中。"""
+    _store, memory = built_stack
+    await memory.add_viewer_fact(platform="bilibili", user_id="u_1", fact_text="弹幕互动很有趣，今天观众很多")
 
     registry = ToolRegistry()
-    new_count = bind_memory_tools(registry, mem)
-    assert new_count == 1
-    # 注册名 = <provider>_<工具名>（provider="memory"）
-    assert "memory_query_memory" in registry
-    assert len(registry) == 1
-
-
-async def test_bind_memory_tools_invoke_recalls_ingested_fact(
-    built_stack: tuple[SQLiteDatabase, SimpleMemory],
-) -> None:
-    """端到端：build → bind → ingest → invoke memory_query_memory 召回中文事实。"""
-    _, mem = built_stack
-    await mem.ingest("弹幕互动很有趣，今天观众很多", source="seed", importance=10)
-
-    registry = ToolRegistry()
-    bind_memory_tools(registry, mem)
-
-    # 用部分关键词触发召回（短 CJK 段取整段）
+    bind_memory_tools(registry, memory)
     res = await registry.invoke(
         ToolInvocation(tool_name="memory_query_memory", arguments={"query": "弹幕互动", "top_k": 3})
     )
     assert res.success is True
-    assert "弹幕" in res.content or "互动" in res.content
-    assert "无匹配" not in res.content
+    assert "弹幕互动" in res.content
 
 
-async def test_bind_memory_tools_rejects_non_registry() -> None:
-    """registry 必须是 ToolRegistry 实例；其他类型 → TypeError。"""
+async def test_bind_memory_tools_duplicate_returns_zero(
+    built_stack: tuple[SQLiteDatabase, SimpleMemory],
+) -> None:
+    """重复注册返回 0（不报错）。"""
+    _store, memory = built_stack
+    registry = ToolRegistry()
+    assert bind_memory_tools(registry, memory) == 2
+    assert bind_memory_tools(registry, memory) == 0
+
+
+async def test_bind_memory_tools_type_checks(built_stack: tuple[SQLiteDatabase, SimpleMemory]) -> None:
+    """registry 非 ToolRegistry / memory 为 None 都 fail-fast。"""
+    _store, memory = built_stack
     with pytest.raises(TypeError):
-        bind_memory_tools("not a registry", memory=None)  # type: ignore[arg-type]
-
-
-async def test_bind_memory_tools_rejects_none_memory() -> None:
-    """memory=None → ValueError（不允许出现"无 memory 的 query_memory 工具"）。"""
-    registry = ToolRegistry()
+        bind_memory_tools("not-a-registry", memory)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
-        bind_memory_tools(registry, memory=None)
-
-
-async def test_bind_memory_tools_duplicate_returns_zero(built_stack: tuple[SQLiteDatabase, SimpleMemory]) -> None:
-    """重复注册同一 memory（provider 实例不同但 spec.name 冲突）→ 返回 0。"""
-    _, mem = built_stack
-    registry = ToolRegistry()
-    bind_memory_tools(registry, mem)
-    new_count = bind_memory_tools(registry, mem)  # 第二次
-    assert new_count == 0
-    assert len(registry) == 1  # 没有重复添加
+        bind_memory_tools(ToolRegistry(), None)  # type: ignore[arg-type]

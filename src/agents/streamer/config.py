@@ -93,18 +93,14 @@ class StreamerPersonaConfig(BaseConfig):
 class StreamerContextConfig(BaseConfig):
     """[agents.streamer.context] 段
 
-    控制 Planner 的上下文组装路径与长记忆召回强度。
+    控制 Planner 的上下文组装路径开关。人物画像行为参数（门槛/长度/
+    注入上限/提取开关等）集中在 [memory] 段（storage.toml）——画像写入
+    （后台循环）与注入（Planner）共享同一组策略值，不拆两处。
     """
 
     enabled: bool = Field(
         default=True,
-        description="是否启用组装器路径（关闭后 Planner 跳过组装器与记忆召回，直接以直播流窗口文本注入）",
-    )
-    memory_recall_long_term: int = Field(
-        default=3,
-        ge=0,
-        le=20,
-        description="每次决策召回的长记忆条数上限",
+        description="是否启用组装器路径（关闭后 Planner 跳过组装器与画像注入，直接以直播流窗口文本注入）",
     )
 
 

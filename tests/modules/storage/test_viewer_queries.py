@@ -23,6 +23,9 @@ import pytest
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.time_utils import now_ms
 
+# 测试统一平台标识
+PLATFORM = "bilibili"
+
 
 @pytest.fixture
 def temp_db_path() -> Generator[Path, None, None]:
@@ -51,9 +54,9 @@ async def _seed_viewer(
     """造一行观众统计（发言/送礼计数与最后活跃时间）。"""
     ts = last_active_ms if last_active_ms is not None else now_ms()
     for _ in range(messages):
-        await store.viewers.upsert_viewer_message(user_id=user_id, user_name=user_name, timestamp_ms=ts)
+        await store.viewers.upsert_viewer_message(platform=PLATFORM, user_id=user_id, user_name=user_name, timestamp_ms=ts)
     for _ in range(gifts):
-        await store.viewers.upsert_viewer_gift(user_id=user_id, user_name=user_name, timestamp_ms=ts)
+        await store.viewers.upsert_viewer_gift(platform=PLATFORM, user_id=user_id, user_name=user_name, timestamp_ms=ts)
 
 
 # ===== list_viewer_stats：搜索与分页 =====
@@ -125,7 +128,7 @@ async def test_insight_buckets_mutually_exclusive(store: SQLiteDatabase) -> None
     await _seed_viewer(store, "u_month", "本月", last_active_ms=now - 20 * 86_400_000)
     await _seed_viewer(store, "u_older", "更早", last_active_ms=now - 60 * 86_400_000)
     # u_today 送过礼；u_week 从未被回复（messages>0 但 replied_count=0）
-    await store.viewers.upsert_viewer_gift(user_id="u_today", user_name="今天", timestamp_ms=now)
+    await store.viewers.upsert_viewer_gift(platform=PLATFORM, user_id="u_today", user_name="今天", timestamp_ms=now)
 
     buckets = await store.viewers.viewer_insight_buckets()
     assert buckets["total"] == 4
@@ -255,10 +258,10 @@ async def test_activity_bounds_covers_three_tables(store: SQLiteDatabase) -> Non
         message_type="danmaku",
     )
     await store.chat.insert_gift(
-        live_session_id=1, timestamp_ms=base, user_id="u_b", user_name="礼官", gift_name="小心心", gift_count=1
+        live_session_id=1, timestamp_ms=base, platform=PLATFORM, user_id="u_b", user_name="礼官", gift_name="小心心", quantity=1, total_price=1000
     )
     await store.chat.insert_super_chat(
-        live_session_id=1, timestamp_ms=base + 9_000, user_id="u_b", user_name="礼官", amount=30.0, message="SC"
+        live_session_id=1, timestamp_ms=base + 9_000, platform=PLATFORM, user_id="u_b", user_name="礼官", total_price=30_000, currency="bilibili_gold_coin", message="SC"
     )
     bounds = await store.chat.get_user_activity_bounds(user_id="u_b")
     assert bounds == (base, base + 9_000)
@@ -276,28 +279,28 @@ async def test_activity_bounds_no_details_returns_none(store: SQLiteDatabase) ->
 async def test_user_contributions_detail_and_summary(store: SQLiteDatabase) -> None:
     base = 1_700_000_000_000
     await store.chat.insert_gift(
-        live_session_id=1, timestamp_ms=base, user_id="u_c", user_name="贡献者", gift_name="小心心", gift_count=2
+        live_session_id=1, timestamp_ms=base, platform=PLATFORM, user_id="u_c", user_name="贡献者", gift_name="小心心", quantity=2, total_price=2000, currency="bilibili_gold_coin"
     )
     await store.chat.insert_gift(
-        live_session_id=1, timestamp_ms=base + 1_000, user_id="u_c", user_name="贡献者", gift_name="辣条", gift_count=3
+        live_session_id=1, timestamp_ms=base + 1_000, platform=PLATFORM, user_id="u_c", user_name="贡献者", gift_name="辣条", quantity=3, total_price=300, currency="bilibili_gold_coin"
     )
     await store.chat.insert_super_chat(
-        live_session_id=2, timestamp_ms=base + 2_000, user_id="u_c", user_name="贡献者", amount=50.0, message="加油"
+        live_session_id=2, timestamp_ms=base + 2_000, platform=PLATFORM, user_id="u_c", user_name="贡献者", total_price=50_000, currency="bilibili_gold_coin", message="加油"
     )
     gifts = await store.chat.list_user_gifts(user_id="u_c")
-    assert [int(r["gift_count"]) for r in gifts] == [3, 2]  # 时间倒序
+    assert [int(r["quantity"]) for r in gifts] == [3, 2]  # 时间倒序
     scs = await store.chat.list_user_super_chats(user_id="u_c")
     assert len(scs) == 1
     summary = await store.chat.summarize_user_contributions(user_id="u_c")
     assert summary["gift_total_count"] == 5
-    assert summary["sc_total_amount"] == 50.0
+    assert summary["sc_total_amount"] == 50_000
     assert summary["sc_total_count"] == 1
 
 
 @pytest.mark.asyncio
 async def test_user_contributions_empty(store: SQLiteDatabase) -> None:
     summary = await store.chat.summarize_user_contributions(user_id="nobody")
-    assert summary == {"gift_total_count": 0, "sc_total_amount": 0.0, "sc_total_count": 0}
+    assert summary == {"gift_total_count": 0, "gift_total_amount": 0, "sc_total_amount": 0, "sc_total_count": 0}
     assert await store.chat.list_user_gifts(user_id="nobody") == []
 
 

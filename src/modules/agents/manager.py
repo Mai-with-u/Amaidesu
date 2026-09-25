@@ -61,10 +61,12 @@ class AgentManager:
         *,
         tool_registry: Optional[ToolRegistry] = None,
         memory: Optional[Any] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
         rundown_repo: Optional[Any] = None,
         chat_repo: Optional[Any] = None,
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
+        viewer_repo: Optional[Any] = None,
         supervisor_config: Optional[AgentSupervisorConfig] = None,
     ) -> None:
         self._agents: Dict[str, AgentRegistration] = {}
@@ -73,10 +75,12 @@ class AgentManager:
         self._enable_args: Dict[str, Dict[str, Any]] = {}
         self._tool_registry = tool_registry
         self._memory = memory
+        self._memory_policy = memory_policy
         self._rundown_repo = rundown_repo
         self._chat_repo = chat_repo
         self._sessions_repo = sessions_repo
         self._topic_repo = topic_repo
+        self._viewer_repo = viewer_repo
         self._lock = asyncio.Lock()
         # ----- 守护（心跳巡检 + 自动重建 + 风暴保护）-----
         self._supervisor_config = supervisor_config if supervisor_config is not None else AgentSupervisorConfig()
@@ -198,6 +202,7 @@ class AgentManager:
         event_bus: Optional[object] = None,
         tool_registry: Optional[ToolRegistry] = None,
         memory: Optional[Any] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
         thinking_sink: Optional[Any] = None,
         speech_config: Optional[Dict[str, Any]] = None,
         tts_engine: Optional[Any] = None,
@@ -207,6 +212,7 @@ class AgentManager:
         chat_repo: Optional[Any] = None,
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
+        viewer_repo: Optional[Any] = None,
         context_assembler_config: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
     ) -> bool:
@@ -228,10 +234,12 @@ class AgentManager:
 
         effective_registry = tool_registry if tool_registry is not None else self._tool_registry
         effective_memory = memory if memory is not None else self._memory
+        effective_memory_policy = memory_policy if memory_policy is not None else self._memory_policy
         effective_rundown_repo = rundown_repo if rundown_repo is not None else self._rundown_repo
         effective_chat_repo = chat_repo if chat_repo is not None else self._chat_repo
         effective_sessions_repo = sessions_repo if sessions_repo is not None else self._sessions_repo
         effective_topic_repo = topic_repo if topic_repo is not None else self._topic_repo
+        effective_viewer_repo = viewer_repo if viewer_repo is not None else self._viewer_repo
 
         instance = instantiate_agent(
             name,
@@ -241,6 +249,7 @@ class AgentManager:
             event_bus=event_bus,
             tool_registry=effective_registry,
             memory=effective_memory,
+            memory_policy=effective_memory_policy,
             thinking_sink=thinking_sink,
             speech_config=speech_config,
             tts_engine=tts_engine,
@@ -250,6 +259,7 @@ class AgentManager:
             chat_repo=effective_chat_repo,
             sessions_repo=effective_sessions_repo,
             topic_repo=effective_topic_repo,
+            viewer_repo=effective_viewer_repo,
             context_assembler_config=context_assembler_config,
             task_tracker=task_tracker,
         )

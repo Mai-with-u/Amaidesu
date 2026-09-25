@@ -432,7 +432,7 @@ const CATEGORY_META: Record<string, { label: string; description: string }> = {
   },
   studio: { label: '演播室', description: 'OBS 等演播室控制后端提供的工具' },
   vision: { label: '视觉', description: '屏幕感知能力（look_at_screen）' },
-  memory: { label: '记忆', description: '长期记忆检索（query_memory）' },
+  memory: { label: '记忆', description: '观众事实与画像查询（query_memory / query_viewer_profile）' },
   mcp: { label: 'MCP', description: '外部 MCP server 提供的工具' },
   game: { label: '游戏 Agent', description: '游戏 Agent 自声明的工具（text_adv 等）' },
   framework: { label: '框架', description: '框架内置工具（AgentControl 等）' },

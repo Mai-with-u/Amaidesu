@@ -1,17 +1,21 @@
 """观众数据只读端点
 
-观众域的 WebUI 消费面：``viewers`` 统计表 + 明细三表（live_chat / gifts /
-super_chats）按 ``user_id`` 的聚合查询，全部只读。
+观众域的 WebUI 消费面：``viewers`` 统计表 + 明细四表（live_chat / gifts /
+super_chats / guards）按 ``(platform, user_id)`` 的聚合查询，全部只读。
 
-- ``GET /viewers``                      观众列表（搜索 / 排序 / 分页，``total`` 全计数）
+- ``GET /viewers``                      观众列表（平台过滤 / 搜索 / 排序 / 分页）
 - ``GET /viewers/insights``             互动分析聚合（活跃分桶 / 回复覆盖 / 按天弹幕量）
 - ``GET /viewers/{user_id}``            单观众档案（统计 + 活跃边界 + 贡献汇总）
 - ``GET /viewers/{user_id}/messages``   对话批次（观众消息与主播回复交织，游标分页）
 - ``GET /viewers/{user_id}/contributions`` 礼物与 SC 明细 + 汇总
 - ``GET /viewers/{user_id}/sessions``   参与场次聚合
 
-数据现实：礼物事件无金额，礼物维度以件数计；上舰（guard）是 live_chat 文本行，
-进房 / 关注 / 点赞不落库——页面如实呈现这些边界，不臆造数据。
+身份键 = ``(platform, user_id)`` 复合键：单观众端点以 ``platform`` 查询参数
+定位（默认 bilibili），列表端点不传 platform 时返回全部平台。
+
+金额口径：存储层为平台最小虚拟货币单位（B 站金瓜子），本层展示 ÷1000 = 元。
+数据现实：上舰（guard）进 guards 明细表；进房 / 关注 / 点赞不落库——
+页面如实呈现这些边界，不臆造数据。
 """
 
 from typing import TYPE_CHECKING, Annotated, Any, List, Optional
@@ -20,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.types.currency import to_cny
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -28,6 +33,9 @@ router = APIRouter()
 
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
+
+# 单观众端点的默认平台（本项目生产平台）
+_DEFAULT_PLATFORM = "bilibili"
 
 
 def _require_viewer_repo(server: "DashboardServer") -> Any:
@@ -49,12 +57,15 @@ def _require_chat_repo(server: "DashboardServer") -> Any:
 class ViewerListItem(BaseModel):
     """单行观众统计（viewers 表行的投影）。"""
 
+    platform: str
     user_id: str
     user_name: str
     message_count: int
     gift_count: int
     replied_count: int
     interaction_count: int
+    paid_count: int
+    paid_amount: int = Field(description="付费总额（金瓜子，展示层 ÷1000 = 元）")
     last_active_ms: int
 
 
@@ -86,18 +97,22 @@ class ViewerInsightsResponse(BaseModel):
 
 
 class ViewerDetailResponse(BaseModel):
-    """单观众档案：viewers 统计行 + 明细三表聚合。"""
+    """单观众档案：viewers 统计行 + 明细表聚合。"""
 
+    platform: str
     user_id: str
     user_name: str
     message_count: int
     gift_count: int
     replied_count: int
     interaction_count: int
+    paid_count: int
+    paid_amount: int = Field(default=0, description="付费总额（金瓜子）")
     last_active_ms: int
-    first_seen_ms: Optional[int] = Field(default=None, description="明细三表中最早出现时刻；无明细为 NULL")
-    gift_total_count: int = Field(default=0, description="礼物总件数（SUM(gift_count)）")
-    sc_total_amount: float = Field(default=0.0, description="SC 总金额（元）")
+    first_seen_ms: Optional[int] = Field(default=None, description="明细表中最早出现时刻；无明细为 NULL")
+    gift_total_count: int = Field(default=0, description="礼物总件数")
+    gift_total_amount: int = Field(default=0, description="礼物标价总额（金瓜子）")
+    sc_total_amount: float = Field(default=0.0, description="SC 总金额（元，金瓜子 ÷1000）")
     sc_total_count: int = Field(default=0, description="SC 条数")
     session_count: int = Field(default=0, description="参与过的直播场次数")
 
@@ -130,6 +145,7 @@ class GiftItem(BaseModel):
     live_session_id: Optional[int] = None
     gift_name: str
     gift_count: int
+    total_price: int = Field(default=0, description="标价总额（金瓜子）")
     simulated: bool = False
 
 
@@ -171,12 +187,15 @@ class ViewerSessionsResponse(BaseModel):
 
 def _row_to_list_item(row: Any) -> ViewerListItem:
     return ViewerListItem(
+        platform=str(row["platform"] or ""),
         user_id=str(row["user_id"]),
         user_name=str(row["user_name"] or ""),
         message_count=int(row["message_count"] or 0),
         gift_count=int(row["gift_count"] or 0),
         replied_count=int(row["replied_count"] or 0),
         interaction_count=int(row["interaction_count"] or 0),
+        paid_count=int(row["paid_count"] or 0),
+        paid_amount=int(row["paid_amount"] or 0),
         last_active_ms=int(row["last_active_ms"] or 0),
     )
 
@@ -185,17 +204,19 @@ def _row_to_list_item(row: Any) -> ViewerListItem:
 async def list_viewers(
     server: ServerDep,
     search: Annotated[Optional[str], Query(description="user_id / 昵称模糊搜索")] = None,
+    platform: Annotated[Optional[str], Query(description="平台过滤；不传返回全部平台")] = None,
     order_by: str = "message_count",
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ViewerListResponse:
-    """列出观众（搜索 / 排序 / 分页）。
+    """列出观众（平台过滤 / 搜索 / 排序 / 分页）。
 
     ``order_by`` 合法性由存储层白名单兜底，非法值转 400。
     """
     viewer_repo = _require_viewer_repo(server)
     try:
         rows, total = await viewer_repo.list_viewer_stats(
+            platform=(platform or "").strip() or None,
             search=(search or "").strip() or None,
             limit=limit,
             offset=offset,
@@ -229,27 +250,35 @@ async def viewer_insights(
 
 
 @router.get("/{user_id}", response_model=ViewerDetailResponse)
-async def get_viewer(user_id: str, server: ServerDep) -> ViewerDetailResponse:
+async def get_viewer(
+    user_id: str,
+    server: ServerDep,
+    platform: Annotated[str, Query(description="平台标识（身份键组成部分）")] = _DEFAULT_PLATFORM,
+) -> ViewerDetailResponse:
     """单观众档案：统计行 + 活跃边界 + 贡献汇总 + 参与场次数。"""
     viewer_repo = _require_viewer_repo(server)
     chat_repo = _require_chat_repo(server)
-    row = await viewer_repo.get_viewer_stats(user_id=user_id)
+    row = await viewer_repo.get_viewer_stats(platform=platform, user_id=user_id)
     if row is None:
-        raise HTTPException(status_code=404, detail=f"观众不存在: {user_id}")
+        raise HTTPException(status_code=404, detail=f"观众不存在: {platform}/{user_id}")
     bounds = await chat_repo.get_user_activity_bounds(user_id=user_id)
     summary = await chat_repo.summarize_user_contributions(user_id=user_id)
     sessions = await chat_repo.list_user_sessions(user_id=user_id)
     return ViewerDetailResponse(
+        platform=str(row["platform"] or ""),
         user_id=str(row["user_id"]),
         user_name=str(row["user_name"] or ""),
         message_count=int(row["message_count"] or 0),
         gift_count=int(row["gift_count"] or 0),
         replied_count=int(row["replied_count"] or 0),
         interaction_count=int(row["interaction_count"] or 0),
+        paid_count=int(row["paid_count"] or 0),
+        paid_amount=int(row["paid_amount"] or 0),
         last_active_ms=int(row["last_active_ms"] or 0),
         first_seen_ms=bounds[0] if bounds else None,
         gift_total_count=int(summary.get("gift_total_count", 0)),
-        sc_total_amount=float(summary.get("sc_total_amount", 0.0)),
+        gift_total_amount=int(summary.get("gift_total_amount", 0)),
+        sc_total_amount=to_cny(int(summary.get("sc_total_amount", 0))) or 0.0,
         sc_total_count=int(summary.get("sc_total_count", 0)),
         session_count=len(sessions),
     )
@@ -309,14 +338,15 @@ async def viewer_contributions(
     sc_rows = await chat_repo.list_user_super_chats(user_id=user_id, limit=limit)
     return ContributionsResponse(
         gift_total_count=int(summary.get("gift_total_count", 0)),
-        sc_total_amount=float(summary.get("sc_total_amount", 0.0)),
+        sc_total_amount=to_cny(int(summary.get("sc_total_amount", 0))) or 0.0,
         sc_total_count=int(summary.get("sc_total_count", 0)),
         gifts=[
             GiftItem(
                 timestamp_ms=int(row["timestamp_ms"]),
                 live_session_id=int(row["live_session_id"]) if row["live_session_id"] is not None else None,
                 gift_name=str(row["gift_name"] or ""),
-                gift_count=int(row["gift_count"] or 0),
+                gift_count=int(row["quantity"] or 0),
+                total_price=int(row["total_price"] or 0),
                 simulated=bool(row["simulated"]),
             )
             for row in gift_rows
@@ -325,7 +355,7 @@ async def viewer_contributions(
             SuperChatItem(
                 timestamp_ms=int(row["timestamp_ms"]),
                 live_session_id=int(row["live_session_id"]) if row["live_session_id"] is not None else None,
-                amount=float(row["amount"] or 0.0),
+                amount=int(row["total_price"] or 0) / 1000,
                 message=str(row["message"] or ""),
                 simulated=bool(row["simulated"]),
             )

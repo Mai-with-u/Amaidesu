@@ -125,7 +125,9 @@ async def test_ledger_dispatches_gift_to_gifts(
     rows = await store.execute("SELECT * FROM gifts")
     assert len(rows) == 1
     assert str(rows[0]["gift_name"]) == "小星星"
-    assert int(rows[0]["gift_count"]) == 5
+    assert int(rows[0]["quantity"]) == 5
+    assert int(rows[0]["quantity"]) * int(rows[0]["unit_price"]) == int(rows[0]["total_price"])
+    assert str(rows[0]["currency"]) == "bilibili_gold_coin"
     assert int(rows[0]["simulated"]) == 0
     assert len(await store.execute("SELECT * FROM live_chat")) == 0
     assert len(await store.execute("SELECT * FROM super_chats")) == 0
@@ -145,7 +147,8 @@ async def test_ledger_dispatches_super_chat_to_super_chats(
 
     rows = await store.execute("SELECT * FROM super_chats")
     assert len(rows) == 1
-    assert float(rows[0]["amount"]) == 99.0
+    assert int(rows[0]["total_price"]) == 99_000
+    assert str(rows[0]["currency"]) == "bilibili_gold_coin"
     assert str(rows[0]["message"]) == "SC 文本"
     assert int(rows[0]["simulated"]) == 0
 
@@ -532,14 +535,16 @@ async def test_room_message_gift_upserts_viewer(
     assert int(row["gift_count"]) == 1
     assert int(row["replied_count"]) == 0
     assert int(row["interaction_count"]) == 1
+    assert int(row["paid_count"]) == 1
+    assert int(row["paid_amount"]) == 3 * 1000  # helpers 默认单价 1000 金瓜子 × 3
     assert int(row["last_active_ms"]) == 1_700_000_000_002
 
 
 @pytest.mark.asyncio
-async def test_room_message_super_chat_does_not_upsert_viewer(
+async def test_room_message_super_chat_upserts_viewer_paid(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
-    """super_chat 事件不应触发任何 viewer upsert（SC 走 SimpleMemory 语义层，保持现有行为）。"""
+    """SC 与礼物同为付费行为：upsert viewers 计付费统计（此前 SC 统计空白是缺陷）。"""
     user = RoomMessageUser(id="v_sc_1", name="SC丙")
     payload = make_room_message(
         message_type="super_chat",
@@ -551,8 +556,13 @@ async def test_room_message_super_chat_does_not_upsert_viewer(
     await event_bus.emit(CoreEvents.ROOM_MESSAGE_SUPER_CHAT, payload, source="test")
     await asyncio.sleep(0.05)
 
-    rows = await store.execute("SELECT * FROM viewers")
-    assert len(rows) == 0, f"super_chat 不应 upsert viewers，但实际有 {len(rows)} 行"
+    rows = await store.execute("SELECT * FROM viewers WHERE user_id=?", ("v_sc_1",))
+    assert len(rows) == 1, "SC 事件应创建观众统计行（付费维度）"
+    row = rows[0]
+    assert int(row["paid_count"]) == 1
+    assert int(row["paid_amount"]) == 99_000  # 99 元 × 1000 = 金瓜子
+    assert int(row["message_count"]) == 0  # SC 不落 live_chat，不计发言
+    assert int(row["interaction_count"]) == 1
 
 
 @pytest.mark.asyncio

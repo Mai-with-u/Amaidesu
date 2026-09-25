@@ -19,9 +19,16 @@ from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.room import (
+    GiftInfo,
+    GuardInfo,
+    RoomMessagePayload,
+    RoomMessageUser,
+    SuperChatInfo,
+)
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
+from src.modules.types.guard_levels import GUARD_LEVEL_NAMES
 
 # 控制台输入循环异常后重试间隔（秒）
 _ERROR_RETRY_INTERVAL_S = 1
@@ -43,6 +50,14 @@ _MESSAGE_TYPE_TO_EVENT = {
 def _read_stdin_line_with_diag() -> str:
     """阻塞读一行 stdin（在专用线程池中执行）。"""
     return sys.stdin.readline()
+
+
+# 本采集器的平台标识（身份键组成部分，装配期常量）：console 是调试保留字，
+# 与真实平台数据在 (platform, user_id) 身份键上隔离，避免测试用户污染真实观众
+_PLATFORM = "console"
+
+# 调试命令的舰名 → 等级映射（B 站语义：1 总督 / 2 提督 / 3 舰长）
+_GUARD_NAME_TO_LEVEL: dict[str, int] = {name: level for level, name in GUARD_LEVEL_NAMES.items()}
 
 
 class ConsoleInputCollector(BaseCollector):
@@ -147,6 +162,7 @@ class ConsoleInputCollector(BaseCollector):
                 else:
                     message = RoomMessagePayload(
                         message_type="danmaku",
+                        platform=_PLATFORM,
                         user=RoomMessageUser(id=self.user_id, name=self.user_nickname),
                         content=text,
                         timestamp_ms=now_ms(),
@@ -213,6 +229,7 @@ class ConsoleInputCollector(BaseCollector):
                     else:
                         yield RoomMessagePayload(
                             message_type="danmaku",
+                            platform=_PLATFORM,
                             user=RoomMessageUser(id=self.user_id, name=self.user_nickname),
                             content=text,
                             timestamp_ms=now_ms(),
@@ -262,7 +279,7 @@ class ConsoleInputCollector(BaseCollector):
         return None
 
     async def _create_gift_message(self, args: List[str]) -> Optional[RoomMessagePayload]:
-        """创建礼物事件载荷"""
+        """创建礼物事件载荷（调试数据无真实金额，金额记 0、币种留空——不进付费统计）"""
         username = args[0] if len(args) > 0 else "测试用户"
         gift_name = args[1] if len(args) > 1 else "辣条"
         gift_count = int(args[2]) if len(args) > 2 and args[2].isdigit() else 1
@@ -276,40 +293,46 @@ class ConsoleInputCollector(BaseCollector):
         print(f"发送礼物测试: {username} -> {gift_count}个{gift_name}")
         return RoomMessagePayload(
             message_type="gift",
+            platform=_PLATFORM,
             user=RoomMessageUser(id=self.user_id, name=username),
             content=description,
+            gift=GiftInfo(name=gift_name, count=gift_count),
             timestamp_ms=now_ms(),
         )
 
     async def _create_sc_message(self, args: List[str]) -> Optional[RoomMessagePayload]:
-        """创建醒目留言事件载荷"""
+        """创建醒目留言事件载荷（调试数据无真实金额，金额记 0、币种留空）"""
         username = args[0] if len(args) > 0 else "SC大佬"
         content_text = " ".join(args[1:]) if len(args) > 1 else "这是一条测试醒目留言！"
 
         print(f"发送醒目留言测试: {username} - {content_text}")
         return RoomMessagePayload(
             message_type="super_chat",
+            platform=_PLATFORM,
             user=RoomMessageUser(id=self.user_id, name=username),
             content=content_text,
+            sc=SuperChatInfo(total_price=0, currency=""),
             timestamp_ms=now_ms(),
         )
 
     async def _create_guard_message(self, args: List[str]) -> Optional[RoomMessagePayload]:
-        """创建大航海开通事件载荷（上舰语义）"""
+        """创建大航海开通事件载荷（上舰语义；调试数据无真实金额）"""
         username = args[0] if len(args) > 0 else "大航海"
-        guard_level = args[1] if len(args) > 1 else "舰长"
+        guard_level_name = args[1] if len(args) > 1 else "舰长"
 
-        valid_levels = ["舰长", "提督", "总督"]
-        if guard_level not in valid_levels:
-            print(f"大航海等级必须是以下之一: {valid_levels}，当前输入: {guard_level}")
+        if guard_level_name not in _GUARD_NAME_TO_LEVEL:
+            valid_levels = list(GUARD_LEVEL_NAMES.values())
+            print(f"大航海等级必须是以下之一: {valid_levels}，当前输入: {guard_level_name}")
             return None
 
-        description = f"{username} 开通了{guard_level}"
+        description = f"{username} 开通了{guard_level_name}"
 
-        print(f"发送大航海测试: {username} 开通了{guard_level}")
+        print(f"发送大航海测试: {username} 开通了{guard_level_name}")
         return RoomMessagePayload(
             message_type="guard",
+            platform=_PLATFORM,
             user=RoomMessageUser(id=self.user_id, name=username),
             content=description,
+            guard=GuardInfo(guard_level=_GUARD_NAME_TO_LEVEL[guard_level_name], currency=""),
             timestamp_ms=now_ms(),
         )

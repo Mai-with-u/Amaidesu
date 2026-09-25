@@ -50,7 +50,8 @@ class TestStreamerContextConfig:
     def test_defaults(self):
         c = StreamerContextConfig()
         assert c.enabled is True
-        assert c.memory_recall_long_term == 3
+        # 记忆召回条数字段已废弃（画像注入上限归 [memory] 段）
+        assert not hasattr(c, "memory_recall_long_term")
 
 
 class TestModelConfig:

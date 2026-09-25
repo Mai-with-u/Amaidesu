@@ -247,5 +247,16 @@ class TestEventFlowConstraints:
         """
         agent_subs = get_all_subscriptions_in_domain("agent")
         agent_subscribes_input = any(sub["event_name"] in INPUT_EVENTS for sub in agent_subs)
+        # 兜底识别：room.message.* 订阅可写成 for 循环遍历 CoreEvents 常量元组
+        # （AST 逐调用扫描提取不到循环变量的事件名），此时以源码常量引用为准
+        if not agent_subscribes_input:
+            agent_dir = get_project_root() / "src" / "agents"
+            for py_file in agent_dir.rglob("*.py"):
+                if "__pycache__" in py_file.parts:
+                    continue
+                text = py_file.read_text(encoding="utf-8")
+                if any(name in text for name in ("CoreEvents.ROOM_MESSAGE_DANMAKU", "CoreEvents.ROOM_MESSAGE_GIFT")):
+                    agent_subscribes_input = True
+                    break
         # 此测试仅作文档化：Agent 应订阅 Input 事件
         assert agent_subscribes_input or len(agent_subs) == 0

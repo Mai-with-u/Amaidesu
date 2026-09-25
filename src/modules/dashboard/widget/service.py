@@ -21,6 +21,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RoomMessagePayload
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
+from src.modules.types.currency import to_cny
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -230,7 +231,7 @@ class DanmakuWidgetService:
                     message_type=MessageType.SUPER_CHAT,
                     timestamp_ms=timestamp,
                     importance=importance,
-                    sc_price=payload.sc.amount if payload.sc else None,
+                    sc_price=to_cny(payload.sc.total_price, payload.sc.currency) if payload.sc else None,
                     sc_message=payload.content or None,
                     platform=platform,
                     room_id=room_id,

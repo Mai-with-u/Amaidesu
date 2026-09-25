@@ -387,8 +387,9 @@ async def create_app_components(
 
     # LiveSessionManager：场次唯一事实源（开启/结束/删除/归属解析）。
     # 启动不自动开新场次；无显式场次期间 ``resolve_pk()`` 返回 None，
-    # 下游 StorageLedger 据此跳过落库。
-    session_manager = LiveSessionManager(database.sessions, database.chat, event_bus)
+    # 下游 StorageLedger 据此跳过落库。platform 是装配期常量（本项目生产
+    # 平台为 B 站），主播发言行落库与 open_session 未显式指定时经此取值。
+    session_manager = LiveSessionManager(database.sessions, database.chat, event_bus, platform="bilibili")
     if session_manager_auto_start:
         await session_manager.start()
 
@@ -502,10 +503,12 @@ async def create_app_components(
         agent_manager = AgentManager(
             tool_registry=tool_registry,
             memory=memory,
+            memory_policy=config.get("memory") if isinstance(config.get("memory"), dict) else {},
             rundown_repo=database.rundowns,
             chat_repo=database.chat,
             sessions_repo=database.sessions,
             topic_repo=database.topics,
+            viewer_repo=database.viewers,
             supervisor_config=supervisor_config,
         )
 
@@ -584,7 +587,10 @@ async def create_app_components(
             chat_repo=database.chat,
             sessions_repo=database.sessions,
             topic_repo=database.topics,
+            viewer_repo=database.viewers,
             thinking_sink=thinking_hub,
+            # 画像行为策略（[memory] 段）：Planner 注入上限与后台提取参数同源
+            memory_policy=config.get("memory") if isinstance(config.get("memory"), dict) else {},
         )
 
         # --- 核心域工具（avatar 平台名单 / studio 域开关，L2 Provider）---
@@ -617,11 +623,11 @@ async def create_app_components(
             f"{skipped_note}，合计新增 {sum(core_report.values())} 个工具" + failed_note
         )
 
-        # --- 记忆检索工具（LLM 主动 query_memory；[tools.memory] 域开关）---
-        memory_cfg = tools_section.get("memory", {}) if isinstance(tools_section, dict) else {}
-        if isinstance(memory_cfg, dict) and memory_cfg.get("enabled", False):
-            memory_tool_count = bind_memory_tools(tool_registry, memory)
-            logger.info(f"query_memory 记忆检索工具已注册（新增 {memory_tool_count} 个）")
+        # --- 记忆检索工具（LLM 主动查询；[tools.memory] 域开关）---
+        memory_tools_cfg = tools_section.get("memory", {}) if isinstance(tools_section, dict) else {}
+        if isinstance(memory_tools_cfg, dict) and memory_tools_cfg.get("enabled", False):
+            memory_tool_count = bind_memory_tools(tool_registry, memory, viewer_repo=database.viewers)
+            logger.info(f"记忆域工具已注册（query_memory/query_viewer_profile，新增 {memory_tool_count} 个）")
 
         # --- 视觉基础模块工具 look_at_screen（L2 DI：组合根注入 mss 截屏后端）---
         # bootstrap 明文不接管 DI 工具（见 bootstrap.py 注释），由组合根按 [tools.vision] 开关装配
@@ -933,7 +939,9 @@ async def _register_agents_from_config(
     chat_repo: Optional[Any] = None,
     sessions_repo: Optional[Any] = None,
     topic_repo: Optional[Any] = None,
+    viewer_repo: Optional[Any] = None,
     thinking_sink: Optional[Any] = None,
+    memory_policy: Optional[Dict[str, Any]] = None,
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
@@ -982,6 +990,7 @@ async def _register_agents_from_config(
             event_bus=event_bus,
             tool_registry=tool_registry,
             memory=memory,
+            memory_policy=memory_policy,
             thinking_sink=thinking_sink,
             speech_config=speech_cfg,
             tts_engine=tts_engine,
@@ -994,6 +1003,7 @@ async def _register_agents_from_config(
             chat_repo=chat_repo,
             sessions_repo=sessions_repo,
             topic_repo=topic_repo,
+            viewer_repo=viewer_repo,
             # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
             context_assembler_config=None,
             task_tracker=task_tracker,

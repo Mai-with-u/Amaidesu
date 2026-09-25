@@ -25,14 +25,17 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Optional
+import json
+from typing import Any, Dict, List, Optional
+
+from json_repair import repair_json
 
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
 from src.modules.time_utils import now_ms as _real_now_ms
+from src.modules.types.currency import to_cny
+from src.modules.types.guard_levels import GUARD_LEVEL_NAMES
 
 from .canonical import canonical_content
 from .room_state import RoomState
@@ -54,12 +57,12 @@ SUMMARY_PROFILE = "summary"
 _DEFAULT_COMPRESSOR_QUEUE_MAX = 100
 # 压缩 worker 并发（与 StreamerCompressorConfig.concurrency 默认对齐）
 _DEFAULT_COMPRESSOR_CONCURRENCY = 1
-# 高价值事件记忆去抖窗口（同一用户相邻写入最小间隔，毫秒）
-_EVENT_INGEST_DEBOUNCE_MS = 60_000
 
 # 摘要系统提示词模板键（正文见 src/agents/streamer/prompts/summary_system.md，
 # 由包内 prompts/ 目录内聚承载）
 _SUMMARY_SYSTEM_TEMPLATE = "summary_system"
+# 画像增量压缩系统提示词模板键（正文见 prompts/profile_system.md）
+_PROFILE_SYSTEM_TEMPLATE = "profile_system"
 
 
 def _cfg(config: Any, key: str, default: Any) -> Any:
@@ -77,9 +80,9 @@ class BackgroundMaintainer:
     非 Agent（无 LLM 主决策权），纯机械循环 + 后台压缩任务。
     通过构造器注入依赖（room_state / storage store / llm_service）。
 
-    记忆写入面：摘要成功落地后 ``await memory.ingest(...)`` 写入"topic_summary"
-    事实；并通过 ``EventBus`` 订阅高价值事件（礼物 / SC），同样写入事实记忆。
-    两者均做异常降级，避免下游故障阻塞后台记账主循环。
+    事实写入面：摘要与事实提取经压缩 worker 落库（``memory`` 注入观众
+    事实/画像读写服务时启用）。话题/付费数据的权威表分别是 topics /
+    付费明细三表——扁平事实副本机制已废弃，不再从事件流二次写入。
     """
 
     def __init__(
@@ -93,6 +96,7 @@ class BackgroundMaintainer:
         topic_repo: Optional[Any] = None,
         session_manager: Optional[Any] = None,
         memory: Optional[Any] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
         event_bus: Optional[EventBus] = None,
         prompt_manager: PromptManager,
     ) -> None:
@@ -113,9 +117,14 @@ class BackgroundMaintainer:
                 提供 ``async resolve_pk() -> Optional[int]``）。心跳、话题快照
                 与话题摘要的场次归属经它解析（与 live_chat 写路径同源）；
                 ``None`` 时相关路径整体降级跳过。
-            memory: 记忆后端（鸭子类型 ``MemoryProvider``）。``None`` 时关闭
-                摘要/事件两路写入功能——BackgroundMaintainer 整体降级为"只记账"。
-            event_bus: 可选 ``EventBus``；提供时 ``start()`` 阶段订阅礼物/SC 事件。
+            memory: 观众事实/画像读写服务（鸭子类型 ``SimpleMemory``）。
+                ``None`` 时事实提取与画像生成功能关闭——BackgroundMaintainer
+                整体降级为"只记账"。
+            memory_policy: 画像行为策略（核心 ``[memory]`` 段，storage.toml）：
+                ``fact_extraction_enabled`` / ``profile_min_interactions`` /
+                ``profile_max_length`` / ``facts_per_batch``。``None`` 时走内置默认。
+            event_bus: 可选 ``EventBus``（观察面预留；本类当前不订阅事件——
+                付费/话题数据的权威表是明细三表与 topics，不做二次副本）。
             chat_repo: 可选 ``ChatRepo``；提供时话题摘要读取 live_chat
                 最近观众行（``sender_role="viewer"``）。
             topic_repo: 可选 ``TopicRepo``；提供时每次摘要成功后写
@@ -135,11 +144,15 @@ class BackgroundMaintainer:
         self._topic_repo = topic_repo
         # 提示词面——prompt_manager 由 StreamerAgent 构造透传（必填）
         self._prompt_manager = prompt_manager
-        # 摘要系统提示词渲染缓存（零变量模板，渲染结果恒定）
+        # 摘要/画像系统提示词渲染缓存（摘要零变量恒定；画像含长度变量）
         self._summary_system_prompt: Optional[str] = None
-        # 同用户去抖时间戳表（user_id → last_ingest_ms）
-        self._last_ingest_ms: Dict[str, int] = {}
-        self._subscribed = False
+        self._profile_system_prompt: str = ""
+        # 画像行为策略（[memory] 段；提取开关/门槛/长度/单批事实条数）
+        policy = memory_policy if isinstance(memory_policy, dict) else {}
+        self._fact_extraction_enabled: bool = bool(policy.get("fact_extraction_enabled", True))
+        self._profile_min_interactions: int = int(policy.get("profile_min_interactions", 3) or 3)
+        self._profile_max_length: int = int(policy.get("profile_max_length", 400) or 400)
+        self._facts_per_batch: int = int(policy.get("facts_per_batch", 5) or 5)
         self._logger = get_logger("BackgroundMaintainer")
 
         self._enabled: bool = bool(_cfg(config, "enabled", True))
@@ -162,8 +175,8 @@ class BackgroundMaintainer:
     async def start(self) -> None:
         """启动轻循环 + 压缩 worker（创建 asyncio.Task）。
 
-        ``config.enabled=False`` 时整体短路：轻循环不跑、压缩 worker 不创建、
-        高价值事件也不订阅——所有后台维护功能降级为"关闭"。
+        ``config.enabled=False`` 时整体短路：轻循环不跑、压缩 worker 不创建——
+        所有后台维护功能降级为"关闭"。
         """
         if self._running:
             return
@@ -171,10 +184,6 @@ class BackgroundMaintainer:
             self._logger.info("BackgroundMaintainer 配置 enabled=false，跳过启动")
             return
         self._running = True
-        # 记忆写入面：高价值事件订阅（礼物 / SC）→ memory.ingest
-        # 仅当 memory 与 event_bus 同时存在时启用（功能可关闭）
-        if self._event_bus is not None and self._memory is not None:
-            self._subscribe_high_value_events()
         self._light_task = asyncio.create_task(self._light_loop())
         self._compress_task = asyncio.create_task(self._compress_loop())
         self._logger.info(
@@ -198,97 +207,6 @@ class BackgroundMaintainer:
         self._light_task = None
         self._compress_task = None
         self._logger.info("BackgroundMaintainer 已停止")
-
-    # ------------------------------------------------------------------
-    # 记忆写入面：摘要 ingest + 高价值事件订阅
-    # ------------------------------------------------------------------
-
-    async def _ingest_topic_summary(self, summary: str) -> None:
-        """把摘要成功落地的 topic_summary 写入记忆。
-
-        调用契约：仅在 ``_summarize_topic`` 成功拿到非空 summary 后调用。
-        异常降级——下游故障不应阻塞后台记账主循环。
-        """
-        if self._memory is None or not summary:
-            return
-        try:
-            await self._memory.ingest(
-                text=summary,
-                source="topic_summary",
-                tags=["topic", "auto_summary"],
-            )
-        except Exception as exc:
-            # ingest 失败仅记 warning，不阻断后台主循环
-            self._logger.warning(f"记忆写入失败 (topic_summary): {exc}")
-
-    def _subscribe_high_value_events(self) -> None:
-        """订阅礼物 / SC 事件（仅在 memory 与 event_bus 都注入时启用）。"""
-        assert self._event_bus is not None  # noqa: S101  start() 已 guard
-        # 防重复订阅：subscribe 标识——start 多次调用只挂一次
-        if getattr(self, "_subscribed", False):
-            return
-        self._event_bus.on(
-            CoreEvents.ROOM_MESSAGE_GIFT,
-            self._handle_memory_event,
-            model_class=RoomMessagePayload,
-        )
-        self._event_bus.on(
-            CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
-            self._handle_memory_event,
-            model_class=RoomMessagePayload,
-        )
-        self._subscribed = True
-        self._logger.info("BackgroundMaintainer 已订阅礼物/SC 事件 → 记忆 ingest")
-
-    async def _handle_memory_event(
-        self,
-        event_name: str,
-        payload: RoomMessagePayload,
-        source: str,
-    ) -> None:
-        """处理礼物 / SC 事件：格式化中文事实 → memory.ingest。
-
-        去抖策略：60 秒内同一 user_id 只写一次（成员 dict 记 last_ingest_ms），
-        避免高价值事件高频刷屏时把记忆库塞爆。
-        """
-        if self._memory is None:
-            return
-        try:
-            user_id = getattr(payload.user, "id", "") or ""
-            nickname = getattr(payload.user, "name", "") or "观众"
-
-            # 按事件类型拼事实文本
-            if payload.message_type == "gift":
-                gift_name = getattr(payload.gift, "name", "礼物") if payload.gift else "礼物"
-                count = getattr(payload.gift, "count", 1) if payload.gift else 1
-                fact = (
-                    f"{nickname} 送出礼物 {gift_name}（×{count}）" if count > 1 else f"{nickname} 送出礼物 {gift_name}"
-                )
-                tags = ["gift"]
-            elif payload.message_type == "super_chat":
-                amount = getattr(payload.sc, "amount", 0.0) if payload.sc else 0.0
-                text = (payload.content or "").strip()
-                if text:
-                    fact = f"{nickname} 发送 SC（¥{amount:.0f}）：{text}"
-                else:
-                    fact = f"{nickname} 发送 SC（¥{amount:.0f}）"
-                tags = ["super_chat"]
-            else:
-                return
-
-            # 同用户 60 秒去抖
-            if user_id:
-                now = _real_now_ms()
-                last_map = getattr(self, "_last_ingest_ms", {})
-                last = last_map.get(user_id, 0)
-                if last and now - last < _EVENT_INGEST_DEBOUNCE_MS:
-                    return
-                last_map[user_id] = now
-
-            await self._memory.ingest(text=fact, source="live_event", tags=tags)
-        except Exception as exc:
-            # ingest 失败仅记 warning——下游故障不阻断记账主循环
-            self._logger.warning(f"高价值事件记忆写入失败 ({event_name}): {exc}")
 
     # ------------------------------------------------------------------
     # 轻循环（周期 tick ~5s）
@@ -403,21 +321,30 @@ class BackgroundMaintainer:
             raise
 
     async def _handle_compress_task(self, task: Dict[str, Any]) -> None:
-        """处理压缩任务（当前支持 summary 类型）。"""
+        """处理压缩任务（summary = 摘要+事实提取；profiles = 画像增量生成）。"""
         task_type = task.get("type")
         if task_type == "summary":
             await self._summarize_topic(task.get("now_ms", _real_now_ms()))
+        elif task_type == "profiles":
+            await self._generate_profiles()
 
     async def _summarize_topic(self, now_ms: int) -> None:
-        """调 LLM 生成话题摘要（summary profile）。
+        """调 LLM 生成话题摘要 + 顺便提取观众事实（summary profile，一次调用双任务）。
 
-        摘要输入 = live_chat 当前场次的最近 viewer 行（"真实观众弹幕"语义
-        由 SQL 的 ``sender_role='viewer'`` 过滤承载——主播发言行是
-        assistant、礼物/SC 不落 live_chat）。无显式场次时静默跳过；
-        窗口内无观众弹幕（仅主播自嗨）则清空 topic_summary 防自嗨循环。
+        输入 = live_chat 当前场次的最近 viewer 行（"真实观众弹幕"语义由
+        SQL 的 ``sender_role='viewer'`` 过滤承载）+ 时间窗内的 SC（SC 不落
+        live_chat，但它是最有价值的事实源——观众主动说的完整话）。无显式
+        场次时静默跳过；窗口内无观众弹幕（仅主播自嗨）则清空 topic_summary
+        防自嗨循环。
+
+        LLM 输出严格 JSON ``{"summary", "facts"}``；解析失败时整体降级为
+        纯文本摘要（旧契约），事实提取失败不影响话题摘要。
+        事实归属程序化：message_id 反查批内消息 → (platform, user_id)，
+        不靠 LLM 报人名；引用批内不存在的 id 视为幻觉丢弃。
         """
         if self._llm_service is None or self._chat_repo is None or self._session_manager is None:
             return
+        previous_summary_ms = self._last_summary_ms
         try:
             live_pk = await self._session_manager.resolve_pk()
             if live_pk is None:
@@ -437,14 +364,42 @@ class BackgroundMaintainer:
             self._last_summary_ms = now_ms
             return
 
-        # 摘要输入由 canonical 映射派生（与 Planner/Replyer 同源；此处只取 content）
-        history_text = "\n".join(
-            canonical_content(role="user", nickname=row["sender_name"] or "观众", text=row["content"]) for row in rows
-        )
+        # 消息批（canonical 格式与 Planner 同源）+ 归属映射（id → (platform, user_id)）
+        lines: List[str] = []
+        evidence_map: Dict[str, tuple[str, str]] = {}
+        for row in rows:
+            message_id = str(row["message_id"] or "")
+            line = canonical_content(
+                role="user",
+                nickname=row["sender_name"] or "观众",
+                text=row["content"],
+                message_id=message_id,
+            )
+            lines.append(line)
+            if message_id:
+                evidence_map[message_id] = (str(row["platform"] or ""), str(row["sender_id"] or ""))
+
+        # SC 并入提取输入（带归属映射；弹幕批为空时 SC 独立成批）
+        window_start_ms = previous_summary_ms or max(now_ms - self._summary_interval_ms, 0)
+        try:
+            sc_rows = await self._chat_repo.list_super_chats_since(live_session_id=live_pk, since_ms=window_start_ms)
+        except Exception as exc:
+            self._logger.warning(f"读取时间窗内 SC 失败（事实源缺 SC）: {exc}")
+            sc_rows = []
+        for row in sc_rows:
+            message_id = str(row["message_id"] or "")
+            nickname = row["user_name"] or "观众"
+            text = f"{nickname} 发送 SC：{row['message']}"
+            line = canonical_content(role="user", nickname=nickname, text=text, message_id=message_id)
+            lines.append(line)
+            if message_id:
+                evidence_map[message_id] = (str(row["platform"] or ""), str(row["user_id"] or ""))
+
+        history_text = "\n".join(lines)
         if not history_text.strip():
             return
 
-        prompt = f"以下是最近直播间弹幕历史，请总结当前讨论的主要话题：\n\n{history_text}"
+        prompt = f"以下是最近直播间消息（弹幕与醒目留言），请完成话题总结与事实提取：\n\n{history_text}"
         try:
             response = await self._llm_service.generate(
                 prompt,
@@ -455,20 +410,259 @@ class BackgroundMaintainer:
             self._logger.warning(f"话题摘要 LLM 调用异常: {exc}")
             return
 
-        if getattr(response, "success", False) and getattr(response, "content", None):
-            summary = response.content.strip()
-            self._room_state.set_topic_summary(summary, now_ms=now_ms)
-            previous_summary_ms = self._last_summary_ms
-            self._last_summary_ms = now_ms
-            self._logger.debug(f"话题摘要已更新: {summary[:50]}")
-            # 摘要落地 → 记忆 + 存储两路写入，失败各自降级不阻断记账
-            await self._ingest_topic_summary(summary)
-            await self._persist_topic_snapshot(summary, now_ms=now_ms, previous_summary_ms=previous_summary_ms)
-        else:
+        if not (getattr(response, "success", False) and getattr(response, "content", None)):
             self._logger.warning("话题摘要 LLM 返回失败")
+            return
+
+        summary, facts = self._parse_summary_and_facts(response.content)
+        self._room_state.set_topic_summary(summary, now_ms=now_ms)
+        self._last_summary_ms = now_ms
+        self._logger.debug(f"话题摘要已更新: {summary[:50]}")
+        # 摘要落地 → 存储写入，失败降级不阻断记账
+        await self._persist_topic_snapshot(summary, now_ms=now_ms, previous_summary_ms=previous_summary_ms)
+        # 提取开关关闭时跳过事实链路（摘要照常）；画像生成随之无新原料自然静默
+        if not self._fact_extraction_enabled:
+            return
+        if facts:
+            await self._store_viewer_facts(facts, evidence_map)
+        try:
+            self._compress_queue.put_nowait({"type": "profiles"})
+        except asyncio.QueueFull:
+            self._logger.debug("压缩队列已满，跳过本轮画像生成请求")
+
+    def _parse_summary_and_facts(self, raw: str) -> tuple[str, List[Dict[str, str]]]:
+        """解析 LLM 输出的 ``{"summary", "facts"}`` JSON；失败时整体降级为纯文本摘要。
+
+        容错链：json.loads → json_repair（项目既有依赖）；两者皆失败时把
+        原文当摘要（旧契约形态），facts 返回空列表——话题摘要永不被事实
+        提取的解析失败拖垮。facts 条目缺字段 / 非法类型直接丢弃。
+        """
+        raw = (raw or "").strip()
+        # 剥离常见 Markdown 代码围栏（LLM 即使被要求"只输出 JSON"也会偶发包裹）
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            try:
+                data = repair_json(raw, return_objects=True)
+            except Exception:
+                data = None
+        if not isinstance(data, dict):
+            # 纯文本降级：整体当摘要
+            return raw, []
+
+        summary = str(data.get("summary", "") or "").strip() or raw
+        raw_facts = data.get("facts")
+        facts: List[Dict[str, str]] = []
+        if isinstance(raw_facts, list):
+            for item in raw_facts[: self._facts_per_batch]:
+                if not isinstance(item, dict):
+                    continue
+                message_id = str(item.get("message_id", "") or "").strip()
+                fact_text = str(item.get("fact", "") or "").strip()
+                if message_id and fact_text:
+                    facts.append({"message_id": message_id, "fact": fact_text})
+        return summary, facts
+
+    async def _store_viewer_facts(
+        self,
+        facts: List[Dict[str, str]],
+        evidence_map: Dict[str, tuple[str, str]],
+    ) -> None:
+        """把提取事实按 message_id 归属落 ``viewer_facts``（程序化归属，失败降级）。
+
+        - 引用批内不存在的 id → 丢弃（防 LLM 幻觉）
+        - 批内消息缺 platform / user_id → 丢弃（身份键不完整的原料不收）
+        """
+        if self._memory is None or not facts:
+            return
+        stored = 0
+        for item in facts:
+            message_id = item.get("message_id", "")
+            identity = evidence_map.get(message_id)
+            if identity is None:
+                self._logger.debug(f"事实引用批内不存在的 message_id，丢弃（防幻觉）: {message_id!r}")
+                continue
+            platform, user_id = identity
+            if not platform or not user_id:
+                continue
+            try:
+                accepted = await self._memory.add_viewer_fact(
+                    platform=platform,
+                    user_id=user_id,
+                    fact_text=item.get("fact", ""),
+                    source_message_id=message_id,
+                )
+                stored += 1 if accepted else 0
+            except Exception as exc:
+                self._logger.warning(f"观众事实写入失败（{platform}/{user_id}）: {exc}")
+        if stored:
+            self._logger.debug(f"本轮观众事实入库 {stored}/{len(facts)} 条")
+
+    # ------------------------------------------------------------------
+    # 画像生成（增量压缩：旧画像 + 水位后新原料 → 新画像）
+    # ------------------------------------------------------------------
+
+    async def _generate_profiles(self) -> None:
+        """扫描画像候选并逐人增量生成画像（summary profile；失败逐人降级）。
+
+        候选 = ``viewer_facts`` 水位后有新事实且 ``viewers.interaction_count``
+        达门槛的观众；原料 = 旧画像 + 水位后新事实 + 付费汇总 + 观众统计。
+        单轮最多处理 3 人（防积压雪崩，剩余留给下一轮）。
+        """
+        if self._memory is None or self._llm_service is None:
+            return
+        try:
+            candidates = await self._memory.list_profile_candidates(min_interactions=self._profile_min_interactions)
+        except Exception as exc:
+            self._logger.warning(f"画像候选查询失败: {exc}")
+            return
+        if not candidates:
+            return
+
+        for candidate in candidates[:3]:
+            try:
+                await self._generate_single_profile(candidate)
+            except Exception as exc:
+                self._logger.warning(f"画像生成失败（{candidate.platform}/{candidate.user_id}，跳过该人）: {exc}")
+
+    async def _generate_single_profile(self, candidate: Any) -> None:
+        """为单个候选观众生成增量画像并写回（水位推进）。
+
+        原料 = 旧画像 + 水位后新事实 + 结构化直读（付费汇总/最近付费明细/
+        付费时的身份快照）——身份快照（粉丝牌/舰队）是决策点名的高价值
+        画像信息（"21 级牌子老粉、当时是舰长"），从明细三表直读、不经提取。
+        """
+        assert self._memory is not None  # noqa: S101 调用方已 guard
+        platform, user_id = candidate.platform, candidate.user_id
+        profile_row = await self._memory.get_viewer_profile_with_watermark(platform=platform, user_id=user_id)
+        old_text = profile_row.profile_text if profile_row else ""
+        watermark_ms = profile_row.last_compressed_at_ms if profile_row else 0
+
+        facts = await self._memory.list_facts_since(platform=platform, user_id=user_id, since_ms=watermark_ms)
+        if not facts:
+            return  # 无新原料不空转（候选查询与生成之间可能已被处理）
+
+        material_lines = [f"- {fact.fact_text}" for fact in facts]
+        structured_lines = await self._collect_payment_material(user_id)
+
+        prompt_parts = [
+            f"观众标识：{platform}/{user_id}",
+            f"【旧画像】\n{old_text}" if old_text else "【旧画像】（无，首次生成）",
+            "【新事实】",
+            *material_lines,
+        ]
+        if structured_lines:
+            prompt_parts.append("【付费与身份】")
+            prompt_parts.extend(structured_lines)
+        prompt = "\n".join(prompt_parts)
+
+        response = await self._llm_service.generate(
+            prompt,
+            profile=SUMMARY_PROFILE,
+            system=self._get_profile_system_prompt(),
+        )
+        if not (getattr(response, "success", False) and getattr(response, "content", None)):
+            self._logger.warning(f"画像生成 LLM 返回失败（{platform}/{user_id}）")
+            return
+
+        profile_text = response.content.strip()
+        if not profile_text:
+            return
+        if len(profile_text) > self._profile_max_length:
+            profile_text = profile_text[: self._profile_max_length]
+        await self._memory.upsert_viewer_profile(
+            platform=platform,
+            user_id=user_id,
+            profile_text=profile_text,
+            last_compressed_at_ms=_real_now_ms(),
+        )
+        self._logger.debug(f"画像已更新（{platform}/{user_id}）: {profile_text[:50]}")
+
+    # 画像原料：付费明细直读条数上限（控 prompt 体量；明细是补充，事实为主料）
+    _PAYMENT_MATERIAL_ROWS = 3
+
+    async def _collect_payment_material(self, user_id: str) -> List[str]:
+        """直读付费明细三表，产出画像原料行（汇总 / 最近明细 / 付费时身份快照）。
+
+        全部异常降级为缺行——结构化原料缺失只让画像少一分厚重，不阻断生成。
+        金额展示经币种换算常量（金瓜子 → 元）。
+        """
+        if self._chat_repo is None:
+            return []
+        lines: List[str] = []
+        try:
+            summary = await self._chat_repo.summarize_user_contributions(user_id=user_id)
+            gold = int(summary.get("gift_total_amount", 0)) + int(summary.get("sc_total_amount", 0))
+            yuan = to_cny(gold)
+            if yuan:
+                lines.append(f"- 累计付费约 {yuan:.0f} 元（礼物与 SC 标价合计）")
+        except Exception as exc:
+            self._logger.debug(f"付费汇总读取失败（画像原料缺该项）: {exc}")
+
+        # 三表明细合并取最近 N 条（时间倒序），并从最近一条取付费时的身份快照
+        entries: List[tuple[int, str, int, int, str]] = []  # (ts, 描述, fans_medal_level, guard_level, medal_name)
+        try:
+            for row in await self._chat_repo.list_user_gifts(user_id=user_id, limit=self._PAYMENT_MATERIAL_ROWS):
+                entries.append(
+                    (
+                        int(row["timestamp_ms"]),
+                        f"送出礼物 {row['gift_name']}×{row['quantity']}",
+                        int(row["fans_medal_level"] or 0),
+                        int(row["guard_level"] or 0),
+                        str(row["fans_medal_name"] or ""),
+                    )
+                )
+            for row in await self._chat_repo.list_user_super_chats(user_id=user_id, limit=self._PAYMENT_MATERIAL_ROWS):
+                entries.append(
+                    (
+                        int(row["timestamp_ms"]),
+                        f"发送 SC「{(row['message'] or '')[:30]}」",
+                        int(row["fans_medal_level"] or 0),
+                        int(row["guard_level"] or 0),
+                        str(row["fans_medal_name"] or ""),
+                    )
+                )
+            for row in await self._chat_repo.list_user_guards(user_id=user_id, limit=self._PAYMENT_MATERIAL_ROWS):
+                guard_name = GUARD_LEVEL_NAMES.get(int(row["guard_level"] or 0), "大航海")
+                entries.append(
+                    (
+                        int(row["timestamp_ms"]),
+                        f"开通{guard_name}（{row['guard_num']}{row['guard_unit']}）",
+                        int(row["fans_medal_level"] or 0),
+                        int(row["guard_level"] or 0),
+                        str(row["fans_medal_name"] or ""),
+                    )
+                )
+        except Exception as exc:
+            self._logger.debug(f"付费明细读取失败（画像原料缺明细行）: {exc}")
+            return lines
+
+        entries.sort(key=lambda item: item[0], reverse=True)
+        for entry in entries[: self._PAYMENT_MATERIAL_ROWS]:
+            lines.append(f"- 最近付费：{entry[1]}")
+        if entries:
+            latest = entries[0]
+            identity_parts: List[str] = []
+            if latest[3]:
+                identity_parts.append(GUARD_LEVEL_NAMES.get(latest[3], "舰队成员"))
+            if latest[2] or latest[4]:
+                medal = f"{latest[4]}{latest[2]} 级牌" if latest[4] else f"{latest[2]} 级牌"
+                identity_parts.append(medal)
+            if identity_parts:
+                lines.append(f"- 最近一次付费时的身份：{'、'.join(identity_parts)}")
+        return lines
+
+    # ------------------------------------------------------------------
+    # 提示词渲染（零变量模板缓存复用）
+    # ------------------------------------------------------------------
 
     def _get_summary_system_prompt(self) -> str:
-        """渲染摘要系统提示词（零变量模板，结果缓存复用）。
+        """渲染摘要+事实提取系统提示词。
 
         ``PromptManager`` 由 StreamerAgent 构造透传：调用方负责装配其扫描根
         与模板（启用 ``src/**/prompts/`` 约定扫描时可发现包内 summary_system
@@ -477,6 +671,15 @@ class BackgroundMaintainer:
         if self._summary_system_prompt is None:
             self._summary_system_prompt = self._prompt_manager.render(_SUMMARY_SYSTEM_TEMPLATE)
         return self._summary_system_prompt
+
+    def _get_profile_system_prompt(self) -> str:
+        """渲染画像增量压缩系统提示词（含长度变量，结果缓存复用）。"""
+        if not self._profile_system_prompt:
+            self._profile_system_prompt = self._prompt_manager.render(
+                _PROFILE_SYSTEM_TEMPLATE,
+                profile_max_length=self._profile_max_length,
+            )
+        return self._profile_system_prompt
 
     async def _persist_topic_snapshot(self, summary: str, *, now_ms: int, previous_summary_ms: int) -> None:
         """摘要成功后把话题状态写入 ``timeline_summary`` 与 ``topics`` 表。

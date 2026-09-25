@@ -1,9 +1,9 @@
 """PlannerAssembler 参考段组装器单元测试。
 
-- 3 输入字段（stage_descriptions / environment / memory_recall_section）——
+- 3 输入字段（stage_descriptions / environment / person_profile_section）——
   对话内容走 canonical 原生消息通道，不进组装器
 - 空段规则：有数据才渲染段，无占位文本
-- 段顺序锁定：环节描述 → 直播间快照 → 记忆召回；整段作为参考段固定在
+- 段顺序锁定：环节描述 → 直播间快照 → 人物画像；整段作为参考段固定在
   消息序列尾（append-only，服务端 LLM 前缀缓存命中既有前缀）
 """
 
@@ -23,7 +23,7 @@ def _production_inputs() -> AssemblerInputs:
             unread_summary="3 条未读互动",
             key_changes=[],
         ),
-        memory_recall_section="- alice 上次问过新皮肤",
+        person_profile_section="- bilibili/alice: 上次问过新皮肤",
     )
 
 
@@ -32,7 +32,7 @@ def test_production_inputs_render_all_sections() -> None:
     text = PlannerAssembler().assemble(_production_inputs())
     assert "## 环节描述" in text
     assert "## 直播间快照" in text
-    assert "## 记忆召回" in text
+    assert "## 人物画像-内部参考" in text
 
 
 def test_no_placeholder_text_in_output() -> None:
@@ -56,14 +56,14 @@ def test_empty_sections_omitted() -> None:
     assert text == ""
     assert "环节描述" not in text
     assert "直播间快照" not in text
-    assert "记忆召回" not in text
+    assert "人物画像-内部参考" not in text
 
 
 def test_section_order_locked() -> None:
-    """段顺序锁定：环节描述 → 直播间快照 → 记忆召回。"""
+    """段顺序锁定：环节描述 → 直播间快照 → 人物画像。"""
     text = PlannerAssembler().assemble(_production_inputs())
     assert text.index("## 环节描述") < text.index("## 直播间快照")
-    assert text.index("## 直播间快照") < text.index("## 记忆召回")
+    assert text.index("## 直播间快照") < text.index("## 人物画像-内部参考")
 
 
 def test_environment_render_details() -> None:

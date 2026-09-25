@@ -336,8 +336,8 @@ async def test_upsert_viewer_message_count(store: SQLiteDatabase) -> None:
     ts2 = 1_700_000_000_500
 
     # 首次
-    await store.viewers.upsert_viewer_message(user_id="u1", user_name="张三", timestamp_ms=ts1)
-    row = await store.viewers.get_viewer_stats(user_id="u1")
+    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=ts1)
+    row = await store.viewers.get_viewer_stats(platform="bilibili", user_id="u1")
     assert row is not None
     assert int(row["message_count"]) == 1
     assert int(row["gift_count"]) == 0
@@ -347,8 +347,8 @@ async def test_upsert_viewer_message_count(store: SQLiteDatabase) -> None:
     assert str(row["user_name"]) == "张三"
 
     # 再次
-    await store.viewers.upsert_viewer_message(user_id="u1", user_name="张三（新昵称）", timestamp_ms=ts2)
-    row2 = await store.viewers.get_viewer_stats(user_id="u1")
+    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u1", user_name="张三（新昵称）", timestamp_ms=ts2)
+    row2 = await store.viewers.get_viewer_stats(platform="bilibili", user_id="u1")
     assert row2 is not None
     assert int(row2["message_count"]) == 2, "message_count 应累计到 2"
     assert int(row2["interaction_count"]) == 2, "interaction_count 应累计到 2"
@@ -363,10 +363,10 @@ async def test_upsert_viewer_gift_count(store: SQLiteDatabase) -> None:
     ts2 = 1_700_000_002_000
 
     # 先 1 条 message，再 1 次 gift
-    await store.viewers.upsert_viewer_message(user_id="u1", user_name="张三", timestamp_ms=ts1)
-    await store.viewers.upsert_viewer_gift(user_id="u1", user_name="张三", timestamp_ms=ts2)
+    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=ts1)
+    await store.viewers.upsert_viewer_gift(platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=ts2)
 
-    row = await store.viewers.get_viewer_stats(user_id="u1")
+    row = await store.viewers.get_viewer_stats(platform="bilibili", user_id="u1")
     assert row is not None
     assert int(row["message_count"]) == 1, "gift upsert 不应改 message_count"
     assert int(row["gift_count"]) == 1, "gift_count 应为 1"
@@ -378,8 +378,8 @@ async def test_upsert_viewer_gift_count(store: SQLiteDatabase) -> None:
 async def test_upsert_viewer_replied_count(store: SQLiteDatabase) -> None:
     """upsert_viewer_replied：+1 replied，+1 interaction；未存在的 user_id 首建 user_name="?"。"""
     # 未存在的用户：首建
-    await store.viewers.upsert_viewer_replied(user_id="u_new", timestamp_ms=1_700_000_010_000)
-    row = await store.viewers.get_viewer_stats(user_id="u_new")
+    await store.viewers.upsert_viewer_replied(platform="bilibili", user_id="u_new", timestamp_ms=1_700_000_010_000)
+    row = await store.viewers.get_viewer_stats(platform="bilibili", user_id="u_new")
     assert row is not None
     assert int(row["replied_count"]) == 1
     assert int(row["interaction_count"]) == 1
@@ -388,8 +388,8 @@ async def test_upsert_viewer_replied_count(store: SQLiteDatabase) -> None:
     assert str(row["user_name"]) == "?", "首建 user_name 应占位 '?'"
 
     # 再次 replied
-    await store.viewers.upsert_viewer_replied(user_id="u_new", timestamp_ms=1_700_000_010_500)
-    row2 = await store.viewers.get_viewer_stats(user_id="u_new")
+    await store.viewers.upsert_viewer_replied(platform="bilibili", user_id="u_new", timestamp_ms=1_700_000_010_500)
+    row2 = await store.viewers.get_viewer_stats(platform="bilibili", user_id="u_new")
     assert row2 is not None
     assert int(row2["replied_count"]) == 2
     assert int(row2["interaction_count"]) == 2
@@ -399,9 +399,9 @@ async def test_upsert_viewer_replied_count(store: SQLiteDatabase) -> None:
 async def test_upsert_viewer_replied_keeps_known_name(store: SQLiteDatabase) -> None:
     """upsert_viewer_replied 不应覆盖已知 user_name（DO UPDATE 不动 user_name）。"""
     # 先 message upsert 写 user_name，再 replied upsert
-    await store.viewers.upsert_viewer_message(user_id="u1", user_name="张三", timestamp_ms=1_700_000_000_000)
-    await store.viewers.upsert_viewer_replied(user_id="u1", timestamp_ms=1_700_000_001_000)
-    row = await store.viewers.get_viewer_stats(user_id="u1")
+    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=1_700_000_000_000)
+    await store.viewers.upsert_viewer_replied(platform="bilibili", user_id="u1", timestamp_ms=1_700_000_001_000)
+    row = await store.viewers.get_viewer_stats(platform="bilibili", user_id="u1")
     assert row is not None
     assert str(row["user_name"]) == "张三", "replied upsert 不应覆盖已有 user_name"
     assert int(row["replied_count"]) == 1
@@ -412,13 +412,13 @@ async def test_upsert_viewer_replied_keeps_known_name(store: SQLiteDatabase) -> 
 async def test_get_viewer_stats_hit_and_miss(store: SQLiteDatabase) -> None:
     """get_viewer_stats：命中返回 Row，未命中返回 None。"""
     # 命中
-    await store.viewers.upsert_viewer_message(user_id="u1", user_name="张三", timestamp_ms=1_700_000_000_000)
-    hit = await store.viewers.get_viewer_stats(user_id="u1")
+    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=1_700_000_000_000)
+    hit = await store.viewers.get_viewer_stats(platform="bilibili", user_id="u1")
     assert hit is not None
     assert str(hit["user_id"]) == "u1"
 
     # 未命中
-    miss = await store.viewers.get_viewer_stats(user_id="nobody")
+    miss = await store.viewers.get_viewer_stats(platform="bilibili", user_id="nobody")
     assert miss is None
 
 
@@ -426,13 +426,13 @@ async def test_get_viewer_stats_hit_and_miss(store: SQLiteDatabase) -> None:
 async def test_list_viewer_stats_order_by_whitelist(store: SQLiteDatabase) -> None:
     """list_viewer_stats：合法 order_by 排序、limit/offset 生效、total 全计数；非法值抛 ValueError。"""
     # 准备 3 个不同指标的观众
-    await store.viewers.upsert_viewer_message(user_id="u_msg", user_name="msg 用户", timestamp_ms=1_700_000_000_000)
-    await store.viewers.upsert_viewer_message(user_id="u_msg", user_name="msg 用户", timestamp_ms=1_700_000_001_000)
-    await store.viewers.upsert_viewer_gift(user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_002_000)
-    await store.viewers.upsert_viewer_gift(user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_003_000)
-    await store.viewers.upsert_viewer_gift(user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_004_000)
-    await store.viewers.upsert_viewer_replied(user_id="u_repl", timestamp_ms=1_700_000_005_000)
-    await store.viewers.upsert_viewer_replied(user_id="u_repl", timestamp_ms=1_700_000_006_000)
+    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u_msg", user_name="msg 用户", timestamp_ms=1_700_000_000_000)
+    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u_msg", user_name="msg 用户", timestamp_ms=1_700_000_001_000)
+    await store.viewers.upsert_viewer_gift(platform="bilibili", user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_002_000)
+    await store.viewers.upsert_viewer_gift(platform="bilibili", user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_003_000)
+    await store.viewers.upsert_viewer_gift(platform="bilibili", user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_004_000)
+    await store.viewers.upsert_viewer_replied(platform="bilibili", user_id="u_repl", timestamp_ms=1_700_000_005_000)
+    await store.viewers.upsert_viewer_replied(platform="bilibili", user_id="u_repl", timestamp_ms=1_700_000_006_000)
 
     # 默认 order_by=message_count：u_msg 排第一；total 为全计数
     rows, total = await store.viewers.list_viewer_stats()
@@ -456,10 +456,10 @@ async def test_list_viewer_stats_order_by_whitelist(store: SQLiteDatabase) -> No
     assert int(rows_repl[0]["replied_count"]) == 2
 
     # limit / offset 生效，total 不随分页变化
-    rows_limited, total_limited = await store.viewers.list_viewer_stats(limit=2)
+    rows_limited, total_limited = await store.viewers.list_viewer_stats(platform="bilibili", limit=2)
     assert len(rows_limited) == 2
     assert total_limited == 3
-    rows_offset, _ = await store.viewers.list_viewer_stats(limit=2, offset=2)
+    rows_offset, _ = await store.viewers.list_viewer_stats(platform="bilibili", limit=2, offset=2)
     assert len(rows_offset) == 1
 
     # 非法 order_by → ValueError

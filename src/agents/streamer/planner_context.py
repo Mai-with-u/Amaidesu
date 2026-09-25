@@ -37,13 +37,13 @@ class AssemblerInputs:
 
     stage_descriptions: str = ""  # 环节描述
     environment: Optional[EnvironmentBlock] = None
-    memory_recall_section: str = ""  # 记忆召回面（由 memory.recall 取得）
+    person_profile_section: str = ""  # 人物画像段（观众画像注入，由 memory 服务取得）
 
 
 class PlannerAssembler:
     """Planner 参考段组装器
 
-    组装顺序：环节描述 → 直播间快照 → 记忆召回。顺序由测试锁定
+    组装顺序：环节描述 → 直播间快照 → 人物画像。顺序由测试锁定
     （test_planner_context.py）；整段作为一条 user 消息固定在消息序列尾部，
     ReAct 循环的 assistant/tool 消息追加在其后（append-only，服务端 LLM
     前缀缓存可命中既有前缀）。
@@ -61,8 +61,8 @@ class PlannerAssembler:
         if env_body:
             sections.append(("直播间快照", env_body))
 
-        if inputs.memory_recall_section:
-            sections.append(("记忆召回", inputs.memory_recall_section))
+        if inputs.person_profile_section:
+            sections.append(("人物画像-内部参考", inputs.person_profile_section))
 
         return "\n\n".join(f"## {title}\n{body}" for title, body in sections)
 

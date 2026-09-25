@@ -71,12 +71,12 @@ def test_convert_super_chat_message() -> None:
         _make_payload(
             message_type="super_chat",
             content="SC 内容",
-            sc=SuperChatInfo(amount=50.0),
+            sc=SuperChatInfo(total_price=50_000, currency="bilibili_gold_coin"),
         )
     )
     assert msg is not None
     assert msg.message_type == MessageType.SUPER_CHAT
-    assert msg.sc_price == 50.0
+    assert msg.sc_price == 50.0  # 50000 金瓜子 ÷1000 = 元
     assert msg.sc_message == "SC 内容"
 
 

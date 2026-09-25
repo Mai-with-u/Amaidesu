@@ -1,15 +1,15 @@
-"""记忆管理端点（WebUI 记忆管理页数据面）
+"""观众画像管理端点（WebUI 画像管理页数据面）
 
-``_memory_facts`` 模块私有表的管理消费面：列表检索 / 手工增改 / 单条删除 /
-召回测试 / 总量统计。读写全部经 ``SimpleMemory`` 管理面方法（私有表契约：
-仅 SimpleMemory 触碰该表），本模块不做 SQL。
+``viewer_profiles`` / ``viewer_facts`` 两张业务表的管理消费面：画像列表 /
+查看 / **人工编辑纠正** / 删除，事实查看与单条删除。读写全部经
+``SimpleMemory``（画像/事实读写服务），本模块不做 SQL。
 
-- ``GET  /memory/stats``         总量统计（总数 / 各来源计数 / 最新写入）
-- ``GET  /memory/facts``         条目列表（搜索 / 排序 / 分页，``total`` 全计数）
-- ``POST /memory/facts``         手工新增（source 固定 "webui"）
-- ``PATCH /memory/facts/{id}``   部分更新（text / tags / importance，缺省不改）
-- ``DELETE /memory/facts/{id}``  删除单条（id 不存在 404）
-- ``POST /memory/recall``        召回测试（与 Agent 侧 query_memory 同链路）
+- ``GET  /memory/stats``                      总量统计（画像数 / 事实数 / 最新更新）
+- ``GET  /memory/profiles``                   画像列表（搜索 / 分页）
+- ``PATCH /memory/profiles/{platform}/{user_id}`` 人工纠正画像文本
+- ``DELETE /memory/profiles/{platform}/{user_id}`` 删除画像（删除后该观众回到无画像态）
+- ``GET  /memory/facts``                      事实列表（按人查 / 关键词搜索）
+- ``DELETE /memory/facts/{fact_id}``          删除单条事实（修正提取错误）
 
 未注入记忆栈（极简启动 / 部分测试装配）时端点返回 503。
 """
@@ -39,218 +39,179 @@ def _require_memory(server: "DashboardServer") -> "SimpleMemory":
     return memory
 
 
-def _split_tags(tags: str) -> List[str]:
-    """存储态逗号串 → 展示态列表（空串 → 空列表）。"""
-    return [t for t in tags.split(",") if t]
+class MemoryStatsResponse(BaseModel):
+    """总量统计：画像数 / 事实数 / 最新画像更新时刻（空库为 0）。"""
+
+    profile_count: int
+    fact_count: int
+    latest_updated_ms: int
 
 
-class MemoryFactItem(BaseModel):
-    """单条记忆（``_memory_facts`` 行投影；tags 已拆为列表）。"""
+class ViewerProfileItem(BaseModel):
+    """单份画像（``viewer_profiles`` 行投影）。"""
 
-    id: int
-    text: str
-    source: str
-    tags: List[str]
-    importance: int
-    timestamp_ms: int
+    platform: str
+    user_id: str
+    profile_text: str
+    last_compressed_at_ms: int = Field(description="增量压缩水位（该时刻前的原料已摄入画像）")
+    updated_at_ms: int
 
 
-class MemoryFactListResponse(BaseModel):
-    """条目列表响应：``total`` 为命中搜索条件的全量行数（分页器用）。"""
+class ViewerProfileListResponse(BaseModel):
+    """画像列表响应：``total`` 为命中搜索条件的全量行数（分页器用）。"""
 
     total: int
-    items: List[MemoryFactItem]
+    items: List[ViewerProfileItem]
 
 
-class MemoryFactCreateRequest(BaseModel):
-    """手工新增请求（source 由服务端固定为 "webui"）。"""
+class ViewerProfileUpdateRequest(BaseModel):
+    """画像纠正请求：人工编辑后的完整画像文本。"""
 
-    text: str = Field(min_length=1, description="记忆文本（空白串拒绝）")
-    tags: List[str] = Field(default_factory=list, description="标签列表（逗号连接落库）")
-    importance: int = Field(default=0, ge=0, description="重要度（召回排序权重）")
+    profile_text: str = Field(min_length=1, description="画像文本（空白串拒绝）")
 
 
-class MemoryFactCreateResponse(BaseModel):
-    """新增响应：``accepted=False`` 携带拒绝原因（如空文本）。"""
-
-    memory_id: int
-    accepted: bool
-    message: str = ""
-
-
-class MemoryFactUpdateRequest(BaseModel):
-    """部分更新请求：``None`` 字段保持不变；``tags`` 传空列表即清空。"""
-
-    text: Optional[str] = Field(default=None, min_length=1)
-    tags: Optional[List[str]] = None
-    importance: Optional[int] = Field(default=None, ge=0)
-
-
-class MemoryMutationResponse(BaseModel):
-    """更新 / 删除的通用响应（``success=False`` 多为 id 不存在）。"""
+class MutationResponse(BaseModel):
+    """更新 / 删除的通用响应（``success=False`` 多为目标不存在）。"""
 
     success: bool
 
 
-class MemorySourceCount(BaseModel):
-    """单来源条目计数。"""
+class ViewerFactItem(BaseModel):
+    """单条观众事实（``viewer_facts`` 行投影）。"""
 
-    source: str
-    count: int
-
-
-class MemoryStatsResponse(BaseModel):
-    """总量统计：来源计数按条数降序；空库 ``latest_ms=0``。"""
-
-    total_facts: int
-    sources: List[MemorySourceCount]
-    latest_ms: int
+    id: int
+    platform: str
+    user_id: str
+    fact_text: str
+    source_message_id: str
+    created_at_ms: int
 
 
-class MemoryRecallRequest(BaseModel):
-    """召回测试请求（与 Agent 侧 query_memory 工具同参语义）。"""
+class ViewerFactListResponse(BaseModel):
+    """事实列表响应（按人查模式附 ``total`` 为该观众事实总数）。"""
 
-    query: str = Field(min_length=1, description="查询文本/关键词")
-    top_k: int = Field(default=5, ge=1, le=20)
-
-
-class MemoryRecallHit(BaseModel):
-    """单条召回命中（``score`` 越大越相关）。"""
-
-    memory_id: int
-    text: str
-    score: float
-    timestamp_ms: int
-    source: str
-    tags: List[str]
-
-
-class MemoryRecallResponse(BaseModel):
-    """召回测试响应（空匹配时 ``hits`` 为空列表）。"""
-
-    query: str
-    hits: List[MemoryRecallHit]
+    total: int
+    items: List[ViewerFactItem]
 
 
 @router.get("/stats", response_model=MemoryStatsResponse)
 async def get_memory_stats(server: ServerDep) -> MemoryStatsResponse:
-    """记忆库总量统计（管理页头部概览）。"""
+    """画像库总量统计（管理页头部概览）。"""
     memory = _require_memory(server)
-    stats = await memory.stats()
+    profile_total, profiles = await memory.list_viewer_profiles(limit=1)
+    fact_total = await memory.count_viewer_facts()
+    latest = profiles[0].updated_at_ms if profiles else 0
     return MemoryStatsResponse(
-        total_facts=stats.total_facts,
-        sources=[{"source": s, "count": c} for s, c in stats.sources],
-        latest_ms=stats.latest_ms,
+        profile_count=profile_total,
+        fact_count=fact_total,
+        latest_updated_ms=latest,
     )
 
 
-@router.get("/facts", response_model=MemoryFactListResponse)
-async def list_memory_facts(
+@router.get("/profiles", response_model=ViewerProfileListResponse)
+async def list_viewer_profiles(
     server: ServerDep,
-    search: str = Query(default="", max_length=200, description="子串搜索 text/source/tags"),
-    order_by: str = Query(default="timestamp_ms", description="timestamp_ms | importance"),
+    search: str = Query(default="", max_length=200, description="子串搜索画像文本 / user_id"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-) -> MemoryFactListResponse:
-    """条目列表（搜索 / 排序白名单 / 分页）。"""
+) -> ViewerProfileListResponse:
+    """画像列表（搜索 / 分页）。"""
     memory = _require_memory(server)
-    total, facts = await memory.list_facts(
+    total, profiles = await memory.list_viewer_profiles(
         search=search,
-        order_by=order_by,
         limit=limit,
         offset=offset,
     )
-    return MemoryFactListResponse(
+    return ViewerProfileListResponse(
         total=total,
         items=[
             {
-                "id": f.memory_id,
-                "text": f.text,
-                "source": f.source,
-                "tags": _split_tags(f.tags),
-                "importance": f.importance,
-                "timestamp_ms": f.timestamp_ms,
+                "platform": p.platform,
+                "user_id": p.user_id,
+                "profile_text": p.profile_text,
+                "last_compressed_at_ms": p.last_compressed_at_ms,
+                "updated_at_ms": p.updated_at_ms,
             }
-            for f in facts
+            for p in profiles
         ],
     )
 
 
-@router.post("/facts", response_model=MemoryFactCreateResponse)
-async def create_memory_fact(
+@router.patch("/profiles/{platform}/{user_id}", response_model=MutationResponse)
+async def update_viewer_profile(
+    platform: str,
+    user_id: str,
+    request: ViewerProfileUpdateRequest,
     server: ServerDep,
-    request: MemoryFactCreateRequest,
-) -> MemoryFactCreateResponse:
-    """手工新增一条记忆（来源记为 "webui"，与 Agent 写入区分）。"""
+) -> MutationResponse:
+    """人工纠正画像文本；空白文本 422，画像不存在 404。"""
     memory = _require_memory(server)
-    result = await memory.ingest(
-        request.text,
-        source="webui",
-        tags=request.tags,
-        importance=request.importance,
-    )
-    return MemoryFactCreateResponse(
-        memory_id=result.memory_id,
-        accepted=result.accepted,
-        message=result.message,
-    )
-
-
-@router.patch("/facts/{memory_id}", response_model=MemoryMutationResponse)
-async def update_memory_fact(
-    server: ServerDep,
-    memory_id: int,
-    request: MemoryFactUpdateRequest,
-) -> MemoryMutationResponse:
-    """部分更新（缺省字段保持不变）；无更新字段 / 空白文本 422，id 不存在 404。"""
-    memory = _require_memory(server)
-    if request.text is None and request.tags is None and request.importance is None:
-        raise HTTPException(status_code=422, detail="缺少任何更新字段（text/tags/importance）")
-    if request.text is not None and not request.text.strip():
-        raise HTTPException(status_code=422, detail="text 不能为空白")
-    updated = await memory.update_fact(
-        memory_id,
-        text=request.text,
-        tags=request.tags,
-        importance=request.importance,
+    if not request.profile_text.strip():
+        raise HTTPException(status_code=422, detail="profile_text 不能为空白")
+    updated = await memory.update_viewer_profile_text(
+        platform=platform,
+        user_id=user_id,
+        profile_text=request.profile_text,
     )
     if not updated:
-        raise HTTPException(status_code=404, detail=f"记忆条目不存在: {memory_id}")
-    return MemoryMutationResponse(success=True)
+        raise HTTPException(status_code=404, detail=f"画像不存在: {platform}/{user_id}")
+    return MutationResponse(success=True)
 
 
-@router.delete("/facts/{memory_id}", response_model=MemoryMutationResponse)
-async def delete_memory_fact(
-    server: ServerDep,
-    memory_id: int,
-) -> MemoryMutationResponse:
-    """删除单条记忆；id 不存在时 404。"""
+@router.delete("/profiles/{platform}/{user_id}", response_model=MutationResponse)
+async def delete_viewer_profile(platform: str, user_id: str, server: ServerDep) -> MutationResponse:
+    """删除画像；画像不存在时 404。"""
     memory = _require_memory(server)
-    deleted = await memory.delete_fact(memory_id)
+    deleted = await memory.delete_viewer_profile(platform=platform, user_id=user_id)
     if not deleted:
-        raise HTTPException(status_code=404, detail=f"记忆条目不存在: {memory_id}")
-    return MemoryMutationResponse(success=True)
+        raise HTTPException(status_code=404, detail=f"画像不存在: {platform}/{user_id}")
+    return MutationResponse(success=True)
 
 
-@router.post("/recall", response_model=MemoryRecallResponse)
-async def recall_memory(
+@router.get("/facts", response_model=ViewerFactListResponse)
+async def list_viewer_facts(
     server: ServerDep,
-    request: MemoryRecallRequest,
-) -> MemoryRecallResponse:
-    """召回测试：走与 Agent 侧 ``query_memory`` 工具相同的 ``recall`` 链路。"""
+    platform: Optional[str] = Query(default=None, description="平台标识（与 user_id 组成身份键按人查）"),
+    user_id: Optional[str] = Query(default=None, description="平台用户 ID"),
+    search: str = Query(default="", max_length=200, description="关键词搜索事实文本"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> ViewerFactListResponse:
+    """事实列表：按人查（platform+user_id）或关键词搜索（二选一，按人优先）。
+
+    提取错误的事实可经 DELETE 单条清理；画像不受影响（下次压缩以剩余
+    事实为原料）。
+    """
     memory = _require_memory(server)
-    hits = await memory.recall(request.query, top_k=request.top_k)
-    return MemoryRecallResponse(
-        query=request.query,
-        hits=[
-            {
-                "memory_id": h.memory_id,
-                "text": h.text,
-                "score": h.score,
-                "timestamp_ms": h.timestamp_ms,
-                "source": str(h.metadata.get("source", "")),
-                "tags": _split_tags(str(h.metadata.get("tags", ""))),
-            }
-            for h in hits
-        ],
-    )
+    if platform and user_id:
+        facts = await memory.list_viewer_facts(platform=platform, user_id=user_id, limit=limit + offset)
+        window = facts[offset : offset + limit]
+        return ViewerFactListResponse(total=len(facts), items=[_fact_item(f) for f in window])
+
+    keyword = (search or "").strip()
+    if not keyword:
+        raise HTTPException(status_code=422, detail="请提供 platform+user_id（按人查）或 search（关键词）")
+    facts = await memory.search_viewer_facts(query=keyword, top_k=min(limit, 20))
+    return ViewerFactListResponse(total=len(facts), items=[_fact_item(f) for f in facts])
+
+
+def _fact_item(fact: object) -> dict:
+    """``ViewerFact`` → API 投影 dict。"""
+    return {
+        "id": fact.fact_id,
+        "platform": fact.platform,
+        "user_id": fact.user_id,
+        "fact_text": fact.fact_text,
+        "source_message_id": fact.source_message_id,
+        "created_at_ms": fact.created_at_ms,
+    }
+
+
+@router.delete("/facts/{fact_id}", response_model=MutationResponse)
+async def delete_viewer_fact(fact_id: int, server: ServerDep) -> MutationResponse:
+    """删除单条事实；id 不存在时 404。"""
+    memory = _require_memory(server)
+    deleted = await memory.delete_viewer_fact(fact_id=fact_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"事实不存在: {fact_id}")
+    return MutationResponse(success=True)

@@ -40,11 +40,10 @@ from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler
 from src.modules.logging import get_logger
-from src.modules.memory.models import MemoryHit
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolInvocation
 
-from .room_state import RoomState, RoomStateSnapshot
+from .room_state import RoomState
 from .thinking_stream import ThinkingStreamContext
 
 __all__ = ["Planner"]
@@ -53,15 +52,16 @@ __all__ = ["Planner"]
 #: Planner 绑定的 LLM profile（代码显式声明，配置不承载绑定，无静默兜底）。
 PLANNER_PROFILE: str = "planner"
 
-#: 默认记忆召回条数（Planner 每轮决策注入的 hit 上限）。
-#: 配置面不允许暴露——记忆质量先稳定再调参，避免污染用户配置文件。
-_DEFAULT_RECALL_TOP_K: int = 3
+#: 每轮决策注入画像的观众数上限（可配 profile_max；超出截断）。
+#: 配置面在 [memory].profile_injection_max——画像行为参数集中在记忆段。
+_DEFAULT_PROFILE_MAX: int = 3
 
-#: 弹幕批次拼接到召回 query 的最大字符数（控 query 长度，避免污染召回）。
-_RECALL_QUERY_BATCH_CHARS: int = 200
+#: 单条画像文本注入截断长度（控制 prompt 体积；画像生成长度上限 400 字之上兜一层）。
+_PROFILE_TEXT_MAX_CHARS: int = 500
 
-#: 单条召回 hit 文本截断长度（控制 prompt 体积）。
-_RECALL_HIT_TEXT_CHARS: int = 80
+#: 人物画像整段字符帽（决策 ~1.6K）：超帽的候选整条丢弃，防止画像段挤占
+#: 参考段其他内容与对话预算。
+_PROFILE_SECTION_MAX_CHARS: int = 1600
 
 #: 单条工具观察作为观察返回的最大字符数（超长观察按体量丢弃并自证，控上下文体积）。
 #: 6144 的来历：完整游戏状态快照（含地图缩略与诊断段）实测上万字符，2000 会把
@@ -190,7 +190,8 @@ class Planner:
         room_state: RoomState,
         tool_registry: Any = None,
         memory: Any = None,
-        recall_top_k: int = _DEFAULT_RECALL_TOP_K,
+        viewer_repo: Any = None,
+        profile_max: int = _DEFAULT_PROFILE_MAX,
         context_enabled: bool = True,
         behavior_style: str = "",
         reply_provider: Any = None,
@@ -205,8 +206,10 @@ class Planner:
             prompt_service: 提示词管理器，需提供 ``render(name, **vars) -> str``。
             room_state: 直播间态势规则层实例。
             tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
-            memory: 记忆后端（鸭子类型 ``MemoryProvider``）；None 时无记忆决策。
-            recall_top_k: 每轮注入 prompt 的最大命中条数。
+            memory: 观众画像/事实读写服务（鸭子类型 ``SimpleMemory``）；None 时无画像注入。
+            viewer_repo: ``ViewerRepo``（观众统计仓储）——画像注入时经它实时取
+                昵称（昵称会漂移不进画像文本）；None 时注入行回退 platform/user_id。
+            profile_max: 每轮注入 prompt 的画像人数上限。
             context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
             behavior_style: 人设行为准则（决策侧）。
             reply_provider: reply 局部工具的 Provider（ReplyToolProvider）；
@@ -235,7 +238,8 @@ class Planner:
         self._room_state = room_state
         self._tool_registry = tool_registry
         self._memory = memory
-        self._recall_top_k = recall_top_k
+        self._viewer_repo = viewer_repo
+        self._profile_max = max(1, int(profile_max))
         self._context_enabled = context_enabled
         self._behavior_style: str = behavior_style or ""
         self._reply_provider = reply_provider
@@ -508,13 +512,13 @@ class Planner:
             key_changes=[],
         )
 
-        memory_recall_section = await self._recall_memory(snapshot, batch)
+        person_profile_section = await self._collect_person_profiles(batch)
 
         try:
             assembler_inputs = AssemblerInputs(
                 stage_descriptions=rundown_text or "",
                 environment=env_block,
-                memory_recall_section=memory_recall_section,
+                person_profile_section=person_profile_section,
             )
             assembled_text = self._assembler.assemble(assembler_inputs)
         except Exception as e:
@@ -686,46 +690,80 @@ class Planner:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
         return _render_observation(data)
 
-    # ==================== 记忆召回与渲染 ====================
+    # ==================== 人物画像注入 ====================
 
-    async def _recall_memory(
+    async def _collect_person_profiles(
         self,
-        snapshot: RoomStateSnapshot,
         batch: List[Any],
     ) -> str:
-        """调记忆后端召回相关历史片段，格式化为 prompt 注入文本。
+        """收集本批发言人的画像并渲染为参考段文本（有画像才注入）。
 
-        - 基础 query = RoomState.topic_summary（非空时）+ 本批弹幕前 200 字符
-        - 无 memory / 无 hits / 异常 → 空串；Assembler 对空段整段省略
+        - 候选 = 本批弹幕发言人（sender 去重，按发言时间倒序）
+        - 逐人查 ``viewer_profiles``：无画像的跳过且**不占位**——候选遍历
+          不会因前几人无画像而提前停，有画像的凑满 ``profile_max`` 人才停
+        - 昵称从 ``viewers`` 实时取（决策：昵称会漂移不进画像文本，注入时
+          才解析），让画像段与本批弹幕的"昵称: 内容"对得上号；无统计行
+          回退 platform/user_id
+        - 整段硬帽 ``_PROFILE_SECTION_MAX_CHARS``：超帽的候选整条丢弃
+          （只整段丢弃、不切半，与历史截断同立场）
+        - 无 memory / 无画像 / 异常 → 空串；Assembler 对空段整段省略，
+          不阻断决策
         """
-        if self._memory is None:
+        if self._memory is None or not batch:
             return ""
 
-        topic_summary = (getattr(snapshot, "topic_summary", "") or "").strip()
-        batch_messages = [canonical.batch_item_to_message(msg) for msg in batch]
-        batch_head = "\n".join(m["content"] for m in batch_messages).strip()[:_RECALL_QUERY_BATCH_CHARS]
-        query_parts = [p for p in (topic_summary, batch_head) if p]
-        query = "\n".join(query_parts) if query_parts else ""
-        if not query:
-            return ""
+        # 候选收集：发言时间倒序去重（最新发言优先；batch 本身按时间正序）
+        candidates: List[tuple[str, str]] = []  # (platform, user_id)
+        seen: set[tuple[str, str]] = set()
+        for msg in reversed(batch):
+            platform = _as_id_str(getattr(msg, "platform", None))
+            user = getattr(msg, "user", None)
+            user_id = _as_id_str(getattr(user, "id", None)) if user is not None else ""
+            if not platform or not user_id:
+                continue
+            key = (platform, user_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(key)
 
-        try:
-            hits: List[MemoryHit] = await self._memory.recall(query, top_k=self._recall_top_k)
-        except Exception as exc:
-            self.logger.warning(f"记忆召回失败: {exc}")
-            return ""
-
-        if not hits:
+        if not candidates:
             return ""
 
         lines: List[str] = []
-        for hit in hits:
-            text = (getattr(hit, "text", "") or "").replace("\n", " ").strip()
-            if len(text) > _RECALL_HIT_TEXT_CHARS:
-                text = text[:_RECALL_HIT_TEXT_CHARS].rstrip() + "…"
-            score = getattr(hit, "score", 0.0) or 0.0
-            metadata = getattr(hit, "metadata", {}) or {}
-            source = metadata.get("source", "unknown")
-            lines.append(f"- [{score:.2f} | src={source}] {text}")
+        section_chars = 0
+        for platform, user_id in candidates:
+            if len(lines) >= self._profile_max:
+                break  # 有画像者凑满即停
+            try:
+                profile_text = await self._memory.get_viewer_profile(platform=platform, user_id=user_id)
+            except Exception as exc:
+                self.logger.warning(f"画像查询失败（{platform}/{user_id}，跳过该人）: {exc}")
+                continue
+            if not profile_text:
+                continue  # 无画像不注入、不占位
+            text = profile_text.replace("\n", " ").strip()
+            if len(text) > _PROFILE_TEXT_MAX_CHARS:
+                text = text[:_PROFILE_TEXT_MAX_CHARS].rstrip() + "…"
+            display = await self._viewer_nickname(platform, user_id) or f"{platform}/{user_id}"
+            line = f"- {display}: {text}"
+            if section_chars + len(line) > _PROFILE_SECTION_MAX_CHARS:
+                break  # 整段硬帽：装不下的候选整条丢弃
+            lines.append(line)
+            section_chars += len(line)
 
-        return "\n".join(lines)
+        if not lines:
+            return ""
+        header = "（内部参考，帮助识别老观众；不要逐字复述，与当前对话冲突时以当前对话为准）"
+        return "\n".join([header, *lines])
+
+    async def _viewer_nickname(self, platform: str, user_id: str) -> str:
+        """从 viewers 统计表实时取观众昵称；仓储未注入或查询失败回退空串。"""
+        if self._viewer_repo is None:
+            return ""
+        try:
+            row = await self._viewer_repo.get_viewer_stats(platform=platform, user_id=user_id)
+            return str(row["user_name"]) if row is not None else ""
+        except Exception as exc:
+            self.logger.warning(f"观众昵称查询失败（{platform}/{user_id}）: {exc}")
+            return ""
