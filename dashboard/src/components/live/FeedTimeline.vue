@@ -112,6 +112,27 @@
             <span v-if="batchSizeOf(entry) > 0" class="mono">批次 {{ batchSizeOf(entry) }} 条</span>
             <span v-if="plannerMsOf(entry)" class="mono">决策 {{ plannerMsOf(entry) }}ms</span>
             <span v-if="replyMsOf(entry)" class="mono">生成 {{ replyMsOf(entry) }}ms</span>
+            <span
+              v-if="cacheLabelOf(entry)"
+              class="d-pill d-pill--cache"
+              :title="cacheTitleOf(entry)"
+            >
+              {{ cacheLabelOf(entry) }}
+            </span>
+            <span
+              v-if="tokensLabelOf(entry)"
+              class="d-pill d-pill--token"
+              :title="tokensTitleOf(entry)"
+            >
+              Token {{ tokensLabelOf(entry) }}
+            </span>
+            <span
+              v-if="modelNameOf(entry)"
+              class="d-pill d-pill--model"
+              :title="modelNameOf(entry)"
+            >
+              {{ modelNameOf(entry) }}
+            </span>
             <a
               v-if="entry.llmRequestId"
               class="d-link"
@@ -301,10 +322,11 @@
  * 控制台独占能力（暂停/清空、注入面板、滚动跟随）留在 LiveObserver；
  * 本组件只负责"按条目渲染"，对上游数据来源无要求，可被任何 Vue 页面复用。
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { CopyDocument, Monitor } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
+import { llmApi } from '@/api';
 import {
   agentGroupOf,
   batchSizeOf,
@@ -367,6 +389,108 @@ function rowAlignClass(entry: ShowEntry): string {
 
 // 1s tick：让相对时间标签（"刚刚 / 12s 前"）每秒刷新一次；独立维护不依赖父组件
 const nowMs = useNowTick();
+
+/** 决策卡 token 统计徽标（llm_request_id → 输入/输出/缓存命中）。
+ * planner.decision 只带请求指针不带 token 数，详情按 id 懒取。缓存口径取
+ * hit/prompt_tokens 而非聚合的 hit/(hit+miss)：OpenAI 风格只上报 cached_tokens
+ * 不上报 miss，后者会算出假 100%；命中为 0（含上游未上报）不渲染缓存徽标。 */
+interface RoundTokenStats {
+  promptTokens: number;
+  completionTokens: number;
+  hitTokens: number;
+  /** 本轮 Planner 请求实际使用的模型标识（取自请求历史记录） */
+  modelName: string;
+}
+const roundTokenStats = ref<Map<string, RoundTokenStats>>(new Map());
+const tokenStatsFetching = new Set<string>();
+
+async function fetchTokenStats(requestId: string): Promise<void> {
+  tokenStatsFetching.add(requestId);
+  try {
+    const response = await llmApi.getRequestById(requestId);
+    const record = response.data;
+    if (!record) return;
+    const prompt = record.usage?.prompt_tokens ?? 0;
+    if (prompt > 0) {
+      roundTokenStats.value.set(requestId, {
+        promptTokens: prompt,
+        completionTokens: record.usage?.completion_tokens ?? 0,
+        hitTokens: record.cache_hit_tokens ?? 0,
+        modelName: record.model_name ?? '',
+      });
+    }
+  } catch (e) {
+    console.warn(`[FeedTimeline] 决策卡 token 统计获取失败: ${requestId}`, e);
+  } finally {
+    tokenStatsFetching.delete(requestId);
+  }
+}
+
+watch(
+  () => props.entries,
+  entries => {
+    const visible = new Set<string>();
+    for (const entry of entries) {
+      // 真实流程里 decision 轮末会合并进先到的 verdict 卡（llmRequestId 一并回填），
+      // 独立 decision 卡只出现在无裁决的失败/静默轮，两种都要取数
+      if ((entry.kind === 'decision' || entry.kind === 'verdict') && entry.llmRequestId) {
+        visible.add(entry.llmRequestId);
+      }
+    }
+    // 离场条目的徽标顺手清掉，长直播下 map 不随轮次无限增长
+    for (const key of roundTokenStats.value.keys()) {
+      if (!visible.has(key)) roundTokenStats.value.delete(key);
+    }
+    for (const requestId of visible) {
+      if (!roundTokenStats.value.has(requestId) && !tokenStatsFetching.has(requestId)) {
+        void fetchTokenStats(requestId);
+      }
+    }
+  },
+  { immediate: true },
+);
+
+function statsOf(entry: ShowEntry): RoundTokenStats | null {
+  return entry.llmRequestId ? (roundTokenStats.value.get(entry.llmRequestId) ?? null) : null;
+}
+
+/** 万级以下直接显示，以上缩写为 k（d-meta 小字号场景，精确值在悬浮提示） */
+function compactTokens(n: number): string {
+  return n >= 10000 ? `${(n / 1000).toFixed(1)}k` : n.toLocaleString();
+}
+
+/** 缓存徽标文案（"缓存 62%"）；未取到 / 上游未上报返回空串（调用方按 v-if 不渲染） */
+function cacheLabelOf(entry: ShowEntry): string {
+  const stats = statsOf(entry);
+  if (!stats || stats.hitTokens <= 0) return '';
+  return `缓存 ${Math.round((stats.hitTokens / stats.promptTokens) * 100)}%`;
+}
+
+/** 缓存徽标悬浮提示：绝对 token 数 */
+function cacheTitleOf(entry: ShowEntry): string {
+  const stats = statsOf(entry);
+  if (!stats) return '';
+  return `缓存命中 ${stats.hitTokens.toLocaleString()} / ${stats.promptTokens.toLocaleString()} tokens`;
+}
+
+/** token 徽标文案（"Token 75.4k/0.5k"，输入/输出） */
+function tokensLabelOf(entry: ShowEntry): string {
+  const stats = statsOf(entry);
+  if (!stats) return '';
+  return `${compactTokens(stats.promptTokens)}/${compactTokens(stats.completionTokens)}`;
+}
+
+/** token 徽标悬浮提示：精确值 */
+function tokensTitleOf(entry: ShowEntry): string {
+  const stats = statsOf(entry);
+  if (!stats) return '';
+  return `输入 ${stats.promptTokens.toLocaleString()} · 输出 ${stats.completionTokens.toLocaleString()} tokens`;
+}
+
+/** 模型名徽标：本轮 Planner 请求实际使用的模型标识（空串不渲染） */
+function modelNameOf(entry: ShowEntry): string {
+  return statsOf(entry)?.modelName ?? '';
+}
 
 /** 弹幕 message_id → 时间线条目（用于发言/决策卡回复引用反查）。
  * 仅索引观众消息类（弹幕 / SC / 礼物）；同一 ID 重复出现时取首次，时间线按 tsMs 正序遍历保证幂等。 */
@@ -849,6 +973,30 @@ async function copyText(text: string): Promise<void> {
 }
 .d-link:hover {
   text-decoration: underline;
+}
+
+/* 统计胶囊：底色块让三项统计在元信息行里一眼可分（缓存=绿 / 用量=蓝 / 模型=中性描边） */
+.d-pill {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  flex-shrink: 0;
+  cursor: default;
+}
+.d-pill--cache {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+.d-pill--token {
+  background: rgba(64, 158, 255, 0.12);
+  color: var(--color-primary);
+}
+.d-pill--model {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color-light);
 }
 
 .d-raw {
