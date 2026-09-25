@@ -22,6 +22,7 @@ from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
 from src.modules.memory.simple_memory import SimpleMemory
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.repos import ViewerRepo
 from src.modules.storage.repos import ChatRepo, ViewerRepo
 from src.modules.storage.storage_ledger import StorageLedger
 from tests.modules.storage.helpers import make_room_message
@@ -238,13 +239,15 @@ async def test_fact_to_profile_to_planner_injection(stack) -> None:
     assert veteran_profile and "老王" in veteran_profile
     assert await memory.get_viewer_profile(platform="bilibili", user_id="u_new") is None
 
-    # Planner 注入：本批含老王 → 参考段出现画像段；无画像观众不占位
+    # Planner 注入：本批含老王 → 参考段出现"昵称: 画像"（昵称经 viewers 实时取，
+    # 与弹幕侧同源可关联）；无画像观众不占位
     planner = Planner(
         config={},
         llm_service=_make_llm('{"speech": "ok"}'),
         prompt_service=prompt_manager,
         room_state=room_state,
         memory=memory,
+        viewer_repo=ViewerRepo(store.manager),
     )
     batch = [
         make_room_message(live_session_id=1, content="又来了", user=_user("u_veteran", "老王")),
@@ -252,7 +255,8 @@ async def test_fact_to_profile_to_planner_injection(stack) -> None:
     ]
     section = await planner._collect_person_profiles(batch)
     assert "人物画像" not in section  # 段标题由 Assembler 渲染，此处只含正文
-    assert "老王" in section or "u_veteran" in section
+    assert "- 老王: " in section
+    assert "u_veteran" not in section  # 有昵称时不再显示 user_id
     assert "u_new" not in section and "新人" not in section
 
 

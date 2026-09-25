@@ -44,6 +44,7 @@ def instantiate_agent(
     chat_repo: Optional[Any] = None,
     sessions_repo: Optional[Any] = None,
     topic_repo: Optional[Any] = None,
+    viewer_repo: Optional[Any] = None,
     context_assembler_config: Optional[Any] = None,
     task_tracker: Optional[Any] = None,
 ) -> Optional[BaseAgent]:
@@ -95,6 +96,7 @@ def instantiate_agent(
             chat_repo=chat_repo,
             sessions_repo=sessions_repo,
             topic_repo=topic_repo,
+            viewer_repo=viewer_repo,
             context_assembler_config=context_assembler_config,
             speech_config=speech_config,
             tts_engine=tts_engine,

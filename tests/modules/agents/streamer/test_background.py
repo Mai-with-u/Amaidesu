@@ -265,8 +265,54 @@ class TestGenerateProfiles:
         assert await memory.get_viewer_profile(platform="bilibili", user_id="u1") is None
 
 
+class TestProfileMaterial:
+    """画像原料的结构化直读:付费汇总 + 最近明细 + 付费时身份快照。"""
+
+    @staticmethod
+    def _make_chat_repo() -> MagicMock:
+        """mock 三表明细读取(gifts/scs/guards 各 1 行,含身份快照列)。"""
+        chat_repo = MagicMock()
+        chat_repo.summarize_user_contributions = AsyncMock(
+            return_value={"gift_total_count": 2, "gift_total_amount": 2000, "sc_total_amount": 50_000, "sc_total_count": 1}
+        )
+        gift_row = {
+            "timestamp_ms": 100, "gift_name": "小星星", "quantity": 3,
+            "fans_medal_level": 21, "fans_medal_name": "粉丝团", "guard_level": 3,
+        }
+        sc_row = {"timestamp_ms": 200, "message": "加油", "fans_medal_level": 21, "fans_medal_name": "粉丝团", "guard_level": 0}
+        guard_row = {
+            "timestamp_ms": 300, "guard_level": 3, "guard_num": 1, "guard_unit": "月",
+            "fans_medal_level": 21, "fans_medal_name": "粉丝团",
+        }
+        chat_repo.list_user_gifts = AsyncMock(return_value=[gift_row])
+        chat_repo.list_user_super_chats = AsyncMock(return_value=[sc_row])
+        chat_repo.list_user_guards = AsyncMock(return_value=[guard_row])
+        return chat_repo
+
+    @pytest.mark.asyncio
+    async def test_payment_material_lines(self) -> None:
+        """原料行含付费汇总、三类明细与最近一次付费时的身份快照。"""
+        maintainer, _ = _make_maintainer(memory=MagicMock())
+        maintainer._chat_repo = self._make_chat_repo()
+
+        lines = await maintainer._collect_payment_material("u1")
+
+        joined = "\n".join(lines)
+        assert "累计付费约 52 元" in joined  # (2000 + 50000) 金瓜子 → 52 元
+        assert "送出礼物 小星星×3" in joined
+        assert "发送 SC「加油」" in joined
+        assert "开通舰长（1月）" in joined
+        assert "舰长" in joined and "21 级牌" in joined  # 身份快照
+
+    @pytest.mark.asyncio
+    async def test_payment_material_degrades_without_chat_repo(self) -> None:
+        """chat_repo 未注入 → 原料缺结构化行,不阻断画像生成。"""
+        maintainer, _ = _make_maintainer(memory=MagicMock())
+        assert await maintainer._collect_payment_material("u1") == []
+
+
 # ---------------------------------------------------------------------------
-# 提取开关（memory_policy.fact_extraction_enabled）
+# 提取开关(memory_policy.fact_extraction_enabled)
 # ---------------------------------------------------------------------------
 
 

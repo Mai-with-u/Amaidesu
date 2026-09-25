@@ -90,7 +90,9 @@ class GiftInfo(BaseModel):
     fans_medal_level: int = Field(default=0, ge=0, description="身份快照：粉丝勋章等级")
     fans_medal_name: str = Field(default="", description="身份快照：粉丝勋章名")
     msg_id: str = Field(default="", description="平台消息 ID")
-    raw_data: str = Field(default="", description="完整原始 JSON（兜底重放用）")
+    raw_data: str = Field(
+        default="", description="完整原始 JSON（存储兜底：付费事件不可复刻，解析修复后重放补数；事件消费方忽略）"
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -120,7 +122,7 @@ class SuperChatInfo(BaseModel):
         fans_medal_level: 身份快照——粉丝勋章等级
         fans_medal_name: 身份快照——粉丝勋章名
         message_id: 平台消息 ID
-        raw_data: 完整原始 JSON（兜底重放用）
+        raw_data: 完整原始 JSON（存储兜底字段：付费事件不可复刻，解析修复后重放补数；经 payload 从采集器运抵落库，事件消费方——Planner/展示——忽略)
     """
 
     total_price: int = Field(default=0, ge=0, description="SC 金额（平台最小虚拟货币单位，B 站金瓜子）")
@@ -131,7 +133,9 @@ class SuperChatInfo(BaseModel):
     fans_medal_level: int = Field(default=0, ge=0, description="身份快照：粉丝勋章等级")
     fans_medal_name: str = Field(default="", description="身份快照：粉丝勋章名")
     message_id: str = Field(default="", description="平台消息 ID")
-    raw_data: str = Field(default="", description="完整原始 JSON（兜底重放用）")
+    raw_data: str = Field(
+        default="", description="完整原始 JSON（存储兜底：付费事件不可复刻，解析修复后重放补数；事件消费方忽略）"
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -157,7 +161,7 @@ class GuardInfo(BaseModel):
         fans_medal_level: 身份快照——上舰时粉丝勋章等级
         fans_medal_name: 身份快照——粉丝勋章名
         msg_id: 平台消息 ID
-        raw_data: 完整原始 JSON（兜底重放用）
+        raw_data: 完整原始 JSON（存储兜底字段：付费事件不可复刻，解析修复后重放补数；经 payload 从采集器运抵落库，事件消费方——Planner/展示——忽略)
     """
 
     guard_level: int = Field(default=0, ge=0, description="舰队等级（1 总督 / 2 提督 / 3 舰长）")
@@ -168,7 +172,9 @@ class GuardInfo(BaseModel):
     fans_medal_level: int = Field(default=0, ge=0, description="身份快照：粉丝勋章等级")
     fans_medal_name: str = Field(default="", description="身份快照：粉丝勋章名")
     msg_id: str = Field(default="", description="平台消息 ID")
-    raw_data: str = Field(default="", description="完整原始 JSON（兜底重放用）")
+    raw_data: str = Field(
+        default="", description="完整原始 JSON（存储兜底：付费事件不可复刻，解析修复后重放补数；事件消费方忽略）"
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -213,7 +219,10 @@ class RoomMessagePayload(BasePayload):
             与主播发言行的 reply_to_message_id 构成"回复了哪条弹幕"的关联键。
         message_type: 消息类型（Literal 与存储 live_chat.message_type 一致；通配订阅 ``room.message.#`` 时按此分发）
         platform: 平台标识（身份键组成部分，与 user.id 组成 (platform, user_id)
-            复合键；平台名 bilibili/douyin 等 + 调试保留字 console/simulator）。
+            复合键；平台名 bilibili/douyin 等 + 调试保留字 console——
+            console 是无 simulated 标记的调试输入，靠 platform 隔离身份；
+            模拟器数据归 bilibili（platform=bilibili + simulated=1），
+            由 simulated 区分真假）。
             采集器作为装配期常量统一注入；空串表示未归属平台。
         user: 发送者信息
         content: 文本内容（弹幕/SC 文本；其他类型为空）

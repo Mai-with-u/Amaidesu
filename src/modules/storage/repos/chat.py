@@ -487,6 +487,23 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_user_guards(self, *, user_id: str, limit: int = 100) -> List[sqlite3.Row]:
+        """取观众的大航海开通/续费明细行（时间倒序，最新在前）。
+
+        "当前舰长"的派生消费方按最后记录 + 周期自行判断，本层只供明细。
+        """
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT * FROM guards WHERE user_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                        (user_id, limit),
+                    ).fetchall()
+                )
+
+        return await self._run_in_executor(_exec)
+
     async def list_user_super_chats(self, *, user_id: str, limit: int = 100) -> List[sqlite3.Row]:
         """取观众的 SC 明细行（时间倒序，最新在前）。"""
 
@@ -506,21 +523,25 @@ class ChatRepo(BaseRepo):
 
         金额单位 = 平台最小虚拟货币单位（B 站金瓜子），礼物 ``total_price``
         与 SC ``total_price`` 同单位直接 SUM；展示层 ÷1000 = 元。
+        **付费口径**：银瓜子（免费礼物）与空币种（调试数据）不计——与
+        viewers 付费统计同一过滤语义。
         """
 
         def _exec() -> Dict[str, float]:
             with self._manager.transaction() as conn:
                 gift_row = conn.execute(
-                    "SELECT COALESCE(SUM(quantity), 0) AS n FROM gifts WHERE user_id=?",
-                    (user_id,),
+                    "SELECT COALESCE(SUM(quantity), 0) AS n FROM gifts WHERE user_id=? AND currency NOT IN (?, ?)",
+                    (user_id, "bilibili_silver_coin", ""),
                 ).fetchone()
                 sc_row = conn.execute(
-                    "SELECT COALESCE(SUM(total_price), 0) AS amount, COUNT(*) AS n FROM super_chats WHERE user_id=?",
-                    (user_id,),
+                    "SELECT COALESCE(SUM(total_price), 0) AS amount, COUNT(*) AS n FROM super_chats"
+                    " WHERE user_id=? AND currency NOT IN (?, ?)",
+                    (user_id, "bilibili_silver_coin", ""),
                 ).fetchone()
                 gift_amount_row = conn.execute(
-                    "SELECT COALESCE(SUM(total_price), 0) AS amount FROM gifts WHERE user_id=?",
-                    (user_id,),
+                    "SELECT COALESCE(SUM(total_price), 0) AS amount FROM gifts"
+                    " WHERE user_id=? AND currency NOT IN (?, ?)",
+                    (user_id, "bilibili_silver_coin", ""),
                 ).fetchone()
                 return {
                     "gift_total_count": int(gift_row["n"]) if gift_row else 0,

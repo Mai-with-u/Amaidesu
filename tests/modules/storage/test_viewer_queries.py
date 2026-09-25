@@ -279,10 +279,10 @@ async def test_activity_bounds_no_details_returns_none(store: SQLiteDatabase) ->
 async def test_user_contributions_detail_and_summary(store: SQLiteDatabase) -> None:
     base = 1_700_000_000_000
     await store.chat.insert_gift(
-        live_session_id=1, timestamp_ms=base, platform=PLATFORM, user_id="u_c", user_name="贡献者", gift_name="小心心", quantity=2, total_price=2000
+        live_session_id=1, timestamp_ms=base, platform=PLATFORM, user_id="u_c", user_name="贡献者", gift_name="小心心", quantity=2, total_price=2000, currency="bilibili_gold_coin"
     )
     await store.chat.insert_gift(
-        live_session_id=1, timestamp_ms=base + 1_000, platform=PLATFORM, user_id="u_c", user_name="贡献者", gift_name="辣条", quantity=3, total_price=300
+        live_session_id=1, timestamp_ms=base + 1_000, platform=PLATFORM, user_id="u_c", user_name="贡献者", gift_name="辣条", quantity=3, total_price=300, currency="bilibili_gold_coin"
     )
     await store.chat.insert_super_chat(
         live_session_id=2, timestamp_ms=base + 2_000, platform=PLATFORM, user_id="u_c", user_name="贡献者", total_price=50_000, currency="bilibili_gold_coin", message="加油"

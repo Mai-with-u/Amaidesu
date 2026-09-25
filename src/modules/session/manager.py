@@ -34,6 +34,7 @@ from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 
 from src.modules.storage.repos import ChatRepo, SessionRepo
+from src.modules.types.currency import to_cny
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -305,7 +306,7 @@ class LiveSessionManager:
                     "user_name": row["user_name"],
                     "user_id": row["user_id"],
                     "content": row["message"],
-                    "amount": float(int(row["total_price"] or 0) / 1000),
+                    "amount": to_cny(int(row["total_price"] or 0), str(row["currency"] or "")) or 0.0,
                     "simulated": bool(row["simulated"]),
                 }
             )

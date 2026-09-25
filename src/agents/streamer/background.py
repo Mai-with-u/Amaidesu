@@ -34,6 +34,8 @@ from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
 from src.modules.time_utils import now_ms as _real_now_ms
+from src.modules.types.currency import to_cny
+from src.modules.types.guard_levels import GUARD_LEVEL_NAMES
 
 from .canonical import canonical_content
 from .room_state import RoomState
@@ -529,7 +531,12 @@ class BackgroundMaintainer:
                 self._logger.warning(f"画像生成失败（{candidate.platform}/{candidate.user_id}，跳过该人）: {exc}")
 
     async def _generate_single_profile(self, candidate: Any) -> None:
-        """为单个候选观众生成增量画像并写回（水位推进）。"""
+        """为单个候选观众生成增量画像并写回（水位推进）。
+
+        原料 = 旧画像 + 水位后新事实 + 结构化直读（付费汇总/最近付费明细/
+        付费时的身份快照）——身份快照（粉丝牌/舰队）是决策点名的高价值
+        画像信息（"21 级牌子老粉、当时是舰长"），从明细三表直读、不经提取。
+        """
         assert self._memory is not None  # noqa: S101 调用方已 guard
         platform, user_id = candidate.platform, candidate.user_id
         profile_row = await self._memory.get_viewer_profile_with_watermark(platform=platform, user_id=user_id)
@@ -541,15 +548,7 @@ class BackgroundMaintainer:
             return  # 无新原料不空转（候选查询与生成之间可能已被处理）
 
         material_lines = [f"- {fact.fact_text}" for fact in facts]
-        contribution = ""
-        if self._chat_repo is not None:
-            try:
-                summary = await self._chat_repo.summarize_user_contributions(user_id=user_id)
-                gold = int(summary.get("gift_total_amount", 0)) + int(summary.get("sc_total_amount", 0))
-                if gold > 0:
-                    contribution = f"- 付费记录：累计约 {gold / 1000:.0f} 元（含礼物与 SC）"
-            except Exception as exc:
-                self._logger.debug(f"付费汇总读取失败（画像原料缺该项）: {exc}")
+        structured_lines = await self._collect_payment_material(user_id)
 
         prompt_parts = [
             f"观众标识：{platform}/{user_id}",
@@ -557,8 +556,9 @@ class BackgroundMaintainer:
             "【新事实】",
             *material_lines,
         ]
-        if contribution:
-            prompt_parts.append(contribution)
+        if structured_lines:
+            prompt_parts.append("【付费与身份】")
+            prompt_parts.extend(structured_lines)
         prompt = "\n".join(prompt_parts)
 
         response = await self._llm_service.generate(
@@ -582,6 +582,80 @@ class BackgroundMaintainer:
             last_compressed_at_ms=_real_now_ms(),
         )
         self._logger.debug(f"画像已更新（{platform}/{user_id}）: {profile_text[:50]}")
+
+    # 画像原料：付费明细直读条数上限（控 prompt 体量；明细是补充，事实为主料）
+    _PAYMENT_MATERIAL_ROWS = 3
+
+    async def _collect_payment_material(self, user_id: str) -> List[str]:
+        """直读付费明细三表，产出画像原料行（汇总 / 最近明细 / 付费时身份快照）。
+
+        全部异常降级为缺行——结构化原料缺失只让画像少一分厚重，不阻断生成。
+        金额展示经币种换算常量（金瓜子 → 元）。
+        """
+        if self._chat_repo is None:
+            return []
+        lines: List[str] = []
+        try:
+            summary = await self._chat_repo.summarize_user_contributions(user_id=user_id)
+            gold = int(summary.get("gift_total_amount", 0)) + int(summary.get("sc_total_amount", 0))
+            yuan = to_cny(gold)
+            if yuan:
+                lines.append(f"- 累计付费约 {yuan:.0f} 元（礼物与 SC 标价合计）")
+        except Exception as exc:
+            self._logger.debug(f"付费汇总读取失败（画像原料缺该项）: {exc}")
+
+        # 三表明细合并取最近 N 条（时间倒序），并从最近一条取付费时的身份快照
+        entries: List[tuple[int, str, int, int, str]] = []  # (ts, 描述, fans_medal_level, guard_level, medal_name)
+        try:
+            for row in await self._chat_repo.list_user_gifts(user_id=user_id, limit=self._PAYMENT_MATERIAL_ROWS):
+                entries.append(
+                    (
+                        int(row["timestamp_ms"]),
+                        f"送出礼物 {row['gift_name']}×{row['quantity']}",
+                        int(row["fans_medal_level"] or 0),
+                        int(row["guard_level"] or 0),
+                        str(row["fans_medal_name"] or ""),
+                    )
+                )
+            for row in await self._chat_repo.list_user_super_chats(user_id=user_id, limit=self._PAYMENT_MATERIAL_ROWS):
+                entries.append(
+                    (
+                        int(row["timestamp_ms"]),
+                        f"发送 SC「{(row['message'] or '')[:30]}」",
+                        int(row["fans_medal_level"] or 0),
+                        int(row["guard_level"] or 0),
+                        str(row["fans_medal_name"] or ""),
+                    )
+                )
+            for row in await self._chat_repo.list_user_guards(user_id=user_id, limit=self._PAYMENT_MATERIAL_ROWS):
+                guard_name = GUARD_LEVEL_NAMES.get(int(row["guard_level"] or 0), "大航海")
+                entries.append(
+                    (
+                        int(row["timestamp_ms"]),
+                        f"开通{guard_name}（{row['guard_num']}{row['guard_unit']}）",
+                        int(row["fans_medal_level"] or 0),
+                        int(row["guard_level"] or 0),
+                        str(row["fans_medal_name"] or ""),
+                    )
+                )
+        except Exception as exc:
+            self._logger.debug(f"付费明细读取失败（画像原料缺明细行）: {exc}")
+            return lines
+
+        entries.sort(key=lambda item: item[0], reverse=True)
+        for entry in entries[: self._PAYMENT_MATERIAL_ROWS]:
+            lines.append(f"- 最近付费：{entry[1]}")
+        if entries:
+            latest = entries[0]
+            identity_parts: List[str] = []
+            if latest[3]:
+                identity_parts.append(GUARD_LEVEL_NAMES.get(latest[3], "舰队成员"))
+            if latest[2] or latest[4]:
+                medal = f"{latest[4]}{latest[2]} 级牌" if latest[4] else f"{latest[2]} 级牌"
+                identity_parts.append(medal)
+            if identity_parts:
+                lines.append(f"- 最近一次付费时的身份：{'、'.join(identity_parts)}")
+        return lines
 
     # ------------------------------------------------------------------
     # 提示词渲染（零变量模板缓存复用）

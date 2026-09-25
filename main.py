@@ -508,6 +508,7 @@ async def create_app_components(
             chat_repo=database.chat,
             sessions_repo=database.sessions,
             topic_repo=database.topics,
+            viewer_repo=database.viewers,
             supervisor_config=supervisor_config,
         )
 
@@ -586,6 +587,7 @@ async def create_app_components(
             chat_repo=database.chat,
             sessions_repo=database.sessions,
             topic_repo=database.topics,
+            viewer_repo=database.viewers,
             thinking_sink=thinking_hub,
             # 画像行为策略（[memory] 段）：Planner 注入上限与后台提取参数同源
             memory_policy=config.get("memory") if isinstance(config.get("memory"), dict) else {},
@@ -937,6 +939,7 @@ async def _register_agents_from_config(
     chat_repo: Optional[Any] = None,
     sessions_repo: Optional[Any] = None,
     topic_repo: Optional[Any] = None,
+    viewer_repo: Optional[Any] = None,
     thinking_sink: Optional[Any] = None,
     memory_policy: Optional[Dict[str, Any]] = None,
 ):
@@ -1000,6 +1003,7 @@ async def _register_agents_from_config(
             chat_repo=chat_repo,
             sessions_repo=sessions_repo,
             topic_repo=topic_repo,
+            viewer_repo=viewer_repo,
             # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
             context_assembler_config=None,
             task_tracker=task_tracker,

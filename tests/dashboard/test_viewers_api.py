@@ -208,6 +208,7 @@ def _seed_full_viewer() -> None:
             user_name="富观众",
             gift_name="小心心",
             quantity=2,
+            currency="bilibili_gold_coin",
         )
         await store.chat.insert_super_chat(
             live_session_id=2,

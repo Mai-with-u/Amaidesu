@@ -30,6 +30,7 @@ def _make_planner(
     registry: Any | None = None,
     reply_provider: Any | None = None,
     memory: Any | None = None,
+    viewer_repo: Any | None = None,
     context_enabled: bool = True,
     max_steps: int = 8,
     elapsed_live_provider: Any | None = None,
@@ -88,6 +89,7 @@ def _make_planner(
         room_state=RoomState(),
         tool_registry=reg,
         memory=memory,
+        viewer_repo=viewer_repo,
         context_enabled=context_enabled,
         reply_provider=prov,
         elapsed_live_provider=elapsed_live_provider,
@@ -351,14 +353,56 @@ async def test_context_game_narrative_in_reference_tail() -> None:
 
 @pytest.mark.asyncio
 async def test_person_profile_hits_in_context() -> None:
-    """本批发言人有画像 → 注入组装器（person_profile_section 路径）。"""
+    """本批发言人有画像 → 注入组装器；昵称从 viewers 实时取（画像段与弹幕对得上号）。"""
     memory = MagicMock()
     memory.get_viewer_profile = AsyncMock(return_value="老粉，喜欢工作台话题")
-    planner, llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory)
+    viewer_repo = MagicMock()
+    viewer_repo.get_viewer_stats = AsyncMock(return_value={"user_name": "老王"})
+    planner, llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory, viewer_repo=viewer_repo)
 
     await planner.plan([_msg("工作台")])
 
     memory.get_viewer_profile.assert_awaited()
+    viewer_repo.get_viewer_stats.assert_awaited()
+    # 参考段固定在消息序列尾（最后一条 user 消息），画像行与弹幕侧"老王: ..."同源可关联
+    reference = [m for m in llm.generate.await_args.args[0] if m["role"] == "user"][-1]
+    assert "- 老王: 老粉，喜欢工作台话题" in reference["content"]
+
+
+@pytest.mark.asyncio
+async def test_person_profile_no_placeholder_for_portraitless() -> None:
+    """无画像的候选不占位：前几人无画像时继续遍历，有画像者照常注入。"""
+    memory = MagicMock()
+
+    async def _profile(platform: str, user_id: str) -> str:
+        return "" if user_id == "u_无画像" else "有画像"
+
+    memory.get_viewer_profile = AsyncMock(side_effect=_profile)
+    planner, _llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory)
+
+    # batch 时间正序:最无画像者在最前(倒序遍历的最后),有画像者在后
+    portraitless = _msg("随便聊聊")
+    portraitless.user.id = "u_无画像"
+    section = await planner._collect_person_profiles([portraitless, _msg("有画像的人说话")])
+
+    assert "bilibili/u_观众" in section  # _msg 默认 user_id,有画像 → 注入
+
+
+@pytest.mark.asyncio
+async def test_person_profile_section_hard_cap() -> None:
+    """整段超硬帽时候选整条丢弃(不切半)。"""
+    memory = MagicMock()
+    memory.get_viewer_profile = AsyncMock(return_value="画" * 900)  # 单条截断到 500 字
+    planner, _llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory)
+
+    batch = [_msg(f"第{i}条") for i in range(5)]
+    for i, msg in enumerate(batch):
+        msg.user.id = f"u_{i}"
+    section = await planner._collect_person_profiles(batch)
+
+    assert section.startswith("（内部参考")
+    # 1600 字帽:header(~45) + 500 字条目最多 3 条,第 4 条装不下整条丢弃
+    assert section.count("- ") <= 3
 
 
 @pytest.mark.asyncio

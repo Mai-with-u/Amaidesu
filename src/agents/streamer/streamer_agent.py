@@ -141,6 +141,7 @@ class StreamerAgent(BaseAgent):
         chat_repo: Optional[Any] = None,
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
+        viewer_repo: Optional[Any] = None,
         memory: Any = None,
         memory_policy: Optional[Dict[str, Any]] = None,
         context_assembler_config: Optional[Any] = None,
@@ -164,6 +165,8 @@ class StreamerAgent(BaseAgent):
             chat_repo: 可选 ``ChatRepo``（live_chat 会话历史读取，reply tool 历史源）
             sessions_repo: 可选 ``SessionRepo``（live_sessions 实时状态，转交后台维护器）
             topic_repo: 可选 ``TopicRepo``（摘要/话题快照落地，转交后台维护器）
+            viewer_repo: 可选 ``ViewerRepo``（观众统计仓储）——Planner 画像注入
+                时经它实时取观众昵称；None 时注入行回退 platform/user_id
             context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
                 控制 Planner 组装路径开关与长记忆召回条数；None 时 Planner 走内置默认）
             memory: 可选观众事实/画像读写服务（``SimpleMemory`` 结构契约）。
@@ -218,6 +221,8 @@ class StreamerAgent(BaseAgent):
         self._thinking_sink = thinking_sink
         # 记忆后端（可选；None 时记忆相关功能整体降级）
         self._memory = memory
+        # 观众统计仓储（Planner 注入画像时实时取昵称用；None 时回退 platform/user_id）
+        self._viewer_repo = viewer_repo
         # 画像行为策略（[memory] 段；Planner 注入上限与后台提取参数同源）
         self._memory_policy = memory_policy if isinstance(memory_policy, dict) else {}
         # 历史窗口滞回状态：窗口最旧一条的 message_id + 所属场次主键
@@ -255,6 +260,7 @@ class StreamerAgent(BaseAgent):
             room_state=self._room_state,
             tool_registry=tool_registry,
             memory=memory,
+            viewer_repo=viewer_repo,
             profile_max=int(self._memory_policy.get("profile_injection_max", 3) or 3),
             context_enabled=bool(_context_enabled),
             behavior_style=_behavior_style,

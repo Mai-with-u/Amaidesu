@@ -23,8 +23,10 @@
   格式数据（platform=bilibili + simulated=1），过滤假数据靠 simulated
 - **观众身份键 = ``(platform, user_id)`` 复合键**（观众画像/统计/明细表统一）。
   platform 是本项目自定的稳定键：平台名（``bilibili`` / ``douyin`` / …）+
-  调试保留字（``console`` / ``simulator``），由采集器作为装配期常量注入。
-  不同平台账号视为不同的人，付费/统计天然按平台隔离，不跨平台聚合
+  调试保留字 ``console``（控制台输入无 simulated 标记，靠 platform 隔离
+  身份；模拟器数据归 bilibili，由 simulated 区分真假），由采集器作为
+  装配期常量注入。不同平台账号视为不同的人，付费/统计天然按平台隔离，
+  不跨平台聚合
 - 付费明细三表（gifts / super_chats / guards）金额单位 = **平台最小虚拟
   货币单位**（B 站金瓜子，1000 金瓜子 = 1 元），取值口径 = 标价（实付另记
   ``paid_price``）；``currency`` 带平台前缀（``bilibili_gold_coin`` /

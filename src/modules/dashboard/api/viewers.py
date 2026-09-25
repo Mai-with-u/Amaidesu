@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.types.currency import to_cny
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -277,7 +278,7 @@ async def get_viewer(
         first_seen_ms=bounds[0] if bounds else None,
         gift_total_count=int(summary.get("gift_total_count", 0)),
         gift_total_amount=int(summary.get("gift_total_amount", 0)),
-        sc_total_amount=int(summary.get("sc_total_amount", 0)) / 1000,
+        sc_total_amount=to_cny(int(summary.get("sc_total_amount", 0))) or 0.0,
         sc_total_count=int(summary.get("sc_total_count", 0)),
         session_count=len(sessions),
     )
@@ -337,7 +338,7 @@ async def viewer_contributions(
     sc_rows = await chat_repo.list_user_super_chats(user_id=user_id, limit=limit)
     return ContributionsResponse(
         gift_total_count=int(summary.get("gift_total_count", 0)),
-        sc_total_amount=int(summary.get("sc_total_amount", 0)) / 1000,
+        sc_total_amount=to_cny(int(summary.get("sc_total_amount", 0))) or 0.0,
         sc_total_count=int(summary.get("sc_total_count", 0)),
         gifts=[
             GiftItem(

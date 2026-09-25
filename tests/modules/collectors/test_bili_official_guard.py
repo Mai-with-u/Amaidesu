@@ -107,17 +107,15 @@ async def test_non_guard_types_not_marked_guard() -> None:
     ]
 
 
-async def test_malformed_guard_message_degrades_gracefully() -> None:
-    """畸形上舰消息：缺 data 字段 → 不抛异常，优雅降级（空值兜底构造载荷）"""
+async def test_malformed_guard_message_dropped_without_identity() -> None:
+    """畸形上舰消息：缺 data 字段 → open_id 缺失，告警丢弃不 emit（防多用户退化混淆）"""
     collector, bus = _make_collector()
     queue: Any = _FakeQueue()
 
-    # data 缺用户字段：GuardMessage.from_dict 有默认值，构造兜底载荷，不丢事件语义
+    # data 缺用户字段：身份键缺失的消息不构造兜底载荷——空 user_id 会让
+    # 多个无 id 用户在存储层退化成同一行，宁缺毋滥
     await collector._handle_message_from_bili({"cmd": GUARD_CMD, "data": {}}, queue)
-    assert len(bus.events) == 1
-    _, payload = bus.events[0]
-    assert payload.message_type == "guard"
-    assert payload.user.name == "unknown"
+    assert bus.events == []
 
 
 async def test_malformed_guard_payload_type_error_swallowed() -> None:

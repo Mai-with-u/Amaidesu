@@ -275,8 +275,15 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         采集器不感知"当前是哪一场"；平台归属（platform）是本采集器的
         装配期常量，逐条盖章。
         """
-        user_id = str(getattr(bili_msg, "open_id", None) or "unknown")
+        user_id = str(getattr(bili_msg, "open_id", None) or "")
         user_name = str(getattr(bili_msg, "uname", None) or "unknown")
+        if not user_id:
+            # 身份键缺失即告警并丢弃：落库列 user_id NOT NULL，兜底值会让
+            # 多个无 id 用户退化成同一行、身份互相混淆——宁缺毋滥
+            self.logger.warning(
+                f"B 站消息缺失 open_id，丢弃（防多用户退化混淆）: cmd={bili_msg.cmd}, uname={user_name!r}"
+            )
+            return None
         timestamp_ms = int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms()
 
         if isinstance(bili_msg, DanmakuMessage):

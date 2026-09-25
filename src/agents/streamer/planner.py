@@ -59,6 +59,10 @@ _DEFAULT_PROFILE_MAX: int = 3
 #: 单条画像文本注入截断长度（控制 prompt 体积；画像生成长度上限 400 字之上兜一层）。
 _PROFILE_TEXT_MAX_CHARS: int = 500
 
+#: 人物画像整段字符帽（决策 ~1.6K）：超帽的候选整条丢弃，防止画像段挤占
+#: 参考段其他内容与对话预算。
+_PROFILE_SECTION_MAX_CHARS: int = 1600
+
 #: 单条工具观察作为观察返回的最大字符数（超长观察按体量丢弃并自证，控上下文体积）。
 #: 6144 的来历：完整游戏状态快照（含地图缩略与诊断段）实测上万字符，2000 会把
 #: 排在靠后的稀缺字段整段切掉；抬到能装下完整快照后，正常观察不再被截断，
@@ -186,6 +190,7 @@ class Planner:
         room_state: RoomState,
         tool_registry: Any = None,
         memory: Any = None,
+        viewer_repo: Any = None,
         profile_max: int = _DEFAULT_PROFILE_MAX,
         context_enabled: bool = True,
         behavior_style: str = "",
@@ -202,6 +207,8 @@ class Planner:
             room_state: 直播间态势规则层实例。
             tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
             memory: 观众画像/事实读写服务（鸭子类型 ``SimpleMemory``）；None 时无画像注入。
+            viewer_repo: ``ViewerRepo``（观众统计仓储）——画像注入时经它实时取
+                昵称（昵称会漂移不进画像文本）；None 时注入行回退 platform/user_id。
             profile_max: 每轮注入 prompt 的画像人数上限。
             context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
             behavior_style: 人设行为准则（决策侧）。
@@ -231,6 +238,7 @@ class Planner:
         self._room_state = room_state
         self._tool_registry = tool_registry
         self._memory = memory
+        self._viewer_repo = viewer_repo
         self._profile_max = max(1, int(profile_max))
         self._context_enabled = context_enabled
         self._behavior_style: str = behavior_style or ""
@@ -691,8 +699,13 @@ class Planner:
         """收集本批发言人的画像并渲染为参考段文本（有画像才注入）。
 
         - 候选 = 本批弹幕发言人（sender 去重，按发言时间倒序）
-        - 逐人查 ``viewer_profiles``：无画像的跳过（不占位——主播只"认出"
-          有印象的观众），有画像的进入注入清单，截断到 ``profile_max`` 人
+        - 逐人查 ``viewer_profiles``：无画像的跳过且**不占位**——候选遍历
+          不会因前几人无画像而提前停，有画像的凑满 ``profile_max`` 人才停
+        - 昵称从 ``viewers`` 实时取（决策：昵称会漂移不进画像文本，注入时
+          才解析），让画像段与本批弹幕的"昵称: 内容"对得上号；无统计行
+          回退 platform/user_id
+        - 整段硬帽 ``_PROFILE_SECTION_MAX_CHARS``：超帽的候选整条丢弃
+          （只整段丢弃、不切半，与历史截断同立场）
         - 无 memory / 无画像 / 异常 → 空串；Assembler 对空段整段省略，
           不阻断决策
         """
@@ -713,14 +726,15 @@ class Planner:
                 continue
             seen.add(key)
             candidates.append(key)
-            if len(candidates) >= self._profile_max * 2:
-                break  # 候选多时限制查画像次数（超注入上限一倍即停）
 
         if not candidates:
             return ""
 
-        blocks: List[str] = []
-        for platform, user_id in candidates[: self._profile_max]:
+        lines: List[str] = []
+        section_chars = 0
+        for platform, user_id in candidates:
+            if len(lines) >= self._profile_max:
+                break  # 有画像者凑满即停
             try:
                 profile_text = await self._memory.get_viewer_profile(platform=platform, user_id=user_id)
             except Exception as exc:
@@ -731,9 +745,25 @@ class Planner:
             text = profile_text.replace("\n", " ").strip()
             if len(text) > _PROFILE_TEXT_MAX_CHARS:
                 text = text[:_PROFILE_TEXT_MAX_CHARS].rstrip() + "…"
-            blocks.append(f"- {platform}/{user_id}: {text}")
+            display = await self._viewer_nickname(platform, user_id) or f"{platform}/{user_id}"
+            line = f"- {display}: {text}"
+            if section_chars + len(line) > _PROFILE_SECTION_MAX_CHARS:
+                break  # 整段硬帽：装不下的候选整条丢弃
+            lines.append(line)
+            section_chars += len(line)
 
-        if not blocks:
+        if not lines:
             return ""
         header = "（内部参考，帮助识别老观众；不要逐字复述，与当前对话冲突时以当前对话为准）"
-        return "\n".join([header, *blocks])
+        return "\n".join([header, *lines])
+
+    async def _viewer_nickname(self, platform: str, user_id: str) -> str:
+        """从 viewers 统计表实时取观众昵称；仓储未注入或查询失败回退空串。"""
+        if self._viewer_repo is None:
+            return ""
+        try:
+            row = await self._viewer_repo.get_viewer_stats(platform=platform, user_id=user_id)
+            return str(row["user_name"]) if row is not None else ""
+        except Exception as exc:
+            self.logger.warning(f"观众昵称查询失败（{platform}/{user_id}）: {exc}")
+            return ""
