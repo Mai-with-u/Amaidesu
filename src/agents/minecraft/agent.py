@@ -33,7 +33,7 @@ from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.agents.minecraft.builder.controller import MinecraftBuilderController
 from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
 from src.agents.minecraft.design_progress import MachineDesignProgress
-from src.agents.minecraft.observations import MinecraftObservations, json_text
+from src.agents.minecraft.observations import MinecraftObservations, json_text, repeated_read
 from src.agents.minecraft.plan_facts import MinecraftPlanFacts
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.task_facts import decision_facts, task_decision
@@ -635,6 +635,9 @@ class MinecraftAgent(BaseAgent):
             # 步骤间挂起（平台 pause）
             await self._paused.wait()
 
+            # 新指令和真实任务通知提供了新事实，恢复后允许模型重新判断，不继承上一轮的停滞提醒。
+            if self._message_queue:
+                action_reminded = False
             # --- 消息 flush（执行中追加的委派指令 / 任务通知在下一次推理前吸收）---
             while self._message_queue:
                 queued = self._message_queue.popleft()
@@ -723,22 +726,12 @@ class MinecraftAgent(BaseAgent):
                 actionable = self._actionable_task_ids()
                 if actionable or not pending and self._unfinished_todos():
                     # 已有设计等开工、任务等决策或仍有未派发待办时，等通知不会推进；先给模型一次纠正机会。
-                    if not action_reminded:
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": "[任务尚需行动] 仍有未完成待办或需要处理的后台任务："
-                                + ", ".join(sorted(actionable))
-                                + "。请调用工具推进下一阶段或处理决策；设计完成不等于已施工。确实无法推进时上报 escalation，不能只说完成或继续等待。",
-                            }
-                        )
-                        action_reminded = True
-                        continue
-                    self._task_suspended = True
-                    await self.emit_attention_required(
-                        "模型未推进需要行动的任务；已保留原目标、待办和任务编号，等待继续指令"
-                    )
-                    return
+                    if not await self._continue_after_no_progress(
+                        messages, action_reminded, "仍有未完成待办或需要处理的后台任务"
+                    ):
+                        return
+                    action_reminded = True
+                    continue
                 if pending > 0:
                     # 情形 4：有未决 handoff——静默让出回合，等 handoff 唤醒（零空耗）
                     self._logger.info(
@@ -756,7 +749,7 @@ class MinecraftAgent(BaseAgent):
                 return
 
             # --- 工具执行与观察作为观察返回 ---
-            action_reminded = False
+            only_repeated_reads = True
             for call in tool_calls:
                 await self._paused.wait()
                 # 扁平 ToolCall：name/arguments(id 关联观察回填)；arguments 已是解析后的 dict
@@ -774,7 +767,11 @@ class MinecraftAgent(BaseAgent):
                     if call.name == "minecraft_observation"
                     else self._observations.present(call.name, arguments, observation)
                 )
+                if call.name == "minecraft_observation" and "same_request_and_result" not in shown:
+                    # 错误路径也属于一次读取结果；反复读取同一个不存在的字段不能绕过无进展判断。
+                    shown = self._observations.mark_read({**shown, "read_request": deepcopy(arguments)})
                 self._remember_result(call.name, arguments, observation, shown)
+                only_repeated_reads &= repeated_read(call.name, arguments, shown)
                 messages.append(
                     {
                         "role": "tool",
@@ -799,6 +796,41 @@ class MinecraftAgent(BaseAgent):
                 # 工具结果已完整回填；等待期间不再调用模型，真实通知保留原目标并唤醒下一批。
                 return
             self._wait_requested = False
+            # 工具被调用不等于游戏目标得到推进；整轮只重读旧证据时沿用同一次提醒，而不是重新计为行动。
+            if only_repeated_reads and not self._message_queue:
+                if not await self._continue_after_no_progress(
+                    messages, action_reminded, "本轮重复读取已有资料或未变化的任务回执，没有取得新证据"
+                ):
+                    return
+                action_reminded = True
+            elif not only_repeated_reads:
+                action_reminded = False
+
+    async def _continue_after_no_progress(self, messages: List[Dict[str, Any]], reminded: bool, reason: str) -> bool:
+        """先带着当前决策提示模型推进；仍空转时保留任务并让出，避免反复读回执和生成摘要。"""
+        if reminded:
+            self._task_suspended = True
+            self._logger.warning(f"Minecraft 任务无新进展：{reason}")
+            await self.emit_attention_required(
+                f"模型未推进需要行动的任务：{reason}；已保留原目标、待办和任务编号，等待继续指令"
+            )
+            return False
+        pending = [
+            task
+            for task in self._current_task_context()["background_tasks"]
+            if task.get("status") == "waiting_for_decision"
+        ]
+        messages.append(
+            {
+                "role": "user",
+                "content": "[任务尚需行动] "
+                + reason
+                + "。请使用已有事实推进下一阶段或回答当前决策；只有新的具体缺口才补查。"
+                "确实无法推进时上报 escalation，不能以重复读取代替处理。\n"
+                + json_text({"pending_tasks": pending, "ready_plans": self._plan_facts.pending()}),
+            }
+        )
+        return True
 
     def _request_wait(self) -> Dict[str, Any]:
         """只允许对已有后台依赖让出执行，待开工和待决策不能靠等待推进。"""

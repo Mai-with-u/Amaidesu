@@ -510,7 +510,11 @@ async def test_react_pause_suspends_loop() -> None:
         nonlocal call_count
         call_count += 1
         await asyncio.sleep(0.005)  # 模拟推理等待，让平台暂停命令能在下一次游戏行动前到达。
-        return _resp(tool_calls=[_tool_call("minecraft_todo", {"action": "read"})])
+        return _resp(tool_calls=[_tool_call("maicraft_perceive", {"view": "situation"})])
+
+    async def observe(name: str, arguments: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
+        """持续变化的建材数量让任务保持推进，暂停测试不靠反复读同一待办制造空转。"""
+        return {"inventory": {"minecraft:stone": call_count}}
 
     llm = MagicMock()
     llm.generate = fake
@@ -522,6 +526,7 @@ async def test_react_pause_suspends_loop() -> None:
         llm_manager=llm,
         event_bus=event_bus,
     )
+    agent._execute_tool = AsyncMock(side_effect=observe)
     await agent.start()
     await agent.send_prompt("暂停任务")
 

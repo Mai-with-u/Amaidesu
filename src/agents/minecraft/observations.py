@@ -15,6 +15,19 @@ def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
+def repeated_read(tool: str, arguments: dict[str, Any], result: dict[str, Any]) -> bool:
+    """只读工具再次返回相同证据不算推进；新页面、变化后的现场和实际操作仍由原流程处理。"""
+    reading = (
+        tool in {"minecraft_observation", "maicraft_perceive"}
+        or (tool == "maicraft_task" and arguments.get("action") == "get")
+        or (tool in {"minecraft_todo", "minecraft_notebook"} and arguments.get("action") == "read")
+    )
+    return reading and (
+        result.get("same_request_and_result") is True
+        or result.get("_observation", {}).get("same_request_and_result") is True
+    )
+
+
 class MinecraftObservations:
     """只保存本玩家已经取得的证据，重复查询仍真实执行，旧观察不会冒充最新世界状态。"""
 
@@ -23,6 +36,7 @@ class MinecraftObservations:
         self._sizes: dict[str, int] = {}
         self._scope = uuid.uuid4().hex[:8]
         self.repeated_results = 0
+        self._read_fingerprints: set[str] = set()
 
     def present(self, tool: str, arguments: dict[str, Any], value: dict[str, Any]) -> dict[str, Any]:
         """完整保存并返回回执；相同请求与结果复用引用并标明重复。"""
@@ -58,7 +72,7 @@ class MinecraftObservations:
         ref = str(arguments.get("ref") or "")
         query = str(arguments.get("query") or "")
         if not ref:
-            return {"ok": True, "observations": self.index(query), "scope": "current_task_history"}
+            return self.mark_read({"ok": True, "observations": self.index(query), "scope": "current_task_history"})
         entry = self._entries.get(ref)
         if entry is None:
             raise ValueError("观察引用已过期或不属于当前任务，请查询索引或重新取得实际资料")
@@ -86,23 +100,38 @@ class MinecraftObservations:
         if query:
             found = text.find(query, offset)
             if found < 0:
-                return {"ok": True, "ref": ref, "path": path, "found": False, "total_chars": len(text)}
+                return self.mark_read(
+                    {"ok": True, "ref": ref, "path": path, "query": query, "found": False, "total_chars": len(text)}
+                )
             offset = max(offset, found - (200 if limit is None else min(200, limit // 4)))
         end = len(text) if limit is None else min(len(text), offset + limit)
-        return {
-            "ok": True,
-            "ref": ref,
-            "path": path,
-            "source_tool": entry["tool"],
-            "source": source,
-            "observed_at_ms": entry["observed_at_ms"],
-            "text": text[offset:end],
-            "offset": offset,
-            "next_offset": end if end < len(text) else None,
-            "total_chars": len(text),
-            "complete": offset == 0 and end == len(text),
-            "historical": True,
-        }
+        return self.mark_read(
+            {
+                "ok": True,
+                "ref": ref,
+                "path": path,
+                "source_tool": entry["tool"],
+                "source": source,
+                "observed_at_ms": entry["observed_at_ms"],
+                "text": text[offset:end],
+                "offset": offset,
+                "next_offset": end if end < len(text) else None,
+                "total_chars": len(text),
+                "complete": offset == 0 and end == len(text),
+                "historical": True,
+            }
+        )
+
+    def mark_read(self, result: dict[str, Any]) -> dict[str, Any]:
+        """记住真正读到的原文片段；换分页参数却读到同一段，或刷新时间戳，都不会制造新证据。"""
+        evidence = {key: value for key, value in result.items() if key != "observed_at_ms"}
+        signature = hashlib.sha256(json_text(evidence).encode()).hexdigest()
+        repeated = signature in self._read_fingerprints
+        self._read_fingerprints.add(signature)
+        result["same_request_and_result"] = repeated
+        if repeated:
+            result["hint"] = "这段历史原文已经读过；请用已有事实推进，只有新的具体缺口才需要继续补读。"
+        return result
 
     def index(self, query: str = "") -> list[dict[str, Any]]:
         """列出本任务全部匹配证据及完整请求，保留原文引用供整理历史后查阅。"""
