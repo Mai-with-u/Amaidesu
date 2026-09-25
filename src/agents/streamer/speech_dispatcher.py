@@ -248,6 +248,7 @@ class SpeechDispatcher:
                 target_user_id,
                 reply_to_message_id=reply_to_message_id,
                 round_id=round_id,
+                llm_request_id=reply_payload.get("llm_request_id"),
             )
             self._schedule_subtitle_show(cleaned_speech, utterance_id)
             if self._tts_enabled and self._utterance_queue is not None:
@@ -272,6 +273,7 @@ class SpeechDispatcher:
         target_user_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
         round_id: str = "",
+        llm_request_id: Optional[str] = None,
     ) -> None:
         """发布 ``streamer.speech`` 业务事件（同步 await 发出，保证先于轮末决策记录与空闲状态；失败不反噬决策循环）。"""
         event_bus = self._event_bus
@@ -285,6 +287,7 @@ class SpeechDispatcher:
             emotion_intensity=emotion_intensity,
             target_user_id=target_user_id,
             reply_to_message_id=reply_to_message_id,
+            llm_request_id=llm_request_id,
         )
 
         try:

@@ -91,6 +91,10 @@ class StreamerSpeechPayload(BasePayload):
         default=None,
         description="这条发言回复的观众 user_id（主动发言/无特定对象时为 None）",
     )
+    llm_request_id: Optional[str] = Field(
+        default=None,
+        description="本次表达生成的 Replyer LLM 请求历史 ID（完整请求指针）；未进入生成阶段或上游未上报为 None",
+    )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
         description="事件发布时间戳（Unix 毫秒）",

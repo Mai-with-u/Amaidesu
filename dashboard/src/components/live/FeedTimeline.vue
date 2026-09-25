@@ -249,7 +249,9 @@
           </details>
         </div>
 
-        <!-- 主播发言（streamer.speech）：表达语义 + Replyer 思考回看 -->
+        <!-- 主播发言（streamer.speech）：表达语义 + Replyer 思考回看。
+             统计胶囊取 Replyer 表达请求（决策卡上是 Planner 请求，二者互补）：
+             缓存/Token/模型懒取 + 完整请求链接；无指针的旧事件不渲染该行 -->
         <div v-else-if="entry.kind === 'speech'" class="act is-speech">
           <div class="act-head">
             <span class="act-kind act-kind--speech">主播</span>
@@ -265,6 +267,36 @@
             <span v-else class="reply-quote-fallback">回复了一条弹幕</span>
           </div>
           <p class="act-text">{{ entry.text }}</p>
+          <div v-if="entry.llmRequestId" class="d-meta">
+            <span
+              v-if="cacheLabelOf(entry)"
+              class="d-pill d-pill--cache"
+              :title="cacheTitleOf(entry)"
+            >
+              {{ cacheLabelOf(entry) }}
+            </span>
+            <span
+              v-if="tokensLabelOf(entry)"
+              class="d-pill d-pill--token"
+              :title="tokensTitleOf(entry)"
+            >
+              Token {{ tokensLabelOf(entry) }}
+            </span>
+            <span
+              v-if="modelNameOf(entry)"
+              class="d-pill d-pill--model"
+              :title="modelNameOf(entry)"
+            >
+              {{ modelNameOf(entry) }}
+            </span>
+            <a
+              class="d-link"
+              :href="`/llm/history?request_id=${encodeURIComponent(entry.llmRequestId)}`"
+              @click.stop
+            >
+              完整请求 ↗
+            </a>
+          </div>
         </div>
 
         <!-- 游戏 Agent 上报（game.* / 走 toGameEntry）：绿色系左边线，act 变体 -->
@@ -399,10 +431,11 @@ function rowAlignClass(entry: ShowEntry): string {
 // 1s tick：让相对时间标签（"刚刚 / 12s 前"）每秒刷新一次；独立维护不依赖父组件
 const nowMs = useNowTick();
 
-/** 决策卡 token 统计徽标（llm_request_id → 输入/输出/缓存命中）。
- * planner.decision 只带请求指针不带 token 数，详情按 id 懒取。缓存口径取
- * hit/prompt_tokens 而非聚合的 hit/(hit+miss)：OpenAI 风格只上报 cached_tokens
- * 不上报 miss，后者会算出假 100%；命中为 0（含上游未上报）不渲染缓存徽标。 */
+/** 决策/发言卡 LLM 统计徽标（llm_request_id → 输入/输出/缓存命中）。
+ * planner.decision 只带请求指针不带 token 数，详情按 id 懒取；speech 带的是
+ * Replyer 表达请求指针，同一套懒取。缓存口径取 hit/prompt_tokens 而非聚合的
+ * hit/(hit+miss)：OpenAI 风格只上报 cached_tokens 不上报 miss，后者会算出假
+ * 100%；命中为 0（含上游未上报）不渲染缓存徽标。 */
 interface RoundTokenStats {
   promptTokens: number;
   completionTokens: number;
@@ -445,8 +478,12 @@ watch(
     const visible = new Set<string>();
     for (const entry of entries) {
       // 真实流程里 decision 轮末会合并进先到的 verdict 卡（llmRequestId 一并回填），
-      // 独立 decision 卡只出现在无裁决的失败/静默轮，两种都要取数
-      if ((entry.kind === 'decision' || entry.kind === 'verdict') && entry.llmRequestId) {
+      // 独立 decision 卡只出现在无裁决的失败/静默轮，两种都要取数；
+      // speech 卡带的是 Replyer 表达请求的指针（与决策卡的 Planner 请求互补），同样取数
+      if (
+        (entry.kind === 'decision' || entry.kind === 'verdict' || entry.kind === 'speech') &&
+        entry.llmRequestId
+      ) {
         visible.add(entry.llmRequestId);
       }
     }

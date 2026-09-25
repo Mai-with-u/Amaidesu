@@ -196,6 +196,9 @@ class Replyer:
                 "reply_guidance": plan.reply_guidance,
                 "confidence": plan.confidence,
             },
+            # 表达生成的 LLM 请求历史指针（随 reply_payload 一路透传到
+            # streamer.speech 事件，观察端回应卡据此懒取 Token/缓存统计）
+            "llm_request_id": getattr(response, "request_id", None) or None,
         }
 
         # ⑦ 敏感词净化（净化职责归 Replyer 表达引擎）

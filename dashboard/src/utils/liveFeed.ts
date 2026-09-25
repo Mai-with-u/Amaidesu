@@ -367,7 +367,9 @@ function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEn
   });
 }
 
-/** 主播发言：streamer.speech（StreamerSpeechPayload） */
+/** 主播发言：streamer.speech（StreamerSpeechPayload）。
+ * llm_request_id 指向表达生成的 Replyer 请求（与决策卡上的 Planner 请求互补），
+ * 回应卡据此懒取 Token/缓存/模型统计 */
 function fromSpeech(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
   const emotion = str(data.emotion);
   return makeEntry({
@@ -380,6 +382,7 @@ function fromSpeech(event: FeedEvent, data: Record<string, unknown>): ShowEntry 
     speak: true,
     replyTo: str(data.reply_to_message_id),
     roundId: str(data.round_id),
+    llmRequestId: str(data.llm_request_id),
   });
 }
 
