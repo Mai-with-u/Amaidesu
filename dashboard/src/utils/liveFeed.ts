@@ -191,17 +191,19 @@ function initialOf(actor: string): string {
 
 /** 时间线条目归到三类 Agent 组之一：'streamer' 主播管线 / 'game' 游戏 Agent / 'room' 房间事件。
  *  工具条目按 source 归类：主播决策→streamer，游戏 Agent→game，其他有值 source 按前缀 minecraft 判 game 否则 streamer；
- *  speech/decision/verdict/stage/thinking→streamer；game→game；其余 kind→room */
+ *  speech/decision/verdict/stage→streamer；thinking 按来源归类（minecraft 段→game，主播段→streamer）；其余 kind→room */
 export type AgentGroup = 'streamer' | 'game' | 'room';
 
 export function agentGroupOf(entry: ShowEntry): AgentGroup {
   if (entry.kind === 'game') return 'game';
+  if (entry.kind === 'thinking') {
+    return entry.source === '游戏 Agent' ? 'game' : 'streamer';
+  }
   if (
     entry.kind === 'speech' ||
     entry.kind === 'decision' ||
     entry.kind === 'verdict' ||
-    entry.kind === 'stage' ||
-    entry.kind === 'thinking'
+    entry.kind === 'stage'
   ) {
     return 'streamer';
   }
@@ -655,6 +657,8 @@ export function buildThinkingRow(seg: ThinkingSegmentInput): ShowEntry {
     actor: label,
     text: seg.text,
     roundId: seg.roundId,
+    // minecraft 段标注来源供 agentGroupOf 归入游戏 Agent 组（时间线过滤的依据）
+    source: seg.phase === 'minecraft' ? '游戏 Agent' : '',
   });
 }
 

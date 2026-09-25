@@ -353,9 +353,14 @@ interface RundownBanner {
 // 的时间线行与事件条目按时间归并（不进 events store、不落库、不回看）。
 
 const THINKING_ROUNDS_MAX = 20;
-/** 每决策轮的思考聚合：planner 按步骤分段（与工具卡时间交织），replyer 独立一段 */
+/** 每决策轮的思考聚合：planner 与 minecraft 共用按步分段（与工具卡时间交织），
+ * 段携带自身 phase——两边步骤号各自从头计数，只按步号查找会互相踩段；replyer 独立一段 */
+interface ThinkingStepSeg extends ThinkingStep {
+  /** 段归属：planner（主播 ReAct）/ minecraft（游戏 Agent ReAct） */
+  phase: string;
+}
 interface ThinkingRound {
-  steps: ThinkingStep[];
+  steps: ThinkingStepSeg[];
   replyerText: string;
   /** replyer 段首增量到达时刻（Unix 毫秒；0 = 尚未开始） */
   replyerTsMs: number;
@@ -405,11 +410,11 @@ function applyThinkingDeltas(batch: Array<{ delta: ThinkingDelta; tsMs: number }
       if (!round.replyerTsMs) round.replyerTsMs = tsMs;
       round.replyerText += delta.text_delta;
     } else {
-      // planner 与 minecraft 共享 step-based 累积：同 Map 同段索引；
-      // 行标签按 phase 区分（minecraft 段当前不存在，预留）
-      let seg = round.steps.find(s => s.step === delta.step);
+      // planner 与 minecraft 各按 (phase, step) 分段累积：步骤号两边独立计数，
+      // 段归属（含时间线分组与行标签）随 phase 一路传递
+      let seg = round.steps.find(s => s.phase === delta.phase && s.step === delta.step);
       if (!seg) {
-        seg = reactive({ step: delta.step, text: '', tsMs });
+        seg = reactive({ phase: delta.phase, step: delta.step, text: '', tsMs });
         round.steps.push(seg);
       }
       seg.text += delta.text_delta;
@@ -427,7 +432,7 @@ const liveThinkingRows = computed<ShowEntry[]>(() => {
       if (!step.text || step.tsMs <= watermark) continue;
       segments.push({
         roundId,
-        phase: 'planner',
+        phase: step.phase,
         step: step.step,
         tsMs: step.tsMs,
         text: step.text,

@@ -268,7 +268,7 @@ export interface WebSocketMessage {
 /** 思考流单条增量（WS kind="stream" / type="thinking.delta" 的 data.deltas 元素） */
 export interface ThinkingDelta {
   round_id: string;
-  /** "planner" | "replyer" */
+  /** "planner"（主播 ReAct）| "replyer"（表达生成）| "minecraft"（游戏 Agent ReAct） */
   phase: string;
   step: number;
   seq: number;
