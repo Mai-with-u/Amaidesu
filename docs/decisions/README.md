@@ -54,3 +54,5 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-028：avatar 配置迁出 tools 域——第七配置文件与皮套配置结构](028-avatar-domain-config-graduation.md)
 - [ADR-029：观众身份复合键与平台虚拟货币口径（platform+user_id、金瓜子标价口径、raw 可复现性原则）](029-viewer-identity-key-and-currency-unit.md)
 - [ADR-030：观众画像系统与记忆层重构（事实提取/增量压缩/有画像才注入/私有表机制废除）](030-viewer-profile-system.md)
+- [ADR-031：组件间通信通道指派学说（五维框架 + 四角落裁决 + 两阶段装配）](031-communication-channel-doctrine.md)
+- [ADR-032：LLM 运行时边界与入口收口（generate 双方法 / 绑定在代码 / 用途封闭）](032-llm-runtime-boundary-and-entry.md)
