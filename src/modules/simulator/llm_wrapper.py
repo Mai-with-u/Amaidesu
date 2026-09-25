@@ -4,7 +4,7 @@
 - 路人 / 常驻观众 / SuperChat / 暖场等 4 类消息生成
 - 常驻人设批量生成（generate_personas）
 - 并发控制 (``asyncio.Semaphore``)
-- 响应清洗（剥 ``<system>`` / ``think`` 标签、引号、空白、长度截断）
+- 响应清洗（剥 ``<system>`` / ``think`` 标签、引号、空白）
 - Token 用量累计与预算阈值
 """
 
@@ -55,7 +55,6 @@ class SimulatorLLMWrapper:
       键来自各模板 frontmatter 的 name）
     - 通过 :class:`LLMManager` 发起 generate 调用（simulator profile），受信号量约束
     - 清洗 LLM 原始输出（去 ``<system>`` / ``think`` 标签、首尾引号、空白）
-    - 按 ``max_message_chars`` 截断
     - 累加 token 用量、按预算阈值判断是否豁免
 
     线程/并发模型：
@@ -245,7 +244,7 @@ class SimulatorLLMWrapper:
         role_pool = roles or [r.value for r in PersonaRole if r != PersonaRole.PASSERBY]
         existing_hint = ""
         if existing_nicknames:
-            existing_hint = "以下昵称已被占用，严禁使用：" + "、".join(existing_nicknames[:30]) + "。"
+            existing_hint = "以下昵称已被占用，严禁使用：" + "、".join(existing_nicknames) + "。"
         prompt = self._prompts.render(
             "persona_generation",
             count=count,
@@ -254,7 +253,7 @@ class SimulatorLLMWrapper:
             language=self._config.language,
         )
 
-        result = await self._call_llm(prompt, truncate=False)
+        result = await self._call_llm(prompt)
         if result is None:
             return []
         text, _tokens = result
@@ -313,20 +312,14 @@ class SimulatorLLMWrapper:
 
     # === 内部：LLM 调用统一入口 ===
 
-    async def _chat_once(self, prompt: str, max_tokens: Optional[int]) -> Optional[Response]:
-        """单次 LLM 调用（信号量约束），失败返回 None。
-
-        Args:
-            max_tokens: 单次输出上限；None 表示不限制（交由 LLM profile/API 默认），
-                总消耗由 ``token_budget_per_hour`` 预算控制。
-        """
+    async def _chat_once(self, prompt: str) -> Optional[Response]:
+        """在并发额度内等待完整回复，失败返回 None。"""
         try:
             async with self._semaphore:
                 response: Response = await self._llm.generate(
                     prompt,
                     profile=SIMULATOR_PROFILE,
                     temperature=self._config.llm_temperature,
-                    max_tokens=max_tokens,
                 )
         except asyncio.CancelledError:
             raise
@@ -339,33 +332,9 @@ class SimulatorLLMWrapper:
             return None
         return response
 
-    async def _call_llm(
-        self,
-        prompt: str,
-        *,
-        truncate: bool = True,
-        max_tokens: Optional[int] = None,
-    ) -> Optional[Tuple[str, int]]:
-        """调用 LLM 并清洗响应。
-
-        流程：等待信号量并调用 :meth:`LLMManager.generate` → 判断 ``success`` 与
-        ``content`` → 清洗（去 ``<system>`` / ``think`` 块、首尾引号、空白）→
-        推理模型兜底（content 为空但存在 thinking（reasoning_content）时，视为
-        模型未输出正文，保持相同参数重试一次）→ 按
-        :attr:`_config.max_message_chars` 截断（``truncate=True`` 时）→ 累计
-        token 用量。
-
-        Args:
-            prompt: 提示词
-            truncate: 是否按消息长度截断（结构化工件如 JSON 应传 False）
-            max_tokens: 单次输出上限；None 表示不限制（由 profile/API 默认决定），
-                总消耗由 ``token_budget_per_hour`` 预算控制
-
-        Returns:
-            ``(cleaned_text, tokens_used)`` 元组；
-            任意环节失败（信号量拒绝、调用失败、空响应、异常）返回 ``None``。
-        """
-        response = await self._chat_once(prompt, max_tokens)
+    async def _call_llm(self, prompt: str) -> Optional[Tuple[str, int]]:
+        """清理协议包装后保留完整发言；只有正文为空时才重试并记录 token 用量。"""
+        response = await self._chat_once(prompt)
         if response is None:
             return None
 
@@ -376,7 +345,7 @@ class SimulatorLLMWrapper:
         reasoning = getattr(response, "reasoning_content", None)
         if not cleaned and reasoning:
             self._logger.warning(f"_call_llm: content 为空但 thinking 存在 (len={len(reasoning)})，重试一次")
-            response = await self._chat_once(prompt, max_tokens)
+            response = await self._chat_once(prompt)
             if response is None:
                 return None
             tokens_used = self._extract_total_tokens(response)
@@ -386,12 +355,6 @@ class SimulatorLLMWrapper:
         if not cleaned:
             self._logger.warning(f"_call_llm: raw={raw_content!r} → cleaned 为空，跳过")
             return None
-
-        if truncate:
-            cleaned = self._truncate(cleaned, self._config.max_message_chars)
-            if not cleaned:
-                self._logger.warning(f"_call_llm: truncated 为空，跳过 (cleaned={cleaned!r})")
-                return None
 
         self._logger.info(f"_call_llm: 成功 (tokens={tokens_used}, len={len(cleaned)})")
         self._logger.debug(f"_call_llm: raw={raw_content!r} → cleaned={cleaned!r}")
@@ -432,41 +395,6 @@ class SimulatorLLMWrapper:
             return ""
         text = cls._QUOTES_RE.sub("", text)
         return text.strip()
-
-    @staticmethod
-    def _truncate(text: str, max_chars: int) -> str:
-        """按字符数截断；过长时在最近的 ``,。!?！？`` 边界处收尾，避免半句话。"""
-        if not text or max_chars <= 0:
-            return ""
-        if len(text) <= max_chars:
-            return text
-
-        truncated = text[:max_chars]
-        # 使用 chr() 显式构造，避免源码相邻字符串被解析器拼接的歧义
-        sep_chars = (
-            chr(0x3002)
-            + chr(0xFF01)
-            + chr(0x3F)
-            + chr(0xFF1F)
-            + chr(0x21)
-            + chr(0xFF01)
-            + chr(0x2E)
-            + chr(0x2C)
-            + chr(0x3001)
-            + chr(0x3B)
-            + chr(0x3A)
-            + chr(0xFF1B)
-            + chr(0xFF1A)
-            + chr(0xFF0C)
-            + chr(0xA)
-        )
-        for sep in sep_chars:
-            idx = truncated.rfind(sep)
-            # 至少保留 1/3 内容避免截太狠
-            if idx >= max_chars // 3:
-                truncated = truncated[: idx + 1]
-                break
-        return truncated.strip()
 
 
 __all__ = ["SimulatorLLMWrapper"]

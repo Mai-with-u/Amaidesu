@@ -72,14 +72,17 @@ async def test_empty_response_returns_none(mock_llm, persona, context):
 
 
 @pytest.mark.asyncio
-async def test_truncation(mock_llm, persona, context):
+async def test_long_message_is_complete(
+    mock_llm: MagicMock, persona: Persona, context: StreamerContextSnapshot
+) -> None:
+    """模拟观众的完整发言在清洗包装后保留到末尾。"""
     long_text = "a" * 200
     mock_llm.generate = AsyncMock(return_value=Response(success=True, content=long_text, usage=Usage(total_tokens=200)))
-    cfg = SimulatorConfigSchema(max_message_chars=50)
+    cfg = SimulatorConfigSchema()
     wrapper = SimulatorLLMWrapper(cfg, mock_llm)
     msg = await wrapper.generate_viewer_message(persona, context)
     assert msg is not None
-    assert len(msg.text) <= 50
+    assert msg.text == long_text
 
 
 @pytest.mark.asyncio
@@ -175,10 +178,10 @@ async def test_generate_personas_no_truncation(mock_llm):
         + "]"
     )
     mock_llm.generate = _mock_generate(long_json)
-    cfg = SimulatorConfigSchema(max_message_chars=50)
+    cfg = SimulatorConfigSchema()
     wrapper = SimulatorLLMWrapper(cfg, mock_llm)
     personas = await wrapper.generate_personas(count=10)
-    assert len(personas) == 10  # 不因 max_message_chars=50 截断而丢失
+    assert len(personas) == 10  # 完整解析全部人设
 
 
 # --- 推理模型空 content 兜底重试 ---
@@ -198,7 +201,7 @@ async def test_empty_content_with_thinking_retries_same_budget(mock_llm, persona
     assert msg.text == "终于有内容了"
     assert mock_llm.generate.await_count == 2
     second_max_tokens = mock_llm.generate.await_args_list[1].kwargs.get("max_tokens")
-    assert second_max_tokens is None  # 重试保持相同参数，不提高输出上限（上限交由 profile/API 默认）
+    assert second_max_tokens is None  # 重试保持相同参数，不提高输出上限（宿主不发送输出额度）
 
 
 @pytest.mark.asyncio
