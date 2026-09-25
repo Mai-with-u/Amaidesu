@@ -7,13 +7,15 @@ class MemoryProvider(Protocol):
     async def ingest(text, source) -> MemoryWriteResult    # 写入
 ```
 
-接入点：
-- **召回**：决策前 recall 相关长记忆（planner 预注入）+ query_memory 工具
-- **写入**：事件触发（话题摘要/观众互动）→ ingest
-- **配置**：`[memory] backend = "simple"`（当前唯一后端）
+**当前状态**：内置 ``SimpleMemory`` 承载观众**事实/画像**读写
+（``viewer_facts`` / ``viewer_profiles``），不实现本 Protocol；本 Protocol 为
+**将来的外部记忆后端**预留——接入时实现 ``recall`` / ``ingest`` 即可替换。
 
-## 简单版的差异
-- 召回 = 关键词匹配（不使用 embedding）
+调用面（现状，均不经本 Protocol）：
+- **事实**：``query_memory`` 工具查 ``viewer_facts``
+- **画像**：planner 预注入 + ``query_viewer_profile`` 工具查 ``viewer_profiles``
+
+## 时间单位
 - Amaidesu 内部全毫秒，无秒↔毫秒转换
 """
 
