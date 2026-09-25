@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from src.modules.mcp.mapper import (
     to_result,
     to_spec,
@@ -99,6 +97,37 @@ class TestToSpec:
 
 
 class TestToResult:
+    def test_text_only_json_is_available_to_programmatic_consumers(self) -> None:
+        """单份 JSON 回执既可驱动任务监控，也保留原始文本，不依赖服务器重复发送结构化字段。"""
+        text = '{"task_id":"task-1","state":"success","terminal":{"result":{"success":true}}}'
+        result = to_result(FakeCallToolResult(content=[FakeContentBlock("text", text=text)]), tool_name="maicraft_task")
+        assert result.structured_content["state"] == "success"
+        assert result.content == text and result.blocks[0].text == text
+
+    def test_text_only_error_keeps_outcome_certainty(self) -> None:
+        """业务拒绝的确定性属于回执事实，不能因缺少结构化通道而遗失。"""
+        text = '{"success":false,"error":{"outcome_known":false,"code":"unconfirmed"}}'
+        result = to_result(
+            FakeCallToolResult(content=[FakeContentBlock("text", text=text)], is_error=True), tool_name="tool"
+        )
+        assert not result.success and result.structured_content["error"]["outcome_known"] is False
+
+    def test_json_fallback_preserves_metadata_and_multimodal_boundaries(self) -> None:
+        """已有元数据优先；多份正文、截断 JSON 和图文混合不能被猜成一个对象。"""
+        metadata = {"resources": [{"uri": "example://document"}]}
+        result = to_result(
+            FakeCallToolResult(content=[FakeContentBlock("text", text='{"body":1}')], structured_content=metadata),
+            tool_name="tool",
+        )
+        assert result.structured_content == metadata
+        for blocks in (
+            [FakeContentBlock("text", text='{"unfinished":')],
+            [FakeContentBlock("text", text='{"a":1}'), FakeContentBlock("text", text='{"b":2}')],
+            [FakeContentBlock("text", text='{"a":1}'), FakeContentBlock("image", data="x", mimeType="image/png")],
+        ):
+            observed = to_result(FakeCallToolResult(content=blocks), tool_name="tool")
+            assert observed.structured_content is None and len(observed.blocks) == len(blocks)
+
     def test_success_text_content(self) -> None:
         result = FakeCallToolResult(
             content=[FakeContentBlock("text", text="木头 3 个")],

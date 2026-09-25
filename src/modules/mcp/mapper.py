@@ -1,14 +1,14 @@
-"""MCP → Amaidesu 工具契约映射（纯函数，无副作用）
+"""MCP → Amaidesu 工具契约映射
 
 把 mcp 协议层的对象转换为项目 ToolSpec / ToolExecutionResult。
 映射几乎零阻抗（探索依据）：
 - ``mcp.types.Tool.name / description / inputSchema`` → ``ToolSpec`` 字段直传
 - ``CallToolResult.content`` 的 TextContent / ImageContent → ``ResultBlock``
   （模型已原生支持 image(base64+mime)）
-- ``structuredContent`` → ``structured_content``；``is_error`` → ``success`` 取反
+- 结构化对象或单份完整 JSON 文本 → 程序可读事实；原始内容块继续保留
 
 设计要点：
-- 纯函数：不依赖任何全局状态/kwargs 注入；便于单测，无需真实 server
+- 不依赖连接状态或游戏对象；无法解析的文本原样保留并记录原因
 - **不含 server 特定知识**：只做类型层映射，不解析任何工具语义
 - 工具名存 **server 原始名**（``ToolSpec.name`` 不加前缀）；对外全名由
   ``ToolSpec.full_name`` 派生（``<provider>_<原始名>``，provider 默认 =
@@ -18,9 +18,25 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, List
 
+from src.modules.logging import get_logger
 from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolSpec
+
+logger = get_logger("McpMapper")
+
+
+def _json_text_object(blocks: List[ResultBlock]) -> dict[str, Any] | None:
+    """单份完整 JSON 对象可供程序读取；普通文本、多文档和图片保留各自的原始内容。"""
+    if len(blocks) != 1 or blocks[0].kind != "text" or not blocks[0].text.lstrip().startswith("{"):
+        return None
+    try:
+        value = json.loads(blocks[0].text)
+    except json.JSONDecodeError as exc:
+        logger.debug("MCP 文本不是完整 JSON 对象，按原文保留", exc=exc)
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def to_spec(
@@ -127,6 +143,9 @@ def to_result(
     structured = getattr(result, "structured_content", None)
     content = getattr(result, "content", None)
     blocks = _content_to_blocks(content)
+    # MCP 允许仅返回文本 JSON；所有程序消费者统一取得事实，模型呈现仍可按原文相等性去重。
+    if structured is None:
+        structured = _json_text_object(blocks)
 
     # 文本内容拼接（content 字段）
     text_parts: List[str] = []
