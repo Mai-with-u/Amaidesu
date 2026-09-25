@@ -156,14 +156,12 @@ def build_memory_tools(memory: Optional[SimpleMemory] = None, viewer_repo: Optio
 
 
 def _format_facts(facts: List[object]) -> str:
-    """事实召回结果格式化（时间戳毫秒口径展示）。"""
+    """完整返回召回事实及其时间，避免后续判断漏掉尾部条件。"""
     if not facts:
         return "（无匹配事实）"
     lines: List[str] = []
     for idx, fact in enumerate(facts, start=1):
         text = str(getattr(fact, "fact_text", "") or "")
-        if len(text) > 80:
-            text = text[:77] + "..."
         user = f"{getattr(fact, 'platform', '')}/{getattr(fact, 'user_id', '')}"
         created = int(getattr(fact, "created_at_ms", 0) or 0)
         lines.append(f"[{idx}] (t={created}ms, {user}) {text}")

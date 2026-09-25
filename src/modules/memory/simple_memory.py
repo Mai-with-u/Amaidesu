@@ -43,9 +43,6 @@ from src.modules.time_utils import now_ms
 
 logger = get_logger("SimpleMemory")
 
-# 事实文本长度上限（超长截断；单批限 5 条之上再兜一层单条体量）
-_FACT_TEXT_MAX_CHARS = 200
-
 
 class SimpleMemory:
     """观众事实与画像的读写服务（SQLite 持久化）。"""
@@ -77,7 +74,8 @@ class SimpleMemory:
 
         提取侧容错的最后一道防线：LLM 重复输出、跨批重复事实在此挡下。
         """
-        text = (fact_text or "").strip()[:_FACT_TEXT_MAX_CHARS]
+        # 原话支持的完整事实用于后续召回与去重，尾部条件不能在落库时丢失。
+        text = (fact_text or "").strip()
         if not text or not platform or not user_id:
             return False
         ts = int(created_at_ms or now_ms())

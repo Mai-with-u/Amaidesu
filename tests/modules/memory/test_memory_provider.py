@@ -66,9 +66,7 @@ async def _seed_viewer(
     interaction_count: int = 0,
 ) -> None:
     """造一行 viewers 统计（门槛过滤用）。"""
-    await viewer_repo.upsert_viewer_message(
-        platform=platform, user_id=user_id, user_name=user_name, timestamp_ms=1_000
-    )
+    await viewer_repo.upsert_viewer_message(platform=platform, user_id=user_id, user_name=user_name, timestamp_ms=1_000)
     for _ in range(max(0, interaction_count - 1)):
         await viewer_repo.upsert_viewer_message(
             platform=platform, user_id=user_id, user_name=user_name, timestamp_ms=2_000
@@ -118,15 +116,9 @@ async def test_search_facts_by_keyword(memory: SimpleMemory) -> None:
 
 async def test_list_facts_since_watermark(memory: SimpleMemory) -> None:
     """水位过滤：只返回 created_at_ms 之后的新事实，时间正序。"""
-    await memory.add_viewer_fact(
-        platform="bilibili", user_id="u_1", fact_text="旧事实", created_at_ms=1_000
-    )
-    await memory.add_viewer_fact(
-        platform="bilibili", user_id="u_1", fact_text="新事实甲", created_at_ms=3_000
-    )
-    await memory.add_viewer_fact(
-        platform="bilibili", user_id="u_1", fact_text="新事实乙", created_at_ms=2_000
-    )
+    await memory.add_viewer_fact(platform="bilibili", user_id="u_1", fact_text="旧事实", created_at_ms=1_000)
+    await memory.add_viewer_fact(platform="bilibili", user_id="u_1", fact_text="新事实甲", created_at_ms=3_000)
+    await memory.add_viewer_fact(platform="bilibili", user_id="u_1", fact_text="新事实乙", created_at_ms=2_000)
     facts = await memory.list_facts_since(platform="bilibili", user_id="u_1", since_ms=1_500)
     assert [f.fact_text for f in facts] == ["新事实乙", "新事实甲"]
 
@@ -192,13 +184,12 @@ async def test_profile_update_text_and_delete(memory: SimpleMemory) -> None:
     await memory.upsert_viewer_profile(
         platform="bilibili", user_id="u_1", profile_text="自动生成的画像", last_compressed_at_ms=1
     )
-    assert await memory.update_viewer_profile_text(
-        platform="bilibili", user_id="u_1", profile_text="人工纠正后的画像"
-    ) is True
-    assert await memory.get_viewer_profile(platform="bilibili", user_id="u_1") == "人工纠正后的画像"
     assert (
-        await memory.update_viewer_profile_text(platform="bilibili", user_id="u_x", profile_text="不存在") is False
+        await memory.update_viewer_profile_text(platform="bilibili", user_id="u_1", profile_text="人工纠正后的画像")
+        is True
     )
+    assert await memory.get_viewer_profile(platform="bilibili", user_id="u_1") == "人工纠正后的画像"
+    assert await memory.update_viewer_profile_text(platform="bilibili", user_id="u_x", profile_text="不存在") is False
     assert await memory.delete_viewer_profile(platform="bilibili", user_id="u_1") is True
     assert await memory.delete_viewer_profile(platform="bilibili", user_id="u_1") is False
     assert await memory.get_viewer_profile(platform="bilibili", user_id="u_1") is None
@@ -276,15 +267,25 @@ async def test_query_memory_tool_empty_query(memory: SimpleMemory) -> None:
     assert "空查询" in res.content
 
 
+async def test_long_fact_survives_storage_and_tool_recall(memory: SimpleMemory) -> None:
+    """长事实的尾部仍能检索命中，并完整出现在给模型的工具结果中。"""
+    fact = "约定细节" * 300 + "最终要求保留蓝色屋顶"
+    assert await memory.add_viewer_fact(platform="bilibili", user_id="long-fact", fact_text=fact)
+    rows = await memory.list_viewer_facts(platform="bilibili", user_id="long-fact")
+    assert rows[0].fact_text == fact
+    result = await build_memory_tools(memory=memory).invoke(
+        ToolInvocation(tool_name="memory_query_memory", arguments={"query": "保留蓝色屋顶"})
+    )
+    assert result.success and fact in result.content
+
+
 async def test_query_viewer_profile_by_user_id(memory: SimpleMemory) -> None:
     """按 user_id 查画像；无画像给出明确占位。"""
     await memory.upsert_viewer_profile(
         platform="bilibili", user_id="u_1", profile_text="21 级牌子老粉，舰长", last_compressed_at_ms=1
     )
     provider = build_memory_tools(memory=memory)
-    res = await provider.invoke(
-        ToolInvocation(tool_name="memory_query_viewer_profile", arguments={"user_id": "u_1"})
-    )
+    res = await provider.invoke(ToolInvocation(tool_name="memory_query_viewer_profile", arguments={"user_id": "u_1"}))
     assert res.success is True
     assert "21 级牌子老粉" in res.content
 
