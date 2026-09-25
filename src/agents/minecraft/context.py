@@ -6,8 +6,8 @@ import asyncio
 from copy import deepcopy
 from typing import Any
 
-from src.agents.minecraft.config import MinecraftContextConfig
 from src.agents.minecraft.builder.config import MinecraftBuilderConfig
+from src.agents.minecraft.config import MinecraftContextConfig
 from src.agents.minecraft.observations import json_text
 from src.modules.logging import get_logger
 
@@ -119,6 +119,7 @@ class MinecraftHistoryCompactor:
                 "旧疑问已经由当前待办或新证据解决时，应删除旧疑问；待办完成本身不证明游戏操作成功。"
                 "plan_facts 记录已通过、已提交或结果未知的真实计划阶段；旧笔记的待校验不能覆盖它。"
                 "background_tasks 中的 decision 是原生待应答事实，编号、选项和失败证据由代码保留。"
+                "省略证据只保留摘要和读取入口；本地原件与远端未读字段不能混为一谈，也不要求为了完整而全部展开。"
                 "不要重新安排下一步、要求重复授权，或把尚未运行验收变成不能起草设计。"
                 "原始指令、待办、任务事实与观察索引由代码保留，不要复述这些清单或教材正文。"
                 f"直接输出中文短摘要，目标不超过 {min(2000, self._config.summary_max_chars // 2)} 字符，不调用工具。"

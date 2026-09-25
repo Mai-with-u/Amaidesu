@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.minecraft.observations import MinecraftObservations, json_text
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
+from src.agents.minecraft.observations import MinecraftObservations, json_text
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
@@ -91,8 +91,8 @@ def test_pointer_search_and_expired_references_are_explicit() -> None:
     assert "knowledge" in json_text(history.index())
 
 
-def test_full_read_and_index_preserve_long_results_and_early_requests() -> None:
-    """默认读取完整正文，超过旧索引条数后仍可找到首条带长参数的请求。"""
+def test_paged_read_and_index_preserve_long_results_and_early_requests() -> None:
+    """默认小页不丢旧记录，首条长请求和末尾正文仍可按引用及偏移无损找回。"""
     history = MinecraftObservations()
     arguments = {"requirement": "保留现场结构" * 300}
     content = "工艺正文" * 6000 + "尾部验收要求"
@@ -100,14 +100,50 @@ def test_full_read_and_index_preserve_long_results_and_early_requests() -> None:
     ref = shown["_observation"]["ref"]
     for index in range(25):
         history.present("knowledge", {"index": index}, {"content": str(index)})
-    assert len(history.index()) == 26
-    assert history.index()[-1]["request_preview"] == json_text(arguments)
+    assert len(history.index()) == 20 and history.count == 26
+    older = history.read({"offset": 20})
+    assert older["total"] == 26 and older["next_offset"] is None
+    assert older["observations"][-1]["ref"] == ref
+    assert len(older["observations"][-1]["request_preview"]) <= 320
     full = history.read({"ref": ref, "path": "/content"})
-    assert full["text"] == content and full["complete"] is True
+    assert full["text"] == content[:4000] and full["complete"] is False
     found = history.read({"ref": ref, "path": "/content", "query": "尾部验收要求"})
     assert found["text"].endswith("尾部验收要求") and found["next_offset"] is None
-    selected = history.read({"ref": ref, "path": "/content", "limit": len(content)})
-    assert selected["text"] == content
+    parts, offset = [], 0
+    while True:
+        selected = history.read({"ref": ref, "path": "/content", "offset": offset})
+        parts.append(selected["text"])
+        if selected["next_offset"] is None:
+            break
+        offset = selected["next_offset"]
+    assert "".join(parts) == content
+    assert history.read({"ref": ref, "source": "request", "limit": 10000})["text"] == json_text(arguments)
+
+
+def test_large_inputs_do_not_expand_the_compaction_index() -> None:
+    """两个大型蓝图的输入留在原件中，固定事实索引不会反过来超过整个上下文预算。"""
+    history = MinecraftObservations()
+    for index in range(2):
+        request = {
+            "goal": {
+                "ability": "maicraft:build_machine",
+                "outcome": f"建造 {index}",
+                "parameters": {"blueprint": "x" * 71600},
+            }
+        }
+        history.present("maicraft_plan", request, {"plan_id": str(index), "ready_to_execute": True})
+    assert len(json_text(history.index())) < 2000
+    assert len(history.read({"ref": history.index()[0]["ref"], "source": "request"})["text"]) <= 4000
+
+
+def test_index_access_times_and_recency_order_are_not_progress() -> None:
+    """重新查看同一现场只改变索引访问时间或排序时，不应解除模型的无进展提醒。"""
+    history = MinecraftObservations()
+    for item in ("first", "second"):
+        history.present("maicraft_perceive", {"focus": item}, {"observed": item})
+    assert history.read({})["same_request_and_result"] is False
+    history.present("maicraft_perceive", {"focus": "first"}, {"observed": "first"})
+    assert history.read({})["same_request_and_result"] is True
 
 
 @pytest.mark.asyncio
