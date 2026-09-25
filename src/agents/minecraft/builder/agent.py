@@ -229,7 +229,6 @@ class MinecraftBuilderAgent(BaseAgent):
                 list(messages),
                 profile="minecraft_builder",
                 interrupt=self._interrupt,
-                omit_output_token_limit=True,
                 strict_tool_arguments=True,
                 tools=tools,
             )

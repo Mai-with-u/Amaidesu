@@ -65,14 +65,13 @@ class BaseLLMClient(abc.ABC):
         *,
         model: str,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
         on_delta: Optional[OnDeltaCallback] = None,
         interrupt_flag: Optional[Any] = None,
     ) -> Response:
         """执行一次聊天请求（中立契约）。
 
         ``model`` 必填：客户端不持有默认模型，由 Engine 按 profile 选定后传入。
-        ``temperature`` / ``max_tokens`` 为 Engine 按 profile 档位填充的生成参数，
+        ``temperature`` 为 Engine 按 profile 档位填充的生成参数，
         请求内同名字段缺省时生效。
         ``on_delta`` 非 None 时实现方应走流式传输并逐帧回调增量，
         最终仍返回完整 Response（传输层流式、语义层整段）。
@@ -88,7 +87,6 @@ class BaseLLMClient(abc.ABC):
         *,
         model: str,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
         interrupt_flag: Optional[Any] = None,
     ) -> Response:
         """执行视觉请求（中立契约）；不支持时由默认实现明确报告。model 必填。"""

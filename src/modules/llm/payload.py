@@ -110,9 +110,6 @@ class GenerateRequest(BaseModel):
     system: Optional[str] = None
     tools: List[ToolSpec] = Field(default_factory=list)
     temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    # 完整结构化产物不受宿主的固定输出额度裁剪；服务端仍有自己的容量边界。
-    omit_output_token_limit: bool = False
     strict_tool_arguments: bool = False
 
 

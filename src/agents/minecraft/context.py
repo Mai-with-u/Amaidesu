@@ -146,7 +146,6 @@ class MinecraftHistoryCompactor:
             response = await self._llm.generate(
                 request,
                 profile=self._profile,
-                max_tokens=min(2400, self._config.summary_max_chars),
                 interrupt=self._interrupt,
             )
             summary = (response.content or "").strip()

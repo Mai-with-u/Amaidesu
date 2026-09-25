@@ -32,7 +32,6 @@ __all__ = [
     "register_providers",
     "resolve_profile_name",
     "validate_profile_binding",
-    "warn_hard_timeout_conflicts",
 ]
 
 
@@ -90,12 +89,10 @@ class _ResolvedProfile(BaseModel):
     """profile 解析快照（按 model_list 顺序锁定 model 实例）"""
 
     profile_name: str
-    hard_timeout_ms: int
     slow_threshold_ms: int
     selection_strategy: str  # sequential / balance / random
     seed: int  # random 策略用；0 表示不固定
     temperature: float = 0.3
-    max_tokens: int = 4096
     models: List[_ResolvedModel] = Field(default_factory=list)
 
     model_config = {"frozen": True}
@@ -192,38 +189,12 @@ def build_resolved_profile(
 
     return _ResolvedProfile(
         profile_name=pname,
-        hard_timeout_ms=int(pcfg.get("hard_timeout_ms", 90_000) or 90_000),
         slow_threshold_ms=int(pcfg.get("slow_threshold_ms", 15_000) or 15_000),
         selection_strategy=strategy_name,
         seed=seed,
         temperature=pcfg.get("temperature", 0.3),
-        max_tokens=pcfg.get("max_tokens", 4096),
         models=resolved_models,
     )
-
-
-def warn_hard_timeout_conflicts(
-    profiles: Dict[str, Any],
-    providers: Dict[str, Tuple[Dict[str, Any], Any]],
-    logger: Any = None,
-) -> None:
-    """启动期弱校验：profile 硬超时小于 provider 请求超时时告警（不硬错）。
-
-    provider 的 ``timeout``（秒）是客户端请求级超时；profile 的
-    ``hard_timeout_ms`` 是引擎墙。前者更大时引擎墙先到点，请求级超时
-    退化为死配置——这是配置矛盾，保留弱校验语义只告警，交由使用者修正。
-    """
-    log = logger if logger is not None else get_logger("LLMBootstrap")
-    for resolved in profiles.values():
-        for model in resolved.models:
-            pcfg, _client = providers.get(model.provider_name, ({}, None))
-            provider_timeout_ms = int(pcfg.get("timeout", 60) or 60) * 1000
-            if resolved.hard_timeout_ms < provider_timeout_ms:
-                log.warning(
-                    f"[LLM 配置告警] profile={resolved.profile_name} hard_timeout_ms="
-                    f"{resolved.hard_timeout_ms} 小于 provider '{model.provider_name}' 的 "
-                    f"timeout={provider_timeout_ms}ms，引擎墙先到点，请求级超时不会生效"
-                )
 
 
 def resolve_profile_name(

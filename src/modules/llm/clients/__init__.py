@@ -20,7 +20,6 @@ from src.modules.llm.clients.openai.compat import (
     build_openai_compatible_client_config,
     normalize_openai_base_url,
 )
-from src.modules.llm.interrupt import await_with_timeout_and_interrupt
 from src.modules.llm.reasoning import ReasoningParseMode, parse_reasoning
 
 __all__ = [
@@ -35,7 +34,6 @@ __all__ = [
     "normalize_openai_base_url",
     "ReasoningParseMode",
     "parse_reasoning",
-    "await_with_timeout_and_interrupt",
 ]
 
 # 调度表：client_type → 客户端实现类（显式映射，新厂商在此追加一行）。

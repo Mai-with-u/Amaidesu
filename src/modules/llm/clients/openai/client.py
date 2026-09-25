@@ -27,7 +27,7 @@ from src.modules.llm.client import BaseLLMClient, LLMResponse
 from src.modules.llm.clients.openai.arguments import decode_tool_call
 from src.modules.llm.clients.openai.compat import build_openai_compatible_client_config
 from src.modules.llm.errors import FatalError, LLMError, LLMTimeoutError, RetryableError
-from src.modules.llm.interrupt import await_with_timeout_and_interrupt
+from src.modules.llm.interrupt import guarded_call
 from src.modules.llm.payload import GenerateRequest, ImagePart, Message, Response, TextPart, ToolCall, ToolSpec, Usage
 from src.modules.llm.reasoning import ReasoningParseMode, parse_reasoning
 from src.modules.logging import get_logger
@@ -50,7 +50,7 @@ class OpenAIClient(BaseLLMClient):
     """OpenAI 兼容 API 客户端。
 
     按 provider 维度共享：构造时只持有连接信息（base_url/api_key/headers/
-    retry/timeout），model 由每次调用通过 ``model`` 参数传入。
+    retry），model 由每次调用通过 ``model`` 参数传入。
     """
 
     def __init__(self, config: Dict[str, Any]) -> None:
@@ -65,9 +65,10 @@ class OpenAIClient(BaseLLMClient):
             base_url=client_config.base_url,
             default_headers=client_config.default_headers or None,
             default_query=client_config.default_query or None,
+            # 长生成持续等待服务端完成，用户取消由外层任务负责。
+            timeout=None,
         )
         # provider 级默认（profile 显式给值时覆盖）
-        self.max_tokens = config.get("max_tokens")
         self.temperature = config.get("temperature", 0.2)
         self.logger.info(f"OpenAI 客户端初始化完成 (端点: {client_config.base_url})")
 
@@ -330,7 +331,6 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
         on_delta: Optional[Callable[[str, str], None]] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
     ) -> Response:
@@ -343,11 +343,9 @@ class OpenAIClient(BaseLLMClient):
             self._request_to_openai_messages(request),
             model=model,
             temperature=temperature if temperature is not None else request.temperature,
-            max_tokens=max_tokens if max_tokens is not None else request.max_tokens,
             tools=tools,
             interrupt_flag=interrupt_flag,
             on_delta=on_delta,
-            omit_output_token_limit=request.omit_output_token_limit,
             strict_tool_arguments=request.strict_tool_arguments,
         )
         return self._to_payload_response(result)
@@ -359,7 +357,6 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
     ) -> Response:
         """中立契约视觉请求：payload → OpenAI 协议翻译后复用既有 vision 能力。
@@ -371,7 +368,6 @@ class OpenAIClient(BaseLLMClient):
             images,
             model=model,
             temperature=temperature if temperature is not None else request.temperature,
-            max_tokens=max_tokens if max_tokens is not None else request.max_tokens,
         )
         return self._to_payload_response(result)
 
@@ -381,7 +377,6 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
         on_delta: Optional[Callable[[str, str], None]] = None,
@@ -396,13 +391,12 @@ class OpenAIClient(BaseLLMClient):
                 messages,
                 model=model,
                 temperature=temperature,
-                max_tokens=max_tokens,
                 tools=tools,
                 interrupt_flag=interrupt_flag,
                 on_delta=on_delta,
             )
         except asyncio.CancelledError as e:
-            error_msg = f"LLM 请求超时或被中断: {e}"
+            error_msg = f"LLM 请求被中断: {e}"
             self.logger.error(error_msg)
             return LLMResponse(success=False, content=None, error=error_msg)
         except LLMError as e:
@@ -416,11 +410,9 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
         on_delta: Optional[Callable[[str, str], None]] = None,
-        omit_output_token_limit: bool = False,
         strict_tool_arguments: bool = False,
     ) -> LLMResponse:
         """聊天调用实现：SDK 异常翻译为错误分类异常后抛出（不自行重试）。
@@ -435,11 +427,9 @@ class OpenAIClient(BaseLLMClient):
                     messages,
                     model=model,
                     temperature=temperature,
-                    max_tokens=max_tokens,
                     tools=tools,
                     interrupt_flag=interrupt_flag,
                     on_delta=on_delta,
-                    omit_output_token_limit=omit_output_token_limit,
                     strict_tool_arguments=strict_tool_arguments,
                 )
             except asyncio.CancelledError:
@@ -461,15 +451,9 @@ class OpenAIClient(BaseLLMClient):
             if tools:
                 request_params["tools"] = self._normalize_tool_definitions(tools)
                 request_params["tool_choice"] = "auto"
-            if not omit_output_token_limit and max_tokens:
-                request_params["max_tokens"] = max_tokens
-            elif not omit_output_token_limit and self.max_tokens:
-                request_params["max_tokens"] = self.max_tokens
             self.logger.debug(f"发送 LLM 请求: {request_params}")
-            task = asyncio.create_task(self.client.chat.completions.create(**request_params))
-            response = await await_with_timeout_and_interrupt(
-                task,
-                timeout=float(self.config.get("timeout", 60)),
+            response = await guarded_call(
+                lambda: self.client.chat.completions.create(**request_params),
                 interrupt_flag=interrupt_flag,
             )
             message = response.choices[0].message
@@ -503,7 +487,7 @@ class OpenAIClient(BaseLLMClient):
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError as e:
-            # 请求级硬超时（await_with_timeout_and_interrupt）→ Timeout 分类
+            # 服务端或传输层返回超时错误时，保留故障切换所需的原因分类。
             raise LLMTimeoutError("LLM 请求超时", original=e) from e
         except _TRANSLATABLE_SDK_ERRORS as e:
             raise self._translate_sdk_error(e) from e
@@ -514,11 +498,9 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float],
-        max_tokens: Optional[int],
         tools: Optional[List[Dict[str, Any]]],
         interrupt_flag: Optional[asyncio.Event],
         on_delta: Callable[[str, str], None],
-        omit_output_token_limit: bool = False,
         strict_tool_arguments: bool = False,
     ) -> LLMResponse:
         """流式传输路径：SSE 逐帧接收，reasoning/content 增量实时回调，最终组装完整响应。
@@ -540,10 +522,6 @@ class OpenAIClient(BaseLLMClient):
         if tools:
             request_params["tools"] = self._normalize_tool_definitions(tools)
             request_params["tool_choice"] = "auto"
-        if not omit_output_token_limit and max_tokens:
-            request_params["max_tokens"] = max_tokens
-        elif not omit_output_token_limit and self.max_tokens:
-            request_params["max_tokens"] = self.max_tokens
 
         stream = await self.client.chat.completions.create(**request_params)
         content_parts: List[str] = []
@@ -625,7 +603,6 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
     ) -> LLMResponse:
         """视觉理解调用（legacy 包装）：任何失败都折叠为 ``success=False`` 响应。"""
         try:
@@ -634,7 +611,6 @@ class OpenAIClient(BaseLLMClient):
                 images,
                 model=model,
                 temperature=temperature,
-                max_tokens=max_tokens,
             )
         except _LEGACY_FALLBACK_ERRORS as e:
             error_msg = f"VLM 请求失败: {e}"
@@ -648,7 +624,6 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: str,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
     ) -> LLMResponse:
         """视觉理解实现：SDK 异常翻译为错误分类异常后抛出（不自行重试）。"""
         try:
@@ -660,10 +635,6 @@ class OpenAIClient(BaseLLMClient):
                 # 视觉请求同样保留调用方显式给出的零温度。
                 "temperature": self.temperature if temperature is None else temperature,
             }
-            if max_tokens:
-                request_params["max_tokens"] = max_tokens
-            elif self.max_tokens:
-                request_params["max_tokens"] = self.max_tokens
             response = await self.client.chat.completions.create(**request_params)
             usage = self._extract_usage(response.usage)
             result = LLMResponse(
@@ -678,7 +649,7 @@ class OpenAIClient(BaseLLMClient):
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError as e:
-            # 请求级硬超时（await_with_timeout_and_interrupt）→ Timeout 分类
+            # 服务端或传输层返回超时错误时，保留故障切换所需的原因分类。
             raise LLMTimeoutError("LLM 请求超时", original=e) from e
         except _TRANSLATABLE_SDK_ERRORS as e:
             raise self._translate_sdk_error(e) from e

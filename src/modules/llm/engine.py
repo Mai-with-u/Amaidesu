@@ -11,9 +11,6 @@
     - ``random``：随机选一个
 - **故障切换**：当前模型失败切下一个；超 ``slow_threshold_ms`` 仅告警（不切）。
   成功后立即返回，不再尝试。
-- **硬超时墙**：profile 级 ``hard_timeout_ms`` 包住整个单模型尝试（含墙内
-  重试），到点取消 in-flight 请求；超时切下一个模型。流式首 token 已产出
-  后到点则只中止，已外发的增量不追溯。
 - **厂商无关**：本模块不 import 任何厂商适配端（``clients/<vendor>/``），
   provider 客户端构造与能力解析一律经 ``clients`` 包的调度表完成。
 
@@ -39,12 +36,11 @@ from src.modules.llm.bootstrap import (
     register_providers,
     resolve_profile_name,
     validate_profile_binding,
-    warn_hard_timeout_conflicts,
 )
 from src.modules.llm.client import LLMResponse
 from src.modules.llm.clients import resolve_client_method
 from src.modules.llm.errors import FatalError, LLMError, LLMInterruptedError, LLMTimeoutError, RetryableError
-from src.modules.llm.interrupt import HardTimeoutExceeded, guarded_call
+from src.modules.llm.interrupt import guarded_call
 from src.modules.llm.observation import calculate_cost, record_usage
 from src.modules.llm.payload import GenerateRequest, ImagePart, Message, Response, TextPart, ToolCall, ToolSpec, Usage
 from src.modules.logging import get_logger
@@ -80,30 +76,6 @@ _RETRY_POLICY: Dict[type, str] = {
 
 _PAYLOAD_METHODS = frozenset({"generate", "generate_vision"})
 """走中立 payload 契约的客户端能力名（Client 返回 payload.Response）。"""
-
-
-class _StreamGate:
-    """流式增量直通闸门：收到增量立即转调消费方回调（打字机效果）。
-
-    增量外发即不可撤回，直通意味着首 token 之后的失败分支不能 failover
-    （换模型会拼出前后矛盾的输出）、也不能追溯已外发的增量（不是错误）。
-    ``started`` 作为首 token 判据：硬超时发生在首 token 前仍可 failover，
-    发生在首 token 后只能整体中止。
-    """
-
-    def __init__(self, on_delta: Optional[Callable[[str, str], None]]) -> None:
-        self.has_consumer = on_delta is not None
-        self._on_delta = on_delta
-        self.started = False
-
-    @property
-    def callback(self) -> Callable[[str, str], None]:
-        def _gate(kind: str, text_delta: str) -> None:
-            self.started = True
-            if self._on_delta is not None:
-                self._on_delta(kind, text_delta)
-
-        return _gate
 
 
 def _content_to_parts(content: Any) -> List[Any]:
@@ -173,7 +145,6 @@ def _normalize_generate_input(
     system: Optional[str],
     tools: Optional[List[Any]],
     temperature: Optional[float],
-    max_tokens: Optional[int],
 ) -> GenerateRequest:
     """消费方输入（str 或 OpenAI 风格 dict 列表或 Message 列表）→ 中立请求。
 
@@ -232,7 +203,6 @@ def _normalize_generate_input(
         system=merged_system,
         tools=tool_specs,
         temperature=temperature,
-        max_tokens=max_tokens,
     )
 
 
@@ -389,7 +359,6 @@ class LLMManager:
             [llm_profiles.planner]
             model_list = ["ds-chat"]
             selection_strategy = { name = "sequential" }
-            hard_timeout_ms = 90000
             ```
         """
         self._config = config
@@ -420,9 +389,6 @@ class LLMManager:
             self._profile_call_counts[pname] = 0
             self._model_call_counts[pname] = {}
 
-        # 启动期弱校验：profile 硬超时小于 provider 请求超时时告警（防请求级超时变死配置）
-        warn_hard_timeout_conflicts(self._profiles, self._providers, self.logger)
-
         # 价格唯一来源 = model.toml [[llm_models]] 的定价字段
         # 价格表按 model_identifier 键入（费用计算用的是请求实际的 API 模型标识）
         self._model_prices = {
@@ -450,8 +416,6 @@ class LLMManager:
         system: Optional[str] = None,
         tools: Optional[List[Union[ToolSpec, Dict[str, Any]]]] = None,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        omit_output_token_limit: bool = False,
         strict_tool_arguments: bool = False,
         on_delta: Optional[Callable[[str, str], None]] = None,
         interrupt: Optional[asyncio.Event] = None,
@@ -461,15 +425,11 @@ class LLMManager:
         签名宽是刻意的容错设计：``input`` 接受裸字符串（单轮用户消息）、
         中立 ``Message`` 列表或 OpenAI 风格 dict 列表——Engine 统一归一化
         到 payload 再调度，消费方不必为迁就契约改自己的输入形状。
-        ``temperature`` / ``max_tokens`` 缺省时回退 profile 档位。
-        需要完整结构化产物时可省略宿主输出额度，并要求严格解析工具参数；
+        生成温度缺省时回退 profile 档位，完整结构化产物可要求严格解析工具参数；
         响应结束原因原样保留，由调用方拒绝未完成的产物。
         """
         profile_name = self._resolve_profile_name(profile)
-        request = _normalize_generate_input(
-            input, system=system, tools=tools, temperature=temperature, max_tokens=max_tokens
-        )
-        request.omit_output_token_limit = omit_output_token_limit
+        request = _normalize_generate_input(input, system=system, tools=tools, temperature=temperature)
         request.strict_tool_arguments = strict_tool_arguments
         result = await self._call_with_failover(
             profile_name,
@@ -499,7 +459,7 @@ class LLMManager:
             profile_name = ProfileNames.VISION
         else:
             profile_name = self._resolve_profile_name(profile)
-        request = _normalize_generate_input(prompt, system=system, tools=None, temperature=None, max_tokens=None)
+        request = _normalize_generate_input(prompt, system=system, tools=None, temperature=None)
         result = await self._call_with_failover(
             profile_name,
             method="generate_vision",
@@ -651,64 +611,30 @@ class LLMManager:
         slow_threshold_ms: int,
         **kwargs: Any,
     ) -> Tuple[Optional[LLMResponse], Optional[str]]:
-        """单模型尝试整体（含内部重试）置于 profile 硬超时墙内。
-
-        语义口径：hard_timeout 是墙，重试在墙内尽力、可能被截断——墙到点
-        取消 in-flight 请求（含退避等待），整个尝试标记失败交还故障切换。
-        两个分支例外：
-
-        - 流式首 token 已产出：已外发的增量不追溯，也不得切换模型，
-          只能整体中止（以 ``LLMInterruptedError`` 表达，向上传播）
-        - 调用方中断 / 父任务取消：同一取消路径收割子任务后原样传播
-
-        Returns:
-            (response, error)：成功 → (LLMResponse, None)；失败 → (None, 错误描述)
-        """
+        """等待当前模型完成，调用方取消时回收整个请求和重试任务。"""
         call_kwargs = dict(kwargs)
         call_kwargs["model"] = model_identifier
-        # 单次请求的显式额度和温度优先；只有未指定时才采用用途默认值，避免摘要额度被覆盖。
+        # 完整等待模型生成；只让单次温度覆盖用途默认值，主动中断仍立即回收连接。
         profile = self._get_profile(profile_name)
         request = call_kwargs.get("request")
-        for parameter in ("temperature", "max_tokens"):
-            if call_kwargs.get(parameter) is None:
-                explicit = getattr(request, parameter, None)
-                call_kwargs[parameter] = explicit if explicit is not None else getattr(profile, parameter)
-        # 调用方明确要求完整输出时，不再用用途配置的额度限制生成长度。
-        if request is not None and request.omit_output_token_limit:
-            call_kwargs["max_tokens"] = None
-
-        # 流式增量直通：收到即转调消费方（首 token 前后分支判据在 gate.started）
-        gate = _StreamGate(call_kwargs.get("on_delta"))
-        if gate.has_consumer:
-            call_kwargs["on_delta"] = gate.callback
-
-        hard_timeout_ms = profile.hard_timeout_ms
-        try:
-            response, error = await guarded_call(
-                lambda: self._retry_loop(
-                    method=method,
-                    client=client,
-                    provider_cfg=provider_cfg,
-                    model_identifier=model_identifier,
-                    model_name=model_name,
-                    profile_name=profile_name,
-                    request_id=request_id,
-                    start_time=start_time,
-                    slow_threshold_ms=slow_threshold_ms,
-                    call_kwargs=call_kwargs,
-                ),
-                timeout_ms=hard_timeout_ms,
-                interrupt_flag=call_kwargs.get("interrupt_flag"),
-            )
-        except HardTimeoutExceeded:
-            if gate.started:
-                raise LLMInterruptedError(
-                    f"流式输出已开始后触达硬超时（{hard_timeout_ms}ms），已输出内容不追溯，整体中止"
-                ) from None
-            error = f"硬超时（{hard_timeout_ms}ms）：重试在墙内被截断"
-            self.logger.warning(f"[LLM 硬超时] profile={profile_name} model={model_name} {error}，切下一个模型")
-            return None, error
-        return response, error
+        if call_kwargs.get("temperature") is None:
+            explicit = getattr(request, "temperature", None)
+            call_kwargs["temperature"] = explicit if explicit is not None else profile.temperature
+        return await guarded_call(
+            lambda: self._retry_loop(
+                method=method,
+                client=client,
+                provider_cfg=provider_cfg,
+                model_identifier=model_identifier,
+                model_name=model_name,
+                profile_name=profile_name,
+                request_id=request_id,
+                start_time=start_time,
+                slow_threshold_ms=slow_threshold_ms,
+                call_kwargs=call_kwargs,
+            ),
+            interrupt_flag=call_kwargs.get("interrupt_flag"),
+        )
 
     async def _retry_loop(
         self,
@@ -724,7 +650,7 @@ class LLMManager:
         slow_threshold_ms: int,
         call_kwargs: Dict[str, Any],
     ) -> Tuple[Optional[LLMResponse], Optional[str]]:
-        """墙内的单模型重试循环：按 ``_RETRY_POLICY`` 分类表驱动重试/切换/中止。"""
+        """单模型重试循环：按 ``_RETRY_POLICY`` 分类表驱动重试/切换/中止。"""
         max_retries = int(provider_cfg.get("max_retries", self._retry_config.max_retries) or 0)
         base_delay = float(provider_cfg.get("retry_delay", self._retry_config.base_delay) or 0.0)
         max_delay = self._retry_config.max_delay
@@ -825,7 +751,6 @@ class LLMManager:
         request_params = {
             "messages": kwargs.get("messages"),
             "temperature": kwargs.get("temperature"),
-            "max_tokens": kwargs.get("max_tokens"),
             "tools": kwargs.get("tools"),
         }
         if request_params["messages"] is None and kwargs.get("request") is not None:
@@ -834,9 +759,6 @@ class LLMManager:
             request_params["system"] = kwargs["request"].system
             request_params["messages"] = [m.model_dump() for m in kwargs["request"].messages]
             request_params["tools"] = [t.model_dump() for t in kwargs["request"].tools] or None
-            if kwargs["request"].omit_output_token_limit:
-                request_params.pop("max_tokens", None)
-                request_params["omit_output_token_limit"] = True
             if kwargs["request"].strict_tool_arguments:
                 request_params["strict_tool_arguments"] = True
         return {k: v for k, v in request_params.items() if v is not None}
