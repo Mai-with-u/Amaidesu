@@ -1,16 +1,4 @@
-"""硬超时墙与流式超时测试
-
-证明三件事：
-
-- ``hard_timeout_ms`` 真生效：墙包住整个单模型尝试（含墙内 Retryable
-  重试），到点取消 in-flight 请求并切下一个模型
-- 流式超时分支：首 token 前到墙可 failover；首 token 后到墙只中止，
-  已外发的增量不追溯、不切换模型
-- 启动期弱校验：profile 硬超时小于 provider 请求超时时告警
-
-落库断言只用 ``llm_usage`` 单一写入点（observation.record_usage），
-超时失败的模型不产生 usage 记录，成功口径不回退。
-"""
+"""请求生命周期测试：覆盖调用等待、主动取消与故障切换。"""
 
 from __future__ import annotations
 
