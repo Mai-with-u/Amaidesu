@@ -47,6 +47,7 @@ class GiftCreateRequest(BaseModel):
     weight: int = Field(default=1, ge=1)
     data_type: str = Field(default="gift", pattern="^(gift|super_chat)$")
     sc_amount_rmb: Optional[int] = Field(default=None, ge=1)
+    unit_price: int = Field(default=0, ge=0)
 
 
 class GiftUpdateRequest(BaseModel):
@@ -57,6 +58,7 @@ class GiftUpdateRequest(BaseModel):
     weight: Optional[int] = Field(default=None, ge=1)
     data_type: Optional[str] = Field(default=None, pattern="^(gift|super_chat)$")
     sc_amount_rmb: Optional[int] = Field(default=None, ge=1)
+    unit_price: Optional[int] = Field(default=None, ge=0)
 
 
 class SimulatorReplayProgress(BaseModel):
@@ -141,6 +143,7 @@ class GiftOut(BaseModel):
     weight: int
     data_type: str
     sc_amount_rmb: Optional[int] = None
+    unit_price: int = 0
 
 
 class GiftListResponse(BaseModel):
