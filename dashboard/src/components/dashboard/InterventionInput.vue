@@ -1,6 +1,6 @@
 <template>
   <div class="intervention-bar">
-    <div class="intervention-shell">
+    <div class="intervention-shell" :class="{ 'is-sending': sending }">
       <el-input
         ref="inputRef"
         v-model="text"
@@ -167,76 +167,128 @@ defineExpose({ focus: () => inputRef.value?.focus(), settle });
 </script>
 
 <style scoped>
+/* 视觉规格沿用直播控制台输入条原样式（2026-09-26 抽组件时整体搬入）：
+   圆角容器内嵌无边框输入，模式选择器是无边框透明 chip（蓝色加粗标签），
+   聚焦描边亮起 + 光晕；下拉选项"标题+说明"两行不裁切 */
 .intervention-shell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--bg-page);
+  gap: 2px;
   padding: 8px 10px 6px;
-  transition: border-color 0.15s ease;
+  border-radius: 12px;
+  border: 1px solid var(--border-color-light);
+  background: var(--bg-hover);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .intervention-shell:focus-within {
-  border-color: var(--color-primary, var(--el-color-primary));
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.12);
 }
 
+.intervention-shell.is-sending {
+  opacity: 0.75;
+}
+
+/* 内嵌 textarea：去壳自带边框，与容器融为一体 */
 .intervention-main :deep(.el-textarea__inner) {
+  border: none;
   box-shadow: none;
   background: transparent;
   padding: 2px 4px;
   font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.intervention-main :deep(.el-textarea__inner)::placeholder {
+  color: var(--text-placeholder);
 }
 
 .intervention-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: 8px;
   min-height: 26px;
 }
 
+/* 模式 chip：无边框透明 select，标签即按钮 */
 .intervention-mode {
-  width: 108px;
+  width: auto;
+  min-width: 96px;
   flex-shrink: 0;
+}
+
+.intervention-mode :deep(.el-select__wrapper) {
+  box-shadow: none;
+  background: transparent;
+  min-height: 24px;
+  padding: 2px 4px;
+  gap: 2px;
+}
+
+.intervention-mode :deep(.el-select__wrapper:hover) {
+  background: var(--bg-active);
+  border-radius: var(--radius-sm);
+}
+
+.intervention-mode :deep(.el-select__placeholder) {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-primary);
 }
 
 .intervention-option {
   display: flex;
   flex-direction: column;
-  line-height: 1.4;
+  gap: 1px;
   padding: 2px 0;
+  line-height: 1.4;
 }
 
 .intervention-option-label {
+  font-size: 12px;
   font-weight: 600;
+  color: var(--text-primary);
 }
 
 .intervention-option-desc {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-secondary);
   white-space: normal;
-  max-width: 320px;
 }
 
 .intervention-kbd {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--text-tertiary, var(--text-secondary));
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-placeholder);
+  cursor: default;
 }
 
 .intervention-send {
   flex-shrink: 0;
+  width: 28px;
+  height: 28px;
 }
 </style>
 
 <style>
-/* 模式下拉的 popper 挂在 body 下，scoped 样式够不着——popper-class 全局放行 */
-.intervention-mode-popper .intervention-option-desc {
-  color: var(--text-secondary);
-  font-size: 11px;
+/* 模式下拉的 popper 挂在 body 下，scoped 样式够不着——
+   全局收窄宽度并放开选项的两行排版（标题+说明不裁切） */
+.intervention-mode-popper {
+  max-width: 460px;
+}
+
+.intervention-mode-popper .el-select-dropdown__item {
+  height: auto;
+  padding-top: 6px;
+  padding-bottom: 6px;
   white-space: normal;
-  max-width: 320px;
 }
 </style>
