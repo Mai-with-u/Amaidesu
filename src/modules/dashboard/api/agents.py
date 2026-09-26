@@ -4,6 +4,7 @@ Agent 控制面 API（运行态观测 + 框架级控制端点）
 - GET  /api/v1/agents                  -> 已注册 Agent 列表（运行态 + enabled 配置态）
 - GET  /api/v1/agents/{name}/state     -> 单个 Agent 运行状态
 - POST /api/v1/agents/{name}/control   -> 框架级控制（pause/resume/shutdown/restart）
+- POST /api/v1/agents/{name}/prompt    -> 递话（运营提醒/插话：纯文本留言，不派新任务）
 
 数据源：``DashboardServer.agent_control``（AgentControl 直调接口，构造时由
 agent_manager 生成）。enabled 标记读 agents.toml ``[agents].enabled`` 名单
@@ -26,6 +27,8 @@ from src.modules.dashboard.schemas.agent import (
     AgentControlRequest,
     AgentControlResponse,
     AgentListResponse,
+    AgentPromptRequest,
+    AgentPromptResponse,
     AgentStateResponse,
     AgentSummary,
 )
@@ -185,3 +188,19 @@ async def control_agent(name: str, request: AgentControlRequest, server: ServerD
         # 破坏性动作为受理语义（停机/重建异步落地），返回 202；响应体与 200 同形
         return JSONResponse(status_code=202, content=payload.model_dump(mode="json"))
     return payload
+
+
+@router.post("/{name}/prompt", response_model=AgentPromptResponse, summary="向 Agent 递话（运营提醒/插话）")
+async def prompt_agent(name: str, request: AgentPromptRequest, server: ServerDep) -> AgentPromptResponse:
+    """给指定 Agent 发纯文本留言（不派新任务、不进任务账本）。
+
+    source 固定记 "operator"（运营通道）。目标执行中的任务下一步吸收，
+    挂起中的被唤醒重新判断。Agent 不在名册 404；目标拒收（未实现消化
+    通道或留言队列已满）409。
+    """
+    control = _get_agent_control(server)
+    result = await control.prompt(name, request.content, source="operator")
+    if not result["ok"]:
+        code = 404 if result["error"] == "not_found" else 409
+        raise HTTPException(status_code=code, detail=result["message"])
+    return AgentPromptResponse(delivered=bool(result["delivered"]))

@@ -1,4 +1,4 @@
-"""委派原语集成测试（framework_delegate / framework_task_status）。
+"""委派/递话原语集成测试（framework_delegate / framework_prompt / framework_task_status）。
 
 覆盖：
 - 委派全程：回执 accepted+task_id → 状态推进（task.changed 按发起方过滤）→
@@ -7,6 +7,8 @@
   受理失败（不登记）；执行失败 → 记录表 failed 终态
 - 目标留空 → 解析为当前唯一启用的游戏 Agent；候选不唯一 → 拒绝并要求点名
 - 未知任务号查询 → 失败结果
+- 递话：受理不记账（无任务号、无 ledger 条目）/ 默认拒收 / 禁自派 /
+  内容留空拒绝；目标解析与委派同款
 - minecraft 接收委派（入队带任务号 + 唤醒 + 批次状态写回）
 """
 
@@ -44,6 +46,7 @@ class _StubAgent(BaseAgent):
         self._refuse = refuse
         self._fail_later = fail_later
         self.received: List[tuple[str, str]] = []  # (task_id, instruction)
+        self.prompts_received: List[tuple[str, str]] = []  # (content, source)
 
     def list_tools(self):
         return []
@@ -53,6 +56,10 @@ class _StubAgent(BaseAgent):
             return self._refuse
         self.received.append((task_id, instruction))
         return None
+
+    def receive_prompt(self, *, content: str, source: str = "") -> bool:
+        self.prompts_received.append((content, source))
+        return True
 
     async def run_and_finish(self, ledger: TaskLedger, *, failed: bool = False) -> None:
         """测试驱动：把收到的委派任务推进到终态（写回记录表）。"""
@@ -238,6 +245,64 @@ async def test_unknown_task_id_query_fails() -> None:
     registry, ledger, bus, a, b = _setup()
     q = await registry.invoke(_inv("framework_task_status", {"task_id": "nope-123"}))
     assert q.success is False and "任务不存在" in q.error_message
+
+
+# ---------------------------------------------------------------------------
+# 递话原语（framework_prompt：受理不记账）
+# ---------------------------------------------------------------------------
+
+
+async def test_prompt_delivers_without_ledger_entry() -> None:
+    """递话受理 → 回执 delivered（无任务号）；记录表零条目。"""
+    registry, ledger, _bus, _a, b = _setup()
+
+    res = await registry.invoke(_inv("framework_prompt", {"agent": "agent_b", "content": "先去东侧看看"}))
+
+    assert res.success is True
+    assert res.structured_content == {"delivered": True, "executor": "agent_b"}
+    assert b.prompts_received == [("先去东侧看看", "agent_a")], "递话内容与来源（调用方）到达目标"
+    assert len(ledger) == 0, "递话不进任务记录表（记账分家）"
+
+
+async def test_prompt_target_resolution_matches_delegate() -> None:
+    """递话的目标解析与委派同款：不在名册 / 自派 / 留空唯一候选。"""
+    registry, ledger, _bus, a, b = _setup()
+
+    r1 = await registry.invoke(_inv("framework_prompt", {"agent": "ghost", "content": "在吗"}))
+    assert r1.success is False and "不在名册" in r1.error_message
+
+    r2 = await registry.invoke(_inv("framework_prompt", {"agent": "agent_a", "content": "自言自语"}))
+    assert r2.success is False and "自派" in r2.error_message
+
+    r3 = await registry.invoke(_inv("framework_prompt", {"content": "留空目标"}))
+    assert r3.success is True and r3.structured_content["executor"] == "agent_b"
+    assert b.prompts_received[-1] == ("留空目标", "agent_a")
+
+    r4 = await registry.invoke(_inv("framework_prompt", {"agent": "agent_b", "content": ""}))
+    assert r4.success is False and "content" in r4.error_message
+
+    assert len(ledger) == 0
+
+
+async def test_prompt_default_refusal_when_no_channel() -> None:
+    """未实现递话消化的 stub（默认拒收路径）→ 失败结果。"""
+
+    class _NoChannelAgent(_StubAgent):
+        # 删掉 receive_prompt → 走 BaseAgent 默认拒收
+        receive_prompt = BaseAgent.receive_prompt  # type: ignore[assignment]
+
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    ledger = TaskLedger(event_bus=bus)
+    manager = AgentManager()
+    a = _StubAgent("agent_a")
+    c = _NoChannelAgent("agent_c")
+    manager.register(a)
+    manager.register(c)
+    registry.register_provider(build_agent_control_provider(manager, ledger))
+
+    res = await registry.invoke(_inv("framework_prompt", {"agent": "agent_c", "content": "试试"}))
+    assert res.success is False and "拒收" in res.error_message
 
 
 # ---------------------------------------------------------------------------

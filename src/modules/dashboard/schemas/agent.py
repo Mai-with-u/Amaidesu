@@ -67,3 +67,15 @@ class AgentControlResponse(BaseModel):
     name: str
     message: str
     state: Optional[str] = None
+
+
+class AgentPromptRequest(BaseModel):
+    """Agent 递话请求体（运营提醒/插话：纯文本留言，不派新任务）"""
+
+    content: str
+
+
+class AgentPromptResponse(BaseModel):
+    """Agent 递话响应"""
+
+    delivered: bool

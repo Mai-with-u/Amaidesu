@@ -31,8 +31,19 @@ class _SampleAgent(BaseAgent):
     name = "sample_agent"
     description = "sample agent for agents api tests"
 
+    def __init__(self, accept_prompt: bool = True, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._accept_prompt = accept_prompt
+        self.received_prompts: list[tuple[str, str]] = []
+
     def list_tools(self) -> Iterable[ToolSpec]:
         return []
+
+    def receive_prompt(self, *, content: str, source: str = "") -> bool:
+        if not self._accept_prompt:
+            return False
+        self.received_prompts.append((content, source))
+        return True
 
     async def _on_start(self) -> None:
         return None
@@ -207,6 +218,34 @@ def test_control_unknown_agent_returns_404(client: TestClient) -> None:
     resp = client.post("/api/v1/agents/ghost/control", json={"action": "pause"})
     assert resp.status_code == 404
     assert "ghost" in resp.json()["detail"]
+
+
+# ==================== POST /api/v1/agents/{name}/prompt ====================
+
+
+def test_prompt_delivers_with_operator_source(client: TestClient, manager: AgentManager) -> None:
+    resp = client.post("/api/v1/agents/sample_agent/prompt", json={"content": "注意东侧的苦力怕"})
+    assert resp.status_code == 200
+    assert resp.json() == {"delivered": True}
+
+    agent = manager.get_agent_by_name("sample_agent")
+    assert agent is not None
+    assert agent.received_prompts == [("注意东侧的苦力怕", "operator")], "REST 通道来源固定记 operator"
+
+
+def test_prompt_unknown_agent_returns_404(client: TestClient) -> None:
+    resp = client.post("/api/v1/agents/ghost/prompt", json={"content": "在吗"})
+    assert resp.status_code == 404
+    assert "ghost" in resp.json()["detail"]
+
+
+def test_prompt_refusal_returns_409(client: TestClient, manager: AgentManager) -> None:
+    agent = manager.get_agent_by_name("sample_agent")
+    assert agent is not None
+    agent._accept_prompt = False  # 模拟拒收路径（默认拒收 / 队列满）
+    resp = client.post("/api/v1/agents/sample_agent/prompt", json={"content": "在吗"})
+    assert resp.status_code == 409
+    assert "拒收" in resp.json()["detail"]
 
 
 # ==================== agent_control 未注入 ====================
