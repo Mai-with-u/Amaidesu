@@ -10,7 +10,9 @@ import axios from 'axios';
 import type {
   AgentControlActionType,
   AgentControlResponse,
+  AgentDelegateResponse,
   AgentListResponse,
+  AgentPromptResponse,
   AgentState,
   SystemStatusResponse,
   ChangelogResponse,
@@ -38,6 +40,7 @@ import type {
   SimulatorStatus,
   SimPersona,
   SimGift,
+  TaskSnapshotResponse,
   SimulatorControlResponse,
   RundownStateResponse,
   RundownControlRequest,
@@ -161,6 +164,20 @@ export const agentsApi = {
   getAgentState: (name: string) => api.get<AgentState>(`/agents/${name}/state`),
   controlAgent: (name: string, action: AgentControlActionType, confirm?: boolean) =>
     api.post<AgentControlResponse>(`/agents/${name}/control`, { action, confirm }),
+  /** 递话：纯文本留言（不派新任务；目标拒收 409，不在名册 404） */
+  promptAgent: (name: string, content: string) =>
+    api.post<AgentPromptResponse>(`/agents/${name}/prompt`, { content }),
+  /** 直派：派新任务登记账本（任务卡可见；目标拒收 409） */
+  delegateAgent: (name: string, instruction: string) =>
+    api.post<AgentDelegateResponse>(`/agents/${name}/delegate`, { instruction }),
+  /** 硬取消：清追踪 + 账面 cancelled + 通知停手（任务未知/已终态 404） */
+  cancelAgentTask: (name: string, taskId: string) =>
+    api.post<{ cancelled: boolean }>(`/agents/${name}/tasks/${taskId}/cancel`),
+};
+
+// 任务卡快照（进行中账本 + 已完结事件聚合）
+export const tasksApi = {
+  listTasks: () => api.get<TaskSnapshotResponse>('/tasks'),
 };
 
 // Simulator 控制面（模拟器：generate 生成 / replay 回放）

@@ -130,6 +130,36 @@ export interface AgentControlResponse {
   state?: string | null;
 }
 
+/** Agent 递话响应（纯文本留言：不派新任务） */
+export interface AgentPromptResponse {
+  delivered: boolean;
+}
+
+/** Agent 直派受理回执（派新任务，登记账本） */
+export interface AgentDelegateResponse {
+  accepted: boolean;
+  task_id: string;
+  executor: string;
+}
+
+/** 任务卡（进行中 = 账本快照；已完结 = 事件环聚合的终态末次载荷） */
+export interface TaskCard {
+  task_id: string;
+  instruction: string;
+  status: string;
+  initiator: string;
+  executor: string;
+  summary: string;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+/** 任务卡全量快照（GET /api/v1/tasks；已完结仅本次运行内） */
+export interface TaskSnapshotResponse {
+  running: TaskCard[];
+  finished: TaskCard[];
+}
+
 // 配置
 //
 // 配置读写经 stores/settings.ts 直连 `/api/v1/config/*`（响应形状内联于
