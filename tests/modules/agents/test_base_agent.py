@@ -413,7 +413,7 @@ def test_agent_manager_get_and_contains(sample_agent: _SampleAgent) -> None:
 
 
 async def test_agent_control_list_tools_via_registry(sample_agent: _SampleAgent) -> None:
-    """framework provider 只含委派 2 件；6 个控制工具不在 LLM 工具面。"""
+    """framework provider 含委派/递话/任务状态 3 件；6 个控制工具不在 LLM 工具面。"""
     mgr = AgentManager()
     mgr.register(sample_agent)
     await sample_agent.start()
@@ -421,7 +421,7 @@ async def test_agent_control_list_tools_via_registry(sample_agent: _SampleAgent)
     control_provider = build_agent_control_provider(mgr)
     reg = ToolRegistry()
     n = reg.register_provider(control_provider)
-    assert n == 2, "framework provider 应只暴露 delegate/task_status 两个工具"
+    assert n == 3, "framework provider 应暴露 delegate/prompt/task_status 三个工具"
 
     # 控制工具已移出 LLM 工具面（控制面经 DashboardServer 直调 AgentControl）
     removed = {
@@ -433,7 +433,7 @@ async def test_agent_control_list_tools_via_registry(sample_agent: _SampleAgent)
         "framework_agent_state",
     }
     names = {spec.full_name for spec in reg.list_tools(for_agent="streamer")}
-    assert {"framework_delegate", "framework_task_status"}.issubset(names)
+    assert {"framework_delegate", "framework_prompt", "framework_task_status"}.issubset(names)
     assert removed.isdisjoint(names)
 
 
@@ -539,3 +539,8 @@ async def test_task_wakeup_filters_by_initiator_and_unsubscribes() -> None:
 def test_receive_prompt_default_refusal(sample_agent: _SampleAgent) -> None:
     """未实现递话消化的子类走基类默认拒收：返回 False，不抛异常。"""
     assert sample_agent.receive_prompt(content="插句话", source="operator") is False
+
+
+def test_cancel_task_default_refusal(sample_agent: _SampleAgent) -> None:
+    """未实现取消入口的子类走基类默认拒收：返回 False。"""
+    assert sample_agent.cancel_task("t-nonexistent", source="operator") is False

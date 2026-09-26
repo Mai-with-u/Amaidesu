@@ -5,6 +5,7 @@ Agent 控制面 API（运行态观测 + 框架级控制端点）
 - GET  /api/v1/agents/{name}/state     -> 单个 Agent 运行状态
 - POST /api/v1/agents/{name}/control   -> 框架级控制（pause/resume/shutdown/restart）
 - POST /api/v1/agents/{name}/prompt    -> 递话（运营提醒/插话：纯文本留言，不派新任务）
+- POST /api/v1/agents/{name}/tasks/{task_id}/cancel -> 硬取消（强制清账 + 通知停手）
 
 数据源：``DashboardServer.agent_control``（AgentControl 直调接口，构造时由
 agent_manager 生成）。enabled 标记读 agents.toml ``[agents].enabled`` 名单
@@ -23,6 +24,7 @@ from fastapi.responses import JSONResponse
 
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.agent import (
+    AgentCancelTaskResponse,
     AgentControlAction,
     AgentControlRequest,
     AgentControlResponse,
@@ -204,3 +206,21 @@ async def prompt_agent(name: str, request: AgentPromptRequest, server: ServerDep
         code = 404 if result["error"] == "not_found" else 409
         raise HTTPException(status_code=code, detail=result["message"])
     return AgentPromptResponse(delivered=bool(result["delivered"]))
+
+
+@router.post(
+    "/{name}/tasks/{task_id}/cancel",
+    response_model=AgentCancelTaskResponse,
+    summary="硬取消 Agent 的任务（强制清账 + 通知停手）",
+)
+async def cancel_agent_task(name: str, task_id: str, server: ServerDep) -> AgentCancelTaskResponse:
+    """强制取消指定任务：清执行 Agent 的委派追踪 + 账面写 cancelled + 注入停手通知。
+
+    取消经执行 Agent 写账（单写者规则），软取消不打断当前工具调用。
+    source 固定记 "operator"。Agent 不在名册、任务未知或已终态 → 404。
+    """
+    control = _get_agent_control(server)
+    result = await control.cancel_task(name, task_id, source="operator")
+    if not result["ok"]:
+        raise HTTPException(status_code=404, detail=result["message"])
+    return AgentCancelTaskResponse(cancelled=True)

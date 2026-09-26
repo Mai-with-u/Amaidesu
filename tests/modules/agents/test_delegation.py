@@ -364,3 +364,98 @@ async def test_minecraft_receives_delegation_and_reports_terminal() -> None:
     # 4. 交付 → succeeded + 终态移除
     await minecraft._handle_report("delivery", "房子建好了", scene="0,0,0")
     assert ledger.get(task_id) is None, "delivery 后委派任务终态移除"
+
+
+# ---------------------------------------------------------------------------
+# minecraft 硬取消（清追踪清单 + 账面 cancelled + 停手通知）
+# ---------------------------------------------------------------------------
+
+
+def _minecraft_agent_with_ledger(bus: EventBus, registry: ToolRegistry, ledger: TaskLedger) -> "object":  # noqa: ANN401 - 返回真实 MinecraftAgent
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.agents.minecraft.agent import MinecraftAgent
+    from src.agents.minecraft.config import MinecraftConfig
+    from src.modules.mcp.config import McpServerConfig
+
+    llm = MagicMock()
+    llm.chat_messages = AsyncMock(side_effect=[])
+    tracker = TaskTracker(registry, ledger, poll_interval_ms=20)
+    return MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=False)),
+        llm_manager=llm,
+        event_bus=bus,
+        tool_registry=registry,
+        task_tracker=tracker,
+    )
+
+
+async def _delegate_to_minecraft(registry: ToolRegistry, instruction: str = "建一座木头房子") -> tuple["object", str]:  # noqa: ANN401
+    res = await registry.invoke(
+        ToolInvocation(
+            tool_name="framework_delegate",
+            arguments={"agent": "minecraft", "instruction": instruction},
+            source="streamer",
+        )
+    )
+    assert res.success is True
+    return res.structured_content["task_id"]
+
+
+def _absorb_into_batch(minecraft: "object", task_id: str) -> None:  # noqa: ANN401
+    """复刻 _run_task 的消息 flush：委派指令吸收进本批并标记 running。"""
+    del task_id  # 任务号随队列项携带
+    while minecraft._message_queue:
+        tid, _content = minecraft._message_queue.popleft()
+        if tid:
+            minecraft._delegated_batch_ids.append(tid)
+    minecraft._mark_delegated_running()
+
+
+async def test_minecraft_cancel_task_clears_ledger_and_tracking() -> None:
+    """硬取消：账面 cancelled 终态移除 + 追踪清单清空 + 停手通知入队；迟到收尾写不进账。"""
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    ledger = TaskLedger(event_bus=bus)
+    manager = AgentManager()
+    minecraft = _minecraft_agent_with_ledger(bus, registry, ledger)
+    manager.register(minecraft)
+    registry.register_provider(build_agent_control_provider(manager, ledger))
+
+    task_id = await _delegate_to_minecraft(registry)
+    _absorb_into_batch(minecraft, task_id)
+    assert ledger.get(task_id) is not None and ledger.get(task_id).status == "running"
+
+    assert minecraft.cancel_task(task_id, source="operator") is True
+    assert ledger.get(task_id) is None, "cancelled 终态条目已移除"
+    assert minecraft._delegated_batch_ids == [] and minecraft._delegated_finished_ids == []
+    queued = [content for tid, content in minecraft._message_queue if not tid]
+    assert any(task_id in content and "已被取消" in content for content in queued), "停手通知已入队"
+
+    # LLM 收尾（如误报 succeeded）——追踪清单已清空，账面不被污染
+    minecraft._finish_delegated("succeeded", summary="迟到的收尾")
+    assert ledger.get(task_id) is None
+
+    # 已终态再取消 → False（REST 侧映射 404）
+    assert minecraft.cancel_task(task_id, source="operator") is False
+
+
+async def test_minecraft_cancel_clears_suspended_zombie() -> None:
+    """僵尸账（waiting_for_decision 挂起）可经硬取消清场。"""
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    ledger = TaskLedger(event_bus=bus)
+    manager = AgentManager()
+    minecraft = _minecraft_agent_with_ledger(bus, registry, ledger)
+    manager.register(minecraft)
+    registry.register_provider(build_agent_control_provider(manager, ledger))
+
+    task_id = await _delegate_to_minecraft(registry)
+    _absorb_into_batch(minecraft, task_id)
+    await minecraft._suspend_with_report("迷宫尽头卡住，需要决策")
+    record = ledger.get(task_id)
+    assert record is not None and record.status == "waiting_for_decision"
+
+    assert minecraft.cancel_task(task_id, source="operator") is True
+    assert ledger.get(task_id) is None
+    assert minecraft._delegated_finished_ids == []

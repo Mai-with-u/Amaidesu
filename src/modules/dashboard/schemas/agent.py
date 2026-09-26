@@ -79,3 +79,9 @@ class AgentPromptResponse(BaseModel):
     """Agent 递话响应"""
 
     delivered: bool
+
+
+class AgentCancelTaskResponse(BaseModel):
+    """任务硬取消响应"""
+
+    cancelled: bool

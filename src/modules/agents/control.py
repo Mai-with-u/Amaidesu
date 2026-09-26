@@ -135,6 +135,28 @@ class AgentControl:
             return {"ok": False, "error": "refused", "message": f"Agent '{name}' 拒收递话（未实现消化通道或留言已满）"}
         return {"ok": True, "delivered": True, "executor": name}
 
+    async def cancel_task(self, name: str, task_id: str, *, source: str = "operator") -> dict:
+        """硬取消指定 Agent 的任务（控制面直调，供运营 REST）。
+
+        取消经执行 Agent（单写者规则：框架不代写账面）。返回
+        ``{"ok": True, "cancelled": True}`` 或
+        ``{"ok": False, "error": "agent_not_found"|"task_not_found",
+        "message": …}``——REST 侧一律映射 404（不在名册 / 任务未知或已终态）。
+        """
+        agent = self._manager.get_agent_by_name(name)
+        if agent is None:
+            logger.warning(f"cancel_task: 未找到 Agent '{name}'")
+            return {"ok": False, "error": "agent_not_found", "message": f"Agent 不存在: {name}"}
+        cancelled = agent.cancel_task(task_id, source=source)
+        if not cancelled:
+            logger.info(f"cancel_task: Agent '{name}' 拒收取消（task_id={task_id}）")
+            return {
+                "ok": False,
+                "error": "task_not_found",
+                "message": f"任务不存在或已终态: {task_id}（Agent '{name}' 未在追踪）",
+            }
+        return {"ok": True, "cancelled": True}
+
     def list_agents(self) -> List[str]:
         return self._manager.list_agents()
 

@@ -560,6 +560,25 @@ class MinecraftAgent(BaseAgent):
         self._logger.info(f"MinecraftAgent 收到委派（task_id={task_id}）：{instruction[:60]}")
         return None  # 已接收
 
+    def cancel_task(self, task_id: str, source: str = "") -> bool:
+        """硬取消：清委派追踪清单 + 账面 cancelled + 注入停手通知。
+
+        软取消哲学（与 pause 同）：不打断当前工具调用，靠系统消息让 LLM
+        下一步自行停手走既有终止语义；终态粘滞保证其后的收尾动作写不进
+        账。任务不在追踪清单（未知号/已终态移除）→ False。
+        """
+        if task_id not in self._delegated_batch_ids and task_id not in self._delegated_finished_ids:
+            return False
+        if task_id in self._delegated_batch_ids:
+            self._delegated_batch_ids.remove(task_id)
+        if task_id in self._delegated_finished_ids:
+            self._delegated_finished_ids.remove(task_id)
+        if self._task_tracker is not None:
+            self._task_tracker.ledger.update(task_id, "cancelled", summary=f"被取消（source={source or '未知'}）")
+        self._inject_wakeup_message(f"[系统] 任务 {task_id} 已被取消，请停止相关工作。")
+        self._logger.info(f"MinecraftAgent 任务已取消（task_id={task_id}, source={source or '未知'}）")
+        return True
+
     async def _worker(self) -> None:
         """命令工作协程：等待命令信号 → 执行目标任务 → 回到等待（空闲零消耗）。"""
         while self._running:

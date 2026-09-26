@@ -35,6 +35,8 @@ class _SampleAgent(BaseAgent):
         super().__init__(**kwargs)
         self._accept_prompt = accept_prompt
         self.received_prompts: list[tuple[str, str]] = []
+        self._accept_cancel = True
+        self.cancelled_tasks: list[str] = []
 
     def list_tools(self) -> Iterable[ToolSpec]:
         return []
@@ -43,6 +45,12 @@ class _SampleAgent(BaseAgent):
         if not self._accept_prompt:
             return False
         self.received_prompts.append((content, source))
+        return True
+
+    def cancel_task(self, task_id: str, source: str = "") -> bool:
+        if not self._accept_cancel:
+            return False
+        self.cancelled_tasks.append(task_id)
         return True
 
     async def _on_start(self) -> None:
@@ -273,3 +281,31 @@ def test_agents_endpoints_return_503_without_control(config_dir: Path) -> None:
         assert tc.post("/api/v1/agents/x/control", json={"action": "pause"}).status_code == 503
     finally:
         set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+# ==================== POST /api/v1/agents/{name}/tasks/{task_id}/cancel ====================
+
+
+def test_cancel_task_succeeds(client: TestClient, manager: AgentManager) -> None:
+    resp = client.post("/api/v1/agents/sample_agent/tasks/deleg_1/cancel")
+    assert resp.status_code == 200
+    assert resp.json() == {"cancelled": True}
+
+    agent = manager.get_agent_by_name("sample_agent")
+    assert agent is not None
+    assert agent.cancelled_tasks == ["deleg_1"]
+
+
+def test_cancel_task_unknown_agent_returns_404(client: TestClient) -> None:
+    resp = client.post("/api/v1/agents/ghost/tasks/deleg_1/cancel")
+    assert resp.status_code == 404
+    assert "ghost" in resp.json()["detail"]
+
+
+def test_cancel_task_unknown_or_terminal_returns_404(client: TestClient, manager: AgentManager) -> None:
+    agent = manager.get_agent_by_name("sample_agent")
+    assert agent is not None
+    agent._accept_cancel = False  # 模拟任务不在追踪（未知号/已终态移除）
+    resp = client.post("/api/v1/agents/sample_agent/tasks/deleg_gone/cancel")
+    assert resp.status_code == 404
+    assert "deleg_gone" in resp.json()["detail"]

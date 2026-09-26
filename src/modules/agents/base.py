@@ -251,6 +251,19 @@ class BaseAgent(abc.ABC):
         logger.debug(f"Agent '{self.name or type(self).__name__}' 拒收递话（未实现消化通道）")
         return False
 
+    def cancel_task(self, task_id: str, source: str = "") -> bool:
+        """硬取消入口（运营/发起方强制清账；**默认拒收**）。
+
+        与 receive_delegation / receive_prompt 并列三件套。语义：从执行
+        Agent 的委派追踪清单移除该任务 + 账面写 cancelled 终态 + 通知执行
+        循环停手——单写者规则不动（取消经执行 Agent，框架不代写账面）。
+        任务不在本 Agent 追踪范围（未知号/已终态）时返回 False。
+        source 仅用于日志与账面摘要。
+        """
+        del task_id, source
+        logger.debug(f"Agent '{self.name or type(self).__name__}' 拒收取消（未实现取消入口）")
+        return False
+
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """任务变化通知钩子（``task.changed``，仅发起方是自己时被调）。
 
