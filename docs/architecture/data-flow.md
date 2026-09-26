@@ -223,6 +223,7 @@ v2 中不同数据走不同通道，不要混用：
 | **EventBus** | 元数据事件（房间消息、状态变更、工具结果、流程单变更、TTS 生命周期） | 小型 JSON/Pydantic 对象 | `room.message.danmaku` / `tool.result.choose_option` / `rundown.changed` / `tts.utterance.started` |
 | **ToolRegistry.invoke** | 同步/异步工具调用 | 调用方持有 `ToolExecutionResult` | `await registry.invoke("streamer_reply", args)` / `await registry.invoke("vts_set_expression", args)` |
 | **基础模块直调** | TTS 引擎由装配期注入，运行时绕过 ToolRegistry | 调用方持有引擎实例 | `await tts_engine.handle_speech(text, utterance_id)`（StreamerAgent 内部 speak 适配器；TTS 不在工具池中） |
+| **REST 控制面直调** | 运营干预（递话/直派/硬取消；ADR-034） | 同步请求-响应、语义化错误码；意图递给归属组件，不代写账面 | `POST /api/v1/agents/{name}/prompt|delegate|tasks/{id}/cancel` → `AgentControl` |
 
 **EventBus 与 ToolRegistry 的边界**：事件总线是"发生了什么事"的广播；ToolRegistry 是"我要做什么事"的直接调用。同一工具调用既可以同步等结果，也可以 fire-and-forget 后让工具异步 emit `tool.result.<name>` 由订阅者回收——这两种语义都允许，工具实现侧在 `invoke()` 内自行决定。
 

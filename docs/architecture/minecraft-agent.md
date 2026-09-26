@@ -12,7 +12,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 **MinecraftAgent = 一个用 MCP 工具玩 Minecraft 的普通 ReAct Agent。**
 
 - 系统提示词 + 工具列表 = 全部"编程"，不发明任何特殊协议
-- 主播 Agent 是它的用户：发指令（跨 Agent 派活走框架委派 `framework_delegate`）/读工作文档（`minecraft_get_work_log`）/收上报（`game.report`）
+- 主播 Agent 是它的用户：发指令（跨 Agent 派活走框架委派 `framework_delegate`，中途插话走递话 `framework_prompt`）/读工作文档（`minecraft_get_work_log`）/收上报（`game.report`）
 - 异步任务统一采用受理回执：Mod 施工由后台 tick 驱动，建筑设计由包内子 Agent 推进；系统跟踪任务并在有结果时唤醒游戏 Agent，LLM 不用推理步数轮询
 - LLM 可一次返回多个 tool_calls（批量请求 → 串行执行 → 批量作为观察返回，标准 function calling 循环）
 
@@ -44,7 +44,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | # | 情形 | 行为 |
 |---|------|------|
 | 1 | LLM 调 `minecraft_report(kind=delivery)` | 有未决 handoff 或未完成待办时拒绝交付，返回错误观察；通过门禁后停止 |
-| 2 | LLM 调 `minecraft_report(kind=escalation)` | 停止，静默等主播委派 |
+| 2 | LLM 调 `minecraft_report(kind=escalation)` | 停止；账面写 `waiting_for_decision`（升级=受阻上报待定夺，非 failed 终态），委派追踪保留，等递话唤醒 / 恢复续跑 / 硬取消清账 |
 | 3 | 自然终止，无 report、无未决 handoff 且待办完成 | 系统兜底交付，并结算原委派任务 |
 | 4 | 自然终止，仅剩实际运行中的 handoff | 静默让出回合，等 handoff 唤醒 |
 | 5 | 仍需行动却在提醒后继续停顿 | `game.attention_required` 挂起，保留原任务等待继续指令 |
@@ -60,6 +60,14 @@ execute 受理 ≠ 完成：等待期 LLM 自由行动（推进其他 todo / 记
 - **事实核实**：通知/到点后查询任务快照；简短事件仅提示需要核实，同一页每个任务核实一次。状态变化或新的原生决策才唤醒模型，查询失败继续由跟踪器兜底，不能凭简短完成通知移除交付门禁。
 - **wait_timeout**：`execute_wait_timeout_ms` 长期无进展 → 注入告警消息（不杀任务，deadline 顺延），LLM 自行决定后续
 - 终态（success/failed/timeout/cancelled）注入后移除跟踪；决策点（waiting_for_decision）/暂停注入后保留跟踪（LLM 用 `maicraft_task(action="answer")` 应答后任务恢复后台跑）
+
+### 运营干预入口（递话 / 硬取消 / 断连恢复）
+
+委派之外，minecraft 另有两个干预入口与一条自愈路径（原语定案见 ADR-034，账面语义见 ADR-035）：
+
+- **递话 `receive_prompt`**：纯文本留言（主播经 `framework_prompt` 工具、运营经 REST），不派新任务、不进账本——文本入消息队列（任务号空串）+ 唤醒。任务执行中下一步推理前被 flush 吸收；挂起中唤醒重新判断；任务已交付时它不构成新任务起点（派正式新活走委派，任务卡可见）。
+- **硬取消 `cancel_task`**：任务在委派追踪清单 → 清清单 + 账面写 cancelled 终态 + 注入"[系统] 任务已被取消"通知，LLM 下一步自行停手走既有终止语义；终态粘滞保证其后的迟到收尾写不进账。软取消（与 pause 同哲学）：不打断当前工具调用。`waiting_for_decision` 僵尸账以取消为清场手段。
+- **MCP 断连恢复续跑**：私有 MCP 恢复循环装配成功后注入"连接已恢复"通知 + 解锁挂起态 + 唤醒——批次在跑则通知被下一步吸收，已挂起则被唤醒重跑；账面由批次重启对追踪清单旧委派重写 running（escalation 留账不再是死账，交付终态有处可写）。
 
 ## 工具契约
 
@@ -140,3 +148,5 @@ url = "http://127.0.0.1:8766/mcp"
 - [事件系统](event-system.md) — game.* 事件语义单一事实源
 - [数据流规则](data-flow.md) — 事件流约束
 - [组件开发指南](../guides/component.md) — 游戏 Agent 范式
+- [ADR-034](../decisions/034-agent-intervention-primitives.md) — 递话/硬取消/运营直派原语定案
+- [ADR-035](../decisions/035-escalation-ledger-semantics.md) — escalation 账面语义与断连恢复续跑

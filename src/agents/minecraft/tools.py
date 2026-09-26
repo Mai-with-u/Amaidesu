@@ -112,11 +112,11 @@ def build_todo_spec() -> ToolSpec:
 
 
 def build_notebook_spec() -> ToolSpec:
-    """``minecraft_notebook`` 工具规格——工作笔记（持久记忆，LLM 自主沉淀）"""
+    """``minecraft_notebook`` 工具规格——工作笔记（跨批次保留的内存态，LLM 自主沉淀）"""
     return ToolSpec(
         name="notebook",
         description=(
-            "工作笔记文档（全量读写，无 id）。你的持久工作记忆："
+            "工作笔记文档（全量读写，无 id）。你的跨批次工作记忆（进程内保留，重启即清）："
             "记录值得跨轮次保留的关键信息（矿石位置/基地坐标/已完成事项/教训），"
             "对话历史会被压缩、笔记不会——重要发现写这里，每轮可根据需要读回参考。"
             "read 返回全文；write 提交新全文（覆盖）。按需使用，不每轮强制。"
