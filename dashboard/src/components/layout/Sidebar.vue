@@ -76,9 +76,11 @@
     </nav>
 
     <div class="sidebar-footer">
-      <span v-if="version" class="version" title="查看更新日志" @click="changelogVisible = true"
-        >v{{ version }}</span
-      >
+      <button v-if="version" type="button" class="changelog-entry" @click="changelogVisible = true">
+        <el-icon class="entry-icon"><Memo /></el-icon>
+        <span class="version-num">v{{ version }}</span>
+        <span class="entry-label">更新日志</span>
+      </button>
     </div>
     <ChangelogDialog v-model="changelogVisible" />
   </div>
@@ -104,6 +106,7 @@ import {
   MagicStick,
   User,
   Collection,
+  Memo,
 } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/stores';
 import ChangelogDialog from './ChangelogDialog.vue';
@@ -197,15 +200,32 @@ onMounted(() => {
   text-align: center;
 }
 
-.version {
-  font-size: 11px;
-  color: var(--text-placeholder);
-  font-family: var(--font-mono);
+.changelog-entry {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  background-color: transparent;
+  color: var(--text-regular);
+  font-family: inherit;
+  font-size: 12px;
   cursor: pointer;
-  transition: color var(--transition-fast);
+  transition: all var(--transition-fast);
 }
 
-.version:hover {
+.changelog-entry:hover {
   color: var(--color-primary);
+  border-color: var(--color-primary);
+  background-color: var(--bg-hover);
+}
+
+.version-num {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
 }
 </style>
