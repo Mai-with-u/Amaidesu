@@ -429,7 +429,24 @@ class MinecraftAgent(BaseAgent):
             self._logger.info(
                 f"Agent 私有 MCP（名单 fail-closed）装配恢复：{count} 个工具（新增 {len(report.get('added', []))}）"
             )
+            self._on_mcp_recovered()
             return
+
+    def _on_mcp_recovered(self) -> None:
+        """MCP 连接恢复后的任务侧动作：注入通知 + 解锁挂起 + 唤醒。
+
+        断连期间任务层不知情——批次在跑则模型沉浸于失败观察，已挂起
+        （``_task_suspended``）则门卫等 MinecraftInstruction 永不唤醒。
+        恢复通知进队列后批次在跑被下一步 flush 吸收；挂起中解锁后被
+        唤醒重跑，账面由批次重启的 ``_mark_delegated_running`` 对追踪
+        清单旧委派重写 running（不代写账，恢复循环只给信号）。
+        """
+        self._inject_wakeup_message(
+            "[系统] Minecraft 连接已恢复，maicraft 工具重新可用。若此前因连接失败受阻，请评估现场并继续原任务。"
+        )
+        if self._task_suspended:
+            self._task_suspended = False
+        self._wake_event.set()
 
     @staticmethod
     def _maicraft_visible_to(specs: Iterable[ToolSpec]) -> Dict[str, List[str]]:
@@ -1510,8 +1527,21 @@ class MinecraftAgent(BaseAgent):
         self._task_reported = True
         self._task_finished = kind == "delivery"
         self._task_suspended = kind == "escalation"
-        # 委派终态保留完整交付结论或受阻原因，主播据此处理尾部的材料与现场要求。
-        self._finish_delegated("succeeded" if kind == "delivery" else "failed", summary=f"{kind}: {content}")
+        # 委派账面：交付写 succeeded 终态；升级写 waiting_for_decision——
+        # "升级=受阻上报待定夺"，记 failed 是语义误用且终态粘滞会让续跑
+        # 失明（恢复后无处可写）。与 _suspend_with_report 同形（快照同形、
+        # **保留追踪清单**），批次重启时旧委派经 _mark_delegated_running
+        # 重写 running。
+        if kind == "delivery":
+            self._finish_delegated("succeeded", summary=f"{kind}: {content}")
+        elif self._task_tracker is not None:
+            for tid in self._delegated_finished_ids:
+                self._task_tracker.ledger.update(
+                    tid,
+                    "waiting_for_decision",
+                    summary=f"{kind}: {content}",
+                    snapshot={"waiting_for_instruction": True, "reason": f"{kind}: {content}"},
+                )
         return None
 
     def _system_prompt(self) -> str:

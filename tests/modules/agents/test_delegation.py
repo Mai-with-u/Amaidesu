@@ -459,3 +459,64 @@ async def test_minecraft_cancel_clears_suspended_zombie() -> None:
     assert minecraft.cancel_task(task_id, source="operator") is True
     assert ledger.get(task_id) is None
     assert minecraft._delegated_finished_ids == []
+
+
+# ---------------------------------------------------------------------------
+# minecraft 断连恢复续跑（escalation 账面语义 + 恢复唤醒）
+# ---------------------------------------------------------------------------
+
+
+async def test_escalation_writes_waiting_for_decision_not_failed() -> None:
+    """escalation = 受阻上报待定夺：账面 waiting_for_decision（非 failed 终态），追踪保留。"""
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    ledger = TaskLedger(event_bus=bus)
+    manager = AgentManager()
+    minecraft = _minecraft_agent_with_ledger(bus, registry, ledger)
+    manager.register(minecraft)
+    registry.register_provider(build_agent_control_provider(manager, ledger))
+
+    task_id = await _delegate_to_minecraft(registry)
+    _absorb_into_batch(minecraft, task_id)
+    await minecraft._handle_report("escalation", "迷宫尽头卡住，需要决策", scene="")
+
+    record = ledger.get(task_id)
+    assert record is not None, "waiting_for_decision 非终态，条目保留在账"
+    assert record.status == "waiting_for_decision"
+    assert record.snapshot.get("waiting_for_instruction") is True
+    assert minecraft._delegated_finished_ids == [task_id], "追踪清单保留（挂起可被唤醒续跑）"
+    assert minecraft._task_suspended is True
+
+
+async def test_mcp_recovery_resumes_suspended_task() -> None:
+    """断连挂起 → 恢复 → 通知注入 + 解锁挂起 → 批次续跑 → 交付 succeeded。"""
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    ledger = TaskLedger(event_bus=bus)
+    manager = AgentManager()
+    minecraft = _minecraft_agent_with_ledger(bus, registry, ledger)
+    manager.register(minecraft)
+    registry.register_provider(build_agent_control_provider(manager, ledger))
+
+    task_id = await _delegate_to_minecraft(registry)
+    _absorb_into_batch(minecraft, task_id)
+    await minecraft._handle_report("escalation", "连接失败受阻", scene="")
+    assert minecraft._task_suspended is True
+
+    # MCP 恢复成功（_mcp_recover_loop 装配恢复分支调用）
+    minecraft._on_mcp_recovered()
+    assert minecraft._task_suspended is False, "挂起已解锁"
+    assert minecraft._wake_event.is_set(), "worker 已被唤醒"
+    queued = [content for tid, content in minecraft._message_queue if not tid]
+    assert any("连接已恢复" in content for content in queued), "恢复通知已入队"
+
+    # 批次续跑：通知被下一步 flush 吸收，旧委派重写 running（账面复活）
+    while minecraft._message_queue:
+        minecraft._message_queue.popleft()
+    minecraft._mark_delegated_running()
+    record = ledger.get(task_id)
+    assert record is not None and record.status == "running"
+
+    # 交付 → succeeded 终态移除
+    await minecraft._handle_report("delivery", "现场评估后继续并完成", scene="")
+    assert ledger.get(task_id) is None
