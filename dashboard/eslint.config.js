@@ -2,6 +2,7 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import pluginVue from 'eslint-plugin-vue';
 import eslintConfigPrettier from 'eslint-config-prettier';
+import globals from 'globals';
 
 export default [
   {
@@ -17,57 +18,13 @@ export default [
       parserOptions: {
         parser: tseslint.parser,
       },
-      globals: {
-        window: 'readonly',
-        console: 'readonly',
-        document: 'readonly',
-        navigator: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-        setInterval: 'readonly',
-        clearInterval: 'readonly',
-        requestAnimationFrame: 'readonly',
-        cancelAnimationFrame: 'readonly',
-        MutationObserver: 'readonly',
-        ResizeObserver: 'readonly',
-        WebSocket: 'readonly',
-        HTMLElement: 'readonly',
-        DOMParser: 'readonly',
-        HTMLImageElement: 'readonly',
-        HTMLDivElement: 'readonly',
-        MouseEvent: 'readonly',
-        KeyboardEvent: 'readonly',
-        Event: 'readonly',
-        HTMLDetailsElement: 'readonly',
-      },
+      globals: globals.browser,
     },
   },
   {
     files: ['**/*.ts'],
     languageOptions: {
-      globals: {
-        window: 'readonly',
-        console: 'readonly',
-        document: 'readonly',
-        navigator: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-        setInterval: 'readonly',
-        clearInterval: 'readonly',
-        requestAnimationFrame: 'readonly',
-        cancelAnimationFrame: 'readonly',
-        MutationObserver: 'readonly',
-        ResizeObserver: 'readonly',
-        WebSocket: 'readonly',
-        HTMLElement: 'readonly',
-        DOMParser: 'readonly',
-        HTMLImageElement: 'readonly',
-        HTMLDivElement: 'readonly',
-        MouseEvent: 'readonly',
-        KeyboardEvent: 'readonly',
-        Event: 'readonly',
-        HTMLDetailsElement: 'readonly',
-      },
+      globals: globals.browser,
     },
   },
   {
