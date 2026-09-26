@@ -5,6 +5,7 @@ Agent 控制面 API（运行态观测 + 框架级控制端点）
 - GET  /api/v1/agents/{name}/state     -> 单个 Agent 运行状态
 - POST /api/v1/agents/{name}/control   -> 框架级控制（pause/resume/shutdown/restart）
 - POST /api/v1/agents/{name}/prompt    -> 递话（运营提醒/插话：纯文本留言，不派新任务）
+- POST /api/v1/agents/{name}/delegate  -> 运营直派（派新任务，登记账本，任务卡可见）
 - POST /api/v1/agents/{name}/tasks/{task_id}/cancel -> 硬取消（强制清账 + 通知停手）
 
 数据源：``DashboardServer.agent_control``（AgentControl 直调接口，构造时由
@@ -28,6 +29,8 @@ from src.modules.dashboard.schemas.agent import (
     AgentControlAction,
     AgentControlRequest,
     AgentControlResponse,
+    AgentDelegateRequest,
+    AgentDelegateResponse,
     AgentListResponse,
     AgentPromptRequest,
     AgentPromptResponse,
@@ -224,3 +227,27 @@ async def cancel_agent_task(name: str, task_id: str, server: ServerDep) -> Agent
     if not result["ok"]:
         raise HTTPException(status_code=404, detail=result["message"])
     return AgentCancelTaskResponse(cancelled=True)
+
+
+@router.post(
+    "/{name}/delegate",
+    response_model=AgentDelegateResponse,
+    summary="运营直派任务（派新活，登记任务账本）",
+)
+async def delegate_to_agent(name: str, request: AgentDelegateRequest, server: ServerDep) -> AgentDelegateResponse:
+    """给指定 Agent 派一项新工作（与 LLM 工具委派同一张任务账本，任务卡可见）。
+
+    发起方记 "operator"、source 记 "agent"（执行 Agent 是账面唯一写者）。
+    受理回执 200 {accepted, task_id, executor}；Agent 不在名册 404；
+    目标拒收 409；任务基建未装配 503。
+    """
+    control = _get_agent_control(server)
+    result = await control.delegate(name, request.instruction)
+    if not result["ok"]:
+        code = {"not_found": 404, "refused": 409, "no_ledger": 503}.get(result["error"], 500)
+        raise HTTPException(status_code=code, detail=result["message"])
+    return AgentDelegateResponse(
+        accepted=bool(result["accepted"]),
+        task_id=str(result["task_id"]),
+        executor=str(result["executor"]),
+    )

@@ -306,3 +306,31 @@ async def test_broadcaster_unsubscribes_all_events_on_stop(bus_and_handler) -> N
     await broadcaster.stop()
     assert len(bus.unsubscribed) == subscribed_count
     assert len(bus.subscribed) == 0
+
+
+@pytest.mark.asyncio
+async def test_broadcaster_subscribes_to_task_changed(bus_and_handler) -> None:
+    """任务卡实时增量：订阅 task.changed 并以事件名直通转发。"""
+    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
+    from src.modules.events.payloads import TaskChangedPayload
+
+    bus, ws = bus_and_handler
+    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
+    await broadcaster.start()
+
+    assert CoreEvents.TASK_CHANGED in bus.subscribed, "未订阅 task.changed"
+    handler, model_cls = bus.subscribed[CoreEvents.TASK_CHANGED]
+    assert model_cls is TaskChangedPayload
+
+    payload = TaskChangedPayload(
+        task_id="deleg_1",
+        status="running",
+        initiator="operator",
+        executor="minecraft",
+        summary="执行 Agent 已开始处理",
+    )
+    await handler(CoreEvents.TASK_CHANGED, payload, source="TaskLedger")
+    ws.broadcast.assert_awaited()
+    assert ws.broadcast.await_args.args[0] == CoreEvents.TASK_CHANGED
+
+    await broadcaster.stop()

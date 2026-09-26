@@ -36,6 +36,7 @@ from src.modules.events.payloads import (
     RundownChangedPayload,
     StreamerSpeechPayload,
     StreamerStagePayload,
+    TaskChangedPayload,
     ToolHealthPayload,
     ToolResultPayload,
 )
@@ -126,6 +127,8 @@ class EventBroadcaster:
         CoreEvents.GAME_ATTENTION_REQUIRED: (None, GamePayload),
         CoreEvents.GAME_ERROR: (None, GamePayload),
         CoreEvents.GAME_MILESTONE: (None, GamePayload),
+        # 任务卡实时增量（进行中账本变化；已完结从事件环聚合）
+        CoreEvents.TASK_CHANGED: (None, TaskChangedPayload),
         CoreEvents.TOOL_RESULT_WILDCARD: (None, ToolResultPayload),
         CoreEvents.TOOL_HEALTH_WILDCARD: (None, ToolHealthPayload),
         CoreEvents.CORE_STARTUP: (None, CoreStartupPayload),

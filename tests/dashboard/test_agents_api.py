@@ -15,7 +15,7 @@ tests/modules/agents/test_supervisor.py 同一测试基建）。
 from __future__ import annotations
 
 from pathlib import Path
-from typing import AsyncGenerator, Generator, Iterable, Optional
+from typing import AsyncGenerator, Generator, Iterable, Optional, TYPE_CHECKING
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +23,9 @@ from fastapi.testclient import TestClient
 from src.modules.agents import AgentManager, AgentState, BaseAgent
 from src.modules.config.core_schemas import AgentSupervisorConfig
 from src.modules.tools.models import ToolSpec
+
+if TYPE_CHECKING:
+    from src.modules.tools.tasks import TaskLedger
 
 
 class _SampleAgent(BaseAgent):
@@ -37,6 +40,8 @@ class _SampleAgent(BaseAgent):
         self.received_prompts: list[tuple[str, str]] = []
         self._accept_cancel = True
         self.cancelled_tasks: list[str] = []
+        self._accept_delegate = True
+        self.delegated: list[tuple[str, str]] = []
 
     def list_tools(self) -> Iterable[ToolSpec]:
         return []
@@ -46,6 +51,12 @@ class _SampleAgent(BaseAgent):
             return False
         self.received_prompts.append((content, source))
         return True
+
+    def receive_delegation(self, *, instruction: str, task_id: str) -> Optional[str]:
+        if not self._accept_delegate:
+            return "忙不过来"
+        self.delegated.append((task_id, instruction))
+        return None
 
     def cancel_task(self, task_id: str, source: str = "") -> bool:
         if not self._accept_cancel:
@@ -101,18 +112,32 @@ def client(config_dir: Path, manager: AgentManager) -> Generator[TestClient, Non
     from src.modules.dashboard.api.router import create_app
     from src.modules.dashboard.dependencies import set_dashboard_server
     from src.modules.dashboard.server import DashboardServer
+    from src.modules.tools.registry import ToolRegistry
+    from src.modules.tools.tasks import TaskLedger, TaskTracker
 
     svc = ConfigService(base_dir=str(config_dir.parent))
     svc.initialize()
+    ledger = TaskLedger(event_bus=None)
+    tracker = TaskTracker(ToolRegistry(), ledger)
     server = DashboardServer(
         event_bus=None,  # type: ignore[arg-type]
         config_service=svc,
         dashboard_config=DashboardConfig(host="127.0.0.1", port=60215),
         agent_manager=manager,
+        task_tracker=tracker,
     )
     set_dashboard_server(server)
     yield TestClient(create_app())
     set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def _current_task_ledger() -> "TaskLedger":
+    """从当前注入的 DashboardServer 取任务账本（直派断言用）。"""
+    import src.modules.dashboard.dependencies as deps
+
+    server = deps._dashboard_server
+    assert server is not None and server.task_tracker is not None
+    return server.task_tracker.ledger
 
 
 # ==================== GET /api/v1/agents ====================
@@ -309,3 +334,40 @@ def test_cancel_task_unknown_or_terminal_returns_404(client: TestClient, manager
     resp = client.post("/api/v1/agents/sample_agent/tasks/deleg_gone/cancel")
     assert resp.status_code == 404
     assert "deleg_gone" in resp.json()["detail"]
+
+
+# ==================== POST /api/v1/agents/{name}/delegate ====================
+
+
+def test_delegate_registers_ledger_and_delivers(client: TestClient, manager: AgentManager) -> None:
+    resp = client.post("/api/v1/agents/sample_agent/delegate", json={"instruction": "去挖矿"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["accepted"] is True
+    assert body["executor"] == "sample_agent"
+    task_id = body["task_id"]
+
+    agent = manager.get_agent_by_name("sample_agent")
+    assert agent is not None
+    assert agent.delegated == [(task_id, "去挖矿")]
+
+    ledger = _current_task_ledger()
+    record = ledger.get(task_id)
+    assert record is not None
+    assert record.initiator == "operator" and record.executor == "sample_agent"
+    assert record.snapshot["instruction"] == "去挖矿"
+
+
+def test_delegate_unknown_agent_returns_404(client: TestClient) -> None:
+    resp = client.post("/api/v1/agents/ghost/delegate", json={"instruction": "去挖矿"})
+    assert resp.status_code == 404
+
+
+def test_delegate_refusal_returns_409(client: TestClient, manager: AgentManager) -> None:
+    agent = manager.get_agent_by_name("sample_agent")
+    assert agent is not None
+    agent._accept_delegate = False
+    resp = client.post("/api/v1/agents/sample_agent/delegate", json={"instruction": "去挖矿"})
+    assert resp.status_code == 409
+    assert "拒收" in resp.json()["detail"]
+    assert _current_task_ledger().active_task_ids() == [], "拒收不登记账本"

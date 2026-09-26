@@ -85,3 +85,17 @@ class AgentCancelTaskResponse(BaseModel):
     """任务硬取消响应"""
 
     cancelled: bool
+
+
+class AgentDelegateRequest(BaseModel):
+    """运营直派任务请求体（自然语言指令，派新活有账本）"""
+
+    instruction: str
+
+
+class AgentDelegateResponse(BaseModel):
+    """运营直派受理回执"""
+
+    accepted: bool
+    task_id: str
+    executor: str

@@ -20,7 +20,7 @@ tool_registry.register_provider(provider)
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, Iterable, List, Optional
 
 from src.modules.agents.manager import AgentManager
@@ -87,12 +87,23 @@ _PROMPT_SPEC: ToolSpec = ToolSpec(
 
 # -------------------- AgentControl 工具（写形式，可直接 await） --------------------
 
+# 任务号序号源（模块级共享：provider 与控制面直调同一序列，避免同毫秒撞号）
+_task_id_seq = 0
+
+
+def _generate_task_id() -> str:
+    """生成委派任务号（deleg_{epoch_ms}_{seq}，全链路关联键）。"""
+    global _task_id_seq
+    _task_id_seq += 1
+    return f"deleg_{now_ms()}_{_task_id_seq}"
+
 
 class AgentControl:
     """框架级控制——直接调用接口（不进 ToolRegistry）。"""
 
-    def __init__(self, manager: AgentManager) -> None:
+    def __init__(self, manager: AgentManager, task_ledger: Optional[TaskLedger] = None) -> None:
         self._manager = manager
+        self._task_ledger = task_ledger
 
     async def pause(self, name: str) -> bool:
         agent = self._manager.get_agent_by_name(name)
@@ -157,6 +168,37 @@ class AgentControl:
             }
         return {"ok": True, "cancelled": True}
 
+    async def delegate(self, name: str, instruction: str, *, initiator: str = "operator") -> dict:
+        """运营直派任务（控制面直调，供 REST）：登记账本 + 目标接收入口。
+
+        与 LLM 工具委派同一张任务记录表（source="agent"），发起方记
+        ``initiator``（REST 侧固定 "operator"）。任务号先生成再交目标
+        接收（与 provider 同序：拒收则不登记，不留孤儿 accepted 条目）。
+        """
+        agent = self._manager.get_agent_by_name(name)
+        if agent is None:
+            logger.warning(f"delegate: 未找到 Agent '{name}'")
+            return {"ok": False, "error": "not_found", "message": f"Agent 不存在: {name}"}
+        if self._task_ledger is None:
+            return {"ok": False, "error": "no_ledger", "message": "任务基建未装配（task_ledger 未注入），委派不可用"}
+        task_id = _generate_task_id()
+        rejected = agent.receive_delegation(instruction=instruction, task_id=task_id)
+        if rejected:
+            logger.info(f"delegate: Agent '{name}' 拒收委派（{rejected}）")
+            return {"ok": False, "error": "refused", "message": f"目标 '{name}' 拒收（{rejected}）"}
+        self._task_ledger.register(
+            task_id=task_id,
+            provider="framework",
+            tool="framework_delegate",
+            initiator=initiator,
+            executor=name,
+            status="accepted",
+            source="agent",
+            snapshot={"instruction": instruction[:200]},
+        )
+        logger.info(f"运营直派受理: {initiator} -> {name}（task_id={task_id}）")
+        return {"ok": True, "accepted": True, "task_id": task_id, "executor": name}
+
     def list_agents(self) -> List[str]:
         return self._manager.list_agents()
 
@@ -200,7 +242,6 @@ class AgentControlProvider(BaseToolProvider):
 
     manager: AgentManager
     task_ledger: Optional[TaskLedger] = None
-    _task_seq: int = field(default=0, init=False)
 
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category: ClassVar[str] = "framework"
@@ -290,8 +331,7 @@ class AgentControlProvider(BaseToolProvider):
 
     def _next_task_id(self) -> str:
         """生成委派任务号（deleg_{epoch_ms}_{seq}，全链路关联键）。"""
-        self._task_seq += 1
-        return f"deleg_{now_ms()}_{self._task_seq}"
+        return _generate_task_id()
 
     def _resolve_target(
         self, target_name: str, caller: str, tool_name: str

@@ -77,14 +77,22 @@ class DashboardServer:
         llm_repo: Optional[Any] = None,
         rundown_repo: Optional[Any] = None,
         memory: Optional[Any] = None,
+        task_tracker: Optional[Any] = None,
     ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
         self.agent_manager = agent_manager
+        # 任务跟踪器：任务卡快照（GET /api/v1/tasks）读 ledger，运营委派经
+        # AgentControl 登记任务；未注入（极简启动/测试）时相关端点返回 503。
+        self.task_tracker = task_tracker
         # AgentControl 是 /api/v1/agents 控制面（pause/resume/shutdown/state）的
         # 直接调用接口；agent_manager 未注入（极简启动/测试）时保持 None，
         # 相关端点返回 503。
-        self.agent_control: Optional[AgentControl] = AgentControl(agent_manager) if agent_manager is not None else None
+        self.agent_control: Optional[AgentControl] = (
+            AgentControl(agent_manager, task_tracker.ledger if task_tracker is not None else None)
+            if agent_manager is not None
+            else None
+        )
         self.tool_registry = tool_registry
         self.llm_manager = llm_manager
         self.prompt_manager = prompt_manager
