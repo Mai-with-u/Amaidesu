@@ -197,6 +197,7 @@ class Planner:
         rundown_text: Optional[str] = None,
         game_narrative: str = "",
         body_narrative: str = "",
+        reminders: str = "",
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
     ) -> Dict[str, Any]:
@@ -210,6 +211,7 @@ class Planner:
             rundown_text: 当前流程单渲染文本（可选）。
             game_narrative: 游戏叙事文本（game.* 事件摘要；可主动经工具查询更多）。
             body_narrative: 身体侧近况（game.body.* 摘要：被袭击/死亡/重生/紧急反应）。
+            reminders: 运营递话留言（【运营提醒】段注入参考块；消费即送达）。
             thinking: 思考流上下文（可选；提供时每次 LLM 调用的 reasoning
                 增量经旁路通道外发）。
             round_id: 决策轮次 ID（工具调用经 ToolInvocation.round_id 透传到
@@ -257,7 +259,7 @@ class Planner:
             return outcome
 
         reference_text = await self._assemble_reference(
-            batch, history, rundown_text, forced, proactive, game_narrative, body_narrative
+            batch, history, rundown_text, forced, proactive, game_narrative, body_narrative, reminders
         )
         if reference_text is None:
             outcome["error"] = self.last_failure
@@ -391,12 +393,13 @@ class Planner:
         proactive: bool,
         game_narrative: str,
         body_narrative: str = "",
+        reminders: str = "",
     ) -> Optional[str]:
         """构造参考段（一条 user 消息，固定在消息序列尾）。
 
-        内容 = 情境标注（强制/主动）+ 游戏叙事 + 身体侧近况 + 组装器元数据段
-        （环节描述 / 直播间快照 / 记忆召回）。对话内容不在此处——历史与本批
-        走 canonical 映射的原生消息通道。
+        内容 = 情境标注（强制/主动）+ 游戏叙事 + 身体侧近况 + 运营提醒 +
+        组装器元数据段（环节描述 / 直播间快照 / 记忆召回）。对话内容不在此
+        处——历史与本批走 canonical 映射的原生消息通道。
         """
         lines: List[str] = []
         if forced:
@@ -410,6 +413,10 @@ class Planner:
             # 身体侧近况：单独一段，不与游戏叙事混排——两者形状与更新频率不同，
             # 混在一起会让高频的遭遇把进展叙事挤掉。
             lines.append(f"【身体近况】{body_narrative}")
+        if reminders:
+            # 运营提醒：后台递话，必达素材——不伪装观众弹幕、不进对话历史，
+            # 仅进本轮参考块（消费即送达，由调用方在决策窗入口取空队列）。
+            lines.append(f"【运营提醒】{reminders}")
         situation_text = "\n".join(lines)
 
         if not self._context_enabled:

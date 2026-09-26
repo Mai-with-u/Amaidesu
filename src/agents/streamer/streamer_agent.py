@@ -31,6 +31,7 @@ await agent.cleanup()
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
@@ -73,6 +74,10 @@ __all__ = ["StreamerAgent", "StreamerConfig"]
 # LLM profile 用途名（与 [llm_profiles.<name>] 三层结构对齐；model.toml 必填 6 成员）
 _PROFILE_PLANNER = "planner"
 _PROFILE_REPLYER = "replyer"
+
+# 运营递话提醒队列上限（条）。满时拒收递话（receive_prompt 返回 False，
+# REST 侧映射 409）——必达语义不允许静默挤掉旧条目。
+_REMINDER_QUEUE_MAX = 5
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +351,10 @@ class StreamerAgent(BaseAgent):
         self._game_narrative_blocks: List[str] = []
         self._body_narrative_blocks: List[str] = []
 
+        # 运营递话提醒队列（receive_prompt 入队；下个决策窗以【运营提醒】段
+        # 注入参考块，读取即取空——送达一次制）。满时拒收，必达不允许静默挤旧。
+        self._reminder_queue: deque[str] = deque(maxlen=_REMINDER_QUEUE_MAX)
+
         # 观众命令接线（最小接线：玩法待扩展）。enabled + mappings 非空才激活；
         # mappings 即白名单，限频窗口/次数 config 化。命令路由是代码直连的
         # 内部件，不进 ToolRegistry。
@@ -382,6 +391,7 @@ class StreamerAgent(BaseAgent):
             rundown_text_provider=self._build_rundown_text,
             game_narrative_provider=self._game_narrative_text,
             body_narrative_provider=self._body_narrative_text,
+            reminders_provider=self._drain_reminders,
             logger=self._logger,
         )
 
@@ -689,6 +699,35 @@ class StreamerAgent(BaseAgent):
         if topic_hint:
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
+    def receive_prompt(self, *, content: str, source: str = "") -> bool:
+        """接收递话（运营/跨 Agent 留言）：入提醒队列，下个决策窗必达。
+
+        不冒充观众弹幕、不进对话历史——队列内容在决策窗入口取空，以
+        【运营提醒】段注入 Planner 参考块（消费即送达，一次制）。队列
+        满时拒收（返回 False）：必达语义不允许静默挤掉旧条目。
+        """
+        text = content.strip()
+        if not text:
+            self._logger.warning(f"递话内容为空，拒收（source={source or '未知'}）")
+            return False
+        if len(self._reminder_queue) >= _REMINDER_QUEUE_MAX:
+            self._logger.warning(f"提醒队列已满（{_REMINDER_QUEUE_MAX}），拒收递话（source={source or '未知'}）")
+            return False
+        self._reminder_queue.append(text)
+        self._logger.info(
+            f"收到递话提醒（source={source or '未知'}，队列 "
+            f"{len(self._reminder_queue)}/{_REMINDER_QUEUE_MAX}）：{text[:60]}"
+        )
+        return True
+
+    def _drain_reminders(self) -> str:
+        """取空提醒队列（决策执行器在决策窗入口调用；送达一次制）。"""
+        if not self._reminder_queue:
+            return ""
+        lines = [f"- {item}" for item in self._reminder_queue]
+        self._reminder_queue.clear()
+        return "\n".join(lines)
+
     async def debug_test_decision(
         self,
         *,
@@ -805,6 +844,9 @@ class StreamerAgent(BaseAgent):
                     rundown_ready=self._is_rundown_active(),
                     rundown_overdue=self._is_rundown_overdue(),
                     game_pending=game_pending,
+                    # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
+                    # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
+                    reminder_pending=bool(self._reminder_queue),
                 )
                 self._external_proactive_pending = False
                 if reason is not None:

@@ -15,9 +15,10 @@
 ----------------------------------------------
 - **无 I/O、无 LLM 调用、无 EventBus、无 asyncio**：所有时间通过参数注入
   （``now_ms``），便于确定性测试，禁止 ``time.sleep``。
-- **触发优先级**：``external > rundown_pending > game_pending >
-  rundown_overdue > rundown_ready > schedule > cold``（同一 tick 多触发条件
-  同时满足时只取优先级最高的一个）。
+- **触发优先级**：``reminder > rundown_pending > game_pending >
+  rundown_overdue > rundown_ready > external > schedule > cold``（同一 tick
+  多触发条件同时满足时只取优先级最高的一个；reminder/各 rundown/game 分支
+  各自绕过部分公共前置，见下文）。
 - **公共频率限制**（对 ``external`` / ``schedule`` / ``cold`` 生效）：
     - ``min_interval_ms``（防接龙，对照 ``room_state.last_speech_ms``；
       ``None`` 视为 0/从未发言，恒通过）。
@@ -56,6 +57,14 @@
 不应被"防接龙/冷场救场"的低频限流卡死。``game_pending=True`` 仅受总开关
 约束，立即返回 ``"game"``，绕过 ``min_interval_ms`` / ``max_per_hour`` /
 ``topic_required`` 三道前置。一次性信号由调用方（StreamerAgent）消费后复位。
+
+**运营提醒催醒触发源（reminder_pending）的限流独立性**
+------------------------------------
+运营递话（后台留言给主播）是**必达**指令而非自主找话说——总开关、
+每小时上限、话题要求三道闸是"自主找话说"的规矩，不辖运营递话；
+唯一保留的约束是 ``min_interval_ms`` 防接龙（刚开口就插提醒没有意义，
+等下一个 tick 自然送达）。``reminder_pending=True`` 仅查防接龙最小间隔，
+通过即返回 ``"reminder"``。一次性信号由调用方（StreamerAgent）消费后复位。
 
 使用方契约（StreamerAgent 接入）
 ---------------------------------
@@ -164,6 +173,7 @@ class ProactiveTrigger:
         rundown_ready: bool = False,
         rundown_overdue: bool = False,
         game_pending: bool = False,
+        reminder_pending: bool = False,
     ) -> str | None:
         """判定当前 tick 是否应触发主动发言。
 
@@ -171,7 +181,7 @@ class ProactiveTrigger:
         rundown_overdue > rundown_ready > schedule > cold``。
 
         公共前置条件（仅对 ``external`` / ``schedule`` / ``cold`` 生效）：
-        - ``enabled=False`` → 永不触发（含 rundown）
+        - ``enabled=False`` → 永不触发（含 rundown；reminder 豁免——必达）
         - ``min_interval_ms`` 防接龙（对照 ``room_state.last_speech_ms``）
         - ``max_per_hour`` hourly 滑窗
         - ``topic_required`` 话题缺失则跳过
@@ -220,16 +230,29 @@ class ProactiveTrigger:
             rundown_overdue: 当前环节停留已超预期（超时闹钟信号）。绕过
                 公共三道前置，双重冷却后返回 ``"rundown"``——Agent 醒来
                 自行决定推进或继续。
-            game_pending: 游戏 Agent 是否有待定夺上报（``game.report``）。
-                ``True`` 时仅受总开关约束，立即返回 ``"game"``，绕过
-                ``min_interval_ms`` / ``max_per_hour`` / ``topic_required``
-                三道前置（内容推进而非救场，剧情不能无限卡在选项处）。
+        game_pending: 游戏 Agent 是否有待定夺上报（``game.report``）。
+            ``True`` 时仅受总开关约束，立即返回 ``"game"``，绕过
+            ``min_interval_ms`` / ``max_per_hour`` / ``topic_required``
+            三道前置（内容推进而非救场，剧情不能无限卡在选项处）。
+        reminder_pending: 运营是否有待送达的递话留言。``True`` 时仅查
+            ``min_interval_ms`` 防接龙一条约束（总开关/每小时上限/话题
+            要求三道闸豁免——必达语义不辖"自主找话说"的规矩），通过即
+            返回 ``"reminder"``。
 
         Returns:
-            ``"external"`` / ``"rundown"`` / ``"game"`` / ``"schedule"`` /
-            ``"cold"`` —— 表示应触发并给出原因；``None`` —— 表示不触发。
+            ``"external"`` / ``"reminder"`` / ``"rundown"`` / ``"game"`` /
+            ``"schedule"`` / ``"cold"`` —— 表示应触发并给出原因；
+            ``None`` —— 表示不触发。
         """
-        # 总开关（所有源适用，含 rundown）
+        # reminder_pending：运营递话催醒——必达语义，仅受防接龙最小间隔一条
+        # 约束（总开关/每小时上限/话题要求三道闸豁免：那是"自主找话说"的
+        # 规矩，不辖运营递话；刚开口就插提醒没有意义，等下一 tick 自然送达）
+        if reminder_pending:
+            reminder_last_speech = getattr(room_state, "last_speech_ms", None)
+            if reminder_last_speech is None or (now_ms - reminder_last_speech) >= self._min_interval_ms:
+                return "reminder"
+
+        # 总开关（reminder 之外的源适用，含 rundown）
         if not self._enabled:
             return None
 

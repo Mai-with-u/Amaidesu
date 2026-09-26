@@ -107,6 +107,7 @@ class DecisionRoundExecutor:
         rundown_text_provider: Callable[[], Optional[str]],
         game_narrative_provider: Callable[[], str],
         body_narrative_provider: Optional[Callable[[], str]] = None,
+        reminders_provider: Optional[Callable[[], str]] = None,
         logger: Optional[ModuleLogger] = None,
     ) -> None:
         """``history_provider`` 等 provider 返回值形态：
@@ -115,6 +116,8 @@ class DecisionRoundExecutor:
         - rundown_text: ``Optional[str]``（None = 无流程单情境）
         - game_narrative: ``str``（可为空串）
         - body_narrative: ``str``（可为空串；AI 玩家身体侧近况，缺省 = 不注入）
+        - reminders: ``str``（可为空串；运营递话留言，**读取即取空队列**——
+          送达一次制，缺省 = 不注入）
         """
         self._logger = logger or get_logger("StreamerAgent.DecisionRoundExecutor")
         self._planner = planner
@@ -129,6 +132,7 @@ class DecisionRoundExecutor:
         self._rundown_text_provider = rundown_text_provider
         self._game_narrative_provider = game_narrative_provider
         self._body_narrative_provider = body_narrative_provider
+        self._reminders_provider = reminders_provider
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
 
@@ -257,6 +261,9 @@ class DecisionRoundExecutor:
         # 身体侧近况（采集器分类后的 game.body.* 摘要；缺省不注入）
         body_narrative = self._body_narrative_provider() if self._body_narrative_provider else ""
 
+        # 运营递话留言（读取即取空队列——送达一次制；缺省不注入）
+        reminders = self._reminders_provider() if self._reminders_provider else ""
+
         # Planner ReAct 决策（循环内完成查信息与 reply 调用；失败细节经
         # Planner.last_failure 带出，供决策事件区分降级原因）
         planner_started_ms = now_ms()
@@ -272,6 +279,7 @@ class DecisionRoundExecutor:
                 rundown_text=rundown_text,
                 game_narrative=game_narrative,
                 body_narrative=body_narrative,
+                reminders=reminders,
                 thinking=thinking,
                 round_id=round_id,
             )

@@ -279,3 +279,28 @@ class TestProactiveTriggerOverdue:
         assert reason == "rundown"
         # pending 分支先行返回，不消费 overdue 冷却
         assert t._last_overdue_ms is None
+
+
+class TestProactiveTriggerReminder:
+    """reminder_pending（运营递话催醒）——必达语义，仅受防接龙最小间隔一条约束。"""
+
+    def test_reminder_blocked_by_min_interval_then_fires(self):
+        """刚说过话（防接龙窗口内）→ 本 tick 不触发，窗口过后触发。"""
+        t = ProactiveTrigger({"enabled": True, "min_interval_ms": 120_000})
+        room = _MockRoomState(last_speech_ms=9_999_000)
+        assert t.should_trigger(room, now_ms=10_000_000, reminder_pending=True) is None
+        room2 = _MockRoomState(last_speech_ms=5_000_000)
+        assert t.should_trigger(room2, now_ms=10_000_000, reminder_pending=True) == "reminder"
+
+    def test_reminder_bypasses_all_three_gates(self):
+        """总开关关闭 + hourly 上限已满 + 无话题 → 三道闸全部豁免，仍触发。"""
+        t = ProactiveTrigger({"enabled": False, "max_per_hour": 6, "topic_required": True})
+        room = _MockRoomState(last_speech_ms=5_000_000)
+        room._snapshot = {"topic_summary": ""}
+        assert t.should_trigger(room, now_ms=10_000_000, reminder_pending=True) == "reminder"
+
+    def test_reminder_no_speech_history_fires(self):
+        """从未发言（last_speech_ms=None）→ 防接龙视为恒通过。"""
+        t = ProactiveTrigger({"enabled": True})
+        room = _MockRoomState(last_speech_ms=None)
+        assert t.should_trigger(room, now_ms=10_000, reminder_pending=True) == "reminder"
