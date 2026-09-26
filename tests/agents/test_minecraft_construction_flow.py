@@ -98,3 +98,8 @@ async def test_process_site_blueprint_plan_execute_then_wait() -> None:
     resource = agent._messages[3]["content"]
     assert "完整工艺" * 3300 in resource and '"deferred": true' not in resource
     assert agent._current_task_context()["recent_results"][-2]["plan_id"] == "plan"
+    # 真正送给决策模型的提示同时保留库存功能边界和批次回执，不把角色解释留在宿主外部说明中。
+    policy = agent._messages[0]["content"]
+    assert "外部材料 IN" in policy and "内部缓存" in policy and "external_inputs" in policy
+    assert "maicraft:use_item" in policy and "ingredient_item_id" in policy
+    assert "completed_output_count" in policy and "remaining_output_count" in policy

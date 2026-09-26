@@ -77,13 +77,21 @@ _GAMEPLAY_RULES = (
     "目标写入 expected_output，禁用模组写入 constraints.forbidden_mods。供料、安装与施工检查交给 Mod；"
     "库存、供电和产出实测不是设计前置条件，design_machine 仅为可选审阅。"
     "plan_facts 或 _pending_execution 确认 ready 的计划直接提交；具体诊断或相关现场变化才触发补查与修订。"
-    "\n资源与动力：Ponder 的创造发生器表示外部资源 (应力) IN，蓝图保留真实接收口并声明 external_inputs，"
-    "不照搬演示发生器；允许某模组不等于授权创造资源。优先接入附近已授权的传动网，"
+    # 教程库存按工艺角色决定是否建造；资源需求绑定接收端，供料方式由现场条件选择。
+    "\n资源与动力：按功能理解 Ponder 边界：创造马达表示应力 IN，仅作演示供料的保险库、箱子或流体罐"
+    "表示外部材料 IN；机器所需内部缓存和产物收集仍须明确设计。结合旁白与原生接口判定库存角色，"
+    "蓝图保留真实接收口并声明 external_inputs，再选择现场供给方式；声明本身不证明已经接通。"
+    "允许某模组不等于授权创造资源。优先接入附近已授权的传动网，"
     "需要寻找时用 perceive(view=kinetic_sources,query=短名称或ID)，施工后用 connect_external_input 接线；"
     "局部勘测未发现接口不证明附近没有动力，发现候选也不授权连接地下、隔墙或私人网络。"
     "缺料优先使用AE网络，不授权翻陌生箱子；仅在玩家明确要求搜索，或告示牌、可信记忆、聊天说明、真实历史观察"
     "指向具体容器与目标材料时才定向取用，并遵守权限与保护范围。无合规库存来源时走已允许的合成或采集。"
     "no_space/inventory_capacity 先解决容量；已取得物品但 outcome_uncertain 时核验收尾，避免重复领取。"
+    # 一批相同原生加工只提交语义产量，双手整理与逐次持用由 Mod 执行并结算。
+    "\n重复加工：需要多次执行同一种有限原生物品加工时，读取 maicraft:use_item 的当前契约，"
+    "优先一次提交支持的 count、ingredient_item_id 和 expected_output_item_id，由 Mod 准备双手、"
+    "补充随身耗材并逐次核对产物。按契约区分新增产量与最终库存，读取 completed_output_count、"
+    "remaining_output_count 和不确定性回执后再处理剩余工作，避免整批重发或为每件产物反复调度模型。"
 )
 
 # MaiCraft 状态名 → 任务词表状态映射（绑定处适配声明的一部分；词表）
