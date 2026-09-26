@@ -132,28 +132,6 @@
             </span>
             <span class="grow" />
             <template v-if="sessionMode === 'live'">
-              <!-- 测试干预按钮组：两个入口一个考全链路（异步、可能限流不回应）、
-                一个直驱决策（同步、立即出结果），语义差异靠 tooltip 与面板内说明承载 -->
-              <el-button-group>
-                <el-tooltip
-                  content="模拟一名观众发弹幕，走与真实弹幕完全相同的链路（攒批 → 限流 → 主播自行决定是否回应）；回应异步出现，可能因限流不回应"
-                  placement="bottom"
-                >
-                  <el-button
-                    size="small"
-                    :type="injectOpen ? 'primary' : 'default'"
-                    @click="injectOpen = !injectOpen"
-                  >
-                    注入弹幕
-                  </el-button>
-                </el-tooltip>
-                <el-tooltip
-                  content="跳过攒批与限流，把弹幕直接交给主播当场跑一次决策，结果立即以决策卡出现"
-                  placement="bottom"
-                >
-                  <el-button size="small" @click="testDialogVisible = true">立即决策测试</el-button>
-                </el-tooltip>
-              </el-button-group>
               <!-- 显示模式：时间线=单列沿脊线；会话=观众左/主播右气泡对齐 -->
               <el-radio-group v-model="displayMode" size="small">
                 <el-radio-button value="timeline">时间线</el-radio-button>
@@ -195,31 +173,6 @@
             <el-button v-else size="small" type="primary" @click="backToLive">回到实时</el-button>
           </header>
 
-          <!-- 注入面板：显式 v-if 渲染（不依赖弹层组件的触发器绑定） -->
-          <div v-if="injectOpen && sessionMode === 'live'" class="inject-panel">
-            <div class="inject-form">
-              <el-input v-model="injectSource" size="small" placeholder="昵称（可选）" />
-              <el-input
-                v-model="injectText"
-                size="small"
-                type="textarea"
-                :rows="2"
-                placeholder="弹幕内容——走与真实弹幕完全相同的处理链路"
-              />
-              <div class="inject-actions">
-                <span class="inject-hint">
-                  模拟一名观众发弹幕：与真实弹幕走完全相同的链路（攒批 → 限流 →
-                  主播自行决定是否回应），回应异步出现，可能因限流不回应
-                </span>
-                <span class="grow" />
-                <el-button size="small" @click="injectOpen = false">收起</el-button>
-                <el-button size="small" type="primary" :loading="injecting" @click="submitInject">
-                  注入
-                </el-button>
-              </div>
-            </div>
-          </div>
-
           <div class="stage-body">
             <div ref="scrollRef" class="stage-scroll" @scroll.passive="onScroll">
               <FeedTimeline
@@ -242,52 +195,75 @@
               {{ unseen >= 99 ? '99+' : unseen }} 条新内容 · 回到最新 ↓
             </button>
           </div>
+
+          <!-- 干预输入条（code agent 风格）：卡片容器内嵌无边框输入 + 模式 chip +
+               圆形发送钮；Tab/Shift+Tab 切模式、Enter 发送、↑↓ 回溯历史。
+               强制回应为后台执行：发送后立即可继续输入，在途状态由状态 chip 承载 -->
+          <div v-if="sessionMode === 'live'" class="input-bar">
+            <div class="input-shell">
+              <el-input
+                ref="sendInputRef"
+                v-model="sendText"
+                type="textarea"
+                :rows="1"
+                :autosize="{ minRows: 1, maxRows: 5 }"
+                resize="none"
+                class="input-main"
+                :disabled="sending"
+                :placeholder="sendModeDef.placeholder"
+                @keydown="onSendKeydown"
+              />
+              <div class="input-toolbar">
+                <el-select
+                  v-model="sendMode"
+                  size="small"
+                  class="input-mode"
+                  popper-class="input-mode-popper"
+                  :disabled="sending"
+                  :title="sendModeDef.desc"
+                >
+                  <el-option
+                    v-for="mode in SEND_MODES"
+                    :key="mode.key"
+                    :label="mode.label"
+                    :value="mode.key"
+                  >
+                    <div class="mode-option">
+                      <span class="mode-option-label">{{ mode.label }}</span>
+                      <span class="mode-option-desc">{{ mode.desc }}</span>
+                    </div>
+                  </el-option>
+                </el-select>
+                <el-input
+                  v-if="sendMode === 'danmaku'"
+                  v-model="injectNickname"
+                  size="small"
+                  class="input-nick"
+                  placeholder="观众昵称（可选）"
+                  @keydown="onSendKeydown"
+                />
+                <span v-if="forcePending > 0" class="input-status">
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                  主播正在想…
+                </span>
+                <span class="input-kbd mono" title="在输入框内按 Tab 切换模式，↑↓ 回溯发送历史">
+                  Tab 切模式 · ↑↓ 历史
+                </span>
+                <el-button
+                  class="input-send"
+                  type="primary"
+                  circle
+                  :loading="sending"
+                  @click="sendCurrent"
+                >
+                  <el-icon v-if="!sending"><Promotion /></el-icon>
+                </el-button>
+              </div>
+            </div>
+          </div>
         </section>
       </section>
     </div>
-
-    <!-- 决策测试对话框（手动驱动一次两阶段决策）                         -->
-    <el-dialog v-model="testDialogVisible" title="立即决策测试" width="480px">
-      <div class="test-form">
-        <p class="test-intro">
-          与「注入弹幕」不同：本操作跳过攒批窗口与主动发言限流，把弹幕直接交给主播当场跑一次完整决策——
-          Planner / Replyer 与真实链路同一份代码，结果立即以决策卡落在时间线。
-        </p>
-        <el-input
-          v-model="testText"
-          type="textarea"
-          :rows="3"
-          placeholder="测试弹幕文本（直接交给主播当场决策，不进攒批窗口）"
-        />
-        <div class="test-options">
-          <el-checkbox v-model="testForced">强制回应（豁免低置信度降级）</el-checkbox>
-          <el-checkbox v-model="testProactive">主动发言（无弹幕批次）</el-checkbox>
-        </div>
-        <div class="test-real-proactive">
-          <el-input
-            v-model="proactiveTopicHint"
-            size="small"
-            placeholder="话题提示（可选，仅用于日志）"
-          />
-          <el-button
-            size="small"
-            type="warning"
-            :loading="triggeringProactive"
-            @click="submitTriggerProactive"
-          >
-            置位主动发言（走真实限流）
-          </el-button>
-          <p class="test-hint">
-            仅置位 pending：下个 flush tick 由 ProactiveTrigger 判定（防接龙 / 每小时上限 /
-            话题要求），任一不满足则静默丢弃——用于测试限流本身，与上方「执行」的直跑模式互不影响。
-          </p>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="testDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="testing" @click="submitTestDecision">执行</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -303,9 +279,11 @@
  *   时间线（单列居左、靠样式区分）/ 会话（观众左、主播右气泡对齐）
  * - 顶栏：连接状态、决策管线阶段徽章、模拟器模式徽章
  *
- * 干预入口（复用既有 API）：注入弹幕（debug/inject-message，与真实弹幕同链路）、
- * 立即决策测试（streamer/test-decision，结果以决策卡形式落进时间线）、
- * 主动发言真实链路置位（streamer/trigger-proactive，仅置位、走 ProactiveTrigger 限流）。
+ * 干预输入条（时间线底部，复用既有 API）：三模式 = 场控的三种操作——
+ * 注入弹幕（debug/inject-message，与真实弹幕同链路）、强制回应
+ * （streamer/test-decision，直驱决策、结果以决策卡落进时间线，留空=自由发挥）、
+ * 幕后提醒（streamer/trigger-proactive，由真实 ProactiveTrigger 限流判定）。
+ * Tab/Shift+Tab 切模式、Enter 发送、↑↓ 回溯发送历史。
  *
  * 数据来源：
  * - 实时：events store（全局 WS + 游标回填，刷新/断线不丢时间线）+ 思考流旁路
@@ -316,6 +294,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { Promotion, Loading } from '@element-plus/icons-vue';
 import { useEventsStore, useWebSocketStore } from '@/stores';
 import { debugApi, liveSessionsApi, simulatorApi, streamerApi } from '@/api';
 import { useNowTick } from '@/composables/useNowTick';
@@ -932,96 +911,177 @@ async function loadSimulatorStatus(): Promise<void> {
   }
 }
 
-// 干预：注入弹幕 + 决策测试
+// 干预输入条：三个发送模式 = 你以"幕后场控"身份对直播间的三种操作。
+// Tab/Shift+Tab 循环切模式、Enter 发送、↑↓ 回溯发送历史（Terminal 习惯）。
 
-const injecting = ref(false);
-const injectOpen = ref(false);
-const injectSource = ref('');
-const injectText = ref('');
+interface SendMode {
+  key: 'danmaku' | 'force' | 'nudge';
+  label: string;
+  /** 模式说明：下拉选项与输入条下方提示共用 */
+  desc: string;
+  placeholder: string;
+}
 
-async function submitInject(): Promise<void> {
-  const text = injectText.value.trim();
-  if (!text) {
+const SEND_MODES: SendMode[] = [
+  {
+    key: 'danmaku',
+    label: '注入弹幕',
+    desc: '假装一名观众发弹幕，走与真实弹幕完全相同的链路——主播自然反应，可能要等几秒、也可能不理你',
+    placeholder: '弹幕内容（观众昵称在下方填写，可选）',
+  },
+  {
+    key: 'force',
+    label: '强制回应',
+    desc: '不排队不限流：把文字直接交给主播立即开跑，结果落时间线决策卡；留空则主播自由发挥',
+    placeholder: '给主播的文字（立即开跑；留空 = 主播自由发挥）',
+  },
+  {
+    key: 'nudge',
+    label: '幕后提醒',
+    desc: '幕后场控式提醒"该开口了"：主播是否真开口由她的发言规则决定（防接龙 / 每小时上限 / 话题要求），可能被忽略',
+    placeholder: '话题提示（可选，留空 = 纯提醒）',
+  },
+];
+
+const sendMode = ref<SendMode['key']>('danmaku');
+const sendModeDef = computed<SendMode>(
+  () => SEND_MODES.find(mode => mode.key === sendMode.value) ?? SEND_MODES[0],
+);
+const sendText = ref('');
+const sending = ref(false);
+/** 输入框组件实例：发送完成后拉回焦点（Tab 切模式依赖焦点在输入框内） */
+const sendInputRef = ref<{ focus: (options?: { preventScroll?: boolean }) => void } | null>(null);
+
+// 发送历史（跨模式共享，去重保尾，上限 50 条）；↑ 进入历史前暂存草稿，
+// ↓ 翻到尽头自动还原草稿
+const sendHistory = ref<string[]>([]);
+const sendHistoryIdx = ref<number | null>(null);
+let sendDraft = '';
+
+function cycleSendMode(step: number): void {
+  const idx = SEND_MODES.findIndex(mode => mode.key === sendMode.value);
+  const next = (idx + step + SEND_MODES.length) % SEND_MODES.length;
+  sendMode.value = SEND_MODES[next].key;
+}
+
+function historyNav(step: number): void {
+  const list = sendHistory.value;
+  if (list.length === 0) return;
+  if (sendHistoryIdx.value === null) {
+    if (step > 0) return;
+    sendDraft = sendText.value;
+    sendHistoryIdx.value = list.length - 1;
+  } else {
+    const next = sendHistoryIdx.value + step;
+    if (next < 0) return;
+    if (next >= list.length) {
+      sendHistoryIdx.value = null;
+      sendText.value = sendDraft;
+      return;
+    }
+    sendHistoryIdx.value = next;
+  }
+  sendText.value = list[sendHistoryIdx.value];
+}
+
+function onSendKeydown(event: KeyboardEvent): void {
+  if (event.isComposing) return; // IME 组字中不劫持按键
+  if (event.key === 'Tab') {
+    event.preventDefault();
+    cycleSendMode(event.shiftKey ? -1 : 1);
+  } else if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    void sendCurrent();
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    historyNav(-1);
+  } else if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    historyNav(1);
+  }
+}
+
+/** 注入弹幕模式的观众昵称（可选，跨发送保留——方便扮演同一位观众连发） */
+const injectNickname = ref('');
+/** 在途的强制回应决策轮数：后台执行期间在状态 chip 上显示"主播正在想…" */
+const forcePending = ref(0);
+
+async function sendCurrent(): Promise<void> {
+  if (sending.value) return;
+  const text = sendText.value.trim();
+  if (sendMode.value === 'danmaku' && !text) {
     ElMessage.warning('请填写弹幕内容');
     return;
   }
-  injecting.value = true;
+  sending.value = true;
   try {
-    const response = await debugApi.injectMessage({
-      source: injectSource.value.trim() || '测试观众',
-      text,
-    });
-    if (response.data.success) {
-      ElMessage.success('已注入——观察下方决策与发言');
-      injectText.value = '';
-    } else {
-      ElMessage.error(response.data.error || '注入失败');
-    }
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '注入失败');
-  } finally {
-    injecting.value = false;
-  }
-}
-
-const testDialogVisible = ref(false);
-const testing = ref(false);
-const testText = ref('');
-const testForced = ref(false);
-const testProactive = ref(false);
-
-async function submitTestDecision(): Promise<void> {
-  const text = testText.value.trim();
-  if (!testProactive.value && !text) {
-    ElMessage.warning('请填写测试弹幕文本');
-    return;
-  }
-  testing.value = true;
-  try {
-    const response = await streamerApi.testDecision({
-      batch: testProactive.value ? undefined : [{ nickname: '调试观众', text }],
-      forced: testForced.value || undefined,
-      proactive: testProactive.value || undefined,
-    });
-    if (response.data.success) {
-      testDialogVisible.value = false;
-      testText.value = '';
-      const error = response.data.error ?? null;
-      if (error) {
-        ElMessage.warning(`决策轮已结束：${error}（详见时间线决策卡）`);
-      } else if (response.data.plan?.should_reply) {
-        ElMessage.success('决策完成：本轮已回应（详见时间线决策卡）');
+    if (sendMode.value === 'danmaku') {
+      const response = await debugApi.injectMessage({
+        source: injectNickname.value.trim() || '测试观众',
+        text,
+      });
+      if (response.data.success) {
+        ElMessage.success('已注入——主播自然反应中，可能要等、也可能不理');
       } else {
-        ElMessage.info('决策完成：本轮未回应（详见时间线决策卡）');
+        ElMessage.error(response.data.error || '注入失败');
+        return;
       }
+    } else if (sendMode.value === 'force') {
+      // 后台执行：决策可能耗时数十秒，不等返回——输入框立即可继续用，
+      // 在途状态由 forcePending chip 承载，结果落时间线决策卡
+      const payload = {
+        batch: text ? [{ nickname: '调试观众', text }] : undefined,
+        forced: true,
+        proactive: text ? undefined : true,
+      };
+      forcePending.value += 1;
+      void streamerApi
+        .testDecision(payload)
+        .then(response => {
+          if (response.data.success) {
+            const error = response.data.error ?? null;
+            if (error) {
+              ElMessage.warning(`决策轮已结束：${error}（详见时间线决策卡）`);
+            } else if (response.data.plan?.should_reply) {
+              ElMessage.success('已回应（详见时间线决策卡）');
+            } else {
+              ElMessage.info('本轮未回应（详见时间线决策卡）');
+            }
+          } else {
+            ElMessage.error(response.data.message || '测试执行失败');
+          }
+        })
+        .catch((error: unknown) => {
+          ElMessage.error(error instanceof Error ? error.message : '测试执行失败');
+        })
+        .finally(() => {
+          forcePending.value = Math.max(0, forcePending.value - 1);
+        });
     } else {
-      ElMessage.error(response.data.message || '测试执行失败');
+      const response = await streamerApi.triggerProactive({
+        topic_hint: text || undefined,
+      });
+      if (response.data.success) {
+        ElMessage.info(response.data.message || '已提醒，等主播在下个决策周期决定是否开口');
+      } else {
+        ElMessage.warning(response.data.message || '提醒没有送达');
+        return;
+      }
     }
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '测试执行失败');
-  } finally {
-    testing.value = false;
-  }
-}
-
-const proactiveTopicHint = ref('');
-const triggeringProactive = ref(false);
-
-async function submitTriggerProactive(): Promise<void> {
-  triggeringProactive.value = true;
-  try {
-    const response = await streamerApi.triggerProactive({
-      topic_hint: proactiveTopicHint.value.trim() || undefined,
-    });
-    if (response.data.success) {
-      ElMessage.info(response.data.message || '已置位，等待下个 flush tick 判定');
-    } else {
-      ElMessage.warning(response.data.message || '置位未生效');
+    // 发送成功才入历史：失败的原样留在输入框里改了重发
+    if (text && sendHistory.value[sendHistory.value.length - 1] !== text) {
+      sendHistory.value.push(text);
+      if (sendHistory.value.length > 50) sendHistory.value.shift();
     }
+    sendHistoryIdx.value = null;
+    sendText.value = '';
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '触发失败');
+    ElMessage.error(error instanceof Error ? error.message : `${sendModeDef.value.label}失败`);
   } finally {
-    triggeringProactive.value = false;
+    sending.value = false;
+    // sending 翻转会让输入框经历 disabled 往返而失焦——连发/接着 Tab 切模式
+    // 都依赖焦点在此，发送完成后拉回来
+    void nextTick(() => sendInputRef.value?.focus());
   }
 }
 
@@ -1542,60 +1602,138 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
-.inject-panel {
+/* 干预输入条：code agent 风格卡片——圆角容器内嵌无边框输入，
+   底行模式 chip + 快捷键提示 + 圆形发送钮；聚焦时描边亮起 */
+.input-bar {
   flex-shrink: 0;
-  padding: 10px var(--spacing-md);
-  border-bottom: 1px solid var(--border-color-light);
-  background: var(--bg-hover);
+  padding: 8px var(--spacing-md) 10px;
+  background: var(--bg-card);
 }
-
-.inject-form {
+.input-shell {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
+  padding: 8px 10px 6px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color-light);
+  background: var(--bg-hover);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
-
-.inject-actions {
+.input-shell:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.12);
+}
+.input-shell.is-sending {
+  opacity: 0.75;
+}
+/* 内嵌 textarea：去壳自带边框，与容器融为一体 */
+.input-shell .input-main :deep(.el-textarea__inner) {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 2px 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+.input-shell .input-main :deep(.el-textarea__inner)::placeholder {
+  color: var(--text-placeholder);
+}
+.input-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 26px;
 }
-
-.inject-hint {
-  font-size: 10px;
-  color: var(--text-placeholder);
+/* 模式 chip：无边框透明 select，标签即按钮 */
+.input-mode {
+  width: auto;
+  min-width: 96px;
+  flex-shrink: 0;
 }
-
-.test-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.input-mode :deep(.el-select__wrapper) {
+  box-shadow: none;
+  background: transparent;
+  min-height: 24px;
+  padding: 2px 4px;
+  gap: 2px;
 }
-.test-intro {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--text-secondary);
-  padding: 8px 10px;
+.input-mode :deep(.el-select__wrapper:hover) {
+  background: var(--bg-active);
   border-radius: var(--radius-sm);
-  background: var(--bg-hover);
 }
-.test-options {
-  display: flex;
-  gap: 16px;
+.input-mode :deep(.el-select__placeholder) {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-primary);
 }
-.test-real-proactive {
+/* 注入弹幕模式的昵称小输入框：迷你描边框，与 chip 同一视觉层 */
+.input-nick {
+  width: 132px;
+  flex-shrink: 0;
+}
+.input-nick :deep(.el-input__wrapper) {
+  border-radius: 999px;
+  padding: 1px 10px;
+  box-shadow: 0 0 0 1px var(--border-color-light) inset;
+  background: var(--bg-card);
+}
+.input-nick :deep(.el-input__inner) {
+  font-size: 11px;
+  height: 20px;
+}
+/* 强制回应在途状态 chip：转圈 + 文案 */
+.input-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-agent-bg);
+  color: var(--color-agent);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.input-status .el-icon {
+  font-size: 11px;
+}
+.input-kbd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-placeholder);
+  cursor: default;
+}
+.input-send {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+}
+
+/* 模式下拉选项：标题 + 说明两行；popper 收窄防止说明行过长 */
+.mode-option {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--border-color-light);
+  gap: 1px;
+  padding: 2px 0;
+  line-height: 1.4;
 }
-.test-hint {
-  margin: 0;
+.mode-option-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.mode-option-desc {
   font-size: 10px;
-  line-height: 1.6;
-  color: var(--text-placeholder);
+  color: var(--text-secondary);
+  white-space: normal;
 }
 
 /* 滚动体 + 顶部渐隐 + 回到最新                                   */
@@ -1670,5 +1808,19 @@ onUnmounted(() => {
   .slate-label {
     max-width: 55%;
   }
+}
+</style>
+
+<style>
+/* 干预输入条模式下拉的 popper 挂在 body 下，scoped 样式够不着——
+   全局收窄宽度并放开选项的两行排版（标题+说明） */
+.input-mode-popper {
+  max-width: 460px;
+}
+.input-mode-popper .el-select-dropdown__item {
+  height: auto;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  white-space: normal;
 }
 </style>

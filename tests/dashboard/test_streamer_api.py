@@ -369,7 +369,7 @@ def test_test_decision_facade_exception_does_not_500(config_dir: Path) -> None:
 
 
 def test_trigger_proactive_calls_facade(config_dir: Path) -> None:
-    """正常置位：topic_hint 透传，返回等待限流判定文案。"""
+    """正常登记：topic_hint 透传，返回等待限流判定文案。"""
     _write_config(config_dir, proactive_enabled=True)
     agent = FakeStreamerAgent()
     client = _make_client(config_dir, agent=agent)
@@ -378,12 +378,12 @@ def test_trigger_proactive_calls_facade(config_dir: Path) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
-    assert "flush tick" in body["message"]
+    assert "决策周期" in body["message"]
     assert agent.trigger_calls == ["聊聊天气"]
 
 
 def test_trigger_proactive_warns_when_disabled(config_dir: Path) -> None:
-    """proactive_enabled=false → 置位成功但提示真实链路会静默丢弃。"""
+    """proactive_enabled=false → 提醒成功但提示总开关关闭、主播不会开口。"""
     _write_config(config_dir, proactive_enabled=False)
     agent = FakeStreamerAgent(proactive_enabled=False)
     client = _make_client(config_dir, agent=agent)
@@ -392,7 +392,7 @@ def test_trigger_proactive_warns_when_disabled(config_dir: Path) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
-    assert "静默丢弃" in body["message"]
+    assert "不会开口" in body["message"]
 
 
 def test_proactive_toggle_updates_runtime_and_config(config_dir: Path) -> None:

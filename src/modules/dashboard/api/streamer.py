@@ -232,11 +232,11 @@ async def trigger_proactive(
         return TriggerProactiveResponse(
             success=True,
             message=(
-                "已置位，但主动发言总开关当前为关：真实链路会在下个 tick 静默丢弃。"
-                "如需立即开口请改用「主动发言（直跑）」模式，或在直播控制台打开开关。"
+                "已提醒，但主动发言总开关当前是关的：主播不会开口。"
+                "可在直播控制台打开开关，或改用「让主播马上回应」（不受规则约束）。"
             ),
         )
     return TriggerProactiveResponse(
         success=True,
-        message="已置位：等待下个 flush tick 限流判定（受防接龙/每小时上限/话题要求约束）",
+        message=("已提醒：主播会在下个决策周期决定是否开口（受防接龙/每小时上限/话题要求约束，可能不开口）。"),
     )
