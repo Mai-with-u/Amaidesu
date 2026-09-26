@@ -852,7 +852,7 @@ async def test_real_completion_event_wakes_parent_once_with_design_reference(
     parent._mcp_client = harness.resources
     try:
         # 从真正的玩家指令启动父任务，后台通知只能继续它，不能凭空创建新的游戏任务。
-        await parent.send_prompt("建一座房子")
+        parent.receive_prompt(content="建一座房子", source="test")
         await asyncio.wait_for(parent_called.wait(), 2)
         assert len(changes) == 1 and changes[0].executor == "minecraft_builder"
         assert changes[0].snapshot["result"]["artifact_ref"] == "draft-1"

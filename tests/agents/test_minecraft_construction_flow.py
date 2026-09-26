@@ -89,7 +89,7 @@ async def test_process_site_blueprint_plan_execute_then_wait() -> None:
     )
     agent._running = True
     agent._register_tools()
-    await agent.send_prompt("在当前平台建造，已有配方资料，按四步流程执行")
+    agent.receive_prompt(content="在当前平台建造，已有配方资料，按四步流程执行", source="test")
     await agent._run_task_batch()
     assert provider.calls == requests[:4]
     assert llm.generate.await_count == 5 and agent._task_steps == 5

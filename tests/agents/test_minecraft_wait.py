@@ -48,7 +48,7 @@ def make_agent() -> tuple[MinecraftAgent, Any, TaskTracker]:
 async def test_wait_preserves_task_and_only_completion_needs_another_decision() -> None:
     """普通核查和受理转运行不触发推理，完成事件才继续原任务。"""
     agent, llm, tracker = make_agent()
-    await agent.send_prompt("按已批准设计施工")
+    agent.receive_prompt(content="按已批准设计施工", source="test")
     await agent._run_task_batch()
     assert llm.generate.await_count == 1
     assert agent._wait_requested and not agent._task_finished
@@ -70,7 +70,7 @@ async def test_wait_preserves_task_and_only_completion_needs_another_decision() 
     assert llm.generate.await_count == 2 and agent._task_finished
     # 等待完成恢复时原有调用与回执仍为完全相同的前缀，新任务才清空旧任务的上下文。
     assert agent._messages[:len(sent_history)] == sent_history
-    await agent.send_prompt("报告当前位置")
+    agent.receive_prompt(content="报告当前位置", source="test")
     await agent._run_task_batch()
     assert "按已批准设计施工" not in str(agent._messages)
     assert agent._context_compactor.checkpoints == 0
@@ -138,7 +138,7 @@ async def test_failed_generation_preserves_plan_and_suspends_automatic_wakeups(i
         llm.generate.side_effect = LLMInterruptedError("流式输出触达硬超时")
     else:
         llm.generate.return_value = Response(success=False, error="provider unavailable")
-    await agent.send_prompt("沿已验证方案继续")
+    agent.receive_prompt(content="沿已验证方案继续", source="test")
     await agent._run_task_batch()
     assert agent._task_suspended and not agent._task_finished
     assert agent._plan_facts.pending()[0]["plan_id"] == "existing-plan"
@@ -168,7 +168,7 @@ async def test_wait_mixed_with_actions_returns_all_results_without_yielding() ->
         )
 
     llm.generate = generate
-    await agent.send_prompt("建好")
+    agent.receive_prompt(content="建好", source="test")
     await agent._run_task_batch()
     receipts = {m["tool_call_id"]: m["content"] for m in captured[1] if m["role"] == "tool"}
     assert "单独调用" in receipts["wait"] and "施工已受理" in receipts["note"]

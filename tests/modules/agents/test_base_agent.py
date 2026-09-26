@@ -529,3 +529,13 @@ async def test_task_wakeup_filters_by_initiator_and_unsubscribes() -> None:
     await asyncio.sleep(0.05)
     assert agent.notified == ["t-mine"], "退订清理生效（stop 后不再派发）"
     await bus.cleanup()
+
+
+# =============================================================================
+# 递话原语（receive_prompt 默认拒收契约）
+# =============================================================================
+
+
+def test_receive_prompt_default_refusal(sample_agent: _SampleAgent) -> None:
+    """未实现递话消化的子类走基类默认拒收：返回 False，不抛异常。"""
+    assert sample_agent.receive_prompt(content="插句话", source="operator") is False

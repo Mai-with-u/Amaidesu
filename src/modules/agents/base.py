@@ -240,6 +240,17 @@ class BaseAgent(abc.ABC):
         """
         return f"{self.name or type(self).__name__} 不接收委派（未实现接收入口或明确拒收）"
 
+    def receive_prompt(self, *, content: str, source: str = "") -> bool:
+        """接收递话入口（纯文本留言：插话纠正/补充/提醒；**默认拒收**）。
+
+        与委派并列的原语——不派新任务、不进任务账本；source 仅用于日志
+        （如 "streamer" / "operator"）。子类按需实现：典型做法是文本入队
+        或拼进下一轮决策参考块，消化方式由各 Agent 自定。
+        """
+        del content, source
+        logger.debug(f"Agent '{self.name or type(self).__name__}' 拒收递话（未实现消化通道）")
+        return False
+
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """任务变化通知钩子（``task.changed``，仅发起方是自己时被调）。
 

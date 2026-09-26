@@ -537,15 +537,17 @@ class MinecraftAgent(BaseAgent):
     # 命令驱动 ReAct（命令 → 消息队列 → 持续推进任务 → 回空闲）
     # ==================================================================
 
-    async def send_prompt(self, content: str) -> None:
-        """系统/测试注入指令（非委派来源，任务号空串）：入队 + 唤醒。
+    def receive_prompt(self, *, content: str, source: str = "") -> bool:
+        """接收递话（纯文本留言，不派任务、不进账本）：入队 + 唤醒。
 
-        原 minecraft_send_prompt 工具的内部职能；工具已退役，跨 Agent
-        派活走 framework_delegate → receive_delegation。
+        任务号空串（非委派来源），经 worker 门卫的 MinecraftInstruction
+        形状检查——任务执行中下一步推理前被 flush 吸收；任务挂起中被唤醒
+        重新判断。source 仅用于日志。
         """
         self._message_queue.append(MinecraftInstruction("", content))
         self._wake_event.set()
-        self._logger.info(f"MinecraftAgent 收到指令注入：{content[:60]}")
+        self._logger.info(f"MinecraftAgent 收到递话（source={source or '未知'}）：{content[:60]}")
+        return True
 
     def receive_delegation(self, *, instruction: str, task_id: str) -> None:
         """接收委派入口（framework_delegate 调用）：指令入队（带任务号）+ 唤醒。

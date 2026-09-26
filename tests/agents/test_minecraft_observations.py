@@ -168,7 +168,7 @@ async def test_react_tracks_original_before_presentation_and_reads_through_local
     agent._track_receipt = MagicMock()
     agent._running = True
     agent._register_tools()
-    await agent.send_prompt("读取组件资料")
+    agent.receive_prompt(content="读取组件资料", source="test")
     await agent._run_task_batch()
     agent._track_receipt.assert_called_once_with("maicraft_perceive", raw)
     ref = agent._observations.index()[0]["ref"]

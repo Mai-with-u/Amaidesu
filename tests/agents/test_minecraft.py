@@ -1,4 +1,4 @@
-"""MinecraftAgent 测试：工具契约 / ReAct 循环 / 事件 / send_prompt / handoff / 装配"""
+"""MinecraftAgent 测试：工具契约 / ReAct 循环 / 事件 / 递话 / handoff / 装配"""
 
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -242,7 +242,7 @@ async def test_react_natural_termination_fallback_delivery() -> None:
         event_bus=event_bus,
     )
     await agent.start()
-    await agent.send_prompt("挖 3 个钻石")
+    agent.receive_prompt(content="挖 3 个钻石", source="test")
     await _wait_until(lambda: llm.generate.await_count == 1)
 
     emitted = [c.args[1] for c in event_bus.emit.await_args_list]
@@ -282,7 +282,7 @@ async def test_react_report_delivery_stops_batch() -> None:
         tool_registry=ToolRegistry(),
     )
     await agent.start()
-    await agent.send_prompt("干活")
+    agent.receive_prompt(content="干活", source="test")
     await _wait_until(lambda: calls == 1)
     await asyncio.sleep(0.15)
     assert calls == 1  # 上报后停止，不开新推理
@@ -297,7 +297,7 @@ async def test_react_report_delivery_stops_batch() -> None:
 
 @pytest.mark.asyncio
 async def test_react_report_escalation_stops_and_waits() -> None:
-    """情形 2：LLM 调 report(escalation) → 停止，静默等主播 send_prompt 唤醒。"""
+    """情形 2：LLM 调 report(escalation) → 停止，静默等主播递话唤醒。"""
     llm = MagicMock()
     llm.generate = AsyncMock(
         return_value=_resp(tool_calls=[_tool_call("minecraft_report", {"kind": "escalation", "content": "需要授权"})])
@@ -312,7 +312,7 @@ async def test_react_report_escalation_stops_and_waits() -> None:
         tool_registry=ToolRegistry(),
     )
     await agent.start()
-    await agent.send_prompt("遇到困难的任务")
+    agent.receive_prompt(content="遇到困难的任务", source="test")
     await _wait_until(lambda: llm.generate.await_count == 1)
     await asyncio.sleep(0.15)
     assert llm.generate.await_count == 1
@@ -321,10 +321,10 @@ async def test_react_report_escalation_stops_and_waits() -> None:
     reports = _reports(emitted)
     assert len(reports) == 1 and reports[0].report_kind == "escalation"
 
-    # 主播回复（send_prompt）唤醒新批次（新 mock 独立计数，避免与第一批混淆）
+    # 主播回复（递话）唤醒新批次（新 mock 独立计数，避免与第一批混淆）
     resume_mock = AsyncMock(return_value=_resp("收到授权，继续"))
     llm.generate = resume_mock
-    await agent.send_prompt("授权通过了，继续")
+    agent.receive_prompt(content="授权通过了，继续", source="test")
     await _wait_until(lambda: resume_mock.await_count == 1)
     await agent.stop()
 
@@ -351,7 +351,7 @@ async def test_react_continues_past_fifty_steps_until_delivery() -> None:
     )
     await agent.start()
     try:
-        await agent.send_prompt("完成施工并验收")
+        agent.receive_prompt(content="完成施工并验收", source="test")
         await _wait_until(lambda: llm.generate.await_count == 61 and agent._task_finished)
         emitted = [c.args[1] for c in event_bus.emit.await_args_list]
         assert not [p for p in emitted if isinstance(p, GamePayload) and p.event_type == "attention_required"]
@@ -391,7 +391,7 @@ async def test_react_todo_done_no_longer_emits_milestone() -> None:
         event_bus=event_bus,
     )
     await agent.start()
-    await agent.send_prompt("挖钻石")
+    agent.receive_prompt(content="挖钻石", source="test")
     await _wait_until(lambda: len(captured) == 2)
 
     emitted = [c.args[1] for c in event_bus.emit.await_args_list]
@@ -428,7 +428,7 @@ async def test_react_full_format_feedback_and_id_association() -> None:
         tool_registry=ToolRegistry(),
     )
     await agent.start()
-    await agent.send_prompt("探索东侧")
+    agent.receive_prompt(content="探索东侧", source="test")
     await _wait_until(lambda: len(captured) >= 2)
 
     # 第二轮请求的 messages 应含正确的作为观察返回结构
@@ -494,7 +494,7 @@ async def test_react_mcp_tool_via_registry_passthrough() -> None:
         tool_registry=registry,
     )
     await agent.start()
-    await agent.send_prompt("看看周围")
+    agent.receive_prompt(content="看看周围", source="test")
     await _wait_until(lambda: fake.calls == 2)
 
     assert registry.has("maicraft_perceive")
@@ -528,7 +528,7 @@ async def test_react_pause_suspends_loop() -> None:
     )
     agent._execute_tool = AsyncMock(side_effect=observe)
     await agent.start()
-    await agent.send_prompt("暂停任务")
+    agent.receive_prompt(content="暂停任务", source="test")
 
     # 暂停循环：等待一步真实执行后挂起，计数冻结
     await _wait_until(lambda: call_count >= 1)
@@ -544,10 +544,10 @@ async def test_react_pause_suspends_loop() -> None:
 
 @pytest.mark.asyncio
 async def test_instruction_injection_wakes_worker_full_chain() -> None:
-    """指令注入全链路：内部 send_prompt（系统/测试通道）→ worker 唤醒 → 任务真实执行。
+    """指令注入全链路：递话（系统/测试通道）→ worker 唤醒 → 任务真实执行。
 
-    原 minecraft_send_prompt 工具已退役（职能并入接收委派入口）；跨 Agent
-    派活的工具链验证见 tests/modules/agents/test_delegation.py。
+    递话与委派是并列原语：递话不进账本、任务号空串；跨 Agent 派活的
+    工具链验证见 tests/modules/agents/test_delegation.py。
     """
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=_resp("收到，开始执行"))
@@ -563,7 +563,7 @@ async def test_instruction_injection_wakes_worker_full_chain() -> None:
     )
     await agent.start()
 
-    await agent.send_prompt("工具链目标")
+    agent.receive_prompt(content="工具链目标", source="test")
     await _wait_until(lambda: llm.generate.awaited)
 
     await agent.stop()
@@ -591,9 +591,9 @@ async def test_agent_reusable_after_goal_completes() -> None:
     )
     await agent.start()
 
-    await agent.send_prompt("第一个任务")
+    agent.receive_prompt(content="第一个任务", source="test")
     await _wait_until(lambda: calls == 1)
-    await agent.send_prompt("第二个任务")
+    agent.receive_prompt(content="第二个任务", source="test")
     await _wait_until(lambda: calls == 2)
 
     assert len(agent.get_state_snapshot()["recent_reports"]) >= 2  # 两次兜底交付
@@ -612,7 +612,7 @@ async def test_prompt_without_llm_fails_fast() -> None:
         event_bus=event_bus,
     )
     await agent.start()
-    await agent.send_prompt("挖钻石")
+    agent.receive_prompt(content="挖钻石", source="test")
     await _wait_until(lambda: bool(event_bus.emit.await_args_list))
 
     emitted = [c.args[1] for c in event_bus.emit.await_args_list]
@@ -653,7 +653,7 @@ async def test_llm_call_failure_emits_error() -> None:
         event_bus=event_bus,
     )
     await agent.start()
-    await agent.send_prompt("失败任务")
+    agent.receive_prompt(content="失败任务", source="test")
     await _wait_until(lambda: bool(event_bus.emit.await_args_list))
 
     emitted = [c.args[1] for c in event_bus.emit.await_args_list]
@@ -732,7 +732,7 @@ async def test_react_tool_failure_fed_back_to_llm() -> None:
         tool_registry=registry,
     )
     await agent.start()
-    await agent.send_prompt("挖矿")
+    agent.receive_prompt(content="挖矿", source="test")
     await _wait_until(lambda: len(seen_failure) >= 1)
 
     assert seen_failure == [True]  # 失败观察真实作为观察返回
@@ -772,7 +772,7 @@ async def test_react_multi_tool_calls_batch_execute() -> None:
         tool_registry=ToolRegistry(),
     )
     await agent.start()
-    await agent.send_prompt("批量任务")
+    agent.receive_prompt(content="批量任务", source="test")
     # 两个工具都执行后即可核对状态；仍有施工待办时，父循环可以继续提醒推进而不是虚报完成。
     await _wait_until(lambda: calls >= 2)
 
@@ -787,7 +787,7 @@ async def test_react_multi_tool_calls_batch_execute() -> None:
 
 @pytest.mark.asyncio
 async def test_command_after_task_reaches_messages() -> None:
-    """执行中 send_prompt 的消息进入对话（LLM 下一次推理吸收，系统不硬转向）。"""
+    """执行中递话的消息进入对话（LLM 下一次推理吸收，系统不硬转向）。"""
     seen_messages: list[dict] = []
 
     async def fake(messages, **kwargs):
@@ -805,9 +805,9 @@ async def test_command_after_task_reaches_messages() -> None:
         event_bus=event_bus,
     )
     await agent.start()
-    await agent.send_prompt("初始任务")
+    agent.receive_prompt(content="初始任务", source="test")
     await asyncio.sleep(0.15)
-    await agent.send_prompt("追加指令")
+    agent.receive_prompt(content="追加指令", source="test")
     await _wait_until(lambda: len(seen_messages) >= 2)
 
     # 第二轮 messages 含追加指令（user 消息）
@@ -1017,7 +1017,7 @@ async def test_execute_receipt_registers_task_and_subscribes() -> None:
     tracker.start()
     await agent.start()
     try:
-        await agent.send_prompt("挖矿")
+        agent.receive_prompt(content="挖矿", source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
 
         record = tracker.ledger.get("task-1")
@@ -1053,7 +1053,7 @@ async def test_task_terminal_wakes_worker_with_snapshot() -> None:
     tracker.start()
     await agent.start()
     try:
-        await agent.send_prompt("挖矿")
+        agent.receive_prompt(content="挖矿", source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
         assert tracker.ledger.get("task-1") is not None
 
@@ -1106,7 +1106,7 @@ async def test_design_completion_resumes_original_build_goal() -> None:
     tracker.start()
     await agent.start()
     try:
-        await agent.send_prompt(instruction)
+        agent.receive_prompt(content=instruction, source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
         agent._mc_state.set_notebook("公共木料箱已定位")
         assert any(task["task_id"] == "design-1" for task in agent._current_task_context()["background_tasks"])
@@ -1149,7 +1149,7 @@ async def test_task_notification_resumes_after_fifty_steps_without_new_instructi
     tracker.start()
     await agent.start()
     try:
-        await agent.send_prompt(instruction)
+        agent.receive_prompt(content=instruction, source="test")
         await _wait_until(lambda: agent._wait_requested and not agent._batch_active)
         assert agent._task_steps == 50 and not agent._task_suspended
         # Mod 完成施工后通过已有任务跟踪通道通知父玩家，无需第二条主播指令。
@@ -1186,7 +1186,7 @@ async def test_unfinished_todos_block_natural_and_explicit_delivery() -> None:
     agent = MinecraftAgent(MinecraftConfig(), llm_manager=llm, event_bus=bus, tool_registry=ToolRegistry())
     await agent.start()
     try:
-        await agent.send_prompt("建好房屋")
+        agent.receive_prompt(content="建好房屋", source="test")
         await _wait_until(lambda: agent._task_suspended)
         # 停止自动行动必须上报阻塞；它仍不能冒充施工完成，也不能清除尚未完成的目标。
         reports = agent.get_state_snapshot()["recent_reports"]
@@ -1230,7 +1230,7 @@ async def test_task_no_state_change_no_injection() -> None:
     tracker.start()
     await agent.start()
     try:
-        await agent.send_prompt("挖矿")
+        agent.receive_prompt(content="挖矿", source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
 
         provider.fire_attention()  # 状态仍是 running（受理即 running）→ 无真变化
@@ -1262,7 +1262,7 @@ async def test_task_decision_point_injects_and_keeps_tracking() -> None:
     tracker.start()
     await agent.start()
     try:
-        await agent.send_prompt("需要选择的任务")
+        agent.receive_prompt(content="需要选择的任务", source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
 
         provider.task_states["task-1"]["state"] = "waiting_for_decision"
@@ -1298,7 +1298,7 @@ async def test_task_stall_alert_without_killing_task() -> None:
     tracker.start()
     await agent.start()
     try:
-        await agent.send_prompt("卡住的任务")
+        agent.receive_prompt(content="卡住的任务", source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
         assert tracker.ledger.get("task-1") is not None
 
@@ -1333,7 +1333,7 @@ async def test_delivery_gate_rejects_with_pending_task() -> None:
     tracker.start()
     await agent.start()
     try:
-        await agent.send_prompt("挖矿")
+        agent.receive_prompt(content="挖矿", source="test")
         await _wait_until(lambda: len(llm.captured) >= 3)
 
         from src.modules.events.names import CoreEvents as _CE
@@ -1579,7 +1579,7 @@ async def test_on_start_binds_agent_owned_mcp_with_visible_list(monkeypatch: pyt
     assert "maicraft_execute" not in streamer_face
     minecraft_face = {s.full_name for s in registry.list_tools(for_agent="minecraft")}
     assert {"maicraft_perceive", "maicraft_execute"}.issubset(minecraft_face)
-    # 本地工具名单：get_work_log 给主播，todo/notebook/report/send_prompt 各归其主
+    # 本地工具名单：get_work_log 给主播，todo/notebook/report/wait 等各归其主
     assert registry.visible_to_of("minecraft_get_work_log") == ["streamer"]
     assert registry.visible_to_of("minecraft_todo") == ["minecraft"]
     # 装配成功：client 引用留给 handoff 订阅接线
@@ -2019,7 +2019,7 @@ async def test_thinking_sink_receives_reasoning_with_minecraft_phase() -> None:
     agent = _build_sink_agent(llm, sink, cap)
 
     await agent.start()
-    await agent.send_prompt("两步")
+    agent.receive_prompt(content="两步", source="test")
     await _wait_until(lambda: len(sink.calls) >= 3)
     await agent.stop()
 
@@ -2055,7 +2055,7 @@ async def test_thinking_sink_round_id_propagates_to_tool_invocations() -> None:
     agent = _build_sink_agent(llm, sink, cap)
 
     await agent.start()
-    await agent.send_prompt("cap")
+    agent.receive_prompt(content="cap", source="test")
     await _wait_until(lambda: len(cap.invocations) >= 1 and len(sink.calls) >= 1)
     await agent.stop()
 
@@ -2079,7 +2079,7 @@ async def test_thinking_sink_none_keeps_existing_behavior() -> None:
     agent = _build_sink_agent(llm, None, cap)
 
     await agent.start()
-    await agent.send_prompt("cap")
+    agent.receive_prompt(content="cap", source="test")
     await _wait_until(lambda: len(cap.invocations) >= 1)
     await agent.stop()
 
