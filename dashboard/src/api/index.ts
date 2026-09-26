@@ -1,9 +1,9 @@
 /**
  * Dashboard API 客户端
  *
- * 模拟直播能力控制面：
- * - ``simulatorApi`` → ``/api/v1/simulator/*``：模拟器 SimulatorService
- *   （generate 生成 / replay 回放）
+ * 承载 Dashboard 消费的全部后端 ``/api/v1`` REST 接口：按业务域分组导出，
+ * 每域一个 api 对象（端点行为语义见各导出处的注释），请求统一经文件内
+ * 共享的 axios 实例发出。
  */
 
 import axios from 'axios';
@@ -102,9 +102,10 @@ export const componentApi = {
 
 // 配置
 //
-// 后端 `/api/v1/config` 返回六文件合并的扁平 dict；`/api/v1/config/schema`
-// 返回按文件归组的 groups。读写由 stores/settings.ts 直连（裸 axios 实例），
-// 此处仅暴露 AppLayout 顶栏使用的重启触发。
+// 后端 `/api/v1/config` 返回各配置文件 scope 展平的合并视图（敏感字段以
+// 占位文案遮蔽）；`/api/v1/config/schema` 返回按文件归组的 groups。配置
+// 读写由 stores/settings.ts 经本文件的共享 axios 实例完成，此处仅暴露
+// AppLayout 顶栏使用的重启触发。
 export const configApi = {
   restart: () => api.post<ConfigUpdateResponse>('/config/restart'),
 };
