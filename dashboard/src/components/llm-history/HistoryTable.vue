@@ -66,7 +66,7 @@
         <template #default="{ row }">
           <el-tooltip
             v-if="cacheRate(row) !== null"
-            :content="`命中 ${row.cache_hit_tokens.toLocaleString()} / 未中 ${row.cache_miss_tokens.toLocaleString()} tokens`"
+            :content="`命中 ${formatNumber(row.cache_hit_tokens)} / 未中 ${formatNumber(row.cache_miss_tokens)} tokens`"
             placement="top"
           >
             <span class="cache-rate">{{ cacheRateText(row) }}</span>
@@ -112,6 +112,7 @@ import type { LLMRequestHistorySummary, LLMHistoryQueryParams } from '@/types';
 import {
   formatDateTime,
   formatLatency,
+  formatNumber,
   getProfileNameLabel,
   formatCost,
   getLatencyClass,

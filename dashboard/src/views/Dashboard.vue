@@ -178,6 +178,7 @@ import type {
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import PulseChart from '@/components/dashboard/PulseChart.vue';
 import { useChartPalette } from '@/composables/useECharts';
+import { formatTimeHM } from '@/utils/format';
 import { buildLiveEntries, type FeedEvent, type ShowEntry } from '@/utils/liveFeed';
 
 const router = useRouter();
@@ -348,8 +349,7 @@ function buildPulse(events: FeedEvent[]): BucketWindow {
   const labels = new Array<string>(PULSE_BUCKETS);
   for (let i = 0; i < PULSE_BUCKETS; i++) {
     const d = new Date(windowStart + i * PULSE_BUCKET_MS);
-    labels[i] =
-      `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    labels[i] = formatTimeHM(d.getTime());
   }
   for (const event of events) {
     const ts = event.timestamp_ms;

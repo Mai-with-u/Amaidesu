@@ -35,6 +35,45 @@ export function formatDateTime(timestamp: number): string {
 }
 
 /**
+ * 时刻 → 本地 HH:MM（24 小时制）。
+ */
+export function formatTimeHM(ms: number): string {
+  return new Date(ms).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+/**
+ * 时刻 → 本地 HH:MM:SS（24 小时制）。
+ */
+export function formatTimeHMS(ms: number): string {
+  return new Date(ms).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+/**
+ * 时刻 → 本地完整日期时间（zh-CN，24 小时制；不含显式字段选择）。
+ */
+export function formatDateTimeCn(ms: number): string {
+  return new Date(ms).toLocaleString('zh-CN', { hour12: false });
+}
+
+// ==================== 数字 ====================
+
+/**
+ * 数字 → 千分位字符串（token 计数等展示共用的单一事实源）。
+ */
+export function formatNumber(n: number): string {
+  return n.toLocaleString();
+}
+
+/**
  * 延迟毫秒 → "850ms" / "1.25s"。
  */
 export function formatLatency(ms: number): string {

@@ -4,6 +4,7 @@
  */
 
 import type { Ref } from 'vue';
+import { formatTimeHMS } from '@/utils/format';
 import type {
   RundownCurrentSegment,
   RundownSegmentView,
@@ -70,13 +71,7 @@ export function useRundownDisplay(options: UseRundownDisplayOptions) {
 
   function formatTime(tsMs: number): string {
     if (!tsMs) return '—';
-    const d = new Date(tsMs);
-    return d.toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    });
+    return formatTimeHMS(tsMs);
   }
 
   function historyDotType(

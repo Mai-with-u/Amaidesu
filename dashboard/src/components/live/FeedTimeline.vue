@@ -400,6 +400,7 @@ import { CopyDocument, Monitor } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import { llmApi } from '@/api';
+import { formatNumber } from '@/utils/format';
 import {
   agentGroupOf,
   batchSizeOf,
@@ -550,7 +551,7 @@ function statsOf(entry: ShowEntry): RoundTokenStats | null {
 
 /** 万级以下直接显示，以上缩写为 k（d-meta 小字号场景，精确值在悬浮提示） */
 function compactTokens(n: number): string {
-  return n >= 10000 ? `${(n / 1000).toFixed(1)}k` : n.toLocaleString();
+  return n >= 10000 ? `${(n / 1000).toFixed(1)}k` : formatNumber(n);
 }
 
 /** 缓存徽标文案（"缓存 62%"）；未取到 / 上游未上报返回空串（调用方按 v-if 不渲染） */
@@ -564,7 +565,7 @@ function cacheLabelOf(entry: ShowEntry): string {
 function cacheTitleOf(entry: ShowEntry): string {
   const stats = statsOf(entry);
   if (!stats) return '';
-  return `缓存命中 ${stats.hitTokens.toLocaleString()} / ${stats.promptTokens.toLocaleString()} tokens`;
+  return `缓存命中 ${formatNumber(stats.hitTokens)} / ${formatNumber(stats.promptTokens)} tokens`;
 }
 
 /** token 徽标文案（"Token 75.4k/0.5k"，输入/输出） */
@@ -578,7 +579,7 @@ function tokensLabelOf(entry: ShowEntry): string {
 function tokensTitleOf(entry: ShowEntry): string {
   const stats = statsOf(entry);
   if (!stats) return '';
-  return `输入 ${stats.promptTokens.toLocaleString()} · 输出 ${stats.completionTokens.toLocaleString()} tokens`;
+  return `输入 ${formatNumber(stats.promptTokens)} · 输出 ${formatNumber(stats.completionTokens)} tokens`;
 }
 
 /** 模型名徽标：本轮 Planner 请求实际使用的模型标识（空串不渲染） */
@@ -642,7 +643,7 @@ function ctxLabelOf(entry: ShowEntry): string {
 function ctxTitleOf(entry: ShowEntry): string {
   const stats = statsOf(entry);
   const win = contextWindowOf(entry);
-  return `本轮输入 ${(stats?.promptTokens ?? 0).toLocaleString()} / 窗口 ${win.toLocaleString()} tokens`;
+  return `本轮输入 ${formatNumber(stats?.promptTokens ?? 0)} / 窗口 ${formatNumber(win)} tokens`;
 }
 
 /** 弹幕 message_id → 时间线条目（用于发言/决策卡回复引用反查）。

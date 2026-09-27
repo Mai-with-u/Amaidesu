@@ -55,6 +55,7 @@ import type {
   LLMHistoryQueryParams,
   LLMHistoryStatistics,
 } from '@/types';
+import { formatNumber as formatCacheTokens } from '@/utils/format';
 import HistoryFilter from '@/components/llm-history/HistoryFilter.vue';
 import HistoryTable from '@/components/llm-history/HistoryTable.vue';
 import HistoryDetail from '@/components/llm-history/HistoryDetail.vue';
@@ -68,10 +69,6 @@ const currentDetail = ref<LLMRequestHistory | null>(null);
 const availableModels = ref<string[]>([]);
 // 统计视图数据：页头展示当前时间窗内的缓存命中总量（随筛选联动）
 const statistics = ref<LLMHistoryStatistics | null>(null);
-
-function formatCacheTokens(num: number): string {
-  return num.toLocaleString();
-}
 
 async function fetchStatistics() {
   try {

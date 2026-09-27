@@ -337,6 +337,7 @@ import type { LLMUsageStats, LLMUsageSummary, LLMUsageTrendsResponse } from '@/t
 import TrendChart from '@/components/llm/TrendChart.vue';
 import ModelCostDonut from '@/components/llm/ModelCostDonut.vue';
 import { compactNumber, costYuan } from '@/utils/chartFormat';
+import { formatNumber } from '@/utils/format';
 
 // 趋势图时间窗选项（天）
 const RANGE_OPTIONS = [7, 30, 90];
@@ -448,11 +449,6 @@ const donutItems = computed(() =>
 // 跳转 LLM 历史页并按模型预置筛选（历史页读取 ?model_name=）
 function goToModelHistory(modelName: string): void {
   void router.push({ path: '/llm/history', query: { model_name: modelName } });
-}
-
-// 格式化数字（添加千分位分隔符）
-function formatNumber(num: number): string {
-  return num.toLocaleString();
 }
 
 // 上下文水位色阶：≤80% 蓝色（安全），>80% 警告橙（即将溢出）

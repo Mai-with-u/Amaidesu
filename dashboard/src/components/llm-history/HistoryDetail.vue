@@ -38,11 +38,11 @@
           {{ detail.usage.total_tokens }}
         </el-descriptions-item>
         <el-descriptions-item v-if="detail.reasoning_tokens != null" label="思考 token">
-          {{ detail.reasoning_tokens.toLocaleString() }}
+          {{ formatNumber(detail.reasoning_tokens) }}
         </el-descriptions-item>
         <el-descriptions-item v-if="cacheReported" label="缓存命中">
-          命中 {{ detail.cache_hit_tokens.toLocaleString() }} / 未中
-          {{ detail.cache_miss_tokens.toLocaleString() }}（{{ cacheRateText }}）
+          命中 {{ formatNumber(detail.cache_hit_tokens) }} / 未中
+          {{ formatNumber(detail.cache_miss_tokens) }}（{{ cacheRateText }}）
         </el-descriptions-item>
         <el-descriptions-item v-if="detail.cost !== undefined" label="费用">
           {{ formatCost(detail.cost) }}
@@ -187,7 +187,13 @@ import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import { normalizeMessage, type PreviewMessage } from '@/utils/llmMessage';
 import type { LLMRequestHistory } from '@/types';
-import { formatCost, formatDateTime, formatLatency, getProfileNameLabel } from '@/utils/format';
+import {
+  formatCost,
+  formatDateTime,
+  formatLatency,
+  formatNumber,
+  getProfileNameLabel,
+} from '@/utils/format';
 
 interface Props {
   visible: boolean;

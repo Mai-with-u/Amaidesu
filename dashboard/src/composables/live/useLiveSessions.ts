@@ -12,6 +12,7 @@ import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { liveSessionsApi } from '@/api';
+import { formatTimeHM } from '@/utils/format';
 import type { LiveSessionItem } from '@/types';
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -22,11 +23,7 @@ const SOURCE_LABEL: Record<string, string> = {
 
 /** 侧栏时钟/时长的时刻标签（事件→条目取值助手见 utils/liveFeed.ts） */
 function clockLabel(ms: number): string {
-  return new Date(ms).toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  return formatTimeHM(ms);
 }
 
 export function useLiveSessions() {

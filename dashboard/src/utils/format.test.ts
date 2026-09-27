@@ -8,8 +8,12 @@ import { describe, expect, it } from 'vitest';
 import {
   formatCost,
   formatDateTime,
+  formatDateTimeCn,
   formatDurationShort,
   formatLatency,
+  formatNumber,
+  formatTimeHM,
+  formatTimeHMS,
   getLatencyClass,
   getProfileNameLabel,
   getProfileNameTag,
@@ -128,5 +132,26 @@ describe('formatDateTime', () => {
   it('本地时区日期时间（断言结构而非具体小时，兼容时区与 ICU 差异）', () => {
     const text = formatDateTime(Date.UTC(2026, 8, 26, 12, 30, 5));
     expect(text).toMatch(/^\d{4}[/-]\d{2}[/-]\d{2}[ T]\d{2}:\d{2}:\d{2}$/);
+  });
+});
+
+describe('formatTimeHM / formatTimeHMS', () => {
+  it('24 小时制时刻（断言结构而非具体小时，兼容时区差异）', () => {
+    expect(formatTimeHM(Date.UTC(2026, 8, 26, 14, 30))).toMatch(/^\d{2}:\d{2}$/);
+    expect(formatTimeHMS(Date.UTC(2026, 8, 26, 14, 30, 5))).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+});
+
+describe('formatDateTimeCn', () => {
+  it('完整日期时间（断言结构，兼容时区与 ICU 差异）', () => {
+    const text = formatDateTimeCn(Date.UTC(2026, 8, 26, 12, 30, 5));
+    expect(text).toMatch(/^\d{4}[/-]\d{1,2}[/-]\d{1,2}[ T]\d{2}:\d{2}:\d{2}$/);
+  });
+});
+
+describe('formatNumber', () => {
+  it('千分位分组', () => {
+    expect(formatNumber(1234567)).toBe('1,234,567');
+    expect(formatNumber(42)).toBe('42');
   });
 });

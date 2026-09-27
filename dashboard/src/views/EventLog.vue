@@ -153,6 +153,7 @@ import { storeToRefs } from 'pinia';
 import { debugApi } from '@/api';
 import type { EventBusStatsResponse } from '@/types';
 import DOMPurify from 'dompurify';
+import { formatTimeHMS as formatTime } from '@/utils/format';
 import hljs from 'highlight.js/lib/core';
 import json from 'highlight.js/lib/languages/json';
 import 'highlight.js/styles/atom-one-dark.min.css';
@@ -265,16 +266,6 @@ function clearEvents() {
   eventsStore.clearEvents();
   expandedEvents.value.clear();
   ElMessage.success('已清空事件列表');
-}
-
-// 格式化时间
-function formatTime(timestampMs: number): string {
-  const date = new Date(timestampMs);
-  return date.toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
 }
 
 // 格式化事件数据（带语法高亮和 XSS 防护）

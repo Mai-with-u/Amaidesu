@@ -271,6 +271,7 @@ import { useLiveTimeline } from '@/composables/live/useLiveTimeline';
 import { useLiveStatus } from '@/composables/live/useLiveStatus';
 import { useInterventionBar } from '@/composables/live/useInterventionBar';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
+import { formatTimeHMS } from '@/utils/format';
 import { MAX_ENTRIES, relativeTime } from '@/utils/liveFeed';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 
@@ -344,14 +345,7 @@ const nowTick = useNowTick();
 
 /** 当前 Unix 秒（相对时间标签入参；FeedTimeline 自带 tick，这里仅供顶部环节横幅使用） */
 
-const wallClock = computed(() =>
-  new Date(nowTick.value).toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }),
-);
+const wallClock = computed(() => formatTimeHMS(nowTick.value));
 
 // 生命周期
 

@@ -76,7 +76,10 @@
         </el-table-column>
         <el-table-column label="压缩水位" width="120">
           <template #default="{ row }">
-            <span v-if="row.last_compressed_at_ms > 0" :title="formatTime(row.last_compressed_at_ms)">
+            <span
+              v-if="row.last_compressed_at_ms > 0"
+              :title="formatTime(row.last_compressed_at_ms)"
+            >
               {{ relativeAge(row.last_compressed_at_ms) }}
             </span>
             <span v-else class="none-hint">—</span>
@@ -90,7 +93,9 @@
         <el-table-column label="" width="130" align="right">
           <template #default="{ row }">
             <el-button link size="small" type="primary" @click.stop="openEdit(row)">纠正</el-button>
-            <el-button link size="small" type="danger" @click.stop="removeProfile(row)">删除</el-button>
+            <el-button link size="small" type="danger" @click.stop="removeProfile(row)"
+              >删除</el-button
+            >
           </template>
         </el-table-column>
       </el-table>
@@ -147,12 +152,8 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { Search } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { memoryApi } from '@/api';
-import type {
-  ViewerProfileItem,
-  ViewerFactItem,
-  MemoryStatsResponse,
-} from '@/types';
-import { relativeAge } from '@/utils/format';
+import type { ViewerProfileItem, ViewerFactItem, MemoryStatsResponse } from '@/types';
+import { formatDateTimeCn as formatTime, relativeAge } from '@/utils/format';
 import { confirmAction } from '@/utils/confirmAction';
 
 const pageSize = 20;
@@ -171,10 +172,6 @@ const shownRange = computed(() => {
   const end = Math.min(page.value * pageSize, total.value);
   return `${start}-${end}`;
 });
-
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleString('zh-CN', { hour12: false });
-}
 
 function rowKey(row: ViewerProfileItem): string {
   return `${row.platform}/${row.user_id}`;

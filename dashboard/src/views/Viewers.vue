@@ -114,7 +114,7 @@ import { useRouter } from 'vue-router';
 import { Search } from '@element-plus/icons-vue';
 import { viewersApi } from '@/api';
 import type { ViewerListItem } from '@/types';
-import { relativeAge } from '@/utils/format';
+import { formatDateTimeCn as formatTime, relativeAge } from '@/utils/format';
 
 const router = useRouter();
 
@@ -142,10 +142,6 @@ const shownRange = computed(() => {
   const end = Math.min(page.value * pageSize, total.value);
   return `${start}-${end}`;
 });
-
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleString('zh-CN', { hour12: false });
-}
 
 async function load(): Promise<void> {
   loading.value = true;
