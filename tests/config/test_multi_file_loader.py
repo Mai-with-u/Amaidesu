@@ -1,6 +1,7 @@
 """多文件加载器和生成器测试（六文件布局）"""
 
 import shutil
+from typing import Optional
 
 import pytest
 
@@ -134,3 +135,32 @@ class TestLoading:
         config, report = load_config_dir(temp_config_dir)
         assert not report.redundant
         assert "dg_lab" not in agents_path.read_text(encoding="utf-8-sig")
+
+
+class TestCollectorsSectionBackfill:
+    """采集器干净段回填：Optional-None 字段剥除后再写回 extras。"""
+
+    def test_backfill_strips_none_values(self, monkeypatch):
+        """Schema 含 Optional-None 字段且值为 None 时，回填 dict 不含 None——
+        TOML 无 null 字面量，裸 None 留在回填 dict 里会在写回落盘时炸。"""
+        from types import SimpleNamespace
+
+        from src.modules.config.multi_file_loader import _validate_collectors_sections
+        from src.modules.config.registry import COMPONENT_SCHEMAS
+        from src.modules.config.schemas.base import BaseConfig, DriftReport
+
+        class _FakeCollectorSchema(BaseConfig):
+            name: str = "fake"
+            maybe: Optional[int] = None
+
+        monkeypatch.setitem(COMPONENT_SCHEMAS, "fake_collector", _FakeCollectorSchema)
+
+        root = SimpleNamespace(
+            enabled=[],
+            __pydantic_extra__={"fake_collector": {"name": "x", "maybe": None}},
+        )
+        report = DriftReport()
+        _validate_collectors_sections(root, report)
+
+        assert root.__pydantic_extra__["fake_collector"] == {"name": "x"}
+        assert not report.has_drift

@@ -540,7 +540,9 @@ def _validate_collectors_sections(
             raise ConfigValidationError("collectors.toml", f"collectors.{name}", f"子段校验失败: {exc}") from exc
         report.missing.extend(f"{name}.{m}" for m in sub_report.missing)
         report.redundant.extend(f"{name}.{r}" for r in sub_report.redundant)
-        root_instance.__pydantic_extra__[name] = sub_instance.model_dump()
+        # 剥 None 再回填（与 tools 分支同口径）：Optional 字段的 None 不落盘
+        # （TOML 无 null 字面量），序列化侧的裸 dict 渲染路径不做 None 兜底
+        root_instance.__pydantic_extra__[name] = {k: v for k, v in sub_instance.model_dump().items() if v is not None}
 
 
 def _validate_tool_provider_sections(
