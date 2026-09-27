@@ -156,6 +156,29 @@ def test_referenced_chain_details_keep_known_shortage_and_readback_path() -> Non
 
 
 @pytest.mark.asyncio
+async def test_observation_completion_scope_survives_compaction() -> None:
+    """生产请求后来只执行观察时，整理历史后仍要区分原始意图与实际步骤成功。"""
+    agent, llm = make_agent()
+    snapshot = {
+        "task_id": "inspection",
+        "state": "success",
+        "outcome": "产出精密构件",
+        "outcome_scope": "requested_intent",
+        "all_steps_scope": "current_steps_after_recovery_or_replacement",
+        "terminal": {"result": {"success": True, "data": {"completion_scope": "executed_steps"}}},
+    }
+    shown = agent._observations.present("maicraft_task", {"action": "get"}, snapshot)
+    agent._remember_result("maicraft_task", {"action": "get"}, snapshot, shown)
+    llm.generate = AsyncMock(return_value=Response(success=True, content="继续核验产出", finish_reason="stop"))
+    messages = previous_history()
+    assert await agent._context_compactor.compact(messages, [], agent._current_task_context())
+    context = messages[1]["content"]
+    assert '"completion_scope":"executed_steps"' in context
+    assert '"outcome_scope":"requested_intent"' in context
+    assert '"all_steps_scope":"current_steps_after_recovery_or_replacement"' in context
+
+
+@pytest.mark.asyncio
 async def test_powered_construction_does_not_become_verified_production_in_context() -> None:
     """施工与动力成功后仍保留产出未验收，历史整理不能把接好线升级成已制成精密构件。"""
     agent, llm = make_agent()

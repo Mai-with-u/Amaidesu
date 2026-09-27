@@ -10,6 +10,10 @@ from src.agents.minecraft.readback import is_reference
 
 # 接线、拆改与原生点击的确认事实跟随任务保留，防止整理上下文后把超时误当成没有装料。
 _MACHINE_FACT_KEYS = (
+    # 生产被改成检查后，只保留实际步骤的完成含义，原请求中的产物名称不能成为成功事实。
+    "completion_scope",
+    "outcome_scope",
+    "all_steps_scope",
     "native_action_status",
     "native_action_kind",
     "outcome_uncertain",
