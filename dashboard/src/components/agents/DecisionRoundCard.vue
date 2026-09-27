@@ -236,10 +236,6 @@ function toolTitle(tool: DecisionRoundToolItem): string {
   flex-shrink: 0;
 }
 
-.round-grow {
-  flex: 1;
-}
-
 /* 折叠块：本批消息 / 原始输出共用 */
 .round-fold summary {
   cursor: pointer;

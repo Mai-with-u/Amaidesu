@@ -651,7 +651,7 @@ export function buildLiveEntries(events: FeedEvent[], hiddenIds: Set<string>): S
   return next.slice(-MAX_ENTRIES);
 }
 
-// 思考行：视图层从思考流旁路状态合成（不进事件 store，不回看——ADR-008 边界不变）
+// 思考行：视图层从思考流旁路状态合成（不进事件 store、不回看，旁路边界不变）
 
 /** 思考行输入段：视图层从思考流旁路状态提取（时间戳取段首 WS 信封时刻） */
 export interface ThinkingSegmentInput {
