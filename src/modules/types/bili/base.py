@@ -24,6 +24,8 @@ class BiliMessageType(Enum):
     GIFT = "LIVE_OPEN_PLATFORM_SEND_GIFT"
     GUARD = "LIVE_OPEN_PLATFORM_GUARD"
     SUPER_CHAT = "LIVE_OPEN_PLATFORM_SUPER_CHAT"
+    # 房间统计类状态推送（非用户行为）：累计观看人次变化即推
+    WATCHED_CHANGE = "LIVE_OPEN_PLATFORM_WATCHED_CHANGE"
 
 
 class BiliBaseMessage(BaseModel, ABC):

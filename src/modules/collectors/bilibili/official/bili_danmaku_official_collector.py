@@ -3,6 +3,7 @@ BiliDanmakuOfficialCollector —— Bilibili 官方弹幕采集器
 
 - 继承 ``BaseCollector``（流型感知者，世界→系统入口，主动推事件）
 - 默认 emit ``room.message.*`` 语义域事件（danmaku/gift/super_chat/guard/enter）
+  与 ``room.state.watched_count`` 状态事件（观看数统计推送）
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from src.modules.events.payloads.room import (
     RoomMessageUser,
     SuperChatInfo,
 )
+from src.modules.events.payloads.room_state import RoomStateWatchedPayload
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.types.bili import (
@@ -36,6 +38,7 @@ from src.modules.types.bili import (
     GiftMessage,
     GuardMessage,
     SuperChatMessage,
+    WatchedChangeMessage,
 )
 from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
 
@@ -56,8 +59,9 @@ _RMB_TO_GOLD_COIN = 1000
 class BiliDanmakuOfficialCollector(BaseCollector):
     """Bilibili 官方弹幕采集器
 
-    使用官方 WebSocket API 实时接收弹幕/SC/礼物/上舰/进房事件，emit
-    ``room.message.*`` 语义域事件（默认）；``collect()`` 由 BaseCollector 后台任务消费。
+    使用官方 WebSocket API 实时接收弹幕/SC/礼物/上舰/进房/观看数事件，emit
+    ``room.message.*`` 语义域事件与 ``room.state.watched_count`` 状态事件
+    （默认）；``collect()`` 由 BaseCollector 后台任务消费。
     """
 
     name = "bili_danmaku_official"
@@ -76,7 +80,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         enable_template_info: bool = Field(default=False, description="启用模板信息")
         template_items: dict = Field(default_factory=dict, description="模板项")
         # 是否 emit 语义域事件（默认 True）
-        emit_semantic_events: bool = Field(default=True, description="emit room.message.* 语义事件")
+        emit_semantic_events: bool = Field(default=True, description="emit room.message.*/room.state.* 语义事件")
 
     def __init__(
         self,
@@ -216,6 +220,12 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             if not self.message_type_config.should_handle(cmd):
                 return
 
+            # 房间统计类状态推送：无发送者/内容，不属行为流——独立 emit
+            # room.state.*，不进消息队列（collect() 消费面只承载行为流载荷）
+            if cmd == BiliMessageType.WATCHED_CHANGE.value:
+                await self._handle_watched_change(message_data)
+                return
+
             bili_message = self._create_message_from_dict(message_data)
             if not bili_message:
                 self.logger.debug(f"无法解析消息类型: {cmd}")
@@ -235,6 +245,29 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             # f-string 插值先行完成，异常文本中的花括号不会再被日志层二次 format
             self.logger.error(f"处理消息时出错: {e}")
             self.logger.debug(f"失败消息数据: cmd={message_data.get('cmd')}")
+
+    async def _handle_watched_change(self, message_data: Dict[str, Any]) -> None:
+        """处理观看数状态推送：emit ``room.state.watched_count``（受语义事件门控）。"""
+        if not self._emit_semantic_events:
+            return
+        if not isinstance(message_data.get("data"), dict):
+            # 畸形推送（缺 data 段）直接跳过：状态覆写不可逆，不用默认值 0 冒充观测
+            self.logger.debug("观看数消息缺 data 段，跳过")
+            return
+        try:
+            watched_msg = WatchedChangeMessage.from_dict(message_data)
+        except Exception as exc:
+            self.logger.warning(f"观看数消息解析失败，丢弃: {exc}")
+            return
+        self.logger.debug(f"[观看数] {watched_msg.watched_show or watched_msg.watched_count}")
+        await self.emit_event(
+            CoreEvents.ROOM_STATE_WATCHED_COUNT,
+            RoomStateWatchedPayload(
+                platform=_PLATFORM,
+                audience_total=watched_msg.watched_count,
+                watched_show=watched_msg.watched_show,
+            ),
+        )
 
     async def _emit_semantic_event(self, payload: RoomMessagePayload) -> None:
         """按载荷的 message_type 选事件名并 emit room.message.* 事件。"""

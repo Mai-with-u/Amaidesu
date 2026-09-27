@@ -24,6 +24,7 @@ class BiliMessageTypeConfig:
         BiliMessageType.GIFT.value: True,
         BiliMessageType.GUARD.value: True,
         BiliMessageType.SUPER_CHAT.value: True,
+        BiliMessageType.WATCHED_CHANGE.value: True,
     }
 
     # 配置键名映射
@@ -32,6 +33,7 @@ class BiliMessageTypeConfig:
         BiliMessageType.GIFT.value: "handle_gift_messages",
         BiliMessageType.GUARD.value: "handle_guard_messages",
         BiliMessageType.SUPER_CHAT.value: "handle_superchat_messages",
+        BiliMessageType.WATCHED_CHANGE.value: "handle_watched_change_messages",
     }
 
     def __init__(self, config: Dict[str, Any]) -> None:

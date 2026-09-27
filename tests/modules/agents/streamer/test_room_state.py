@@ -113,3 +113,30 @@ class TestRoomStateTopicSummary:
         snap = rs.get_snapshot(now_ms=1_000)
         assert snap.topic_summary == "观众在聊游戏"
         assert snap.topic_summary_at_ms == 1_000
+
+
+class TestRoomStateAudienceTotal:
+    """audience_total 字段（room.state.watched_count 状态推送驱动）。"""
+
+    def test_initial_snapshot_is_zero(self) -> None:
+        """推送未到过时为 0，语义是"未知"而非"没人看" """
+        rs = RoomState()
+        snap = rs.get_snapshot(now_ms=1_000)
+        assert snap.audience_total == 0
+        assert snap.audience_total_at_ms == 0
+
+    def test_set_audience_total_updates_snapshot(self) -> None:
+        rs = RoomState()
+        rs.set_audience_total(12000, now_ms=5_000)
+        snap = rs.get_snapshot(now_ms=6_000)
+        assert snap.audience_total == 12000
+        assert snap.audience_total_at_ms == 5_000
+
+    def test_latest_push_wins(self) -> None:
+        """变化即推：最后一次推送的值即当前状态"""
+        rs = RoomState()
+        rs.set_audience_total(100, now_ms=1_000)
+        rs.set_audience_total(150, now_ms=2_000)
+        snap = rs.get_snapshot(now_ms=3_000)
+        assert snap.audience_total == 150
+        assert snap.audience_total_at_ms == 2_000

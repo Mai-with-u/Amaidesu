@@ -49,7 +49,7 @@
 |---|---|---|
 | **core** | 系统级核心状态（启动 / 关闭 / 错误）。**不属于任何业务域**，仅供系统组件订阅 | `core.startup` / `core.shutdown` / `core.error` |
 | **live** | 直播场次生命周期（开播 / 下播）。**唯一含时间窗锚点**的域，所有 room/game 事件均需携带 `live_session_id` | `live.started` / `live.ended` |
-| **room** | 直播间行为流 / 状态。**子层强制**：行为流走 `.message.*`（已发生事实），状态走 `.state.*`（当前属性快照，预留层） | `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.guard` / `room.message.enter` / `room.message.partner_speech` |
+| **room** | 直播间行为流 / 状态。**子层强制**：行为流走 `.message.*`（已发生事实），状态走 `.state.*`（当前属性快照） | `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.guard` / `room.message.enter` / `room.message.partner_speech` / `room.state.watched_count` |
 | **game** | 游戏里程碑 / 异常 / 上报。**低频**，只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 交付总结）。`live_session_id` 为 int 场次主键：发布方不填，由场次盖章拦截器注入。另有 `game.body.*`（8 类）：MaiCraft 注意流经采集器**分类**后的 AI 玩家遭遇（被袭击/死亡/重生/紧急反应/切维度），高频、与 `game.*` 不混层 | `game.milestone` / `game.attention_required` / `game.error` / `game.report`；`game.body.attacked` 等 8 类 |
 | **rundown** | 流程单（Rundown）状态变更（加载 / 跳转 / 推进 / 暂停 / 恢复）。**单事件 + payload 判别，仅变更即发**，不是周期性状态广播 | `rundown.changed` |
 | **planner** | 主播决策轮记录：轮末一条 `planner.decision`（决策卡数据源）；裁决时刻即时一条 `planner.verdict`（reply 被调用时、表达生成之前） | `planner.decision` / `planner.verdict` |
@@ -90,7 +90,7 @@
 **当前实现状态**：
 
 - ✅ `room.message.*`（行为流，6 类已实现：danmaku / gift / super_chat / guard / enter / partner_speech）
-- ⏳ `room.state.*`（预留层，当前不实现任何事件；将来若需主动广播订阅的状态变更才会启用，不与行为流平铺同层）
+- ✅ `room.state.watched_count`（状态层首个成员：B 站累计观看人次推送，变化即发；其余状态事件仍预留，不与行为流平铺同层）
 
 ---
 
@@ -223,6 +223,9 @@ class CoreEvents:
     ROOM_MESSAGE_ENTER = "room.message.enter"
     ROOM_MESSAGE_PARTNER_SPEECH = "room.message.partner_speech"
 
+    # Room 状态快照（房间统计类推送）
+    ROOM_STATE_WATCHED_COUNT = "room.state.watched_count"
+
     # Game 游戏里程碑 / 上报（4 类）
     GAME_MILESTONE = "game.milestone"
     GAME_ATTENTION_REQUIRED = "game.attention_required"
@@ -265,7 +268,7 @@ class CoreEvents:
     GAME_BODY_WILDCARD = "game.body.#"
 ```
 
-完整事件清单（24 个具名常量 + 3 个通配占位符）见 [事件系统 - 事件事实表](event-system.md#事件事实表与拓扑)。
+完整事件清单（具名常量 + 通配占位符，以 `CoreEvents` 代码为准）见 [事件系统 - 事件事实表](event-system.md#事件事实表与拓扑)。
 
 ---
 

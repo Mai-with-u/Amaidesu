@@ -70,6 +70,9 @@ class RoomStateSnapshot:
         last_update_ms: 本次快照生成时刻(Unix 毫秒)
         topic_summary: 低频 LLM 话题摘要(可选,RoomStateLoop 填充,默认空串)
         topic_summary_at_ms: 话题摘要的生成时刻(Unix 毫秒,0 表示尚未生成)
+        audience_total: 本场累计观看人次(room.state.watched_count 驱动;
+            0 表示推送未到过,语义为"未知")
+        audience_total_at_ms: 最近一次观看数推送到达时刻(Unix 毫秒,0 表示未收到过)
     """
 
     heat: str
@@ -77,6 +80,8 @@ class RoomStateSnapshot:
     last_update_ms: int
     topic_summary: str = ""
     topic_summary_at_ms: int = 0
+    audience_total: int = 0
+    audience_total_at_ms: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +118,10 @@ class RoomState:
         self._last_speech_ms: Optional[int] = None
         # 自启动以来的累计弹幕条数(不受滑动窗口裁剪影响)
         self._total_message_count: int = 0
+        # 本场累计观看人次(room.state.watched_count 状态推送驱动;推送未到过
+        # 时保持 0,语义为"未知"而非"没人看")
+        self._audience_total: int = 0
+        self._audience_total_at_ms: int = 0
 
     # ------------------------------------------------------------------
     # 时钟注入
@@ -232,6 +241,21 @@ class RoomState:
         self._topic_summary_at_ms = ts
 
     # ------------------------------------------------------------------
+    # 观众规模(状态推送驱动)
+    # ------------------------------------------------------------------
+
+    def set_audience_total(self, count: int, *, now_ms: Optional[int] = None) -> None:
+        """更新本场累计观看人次(内存态;由 ``room.state.watched_count`` 驱动)
+
+        Args:
+            count: 累计观看人次(UV 口径,只增不减)
+            now_ms: 推送到达时刻(Unix 毫秒);None 时使用真实时钟
+        """
+        ts = self._resolve_now(now_ms)
+        self._audience_total = count
+        self._audience_total_at_ms = ts
+
+    # ------------------------------------------------------------------
     # 冷场判定
     # ------------------------------------------------------------------
 
@@ -306,6 +330,8 @@ class RoomState:
             last_update_ms=ts,
             topic_summary=self._topic_summary,
             topic_summary_at_ms=self._topic_summary_at_ms,
+            audience_total=self._audience_total,
+            audience_total_at_ms=self._audience_total_at_ms,
         )
 
     # ------------------------------------------------------------------

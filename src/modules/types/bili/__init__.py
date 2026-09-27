@@ -16,9 +16,10 @@ from src.modules.types.bili.gift import (
 )
 from src.modules.types.bili.guard import GuardMessage, UserInfo
 from src.modules.types.bili.superchat import SuperChatMessage
+from src.modules.types.bili.watched_change import WatchedChangeMessage
 
 # BiliRawMessage Union 类型
-BiliRawMessage = DanmakuMessage | GiftMessage | SuperChatMessage | GuardMessage | EnterMessage
+BiliRawMessage = DanmakuMessage | GiftMessage | SuperChatMessage | GuardMessage | EnterMessage | WatchedChangeMessage
 
 __all__ = [
     "AnchorInfo",
@@ -34,4 +35,5 @@ __all__ = [
     "GuardMessage",
     "SuperChatMessage",
     "UserInfo",
+    "WatchedChangeMessage",
 ]

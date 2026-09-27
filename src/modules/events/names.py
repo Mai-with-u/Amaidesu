@@ -25,9 +25,9 @@ class CoreEvents:
     LIVE_ENDED = "live.ended"
 
     # ========== v2 语义域事件（room.message.* 直播间行为流） ==========
-    # 行为流（发生的事）。注意：room.state.* 是**预留层**（契约决定，
-    # 默认不实现任何事件；将来若需主动广播订阅的状态变更才会启用，
-    # 不与行为流平铺同层）。
+    # 行为流（发生的事）。注意：room.state.* 是状态子层（当前属性快照，
+    # 与行为流分属不同子层、禁止平铺同层）；曾整体预留，现随房间统计类
+    # 推送启用首个成员 watched_count，其余仍预留。
     ROOM_MESSAGE_DANMAKU = "room.message.danmaku"
     ROOM_MESSAGE_GIFT = "room.message.gift"
     ROOM_MESSAGE_SUPER_CHAT = "room.message.super_chat"
@@ -37,6 +37,13 @@ class CoreEvents:
     # 联动对象发言（房间里第三个说话者——非弹幕、非主播）。落 live_chat
     # 时 sender_role="partner"，不计观众统计。
     ROOM_MESSAGE_PARTNER_SPEECH = "room.message.partner_speech"
+
+    # ========== v2 语义域事件（room.state.* 直播间状态快照） ==========
+    # 状态子层首个成员：房间统计类状态推送（非行为流——无发送者、无内容，
+    # 值即当前状态）。发布者：B 站采集器（WATCHED_CHANGE 累计观看人次，
+    # 变化即推）；订阅者：主播侧 RoomState（更新快照供后台记账写 live_sessions）。
+    # open-live 协议无"当前在线人数"推送，累计口径是与协议唯一对得上的真值。
+    ROOM_STATE_WATCHED_COUNT = "room.state.watched_count"
 
     # ========== v2 语义域事件（game.* 游戏里程碑） ==========
     # 低频、只发重大变化。四类：milestone / attention_required / error / report。

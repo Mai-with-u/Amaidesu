@@ -47,6 +47,7 @@ from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.time_utils import now_ms
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.room_state import RoomStateWatchedPayload
 
 from .rundown.presentation import apply_rundown_control, build_rundown_view
 from .rundown.rundown_state import RundownState
@@ -526,7 +527,7 @@ class StreamerAgent(BaseAgent):
     # ==================================================================
 
     def _subscribe_events(self) -> None:
-        """订阅 room.message.* + game.* + perception.* 事件（语义域事件）。"""
+        """订阅 room.message.* + room.state.* + game.* + live.* 事件（语义域事件）。"""
         if self._event_bus is None:
             return
         # room.message 全族（danmaku/gift/super_chat/guard）共用同一回调：
@@ -543,6 +544,13 @@ class StreamerAgent(BaseAgent):
                 self._on_room_message_received,
                 model_class=RoomMessagePayload,
             )
+        # 房间状态流（room.state.*）：观看数等统计推送只更新 RoomState 快照
+        # （后台记账数据源），不是对话消息——不进决策缓冲、不影响热度
+        self._event_bus.on(
+            CoreEvents.ROOM_STATE_WATCHED_COUNT,
+            self._on_room_state_watched,
+            model_class=RoomStateWatchedPayload,
+        )
         # 游戏叙事（三通道·事件）：游戏 Agent（如 MinecraftAgent）emit game.*
         # → 主播侧收集最近叙事，进 Planner 上下文（按 payload.game 过滤可扩展到多游戏）
         self._event_bus.on(
@@ -586,7 +594,8 @@ class StreamerAgent(BaseAgent):
             model_class=LiveEndedPayload,
         )
         self._logger.info(
-            "StreamerAgent 已订阅 room.message.danmaku|gift|super_chat|guard / game.* / live.started|ended"
+            "StreamerAgent 已订阅 room.message.danmaku|gift|super_chat|guard / room.state.watched_count"
+            " / game.* / live.started|ended"
         )
 
     async def _on_live_started(
@@ -660,6 +669,20 @@ class StreamerAgent(BaseAgent):
     def _body_narrative_text(self) -> str:
         """导出最近身体侧近况文本（Planner 上下文用）。"""
         return "\n".join(self._body_narrative_blocks)
+
+    async def _on_room_state_watched(
+        self,
+        event_name: str,
+        payload: RoomStateWatchedPayload,
+        source: str,
+    ) -> None:
+        """``room.state.watched_count`` 回调：更新 RoomState 累计观看快照。
+
+        仅记账数据源（background 轻循环经 get_snapshot 写 live_sessions），
+        与决策链无关。
+        """
+        del event_name, source
+        self._room_state.set_audience_total(payload.audience_total, now_ms=payload.timestamp_ms)
 
     async def _on_room_message_received(
         self,

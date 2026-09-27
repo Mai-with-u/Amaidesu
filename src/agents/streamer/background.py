@@ -264,8 +264,9 @@ class BackgroundMaintainer:
         await self._sessions_repo.update_live_session_stats(
             live_session_id=live_pk,
             heat=heat_int,
-            viewer_count=0,  # TODO: 接入观众统计
-            audience_total=0,
+            # open-live 协议无"当前在线人数"推送，此列暂无可靠数据源
+            viewer_count=0,
+            audience_total=snapshot.audience_total,
             updated_at_ms=now_ms,
         )
 

@@ -21,6 +21,8 @@ INPUT_EVENTS = {
     "room.message.super_chat",
     "room.message.enter",
     "room.message.partner_speech",
+    # 房间状态推送（世界侧状态输入，非其他 Agent 的决策输出；room.state.* 首个成员）
+    "room.state.watched_count",
 }
 
 # Agent 域允许的非输入订阅：场次生命周期（主动发言场次闸门）与游戏事件族

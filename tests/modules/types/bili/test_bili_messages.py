@@ -11,6 +11,7 @@ from src.modules.types.bili import (
     GiftMessage,
     GuardMessage,
     SuperChatMessage,
+    WatchedChangeMessage,
 )
 from src.modules.types.bili.config import BiliMessageTypeConfig
 
@@ -25,6 +26,33 @@ class TestBiliMessageType:
         assert BiliMessageType.GIFT.value == "LIVE_OPEN_PLATFORM_SEND_GIFT"
         assert BiliMessageType.GUARD.value == "LIVE_OPEN_PLATFORM_GUARD"
         assert BiliMessageType.SUPER_CHAT.value == "LIVE_OPEN_PLATFORM_SUPER_CHAT"
+        assert BiliMessageType.WATCHED_CHANGE.value == "LIVE_OPEN_PLATFORM_WATCHED_CHANGE"
+
+
+class TestWatchedChangeMessage:
+    """观看数变化消息测试（房间统计类状态推送）"""
+
+    def test_from_dict_basic(self) -> None:
+        data = {
+            "cmd": "LIVE_OPEN_PLATFORM_WATCHED_CHANGE",
+            "data": {
+                "channel_id": "123456",
+                "watched_count": 12000,
+                "watched_show": "1.2万人看过",
+            },
+        }
+        msg = WatchedChangeMessage.from_dict(data)
+        assert msg.channel_id == "123456"
+        assert msg.watched_count == 12000
+        assert msg.watched_show == "1.2万人看过"
+        assert msg.raw_data == data
+
+    def test_from_dict_defaults(self) -> None:
+        """缺字段时不抛错，字段取默认值"""
+        data = {"cmd": "LIVE_OPEN_PLATFORM_WATCHED_CHANGE", "data": {}}
+        msg = WatchedChangeMessage.from_dict(data)
+        assert msg.watched_count == 0
+        assert msg.watched_show == ""
 
 
 class TestDanmakuMessage:
@@ -160,6 +188,7 @@ class TestBiliMessageTypeConfig:
         assert config.should_handle(BiliMessageType.GUARD.value)
         assert config.should_handle(BiliMessageType.SUPER_CHAT.value)
         assert config.should_handle(BiliMessageType.ENTER.value)
+        assert config.should_handle(BiliMessageType.WATCHED_CHANGE.value)
 
     def test_get_enabled_types(self) -> None:
         """获取所有启用的消息类型"""
