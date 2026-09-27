@@ -80,7 +80,13 @@
         <div
           v-else-if="entry.kind === 'decision' || entry.kind === 'verdict'"
           class="decision"
-          :class="{ 'is-failed': entry.failed, 'is-silent': isSilentDecision(entry) }"
+          :class="{
+            'is-failed': entry.failed,
+            'is-silent': isSilentDecision(entry),
+            'is-round-clickable': isRoundClickable(entry),
+          }"
+          :title="isRoundClickable(entry) ? '在 Agent 页查看这轮决策' : undefined"
+          @click="onRowClick(entry)"
         >
           <div class="act-head">
             <span class="act-kind">决策</span>
@@ -160,7 +166,7 @@
               完整请求 ↗
             </a>
             <details v-if="rawOf(entry)" class="d-raw">
-              <summary>原始输出</summary>
+              <summary @click.stop>原始输出</summary>
               <pre class="mono">{{ rawOf(entry) }}</pre>
             </details>
           </div>
@@ -176,7 +182,10 @@
             'is-speak': entry.speak,
             'is-agent-streamer': agentGroupOf(entry) === 'streamer',
             'is-agent-game': agentGroupOf(entry) === 'game',
+            'is-round-clickable': isRoundClickable(entry),
           }"
+          :title="isRoundClickable(entry) ? '在 Agent 页查看这轮决策' : undefined"
+          @click="onRowClick(entry)"
         >
           <div class="act-head">
             <span class="act-kind">工具调用</span>
@@ -211,7 +220,7 @@
             :class="{ 'is-failed': entry.failed }"
             @toggle="onPayloadToggle(entry.id, $event)"
           >
-            <summary>参数 / 结果</summary>
+            <summary @click.stop>参数 / 结果</summary>
             <!-- 载荷懒渲染：展开过才挂载（details 折叠态下子节点仍会进 DOM，
                  大 JSON 树在高频重渲染的时间线里是主要渲染成本） -->
             <template v-if="openedPayloads.has(entry.id)">
@@ -219,7 +228,11 @@
               <div v-if="entry.failed && toolErrorOf(entry)" class="t-payload-block">
                 <div class="t-payload-head">
                   <span class="t-payload-tag t-payload-tag--error">错误</span>
-                  <el-icon class="copy-icon" title="复制" @click="copyText(toolErrorOf(entry))">
+                  <el-icon
+                    class="copy-icon"
+                    title="复制"
+                    @click.stop="copyText(toolErrorOf(entry))"
+                  >
                     <CopyDocument />
                   </el-icon>
                 </div>
@@ -231,7 +244,7 @@
                   <el-icon
                     class="copy-icon"
                     title="复制 JSON"
-                    @click="copyJson(toolDetail(entry).args)"
+                    @click.stop="copyJson(toolDetail(entry).args)"
                   >
                     <CopyDocument />
                   </el-icon>
@@ -250,7 +263,7 @@
                   <el-icon
                     class="copy-icon"
                     title="复制 JSON"
-                    @click="copyJson(toolDetail(entry).result)"
+                    @click.stop="copyJson(toolDetail(entry).result)"
                   >
                     <CopyDocument />
                   </el-icon>
@@ -270,7 +283,13 @@
         <!-- 主播发言（streamer.speech）：表达语义 + Replyer 思考回看。
              统计胶囊取 Replyer 表达请求（决策卡上是 Planner 请求，二者互补）：
              缓存/Token/模型懒取 + 完整请求链接；无指针的旧事件不渲染该行 -->
-        <div v-else-if="entry.kind === 'speech'" class="act is-speech">
+        <div
+          v-else-if="entry.kind === 'speech'"
+          class="act is-speech"
+          :class="{ 'is-round-clickable': isRoundClickable(entry) }"
+          :title="isRoundClickable(entry) ? '在 Agent 页查看这轮决策' : undefined"
+          @click="onRowClick(entry)"
+        >
           <div class="act-head">
             <span class="act-kind act-kind--speech">主播</span>
             <span v-if="entry.note" class="act-emotion">{{ entry.note }}</span>
@@ -394,6 +413,9 @@
  *
  * 控制台独占能力（暂停/清空、注入面板、滚动跟随）留在 LiveObserver；
  * 本组件只负责"按条目渲染"，对上游数据来源无要求，可被任何 Vue 页面复用。
+ *
+ * 可选的决策轮点击（roundClickable）：开启后带轮次 ID 的决策/裁决/工具/发言行
+ * 可点并上抛 roundClick，由页面决定跳转去向；默认关闭，首页复用不受影响。
  */
 import { computed, ref, watch } from 'vue';
 import { CopyDocument, Monitor } from '@element-plus/icons-vue';
@@ -408,6 +430,7 @@ import {
   confidenceLabel,
   guidanceOf,
   isChatProcessKind,
+  isRoundLinkable,
   isSilentDecision,
   plannerMsOf,
   rawOf,
@@ -426,13 +449,31 @@ interface Props {
   layout?: 'timeline' | 'chat';
   /** entries 为空时的提示语 */
   emptyText?: string;
+  /** 决策轮可点：带轮次 ID 的决策/裁决/工具/发言行点击后上抛 roundClick
+   *  （默认关闭——首页复用本组件时行不可点） */
+  roundClickable?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   compact: false,
   layout: 'timeline',
   emptyText: '静候消息与决策',
+  roundClickable: false,
 });
+
+const emit = defineEmits<{
+  /** 决策轮行点击（roundClickable 开启且行带轮次 ID 时触发），页面据此跳 Agent 页 */
+  roundClick: [entry: ShowEntry];
+}>();
+
+/** 行是否可点：仅四类带轮次 ID 的行（判定口径在 liveFeed.isRoundLinkable） */
+function isRoundClickable(entry: ShowEntry): boolean {
+  return props.roundClickable && isRoundLinkable(entry);
+}
+
+function onRowClick(entry: ShowEntry): void {
+  if (isRoundClickable(entry)) emit('roundClick', entry);
+}
 
 const isChat = computed(() => props.layout === 'chat');
 
@@ -787,6 +828,14 @@ async function copyText(text: string): Promise<void> {
   display: flex;
   flex-direction: column;
   animation: rowIn 0.22s cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+/* 决策轮可点行：指针 + 描边提示可跳（roundClickable 开启时才有该类） */
+.is-round-clickable {
+  cursor: pointer;
+}
+.is-round-clickable:hover {
+  outline: 1px solid var(--color-primary);
 }
 
 @keyframes rowIn {

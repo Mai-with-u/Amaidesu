@@ -178,11 +178,13 @@
               <FeedTimeline
                 :entries="entries"
                 :layout="displayMode"
+                round-clickable
                 :empty-text="
                   sessionMode === 'live'
                     ? '静候消息与决策——注入一条弹幕试试'
                     : '该场次暂无可回看条目'
                 "
+                @round-click="jumpToAgentRound"
               />
             </div>
 
@@ -196,33 +198,45 @@
             </button>
           </div>
 
-          <!-- 干预输入条（code agent 风格，共享组件）：Tab/Shift+Tab 切模式、
-               Enter 发送、↑↓ 回溯历史。模式与传输归本页，工具项走插槽；
+          <!-- 干预输入区：页级目标选择（主播 / minecraft；adv 不支持收话不出现）+
+               共享输入条（Tab/Shift+Tab 切模式、Enter 发送、↑↓ 回溯历史）。
+               模式与传输随目标切换，主播目标复用既有行为（昵称插槽、在途 chip）；
                强制回应为后台执行：发送后立即可继续输入，在途状态由状态 chip 承载 -->
-          <InterventionInput
-            v-if="sessionMode === 'live'"
-            ref="sendBarRef"
-            class="input-bar"
-            :modes="SEND_MODES"
-            :sending="sending"
-            @mode-change="onModeChange"
-            @send="onInterventionSend"
-          >
-            <template #toolbar="{ onKeydown }">
-              <el-input
-                v-if="activeMode === 'danmaku'"
-                v-model="injectNickname"
-                size="small"
-                class="input-nick"
-                placeholder="观众昵称（可选）"
-                @keydown="onKeydown"
-              />
-              <span v-if="forcePending > 0" class="input-status">
-                <el-icon class="is-loading"><Loading /></el-icon>
-                主播正在想…
-              </span>
-            </template>
-          </InterventionInput>
+          <div v-if="sessionMode === 'live'" class="input-dock">
+            <div class="input-target">
+              <span class="input-target-label">发给</span>
+              <el-radio-group v-model="interventionTarget" size="small">
+                <el-radio-button :value="STREAMER_AGENT_NAME">主播</el-radio-button>
+                <el-radio-button :value="MINECRAFT_AGENT_NAME">minecraft</el-radio-button>
+              </el-radio-group>
+            </div>
+            <InterventionInput
+              ref="sendBarRef"
+              :key="interventionTarget"
+              :modes="interventionModes"
+              :sending="sending"
+              @mode-change="onModeChange"
+              @send="onInterventionSend"
+            >
+              <template #toolbar="{ onKeydown }">
+                <el-input
+                  v-if="interventionTarget === STREAMER_AGENT_NAME && activeMode === 'danmaku'"
+                  v-model="injectNickname"
+                  size="small"
+                  class="input-nick"
+                  placeholder="观众昵称（可选）"
+                  @keydown="onKeydown"
+                />
+                <span
+                  v-if="interventionTarget === STREAMER_AGENT_NAME && forcePending > 0"
+                  class="input-status"
+                >
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                  主播正在想…
+                </span>
+              </template>
+            </InterventionInput>
+          </div>
         </section>
       </section>
     </div>
@@ -241,11 +255,15 @@
  *   时间线（单列居左、靠样式区分）/ 会话（观众左、主播右气泡对齐）
  * - 顶栏：连接状态、决策管线阶段徽章、模拟器模式徽章
  *
- * 干预输入条（时间线底部，共享组件 InterventionInput）：三模式 = 场控的三种
- * 操作——注入弹幕（debug/inject-message，与真实弹幕同链路）、强制回应
- * （streamer/test-decision，直驱决策、结果以决策卡落进时间线，留空=自由发挥）、
- * 幕后提醒（agents/{name}/prompt，运营递话：文字必达进下个决策参考块，
- * 并顺带敲门催醒主播提前决策）。
+ * 干预输入区（时间线底部）：页级目标选择（主播 / minecraft）+ 共享输入条。
+ * 主播目标三模式 = 场控的三种操作——注入弹幕（debug/inject-message，与真实弹幕
+ * 同链路）、强制回应（streamer/test-decision，直驱决策、结果以决策卡落进时间线，
+ * 留空=自由发挥）、幕后提醒（agents/{name}/prompt，运营递话：文字必达进下个
+ * 决策参考块，并顺带敲门催醒主播提前决策）；minecraft 目标递话/委派走 agents 域
+ * 接口。目标→模式→传输的单一事实源在 useAgentIntervention。
+ *
+ * 时间线行点击深链：带轮次 ID 的决策/裁决/工具/发言行可点，跳 Agent 页对应
+ * 决策轮（/agents?agent=&round=，契约见 useAgentDeepLink）。
  *
  * 数据来源：
  * - 实时：events store（全局 WS + 游标回填，刷新/断线不丢时间线）+ 思考流旁路
@@ -259,7 +277,8 @@
  * （useTimelineScroll）。全局共享态（events 流、WS 连接）仍在 Pinia store。
  * 本组件只做装配与跨块的少量编排（清空时间线联动未读计数）。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { Loading } from '@element-plus/icons-vue';
 import { useWebSocketStore } from '@/stores';
@@ -269,10 +288,15 @@ import { useLiveSessions } from '@/composables/live/useLiveSessions';
 import { useThinkingStream } from '@/composables/live/useThinkingStream';
 import { useLiveTimeline } from '@/composables/live/useLiveTimeline';
 import { useLiveStatus } from '@/composables/live/useLiveStatus';
-import { useInterventionBar } from '@/composables/live/useInterventionBar';
+import {
+  MINECRAFT_AGENT_NAME,
+  STREAMER_AGENT_NAME,
+  useAgentIntervention,
+} from '@/composables/useAgentIntervention';
+import { agentRoundLocation } from '@/composables/useAgentDeepLink';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
 import { formatTimeHMS } from '@/utils/format';
-import { MAX_ENTRIES, relativeTime } from '@/utils/liveFeed';
+import { MAX_ENTRIES, relativeTime, type ShowEntry } from '@/utils/liveFeed';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 
 // 装配：场次侧边栏 → 思考流 → 时间线内容 → 滚动跟随 → 干预输入条
@@ -323,15 +347,37 @@ const { rundownBanner, stageChip, simulatorChip, loadSimulatorStatus } = useLive
 const { scrollRef, unseen, onScroll, jumpToLatest, resetUnseen } = useTimelineScroll(entries);
 
 const sendBarRef = ref<InstanceType<typeof InterventionInput> | null>(null);
+
+// 干预发话：目标二选一（默认主播），模式集合与传输随目标切换——
+// 单一事实源在 useAgentIntervention，主播目标复用既有行为（昵称插槽、在途 chip）
+const router = useRouter();
+const interventionTarget = ref<string>(STREAMER_AGENT_NAME);
 const {
-  SEND_MODES,
   activeMode,
-  sending,
   injectNickname,
   forcePending,
   onModeChange,
-  onInterventionSend,
-} = useInterventionBar({ settle: async () => sendBarRef.value?.settle() });
+  modesForTarget,
+  sendToTarget,
+  sending,
+} = useAgentIntervention({ settle: async () => sendBarRef.value?.settle() });
+
+const interventionModes = computed(() => modesForTarget(interventionTarget.value));
+
+function onInterventionSend(modeKey: string, text: string): void {
+  void sendToTarget(interventionTarget.value, modeKey, text);
+}
+
+// 目标切换经 :key 重挂输入条，内部模式回到首项——主播工具项状态同步复位
+watch(interventionTarget, target => {
+  if (target === STREAMER_AGENT_NAME) onModeChange('danmaku');
+});
+
+/** 时间线行点击 → Agent 页对应决策轮（可点行已由 FeedTimeline 按轮次 ID 过滤） */
+function jumpToAgentRound(entry: ShowEntry): void {
+  if (!entry.roundId) return;
+  void router.push(agentRoundLocation(STREAMER_AGENT_NAME, entry.roundId));
+}
 
 /** 清空时间线：条目与思考行水位归时间线块，未读计数归滚动块 */
 function clearTimeline(): void {
@@ -794,11 +840,24 @@ onMounted(() => {
   font-size: 11px;
 }
 
-/* 干预输入条容器：卡片底衬与内边距；输入交互样式在共享组件内 */
-.input-bar {
+/* 干预输入区：目标选择行 + 共享输入条（输入交互样式在共享组件内） */
+.input-dock {
   flex-shrink: 0;
-  padding: 8px var(--spacing-md) 10px;
+  padding: 6px var(--spacing-md) 10px;
   background: var(--bg-card);
+  border-top: 1px solid var(--border-color-light);
+}
+
+.input-target {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding-bottom: 6px;
+}
+
+.input-target-label {
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 /* 注入弹幕模式的昵称小输入框：迷你描边框，与模式 chip 同一视觉层 */
 .input-nick {

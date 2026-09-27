@@ -24,6 +24,7 @@ import {
   guidanceOf,
   isChatProcessKind,
   isRecord,
+  isRoundLinkable,
   isSilentDecision,
   bool,
   makeEntry,
@@ -40,6 +41,7 @@ import {
   toGameEntry,
   toolArgPills,
   userLabel,
+  type ShowEntry,
 } from './liveFeed';
 
 let seq = 0;
@@ -736,5 +738,30 @@ describe('isChatProcessKind / chatProcessSummary', () => {
 
   it('空过程列表摘要为空串', () => {
     expect(chatProcessSummary([])).toBe('');
+  });
+});
+
+describe('isRoundLinkable', () => {
+  /** 构造最小可用的行（仅用到 kind 与 roundId） */
+  function row(kind: ShowEntry['kind'], roundId = ''): ShowEntry {
+    return makeEntry({ id: `x-${(seq += 1)}`, kind, tsMs: 1000, text: 't', roundId });
+  }
+
+  it('四类带轮次 ID 的行可深链：决策/裁决/工具/发言', () => {
+    for (const kind of ['decision', 'verdict', 'tool', 'speech'] as const) {
+      expect(isRoundLinkable(row(kind, 'rnd_1_1'))).toBe(true);
+    }
+  });
+
+  it('无轮次 ID 的同类行不可点', () => {
+    for (const kind of ['decision', 'verdict', 'tool', 'speech'] as const) {
+      expect(isRoundLinkable(row(kind))).toBe(false);
+    }
+  });
+
+  it('阶段/游戏/弹幕行不带轮次跳转语义', () => {
+    expect(isRoundLinkable(row('stage', 'rnd_1_1'))).toBe(false);
+    expect(isRoundLinkable(row('game', 'rnd_1_1'))).toBe(false);
+    expect(isRoundLinkable(row('danmaku', 'rnd_1_1'))).toBe(false);
   });
 });

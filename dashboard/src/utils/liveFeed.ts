@@ -218,6 +218,18 @@ export function agentGroupOf(entry: ShowEntry): AgentGroup {
   return 'room';
 }
 
+/** 可深链到 Agent 页决策轮的行：四类带轮次 ID 的行（决策/裁决/工具/发言）。
+ *  stage 不带 round_id、game 行无轮次可跳，均不在列 */
+export function isRoundLinkable(entry: ShowEntry): boolean {
+  return (
+    Boolean(entry.roundId) &&
+    (entry.kind === 'decision' ||
+      entry.kind === 'verdict' ||
+      entry.kind === 'tool' ||
+      entry.kind === 'speech')
+  );
+}
+
 // 事件 → 时间线条目
 
 export function makeEntry(base: {
