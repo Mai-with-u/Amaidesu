@@ -195,7 +195,12 @@
 
           <!-- 详情主体按 Agent 类型分视图：主播 = 决策轮决定卡；
                minecraft = 活任务板（进行中可取消 + 已完结折叠）；其他 = 占位 -->
-          <section v-if="selectedView === 'streamer'" class="md-rounds-panel" aria-label="决定记录">
+          <section
+            v-if="selectedView === 'streamer'"
+            ref="roundsPanelRef"
+            class="md-rounds-panel"
+            aria-label="决定记录"
+          >
             <header class="md-tasks-header">
               <div class="md-stream-title-block">
                 <span class="md-stream-pulse" aria-hidden="true" />
@@ -310,19 +315,43 @@
                 </el-collapse>
               </template>
             </div>
-            <div class="md-task-input">
-              <InterventionInput
-                ref="agentSendBarRef"
-                :modes="AGENT_SEND_MODES"
-                :sending="agentSending"
-                @send="onAgentSend"
-              />
-            </div>
           </section>
 
           <!-- 其他 Agent（adv 等）：暂不支持干预与详细查看 -->
           <div v-else class="md-detail-placeholder">
             <el-empty :image-size="80" description="该 Agent 暂不支持干预与详细查看" />
+          </div>
+
+          <!-- 干预输入条：模式集合随选中 Agent 分派（主播三模式 / minecraft 递话委派；
+               其余 Agent 无收话能力不渲染）。发送成功提示语义不变：委派回执任务号
+               并刷新任务板，递话提示已送达 -->
+          <div v-if="sendModes.length > 0" class="md-input-dock">
+            <InterventionInput
+              ref="agentSendBarRef"
+              :key="selectedName ?? ''"
+              :modes="sendModes"
+              :sending="interventionSending"
+              @mode-change="onAgentModeChange"
+              @send="onAgentSend"
+            >
+              <template #toolbar="{ onKeydown }">
+                <el-input
+                  v-if="selectedView === 'streamer' && agentActiveMode === 'danmaku'"
+                  v-model="agentInjectNickname"
+                  size="small"
+                  class="md-input-nick"
+                  placeholder="观众昵称（可选）"
+                  @keydown="onKeydown"
+                />
+                <span
+                  v-if="selectedView === 'streamer' && agentForcePending > 0"
+                  class="md-input-status"
+                >
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                  主播正在想…
+                </span>
+              </template>
+            </InterventionInput>
           </div>
         </template>
 
@@ -347,17 +376,22 @@
  * 主从通用逻辑（选中保持 / 控制 / 批量 / 状态文案）见 useComponentMasterDetail；
  * 本页事件流缓冲仅作深链与最近决策指标的数据源，不再渲染流水面板。
  */
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
-import { ArrowDown, Refresh } from '@element-plus/icons-vue';
+import { ArrowDown, Loading, Refresh } from '@element-plus/icons-vue';
 import { storeToRefs } from 'pinia';
 import { useComponentsStore, useEventsStore } from '@/stores';
 import { agentsApi, tasksApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import DecisionRoundCard from '@/components/agents/DecisionRoundCard.vue';
-import { MINECRAFT_AGENT_NAME, STREAMER_AGENT_NAME } from '@/composables/useAgentIntervention';
+import {
+  MINECRAFT_AGENT_NAME,
+  STREAMER_AGENT_NAME,
+  useAgentIntervention,
+} from '@/composables/useAgentIntervention';
+import { useAgentDeepLink, type AgentDeepLink } from '@/composables/useAgentDeepLink';
 import { useNowTick } from '@/composables/useNowTick';
 import {
   useComponentMasterDetail,
@@ -628,49 +662,71 @@ async function cancelTask(task: TaskCard): Promise<void> {
   await refreshTasks(true);
 }
 
-// 干预输入条：递话（默认）/ 委派两模式；输入交互在共享组件，传输归本页
-
-const AGENT_SEND_MODES = [
-  {
-    key: 'prompt',
-    label: '递话',
-    desc: '纯文本留言（插话/提醒）：不派新任务——任务执行中下一步吸收，挂起中被唤醒',
-    placeholder: '给该 Agent 的留言（不派新任务）',
-  },
-  {
-    key: 'delegate',
-    label: '委派',
-    desc: '派一项新工作：登记任务账本并送达目标，受理回执任务号，任务卡在此可见',
-    placeholder: '工作指令（自然语言：目标与约束，不规定步骤）',
-  },
-];
-
+// 干预输入条：模式集合与传输按选中 Agent 分派——单一事实源在
+// useAgentIntervention（主播三模式复用直播控制台同款通道，minecraft 递话/委派）
 const agentSendBarRef = ref<InstanceType<typeof InterventionInput> | null>(null);
-const agentSending = ref(false);
+const {
+  activeMode: agentActiveMode,
+  injectNickname: agentInjectNickname,
+  forcePending: agentForcePending,
+  onModeChange: onAgentModeChange,
+  modesForTarget,
+  sendToTarget,
+  sending: interventionSending,
+} = useAgentIntervention({
+  settle: async () => {
+    await agentSendBarRef.value?.settle();
+  },
+  onDelegated: () => void refreshTasks(true),
+});
+
+const sendModes = computed(() => modesForTarget(selectedName.value ?? ''));
 
 async function onAgentSend(modeKey: string, text: string): Promise<void> {
   const name = selectedName.value;
-  if (!name || agentSending.value) return;
-  if (!text) {
-    ElMessage.warning(modeKey === 'delegate' ? '请填写工作指令' : '请填写留言内容');
-    return;
-  }
-  agentSending.value = true;
-  try {
-    if (modeKey === 'delegate') {
-      const res = await agentsApi.delegateAgent(name, text);
-      ElMessage.success(`已受理（任务号 ${res.data.task_id}）`);
-      await refreshTasks(true);
-    } else {
-      await agentsApi.promptAgent(name, text);
-      ElMessage.success('已递话——执行中的任务下一步会吸收，挂起中的会被唤醒');
+  if (!name) return;
+  await sendToTarget(name, modeKey, text);
+}
+
+// Agent 切换经 :key 重挂输入条，内部模式回到首项——主播工具项状态同步复位
+watch(selectedName, name => {
+  if (name === STREAMER_AGENT_NAME) onAgentModeChange('danmaku');
+});
+
+// 深链接入：/agents?agent=<name>&round=<round_id> 选中对应 Agent 并滚动高亮该轮
+// 决定卡。清单未就绪时选中会被默认选择覆盖，故挂起待清单到达后再消费；
+// round 过期/已淘汰时静默跳过高亮，不报错
+const { consumeDeepLink } = useAgentDeepLink();
+const pendingDeepLink = ref<AgentDeepLink | null>(null);
+const roundsPanelRef = ref<HTMLElement | null>(null);
+
+watch(
+  [agentsList, pendingDeepLink],
+  ([list, link]) => {
+    if (!link || list.length === 0) return;
+    pendingDeepLink.value = null;
+    if (!list.some(a => a.name === link.agent)) return;
+    select(link.agent);
+    if (link.round) void highlightRound(link.round);
+  },
+  { immediate: true },
+);
+
+/** 高亮定位目标轮：等卡渲染（事件回填异步）后滚到卡中央，约 3 秒撤掉高亮 */
+async function highlightRound(roundId: string): Promise<void> {
+  highlightedRoundId.value = roundId;
+  await nextTick();
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const el = roundsPanelRef.value?.querySelector(`[data-round-id="${CSS.escape(roundId)}"]`);
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      break;
     }
-    await agentSendBarRef.value?.settle();
-  } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, modeKey === 'delegate' ? '委派失败' : '递话失败'));
-  } finally {
-    agentSending.value = false;
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
+  window.setTimeout(() => {
+    if (highlightedRoundId.value === roundId) highlightedRoundId.value = '';
+  }, 3000);
 }
 
 // 生命周期
@@ -679,6 +735,8 @@ onMounted(() => {
   componentsStore.fetchComponents();
   void refreshAgentStates();
   void refreshTasks();
+  // 深链消费：读一次 query 并已由 replace 清参（刷新/前进后退不重复高亮）
+  pendingDeepLink.value = consumeDeepLink();
   // 状态轮询：心跳/存活/状态随时间自动保鲜
   statePollTimer = setInterval(() => void refreshAgentStates(true), STATE_POLL_INTERVAL_MS);
 });
@@ -902,10 +960,45 @@ onUnmounted(() => {
   border-bottom: none;
 }
 
-.md-task-input {
-  padding: var(--spacing-sm) var(--spacing-lg);
-  border-top: 1px solid var(--border-color-light);
+/* 干预输入条底座：随视图贴在详情底部（主播/minecraft 有收话能力时渲染） */
+.md-input-dock {
   flex-shrink: 0;
+  padding: var(--spacing-sm) var(--spacing-lg);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+/* 主播目标的工具项：观众昵称小输入框 + 强制回应在途 chip（与直播控制台同款） */
+.md-input-nick {
+  width: 132px;
+  flex-shrink: 0;
+}
+.md-input-nick :deep(.el-input__wrapper) {
+  border-radius: 999px;
+  padding: 1px 10px;
+  box-shadow: 0 0 0 1px var(--border-color-light) inset;
+  background: var(--bg-card);
+}
+.md-input-nick :deep(.el-input__inner) {
+  font-size: 11px;
+  height: 20px;
+}
+.md-input-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-agent-bg);
+  color: var(--color-agent);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.md-input-status .el-icon {
+  font-size: 11px;
 }
 
 /* 响应式 */
