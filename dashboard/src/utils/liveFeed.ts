@@ -676,6 +676,8 @@ export interface ThinkingSegmentInput {
   roundId: string;
   /** 段归属：planner（按 ReAct 步分段）/ replyer（表达生成，恒一段）/ minecraft */
   phase: string;
+  /** 增量通道：reasoning（思考，缺省）/ content（响应正文） */
+  kind?: string;
   /** 段号：planner 为步号；replyer 恒 1 */
   step: number;
   /** 段首增量到达时刻（Unix 毫秒） */
@@ -685,16 +687,20 @@ export interface ThinkingSegmentInput {
 }
 
 /** 思考段 → 时间线合成条目。id 由轮次/段归属/段号派生且稳定——流式增量到达时
- * 同 id 原地刷新文本，不产生新行 */
+ * 同 id 原地刷新文本，不产生新行；响应正文段（kind=content）与思考段同号不同 id */
 export function buildThinkingRow(seg: ThinkingSegmentInput): ShowEntry {
-  const label =
-    seg.phase === 'replyer'
+  const isContent = seg.kind === 'content';
+  const label = isContent
+    ? seg.phase === 'minecraft'
+      ? '游戏 Agent · 响应'
+      : `响应 · 步骤 ${seg.step}`
+    : seg.phase === 'replyer'
       ? '生成思考'
       : seg.phase === 'minecraft'
         ? '游戏 Agent · 思考'
         : `思考 · 步骤 ${seg.step}`;
   return makeEntry({
-    id: `think:${seg.roundId}:${seg.phase}:${seg.step}`,
+    id: `think:${seg.roundId}:${seg.phase}:${seg.step}${isContent ? ':reply' : ''}`,
     kind: 'thinking',
     tsMs: seg.tsMs,
     actor: label,

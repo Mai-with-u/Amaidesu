@@ -1044,18 +1044,20 @@ class MinecraftAgent(BaseAgent):
         return failed_observation(result, name)
 
     def _build_thinking_callback(self, round_id: str, step: int, seq_box: List[int]) -> Any:
-        """构造 LLM 层增量回调（duck-typed sink），只转发 reasoning 增量。
+        """构造 LLM 层增量回调（duck-typed sink），转发 reasoning 与 content 增量。
 
         自足实现：不在此 import streamer 包的内部件 ThinkingStreamContext——
         跨 Agent import 违反边界（Protocol 鸭子匹配）。seq_box
         是 list 包装以实现闭包内计数自增（list[0]=... 不需 nonlocal）。
+        kind 原样透传（思考/响应正文由观察面分行渲染）；本 Agent 的每步
+        响应正文没有事件通道（非交付、非里程碑），这是它唯一的观测出口。
         """
         sink = self._thinking_sink
         if sink is None:
             return None
 
         def _on_delta(kind: str, text_delta: str) -> None:
-            if kind != "reasoning" or not text_delta:
+            if kind not in ("reasoning", "content") or not text_delta:
                 return
             seq_box[0] += 1
             sink.on_thinking_delta(
@@ -1064,6 +1066,7 @@ class MinecraftAgent(BaseAgent):
                 step=step,
                 seq=seq_box[0],
                 text_delta=text_delta,
+                kind=kind,
             )
 
         return _on_delta

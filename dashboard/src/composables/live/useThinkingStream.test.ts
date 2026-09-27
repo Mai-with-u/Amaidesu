@@ -1,17 +1,21 @@
 // useThinkingStream.ts 思考流视图层合成的测试
 //
-// 覆盖：WS 消息过滤、增量合批落状态、段累积（planner/minecraft/replyer）、
-// 轮数上限保尾、隐藏水位过滤、作用域销毁时的订阅与计时器清理。
+// 覆盖：WS 消息过滤、增量合批落状态、段累积（planner/minecraft/replyer + 响应
+// 正文段）、轮数/步数上限保尾、隐藏水位过滤、单例语义（重复调用状态保留）。
+//
+// 状态是模块级单例（切页保留）——每个用例用 vi.resetModules + 动态 import
+// 取得全新模块实例做隔离；stores 也必须取自重置后的同一模块图，否则 spy
+// 加在与 composable 不同的 store 实例上。
 
-import { effectScope, type EffectScope } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useThinkingStream } from '@/composables/live/useThinkingStream';
-import { useWebSocketStore } from '@/stores';
 import type { WebSocketMessage } from '@/types';
 
 type MessageHandler = (message: WebSocketMessage) => void;
+
+type ThinkingStreamModule = typeof import('@/composables/live/useThinkingStream');
+type StoresModule = typeof import('@/stores');
 
 // ws 客户端是模块级单例（构造读 window），node 测试环境替换为哑实现
 vi.mock('@/api/websocket', () => ({
@@ -29,7 +33,13 @@ vi.mock('@/api/websocket', () => ({
 
 /** 构造思考流 WS 信封（kind="stream" + thinking.delta + 批量增量） */
 function streamMessage(
-  deltas: Array<{ round_id: string; phase: string; step: number; text_delta: string }>,
+  deltas: Array<{
+    round_id: string;
+    phase: string;
+    step: number;
+    text_delta: string;
+    kind?: string;
+  }>,
   tsMs = 1000,
 ): WebSocketMessage {
   return {
@@ -41,31 +51,30 @@ function streamMessage(
 }
 
 describe('useThinkingStream', () => {
-  let scope: EffectScope;
   let handler!: MessageHandler;
-  let unsubscribeSpy: ReturnType<typeof vi.fn>;
+  let mod!: ThinkingStreamModule;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     setActivePinia(createPinia());
+    vi.resetModules();
     vi.useFakeTimers();
-    // 捕获 composable 注册进 ws store 的消息处理器，测试直接投递信封
-    const wsStore = useWebSocketStore();
+    // stores 与被测组合式取自同一重置后的模块图，保证 spy 生效
+    const stores: StoresModule = await import('@/stores');
+    const wsStore = stores.useWebSocketStore();
     vi.spyOn(wsStore, 'subscribe').mockImplementation((h: MessageHandler) => {
       handler = h;
     });
-    unsubscribeSpy = vi.fn();
-    vi.spyOn(wsStore, 'unsubscribe').mockImplementation(unsubscribeSpy);
-    scope = effectScope();
+    vi.spyOn(wsStore, 'unsubscribe').mockImplementation(vi.fn());
+    mod = await import('@/composables/live/useThinkingStream');
   });
 
   afterEach(() => {
-    scope.stop();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   function mount() {
-    const composable = scope.run(() => useThinkingStream())!;
+    const composable = mod.useThinkingStream();
     expect(handler).toBeTypeOf('function');
     return composable;
   }
@@ -125,6 +134,49 @@ describe('useThinkingStream', () => {
     ]);
   });
 
+  it('minecraft 响应正文（kind=content）独立成行，与同步思考段互不覆盖', () => {
+    const { liveThinkingRows } = mount();
+    handler(
+      streamMessage([
+        { round_id: 'r1', phase: 'minecraft', step: 3, text_delta: '先核对状态' },
+        {
+          round_id: 'r1',
+          phase: 'minecraft',
+          step: 3,
+          text_delta: '目标解释：切石',
+          kind: 'content',
+        },
+      ]),
+    );
+    vi.advanceTimersByTime(150);
+    expect(liveThinkingRows.value.map(row => row.actor)).toEqual([
+      '游戏 Agent · 思考',
+      '游戏 Agent · 响应',
+    ]);
+    const [think, reply] = liveThinkingRows.value;
+    expect(think.id).toBe('think:r1:minecraft:3');
+    expect(reply.id).toBe('think:r1:minecraft:3:reply');
+    expect(reply.source).toBe('游戏 Agent');
+    // 后续增量继续原地追加各自的行
+    handler(
+      streamMessage([
+        { round_id: 'r1', phase: 'minecraft', step: 3, text_delta: '、血量' },
+        { round_id: 'r1', phase: 'minecraft', step: 3, text_delta: '完毕', kind: 'content' },
+      ]),
+    );
+    vi.advanceTimersByTime(150);
+    expect(liveThinkingRows.value).toHaveLength(2);
+    expect(liveThinkingRows.value[0].text).toBe('先核对状态、血量');
+    expect(liveThinkingRows.value[1].text).toBe('目标解释：切石完毕');
+  });
+
+  it('kind 缺省按思考处理（兼容旧消息形态）', () => {
+    const { liveThinkingRows } = mount();
+    handler(streamMessage([{ round_id: 'r1', phase: 'minecraft', step: 1, text_delta: '想' }]));
+    vi.advanceTimersByTime(150);
+    expect(liveThinkingRows.value[0].actor).toBe('游戏 Agent · 思考');
+  });
+
   it('轮数上限保尾：超过 20 轮时最旧轮被淘汰', () => {
     const { liveThinkingRows } = mount();
     for (let i = 0; i < 21; i += 1) {
@@ -173,12 +225,16 @@ describe('useThinkingStream', () => {
     expect(liveThinkingRows.value.map(row => row.text)).toEqual(['更晚']);
   });
 
-  it('作用域销毁：解除订阅并清除合批计时器', () => {
-    mount();
-    handler(streamMessage([{ round_id: 'r1', phase: 'planner', step: 1, text_delta: 'x' }]));
-    scope.stop();
-    expect(unsubscribeSpy).toHaveBeenCalled();
-    // 销毁后到期的合批不再落状态（计时器已清）
-    vi.advanceTimersByTime(500);
+  it('单例语义：重复调用（模拟切页重进）不重置状态，已落思考行保留', () => {
+    const first = mount();
+    handler(streamMessage([{ round_id: 'r1', phase: 'minecraft', step: 1, text_delta: '挖矿中' }]));
+    vi.advanceTimersByTime(150);
+    expect(first.liveThinkingRows.value).toHaveLength(1);
+
+    // 第二次调用即切页重进后的重新挂接：同一份模块级状态
+    const second = mod.useThinkingStream();
+    expect(second.liveThinkingRows.value).toHaveLength(1);
+    expect(second.liveThinkingRows.value[0].text).toBe('挖矿中');
+    expect(second.liveThinkingRows.value).toBe(first.liveThinkingRows.value);
   });
 });

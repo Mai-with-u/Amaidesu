@@ -23,7 +23,16 @@ class ThinkingStreamSink(Protocol):
     - seq 在 (round_id, phase, step) 内单调递增
     """
 
-    def on_thinking_delta(self, *, round_id: str, phase: str, step: int, seq: int, text_delta: str) -> None: ...
+    def on_thinking_delta(
+        self,
+        *,
+        round_id: str,
+        phase: str,
+        step: int,
+        seq: int,
+        text_delta: str,
+        kind: str = "reasoning",
+    ) -> None: ...
 
 
 class ThinkingStreamContext:

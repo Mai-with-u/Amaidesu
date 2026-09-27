@@ -1955,8 +1955,19 @@ class _RecordingSink:
     def __init__(self) -> None:
         self.calls: List[Dict[str, Any]] = []
 
-    def on_thinking_delta(self, *, round_id: str, phase: str, step: int, seq: int, text_delta: str) -> None:
-        self.calls.append({"round_id": round_id, "phase": phase, "step": step, "seq": seq, "text_delta": text_delta})
+    def on_thinking_delta(
+        self,
+        *,
+        round_id: str,
+        phase: str,
+        step: int,
+        seq: int,
+        text_delta: str,
+        kind: str = "reasoning",
+    ) -> None:
+        self.calls.append(
+            {"round_id": round_id, "phase": phase, "step": step, "seq": seq, "text_delta": text_delta, "kind": kind}
+        )
 
 
 class _CapturingToolProvider(BaseToolProvider):
@@ -1998,8 +2009,8 @@ def _build_sink_agent(llm: Any, sink: Optional[Any], capturing: _CapturingToolPr
 
 
 @pytest.mark.asyncio
-async def test_thinking_sink_receives_reasoning_with_minecraft_phase() -> None:
-    """sink 注入后：LLM reasoning delta → sink.on_thinking_delta，phase=minecraft，seq 跨步单调递增；content delta 不转发。"""
+async def test_thinking_sink_receives_reasoning_and_content_with_minecraft_phase() -> None:
+    """sink 注入后：LLM reasoning/content delta 均转发并携带 kind，phase=minecraft，seq 跨步单调递增。"""
     sink = _RecordingSink()
     cap = _CapturingToolProvider()
 
@@ -2020,12 +2031,13 @@ async def test_thinking_sink_receives_reasoning_with_minecraft_phase() -> None:
 
     await agent.start()
     agent.receive_prompt(content="两步", source="test")
-    await _wait_until(lambda: len(sink.calls) >= 3)
+    await _wait_until(lambda: len(sink.calls) >= 4)
     await agent.stop()
 
     by_text = {c["text_delta"]: c for c in sink.calls}
-    assert set(by_text) == {"step1 A", "step1 B", "step2"}
-    assert not any("content" in k for k in by_text)
+    assert set(by_text) == {"step1 A", "step1 content x", "step1 B", "step2"}
+    assert by_text["step1 content x"]["kind"] == "content"
+    assert by_text["step1 A"]["kind"] == "reasoning" and by_text["step1 B"]["kind"] == "reasoning"
     round_ids = {c["round_id"] for c in sink.calls}
     assert len(round_ids) == 1
     (rid,) = round_ids
