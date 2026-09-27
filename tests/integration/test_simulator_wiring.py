@@ -99,6 +99,7 @@ class TestSimulatorWiring:
             config=config,
             config_service=config_service,
             dev_webui=False,
+            log_streamer_persist=False,
         )
         # 组合根契约（create_app_components 返回元组，共 13 项）：
         # 第 7 项 (index=6) 是 simulator_service；第 10 项 (index=9) 是 session_manager；
@@ -114,6 +115,11 @@ class TestSimulatorWiring:
         await result[0].cleanup()  # event_bus
         if result[1] is not None:
             await result[1].cleanup()  # llm_service
+
+        # 测试装配不得留下 persist LogStreamer（落盘写真实 data/logs/ 的污染源）
+        from src.modules.logging.log_streamer import _LIVE_STREAMERS
+
+        assert not [s for s in _LIVE_STREAMERS if s.persist], "测试装配不得留下 persist LogStreamer 实例"
 
     @pytest.mark.asyncio
     async def test_enabled_dry_mode_no_llm_call(self, config_service_factory, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,6 +137,7 @@ class TestSimulatorWiring:
             config_service=config_service,
             dev_webui=False,
             simulator_auto_start=False,
+            log_streamer_persist=False,
         )
         simulator_service = result[6]
         assert simulator_service is not None, "enabled=true 时 simulator_service 应被装配"
@@ -161,6 +168,7 @@ class TestSimulatorWiring:
             config_service=config_service,
             dev_webui=False,
             simulator_auto_start=True,
+            log_streamer_persist=False,
         )
         simulator_service = result[6]
         assert simulator_service is not None
@@ -216,6 +224,7 @@ class TestSimulatorWiring:
             config_service=config_service,
             dev_webui=False,
             simulator_auto_start=True,
+            log_streamer_persist=False,
         )
         try:
             assert order == ["agents_started", "simulator_setup"], (
@@ -232,6 +241,22 @@ class TestSimulatorWiring:
             await result[0].cleanup()
             if result[1] is not None:
                 await result[1].cleanup()
+
+
+class TestLogStreamerWiring:
+    """LogStreamer 装配透传契约：persist 开关与落盘目录可由调用方控制。"""
+
+    @pytest.mark.asyncio
+    async def test_start_log_streamer_persist_dir_passthrough(self, tmp_path: Path) -> None:
+        """persist_dir 透传生效：绝对路径原样作为落盘目录（不落入真实 data/logs/）。"""
+        from main import _start_log_streamer
+
+        streamer = await _start_log_streamer(persist=True, persist_dir=str(tmp_path))
+        try:
+            assert streamer.persist is True
+            assert streamer._persist_dir == tmp_path.resolve(), "persist_dir 应原样透传到 LogStreamer"
+        finally:
+            await streamer.stop()
 
 
 class TestMainDryModeShutdown:
@@ -266,6 +291,7 @@ class TestMainDryModeShutdown:
             config_service=config_service,
             dev_webui=False,
             simulator_auto_start=False,  # --dry 模式
+            log_streamer_persist=False,  # --dry 模式不落盘日志
         )
         simulator_service = result[6]
         assert simulator_service is not None

@@ -7,6 +7,7 @@ import json
 import sys
 import time as time_mod
 import traceback
+import weakref
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -61,12 +62,20 @@ class LogStreamer:
         self._persist_dir: Optional[Path] = None
         self._current_date: Optional[str] = None
         self._current_file_path: Optional[Path] = None
+        _LIVE_STREAMERS.add(self)
         if self.persist:
             project_root = Path(__file__).resolve().parents[3]
             self._persist_dir = (project_root / persist_dir).resolve()
             self._persist_dir.mkdir(parents=True, exist_ok=True)
             self._cleanup_expired_persist_files()
             self._load_from_disk()
+            # persist 单例防线：同进程并存多个 persist 实例时，每条日志会被
+            # 各实例的 sink 各写一遍（重复行的直接来源），创建即告警定位
+            live_persist = sum(1 for s in _LIVE_STREAMERS if s.persist)
+            if live_persist > 1:
+                loguru_logger.bind(module="LogStreamer").warning(
+                    f"同进程已存在 {live_persist - 1} 个存活 persist LogStreamer 实例，多实例并存会导致日志落盘重复行"
+                )
 
     # ------------------------------------------------------------------ #
     # 内部:磁盘恢复与持久化                                              #
@@ -155,7 +164,20 @@ class LogStreamer:
         if self._is_running:
             return
         self._is_running = True
-        # 添加 loguru handler
+        self._install_sink()
+
+    async def stop(self) -> None:
+        """停止日志流"""
+        if not self._is_running:
+            return
+        self._is_running = False
+        self._remove_sink()
+        _LIVE_STREAMERS.discard(self)
+
+    def _install_sink(self) -> None:
+        """挂载 loguru sink 并记录 handler_id；已挂载的旧 sink 先摘除（幂等，供重建复用）。"""
+        if self._handler_id is not None:
+            self._remove_sink()
         self._handler_id = loguru_logger.add(
             self._sink,
             level=self.min_level,
@@ -163,14 +185,19 @@ class LogStreamer:
             filter=self._filter,
         )
 
-    async def stop(self) -> None:
-        """停止日志流"""
-        if not self._is_running:
+    def _remove_sink(self) -> None:
+        """摘除已挂载的 sink。
+
+        handler 可能已被外部摘除（如 configure_from_config 的全局 remove()），
+        此时 loguru 抛 ValueError，静默归位即可——目标状态（sink 不在）已达成。
+        """
+        if self._handler_id is None:
             return
-        self._is_running = False
-        if self._handler_id is not None:
+        try:
             loguru_logger.remove(self._handler_id)
-            self._handler_id = None
+        except ValueError:
+            pass
+        self._handler_id = None
 
     def _filter(self, record: dict) -> bool:
         """过滤日志记录"""
@@ -256,3 +283,23 @@ class LogStreamer:
                     pass
         except Exception as e:
             sys.stderr.write(f"[log_streamer] sink error: {e!r}\n")
+
+
+# 存活 LogStreamer 弱引用注册表：实例 stop 或被回收后自动清出。
+# 承担两件事——persist 实例的单例防线（构造期告警），以及全局日志重配置
+# 摘掉 sink 后的存活实例重建（rebind_live_streamers）。
+_LIVE_STREAMERS: "weakref.WeakSet[LogStreamer]" = weakref.WeakSet()
+
+
+def rebind_live_streamers() -> int:
+    """为所有仍标记运行中的 LogStreamer 重建 sink，返回重建数。
+
+    configure_from_config() 的全局 remove() 会把本模块挂载的 sink 一并摘掉，
+    实例却仍处于运行态（孤儿化）。全局重配置完成后调用本函数恢复日志流。
+    """
+    count = 0
+    for streamer in list(_LIVE_STREAMERS):
+        if streamer._is_running:
+            streamer._install_sink()
+            count += 1
+    return count

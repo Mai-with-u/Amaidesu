@@ -169,7 +169,6 @@ def configure_from_config(config_dict: dict | None = None) -> None:
                 level=level,
             )
             _HANDLER_IDS.append(file_handler_id)
-            return  # JSONL 格式已处理，直接返回
         else:  # text
             # 根据 split_by_session 决定文件名格式
             if split_by_session:
@@ -191,6 +190,13 @@ def configure_from_config(config_dict: dict | None = None) -> None:
                 encoding="utf-8",
             )
             _HANDLER_IDS.append(file_handler_id)
+
+    # 前面的全局 remove() 会把 LogStreamer 等外部组件挂载的 sink 一并摘掉，
+    # 其实例仍处于运行态（孤儿化）。重配置完成后通知存活实例重建 sink。
+    # 函数体内 import：循环 import 规避（log_streamer 可能反向依赖本模块门面）。
+    from src.modules.logging.log_streamer import rebind_live_streamers
+
+    rebind_live_streamers()
 
 
 class ModuleLogger:

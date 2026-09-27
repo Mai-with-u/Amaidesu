@@ -316,6 +316,8 @@ async def create_app_components(
     storage_ledger_auto_start: bool = True,
     session_manager_auto_start: bool = True,
     providers_auto_start: bool = True,
+    log_streamer_persist: bool = True,
+    log_streamer_persist_dir: Optional[str] = None,
 ) -> Tuple[
     EventBus,
     LLMManager,
@@ -353,6 +355,10 @@ async def create_app_components(
             关闭链（``run_shutdown``）无论如何都会 ``stop()`` 一次，幂等安全。
         session_manager_auto_start: 是否启动 LiveSessionManager（残留场次收口）。
             ``--dry`` 模式传 False，避免冒烟写库。
+        log_streamer_persist: LogStreamer 是否落盘 JSONL（data/logs/）。
+            ``--dry`` 与测试装配传 False，避免向真实 ``data/logs/`` 写入运行数据。
+        log_streamer_persist_dir: LogStreamer 落盘目录（None 用默认）。
+            集成测试需要验证持久化时指向临时目录，实现与真实数据隔离。
 
     Returns:
         (event_bus, llm_service, dashboard_server,
@@ -759,10 +765,17 @@ async def create_app_components(
         await tool_registry.start_providers()
 
     # --- DashboardServer ---
+    # LogStreamer 仅在有消费者（Dashboard 日志页）时装配：dashboard 关闭时
+    # 它只剩落盘副作用（无 WS 广播出口），照建不误正是测试污染 data/logs 的
+    # 入口之一。persist 开关与落盘目录由调用方决定（--dry/测试装配传 False）。
     dashboard_server: Optional["DashboardServer"] = None
-    log_streamer = await _start_log_streamer()
+    log_streamer: Optional[LogStreamer] = None
     dashboard_config = config.get("dashboard", {}) if isinstance(config, dict) else {}
     if dashboard_config.get("enabled", True):
+        log_streamer = await _start_log_streamer(
+            persist=log_streamer_persist,
+            persist_dir=log_streamer_persist_dir,
+        )
         dashboard_server = await _start_dashboard(
             dashboard_config,
             dev_webui,
@@ -879,9 +892,21 @@ async def _start_storage_ledger(
         return None
 
 
-async def _start_log_streamer():
-    """启动 LogStreamer（用于 Dashboard 抓取实时日志）。"""
-    streamer = LogStreamer(min_level="DEBUG", persist=True)
+async def _start_log_streamer(
+    persist: bool = True,
+    persist_dir: Optional[str] = None,
+) -> LogStreamer:
+    """启动 LogStreamer（用于 Dashboard 抓取实时日志）。
+
+    persist=False 不落盘（``--dry``/测试装配传 False，避免向真实 data/logs/
+    写入运行数据）；persist_dir 透传落盘目录（None 用默认 data/logs），
+    测试可指向临时目录实现隔离。
+    """
+    streamer = LogStreamer(
+        min_level="DEBUG",
+        persist=persist,
+        persist_dir=persist_dir or LogStreamer.DEFAULT_PERSIST_DIR,
+    )
     await streamer.start()
     return streamer
 
@@ -1307,6 +1332,7 @@ async def main() -> None:
         storage_ledger_auto_start=not args.dry,
         session_manager_auto_start=not args.dry,
         providers_auto_start=not args.dry,
+        log_streamer_persist=not args.dry,
     )
 
     # 启动完成广播：此时 EventHistoryRecorder 已就绪，core.startup 会进事件历史
