@@ -80,7 +80,7 @@ class _FakeAgentManager:
 
 
 def _write_config(config_dir: Path) -> None:
-    """六文件基线铺设（main_config 来源；activate 的落盘管线依赖）。"""
+    """七文件基线铺设（main_config 来源；activate 的落盘管线依赖）。"""
     from src.modules.config.multi_file_loader import generate_default_configs
 
     generate_default_configs(config_dir)

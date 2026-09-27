@@ -1,6 +1,6 @@
 """配置 Schema 生成器测试套件
 
-覆盖 ``ConfigSchemaGenerator`` 对六文件根 Schema 的输出契约：
+覆盖 ``ConfigSchemaGenerator`` 对七文件根 Schema 的输出契约：
 
 1. **输出格式** — className / fields / nested 结构符合前端动态表单预期
 2. **字段形状** — name / type / label / description 必备，type 为 UI 类型集合
@@ -24,7 +24,7 @@ from src.modules.config.schema_generator import ConfigSchemaGenerator
 from src.modules.config.storage_schemas import StorageRootConfig
 from src.modules.config.tools_schemas import ToolsRootConfig
 
-_SIX_ROOTS = [
+_ALL_ROOTS = [
     AgentsRootConfig,
     CollectorsRootConfig,
     ToolsRootConfig,
@@ -88,7 +88,7 @@ class TestFieldShape:
 
     def test_field_type_values_are_ui_types(self):
         valid_types = {"string", "integer", "number", "boolean", "array", "object", "select"}
-        for cls in _SIX_ROOTS:
+        for cls in _ALL_ROOTS:
             schema = _generate(cls)
             for field in schema["fields"]:
                 assert field["type"] in valid_types, (
@@ -112,13 +112,13 @@ class TestSixRootSchemas:
     """六个根 Schema 全部可生成，自描述协议与加载器索引一致"""
 
     def test_all_six_roots_generate(self):
-        for cls in _SIX_ROOTS:
+        for cls in _ALL_ROOTS:
             schema = _generate(cls)
             assert schema["className"] == cls.__name__
 
     def test_self_described_file_names(self):
-        """__file_name__ 声明覆盖六文件，且与类一一对应"""
-        declared = {cls.__file_name__: cls for cls in _SIX_ROOTS}
+        """__file_name__ 声明覆盖七文件，且与类一一对应"""
+        declared = {cls.__file_name__: cls for cls in _ALL_ROOTS}
         assert set(declared) == {
             "agents.toml",
             "collectors.toml",
@@ -172,7 +172,7 @@ class TestReadonlyPassthrough:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("cls", _SIX_ROOTS, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("cls", _ALL_ROOTS, ids=lambda c: c.__name__)
 def test_root_schema_generation_smoke(cls):
     schema = _generate(cls)
     assert schema["className"] == cls.__name__

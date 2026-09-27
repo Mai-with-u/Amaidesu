@@ -42,7 +42,7 @@ def client(tmp_path: Path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
 
-    # 首启生成六文件基线，再经统一写回器铺出测试态（ collectors 段需过注册表校验）
+    # 首启生成七文件基线，再经统一写回器铺出测试态（ collectors 段需过注册表校验）
     svc = ConfigService(base_dir=str(tmp_path))
     svc.initialize()
     update_config_values(

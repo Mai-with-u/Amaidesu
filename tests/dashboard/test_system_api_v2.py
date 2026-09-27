@@ -39,7 +39,7 @@ class _FakeToolRegistry:
 
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
-    """六文件基线（组件计数断言基于生成基线：5 采集器段 + 3 Agent 段）。"""
+    """七文件基线（组件计数断言基于生成基线：5 采集器段 + 3 Agent 段）。"""
     from src.modules.config.multi_file_loader import generate_default_configs
 
     cfg = tmp_path / "config"

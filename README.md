@@ -132,7 +132,7 @@ cd Amaidesu
 # 3. 同步依赖
 uv sync
 
-# 4. 首次运行：按 Schema 生成 config/ 六文件配置树后主动退出
+# 4. 首次运行：按 Schema 生成 config/ 七文件配置树后主动退出
 uv run python main.py
 
 # 5. 编辑 config/model.toml 填入 LLM API Key，在 config/agents.toml 选择要启用的 Agent

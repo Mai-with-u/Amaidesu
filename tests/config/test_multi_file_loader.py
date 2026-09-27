@@ -1,4 +1,4 @@
-"""多文件加载器和生成器测试（六文件布局）"""
+"""多文件加载器和生成器测试（七文件布局）"""
 
 import shutil
 from typing import Optional

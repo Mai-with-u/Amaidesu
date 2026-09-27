@@ -140,7 +140,7 @@ def update_config_values(config_dir: Path, file_name: str, updates: dict[str, An
 
     Args:
         config_dir: config/ 目录路径
-        file_name: 目标文件名（六文件之一）
+        file_name: 目标文件名（七文件之一）
         updates: ``{文件内点分路径: 新值}``，路径不含 scope 前缀；
             同路径多次给定时后者覆盖前者
 
@@ -205,7 +205,7 @@ def _populate_fields_table(table: Any, item: BaseModel) -> None:
 
 
 def _generate_root_toml(file_name: str, schema_cls: type[BaseConfig]) -> str:
-    """从根 Schema 默认值生成整文件 TOML（六文件共用的生成器）。
+    """从根 Schema 默认值生成整文件 TOML（七文件共用的生成器）。
 
     顶层字段即顶层表/键值：BaseModel 字段展开为子表，list[BaseModel]
     字段展开为 array-of-tables（``[[name]]``）。

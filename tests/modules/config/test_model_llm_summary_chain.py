@@ -24,7 +24,7 @@ from src.modules.llm.engine import LLMManager
 
 @pytest.fixture
 def loaded_model_config(tmp_path: Path) -> Dict[str, Any]:
-    """生成六文件基线（tmp，自包含不依赖机器本地配置）并返回 model section。"""
+    """生成七文件基线（tmp，自包含不依赖机器本地配置）并返回 model section。"""
     config_dir = tmp_path / "config"
     generate_default_configs(config_dir)
     config, _report = load_config_dir(config_dir)

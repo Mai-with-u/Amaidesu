@@ -1,6 +1,6 @@
 """配置适配服务层
 
-从六文件根 Schema 派生前端分组视图，并承担配置写路径的统一编排：
+从七文件根 Schema 派生前端分组视图，并承担配置写路径的统一编排：
 前置校验（未知项 / 只读 / 占位回写 / 空键）→ 按文件分组走统一管线写盘 →
 按 scope 触发热重载。HTTP 语义（状态码、响应包装）留在 api 层。
 """
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 logger = get_logger("ConfigAdapter")
 
-# 六文件 scope 清单（= 文件名去后缀；顺序即 Schema 分组展示顺序）
+# 七文件 scope 清单（= 文件名去后缀；顺序即 Schema 分组展示顺序）
 _SCOPES = ("agents", "collectors", "tools", "avatar", "model", "storage", "infra")
 
 # GET 响应中敏感字段的占位文案：明文不下发，回写同值会被拒绝
@@ -380,7 +380,7 @@ def _group_into_children(fields: list[dict], _depth: int = 1) -> list[dict]:
 
 
 def _build_frontend_groups(config_service: "ConfigService") -> dict:
-    """Schema 适配器：六文件根 Schema → {groups, version} 前端格式.
+    """Schema 适配器：七文件根 Schema → {groups, version} 前端格式.
 
     每个根 Schema 一个分组；分组 label / 文件归属来自根类的自描述协议
     （``__section_label__`` / ``__file_name__``），无手写映射表。

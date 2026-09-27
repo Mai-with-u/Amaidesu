@@ -1,8 +1,8 @@
-"""配置管理 API（六文件树）
+"""配置管理 API（七文件树）
 
 提供配置的查询、Schema 获取和修改接口。
 
-配置布局为 v2 六文件树（``config/agents.toml`` / ``collectors.toml`` /
+配置布局为 v2 七文件树（``config/agents.toml`` / ``collectors.toml`` /
 ``tools.toml`` / ``model.toml`` / ``storage.toml`` / ``infra.toml``），
 文件归属与显示名由各根 Schema 的自描述协议（``__file_name__`` /
 ``__section_label__``）提供，本模块不维护任何手写映射表。
@@ -65,7 +65,7 @@ ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 async def get_config(server: ServerDep) -> ConfigResponse:
     """获取当前配置
 
-    返回扁平化的 ``main_config``（六文件 scope 展平后的合并视图，键为
+    返回扁平化的 ``main_config``（七文件 scope 展平后的合并视图，键为
     文件内点分路径的首段，如 ``agents`` / ``tools`` / ``dashboard``）。
 
     敏感字段 (api_key / token / password / secret 等) 的值在响应中替换为

@@ -1,4 +1,4 @@
-"""Schema 默认值测试（六文件新结构）
+"""Schema 默认值测试（七文件新结构）
 
 persona / context / events / dashboard / simulator / logging / interceptors
 各段的真实权威分别位于：

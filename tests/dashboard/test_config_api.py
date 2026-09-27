@@ -1,6 +1,6 @@
-"""Dashboard 配置 API 测试套件（v2 六文件树）
+"""Dashboard 配置 API 测试套件（v2 七文件树）
 
-覆盖 Dashboard 配置管理 API 在六文件配置结构下的行为:
+覆盖 Dashboard 配置管理 API 在七文件配置结构下的行为:
 
 1. **GET /api/v1/config** — 返回七 scope 合并视图，敏感字段"已设置"占位
 2. **PATCH /api/v1/config** — scope 首段路由到对应 TOML 文件，经统一管线写盘；
@@ -28,7 +28,7 @@ import pytest
 
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
-    """六文件基线布局（从 Schema 生成默认值，可被加载管线正常装载）。"""
+    """七文件基线布局（从 Schema 生成默认值，可被加载管线正常装载）。"""
     from src.modules.config.multi_file_loader import generate_default_configs
 
     cfg = tmp_path / "config"

@@ -100,7 +100,7 @@ class _FakeAgentManager:
 
 
 def _write_config(config_dir: Path, *, proactive_enabled: bool = False) -> None:
-    """六文件基线 + 统一管线铺设 proactive 开关（main_config["agents"]["streamer"] 来源）。"""
+    """七文件基线 + 统一管线铺设 proactive 开关（main_config["agents"]["streamer"] 来源）。"""
     from src.modules.config.multi_file_loader import generate_default_configs, update_config_values
 
     generate_default_configs(config_dir)
