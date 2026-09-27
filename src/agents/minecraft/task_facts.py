@@ -25,6 +25,7 @@ _MACHINE_FACT_KEYS = (
     "source_native_observation_stage",
     "target_native_observation_stage",
     "chain_conveyor_use",
+    "deployer_hand_observation",
     "chains_required",
     "chains_available_before",
     "chains_available_after",
