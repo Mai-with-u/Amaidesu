@@ -37,7 +37,7 @@ from src.agents.minecraft.observations import MinecraftObservations, json_text, 
 from src.agents.minecraft.plan_facts import MinecraftPlanFacts
 from src.agents.minecraft.readback import is_reference, read_receipt
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
-from src.agents.minecraft.task_facts import decision_facts, task_decision
+from src.agents.minecraft.task_facts import decision_facts, machine_facts, task_decision
 from src.agents.minecraft.tool_content import failed_observation, successful_observation
 from src.agents.minecraft.tool_names import find_mod_tool
 from src.agents.minecraft.tools import MinecraftToolProvider
@@ -940,10 +940,12 @@ class MinecraftAgent(BaseAgent):
             self._remember_task_snapshot(original, ref)
         if not tool.startswith("minecraft_") and not shown.get("_observation", {}).get("same_request_and_result"):
             # 整理时仍保留近期失败与结果未知的区别，详细过程从同一引用恢复。
+            mechanical = machine_facts(original)
             self._recent_results.append(
                 {
                     "tool": tool,
                     "ref": ref,
+                    **({"machine_facts": mechanical} if mechanical else {}),
                     **{
                         key: shown[key]
                         for key in (
@@ -1188,6 +1190,12 @@ class MinecraftAgent(BaseAgent):
         if payload.snapshot:
             shown = self._observations.present("task_notification", {"task_id": payload.task_id}, payload.snapshot)
             snapshot_text = "\n任务快照：" + json_text(shown)
+            # 终态经注意流到达时，也把缺链数量和实际受电设备放进已有的六条近期结果，避免靠摘要模型复述。
+            mechanical = machine_facts(payload.snapshot)
+            if mechanical:
+                self._recent_results.append(
+                    {"tool": "task_notification", "ref": shown["_observation"]["ref"], "machine_facts": mechanical}
+                )
             if payload.task_id in self._task_progress:
                 self._task_progress[payload.task_id]["result_ref"] = shown["_observation"]["ref"]
                 if payload.status == "waiting_for_decision" and "decision" in self._task_progress[payload.task_id]:

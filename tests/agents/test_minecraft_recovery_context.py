@@ -10,6 +10,7 @@ from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig, MinecraftContextConfig
 from src.agents.minecraft.context import MinecraftHistoryCompactor
 from src.agents.minecraft.observations import json_text
+from src.agents.minecraft.task_facts import machine_facts
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.tools.registry import ToolRegistry
@@ -90,6 +91,70 @@ def previous_history() -> list[dict[str, Any]]:
             ]
         )
     return messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receipt_form", ["event", "task", "decision"])
+async def test_native_machine_facts_survive_compaction(receipt_form: str) -> None:
+    """缺链、部分拆除和接错设备的事实在普通终态与待决策中都保留，不依赖摘要复述或重复勘察。"""
+    agent, llm = make_agent()
+    data = {
+        "selected_destination_block": "create:shaft",
+        "requested_transmission": "chain_conveyor",
+        "construction_progress": {"phase": "remove", "confirmed_blocks": 7},
+        "chain_conveyor_use": {"chains_required": 9, "chains_available_before": 2, "chains_missing": 7},
+        "goal": {"selected_destination_block": "不应当作实际端点的设计值"},
+    }
+    snapshot = {"task_id": "link", "state": "failed", "result": {"success": False, "data": data}}
+    if receipt_form == "event":
+        agent.on_task_notification(
+            TaskChangedPayload(task_id="link", status="failed", initiator="minecraft", snapshot=snapshot)
+        )
+    else:
+        if receipt_form == "decision":
+            snapshot = decision_snapshot()
+            snapshot["decision"]["context"]["failure"]["data"] = data
+        shown = agent._observations.present("maicraft_task", {"action": "get"}, snapshot)
+        agent._remember_result("maicraft_task", {"action": "get"}, snapshot, shown)
+    llm.generate = AsyncMock(return_value=Response(success=True, content="继续处理机械任务", finish_reason="stop"))
+    messages = previous_history()
+    assert await agent._context_compactor.compact(messages, [], agent._current_task_context())
+    context = messages[1]["content"]
+    assert '"chains_missing":7' in context and '"confirmed_blocks":7' in context
+    assert '"selected_destination_block":"create:shaft"' in context
+    assert "不应当作实际端点的设计值" not in context
+    data["chain_conveyor_use"]["chains_missing"] = 99
+    assert '"chains_missing":99' not in json_text(agent._current_task_context())
+
+
+def test_referenced_chain_details_keep_known_shortage_and_readback_path() -> None:
+    """大回执被分页时同时保留已知缺口和原文入口，缺失的字段不被误记为零。"""
+    facts = machine_facts(
+        {"data": {"chain_conveyor_use": {
+            "omitted": True, "type": "object", "total": 20, "detail_path": "/result/data/chain_conveyor_use",
+            "summary": {"chains_missing": 7},
+        }}}
+    )
+    assert any(row.get("chains_missing") == 7 for row in facts)
+    assert any(row.get("detail_path") == "/result/data/chain_conveyor_use" for row in facts)
+
+
+@pytest.mark.asyncio
+async def test_powered_construction_does_not_become_verified_production_in_context() -> None:
+    """施工与动力成功后仍保留产出未验收，历史整理不能把接好线升级成已制成精密构件。"""
+    agent, llm = make_agent()
+    snapshot = {"task_id": "power", "state": "success", "result": {"success": True, "data": {
+        "construction_complete": True, "native_connected": True, "power_ready": True,
+        "machine_production_verified": False, "throughput_verified": False,
+    }}}
+    shown = agent._observations.present("maicraft_task", {"action": "get"}, snapshot)
+    agent._remember_result("maicraft_task", {"action": "get"}, snapshot, shown)
+    llm.generate = AsyncMock(return_value=Response(success=True, content="线路施工已完成", finish_reason="stop"))
+    messages = previous_history()
+    assert await agent._context_compactor.compact(messages, [], agent._current_task_context())
+    assert '"native_connected":true' in messages[1]["content"]
+    assert '"machine_production_verified":false' in messages[1]["content"]
+    assert '"throughput_verified":false' in messages[1]["content"]
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,47 @@ from typing import Any
 from src.agents.minecraft.readback import is_reference
 
 
+# 接线和拆改后的数量、实际设备与施工阶段要跟随任务保留，不能在整理上下文后只剩通用失败文字。
+_MACHINE_FACT_KEYS = (
+    "construction_progress",
+    "requested_transmission",
+    "transmission_description",
+    "selected_source_block",
+    "selected_destination_block",
+    "chain_conveyor_use",
+    "chains_required",
+    "chains_available_before",
+    "chains_available_after",
+    "chains_missing",
+    "first_endpoint_selected",
+    "chain_link_verified",
+    "machine_geometry_verified",
+    "construction_complete",
+    "configuration_complete",
+    "native_connected",
+    "power_ready",
+    "machine_production_verified",
+    "throughput_verified",
+)
+
+
+def machine_facts(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """近期终态区分施工、动力和产出证据，详细原件按原路径补读；提交的蓝图不作为施工事实。"""
+    wrapped = isinstance(snapshot.get("task"), dict)
+    rows = failure_evidence(snapshot["task"] if wrapped else snapshot, "/task" if wrapped else "")
+    return [
+        {
+            key: deepcopy(value)
+            for key, value in row.items()
+            if key in _MACHINE_FACT_KEYS or key in ("path", "omitted", "detail_path", "resource_uri")
+        }
+        for row in rows
+        if any(key in row for key in _MACHINE_FACT_KEYS)
+        or row.get("omitted")
+        and row["path"].rsplit("/", 1)[-1] in _MACHINE_FACT_KEYS
+    ]
+
+
 def task_decision(snapshot: dict[str, Any]) -> dict[str, Any]:
     """兼容注意流决策和任务快照，只认原生决策位置，避免误读蓝图中的同名字段。"""
     task = snapshot.get("task", snapshot)
@@ -75,6 +116,7 @@ def failure_evidence(value: Any, path: str = "") -> list[dict[str, Any]]:
         }
         return [{"path": path, "omitted": True, **reference}, *known]
     keys = (
+        *_MACHINE_FACT_KEYS,
         "message",
         "failure_code",
         "cause_code",
@@ -104,7 +146,16 @@ def failure_evidence(value: Any, path: str = "") -> list[dict[str, Any]]:
         if is_reference(value.get(key)):
             rows.extend(failure_evidence(value[key], f"{path}/{key}"))
     # 只沿执行器公开的结果链取事实，不扫描 goal/blueprint，避免把旧设计参数误当成当前缺口。
-    for key in ("data", "result", "last_native_stage", "batches", "supply", "last_build_evidence", "child_data"):
+    for key in (
+        "data",
+        "result",
+        "terminal",
+        "last_native_stage",
+        "batches",
+        "supply",
+        "last_build_evidence",
+        "child_data",
+    ):
         if key in value:
             rows.extend(failure_evidence(value[key], f"{path}/{key}"))
     return rows
