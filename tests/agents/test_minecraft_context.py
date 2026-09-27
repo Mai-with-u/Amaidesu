@@ -12,6 +12,19 @@ from src.modules.config.agents_schemas import AgentsConfig
 from src.modules.llm.payload import Response, ToolCall
 
 
+@pytest.mark.parametrize("with_template", [False, True])
+def test_material_priority_is_shared_by_template_and_fallback(with_template: bool) -> None:
+    """不同提示入口都保留随身与无线库存优先，普通取材不被模型自行缩成逐木种采矿。"""
+    manager = MagicMock() if with_template else None
+    if manager is not None:
+        manager.render.return_value = "通过原生工具完成游戏任务"
+    agent = MinecraftAgent(MinecraftConfig(), llm_manager=MagicMock(), prompt_manager=manager)
+    prompt = agent._system_prompt()
+    assert "先用随身库存和可立即使用的 AE 无线现货" in prompt
+    assert "默认省略 allowed_sources" in prompt and "只有用户明确限定来源才收窄" in prompt
+    assert "不按木种逐个试搜" in prompt
+
+
 def history() -> list[dict]:
     """包含多轮完整工具往返，预算超限来自历史累积而非孤立协议消息。"""
     messages = [{"role": "system", "content": "完成玩家目标"}, {"role": "user", "content": "建好；禁止取私人箱子"}]
