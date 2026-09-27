@@ -138,6 +138,17 @@ describe('useAgentTasks', () => {
     expect(composable.refreshing.value).toBe(false);
   });
 
+  it('稳态无事件时轮询兜底刷新', async () => {
+    const target = ref<string | null>('minecraft');
+    mount(target);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listTasksMock).toHaveBeenCalledTimes(1);
+
+    // 一个轮询周期后静默追平
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(listTasksMock).toHaveBeenCalledTimes(2);
+  });
+
   it('cancelTask 调对 API 并刷新账面', async () => {
     cancelAgentTaskMock.mockResolvedValue({ data: { cancelled: true } } as never);
     const target = ref<string | null>('minecraft');
