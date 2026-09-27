@@ -405,555 +405,83 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+/**
+ * 工具页 —— 提供者分类面板 + 工具清单 + 调试调用 + 视觉捕获面板
+ *
+ * 页面私有逻辑拆在 composables/tools/：目录加载与分类导航/过滤
+ * （useToolCatalog）、开关与重连控制（useToolControls）、详情抽屉与
+ * 调试调用（useToolDetail）、WS 熔断状态（useToolHealth）。
+ * 本组件只做装配与初始加载。
+ */
+import { onMounted } from 'vue';
 import { Search } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
-import { toolsApi } from '@/api';
-import { useWebSocketStore } from '@/stores/websocket';
 import VisionCapturePanel from '@/components/vision/VisionCapturePanel.vue';
-import type {
-  ToolCategoryView,
-  ToolEntry,
-  ToolHealth,
-  ToolHealthEventData,
-  ToolInvokeResult,
-  ToolProviderUnit,
-  WebSocketMessage,
-} from '@/types';
-
-// 分类元数据
-
-const CATEGORY_META: Record<string, { label: string; description: string }> = {
-  avatar: {
-    label: '虚拟形象',
-    description: 'VTubeStudio / VRChat / Warudo 等虚拟形象后端提供的工具',
-  },
-  studio: { label: '演播室', description: 'OBS 等演播室控制后端提供的工具' },
-  vision: { label: '视觉', description: '屏幕感知能力（look_at_screen）' },
-  memory: { label: '记忆', description: '观众事实与画像查询（query_memory / query_viewer_profile）' },
-  mcp: { label: 'MCP', description: '外部 MCP server 提供的工具' },
-  game: { label: '游戏 Agent', description: '游戏 Agent 自声明的工具（text_adv 等）' },
-  framework: { label: '框架', description: '框架内置工具（AgentControl 等）' },
-};
-
-function categoryMeta(category: string) {
-  return CATEGORY_META[category] ?? { label: category, description: '' };
-}
-
-// 数据加载
-
-const categories = ref<ToolCategoryView[]>([]);
-const tools = ref<ToolEntry[]>([]);
-const loading = ref(false);
-const error = ref<string | null>(null);
-
-async function refreshAll() {
-  loading.value = true;
-  error.value = null;
-  try {
-    const [catResp, toolResp] = await Promise.all([toolsApi.listCategories(), toolsApi.list()]);
-    categories.value = catResp.data.categories ?? [];
-    tools.value = toolResp.data.tools ?? [];
-    ensureActiveCategory();
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '无法加载工具数据';
-    categories.value = [];
-    tools.value = [];
-  } finally {
-    loading.value = false;
-  }
-}
-
-// 分类列表（左侧）
-
-const activeCategory = ref('');
-
-const categoryNav = computed(() =>
-  categories.value.map(cat => {
-    const switchable = cat.providers.filter(p => p.switchable);
-    return {
-      category: cat.category,
-      label: categoryMeta(cat.category).label,
-      toolCount: cat.providers.reduce((sum, p) => sum + p.tool_count, 0),
-      enabledCount: switchable.filter(p => p.enabled).length,
-    };
-  }),
-);
-
-const totalToolCount = computed(() =>
-  categoryNav.value.reduce((sum, cat) => sum + cat.toolCount, 0),
-);
-
-function ensureActiveCategory() {
-  if (!categories.value.some(cat => cat.category === activeCategory.value)) {
-    activeCategory.value = categories.value[0]?.category ?? '';
-  }
-}
-
-function selectCategory(category: string): void {
-  activeCategory.value = category;
-}
-
-const activeMeta = computed(() => categoryMeta(activeCategory.value));
-
-const activeCategoryData = computed(
-  () => categories.value.find(cat => cat.category === activeCategory.value) ?? null,
-);
-
-const activeSwitchableCount = computed(
-  () => (activeCategoryData.value?.providers ?? []).filter(p => p.switchable).length,
-);
-
-const activeEnabledCount = computed(
-  () => (activeCategoryData.value?.providers ?? []).filter(p => p.switchable && p.enabled).length,
-);
-
-const pendingRestartCount = computed(
-  () =>
-    (activeCategoryData.value?.providers ?? []).filter(
-      p => p.switchable && (p.enabled ? p.registered === false : p.tool_count > 0),
-    ).length,
-);
-
-// 提供者开关
-
-const toggling = reactive(new Set<string>());
-
-// 分类总开关（聚合操作：一键开/关全部提供者）
-
-const bulkSwitchable = computed(() =>
-  (activeCategoryData.value?.providers ?? []).some(p => p.switchable),
-);
-
-const bulkState = computed<'all' | 'none' | 'mixed'>(() => {
-  const switchable = (activeCategoryData.value?.providers ?? []).filter(p => p.switchable);
-  if (switchable.length === 0) return 'none';
-  const on = switchable.filter(p => p.enabled).length;
-  if (on === switchable.length) return 'all';
-  if (on === 0) return 'none';
-  return 'mixed';
-});
-
-const bulkToggling = ref(false);
-
-async function onBulkToggle(next: boolean) {
-  const units = (activeCategoryData.value?.providers ?? []).filter(p => p.switchable);
-  if (units.length === 0) return;
-  bulkToggling.value = true;
-  try {
-    const results = await Promise.allSettled(
-      units.map(u =>
-        toolsApi.controlProvider(activeCategory.value, u.key, next ? 'enable' : 'disable'),
-      ),
-    );
-    const failed = results.filter(r => r.status === 'rejected').length;
-    if (failed > 0) {
-      ElMessage.warning(`部分提供者写回失败（${failed}/${units.length}），请重试`);
-    } else {
-      ElMessage.success(`${next ? '启用' : '停用'} ${units.length} 个提供者，重启后生效`);
-    }
-  } finally {
-    bulkToggling.value = false;
-    await refreshAll();
-  }
-}
-
-// 工具级停用
-
-const toolToggling = reactive(new Set<string>());
-
-async function onToolToggle(row: ToolEntry, next: boolean) {
-  toolToggling.add(row.name);
-  try {
-    // 停用集合按注册表全名索引，必须传 full_name（裸名会被 apply_disabled 过滤丢弃）
-    const response = await toolsApi.controlTool(row.full_name, next ? 'enable' : 'disable');
-    row.disabled = !next;
-    ElMessage.success(response.data.message ?? '已写回配置，重启后生效');
-  } catch (e) {
-    const detail = e instanceof Error ? e.message : `开关写回失败（${row.name}）`;
-    ElMessage.error(detail);
-  } finally {
-    toolToggling.delete(row.name);
-  }
-}
-
-async function onToggle(unit: ToolProviderUnit, next: boolean) {
-  toggling.add(unit.key);
-  try {
-    const response = await toolsApi.controlProvider(
-      activeCategory.value,
-      unit.key,
-      next ? 'enable' : 'disable',
-    );
-    unit.enabled = next;
-    ElMessage.success(response.data.message ?? '已写回配置，重启后生效');
-  } catch (e) {
-    const detail = e instanceof Error ? e.message : `开关写回失败（${unit.key}）`;
-    ElMessage.error(detail);
-  } finally {
-    toggling.delete(unit.key);
-  }
-}
-
-// 工具提供者手动重连
-//
-// 按 provider 维度防重：同一 Provider 下多行触发同一调用，按行名防重会出现
-// loading 不同步；用 provider_id 做 Set 键，保证任意一行触发都共享 loading。
-const reconnecting = reactive(new Set<string>());
-
-function extractReconnectDetail(err: unknown): string {
-  // axios 错误：后端 404/409 返回 {detail: "..."}，需要穿透 axios 默认 message
-  const ax = err as { response?: { data?: { detail?: string } } };
-  return ax?.response?.data?.detail ?? (err instanceof Error ? err.message : '重连失败');
-}
-
-async function onReconnect(providerId: string) {
-  if (!providerId || reconnecting.has(providerId)) return;
-  reconnecting.add(providerId);
-  try {
-    const resp = await toolsApi.reconnectProvider(providerId);
-    const recoveredCount = resp.data.recovered.length;
-    const stillTrippedCount = resp.data.still_tripped.length;
-    const addedCount = resp.data.refreshed?.added.length ?? 0;
-    if (stillTrippedCount > 0) {
-      ElMessage.warning(
-        `重连成功但 ${stillTrippedCount} 个工具探活未通过：${resp.data.still_tripped.join('、')}`,
-      );
-    } else if (addedCount > 0) {
-      ElMessage.success(`重连成功，补注册 ${addedCount} 个工具（降级装配已恢复）`);
-    } else if (recoveredCount > 0) {
-      ElMessage.success(`已恢复 ${recoveredCount} 个工具`);
-    } else {
-      ElMessage.success('重连完成（当前无熔断工具）');
-    }
-    await refreshAll();
-  } catch (e) {
-    ElMessage.error(extractReconnectDetail(e));
-  } finally {
-    reconnecting.delete(providerId);
-  }
-}
-
-// 工具过滤
-
-const searchQuery = ref('');
-
-function toolsOf(unit: ToolProviderUnit): ToolEntry[] {
-  const q = searchQuery.value.trim().toLowerCase();
-  return tools.value.filter(t => {
-    if (t.category !== activeCategory.value || t.provider !== unit.provider_name) return false;
-    if (q && !`${t.name} ${t.description ?? ''}`.toLowerCase().includes(q)) return false;
-    return true;
-  });
-}
-
-const visibleProviders = computed<ToolProviderUnit[]>(() => {
-  const units = activeCategoryData.value?.providers ?? [];
-  if (!searchQuery.value.trim()) return units;
-  return units.filter(unit => toolsOf(unit).length > 0);
-});
-
-// 抽屉详情
-
-const detailOpen = ref(false);
-const activeTool = ref<ToolEntry | null>(null);
-
-const detailTitle = computed(() =>
-  activeTool.value ? `工具详情 · ${activeTool.value.name}` : '工具详情',
-);
-
-function openDetail(row: ToolEntry) {
-  activeTool.value = row;
-  detailOpen.value = true;
-  // 等 DOM 渲染后测描述是否溢出（决定"展开全文"入口是否显示）
-  void nextTick(() => {
-    descExpanded.value = false;
-    measureDescClamp();
-  });
-}
-
-function rowClass({ row }: { row: ToolEntry }): string {
-  return row.disabled ? 'is-disabled-row' : '';
-}
-
-const paramEntries = computed(() => {
-  if (!activeTool.value) return [];
-  return Object.entries(activeTool.value.parameters ?? {})
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, spec]) => ({ key, spec }));
-});
-
-// 调试调用（与 Agent 同路径经 registry 真实执行）
-//
-// formModel 形状由工具的 parameters 决定：default 预填，boolean 落 false，
-// 数字型落 undefined（el-input-number 空态）、字符串落空串。
-const invoking = ref(false);
-const formModel = ref<Record<string, unknown>>({});
-const invokeResult = ref<ToolInvokeResult | null>(null);
-// async 工具受理后等待 WS tool.result 回传：true 期间监听 asyncEventName
-const waitingAsyncResult = ref(false);
-const asyncEventName = ref('');
-
-const JSON_PARAM_PLACEHOLDER = 'JSON 对象/数组，如 {"k": 1}';
-
-const isInternalTool = computed(() => {
-  const cat = activeTool.value?.category;
-  return cat === 'framework' || cat === 'game';
-});
-
-function resetInvokeState() {
-  const next: Record<string, unknown> = {};
-  for (const [key, spec] of Object.entries(activeTool.value?.parameters ?? {})) {
-    if (spec.type === 'json') {
-      // JSON 参数以文本承载：default 对象序列化预填，提交时解析回值
-      next[key] =
-        spec.default !== undefined && spec.default !== null
-          ? JSON.stringify(spec.default, null, 2)
-          : '';
-    } else if (spec.default !== undefined && spec.default !== null) {
-      next[key] = spec.default;
-    } else if (spec.type === 'boolean') next[key] = false;
-    else if (spec.type === 'integer' || spec.type === 'number') next[key] = undefined;
-    else next[key] = '';
-  }
-  formModel.value = next;
-  invokeResult.value = null;
-  waitingAsyncResult.value = false;
-  asyncEventName.value = '';
-}
-
-watch(activeTool, resetInvokeState);
-
-// 工具描述折叠/展开：默认两行省略，溢出时点击或点"展开全文"看全文
-const descRef = ref<HTMLElement | null>(null);
-const descClamped = ref(false);
-const descExpanded = ref(false);
-
-function measureDescClamp(): void {
-  // scrollHeight > clientHeight = 两行放不下、出现了省略
-  descClamped.value = descRef.value
-    ? descRef.value.scrollHeight > descRef.value.clientHeight + 1
-    : false;
-}
-
-async function toggleDesc(): Promise<void> {
-  if (!descClamped.value && !descExpanded.value) return;
-  descExpanded.value = !descExpanded.value;
-  if (!descExpanded.value) {
-    // 收起后重测：窗口尺寸变化可能已不再溢出
-    await nextTick();
-    measureDescClamp();
-  }
-}
-
-function extractInvokeDetail(err: unknown): string {
-  // axios 错误：后端 400/404 返回 {detail: "..."}，穿透 axios 默认 message
-  const ax = err as { response?: { data?: { detail?: string } } };
-  return ax?.response?.data?.detail ?? (err instanceof Error ? err.message : '调用失败');
-}
-
-async function onInvoke() {
-  const tool = activeTool.value;
-  if (!tool || invoking.value) return;
-  // 组装 arguments：json 参数解析文本为值（MCP 复杂参数），其余原样透传
-  const args: Record<string, unknown> = {};
-  for (const [key, spec] of Object.entries(tool.parameters ?? {})) {
-    const raw = formModel.value[key];
-    if (spec.type === 'json') {
-      const text = typeof raw === 'string' ? raw.trim() : '';
-      if (!text) {
-        if (spec.required) {
-          ElMessage.warning(`必填参数 ${key} 未填写`);
-          return;
-        }
-        continue;
-      }
-      try {
-        args[key] = JSON.parse(text);
-      } catch {
-        ElMessage.warning(`参数 ${key} 不是合法 JSON`);
-        return;
-      }
-      continue;
-    }
-    if (spec.required && (raw === undefined || raw === null || raw === '')) {
-      ElMessage.warning(`必填参数 ${key} 未填写`);
-      return;
-    }
-    args[key] = raw;
-  }
-  invoking.value = true;
-  try {
-    const resp = await toolsApi.invoke(tool.full_name, args);
-    invokeResult.value = resp.data;
-    if (tool.kind === 'async') {
-      waitingAsyncResult.value = true;
-      asyncEventName.value = tool.result_event ?? `tool.result.${tool.full_name}`;
-    }
-  } catch (e) {
-    ElMessage.error(extractInvokeDetail(e));
-  } finally {
-    invoking.value = false;
-  }
-}
-
-// WS 回传（tool.result.<full_name>）覆盖受理回执（async 工具专用）
-function handleToolResultMessage(msg: WebSocketMessage): void {
-  const tool = activeTool.value;
-  if (!tool || !waitingAsyncResult.value || msg.type !== asyncEventName.value) return;
-  const d = msg.data;
-  const name = typeof d.tool_name === 'string' ? d.tool_name : '';
-  if (name && name !== tool.full_name && name !== tool.name) return;
-  waitingAsyncResult.value = false;
-  invokeResult.value = {
-    success: d.status === 'success',
-    content: '',
-    blocks: [],
-    error_message: typeof d.error_message === 'string' ? d.error_message : '',
-    structured_content: d.result ?? null,
-    duration_ms: 0,
-    timestamp_ms: typeof d.timestamp_ms === 'number' ? d.timestamp_ms : 0,
-  };
-}
-
-// 结果区视图合成
-//
-// ToolExecutionResult 的 content / blocks / structured_content 三处可能携带
-// 同源内容（如 MCP mapper 把同一段 JSON 同时填进三处），按规范化形态去重；
-// 能解析为 JSON 的文本走 vue-json-pretty 树渲染（同 LLM 历史详情页约定），
-// 其余原样。
-// vue-json-pretty data prop 的容许类型（包内 JSONDataType 的等价内联）
-type JsonTreeData = string | number | boolean | unknown[] | Record<string, unknown> | null;
-
-interface ResultView {
-  kind: 'text' | 'image';
-  /** JSON 视图的数据源（isJson 为 true 时有效） */
-  jsonData: JsonTreeData;
-  isJson: boolean;
-  /** 非 JSON 文本原样内容 */
-  text: string;
-  /** 图像 base64 与 MIME（kind = 'image' 时有效） */
-  data: string;
-  mime: string;
-}
-
-function normalizeForResult(t: string): string {
-  try {
-    return JSON.stringify(JSON.parse(t));
-  } catch {
-    return t.trim();
-  }
-}
-
-function tryParseJson(t: string): { ok: boolean; value: JsonTreeData } {
-  try {
-    return { ok: true, value: JSON.parse(t) as JsonTreeData };
-  } catch {
-    return { ok: false, value: null };
-  }
-}
-
-const resultViews = computed<ResultView[]>(() => {
-  const result = invokeResult.value;
-  if (!result) return [];
-  const views: ResultView[] = [];
-  const seen = new Set<string>();
-  const pushText = (raw: string) => {
-    if (!raw || !raw.trim() || seen.has(normalizeForResult(raw))) return;
-    seen.add(normalizeForResult(raw));
-    const parsed = tryParseJson(raw);
-    if (parsed.ok) {
-      views.push({
-        kind: 'text',
-        jsonData: parsed.value,
-        isJson: true,
-        text: '',
-        data: '',
-        mime: '',
-      });
-    } else {
-      views.push({ kind: 'text', jsonData: null, isJson: false, text: raw, data: '', mime: '' });
-    }
-  };
-  pushText(result.content);
-  for (const block of result.blocks) {
-    if (block.kind === 'image' && block.data) {
-      views.push({
-        kind: 'image',
-        jsonData: null,
-        isJson: false,
-        text: '',
-        data: block.data,
-        mime: block.mime_type,
-      });
-    } else {
-      pushText(block.text);
-    }
-  }
-  if (result.structured_content !== null && result.structured_content !== undefined) {
-    pushText(JSON.stringify(result.structured_content));
-  }
-  return views;
-});
-
-watch(activeCategory, () => {
-  searchQuery.value = '';
-});
-
-// 实时熔断状态（WS tool.health.*）
-
-function applyHealthUpdate(toolName: string, next: ToolHealth | null): void {
-  const target = tools.value.find(t => t.name === toolName);
-  if (!target) return;
-  target.health = next;
-}
-
-function isToolHealthEventData(data: unknown): data is ToolHealthEventData {
-  if (!data || typeof data !== 'object') return false;
-  const d = data as Record<string, unknown>;
-  return (
-    typeof d.tool_name === 'string' &&
-    typeof d.state === 'string' &&
-    typeof d.timestamp_ms === 'number'
-  );
-}
-
-function handleHealthMessage(msg: WebSocketMessage): void {
-  if (!msg.type.startsWith('tool.health.')) return;
-  if (!isToolHealthEventData(msg.data)) return;
-  const payload = msg.data;
-  if (payload.state === 'open') {
-    applyHealthUpdate(payload.tool_name, {
-      state: 'tripped',
-      failure_count: payload.failure_count,
-      last_error: payload.last_error,
-      tripped_at_ms: payload.timestamp_ms,
-    });
-  } else if (payload.state === 'closed') {
-    applyHealthUpdate(payload.tool_name, null);
-  }
-}
-
-function healthTooltip(row: ToolEntry): string {
-  const h = row.health;
-  if (!h) return '';
-  // el-tooltip 默认按纯文本渲染，\n 不会换行，用分号分隔两段信息
-  return `${h.last_error}；连续失败 ${h.failure_count} 次`;
-}
-
-const wsStore = useWebSocketStore();
+import { useToolCatalog } from '@/composables/tools/useToolCatalog';
+import { useToolControls } from '@/composables/tools/useToolControls';
+import { useToolDetail } from '@/composables/tools/useToolDetail';
+import { useToolHealth } from '@/composables/tools/useToolHealth';
+
+// 装配：目录 → 控制（消费选中分类与刷新）→ 详情 → 熔断（消费工具清单）
+
+const {
+  tools,
+  loading,
+  error,
+  refreshAll,
+  activeCategory,
+  categoryNav,
+  totalToolCount,
+  selectCategory,
+  activeMeta,
+  activeCategoryData,
+  activeSwitchableCount,
+  activeEnabledCount,
+  pendingRestartCount,
+  searchQuery,
+  toolsOf,
+  visibleProviders,
+} = useToolCatalog();
+
+const {
+  toggling,
+  bulkSwitchable,
+  bulkState,
+  bulkToggling,
+  onBulkToggle,
+  toolToggling,
+  onToolToggle,
+  onToggle,
+  reconnecting,
+  onReconnect,
+} = useToolControls({ activeCategory, activeCategoryData, refreshAll });
+
+const {
+  detailOpen,
+  activeTool,
+  detailTitle,
+  openDetail,
+  rowClass,
+  paramEntries,
+  invoking,
+  formModel,
+  invokeResult,
+  waitingAsyncResult,
+  JSON_PARAM_PLACEHOLDER,
+  isInternalTool,
+  descRef,
+  descClamped,
+  descExpanded,
+  toggleDesc,
+  onInvoke,
+  resultViews,
+} = useToolDetail();
+
+const { healthTooltip } = useToolHealth(tools);
 
 onMounted(() => {
-  wsStore.subscribe(handleHealthMessage);
-  wsStore.subscribe(handleToolResultMessage);
   void refreshAll();
-});
-
-onBeforeUnmount(() => {
-  wsStore.unsubscribe(handleHealthMessage);
-  wsStore.unsubscribe(handleToolResultMessage);
 });
 </script>
 
