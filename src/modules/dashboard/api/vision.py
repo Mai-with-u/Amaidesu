@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 from typing import Annotated, List, Optional
@@ -153,31 +154,21 @@ def _draw_region_overlay(img: Image.Image, region: List[int]) -> None:
         )
 
 
-@router.get(
-    "/preview",
-    response_model=PreviewResponse,
-    summary="抓取一帧屏幕截图并叠加区域框",
-)
-async def get_preview(
-    monitor_index: Annotated[int, Query(ge=0, description="显示器索引（默认 1=首个物理显示器）")] = 1,
-    region: Annotated[
-        Optional[str],
-        Query(description="区域 'x1,y1,x2,y2'（相对显示器左上角的坐标）"),
-    ] = None,
-    max_width: Annotated[
-        Optional[int],
-        Query(ge=1, le=7680, description="图像缩放最大宽度（等比缩放）"),
-    ] = None,
-) -> PreviewResponse:
-    """抓取一帧屏幕截图，并在图上叠加用户传入的 region 矩形。
+def _render_preview_frame(
+    monitor_index: int,
+    max_width: Optional[int],
+    region_overlay: Optional[List[int]],
+) -> tuple[str, int, int]:
+    """同步执行抓屏与编码全流程（仅供 ``asyncio.to_thread`` 调用）。
 
-    失败路径（全部映射为 HTTPException，避免 500 裸崩）：
+    mss 抓屏 + PIL 解码/画框/编码是同步阻塞调用（实测 80–220ms/次），整体
+    移入 worker 线程避免冻结事件循环；``MssScreenCapture`` 每次调用自建
+    mss 实例，实例的创建与使用都留在本线程内。失败路径以 ``HTTPException``
+    表达（503 语义），经 to_thread 传回后由端点原样抛出。
 
-    - ``region`` 非法 → 400 + 明确错误体（由 ``_parse_region`` 抛）。
-    - mss 不可用 / 枚举空 / 抓取失败 → 503 + 明确错误体。
+    Returns:
+        ``(image_b64, width, height)``：叠加区域框后的 PNG base64 与尺寸。
     """
-    parsed_region = _parse_region(region)
-
     cap = MssScreenCapture()
 
     monitors = cap.list_monitors()
@@ -203,8 +194,8 @@ async def get_preview(
         )
 
     img = Image.open(io.BytesIO(result.image))
-    if parsed_region is not None:
-        _draw_region_overlay(img, parsed_region)
+    if region_overlay is not None:
+        _draw_region_overlay(img, region_overlay)
 
     buf = io.BytesIO()
     try:
@@ -214,10 +205,40 @@ async def get_preview(
         logger.warning(f"预览 PNG 编码失败: {type(exc).__name__}: {exc}")
         raise HTTPException(status_code=503, detail=f"预览图像编码失败: {exc}") from exc
 
+    return base64.b64encode(img_bytes).decode("ascii"), img.width, img.height
+
+
+@router.get(
+    "/preview",
+    response_model=PreviewResponse,
+    summary="抓取一帧屏幕截图并叠加区域框",
+)
+async def get_preview(
+    monitor_index: Annotated[int, Query(ge=0, description="显示器索引（默认 1=首个物理显示器）")] = 1,
+    region: Annotated[
+        Optional[str],
+        Query(description="区域 'x1,y1,x2,y2'（相对显示器左上角的坐标）"),
+    ] = None,
+    max_width: Annotated[
+        Optional[int],
+        Query(ge=1, le=7680, description="图像缩放最大宽度（等比缩放）"),
+    ] = None,
+) -> PreviewResponse:
+    """抓取一帧屏幕截图，并在图上叠加用户传入的 region 矩形。
+
+    失败路径（全部映射为 HTTPException，避免 500 裸崩）：
+
+    - ``region`` 非法 → 400 + 明确错误体（由 ``_parse_region`` 抛）。
+    - mss 不可用 / 枚举空 / 抓取失败 → 503 + 明确错误体。
+    """
+    parsed_region = _parse_region(region)
+
+    image_b64, width, height = await asyncio.to_thread(_render_preview_frame, monitor_index, max_width, parsed_region)
+
     return PreviewResponse(
-        image_b64=base64.b64encode(img_bytes).decode("ascii"),
-        width=img.width,
-        height=img.height,
+        image_b64=image_b64,
+        width=width,
+        height=height,
         monitor_index=monitor_index,
         region=parsed_region,
     )
