@@ -6,6 +6,7 @@
  */
 
 import { ref } from 'vue';
+import { getApiErrorMessage } from '@/utils/apiError';
 import { ElMessage } from 'element-plus';
 import { agentsApi, debugApi, streamerApi } from '@/api';
 
@@ -120,7 +121,7 @@ export function useInterventionBar(options: { settle: () => Promise<void> }) {
       }
       await settle();
     } catch (error) {
-      ElMessage.error(extractHttpError(error, `${modeKey === 'nudge' ? '递话' : '发送'}失败`));
+      ElMessage.error(getApiErrorMessage(error, `${modeKey === 'nudge' ? '递话' : '发送'}失败`));
     } finally {
       sending.value = false;
     }
@@ -135,13 +136,4 @@ export function useInterventionBar(options: { settle: () => Promise<void> }) {
     onModeChange,
     onInterventionSend,
   };
-}
-
-/** 从 axios 错误中提取后端中文 detail（409 拒收 / 404 / 422 均为中文） */
-function extractHttpError(error: unknown, fallback: string): string {
-  if (error && typeof error === 'object' && 'response' in error) {
-    const data = (error as { response?: { data?: { detail?: unknown } } }).response?.data;
-    if (data && typeof data.detail === 'string') return data.detail;
-  }
-  return error instanceof Error && error.message ? error.message : fallback;
 }

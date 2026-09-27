@@ -395,6 +395,7 @@ import { ArrowDown, Refresh } from '@element-plus/icons-vue';
 import { storeToRefs } from 'pinia';
 import { useComponentsStore, useEventsStore } from '@/stores';
 import { agentsApi, tasksApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import { useNowTick } from '@/composables/useNowTick';
 import { useScrollFollow } from '@/composables/useScrollFollow';
@@ -470,7 +471,7 @@ async function refreshAgentStates(silent = false): Promise<void> {
     if (silent) {
       console.warn('Agent 状态轮询失败（等待下轮重试）:', error);
     } else {
-      ElMessage.error(extractAgentError(error, '获取 Agent 状态失败'));
+      ElMessage.error(getApiErrorMessage(error, '获取 Agent 状态失败'));
     }
   } finally {
     if (!silent) stateRefreshing.value = false;
@@ -510,15 +511,6 @@ const heartbeatTone = computed<string>(() => {
   return heartbeatAgeSec.value > 60 ? 'md-chip-stale' : 'md-chip-ok';
 });
 
-// 从 axios 错误中提取后端中文 detail（400 风险说明 / 404 / 500 均为中文）
-function extractAgentError(error: unknown, fallback: string): string {
-  if (error && typeof error === 'object' && 'response' in error) {
-    const data = (error as { response?: { data?: { detail?: unknown } } }).response?.data;
-    if (data && typeof data.detail === 'string') return data.detail;
-  }
-  return error instanceof Error && error.message ? error.message : fallback;
-}
-
 // pause/resume/shutdown 走框架级控制端点；shutdown 为高风险动作，确认后才携带 confirm: true
 const controlLoading = reactive<Record<string, boolean>>({});
 
@@ -541,7 +533,7 @@ async function handleAgentControl(action: AgentControlActionType): Promise<void>
     const res = await agentsApi.controlAgent(name, action, hint ? true : undefined);
     ElMessage.success(res.data.message);
   } catch (error) {
-    ElMessage.error(extractAgentError(error, '操作失败'));
+    ElMessage.error(getApiErrorMessage(error, '操作失败'));
   } finally {
     controlLoading[key] = false;
     await refreshAgentStates();
@@ -684,7 +676,7 @@ async function refreshTasks(silent = false): Promise<void> {
     taskSnapshot.value = res.data;
   } catch (error) {
     // 已完结聚合仅运行内成立、后端未装配任务基建（503）皆属常态——静默轮询不打扰
-    if (!silent) ElMessage.error(extractAgentError(error, '获取任务快照失败'));
+    if (!silent) ElMessage.error(getApiErrorMessage(error, '获取任务快照失败'));
   } finally {
     if (!silent) tasksRefreshing.value = false;
   }
@@ -718,7 +710,7 @@ async function cancelTask(task: TaskCard): Promise<void> {
     await agentsApi.cancelAgentTask(name, task.task_id);
     ElMessage.success('任务已取消');
   } catch (error) {
-    ElMessage.error(extractAgentError(error, '取消失败'));
+    ElMessage.error(getApiErrorMessage(error, '取消失败'));
   }
   await refreshTasks(true);
 }
@@ -762,7 +754,7 @@ async function onAgentSend(modeKey: string, text: string): Promise<void> {
     }
     await agentSendBarRef.value?.settle();
   } catch (error) {
-    ElMessage.error(extractAgentError(error, modeKey === 'delegate' ? '委派失败' : '递话失败'));
+    ElMessage.error(getApiErrorMessage(error, modeKey === 'delegate' ? '委派失败' : '递话失败'));
   } finally {
     agentSending.value = false;
   }

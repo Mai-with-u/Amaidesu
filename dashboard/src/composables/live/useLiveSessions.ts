@@ -12,6 +12,7 @@ import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { liveSessionsApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
 import { formatTimeHM } from '@/utils/format';
 import type { LiveSessionItem } from '@/types';
 
@@ -103,7 +104,7 @@ export function useLiveSessions() {
       await liveSessionsApi.open({ title });
       ElMessage.success('场次已开启');
     } catch (error) {
-      ElMessage.error(error instanceof Error ? `开启场次失败：${error.message}` : '开启场次失败');
+      ElMessage.error(getApiErrorMessage(error, '开启场次失败'));
       return;
     }
     backToLive(); // 开了新场次即回到实时视图，避免停留在旧场次的回看里
@@ -116,7 +117,7 @@ export function useLiveSessions() {
       await liveSessionsApi.close(activeSessionId.value);
       ElMessage.success('场次已结束');
     } catch (error) {
-      ElMessage.error(error instanceof Error ? error.message : '结束场次失败');
+      ElMessage.error(getApiErrorMessage(error, '结束场次失败'));
     }
     await loadSessions();
   }
@@ -126,7 +127,7 @@ export function useLiveSessions() {
       await liveSessionsApi.remove(item.live_session_id);
       ElMessage.success('场次已删除');
     } catch (error) {
-      ElMessage.error(error instanceof Error ? error.message : '删除失败');
+      ElMessage.error(getApiErrorMessage(error, '删除失败'));
     }
     if (selectedSession.value?.live_session_id === item.live_session_id) backToLive();
     await loadSessions();

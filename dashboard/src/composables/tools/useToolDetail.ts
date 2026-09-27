@@ -8,6 +8,7 @@
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { toolsApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
 import { useWebSocketStore } from '@/stores/websocket';
 import type { ToolEntry, ToolInvokeResult, WebSocketMessage } from '@/types';
 
@@ -123,12 +124,6 @@ export function useToolDetail() {
     }
   }
 
-  function extractInvokeDetail(err: unknown): string {
-    // axios 错误：后端 400/404 返回 {detail: "..."}，穿透 axios 默认 message
-    const ax = err as { response?: { data?: { detail?: string } } };
-    return ax?.response?.data?.detail ?? (err instanceof Error ? err.message : '调用失败');
-  }
-
   async function onInvoke() {
     const tool = activeTool.value;
     if (!tool || invoking.value) return;
@@ -168,7 +163,7 @@ export function useToolDetail() {
         asyncEventName.value = tool.result_event ?? `tool.result.${tool.full_name}`;
       }
     } catch (e) {
-      ElMessage.error(extractInvokeDetail(e));
+      ElMessage.error(getApiErrorMessage(e, '调用失败'));
     } finally {
       invoking.value = false;
     }

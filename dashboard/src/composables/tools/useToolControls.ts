@@ -6,6 +6,7 @@
 import { computed, reactive, ref, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { toolsApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
 import type { ToolCategoryView, ToolEntry, ToolProviderUnit } from '@/types';
 
 export interface UseToolControlsOptions {
@@ -32,8 +33,7 @@ export function useToolControls(options: UseToolControlsOptions) {
       unit.enabled = next;
       ElMessage.success(response.data.message ?? '已写回配置，重启后生效');
     } catch (e) {
-      const detail = e instanceof Error ? e.message : `开关写回失败（${unit.key}）`;
-      ElMessage.error(detail);
+      ElMessage.error(getApiErrorMessage(e, `开关写回失败（${unit.key}）`));
     } finally {
       toggling.delete(unit.key);
     }
@@ -90,8 +90,7 @@ export function useToolControls(options: UseToolControlsOptions) {
       row.disabled = !next;
       ElMessage.success(response.data.message ?? '已写回配置，重启后生效');
     } catch (e) {
-      const detail = e instanceof Error ? e.message : `开关写回失败（${row.name}）`;
-      ElMessage.error(detail);
+      ElMessage.error(getApiErrorMessage(e, `开关写回失败（${row.name}）`));
     } finally {
       toolToggling.delete(row.name);
     }
@@ -102,12 +101,6 @@ export function useToolControls(options: UseToolControlsOptions) {
   // 按 provider 维度防重：同一 Provider 下多行触发同一调用，按行名防重会出现
   // loading 不同步；用 provider_id 做 Set 键，保证任意一行触发都共享 loading。
   const reconnecting = reactive(new Set<string>());
-
-  function extractReconnectDetail(err: unknown): string {
-    // axios 错误：后端 404/409 返回 {detail: "..."}，需要穿透 axios 默认 message
-    const ax = err as { response?: { data?: { detail?: string } } };
-    return ax?.response?.data?.detail ?? (err instanceof Error ? err.message : '重连失败');
-  }
 
   async function onReconnect(providerId: string) {
     if (!providerId || reconnecting.has(providerId)) return;
@@ -130,7 +123,7 @@ export function useToolControls(options: UseToolControlsOptions) {
       }
       await refreshAll();
     } catch (e) {
-      ElMessage.error(extractReconnectDetail(e));
+      ElMessage.error(getApiErrorMessage(e, '重连失败'));
     } finally {
       reconnecting.delete(providerId);
     }

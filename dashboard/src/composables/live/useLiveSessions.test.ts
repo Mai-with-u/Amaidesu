@@ -162,7 +162,8 @@ describe('useLiveSessions', () => {
     openMock.mockRejectedValue(new Error('boom'));
     await composable.openSession();
     expect(openMock).toHaveBeenCalledWith({ title: undefined });
-    expect(ElMessage.error).toHaveBeenCalledWith('开启场次失败：boom');
+    // 措辞统一：直接展示可读错误消息，不再拼前缀
+    expect(ElMessage.error).toHaveBeenCalledWith('boom');
     expect(composable.activeExplicitSession.value).toBe(false);
   });
 
