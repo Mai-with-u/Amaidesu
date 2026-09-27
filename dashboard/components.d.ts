@@ -16,6 +16,7 @@ declare module 'vue' {
     ChangelogDialog: typeof import('./src/components/layout/ChangelogDialog.vue')['default']
     ComponentCard: typeof import('./src/components/settings/ComponentCard.vue')['default']
     ComponentCardList: typeof import('./src/components/settings/ComponentCardList.vue')['default']
+    DecisionRoundCard: typeof import('./src/components/agents/DecisionRoundCard.vue')['default']
     DictEditor: typeof import('./src/components/settings/DictEditor.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']
