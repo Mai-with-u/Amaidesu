@@ -252,790 +252,91 @@
  *   （kind="stream"，仅视图层合成思考行、按时间归并进时间线，不入 store 不回看）
  * - 回看：GET /live-sessions/{id}/timeline（明细行 + 事件历史按时间合并；无思考数据）
  * 渲染字段一律取自后端真实 Payload（src/modules/events/payloads/），不臆造字段。
+ *
+ * 页面私有逻辑按块拆在 composables/live/：场次侧边栏（useLiveSessions）、
+ * 思考流（useThinkingStream）、时间线内容合成（useLiveTimeline）、顶栏/环节
+ * 徽章（useLiveStatus）、干预输入条（useInterventionBar）、滚动跟随接线
+ * （useTimelineScroll）。全局共享态（events 流、WS 连接）仍在 Pinia store。
+ * 本组件只做装配与跨块的少量编排（清空时间线联动未读计数）。
  */
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
-import { ElMessage, ElMessageBox } from 'element-plus';
 import { Loading } from '@element-plus/icons-vue';
-import { useEventsStore, useWebSocketStore } from '@/stores';
-import { agentsApi, debugApi, liveSessionsApi, simulatorApi, streamerApi } from '@/api';
+import { useWebSocketStore } from '@/stores';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import { useNowTick } from '@/composables/useNowTick';
-import { useScrollFollow } from '@/composables/useScrollFollow';
-import {
-  STAGE_LABEL,
-  MAX_ENTRIES,
-  agentGroupOf,
-  buildLiveEntries,
-  buildThinkingRow,
-  bool,
-  formatAmount,
-  fromDecision,
-  fromStage,
-  isRecord,
-  makeEntry,
-  mergeEntriesByTime,
-  num,
-  relativeTime,
-  str,
-  toGameEntry,
-  type AgentGroup,
-  type FeedEvent,
-  type ShowEntry,
-  type ThinkingSegmentInput,
-  type ThinkingStep,
-} from '@/utils/liveFeed';
+import { useLiveSessions } from '@/composables/live/useLiveSessions';
+import { useThinkingStream } from '@/composables/live/useThinkingStream';
+import { useLiveTimeline } from '@/composables/live/useLiveTimeline';
+import { useLiveStatus } from '@/composables/live/useLiveStatus';
+import { useInterventionBar } from '@/composables/live/useInterventionBar';
+import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
+import { MAX_ENTRIES, relativeTime } from '@/utils/liveFeed';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
-import type { LiveSessionItem, ThinkingDelta, WebSocketMessage } from '@/types';
 
-// 常量
+// 装配：场次侧边栏 → 思考流 → 时间线内容 → 滚动跟随 → 干预输入条
+// （依赖沿参数单向流动：时间线消费场次模式与思考行，滚动跟随消费展示条目）
 
-/** 距底 ≤ 此距离视为"贴底"，可自动跟随 */
-
-const SOURCE_LABEL: Record<string, string> = {
-  manual: '手动',
-  replay: '回放',
-  legacy: '历史',
-};
-
-// 类型
-
-interface RundownBanner {
-  order: number;
-  label: string;
-  actionLabel: string;
-  note: string;
-  startLabel: string;
-  expectedLabel: string;
-  changedAtMs: number;
-}
-
-// 思考流（WS kind="stream"；ADR-008 best-effort 观测通道）
-//
-// 只在视图层消费：按 (round_id, phase, step) 累积思考段，再合成 kind='thinking'
-// 的时间线行与事件条目按时间归并（不进 events store、不落库、不回看）。
-
-const THINKING_ROUNDS_MAX = 20;
-/** 每决策轮的思考聚合：planner 与 minecraft 共用按步分段（与工具卡时间交织），
- * 段携带自身 phase——两边步骤号各自从头计数，只按步号查找会互相踩段；replyer 独立一段 */
-interface ThinkingStepSeg extends ThinkingStep {
-  /** 段归属：planner（主播 ReAct）/ minecraft（游戏 Agent ReAct） */
-  phase: string;
-}
-interface ThinkingRound {
-  steps: ThinkingStepSeg[];
-  replyerText: string;
-  /** replyer 段首增量到达时刻（Unix 毫秒；0 = 尚未开始） */
-  replyerTsMs: number;
-}
-const thinkingRounds = reactive(new Map<string, ThinkingRound>());
-
-/** 思考行隐藏水位：清空时间线时记下当前思考行最大时刻，此前的思考行一并隐藏
- *  （思考行不进 hiddenIds 体系——它不是事件，没有事件 id） */
-const thinkingHiddenBeforeMs = ref(0);
-
-/** 思考流增量合批：WS 每消息触发一次落状态会带起整条时间线重渲染，复杂任务期间
- * 思考增量高频涌入时把页面拖死——先缓冲，按固定间隔一次性落进 reactive 状态，
- * 渲染频率与消息频率解耦；缓冲条目携带信封时间戳（段首定位用） */
-const THINKING_FLUSH_INTERVAL_MS = 150;
-const pendingDeltas: Array<{ delta: ThinkingDelta; tsMs: number }> = [];
-let thinkingFlushTimer: ReturnType<typeof setTimeout> | null = null;
-
-function handleThinkingMessage(message: WebSocketMessage): void {
-  if (message.kind !== 'stream' || message.type !== 'thinking.delta') return;
-  const deltas = (message.data.deltas ?? []) as ThinkingDelta[];
-  for (const delta of deltas) pendingDeltas.push({ delta, tsMs: message.timestamp_ms });
-  if (thinkingFlushTimer) return;
-  thinkingFlushTimer = setTimeout(() => {
-    thinkingFlushTimer = null;
-    applyThinkingDeltas(pendingDeltas.splice(0, pendingDeltas.length));
-  }, THINKING_FLUSH_INTERVAL_MS);
-}
-
-function applyThinkingDeltas(batch: Array<{ delta: ThinkingDelta; tsMs: number }>): void {
-  for (const { delta, tsMs } of batch) {
-    let round = thinkingRounds.get(delta.round_id);
-    if (!round) {
-      round = reactive({
-        steps: [],
-        replyerText: '',
-        replyerTsMs: 0,
-      });
-      thinkingRounds.set(delta.round_id, round);
-      // 上限保尾：只保留最近 N 轮供时间线回看，更早的文本随轮淘汰
-      while (thinkingRounds.size > THINKING_ROUNDS_MAX) {
-        const oldest = thinkingRounds.keys().next().value;
-        if (oldest === undefined) break;
-        thinkingRounds.delete(oldest);
-      }
-    }
-    if (delta.phase === 'replyer') {
-      if (!round.replyerTsMs) round.replyerTsMs = tsMs;
-      round.replyerText += delta.text_delta;
-    } else {
-      // planner 与 minecraft 各按 (phase, step) 分段累积：步骤号两边独立计数，
-      // 段归属（含时间线分组与行标签）随 phase 一路传递
-      let seg = round.steps.find(s => s.phase === delta.phase && s.step === delta.step);
-      if (!seg) {
-        seg = reactive({ phase: delta.phase, step: delta.step, text: '', tsMs });
-        round.steps.push(seg);
-      }
-      seg.text += delta.text_delta;
-    }
-  }
-}
-
-/** 当前全部思考行（buildThinkingRow 内 id 稳定，流式增量原地刷新；升序交给归并函数）。
- *  仅实时模式使用——思考流不落库，回看场次的 REST 时间线没有思考数据 */
-const liveThinkingRows = computed<ShowEntry[]>(() => {
-  const watermark = thinkingHiddenBeforeMs.value;
-  const segments: ThinkingSegmentInput[] = [];
-  for (const [roundId, round] of thinkingRounds) {
-    for (const step of round.steps) {
-      if (!step.text || step.tsMs <= watermark) continue;
-      segments.push({
-        roundId,
-        phase: step.phase,
-        step: step.step,
-        tsMs: step.tsMs,
-        text: step.text,
-      });
-    }
-    if (round.replyerText && round.replyerTsMs > watermark) {
-      segments.push({
-        roundId,
-        phase: 'replyer',
-        step: 1,
-        tsMs: round.replyerTsMs,
-        text: round.replyerText,
-      });
-    }
-  }
-  return segments.map(buildThinkingRow);
-});
-
-// Store 与全局状态
-
-const eventsStore = useEventsStore();
 const wsStore = useWebSocketStore();
-const { events } = storeToRefs(eventsStore);
 const { isConnected: wsConnected } = storeToRefs(wsStore);
 
-wsStore.subscribe(handleThinkingMessage);
+const {
+  sessions,
+  activeExplicitSession,
+  showTestModeNotice,
+  sessionQuery,
+  sessionSourceFilter,
+  sessionMode,
+  selectedSession,
+  sessionTitle,
+  sourceLabel,
+  sessionTimeLabel,
+  isSelected,
+  loadSessions,
+  openSession,
+  closeSession,
+  removeSession,
+  selectSession,
+  backToLive,
+} = useLiveSessions();
 
-// 通用取值助手（侧栏时钟/时长；事件→条目取值助手见 utils/liveFeed.ts）
+const { liveThinkingRows, thinkingHiddenBeforeMs } = useThinkingStream();
 
-function clockLabel(ms: number): string {
-  return new Date(ms).toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-}
-
-// 事件 → 时间线条目（折叠规则与取值助手统一在 utils/liveFeed.ts；
-// 回看时间线仍按条目类型直接调 makeEntry / fromDecision / fromStage）
-
-// 场次侧边栏：列表 / 生命周期 / 回看
-
-const sessions = ref<LiveSessionItem[]>([]);
-/** 进行中的显式场次主键（来自 API 响应，不受侧边栏筛选影响——筛选只是视图） */
-const activeSessionId = ref<number | null>(null);
-const activeExplicitSession = computed(() => activeSessionId.value !== null);
-/** 测试模式提示：实时模式下无任何进行中的显式场次，消息仅在内存中流转、不落库 */
-const showTestModeNotice = computed(
-  () => sessionMode.value === 'live' && !activeExplicitSession.value,
-);
-/** 场次筛选：标题关键字 + 来源（服务端筛选） */
-const sessionQuery = ref('');
-const sessionSourceFilter = ref('');
-const sessionMode = ref<'live' | 'replay'>('live');
-const selectedSession = ref<LiveSessionItem | null>(null);
-
-function sessionTitle(item: LiveSessionItem | null): string {
-  if (!item) return '';
-  if (item.title) return item.title;
-  return `场次 #${item.live_session_id}`;
-}
-
-function sourceLabel(source: string): string {
-  return SOURCE_LABEL[source] ?? source;
-}
-
-function sessionTimeLabel(item: LiveSessionItem): string {
-  const start = clockLabel(item.started_at_ms);
-  if (item.ended_at_ms == null) return `${start} 起`;
-  return `${start} – ${clockLabel(item.ended_at_ms)}`;
-}
-
-function isSelected(item: LiveSessionItem): boolean {
-  if (sessionMode.value === 'live') {
-    return item.is_active;
-  }
-  return selectedSession.value?.live_session_id === item.live_session_id;
-}
-
-async function loadSessions(): Promise<void> {
-  try {
-    const response = await liveSessionsApi.list({
-      source: sessionSourceFilter.value || undefined,
-      q: sessionQuery.value.trim() || undefined,
-    });
-    sessions.value = response.data.items;
-    activeSessionId.value = response.data.active_session_id;
-  } catch {
-    /* 场次面不可用时侧边栏保持空态，不阻断时间线 */
-  }
-}
-
-let sessionFilterTimer: ReturnType<typeof setTimeout> | null = null;
-watch([sessionQuery, sessionSourceFilter], () => {
-  if (sessionFilterTimer) clearTimeout(sessionFilterTimer);
-  sessionFilterTimer = setTimeout(() => {
-    void loadSessions();
-  }, 250);
+const {
+  paused,
+  displayMode,
+  agentFilter,
+  handleAgentChip,
+  entries,
+  togglePause,
+  clearTimeline: clearTimelineEntries,
+} = useLiveTimeline({
+  liveThinkingRows,
+  thinkingHiddenBeforeMs,
+  sessionMode,
+  selectedSession,
 });
 
-async function openSession(): Promise<void> {
-  let title: string | undefined;
-  try {
-    const { value } = await ElMessageBox.prompt('为新的直播场次起个标题（可留空）', '开启场次', {
-      confirmButtonText: '开启',
-      cancelButtonText: '取消',
-      inputPlaceholder: '例如：周五晚间场',
-    });
-    title = value?.trim() || undefined;
-  } catch {
-    return; // 取消输入
-  }
-  try {
-    await liveSessionsApi.open({ title });
-    ElMessage.success('场次已开启');
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? `开启场次失败：${error.message}` : '开启场次失败');
-    return;
-  }
-  backToLive(); // 开了新场次即回到实时视图，避免停留在旧场次的回看里
-  await loadSessions();
-}
+const { rundownBanner, stageChip, simulatorChip, loadSimulatorStatus } = useLiveStatus();
 
-async function closeSession(): Promise<void> {
-  if (activeSessionId.value == null) return;
-  try {
-    await liveSessionsApi.close(activeSessionId.value);
-    ElMessage.success('场次已结束');
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '结束场次失败');
-  }
-  await loadSessions();
-}
-
-async function removeSession(item: LiveSessionItem): Promise<void> {
-  try {
-    await liveSessionsApi.remove(item.live_session_id);
-    ElMessage.success('场次已删除');
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '删除失败');
-  }
-  if (selectedSession.value?.live_session_id === item.live_session_id) backToLive();
-  await loadSessions();
-}
-
-/** 历史场次 → 回看模式；进行中场次 → 实时模式 */
-function selectSession(item: LiveSessionItem): void {
-  if (item.is_active) {
-    backToLive();
-    return;
-  }
-  sessionMode.value = 'replay';
-  selectedSession.value = item;
-}
-
-function backToLive(): void {
-  sessionMode.value = 'live';
-  selectedSession.value = null;
-}
-
-// 回看时间线：REST 明细 + 事件历史 → ShowEntry
-
-const replayEntries = ref<ShowEntry[]>([]);
-const replayLoading = ref(false);
-
-function decisionEntryFromData(id: string, tsMs: number, data: Record<string, unknown>): ShowEntry {
-  return fromDecision(id, tsMs, data);
-}
-
-async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
-  replayLoading.value = true;
-  try {
-    const response = await liveSessionsApi.timeline(item.live_session_id);
-    const next: ShowEntry[] = [];
-    response.data.items.forEach((entry, index) => {
-      const id = `rp-${entry.ts_ms}-${index}`;
-      if (entry.kind === 'event') {
-        const data = isRecord(entry.data) ? entry.data : {};
-        const type = str(entry.event_type);
-        if (type === 'planner.decision') {
-          next.push(decisionEntryFromData(id, entry.ts_ms, data));
-        } else if (type === 'streamer.stage') {
-          next.push(fromStage(id, entry.ts_ms, data));
-        } else if (type === 'live.started' || type === 'live.ended') {
-          next.push(
-            makeEntry({
-              id,
-              kind: 'boundary',
-              tsMs: entry.ts_ms,
-              text: type === 'live.started' ? '场次开启' : '场次结束',
-              note: str(data.title) || str(data.reason),
-            }),
-          );
-        } else if (type === 'rundown.changed') {
-          const index = typeof data.index === 'number' ? data.index : 0;
-          const total = typeof data.total === 'number' ? data.total : 0;
-          const finished = total > 0 && index >= total;
-          next.push(
-            makeEntry({
-              id,
-              kind: 'rundown',
-              tsMs: entry.ts_ms,
-              text: str(data.segment_title) || (finished ? '流程单完成' : '环节切换'),
-              note: finished ? '流程单已全部完成' : `环节 ${index}/${total}`,
-              badge:
-                str(data.by) === 'human' ? '手动' : str(data.by) === 'system' ? '系统' : 'Agent',
-            }),
-          );
-        } else if (type === 'game.milestone') {
-          next.push(
-            makeEntry({
-              id,
-              kind: 'milestone',
-              tsMs: entry.ts_ms,
-              text: str(data.message),
-              note: [str(data.game), str(data.scene)].filter(Boolean).join(' · '),
-            }),
-          );
-        } else if (
-          type === 'game.report' ||
-          type === 'game.attention_required' ||
-          type === 'game.error'
-        ) {
-          // 实时路径已由共享层 toEntry→toGameEntry 自动入列；
-          // 回看路径手工拼出 FeedEvent 调用同一函数，保持条目构造逻辑单点维护
-          const gameEntry = toGameEntry({
-            id,
-            type,
-            timestamp_ms: entry.ts_ms,
-            data,
-          } as FeedEvent);
-          if (gameEntry) next.push(gameEntry);
-        }
-        return;
-      }
-      if (entry.kind === 'speech') {
-        next.push(
-          makeEntry({
-            id,
-            kind: 'speech',
-            tsMs: entry.ts_ms,
-            actor: '主播',
-            text: str(entry.text),
-            speak: true,
-            replyTo: str(entry.reply_to_message_id),
-          }),
-        );
-        return;
-      }
-      if (entry.kind === 'gift') {
-        next.push(
-          makeEntry({
-            id,
-            kind: 'gift',
-            tsMs: entry.ts_ms,
-            actor: str(entry.user_name) || '匿名观众',
-            text: `送出 ${str(entry.gift_name)} ×${num(entry.gift_count) ?? 1}`,
-            badge: '礼物',
-            messageId: str(entry.message_id),
-            simulated: entry.simulated === true,
-          }),
-        );
-        return;
-      }
-      if (entry.kind === 'super_chat') {
-        const amount = num(entry.amount);
-        next.push(
-          makeEntry({
-            id,
-            kind: 'super_chat',
-            tsMs: entry.ts_ms,
-            actor: str(entry.user_name) || '匿名观众',
-            text: str(entry.content),
-            badge: 'SC',
-            money: amount != null ? `¥${formatAmount(amount)}` : '',
-            messageId: str(entry.message_id),
-            simulated: entry.simulated === true,
-          }),
-        );
-        return;
-      }
-      // danmaku / enter
-      next.push(
-        makeEntry({
-          id,
-          kind: entry.kind === 'enter' ? 'enter' : 'danmaku',
-          tsMs: entry.ts_ms,
-          actor: str(entry.user_name) || '匿名观众',
-          text:
-            entry.kind === 'enter'
-              ? `${str(entry.user_name) || '观众'} 进入直播间`
-              : str(entry.content),
-          messageId: str(entry.message_id),
-          simulated: entry.simulated === true,
-        }),
-      );
-    });
-    replayEntries.value = next;
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '回看加载失败');
-    replayEntries.value = [];
-  } finally {
-    replayLoading.value = false;
-  }
-}
-
-watch(
-  [sessionMode, selectedSession],
-  ([mode, selected]) => {
-    if (mode === 'replay' && selected) {
-      void loadReplayTimeline(selected);
-    }
-  },
-  { immediate: true },
-);
-
-// 实时时间线：暂停 / 清空水位 / 条目缓冲
-
-const paused = ref(false);
-/** 清空水位：记下当时缓冲区里的事件 id，之后重建时永久跳过（store 仍不丢数据） */
-const hiddenIds = ref<Set<string>>(new Set());
-const liveEntries = ref<ShowEntry[]>([]);
-
-/** 暂停期思考行快照：暂停时锁存当前思考行，恢复后回到实时
- *  （事件流靠 watch 跳过重建实现冻结，思考行是 computed、需单独锁存） */
-const frozenThinkingRows = ref<ShowEntry[] | null>(null);
-
-/** 时间线显示模式：timeline=单列沿脊线；chat=会话模式（观众左/主播右气泡对齐，
- * 原独立会话调试页的显示形态） */
-const displayMode = ref<'timeline' | 'chat'>('timeline');
-
-/** 来源过滤：实时模式下按 Agent 组别过滤展示条目（观众消息与场次边界不过滤——观众始终可见）；
- *  回看模式不生效（场次条目全量呈现） */
-const agentFilter = ref<'all' | AgentGroup>('all');
-
-/** chips 点击处理：el-check-tag 在「勾选→取消勾选」时都会触发 change；
- *  排他语义下只接受「点亮」动作，避免误触把已选中态切走 */
-function handleAgentChip(value: 'all' | AgentGroup, checked: boolean): void {
-  if (checked) agentFilter.value = value;
-}
-
-/** 条目重建节流：每条事件到达都会触发 buildLiveEntries 全量折叠，复杂任务期间
- * 工具结果高频涌入时按固定间隔合并重建（尾沿触发，静默后最终态仍会落地） */
-const REBUILD_INTERVAL_MS = 250;
-let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
-let lastRebuildMs = 0;
-let pendingRebuild: Array<FeedEvent[]> | null = null;
-let pendingHidden: Set<string> | null = null;
-
-watch(
-  [events, paused, hiddenIds],
-  ([list, isPaused, hidden]) => {
-    if (isPaused) return;
-    pendingRebuild = [list as FeedEvent[]];
-    pendingHidden = hidden;
-    if (rebuildTimer) return;
-    const wait = Math.max(0, REBUILD_INTERVAL_MS - (Date.now() - lastRebuildMs));
-    rebuildTimer = setTimeout(() => {
-      rebuildTimer = null;
-      lastRebuildMs = Date.now();
-      // 暂停期不重建（与原 watch 跳过重建的冻结语义一致）；恢复时 watch 会再排程
-      if (paused.value || !pendingRebuild || pendingHidden === null) return;
-      liveEntries.value = buildLiveEntries(pendingRebuild[0], pendingHidden);
-    }, wait);
-  },
-  { immediate: true },
-);
-
-/** 展示条目：实时模式把思考行与事件条目按时间归并后过 agentFilter；
- *  回看模式取 REST 时间线全量（思考流不落库，回看没有思考行）。
- *  过滤只针对 Agent 产生的卡，观众消息与场次边界（room 组）始终可见 */
-const entries = computed<ShowEntry[]>(() => {
-  if (sessionMode.value === 'replay') return replayEntries.value;
-  const thinkingRows = paused.value ? (frozenThinkingRows.value ?? []) : liveThinkingRows.value;
-  const list = mergeEntriesByTime(liveEntries.value, thinkingRows);
-  if (agentFilter.value === 'all') return list;
-  return list.filter(
-    entry => agentGroupOf(entry) === 'room' || agentGroupOf(entry) === agentFilter.value,
-  );
-});
-
-function togglePause(): void {
-  const next = !paused.value;
-  // 暂停沿锁存当前思考行，恢复沿放回实时流（事件条目的冻结由 watch 跳过重建实现）
-  frozenThinkingRows.value = next ? liveThinkingRows.value : null;
-  paused.value = next;
-}
-
-function clearTimeline(): void {
-  hiddenIds.value = new Set(events.value.map(event => event.id));
-  liveEntries.value = [];
-  // 思考行按时间水位隐藏（与 hiddenIds 同语义：只藏不删）
-  const rows = paused.value ? (frozenThinkingRows.value ?? []) : liveThinkingRows.value;
-  thinkingHiddenBeforeMs.value = rows.reduce(
-    (max, row) => Math.max(max, row.tsMs),
-    thinkingHiddenBeforeMs.value,
-  );
-  unseen.value = 0;
-}
-
-// 场次生命周期事件 → 侧边栏刷新
-
-watch(events, list => {
-  for (let i = list.length - 1; i >= Math.max(0, list.length - 5); i -= 1) {
-    const type = list[i].type;
-    if (type === 'live.started' || type === 'live.ended') {
-      void loadSessions();
-      break;
-    }
-  }
-});
-
-// 当前环节横幅：取最近一条 rundownBanner.update
-
-const rundownBanner = computed<RundownBanner | null>(() => {
-  const list = events.value;
-  for (let i = list.length - 1; i >= 0; i -= 1) {
-    const event = list[i];
-    if (event.type !== 'rundown.changed') continue;
-    const data = isRecord(event.data) ? event.data : {};
-    const by = typeof data.by === 'string' ? data.by : 'agent';
-    const changedAtMs = typeof data.at_ms === 'number' ? data.at_ms : null;
-    const index = typeof data.index === 'number' ? data.index : 0;
-    return {
-      order: index + 1,
-      label: str(data.segment_title) || '未命名环节',
-      actionLabel: by === 'human' ? '手动切换' : by === 'system' ? '系统切换' : 'Agent 切换',
-      note: '',
-      startLabel: '',
-      expectedLabel: '',
-      changedAtMs: changedAtMs ?? event.timestamp_ms,
-    };
-  }
-  return null;
-});
-
-// 顶栏徽章：决策管线阶段 + 模拟器模式
-
-const stageChip = computed<{ label: string; running: boolean; detail: string } | null>(() => {
-  const list = events.value;
-  for (let i = list.length - 1; i >= 0; i -= 1) {
-    const event = list[i];
-    if (event.type !== 'streamer.stage') continue;
-    const data = isRecord(event.data) ? event.data : {};
-    const stage = str(data.stage);
-    const running = str(data.agent_state) === 'running';
-    return {
-      label: STAGE_LABEL[stage] ?? stage,
-      running,
-      detail: str(data.detail),
-    };
-  }
-  return null;
-});
-
-const simulatorChip = ref<{ label: string; on: boolean } | null>(null);
-
-async function loadSimulatorStatus(): Promise<void> {
-  try {
-    const response = await simulatorApi.getStatus();
-    const mode = str(response.data.mode) || 'off';
-    const running = bool(response.data.is_running);
-    const label =
-      mode === 'generate'
-        ? running
-          ? '模拟器 · 生成中'
-          : '模拟器 · 生成待启'
-        : mode === 'replay'
-          ? running
-            ? '模拟器 · 回放中'
-            : '模拟器 · 回放待启'
-          : '模拟器未启用';
-    simulatorChip.value = { label, on: mode !== 'off' && running };
-  } catch {
-    simulatorChip.value = null;
-  }
-}
-
-// 干预输入条：三个发送模式 = 你以"幕后场控"身份对直播间的三种操作。
-// 传输归本页（输入交互在共享组件 InterventionInput）。
-
-/** 主播 Agent 注册名：干预输入条面向的就是她（递话通道按名寻址） */
-const STREAMER_AGENT_NAME = 'streamer';
-
-interface SendMode {
-  key: 'danmaku' | 'force' | 'nudge';
-  label: string;
-  /** 模式说明：下拉选项与输入条下方提示共用 */
-  desc: string;
-  placeholder: string;
-}
-
-const SEND_MODES: SendMode[] = [
-  {
-    key: 'danmaku',
-    label: '注入弹幕',
-    desc: '假装一名观众发弹幕，走与真实弹幕完全相同的链路——主播自然反应，可能要等几秒、也可能不理你',
-    placeholder: '弹幕内容（观众昵称在下方填写，可选）',
-  },
-  {
-    key: 'force',
-    label: '强制回应',
-    desc: '不排队不限流：把文字直接交给主播立即开跑，结果落时间线决策卡；留空则主播自由发挥',
-    placeholder: '给主播的文字（立即开跑；留空 = 主播自由发挥）',
-  },
-  {
-    key: 'nudge',
-    label: '幕后提醒',
-    desc: '把话直接递给主播：文字必达（进她下个决策的参考材料），她会被提前唤醒来看——说不说、怎么说由她自己定',
-    placeholder: '给主播的提醒（必达送达）',
-  },
-];
+const { scrollRef, unseen, onScroll, jumpToLatest, resetUnseen } = useTimelineScroll(entries);
 
 const sendBarRef = ref<InstanceType<typeof InterventionInput> | null>(null);
-const activeMode = ref<SendMode['key']>('danmaku');
+const {
+  SEND_MODES,
+  activeMode,
+  sending,
+  injectNickname,
+  forcePending,
+  onModeChange,
+  onInterventionSend,
+} = useInterventionBar({ settle: async () => sendBarRef.value?.settle() });
 
-function onModeChange(modeKey: string): void {
-  if (modeKey === 'danmaku' || modeKey === 'force' || modeKey === 'nudge') {
-    activeMode.value = modeKey;
-  }
+/** 清空时间线：条目与思考行水位归时间线块，未读计数归滚动块 */
+function clearTimeline(): void {
+  clearTimelineEntries();
+  resetUnseen();
 }
-const sending = ref(false);
-/** 注入弹幕模式的观众昵称（可选，跨发送保留——方便扮演同一位观众连发） */
-const injectNickname = ref('');
-/** 在途的强制回应决策轮数：后台执行期间在状态 chip 上显示"主播正在想…" */
-const forcePending = ref(0);
-
-async function onInterventionSend(modeKey: string, text: string): Promise<void> {
-  if (sending.value) return;
-  if (modeKey === 'danmaku' && !text) {
-    ElMessage.warning('请填写弹幕内容');
-    return;
-  }
-  if (modeKey === 'nudge' && !text) {
-    ElMessage.warning('请填写提醒内容（必达递话需要说明提醒什么）');
-    return;
-  }
-  sending.value = true;
-  try {
-    if (modeKey === 'danmaku') {
-      const response = await debugApi.injectMessage({
-        source: injectNickname.value.trim() || '测试观众',
-        text,
-      });
-      if (response.data.success) {
-        ElMessage.success('已注入——主播自然反应中，可能要等、也可能不理');
-      } else {
-        ElMessage.error(response.data.error || '注入失败');
-        return;
-      }
-    } else if (modeKey === 'force') {
-      // 后台执行：决策可能耗时数十秒，不等返回——输入框立即可继续用，
-      // 在途状态由 forcePending chip 承载，结果落时间线决策卡
-      const payload = {
-        batch: text ? [{ nickname: '调试观众', text }] : undefined,
-        forced: true,
-        proactive: text ? undefined : true,
-      };
-      forcePending.value += 1;
-      void streamerApi
-        .testDecision(payload)
-        .then(response => {
-          if (response.data.success) {
-            const error = response.data.error ?? null;
-            if (error) {
-              ElMessage.warning(`决策轮已结束：${error}（详见时间线决策卡）`);
-            } else if (response.data.plan?.should_reply) {
-              ElMessage.success('已回应（详见时间线决策卡）');
-            } else {
-              ElMessage.info('本轮未回应（详见时间线决策卡）');
-            }
-          } else {
-            ElMessage.error(response.data.message || '测试执行失败');
-          }
-        })
-        .catch((error: unknown) => {
-          ElMessage.error(error instanceof Error ? error.message : '测试执行失败');
-        })
-        .finally(() => {
-          forcePending.value = Math.max(0, forcePending.value - 1);
-        });
-    } else {
-      // 幕后提醒 → 运营递话通道：必达（进下个决策参考块 + 顺带敲门催醒）；
-      // 纯催话/限流测试走 API（trigger-proactive），界面不再默认暴露
-      await agentsApi.promptAgent(STREAMER_AGENT_NAME, text);
-      ElMessage.success('已递到主播手里——下个决策窗她一定看到，并已顺带敲了敲门');
-    }
-    await sendBarRef.value?.settle();
-  } catch (error) {
-    ElMessage.error(extractHttpError(error, `${modeKey === 'nudge' ? '递话' : '发送'}失败`));
-  } finally {
-    sending.value = false;
-  }
-}
-
-/** 从 axios 错误中提取后端中文 detail（409 拒收 / 404 / 422 均为中文） */
-function extractHttpError(error: unknown, fallback: string): string {
-  if (error && typeof error === 'object' && 'response' in error) {
-    const data = (error as { response?: { data?: { detail?: unknown } } }).response?.data;
-    if (data && typeof data.detail === 'string') return data.detail;
-  }
-  return error instanceof Error && error.message ? error.message : fallback;
-}
-
-// 滚动跟随：贴底自动跟随；上滚时冒出"回到最新"
-
-const unseen = ref(0);
-let resizeObserver: ResizeObserver | null = null;
-
-const { scrollRef, atBottom, onScroll: followOnScroll, scrollToBottom } = useScrollFollow();
-
-function onScroll(): void {
-  followOnScroll();
-  if (atBottom.value) unseen.value = 0;
-}
-
-function jumpToLatest(): void {
-  atBottom.value = true;
-  unseen.value = 0;
-  scrollToBottom();
-}
-
-/** 新增条目数：以上一帧末条 id 为锚，找不到锚点则视为全新 */
-function countAdded(next: ShowEntry[], prev: ShowEntry[]): number {
-  const anchor = prev.length > 0 ? prev[prev.length - 1].id : null;
-  if (!anchor) return next.length;
-  const index = next.findIndex(entry => entry.id === anchor);
-  return index === -1 ? next.length : next.length - 1 - index;
-}
-
-watch(entries, async (next, prev) => {
-  const added = countAdded(next, prev ?? []);
-  await nextTick();
-  if (atBottom.value) {
-    scrollToBottom();
-    unseen.value = 0;
-    return;
-  }
-  if (added > 0) unseen.value += added;
-});
 
 // 秒级时钟：驱动相对时间与台上时钟刷新
 
@@ -1054,27 +355,9 @@ const wallClock = computed(() =>
 
 // 生命周期
 
-onMounted(async () => {
+onMounted(() => {
   void loadSessions();
   void loadSimulatorStatus();
-  await nextTick();
-  scrollToBottom();
-  // 容器尺寸变化（窗口缩放、注入面板开合）时维持贴底跟随。仅靠 entries
-  // 变化触发不够——布局一变，最新条目就会滑出可视区且不再自动回位
-  if (scrollRef.value) {
-    resizeObserver = new ResizeObserver(() => {
-      if (atBottom.value) scrollToBottom();
-    });
-    resizeObserver.observe(scrollRef.value);
-  }
-});
-
-onUnmounted(() => {
-  wsStore.unsubscribe(handleThinkingMessage);
-  if (thinkingFlushTimer) clearTimeout(thinkingFlushTimer);
-  if (rebuildTimer) clearTimeout(rebuildTimer);
-  resizeObserver?.disconnect();
-  resizeObserver = null;
 });
 </script>
 
