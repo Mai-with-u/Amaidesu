@@ -76,7 +76,7 @@
         </ul>
       </aside>
 
-      <!-- RIGHT：详情 + 运行轨迹（flex-1, the star） -->
+      <!-- RIGHT：详情（按 Agent 类型分视图） -->
       <main class="md-detail-panel" aria-label="Agent 详情">
         <template v-if="selected">
           <!-- 详情头：名称 + 状态 + 操作。档案页以查看为主：状态标签是头部
@@ -193,89 +193,38 @@
             </el-button>
           </div>
 
-          <!-- 运行轨迹 -->
-          <section class="md-stream-panel" aria-label="运行轨迹">
-            <header class="stream-header">
-              <div class="stream-header-row stream-header-row--main">
-                <div class="md-stream-title-block">
-                  <span class="md-stream-pulse" aria-hidden="true" />
-                  <h3 class="md-stream-title">运行轨迹</h3>
-                  <el-tooltip
-                    content="轨迹由三族事件构成：决策（planner.*）/ 流程（rundown.changed）/ 工具（tool.result.*）；单 Agent 归因精确，多 Agent 并行时按时间近似"
-                    placement="top"
-                  >
-                    <el-tag size="small" type="info" effect="plain" class="md-stream-count">
-                      {{ displayedEntries.length }} / {{ STREAM_CAP }}
-                    </el-tag>
-                  </el-tooltip>
-                </div>
-                <div class="md-stream-controls">
-                  <el-button
-                    size="small"
-                    :type="paused ? 'primary' : 'default'"
-                    @click="togglePause"
-                  >
-                    {{ paused ? '继续' : '暂停' }}
-                  </el-button>
-                  <el-button size="small" :disabled="streamItems.length === 0" @click="clearStream">
-                    清空
-                  </el-button>
-                </div>
-              </div>
-              <div class="stream-header-row stream-header-row--filter">
-                <span class="filter-label">阶段：</span>
-                <el-check-tag
-                  v-for="f in filterOptions"
-                  :key="f.value"
-                  :checked="activeFilter === f.value"
-                  class="filter-chip"
-                  @change="activeFilter = f.value"
-                >
-                  {{ f.label }}
-                </el-check-tag>
+          <!-- 详情主体按 Agent 类型分视图：主播 = 决策轮决定卡；
+               minecraft = 活任务板（进行中可取消 + 已完结折叠）；其他 = 占位 -->
+          <section v-if="selectedView === 'streamer'" class="md-rounds-panel" aria-label="决定记录">
+            <header class="md-tasks-header">
+              <div class="md-stream-title-block">
+                <span class="md-stream-pulse" aria-hidden="true" />
+                <h3 class="md-stream-title">决定记录</h3>
+                <el-tag size="small" type="info" effect="plain" class="md-stream-count">
+                  {{ decisionCards.length }} 轮
+                </el-tag>
               </div>
             </header>
-
-            <div ref="streamScrollRef" class="md-stream-scroll">
-              <div v-if="displayedEntries.length === 0" class="md-stream-empty">
-                <span class="md-stream-empty-icon" aria-hidden="true">∅</span>
-                <p>
-                  {{
-                    streamItems.length === 0
-                      ? '暂无轨迹——等待 Agent 活动（planner/rundown/tool.result）'
-                      : '当前过滤下无匹配条目'
-                  }}
-                </p>
+            <div class="md-rounds-scroll">
+              <div v-if="decisionCards.length === 0" class="md-tasks-empty">
+                <p>暂无决定——等主播活动（planner.decision）</p>
               </div>
-              <ul v-else class="md-stream-list">
-                <li
-                  v-for="item in displayedEntries"
-                  :key="item.id"
-                  class="md-stream-item"
-                  :class="{ 'is-failed': item.failed }"
-                >
-                  <span
-                    class="stage-badge"
-                    :class="[`stage-badge--${item.stage}`, { 'is-failed': item.failed }]"
-                    aria-hidden="true"
-                  >
-                    {{ stageLabel(item.stage) }}
-                  </span>
-                  <span class="md-stream-item-type mono">{{ item.eventType }}</span>
-                  <span class="md-stream-item-content" :class="{ 'is-failed': item.failed }">
-                    {{ item.summary }}
-                  </span>
-                  <span class="md-stream-item-time mono">
-                    {{ relativeTime(item.timestampMs) }}
-                  </span>
-                </li>
-              </ul>
+              <template v-else>
+                <DecisionRoundCard
+                  v-for="card in decisionCards"
+                  :key="card.roundId || card.timestampMs"
+                  :card="card"
+                  :highlighted="card.roundId === highlightedRoundId"
+                />
+              </template>
             </div>
           </section>
 
-          <!-- 任务区：委派任务卡（进行中在上，已完结折叠可查，仅本次运行内）+
-               干预输入条（递话默认 / 委派派活；Tab 切模式、Enter 发送） -->
-          <section class="md-tasks-panel" aria-label="任务区">
+          <section
+            v-else-if="selectedView === 'minecraft'"
+            class="md-tasks-panel"
+            aria-label="任务区"
+          >
             <header class="md-tasks-header">
               <div class="md-stream-title-block">
                 <span class="md-stream-pulse" aria-hidden="true" />
@@ -370,10 +319,15 @@
               />
             </div>
           </section>
+
+          <!-- 其他 Agent（adv 等）：暂不支持干预与详细查看 -->
+          <div v-else class="md-detail-placeholder">
+            <el-empty :image-size="80" description="该 Agent 暂不支持干预与详细查看" />
+          </div>
         </template>
 
         <div v-else class="md-detail-empty">
-          <el-empty description="从左侧选择一个 Agent 查看详情与运行轨迹" />
+          <el-empty description="从左侧选择一个 Agent 查看详情" />
         </div>
       </main>
     </div>
@@ -382,15 +336,16 @@
 
 <script setup lang="ts">
 /**
- * Agents 页面 —— Master-Detail 布局：左 240px Agent 列表 + 右详情三段
- * （详情头 / 状态摘要条 / 运行轨迹）。
+ * Agents 页面 —— 单 Agent 检视/管理页：左 240px Agent 列表 + 右详情。
+ * 详情主体按 Agent 注册名分视图：
+ * - 主播（streamer）：决策轮决定卡——每轮 planner.decision 一张卡，回答
+ *   "她为什么这么做"（触发原因/批消息/说或不说/工具/发言/耗时/LLM 原文入口），
+ *   由事件缓冲实时归组，新轮自动出现在顶部
+ * - minecraft：活任务板——进行中可取消、已完结折叠，task.changed 实时刷新
+ * - 其他（adv 等）：占位提示，该 Agent 暂不支持干预与详细查看
  *
- * 运行轨迹按三事件族合并（planner.* / rundown.changed / tool.result.*），
- * 每条带阶段 badge（决策/流程/工具）与失败标记（tool.result 失败标红）。
- * 事件负载暂无 agent 身份字段：单 Agent 场景归因精确，多 Agent 并行时
- * 按时间近似；消除近似需后端在事件负载中增加 agent-identity 字段。
- *
- * 主从通用逻辑（选中保持 / 控制 / 批量 / 事件流缓冲）见 useComponentMasterDetail。
+ * 主从通用逻辑（选中保持 / 控制 / 批量 / 状态文案）见 useComponentMasterDetail；
+ * 本页事件流缓冲仅作深链与最近决策指标的数据源，不再渲染流水面板。
  */
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -401,22 +356,15 @@ import { useComponentsStore, useEventsStore } from '@/stores';
 import { agentsApi, tasksApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
+import DecisionRoundCard from '@/components/agents/DecisionRoundCard.vue';
+import { MINECRAFT_AGENT_NAME, STREAMER_AGENT_NAME } from '@/composables/useAgentIntervention';
 import { useNowTick } from '@/composables/useNowTick';
-import { useScrollFollow } from '@/composables/useScrollFollow';
 import {
-  STREAM_CAP,
   useComponentMasterDetail,
-  type ComponentEvent,
   type ComponentStreamItem,
 } from '@/composables/useComponentMasterDetail';
-import type {
-  AgentControlActionType,
-  AgentInfo,
-  TaskCard,
-  TaskSnapshotResponse,
-  WebSocketMessage,
-} from '@/types';
-import { summarizeEvent } from '@/utils/eventSummary';
+import { groupDecisionRounds } from '@/utils/decisionRounds';
+import type { AgentControlActionType, AgentInfo, TaskCard, TaskSnapshotResponse } from '@/types';
 import { relativeTime as relativeTimeLabel } from '@/utils/liveFeed';
 import { formatDurationShort } from '@/utils/format';
 import '@/styles/component-master-detail.css';
@@ -431,7 +379,8 @@ const { events } = storeToRefs(eventsStore);
 const totalCount = computed(() => agentsList.value.length);
 const startedCount = computed(() => agentsList.value.filter(a => a.is_started).length);
 
-// 主从通用逻辑：选中保持 / 启停控制 / 批量 / 状态文案 / 事件流缓冲
+// 主从通用逻辑：选中保持 / 启停控制 / 批量 / 状态文案。
+// 本页不渲染事件流水，mapEvent 置空（共享逻辑保留，Collectors 页还在用）
 const {
   selectedName,
   selected,
@@ -441,18 +390,30 @@ const {
   handleControl,
   runBatch,
   statusLabel,
-  paused,
-  streamItems,
-  togglePause,
-  clearStream,
-} = useComponentMasterDetail({
+} = useComponentMasterDetail<ComponentStreamItem>({
   list: agentsList,
   domain: 'agents',
   noun: 'Agent',
   events,
-  mapEvent: mapStreamEvent,
+  mapEvent: (): null => null,
   afterControl: () => void refreshAgentStates(),
 });
+
+// 视图分派：按选中 Agent 的注册名分流
+
+type AgentViewKind = 'streamer' | 'minecraft' | 'generic';
+
+const selectedView = computed<AgentViewKind>(() => {
+  if (selectedName.value === STREAMER_AGENT_NAME) return 'streamer';
+  if (selectedName.value === MINECRAFT_AGENT_NAME) return 'minecraft';
+  return 'generic';
+});
+
+// 决策轮决定卡（主播视图）：事件缓冲实时归组，输出按时间降序（新轮在前）
+const decisionCards = computed(() => groupDecisionRounds(events.value));
+
+/** 深链定位的轮次（任务 7 接管：/agents?agent=&round= 命中时置值并高亮） */
+const highlightedRoundId = ref('');
 
 // Agent 控制面（/api/v1/agents）：运行状态 + pause/resume/shutdown
 
@@ -594,70 +555,6 @@ const latestDecisionLabel = computed<string>(() => {
   }
   return '—';
 });
-
-// 运行轨迹：三族合并 + 阶段 badge + 失败标记
-
-type StageKind = 'planner' | 'rundown' | 'tool';
-type FilterKind = 'all' | StageKind;
-
-const filterOptions: { value: FilterKind; label: string }[] = [
-  { value: 'all', label: '全部' },
-  { value: 'planner', label: '决策' },
-  { value: 'rundown', label: '流程' },
-  { value: 'tool', label: '工具' },
-];
-
-const stageLabels: Record<StageKind, string> = {
-  planner: '决策',
-  rundown: '流程',
-  tool: '工具',
-};
-
-function stageLabel(stage: StageKind): string {
-  return stageLabels[stage];
-}
-
-function getStage(type: string): StageKind | null {
-  if (type.startsWith('planner.')) return 'planner';
-  if (type === 'rundown.changed') return 'rundown';
-  if (type.startsWith('tool.result.')) return 'tool';
-  return null;
-}
-
-function isToolFailed(data: WebSocketMessage['data']): boolean {
-  const status = String((data as Record<string, unknown>).status ?? '').toLowerCase();
-  return status === 'failed' || status === 'failure' || status === 'error';
-}
-
-interface AgentStreamItem extends ComponentStreamItem {
-  stage: StageKind;
-  failed: boolean;
-}
-
-function mapStreamEvent(e: ComponentEvent): AgentStreamItem | null {
-  const stage = getStage(e.type);
-  if (!stage) return null;
-  return {
-    id: e.id,
-    eventType: e.type,
-    stage,
-    summary: summarizeEvent(e.type, e.data),
-    timestampMs: e.timestamp_ms,
-    failed: stage === 'tool' && isToolFailed(e.data),
-  };
-}
-
-const activeFilter = ref<FilterKind>('all');
-
-// 视图层：按 activeFilter 过滤；保持时间升序展示（新条目在末尾）。
-const displayedEntries = computed<AgentStreamItem[]>(() => {
-  if (activeFilter.value === 'all') return streamItems.value;
-  return streamItems.value.filter(e => e.stage === activeFilter.value);
-});
-
-// 自动滚动：新条目追加时滚到底部，除非用户已向上滚动
-
-const { scrollRef: streamScrollRef } = useScrollFollow(displayedEntries);
 
 // 工具：相对时间
 
@@ -817,97 +714,44 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-/* 运行轨迹头部：主行 + 过滤行两段布局（本页特有） */
-.stream-header {
+/* 决定卡列表面板（主播视图）：容器与任务区同风格 */
+.md-rounds-panel {
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  overflow: hidden;
 }
 
-.stream-header-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.md-rounds-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: var(--spacing-sm) var(--spacing-lg);
-  gap: var(--spacing-md);
-}
-
-.stream-header-row--main {
-  border-bottom: 1px solid var(--border-color-light);
-}
-
-.stream-header-row--filter {
-  justify-content: flex-start;
-  background: var(--bg-page);
-  padding-top: var(--spacing-xs);
-  padding-bottom: var(--spacing-xs);
-  flex-wrap: wrap;
+  display: flex;
+  flex-direction: column;
   gap: var(--spacing-sm);
 }
 
-.filter-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-right: 2px;
+.md-rounds-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.md-rounds-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-color-dark);
+  border-radius: 4px;
 }
 
-.filter-chip {
-  font-size: 12px;
-}
-
-/* 流条目网格与阶段 badge（本页特有） */
-.md-stream-item {
-  grid-template-columns: 36px 156px minmax(0, 1fr) auto;
-}
-
-.stage-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 22px;
-  border-radius: var(--radius-sm);
-  font-size: 11px;
-  font-weight: 700;
-  font-family: var(--font-mono);
-  border: 1px solid transparent;
-  flex-shrink: 0;
-  letter-spacing: 0.04em;
-}
-
-.stage-badge--planner {
-  color: var(--color-agent);
-  background: var(--color-agent-bg);
-  border-color: var(--color-agent);
-}
-
-.stage-badge--rundown {
-  color: var(--color-rundown);
-  background: var(--color-rundown-bg);
-  border-color: var(--color-rundown);
-}
-
-.stage-badge--tool {
-  color: var(--color-tool);
-  background: var(--color-tool-bg);
-  border-color: var(--color-tool);
-}
-
-.stage-badge.is-failed {
-  color: var(--color-danger);
-  background: var(--color-danger-bg);
-  border-color: var(--color-danger);
-}
-
-.md-stream-item-type {
-  color: var(--text-secondary);
-}
-
-.md-stream-item-content.is-failed {
-  color: var(--color-danger);
-  font-weight: 500;
+/* 其他 Agent 占位视图 */
+.md-detail-placeholder {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border-color-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
 }
 
 /* 任务区：任务卡列表 + 底部干预输入条（进行中在上，已完结折叠可查） */
@@ -1073,31 +917,12 @@ onUnmounted(() => {
   .md-detail-name {
     font-size: 20px;
   }
-
-  .md-stream-item {
-    grid-template-columns: 32px 100px minmax(0, 1fr) auto;
-  }
-
-  .stage-badge {
-    width: 30px;
-    font-size: 10px;
-  }
 }
 
 @media (max-width: 768px) {
   .agents-page {
     grid-template-columns: 1fr;
     min-height: 480px;
-  }
-
-  .md-stream-item {
-    grid-template-columns: 28px minmax(0, 1fr) auto;
-  }
-
-  .stage-badge {
-    width: 28px;
-    font-size: 10px;
-    letter-spacing: 0;
   }
 }
 </style>
