@@ -229,7 +229,8 @@
         </div>
 
         <!-- 工具调用卡（tool.result.*）：状态徽标（成功/失败）+ 来源徽标（主播决策/游戏 Agent）拆双槽
-             工具卡一律中性底——状态由左边线色 + 徽标承载，避免高频工具行刷成警报墙 -->
+             工具卡一律中性底——状态由左边线色 + 徽标承载，避免高频工具行刷成警报墙。
+             轮次跳转收在头部蓝字链接（整卡可点误触率高） -->
         <div
           v-else-if="entry.kind === 'tool'"
           class="act is-tool-neutral"
@@ -238,10 +239,7 @@
             'is-speak': entry.speak,
             'is-agent-streamer': agentGroupOf(entry) === 'streamer',
             'is-agent-game': agentGroupOf(entry) === 'game',
-            'is-round-clickable': isRoundClickable(entry),
           }"
-          :title="isRoundClickable(entry) ? '在 Agent 页查看这轮决策' : undefined"
-          @click="onRowClick(entry)"
         >
           <div class="act-head">
             <span class="act-kind">工具调用</span>
@@ -257,6 +255,14 @@
             <!-- 来源徽标（中性色，与状态徽标区分不抢视觉） -->
             <span v-if="entry.source" class="act-source">{{ entry.source }}</span>
             <span class="grow" />
+            <a
+              v-if="isRoundClickable(entry)"
+              class="d-link"
+              title="在 Agent 页查看这轮决策"
+              @click.stop="onRowClick(entry)"
+            >
+              这轮决策 ↗
+            </a>
             <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
           </div>
           <!-- 参数药丸：入参轮廓一眼可扫；入参为空/非对象时回退纯文本正文 -->
@@ -1275,6 +1281,7 @@ async function copyText(text: string): Promise<void> {
   font-weight: 600;
   color: var(--color-primary);
   text-decoration: none;
+  cursor: pointer;
 }
 .d-link:hover {
   text-decoration: underline;
