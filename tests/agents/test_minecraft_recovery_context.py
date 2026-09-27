@@ -104,6 +104,10 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
         "outcome_uncertain": True,
         "mechanical_retry_allowed": False,
         "selected_destination_block": "create:shaft",
+        "source_power_evidence": {"observation_status": "observed", "powered": True, "actual_rpm": 256},
+        "destination_power_evidence": {"observation_status": "not_observed"},
+        "source_native_observation_stage": "before_construction",
+        "target_native_observation_stage": "not_observed",
         "requested_transmission": "chain_conveyor",
         "construction_progress": {"phase": "remove", "confirmed_blocks": 7},
         "chain_conveyor_use": {"chains_required": 9, "chains_available_before": 2, "chains_missing": 7},
@@ -128,6 +132,9 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
     assert '"selected_destination_block":"create:shaft"' in context
     assert '"native_action_status":"UNCERTAIN"' in context and '"native_action_kind":"USE_BLOCK"' in context
     assert '"outcome_uncertain":true' in context and '"mechanical_retry_allowed":false' in context
+    assert '"source_power_evidence":{"observation_status":"observed","powered":true,"actual_rpm":256}' in context
+    assert '"destination_power_evidence":{"observation_status":"not_observed"}' in context
+    assert '"source_native_observation_stage":"before_construction"' in context
     assert "不应当作实际端点的设计值" not in context
     data["chain_conveyor_use"]["chains_missing"] = 99
     assert '"chains_missing":99' not in json_text(agent._current_task_context())

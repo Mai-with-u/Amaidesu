@@ -19,6 +19,11 @@ _MACHINE_FACT_KEYS = (
     "transmission_description",
     "selected_source_block",
     "selected_destination_block",
+    # 接线整体未验收时仍保留两端各自的转速与观察时机，不能把源有电的事实丢掉。
+    "source_power_evidence",
+    "destination_power_evidence",
+    "source_native_observation_stage",
+    "target_native_observation_stage",
     "chain_conveyor_use",
     "chains_required",
     "chains_available_before",
