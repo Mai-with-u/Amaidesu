@@ -96,9 +96,13 @@ def previous_history() -> list[dict[str, Any]]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("receipt_form", ["event", "task", "decision"])
 async def test_native_machine_facts_survive_compaction(receipt_form: str) -> None:
-    """缺链、部分拆除和接错设备的事实在普通终态与待决策中都保留，不依赖摘要复述或重复勘察。"""
+    """缺链、拆改和原生交互不确定性在终态与待决策中都保留，不依赖模型摘要复述。"""
     agent, llm = make_agent()
     data = {
+        "native_action_status": "UNCERTAIN",
+        "native_action_kind": "USE_BLOCK",
+        "outcome_uncertain": True,
+        "mechanical_retry_allowed": False,
         "selected_destination_block": "create:shaft",
         "requested_transmission": "chain_conveyor",
         "construction_progress": {"phase": "remove", "confirmed_blocks": 7},
@@ -122,6 +126,8 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
     context = messages[1]["content"]
     assert '"chains_missing":7' in context and '"confirmed_blocks":7' in context
     assert '"selected_destination_block":"create:shaft"' in context
+    assert '"native_action_status":"UNCERTAIN"' in context and '"native_action_kind":"USE_BLOCK"' in context
+    assert '"outcome_uncertain":true' in context and '"mechanical_retry_allowed":false' in context
     assert "不应当作实际端点的设计值" not in context
     data["chain_conveyor_use"]["chains_missing"] = 99
     assert '"chains_missing":99' not in json_text(agent._current_task_context())

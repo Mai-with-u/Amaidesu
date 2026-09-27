@@ -8,8 +8,12 @@ from typing import Any
 from src.agents.minecraft.readback import is_reference
 
 
-# 接线和拆改后的数量、实际设备与施工阶段要跟随任务保留，不能在整理上下文后只剩通用失败文字。
+# 接线、拆改与原生点击的确认事实跟随任务保留，防止整理上下文后把超时误当成没有装料。
 _MACHINE_FACT_KEYS = (
+    "native_action_status",
+    "native_action_kind",
+    "outcome_uncertain",
+    "mechanical_retry_allowed",
     "construction_progress",
     "requested_transmission",
     "transmission_description",
@@ -122,8 +126,6 @@ def failure_evidence(value: Any, path: str = "") -> list[dict[str, Any]]:
         "cause_code",
         "failure_type",
         "phase",
-        "outcome_uncertain",
-        "mechanical_retry_allowed",
         "effects_started",
         "pending_output",
         "world_change_uncertain",
