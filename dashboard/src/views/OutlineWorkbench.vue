@@ -565,19 +565,17 @@
 /**
  * 流程单编排页 —— 流程单实时状态 + 手动控制
  *
- * 数据来源：
- * - REST 轮询：GET /api/v1/rundown/state（300ms 防抖 + WS 触发）
- * - WebSocket：rundown.changed（onMessage 过滤，触发重拉）
- * - 本地 1s setInterval：仅用于重算当前环节的 elapsed/remaining 倒计时显示
- *
  * 三态布局：
  * 1. 不可用（available=false）：主播 Agent 未启动
  * 2. 未加载（status=idle）：等待主播 Agent 启动 + 环节预览
  * 3. 运行中（status=running|paused|done）：KPI 行 + 当前环节卡 + 环节表 + 历史时间线
+ *
+ * 页面私有逻辑拆在 composables/rundown/：运行态与 WS 防抖重拉
+ * （useRundownState）、段状态/格式化展示派生（useRundownDisplay）、
+ * 流程单库与编辑器（useRundownLibrary）。本组件只做装配与环节详情
+ * 抽屉编排（跳转成功收起抽屉）。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
-import { confirmAction } from '@/utils/confirmAction';
+import { computed, ref } from 'vue';
 import {
   ArrowRightBold,
   EditPen,
@@ -587,33 +585,76 @@ import {
   Refresh,
   VideoPause,
 } from '@element-plus/icons-vue';
-import { rundownApi } from '@/api';
-import { wsClient } from '@/api/websocket';
-import { useNowTick } from '@/composables/useNowTick';
-import type {
-  RundownControlAction,
-  RundownControlResponse,
-  RundownCurrentSegment,
-  RundownDefinition,
-  RundownSegmentView,
-  RundownSnapshot,
-  RundownStateResponse,
-  RundownTransitionEntry,
-  WebSocketMessage,
-} from '@/types';
+import { useRundownState } from '@/composables/rundown/useRundownState';
+import { useRundownDisplay } from '@/composables/rundown/useRundownDisplay';
+import { useRundownLibrary } from '@/composables/rundown/useRundownLibrary';
+import type { RundownSegmentView } from '@/types';
 
-// 响应式状态
+// 装配：运行态 → 展示派生（消费 state/currentSegment）→ 库与编辑器（消费 state/fetchState）
 
-const state = ref<RundownStateResponse | null>(null);
-const initialLoading = ref(true);
-const loadingState = ref(false);
-const loadError = ref<string | null>(null);
-const actionLoading = ref<RundownControlAction | null>(null);
+const {
+  state,
+  initialLoading,
+  loadingState,
+  loadError,
+  actionLoading,
+  snapshot,
+  isNotLoaded,
+  statusLabel,
+  statusTagType,
+  progressPercent,
+  progressColor,
+  currentSegment,
+  tickElapsedMs,
+  tickRemainingMs,
+  historyEntries,
+  nextSegment,
+  currentRundownId,
+  fetchState,
+  refresh,
+  performControl,
+  togglePause,
+  handleNext,
+} = useRundownState();
 
-// 本地 1s tick：仅重算当前环节 elapsed/remaining 展示
-const nowTickMs = useNowTick();
+const {
+  segmentStatusLabel,
+  segmentStatusTagType,
+  segmentStatusTagEffect,
+  segmentTitleOf,
+  rowClassName,
+  formatDuration,
+  formatTime,
+  historyDotType,
+} = useRundownDisplay({ state, currentSegment });
 
-// 抽屉
+const {
+  libraryOpen,
+  libraryLoading,
+  libraryItems,
+  totalExpectedMs,
+  openLibrary,
+  editorOpen,
+  editorSaving,
+  editorOriginalId,
+  editorForm,
+  startCreate,
+  startEditCurrent,
+  startEdit,
+  saveEditor,
+  moveSegment,
+  removeSegment,
+  segDialogOpen,
+  segEditingIndex,
+  segForm,
+  openSegmentDialog,
+  saveSegmentDialog,
+  removeRundown,
+  duplicateRundown,
+  activateRundown,
+} = useRundownLibrary({ state, fetchState });
+
+// 环节详情抽屉：跳转成功即收起，避免遮挡主区；失败（null）时保留现场供重试
 
 const drawerOpen = ref(false);
 const activeSegment = ref<RundownSegmentView | null>(null);
@@ -629,569 +670,11 @@ function openDrawer(row: RundownSegmentView) {
   drawerOpen.value = true;
 }
 
-// 派生状态
-
-const snapshot = computed<RundownSnapshot | null>(() => state.value?.snapshot ?? null);
-
-const isNotLoaded = computed(() => snapshot.value?.status === 'idle');
-
-const statusLabel = computed(() => {
-  const s = snapshot.value;
-  if (!s) return '—';
-  switch (s.status) {
-    case 'running':
-      return '进行中';
-    case 'paused':
-      return '已暂停';
-    case 'done':
-      return '已完成';
-    default:
-      return '未启动';
-  }
-});
-
-const statusTagType = computed<'success' | 'warning' | 'info' | 'primary' | 'danger'>(() => {
-  const s = snapshot.value;
-  if (!s) return 'info';
-  if (s.status === 'paused') return 'warning';
-  if (s.status === 'running') return 'success';
-  return 'info';
-});
-
-const progressPercent = computed(() => {
-  const p = snapshot.value?.progress_percent;
-  if (p == null || Number.isNaN(p)) return 0;
-  return Math.max(0, Math.min(100, p));
-});
-
-const progressColor = computed(() => {
-  if (snapshot.value?.status === 'done') return 'var(--color-info)';
-  return 'var(--color-rundown)';
-});
-
-const currentSegment = computed<RundownCurrentSegment | null>(
-  () => snapshot.value?.current ?? null,
-);
-
-const tickElapsedMs = computed(() => {
-  const seg = currentSegment.value;
-  if (!seg) return 0;
-  // 后端 elapsed_ms 是快照时刻的累计；paused 时不递增
-  if (snapshot.value?.paused) return Math.max(0, seg.elapsed_ms);
-  const drift = nowTickMs.value - snapshotBaselineMs.value;
-  return Math.max(0, Math.min(seg.expected_ms, seg.elapsed_ms + drift));
-});
-
-const tickRemainingMs = computed(() => {
-  const seg = currentSegment.value;
-  if (!seg) return 0;
-  return Math.max(0, seg.expected_ms - tickElapsedMs.value);
-});
-
-/** 快照基线时刻（用于本地 tick 漂移计算） */
-const snapshotBaselineMs = ref(Date.now());
-
-/** 变更历史：仅展示最近 20 条，按时间倒序 */
-const historyEntries = computed<RundownTransitionEntry[]>(() => {
-  const list = state.value?.transitions ?? [];
-  return [...list].sort((a, b) => b.at_ms - a.at_ms).slice(0, 20);
-});
-
-/** 下一环节预览（无下一环节/已结束时为 null） */
-const nextSegment = computed<RundownSegmentView | null>(() => {
-  const s = snapshot.value;
-  if (!s || s.status === 'done') return null;
-  return state.value?.segments[s.index + 1] ?? null;
-});
-
-// 段状态 / 来源 / 时间格式化
-
-function segmentStatusOf(seg: RundownSegmentView): 'done' | 'current' | 'pending' {
-  const cur = currentSegment.value;
-  if (cur && cur.id === seg.id) return 'current';
-  // 简化：用 currentSegment.id 之前的视作 done，索引比较作为兜底
-  const segments = state.value?.segments ?? [];
-  const idx = segments.findIndex(s => s.id === seg.id);
-  if (idx === -1) return 'pending';
-  const curIdx = segments.findIndex(s => s.id === cur?.id);
-  if (curIdx >= 0 && idx < curIdx) return 'done';
-  return 'pending';
-}
-
-function segmentStatusLabel(seg: RundownSegmentView): string {
-  const s = segmentStatusOf(seg);
-  if (s === 'done') return '已完成';
-  if (s === 'current') return '进行中';
-  return '待开始';
-}
-
-function segmentStatusTagType(seg: RundownSegmentView): 'success' | 'warning' | 'info' {
-  const s = segmentStatusOf(seg);
-  if (s === 'done') return 'success';
-  if (s === 'current') return 'warning';
-  return 'info';
-}
-
-function segmentStatusTagEffect(seg: RundownSegmentView): 'plain' | 'dark' {
-  return segmentStatusOf(seg) === 'current' ? 'dark' : 'plain';
-}
-
-function segmentTitleOf(id: string): string {
-  const seg = (state.value?.segments ?? []).find(s => s.id === id);
-  return seg?.title ?? id;
-}
-
-function rowClassName({ row }: { row: RundownSegmentView }): string {
-  return segmentStatusOf(row) === 'current' ? 'is-current-row' : '';
-}
-
-function formatDuration(ms: number | null | undefined): string {
-  if (ms == null || Number.isNaN(ms) || ms < 0) return '—';
-  const totalSec = Math.floor(ms / 1000);
-  const hh = Math.floor(totalSec / 3600);
-  const mm = Math.floor((totalSec % 3600) / 60);
-  const ss = totalSec % 60;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return hh > 0 ? `${pad(hh)}:${pad(mm)}:${pad(ss)}` : `${pad(mm)}:${pad(ss)}`;
-}
-
-function formatTime(tsMs: number): string {
-  if (!tsMs) return '—';
-  const d = new Date(tsMs);
-  return d.toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-}
-
-function historyDotType(
-  entry: RundownTransitionEntry,
-): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
-  const ev = entry.action.toLowerCase();
-  if (ev.includes('fail') || ev.includes('error')) return 'danger';
-  if (ev.includes('skip') || ev.includes('pause') || ev.includes('override')) return 'warning';
-  if (ev.includes('done') || ev.includes('complete') || ev.includes('finish')) return 'success';
-  if (ev.includes('start') || ev.includes('begin') || ev.includes('load')) return 'primary';
-  return 'info';
-}
-
-// 数据加载
-
-async function fetchState(opts: { silent?: boolean } = {}): Promise<void> {
-  if (!opts.silent) loadingState.value = true;
-  loadError.value = null;
-  try {
-    const res = await rundownApi.getState();
-    state.value = res.data;
-    // 本地 tick 从该基准起算已播时长，吸收取数耗时造成的漂移
-    snapshotBaselineMs.value = Date.now();
-  } catch (e) {
-    loadError.value = e instanceof Error ? e.message : '无法加载流程单状态';
-    state.value = null;
-  } finally {
-    initialLoading.value = false;
-    loadingState.value = false;
-  }
-}
-
-function refresh(): void {
-  void fetchState();
-}
-
-// 控制操作
-
-async function performControl(
-  action: RundownControlAction,
-  extra: { segment_id?: string } = {},
-): Promise<RundownControlResponse['snapshot'] | null> {
-  if (actionLoading.value) return null;
-  actionLoading.value = action;
-  try {
-    const res = await rundownApi.control({ action, ...extra });
-    const data = res.data;
-    if (!data.success) {
-      ElMessage.error(data.message || '操作失败');
-      return null;
-    }
-    ElMessage.success(data.message || '操作成功');
-    // 用响应内嵌的 snapshot 立即刷新（避免等 WS 抖动）
-    if (data.snapshot && state.value) {
-      state.value = { ...state.value, snapshot: data.snapshot };
-      snapshotBaselineMs.value = Date.now();
-    } else {
-      // 控制后无 snapshot，回拉完整 state
-      await fetchState({ silent: true });
-    }
-    return data.snapshot;
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '操作失败');
-    return null;
-  } finally {
-    actionLoading.value = null;
-  }
-}
-
-function togglePause(): void {
-  const s = snapshot.value;
-  if (!s) return;
-  void performControl(s.paused ? 'resume' : 'pause');
-}
-
-function handleNext(): void {
-  void performControl('next');
-}
-
 function handleJump(seg: RundownSegmentView): void {
-  void performControl('goto', { segment_id: seg.id }).then(snapshot => {
-    // 跳转成功即收起抽屉，避免遮挡主区；失败（null）时保留现场供重试
-    if (snapshot) drawerOpen.value = false;
+  void performControl('goto', { segment_id: seg.id }).then(result => {
+    if (result) drawerOpen.value = false;
   });
 }
-
-// 流程单库与编辑器
-// 编辑保存（upsert）写入存储；保存的是直播运行中的那份流程单时，
-// 后端写穿运行态（进度按环节 id 对齐），本页经既有 rundown.changed
-// 防抖重拉机制自动刷新，无需额外订阅。
-
-const libraryOpen = ref(false);
-const libraryLoading = ref(false);
-const libraryItems = ref<RundownDefinition[]>([]);
-
-/** 配置当前指向的流程单 id；空串 = 使用内置默认流程单 */
-const currentRundownId = computed(() => state.value?.config.rundown_id ?? '');
-
-function totalExpectedMs(def: RundownDefinition): number {
-  return def.segments.reduce((sum, seg) => sum + (seg.expected_ms || 0), 0);
-}
-
-async function fetchLibrary(): Promise<void> {
-  libraryLoading.value = true;
-  try {
-    const res = await rundownApi.listRundowns();
-    if (!res.data.success) {
-      ElMessage.error(res.data.message || '流程单库加载失败');
-      return;
-    }
-    libraryItems.value = res.data.rundowns;
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '流程单库加载失败');
-  } finally {
-    libraryLoading.value = false;
-  }
-}
-
-async function openLibrary(): Promise<void> {
-  await fetchLibrary();
-  libraryOpen.value = true;
-}
-
-// ---- 编辑器 ----
-
-const editorOpen = ref(false);
-const editorSaving = ref(false);
-/** 打开时的 rundown_id；空串 = 新建 */
-const editorOriginalId = ref('');
-const editorForm = reactive<{ rundown_id: string; title: string; segments: RundownSegmentView[] }>({
-  rundown_id: '',
-  title: '',
-  segments: [],
-});
-
-function fillEditorForm(def: RundownDefinition): void {
-  editorForm.rundown_id = def.rundown_id;
-  editorForm.title = def.title;
-  editorForm.segments = JSON.parse(JSON.stringify(def.segments)) as RundownSegmentView[];
-}
-
-async function startCreate(): Promise<void> {
-  try {
-    const res = await rundownApi.getTemplate();
-    if (!res.data.success || !res.data.definition) {
-      ElMessage.error(res.data.message || '模板加载失败');
-      return;
-    }
-    fillEditorForm(res.data.definition);
-    editorForm.rundown_id = `rundown_${Date.now() % 100_000}`;
-    editorOriginalId.value = '';
-    editorOpen.value = true;
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '模板加载失败');
-  }
-}
-
-/** 编辑当前配置指向的流程单；未选单或指向不存在时从运行快照预填新建 */
-async function startEditCurrent(): Promise<void> {
-  await fetchLibrary();
-  const found = currentRundownId.value
-    ? libraryItems.value.find(r => r.rundown_id === currentRundownId.value)
-    : null;
-  if (found) {
-    startEdit(found);
-    return;
-  }
-  if (state.value && state.value.segments.length > 0) {
-    // 运行中的是内置默认流程单（虚拟存在不写库）：从快照预填，保存即落库
-    fillEditorForm({
-      rundown_id: `rundown_${Date.now() % 100_000}`,
-      title: snapshot.value?.title || '未命名流程单',
-      segments: state.value.segments,
-    });
-    editorOriginalId.value = '';
-    editorOpen.value = true;
-    ElMessage.info('当前使用的是内置默认流程单；保存后将作为新流程单入库');
-    return;
-  }
-  ElMessage.warning('流程单内容尚未加载，请先启动主播 Agent 或从流程单库选择');
-}
-
-function startEdit(def: RundownDefinition): void {
-  fillEditorForm(def);
-  editorOriginalId.value = def.rundown_id;
-  editorOpen.value = true;
-}
-
-async function saveEditor(): Promise<void> {
-  if (!editorForm.rundown_id.trim()) {
-    ElMessage.warning('请填写流程单 ID');
-    return;
-  }
-  if (!editorForm.title.trim()) {
-    ElMessage.warning('请填写流程单标题');
-    return;
-  }
-  if (editorForm.segments.length === 0) {
-    ElMessage.warning('至少需要一个环节');
-    return;
-  }
-  editorSaving.value = true;
-  try {
-    const res = await rundownApi.upsert({
-      rundown_id: editorForm.rundown_id.trim(),
-      title: editorForm.title.trim(),
-      segments: editorForm.segments,
-    });
-    if (!res.data.success) {
-      ElMessage.error(res.data.message || '保存失败');
-      return;
-    }
-    ElMessage.success(res.data.message || '已保存');
-    editorOpen.value = false;
-    // 写穿后 rundown.changed 会触发防抖重拉；这里主动刷新保证非运行态也即时
-    void fetchState({ silent: true });
-    if (libraryOpen.value) await fetchLibrary();
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '保存失败');
-  } finally {
-    editorSaving.value = false;
-  }
-}
-
-// ---- 环节卡片操作 ----
-
-function moveSegment(idx: number, dir: -1 | 1): void {
-  const target = idx + dir;
-  if (target < 0 || target >= editorForm.segments.length) return;
-  const segs = editorForm.segments;
-  [segs[idx], segs[target]] = [segs[target], segs[idx]];
-}
-
-function removeSegment(idx: number): void {
-  if (editorForm.segments.length <= 1) return;
-  editorForm.segments.splice(idx, 1);
-}
-
-// ---- 环节二级编辑 ----
-
-const segDialogOpen = ref(false);
-const segEditingIndex = ref(-1);
-const segForm = reactive({
-  id: '',
-  title: '',
-  task_description: '',
-  keyPointsText: '',
-  expectedMinutes: 5,
-  minMinutes: null as number | null,
-  notes: '',
-});
-
-const MINUTES_MS = 60_000;
-
-function openSegmentDialog(idx: number): void {
-  segEditingIndex.value = idx;
-  if (idx >= 0) {
-    const seg = editorForm.segments[idx];
-    segForm.id = seg.id;
-    segForm.title = seg.title;
-    segForm.task_description = seg.task_description;
-    segForm.keyPointsText = seg.key_points.join('\n');
-    segForm.expectedMinutes = Math.round((seg.expected_ms / MINUTES_MS) * 10) / 10;
-    segForm.minMinutes =
-      seg.min_duration_ms != null ? Math.round((seg.min_duration_ms / MINUTES_MS) * 10) / 10 : null;
-    segForm.notes = seg.notes ?? '';
-  } else {
-    segForm.id = `segment_${editorForm.segments.length + 1}`;
-    segForm.title = '';
-    segForm.task_description = '';
-    segForm.keyPointsText = '';
-    segForm.expectedMinutes = 5;
-    segForm.minMinutes = null;
-    segForm.notes = '';
-  }
-  segDialogOpen.value = true;
-}
-
-function saveSegmentDialog(): void {
-  if (!segForm.id.trim()) {
-    ElMessage.warning('请填写环节 ID');
-    return;
-  }
-  if (!segForm.title.trim()) {
-    ElMessage.warning('请填写环节名');
-    return;
-  }
-  const duplicate = editorForm.segments.some(
-    (seg, i) => seg.id === segForm.id.trim() && i !== segEditingIndex.value,
-  );
-  if (duplicate) {
-    ElMessage.warning(`环节 ID "${segForm.id.trim()}" 已存在`);
-    return;
-  }
-  if (
-    segForm.minMinutes != null &&
-    segForm.expectedMinutes != null &&
-    segForm.minMinutes > segForm.expectedMinutes
-  ) {
-    ElMessage.warning('最短停留不能大于预期时长');
-    return;
-  }
-
-  const segment: RundownSegmentView = {
-    id: segForm.id.trim(),
-    title: segForm.title.trim(),
-    task_description: segForm.task_description.trim(),
-    key_points: segForm.keyPointsText
-      .split('\n')
-      .map(line => line.trim())
-      .filter(Boolean),
-    expected_ms: Math.max(1000, Math.round((segForm.expectedMinutes ?? 0.1) * MINUTES_MS)),
-    min_duration_ms:
-      segForm.minMinutes != null
-        ? Math.max(1000, Math.round(segForm.minMinutes * MINUTES_MS))
-        : null,
-    notes: segForm.notes.trim() || null,
-  };
-  if (segEditingIndex.value >= 0) {
-    editorForm.segments[segEditingIndex.value] = segment;
-  } else {
-    editorForm.segments.push(segment);
-  }
-  segDialogOpen.value = false;
-}
-
-// ---- 库操作：删除 / 复制 / 设为当前 ----
-
-async function removeRundown(def: RundownDefinition): Promise<void> {
-  const referenced = def.rundown_id === currentRundownId.value;
-  const ok = await confirmAction(
-    referenced
-      ? `确定删除「${def.title}」？当前配置仍指向它，重启主播 Agent 后将回退内置默认流程单。`
-      : `确定删除「${def.title}」？`,
-    '删除流程单',
-    { confirmButtonText: '删除' },
-  );
-  if (!ok) return;
-  try {
-    const res = await rundownApi.remove(def.rundown_id);
-    if (!res.data.success) {
-      ElMessage.error(res.data.message || '删除失败');
-      return;
-    }
-    ElMessage.success(res.data.message || '已删除');
-    await fetchLibrary();
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '删除失败');
-  }
-}
-
-async function duplicateRundown(def: RundownDefinition): Promise<void> {
-  try {
-    const res = await rundownApi.duplicate(def.rundown_id);
-    if (!res.data.success) {
-      ElMessage.error(res.data.message || '复制失败');
-      return;
-    }
-    ElMessage.success(`已复制为 ${res.data.rundown_id}`);
-    await fetchLibrary();
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '复制失败');
-  }
-}
-
-async function activateRundown(def: RundownDefinition): Promise<void> {
-  try {
-    const res = await rundownApi.activate(def.rundown_id);
-    if (!res.data.success) {
-      ElMessage.error(res.data.message || '设置失败');
-      return;
-    }
-    ElMessage.success(res.data.message || '已设为当前');
-    // 同步刷新页面 state：当前标记 / 按钮禁用 / 删除确认文案都读 config.rundown_id，
-    // 只刷库列表会让它们停留在旧值
-    await Promise.all([fetchLibrary(), fetchState({ silent: true })]);
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '设置失败');
-  }
-}
-
-// WS 订阅 + 防抖重拉
-
-let reloadTimer: ReturnType<typeof setTimeout> | null = null;
-let wsActive = false;
-
-function onWsMessage(msg: WebSocketMessage): void {
-  if (!wsActive) return;
-  if (msg.type !== 'rundown.changed') return;
-  // 300ms 防抖：避免事件风暴期间反复拉取
-  if (reloadTimer) clearTimeout(reloadTimer);
-  reloadTimer = setTimeout(() => {
-    if (!wsActive) return;
-    void fetchState({ silent: true });
-  }, 300);
-}
-
-function startWs(): void {
-  wsActive = true;
-  wsClient.onMessage(onWsMessage);
-}
-
-function stopWs(): void {
-  wsActive = false;
-  if (reloadTimer) {
-    clearTimeout(reloadTimer);
-    reloadTimer = null;
-  }
-}
-
-// 生命周期
-
-onMounted(() => {
-  startWs();
-  void fetchState();
-});
-
-onBeforeUnmount(() => {
-  stopWs();
-});
-
-// 状态切换时同步基线：snapshot 改变（如切换环节）时重置本地 tick
-watch(
-  () => currentSegment.value?.id,
-  () => {
-    snapshotBaselineMs.value = Date.now();
-  },
-);
 </script>
 
 <style scoped>
