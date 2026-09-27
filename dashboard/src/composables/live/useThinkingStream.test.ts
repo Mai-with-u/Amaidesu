@@ -141,6 +141,20 @@ describe('useThinkingStream', () => {
     expect(liveThinkingRows.value.some(row => row.text === 't20')).toBe(true);
   });
 
+  it('单轮步骤上限保尾：超过 100 步时最旧段被淘汰', () => {
+    const { liveThinkingRows } = mount();
+    const deltas: Array<{ round_id: string; phase: string; step: number; text_delta: string }> = [];
+    for (let step = 1; step <= 105; step += 1) {
+      deltas.push({ round_id: 'r1', phase: 'planner', step, text_delta: `s${step}` });
+    }
+    handler(streamMessage(deltas, 1000));
+    vi.advanceTimersByTime(150);
+    expect(liveThinkingRows.value).toHaveLength(100);
+    // 最旧的 1..5 步被淘汰，保留最近的 6..105 步
+    expect(liveThinkingRows.value[0].id).toBe('think:r1:planner:6');
+    expect(liveThinkingRows.value[99].id).toBe('think:r1:planner:105');
+  });
+
   it('隐藏水位：tsMs ≤ 水位的思考段不进时间线', () => {
     const { liveThinkingRows, thinkingHiddenBeforeMs } = mount();
     handler(

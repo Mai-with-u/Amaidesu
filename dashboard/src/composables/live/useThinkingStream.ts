@@ -18,6 +18,9 @@ import {
 import type { ThinkingDelta, WebSocketMessage } from '@/types';
 
 const THINKING_ROUNDS_MAX = 20;
+/** 单轮步骤上限：ReAct 步数无理论上限，长任务期间会无限累积推高渲染面；
+ *  超限淘汰最旧段（上限保尾，与轮数上限同语义） */
+const THINKING_STEPS_PER_ROUND_MAX = 100;
 
 /** 每决策轮的思考聚合：planner 与 minecraft 共用按步分段（与工具卡时间交织），
  * 段携带自身 phase——两边步骤号各自从头计数，只按步号查找会互相踩段；replyer 独立一段 */
@@ -87,6 +90,9 @@ export function useThinkingStream() {
         if (!seg) {
           seg = reactive({ phase: delta.phase, step: delta.step, text: '', tsMs });
           round.steps.push(seg);
+          while (round.steps.length > THINKING_STEPS_PER_ROUND_MAX) {
+            round.steps.shift();
+          }
         }
         seg.text += delta.text_delta;
       }

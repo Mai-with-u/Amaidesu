@@ -135,6 +135,23 @@ describe('useLiveTimeline', () => {
     expect(composable.entries.value.length).toBe(frozenCount + 1);
   });
 
+  it('归并封顶：事件+思考行合计超 MAX_ENTRIES 时限长保尾', async () => {
+    const composable = mount();
+    const store = useEventsStore();
+    store.events = [danmakuEvent('e1', 0)];
+    // 450 条思考行（ts 1..450），事件条目在 ts 0；归并共 451 条
+    const rows: ShowEntry[] = [];
+    for (let ts = 1; ts <= 450; ts += 1) {
+      rows.push(thinkingRow(`think-${ts}`, ts));
+    }
+    rawThinkingRows.value = rows;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(composable.entries.value).toHaveLength(400);
+    // 保尾：最旧的 ts 0..50（事件 + 前 50 条思考行）被淘汰，首条为 ts 51
+    expect(composable.entries.value[0].tsMs).toBe(51);
+    expect(composable.entries.value[399].tsMs).toBe(450);
+  });
+
   it('clearTimeline：事件按 id 隐藏、思考行按时间水位隐藏，新事件仍会进入', async () => {
     const composable = mount();
     const store = useEventsStore();

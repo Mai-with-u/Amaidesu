@@ -14,6 +14,7 @@ import { useEventsStore } from '@/stores';
 import { liveSessionsApi } from '@/api';
 import { buildReplayEntries } from '@/utils/replayFeed';
 import {
+  MAX_ENTRIES,
   agentGroupOf,
   buildLiveEntries,
   mergeEntriesByTime,
@@ -118,15 +119,20 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
 
   /** 展示条目：实时模式把思考行与事件条目按时间归并后过 agentFilter；
    *  回看模式取 REST 时间线全量（思考流不落库，回看没有思考行）。
-   *  过滤只针对 Agent 产生的卡，观众消息与场次边界（room 组）始终可见 */
+   *  过滤只针对 Agent 产生的卡，观众消息与场次边界（room 组）始终可见。
+   *  事件条目本身已按 MAX_ENTRIES 限长，但思考行归并会突破上限（实测长任务
+   *  805/400）；展示条目统一限长保尾，与计数显示口径一致 */
   const entries = computed<ShowEntry[]>(() => {
     if (sessionMode.value === 'replay') return replayEntries.value;
     const thinkingRows = paused.value ? (frozenThinkingRows.value ?? []) : liveThinkingRows.value;
     const list = mergeEntriesByTime(liveEntries.value, thinkingRows);
-    if (agentFilter.value === 'all') return list;
-    return list.filter(
-      entry => agentGroupOf(entry) === 'room' || agentGroupOf(entry) === agentFilter.value,
-    );
+    const filtered =
+      agentFilter.value === 'all'
+        ? list
+        : list.filter(
+            entry => agentGroupOf(entry) === 'room' || agentGroupOf(entry) === agentFilter.value,
+          );
+    return filtered.slice(-MAX_ENTRIES);
   });
 
   function togglePause(): void {
