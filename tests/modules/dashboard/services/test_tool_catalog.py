@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from src.modules.dashboard.services.tool_catalog import (
@@ -97,6 +98,22 @@ class TestRuntimeToolCounts:
 
     def test_空工具表返回空计数(self) -> None:
         assert runtime_tool_counts(_FakeRegistry()) == {}
+
+    def test_停用判定按全名键(self) -> None:
+        """is_disabled 按注册表全名键判停用：传裸名的实现会让停用计数恒 0。"""
+        registry = _FakeRegistry(
+            tools=[SimpleNamespace(name="set_expression", full_name="vts_set_expression", provider="vts")]
+        )
+        seen: list[str] = []
+
+        def _is_disabled(name: str) -> bool:
+            seen.append(name)
+            return name == "vts_set_expression"
+
+        registry.is_disabled = _is_disabled  # type: ignore[method-assign]
+        counts = runtime_tool_counts(registry)
+        assert seen == ["vts_set_expression"]  # 查询键必须是全名而非裸名
+        assert counts == {("framework", "vts"): (1, 1)}
 
 
 # ---------------------------------------------------------------------------

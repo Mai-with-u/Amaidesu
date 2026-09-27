@@ -62,7 +62,9 @@ def runtime_tool_counts(registry: Any) -> Dict[Tuple[str, str], Tuple[int, int]]
             # category_of 按注册表索引键（全名）反查，传短名会落空导致计数归错类
             key = (registry.category_of(spec.full_name), getattr(spec, "provider", "") or "")
             total, disabled = counts.get(key, (0, 0))
-            counts[key] = (total + 1, disabled + (1 if registry.is_disabled(spec.name) else 0))
+            # is_disabled 按注册表全名键判停用（_disabled 存 _tools 的键，即全名），
+            # 传裸名恒判 False——停用计数会恒 0
+            counts[key] = (total + 1, disabled + (1 if registry.is_disabled(spec.full_name) else 0))
     except Exception:
         logger.warning("统计运行态工具计数失败，提供者卡片按 0 工具展示", exc=True)
     return counts
