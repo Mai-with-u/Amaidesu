@@ -198,6 +198,34 @@
             </button>
           </div>
 
+          <!-- minecraft 目标的进行中任务卡条：发话→看任务→取消就地闭环。
+               主播无任务账本、无进行中任务时整条隐藏，不占控制台空间 -->
+          <div
+            v-if="interventionTarget === MINECRAFT_AGENT_NAME && runningTasks.length > 0"
+            class="task-strip"
+          >
+            <ul class="task-strip-list">
+              <li v-for="task in runningTasks" :key="task.task_id" class="task-strip-item">
+                <span class="task-strip-status" :class="`is-${task.status}`">
+                  {{ taskStatusText(task.status) }}
+                </span>
+                <span class="task-strip-id mono" :title="task.task_id">{{ task.task_id }}</span>
+                <span class="task-strip-instruction" :title="task.instruction">
+                  {{ task.instruction || '（无指令摘要）' }}
+                </span>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  class="task-strip-cancel"
+                  @click="cancelTask(task)"
+                >
+                  取消
+                </el-button>
+              </li>
+            </ul>
+          </div>
+
           <!-- 干预输入区：页级目标选择（主播 / minecraft；adv 不支持收话不出现）+
                共享输入条（Tab/Shift+Tab 切模式、Enter 发送、↑↓ 回溯历史）。
                模式与传输随目标切换，主播目标复用既有行为（昵称插槽、在途 chip）；
@@ -294,9 +322,12 @@ import {
   useAgentIntervention,
 } from '@/composables/useAgentIntervention';
 import { agentRoundLocation } from '@/composables/useAgentDeepLink';
+import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
+import { confirmAction } from '@/utils/confirmAction';
 import { formatTimeHMS } from '@/utils/format';
 import { MAX_ENTRIES, relativeTime, type ShowEntry } from '@/utils/liveFeed';
+import type { TaskCard } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 
 // 装配：场次侧边栏 → 思考流 → 时间线内容 → 滚动跟随 → 干预输入条
@@ -372,6 +403,22 @@ function onInterventionSend(modeKey: string, text: string): void {
 watch(interventionTarget, target => {
   if (target === STREAMER_AGENT_NAME) onModeChange('danmaku');
 });
+
+// minecraft 目标的进行中任务（紧循环：发话→看任务→取消）。
+// 数据流与 Agent 页任务板同源（useAgentTasks）；主播无任务账本不展示
+const { runningTasks, cancelTask: cancelTaskRequest } = useAgentTasks(interventionTarget);
+
+async function cancelTask(task: TaskCard): Promise<void> {
+  const ok = await confirmAction(
+    `确认取消任务 ${task.task_id}？将强制清账并通知该 Agent 停手`,
+    '取消任务确认',
+    {
+      confirmButtonText: '确认取消',
+    },
+  );
+  if (!ok) return;
+  await cancelTaskRequest(task.task_id);
+}
 
 /** 时间线行点击 → Agent 页对应决策轮（可点行已由 FeedTimeline 按轮次 ID 过滤） */
 function jumpToAgentRound(entry: ShowEntry): void {
@@ -838,6 +885,80 @@ onMounted(() => {
 }
 .agent-filter :deep(.el-check-tag) {
   font-size: 11px;
+}
+
+/* 进行中任务卡条：minecraft 目标的紧循环（发话→看任务→取消），限高内滚动 */
+.task-strip {
+  flex-shrink: 0;
+  padding: 6px var(--spacing-md) 0;
+  background: var(--bg-card);
+}
+
+.task-strip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.task-strip-list::-webkit-scrollbar {
+  width: 6px;
+}
+.task-strip-list::-webkit-scrollbar-thumb {
+  background: var(--border-color-dark);
+  border-radius: 3px;
+}
+
+.task-strip-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+}
+
+.task-strip-status {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-agent-bg);
+  color: var(--color-agent);
+}
+.task-strip-status.is-waiting_for_decision {
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+}
+
+.task-strip-id {
+  flex-shrink: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.task-strip-instruction {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.task-strip-cancel {
+  flex-shrink: 0;
 }
 
 /* 干预输入区：目标选择行 + 共享输入条（输入交互样式在共享组件内） */

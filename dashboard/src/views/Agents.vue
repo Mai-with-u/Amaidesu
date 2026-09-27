@@ -382,7 +382,7 @@ import { confirmAction } from '@/utils/confirmAction';
 import { ArrowDown, Loading, Refresh } from '@element-plus/icons-vue';
 import { storeToRefs } from 'pinia';
 import { useComponentsStore, useEventsStore } from '@/stores';
-import { agentsApi, tasksApi } from '@/api';
+import { agentsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import DecisionRoundCard from '@/components/agents/DecisionRoundCard.vue';
@@ -391,6 +391,7 @@ import {
   STREAMER_AGENT_NAME,
   useAgentIntervention,
 } from '@/composables/useAgentIntervention';
+import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useAgentDeepLink, type AgentDeepLink } from '@/composables/useAgentDeepLink';
 import { useNowTick } from '@/composables/useNowTick';
 import {
@@ -398,7 +399,7 @@ import {
   type ComponentStreamItem,
 } from '@/composables/useComponentMasterDetail';
 import { groupDecisionRounds } from '@/utils/decisionRounds';
-import type { AgentControlActionType, AgentInfo, TaskCard, TaskSnapshotResponse } from '@/types';
+import type { AgentControlActionType, AgentInfo, TaskCard } from '@/types';
 import { relativeTime as relativeTimeLabel } from '@/utils/liveFeed';
 import { formatDurationShort } from '@/utils/format';
 import '@/styles/component-master-detail.css';
@@ -596,55 +597,17 @@ function relativeTime(timestampMs: number): string {
   return relativeTimeLabel(nowMs.value, timestampMs);
 }
 
-// 任务区：委派任务卡（进行中账本快照 + 已完结事件聚合，按执行 Agent 过滤）
-// 与干预输入条（递话默认 / 委派派活）。
-
-const TASK_STATUS_TEXT: Record<string, string> = {
-  accepted: '已受理',
-  running: '进行中',
-  waiting_for_decision: '待定夺',
-  succeeded: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-  timeout: '已超时',
-};
-
-function taskStatusText(status: string): string {
-  return TASK_STATUS_TEXT[status] ?? status;
-}
-
-const taskSnapshot = ref<TaskSnapshotResponse>({ running: [], finished: [] });
-const tasksRefreshing = ref(false);
-
-async function refreshTasks(silent = false): Promise<void> {
-  if (!silent) tasksRefreshing.value = true;
-  try {
-    const res = await tasksApi.listTasks();
-    taskSnapshot.value = res.data;
-  } catch (error) {
-    // 已完结聚合仅运行内成立、后端未装配任务基建（503）皆属常态——静默轮询不打扰
-    if (!silent) ElMessage.error(getApiErrorMessage(error, '获取任务快照失败'));
-  } finally {
-    if (!silent) tasksRefreshing.value = false;
-  }
-}
-
-const runningTasks = computed<TaskCard[]>(() =>
-  taskSnapshot.value.running.filter(task => task.executor === selectedName.value),
-);
-const finishedTasks = computed<TaskCard[]>(() =>
-  taskSnapshot.value.finished.filter(task => task.executor === selectedName.value),
-);
-
-// task.changed 实时刷新（WS 全量订阅已入 events store；这里只数增量触发拉取）
-watch(
-  () => events.value.reduce((count, e) => (e.type === 'task.changed' ? count + 1 : count), 0),
-  () => void refreshTasks(true),
-);
+// 任务区：委派任务卡（进行中账本快照 + 已完结事件聚合，按执行 Agent 过滤）。
+// 数据流在 useAgentTasks 共享组合式（直播控制台任务卡条同源）；确认框留本页
+const {
+  runningTasks,
+  finishedTasks,
+  refreshing: tasksRefreshing,
+  refresh: refreshTasks,
+  cancelTask: cancelTaskRequest,
+} = useAgentTasks(selectedName);
 
 async function cancelTask(task: TaskCard): Promise<void> {
-  const name = selectedName.value;
-  if (!name) return;
   const ok = await confirmAction(
     `确认取消任务 ${task.task_id}？将强制清账并通知该 Agent 停手`,
     '取消任务确认',
@@ -653,13 +616,7 @@ async function cancelTask(task: TaskCard): Promise<void> {
     },
   );
   if (!ok) return;
-  try {
-    await agentsApi.cancelAgentTask(name, task.task_id);
-    ElMessage.success('任务已取消');
-  } catch (error) {
-    ElMessage.error(getApiErrorMessage(error, '取消失败'));
-  }
-  await refreshTasks(true);
+  await cancelTaskRequest(task.task_id);
 }
 
 // 干预输入条：模式集合与传输按选中 Agent 分派——单一事实源在
@@ -734,7 +691,7 @@ async function highlightRound(roundId: string): Promise<void> {
 onMounted(() => {
   componentsStore.fetchComponents();
   void refreshAgentStates();
-  void refreshTasks();
+  // 任务快照由 useAgentTasks 在选中目标就绪时拉取，这里不再重复首拉
   // 深链消费：读一次 query 并已由 replace 清参（刷新/前进后退不重复高亮）
   pendingDeepLink.value = consumeDeepLink();
   // 状态轮询：心跳/存活/状态随时间自动保鲜
