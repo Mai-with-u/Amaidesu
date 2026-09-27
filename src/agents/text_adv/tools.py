@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional, Tuple
@@ -280,6 +281,11 @@ class TextAdvToolProvider(BaseToolProvider):
     # text_adv_advance：按键推进 → 等稳定 → 识别 → 快照
     # ==================================================================
 
+    async def _inject(self, action: Callable[[], None]) -> None:
+        """在 worker 线程执行键鼠注入：pyautogui 为同步 API，事件循环内直接
+        调用会按注入时长冻结整个进程（hold 按住多久停摆多久）。"""
+        await asyncio.to_thread(action)
+
     async def _invoke_advance(self, started_ms: int) -> ToolExecutionResult:
         cfg = self.agent.typed_config
         ok, reason = self._guard_window()
@@ -288,7 +294,7 @@ class TextAdvToolProvider(BaseToolProvider):
 
         key = cfg.keys.get("advance", "space")
         try:
-            self.input_backend.press(key)
+            await self._inject(lambda: self.input_backend.press(key))
         except Exception as exc:  # noqa: BLE001 - 注入失败转失败结果
             logger.exception(f"推进按键失败（key={key}）: {type(exc).__name__}: {exc}")
             return self._fail("text_adv_advance", started_ms, f"推进按键失败: {type(exc).__name__}: {exc}")
@@ -359,7 +365,7 @@ class TextAdvToolProvider(BaseToolProvider):
             )
 
         try:
-            self.input_backend.click(abs_xy[0], abs_xy[1])
+            await self._inject(lambda: self.input_backend.click(abs_xy[0], abs_xy[1]))
         except Exception as exc:  # noqa: BLE001 - 注入失败转失败结果
             logger.exception(f"选项点击失败（{abs_xy}）: {type(exc).__name__}: {exc}")
             return self._fail("text_adv_choose", started_ms, f"选项点击失败: {type(exc).__name__}: {exc}")
@@ -410,7 +416,7 @@ class TextAdvToolProvider(BaseToolProvider):
                 logger.warning("监视器原点查询失败，AUTO 按钮坐标按 (0,0) 原点使用")
                 abs_xy = (button_xy[0], button_xy[1])
             try:
-                self.input_backend.click(abs_xy[0], abs_xy[1])
+                await self._inject(lambda: self.input_backend.click(abs_xy[0], abs_xy[1]))
             except Exception as exc:  # noqa: BLE001 - 点击失败不翻标志
                 logger.exception(f"AUTO 按钮点击失败（{abs_xy}）: {type(exc).__name__}: {exc}")
                 return self._fail("text_adv_set_auto", started_ms, f"AUTO 按钮点击失败: {type(exc).__name__}: {exc}")
