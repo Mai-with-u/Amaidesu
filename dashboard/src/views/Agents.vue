@@ -14,6 +14,7 @@
               <span class="md-list-count-total">共 {{ totalCount }}</span>
             </span>
           </div>
+          <!-- 批量启停影响所有 Agent（直播中误点全部停止会直接停摆），先确认再执行 -->
           <div class="md-batch-actions">
             <el-button
               size="small"
@@ -23,7 +24,7 @@
               :loading="batchLoading === 'start'"
               :disabled="totalCount === 0 || startedCount === totalCount"
               title="启动全部 Agent"
-              @click="runBatch('start')"
+              @click="handleBatch('start')"
             >
               全部启动
             </el-button>
@@ -35,7 +36,7 @@
               :loading="batchLoading === 'stop'"
               :disabled="totalCount === 0 || startedCount === 0"
               title="停止全部 Agent"
-              @click="runBatch('stop')"
+              @click="handleBatch('stop')"
             >
               全部停止
             </el-button>
@@ -78,13 +79,14 @@
       <!-- RIGHT：详情 + 运行轨迹（flex-1, the star） -->
       <main class="md-detail-panel" aria-label="Agent 详情">
         <template v-if="selected">
-          <!-- 详情头：名称 + 状态 + 操作 -->
+          <!-- 详情头：名称 + 状态 + 操作。档案页以查看为主：状态标签是头部
+               最大权重元素，启停/暂停恢复为次要样式，高风险动作收进"更多" -->
           <header class="md-detail-header">
             <div class="md-detail-title-block">
               <div class="md-detail-title-row">
                 <h1 class="md-detail-name">{{ selected.name }}</h1>
                 <el-tag
-                  size="default"
+                  size="large"
                   :type="selected.is_started ? 'success' : selected.is_enabled ? 'warning' : 'info'"
                   effect="dark"
                   class="md-status-tag"
@@ -102,7 +104,8 @@
               <el-button
                 v-if="!selected.is_started"
                 type="primary"
-                size="default"
+                size="small"
+                plain
                 :loading="actionLoading[`${selected.name}-start`]"
                 @click="handleControl('start')"
               >
@@ -110,7 +113,8 @@
               </el-button>
               <el-button
                 v-else
-                size="default"
+                size="small"
+                plain
                 :loading="actionLoading[`${selected.name}-stop`]"
                 @click="handleControl('stop')"
               >
@@ -119,7 +123,7 @@
               <!-- 暂停/恢复互斥：同理只渲染可用的一项 -->
               <el-button
                 v-if="selectedState !== 'paused'"
-                size="default"
+                size="small"
                 plain
                 :disabled="!agentStateOf(selected.name)"
                 :loading="controlLoading[`${selected.name}-pause`]"
@@ -129,7 +133,7 @@
               </el-button>
               <el-button
                 v-else
-                size="default"
+                size="small"
                 type="warning"
                 plain
                 :loading="controlLoading[`${selected.name}-resume`]"
@@ -139,7 +143,7 @@
               </el-button>
               <!-- 重启/关机为低频高风险动作，收进下拉（点击后仍有确认框） -->
               <el-dropdown class="more-actions" trigger="click" @command="onMoreCommand">
-                <el-button size="default" plain :loading="moreActionsLoading">
+                <el-button size="small" plain :loading="moreActionsLoading">
                   更多
                   <el-icon class="el-icon--right"><arrow-down /></el-icon>
                 </el-button>
@@ -538,6 +542,18 @@ async function handleAgentControl(action: AgentControlActionType): Promise<void>
     controlLoading[key] = false;
     await refreshAgentStates();
   }
+}
+
+// 批量启停影响所有 Agent，先确认再执行（取消路径零请求）
+async function handleBatch(action: 'start' | 'stop'): Promise<void> {
+  const verb = action === 'start' ? '启动' : '停止';
+  const ok = await confirmAction(
+    `确认${verb}全部 ${totalCount.value} 个 Agent？将同时改变所有 Agent 的运行状态`,
+    `批量${verb}确认`,
+    { confirmButtonText: `确认${verb}` },
+  );
+  if (!ok) return;
+  await runBatch(action);
 }
 
 // 既有重启语义（组件控制端点）不动，仅补确认框
