@@ -94,6 +94,61 @@ async def test_vts_reconnect_default_compose() -> None:
 
 
 # =============================================================================
+# 手动重连后自动重连循环恢复
+# =============================================================================
+
+
+async def test_connect_restores_reconnect_loop_after_manual_disconnect() -> None:
+    """手动断开（循环被取消置空）后再手动 connect：自动重连循环必须被拉回。
+
+    无论手动连接成败（VTS 未起时 connect 失败是常态），循环都要恢复——
+    否则 VTS 之后恢复时不再自动重连。
+    """
+    provider = _build_provider()
+    provider._has_started = True
+    provider._reconnect_task = None  # disconnect→_disconnect 取消并置空后的状态
+    provider._connect = AsyncMock()  # type: ignore[method-assign]
+    provider._RECONNECT_INTERVAL_S = 999  # 拉回后循环停在首个 sleep，测试尾取消
+
+    assert await provider.connect() is False  # 手动连接失败（_connect 被 mock，_is_connected=False）
+    assert provider._reconnect_task is not None and not provider._reconnect_task.done()
+
+    task = provider._reconnect_task
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_connect_does_not_duplicate_running_reconnect_loop() -> None:
+    """循环仍在运行时手动 connect 不得重复拉起（避免两个循环并存）。"""
+    provider = _build_provider()
+    provider._has_started = True
+    provider._connect = AsyncMock()  # type: ignore[method-assign]
+    provider._RECONNECT_INTERVAL_S = 999
+    provider._reconnect_task = asyncio.create_task(provider._reconnect_loop())
+
+    try:
+        await provider.connect()
+        assert provider._reconnect_task is not None and not provider._reconnect_task.done()
+    finally:
+        task = provider._reconnect_task
+        assert task is not None
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_connect_skips_loop_restore_before_setup() -> None:
+    """setup 未执行过（_has_started=False）时 connect 不拉循环——
+    事件订阅/口型渲染等装配语义都还没建立，循环不该提前启动。"""
+    provider = _build_provider()
+    provider._has_started = False
+    provider._reconnect_task = None
+    provider._connect = AsyncMock()  # type: ignore[method-assign]
+
+    await provider.connect()
+    assert provider._reconnect_task is None
+
+
+# =============================================================================
 # 连接态迁移回调 / last_error / health_check
 # =============================================================================
 

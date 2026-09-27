@@ -33,6 +33,7 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
+from src.modules.task_utils import spawn_background_task
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,
@@ -174,6 +175,8 @@ class VTSProvider(BaseToolProvider):
         # 共享口型分析器（装配注入；setup 时挂 VTS 渲染器，None = 不渲染口型）
         self.lipsync_analyzer = lipsync_analyzer
         self.logger = get_logger(self.__class__.__name__)
+        # fire-and-forget 后台任务强引用（防 GC 中途回收 + 异常可见化）
+        self._bg_tasks: set = set()
 
         # 配置（typed；空 dict = 全默认；失败 log+raise）
         try:
@@ -655,11 +658,13 @@ class VTSProvider(BaseToolProvider):
             except Exception as e:
                 self.logger.error(f"启动 idle 动画失败: {e}")
         elif not enabled and self.idle_motion._running:
-            try:
-                # 异步停止转后台任务，不阻塞调用方
-                asyncio.create_task(self.idle_motion.stop())
-            except Exception as e:
-                self.logger.error(f"停止 idle 动画失败: {e}")
+            # 异步停止转后台任务，不阻塞调用方
+            spawn_background_task(
+                self.idle_motion.stop(),
+                logger=self.logger,
+                tasks=self._bg_tasks,
+                label=f"{self.__class__.__name__}.idle_motion_stop",
+            )
 
     def get_stats(self) -> Dict[str, Any]:
         return {
@@ -961,9 +966,17 @@ class VTSProvider(BaseToolProvider):
         ``_connect`` 异常被内部 try 吞掉，此处的真值与 VTS WebSocket 实际
         状态一致。手动 connect 与后台 ``_reconnect_loop`` 属低频可接受并发
         场景，不强制互斥。
+
+        手动断开（``disconnect``）会取消自动重连循环并置空任务引用；此处
+        在已启动过的 Provider 上把循环拉回来，保证手动重连成败与否都不
+        影响后续 VTS 恢复时的自动重连（循环自身按 ``_is_connected`` 分流，
+        未连接时持续重试）。
         """
         self.logger.info("手动触发 VTS 连接")
         await self._connect()
+        if self._has_started and (self._reconnect_task is None or self._reconnect_task.done()):
+            self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+            self._reconnect_task.set_name(f"{self.__class__.__name__}.reconnect_loop")
         return self._is_connected
 
     async def disconnect(self) -> bool:
@@ -972,10 +985,8 @@ class VTSProvider(BaseToolProvider):
         复用 ``_disconnect`` 的关闭逻辑：停 idle → 取消后台重连循环 →
         关 VTS WebSocket → 置 ``_is_connected=False``。区别于 ``cleanup``
         的是**不重置** ``_has_started``——手动断开不破坏 setup 语义，后续
-        仍可再 connect。后台 ``_reconnect_loop`` 被取消后手动重连场景下
-        不自动恢复：调用方（``reconnect_provider``）在 connect 成功后下次
-        ``_vts_health_check`` 仍能驱动恢复路径，不阻塞熔断器复位。返回
-        True 表达"断开动作已完成"。
+        仍可再 connect；重连循环的恢复由 ``connect`` 负责（拉回循环），
+        手动重连成败均不影响后续自动重连。返回 True 表达"断开动作已完成"。
         """
         self.logger.info("手动断开 VTS 连接")
         await self._disconnect()
