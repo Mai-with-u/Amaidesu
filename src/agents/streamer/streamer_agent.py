@@ -43,6 +43,7 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.logging import get_logger
 from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown
+from src.modules.task_utils import spawn_background_task
 from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.time_utils import now_ms
@@ -220,6 +221,8 @@ class StreamerAgent(BaseAgent):
         # 画像行为策略（[memory] 段；控制后台事实提取与画像生成）
         self._memory_policy = memory_policy if isinstance(memory_policy, dict) else {}
         self._logger = get_logger("StreamerAgent")
+        # fire-and-forget 后台任务强引用（防 GC 中途回收 + 异常可见化）
+        self._bg_tasks: set = set()
 
         # ===== 内部子组件 =====
         # 弹幕聚合缓冲 + 强制触发判定
@@ -958,10 +961,12 @@ class StreamerAgent(BaseAgent):
         """桥接 RundownState 的事件回调到 EventBus（异步 emit 经任务调度）。"""
         if self._event_bus is None:
             return
-        try:
-            asyncio.create_task(self._event_bus.emit(event_name, payload, source="RundownState"))
-        except RuntimeError as exc:
-            self._logger.warning(f"rundown.changed 任务创建失败（已忽略）: {exc}")
+        spawn_background_task(
+            self._event_bus.emit(event_name, payload, source="RundownState"),
+            logger=self._logger,
+            tasks=self._bg_tasks,
+            label="StreamerAgent.rundown_changed_emit",
+        )
 
     # ==================================================================
     # 公开门面：主动发言动态开关（Dashboard 直播控制台）

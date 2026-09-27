@@ -47,6 +47,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
+from src.modules.task_utils import spawn_background_task
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 
@@ -200,6 +201,8 @@ class MinecraftAgent(BaseAgent):
 
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
         self._worker_task: Optional[asyncio.Task[None]] = None
+        # fire-and-forget 后台任务强引用（防 GC 中途回收 + 异常可见化）
+        self._bg_tasks: set = set()
         self._wake_event: asyncio.Event = asyncio.Event()
         # 指令队列（委派接收 / 系统注入投递；元素 = (task_id, content)，
         # task_id 空串表示非委派来源；任务执行中也可追加——LLM 下一次推理吸收）
@@ -1208,11 +1211,12 @@ class MinecraftAgent(BaseAgent):
         """
         if not (self._batch_active or self._pending_task_count() > 0):
             return
-        try:
-            asyncio.get_running_loop().create_task(self._drain_attention())
-        except RuntimeError:
-            # 没有事件循环（同步上下文）：通知只是提示，丢弃不补
-            self._logger.warning("注意流通知到达时无事件循环，本次提示丢弃")
+        spawn_background_task(
+            self._drain_attention(),
+            logger=self._logger,
+            tasks=self._bg_tasks,
+            label="MinecraftAgent.drain_attention",
+        )
 
     async def _drain_attention(self) -> None:
         """共用一个游标读取者，分页补读期间到达的通知按顺序核实。"""

@@ -12,7 +12,6 @@ LLM 请求历史记录管理器
 注意：所有地方都应该使用全局实例以确保数据一致性
 """
 
-import asyncio
 import json
 import uuid
 from collections import deque
@@ -24,6 +23,7 @@ from pydantic import BaseModel, Field
 from src.modules.llm.observation import record_request
 from src.modules.logging import get_logger
 from src.modules.storage.repos.llm import LLMRequestInsert
+from src.modules.task_utils import spawn_background_task
 from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -157,6 +157,9 @@ class RequestHistoryManager:
         # 内存缓存（使用 deque 限制大小）
         self._cache: deque = deque(maxlen=cache_size)
 
+        # fire-and-forget 后台任务强引用（防 GC 中途回收 + 异常可见化）
+        self._bg_tasks: set = set()
+
         # 如果使用全局实例，保存到全局变量
         if use_global:
             global_request_history_manager = self
@@ -191,12 +194,12 @@ class RequestHistoryManager:
 
         # 异步写库（fire-and-forget；无事件循环的同步上下文仅保留内存缓存）
         if self._llm_repo is not None:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                pass
-            else:
-                loop.create_task(self._persist_request(record_dict))
+            spawn_background_task(
+                self._persist_request(record_dict),
+                logger=self.logger,
+                tasks=self._bg_tasks,
+                label="RequestHistoryManager.persist_request",
+            )
 
         self.logger.debug(
             f"记录请求: {record.request_id}, 模型: {record.model_name}, "

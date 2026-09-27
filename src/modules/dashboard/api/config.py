@@ -21,7 +21,6 @@ API 键约定：**scope 前缀 + 文件内点分路径**——``tools.tools.task
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated
-import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -46,12 +45,17 @@ from src.modules.dashboard.services.config_adapter import (
 )
 from src.modules.dashboard.utils.component_helper import config_dir as get_config_dir
 from src.modules.logging import get_logger
+from src.modules.task_utils import spawn_background_task
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
 
 router = APIRouter()
 logger = get_logger("ConfigAPI")
+
+# fire-and-forget 后台任务强引用（防 GC 中途回收 + 异常可见化）；模块级即可——
+# 进程随重启退出，无需停止时汇合
+_bg_tasks: set = set()
 
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
@@ -199,7 +203,12 @@ async def restart_service(server: ServerDep) -> ConfigUpdateResponse:
     """
     try:
         logger.info("收到重启服务请求")
-        asyncio.create_task(server.graceful_restart())
+        spawn_background_task(
+            server.graceful_restart(),
+            logger=logger,
+            tasks=_bg_tasks,
+            label="ConfigAPI.graceful_restart",
+        )
         return ConfigUpdateResponse(
             success=True,
             message="正在重启服务...",
