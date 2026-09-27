@@ -50,6 +50,8 @@ export type EntryKind =
   | 'game'
   /** 递话受理（agent.prompted）：运营/跨 Agent 留言送达目标 */
   | 'prompt'
+  /** Agent 每步响应（agent.replied）：命令驱动型 Agent 中间步骤的行动说明，决定卡形态 */
+  | 'agent_reply'
   /** 会话模式的过程折叠条（合成展示条目，不对应任何事件） */
   | 'process_group'
   /** 思考行：ReAct 各步/生成段思考流（视图层合成条目，不对应事件；流式期间文本原地增长） */
@@ -200,6 +202,7 @@ export type AgentGroup = 'streamer' | 'game' | 'room';
 
 export function agentGroupOf(entry: ShowEntry): AgentGroup {
   if (entry.kind === 'game') return 'game';
+  if (entry.kind === 'agent_reply') return 'game';
   if (entry.kind === 'thinking') {
     return entry.source === '游戏 Agent' ? 'game' : 'streamer';
   }
@@ -562,10 +565,28 @@ function fromPrompt(event: FeedEvent, data: Record<string, unknown>): ShowEntry 
   });
 }
 
+/** Agent 每步响应：agent.replied（命令驱动型 Agent 中间步骤的行动说明）。
+ *  决定卡形态渲染（llmRequestId 供缓存/Token/上下文胶囊懒取），roundId 与
+ *  思考流/工具卡同轮关联键 */
+function fromAgentReply(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  return makeEntry({
+    id: event.id,
+    kind: 'agent_reply',
+    tsMs: event.timestamp_ms,
+    actor: '游戏 Agent',
+    text: str(data.content) || summarizeEvent(event.type, data),
+    roundId: str(data.round_id),
+    detail: { step: num(data.step) ?? 0, model: str(data.model) },
+    llmRequestId: str(data.llm_request_id),
+    source: '游戏 Agent',
+  });
+}
+
 /** 非控制台事件（system.* 等）返回 null，不进时间线 */
 export function toEntry(event: FeedEvent): ShowEntry | null {
   const data = isRecord(event.data) ? event.data : {};
   if (event.type === 'agent.prompted') return fromPrompt(event, data);
+  if (event.type === 'agent.replied') return fromAgentReply(event, data);
   // WS 广播把 4 种 room.message.* 统一为 "room.message"，种类由 payload.message_type 判别
   if (event.type === 'room.message') return fromRoomMessage(event, data);
   if (event.type === 'streamer.speech') return fromSpeech(event, data);
@@ -676,8 +697,6 @@ export interface ThinkingSegmentInput {
   roundId: string;
   /** 段归属：planner（按 ReAct 步分段）/ replyer（表达生成，恒一段）/ minecraft */
   phase: string;
-  /** 增量通道：reasoning（思考，缺省）/ content（响应正文） */
-  kind?: string;
   /** 段号：planner 为步号；replyer 恒 1 */
   step: number;
   /** 段首增量到达时刻（Unix 毫秒） */
@@ -687,20 +706,16 @@ export interface ThinkingSegmentInput {
 }
 
 /** 思考段 → 时间线合成条目。id 由轮次/段归属/段号派生且稳定——流式增量到达时
- * 同 id 原地刷新文本，不产生新行；响应正文段（kind=content）与思考段同号不同 id */
+ * 同 id 原地刷新文本，不产生新行 */
 export function buildThinkingRow(seg: ThinkingSegmentInput): ShowEntry {
-  const isContent = seg.kind === 'content';
-  const label = isContent
-    ? seg.phase === 'minecraft'
-      ? '游戏 Agent · 响应'
-      : `响应 · 步骤 ${seg.step}`
-    : seg.phase === 'replyer'
+  const label =
+    seg.phase === 'replyer'
       ? '生成思考'
       : seg.phase === 'minecraft'
         ? '游戏 Agent · 思考'
         : `思考 · 步骤 ${seg.step}`;
   return makeEntry({
-    id: `think:${seg.roundId}:${seg.phase}:${seg.step}${isContent ? ':reply' : ''}`,
+    id: `think:${seg.roundId}:${seg.phase}:${seg.step}`,
     kind: 'thinking',
     tsMs: seg.tsMs,
     actor: label,
@@ -756,6 +771,7 @@ const CHAT_PROCESS_KINDS: ReadonlySet<EntryKind> = new Set<EntryKind>([
   'boundary',
   'thinking',
   'prompt',
+  'agent_reply',
 ]);
 
 /** 过程条合成条目 id 前缀（与事件条目 id 区分，避免 key 冲突） */
@@ -772,6 +788,7 @@ const CHAT_PROCESS_LABEL: Record<string, string> = {
   rundown: '环节',
   boundary: '场次',
   thinking: '思考',
+  agent_reply: '响应',
 };
 
 /** 该条目在会话模式是否属于过程行（折叠进过程条） */

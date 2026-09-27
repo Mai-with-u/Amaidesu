@@ -11,6 +11,7 @@ from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftAgentState
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.factory import instantiate_agent
+from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
@@ -1955,19 +1956,8 @@ class _RecordingSink:
     def __init__(self) -> None:
         self.calls: List[Dict[str, Any]] = []
 
-    def on_thinking_delta(
-        self,
-        *,
-        round_id: str,
-        phase: str,
-        step: int,
-        seq: int,
-        text_delta: str,
-        kind: str = "reasoning",
-    ) -> None:
-        self.calls.append(
-            {"round_id": round_id, "phase": phase, "step": step, "seq": seq, "text_delta": text_delta, "kind": kind}
-        )
+    def on_thinking_delta(self, *, round_id: str, phase: str, step: int, seq: int, text_delta: str) -> None:
+        self.calls.append({"round_id": round_id, "phase": phase, "step": step, "seq": seq, "text_delta": text_delta})
 
 
 class _CapturingToolProvider(BaseToolProvider):
@@ -1995,22 +1985,27 @@ class _CapturingToolProvider(BaseToolProvider):
         return ToolExecutionResult(tool_name=invocation.tool_name, success=True, structured_content={"ok": True})
 
 
-def _build_sink_agent(llm: Any, sink: Optional[Any], capturing: _CapturingToolProvider) -> MinecraftAgent:
+def _build_sink_agent(
+    llm: Any,
+    sink: Optional[Any],
+    capturing: _CapturingToolProvider,
+    bus: Optional[Any] = None,
+) -> MinecraftAgent:
     registry = ToolRegistry()
     registry.register_provider(capturing)
 
     return MinecraftAgent(
         MinecraftConfig(mcp=McpServerConfig(enabled=False)),
         llm_manager=llm,
-        event_bus=_make_event_bus(),
+        event_bus=bus or _make_event_bus(),
         tool_registry=registry,
         thinking_sink=sink,
     )
 
 
 @pytest.mark.asyncio
-async def test_thinking_sink_receives_reasoning_and_content_with_minecraft_phase() -> None:
-    """sink 注入后：LLM reasoning/content delta 均转发并携带 kind，phase=minecraft，seq 跨步单调递增。"""
+async def test_thinking_sink_receives_reasoning_with_minecraft_phase() -> None:
+    """sink 注入后：LLM reasoning delta → sink.on_thinking_delta，phase=minecraft，seq 跨步单调递增；content 增量不转发（响应正文走 agent.replied 事件）。"""
     sink = _RecordingSink()
     cap = _CapturingToolProvider()
 
@@ -2031,13 +2026,12 @@ async def test_thinking_sink_receives_reasoning_and_content_with_minecraft_phase
 
     await agent.start()
     agent.receive_prompt(content="两步", source="test")
-    await _wait_until(lambda: len(sink.calls) >= 4)
+    await _wait_until(lambda: len(sink.calls) >= 3)
     await agent.stop()
 
     by_text = {c["text_delta"]: c for c in sink.calls}
-    assert set(by_text) == {"step1 A", "step1 content x", "step1 B", "step2"}
-    assert by_text["step1 content x"]["kind"] == "content"
-    assert by_text["step1 A"]["kind"] == "reasoning" and by_text["step1 B"]["kind"] == "reasoning"
+    assert set(by_text) == {"step1 A", "step1 B", "step2"}
+    assert not any("content" in k for k in by_text)
     round_ids = {c["round_id"] for c in sink.calls}
     assert len(round_ids) == 1
     (rid,) = round_ids
@@ -2074,6 +2068,38 @@ async def test_thinking_sink_round_id_propagates_to_tool_invocations() -> None:
     inv = cap.invocations[0]
     assert inv.round_id == sink.calls[0]["round_id"]
     assert inv.round_id.startswith("mc_")
+
+
+@pytest.mark.asyncio
+async def test_agent_replied_emitted_for_intermediate_steps_only() -> None:
+    """中间工具调用步骤且正文非空 → 发 agent.replied（round/step 齐全，与思考轮同键）；
+    自然终止轮的正文走 game.report 交付卡，不再重复发。"""
+    bus = _make_event_bus()
+    sink = _RecordingSink()
+    cap = _CapturingToolProvider()
+
+    async def fake(messages, **kwargs):
+        if not any(m.get("role") == "tool" for m in messages):
+            return _resp(
+                "目标解释：用切石机把石头加工成石砖",
+                tool_calls=[_tool_call("minecraft_capture", {"v": 1}, "c1")],
+            )
+        return _resp("任务完成，石砖已交付")
+
+    agent = _build_sink_agent(_RecordingLlm(fake), sink, cap, bus=bus)
+
+    await agent.start()
+    agent.receive_prompt(content="做石砖", source="test")
+    await _wait_until(lambda: any(isinstance(c.args[1], GamePayload) for c in bus.emit.await_args_list))
+    await agent.stop()
+
+    replied = [c.args[1] for c in bus.emit.await_args_list if isinstance(c.args[1], AgentRepliedPayload)]
+    assert len(replied) == 1, "只有中间工具调用步骤发响应事实"
+    payload = replied[0]
+    assert payload.agent == "minecraft"
+    assert payload.content == "目标解释：用切石机把石头加工成石砖"
+    assert payload.step == 1
+    assert payload.round_id.startswith("mc_"), "响应事实带思考轮关联键（sink 注入即生成）"
 
 
 @pytest.mark.asyncio

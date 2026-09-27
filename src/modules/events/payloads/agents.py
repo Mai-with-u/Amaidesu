@@ -4,6 +4,9 @@
 - ``agent.prompted``：递话受理事件（运营或跨 Agent 递话成功送达目标时发一条）。
   递话不进任务账本（记账分家），本事件只做观测——前端时间线递话行与
   Agent 页"最近递话"的数据源。
+- ``agent.replied``：命令驱动型 Agent 的每步响应事实（中间工具调用步骤发一条，
+  自然终止轮的正文走 game.report 交付卡）——前端时间线响应卡的数据源，
+  llm_request_id 供懒取缓存/Token/上下文统计。
 """
 
 from pydantic import Field
@@ -40,4 +43,36 @@ class AgentPromptedPayload(BasePayload):
     )
 
 
-__all__ = ["AgentPromptedPayload"]
+@register_event(CoreEvents.AGENT_REPLIED)
+class AgentRepliedPayload(BasePayload):
+    """
+    Agent 每步响应事实 Payload（命令驱动型 Agent 的 ReAct 中间步骤，一步一条）。
+
+    Attributes:
+        agent: 发话 Agent 注册名（如 minecraft）
+        content: 本步响应正文（LLM 的 content 通道输出）
+        round_id: ReAct 轮次关联键（与思考流/工具卡同键；空串=无思考流注入）
+        step: ReAct 步号（轮内从 1 递增）
+        model: 本步请求实际使用的模型标识
+        llm_request_id: 请求历史指针（观察面懒取缓存/Token/上下文统计的键）
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
+        timestamp_ms: 事件发布时间戳（Unix 毫秒）
+    """
+
+    agent: str = Field(..., description="发话 Agent 注册名")
+    content: str = Field(default="", description="本步响应正文")
+    round_id: str = Field(default="", description="ReAct 轮次关联键（空串=无思考流注入）")
+    step: int = Field(default=0, description="ReAct 步号（轮内从 1 递增）")
+    model: str = Field(default="", description="本步请求实际使用的模型标识")
+    llm_request_id: str = Field(default="", description="请求历史指针（统计懒取键）")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
+    timestamp_ms: int = Field(
+        default_factory=lambda: now_ms(),
+        description="事件发布时间戳（Unix 毫秒）",
+    )
+
+
+__all__ = ["AgentPromptedPayload", "AgentRepliedPayload"]

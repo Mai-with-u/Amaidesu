@@ -25,6 +25,7 @@ from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     AgentPromptedPayload,
+    AgentRepliedPayload,
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
@@ -132,6 +133,8 @@ class EventBroadcaster:
         CoreEvents.TASK_CHANGED: (None, TaskChangedPayload),
         # 递话受理（运营/跨 Agent 留言送达目标；时间线递话行 + 最近递话数据源）
         CoreEvents.AGENT_PROMPTED: (None, AgentPromptedPayload),
+        # Agent 每步响应事实（时间线响应卡数据源）
+        CoreEvents.AGENT_REPLIED: (None, AgentRepliedPayload),
         CoreEvents.TOOL_RESULT_WILDCARD: (None, ToolResultPayload),
         CoreEvents.TOOL_HEALTH_WILDCARD: (None, ToolHealthPayload),
         CoreEvents.CORE_STARTUP: (None, CoreStartupPayload),

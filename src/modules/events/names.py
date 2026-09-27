@@ -145,6 +145,11 @@ class CoreEvents:
     # 观察面据此渲染递话行与最近递话。递话不进任务账本（记账分家），
     # 本事件只做观测，不承载唤醒语义。
     AGENT_PROMPTED = "agent.prompted"
+    # 命令驱动型 Agent 每步推理产生响应正文即发一条（中间工具调用步骤；
+    # 自然终止轮的正文走 game.report 交付卡，不重复发）。正文无其它事件
+    # 通道（思考流只转发 reasoning），本事件是"游戏 Agent 每步说了什么"
+    # 的唯一观测面；llm_request_id 供观察面懒取缓存/Token/上下文统计。
+    AGENT_REPLIED = "agent.replied"
 
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:

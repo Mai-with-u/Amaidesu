@@ -51,20 +51,8 @@ class StreamPreviewHub:
 
     # ==== ThinkingStreamSink 契约（同步，Agent 决策循环内调用）====
 
-    def on_thinking_delta(
-        self,
-        *,
-        round_id: str,
-        phase: str,
-        step: int,
-        seq: int,
-        text_delta: str,
-        kind: str = "reasoning",
-    ) -> None:
-        """缓冲一条思考增量（同步；仅 append + 惰性启 flush，无 IO）。
-
-        kind 区分增量通道（"reasoning" 思考 / "content" 响应正文），原样透传
-        给前端分行渲染；缺省 reasoning 兼容只发思考的调用方。"""
+    def on_thinking_delta(self, *, round_id: str, phase: str, step: int, seq: int, text_delta: str) -> None:
+        """缓冲一条思考增量（同步；仅 append + 惰性启 flush，无 IO）。"""
         if self._stopped:
             return
         self._buffer.append(
@@ -74,7 +62,6 @@ class StreamPreviewHub:
                 "step": step,
                 "seq": seq,
                 "text_delta": text_delta,
-                "kind": kind,
             }
         )
         self._ensure_flush_task()

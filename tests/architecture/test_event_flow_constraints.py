@@ -28,7 +28,7 @@ INPUT_EVENTS = {
 # Agent 域允许的非输入订阅：场次生命周期（主动发言场次闸门）与游戏事件族
 AGENT_ALLOWED_PREFIXES = ("live.started", "live.ended", "game.", "tool.result.")
 
-# Agent 域输出事件（决策 / 流程 / 发言 / 任务事实）——Tool 域不得订阅
+# Agent 域输出事件（决策 / 流程 / 发言 / 任务 / 控制面事实）——Tool 域不得订阅
 DECISION_EVENTS = {
     "rundown.changed",
     "planner.decision",
@@ -36,6 +36,8 @@ DECISION_EVENTS = {
     "streamer.speech",
     "streamer.stage",
     "task.changed",
+    "agent.prompted",
+    "agent.replied",
 }
 
 

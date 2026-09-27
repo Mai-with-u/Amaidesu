@@ -787,3 +787,33 @@ describe('递话行（agent.prompted）', () => {
     expect(isChatProcessKind('prompt')).toBe(true);
   });
 });
+
+describe('响应卡（agent.replied）', () => {
+  it('响应事实 → 决定卡形态条目：正文主文、round/step/请求指针齐全、归游戏组', () => {
+    const entry = toEntry(
+      evt('agent.replied', {
+        agent: 'minecraft',
+        content: '目标解释：用切石机把石头加工成石砖',
+        round_id: 'mc_abc123456789',
+        step: 3,
+        model: 'deepseek-flash',
+        llm_request_id: 'req_1',
+      }),
+    );
+    expect(entry).not.toBeNull();
+    expect(entry!.kind).toBe('agent_reply');
+    expect(entry!.text).toBe('目标解释：用切石机把石头加工成石砖');
+    expect(entry!.roundId).toBe('mc_abc123456789');
+    expect(entry!.llmRequestId).toBe('req_1');
+    expect(entry!.source).toBe('游戏 Agent');
+    expect(entry!.detail).toMatchObject({ step: 3, model: 'deepseek-flash' });
+    expect(agentGroupOf(entry!)).toBe('game');
+  });
+
+  it('正文为空回退事件摘要；会话模式折叠为过程行', () => {
+    const entry = toEntry(evt('agent.replied', { agent: 'minecraft', content: '' }));
+    expect(entry!.kind).toBe('agent_reply');
+    expect(entry!.text).not.toBe('');
+    expect(isChatProcessKind('agent_reply')).toBe(true);
+  });
+});

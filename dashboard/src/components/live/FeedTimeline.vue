@@ -172,6 +172,62 @@
           </div>
         </div>
 
+        <!-- Agent 响应卡（agent.replied）：命令驱动型 Agent 每步的行动说明，
+             决定卡同款胶囊（缓存/Token/模型/上下文，按 llm_request_id 懒取） -->
+        <div v-else-if="entry.kind === 'agent_reply'" class="decision is-agent-game">
+          <div class="act-head">
+            <span class="act-kind act-kind--game">响应</span>
+            <span v-if="detailStepOf(entry) > 0" class="act-source mono"
+              >步骤 {{ detailStepOf(entry) }}</span
+            >
+            <span class="grow" />
+            <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+          </div>
+          <p class="act-text">{{ entry.text }}</p>
+          <div class="d-meta">
+            <span
+              v-if="cacheLabelOf(entry)"
+              class="d-pill d-pill--cache"
+              :title="cacheTitleOf(entry)"
+            >
+              {{ cacheLabelOf(entry) }}
+            </span>
+            <span
+              v-if="tokensLabelOf(entry)"
+              class="d-pill d-pill--token"
+              :title="tokensTitleOf(entry)"
+            >
+              Token {{ tokensLabelOf(entry) }}
+            </span>
+            <span
+              v-if="modelNameOf(entry)"
+              class="d-pill d-pill--model"
+              :title="modelNameOf(entry)"
+            >
+              {{ modelNameOf(entry) }}
+            </span>
+            <span
+              v-if="ctxRatioOf(entry) !== null"
+              class="d-pill d-pill--ctx"
+              :class="{ 'is-warn': (ctxRatioOf(entry) ?? 0) > 0.8 }"
+              :title="ctxTitleOf(entry)"
+            >
+              <span class="d-pill-ctx-bar">
+                <span class="d-pill-ctx-bar-fill" :style="ctxBarStyleOf(entry)"></span>
+              </span>
+              上下文 {{ ctxLabelOf(entry) }}
+            </span>
+            <a
+              v-if="entry.llmRequestId"
+              class="d-link"
+              :href="`/llm/history?request_id=${encodeURIComponent(entry.llmRequestId)}`"
+              @click.stop
+            >
+              完整请求 ↗
+            </a>
+          </div>
+        </div>
+
         <!-- 工具调用卡（tool.result.*）：状态徽标（成功/失败）+ 来源徽标（主播决策/游戏 Agent）拆双槽
              工具卡一律中性底——状态由左边线色 + 徽标承载，避免高频工具行刷成警报墙 -->
         <div
@@ -565,9 +621,13 @@ watch(
     for (const entry of entries) {
       // 真实流程里 decision 轮末会合并进先到的 verdict 卡（llmRequestId 一并回填），
       // 独立 decision 卡只出现在无裁决的失败/静默轮，两种都要取数；
-      // speech 卡带的是 Replyer 表达请求的指针（与决策卡的 Planner 请求互补），同样取数
+      // speech 卡带的是 Replyer 表达请求的指针（与决策卡的 Planner 请求互补），同样取数；
+      // agent_reply 响应卡带本步请求指针，同一套懒取
       if (
-        (entry.kind === 'decision' || entry.kind === 'verdict' || entry.kind === 'speech') &&
+        (entry.kind === 'decision' ||
+          entry.kind === 'verdict' ||
+          entry.kind === 'speech' ||
+          entry.kind === 'agent_reply') &&
         entry.llmRequestId
       ) {
         visible.add(entry.llmRequestId);
@@ -600,6 +660,12 @@ watch(
 
 function statsOf(entry: ShowEntry): RoundTokenStats | null {
   return entry.llmRequestId ? (roundTokenStats.value.get(entry.llmRequestId) ?? null) : null;
+}
+
+/** 响应卡步骤号（agent.replied payload.step；缺省 0 不渲染） */
+function detailStepOf(entry: ShowEntry): number {
+  const step = entry.detail ? Number(entry.detail.step ?? 0) : 0;
+  return Number.isFinite(step) ? step : 0;
 }
 
 /** 万级以下直接显示，以上缩写为 k（d-meta 小字号场景，精确值在悬浮提示） */
@@ -1051,6 +1117,12 @@ async function copyText(text: string): Promise<void> {
 .decision.is-silent {
   background: var(--bg-hover);
   border-left-color: var(--border-color-dark);
+}
+
+/* Agent 响应卡（kind='agent_reply'）：决定卡同布局，游戏绿色系变体 */
+.decision.is-agent-game {
+  background: var(--color-game-bg);
+  border-left-color: var(--color-game);
 }
 
 .act-head {

@@ -305,8 +305,6 @@ export interface ThinkingDelta {
   step: number;
   seq: number;
   text_delta: string;
-  /** 增量通道：reasoning（思考，缺省）/ content（响应正文，游戏 Agent 每步说明） */
-  kind?: string;
 }
 
 export interface SubscribeRequest {

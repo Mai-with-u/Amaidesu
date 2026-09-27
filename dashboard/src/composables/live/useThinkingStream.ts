@@ -1,11 +1,11 @@
 /**
  * 思考流（WS kind="stream"；ADR-008 best-effort 观测通道）的视图层消费。
  *
- * 只在视图层合成：按 (round_id, phase, step, kind) 累积思考段，再合成
- * kind='thinking' 的时间线行与事件条目按时间归并（不进 events store、不落库、
- * 不回看）。状态是模块级单例——思考流不落库，但同一访问内切页再回来时时间线
- * 事件行（全局 store）不丢，思考行不应因页面切换单独消失；常驻内存靠轮数/
- * 步数上限保尾约束。WS 订阅在首次使用时挂接一次，随应用生命周期存在。
+ * 只在视图层合成：按 (round_id, phase, step) 累积思考段，再合成 kind='thinking'
+ * 的时间线行与事件条目按时间归并（不进 events store、不落库、不回看）。
+ * 状态是模块级单例——思考流不落库，但同一访问内切页再回来时时间线事件行
+ * （全局 store）不丢，思考行不应因页面切换单独消失；常驻内存靠轮数/步数
+ * 上限保尾约束。WS 订阅在首次使用时挂接一次，随应用生命周期存在。
  */
 
 import { computed, reactive, ref } from 'vue';
@@ -25,12 +25,10 @@ const THINKING_STEPS_PER_ROUND_MAX = 100;
 
 /** 每决策轮的思考聚合：planner 与 minecraft 共用按步分段（与工具卡时间交织），
  *  段携带自身 phase——两边步骤号各自从头计数，只按步号查找会互相踩段；
- *  replyer 独立一段；同一步的思考与响应正文（kind）再分段 */
+ *  replyer 独立一段 */
 interface ThinkingStepSeg extends ThinkingStep {
   /** 段归属：planner（主播 ReAct）/ minecraft（游戏 Agent ReAct） */
   phase: string;
-  /** 增量通道：reasoning（思考，缺省）/ content（响应正文） */
-  kind: string;
 }
 
 interface ThinkingRound {
@@ -87,14 +85,11 @@ function applyThinkingDeltas(batch: Array<{ delta: ThinkingDelta; tsMs: number }
       if (!round.replyerTsMs) round.replyerTsMs = tsMs;
       round.replyerText += delta.text_delta;
     } else {
-      // planner 与 minecraft 各按 (phase, kind, step) 分段累积：步骤号两边独立计数，
-      // 段归属（含时间线分组与行标签）随 phase 一路传递；kind 区分思考与响应正文
-      const kind = delta.kind ?? 'reasoning';
-      let seg = round.steps.find(
-        s => s.phase === delta.phase && s.kind === kind && s.step === delta.step,
-      );
+      // planner 与 minecraft 各按 (phase, step) 分段累积：步骤号两边独立计数，
+      // 段归属（含时间线分组与行标签）随 phase 一路传递
+      let seg = round.steps.find(s => s.phase === delta.phase && s.step === delta.step);
       if (!seg) {
-        seg = reactive({ phase: delta.phase, kind, step: delta.step, text: '', tsMs });
+        seg = reactive({ phase: delta.phase, step: delta.step, text: '', tsMs });
         round.steps.push(seg);
         while (round.steps.length > THINKING_STEPS_PER_ROUND_MAX) {
           round.steps.shift();
@@ -105,7 +100,7 @@ function applyThinkingDeltas(batch: Array<{ delta: ThinkingDelta; tsMs: number }
   }
 }
 
-/** 当前全部思考/响应行（buildThinkingRow 内 id 稳定，流式增量原地刷新；升序交给归并函数）。
+/** 当前全部思考行（buildThinkingRow 内 id 稳定，流式增量原地刷新；升序交给归并函数）。
  *  仅实时模式使用——思考流不落库，回看场次的 REST 时间线没有思考数据 */
 const liveThinkingRows = computed<ShowEntry[]>(() => {
   const watermark = thinkingHiddenBeforeMs.value;
@@ -116,7 +111,6 @@ const liveThinkingRows = computed<ShowEntry[]>(() => {
       segments.push({
         roundId,
         phase: step.phase,
-        kind: step.kind,
         step: step.step,
         tsMs: step.tsMs,
         text: step.text,
@@ -126,7 +120,6 @@ const liveThinkingRows = computed<ShowEntry[]>(() => {
       segments.push({
         roundId,
         phase: 'replyer',
-        kind: 'reasoning',
         step: 1,
         tsMs: round.replyerTsMs,
         text: round.replyerText,

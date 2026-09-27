@@ -1,7 +1,7 @@
 // useThinkingStream.ts 思考流视图层合成的测试
 //
-// 覆盖：WS 消息过滤、增量合批落状态、段累积（planner/minecraft/replyer + 响应
-// 正文段）、轮数/步数上限保尾、隐藏水位过滤、单例语义（重复调用状态保留）。
+// 覆盖：WS 消息过滤、增量合批落状态、段累积（planner/minecraft/replyer）、
+// 轮数/步数上限保尾、隐藏水位过滤、单例语义（重复调用状态保留）。
 //
 // 状态是模块级单例（切页保留）——每个用例用 vi.resetModules + 动态 import
 // 取得全新模块实例做隔离；stores 也必须取自重置后的同一模块图，否则 spy
@@ -33,13 +33,7 @@ vi.mock('@/api/websocket', () => ({
 
 /** 构造思考流 WS 信封（kind="stream" + thinking.delta + 批量增量） */
 function streamMessage(
-  deltas: Array<{
-    round_id: string;
-    phase: string;
-    step: number;
-    text_delta: string;
-    kind?: string;
-  }>,
+  deltas: Array<{ round_id: string; phase: string; step: number; text_delta: string }>,
   tsMs = 1000,
 ): WebSocketMessage {
   return {
@@ -132,49 +126,6 @@ describe('useThinkingStream', () => {
       '游戏 Agent · 思考',
       '生成思考',
     ]);
-  });
-
-  it('minecraft 响应正文（kind=content）独立成行，与同步思考段互不覆盖', () => {
-    const { liveThinkingRows } = mount();
-    handler(
-      streamMessage([
-        { round_id: 'r1', phase: 'minecraft', step: 3, text_delta: '先核对状态' },
-        {
-          round_id: 'r1',
-          phase: 'minecraft',
-          step: 3,
-          text_delta: '目标解释：切石',
-          kind: 'content',
-        },
-      ]),
-    );
-    vi.advanceTimersByTime(150);
-    expect(liveThinkingRows.value.map(row => row.actor)).toEqual([
-      '游戏 Agent · 思考',
-      '游戏 Agent · 响应',
-    ]);
-    const [think, reply] = liveThinkingRows.value;
-    expect(think.id).toBe('think:r1:minecraft:3');
-    expect(reply.id).toBe('think:r1:minecraft:3:reply');
-    expect(reply.source).toBe('游戏 Agent');
-    // 后续增量继续原地追加各自的行
-    handler(
-      streamMessage([
-        { round_id: 'r1', phase: 'minecraft', step: 3, text_delta: '、血量' },
-        { round_id: 'r1', phase: 'minecraft', step: 3, text_delta: '完毕', kind: 'content' },
-      ]),
-    );
-    vi.advanceTimersByTime(150);
-    expect(liveThinkingRows.value).toHaveLength(2);
-    expect(liveThinkingRows.value[0].text).toBe('先核对状态、血量');
-    expect(liveThinkingRows.value[1].text).toBe('目标解释：切石完毕');
-  });
-
-  it('kind 缺省按思考处理（兼容旧消息形态）', () => {
-    const { liveThinkingRows } = mount();
-    handler(streamMessage([{ round_id: 'r1', phase: 'minecraft', step: 1, text_delta: '想' }]));
-    vi.advanceTimersByTime(150);
-    expect(liveThinkingRows.value[0].actor).toBe('游戏 Agent · 思考');
   });
 
   it('轮数上限保尾：超过 20 轮时最旧轮被淘汰', () => {

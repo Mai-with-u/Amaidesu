@@ -17,8 +17,8 @@ def _make_hub(flush_interval_ms: int = 20, buffer_max: int = 100):
     return hub, ws
 
 
-def _delta(round_id="round_1", phase="planner", step=1, seq=1, text="想", kind="reasoning"):
-    return {"round_id": round_id, "phase": phase, "step": step, "seq": seq, "text_delta": text, "kind": kind}
+def _delta(round_id="round_1", phase="planner", step=1, seq=1, text="想"):
+    return {"round_id": round_id, "phase": phase, "step": step, "seq": seq, "text_delta": text}
 
 
 @pytest.mark.asyncio
@@ -35,21 +35,6 @@ async def test_deltas_batched_into_single_stream_message():
     stream_type, data = ws.broadcast_stream.await_args.args
     assert stream_type == "thinking.delta"
     assert [d["text_delta"] for d in data["deltas"]] == ["想", "了", "说"]
-    await hub.stop()
-
-
-@pytest.mark.asyncio
-async def test_kind_defaults_to_reasoning_and_passes_through():
-    """kind 缺省 reasoning（兼容只发思考的调用方），显式传入原样透传到推送。"""
-    hub, ws = _make_hub(flush_interval_ms=20)
-    hub.on_thinking_delta(**_delta(seq=1, text="想"))
-    hub.on_thinking_delta(**_delta(seq=2, text="说", kind="content"))
-
-    await asyncio.sleep(0.1)
-
-    _, data = ws.broadcast_stream.await_args.args
-    kinds = [d["kind"] for d in data["deltas"]]
-    assert kinds == ["reasoning", "content"]
     await hub.stop()
 
 
