@@ -366,9 +366,12 @@ class LookAtScreenProvider(BaseToolProvider):
                 latency_ms=latency_ms,
             )
 
-        # 调用采集后端（捕获异常 → 失败 result，不抛）
+        # 调用采集后端（捕获异常 → 失败 result，不抛）。
+        # mss 抓屏是同步阻塞调用（实测 80–220ms/次），移入 worker 线程避免
+        # 冻结事件循环；MssScreenCapture 每次调用自建 mss 实例，跨线程安全
         try:
-            result = self._capture.capture(
+            result = await asyncio.to_thread(
+                self._capture.capture,
                 monitor_index=monitor_index,
                 region=region,
                 max_width=max_width,

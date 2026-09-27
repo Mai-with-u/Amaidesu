@@ -139,6 +139,31 @@ class TestConfigSchema:
         LookAtScreenProvider(config={}, text_reader=reader)
         assert not hasattr(reader, "_timeout_s")
 
+    async def test_capture_runs_off_event_loop_thread(self) -> None:
+        """抓屏同步调用移入 worker 线程执行——截图期间事件循环不被冻结。"""
+        import threading
+
+        capture = FakeScreenCapture()
+        capture.queue_png(b"image", width=64, height=48)
+        reader = FakeTextReader()
+        reader.queue_text("线程验证")
+        provider = LookAtScreenProvider(config={}, screen_capture=capture, text_reader=reader)
+
+        loop_thread_ident = threading.get_ident()
+        capture_threads: list[int] = []
+        original_capture = capture.capture
+
+        def _capture_with_thread_probe(**kwargs: object) -> object:
+            capture_threads.append(threading.get_ident())
+            return original_capture(**kwargs)
+
+        capture.capture = _capture_with_thread_probe  # type: ignore[method-assign]
+
+        await provider.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}))
+
+        assert len(capture_threads) == 1
+        assert capture_threads[0] != loop_thread_ident
+
 
 # ===========================================================================
 # 零参调用兼容锚点（text_adv）
