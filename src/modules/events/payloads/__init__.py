@@ -7,6 +7,7 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
 供旧连接/断开语义的兼容导入。
 
 模块结构：
+- agents.py: 控制面事实（agent.prompted 递话受理）
 - core.py: Core 系统事件 Payload（core.startup/shutdown/error）
 - live.py: 场次生命周期（live.started/live.ended，LiveSessionManager 发布）
 - room.py: 直播间行为流（room.message.*）
@@ -37,6 +38,7 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
 
 from src.modules.logging import get_logger
 
+from .agents import AgentPromptedPayload
 from .core import (
     CoreErrorPayload,
     CoreShutdownPayload,
@@ -74,6 +76,8 @@ from .utterance import (
 logger = get_logger("Payloads")
 
 __all__ = [
+    # agents 控制面事实
+    "AgentPromptedPayload",
     # Core 系统事件
     "CoreStartupPayload",
     "CoreShutdownPayload",

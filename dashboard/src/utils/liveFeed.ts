@@ -48,6 +48,8 @@ export type EntryKind =
   | 'stage'
   | 'boundary'
   | 'game'
+  /** 递话受理（agent.prompted）：运营/跨 Agent 留言送达目标 */
+  | 'prompt'
   /** 会话模式的过程折叠条（合成展示条目，不对应任何事件） */
   | 'process_group'
   /** 思考行：ReAct 各步/生成段思考流（视图层合成条目，不对应事件；流式期间文本原地增长） */
@@ -546,9 +548,24 @@ export function toGameEntry(event: FeedEvent): ShowEntry | null {
   });
 }
 
+/** 递话受理：agent.prompted（运营/跨 Agent 留言送达目标）。
+ *  actor = 发起方（operator 折叠为"运营"），note 承载目标 Agent 名 */
+function fromPrompt(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  const source = str(data.source);
+  return makeEntry({
+    id: event.id,
+    kind: 'prompt',
+    tsMs: event.timestamp_ms,
+    actor: source === 'operator' ? '运营' : source || '未知',
+    text: str(data.content) || summarizeEvent(event.type, data),
+    note: str(data.target),
+  });
+}
+
 /** 非控制台事件（system.* 等）返回 null，不进时间线 */
 export function toEntry(event: FeedEvent): ShowEntry | null {
   const data = isRecord(event.data) ? event.data : {};
+  if (event.type === 'agent.prompted') return fromPrompt(event, data);
   // WS 广播把 4 种 room.message.* 统一为 "room.message"，种类由 payload.message_type 判别
   if (event.type === 'room.message') return fromRoomMessage(event, data);
   if (event.type === 'streamer.speech') return fromSpeech(event, data);
@@ -732,12 +749,14 @@ const CHAT_PROCESS_KINDS: ReadonlySet<EntryKind> = new Set<EntryKind>([
   'rundown',
   'boundary',
   'thinking',
+  'prompt',
 ]);
 
 /** 过程条合成条目 id 前缀（与事件条目 id 区分，避免 key 冲突） */
 const CHAT_GROUP_PREFIX = 'chat-process:';
 
 const CHAT_PROCESS_LABEL: Record<string, string> = {
+  prompt: '递话',
   tool: '工具',
   decision: '决策',
   verdict: '决策',

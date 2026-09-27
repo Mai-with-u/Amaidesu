@@ -723,7 +723,7 @@ async def create_app_components(
         if tool_registry is not None:
             from src.modules.agents.control import build_agent_control_provider
 
-            framework_provider = build_agent_control_provider(agent_manager, task_ledger)
+            framework_provider = build_agent_control_provider(agent_manager, task_ledger, event_bus=event_bus)
             framework_count = tool_registry.register_provider(framework_provider)
             logger.info(f"framework 工具已注册（控制+委派，新增 {framework_count} 个）")
 

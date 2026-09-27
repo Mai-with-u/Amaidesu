@@ -22,7 +22,7 @@ from src.modules.agents.control import build_agent_control_provider
 from src.modules.agents.manager import AgentManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.tasks import TaskChangedPayload
+from src.modules.events.payloads import AgentPromptedPayload, TaskChangedPayload
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger, TaskTracker
@@ -262,6 +262,33 @@ async def test_prompt_delivers_without_ledger_entry() -> None:
     assert res.structured_content == {"delivered": True, "executor": "agent_b"}
     assert b.prompts_received == [("先去东侧看看", "agent_a")], "递话内容与来源（调用方）到达目标"
     assert len(ledger) == 0, "递话不进任务记录表（记账分家）"
+
+
+async def test_prompt_emits_agent_prompted_event() -> None:
+    """递话受理 → 广播 agent.prompted（载荷带目标/内容/来源；不进账本）。"""
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    ledger = TaskLedger(event_bus=bus)
+    manager = AgentManager()
+    manager.register(_StubAgent("agent_a"))
+    manager.register(_StubAgent("agent_b"))
+    registry.register_provider(build_agent_control_provider(manager, ledger, event_bus=bus))
+    received: List[AgentPromptedPayload] = []
+
+    async def _on(name: str, payload: AgentPromptedPayload, source: str) -> None:
+        received.append(payload)
+
+    bus.on(CoreEvents.AGENT_PROMPTED, _on, model_class=AgentPromptedPayload)
+
+    res = await registry.invoke(_inv("framework_prompt", {"agent": "agent_b", "content": "先去东侧看看"}))
+    await _drain()
+
+    assert res.success is True
+    assert len(received) == 1, "受理成功恰好广播一条"
+    assert received[0].target == "agent_b"
+    assert received[0].content == "先去东侧看看"
+    assert received[0].source == "agent_a"
+    assert len(ledger) == 0, "事件只做观测，记账分家不变"
 
 
 async def test_prompt_target_resolution_matches_delegate() -> None:

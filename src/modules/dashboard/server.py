@@ -89,7 +89,11 @@ class DashboardServer:
         # 直接调用接口；agent_manager 未注入（极简启动/测试）时保持 None，
         # 相关端点返回 503。
         self.agent_control: Optional[AgentControl] = (
-            AgentControl(agent_manager, task_tracker.ledger if task_tracker is not None else None)
+            AgentControl(
+                agent_manager,
+                task_tracker.ledger if task_tracker is not None else None,
+                event_bus=event_bus,
+            )
             if agent_manager is not None
             else None
         )

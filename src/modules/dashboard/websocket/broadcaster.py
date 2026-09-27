@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
+    AgentPromptedPayload,
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
@@ -129,6 +130,8 @@ class EventBroadcaster:
         CoreEvents.GAME_MILESTONE: (None, GamePayload),
         # 任务卡实时增量（进行中账本变化；已完结从事件环聚合）
         CoreEvents.TASK_CHANGED: (None, TaskChangedPayload),
+        # 递话受理（运营/跨 Agent 留言送达目标；时间线递话行 + 最近递话数据源）
+        CoreEvents.AGENT_PROMPTED: (None, AgentPromptedPayload),
         CoreEvents.TOOL_RESULT_WILDCARD: (None, ToolResultPayload),
         CoreEvents.TOOL_HEALTH_WILDCARD: (None, ToolHealthPayload),
         CoreEvents.CORE_STARTUP: (None, CoreStartupPayload),

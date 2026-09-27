@@ -20,10 +20,13 @@ tool_registry.register_provider(provider)
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, Iterable, List, Optional
 
 from src.modules.agents.manager import AgentManager
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.agents import AgentPromptedPayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
@@ -31,6 +34,26 @@ from src.modules.tools.tasks import TaskLedger
 from src.modules.time_utils import now_ms
 
 logger = get_logger("AgentControl")
+
+
+def _emit_prompted(event_bus: Any, *, target: str, content: str, source: str) -> None:
+    """广播 agent.prompted（递话受理成功后调用；观测旁路，失败仅记日志）。"""
+    if event_bus is None:
+        return
+    payload = AgentPromptedPayload(target=target, content=content, source=source)
+
+    async def _send() -> None:
+        try:
+            await event_bus.emit(CoreEvents.AGENT_PROMPTED, payload, source="AgentControl")
+        except Exception as exc:  # noqa: BLE001 - 观测旁路
+            logger.warning(f"agent.prompted 广播失败（target={target}）: {exc}")
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.debug("无运行循环，agent.prompted 跳过调度（同步上下文）")
+        return
+    loop.create_task(_send())
 
 
 # -------------------- 工具规格 --------------------
@@ -101,9 +124,15 @@ def _generate_task_id() -> str:
 class AgentControl:
     """框架级控制——直接调用接口（不进 ToolRegistry）。"""
 
-    def __init__(self, manager: AgentManager, task_ledger: Optional[TaskLedger] = None) -> None:
+    def __init__(
+        self,
+        manager: AgentManager,
+        task_ledger: Optional[TaskLedger] = None,
+        event_bus: Optional[Any] = None,
+    ) -> None:
         self._manager = manager
         self._task_ledger = task_ledger
+        self._event_bus = event_bus
 
     async def pause(self, name: str) -> bool:
         agent = self._manager.get_agent_by_name(name)
@@ -144,6 +173,7 @@ class AgentControl:
         if not delivered:
             logger.info(f"prompt: Agent '{name}' 拒收递话（source={source}）")
             return {"ok": False, "error": "refused", "message": f"Agent '{name}' 拒收递话（未实现消化通道或留言已满）"}
+        _emit_prompted(self._event_bus, target=name, content=content, source=source)
         return {"ok": True, "delivered": True, "executor": name}
 
     async def cancel_task(self, name: str, task_id: str, *, source: str = "operator") -> dict:
@@ -242,6 +272,7 @@ class AgentControlProvider(BaseToolProvider):
 
     manager: AgentManager
     task_ledger: Optional[TaskLedger] = None
+    event_bus: Optional[Any] = None
 
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category: ClassVar[str] = "framework"
@@ -452,6 +483,7 @@ class AgentControlProvider(BaseToolProvider):
                 success=False,
                 error_message=f"目标 '{target.name}' 拒收递话（未实现消化通道或留言已满）",
             )
+        _emit_prompted(self.event_bus, target=target.name, content=content, source=caller or "unknown")
         return ToolExecutionResult(
             tool_name="framework_prompt",
             success=True,
@@ -491,9 +523,10 @@ class AgentControlProvider(BaseToolProvider):
 def build_agent_control_provider(
     manager: AgentManager,
     task_ledger: Optional[TaskLedger] = None,
+    event_bus: Optional[Any] = None,
 ) -> AgentControlProvider:
     """工厂：构造一个 AgentControlProvider 绑定 manager（+ 任务记录表供委派）。"""
-    return AgentControlProvider(manager=manager, task_ledger=task_ledger)
+    return AgentControlProvider(manager=manager, task_ledger=task_ledger, event_bus=event_bus)
 
 
 __all__ = [

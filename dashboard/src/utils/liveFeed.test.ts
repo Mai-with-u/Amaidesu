@@ -765,3 +765,25 @@ describe('isRoundLinkable', () => {
     expect(isRoundLinkable(row('danmaku', 'rnd_1_1'))).toBe(false);
   });
 });
+
+describe('递话行（agent.prompted）', () => {
+  it('受理事件 → 递话行：来源折叠、内容为主文、目标进 note', () => {
+    const entry = toEntry(
+      evt('agent.prompted', { target: 'minecraft', content: '先去东侧看看', source: 'operator' }),
+    );
+    expect(entry).not.toBeNull();
+    expect(entry!.kind).toBe('prompt');
+    expect(entry!.actor).toBe('运营');
+    expect(entry!.text).toBe('先去东侧看看');
+    expect(entry!.note).toBe('minecraft');
+    expect(entry!.roundId).toBe('');
+  });
+
+  it('跨 Agent 递话：来源显示发起 Agent 注册名', () => {
+    const entry = toEntry(
+      evt('agent.prompted', { target: 'minecraft', content: '注意东侧', source: 'streamer' }),
+    );
+    expect(entry!.actor).toBe('streamer');
+    expect(isChatProcessKind('prompt')).toBe(true);
+  });
+});

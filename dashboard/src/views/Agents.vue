@@ -322,6 +322,18 @@
             <el-empty :image-size="80" description="该 Agent 暂不支持干预与详细查看" />
           </div>
 
+          <!-- 最近递话：事件环窗口内的受理记录（发话→有迹可查）；无记录不占位 -->
+          <div v-if="recentPrompts.length > 0" class="md-prompts" aria-label="最近递话">
+            <div class="md-prompts-head">最近递话</div>
+            <ul class="md-prompts-list">
+              <li v-for="p in recentPrompts" :key="p.id" class="md-prompt-row">
+                <span class="md-prompt-source">{{ p.sourceLabel }}</span>
+                <span class="md-prompt-content" :title="p.content">{{ p.content }}</span>
+                <time class="md-prompt-time mono">{{ relativeTime(p.tsMs) }}</time>
+              </li>
+            </ul>
+          </div>
+
           <!-- 干预输入条：模式集合随选中 Agent 分派（主播三模式 / minecraft 递话委派；
                其余 Agent 无收话能力不渲染）。发送成功提示语义不变：委派回执任务号
                并刷新任务板，递话提示已送达 -->
@@ -400,7 +412,7 @@ import {
 } from '@/composables/useComponentMasterDetail';
 import { groupDecisionRounds } from '@/utils/decisionRounds';
 import type { AgentControlActionType, AgentInfo, TaskCard } from '@/types';
-import { relativeTime as relativeTimeLabel } from '@/utils/liveFeed';
+import { isRecord, relativeTime as relativeTimeLabel, str } from '@/utils/liveFeed';
 import { formatDurationShort } from '@/utils/format';
 import '@/styles/component-master-detail.css';
 
@@ -576,6 +588,33 @@ const moreActionsLoading = computed<boolean>(() => {
   const name = selectedName.value;
   if (!name) return false;
   return Boolean(actionLoading[`${name}-restart`] || controlLoading[`${name}-shutdown`]);
+});
+
+// 最近递话（事件环窗口内，按选中 Agent 过滤，最新在前）：递话受理即有迹可查
+interface RecentPrompt {
+  id: string;
+  sourceLabel: string;
+  content: string;
+  tsMs: number;
+}
+
+const recentPrompts = computed<RecentPrompt[]>(() => {
+  const name = selectedName.value;
+  if (!name) return [];
+  const rows: RecentPrompt[] = [];
+  for (const e of events.value) {
+    if (e.type !== 'agent.prompted') continue;
+    const data = isRecord(e.data) ? e.data : {};
+    if (str(data.target) !== name) continue;
+    const source = str(data.source);
+    rows.push({
+      id: e.id,
+      sourceLabel: source === 'operator' ? '运营' : source || '未知',
+      content: str(data.content),
+      tsMs: e.timestamp_ms,
+    });
+  }
+  return rows.slice(-5).reverse();
 });
 
 // "最近决策"指标：planner.* 最新事件的相对时间
@@ -915,6 +954,61 @@ onUnmounted(() => {
 .md-task-finished :deep(.el-collapse-item__wrap) {
   background: transparent;
   border-bottom: none;
+}
+
+/* 最近递话：受理记录紧凑列表（事件环窗口内，最新在前） */
+.md-prompts {
+  flex-shrink: 0;
+  padding: var(--spacing-xs) var(--spacing-lg);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+.md-prompts-head {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  padding: 2px 0 4px;
+}
+
+.md-prompts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.md-prompt-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+  font-size: 12px;
+}
+
+.md-prompt-source {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.md-prompt-content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-regular);
+}
+
+.md-prompt-time {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-placeholder);
 }
 
 /* 干预输入条底座：随视图贴在详情底部（主播/minecraft 有收话能力时渲染） */

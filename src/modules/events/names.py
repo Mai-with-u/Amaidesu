@@ -140,6 +140,12 @@ class CoreEvents:
     # 监听上面 8 类身体事件（emit 时用具体常量）。
     GAME_BODY_WILDCARD = "game.body.#"
 
+    # ========== v2 语义域事件（agent 控制面事实） ==========
+    # 递话受理即发一条（运营 REST 与跨 Agent 原语两条调用面同点收口）：
+    # 观察面据此渲染递话行与最近递话。递话不进任务账本（记账分家），
+    # 本事件只做观测，不承载唤醒语义。
+    AGENT_PROMPTED = "agent.prompted"
+
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:
         """

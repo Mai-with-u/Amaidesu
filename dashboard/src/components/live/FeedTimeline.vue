@@ -347,6 +347,18 @@
           </div>
         </div>
 
+        <!-- 递话受理（agent.prompted）：运营/跨 Agent 留言送达目标 -->
+        <div v-else-if="entry.kind === 'prompt'" class="prompt-row">
+          <div class="act-head">
+            <span class="prompt-kind">递话</span>
+            <span class="prompt-source">{{ entry.actor }}</span>
+            <span v-if="entry.note" class="prompt-target">发给 {{ entry.note }}</span>
+            <span class="grow" />
+            <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+          </div>
+          <p class="act-text">{{ entry.text }}</p>
+        </div>
+
         <!-- 游戏 Agent 上报（game.* / 走 toGameEntry）：绿色系左边线，act 变体 -->
         <div
           v-else-if="entry.kind === 'game'"
@@ -1572,6 +1584,46 @@ async function copyText(text: string): Promise<void> {
 .act.is-speak .act-text::after {
   content: '」';
   color: var(--color-tool);
+}
+
+/* 递话行：干预动作（运营/跨 Agent 留言送达目标），主色左边线区分于 Agent 卡 */
+.prompt-row {
+  margin-left: 38px; /* 与决策卡同列对齐 */
+  max-width: 92%;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+  border-left: 3px solid var(--color-primary);
+}
+
+.prompt-kind {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.prompt-source {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.prompt-target {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* 环节推进 / 场次边界：横贯分隔行                                 */
