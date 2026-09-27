@@ -45,7 +45,15 @@ def client(tmp_path: Path) -> Generator[tuple[TestClient, TaskLedger, EventHisto
     set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-def _record_finished(history: EventHistoryService, task_id: str, status: str = "succeeded") -> None:
+def _record_finished(
+    history: EventHistoryService,
+    task_id: str,
+    status: str = "succeeded",
+    *,
+    initiator: str = "operator",
+    executor: str = "minecraft",
+    source: str = "agent",
+) -> None:
     history.record(
         EventRecord(
             type=CoreEvents.TASK_CHANGED,
@@ -54,8 +62,9 @@ def _record_finished(history: EventHistoryService, task_id: str, status: str = "
             data={
                 "task_id": task_id,
                 "status": status,
-                "initiator": "operator",
-                "executor": "minecraft",
+                "initiator": initiator,
+                "executor": executor,
+                "source": source,
                 "summary": f"delivery: 完成（{task_id}）",
                 "snapshot": {"instruction": f"指令 {task_id}"},
                 "timestamp_ms": 1_760_000_000_000,
@@ -86,16 +95,31 @@ def test_running_tasks_from_ledger(client) -> None:
         source="agent",
         snapshot={"instruction": "探索东侧"},
     )
+    # provider 型自驱执行：executor 是提供者名（maicraft），归属按发起 Agent 推导
+    ledger.register(
+        task_id="exec_1",
+        provider="maicraft",
+        tool="maicraft_execute",
+        initiator="minecraft",
+        executor="maicraft",
+        status="running",
+        source="provider",
+        snapshot={},
+    )
 
     resp = tc.get("/api/v1/tasks")
     assert resp.status_code == 200
     body = resp.json()
     running = {card["task_id"]: card for card in body["running"]}
-    assert set(running) == {"deleg_1", "deleg_2"}
+    assert set(running) == {"deleg_1", "deleg_2", "exec_1"}
     assert running["deleg_1"]["instruction"] == "建一座木头房子"
     assert running["deleg_1"]["status"] == "running"
     assert running["deleg_1"]["initiator"] == "operator" and running["deleg_1"]["executor"] == "minecraft"
     assert running["deleg_2"]["status"] == "waiting_for_decision"
+    # 归属推导：agent 型 = 执行 Agent；provider 型 = 发起 Agent
+    assert running["deleg_1"]["owner_agent"] == "minecraft"
+    assert running["deleg_2"]["owner_agent"] == "minecraft"
+    assert running["exec_1"]["owner_agent"] == "minecraft", "自驱执行归属发起 Agent，不再被执行侧标识挡住"
 
 
 def test_finished_tasks_from_event_history(client) -> None:
@@ -114,10 +138,18 @@ def test_finished_tasks_from_event_history(client) -> None:
     resp = tc.get("/api/v1/tasks")
     assert resp.status_code == 200
     body = resp.json()
+    _record_finished(
+        history,
+        "exec_done",
+        initiator="minecraft",
+        executor="maicraft",
+        source="provider",
+    )
     finished = {card["task_id"]: card for card in body["finished"]}
     assert set(finished) == {"deleg_done"}
     assert finished["deleg_done"]["summary"] == "delivery: 完成（deleg_done）"
     assert finished["deleg_done"]["instruction"] == "指令 deleg_done"
+    assert finished["deleg_done"]["owner_agent"] == "minecraft"
     assert all(card["task_id"] != "deleg_live" for card in body["running"])
 
 

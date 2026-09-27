@@ -29,6 +29,8 @@ class TaskChangedPayload(BasePayload):
         initiator: 发起方 Agent 注册名（有变化通知谁——唤醒过滤键）
         executor: 执行者（provider 型 = 提供者名；agent 型 = 执行 Agent 名）
         live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
+        source: 事实源归属（provider=工具包异步执行 / agent=委派给执行 Agent），
+            观察面据此推导任务归属（owner）
         snapshot: 任务快照（执行侧自由 dict；嵌套任务在此带内层任务号）
         timestamp_ms: 事件发布时间戳（Unix 毫秒）
     """
@@ -41,6 +43,10 @@ class TaskChangedPayload(BasePayload):
     live_session_id: int = Field(
         default=0,
         description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
+    source: str = Field(
+        default="",
+        description="事实源归属（provider=工具包异步执行 / agent=委派给执行 Agent）；观察面推导任务归属用",
     )
     snapshot: Dict[str, Any] = Field(default_factory=dict, description="任务快照（执行侧自由 dict）")
     alert: bool = Field(

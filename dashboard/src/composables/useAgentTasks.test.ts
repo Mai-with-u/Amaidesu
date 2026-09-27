@@ -33,8 +33,9 @@ vi.mock('element-plus', () => ({
 const listTasksMock = vi.mocked(tasksApi.listTasks);
 const cancelAgentTaskMock = vi.mocked(agentsApi.cancelAgentTask);
 
-/** 任务账本条目最小形状（字段与后端 TaskCard 对齐） */
-function task(executor: string, taskId = 'task_1', status = 'running') {
+/** 任务账本条目最小形状（字段与后端 TaskCard 对齐）。
+ *  owner = 归属 Agent（后端推导：agent 型 = 执行 Agent；provider 型 = 发起 Agent） */
+function task(executor: string, taskId = 'task_1', status = 'running', owner = executor) {
   return {
     task_id: taskId,
     instruction: '做一件事',
@@ -42,6 +43,7 @@ function task(executor: string, taskId = 'task_1', status = 'running') {
     status,
     initiator: 'operator',
     executor,
+    owner_agent: owner,
     created_at_ms: 1000,
     updated_at_ms: 2000,
   };

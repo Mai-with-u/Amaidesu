@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List
 
-import pytest
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -118,6 +117,7 @@ async def test_state_transitions_drive_events_and_idempotent() -> None:
     assert received[-1].snapshot == {"done": True}
     assert received[-1].initiator == "minecraft"
     assert received[-1].executor == "game"
+    assert received[-1].source == "provider", "事件带事实源归属（观察面推导任务归属用）"
 
 
 async def test_terminal_state_is_sticky_via_ledger() -> None:
@@ -256,6 +256,7 @@ def test_task_changed_payload_shape() -> None:
     assert data["status"] == "running"
     assert data["initiator"] == "streamer"
     assert data["executor"] == "minecraft"
+    assert data["source"] == "", "source 缺省空串（agent 型由发射方显式携带）"
     assert data["snapshot"] == {"inner_task_id": "maicraft-7"}, "嵌套委派快照带内层任务号"
 
 

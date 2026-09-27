@@ -149,6 +149,8 @@ export interface TaskCard {
   status: string;
   initiator: string;
   executor: string;
+  /** 任务归属 Agent（agent 型 = 执行 Agent；provider 型自驱 = 发起 Agent） */
+  owner_agent: string;
   summary: string;
   created_at_ms: number;
   updated_at_ms: number;

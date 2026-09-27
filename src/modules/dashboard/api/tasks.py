@@ -20,7 +20,7 @@ from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.events.event_history import DEFAULT_MAX_EVENTS
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
-from src.modules.tools.tasks import TERMINAL_TASK_STATES
+from src.modules.tools.tasks import TERMINAL_TASK_STATES, owner_agent_of
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -41,6 +41,9 @@ class TaskCard(BaseModel):
     status: str
     initiator: str = ""
     executor: str = ""
+    # 任务归属 Agent（agent 型 = 执行 Agent；provider 型 = 发起 Agent）——
+    # 观察面按它过滤"这个 Agent 的账"；executor 是执行侧标识，不表归属
+    owner_agent: str = ""
     summary: str = ""  # 最近一次变化摘要（仅事件聚合侧有；账本侧为空）
     created_at_ms: int = 0
     updated_at_ms: int = 0
@@ -70,6 +73,11 @@ def _card_from_record(record: Any) -> TaskCard:
         status=str(record.status),
         initiator=str(record.initiator),
         executor=str(record.executor),
+        owner_agent=owner_agent_of(
+            source=str(record.source),
+            initiator=str(record.initiator),
+            executor=str(record.executor),
+        ),
         created_at_ms=int(record.created_at_ms),
         updated_at_ms=int(record.updated_at_ms),
     )
@@ -106,6 +114,11 @@ def _finished_cards_from_history(server: "DashboardServer") -> List[TaskCard]:
                 status=status,
                 initiator=str(data.get("initiator", "") or ""),
                 executor=str(data.get("executor", "") or ""),
+                owner_agent=owner_agent_of(
+                    source=str(data.get("source", "") or ""),
+                    initiator=str(data.get("initiator", "") or ""),
+                    executor=str(data.get("executor", "") or ""),
+                ),
                 summary=str(data.get("summary", "") or ""),
                 updated_at_ms=int(data.get("timestamp_ms", 0) or 0),
             )

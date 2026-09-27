@@ -50,11 +50,13 @@ export function useAgentTasks(target: Ref<string | null>) {
     }
   }
 
+  // 按"归属 Agent"过滤（后端推导：委派 = 执行 Agent；自驱执行 = 发起 Agent）。
+  // executor 是执行侧标识（provider 型任务里是提供者名），不能当归属用
   const runningTasks = computed<TaskCard[]>(() =>
-    taskSnapshot.value.running.filter(task => task.executor === target.value),
+    taskSnapshot.value.running.filter(task => task.owner_agent === target.value),
   );
   const finishedTasks = computed<TaskCard[]>(() =>
-    taskSnapshot.value.finished.filter(task => task.executor === target.value),
+    taskSnapshot.value.finished.filter(task => task.owner_agent === target.value),
   );
 
   // task.changed 实时刷新（WS 全量订阅已入 events store；这里只数增量触发拉取）

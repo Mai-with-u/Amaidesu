@@ -79,6 +79,16 @@ class TaskRecord:
     created_at_ms: int = 0
 
 
+def owner_agent_of(*, source: str, initiator: str, executor: str) -> str:
+    """任务归属 Agent（观察面按它过滤"这个 Agent 的账"）。
+
+    executor 是执行侧标识（provider 型 = 提供者名，路由/通知用），不表归属：
+    - agent 型（委派）：活归执行的 Agent → executor
+    - provider 型（发起 Agent 自驱执行）：活归发起的 Agent → initiator
+    """
+    return initiator if source == "provider" else executor
+
+
 # ---------------------------------------------------------------------------
 # 任务记录表（单写者按 source 分工；状态单调 + 幂等 + 终态移除）
 # ---------------------------------------------------------------------------
@@ -207,6 +217,7 @@ class TaskLedger:
             summary=text,
             initiator=record.initiator,
             executor=record.executor,
+            source=record.source,
             snapshot=dict(record.snapshot),
             timestamp_ms=record.updated_at_ms,
         )
@@ -237,6 +248,7 @@ class TaskLedger:
             summary=summary,
             initiator=record.initiator,
             executor=record.executor,
+            source=record.source,
             snapshot=dict(record.snapshot),
             timestamp_ms=record.updated_at_ms,
             alert=True,
