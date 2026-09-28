@@ -1,5 +1,9 @@
 <template>
-  <div class="field-renderer" :class="{ 'is-modified': isModified, 'has-error': error }">
+  <div
+    class="field-renderer"
+    :class="{ 'is-modified': isModified, 'has-error': error }"
+    :data-config-key="field.key"
+  >
     <!-- 字段标签 -->
     <div class="field-header">
       <label class="field-label">
@@ -24,7 +28,7 @@
           v-model="localValue"
           type="password"
           show-password
-          :placeholder="String(field.default || '')"
+          :placeholder="defaultPlaceholder"
           :disabled="field.readonly"
           @input="handleChange"
         />
@@ -33,14 +37,14 @@
           v-model="localValue"
           type="textarea"
           :rows="3"
-          :placeholder="String(field.default || '')"
+          :placeholder="defaultPlaceholder"
           :disabled="field.readonly"
           @input="handleChange"
         />
         <el-input
           v-else
           v-model="localValue"
-          :placeholder="String(field.default || '')"
+          :placeholder="defaultPlaceholder"
           :disabled="field.readonly"
           @input="handleChange"
         />
@@ -53,6 +57,7 @@
           :min="field.validation?.min"
           :max="field.validation?.max"
           :step="1"
+          :placeholder="defaultPlaceholder"
           controls-position="right"
           :disabled="field.readonly"
           @change="handleChange"
@@ -67,6 +72,7 @@
           :max="field.validation?.max"
           :step="0.1"
           :precision="2"
+          :placeholder="defaultPlaceholder"
           controls-position="right"
           :disabled="field.readonly"
           @change="handleChange"
@@ -179,6 +185,15 @@ const isLongText = computed(() => {
   if (props.field.type !== 'string') return false;
   const desc = props.field.description || '';
   return desc.length > 50 || (props.field.validation?.max_length ?? 0) > 100;
+});
+
+// 占位提示：默认值加「默认」前缀，与已填值区分（裸默认值会被误读为来源不明的灰字建议）；
+// 敏感字段不回显默认值形态
+const defaultPlaceholder = computed(() => {
+  if (props.field.sensitive) return '';
+  const d = props.field.default;
+  if (d === null || d === undefined || d === '') return '';
+  return `默认 ${String(d)}`;
 });
 
 // 选择选项

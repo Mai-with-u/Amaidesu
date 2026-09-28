@@ -70,6 +70,8 @@ export interface ConfigUpdateResponse {
   success: boolean;
   message: string;
   requires_restart?: boolean;
+  /** 批量保存失败时逐 key 的校验错误；key 与前端字段 key 同构，可直接定位跳转 */
+  errors?: { key: string; message: string }[];
 }
 
 // 待保存的变更

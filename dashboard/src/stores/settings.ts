@@ -11,6 +11,7 @@ import type {
   ConfigFieldSchema,
   PendingChange,
 } from '@/types/settings';
+import { attributeValidationError } from '@/utils/saveError';
 import api from '@/api';
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -22,6 +23,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const loading = ref(false);
   const saving = ref(false);
   const error = ref<string | null>(null);
+  /** 已落盘但需重启才生效（infra 文件热生效除外）；用户「稍后重启」后由横幅常驻提示 */
+  const pendingRestart = ref(false);
 
   // 计算属性
   const groups = computed((): ConfigGroupSchema[] => {
@@ -70,7 +73,8 @@ export const useSettingsStore = defineStore('settings', () => {
 
     try {
       // 批量端点原子语义：要么全部成功落盘，要么任一校验失败整批回退（后端保证）。
-      // 前端只 inspect 响应体的 success，HTTP 状态恒为 200。
+      // 失败两种形态：前置校验逐 key 错误 → HTTP 200 + success:false + errors[]；
+      // Schema 校验拒绝 → HTTP 422 + detail 单条中文消息（catch 分支归属 key）。
       const response = await api.post<{
         success: boolean;
         message: string;
@@ -87,10 +91,12 @@ export const useSettingsStore = defineStore('settings', () => {
           setNestedValue(originalValues.value, change.key, change.newValue);
         }
         pendingChanges.value = [];
+        const requiresRestart = !!data.requires_restart;
+        pendingRestart.value = requiresRestart;
         return {
           success: true,
           message: data.message || '配置已保存',
-          requires_restart: !!data.requires_restart,
+          requires_restart: requiresRestart,
         };
       }
 
@@ -99,9 +105,22 @@ export const useSettingsStore = defineStore('settings', () => {
         success: false,
         message: data.message || '保存配置失败',
         requires_restart: false,
+        errors: data.errors ?? [],
       };
     } catch (e) {
       console.error('Failed to save changes:', e);
+      // Schema 校验拒绝（HTTP 422）：detail 为单条中文消息，归属到待保存变更的 key
+      const axErr = e as { response?: { status?: number; data?: { detail?: string } } };
+      const detail = axErr.response?.data?.detail;
+      if (axErr.response?.status === 422 && typeof detail === 'string') {
+        const errors = attributeValidationError(detail, pendingChanges.value);
+        return {
+          success: false,
+          message: errors[0]?.message ?? detail,
+          requires_restart: false,
+          errors,
+        };
+      }
       error.value = '保存配置失败';
       return { success: false, message: '保存配置失败' };
     } finally {
@@ -112,6 +131,7 @@ export const useSettingsStore = defineStore('settings', () => {
   async function restartService(): Promise<ConfigUpdateResponse> {
     try {
       const response = await api.post<ConfigUpdateResponse>('/config/restart');
+      if (response.data.success) pendingRestart.value = false;
       return response.data;
     } catch (e) {
       console.error('Failed to restart service:', e);
@@ -208,6 +228,7 @@ export const useSettingsStore = defineStore('settings', () => {
     loading,
     saving,
     error,
+    pendingRestart,
     // 计算属性
     groups,
     hasChanges,

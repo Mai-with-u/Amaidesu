@@ -25,6 +25,42 @@
       </div>
     </header>
 
+    <!-- 待重启横幅：已落盘但需重启生效（用户选过「稍后重启」后常驻可见） -->
+    <el-alert
+      v-if="settingsStore.pendingRestart && !settingsStore.loading"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="restart-banner"
+    >
+      <template #title>有已保存的配置需要重启服务才能生效</template>
+      <el-button size="small" type="primary" @click="showRestartDialog = true">立即重启</el-button>
+    </el-alert>
+
+    <!-- 保存失败逐 key 定位：点击 key 切到所属文件 Tab 并滚动高亮字段 -->
+    <el-alert
+      v-if="saveErrors.length > 0"
+      type="error"
+      show-icon
+      class="save-error-alert"
+      @close="saveErrors = []"
+    >
+      <template #title>保存失败：{{ saveErrors.length }} 项更改未落盘，点击配置项定位</template>
+      <div v-for="err in saveErrors" :key="err.key || err.message" class="save-error-row">
+        <el-link
+          v-if="err.key"
+          type="primary"
+          :underline="false"
+          class="save-error-link"
+          @click="jumpToField(err.key)"
+        >
+          {{ err.key }}
+        </el-link>
+        <span v-else class="save-error-msg">（未能定位到具体字段）</span>
+        <span class="save-error-msg">{{ err.message }}</span>
+      </div>
+    </el-alert>
+
     <!-- 加载状态 -->
     <div v-if="settingsStore.loading" class="loading-container">
       <el-icon class="is-loading" :size="48"><Loading /></el-icon>
@@ -65,12 +101,7 @@
       </div>
 
       <!-- 文件 Tab 导航 -->
-      <el-tabs
-        v-model="activeFileTab"
-        class="file-tabs"
-        :stretch="false"
-        @tab-click="handleTabClick"
-      >
+      <el-tabs v-model="activeFileTab" class="file-tabs" :stretch="false">
         <el-tab-pane v-for="tab in FILE_TABS" :key="tab.key" :name="tab.key" lazy>
           <template #label>
             <span class="file-tab-label">
@@ -189,7 +220,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
+import { onBeforeRouteLeave } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { Check, RefreshLeft, Loading, Search } from '@element-plus/icons-vue';
@@ -220,10 +252,10 @@ import type { ConfigFieldSchema, ConfigGroupSchema } from '@/types/settings';
 import SubFieldGroup from '@/components/settings/SubFieldGroup.vue';
 import ComponentCardList from '@/components/settings/ComponentCardList.vue';
 
-// ── 文件 Tab 定义（v2：6 文件配置树） ──────────────────────
-// 后端 `/api/v1/config/schema` 返回的 groups 元素已带 `file_name` 与 `file_label`
-// 字段（根 Schema 自描述协议），前端从 schema 动态推断 Tab 列表；下方保留硬编码
-// 顺序作为兜底（schema 为空 / 后端异常时仍可展示所有文件 Tab）。
+// ── 文件 Tab 定义（v2：7 文件配置树） ──────────────────────
+// Tab 列表为前端硬编码（此处顺序即展示顺序）；后端 /config/schema 的 groups
+// 自带 file_name/file_label，仅用于把分组归位到对应 Tab（groupsByFile），
+// Tab 本身不从 schema 动态推断。
 const FALLBACK_FILE_TABS = [
   {
     key: 'agents.toml',
@@ -293,6 +325,8 @@ const showRestartDialog = ref(false);
 const restarting = ref(false);
 const searchQuery = ref('');
 const activeFileTab = ref('agents.toml');
+/** 最近一次保存失败的逐 key 错误；可点 key 跳转定位，关闭面板或再次保存时清除 */
+const saveErrors = ref<{ key: string; message: string }[]>([]);
 
 /** 工具栏「全部展开/全部收起」命令：seq 递增保证同方向连点也能触发子组件 watch */
 const cardExpandCommand = ref<{ action: 'expand' | 'collapse'; seq: number } | null>(null);
@@ -425,10 +459,26 @@ function getFileTabLabel(fileName?: string): string {
   return tab?.label ?? fileName;
 }
 
-// Tab 点击：搜索时清除搜索
-function handleTabClick() {
-  // 不做特殊处理，保持 tab 切换
+// ── 离开防护 ──────────────────────────────────────────────
+// 站内路由切换：有未保存变更时先确认。更改仍留在 store 里，回到设置页可继续编辑；
+// 真正的丢失路径是刷新/关闭标签页，由下方 beforeunload 兜底。
+onBeforeRouteLeave(async () => {
+  if (!settingsStore.hasChanges) return true;
+  return await confirmAction(
+    `有 ${settingsStore.changeCount} 项未保存的更改。离开后更改仍保留在本页，刷新或关闭浏览器才会丢失。确定离开吗？`,
+    '未保存的更改',
+    { confirmButtonText: '离开' },
+  );
+});
+
+// 刷新/关闭标签页：浏览器原生确认（文案不可定制），未保存时挂拦截
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (!settingsStore.hasChanges) return;
+  e.preventDefault();
+  e.returnValue = '';
 }
+onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload));
+onUnmounted(() => window.removeEventListener('beforeunload', handleBeforeUnload));
 
 // ── 变更统计 ──────────────────────────────────────────────
 // 某个文件下的变更数
@@ -490,6 +540,7 @@ function updatePendingChanges(field: ConfigFieldSchema, newValue: unknown) {
 // ── 保存 / 重置 / 重启 ──────────────────────────────────
 async function handleSave() {
   if (!settingsStore.hasChanges) return;
+  saveErrors.value = [];
   try {
     const result = await settingsStore.saveChanges();
     if (result.success) {
@@ -498,12 +549,33 @@ async function handleSave() {
         showRestartDialog.value = true;
       }
     } else {
+      saveErrors.value = result.errors ?? [];
       ElMessage.error(result.message);
     }
   } catch (error) {
     console.error('Save failed:', error);
     ElMessage.error('保存配置失败');
   }
+}
+
+/**
+ * 保存失败定位：key 首段即文件 scope，切到对应文件 Tab、清搜索（搜索态下
+ * 浏览卡片不渲染）后按 data-config-key 滚动高亮。
+ */
+async function jumpToField(key: string) {
+  const fileKey = `${key.split('.')[0]}.toml`;
+  if (FILE_TABS.some(t => t.key === fileKey)) {
+    activeFileTab.value = fileKey;
+  }
+  if (searchQuery.value) searchQuery.value = '';
+  await nextTick();
+  const el = document.querySelector<HTMLElement>(`[data-config-key="${key}"]`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.remove('field-flash');
+  void el.offsetWidth; // 强制重排以重启动画，同一字段连续点击也能再次闪烁
+  el.classList.add('field-flash');
+  window.setTimeout(() => el.classList.remove('field-flash'), 1600);
 }
 
 async function handleDiscard() {
@@ -590,6 +662,46 @@ async function handleRestart() {
 
 .error-alert {
   flex-shrink: 0;
+}
+
+/* ── 待重启横幅 / 保存失败面板 ─────────────────────────── */
+.restart-banner,
+.save-error-alert {
+  flex-shrink: 0;
+  margin-bottom: var(--spacing-md);
+}
+
+.save-error-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  padding: 2px 0;
+}
+
+.save-error-link {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.save-error-msg {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* jumpToField 的滚动高亮闪烁：作用于子组件根节点（携带本组件作用域 id） */
+.field-flash {
+  animation: field-flash-anim 1.5s ease;
+}
+
+@keyframes field-flash-anim {
+  0%,
+  55% {
+    box-shadow: 0 0 0 2px var(--color-danger);
+  }
+  100% {
+    box-shadow: none;
+  }
 }
 
 /* ── 主内容区 ──────────────────────────────────────────── */
