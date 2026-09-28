@@ -133,8 +133,15 @@
             />
           </template>
 
-          <!-- 删除按钮 -->
-          <el-button type="danger" size="small" text :icon="Delete" @click="removeItem(index)" />
+          <!-- 删除按钮：对象项的卡头已内联删除，此处只服务标量/JSON 项，避免一行双删除 -->
+          <el-button
+            v-if="!isObjectWithFields(itemSchema)"
+            type="danger"
+            size="small"
+            text
+            :icon="Delete"
+            @click="removeItem(index)"
+          />
         </div>
       </div>
 

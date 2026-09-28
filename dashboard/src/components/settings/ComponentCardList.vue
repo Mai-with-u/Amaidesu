@@ -278,9 +278,10 @@ function findField(fields: ConfigFieldSchema[], key: string): ConfigFieldSchema 
   padding: var(--spacing-sm) var(--spacing-lg) var(--spacing-lg);
 }
 
-/* 卡头已渲染字段名与描述，内部 FieldRenderer 的同名标题不再重复 */
-.array-card-body :deep(.field-header),
-.array-card-body :deep(.field-description) {
+/* 卡头已渲染字段名与描述，仅隐藏卡体首层 FieldRenderer 的同名标题；
+   对象项子字段的标题（含必填星号/只读/已修改标记）必须保留，后代通配会把它们一并吞掉 */
+.array-card-body > :deep(.field-renderer > .field-header),
+.array-card-body > :deep(.field-renderer > .field-description) {
   display: none;
 }
 </style>
