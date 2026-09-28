@@ -120,6 +120,8 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
         "last_melee_stance_adjustment": {"failure": "edge_support_or_sweep_changed"},
         # 缺料位于实际供料失败链；压缩后仍保留尝试变化和不完整搜索，不能误称已经穷尽游戏配方。
         "material_supply_failure": {
+            # 查货状态独立于取物是否成功，失败查询不能在摘要中被改成仓库为空。
+            "wireless_stock_evidence": {"last_query": {"status": "failed"}, "need_checks": []},
             "acquisition_evidence_scope": "last reported rows; upstream history may already be bounded",
             "attempts": [{"source": "wireless", "inventory_before": 1, "inventory_after": 2, "effects_observed": True}],
             "attempts_reported_count": 12, "attempts_omitted_reported_rows": 4,
@@ -159,6 +161,7 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
     assert '"acquisition_evidence"' in context and '"attempts_omitted_reported_rows":4' in context
     assert '"inventory_before":1,"inventory_after":2,"effects_observed":true' in context
     assert '"recipe_id":"minecraft:chest","preparation_plan":{"search_complete":false}' in context
+    assert '"wireless_stock_evidence":{"last_query":{"status":"failed"},"need_checks":[]}' in context
     assert "不应当作实际端点的设计值" not in context
     data["chain_conveyor_use"]["chains_missing"] = 99
     assert '"chains_missing":99' not in json_text(agent._current_task_context())

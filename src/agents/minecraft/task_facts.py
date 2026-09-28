@@ -26,6 +26,7 @@ _MACHINE_FACT_KEYS = (
     "last_melee_stance_adjustment",
     # 施工补料已经筛选过的近期分支事实随任务保存，不能在摘要后只剩一个看似唯一的缺料名称。
     "acquisition_evidence",
+    "wireless_stock_evidence",
     "requested_transmission",
     "transmission_description",
     "selected_source_block",
