@@ -153,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onActivated, onDeactivated, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
@@ -557,14 +557,19 @@ function goEventLog(): void {
 
 onMounted(async () => {
   await systemStore.fetchStatus();
-  systemStore.startPolling(1000);
   void eventsStore.backfill();
   await refreshSnapshot();
   void fetchLLM();
+});
+
+// keep-alive 全路由下 onUnmounted 不会触发，轮询启停须挂 activated/deactivated，
+// 否则离开本页后 1s 系统轮询与 12s 快照轮询仍永久常驻
+onActivated(() => {
+  systemStore.startPolling(1000);
   startRefresh();
 });
 
-onUnmounted(() => {
+onDeactivated(() => {
   systemStore.stopPolling();
   stopRefresh();
 });

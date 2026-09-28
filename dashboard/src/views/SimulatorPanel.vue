@@ -430,7 +430,7 @@
  * 形态：Tabs 工作台（运行控制 / 常驻人设 / 礼物目录 / 配置说明）。
  * 人设与礼物 CRUD 写穿 SQLite；回放日期来自事件历史录制目录。
  */
-import { onMounted, onUnmounted, reactive, ref, computed } from 'vue';
+import { onActivated, onDeactivated, onMounted, reactive, ref, computed } from 'vue';
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { simulatorApi } from '@/api';
@@ -855,11 +855,15 @@ async function removeGift(row: SimGift) {
 onMounted(async () => {
   await fetchStatus();
   await Promise.all([fetchReplayDates(), fetchPersonas(), fetchGifts()]);
+});
+
+// keep-alive 全路由下 onUnmounted 不触发，轮询启停挂 activated/deactivated 防切页常驻
+onActivated(() => {
   // 5s 轮询以捕捉按钮外的状态变化（回放进度、预算耗尽等）
   pollTimer = setInterval(fetchStatus, 5000);
 });
 
-onUnmounted(() => {
+onDeactivated(() => {
   if (pollTimer) clearInterval(pollTimer);
 });
 </script>

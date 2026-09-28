@@ -388,7 +388,16 @@
  * 主从通用逻辑（选中保持 / 控制 / 批量 / 状态文案）见 useComponentMasterDetail；
  * 本页事件流缓冲仅作深链与最近决策指标的数据源，不再渲染流水面板。
  */
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onDeactivated,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from 'vue';
 import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { ArrowDown, Loading, Refresh } from '@element-plus/icons-vue';
@@ -733,11 +742,15 @@ onMounted(() => {
   // 任务快照由 useAgentTasks 在选中目标就绪时拉取，这里不再重复首拉
   // 深链消费：读一次 query 并已由 replace 清参（刷新/前进后退不重复高亮）
   pendingDeepLink.value = consumeDeepLink();
+});
+
+// keep-alive 全路由下 onUnmounted 不触发，状态轮询启停挂 activated/deactivated 防切页常驻
+onActivated(() => {
   // 状态轮询：心跳/存活/状态随时间自动保鲜
   statePollTimer = setInterval(() => void refreshAgentStates(true), STATE_POLL_INTERVAL_MS);
 });
 
-onUnmounted(() => {
+onDeactivated(() => {
   if (statePollTimer) clearInterval(statePollTimer);
 });
 </script>
