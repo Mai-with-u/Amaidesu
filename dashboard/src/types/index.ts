@@ -512,6 +512,12 @@ export interface SimulatorReplayProgress {
   remaining: number;
 }
 
+/** 可回放录制日期条目（带当日弹幕条数） */
+export interface ReplayDateEntry {
+  date: string;
+  danmaku_count: number;
+}
+
 /** 模拟器常驻人设（sim_personas 表的运行时视图） */
 export interface SimPersona {
   user_id: string;

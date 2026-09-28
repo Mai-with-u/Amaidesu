@@ -73,7 +73,12 @@
                       style="width: 100%"
                       :loading="loadingDates"
                     >
-                      <el-option v-for="d in replayDates" :key="d" :label="d" :value="d" />
+                      <el-option
+                        v-for="entry in replayDates"
+                        :key="entry.date"
+                        :label="`${entry.date}（${entry.danmaku_count} 条）`"
+                        :value="entry.date"
+                      />
                     </el-select>
                   </el-form-item>
                   <el-form-item>
@@ -434,7 +439,7 @@ import { onActivated, onDeactivated, onMounted, reactive, ref, computed } from '
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { simulatorApi } from '@/api';
-import type { SimulatorReplayProgress, SimPersona, SimGift } from '@/types';
+import type { SimulatorReplayProgress, SimPersona, SimGift, ReplayDateEntry } from '@/types';
 
 interface SimulatorStatusState {
   enabled: boolean;
@@ -463,7 +468,7 @@ const lastError = ref('');
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // ---- 回放 ----
-const replayDates = ref<string[]>([]);
+const replayDates = ref<ReplayDateEntry[]>([]);
 const selectedReplayDate = ref('');
 const loadingDates = ref(false);
 
@@ -595,7 +600,7 @@ async function fetchReplayDates() {
     replayDates.value = Array.isArray(res.data.dates) ? res.data.dates : [];
     // 唯一日期直接预选：省一次点选，也避免"有日期却因未选而启动失败"
     if (replayDates.value.length === 1) {
-      selectedReplayDate.value = replayDates.value[0] ?? '';
+      selectedReplayDate.value = replayDates.value[0]?.date ?? '';
     }
   } catch {
     replayDates.value = [];

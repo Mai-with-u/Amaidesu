@@ -98,10 +98,17 @@ class SimulatorRunStateResponse(BaseModel):
     replay_progress: Optional[SimulatorReplayProgress] = Field(default=None, description="回放进度（仅启动成功时携带）")
 
 
+class ReplayDateEntry(BaseModel):
+    """可回放录制日期条目（带当日弹幕条数，供选择器预告回放规模）。"""
+
+    date: str = Field(description="录制日期 YYYY-MM-DD")
+    danmaku_count: int = Field(description="当日可回放的弹幕条数")
+
+
 class ReplayDatesResponse(BaseModel):
     """可回放录制日期列表响应。"""
 
-    dates: List[str] = Field(default_factory=list, description="有弹幕记录的日期（YYYY-MM-DD，时间正序）")
+    dates: List[ReplayDateEntry] = Field(default_factory=list, description="有弹幕记录的日期及条数（时间正序）")
 
 
 class PersonaOut(BaseModel):

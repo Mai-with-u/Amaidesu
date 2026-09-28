@@ -39,6 +39,7 @@ import type {
   ToolReconnectResponse,
   SimulatorStatus,
   SimPersona,
+  ReplayDateEntry,
   SimGift,
   TaskSnapshotResponse,
   SimulatorControlResponse,
@@ -194,7 +195,7 @@ export const simulatorApi = {
       replayDate ? { replay_date: replayDate } : {},
     ),
   stop: () => api.post<SimulatorControlResponse>('/simulator/stop'),
-  listReplayDates: () => api.get<{ dates: string[] }>('/simulator/replay/dates'),
+  listReplayDates: () => api.get<{ dates: ReplayDateEntry[] }>('/simulator/replay/dates'),
 
   listPersonas: () =>
     api.get<{ personas: SimPersona[]; is_available: boolean }>('/simulator/personas'),

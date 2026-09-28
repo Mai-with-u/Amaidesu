@@ -283,20 +283,21 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_chat_dates(self) -> List[str]:
-        """列出 live_chat 有弹幕记录的本地日期（``YYYY-MM-DD``，时间正序）。
+    async def list_chat_dates_with_counts(self) -> List[Dict[str, Any]]:
+        """列出 live_chat 有弹幕记录的本地日期及各日弹幕条数（``YYYY-MM-DD``，时间正序）。
 
-        回放日期选择器的数据源：从业务表取 DISTINCT 日期，无场次数据则
-        返回空列表。
+        回放日期选择器的数据源：日期 + 条数一起返回，选择器可预告"这天有多少
+        可回放内容"；无场次数据则返回空列表。
         """
 
-        def _exec() -> List[str]:
+        def _exec() -> List[Dict[str, Any]]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
-                    "SELECT DISTINCT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS d"
-                    " FROM live_chat WHERE message_type='danmaku' ORDER BY d"
+                    "SELECT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS d,"
+                    " COUNT(*) AS n"
+                    " FROM live_chat WHERE message_type='danmaku' GROUP BY d ORDER BY d"
                 ).fetchall()
-            return [str(row["d"]) for row in rows if row["d"] is not None]
+            return [{"date": str(row["d"]), "danmaku_count": int(row["n"])} for row in rows if row["d"] is not None]
 
         return await self._run_in_executor(_exec)
 

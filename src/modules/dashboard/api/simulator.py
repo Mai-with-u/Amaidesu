@@ -43,6 +43,7 @@ from src.modules.dashboard.schemas.simulator import (
     PersonaListResponse,
     PersonaOut,
     PersonaUpdateRequest,
+    ReplayDateEntry,
     ReplayDatesResponse,
     SimulatorOperationResponse,
     SimulatorReplayProgress,
@@ -262,15 +263,15 @@ async def stop_simulator(server: ServerDep) -> SimulatorRunStateResponse:
 # ------------------------------------------------------------------ #
 
 
-@router.get("/replay/dates", response_model=ReplayDatesResponse, summary="可回放的录制日期列表（live_chat 业务表）")
+@router.get("/replay/dates", response_model=ReplayDatesResponse, summary="可回放的录制日期列表（含各日弹幕条数）")
 async def list_replay_dates(server: ServerDep) -> ReplayDatesResponse:
-    """列出有弹幕记录的日期（按时间正序），供回放选择器使用。
+    """列出有弹幕记录的日期及各日条数（按时间正序），供回放选择器预告回放规模。
 
     数据源为 ``live_chat`` 业务表（消息流单一事实源，与 SimulatorService
     实例无关），经默认数据库工厂取明细仓储；enabled=false 也可用。
     """
-    dates = await get_default_db().chat.list_chat_dates()
-    return ReplayDatesResponse(dates=dates)
+    entries = await get_default_db().chat.list_chat_dates_with_counts()
+    return ReplayDatesResponse(dates=[ReplayDateEntry(**e) for e in entries])
 
 
 # ------------------------------------------------------------------ #

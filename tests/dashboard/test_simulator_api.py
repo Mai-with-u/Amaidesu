@@ -146,8 +146,11 @@ def test_replay_dates_from_live_chat(client: TestClient, monkeypatch: pytest.Mon
     monkeypatch.setattr("src.modules.dashboard.api.simulator.get_default_db", lambda: store)
     try:
         body = client.get("/api/v1/simulator/replay/dates").json()
-        assert body["dates"] == sorted(body["dates"])
-        assert len(body["dates"]) == 2  # core.startup 不计入
+        dates = [entry["date"] for entry in body["dates"]]
+        assert dates == sorted(dates)
+        assert len(dates) == 2  # core.startup 不计入
+        # 新契约携带各日条数：两条 danmaku 分属两个日期、各 1 条
+        assert sum(entry["danmaku_count"] for entry in body["dates"]) == 2
     finally:
         asyncio.run(store.close())
 
