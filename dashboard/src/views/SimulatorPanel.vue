@@ -153,6 +153,9 @@
                   <el-descriptions-item label="Token 预算">
                     {{ formatNumber(status.config.token_budget_per_hour) }} / 小时
                   </el-descriptions-item>
+                  <el-descriptions-item v-if="status.last_error" label="最近故障">
+                    <span class="last-error">{{ status.last_error }}</span>
+                  </el-descriptions-item>
                 </el-descriptions>
                 <p class="hint">
                   启动方式由 <code>[simulator].mode</code> 决定；replay
@@ -447,6 +450,7 @@ interface SimulatorStatusState {
   is_running: boolean;
   mode: string;
   replay_progress: SimulatorReplayProgress | null;
+  last_error: string | null;
   message: string;
   config: Record<string, unknown>;
 }
@@ -457,6 +461,7 @@ const status = reactive<SimulatorStatusState>({
   is_running: false,
   mode: 'off',
   replay_progress: null,
+  last_error: null,
   message: '',
   config: {},
 });
@@ -924,6 +929,12 @@ onDeactivated(() => {
 
 .replay-progress {
   margin-top: var(--spacing-sm);
+}
+
+.last-error {
+  color: var(--el-color-danger, #f56c6c);
+  font-size: 12px;
+  word-break: break-all;
 }
 
 .replay-progress p {

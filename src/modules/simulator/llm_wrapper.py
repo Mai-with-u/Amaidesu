@@ -31,6 +31,10 @@ from .types import GeneratedMessage, Persona, PersonaRole, StreamerContextSnapsh
 # 本模块消费的 LLM profile 绑定：由代码显式常量声明，配置不承载绑定
 SIMULATOR_PROFILE = "simulator"
 
+# Engine 把分类异常 flatten 进 Response.error 字符串，类型名是可检索的稳定标记
+# （见 llm/errors.py 的 __all__）；命中即表示重试无意义，调用方应停止重试
+_FATAL_ERROR_MARK = "FatalError"
+
 
 def _parse_persona_json(text: str) -> list[dict]:
     """从 LLM 输出中解析人设 JSON 数组（容忍 markdown 代码块包裹与前后杂讯）。"""
@@ -106,6 +110,9 @@ class SimulatorLLMWrapper:
         self._logger = get_logger("SimulatorLLMWrapper")
         self._semaphore: asyncio.Semaphore = asyncio.Semaphore(config.max_concurrent_llm)
         self._total_tokens: int = 0
+        # 最近一次 FatalError 的完整错误描述（None=无；成功调用不清除——
+        # 供调用方在生成失败分支判断"本次失败是否不可恢复"）
+        self.last_fatal_error: Optional[str] = None
 
     # === 公共 API：4 类消息生成 ===
 
@@ -329,6 +336,8 @@ class SimulatorLLMWrapper:
 
         if not response.success:
             self._logger.warning(f"LLM 调用未成功 (profile={SIMULATOR_PROFILE}, error={response.error!r})")
+            if response.error and _FATAL_ERROR_MARK in response.error:
+                self.last_fatal_error = response.error
             return None
         return response
 

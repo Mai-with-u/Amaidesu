@@ -63,6 +63,43 @@ async def test_llm_failure_returns_none(mock_llm, persona, context):
 
 
 @pytest.mark.asyncio
+async def test_fatal_error_is_surfaced(mock_llm, persona, context):
+    """FatalError（flatten 进 error 字符串）必须暴露到 last_fatal_error 供循环收场。"""
+    mock_llm.generate = AsyncMock(
+        return_value=Response(
+            success=False,
+            content="",
+            error="全部模型失败 ['deepseek-flash']: FatalError: 请求被服务端拒绝（HTTP 402）",
+            usage=Usage(total_tokens=0),
+        )
+    )
+    cfg = SimulatorConfigSchema()
+    wrapper = SimulatorLLMWrapper(cfg, mock_llm)
+    msg = await wrapper.generate_viewer_message(persona, context)
+    assert msg is None
+    assert wrapper.last_fatal_error is not None
+    assert "FatalError" in wrapper.last_fatal_error
+
+
+@pytest.mark.asyncio
+async def test_retryable_error_does_not_set_fatal(mock_llm, persona, context):
+    """临时性失败（限流/网络）不算致命，last_fatal_error 保持 None。"""
+    mock_llm.generate = AsyncMock(
+        return_value=Response(
+            success=False,
+            content="",
+            error="全部模型失败 ['deepseek-flash']: RetryableError: 限流（HTTP 429）",
+            usage=Usage(total_tokens=0),
+        )
+    )
+    cfg = SimulatorConfigSchema()
+    wrapper = SimulatorLLMWrapper(cfg, mock_llm)
+    msg = await wrapper.generate_viewer_message(persona, context)
+    assert msg is None
+    assert wrapper.last_fatal_error is None
+
+
+@pytest.mark.asyncio
 async def test_empty_response_returns_none(mock_llm, persona, context):
     mock_llm.generate = AsyncMock(return_value=Response(success=True, content="   ", usage=Usage(total_tokens=0)))
     cfg = SimulatorConfigSchema()

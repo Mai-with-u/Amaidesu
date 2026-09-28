@@ -114,6 +114,8 @@ class SimulatorService:
         self._replay_engine: Optional[ReplayEngine] = None
         # 防重复订阅：start 多次调用只挂一次（与 background._subscribed 模式一致）
         self._subscribed_streamer_speech: bool = False
+        # 生成循环的最后一次致命故障描述（FatalError 等，启动时清零；Dashboard 状态面展示）
+        self._last_error: Optional[str] = None
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -265,6 +267,7 @@ class SimulatorService:
             name=f"SimulatorService-{mode}",
         )
         self._is_started = True
+        self._last_error = None
 
         self.logger.info(f"模拟器服务已启动（mode={mode}）")
         return None
@@ -404,6 +407,12 @@ class SimulatorService:
                 # 普通弹幕：调 LLM 生成文本
                 generated = await self._llm_wrapper.generate_viewer_message(persona=persona, context=context)
                 if generated is None or not generated.text:
+                    fatal = self._llm_wrapper.last_fatal_error
+                    if fatal:
+                        # FatalError 重试无意义（欠费/鉴权类）：停循环并暴露原因，
+                        # 避免按节奏无限重试刷错误日志、页面假健康
+                        await self._finish_generate_on_fatal(fatal)
+                        break
                     continue
 
                 # 累计 token 用量（生成消耗 + 窗口注入估算）
@@ -476,6 +485,20 @@ class SimulatorService:
             raise
         except Exception as exc:
             self.logger.exception(f"模拟器回放循环异常: {exc}")
+
+    async def _finish_generate_on_fatal(self, fatal: str) -> None:
+        """generate 循环遇 FatalError 的收场：与 stop() 同套落场动作，但由循环自发触发。
+
+        不收场的后果是循环按节奏无限重试不可恢复错误，持续刷 ERROR 日志，
+        页面停留在"运行中"的假健康态。
+        """
+        self._last_error = fatal
+        self._is_started = False
+        self._stop_event.set()
+        self._unsubscribe_streamer_speech()
+        self._task = None
+        self._active_mode = "off"
+        self.logger.error(f"模拟器 generate 循环因 LLM 不可恢复错误停止: {fatal}")
 
     async def _finish_replay_naturally(self) -> None:
         """回放队列耗尽后的自然收场：与 stop() 同一套落场动作，但不 cancel 自身。
@@ -643,6 +666,7 @@ class SimulatorService:
         await self._close_replay_session()
 
         self._active_mode = "off"
+        self._last_error = None
         self.logger.info("模拟器服务已停止")
 
     async def cleanup(self) -> None:
@@ -681,6 +705,11 @@ class SimulatorService:
     def gift_generator(self) -> Optional[GiftGenerator]:
         """礼物生成器（setup 后可用；Dashboard CRUD 访问面）。"""
         return self._gift_generator
+
+    @property
+    def last_error(self) -> Optional[str]:
+        """生成循环最后一次致命故障描述（无则 None；启动/停止时清零）。"""
+        return self._last_error
 
     @property
     def replay_engine(self) -> Optional[ReplayEngine]:

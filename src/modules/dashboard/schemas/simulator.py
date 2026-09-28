@@ -77,6 +77,9 @@ class SimulatorStatusResponse(BaseModel):
     is_running: bool = Field(description="当前是否在世界循环里")
     mode: str = Field(description="当前运行模式（off/generate/replay）")
     replay_progress: Optional[SimulatorReplayProgress] = Field(default=None, description="replay 模式进度")
+    last_error: Optional[str] = Field(
+        default=None, description="生成循环最后一次致命故障描述（LLM 不可恢复错误等，无则 null）"
+    )
     message: str = Field(default="", description="给前端的状态说明")
     config: Dict[str, Any] = Field(default_factory=dict, description="只读配置摘要")
 

@@ -385,6 +385,30 @@ class _FakeSessionManager:
         return 42
 
 
+class _FatalLLMService:
+    """恒返 FatalError 的假 LLM 服务（duck-type 注入）。"""
+
+    def __init__(self) -> None:
+        self.chat_calls: int = 0
+
+    async def generate(self, prompt: str, **kwargs: Any) -> Any:
+        self.chat_calls += 1
+        from src.modules.llm.payload import Response, Usage
+
+        return Response(
+            success=False,
+            content="",
+            error="全部模型失败 ['deepseek-flash']: FatalError: 请求被服务端拒绝（HTTP 402）",
+            usage=Usage(total_tokens=0),
+        )
+
+    async def setup(self, config: Any) -> None:
+        pass
+
+    async def cleanup(self) -> None:
+        pass
+
+
 async def _insert_danmaku(store: SQLiteDatabase, date_str: str, rows: int) -> None:
     """种入同一本地日期的连续弹幕（相邻 1s）。"""
     base_ms = int(datetime.strptime(date_str, "%Y-%m-%d").timestamp() * 1000)
@@ -508,5 +532,40 @@ class TestStartRejectionAndInstantFinish:
 
             assert service.is_running is False, "启动即完成后不得挂运行态（否则 API 误报启动失败）"
             assert service.mode == "off"
+        finally:
+            await service.cleanup()
+
+
+class TestGenerateFatalErrorShutdown:
+    """generate 循环遇 LLM FatalError 的收场契约。"""
+
+    @pytest.mark.asyncio
+    async def test_fatal_llm_error_stops_loop_and_sets_last_error(self, sim_store: SQLiteDatabase) -> None:
+        fatal_llm = _FatalLLMService()
+        service = SimulatorService(
+            event_bus=EventBus(),
+            sim_repo=sim_store.sim,
+            chat_repo=sim_store.chat,
+            services_by_type={type(fatal_llm): fatal_llm},
+        )
+        await service.setup(
+            _FakeConfigService(
+                _enabled_config(
+                    cadence_mode="fixed",
+                    fixed_interval_s=1.0,
+                    gift_probability=0.0,
+                    warmup_duration_s=0.0,
+                )
+            )
+        )
+        try:
+            deadline = asyncio.get_event_loop().time() + 8.0
+            while service.is_running and asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.05)
+
+            assert service.is_running is False, "FatalError 后循环必须收场，不得无限重试"
+            assert service.mode == "off"
+            assert service.last_error is not None and "FatalError" in service.last_error
+            assert fatal_llm.chat_calls == 1, "不可恢复错误只允许调用一次"
         finally:
             await service.cleanup()

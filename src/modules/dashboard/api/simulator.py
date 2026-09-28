@@ -172,6 +172,7 @@ async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
         is_running=is_running,
         mode=mode,
         replay_progress=_replay_progress_of(service),
+        last_error=getattr(service, "last_error", None) if service is not None else None,
         message=message,
         config=_config_summary(server),
     )

@@ -501,6 +501,8 @@ export interface SimulatorStatus {
   /** 当前运行模式（off/generate/replay） */
   mode: string;
   replay_progress: SimulatorReplayProgress | null;
+  /** 生成循环最后一次致命故障描述（LLM 不可恢复错误等，无则 null） */
+  last_error: string | null;
   message: string;
   config: Record<string, unknown>;
 }
