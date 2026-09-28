@@ -620,6 +620,15 @@ async function fetchTokenStats(requestId: string): Promise<void> {
   }
 }
 
+/** 模型上下文窗口（model_name → token 总量，取自 GET /llm/usage 装配期快照）。
+ * 整页只取一次——窗口来自 [[llm_models]].context_window 配置，改配置需重启应用，
+ * 运行期不变。未配置（0）的模型不进映射，水位胶囊按 v-if 隐藏（与用量页一致）。
+ * 声明必须先于下方 immediate watch：首跑同步触发的 ensureContextWindows 会读这些
+ * 标记，声明在后会触发 TDZ ReferenceError 并中断 watch 回调。 */
+const contextWindows = ref<Map<string, number>>(new Map());
+let contextWindowsLoading = false;
+let contextWindowsLoaded = false;
+
 watch(
   () => props.entries,
   entries => {
@@ -711,13 +720,6 @@ function tokensTitleOf(entry: ShowEntry): string {
 function modelNameOf(entry: ShowEntry): string {
   return statsOf(entry)?.modelName ?? '';
 }
-
-/** 模型上下文窗口（model_name → token 总量，取自 GET /llm/usage 装配期快照）。
- * 整页只取一次——窗口来自 [[llm_models]].context_window 配置，改配置需重启应用，
- * 运行期不变。未配置（0）的模型不进映射，水位胶囊按 v-if 隐藏（与用量页一致）。 */
-const contextWindows = ref<Map<string, number>>(new Map());
-let contextWindowsLoading = false;
-let contextWindowsLoaded = false;
 
 async function ensureContextWindows(): Promise<void> {
   if (contextWindowsLoaded || contextWindowsLoading) return;
