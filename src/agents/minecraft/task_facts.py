@@ -19,6 +19,11 @@ _MACHINE_FACT_KEYS = (
     "outcome_uncertain",
     "mechanical_retry_allowed",
     "construction_progress",
+    # 清水失败和自救走位的原生证据随任务保留，整理历史后仍能区分已回收源水与未解决的阻塞。
+    "clearance_report",
+    "confirmed_source_fluid_removals",
+    "last_retreat_observation",
+    "last_melee_stance_adjustment",
     "requested_transmission",
     "transmission_description",
     "selected_source_block",

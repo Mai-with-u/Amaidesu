@@ -112,6 +112,12 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
                                      "after": {"item_id": "create:cogwheel", "count": 5}, "submitted_face": "down"},
         "requested_transmission": "chain_conveyor",
         "construction_progress": {"phase": "remove", "confirmed_blocks": 7},
+        # 源水与流水判据来自执行器；上下文整理保留原值，不靠模型重新解释方块名称。
+        "clearance_report": {"observed_block_id": "minecraft:water", "world_modified": False,
+                             "fluid_state": {"source": False, "standalone_liquid_block": True}},
+        "confirmed_source_fluid_removals": 0,
+        "last_retreat_observation": {"threats": {"count": 1, "truncated": False}},
+        "last_melee_stance_adjustment": {"failure": "edge_support_or_sweep_changed"},
         "chain_conveyor_use": {"chains_required": 9, "chains_available_before": 2, "chains_missing": 7},
         "goal": {"selected_destination_block": "不应当作实际端点的设计值"},
     }
@@ -138,6 +144,10 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
     assert '"destination_power_evidence":{"observation_status":"not_observed"}' in context
     assert '"source_native_observation_stage":"before_construction"' in context
     assert '"submitted_face":"down"' in context and '"deployer_hand_observation"' in context
+    assert '"fluid_state":{"source":false,"standalone_liquid_block":true}' in context
+    assert '"confirmed_source_fluid_removals":0' in context
+    assert '"last_retreat_observation":{"threats":{"count":1,"truncated":false}}' in context
+    assert '"last_melee_stance_adjustment":{"failure":"edge_support_or_sweep_changed"}' in context
     assert "不应当作实际端点的设计值" not in context
     data["chain_conveyor_use"]["chains_missing"] = 99
     assert '"chains_missing":99' not in json_text(agent._current_task_context())
