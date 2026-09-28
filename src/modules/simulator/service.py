@@ -207,42 +207,58 @@ class SimulatorService:
                 return service
         return None
 
-    async def start(self, *, replay_date: Optional[str] = None) -> None:
+    async def start(self, *, replay_date: Optional[str] = None) -> Optional[str]:
         """按当前 mode 启动世界循环（幂等）。
 
         Args:
             replay_date: replay 模式的录制日期覆盖（不传用配置的 replay_date）。
+
+        Returns:
+            None 表示已进入运行态；字符串为拒绝启动的原因（未 setup / mode=off /
+            缺回放日期 / 队列为空 / 缺 LLM 包装器）。小队列回放可能在启动返回前
+            就自然放完，那不算拒绝——调用方以 :attr:`is_running` 区分。
         """
         if self._is_started:
             self.logger.debug("模拟器已运行，忽略重复 start")
-            return
+            return None
         if self._config_obj is None:
             self.logger.warning("模拟器未 setup，无法启动")
-            return
+            return "模拟器未完成装配，无法启动"
 
         mode = self._config_obj.mode
         if mode == "off":
             self.logger.info("模拟器 mode=off，不启动世界循环")
-            return
+            return "配置 mode=off，启动被拒绝"
         if mode == "replay":
             date_str = replay_date or self._config_obj.replay_date
             if not date_str:
                 self.logger.warning("模拟器 mode=replay 但未指定回放日期（replay_date），不启动")
-                return
+                return "未指定回放日期"
             if self._replay_engine is None:
                 self.logger.warning("模拟器回放引擎未构造，不启动")
-                return
+                return "回放引擎未装配"
             loaded = await self._replay_engine.load(date_str)
             if loaded == 0:
                 self.logger.warning(f"回放日期 {date_str} 无可回放消息，不启动")
-                return
+                return f"回放日期 {date_str} 无可回放的弹幕记录"
         elif mode == "generate" and self._llm_wrapper is None:
             self.logger.warning("模拟器 generate 模式缺 LLM 包装器（setup 未注入 LLMManager？），不启动")
-            return
+            return "generate 模式缺 LLM 包装器（LLMManager 未注入）"
 
         self._subscribe_streamer_speech()
-
         self._active_mode = mode
+
+        # 回放自动开/关场次：一场回放天然是一场直播——启动即开（source=replay），
+        # stop/自然收场时收口。必须先开场次再起回放循环：小队列的回放会在任务
+        # 首个调度片内跑完，循环后置会导致首条消息因场次未开被丢弃、收场时
+        # 场次指针尚未赋值而悬挂开启。
+        self._opened_session_pk = None
+        if mode == "replay" and self._session_manager is not None:
+            self._opened_session_pk = await self._session_manager.open_session(
+                title=f"回放 {date_str}",
+                source="replay",
+            )
+
         self._stop_event.clear()
         self._task = asyncio.create_task(
             self._run_replay(replay_date=date_str) if mode == "replay" else self._run_generate(),
@@ -250,15 +266,8 @@ class SimulatorService:
         )
         self._is_started = True
 
-        # 回放自动开/关场次：一场回放天然是一场直播——启动即开（source=replay），
-        # stop 时收口。其余模式不开场次（消息归默认场次）。
-        if mode == "replay" and self._session_manager is not None:
-            self._opened_session_pk = await self._session_manager.open_session(
-                title=f"回放 {date_str}",
-                source="replay",
-            )
-
         self.logger.info(f"模拟器服务已启动（mode={mode}）")
+        return None
 
     def _subscribe_streamer_speech(self) -> None:
         """订阅 ``streamer.speech`` 业务事件 → cadence.notify_streamer_activity。

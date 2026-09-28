@@ -204,14 +204,22 @@ async def start_simulator(
 
     replay_date = request.replay_date if request is not None else None
     try:
-        await service.start(replay_date=replay_date)
+        rejected = await service.start(replay_date=replay_date)
     except Exception as exc:  # noqa: BLE001 - 边界
         logger.exception(f"模拟器启动失败: {exc}")
         return SimulatorRunStateResponse(success=False, message=f"启动失败: {exc}")
 
+    if rejected is not None:
+        return SimulatorRunStateResponse(success=False, message=rejected, is_running=False)
+
     if not getattr(service, "is_running", False):
+        # start 未拒绝但已不在运行态：小队列回放在启动返回前就自然放完
+        engine = getattr(service, "replay_engine", None)
+        total = getattr(engine, "total", 0) or 0
         return SimulatorRunStateResponse(
-            success=False, message="启动未生效（mode=off 或 replay 缺少可用录制日期），详见应用日志。", is_running=False
+            success=True,
+            message=f"回放已完成（共 {total} 条）",
+            is_running=False,
         )
 
     return SimulatorRunStateResponse(

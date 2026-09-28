@@ -359,3 +359,154 @@ class TestReplayNaturalFinish:
             assert service.is_running is True
         finally:
             await service.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# ⑥ start 顺序与语义（场次先于回放循环 / 拒绝原因 / 启动即完成 / Fatal 收场）
+# ---------------------------------------------------------------------------
+
+
+class _FakeSessionManager:
+    """duck-type 场次管理器：记录调用顺序，供 start 顺序断言。"""
+
+    def __init__(self) -> None:
+        self.calls: List[str] = []
+        self.opened_pk: Optional[int] = None
+
+    async def open_session(self, *, title: str, source: str) -> int:
+        self.calls.append(f"open:{source}")
+        self.opened_pk = 42
+        return 42
+
+    async def close_session(self, *, reason: str) -> None:
+        self.calls.append("close")
+
+    async def resolve_pk(self) -> int:
+        return 42
+
+
+async def _insert_danmaku(store: SQLiteDatabase, date_str: str, rows: int) -> None:
+    """种入同一本地日期的连续弹幕（相邻 1s）。"""
+    base_ms = int(datetime.strptime(date_str, "%Y-%m-%d").timestamp() * 1000)
+    for i in range(rows):
+        await store.chat.insert_live_chat(
+            live_session_id=1,
+            timestamp_ms=base_ms + i * 1000,
+            sender_role="viewer",
+            sender_id=f"uid_{i}",
+            sender_name=f"观众{i}",
+            content=f"第{i}条",
+            message_type="danmaku",
+            simulated=False,
+        )
+
+
+class TestReplayStartOrdering:
+    """start() 内部顺序契约：场次必须先于回放循环开启（小队列回放竞态防护）。"""
+
+    @pytest.mark.asyncio
+    async def test_session_opens_before_first_replay_message(self, sim_store: SQLiteDatabase) -> None:
+        event_bus = EventBus()
+        session_mgr = _FakeSessionManager()
+        opened_flags: List[bool] = []
+
+        async def _capture(event_name: str, payload: Any, source: Optional[str] = None) -> None:
+            if isinstance(payload, RoomMessagePayload):
+                opened_flags.append(session_mgr.opened_pk is not None)
+
+        event_bus.on(CoreEvents.ROOM_MESSAGE_DANMAKU, _capture, model_class=RoomMessagePayload)
+
+        date_str = "2026-09-02"
+        await _insert_danmaku(sim_store, date_str, rows=1)
+
+        fake_llm = _FakeLLMService()
+        service = SimulatorService(
+            event_bus=event_bus,
+            sim_repo=sim_store.sim,
+            chat_repo=sim_store.chat,
+            services_by_type={type(fake_llm): fake_llm},
+            session_manager=session_mgr,
+        )
+        # 不配 replay_date → setup 自动启动被拒，显式 start 走本测试的顺序断言
+        await service.setup(_FakeConfigService(_enabled_config(mode="replay", replay_speed=100.0)))
+        try:
+            assert service.is_running is False
+            rejected = await service.start(replay_date=date_str)
+            assert rejected is None, "日期与队列就绪时 start 不应拒绝"
+
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while service.is_running and asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.05)
+
+            assert opened_flags == [True], "首条回放消息 emit 时场次必须已开启（否则消息丢场次）"
+            assert "close" in session_mgr.calls, "自然收场必须关闭回放场次"
+        finally:
+            await service.cleanup()
+
+
+class TestStartRejectionAndInstantFinish:
+    """start() 拒绝原因返回 + 小队列"启动即完成"语义。"""
+
+    @pytest.mark.asyncio
+    async def test_start_without_date_returns_reason(self, sim_store: SQLiteDatabase) -> None:
+        fake_llm = _FakeLLMService()
+        service = SimulatorService(
+            event_bus=EventBus(),
+            sim_repo=sim_store.sim,
+            chat_repo=sim_store.chat,
+            services_by_type={type(fake_llm): fake_llm},
+        )
+        await service.setup(_FakeConfigService(_enabled_config(mode="replay")))
+        try:
+            rejected = await service.start()
+            assert rejected is not None and "日期" in rejected
+            assert service.is_running is False
+        finally:
+            await service.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_start_empty_date_returns_reason(self, sim_store: SQLiteDatabase) -> None:
+        fake_llm = _FakeLLMService()
+        service = SimulatorService(
+            event_bus=EventBus(),
+            sim_repo=sim_store.sim,
+            chat_repo=sim_store.chat,
+            services_by_type={type(fake_llm): fake_llm},
+        )
+        await service.setup(_FakeConfigService(_enabled_config(mode="replay")))
+        try:
+            rejected = await service.start(replay_date="1999-01-01")
+            assert rejected is not None and "无可回放" in rejected
+            assert service.is_running is False
+        finally:
+            await service.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_single_message_replay_finishes_immediately(self, sim_store: SQLiteDatabase) -> None:
+        """1 条全速回放启动即完成：start 不拒绝、随后 is_running 复位（API 据此报"已完成"）。"""
+        event_bus = EventBus()
+        date_str = "2026-09-03"
+        await _insert_danmaku(sim_store, date_str, rows=1)
+
+        fake_llm = _FakeLLMService()
+        service = SimulatorService(
+            event_bus=event_bus,
+            sim_repo=sim_store.sim,
+            chat_repo=sim_store.chat,
+            services_by_type={type(fake_llm): fake_llm},
+        )
+        await service.setup(_FakeConfigService(_enabled_config(mode="replay")))
+        try:
+            rejected = await service.start(replay_date=date_str)
+            assert rejected is None
+            assert service.replay_engine is not None
+            assert service.replay_engine.total == 1
+
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while service.is_running and asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.05)
+
+            assert service.is_running is False, "启动即完成后不得挂运行态（否则 API 误报启动失败）"
+            assert service.mode == "off"
+        finally:
+            await service.cleanup()

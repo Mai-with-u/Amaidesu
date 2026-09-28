@@ -635,7 +635,8 @@ async function startReplay() {
     const res = await simulatorApi.start(selectedReplayDate.value);
     if (res.data.success) {
       lastError.value = '';
-      ElMessage.success('回放已启动');
+      // 小队列回放会"启动即完成"，后端 message 区分已启动/已完成两种口径
+      ElMessage.success(res.data.message || '回放已启动');
     } else {
       lastError.value = res.data.message || '启动被拒绝';
       ElMessage.warning(res.data.message || '启动被拒绝');
