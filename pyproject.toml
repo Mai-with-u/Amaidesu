@@ -28,8 +28,6 @@ dependencies = [
     "edge-tts>=6.1.0",
     "sounddevice>=0.4.0",
     "soundfile>=0.12.0",
-    # 音频处理
-    "scipy>=1.10.0",
     # 图像和屏幕捕获
     "mss>=9.0.0",
     "numpy>=1.24.0",
