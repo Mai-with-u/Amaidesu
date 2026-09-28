@@ -121,9 +121,13 @@ def test_silent_collector_gets_no_fallback_emit() -> None:
     assert bus.events == [], "基类不应兜底转发（采集器自产自发）"
 
 
-def test_manager_dynamic_register_start_stop() -> None:
+def test_manager_dynamic_register_start_stop(monkeypatch) -> None:
     """CollectorManager 动态注册→启动→停止→注销全链（真实运行态）。"""
+    from src.modules.collectors.console import console_input_collector as console_mod
     from src.modules.collectors.manager import CollectorManager
+
+    # console_input 仅作链路载体：屏蔽交互终端检查（pytest 下 stdin 非 TTY 会自禁）
+    monkeypatch.setattr(console_mod, "_stdin_interactive", lambda: True)
 
     async def run():
         cm = CollectorManager()

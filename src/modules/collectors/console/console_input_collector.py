@@ -52,6 +52,19 @@ def _read_stdin_line_with_diag() -> str:
     return sys.stdin.readline()
 
 
+def _stdin_interactive() -> bool:
+    """stdin 是否为可交互终端。
+
+    重定向/管道场景下守护进程化的运行方式会让宿主 shell 的命令文本残留在
+    stdin 缓冲里被当观众弹幕发出去（历史上出现过 PowerShell 激活命令落库），
+    EOF 后 readline() 恒返空串还会导致忙转——非交互 stdin 一律不启动输入循环。
+    """
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
 # 本采集器的平台标识（身份键组成部分，装配期常量）：console 是调试保留字，
 # 与真实平台数据在 (platform, user_id) 身份键上隔离，避免测试用户污染真实观众
 _PLATFORM = "console"
@@ -102,6 +115,12 @@ class ConsoleInputCollector(BaseCollector):
         async with self._input_lock:
             if self.is_started:
                 return
+            if not _stdin_interactive():
+                self.logger.warning(
+                    "stdin 不是交互终端（重定向/后台运行），控制台输入不启动；"
+                    "手动注入弹幕请改用 WebUI 直播控制台的输入条"
+                )
+                return
             import os as _os
 
             if _os.environ.get("TERM_PROGRAM") == "vscode":
@@ -149,10 +168,17 @@ class ConsoleInputCollector(BaseCollector):
                 text = line.strip()
 
                 if not text:
+                    if not line:
+                        # readline 返回空串即 EOF（终端关闭/管道结束）：退出而非忙转；
+                        # is_started 一并复位，避免"循环已退出但采集器仍表现为运行中"
+                        self.logger.info("stdin 已关闭（EOF），控制台输入循环退出")
+                        self.is_started = False
+                        break
                     continue
 
                 if text.lower() == "exit()":
                     self.logger.info("收到 'exit()' 命令，正在停止...")
+                    self.is_started = False
                     break
 
                 if text.startswith("/"):
@@ -216,6 +242,10 @@ class ConsoleInputCollector(BaseCollector):
                     text = line.strip()
 
                     if not text:
+                        if not line:
+                            # readline 返回空串即 EOF：退出而非忙转
+                            self.logger.info("stdin 已关闭（EOF），控制台输入循环退出")
+                            break
                         continue
 
                     if text.lower() == "exit()":

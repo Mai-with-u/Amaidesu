@@ -49,10 +49,13 @@ def test_console_config_defaults() -> None:
     assert cfg.user_nickname == "控制台"
 
 
-def test_console_start_emits_danmaku_on_input() -> None:
+def test_console_start_emits_danmaku_on_input(monkeypatch) -> None:
     """start() 开后台循环：stdin 输入 → emit room.message.danmaku（v2 主动推）。"""
     import sys
 
+    from src.modules.collectors.console import console_input_collector as mod
+
+    monkeypatch.setattr(mod, "_stdin_interactive", lambda: True)
     bus = _FakeEventBus()
     collector = ConsoleInputCollector(config={}, event_bus=bus)  # type: ignore[arg-type]
 
@@ -80,3 +83,51 @@ def test_console_start_emits_danmaku_on_input() -> None:
     assert event_name == "room.message.danmaku"
     assert payload.content == "你好测试"  # type: ignore[attr-defined]
     assert payload.user.name == "控制台"  # type: ignore[attr-defined]
+
+
+def test_console_start_skipped_when_stdin_not_interactive(monkeypatch) -> None:
+    """stdin 非交互（重定向/后台）时不启动输入循环：防宿主命令文本被当弹幕。"""
+    from src.modules.collectors.console import console_input_collector as mod
+
+    monkeypatch.setattr(mod, "_stdin_interactive", lambda: False)
+    bus = _FakeEventBus()
+    collector = ConsoleInputCollector(config={}, event_bus=bus)  # type: ignore[arg-type]
+
+    async def run():
+        await collector.start()
+        await asyncio.sleep(0.05)
+        return collector.is_started
+
+    assert asyncio.run(run()) is False
+    assert bus.events == []
+
+
+def test_console_input_loop_exits_on_eof(monkeypatch) -> None:
+    """stdin EOF（readline 返回空串）时循环退出并复位 is_started，不忙转。"""
+    import sys
+
+    from src.modules.collectors.console import console_input_collector as mod
+
+    monkeypatch.setattr(mod, "_stdin_interactive", lambda: True)
+    bus = _FakeEventBus()
+    collector = ConsoleInputCollector(config={}, event_bus=bus)  # type: ignore[arg-type]
+
+    sys.stdin_readline_orig = sys.stdin.readline
+    sys.stdin.readline = lambda: ""  # type: ignore[assignment]  # 立即 EOF
+
+    try:
+
+        async def run():
+            await collector.start()
+            for _ in range(50):
+                if not collector.is_started:
+                    break
+                await asyncio.sleep(0.01)
+            return collector.is_started
+
+        started_after_eof = asyncio.run(run())
+    finally:
+        sys.stdin.readline = sys.stdin_readline_orig  # type: ignore[assignment]
+
+    assert started_after_eof is False
+    assert bus.events == []
