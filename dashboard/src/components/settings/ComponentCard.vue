@@ -11,13 +11,12 @@
         <span class="card-title">{{ label }}</span>
       </div>
       <div class="card-header-right">
-        <!-- 开关仅在具备语义时显示：布尔 enabled 子字段，或名单驱动的文件 -->
+        <!-- 开关仅在具备语义时显示：布尔 enabled 子字段，或名单驱动的文件。
+             裸开关（不印启用/禁用文字）：开关位置固定在卡头，明暗态一眼可辨 -->
         <el-switch
           v-if="booleanEnabledKey || hasListSemantics"
           :model-value="enabled"
           size="small"
-          active-text="启用"
-          inactive-text="禁用"
           @click.stop
           @change="toggleEnabled"
         />

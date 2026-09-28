@@ -13,13 +13,12 @@
             <span class="sub-card-title">{{ field.label || field.key }}</span>
           </div>
           <div class="sub-card-header-right">
-            <!-- 容器自带的布尔 enabled 子字段提为卡头开关（如 streamer.background.enabled） -->
+            <!-- 容器自带的布尔 enabled 子字段提为卡头开关（如 streamer.background.enabled）；
+                 裸开关与实体卡头一致，不印启用/禁用文字 -->
             <el-switch
               v-if="enabledLeaf(field)"
               :model-value="getValue(enabledLeaf(field)!.key) === true"
               size="small"
-              active-text="启用"
-              inactive-text="禁用"
               @click.stop
               @change="(v: boolean) => toggleSubEnabled(field, v)"
             />

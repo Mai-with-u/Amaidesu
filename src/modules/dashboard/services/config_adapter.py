@@ -524,7 +524,7 @@ def _dynamic_instance_fields(scope: str, config_service: "ConfigService", main_c
                 enabled_field = {
                     "name": "enabled",
                     "key": f"{prefix}.enabled",
-                    "label": "enabled",
+                    "label": "启用",
                     "type": "boolean",
                     # 落盘实例展示现值；未落盘实例默认关——bootstrap 对缺段按未装配处理
                     "default": on_disk,
