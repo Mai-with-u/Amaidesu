@@ -55,6 +55,14 @@ class GiftGenerator:
         self._gifts: List[GiftItem] = []
         self._weights: List[int] = []
 
+    def set_llm_wrapper(self, llm_wrapper: Any) -> None:
+        """后置注入 LLM 包装器（SC 文本生成用）。
+
+        装配层构造本类时 LLM 服务尚未探测就绪，由装配层在包装器创建后显式注入，
+        代替从外部直写私有属性。
+        """
+        self._llm_wrapper = llm_wrapper
+
     async def load(self) -> None:
         """从 DB 加载礼物目录到内存缓存。"""
         rows = await self._sim.list_sim_gifts()

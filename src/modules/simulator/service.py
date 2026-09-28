@@ -70,6 +70,9 @@ _GUARD_NUM_MONTHLY = 1
 _GUARD_UNIT_MONTH = "月"
 _GUARD_CAPTAIN_PRICE_GOLD = 138_000
 
+# 世界窗口上限：模拟观众可见的近期公共对话条数封顶，防长场直播下每次生成全量读表线性变慢
+_WORLD_WINDOW_LIMIT = 200
+
 
 class SimulatorService:
     """世界模拟器 — 唯一的 room.message.* 模拟发射器
@@ -182,7 +185,7 @@ class SimulatorService:
                 llm_manager=llm_service,
             )
             # 让礼物生成器也能用同一个 LLM 包装器（生成 SC 文本）
-            self._gift_generator._llm_wrapper = self._llm_wrapper
+            self._gift_generator.set_llm_wrapper(self._llm_wrapper)
 
         # 自动启动（按 [simulator].enabled 或 auto_start 显式覆盖）
         if auto_start is None:
@@ -413,14 +416,14 @@ class SimulatorService:
             self.logger.exception(f"模拟器生成循环异常: {exc}")
 
     async def _fetch_world_window(self, *, persona: Any) -> List[str]:
-        """读取当前场次完整公共对话，让模拟观众能看到全部发言。"""
+        """读取当前场次近期公共对话（封顶 _WORLD_WINDOW_LIMIT 条）供模拟观众参考。"""
         if self._chat is None or self._config_obj is None or self._session_manager is None:
             return []
         try:
             live_pk = await self._session_manager.resolve_pk()
             rows = await self._chat.list_recent_live_chat(
                 live_session_id=live_pk,
-                limit=None,
+                limit=_WORLD_WINDOW_LIMIT,
             )
         except Exception as exc:
             self.logger.warning(f"世界窗口读取失败（本轮无上下文）: {exc}")
