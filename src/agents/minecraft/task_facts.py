@@ -27,6 +27,8 @@ _MACHINE_FACT_KEYS = (
     # 施工补料已经筛选过的近期分支事实随任务保存，不能在摘要后只剩一个看似唯一的缺料名称。
     "acquisition_evidence",
     "wireless_stock_evidence",
+    # 仓库有货但背包装不下时保存容量前置，避免下一轮又将其当成原料来源不足。
+    "inventory_capacity",
     "requested_transmission",
     "transmission_description",
     "selected_source_block",
