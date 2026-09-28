@@ -29,6 +29,7 @@ _MACHINE_FACT_KEYS = (
     "wireless_stock_evidence",
     # 仓库有货但背包装不下时保存容量前置，避免下一轮又将其当成原料来源不足。
     "inventory_capacity",
+    "inventory_maintenance",
     "requested_transmission",
     "transmission_description",
     "selected_source_block",

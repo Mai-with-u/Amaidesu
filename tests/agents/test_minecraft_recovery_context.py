@@ -123,6 +123,7 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
             # 查货状态独立于取物是否成功，失败查询不能在摘要中被改成仓库为空。
             "wireless_stock_evidence": {"last_query": {"status": "failed"}, "need_checks": []},
             "inventory_capacity": {"empty_main_slots": 0, "missing": 15, "source": "wireless"},
+            "inventory_maintenance": [{"storage": "ae2_wireless", "confirmed_deposited": {"minecraft:bone": 2}}],
             "acquisition_evidence_scope": "last reported rows; upstream history may already be bounded",
             "attempts": [{"source": "wireless", "inventory_before": 1, "inventory_after": 2, "effects_observed": True}],
             "attempts_reported_count": 12, "attempts_omitted_reported_rows": 4,
@@ -164,6 +165,7 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
     assert '"recipe_id":"minecraft:chest","preparation_plan":{"search_complete":false}' in context
     assert '"wireless_stock_evidence":{"last_query":{"status":"failed"},"need_checks":[]}' in context
     assert '"inventory_capacity":{"empty_main_slots":0,"missing":15,"source":"wireless"}' in context
+    assert '"inventory_maintenance":[{"storage":"ae2_wireless","confirmed_deposited":{"minecraft:bone":2}}]' in context
     assert "不应当作实际端点的设计值" not in context
     data["chain_conveyor_use"]["chains_missing"] = 99
     assert '"chains_missing":99' not in json_text(agent._current_task_context())
