@@ -104,9 +104,6 @@ class STTCollector(BaseCollector):
         self.vad_model = None
         self.vad_utils = None
 
-        if self.vad_enabled:
-            self._load_vad_model()
-
         self._session = None
         self._active_ws = None
         self._active_receiver_task = None
@@ -163,9 +160,8 @@ class STTCollector(BaseCollector):
             import torch
 
             original_hub_dir = torch.hub.get_dir()
-            component_dir = os.path.dirname(os.path.abspath(__file__))
-            safe_cache_dir = os.path.join(component_dir, ".torch_cache")
-
+            # 缓存放用户目录：包源码目录会被清理/重装，运行时下载的模型产物不进源码树
+            safe_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "amaidesu", "torch-hub")
             os.makedirs(safe_cache_dir, exist_ok=True)
             torch.hub.set_dir(safe_cache_dir)
 
@@ -219,8 +215,12 @@ class STTCollector(BaseCollector):
         return None
 
     async def start(self) -> None:
-        """启动：开后台任务消费 collect()（collect 内直发 room.message.*）。"""
+        """启动：加载 VAD 模型后开后台任务消费 collect()（collect 内直发 room.message.*）。"""
         if not self.is_started:
+            if self.vad_enabled and self.vad_model is None:
+                # 模型下载/加载放启动期而非构造期：构造被下载卡住会拖死整个应用装配
+                # （首次运行从 GitHub 拉取，网络不佳时可达分钟级）
+                await asyncio.to_thread(self._load_vad_model)
             self.is_started = True
             await self._start_collect_task()
 
