@@ -242,7 +242,8 @@ class ConfigSchemaGenerator:
         schema: Dict[str, Any] = {
             "name": field_name,
             "type": field_type,
-            "label": cls._build_label(field_name),
+            # 字段展示名：Field(title=...) 声明的中文名优先，未声明回退字段名
+            "label": cls._build_label(field_info.title or field_name),
             "description": description,
             "required": field_info.is_required(),
         }

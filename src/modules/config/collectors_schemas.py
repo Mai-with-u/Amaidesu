@@ -33,6 +33,7 @@ class CollectorsRootConfig(BaseConfig):
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
     enabled: list[str] = Field(
         default_factory=lambda: ["console_input", "maicraft_attention"],
+        title="启用的采集器",
         description="启用的 Collector 列表（注册名 = 配置段名）",
         json_schema_extra={
             "x-options": [

@@ -69,6 +69,7 @@ class AgentsConfig(BaseConfig):
     # 启用列表（哪些 Agent 参与运行）——取值必须为已知顶级 Agent 名
     enabled: List[AgentType] = Field(
         default_factory=lambda: ["streamer"],
+        title="启用的 Agent",
         description="启用的 Agent 列表",
         json_schema_extra={
             # WebUI 下拉候选从 AgentType 派生，与取值空间同源不漂移
