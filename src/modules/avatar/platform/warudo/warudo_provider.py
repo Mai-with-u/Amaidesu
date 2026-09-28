@@ -635,13 +635,6 @@ class WarudoProvider(BaseToolProvider):
         except Exception as e:
             self.logger.error(f"启动 TypingAction 任务失败: {e}")
 
-        if self.subtitle_manager is not None:
-            try:
-                await self.subtitle_manager.start_server()
-                self.logger.info(f"字幕服务器已启动: http://localhost:{self.subtitle_port}")
-            except Exception as e:
-                self.logger.error(f"启动字幕服务器失败: {e}")
-
 
 # =============================================================================
 # 工厂 / 注册辅助
