@@ -24,6 +24,8 @@ _MACHINE_FACT_KEYS = (
     "confirmed_source_fluid_removals",
     "last_retreat_observation",
     "last_melee_stance_adjustment",
+    # 施工补料已经筛选过的近期分支事实随任务保存，不能在摘要后只剩一个看似唯一的缺料名称。
+    "acquisition_evidence",
     "requested_transmission",
     "transmission_description",
     "selected_source_block",
@@ -64,7 +66,7 @@ def machine_facts(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         for row in rows
         if any(key in row for key in _MACHINE_FACT_KEYS)
         or row.get("omitted")
-        and row["path"].rsplit("/", 1)[-1] in _MACHINE_FACT_KEYS
+        and row["path"].rsplit("/", 1)[-1] in (*_MACHINE_FACT_KEYS, "material_supply_failure")
     ]
 
 
@@ -158,6 +160,21 @@ def failure_evidence(value: Any, path: str = "") -> list[dict[str, Any]]:
         "build_diagnostics",
     )
     facts = {key: deepcopy(value[key]) for key in keys if key in value and not is_reference(value[key])}
+    if "acquisition_evidence_scope" in value:
+        # 只收 Mod 明确标记范围的有界供料摘要，普通子任务的整张仓库清单仍通过原件补读。
+        facts["acquisition_evidence"] = {
+            key: deepcopy(value[key])
+            for key in (
+                "acquisition_evidence_scope",
+                "attempts",
+                "attempts_reported_count",
+                "attempts_omitted_reported_rows",
+                "recipe_trace",
+                "recipe_trace_reported_count",
+                "recipe_trace_omitted_reported_rows",
+            )
+            if key in value
+        }
     rows = [{"path": path, **facts}] if facts else []
     for key in keys:
         if is_reference(value.get(key)):
@@ -170,6 +187,7 @@ def failure_evidence(value: Any, path: str = "") -> list[dict[str, Any]]:
         "last_native_stage",
         "batches",
         "supply",
+        "material_supply_failure",
         "last_build_evidence",
         "child_data",
     ):

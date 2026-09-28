@@ -118,6 +118,14 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
         "confirmed_source_fluid_removals": 0,
         "last_retreat_observation": {"threats": {"count": 1, "truncated": False}},
         "last_melee_stance_adjustment": {"failure": "edge_support_or_sweep_changed"},
+        # 缺料位于实际供料失败链；压缩后仍保留尝试变化和不完整搜索，不能误称已经穷尽游戏配方。
+        "material_supply_failure": {
+            "acquisition_evidence_scope": "last reported rows; upstream history may already be bounded",
+            "attempts": [{"source": "wireless", "inventory_before": 1, "inventory_after": 2, "effects_observed": True}],
+            "attempts_reported_count": 12, "attempts_omitted_reported_rows": 4,
+            "recipe_trace": [{"recipe_id": "minecraft:chest", "preparation_plan": {"search_complete": False}}],
+            "recipe_trace_reported_count": 1, "recipe_trace_omitted_reported_rows": 0,
+        },
         "chain_conveyor_use": {"chains_required": 9, "chains_available_before": 2, "chains_missing": 7},
         "goal": {"selected_destination_block": "不应当作实际端点的设计值"},
     }
@@ -148,9 +156,28 @@ async def test_native_machine_facts_survive_compaction(receipt_form: str) -> Non
     assert '"confirmed_source_fluid_removals":0' in context
     assert '"last_retreat_observation":{"threats":{"count":1,"truncated":false}}' in context
     assert '"last_melee_stance_adjustment":{"failure":"edge_support_or_sweep_changed"}' in context
+    assert '"acquisition_evidence"' in context and '"attempts_omitted_reported_rows":4' in context
+    assert '"inventory_before":1,"inventory_after":2,"effects_observed":true' in context
+    assert '"recipe_id":"minecraft:chest","preparation_plan":{"search_complete":false}' in context
     assert "不应当作实际端点的设计值" not in context
     data["chain_conveyor_use"]["chains_missing"] = 99
     assert '"chains_missing":99' not in json_text(agent._current_task_context())
+
+
+def test_referenced_supply_failure_keeps_readback_path() -> None:
+    """供料失败整块被分页时保留原文入口，不把没有展开的尝试历史误记成空。"""
+    uri = "maicraft://receipts/supply?path=%2Fmaterial_supply_failure"
+    facts = machine_facts({"result": {"data": {"material_supply_failure": {
+        "omitted": True, "type": "object", "total": 20, "resource_uri": uri,
+        "detail_path": "/result/data/material_supply_failure",
+    }}}})
+    assert any(row.get("resource_uri") == uri and row.get("omitted") for row in facts)
+
+
+def test_unprojected_acquisition_history_is_not_copied_to_machine_facts() -> None:
+    """没有执行器范围标记的原始取料回执仍按需补读，避免整张网络库存再次进入近期摘要。"""
+    facts = machine_facts({"result": {"data": {"attempts": [{"child_data": {"network_contents": "large"}}]}}})
+    assert not facts
 
 
 def test_referenced_chain_details_keep_known_shortage_and_readback_path() -> None:
