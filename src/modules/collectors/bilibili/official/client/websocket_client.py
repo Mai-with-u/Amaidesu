@@ -169,6 +169,11 @@ class BiliWebSocketClient:
         header_map["Accept"] = "application/json"
         return header_map
 
+    def _post_openapi(self, *, url: str, headers: dict[str, str], body: str, timeout: int) -> requests.Response:
+        """同步 POST B 站开放平台接口；调用方须经 asyncio.to_thread 进入，避免阻塞事件循环。"""
+        # verify=False 为既有取舍：显式跳过证书校验（历史行为，恢复需单独评估）
+        return requests.post(url=url, headers=headers, data=body, verify=False, timeout=timeout)
+
     async def _get_websocket_info(self) -> tuple[Optional[str], Optional[str]]:
         """获取WebSocket连接信息"""
         try:
@@ -178,7 +183,9 @@ class BiliWebSocketClient:
             header_map = self._sign(params)
 
             self.logger.debug(f"请求应用启动: {post_url}")
-            response = requests.post(url=post_url, headers=header_map, data=params, verify=False, timeout=30)
+            response = await asyncio.to_thread(
+                self._post_openapi, url=post_url, headers=header_map, body=params, timeout=30
+            )
             response.raise_for_status()
 
             data = response.json()
@@ -209,7 +216,9 @@ class BiliWebSocketClient:
             params = json.dumps({"game_id": self.game_id})
             header_map = self._sign(params)
 
-            response = requests.post(url=post_url, headers=header_map, data=params, verify=False, timeout=10)
+            response = await asyncio.to_thread(
+                self._post_openapi, url=post_url, headers=header_map, body=params, timeout=10
+            )
             response.raise_for_status()
 
             data = response.json()
@@ -231,7 +240,9 @@ class BiliWebSocketClient:
             params = json.dumps({"game_id": self.game_id, "app_id": self.app_id})
             header_map = self._sign(params)
 
-            response = requests.post(url=post_url, headers=header_map, data=params, verify=False, timeout=10)
+            response = await asyncio.to_thread(
+                self._post_openapi, url=post_url, headers=header_map, body=params, timeout=10
+            )
             response.raise_for_status()
 
             data = response.json()
