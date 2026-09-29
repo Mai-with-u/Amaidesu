@@ -21,15 +21,16 @@ jobs:
         run: uv sync --frozen
 
       # 错误输出转 ::error:: 注解：仓库协作者之外无法拉取 job 日志，注解可匿名读。
-      # 非零退出时无条件倾倒输出尾部——失败形态未知时不做模式匹配，保真优先
+      # 分步观测：先验证 uv run 可用；非零退出时倾倒输出大小与非空行，保真优先
       - name: Run pytest
         run: |
-          set -o pipefail
-          uv run pytest tests/ -q --tb=short 2>&1 | tee /tmp/pytest-out.txt
-          status=${PIPESTATUS[0]}
+          uv run python -V
+          uv run pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
+          status=$?
+          echo "pytest exit=$status size=$(wc -c < /tmp/pytest-out.txt)"
           if [ $status -ne 0 ]; then
             tail -20 /tmp/pytest-out.txt | while IFS= read -r line; do
-              echo "::error::${line:0:300}"
+              [ -n "$line" ] && echo "::error::${line:0:250}"
             done
           fi
           exit $status
