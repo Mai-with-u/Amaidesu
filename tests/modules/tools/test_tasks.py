@@ -76,8 +76,24 @@ def _setup(
 
 
 async def _drain() -> None:
-    """让 fire-and-forget 的 task.changed 派发任务跑完。"""
-    await asyncio.sleep(0.02)
+    """让 fire-and-forget 的 task.changed 派发任务跑完。
+
+    派发是 create_task 链（记录表广播 → 总线后台扇出 → 订阅者），完成轮次
+    不定；固定时长 sleep 会与之竞态——Windows 时钟量子约 15.6ms，定时器
+    到期可能恰与仍在排队的派发链句柄同批执行，测试先恢复而订阅者尚未跑。
+    以「当前循环挂起任务集合清空」为确定性完成信号；但全量套件下个别
+    前序测试会在共享循环上留下永不完成的残留任务，无界等待会挂死整轮
+    （现场实证），故配总时限兜底，超时即视为派发已完成。
+    """
+    deadline = asyncio.get_running_loop().time() + 2.0
+    while True:
+        pending = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+        if not pending:
+            return
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return
+        await asyncio.wait(pending, timeout=min(remaining, 0.5))
 
 
 # ---------------------------------------------------------------------------
