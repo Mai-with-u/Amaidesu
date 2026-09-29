@@ -7,6 +7,15 @@
         <p class="page-subtitle">配置管理</p>
       </div>
       <div class="header-actions">
+        <el-link
+          v-if="settingsStore.hasChanges"
+          type="primary"
+          :underline="false"
+          class="changes-panel-link"
+          @click="showChangesPanel = true"
+        >
+          查看 {{ settingsStore.changeCount }} 项变更
+        </el-link>
         <el-badge :value="settingsStore.changeCount" :hidden="!settingsStore.hasChanges">
           <el-button
             type="primary"
@@ -101,12 +110,24 @@
       </div>
 
       <!-- 文件 Tab 导航 -->
-      <el-tabs v-model="activeFileTab" class="file-tabs" :stretch="false">
+      <el-tabs
+        v-model="activeFileTab"
+        class="file-tabs"
+        :stretch="false"
+        :before-leave="handleTabBeforeLeave"
+      >
         <el-tab-pane v-for="tab in FILE_TABS" :key="tab.key" :name="tab.key" lazy>
           <template #label>
             <span class="file-tab-label">
               <el-icon class="file-tab-icon"><component :is="tab.icon" /></el-icon>
               <span>{{ tab.label }}</span>
+              <!-- 搜索态：各文件命中数徽标（零命中不显示），点 Tab 即退出搜索进入该文件 -->
+              <el-badge
+                v-if="searchQuery && getSearchHitCount(tab.key) > 0"
+                :value="getSearchHitCount(tab.key)"
+                type="primary"
+                class="file-tab-hit-badge"
+              />
               <el-icon
                 v-if="tab.restart && getFileChangeCount(tab.key) > 0"
                 class="file-tab-restart"
@@ -197,6 +218,45 @@
       </el-tabs>
     </div>
 
+    <!-- 变更清单面板：保存前 diff 预览 + 逐项撤销（全部撤销走页头「重置」，不在此重复入口） -->
+    <el-dialog v-model="showChangesPanel" title="变更清单" width="680px" class="changes-panel">
+      <el-empty
+        v-if="settingsStore.pendingChanges.length === 0"
+        description="没有待保存的更改"
+        :image-size="80"
+      />
+      <div v-else class="changes-list">
+        <div v-for="change in settingsStore.pendingChanges" :key="change.key" class="change-row">
+          <div class="change-row-main">
+            <el-link
+              type="primary"
+              :underline="false"
+              class="change-key"
+              @click="jumpFromChangesPanel(change.key)"
+            >
+              {{ change.key }}
+            </el-link>
+            <span class="change-diff">
+              <code class="diff-old">{{ formatValue(change.oldValue) }}</code>
+              <el-icon class="diff-arrow"><Right /></el-icon>
+              <code class="diff-new">{{ formatValue(change.newValue) }}</code>
+            </span>
+          </div>
+          <el-button
+            size="small"
+            type="danger"
+            plain
+            @click="settingsStore.revertChange(change.key)"
+          >
+            撤销
+          </el-button>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showChangesPanel = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 重启确认对话框 -->
     <el-dialog
       v-model="showRestartDialog"
@@ -246,6 +306,7 @@ import {
   WarningFilled,
   Expand,
   Fold,
+  Right,
 } from '@element-plus/icons-vue';
 import { useSettingsStore } from '@/stores/settings';
 import type { ConfigFieldSchema, ConfigGroupSchema } from '@/types/settings';
@@ -327,6 +388,8 @@ const searchQuery = ref('');
 const activeFileTab = ref('agents.toml');
 /** 最近一次保存失败的逐 key 错误；可点 key 跳转定位，关闭面板或再次保存时清除 */
 const saveErrors = ref<{ key: string; message: string }[]>([]);
+/** 变更清单面板（保存前 diff 预览 + 逐项撤销） */
+const showChangesPanel = ref(false);
 
 /** 工具栏「全部展开/全部收起」命令：seq 递增保证同方向连点也能触发子组件 watch */
 const cardExpandCommand = ref<{ action: 'expand' | 'collapse'; seq: number } | null>(null);
@@ -444,6 +507,29 @@ function collectMatchingFields(
       collectMatchingFields(Object.values(f.properties), q, seen, out);
     }
   }
+}
+
+// 搜索态：按文件名聚合命中字段数（Tab 徽标数据源；零命中 Tab 不显示徽标）
+const searchHitCountByFile = computed(() => {
+  const map = new Map<string, number>();
+  for (const result of globalSearchResults.value) {
+    const file = result.section.file_name ?? '';
+    map.set(file, (map.get(file) ?? 0) + result.fields.length);
+  }
+  return map;
+});
+
+function getSearchHitCount(fileName: string): number {
+  return searchHitCountByFile.value.get(fileName) ?? 0;
+}
+
+/**
+ * 搜索态下点 Tab = 退出搜索并进入该文件：清空搜索词让目标 Tab 渲染浏览卡片，
+ * 搜索框内容消失是预期行为（搜索=全局总览，点 Tab=深入该文件）。
+ */
+function handleTabBeforeLeave(): boolean {
+  if (searchQuery.value) searchQuery.value = '';
+  return true;
 }
 
 // ── 图标 ──────────────────────────────────────────────────
@@ -578,6 +664,29 @@ async function jumpToField(key: string) {
   window.setTimeout(() => el.classList.remove('field-flash'), 1600);
 }
 
+// ── 变更清单面板 ────────────────────────────────────────
+// 值统一 JSON 化展示，长值截断（undefined 显示为「未设置」，对应原路径缺失的回滚形态）
+function formatValue(value: unknown): string {
+  if (value === undefined) return '未设置';
+  const text = JSON.stringify(value) ?? String(value);
+  return text.length > 40 ? text.slice(0, 40) + '…' : text;
+}
+
+/** 面板内点字段 key：先关面板再滚动定位，避免高亮被遮挡 */
+async function jumpFromChangesPanel(key: string) {
+  showChangesPanel.value = false;
+  await nextTick();
+  await jumpToField(key);
+}
+
+// 清单逐项撤销至空时自动收起面板
+watch(
+  () => settingsStore.pendingChanges.length,
+  len => {
+    if (len === 0) showChangesPanel.value = false;
+  },
+);
+
 async function handleDiscard() {
   if (!settingsStore.hasChanges) return;
   const ok = await confirmAction('确定要丢弃所有未保存的更改吗？', '确认丢弃', {
@@ -644,7 +753,25 @@ async function handleRestart() {
 
 .header-actions {
   display: flex;
+  align-items: center;
   gap: var(--spacing-sm);
+}
+
+/* 变更清单入口与按钮基线对齐 */
+.changes-panel-link {
+  font-size: 13px;
+  margin-right: var(--spacing-xs);
+}
+
+/* 搜索态 Tab 命中数徽标：覆盖 el-badge 默认绝对定位，改为内联跟随文本 */
+.file-tab-hit-badge {
+  position: static;
+  transform: none;
+}
+
+.file-tab-hit-badge :deep(.el-badge__content) {
+  position: static;
+  transform: none;
 }
 
 .loading-container {
@@ -913,6 +1040,70 @@ async function handleRestart() {
 
 .section-fields {
   padding: var(--spacing-md) var(--spacing-lg);
+}
+
+/* ── 变更清单面板 ──────────────────────────────────────── */
+.changes-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.change-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid var(--border-color-light);
+}
+
+.change-row:last-child {
+  border-bottom: none;
+}
+
+.change-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.change-key {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  align-self: flex-start;
+}
+
+.change-diff {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.change-diff code {
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  word-break: break-all;
+}
+
+.diff-old {
+  background: var(--color-danger-light-9, rgba(245, 108, 108, 0.1));
+  color: var(--color-danger);
+  text-decoration: line-through;
+}
+
+.diff-new {
+  background: var(--color-success-light-9, rgba(103, 194, 58, 0.1));
+  color: var(--color-success);
+}
+
+.diff-arrow {
+  flex-shrink: 0;
+  color: var(--text-secondary);
 }
 
 /* ── 重启警告 ──────────────────────────────────────────── */

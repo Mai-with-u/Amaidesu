@@ -14,6 +14,39 @@ import type {
 import { attributeValidationError } from '@/utils/saveError';
 import api from '@/api';
 
+/**
+ * 按点分路径在树中恢复一个值（不可变：沿途对象浅拷贝，不改传入树）。
+ * value 为 undefined 时删除该叶子（原配置不存在该路径的回滚形态）。
+ */
+export function restoreNestedValue(
+  obj: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): Record<string, unknown> {
+  const keys = key.split('.');
+  const root = { ...obj };
+  let current = root;
+
+  for (let i = 0; i < keys.length - 1; i++) {
+    const k = keys[i];
+    const child = current[k];
+    if (!child || typeof child !== 'object') {
+      current[k] = {};
+    } else {
+      current[k] = { ...(child as Record<string, unknown>) };
+    }
+    current = current[k] as Record<string, unknown>;
+  }
+
+  const leaf = keys[keys.length - 1];
+  if (value === undefined) {
+    delete current[leaf];
+  } else {
+    current[leaf] = value;
+  }
+  return root;
+}
+
 export const useSettingsStore = defineStore('settings', () => {
   // 状态
   const schema = ref<ConfigSchemaResponse | null>(null);
@@ -190,6 +223,20 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /** 逐项撤销：从待保存清单移除该条，并把当前值恢复为原始值（嵌套路径，沿途浅拷贝） */
+  function revertChange(key: string) {
+    const index = pendingChanges.value.findIndex(c => c.key === key);
+    if (index < 0) return;
+    const next = [...pendingChanges.value];
+    next.splice(index, 1);
+    pendingChanges.value = next;
+    currentValues.value = restoreNestedValue(
+      currentValues.value as Record<string, unknown>,
+      key,
+      originalValueAt(key),
+    );
+  }
+
   // 辅助函数
   // 递归展开 fields（含 children），用嵌套结构存入 values
   function flattenFields(
@@ -242,5 +289,6 @@ export const useSettingsStore = defineStore('settings', () => {
     updatePendingChanges,
     originalValueAt,
     applyFieldChange,
+    revertChange,
   };
 });
