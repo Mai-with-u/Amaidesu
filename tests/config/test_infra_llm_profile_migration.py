@@ -46,8 +46,9 @@ def test_version_advance_via_scheduler():
     assert "meta.version" in changed["infra.toml"]
     # 版本推进到本文件钩子链最后一个钩子的 target，与全局基线种子无关
     # （infra.toml 链尾：llm_profile @2.0.32 + events.persist @2.0.33
-    #   + avatar.lipsync 迁移 @2.0.38，本 raw 无 avatar 段故零变更）
-    assert raw["meta"]["version"] == "2.0.40"
+    #   + avatar.lipsync 迁移 @2.0.38 + simulator.text_limits @2.0.40
+    #   + sc_probability 死键清理 @2.0.41，本 raw 无对应旧键故零变更）
+    assert raw["meta"]["version"] == "2.0.41"
     assert "llm_profile" not in raw["simulator"]
 
 
@@ -60,4 +61,4 @@ def test_migration_writeback_on_load(tmp_path: Path):
 
     content = infra.read_text(encoding="utf-8")
     assert "llm_profile" not in content
-    assert 'version = "2.0.40"' in content
+    assert 'version = "2.0.41"' in content

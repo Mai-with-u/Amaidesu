@@ -180,6 +180,22 @@ def _drop_text_adv_fake_knobs(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "drop_text_adv_fake_knobs", "2.0.34", _drop_text_adv_fake_knobs)
 
 
+def _drop_simulator_sc_probability(data: Dict[str, Any]) -> List[str]:
+    """infra.toml v2.0.41：删 ``[simulator].sc_probability`` 死键。
+
+    SC 触发实际走付费分支的 ``sc_pay_probability``，该键自付费分支引入后
+    再无业务消费（唯一消费方是面板展示），删除。对已迁移数据零变更（幂等）。
+    """
+    simulator = data.get("simulator")
+    if isinstance(simulator, dict) and "sc_probability" in simulator:
+        del simulator["sc_probability"]
+        return ["simulator.sc_probability"]
+    return []
+
+
+register_file_hook("infra.toml", "drop_simulator_sc_probability", "2.0.41", _drop_simulator_sc_probability)
+
+
 def _upgrade_builder_scene_transport(data: Dict[str, Any]) -> List[str]:
     """设计与施工复用 Mod 受理通道，独立校验入口不再有消费者。"""
     builder = ((data.get("agents") or {}).get("minecraft") or {}).get("builder")

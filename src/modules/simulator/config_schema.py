@@ -55,7 +55,6 @@ class SimulatorConfigSchema(BaseConfig):
     burst_cooldown_s: float = Field(default=60.0, title="突发持续时长", ge=10.0, description="突发期持续时间")
     temp_passerby_ratio: float = Field(default=0.3, title="临时路人比例", ge=0.0, le=1.0, description="临时路人比例")
     gift_probability: float = Field(default=0.05, title="礼物概率", ge=0.0, le=0.5, description="每条消息是礼物的概率")
-    sc_probability: float = Field(default=0.01, title="SC 概率", ge=0.0, le=0.1, description="每条消息是 SC 的概率")
     guard_probability: float = Field(
         default=0.05,
         title="上舰概率",

@@ -56,6 +56,9 @@ class TestWritebackShortCircuit:
     def test_unchanged_content_no_rewrite(self, temp_config_dir):
         """无漂移的常规加载不写盘：mtime 不动、无备份目录。"""
         generate_default_configs(temp_config_dir)
+        # 预热：让生成基线之后新注册钩子的版本推进先行落定（此轮会写盘+备份）
+        load_config_dir(temp_config_dir)
+        shutil.rmtree(temp_config_dir / "old", ignore_errors=True)
         agents_path = temp_config_dir / "agents.toml"
         mtime_before = agents_path.stat().st_mtime_ns
         # 同目录内其他文件刚生成，mtime 分辨率内可能相同，先推开
@@ -137,6 +140,9 @@ class TestPipelineMarksSelfWrite:
     def test_writeback_marks_touched_file_only(self, temp_config_dir):
         """管线写回自动压标：被写文件命中一次，未写文件不命中。"""
         generate_default_configs(temp_config_dir)
+        # 预热：生成基线之后新钩子的版本推进先行落定，并清掉预热轮的自写标记
+        load_config_dir(temp_config_dir)
+        consume_self_write(temp_config_dir / "infra.toml")
         _append(temp_config_dir, "agents.toml", "\nstale_section = true\n")
 
         load_config_dir(temp_config_dir)

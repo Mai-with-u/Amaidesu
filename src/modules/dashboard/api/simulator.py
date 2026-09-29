@@ -119,7 +119,6 @@ _CONFIG_SUMMARY_KEYS = (
     "base_rate_per_minute",
     "burst_multiplier",
     "gift_probability",
-    "sc_probability",
     "llm_client_type",
     "llm_temperature",
     "token_budget_per_hour",

@@ -90,7 +90,7 @@ def test_lipsync_graduation_migrates_and_written_back(tmp_path: Path):
     infra_doc = tomlkit.parse((tmp_path / "infra.toml").read_text(encoding="utf-8-sig"))
     assert "avatar" not in infra_doc
 
-    assert get_config_version(tmp_path, "infra.toml") == "2.0.40"
+    assert get_config_version(tmp_path, "infra.toml") == "2.0.41"
 
 
 def test_graduation_idempotent_on_second_load(tmp_path: Path):

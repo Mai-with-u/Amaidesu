@@ -37,10 +37,16 @@ def config_dir_with_toml(tmp_path: Path) -> Path:
     配置文件名与 Amaidesu 多文件加载约定一致：
     agents.toml / collectors.toml / tools.toml / model.toml / storage.toml / infra.toml
     """
-    from src.modules.config.multi_file_loader import generate_default_configs
+    from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
+    from src.modules.config.self_write_guard import consume_self_write
 
     cfg = tmp_path / "config"
     generate_default_configs(cfg)
+    # 预加载一次让升级钩子的迁移写回（含版本推进）先行落定，并消费掉预热轮
+    # 的自写标记——否则残留的抑制窗口会把测试的外部变更误判为管线自写
+    load_config_dir(cfg)
+    for toml_file in cfg.glob("*.toml"):
+        consume_self_write(toml_file)
     return cfg
 
 

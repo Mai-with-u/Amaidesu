@@ -18,7 +18,7 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
 
 
 @pytest.mark.parametrize(
-    ("filename", "removed"),
+    ("filename", "removed", "final_version"),
     [
         (
             "model.toml",
@@ -28,6 +28,7 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
                 "llm_providers.0.timeout",
                 "llm_providers.0.max_tokens",
             ),
+            "2.0.40",
         ),
         (
             "agents.toml",
@@ -37,8 +38,10 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
                 "agents.minecraft.context.observation_inline_chars",
                 "agents.minecraft.context.archive_max_chars",
             ),
+            "2.0.40",
         ),
-        ("infra.toml", ("simulator.context_window_size", "simulator.max_message_chars")),
+        # infra.toml 的钩子链更长（sc_probability 死键清理 v2.0.41）
+        ("infra.toml", ("simulator.context_window_size", "simulator.max_message_chars"), "2.0.41"),
         (
             "tools.toml",
             (
@@ -46,12 +49,13 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
                 "tools.vision.config.default_max_width",
                 "tools.web.search.config.max_fetch_chars",
             ),
+            "2.0.40",
         ),
-        ("storage.toml", ("memory.profile_injection_max",)),
+        ("storage.toml", ("memory.profile_injection_max",), "2.0.40"),
     ],
 )
 def test_legacy_limits_removed_from_disk_only_for_affected_file(
-    tmp_path: Path, filename: str, removed: tuple[str, ...]
+    tmp_path: Path, filename: str, removed: tuple[str, ...], final_version: str
 ) -> None:
     """自定义旧上限被删除；无关文件不动，重载不重复写回。"""
     generate_default_configs(tmp_path)
@@ -68,7 +72,7 @@ def test_legacy_limits_removed_from_disk_only_for_affected_file(
     load_config_dir(tmp_path)
 
     migrated = tomlkit.parse(target.read_text(encoding="utf-8-sig"))
-    assert migrated["meta"]["version"] == "2.0.40"
+    assert migrated["meta"]["version"] == final_version
     for path in removed:
         section, key = _section(migrated, path)
         assert key not in section

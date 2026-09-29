@@ -277,9 +277,6 @@
                   <el-descriptions-item label="礼物概率">
                     {{ formatPercent(status.config.gift_probability) }}
                   </el-descriptions-item>
-                  <el-descriptions-item label="SC 概率">
-                    {{ formatPercent(status.config.sc_probability) }}
-                  </el-descriptions-item>
                   <el-descriptions-item label="LLM 温度">
                     {{ formatNumber(status.config.llm_temperature) }}
                   </el-descriptions-item>
