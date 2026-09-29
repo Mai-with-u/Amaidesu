@@ -73,6 +73,24 @@ class _SampleAgent(BaseAgent):
         self.resumed += 1
 
 
+class _ReceivingAgent(BaseAgent):
+    """覆写委派/递话接入入口的最小子类——名册能力探测的"已接入"形态。"""
+
+    name = "receiving_agent"
+    description = "Accepts delegation and prompt"
+
+    def list_tools(self) -> Iterable[ToolSpec]:
+        return []
+
+    def receive_delegation(self, *, instruction: str, task_id: str) -> Optional[str]:
+        del instruction, task_id
+        return None
+
+    def receive_prompt(self, *, content: str, source: str = "") -> bool:
+        del content, source
+        return True
+
+
 @pytest.fixture
 def sample_agent() -> _SampleAgent:
     return _SampleAgent()
@@ -416,6 +434,9 @@ async def test_agent_control_list_tools_via_registry(sample_agent: _SampleAgent)
     """framework provider 含委派/递话/任务状态 3 件；6 个控制工具不在 LLM 工具面。"""
     mgr = AgentManager()
     mgr.register(sample_agent)
+    # 委派/递话名册按接收入口覆写过滤：注册一个已接入的 Agent 让两工具出现
+    receiving = _ReceivingAgent()
+    mgr.register(receiving)
     await sample_agent.start()
 
     control_provider = build_agent_control_provider(mgr)
@@ -435,6 +456,28 @@ async def test_agent_control_list_tools_via_registry(sample_agent: _SampleAgent)
     names = {spec.full_name for spec in reg.list_tools(for_agent="streamer")}
     assert {"framework_delegate", "framework_prompt", "framework_task_status"}.issubset(names)
     assert removed.isdisjoint(names)
+
+    # 名册枚举只含覆写了接收入口的 Agent——未接入的 sample_agent 不可委派
+    delegate_spec = next(s for s in control_provider.list_tools() if s.name == "delegate")
+    assert delegate_spec.parameters_schema["properties"]["agent"]["enum"] == ["receiving_agent"]
+    prompt_spec = next(s for s in control_provider.list_tools() if s.name == "prompt")
+    assert prompt_spec.parameters_schema["properties"]["agent"]["enum"] == ["receiving_agent"]
+
+
+async def test_agent_control_roster_filters_unreceiving_agent(
+    sample_agent: _SampleAgent,
+) -> None:
+    """未覆写接收入口的 Agent 不进名册枚举（无论名册是否为空，工具恒三件）。"""
+    mgr = AgentManager()
+    mgr.register(sample_agent)  # 未覆写接收入口 → 不进任何名册
+
+    control_provider = build_agent_control_provider(mgr)
+    names = {spec.name for spec in control_provider.list_tools()}
+    assert names == {"delegate", "prompt", "task_status"}
+
+    delegate_spec = next(s for s in control_provider.list_tools() if s.name == "delegate")
+    agent_prop = delegate_spec.parameters_schema["properties"]["agent"]
+    assert "enum" not in agent_prop, "名册空时无枚举（未接入者不在其中）"
 
 
 async def test_agent_control_invoke_removed_tool_returns_unknown(
@@ -461,6 +504,7 @@ async def test_agent_control_invoke_unknown_agent_returns_failure(
     """委派对未知目标 Agent 返回受理失败 result，不抛。"""
     mgr = AgentManager()
     mgr.register(sample_agent)
+    mgr.register(_ReceivingAgent())  # 让 delegate 工具进入工具面（名册非空）
 
     control_provider = build_agent_control_provider(mgr, task_ledger=TaskLedger())
     reg = ToolRegistry()

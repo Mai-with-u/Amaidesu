@@ -24,6 +24,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, Iterable, List, Optional
 
+from src.modules.agents.base import BaseAgent
 from src.modules.agents.manager import AgentManager
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentPromptedPayload
@@ -86,22 +87,6 @@ _TASK_STATUS_SPEC: ToolSpec = ToolSpec(
             "task_id": {"type": "string", "description": "受理回执返回的任务号"},
         },
         "required": ["task_id"],
-    },
-    kind="sync",
-    provider="framework",
-)
-
-#: 递话工具规格（agent 参数说明随名册动态构造，见 _prompt_spec）
-_PROMPT_SPEC: ToolSpec = ToolSpec(
-    name="prompt",
-    description=_PROMPT_DESCRIPTION,
-    parameters_schema={
-        "type": "object",
-        "properties": {
-            "agent": {"type": "string", "description": "目标 Agent 注册名"},
-            "content": {"type": "string", "description": "递话内容（自然语言：想说给目标的话）"},
-        },
-        "required": ["content"],
     },
     kind="sync",
     provider="framework",
@@ -282,26 +267,46 @@ class AgentControlProvider(BaseToolProvider):
         return "framework"
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        """委派 + 递话 + 任务状态工具。
+        """委派 + 递话 + 任务状态工具（恒三件）。
 
-        **可委派对象取自当前名册**（AgentManager 注册表）：主 Agent 不写死任何
-        游戏名——接的是哪个游戏由配置里的 enabled 名单决定，换游戏只需换 Agent，
-        提示词与框架零改动。名册每个决策窗重新拉取，随启停实时变化。
+        **参数枚举里的名册只含真正覆写了接收入口的 Agent**——没接入的 Agent
+        （如纯手柄型游戏 Agent）不出现在 enum 与描述里，LLM 从源头选不出
+        "必被拒收"的委派目标。三件必须恒返回：registry 的 invoke 表是注册期
+        快照（装配顺序总是 framework 先注册、Agent 后注册），此刻名册常为空，
+        按名册裁剪工具会把 delegate 砍出 invoke 表、命令直连链路整体断掉。
+        接入状态变化经重启后下一次装配生效（与名册快照同节拍）。
         """
-        return [self._delegate_spec(), _PROMPT_SPEC, _TASK_STATUS_SPEC]
+        return [self._delegate_spec(), self._prompt_spec(), _TASK_STATUS_SPEC]
 
-    def _roster(self) -> Dict[str, str]:
-        """当前名册 {注册名: 描述}（读不到时按空名册）。"""
+    def _roster(self, hook: str) -> Dict[str, str]:
+        """当前名册 {注册名: 描述}，仅含覆写了 ``hook`` 接收入口的 Agent。
+
+        能力探测，覆写即声明（单一事实源）：``BaseAgent.receive_delegation`` /
+        ``receive_prompt`` 默认拒收，子类覆写才代表真正接入。未覆写的 Agent
+        不进名册——委派/递话工具的参数枚举里看不到它，从源头杜绝"选了必被
+        拒收的目标"的无效调用（调用侧 ``_resolve_target`` 的拒收校验保留，
+        防编名直调）。manager 不可达或缺查询接口时按空名册。
+        """
         roster: Dict[str, str] = {}
         list_agents = getattr(self.manager, "list_agents", None)
         descriptions = getattr(self.manager, "descriptions", {}) or {}
-        if callable(list_agents):
-            roster = {name: str(descriptions.get(name, "") or "") for name in list_agents()}
+        get_agent = getattr(self.manager, "get_agent_by_name", None)
+        if not (callable(list_agents) and callable(get_agent)):
+            return roster
+        base_fn = getattr(BaseAgent, hook, None)
+        if base_fn is None:
+            return roster
+        for name in list_agents():
+            agent = get_agent(name)
+            if agent is None:
+                continue
+            if getattr(type(agent), hook, None) is base_fn:
+                continue  # 未覆写：默认拒收，不进名册
+            roster[name] = str(descriptions.get(name, "") or "")
         return roster
 
-    def _agent_target_description(self) -> str:
+    def _agent_target_description(self, roster: Dict[str, str]) -> str:
         """构造 agent 参数的动态说明（名册 + 描述；委派/递话共用）。"""
-        roster = self._roster()
         if roster:
             listed = "；".join(f"{name}={desc or '（无描述）'}" for name, desc in roster.items())
             return (
@@ -312,11 +317,11 @@ class AgentControlProvider(BaseToolProvider):
 
     def _delegate_spec(self) -> ToolSpec:
         """构造委派规格：把名册（注册名 + 描述）写进 agent 参数说明与枚举。"""
-        roster = self._roster()
+        roster = self._roster("receive_delegation")
         schema: Dict[str, Any] = {
             "type": "object",
             "properties": {
-                "agent": {"type": "string", "description": self._agent_target_description()},
+                "agent": {"type": "string", "description": self._agent_target_description(roster)},
                 "instruction": {
                     "type": "string",
                     "description": "工作指令（自然语言：目标与约束，不规定步骤与次序）",
@@ -329,6 +334,27 @@ class AgentControlProvider(BaseToolProvider):
         return ToolSpec(
             name="delegate",
             description=_DELEGATE_DESCRIPTION,
+            parameters_schema=schema,
+            kind="sync",
+            provider="framework",
+        )
+
+    def _prompt_spec(self) -> ToolSpec:
+        """构造递话规格：agent 参数说明与枚举随可递话名册动态构造。"""
+        roster = self._roster("receive_prompt")
+        schema: Dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string", "description": self._agent_target_description(roster)},
+                "content": {"type": "string", "description": "递话内容（自然语言：想说给目标的话）"},
+            },
+            "required": ["content"],
+        }
+        if roster:
+            schema["properties"]["agent"]["enum"] = sorted(roster)
+        return ToolSpec(
+            name="prompt",
+            description=_PROMPT_DESCRIPTION,
             parameters_schema=schema,
             kind="sync",
             provider="framework",
