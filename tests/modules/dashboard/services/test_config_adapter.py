@@ -339,6 +339,24 @@ class TestBuildFrontendGroups:
         result = _build_frontend_groups(service)
         assert len(result["groups"]) == 7
 
+    def test_控件语义标记透传前端字段(self) -> None:
+        """x-options / readonly / x-ui-precision 经 API 字段规范化后可达前端。"""
+        result = _build_frontend_groups(_FakeConfigService({}))
+        by_key = {g["key"]: g for g in result["groups"]}
+
+        # avatar.enabled：封闭候选池进 validation.options
+        avatar_fields = _iter_all_fields(by_key["avatar"]["fields"])
+        enabled = next(f for f in avatar_fields if f["key"] == "avatar.platform.enabled")
+        assert enabled["validation"]["options"] == ["vts", "warudo", "vrchat"]
+
+        # lipsync.type：常量型字段只读
+        lipsync_type = next(f for f in avatar_fields if f["key"] == "avatar.lipsync.type")
+        assert lipsync_type["readonly"] is True
+
+        # lipsync.min_mouth_delta：精度标记透传
+        precision_field = next(f for f in avatar_fields if f["key"] == "avatar.lipsync.min_mouth_delta")
+        assert precision_field["precision"] == 3
+
 
 def _iter_all_fields(nodes: list[dict]) -> list[dict]:
     out: list[dict] = []
@@ -466,7 +484,7 @@ class TestDynamicInstanceFields:
 
 
 class TestFillArrayPlaceholders:
-    """对象数组整值提交的占位回填：未编辑的敏感字段从磁盘现值按索引补回。"""
+    """对象数组整值提交的占位回填：未编辑的敏感字段经两段式配对（身份匹配优先、位置兜底其次）从磁盘现值补回。"""
 
     def test_改非敏感字段时占位回填真实值(self) -> None:
         old = {"llm_providers": [{"name": "deepseek", "api_key": "sk-real"}]}
@@ -481,7 +499,7 @@ class TestFillArrayPlaceholders:
         assert filled[0]["api_key"] == "sk-new"
 
     def test_新增元素无磁盘对应时占位原样保留(self) -> None:
-        """新元素超出磁盘列表长度（zip 截断），占位原样保留 → 交给占位写检查拒绝。"""
+        """配不上的新条目（真正的新增项）占位原样保留 → 交给占位写检查拒绝（fail-closed）。"""
         old = {"llm_providers": [{"name": "deepseek", "api_key": "sk-real"}]}
         new_value = [
             {"name": "deepseek", "api_key": "已设置"},
@@ -490,6 +508,72 @@ class TestFillArrayPlaceholders:
         filled = _fill_array_placeholders("model.llm_providers", new_value, old)
         assert filled[0]["api_key"] == "sk-real"
         assert filled[1]["api_key"] == "已设置"
+
+    def test_重排后各自占位还原回各自真实key(self) -> None:
+        """两条 provider 交换顺序后提交：身份匹配防止旧实现的下标错位串 key。"""
+        old = {
+            "llm_providers": [
+                {"name": "deepseek", "api_key": "sk-deepseek"},
+                {"name": "openai", "api_key": "sk-openai"},
+            ]
+        }
+        new_value = [
+            {"name": "openai", "api_key": "已设置"},
+            {"name": "deepseek", "api_key": "已设置"},
+        ]
+        filled = _fill_array_placeholders("model.llm_providers", new_value, old)
+        assert filled[0]["api_key"] == "sk-openai"
+        assert filled[1]["api_key"] == "sk-deepseek"
+
+    def test_删除中间项后剩余条目各自还原正确(self) -> None:
+        """3 条删第 2 条：身份匹配让第 3 条仍还原回自己的 key，不串第 2 条的。"""
+        old = {
+            "llm_providers": [
+                {"name": "a", "api_key": "sk-a"},
+                {"name": "b", "api_key": "sk-b"},
+                {"name": "c", "api_key": "sk-c"},
+            ]
+        }
+        new_value = [
+            {"name": "a", "api_key": "已设置"},
+            {"name": "c", "api_key": "已设置"},
+        ]
+        filled = _fill_array_placeholders("model.llm_providers", new_value, old)
+        assert filled[0]["api_key"] == "sk-a"
+        assert filled[1]["api_key"] == "sk-c"
+
+    def test_就地改名经位置兜底还原(self) -> None:
+        """改名场景身份未命中 → 位置兜底按剩余顺序配对，占位仍还原。"""
+        old = {
+            "llm_providers": [
+                {"name": "deepseek", "api_key": "sk-real"},
+                {"name": "openai", "api_key": "sk-openai"},
+            ]
+        }
+        new_value = [
+            {"name": "deepseek-renamed", "api_key": "已设置"},
+            {"name": "openai", "api_key": "已设置"},
+        ]
+        filled = _fill_array_placeholders("model.llm_providers", new_value, old)
+        assert filled[0]["api_key"] == "sk-real"
+        assert filled[1]["api_key"] == "sk-openai"
+
+    def test_同名重复条目确定性配对不抛错(self) -> None:
+        """同名重复：第一个新条目认领第一个同名旧条目，按顺序确定性配对。"""
+        old = {
+            "llm_providers": [
+                {"name": "dup", "api_key": "sk-one"},
+                {"name": "dup", "api_key": "sk-two"},
+            ]
+        }
+        new_value = [
+            {"name": "dup", "api_key": "已设置"},
+            {"name": "dup", "api_key": "已设置"},
+        ]
+        filled = _fill_array_placeholders("model.llm_providers", new_value, old)
+        assert filled[0]["api_key"] in ("sk-one", "sk-two")
+        assert filled[1]["api_key"] in ("sk-one", "sk-two")
+        assert filled[0]["api_key"] != filled[1]["api_key"]
 
     def test_非列表值原样返回(self) -> None:
         old = {"port": 60214}

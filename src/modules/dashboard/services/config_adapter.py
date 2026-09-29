@@ -306,6 +306,14 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
         # x-ui-advanced 标记的字段（鉴权细节、重试参数等）由前端收进默认折叠的"高级"区
         "advanced": bool(field.get("x-ui-advanced", False)),
     }
+    # 控件形态与精度提示：x-ui-widget（如 fixed-tuple 定长元组一行并排数字框）、
+    # x-ui-tuple-length（定长元组长度）、x-ui-precision（浮点小数位；缺省 = 前端不强制舍入）
+    if field.get("x-ui-widget"):
+        gfield["widget"] = field["x-ui-widget"]
+    if isinstance(field.get("x-ui-tuple-length"), int):
+        gfield["tupleLength"] = field["x-ui-tuple-length"]
+    if isinstance(field.get("x-ui-precision"), int):
+        gfield["precision"] = field["x-ui-precision"]
     validation: dict = {}
     for k in ("minValue", "maxValue", "options", "pattern"):
         if k in field:
@@ -632,12 +640,65 @@ async def _apply_and_reload(
     return True, not hot_applied, None
 
 
+def _array_item_identity(item: Any) -> Optional[str]:
+    """取数组条目的身份键：name → title → id 的第一个非空字符串（与前端 ArrayEditor.itemTitle 取名偏好一致）。"""
+    if not isinstance(item, dict):
+        return None
+    for key in ("name", "title", "id"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _pair_old_items(new_items: list[Any], old_items: list[Any]) -> list[tuple[int, Optional[Any]]]:
+    """为新列表逐条配对磁盘旧条目（两段式：身份匹配优先，位置兜底其次）。
+
+    返回与 new_items 等长的 (new_index, old_item) 列表，配不上的新条目 old_item 为 None。
+    - 身份匹配：新条目按身份键在旧列表中找同名条目，唯一命中才认领；旧条目一旦认领不再复用。
+    - 位置兜底：身份未命中的新条目按剩余顺序与未认领旧条目依次配对（就地改名场景仍能还原；
+      重排场景身份匹配已正确认领，兜底不会误配）。
+    - 同名重复按顺序确定性认领（第一个新条目认领第一个同名旧条目），不引入随机性。
+    """
+    claimed: set[int] = set()
+    pairs: list[tuple[int, Optional[Any]]] = [(i, None) for i in range(len(new_items))]
+
+    # 第一段：身份匹配
+    identity_to_old: dict[str, list[int]] = {}
+    for old_index, old_item in enumerate(old_items):
+        identity = _array_item_identity(old_item)
+        if identity is not None:
+            identity_to_old.setdefault(identity, []).append(old_index)
+    for new_index, new_item in enumerate(new_items):
+        identity = _array_item_identity(new_item)
+        if identity is None:
+            continue
+        candidates = identity_to_old.get(identity, [])
+        if len(candidates) == 1:
+            old_index = candidates[0]
+            claimed.add(old_index)
+            pairs[new_index] = (new_index, old_items[old_index])
+        # 多个同名旧条目不做身份消歧，留给位置兜底按顺序认领
+
+    # 第二段：位置兜底（未认领的新条目 ↔ 未认领的旧条目，按剩余顺序依次配对）
+    unclaimed_old = iter(i for i in range(len(old_items)) if i not in claimed)
+    for new_index, _new_item in enumerate(new_items):
+        if pairs[new_index][1] is not None:
+            continue
+        for old_index in unclaimed_old:
+            claimed.add(old_index)
+            pairs[new_index] = (new_index, old_items[old_index])
+            break
+    return pairs
+
+
 def _fill_array_placeholders(key: str, value: Any, main_config: dict) -> Any:
     """对象数组整值提交的占位回填。
 
     前端整列表提交时，元素内未编辑的敏感字段仍是 GET 下发的"已设置"占位
-    （前端不持有真实凭据）。按索引对齐磁盘现值回填真实值，占位文本才不会
-    落盘覆盖凭据。回填后仍残留占位（如新元素未填写）交由占位写检查拒绝。
+    （前端不持有真实凭据）。用两段式配对（身份匹配优先、位置兜底其次）对齐
+    磁盘现值回填真实值，删除或重排条目后占位才不会错位回填他人凭据。
+    回填后仍残留占位（如新增条目未填写）交由占位写检查拒绝。
     """
     if not isinstance(value, list):
         return value
@@ -646,9 +707,9 @@ def _fill_array_placeholders(key: str, value: Any, main_config: dict) -> Any:
     if not isinstance(current, list):
         return value
     filled: list[Any] = []
-    for index, new_item in enumerate(value):
-        # 磁盘越界（新增元素）原样保留：占位交由占位写检查拒绝，不能静默丢弃元素
-        old_item = current[index] if index < len(current) else None
+    for new_index, old_item in _pair_old_items(value, current):
+        # 配不上的新条目（真正的新增项）占位原样保留：交由占位写检查拒绝，不能静默丢弃元素
+        new_item = value[new_index]
         filled.append(_restore_masked(new_item, old_item) if isinstance(new_item, dict) else new_item)
     return filled
 
