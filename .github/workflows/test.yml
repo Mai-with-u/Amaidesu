@@ -48,7 +48,19 @@ jobs:
               tr -d '\000-\010\013\014\016-\037\177' |
               sed 's/::/%3A%3A/g' |
               grep -v '^\s*$' |
-              head -48 |
+              head -30 |
+              while IFS= read -r line; do
+                echo "::error::${line:0:250}"
+              done
+            sed -n '/= FAILURES =/,/short test summary info/p' /tmp/pytest-out.txt |
+              tr -d '\000-\010\013\014\016-\037\177' |
+              sed 's/::/%3A%3A/g' |
+              grep -vE '^\s*$|^_{10,}|^={10,}' |
+              head -40 |
+              while IFS= read -r line; do
+                echo "::error::${line:0:250}"
+              done
+            grep -E "^(FAILED|ERROR) " /tmp/pytest-out.txt | head -25 |
               while IFS= read -r line; do
                 echo "::error::${line:0:250}"
               done
