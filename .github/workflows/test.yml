@@ -20,18 +20,19 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      # 错误输出转 ::error:: 注解：协作者之外无法拉取 job 日志。CI 输出含
-      # ANSI/控制字符会让 GitHub 静默丢弃注解命令，故先剥控制字符并转义 ::；
-      # 空行跳过；文件大小用 notice 探针确认输出是否为空
+      # 错误输出转 ::error:: 注解：协作者之外无法拉取 job 日志。注意 Actions
+      # 默认 shell 是 bash -e，pytest 非零退出会当场终止脚本——必须先 set +e
+      # 才能执行到转储逻辑；CI 输出含控制字符需剥除、:: 需转义，否则注解被静默丢弃
       - name: Run pytest
         run: |
+          set +e
           uv run python -V
           uv run pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
           status=$?
           size=$(wc -c < /tmp/pytest-out.txt)
           echo "::notice::pytest exit=$status size=$size bytes"
           if [ $status -ne 0 ]; then
-            (head -6 /tmp/pytest-out.txt; echo "...[tail]..."; tail -14 /tmp/pytest-out.txt) |
+            (head -8 /tmp/pytest-out.txt; echo "...[tail]..."; tail -14 /tmp/pytest-out.txt) |
               tr -d '\000-\010\013\014\016-\037\177' |
               sed 's/::/%3A%3A/g' |
               while IFS= read -r line; do
