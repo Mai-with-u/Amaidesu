@@ -48,50 +48,70 @@ class LLMProviderConfig(BaseConfig):
         extra_body: provider 级方言逃生舱（自由 dict 原样合并进请求体；空 dict=不注入）
     """
 
-    name: str = Field(default="default", description="provider 唯一名称（被 model.api_provider 引用）")
+    name: str = Field(
+        default="default", title="提供商名称", description="provider 唯一名称（被 model.api_provider 引用）"
+    )
     client_type: str = Field(
         default="openai",
+        title="客户端类型",
         description="客户端实现标识（如 openai）",
         json_schema_extra={"x-ui-type": "select", "x-options": ["openai"]},
     )
     base_url: str = Field(
         default="https://api.openai.com/v1",
+        title="API 端点",
         description="API 端点（可自定义为任何 OpenAI 兼容服务）",
     )
     api_key: str = Field(
         default="",
+        title="API 密钥",
         description="API 密钥（留空时客户端以占位符 sk-dummy 兜底，需填真实 Key 才能调用）",
     )
     auth_type: str = Field(
         default="bearer",
+        title="鉴权方式",
         description="鉴权方式：bearer / header / query / none",
         json_schema_extra={"x-ui-type": "select", "x-options": ["bearer", "header", "query", "none"]},
     )
     # auth_* 三兄弟只在非默认鉴权方式下才有意义，标 x-ui-advanced 让 WebUI 收进折叠区
     auth_header_name: str = Field(
         default="Authorization",
+        title="鉴权 Header 名",
         description="header 鉴权时的 header 名",
         json_schema_extra={"x-ui-advanced": True},
     )
     auth_header_prefix: str = Field(
         default="Bearer",
+        title="鉴权前缀",
         description="header 鉴权时值的前缀",
         json_schema_extra={"x-ui-advanced": True},
     )
     auth_query_name: str = Field(
         default="api_key",
+        title="鉴权参数名",
         description="query 鉴权时的 query 参数名",
         json_schema_extra={"x-ui-advanced": True},
     )
-    default_headers: dict[str, str] = Field(default_factory=dict, description="每次请求附加的默认 header")
+    default_headers: dict[str, str] = Field(
+        default_factory=dict, title="默认 Header", description="每次请求附加的默认 header"
+    )
     max_retries: int = Field(
-        default=3, ge=0, description="请求失败时的最大重试次数", json_schema_extra={"x-ui-advanced": True}
+        default=3,
+        ge=0,
+        title="重试次数",
+        description="请求失败时的最大重试次数",
+        json_schema_extra={"x-ui-advanced": True},
     )
     retry_delay: float = Field(
-        default=1.0, ge=0.0, description="重试间隔时间（秒）", json_schema_extra={"x-ui-advanced": True}
+        default=1.0,
+        ge=0.0,
+        title="重试间隔",
+        description="重试间隔时间（秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     reasoning_parse_mode: str = Field(
         default="auto",
+        title="推理解析模式",
         description="推理内容解析模式：auto / native / think_tag / none",
         json_schema_extra={"x-ui-type": "select", "x-options": ["auto", "native", "think_tag", "none"]},
     )
@@ -99,6 +119,7 @@ class LLMProviderConfig(BaseConfig):
     # 引擎不读不传不存；空 dict = 不注入；非空 dict 由适配端合并进 JSON body）
     extra_body: dict[str, Any] = Field(
         default_factory=dict,
+        title="请求体扩展",
         description="provider 级方言逃生舱：自由 dict 原样合并进请求体（OpenAI SDK create 的 extra_body 参数；空 dict=不注入）",
         json_schema_extra={"x-ui-advanced": True},
     )
@@ -119,25 +140,32 @@ class LLMModelConfig(BaseConfig):
         context_window: 上下文窗口 token 总量（用于 Dashboard 水位展示；0 = 不展示）
     """
 
-    name: str = Field(default="default", description="模型唯一名（被 profile.model_list 引用）")
+    name: str = Field(default="default", title="模型名称", description="模型唯一名（被 profile.model_list 引用）")
     model_identifier: str = Field(
         default="gpt-4o-mini",
+        title="模型标识",
         description="实际 API 模型标识（传给 OpenAI 兼容 endpoint 的 model 字段）",
     )
     api_provider: str = Field(
         default="default",
+        title="所属提供商",
         description="关联的 provider 名（对应 llm_providers[].name）",
     )
-    visual: bool = Field(default=False, description="是否支持视觉（影响 chat_vision 是否装配）")
-    price_in: float = Field(default=0.0, ge=0.0, description="输入 token 单价（每百万 token）")
-    price_out: float = Field(default=0.0, ge=0.0, description="输出 token 单价（每百万 token）")
+    visual: bool = Field(default=False, title="是否支持视觉", description="是否支持视觉（影响 chat_vision 是否装配）")
+    price_in: float = Field(default=0.0, ge=0.0, title="输入单价", description="输入 token 单价（每百万 token）")
+    price_out: float = Field(default=0.0, ge=0.0, title="输出单价", description="输出 token 单价（每百万 token）")
     cache: str = Field(
-        default="", description="缓存类型（非空 = 按缓存价计费，命中 token 走 cache_price_in；空 = 无缓存）"
+        default="",
+        title="缓存类型",
+        description="缓存类型（非空 = 按缓存价计费，命中 token 走 cache_price_in；空 = 无缓存）",
     )
-    cache_price_in: float = Field(default=0.0, ge=0.0, description="缓存输入 token 单价（每百万 token）")
+    cache_price_in: float = Field(
+        default=0.0, ge=0.0, title="缓存输入单价", description="缓存输入 token 单价（每百万 token）"
+    )
     context_window: int = Field(
         default=0,
         ge=0,
+        title="上下文窗口",
         description="上下文窗口 token 总量（用于 Dashboard 水位展示；0 = 不展示）",
     )
 
@@ -150,8 +178,8 @@ class LLMSelectionStrategy(BaseConfig):
     random：随机选一个
     """
 
-    name: str = Field(default="sequential", description="选择策略名")
-    seed: int = Field(default=0, description="random 策略的可选 seed（0=不固定）")
+    name: str = Field(default="sequential", title="策略名", description="选择策略名")
+    seed: int = Field(default=0, title="随机种子", description="random 策略的可选 seed（0=不固定）")
 
 
 class LLMProfileConfig(BaseConfig):
@@ -167,26 +195,31 @@ class LLMProfileConfig(BaseConfig):
 
     model_list: List[str] = Field(
         default_factory=list,
+        title="模型名单",
         description="引用的模型名列表（对应 llm_models[].name，按顺序选择）",
     )
     selection_strategy: LLMSelectionStrategy = Field(
         default_factory=LLMSelectionStrategy,
+        title="选择策略",
         description="model_list 选择策略",
     )
     slow_threshold_ms: int = Field(
         default=15_000,
         ge=100,
+        title="慢调用阈值",
         description="慢调用阈值（毫秒）；超阈值仅告警，不切换",
     )
     temperature: float = Field(
         default=0.3,
         ge=0.0,
         le=2.0,
+        title="温度",
         description="生成温度 (0.0-2.0)",
         json_schema_extra={"x-ui-type": "number"},
     )
     reasoning_effort: str = Field(
         default="",
+        title="思考强度",
         description="思考强度档位（自由字符串，如 low/medium/high；取值看模型支持；空串=不控制=请求不含该字段）",
     )
 
@@ -220,30 +253,37 @@ class LLMProfilesConfig(BaseConfig):
 
     planner: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("planner"),
+        title="决策 Profile",
         description="决策 profile（思考与工具编排，温度偏高）",
     )
     replyer: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("replyer"),
+        title="表达 Profile",
         description="表达 profile（主播回复生成，低温稳定）",
     )
     summary: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("summary"),
+        title="摘要 Profile",
         description="摘要 profile（话题总结，长超时）",
     )
     minecraft: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("minecraft"),
+        title="游戏 Profile",
         description="游戏 Agent profile（Minecraft 决策循环）",
     )
     minecraft_builder: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("minecraft_builder"),
+        title="建筑设计 Profile",
         description="按需建筑设计 profile（独立于游戏决策的生成预算）",
     )
     vision: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("vision"),
+        title="视觉 Profile",
         description="视觉 profile（屏幕/图像理解，少 token）",
     )
     simulator: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("simulator"),
+        title="模拟 Profile",
         description="模拟 profile（虚拟用户消息生成，高温活跃）",
     )
 
@@ -280,17 +320,20 @@ class ModelRootConfig(BaseConfig):
     __file_name__ = "model.toml"
     __section_label__ = "模型"
 
-    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
+    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     llm_providers: List[LLMProviderConfig] = Field(
         default_factory=lambda: [LLMProviderConfig()],
+        title="API 提供商列表",
         description="API provider 列表（被 llm_models.api_provider 引用）",
     )
     llm_models: List[LLMModelConfig] = Field(
         default_factory=lambda: [LLMModelConfig()],
+        title="模型注册表",
         description="模型注册表（被 llm_profiles.model_list 引用）",
     )
     llm_profiles: LLMProfilesConfig = Field(
         default_factory=LLMProfilesConfig,
+        title="用途 Profile 集合",
         description=("用途 profile 封闭集合（包含游戏决策与独立的建筑设计用途）"),
         json_schema_extra={"x-ui-type": "object"},
     )

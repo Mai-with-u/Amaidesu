@@ -75,9 +75,10 @@ class ToolProviderConfig(BaseConfig):
             补全（静态命名段如 vision 走 typed 引用，见 VisionProviderConfig）
     """
 
-    enabled: bool = Field(default=True, description="是否启用该工具提供者（开=其工具全部可见）")
+    enabled: bool = Field(default=True, title="是否启用", description="是否启用该工具提供者（开=其工具全部可见）")
     config: Dict[str, Any] = Field(
         default_factory=dict,
+        title="提供者配置",
         description="提供者具体配置（加载期按工具提供者注册表校验与补全默认值）",
     )
 
@@ -99,6 +100,7 @@ class VisionProviderConfig(ToolProviderConfig):
 
     config: LookAtScreenProvider.ConfigSchema = Field(
         default_factory=LookAtScreenProvider.ConfigSchema,
+        title="视觉配置",
         description="视觉提供者配置（直接复用 LookAtScreenProvider.ConfigSchema）",
     )
 
@@ -112,7 +114,7 @@ class MemoryProviderConfig(ToolProviderConfig):
     ``.get("enabled", True)`` 兜底对齐，消除原"配置 false 时仍注册"的漂移。
     """
 
-    enabled: bool = Field(default=True, description="是否启用 query_memory 记忆检索工具")
+    enabled: bool = Field(default=True, title="是否启用记忆检索", description="是否启用 query_memory 记忆检索工具")
 
     model_config = ConfigDict(extra="allow")
 
@@ -154,11 +156,13 @@ class ToolsTasksConfig(BaseConfig):
     poll_interval_ms: int = Field(
         default=2000,
         ge=100,
+        title="轮询间隔",
         description="异步任务跟踪循环轮询间隔（毫秒）",
     )
     wait_timeout_ms: int = Field(
         default=1_800_000,
         ge=1000,
+        title="等待超时",
         description="异步任务最长等待时长（毫秒）",
     )
 
@@ -173,14 +177,16 @@ class ToolsHealthConfig(BaseConfig):
       "熔断后最小驻留时长"——monitor 在 dwell 时间未到时不会尝试恢复
     """
 
-    enabled: bool = Field(default=True, description="是否启用 ToolHealthMonitor 探活循环")
+    enabled: bool = Field(default=True, title="是否启用", description="是否启用 ToolHealthMonitor 探活循环")
     failure_threshold: int = Field(
         default=3,
+        title="熔断阈值",
         description="ToolRegistry 连续失败熔断阈值（<=0 关闭熔断，monitor 仍可装配但永不跳闸）",
     )
     probe_interval_ms: int = Field(
         default=30000,
         gt=0,
+        title="探活间隔",
         description="ToolHealthMonitor 探活节拍毫秒；兼作熔断后最小驻留时长",
     )
 
@@ -202,6 +208,7 @@ class ToolsConfig(BaseConfig):
     # 异步任务基建节拍（段定义归本文件；消费侧由工具线任务合流覆盖）
     tasks: ToolsTasksConfig = Field(
         default_factory=ToolsTasksConfig,
+        title="异步任务基建",
         description="异步任务基建节拍（poll_interval_ms / wait_timeout_ms）",
         json_schema_extra={"x-ui-type": "object"},
     )
@@ -210,26 +217,31 @@ class ToolsConfig(BaseConfig):
     # 禁 None 政策：段缺省 = 空容器 / 关态实例，全量写出可往返
     studio: Dict[str, StudioProviderConfig] = Field(
         default_factory=dict,
+        title="演播室分类",
         description="演播室分类（obs 等，enabled 控制各演播工具）",
         json_schema_extra={"x-ui-type": "object"},
     )
     vision: VisionProviderConfig = Field(
         default_factory=lambda: VisionProviderConfig(enabled=False),
+        title="视觉模块",
         description="视觉基础模块（工具出口 look_at_screen；enabled=true 时组合根注入 Pillow 后端；缺省关态）",
         json_schema_extra={"x-ui-type": "object"},
     )
     memory: MemoryProviderConfig = Field(
         default_factory=MemoryProviderConfig,
+        title="记忆工具",
         description="记忆分类（工具出口 query_memory；默认 enabled=true）",
         json_schema_extra={"x-ui-type": "object"},
     )
     mcp: McpProviderConfig = Field(
         default_factory=McpProviderConfig,
+        title="MCP 工具源",
         description="通用 MCP 外部工具源（config.servers 声明连接；enabled=true 时注册其工具）",
         json_schema_extra={"x-ui-type": "object"},
     )
     web: Dict[str, WebProviderConfig] = Field(
         default_factory=dict,
+        title="Web 工具",
         description="web 分类（联网搜索等，enabled 控制各提供者工具）",
         json_schema_extra={"x-ui-type": "object"},
     )
@@ -237,6 +249,7 @@ class ToolsConfig(BaseConfig):
     # 工具熔断器健康监控（ToolRegistry 熔断 + ToolHealthMonitor 探活）
     health: ToolsHealthConfig = Field(
         default_factory=ToolsHealthConfig,
+        title="健康监控",
         description="工具熔断器健康监控（连续失败熔断 + 探活恢复）",
         json_schema_extra={"x-ui-type": "object"},
     )
@@ -245,6 +258,7 @@ class ToolsConfig(BaseConfig):
     # 且调用被拒绝；由组合根在装配完成后应用到 ToolRegistry
     disabled_tools: List[str] = Field(
         default_factory=list,
+        title="停用工具名单",
         description="停用的工具名列表（对 LLM 不可见且不可调用，重启后生效）",
     )
 
@@ -263,9 +277,10 @@ class ToolsRootConfig(BaseConfig):
     __file_name__ = "tools.toml"
     __section_label__ = "工具包"
 
-    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
+    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     tools: ToolsConfig = Field(
         default_factory=ToolsConfig,
+        title="工具配置",
         description="[tools] 段聚合（异步任务基建 + 各提供者分类配置 + disabled_tools）",
     )
 

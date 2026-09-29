@@ -25,6 +25,7 @@ class FileMetaConfig(BaseConfig):
 
     version: str = Field(
         default=CONFIG_BASELINE_VERSION,
+        title="配置结构版本",
         description="配置结构版本（只读，由升级流程自动推进）",
         json_schema_extra={"readonly": True},
     )

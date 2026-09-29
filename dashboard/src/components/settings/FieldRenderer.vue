@@ -64,6 +64,21 @@
         />
       </template>
 
+      <!-- 定长数值元组：一行并排数字输入（如截图区域 [x, y, w, h]），替代逐项添加的通用数组编辑器 -->
+      <template v-if="field.widget === 'fixed-tuple'">
+        <div class="fixed-tuple" :disabled="field.readonly">
+          <el-input-number
+            v-for="(_, i) in tupleLength"
+            :key="i"
+            :model-value="tupleValues[i]"
+            size="small"
+            controls-position="right"
+            :disabled="field.readonly"
+            @update:model-value="setTupleValue(i, $event)"
+          />
+        </div>
+      </template>
+
       <!-- 浮点数类型 -->
       <template v-else-if="field.type === 'float'">
         <el-input-number
@@ -71,7 +86,7 @@
           :min="field.validation?.min"
           :max="field.validation?.max"
           :step="0.1"
-          :precision="2"
+          :precision="field.precision"
           :placeholder="defaultPlaceholder"
           controls-position="right"
           :disabled="field.readonly"
@@ -200,6 +215,26 @@ const defaultPlaceholder = computed(() => {
 const selectOptions = computed(() => {
   return props.field.validation?.options || [];
 });
+
+// 定长数值元组：按标记长度拆成并排数字输入；全填齐才产出数组，任一空缺回退 null（= 未指定）
+const tupleLength = computed(() =>
+  props.field.widget === 'fixed-tuple' ? (props.field.tupleLength ?? 4) : 0,
+);
+
+const tupleValues = computed<(number | undefined)[]>(() => {
+  const arr = Array.isArray(localValue.value) ? localValue.value : [];
+  return Array.from({ length: tupleLength.value }, (_, i) =>
+    typeof arr[i] === 'number' ? (arr[i] as number) : undefined,
+  );
+});
+
+function setTupleValue(index: number, value: number | undefined) {
+  const next = [...tupleValues.value];
+  next[index] = value;
+  const complete = next.every(v => typeof v === 'number');
+  localValue.value = complete ? next.map(v => v as number) : null;
+  handleChange();
+}
 
 // 是否已修改
 const isModified = computed(() => {
@@ -349,6 +384,17 @@ function setObjectValue(key: string, value: unknown) {
 
 .field-input :deep(.el-textarea__inner) {
   font-family: var(--font-mono);
+}
+
+/* 定长数值元组：一行并排的数字输入 */
+.fixed-tuple {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.fixed-tuple :deep(.el-input-number) {
+  flex: 1;
+  min-width: 0;
 }
 
 .field-error {

@@ -58,18 +58,23 @@ class AvatarPlatformConfig(BaseConfig):
 
     enabled: List[str] = Field(
         default_factory=lambda: ["vts"],
+        title="启用平台名单",
         description="启用的皮套平台名单（合法名：vts / warudo / vrchat）",
+        json_schema_extra={"x-options": list(PLATFORM_NAMES)},
     )
     vts: VTSProvider.ConfigSchema = Field(
         default_factory=VTSProvider.ConfigSchema,
+        title="VTS 配置",
         description="VTubeStudio 平台配置（连接 / 表情基线 / idle 绑定）",
     )
     warudo: WarudoProvider.ConfigSchema = Field(
         default_factory=WarudoProvider.ConfigSchema,
+        title="Warudo 配置",
         description="Warudo 平台配置（WebSocket 连接 / TalkingHead / 动作目录）",
     )
     vrchat: VRChatProvider.ConfigSchema = Field(
         default_factory=VRChatProvider.ConfigSchema,
+        title="VRChat 配置",
         description="VRChat 平台配置（OSC 主机与输出端口）",
     )
 
@@ -80,13 +85,15 @@ class AvatarRootConfig(BaseConfig):
     __file_name__ = "avatar.toml"
     __section_label__ = "皮套"
 
-    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
+    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     platform: AvatarPlatformConfig = Field(
         default_factory=AvatarPlatformConfig,
+        title="皮套平台",
         description="皮套平台（启用名单 + 各平台成员段）",
     )
     lipsync: LipSyncConfig = Field(
         default_factory=LipSyncConfig,
+        title="口型同步配置",
         description="口型分析共享件调参（平台无关，分接 TTS 播放音频）",
     )
 

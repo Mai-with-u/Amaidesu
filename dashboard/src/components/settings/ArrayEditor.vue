@@ -6,7 +6,7 @@
       :model-value="tagValues"
       multiple
       filterable
-      allow-create
+      :allow-create="!hasClosedOptionPool"
       default-first-option
       :placeholder="tagPlaceholder"
       class="tag-select"
@@ -97,7 +97,7 @@
               :min="itemSchema.validation?.min"
               :max="itemSchema.validation?.max"
               :step="0.1"
-              :precision="2"
+              :precision="itemSchema.precision"
               controls-position="right"
               @change="handleUpdate"
             />
@@ -194,6 +194,12 @@ const optionPool = computed<string[]>(() => {
     ? props.modelValue.filter((v): v is string => typeof v === 'string')
     : [];
   return [...new Set([...options.map(String), ...current])];
+});
+
+// 封闭候选集：字段/元素级声明了 options 名单时禁用 allow-create（只能从名单选，手敲非法名被拒）
+const hasClosedOptionPool = computed(() => {
+  const options = itemSchema.value?.validation?.options || props.field.validation?.options || [];
+  return options.length > 0;
 });
 
 const tagValues = computed<string[]>(() =>

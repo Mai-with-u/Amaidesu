@@ -166,6 +166,57 @@ class TestReadonlyPassthrough:
         version_field = next(f for f in schema["fields"] if f["name"] == "version")
         assert version_field.get("readonly") is True
 
+    def test_constant_type_fields_marked_readonly(self):
+        """常量型字段（lipsync.type / vrchat.type）携带 readonly 标记，WebUI 只读呈现"""
+        from src.modules.avatar.lipsync import LipSyncConfig
+        from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
+
+        for cls in (LipSyncConfig, VRChatProvider.ConfigSchema):
+            schema = _generate(cls)
+            type_field = next(f for f in schema["fields"] if f["name"] == "type")
+            assert type_field.get("readonly") is True, f"{cls.__name__}.type 缺 readonly 标记"
+
+
+class TestUiMarkerPassthrough:
+    """控件语义标记（x-options / x-ui-widget / x-ui-precision）进入生成结果"""
+
+    def test_avatar_enabled_has_closed_options(self):
+        """皮套平台启用名单携带封闭候选池（合法名 vts/warudo/vrchat）"""
+        from src.modules.config.avatar_schemas import PLATFORM_NAMES, AvatarRootConfig
+
+        schema = _generate(AvatarRootConfig)
+        platform = schema["nested"]["platform"]
+        enabled_field = next(f for f in platform["fields"] if f["name"] == "enabled")
+        assert enabled_field.get("options") == list(PLATFORM_NAMES)
+
+    def test_text_adv_region_fixed_tuple(self):
+        """text_adv 截图区域标记定长四元组，元素为整数"""
+        from src.agents.text_adv.config import TextAdvConfig
+
+        schema = _generate(TextAdvConfig)
+        region_field = next(f for f in schema["fields"] if f["name"] == "region")
+        assert region_field.get("x-ui-widget") == "fixed-tuple"
+        assert region_field.get("x-ui-tuple-length") == 4
+        assert region_field.get("items") == {"type": "integer"}
+
+    def test_lipsync_min_mouth_delta_precision(self):
+        """低于两位小数分辨率的浮点字段声明精度，防前端静默舍入"""
+        from src.modules.avatar.lipsync import LipSyncConfig
+
+        schema = _generate(LipSyncConfig)
+        field = next(f for f in schema["fields"] if f["name"] == "min_mouth_delta")
+        assert field.get("x-ui-precision") == 3
+
+    def test_dashboard_ports_bounded(self):
+        """Dashboard 端口字段带 1–65535 范围约束"""
+        from src.modules.config.core_schemas import DashboardConfig
+
+        schema = _generate(DashboardConfig)
+        fields = {f["name"]: f for f in schema["fields"]}
+        for name in ("port", "vite_dev_port"):
+            assert fields[name].get("minValue") == 1, f"{name} 缺下界"
+            assert fields[name].get("maxValue") == 65535, f"{name} 缺上界"
+
 
 # ===========================================================================
 # 参数化冒烟：六根逐个生成不抛

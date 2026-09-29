@@ -12,16 +12,17 @@ from pydantic import BaseModel, Field
 class LoggingConfig(BaseModel):
     """日志配置"""
 
-    enabled: bool = Field(default=True, description="启用文件日志")
+    enabled: bool = Field(default=True, title="是否启用", description="启用文件日志")
 
     format: Literal["jsonl", "text"] = Field(
-        default="jsonl", description="日志格式：jsonl（每行一个JSON对象）或 text（纯文本）"
+        default="jsonl", title="日志格式", description="日志格式：jsonl（每行一个JSON对象）或 text（纯文本）"
     )
 
-    directory: str = Field(default="logs", description="日志目录（相对于项目根目录）")
+    directory: str = Field(default="logs", title="日志目录", description="日志目录（相对于项目根目录）")
 
     level: str = Field(
         default="INFO",
+        title="日志级别",
         description="最低日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）",
         json_schema_extra={
             "x-ui-type": "select",
@@ -29,25 +30,35 @@ class LoggingConfig(BaseModel):
         },
     )
 
-    console_level: str = Field(default="INFO", description="控制台日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）")
+    console_level: str = Field(
+        default="INFO", title="控制台级别", description="控制台日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）"
+    )
 
     filter: List[str] = Field(
         default_factory=list,
+        title="模块过滤器",
         description="模块过滤器（仅显示这些模块的日志，空列表 = 不过滤）",
     )
 
-    rotation: str = Field(default="10 MB", description="日志轮转触发条件（如 '10 MB', '500 MB', '1 GB'）")
+    rotation: str = Field(
+        default="10 MB", title="轮转条件", description="日志轮转触发条件（如 '10 MB', '500 MB', '1 GB'）"
+    )
 
-    retention: str = Field(default="7 days", description="日志保留时间（如 '7 days', '1 week', '1 month'）")
+    retention: str = Field(
+        default="7 days", title="保留时长", description="日志保留时间（如 '7 days', '1 week', '1 month'）"
+    )
 
     compression: str = Field(
         default="zip",
+        title="压缩格式",
         description="压缩格式（zip, gz, tar, tar.gz）",
         json_schema_extra={"x-ui-type": "select", "x-options": ["zip", "gz", "tar", "tar.gz", ""]},
     )
 
     split_by_session: bool = Field(
-        default=False, description="是否按会话分割日志文件（每次启动生成新文件，文件名包含时间戳）"
+        default=False,
+        title="是否按会话分割",
+        description="是否按会话分割日志文件（每次启动生成新文件，文件名包含时间戳）",
     )
 
     @classmethod

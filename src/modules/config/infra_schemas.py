@@ -40,16 +40,20 @@ class InfraRootConfig(BaseConfig):
     __file_name__ = "infra.toml"
     __section_label__ = "基础设施"
 
-    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
+    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     tts: TTSConfig = Field(
         default_factory=TTSConfig,
+        title="TTS 配置",
         description="TTS 基础设施配置（开关/目标引擎/队列/超时 + 引擎子段）",
     )
     subtitle: SubtitleInfraConfig = Field(
         default_factory=SubtitleInfraConfig,
+        title="字幕配置",
         description="字幕基础设施配置（开关/后端列表 + tk_gui 子段）",
     )
-    events: EventHistoryConfig = Field(default_factory=EventHistoryConfig, description="事件历史记录配置")
+    events: EventHistoryConfig = Field(
+        default_factory=EventHistoryConfig, title="事件历史", description="事件历史记录配置"
+    )
     interceptors: dict[str, Any] = Field(
         default_factory=lambda: {
             "rate_limit": {
@@ -66,16 +70,21 @@ class InfraRootConfig(BaseConfig):
                 "cross_user_filter": True,
             },
         },
+        title="事件拦截器",
         description="事件拦截器配置（动态键，如 rate_limit / similar_filter）",
     )
     agent_supervisor: AgentSupervisorConfig = Field(
         default_factory=AgentSupervisorConfig,
+        title="Agent 守护",
         description="Agent 心跳与自动重建（守护）配置（间隔/判死阈值/重建风暴保护）",
     )
-    dashboard: DashboardConfig = Field(default_factory=DashboardConfig, description="Dashboard 配置")
-    logging: LoggingConfig = Field(default_factory=LoggingConfig, description="日志配置")
+    dashboard: DashboardConfig = Field(
+        default_factory=DashboardConfig, title="Dashboard 配置", description="Dashboard 配置"
+    )
+    logging: LoggingConfig = Field(default_factory=LoggingConfig, title="日志配置", description="日志配置")
     simulator: SimulatorConfigSchema = Field(
         default_factory=SimulatorConfigSchema,
+        title="模拟直播间配置",
         description="模拟直播间配置（人设/礼物数据位于 SQLite 的 sim_personas/sim_gifts 表）",
     )
 

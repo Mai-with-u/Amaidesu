@@ -30,7 +30,7 @@ class CollectorsRootConfig(BaseConfig):
     __file_name__ = "collectors.toml"
     __section_label__ = "采集器"
 
-    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
+    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     enabled: list[str] = Field(
         default_factory=lambda: ["console_input", "maicraft_attention"],
         title="启用的采集器",

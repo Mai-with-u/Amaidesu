@@ -49,11 +49,13 @@ class SqliteStorageConfig(BaseConfig):
 
     db_path: str = Field(
         default="data/amaidesu.db",
+        title="数据库路径",
         description="数据库文件路径（相对项目根目录）。单一事实源：存储与记忆共用此库",
     )
     busy_timeout_ms: int = Field(
         default=5000,
         ge=0,
+        title="忙等待超时",
         description="数据库忙时等待超时（毫秒；连接模块读此值注入 PRAGMA busy_timeout）",
     )
 
@@ -79,9 +81,10 @@ class StorageRootConfig(BaseConfig):
     __file_name__ = "storage.toml"
     __section_label__ = "存储"
 
-    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
+    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     sqlite: SqliteStorageConfig = Field(
         default_factory=SqliteStorageConfig,
+        title="SQLite 配置",
         description="SQLite 存储后端配置（存储与 SimpleMemory 共用）",
     )
 

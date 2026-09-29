@@ -47,6 +47,7 @@ class MemoryConfig(BaseConfig):
 
     backend: MemoryBackend = Field(
         default="simple",
+        title="记忆后端",
         description="记忆后端实现：simple=内置 SimpleMemory（观众事实/画像读写）",
         json_schema_extra={
             "x-ui-type": "select",
@@ -55,24 +56,28 @@ class MemoryConfig(BaseConfig):
     )
     fact_extraction_enabled: bool = Field(
         default=True,
+        title="是否启用事实提取",
         description="是否在后台话题摘要循环中顺便提取观众事实（关闭后画像将无新原料）",
     )
     profile_min_interactions: int = Field(
         default=3,
         ge=1,
         le=100,
+        title="画像生成门槛",
         description="首次生成画像的互动量门槛（viewers.interaction_count ≥ N；不够格不生成、自然不注入）",
     )
     profile_max_length: int = Field(
         default=400,
         ge=100,
         le=1000,
+        title="画像长度上限",
         description="画像文本长度上限（字符；提示词约束 LLM 压缩篇幅）",
     )
     facts_per_batch: int = Field(
         default=5,
         ge=1,
         le=20,
+        title="每轮事实条数",
         description="每轮话题摘要循环最多提取的事实条数",
     )
 

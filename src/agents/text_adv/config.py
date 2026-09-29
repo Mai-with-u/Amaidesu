@@ -40,6 +40,8 @@ class TextAdvConfig(BaseConfig):
     region: Optional[List[int]] = Field(
         default=None,
         description="截图区域 [x, y, w, h]（相对所选显示器左上角，物理像素）；None = 整个显示器",
+        # 值恒为四元组：前端渲染为一行 4 个并排数字输入，不走通用数组编辑器
+        json_schema_extra={"x-ui-widget": "fixed-tuple", "x-ui-tuple-length": 4},
     )
     keys: Dict[str, str] = Field(
         default_factory=_default_keys,

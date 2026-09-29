@@ -43,6 +43,12 @@ export interface ConfigFieldSchema {
   readonly?: boolean;
   /** x-ui-advanced 标记：收进默认折叠的「高级参数」区（鉴权细节、重试参数等） */
   advanced?: boolean;
+  /** x-ui-widget 标记：控件形态覆盖（fixed-tuple = 定长数值元组，一行并排数字输入） */
+  widget?: string;
+  /** x-ui-tuple-length 标记：定长元组的元素个数（widget === 'fixed-tuple' 时生效） */
+  tupleLength?: number;
+  /** x-ui-precision 标记：浮点小数位数；缺省 = 不强制舍入 */
+  precision?: number;
 }
 
 // 配置分组 Schema

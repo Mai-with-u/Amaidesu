@@ -85,6 +85,7 @@ class AgentsConfig(BaseConfig):
     # AgentsConfig.model_rebuild() 之前可用且不触发重型依赖链。
     streamer: Optional["StreamerConfig"] = Field(  # type: ignore[name-defined]  # noqa: F821
         default_factory=lambda: __import__("src.agents.streamer.config", fromlist=["StreamerConfig"]).StreamerConfig(),
+        title="主播 Agent",
         description="主播 Agent（Planner+Replyer）配置",
         json_schema_extra={"x-ui-type": "object"},
     )
@@ -92,16 +93,19 @@ class AgentsConfig(BaseConfig):
         default_factory=lambda: __import__(
             "src.agents.minecraft.config", fromlist=["MinecraftConfig"]
         ).MinecraftConfig(),
+        title="Minecraft 游戏 Agent",
         description="Minecraft 游戏 Agent 配置",
         json_schema_extra={"x-ui-type": "object"},
     )
     text_adv: Optional["TextAdvConfig"] = Field(  # type: ignore[name-defined]  # noqa: F821
         default_factory=lambda: __import__("src.agents.text_adv.config", fromlist=["TextAdvConfig"]).TextAdvConfig(),
+        title="文字冒险 Agent",
         description="文字冒险游戏 Agent 配置",
         json_schema_extra={"x-ui-type": "object"},
     )
     game_2048: Optional["Game2048Config"] = Field(  # type: ignore[name-defined]  # noqa: F821
         default_factory=lambda: __import__("src.agents.game_2048.config", fromlist=["Game2048Config"]).Game2048Config(),
+        title="2048 游戏 Agent",
         description="2048 游戏 Agent 配置",
         json_schema_extra={"x-ui-type": "object"},
     )
@@ -123,9 +127,10 @@ class AgentsRootConfig(BaseConfig):
     __file_name__ = "agents.toml"
     __section_label__ = "业务 Agent"
 
-    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, description="文件元数据")
+    meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     agents: AgentsConfig = Field(
         default_factory=AgentsConfig,
+        title="Agent 配置",
         description="[agents] 段聚合（启用列表 + 各 Agent 子配置）",
     )
 

@@ -90,7 +90,8 @@ class VRChatProvider(BaseToolProvider):
     class ConfigSchema(BaseConfig):
         """VRChat OSC 配置（host + out port）"""
 
-        type: str = "vrchat"
+        # 常量型字段：值恒等于段名，仅作段位标识，WebUI 只读呈现（改了也会被忽略）
+        type: str = Field(default="vrchat", json_schema_extra={"readonly": True})
         vrc_host: str = Field(default="127.0.0.1", description="VRChat OSC 主机地址")
         vrc_out_port: int = Field(default=9000, ge=1, le=65535, description="VRChat OSC 输出端口")
 
