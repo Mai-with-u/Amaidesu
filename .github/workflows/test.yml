@@ -33,7 +33,7 @@ jobs:
       - name: Run pytest
         run: |
           set +e
-          uv run python -u -m pytest tests/ --collect-only -q > /tmp/collect.txt 2>&1
+          xvfb-run -a uv run python -u -m pytest tests/ --collect-only -q > /tmp/collect.txt 2>&1
           cstatus=$?
           if [ $cstatus -ne 0 ]; then
             tail -20 /tmp/collect.txt | while IFS= read -r line; do
