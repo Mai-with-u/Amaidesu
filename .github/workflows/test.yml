@@ -20,8 +20,16 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      # 错误行转 ::error:: 注解：仓库协作者之外无法拉取 job 日志，注解可匿名读
       - name: Run pytest
-        run: uv run pytest tests/ -q
+        run: |
+          set -o pipefail
+          uv run pytest tests/ -q --tb=line 2>&1 | tee /tmp/pytest-out.txt
+          status=${PIPESTATUS[0]}
+          grep -E "^(ERROR|E   |FAILED|Interrupted)" /tmp/pytest-out.txt | head -10 | while IFS= read -r line; do
+            echo "::error::${line:0:300}"
+          done
+          exit $status
 
   frontend-test:
     runs-on: ubuntu-latest
