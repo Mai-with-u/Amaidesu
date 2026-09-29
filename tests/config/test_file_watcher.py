@@ -79,6 +79,26 @@ async def _wait_for_event_count(recorder: list, expected: int, timeout_s: float 
     return len(recorder) >= expected
 
 
+async def _wait_for_quiesce(recorder: list, quiet_s: float, timeout_s: float) -> None:
+    """等待回调序列静默 (连续 quiet_s 无新批次) 或超时。
+
+    用于写入全部确认送达后排除在途尾批: watchfiles 的冲刷周期由 step
+    (默认 50ms) 与 debounce 共同决定, 静默窗口取大于 step 的值即可认定
+    无新批次; 超时兜底防止异常场景下挂死整轮。
+    """
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    last_count = len(recorder)
+    last_change = asyncio.get_running_loop().time()
+    while asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.05)
+        now = asyncio.get_running_loop().time()
+        if len(recorder) != last_count:
+            last_count = len(recorder)
+            last_change = now
+        elif now - last_change >= quiet_s:
+            return
+
+
 # =============================================================================
 # Lifecycle: start / stop
 # =============================================================================
@@ -250,13 +270,20 @@ class TestDebounce:
         await w.start()
 
         try:
-            # 5 次快速写入,每次间隔 100ms (总耗时 ~500ms, 在 600ms 防抖窗口内)
+            # 5 次快速写入 (每笔间隔远小于 600ms 防抖窗口)。
+            # 每笔写入后以「回调已收到该笔事件」为确定性完成信号再写下一笔
+            # (有界等待, 5s 兜底): 固定间隔 sleep 下, fs 事件迟到会使相邻两笔
+            # 落入同一 watchfiles 批次, 被 set 语义合并为一条 change, 导致
+            # total_changes < 写入数的假性丢事件 (全量套件负载下实证复现)。
             for i in range(5):
                 await asyncio.to_thread(_modify_file, toml_file, f"# rapid_{i}\n")
-                await asyncio.sleep(0.1)
+                assert await _wait_for_event_count(received, i + 1, timeout_s=5.0), (
+                    f"Write #{i} event not delivered in time: got {len(received)} batches"
+                )
 
-            # 等待防抖窗口完全关闭
-            await asyncio.sleep(1.5)
+            # 等待潜在尾批稳定: 交付静默 0.6s (远大于 watchfiles step 50ms 的
+            # 冲刷周期) 视为无在途批次, 3s 总时限兜底。
+            await _wait_for_quiesce(received, quiet_s=0.6, timeout_s=3.0)
 
             # 防抖不应增加回调次数: 5 次原始写入 -> <= 5 次回调
             assert len(received) <= 5, f"Debounce should not increase callback count: got {len(received)} for 5 writes"
@@ -280,11 +307,14 @@ class TestDebounce:
         try:
             for i in range(5):
                 await asyncio.to_thread(_modify_file, toml_file, f"# short_{i}\n")
-                # 间隔大于防抖窗口, 每个写入都会独立触发
-                await asyncio.sleep(0.1)
+                # 间隔大于防抖窗口, 每个写入都会独立触发; 同样以事件送达为
+                # 确定性信号 (有界等待), 排除 fs 事件迟到合并导致的假性丢事件
+                assert await _wait_for_event_count(received, i + 1, timeout_s=5.0), (
+                    f"Write #{i} event not delivered in time: got {len(received)} batches"
+                )
 
-            # 等待防抖关闭
-            await asyncio.sleep(0.5)
+            # 等待防抖关闭与尾批稳定 (静默 0.4s + 3s 兜底)
+            await _wait_for_quiesce(received, quiet_s=0.4, timeout_s=3.0)
 
             assert len(received) >= 1, f"Expected >= 1 batch, got {len(received)}"
             # 所有 5 个变化都应到达 (debounce 不丢事件)
