@@ -72,6 +72,10 @@
           <el-icon><ChatDotRound /></el-icon>
           <span>字幕</span>
         </el-menu-item>
+        <el-menu-item index="/game2048">
+          <el-icon><Grid /></el-icon>
+          <span>2048</span>
+        </el-menu-item>
       </el-menu>
     </nav>
 
@@ -101,6 +105,7 @@ import {
   Tickets,
   ChatLineSquare,
   ChatDotRound,
+  Grid,
   VideoCamera,
   List,
   MagicStick,

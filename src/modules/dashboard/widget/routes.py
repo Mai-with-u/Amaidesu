@@ -13,7 +13,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from src.modules.dashboard.widget import DanmakuWidgetService
-from src.modules.dashboard.widget.page import WIDGET_HTML
+from src.modules.dashboard.widget.game2048_service import Game2048WidgetService
+from src.modules.dashboard.widget.page import GAME2048_HTML, WIDGET_HTML
 from src.modules.logging import get_logger
 
 logger = get_logger("WidgetGateway")
@@ -24,17 +25,28 @@ class WidgetGateway:
 
     def __init__(self) -> None:
         self.widget_service: Optional[DanmakuWidgetService] = None
+        self.game2048_service: Optional[Game2048WidgetService] = None
         self._widget_clients: set[WebSocket] = set()
         self._danmaku_clients: set[WebSocket] = set()
         self._subtitle_clients: set[WebSocket] = set()
+        self._game2048_clients: set[WebSocket] = set()
 
     async def stop(self) -> None:
-        """停止小部件服务并关闭全部三组客户端连接。"""
+        """停止小部件服务并关闭全部客户端连接。"""
         if self.widget_service:
             await self.widget_service.stop()
             self.widget_service = None
+        if self.game2048_service:
+            await self.game2048_service.stop()
+            self.game2048_service = None
 
-        for client in list(self._widget_clients) + list(self._danmaku_clients) + list(self._subtitle_clients):
+        all_clients = (
+            list(self._widget_clients)
+            + list(self._danmaku_clients)
+            + list(self._subtitle_clients)
+            + list(self._game2048_clients)
+        )
+        for client in all_clients:
             try:
                 await client.close()
             except Exception as e:
@@ -42,13 +54,16 @@ class WidgetGateway:
         self._widget_clients.clear()
         self._danmaku_clients.clear()
         self._subtitle_clients.clear()
+        self._game2048_clients.clear()
 
     def reset(self) -> None:
         """释放服务引用并清空全部客户端集合（不主动关连接）。"""
         self.widget_service = None
+        self.game2048_service = None
         self._widget_clients.clear()
         self._danmaku_clients.clear()
         self._subtitle_clients.clear()
+        self._game2048_clients.clear()
 
     async def run_danmaku_socket(self, websocket: WebSocket) -> None:
         await self._run_socket(websocket, self._danmaku_clients, with_history=True)
@@ -58,6 +73,29 @@ class WidgetGateway:
 
     async def run_widget_socket(self, websocket: WebSocket) -> None:
         await self._run_socket(websocket, self._widget_clients, with_history=True)
+
+    async def run_game2048_socket(self, websocket: WebSocket) -> None:
+        """2048 棋盘 WS 收发循环：接入即推单槽最新快照，后续随事件增量推送。"""
+        await websocket.accept()
+        self._game2048_clients.add(websocket)
+
+        try:
+            if self.game2048_service is not None:
+                latest = self.game2048_service.get_latest_state()
+                if latest is not None:
+                    await websocket.send_json({"type": "state", "state": latest})
+
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        except asyncio.CancelledError:
+            # 关闭信号：静默退出（finally 负责清理 client 集合）
+            pass
+        except Exception as e:
+            logger.debug(f"Game2048 WebSocket 错误: {e}")
+        finally:
+            self._game2048_clients.discard(websocket)
 
     async def _run_socket(self, websocket: WebSocket, clients: set[WebSocket], *, with_history: bool) -> None:
         """widget 族 WebSocket 端点的公共收发循环（accept → 可选历史 → 保活 → 清理）。"""
@@ -106,9 +144,18 @@ class WidgetGateway:
         """广播字幕到所有 subtitle 客户端"""
         await self._broadcast_to_clients(self._subtitle_clients, data)
 
+    async def broadcast_game2048(self, data: dict) -> None:
+        """广播棋盘状态到所有 game2048 客户端"""
+        await self._broadcast_to_clients(self._game2048_clients, data)
 
-def create_widget_router(gateway: WidgetGateway, *, include_page: bool) -> APIRouter:
-    """装配 widget 族路由（页面 + 3 条 WS + 3 条 HTTP 查询）。"""
+
+def create_widget_router(
+    gateway: WidgetGateway,
+    *,
+    include_page: bool,
+    include_game2048_page: bool = False,
+) -> APIRouter:
+    """装配 widget 族路由（页面 + WS + HTTP 查询，按各 widget 开关独立挂载）。"""
     router = APIRouter()
 
     if include_page:
@@ -116,6 +163,12 @@ def create_widget_router(gateway: WidgetGateway, *, include_page: bool) -> APIRo
         @router.get("/widget", response_class=HTMLResponse)
         async def widget_page() -> HTMLResponse:
             return HTMLResponse(WIDGET_HTML)
+
+    if include_game2048_page:
+
+        @router.get("/widget/2048", response_class=HTMLResponse)
+        async def game2048_page() -> HTMLResponse:
+            return HTMLResponse(GAME2048_HTML)
 
     @router.websocket("/ws/danmaku")
     async def danmaku_websocket(websocket: WebSocket) -> None:
@@ -128,6 +181,10 @@ def create_widget_router(gateway: WidgetGateway, *, include_page: bool) -> APIRo
     @router.websocket("/ws/widget")
     async def widget_websocket(websocket: WebSocket) -> None:
         await gateway.run_widget_socket(websocket)
+
+    @router.websocket("/ws/game2048")
+    async def game2048_websocket(websocket: WebSocket) -> None:
+        await gateway.run_game2048_socket(websocket)
 
     @router.get("/api/widget/messages")
     async def get_widget_messages() -> dict:
@@ -146,5 +203,11 @@ def create_widget_router(gateway: WidgetGateway, *, include_page: bool) -> APIRo
         if gateway.widget_service is None:
             return {"is_running": False}
         return gateway.widget_service.get_stats()
+
+    @router.get("/api/widget/game2048")
+    async def get_game2048_state() -> dict:
+        if gateway.game2048_service is None:
+            return {"state": None}
+        return {"state": gateway.game2048_service.get_latest_state()}
 
     return router

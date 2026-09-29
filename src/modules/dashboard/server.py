@@ -21,7 +21,7 @@ from src.modules.dashboard.api.router import create_app, setup_cors
 from src.modules.dashboard.dependencies import set_dashboard_server
 from src.modules.config.core_schemas import DashboardConfig
 from src.modules.dashboard.vite_dev import ViteDevServer
-from src.modules.dashboard.widget import DanmakuWidgetService
+from src.modules.dashboard.widget import DanmakuWidgetService, Game2048WidgetService
 from src.modules.dashboard.widget.models import DanmakuWidgetConfig, SubtitleWidgetConfig
 from src.modules.dashboard.widget.routes import WidgetGateway, create_widget_router
 from src.modules.logging import get_logger
@@ -159,6 +159,10 @@ class DashboardServer:
         self.app = create_app()
         setup_cors(self.app, self.cors_origins)
 
+        # widget 路由必须先于下方 serve_spa catch-all 挂载（路由按注册顺序匹配，
+        # 反了则 /api/widget/* 全部被 catch-all 的 api/ 守卫截成 Not Found）
+        await self._setup_widget_service()
+
         DASHBOARD_DIST = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
 
         if DASHBOARD_DIST.exists() and DASHBOARD_DIST.is_dir():
@@ -243,8 +247,6 @@ class DashboardServer:
             await ws_handler.run_client_handler(websocket, on_connected=push_history)
 
         self._heartbeat_task = asyncio.create_task(self._run_heartbeat())
-
-        await self._setup_widget_service()
 
         if self.dev_mode:
             dashboard_dir = Path(__file__).parent.parent.parent.parent / "dashboard"
@@ -418,26 +420,10 @@ class DashboardServer:
                 await self.ws_handler.send_heartbeat()
 
     async def _setup_widget_service(self) -> None:
-        """初始化弹幕小部件服务并挂载 widget 族路由"""
+        """初始化 widget 族服务并挂载 widget 族路由（各 widget 独立开关，任一启用即挂路由）"""
         danmaku_widget_config = self.dashboard_config.danmaku_widget
         subtitle_widget_config = self.dashboard_config.subtitle_widget
-
-        if danmaku_widget_config is None or not danmaku_widget_config.enabled:
-            self.logger.info("弹幕小部件服务已禁用")
-            return
-
-        widget_config = DanmakuWidgetConfig(
-            enabled=danmaku_widget_config.enabled,
-            enable_html_page=danmaku_widget_config.enable_html_page,
-            max_messages=danmaku_widget_config.max_messages,
-            show_danmaku=danmaku_widget_config.show_danmaku,
-            show_gift=danmaku_widget_config.show_gift,
-            show_super_chat=danmaku_widget_config.show_super_chat,
-            show_guard=danmaku_widget_config.show_guard,
-            show_enter=danmaku_widget_config.show_enter,
-            show_reply=danmaku_widget_config.show_reply,
-            min_importance=danmaku_widget_config.min_importance,
-        )
+        game2048_widget_config = self.dashboard_config.game2048_widget
 
         subtitle_config = SubtitleWidgetConfig(
             enabled=subtitle_widget_config.enabled,
@@ -451,17 +437,55 @@ class DashboardServer:
             position=subtitle_widget_config.position,
         )
 
-        widget_service = DanmakuWidgetService(
-            event_bus=self.event_bus,
-            config=widget_config,
-            subtitle_config=subtitle_config,
-        )
-        self.widget_gateway.widget_service = widget_service
-        widget_service.set_danmaku_callback(self.widget_gateway.broadcast_danmaku)
-        widget_service.set_subtitle_callback(self.widget_gateway.broadcast_subtitle)
+        danmaku_enabled = bool(danmaku_widget_config and danmaku_widget_config.enabled)
+        danmaku_html_page = False
+        if danmaku_enabled:
+            widget_config = DanmakuWidgetConfig(
+                enabled=danmaku_widget_config.enabled,
+                enable_html_page=danmaku_widget_config.enable_html_page,
+                max_messages=danmaku_widget_config.max_messages,
+                show_danmaku=danmaku_widget_config.show_danmaku,
+                show_gift=danmaku_widget_config.show_gift,
+                show_super_chat=danmaku_widget_config.show_super_chat,
+                show_guard=danmaku_widget_config.show_guard,
+                show_enter=danmaku_widget_config.show_enter,
+                show_reply=danmaku_widget_config.show_reply,
+                min_importance=danmaku_widget_config.min_importance,
+            )
+            danmaku_html_page = widget_config.enable_html_page
 
-        await widget_service.start()
-        self.logger.info(f"弹幕小部件服务已启动 (max_messages={widget_config.max_messages})")
+            widget_service = DanmakuWidgetService(
+                event_bus=self.event_bus,
+                config=widget_config,
+                subtitle_config=subtitle_config,
+            )
+            self.widget_gateway.widget_service = widget_service
+            widget_service.set_danmaku_callback(self.widget_gateway.broadcast_danmaku)
+            widget_service.set_subtitle_callback(self.widget_gateway.broadcast_subtitle)
 
-        self.app.include_router(create_widget_router(self.widget_gateway, include_page=widget_config.enable_html_page))
-        self.logger.info("弹幕小部件路由已注册: /danmaku, /subtitle, /widget, /ws/danmaku, /ws/subtitle, /ws/widget")
+            await widget_service.start()
+            self.logger.info(f"弹幕小部件服务已启动 (max_messages={widget_config.max_messages})")
+        else:
+            self.logger.info("弹幕小部件服务已禁用")
+
+        game2048_enabled = bool(game2048_widget_config and game2048_widget_config.enabled)
+        game2048_html_page = bool(game2048_enabled and game2048_widget_config.enable_html_page)
+        if game2048_enabled:
+            game_service = Game2048WidgetService(event_bus=self.event_bus)
+            self.widget_gateway.game2048_service = game_service
+            game_service.set_state_callback(self.widget_gateway.broadcast_game2048)
+
+            await game_service.start()
+            self.logger.info("2048 棋盘小部件服务已启动")
+
+        if danmaku_enabled or game2048_enabled:
+            self.app.include_router(
+                create_widget_router(
+                    self.widget_gateway,
+                    include_page=danmaku_html_page,
+                    include_game2048_page=game2048_html_page,
+                )
+            )
+            self.logger.info(
+                "widget 族路由已注册: /widget, /widget/2048, /ws/danmaku, /ws/subtitle, /ws/widget, /ws/game2048"
+            )

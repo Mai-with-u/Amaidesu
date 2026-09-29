@@ -47,8 +47,18 @@ class DanmakuWidgetConfig(BaseConfig):
     min_importance: float = Field(default=0.0, ge=0.0, le=1.0, description="最小重要性过滤")
 
 
+class Game2048WidgetConfig(BaseConfig):
+    """2048 棋盘小部件配置"""
+
+    enabled: bool = Field(default=True, description="是否启用 2048 棋盘小部件（订阅 game.state.changed 推送）")
+    enable_html_page: bool = Field(
+        default=True,
+        description="是否启用后端 HTML 透明页（/widget/2048，供 OBS 浏览器源 / Warudo 网页道具加载）",
+    )
+
+
 # ---------------------------------------------------------------------------
-# Dashboard（含 SubtitleWidget + DanmakuWidget 子段）
+# Dashboard（含 SubtitleWidget + DanmakuWidget + Game2048Widget 子段）
 # ---------------------------------------------------------------------------
 
 
@@ -86,6 +96,10 @@ class DashboardConfig(BaseConfig):
     subtitle_widget: SubtitleWidgetConfig = Field(
         default_factory=SubtitleWidgetConfig,
         description="字幕小部件配置",
+    )
+    game2048_widget: Game2048WidgetConfig = Field(
+        default_factory=Game2048WidgetConfig,
+        description="2048 棋盘小部件配置",
     )
 
 

@@ -5,7 +5,13 @@
 用于 Warudo 等虚拟形象软件的网页道具场景。
 """
 
+from .game2048_service import Game2048WidgetService
 from .models import DanmakuWidgetMessage, MessageType
 from .service import DanmakuWidgetService
 
-__all__ = ["DanmakuWidgetMessage", "MessageType", "DanmakuWidgetService"]
+__all__ = [
+    "DanmakuWidgetMessage",
+    "DanmakuWidgetService",
+    "Game2048WidgetService",
+    "MessageType",
+]

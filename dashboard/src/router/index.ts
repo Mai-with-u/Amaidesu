@@ -88,6 +88,12 @@ const router = createRouter({
       meta: { layout: false },
     },
     {
+      path: '/game2048',
+      name: 'game2048',
+      component: () => import('@/views/Game2048.vue'),
+      meta: { layout: false },
+    },
+    {
       path: '/simulator',
       name: 'simulator',
       component: () => import('@/views/SimulatorPanel.vue'),
