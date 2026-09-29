@@ -36,6 +36,8 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Dict, List, Optional
 
+from pydantic import Field
+
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler
@@ -73,7 +75,7 @@ class _PlannerConfig(BaseConfig):
     不再作为配置字段透传。
     """
 
-    planner_max_steps: int = _DEFAULT_MAX_STEPS
+    planner_max_steps: int = Field(default=_DEFAULT_MAX_STEPS, title="决策最大步数")
 
 
 def _spec_to_fn_def(spec: Any) -> Dict[str, Any]:

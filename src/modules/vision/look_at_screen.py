@@ -252,15 +252,17 @@ class LookAtScreenProvider(BaseToolProvider):
         TOML 段位：[tools.vision].config
         """
 
-        type: str = "vision"
+        type: str = Field(default="vision", title="段位标识")
         # 默认显示器索引（1..N 物理显示器）；对应 ToolSpec 的 monitor_index 入参缺省
         monitor_index: int = Field(
+            title="显示器索引",
             default=1,
             ge=0,
             description="默认显示器索引（1..N 物理显示器）；非法 → 后端回退并 warning",
         )
         # 默认区域 [x1, y1, x2, y2]（相对显示器左上角）；None = 全屏
         default_region: Optional[List[int]] = Field(
+            title="默认区域",
             default=None,
             description="默认区域 [x1, y1, x2, y2]（相对显示器左上角）；None = 全屏",
         )

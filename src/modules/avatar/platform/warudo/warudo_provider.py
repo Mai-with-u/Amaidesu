@@ -153,16 +153,21 @@ class WarudoProvider(BaseToolProvider):
         8766 字幕面删除而移除，字幕收敛为 Dashboard /subtitle 一面。）
         """
 
-        type: str = "warudo"
-        ws_host: str = Field(default="localhost", description="Warudo WebSocket 主机地址")
-        ws_port: int = Field(default=19190, ge=1, le=65535, description="Warudo WebSocket 端口")
-        reconnect_delay_seconds: float = Field(default=5.0, ge=0.0, description="断线重连间隔秒数")
-        talking_head_enabled: bool = Field(default=True, description="是否启用 TalkingHead 后台任务")
-        talking_head_interval: float = Field(default=0.1, ge=0.01, description="TalkingHead 最小间隔秒数")
-        throw_fish_cooldown: float = Field(default=5.0, ge=0.0, description="抛鱼动画冷却秒数")
+        type: str = Field(default="warudo", title="段位标识")
+        ws_host: str = Field(title="Warudo 主机地址", default="localhost", description="Warudo WebSocket 主机地址")
+        ws_port: int = Field(title="Warudo 端口", default=19190, ge=1, le=65535, description="Warudo WebSocket 端口")
+        reconnect_delay_seconds: float = Field(title="重连间隔", default=5.0, ge=0.0, description="断线重连间隔秒数")
+        talking_head_enabled: bool = Field(
+            title="是否启用 TalkingHead", default=True, description="是否启用 TalkingHead 后台任务"
+        )
+        talking_head_interval: float = Field(
+            title="TalkingHead 间隔", default=0.1, ge=0.01, description="TalkingHead 最小间隔秒数"
+        )
+        throw_fish_cooldown: float = Field(title="抛鱼冷却时间", default=5.0, ge=0.0, description="抛鱼动画冷却秒数")
         # 动作目录（人类登记的可用动作名+说明；类似 MCP servers 的动态键例外，
         # 键=动作名、值=说明；typed 形态 Dict[str, str] 为有界键值映射，不算自由 dict）
         action_catalog: Dict[str, str] = Field(
+            title="动作目录",
             default_factory=dict,
             description="可用蓝图动作目录 {动作名: 说明}，人类配置预声明；用于拼入工具描述供 LLM 选择",
         )

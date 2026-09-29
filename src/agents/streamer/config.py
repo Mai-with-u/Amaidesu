@@ -71,20 +71,24 @@ class StreamerPersonaConfig(BaseConfig):
     （Replyer 模板 ``$audience_salutation`` 变量）。
     """
 
-    bot_name: str = Field(default="麦麦", description="VTuber 名字（注入 Replyer 表达侧）")
+    bot_name: str = Field(title="VTuber 名字", default="麦麦", description="VTuber 名字（注入 Replyer 表达侧）")
     personality: str = Field(
+        title="性格描述",
         default="活泼开朗，有些调皮，喜欢和观众互动",
         description="性格描述（注入 Replyer 表达侧）",
     )
     style_constraints: str = Field(
+        title="说话风格约束",
         default="口语化，使用网络流行语，避免机械式回复，适当使用emoji",
         description="说话风格约束（注入 Replyer 表达侧）",
     )
     behavior_style: str = Field(
+        title="行动准则",
         default="积极与观众互动，收到礼物和SC及时致谢，冷场时主动开新话题，遇到争议保持风度不纠缠",
         description="Planner 行动准则（注入 Planner 决策侧）",
     )
     audience_salutation: str = Field(
+        title="观众称呼",
         default="大家",
         description="对观众的称呼（注入 Replyer 模板 ``$audience_salutation`` 变量）",
     )
@@ -99,6 +103,7 @@ class StreamerContextConfig(BaseConfig):
     """
 
     enabled: bool = Field(
+        title="是否启用组装器路径",
         default=True,
         description="是否启用组装器路径（关闭后 Planner 跳过组装器与画像注入，直接以直播流窗口文本注入）",
     )
@@ -111,12 +116,14 @@ class StreamerCompressorConfig(BaseConfig):
     """
 
     concurrency: int = Field(
+        title="压缩并发数",
         default=1,
         ge=1,
         le=8,
         description="压缩 worker 并发数（默认 1 保顺序，避免乱序覆盖）",
     )
     queue_max: int = Field(
+        title="压缩队列上限",
         default=100,
         ge=1,
         description="压缩队列上限（防止积压耗尽内存）",
@@ -129,24 +136,28 @@ class StreamerBackgroundConfig(BaseConfig):
     后台维护任务的轻循环 + 压缩 worker 参数。
     """
 
-    enabled: bool = Field(default=True, description="是否启用后台维护任务")
+    enabled: bool = Field(title="是否启用后台维护", default=True, description="是否启用后台维护任务")
     light_tick_ms: int = Field(
+        title="轻循环间隔",
         default=5_000,
         ge=100,
         le=60_000,
         description="轻循环 tick 间隔（毫秒）",
     )
     cold_timeout_ms: int = Field(
+        title="冷场判定阈值",
         default=60_000,
         ge=0,
         description="房间冷场判定阈值（毫秒）",
     )
     summary_interval_ms: int = Field(
+        title="摘要间隔",
         default=60_000,
         ge=0,
         description="低频 LLM 摘要间隔（毫秒）",
     )
     compressor: StreamerCompressorConfig = Field(
+        title="压缩 worker 配置",
         default_factory=StreamerCompressorConfig,
         description="压缩 worker 配置",
     )
@@ -158,10 +169,10 @@ class StreamerBatchConfig(BaseConfig):
     弹幕聚合（含 idle 补偿公式）。
     """
 
-    batch_window_ms: int = Field(default=3_000, ge=0, description="弹幕聚合时间窗口（毫秒）")
-    batch_max_size: int = Field(default=20, ge=1, description="单批最多聚合的弹幕条数")
-    tick_interval_ms: int = Field(default=300, ge=50, description="后台聚合检查间隔（毫秒）")
-    enable_idle_compensation: bool = Field(default=True, description="空窗补偿开关")
+    batch_window_ms: int = Field(title="聚合窗口", default=3_000, ge=0, description="弹幕聚合时间窗口（毫秒）")
+    batch_max_size: int = Field(title="单批条数上限", default=20, ge=1, description="单批最多聚合的弹幕条数")
+    tick_interval_ms: int = Field(title="聚合检查间隔", default=300, ge=50, description="后台聚合检查间隔（毫秒）")
+    enable_idle_compensation: bool = Field(title="是否启用空窗补偿", default=True, description="空窗补偿开关")
 
 
 class StreamerForceConfig(BaseConfig):
@@ -171,6 +182,7 @@ class StreamerForceConfig(BaseConfig):
     """
 
     force_message_types: List[str] = Field(
+        title="强制响应消息类型",
         default_factory=lambda: ["super_chat", "guard", "gift"],
         description="强制响应的消息类型（与 TimingGate 构造参数一致）",
     )
@@ -182,14 +194,19 @@ class StreamerProactiveConfig(BaseConfig):
     主动发言触发器配置（含 rundown 间隔）。
     """
 
-    enabled: bool = Field(default=True, description="主动发言总开关（流程单/冷场/定时等所有主动发言源）")
-    cold_timeout_ms: int = Field(default=45_000, ge=0, description="冷场判定阈值（毫秒）")
-    min_interval_ms: int = Field(default=120_000, ge=0, description="两次主动发言最小间隔")
-    schedule_interval_ms: int = Field(default=300_000, ge=0, description="定时话题触发间隔（0 = 关闭）")
-    schedule_only_cold: bool = Field(default=True, description="定时触发是否仅限冷场")
-    max_per_hour: int = Field(default=6, ge=1, description="每小时主动发言次数上限")
-    topic_required: bool = Field(default=True, description="话题缺失时跳过触发")
+    enabled: bool = Field(
+        title="是否启用主动发言", default=True, description="主动发言总开关（流程单/冷场/定时等所有主动发言源）"
+    )
+    cold_timeout_ms: int = Field(title="冷场判定阈值", default=45_000, ge=0, description="冷场判定阈值（毫秒）")
+    min_interval_ms: int = Field(title="发言最小间隔", default=120_000, ge=0, description="两次主动发言最小间隔")
+    schedule_interval_ms: int = Field(
+        title="定时话题间隔", default=300_000, ge=0, description="定时话题触发间隔（0 = 关闭）"
+    )
+    schedule_only_cold: bool = Field(title="定时是否仅限冷场", default=True, description="定时触发是否仅限冷场")
+    max_per_hour: int = Field(title="每小时发言上限", default=6, ge=1, description="每小时主动发言次数上限")
+    topic_required: bool = Field(title="是否必须有话题", default=True, description="话题缺失时跳过触发")
     rundown_speech_interval_ms: int = Field(
+        title="流程单发言间隔",
         default=3_000,
         ge=1_000,
         description="流程单环节内两次主动发言最小间隔",
@@ -202,11 +219,11 @@ class StreamerWordFilterConfig(BaseConfig):
     输出端敏感词净化配置。
     """
 
-    enabled: bool = Field(default=False, description="敏感词净化开关")
-    words: List[str] = Field(default_factory=list, description="敏感词列表")
-    replacement: str = Field(default="***", description="替换字符")
-    case_sensitive: bool = Field(default=False, description="是否大小写敏感")
-    drop_on_match: bool = Field(default=False, description="命中时是否整条丢弃")
+    enabled: bool = Field(title="是否启用敏感词净化", default=False, description="敏感词净化开关")
+    words: List[str] = Field(title="敏感词名单", default_factory=list, description="敏感词列表")
+    replacement: str = Field(title="替换字符", default="***", description="替换字符")
+    case_sensitive: bool = Field(title="是否区分大小写", default=False, description="是否大小写敏感")
+    drop_on_match: bool = Field(title="命中是否整条丢弃", default=False, description="命中时是否整条丢弃")
 
 
 class StreamerCommandConfig(BaseConfig):
@@ -218,23 +235,26 @@ class StreamerCommandConfig(BaseConfig):
     """
 
     enabled: bool = Field(
+        title="是否启用命令接线",
         default=True,
         description="命令接线开关（接线已完成，默认开放机制；实际可用性由 mappings 白名单决定）",
     )
-    prefix: str = Field(default="/", description="命令前缀")
+    prefix: str = Field(title="命令前缀", default="/", description="命令前缀")
     mappings: Dict[str, str] = Field(
+        title="命令映射表",
         default_factory=dict,
         description="命令名 → 委派语义目标（给游戏 Agent 的自然语言指令，作为 framework_delegate 的 instruction）",
     )
     target_agent: Optional[str] = Field(
+        title="委派目标 Agent",
         default=None,
         description=(
             "委派目标 Agent 注册名；留空 = 由框架委派原语解析为当前唯一启用的游戏 Agent"
             "（换游戏时只需改 agents.enabled，不必回来改这里）"
         ),
     )
-    rate_window_ms: int = Field(default=60_000, ge=1, description="限频时间窗（毫秒）")
-    rate_max: int = Field(default=3, ge=1, description="同一用户在时间窗内允许的命令条数上限")
+    rate_window_ms: int = Field(title="限频时间窗", default=60_000, ge=1, description="限频时间窗（毫秒）")
+    rate_max: int = Field(title="限频条数上限", default=3, ge=1, description="同一用户在时间窗内允许的命令条数上限")
 
 
 class StreamerThinkingStreamConfig(BaseConfig):
@@ -244,15 +264,18 @@ class StreamerThinkingStreamConfig(BaseConfig):
     """
 
     enabled: bool = Field(
+        title="是否启用思考流",
         default=True,
         description="思考流总开关：决策/生成期间的 reasoning 增量经旁路通道推送 WebUI 控制台",
     )
     flush_interval_ms: int = Field(
+        title="推送间隔",
         default=100,
         ge=20,
         description="思考流合帧推送间隔（毫秒）",
     )
     buffer_max: int = Field(
+        title="缓冲上限",
         default=400,
         ge=10,
         description="思考流环形缓冲上限（条）；超限丢最旧",
@@ -272,8 +295,9 @@ class StreamerConfig(BaseConfig):
     """
 
     # 根段：流程单与决策循环控制
-    rundown_id: str = Field(default="", description="流程单 id（空 = 使用内置默认流程单）")
+    rundown_id: str = Field(title="流程单 ID", default="", description="流程单 id（空 = 使用内置默认流程单）")
     planner_max_steps: int = Field(
+        title="决策最大步数",
         default=8,
         ge=1,
         description="Planner 单决策窗 ReAct 循环最大步数（超出静默收场，防失控）",
@@ -281,38 +305,47 @@ class StreamerConfig(BaseConfig):
 
     # 子段
     persona: StreamerPersonaConfig = Field(
+        title="人设配置",
         default_factory=StreamerPersonaConfig,
         description="人设配置（bot_name/personality/style_constraints/behavior_style/audience_salutation）",
     )
     context: StreamerContextConfig = Field(
+        title="上下文组装器配置",
         default_factory=StreamerContextConfig,
         description="上下文组装器配置（enabled/memory_recall_long_term）",
     )
     background: StreamerBackgroundConfig = Field(
+        title="后台维护配置",
         default_factory=StreamerBackgroundConfig,
         description="后台维护任务配置（轻循环 + 压缩 worker）",
     )
     batch: StreamerBatchConfig = Field(
+        title="弹幕聚合配置",
         default_factory=StreamerBatchConfig,
         description="弹幕聚合配置",
     )
     force: StreamerForceConfig = Field(
+        title="强制响应配置",
         default_factory=StreamerForceConfig,
         description="强制响应触发配置",
     )
     proactive: StreamerProactiveConfig = Field(
+        title="主动发言配置",
         default_factory=StreamerProactiveConfig,
         description="主动发言配置",
     )
     word_filter: StreamerWordFilterConfig = Field(
+        title="敏感词净化配置",
         default_factory=StreamerWordFilterConfig,
         description="输出端敏感词净化配置",
     )
     command: StreamerCommandConfig = Field(
+        title="命令接线配置",
         default_factory=StreamerCommandConfig,
         description="观众命令接线配置（代码直连，非 LLM 工具）",
     )
     thinking_stream: StreamerThinkingStreamConfig = Field(
+        title="思考流配置",
         default_factory=StreamerThinkingStreamConfig,
         description="思考流旁路配置",
     )
