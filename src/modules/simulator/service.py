@@ -542,10 +542,11 @@ class SimulatorService:
         return event_name
 
     async def _emit_replay_payload(self, payload: RoomMessagePayload) -> None:
-        """原样回放一条录制消息（时间戳刷新 + simulated 标记保持）。
+        """原样回放一条录制消息（时间戳刷新 + 一律标记 simulated）。
 
         场次归属不在此填写——回放启动时已自动开启回放场次，事件经场次盖章
         拦截器归属到该场；message_id 保留录制值（跨回放可复现同一条消息）。
+        simulated=True 由回放引擎在构建队列时统一打好，此处不改动。
         事件名按 message_type 选择，与录制时的消息类型一致。
         """
         replayed = payload.model_copy(

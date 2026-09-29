@@ -228,6 +228,28 @@ async def test_row_fields_restored_to_payload(store: SQLiteDatabase) -> None:
 
 
 @pytest.mark.asyncio
+async def test_replay_forces_simulated_true(store: SQLiteDatabase) -> None:
+    """录制行 simulated=0（真实弹幕）回放时也一律标记 simulated=True。"""
+    base = _day_base_ms(DATE)
+    await store.chat.insert_live_chat(
+        live_session_id=7,
+        timestamp_ms=base + 1000,
+        sender_role="viewer",
+        sender_id="uid_真实观众",
+        sender_name="真实观众",
+        content="真实历史弹幕",
+        message_type="danmaku",
+        simulated=False,
+    )
+
+    engine = _engine(store)
+    assert await engine.load(DATE, simulated_only=False) == 1
+    loaded = engine.pop_next()
+    assert loaded is not None
+    assert loaded.simulated is True
+
+
+@pytest.mark.asyncio
 async def test_live_session_id_normalized_to_zero(store: SQLiteDatabase) -> None:
     """历史场次主键不入回放队列：live_session_id 统一清零，由场次盖章归属当前场次。"""
     base = _day_base_ms(DATE)
