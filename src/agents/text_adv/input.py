@@ -17,8 +17,6 @@ from __future__ import annotations
 import time
 from typing import Protocol
 
-import pyautogui
-
 
 class InputBackend(Protocol):
     """键鼠注入后端协议（依赖注入点）。
@@ -46,24 +44,31 @@ class PyAutoGuiInputBackend:
     初始化即关闭 FAILSAFE（直播中鼠标被甩到屏幕角落会触发 pyautogui
     的紧急停止异常，直接打断 Agent）并清零全局 PAUSE（逐次调用间的
     内置停顿会拖慢推进节奏）。
+
+    pyautogui 延迟到实例化才导入：其依赖链在无显示环境（CI、headless
+    机器）import 期即失败，模块级 import 会让本包整体不可导入；生产
+    （Windows 直播机）实例化时环境必然齐备。
     """
 
     def __init__(self) -> None:
-        pyautogui.FAILSAFE = False
-        pyautogui.PAUSE = 0
+        import pyautogui
+
+        self._pyautogui = pyautogui
+        self._pyautogui.FAILSAFE = False
+        self._pyautogui.PAUSE = 0
 
     def press(self, key: str) -> None:
-        pyautogui.press(key)
+        self._pyautogui.press(key)
 
     def hold(self, key: str, duration_ms: int) -> None:
-        pyautogui.keyDown(key)
+        self._pyautogui.keyDown(key)
         try:
             time.sleep(duration_ms / 1000.0)
         finally:
-            pyautogui.keyUp(key)
+            self._pyautogui.keyUp(key)
 
     def click(self, x: int, y: int, button: str = "left") -> None:
-        pyautogui.click(x=x, y=y, button=button)
+        self._pyautogui.click(x=x, y=y, button=button)
 
 
 class FakeInputBackend:

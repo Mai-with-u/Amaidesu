@@ -18,8 +18,6 @@ import ctypes
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol, Tuple
 
-import pygetwindow
-
 from src.modules.logging import get_logger
 
 logger = get_logger("PyGetWindowBackend")
@@ -78,6 +76,11 @@ class PyGetWindowBackend:
     """基于 pygetwindow 的窗口后端实现（Windows）。"""
 
     def find(self, title_keyword: str) -> Optional[WindowInfo]:
+        # 延迟导入：pygetwindow 无 Linux 实现，模块级 import 会让本包在
+        # 无 GUI 环境（CI 收集、无显示机器）整体不可导入；生产（Windows
+        # 直播机）调用 find 时才加载
+        import pygetwindow
+
         matches = pygetwindow.getWindowsWithTitle(title_keyword)
         if not matches:
             return None
