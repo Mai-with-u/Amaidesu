@@ -96,11 +96,12 @@ def test_list_components_returns_all_groups_with_disabled(client) -> None:
     assert collectors["console_input"]["is_started"] is False
 
     agents = {c["name"]: c for c in data["agents"]}
-    assert set(agents) == {"streamer", "minecraft", "text_adv"}
+    assert set(agents) == {"streamer", "minecraft", "text_adv", "game_2048"}
     assert agents["streamer"]["is_enabled"] is True
     assert agents["streamer"]["is_started"] is False
     assert agents["minecraft"]["is_enabled"] is False
     assert agents["text_adv"]["is_enabled"] is False
+    assert agents["game_2048"]["is_enabled"] is False
 
 
 def test_control_start_dynamically_starts_collector(client) -> None:

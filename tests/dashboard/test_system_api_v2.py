@@ -114,7 +114,7 @@ def test_status_groups_count_correctly(client: TestClient) -> None:
     assert collectors["enabled"] == 2  # 两者都启用
 
     agents = resp["groups"]["agents"]
-    assert agents["total"] == 3  # streamer + minecraft + text_adv（Schema 三 Agent 全占位）
+    assert agents["total"] == 4  # streamer + minecraft + text_adv + game_2048（Schema 占位）
     assert agents["enabled"] == 1  # streamer
 
     tools = resp["groups"]["tools"]
