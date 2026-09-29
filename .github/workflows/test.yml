@@ -32,9 +32,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # pnpm 版本由 dashboard/package.json 的 packageManager 字段决定
+      # uses 步骤不吃 defaults.run.working-directory，packageManager 声明在
+      # dashboard/package.json，action 找不到 → 显式钉版本
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.4
 
       - name: Set up Node
         uses: actions/setup-node@v4

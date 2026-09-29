@@ -124,6 +124,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=5.0.0",
     "setuptools>=68.0.0",
+    "pytest-github-actions-annotate-failures>=0.4.2",
 ]
 
 [tool.hatch.build.targets.wheel]

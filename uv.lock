@@ -186,6 +186,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "pytest-github-actions-annotate-failures" },
     { name = "ruff" },
     { name = "setuptools" },
 ]
@@ -233,6 +234,7 @@ dev = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", specifier = ">=0.21.0" },
     { name = "pytest-cov", specifier = ">=5.0.0" },
+    { name = "pytest-github-actions-annotate-failures", specifier = ">=0.4.2" },
     { name = "ruff", specifier = ">=0.1.0" },
     { name = "setuptools", specifier = ">=68.0.0" },
 ]
@@ -2296,6 +2298,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5e/f7/c933acc76f5208b3b00089573cf6a2bc26dc80a8aece8f52bb7d6b1855ca/pytest_cov-7.0.0.tar.gz", hash = "sha256:33c97eda2e049a0c5298e91f519302a1334c26ac65c1a483d6206fd458361af1", size = 54328, upload-time = "2025-09-09T10:57:02.113Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ee/49/1377b49de7d0c1ce41292161ea0f721913fa8722c19fb9c1e3aa0367eecb/pytest_cov-7.0.0-py3-none-any.whl", hash = "sha256:3b8e9558b16cc1479da72058bdecf8073661c7f57f7d3c5f22a1c23507f2d861", size = 22424, upload-time = "2025-09-09T10:57:00.695Z" },
+]
+
+[[package]]
+name = "pytest-github-actions-annotate-failures"
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/00/a0/bdb91581b03c41016c78e16b8ec36c34d8508206fcb30f1951c9cdff2e97/pytest_github_actions_annotate_failures-0.4.2.tar.gz", hash = "sha256:5dd18304512361788bc7b5c5c805db853f03f4950c6be09b088de6bab8e2e6c9", size = 12158, upload-time = "2026-06-19T15:59:17.445Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3c/09/c44e658f3a27c588c2017d858c8b0fa962612af9b74326beabbf010c839c/pytest_github_actions_annotate_failures-0.4.2-py3-none-any.whl", hash = "sha256:02911cd3b55f235328a334f8ca6037a89944398b8e8b028c82de97111eff4071", size = 6151, upload-time = "2026-06-19T15:59:16.486Z" },
 ]
 
 [[package]]
