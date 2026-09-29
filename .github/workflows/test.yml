@@ -20,18 +20,23 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      # 错误输出转 ::error:: 注解：仓库协作者之外无法拉取 job 日志，注解可匿名读。
-      # 分步观测：先验证 uv run 可用；非零退出时倾倒输出大小与非空行，保真优先
+      # 错误输出转 ::error:: 注解：协作者之外无法拉取 job 日志。CI 输出含
+      # ANSI/控制字符会让 GitHub 静默丢弃注解命令，故先剥控制字符并转义 ::；
+      # 空行跳过；文件大小用 notice 探针确认输出是否为空
       - name: Run pytest
         run: |
           uv run python -V
           uv run pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
           status=$?
-          echo "pytest exit=$status size=$(wc -c < /tmp/pytest-out.txt)"
+          size=$(wc -c < /tmp/pytest-out.txt)
+          echo "::notice::pytest exit=$status size=$size bytes"
           if [ $status -ne 0 ]; then
-            tail -20 /tmp/pytest-out.txt | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error::${line:0:250}"
-            done
+            (head -6 /tmp/pytest-out.txt; echo "...[tail]..."; tail -14 /tmp/pytest-out.txt) |
+              tr -d '\000-\010\013\014\016-\037\177' |
+              sed 's/::/%3A%3A/g' |
+              while IFS= read -r line; do
+                [ -n "$line" ] && echo "::error::${line:0:250}"
+              done
           fi
           exit $status
 
