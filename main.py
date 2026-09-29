@@ -84,6 +84,7 @@ _AGENT_REGISTRATION_META: Dict[str, Tuple[str, str]] = {
     ),
     "minecraft": ("minecraft", "游戏 AI 玩家代理（Minecraft / MaiCraftMod）"),
     "text_adv": ("text_adv", "文字冒险游戏 Agent（视觉小说观察与上报）"),
+    "game_2048": ("game_2048", "2048 游戏 Agent（棋局宿主，主播按键驱动，无自动走子）"),
 }
 
 

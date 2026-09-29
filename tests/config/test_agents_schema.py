@@ -191,6 +191,6 @@ class TestAgentTypeLiteral:
         assert set(get_args(AgentType)) == set(SUPPORTED_AGENTS)
 
     def test_agent_type_values_flat(self):
-        """无分类层：AgentType 即顶级注册名全集，game/custom 已移除。"""
+        """无分类层：AgentType 即顶级注册名全集（游戏 Agent 平级展开）。"""
         values = get_args(AgentType)
-        assert set(values) == {"streamer", "minecraft", "text_adv"}
+        assert set(values) == {"streamer", "minecraft", "text_adv", "game_2048"}

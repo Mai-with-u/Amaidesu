@@ -54,6 +54,12 @@ class CoreEvents:
     GAME_ERROR = "game.error"
     GAME_REPORT = "game.report"
 
+    # 进程内游戏状态高频快照（首个发布者：game_2048 每步落子）。
+    # 刻意用三层名：``game.*`` 是单层通配（存储台账借它落 game_events 低频表），
+    # 三层名天然不被它接住——高频快照是呈现流（widget 桥 → 透明页），不进存储；
+    # 同款先例见上方 game.body.* 族。
+    GAME_STATE_CHANGED = "game.state.changed"
+
     # ========== 流程单（Rundown）子系统事件 ==========
     # 唯一发布者：``RundownState`` 变更边界。``rundown.changed`` 涵盖
     # load / goto / next（含 finish）/ pause / resume 五种状态变更；

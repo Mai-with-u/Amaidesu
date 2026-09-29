@@ -20,7 +20,7 @@ from src.modules.agents.base import BaseAgent
 from src.modules.logging import get_logger
 
 # 已实现的 Agent 注册名
-SUPPORTED_AGENTS: tuple[str, ...] = ("streamer", "minecraft", "text_adv")
+SUPPORTED_AGENTS: tuple[str, ...] = ("streamer", "minecraft", "text_adv", "game_2048")
 
 _logger = get_logger("AgentFactory")
 
@@ -145,6 +145,21 @@ def instantiate_agent(
             window_backend=PyGetWindowBackend(),
             capture=MssScreenCapture(),
             input_backend=PyAutoGuiInputBackend(),
+            tool_registry=tool_registry,
+            event_bus=event_bus,
+        )
+
+    if name == "game_2048":
+        from src.agents.game_2048 import Game2048Agent, Game2048Config
+
+        try:
+            game_2048_cfg = Game2048Config(**config) if config else Game2048Config()
+        except Exception as exc:
+            _logger.warning(f"解析 Game2048Config 失败: {exc}; 使用默认配置")
+            game_2048_cfg = Game2048Config()
+        # 棋盘与策略全部进程内，无外部依赖可装配；tool_registry 供启动期自注册工具面
+        return Game2048Agent(
+            config=game_2048_cfg,
             tool_registry=tool_registry,
             event_bus=event_bus,
         )

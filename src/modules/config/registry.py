@@ -40,6 +40,7 @@ EXPECTED_COMPONENTS: tuple[str, ...] = (
     "stt",
     # Agent（配置宿主 agents.toml）
     "minecraft",
+    "game_2048",
 )
 
 # 必须在册的工具提供者清单（新增 provider 时在此与 bootstrap 成员表两处登记）
@@ -83,9 +84,10 @@ def _fill_collectors() -> dict[str, type[BaseConfig]]:
 
 def _fill_agents() -> dict[str, type[BaseConfig]]:
     """从各 Agent 包显式收集 ConfigSchema（包内模块级定义）"""
+    from src.agents.game_2048.config import Game2048Config
     from src.agents.minecraft.config import MinecraftConfig
 
-    return {"minecraft": MinecraftConfig}
+    return {"minecraft": MinecraftConfig, "game_2048": Game2048Config}
 
 
 def _fill_tool_providers() -> dict[tuple[str, str], type[BaseConfig]]:

@@ -1,14 +1,17 @@
 """
 事件 Payload 定义：game.* 游戏事件
 
-定义 4 类游戏事件 Payload（milestone / attention_required / error / report）。
-对应存储 ``game_events`` 表。
+定义低频叙事类 ``GamePayload``（milestone / attention_required / error / report，
+对应存储 ``game_events`` 表）与高频快照类 ``GameBoardStatePayload``
+（进程内游戏状态流，呈现专用、不落存储）。
 
 契约约定：
-- 低频、只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 异常 / 交付与升级）
+- GamePayload 低频、只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 异常 / 交付与升级）
 - 同一 ``GamePayload`` 类在 4 个事件名下复用，通过 ``event_type`` 字段判别
 - ``scene`` 字段携带场景信息（关卡坐标 / 区块名等自由文本），便于回顾
 - ``report_kind`` 仅 report 事件使用：delivery=交付总结 / escalation=升级决策
+- GameBoardStatePayload 每步落子即发，事件名 ``game.state.changed``（三层名
+  避开存储台账的 ``game.*`` 单层通配），订阅者是 widget 呈现桥
 """
 
 from typing import Any, ClassVar, Dict, List, Literal, Optional
@@ -102,4 +105,51 @@ class GamePayload(BasePayload):
     )
 
 
-__all__ = ["GamePayload"]
+@register_event(CoreEvents.GAME_STATE_CHANGED)
+class GameBoardStatePayload(BasePayload):
+    """进程内游戏状态高频快照（呈现流，不落存储）
+
+    事件名：``game.state.changed``——每步状态迁移即发，消费方是 widget
+    呈现桥（推给透明页渲染），刻意不走 ``game_events`` 低频表。
+
+    Attributes:
+        live_session_id: 场次主键（int）。发布方不填（保持默认 0），
+          由场次盖章拦截器注入当前场次的存储主键；0 表示未归属
+        game: 游戏标识（如 "game_2048"）
+        board: 棋盘矩阵（0 表示空格；非方阵棋盘的游戏可自行约定形状）
+        score: 当前累计得分
+        moves: 已完成的有效步数
+        max_tile: 当前盘面最大块值
+        over: 是否终局
+        last_direction: 触发本次变更的落子方向（up/down/left/right；restart
+          或首帧推送为 None——前端据此决定是否播滑动动画）
+        history: 最近若干步的方向序列（旧→新，环形截断；重开一局清空），
+          供前端渲染操作历史
+        timestamp_ms: 事件时间戳（Unix 毫秒）
+    """
+
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入",
+    )
+    game: str = Field(..., description="游戏标识（如 'game_2048'）")
+    board: List[List[int]] = Field(..., description="棋盘矩阵（0 表示空格）")
+    score: int = Field(default=0, ge=0, description="当前累计得分")
+    moves: int = Field(default=0, ge=0, description="已完成的有效步数")
+    max_tile: int = Field(default=0, ge=0, description="当前盘面最大块值")
+    over: bool = Field(default=False, description="是否终局")
+    last_direction: Optional[str] = Field(
+        default=None,
+        description="触发本次变更的落子方向（up/down/left/right）；restart/首帧为 None",
+    )
+    history: List[str] = Field(
+        default_factory=list,
+        description="最近若干步方向序列（旧→新，环形截断；重开清空）",
+    )
+    timestamp_ms: int = Field(
+        default_factory=lambda: now_ms(),
+        description="事件时间戳（Unix 毫秒）",
+    )
+
+
+__all__ = ["GameBoardStatePayload", "GamePayload"]

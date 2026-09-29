@@ -10,14 +10,15 @@
     [agents.streamer]  # 主播 Agent（包内权威：src/agents/streamer/config.py）
     [agents.minecraft]  # Minecraft 游戏 Agent（包内权威：src/agents/minecraft/config.py）
     [agents.text_adv]  # 文字冒险游戏 Agent（包内权威：src/agents/text_adv/config.py）
+    [agents.game_2048]  # 2048 游戏 Agent（包内权威：src/agents/game_2048/config.py）
 
 设计原则：
 - 业务 Agent 统一经 ``[agents]`` 段注册启用
 - Agent 间无分类层——每个 Agent 是一份顶级子配置，**自己拥有全部字段**
   （无 ``[agents.game]`` 公共段，无 ``engine`` 判别字段）
 - 组件配置权威在自身包内（``src/agents/<name>/config.py``），中央树只聚合引用
-- ``enabled`` 列表接受已知 Agent 名（streamer / minecraft / text_adv），
-  未知名由 Pydantic 校验拒绝（extra="forbid" + Literal 约束）
+- ``enabled`` 列表接受已知 Agent 名（streamer / minecraft / text_adv /
+  game_2048），未知名由 Pydantic 校验拒绝（extra="forbid" + Literal 约束）
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ AgentType = Literal[
     "streamer",  # 主播 Agent（Planner+Replyer）
     "minecraft",  # Minecraft 游戏 Agent
     "text_adv",  # 文字冒险游戏 Agent
+    "game_2048",  # 2048 游戏 Agent
 ]
 
 
@@ -98,6 +100,11 @@ class AgentsConfig(BaseConfig):
         description="文字冒险游戏 Agent 配置",
         json_schema_extra={"x-ui-type": "object"},
     )
+    game_2048: Optional["Game2048Config"] = Field(  # type: ignore[name-defined]  # noqa: F821
+        default_factory=lambda: __import__("src.agents.game_2048.config", fromlist=["Game2048Config"]).Game2048Config(),
+        description="2048 游戏 Agent 配置",
+        json_schema_extra={"x-ui-type": "object"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +131,7 @@ class AgentsRootConfig(BaseConfig):
 
 
 # 延迟 import：各 Agent 包内权威 Schema；通过 model_rebuild() 完成前向引用解析。
+from src.agents.game_2048.config import Game2048Config  # noqa: E402, F401
 from src.agents.minecraft.config import MinecraftConfig  # noqa: E402, F401
 from src.agents.streamer.config import StreamerConfig  # noqa: E402, F401
 from src.agents.text_adv.config import TextAdvConfig  # noqa: E402, F401
