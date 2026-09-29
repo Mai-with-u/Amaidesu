@@ -27,16 +27,22 @@ jobs:
         run: uv sync --frozen
 
       # 错误输出转 ::error:: 注解：协作者之外无法拉取 job 日志。注意 Actions
-      # 默认 shell 是 bash -e，pytest 非零退出会当场终止脚本——必须先 set +e
-      # 才能执行到转储逻辑；CI 输出含控制字符需剥除、:: 需转义，否则注解被静默丢弃
+      # 默认 shell 是 bash -e，非零退出会当场终止脚本——必须先 set +e；CI 输出
+      # 含控制字符需剥除、:: 需转义。先跑无缓冲纯收集定位硬崩（SIGILL 类）的
+      # 崩点文件，再跑正式测试
       - name: Run pytest
         run: |
           set +e
-          uv run python -V
-          xvfb-run -a uv run pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
+          uv run python -u -m pytest tests/ --collect-only -q > /tmp/collect.txt 2>&1
+          cstatus=$?
+          if [ $cstatus -ne 0 ]; then
+            tail -20 /tmp/collect.txt | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::[collect]${line:0:250}"
+            done
+            exit $cstatus
+          fi
+          xvfb-run -a uv run python -u -m pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
           status=$?
-          size=$(wc -c < /tmp/pytest-out.txt)
-          echo "::notice::pytest exit=$status size=$size bytes"
           if [ $status -ne 0 ]; then
             sed -n '/= ERRORS =/,/short test summary info/p' /tmp/pytest-out.txt |
               tr -d '\000-\010\013\014\016-\037\177' |
