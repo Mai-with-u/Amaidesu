@@ -569,3 +569,114 @@ class TestGenerateFatalErrorShutdown:
             assert fatal_llm.chat_calls == 1, "不可恢复错误只允许调用一次"
         finally:
             await service.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# ⑥ 付费概率路径（上舰 / SC 概率读配置，不再写死在代码里）
+# ---------------------------------------------------------------------------
+
+
+async def _collect_pay_messages(
+    monkeypatch: pytest.MonkeyPatch,
+    sim_store: SQLiteDatabase,
+    scripted_rolls: List[float],
+    **config_overrides: Any,
+) -> List[RoomMessagePayload]:
+    """按脚本化随机序列驱动主循环，收集 emit 出的付费消息。
+
+    scripted_rolls 依次供给 random.random()（gift_roll / pay_roll），
+    耗尽后回退 0.99（走普通礼物分支，不干扰目标断言）。
+    """
+    rolls = iter(scripted_rolls)
+    monkeypatch.setattr(
+        "src.modules.simulator.service.random.random",
+        lambda: next(rolls, 0.99),
+    )
+
+    received: List[RoomMessagePayload] = []
+
+    async def _capture(event_name: str, payload: Any, source: Optional[str] = None) -> None:
+        if isinstance(payload, RoomMessagePayload):
+            received.append(payload)
+
+    event_bus = EventBus()
+    # 付费消息按类型分流到 gift / super_chat / guard 事件，统一订阅以便捕获
+    for _evt in (
+        CoreEvents.ROOM_MESSAGE_DANMAKU,
+        CoreEvents.ROOM_MESSAGE_GIFT,
+        CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+        CoreEvents.ROOM_MESSAGE_GUARD,
+    ):
+        event_bus.on(_evt, _capture, model_class=RoomMessagePayload)
+
+    fake_llm = _FakeLLMService(reply="普通弹幕", tokens=5)
+    service = SimulatorService(
+        event_bus=event_bus,
+        sim_repo=sim_store.sim,
+        chat_repo=sim_store.chat,
+        services_by_type={type(fake_llm): fake_llm},
+    )
+    await service.setup(
+        _FakeConfigService(
+            _enabled_config(
+                cadence_mode="fixed",
+                fixed_interval_s=1.0,
+                warmup_duration_s=0.0,
+                gift_probability=0.5,  # 拉满上限（le=0.5），配合脚本 gift_roll 必进付费分支
+                **config_overrides,
+            )
+        )
+    )
+    try:
+        deadline = asyncio.get_event_loop().time() + 3.0
+        while not received and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+    finally:
+        await service.stop()
+        await service.cleanup()
+    return received
+
+
+@pytest.mark.asyncio
+async def test_guard_probability_from_config(monkeypatch: pytest.MonkeyPatch, sim_store: SQLiteDatabase) -> None:
+    """guard_probability 命中时走上舰分支（原 0.05 硬编码改读配置）。"""
+    received = await _collect_pay_messages(
+        monkeypatch,
+        sim_store,
+        scripted_rolls=[0.1, 0.01],  # gift_roll 进付费分支；pay_roll 命中上舰
+        guard_probability=1.0,
+    )
+    assert received, "应至少 emit 一条消息"
+    assert received[0].message_type == "guard", "guard_probability=1.0 时首条付费消息必须是上舰"
+    assert received[0].guard is not None
+
+
+@pytest.mark.asyncio
+async def test_sc_pay_probability_from_config(monkeypatch: pytest.MonkeyPatch, sim_store: SQLiteDatabase) -> None:
+    """pay_roll 落在上舰概率之外、SC 累计上限之内时走 SC 分支（原 0.20 硬编码改读配置）。"""
+    received = await _collect_pay_messages(
+        monkeypatch,
+        sim_store,
+        scripted_rolls=[0.1, 0.10],  # pay_roll=0.10：避开上舰（0.0）、命中 SC（<1.0）
+        guard_probability=0.0,
+        sc_pay_probability=1.0,
+    )
+    assert received, "应至少 emit 一条消息"
+    assert received[0].message_type == "super_chat", "sc_pay_probability 覆盖 pay_roll 时必须走 SC 分支"
+    assert received[0].sc is not None
+
+
+@pytest.mark.asyncio
+async def test_pay_fallback_to_gift_when_probabilities_zero(
+    monkeypatch: pytest.MonkeyPatch, sim_store: SQLiteDatabase
+) -> None:
+    """上舰/SC 概率均为 0 时，付费消息回退为普通礼物分支。"""
+    received = await _collect_pay_messages(
+        monkeypatch,
+        sim_store,
+        scripted_rolls=[0.1, 0.10],  # pay_roll 不小于任何上限 → 走礼物
+        guard_probability=0.0,
+        sc_pay_probability=0.0,
+    )
+    assert received, "应至少 emit 一条消息"
+    assert received[0].message_type == "gift", "概率全零时付费分支必须回退为普通礼物"

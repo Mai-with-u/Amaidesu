@@ -21,6 +21,7 @@ class Game2048Config(BaseConfig):
 
     milestone_tile: int = Field(
         default=256,
+        title="里程碑起始块值",
         ge=8,
         description="里程碑播报起始块值（首次达到后每翻倍一档再播）",
     )

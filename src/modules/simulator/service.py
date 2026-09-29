@@ -371,7 +371,7 @@ class SimulatorService:
                 if gift_roll < self._config_obj.gift_probability:
                     pay_roll = random.random()
                     # 小概率上舰（付费明细链路的模拟数据源：guards 表落库 + 付费统计）
-                    if pay_roll < 0.05:
+                    if pay_roll < self._config_obj.guard_probability:
                         guard_event = await self._gift_generator.generate_guard(context=context)
                         await self._emit_message(
                             message_type="guard",
@@ -382,7 +382,7 @@ class SimulatorService:
                         self._persona_pool.record_message(guard_event.persona)
                         continue
                     # SC 分支（SC 文本经 LLM 生成；LLM 不可用时仅发金额载荷）
-                    if pay_roll < 0.20:
+                    if pay_roll < self._config_obj.sc_pay_probability:
                         sc_event = await self._gift_generator.generate_sc(context=context)
                         if sc_event is not None:
                             await self._emit_message(
