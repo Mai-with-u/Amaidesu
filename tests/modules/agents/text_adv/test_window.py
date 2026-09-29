@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import pytest
@@ -10,6 +11,13 @@ from src.agents.text_adv.window import (
     FakeWindowBackend,
     PyGetWindowBackend,
     WindowInfo,
+)
+
+# pygetwindow 仅提供 Windows/macOS 实现（无 Linux 分支），无显示环境无法
+# 实例化；这些用例在 Windows 本地真实执行，CI（Linux）按平台条件跳过。
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="pygetwindow 仅支持 Windows/macOS，Linux CI 无此平台实现",
 )
 
 

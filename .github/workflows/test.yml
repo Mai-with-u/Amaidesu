@@ -16,10 +16,11 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      # sounddevice 的 Windows wheel 自带 PortAudio，Linux 需系统库
-      # （tests/agents 收集链 import 音频模块时触发）
-      - name: Install PortAudio
-        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+      # Windows wheel 自带的系统库 Linux 需要安装：libportaudio2（sounddevice
+      # 的 tests/agents 收集链触发）；xvfb 提供虚拟显示（pyautogui 等 GUI 库
+      # 在无显示环境无法 import/实例化）
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 xvfb
 
       # 依赖版本以 uv.lock 为准，锁定安装保证 CI 与本地一致
       - name: Install dependencies
@@ -32,7 +33,7 @@ jobs:
         run: |
           set +e
           uv run python -V
-          uv run pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
+          xvfb-run -a uv run pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
           status=$?
           size=$(wc -c < /tmp/pytest-out.txt)
           echo "::notice::pytest exit=$status size=$size bytes"
