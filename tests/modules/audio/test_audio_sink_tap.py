@@ -10,12 +10,23 @@
 from __future__ import annotations
 
 from typing import List, Tuple
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
 
+from src.modules.audio import audio_device_manager
 from src.modules.audio.audio_device_manager import AudioDeviceManager
+
+
+@pytest.fixture(autouse=True)
+def mock_sd(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """分接测试只验证播放器接线，不依赖测试机的输出设备。"""
+    backend = MagicMock(spec=["OutputStream", "play", "stop"])
+    monkeypatch.setattr(audio_device_manager, "sd", backend, raising=False)
+    monkeypatch.setattr(audio_device_manager, "DEPENDENCIES_OK", True)
+    monkeypatch.setattr(audio_device_manager.asyncio, "sleep", AsyncMock())
+    return backend
 
 
 class _StubSink:
@@ -56,18 +67,42 @@ def test_write_chunk_feeds_sink():
     assert (fed_chunk == chunk).all()
 
 
-def test_stream_lifecycle_drives_sink_session():
+def test_stream_lifecycle_drives_sink_session(mock_sd: MagicMock) -> None:
     """start_stream 开 sink 会话、stop_stream 收会话（同步开关，D2）。"""
     sink = _StubSink()
     mgr = AudioDeviceManager(sample_rate=32000, sink=sink)
 
     mgr.start_stream(utterance_id="utt_tap_1")
-    mgr.write_chunk(np.zeros(16, dtype=np.int16))
+    assert mgr.is_playing
+    chunk = np.zeros(16, dtype=np.int16)
+    mgr.write_chunk(chunk)
     mgr.stop_stream()
 
+    mock_sd.OutputStream.assert_called_once_with(samplerate=32000, channels=1, dtype=np.int16, device=None)
+    stream = mock_sd.OutputStream.return_value
+    stream.start.assert_called_once_with()
+    stream.write.assert_called_once_with(chunk)
+    stream.stop.assert_called_once_with()
+    stream.close.assert_called_once_with()
+    assert not mgr.is_playing
+    assert mgr._stream is None
     kinds = [c[0] for c in sink.calls]
     assert kinds == ["start", "feed", "stop"]
     assert sink.calls[0][1] == "utt_tap_1"
+
+
+def test_failed_stream_start_does_not_open_sink_session(mock_sd: MagicMock) -> None:
+    """设备创建失败走清理路径，不能伪造成功开播的分接会话。"""
+    mock_sd.OutputStream.side_effect = RuntimeError("no output device")
+    sink = _StubSink()
+    mgr = AudioDeviceManager(sample_rate=32000, sink=sink)
+
+    mgr.start_stream(utterance_id="utt_failed")
+    mgr.stop_stream()
+
+    assert not mgr.is_playing
+    assert mgr._stream is None
+    assert sink.calls == [("stop", None)]
 
 
 def test_sink_exception_is_fail_soft():
@@ -89,26 +124,18 @@ def test_no_sink_is_passthrough():
     # 不抛即通过
 
 
-def test_full_playback_taps_sink():
-    """全量播法（play_audio）同样分接；依赖缺失时跳过播放但分接会话仍开关。
-
-    注：play_audio 在 sounddevice 缺失环境会 RuntimeError（播放本身失败），
-    但 sink 的 start/feed/stop 异常兜底各自独立——本用例只验证 sink 调用
-    形态，不依赖声卡。
-    """
+@pytest.mark.asyncio
+async def test_full_playback_taps_sink(mock_sd: MagicMock) -> None:
+    """全量播法同样依次开会话、分接整段音频、关闭会话。"""
     sink = _StubSink()
     mgr = AudioDeviceManager(sample_rate=16000, sink=sink)
     audio = np.zeros(256, dtype=np.int16)
 
-    try:
-        import asyncio
+    await mgr.play_audio(audio, samplerate=16000)
 
-        asyncio.run(mgr.play_audio(audio, samplerate=16000))
-    except Exception:
-        pass  # 声卡依赖缺失/播放失败的路径：播放异常与分接正交
-
+    mock_sd.play.assert_called_once_with(audio, samplerate=16000, device=None)
     kinds = [c[0] for c in sink.calls]
-    assert "feed" in kinds  # 音频已复制递入
+    assert kinds == ["start", "feed", "stop"]
 
 
 def test_engine_constructs_manager_with_sink_kwarg():

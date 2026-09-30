@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import time
+
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler
 
 
@@ -71,6 +73,7 @@ def test_environment_render_details() -> None:
     text = PlannerAssembler().assemble(
         AssemblerInputs(environment=EnvironmentBlock(minute_bucket_ms=0, duration_so_far_ms=0))
     )
-    assert "- 时刻: 1970-01-01 08:00" in text  # 本机 UTC+8
+    local_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(0))
+    assert f"- 时刻: {local_time}" in text
     assert "已开播时长" not in text
     assert "0 分钟" not in text

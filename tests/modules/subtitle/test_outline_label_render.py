@@ -4,6 +4,11 @@
 （如描边与色键背景混合的绿色中间色）。
 """
 
+from typing import Any
+from unittest.mock import MagicMock
+
+from PIL import ImageFont
+
 from src.modules.subtitle.backends.tk_gui_service import OutlineLabel
 
 BG = "#00FF00"
@@ -11,7 +16,7 @@ TEXT = "#FFFFFF"
 OUTLINE = "#000000"
 
 
-def _make_label(**overrides):
+def _make_label(**overrides: Any) -> OutlineLabel:
     class FakeCanvas:
         def pack(self, **kwargs):
             pass
@@ -26,7 +31,7 @@ def _make_label(**overrides):
             return 100
 
     label = OutlineLabel.__new__(OutlineLabel)
-    label.display_text = overrides.get("text", "测试字幕")
+    label.display_text = overrides.get("text", "Test subtitles")
     label.text_color = overrides.get("text_color", TEXT)
     label.outline_color = overrides.get("outline_color", OUTLINE)
     label.outline_width = overrides.get("outline_width", 2)
@@ -38,6 +43,10 @@ def _make_label(**overrides):
     label._photo = None
     label.canvas = FakeCanvas()
     label.logger = None
+    # 用 Pillow 内嵌 TrueType 字体验证真实像素渲染，避免依赖宿主机的
+    # 雅黑/Segoe 安装状态；emoji 用不同字号，确保测量实际区分两种字体。
+    label._load_font = MagicMock(return_value=ImageFont.load_default(size=label._font_px))
+    label._load_emoji_font = MagicMock(return_value=ImageFont.load_default(size=label._font_px + 10))
     return label
 
 
@@ -45,6 +54,8 @@ def test_render_pixels_only_three_colors():
     img = _make_label()._render_text(800, 100, BG)
     assert img is not None
     colors = set(img.getdata())
+    assert ImageColorToTuple(TEXT) in colors
+    assert ImageColorToTuple(OUTLINE) in colors
     # 只允许 背景色 / 描边色 / 文字色 三种纯色，无抗锯齿中间色（绿边回归）
     assert colors <= {ImageColorToTuple(BG), ImageColorToTuple(OUTLINE), ImageColorToTuple(TEXT)}, colors
 
@@ -59,11 +70,12 @@ def test_render_no_outline_when_disabled():
     img = _make_label(outline_enabled=False)._render_text(800, 100, BG)
     assert img is not None
     colors = set(img.getdata())
+    assert ImageColorToTuple(TEXT) in colors
     assert ImageColorToTuple(OUTLINE) not in colors
 
 
 def test_wrap_lines_respects_width():
-    label = _make_label(text="这是一段比较长的字幕文本，用于测试折行是否超出窗口宽度限制")
+    label = _make_label(text="这是一段比较长的字幕文本，用于测试折行是否超出窗口宽度限制" * 2)
     font = label._load_font()
     assert font is not None
     lines = label._wrap_lines(font, 800)
@@ -105,21 +117,22 @@ def test_split_emoji_runs_classifies_and_glues_joiners():
     assert label._split_emoji_runs("纯文本") == [("纯文本", False)]
 
 
-def test_emoji_font_renders_monochrome_ink():
+def test_emoji_font_mask_is_binary() -> None:
     label = _make_label(text="✅")
     emoji_font = label._load_emoji_font()
-    if emoji_font is None:
-        import pytest
-
-        pytest.skip("缺少 Segoe UI Emoji 字体（非 Windows 环境）")
+    assert emoji_font is not None
     bbox = emoji_font.getbbox("✅")
     assert bbox is not None and bbox[2] > bbox[0] and bbox[3] > bbox[1]
+    ink = set(bytes(emoji_font.getmask("✅", mode="1")))
+    assert ink <= {0, 255}
+    assert 255 in ink
 
 
 def test_render_emoji_pixels_only_three_colors():
     img = _make_label(text="完成✅🔥")._render_text(800, 100, BG)
     assert img is not None
     colors = set(img.getdata())
+    assert ImageColorToTuple(TEXT) in colors
     # emoji 走单色轮廓渲染，同样只允许三种纯色（无彩色/抗锯齿中间色）
     assert colors <= {ImageColorToTuple(BG), ImageColorToTuple(OUTLINE), ImageColorToTuple(TEXT)}, colors
 
