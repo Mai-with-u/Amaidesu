@@ -4,6 +4,9 @@ on: [ push, pull_request ]
 jobs:
   backend-test:
     runs-on: ubuntu-latest
+    env:
+      # 渲染测试使用有中文字形的真实字体，不依赖 Windows 字体安装。
+      AMAIDESU_TEST_FONT: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -16,56 +19,61 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      # Windows wheel 自带的系统库 Linux 需要安装：libportaudio2（sounddevice
-      # 的 tests/agents 收集链触发）；xvfb 提供虚拟显示（pyautogui 等 GUI 库
-      # 在无显示环境无法 import/实例化）
+      # 音频库、虚拟显示和中文字体分别满足导入与渲染需求；声卡由测试隔离。
       - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y libportaudio2 xvfb
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 xvfb fonts-noto-cjk
 
-      # 依赖版本以 uv.lock 为准，锁定安装保证 CI 与本地一致
+      # 依赖版本以 uv.lock 为准，锁定安装保证 CI 与本地一致。
       - name: Install dependencies
         run: uv sync --frozen
 
-      # 错误输出转 ::error:: 注解：协作者之外无法拉取 job 日志。注意 Actions
-      # 默认 shell 是 bash -e，非零退出会当场终止脚本——必须先 set +e；CI 输出
-      # 含控制字符需剥除、:: 需转义。先跑无缓冲纯收集定位硬崩（SIGILL 类）的
-      # 崩点文件，再跑正式测试
+      - name: Check test font
+        run: test -r "$AMAIDESU_TEST_FONT"
+
+      # tee 保留完整输出；pipefail 让 pytest 失败不会被 tee 的成功退出掩盖。
+      # 单独收集便于区分导入阶段的原生崩溃与实际测试失败。
       - name: Run pytest
+        shell: bash
         run: |
-          set +e
-          xvfb-run -a uv run python -u -m pytest tests/ --collect-only -q > /tmp/collect.txt 2>&1
-          cstatus=$?
-          if [ $cstatus -ne 0 ]; then
-            tail -20 /tmp/collect.txt | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error::[collect]${line:0:250}"
-            done
-            exit $cstatus
-          fi
-          xvfb-run -a uv run python -u -m pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
-          status=$?
-          if [ $status -ne 0 ]; then
-            sed -n '/= ERRORS =/,/short test summary info/p' /tmp/pytest-out.txt |
-              tr -d '\000-\010\013\014\016-\037\177' |
-              sed 's/::/%3A%3A/g' |
-              grep -v '^\s*$' |
-              head -30 |
-              while IFS= read -r line; do
-                echo "::error::${line:0:250}"
-              done
-            sed -n '/= FAILURES =/,/short test summary info/p' /tmp/pytest-out.txt |
-              tr -d '\000-\010\013\014\016-\037\177' |
-              sed 's/::/%3A%3A/g' |
-              grep -vE '^\s*$|^_{10,}|^={10,}' |
-              head -40 |
-              while IFS= read -r line; do
-                echo "::error::${line:0:250}"
-              done
-            grep -E "^(FAILED|ERROR) " /tmp/pytest-out.txt | head -25 |
-              while IFS= read -r line; do
-                echo "::error::${line:0:250}"
-              done
-          fi
-          exit $status
+          set -o pipefail
+          mkdir -p test-results
+          xvfb-run -a uv run python -u -m pytest tests/ --collect-only -q 2>&1 | tee test-results/collect.log
+          xvfb-run -a uv run python -u -m pytest tests/ -q --tb=short \
+            -k "not test_context_restored_after_exit and not test_nested_context_restore" \
+            --junitxml=test-results/pytest.xml 2>&1 | tee test-results/pytest.log
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-reports
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  windows-dpi-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run Windows DPI tests
+        run: >-
+          uv run python -m pytest
+          tests/modules/vision/test_mss_capture.py::TestPerMonitorDpiThread::test_context_restored_after_exit
+          tests/modules/vision/test_mss_capture.py::TestPerMonitorDpiThread::test_nested_context_restore
+          -q --tb=short
 
   frontend-test:
     runs-on: ubuntu-latest
@@ -76,8 +84,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # uses 步骤不吃 defaults.run.working-directory，packageManager 声明在
-      # dashboard/package.json，action 找不到 → 显式钉版本
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
