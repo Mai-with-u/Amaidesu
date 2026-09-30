@@ -13,8 +13,11 @@
 
 from __future__ import annotations
 
+import ctypes
 import time
+from types import SimpleNamespace
 from typing import Any, List, Optional
+from unittest.mock import MagicMock
 
 import pytest
 from loguru import logger as _loguru_logger
@@ -519,32 +522,43 @@ class TestRegionOutputInResult:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def dpi_api(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """模拟线程 DPI 状态，让任意平台都能验证 Windows 分支的切换和恢复。"""
+    context = {"current": 17}
+
+    def set_context(value: ctypes.c_void_p) -> int:
+        previous = context["current"]
+        context["current"] = value.value
+        return previous
+
+    user32 = MagicMock()
+    user32.SetThreadDpiAwarenessContext.side_effect = set_context
+    user32.GetThreadDpiAwarenessContext.side_effect = lambda: context["current"]
+    monkeypatch.setattr(mss_capture_module, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(mss_capture_module.ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+    return user32
+
+
 class TestPerMonitorDpiThread:
-    @staticmethod
-    def _current_thread_dpi_context() -> int | None:
-        import ctypes
-
-        user32 = ctypes.windll.user32
-        user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
-        user32.GetThreadDpiAwarenessContext.argtypes = []
-        ctx = user32.GetThreadDpiAwarenessContext()
-        return int(ctx) if ctx else None
-
-    def test_context_restored_after_exit(self):
-        # Windows 上进出上下文后，线程 DPI 上下文应还原
-        before = self._current_thread_dpi_context()
+    def test_context_restored_after_exit(self, dpi_api: MagicMock) -> None:
+        before = dpi_api.GetThreadDpiAwarenessContext()
         with _per_monitor_dpi_thread():
-            pass
-        after = self._current_thread_dpi_context()
+            assert dpi_api.GetThreadDpiAwarenessContext() == ctypes.c_void_p(-4).value
+        after = dpi_api.GetThreadDpiAwarenessContext()
         assert before == after
+        assert dpi_api.SetThreadDpiAwarenessContext.call_count == 2
 
-    def test_nested_context_restore(self):
+    def test_nested_context_restore(self, dpi_api: MagicMock) -> None:
         # 嵌套使用（capture 内 list_monitors + grab 两处包裹）也应正确还原
-        before = self._current_thread_dpi_context()
+        before = dpi_api.GetThreadDpiAwarenessContext()
         with _per_monitor_dpi_thread():
+            assert dpi_api.GetThreadDpiAwarenessContext() == ctypes.c_void_p(-4).value
             with _per_monitor_dpi_thread():
-                pass
-        assert before == self._current_thread_dpi_context()
+                assert dpi_api.GetThreadDpiAwarenessContext() == ctypes.c_void_p(-4).value
+            assert dpi_api.GetThreadDpiAwarenessContext() == ctypes.c_void_p(-4).value
+        assert before == dpi_api.GetThreadDpiAwarenessContext()
+        assert dpi_api.SetThreadDpiAwarenessContext.call_count == 4
 
     def test_yields_on_non_windows(self, monkeypatch):
         # 非 Windows 平台：API 缺失时按原行为直通（不抛、正常 yield）

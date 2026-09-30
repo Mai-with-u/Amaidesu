@@ -1,0 +1,93 @@
+name: Test
+on: [ push, pull_request ]
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    env:
+      AMAIDESU_TEST_FONT: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 xvfb fonts-noto-cjk
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Check test font
+        run: test -r "$AMAIDESU_TEST_FONT"
+
+      - name: Lint regression tests
+        run: >-
+          uv run ruff check
+          tests/agents/streamer/test_planner_context.py
+          tests/modules/audio/test_audio_sink_tap.py
+          tests/modules/subtitle/test_outline_label_render.py
+          tests/modules/vision/test_mss_capture.py
+          tests/modules/vision/test_mss_capture_windows.py
+
+      # 本分支的窗口后端在导入时需要 Win32；全量测试由下方 Windows job 执行。
+      # Linux 独立验证本次消除时区、声卡、字体和 DPI 环境依赖的回归测试。
+      - name: Run Linux portability regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          xvfb-run -a uv run python -X faulthandler -u -m pytest \
+            tests/agents/streamer/test_planner_context.py \
+            tests/modules/audio/test_audio_sink_tap.py \
+            tests/modules/subtitle/test_outline_label_render.py \
+            tests/modules/vision/test_mss_capture.py \
+            tests/modules/vision/test_mss_capture_windows.py \
+            -v --tb=short --junitxml=test-results/pytest.xml 2>&1 | tee test-results/pytest.log
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-reports
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  windows-backend-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # 全量包含真实 Win32 DPI、中文和 Segoe Emoji 字体验证，不排除用例。
+      - name: Run full backend suite on Windows
+        run: >-
+          uv run python -X faulthandler -u -m pytest tests/
+          -v --tb=short --junitxml=test-results/windows.xml
+
+      - name: Upload Windows test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-reports
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
