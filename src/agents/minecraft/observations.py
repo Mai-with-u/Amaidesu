@@ -88,7 +88,7 @@ class MinecraftObservations:
         return result
 
     def read(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """通过 JSON Pointer 定位并分页阅读历史原文，搜索结果也保留可继续读取的偏移。"""
+        """选定历史字段默认一次读完；显式分页和搜索仍保留兼容入口。"""
         ref = str(arguments.get("ref") or "")
         query = str(arguments.get("query") or "")
         offset = arguments.get("offset", 0)
@@ -121,6 +121,24 @@ class MinecraftObservations:
             else:
                 raise ValueError(f"原始观察中不存在路径 {path}")
         text = value if isinstance(value, str) else json_text(value)
+        # 指定了证据和字段就是明确的读取范围，不再让模型为同一段原文多调用几轮。
+        if "limit" not in arguments and offset == 0 and not query:
+            return self.mark_read(
+                {
+                    "ok": True,
+                    "ref": ref,
+                    "path": path,
+                    "source_tool": entry["tool"],
+                    "source": source,
+                    "observed_at_ms": entry["observed_at_ms"],
+                    "value": deepcopy(value),
+                    "offset": 0,
+                    "next_offset": None,
+                    "total_chars": len(text),
+                    "complete": True,
+                    "historical": True,
+                }
+            )
         if query:
             found = text.find(query, offset)
             if found < 0:
@@ -129,7 +147,7 @@ class MinecraftObservations:
                 )
             offset = max(offset, found - min(200, limit // 4))
         end = min(len(text), offset + limit)
-        # 历史原件保留完整，当前页同时限制转义后的体积；调用者沿 next_offset 续读，不重新灌入整份蓝图。
+        # 仅在主动指定分页或搜索时限制片段；默认原文已由上面的完整读取分支交付。
         while end > offset and len(json_text(text[offset:end])) > max(6000, limit):
             end = offset + (end - offset) // 2
         return self.mark_read(

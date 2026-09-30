@@ -34,6 +34,7 @@ from src.agents.minecraft.builder.controller import MinecraftBuilderController
 from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
 from src.agents.minecraft.design_progress import MachineDesignProgress
 from src.agents.minecraft.observations import MinecraftObservations, json_text, repeated_read
+from src.agents.minecraft.observation_context import project_context
 from src.agents.minecraft.plan_facts import MinecraftPlanFacts
 from src.agents.minecraft.readback import is_reference, read_receipt
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
@@ -741,7 +742,8 @@ class MinecraftAgent(BaseAgent):
             on_delta = self._build_thinking_callback(mc_round, steps, mc_seq_box) if mc_round else None
             try:
                 response = await self._llm.generate(
-                    list(messages),
+                    # 原文留在工作历史；本轮仅引用仍在实际请求中的相同证据，整理掉的内容会自动完整重现。
+                    project_context(messages),
                     profile=MINECRAFT_PROFILE,
                     tools=tool_defs,
                     on_delta=on_delta,
@@ -1037,13 +1039,14 @@ class MinecraftAgent(BaseAgent):
 
     async def _prepare_context(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> bool:
         """历史超预算才生成检查点，失败保留原件并挂起，避免无上下文地继续操作游戏。"""
-        if context_chars(messages, tools) <= self.typed_config.context.max_context_chars:
+        if context_chars(project_context(messages), tools) <= self.typed_config.context.max_context_chars:
             return True
         try:
             await self._context_compactor.compact(
                 messages,
                 tools,
                 self._current_task_context(),
+                context_projector=project_context,
             )
         except asyncio.CancelledError:
             raise

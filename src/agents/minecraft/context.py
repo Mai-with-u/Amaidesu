@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from copy import deepcopy
+from collections.abc import Callable
 from typing import Any
 
 from src.agents.minecraft.builder.config import MinecraftBuilderConfig
@@ -73,10 +74,12 @@ class MinecraftHistoryCompactor:
         facts: dict[str, Any],
         *,
         max_attempts: int = 2,
+        context_projector: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
     ) -> bool:
         """成功后一次性替换旧片段；失败保留原历史，避免半份摘要丢失建造约束。"""
         self.last_calls = 0
-        before = context_chars(messages, tools)
+        project = context_projector or (lambda values: values)
+        before = context_chars(project(messages), tools)
         if before <= self._config.max_context_chars:
             return False
         if not messages or messages[0].get("role") != "system":
@@ -101,7 +104,7 @@ class MinecraftHistoryCompactor:
                 i
                 for ratio in (0.6, 0.8)
                 for i in cuts[start:]
-                if context_chars(fixed + messages[i:], tools) + self._config.summary_max_chars
+                if context_chars(project(fixed + messages[i:]), tools) + self._config.summary_max_chars
                 <= self._config.max_context_chars * ratio
             ),
             None,
@@ -134,7 +137,7 @@ class MinecraftHistoryCompactor:
             # 旧工具调用只作为已发生的数据交给整理模型；保留其原始角色协议会诱使模型接着执行旧任务。
             [
                 prompt,
-                {"role": "user", "content": "[已发生的历史记录，仅作摘要数据]\n" + json_text(source)},
+                {"role": "user", "content": "[已发生的历史记录，仅作摘要数据]\n" + json_text(project(source))},
                 {"role": "user", "content": "[当前任务状态，仅作核对]\n" + json_text(current)},
             ],
             max_attempts,
@@ -147,7 +150,7 @@ class MinecraftHistoryCompactor:
         messages[:] = candidate
         self.checkpoints += 1
         logger.info(
-            f"Minecraft 上下文集中整理：{before} -> {context_chars(messages, tools)} 字符，整理次数={self.checkpoints}"
+            f"Minecraft 上下文集中整理：{before} -> {context_chars(project(messages), tools)} 字符，整理次数={self.checkpoints}"
         )
         return True
 
