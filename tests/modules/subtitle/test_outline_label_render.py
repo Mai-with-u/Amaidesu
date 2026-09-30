@@ -1,11 +1,12 @@
-"""OutlineLabel PIL 渲染测试：二值（无抗锯齿）合成，像素仅含三种纯色。
+"""OutlineLabel PIL 渲染测试：二值合成，像素仅含三种纯色。
 
-防止回归：Canvas 原生抗锯齿文字在 ``-transparentcolor`` 打孔后残留脏边
-（如描边与色键背景混合的绿色中间色）。
+真实中文字体覆盖字形渲染，受控字体度量单独覆盖混排分支。
 """
 
 import os
+import sys
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from PIL import ImageColor
@@ -38,8 +39,7 @@ def _make_label(**overrides: Any) -> OutlineLabel:
     label.outline_width = overrides.get("outline_width", 2)
     label.outline_enabled = overrides.get("outline_enabled", True)
     label._background_color = overrides.get("background_color", BG)
-    # CI 显式提供覆盖中文的字体；本地 Windows 沿用真实字体解析路径。
-    # 不使用 Pillow 默认西文字体，避免中文缺字方块造成假通过。
+    # CI 显式提供中文字体；Windows 沿用真实字体解析路径。
     label.font_obj = (os.environ.get("AMAIDESU_TEST_FONT", "Microsoft YaHei UI"), 28, "bold")
     label.font_size_px = overrides.get("font_size_px", 28)
     label._font_px = round(label.font_size_px * 4 / 3)
@@ -49,16 +49,17 @@ def _make_label(**overrides: Any) -> OutlineLabel:
     return label
 
 
+def ImageColorToTuple(color_hex: str) -> tuple[int, int, int]:
+    return ImageColor.getrgb(color_hex)
+
+
 def test_render_pixels_only_three_colors() -> None:
     img = _make_label()._render_text(800, 100, BG)
     assert img is not None
     colors = set(img.getdata())
     assert colors <= {ImageColorToTuple(BG), ImageColorToTuple(OUTLINE), ImageColorToTuple(TEXT)}, colors
     assert ImageColorToTuple(TEXT) in colors
-
-
-def ImageColorToTuple(color_hex: str) -> tuple[int, int, int]:
-    return ImageColor.getrgb(color_hex)
+    assert ImageColorToTuple(OUTLINE) in colors
 
 
 def test_render_no_outline_when_disabled() -> None:
@@ -67,6 +68,21 @@ def test_render_no_outline_when_disabled() -> None:
     colors = set(img.getdata())
     assert ImageColorToTuple(OUTLINE) not in colors
     assert ImageColorToTuple(TEXT) in colors
+
+
+def test_chinese_font_has_real_glyphs_and_binary_masks() -> None:
+    """非空图片仍可能全是缺字方块，必须验证中文墨迹与缺字字形不同。"""
+    font = _make_label()._load_font()
+    assert font is not None
+    missing = bytes(font.getmask("\U0010ffff", mode="1"))
+    glyphs = []
+    for character in "测试字幕":
+        ink = bytes(font.getmask(character, mode="1"))
+        assert ink != missing
+        assert set(ink) <= {0, 255}
+        assert 255 in ink
+        glyphs.append(ink)
+    assert len(set(glyphs)) == 4
 
 
 def test_wrap_lines_respects_width() -> None:
@@ -112,12 +128,18 @@ def test_split_emoji_runs_classifies_and_glues_joiners() -> None:
 
 
 def test_emoji_font_renders_monochrome_ink() -> None:
-    label = _make_label(text="✅")
-    emoji_font = label._load_emoji_font()
+    """真实 Segoe Emoji 由 Windows CI 验证，不能以缺字方块代替。"""
+    emoji_font = _make_label(text="✅")._load_emoji_font()
     if emoji_font is None:
-        pytest.skip("缺少 Segoe UI Emoji 字体（非 Windows 环境）")
+        if sys.platform == "win32":
+            pytest.fail("Windows 未加载到 Segoe UI Emoji 字体")
+        pytest.skip("真实 Segoe UI Emoji 字体由 Windows CI 验证")
     bbox = emoji_font.getbbox("✅")
     assert bbox is not None and bbox[2] > bbox[0] and bbox[3] > bbox[1]
+    ink = bytes(emoji_font.getmask("✅", mode="1"))
+    assert set(ink) <= {0, 255}
+    assert 255 in ink
+    assert ink != bytes(emoji_font.getmask("\U0010ffff", mode="1"))
 
 
 def test_render_emoji_pixels_only_three_colors() -> None:
@@ -138,6 +160,20 @@ def test_wrap_lines_counts_emoji_width() -> None:
     for line in lines:
         width = 0.0
         for seg, use_emoji in label._split_emoji_runs(line):
-            f = emoji_font if (use_emoji and emoji_font) else font
-            width += f.getlength(seg)
+            selected = emoji_font if (use_emoji and emoji_font) else font
+            width += selected.getlength(seg)
         assert width <= 780
+
+
+def test_wrap_lines_uses_distinct_emoji_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    """受控宽度验证字体分派，不把缺字字形当作真实 emoji 验证。"""
+    label = _make_label(text="A✅B✅C")
+    main_font = MagicMock()
+    main_font.getlength.side_effect = lambda text: 10 * len(text)
+    emoji_font = MagicMock()
+    emoji_font.getlength.side_effect = lambda text: 60 * len(text)
+    monkeypatch.setattr(label, "_load_emoji_font", lambda: emoji_font)
+
+    assert label._wrap_lines(main_font, 100) == ["A✅B", "✅C"]
+    assert main_font.getlength.call_count == 3
+    assert emoji_font.getlength.call_count == 2

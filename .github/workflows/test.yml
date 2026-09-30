@@ -5,7 +5,7 @@ jobs:
   backend-test:
     runs-on: ubuntu-latest
     env:
-      # 渲染测试使用有中文字形的真实字体，不依赖 Windows 字体安装。
+      # 渲染测试使用真实中文字体，不依赖 Windows 字体安装。
       AMAIDESU_TEST_FONT: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
     steps:
       - name: Checkout code
@@ -19,27 +19,33 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      # 音频库、虚拟显示和中文字体分别满足导入与渲染需求；声卡由测试隔离。
       - name: Install system packages
         run: sudo apt-get update && sudo apt-get install -y libportaudio2 xvfb fonts-noto-cjk
 
-      # 依赖版本以 uv.lock 为准，锁定安装保证 CI 与本地一致。
       - name: Install dependencies
         run: uv sync --frozen
 
       - name: Check test font
         run: test -r "$AMAIDESU_TEST_FONT"
 
-      # tee 保留完整输出；pipefail 让 pytest 失败不会被 tee 的成功退出掩盖。
-      # 单独收集便于区分导入阶段的原生崩溃与实际测试失败。
+      - name: Lint regression tests
+        run: >-
+          uv run ruff check
+          tests/agents/streamer/test_planner_context.py
+          tests/modules/audio/test_audio_sink_tap.py
+          tests/modules/subtitle/test_outline_label_render.py
+          tests/modules/vision/test_mss_capture.py
+          tests/modules/vision/test_mss_capture_windows.py
+
+      # 模拟 DPI 测试在全部平台执行；真实 Win32 集成测试另由 Windows 执行。
+      # pipefail 保留失败状态，faulthandler 和完整日志用于追踪原生崩溃。
       - name: Run pytest
         shell: bash
         run: |
           set -o pipefail
           mkdir -p test-results
-          xvfb-run -a uv run python -u -m pytest tests/ --collect-only -q 2>&1 | tee test-results/collect.log
-          xvfb-run -a uv run python -u -m pytest tests/ -q --tb=short \
-            -k "not test_context_restored_after_exit and not test_nested_context_restore" \
+          xvfb-run -a uv run python -X faulthandler -u -m pytest tests/ --collect-only -q 2>&1 | tee test-results/collect.log
+          xvfb-run -a uv run python -X faulthandler -u -m pytest tests/ -v --tb=short \
             --junitxml=test-results/pytest.xml 2>&1 | tee test-results/pytest.log
 
       - name: Upload test reports
@@ -68,12 +74,22 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Run Windows DPI tests
+      - name: Run Windows DPI and font tests
         run: >-
-          uv run python -m pytest
-          tests/modules/vision/test_mss_capture.py::TestPerMonitorDpiThread::test_context_restored_after_exit
-          tests/modules/vision/test_mss_capture.py::TestPerMonitorDpiThread::test_nested_context_restore
-          -q --tb=short
+          uv run python -X faulthandler -m pytest
+          tests/modules/vision/test_mss_capture.py
+          tests/modules/vision/test_mss_capture_windows.py
+          tests/modules/subtitle/test_outline_label_render.py
+          -q --tb=short --junitxml=test-results/windows.xml
+
+      - name: Upload Windows test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-reports
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
 
   frontend-test:
     runs-on: ubuntu-latest
@@ -84,6 +100,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # packageManager 声明在 dashboard/package.json，显式指定版本。
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
