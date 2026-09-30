@@ -9,6 +9,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock
+
+import pytest
+
+import src.agents.streamer.planner_context as planner_context_module
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler
 
 
@@ -67,10 +73,33 @@ def test_section_order_locked() -> None:
 
 
 def test_environment_render_details() -> None:
-    """快照渲染：分钟时刻转人类可读；零时长/空字段行省略。"""
+    """快照渲染使用运行环境的本地时刻；零时长/空字段行省略。"""
     text = PlannerAssembler().assemble(
         AssemblerInputs(environment=EnvironmentBlock(minute_bucket_ms=0, duration_so_far_ms=0))
     )
-    assert "- 时刻: 1970-01-01 08:00" in text  # 本机 UTC+8
+    expected_time = datetime.fromtimestamp(0).strftime("%Y-%m-%d %H:%M")
+    assert f"- 时刻: {expected_time}" in text
     assert "已开播时长" not in text
     assert "0 分钟" not in text
+
+
+@pytest.mark.parametrize(
+    ("offset_hours", "expected_time"),
+    [(0, "1970-01-01 00:01"), (8, "1970-01-01 08:01"), (-5, "1969-12-31 19:01")],
+)
+def test_environment_uses_local_time_conversion(
+    monkeypatch: pytest.MonkeyPatch, offset_hours: int, expected_time: str
+) -> None:
+    """隔离系统时区接口，同时验证毫秒换算、分钟格式与跨日结果。"""
+    local_datetime = Mock()
+    local_datetime.fromtimestamp.side_effect = lambda value: datetime.fromtimestamp(
+        value, tz=timezone(timedelta(hours=offset_hours))
+    )
+    monkeypatch.setattr(planner_context_module, "datetime", local_datetime)
+
+    text = PlannerAssembler().assemble(
+        AssemblerInputs(environment=EnvironmentBlock(minute_bucket_ms=60_000, duration_so_far_ms=0))
+    )
+
+    local_datetime.fromtimestamp.assert_called_once_with(60)
+    assert f"- 时刻: {expected_time}" in text
