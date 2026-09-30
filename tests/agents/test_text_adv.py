@@ -18,6 +18,8 @@ import asyncio
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
+from pytest import MonkeyPatch
+
 from src.agents.text_adv import (
     MonitorGeometry,
     TextAdvConfig,
@@ -185,9 +187,11 @@ def test_build_text_adv_agent_returns_agent() -> None:
     assert agent.auto is False
 
 
-def test_factory_enables_tools_for_streamer_and_stop_removes() -> None:
+def test_factory_enables_tools_for_streamer_and_stop_removes(monkeypatch: MonkeyPatch) -> None:
     """工厂装配接线：注册进 registry 的 Agent 启动后主播可见四工具；stop 后摘除。"""
     from src.modules.agents.factory import instantiate_agent
+
+    monkeypatch.setattr("src.agents.text_adv.input.PyAutoGuiInputBackend", FakeInputBackend)
 
     registry = ToolRegistry()
     agent = instantiate_agent(
