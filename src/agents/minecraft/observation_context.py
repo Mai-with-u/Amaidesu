@@ -28,7 +28,7 @@ def _body(message: dict[str, Any]) -> tuple[dict[str, Any], str, str] | None:
         return None
     prefix = ""
     if message.get("role") != "tool":
-        if message.get("role") != "user" or not content.startswith("[系统] ") or "\n任务快照：" not in content:
+        if not message.get("_minecraft_task_notice") or "\n任务快照：" not in content:
             return None
         prefix, content = content.split("\n任务快照：", 1)
         prefix += "\n任务快照："

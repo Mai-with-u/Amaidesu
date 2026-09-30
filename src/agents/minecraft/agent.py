@@ -725,7 +725,11 @@ class MinecraftAgent(BaseAgent):
                     self._design_progress.reset()
                 if _tid:
                     self._delegated_batch_ids.append(_tid)
-                messages.append({"role": "user", "content": _content})
+                message: Dict[str, Any] = {"role": "user", "content": _content}
+                # 只有宿主入队的通知可参与证据投影；用户即使写了相同前缀，其指令也必须保持原文。
+                if not isinstance(queued, MinecraftInstruction):
+                    message["_minecraft_task_notice"] = True
+                messages.append(message)
             # 本批委派任务进入进行中（agent 型单写者：执行 Agent 写）
             self._mark_delegated_running()
             steps += 1
