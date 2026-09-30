@@ -1,6 +1,7 @@
 """验证大型游戏资料可展开、错误证据保留，以及历史观察不会被改写为新事实。"""
 
 from copy import deepcopy
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -39,7 +40,11 @@ def test_large_reference_keeps_decision_evidence_and_lossless_original() -> None
         offset = page["next_offset"]
     assert "".join(parts) == original["data"]["content"] and original == before
     original["error"]["message"] = "外部修改"
-    assert "材料获取结果未确认" in history.read({"ref": ref, "path": "/error"})["text"]
+    # 补读失败诊断时取得完整对象；外部回执和读取端的修改都不能改写已归档的施工证据。
+    read_back = history.read({"ref": ref, "path": "/error"})["value"]
+    assert read_back == before["error"]
+    read_back["message"] = "读取端修改"
+    assert history.read({"ref": ref, "path": "/error"})["value"] == before["error"]
 
 
 def test_repeat_marker_requires_identical_request_and_actual_result() -> None:
@@ -92,7 +97,7 @@ def test_pointer_search_and_expired_references_are_explicit() -> None:
 
 
 def test_paged_read_and_index_preserve_long_results_and_early_requests() -> None:
-    """默认小页不丢旧记录，首条长请求和末尾正文仍可按引用及偏移无损找回。"""
+    """索引默认小页不丢旧记录；正文默认读全，显式分页仍能无损找回首条请求和尾部要求。"""
     history = MinecraftObservations()
     arguments = {"requirement": "保留现场结构" * 300}
     content = "工艺正文" * 6000 + "尾部验收要求"
@@ -106,12 +111,15 @@ def test_paged_read_and_index_preserve_long_results_and_early_requests() -> None
     assert older["observations"][-1]["ref"] == ref
     assert len(older["observations"][-1]["request_preview"]) <= 320
     full = history.read({"ref": ref, "path": "/content"})
-    assert full["text"] == content[:4000] and full["complete"] is False
+    assert full["value"] == content and full["complete"] is True and full["next_offset"] is None
+    # 只有主动请求分页才切分教材，避免玩家为已选定的同一份工艺反复补读。
+    first_page = history.read({"ref": ref, "path": "/content", "limit": 4000})
+    assert first_page["text"] == content[:4000] and first_page["complete"] is False
     found = history.read({"ref": ref, "path": "/content", "query": "尾部验收要求"})
     assert found["text"].endswith("尾部验收要求") and found["next_offset"] is None
     parts, offset = [], 0
     while True:
-        selected = history.read({"ref": ref, "path": "/content", "offset": offset})
+        selected = history.read({"ref": ref, "path": "/content", "offset": offset, "limit": 4000})
         parts.append(selected["text"])
         if selected["next_offset"] is None:
             break
@@ -133,7 +141,27 @@ def test_large_inputs_do_not_expand_the_compaction_index() -> None:
         }
         history.present("maicraft_plan", request, {"plan_id": str(index), "ready_to_execute": True})
     assert len(json_text(history.index())) < 2000
-    assert len(history.read({"ref": history.index()[0]["ref"], "source": "request"})["text"]) <= 4000
+    # 摘要只带短索引；明确选定原请求后仍完整交付蓝图，不能把索引预算套到原件上。
+    original = history.read({"ref": history.index()[0]["ref"], "source": "request"})
+    assert original["value"] == request and original["complete"] is True
+    page = history.read({"ref": history.index()[0]["ref"], "source": "request", "limit": 4000})
+    assert len(page["text"]) <= 4000 and page["complete"] is False
+
+
+@pytest.mark.parametrize("value", [{"missing": 2}, ["minecraft:stone", 2], "材料缺口", 0, None])
+@pytest.mark.parametrize("paged_first", [False, True])
+def test_full_and_paged_reads_of_same_evidence_are_repeats(value: Any, paged_first: bool) -> None:
+    """全文的结构化值和分页文本代表同一份施工证据，切换读取形式不能重置无进展判断。"""
+    history = MinecraftObservations()
+    ref = history.present("maicraft_task", {"action": "get"}, {"data": value})["_observation"]["ref"]
+    request = {"ref": ref, "path": "/data"}
+    first = history.read({**request, **({"limit": 1000} if paged_first else {})})
+    second = history.read({**request, **({} if paged_first else {"limit": 1000})})
+    full, page = (second, first) if paged_first else (first, second)
+    assert full["value"] == value and full["complete"] is True
+    assert page["text"] == (value if isinstance(value, str) else json_text(value))
+    assert not first["same_request_and_result"]
+    assert second["same_request_and_result"] and second["complete"]
 
 
 def test_index_access_times_and_recency_order_are_not_progress() -> None:
@@ -196,7 +224,8 @@ async def test_invalid_observation_reads_remain_correctable(bad_arguments: dict)
         assert not result.success
         assert not registry.is_tripped("minecraft_observation")
     result = await registry.invoke(ToolInvocation(tool_name="minecraft_observation", arguments={"ref": ref}))
-    assert result.success and '"x":3' in result.structured_content["text"]
+    # 修正读取参数后一次取回完整坐标，不受此前错误请求影响。
+    assert result.success and result.structured_content["value"] == {"position": {"x": 3}}
 
 
 def test_attention_cursor_does_not_turn_same_failed_task_into_new_evidence() -> None:
@@ -219,7 +248,8 @@ def test_attention_cursor_does_not_turn_same_failed_task_into_new_evidence() -> 
     reordered = dict(reversed(list(changed_cursor.items())))
     assert history.present("maicraft_task", args, reordered)["_observation"]["same_request_and_result"]
     original = history.read({"ref": second["_observation"]["ref"], "path": "/next_attention"})
-    assert '"after_cursor":2' in original["text"]
+    # 游标原件按新引用完整保留，即使它本身不代表施工进展。
+    assert original["value"] == {"after_cursor": 2}
     # 真正的施工失败发生变化时，允许模型重新判断，不能因任务编号相同就丢弃新的诊断。
     changed_cursor["failure_code"] = "material_exhausted"
     assert not history.present("maicraft_task", args, changed_cursor)["_observation"]["same_request_and_result"]

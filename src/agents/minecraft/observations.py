@@ -168,8 +168,12 @@ class MinecraftObservations:
         )
 
     def mark_read(self, result: dict[str, Any]) -> dict[str, Any]:
-        """记住真正读到的原文片段；换分页参数却读到同一段，或刷新时间戳，都不会制造新证据。"""
+        """记住实际读到的证据；相同全文换读取形式、分页上限或访问时间都不算推进。"""
         evidence = {key: value for key, value in result.items() if key != "observed_at_ms"}
+        # 完整字段与显式分页若交付同一全文，就没有新增施工事实；比较正文而不比较 value/text 包装。
+        if "value" in evidence:
+            value = evidence.pop("value")
+            evidence["text"] = value if isinstance(value, str) else json_text(value)
         if isinstance(evidence.get("observations"), list):
             # 索引的访问时间和近期排序不产生新游戏事实，原文引用与请求内容变化才有信息增量。
             evidence["observations"] = sorted(
@@ -179,7 +183,10 @@ class MinecraftObservations:
                 ),
                 key=lambda row: row["ref"],
             )
-        signature = hashlib.sha256(json_text(evidence).encode()).hexdigest()
+        # 包装字段重排不改变玩家读到的证据，分页位置和原件引用仍参与比较。
+        signature = hashlib.sha256(
+            json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()
         repeated = signature in self._read_fingerprints
         self._read_fingerprints.add(signature)
         result["same_request_and_result"] = repeated

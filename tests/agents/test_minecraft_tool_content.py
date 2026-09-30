@@ -34,7 +34,8 @@ async def test_knowledge_text_body_survives_mcp_metadata_and_can_be_read_back() 
     assert observed["content_loaded"] is True
     shown = agent._observations.present("maicraft_perceive", request, observed)
     read = agent._read_observation({"ref": shown["_observation"]["ref"], "path": "/resources/0/content/rule"})
-    assert read["text"] == "原生接口约束"
+    # 选定规则字段后直接返回完整字符串，不依赖分页文本包装。
+    assert read["value"] == "原生接口约束"
 
 
 def test_metadata_without_body_is_not_reported_as_loaded() -> None:

@@ -272,7 +272,8 @@ async def test_pending_decision_survives_summary_without_model_restatement(recei
     decision = agent._current_task_context()["background_tasks"][0]["decision"]
     missing = next(row for row in decision["failure_evidence"] if row.get("missing") == 2)
     original = agent._read_observation({"ref": decision["result_ref"], "path": missing["path"]})
-    assert '"missing":2' in original["text"]
+    # 按缺料事实中的路径直接读回供料对象，整理历史后仍能确定实际数量。
+    assert original["value"]["missing"] == 2
     snapshot["decision"]["decision_id"] = "外部修改"
     assert agent._current_task_context()["background_tasks"][0]["decision"]["decision_id"] == "material-decision"
 

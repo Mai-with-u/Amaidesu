@@ -62,7 +62,8 @@ def test_design_result_retains_original_goal_and_links_exact_request() -> None:
     original = agent._read_observation(
         {"ref": stage["request_ref"], "source": "request", "path": "/goal/parameters/blueprint"}
     )
-    assert original["text"] == '{"blocks":[]}' and stage["result_ref"]
+    # 原建造参数以完整对象交付，设计完成通知仍关联到真实产物回执。
+    assert original["value"] == {"blocks": []} and stage["result_ref"]
     agent._llm.generate.assert_not_called()
 
 
