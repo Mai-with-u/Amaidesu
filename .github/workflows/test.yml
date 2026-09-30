@@ -41,7 +41,7 @@ jobs:
             done
             exit $cstatus
           fi
-          xvfb-run -a uv run python -u -m pytest tests/ -q --tb=short > /tmp/pytest-out.txt 2>&1
+          xvfb-run -a uv run python -X faulthandler -u -m pytest tests/ -vv --tb=short > /tmp/pytest-out.txt 2>&1
           status=$?
           if [ $status -ne 0 ]; then
             sed -n '/= ERRORS =/,/short test summary info/p' /tmp/pytest-out.txt |
@@ -64,7 +64,11 @@ jobs:
               while IFS= read -r line; do
                 echo "::error::${line:0:250}"
               done
+            echo "::group::pytest failure diagnostics"
+            tail -200 /tmp/pytest-out.txt | sed 's/::/%3A%3A/g'
+            echo "::endgroup::"
           fi
+          tail -1 /tmp/pytest-out.txt
           exit $status
 
   frontend-test:
