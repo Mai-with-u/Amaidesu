@@ -334,3 +334,44 @@ async def test_broadcaster_subscribes_to_task_changed(bus_and_handler) -> None:
     assert ws.broadcast.await_args.args[0] == CoreEvents.TASK_CHANGED
 
     await broadcaster.stop()
+
+
+@pytest.mark.asyncio
+async def test_broadcaster_subscribes_to_llm_context_used(bus_and_handler) -> None:
+    """llm.context.used：订阅 + 直通转发（上下文水位面板的实时刷新源）。"""
+    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
+    from src.modules.events.payloads import LLMContextUsedPayload
+
+    bus, ws = bus_and_handler
+    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
+    await broadcaster.start()
+
+    assert CoreEvents.LLM_CONTEXT_USED in bus.subscribed, "未订阅 llm.context.used"
+    handler, model_cls = bus.subscribed[CoreEvents.LLM_CONTEXT_USED]
+    assert model_cls is LLMContextUsedPayload
+
+    payload = LLMContextUsedPayload(
+        request_id="req_cb",
+        profile_name="replyer",
+        model_name="glm-4.7",
+        context_window=128_000,
+        api_prompt_tokens=1_000,
+        completion_tokens=200,
+        sections=[
+            {"key": "system", "tokens": 100, "raw_tokens": 90, "count": 1, "items": []},
+            {"key": "messages", "tokens": 700, "raw_tokens": 630, "count": 8, "items": []},
+            {"key": "tools", "tokens": 200, "raw_tokens": 180, "count": 2, "items": []},
+        ],
+        calibrated=True,
+    )
+    await handler(CoreEvents.LLM_CONTEXT_USED, payload, source="LLMManager")
+
+    ws.broadcast.assert_awaited_once()
+    call = ws.broadcast.await_args
+    assert call.args[0] == "llm.context.used"
+    assert call.args[1]["request_id"] == "req_cb"
+    assert call.args[1]["api_prompt_tokens"] == 1_000
+    assert len(call.args[1]["sections"]) == 3
+    assert call.kwargs.get("message_id") == payload.id
+
+    await broadcaster.stop()

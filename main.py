@@ -373,9 +373,13 @@ async def create_app_components(
     database, memory = await build_memory_stack(config)
     logger.info(f"存储与记忆已就绪（db={database.db_path}）")
 
+    # --- EventBus（先于 LLMManager：水位事件经构造器注入引擎）---
+    logger.info("初始化事件总线...")
+    event_bus = EventBus()
+
     # --- LLM 服务 ---
     logger.info("初始化 LLM 服务...")
-    llm_service = LLMManager(llm_repo=database.llm)
+    llm_service = LLMManager(llm_repo=database.llm, event_bus=event_bus)
     await llm_service.setup(config)
     # 请求历史落库目标注入（全局单例可能已被惰性创建，须显式 attach）
     get_global_request_history_manager().attach_repo(database.llm)
@@ -388,9 +392,7 @@ async def create_app_components(
     # 跨场次对话记忆由 SimpleMemory / 摘要机制承载，不在组合根做 live_chat 重新写入。
     # 无显式场次期间消息仅在内存流转，落库路径依据 0 值跳过。
 
-    # --- EventBus + 场次管理 + 拦截器 ---
-    logger.info("初始化事件总线...")
-    event_bus = EventBus()
+    # --- 场次管理 + 拦截器 ---
 
     # LiveSessionManager：场次唯一事实源（开启/结束/删除/归属解析）。
     # 启动不自动开新场次；无显式场次期间 ``resolve_pk()`` 返回 None，

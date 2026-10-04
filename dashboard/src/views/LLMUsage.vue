@@ -210,25 +210,30 @@
           </template>
           <template #default="{ row }">
             <template v-if="row.context_window > 0 && row.last_call_prompt_tokens != null">
-              <div class="water-level">
-                <el-progress
-                  :percentage="
-                    Math.min(100, (row.last_call_prompt_tokens / row.context_window) * 100)
-                  "
-                  :stroke-width="10"
-                  :format="() => ''"
-                  :color="waterLevelColor(row.last_call_prompt_tokens / row.context_window)"
-                  :show-text="false"
-                />
-                <span
-                  class="water-level-text"
-                  :class="{ warn: row.last_call_prompt_tokens / row.context_window > 0.8 }"
-                  >{{ formatNumber(row.last_call_prompt_tokens) }} /
-                  {{ formatNumber(row.context_window) }} ({{
-                    ((row.last_call_prompt_tokens / row.context_window) * 100).toFixed(1)
-                  }}%)</span
-                >
-              </div>
+              <el-popover placement="top-start" :width="352" trigger="hover">
+                <template #reference>
+                  <div class="water-level">
+                    <el-progress
+                      :percentage="
+                        Math.min(100, (row.last_call_prompt_tokens / row.context_window) * 100)
+                      "
+                      :stroke-width="10"
+                      :format="() => ''"
+                      :color="waterLevelColor(row.last_call_prompt_tokens / row.context_window)"
+                      :show-text="false"
+                    />
+                    <span
+                      class="water-level-text"
+                      :class="{ warn: row.last_call_prompt_tokens / row.context_window > 0.8 }"
+                      >{{ formatNumber(row.last_call_prompt_tokens) }} /
+                      {{ formatNumber(row.context_window) }} ({{
+                        ((row.last_call_prompt_tokens / row.context_window) * 100).toFixed(1)
+                      }}%)</span
+                    >
+                  </div>
+                </template>
+                <ContextBreakdownCard :breakdown="contextBreakdowns[row.model_name] ?? null" />
+              </el-popover>
             </template>
             <span v-else class="water-level-empty">—</span>
           </template>
@@ -333,9 +338,15 @@ import { useRouter } from 'vue-router';
 import { Refresh, Document, QuestionFilled } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { llmApi } from '@/api';
-import type { LLMUsageStats, LLMUsageSummary, LLMUsageTrendsResponse } from '@/types';
+import type {
+  LLMContextBreakdown,
+  LLMUsageStats,
+  LLMUsageSummary,
+  LLMUsageTrendsResponse,
+} from '@/types';
 import TrendChart from '@/components/llm/TrendChart.vue';
 import ModelCostDonut from '@/components/llm/ModelCostDonut.vue';
+import ContextBreakdownCard from '@/components/llm/ContextBreakdownCard.vue';
 import { compactNumber, costYuan } from '@/utils/chartFormat';
 import { formatNumber } from '@/utils/format';
 
@@ -346,6 +357,8 @@ const router = useRouter();
 
 const loading = ref(false);
 const usageData = ref<Record<string, LLMUsageStats>>({});
+// 每模型最近一次调用的上下文分段占用（"上下文水位"悬停明细）；拉取失败不阻塞页面主数据
+const contextBreakdowns = ref<Record<string, LLMContextBreakdown>>({});
 const summary = ref<LLMUsageSummary | null>(null);
 const trends = ref<LLMUsageTrendsResponse | null>(null);
 const rangeDays = ref(30);
@@ -475,18 +488,31 @@ async function fetchTrends(): Promise<LLMUsageTrendsResponse> {
   return response.data;
 }
 
+async function fetchContextBreakdowns(): Promise<Record<string, LLMContextBreakdown>> {
+  try {
+    const response = await llmApi.getContextBreakdown();
+    return response.data;
+  } catch (error) {
+    // 明细属增强信息：失败只降级为"悬停无数据"，不打断用量主数据加载
+    console.error('Failed to fetch LLM context breakdown:', error);
+    return {};
+  }
+}
+
 async function fetchData() {
   loading.value = true;
   try {
-    const [usageResponse, summaryResponse, trendsData] = await Promise.all([
+    const [usageResponse, summaryResponse, trendsData, breakdowns] = await Promise.all([
       llmApi.getUsage(),
       llmApi.getUsageSummary(),
       fetchTrends(),
+      fetchContextBreakdowns(),
     ]);
 
     usageData.value = usageResponse.data;
     summary.value = summaryResponse.data;
     trends.value = trendsData;
+    contextBreakdowns.value = breakdowns;
   } catch (error) {
     console.error('Failed to fetch LLM usage data:', error);
     ElMessage.error('获取 LLM 用量数据失败');

@@ -23,6 +23,7 @@ import type {
   InjectMessageResponse,
   EventBusStatsResponse,
   ConfigUpdateResponse,
+  LLMContextBreakdown,
   LLMUsageStats,
   LLMUsageSummary,
   LLMUsageTrendsResponse,
@@ -124,6 +125,11 @@ export const debugApi = {
 // LLM
 export const llmApi = {
   getUsage: () => api.get<Record<string, LLMUsageStats>>('/llm/usage'),
+  // 每模型最近一次调用的上下文分段占用（"上下文水位"悬停明细数据源）
+  getContextBreakdown: () => api.get<Record<string, LLMContextBreakdown>>('/llm/context-breakdown'),
+  // 按请求 ID 取单次调用的分段占用（时间线决策卡水位胶囊悬停明细）；无分段返回 null
+  getContextBreakdownByRequest: (requestId: string) =>
+    api.get<LLMContextBreakdown | null>(`/llm/context-breakdown/${encodeURIComponent(requestId)}`),
   getUsageSummary: () => api.get<LLMUsageSummary>('/llm/usage/summary'),
   getUsageTrends: (days: number) =>
     api.get<LLMUsageTrendsResponse>('/llm/usage/trends', { params: { days } }),

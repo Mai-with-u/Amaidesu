@@ -77,6 +77,41 @@ export interface LLMUsageTrendsResponse {
   model_points: LLMUsageTrendModelPoint[];
 }
 
+// 上下文分段内明细行（一条工具 / 一组同角色消息）
+export interface LLMContextSectionItem {
+  name: string;
+  tokens: number;
+}
+
+// 上下文分段（system / messages / tools 之一）
+export interface LLMContextSection {
+  key: string;
+  /** 校准后展示值 */
+  tokens: number;
+  /** 本地估算原值（校准前） */
+  raw_tokens: number;
+  /** 条目数（消息条数 / 工具条数） */
+  count: number;
+  items: LLMContextSectionItem[];
+}
+
+// 单模型最近一次调用的上下文分段占用（GET /llm/context-breakdown）
+export interface LLMContextBreakdown {
+  model_name: string;
+  profile_name: string;
+  request_id: string;
+  timestamp_ms: number | null;
+  /** 0 = 未配置，前端隐藏水位与剩余 */
+  context_window: number;
+  /** API 回报的输入 token 精确总数（分段展示的校准基准） */
+  api_prompt_tokens: number;
+  /** 分段是否经过 API 总数校准（false = 展示原始估算值） */
+  calibrated: boolean;
+  sections: LLMContextSection[];
+  /** 窗口剩余；未配置窗口时 null */
+  free_tokens: number | null;
+}
+
 // Token 用量详情
 export interface LLMTokenUsage {
   prompt_tokens: number;

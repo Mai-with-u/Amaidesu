@@ -70,6 +70,8 @@ class LLMRequestInsert:
     error: Optional[str] = None
     latency_ms: int = 0
     usage_raw_json: Optional[str] = None
+    # 上下文分段占用解剖 JSON（见 src/modules/llm/context_meter.py）；估算不可用时为 None
+    breakdown_json: Optional[str] = None
 
 
 class LLMRepo(BaseRepo):
@@ -132,6 +134,7 @@ class LLMRepo(BaseRepo):
             row.error,
             row.latency_ms,
             row.usage_raw_json,
+            row.breakdown_json,
         )
 
     @staticmethod
@@ -141,8 +144,8 @@ class LLMRepo(BaseRepo):
             "request_id, timestamp_ms, profile_name, model_name, request_params, response_content,"
             " reasoning_content, tool_calls, prompt_tokens, completion_tokens, total_tokens,"
             " cache_hit_tokens, cache_miss_tokens, reasoning_tokens, cost, success, error,"
-            " latency_ms, usage_raw_json"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " latency_ms, usage_raw_json, breakdown_json"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
 
     async def insert_llm_usage_row(self, row: LLMUsageInsert) -> int:
@@ -181,6 +184,7 @@ class LLMRepo(BaseRepo):
         error: Optional[str] = None,
         latency_ms: int = 0,
         usage_raw_json: Optional[str] = None,
+        breakdown_json: Optional[str] = None,
     ) -> bool:
         """插入一条请求历史行；``request_id`` 冲突时忽略（幂等）。
 
@@ -207,6 +211,7 @@ class LLMRepo(BaseRepo):
             error=error,
             latency_ms=latency_ms,
             usage_raw_json=usage_raw_json,
+            breakdown_json=breakdown_json,
         )
 
         def _exec() -> bool:
@@ -427,6 +432,31 @@ class LLMRepo(BaseRepo):
             if not name:
                 continue
             result[name] = int(row["prompt_tokens"] or 0)
+        return result
+
+    async def llm_requests_latest_breakdowns(self) -> Dict[str, Dict[str, Any]]:
+        """每模型最近一次带上下文分段解剖的请求行（监控面板水位明细数据源）。
+
+        返回 ``{model_name: 行 dict}``，行含 request_id / timestamp_ms /
+        profile_name / model_name / breakdown_json；无记录的模型不返回键。
+        过滤 ``breakdown_json IS NOT NULL``（估算不可用的行不构成快照）；
+        ``prompt_tokens`` 一并带出，供展示与 breakdown 内总数互相印证。
+        """
+        rows = await self._execute(
+            "SELECT request_id, timestamp_ms, profile_name, model_name, prompt_tokens, breakdown_json"
+            " FROM llm_requests t1"
+            " WHERE breakdown_json IS NOT NULL AND model_name != ''"
+            "   AND timestamp_ms = ("
+            " SELECT MAX(timestamp_ms) FROM llm_requests t2"
+            "  WHERE t2.model_name = t1.model_name AND t2.breakdown_json IS NOT NULL"
+            " )"
+        )
+        result: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            name = str(row["model_name"] or "")
+            if not name:
+                continue
+            result[name] = dict(row)
         return result
 
     async def llm_usage_daily_trends(self, *, start_ms: int) -> Dict[str, Any]:

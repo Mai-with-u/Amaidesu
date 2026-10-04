@@ -157,6 +157,13 @@ class CoreEvents:
     # 的唯一观测面；llm_request_id 供观察面懒取缓存/Token/上下文统计。
     AGENT_REPLIED = "agent.replied"
 
+    # ========== v2 语义域事件（LLM 调用上下文水位） ==========
+    # LLMManager 每次成功调用收尾即发一条（观察面终点广播，不承载唤醒语义，
+    # 消费者不得触发新决策）。payload 携带该次调用的上下文分段占用解剖
+    # （system / messages / tools，见 src/modules/llm/context_meter.py），
+    # WebUI "上下文水位"明细据此实时刷新。
+    LLM_CONTEXT_USED = "llm.context.used"
+
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:
         """

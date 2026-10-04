@@ -25,7 +25,6 @@ from src.modules.storage.migrations import SCHEMA_MIGRATIONS
 from src.modules.storage.schema import (
     SCHEMA_VERSION,
     build_schema_sql,
-    list_expected_tables,
 )
 from src.modules.storage.database import SQLiteDatabase
 
@@ -427,3 +426,73 @@ async def test_build_schema_sql_contains_v10_tables() -> None:
     # gifts 表段内已改名 quantity（viewers 统计列 gift_count 保留，属不同语义）
     assert "gift_count" not in _GIFTS_SQL, "gifts 表应已改名 quantity"
     assert "_memory_facts" not in sql, "扁平事实私有表应已从 DDL 移除"
+
+
+# ===== v12 → v13：llm_requests 补上下文分段解剖列 =====
+
+_V12_LLM_REQUESTS_SQL = """
+CREATE TABLE llm_requests (
+    request_id          TEXT PRIMARY KEY,
+    timestamp_ms        INTEGER NOT NULL,
+    profile_name        TEXT NOT NULL DEFAULT '',
+    model_name          TEXT NOT NULL DEFAULT '',
+    request_params      TEXT,
+    response_content    TEXT,
+    reasoning_content   TEXT,
+    tool_calls          TEXT,
+    prompt_tokens       INTEGER NOT NULL DEFAULT 0,
+    completion_tokens   INTEGER NOT NULL DEFAULT 0,
+    total_tokens        INTEGER NOT NULL DEFAULT 0,
+    cache_hit_tokens    INTEGER NOT NULL DEFAULT 0,
+    cache_miss_tokens   INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens    INTEGER NOT NULL DEFAULT 0,
+    cost                REAL NOT NULL DEFAULT 0,
+    success             INTEGER NOT NULL DEFAULT 1,
+    error               TEXT,
+    latency_ms          INTEGER NOT NULL DEFAULT 0,
+    usage_raw_json      TEXT
+)
+""".strip()
+
+
+@pytest.mark.asyncio
+async def test_build_schema_sql_contains_breakdown_column() -> None:
+    """建库 DDL 已是 v13 形态：llm_requests 自带 breakdown_json 列。"""
+    assert "breakdown_json" in build_schema_sql()
+
+
+@pytest.mark.asyncio
+async def test_v12_to_v13_migration_adds_breakdown_column(temp_db_path: Path) -> None:
+    """v12 形状旧库升级到 v13：补 breakdown_json 列，存量行原样保留（NULL）。"""
+    old = SQLiteDatabase(temp_db_path)
+    await old.initialize()
+    # 回退到 v12 形状：重建无 breakdown_json 的 llm_requests + 存量行
+    await old.execute("DROP TABLE llm_requests")
+    await old.execute(_V12_LLM_REQUESTS_SQL)
+    await old.execute(
+        "INSERT INTO llm_requests(request_id, timestamp_ms, profile_name, model_name, prompt_tokens)"
+        " VALUES ('r_old', 1000, 'replyer', 'model-a', 100)"
+    )
+    await old.execute("DELETE FROM schema_migrations WHERE version > 12")
+    assert await old.get_schema_version() == 12
+    await old.close()
+
+    reopened = SQLiteDatabase(temp_db_path)
+    await reopened.initialize()
+    try:
+        assert await reopened.get_schema_version() == SCHEMA_VERSION
+        rows = await reopened.execute("SELECT request_id, breakdown_json FROM llm_requests")
+        assert [r["request_id"] for r in rows] == ["r_old"]
+        assert all(r["breakdown_json"] is None for r in rows)
+    finally:
+        await reopened.close()
+
+    # 幂等：再次 initialize 不破坏数据
+    again = SQLiteDatabase(temp_db_path)
+    await again.initialize()
+    try:
+        assert await again.get_schema_version() == SCHEMA_VERSION
+        count = await again.execute("SELECT COUNT(*) AS n FROM llm_requests")
+        assert int(count[0]["n"]) == 1
+    finally:
+        await again.close()

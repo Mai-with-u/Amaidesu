@@ -483,3 +483,135 @@ def test_usage_threads_context_window_from_engine_assembly(client_with_context_w
     # 水位分子：取该模型最新一条 prompt_tokens
     assert body[MODEL_A]["last_call_prompt_tokens"] == 20_000
     assert body[MODEL_B]["last_call_prompt_tokens"] == 300
+
+
+# === /context-breakdown：上下文水位悬停明细数据源 ===
+
+
+def _seed_breakdown(
+    store,
+    *,
+    request_id: str,
+    model_name: str,
+    timestamp_ms: int,
+    prompt: int = 100,
+    profile_name: str = "replyer",
+    with_breakdown: bool = True,
+) -> None:
+    """直连 store 造一条带上下文分段解剖的请求明细行。"""
+
+    async def _seed():
+        breakdown = (
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "profile_name": profile_name,
+                    "model_name": model_name,
+                    "api_prompt_tokens": prompt,
+                    "local_total_tokens": 90,
+                    "calibrated": True,
+                    "sections": [
+                        {
+                            "key": "system",
+                            "tokens": 10,
+                            "raw_tokens": 9,
+                            "count": 1,
+                            "items": [{"name": "system", "tokens": 10}],
+                        },
+                        {"key": "messages", "tokens": 60, "raw_tokens": 54, "count": 2, "items": []},
+                        {
+                            "key": "tools",
+                            "tokens": 30,
+                            "raw_tokens": 27,
+                            "count": 1,
+                            "items": [{"name": "reply", "tokens": 30}],
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            )
+            if with_breakdown
+            else None
+        )
+        await store.llm.insert_llm_request(
+            request_id=request_id,
+            timestamp_ms=timestamp_ms,
+            profile_name=profile_name,
+            model_name=model_name,
+            prompt_tokens=prompt,
+            breakdown_json=breakdown,
+        )
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(_seed())
+    loop.close()
+
+
+def test_context_breakdown_empty_db_returns_empty_object(client: TestClient) -> None:
+    """冷启动：库空时 /context-breakdown 返回 200 空对象（非 500）。"""
+    resp = client.get("/api/v1/llm/context-breakdown")
+    assert resp.status_code == 200
+    assert resp.json() == {}
+
+
+def test_context_breakdown_returns_latest_per_model(client: TestClient) -> None:
+    """每模型取最新一条带解剖行；无解剖行/损坏 JSON 行不进入结果。"""
+    store = _server_ref_cache["store"]
+    _seed_breakdown(store, request_id="cb-a1", model_name=MODEL_A, timestamp_ms=1_000)
+    _seed_breakdown(store, request_id="cb-a2", model_name=MODEL_A, timestamp_ms=2_000, prompt=500)
+    _seed_breakdown(store, request_id="cb-a3", model_name=MODEL_A, timestamp_ms=3_000, with_breakdown=False)
+    _seed_breakdown(store, request_id="cb-b1", model_name=MODEL_B, timestamp_ms=1_500, profile_name="planner")
+
+    body = client.get("/api/v1/llm/context-breakdown").json()
+    assert set(body.keys()) == {MODEL_A, MODEL_B}
+    model_a = body[MODEL_A]
+    assert model_a["request_id"] == "cb-a2"  # 最新带解剖行（cb-a3 无解剖不构成快照）
+    assert model_a["api_prompt_tokens"] == 500
+    assert model_a["calibrated"] is True
+    assert {section["key"] for section in model_a["sections"]} == {"system", "messages", "tools"}
+    # 默认装配无 llm_manager：窗口 0 → 前端隐藏水位与剩余
+    assert model_a["context_window"] == 0
+    assert model_a["free_tokens"] is None
+    assert body[MODEL_B]["profile_name"] == "planner"
+
+
+def test_context_breakdown_threads_window_from_llm_manager(client_with_context_window: TestClient) -> None:
+    """窗口上限与剩余由 llm_manager 装配索引带出（free = max(0, window - used)）。"""
+    store = _server_ref_cache["store_cw"]
+    _seed_breakdown(store, request_id="cbw-a1", model_name=MODEL_A, timestamp_ms=1_000, prompt=10_000)
+    _seed_breakdown(store, request_id="cbw-b1", model_name=MODEL_B, timestamp_ms=1_100, prompt=300)
+
+    body = client_with_context_window.get("/api/v1/llm/context-breakdown").json()
+    assert body[MODEL_A]["context_window"] == 128_000
+    assert body[MODEL_A]["free_tokens"] == 118_000
+    # MODEL_B 窗口未配置（0）→ free 为 None
+    assert body[MODEL_B]["context_window"] == 0
+    assert body[MODEL_B]["free_tokens"] is None
+
+
+def test_context_breakdown_by_request(client: TestClient) -> None:
+    """按请求 ID 取单次调用分段：命中返回明细，未命中/无分段返回 null。"""
+    store = _server_ref_cache["store"]
+    _seed_breakdown(store, request_id="cbr-1", model_name=MODEL_A, timestamp_ms=1_000, prompt=2_933)
+
+    body = client.get("/api/v1/llm/context-breakdown/cbr-1").json()
+    assert body is not None
+    assert body["request_id"] == "cbr-1"
+    assert body["api_prompt_tokens"] == 2_933
+    assert {section["key"] for section in body["sections"]} == {"system", "messages", "tools"}
+
+    # 行存在但无分段（估算不可用的历史行）→ null
+    _seed_breakdown(store, request_id="cbr-2", model_name=MODEL_A, timestamp_ms=2_000, with_breakdown=False)
+    assert client.get("/api/v1/llm/context-breakdown/cbr-2").json() is None
+    # 行不存在 → null（前端按空态渲染，不报错）
+    assert client.get("/api/v1/llm/context-breakdown/nonexistent").json() is None
+
+
+def test_context_breakdown_by_request_threads_window(client_with_context_window: TestClient) -> None:
+    """按请求取分段同样透出 llm_manager 装配的窗口上限与剩余。"""
+    store = _server_ref_cache["store_cw"]
+    _seed_breakdown(store, request_id="cbrw-1", model_name=MODEL_A, timestamp_ms=1_000, prompt=10_000)
+
+    body = client_with_context_window.get("/api/v1/llm/context-breakdown/cbrw-1").json()
+    assert body["context_window"] == 128_000
+    assert body["free_tokens"] == 118_000

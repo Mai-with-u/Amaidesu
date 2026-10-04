@@ -39,6 +39,40 @@ class LLMUsageStatsResponse(BaseModel):
     last_call_prompt_tokens: Optional[int] = None
 
 
+class LLMContextSectionItemResponse(BaseModel):
+    """上下文分段内明细行（一条工具 / 一组同角色消息）"""
+
+    name: str
+    tokens: int = 0
+
+
+class LLMContextSectionResponse(BaseModel):
+    """一个上下文分段（system / messages / tools 之一）"""
+
+    key: str
+    tokens: int = 0
+    raw_tokens: int = 0
+    count: int = 0
+    items: List[LLMContextSectionItemResponse] = []
+
+
+class LLMContextBreakdownResponse(BaseModel):
+    """单个模型最近一次调用的上下文分段占用（"上下文水位"悬停明细数据源）"""
+
+    model_name: str
+    profile_name: str = ""
+    request_id: str = ""
+    timestamp_ms: Optional[int] = None
+    # 模型上下文窗口 token 总量；0 = 未配置（前端隐藏水位与剩余）
+    context_window: int = 0
+    # API 回报的输入 token 精确总数（分段展示的校准基准）
+    api_prompt_tokens: int = 0
+    calibrated: bool = False
+    sections: List[LLMContextSectionResponse] = []
+    # 窗口剩余（max(0, context_window - api_prompt_tokens)）；未配置窗口时 None
+    free_tokens: Optional[int] = None
+
+
 class LLMUsageSummaryResponse(BaseModel):
     """所有模型的总费用摘要响应"""
 

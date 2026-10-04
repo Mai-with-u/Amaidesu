@@ -146,17 +146,27 @@
             >
               {{ modelNameOf(entry) }}
             </span>
-            <span
-              v-if="ctxRatioOf(entry) !== null"
-              class="d-pill d-pill--ctx"
-              :class="{ 'is-warn': (ctxRatioOf(entry) ?? 0) > 0.8 }"
-              :title="ctxTitleOf(entry)"
+            <el-popover
+              placement="top-start"
+              :width="352"
+              trigger="hover"
+              @show="onCtxPillShow(entry)"
             >
-              <span class="d-pill-ctx-bar">
-                <span class="d-pill-ctx-bar-fill" :style="ctxBarStyleOf(entry)"></span>
-              </span>
-              上下文 {{ ctxLabelOf(entry) }}
-            </span>
+              <template #reference>
+                <span
+                  v-if="ctxRatioOf(entry) !== null"
+                  class="d-pill d-pill--ctx"
+                  :class="{ 'is-warn': (ctxRatioOf(entry) ?? 0) > 0.8 }"
+                  :title="entry.llmRequestId ? undefined : ctxTitleOf(entry)"
+                >
+                  <span class="d-pill-ctx-bar">
+                    <span class="d-pill-ctx-bar-fill" :style="ctxBarStyleOf(entry)"></span>
+                  </span>
+                  上下文 {{ ctxLabelOf(entry) }}
+                </span>
+              </template>
+              <ContextBreakdownCard :breakdown="ctxBreakdownOf(entry)" />
+            </el-popover>
             <a
               v-if="entry.llmRequestId"
               class="d-link"
@@ -206,17 +216,27 @@
             >
               {{ modelNameOf(entry) }}
             </span>
-            <span
-              v-if="ctxRatioOf(entry) !== null"
-              class="d-pill d-pill--ctx"
-              :class="{ 'is-warn': (ctxRatioOf(entry) ?? 0) > 0.8 }"
-              :title="ctxTitleOf(entry)"
+            <el-popover
+              placement="top-start"
+              :width="352"
+              trigger="hover"
+              @show="onCtxPillShow(entry)"
             >
-              <span class="d-pill-ctx-bar">
-                <span class="d-pill-ctx-bar-fill" :style="ctxBarStyleOf(entry)"></span>
-              </span>
-              上下文 {{ ctxLabelOf(entry) }}
-            </span>
+              <template #reference>
+                <span
+                  v-if="ctxRatioOf(entry) !== null"
+                  class="d-pill d-pill--ctx"
+                  :class="{ 'is-warn': (ctxRatioOf(entry) ?? 0) > 0.8 }"
+                  :title="entry.llmRequestId ? undefined : ctxTitleOf(entry)"
+                >
+                  <span class="d-pill-ctx-bar">
+                    <span class="d-pill-ctx-bar-fill" :style="ctxBarStyleOf(entry)"></span>
+                  </span>
+                  上下文 {{ ctxLabelOf(entry) }}
+                </span>
+              </template>
+              <ContextBreakdownCard :breakdown="ctxBreakdownOf(entry)" />
+            </el-popover>
             <a
               v-if="entry.llmRequestId"
               class="d-link"
@@ -388,17 +408,27 @@
             >
               {{ modelNameOf(entry) }}
             </span>
-            <span
-              v-if="ctxRatioOf(entry) !== null"
-              class="d-pill d-pill--ctx"
-              :class="{ 'is-warn': (ctxRatioOf(entry) ?? 0) > 0.8 }"
-              :title="ctxTitleOf(entry)"
+            <el-popover
+              placement="top-start"
+              :width="352"
+              trigger="hover"
+              @show="onCtxPillShow(entry)"
             >
-              <span class="d-pill-ctx-bar">
-                <span class="d-pill-ctx-bar-fill" :style="ctxBarStyleOf(entry)"></span>
-              </span>
-              上下文 {{ ctxLabelOf(entry) }}
-            </span>
+              <template #reference>
+                <span
+                  v-if="ctxRatioOf(entry) !== null"
+                  class="d-pill d-pill--ctx"
+                  :class="{ 'is-warn': (ctxRatioOf(entry) ?? 0) > 0.8 }"
+                  :title="entry.llmRequestId ? undefined : ctxTitleOf(entry)"
+                >
+                  <span class="d-pill-ctx-bar">
+                    <span class="d-pill-ctx-bar-fill" :style="ctxBarStyleOf(entry)"></span>
+                  </span>
+                  上下文 {{ ctxLabelOf(entry) }}
+                </span>
+              </template>
+              <ContextBreakdownCard :breakdown="ctxBreakdownOf(entry)" />
+            </el-popover>
             <a
               class="d-link"
               :href="`/llm/history?request_id=${encodeURIComponent(entry.llmRequestId)}`"
@@ -496,6 +526,8 @@ import { CopyDocument, Monitor } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import { llmApi } from '@/api';
+import type { LLMContextBreakdown } from '@/types';
+import ContextBreakdownCard from '@/components/llm/ContextBreakdownCard.vue';
 import { formatNumber } from '@/utils/format';
 import {
   agentGroupOf,
@@ -771,6 +803,32 @@ function ctxTitleOf(entry: ShowEntry): string {
   const stats = statsOf(entry);
   const win = contextWindowOf(entry);
   return `本轮输入 ${formatNumber(stats?.promptTokens ?? 0)} / 窗口 ${formatNumber(win)} tokens`;
+}
+
+/** 决策/发言卡水位胶囊的悬停明细（llm_request_id → 该次调用的分段占用）。
+ * 弹层首次展开时才拉取（按请求 ID 精确取行），同请求缓存复用；失败静默降级
+ * 为空态文案，不影响胶囊本体与统计徽标。 */
+const ctxBreakdowns = ref<Map<string, LLMContextBreakdown>>(new Map());
+const ctxBreakdownFetching = new Set<string>();
+
+function ctxBreakdownOf(entry: ShowEntry): LLMContextBreakdown | null {
+  if (!entry.llmRequestId) return null;
+  return ctxBreakdowns.value.get(entry.llmRequestId) ?? null;
+}
+
+async function onCtxPillShow(entry: ShowEntry): Promise<void> {
+  const requestId = entry.llmRequestId;
+  if (!requestId || ctxBreakdowns.value.has(requestId) || ctxBreakdownFetching.has(requestId))
+    return;
+  ctxBreakdownFetching.add(requestId);
+  try {
+    const response = await llmApi.getContextBreakdownByRequest(requestId);
+    if (response.data) ctxBreakdowns.value.set(requestId, response.data);
+  } catch (e) {
+    console.warn(`[FeedTimeline] 上下文分段明细获取失败: ${requestId}`, e);
+  } finally {
+    ctxBreakdownFetching.delete(requestId);
+  }
 }
 
 /** 弹幕 message_id → 时间线条目（用于发言/决策卡回复引用反查）。

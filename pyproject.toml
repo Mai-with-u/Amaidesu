@@ -48,6 +48,7 @@ dependencies = [
     "fastmcp>=3.0.0",
     "pygetwindow>=0.0.9",
     "beautifulsoup4>=4.15.0",
+    "tiktoken>=0.14.0",
 ]
 
 [project.optional-dependencies]

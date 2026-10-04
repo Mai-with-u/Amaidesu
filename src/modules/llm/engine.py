@@ -28,6 +28,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.llm import LLMContextUsedPayload
 from src.modules.llm.bootstrap import (
     ProfileNames,
     _ResolvedProfile,
@@ -39,6 +42,7 @@ from src.modules.llm.bootstrap import (
 )
 from src.modules.llm.client import LLMResponse
 from src.modules.llm.clients import resolve_client_method
+from src.modules.llm.context_meter import ContextBreakdown, estimate_breakdown, extract_request_sections
 from src.modules.llm.errors import FatalError, LLMError, LLMInterruptedError, LLMTimeoutError, RetryableError
 from src.modules.llm.interrupt import guarded_call
 from src.modules.llm.observation import calculate_cost, record_usage
@@ -313,7 +317,7 @@ class LLMManager:
         ```
     """
 
-    def __init__(self, llm_repo: Optional[LLMRepo] = None) -> None:
+    def __init__(self, llm_repo: Optional[LLMRepo] = None, event_bus: Optional[EventBus] = None) -> None:
         self.logger = get_logger("LLMManager")
         # provider_name -> provider 配置 + 客户端实例（共享连接）
         self._providers: Dict[str, Tuple[Dict[str, Any], Any]] = {}
@@ -335,6 +339,9 @@ class LLMManager:
         self._retry_config = RetryConfig()
         # 注入后每次成功调用旁路写一条 llm_usage（失败降级不阻断调用）；None 时不落库
         self._llm_repo = llm_repo
+        # 注入后每次成功调用发布 llm.context.used 上下文水位事件（观察面终点
+        # 广播）；None 时不发布。事件发布失败只告警，绝不阻断调用链
+        self._event_bus = event_bus
         # 随机策略 RNG（lazy 创建，按 seed 决定是否固定）
         self._rng: Optional[random.Random] = None
 
@@ -750,7 +757,14 @@ class LLMManager:
         kwargs: Dict[str, Any],
         start_time: float,
     ) -> None:
-        """成功路径后置动作：llm_usage 落库 + 请求历史"""
+        """成功路径后置动作：上下文分段估算 + 两账落库 + 请求历史 + 水位事件"""
+        breakdown = self._build_context_breakdown(
+            request_id=request_id,
+            profile_name=profile_name,
+            model_name=model_name,
+            result=result,
+            kwargs=kwargs,
+        )
         if result.usage and self._llm_repo:
             duration_ms = int((time.time() - start_time) * 1000)
             try:
@@ -762,6 +776,7 @@ class LLMManager:
                     result=result,
                     kwargs=kwargs,
                     duration_ms=duration_ms,
+                    breakdown=breakdown,
                 )
             except Exception as exc:  # noqa: BLE001
                 # 兜底（_persist_llm_call 内部已 try/except；此处防止传播异常）
@@ -773,6 +788,59 @@ class LLMManager:
             kwargs=kwargs,
             start_time=start_time,
         )
+        await self._emit_context_used(breakdown=breakdown, result=result)
+
+    def _build_context_breakdown(
+        self,
+        *,
+        request_id: str,
+        profile_name: str,
+        model_name: str,
+        result: LLMResponse,
+        kwargs: Dict[str, Any],
+    ) -> Optional[ContextBreakdown]:
+        """估算本次调用的上下文分段占用（监控口径，失败返回 None 不阻断调用链）。"""
+        sections = extract_request_sections(kwargs)
+        if sections is None:
+            return None
+        system, messages, tools = sections
+        api_prompt_tokens = int((result.usage or {}).get("prompt_tokens", 0) or 0)
+        try:
+            return estimate_breakdown(
+                request_id=request_id,
+                profile_name=profile_name,
+                model_name=result.model or model_name,
+                system=system,
+                messages=messages,
+                tools=tools,
+                api_prompt_tokens=api_prompt_tokens,
+            )
+        except Exception as exc:  # noqa: BLE001 估算属旁路观测，任何异常只降级
+            self.logger.warning(f"上下文分段估算失败（本次跳过）: {exc}")
+            return None
+
+    async def _emit_context_used(self, *, breakdown: Optional[ContextBreakdown], result: LLMResponse) -> None:
+        """发布 llm.context.used 上下文水位事件（观察面终点广播；失败只告警）。"""
+        if self._event_bus is None or breakdown is None:
+            return
+        try:
+            usage = result.usage or {}
+            await self._event_bus.emit(
+                CoreEvents.LLM_CONTEXT_USED,
+                LLMContextUsedPayload(
+                    request_id=breakdown.request_id,
+                    profile_name=breakdown.profile_name,
+                    model_name=breakdown.model_name,
+                    context_window=self.get_model_context_window(breakdown.model_name),
+                    api_prompt_tokens=breakdown.api_prompt_tokens,
+                    completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+                    sections=[section.model_dump() for section in breakdown.sections],
+                    calibrated=breakdown.calibrated,
+                ),
+                source="LLMManager",
+            )
+        except Exception as exc:  # noqa: BLE001 事件属旁路观测，失败不阻断调用链
+            self.logger.warning(f"上下文水位事件发布失败: {exc}")
 
     @staticmethod
     def _build_request_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -813,6 +881,7 @@ class LLMManager:
         result: LLMResponse,
         kwargs: Dict[str, Any],
         duration_ms: int,
+        breakdown: Optional[ContextBreakdown] = None,
     ) -> None:
         """一次成功调用的两账同事务落库（``llm_usage`` + ``llm_requests`` 原子写入）。
 
@@ -863,6 +932,9 @@ class LLMManager:
                 error=result.error,
                 latency_ms=duration_ms,
                 usage_raw_json=result.usage_raw_json,
+                breakdown_json=(
+                    json.dumps(breakdown.model_dump(), ensure_ascii=False) if breakdown is not None else None
+                ),
             )
             # 落库统一走 observation.record_usage（两表唯一写入点）；携带明细
             # 载荷即两账同事务，缓存列与成本入参的处理收敛在 observation 侧

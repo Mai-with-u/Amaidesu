@@ -52,7 +52,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 12
+SCHEMA_VERSION: int = 13
 
 
 # =============================================================================
@@ -442,7 +442,9 @@ CREATE TABLE IF NOT EXISTS sim_gifts (
 # usage 拆平为多列以便 SQL 聚合（statistics/费用汇总）；request_params 与
 # tool_calls 结构不定，存 JSON 文本。dashboard 历史页按时间倒序分页查询。
 # ``profile_name`` 替换历史 ``client_type`` 列（§2 扩容正名）；新增
-# ``reasoning_tokens`` 思考量列与 ``usage_raw_json`` 解析即弃唯一兜底。
+# ``reasoning_tokens`` 思考量列与 ``usage_raw_json`` 解析即弃唯一兜底；
+# ``breakdown_json`` 为上下文分段占用解剖（监控面板数据源，见
+# ``src/modules/llm/context_meter.py``），估算失败/旧数据为 NULL。
 
 _LLM_REQUESTS_SQL = """
 CREATE TABLE IF NOT EXISTS llm_requests (
@@ -464,7 +466,8 @@ CREATE TABLE IF NOT EXISTS llm_requests (
     success             INTEGER NOT NULL DEFAULT 1,
     error               TEXT,
     latency_ms          INTEGER NOT NULL DEFAULT 0,
-    usage_raw_json      TEXT
+    usage_raw_json      TEXT,
+    breakdown_json      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_llm_requests_ts ON llm_requests(timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_llm_requests_model ON llm_requests(model_name);

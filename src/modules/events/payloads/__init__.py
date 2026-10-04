@@ -49,6 +49,11 @@ from .live import (
     LiveEndedPayload,
     LiveStartedPayload,
 )
+from .llm import (
+    ContextSectionItemPayload,
+    ContextSectionPayload,
+    LLMContextUsedPayload,
+)
 from .planner import (
     PlannerBatchItem,
     PlannerDecisionPayload,
@@ -108,6 +113,10 @@ __all__ = [
     "ToolResultPayload",
     # tool.health.* 工具健康状态变更
     "ToolHealthPayload",
+    # llm.context.used 调用上下文水位
+    "LLMContextUsedPayload",
+    "ContextSectionPayload",
+    "ContextSectionItemPayload",
     # tts.utterance.* 发声实例生命周期
     "UtteranceStartedPayload",
     "UtteranceFinishedPayload",
