@@ -118,7 +118,7 @@ class TestMinecraftPackageConfig:
     def test_defaults(self) -> None:
         """游戏主任务配置保留上下文预算，界面与生成配置均不再暴露累计步数限制。"""
         cfg = AgentsConfig()
-        assert cfg.minecraft.context.max_context_chars == 120_000
+        assert cfg.minecraft.context.max_context_chars == 160_000
         assert "max_steps" not in cfg.minecraft.model_dump()
         assert "max_steps" not in MinecraftConfig.model_json_schema()["properties"]
 

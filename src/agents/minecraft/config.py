@@ -16,7 +16,8 @@ from src.modules.mcp.config import McpServerConfig
 class MinecraftContextConfig(BaseModel):
     """本玩家的工作上下文预算，字符预算限制呈现体积，不冒充厂商 Token 计数。"""
 
-    max_context_chars: int = Field(default=120_000, ge=24_000, description="触发集中整理的消息与工具声明字符预算")
+    # 实测动作步前缀缓存命中 79%–92%，多带一些上下文的代价远小于每次 20–60 秒的摘要
+    max_context_chars: int = Field(default=160_000, ge=24_000, description="触发集中整理的消息与工具声明字符预算")
     recent_turns: int = Field(default=6, ge=1, le=20, description="集中整理时优先保留的近期完整决策轮数")
     summary_max_chars: int = Field(default=6000, ge=1000, le=12000, description="推理摘要的最大字符数")
 

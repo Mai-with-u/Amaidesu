@@ -15,6 +15,10 @@ from src.modules.logging import get_logger
 
 logger = get_logger("MinecraftContext")
 
+# 最新一组回执还没读、怎么整理都压不进预算时，可以先多带这么多倍预算让模型读完，
+# 下一轮再一次性整理掉；再大就照常整理，避免撞上模型上下文窗口
+_UNREAD_RECEIPT_HEADROOM = 1.5
+
 
 def context_chars(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> int:
     """把工具声明一起计入呈现预算，避免只限制观察而遗漏大参数 Schema。"""
@@ -112,6 +116,18 @@ class MinecraftHistoryCompactor:
         # 单份新回执很大时，触发阈值允许暂时超出；先让模型读完，下一轮再整理已读回执。
         # 不能为了压到目标体积，把刚查到的决策编号和失败详情先交给摘要模型删掉。
         if cut is None:
+            unread_floor = context_chars(project(fixed + messages[protected_start:]), tools)
+            if (
+                unread_floor + self._config.summary_max_chars > self._config.max_context_chars
+                and before <= self._config.max_context_chars * _UNREAD_RECEIPT_HEADROOM
+            ):
+                # 这一轮整理完仍超预算（大头是还没读的新回执），下一轮又得再整理一次；
+                # 不如这轮跳过、让身体少等一次摘要，模型读完后下一轮一次整理到位
+                logger.info(
+                    f"Minecraft 上下文暂不整理：最新回执尚未阅读，整理后仍有 {unread_floor} 字符，"
+                    f"本轮带 {before} 字符先读完"
+                )
+                return False
             cut = protected_start
         prompt = {
             "role": "system",

@@ -234,3 +234,81 @@ async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: i
     assert agent._task_steps == used_steps + 3 and not agent._task_suspended
     assert agent._task_finished and llm.generate.await_count == 3
     assert agent._context_compactor.last_calls == 2
+
+
+def _history_with_unread_receipt(receipt_chars: int) -> list[dict]:
+    """几轮已读的小回执，加上最新一组尚未阅读的大回执（实测 13 万字的整份任务回执）。"""
+    messages = [{"role": "system", "content": "完成玩家目标"}, {"role": "user", "content": "取一块铁板"}]
+    for i in range(4):
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": "查看取材回执",
+                    "tool_calls": [
+                        {"id": f"s{i}", "type": "function", "function": {"name": "observe", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": f"s{i}", "content": "背包打开失败" * 300},
+            ]
+        )
+    messages.extend(
+        [
+            {
+                "role": "assistant",
+                "content": "整份读取最新任务回执",
+                "tool_calls": [{"id": "big", "type": "function", "function": {"name": "task", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "big", "content": "完整回执" * (receipt_chars // 4)},
+        ]
+    )
+    return messages
+
+
+@pytest.mark.asyncio
+async def test_unread_oversized_receipt_is_read_before_one_compaction() -> None:
+    """最新回执还没读、整理后仍超预算时本轮跳过；读完后下一轮一次整理到预算内。
+
+    实测每份大回执都会连续整理两次（第一次压不下去），每次让身体多站 20–60 秒。
+    """
+    llm = MagicMock()
+    llm.generate = AsyncMock(return_value=Response(success=True, content="背包打开一直失败", finish_reason="stop"))
+    config = MinecraftContextConfig(max_context_chars=24000, recent_turns=2)
+    compactor = MinecraftHistoryCompactor(llm, config)
+    messages = _history_with_unread_receipt(20000)
+    before = context_chars(messages, [])
+    assert config.max_context_chars < before <= config.max_context_chars * 1.5
+    snapshot = deepcopy(messages)
+
+    assert not await compactor.compact(messages, [], {"original_instructions": ["取一块铁板"]})
+    assert messages == snapshot and llm.generate.await_count == 0 and compactor.last_calls == 0
+
+    # 模型读完大回执、发出下一步后，大回执已是旧历史，一次整理即可回到预算内
+    messages.extend(
+        [
+            {
+                "role": "assistant",
+                "content": "改走合成",
+                "tool_calls": [{"id": "next", "type": "function", "function": {"name": "craft", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "next", "content": "已受理"},
+        ]
+    )
+    assert await compactor.compact(messages, [], {"original_instructions": ["取一块铁板"]})
+    assert llm.generate.await_count == 1 and context_chars(messages, []) < config.max_context_chars
+
+
+@pytest.mark.asyncio
+async def test_far_oversized_context_still_compacts_before_reading() -> None:
+    """超过预算 1.5 倍时不再跳过，照常整理旧历史，避免撞上模型上下文窗口。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(return_value=Response(success=True, content="背包打开一直失败", finish_reason="stop"))
+    config = MinecraftContextConfig(max_context_chars=24000, recent_turns=2)
+    compactor = MinecraftHistoryCompactor(llm, config)
+    messages = _history_with_unread_receipt(40000)
+    assert context_chars(messages, []) > config.max_context_chars * 1.5
+
+    assert await compactor.compact(messages, [], {"original_instructions": ["取一块铁板"]})
+    assert llm.generate.await_count == 1
+    # 尚未阅读的大回执原样保留给模型
+    assert messages[-1]["tool_call_id"] == "big" and len(messages[-1]["content"]) == 40000
