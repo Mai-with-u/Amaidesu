@@ -91,6 +91,13 @@ def _as_id_str(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _reply_last(tool_calls: List[Any]) -> List[Any]:
+    """同一步的工具调用按原序执行，只把说话（streamer_reply）挪到最后。"""
+    others = [call for call in tool_calls if not (isinstance(call, dict) and call.get("name") == "streamer_reply")]
+    replies = [call for call in tool_calls if isinstance(call, dict) and call.get("name") == "streamer_reply"]
+    return others + replies
+
+
 def _tool_call_parts(call: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     """解析中立扁平 tool_call（id/name/arguments）的 (name, arguments)。"""
     name = str(call.get("name", "") or "")
@@ -342,7 +349,9 @@ class Planner:
                 return outcome
 
             replied = False
-            for call in tool_calls:
+            # 同一步里并列的委派/环节切换先执行、说话最后收尾：reply 一成功本轮即结束，
+            # 排在它后面的调用若不先做就会被丢掉（例如说完话却没切到下一个环节）
+            for call in _reply_last(tool_calls):
                 if not isinstance(call, dict):
                     continue
                 name, args = _tool_call_parts(call)
@@ -351,7 +360,9 @@ class Planner:
                 outcome["tool_trace"].append(name)
 
                 if name == "streamer_reply":
-                    observation, replied = await self._invoke_reply(args, outcome, thinking=thinking, round_id=round_id)
+                    observation, replied = await self._invoke_reply(
+                        args, outcome, batch=batch, thinking=thinking, round_id=round_id
+                    )
                 else:
                     observation = await self._invoke_registry_tool(
                         name, args, round_id=round_id, source_dialogue=source_dialogue
@@ -475,20 +486,7 @@ class Planner:
         batch_messages = [canonical.batch_item_to_message(msg) for msg in batch]
         if not history:
             return batch_messages
-
-        batch_ids = {_as_id_str(getattr(msg, "message_id", None)) for msg in batch} - {""}
-        batch_texts = {(getattr(msg, "content", "") or "").strip() for msg in batch} - {""}
-        end = len(history)
-        while end > 0:
-            turn = history[end - 1]
-            turn_id = _as_id_str(getattr(turn, "message_id", None))
-            turn_text = (getattr(turn, "content", "") or "").strip()
-            if (turn_id and turn_id in batch_ids) or (turn_text and turn_text in batch_texts):
-                end -= 1
-            else:
-                break
-
-        history_messages = [canonical.turn_to_message(turn) for turn in history[:end]]
+        history_messages = [canonical.turn_to_message(turn) for turn in canonical.trim_batch_echo(history, batch)]
         return history_messages + batch_messages
 
     # ==================== 工具列表与执行 ====================
@@ -513,6 +511,7 @@ class Planner:
         args: Dict[str, Any],
         outcome: Dict[str, Any],
         *,
+        batch: Optional[List[Any]] = None,
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
     ) -> tuple[str, bool]:
@@ -529,10 +528,14 @@ class Planner:
                 {"ok": False, "error": "reply 工具不可用（tool_registry 未注入）"}, ensure_ascii=False
             ), False
         set_thinking = getattr(self._reply_provider, "set_thinking_callback", None)
+        set_batch = getattr(self._reply_provider, "set_round_batch", None)
         invoke_started_ms = now_ms()
         try:
             if set_thinking is not None:
                 set_thinking(thinking.callback_for("replyer", 1) if thinking else None)
+            if set_batch is not None:
+                # 表达侧要看到观众原话才能接上话；槽位一次性，调用后立即清空
+                set_batch(batch)
             result = await self._tool_registry.invoke(
                 ToolInvocation(tool_name="streamer_reply", arguments=args, source="planner-react", round_id=round_id)
             )
@@ -544,6 +547,8 @@ class Planner:
         finally:
             if set_thinking is not None:
                 set_thinking(None)
+            if set_batch is not None:
+                set_batch(None)
         outcome["reply_duration_ms"] += now_ms() - invoke_started_ms
 
         if not result.success:

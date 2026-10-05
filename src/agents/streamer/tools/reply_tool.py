@@ -120,6 +120,9 @@ class ReplyToolProvider(BaseToolProvider):
         # 本轮思考流回调（LLM 层形态 on_delta）；由 Planner 在 reply 调用前设置、
         # 调用后清理（一次性槽位，ReAct 串行无并发）
         self._thinking_callback: Optional[Any] = None
+        # 本轮弹幕批（Planner 在 reply 调用前设置、调用后清理）：表达侧据此看到观众原话，
+        # 回应弹幕时不会被当成"本批无弹幕"的主动发言
+        self._round_batch: List[Any] = []
         # 可选 EventBus：reply 调用入口发布 planner.verdict（裁决时刻即时事实）
         self._event_bus = event_bus
         self._logger = get_logger("ReplyTool")
@@ -127,6 +130,10 @@ class ReplyToolProvider(BaseToolProvider):
     def set_thinking_callback(self, callback: Optional[Any]) -> None:
         """设置/清理本轮 replyer 阶段的思考流回调（Planner 每轮一次性注入）。"""
         self._thinking_callback = callback
+
+    def set_round_batch(self, batch: Optional[List[Any]]) -> None:
+        """设置/清理本轮弹幕批（Planner 每轮一次性注入；None 即清空）。"""
+        self._round_batch = list(batch or [])
 
     async def _emit_verdict(self, args: Dict[str, Any], round_id: str) -> None:
         """发布 ``planner.verdict``（裁决时刻即时事实；观测旁路，失败不阻断）。
@@ -221,9 +228,8 @@ class ReplyToolProvider(BaseToolProvider):
         except (TypeError, ValueError):
             confidence = 0.9
 
-        # Replyer.generate 接受弹幕批次列表；工具调用时无原始结构，
-        # 故传空列表（Replyer 仍能基于 plan + persona 生成）
-        batch: List[Any] = []
+        # 本轮弹幕批由 Planner 调用前注入；主动发言或脱离 Planner 调用时为空列表
+        batch: List[Any] = list(self._round_batch)
 
         # 构造 plan（must should_reply=true）
         plan = DecisionPlan(

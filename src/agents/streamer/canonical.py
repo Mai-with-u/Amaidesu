@@ -25,6 +25,7 @@ __all__ = [
     "canonical_content",
     "live_chat_row_to_message",
     "to_text_view",
+    "trim_batch_echo",
     "turn_to_message",
 ]
 
@@ -138,6 +139,28 @@ def batch_item_to_message(msg: Any) -> Dict[str, str]:
             message_id=_as_str(getattr(msg, "message_id", None)),
         ),
     }
+
+
+def trim_batch_echo(history: List[Any], batch: List[Any]) -> List[Any]:
+    """剔除历史尾部与本批同源的消息（弹幕先落库再进决策，窗口尾部会与本批重复）。
+
+    按消息 ID 精确匹配、原始文本兜底；只剔尾部连续命中段，更早的同文历史
+    保留为有效上下文。去重在 canonical 化之前做：昵称渲染差异不影响判定。
+    """
+    if not history or not batch:
+        return list(history or [])
+    batch_ids = {_as_str(getattr(msg, "message_id", None)) for msg in batch} - {""}
+    batch_texts = {_as_str(getattr(msg, "content", None)).strip() for msg in batch} - {""}
+    end = len(history)
+    while end > 0:
+        turn = history[end - 1]
+        turn_id = _as_str(getattr(turn, "message_id", None))
+        turn_text = _as_str(getattr(turn, "content", None)).strip()
+        if (turn_id and turn_id in batch_ids) or (turn_text and turn_text in batch_texts):
+            end -= 1
+        else:
+            break
+    return list(history[:end])
 
 
 def to_text_view(messages: List[Any]) -> str:

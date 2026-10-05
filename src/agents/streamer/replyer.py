@@ -148,7 +148,10 @@ class Replyer:
         # 对话历史走原生消息通道（canonical 单一映射，与 Planner 同源）：
         # 历史段跨轮逐字稳定、只追加不重排，是请求前缀缓存命中的前提；
         # 文本拍平进单条 user 消息会让每轮请求前缀全变，缓存无从命中。
-        history_messages = [canonical.turn_to_message(msg) for msg in (history or [])]
+        # 本批弹幕已在"本批弹幕"段完整呈现，历史尾部落库的同一批不再重复一遍
+        history_messages = [
+            canonical.turn_to_message(msg) for msg in canonical.trim_batch_echo(list(history or []), batch)
+        ]
         messages: List[Dict[str, Any]] = [*history_messages, {"role": "user", "content": turn_input}]
 
         # reply 是唯一工具——表达引擎不持有任何信息/动作类工具列表

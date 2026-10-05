@@ -101,6 +101,14 @@ class _LiveChatTurn:
     sender_name: str = ""
     message_type: str = "danmaku"
     message_id: str = ""
+    # 发生时刻：落库行与内存对话轮按它合并成同一条时间线
+    timestamp_ms: int = 0
+
+
+def _text_field(item: Any, name: str) -> str:
+    """鸭子字段取文本：只接受 str，其余（None/Mock 等）按空串处理。"""
+    value = getattr(item, name, "")
+    return value if isinstance(value, str) else ""
 
 
 class StreamerAgent(BaseAgent):
@@ -355,6 +363,11 @@ class StreamerAgent(BaseAgent):
         self._game_narrative_blocks: List[str] = []
         self._body_narrative_blocks: List[str] = []
 
+        # 未落库的对话轮：没开场次时的全部对话、调试面板注入的观众消息都不会写进
+        # live_chat，由这里按时间并入历史——主播问"要不要拉一下"、观众回"拉"时，
+        # 下一轮决策仍看得到自己刚问过什么。场次开始/结束时清空，与 live_chat 同以场次为界。
+        self._unpersisted_turns: List[_LiveChatTurn] = []
+
         # 运营递话提醒队列（receive_prompt 入队；下个决策窗以【运营提醒】段
         # 注入参考块，读取即取空——送达一次制）。满时拒收，必达不允许静默挤旧。
         self._reminder_queue: deque[str] = deque(maxlen=_REMINDER_QUEUE_MAX)
@@ -504,7 +517,8 @@ class StreamerAgent(BaseAgent):
         # reply tool（无条件构造——thinking 槽位与注册共用同一实例）
         self._reply_provider = ReplyToolProvider(
             replyer=self._replyer,
-            history_provider=(self._read_history_sync if self._chat is not None else None),
+            # 没有聊天仓储时历史仍由内存对话轮承载，表达侧照样知道上一句说了什么
+            history_provider=self._read_history_sync,
             rundown_text_provider=self._build_rundown_text_sync,
             event_bus=self._event_bus,
         )
@@ -610,6 +624,8 @@ class StreamerAgent(BaseAgent):
         """live.started 回调：开播，放行主动发言。"""
         del event_name, source
         self._live_active = True
+        # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
+        self._unpersisted_turns.clear()
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
 
     async def _on_live_ended(
@@ -621,6 +637,8 @@ class StreamerAgent(BaseAgent):
         """live.ended 回调：下播，主动发言收闸。"""
         del event_name, source
         self._live_active = False
+        # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
+        self._unpersisted_turns.clear()
         self._logger.info("场次已结束：主动发言收闸")
 
     async def _on_game_event(
@@ -811,11 +829,13 @@ class StreamerAgent(BaseAgent):
         trigger_reason = "proactive:dashboard_debug" if proactive else "dashboard:debug_test"
         try:
             async with self._flush_lock:
-                result = await self._rounds.execute(
+                # 调试注入不经 room.message 事件，观众这句不会落库；记入内存后下一轮仍能接上话
+                result = await self._execute_round(
                     messages,
                     forced=forced,
                     trigger_reason=trigger_reason,
                     proactive=proactive,
+                    batch_persisted=False,
                 )
         except Exception as exc:
             self._logger.exception(f"调试决策执行异常: {exc}")
@@ -878,7 +898,7 @@ class StreamerAgent(BaseAgent):
                 if reason is not None:
                     self._stats.total_proactive += 1
                     self._logger.info(f"主动发言触发: {reason}")
-                    await self._rounds.execute(
+                    await self._execute_round(
                         [],
                         forced=False,
                         trigger_reason=f"proactive:{reason}",
@@ -899,7 +919,72 @@ class StreamerAgent(BaseAgent):
                 return
             self._stats.total_batches += 1
 
-            await self._rounds.execute(batch, forced=forced, trigger_reason=flush_reason)
+            await self._execute_round(batch, forced=forced, trigger_reason=flush_reason)
+
+    async def _execute_round(
+        self,
+        batch: List[RoomMessagePayload],
+        *,
+        forced: bool,
+        trigger_reason: str,
+        proactive: bool = False,
+        batch_persisted: bool = True,
+    ) -> Dict[str, Any]:
+        """执行一轮决策，并把本轮观众消息与主播发言记入尚未落库的对话轮。
+
+        ``batch_persisted`` 表示本批消息是否经 room.message 事件进了落库链路；
+        调试注入传 False——即使开着场次，这些消息也不在 live_chat 里。
+        """
+        result = await self._rounds.execute(batch, forced=forced, trigger_reason=trigger_reason, proactive=proactive)
+        await self._remember_round(batch, result, batch_persisted=batch_persisted)
+        return result
+
+    async def _remember_round(
+        self,
+        batch: List[RoomMessagePayload],
+        result: Dict[str, Any],
+        *,
+        batch_persisted: bool,
+    ) -> None:
+        """决策轮结束后补记不会从 live_chat 读回的对话：观众先说、主播后答。"""
+        chat_persisted = await self._chat_persisted()
+        if not (batch_persisted and chat_persisted):
+            for msg in batch:
+                user = getattr(msg, "user", None)
+                nickname = getattr(user, "name", None) or getattr(user, "id", None)
+                timestamp = getattr(msg, "timestamp_ms", None)
+                self._unpersisted_turns.append(
+                    _LiveChatTurn(
+                        role="viewer",
+                        content=_text_field(msg, "content"),
+                        sender_name=nickname if isinstance(nickname, str) else "",
+                        message_type=_text_field(msg, "message_type") or "danmaku",
+                        message_id=_text_field(msg, "message_id"),
+                        timestamp_ms=timestamp if isinstance(timestamp, int) and timestamp > 0 else now_ms(),
+                    )
+                )
+        speech = result.get("speech")
+        # 开着场次时主播发言由 StorageLedger 写进 live_chat，这里只补没有落库的那一份
+        if speech and not chat_persisted:
+            self._unpersisted_turns.append(
+                _LiveChatTurn(
+                    role="assistant",
+                    content=str(speech),
+                    sender_name="主播",
+                    message_type="speak",
+                    timestamp_ms=now_ms(),
+                )
+            )
+
+    async def _chat_persisted(self) -> bool:
+        """当前对话是否会写进 live_chat 并能被历史读回（显式场次进行中且有聊天仓储）。"""
+        if self._chat is None or self._session_manager is None:
+            return False
+        try:
+            return await self._session_manager.resolve_pk() is not None
+        except Exception as exc:
+            self._logger.warning(f"解析当前场次失败（本轮对话按未落库记入内存）: {exc}", exc=exc)
+            return False
 
     def _estimate_avg_interval_ms(self) -> Optional[float]:
         """估算缓冲内消息平均间隔（供 idle 补偿公式使用）。"""
@@ -1046,31 +1131,39 @@ class StreamerAgent(BaseAgent):
         return self._read_history()
 
     async def _read_history(self) -> Optional[List[Any]]:
-        """按时间正序读取当前直播场次完整对话，保留早期要求与已有承诺。"""
-        if self._chat is None or self._session_manager is None:
-            return None
-        try:
-            live_pk = await self._session_manager.resolve_pk()
-            if live_pk is None:
-                return []
-            rows = await self._chat.list_recent_live_chat(
-                live_session_id=live_pk,
-                limit=None,
-            )
-        except Exception as exc:
-            self._logger.warning(f"读取会话历史失败: {exc}")
-            return None
-        turns = [
-            _LiveChatTurn(
-                role=row["sender_role"],
-                content=row["content"],
-                sender_name=row["sender_name"] or "",
-                message_type=row["message_type"],
-                message_id=row["message_id"] or "",
-            )
-            for row in rows
-        ]
-        return turns
+        """按时间正序读取当前对话，保留早期要求与已有承诺。
+
+        显式场次进行中时，live_chat 是已落库对话的事实源；没开场次时的对话与
+        调试注入的观众消息不会落库，由内存对话轮按发生时刻并入同一条时间线。
+        读库失败返回 None（宁可本轮无历史，也不拿残缺历史冒充完整对话）。
+        """
+        stored: List[_LiveChatTurn] = []
+        if self._chat is not None and self._session_manager is not None:
+            try:
+                live_pk = await self._session_manager.resolve_pk()
+                rows = (
+                    await self._chat.list_recent_live_chat(live_session_id=live_pk, limit=None)
+                    if live_pk is not None
+                    else []
+                )
+            except Exception as exc:
+                self._logger.warning(f"读取会话历史失败: {exc}")
+                return None
+            stored = [
+                _LiveChatTurn(
+                    role=row["sender_role"],
+                    content=row["content"],
+                    sender_name=row["sender_name"] or "",
+                    message_type=row["message_type"],
+                    message_id=row["message_id"] or "",
+                    timestamp_ms=int(row["timestamp_ms"] or 0),
+                )
+                for row in rows
+            ]
+        if not self._unpersisted_turns:
+            return stored
+        # 稳定排序：同一时刻的落库行与内存轮保持各自原有先后，历史前缀跨轮逐字稳定
+        return sorted([*stored, *self._unpersisted_turns], key=lambda turn: turn.timestamp_ms)
 
     # ==================================================================
     # 统计信息
