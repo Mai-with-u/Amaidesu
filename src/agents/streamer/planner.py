@@ -255,21 +255,26 @@ class Planner:
             delegation.reported_ms = now_ms()
 
     def _render_delegations(self, current_ms: int) -> str:
-        """身体手头的事：每个执行 Agent 最近一次委派的原话、距今多久、是否已交付或卡住。"""
+        """我手头在游戏里做的事：每个游戏最近一次开始做的事、距今多久、做完了还是卡住了。
+
+        用第一人称写：对观众来说只有一个主播，游戏里的操作也是"我"在做，
+        写成"交给谁""身体在做"会让表达里冒出"活已经派下去了"这种让观众困惑的话。
+        """
         rows: List[str] = []
         for delegation in self._delegations.values():
+            game = f"在 {delegation.agent} 里" if delegation.agent else "在游戏里"
             head = (
-                f"{age_text(current_ms - delegation.at_ms)}交给 {delegation.agent or '游戏身体'}"
-                f"（任务 {delegation.task_id}）：{delegation.instruction}"
+                f"{age_text(current_ms - delegation.at_ms)}{game}开始做（任务 {delegation.task_id}）："
+                f"{delegation.instruction}"
             )
             if delegation.report_kind == "delivery":
-                state = f"身体已在{age_text(current_ms - delegation.reported_ms)}交付，结果见【游戏叙事】。"
+                state = f"已在{age_text(current_ms - delegation.reported_ms)}做完，结果见【游戏叙事】。"
             elif delegation.report_kind == "escalation":
                 state = (
-                    f"身体在{age_text(current_ms - delegation.reported_ms)}上报卡住了，正等你定夺（见【游戏叙事】）。"
+                    f"在{age_text(current_ms - delegation.reported_ms)}卡住了，正等我和观众一起定夺（见【游戏叙事】）。"
                 )
             else:
-                state = "身体还在做，还没有交付或上报。"
+                state = "还在做，还没做完。"
             rows.append(f"- {head}\n  {state}")
         return "\n".join(rows)
 
@@ -502,14 +507,15 @@ class Planner:
             # 游戏进度保留完整叙述，使施工结果和未解决的问题都能进入本轮决策。
             lines.append(f"【游戏叙事】{game_narrative}")
         if body_narrative:
-            # 身体侧近况：单独一段，不与游戏叙事混排——两者形状与更新频率不同，
-            # 混在一起会让高频的遭遇把进展叙事挤掉。
-            lines.append(f"【身体近况】{body_narrative}")
+            # 我在游戏里的遭遇（被打/死亡/重生/紧急反应）：单独一段，不与游戏叙事混排——
+            # 两者形状与更新频率不同，混在一起会让高频的遭遇把进展叙事挤掉。
+            # 标题用第一人称：游戏里挨打的就是主播自己，不是另一个"身体"
+            lines.append(f"【我在游戏里的遭遇】{body_narrative}")
         work = self._render_delegations(now_ms())
         if work:
-            # 身体手头的事：最近一次委派的原话与进展。看得到身体在忙什么，
-            # 观众补充或催促时才会递话，而不是每条弹幕都改派一个新目标
-            lines.append(f"【身体手头的事】\n{work}")
+            # 我手头在游戏里做的事：最近一次开始做的原话与进展。看得到自己在忙什么，
+            # 观众补充或催促时才会补充要求，而不是每条弹幕都换一个新目标
+            lines.append(f"【我手头在游戏里做的事】\n{work}")
         if reminders:
             # 运营提醒：后台递话，必达素材——不伪装观众弹幕、不进对话历史，
             # 仅进本轮参考块（消费即送达，由调用方在决策窗入口取空队列）。
@@ -670,7 +676,7 @@ class Planner:
         """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。"""
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
-        # 记下主播自己的委派原话（附来源对话之前），之后每轮都能看到身体手上正做着什么
+        # 记下主播自己开始做事时的原话（附来源对话之前），之后每轮都能看到自己在游戏里手上正做着什么
         own_instruction = str(args.get("instruction") or "") if name == "framework_delegate" else ""
         if (
             name == "framework_delegate"
@@ -678,15 +684,19 @@ class Planner:
             and isinstance(args.get("instruction"), str)
             and args["instruction"].strip()
         ):
-            # 游戏侧按对应观众原话理解目标；转述偏差不增加确认手续，同批其他请求也不产生行动授权。
+            # 做什么由主播拿主意：游戏侧以本次目标为准，原话只补物品名写法和禁用条件。
+            # 实测"别死磕这台机器"配上"以原话为准"的"放块铁板试试"，游戏侧收到两个相反要求；
+            # 原话离开直播间上下文（"试试看？""那你……"）也读不懂，所以做法建议只在目标采纳时才做。
+            # 抬头写"本次目标"而不是"委派"：游戏里动手的也是主播自己，不该读成别人派来的活。
             args = dict(args)
             args["instruction"] = (
-                "[委派目标]\n"
+                "[本次目标]\n"
                 + args["instruction"]
-                + "\n\n[来源对话：逐字引用，仅用于核对本目标的术语与限制，不构成额外任务]\n"
+                + "\n\n[来源对话：逐字引用，只用于核对本次目标里的物品名写法与禁用条件，不构成额外任务]\n"
                 + json.dumps(source_dialogue, ensure_ascii=False, default=str)
-                + "\n本次目标的具体要求以对应来源原话为准；由接收方结合上下文理解并执行，"
-                "保留原话中的确认与权限要求，不把转述额外添加的查证或确认步骤视为用户要求。"
+                + "\n做什么、用什么办法以本次目标为准，两者冲突时听本次目标；本次目标没写到的物品名写法、"
+                "禁用条件和确认与权限要求按原话补上；原话里的做法建议和其他请求，只有本次目标采纳了才做。"
+                "不把转述额外添加的查证或确认步骤视为用户要求。"
             )
         try:
             result = await self._tool_registry.invoke(

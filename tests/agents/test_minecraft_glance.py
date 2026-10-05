@@ -129,7 +129,7 @@ async def test_glance_tool_combines_body_surroundings_and_work() -> None:
     assert view["body"]["position"] == [-86, 105, 27]
     assert view["signs"][0]["text"] == "停机开关"
     assert view["work"] == {
-        "state": "正在做主播交代的事",
+        "state": "正在做手上的事",
         "todo": [{"content": "拿 1 块铁板", "status": "in_progress"}],
         "failure_streak": 4,
     }

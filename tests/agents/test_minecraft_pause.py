@@ -83,7 +83,7 @@ async def test_displaced_pause_wakes_agent_and_blocks_idle_wait() -> None:
     narrated = [
         call.args[1].message for call in bus.emit.await_args_list if call.args[0] == CoreEvents.GAME_ATTENTION_REQUIRED
     ]
-    assert narrated == ["身体手上的游戏内动作暂停了：自卫时被带离了工位。"]
+    assert narrated == ["我手上的游戏内动作暂停了：自卫时被带离了工位。"]
     refused = agent._request_wait()
     assert refused["ok"] is False and refused["paused_tasks"] == {"t1": "self_defense_displaced"}
 

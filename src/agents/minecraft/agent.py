@@ -73,9 +73,11 @@ _FAILURE_STREAK_REPEAT = 5
 
 # 角色按目标理解口语并推进施工；常驻提示只保留决策与访问边界，部件细节按需从 Mod 资料读取。
 _GAMEPLAY_RULES = (
-    "\n目标理解：依据本次目标对应的原话、场景和工艺决定要完成的结果，保留产物、地点、数量与模组限制。"
+    # 做什么以主播发来的本次目标为准：原话离开直播间上下文容易读偏，只拿来核对物品名写法与禁用条件
+    "\n目标理解：依据本次目标、场景和工艺决定要完成的结果，保留产物、地点、数量与模组限制；"
+    "附带的来源原话只用来核对物品名写法与禁用条件，与本次目标冲突时听本次目标。"
     "口语、错别字或自定义机器名称不要求与注册名完全一致；要建造的机器也可以是生产目标物品的一组装置。"
-    "找到符合原话的产物与工艺后，说明采用的解释并继续设计，无需先证明全库不存在同名整机。"
+    "找到符合目标的产物与工艺后，说明采用的解释并继续设计，无需先证明全库不存在同名整机。"
     "只有证据支持会造成实质不同结果的多个解释、且上下文无法取舍时才澄清；真正缺少目标时也应询问。"
     "把转述中的‘不明确先查证’作为解决实际疑问的提醒，不新增等待用户确认的步骤。"
     # 模板和内建提示共用取材原则，避免换提示入口后又排除手上的无线库存、先去远处搜索。
@@ -985,10 +987,11 @@ class MinecraftAgent(BaseAgent):
 
     def _glance_work(self) -> Dict[str, Any]:
         """身体手头的工作：在做/等主播指令/空闲、待办、未结束的游戏内动作、连续失败次数。"""
+        # 状态写成主播自己的口吻：读这份结果的就是主播本人，"主播交代的事"会让它以为另有人在干活
         if self._task_suspended:
-            state = "卡住了，正在等主播的新指令"
+            state = "卡住了，正等我拿主意"
         elif not self._task_finished:
-            state = "正在做主播交代的事"
+            state = "正在做手上的事"
         else:
             state = "空闲"
         work: Dict[str, Any] = {"state": state, "todo": self._mc_state.todo_doc()["todos"]}
@@ -1339,9 +1342,10 @@ class MinecraftAgent(BaseAgent):
         if streak < _FAILURE_STREAK_NOTICE or (streak - _FAILURE_STREAK_NOTICE) % _FAILURE_STREAK_REPEAT:
             return
         reason = (payload.summary or "").strip() or payload.status
+        # 叙事是主播自己的经历，用第一人称写：连续失败 -> 照实说卡在哪 -> 说明还在换办法，不让主播替我放弃
         message = (
-            f"身体卡在同一步了：最近连续 {streak} 个游戏内动作没有成功（最近一次：{reason}），"
-            "身体还在换办法继续，没有放弃这个任务。"
+            f"我卡在同一步了：最近连续 {streak} 个游戏内动作没有成功（最近一次：{reason}），"
+            "我还在换办法继续，没有放弃。"
         )
         spawn_background_task(
             self._emit_game_event("attention_required", message),
@@ -1393,7 +1397,8 @@ class MinecraftAgent(BaseAgent):
         detail_text = f"（Mod 说明：{detail}）" if detail else ""
         self._inject_wakeup_message(f"[系统] 后台任务 {task_id} 已被 Mod 暂停：{label}{detail_text}。{advice}")
         spawn_background_task(
-            self._emit_game_event("attention_required", f"身体手上的游戏内动作暂停了：{label}。"),
+            # 告诉主播的是"我手上的事停了"：主播和游戏里的我是同一个人，不说成另一个身体
+            self._emit_game_event("attention_required", f"我手上的游戏内动作暂停了：{label}。"),
             logger=self._logger,
             tasks=self._bg_tasks,
             label="MinecraftAgent.task_paused_notice",

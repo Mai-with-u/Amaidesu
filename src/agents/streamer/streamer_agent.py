@@ -681,7 +681,7 @@ class StreamerAgent(BaseAgent):
             self._game_narrative_blocks.append(_NarrativeEntry(received_ms=now_ms(), line=line))
             if payload.event_type == "report":
                 self._game_decision_pending = True
-                # 身体交付或上报卡住：【身体手头的事】里那次委派随之标成已上报
+                # 游戏里做完或卡住待定夺：【我手头在游戏里做的事】里那件事随之标成已上报
                 self._planner.note_game_report(payload.game, payload.report_kind or "")
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏叙事失败: {exc}")

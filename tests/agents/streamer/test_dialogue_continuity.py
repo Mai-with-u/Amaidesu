@@ -337,15 +337,16 @@ async def test_registry_observation_keeps_one_copy_of_duplicated_json_body() -> 
 
 
 # ---------------------------------------------------------------------------
-# 身体手头的事：委派原话与进展进入每轮参考段
+# 我手头在游戏里做的事：开始做事时的原话与进展进入每轮参考段
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_planner_sees_what_the_body_is_doing_until_it_reports() -> None:
-    """委派受理后每轮都看得到身体手上的原话与进展；身体交付或卡住后状态随之改变。
+    """开始做事后每轮都看得到自己手上的原话与进展；做完或卡住后状态随之改变，且全程第一人称。
 
-    实测半小时委派 27 次、目标来回反转：主播看不到身体正在做什么，就把每条弹幕都改派成新目标。
+    实测半小时委派 27 次、目标来回反转：主播看不到身体正在做什么，就把每条弹幕都改派成新目标；
+    写成"交给谁"又会让主播对观众说出"活已经派下去了"。
     """
     captured: List[List[dict]] = []
 
@@ -376,25 +377,53 @@ async def test_planner_sees_what_the_body_is_doing_until_it_reports() -> None:
     assert observation["accepted"] is True
     await planner.plan([_msg("快点呀", "m1")])
     working = captured[-1][-1]["content"]
-    assert "【身体手头的事】" in working and f"交给 minecraft（任务 deleg_1）：{instruction}" in working
-    assert "身体还在做" in working and "[来源对话" not in working
+    work = working.split("【我手头在游戏里做的事】\n", 1)[1].split("\n\n", 1)[0]
+    assert f"在 minecraft 里开始做（任务 deleg_1）：{instruction}" in work
+    assert "还在做，还没做完" in work and "[来源对话" not in working
+    assert not any(word in work for word in ("交给", "身体", "委派"))
 
     planner.note_game_report("minecraft", "escalation")
     await planner.plan([_msg("怎么样了", "m2")])
-    assert "上报卡住了，正等你定夺" in captured[-1][-1]["content"]
+    assert "卡住了，正等我和观众一起定夺" in captured[-1][-1]["content"]
 
     planner.note_game_report("minecraft", "delivery")
     await planner.plan([_msg("好了吗", "m3")])
-    assert "交付，结果见【游戏叙事】" in captured[-1][-1]["content"]
+    assert "做完，结果见【游戏叙事】" in captured[-1][-1]["content"]
 
 
 def test_planner_prompt_keeps_viewer_method_and_relays_instead_of_redelegating() -> None:
-    """Planner 守则：身体在忙时递话不改派；观众给的做法原样转达，不用早先判断否定；物品名不翻译。"""
+    """Planner 守则：我拿主意并写成完整决定，观众的具体说法用「」逐字引用；手头的事没做完时补充不换目标；
+    观众给的做法默认采纳，不用早先判断否定；物品名不翻译。"""
     reset_prompt_manager()
     try:
         prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
     finally:
         reset_prompt_manager()
-    assert "身体在忙时递话，不改派" in prompt and "framework_prompt" in prompt
-    assert "观众给的做法原样转达" in prompt and "不要用你自己或早先游戏叙事里的判断否定它" in prompt
-    assert '"蜂蜜胶"不是"蜂蜜块"' in prompt
+    assert "手头的事没做完时补充，不换目标" in prompt and "framework_prompt" in prompt
+    assert "观众给的做法默认采纳去试" in prompt and "不要用你自己或早先游戏叙事里的判断否定它" in prompt
+    assert "我拿主意，写成完整的决定" in prompt and "用「」逐字写进去" in prompt
+    assert "「蜂蜜胶」不是「蜂蜜块」" in prompt and "做什么以我的决定为准" in prompt
+
+
+def test_streamer_prompts_speak_as_one_streamer() -> None:
+    """一体化自我认知：决策和表达都把游戏里的动作当成自己做的，不对观众说"派下去了"。
+
+    实测主播常说"活已经派下去了"，观众会疑惑派给了谁。
+    """
+    reset_prompt_manager()
+    try:
+        manager = get_prompt_manager()
+        planner = manager.render("amaidesu_planner_react", behavior_style="积极互动")
+        replyer = manager.render(
+            "amaidesu_replyer_system",
+            bot_name="麦麦",
+            personality="活泼",
+            style_constraints="",
+            audience_salutation="大家",
+        )
+    finally:
+        reset_prompt_manager()
+    assert "# 你是谁" in planner and "只有一个你" in planner
+    assert "没有小伙伴、没有游戏 Agent" in planner and "【我手头在游戏里做的事】" in planner
+    assert "【身体" not in planner
+    assert "游戏里干活的就是你自己" in replyer and "活已经派下去了" in replyer
