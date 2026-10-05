@@ -34,13 +34,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
-from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler
+from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolInvocation
@@ -62,6 +63,18 @@ def _render_observation(data: Any) -> str:
 
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
 _DEFAULT_MAX_STEPS: int = 8
+
+
+@dataclass
+class _Delegation:
+    """一次已受理的委派：交给谁、主播自己的原话、何时交出，以及身体是否已上报。"""
+
+    agent: str
+    instruction: str
+    task_id: str
+    at_ms: int
+    report_kind: str = ""  # delivery=已交付 / escalation=卡住待定夺；空=还在做
+    reported_ms: int = 0
 
 
 class _PlannerConfig(BaseConfig):
@@ -108,7 +121,7 @@ _PAID_TYPE_LABELS: Dict[str, str] = {"super_chat": "SC", "gift": "礼物", "guar
 def _forced_situation(batch: List[Any]) -> str:
     """强制回应批次的情境标注：本批真有付费消息才说"付费点名"。
 
-    控制台点名测试同样强制回应，但那只是运营要求必答，不是 SC——当成付费
+    控制台点名同样强制回应，但它是以观众身份说的话、不是 SC——当成付费
     会让主播对每句调试话都"谢谢老板 SC"。
     """
     paid = [
@@ -118,9 +131,10 @@ def _forced_situation(batch: List[Any]) -> str:
     ]
     if paid:
         return f"【情境】本批为强制回应（含付费消息：{' / '.join(paid)}）——观众付费点名，应优先回应。"
+    # 控制台点名就是观众的话，只是必须回应；写成"运营"会让模型把它降级成仅供参考的建议
     return (
-        "【情境】本批为强制回应（运营点名的必答消息，不是 SC / 礼物 / 上舰，没有人付费）"
-        "——优先回应消息本身，不要致谢付费。"
+        "【情境】本批为强制回应（控制台以观众身份点名的消息：必须回应，但不是 SC / 礼物 / 上舰，没有人付费）"
+        "——优先回应消息本身，把它当成观众的要求认真对待，不要致谢付费。"
     )
 
 
@@ -209,6 +223,9 @@ class Planner:
         self._behavior_style: str = behavior_style or ""
         self._reply_provider = reply_provider
         self._elapsed_live_provider = elapsed_live_provider
+        # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派 27 次、
+        # 目标来回反转——主播看不到身体手上正做着什么，就会把每条弹幕都改派成新目标
+        self._delegations: Dict[str, _Delegation] = {}
 
         self._assembler = PlannerAssembler()
 
@@ -226,6 +243,35 @@ class Planner:
     def bind_elapsed_live_provider(self, provider: Callable[[], Optional[int]]) -> None:
         """注入开播时长查询（StreamerAgent 构造 RundownState 后绑定，同 bind 模式）。"""
         self._elapsed_live_provider = provider
+
+    def note_game_report(self, game: str, report_kind: str) -> None:
+        """游戏侧上报（交付/卡住待定夺）到达：把对应执行 Agent 手头那次委派标成已上报。
+
+        游戏 Agent 以自己的注册名作为上报的 game 字段，按名字对上即可。
+        """
+        delegation = self._delegations.get(game)
+        if delegation is not None and report_kind in {"delivery", "escalation"}:
+            delegation.report_kind = report_kind
+            delegation.reported_ms = now_ms()
+
+    def _render_delegations(self, current_ms: int) -> str:
+        """身体手头的事：每个执行 Agent 最近一次委派的原话、距今多久、是否已交付或卡住。"""
+        rows: List[str] = []
+        for delegation in self._delegations.values():
+            head = (
+                f"{age_text(current_ms - delegation.at_ms)}交给 {delegation.agent or '游戏身体'}"
+                f"（任务 {delegation.task_id}）：{delegation.instruction}"
+            )
+            if delegation.report_kind == "delivery":
+                state = f"身体已在{age_text(current_ms - delegation.reported_ms)}交付，结果见【游戏叙事】。"
+            elif delegation.report_kind == "escalation":
+                state = (
+                    f"身体在{age_text(current_ms - delegation.reported_ms)}上报卡住了，正等你定夺（见【游戏叙事】）。"
+                )
+            else:
+                state = "身体还在做，还没有交付或上报。"
+            rows.append(f"- {head}\n  {state}")
+        return "\n".join(rows)
 
     # ==================== 主入口 ====================
 
@@ -459,6 +505,11 @@ class Planner:
             # 身体侧近况：单独一段，不与游戏叙事混排——两者形状与更新频率不同，
             # 混在一起会让高频的遭遇把进展叙事挤掉。
             lines.append(f"【身体近况】{body_narrative}")
+        work = self._render_delegations(now_ms())
+        if work:
+            # 身体手头的事：最近一次委派的原话与进展。看得到身体在忙什么，
+            # 观众补充或催促时才会递话，而不是每条弹幕都改派一个新目标
+            lines.append(f"【身体手头的事】\n{work}")
         if reminders:
             # 运营提醒：后台递话，必达素材——不伪装观众弹幕、不进对话历史，
             # 仅进本轮参考块（消费即送达，由调用方在决策窗入口取空队列）。
@@ -619,6 +670,8 @@ class Planner:
         """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。"""
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
+        # 记下主播自己的委派原话（附来源对话之前），之后每轮都能看到身体手上正做着什么
+        own_instruction = str(args.get("instruction") or "") if name == "framework_delegate" else ""
         if (
             name == "framework_delegate"
             and source_dialogue
@@ -657,6 +710,12 @@ class Planner:
                 and not _same_json_document(result.content, result.structured_content)
             ):
                 data["content"] = result.content
+            if name == "framework_delegate" and data.get("accepted"):
+                # 新委派替换同一执行者手上的旧目标：只保留最近一次，状态从"还在做"重新开始
+                agent = str(data.get("executor") or args.get("agent") or "")
+                self._delegations[agent] = _Delegation(
+                    agent=agent, instruction=own_instruction, task_id=str(data.get("task_id") or ""), at_ms=now_ms()
+                )
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
         return _render_observation(data)

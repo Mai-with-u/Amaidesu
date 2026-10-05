@@ -57,6 +57,7 @@ from .background import BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
 from .message_buffer import MessageBuffer
 from .planner import Planner
+from .planner_context import age_text
 from .proactive_trigger import ProactiveTrigger
 from .replyer import WordFilter, Replyer
 from .room_state import RoomState
@@ -113,22 +114,11 @@ class _NarrativeEntry:
     line: str
 
 
-def _age_text(age_ms: int) -> str:
-    """到达距今的口语时长：一分钟内是"刚刚"，再往前按分钟/小时说。"""
-    minutes = max(0, age_ms) // 60_000
-    if minutes < 1:
-        return "刚刚"
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours} 小时 {minutes} 分钟前"
-    return f"{minutes} 分钟前"
-
-
 def _render_narrative(entries: List[_NarrativeEntry], *, seen_until_ms: int, now: int) -> str:
     """叙事条目按到达先后全部列出，行首标注到达距今多久；上次决策之后才到达的加"新"。"""
     lines: List[str] = []
     for entry in entries:
-        age = _age_text(now - entry.received_ms)
+        age = age_text(now - entry.received_ms)
         mark = f"新·{age}" if entry.received_ms > seen_until_ms else age
         lines.append(f"[{mark}] {entry.line}")
     return "\n".join(lines)
@@ -691,6 +681,8 @@ class StreamerAgent(BaseAgent):
             self._game_narrative_blocks.append(_NarrativeEntry(received_ms=now_ms(), line=line))
             if payload.event_type == "report":
                 self._game_decision_pending = True
+                # 身体交付或上报卡住：【身体手头的事】里那次委派随之标成已上报
+                self._planner.note_game_report(payload.game, payload.report_kind or "")
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏叙事失败: {exc}")
 

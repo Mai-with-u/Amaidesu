@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -21,11 +22,12 @@ from src.agents.streamer import canonical
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.streamer_agent import StreamerAgent
+from src.agents.streamer.streamer_agent import StreamerAgent, _NarrativeEntry, _render_narrative
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
+from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 
 
@@ -269,8 +271,6 @@ def test_trim_batch_echo_drops_only_tail_copy_of_batch() -> None:
 
 def test_narrative_marks_age_and_new_since_last_round() -> None:
     """旧条目标到达距今多久，上次决策后才到的标"新"——死亡不会被当成刚发生的事反复讲。"""
-    from src.agents.streamer.streamer_agent import _NarrativeEntry, _render_narrative
-
     entries = [
         _NarrativeEntry(received_ms=0, line="[minecraft·died] 死了"),
         _NarrativeEntry(received_ms=40 * 60_000, line="[minecraft·report] 蜂房机器运转正常"),
@@ -305,15 +305,15 @@ async def test_forced_debug_batch_is_not_labeled_as_paid() -> None:
     await planner.plan([paid], forced=True)
 
     debug_ref, paid_ref = captured[0][-1]["content"], captured[1][-1]["content"]
-    assert "运营点名的必答消息" in debug_ref and "SC" in debug_ref and "付费点名" not in debug_ref
+    # 控制台点名就是观众的话：不能写成"运营"，否则模型会把它降级成仅供参考的建议
+    assert "控制台以观众身份点名" in debug_ref and "当成观众的要求认真对待" in debug_ref
+    assert "运营" not in debug_ref and "付费点名" not in debug_ref
     assert "含付费消息：SC" in paid_ref
 
 
 @pytest.mark.asyncio
 async def test_registry_observation_keeps_one_copy_of_duplicated_json_body() -> None:
     """MCP 工具正文只是结构化结果的 JSON 时只给一份；正文另有信息时照常附上。"""
-    import json
-
     structured = {"health": 20.0, "position": {"x": -86, "y": 105, "z": 27}}
     registry = MagicMock()
     registry.list_tools = MagicMock(return_value=[])
@@ -334,3 +334,67 @@ async def test_registry_observation_keeps_one_copy_of_duplicated_json_body() -> 
 
     assert "content" not in duplicated and duplicated["health"] == 20.0
     assert distinct["content"] == "附近有一块写着蜂房的牌子"
+
+
+# ---------------------------------------------------------------------------
+# 身体手头的事：委派原话与进展进入每轮参考段
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_planner_sees_what_the_body_is_doing_until_it_reports() -> None:
+    """委派受理后每轮都看得到身体手上的原话与进展；身体交付或卡住后状态随之改变。
+
+    实测半小时委派 27 次、目标来回反转：主播看不到身体正在做什么，就把每条弹幕都改派成新目标。
+    """
+    captured: List[List[dict]] = []
+
+    async def _generate(messages: List[dict], **_: Any) -> Response:
+        captured.append([dict(m) for m in messages])
+        return Response(success=True, content="不说")
+
+    registry = MagicMock()
+    registry.list_tools = MagicMock(return_value=[])
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="framework_delegate",
+            success=True,
+            structured_content={"accepted": True, "task_id": "deleg_1", "executor": "minecraft"},
+        )
+    )
+    planner = _planner_with([], registry, MagicMock())
+    planner._llm_service.generate = AsyncMock(side_effect=_generate)
+    instruction = "从 AE 请求一块铁板放到置物台上，用机器做一个蜂蜜胶"
+
+    observation = json.loads(
+        await planner._invoke_registry_tool(
+            "framework_delegate",
+            {"agent": "minecraft", "instruction": instruction},
+            source_dialogue=[{"role": "user", "content": "调试观众: 铁板！放到置物台上！"}],
+        )
+    )
+    assert observation["accepted"] is True
+    await planner.plan([_msg("快点呀", "m1")])
+    working = captured[-1][-1]["content"]
+    assert "【身体手头的事】" in working and f"交给 minecraft（任务 deleg_1）：{instruction}" in working
+    assert "身体还在做" in working and "[来源对话" not in working
+
+    planner.note_game_report("minecraft", "escalation")
+    await planner.plan([_msg("怎么样了", "m2")])
+    assert "上报卡住了，正等你定夺" in captured[-1][-1]["content"]
+
+    planner.note_game_report("minecraft", "delivery")
+    await planner.plan([_msg("好了吗", "m3")])
+    assert "交付，结果见【游戏叙事】" in captured[-1][-1]["content"]
+
+
+def test_planner_prompt_keeps_viewer_method_and_relays_instead_of_redelegating() -> None:
+    """Planner 守则：身体在忙时递话不改派；观众给的做法原样转达，不用早先判断否定；物品名不翻译。"""
+    reset_prompt_manager()
+    try:
+        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+    finally:
+        reset_prompt_manager()
+    assert "身体在忙时递话，不改派" in prompt and "framework_prompt" in prompt
+    assert "观众给的做法原样转达" in prompt and "不要用你自己或早先游戏叙事里的判断否定它" in prompt
+    assert '"蜂蜜胶"不是"蜂蜜块"' in prompt

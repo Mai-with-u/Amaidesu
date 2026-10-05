@@ -99,8 +99,16 @@ def _format_duration_minutes(ms: int) -> str:
     return f"{minutes} 分钟"
 
 
+def age_text(age_ms: int) -> str:
+    """到达距今的口语时长：一分钟内是"刚刚"，再往前按分钟/小时说（叙事条目与身体手头的事共用）。"""
+    if max(0, age_ms) < 60_000:
+        return "刚刚"
+    return f"{_format_duration_minutes(age_ms)}前"
+
+
 __all__ = [
     "AssemblerInputs",
     "EnvironmentBlock",
     "PlannerAssembler",
+    "age_text",
 ]
