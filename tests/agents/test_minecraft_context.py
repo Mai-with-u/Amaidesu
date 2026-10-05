@@ -348,3 +348,20 @@ def test_fair_play_rules_reach_template_and_fallback(with_template: bool) -> Non
     if with_template:
         assert "普通玩家命令（`/tell`、`/tpa`、`/home` 等）可以照常用" in prompt
         assert "管理员命令被拒绝时不要换个写法再试" in prompt and "卡关本身就是好内容" in prompt
+
+
+@pytest.mark.parametrize("with_template", [False, True])
+def test_persistence_rules_reach_template_and_fallback(with_template: bool) -> None:
+    """不摆烂：本次目标真的达成才交付，顶替不算；卡住先换路查资料，至少试过两种办法再上报。"""
+    reset_prompt_manager()
+    try:
+        manager = get_prompt_manager() if with_template else None
+        prompt = MinecraftAgent(MinecraftConfig(), llm_manager=MagicMock(), prompt_manager=manager)._system_prompt()
+    finally:
+        reset_prompt_manager()
+    assert "本次目标要的结果真的达成才交付" in prompt or "本次目标要的结果真的在游戏里达成" in prompt
+    if with_template:
+        assert "## 完成标准" in prompt and "顶替不算完成" in prompt and "子问题解决后直接回原目标" in prompt
+        assert "## 遇到困难时" in prompt and "说\"做不到\"要有证据" in prompt and "卡在某一步时别干等" in prompt
+    else:
+        assert "至少试过两种办法再上报" in prompt and "子问题解决后直接回原目标" in prompt
