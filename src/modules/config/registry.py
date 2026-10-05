@@ -37,6 +37,7 @@ EXPECTED_COMPONENTS: tuple[str, ...] = (
     "bili_danmaku_official",
     "console_input",
     "maicraft_attention",
+    "maicraft_chat",
     "stt",
     # Agent（配置宿主 agents.toml）
     "minecraft",
@@ -61,11 +62,12 @@ TOOL_PROVIDER_DOMAINS: tuple[str, ...] = tuple(dict.fromkeys(d for d, _ in EXPEC
 def _fill_collectors() -> dict[str, type[BaseConfig]]:
     """从各采集器包显式收集 ConfigSchema（包内类内嵌定义）。
 
-    多数采集器代码在 ``src/modules/collectors/`` 下；``maicraft_attention``
-    是**游戏相关**的外部世界适配器，按"游戏内容逻辑内聚 ``src/agents/<名>/``"
+    多数采集器代码在 ``src/modules/collectors/`` 下；``maicraft_attention`` 与
+    ``maicraft_chat`` 是**游戏相关**的外部世界适配器，按"游戏内容逻辑内聚 ``src/agents/<名>/``"
     放在 Minecraft Agent 包内，只有装配走采集器框架。
     """
     from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
+    from src.agents.minecraft.chat_collector import MaicraftChatCollector
     from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import BiliDanmakuCollector
     from src.modules.collectors.bilibili.official.bili_danmaku_official_collector import (
         BiliDanmakuOfficialCollector,
@@ -78,6 +80,7 @@ def _fill_collectors() -> dict[str, type[BaseConfig]]:
         "bili_danmaku_official": BiliDanmakuOfficialCollector.ConfigSchema,
         "console_input": ConsoleInputCollector.ConfigSchema,
         "maicraft_attention": MaicraftAttentionCollector.ConfigSchema,
+        "maicraft_chat": MaicraftChatCollector.ConfigSchema,
         "stt": STTCollector.ConfigSchema,
     }
 

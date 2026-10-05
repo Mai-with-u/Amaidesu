@@ -32,7 +32,7 @@ class CollectorsRootConfig(BaseConfig):
 
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     enabled: list[str] = Field(
-        default_factory=lambda: ["console_input", "maicraft_attention"],
+        default_factory=lambda: ["console_input", "maicraft_attention", "maicraft_chat"],
         title="启用的采集器",
         description="启用的 Collector 列表（注册名 = 配置段名）",
         json_schema_extra={
@@ -41,6 +41,7 @@ class CollectorsRootConfig(BaseConfig):
                 "bili_danmaku_official",
                 "console_input",
                 "maicraft_attention",
+                "maicraft_chat",
                 "stt",
             ],
         },

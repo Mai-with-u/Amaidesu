@@ -128,7 +128,7 @@ enabled = ["streamer", "text_adv"]
 
 #### 启用采集器
 
-采集器配置宿主是 `config/collectors.toml`（顶层 `enabled` 名单驱动装配）。默认已启用"控制台输入"与游戏注意流 `maicraft_attention`（游戏未运行时空转、无感），零依赖就能对话：
+采集器配置宿主是 `config/collectors.toml`（顶层 `enabled` 名单驱动装配）。默认已启用"控制台输入"、游戏注意流 `maicraft_attention` 与游戏聊天流 `maicraft_chat`（游戏未运行时空转、无感），零依赖就能对话：
 
 ```toml
 # config/collectors.toml
@@ -215,6 +215,7 @@ uv run python main.py --dry
 | `bili_danmaku_official` | B 站官方长连弹幕 | `id_code` / `app_id` / `access_key(_secret)` / `api_host` |
 | `stt` | 语音转文字（讯飞 ASR + VAD） | 包内 ConfigSchema（iflytek_asr / vad / audio） |
 | `maicraft_attention` | 游戏注意流：观察 Minecraft 身体遭遇（受伤/死亡等），分类叙事化后发布 | 同名子段（实现位于游戏 Agent 包 `src/agents/minecraft/`） |
+| `maicraft_chat` | 游戏聊天流：把 Minecraft 里其他玩家的聊天与服务器系统消息转给主播（滤掉 AI 自己的回显） | 同名子段（实现位于游戏 Agent 包 `src/agents/minecraft/`） |
 
 
 #### 业务 Agent（`SUPPORTED_AGENTS`）

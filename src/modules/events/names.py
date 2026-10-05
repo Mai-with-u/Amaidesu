@@ -146,6 +146,14 @@ class CoreEvents:
     # 监听上面 8 类身体事件（emit 时用具体常量）。
     GAME_BODY_WILDCARD = "game.body.#"
 
+    # ========== v2 语义域事件（game.chat.* 游戏内聊天） ==========
+    # 游戏世界里别人说的话（其他玩家的聊天、服务器系统消息），由游戏专属采集器转出；
+    # AI 玩家自己发出、被服务器回显的话在采集层就滤掉，不发事件。
+    # 与 game.body.* 同理用三层名：聊天是流，不进 game.* 单层里程碑通道。
+    GAME_CHAT_RECEIVED = "game.chat.received"
+    # 通配订阅专用，不是被 emit 的具体事件名
+    GAME_CHAT_WILDCARD = "game.chat.#"
+
     # ========== v2 语义域事件（agent 控制面事实） ==========
     # 递话受理即发一条（运营 REST 与跨 Agent 原语两条调用面同点收口）：
     # 观察面据此渲染递话行与最近递话。递话不进任务账本（记账分家），

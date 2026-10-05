@@ -7,6 +7,7 @@
 - bili_danmaku_official→ BiliDanmakuOfficialCollector
 - console_input        → ConsoleInputCollector
 - maicraft_attention   → MaicraftAttentionCollector
+- maicraft_chat        → MaicraftChatCollector
 - stt                  → STTCollector
 """
 
@@ -25,6 +26,7 @@ SUPPORTED_COLLECTORS: tuple[str, ...] = (
     "bili_danmaku_official",
     "console_input",
     "maicraft_attention",
+    "maicraft_chat",
     "stt",
 )
 
@@ -55,6 +57,11 @@ def instantiate_collector(
         from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
 
         return MaicraftAttentionCollector(config=config or {}, event_bus=event_bus)
+    if name == "maicraft_chat":
+        # 游戏里别人说的话：同属 Minecraft Agent 包的游戏适配器，装配走本工厂
+        from src.agents.minecraft.chat_collector import MaicraftChatCollector
+
+        return MaicraftChatCollector(config=config or {}, event_bus=event_bus)
     if name == "stt":
         from src.modules.collectors.stt.stt_collector import STTCollector
 
