@@ -438,3 +438,36 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
         reset_prompt_manager()
     assert "进展只说有凭据的" in prompt and '就说"还在弄"' in prompt
     assert '"已经拿到"这类没凭据的细节' in prompt and "想讲具体进度就先查" in prompt
+
+
+def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
+    """游戏里的聊天是游戏世界里的人在说话：开口他们听不到，要回就在游戏里打字；不带额外授权。"""
+    reset_prompt_manager()
+    try:
+        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+    finally:
+        reset_prompt_manager()
+    assert "【游戏里的聊天】是游戏里的人在说话" in prompt and "我开口说话他们听不到" in prompt
+    assert "用 `framework_prompt` 让自己在游戏里打字回一句" in prompt
+    assert "不带额外授权" in prompt and "【游戏里的聊天】每条行首" in prompt
+
+
+@pytest.mark.asyncio
+async def test_planner_reference_shows_game_chat_block() -> None:
+    """游戏里的聊天单独成段进参考块，主动窗的情境说明不再只写冷场/定时。"""
+    captured: List[List[dict]] = []
+
+    async def _generate(messages: List[dict], **_: Any) -> Response:
+        captured.append([dict(m) for m in messages])
+        return Response(success=True, content="不说")
+
+    registry = MagicMock()
+    registry.list_tools = MagicMock(return_value=[])
+    planner = _planner_with([], registry, MagicMock())
+    planner._llm_service.generate = AsyncMock(side_effect=_generate)
+
+    await planner.plan([], proactive=True, game_chat="[新·刚刚] [minecraft] 玩家 Steve：麦麦你在干嘛呀")
+
+    reference = captured[-1][-1]["content"]
+    assert "【游戏里的聊天】[新·刚刚] [minecraft] 玩家 Steve：麦麦你在干嘛呀" in reference
+    assert "游戏里有新动静" in reference

@@ -293,18 +293,20 @@ class Planner:
         reminders: str = "",
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
+        game_chat: str = "",
     ) -> Dict[str, Any]:
         """对一个决策窗跑 ReAct 循环，产出 outcome dict。
 
         Args:
             batch: 本批弹幕列表（可为空——proactive 触发时基于房间状态独立判断）。
             forced: 是否为强制回应批次（SC / 礼物 / 上舰）。
-            proactive: 是否为主动发言触发（冷场/定时；batch 可能为空）。
+            proactive: 是否为主动发言触发（冷场/定时/环节/游戏动静；batch 可能为空）。
             history: 最近对话历史（可选；反重复用）。
             rundown_text: 当前流程单渲染文本（可选）。
             game_narrative: 游戏叙事文本（game.* 事件摘要；可主动经工具查询更多）。
             body_narrative: 身体侧近况（game.body.* 摘要：被袭击/死亡/重生/紧急反应）。
             reminders: 运营递话留言（【运营提醒】段注入参考块；消费即送达）。
+            game_chat: 游戏里的聊天（game.chat.* 摘要：其他玩家的话与系统消息）。
             thinking: 思考流上下文（可选；提供时每次 LLM 调用的 reasoning
                 增量经旁路通道外发）。
             round_id: 决策轮次 ID（工具调用经 ToolInvocation.round_id 透传到
@@ -352,7 +354,7 @@ class Planner:
             return outcome
 
         reference_text = await self._assemble_reference(
-            batch, history, rundown_text, forced, proactive, game_narrative, body_narrative, reminders
+            batch, history, rundown_text, forced, proactive, game_narrative, body_narrative, reminders, game_chat
         )
         if reference_text is None:
             outcome["error"] = self.last_failure
@@ -491,10 +493,11 @@ class Planner:
         game_narrative: str,
         body_narrative: str = "",
         reminders: str = "",
+        game_chat: str = "",
     ) -> Optional[str]:
         """构造参考段（一条 user 消息，固定在消息序列尾）。
 
-        内容 = 情境标注（强制/主动）+ 游戏叙事 + 身体侧近况 + 运营提醒 +
+        内容 = 情境标注（强制/主动）+ 游戏叙事 + 身体侧近况 + 游戏里的聊天 + 运营提醒 +
         组装器元数据段（环节描述 / 直播间快照 / 记忆召回）。对话内容不在此
         处——历史与本批走 canonical 映射的原生消息通道。
         """
@@ -502,7 +505,11 @@ class Planner:
         if forced:
             lines.append(_forced_situation(batch))
         if proactive:
-            lines.append("【情境】本窗为主动发言触发（冷场/定时）——弹幕可能为空，基于房间态势决定是否主动开口。")
+            # 主动窗不只来自冷场/定时：环节切换、游戏上报、游戏里有人说话也会唤醒，按实际可能来源说明
+            lines.append(
+                "【情境】本窗为主动发言触发（冷场、定时、环节推进或游戏里有新动静）——弹幕可能为空，"
+                '结合房间态势与标"新"的游戏条目决定是否开口、做什么。'
+            )
         if game_narrative:
             # 游戏进度保留完整叙述，使施工结果和未解决的问题都能进入本轮决策。
             lines.append(f"【游戏叙事】{game_narrative}")
@@ -511,6 +518,10 @@ class Planner:
             # 两者形状与更新频率不同，混在一起会让高频的遭遇把进展叙事挤掉。
             # 标题用第一人称：游戏里挨打的就是主播自己，不是另一个"身体"
             lines.append(f"【我在游戏里的遭遇】{body_narrative}")
+        if game_chat:
+            # 游戏里的聊天：游戏世界里的玩家在跟我说话、服务器在通知，不是直播间观众——单独一段，
+            # 主播才分得清开口说话对方听不到，要回就得在游戏里打字
+            lines.append(f"【游戏里的聊天】{game_chat}")
         work = self._render_delegations(now_ms())
         if work:
             # 我手头在游戏里做的事：最近一次开始做的原话与进展。看得到自己在忙什么，

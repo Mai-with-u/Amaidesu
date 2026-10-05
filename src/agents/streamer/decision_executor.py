@@ -109,6 +109,7 @@ class DecisionRoundExecutor:
         body_narrative_provider: Optional[Callable[[], str]] = None,
         reminders_provider: Optional[Callable[[], str]] = None,
         logger: Optional[ModuleLogger] = None,
+        game_chat_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         """``history_provider`` 等 provider 返回值形态：
 
@@ -118,6 +119,7 @@ class DecisionRoundExecutor:
         - body_narrative: ``str``（可为空串；AI 玩家身体侧近况，缺省 = 不注入）
         - reminders: ``str``（可为空串；运营递话留言，**读取即取空队列**——
           送达一次制，缺省 = 不注入）
+        - game_chat: ``str``（可为空串；游戏里其他玩家的话与系统消息，缺省 = 不注入）
         """
         self._logger = logger or get_logger("StreamerAgent.DecisionRoundExecutor")
         self._planner = planner
@@ -133,6 +135,7 @@ class DecisionRoundExecutor:
         self._game_narrative_provider = game_narrative_provider
         self._body_narrative_provider = body_narrative_provider
         self._reminders_provider = reminders_provider
+        self._game_chat_provider = game_chat_provider
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
 
@@ -261,6 +264,9 @@ class DecisionRoundExecutor:
         # 身体侧近况（采集器分类后的 game.body.* 摘要；缺省不注入）
         body_narrative = self._body_narrative_provider() if self._body_narrative_provider else ""
 
+        # 游戏里的聊天（game.chat.* 摘要：别的玩家在跟我说话、服务器通知；缺省不注入）
+        game_chat = self._game_chat_provider() if self._game_chat_provider else ""
+
         # 运营递话留言（读取即取空队列——送达一次制；缺省不注入）
         reminders = self._reminders_provider() if self._reminders_provider else ""
 
@@ -279,6 +285,7 @@ class DecisionRoundExecutor:
                 rundown_text=rundown_text,
                 game_narrative=game_narrative,
                 body_narrative=body_narrative,
+                game_chat=game_chat,
                 reminders=reminders,
                 thinking=thinking,
                 round_id=round_id,

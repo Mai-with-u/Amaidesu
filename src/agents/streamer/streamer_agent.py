@@ -41,6 +41,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.body import BodyEventPayload
+from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.logging import get_logger
 from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown
 from src.modules.task_utils import spawn_background_task
@@ -384,6 +385,10 @@ class StreamerAgent(BaseAgent):
         self._body_narrative_blocks: List[_NarrativeEntry] = []
         self._game_narrative_seen_ms: int = 0
         self._body_narrative_seen_ms: int = 0
+        # 游戏里的聊天（订阅 game.chat.*）：游戏世界里的玩家在跟我说话、服务器在通知，
+        # 与观众弹幕分开——开口说话对方听不到，要回得在游戏里打字
+        self._game_chat_blocks: List[_NarrativeEntry] = []
+        self._game_chat_seen_ms: int = 0
 
         # 未落库的对话轮：没开场次时的全部对话、调试面板注入的观众消息都不会写进
         # live_chat，由这里按时间并入历史——主播问"要不要拉一下"、观众回"拉"时，
@@ -430,6 +435,7 @@ class StreamerAgent(BaseAgent):
             rundown_text_provider=self._build_rundown_text,
             game_narrative_provider=self._game_narrative_text,
             body_narrative_provider=self._body_narrative_text,
+            game_chat_provider=self._game_chat_text,
             reminders_provider=self._drain_reminders,
             logger=self._logger,
         )
@@ -621,6 +627,12 @@ class StreamerAgent(BaseAgent):
             self._on_body_event,
             model_class=BodyEventPayload,
         )
+        # 游戏里的聊天（采集器滤掉了 AI 自己的回显）：玩家搭话促发一轮决策，系统消息只作参考
+        self._event_bus.on(
+            CoreEvents.GAME_CHAT_WILDCARD,
+            self._on_game_chat,
+            model_class=GameChatPayload,
+        )
         # 场次边界事件：开播放行主动发言，下播收闸（开场白属于场次，不属于进程）
         self._event_bus.on(
             CoreEvents.LIVE_STARTED,
@@ -634,7 +646,7 @@ class StreamerAgent(BaseAgent):
         )
         self._logger.info(
             "StreamerAgent 已订阅 room.message.danmaku|gift|super_chat|guard / room.state.watched_count"
-            " / game.* / live.started|ended"
+            " / game.* / game.body.* / game.chat.* / live.started|ended"
         )
 
     async def _on_live_started(
@@ -723,6 +735,38 @@ class StreamerAgent(BaseAgent):
         current = now_ms()
         text = _render_narrative(self._body_narrative_blocks, seen_until_ms=self._body_narrative_seen_ms, now=current)
         self._body_narrative_seen_ms = current
+        return text
+
+    async def _on_game_chat(
+        self,
+        event_name: str,
+        payload: GameChatPayload,
+        source: str,
+    ) -> None:
+        """``game.chat.*`` 回调：收集游戏里别人说的话；玩家搭话促发一轮决策。
+
+        玩家聊天是有人在跟游戏里的我说话，像弹幕一样值得及时接住，所以置位待决策信号
+        （下次空缓冲 tick 触发；弹幕在排队时随那一轮一起看到）。系统消息（公告、死亡
+        提示、传送请求等）是信息，只进参考段，不单独唤醒主播。
+        """
+        del event_name, source
+        try:
+            speaker = "系统消息" if payload.kind == "system" else f"玩家 {payload.sender or '（名字未知）'}"
+            note = "（原话过长已截断）" if payload.truncated else ""
+            if payload.suppressed:
+                note += f"（之前还有 {payload.suppressed} 条重复或刷屏的没转过来）"
+            line = f"[{payload.game}] {speaker}：{payload.content}{note}"
+            self._game_chat_blocks.append(_NarrativeEntry(received_ms=now_ms(), line=line))
+            if payload.kind == "player":
+                self._game_decision_pending = True
+        except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
+            self._logger.warning(f"收集游戏聊天失败: {exc}")
+
+    def _game_chat_text(self) -> str:
+        """导出游戏里的聊天全文（Planner 上下文用），标注到达时间与"新"，口径同游戏叙事。"""
+        current = now_ms()
+        text = _render_narrative(self._game_chat_blocks, seen_until_ms=self._game_chat_seen_ms, now=current)
+        self._game_chat_seen_ms = current
         return text
 
     async def _on_room_state_watched(

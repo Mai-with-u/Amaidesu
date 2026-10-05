@@ -21,6 +21,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.llm.client import LLMResponse
 from src.modules.llm.payload import Response
 
@@ -185,6 +186,42 @@ async def test_body_event_feeds_the_body_narrative_line() -> None:
     assert agent._game_narrative_text() == ""
     # 身体事件不触发决策轮（它只是素材；是否开口由决策窗自己判断）
     assert agent._game_decision_pending is False
+
+    await bus.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_game_chat_feeds_its_own_block_and_player_wakes_streamer() -> None:
+    """game.chat.* → 独立"游戏里的聊天"缓冲；玩家搭话促发决策，系统消息只作参考。"""
+    bus = EventBus()
+    agent = _build_streamer_agent(event_bus=bus)
+    agent._subscribe_events()
+    agent._live_active = True
+
+    await bus.emit(
+        CoreEvents.GAME_CHAT_RECEIVED,
+        GameChatPayload(game="minecraft", kind="system", content="Alex 请求传送到你这里"),
+        source="maicraft_chat",
+    )
+    await _wait_until(lambda: len(agent._game_chat_blocks) == 1)
+    # 系统消息是信息，不单独唤醒主播
+    assert agent._game_decision_pending is False
+
+    await bus.emit(
+        CoreEvents.GAME_CHAT_RECEIVED,
+        GameChatPayload(game="minecraft", kind="player", sender="Steve", content="麦麦你在干嘛呀", suppressed=2),
+        source="maicraft_chat",
+    )
+    await _wait_until(lambda: len(agent._game_chat_blocks) == 2)
+    # 玩家是在跟游戏里的我说话：像弹幕一样值得及时接住
+    assert agent._game_decision_pending is True
+
+    text = agent._game_chat_text()
+    assert "[minecraft] 系统消息：Alex 请求传送到你这里" in text
+    assert "[minecraft] 玩家 Steve：麦麦你在干嘛呀（之前还有 2 条重复或刷屏的没转过来）" in text
+    assert "新·" in text and "新·" not in agent._game_chat_text()
+    # 与游戏叙事、身体近况互不混排
+    assert agent._game_narrative_text() == "" and agent._body_narrative_text() == ""
 
     await bus.cleanup()
 
