@@ -129,7 +129,8 @@
                   回放数据来自 SQLite <code>live_chat</code> 表中该日期的弹幕记录（配置
                   <code>replay_simulated_only = true</code> 时仅回放模拟消息），按录制节奏重放；
                   回放消息一律带
-                  <code>simulated: true</code> 标记（不继承录制行原值），时间戳刷新为当前时刻。运行中需先停止才能再启动。
+                  <code>simulated: true</code>
+                  标记（不继承录制行原值），时间戳刷新为当前时刻。运行中需先停止才能再启动。
                 </p>
               </el-card>
             </el-col>

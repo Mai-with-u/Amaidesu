@@ -46,7 +46,8 @@
             :key="i + '-' + d"
             class="hist"
             :class="{ latest: i === 0 }"
-          >{{ ARROWS[d] || '?' }}</span>
+            >{{ ARROWS[d] || '?' }}</span
+          >
         </div>
       </div>
     </div>
@@ -71,7 +72,19 @@ const SIZE = 4;
 const CELL = 96;
 const GAP = 10;
 const PAD = 10;
-const TILE_CLASSES = ['v2', 'v4', 'v8', 'v16', 'v32', 'v64', 'v128', 'v256', 'v512', 'v1024', 'v2048'];
+const TILE_CLASSES = [
+  'v2',
+  'v4',
+  'v8',
+  'v16',
+  'v32',
+  'v64',
+  'v128',
+  'v256',
+  'v512',
+  'v1024',
+  'v2048',
+];
 const ARROWS: Record<string, string> = { up: '↑', down: '↓', left: '←', right: '→' };
 const HISTORY_SHOWN = 10; // 纵向最多展示条数（新的在上），与后端透明页同口径
 
@@ -150,15 +163,28 @@ interface MovePlan {
 
 // 本地重放：按方向对上一帧做同规则滑动，推演每块轨迹与合并、新块位置。
 // 推演结果与新帧不一致（理论不发生）时返回 null，调用方退化直渲染。
-function computeMoves(prev: number[][], dir: string, next: number[][]): { moved: MovePlan[]; spawn: { r: number; c: number; value: number } | null } | null {
+function computeMoves(
+  prev: number[][],
+  dir: string,
+  next: number[][],
+): { moved: MovePlan[]; spawn: { r: number; c: number; value: number } | null } | null {
   const lineCells = (li: number): { r: number; c: number }[] => {
     const cells: { r: number; c: number }[] = [];
     for (let k = 0; k < SIZE; k++) {
       let r: number, c: number;
-      if (dir === 'left') { r = li; c = k; }
-      else if (dir === 'right') { r = li; c = SIZE - 1 - k; }
-      else if (dir === 'up') { r = k; c = li; }
-      else { r = SIZE - 1 - k; c = li; }
+      if (dir === 'left') {
+        r = li;
+        c = k;
+      } else if (dir === 'right') {
+        r = li;
+        c = SIZE - 1 - k;
+      } else if (dir === 'up') {
+        r = k;
+        c = li;
+      } else {
+        r = SIZE - 1 - k;
+        c = li;
+      }
       cells.push({ r, c });
     }
     return cells;
@@ -169,7 +195,12 @@ function computeMoves(prev: number[][], dir: string, next: number[][]): { moved:
     const cells = lineCells(li)
       .map(p => ({ ...p, v: prev[p.r][p.c] }))
       .filter(x => x.v !== 0);
-    const slots: { v: number; first: { r: number; c: number }; merged: boolean; second?: { r: number; c: number } }[] = [];
+    const slots: {
+      v: number;
+      first: { r: number; c: number };
+      merged: boolean;
+      second?: { r: number; c: number };
+    }[] = [];
     for (const cell of cells) {
       const last = slots[slots.length - 1];
       if (last && !last.merged && last.v === cell.v) {
@@ -184,9 +215,23 @@ function computeMoves(prev: number[][], dir: string, next: number[][]): { moved:
     slots.forEach((slot, i) => {
       const t = targets[i];
       after[t.r][t.c] = slot.v;
-      moved.push({ fromR: slot.first.r, fromC: slot.first.c, toR: t.r, toC: t.c, value: slot.v, merge: false });
+      moved.push({
+        fromR: slot.first.r,
+        fromC: slot.first.c,
+        toR: t.r,
+        toC: t.c,
+        value: slot.v,
+        merge: false,
+      });
       if (slot.merged && slot.second) {
-        moved.push({ fromR: slot.second.r, fromC: slot.second.c, toR: t.r, toC: t.c, value: slot.v, merge: true });
+        moved.push({
+          fromR: slot.second.r,
+          fromC: slot.second.c,
+          toR: t.r,
+          toC: t.c,
+          value: slot.v,
+          merge: true,
+        });
       }
     });
   }
@@ -227,7 +272,10 @@ function applyFrame(state: Game2048State) {
     flashKey('restart');
   }
 
-  const plan = prevBoard && state.last_direction ? computeMoves(prevBoard, state.last_direction, state.board) : null;
+  const plan =
+    prevBoard && state.last_direction
+      ? computeMoves(prevBoard, state.last_direction, state.board)
+      : null;
   if (!plan) {
     rebuild(state.board);
   } else {
@@ -387,24 +435,63 @@ onUnmounted(() => {
   will-change: transform;
 }
 
-.board :deep(.tile.v2) { background: #eee4da; color: #776e65; text-shadow: none; }
-.board :deep(.tile.v4) { background: #ede0c8; color: #776e65; text-shadow: none; }
-.board :deep(.tile.v8) { background: #f2b179; }
-.board :deep(.tile.v16) { background: #f59563; }
-.board :deep(.tile.v32) { background: #f67c5f; }
-.board :deep(.tile.v64) { background: #f65e3b; }
-.board :deep(.tile.v128) { background: #edcf72; }
-.board :deep(.tile.v256) { background: #edcc61; }
-.board :deep(.tile.v512) { background: #edc850; }
-.board :deep(.tile.v1024) { background: #edc53f; font-size: 32px; }
-.board :deep(.tile.v2048) { background: #edc22e; font-size: 32px; }
-.board :deep(.tile.vbig) { background: #3c3a32; font-size: 30px; }
-.board :deep(.tile.pop) { animation: g2048-pop 0.18s ease-out; }
-.board :deep(.tile.dying) { opacity: 0; }
+.board :deep(.tile.v2) {
+  background: #eee4da;
+  color: #776e65;
+  text-shadow: none;
+}
+.board :deep(.tile.v4) {
+  background: #ede0c8;
+  color: #776e65;
+  text-shadow: none;
+}
+.board :deep(.tile.v8) {
+  background: #f2b179;
+}
+.board :deep(.tile.v16) {
+  background: #f59563;
+}
+.board :deep(.tile.v32) {
+  background: #f67c5f;
+}
+.board :deep(.tile.v64) {
+  background: #f65e3b;
+}
+.board :deep(.tile.v128) {
+  background: #edcf72;
+}
+.board :deep(.tile.v256) {
+  background: #edcc61;
+}
+.board :deep(.tile.v512) {
+  background: #edc850;
+}
+.board :deep(.tile.v1024) {
+  background: #edc53f;
+  font-size: 32px;
+}
+.board :deep(.tile.v2048) {
+  background: #edc22e;
+  font-size: 32px;
+}
+.board :deep(.tile.vbig) {
+  background: #3c3a32;
+  font-size: 30px;
+}
+.board :deep(.tile.pop) {
+  animation: g2048-pop 0.18s ease-out;
+}
+.board :deep(.tile.dying) {
+  opacity: 0;
+}
 
 @keyframes g2048-pop {
-  0% { scale: 0.7; }
-  100% { scale: 1; }
+  0% {
+    scale: 0.7;
+  }
+  100% {
+    scale: 1;
+  }
 }
 
 .overlay {
