@@ -239,6 +239,9 @@ class MinecraftAgent(BaseAgent):
         # 游戏内动作连续失败计数（成功即清零、新指令清零）：卡在同一步时把卡点讲给主播，
         # 免得身体闷头重试几十次、主播却一句话说不出来；只做叙事通报，不改变任务走向
         self._failure_streak = 0
+        # Mod 已暂停的本人后台任务 → 暂停原因。通用任务词表没有"暂停"，账面仍是 running；
+        # 这里单独记下，身体停着时唤醒自己处理，而不是在 minecraft_wait 里干等
+        self._paused_tasks: Dict[str, str] = {}
         self._task_finished = True
         self._task_suspended = False
         self._design_progress = MachineDesignProgress()
@@ -718,6 +721,7 @@ class MinecraftAgent(BaseAgent):
                     if self._task_finished:
                         self._task_instructions.clear()
                         self._task_progress.clear()
+                        self._paused_tasks.clear()
                         self._recent_results.clear()
                         self._plan_facts.clear()
                         self._task_notice_fingerprints.clear()
@@ -929,12 +933,31 @@ class MinecraftAgent(BaseAgent):
         """只允许对已有后台依赖让出执行，待开工和待决策不能靠等待推进。"""
         if self._actionable_task_ids():
             return {"ok": False, "error": "仍有待开工或待决策任务，请先推进或说明具体阻塞"}
+        # 自卫离位等暂停不会自己恢复：等下去身体只会一直站着，必须先继续、取消或改方案
+        stuck = {task_id: reason for task_id, reason in self._paused_tasks.items() if reason != "control_unavailable"}
+        if stuck:
+            return {
+                "ok": False,
+                "error": "后台任务已被 Mod 暂停且不会自行继续，等待不会推进；"
+                "先看现场，再用 maicraft_task 继续或取消，或上报阻塞",
+                "paused_tasks": stuck,
+            }
         if self._pending_task_count() == 0:
             return {"ok": False, "error": "没有已登记的后台任务；请继续执行待办或上报阻塞"}
         if self._message_queue:
             return {"ok": True, "waiting": False, "reason": "已有新消息，请处理最新事实"}
         self._wait_requested = True
-        return {"ok": True, "waiting": True, "monitor": "host", "resume_on": "task_event_or_instruction"}
+        result: Dict[str, Any] = {
+            "ok": True,
+            "waiting": True,
+            "monitor": "host",
+            "resume_on": "task_event_or_instruction",
+        }
+        if self._paused_tasks:
+            # 控制权暂不可用的暂停会在交还控制后自动继续；如实说明身体此刻并没有在动
+            result["paused_tasks"] = dict(self._paused_tasks)
+            result["note"] = "这些任务处于暂停，身体此刻没有在执行；控制权恢复后 Mod 会自动继续"
+        return result
 
     def _read_observation(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """每次从当前任务取原文，避免新任务仍绑定上一任务的观察集合。"""
@@ -1225,6 +1248,9 @@ class MinecraftAgent(BaseAgent):
         """
         if self._builder is not None:
             self._builder.absorb(payload)
+        if payload.status not in {"accepted", "running"}:
+            # 终态或待答问题接替了暂停：不再按"身体停着"处理
+            self._paused_tasks.pop(payload.task_id, None)
         # 同一决策从查询和注意流抵达时只处理一次；新的 decision_id 即使仍是待决策状态也必须交给模型。
         decision_id = self._decision_id(payload.snapshot) if payload.status == "waiting_for_decision" else ""
         fingerprint = (
@@ -1324,6 +1350,55 @@ class MinecraftAgent(BaseAgent):
             label="MinecraftAgent.failure_streak_notice",
         )
         self._logger.info(f"游戏内动作连续失败 {streak} 次，已通报主播")
+
+    def _absorb_pause_event(self, task_id: str, event_type: str, event: Dict[str, Any]) -> None:
+        """旧版注意流的暂停/恢复事件（完整事件体）：只处理本人在册的后台任务。"""
+        ledger = getattr(self._task_tracker, "ledger", None)
+        record = ledger.get(task_id) if ledger is not None else None
+        if record is None or record.initiator != self.name:
+            return
+        if event_type == "resumed":
+            self._paused_tasks.pop(task_id, None)
+            return
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        self._note_task_paused(
+            task_id, str(data.get("pause_reason") or data.get("reason") or ""), str(event.get("message") or "")
+        )
+
+    def _note_task_paused(self, task_id: str, reason: str, detail: str) -> None:
+        """Mod 暂停了本人的后台任务：唤醒自己处理，并让主播知道身体停下了。
+
+        同一次暂停只通报一次。控制权暂不可用的暂停会在交还控制后由 Mod 自动继续，
+        其他原因（如自卫把身体带离工位）不继续就一直停着——两种情况都如实说明，
+        怎么处理由模型按现场决定。
+        """
+        reason = reason or "unknown"
+        if self._paused_tasks.get(task_id) == reason:
+            return
+        self._paused_tasks[task_id] = reason
+        if task_id in self._task_progress:
+            self._task_progress[task_id].update(status="paused", summary=detail or reason)
+        if reason == "control_unavailable":
+            label = "第一人称控制暂时不可用（游戏窗口不在前台或玩家接管了操作）"
+            advice = (
+                "控制权回来后 Mod 会自动继续。暂停期间身体没有在动：可以先做不需要身体动作的准备"
+                "（读下一步要用的资料、想好方案），不要把等待当成任务在推进。"
+            )
+        else:
+            label = "自卫时被带离了工位" if reason == "self_defense_displaced" else f"原因：{reason}"
+            advice = (
+                "不处理它就会一直停着：先看一眼现场，再用 maicraft_task(action=resume) 从当前位置继续，"
+                "或取消、改方案，确实推不动再上报主播。"
+            )
+        detail_text = f"（Mod 说明：{detail}）" if detail else ""
+        self._inject_wakeup_message(f"[系统] 后台任务 {task_id} 已被 Mod 暂停：{label}{detail_text}。{advice}")
+        spawn_background_task(
+            self._emit_game_event("attention_required", f"身体手上的游戏内动作暂停了：{label}。"),
+            logger=self._logger,
+            tasks=self._bg_tasks,
+            label="MinecraftAgent.task_paused_notice",
+        )
+        self._logger.info(f"后台任务暂停，已唤醒处理（task_id={task_id}, reason={reason}）")
 
     # ==================================================================
     # 身体事件（注意流增量读取）
@@ -1443,7 +1518,16 @@ class MinecraftAgent(BaseAgent):
             if not isinstance(snapshot, dict) or snapshot.get("task_id") != task_id:
                 raise ValueError("任务查询未返回同一任务的可读快照")
             self._remember_task_snapshot(snapshot)
-            if result.get("status") == "waiting_for_decision":
+            status = result.get("status")
+            if status == "paused":
+                # 通用词表认不出暂停，跟踪器会忽略它；这里按核实快照把"身体停下了"交给自己处理
+                self._note_task_paused(
+                    task_id, str(snapshot.get("pause_reason") or ""), str(event.get("message") or "")
+                )
+            elif status in {"running", "accepted"}:
+                # 控制权交还后 Mod 自动恢复：撤掉暂停记录，继续按原通知等待结果
+                self._paused_tasks.pop(task_id, None)
+            if status == "waiting_for_decision":
                 # 待答期间可能改成新的死亡恢复问题；同状态轮询不会广播，因此按新决策编号补一次通知。
                 self.on_task_notification(
                     TaskChangedPayload(
@@ -1538,6 +1622,10 @@ class MinecraftAgent(BaseAgent):
         """
         task_id = str(event.get("task_id") or "")
         event_type = str(event.get("type") or "")
+        if task_id and event_type in {"paused", "resumed"}:
+            # 暂停/恢复不进通用词表（分不清等人回答还是系统暂停），但身体是否停着必须让自己知道
+            self._absorb_pause_event(task_id, event_type, event)
+            return
         status = _MAICRAFT_TASK_STATUS_MAP.get(event_type, event_type)
         if not task_id or status not in _TASK_EVENT_STATUSES:
             return

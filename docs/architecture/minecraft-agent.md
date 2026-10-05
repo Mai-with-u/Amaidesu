@@ -109,7 +109,7 @@ Minecraft Agent 把建筑设计委派给包内的 `MinecraftBuilderAgent`，收�
 | 事件 | 触发 |
 |---|---|
 | `game.report` | LLM 调 `minecraft_report`（delivery/escalation）或批次终止系统兜底交付；kind 见 `GamePayload.report_kind` |
-| `game.attention_required` | 任务需要行动但模型经提醒仍未推进，或上下文整理失败；游戏内动作连续失败第 3 次起（之后每 5 次）通报卡点，只叙事、不打断任务 |
+| `game.attention_required` | 任务需要行动但模型经提醒仍未推进，或上下文整理失败；游戏内动作连续失败第 3 次起（之后每 5 次）通报卡点；后台任务被 Mod 暂停时通报身体停下了。均只叙事、不打断任务 |
 | `game.error` | 工具执行异常 / LLM 调用失败 / 无 LLM fail-fast |
 
 事件 payload 复用 `GamePayload`（`game="minecraft"`）；上报同时进内存 `recent_reports`（状态查询数据源，保留最近 10 条）。`game.milestone` 不再由本 Agent 发射（todo-diff 自动里程碑已移除，防主播叙事刷屏）。
