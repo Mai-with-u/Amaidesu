@@ -1250,9 +1250,14 @@ async def test_task_decision_point_injects_and_keeps_tracking() -> None:
     registry = ToolRegistry()
     registry.register_provider(provider)
 
+    answered = [False]
+
     async def script(messages, **kwargs):
         user_msgs = [m["content"] for m in messages if m.get("role") == "user"]
-        if any("waiting_for_decision" in u for u in user_msgs):
+        # 决策点只应答一次：通知文字会一直留在历史里，按历史判断会让替身反复应答、空转上百轮，
+        # 每轮上下文越来越长，机器负载一高就撞上等待超时
+        if not answered[0] and any("waiting_for_decision" in u for u in user_msgs):
+            answered[0] = True
             return _resp(tool_calls=[_tool_call("maicraft_maicraft_task", {"action": "answer", "task_id": "task-1"})])
         if not any(m.get("role") == "tool" for m in messages):
             return _resp(tool_calls=[_tool_call("maicraft_maicraft_execute", {"goal": "需要选择的任务"})])
