@@ -332,3 +332,19 @@ def test_pacing_rules_reach_template_and_fallback(with_template: bool) -> None:
     else:
         assert "先准备下一步要用的契约与方案" in prompt and "任务被暂停时按原因处理" in prompt
         assert "按 ref/path 只读需要的字段" in prompt and "同一路径连续失败就换路径" in prompt
+
+
+@pytest.mark.parametrize("with_template", [False, True])
+def test_fair_play_rules_reach_template_and_fallback(with_template: bool) -> None:
+    """模板与内建兜底都要求像生存玩家一样玩：不用管理员命令、不用创造模式物品，卡住了照实说。"""
+    reset_prompt_manager()
+    try:
+        manager = get_prompt_manager() if with_template else None
+        prompt = MinecraftAgent(MinecraftConfig(), llm_manager=MagicMock(), prompt_manager=manager)._system_prompt()
+    finally:
+        reset_prompt_manager()
+    assert "像生存玩家一样玩" in prompt and "/tp" in prompt and "/give" in prompt
+    assert "创造模式" in prompt
+    if with_template:
+        assert "普通玩家命令（`/tell`、`/tpa`、`/home` 等）可以照常用" in prompt
+        assert "管理员命令被拒绝时不要换个写法再试" in prompt and "卡关本身就是好内容" in prompt
