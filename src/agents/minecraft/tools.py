@@ -121,6 +121,7 @@ def build_notebook_spec() -> ToolSpec:
             "工作笔记文档（全量读写，无 id）。你的跨批次工作记忆（进程内保留，重启即清）："
             "记录值得跨轮次保留的关键信息（矿石位置/基地坐标/已完成事项/教训），"
             "对话历史会被压缩、笔记不会——重要发现写这里，每轮可根据需要读回参考。"
+            "只写短条目，不复述历史经过、不抄回执原文。"
             "read 返回全文；write 提交新全文（覆盖）。按需使用，不每轮强制。"
         ),
         parameters_schema={
@@ -160,7 +161,13 @@ def build_report_spec() -> ToolSpec:
                     "enum": ["delivery", "escalation"],
                     "description": "delivery=交付总结；escalation=升级决策（发后停止等待）",
                 },
-                "content": {"type": "string", "description": "上报内容（交付总结 / 需要主播决策的事项）"},
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "主播要念给观众听的几句话：做成了什么、没做成什么、卡在哪、需要主播定什么。"
+                        "坐标、观察编号、证据清单和操作流水不写进来，需要留存的记进 notebook"
+                    ),
+                },
                 "scene": {"type": "string", "description": "可选场景补充（坐标/区块等上下文）"},
             },
             "required": ["kind", "content"],

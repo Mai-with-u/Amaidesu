@@ -12,6 +12,7 @@ def build_observation_spec() -> ToolSpec:
         description=(
             "读取本任务已经取得的观察。省略 ref 分页列出证据索引，可用 query 搜索全部历史的来源或请求。"
             "指定 ref 后用 path（JSON Pointer）选字段；默认一次返回该字段完整正文，索引默认 20 项。"
+            "大回执只读影响当前判断的字段，不要省略 path 整份读取。"
             "source=request 可找回完整输入。Mod 的 omitted/detail_path/resource_uri 引用需按对应的 Mod 入口补读。"
             "这是历史证据，不证明当前库存、位置或现场仍未变化；需要刷新时正常调用 Mod。"
         ),
@@ -47,9 +48,9 @@ def build_wait_spec() -> ToolSpec:
         provider="minecraft",
         kind="sync",
         description=(
-            "当前没有其他可推进事项时，单独调用本工具让出执行，等待已登记的后台任务。"
-            "宿主负责等待和超时检查；任务完成、失败、需要决策或新指令到达后恢复原任务。"
-            "不要再用 attention 长轮询消耗推理轮数。已有待开工产物或待决策任务时先处理它们。"
+            "当前既没有可推进、也没有可趁身体执行任务提前准备的事项时，单独调用本工具让出执行，等待已登记的后台任务。"
+            "宿主负责等待和超时检查；任务完成、失败、需要决策、被暂停或新指令到达后恢复原任务。"
+            "不要再用 attention 长轮询消耗推理轮数。已有待开工产物、待决策或不会自行恢复的暂停任务时先处理它们。"
         ),
         parameters_schema={
             "type": "object",

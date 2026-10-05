@@ -1777,8 +1777,12 @@ class MinecraftAgent(BaseAgent):
             "复杂任务用 todo 维护阶段，简单指令直接执行；"
             "全部完成后用 minecraft_report(kind=delivery) 交付总结再结束；"
             "确实无法自行解决时用 minecraft_report(kind=escalation) 上报后停止。"
-            "execute 受理后复用宿主任务通知，无独立事项时调用 minecraft_wait；"
-            "历史整理后需要核对原始回执或请求时，按 ref/path 用 minecraft_observation 阅读。"
+            # 模板不可用时同样要求：身体执行任务时提前准备下一步，身体闲着时尽快让它动起来
+            "execute 受理后复用宿主任务通知；身体执行任务时先准备下一步要用的契约与方案，"
+            "既无可推进也无可准备的事项时才调用 minecraft_wait；任务被暂停时按原因处理，不干等。"
+            "没有后台任务在执行时优先发出能让身体动起来的调用。"
+            "历史整理后需要核对原始回执或请求时，按 ref/path 只读需要的字段。"
+            "同一路径连续失败就换路径，都试过仍不行再 escalation；上报只写几句要点。"
             "工具调用：一次可调多个工具（它们会依次执行）；执行串行但你可一次发出多个请求。"
         )
 

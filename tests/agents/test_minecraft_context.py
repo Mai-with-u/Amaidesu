@@ -10,6 +10,7 @@ from src.agents.minecraft.config import MinecraftConfig, MinecraftContextConfig
 from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
 from src.modules.config.agents_schemas import AgentsConfig
 from src.modules.llm.payload import Response, ToolCall
+from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 
 
 @pytest.mark.parametrize("with_template", [False, True])
@@ -312,3 +313,22 @@ async def test_far_oversized_context_still_compacts_before_reading() -> None:
     assert llm.generate.await_count == 1
     # 尚未阅读的大回执原样保留给模型
     assert messages[-1]["tool_call_id"] == "big" and len(messages[-1]["content"]) == 40000
+
+
+@pytest.mark.parametrize("with_template", [False, True])
+def test_pacing_rules_reach_template_and_fallback(with_template: bool) -> None:
+    """模板与内建兜底都要求：身体执行任务时准备下一步、按需读取、换路不重试、上报只写要点。"""
+    reset_prompt_manager()
+    try:
+        manager = get_prompt_manager() if with_template else None
+        prompt = MinecraftAgent(MinecraftConfig(), llm_manager=MagicMock(), prompt_manager=manager)._system_prompt()
+    finally:
+        reset_prompt_manager()
+    if with_template:
+        assert "身体执行任务的这段时间是你的准备时间" in prompt and "身体闲着时观众在等" in prompt
+        assert "按需读取" in prompt and "不整份读取大回执" in prompt
+        assert "换路而不是重试" in prompt and "任务被暂停" in prompt
+        assert "念给观众听" in prompt and "写 JSON 数字，不加引号" in prompt
+    else:
+        assert "先准备下一步要用的契约与方案" in prompt and "任务被暂停时按原因处理" in prompt
+        assert "按 ref/path 只读需要的字段" in prompt and "同一路径连续失败就换路径" in prompt
