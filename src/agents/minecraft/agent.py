@@ -2,7 +2,7 @@
 
 核心意象：一个用 MCP 工具玩 Minecraft 的普通 ReAct Agent。
 - 主播 Agent 是它的用户：framework_delegate 委派派活、minecraft_get_work_log 读工作文档、
-  minecraft_report 收上报
+  minecraft_glance 看一眼游戏、minecraft_report 收上报
 - 命令驱动（类 Code Agent）：空闲零消耗；委派指令唤醒任务，任务内持续推进
   ReAct 循环（LLM 推理 → 工具调用串行执行 → 观察作为观察返回），批次终止语义见
   ``_run_task``——无存在性心跳、无时间循环
@@ -33,6 +33,7 @@ from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.agents.minecraft.builder.controller import MinecraftBuilderController
 from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
 from src.agents.minecraft.design_progress import MachineDesignProgress
+from src.agents.minecraft.glance import SURROUNDINGS_SECTIONS, glance_situation, glance_surroundings
 from src.agents.minecraft.observations import MinecraftObservations, json_text, repeated_read
 from src.agents.minecraft.observation_context import project_context
 from src.agents.minecraft.plan_facts import MinecraftPlanFacts
@@ -65,6 +66,10 @@ _ATTENTION_PAGE_LIMIT = 10
 
 # 本批任务期间保留的身体事件条数上限（上报携带的任务上下文，多了只会淹没重点）
 _MAX_BATCH_BODY_EVENTS = 5
+
+# 游戏内动作连续失败到第 3 次时把卡点讲给主播，之后每再失败 5 次补报一次（只叙事，不打断任务）
+_FAILURE_STREAK_NOTICE = 3
+_FAILURE_STREAK_REPEAT = 5
 
 # 角色按目标理解口语并推进施工；常驻提示只保留决策与访问边界，部件细节按需从 Mod 资料读取。
 _GAMEPLAY_RULES = (
@@ -210,7 +215,10 @@ class MinecraftAgent(BaseAgent):
             report_callback=self._handle_report,
             wait_callback=self._request_wait,
             observation_reader=self._read_observation,
+            glance_reader=self._glance,
         )
+        # Mod 的感知工具全名（装配成功时由适配器绑定填入）：主播看一眼经它读原生观察
+        self._perceive_tool: Optional[str] = None
 
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
         self._worker_task: Optional[asyncio.Task[None]] = None
@@ -228,6 +236,9 @@ class MinecraftAgent(BaseAgent):
         self._task_notice_fingerprints: Dict[str, str] = {}
         # 累计推理次数供恢复任务时观察进展，持续施工不会因次数达到固定值而中断。
         self._task_steps = 0
+        # 游戏内动作连续失败计数（成功即清零、新指令清零）：卡在同一步时把卡点讲给主播，
+        # 免得身体闷头重试几十次、主播却一句话说不出来；只做叙事通报，不改变任务走向
+        self._failure_streak = 0
         self._task_finished = True
         self._task_suspended = False
         self._design_progress = MachineDesignProgress()
@@ -309,8 +320,8 @@ class MinecraftAgent(BaseAgent):
 
         启用条件：registry 非空且 ``typed_config.mcp.enabled`` 为 True。
         装配：provider **常驻登记**到 ToolRegistry（可见名单以策略 callable
-        声明，fail-closed：每个工具默认仅 minecraft 可见，读工具 perceive
-        放开给主播直读；恢复刷新时对新工具集重派名单，不落"未列出=全员"
+        声明，fail-closed：每个工具仅 minecraft 可见，主播读游戏状态走
+        minecraft_glance；恢复刷新时对新工具集重派名单，不落"未列出=全员"
         默认）。连接失败/装配异常不再丢弃——provider 以 0 工具降级登记
         （工具页可见、可手动重连），后台退避重试直至装配成功（对齐
         MaicraftAttentionCollector 的失败语义："Mod 没开"是常态而非事故）。
@@ -394,6 +405,7 @@ class MinecraftAgent(BaseAgent):
         # 空闲时通知到达即返回，不产生 MCP 调用也不唤 LLM。
         spec = find_mod_tool(prov.list_tools(), "perceive")
         prov.attention_read_tool = spec.full_name if spec is not None else None
+        self._perceive_tool = spec.full_name if spec is not None else None
         prov.attention_read_arguments = {"view": "attention"}
         self._attention_provider = prov if getattr(prov, "attention_read_tool", None) else None
         if self._mcp_adapters_bound:
@@ -466,18 +478,13 @@ class MinecraftAgent(BaseAgent):
 
     @staticmethod
     def _maicraft_visible_to(specs: Iterable[ToolSpec]) -> Dict[str, List[str]]:
-        """maicraft 逐工具名单（绑定处代码分类，注解不可信）。
+        """maicraft 逐工具名单（绑定处代码分类，注解不可信）：全部仅 minecraft 可见。
 
-        fail-closed：全部默认仅 minecraft 可见（执行类 plan/execute/task 等）；
-        读工具（server 原始名以 perceive 结尾）放开给主播直读——"主播随时
-        直读游戏状态"的产品需求，sync 直返、不进游戏 LLM 循环。
+        主播"随时直读游戏状态"走 minecraft_glance 精简视图：原始观察里的几何
+        与证据是给游戏 Agent 规划用的，交给主播会让一次回应读进几万字、
+        还会诱导主播自己去推方块坐标、替身体做工程判断。
         """
-        visible: Dict[str, List[str]] = {}
-        for spec in specs:
-            visible[spec.full_name] = (
-                ["streamer", "minecraft"] if spec.name in {"perceive", "maicraft_perceive"} else ["minecraft"]
-            )
-        return visible
+        return {spec.full_name: ["minecraft"] for spec in specs}
 
     async def _on_stop(self) -> None:
         """停止钩子：取消命令 worker 与 handoff 监视（任务执行随 worker 取消而中断）。"""
@@ -546,6 +553,7 @@ class MinecraftAgent(BaseAgent):
         "minecraft_wait": ["minecraft"],
         "minecraft_observation": ["minecraft"],
         "minecraft_get_work_log": ["streamer"],
+        "minecraft_glance": ["streamer"],
     }
 
     def _register_tools(self) -> None:
@@ -722,6 +730,8 @@ class MinecraftAgent(BaseAgent):
                     self._task_finished = False
                     self._task_suspended = False
                     self._task_steps = 0
+                    # 主播给了新指令就换了方向，之前的失败连击不再代表"卡在同一步"
+                    self._failure_streak = 0
                     self._design_progress.reset()
                 if _tid:
                     self._delegated_batch_ids.append(_tid)
@@ -929,6 +939,47 @@ class MinecraftAgent(BaseAgent):
     def _read_observation(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """每次从当前任务取原文，避免新任务仍绑定上一任务的观察集合。"""
         return self._observations.read(arguments)
+
+    async def _glance(self) -> Dict[str, Any]:
+        """主播看一眼：读一次现状与周边，只留直播叙事用得上的事实，再附上身体手头的工作。
+
+        主播被观众问到"你现在在哪/背包里有啥/面前是什么"时调用；只读，不进本
+        Agent 的推理循环、不写观察记录。连接没就绪或读取失败时照实写出原因。
+        """
+        result: Dict[str, Any] = {"tool": "glance"}
+        if self._perceive_tool is None:
+            result["unavailable"] = "游戏连接还没就绪，暂时看不到游戏里的情况"
+        else:
+            # 先看自己（位置/血量/背包），再看周边（牌子/生物/设施），两次读取互不依赖
+            situation = await self._execute_tool(self._perceive_tool, {"view": "situation"})
+            surroundings = await self._execute_tool(
+                self._perceive_tool, {"view": "surroundings", "sections": list(SURROUNDINGS_SECTIONS)}
+            )
+            result.update(glance_situation(situation))
+            result.update(glance_surroundings(surroundings))
+        result["work"] = self._glance_work()
+        return result
+
+    def _glance_work(self) -> Dict[str, Any]:
+        """身体手头的工作：在做/等主播指令/空闲、待办、未结束的游戏内动作、连续失败次数。"""
+        if self._task_suspended:
+            state = "卡住了，正在等主播的新指令"
+        elif not self._task_finished:
+            state = "正在做主播交代的事"
+        else:
+            state = "空闲"
+        work: Dict[str, Any] = {"state": state, "todo": self._mc_state.todo_doc()["todos"]}
+        # 只列还没结束的动作；已结束的成败由连续失败次数和上报讲清楚
+        active = [
+            {"status": item.get("status"), "summary": item.get("summary")}
+            for item in self._task_progress.values()
+            if item.get("status") not in {"succeeded", "failed", "cancelled", "timeout"}
+        ]
+        if active:
+            work["active_actions"] = active
+        if self._failure_streak:
+            work["failure_streak"] = self._failure_streak
+        return work
 
     def _remember_result(
         self, tool: str, arguments: Dict[str, Any], original: Dict[str, Any], shown: Dict[str, Any]
@@ -1201,6 +1252,9 @@ class MinecraftAgent(BaseAgent):
                 self._task_progress[payload.task_id].pop("decision", None)
             while len(self._task_progress) > 64:
                 self._task_progress.pop(next(iter(self._task_progress)))
+            # 设计子任务另有完成通知；这里只数身体真正去做的游戏内动作
+            if payload.executor != "minecraft_builder":
+                self._note_task_outcome(payload)
         # 受理转运行和普通进度由宿主记账，只有决策点、终态或停滞告警才需要模型判断。
         if payload.status in {"accepted", "running"} and not payload.alert:
             return
@@ -1242,6 +1296,34 @@ class MinecraftAgent(BaseAgent):
         """系统消息入队 + 唤醒 worker（非委派来源，任务号空串）。"""
         self._message_queue.append(("", content))
         self._wake_event.set()
+
+    def _note_task_outcome(self, payload: TaskChangedPayload) -> None:
+        """游戏内动作成败计数：连续失败到第 3 次时告诉主播卡在哪，之后每再失败 5 次补报一次。
+
+        成功一次就清零。通报走 attention_required 叙事事件，只让主播有话可讲
+        （"取铁板这步一直失败，还在换办法"），不打断任务、不替身体决定放弃或换法。
+        """
+        if payload.status == "succeeded":
+            self._failure_streak = 0
+            return
+        if payload.status not in {"failed", "timeout"}:
+            return
+        self._failure_streak += 1
+        streak = self._failure_streak
+        if streak < _FAILURE_STREAK_NOTICE or (streak - _FAILURE_STREAK_NOTICE) % _FAILURE_STREAK_REPEAT:
+            return
+        reason = (payload.summary or "").strip() or payload.status
+        message = (
+            f"身体卡在同一步了：最近连续 {streak} 个游戏内动作没有成功（最近一次：{reason}），"
+            "身体还在换办法继续，没有放弃这个任务。"
+        )
+        spawn_background_task(
+            self._emit_game_event("attention_required", message),
+            logger=self._logger,
+            tasks=self._bg_tasks,
+            label="MinecraftAgent.failure_streak_notice",
+        )
+        self._logger.info(f"游戏内动作连续失败 {streak} 次，已通报主播")
 
     # ==================================================================
     # 身体事件（注意流增量读取）

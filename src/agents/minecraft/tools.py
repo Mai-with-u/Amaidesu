@@ -5,6 +5,8 @@ minecraft_notebook / minecraft_get_work_log）
 - 局部工具（minecraft_todo / minecraft_notebook）= Agent 自己 LLM 用，驱动 ReAct 循环
   ——全量读写文档，无 id
 - 对外工作文档读取（minecraft_get_work_log）= 主播经 ToolRegistry 调，只读——叙事素材通道
+- 主播看一眼（minecraft_glance）= 主播经 ToolRegistry 调，只读——身体现状与周边的精简叙事视图，
+  代替原始观察（原始观察的几何与证据是给游戏 Agent 规划用的）
 - 跨 Agent 派活走框架委派原语（framework_delegate；原 minecraft_send_prompt
   已退役，职能并入 Agent 的接收委派入口）——主播是玩家 Agent 的用户：
   派发/调整任务、回答问题、补充要求；系统不代写 todo（目标分解是 LLM 用
@@ -200,6 +202,31 @@ def build_get_work_log_spec() -> ToolSpec:
     )
 
 
+def build_glance_spec() -> ToolSpec:
+    """``minecraft_glance`` 工具规格——主播看一眼游戏（只读，精简叙事视图）"""
+    return ToolSpec(
+        name="glance",
+        description=(
+            "看一眼游戏里的自己：身体状态（维度/位置/血量/饥饿/时段天气/护甲）、背包物品与数量、"
+            "附近牌子上的字、附近生物与设施，以及身体手头的工作（待办、进行中的游戏内动作、连续失败次数）。"
+            "只读、即时，面向直播叙事；更细的勘查、判断或任何操作都交给委派，不要自己琢磨方块坐标。"
+        ),
+        parameters_schema={"type": "object", "properties": {}, "required": []},
+        kind="sync",
+        provider=PROVIDER_NAME,
+        output_schema={
+            "type": "object",
+            "properties": {
+                "body": {"type": "object"},
+                "inventory": {"type": "array"},
+                "signs": {"type": "array"},
+                "entities": {"type": "array"},
+                "work": {"type": "object"},
+            },
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Provider（注册到 ToolRegistry）
 # ---------------------------------------------------------------------------
@@ -224,6 +251,8 @@ class MinecraftToolProvider(BaseToolProvider):
     wait_callback: Optional[Callable[[], Dict[str, Any]]] = None
     # 原始观察由当前逻辑任务持有，工具只负责按引用读取，不自行查询或缓存世界。
     observation_reader: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
+    # 主播看一眼：由 Agent 读原生观察并精简成叙事视图（未注入时不提供该工具）
+    glance_reader: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
 
     @property
     def name(self) -> str:
@@ -240,6 +269,8 @@ class MinecraftToolProvider(BaseToolProvider):
             specs.append(build_wait_spec())
         if self.observation_reader is not None:
             specs.append(build_observation_spec())
+        if self.glance_reader is not None:
+            specs.append(build_glance_spec())
         return specs
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -273,6 +304,8 @@ class MinecraftToolProvider(BaseToolProvider):
                 result = self.wait_callback()
             elif matched.name == "observation" and self.observation_reader is not None:
                 result = self.observation_reader(args)
+            elif matched.name == "glance" and self.glance_reader is not None:
+                result = await self.glance_reader()
             else:
                 return ToolExecutionResult(
                     tool_name=tool_name,
@@ -354,6 +387,7 @@ __all__ = [
     "build_todo_spec",
     "build_notebook_spec",
     "build_get_work_log_spec",
+    "build_glance_spec",
     "build_report_spec",
     "PROVIDER_NAME",
     "ReportCallback",

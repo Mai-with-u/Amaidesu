@@ -1374,7 +1374,15 @@ def test_factory_instantiates_minecraft() -> None:
     assert isinstance(agent, MinecraftAgent)
     assert agent.typed_config.execute_poll_interval_ms == 4000
     # 工厂创建的玩家也暴露让出能力，等待是否可用由真实后台依赖决定。
-    assert [s.name for s in agent.list_tools()] == ["todo", "notebook", "get_work_log", "report", "wait", "observation"]
+    assert [s.name for s in agent.list_tools()] == [
+        "todo",
+        "notebook",
+        "get_work_log",
+        "report",
+        "wait",
+        "observation",
+        "glance",
+    ]
 
 
 def test_factory_rejects_legacy_game_name() -> None:
@@ -1551,7 +1559,7 @@ def _patch_mcp(monkeypatch: pytest.MonkeyPatch, provider_cls: type) -> Dict[str,
 async def test_on_start_binds_agent_owned_mcp_with_visible_list(monkeypatch: pytest.MonkeyPatch) -> None:
     """_on_start 启用 mcp 时：McpClient/McpToolProvider 被实例化、setup 调用、
     工具以逐工具可见名单（fail-closed）注册进 ToolRegistry：
-    读工具 perceive 给主播+自己；执行类仅 minecraft；域内查询照常可见。"""
+    maicraft 工具一律仅 minecraft；主播读游戏状态走 minecraft_glance；域内查询照常可见。"""
     _patch_mcp(monkeypatch, _FakeMcpProvider)
 
     from src.modules.mcp.config import McpServerConfig
@@ -1571,18 +1579,23 @@ async def test_on_start_binds_agent_owned_mcp_with_visible_list(monkeypatch: pyt
     # 域内查询（provider="maicraft"）：可见
     scoped_names = {s.full_name for s in registry.list_tools(provider="maicraft")}
     assert scoped_names == {"maicraft_perceive", "maicraft_execute"}
-    # 可见名单：读工具放开给主播（sync 直读），执行类 fail-closed 仅自己
-    assert registry.visible_to_of("maicraft_perceive") == ["streamer", "minecraft"]
+    # 可见名单：原始观察与执行类一律 fail-closed 仅自己（主播不再直读几万字的原始观察）
+    assert registry.visible_to_of("maicraft_perceive") == ["minecraft"]
     assert registry.visible_to_of("maicraft_execute") == ["minecraft"]
     # 按 Agent 计算工具列表
     streamer_face = {s.full_name for s in registry.list_tools(for_agent="streamer")}
-    assert "maicraft_perceive" in streamer_face
+    assert "maicraft_perceive" not in streamer_face
     assert "maicraft_execute" not in streamer_face
+    assert "minecraft_glance" in streamer_face
     minecraft_face = {s.full_name for s in registry.list_tools(for_agent="minecraft")}
     assert {"maicraft_perceive", "maicraft_execute"}.issubset(minecraft_face)
-    # 本地工具名单：get_work_log 给主播，todo/notebook/report/wait 等各归其主
+    assert "minecraft_glance" not in minecraft_face
+    # 本地工具名单：get_work_log / glance 给主播，todo/notebook/report/wait 等各归其主
     assert registry.visible_to_of("minecraft_get_work_log") == ["streamer"]
+    assert registry.visible_to_of("minecraft_glance") == ["streamer"]
     assert registry.visible_to_of("minecraft_todo") == ["minecraft"]
+    # 装配时记下感知工具全名，主播看一眼经它读原生观察
+    assert agent._perceive_tool == "maicraft_perceive"
     # 装配成功：client 引用留给 handoff 订阅接线
     assert agent._mcp_client is not None
 

@@ -195,6 +195,10 @@ def test_classification_covers_narratable_and_drops_the_rest() -> None:
     assert classify("agent.dimension_changed", "") == "dimension_changed"
     assert classify("world.time_phase_changed", "") is None, "世界时刻对叙述没有意义"
     assert classify("agent.respawn_requested", "") is None, "重生请求由 died/respawned 覆盖"
+    # 写给游戏 Agent 的维护提示不是身体遭遇，不能刷进主播的身体近况
+    assert classify("agent.reminder", "") is None
+    assert classify("machine_catalog_attention", "") is None
+    assert classify("runtime.unavailable", "") is None
     assert classify("agent.something_new", "") == "unknown", "上游新增类型不丢，但事件面保持封闭"
     assert classify("", "") is None
 

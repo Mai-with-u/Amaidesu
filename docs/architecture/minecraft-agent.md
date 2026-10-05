@@ -12,7 +12,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 **MinecraftAgent = 一个用 MCP 工具玩 Minecraft 的普通 ReAct Agent。**
 
 - 系统提示词 + 工具列表 = 全部"编程"，不发明任何特殊协议
-- 主播 Agent 是它的用户：发指令（跨 Agent 派活走框架委派 `framework_delegate`，中途插话走递话 `framework_prompt`）/读工作文档（`minecraft_get_work_log`）/收上报（`game.report`）
+- 主播 Agent 是它的用户：发指令（跨 Agent 派活走框架委派 `framework_delegate`，中途插话走递话 `framework_prompt`）/读工作文档（`minecraft_get_work_log`）/看一眼游戏（`minecraft_glance`）/收上报（`game.report`）
 - 异步任务统一采用受理回执：Mod 施工由后台 tick 驱动，建筑设计由包内子 Agent 推进；系统跟踪任务并在有结果时唤醒游戏 Agent，LLM 不用推理步数轮询
 - LLM 可一次返回多个 tool_calls（批量请求 → 串行执行 → 批量作为观察返回，标准 function calling 循环）
 
@@ -102,13 +102,14 @@ Minecraft Agent 把建筑设计委派给包内的 `MinecraftBuilderAgent`，收�
 **对外工具**（经 ToolRegistry 注册、主播工具列表可见，不进玩家 LLM 工具列表）：
 - `framework_delegate`：跨 Agent 委派通道——把工作交给另一 Agent（指令只当自然语言，不给步骤）；BaseAgent 默认拒收，minecraft 实现接收入口（指令入队带任务号 + 唤醒）。跨 Agent 派活的发送侧走框架委派而非 mcp 工具
 - `minecraft_get_work_log`：工作文档读服务——只读返回 `{todo, notebook, recent_reports}` 三元组；本工具不查异步任务记录表，查任务进度用 `framework_task_status`（跨 Agent 委派 + 回执型工具的当前状态与快照）
+- `minecraft_glance`：主播看一眼游戏——读一次原生现状与周边，只返回直播叙事用得上的事实（身体状态、背包物品与数量、附近牌子文字/生物/设施）与身体手头的工作（待办、未结束的游戏内动作、连续失败次数）。原始 `maicraft_*` 工具只对玩家自己可见
 
 ## 事件契约（确定性系统事件，无 LLM 自觉汇报）
 
 | 事件 | 触发 |
 |---|---|
 | `game.report` | LLM 调 `minecraft_report`（delivery/escalation）或批次终止系统兜底交付；kind 见 `GamePayload.report_kind` |
-| `game.attention_required` | 任务需要行动但模型经提醒仍未推进，或上下文整理失败 |
+| `game.attention_required` | 任务需要行动但模型经提醒仍未推进，或上下文整理失败；游戏内动作连续失败第 3 次起（之后每 5 次）通报卡点，只叙事、不打断任务 |
 | `game.error` | 工具执行异常 / LLM 调用失败 / 无 LLM fail-fast |
 
 事件 payload 复用 `GamePayload`（`game="minecraft"`）；上报同时进内存 `recent_reports`（状态查询数据源，保留最近 10 条）。`game.milestone` 不再由本 Agent 发射（todo-diff 自动里程碑已移除，防主播叙事刷屏）。

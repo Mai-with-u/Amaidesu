@@ -63,6 +63,11 @@ _NON_NARRATIVE_TYPES = frozenset(
         "agent.respawn_requested",
         "agent.respawn_request_failed",
         "agent.death_decision_applied",
+        # 下面几类是写给游戏 Agent 的维护提示（光照/口粮/耐久提醒、机器档案、运行时状态），
+        # 不是身体遭遇；转给主播只会变成一串"身体事件：agent.reminder"，挤掉真正的摔伤和死亡
+        "agent.reminder",
+        "machine_catalog_attention",
+        "runtime.unavailable",
     }
 )
 

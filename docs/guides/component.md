@@ -509,7 +509,7 @@ registry.register_provider(
     provider,
     visible_to={
         "minecraft_todo": ["minecraft"],       # 仅自己
-        "maicraft_perceive": ["streamer", "minecraft"],  # 读工具放开给主播
+        "minecraft_glance": ["streamer"],      # 主播只读的精简叙事视图
         # 未列出的工具默认仅主播（DEFAULT_VISIBLE_TO，fail-closed）
     },
 )
@@ -586,11 +586,11 @@ reply 走注册表后三事件都发——观测冗余是**有意接受**的（�
 | 通道 | 配置位置 | 工具注册时 `provider` | 装配入口 | 适用 |
 |------|---------|---------------------|----------|------|
 | 通用 MCP | `tools.toml` 的 `[tools.mcp.config.servers.<别名>]` | `<server 名>`（如 `maicraft`） | 组合根 `bind_mcp_tools(registry, ...)` | 任何 Agent 都可调用，类 Claude Code 全局工具源 |
-| Agent 私有 MCP | `agents.toml` 的 `[agents.<Agent 名>.mcp]` | `<server 名>` | Agent `_on_start` 自行装配，逐工具名单（fail-closed：默认仅自己，读工具放开） | 名单内的 Agent 可见；域内查询 `list_tools(provider=...)` 照常 |
+| Agent 私有 MCP | `agents.toml` 的 `[agents.<Agent 名>.mcp]` | `<server 名>` | Agent `_on_start` 自行装配，逐工具名单（fail-closed：默认仅自己） | 名单内的 Agent 可见；域内查询 `list_tools(provider=...)` 照常 |
 
 原则：**位置即归属，装配即声明，调度与基建全局统一**——通用 MCP 与 Agent 私有 MCP 共用 `McpToolProvider` / `ToolRegistry` / 熔断器 / 探活等基建，唯一区别是归属标记与配置宿主文件。Agent 私有 MCP 的 `enabled=false` 时不装配（Agent 是命令驱动，MCP 不可用只降级）。
 
-典型范例：MinecraftAgent 在 `[agents.minecraft].mcp` 声明其 maicraft server，启动时以逐工具名单注册（fail-closed：执行类工具仅 minecraft；读工具 perceive 放开给主播直读）——其它 Agent 的工具列表不被 maicraft 执行工具污染。
+典型范例：MinecraftAgent 在 `[agents.minecraft].mcp` 声明其 maicraft server，启动时以逐工具名单注册（fail-closed：maicraft 工具仅 minecraft 可见；主播读游戏状态走 Agent 自带的 `minecraft_glance` 精简视图）——其它 Agent 的工具列表不被 maicraft 原始工具污染。
 
 ---
 
