@@ -175,6 +175,12 @@ class Replyer:
             return None
 
         speech, emotion_name, emotion_intensity = self._parse_tool_calls(getattr(response, "tool_calls", None))
+        if not speech:
+            # 实测 MiniMax-M3 常把台词直接写成正文、不调 reply：正文就是要说的话，拿来当台词而不是整轮静默。
+            # 否则连续静默会让 reply 工具被熔断摘除，主播一分钟左右张不开嘴。
+            speech = _plain_text_speech(getattr(response, "content", None))
+            if speech:
+                self.logger.info("Replyer 未调用 reply，改用正文作为台词")
 
         if not speech:
             self.logger.info("Replyer LLM 未返回 reply 或 speech 为空，silent 降级")
@@ -478,6 +484,27 @@ def _parse_call_arguments(raw: Any) -> Any:
         except json.JSONDecodeError:
             return raw
     return {}
+
+
+#: 正文里的思考段：闭合的整段去掉；只有开头没有结尾的，从开头起全是思考，整段都不能念
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+_THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL)
+
+
+def _plain_text_speech(content: Any) -> str:
+    """模型没调 reply、把台词写进正文时，取出可以直接念的那句话。
+
+    先去掉思考段（实测有 208 秒的请求只回了一段没闭合的 ``<think>``，那种整段都不能念）；
+    正文若是 ``{"speech": ...}`` 形状的 JSON，取其中的 speech。取不出就返回空串，照常静默。
+    """
+    if not isinstance(content, str):
+        return ""
+    text = _THINK_UNCLOSED.sub("", _THINK_BLOCK.sub("", content)).strip()
+    if text.startswith("{"):
+        parsed = _parse_call_arguments(text)
+        if isinstance(parsed, dict) and isinstance(parsed.get("speech"), str):
+            return parsed["speech"].strip()
+    return text
 
 
 def _render_plan_text(plan: DecisionPlan) -> str:

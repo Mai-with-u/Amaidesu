@@ -427,3 +427,14 @@ def test_streamer_prompts_speak_as_one_streamer() -> None:
     assert "没有小伙伴、没有游戏 Agent" in planner and "【我手头在游戏里做的事】" in planner
     assert "【身体" not in planner
     assert "游戏里干活的就是你自己" in replyer and "活已经派下去了" in replyer
+
+
+def test_planner_prompt_only_reports_progress_with_evidence() -> None:
+    """进展只说有凭据的：实测游戏侧每次执行都被拒，主播却说"机器在嗡嗡响、蜂蜜胶在冒出来"。"""
+    reset_prompt_manager()
+    try:
+        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+    finally:
+        reset_prompt_manager()
+    assert "进展只说有凭据的" in prompt and '就说"还在弄"' in prompt
+    assert '"已经拿到"这类没凭据的细节' in prompt and "想讲具体进度就先查" in prompt

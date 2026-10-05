@@ -69,11 +69,12 @@ def _make_llm_response(
     tool_calls: Optional[List[ToolCall]] = None,
     success: bool = True,
     error: Optional[str] = None,
+    content: str = "",
 ) -> Response:
     """构造 payload.Response（generate 返回值）。"""
     return Response(
         success=success,
-        content="",
+        content=content,
         tool_calls=tool_calls or [],
         error=error,
     )
@@ -331,6 +332,39 @@ class TestReplyerGenerate:
         result = await r.generate(plan, [])
 
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_replyer_plain_text_becomes_speech(self) -> None:
+        """模型没调 reply、把台词写成正文（实测 MiniMax-M3 常这样）→ 正文当台词，情绪中性，不再静默。"""
+        r, _llm, _prompt = _make_replyer(
+            llm_response=_make_llm_response(content="  到了到了，机器就在面前～马上开整！  "),
+        )
+        result = await r.generate(_make_plan(), [])
+
+        assert result is not None
+        assert result["speech"] == "到了到了，机器就在面前～马上开整！"
+        assert result["emotion"]["name"] == "neutral"
+
+    @pytest.mark.asyncio
+    async def test_replyer_plain_text_drops_thinking(self) -> None:
+        """正文里的思考段不能念：闭合的去掉留下台词；只有没闭合的思考就照常静默。"""
+        r, _llm, _prompt = _make_replyer(
+            llm_response=_make_llm_response(content="<think>观众在等，接一句</think>我回来啦"),
+        )
+        assert (await r.generate(_make_plan(), []))["speech"] == "我回来啦"
+
+        r, _llm, _prompt = _make_replyer(
+            llm_response=_make_llm_response(content="<think>The user is asking me to continue the opening"),
+        )
+        assert await r.generate(_make_plan(), []) is None
+
+    @pytest.mark.asyncio
+    async def test_replyer_plain_json_speech(self) -> None:
+        """正文是 reply 参数形状的 JSON → 取其中的 speech，不把整段 JSON 念出来。"""
+        r, _llm, _prompt = _make_replyer(
+            llm_response=_make_llm_response(content='{"speech": "蜂蜜胶还在弄", "emotion": "happy"}'),
+        )
+        assert (await r.generate(_make_plan(), []))["speech"] == "蜂蜜胶还在弄"
 
     @pytest.mark.asyncio
     async def test_replyer_empty_speech_silent(self) -> None:
