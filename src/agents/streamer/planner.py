@@ -91,6 +91,39 @@ def _as_id_str(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _same_json_document(text: str, structured: Any) -> bool:
+    """正文是否只是结构化结果的 JSON 序列化（解析后逐字段相等）。"""
+    if not isinstance(structured, dict) or not structured or not text.lstrip().startswith("{"):
+        return False
+    try:
+        return json.loads(text) == structured
+    except json.JSONDecodeError:
+        return False
+
+
+#: 付费消息类型 → 情境标注用词（强制回应的情境按本批实际消息类型说，不一律当付费）
+_PAID_TYPE_LABELS: Dict[str, str] = {"super_chat": "SC", "gift": "礼物", "guard": "上舰"}
+
+
+def _forced_situation(batch: List[Any]) -> str:
+    """强制回应批次的情境标注：本批真有付费消息才说"付费点名"。
+
+    控制台点名测试同样强制回应，但那只是运营要求必答，不是 SC——当成付费
+    会让主播对每句调试话都"谢谢老板 SC"。
+    """
+    paid = [
+        _PAID_TYPE_LABELS[message_type]
+        for message_type in dict.fromkeys(getattr(msg, "message_type", "") for msg in batch)
+        if message_type in _PAID_TYPE_LABELS
+    ]
+    if paid:
+        return f"【情境】本批为强制回应（含付费消息：{' / '.join(paid)}）——观众付费点名，应优先回应。"
+    return (
+        "【情境】本批为强制回应（运营点名的必答消息，不是 SC / 礼物 / 上舰，没有人付费）"
+        "——优先回应消息本身，不要致谢付费。"
+    )
+
+
 def _reply_last(tool_calls: List[Any]) -> List[Any]:
     """同一步的工具调用按原序执行，只把说话（streamer_reply）挪到最后。"""
     others = [call for call in tool_calls if not (isinstance(call, dict) and call.get("name") == "streamer_reply")]
@@ -416,7 +449,7 @@ class Planner:
         """
         lines: List[str] = []
         if forced:
-            lines.append("【情境】本批为强制回应触发（SC / 礼物 / 上舰）——观众付费点名，应优先回应。")
+            lines.append(_forced_situation(batch))
         if proactive:
             lines.append("【情境】本窗为主动发言触发（冷场/定时）——弹幕可能为空，基于房间态势决定是否主动开口。")
         if game_narrative:
@@ -617,7 +650,12 @@ class Planner:
             # content 不带键——动作执行型工具的观察形态维持原样。
             data = dict(result.structured_content) if isinstance(result.structured_content, dict) else {}
             data.setdefault("ok", True)
-            if result.content and "content" not in data:
+            # MCP 工具常把同一份结构化结果再序列化成正文返回一遍；完全相同时只给一份，避免上下文翻倍
+            if (
+                result.content
+                and "content" not in data
+                and not _same_json_document(result.content, result.structured_content)
+            ):
                 data["content"] = result.content
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}

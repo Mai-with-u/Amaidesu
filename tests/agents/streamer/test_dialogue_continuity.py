@@ -260,3 +260,77 @@ def test_trim_batch_echo_drops_only_tail_copy_of_batch() -> None:
     trimmed = canonical.trim_batch_echo(history, [_msg("拉", "m1")])
 
     assert [turn.content for turn in trimmed] == ["拉", "要不要拉一下？"]
+
+
+# ---------------------------------------------------------------------------
+# 叙事时间标注 + 付费情境
+# ---------------------------------------------------------------------------
+
+
+def test_narrative_marks_age_and_new_since_last_round() -> None:
+    """旧条目标到达距今多久，上次决策后才到的标"新"——死亡不会被当成刚发生的事反复讲。"""
+    from src.agents.streamer.streamer_agent import _NarrativeEntry, _render_narrative
+
+    entries = [
+        _NarrativeEntry(received_ms=0, line="[minecraft·died] 死了"),
+        _NarrativeEntry(received_ms=40 * 60_000, line="[minecraft·report] 蜂房机器运转正常"),
+    ]
+
+    text = _render_narrative(entries, seen_until_ms=20 * 60_000, now=40 * 60_000 + 5_000)
+
+    assert text.splitlines() == [
+        "[40 分钟前] [minecraft·died] 死了",
+        "[新·刚刚] [minecraft·report] 蜂房机器运转正常",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_forced_debug_batch_is_not_labeled_as_paid() -> None:
+    """控制台点名必答，但没人付费：情境不说 SC，真有醒目留言时才说付费点名。"""
+    captured: List[List[dict]] = []
+
+    async def _generate(messages: List[dict], **_: Any) -> Response:
+        captured.append([dict(m) for m in messages])
+        return Response(success=True, content="不说")
+
+    registry = MagicMock()
+    registry.list_tools = MagicMock(return_value=[])
+    planner = _planner_with([], registry, MagicMock())
+    planner._llm_service.generate = AsyncMock(side_effect=_generate)
+
+    await planner.plan([_msg("拉", "m1")], forced=True)
+    paid = RoomMessagePayload(
+        message_type="super_chat", user=RoomMessageUser(id="u2", name="老板"), content="冲", message_id="m2"
+    )
+    await planner.plan([paid], forced=True)
+
+    debug_ref, paid_ref = captured[0][-1]["content"], captured[1][-1]["content"]
+    assert "运营点名的必答消息" in debug_ref and "SC" in debug_ref and "付费点名" not in debug_ref
+    assert "含付费消息：SC" in paid_ref
+
+
+@pytest.mark.asyncio
+async def test_registry_observation_keeps_one_copy_of_duplicated_json_body() -> None:
+    """MCP 工具正文只是结构化结果的 JSON 时只给一份；正文另有信息时照常附上。"""
+    import json
+
+    structured = {"health": 20.0, "position": {"x": -86, "y": 105, "z": 27}}
+    registry = MagicMock()
+    registry.list_tools = MagicMock(return_value=[])
+    planner = _planner_with([], registry, MagicMock())
+
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="x_tool", success=True, structured_content=structured, content=json.dumps(structured)
+        )
+    )
+    duplicated = json.loads(await planner._invoke_registry_tool("x_tool", {}))
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="x_tool", success=True, structured_content=structured, content="附近有一块写着蜂房的牌子"
+        )
+    )
+    distinct = json.loads(await planner._invoke_registry_tool("x_tool", {}))
+
+    assert "content" not in duplicated and duplicated["health"] == 20.0
+    assert distinct["content"] == "附近有一块写着蜂房的牌子"

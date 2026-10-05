@@ -76,15 +76,17 @@ async def _wait_until(cond: Any, timeout_s: float = 2.0) -> None:
 
 @pytest.mark.asyncio
 async def test_narrative_line_contains_event_type_and_message_unchanged():
-    """叙事行形如 [game·event_type] message；message 本体原样保留。"""
+    """叙事行形如 [到达距今] [game·event_type] message；message 本体原样保留。"""
     agent = _build_streamer_agent()
 
     await agent._on_game_event(CoreEvents.GAME_REPORT, _make_payload("report", "迷宫尽头有两个门：左或右？"), "Test")
     await agent._on_game_event(CoreEvents.GAME_MILESTONE, _make_payload("milestone", "挖到钻石了！"), "Test")
 
     lines = agent._game_narrative_text().splitlines()
-    assert lines[0] == "[minecraft·report] 迷宫尽头有两个门：左或右？"
-    assert lines[1] == "[minecraft·milestone] 挖到钻石了！"
+    assert lines[0] == "[新·刚刚] [minecraft·report] 迷宫尽头有两个门：左或右？"
+    assert lines[1] == "[新·刚刚] [minecraft·milestone] 挖到钻石了！"
+    # 交给过一次决策窗后不再标"新"，内容仍完整保留
+    assert agent._game_narrative_text().splitlines()[0] == "[刚刚] [minecraft·report] 迷宫尽头有两个门：左或右？"
 
 
 @pytest.mark.asyncio
