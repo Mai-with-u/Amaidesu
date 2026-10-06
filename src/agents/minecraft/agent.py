@@ -68,6 +68,15 @@ MINECRAFT_PROFILE = "minecraft"
 # 让出等待后台任务时，历史超过预算的这一比例就提前整理；整理目标仍按完整预算的六成计算。
 _IDLE_COMPACTION_RATIO = 0.7
 
+# 开局资料里的周边段：位置、告示牌、设施盘点、附近生物与局部决策摘要，覆盖开局最常读的现场事实。
+_OPENING_SURROUNDINGS_SECTIONS = (
+    "position",
+    "nearby_signs",
+    "nearby_facilities",
+    "nearby_entities",
+    "local_decision_summary",
+)
+
 # 递话来源标签：运营在控制面直接说的话与主播决策循环递来的补充分开标注。
 _PROMPT_SOURCE_LABELS = {"operator": "[运营原话]", "planner-react": "[主播补充]"}
 
@@ -232,6 +241,8 @@ class MinecraftAgent(BaseAgent):
         )
         # Mod 的感知工具全名（装配成功时由适配器绑定填入）：主播看一眼经它读原生观察
         self._perceive_tool: Optional[str] = None
+        # 全部能力的签名简表（每次 MCP 连接只读一次）；新任务开局随资料包附上，模型不必逐个读契约
+        self._ability_signatures: Optional[Dict[str, Any]] = None
 
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
         self._worker_task: Optional[asyncio.Task[None]] = None
@@ -489,6 +500,8 @@ class MinecraftAgent(BaseAgent):
         唤醒重跑，账面由批次重启的 ``_mark_delegated_running`` 对追踪
         清单旧委派重写 running（不代写账，恢复循环只给信号）。
         """
+        # 重连后 Mod 可能已换版本，能力签名下次开局重新读取。
+        self._ability_signatures = None
         self._inject_wakeup_message(
             "[系统] Minecraft 连接已恢复，maicraft 工具重新可用。若此前因连接失败受阻，请评估现场并继续原任务。"
         )
@@ -741,6 +754,8 @@ class MinecraftAgent(BaseAgent):
             )
 
         steps = 0
+        # 本批若开始了新任务，就在第一次推理前附上宿主代读的开局资料。
+        opening_due = False
         mc_round = f"mc_{uuid.uuid4().hex[:12]}" if self._thinking_sink is not None else ""
         mc_seq_box = [0]
         action_reminded = False
@@ -770,6 +785,7 @@ class MinecraftAgent(BaseAgent):
                         self._mc_state.set_todos([])
                         # 原文引用只属于本次逻辑任务；后台唤醒和同任务补充要求继续使用已有证据。
                         self._observations = MinecraftObservations()
+                        opening_due = True
                     self._task_instructions.append(_content)
                     self._task_finished = False
                     self._task_suspended = False
@@ -784,6 +800,10 @@ class MinecraftAgent(BaseAgent):
                 if not isinstance(queued, MinecraftInstruction):
                     message["_minecraft_task_notice"] = True
                 messages.append(message)
+            if opening_due:
+                # 新任务开局：模型以往开头几轮都在读现状、地标、笔记和能力契约，由宿主一次代读，省掉这几轮请求。
+                opening_due = False
+                await self._append_opening_bundle(messages)
             # 本批委派任务进入进行中（agent 型单写者：执行 Agent 写）
             self._mark_delegated_running()
             steps += 1
@@ -1004,6 +1024,65 @@ class MinecraftAgent(BaseAgent):
     def _read_observation(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """每次从当前任务取原文，避免新任务仍绑定上一任务的观察集合。"""
         return self._observations.read(arguments)
+
+    async def _append_opening_bundle(self, messages: List[Dict[str, Any]]) -> None:
+        """新任务开局由宿主代读固定资料：当前状态、周边（告示牌、设施、生物）、地标、笔记与全部能力签名。
+
+        以一组宿主代发的工具调用和回执放进历史，和模型自己读取时同样带观察引用、参与证据去重；
+        读取失败的那一项照实留下错误回执。这些都是本地 MCP 读取，不消耗推理请求。
+        """
+        reads: List[tuple[str, Dict[str, Any]]] = []
+        if self._perceive_tool is not None:
+            reads.append((self._perceive_tool, {"view": "situation"}))
+            reads.append(
+                (
+                    self._perceive_tool,
+                    {"view": "surroundings", "sections": list(_OPENING_SURROUNDINGS_SECTIONS)},
+                )
+            )
+            reads.append((self._perceive_tool, {"view": "landmarks", "limit": 20}))
+        if self._mc_state.notebook:
+            reads.append(("minecraft_notebook", {"action": "read"}))
+        signature_args = {"view": "abilities", "detail": "signatures"}
+        if self._perceive_tool is not None:
+            reads.append((self._perceive_tool, signature_args))
+        if not reads:
+            return
+        batch = uuid.uuid4().hex[:8]
+        calls: List[Dict[str, Any]] = []
+        results: List[Dict[str, Any]] = []
+        for index, (name, arguments) in enumerate(reads):
+            call_id = f"opening-{batch}-{index}"
+            if arguments is signature_args and self._ability_signatures is not None:
+                observation = self._ability_signatures
+            else:
+                observation = await self._execute_tool(name, arguments)
+                if arguments is signature_args and observation.get("ok", True) is not False:
+                    self._ability_signatures = observation
+            shown = self._observations.present(name, arguments, observation)
+            self._remember_result(name, arguments, observation, shown)
+            calls.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(arguments, ensure_ascii=False)},
+                }
+            )
+            results.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": json.dumps(shown, ensure_ascii=False, default=str),
+                }
+            )
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "[开局资料] 宿主已代为读取当前状态、周边、地标、笔记和全部能力签名；仍有效时直接使用，不重复读取。",
+                "tool_calls": calls,
+            }
+        )
+        messages.extend(results)
 
     async def _glance(self) -> Dict[str, Any]:
         """主播看一眼：读一次现状与周边，只留直播叙事用得上的事实，再附上身体手头的工作。
