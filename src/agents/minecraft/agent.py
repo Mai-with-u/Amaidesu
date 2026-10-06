@@ -26,6 +26,7 @@ import hashlib
 import json
 import uuid
 from collections import deque
+from contextlib import suppress
 from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
@@ -60,6 +61,9 @@ __all__ = ["MinecraftAgent"]
 
 # 游戏决策使用独立用途；建筑设计的模型预算由子 Agent 自己声明。
 MINECRAFT_PROFILE = "minecraft"
+
+# 让出等待后台任务时，历史超过预算的这一比例就提前整理；整理目标仍按完整预算的六成计算。
+_IDLE_COMPACTION_RATIO = 0.7
 
 # 身体事件单页上限：一次增量读取最多取几条注意流事件（超出部分下次接着读）
 _ATTENTION_PAGE_LIMIT = 10
@@ -250,6 +254,10 @@ class MinecraftAgent(BaseAgent):
         # 同一逻辑任务跨后台等待沿用历史，只有新任务或集中整理才重建前缀。
         self._messages: List[Dict[str, Any]] = []
         self._context_compactor = MinecraftHistoryCompactor(llm_manager, config.context)
+        # 最近一次完整进入历史的任务状态（集中整理的固定事实或首次续做快照）；唤醒续做只补交它之后的变化。
+        self._shown_context: Dict[str, Any] = {}
+        # 让出等待后台任务时提前进行的历史整理；醒来时若尚未完成，按预算决定等待或放弃。
+        self._idle_compaction: Optional[asyncio.Task[None]] = None
         # 本批已吸收的委派任务号（进入 running）与待写终态的委派任务号
         self._delegated_batch_ids: List[str] = []
         self._delegated_finished_ids: List[str] = []
@@ -495,6 +503,12 @@ class MinecraftAgent(BaseAgent):
         """停止钩子：取消命令 worker 与 handoff 监视（任务执行随 worker 取消而中断）。"""
         self._running = False
         self._wake_event.set()
+        # 停机时放弃等待期间的提前整理；整理只在成功时替换历史，取消不会留下半份摘要。
+        if self._idle_compaction is not None:
+            self._idle_compaction.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._idle_compaction
+            self._idle_compaction = None
         if self._worker_task is not None:
             self._worker_task.cancel()
             try:
@@ -689,17 +703,20 @@ class MinecraftAgent(BaseAgent):
             # 注册顺序的偶然变化不能改变同一组工具的发送顺序。
             tool_defs = [_spec_to_fn(s) for s in sorted(specs, key=lambda spec: spec.full_name)]
 
+        # 等待期间的提前整理必须在本批改动历史之前结清，避免两边同时改写同一份工作历史。
+        await self._settle_idle_compaction(tool_defs)
         if not self._messages:
             self._messages.append({"role": "system", "content": system_prompt})
         messages = self._messages
         close_interrupted_calls(messages)
         if not self._task_finished and self._task_instructions:
             # 后台任务完成后先恢复原目标、待办与当前阶段，再让模型解释这次通知。
+            # 唤醒续做：前文已完整展示的任务状态不再整份重抄，只补交变化的字段与后台任务。
             messages.append(
                 {
                     "role": "user",
                     "content": "[继续原游戏任务]\n"
-                    + json.dumps(self._current_task_context(), ensure_ascii=False, default=str),
+                    + json.dumps(self._continue_task_context(), ensure_ascii=False, default=str),
                     "_minecraft_context_facts": True,
                 }
             )
@@ -729,6 +746,8 @@ class MinecraftAgent(BaseAgent):
                         self._task_notice_fingerprints.clear()
                         messages[:] = [{"role": "system", "content": system_prompt}]
                         self._context_compactor.checkpoints = 0
+                        # 新任务从空历史开始，下一次续做必须重新完整展示任务状态。
+                        self._shown_context = {}
                         self._mc_state.set_todos([])
                         # 原文引用只属于本次逻辑任务；后台唤醒和同任务补充要求继续使用已有证据。
                         self._observations = MinecraftObservations()
@@ -894,6 +913,8 @@ class MinecraftAgent(BaseAgent):
 
             if self._wait_requested and not self._message_queue:
                 # 工具结果已完整回填；等待期间不再调用模型，真实通知保留原目标并唤醒下一批。
+                # 身体在等游戏结果时，历史若已接近预算就借这段空档提前整理，醒来后直接行动。
+                self._schedule_idle_compaction(messages, tool_defs)
                 return
             self._wait_requested = False
             # 工具被调用不等于游戏目标得到推进；整轮只重读旧证据时沿用同一次提醒，而不是重新计为行动。
@@ -1118,17 +1139,90 @@ class MinecraftAgent(BaseAgent):
         if record is not None and record.initiator == self.name:
             ledger.update(task_id, status, snapshot=snapshot)
 
+    def _continue_task_context(self) -> Dict[str, Any]:
+        """续做时相对前文最近一份完整任务状态只交付变化；首次续做或刚换任务时交付完整状态。
+
+        前文完整状态来自集中整理的固定事实或上一份续做快照，二者都留在本次请求里，
+        因此未变化的原始指令、笔记与待办不必每次唤醒再抄一遍。观察索引只在完整状态中给出，
+        之后新增的观察回执本身就带着引用编号。
+        """
+        current = self._current_task_context()
+        shown = self._shown_context
+        self._shown_context = deepcopy(current)
+        if not shown:
+            return current
+        delta: Dict[str, Any] = {}
+        for key, value in current.items():
+            if key == "observations":
+                continue
+            if key == "background_tasks":
+                # 后台任务按编号比较，只补交状态、决策或结果引用变化过的那几项。
+                before = {task.get("task_id"): task for task in shown.get(key, []) if isinstance(task, dict)}
+                changed = [
+                    task for task in value if not isinstance(task, dict) or before.get(task.get("task_id")) != task
+                ]
+                if changed:
+                    delta[key] = changed
+            elif shown.get(key) != value:
+                delta[key] = value
+        delta["unchanged_since_earlier_task_state"] = sorted(
+            key for key in current if key not in delta and key != "observations"
+        )
+        return delta
+
+    def _schedule_idle_compaction(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> None:
+        """让出等待时若历史已过提前整理线，就在后台整理；身体此刻本来就在等游戏结果。"""
+        if self._idle_compaction is not None and not self._idle_compaction.done():
+            return
+        trigger = int(self.typed_config.context.max_context_chars * _IDLE_COMPACTION_RATIO)
+        if context_chars(project_context(messages), tools) <= trigger:
+            return
+        facts = self._current_task_context()
+        self._idle_compaction = asyncio.create_task(self._compact_while_waiting(messages, tools, facts, trigger))
+
+    async def _compact_while_waiting(
+        self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], facts: Dict[str, Any], trigger: int
+    ) -> None:
+        """后台整理只在成功时一次性替换历史；失败或被取消都保留原件，醒来后按正常预算再判断。"""
+        try:
+            if await self._context_compactor.compact(
+                messages, tools, facts, context_projector=project_context, trigger_chars=trigger
+            ):
+                self._shown_context = deepcopy(facts)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 提前整理失败不影响任务，醒来后按正常预算处理
+            self._logger.warning(f"等待期间的历史整理未完成，原历史已保留：{exc}", exc=True)
+        finally:
+            self._task_steps += self._context_compactor.last_calls
+
+    async def _settle_idle_compaction(self, tools: List[Dict[str, Any]]) -> None:
+        """醒来时结清提前整理：已超预算就等它完成（本来也要整理），否则放弃以便立刻处理新事实。"""
+        task, self._idle_compaction = self._idle_compaction, None
+        if task is None:
+            return
+        if not task.done():
+            if context_chars(project_context(self._messages), tools) > self.typed_config.context.max_context_chars:
+                await task
+                return
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
     async def _prepare_context(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> bool:
         """历史超预算才生成检查点，失败保留原件并挂起，避免无上下文地继续操作游戏。"""
         if context_chars(project_context(messages), tools) <= self.typed_config.context.max_context_chars:
             return True
+        facts = self._current_task_context()
         try:
-            await self._context_compactor.compact(
+            if await self._context_compactor.compact(
                 messages,
                 tools,
-                self._current_task_context(),
+                facts,
                 context_projector=project_context,
-            )
+            ):
+                # 整理后的固定事实就是之后续做比较变化的基准。
+                self._shown_context = deepcopy(facts)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 整理失败保留任务，不用半份摘要继续游戏
