@@ -57,8 +57,8 @@ from .tools.rundown_tool import RundownControlProvider, build_rundown_tool_provi
 from .background import BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
 from .message_buffer import MessageBuffer
+from .narrative import NarrativeBuffer
 from .planner import Planner
-from .planner_context import age_text
 from .proactive_trigger import ProactiveTrigger
 from .replyer import WordFilter, Replyer
 from .room_state import RoomState
@@ -105,24 +105,6 @@ class _LiveChatTurn:
     message_id: str = ""
     # 发生时刻：落库行与内存对话轮按它合并成同一条时间线
     timestamp_ms: int = 0
-
-
-@dataclass(frozen=True)
-class _NarrativeEntry:
-    """一条游戏叙事/身体近况：到达时刻 + 叙事行（``[game·类型] 内容``）。"""
-
-    received_ms: int
-    line: str
-
-
-def _render_narrative(entries: List[_NarrativeEntry], *, seen_until_ms: int, now: int) -> str:
-    """叙事条目按到达先后全部列出，行首标注到达距今多久；上次决策之后才到达的加"新"。"""
-    lines: List[str] = []
-    for entry in entries:
-        age = age_text(now - entry.received_ms)
-        mark = f"新·{age}" if entry.received_ms > seen_until_ms else age
-        lines.append(f"[{mark}] {entry.line}")
-    return "\n".join(lines)
 
 
 def _text_field(item: Any, name: str) -> str:
@@ -379,16 +361,15 @@ class StreamerAgent(BaseAgent):
         # 统计（决策循环各分支增量；对外经 get_statistics 导出）
         self._stats = StreamerStats()
 
-        # 游戏叙事与身体近况（订阅 game.* / game.body.* 完整收集；进 Planner 上下文）。
-        # *_seen_ms 是上一次交给决策窗的时刻：之后才到达的条目标"新"，之前的按旧事陈述
-        self._game_narrative_blocks: List[_NarrativeEntry] = []
-        self._body_narrative_blocks: List[_NarrativeEntry] = []
-        self._game_narrative_seen_ms: int = 0
-        self._body_narrative_seen_ms: int = 0
+        # 游戏叙事与身体近况（订阅 game.* / game.body.*；每个决策窗回放给 Planner）。
+        # 缓冲有界：交给过决策窗又过了保留期的旧条目不再回放——整场遭遇每窗全量重放时，
+        # 主播会把早就讲过的掉血一遍遍当新闻播
+        narrative = config.narrative
+        self._game_narrative = NarrativeBuffer(ttl_ms=narrative.game_ttl_ms, max_items=narrative.game_max_items)
+        self._body_narrative = NarrativeBuffer(ttl_ms=narrative.body_ttl_ms, max_items=narrative.body_max_items)
         # 游戏里的聊天（订阅 game.chat.*）：游戏世界里的玩家在跟我说话、服务器在通知，
         # 与观众弹幕分开——开口说话对方听不到，要回得在游戏里打字
-        self._game_chat_blocks: List[_NarrativeEntry] = []
-        self._game_chat_seen_ms: int = 0
+        self._game_chat = NarrativeBuffer(ttl_ms=narrative.chat_ttl_ms, max_items=narrative.chat_max_items)
 
         # 未落库的对话轮：没开场次时的全部对话、调试面板注入的观众消息都不会写进
         # live_chat，由这里按时间并入历史——主播问"要不要拉一下"、观众回"拉"时，
@@ -690,7 +671,7 @@ class StreamerAgent(BaseAgent):
         """
         try:
             line = f"[{payload.game}·{payload.event_type}] {payload.message}"
-            self._game_narrative_blocks.append(_NarrativeEntry(received_ms=now_ms(), line=line))
+            self._game_narrative.add(line, now_ms())
             if payload.event_type == "report":
                 self._game_decision_pending = True
                 # 游戏里做完或卡住待定夺：【我手头在游戏里做的事】里那件事随之标成已上报
@@ -702,12 +683,9 @@ class StreamerAgent(BaseAgent):
         """导出游戏叙事全文（Planner 上下文用），并把本次交出的条目记为"已给过"。
 
         每条标出到达距今多久，上一次决策之后才到达的另标"新"——20 分钟前的
-        进展不会再被当成刚发生的事播报一遍。
+        进展不会再被当成刚发生的事播报一遍；交出过又过了保留期的不再回放。
         """
-        current = now_ms()
-        text = _render_narrative(self._game_narrative_blocks, seen_until_ms=self._game_narrative_seen_ms, now=current)
-        self._game_narrative_seen_ms = current
-        return text
+        return self._game_narrative.render(now_ms()).text
 
     async def _on_body_event(
         self,
@@ -726,16 +704,13 @@ class StreamerAgent(BaseAgent):
         try:
             marker = "（已结束）" if getattr(payload, "resolved", False) else ""
             line = f"[{payload.game}·{payload.kind}] {payload.summary}{marker}"
-            self._body_narrative_blocks.append(_NarrativeEntry(received_ms=now_ms(), line=line))
+            self._body_narrative.add(line, now_ms())
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集身体近况失败: {exc}")
 
     def _body_narrative_text(self) -> str:
         """导出身体侧近况全文（Planner 上下文用），标注到达时间与"新"，口径同游戏叙事。"""
-        current = now_ms()
-        text = _render_narrative(self._body_narrative_blocks, seen_until_ms=self._body_narrative_seen_ms, now=current)
-        self._body_narrative_seen_ms = current
-        return text
+        return self._body_narrative.render(now_ms()).text
 
     async def _on_game_chat(
         self,
@@ -756,7 +731,7 @@ class StreamerAgent(BaseAgent):
             if payload.suppressed:
                 note += f"（之前还有 {payload.suppressed} 条重复或刷屏的没转过来）"
             line = f"[{payload.game}] {speaker}：{payload.content}{note}"
-            self._game_chat_blocks.append(_NarrativeEntry(received_ms=now_ms(), line=line))
+            self._game_chat.add(line, now_ms())
             if payload.kind == "player":
                 self._game_decision_pending = True
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
@@ -764,10 +739,7 @@ class StreamerAgent(BaseAgent):
 
     def _game_chat_text(self) -> str:
         """导出游戏里的聊天全文（Planner 上下文用），标注到达时间与"新"，口径同游戏叙事。"""
-        current = now_ms()
-        text = _render_narrative(self._game_chat_blocks, seen_until_ms=self._game_chat_seen_ms, now=current)
-        self._game_chat_seen_ms = current
-        return text
+        return self._game_chat.render(now_ms()).text
 
     async def _on_room_state_watched(
         self,

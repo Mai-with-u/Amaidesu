@@ -22,7 +22,8 @@ from src.agents.streamer import canonical
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.streamer_agent import StreamerAgent, _NarrativeEntry, _render_narrative
+from src.agents.streamer.narrative import NarrativeEntry, render_narrative
+from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -272,11 +273,11 @@ def test_trim_batch_echo_drops_only_tail_copy_of_batch() -> None:
 def test_narrative_marks_age_and_new_since_last_round() -> None:
     """旧条目标到达距今多久，上次决策后才到的标"新"——死亡不会被当成刚发生的事反复讲。"""
     entries = [
-        _NarrativeEntry(received_ms=0, line="[minecraft·died] 死了"),
-        _NarrativeEntry(received_ms=40 * 60_000, line="[minecraft·report] 蜂房机器运转正常"),
+        NarrativeEntry(received_ms=0, line="[minecraft·died] 死了"),
+        NarrativeEntry(received_ms=40 * 60_000, line="[minecraft·report] 蜂房机器运转正常"),
     ]
 
-    text = _render_narrative(entries, seen_until_ms=20 * 60_000, now=40 * 60_000 + 5_000)
+    text = render_narrative(entries, seen_until_ms=20 * 60_000, now=40 * 60_000 + 5_000)
 
     assert text.splitlines() == [
         "[40 分钟前] [minecraft·died] 死了",

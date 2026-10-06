@@ -106,6 +106,9 @@ class TestStreamerConfigInAgentsTree:
         assert s.word_filter.enabled is False
         assert s.command.prefix == "/"
         assert s.thinking_stream.enabled is True
+        assert s.narrative.body_ttl_ms == 300_000
+        assert s.narrative.game_ttl_ms == 900_000
+        assert s.narrative.chat_max_items == 10
 
 
 class TestMinecraftPackageConfig:

@@ -177,7 +177,7 @@ async def test_body_event_feeds_the_body_narrative_line() -> None:
         ),
         source="maicraft_attention",
     )
-    await _wait_until(lambda: len(agent._body_narrative_blocks) == 2)
+    await _wait_until(lambda: len(agent._body_narrative) == 2)
 
     text = agent._body_narrative_text()
     assert "[minecraft·attacked] 正在被僵尸攻击（已命中 2 次）" in text
@@ -203,7 +203,7 @@ async def test_game_chat_feeds_its_own_block_and_player_wakes_streamer() -> None
         GameChatPayload(game="minecraft", kind="system", content="Alex 请求传送到你这里"),
         source="maicraft_chat",
     )
-    await _wait_until(lambda: len(agent._game_chat_blocks) == 1)
+    await _wait_until(lambda: len(agent._game_chat) == 1)
     # 系统消息是信息，不单独唤醒主播
     assert agent._game_decision_pending is False
 
@@ -212,7 +212,7 @@ async def test_game_chat_feeds_its_own_block_and_player_wakes_streamer() -> None
         GameChatPayload(game="minecraft", kind="player", sender="Steve", content="麦麦你在干嘛呀", suppressed=2),
         source="maicraft_chat",
     )
-    await _wait_until(lambda: len(agent._game_chat_blocks) == 2)
+    await _wait_until(lambda: len(agent._game_chat) == 2)
     # 玩家是在跟游戏里的我说话：像弹幕一样值得及时接住
     assert agent._game_decision_pending is True
 
@@ -228,7 +228,7 @@ async def test_game_chat_feeds_its_own_block_and_player_wakes_streamer() -> None
 
 @pytest.mark.asyncio
 async def test_body_narrative_keeps_all_events() -> None:
-    """连续身体事件全部保留，主播能看到最初遇险与最新反应。"""
+    """还没交给决策窗的连续身体事件在条数上限内全部保留，主播能看到最初遇险与最新反应。"""
     bus = EventBus()
     agent = _build_streamer_agent(event_bus=bus)
     agent._subscribe_events()
@@ -239,8 +239,8 @@ async def test_body_narrative_keeps_all_events() -> None:
             BodyEventPayload(game="minecraft", kind="reflex_started", summary=f"紧急反应接管（{index}）"),
             source="maicraft_attention",
         )
-    await _wait_until(lambda: len(agent._body_narrative_blocks) == 8)
-    assert len(agent._body_narrative_blocks) == 8
+    await _wait_until(lambda: len(agent._body_narrative) == 8)
+    assert len(agent._body_narrative) == 8
     assert all(f"（{i}）" in agent._body_narrative_text() for i in range(8))
 
     await bus.cleanup()
