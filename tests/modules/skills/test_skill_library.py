@@ -5,7 +5,14 @@ from textwrap import dedent
 
 import pytest
 
-from src.modules.skills import SkillLibrary, build_skill_spec, render_catalog
+from src.modules.agents.factory import SUPPORTED_AGENTS
+from src.modules.skills import (
+    SkillLibrary,
+    build_skill_spec,
+    get_skill_library,
+    render_catalog,
+    reset_skill_library,
+)
 
 
 def _write(root: Path, rel: str, text: str) -> Path:
@@ -199,3 +206,32 @@ def test_skill_spec_is_declared_per_provider() -> None:
 
     assert spec.full_name == "minecraft_skill"
     assert spec.parameters_schema["required"] == ["name"]
+
+
+class TestRepositorySkills:
+    """仓库内技能文档的契约：随启动加载，受众只能是已实现的 Agent。"""
+
+    def setup_method(self) -> None:
+        reset_skill_library()
+
+    def teardown_method(self) -> None:
+        reset_skill_library()
+
+    def test_repository_skills_load_and_target_known_agents(self) -> None:
+        library = get_skill_library()
+
+        assert library.list_skills(), "仓库应至少带一项技能"
+        for name in library.list_skills():
+            skill = library.get(name)
+            assert skill is not None
+            agents = skill.metadata.agents
+            assert agents == ["*"] or set(agents) <= set(SUPPORTED_AGENTS), f"技能 {name} 的受众拼写有误: {agents}"
+
+    def test_minecraft_mod_skills_hidden_when_mod_absent(self) -> None:
+        library = get_skill_library()
+
+        vanilla = {e.name for e in library.catalog("minecraft", {"mods": set()})}
+        with_mods = {e.name for e in library.catalog("minecraft", {"mods": {"create", "mekanism", "ftbquests"}})}
+
+        assert not any(name.startswith(("create_", "mekanism_")) for name in vanilla)
+        assert vanilla < with_mods
