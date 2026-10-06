@@ -59,3 +59,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-033：LLM 思考强度控制三原则（设了才发 / 自由字符串 / 方言逃生舱）](033-llm-reasoning-effort-three-principles.md)
 - [ADR-034：Agent 干预原语三件套（递话/硬取消/运营直派，传输同路记账分家）](034-agent-intervention-primitives.md)
 - [ADR-035：escalation 账面语义修正（failed 终态改写 waiting_for_decision）](035-escalation-ledger-semantics.md)
+- [ADR-036：Skill 系统——Agent 侧玩法经验文档（目录常驻 + 正文按需 + 环境门控）](036-skill-system.md)

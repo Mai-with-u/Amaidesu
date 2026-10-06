@@ -266,6 +266,7 @@ uv run python main.py
 ## 相关文档
 
 - [组件开发指南](component.md) - 如何开发自定义采集器/工具/Agent
+- [Skill 编写与接入](skill.md) - 与提示词同构的玩法经验文档（目录常驻、正文按需）
 - [主播上下文构成](../architecture/streamer-context.md) - 主播 Agent 决策窗的消息形态、参考段与输入预算
 - [事件拦截器](../architecture/event-system.md#事件拦截器interceptor) - 如何开发自定义拦截器
 - [开发规范](../../AGENTS.md#代码约定) - 代码风格和约定

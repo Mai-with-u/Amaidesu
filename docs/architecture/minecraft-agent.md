@@ -97,6 +97,7 @@ Minecraft Agent 把建筑设计委派给包内的 `MinecraftBuilderAgent`，收�
 | `minecraft_todo` | 待办文档（read/write 全量读写，无 id）。任务分解与推进由 LLM 自主决策 |
 | `minecraft_notebook` | 工作笔记（read/write）。持久记忆：对话历史会压缩、笔记不会——重要发现写这里 |
 | `minecraft_report` | 上报通道（玩家→主播唯一发声出口）：delivery 交付总结 / escalation 升级决策 |
+| `minecraft_skill` | 按名读取技能正文（玩法经验）。技能目录随系统提示词给出，按 Mod 资源 `maicraft://environment` 报告的已装模组裁剪；机制见 [ADR-036](../decisions/036-skill-system.md) |
 | `maicraft_perceive` / `maicraft_execute` / `maicraft_task` 等 | registry 动态发现的 MCP 工具（每任务重新拉取）；参数按 Mod 定义填写 |
 
 **对外工具**（经 ToolRegistry 注册、主播工具列表可见，不进玩家 LLM 工具列表）：
