@@ -26,7 +26,6 @@ import hashlib
 import json
 import uuid
 from collections import deque
-from contextlib import suppress
 from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
@@ -34,6 +33,7 @@ from src.agents.minecraft.attention_matrix import upstream_timestamp_ms
 from src.agents.minecraft.builder.controller import MinecraftBuilderController
 from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
 from src.agents.minecraft.design_progress import MachineDesignProgress
+from src.agents.minecraft.environment import read_installed_mods
 from src.agents.minecraft.glance import SURROUNDINGS_SECTIONS, glance_situation, glance_surroundings
 from src.agents.minecraft.observations import MinecraftObservations, json_text, repeated_read
 from src.agents.minecraft.observation_context import project_context
@@ -51,6 +51,7 @@ from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
+from src.modules.skills import SkillEnvironment, SkillLibrary, render_catalog
 from src.modules.task_utils import spawn_background_task
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
@@ -61,9 +62,6 @@ __all__ = ["MinecraftAgent"]
 
 # 游戏决策使用独立用途；建筑设计的模型预算由子 Agent 自己声明。
 MINECRAFT_PROFILE = "minecraft"
-
-# 让出等待后台任务时，历史超过预算的这一比例就提前整理；整理目标仍按完整预算的六成计算。
-_IDLE_COMPACTION_RATIO = 0.7
 
 # 身体事件单页上限：一次增量读取最多取几条注意流事件（超出部分下次接着读）
 _ATTENTION_PAGE_LIMIT = 10
@@ -188,6 +186,7 @@ class MinecraftAgent(BaseAgent):
         tool_registry: Optional[ToolRegistry] = None,
         thinking_sink: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
+        skill_library: Optional[SkillLibrary] = None,
     ) -> None:
         """初始化 Minecraft Agent。
 
@@ -203,6 +202,8 @@ class MinecraftAgent(BaseAgent):
             task_tracker: 通用任务基建（TaskTracker；跟踪循环 + 记录表）。
                 execute 受理回执经它登记跟踪，状态变化经 task.changed 唤醒
                 本 Agent（on_task_notification 注入消息）。
+            skill_library: 技能库（玩法经验文档）。注入时系统提示词附技能目录，
+                并提供 ``minecraft_skill`` 按名读取正文；``None`` 时两者都不出现。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -211,6 +212,11 @@ class MinecraftAgent(BaseAgent):
         self._event_bus = event_bus
         self._tool_registry = tool_registry
         self._thinking_sink = thinking_sink
+        self._skills = skill_library
+        # Mod 报告的已装模组编号（None=未知）：技能目录据此移除确认没装的模组玩法。
+        # 清单在游戏客户端启动时冻结，每次连接只需读一次；连接恢复后可能换了实例，重新读取。
+        self._installed_mods: Optional[frozenset[str]] = None
+        self._installed_mods_probed = False
 
         # Agent 内部状态（内存，不持久化）
         self._mc_state: MinecraftAgentState = MinecraftAgentState()
@@ -222,6 +228,7 @@ class MinecraftAgent(BaseAgent):
             wait_callback=self._request_wait,
             observation_reader=self._read_observation,
             glance_reader=self._glance,
+            skill_reader=self._read_skill if skill_library is not None else None,
         )
         # Mod 的感知工具全名（装配成功时由适配器绑定填入）：主播看一眼经它读原生观察
         self._perceive_tool: Optional[str] = None
@@ -254,10 +261,6 @@ class MinecraftAgent(BaseAgent):
         # 同一逻辑任务跨后台等待沿用历史，只有新任务或集中整理才重建前缀。
         self._messages: List[Dict[str, Any]] = []
         self._context_compactor = MinecraftHistoryCompactor(llm_manager, config.context)
-        # 最近一次完整进入历史的任务状态（集中整理的固定事实或首次续做快照）；唤醒续做只补交它之后的变化。
-        self._shown_context: Dict[str, Any] = {}
-        # 让出等待后台任务时提前进行的历史整理；醒来时若尚未完成，按预算决定等待或放弃。
-        self._idle_compaction: Optional[asyncio.Task[None]] = None
         # 本批已吸收的委派任务号（进入 running）与待写终态的委派任务号
         self._delegated_batch_ids: List[str] = []
         self._delegated_finished_ids: List[str] = []
@@ -487,6 +490,9 @@ class MinecraftAgent(BaseAgent):
         )
         if self._task_suspended:
             self._task_suspended = False
+        # 断连期间游戏客户端可能重启换了整合包，下一批重新读取已装模组
+        self._installed_mods_probed = False
+        self._installed_mods = None
         self._wake_event.set()
 
     @staticmethod
@@ -503,12 +509,6 @@ class MinecraftAgent(BaseAgent):
         """停止钩子：取消命令 worker 与 handoff 监视（任务执行随 worker 取消而中断）。"""
         self._running = False
         self._wake_event.set()
-        # 停机时放弃等待期间的提前整理；整理只在成功时替换历史，取消不会留下半份摘要。
-        if self._idle_compaction is not None:
-            self._idle_compaction.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._idle_compaction
-            self._idle_compaction = None
         if self._worker_task is not None:
             self._worker_task.cancel()
             try:
@@ -571,6 +571,7 @@ class MinecraftAgent(BaseAgent):
         "minecraft_report": ["minecraft"],
         "minecraft_wait": ["minecraft"],
         "minecraft_observation": ["minecraft"],
+        "minecraft_skill": ["minecraft"],
         "minecraft_get_work_log": ["streamer"],
         "minecraft_glance": ["streamer"],
     }
@@ -579,9 +580,11 @@ class MinecraftAgent(BaseAgent):
         """注册 Agent 专属工具到 ToolRegistry（复用 __init__ 创建的执行器实例）。"""
         if self._tool_registry is None:
             return
-        self.register_tool_provider(
-            self._tool_provider, registry=self._tool_registry, visible_to=dict(self._LOCAL_VISIBLE_TO)
-        )
+        visible_to = dict(self._LOCAL_VISIBLE_TO)
+        if self._skills is None:
+            # 未注入技能库时不声明读取工具，名单也不能留下没有对应工具的条目
+            visible_to.pop("minecraft_skill")
+        self.register_tool_provider(self._tool_provider, registry=self._tool_registry, visible_to=visible_to)
         if self._builder is not None:
             provider = self._builder.provider
             self.register_tool_provider(
@@ -691,6 +694,7 @@ class MinecraftAgent(BaseAgent):
         """任务批主体：持续调用工具推进当前任务，直到交付、等待或真实阻塞。"""
         self._task_reported = False
         self._wait_requested = False
+        await self._probe_installed_mods()
         system_prompt = self._system_prompt()
         # 工具列表 = 注册表按可见名单计算（for_agent，每任务重新拉取）——
         # minecraft 名单内含本地件 todo/notebook/report 与 maicraft_*，共享工具
@@ -703,20 +707,17 @@ class MinecraftAgent(BaseAgent):
             # 注册顺序的偶然变化不能改变同一组工具的发送顺序。
             tool_defs = [_spec_to_fn(s) for s in sorted(specs, key=lambda spec: spec.full_name)]
 
-        # 等待期间的提前整理必须在本批改动历史之前结清，避免两边同时改写同一份工作历史。
-        await self._settle_idle_compaction(tool_defs)
         if not self._messages:
             self._messages.append({"role": "system", "content": system_prompt})
         messages = self._messages
         close_interrupted_calls(messages)
         if not self._task_finished and self._task_instructions:
             # 后台任务完成后先恢复原目标、待办与当前阶段，再让模型解释这次通知。
-            # 唤醒续做：前文已完整展示的任务状态不再整份重抄，只补交变化的字段与后台任务。
             messages.append(
                 {
                     "role": "user",
                     "content": "[继续原游戏任务]\n"
-                    + json.dumps(self._continue_task_context(), ensure_ascii=False, default=str),
+                    + json.dumps(self._current_task_context(), ensure_ascii=False, default=str),
                     "_minecraft_context_facts": True,
                 }
             )
@@ -746,8 +747,6 @@ class MinecraftAgent(BaseAgent):
                         self._task_notice_fingerprints.clear()
                         messages[:] = [{"role": "system", "content": system_prompt}]
                         self._context_compactor.checkpoints = 0
-                        # 新任务从空历史开始，下一次续做必须重新完整展示任务状态。
-                        self._shown_context = {}
                         self._mc_state.set_todos([])
                         # 原文引用只属于本次逻辑任务；后台唤醒和同任务补充要求继续使用已有证据。
                         self._observations = MinecraftObservations()
@@ -913,8 +912,6 @@ class MinecraftAgent(BaseAgent):
 
             if self._wait_requested and not self._message_queue:
                 # 工具结果已完整回填；等待期间不再调用模型，真实通知保留原目标并唤醒下一批。
-                # 身体在等游戏结果时，历史若已接近预算就借这段空档提前整理，醒来后直接行动。
-                self._schedule_idle_compaction(messages, tool_defs)
                 return
             self._wait_requested = False
             # 工具被调用不等于游戏目标得到推进；整轮只重读旧证据时沿用同一次提醒，而不是重新计为行动。
@@ -1139,90 +1136,17 @@ class MinecraftAgent(BaseAgent):
         if record is not None and record.initiator == self.name:
             ledger.update(task_id, status, snapshot=snapshot)
 
-    def _continue_task_context(self) -> Dict[str, Any]:
-        """续做时相对前文最近一份完整任务状态只交付变化；首次续做或刚换任务时交付完整状态。
-
-        前文完整状态来自集中整理的固定事实或上一份续做快照，二者都留在本次请求里，
-        因此未变化的原始指令、笔记与待办不必每次唤醒再抄一遍。观察索引只在完整状态中给出，
-        之后新增的观察回执本身就带着引用编号。
-        """
-        current = self._current_task_context()
-        shown = self._shown_context
-        self._shown_context = deepcopy(current)
-        if not shown:
-            return current
-        delta: Dict[str, Any] = {}
-        for key, value in current.items():
-            if key == "observations":
-                continue
-            if key == "background_tasks":
-                # 后台任务按编号比较，只补交状态、决策或结果引用变化过的那几项。
-                before = {task.get("task_id"): task for task in shown.get(key, []) if isinstance(task, dict)}
-                changed = [
-                    task for task in value if not isinstance(task, dict) or before.get(task.get("task_id")) != task
-                ]
-                if changed:
-                    delta[key] = changed
-            elif shown.get(key) != value:
-                delta[key] = value
-        delta["unchanged_since_earlier_task_state"] = sorted(
-            key for key in current if key not in delta and key != "observations"
-        )
-        return delta
-
-    def _schedule_idle_compaction(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> None:
-        """让出等待时若历史已过提前整理线，就在后台整理；身体此刻本来就在等游戏结果。"""
-        if self._idle_compaction is not None and not self._idle_compaction.done():
-            return
-        trigger = int(self.typed_config.context.max_context_chars * _IDLE_COMPACTION_RATIO)
-        if context_chars(project_context(messages), tools) <= trigger:
-            return
-        facts = self._current_task_context()
-        self._idle_compaction = asyncio.create_task(self._compact_while_waiting(messages, tools, facts, trigger))
-
-    async def _compact_while_waiting(
-        self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], facts: Dict[str, Any], trigger: int
-    ) -> None:
-        """后台整理只在成功时一次性替换历史；失败或被取消都保留原件，醒来后按正常预算再判断。"""
-        try:
-            if await self._context_compactor.compact(
-                messages, tools, facts, context_projector=project_context, trigger_chars=trigger
-            ):
-                self._shown_context = deepcopy(facts)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - 提前整理失败不影响任务，醒来后按正常预算处理
-            self._logger.warning(f"等待期间的历史整理未完成，原历史已保留：{exc}", exc=True)
-        finally:
-            self._task_steps += self._context_compactor.last_calls
-
-    async def _settle_idle_compaction(self, tools: List[Dict[str, Any]]) -> None:
-        """醒来时结清提前整理：已超预算就等它完成（本来也要整理），否则放弃以便立刻处理新事实。"""
-        task, self._idle_compaction = self._idle_compaction, None
-        if task is None:
-            return
-        if not task.done():
-            if context_chars(project_context(self._messages), tools) > self.typed_config.context.max_context_chars:
-                await task
-                return
-            task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
     async def _prepare_context(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> bool:
         """历史超预算才生成检查点，失败保留原件并挂起，避免无上下文地继续操作游戏。"""
         if context_chars(project_context(messages), tools) <= self.typed_config.context.max_context_chars:
             return True
-        facts = self._current_task_context()
         try:
-            if await self._context_compactor.compact(
+            await self._context_compactor.compact(
                 messages,
                 tools,
-                facts,
+                self._current_task_context(),
                 context_projector=project_context,
-            ):
-                # 整理后的固定事实就是之后续做比较变化的基准。
-                self._shown_context = deepcopy(facts)
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 整理失败保留任务，不用半份摘要继续游戏
@@ -1893,17 +1817,66 @@ class MinecraftAgent(BaseAgent):
         )
 
     def _with_gameplay_prompt(self, prompt: str) -> str:
-        """所有环境都保留访问与阶段边界；装配建筑设计入口时再附加委派方式。"""
+        """所有环境都保留访问与阶段边界；装配建筑设计入口时再附加委派方式，有技能库时附技能目录。"""
         prompt += _GAMEPLAY_RULES
-        if self._builder is None:
-            return prompt
-        return prompt + (
-            "\n房屋与外观结构设计交给 minecraft_builder_request：传自然语言 requirements 和已知现场 context，"
-            "不要自己生成完整建筑 JSON。intent=build 要求建好，intent=design 只要设计。"
-            "它立即返回任务号，不要轮询等待；完成事件会通知你。"
-            "用 minecraft_builder_task 查询、修改、取消设计；设计通过后用 action=execute 按引用施工，"
-            "再跟进 Mod 施工任务，核实完成后才能交付。"
+        if self._builder is not None:
+            prompt += (
+                "\n房屋与外观结构设计交给 minecraft_builder_request：传自然语言 requirements 和已知现场 context，"
+                "不要自己生成完整建筑 JSON。intent=build 要求建好，intent=design 只要设计。"
+                "它立即返回任务号，不要轮询等待；完成事件会通知你。"
+                "用 minecraft_builder_task 查询、修改、取消设计；设计通过后用 action=execute 按引用施工，"
+                "再跟进 Mod 施工任务，核实完成后才能交付。"
+            )
+        return prompt + self._skill_catalog_section()
+
+    # ==================================================================
+    # 技能（玩法经验文档：目录常驻系统提示词，正文按需读取）
+    # ==================================================================
+
+    def _skill_environment(self) -> SkillEnvironment:
+        """技能前提的已知环境事实：读到已装模组清单后才认定"装了/没装"，否则按未知。"""
+        if self._installed_mods is None:
+            return {}
+        return {"mods": self._installed_mods}
+
+    def _skill_catalog_section(self) -> str:
+        """系统提示词里的技能目录段；没有技能库或没有可用技能时整段省略。"""
+        if self._skills is None:
+            return ""
+        catalog = render_catalog(self._skills.catalog(self.name, self._skill_environment()))
+        if not catalog:
+            return ""
+        return (
+            "\n\n## 技能\n"
+            "技能是把一类目标做成的打法与经验：步骤、决策点、常见坑和该查的资料。"
+            "开始一类不熟悉或容易出错的工作前，用 minecraft_skill 按名读取相关技能；"
+            "技能是参考，不授予额外权限，现场证据与能力契约优先。"
+            "标注“前提待确认”的技能只在现场确实具备该前提时使用。\n" + catalog
         )
+
+    def _read_skill(self, name: str) -> Dict[str, Any]:
+        """minecraft_skill：按本 Agent 受众名与当前已知环境读取技能正文。"""
+        if self._skills is None:
+            return {"success": False, "error": "技能库未装配"}
+        return self._skills.read(name, self.name, self._skill_environment())
+
+    async def _probe_installed_mods(self) -> None:
+        """每次连接读一次 Mod 的已装模组清单；读不到按未知处理，不阻断任务。"""
+        if self._skills is None or self._installed_mods_probed:
+            return
+        client = self._mcp_client
+        if client is None or not getattr(client, "connected", False):
+            return
+        # 先置位再读：旧版 Mod 没有该资源时，同一连接内不必每批重复尝试
+        self._installed_mods_probed = True
+        try:
+            self._installed_mods = await read_installed_mods(client)
+        except Exception as exc:  # noqa: BLE001 - 环境读取失败只影响技能筛选，不能中断任务
+            self._logger.warning(f"读取已装模组清单失败，技能前提按未知处理：{exc}", exc=True)
+            self._installed_mods = None
+            return
+        if self._installed_mods is not None:
+            self._logger.info(f"已读取已装模组清单：{len(self._installed_mods)} 个模组")
 
     # ==================================================================
     # 事件上报（三通道·事件；GamePayload(game="minecraft")）

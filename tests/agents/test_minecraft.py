@@ -1378,7 +1378,7 @@ def test_factory_instantiates_minecraft() -> None:
     )
     assert isinstance(agent, MinecraftAgent)
     assert agent.typed_config.execute_poll_interval_ms == 4000
-    # 工厂创建的玩家也暴露让出能力，等待是否可用由真实后台依赖决定。
+    # 工厂创建的玩家也暴露让出能力，等待是否可用由真实后台依赖决定；工厂注入技能库后带技能读取。
     assert [s.name for s in agent.list_tools()] == [
         "todo",
         "notebook",
@@ -1387,6 +1387,7 @@ def test_factory_instantiates_minecraft() -> None:
         "wait",
         "observation",
         "glance",
+        "skill",
     ]
 
 

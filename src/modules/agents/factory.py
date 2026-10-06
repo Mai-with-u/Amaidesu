@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 from src.modules.agents.base import BaseAgent
 from src.modules.logging import get_logger
+from src.modules.skills import get_skill_library
 
 # 已实现的 Agent 注册名
 SUPPORTED_AGENTS: tuple[str, ...] = ("streamer", "minecraft", "text_adv", "game_2048")
@@ -57,7 +58,7 @@ def instantiate_agent(
       缺省 None 时对应能力降级（chat_repo 缺失 = 对话历史读取整体短路，
       Planner/Replyer 无历史上下文），组合根必须传入
     - minecraft：thinking_sink / task_tracker；llm_profile 使用 Agent
-      类默认值（``[llm_profiles.minecraft]`` 段）
+      类默认值（``[llm_profiles.minecraft]`` 段）；技能库在工厂内取全局单例注入
     - text_adv：基础四件套 + 工厂内装配的感知/动作依赖（读屏 reader /
       窗口后端 / 帧采集后端 / 键鼠后端）；tool_registry 供启动期自注册工具面
 
@@ -122,6 +123,7 @@ def instantiate_agent(
             tool_registry=tool_registry,
             thinking_sink=thinking_sink,
             task_tracker=task_tracker,
+            skill_library=get_skill_library(),
         )
 
     if name == "text_adv":

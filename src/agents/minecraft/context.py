@@ -79,17 +79,12 @@ class MinecraftHistoryCompactor:
         *,
         max_attempts: int = 2,
         context_projector: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
-        trigger_chars: int | None = None,
     ) -> bool:
-        """成功后一次性替换旧片段；失败保留原历史，避免半份摘要丢失建造约束。
-
-        ``trigger_chars`` 供等待后台任务时提前整理：身体本来就在等游戏结果，
-        借这段空档把历史整理好，醒来后的行动轮就不必先停下来等摘要。
-        """
+        """成功后一次性替换旧片段；失败保留原历史，避免半份摘要丢失建造约束。"""
         self.last_calls = 0
         project = context_projector or (lambda values: values)
         before = context_chars(project(messages), tools)
-        if before <= (self._config.max_context_chars if trigger_chars is None else trigger_chars):
+        if before <= self._config.max_context_chars:
             return False
         if not messages or messages[0].get("role") != "system":
             raise ValueError("任务历史缺少固定系统说明，无法整理")
