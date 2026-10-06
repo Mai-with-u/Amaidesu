@@ -5,7 +5,7 @@
 段树结构（TOML 视角）::
 
     [agents.streamer]
-    rundown_id, planner_max_steps
+    rundown_id, planner_max_steps, planner_recent_intents_max, planner_recent_relays_max
 
     [agents.streamer.persona]
     bot_name, personality, style_constraints, behavior_style, audience_salutation
@@ -335,6 +335,18 @@ class StreamerConfig(BaseConfig):
         default=8,
         ge=1,
         description="Planner 单决策窗 ReAct 循环最大步数（超出静默收场，防失控）",
+    )
+    planner_recent_intents_max: int = Field(
+        title="回看最近几轮打算",
+        default=6,
+        ge=0,
+        description="Planner 上下文列出最近几轮自己说出口的话题与指引（防止连着几轮讲同一件事；0 = 不列）",
+    )
+    planner_recent_relays_max: int = Field(
+        title="回看最近几次补充要求",
+        default=4,
+        ge=0,
+        description="Planner 上下文列出最近几次给手上游戏活补充过的要求（防止重复补同样的话；0 = 不列）",
     )
 
     # 子段

@@ -34,8 +34,9 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 from pydantic import Field
 
@@ -77,6 +78,24 @@ class _Delegation:
     reported_ms: int = 0
 
 
+@dataclass(frozen=True)
+class _Intent:
+    """一轮已说出口的打算：何时说的、围绕什么话题、给表达侧的指引。"""
+
+    at_ms: int
+    topic_summary: str
+    reply_guidance: str
+
+
+@dataclass(frozen=True)
+class _Relay:
+    """一次已送达的补充要求：补给哪个游戏、主播自己的原话、何时补的。"""
+
+    at_ms: int
+    agent: str
+    content: str
+
+
 class _PlannerConfig(BaseConfig):
     """Planner 配置 Schema（StreamerConfig 最小子集）。
 
@@ -89,6 +108,8 @@ class _PlannerConfig(BaseConfig):
     """
 
     planner_max_steps: int = Field(default=_DEFAULT_MAX_STEPS, title="决策最大步数")
+    planner_recent_intents_max: int = Field(default=6, ge=0, title="回看最近几轮打算")
+    planner_recent_relays_max: int = Field(default=4, ge=0, title="回看最近几次补充要求")
 
 
 def _spec_to_fn_def(spec: Any) -> Dict[str, Any]:
@@ -204,8 +225,15 @@ class Planner:
         if config is None:
             self.typed_config = _PlannerConfig()
         elif hasattr(config, "planner_max_steps"):
+            defaults = _PlannerConfig()
             self.typed_config = _PlannerConfig(
                 planner_max_steps=getattr(config, "planner_max_steps", _DEFAULT_MAX_STEPS),
+                planner_recent_intents_max=getattr(
+                    config, "planner_recent_intents_max", defaults.planner_recent_intents_max
+                ),
+                planner_recent_relays_max=getattr(
+                    config, "planner_recent_relays_max", defaults.planner_recent_relays_max
+                ),
             )
         elif isinstance(config, dict):
             self.typed_config = _PlannerConfig.from_dict(config)
@@ -230,6 +258,12 @@ class Planner:
         # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派 27 次、
         # 目标来回反转——主播看不到身体手上正做着什么，就会把每条弹幕都改派成新目标
         self._delegations: Dict[str, _Delegation] = {}
+        # 最近几轮自己说出口的打算（话题 + 指引）。对话历史里只有最终台词，看不出"我已经连着
+        # 几轮在讲同一件事"——实测主播连续十分钟句句提掉血，每轮都把它当新消息开口
+        self._recent_intents: Deque[_Intent] = deque(maxlen=self.typed_config.planner_recent_intents_max)
+        # 最近几次给手上的游戏活补充过的要求（主播自己的原话，不含附带的来源对话）：
+        # 看得到自己刚交代过什么，没有新要求时才不会把同样的话再补一遍
+        self._recent_relays: Deque[_Relay] = deque(maxlen=self.typed_config.planner_recent_relays_max)
 
         self._assembler = PlannerAssembler()
 
@@ -281,6 +315,22 @@ class Planner:
                 state = "还在做，还没做完。"
             rows.append(f"- {head}\n  {state}")
         return "\n".join(rows)
+
+    def _render_recent_intents(self, current_ms: int) -> str:
+        """我最近几轮想说的：由旧到新列出每轮定下的话题与指引，供判断是否在连着讲同一件事。"""
+        return "\n".join(
+            f"- {age_text(current_ms - intent.at_ms)} 话题：{intent.topic_summary or '（无）'}"
+            f" ｜ 指引：{intent.reply_guidance or '（无）'}"
+            for intent in self._recent_intents
+        )
+
+    def _render_recent_relays(self, current_ms: int) -> str:
+        """我最近给手上的事补充过的要求：由旧到新，用第一人称写"在哪个游戏里补了什么"。"""
+        return "\n".join(
+            f"- {age_text(current_ms - relay.at_ms)}{f'在 {relay.agent} 里' if relay.agent else '在游戏里'}"
+            f"补充：{relay.content}"
+            for relay in self._recent_relays
+        )
 
     # ==================== 主入口 ====================
 
@@ -541,11 +591,21 @@ class Planner:
             # 游戏里的聊天：游戏世界里的玩家在跟我说话、服务器在通知，不是直播间观众——单独一段，
             # 主播才分得清开口说话对方听不到，要回就得在游戏里打字
             lines.append(f"【游戏里的聊天】{game_chat}")
-        work = self._render_delegations(now_ms())
+        current_ms = now_ms()
+        work = self._render_delegations(current_ms)
         if work:
             # 我手头在游戏里做的事：最近一次开始做的原话与进展。看得到自己在忙什么，
             # 观众补充或催促时才会补充要求，而不是每条弹幕都换一个新目标
             lines.append(f"【我手头在游戏里做的事】\n{work}")
+        relays = self._render_recent_relays(current_ms)
+        if relays:
+            # 补充过的要求紧跟在手头的事后面：同一件事已经交代过什么一眼可见，没有新要求就不再补
+            lines.append(f"【我最近给手上的事补充过的要求】\n{relays}")
+        intents = self._render_recent_intents(current_ms)
+        if intents:
+            # 我最近几轮想说的：对话历史里只有台词，这里给出每轮定下的话题，
+            # 连着几轮都是同一件事又没有新进展时，就该换话题、换角度或者不开口
+            lines.append(f"【我最近几轮想说的】（由旧到新；说出口的原话见对话历史）\n{intents}")
         if reminders:
             # 运营提醒：后台递话，必达素材——不伪装观众弹幕、不进对话历史，
             # 仅进本轮参考块（消费即送达，由调用方在决策窗入口取空队列）。
@@ -557,7 +617,6 @@ class Planner:
             return situation_text
 
         snapshot = self._room_state.get_snapshot()
-        current_ms = now_ms()
         duration_so_far_ms = 0
         if self._elapsed_live_provider is not None:
             try:
@@ -692,6 +751,10 @@ class Planner:
             outcome["confidence"] = None
         reply_to = args.get("target")
         outcome["reply_to"] = reply_to if isinstance(reply_to, str) and reply_to else None
+        # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
+        self._recent_intents.append(
+            _Intent(at_ms=now_ms(), topic_summary=outcome["topic_summary"], reply_guidance=outcome["reply_guidance"])
+        )
 
         self.logger.info(f"Planner ReAct 收尾：reply 成功 (target={outcome['target']!r}, steps={outcome['steps']})")
         return json.dumps({"ok": True, "speech_delivered": True}, ensure_ascii=False), True
@@ -717,6 +780,8 @@ class Planner:
                 },
                 ensure_ascii=False,
             )
+        # 记下主播自己补充要求的原话（附来源对话之前），之后每轮都看得到自己刚交代过什么
+        own_relay = str(args.get("content") or "") if name == "framework_prompt" else ""
         if (
             name == "framework_prompt"
             and source_dialogue
@@ -781,6 +846,10 @@ class Planner:
                 self._delegations[agent] = _Delegation(
                     agent=agent, instruction=own_instruction, task_id=str(data.get("task_id") or ""), at_ms=now_ms()
                 )
+            if name == "framework_prompt" and data.get("delivered") and own_relay.strip():
+                # 补充要求送达了才记；被拒收的没交代到，不能当成"已经说过"
+                agent = str(data.get("executor") or args.get("agent") or "")
+                self._recent_relays.append(_Relay(at_ms=now_ms(), agent=agent, content=own_relay))
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
         return _render_observation(data)
