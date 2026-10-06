@@ -86,6 +86,26 @@ async def test_game_request_and_reminder_windows_still_relay() -> None:
 
 
 @pytest.mark.asyncio
+async def test_only_fresh_game_chat_counts_as_new_input() -> None:
+    """冷场窗里只有看过的旧聊天不算新输入，递话被拦；本窗新到玩家原话才放行。"""
+    old_chat = "[3 分钟前] [minecraft] 玩家 Steve：在吗"
+    invoked: List[ToolInvocation] = []
+    planner = _planner([_relay("回 Steve 一句"), Response(success=True, content="不说")], invoked)
+    await planner.plan([], proactive=True, trigger_reason="proactive:cold", game_chat=old_chat)
+    assert invoked == []
+
+    planner = _planner([_relay("回 Steve 一句"), Response(success=True, content="不说")], invoked)
+    await planner.plan(
+        [],
+        proactive=True,
+        trigger_reason="proactive:cold",
+        game_chat=f"{old_chat}\n[新·刚刚] [minecraft] 玩家 Steve：你在干嘛",
+        fresh_game_chat=["[minecraft] 玩家 Steve：你在干嘛"],
+    )
+    assert [call.tool_name for call in invoked] == ["framework_prompt"]
+
+
+@pytest.mark.asyncio
 async def test_relay_with_viewer_words_carries_them_verbatim() -> None:
     """弹幕窗的补充要求附上观众逐字原话，游戏侧不只看到一层转述。"""
     invoked: List[ToolInvocation] = []

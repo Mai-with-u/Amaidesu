@@ -431,11 +431,13 @@ class Planner:
         ]
         # 流程单推进、冷场、定时这类主动窗没有观众、运营或游戏聊天的新输入：此时再给手上的游戏活
         # 补充要求，只会把游戏侧自己汇报过的进展或我的猜测转述回去，变成过时或互相矛盾的指令。
+        # 游戏聊天只认本窗新到的：全文里还留着已经看过的旧聊天，拿全文判断会让几分钟前的
+        # 一句话一直算作"有新输入"，冷场窗照样往游戏里递话
         relay_without_input = (
             proactive
             and trigger_reason.removeprefix("proactive:") in _NO_INPUT_PROACTIVE_REASONS
             and not (reminders or "").strip()
-            and not (game_chat or "").strip()
+            and not fresh_game_chat
         )
         if reference_text:
             messages.append({"role": "user", "content": reference_text})
