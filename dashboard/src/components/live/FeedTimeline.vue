@@ -148,7 +148,7 @@
             </span>
             <el-popover
               placement="top-start"
-              :width="352"
+              :width="400"
               trigger="hover"
               @show="onCtxPillShow(entry)"
             >
@@ -218,7 +218,7 @@
             </span>
             <el-popover
               placement="top-start"
-              :width="352"
+              :width="400"
               trigger="hover"
               @show="onCtxPillShow(entry)"
             >
@@ -410,7 +410,7 @@
             </span>
             <el-popover
               placement="top-start"
-              :width="352"
+              :width="400"
               trigger="hover"
               @show="onCtxPillShow(entry)"
             >
