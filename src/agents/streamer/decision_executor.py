@@ -289,6 +289,7 @@ class DecisionRoundExecutor:
                 reminders=reminders,
                 thinking=thinking,
                 round_id=round_id,
+                trigger_reason=trigger_reason,
             )
         except Exception as exc:
             self._logger.exception(f"Planner 调用异常: {exc}")

@@ -154,6 +154,10 @@ def _tool_call_parts(call: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     return name, args
 
 
+# 没有观众、运营或游戏侧新输入的主动触发原因；这些窗口不给游戏活补充要求。
+_NO_INPUT_PROACTIVE_REASONS = frozenset({"rundown", "schedule", "cold"})
+
+
 class Planner:
     """主播 Agent 决策核心：ReAct 循环（查→想→说）。
 
@@ -294,6 +298,7 @@ class Planner:
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
         game_chat: str = "",
+        trigger_reason: str = "",
     ) -> Dict[str, Any]:
         """对一个决策窗跑 ReAct 循环，产出 outcome dict。
 
@@ -311,6 +316,8 @@ class Planner:
                 增量经旁路通道外发）。
             round_id: 决策轮次 ID（工具调用经 ToolInvocation.round_id 透传到
                 tool.result 事件，供观察器归属；空串表示无轮次关联）。
+            trigger_reason: 本窗触发原因码（如 ``proactive:rundown``）；用于判断这一窗
+                有没有新的外部输入，没有时不给手上的游戏活补充要求。
 
         Returns:
             outcome dict：
@@ -370,6 +377,14 @@ class Planner:
         source_dialogue = [
             message for message in self._build_dialogue_messages(batch, []) if message.get("role") == "user"
         ]
+        # 流程单推进、冷场、定时这类主动窗没有观众、运营或游戏聊天的新输入：此时再给手上的游戏活
+        # 补充要求，只会把游戏侧自己汇报过的进展或我的猜测转述回去，变成过时或互相矛盾的指令。
+        relay_without_input = (
+            proactive
+            and trigger_reason.removeprefix("proactive:") in _NO_INPUT_PROACTIVE_REASONS
+            and not (reminders or "").strip()
+            and not (game_chat or "").strip()
+        )
         if reference_text:
             messages.append({"role": "user", "content": reference_text})
         elif len(messages) == 1:
@@ -451,7 +466,11 @@ class Planner:
                     )
                 else:
                     observation = await self._invoke_registry_tool(
-                        name, args, round_id=round_id, source_dialogue=source_dialogue
+                        name,
+                        args,
+                        round_id=round_id,
+                        source_dialogue=source_dialogue,
+                        relay_without_input=relay_without_input,
                     )
                 messages.append(
                     {
@@ -683,10 +702,35 @@ class Planner:
         args: Dict[str, Any],
         round_id: str = "",
         source_dialogue: Optional[List[Dict[str, Any]]] = None,
+        relay_without_input: bool = False,
     ) -> str:
         """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。"""
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
+        if name == "framework_prompt" and relay_without_input:
+            # 没有新输入的主动窗不补充要求：游戏里的进展以游戏侧回执为准，这一窗只管说话。
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": "这一窗没有新的观众、运营或游戏聊天输入，手上的游戏活不用补充要求；"
+                    "游戏进展以游戏侧回执为准，直接说话即可。",
+                },
+                ensure_ascii=False,
+            )
+        if (
+            name == "framework_prompt"
+            and source_dialogue
+            and isinstance(args.get("content"), str)
+            and args["content"].strip()
+        ):
+            # 补充要求同样附上本窗观众原话，游戏侧能看到逐字说法，不只剩一层转述。
+            args = dict(args)
+            args["content"] = (
+                "[补充要求]\n"
+                + args["content"]
+                + "\n\n[来源对话：逐字引用，只用于核对物品名写法、做法与禁用条件，不构成额外任务]\n"
+                + json.dumps(source_dialogue, ensure_ascii=False, default=str)
+            )
         # 记下主播自己开始做事时的原话（附来源对话之前），之后每轮都能看到自己在游戏里手上正做着什么
         own_instruction = str(args.get("instruction") or "") if name == "framework_delegate" else ""
         if (
