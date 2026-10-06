@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List
 
 from src.modules.events.payloads.tool_health import ToolHealthPayload
 from src.modules.events.payloads.tool_result import ToolResultPayload
+from src.modules.llm.context_meter import SECTION_MCP_TOOLS, SECTION_SYSTEM_TOOLS
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import (
@@ -39,7 +40,7 @@ from src.modules.tools.models import (
     ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import BaseToolProvider, ToolProvider
+from src.modules.tools.provider import MCP_CATEGORY, BaseToolProvider, ToolProvider
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -1044,16 +1045,27 @@ class ToolRegistry:
 
         这是与 LLM 协议层之间的转换点（解耦 ToolSpec 与具体 LLM 协议）。
         """
-        definitions: List[Dict[str, Any]] = []
-        for spec in self.list_tools(provider=provider, category=category):
-            entry: Dict[str, Any] = {
-                "name": spec.full_name,
-                "description": spec.description,
-            }
-            if spec.parameters_schema is not None:
-                entry["parameters"] = spec.parameters_schema
-            definitions.append(entry)
-        return definitions
+        return [self.function_definition(spec) for spec in self.list_tools(provider=provider, category=category)]
+
+    def function_definition(self, spec: ToolSpec) -> Dict[str, Any]:
+        """单个工具的 LLM 定义（name 用派生全名），附上下文计量归属标注。
+
+        ``context_section`` 按提供者自声明的分类区分 MCP 工具与内置工具，
+        ``result_section`` 取工具声明的结果归属；两者只供上下文分段统计，
+        LLM 层规整请求时收下、不发给模型。
+        """
+        entry: Dict[str, Any] = {
+            "name": spec.full_name,
+            "description": spec.description,
+            "context_section": (
+                SECTION_MCP_TOOLS if self._categories.get(spec.provider) == MCP_CATEGORY else SECTION_SYSTEM_TOOLS
+            ),
+        }
+        if spec.parameters_schema is not None:
+            entry["parameters"] = spec.parameters_schema
+        if spec.result_section:
+            entry["result_section"] = spec.result_section
+        return entry
 
     # -------------------- 元信息 --------------------
 

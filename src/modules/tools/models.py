@@ -38,6 +38,8 @@ class ToolSpec:
         provider: 提供者标识（如 vts / warudo / obs / vision / memory /
                   maicraft；溯源、全名前缀与过滤用，非白名单枚举）
         output_schema: 可选的 JSON Schema 形态的输出描述
+        result_section: 调用结果在上下文计量中另记的分段（如技能读取记入
+                        ``skills``）；空串 = 计入对话消息
     """
 
     name: str
@@ -47,6 +49,7 @@ class ToolSpec:
     result_event: str = ""
     provider: str = ""
     output_schema: Optional[Dict[str, Any]] = None
+    result_section: str = ""
 
     @property
     def full_name(self) -> str:

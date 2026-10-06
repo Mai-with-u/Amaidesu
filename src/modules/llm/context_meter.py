@@ -1,8 +1,14 @@
-"""上下文分段计量器：把一次 LLM 调用的输入拆成 system / messages / tools 三段估算 token。
+"""上下文分段计量器：把一次 LLM 调用的输入拆成若干分段估算 token。
+
+分段与 Claude Desktop 的上下文面板同构：对话消息 / MCP 工具 / 内置工具 /
+技能 / 系统提示词。工具属于哪一段、哪些工具结果与系统提示词片段另记一段，
+由调用方随请求带上归属标注（``ToolSpec.context_section`` /
+``ToolSpec.result_section`` / ``GenerateRequest.system_parts``）；没有标注
+的工具计入内置工具段，工具结果计入对话消息段。
 
 定位是监控估算，不是计费口径。精确总数永远以 API 回报的 ``prompt_tokens``
 为准（落库账本同一来源）；本模块的本地估算只承担一件事——决定精确总数在
-三段之间怎么分配：估算出各段原值后，按 ``api_prompt_tokens / 本地总和`` 的
+各段之间怎么分配：估算出各段原值后，按 ``api_prompt_tokens / 本地总和`` 的
 校准系数等比缩放，估算误差因此不进入展示总数，也不会跨调用累积。
 
 本地计数用 tiktoken（cl100k_base），惰性加载：词表文件首次使用时才拉取并
@@ -16,7 +22,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -34,31 +40,41 @@ _ASCII_TOKEN_RATIO = 0.25
 # CJK 统一表意区起点（含部首/标点扩展），之下的字符按 ASCII 密度计
 _CJK_CODEPOINT_START = 0x2E80
 
-# 分段键的封闭集合（payload/前端按此渲染）
+# 分段键的封闭集合（payload/前端按此渲染）。较早落库的记录用单一 "tools" 段，
+# 前端仍按旧键展示，计量器不再产出它。
 SECTION_SYSTEM = "system"
 SECTION_MESSAGES = "messages"
-SECTION_TOOLS = "tools"
+SECTION_MCP_TOOLS = "mcp_tools"
+SECTION_SYSTEM_TOOLS = "system_tools"
+SECTION_SKILLS = "skills"
+
+# 工具声明可归属的分段；未标注或标注不在此列时计入内置工具段
+_TOOL_SECTIONS = frozenset({SECTION_MCP_TOOLS, SECTION_SYSTEM_TOOLS})
+# 工具结果与系统提示词片段可另记的分段；不在此列的标注按默认归属处理
+_ATTRIBUTED_SECTIONS = frozenset({SECTION_SKILLS})
+# 工具声明里只供计量的归属字段，计数时剔除（模型看不到它们）
+_TOOL_HINT_KEYS = ("context_section", "result_section")
 
 _encoding: Any = None
 _encoding_failed = False
 
 
 class ContextSectionItem(BaseModel):
-    """分段内的明细行（一条工具 / 一组同角色消息）"""
+    """分段内的明细行（一条工具 / 一组同角色消息 / 一项技能）"""
 
     name: str
     tokens: int = 0
 
 
 class ContextSection(BaseModel):
-    """一个上下文分段（system / messages / tools 之一）"""
+    """一个上下文分段（messages / mcp_tools / system_tools / skills / system 之一）"""
 
     key: str
     # 校准后展示值（calibrated=False 时等于 raw_tokens）
     tokens: int = 0
     # 本地估算原值（校准分量的分子）
     raw_tokens: int = 0
-    # 条目数：system 恒 1；messages 为消息条数；tools 为工具条数
+    # 条目数：system 恒 1；messages 为消息条数；工具段为工具条数；skills 为片段与结果条数
     count: int = 0
     items: List[ContextSectionItem] = Field(default_factory=list)
 
@@ -71,7 +87,7 @@ class ContextBreakdown(BaseModel):
     model_name: str = ""
     # API 回报的输入 token 精确总数；0 = 上游未回报（此时展示原始估算值）
     api_prompt_tokens: int = 0
-    # 本地估算三段总和（校准分母；与 api_prompt_tokens 的比值即校准系数）
+    # 本地估算各段总和（校准分母；与 api_prompt_tokens 的比值即校准系数）
     local_total_tokens: int = 0
     calibrated: bool = False
     sections: List[ContextSection] = Field(default_factory=list)
@@ -136,6 +152,11 @@ def _count_content_tokens(content: Any) -> int:
     return count_text_tokens(json.dumps(content, ensure_ascii=False, default=str))
 
 
+def _field(obj: Any, key: str) -> Any:
+    """dict 与模型对象统一取字段。"""
+    return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+
 def _count_message_tokens(message: Any) -> int:
     """单条消息 token 计数（content / parts 双形状 + 工具调用 + 协议开销）。
 
@@ -143,14 +164,9 @@ def _count_message_tokens(message: Any) -> int:
     （TextPart/ImagePart）。图像（含 data URL 的 base64 内嵌）不进 tokenizer，
     按固定估值计；assistant 既往工具调用按其 JSON 序列化计数。
     """
-    if isinstance(message, dict):
-        content = message.get("content")
-        parts = message.get("parts") or []
-        tool_calls = message.get("tool_calls") or []
-    else:
-        content = getattr(message, "content", None)
-        parts = getattr(message, "parts", None) or []
-        tool_calls = getattr(message, "tool_calls", None) or []
+    content = _field(message, "content")
+    parts = _field(message, "parts") or []
+    tool_calls = _field(message, "tool_calls") or []
 
     total = _count_content_tokens(content)
     for part in parts:
@@ -177,19 +193,46 @@ def _normalize_tool_spec(spec: Any) -> Tuple[str, Dict[str, Any]]:
         return str(spec.get("name") or "unknown"), spec
     name = getattr(spec, "name", None)
     if name is not None:
-        dump = spec.model_dump() if hasattr(spec, "model_dump") else {"name": str(name)}
+        dump = spec.model_dump(exclude_none=True) if hasattr(spec, "model_dump") else {"name": str(name)}
         return str(name), dump
     return "unknown", {"repr": str(spec)}
 
 
-def _count_tool_tokens(spec: Any) -> Tuple[str, int]:
-    """单个工具声明的 token 计数（schema 全量 JSON 序列化后计数）。"""
+class _ToolCount(NamedTuple):
+    """单个工具声明的计数结果与归属标注"""
+
+    name: str
+    tokens: int
+    section: str
+    result_section: Optional[str]
+
+
+def _count_tool_tokens(spec: Any) -> _ToolCount:
+    """单个工具声明的 token 计数（schema 全量 JSON 序列化后计数，归属标注不计入）。"""
     name, dump = _normalize_tool_spec(spec)
-    return name, count_text_tokens(json.dumps(dump, ensure_ascii=False, default=str))
+    section = dump.get("context_section")
+    result_section = dump.get("result_section")
+    visible = {key: value for key, value in dump.items() if key not in _TOOL_HINT_KEYS}
+    return _ToolCount(
+        name=name,
+        tokens=count_text_tokens(json.dumps(visible, ensure_ascii=False, default=str)),
+        section=section if section in _TOOL_SECTIONS else SECTION_SYSTEM_TOOLS,
+        result_section=result_section if result_section in _ATTRIBUTED_SECTIONS else None,
+    )
 
 
-def extract_request_sections(kwargs: Dict[str, Any]) -> Optional[Tuple[str, List[Any], List[Any]]]:
-    """从 generate 调用 kwargs 提取 (system, messages, tools) 三段原值。
+class RequestSections(NamedTuple):
+    """一次请求中参与计量的原值"""
+
+    system: str
+    messages: List[Any]
+    tools: List[Any]
+    # 系统提示词中单独计量的片段（dict：section / name / text）
+    system_parts: List[Dict[str, Any]]
+
+
+def extract_request_sections(kwargs: Dict[str, Any]) -> Optional[RequestSections]:
+    """从 generate 调用 kwargs 提取计量原值。
 
     与 ``LLMManager._build_request_params`` 同构的双路径：中立 payload 契约
     路径从 ``kwargs["request"]`` 归一化出 dict 形状，遗留路径直接取 dict 列表。
@@ -198,17 +241,63 @@ def extract_request_sections(kwargs: Dict[str, Any]) -> Optional[Tuple[str, List
     request = kwargs.get("request")
     if request is not None:
         messages = [m.model_dump() for m in getattr(request, "messages", []) or []]
-        tools = [t.model_dump() for t in getattr(request, "tools", []) or []]
-        return getattr(request, "system", None) or "", messages, tools
+        tools = [t.model_dump(exclude_none=True) for t in getattr(request, "tools", []) or []]
+        parts = [p.model_dump() for p in getattr(request, "system_parts", []) or []]
+        return RequestSections(getattr(request, "system", None) or "", messages, tools, parts)
     messages = kwargs.get("messages")
     if messages is None:
         return None
-    return kwargs.get("system") or "", list(messages), list(kwargs.get("tools") or [])
+    return RequestSections(kwargs.get("system") or "", list(messages), list(kwargs.get("tools") or []), [])
 
 
-def _role_item_name(role: str, count: int) -> str:
-    """messages 明细行的显示名：按角色聚合，多于一 条时附条数。"""
-    return f"{role} ×{count}" if count > 1 else role
+def _index_tool_calls(messages: List[Any]) -> Dict[str, Tuple[str, Any]]:
+    """assistant 既往工具调用：调用编号 → (工具名, 参数)，供工具结果消息找回出处。
+
+    兼容中立 dump（``name`` / ``arguments`` 平铺）与 OpenAI 协议形状
+    （``function.name`` / ``function.arguments``，参数可能是 JSON 字符串）。
+    """
+    index: Dict[str, Tuple[str, Any]] = {}
+    for message in messages:
+        for call in _field(message, "tool_calls") or []:
+            call_id = _field(call, "id")
+            if not call_id:
+                continue
+            function = _field(call, "function")
+            name = _field(function, "name") if function is not None else _field(call, "name")
+            arguments = _field(function, "arguments") if function is not None else _field(call, "arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except ValueError:
+                    arguments = None
+            index[str(call_id)] = (str(name or "unknown"), arguments)
+    return index
+
+
+class _ItemTally:
+    """按显示名累计 token 与条数（保持首次出现顺序），同名多于一条时显示名附条数。"""
+
+    def __init__(self) -> None:
+        self.tokens: Dict[str, int] = {}
+        self.counts: Dict[str, int] = {}
+
+    def add(self, name: str, tokens: int) -> None:
+        self.tokens[name] = self.tokens.get(name, 0) + tokens
+        self.counts[name] = self.counts.get(name, 0) + 1
+
+    def items(self) -> List[ContextSectionItem]:
+        return [
+            ContextSectionItem(name=f"{name} ×{self.counts[name]}" if self.counts[name] > 1 else name, tokens=tokens)
+            for name, tokens in self.tokens.items()
+        ]
+
+    @property
+    def total(self) -> int:
+        return sum(self.tokens.values())
+
+    @property
+    def count(self) -> int:
+        return sum(self.counts.values())
 
 
 def estimate_breakdown(
@@ -219,41 +308,69 @@ def estimate_breakdown(
     system: str,
     messages: List[Any],
     tools: List[Any],
+    system_parts: Optional[List[Dict[str, Any]]] = None,
     api_prompt_tokens: int = 0,
 ) -> ContextBreakdown:
-    """估算一次调用的三段占用并按 API 总数校准（纯函数，不产生 IO）。"""
-    system_tokens = count_text_tokens(system)
-    message_tokens_by_role: Dict[str, int] = {}
-    message_count_by_role: Dict[str, int] = {}
-    for message in messages:
-        role = str(
-            message.get("role") if isinstance(message, dict) else getattr(message, "role", "unknown") or "unknown"
-        )
-        message_tokens_by_role[role] = message_tokens_by_role.get(role, 0) + _count_message_tokens(message)
-        message_count_by_role[role] = message_count_by_role.get(role, 0) + 1
-    tool_counts = [_count_tool_tokens(spec) for spec in tools]
+    """估算一次调用的各段占用并按 API 总数校准（纯函数，不产生 IO）。
 
+    对话消息按角色汇总，工具结果按工具名汇总；结果所属工具声明了另记分段时
+    （如技能读取）计入该段，明细名取调用参数里的 ``name``（技能名），缺省用
+    工具名。系统提示词里被标注的片段从系统提示词段扣出，计入所标分段。
+    """
+    tool_counts = [_count_tool_tokens(spec) for spec in tools]
+    result_sections = {tool.name: tool.result_section for tool in tool_counts if tool.result_section}
+    calls = _index_tool_calls(messages)
+
+    tallies: Dict[str, _ItemTally] = {section: _ItemTally() for section in _ATTRIBUTED_SECTIONS}
+    message_tally = _ItemTally()
+    for message in messages:
+        role = str(_field(message, "role") or "unknown")
+        tokens = _count_message_tokens(message)
+        if role != "tool":
+            message_tally.add(role, tokens)
+            continue
+        tool_name, arguments = calls.get(str(_field(message, "tool_call_id") or ""), ("", None))
+        section = result_sections.get(tool_name)
+        if section is not None:
+            label = arguments.get("name") if isinstance(arguments, dict) else None
+            tallies[section].add(label if isinstance(label, str) and label else tool_name, tokens)
+        else:
+            message_tally.add(f"tool · {tool_name}" if tool_name else "tool", tokens)
+
+    system_tokens = count_text_tokens(system)
+    for part in system_parts or []:
+        section, name, text = part.get("section"), part.get("name"), part.get("text")
+        if section not in _ATTRIBUTED_SECTIONS or not isinstance(text, str) or not text or text not in system:
+            continue
+        part_tokens = count_text_tokens(text)
+        tallies[section].add(str(name or section), part_tokens)
+        system_tokens = max(0, system_tokens - part_tokens)
+
+    def _tool_section(key: str) -> ContextSection:
+        selected = [tool for tool in tool_counts if tool.section == key]
+        return ContextSection(
+            key=key,
+            raw_tokens=sum(tool.tokens for tool in selected),
+            count=len(selected),
+            items=[ContextSectionItem(name=tool.name, tokens=tool.tokens) for tool in selected],
+        )
+
+    skills = tallies[SECTION_SKILLS]
     raw_sections = [
+        ContextSection(
+            key=SECTION_MESSAGES,
+            raw_tokens=message_tally.total,
+            count=message_tally.count,
+            items=message_tally.items(),
+        ),
+        _tool_section(SECTION_MCP_TOOLS),
+        _tool_section(SECTION_SYSTEM_TOOLS),
+        ContextSection(key=SECTION_SKILLS, raw_tokens=skills.total, count=skills.count, items=skills.items()),
         ContextSection(
             key=SECTION_SYSTEM,
             raw_tokens=system_tokens,
             count=1 if system else 0,
             items=[ContextSectionItem(name="system", tokens=system_tokens)] if system else [],
-        ),
-        ContextSection(
-            key=SECTION_MESSAGES,
-            raw_tokens=sum(message_tokens_by_role.values()),
-            count=len(messages),
-            items=[
-                ContextSectionItem(name=_role_item_name(role, message_count_by_role[role]), tokens=tokens)
-                for role, tokens in message_tokens_by_role.items()
-            ],
-        ),
-        ContextSection(
-            key=SECTION_TOOLS,
-            raw_tokens=sum(tokens for _, tokens in tool_counts),
-            count=len(tool_counts),
-            items=[ContextSectionItem(name=name, tokens=tokens) for name, tokens in tool_counts],
         ),
     ]
 

@@ -61,6 +61,9 @@ from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 
+# MCP 外部扩展提供者的分类：工具页分组与上下文计量据此区分 MCP 工具与内置工具
+MCP_CATEGORY = "mcp"
+
 _logger = get_logger("ToolProvider")
 
 
@@ -387,7 +390,7 @@ def make_provider_from_specs(
     return _SpecImplProvider(name=name, spec_impl_pairs=spec_impl_pairs, category=category)
 
 
-__all__ = ["ToolProvider", "BaseToolProvider", "ToolImpl", "as_tool_impl", "make_provider_from_specs"]
+__all__ = ["MCP_CATEGORY", "ToolProvider", "BaseToolProvider", "ToolImpl", "as_tool_impl", "make_provider_from_specs"]
 
 
 # 让 Pylance 不报 _ 变量未用

@@ -187,7 +187,13 @@ async def test_successful_call_persists_breakdown_and_emits_event(store: SQLiteD
     assert breakdown["request_id"] == result.request_id
     assert breakdown["api_prompt_tokens"] == 10
     assert breakdown["calibrated"] is True
-    assert {section["key"] for section in breakdown["sections"]} == {"system", "messages", "tools"}
+    assert {section["key"] for section in breakdown["sections"]} == {
+        "messages",
+        "mcp_tools",
+        "system_tools",
+        "skills",
+        "system",
+    }
 
     assert len(bus.emitted) == 1
     event_name, payload, source = bus.emitted[0]
@@ -197,7 +203,13 @@ async def test_successful_call_persists_breakdown_and_emits_event(store: SQLiteD
     assert payload.request_id == result.request_id
     assert payload.model_name == "glm-4.7"
     assert payload.api_prompt_tokens == 10
-    assert {section.key for section in payload.sections} == {"system", "messages", "tools"}
+    assert {section.key for section in payload.sections} == {
+        "messages",
+        "mcp_tools",
+        "system_tools",
+        "skills",
+        "system",
+    }
 
 
 @pytest.mark.asyncio

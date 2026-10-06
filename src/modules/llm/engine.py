@@ -46,7 +46,17 @@ from src.modules.llm.context_meter import ContextBreakdown, estimate_breakdown, 
 from src.modules.llm.errors import FatalError, LLMError, LLMInterruptedError, LLMTimeoutError, RetryableError
 from src.modules.llm.interrupt import guarded_call
 from src.modules.llm.observation import calculate_cost, record_usage
-from src.modules.llm.payload import GenerateRequest, ImagePart, Message, Response, TextPart, ToolCall, ToolSpec, Usage
+from src.modules.llm.payload import (
+    ContextPart,
+    GenerateRequest,
+    ImagePart,
+    Message,
+    Response,
+    TextPart,
+    ToolCall,
+    ToolSpec,
+    Usage,
+)
 from src.modules.logging import get_logger
 from src.modules.storage.repos import LLMRepo
 from src.modules.storage.repos.llm import LLMRequestInsert
@@ -143,6 +153,27 @@ def _tool_calls_from_protocol(raw: Any) -> List[ToolCall]:
     return calls
 
 
+def _context_parts_from_protocol(raw: Any) -> List[ContextPart]:
+    """system 消息附带的 ``context_parts``（片段归属标注）→ 中立片段；形状不对的条目跳过。
+
+    标注只服务上下文计量，写错不能让一次真实调用失败。
+    """
+    parts: List[ContextPart] = []
+    if not isinstance(raw, list):
+        return parts
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        section, name, text = item.get("section"), item.get("name"), item.get("text")
+        if isinstance(section, str) and isinstance(name, str) and isinstance(text, str) and text:
+            parts.append(ContextPart(section=section, name=name, text=text))
+    return parts
+
+
+def _optional_str(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and value else None
+
+
 def _normalize_generate_input(
     input: Any,
     *,
@@ -153,10 +184,13 @@ def _normalize_generate_input(
     """消费方输入（str 或 OpenAI 风格 dict 列表或 Message 列表）→ 中立请求。
 
     dict 列表里的 system 消息折叠进请求的独立 system 参数（各厂商对
-    system 的承载位置不同，由适配端翻译）。
+    system 的承载位置不同，由适配端翻译）。system 消息的 ``context_parts`` 与
+    工具 dict 的 ``context_section`` / ``result_section`` 是上下文计量的归属
+    标注，进入中立请求的同名字段，不发给模型。
     """
     messages: List[Message] = []
     system_texts: List[str] = []
+    system_parts: List[ContextPart] = []
     if isinstance(input, str):
         messages.append(Message(role="user", parts=[input]))
     elif isinstance(input, list):
@@ -169,6 +203,7 @@ def _normalize_generate_input(
                 if role == "system":
                     parts = _content_to_parts(content)
                     system_texts.append("".join(p if isinstance(p, str) else (p.text or "") for p in parts))
+                    system_parts.extend(_context_parts_from_protocol(item.get("context_parts")))
                     continue
                 if role not in ("user", "assistant", "tool"):
                     raise ValueError(f"不支持的消息 role: {role!r}")
@@ -197,6 +232,8 @@ def _normalize_generate_input(
                     name=str(tool.get("name", "")),
                     description=str(tool.get("description", "")),
                     parameters=tool.get("parameters") or {},
+                    context_section=_optional_str(tool.get("context_section")),
+                    result_section=_optional_str(tool.get("result_section")),
                 )
             )
         else:
@@ -207,6 +244,7 @@ def _normalize_generate_input(
         system=merged_system,
         tools=tool_specs,
         temperature=temperature,
+        system_parts=system_parts,
     )
 
 
@@ -803,16 +841,16 @@ class LLMManager:
         sections = extract_request_sections(kwargs)
         if sections is None:
             return None
-        system, messages, tools = sections
         api_prompt_tokens = int((result.usage or {}).get("prompt_tokens", 0) or 0)
         try:
             return estimate_breakdown(
                 request_id=request_id,
                 profile_name=profile_name,
                 model_name=result.model or model_name,
-                system=system,
-                messages=messages,
-                tools=tools,
+                system=sections.system,
+                messages=sections.messages,
+                tools=sections.tools,
+                system_parts=sections.system_parts,
                 api_prompt_tokens=api_prompt_tokens,
             )
         except Exception as exc:  # noqa: BLE001 估算属旁路观测，任何异常只降级

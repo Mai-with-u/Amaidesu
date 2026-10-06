@@ -112,14 +112,6 @@ class _PlannerConfig(BaseConfig):
     planner_recent_relays_max: int = Field(default=4, ge=0, title="回看最近几次补充要求")
 
 
-def _spec_to_fn_def(spec: Any) -> Dict[str, Any]:
-    """ToolSpec → OpenAI function def（name 用派生全名，与调用契约一致）。"""
-    entry: Dict[str, Any] = {"name": spec.full_name, "description": spec.description}
-    if spec.parameters_schema is not None:
-        entry["parameters"] = spec.parameters_schema
-    return entry
-
-
 def _as_id_str(value: Any) -> str:
     """消息 ID 字段收敛：仅接受 str，其余（None/Mock 等）按空处理。"""
     return value if isinstance(value, str) else ""
@@ -692,7 +684,8 @@ class Planner:
         except Exception as e:
             self.logger.warning(f"Planner 拉取工具列表失败（本轮无工具）: {e}")
             return []
-        return [_spec_to_fn_def(spec) for spec in specs]
+        # 定义附上下文计量归属（MCP / 内置工具），上下文面板据此分段
+        return [self._tool_registry.function_definition(spec) for spec in specs]
 
     async def _invoke_reply(
         self,

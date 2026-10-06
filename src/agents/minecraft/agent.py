@@ -51,6 +51,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
+from src.modules.llm.context_meter import SECTION_SKILLS
 from src.modules.logging import get_logger
 from src.modules.skills import SkillEnvironment, SkillLibrary, render_catalog
 from src.modules.task_utils import spawn_background_task
@@ -152,14 +153,6 @@ _MAICRAFT_TASK_STATUS_MAP = {
 _TASK_EVENT_STATUSES = frozenset(
     {"accepted", "running", "waiting_for_decision", "succeeded", "failed", "cancelled", "timeout"}
 )
-
-
-def _spec_to_fn(spec: ToolSpec) -> Dict[str, Any]:
-    """ToolSpec → OpenAI 风格 function def（name 用派生全名）。"""
-    entry: Dict[str, Any] = {"name": spec.full_name, "description": spec.description}
-    if spec.parameters_schema is not None:
-        entry["parameters"] = spec.parameters_schema
-    return entry
 
 
 class MinecraftAgent(BaseAgent):
@@ -715,7 +708,7 @@ class MinecraftAgent(BaseAgent):
         self._task_reported = False
         self._wait_requested = False
         await self._probe_installed_mods()
-        system_prompt = self._system_prompt()
+        system_message = self._system_message()
         # 工具列表 = 注册表按可见名单计算（for_agent，每任务重新拉取）——
         # minecraft 名单内含本地件 todo/notebook/report 与 maicraft_*，共享工具
         # 按各自名单照常出现；报告缺陷（report 不在旧手工列表）随统一来源消除
@@ -725,12 +718,14 @@ class MinecraftAgent(BaseAgent):
         else:
             specs = self._tool_registry.list_tools(for_agent=self.name)
             # 注册顺序的偶然变化不能改变同一组工具的发送顺序。
-            tool_defs = [_spec_to_fn(s) for s in sorted(specs, key=lambda spec: spec.full_name)]
+            tool_defs = [
+                self._tool_registry.function_definition(s) for s in sorted(specs, key=lambda spec: spec.full_name)
+            ]
 
         # 等待期间的提前整理必须在本批改动历史之前结清，避免两边同时改写同一份工作历史。
         await self._settle_idle_compaction(tool_defs)
         if not self._messages:
-            self._messages.append({"role": "system", "content": system_prompt})
+            self._messages.append(dict(system_message))
         messages = self._messages
         close_interrupted_calls(messages)
         if not self._task_finished and self._task_instructions:
@@ -768,7 +763,7 @@ class MinecraftAgent(BaseAgent):
                         self._recent_results.clear()
                         self._plan_facts.clear()
                         self._task_notice_fingerprints.clear()
-                        messages[:] = [{"role": "system", "content": system_prompt}]
+                        messages[:] = [dict(system_message)]
                         self._context_compactor.checkpoints = 0
                         # 新任务从空历史开始，下一次续做必须重新完整展示任务状态。
                         self._shown_context = {}
@@ -1884,6 +1879,18 @@ class MinecraftAgent(BaseAgent):
                     snapshot={"waiting_for_instruction": True, "reason": f"{kind}: {content}"},
                 )
         return None
+
+    def _system_message(self) -> Dict[str, Any]:
+        """任务历史开头的系统消息；技能目录段附计量标注，上下文面板据此把它记入技能段。
+
+        标注由 LLM 层收下用于分段统计，不发给模型；目录为空时不附标注。
+        """
+        content = self._system_prompt()
+        message: Dict[str, Any] = {"role": "system", "content": content}
+        catalog = self._skill_catalog_section()
+        if catalog and catalog in content:
+            message["context_parts"] = [{"section": SECTION_SKILLS, "name": "技能目录", "text": catalog}]
+        return message
 
     def _system_prompt(self) -> str:
         """系统提示词：渲染 prompt_manager 模板（无则用内建兜底）。"""

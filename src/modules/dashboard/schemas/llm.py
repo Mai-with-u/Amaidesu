@@ -40,14 +40,14 @@ class LLMUsageStatsResponse(BaseModel):
 
 
 class LLMContextSectionItemResponse(BaseModel):
-    """上下文分段内明细行（一条工具 / 一组同角色消息）"""
+    """上下文分段内明细行（一条工具 / 一组同角色消息 / 一项技能）"""
 
     name: str
     tokens: int = 0
 
 
 class LLMContextSectionResponse(BaseModel):
-    """一个上下文分段（system / messages / tools 之一）"""
+    """一个上下文分段（messages / mcp_tools / system_tools / skills / system 之一；旧记录可能是 tools）"""
 
     key: str
     tokens: int = 0

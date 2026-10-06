@@ -2,7 +2,7 @@
 事件 Payload 定义：llm 域 / 调用上下文水位
 
 - ``llm.context.used``：LLMManager 每次成功调用的收尾事实，payload 携带该次
-  请求的上下文分段占用解剖（system / messages / tools 三段 token 与明细，
+  请求的上下文分段占用解剖（对话消息 / MCP 工具 / 内置工具 / 技能 / 系统提示词各段 token 与明细，
   估算口径见 ``src/modules/llm/context_meter.py``）——WebUI"上下文水位"
   弹出明细的实时刷新数据源。观察面终点广播，消费者不得触发新决策。
 """
@@ -24,9 +24,9 @@ class ContextSectionItemPayload(BasePayload):
 
 
 class ContextSectionPayload(BasePayload):
-    """一个上下文分段（system / messages / tools 之一）"""
+    """一个上下文分段（messages / mcp_tools / system_tools / skills / system 之一）"""
 
-    key: str = Field(..., description="分段键（system / messages / tools）")
+    key: str = Field(..., description="分段键（messages / mcp_tools / system_tools / skills / system）")
     tokens: int = Field(default=0, description="该段 token 数（校准后展示值）")
     raw_tokens: int = Field(default=0, description="该段本地估算原值（校准前）")
     count: int = Field(default=0, description="条目数（消息条数 / 工具条数）")
@@ -45,7 +45,7 @@ class LLMContextUsedPayload(BasePayload):
         context_window: 模型上下文窗口 token 总量（0 = 未配置，前端隐藏水位）
         api_prompt_tokens: API 回报的输入 token 精确总数（分段展示的校准基准）
         completion_tokens: API 回报的输出 token 数
-        sections: 三段占用明细（key/tokens/count/items）
+        sections: 分段占用明细（key/tokens/count/items）
         calibrated: 分段是否经过 API 总数校准（False = 展示原始估算值）
     """
 
@@ -57,7 +57,7 @@ class LLMContextUsedPayload(BasePayload):
     completion_tokens: int = Field(default=0, description="API 回报的输出 token 数")
     sections: List[ContextSectionPayload] = Field(
         default_factory=list,
-        description="三段占用明细（system / messages / tools）",
+        description="分段占用明细（messages / mcp_tools / system_tools / skills / system）",
     )
     calibrated: bool = Field(default=False, description="分段是否经过 API 总数校准")
 

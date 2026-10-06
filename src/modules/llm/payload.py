@@ -87,6 +87,22 @@ class ToolSpec(BaseModel):
     name: str
     description: str = ""
     parameters: Dict[str, Any] = Field(default_factory=dict)
+    # 上下文计量归属（只供监控分段，适配端不发给模型）：声明本身计入哪一段，
+    # 以及这个工具的调用结果计入哪一段（None = 按默认归属）
+    context_section: Optional[str] = None
+    result_section: Optional[str] = None
+
+
+class ContextPart(BaseModel):
+    """系统提示词中单独计量的片段（只供监控分段，适配端不发给模型）
+
+    计量器从系统提示词总量里扣出该片段，记到 ``section`` 段下名为 ``name``
+    的明细行；``text`` 必须原样出现在系统提示词里，否则忽略。
+    """
+
+    section: str
+    name: str
+    text: str
 
 
 class Usage(BaseModel):
@@ -113,6 +129,8 @@ class GenerateRequest(BaseModel):
     temperature: Optional[float] = None
     strict_tool_arguments: bool = False
     reasoning_effort: Optional[str] = None
+    # 系统提示词中单独计量的片段（如技能目录），只供上下文分段统计
+    system_parts: List[ContextPart] = Field(default_factory=list)
 
 
 class Response(BaseModel):
@@ -140,6 +158,7 @@ __all__ = [
     "Part",
     "Message",
     "ToolSpec",
+    "ContextPart",
     "ToolCall",
     "Usage",
     "GenerateRequest",

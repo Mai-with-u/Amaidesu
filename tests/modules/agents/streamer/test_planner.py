@@ -126,11 +126,14 @@ def test_tool_list_is_for_agent_registry_result() -> None:
         ),
         ToolSpec(name="reply", description="说话出口", parameters_schema=None, kind="sync", provider="streamer"),
     ]
+    # 定义的形状（全名、计量归属）由注册表统一生成，替身沿用真实实现
+    registry.function_definition.side_effect = ToolRegistry().function_definition
     planner, _llm, _prompt = _make_planner(registry=registry)
 
     tool_list = planner._build_tool_list()
     names = [f["name"] for f in tool_list]
     assert names == ["minecraft_get_work_log", "streamer_reply"]  # 注册表全名直出、无重复注入
+    assert all(f["context_section"] == "system_tools" for f in tool_list)
 
 
 def test_tool_list_registry_missing_is_empty() -> None:
