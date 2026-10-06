@@ -110,6 +110,7 @@ class _PlannerConfig(BaseConfig):
     planner_max_steps: int = Field(default=_DEFAULT_MAX_STEPS, title="决策最大步数")
     planner_recent_intents_max: int = Field(default=6, ge=0, title="回看最近几轮打算")
     planner_recent_relays_max: int = Field(default=4, ge=0, title="回看最近几次补充要求")
+    reference_tools: List[str] = Field(default_factory=list, title="每轮自动参考的只读工具")
 
 
 def _as_id_str(value: Any) -> str:
@@ -226,6 +227,7 @@ class Planner:
                 planner_recent_relays_max=getattr(
                     config, "planner_recent_relays_max", defaults.planner_recent_relays_max
                 ),
+                reference_tools=list(getattr(config, "reference_tools", None) or []),
             )
         elif isinstance(config, dict):
             self.typed_config = _PlannerConfig.from_dict(config)
@@ -404,8 +406,20 @@ class Planner:
             outcome["silent_reason"] = "prompt_render_failed"
             return outcome
 
+        # 决策前自动读一次配置的只读参考工具（如游戏现场速览）：结果直接进参考段，
+        # 不必先花一步请求去查再决定说什么。
+        overview = await self._read_reference_tools(round_id)
         reference_text = await self._assemble_reference(
-            batch, history, rundown_text, forced, proactive, game_narrative, body_narrative, reminders, game_chat
+            batch,
+            history,
+            rundown_text,
+            forced,
+            proactive,
+            game_narrative,
+            body_narrative,
+            reminders,
+            game_chat,
+            overview=overview,
         )
         if reference_text is None:
             outcome["error"] = self.last_failure
@@ -564,6 +578,7 @@ class Planner:
         body_narrative: str = "",
         reminders: str = "",
         game_chat: str = "",
+        overview: str = "",
     ) -> Optional[str]:
         """构造参考段（一条 user 消息，固定在消息序列尾）。
 
@@ -592,6 +607,9 @@ class Planner:
             # 游戏里的聊天：游戏世界里的玩家在跟我说话、服务器在通知，不是直播间观众——单独一段，
             # 主播才分得清开口说话对方听不到，要回就得在游戏里打字
             lines.append(f"【游戏里的聊天】{game_chat}")
+        if overview:
+            # 本轮决策前自动读取的现场：已经足够时直接据此决定，不再调用同样的查询工具
+            lines.append(f"【现场速览（本轮决策前自动读取）】\n{overview}")
         current_ms = now_ms()
         work = self._render_delegations(current_ms)
         if work:
@@ -668,6 +686,32 @@ class Planner:
             return batch_messages
         history_messages = [canonical.turn_to_message(turn) for turn in canonical.trim_batch_echo(history, batch)]
         return history_messages + batch_messages
+
+    async def _read_reference_tools(self, round_id: str) -> str:
+        """逐个调用配置的只读参考工具（无参数），按工具名列出结果；失败照实写出原因，不中断决策。"""
+        if self._tool_registry is None or not self.typed_config.reference_tools:
+            return ""
+        parts: List[str] = []
+        for name in self.typed_config.reference_tools:
+            try:
+                result = await self._tool_registry.invoke(
+                    ToolInvocation(tool_name=name, arguments={}, source="planner-reference", round_id=round_id)
+                )
+            except Exception as e:
+                self.logger.warning(f"参考工具 '{name}' 调用异常: {e}", exc=True)
+                parts.append(f"{name}: 读取失败（{type(e).__name__}: {e}）")
+                continue
+            if not result.success:
+                parts.append(f"{name}: 读取失败（{result.error_message or '未知原因'}）")
+                continue
+            body = (
+                result.structured_content
+                if isinstance(result.structured_content, dict) and result.structured_content
+                else result.content
+            )
+            text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False, default=str)
+            parts.append(f"{name}: {text}")
+        return "\n".join(parts)
 
     # ==================== 工具列表与执行 ====================
 

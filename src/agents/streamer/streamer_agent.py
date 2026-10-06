@@ -259,6 +259,7 @@ class StreamerAgent(BaseAgent):
                 "planner_max_steps": config.planner_max_steps,
                 "planner_recent_intents_max": config.planner_recent_intents_max,
                 "planner_recent_relays_max": config.planner_recent_relays_max,
+                "reference_tools": list(config.reference_tools),
             },
             llm_service=llm_manager,
             prompt_service=prompt_manager,

@@ -348,6 +348,12 @@ class StreamerConfig(BaseConfig):
         ge=0,
         description="Planner 上下文列出最近几次给手上游戏活补充过的要求（防止重复补同样的话；0 = 不列）",
     )
+    reference_tools: List[str] = Field(
+        title="每轮自动参考的只读工具",
+        default_factory=list,
+        description="决策前自动调用的只读工具全名（无参数），结果放进参考段的【现场速览】；"
+        "省掉“先查一步再开口”的请求。按所接游戏配置，空 = 不调用",
+    )
 
     # 子段
     persona: StreamerPersonaConfig = Field(
