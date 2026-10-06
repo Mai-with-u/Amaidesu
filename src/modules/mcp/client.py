@@ -359,6 +359,7 @@ class McpClient:
 
     async def close(self) -> None:
         """串行且有界关闭连接，远端不退出也不能永久阻塞宿主停止。"""
+        was_connected = self._connected
         try:
             async with asyncio.timeout(self._connection_timeout_ms / 1000):
                 async with self._connection_lock:
@@ -367,7 +368,13 @@ class McpClient:
                     if old is not None:
                         await old.__aexit__(None, None, None)
         except Exception as exc:  # noqa: BLE001 - 关闭边界兜底
-            logger.warning(f"MCP server '{self.name}' 关闭连接时异常: {type(exc).__name__}: {exc}", exc=exc)
+            # 连接从未建立时，释放失败实例会重抛当初的连接错误（连接失败当时已告警过），
+            # 只记 debug；已连接后的关闭异常才 warning。两者都是可预期的边界失败，单行不附堆栈。
+            reason = f"{type(exc).__name__}: {exc}"
+            if was_connected:
+                logger.warning(f"MCP server '{self.name}' 关闭连接时异常: {reason}")
+            else:
+                logger.debug(f"MCP server '{self.name}' 释放未建立的连接时异常: {reason}")
             return
         logger.info(f"MCP server '{self.name}' 已关闭")
 
