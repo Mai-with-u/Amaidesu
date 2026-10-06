@@ -15,7 +15,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
@@ -23,7 +24,9 @@ __all__ = [
     "ROLE_LABELS",
     "batch_item_to_message",
     "canonical_content",
+    "find_target_message",
     "live_chat_row_to_message",
+    "normalize_message_id",
     "to_text_view",
     "trim_batch_echo",
     "turn_to_message",
@@ -161,6 +164,35 @@ def trim_batch_echo(history: List[Any], batch: List[Any]) -> List[Any]:
         else:
             break
     return list(history[:end])
+
+
+#: 消息 ID 的引用写法：Planner 照着 canonical 行尾的 ``[id:…]`` 填 target，可能连括号一起抄
+_ID_REFERENCE = re.compile(r"^\[?\s*id\s*[:：]\s*([^\]\s]+)\s*\]?$", re.IGNORECASE)
+
+
+def normalize_message_id(target: str) -> str:
+    """把 ``[id:xxx]`` / ``id:xxx`` / ``xxx`` 三种写法归一成裸消息 ID。"""
+    text = (target or "").strip()
+    match = _ID_REFERENCE.match(text)
+    return match.group(1) if match else text
+
+
+def find_target_message(target: Optional[str], batch: List[Any], history: List[Any]) -> str:
+    """按消息 ID 找出要回应的那条原话（canonical content，与弹幕行同形）。
+
+    本批优先，再从近到远查历史；找不到返回空串。只认 ID 精确命中，不按文本猜——
+    把别人的话当成要回应的原话交给表达侧，比不给更糟。
+    """
+    message_id = normalize_message_id(target) if isinstance(target, str) else ""
+    if not message_id:
+        return ""
+    for msg in batch:
+        if _as_str(getattr(msg, "message_id", None)) == message_id:
+            return batch_item_to_message(msg)["content"]
+    for turn in reversed(history):
+        if _as_str(getattr(turn, "message_id", None)) == message_id:
+            return turn_to_message(turn)["content"]
+    return ""
 
 
 def to_text_view(messages: List[Any]) -> str:

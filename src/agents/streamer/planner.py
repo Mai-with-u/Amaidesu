@@ -349,6 +349,7 @@ class Planner:
         round_id: str = "",
         game_chat: str = "",
         trigger_reason: str = "",
+        fresh_game_chat: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """对一个决策窗跑 ReAct 循环，产出 outcome dict。
 
@@ -362,6 +363,7 @@ class Planner:
             body_narrative: 身体侧近况（game.body.* 摘要：被袭击/死亡/重生/紧急反应）。
             reminders: 运营递话留言（【运营提醒】段注入参考块；消费即送达）。
             game_chat: 游戏里的聊天（game.chat.* 摘要：其他玩家的话与系统消息）。
+            fresh_game_chat: 本窗新到的游戏聊天原话，说话时随本批弹幕一起交给表达侧。
             thinking: 思考流上下文（可选；提供时每次 LLM 调用的 reasoning
                 增量经旁路通道外发）。
             round_id: 决策轮次 ID（工具调用经 ToolInvocation.round_id 透传到
@@ -512,7 +514,12 @@ class Planner:
 
                 if name == "streamer_reply":
                     observation, replied = await self._invoke_reply(
-                        args, outcome, batch=batch, thinking=thinking, round_id=round_id
+                        args,
+                        outcome,
+                        batch=batch,
+                        thinking=thinking,
+                        round_id=round_id,
+                        game_chat=fresh_game_chat,
                     )
                 else:
                     observation = await self._invoke_registry_tool(
@@ -693,6 +700,7 @@ class Planner:
         batch: Optional[List[Any]] = None,
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
+        game_chat: Optional[List[str]] = None,
     ) -> tuple[str, bool]:
         """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出写进 outcome 并返回 (观察, replied=True)。
 
@@ -708,6 +716,7 @@ class Planner:
             ), False
         set_thinking = getattr(self._reply_provider, "set_thinking_callback", None)
         set_batch = getattr(self._reply_provider, "set_round_batch", None)
+        set_game_chat = getattr(self._reply_provider, "set_round_game_chat", None)
         invoke_started_ms = now_ms()
         try:
             if set_thinking is not None:
@@ -715,6 +724,9 @@ class Planner:
             if set_batch is not None:
                 # 表达侧要看到观众原话才能接上话；槽位一次性，调用后立即清空
                 set_batch(batch)
+            if set_game_chat is not None:
+                # 游戏里有人搭话促发的一轮弹幕批是空的，原话同样交给表达侧，调用后清空
+                set_game_chat(game_chat)
             result = await self._tool_registry.invoke(
                 ToolInvocation(tool_name="streamer_reply", arguments=args, source="planner-react", round_id=round_id)
             )
@@ -728,6 +740,8 @@ class Planner:
                 set_thinking(None)
             if set_batch is not None:
                 set_batch(None)
+            if set_game_chat is not None:
+                set_game_chat(None)
         outcome["reply_duration_ms"] += now_ms() - invoke_started_ms
 
         if not result.success:

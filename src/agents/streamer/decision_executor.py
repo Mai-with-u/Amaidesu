@@ -25,6 +25,7 @@ from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import ModuleLogger, get_logger
 from src.modules.time_utils import now_ms
 
+from .narrative import NarrativeView
 from .planner import Planner
 from .proactive_trigger import ProactiveTrigger
 from .room_state import RoomState
@@ -109,7 +110,7 @@ class DecisionRoundExecutor:
         body_narrative_provider: Optional[Callable[[], str]] = None,
         reminders_provider: Optional[Callable[[], str]] = None,
         logger: Optional[ModuleLogger] = None,
-        game_chat_provider: Optional[Callable[[], str]] = None,
+        game_chat_provider: Optional[Callable[[], NarrativeView]] = None,
     ) -> None:
         """``history_provider`` 等 provider 返回值形态：
 
@@ -119,7 +120,8 @@ class DecisionRoundExecutor:
         - body_narrative: ``str``（可为空串；AI 玩家身体侧近况，缺省 = 不注入）
         - reminders: ``str``（可为空串；运营递话留言，**读取即取空队列**——
           送达一次制，缺省 = 不注入）
-        - game_chat: ``str``（可为空串；游戏里其他玩家的话与系统消息，缺省 = 不注入）
+        - game_chat: ``NarrativeView``（全文进 Planner 参考段，本窗新到的原话随说话交给
+          表达侧；缺省 = 不注入）
         """
         self._logger = logger or get_logger("StreamerAgent.DecisionRoundExecutor")
         self._planner = planner
@@ -264,8 +266,9 @@ class DecisionRoundExecutor:
         # 身体侧近况（采集器分类后的 game.body.* 摘要；缺省不注入）
         body_narrative = self._body_narrative_provider() if self._body_narrative_provider else ""
 
-        # 游戏里的聊天（game.chat.* 摘要：别的玩家在跟我说话、服务器通知；缺省不注入）
-        game_chat = self._game_chat_provider() if self._game_chat_provider else ""
+        # 游戏里的聊天（game.chat.* 摘要：别的玩家在跟我说话、服务器通知；缺省不注入）。
+        # 全文给 Planner 判断；本窗新到的原话另交给表达侧，玩家搭话促发的一轮才不会被当成冷场
+        game_chat = self._game_chat_provider() if self._game_chat_provider else NarrativeView(text="")
 
         # 运营递话留言（读取即取空队列——送达一次制；缺省不注入）
         reminders = self._reminders_provider() if self._reminders_provider else ""
@@ -285,11 +288,12 @@ class DecisionRoundExecutor:
                 rundown_text=rundown_text,
                 game_narrative=game_narrative,
                 body_narrative=body_narrative,
-                game_chat=game_chat,
+                game_chat=game_chat.text,
                 reminders=reminders,
                 thinking=thinking,
                 round_id=round_id,
                 trigger_reason=trigger_reason,
+                fresh_game_chat=list(game_chat.fresh),
             )
         except Exception as exc:
             self._logger.exception(f"Planner 调用异常: {exc}")

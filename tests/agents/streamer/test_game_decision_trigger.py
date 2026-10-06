@@ -216,10 +216,17 @@ async def test_game_chat_feeds_its_own_block_and_player_wakes_streamer() -> None
     # 玩家是在跟游戏里的我说话：像弹幕一样值得及时接住
     assert agent._game_decision_pending is True
 
-    text = agent._game_chat_text()
+    view = agent._game_chat_view()
+    text = view.text
     assert "[minecraft] 系统消息：Alex 请求传送到你这里" in text
     assert "[minecraft] 玩家 Steve：麦麦你在干嘛呀（之前还有 2 条重复或刷屏的没转过来）" in text
-    assert "新·" in text and "新·" not in agent._game_chat_text()
+    # 本窗新到的原话另行给出，交给表达侧；交出过一次后不再算新
+    assert view.fresh == (
+        "[minecraft] 系统消息：Alex 请求传送到你这里",
+        "[minecraft] 玩家 Steve：麦麦你在干嘛呀（之前还有 2 条重复或刷屏的没转过来）",
+    )
+    again = agent._game_chat_view()
+    assert "新·" in text and "新·" not in again.text and again.fresh == ()
     # 与游戏叙事、身体近况互不混排
     assert agent._game_narrative_text() == "" and agent._body_narrative_text() == ""
 

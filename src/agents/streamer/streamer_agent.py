@@ -57,7 +57,7 @@ from .tools.rundown_tool import RundownControlProvider, build_rundown_tool_provi
 from .background import BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
 from .message_buffer import MessageBuffer
-from .narrative import NarrativeBuffer
+from .narrative import NarrativeBuffer, NarrativeView
 from .planner import Planner
 from .proactive_trigger import ProactiveTrigger
 from .replyer import WordFilter, Replyer
@@ -418,7 +418,7 @@ class StreamerAgent(BaseAgent):
             rundown_text_provider=self._build_rundown_text,
             game_narrative_provider=self._game_narrative_text,
             body_narrative_provider=self._body_narrative_text,
-            game_chat_provider=self._game_chat_text,
+            game_chat_provider=self._game_chat_view,
             reminders_provider=self._drain_reminders,
             logger=self._logger,
         )
@@ -739,9 +739,9 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏聊天失败: {exc}")
 
-    def _game_chat_text(self) -> str:
-        """导出游戏里的聊天全文（Planner 上下文用），标注到达时间与"新"，口径同游戏叙事。"""
-        return self._game_chat.render(now_ms()).text
+    def _game_chat_view(self) -> NarrativeView:
+        """导出游戏里的聊天：全文给 Planner（到达时间与"新"口径同游戏叙事），本窗新到的原话给表达侧。"""
+        return self._game_chat.render(now_ms())
 
     async def _on_room_state_watched(
         self,

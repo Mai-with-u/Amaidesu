@@ -108,6 +108,7 @@ class Replyer:
         history: Optional[List[Any]] = None,
         rundown: Optional[str] = None,
         on_delta: Optional[Any] = None,
+        game_chat: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """根据 Planner 的决策计划 + 弹幕批次，生成本方人设下的实际回复。
 
@@ -131,6 +132,9 @@ class Replyer:
                     title / task_description / key_points / 环节剩余时长 + 整场进度。
                     透传到 prompt 的 ``$rundown`` 变量。
                 on_delta: 思考流回调（LLM 层形态 (kind, text_delta)）。
+                game_chat: 本决策窗新到的游戏聊天原话（游戏里玩家与系统消息；可选）。
+                    游戏里有人搭话促发的一轮弹幕批是空的，没有它表达侧只看得到
+                    Planner 的转述，会把这一轮当成冷场自言自语。
 
             Returns:
                 Dict 实例（含 speech/emotion/metadata）；LLM 异常、tool_calls 缺失
@@ -144,7 +148,7 @@ class Replyer:
 
         # 注入人设 + 决策意图 + 弹幕上下文 + 会话历史 + 流程单上下文
         system_prompt = self._render_system_prompt()
-        turn_input = self._render_turn_input(plan, batch, rundown)
+        turn_input = self._render_turn_input(plan, batch, rundown, history=history, game_chat=game_chat)
         # 对话历史走原生消息通道（canonical 单一映射，与 Planner 同源）：
         # 历史段跨轮逐字稳定、只追加不重排，是请求前缀缓存命中的前提；
         # 文本拍平进单条 user 消息会让每轮请求前缀全变，缓存无从命中。
@@ -242,19 +246,26 @@ class Replyer:
         plan: DecisionPlan,
         batch: List[Any],
         rundown: Optional[str] = None,
+        *,
+        history: Optional[List[Any]] = None,
+        game_chat: Optional[List[str]] = None,
     ) -> str:
-        """渲染本轮 user 消息（每轮变化段）：Planner 决策 + 弹幕批 + 流程单上下文。
+        """渲染本轮 user 消息（每轮变化段）：Planner 决策 + 弹幕批 + 游戏聊天 + 流程单上下文。
 
         会话历史不在此渲染——历史经 canonical 走原生消息通道（见 generate）。
         流程单上下文（$rundown）是任务上下文注入（当前环节 / 整场进度），由
         调用方拼装后传入；None / 空串时用占位文本，避免模板出现字面 $rundown。
+        target 能按消息 ID 在本批或历史里找到原话时，随决策一起给出：
+        一批里有好几条弹幕时，表达侧不用自己拿 ID 去对号。
         """
         # 流程单上下文：None / 空串时用占位文本，与 Planner 对齐
         rundown_render = rundown if rundown else "（当前无流程单）"
+        target_text = canonical.find_target_message(plan.target, batch, list(history or []))
         return self._prompt_service.render(
             _REPLYER_TEMPLATE,
-            plan=_render_plan_text(plan),
+            plan=_render_plan_text(plan, target_text=target_text),
             danmaku_batch=_batch_prompt_text(batch),
+            game_chat="\n".join(game_chat) if game_chat else "（无）",
             rundown=rundown_render,
         )
 
@@ -507,11 +518,13 @@ def _plain_text_speech(content: Any) -> str:
     return text
 
 
-def _render_plan_text(plan: DecisionPlan) -> str:
-    """把 DecisionPlan 渲染为供 prompt 使用的可读文本。"""
+def _render_plan_text(plan: DecisionPlan, *, target_text: str = "") -> str:
+    """把 DecisionPlan 渲染为供 prompt 使用的可读文本；找到 target 原话时紧跟在 target 后面。"""
     target = plan.target or "（无特定目标，面向全体观众）"
+    target_line = f"target 原文: {target_text}\n" if target_text else ""
     return (
         f"target: {target}\n"
+        f"{target_line}"
         f"topic_summary: {plan.topic_summary or '（无特定话题）'}\n"
         f"reply_guidance: {plan.reply_guidance or '（无额外指引）'}\n"
         f"confidence: {plan.confidence:.2f}"
