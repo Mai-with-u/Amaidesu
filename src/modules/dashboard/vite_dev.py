@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -17,9 +18,12 @@ logger = get_logger("ViteDevServer")
 class ViteDevServer:
     """Vite 开发服务器子进程的启停管理。"""
 
-    def __init__(self, dashboard_dir: Path, port: int) -> None:
+    def __init__(self, dashboard_dir: Path, port: int, backend_host: str, backend_port: int) -> None:
         self.dashboard_dir = dashboard_dir
         self.port = port
+        # 后端实际监听地址：Vite 代理 /api 与 /ws 的目标，改端口后必须同步
+        self.backend_host = backend_host
+        self.backend_port = backend_port
         self._process: Optional[asyncio.subprocess.Process] = None
         self._log_file = None
 
@@ -34,11 +38,20 @@ class ViteDevServer:
         try:
             # 子进程输出落文件而非 DEVNULL：vite 启动失败（端口占用/依赖缺失）时后端可追溯
             self._log_file = open(self.dashboard_dir / ".vite-dev.log", "w", encoding="utf-8")
+            # 通配监听地址不能作为代理目标，统一回落 localhost
+            proxy_host = "localhost" if self.backend_host in ("0.0.0.0", "::", "") else self.backend_host
+            env = {
+                **os.environ,
+                "DASHBOARD_VITE_PORT": str(self.port),
+                "DASHBOARD_BACKEND_HOST": proxy_host,
+                "DASHBOARD_BACKEND_PORT": str(self.backend_port),
+            }
             self._process = await asyncio.create_subprocess_exec(
                 npm_cmd,
                 "run",
                 "dev",
                 cwd=str(self.dashboard_dir),
+                env=env,
                 stdout=self._log_file,
                 stderr=asyncio.subprocess.STDOUT,
             )

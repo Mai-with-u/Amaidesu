@@ -250,7 +250,12 @@ class DashboardServer:
 
         if self.dev_mode:
             dashboard_dir = Path(__file__).parent.parent.parent.parent / "dashboard"
-            self._vite_dev = ViteDevServer(dashboard_dir=dashboard_dir, port=self.vite_dev_port)
+            self._vite_dev = ViteDevServer(
+                dashboard_dir=dashboard_dir,
+                port=self.vite_dev_port,
+                backend_host=self.host,
+                backend_port=self.port,
+            )
             await self._vite_dev.start()
 
         # socket 已预绑定，serve 直接复用，不会再绑定端口

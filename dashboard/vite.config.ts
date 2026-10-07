@@ -6,6 +6,11 @@ import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
+// 端口由后端启动 Vite 时经环境变量注入（与 infra.dashboard 配置同源）；单独运行 pnpm dev 时回落默认值
+const backendPort = process.env.DASHBOARD_BACKEND_PORT ?? '60214'
+const backendHost = process.env.DASHBOARD_BACKEND_HOST ?? 'localhost'
+const vitePort = Number(process.env.DASHBOARD_VITE_PORT ?? 60315)
+
 export default defineConfig({
   plugins: [
     vue(),
@@ -22,16 +27,16 @@ export default defineConfig({
     }
   },
   server: {
-    port: 60315,
+    port: vitePort,
     host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:60214',
+        target: `http://${backendHost}:${backendPort}`,
         changeOrigin: true,
         ws: true,
       },
       '/ws': {
-        target: 'ws://localhost:60214',
+        target: `ws://${backendHost}:${backendPort}`,
         ws: true,
       },
     },

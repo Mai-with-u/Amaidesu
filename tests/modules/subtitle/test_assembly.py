@@ -38,6 +38,14 @@ from src.modules.subtitle import (
 from src.modules.subtitle.backends.tk_gui_service import SubtitleGuiService
 
 
+@pytest.fixture(autouse=True)
+def _no_real_tk_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """装配入口会启动 Tk 守护线程且无人停止；多个用例累积出多个并发 Tk 解释器，
+    在 CI 的 xvfb 下会让同进程后续测试随机段错误。这里把 start 换成空操作，
+    装配与后端注册的断言不依赖真实窗口。"""
+    monkeypatch.setattr(SubtitleGuiService, "start", lambda self: None)
+
+
 # ---------------------------------------------------------------------------
 # 合法配置：装配成功 + Backend 注册
 # ---------------------------------------------------------------------------
