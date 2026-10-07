@@ -39,12 +39,15 @@
           :content="themeStore.theme === 'light' ? '切换到深色模式' : '切换到浅色模式'"
           placement="bottom"
         >
-          <el-button
-            class="theme-toggle"
-            :icon="themeStore.theme === 'light' ? Moon : Sunny"
-            circle
-            @click="themeStore.toggleTheme()"
-          />
+          <el-button class="theme-toggle" circle @click="onToggleTheme">
+            <!-- 图标随主题旋转换场：月亮转出、太阳转入 -->
+            <transition name="theme-icon" mode="out-in">
+              <el-icon :key="themeStore.theme">
+                <Moon v-if="themeStore.theme === 'light'" />
+                <Sunny v-else />
+              </el-icon>
+            </transition>
+          </el-button>
         </el-tooltip>
       </div>
     </el-header>
@@ -229,6 +232,12 @@ function handleRefreshPage() {
   window.location.reload();
 }
 
+/** 以按钮中心为圆心切换主题，新主题从按钮处圆形铺满全屏 */
+function onToggleTheme(event: MouseEvent): void {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  void themeStore.toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+}
+
 onUnmounted(() => {
   clearAllTimers();
 });
@@ -250,7 +259,6 @@ onUnmounted(() => {
   padding: 0 var(--spacing-lg);
   background-color: var(--bg-header);
   border-bottom: 1px solid var(--border-color-light);
-  box-shadow: var(--shadow-sm);
   z-index: 100;
 }
 
@@ -267,17 +275,25 @@ onUnmounted(() => {
 }
 
 .brand-icon {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-primary);
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--color-primary), var(--color-agent));
+  box-shadow: 0 4px 12px rgba(var(--color-primary-rgb), 0.3);
+  color: #fff;
+  transition: transform 0.4s var(--ease-spring);
+}
+
+.brand:hover .brand-icon {
+  transform: rotate(-8deg) scale(1.06);
 }
 
 .brand-icon svg {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
 }
 
 .brand-text {
@@ -298,26 +314,57 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
-  padding: var(--spacing-sm) var(--spacing-md);
+  padding: 6px 12px;
   background-color: var(--bg-elevated);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color-light);
+  border-radius: 999px;
   font-size: 13px;
+  transition:
+    background-color var(--transition-normal),
+    border-color var(--transition-normal);
+}
+
+.connection-status.connected {
+  background-color: var(--color-success-bg);
+  border-color: transparent;
 }
 
 .connection-status .status-dot {
+  position: relative;
   width: 8px;
   height: 8px;
   border-radius: 50%;
 }
 
+/* 在线：实心点外扩一圈渐隐的涟漪，像心跳；离线：红点静止 */
 .connection-status .status-dot.running {
   background-color: var(--color-success);
-  box-shadow: 0 0 8px var(--color-success);
-  animation: pulse 2s infinite;
+  box-shadow: none;
+  animation: none;
+}
+
+.connection-status .status-dot.running::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background-color: var(--color-success);
+  animation: status-ripple 2s var(--ease-out) infinite;
 }
 
 .connection-status .status-dot.stopped {
   background-color: var(--color-danger);
+}
+
+@keyframes status-ripple {
+  from {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.6);
+  }
 }
 
 .connection-status .status-label {
@@ -351,6 +398,23 @@ onUnmounted(() => {
   background-color: var(--bg-active);
 }
 
+.theme-icon-enter-active,
+.theme-icon-leave-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.3s var(--ease-spring);
+}
+
+.theme-icon-enter-from {
+  opacity: 0;
+  transform: rotate(-90deg) scale(0.5);
+}
+
+.theme-icon-leave-to {
+  opacity: 0;
+  transform: rotate(90deg) scale(0.5);
+}
+
 /* 主体区域 */
 .app-body {
   flex: 1;
@@ -368,16 +432,6 @@ onUnmounted(() => {
   padding: var(--spacing-lg);
   background-color: var(--bg-app);
   overflow-y: auto;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
 }
 
 /* 响应式 */

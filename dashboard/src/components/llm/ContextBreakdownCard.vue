@@ -17,23 +17,38 @@
         </span>
       </div>
 
+      <!-- 悬停某一分段行时，条上只亮这一段，其余压暗，方便对位 -->
       <div class="cbc-bar" role="img" aria-label="上下文窗口分段占用条">
         <div
           v-for="seg in barSegments"
           :key="seg.key"
           class="cbc-bar-seg"
+          :class="{ dim: hoverKey !== null && hoverKey !== seg.key }"
           :style="{ flexGrow: seg.value, backgroundColor: seg.color }"
         ></div>
       </div>
 
       <ul class="cbc-rows">
-        <li v-for="row in sectionRows" :key="row.key" class="cbc-row">
+        <li
+          v-for="(row, index) in sectionRows"
+          :key="row.key"
+          class="cbc-row"
+          :style="{ '--i': index }"
+          @mouseenter="hoverKey = row.key"
+          @mouseleave="hoverKey = null"
+        >
           <span class="cbc-swatch" :style="{ backgroundColor: row.color }"></span>
           <span class="cbc-name">{{ row.label }}</span>
           <span class="cbc-tokens">{{ shortNumber(row.tokens) }}</span>
           <span class="cbc-percent">{{ percentText(row.tokens) }}</span>
         </li>
-        <li v-if="breakdown.free_tokens !== null" class="cbc-row">
+        <li
+          v-if="breakdown.free_tokens !== null"
+          class="cbc-row"
+          :style="{ '--i': sectionRows.length }"
+          @mouseenter="hoverKey = 'free'"
+          @mouseleave="hoverKey = null"
+        >
           <span class="cbc-swatch cbc-swatch--free"></span>
           <span class="cbc-name">Free space</span>
           <span class="cbc-tokens">{{ shortNumber(breakdown.free_tokens) }}</span>
@@ -42,19 +57,36 @@
       </ul>
 
       <div v-if="detailGroups.length > 0" class="cbc-groups">
-        <section v-for="group in detailGroups" :key="group.key" class="cbc-group">
-          <div class="cbc-group-head" @click="toggleCollapsed(group.key)">
-            <span class="cbc-chevron" :class="{ collapsed: collapsed.has(group.key) }">⌄</span>
+        <section
+          v-for="group in detailGroups"
+          :key="group.key"
+          class="cbc-group"
+          :class="{ collapsed: collapsed.has(group.key) }"
+        >
+          <div
+            class="cbc-group-head"
+            @click="toggleCollapsed(group.key)"
+            @mouseenter="hoverKey = group.key"
+            @mouseleave="hoverKey = null"
+          >
+            <svg class="cbc-chevron" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M2 3.5 5 6.5 8 3.5" />
+            </svg>
             <span class="cbc-name">{{ group.label }}</span>
             <span class="cbc-tokens">{{ shortNumber(group.tokens) }}</span>
             <span class="cbc-count">{{ group.count }}</span>
           </div>
-          <ul v-if="!collapsed.has(group.key)" class="cbc-items">
-            <li v-for="item in group.items" :key="item.name" class="cbc-item">
-              <span class="cbc-item-name" :title="item.name">{{ item.name }}</span>
-              <span class="cbc-tokens">{{ shortNumber(item.tokens) }}</span>
-            </li>
-          </ul>
+          <!-- 折叠用 grid 行高 0fr↔1fr 过渡，内容高度不定也能平滑收放 -->
+          <div class="cbc-items-wrap">
+            <div class="cbc-items-clip">
+              <ul class="cbc-items">
+                <li v-for="item in group.items" :key="item.name" class="cbc-item">
+                  <span class="cbc-item-name" :title="item.name">{{ item.name }}</span>
+                  <span class="cbc-tokens">{{ shortNumber(item.tokens) }}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
         </section>
       </div>
 
@@ -97,6 +129,8 @@ const props = defineProps<{
 
 /** 折叠状态在换模型（数据源变化）时重置，默认全部展开 */
 const collapsed = ref<Set<string>>(new Set());
+/** 鼠标所在的分段（含 free），用于在分段条上高亮对应色块 */
+const hoverKey = ref<string | null>(null);
 watch(
   () => props.breakdown?.model_name,
   () => {
@@ -204,30 +238,53 @@ function percentText(tokens: number): string {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
-  color: var(--el-text-color-secondary);
+  margin-bottom: 10px;
+}
+
+.cbc-title {
+  font-weight: 600;
 }
 
 .cbc-total {
+  color: var(--el-text-color-secondary);
   font-variant-numeric: tabular-nums;
+  transition: color var(--transition-normal);
 }
 
 .cbc-total.warn {
   color: var(--el-color-danger);
 }
 
+/* 分段条：每次弹出从左向右展开；数据刷新时各段宽度平滑过渡 */
 .cbc-bar {
   display: flex;
   gap: 2px;
   height: 6px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
   overflow: hidden;
   border-radius: 3px;
+  animation: cbc-bar-reveal 0.6s var(--ease-out);
+}
+
+@keyframes cbc-bar-reveal {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
 }
 
 .cbc-bar-seg {
   min-width: 2px;
   border-radius: 1px;
+  transition:
+    flex-grow 0.5s var(--ease-out),
+    opacity var(--transition-fast);
+}
+
+.cbc-bar-seg.dim {
+  opacity: 0.25;
 }
 
 .cbc-rows,
@@ -245,15 +302,37 @@ function percentText(tokens: number): string {
   gap: 8px;
 }
 
+/* 分段行在分段条展开后逐条淡入，间隔 30ms */
 .cbc-row {
-  padding: 2px 0;
+  margin: 0 -6px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--transition-fast);
+  animation: cbc-rise-in 0.32s var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 30ms + 80ms);
+}
+
+.cbc-row:hover {
+  background: var(--el-fill-color-light);
+}
+
+@keyframes cbc-rise-in {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
 }
 
 .cbc-swatch {
   width: 10px;
   height: 10px;
   flex: none;
-  border-radius: 2px;
+  border-radius: 3px;
+  transition: transform 0.25s var(--ease-spring);
+}
+
+.cbc-row:hover .cbc-swatch {
+  transform: scale(1.25);
 }
 
 .cbc-swatch--free {
@@ -282,29 +361,38 @@ function percentText(tokens: number): string {
   text-align: right;
 }
 
+/* 明细组条数做成小胶囊，与 token 数区分开 */
 .cbc-count {
-  width: 48px;
+  min-width: 22px;
   flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--el-fill-color-light);
   color: var(--el-text-color-secondary);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
-  text-align: right;
+  line-height: 18px;
+  text-align: center;
 }
 
 .cbc-groups {
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid var(--el-border-color-lighter);
+  animation: cbc-rise-in 0.32s var(--ease-out) 0.2s backwards;
 }
 
 .cbc-group + .cbc-group {
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .cbc-group-head {
-  padding: 2px 0;
-  border-radius: 4px;
+  margin: 0 -6px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   user-select: none;
+  transition: background-color var(--transition-fast);
 }
 
 .cbc-group-head:hover {
@@ -313,20 +401,45 @@ function percentText(tokens: number): string {
 
 .cbc-chevron {
   width: 10px;
+  height: 10px;
   flex: none;
-  color: var(--el-text-color-secondary);
-  line-height: 1;
-  transition: transform 0.15s;
+  fill: none;
+  stroke: var(--el-text-color-secondary);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.25s var(--ease-out);
 }
 
-.cbc-chevron.collapsed {
+.cbc-group.collapsed .cbc-chevron {
   transform: rotate(-90deg);
+}
+
+/* 折叠：外层 grid 行高 1fr→0fr，内层裁切，列表同时淡出 */
+.cbc-items-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.28s var(--ease-out);
+}
+
+.cbc-group.collapsed .cbc-items-wrap {
+  grid-template-rows: 0fr;
+}
+
+.cbc-items-clip {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .cbc-items {
   max-height: 168px;
   overflow-y: auto;
   padding: 2px 4px 2px 18px;
+  transition: opacity 0.2s ease;
+}
+
+.cbc-group.collapsed .cbc-items {
+  opacity: 0;
 }
 
 .cbc-item {

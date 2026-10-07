@@ -56,6 +56,23 @@ body {
   background: transparent;
 }
 
+/* ==================== 主题切换 ==================== */
+
+/* 圆形展开期间暂停所有过渡：新画面直接是新主题色，不在圆里再渐变一遍。
+   主题按钮除外，月亮转出、太阳转入的图标动画要在展开的同时播放 */
+.theme-switching *:not(.theme-toggle *),
+.theme-switching *:not(.theme-toggle *)::before,
+.theme-switching *:not(.theme-toggle *)::after {
+  transition: none !important;
+}
+
+/* 新旧快照叠放，只靠 clip-path 圆形展开新主题（动画由 stores/theme.ts 驱动） */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
 /* 选中文本样式 */
 ::selection {
   background-color: var(--color-primary);
@@ -71,6 +88,148 @@ a {
 
 a:hover {
   color: var(--color-primary-light);
+}
+
+/* ==================== 页面与弹层动效 ==================== */
+
+/* 路由切换：旧页快速淡出，新页淡入并轻微上浮 */
+.page-enter-active {
+  transition:
+    opacity 0.24s var(--ease-out),
+    translate 0.24s var(--ease-out);
+}
+
+.page-leave-active {
+  transition: opacity 0.1s ease;
+}
+
+.page-enter-from {
+  opacity: 0;
+  translate: 0 8px;
+}
+
+.page-leave-to {
+  opacity: 0;
+}
+
+/*
+ * 子元素依次浮入：挂在卡片网格的父容器上，进页面时各卡片间隔 50ms 依次淡入上浮。
+ * keep-alive 页面重新插入 DOM 时动画会重播；数据刷新不重建元素，不会反复闪。
+ */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    translate: 0 10px;
+  }
+}
+
+.stagger-in > * {
+  animation: rise-in 0.42s var(--ease-out) backwards;
+}
+
+.stagger-in > :nth-child(2) {
+  animation-delay: 50ms;
+}
+
+.stagger-in > :nth-child(3) {
+  animation-delay: 100ms;
+}
+
+.stagger-in > :nth-child(4) {
+  animation-delay: 150ms;
+}
+
+.stagger-in > :nth-child(5) {
+  animation-delay: 200ms;
+}
+
+.stagger-in > :nth-child(n + 6) {
+  animation-delay: 250ms;
+}
+
+/* 按钮按下时轻微回弹，给点击一个触感反馈（Element Plus 按钮自带 transition: all，缩放随之过渡） */
+.el-button:not(.is-disabled):active {
+  scale: 0.97;
+}
+
+/* 通用淡入（v-if 切换的小块内容） */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/*
+ * 弹层出现：Popover / Tooltip / 下拉每次从隐藏变为显示都会重播这段动画。
+ * 用独立的 translate / scale 属性而不是 transform，避免和定位库写的 transform 打架；
+ * 位移方向随弹出方位，向上弹出的从下方浮起，向下弹出的从上方落下。
+ */
+@keyframes popper-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+
+.el-popper {
+  animation: popper-in 0.16s var(--ease-out);
+}
+
+.el-popper[data-popper-placement^='top'] {
+  transform-origin: bottom center;
+  animation-name: popper-in, popper-rise;
+}
+
+.el-popper[data-popper-placement^='bottom'] {
+  transform-origin: top center;
+  animation-name: popper-in, popper-drop;
+}
+
+@keyframes popper-rise {
+  from {
+    translate: 0 4px;
+  }
+}
+
+@keyframes popper-drop {
+  from {
+    translate: 0 -4px;
+  }
+}
+
+/* 弹层外观：圆角加大、阴影更柔，深色下靠描边与底色差区分层级 */
+.el-popover.el-popper {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.el-dropdown__popper.el-popper,
+.el-select__popper.el-popper {
+  border-radius: var(--radius-md);
+}
+
+.el-dialog {
+  border-radius: var(--radius-lg);
+}
+
+.el-message-box {
+  border-radius: var(--radius-lg);
+}
+
+/* 系统开了"减少动态效果"：所有动画与过渡压到一瞬间，状态仍然正确切换 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Element Plus 主题覆盖 */
@@ -90,12 +249,13 @@ a:hover {
   border: 1px solid var(--border-color-light);
   box-shadow: var(--shadow-sm);
   transition:
-    box-shadow var(--transition-fast),
-    transform var(--transition-fast);
+    box-shadow var(--transition-normal),
+    border-color var(--transition-normal);
 }
 
 .card:hover {
   box-shadow: var(--shadow-md);
+  border-color: var(--border-color);
 }
 
 /* 页面标题样式 */

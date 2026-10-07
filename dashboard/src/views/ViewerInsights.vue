@@ -19,7 +19,7 @@
 
     <template v-if="data">
       <!-- 统计卡行                                                      -->
-      <section class="stat-cards">
+      <section class="stat-cards stagger-in">
         <div class="stat-card">
           <span class="stat-value mono">{{ data.total_viewers }}</span>
           <span class="stat-label">观众总数</span>

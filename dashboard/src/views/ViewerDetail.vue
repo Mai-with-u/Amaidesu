@@ -17,7 +17,7 @@
     </header>
 
     <!-- 统计卡行：礼物 / SC / 场次 / 首次出现                           -->
-    <section v-if="detail" class="stat-cards">
+    <section v-if="detail" class="stat-cards stagger-in">
       <div class="stat-card">
         <span class="stat-value mono">{{ detail.gift_total_count }}</span>
         <span class="stat-label">礼物件数</span>

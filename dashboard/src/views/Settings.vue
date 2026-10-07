@@ -171,7 +171,7 @@
           </div>
 
           <!-- 正常浏览模式：分区卡片 -->
-          <div v-else class="section-cards">
+          <div v-else class="section-cards stagger-in">
             <div
               v-for="section in getFileSections(tab.key)"
               :key="section.key"

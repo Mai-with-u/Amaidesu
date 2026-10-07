@@ -15,7 +15,7 @@
     </header>
 
     <!-- 统计卡片 -->
-    <section class="stats-cards">
+    <section class="stats-cards stagger-in">
       <div class="stat-card cost">
         <div class="stat-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

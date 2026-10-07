@@ -11,7 +11,7 @@
   归 /collectors、/agents、/tools 各页管辖，首页不重复承载。
 -->
 <template>
-  <div class="dashboard">
+  <div class="dashboard stagger-in">
     <!-- 结论条 -->
     <header class="verdict-bar" :class="`is-${verdict.tone}`">
       <div class="verdict-lamp">

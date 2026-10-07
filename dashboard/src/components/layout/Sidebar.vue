@@ -167,21 +167,40 @@ onMounted(() => {
   font-weight: 500;
 }
 
+/* 选中指示条：切到新菜单时从中间弹性伸展出来 */
 .sidebar-menu :deep(.el-menu-item.is-active)::before {
   content: '';
   position: absolute;
   left: 0;
   top: 50%;
-  transform: translateY(-50%);
+  translate: 0 -50%;
   width: 3px;
   height: 20px;
   background-color: var(--color-primary);
   border-radius: 0 2px 2px 0;
+  animation: indicator-in 0.35s var(--ease-spring);
+}
+
+@keyframes indicator-in {
+  from {
+    scale: 1 0;
+    opacity: 0;
+  }
 }
 
 .sidebar-menu :deep(.el-menu-item .el-icon) {
   font-size: 17px;
   margin-right: var(--spacing-sm);
+  transition: transform 0.25s var(--ease-spring);
+}
+
+/* 悬停时图标轻推一下，提示可点 */
+.sidebar-menu :deep(.el-menu-item:hover .el-icon) {
+  transform: translateX(2px);
+}
+
+.sidebar-menu :deep(.el-menu-item:active) {
+  transform: scale(0.98);
 }
 
 .sidebar-divider {
