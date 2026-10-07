@@ -6,7 +6,7 @@
 import os
 import sys
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from PIL import ImageColor
@@ -33,10 +33,13 @@ def _make_label(**overrides: Any) -> OutlineLabel:
             return 100
 
     class FakeContainer:
-        """画布外层容器：比画布高出的部分是窗口的上下内边距。"""
+        """画布外层容器：pack 的上下内边距就是画布外的额外高度。"""
 
         def winfo_height(self) -> int:
             return 112
+
+        def pack_info(self) -> dict:
+            return {"pady": 6}  # 逻辑 5 × 缩放 1.25
 
     label = OutlineLabel.__new__(OutlineLabel)
     label.display_text = overrides.get("text", "测试字幕")
@@ -58,6 +61,110 @@ def _make_label(**overrides: Any) -> OutlineLabel:
 
 def ImageColorToTuple(color_hex: str) -> tuple[int, int, int]:
     return ImageColor.getrgb(color_hex)
+
+
+def test_draw_text_renders_at_computed_content_height_not_canvas_height() -> None:
+    """绘制高度取"算好的内容高度"，不取画布回读高度。
+
+    画布比内容矮的瞬间（窗口已改高、Tk 尚未把画布尺寸交上来）如果按画布高度渲染，
+    画出来的就是被裁掉上下半行的图；按算好的内容高度渲染则始终完整。
+    """
+
+    class RecordingCanvas:
+        def __init__(self, width: int, height: int) -> None:
+            self.width = width
+            self.height = height
+            self.images: list[tuple[int, int]] = []
+            self.deleted = 0
+
+        def delete(self, _tag: str) -> None:
+            self.deleted += 1
+
+        def configure(self, **_kwargs: Any) -> None:
+            pass
+
+        def winfo_width(self) -> int:
+            return self.width
+
+        def winfo_height(self) -> int:
+            return self.height
+
+        def create_image(self, x: int, y: int, image: Any) -> None:
+            self.images.append((image.width(), image.height()))
+
+    class FakePhoto:
+        def __init__(self, img: Any) -> None:
+            self._img = img
+
+        def width(self) -> int:
+            return self._img.width
+
+        def height(self) -> int:
+            return self._img.height
+
+    label = _make_label(text="这是一段需要折行的字幕文本，用来验证绘制高度取算好的内容高度")
+    required = label.required_height()
+    content_height = required - label._canvas_chrome_height()
+    assert content_height > 0
+
+    # 画布还停留在很矮的旧尺寸
+    canvas = RecordingCanvas(width=800, height=40)
+    label.canvas = canvas
+    with patch("src.modules.subtitle.backends.tk_gui_service.ImageTk.PhotoImage", FakePhoto):
+        label._draw_text()
+
+    assert canvas.images, "应当把渲染结果贴到画布上"
+    drawn_w, drawn_h = canvas.images[0]
+    assert drawn_h == content_height, f"应按内容高度 {content_height} 渲染，实际 {drawn_h}"
+    assert drawn_w == 800
+
+
+def test_canvas_configure_reflows_and_reredraws() -> None:
+    """画布尺寸真的变了（窗口被拖宽）时要重新折行并重绘。"""
+
+    class RecordingCanvas:
+        def __init__(self, width: int, height: int) -> None:
+            self.width = width
+            self.height = height
+            self.images: list[tuple[int, int]] = []
+
+        def delete(self, _tag: str) -> None:
+            pass
+
+        def configure(self, **_kwargs: Any) -> None:
+            pass
+
+        def winfo_width(self) -> int:
+            return self.width
+
+        def winfo_height(self) -> int:
+            return self.height
+
+        def create_image(self, x: int, y: int, image: Any) -> None:
+            self.images.append((image.width(), image.height()))
+
+    class FakePhoto:
+        def __init__(self, img: Any) -> None:
+            self._img = img
+
+        def width(self) -> int:
+            return self._img.width
+
+        def height(self) -> int:
+            return self._img.height
+
+    label = _make_label(text="折行宽度变化时要重新排版，否则行数与宽度都会对不上实际画布")
+    label._canvas_height_px = None
+    label.required_height()
+    narrow_need = label._content_height_px
+
+    label.canvas = RecordingCanvas(width=400, height=100)
+    with patch("src.modules.subtitle.backends.tk_gui_service.ImageTk.PhotoImage", FakePhoto):
+        label._on_canvas_configure(None)
+
+    wide_need = label._content_height_px
+    assert wide_need is not None and narrow_need is not None
+    assert wide_need > narrow_need, "画布变窄后折行更多，内容高度应随之变大"
 
 
 def test_render_pixels_only_three_colors() -> None:

@@ -9,6 +9,7 @@ CustomTkinter 窗口、长驻线程、文本队列、自动隐藏、右键菜单
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import glob
 import os
 import queue
@@ -34,6 +35,27 @@ except ImportError:
 # 字体解析等不依赖实例状态的辅助路径用模块级 logger：测试会经 __new__ 构造
 # 未初始化实例，self.logger 不保证可用
 logger = get_logger("OutlineLabel")
+
+# 字幕标签在窗口里的内边距（逻辑单位，CustomTkinter 会按缩放放大）。画布只占
+# 窗口的一部分，高度自适应要按这份内边距把窗口算得比内容高一点
+_LABEL_PADX = 10
+_LABEL_PADY = 5
+
+
+def _virtual_screen_bounds() -> Optional[Tuple[int, int, int, int]]:
+    """Windows 虚拟桌面范围 (left, top, right, bottom)；取不到返回 None。"""
+    try:
+        user32 = ctypes.windll.user32
+        left = user32.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
+        top = user32.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
+        width = user32.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
+        height = user32.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
+        if width > 0 and height > 0:
+            return left, top, left + width, top + height
+    except Exception as e:
+        # 非 Windows 或 ctypes 不可用时退回 Tk 报告的屏幕尺寸，不留异常路径
+        logger.debug(f"读取虚拟桌面范围失败: {e}")
+    return None
 
 
 class OutlineLabel:
@@ -86,6 +108,9 @@ class OutlineLabel:
         self.font_size_px = font[1] if font else 28
         self._font_px = round(self.font_size_px * 4 / 3)
         self._photo: Any = None
+        # 当前文本按画布宽度折行后的内容高度（物理像素）；None 表示需要按当前
+        # 画布宽度重新折行。绘制按这个值渲染，不去回读画布高度
+        self._content_height_px: Optional[int] = None
         # emoji 兜底字体缓存：None=未尝试 False=不可用 FreeTypeFont=已加载
         self._emoji_font_obj: Any = None
         self._background_color = background_color
@@ -118,9 +143,21 @@ class OutlineLabel:
         return self.container_frame.after(delay, callback)
 
     def _on_canvas_configure(self, event: tk.Event) -> None:
+        """画布尺寸变化（用户拖动窗口宽度等）时重新排版并绘制。
+
+        正常换字幕不依赖这里：绘制按算好的内容高度进行，与画布何时跟上无关。
+        """
+        self._content_height_px = None
         self._draw_text()
 
     def _draw_text(self) -> None:
+        """按"算好的内容高度"渲染并居中贴到画布上。
+
+        不用 ``winfo_height()`` 定渲染高度：那里读的是 Tk 已经算完的布局，几何请求
+        尚未处理时拿到的是旧值，据此渲染会画出被裁的图（窗口已改、画布未跟上的那
+        一瞬）。渲染高度由文本折行自己算，画布何时跟上都不影响画面正确性——画布比
+        内容矮的短暂瞬间里，居中贴图也不会切到字形。
+        """
         self.canvas.delete("all")
         self._photo = None
         if not self.display_text:
@@ -131,23 +168,42 @@ class OutlineLabel:
         except Exception:
             self.canvas.configure(bg="gray15")
         canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
-        if canvas_width <= 1 or canvas_height <= 1:
+        if canvas_width <= 1:
             return
-        img = self._render_text(canvas_width, canvas_height, bg_color)
+        content_height = self._content_height_px
+        if content_height is None:
+            # 画布尺寸刚变过（或首次绘制）：按当前宽度重新折行，同时把内容高度记下
+            font = self._load_font()
+            if font is None:
+                return
+            lines = self._wrap_lines(font, canvas_width)
+            if not lines:
+                return
+            content_height = self._content_height_px = self._content_height_for(lines)
+        img = self._render_text(canvas_width, content_height, bg_color)
         if img is None:
             return
         try:
             self._photo = ImageTk.PhotoImage(img)
-            self.canvas.create_image(canvas_width // 2, canvas_height // 2, image=self._photo)
+            # anchor 决定贴图基准点：用画布当前尺寸定位，画布比图矮时也不会切字形
+            self.canvas.create_image(
+                self.canvas.winfo_width() // 2,
+                self.canvas.winfo_height() // 2,
+                image=self._photo,
+            )
         except Exception:
             self.logger.exception("PIL 字幕渲染失败（ImageTk 不可用？）")
 
     def _line_height(self) -> int:
         return int(self._font_px * 1.35)
 
+    def _content_height_for(self, lines: List[str]) -> int:
+        """折行结果对应的内容高度：行数 × 行高 + 描边与贴边余量。"""
+        pad = 8 + (2 * self.outline_width if self.outline_enabled else 0)
+        return len(lines) * self._line_height() + pad
+
     def required_height(self) -> int:
-        """当前文本在画布宽度内折行后所需的渲染高度（物理像素）。
+        """当前文本在画布宽度内折行后所需的窗口高度（物理像素）。
 
         供窗口高度自适应使用：窗口比内容矮时，居中绘制的首尾行会落
         在窗口外被裁掉。返回值是窗口高度口径——画布只占窗口的一个子
@@ -156,6 +212,7 @@ class OutlineLabel:
         由调用方回退到窗口默认高度。
         """
         if not self.display_text:
+            self._content_height_px = None
             return 0
         width = self.canvas.winfo_width()
         if width <= 1:
@@ -166,18 +223,29 @@ class OutlineLabel:
         lines = self._wrap_lines(font, width)
         if not lines:
             return 0
-        # 额外留出描边膨胀与上下贴边的余量
-        pad = 8 + (2 * self.outline_width if self.outline_enabled else 0)
-        return len(lines) * self._line_height() + pad + self._canvas_chrome_height()
+        self._content_height_px = self._content_height_for(lines)
+        return self._content_height_px + self._canvas_chrome_height()
 
     def _canvas_chrome_height(self) -> int:
-        """画布之外的窗口空白高度：``OutlineLabel`` 的上下内边距。
+        """画布之外的额外高度：``OutlineLabel`` 容器在窗口里的上下内边距。
 
-        画布尚未布局（高度 ≤ 1）时返回 0，由调用方的默认高度兜底。
+        取自 pack 配置而不是回读几何：画布与容器的高度在布局过程中会短暂读到
+        中间值（甚至读到 0），据此算出的"还差多少"会误判成空间不足。取不到
+        pack 配置（容器已销毁等）时返回 0，由调用方的默认高度兜底。
         """
-        container_height = self.container_frame.winfo_height()
-        canvas_height = self.canvas.winfo_height()
-        return max(container_height - canvas_height, 0)
+        try:
+            info = self.container_frame.pack_info()
+        except Exception as e:
+            self.logger.debug(f"读取字幕容器 pack 配置失败: {e}")
+            return 0
+        pady = info.get("pady", 0)
+        if isinstance(pady, (tuple, list)):
+            return int(pady[0]) + int(pady[1])
+        return 2 * int(pady)
+
+    def _canvas_height_need(self, required_height_px: int) -> int:
+        """窗口口径的所需高度换算成画布需要的高度。"""
+        return required_height_px - self._canvas_chrome_height()
 
     def _render_text(self, width: int, height: int, bg_color: str) -> Optional[Image.Image]:
         """按色键背景合成文字+描边。
@@ -454,6 +522,9 @@ class SubtitleGuiService:
         self._gui_running = True
         self.is_visible = False
         self._started = False
+        # 正在更新字幕文本：更新过程中会跑一次事件循环，自动隐藏巡检不得在此期间
+        # 清空文本/缩回窗口
+        self._updating_text = False
         # 窗口尺寸自持：geometry 的宽高参数按窗口缩放放大后交给 Tk，位置不
         # 缩放；winfo 系列返回物理像素，而 geometry 回读返回逻辑单位。位置
         # 锚定底边——字幕窗贴底展示，内容变高只向上扩展，底边必须钉在屏幕
@@ -465,6 +536,18 @@ class SubtitleGuiService:
         self._default_window_height_px = 0
         # 底边距屏幕底部的偏移（物理像素），窗口映射后据此校正摆放位置
         self._bottom_offset_px = 0
+        # 上一步期望的窗口高度（物理像素），供未到位时的延迟重试用
+        self._last_target_height_px = 0
+        # 已经为哪个目标高度重试过，避免"重试仍不到位→再重试"的自我重排
+        self._height_retry_target = 0
+        # 屏幕可用范围缓存 (left, top, right, bottom)，位置夹取与摆放都用它
+        self._screen_bounds: Optional[Tuple[int, int, int, int]] = None
+        # 用户是否亲手挪过窗口：启动后的自动定位会重摆窗口，一旦用户动过就不再
+        # 插手，否则拖动刚落下就被定位回调按旧锚点搬回去（看起来像被甩飞）
+        self._user_moved_window = False
+        # 拖动中的指针位置与窗口目标位置，见 _start_move/_on_move
+        self._move_pointer: Tuple[int, int] = (0, 0)
+        self._move_target: Tuple[int, int] = (0, 0)
         # 最近一次请求的高度（逻辑单位，0 表示无未收敛请求），用于在没有窗口
         # 缩放口径时按"请求 → 回读"实测换算出缩放系数
         self._last_requested_height_px = 0
@@ -503,6 +586,12 @@ class SubtitleGuiService:
             return
         try:
             self.text_queue.put(text)
+            # 文本一到就刷新空闲计时器：自动隐藏按"最后一条字幕"计时，而不是按
+            # 上一次语音输入——TTS 引擎在位时字幕由播放事件直接推进来
+            # （SubtitleService.show → 本方法），不经过任何语音时间戳，计时器会
+            # 一直停留在很久以前，巡检就会在文本还显示着的时候判超时、把多行
+            # 窗口缩回默认高度，字幕于是被裁成中间一行
+            self.last_voice_time_ms = now_ms()
         except Exception as e:
             self.logger.exception(f"放入字幕队列时出错: {e}")
 
@@ -569,7 +658,7 @@ class SubtitleGuiService:
                 background_color=effective_background,
                 logger=self.logger,
             )
-            self.text_label.pack(expand=True, fill="both", padx=10, pady=5)
+            self.text_label.pack(expand=True, fill="both", padx=_LABEL_PADX, pady=_LABEL_PADY)
 
             def bind_drag_events(widget: Any) -> None:
                 widget.bind("<Button-1>", self._start_move)
@@ -708,7 +797,8 @@ class SubtitleGuiService:
 
         配置的逻辑高度与实测物理高度在 DPI 缩放下不等，而且窗口管理器响应
         geometry 请求有延迟：回读高度已经生效、位置还是旧值时按实测值定位会
-        把底边算错，所以没把握时留一次重试机会。
+        把底边算错，所以没把握时留一次重试机会。用户已经亲手挪过窗口时只记
+        高度下限，不再重摆位置——用户的位置优先。
         """
         if not self.root or not self._gui_running:
             return
@@ -720,13 +810,25 @@ class SubtitleGuiService:
             return
         self._default_window_height_px = measured
         self._target_width_px = max(self.root.winfo_width(), 1)
-        desired_top = self.root.winfo_screenheight() - self._bottom_offset_px - measured
-        self._window_bottom_px = desired_top + measured
+        if self._user_moved_window:
+            self.logger.debug(f"用户已挪动字幕窗口，跳过自动定位（实测高度 {measured}）")
+            return
+        self._window_bottom_px = self.root.winfo_screenheight() - self._bottom_offset_px
+        desired_top = min(self._window_bottom_px - measured, self._visible_top_limit())
         self.root.geometry(self._size_spec(self.window_width, self.window_height, desired_top))
         self.root.update_idletasks()
+        self.logger.info(
+            f"字幕窗口已摆放: 屏幕 {self.root.winfo_screenwidth()}x{self.root.winfo_screenheight()}"
+            f" 位置 ({self.root.winfo_x()},{self.root.winfo_y()})"
+            f" 尺寸 {self.root.winfo_width()}x{self.root.winfo_height()}"
+        )
         if remaining_attempts > 1 and self.root.winfo_y() != desired_top:
             # 位置还没落到目标处，说明上一步请求仍在途中，下一轮按新回读校准
             self.root.after(100, lambda: self._measure_default_window_height(remaining_attempts - 1))
+        self.logger.info(
+            f"窗口定位结果: 实测高度 {measured} 目标顶边 {desired_top}"
+            f" 实际位置 y={self.root.winfo_y()} 高度 {self.root.winfo_height()}"
+        )
 
     def _apply_window_height(self, target_height_px: int) -> None:
         """把窗口高度调到 ``target_height_px``（物理像素），底边锚定不动。
@@ -736,6 +838,10 @@ class SubtitleGuiService:
         CustomTkinter 按窗口缩放放大，所以尺寸先在物理像素空间算好再折算成
         逻辑单位请求，缩放系数用"请求 → 回读实测 → 校正"收敛；位置只发锚点
         推算的顶边，不把回读到的窗口高度混进位置换算。
+
+        尺寸已到位也要检查位置：窗口被拖到屏幕外时写入的锚点会越界，只有重新
+        下发一次 geometry 才能把它拉回屏内。高度没变就整个跳过，会让窗口永远
+        停在屏幕外（要等某次文本长度变化才顺带纠正）。
         """
         if not self.root or not self._gui_running:
             return
@@ -747,7 +853,17 @@ class SubtitleGuiService:
             self._measure_default_window_height()
         target_h = max(target_height_px, self._default_window_height_px)
         target_w = self._target_width_px
-        top = self._window_bottom_px - target_h
+        # 顶边不得超过屏幕下沿：窗口被拖到屏幕外时，底边锚点会把窗口一直固定在
+        # 屏幕外，越拖越找不回来；这里只保证"顶端可见"，正常摆放不受影响
+        anchored_top = self._window_bottom_px - target_h
+        top = min(anchored_top, self._visible_top_limit())
+        if (
+            abs(self.root.winfo_height() - target_h) <= 2
+            and abs(self.root.winfo_width() - target_w) <= 2
+            and self.root.winfo_y() == top
+        ):
+            # 尺寸与位置都已是目标值：不发无意义的请求（空字幕时每 100ms 巡检一次）
+            return
         h_scale = self._size_scale()
         w_scale = h_scale
         for _ in range(3):
@@ -765,14 +881,76 @@ class SubtitleGuiService:
                 h_scale = actual_h / max(h_req, 1)
                 # 高度没到位时窗口可能只是"缩不下去"，此时按目标高度挪顶边会
                 # 让底边每次向下漂；取实测高度与目标高度的较小值，只把窗口
-                # 长高的那一侧计入位置
-                top = self._window_bottom_px - min(actual_h, target_h)
+                # 长高的那一侧计入位置。位置从锚点重算、不取自回读值，夹取
+                # 后的落位也就不会在下一轮被当成新锚点
+                top = min(self._window_bottom_px - min(actual_h, target_h), self._visible_top_limit())
             if not w_ok:
                 w_scale = self.root.winfo_width() / max(w_req, 1)
         self._last_requested_height_px = 0
         self._target_width_px = self.root.winfo_width()
+        self.logger.info(
+            f"窗口高度调整: 目标 {target_h} 实测 {self.root.winfo_height()}"
+            f" 顶边 {self.root.winfo_y()} 比例 {h_scale:.3f}"
+        )
+        if not (abs(self.root.winfo_height() - target_h) <= 2 and abs(self.root.winfo_width() - target_w) <= 2):
+            # 三次请求都没到位：窗口管理器可能把某次请求丢了，隔一拍再校正一次，
+            # 否则窗口会停在中间高度，多行字幕只露出中间一行半
+            self._last_target_height_px = target_h
+            self.root.after(120, self._retry_window_height)
+
+    def _configure_then_fit(self, text: str) -> int:
+        """换文本：算高度、改窗口、按算好的高度绘制一次。
+
+        渲染高度由文本折行自己算（``required_height`` 顺手记下内容高度），窗口高度
+        按同一个值设；两者一致就不存在"画布还没跟上"的问题，布局何时落定都不影响
+        画面正确性，因此不需要延迟重绘或轮询兜底。
+
+        改窗口后跑一次 ``update()`` 只是让画面尽快稳定，不是正确性依赖——即使跳过，
+        贴图也已是按正确尺寸渲染的。这里用 ``update()`` 而非 ``update_idletasks()``，
+        后者不做几何重算。
+        """
+        self.text_label.display_text = text
+        required = self.text_label.required_height()
+        self._apply_window_height(required)
+        self.root.update()
+        self.text_label._draw_text()
+        return required
+
+    def _log_subtitle_fit(self, required_height_px: int) -> None:
+        """把本次文本的渲染空间记到调试日志，供排查截断时对照。"""
+        if not self.root or not self.text_label:
+            return
+        canvas_h = self.text_label.canvas.winfo_height()
+        canvas_need = self.text_label._canvas_height_need(required_height_px)
+        self.logger.debug(f"字幕渲染空间: 窗口高 {self.root.winfo_height()} 画布高 {canvas_h} 画布需要 {canvas_need}")
+
+    def _retry_window_height(self) -> None:
+        """校正上一步没到位的窗口高度（延迟一拍重试一次）。"""
+        if not self.root or not self._gui_running:
+            return
+        if abs(self.root.winfo_height() - self._last_target_height_px) <= 2:
+            return
+        if self._height_retry_target == self._last_target_height_px:
+            # 同一目标已经重试过且仍不到位，不再自我重排（窗口管理器或 DPI 口径
+            # 决定的偏差，重发请求也改不动），只记录事实
+            self.logger.warning(
+                f"字幕窗口高度无法到位: 实测 {self.root.winfo_height()}，目标 {self._last_target_height_px}"
+            )
+            return
+        self._height_retry_target = self._last_target_height_px
+        self.logger.warning(
+            f"字幕窗口高度未到位（实测 {self.root.winfo_height()}，目标 {self._last_target_height_px}），重试一次"
+        )
+        self._apply_window_height(self._last_target_height_px)
 
     def _update_subtitle_display(self, text: str) -> None:
+        """显示一条字幕（GUI 线程内调用）。
+
+        空闲计时器在这里统一刷新：自动隐藏应当从"这条字幕被显示"开始计时，而不是
+        从上次语音输入开始。TTS 引擎在位时字幕由播放事件推进来
+        （SubtitleService.show → push_subtitle → 队列 → 本方法），与语音时间戳没有
+        关系，不刷新就会让巡检在文本还显示着的时候判超时，把多行窗口缩回默认高度。
+        """
         if not self.text_label or not self._gui_running:
             return
         try:
@@ -780,11 +958,13 @@ class SubtitleGuiService:
                 if not self.always_show_window and not self.is_visible and self.root:
                     self.root.deiconify()
                     self.is_visible = True
-                self.text_label.configure_text(text=text)
-                # 窗口高度随内容自适应：固定高度下多行文本居中绘制时
-                # 首尾行会落在窗口外被裁掉
-                self._apply_window_height(self.text_label.required_height())
                 self.last_voice_time_ms = now_ms()
+                self._updating_text = True
+                try:
+                    self._configure_then_fit(text)
+                    self._log_subtitle_fit(self.text_label.required_height())
+                finally:
+                    self._updating_text = False
                 self.logger.debug(f"已更新字幕: {text[:30]}...")
             elif not self.always_show_window and self.is_visible and self.auto_hide and self.root:
                 self.root.withdraw()
@@ -800,15 +980,20 @@ class SubtitleGuiService:
                 self.auto_hide
                 and self.is_visible
                 and self.root
+                and not self._updating_text
                 and self.fade_delay_ms > 0
                 and now_ms() - self.last_voice_time_ms > self.fade_delay_ms
             ):
                 if self.always_show_window:
                     if self.text_label:
                         if self.show_waiting_text:
-                            self.text_label.configure_text(text="等待语音/弹幕输入...")
+                            waiting_text = "等待语音/弹幕输入..."
                         else:
-                            self.text_label.configure_text(text="")
+                            waiting_text = ""
+                        if self.text_label.display_text:
+                            # 已经清空过就不用重复清空/重算高度：空字幕期间这个
+                            # 巡检每 100ms 跑一次，重复下发会刷爆日志与布局
+                            self.text_label.configure_text(text=waiting_text)
                         self._apply_window_height(0)
                 else:
                     self.logger.debug("自动隐藏字幕窗口")
@@ -834,28 +1019,80 @@ class SubtitleGuiService:
                 self.logger.warning(f"销毁 subtitle 窗口时出错: {e}", exc=True)
         self.root = None
 
-    def _start_move(self, event: tk.Event) -> None:
-        """记录拖动起点：按下时的指针屏幕坐标。
+    def _window_bounds(self) -> Tuple[int, int, int, int]:
+        """窗口可停留的屏幕范围 (left, top, right, bottom)。
 
-        后续每步位移按"窗口当前位置 + 指针位移增量"算，而不是按按下时的窗口
-        位置累加：字幕文本变长会把窗口挪高，此时按住不放的指针在窗口内的相对
-        位置随之改变，按按下时的窗口位置累加位移会把这段高度差当成拖动距离，
-        窗口被一路甩出屏幕。
+        优先取虚拟桌面范围：Windows 允许窗口停在物理屏幕外的区域，按主屏尺寸
+        夹取会把窗口硬拽回主屏。窗口对象上的同名属性优先——测试用它注入屏幕
+        尺寸，免得断言受运行机器的实际桌面影响。
+        """
+        injected = getattr(self.root, "_screen_bounds", None)
+        if injected is not None:
+            return injected
+        if self._screen_bounds is None:
+            self._screen_bounds = _virtual_screen_bounds() or (
+                0,
+                0,
+                self.root.winfo_screenwidth(),
+                self.root.winfo_screenheight(),
+            )
+        return self._screen_bounds
+
+    def _min_visible_px(self) -> int:
+        """窗口至少保留在屏幕内的宽度/高度：保证还能用鼠标抓住拖回来。"""
+        return max(min(self._target_width_px, self.root.winfo_height()) // 4, 40)
+
+    def _visible_top_limit(self) -> int:
+        """顶边的最大允许值：再往下窗口就整条滑出屏幕、抓不回来了。"""
+        _, _, _, bounds_bottom = self._window_bounds()
+        return bounds_bottom - self._min_visible_px()
+
+    def _clamp_position(self, x: int, y: int) -> Tuple[int, int]:
+        """把窗口位置夹到屏幕内，至少留一角可见。
+
+        窗口一旦被拖到屏幕外就再也抓不回来，而字幕窗是无边框透明窗、没有任务
+        栏入口；位置改动一律过这道闸。
+        """
+        left, top, right, bottom = self._window_bounds()
+        margin = self._min_visible_px()
+        # 左边最少留 margin 可见（窗口右探出屏幕），右边同样最少留 margin
+        x = min(max(x, left - self._target_width_px + margin), right - margin)
+        y = min(max(y, top), bottom - margin)
+        return x, y
+
+    def _start_move(self, event: tk.Event) -> None:
+        """记录拖动起点：按下时的指针屏幕坐标与窗口位置。
+
+        后续每步位移按"上一步的目标位置 + 指针位移增量"累加，而不是按窗口回读
+        位置续算：窗口管理器响应 geometry 有上百毫秒延迟，快速拖动时回读到的
+        还是旧位置，同一段位移会被反复累加，窗口越拖越远、最后飞出屏幕。
         """
         if not self.root:
             return
+        self._user_moved_window = True
         self._move_pointer = (event.x_root, event.y_root)
+        self._move_target = (self.root.winfo_x(), self.root.winfo_y())
 
     def _on_move(self, event: tk.Event) -> None:
         if not self.root:
             return
         deltax = event.x_root - self._move_pointer[0]
         deltay = event.y_root - self._move_pointer[1]
-        x = self.root.winfo_x() + deltax
-        y = self.root.winfo_y() + deltay
+        # 指针没动就不是真拖动：窗口可能只是被高度自适应挪了位置，此时若照旧
+        # 下发位置请求，会平白多一次挪窗并污染底边锚点
+        if deltax == 0 and deltay == 0:
+            return
+        self._move_pointer = (event.x_root, event.y_root)
+        # 位移增量按屏幕坐标算，与 geometry 的位置参数同口径，不掺缩放换算：
+        # 指针落在窗口内，而窗口只有底边可能探出屏幕下沿，y 方向不会把整窗带走
+        x, y = self._clamp_position(self._move_target[0] + deltax, self._move_target[1] + deltay)
+        self._move_target = (x, y)
         self.root.geometry(f"+{x}+{y}")
         # 窗口被挪动后底边锚点跟着走，后续高度调整不再拉回原处
         self._window_bottom_px = y + self.root.winfo_height()
+        self.logger.debug(
+            f"拖动字幕窗口: 指针位移 ({deltax},{deltay}) → 位置 ({x},{y}) 底边锚点 {self._window_bottom_px}"
+        )
 
     def _show_context_menu(self, event: tk.Event) -> None:
         if not self.root:
