@@ -150,8 +150,10 @@ class OutlineLabel:
         """当前文本在画布宽度内折行后所需的渲染高度（物理像素）。
 
         供窗口高度自适应使用：窗口比内容矮时，居中绘制的首尾行会落
-        在窗口外被裁掉。画布尚未完成布局（宽度 ≤ 1）、文本为空或字体
-        不可用时返回 0，由调用方回退到窗口默认高度。
+        在窗口外被裁掉。返回值是窗口高度口径——画布只占窗口的一个子
+        区域，空白高度按需留出，避免每行字幕都把窗口撑到比内容高一截。
+        画布尚未完成布局（宽度 ≤ 1）、文本为空或字体不可用时返回 0，
+        由调用方回退到窗口默认高度。
         """
         if not self.display_text:
             return 0
@@ -166,7 +168,16 @@ class OutlineLabel:
             return 0
         # 额外留出描边膨胀与上下贴边的余量
         pad = 8 + (2 * self.outline_width if self.outline_enabled else 0)
-        return len(lines) * self._line_height() + pad
+        return len(lines) * self._line_height() + pad + self._canvas_chrome_height()
+
+    def _canvas_chrome_height(self) -> int:
+        """画布之外的窗口空白高度：``OutlineLabel`` 的上下内边距。
+
+        画布尚未布局（高度 ≤ 1）时返回 0，由调用方的默认高度兜底。
+        """
+        container_height = self.container_frame.winfo_height()
+        canvas_height = self.canvas.winfo_height()
+        return max(container_height - canvas_height, 0)
 
     def _render_text(self, width: int, height: int, bg_color: str) -> Optional[Image.Image]:
         """按色键背景合成文字+描边。
@@ -443,10 +454,20 @@ class SubtitleGuiService:
         self._gui_running = True
         self.is_visible = False
         self._started = False
-        # 首次调整高度时按"配置逻辑高度 × 实测 DPI 缩放"推算（物理像素），
-        # 作为高度自适应的下限；不在启动时测量，窗口布局未稳定时会读到
-        # 陈旧值
-        self._default_window_height_px: Optional[int] = None
+        # 窗口尺寸自持：geometry 的宽高参数按窗口缩放放大后交给 Tk，位置不
+        # 缩放；winfo 系列返回物理像素，而 geometry 回读返回逻辑单位。位置
+        # 锚定底边——字幕窗贴底展示，内容变高只向上扩展，底边必须钉在屏幕
+        # 底部；顶边由"底边减目标高度"算出，但目标高度与实际高度不等时（窗口
+        # 不缩、校正未收敛）回读高度里含未收敛的放大残差，直接拿它反推会让
+        # 窗口每次调整都向下爬一截，所以只在高度确实被改到位时才挪顶边。
+        self._target_width_px = 0
+        self._window_bottom_px = 0
+        self._default_window_height_px = 0
+        # 底边距屏幕底部的偏移（物理像素），窗口映射后据此校正摆放位置
+        self._bottom_offset_px = 0
+        # 最近一次请求的高度（逻辑单位，0 表示无未收敛请求），用于在没有窗口
+        # 缩放口径时按"请求 → 回读"实测换算出缩放系数
+        self._last_requested_height_px = 0
 
     @property
     def enabled(self) -> bool:
@@ -523,11 +544,8 @@ class SubtitleGuiService:
                 except Exception:
                     self.logger.exception("设置工具窗口属性失败")
 
-            screen_width = self.root.winfo_screenwidth()
-            screen_height = self.root.winfo_screenheight()
-            x = (screen_width - self.window_width) // 2
-            y = screen_height - self.window_height - self.window_offset_y
-            self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
+            self._place_window()
+            self.root.after(200, lambda: self._measure_default_window_height(remaining_attempts=3))
 
             # 背景：OBS 友好模式或色度键开启时用色度键颜色作"透明打孔色"，
             # 否则用配置的背景色。
@@ -603,42 +621,156 @@ class SubtitleGuiService:
         if self._gui_running and self.root:
             self.root.after(100, self._check_queue)
 
-    def _apply_window_height(self, target_height_px: int) -> None:
-        """把窗口高度调到 ``target_height_px``（物理像素），底边锚定不动。
+    def _logical_size(self, size_px: int) -> int:
+        """把物理像素尺寸折算成 geometry 期望的逻辑单位。"""
+        return max(1, round(size_px / self._size_scale()))
 
-        字幕窗口贴底展示，内容变高时只向上扩展；目标高度低于窗口默认
-        高度时取默认高度（清空/短文本回落到常规条幅尺寸）。geometry 的
-        宽高参数会被 CustomTkinter 按 DPI 缩放（位置不缩放，winfo 系列
-        返回物理像素），因此宽高都要先除以缩放系数再请求，否则窗口每
-        次调整都会被再放大一圈；缩放系数用"请求 → 回读实测 → 校正"收
-        敛，不依赖固定换算口径。
+    def _size_scale(self) -> float:
+        """geometry 尺寸相对 winfo 物理像素的缩放系数（CustomTkinter 窗口缩放）。
+
+        优先用窗口自身的缩放口径（CTk 以 ``_get_window_scaling`` 暴露，私有
+        属性名按类名改写、跨版本可能变），取不到时退回"请求 → 回读"实测比值，
+        再取不到按 1.0 处理，由高度调整的收敛闭环下一轮纠正。
+        """
+        if not self.root:
+            return 1.0
+        try:
+            scale = self.root._get_window_scaling()
+        except Exception:
+            scale = None
+        if isinstance(scale, (int, float)) and scale > 0:
+            return float(scale)
+        if self._last_requested_height_px > 1:
+            try:
+                requested = self._parse_requested_size(self.root.geometry())[1]
+            except Exception:
+                requested = None
+            if requested:
+                measured = self.root.winfo_height() / requested
+                if measured > 0:
+                    return measured
+        return 1.0
+
+    @staticmethod
+    def _parse_requested_size(geometry_string: str) -> Tuple[int, int]:
+        """解析 geometry 串中的宽高（逻辑单位）；无尺寸段时返回 (0, 0)。"""
+        size = geometry_string.partition("+")[0]
+        width_str, _, height_str = size.partition("x")
+        width = int(width_str) if width_str.isdigit() else 0
+        height = int(height_str) if height_str.isdigit() else 0
+        return width, height
+
+    def _sync_window_metrics(self) -> None:
+        """以当前窗口几何重设尺寸基准与底边锚点。
+
+        用户拖动后调用：之后高度调整只改高度、不动底边，锚点取当前底边即可。
+        锚点只在摆放/拖动时更新，不随高度调整回写——请求的逻辑高度换算回物理
+        像素必然带取整余数（实测高度可能比目标差 1 像素），把回读到的底边当作
+        新锚点，这点余数就会每次调整累加一次，窗口会持续单向漂移。
+        """
+        if not self.root:
+            return
+        self._target_width_px = max(self.root.winfo_width(), 1)
+        self._window_bottom_px = self.root.winfo_y() + self.root.winfo_height()
+
+    def _place_window(self) -> None:
+        """按配置摆放窗口：水平居中、底边距屏幕底部 ``window_offset_y``。
+
+        位置是物理像素（屏幕尺寸与 geometry 的位置参数同口径），尺寸交给
+        CustomTkinter 缩放；配置的逻辑高度与缩放后的物理高度不等，先按逻辑
+        高度估一个顶边，窗口映射后由 ``_measure_default_window_height`` 按实测
+        高度把底边校正到位。
+        """
+        if not self.root:
+            return
+        screen_height = self.root.winfo_screenheight()
+        self._bottom_offset_px = self.window_offset_y
+        self._window_bottom_px = screen_height - self.window_offset_y
+        self._target_width_px = self.window_width
+        self.root.geometry(
+            self._size_spec(self.window_width, self.window_height, self._window_bottom_px - self.window_height)
+        )
+        self.root.update_idletasks()
+        self._last_requested_height_px = self._logical_size(self.window_height)
+
+    def _size_spec(self, width_px: int, height_px: int, y_px: int) -> str:
+        """拼 geometry 尺寸串：宽高按物理像素传入并折算成逻辑单位，位置原样。"""
+        return f"{self._logical_size(width_px)}x{self._logical_size(height_px)}+{self._window_x()}+{y_px}"
+
+    def _window_x(self) -> int:
+        """水平居中所需的位置，由屏幕宽度与物理窗口宽度算出。"""
+        if not self.root:
+            return 0
+        return max((self.root.winfo_screenwidth() - self.window_width) // 2, 0)
+
+    def _measure_default_window_height(self, remaining_attempts: int = 1) -> None:
+        """窗口映射后按实测高度定位：记高度下限并把底边校正到配置偏移处。
+
+        配置的逻辑高度与实测物理高度在 DPI 缩放下不等，而且窗口管理器响应
+        geometry 请求有延迟：回读高度已经生效、位置还是旧值时按实测值定位会
+        把底边算错，所以没把握时留一次重试机会。
         """
         if not self.root or not self._gui_running:
             return
-        h_scale = self.root.winfo_fpixels("1i") / 96.0
-        if h_scale <= 0:
+        measured = self.root.winfo_height()
+        if measured <= 1:
+            # 窗口尚未映射（回读仍是 Tk 初始尺寸），高度与位置都不作数
+            if remaining_attempts > 1:
+                self.root.after(100, lambda: self._measure_default_window_height(remaining_attempts - 1))
             return
-        if self._default_window_height_px is None:
-            # 配置的窗口高度是 geometry 逻辑单位，物理高度按实测缩放换算
-            self._default_window_height_px = max(round(self.window_height * h_scale), 1)
+        self._default_window_height_px = measured
+        self._target_width_px = max(self.root.winfo_width(), 1)
+        desired_top = self.root.winfo_screenheight() - self._bottom_offset_px - measured
+        self._window_bottom_px = desired_top + measured
+        self.root.geometry(self._size_spec(self.window_width, self.window_height, desired_top))
+        self.root.update_idletasks()
+        if remaining_attempts > 1 and self.root.winfo_y() != desired_top:
+            # 位置还没落到目标处，说明上一步请求仍在途中，下一轮按新回读校准
+            self.root.after(100, lambda: self._measure_default_window_height(remaining_attempts - 1))
+
+    def _apply_window_height(self, target_height_px: int) -> None:
+        """把窗口高度调到 ``target_height_px``（物理像素），底边锚定不动。
+
+        字幕窗口贴底展示，内容变高时只向上扩展；目标高度低于窗口默认高度时
+        取默认高度（清空/短文本回落到常规条幅尺寸）。geometry 的宽高会被
+        CustomTkinter 按窗口缩放放大，所以尺寸先在物理像素空间算好再折算成
+        逻辑单位请求，缩放系数用"请求 → 回读实测 → 校正"收敛；位置只发锚点
+        推算的顶边，不把回读到的窗口高度混进位置换算。
+        """
+        if not self.root or not self._gui_running:
+            return
+        if self._default_window_height_px <= 0:
+            # 窗口映射前（或 _measure_default_window_height 未及执行）先按配置
+            # 逻辑高度兜底，映射后由实测值覆盖
+            self._default_window_height_px = max(self.window_height, 1)
+        if self._target_width_px <= 0:
+            self._measure_default_window_height()
         target_h = max(target_height_px, self._default_window_height_px)
-        target_w = self.root.winfo_width()
+        target_w = self._target_width_px
+        top = self._window_bottom_px - target_h
+        h_scale = self._size_scale()
         w_scale = h_scale
         for _ in range(3):
             w_req = max(1, round(target_w / w_scale))
             h_req = max(1, round(target_h / h_scale))
-            bottom = self.root.winfo_y() + self.root.winfo_height()
-            y = max(0, bottom - target_h)
-            self.root.geometry(f"{w_req}x{h_req}+{self.root.winfo_x()}+{y}")
+            self._last_requested_height_px = h_req
+            self.root.geometry(f"{w_req}x{h_req}+{self.root.winfo_x()}+{top}")
             self.root.update_idletasks()
-            h_ok = abs(self.root.winfo_height() - target_h) <= 2
+            actual_h = self.root.winfo_height()
+            h_ok = abs(actual_h - target_h) <= 2
             w_ok = abs(self.root.winfo_width() - target_w) <= 2
             if h_ok and w_ok:
-                return
+                break
             if not h_ok:
-                h_scale = self.root.winfo_height() / max(h_req, 1)
+                h_scale = actual_h / max(h_req, 1)
+                # 高度没到位时窗口可能只是"缩不下去"，此时按目标高度挪顶边会
+                # 让底边每次向下漂；取实测高度与目标高度的较小值，只把窗口
+                # 长高的那一侧计入位置
+                top = self._window_bottom_px - min(actual_h, target_h)
             if not w_ok:
                 w_scale = self.root.winfo_width() / max(w_req, 1)
+        self._last_requested_height_px = 0
+        self._target_width_px = self.root.winfo_width()
 
     def _update_subtitle_display(self, text: str) -> None:
         if not self.text_label or not self._gui_running:
@@ -703,16 +835,27 @@ class SubtitleGuiService:
         self.root = None
 
     def _start_move(self, event: tk.Event) -> None:
-        self._move_x = event.x
-        self._move_y = event.y
+        """记录拖动起点：按下时的指针屏幕坐标。
+
+        后续每步位移按"窗口当前位置 + 指针位移增量"算，而不是按按下时的窗口
+        位置累加：字幕文本变长会把窗口挪高，此时按住不放的指针在窗口内的相对
+        位置随之改变，按按下时的窗口位置累加位移会把这段高度差当成拖动距离，
+        窗口被一路甩出屏幕。
+        """
+        if not self.root:
+            return
+        self._move_pointer = (event.x_root, event.y_root)
 
     def _on_move(self, event: tk.Event) -> None:
-        if self.root:
-            deltax = event.x - self._move_x
-            deltay = event.y - self._move_y
-            x = self.root.winfo_x() + deltax
-            y = self.root.winfo_y() + deltay
-            self.root.geometry(f"+{x}+{y}")
+        if not self.root:
+            return
+        deltax = event.x_root - self._move_pointer[0]
+        deltay = event.y_root - self._move_pointer[1]
+        x = self.root.winfo_x() + deltax
+        y = self.root.winfo_y() + deltay
+        self.root.geometry(f"+{x}+{y}")
+        # 窗口被挪动后底边锚点跟着走，后续高度调整不再拉回原处
+        self._window_bottom_px = y + self.root.winfo_height()
 
     def _show_context_menu(self, event: tk.Event) -> None:
         if not self.root:

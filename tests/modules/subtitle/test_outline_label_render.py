@@ -32,6 +32,12 @@ def _make_label(**overrides: Any) -> OutlineLabel:
         def winfo_height(self) -> int:
             return 100
 
+    class FakeContainer:
+        """画布外层容器：比画布高出的部分是窗口的上下内边距。"""
+
+        def winfo_height(self) -> int:
+            return 112
+
     label = OutlineLabel.__new__(OutlineLabel)
     label.display_text = overrides.get("text", "测试字幕")
     label.text_color = overrides.get("text_color", TEXT)
@@ -45,6 +51,7 @@ def _make_label(**overrides: Any) -> OutlineLabel:
     label._font_px = round(label.font_size_px * 4 / 3)
     label._photo = None
     label.canvas = FakeCanvas()
+    label.container_frame = FakeContainer()
     label.logger = None
     return label
 
@@ -104,9 +111,20 @@ def test_required_height_zero_before_canvas_layout() -> None:
         def winfo_width(self) -> int:
             return 1
 
+        def winfo_height(self) -> int:
+            return 1
+
     label = _make_label(text="测试字幕")
     label.canvas = NarrowCanvas()
     assert label.required_height() == 0
+
+
+def test_required_height_includes_container_chrome() -> None:
+    """返回值是窗口高度口径：含画布外的上下内边距，避免每行都撑高窗口。"""
+    label = _make_label(text="短字幕")
+    canvas_only = label.required_height() - label._canvas_chrome_height()
+    assert canvas_only > 0
+    assert label.required_height() == canvas_only + 12
 
 
 def test_required_height_grows_with_wrapped_lines() -> None:
