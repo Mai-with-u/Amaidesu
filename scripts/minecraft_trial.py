@@ -210,7 +210,7 @@ def main() -> int:
     parser.add_argument("--source", default="调试观众", help="danmaku 模式的观众昵称")
     parser.add_argument("--expect-item", default="", help="期望到手的物品 ID，任务前后读背包比较")
     parser.add_argument("--timeout", type=int, default=600, help="最长等待秒数")
-    parser.add_argument("--dashboard", default="http://127.0.0.1:24214")
+    parser.add_argument("--dashboard", default="http://127.0.0.1:60214")
     parser.add_argument("--mcp", default="http://127.0.0.1:8766/mcp")
     parser.add_argument("--cancel-on-timeout", action="store_true", help="超时后取消该任务")
     parser.add_argument("--report", default="", help="汇总 JSON 路径，缺省写到 data/trials/")
