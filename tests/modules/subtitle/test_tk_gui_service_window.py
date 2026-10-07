@@ -1,33 +1,43 @@
 """SubtitleGuiService 窗口几何测试。
 
-防止回归两类问题：
+防止回归三类问题：
 1. 固定高度窗口下多行字幕居中绘制时首尾行落在窗口外被裁掉；
-2. 窗口底边随字幕更新逐次下移、最终整窗跑出屏幕外。
+2. 窗口底边随字幕更新逐次下移、最终整窗跑出屏幕外；
+3. 多显示器下窗口被夹在主屏边界内、拖不到副屏（或落进显示器之间的空洞）。
 
 桩 Root 模拟 CustomTkinter 的 geometry 口径——宽高参数按窗口缩放放大后
 执行，位置不缩放，winfo 系列返回物理像素。早期桩把位置也按缩放处理，
-与真实 CTk 不符，因而漏掉了坐标口径混读导致的漂移。
+与真实 CTk 不符，因而漏掉了坐标口径混读导致的漂移。屏幕尺寸设得足够高，
+让断言只考验"锚定/夹取"本身而不被夹取边界干扰。
 """
 
 import pytest
 
 from src.modules.subtitle.backends.tk_gui_service import SubtitleGuiService
 
+# 假显示器布局：主屏 2048x2160（高度放大以免夹取干扰锚定断言），副屏接在主屏右侧
+PRIMARY_MONITOR = (0, 0, 2048, 2160)
+SECOND_MONITOR = (2048, 0, 3968, 2160)
+
 
 class FakeCtkRoot:
-    """模拟 CTk 窗口：geometry 宽高按 scale 放大生效，位置原样生效。"""
+    """模拟 CTk 窗口：geometry 宽高按 scale 放大生效，位置原样生效。
 
-    def __init__(self, width, height, x, y, scale, screen=(2048, 1280)):
+    ``monitors`` 给出各显示器矩形（物理像素），缺省视为单显示器=窗口所在屏；
+    服务取屏幕范围时优先读窗口上的 ``_screen_bounds``，这里注入假桌面，免得
+    断言受运行机器实际显示器布局影响。
+    """
+
+    def __init__(self, width, height, x, y, scale, screen=(2048, 1280), monitors=None):
         self._width = width
         self._height = height
         self._x = x
         self._y = y
         self._scale = scale
         self._screen = screen
-        # 服务取屏幕范围时优先读窗口上的同名属性，这里注入假屏幕，免得断言受
-        # 运行机器实际桌面尺寸影响
         self._screen_bounds = (0, 0, screen[0], screen[1])
         self.geometry_specs = []
+        self.monitors = list(monitors) if monitors else [(0, 0, screen[0], screen[1])]
 
     def _get_window_scaling(self):
         # 真实 CTk 由 ScalingTracker 注入窗口缩放系数（几何尺寸按它放大，
@@ -75,7 +85,15 @@ class FakeCtkRoot:
 def service():
     svc = SubtitleGuiService(config={"window_width": 800, "window_height": 100, "window_offset_y": 100})
     # 屏幕给足高度，让 1550 的底边仍落在屏内，便于断言锚定行为本身
-    svc.root = FakeCtkRoot(width=1200, height=150, x=880, y=1400, scale=1.5, screen=(2048, 2160))
+    svc.root = FakeCtkRoot(
+        width=1200,
+        height=150,
+        x=880,
+        y=1400,
+        scale=1.5,
+        screen=(2048, 2160),
+        monitors=[PRIMARY_MONITOR],
+    )
     svc._default_window_height_px = 150
     svc._target_width_px = 1200
     svc._window_bottom_px = 1550
@@ -110,7 +128,9 @@ def test_repeated_same_target_does_not_creep():
     这样位置必须逐次完全一致；有累加漂移时第一次复算就会偏出容差。
     """
     svc = SubtitleGuiService(config={"window_width": 800, "window_height": 100, "window_offset_y": 100})
-    svc.root = FakeCtkRoot(width=1200, height=150, x=880, y=1400, scale=2.0, screen=(2048, 2160))
+    svc.root = FakeCtkRoot(
+        width=1200, height=150, x=880, y=1400, scale=2.0, screen=(2048, 2160), monitors=[PRIMARY_MONITOR]
+    )
     svc._default_window_height_px = 150
     svc._target_width_px = 1200
     svc._window_bottom_px = 1550
@@ -235,6 +255,9 @@ def test_drag_follows_pointer_while_window_is_resized():
     窗口内的相对位置随之改变；若按窗口回读位置续算，这段高度差会被当成拖动
     距离，每来一个鼠标事件窗口就被甩出一截，快速拖动时更明显（窗口管理器
     响应 geometry 有延迟，回读到的还是旧位置，同一段位移被反复累加）。
+
+    往下拖到底时位置被夹取接管（底边不得越过显示器下沿），横向位移与"没有把
+    高度变化算成拖动距离"这两件事仍必须成立。
     """
 
     class Event:
@@ -252,8 +275,11 @@ def test_drag_follows_pointer_while_window_is_resized():
     assert (svc.root.winfo_x(), svc.root.winfo_y()) == (624, 874)
     svc._on_move(Event(x_root=1040, y_root=1180))  # 指针右移 40、下移 50
     # 位置按拖动起点的窗口位置累加指针位移，中途的高度调整不参与计算
-    assert svc.root.winfo_x() == 624 + 40
-    assert svc.root.winfo_y() == 1080 + 50, "续拖把窗口高度变化当成了拖动距离"
+    assert svc.root.winfo_x() == 624 + 40, "横向位移被高度变化带偏"
+    # 下移 50 会让底边越过显示器下沿（874+306+50 > 1280），夹取把底边钉在下沿：
+    # 位移本身没有打折，折扣来自夹取
+    assert svc.root.winfo_y() == 1280 - 306, "续拖把窗口高度变化当成了拖动距离"
+    assert svc.root.winfo_y() + svc.root.winfo_height() == 1280
     assert svc._window_bottom_px == svc.root.winfo_y() + svc.root.winfo_height()
 
 
@@ -347,7 +373,9 @@ def test_configure_then_fit_sizes_window_and_draws_once():
 
     label = FakeLabel()
     svc = SubtitleGuiService(config={"window_width": 800, "window_height": 100, "window_offset_y": 100})
-    root = FakeRoot(label, width=800, height=100, x=624, y=900, scale=1.0, screen=(2048, 2160))
+    root = FakeRoot(
+        label, width=800, height=100, x=624, y=900, scale=1.0, screen=(2048, 2160), monitors=[PRIMARY_MONITOR]
+    )
     svc.root = root
     svc.text_label = label
     svc._default_window_height_px = 100
@@ -355,7 +383,6 @@ def test_configure_then_fit_sizes_window_and_draws_once():
     svc._window_bottom_px = 1180
 
     required = svc._configure_then_fit("新文本")
-
     assert label.display_text == "新文本", "文本要先换上再量高度"
     assert required == 159
     assert root.winfo_height() == 159, "窗口高度按算出的高度设置"
@@ -397,7 +424,9 @@ def test_retries_when_height_request_keeps_missing():
             callback()
 
     svc = SubtitleGuiService(config={"window_width": 800, "window_height": 100, "window_offset_y": 100})
-    svc.root = StubbornRoot(width=800, height=100, x=624, y=1080, scale=1.0, screen=(2048, 2160))
+    svc.root = StubbornRoot(
+        width=800, height=100, x=624, y=1080, scale=1.0, screen=(2048, 2160), monitors=[PRIMARY_MONITOR]
+    )
     svc._default_window_height_px = 100
     svc._target_width_px = 800
     svc._window_bottom_px = 1180
@@ -424,7 +453,7 @@ def test_startup_placement_leaves_user_position_alone():
 
 
 def test_height_adjust_keeps_window_on_screen():
-    """窗口被拖/漂到屏幕外时，高度调整必须把顶边拉回可见范围。
+    """窗口被拖/漂到屏幕外时，高度调整必须把窗口整条拉回显示器内。
 
     否则底边锚点会把窗口一直固定在屏幕外，用户再也抓不回来。
     """
@@ -434,13 +463,12 @@ def test_height_adjust_keeps_window_on_screen():
     svc._target_width_px = 800
     svc._window_bottom_px = 1600  # 锚点落在屏幕外（屏高 1280）
     svc._apply_window_height(100)
-    assert svc.root.winfo_y() < 1280, "窗口整条停在屏幕外，用户抓不回来"
-    # 夹取只保证顶边（抓取条）落在屏内，底边允许探出屏幕下沿
-    assert svc.root.winfo_y() <= 1280 - svc._min_visible_px()
+    assert svc.root.winfo_y() + svc.root.winfo_height() <= 1280, "窗口底边仍在屏幕外"
+    assert svc.root.winfo_y() >= 0
 
 
-def test_drag_past_screen_edge_keeps_a_grabbable_corner():
-    """拖到屏幕边缘时至少留下可抓取的一角，避免无边框窗口彻底丢失。"""
+def test_drag_past_screen_edge_keeps_window_whole_on_screen():
+    """拖到屏幕边缘时窗口必须整体留在显示器内，不得只露一角。"""
 
     class Event:
         def __init__(self, x_root, y_root):
@@ -452,12 +480,117 @@ def test_drag_past_screen_edge_keeps_a_grabbable_corner():
     svc._target_width_px = 800
     svc._start_move(Event(x_root=1000, y_root=1130))
     svc._on_move(Event(x_root=4000, y_root=4000))  # 指针拖到屏幕外
-    margin = svc._min_visible_px()
-    # 右探出屏幕时左侧仍留有可抓取的宽度
-    assert svc.root.winfo_x() + svc.root.winfo_width() >= margin
-    assert svc.root.winfo_x() <= 2048 - margin
+    # 右下角顶到显示器边界为止，窗口完整可见（旧的"一角可见"规则会让它只剩
+    # 45 像素在屏内，用户看到的就是"被拖到屏幕外面了"）
+    assert svc.root.winfo_x() + svc.root.winfo_width() <= 2048
+    assert svc.root.winfo_y() + svc.root.winfo_height() <= 1280
+    assert svc.root.winfo_x() == 2048 - 800
+    assert svc.root.winfo_y() == 1280 - 100
+
+
+class _DragEvent:
+    """最小拖动事件桩：夹取只看屏幕坐标。"""
+
+    def __init__(self, x_root: int, y_root: int) -> None:
+        self.x_root = x_root
+        self.y_root = y_root
+
+
+def _multi_monitor_service() -> SubtitleGuiService:
+    """主屏 2048x1280 + 右侧副屏 1920x1280 的服务实例（窗口初始在主屏右侧）。"""
+    svc = SubtitleGuiService(config={"window_width": 800, "window_height": 100, "window_offset_y": 100})
+    svc.root = FakeCtkRoot(
+        width=800,
+        height=100,
+        x=624,
+        y=1080,
+        scale=1.0,
+        screen=(3968, 1280),
+        monitors=[(0, 0, 2048, 1280), (2048, 0, 3968, 1280)],
+    )
+    svc._default_window_height_px = 100
+    svc._target_width_px = 800
+    svc._window_bottom_px = 1180
+    return svc
+
+
+def test_drag_crosses_into_second_monitor():
+    """窗口必须能被拖到第二台显示器上。
+
+    真实事故形态：夹取按"主屏右沿"算边界，指针还在主屏上时窗口就先顶住了，
+    再往右拖纹丝不动——副屏完全用不了。拖动只按指针位置选边界：指针落在副屏
+    上，窗口就可以整条停在副屏里。
+    """
+    svc = _multi_monitor_service()
+    svc._start_move(_DragEvent(x_root=1000, y_root=1130))
+    svc._on_move(_DragEvent(x_root=3000, y_root=1130))  # 指针在主屏右沿之外（副屏上）
+    assert svc.root.winfo_x() > 2048, "窗口被主屏边界挡住了，进不到副屏"
+    # 落点由"上一步目标 + 指针位移"算出，不被主屏右沿截断
+    assert svc.root.winfo_x() == 624 + 2000
+
+
+def test_drag_into_monitor_gap_falls_back_to_visible_area():
+    """显示器拼不成矩形时，拖进空洞的窗口必须被拉回到有显示器的区域。
+
+    主屏右下角与副屏之间的空洞没有任何显示器覆盖：夹取到空洞里窗口既看不见
+    也点不到，而无边框窗没有任务栏入口，等于丢失。
+    """
+    svc = _multi_monitor_service()
+    # 副屏画在主屏上方（上/右侧拼成 L 形），主屏右下的区域没有任何显示器
+    svc.root.monitors = [(0, 0, 2048, 1280), (2048, -900, 3968, 0)]
+    svc._start_move(_DragEvent(x_root=1000, y_root=1130))
+    svc._on_move(_DragEvent(x_root=2600, y_root=1900))  # 拖到主屏右下方的空洞
+    x, y = svc.root.winfo_x(), svc.root.winfo_y()
+    w, h = svc.root.winfo_width(), svc.root.winfo_height()
+    fully_on_monitor = any(
+        left <= x and y >= top and x + w <= right and y + h <= bottom for left, top, right, bottom in svc.root.monitors
+    )
+    assert fully_on_monitor, f"窗口没有完整落在任何一台显示器上: ({x},{y})"
+
+
+def test_clamp_picks_monitor_under_pointer():
+    """夹取按指针所在显示器算边界，而不是按落点——否则窗口会在显示器间跳。"""
+    svc = _multi_monitor_service()
+    # 指针在副屏、落点却已越过副屏右沿：应按副屏夹取（整窗停在副屏右沿），
+    # 而不是按落点判定后弹回主屏
+    svc._pointer_pos = (2500, 600)
+    x, y = svc._clamp_position(5000, 600)
+    assert x == 3968 - svc.root.winfo_width(), "窗口没被夹在指针所在的副屏上"
+    assert y == 600
+
+
+def test_shrinking_subtitle_pulls_window_back_inside():
+    """字幕变少导致窗口缩短时，不得把窗口顶到屏幕外。
+
+    真实事故形态：窗口被停在显示器下沿之外（显示器布局变过、或用户拖到边界
+    附近），底边锚点落在屏外；字幕变少后窗口从底边向上缩短，顶边——也就是唯一
+    还看得见的部分——跟着往下走，窗口彻底滑出屏幕。锚点越界时先收回显示器内
+    再改高度，缩短只会把窗口往屏内收。
+    """
+    svc = _multi_monitor_service()
+    svc.root._y = 1250  # 窗口停在显示器下沿之外（下沿 1280，高 100）
+    svc._window_bottom_px = 1350
+    svc._apply_window_height(0)  # 字幕变少，回落到默认高度
+    assert svc.root.winfo_y() + svc.root.winfo_height() <= 1280, "窗口被推出屏幕外"
     assert svc.root.winfo_y() >= 0
-    assert svc.root.winfo_y() <= 1280 - margin
+    assert svc._window_bottom_px <= 1280, "底边锚点仍停在屏外，下一次缩短还会把窗口带走"
+
+
+def test_growing_subtitle_keeps_bottom_on_screen():
+    """窗口拖到显示器下沿后字幕变长，必须向上长而不是把底边顶出屏外。
+
+    真实事故形态：窗口按"底边锚定"放在下沿，内容变高时顶边按锚点算出屏外，
+    窗口就有半截露在屏幕下面，看起来就是"卡在外面了"。底边锚点不越过下沿是
+    硬约束，长高的部分由顶边上移承担。
+    """
+    svc = _multi_monitor_service()
+    svc._start_move(_DragEvent(x_root=1000, y_root=1130))
+    svc._on_move(_DragEvent(x_root=1500, y_root=2000))  # 往下拖到底
+    assert svc.root.winfo_y() + svc.root.winfo_height() == 1280, "前提：底边被夹在下沿"
+    svc._apply_window_height(400)  # 多行字幕
+    assert svc.root.winfo_y() == 1280 - 400, "长高的部分没有由顶边上移承担"
+    assert svc.root.winfo_y() >= 0, "窗口顶边跑到屏幕外"
+    assert svc.root.winfo_y() + svc.root.winfo_height() == 1280
 
 
 class FakeLabelForAutoHide:
@@ -529,7 +662,9 @@ def test_auto_hide_does_not_shrink_window_while_updating_text():
             "fade_delay_ms": 5000,
         }
     )
-    root = FakeRootWithUpdate(width=800, height=100, x=624, y=1080, scale=1.0, screen=(2048, 2160))
+    root = FakeRootWithUpdate(
+        width=800, height=100, x=624, y=1080, scale=1.0, screen=(2048, 2160), monitors=[PRIMARY_MONITOR]
+    )
     svc.root = root
     label = FakeLabelForAutoHide()
     svc.text_label = label
