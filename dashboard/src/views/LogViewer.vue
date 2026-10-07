@@ -411,7 +411,7 @@ onUnmounted(() => {
 }
 
 .level-dot.level-critical {
-  background-color: #9c27b0;
+  background-color: var(--color-critical);
 }
 
 .level-count {
@@ -518,7 +518,7 @@ onUnmounted(() => {
 }
 
 .log-row.log-level-critical {
-  background-color: rgba(156, 39, 176, 0.1);
+  background-color: var(--color-critical-bg);
 }
 
 .log-row:hover {
@@ -555,8 +555,8 @@ onUnmounted(() => {
 }
 
 .log-level.level-warning {
-  background-color: rgba(230, 162, 60, 0.2);
-  color: #e6a23c;
+  background-color: var(--color-warning-bg);
+  color: var(--color-warning);
 }
 
 .log-level.level-error {
@@ -565,8 +565,8 @@ onUnmounted(() => {
 }
 
 .log-level.level-critical {
-  background-color: rgba(156, 39, 176, 0.2);
-  color: #9c27b0;
+  background-color: var(--color-critical-bg);
+  color: var(--color-critical);
 }
 
 .log-module {

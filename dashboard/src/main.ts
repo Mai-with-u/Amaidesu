@@ -3,6 +3,8 @@ import { createPinia } from 'pinia';
 import ElementPlus from 'element-plus';
 import zhCN from 'element-plus/es/locale/lang/zh-cn';
 import 'element-plus/dist/index.css';
+// Element Plus 暗色变量挂在 html.dark 上；项目色板在 variables.css 里再覆盖一层，两套组件同色
+import 'element-plus/theme-chalk/dark/css-vars.css';
 
 import App from './App.vue';
 import router from './router';

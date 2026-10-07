@@ -25,24 +25,35 @@ body {
   height: 100%;
 }
 
-/* 滚动条样式 */
+/* 深色下原生控件（滚动条、日期选择、复选框）跟着变暗；写在 body 而非 html 上，
+   OBS 小部件页的透明画布不受影响 */
+[data-theme='dark'] body {
+  color-scheme: dark;
+}
+
+/* 滚动条：轨道透明，滑块用透明边框内缩成细条，悬停加深 */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-elevated);
-  border-radius: 4px;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--border-color-dark);
-  border-radius: 4px;
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
+  background-color: var(--text-secondary);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* 选中文本样式 */

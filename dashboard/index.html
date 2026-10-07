@@ -5,6 +5,28 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Amaidesu Dashboard</title>
+    <script>
+      // 首帧前定主题：Vue 挂载前就把 data-theme 与 Element Plus 的 dark 类写到 <html>，
+      // 避免深色用户刷新时先闪一帧白底。取值规则与 stores/theme.ts 一致：
+      // 用户手动选过就用存档，没选过跟随系统。
+      (function () {
+        var stored = null;
+        try {
+          stored = localStorage.getItem('theme');
+        } catch (e) {
+          stored = null;
+        }
+        var theme =
+          stored === 'light' || stored === 'dark'
+            ? stored
+            : window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+        var root = document.documentElement;
+        root.setAttribute('data-theme', theme);
+        root.classList.toggle('dark', theme === 'dark');
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>
