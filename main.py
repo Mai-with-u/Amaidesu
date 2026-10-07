@@ -71,6 +71,7 @@ from src.modules.tools.tasks import resolve_tasks_config
 from src.modules.tools.bootstrap import bind_core_tools
 from src.modules.vision.look_at_screen import LookAtScreenProvider, LlmVisionTextReader
 from src.modules.vision.mss_capture import MssScreenCapture
+from src.modules.windows_dpi import setup_process_dpi_awareness
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1300,6 +1301,9 @@ async def main() -> None:
     """应用程序主入口。"""
     args = parse_args()
     setup_logging_early(args)
+    # 须在任何窗口创建前声明 DPI 感知：Tk 只在第一个窗口创建时设置一次，
+    # 之前若已被别的组件定成别的口径，多显示器坐标就会与系统枚举分叉
+    setup_process_dpi_awareness()
 
     config_service, config, was_created = load_config()
     logging_config = config_service.get_section("logging", default={})
