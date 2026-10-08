@@ -110,7 +110,7 @@ async def test_failed_reply_is_not_recorded() -> None:
 async def test_intents_keep_only_configured_count() -> None:
     """只回看配置的轮数，最早的先出列。"""
     planner = _planner(
-        [_reply_call(f"话题{i}", "") for i in range(3)],
+        [_reply_call(t, "") for t in ("今天天气不错", "水车修好了", "晚饭想吃火锅")],
         config={"planner_recent_intents_max": 2},
     )
 
@@ -118,7 +118,7 @@ async def test_intents_keep_only_configured_count() -> None:
         await planner.plan([], proactive=True)
     text = await _reference(planner)
 
-    assert "话题0" not in text and "话题1" in text and "话题2" in text
+    assert "今天天气不错" not in text and "水车修好了" in text and "晚饭想吃火锅" in text
 
 
 @pytest.mark.asyncio
@@ -213,7 +213,6 @@ async def test_intent_outside_delegation_window_is_not_superseded() -> None:
     assert all("已被游戏回执覆盖" not in line for line in section)
     assert "话题：和观众打了个招呼" in section[0]
     assert "话题：包里攒了 19 块圆石" in section[1]
-
 
 
 @pytest.mark.asyncio

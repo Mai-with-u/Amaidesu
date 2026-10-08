@@ -44,6 +44,7 @@ from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
+from src.agents.streamer.topic_gate import check_topic, rejection_reason
 from src.modules.llm.history_compaction import HistoryCompactor
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
@@ -82,11 +83,16 @@ class _Delegation:
 
 @dataclass(frozen=True)
 class _Intent:
-    """一轮已说出口的打算：何时说的、围绕什么话题、给表达侧的指引。"""
+    """一轮已说出口的打算：何时说的、围绕什么话题、给表达侧的指引、说出的台词。
+
+    台词一并保留：重复闸（topic_gate）需要拿"说出口的原话"与新话题做
+    字面重叠检测——指引只是给表达侧的方向，最终落在观众耳朵里的是台词。
+    """
 
     at_ms: int
     topic_summary: str
     reply_guidance: str
+    speech: str = ""
 
 
 @dataclass(frozen=True)
@@ -397,6 +403,7 @@ class Planner:
             - reply_payload: reply 工具完整结果（发言管线消费）
             - reply_duration_ms: reply 工具调用累计耗时（毫秒；未调用为 0）
             - reply_failures: reply 工具失败次数（成功轮为 0）
+            - topic_gate_retries: 重复闸打回 reply 的次数（本轮内累计）
         """
         self.last_raw_content = ""
         self.last_request_id = None
@@ -419,6 +426,7 @@ class Planner:
             "reply_payload": None,
             "reply_duration_ms": 0,
             "reply_failures": 0,
+            "topic_gate_retries": 0,
         }
 
         system_prompt = self._render_system_prompt()
@@ -456,6 +464,12 @@ class Planner:
         source_dialogue = [
             message for message in self._build_dialogue_messages(batch, []) if message.get("role") == "user"
         ]
+        # 重复闸的新实体豁免语料：本窗弹幕原话 + 本窗新到的游戏聊天 + 游戏叙事。
+        # 叙事里的旧条目无害：真被说过的词已在最近发言语料里，不会被豁免判成"新"
+        fresh_texts = [str(message.get("content") or "") for message in source_dialogue]
+        fresh_texts.extend(fresh_game_chat or [])
+        if game_narrative:
+            fresh_texts.append(game_narrative)
         # 流程单推进、冷场、定时这类主动窗没有观众、运营或游戏聊天的新输入：此时再给手上的游戏活
         # 补充要求，只会把游戏侧自己汇报过的进展或我的猜测转述回去，变成过时或互相矛盾的指令。
         # 游戏聊天只认本窗新到的：全文里还留着已经看过的旧聊天，拿全文判断会让几分钟前的
@@ -549,6 +563,7 @@ class Planner:
                         thinking=thinking,
                         round_id=round_id,
                         game_chat=fresh_game_chat,
+                        fresh_texts=fresh_texts,
                     )
                 else:
                     observation = await self._invoke_registry_tool(
@@ -784,6 +799,7 @@ class Planner:
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
         game_chat: Optional[List[str]] = None,
+        fresh_texts: Optional[List[str]] = None,
     ) -> tuple[str, bool]:
         """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出写进 outcome 并返回 (观察, replied=True)。
 
@@ -791,7 +807,20 @@ class Planner:
         熔断复用既有机制，tool.result 事件照发）。thinking 回调槽位机制保留：
         调用前把 replyer 阶段回调设到 Provider 的临时槽位，调用后立即清理
         （一次性语义，防跨轮残留）——槽位挂在 Provider 实例上，不经注册表。
+        产出侧重复闸：新话题与最近发言字面大面积重合、又没有本窗新词背书时，
+        当工具错误打回（首次给改题机会，再次拒绝并引导本轮沉默）。
         """
+        verdict = check_topic(
+            str(args.get("topic_summary") or ""),
+            recent_topics=[intent.topic_summary for intent in self._recent_intents],
+            recent_speeches=[intent.speech for intent in self._recent_intents],
+            fresh_texts=fresh_texts or [],
+        )
+        if not verdict.allowed:
+            attempt = int(outcome.get("topic_gate_retries") or 0)
+            outcome["topic_gate_retries"] = attempt + 1
+            self.logger.info(f"重复闸打回 reply（第 {attempt + 1} 次）：{args.get('topic_summary')!r}")
+            return json.dumps({"ok": False, "error": rejection_reason(attempt >= 1)}, ensure_ascii=False), False
         if self._tool_registry is None:
             outcome["reply_failures"] += 1
             return json.dumps(
@@ -850,7 +879,12 @@ class Planner:
         outcome["reply_to"] = reply_to if isinstance(reply_to, str) and reply_to else None
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
         self._recent_intents.append(
-            _Intent(at_ms=now_ms(), topic_summary=outcome["topic_summary"], reply_guidance=outcome["reply_guidance"])
+            _Intent(
+                at_ms=now_ms(),
+                topic_summary=outcome["topic_summary"],
+                reply_guidance=outcome["reply_guidance"],
+                speech=str(payload.get("speech") or ""),
+            )
         )
 
         self.logger.info(f"Planner ReAct 收尾：reply 成功 (target={outcome['target']!r}, steps={outcome['steps']})")
