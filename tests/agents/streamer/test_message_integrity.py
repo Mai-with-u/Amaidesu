@@ -14,7 +14,9 @@ def _make_planner() -> Planner:
     """构造只组装上下文的决策器，测试不访问外部模型。"""
     return Planner(
         config={"planner_max_steps": 2},
-        llm_service=MagicMock(),
+        # 显式声明无预算：MagicMock 的 get_history_token_budget 返回值会被 int() 成 1，
+        # 意外触发历史压缩、破坏本文件"全量保序"契约
+        llm_service=MagicMock(get_history_token_budget=lambda profile: 0),
         prompt_service=MagicMock(),
         room_state=RoomState(),
         tool_registry=MagicMock(),

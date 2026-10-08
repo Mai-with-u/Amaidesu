@@ -22,6 +22,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.modules.llm.history_compaction import HistoryCompactor
 from src.modules.logging import get_logger
 from src.modules.types.emotion_vocab import Emotion
 
@@ -96,6 +97,9 @@ class Replyer:
         self._audience_salutation: str = self._config.get("audience_salutation", _DEFAULT_AUDIENCE_SALUTATION)
 
         self._llm_service = llm_service
+        # 对话历史 token 预算压缩器：预算来自 profile 配置（history_token_budget），
+        # 与 Planner 同一机制；预算查询失败退化为不压缩，不影响表达链
+        self._history_compactor = HistoryCompactor()
         self._prompt_service = prompt_service
         self._tool_registry = tool_registry
         self._word_filter = word_filter
@@ -156,6 +160,7 @@ class Replyer:
         history_messages = [
             canonical.turn_to_message(msg) for msg in canonical.trim_batch_echo(list(history or []), batch)
         ]
+        history_messages = self._compact_history(history_messages)
         messages: List[Dict[str, Any]] = [*history_messages, {"role": "user", "content": turn_input}]
 
         # reply 是唯一工具——表达引擎不持有任何信息/动作类工具列表
@@ -224,6 +229,20 @@ class Replyer:
         return result
 
     # ==================== prompt 渲染（人设注入核心） ====================
+
+    def _compact_history(self, history_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """按 profile 配置的历史 token 预算压缩对话历史（与 Planner 同一机制）。
+
+        预算查询失败按无预算处理；未超预算时压缩器原样返回入参，零开销。
+        """
+        budget = 0
+        getter = getattr(self._llm_service, "get_history_token_budget", None)
+        if callable(getter):
+            try:
+                budget = int(getter(REPLYER_PROFILE) or 0)
+            except Exception as exc:  # noqa: BLE001 - 预算查询失败退化为不压缩
+                self.logger.warning(f"读取历史 token 预算失败（本轮不压缩）: {exc}")
+        return self._history_compactor.compact(history_messages, budget, profile_name=REPLYER_PROFILE)
 
     def _render_system_prompt(self) -> str:
         """渲染 system 提示词（全程稳定段）。

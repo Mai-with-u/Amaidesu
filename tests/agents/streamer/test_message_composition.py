@@ -48,6 +48,9 @@ def _make_planner() -> tuple[Planner, MagicMock, List[List[dict]]]:
     （planner 原地追加消息，必须复制）。"""
     captured: List[List[dict]] = []
     llm = MagicMock()
+    # 显式声明无预算：MagicMock 的 get_history_token_budget 返回值会被 int() 成 1，
+    # 意外触发历史压缩、破坏跨窗字节稳定契约
+    llm.get_history_token_budget = MagicMock(return_value=0)
 
     async def _generate(
         messages: List[dict], *, tools: Any = None, profile: str = "", on_delta: Any = None
@@ -149,6 +152,7 @@ async def test_react_messages_appended_after_reference() -> None:
         return responses.pop(0)
 
     llm = MagicMock()
+    llm.get_history_token_budget = MagicMock(return_value=0)
     llm.generate = AsyncMock(side_effect=_generate)
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="SYSTEM")
