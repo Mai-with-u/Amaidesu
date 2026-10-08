@@ -26,6 +26,7 @@ import hashlib
 import json
 import uuid
 from collections import deque
+from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
@@ -39,6 +40,7 @@ from src.agents.minecraft.glance import SURROUNDINGS_SECTIONS, glance_situation,
 from src.agents.minecraft.observations import MinecraftObservations, json_text, repeated_read
 from src.agents.minecraft.observation_context import project_context
 from src.agents.minecraft.plan_facts import MinecraftPlanFacts
+from src.agents.minecraft.polling_gate import FailureBackoffGate, NoProgressGate, default_clock_ms
 from src.agents.minecraft.readback import is_reference, read_receipt
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.task_facts import decision_facts, machine_facts, task_decision
@@ -89,6 +91,14 @@ _MAX_BATCH_BODY_EVENTS = 5
 # 游戏内动作连续失败到第 3 次时把卡点讲给主播，之后每再失败 5 次补报一次（只叙事，不打断任务）
 _FAILURE_STREAK_NOTICE = 3
 _FAILURE_STREAK_REPEAT = 5
+
+# 失败唤醒退避：连续失败第 1/2 次推迟唤醒（30s/60s），第 3 次立即升级为 LLM 决策，
+# 升级后仍按 120s 封顶节流——实证里失败事件一到就触发完整推理（间隔 1-2 秒）是最大忙等源
+_FAILURE_WAKE_DELAYS_MS = (30_000, 60_000, 120_000)
+_FAILURE_WAKE_ESCALATE_AFTER = 3
+
+# 无进展决策合并闸：窗口内的再次"只重复读取"直接并入 minecraft_wait，不再发起推理
+_NO_PROGRESS_WINDOW_MS = 60_000
 
 # 角色按目标理解口语并推进施工；常驻提示只保留决策与访问边界，部件细节按需从 Mod 资料读取。
 _GAMEPLAY_RULES = (
@@ -196,6 +206,7 @@ class MinecraftAgent(BaseAgent):
         thinking_sink: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
         skill_library: Optional[SkillLibrary] = None,
+        clock: Optional[Callable[[], int]] = None,
     ) -> None:
         """初始化 Minecraft Agent。
 
@@ -213,6 +224,8 @@ class MinecraftAgent(BaseAgent):
                 本 Agent（on_task_notification 注入消息）。
             skill_library: 技能库（玩法经验文档）。注入时系统提示词附技能目录，
                 并提供 ``minecraft_skill`` 按名读取正文；``None`` 时两者都不出现。
+            clock: 毫秒时钟（返回 int）。仅用于忙等治理闸的时间差比较；
+                缺省单调时钟，测试注入假时钟做确定性推进。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -258,6 +271,15 @@ class MinecraftAgent(BaseAgent):
         self._recent_results: Deque[Dict[str, Any]] = deque(maxlen=6)
         self._plan_facts = MinecraftPlanFacts()
         self._task_notice_fingerprints: Dict[str, str] = {}
+        # 忙等治理闸：失败唤醒退避（实证：failed 事件一到就触发完整推理是最大忙等源）
+        # 与无进展决策合并（实证：连续调用间隔 1-2 秒、completion 只有"等待结果"几十 token）
+        self._clock: Callable[[], int] = clock if clock is not None else default_clock_ms
+        self._failure_gate = FailureBackoffGate(
+            delays_ms=_FAILURE_WAKE_DELAYS_MS, escalate_after=_FAILURE_WAKE_ESCALATE_AFTER
+        )
+        self._no_progress_gate = NoProgressGate(window_ms=_NO_PROGRESS_WINDOW_MS)
+        # 退避期的失败唤醒定时任务（task_id → 定时器）；到点注入攒下的失败事实
+        self._failure_wake_timers: Dict[str, asyncio.Task[None]] = {}
         # 累计推理次数供恢复任务时观察进展，持续施工不会因次数达到固定值而中断。
         self._task_steps = 0
         # 游戏内动作连续失败计数（成功即清零、新指令清零）：卡在同一步时把卡点讲给主播，
@@ -532,6 +554,12 @@ class MinecraftAgent(BaseAgent):
             with suppress(asyncio.CancelledError):
                 await self._idle_compaction
             self._idle_compaction = None
+        # 退避中的失败唤醒随停机取消，重启后由下一次真实事件重新判断
+        for timer in self._failure_wake_timers.values():
+            timer.cancel()
+        self._failure_wake_timers.clear()
+        self._failure_gate.reset()
+        self._no_progress_gate.reset()
         if self._worker_task is not None:
             self._worker_task.cancel()
             try:
@@ -792,6 +820,11 @@ class MinecraftAgent(BaseAgent):
                     self._task_steps = 0
                     # 主播给了新指令就换了方向，之前的失败连击不再代表"卡在同一步"
                     self._failure_streak = 0
+                    # 忙等治理账目同作废：旧方向攒的失败退避与无进展窗口不属于新方向
+                    self._failure_gate.reset()
+                    self._no_progress_gate.reset()
+                    for stale_task_id in list(self._failure_wake_timers):
+                        self._cancel_failure_wake(stale_task_id)
                     self._design_progress.reset()
                 if _tid:
                     self._delegated_batch_ids.append(_tid)
@@ -958,12 +991,21 @@ class MinecraftAgent(BaseAgent):
             self._wait_requested = False
             # 工具被调用不等于游戏目标得到推进；整轮只重读旧证据时沿用同一次提醒，而不是重新计为行动。
             if only_repeated_reads and not self._message_queue:
+                # 框架闸：窗口内的重复无进展决策直接并入等待，不再发起推理
+                # （提示词约束不住模型轮询时由这里兜底；有可等的后台任务才合并，否则照旧提醒/挂起）
+                now_ms = self._clock()
+                if self._no_progress_gate.in_window(now_ms) and self._request_wait()["ok"]:
+                    self._logger.info("重复无进展决策已并入 minecraft_wait，让出等真实事件唤醒")
+                    self._schedule_idle_compaction(messages, tool_defs)
+                    return
                 if not await self._continue_after_no_progress(
                     messages, action_reminded, "本轮重复读取已有资料或未变化的任务回执，没有取得新证据"
                 ):
                     return
+                self._no_progress_gate.mark(now_ms)
                 action_reminded = True
             elif not only_repeated_reads:
+                self._no_progress_gate.reset()
                 action_reminded = False
 
     async def _continue_after_no_progress(self, messages: List[Dict[str, Any]], reminded: bool, reason: str) -> bool:
@@ -1476,6 +1518,10 @@ class MinecraftAgent(BaseAgent):
             # 设计子任务另有完成通知；这里只数身体真正去做的游戏内动作
             if payload.executor != "minecraft_builder":
                 self._note_task_outcome(payload)
+        # 任务回到非失败状态即清失败账并撤掉退避定时器（恢复/成功不欠一次"再等等"）。
+        if payload.status not in {"failed", "timeout"} or getattr(payload, "alert", False):
+            self._failure_gate.recover(payload.task_id)
+            self._cancel_failure_wake(payload.task_id)
         # 受理转运行和普通进度由宿主记账，只有决策点、终态或停滞告警才需要模型判断。
         if payload.status in {"accepted", "running"} and not payload.alert:
             return
@@ -1505,6 +1551,10 @@ class MinecraftAgent(BaseAgent):
                 )
             return
         hint = "（已有核实快照请直接使用；waiting_for_decision 用任务查询工具 answer 应答；终态沿原目标推进下一待办，缺少具体证据才补查）"
+        if payload.status in {"failed", "timeout"} and not getattr(payload, "alert", False):
+            # 失败唤醒退避（框架强制，实证里失败事件一到就触发完整推理是最大忙等源）
+            self._gate_failure_wakeup(payload, snapshot_text, hint)
+            return
         if getattr(payload, "alert", False):
             content = f"[系统] 后台任务 {payload.task_id} 停滞告警：{payload.summary}{snapshot_text}。请核查该任务。"
         else:
@@ -1517,6 +1567,72 @@ class MinecraftAgent(BaseAgent):
         """系统消息入队 + 唤醒 worker（非委派来源，任务号空串）。"""
         self._message_queue.append(("", content))
         self._wake_event.set()
+
+    def _gate_failure_wakeup(self, payload: TaskChangedPayload, snapshot_text: str, hint: str) -> None:
+        """失败/超时对决策唤醒的退避：阈值前推迟注入攒事实，达到阈值立即升级交模型。
+
+        退避期的失败事实（原因、连续次数、快照）先攒在闸上，到期一并注入——
+        唤醒上下文自带"为什么被醒来 + 失败事实"，模型不必重新感知一遍。
+        升级后的继续失败仍按封顶间隔节流，防止"重试→再失败"缩回秒级循环。
+        """
+        count_before = self._failure_gate.failure_count(payload.task_id)
+        delay_ms, count = self._failure_gate.on_failure(
+            payload.task_id, (payload.summary or "").strip() or payload.status
+        )
+        facts = "；".join(self._failure_gate.facts(payload.task_id))
+        if delay_ms > 0:
+            content = (
+                f"[系统] 后台任务 {payload.task_id} 状态变化：{payload.status}{snapshot_text}{hint}"
+                f"（这是第 {count} 次失败，宿主已退避 {delay_ms // 1000} 秒后才唤醒你；"
+                f"醒来前请勿发起任何调用空转等待。近期失败：{facts}）"
+            )
+            self._failure_gate.store_wakeup(payload.task_id, content)
+            self._schedule_failure_wake(payload.task_id, delay_ms)
+            self._logger.info(f"任务失败唤醒已退避（task_id={payload.task_id}, 第{count}次, {delay_ms}ms 后再交模型）")
+            return
+        if count_before == 0:
+            # 闸上无账却走到立即升级：保留原有即时注入语义，不附加失败叙事
+            content = f"[系统] 后台任务 {payload.task_id} 状态变化：{payload.status}{snapshot_text}{hint}"
+        else:
+            content = (
+                f"[系统] 后台任务 {payload.task_id} 状态变化：{payload.status}{snapshot_text}{hint}"
+                f"（已连续失败 {count} 次：{facts}。请基于这些失败事实换实质不同的方案，"
+                "或用 minecraft_report(kind=escalation) 上报，不要原样重试后干等）"
+            )
+        self._inject_wakeup_message(content)
+        self._logger.info(f"任务连续失败升级唤醒（task_id={payload.task_id}, 连续{count}次）")
+
+    def _schedule_failure_wake(self, task_id: str, delay_ms: int) -> None:
+        """退避到期注入攒下的失败事实；同一任务的旧定时器先撤再排。"""
+        self._cancel_failure_wake_timer(task_id)
+        self._failure_wake_timers[task_id] = asyncio.create_task(self._deferred_failure_wake(task_id, delay_ms / 1000))
+
+    async def _deferred_failure_wake(self, task_id: str, delay_seconds: float) -> None:
+        """退避到期后注入暂存的失败唤醒；期间任务恢复则暂存已被取走，到点即空操作。"""
+        try:
+            await asyncio.sleep(delay_seconds)
+        except asyncio.CancelledError:
+            return
+        self._failure_wake_timers.pop(task_id, None)
+        self._flush_deferred_failure(task_id)
+
+    def _flush_deferred_failure(self, task_id: str) -> None:
+        """注入退避期攒下的失败唤醒（测试可直接调用，配合注入时钟确定性推进）。"""
+        content = self._failure_gate.take_wakeup(task_id)
+        if content is None:
+            return
+        self._inject_wakeup_message(content)
+
+    def _cancel_failure_wake_timer(self, task_id: str) -> None:
+        """撤掉退避定时器（不动闸上暂存的内容）。"""
+        timer = self._failure_wake_timers.pop(task_id, None)
+        if timer is not None and not timer.done():
+            timer.cancel()
+
+    def _cancel_failure_wake(self, task_id: str) -> None:
+        """任务不再处于失败等待：撤定时器并丢弃暂存的失败唤醒。"""
+        self._cancel_failure_wake_timer(task_id)
+        self._failure_gate.take_wakeup(task_id)
 
     def _note_task_outcome(self, payload: TaskChangedPayload) -> None:
         """游戏内动作成败计数：连续失败到第 3 次时告诉主播卡在哪，之后每再失败 5 次补报一次。
