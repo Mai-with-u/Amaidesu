@@ -114,6 +114,18 @@ class TestRoomStateTopicSummary:
         assert snap.topic_summary == "观众在聊游戏"
         assert snap.topic_summary_at_ms == 1_000
 
+    def test_consume_topic_summary_marks_read(self) -> None:
+        """决策面取走摘要即清空：同一段摘要在多轮请求里不重复注入，直到后台写入新摘要。"""
+        rs = RoomState()
+        rs.set_topic_summary("观众向主播问好并表达惊喜", now_ms=1_000)
+
+        assert rs.consume_topic_summary() == "观众向主播问好并表达惊喜"
+        consumed_again = rs.consume_topic_summary()
+        assert consumed_again == ""
+        snap = rs.get_snapshot(now_ms=2_000)
+        assert snap.topic_summary == ""
+        assert snap.topic_summary_at_ms == 0
+
 
 class TestRoomStateAudienceTotal:
     """audience_total 字段（room.state.watched_count 状态推送驱动）。"""

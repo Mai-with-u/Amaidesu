@@ -240,6 +240,21 @@ class RoomState:
         self._topic_summary = summary
         self._topic_summary_at_ms = ts
 
+    def consume_topic_summary(self) -> str:
+        """取出并清空当前话题摘要(决策面消费语义:读过即已读,不重复注入)
+
+        摘要被一次决策窗取走后即清空;后台摘要循环只在有新弹幕时才生成新摘要,
+        因此同一段"观众问好并表达惊喜"不会在多轮请求里反复出现。需要整体快照
+        (只读、不清空)时用 ``get_snapshot``。
+
+        Returns:
+            当前摘要文本(取走后为空,直到后台写入新摘要)
+        """
+        summary = self._topic_summary
+        self._topic_summary = ""
+        self._topic_summary_at_ms = 0
+        return summary
+
     # ------------------------------------------------------------------
     # 观众规模(状态推送驱动)
     # ------------------------------------------------------------------

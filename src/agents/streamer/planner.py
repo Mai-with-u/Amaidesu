@@ -652,7 +652,6 @@ class Planner:
             # 裸消息路径：跳过环境快照与记忆召回，仅保留情境标注与叙事
             return situation_text
 
-        snapshot = self._room_state.get_snapshot()
         duration_so_far_ms = 0
         if self._elapsed_live_provider is not None:
             try:
@@ -660,12 +659,15 @@ class Planner:
             except Exception as exc:
                 self.logger.warning(f"读取开播时长失败（按 0 处理，快照省略该行）: {exc}")
         # RoomState.topics 是字符级词频（落库统计口径），单字进 prompt 是噪声，
-        # 话题信息由 unread_summary（LLM 摘要）承载
+        # 话题信息由 unread_summary（LLM 摘要）承载。
+        # 未读摘要消费语义：本决策窗取走即清空，后台只在有新弹幕时才生成新摘要，
+        # 同一段摘要在多轮请求里反复出现会诱导主播重复播报同一件事；
+        # 快照的热度/词频等记账面字段由 background 自行读取，决策面不再整快照
         env_block = EnvironmentBlock(
             minute_bucket_ms=(current_ms // 60000) * 60000,
             duration_so_far_ms=duration_so_far_ms,
             current_stage_label=None,
-            unread_summary=getattr(snapshot, "topic_summary", "") or "",
+            unread_summary=self._room_state.consume_topic_summary(),
             key_changes=[],
         )
 

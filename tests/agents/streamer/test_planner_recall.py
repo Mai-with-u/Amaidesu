@@ -125,6 +125,23 @@ async def test_zero_intents_disables_section() -> None:
     assert "【我最近几轮想说的】" not in await _reference(planner)
 
 
+@pytest.mark.asyncio
+async def test_unread_summary_consumed_once() -> None:
+    """未读摘要被一个决策窗取走后不再重复注入，直到后台写入新摘要。
+
+    实测"观众向主播问好并表达惊喜"在多轮请求里反复出现，诱导主播重复播报同一件事。
+    """
+    room_state = RoomState()
+    room_state.set_topic_summary("观众向主播问好并表达惊喜")
+    planner = Planner({}, MagicMock(), MagicMock(), room_state, context_enabled=True)
+
+    first = await planner._assemble_reference([], None, None, False, False, "")
+    second = await planner._assemble_reference([], None, None, False, False, "")
+
+    assert "未读摘要: 观众向主播问好并表达惊喜" in first
+    assert "未读摘要" not in second
+
+
 def _relay_planner(result: ToolExecutionResult) -> tuple[Planner, MagicMock]:
     registry = MagicMock()
     registry.invoke = AsyncMock(return_value=result)
