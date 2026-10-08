@@ -64,8 +64,10 @@
         />
       </template>
 
-      <!-- 定长数值元组：一行并排数字输入（如截图区域 [x, y, w, h]），替代逐项添加的通用数组编辑器 -->
-      <template v-if="field.widget === 'fixed-tuple'">
+      <!-- 定长数值元组：一行并排数字输入（如截图区域 [x, y, w, h]），替代逐项添加的通用数组编辑器。
+           widget 优先于 type（挂在同一条 v-if 链上）——脱链的 v-if 会让元组字段同时渲染
+           type 控件与元组控件两套输入，且都绑 localValue，一处编辑另一处同步 -->
+      <template v-else-if="field.widget === 'fixed-tuple'">
         <div class="fixed-tuple" :disabled="field.readonly">
           <el-input-number
             v-for="(_, i) in tupleLength"
