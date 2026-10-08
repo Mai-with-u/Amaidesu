@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from src.modules.config.model_schemas import LLMProfilesConfig
+from src.modules.config.model_schemas import DEFAULT_HISTORY_TOKEN_BUDGET, LLMProfilesConfig
 from src.modules.llm.clients import get_client_impl
 from src.modules.logging import get_logger
 
@@ -94,6 +94,8 @@ class _ResolvedProfile(BaseModel):
     seed: int  # random 策略用；0 表示不固定
     temperature: float = 0.3
     reasoning_effort: str = ""
+    # 对话历史 token 预算（0 = 不启用压缩）；消费方经引擎的查询接口读取
+    history_token_budget: int = 0
     models: List[_ResolvedModel] = Field(default_factory=list)
 
     model_config = {"frozen": True}
@@ -195,6 +197,7 @@ def build_resolved_profile(
         seed=seed,
         temperature=pcfg.get("temperature", 0.3),
         reasoning_effort=pcfg.get("reasoning_effort", "") or "",
+        history_token_budget=int(pcfg.get("history_token_budget", DEFAULT_HISTORY_TOKEN_BUDGET) or 0),
         models=resolved_models,
     )
 

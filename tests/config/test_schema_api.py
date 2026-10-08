@@ -147,6 +147,7 @@ class TestSixRootSchemas:
             "selection_strategy",
             "slow_threshold_ms",
             "temperature",
+            "history_token_budget",
         } <= field_names
         assert "provider" not in field_names
         assert "model" not in field_names

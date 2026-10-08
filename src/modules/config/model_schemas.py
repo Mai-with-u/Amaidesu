@@ -182,6 +182,10 @@ class LLMSelectionStrategy(BaseConfig):
     seed: int = Field(default=0, title="随机种子", description="random 策略的可选 seed（0=不固定）")
 
 
+#: 对话历史 token 预算的 schema 缺省值（装配层 bootstrap 与本值共用，避免双处漂移）
+DEFAULT_HISTORY_TOKEN_BUDGET = 8_000
+
+
 class LLMProfileConfig(BaseConfig):
     """LLM 用途 profile（``[llm_profiles.<name>]`` 段）
 
@@ -191,6 +195,7 @@ class LLMProfileConfig(BaseConfig):
         slow_threshold_ms: 慢调用阈值（毫秒）；超阈值仅告警，不切换
         temperature: 生成温度（0.0-2.0）
         reasoning_effort: 思考强度档位（自由字符串，如 low/medium/high；取值看模型支持；空串=不控制=请求不含该字段）
+        history_token_budget: 对话历史 token 预算；超出时最老一段历史被摘要压缩
     """
 
     model_list: List[str] = Field(
@@ -221,6 +226,16 @@ class LLMProfileConfig(BaseConfig):
         default="",
         title="思考强度",
         description="思考强度档位（自由字符串，如 low/medium/high；取值看模型支持；空串=不控制=请求不含该字段）",
+    )
+    history_token_budget: int = Field(
+        default=DEFAULT_HISTORY_TOKEN_BUDGET,
+        ge=0,
+        title="对话历史 token 预算",
+        description=(
+            "对话历史允许携带的 token 预算；超出时最老一段历史（工具回执优先）"
+            "被摘要压缩为一条 user 消息，0 = 不启用压缩。当前由主播侧"
+            "（planner / replyer）对话历史装配消费；minecraft 侧沿用自身字符预算整理"
+        ),
     )
 
 

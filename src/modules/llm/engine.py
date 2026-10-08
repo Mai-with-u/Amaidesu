@@ -544,6 +544,18 @@ class LLMManager:
         """返回 ``{model_identifier: context_window}`` 浅拷贝（0 值保留，标识"未配置"）。"""
         return dict(self._model_context_windows)
 
+    def get_history_token_budget(self, profile: Optional[str]) -> int:
+        """取用途 profile 的对话历史 token 预算；0 = 不启用压缩。
+
+        未配置的 profile 按 0 处理（预算查询发生在请求装配期，缺配置应退化为
+        不压缩而不是中断决策链，因此解析失败不硬错）。
+        """
+        try:
+            resolved = self._profiles.get(self._resolve_profile_name(profile))
+        except ValueError:
+            return 0
+        return resolved.history_token_budget if resolved is not None else 0
+
     def _get_profile(self, profile_name: str) -> _ResolvedProfile:
         if profile_name not in self._profiles:
             raise ValueError(f"profile {profile_name!r} 未配置。已配置的 profile: {list(self._profiles.keys())}")
