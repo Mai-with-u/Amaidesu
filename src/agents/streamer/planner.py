@@ -43,6 +43,7 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
+from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolInvocation
@@ -295,10 +296,9 @@ class Planner:
         rows: List[str] = []
         for delegation in self._delegations.values():
             game = f"在 {delegation.agent} 里" if delegation.agent else "在游戏里"
-            head = (
-                f"{age_text(current_ms - delegation.at_ms)}{game}开始做（任务 {delegation.task_id}）："
-                f"{delegation.instruction}"
-            )
+            # 任务号（deleg_*）是 minecraft 侧的检索地址，对决策无信息量且会被念给观众：
+            # 同一执行者手上只保留最近一次委派，注入前转成人类可读描述；原话同样脱敏
+            head = f"{age_text(current_ms - delegation.at_ms)}{game}开始做一个任务：{sanitize_internal_terms(delegation.instruction)}"
             if delegation.report_kind == "delivery":
                 state = f"已在{age_text(current_ms - delegation.reported_ms)}做完，结果见【游戏叙事】。"
             elif delegation.report_kind == "escalation":
@@ -729,7 +729,8 @@ class Planner:
                 else result.content
             )
             text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False, default=str)
-            parts.append(f"{name}: {text}")
+            # 现场速览来自 minecraft 查询工具，回执里常带观测引用等内部标识：进参考段前脱敏
+            parts.append(f"{name}: {sanitize_internal_terms(text)}")
         return "\n".join(parts)
 
     # ==================== 工具列表与执行 ====================

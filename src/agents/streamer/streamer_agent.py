@@ -64,6 +64,7 @@ from .replyer import WordFilter, Replyer
 from .room_state import RoomState
 from .speech_dispatcher import SpeechDispatcher
 from .stats import StreamerStats
+from .term_sanitizer import sanitize_internal_terms
 from .timing_gate import TimingGate
 from .tools.reply_tool import ReplyToolProvider
 from .command.router import CommandRouter
@@ -668,12 +669,13 @@ class StreamerAgent(BaseAgent):
         """game.* 事件回调：完整收集游戏叙事，供 Planner 理解已有进展。
 
         叙事行带事件类型标记（``[game·event_type]``），Planner 据此区分
-        "剧情推进"（milestone）与"需要定夺"（report）；message 本体不变。
+        "剧情推进"（milestone）与"需要定夺"（report）；message 本体经术语脱敏
+        （任务号/观测引用等内部标识不进主播上下文）。
         ``report`` 类型（交付总结/升级决策）同时置位待定夺触发信号——游戏
         停在选项处等主播定夺，下次空缓冲 tick 应促发一轮主动决策。
         """
         try:
-            line = f"[{payload.game}·{payload.event_type}] {payload.message}"
+            line = f"[{payload.game}·{payload.event_type}] {sanitize_internal_terms(payload.message)}"
             self._game_narrative.add(line, now_ms())
             if payload.event_type == "report":
                 self._game_decision_pending = True
@@ -706,7 +708,7 @@ class StreamerAgent(BaseAgent):
         """
         try:
             marker = "（已结束）" if getattr(payload, "resolved", False) else ""
-            line = f"[{payload.game}·{payload.kind}] {payload.summary}{marker}"
+            line = f"[{payload.game}·{payload.kind}] {sanitize_internal_terms(payload.summary)}{marker}"
             self._body_narrative.add(line, now_ms())
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集身体近况失败: {exc}")

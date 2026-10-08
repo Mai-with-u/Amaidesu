@@ -379,7 +379,8 @@ async def test_planner_sees_what_the_body_is_doing_until_it_reports() -> None:
     await planner.plan([_msg("快点呀", "m1")])
     working = captured[-1][-1]["content"]
     work = working.split("【我手头在游戏里做的事】\n", 1)[1].split("\n\n", 1)[0]
-    assert f"在 minecraft 里开始做（任务 deleg_1）：{instruction}" in work
+    # 任务号是 minecraft 侧内部标识，注入前转成"一个游戏任务"，原话保留
+    assert f"在 minecraft 里开始做一个任务：{instruction}" in work
     assert "还在做，还没做完" in work and "[来源对话" not in working
     assert not any(word in work for word in ("交给", "身体", "委派"))
 
