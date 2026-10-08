@@ -74,7 +74,11 @@ async def _reference(planner: Planner) -> str:
 
 @pytest.mark.asyncio
 async def test_spoken_intents_listed_oldest_first() -> None:
-    """说出口的每轮话题与指引按先后列进【我最近几轮想说的】，下一窗就看得到自己连着讲了什么。"""
+    """说出口的每轮话题一句话按先后列进【我最近几轮想说的】，下一窗就看得到自己连着讲了什么。
+
+    指引全文不随行注入：那轮的原话已在对话历史 assistant 消息里，同一信息双份
+    只会让参考段每轮平白多出几百字。
+    """
     planner = _planner([_reply_call("报平安：满血了", "轻松"), _reply_call("还是满血", "得意")])
 
     await planner.plan([], proactive=True)
@@ -83,7 +87,7 @@ async def test_spoken_intents_listed_oldest_first() -> None:
 
     assert "【我最近几轮想说的】" in text
     section = text.split("【我最近几轮想说的】", 1)[1].splitlines()[1:]
-    assert section == ["- 刚刚 话题：报平安：满血了 ｜ 指引：轻松", "- 刚刚 话题：还是满血 ｜ 指引：得意"]
+    assert section == ["- 刚刚 话题：报平安：满血了", "- 刚刚 话题：还是满血"]
 
 
 @pytest.mark.asyncio
@@ -152,7 +156,7 @@ async def test_game_report_supersedes_inflight_intents() -> None:
 
     assert "已被游戏回执覆盖" in text
     assert "还没挖进包" in text  # 话题仍保留，反重复记忆不丢
-    assert "懊恼" not in text  # 指引全文随覆盖一并撤下
+    assert "懊恼" not in text  # 指引全文不随行注入（原话已在对话历史）
 
 
 @pytest.mark.asyncio
@@ -184,8 +188,8 @@ async def test_intent_outside_delegation_window_is_not_superseded() -> None:
     section = text.split("【我最近几轮想说的】", 1)[1].splitlines()[1:]
     assert len(section) == 2
     assert all("已被游戏回执覆盖" not in line for line in section)
-    assert "｜ 指引：热情" in section[0]
-    assert "｜ 指引：报喜" in section[1]
+    assert "话题：和观众打了个招呼" in section[0]
+    assert "话题：包里攒了 19 块圆石" in section[1]
 
 
 

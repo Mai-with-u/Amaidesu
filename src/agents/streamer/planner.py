@@ -311,19 +311,19 @@ class Planner:
         return "\n".join(rows)
 
     def _render_recent_intents(self, current_ms: int) -> str:
-        """我最近几轮想说的：由旧到新列出每轮定下的话题与指引，供判断是否在连着讲同一件事。
+        """我最近几轮想说的：由旧到新只列每轮的话题一句话，供判断是否在连着讲同一件事。
 
-        游戏回执到达前说出口的条目里，对游戏进展的说法只是当时的猜测（"还没挖进包"），
-        回执才是权威事实；已被回执覆盖的条目不再带指引全文，并标注以【游戏叙事】为准，
-        避免模型在两条都标"刚刚"的矛盾说法里任选一条播报。
+        指引全文不在此重复注入——那轮说出口的原话（指引的最终落点）已在对话历史
+        assistant 消息里，同一信息双份会让每轮参考段平白多出几百字。游戏回执到达前
+        说出口的条目里，对游戏进展的说法只是当时的猜测（"还没挖进包"），回执才是
+        权威事实；已被回执覆盖的条目标注以【游戏叙事】为准，避免模型在两条都标
+        "刚刚"的矛盾说法里任选一条播报。
         """
         lines: List[str] = []
         for intent in self._recent_intents:
             line = f"- {age_text(current_ms - intent.at_ms)} 话题：{intent.topic_summary or '（无）'}"
             if self._superseded_by_game_report(intent):
                 line += "（其中对游戏进展的说法已被游戏回执覆盖，以【游戏叙事】为准）"
-            else:
-                line += f" ｜ 指引：{intent.reply_guidance or '（无）'}"
             lines.append(line)
         return "\n".join(lines)
 
@@ -641,7 +641,7 @@ class Planner:
         if intents:
             # 我最近几轮想说的：对话历史里只有台词，这里给出每轮定下的话题，
             # 连着几轮都是同一件事又没有新进展时，就该换话题、换角度或者不开口
-            lines.append(f"【我最近几轮想说的】（由旧到新；说出口的原话见对话历史）\n{intents}")
+            lines.append(f"【我最近几轮想说的】（由旧到新，只列话题一句话；说出口的原话见对话历史）\n{intents}")
         if reminders:
             # 运营提醒：后台递话，必达素材——不伪装观众弹幕、不进对话历史，
             # 仅进本轮参考块（消费即送达，由调用方在决策窗入口取空队列）。
