@@ -106,3 +106,35 @@ async def test_control_pause_then_resume_again_rejected() -> None:
     assert success is False
     assert message == "流程单未在暂停"
     assert snapshot is not None
+
+
+# ---------------------------------------------------------------------------
+# renew（续期）翻译
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_control_renew_resets_timer_by_human() -> None:
+    """Dashboard 手动续期走 by="human"：成功后快照剩余时长回到完整周期。"""
+    state = _loaded_state()
+    first = DEFAULT_RUNDOWN.segments[0]
+
+    success, message, snapshot = apply_rundown_control(state, "renew")
+    assert (success, message) == (True, "已执行")
+    assert snapshot is not None
+    assert snapshot["status"] == "running"
+    assert snapshot["current"]["id"] == first.id
+    assert snapshot["current"]["remaining_ms"] == first.expected_ms
+    assert state.get_transitions()[-1]["by"] == "human"
+
+
+@pytest.mark.asyncio
+async def test_control_renew_rejected_when_paused() -> None:
+    """暂停中续期被 not_running 话术拒绝（renew 仅 running 合法）。"""
+    state = _loaded_state()
+    apply_rundown_control(state, "pause")
+
+    success, message, _ = apply_rundown_control(state, "renew")
+
+    assert success is False
+    assert message == "流程单未在运行"

@@ -383,6 +383,38 @@ class RundownState:
         )
         return None
 
+    def renew(self, *, by: str, now_ms: Optional[int] = None) -> Optional[RundownReject]:
+        """续期当前环节：计时锚点重置到 ``now``，本环节再给一个完整预期周期。
+
+        与 ``pause``/``resume`` 的关系：pause/resume 冻结与恢复同一段计时，
+        不改变环节的预期时长；renew 则把当前环节"重新起算"——锚点前移、
+        累计暂停清零，``elapsed`` 归零、``expected_ms`` 不变。典型场景是
+        环节超时后主播 agent 判断话题仍值得继续，主动为该环节续一个周期，
+        而不是被"剩 0 秒"僵尸提示卡住。
+
+        仅 ``running`` 时合法；``paused`` / ``done`` / 未加载均结构化拒绝。
+        """
+        if by not in _VALID_BY:
+            raise ValueError(f"RundownState.renew: 非法 by={by!r}，仅接受 {_VALID_BY}")
+        if self.status != "running":
+            reason = (
+                "no_rundown_loaded"
+                if self.rundown is None
+                else ("already_done" if self.index >= len(self.rundown.segments) else "not_running")
+            )
+            return RundownReject(reason=reason)
+        now = self._resolve_now(now_ms)
+        self.segment_started_at_ms = now
+        self._accumulated_pause_ms = 0
+        self._apply_change(
+            action="renew",
+            segment_id=self.current_segment_id,
+            segment_title=self.current_segment.title if self.current_segment else "",
+            by=cast(RundownActor, by),
+            now_ms=now,
+        )
+        return None
+
     def replace_definition(
         self,
         rundown: Rundown,
@@ -601,10 +633,21 @@ class RundownState:
 
         lines: List[str] = []
         paused_mark = "（计时暂停中）" if self.paused_at_ms is not None else ""
-        lines.append(
-            f"[流程单] 环节 {self.index + 1}/{total}：{seg.title}"
-            f"（已进行 {_format_duration_ms(elapsed)}，剩 {_format_duration_ms(remaining)}）{paused_mark}"
-        )
+        overdue_ms = elapsed - seg.expected_ms
+        if overdue_ms > 0:
+            # 超时不冻结显示：明确报出超时量与出路（续期/切换），
+            # 避免渲染成"剩 0 秒"让 Agent 失去决策依据
+            lines.append(
+                f"[流程单] 环节 {self.index + 1}/{total}：{seg.title}"
+                f"（已进行 {_format_duration_ms(elapsed)}，已超时 {_format_duration_ms(overdue_ms)}）"
+                f"——本环节设计时长 {_format_duration_ms(seg.expected_ms)}，"
+                f"可用 rundown_control 的 renew 续期本环节，或 goto/next 切换环节{paused_mark}"
+            )
+        else:
+            lines.append(
+                f"[流程单] 环节 {self.index + 1}/{total}：{seg.title}"
+                f"（已进行 {_format_duration_ms(elapsed)}，剩 {_format_duration_ms(remaining)}）{paused_mark}"
+            )
         if seg.task_description:
             lines.append(f"目标：{seg.task_description}")
         if seg.key_points:

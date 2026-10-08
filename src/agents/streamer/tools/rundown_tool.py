@@ -37,10 +37,11 @@ _PARAMETERS_SCHEMA: dict[str, Any] = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["next", "goto", "pause", "resume"],
+            "enum": ["next", "goto", "pause", "resume", "renew"],
             "description": (
                 "next=结束当前环节切到下一环节（当前是末段时结束整场流程单）；"
-                "goto=跳到指定环节（不限方向）；pause=暂停环节计时；resume=恢复计时"
+                "goto=跳到指定环节（不限方向）；pause=暂停环节计时；resume=恢复计时；"
+                "renew=续期当前环节（计时重新起算，本环节再给一个完整预期周期）"
             ),
         },
         "segment_id": {
@@ -55,8 +56,9 @@ _PARAMETERS_SCHEMA: dict[str, Any] = {
 _CONTROL_SPEC = ToolSpec(
     name="control",
     description=(
-        "流程单控制：切换直播环节或暂停/恢复环节计时。"
+        "流程单控制：切换直播环节或暂停/恢复/续期环节计时。"
         "当本环节目标已达成、或剩余时间不多且话题自然收束时，用 next/goto 推进；"
+        "环节已超时但话题仍值得继续时，用 renew 为本环节续一个周期；"
         "被拒绝时读取原因（如最少停留未到），不要盲目重试同一调用。"
     ),
     parameters_schema=_PARAMETERS_SCHEMA,
@@ -120,6 +122,8 @@ class RundownControlProvider:
                 reject = self._state.pause(by="agent")
             elif action == "resume":
                 reject = self._state.resume(by="agent")
+            elif action == "renew":
+                reject = self._state.renew(by="agent")
             else:
                 return json.dumps({"ok": False, "error": f"未知 action={action!r}"}, ensure_ascii=False)
         except Exception as exc:

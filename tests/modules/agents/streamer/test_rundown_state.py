@@ -593,3 +593,113 @@ def test_get_elapsed_live_ms_advances_with_clock() -> None:
     clock.advance(120_000)
 
     assert state.get_elapsed_live_ms() == 120_000
+
+
+# ---------------------------------------------------------------------------
+# renew（续期）与超时注入
+# ---------------------------------------------------------------------------
+
+
+def test_renew_resets_timer_and_keeps_segment() -> None:
+    """续期后计时锚点重置：elapsed 归零、剩余回到完整预期周期、环节不变。"""
+    clock = _FakeClock()
+    state = RundownState(clock=clock)
+    state.load(_make_rundown(), now_ms=clock.now)
+    clock.advance(700_000)
+    assert state.get_current_remaining_ms(now_ms=clock.now) == 0
+
+    assert state.renew(by="agent", now_ms=clock.now) is None
+
+    assert state.current_segment_id == "opening"
+    assert state.index == 0
+    assert state.get_current_remaining_ms(now_ms=clock.now) == 600_000
+    assert state.is_current_segment_overdue(now_ms=clock.now) is False
+
+
+def test_renew_clears_accumulated_pause() -> None:
+    """续期清空累计暂停：此前暂停折算不带入新周期。"""
+    clock = _FakeClock()
+    state = RundownState(clock=clock)
+    state.load(_make_rundown(), now_ms=clock.now)
+    clock.advance(60_000)
+    assert state.pause(by="human", now_ms=clock.now) is None
+    clock.advance(30_000)
+    assert state.resume(by="human", now_ms=clock.now) is None
+    assert state.renew(by="human", now_ms=clock.now) is None
+    clock.advance(600_000)
+
+    assert state.get_current_remaining_ms(now_ms=clock.now) == 0
+    assert state.is_current_segment_overdue(now_ms=clock.now) is False
+
+
+def test_renew_rejected_when_not_running() -> None:
+    """暂停 / 完成 / 未加载时续期被结构化拒绝，状态不变。"""
+    clock = _FakeClock()
+    state = RundownState(clock=clock)
+    assert state.renew(by="agent").reason == "no_rundown_loaded"
+
+    state.load(_make_rundown(), now_ms=clock.now)
+    state.pause(by="human", now_ms=clock.now)
+    assert state.renew(by="agent", now_ms=clock.now).reason == "not_running"
+    assert state.paused_at_ms is not None
+
+    state.resume(by="human", now_ms=clock.now)
+    _drive_to_last(state, clock)
+    state.next(by="human", now_ms=clock.now)
+    assert state.renew(by="agent", now_ms=clock.now).reason == "already_done"
+
+
+def test_renew_invalid_by_raises() -> None:
+    """非法 by 抛 ValueError（程序员错误通道）。"""
+    clock = _FakeClock()
+    state = RundownState(clock=clock)
+    state.load(_make_rundown(), now_ms=clock.now)
+    with pytest.raises(ValueError):
+        state.renew(by="robot", now_ms=clock.now)
+
+
+def test_renew_emits_change_event() -> None:
+    """续期走统一变更收口：记录推进历史并发射 rundown.changed。"""
+    clock = _FakeClock()
+    events: List[Tuple[str, Any]] = []
+    state = RundownState(clock=clock, emit=lambda name, payload: events.append((name, payload)))
+    state.load(_make_rundown(), now_ms=clock.now)
+    clock.advance(650_000)
+
+    assert state.renew(by="agent", now_ms=clock.now) is None
+
+    assert events[-1][0] == "rundown.changed"
+    assert events[-1][1].segment_id == "opening"
+    assert state.get_transitions()[-1]["action"] == "renew"
+
+
+def test_build_context_text_marks_overdue_instead_of_zero_remaining() -> None:
+    """超时后注入明确标注已超时与出路，不再渲染"剩 0 秒"僵尸态。"""
+    clock = _FakeClock()
+    state = RundownState(clock=clock)
+    state.load(_make_rundown(), now_ms=clock.now)
+    clock.advance(760_000)
+
+    text = state.build_context_text(now_ms=clock.now)
+
+    assert text is not None
+    assert "已超时 约 3 分钟" in text
+    assert "剩 0 秒" not in text
+    assert "renew" in text
+    assert "goto/next" in text
+
+
+def test_build_context_text_normal_remaining_after_renew() -> None:
+    """续期后注入恢复正常剩余时长展示。"""
+    clock = _FakeClock()
+    state = RundownState(clock=clock)
+    state.load(_make_rundown(), now_ms=clock.now)
+    clock.advance(700_000)
+    assert state.renew(by="agent", now_ms=clock.now) is None
+    clock.advance(60_000)
+
+    text = state.build_context_text(now_ms=clock.now)
+
+    assert text is not None
+    assert "剩 约 9 分钟" in text
+    assert "已超时" not in text

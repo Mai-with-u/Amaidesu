@@ -98,7 +98,7 @@ def test_visible_to_streamer_with_full_function_shape() -> None:
 
     assert "rundown_control" in fn_defs
     props = fn_defs["rundown_control"]["parameters"]["properties"]
-    assert props["action"]["enum"] == ["next", "goto", "pause", "resume"]
+    assert props["action"]["enum"] == ["next", "goto", "pause", "resume", "renew"]
     assert fn_defs["rundown_control"]["parameters"]["required"] == ["action"]
 
 
@@ -248,3 +248,39 @@ def test_invoke_finish_marks_done() -> None:
 
     assert result["ok"] is True
     assert result["rundown"]["status"] == "done"
+
+
+def test_invoke_renew_resets_segment_timer() -> None:
+    """renew 动作经工具面续期：状态推进成功、快照剩余时长回到完整周期。"""
+    clock = _FakeClock()
+    provider = _make_provider(clock, DEFAULT_RUNDOWN)
+    first = DEFAULT_RUNDOWN.segments[0]
+    clock.advance(first.expected_ms + 60_000)
+    assert provider._state.get_current_remaining_ms(now_ms=clock.now) == 0
+
+    result = _parse(provider.invoke({"action": "renew"}))
+
+    assert result["ok"] is True
+    assert result["rundown"]["status"] == "running"
+    assert result["rundown"]["current"]["remaining_ms"] == first.expected_ms
+    assert result["rundown"]["current"]["elapsed_ms"] == 0
+
+
+def test_invoke_renew_rejected_when_done() -> None:
+    """流程单已完成后 renew 被结构化拒绝（already_done）。"""
+    clock = _FakeClock()
+    provider = _make_provider(clock, DEFAULT_RUNDOWN)
+    for _ in range(len(DEFAULT_RUNDOWN.segments)):
+        provider.invoke({"action": "next"})
+
+    result = _parse(provider.invoke({"action": "renew"}))
+
+    assert result["ok"] is False
+    assert result["reason"] == "already_done"
+
+
+def test_tool_spec_declares_renew_in_enum() -> None:
+    """工具 spec 的 action 枚举含 renew，Planner 侧可见该能力。"""
+    from src.agents.streamer.tools.rundown_tool import _PARAMETERS_SCHEMA
+
+    assert "renew" in _PARAMETERS_SCHEMA["properties"]["action"]["enum"]

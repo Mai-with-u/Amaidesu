@@ -150,7 +150,7 @@ async def control_rundown(
     request: RundownControlRequest,
     server: ServerDep,
 ) -> RundownControlResponse:
-    """执行流程单控制动作（pause/resume/next/goto，by="human"）。
+    """执行流程单控制动作（pause/resume/next/goto/renew，by="human"）。
 
     错误约定（不抛 HTTPException）：
     - agent 未注册 / 组件未就绪 → ``success=false`` + 原因
