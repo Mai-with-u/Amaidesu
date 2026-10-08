@@ -229,6 +229,7 @@ async def harness() -> AsyncIterator[Harness]:
         task_tracker=tracker,
     )
     await parent.start()
+    parent._live_active = True  # 测试模拟直播中
     parent._mcp_client = resources
     assert parent._builder is not None
     try:
@@ -316,6 +317,7 @@ async def test_disabled_builder_has_no_tools_or_prompt() -> None:
         MinecraftConfig(builder={"enabled": False}, mcp=McpServerConfig(enabled=False)), tool_registry=ToolRegistry()
     )
     await parent.start()
+    parent._live_active = True  # 测试模拟直播中
     try:
         assert parent._builder is None
         assert "minecraft_builder" not in parent._system_prompt()
@@ -849,6 +851,7 @@ async def test_real_completion_event_wakes_parent_once_with_design_reference(
     )
     bus.on(CoreEvents.TASK_CHANGED, observe, model_class=TaskChangedPayload)
     await parent.start()
+    parent._live_active = True  # 测试模拟直播中
     parent._mcp_client = harness.resources
     try:
         # 从真正的玩家指令启动父任务，后台通知只能继续它，不能凭空创建新的游戏任务。

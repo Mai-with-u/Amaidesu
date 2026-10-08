@@ -52,6 +52,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.llm.context_meter import SECTION_SKILLS
 from src.modules.logging import get_logger
@@ -335,6 +336,10 @@ class MinecraftAgent(BaseAgent):
         self._paused = asyncio.Event()
         self._paused.set()
 
+        # 直播生命周期闸：构造期不设限；收工判据在启动期确立——进程重启后
+        # 没有活跃场次即视为收工，直到 live.started 才恢复接受委派（_on_start）
+        self._live_active = True
+
         self._running = False
 
         # 建造器只持有本游戏的设计任务；关闭 Minecraft 时不独立装配或借用其他连接。
@@ -363,10 +368,65 @@ class MinecraftAgent(BaseAgent):
             await self._bind_agent_owned_mcp()
 
         self._running = True
+        # 启动即按"无活跃场次"落收工态：进程重启后没有活跃场次（场次管理器
+        # 启动时也会收口残留场次），直到 live.started 恢复接受委派
+        self._live_active = False
         if self._builder is not None:
             self._builder.open()
         self._worker_task = asyncio.create_task(self._worker())
-        self._logger.info("MinecraftAgent 已启动（命令驱动：等待委派指令）")
+        # 直播生命周期：开播放行收工闸（不依赖 payload，收口即进收工态）
+        if self._event_bus is not None:
+            self._event_bus.on(
+                CoreEvents.LIVE_STARTED,
+                self._on_live_started,
+                model_class=LiveStartedPayload,
+            )
+            self._event_bus.on(
+                CoreEvents.LIVE_ENDED,
+                self._on_live_ended,
+                model_class=LiveEndedPayload,
+            )
+        self._logger.info(
+            "MinecraftAgent 已启动（命令驱动：等待委派指令；当前" + ("直播中" if self._live_active else "收工态") + "）"
+        )
+
+    async def _on_live_started(
+        self,
+        event_name: str,
+        payload: LiveStartedPayload,
+        source: str,
+    ) -> None:
+        """live.started 回调：开播，恢复接受委派。"""
+        del event_name, source
+        self._live_active = True
+        self._logger.info(f"场次已开启（id={payload.live_session_id}）：minecraft 恢复接受委派")
+
+    async def _on_live_ended(
+        self,
+        event_name: str,
+        payload: LiveEndedPayload,
+        source: str,
+    ) -> None:
+        """live.ended 回调：收工。
+
+        收工即停，不为下一场做任何准备：在途任务批在当前 LLM 调用返回、
+        工具落盘后停止（不硬取消），此后不再发起新推理；退避定时器与无
+        进展闸随收工作废；未处理消息（委派/递话/系统注入）一并丢弃——
+        不留到下一场，避免开播后陈年指令突然开跑。
+        """
+        del event_name, source
+        self._live_active = False
+        for timer in self._failure_wake_timers.values():
+            timer.cancel()
+        self._failure_wake_timers.clear()
+        self._failure_gate.reset()
+        self._no_progress_gate.reset()
+        dropped = len(self._message_queue)
+        self._message_queue.clear()
+        self._logger.info(
+            f"场次已结束（id={payload.live_session_id}）：minecraft 收工"
+            f"（在途批跑完当前步即停；丢弃 {dropped} 条未处理消息）"
+        )
 
     async def _bind_agent_owned_mcp(self) -> None:
         """装配 Agent 私有 MCP server（[agents.minecraft.mcp]）——失败常驻重试。
@@ -656,8 +716,11 @@ class MinecraftAgent(BaseAgent):
 
         任务号空串（非委派来源），经 worker 门卫的 MinecraftInstruction
         形状检查——任务执行中下一步推理前被 flush 吸收；任务挂起中被唤醒
-        重新判断。source 仅用于日志。
+        重新判断。source 仅用于日志。收工态拒收（不唤醒、不入队）。
         """
+        if not self._live_active:
+            self._logger.warning(f"收工态拒收递话（source={source or '未知'}）：{content[:60]}")
+            return False
         # 标明递话来自谁：运营原话是直接要求；主播递来的补充可能夹带对现场的转述，
         # 与回执或运营原话冲突时以回执和原话为准（规则见系统提示词）。
         label = _PROMPT_SOURCE_LABELS.get(source, "")
@@ -670,8 +733,15 @@ class MinecraftAgent(BaseAgent):
         """接收委派入口（framework_delegate 调用）：指令入队（带任务号）+ 唤醒。
 
         指令不可拒绝；队列项带任务号供任务批次把状态写回任务记录表
-        （开始 → running；交付/升级 → 终态）。
+        （开始 → running；交付/升级 → 终态）。收工态拒收：不入队、不唤醒，
+        委派方经任务记录表看不到受理（对齐"下播即收工"）。
         """
+        if not self._live_active:
+            self._logger.warning(f"收工态拒收委派（task_id={task_id}）：{instruction[:60]}")
+            if self._task_tracker is not None:
+                # 账面如实写 cancelled：委派方经 framework_task_status 看到拒收结果
+                self._task_tracker.ledger.update(task_id, "cancelled", summary="收工态拒收（下播即收工）")
+            return None  # 已接收
         self._message_queue.append(MinecraftInstruction(task_id, instruction))
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到委派（task_id={task_id}）：{instruction[:60]}")
@@ -702,6 +772,9 @@ class MinecraftAgent(BaseAgent):
             await self._wake_event.wait()
             self._wake_event.clear()
             if not (self._running and self._message_queue):
+                continue
+            # 收工闸：收工后不开新任务批；在途批由 _run_task_batch 的步骤闸收尾
+            if not self._live_active:
                 continue
             # 任务交付、上报困难或执行中断后等待玩家新指令，后台通知只补充已知状态。
             if (self._task_finished or self._task_suspended) and not any(
@@ -790,6 +863,11 @@ class MinecraftAgent(BaseAgent):
         while self._running:
             # 步骤间挂起（平台 pause）
             await self._paused.wait()
+            # 收工闸：在途 LLM 调用已返回、工具观察已落盘，本批到此为止；
+            # 不硬取消在途调用，也不再发起新推理（下播即收工）
+            if not self._live_active:
+                self._logger.info(f"已收工，任务批停止（{steps} 步）；原任务事实已随工具回执保留")
+                return
 
             # 新指令和真实任务通知提供了新事实，恢复后允许模型重新判断，不继承上一轮的停滞提醒。
             if self._message_queue:
@@ -1564,6 +1642,10 @@ class MinecraftAgent(BaseAgent):
         self._logger.info(f"任务通知注入唤醒（task_id={payload.task_id}, status={payload.status}）")
 
     def _inject_wakeup_message(self, content: str) -> None:
+        """注入系统消息 + 唤醒；收工态丢弃——不留到下一场突然开跑。"""
+        if not self._live_active:
+            self._logger.debug(f"收工态丢弃系统注入消息: {content[:60]}")
+            return
         """系统消息入队 + 唤醒 worker（非委派来源，任务号空串）。"""
         self._message_queue.append(("", content))
         self._wake_event.set()
@@ -1603,7 +1685,12 @@ class MinecraftAgent(BaseAgent):
         self._logger.info(f"任务连续失败升级唤醒（task_id={payload.task_id}, 连续{count}次）")
 
     def _schedule_failure_wake(self, task_id: str, delay_ms: int) -> None:
-        """退避到期注入攒下的失败事实；同一任务的旧定时器先撤再排。"""
+        """退避到期注入攒下的失败事实；同一任务的旧定时器先撤再排。
+
+        收工态不排程：退避定时器不跨越场次边界，收工后不再唤醒 LLM。
+        """
+        if not self._live_active:
+            return
         self._cancel_failure_wake_timer(task_id)
         self._failure_wake_timers[task_id] = asyncio.create_task(self._deferred_failure_wake(task_id, delay_ms / 1000))
 
@@ -1614,6 +1701,9 @@ class MinecraftAgent(BaseAgent):
         except asyncio.CancelledError:
             return
         self._failure_wake_timers.pop(task_id, None)
+        # 定时器跨越收工边界（如收工瞬间排程的竞态）：收工后不再注入唤醒
+        if not self._live_active:
+            return
         self._flush_deferred_failure(task_id)
 
     def _flush_deferred_failure(self, task_id: str) -> None:
@@ -1722,7 +1812,10 @@ class MinecraftAgent(BaseAgent):
 
         空闲时直接返回——身体事件的日常值守归主播侧采集器，"游戏 Agent 只在干活时
         需要知道身体受威胁"，这样"空闲零消耗"仍然成立（通知到达不产生 MCP 调用与 LLM 推理）。
+        收工态同样直接返回：不响应主动轮询，收工后不产生任何 MCP/LLM 消耗。
         """
+        if not self._live_active:
+            return
         if not (self._batch_active or self._pending_task_count() > 0):
             return
         spawn_background_task(

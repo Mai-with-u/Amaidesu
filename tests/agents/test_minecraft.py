@@ -243,6 +243,7 @@ async def test_react_natural_termination_fallback_delivery() -> None:
         event_bus=event_bus,
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="挖 3 个钻石", source="test")
     await _wait_until(lambda: llm.generate.await_count == 1)
 
@@ -283,6 +284,7 @@ async def test_react_report_delivery_stops_batch() -> None:
         tool_registry=ToolRegistry(),
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="干活", source="test")
     await _wait_until(lambda: calls == 1)
     await asyncio.sleep(0.15)
@@ -313,6 +315,7 @@ async def test_react_report_escalation_stops_and_waits() -> None:
         tool_registry=ToolRegistry(),
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="遇到困难的任务", source="test")
     await _wait_until(lambda: llm.generate.await_count == 1)
     await asyncio.sleep(0.15)
@@ -351,6 +354,7 @@ async def test_react_continues_past_fifty_steps_until_delivery() -> None:
         tool_registry=ToolRegistry(),
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     try:
         agent.receive_prompt(content="完成施工并验收", source="test")
         await _wait_until(lambda: llm.generate.await_count == 61 and agent._task_finished)
@@ -392,6 +396,7 @@ async def test_react_todo_done_no_longer_emits_milestone() -> None:
         event_bus=event_bus,
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="挖钻石", source="test")
     await _wait_until(lambda: len(captured) == 2)
 
@@ -429,6 +434,7 @@ async def test_react_full_format_feedback_and_id_association() -> None:
         tool_registry=ToolRegistry(),
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="探索东侧", source="test")
     await _wait_until(lambda: len(captured) >= 2)
 
@@ -495,6 +501,7 @@ async def test_react_mcp_tool_via_registry_passthrough() -> None:
         tool_registry=registry,
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="看看周围", source="test")
     await _wait_until(lambda: fake.calls == 2)
 
@@ -529,6 +536,7 @@ async def test_react_pause_suspends_loop() -> None:
     )
     agent._execute_tool = AsyncMock(side_effect=observe)
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="暂停任务", source="test")
 
     # 暂停循环：等待一步真实执行后挂起，计数冻结
@@ -563,6 +571,7 @@ async def test_instruction_injection_wakes_worker_full_chain() -> None:
         tool_registry=registry,
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
 
     agent.receive_prompt(content="工具链目标", source="test")
     await _wait_until(lambda: llm.generate.awaited)
@@ -591,6 +600,7 @@ async def test_agent_reusable_after_goal_completes() -> None:
         event_bus=event_bus,
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
 
     agent.receive_prompt(content="第一个任务", source="test")
     await _wait_until(lambda: calls == 1)
@@ -613,6 +623,7 @@ async def test_prompt_without_llm_fails_fast() -> None:
         event_bus=event_bus,
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="挖钻石", source="test")
     await _wait_until(lambda: bool(event_bus.emit.await_args_list))
 
@@ -634,6 +645,7 @@ async def test_idle_costs_nothing() -> None:
         event_bus=MagicMock(),
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     await asyncio.sleep(0.4)
 
     llm.generate.assert_not_awaited()
@@ -654,6 +666,7 @@ async def test_llm_call_failure_emits_error() -> None:
         event_bus=event_bus,
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="失败任务", source="test")
     await _wait_until(lambda: bool(event_bus.emit.await_args_list))
 
@@ -733,6 +746,7 @@ async def test_react_tool_failure_fed_back_to_llm() -> None:
         tool_registry=registry,
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="挖矿", source="test")
     await _wait_until(lambda: len(seen_failure) >= 1)
 
@@ -773,6 +787,7 @@ async def test_react_multi_tool_calls_batch_execute() -> None:
         tool_registry=ToolRegistry(),
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="批量任务", source="test")
     # 两个工具都执行后即可核对状态；仍有施工待办时，父循环可以继续提醒推进而不是虚报完成。
     await _wait_until(lambda: calls >= 2)
@@ -806,6 +821,7 @@ async def test_command_after_task_reaches_messages() -> None:
         event_bus=event_bus,
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="初始任务", source="test")
     await asyncio.sleep(0.15)
     agent.receive_prompt(content="追加指令", source="test")
@@ -1017,6 +1033,7 @@ async def test_execute_receipt_registers_task_and_subscribes() -> None:
     agent, tracker = _make_task_agent(llm, registry)
     tracker.start()
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     try:
         agent.receive_prompt(content="挖矿", source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
@@ -1053,6 +1070,7 @@ async def test_task_terminal_wakes_worker_with_snapshot() -> None:
     agent, tracker = _make_task_agent(llm, registry)
     tracker.start()
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     try:
         agent.receive_prompt(content="挖矿", source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
@@ -1106,6 +1124,7 @@ async def test_design_completion_resumes_original_build_goal() -> None:
     agent, tracker = _make_task_agent(llm, registry)
     tracker.start()
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     try:
         agent.receive_prompt(content=instruction, source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
@@ -1149,6 +1168,7 @@ async def test_task_notification_resumes_after_fifty_steps_without_new_instructi
     agent, tracker = _make_task_agent(llm, registry)
     tracker.start()
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     try:
         agent.receive_prompt(content=instruction, source="test")
         await _wait_until(lambda: agent._wait_requested and not agent._batch_active)
@@ -1186,6 +1206,7 @@ async def test_unfinished_todos_block_natural_and_explicit_delivery() -> None:
     bus.emit = AsyncMock()
     agent = MinecraftAgent(MinecraftConfig(), llm_manager=llm, event_bus=bus, tool_registry=ToolRegistry())
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     try:
         agent.receive_prompt(content="建好房屋", source="test")
         await _wait_until(lambda: agent._task_suspended)
@@ -1230,6 +1251,7 @@ async def test_task_no_state_change_no_injection() -> None:
     agent, tracker = _make_task_agent(llm, registry)
     tracker.start()
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     try:
         agent.receive_prompt(content="挖矿", source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
@@ -1267,6 +1289,7 @@ async def test_task_decision_point_injects_and_keeps_tracking() -> None:
     agent, tracker = _make_task_agent(llm, registry)
     tracker.start()
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     try:
         agent.receive_prompt(content="需要选择的任务", source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
@@ -1303,6 +1326,7 @@ async def test_task_stall_alert_without_killing_task() -> None:
     agent, tracker = _make_task_agent(llm, registry, wait_timeout_ms=80)
     tracker.start()
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     try:
         agent.receive_prompt(content="卡住的任务", source="test")
         await _wait_until(lambda: len(llm.captured) == 2)
@@ -1338,6 +1362,7 @@ async def test_delivery_gate_rejects_with_pending_task() -> None:
     agent, tracker = _make_task_agent(llm, registry)
     tracker.start()
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     try:
         agent.receive_prompt(content="挖矿", source="test")
         await _wait_until(lambda: len(llm.captured) >= 3)
@@ -1581,6 +1606,7 @@ async def test_on_start_binds_agent_owned_mcp_with_visible_list(monkeypatch: pyt
     )
 
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
 
     # 域内查询（provider="maicraft"）：可见
     scoped_names = {s.full_name for s in registry.list_tools(provider="maicraft")}
@@ -1666,6 +1692,7 @@ async def _agent_with_fake_mcp(monkeypatch: pytest.MonkeyPatch) -> Any:
         tool_registry=ToolRegistry(),
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     return agent
 
 
@@ -1711,6 +1738,7 @@ async def _task_agent_with_fake_mcp(monkeypatch: pytest.MonkeyPatch) -> Any:
     )
     tracker.start()
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     ledger.register(
         task_id=str(_uuid.uuid4()),
         provider="maicraft",
@@ -1897,6 +1925,7 @@ async def test_on_start_disabled_mcp_skips_binding(monkeypatch: pytest.MonkeyPat
         tool_registry=registry,
     )
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
 
     assert constructed_clients == [], "enabled=false 不应实例化 McpClient"
     assert constructed_providers == [], "enabled=false 不应实例化 McpToolProvider"
@@ -1961,6 +1990,7 @@ async def test_on_start_zero_tools_registers_degraded_and_retries(
     )
 
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     assert registry.list_tools(provider="maicraft") == [], "count=0 时不注册任何工具"
     assert agent._mcp_client is not None, "降级保留 client 引用"
     assert agent._mcp_recover_task is not None, "降级后启动后台恢复循环"
@@ -2044,6 +2074,7 @@ async def test_thinking_sink_receives_reasoning_with_minecraft_phase() -> None:
     agent = _build_sink_agent(llm, sink, cap)
 
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="两步", source="test")
     await _wait_until(lambda: len(sink.calls) >= 3)
     await agent.stop()
@@ -2080,6 +2111,7 @@ async def test_thinking_sink_round_id_propagates_to_tool_invocations() -> None:
     agent = _build_sink_agent(llm, sink, cap)
 
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="cap", source="test")
     await _wait_until(lambda: len(cap.invocations) >= 1 and len(sink.calls) >= 1)
     await agent.stop()
@@ -2108,6 +2140,7 @@ async def test_agent_replied_emitted_for_intermediate_steps_only() -> None:
     agent = _build_sink_agent(_RecordingLlm(fake), sink, cap, bus=bus)
 
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="做石砖", source="test")
     await _wait_until(lambda: any(isinstance(c.args[1], GamePayload) for c in bus.emit.await_args_list))
     await agent.stop()
@@ -2136,6 +2169,7 @@ async def test_thinking_sink_none_keeps_existing_behavior() -> None:
     agent = _build_sink_agent(llm, None, cap)
 
     await agent.start()
+    agent._live_active = True  # 测试模拟直播中
     agent.receive_prompt(content="cap", source="test")
     await _wait_until(lambda: len(cap.invocations) >= 1)
     await agent.stop()
@@ -2168,6 +2202,7 @@ async def test_own_tool_invoke_emits_tool_result_event() -> None:
             tool_registry=registry,
         )
         await agent.start()
+        agent._live_active = True  # 测试模拟直播中
         try:
             obs = await agent._execute_tool("minecraft_todo", {"action": "read"})
             assert obs.get("tool") == "todo"
