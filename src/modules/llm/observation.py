@@ -115,6 +115,7 @@ async def record_usage(
     duration_ms: int = 0,
     profile_name: Optional[str] = None,
     request_id: Optional[str] = None,
+    live_session_id: Optional[int] = None,
     request: Optional[LLMRequestInsert] = None,
 ) -> int:
     """把一次成功调用的消耗写入 ``llm_usage`` 表。
@@ -123,6 +124,8 @@ async def record_usage(
     cache_miss_tokens）缺省或 None 视为 provider 未上报，按计划 v1 约定落 0。
     cost 由调用方按统一口径（``calculate_cost``）预先算好传入，本函数不再
     二次计价，保证费用行为只随计算口径一处变化。
+    ``live_session_id`` 为调用发生时的直播场次主键；None = 场间消耗
+    （无进行中场次），与 ``LiveSessionManager.resolve_pk`` 的 None 语义对齐。
     ``request`` 携带请求明细载荷时走两账同事务（``llm_usage`` +
     ``llm_requests`` 原子写入，连接键取 ``request.request_id``）；不携带时
     只写聚合账，``request_id`` 可选用于补连接键。
@@ -144,6 +147,7 @@ async def record_usage(
         cost=float(cost),
         duration_ms=duration_ms,
         profile_name=profile_name,
+        live_session_id=live_session_id,
         request_id=request.request_id if request is not None else request_id,
     )
     if request is not None:

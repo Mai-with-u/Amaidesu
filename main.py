@@ -378,9 +378,24 @@ async def create_app_components(
     logger.info("初始化事件总线...")
     event_bus = EventBus()
 
+    # --- 场次管理（先于 LLMManager：llm_usage 场次归属经构造器注入解析器）---
+
+    # LiveSessionManager：场次唯一事实源（开启/结束/删除/归属解析）。
+    # 启动不自动开新场次；无显式场次期间 ``resolve_pk()`` 返回 None，
+    # 下游 StorageLedger 据此跳过落库。platform 是装配期常量（本项目生产
+    # 平台为 B 站），主播发言行落库与 open_session 未显式指定时经此取值。
+    session_manager = LiveSessionManager(database.sessions, database.chat, event_bus, platform="bilibili")
+    if session_manager_auto_start:
+        await session_manager.start()
+
     # --- LLM 服务 ---
     logger.info("初始化 LLM 服务...")
-    llm_service = LLMManager(llm_repo=database.llm, event_bus=event_bus)
+    # 场次归属解析器：落库时取当前显式场次主键（无场次 → NULL = 场间消耗）
+    llm_service = LLMManager(
+        llm_repo=database.llm,
+        event_bus=event_bus,
+        live_session_resolver=lambda: session_manager.active_pk,
+    )
     await llm_service.setup(config)
     # 请求历史落库目标注入（全局单例可能已被惰性创建，须显式 attach）
     get_global_request_history_manager().attach_repo(database.llm)
@@ -392,16 +407,6 @@ async def create_app_components(
     # --- 启动期不进行任何上下文重新写入（每次启动 = 干净测试环境）---
     # 跨场次对话记忆由 SimpleMemory / 摘要机制承载，不在组合根做 live_chat 重新写入。
     # 无显式场次期间消息仅在内存流转，落库路径依据 0 值跳过。
-
-    # --- 场次管理 + 拦截器 ---
-
-    # LiveSessionManager：场次唯一事实源（开启/结束/删除/归属解析）。
-    # 启动不自动开新场次；无显式场次期间 ``resolve_pk()`` 返回 None，
-    # 下游 StorageLedger 据此跳过落库。platform 是装配期常量（本项目生产
-    # 平台为 B 站），主播发言行落库与 open_session 未显式指定时经此取值。
-    session_manager = LiveSessionManager(database.sessions, database.chat, event_bus, platform="bilibili")
-    if session_manager_auto_start:
-        await session_manager.start()
 
     register_event_interceptors(event_bus, config, session_manager=session_manager)
     logger.info("事件总线已初始化，事件拦截器已挂载")

@@ -355,7 +355,12 @@ class LLMManager:
         ```
     """
 
-    def __init__(self, llm_repo: Optional[LLMRepo] = None, event_bus: Optional[EventBus] = None) -> None:
+    def __init__(
+        self,
+        llm_repo: Optional[LLMRepo] = None,
+        event_bus: Optional[EventBus] = None,
+        live_session_resolver: Optional[Callable[[], Optional[int]]] = None,
+    ) -> None:
         self.logger = get_logger("LLMManager")
         # provider_name -> provider 配置 + 客户端实例（共享连接）
         self._providers: Dict[str, Tuple[Dict[str, Any], Any]] = {}
@@ -380,6 +385,9 @@ class LLMManager:
         # 注入后每次成功调用发布 llm.context.used 上下文水位事件（观察面终点
         # 广播）；None 时不发布。事件发布失败只告警，绝不阻断调用链
         self._event_bus = event_bus
+        # 注入后每次落库解析当前直播场次主键写入 llm_usage.live_session_id；
+        # None（未注入或无进行中场次）落 NULL = 场间消耗。解析失败只告警
+        self._live_session_resolver = live_session_resolver
         # 随机策略 RNG（lazy 创建，按 seed 决定是否固定）
         self._rng: Optional[random.Random] = None
 
@@ -988,6 +996,15 @@ class LLMManager:
             )
             # 落库统一走 observation.record_usage（两表唯一写入点）；携带明细
             # 载荷即两账同事务，缓存列与成本入参的处理收敛在 observation 侧
+            # 场次归属：注入了解析器时取当前显式场次主键；无进行中场次落
+            # NULL = 场间消耗（归因口径与 live_sessions 主键对齐）
+            live_session_id: Optional[int] = None
+            if self._live_session_resolver is not None:
+                try:
+                    live_session_id = self._live_session_resolver()
+                except Exception as exc:  # noqa: BLE001 - 归属解析失败不阻断落库
+                    self.logger.warning(f"llm_usage 场次归属解析失败（落 NULL）: {exc}")
+                    live_session_id = None
             await record_usage(
                 self._llm_repo,
                 model_name=result.model or model_name,
@@ -997,6 +1014,7 @@ class LLMManager:
                 cost=cost,
                 duration_ms=duration_ms,
                 profile_name=profile_name,
+                live_session_id=live_session_id,
                 request=request_row,
             )
         except Exception as exc:  # noqa: BLE001
