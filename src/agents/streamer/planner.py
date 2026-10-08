@@ -311,11 +311,28 @@ class Planner:
         return "\n".join(rows)
 
     def _render_recent_intents(self, current_ms: int) -> str:
-        """我最近几轮想说的：由旧到新列出每轮定下的话题与指引，供判断是否在连着讲同一件事。"""
-        return "\n".join(
-            f"- {age_text(current_ms - intent.at_ms)} 话题：{intent.topic_summary or '（无）'}"
-            f" ｜ 指引：{intent.reply_guidance or '（无）'}"
-            for intent in self._recent_intents
+        """我最近几轮想说的：由旧到新列出每轮定下的话题与指引，供判断是否在连着讲同一件事。
+
+        游戏回执到达前说出口的条目里，对游戏进展的说法只是当时的猜测（"还没挖进包"），
+        回执才是权威事实；已被回执覆盖的条目不再带指引全文，并标注以【游戏叙事】为准，
+        避免模型在两条都标"刚刚"的矛盾说法里任选一条播报。
+        """
+        lines: List[str] = []
+        for intent in self._recent_intents:
+            line = f"- {age_text(current_ms - intent.at_ms)} 话题：{intent.topic_summary or '（无）'}"
+            if self._superseded_by_game_report(intent):
+                line += "（其中对游戏进展的说法已被游戏回执覆盖，以【游戏叙事】为准）"
+            else:
+                line += f" ｜ 指引：{intent.reply_guidance or '（无）'}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _superseded_by_game_report(self, intent: _Intent) -> bool:
+        """该条目对游戏进展的说法是否已被后续回执覆盖：说出口的时刻落在某次
+        委派的"开始 → 已上报"区间内，即属于回执到达前的在途叙述。"""
+        return any(
+            delegation.report_kind != "" and delegation.at_ms <= intent.at_ms <= delegation.reported_ms
+            for delegation in self._delegations.values()
         )
 
     def _render_recent_relays(self, current_ms: int) -> str:

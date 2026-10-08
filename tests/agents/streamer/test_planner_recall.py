@@ -9,10 +9,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.config import StreamerConfig
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, _Intent
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.llm.payload import Response, ToolCall
+from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
@@ -124,6 +125,68 @@ def _relay_planner(result: ToolExecutionResult) -> tuple[Planner, MagicMock]:
     registry = MagicMock()
     registry.invoke = AsyncMock(return_value=result)
     return Planner({}, MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False), registry
+
+
+@pytest.mark.asyncio
+async def test_game_report_supersedes_inflight_intents() -> None:
+    """游戏回执到达后，回执前说出口的在途条目标注已被覆盖，不再带指引全文。
+
+    实测同一轮注入里两条都标"刚刚"且互相矛盾（"石料还没挖进包" vs "攒了 19 块圆石"），
+    模型任选一条播报就会前后打脸——回执才是权威事实。
+    """
+    planner, _registry = _relay_planner(
+        ToolExecutionResult(
+            tool_name="framework_delegate",
+            success=True,
+            structured_content={"accepted": True, "executor": "minecraft", "task_id": "deleg_1"},
+        )
+    )
+
+    await planner._invoke_registry_tool("framework_delegate", {"agent": "minecraft", "instruction": "挖石料"})
+    # 委派在途期间说出口的对进展的猜测（此刻与回执说法矛盾）
+    planner._recent_intents.append(
+        _Intent(at_ms=now_ms(), topic_summary="石料到现在都还没挖进包", reply_guidance="懊恼地汇报白挥了一镐")
+    )
+    planner.note_game_report("minecraft", "delivery")
+    text = await _reference(planner)
+
+    assert "已被游戏回执覆盖" in text
+    assert "还没挖进包" in text  # 话题仍保留，反重复记忆不丢
+    assert "懊恼" not in text  # 指引全文随覆盖一并撤下
+
+
+@pytest.mark.asyncio
+async def test_intent_outside_delegation_window_is_not_superseded() -> None:
+    """委派窗口之外的条目不受回执影响：委派开始前的旧话、上报后说的新话都完整保留。"""
+    planner, _registry = _relay_planner(
+        ToolExecutionResult(
+            tool_name="framework_delegate",
+            success=True,
+            structured_content={"accepted": True, "executor": "minecraft", "task_id": "deleg_1"},
+        )
+    )
+
+    base = now_ms()
+    # 委派开始前说的一轮
+    planner._recent_intents.append(
+        _Intent(at_ms=base - 60_000, topic_summary="和观众打了个招呼", reply_guidance="热情")
+    )
+    await planner._invoke_registry_tool("framework_delegate", {"agent": "minecraft", "instruction": "挖石料"})
+    delegation = planner._delegations["minecraft"]
+    delegation.at_ms = base
+    delegation.reported_ms = base + 30_000
+    # 回执之后说的一轮
+    planner._recent_intents.append(
+        _Intent(at_ms=base + 60_000, topic_summary="包里攒了 19 块圆石", reply_guidance="报喜")
+    )
+    text = await _reference(planner)
+
+    section = text.split("【我最近几轮想说的】", 1)[1].splitlines()[1:]
+    assert len(section) == 2
+    assert all("已被游戏回执覆盖" not in line for line in section)
+    assert "｜ 指引：热情" in section[0]
+    assert "｜ 指引：报喜" in section[1]
+
 
 
 @pytest.mark.asyncio
