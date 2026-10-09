@@ -17,13 +17,9 @@ MaiCraft v1 的事件流里大部分是目标运行的处境变化（开始、�
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from src.modules.events.names import CoreEvents
-
-#: 上游时间戳格式（Mod 侧 ISO-8601 带 Z；带/不带毫秒两种）
-_UPSTREAM_TIME_FORMATS = ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ")
 
 #: 叙事种类 → 事件名（事件名一律引用 CoreEvents 常量，不写字面量）
 KIND_TO_EVENT: Dict[str, str] = {
@@ -88,28 +84,10 @@ def summarize(kind: str, source_event_type: str, message: str) -> str:
     return f"{lead}：{detail}" if detail else lead
 
 
-def upstream_timestamp_ms(raw: Any) -> int:
-    """上游时间戳（ISO-8601 带 Z）→ Unix 毫秒；无法解析返回 0。
-
-    只做搬运：解析不出来宁可写 0（未知），也不拿"现在"冒充上游时刻。
-    """
-    if not isinstance(raw, str) or not raw:
-        return 0
-    text = raw.strip()
-    for fmt in _UPSTREAM_TIME_FORMATS:
-        try:
-            parsed = datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
-            return int(parsed.timestamp() * 1000)
-        except ValueError:
-            continue
-    return 0
-
-
 __all__ = [
     "KIND_TO_EVENT",
     "RESOLVED_KINDS",
     "classify",
     "summarize",
-    "upstream_timestamp_ms",
     "without_coordinates",
 ]

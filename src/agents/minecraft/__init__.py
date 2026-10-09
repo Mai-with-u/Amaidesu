@@ -12,10 +12,11 @@
 - ``prompts/``               系统提示词
 - ``skills/``                技能（玩法经验文档），按能力清单筛选后进目录
 
-``attention_collector.py`` 常驻长轮询 MaiCraft v1 的任务事件流，把身体先处理的急事与处理不了的需求
-转成 ``game.body.*`` 事件（分类表在 ``attention_matrix.py``）；``chat_collector.py`` 读的是旧版 Mod 的
-聊天流资源，MaiCraft v1 还没有聊天来源，接 v1 时从采集器的 enabled 列表里移除。两个采集器的装配与起停
-走采集器框架（``config/collectors.toml`` + 工厂），生命周期挂装配期而非本 Agent。
+两个采集器常驻长轮询 MaiCraft v1 的 ``events``（连接、游标与长轮询在 ``events_collector.py``）：
+``attention_collector.py`` 读任务事件流，把身体先处理的急事、处理不了的需求与角色死亡转成 ``game.body.*``
+事件（分类表在 ``attention_matrix.py``）；``chat_collector.py`` 读聊天事件流，把别人说的话转成
+``game.chat.received``（私聊默认不转）。装配与起停走采集器框架（``config/collectors.toml`` + 工厂），
+生命周期挂装配期而非本 Agent。
 """
 
 from .agent import MinecraftAgent
