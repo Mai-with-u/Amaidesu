@@ -6,6 +6,7 @@ MaiCraft v1 把目标运行的处境变化写进一条事件流（``events``）�
 - 目标提问、被暂停、恢复、结束时，再用 ``task(get)`` 取它此刻的完整样子交给回调——
   事件只说"变了"，完整结果（变化、问题、剩下的部分）以查询为准；
 - 与目标无关的事件（生存需求插进来的临时任务、角色自己处理不了的需求、角色死亡）原样交给身体事件回调；
+- Mod 自己挂出的决策（死亡恢复：编号是负数，不是谁下达的目标）提问时，读一次交给决策回调，等模型按选项回答；
 - 事件流换了（换世界、重进世界）时游标作废，逐个重新查询在跟踪的目标：查得到就照常交回调，
   查不到或已经不是原来那个目标，就按"不在了"交给回调，不让它挂在待办里永远等不到结果。
 
@@ -21,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
-from .maicraft import EVENTS, TASK, GoalRun, MaicraftReply, events_page_of, goal_run_of
+from .maicraft import AWAITING_ANSWER, EVENTS, TASK, GoalRun, MaicraftReply, events_page_of, goal_run_of
 
 logger = get_logger("MinecraftGoals")
 
@@ -39,6 +40,7 @@ _BODY_EVENT_KINDS = frozenset({"temporary_task_started", "temporary_task_finishe
 McpCall = Callable[[str, Dict[str, Any]], Awaitable[MaicraftReply]]
 GoalChanged = Callable[[GoalRun], Awaitable[None]]
 GoalGone = Callable[[int, str], Awaitable[None]]
+DecisionAsked = Callable[[GoalRun], Awaitable[None]]
 BodyEvent = Callable[[Dict[str, Any]], Awaitable[None]]
 
 
@@ -62,6 +64,7 @@ class GoalWatch:
         on_goal_changed: GoalChanged,
         on_goal_gone: GoalGone,
         on_body_event: BodyEvent,
+        on_decision_asked: Optional[DecisionAsked] = None,
         wait_ms: int = DEFAULT_WAIT_MS,
     ) -> None:
         self._call = call
@@ -69,6 +72,7 @@ class GoalWatch:
         self._on_goal_changed = on_goal_changed
         self._on_goal_gone = on_goal_gone
         self._on_body_event = on_body_event
+        self._on_decision_asked = on_decision_asked
         self._wait_ms = wait_ms
         self._goals: Dict[int, TrackedGoal] = {}
         self._stream_id: Optional[str] = None
@@ -192,6 +196,10 @@ class GoalWatch:
         if kind in _BODY_EVENT_KINDS:
             await self._on_body_event(event)
             return
+        if kind == "asked" and isinstance(goal_id, int) and goal_id < 0 and goal_id not in self._goals:
+            # 负数编号是 Mod 自己挂出的决策（死亡恢复），不是谁下达的目标：不跟踪，读一次交给决策回调。
+            await self._decision_asked(goal_id)
+            return
         if not isinstance(goal_id, int) or goal_id not in self._goals or kind not in _GOAL_CHANGE_KINDS:
             return
         await self._refresh(goal_id)
@@ -221,6 +229,19 @@ class GoalWatch:
         if run.finished:
             self.untrack(goal_id)
         await self._on_goal_changed(run)
+
+    async def _decision_asked(self, decision_id: int) -> None:
+        """取 Mod 挂出的决策此刻的样子：还在等回答就交给决策回调；读不到或已答复就不打扰模型。"""
+        if self._on_decision_asked is None:
+            return
+        reply = await self._call(TASK, {"operation": "get", "task_id": decision_id})
+        run = goal_run_of(reply.data) if reply.ok else None
+        if run is None or run.state != AWAITING_ANSWER:
+            logger.info(
+                f"决策 {decision_id} 已经不在等回答，不唤醒任务：{reply.error_code or (run.state if run else '读不懂')}"
+            )
+            return
+        await self._on_decision_asked(run)
 
     async def _resync(self) -> None:
         for goal_id in list(self._goals):

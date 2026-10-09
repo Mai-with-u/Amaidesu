@@ -46,8 +46,10 @@ _SOURCE_KINDS: Dict[str, str] = {
     "character_died": "died",
 }
 
-#: 目标运行的处境变化：游戏 Agent 的任务通道，不进叙事通道
-_GOAL_KINDS = frozenset({"started", "asked", "paused", "resumed", "step_finished", "finished"})
+#: 目标运行的处境变化与死亡恢复决策的执行结果：游戏 Agent 的任务通道，不进叙事通道
+_GOAL_KINDS = frozenset(
+    {"started", "asked", "paused", "resumed", "step_finished", "finished", "death_recovery_applied"}
+)
 
 #: 每种叙事的开头：Mod 那句话是写给游戏 Agent 的，主播要先知道这是什么性质的事
 _LEADS: Dict[str, str] = {

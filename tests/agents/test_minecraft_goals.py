@@ -20,6 +20,7 @@ class _Recorder:
         self.changed: List[GoalRun] = []
         self.gone: List[tuple[int, str]] = []
         self.body: List[Dict[str, Any]] = []
+        self.decisions: List[GoalRun] = []
 
     async def on_changed(self, run: GoalRun) -> None:
         self.changed.append(run)
@@ -29,6 +30,9 @@ class _Recorder:
 
     async def on_body(self, event: Dict[str, Any]) -> None:
         self.body.append(event)
+
+    async def on_decision(self, run: GoalRun) -> None:
+        self.decisions.append(run)
 
 
 def _watch(server: FakeMaicraft, recorder: _Recorder) -> GoalWatch:
@@ -41,6 +45,7 @@ def _watch(server: FakeMaicraft, recorder: _Recorder) -> GoalWatch:
         on_goal_changed=recorder.on_changed,
         on_goal_gone=recorder.on_gone,
         on_body_event=recorder.on_body,
+        on_decision_asked=recorder.on_decision,
         wait_ms=1000,
     )
 
@@ -177,3 +182,20 @@ async def test_unreadable_or_failed_reads_do_not_raise() -> None:
     await watch.step()
 
     assert watch._stream_id is None and recorder.changed == []
+
+
+@pytest.mark.asyncio
+async def test_a_death_recovery_question_is_handed_over_without_tracking_it() -> None:
+    """死亡恢复是 Mod 自己挂出的决策：死亡照常算身体事件，提问读一次交给决策回调，不进跟踪名单。"""
+    server, recorder = FakeMaicraft(), _Recorder()
+    watch = _watch(server, recorder)
+    await watch.step()
+    decision_id = server.die()
+
+    await watch.step()
+
+    assert [event["kind"] for event in recorder.body] == ["character_died"]
+    assert [run.goal_id for run in recorder.decisions] == [decision_id]
+    assert recorder.decisions[0].ability == "death_recovery"
+    assert recorder.decisions[0].question["options"][0]["id"] == "respawn"
+    assert recorder.changed == [] and watch.tracked_ids() == []

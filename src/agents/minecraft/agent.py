@@ -79,7 +79,8 @@ _MAX_BATCH_BODY_EVENTS = 5
 _BODY_NOTICES = {
     "need_unhandled": "[身体] {message}。这是观察不是命令：身体自己处理不了它，需要时调整计划或上报主播。",
     "character_died": (
-        "[身体] {message}。目标保留着，重生后身体会接着做；重生后先 maicraft_observe(what=self) 看一眼自己"
+        "[身体] {message}。Mod 会挂出一条死亡恢复决策等你回答，按问题里给的选项选（选重生才会复活）；"
+        "目标保留着，复活后接着做。复活后先 maicraft_observe(what=self) 看一眼自己"
         "（位置变了，背包可能也变了），再决定要不要调整计划或上报主播。"
     ),
 }
@@ -210,6 +211,7 @@ class MinecraftAgent(BaseAgent):
             on_goal_changed=self._on_goal_changed,
             on_goal_gone=self._on_goal_gone,
             on_body_event=self._on_body_event,
+            on_decision_asked=self._on_decision_asked,
             wait_ms=config.events_wait_ms,
         )
 
@@ -978,6 +980,16 @@ class MinecraftAgent(BaseAgent):
                 f"先看现场，再用 maicraft_task(operation=resume 或 cancel, task_id={run.goal_id}) 继续或取消。"
             )
 
+    async def _on_decision_asked(self, run: GoalRun) -> None:
+        """Mod 自己挂出的决策（死亡恢复）在等回答：带着问题与选项唤醒任务，让模型按问题里给的选项选。
+
+        决策不是本 Agent 下达的目标：不进跟踪名单、不记任务账本；空闲时也唤醒，没人回答角色就一直停在死亡屏幕。
+        """
+        self._inject_wakeup_message(
+            f"[系统] Mod 挂出的决策（{run.ability}，task_id={run.goal_id}）在等你回答：{json_text(run.question)}。"
+            f"按问题里给的选项，用 maicraft_task(operation=answer, task_id={run.goal_id}, answer=选项编号) 回答。"
+        )
+
     async def _on_goal_gone(self, goal_id: int, reason: str) -> None:
         """在跟踪的目标查不到了（多半是换了世界）：如实告诉任务，不让它挂着等不来的结果。"""
         note = self._goal_notes.pop(goal_id, {"task_id": goal_id})
@@ -999,7 +1011,8 @@ class MinecraftAgent(BaseAgent):
         notice = _BODY_NOTICES.get(kind)
         if notice is not None:
             # 处理不了的需求、角色死亡：身体自己顾不过来，任务还没结束就注入一条通知唤醒模型，同时上报主播。
-            # 死亡时 Mod 让目标停在原地等重生、重生后接着做，所以只提醒重生后先看一眼自己，不催模型重下目标。
+            # 死亡时 Mod 让目标停在原地，另挂一条死亡恢复决策等模型选（决策提问另由决策回调唤醒）；
+            # 这里只说明来龙去脉、提醒复活后先看一眼自己，不催模型重下目标。
             if self._batch_active or not self._task_finished:
                 self._inject_wakeup_message(notice.format(message=message))
             await self._emit_game_event("attention_required", message)

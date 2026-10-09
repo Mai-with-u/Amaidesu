@@ -80,7 +80,7 @@ def test_classification_keeps_body_encounters_and_drops_goal_progress() -> None:
     assert classify("temporary_task_finished") == "reflex_finished"
     assert classify("need_unhandled") == "need_unhandled"
     assert classify("character_died") == "died", "角色死亡归已有的 died 事件"
-    for goal_kind in ("started", "asked", "paused", "resumed", "step_finished", "finished"):
+    for goal_kind in ("started", "asked", "paused", "resumed", "step_finished", "finished", "death_recovery_applied"):
         assert classify(goal_kind) is None, f"{goal_kind} 是游戏 Agent 的任务通道"
     assert classify("something_new") == "unknown", "上游新增种类不丢，但事件面保持封闭"
     assert classify("") is None

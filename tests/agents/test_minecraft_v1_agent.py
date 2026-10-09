@@ -367,3 +367,30 @@ async def test_skill_catalog_follows_the_abilities_the_mod_has(tmp_path: Path) -
     assert "minecraft_skill" in json.dumps(llm.tools_given[0]), "有技能库时提供按名读技能的工具"
     assert len(server.calls_to("lookup")) == 1, "能力清单每次连接只读一次，技能目录与开局资料共用"
     await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
+    """角色死了：死亡通知说明要回答死亡恢复决策，决策提问带着选项唤醒任务，模型按选项回答。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if "Mod 挂出的决策" in _texts(messages):
+            return _resp(calls=[_call("maicraft_task", {"operation": "answer", "task_id": -1, "answer": "respawn"})])
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
+
+    agent, llm, bus = await _start(server, script)
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
+    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+
+    server.die()
+    await _wait_until(lambda: server.calls_to("task") and server.calls_to("task")[-1].get("operation") == "answer")
+
+    woken = _texts(llm.seen[-1])
+    assert "死亡恢复决策等你回答" in woken and "task_id=-1" in woken and "respawn" in woken
+    assert server.calls_to("task")[-1] == {"operation": "answer", "task_id": -1, "answer": "respawn"}
+    assert agent._goals.tracked_ids() == [1], "决策不进跟踪名单，原来的目标还在跟"
+    await agent.stop()

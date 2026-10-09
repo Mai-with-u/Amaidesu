@@ -193,6 +193,27 @@ class FakeMaicraft(BaseToolProvider):
     def body_event(self, kind: str, message: str) -> None:
         self._append(kind, -1, message)
 
+    def die(self) -> int:
+        """角色死了：和 MaiCraft v1 一样先发 character_died，再挂一条死亡恢复决策（编号是负数）并发 asked。"""
+        decision_id = -1 - sum(1 for goal_id in self.goals if goal_id < 0)
+        self._append("character_died", -1, "角色死了，等重生；插着的任务已结束，主任务停在原地，重生后接着做")
+        question = {
+            "reason": "choose_one",
+            "text": "角色死了。接下来怎么办？",
+            "options": [
+                {"id": "respawn", "meaning": "发原版重生请求，回出生点或床，任务原地接着做"},
+                {"id": "cancel_task", "meaning": "取消当前任务，死亡屏幕留给人处理"},
+            ],
+        }
+        self.goals[decision_id] = {
+            "task_id": decision_id,
+            "ability": "death_recovery",
+            "state": "awaiting_answer",
+            "question": question,
+        }
+        self._append("asked", decision_id, question["text"])
+        return decision_id
+
     def change_world(self) -> None:
         """换了世界：事件流换新编号，旧目标都不在了。"""
         self.stream_id = "stream-2"
