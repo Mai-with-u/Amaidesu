@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
-from copy import deepcopy
 from collections.abc import Callable
+from copy import deepcopy
 from typing import Any
 
-from src.agents.minecraft.builder.config import MinecraftBuilderConfig
 from src.agents.minecraft.config import MinecraftContextConfig
-from src.agents.minecraft.observations import json_text
 from src.modules.logging import get_logger
 
 logger = get_logger("MinecraftContext")
@@ -18,6 +17,11 @@ logger = get_logger("MinecraftContext")
 # 最新一组回执还没读、怎么整理都压不进预算时，可以先多带这么多倍预算让模型读完，
 # 下一轮再一次性整理掉；再大就照常整理，避免撞上模型上下文窗口
 _UNREAD_RECEIPT_HEADROOM = 1.5
+
+
+def json_text(value: Any) -> str:
+    """稳定序列化工作证据，避免空格变化制造重复正文。"""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 def context_chars(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> int:
@@ -58,14 +62,13 @@ class MinecraftHistoryCompactor:
     def __init__(
         self,
         llm: Any,
-        config: MinecraftContextConfig | MinecraftBuilderConfig,
+        config: MinecraftContextConfig,
         *,
         profile: str = "minecraft",
         interrupt: asyncio.Event | None = None,
     ) -> None:
         self._llm = llm
         self._config = config
-        # 建筑设计仍使用自己的模型预算和取消信号，整理能力只在 Minecraft 包内复用。
         self._profile = profile
         self._interrupt = interrupt
         self.checkpoints = 0
@@ -142,11 +145,10 @@ class MinecraftHistoryCompactor:
                 "引用已有观察或产物编号；保留失败和结果未知的区别，不补造事实、授权或成功结论。"
                 "末尾的当前任务状态用于核对旧历史：最新指令与真实回执优先，已采用的目标解释和方案保持有效。"
                 "旧疑问已经由当前待办或新证据解决时，应删除旧疑问；待办完成本身不证明游戏操作成功。"
-                "plan_facts 记录已通过、已提交或结果未知的真实计划阶段；旧笔记的待校验不能覆盖它。"
-                "background_tasks 中的 decision 是原生待应答事实，编号、选项和失败证据由代码保留。"
-                "省略证据只保留摘要和读取入口；本地原件与远端未读字段不能混为一谈，也不要求为了完整而全部展开。"
-                "不要重新安排下一步、要求重复授权，或把尚未运行验收变成不能起草设计。"
-                "原始指令、待办、任务事实与观察索引由代码保留，不要复述这些清单或教材正文。"
+                "background_goals 是 MaiCraft 里还没结束的目标，其中的 question 是等待回答的问题，编号与选项由代码保留。"
+                "保留目标结果里已经发生的变化与没能确认的交互，不把没确认的说成做成了。"
+                "不要重新安排下一步或要求重复授权。"
+                "原始指令、待办与任务事实由代码保留，不要复述这些清单。"
                 f"直接输出中文短摘要，目标不超过 {min(2000, self._config.summary_max_chars // 2)} 字符，不调用工具。"
             ),
         }

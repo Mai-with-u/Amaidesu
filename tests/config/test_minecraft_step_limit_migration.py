@@ -30,8 +30,7 @@ def test_step_limit_removal_is_written_back_only_to_agents(tmp_path: Path, old_v
     agents["meta"]["version"] = old_version
     minecraft = agents["agents"]["minecraft"]
     minecraft["max_steps"] = old_limit
-    minecraft["execute_poll_interval_ms"] = 4000
-    minecraft["builder"]["max_steps"] = 9
+    minecraft["context"]["recent_turns"] = 9
     agents_path.write_text(tomlkit.dumps(agents), encoding="utf-8")
     others = {path: path.read_bytes() for path in tmp_path.glob("*.toml") if path != agents_path}
 
@@ -41,7 +40,7 @@ def test_step_limit_removal_is_written_back_only_to_agents(tmp_path: Path, old_v
     minecraft = migrated["agents"]["minecraft"]
     assert migrated["meta"]["version"] == "2.0.40"
     assert "max_steps" not in minecraft
-    assert minecraft["execute_poll_interval_ms"] == 4000 and minecraft["builder"]["max_steps"] == 9
+    assert minecraft["context"]["recent_turns"] == 9
     assert all(path.read_bytes() == content for path, content in others.items())
     written = agents_path.read_bytes()
     _, report = load_config_dir(tmp_path)

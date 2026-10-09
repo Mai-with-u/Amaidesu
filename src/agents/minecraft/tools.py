@@ -1,5 +1,5 @@
 """MinecraftAgent 局部工具（minecraft_report / minecraft_todo /
-minecraft_notebook / minecraft_get_work_log）
+minecraft_notebook / minecraft_wait / minecraft_get_work_log / minecraft_glance）
 
 工具归属约定（text_adv 同构）：
 - 局部工具（minecraft_todo / minecraft_notebook）= Agent 自己 LLM 用，驱动 ReAct 循环
@@ -31,7 +31,6 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, Optional
 
 from src.modules.logging import get_logger
-from src.modules.skills import SKILL_TOOL_NAME, build_skill_spec
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,
@@ -39,7 +38,6 @@ from src.modules.tools.models import (
 )
 from src.modules.tools.provider import BaseToolProvider
 
-from .runtime_tools import build_observation_spec, build_wait_spec
 from .state import MinecraftAgentState
 
 logger = get_logger("MinecraftTools")
@@ -216,8 +214,8 @@ def build_glance_spec() -> ToolSpec:
     return ToolSpec(
         name="glance",
         description=(
-            "看一眼游戏里的自己：身体状态（维度/位置/血量/饥饿/时段天气/护甲）、背包物品与数量、"
-            "附近牌子上的字、附近生物与设施，以及身体手头的工作（待办、进行中的游戏内动作、连续失败次数）。"
+            "看一眼游戏里的自己：身体状态（维度/位置/血量/饥饿/手上拿的/护甲/效果）、背包物品与数量、"
+            "时段天气、身边的生物与设施，以及身体手头的工作（待办、正在跑的游戏内目标）。"
             "只读、即时，面向直播叙事；更细的勘查、判断或任何操作都交给委派，不要自己琢磨方块坐标。"
         ),
         parameters_schema={"type": "object", "properties": {}, "required": []},
@@ -228,10 +226,32 @@ def build_glance_spec() -> ToolSpec:
             "properties": {
                 "body": {"type": "object"},
                 "inventory": {"type": "array"},
-                "signs": {"type": "array"},
                 "entities": {"type": "array"},
+                "facilities": {"type": "array"},
                 "work": {"type": "object"},
             },
+        },
+    )
+
+
+def build_wait_spec() -> ToolSpec:
+    """``minecraft_wait`` 工具规格——让出本轮，等后台目标的真实进展"""
+    return ToolSpec(
+        name="wait",
+        provider=PROVIDER_NAME,
+        kind="sync",
+        description=(
+            "身体正在执行后台目标、而你既没有可推进也没有可提前准备的事时，单独调用本工具让出本轮。"
+            "宿主盯着事件流：目标做完、失败、提问、被暂停，或主播发来新指令时，原任务带着最新结果继续。"
+            "不要用 maicraft_task 反复查同一个目标来等结果。目标在等你回答问题或已被暂停时先处理它们，等不来结果。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "minLength": 1, "description": "说明在等哪个目标的什么结果"},
+            },
+            "required": ["reason"],
+            "additionalProperties": False,
         },
     )
 
@@ -256,14 +276,10 @@ class MinecraftToolProvider(BaseToolProvider):
 
     state: MinecraftAgentState
     report_callback: Optional[ReportCallback] = None
-    # 等待只改变本玩家的调度状态，真正的任务监控由已有跟踪器承担。
+    # 等待只改变本玩家的调度状态，真正盯后台目标的是宿主的事件跟踪。
     wait_callback: Optional[Callable[[], Dict[str, Any]]] = None
-    # 原始观察由当前逻辑任务持有，工具只负责按引用读取，不自行查询或缓存世界。
-    observation_reader: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
-    # 主播看一眼：由 Agent 读原生观察并精简成叙事视图（未注入时不提供该工具）
+    # 主播看一眼：由 Agent 读观察并精简成叙事视图（未注入时不提供该工具）
     glance_reader: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
-    # 技能正文读取：由 Agent 按自己的受众名与已装模组筛选（未注入技能库时不提供该工具）
-    skill_reader: Optional[Callable[[str], Dict[str, Any]]] = None
 
     @property
     def name(self) -> str:
@@ -278,12 +294,8 @@ class MinecraftToolProvider(BaseToolProvider):
         ]
         if self.wait_callback is not None:
             specs.append(build_wait_spec())
-        if self.observation_reader is not None:
-            specs.append(build_observation_spec())
         if self.glance_reader is not None:
             specs.append(build_glance_spec())
-        if self.skill_reader is not None:
-            specs.append(build_skill_spec(PROVIDER_NAME))
         return specs
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -315,12 +327,8 @@ class MinecraftToolProvider(BaseToolProvider):
                 result = await self._invoke_report(args)
             elif matched.name == "wait" and self.wait_callback is not None:
                 result = self.wait_callback()
-            elif matched.name == "observation" and self.observation_reader is not None:
-                result = self.observation_reader(args)
             elif matched.name == "glance" and self.glance_reader is not None:
                 result = await self.glance_reader()
-            elif matched.name == SKILL_TOOL_NAME and self.skill_reader is not None:
-                result = self.skill_reader(str(args.get("name", "")))
             else:
                 return ToolExecutionResult(
                     tool_name=tool_name,
@@ -329,7 +337,7 @@ class MinecraftToolProvider(BaseToolProvider):
                     duration_ms=int(time.time() * 1000) - started_ms,
                 )
         except ValueError as exc:
-            # 观察引用或资料路径写错时，玩家应纠正读取参数，不能把自己的资料工具熔断摘除。
+            # 参数写错时由玩家纠正，不能把自己的工具熔断摘除。
             logger.warning(f"Minecraft 工具 '{tool_name}' 请求被拒绝: {exc}", exc=True)
             return ToolExecutionResult(
                 tool_name=tool_name,
@@ -404,6 +412,7 @@ __all__ = [
     "build_get_work_log_spec",
     "build_glance_spec",
     "build_report_spec",
+    "build_wait_spec",
     "PROVIDER_NAME",
     "ReportCallback",
 ]

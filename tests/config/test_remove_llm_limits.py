@@ -34,7 +34,6 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
             "agents.toml",
             (
                 "agents.streamer.history_limit",
-                "agents.minecraft.builder.max_resource_chars",
                 "agents.minecraft.context.observation_inline_chars",
                 "agents.minecraft.context.archive_max_chars",
             ),
@@ -83,20 +82,20 @@ def test_legacy_limits_removed_from_disk_only_for_affected_file(
 
 
 def test_summary_thresholds_and_custom_values_survive_upgrade(tmp_path: Path) -> None:
-    """此次清理保留父玩家和建造设计的摘要阈值、近期轮数及摘要长度。"""
+    """此次清理保留玩家的摘要阈值、近期轮数及摘要长度。"""
     generate_default_configs(tmp_path)
     path = tmp_path / "agents.toml"
     data = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     data["meta"]["version"] = "2.0.39"
     minecraft = data["agents"]["minecraft"]
-    for section in (minecraft["context"], minecraft["builder"]):
+    for section in (minecraft["context"],):
         section["max_context_chars"] = 234000
         section["summary_max_chars"] = 7000
         section["recent_turns"] = 8
     path.write_text(tomlkit.dumps(data), encoding="utf-8")
     load_config_dir(tmp_path)
     migrated = tomlkit.parse(path.read_text(encoding="utf-8-sig"))["agents"]["minecraft"]
-    for section in (migrated["context"], migrated["builder"]):
+    for section in (migrated["context"],):
         assert section["max_context_chars"] == 234000
         assert section["summary_max_chars"] == 7000
         assert section["recent_turns"] == 8

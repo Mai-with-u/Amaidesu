@@ -67,9 +67,9 @@ class TestAgentsConfigSubConfigs:
 
     def test_minecraft_subconfig_self_contained(self) -> None:
         """minecraft 是顶级子配置，类型由包内权威 MinecraftConfig 提供。"""
-        cfg = AgentsConfig(minecraft={"execute_poll_interval_ms": 4000})
+        cfg = AgentsConfig(minecraft={"events_wait_ms": 4000})
         assert isinstance(cfg.minecraft, MinecraftConfig)
-        assert cfg.minecraft.execute_poll_interval_ms == 4000
+        assert cfg.minecraft.events_wait_ms == 4000
 
     def test_text_adv_subconfig_self_contained(self):
         cfg = AgentsConfig(text_adv={"monitor_index": 0})
@@ -127,8 +127,8 @@ class TestMinecraftPackageConfig:
 
     def test_field_overrides(self) -> None:
         """自定义后台核查间隔随玩家子配置保留。"""
-        cfg = AgentsConfig(minecraft={"execute_poll_interval_ms": 4000})
-        assert cfg.minecraft.execute_poll_interval_ms == 4000
+        cfg = AgentsConfig(minecraft={"events_wait_ms": 4000})
+        assert cfg.minecraft.events_wait_ms == 4000
 
     def test_removed_step_limit_rejected(self) -> None:
         """旧步数键须经配置迁移清理，不能成为仍可编辑但不生效的参数。"""
@@ -180,10 +180,10 @@ class TestAgentsConfigRoundTrip:
 
     def test_game_agent_round_trip(self) -> None:
         """序列化再加载后保留游戏后台核查节奏。"""
-        cfg = AgentsConfig(minecraft={"execute_poll_interval_ms": 4000})
+        cfg = AgentsConfig(minecraft={"events_wait_ms": 4000})
         dumped = cfg.model_dump()
         cfg2 = AgentsConfig.model_validate(dumped)
-        assert cfg2.minecraft.execute_poll_interval_ms == 4000
+        assert cfg2.minecraft.events_wait_ms == 4000
 
 
 class TestAgentTypeLiteral:

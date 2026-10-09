@@ -13,19 +13,6 @@ from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 
 
-@pytest.mark.parametrize("with_template", [False, True])
-def test_material_priority_is_shared_by_template_and_fallback(with_template: bool) -> None:
-    """不同提示入口都保留随身与无线库存优先，普通取材不被模型自行缩成逐木种采矿。"""
-    manager = MagicMock() if with_template else None
-    if manager is not None:
-        manager.render.return_value = "通过原生工具完成游戏任务"
-    agent = MinecraftAgent(MinecraftConfig(), llm_manager=MagicMock(), prompt_manager=manager)
-    prompt = agent._system_prompt()
-    assert "先用随身库存和可立即使用的 AE 无线现货" in prompt
-    assert "默认省略 allowed_sources" in prompt and "只有用户明确限定来源才收窄" in prompt
-    assert "不按木种逐个试搜" in prompt
-
-
 def history() -> list[dict]:
     """包含多轮完整工具往返，预算超限来自历史累积而非孤立协议消息。"""
     messages = [{"role": "system", "content": "完成玩家目标"}, {"role": "user", "content": "建好；禁止取私人箱子"}]
@@ -315,55 +302,29 @@ async def test_far_oversized_context_still_compacts_before_reading() -> None:
     assert messages[-1]["tool_call_id"] == "big" and len(messages[-1]["content"]) == 40000
 
 
-@pytest.mark.parametrize("with_template", [False, True])
-def test_pacing_rules_reach_template_and_fallback(with_template: bool) -> None:
-    """模板与内建兜底都要求：身体执行任务时准备下一步、按需读取、换路不重试、上报只写要点。"""
+def test_template_states_how_to_play_with_maicraft_v1() -> None:
+    """系统提示词写明 v1 的玩法：五个工具各管什么、一次一个动手目标、等待靠宿主通知、完成标准与底线。"""
     reset_prompt_manager()
     try:
-        manager = get_prompt_manager() if with_template else None
-        prompt = MinecraftAgent(MinecraftConfig(), llm_manager=MagicMock(), prompt_manager=manager)._system_prompt()
+        prompt = MinecraftAgent(MinecraftConfig(), prompt_manager=get_prompt_manager())._system_prompt()
     finally:
         reset_prompt_manager()
-    if with_template:
-        assert "身体执行任务的这段时间是你的准备时间" in prompt and "身体闲着时观众在等" in prompt
-        assert "按需读取" in prompt and "不整份读取大回执" in prompt
-        assert "换路而不是重试" in prompt and "任务被暂停" in prompt
-        assert "念给观众听" in prompt and "写 JSON 数字，不加引号" in prompt
-    else:
-        assert "先准备下一步要用的契约与方案" in prompt and "任务被暂停时按原因处理" in prompt
-        assert "按 ref/path 只读需要的字段" in prompt and "同一路径连续失败就换路径" in prompt
+    for tool in ("maicraft_observe", "maicraft_lookup", "maicraft_execute", "maicraft_task", "minecraft_wait"):
+        assert tool in prompt
+    assert "maicraft_events" not in prompt, "事件流只给宿主读"
+    assert "身体同一时间只做一件事" in prompt and "[开局资料]" in prompt
+    assert "error.fields" in prompt and "unconfirmed" in prompt
+    assert "## 完成标准" in prompt and "顶替不算完成" in prompt and "子问题解决后直接回原目标" in prompt
+    assert "## 遇到困难时" in prompt and '说"做不到"要有证据' in prompt
+    assert "你就是这场直播的主播" in prompt and "没有谁派谁" in prompt
+    assert "像生存玩家一样玩" in prompt and "/tp" in prompt and "创造模式" in prompt
 
 
-@pytest.mark.parametrize("with_template", [False, True])
-def test_fair_play_rules_reach_template_and_fallback(with_template: bool) -> None:
-    """模板与内建兜底都要求像生存玩家一样玩：不用管理员命令、不用创造模式物品，卡住了照实说。"""
-    reset_prompt_manager()
-    try:
-        manager = get_prompt_manager() if with_template else None
-        prompt = MinecraftAgent(MinecraftConfig(), llm_manager=MagicMock(), prompt_manager=manager)._system_prompt()
-    finally:
-        reset_prompt_manager()
-    assert "像生存玩家一样玩" in prompt and "/tp" in prompt and "/give" in prompt
-    assert "创造模式" in prompt
-    if with_template:
-        assert "普通玩家命令（`/tell`、`/tpa`、`/home` 等）可以照常用" in prompt
-        assert "管理员命令被拒绝时不要换个写法再试" in prompt and "卡关本身就是好内容" in prompt
-
-
-@pytest.mark.parametrize("with_template", [False, True])
-def test_persistence_and_one_streamer_rules_reach_template_and_fallback(with_template: bool) -> None:
-    """不摆烂与一体化：本次目标真的达成才交付，卡住先换路查资料；做什么以本次目标为准，上报用第一人称。"""
-    reset_prompt_manager()
-    try:
-        manager = get_prompt_manager() if with_template else None
-        prompt = MinecraftAgent(MinecraftConfig(), llm_manager=MagicMock(), prompt_manager=manager)._system_prompt()
-    finally:
-        reset_prompt_manager()
-    assert "本次目标要的结果真的达成才交付" in prompt or "本次目标要的结果真的在游戏里达成" in prompt
-    assert "与本次目标冲突时听本次目标" in prompt or "两者冲突时听本次目标" in prompt
-    if with_template:
-        assert "## 完成标准" in prompt and "顶替不算完成" in prompt and "子问题解决后直接回原目标" in prompt
-        assert "## 遇到困难时" in prompt and "说\"做不到\"要有证据" in prompt and "卡在某一步时别干等" in prompt
-        assert "你就是这场直播的主播" in prompt and "没有谁派谁" in prompt and "用第一人称" in prompt
-    else:
-        assert "至少试过两种办法再上报" in prompt and "子问题解决后直接回原目标" in prompt
+def test_fallback_prompt_keeps_the_bottom_lines() -> None:
+    """模板渲染不了时，内建提示词仍守住交付标准、卡住时的做法和不走捷径。"""
+    manager = MagicMock()
+    manager.render.side_effect = RuntimeError("模板坏了")
+    prompt = MinecraftAgent(MinecraftConfig(), prompt_manager=manager)._system_prompt()
+    assert "本次目标要的结果真的达成才交付" in prompt and "听本次目标" in prompt
+    assert "至少试过两种办法再用" in prompt and "身体同一时间只做一件事" in prompt
+    assert "像生存玩家一样玩" in prompt and "/tp" in prompt and "/give" in prompt and "创造模式" in prompt

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from src.agents.minecraft.builder.config import MinecraftBuilderConfig
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.mcp.config import McpServerConfig
 
@@ -30,20 +29,15 @@ class MinecraftConfig(BaseConfig):
             _on_start 装配 McpToolProvider 并以逐工具可见名单（
             fail-closed）注册进 ToolRegistry；false 时不装配（Agent 命令
             驱动，MCP 不可用即降级）。
+        events_wait_ms: 跟踪后台目标时，一次读事件流最多等多久；没有新事件就空手返回再等下一次。
     """
 
-    # 设计任务从属于当前游戏，关闭 Minecraft 时不单独装配建造 Agent。
     context: MinecraftContextConfig = Field(default_factory=MinecraftContextConfig, description="游戏任务上下文预算")
-    builder: MinecraftBuilderConfig = Field(default_factory=MinecraftBuilderConfig, description="按需建筑设计 Agent")
-    execute_poll_interval_ms: int = Field(
-        default=2000,
-        ge=100,
-        description="handoff 周期兜底核实任务快照的间隔（毫秒）",
-    )
-    execute_wait_timeout_ms: int = Field(
-        default=1_800_000,
+    events_wait_ms: int = Field(
+        default=25_000,
         ge=1000,
-        description="后台任务单轮 wait_timeout 上限（毫秒，到点注入告警不杀任务）",
+        le=55_000,
+        description="跟踪后台目标时一次读事件流最多等多久（毫秒；MaiCraft 上限 60 秒）",
     )
     mcp: McpServerConfig = Field(
         default_factory=lambda: McpServerConfig(url="http://127.0.0.1:8766/mcp"),
@@ -51,4 +45,4 @@ class MinecraftConfig(BaseConfig):
     )
 
 
-__all__ = ["MinecraftConfig"]
+__all__ = ["MinecraftConfig", "MinecraftContextConfig"]

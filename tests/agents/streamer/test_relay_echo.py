@@ -140,5 +140,5 @@ def test_prompts_state_relay_and_completion_rules() -> None:
     assert "补充只写**新的要求**" in planner and "没有新输入的流程单推进、冷场、定时窗口不补充" in planner
     assert "怎样算做完" in planner and "观众没说数量就按一个算" in planner
     assert "要的东西要收进背包才算到手" in game and "[运营原话]" in game and "[主播补充]" in game
-    assert "一次只提交一个身体动作的 `maicraft_execute`" in game
-    assert "ability_signature" in game
+    assert "身体同一时间只做一件事" in game
+    assert "error.fields" in game

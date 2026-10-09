@@ -1,17 +1,20 @@
-"""MinecraftAgent —— Minecraft 世界中的 AI 玩家（普通 ReAct Agent）
+"""MinecraftAgent —— 用 MaiCraft v1 的工具玩 Minecraft 的 AI 玩家（普通 ReAct Agent）
 
 自包含包（内容特有逻辑内聚，框架零改动）：
-- ``config.py``              运行时配置（上下文整理、后台等待与私有 MCP）
+- ``config.py``              运行时配置（上下文预算、事件长轮询、私有 MCP）
 - ``state.py``               Agent 内存状态（todo/notebook/reports）
-- ``tools.py``               局部工具（todo/notebook/get_work_log/report）Spec + Provider
+- ``tools.py``               局部工具（todo/notebook/report/wait/get_work_log/glance）Spec + Provider
+- ``maicraft.py``            MaiCraft v1 的返回格式、目标运行状态与事件流，只在这里解读一次
+- ``goals.py``               后台目标跟踪：events 长轮询，目标需要处理时唤醒任务
+- ``glance.py``              主播看一眼的叙事视图
+- ``context.py``             任务历史按预算集中整理
 - ``agent.py``               MinecraftAgent（BaseAgent）：命令驱动 ReAct 循环
-- ``attention_collector.py`` 注意流采集器（身体事件 → game.body.* 事件）
-- ``prompts/``               系统提示词（ReAct 工作方式引导）
+- ``prompts/``               系统提示词
 
-``attention_collector.py`` 是**游戏相关**的外部世界适配器，故随本包内聚；
-但它的装配与起停走采集器框架（``config/collectors.toml`` + 工厂），
-生命周期挂装配期而非本 Agent——这样"待机时也有身体事件流"成立，
-且游戏 Agent 重建/停机不会带走这条流。
+``attention_collector.py`` 常驻长轮询 MaiCraft v1 的任务事件流，把身体先处理的急事与处理不了的需求
+转成 ``game.body.*`` 事件（分类表在 ``attention_matrix.py``）；``chat_collector.py`` 读的是旧版 Mod 的
+聊天流资源，MaiCraft v1 还没有聊天来源，接 v1 时从采集器的 enabled 列表里移除。两个采集器的装配与起停
+走采集器框架（``config/collectors.toml`` + 工厂），生命周期挂装配期而非本 Agent。
 """
 
 from .agent import MinecraftAgent

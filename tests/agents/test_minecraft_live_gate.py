@@ -15,8 +15,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
+from src.modules.mcp.config import McpServerConfig
 from src.agents.minecraft.state import MinecraftInstruction
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
+
+
+def _offline_config() -> MinecraftConfig:
+    """不连私有 MCP 的配置：本机正开着 MaiCraft 时，测试也不能连上真实的 8766 端口。"""
+    return MinecraftConfig(mcp=McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp"))
 
 
 def _agent(llm: Optional[Any] = None) -> tuple[MinecraftAgent, MagicMock]:
@@ -26,7 +32,7 @@ def _agent(llm: Optional[Any] = None) -> tuple[MinecraftAgent, MagicMock]:
     if llm is None:
         llm = MagicMock()
         llm.generate = AsyncMock()
-    agent = MinecraftAgent(MinecraftConfig(), llm_manager=llm, event_bus=bus)
+    agent = MinecraftAgent(_offline_config(), llm_manager=llm, event_bus=bus)
     agent._running = True
     return agent, llm
 
@@ -89,34 +95,6 @@ async def test_start_enters_offline_until_live_started() -> None:
     assert len(agent._message_queue) == 1
 
 
-async def test_live_started_resumes_and_ended_stops() -> None:
-    """开播恢复接受委派；下播清队列、复位闸、进收工态。"""
-    agent, _llm = _agent()
-    await agent._on_live_started("live.started", _started_payload(), "test")
-    assert agent._live_active is True
-    agent.receive_delegation(instruction="建房子", task_id="t1")
-    assert len(agent._message_queue) == 1
-
-    # 收工前先摆上退避定时器与退避账目，验证一并作废
-    timer = asyncio.create_task(asyncio.sleep(60))
-    agent._failure_wake_timers["t1"] = timer
-    agent._failure_gate.store_wakeup("t1", "[系统] 失败事实")
-    agent._no_progress_gate.mark(0)
-
-    await agent._on_live_ended("live.ended", _ended_payload(), "test")
-    with suppress(asyncio.CancelledError):
-        await timer
-    assert agent._live_active is False
-    assert len(agent._message_queue) == 0
-    assert timer.cancelled()
-    assert agent._failure_wake_timers == {}
-    assert agent._no_progress_gate.in_window(1) is False
-    # 收工后委派与递话均拒收
-    agent.receive_delegation(instruction="再来一单", task_id="t2")
-    assert len(agent._message_queue) == 0
-    assert agent.receive_prompt(content="补充", source="streamer-react") is False
-
-
 async def test_offline_worker_never_starts_batch() -> None:
     """收工态下唤醒信号与队列残留都不会开新任务批。"""
     agent, llm = _agent()
@@ -165,26 +143,3 @@ async def test_inflight_batch_settles_then_stops() -> None:
     assert llm.generate.await_count == 1
     tool_messages = [m for m in agent._messages if m.get("role") == "tool"]
     assert len(tool_messages) == 1
-
-
-async def test_offline_attention_notification_is_silent() -> None:
-    """收工态下注意流通知不触发任何读取（不响应主动轮询）。"""
-    agent, _llm = _agent()
-    agent._live_active = False
-    provider = MagicMock()
-    provider.read_attention = AsyncMock()
-    agent._attention_provider = provider
-    agent._on_attention_notification()
-    for _ in range(5):
-        if not agent._bg_tasks:
-            break
-        await asyncio.gather(*list(agent._bg_tasks), return_exceptions=True)
-    provider.read_attention.assert_not_called()
-
-
-async def test_offline_failure_wake_not_scheduled() -> None:
-    """收工态下失败退避不再排程唤醒定时器。"""
-    agent, _llm = _agent()
-    agent._live_active = False
-    agent._schedule_failure_wake("t9", 1000)
-    assert agent._failure_wake_timers == {}

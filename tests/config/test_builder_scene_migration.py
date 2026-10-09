@@ -45,10 +45,8 @@ def test_scene_transport_written_back_with_independent_file_migrations(tmp_path:
     load_config_dir(tmp_path)
     agents = tomlkit.parse(agents_path.read_text(encoding="utf-8-sig"))
     model = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-    builder = agents["agents"]["minecraft"]["builder"]
-    assert builder["execute_tool"] == "maicraft_execute" and builder["task_tool"] == "maicraft_task"
-    assert "validate_tool" not in builder and "preview_tool" not in builder
-    assert builder["max_steps"] == 9
+    # 旧建筑设计子 Agent 随 v1 玩家停用：迁移照常执行，写回时整段按多余字段清理。
+    assert "builder" not in agents["agents"]["minecraft"]
     assert agents["meta"]["version"] == "2.0.40" and model["meta"]["version"] == "2.0.40"
     _, report = load_config_dir(tmp_path)
     assert not report.missing
