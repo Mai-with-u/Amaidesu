@@ -7,7 +7,7 @@
 
 - ``--via delegate``（默认）直接给游戏 Agent 派任务，不经过主播；``--via danmaku`` 注入一条调试弹幕，
   走主播决策、委派、游戏执行的完整链路。
-- ``--expect-item`` 在任务前后经 MaiCraft MCP 读背包，按实际数量变化判断成品是否到手。
+- ``--expect-item`` 在任务前后经 MaiCraft v1 的 ``observe(what=self)`` 读背包，按实际数量变化判断成品是否到手。
 - 汇总写到 ``data/trials/<时间>.json`` 并打印：结果、耗时、各档位请求数与 RPM、token、整理次数、
   被拒调用和游戏 Agent 的调用分布。只读数据库与日志，不改动任何运行状态（超时取消需显式 ``--cancel-on-timeout``）。
 """
@@ -31,14 +31,11 @@ ROOT = Path(__file__).resolve().parent.parent
 TERMINAL = {"succeeded", "failed", "cancelled", "timeout"}
 # 任务停在待定夺时游戏侧已上报卡点，试跑到此为止，交由人决定
 STOPPING = TERMINAL | {"waiting_for_decision"}
+# MaiCraft v1 的工具调用失败里，这两种是请求本身写错了（参数不对、能力名不存在），算作被拒；
+# 不在世界里、游戏腾不出手、程序出错不是模型的错，不计入。
 REJECTION_MARKERS = (
-    "must be an integer",
-    "must be boolean",
-    "must be an array",
-    "unexpected field",
-    "does not accept target kind",
-    "invalid_arguments",
-    "invalid_semantic_goal",
+    "invalid_parameter",
+    "unknown_ability",
 )
 
 
@@ -97,23 +94,28 @@ class MaicraftMcp:
         self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
     def item_count(self, item_id: str) -> Optional[int]:
-        """读主背包与随身容器里某物品的总数；读不到返回 None（按未知处理，不当成 0）。"""
+        """读背包里某物品的总数；读不到返回 None（按未知处理，不当成 0）。
+
+        用 v1 的 observe(what=self)：背包按物品合并成 {item, count}；回复是 {ok, data} 信封，
+        角色不在世界里等调用失败时 ok 为 false，同样按读不到处理。
+        """
         reply = self._post(
             {
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "tools/call",
-                "params": {"name": "perceive", "arguments": {"view": "situation", "sections": ["inventory"]}},
+                "params": {"name": "observe", "arguments": {"what": "self"}},
             }
         )
         try:
             body = json.loads(reply["result"]["content"][0]["text"])
         except (KeyError, IndexError, TypeError, json.JSONDecodeError):
             return None
-        inventory = body.get("inventory")
+        data = body.get("data") if isinstance(body, dict) and body.get("ok") else None
+        inventory = data.get("inventory") if isinstance(data, dict) else None
         if not isinstance(inventory, list):
             return None
-        return sum(int(row.get("count", 0)) for row in inventory if row.get("item_id") == item_id)
+        return sum(int(row.get("count", 0)) for row in inventory if row.get("item") == item_id)
 
 
 def find_task(dashboard: str, task_id: str) -> Optional[Dict[str, Any]]:
@@ -174,10 +176,13 @@ def request_metrics(t0_ms: int, t1_ms: int) -> Dict[str, Any]:
             if isinstance(arguments, str):
                 arguments = json.loads(arguments or "{}")
             name = function.get("name", "?")
+            # 按 v1 工具细分：下达的能力、看的对象、对目标做的操作，便于看出模型把调用花在了哪里。
             if name == "maicraft_execute":
                 name += ":" + str((arguments.get("goal") or {}).get("ability"))
-            elif name == "maicraft_perceive":
-                name += ":" + str(arguments.get("view"))
+            elif name == "maicraft_observe":
+                name += ":" + str(arguments.get("what"))
+            elif name == "maicraft_task":
+                name += ":" + str(arguments.get("operation"))
             calls[name] += 1
     summary["minecraft_compactions"] = compaction
     summary["minecraft_calls"] = dict(calls.most_common())
