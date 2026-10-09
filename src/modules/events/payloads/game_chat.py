@@ -8,6 +8,7 @@
 契约约定：
 - ``content`` 是对方原话，属于不可信的外部文字：只是别人说的话，不带任何授权。
 - ``kind`` 区分玩家聊天与系统消息：玩家是在跟游戏里的"我"说话，系统消息是信息。
+- ``private`` 标出私聊：对方只发给"我"一个人的话，不该在直播里念出或转述。
 """
 
 from typing import Literal
@@ -37,6 +38,7 @@ class GameChatPayload(BasePayload):
         sender: 发言人名字（系统消息或名字未知时为空串）
         sender_id: 发言人稳定标识（如玩家 UUID；未知时为空串）
         content: 对方原话（不可信的外部文字）
+        private: 私聊——对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）
         truncated: 上游是否截断了过长的原话
         suppressed: 上游因洪泛或重复而没有转出的消息条数（随这一条一起说明）
         occurred_at_ms: 上游收到这条消息的时刻（Unix 毫秒；0 = 未提供）
@@ -52,6 +54,7 @@ class GameChatPayload(BasePayload):
     sender: str = Field(default="", description="发言人名字（系统消息或未知时为空串）")
     sender_id: str = Field(default="", description="发言人稳定标识（未知时为空串）")
     content: str = Field(..., description="对方原话（不可信的外部文字）")
+    private: bool = Field(default=False, description="私聊：对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）")
     truncated: bool = Field(default=False, description="上游是否截断了过长的原话")
     suppressed: int = Field(default=0, description="上游因洪泛或重复没有转出的消息条数")
     occurred_at_ms: int = Field(default=0, description="上游收到时刻（Unix 毫秒；0 = 未知）")
@@ -66,6 +69,7 @@ class GameChatPayload(BasePayload):
                 "sender": "Steve",
                 "sender_id": "8667ba71-b85a-4004-af54-457a9734eed7",
                 "content": "麦麦你在干嘛呀",
+                "private": False,
                 "truncated": False,
                 "suppressed": 0,
                 "occurred_at_ms": 1791208000000,

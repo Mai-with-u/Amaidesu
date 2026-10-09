@@ -234,6 +234,34 @@ async def test_game_chat_feeds_its_own_block_and_player_wakes_streamer() -> None
 
 
 @pytest.mark.asyncio
+async def test_private_game_chat_reaches_the_planner_but_not_the_replyer() -> None:
+    """私聊：决策看得到、标着私聊，玩家搭话照样促发决策；但不交给表达侧，免得当众念出或转述。"""
+    bus = EventBus()
+    agent = _build_streamer_agent(event_bus=bus)
+    agent._subscribe_events()
+    agent._live_active = True
+
+    await bus.emit(
+        CoreEvents.GAME_CHAT_RECEIVED,
+        GameChatPayload(game="minecraft", kind="player", sender="Steve", content="悄悄跟你说个事", private=True),
+        source="maicraft_chat",
+    )
+    await bus.emit(
+        CoreEvents.GAME_CHAT_RECEIVED,
+        GameChatPayload(game="minecraft", kind="player", sender="Alex", content="大家好"),
+        source="maicraft_chat",
+    )
+    await _wait_until(lambda: len(agent._game_chat) == 2)
+
+    assert agent._game_decision_pending is True
+    view = agent._game_chat_view()
+    assert "[minecraft] 玩家 Steve（私聊，只发给我）：悄悄跟你说个事" in view.text
+    assert view.fresh == ("[minecraft] 玩家 Alex：大家好",)
+
+    await bus.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_body_narrative_keeps_all_events() -> None:
     """还没交给决策窗的连续身体事件在条数上限内全部保留，主播能看到最初遇险与最新反应。"""
     bus = EventBus()

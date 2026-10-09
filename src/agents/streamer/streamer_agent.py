@@ -374,6 +374,8 @@ class StreamerAgent(BaseAgent):
         # 游戏里的聊天（订阅 game.chat.*）：游戏世界里的玩家在跟我说话、服务器在通知，
         # 与观众弹幕分开——开口说话对方听不到，要回得在游戏里打字
         self._game_chat = NarrativeBuffer(ttl_ms=narrative.chat_ttl_ms, max_items=narrative.chat_max_items)
+        # 私聊的那几行：决策照常看到，但不交给表达侧——表达侧拿到的是本窗新到的原话，私下的话不能被当众说出来
+        self._private_chat_lines: deque[str] = deque(maxlen=narrative.chat_max_items)
 
         # 未落库的对话轮：没开场次时的全部对话、调试面板注入的观众消息都不会写进
         # live_chat，由这里按时间并入历史——主播问"要不要拉一下"、观众回"拉"时，
@@ -732,19 +734,31 @@ class StreamerAgent(BaseAgent):
         del event_name, source
         try:
             speaker = "系统消息" if payload.kind == "system" else f"玩家 {payload.sender or '（名字未知）'}"
+            if payload.private:
+                # 私聊标在发言人后面：决策看到这是只发给我的话，不在直播里念出或转述
+                speaker += "（私聊，只发给我）"
             note = "（原话过长已截断）" if payload.truncated else ""
             if payload.suppressed:
                 note += f"（之前还有 {payload.suppressed} 条重复或刷屏的没转过来）"
             line = f"[{payload.game}] {speaker}：{payload.content}{note}"
             self._game_chat.add(line, now_ms())
+            if payload.private:
+                self._private_chat_lines.append(line)
             if payload.kind == "player":
                 self._game_decision_pending = True
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏聊天失败: {exc}")
 
     def _game_chat_view(self) -> NarrativeView:
-        """导出游戏里的聊天：全文给 Planner（到达时间与"新"口径同游戏叙事），本窗新到的原话给表达侧。"""
-        return self._game_chat.render(now_ms())
+        """导出游戏里的聊天：全文给 Planner（到达时间与"新"口径同游戏叙事），本窗新到的原话给表达侧。
+
+        私聊只留在全文里：表达侧会围绕新到的原话跟观众聊，私下的话交过去就等于当众转述。
+        """
+        view = self._game_chat.render(now_ms())
+        if not self._private_chat_lines:
+            return view
+        private = set(self._private_chat_lines)
+        return NarrativeView(text=view.text, fresh=tuple(line for line in view.fresh if line not in private))
 
     async def _on_room_state_watched(
         self,
