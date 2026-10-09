@@ -1,14 +1,15 @@
-"""maicraft_attention 采集器测试：注意流增量读取与事件转发。
+"""maicraft_attention 采集器测试：长轮询 MaiCraft v1 的任务事件流，把身体遭遇转成 game.body.* 事件。
 
 采集器代码归属 Minecraft Agent 包（游戏相关适配器内聚），装配走采集器框架。
 
 覆盖：
 - 元数据/继承/配置默认值
-- 增量语义：首读只建游标，之后按游标读取且只转发 ``important``
-- 换流/重新同步：只重置游标、不转发历史
+- 分类：临时任务开始与结束、处理不了的需求进叙事通道，目标运行的处境变化不进
+- 摘要：Mod 那句话去掉坐标，坐标这类遥测不进事件
+- 增量语义：首读只建游标（翻过积压页），之后带流编号与游标长轮询
+- 换流：只重置游标、不转发换流前后的历史
 - 读取失败：游标不动（那一段事件不能因此永久丢失）
 - 连接失败：采集循环不终止，稍后重试（游戏可能后启动）
-- 事件面：``game.body.<上游类型>`` 名字折叠与 payload 字段
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
-from src.agents.minecraft.attention_matrix import attacker_label, classify, summarize
+from src.agents.minecraft.attention_matrix import KIND_TO_EVENT, classify, summarize, without_coordinates
 from src.modules.collectors.base import BaseCollector, CollectorState
 from src.modules.collectors.factory import SUPPORTED_COLLECTORS, instantiate_collector
 from src.modules.events.names import CoreEvents
@@ -39,17 +40,16 @@ class _FakeEventBus:
 
 
 class _FakeClient:
-    """MCP 客户端替身：连接、读工具、资源订阅都可控。"""
+    """MCP 客户端替身：连接、工具清单与 events 的回复都可控。"""
 
     instances: List["_FakeClient"] = []
+    tool_names = ("observe", "lookup", "execute", "task", "events")
 
     def __init__(self, name: str, config: Any) -> None:
         self.name = name
         self.config = config
         self.connected = True
         self.closed = False
-        self.subscriptions: List[str] = []
-        self.unsubscribed: List[str] = []
         self.pages: List[Dict[str, Any]] = []
         self.read_error: Optional[Exception] = None
         self.read_calls: List[Dict[str, Any]] = []
@@ -63,23 +63,14 @@ class _FakeClient:
         self.connected = False
 
     async def list_tools(self) -> List[Any]:
-        return [_FakeTool("perceive"), _FakeTool("execute")]
-
-    async def subscribe_resource(self, uri: str, callback: Any) -> Any:
-        self.subscriptions.append(uri)
-        self._callback = callback
-
-        async def unsubscribe() -> None:
-            self.unsubscribed.append(uri)
-
-        return unsubscribe
+        return [_FakeTool(name) for name in self.tool_names]
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
         self.read_calls.append({"name": name, "arguments": dict(arguments)})
         if self.read_error is not None:
             raise self.read_error
-        page = self.pages.pop(0) if self.pages else None
-        return _FakeCallResult(page)
+        page = self.pages.pop(0) if self.pages else _page([], cursor=0)
+        return _FakeCallResult({"ok": True, "data": page})
 
 
 class _FakeTool:
@@ -90,8 +81,8 @@ class _FakeTool:
 
 
 class _FakeCallResult:
-    def __init__(self, structured: Optional[Dict[str, Any]]) -> None:
-        self.is_error = structured is None
+    def __init__(self, structured: Dict[str, Any]) -> None:
+        self.is_error = False
         self.content = []
         self.structured_content = structured
 
@@ -101,67 +92,40 @@ def _page(
     *,
     cursor: int,
     stream_id: str = "stream-A",
-    resync: bool = False,
+    status: str = "valid",
+    has_more: bool = False,
 ) -> Dict[str, Any]:
-    return {
-        "stream_id": stream_id,
-        "cursor": cursor,
-        "latest_cursor": cursor,
-        "oldest_cursor": 1,
-        "has_more": False,
-        "history_lost": False,
-        "stream_reset": False,
-        "resync_required": resync,
-        "events": events,
-    }
+    """一页 events 的 data（形状与 MaiCraft v1 的 events 一致）。"""
+    return {"stream_id": stream_id, "cursor": cursor, "has_more": has_more, "cursor_status": status, "events": events}
 
 
-def _damage(
-    cursor: int,
-    *,
-    priority: str = "important",
-    phase: str = "",
-    hits: int = 0,
-    source_type: str = "agent.damaged",
-    timestamp: str = "2026-09-16T10:16:23.580633Z",
-) -> Dict[str, Any]:
-    """一条上游注意流事件（形状与 mod 的 agent.damaged 一致）。"""
-    data: Dict[str, Any] = {
-        "cause": {"causing_entity_type_id": "minecraft:zombie"},
-        "defense": {"policy": "instinct", "would_engage": True},
-        # 遥测：本不该进叙事事件（测试据此断言它没被带出去）
-        "current_health": 18.0,
-        "absorption": 0.0,
-        "position": {"x": 1.0, "y": 135.0, "z": 2.0},
-    }
-    if phase:
-        data["phase"] = phase
-    if hits:
-        data["repeat"] = {"hits": hits, "damage_total": 2.0 * hits}
-    return {
-        "cursor": cursor,
-        "type": source_type,
-        "priority": priority,
-        "timestamp": timestamp,
-        "message": "The agent took damage",
-        "data": data,
-    }
+def _event(cursor: int, kind: str, message: str = "", task_id: int = -1) -> Dict[str, Any]:
+    return {"cursor": cursor, "kind": kind, "task_id": task_id, "message": message}
 
 
 @pytest.fixture(autouse=True)
 def _patch_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
-    """把采集器用到的 MCP 类型换成替身（采集器在 _ensure_ready 内函数级 import）。"""
+    """把采集器用到的 MCP 客户端换成替身（采集器在 _ensure_ready 内函数级 import）。"""
     import src.modules.mcp.client as client_module
     import src.modules.mcp.provider as provider_module
 
     _FakeClient.instances = []
     monkeypatch.setattr(client_module, "McpClient", _FakeClient)
-    # provider 保持真实实现（只借助它做工具缓存与参数拼装）
+    # provider 保持真实实现（工具缓存、调用与回复映射都走真路径）
     monkeypatch.setattr(provider_module, "McpClient", _FakeClient)
 
 
 def _collector(bus: _FakeEventBus) -> MaicraftAttentionCollector:
     return MaicraftAttentionCollector(config={}, event_bus=bus)  # type: ignore[arg-type]
+
+
+async def _primed(bus: _FakeEventBus, cursor: int = 5) -> tuple[MaicraftAttentionCollector, _FakeClient]:
+    collector = _collector(bus)
+    assert await collector._ensure_ready() is True
+    client = _FakeClient.instances[-1]
+    client.pages.append(_page([], cursor=cursor))
+    await collector._drain()
+    return collector, client
 
 
 # ---------------------------------------------------------------------------
@@ -178,52 +142,40 @@ def test_collector_metadata_and_registration() -> None:
 
 def test_config_defaults() -> None:
     cfg = MaicraftAttentionCollector.ConfigSchema()
-    assert cfg.attention_uri == "maicraft://attention"
     assert cfg.url.endswith("/mcp")
-    assert cfg.page_limit >= 1 and cfg.idle_poll_ms >= 1000
+    assert 1000 <= cfg.wait_ms <= 55_000
 
 
-def test_classification_covers_narratable_and_drops_the_rest() -> None:
-    """分类表：只有"值得向观众叙述的遭遇"进叙事通道，遥测与背景不进。"""
-    assert classify("agent.damaged", "started") == "attacked"
-    assert classify("agent.damaged", "finished") == "attack_ended"
-    assert classify("agent.damaged", "") == "attacked", "老版本没有阶段字段也要能讲"
-    assert classify("agent.died", "") == "died"
-    assert classify("agent.respawned", "") == "respawned"
-    assert classify("agent.reflex", "started") == "reflex_started"
-    assert classify("agent.reflex", "finished") == "reflex_finished"
-    assert classify("agent.dimension_changed", "") == "dimension_changed"
-    assert classify("world.time_phase_changed", "") is None, "世界时刻对叙述没有意义"
-    assert classify("agent.respawn_requested", "") is None, "重生请求由 died/respawned 覆盖"
-    # 写给游戏 Agent 的维护提示不是身体遭遇，不能刷进主播的身体近况
-    assert classify("agent.reminder", "") is None
-    assert classify("machine_catalog_attention", "") is None
-    assert classify("runtime.unavailable", "") is None
-    assert classify("agent.something_new", "") == "unknown", "上游新增类型不丢，但事件面保持封闭"
-    assert classify("", "") is None
+def test_classification_keeps_body_encounters_and_drops_goal_progress() -> None:
+    """分类表：身体先处理的急事与处理不了的需求进叙事通道，目标运行的处境变化不进。"""
+    assert classify("temporary_task_started") == "reflex_started"
+    assert classify("temporary_task_finished") == "reflex_finished"
+    assert classify("need_unhandled") == "need_unhandled"
+    for goal_kind in ("started", "asked", "paused", "resumed", "step_finished", "finished"):
+        assert classify(goal_kind) is None, f"{goal_kind} 是游戏 Agent 的任务通道"
+    assert classify("something_new") == "unknown", "上游新增种类不丢，但事件面保持封闭"
+    assert classify("") is None
 
 
-def test_summary_states_only_evidenced_facts() -> None:
-    """摘要只陈述有证据的部分：攻击者类型与命中次数；不写"正在反击"。"""
-    facts = {
-        "cause": {"causing_entity_type_id": "minecraft:zombie"},
-        "repeat": {"hits": 3},
-        "defense": {"would_engage": True},
-    }
-    assert summarize("attacked", "agent.damaged", facts) == "正在被僵尸攻击（已命中 3 次）"
-    assert summarize("attack_ended", "agent.damaged", facts) == "摆脱了僵尸的攻击（共命中 3 次）"
-    assert "反击" not in summarize("attacked", "agent.damaged", facts)
-    assert summarize("attacked", "agent.damaged", {}) == "受到了伤害", "没有攻击者证据就不编来源"
-    assert summarize("died", "agent.died", {}) == "死了"
-    assert summarize("unknown", "agent.something_new", {}) == "身体事件：agent.something_new"
-    assert attacker_label("minecraft:creeper") == "苦力怕"
-    assert attacker_label("some_mod:weird_thing") == "weird_thing", "查不到就用 id 路径段，不猜中文"
+def test_summary_drops_coordinates_and_keeps_the_rest() -> None:
+    """摘要只陈述事件里有的事实，带坐标的分句整句去掉，不留"停在了"这种残片。"""
+    assert (
+        summarize("reflex_started", "temporary_task_started", "被威胁，插入自卫：打点在 3, 64, -9")
+        == "身体先停下手上的活处理急事：被威胁，插入自卫"
+    )
+    assert (
+        without_coordinates("自卫结束但走不回打点（还差 7 格），停在了 3, 64, 9；主任务已暂停，等下一步指示")
+        == "自卫结束但走不回打点（还差 7 格），主任务已暂停，等下一步指示"
+    )
+    assert summarize("reflex_finished", "temporary_task_finished", "退回了安全处，继续干活") == (
+        "身体处理完急事：退回了安全处，继续干活"
+    )
+    assert summarize("need_unhandled", "need_unhandled", "") == "身体遇到处理不了的事"
+    assert summarize("unknown", "something_new", "") == "身体事件：something_new"
 
 
 def test_body_event_names_are_the_closed_kind_set() -> None:
-    """8 个具名事件与判别字段一一对应，通配订阅仍然可用。"""
-    from src.agents.minecraft.attention_matrix import KIND_TO_EVENT
-
+    """9 个具名事件与判别字段一一对应，通配订阅仍然可用。"""
     assert CoreEvents.GAME_BODY_WILDCARD == "game.body.#"
     assert set(KIND_TO_EVENT.values()) == {
         CoreEvents.GAME_BODY_ATTACKED,
@@ -233,6 +185,7 @@ def test_body_event_names_are_the_closed_kind_set() -> None:
         CoreEvents.GAME_BODY_REFLEX_STARTED,
         CoreEvents.GAME_BODY_REFLEX_FINISHED,
         CoreEvents.GAME_BODY_DIMENSION_CHANGED,
+        CoreEvents.GAME_BODY_NEED_UNHANDLED,
         CoreEvents.GAME_BODY_UNKNOWN,
     }
     for kind, event_name in KIND_TO_EVENT.items():
@@ -241,10 +194,10 @@ def test_body_event_names_are_the_closed_kind_set() -> None:
 
 def test_body_payload_requires_game_and_kind() -> None:
     """游戏标识由发布方给定（框架不假定是哪款游戏），缺 game 直接报错。"""
-    payload = BodyEventPayload(game="minecraft", kind="attacked", summary="正在被僵尸攻击")
+    payload = BodyEventPayload(game="minecraft", kind="reflex_started", summary="身体先停下手上的活处理急事")
     assert payload.game == "minecraft" and payload.timestamp_ms > 0
     with pytest.raises(ValidationError):
-        BodyEventPayload(kind="attacked", summary="正在被僵尸攻击")
+        BodyEventPayload(kind="reflex_started", summary="身体先停下手上的活处理急事")
 
 
 # ---------------------------------------------------------------------------
@@ -253,97 +206,112 @@ def test_body_payload_requires_game_and_kind() -> None:
 
 
 @pytest.mark.asyncio
-async def test_first_read_primes_cursor_without_forwarding() -> None:
+async def test_first_read_skips_the_backlog_without_forwarding() -> None:
+    """首读拿到的是流里最早保留的事件：翻到最新再开始，陈年事件不灌进系统。"""
     bus = _FakeEventBus()
     collector = _collector(bus)
     assert await collector._ensure_ready() is True
     client = _FakeClient.instances[-1]
-    assert client.subscriptions == ["maicraft://attention"], "必须订阅注意流资源"
+    client.pages.append(_page([_event(1, "temporary_task_started", "被威胁")], cursor=1, has_more=True))
+    client.pages.append(_page([_event(2, "temporary_task_finished", "自卫结束")], cursor=2))
 
-    client.pages.append(_page([_damage(5), _damage(6)], cursor=6))
     await collector._drain()
 
-    assert collector._cursor == 6 and collector._stream_id == "stream-A"
-    assert bus.events == [], "首读拿到的是历史页，转发等于把陈年事件灌进系统"
+    assert collector._cursor == 2 and collector._stream_id == "stream-A"
+    assert bus.events == []
+    assert client.read_calls[0]["arguments"] == {"wait_ms": 0}
+    assert client.read_calls[1]["arguments"] == {"stream_id": "stream-A", "after_cursor": 1, "wait_ms": 0}
 
 
 @pytest.mark.asyncio
-async def test_incremental_read_forwards_only_narratable_events() -> None:
-    """增量读取：只把叙事化的遭遇转出去，遥测与背景事件不进事件面。"""
+async def test_incremental_read_forwards_only_body_encounters() -> None:
+    """增量读取：只把身体遭遇转出去，目标运行的事件留给游戏 Agent。"""
     bus = _FakeEventBus()
-    collector = _collector(bus)
-    await collector._ensure_ready()
-    client = _FakeClient.instances[-1]
-
-    client.pages.append(_page([_damage(5)], cursor=5))
-    await collector._drain()
-
+    collector, client = await _primed(bus, cursor=5)
     client.pages.append(
         _page(
             [
-                _damage(6, phase="started", hits=3),
-                _damage(7, priority="background"),
-                _damage(8, source_type="world.weather_changed", priority="important"),
+                _event(6, "temporary_task_started", "被威胁，插入自卫：打点在 3, 64, -9"),
+                _event(7, "finished", "砍了 5 块原木", task_id=3),
+                _event(8, "need_unhandled", "饿了但没吃上：身上没有食物；先回去继续干活"),
             ],
             cursor=8,
         )
     )
+
     await collector._drain()
 
-    assert [name for name, _ in bus.events] == [CoreEvents.GAME_BODY_ATTACKED]
-    _, payload = bus.events[0]
-    assert payload.kind == "attacked" and payload.source_event_type == "agent.damaged"
-    assert payload.summary == "正在被僵尸攻击（已命中 3 次）"
-    assert payload.attacker == "minecraft:zombie" and payload.hits == 3
-    assert payload.resolved is False
-    assert payload.occurred_at_ms > 0, "上游 ISO-8601 时刻要解析成毫秒"
-    # 遥测不入事件：血量/坐标/游标不是叙事素材
-    dumped = payload.model_dump()
-    assert "facts" not in dumped and "cursor" not in dumped and "stream_id" not in dumped
-    assert "18.0" not in json.dumps(dumped, ensure_ascii=False)
-    # 增量语义：第二次读取带上游标与流编号
+    assert [name for name, _ in bus.events] == [
+        CoreEvents.GAME_BODY_REFLEX_STARTED,
+        CoreEvents.GAME_BODY_NEED_UNHANDLED,
+    ]
+    started, need = bus.events[0][1], bus.events[1][1]
+    assert started.kind == "reflex_started" and started.source_event_type == "temporary_task_started"
+    assert started.summary == "身体先停下手上的活处理急事：被威胁，插入自卫" and started.resolved is False
+    assert need.summary.startswith("身体遇到处理不了的事：饿了但没吃上")
+    # 坐标与游标这类遥测不入事件（比对时去掉随机 id，免得 uuid 里碰巧出现 "-9"）
+    dumped = json.dumps([payload.model_dump(exclude={"id"}) for _, payload in bus.events], ensure_ascii=False)
+    assert "-9" not in dumped and "cursor" not in dumped
     second = client.read_calls[-1]["arguments"]
-    assert second["after_cursor"] == 5 and second["stream_id"] == "stream-A"
-    assert second["view"] == "attention" and second["wait_ms"] == 0
+    assert second == {"stream_id": "stream-A", "after_cursor": 5, "wait_ms": 25_000}
+    assert collector._cursor == 8
 
 
 @pytest.mark.asyncio
-async def test_resync_resets_cursor_without_forwarding_history() -> None:
+async def test_finished_temporary_task_is_marked_resolved() -> None:
     bus = _FakeEventBus()
-    collector = _collector(bus)
-    await collector._ensure_ready()
-    client = _FakeClient.instances[-1]
+    collector, client = await _primed(bus)
+    client.pages.append(_page([_event(6, "temporary_task_finished", "自卫结束，回到打点；位移 2 格")], cursor=6))
 
-    client.pages.append(_page([_damage(5)], cursor=5))
-    await collector._drain()
-    client.pages.append(_page([_damage(9)], cursor=9, stream_id="stream-B", resync=True))
     await collector._drain()
 
-    assert bus.events == [], "换流后的历史页不转发（旧世界的身体事件不属于当前这条命）"
-    assert collector._stream_id == "stream-B" and collector._cursor == 9
+    name, payload = bus.events[0]
+    assert name == CoreEvents.GAME_BODY_REFLEX_FINISHED and payload.resolved is True
+
+
+@pytest.mark.asyncio
+async def test_stream_change_resets_cursor_without_forwarding_history() -> None:
+    """换了世界或 Mod 重启：事件流换新编号，只重新建立游标，旧流和新流的积压都不转发。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    client.pages.append(
+        _page([_event(1, "temporary_task_started", "被威胁")], cursor=1, stream_id="stream-B", status="stream_changed")
+    )
+
+    await collector._drain()
+
+    assert bus.events == []
+    assert collector._stream_id == "stream-B" and collector._cursor == 1
 
 
 @pytest.mark.asyncio
 async def test_read_failure_keeps_cursor_and_surfaces_to_the_loop() -> None:
-    """读取失败：游标不动（那一段事件不能因此永久丢失），异常上抛给采集循环处理重连。
-
-    恢复动作归循环（记 warning + 断开重连，见 test_collect_loop_survives_unavailable_game）；
-    这里只钉住"失败不得推进游标"。
-    """
+    """读取失败：游标不动（那一段事件不能因此永久丢失），异常上抛给采集循环处理重连。"""
     bus = _FakeEventBus()
-    collector = _collector(bus)
-    await collector._ensure_ready()
-    client = _FakeClient.instances[-1]
-
-    client.pages.append(_page([_damage(5)], cursor=5))
-    await collector._drain()
+    collector, client = await _primed(bus, cursor=5)
     client.read_error = RuntimeError("boom")
 
     with pytest.raises(RuntimeError):
         await collector._drain()
 
-    assert collector._cursor == 5, "读取失败不能推进游标（否则那一段事件永久丢失）"
+    assert collector._cursor == 5
     assert bus.events == []
+
+
+@pytest.mark.asyncio
+async def test_mod_without_events_tool_is_not_ready(monkeypatch: pytest.MonkeyPatch, loguru_capture: Any) -> None:
+    """连上的不是 MaiCraft v1（没有 events 工具）：不当成就绪，如实说明原因。"""
+
+    class _OldModClient(_FakeClient):
+        tool_names = ("perceive", "execute")
+
+    import src.modules.mcp.client as client_module
+
+    monkeypatch.setattr(client_module, "McpClient", _OldModClient)
+    collector = _collector(_FakeEventBus())
+
+    assert await collector._ensure_ready() is False
+    assert any("events" in record["message"] for record in _unavailable_warnings(loguru_capture))
 
 
 @pytest.mark.asyncio
@@ -359,7 +327,7 @@ async def test_collect_loop_survives_unavailable_game(monkeypatch: pytest.Monkey
     monkeypatch.setattr(client_module, "McpClient", _OfflineClient)
 
     bus = _FakeEventBus()
-    collector = MaicraftAttentionCollector(config={"retry_interval_ms": 200, "idle_poll_ms": 1000}, event_bus=bus)  # type: ignore[arg-type]
+    collector = MaicraftAttentionCollector(config={"retry_interval_ms": 200, "wait_ms": 1000}, event_bus=bus)  # type: ignore[arg-type]
     await collector.start()
     assert collector.state == CollectorState.RUNNING
     await asyncio.sleep(0.05)
@@ -369,11 +337,6 @@ async def test_collect_loop_survives_unavailable_game(monkeypatch: pytest.Monkey
     monkeypatch.setattr(client_module, "McpClient", _FakeClient)
     await asyncio.sleep(0.35)
     assert _FakeClient.instances, "应重试建立连接"
-    online = _FakeClient.instances[-1]
-    online.pages.append(_page([_damage(5)], cursor=5))
-    online.pages.append(_page([_damage(6)], cursor=6))
-    collector._on_notify("maicraft://attention")
-    await asyncio.sleep(0.05)
     await collector.stop()
     assert collector.state == CollectorState.STOPPED
 
@@ -384,7 +347,7 @@ async def test_collect_loop_survives_unavailable_game(monkeypatch: pytest.Monkey
 
 
 def _unavailable_warnings(cap: Any) -> List[Dict[str, Any]]:
-    return [r for r in cap.records if r["level"] == "WARNING" and "注意流不可用" in r["message"]]
+    return [r for r in cap.records if r["level"] == "WARNING" and "事件流不可用" in r["message"]]
 
 
 @pytest.mark.asyncio
@@ -397,7 +360,7 @@ async def test_unavailable_reported_once_per_reason(loguru_capture: Any) -> None
     collector._report_unavailable("连接失败（RuntimeError: boom）")
     assert len(_unavailable_warnings(cap)) == 1, "Mod 没开是常态，不该按最短间隔重复 warning"
 
-    collector._report_unavailable("Mod 未暴露 perceive 工具，注意流无法读取")
+    collector._report_unavailable("连接成功但 Mod 未暴露任何工具")
     assert len(_unavailable_warnings(cap)) == 2, "失败理由变了要重新报"
 
     assert await collector._ensure_ready() is True

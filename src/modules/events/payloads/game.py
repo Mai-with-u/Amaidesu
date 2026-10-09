@@ -72,7 +72,7 @@ class GamePayload(BasePayload):
         description="上报种类（仅 event_type='report' 时有值：delivery=交付总结 / escalation=升级决策）",
     )
     # 任务上下文（超集形状：四类事件共用，缺省即"本次与身体事件无关"）。
-    # 身体事件来自 MaiCraft 注意流（挨打/死亡/紧急反应），由游戏 Agent 观察后随上报携带；
+    # 身体事件来自 MaiCraft 的任务事件流（紧急反应/处理不了的需求），由游戏 Agent 观察后随上报携带；
     # 主播据此说"你在进行 xx 任务的时候遭遇了僵尸的攻击"，而不必自己去猜时间与结局。
     occurred_at_ms: int = Field(
         default=0,
@@ -84,7 +84,7 @@ class GamePayload(BasePayload):
     )
     body_events: List[Dict[str, Any]] = Field(
         default_factory=list,
-        description="相关身体事件（本批任务期间观察到的注意流事实，最多若干条；空 = 无）",
+        description="相关身体事件（本批任务期间观察到的身体事件，最多若干条；空 = 无）",
     )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),

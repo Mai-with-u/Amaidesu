@@ -1,27 +1,22 @@
-"""注意流事件的分类表：上游事实 → 值得叙述的遭遇。
+"""MaiCraft 任务事件的分类表：事件流里哪些是值得向观众叙述的身体遭遇。
 
 ## 为什么需要这一层
 
-MaiCraft 的注意流内容很杂：里面既有"被僵尸袭击了""死了""紧急反应接管了"
-这类**值得向观众叙述**的遭遇，也有掉了 2 点血、当前 18 血、坐标 x/z、
-游标编号这类**遥测**。主播的职责是叙述现在在干什么、遭遇了什么——只有前者
-对它有价值，后者塞进去只会污染叙事并把有用的信息挤掉。
-
-所以 `maicraft_attention` 采集器不只搬运转发，它还做**分类**：只把遭遇
-转成 `game.body.*` 事件，遥测留在上游（需要时用工具直读游戏状态）。
+MaiCraft v1 的事件流里大部分是目标运行的处境变化（开始、提问、暂停、结束），那是游戏 Agent
+的任务通道，主播的叙事不需要。和身体有关的只有几种：生存需求插进来的临时任务开始与结束
+（自卫、夜里封顶自保、退离边沿），以及角色自己处理不了的需求（饿了没吃上、封顶没封上）。
+`maicraft_attention` 采集器只把这些转成 `game.body.*` 事件，任务通道的事件留在上游。
 
 ## 契约
 
-- `classify()` 返回 `None` = 这条上游事件不进入叙事通道（世界时间/天气等）；
-- 未知上游类型归 `unknown` 且保留 `source_event_type`，所以**上游加新事件类型
-  不会让本系统的事件面漂移**；
-- `summarize()` 只陈述有证据的事实：攻击者类型、命中次数、阶段。
-  不做英文原文翻译，也不推断上游没给的事实——"正在反击"就没有证据，
-  本能是否接管只能由 mod 的 `defense` 段回答。
+- `classify()` 返回 `None` = 这条事件不进入叙事通道（目标运行的处境变化）；
+- 未知事件种类归 `unknown` 且保留 `source_event_type`，所以**上游加新事件种类不会让本系统的事件面漂移**；
+- `summarize()` 只陈述事件里有的事实：Mod 写的那句话去掉坐标，坐标这类遥测不进叙事通道。
 """
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -39,182 +34,59 @@ KIND_TO_EVENT: Dict[str, str] = {
     "reflex_started": CoreEvents.GAME_BODY_REFLEX_STARTED,
     "reflex_finished": CoreEvents.GAME_BODY_REFLEX_FINISHED,
     "dimension_changed": CoreEvents.GAME_BODY_DIMENSION_CHANGED,
+    "need_unhandled": CoreEvents.GAME_BODY_NEED_UNHANDLED,
     "unknown": CoreEvents.GAME_BODY_UNKNOWN,
 }
 
 #: 已经是"结局面"的种类（主播据此把措辞从"正在"改成"刚才"）
 RESOLVED_KINDS = frozenset({"attack_ended", "respawned", "reflex_finished"})
 
-#: 上游类型 → 叙事种类（按阶段细分；未列出的类型归 unknown 保留留痕）
-#: 只有"身体侧遭遇"在此表；世界时间/天气与任务事件都不进叙事通道。
-_SOURCE_KINDS: Dict[str, Dict[str, str]] = {
-    "agent.damaged": {"started": "attacked", "finished": "attack_ended", "": "attacked"},
-    "agent.died": {"": "died"},
-    "agent.respawned": {"": "respawned"},
-    "agent.reflex": {"started": "reflex_started", "finished": "reflex_finished"},
-    "agent.dimension_changed": {"": "dimension_changed"},
+#: 事件种类 → 叙事种类。生存需求的临时任务就是"身体先停下手上的活处理急事"，对应本能接管。
+_SOURCE_KINDS: Dict[str, str] = {
+    "temporary_task_started": "reflex_started",
+    "temporary_task_finished": "reflex_finished",
+    "need_unhandled": "need_unhandled",
 }
 
-#: 明确不进叙事通道的上游类型（有意的静默；未列出的走 unknown 兜底）
-_NON_NARRATIVE_TYPES = frozenset(
-    {
-        "world.time_phase_changed",
-        "world.weather_changed",
-        "agent.respawn_requested",
-        "agent.respawn_request_failed",
-        "agent.death_decision_applied",
-        # 下面几类是写给游戏 Agent 的维护提示（光照/口粮/耐久提醒、机器档案、运行时状态），
-        # 不是身体遭遇；转给主播只会变成一串"身体事件：agent.reminder"，挤掉真正的摔伤和死亡
-        "agent.reminder",
-        "machine_catalog_attention",
-        "runtime.unavailable",
-    }
-)
+#: 目标运行的处境变化：游戏 Agent 的任务通道，不进叙事通道
+_GOAL_KINDS = frozenset({"started", "asked", "paused", "resumed", "step_finished", "finished"})
 
-#: 伤害类型名 → 叙述用词（**仅用于生成叙述**；没有攻击者的伤害靠它讲清是什么伤）
-_DAMAGE_TYPE_PHRASES: Dict[str, str] = {
-    "fall": "摔了一下",
-    "drowning": "溺水了",
-    "lava": "被岩浆烫到",
-    "fire": "着火了",
-    "on_fire": "着火了",
-    "cactus": "被仙人掌扎到",
-    "sweet_berry_bush": "被浆果丛扎到",
-    "starve": "饿得掉血了",
-    "in_wall": "被卡住窒息",
-    "freeze": "冻伤了",
-    "hot_floor": "踩到热地面",
-    "lightning_bolt": "被雷劈了",
-    "falling_block": "被落物砸到",
-    "anvil": "被铁砧砸到",
-    "fly_into_wall": "撞到墙上",
-    "out_of_world": "掉出了世界",
-    "explosion": "被炸到",
-    "player_explosion": "被炸到",
-    "magic": "中了魔法伤害",
-    "wither": "凋零效果发作",
-    "poison": "中毒了",
-    "sonic_boom": "被音爆打到",
-    "mob_attack": "遭到了近战攻击",
-    "mob_attack_no_aggro": "被撞了一下",
-    "arrow": "中箭了",
-    "trident": "被三叉戟扎到",
-    "thrown": "被投掷物打到",
-    "player_attack": "被玩家攻击",
+#: 每种叙事的开头：Mod 那句话是写给游戏 Agent 的，主播要先知道这是什么性质的事
+_LEADS: Dict[str, str] = {
+    "reflex_started": "身体先停下手上的活处理急事",
+    "reflex_finished": "身体处理完急事",
+    "need_unhandled": "身体遇到处理不了的事",
 }
 
-#: 常见攻击者的中文名（**仅用于生成叙述用词**，不参与任何判定）
-#: 查不到就回落到实体 id 的路径段（如 minecraft:zombie → zombie），不猜中文
-_ATTACKER_LABELS: Dict[str, str] = {
-    "zombie": "僵尸",
-    "husk": "尸壳",
-    "drowned": "溺尸",
-    "skeleton": "骷髅",
-    "stray": "流浪者",
-    "wither_skeleton": "凋灵骷髅",
-    "creeper": "苦力怕",
-    "spider": "蜘蛛",
-    "cave_spider": "洞穴蜘蛛",
-    "enderman": "末影人",
-    "witch": "女巫",
-    "slime": "史莱姆",
-    "magma_cube": "岩浆怪",
-    "blaze": "烈焰人",
-    "ghast": "恶魂",
-    "phantom": "幻翼",
-    "pillager": "掠夺者",
-    "vindicator": "卫道士",
-    "ravager": "劫掠兽",
-    "piglin": "猪灵",
-    "hoglin": "疣猪兽",
-    "wolf": "狼",
-    "polar_bear": "北极熊",
-    "bee": "蜜蜂",
-    "iron_golem": "铁傀儡",
-    "player": "玩家",
-}
+# 一个分句里出现"x, y, z"三个整数就是坐标：整句去掉，不在半句话里留下"停在了"这种残片。
+_COORDINATES = re.compile(r"-?\d+\s*,\s*-?\d+\s*,\s*-?\d+")
+# 只按中文标点与分号、冒号断句；英文逗号不断，否则坐标本身会被拆开。
+_CLAUSE_BREAK = re.compile(r"[，；：;:]")
 
 
-def classify(source_event_type: str, phase: str = "", evidence: str = "") -> Optional[str]:
-    """上游类型（+ 片段阶段、证据口径）→ 叙事种类；不进入叙事通道返回 ``None``。
-
-    **没被伤害包确认的掉血不算"遭遇攻击"**：那条路径只说明"血量数字变小了"
-    （吸收黄心到期也会让它变小），讲成"受到了伤害"就是无证据的断言，
-    所以归 ``unknown`` 留痕而不叙事化。
-    """
+def classify(source_event_type: str) -> Optional[str]:
+    """事件种类 → 叙事种类；不进入叙事通道返回 ``None``。"""
     source = str(source_event_type or "")
-    if not source or source in _NON_NARRATIVE_TYPES:
+    if not source or source in _GOAL_KINDS:
         return None
-    if str(evidence or "") == "health_drop_without_packet":
-        return "unknown"
-    phases = _SOURCE_KINDS.get(source)
-    if phases is None:
-        return "unknown"  # 上游新增类型：留痕但不丢，事件面保持封闭
-    return phases.get(str(phase or ""), phases.get(""))
+    return _SOURCE_KINDS.get(source, "unknown")
 
 
-def attacker_label(entity_type_id: str) -> str:
-    """攻击者实体 id → 叙述用词（``minecraft:zombie`` → ``僵尸``）。"""
-    path = str(entity_type_id or "").split(":")[-1]
-    if not path:
-        return "不明来源"
-    return _ATTACKER_LABELS.get(path, path)
+def without_coordinates(text: str) -> str:
+    """去掉带坐标的分句，其余原样保留（"被威胁，插入自卫：打点在 3, 64, 9" → "被威胁，插入自卫"）。"""
+    clauses = [clause.strip() for clause in _CLAUSE_BREAK.split(str(text or ""))]
+    return "，".join(clause for clause in clauses if clause and not _COORDINATES.search(clause))
 
 
-def damage_type_phrase(damage_type: str) -> str:
-    """伤害类型名 → 一句叙述（``fall`` → ``摔了一下``）。
-
-    没有攻击者的伤害（摔落/溺水/仙人掌）只能靠类型说清是什么伤；
-    查不到的类型回落到"受到了 xx 伤害"，不猜具体情境。
-    """
-    key = str(damage_type or "").strip()
-    phrase = _DAMAGE_TYPE_PHRASES.get(key)
-    if phrase:
-        return phrase
-    return f"受到了 {key} 伤害" if key else "受到了伤害"
-
-
-def summarize(kind: str, source_event_type: str, facts: Dict[str, Any]) -> str:
-    """叙事种类 + 上游事实 → 一句可直接讲给观众的话（只陈述有证据的部分）。"""
-    cause = facts.get("cause") if isinstance(facts.get("cause"), dict) else {}
-    repeat = facts.get("repeat") if isinstance(facts.get("repeat"), dict) else {}
-    attacker = str(cause.get("causing_entity_type_id") or "")
-    label = attacker_label(attacker) if attacker else ""
-    raw_hits = repeat.get("hits")
-    hits = int(raw_hits) if isinstance(raw_hits, int) and raw_hits > 1 else 0
-
-    if kind == "attacked":
-        if label:
-            return f"正在被{label}攻击" + (f"（已命中 {hits} 次）" if hits else "")
-        # 没有攻击者（摔落/溺水/仙人掌等）：伤害类型能说清是什么伤，就不含糊地说"受到了伤害"
-        damage_type = str(cause.get("damage_type") or "")
-        if damage_type:
-            return damage_type_phrase(damage_type) + (f"（已命中 {hits} 次）" if hits else "")
-        return "受到了伤害" + (f"（已命中 {hits} 次）" if hits else "")
-    if kind == "attack_ended":
-        if label:
-            return f"摆脱了{label}的攻击" + (f"（共命中 {hits} 次）" if hits else "")
-        return "不再受到伤害了"
-    if kind == "died":
-        return "死了"
-    if kind == "respawned":
-        return "已重生"
-    if kind == "reflex_started":
-        reflex = str(facts.get("reflex") or "")
-        return f"紧急反应接管（{reflex}）" if reflex else "紧急反应接管"
-    if kind == "reflex_finished":
-        detail = "、".join(part for part in (str(facts.get("reflex") or ""), str(facts.get("outcome") or "")) if part)
-        return f"紧急反应结束（{detail}）" if detail else "紧急反应结束"
-    if kind == "dimension_changed":
-        to_dimension = str(facts.get("to_dimension") or "")
-        return f"进入了 {to_dimension}" if to_dimension else "换了个维度"
-    if str(facts.get("evidence") or "") == "health_drop_without_packet":
-        return "血量下降了（原因不明）"
-    return f"身体事件：{source_event_type}" if source_event_type else "身体事件"
+def summarize(kind: str, source_event_type: str, message: str) -> str:
+    """一句可直接讲述的中文：叙事开头加上 Mod 那句话（去掉坐标）；没有原话时只说开头。"""
+    lead = _LEADS.get(kind) or (f"身体事件：{source_event_type}" if source_event_type else "身体事件")
+    detail = without_coordinates(message)
+    return f"{lead}：{detail}" if detail else lead
 
 
 def upstream_timestamp_ms(raw: Any) -> int:
-    """上游注意流时间戳（ISO-8601 带 Z）→ Unix 毫秒；无法解析返回 0。
+    """上游时间戳（ISO-8601 带 Z）→ Unix 毫秒；无法解析返回 0。
 
     只做搬运：解析不出来宁可写 0（未知），也不拿"现在"冒充上游时刻。
     """
@@ -233,8 +105,8 @@ def upstream_timestamp_ms(raw: Any) -> int:
 __all__ = [
     "KIND_TO_EVENT",
     "RESOLVED_KINDS",
-    "attacker_label",
     "classify",
     "summarize",
     "upstream_timestamp_ms",
+    "without_coordinates",
 ]
