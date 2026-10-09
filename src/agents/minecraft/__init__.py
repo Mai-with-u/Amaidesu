@@ -15,7 +15,7 @@
 两个采集器常驻长轮询 MaiCraft v1 的 ``events``（连接、游标与长轮询在 ``events_collector.py``）：
 ``attention_collector.py`` 读任务事件流，把身体先处理的急事、处理不了的需求与角色死亡转成 ``game.body.*``
 事件（分类表在 ``attention_matrix.py``）；``chat_collector.py`` 读聊天事件流，把别人说的话转成
-``game.chat.received``（私聊默认不转）。装配与起停走采集器框架（``config/collectors.toml`` + 工厂），
+``game.chat.received``（私聊标 ``private``）。装配与起停走采集器框架（``config/collectors.toml`` + 工厂），
 生命周期挂装配期而非本 Agent。
 """
 

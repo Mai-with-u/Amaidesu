@@ -2,10 +2,10 @@
 
 采集器代码归属 Minecraft Agent 包（游戏相关适配器内聚），装配走采集器框架。
 覆盖：
-- 元数据/注册/配置默认值（私聊默认不转）
+- 元数据/注册/配置默认值
 - 读的是 events(topic=chat)；首次读取只建游标，接手前的聊天不补发
 - 玩家聊天带发言人与 UUID，系统消息不带发言人，截断标记照传
-- 私聊默认不转，所有者打开开关后照常转；空白消息不转，游标照样往后走
+- 私聊照常转出并标 private；空白消息不转，游标照样往后走
 """
 
 from __future__ import annotations
@@ -64,7 +64,6 @@ def test_collector_metadata_and_registration() -> None:
     assert instantiate_collector("maicraft_chat", {}, None) is not None
     cfg = MaicraftChatCollector.ConfigSchema()
     assert cfg.url.endswith("/mcp")
-    assert cfg.forward_private_messages is False, "私聊默认不转给主播"
 
 
 async def test_reads_the_chat_topic_and_does_not_replay_history() -> None:
@@ -104,18 +103,12 @@ async def test_player_and_system_messages_become_game_chat_events() -> None:
     }
 
 
-async def test_private_messages_are_held_back_unless_the_owner_allows() -> None:
+async def test_private_messages_are_forwarded_and_marked() -> None:
     collector, client, bus = await _primed()
     client.pages.append(events_page([_chat(4, "悄悄跟你说", private=True), _chat(5, "   ")], cursor=5))
 
     await collector._drain()
 
-    assert bus.events == [], "私聊默认不转，空白消息不转"
-    assert collector._cursor == 5, "不转的消息游标照样往后走"
-
-    allowing, allowed_client, allowed_bus = await _primed({"forward_private_messages": True})
-    allowed_client.pages.append(events_page([_chat(4, "悄悄跟你说", private=True)], cursor=4))
-
-    await allowing._drain()
-
-    assert [payload.content for _, payload in allowed_bus.events] == ["悄悄跟你说"]
+    # 私聊照转并标出来，主播据此不在直播里念；空白消息不转，游标照样往后走。
+    assert [(payload.content, payload.private) for _, payload in bus.events] == [("悄悄跟你说", True)]
+    assert collector._cursor == 5
