@@ -5,7 +5,7 @@ MaiCraft v1 把目标运行的处境变化写进一条事件流（``events``）�
 
 - 目标提问、被暂停、恢复、结束时，再用 ``task(get)`` 取它此刻的完整样子交给回调——
   事件只说"变了"，完整结果（变化、问题、剩下的部分）以查询为准；
-- 与目标无关的事件（生存需求插进来的临时任务、角色自己处理不了的需求）原样交给身体事件回调；
+- 与目标无关的事件（生存需求插进来的临时任务、角色自己处理不了的需求、角色死亡）原样交给身体事件回调；
 - 事件流换了（换世界、重进世界）时游标作废，逐个重新查询在跟踪的目标：查得到就照常交回调，
   查不到或已经不是原来那个目标，就按"不在了"交给回调，不让它挂在待办里永远等不到结果。
 
@@ -33,8 +33,8 @@ _RETRY_DELAYS_S = (1.0, 2.0, 5.0, 10.0, 30.0)
 _EMPTY_READ_FLOOR_S = 1.0
 # 这些事件说明目标的处境变了，需要取它此刻的完整样子。
 _GOAL_CHANGE_KINDS = frozenset({"asked", "paused", "resumed", "finished"})
-# 与目标无关的身体事件：生存需求的临时任务开始与结束、处理不了的需求。
-_BODY_EVENT_KINDS = frozenset({"temporary_task_started", "temporary_task_finished", "need_unhandled"})
+# 与目标无关的身体事件：生存需求的临时任务开始与结束、处理不了的需求、角色死亡。
+_BODY_EVENT_KINDS = frozenset({"temporary_task_started", "temporary_task_finished", "need_unhandled", "character_died"})
 
 McpCall = Callable[[str, Dict[str, Any]], Awaitable[MaicraftReply]]
 GoalChanged = Callable[[GoalRun], Awaitable[None]]

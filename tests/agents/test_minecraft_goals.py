@@ -113,11 +113,12 @@ async def test_other_goals_are_ignored_and_body_events_pass_through() -> None:
     reply = await server._execute({"goal": {"ability": "maicraft:gather"}})
     server.finish(reply["data"]["task_id"])
     server.body_event("temporary_task_started", "自卫：有僵尸打过来")
+    server.body_event("character_died", "角色死了，等重生")
 
     await watch.step()
 
     assert recorder.changed == []
-    assert [event["kind"] for event in recorder.body] == ["temporary_task_started"]
+    assert [event["kind"] for event in recorder.body] == ["temporary_task_started", "character_died"]
     assert server.calls_to("task") == [], "没在跟踪的目标不去查"
 
 

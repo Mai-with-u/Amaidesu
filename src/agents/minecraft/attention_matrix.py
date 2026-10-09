@@ -4,7 +4,7 @@
 
 MaiCraft v1 的事件流里大部分是目标运行的处境变化（开始、提问、暂停、结束），那是游戏 Agent
 的任务通道，主播的叙事不需要。和身体有关的只有几种：生存需求插进来的临时任务开始与结束
-（自卫、夜里封顶自保、退离边沿），以及角色自己处理不了的需求（饿了没吃上、封顶没封上）。
+（自卫、夜里封顶自保、退离边沿），角色自己处理不了的需求（饿了没吃上、封顶没封上），以及角色死亡。
 `maicraft_attention` 采集器只把这些转成 `game.body.*` 事件，任务通道的事件留在上游。
 
 ## 契约
@@ -46,6 +46,8 @@ _SOURCE_KINDS: Dict[str, str] = {
     "temporary_task_started": "reflex_started",
     "temporary_task_finished": "reflex_finished",
     "need_unhandled": "need_unhandled",
+    # 角色血量见底进了死亡流程：Mod 只发这一条，重生后接着做原来的目标，不另发重生事件。
+    "character_died": "died",
 }
 
 #: 目标运行的处境变化：游戏 Agent 的任务通道，不进叙事通道
@@ -56,6 +58,7 @@ _LEADS: Dict[str, str] = {
     "reflex_started": "身体先停下手上的活处理急事",
     "reflex_finished": "身体处理完急事",
     "need_unhandled": "身体遇到处理不了的事",
+    "died": "角色倒下了",
 }
 
 # 一个分句里出现"x, y, z"三个整数就是坐标：整句去掉，不在半句话里留下"停在了"这种残片。

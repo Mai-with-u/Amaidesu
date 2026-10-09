@@ -290,3 +290,33 @@ async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
         {"ability": "maicraft:gather", "purpose": "砍树", "state": "running", "doing": "走向树"}
     ]
     await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_character_death_tells_the_running_task_and_the_streamer() -> None:
+    """角色死了：在跑的任务被唤醒，知道目标保留着、重生后接着做；同时上报主播。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
+
+    agent, llm, bus = await _start(server, script)
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
+    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+
+    server.body_event("character_died", "角色死了，等重生；主任务停在原地，重生后接着做")
+    await _wait_until(lambda: len(llm.seen) == 3)
+
+    woken = _texts(llm.seen[-1])
+    assert "[身体] 角色死了" in woken and "目标保留着" in woken
+    alerts = [
+        call.args[1]
+        for call in bus.emit.await_args_list
+        if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
+    ]
+    assert any("角色死了" in alert.message for alert in alerts)
+    assert agent._goals.tracked_ids() == [1], "死亡不结束目标"
+    await agent.stop()

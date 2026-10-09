@@ -2,7 +2,7 @@
 MaicraftAttentionCollector —— AI 玩家身体事件采集器
 
 上游是 MaiCraft v1 的任务事件流（``events``）：生存需求插进来的临时任务（自卫、夜里封顶自保、
-退离边沿）开始与结束、角色自己处理不了的需求，都写在这条流上。本采集器**常驻**带着游标长轮询，
+退离边沿）开始与结束、角色自己处理不了的需求、角色死亡，都写在这条流上。本采集器**常驻**带着游标长轮询，
 把其中的身体遭遇转成 ``game.body.*`` 事件；目标运行的处境变化归游戏 Agent 的任务通道，不转。
 
 代码归属：它读的是 Minecraft 的事件流，是**游戏相关**的外部世界适配器，
@@ -48,7 +48,7 @@ class MaicraftAttentionCollector(BaseCollector):
     """AI 玩家身体事件采集器（常驻长轮询 MaiCraft 的任务事件流）。"""
 
     name = "maicraft_attention"
-    description = "常驻读 MaiCraft 的任务事件流，把身体先处理的急事与处理不了的需求转成 game.body.* 事件"
+    description = "常驻读 MaiCraft 的任务事件流，把身体先处理的急事、处理不了的需求与角色死亡转成 game.body.* 事件"
 
     class ConfigSchema(BaseConfig):
         """采集器配置（包内权威 Schema）。

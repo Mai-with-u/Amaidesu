@@ -74,6 +74,14 @@ _PROMPT_SOURCE_LABELS = {"operator": "[运营原话]", "planner-react": "[主播
 
 # 本批任务期间保留的身体事件条数上限（上报携带的任务上下文，多了只会淹没重点）
 _MAX_BATCH_BODY_EVENTS = 5
+# 需要告诉任务的身体事件：其余种类（临时任务开始与结束）只记进本批上下文、上报主播。
+_BODY_NOTICES = {
+    "need_unhandled": "[身体] {message}。这是观察不是命令：身体自己处理不了它，需要时调整计划或上报主播。",
+    "character_died": (
+        "[身体] {message}。目标保留着，重生后身体会接着做；重生后先 maicraft_observe(what=self) 看一眼自己"
+        "（位置变了，背包可能也变了），再决定要不要调整计划或上报主播。"
+    ),
+}
 
 # 结束了的目标在任务状态里保留几条：交付前对照用，再多只会挤占上下文。
 _RECENT_FINISHED_GOALS = 6
@@ -919,18 +927,19 @@ class MinecraftAgent(BaseAgent):
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:
-        """生存需求的临时任务与处理不了的需求：记进本批上下文，处理不了的告诉任务与主播。"""
+        """生存需求的临时任务、处理不了的需求与角色死亡：记进本批上下文，后两种告诉任务与主播。"""
         kind = str(event.get("kind") or "")
         message = str(event.get("message") or kind)
         record = {"event_type": kind, "message": message, "cursor": event.get("cursor")}
         self._batch_body_events.append(record)
         if len(self._batch_body_events) > _MAX_BATCH_BODY_EVENTS:
             self._batch_body_events = self._batch_body_events[-_MAX_BATCH_BODY_EVENTS:]
-        if kind == "need_unhandled":
+        notice = _BODY_NOTICES.get(kind)
+        if notice is not None:
+            # 处理不了的需求、角色死亡：身体自己顾不过来，任务还没结束就注入一条通知唤醒模型，同时上报主播。
+            # 死亡时 Mod 让目标停在原地等重生、重生后接着做，所以只提醒重生后先看一眼自己，不催模型重下目标。
             if self._batch_active or not self._task_finished:
-                self._inject_wakeup_message(
-                    f"[身体] {message}。这是观察不是命令：身体自己处理不了它，需要时调整计划或上报主播。"
-                )
+                self._inject_wakeup_message(notice.format(message=message))
             await self._emit_game_event("attention_required", message)
             return
         if not self._batch_active or (kind, message) in self._body_notified:
