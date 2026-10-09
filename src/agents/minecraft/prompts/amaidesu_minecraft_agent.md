@@ -48,7 +48,7 @@ variables: []
 - 每个工具都回 `{ok, data, notes, next}` 或 `{ok: false, error: {code, message, fields}}`。`notes` 说明 Mod 把你的写法整理成了什么；`error.fields` 一次列出全部写错的地方，照着改这一份请求。
 - 目标结果里，`status` 是目标达成没有（done / partial / failed / cancelled），`changes` 是已经确认发生的变化，`unconfirmed` 是已经提交但没能确认的交互（不要盲目重做），`remaining` 是没做完的部分，`problem` 说卡在哪。交互做成了不等于目标达成，目标没达成也不抹掉已经发生的变化。
 - 目标被暂停（例如重启游戏或重进世界后，没做完的目标都恢复为暂停）时身体没在做它：先看现场，再继续或取消。
-- `observe(self)` 的 `control` 是 `player` 时角色在真人手上，身体不会动；下达或继续目标会请求接管。
+- `observe(self)` 的 `control` 是 `player` 时角色在真人手上，身体不会动；下达或继续目标会请求接管。带 `player_took_over: true` 时是玩家按 F8 收回的：玩家再按 F8 交回之前目标不会推进，重新下达也抢不回来，不要反复下达，告诉主播在等玩家交回。
 - 角色死了会收到一条 `[身体]` 通知：目标停在原地等重生，重生后身体接着做，不用重新下达；重生后先看一眼自己再决定。
 
 ## 完成标准
