@@ -47,7 +47,7 @@ class FakeMaicraft(BaseToolProvider):
             "effects": [],
             "inventory": [{"item": "minecraft:oak_log", "count": 6}],
             "control": "automation",
-            "task": {"doing": "空闲，没有主任务"},
+            "goal": {"doing": "空闲，没有主任务"},
         }
         self.scene_view: Dict[str, Any] = {
             "time": "白天",
@@ -70,7 +70,7 @@ class FakeMaicraft(BaseToolProvider):
             ToolSpec(
                 name=name, description=name, parameters_schema={"type": "object"}, kind="sync", provider="maicraft"
             )
-            for name in ("observe", "lookup", "execute", "task", "events")
+            for name in ("observe", "lookup", "execute", "goal", "events")
         ]
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -106,7 +106,7 @@ class FakeMaicraft(BaseToolProvider):
         ability = ability if ":" in ability else f"maicraft:{ability}"
         goal_id = self._next_id
         self._next_id += 1
-        run: Dict[str, Any] = {"task_id": goal_id, "ability": ability, "state": "running"}
+        run: Dict[str, Any] = {"goal_id": goal_id, "ability": ability, "state": "running"}
         if goal.get("purpose"):
             run["purpose"] = goal["purpose"]
         if ability in _ASIDE_ABILITIES:
@@ -115,17 +115,17 @@ class FakeMaicraft(BaseToolProvider):
         self.goals[goal_id] = run
         return ok(dict(run))
 
-    async def _task(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def _goal(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         operation = arguments.get("operation")
         if operation == "list":
-            return ok({"tasks": [dict(run) for run in self.goals.values()]})
-        run = self.goals.get(arguments.get("task_id"))
+            return ok({"goals": [dict(run) for run in self.goals.values()]})
+        run = self.goals.get(arguments.get("goal_id"))
         if run is None:
-            return error("unknown_id", f"没有编号为 {arguments.get('task_id')} 的任务")
+            return error("unknown_id", f"没有编号为 {arguments.get('goal_id')} 的目标")
         if operation == "answer":
             run.pop("question", None)
             run["state"] = "running"
-            self._append("resumed", run["task_id"], "收到回答")
+            self._append("resumed", run["goal_id"], "收到回答")
         elif operation == "resume":
             run["state"] = "running"
         elif operation == "cancel":
@@ -158,7 +158,7 @@ class FakeMaicraft(BaseToolProvider):
     # ----- 测试推进目标 -----
 
     def _append(self, kind: str, goal_id: int, message: str, status: Optional[str] = None) -> None:
-        event: Dict[str, Any] = {"cursor": len(self.events) + 1, "kind": kind, "task_id": goal_id, "message": message}
+        event: Dict[str, Any] = {"cursor": len(self.events) + 1, "kind": kind, "goal_id": goal_id, "message": message}
         if status:
             event["status"] = status
         self.events.append(event)
@@ -202,11 +202,11 @@ class FakeMaicraft(BaseToolProvider):
             "text": "角色死了。接下来怎么办？",
             "options": [
                 {"id": "respawn", "meaning": "发原版重生请求，回出生点或床，任务原地接着做"},
-                {"id": "cancel_task", "meaning": "取消当前任务，死亡屏幕留给人处理"},
+                {"id": "cancel_goal", "meaning": "取消当前目标，死亡屏幕留给人处理"},
             ],
         }
         self.goals[decision_id] = {
-            "task_id": decision_id,
+            "goal_id": decision_id,
             "ability": "death_recovery",
             "state": "awaiting_answer",
             "question": question,

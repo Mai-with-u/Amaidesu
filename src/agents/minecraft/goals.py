@@ -3,7 +3,7 @@
 MaiCraft v1 把目标运行的处境变化写进一条事件流（``events``），宿主带着上次读到的游标去读，
 没有新事件时服务端最多等一会儿再空手返回。这里只盯本 Agent 自己下达、还没结束的目标：
 
-- 目标提问、被暂停、恢复、结束时，再用 ``task(get)`` 取它此刻的完整样子交给回调——
+- 目标提问、被暂停、恢复、结束时，再用 ``goal(get)`` 取它此刻的完整样子交给回调——
   事件只说"变了"，完整结果（变化、问题、剩下的部分）以查询为准；
 - 与目标无关的事件（生存需求插进来的临时任务、角色自己处理不了的需求、角色死亡）原样交给身体事件回调；
 - Mod 自己挂出的决策（死亡恢复：编号是负数，不是谁下达的目标）提问时，读一次交给决策回调，等模型按选项回答；
@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
-from .maicraft import AWAITING_ANSWER, EVENTS, TASK, GoalRun, MaicraftReply, events_page_of, goal_run_of
+from .maicraft import AWAITING_ANSWER, EVENTS, GOAL, GoalRun, MaicraftReply, events_page_of, goal_run_of
 
 logger = get_logger("MinecraftGoals")
 
@@ -192,7 +192,7 @@ class GoalWatch:
 
     async def _absorb(self, event: Dict[str, Any]) -> None:
         kind = str(event.get("kind") or "")
-        goal_id = event.get("task_id")
+        goal_id = event.get("goal_id")
         if kind in _BODY_EVENT_KINDS:
             await self._on_body_event(event)
             return
@@ -206,7 +206,7 @@ class GoalWatch:
 
     async def _refresh(self, goal_id: int) -> None:
         """取目标此刻的完整样子交给回调；结束了就不再跟踪。查询失败留着，等下一条事件或重新同步。"""
-        reply = await self._call(TASK, {"operation": "get", "task_id": goal_id})
+        reply = await self._call(GOAL, {"operation": "get", "goal_id": goal_id})
         tracked = self._goals.get(goal_id)
         if tracked is None:
             return
@@ -234,7 +234,7 @@ class GoalWatch:
         """取 Mod 挂出的决策此刻的样子：还在等回答就交给决策回调；读不到或已答复就不打扰模型。"""
         if self._on_decision_asked is None:
             return
-        reply = await self._call(TASK, {"operation": "get", "task_id": decision_id})
+        reply = await self._call(GOAL, {"operation": "get", "goal_id": decision_id})
         run = goal_run_of(reply.data) if reply.ok else None
         if run is None or run.state != AWAITING_ANSWER:
             logger.info(

@@ -24,7 +24,7 @@ class FakeMcpClient:
     """MCP 客户端替身：连接、工具清单与 events 的回复都可控。"""
 
     instances: List["FakeMcpClient"] = []
-    tool_names = ("observe", "lookup", "execute", "task", "events")
+    tool_names = ("observe", "lookup", "execute", "goal", "events")
 
     def __init__(self, name: str, config: Any) -> None:
         self.name = name

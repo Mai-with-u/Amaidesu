@@ -34,8 +34,8 @@ from .minecraft_collector_fakes import events_page as _page
 from .minecraft_collector_fakes import patch_mcp
 
 
-def _event(cursor: int, kind: str, message: str = "", task_id: int = -1) -> Dict[str, Any]:
-    return {"cursor": cursor, "kind": kind, "task_id": task_id, "message": message}
+def _event(cursor: int, kind: str, message: str = "", goal_id: int = -1) -> Dict[str, Any]:
+    return {"cursor": cursor, "kind": kind, "goal_id": goal_id, "message": message}
 
 
 @pytest.fixture(autouse=True)
@@ -162,7 +162,7 @@ async def test_incremental_read_forwards_only_body_encounters() -> None:
         _page(
             [
                 _event(6, "temporary_task_started", "被威胁，插入自卫：打点在 3, 64, -9"),
-                _event(7, "finished", "砍了 5 块原木", task_id=3),
+                _event(7, "finished", "砍了 5 块原木", goal_id=3),
                 _event(8, "need_unhandled", "饿了但没吃上：身上没有食物；先回去继续干活"),
             ],
             cursor=8,

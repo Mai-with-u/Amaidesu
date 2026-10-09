@@ -1,7 +1,7 @@
 """
 MaicraftEventsCollector —— 常驻长轮询 MaiCraft v1 一条事件流的采集器基类
 
-MaiCraft v1 的 ``events`` 按 ``topic`` 分两条流：``tasks`` 是任务事件（身体事件从这里挑），``chat`` 是聊天栏
+MaiCraft v1 的 ``events`` 按 ``topic`` 分两条流：``self`` 是角色身上发生的事（身体事件从这里挑），``chat`` 是聊天栏
 收到的消息。两种采集器做的事一样：自带一份连接、带游标长轮询、首次读取与事件流更换只建立游标（接手前的事件
 不补发）、读失败游标不动并重连、服务端没按要求等就空手返回时停一下；不一样的只有读哪条流、一条事件怎么转出去，
 由子类给出 ``topic`` 与 ``_forward``。
@@ -32,8 +32,8 @@ _RETRY_MAX_S: float = 60.0
 #: 一次长轮询空手返回得比这还快，说明服务端没有等：停这么久再读，避免空转。
 _EMPTY_READ_FLOOR_S: float = 1.0
 
-#: 任务事件流是 events 的默认 topic：读它时不带 topic，较早的 v1 也认。
-_DEFAULT_TOPIC = "tasks"
+#: 角色身上发生的事（目标处境、临时任务、处理不了的需求、死亡）是 events 的默认 topic（self）：读它时不带 topic。
+_DEFAULT_TOPIC = "self"
 
 
 class MaicraftEventsCollector(BaseCollector):

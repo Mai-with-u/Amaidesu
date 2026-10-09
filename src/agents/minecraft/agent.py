@@ -36,7 +36,7 @@ from src.agents.minecraft.maicraft import (
     OBSERVE,
     PAUSED,
     PROVIDER,
-    TASK,
+    GOAL,
     GoalRun,
     MaicraftReply,
     goal_id_of_ledger,
@@ -96,7 +96,7 @@ _OPENING_READS = (
     (OBSERVE, {"what": "self"}),
     (OBSERVE, {"what": "scene"}),
     (LOOKUP, {}),
-    (TASK, {"operation": "list"}),
+    (GOAL, {"operation": "list"}),
 )
 
 
@@ -475,7 +475,7 @@ class MinecraftAgent(BaseAgent):
         if self._task_tracker is not None:
             self._task_tracker.ledger.update(task_id, "cancelled", summary=f"被取消（source={source or '未知'}）")
         self._inject_wakeup_message(
-            f"[系统] 任务 {task_id} 已被取消，请停止相关工作；还在跑的游戏目标用 maicraft_task(operation=cancel) 取消。"
+            f"[系统] 任务 {task_id} 已被取消，请停止相关工作；还在跑的游戏目标用 maicraft_goal(operation=cancel) 取消。"
         )
         self._logger.info(f"MinecraftAgent 任务已取消（task_id={task_id}, source={source or '未知'}）")
         return True
@@ -862,7 +862,7 @@ class MinecraftAgent(BaseAgent):
 
     def _absorb_reply(self, name: str, arguments: Dict[str, Any], observation: Dict[str, Any]) -> None:
         """从 execute / task 的回复里认出目标运行：没结束的开始跟踪，状态变化记下，结束的收起。"""
-        if name not in (EXECUTE, TASK) or observation.get("ok") is not True:
+        if name not in (EXECUTE, GOAL) or observation.get("ok") is not True:
             return
         data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
         run = goal_run_of(data)
@@ -892,12 +892,12 @@ class MinecraftAgent(BaseAgent):
 
     def _polls_running_goal(self, name: str, arguments: Dict[str, Any]) -> bool:
         """这次调用只是在查询还在跑的目标（没提问、没被暂停），不算推进。"""
-        if name != TASK or arguments.get("operation") not in _GOAL_POLLING_OPERATIONS:
+        if name != GOAL or arguments.get("operation") not in _GOAL_POLLING_OPERATIONS:
             return False
         tracked = self._goals.tracked_ids()
         if not tracked or self._actionable_goals():
             return False
-        goal_id = arguments.get("task_id")
+        goal_id = arguments.get("goal_id")
         return arguments.get("operation") == "list" or goal_id in tracked
 
     # ==================================================================
@@ -919,7 +919,7 @@ class MinecraftAgent(BaseAgent):
 
     def _note_goal(self, run: GoalRun) -> None:
         """记下目标此刻的样子：任务状态、看一眼与交付门禁都读它。"""
-        note: Dict[str, Any] = {"task_id": run.goal_id, "ability": run.ability, "state": run.state}
+        note: Dict[str, Any] = {"goal_id": run.goal_id, "ability": run.ability, "state": run.state}
         if run.purpose:
             note["purpose"] = run.purpose
         if run.question:
@@ -934,7 +934,7 @@ class MinecraftAgent(BaseAgent):
 
     def _remember_finished(self, run: GoalRun) -> None:
         self._finished_goals.append(
-            {"task_id": run.goal_id, "ability": run.ability, "status": run.result_status, "summary": run.summary}
+            {"goal_id": run.goal_id, "ability": run.ability, "status": run.result_status, "summary": run.summary}
         )
 
     def _update_goal_ledger(self, run: GoalRun, summary: str = "") -> None:
@@ -971,13 +971,13 @@ class MinecraftAgent(BaseAgent):
         if run.state == AWAITING_ANSWER and before.get("question") != run.question:
             self._inject_wakeup_message(
                 f"[系统] 目标 {run.goal_id}（{self._goal_label(run)}）在等你回答：{json_text(run.question)}。"
-                f"用 maicraft_task(operation=answer, task_id={run.goal_id}, answer=选项编号) 回答。"
+                f"用 maicraft_goal(operation=answer, goal_id={run.goal_id}, answer=选项编号) 回答。"
             )
         elif run.state == PAUSED and before.get("state") != PAUSED:
             self._inject_wakeup_message(
                 f"[系统] 目标 {run.goal_id}（{self._goal_label(run)}）被暂停了，身体没在做它"
                 "（重启游戏或重进世界后，没做完的目标都会恢复为暂停）。"
-                f"先看现场，再用 maicraft_task(operation=resume 或 cancel, task_id={run.goal_id}) 继续或取消。"
+                f"先看现场，再用 maicraft_goal(operation=resume 或 cancel, goal_id={run.goal_id}) 继续或取消。"
             )
 
     async def _on_decision_asked(self, run: GoalRun) -> None:
@@ -986,13 +986,13 @@ class MinecraftAgent(BaseAgent):
         决策不是本 Agent 下达的目标：不进跟踪名单、不记任务账本；空闲时也唤醒，没人回答角色就一直停在死亡屏幕。
         """
         self._inject_wakeup_message(
-            f"[系统] Mod 挂出的决策（{run.ability}，task_id={run.goal_id}）在等你回答：{json_text(run.question)}。"
-            f"按问题里给的选项，用 maicraft_task(operation=answer, task_id={run.goal_id}, answer=选项编号) 回答。"
+            f"[系统] Mod 挂出的决策（{run.ability}，goal_id={run.goal_id}）在等你回答：{json_text(run.question)}。"
+            f"按问题里给的选项，用 maicraft_goal(operation=answer, goal_id={run.goal_id}, answer=选项编号) 回答。"
         )
 
     async def _on_goal_gone(self, goal_id: int, reason: str) -> None:
         """在跟踪的目标查不到了（多半是换了世界）：如实告诉任务，不让它挂着等不来的结果。"""
-        note = self._goal_notes.pop(goal_id, {"task_id": goal_id})
+        note = self._goal_notes.pop(goal_id, {"goal_id": goal_id})
         self._paused_goals.discard(goal_id)
         self._finished_goals.append({**note, "status": "gone", "summary": reason})
         ledger = getattr(self._task_tracker, "ledger", None)
@@ -1037,7 +1037,7 @@ class MinecraftAgent(BaseAgent):
         if goal_id is None or not getattr(payload, "alert", False) or not self._goals.tracking(goal_id):
             return
         self._inject_wakeup_message(
-            f"[系统] 目标 {goal_id} 很久没有新进展：{payload.summary}。用 maicraft_task(operation=get) 看看它在做什么，"
+            f"[系统] 目标 {goal_id} 很久没有新进展：{payload.summary}。用 maicraft_goal(operation=get) 看看它在做什么，"
             "需要时取消或换办法。"
         )
 
@@ -1282,7 +1282,7 @@ class MinecraftAgent(BaseAgent):
         return (
             "你是 Minecraft 世界中的 AI 玩家，用工具玩 Minecraft。"
             "maicraft_observe 看自己与周围，maicraft_lookup 查能力，maicraft_execute 下达目标，"
-            "maicraft_task 查看、回答、暂停、继续或取消目标。身体同一时间只做一件事；需要动手的目标在后台推进，"
+            "maicraft_goal 查看、回答、暂停、继续或取消目标。身体同一时间只做一件事；需要动手的目标在后台推进，"
             "宿主会在它结束、提问或被暂停时通知你；没有可做的事就单独调用 minecraft_wait。"
             "复杂任务用 minecraft_todo 维护阶段。本次目标要的结果真的达成才交付，用 minecraft_report(kind=delivery)；"
             "拿别的顶替或只做一半不算，附带原话与本次目标冲突时听本次目标。"

@@ -2,8 +2,8 @@
 
 v1 的每个工具都回一份 JSON：成功是 ``{ok: true, data, notes?, next?}``，失败是
 ``{ok: false, error: {code, message, fields?}}``。需要后台推进的目标由 ``execute`` 下达后
-返回 ``task_id`` 与 ``state``；目标的处境（进行中 / 等回答 / 暂停 / 结束）与结束后的结果
-都在 ``task(get)`` 里，变化经 ``events`` 推送。这些格式只在本模块解读一次，Agent 其余部分
+返回 ``goal_id`` 与 ``state``；目标的处境（进行中 / 等回答 / 暂停 / 结束）与结束后的结果
+都在 ``goal(get)`` 里，变化经 ``events`` 推送。这些格式只在本模块解读一次，Agent 其余部分
 按这里给出的含义使用，不各自猜字段。
 """
 
@@ -20,7 +20,7 @@ PROVIDER = "maicraft"
 OBSERVE = "maicraft_observe"
 LOOKUP = "maicraft_lookup"
 EXECUTE = "maicraft_execute"
-TASK = "maicraft_task"
+GOAL = "maicraft_goal"
 EVENTS = "maicraft_events"
 
 # 事件流只给宿主自己读：模型看到的是宿主整理后的通知，不需要自己长轮询。
@@ -92,7 +92,7 @@ def reply_of(result: ToolExecutionResult) -> MaicraftReply:
 
 @dataclass(slots=True)
 class GoalRun:
-    """一个目标运行此刻的样子（``task(get)`` / ``execute`` 的 data）。"""
+    """一个目标运行此刻的样子（``goal(get)`` / ``execute`` 的 data）。"""
 
     goal_id: int
     ability: str
@@ -123,8 +123,8 @@ class GoalRun:
 
 
 def goal_run_of(data: Dict[str, Any]) -> Optional[GoalRun]:
-    """从 execute / task(get) 的 data 读出目标运行；不是目标运行的形状时为 None。"""
-    goal_id = data.get("task_id")
+    """从 execute / goal(get) 的 data 读出目标运行；不是目标运行的形状时为 None。"""
+    goal_id = data.get("goal_id")
     state = data.get("state")
     if not isinstance(goal_id, int) or isinstance(goal_id, bool) or not isinstance(state, str):
         return None
@@ -209,7 +209,7 @@ __all__ = [
     "PAUSED",
     "PROVIDER",
     "RUNNING",
-    "TASK",
+    "GOAL",
     "envelope_of",
     "events_page_of",
     "goal_id_of_ledger",

@@ -132,7 +132,7 @@ async def test_look_around_and_remember_a_place_end_to_end() -> None:
     ]
     assert opening, "新任务开局附上宿主代读的资料"
     read_tools = [call["function"]["name"] for call in opening[0]["tool_calls"]]
-    assert read_tools == ["maicraft_observe", "maicraft_observe", "maicraft_lookup", "maicraft_task"]
+    assert read_tools == ["maicraft_observe", "maicraft_observe", "maicraft_lookup", "maicraft_goal"]
     assert "minecraft:cow" in _texts(first) and "maicraft:remember" in _texts(first)
     assert all(tool["name"] != "maicraft_events" for tool in llm.tools_given[0]), "事件流不给模型"
     assert _reports(bus)[0].report_kind == "delivery"
@@ -151,7 +151,7 @@ async def test_a_background_goal_wakes_the_task_with_its_full_result() -> None:
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "砍到 5 块原木了"})])
         if any(
             message.get("role") == "tool"
-            and "task_id" in str(message.get("content"))
+            and "goal_id" in str(message.get("content"))
             and "running" in str(message.get("content"))
             for message in messages
         ):
@@ -209,9 +209,9 @@ async def test_a_question_wakes_the_task_and_waiting_is_refused_until_answered()
         if "在等你回答" in text and not answered:
             if any("等待不会推进" in str(message.get("content")) for message in messages):
                 answered.append(True)
-                return _resp(calls=[_call("maicraft_task", {"operation": "answer", "task_id": 1, "answer": "b6"})])
+                return _resp(calls=[_call("maicraft_goal", {"operation": "answer", "goal_id": 1, "answer": "b6"})])
             return _resp(calls=[_call("minecraft_wait", {"reason": "先等等"})])
-        if "task_id" in text and "running" in text:
+        if "goal_id" in text and "running" in text:
             return _resp(calls=[_call("minecraft_wait", {"reason": "等存东西"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "deposit"}})])
 
@@ -226,9 +226,9 @@ async def test_a_question_wakes_the_task_and_waiting_is_refused_until_answered()
     await _wait_until(lambda: len(_reports(bus)) == 1)
 
     asked = next(seen for seen in llm.seen if "在等你回答" in _texts(seen))
-    assert "maicraft_task(operation=answer, task_id=1" in _texts(asked) and "b5" in _texts(asked)
-    assert server.calls_to("task")[-1]["operation"] in ("get", "answer")
-    assert any(call.get("operation") == "answer" for call in server.calls_to("task"))
+    assert "maicraft_goal(operation=answer, goal_id=1" in _texts(asked) and "b5" in _texts(asked)
+    assert server.calls_to("goal")[-1]["operation"] in ("get", "answer")
+    assert any(call.get("operation") == "answer" for call in server.calls_to("goal"))
     await agent.stop()
 
 
@@ -240,7 +240,7 @@ async def test_polling_a_running_goal_is_folded_into_waiting() -> None:
     def script(messages: List[Dict[str, Any]]) -> Response:
         if not any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
             return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
-        return _resp(calls=[_call("maicraft_task", {"operation": "get", "task_id": 1})])
+        return _resp(calls=[_call("maicraft_goal", {"operation": "get", "goal_id": 1})])
 
     agent, llm, bus = await _start(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
@@ -283,7 +283,7 @@ async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     server = FakeMaicraft()
     agent, llm, bus = await _start(server, lambda messages: _resp("好"))
     run = goal_run_of(
-        {"task_id": 4, "ability": "maicraft:gather", "purpose": "砍树", "state": "running", "doing": "走向树"}
+        {"goal_id": 4, "ability": "maicraft:gather", "purpose": "砍树", "state": "running", "doing": "走向树"}
     )
     assert run is not None
     agent._track_goal(run)
@@ -376,7 +376,7 @@ async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
 
     def script(messages: List[Dict[str, Any]]) -> Response:
         if "Mod 挂出的决策" in _texts(messages):
-            return _resp(calls=[_call("maicraft_task", {"operation": "answer", "task_id": -1, "answer": "respawn"})])
+            return _resp(calls=[_call("maicraft_goal", {"operation": "answer", "goal_id": -1, "answer": "respawn"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
             return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
@@ -387,10 +387,10 @@ async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
     await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
 
     server.die()
-    await _wait_until(lambda: server.calls_to("task") and server.calls_to("task")[-1].get("operation") == "answer")
+    await _wait_until(lambda: server.calls_to("goal") and server.calls_to("goal")[-1].get("operation") == "answer")
 
     woken = _texts(llm.seen[-1])
-    assert "死亡恢复决策等你回答" in woken and "task_id=-1" in woken and "respawn" in woken
-    assert server.calls_to("task")[-1] == {"operation": "answer", "task_id": -1, "answer": "respawn"}
+    assert "死亡恢复决策等你回答" in woken and "goal_id=-1" in woken and "respawn" in woken
+    assert server.calls_to("goal")[-1] == {"operation": "answer", "goal_id": -1, "answer": "respawn"}
     assert agent._goals.tracked_ids() == [1], "决策不进跟踪名单，原来的目标还在跟"
     await agent.stop()

@@ -144,7 +144,7 @@ async def test_failed_rewrite_is_bounded_by_remaining_budget() -> None:
 async def test_summary_reads_inert_history_and_rejects_textual_tool_calls() -> None:
     """复现 DSML 混入摘要：旧调用只作为数据读取，模型写出的未执行动作必须被拒绝后重写。"""
     llm = MagicMock()
-    malformed = '<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name="maicraft_task">get</invoke>'
+    malformed = '<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name="maicraft_goal">get</invoke>'
     llm.generate = AsyncMock(
         side_effect=[
             Response(success=True, content=malformed, finish_reason="stop"),
@@ -309,7 +309,7 @@ def test_template_states_how_to_play_with_maicraft_v1() -> None:
         prompt = MinecraftAgent(MinecraftConfig(), prompt_manager=get_prompt_manager())._system_prompt()
     finally:
         reset_prompt_manager()
-    for tool in ("maicraft_observe", "maicraft_lookup", "maicraft_execute", "maicraft_task", "minecraft_wait"):
+    for tool in ("maicraft_observe", "maicraft_lookup", "maicraft_execute", "maicraft_goal", "minecraft_wait"):
         assert tool in prompt
     assert "maicraft_events" not in prompt, "事件流只给宿主读"
     assert "身体同一时间只做一件事" in prompt and "[开局资料]" in prompt

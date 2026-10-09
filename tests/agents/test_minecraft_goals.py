@@ -116,7 +116,7 @@ async def test_other_goals_are_ignored_and_body_events_pass_through() -> None:
     watch = _watch(server, recorder)
     await watch.step()
     reply = await server._execute({"goal": {"ability": "maicraft:gather"}})
-    server.finish(reply["data"]["task_id"])
+    server.finish(reply["data"]["goal_id"])
     server.body_event("temporary_task_started", "自卫：有僵尸打过来")
     server.body_event("character_died", "角色死了，等重生")
 
@@ -124,7 +124,7 @@ async def test_other_goals_are_ignored_and_body_events_pass_through() -> None:
 
     assert recorder.changed == []
     assert [event["kind"] for event in recorder.body] == ["temporary_task_started", "character_died"]
-    assert server.calls_to("task") == [], "没在跟踪的目标不去查"
+    assert server.calls_to("goal") == [], "没在跟踪的目标不去查"
 
 
 @pytest.mark.asyncio

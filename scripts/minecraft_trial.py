@@ -181,7 +181,7 @@ def request_metrics(t0_ms: int, t1_ms: int) -> Dict[str, Any]:
                 name += ":" + str((arguments.get("goal") or {}).get("ability"))
             elif name == "maicraft_observe":
                 name += ":" + str(arguments.get("what"))
-            elif name == "maicraft_task":
+            elif name == "maicraft_goal":
                 name += ":" + str(arguments.get("operation"))
             calls[name] += 1
     summary["minecraft_compactions"] = compaction

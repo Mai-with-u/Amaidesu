@@ -26,11 +26,11 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
   ▼
 任务批次（每步 = 一次 LLM 推理）：
   ├─ flush 新消息（主播提示词 / 宿主推送的目标通知）→ user 消息
-  ├─ 新任务开局：宿主代读 observe(self)、observe(scene)、lookup()、task(list)，以 [开局资料] 回执放进历史
+  ├─ 新任务开局：宿主代读 observe(self)、observe(scene)、lookup()、goal(list)，以 [开局资料] 回执放进历史
   ├─ 历史超预算时集中整理一次
   ├─ LLM 推理（系统提示词 + 对话历史 + 工具列表）→ tool_calls（可多个）
   ├─ 串行执行（局部工具直接落状态；maicraft_* 经 ToolRegistry 透传 = MCP 调用）
-  │    └─ execute 返回没结束的目标 → 开始跟踪（task_id + state）
+  │    └─ execute 返回没结束的目标 → 开始跟踪（goal_id + state）
   ├─ 工具结果作为观察返回（OpenAI tool role + tool_call_id 关联）
   └─ 批次终止语义（全部系统可判定，见下节）
   → 回空闲（todo/notebook/reports 保留；目标跟踪跨批次持续）
@@ -48,17 +48,17 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | 4 | 自然终止或 `minecraft_wait`，仅剩在跑的目标 | 静默让出回合，等目标事件唤醒 |
 | 5 | 有目标在等回答、被暂停或待办没推进，提醒后仍不行动 | 挂起并上报 escalation，保留原任务等继续指令 |
 
-一整轮只在查询还在跑的目标（`maicraft_task` get/list）时，先提醒用 `minecraft_wait`；连续第二轮直接并入等待，不再推理。
+一整轮只在查询还在跑的目标（`maicraft_goal` get/list）时，先提醒用 `minecraft_wait`；连续第二轮直接并入等待，不再推理。
 
 ### 后台目标跟踪（events → 唤醒）
 
-- **登记**：`maicraft_execute` 返回没结束的目标（`state` 为 running / awaiting_answer / paused）即开始跟踪；当场完成的目标（只改记忆、只读分析）结果已在回复里，不跟踪。模型用 `maicraft_task(resume)` 解除暂停的旧目标也纳入跟踪
+- **登记**：`maicraft_execute` 返回没结束的目标（`state` 为 running / awaiting_answer / paused）即开始跟踪；当场完成的目标（只改记忆、只读分析）结果已在回复里，不跟踪。模型用 `maicraft_goal(resume)` 解除暂停的旧目标也纳入跟踪
 - **读事件**：`GoalWatch` 带着游标长轮询 `events`（`events_wait_ms`，默认 25 秒），事件流只给宿主读、不进模型工具列表。首次读取只建立游标，接手前的事件不补发
-- **事实核实**：目标的 asked / paused / resumed / finished 事件只说明"变了"，宿主再用 `task(get)` 取它此刻的完整样子（结果、变化、问题）交给任务；结束的目标不再跟踪
+- **事实核实**：目标的 asked / paused / resumed / finished 事件只说明"变了"，宿主再用 `goal(get)` 取它此刻的完整样子（结果、变化、问题）交给任务；结束的目标不再跟踪
 - **唤醒**：结束 → 注入"目标 N 结束了"与完整结果；提问 → 注入问题、选项与回答方式；被暂停 → 注入"身体没在做它"。只有这些需要模型处理的变化才唤醒，恢复推进静默记账
 - **换世界**：事件流编号变了（换世界、重进世界、Mod 重启）时旧游标作废，逐个重新查在跟踪的目标；查不到或编号已是别的能力的目标，按"不在了"注入通知，不让任务挂着等不来的结果
 - **身体事件**：与目标无关的事件（生存需求的临时任务开始与结束、处理不了的需求、角色死亡）进本批身体上下文；处理不了的需求与角色死亡同时注入任务并发 `game.attention_required`
-- **Mod 挂出的决策**：死亡恢复这类决策不是谁下达的目标（`task_id` 是负数）。它提问时读一次、带着问题与选项唤醒任务（空闲时也唤醒，没人回答角色就停在死亡屏幕），模型按问题里给的选项用 `maicraft_task(answer)` 回答；不进跟踪名单、不记账本，执行结果事件 `death_recovery_applied` 不转给主播
+- **Mod 挂出的决策**：死亡恢复这类决策不是谁下达的目标（`goal_id` 是负数）。它提问时读一次、带着问题与选项唤醒任务（空闲时也唤醒，没人回答角色就停在死亡屏幕），模型按问题里给的选项用 `maicraft_goal(answer)` 回答；不进跟踪名单、不记账本，执行结果事件 `death_recovery_applied` 不转给主播
 - **账本镜像**：目标同时记进通用任务账本（`maicraft-goal-<id>`，发起方 minecraft），主播的任务查询看得到；账本的长时间无进展告警回到 Agent 注入提醒，成败本身以事件流为准
 
 ### 运营干预入口（递话 / 硬取消 / 断连恢复）
@@ -66,7 +66,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 委派之外，minecraft 另有两个干预入口与一条自愈路径（原语定案见 ADR-034，账面语义见 ADR-035）：
 
 - **递话 `receive_prompt`**：纯文本留言（主播经 `framework_prompt` 工具、运营经 REST），不派新任务、不进账本——文本入消息队列 + 唤醒；入队时按来源加 `[运营原话]` / `[主播补充]` 标签，冲突时原话与游戏结果优先于转述。
-- **硬取消 `cancel_task`**：任务在委派追踪清单 → 清清单 + 账面写 cancelled + 注入"任务已被取消"通知，LLM 下一步自行停手（还在跑的游戏目标由它用 `maicraft_task(cancel)` 取消）。软取消：不打断当前工具调用。
+- **硬取消 `cancel_task`**：任务在委派追踪清单 → 清清单 + 账面写 cancelled + 注入"任务已被取消"通知，LLM 下一步自行停手（还在跑的游戏目标由它用 `maicraft_goal(cancel)` 取消）。软取消：不打断当前工具调用。
 - **MCP 断连恢复续跑**：私有 MCP 恢复循环装配成功后注入"连接已恢复"通知 + 解锁挂起态 + 唤醒；能力清单与事件游标按新连接重新读取。
 
 ## 工具契约
@@ -82,7 +82,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | `minecraft_wait` | 身体在执行后台目标、又没有可推进或可准备的事时单独调用，让出本轮等目标事件 |
 | `minecraft_report` | 上报通道（玩家→主播唯一发声出口）：delivery 交付总结 / escalation 升级决策 |
 | `minecraft_skill` | 按名读技能正文（装配了技能库时才有）。技能目录随系统提示词给出，按 MaiCraft 当前的能力清单筛选：技能的 `requires.abilities` 都在清单里才进目录；Mod 列能力时已按装了哪些模组筛过，模组相关的技能随能力一起出现。为旧版 Mod 写的技能标了 `maicraft: [v0]`，按 v1 重写前不进目录 |
-| `maicraft_observe` / `maicraft_lookup` / `maicraft_execute` / `maicraft_task` | MaiCraft v1 的工具，registry 动态发现（每任务重新拉取）；参数按 Mod 定义填写。`maicraft_events` 只给宿主读，不进 LLM 工具列表 |
+| `maicraft_observe` / `maicraft_lookup` / `maicraft_execute` / `maicraft_goal` | MaiCraft v1 的工具，registry 动态发现（每任务重新拉取）；参数按 Mod 定义填写。`maicraft_events` 只给宿主读，不进 LLM 工具列表 |
 
 **对外工具**（经 ToolRegistry 注册、主播工具列表可见，不进玩家 LLM 工具列表）：
 - `framework_delegate`：跨 Agent 委派通道——把工作交给另一 Agent（指令只当自然语言，不给步骤）；BaseAgent 默认拒收，minecraft 实现接收入口（指令入队带任务号 + 唤醒）
