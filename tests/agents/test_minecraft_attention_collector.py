@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pytest
 from pydantic import ValidationError
@@ -28,75 +28,10 @@ from src.modules.collectors.factory import SUPPORTED_COLLECTORS, instantiate_col
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
 
-
-class _FakeEventBus:
-    """捕获 emit 的桩（替代真实 EventBus）。"""
-
-    def __init__(self) -> None:
-        self.events: List[tuple] = []
-
-    async def emit(self, event_name: str, payload: Any, **kwargs: Any) -> None:
-        self.events.append((event_name, payload))
-
-
-class _FakeClient:
-    """MCP 客户端替身：连接、工具清单与 events 的回复都可控。"""
-
-    instances: List["_FakeClient"] = []
-    tool_names = ("observe", "lookup", "execute", "task", "events")
-
-    def __init__(self, name: str, config: Any) -> None:
-        self.name = name
-        self.config = config
-        self.connected = True
-        self.closed = False
-        self.pages: List[Dict[str, Any]] = []
-        self.read_error: Optional[Exception] = None
-        self.read_calls: List[Dict[str, Any]] = []
-        _FakeClient.instances.append(self)
-
-    async def connect(self) -> bool:
-        return self.connected
-
-    async def close(self) -> None:
-        self.closed = True
-        self.connected = False
-
-    async def list_tools(self) -> List[Any]:
-        return [_FakeTool(name) for name in self.tool_names]
-
-    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
-        self.read_calls.append({"name": name, "arguments": dict(arguments)})
-        if self.read_error is not None:
-            raise self.read_error
-        page = self.pages.pop(0) if self.pages else _page([], cursor=0)
-        return _FakeCallResult({"ok": True, "data": page})
-
-
-class _FakeTool:
-    def __init__(self, name: str) -> None:
-        self.name = name
-        self.description = f"desc {name}"
-        self.inputSchema = {"type": "object"}
-
-
-class _FakeCallResult:
-    def __init__(self, structured: Dict[str, Any]) -> None:
-        self.is_error = False
-        self.content = []
-        self.structured_content = structured
-
-
-def _page(
-    events: List[Dict[str, Any]],
-    *,
-    cursor: int,
-    stream_id: str = "stream-A",
-    status: str = "valid",
-    has_more: bool = False,
-) -> Dict[str, Any]:
-    """一页 events 的 data（形状与 MaiCraft v1 的 events 一致）。"""
-    return {"stream_id": stream_id, "cursor": cursor, "has_more": has_more, "cursor_status": status, "events": events}
+from .minecraft_collector_fakes import FakeEventBus as _FakeEventBus
+from .minecraft_collector_fakes import FakeMcpClient as _FakeClient
+from .minecraft_collector_fakes import events_page as _page
+from .minecraft_collector_fakes import patch_mcp
 
 
 def _event(cursor: int, kind: str, message: str = "", task_id: int = -1) -> Dict[str, Any]:
@@ -105,14 +40,7 @@ def _event(cursor: int, kind: str, message: str = "", task_id: int = -1) -> Dict
 
 @pytest.fixture(autouse=True)
 def _patch_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
-    """把采集器用到的 MCP 客户端换成替身（采集器在 _ensure_ready 内函数级 import）。"""
-    import src.modules.mcp.client as client_module
-    import src.modules.mcp.provider as provider_module
-
-    _FakeClient.instances = []
-    monkeypatch.setattr(client_module, "McpClient", _FakeClient)
-    # provider 保持真实实现（工具缓存、调用与回复映射都走真路径）
-    monkeypatch.setattr(provider_module, "McpClient", _FakeClient)
+    patch_mcp(monkeypatch)
 
 
 def _collector(bus: _FakeEventBus) -> MaicraftAttentionCollector:
