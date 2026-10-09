@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, Optional
 
 from src.modules.logging import get_logger
+from src.modules.skills import SKILL_TOOL_NAME, build_skill_spec
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,
@@ -280,6 +281,8 @@ class MinecraftToolProvider(BaseToolProvider):
     wait_callback: Optional[Callable[[], Dict[str, Any]]] = None
     # 主播看一眼：由 Agent 读观察并精简成叙事视图（未注入时不提供该工具）
     glance_reader: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
+    # 按名读技能正文：由 Agent 按自己的受众名与当前能力清单筛选（未注入技能库时不提供该工具）
+    skill_reader: Optional[Callable[[str], Dict[str, Any]]] = None
 
     @property
     def name(self) -> str:
@@ -296,6 +299,8 @@ class MinecraftToolProvider(BaseToolProvider):
             specs.append(build_wait_spec())
         if self.glance_reader is not None:
             specs.append(build_glance_spec())
+        if self.skill_reader is not None:
+            specs.append(build_skill_spec(PROVIDER_NAME))
         return specs
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -329,6 +334,8 @@ class MinecraftToolProvider(BaseToolProvider):
                 result = self.wait_callback()
             elif matched.name == "glance" and self.glance_reader is not None:
                 result = await self.glance_reader()
+            elif matched.name == SKILL_TOOL_NAME and self.skill_reader is not None:
+                result = self.skill_reader(str(args.get("name", "")))
             else:
                 return ToolExecutionResult(
                     tool_name=tool_name,

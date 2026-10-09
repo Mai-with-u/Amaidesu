@@ -80,6 +80,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | `minecraft_notebook` | 工作笔记（read/write）。持久记忆：对话历史会整理、笔记不会——重要发现写这里 |
 | `minecraft_wait` | 身体在执行后台目标、又没有可推进或可准备的事时单独调用，让出本轮等目标事件 |
 | `minecraft_report` | 上报通道（玩家→主播唯一发声出口）：delivery 交付总结 / escalation 升级决策 |
+| `minecraft_skill` | 按名读技能正文（装配了技能库时才有）。技能目录随系统提示词给出，按 MaiCraft 当前的能力清单筛选：技能的 `requires.abilities` 都在清单里才进目录；Mod 列能力时已按装了哪些模组筛过，模组相关的技能随能力一起出现。为旧版 Mod 写的技能标了 `maicraft: [v0]`，按 v1 重写前不进目录 |
 | `maicraft_observe` / `maicraft_lookup` / `maicraft_execute` / `maicraft_task` | MaiCraft v1 的工具，registry 动态发现（每任务重新拉取）；参数按 Mod 定义填写。`maicraft_events` 只给宿主读，不进 LLM 工具列表 |
 
 **对外工具**（经 ToolRegistry 注册、主播工具列表可见，不进玩家 LLM 工具列表）：

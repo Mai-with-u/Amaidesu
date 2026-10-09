@@ -3,13 +3,14 @@
 自包含包（内容特有逻辑内聚，框架零改动）：
 - ``config.py``              运行时配置（上下文预算、事件长轮询、私有 MCP）
 - ``state.py``               Agent 内存状态（todo/notebook/reports）
-- ``tools.py``               局部工具（todo/notebook/report/wait/get_work_log/glance）Spec + Provider
+- ``tools.py``               局部工具（todo/notebook/report/wait/get_work_log/glance/skill）Spec + Provider
 - ``maicraft.py``            MaiCraft v1 的返回格式、目标运行状态与事件流，只在这里解读一次
 - ``goals.py``               后台目标跟踪：events 长轮询，目标需要处理时唤醒任务
 - ``glance.py``              主播看一眼的叙事视图
 - ``context.py``             任务历史按预算集中整理
 - ``agent.py``               MinecraftAgent（BaseAgent）：命令驱动 ReAct 循环
 - ``prompts/``               系统提示词
+- ``skills/``                技能（玩法经验文档），按能力清单筛选后进目录
 
 ``attention_collector.py`` 常驻长轮询 MaiCraft v1 的任务事件流，把身体先处理的急事与处理不了的需求
 转成 ``game.body.*`` 事件（分类表在 ``attention_matrix.py``）；``chat_collector.py`` 读的是旧版 Mod 的

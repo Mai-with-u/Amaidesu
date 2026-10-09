@@ -23,7 +23,7 @@ from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
-from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
+from typing import Any, Deque, Dict, Iterable, List, Literal, Optional, Set
 
 from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars, json_text
 from src.agents.minecraft.glance import glance_scene, glance_self
@@ -55,7 +55,8 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
-from src.modules.skills import SkillLibrary
+from src.modules.llm.context_meter import SECTION_SKILLS
+from src.modules.skills import SkillEnvironment, SkillLibrary, render_catalog
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 
@@ -144,12 +145,13 @@ class MinecraftAgent(BaseAgent):
                 ``on_thinking_delta(round_id, phase, step, seq, text_delta)`` 方法的对象）。
             task_tracker: 通用任务基建。委派任务的账面由本 Agent 写；后台目标同时记进账本，
                 主播的任务查询与长时间无进展告警复用它。
-            skill_library: 技能库。现有技能写的是旧版 Mod 的能力，按 v1 能力重写之前不接入，
-                参数保留只为工厂的统一构造签名。
+            skill_library: 技能库（玩法经验文档）。注入时系统提示词附技能目录，并提供
+                ``minecraft_skill`` 按名读正文；目录按本 Agent 受众与 MaiCraft 当前的能力清单筛选。
             clock: 保留给测试注入假时钟的构造参数（统一构造签名）。
         """
         super().__init__(event_bus=event_bus)
-        del skill_library, clock
+        del clock
+        self._skills = skill_library
         self.typed_config = config
         self._llm = llm_manager
         self._prompt = prompt_manager
@@ -165,6 +167,7 @@ class MinecraftAgent(BaseAgent):
             report_callback=self._handle_report,
             wait_callback=self._request_wait,
             glance_reader=self._glance,
+            skill_reader=self._read_skill if skill_library is not None else None,
         )
         # 能力清单（lookup()）每次 MCP 连接只读一次；新任务开局直接附上。
         self._ability_listing: Optional[Dict[str, Any]] = None
@@ -405,14 +408,17 @@ class MinecraftAgent(BaseAgent):
         "minecraft_wait": ["minecraft"],
         "minecraft_get_work_log": ["streamer"],
         "minecraft_glance": ["streamer"],
+        "minecraft_skill": ["minecraft"],
     }
 
     def _register_tools(self) -> None:
         if self._tool_registry is None:
             return
-        self.register_tool_provider(
-            self._tool_provider, registry=self._tool_registry, visible_to=dict(self._LOCAL_VISIBLE_TO)
-        )
+        visible_to = dict(self._LOCAL_VISIBLE_TO)
+        if self._skills is None:
+            # 没有技能库就不提供读技能的工具，可见名单里也不留它。
+            visible_to.pop("minecraft_skill")
+        self.register_tool_provider(self._tool_provider, registry=self._tool_registry, visible_to=visible_to)
         self._logger.info(
             "MinecraftAgent 工具已注册：minecraft_todo / notebook / report / wait / get_work_log / glance"
         )
@@ -516,6 +522,8 @@ class MinecraftAgent(BaseAgent):
     async def _run_task_batch(self) -> None:
         self._task_reported = False
         self._wait_requested = False
+        # 技能目录按能力清单筛选：先把清单读到（每次连接只读一次，开局资料复用同一份），再写系统提示词。
+        await self._ensure_ability_listing()
         system_message = self._system_message()
         tool_defs = self._tool_definitions()
         await self._settle_idle_compaction(tool_defs)
@@ -720,6 +728,60 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
     # 开局资料、工具执行与结果吸收
     # ==================================================================
+
+    async def _ensure_ability_listing(self) -> None:
+        """连上 MaiCraft 后读一次能力清单（lookup()）：技能目录与开局资料都用它，读失败下次再试。"""
+        if self._ability_listing is not None or not self._maicraft_ready():
+            return
+        observation = await self._execute_tool(LOOKUP, {})
+        if observation.get("ok") is True:
+            self._ability_listing = observation
+
+    def _ability_ids(self) -> Optional[Set[str]]:
+        """能力清单里的能力 ID；还没读到返回 None（按未知处理，不当成"一个能力都没有"）。"""
+        listing = self._ability_listing
+        data = listing.get("data") if isinstance(listing, dict) else None
+        abilities = data.get("abilities") if isinstance(data, dict) else None
+        if not isinstance(abilities, list):
+            return None
+        return {str(entry["ability"]) for entry in abilities if isinstance(entry, dict) and entry.get("ability")}
+
+    # ==================================================================
+    # 技能（玩法经验文档：目录常驻系统提示词，正文按需读取）
+    # ==================================================================
+
+    def _skill_environment(self) -> SkillEnvironment:
+        """技能前提的已知环境：接的是 v1 的 Mod；读到能力清单后才认定哪些能力有、哪些没有。
+
+        技能写明用到哪些能力（requires.abilities），Mod 还没有的就不进目录——Mod 列能力时已按装了哪些
+        模组筛过，所以模组相关的技能也随能力一起出现。为旧版 Mod 写的技能标了 maicraft: [v0]，按 v1 重写前不进目录。
+        """
+        environment: Dict[str, Set[str]] = {"maicraft": {"v1"}}
+        abilities = self._ability_ids()
+        if abilities is not None:
+            environment["abilities"] = abilities
+        return environment
+
+    def _skill_catalog_section(self) -> str:
+        """系统提示词里的技能目录段；没有技能库或没有可用技能时整段省略。"""
+        if self._skills is None:
+            return ""
+        catalog = render_catalog(self._skills.catalog(self.name, self._skill_environment()))
+        if not catalog:
+            return ""
+        return (
+            "\n\n## 技能\n"
+            "技能是把一类目标做成的打法与经验：步骤、决策点、常见坑和该查的资料。"
+            "开始一类不熟悉或容易出错的工作前，用 minecraft_skill 按名读取相关技能；"
+            "技能是参考，不授予额外权限，现场和能力说明优先。"
+            "标注“前提待确认”的技能只在现场确实具备该前提时使用。\n" + catalog
+        )
+
+    def _read_skill(self, name: str) -> Dict[str, Any]:
+        """minecraft_skill：按本 Agent 受众名与当前已知环境读取技能正文。"""
+        if self._skills is None:
+            return {"success": False, "error": "技能库未装配"}
+        return self._skills.read(name, self.name, self._skill_environment())
 
     async def _append_opening_bundle(self, messages: List[Dict[str, Any]]) -> None:
         """新任务开局由宿主代读：自己、周围、能力清单、手上的目标，有笔记时附上笔记。
@@ -1189,7 +1251,12 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
 
     def _system_message(self) -> Dict[str, Any]:
-        return {"role": "system", "content": self._system_prompt()}
+        """任务历史开头的系统消息；附技能目录时带计量标注，上下文面板据此把它记入技能段。"""
+        catalog = self._skill_catalog_section()
+        message: Dict[str, Any] = {"role": "system", "content": self._system_prompt() + catalog}
+        if catalog:
+            message["context_parts"] = [{"section": SECTION_SKILLS, "name": "技能目录", "text": catalog}]
+        return message
 
     def _system_prompt(self) -> str:
         """系统提示词：渲染 prompt_manager 模板（无则用内建兜底）。"""

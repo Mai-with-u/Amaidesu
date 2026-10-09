@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -15,6 +17,7 @@ from src.agents.minecraft.maicraft import goal_run_of
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
+from src.modules.skills import SkillLibrary
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger, TaskTracker
 
@@ -59,7 +62,11 @@ class _Llm:
 
 
 async def _start(
-    server: FakeMaicraft, script: LlmScript, *, tracker: Optional[TaskTracker] = None
+    server: FakeMaicraft,
+    script: LlmScript,
+    *,
+    tracker: Optional[TaskTracker] = None,
+    skills: Optional[SkillLibrary] = None,
 ) -> tuple[MinecraftAgent, _Llm, MagicMock]:
     """启动一个接上 MaiCraft 替身的玩家：私有 MCP 不连真端口，provider 直接换成替身。"""
     registry = ToolRegistry()
@@ -73,6 +80,7 @@ async def _start(
         event_bus=bus,
         tool_registry=registry,
         task_tracker=tracker,
+        skill_library=skills,
     )
     agent._mcp_provider = server
     agent._mcp_client = SimpleNamespace(connected=True)
@@ -319,4 +327,43 @@ async def test_character_death_tells_the_running_task_and_the_streamer() -> None
     ]
     assert any("角色死了" in alert.message for alert in alerts)
     assert agent._goals.tracked_ids() == [1], "死亡不结束目标"
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_skill_catalog_follows_the_abilities_the_mod_has(tmp_path: Path) -> None:
+    """技能目录按 Mod 的能力清单筛：用到的能力都在才进目录，为旧版 Mod 写的不进；正文按名读。"""
+    for name, requires in (
+        ("chop_trees", "abilities: [maicraft:gather]"),
+        ("make_tools", "abilities: [maicraft:obtain]"),
+        ("old_machines", "maicraft: [v0]"),
+    ):
+        (tmp_path / f"{name}.md").write_text(
+            f"---\nname: {name}\ndescription: {name} guide\nagents: [minecraft]\ncategory: survival\n"
+            f"requires:\n  {requires}\n---\nbody-of-{name}\n",
+            encoding="utf-8",
+        )
+    library = SkillLibrary()
+    library.register_scan_root(tmp_path)
+    library.load_all()
+    server = FakeMaicraft()  # 替身的能力清单只有 gather 与 remember
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(
+            message.get("role") == "tool" and "body-of-chop_trees" in str(message.get("content"))
+            for message in messages
+        ):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "读过砍树的打法了"})])
+        return _resp(calls=[_call("minecraft_skill", {"name": "chop_trees"})])
+
+    agent, llm, bus = await _start(server, script, skills=library)
+    agent.receive_delegation(instruction="先看看怎么砍树", task_id="d-1")
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+
+    system = str(llm.seen[0][0]["content"])
+    assert "chop_trees" in system
+    assert "make_tools" not in system, "Mod 没有 obtain，用到它的技能不进目录"
+    assert "old_machines" not in system, "为旧版 Mod 写的技能不进目录"
+    assert "minecraft_skill" in json.dumps(llm.tools_given[0]), "有技能库时提供按名读技能的工具"
+    assert len(server.calls_to("lookup")) == 1, "能力清单每次连接只读一次，技能目录与开局资料共用"
     await agent.stop()
