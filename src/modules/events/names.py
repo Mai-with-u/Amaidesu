@@ -126,8 +126,8 @@ class CoreEvents:
     ROOM_MESSAGE_WILDCARD = "room.message.#"
 
     # ========== v2 语义域事件（game.body.* AI 玩家身体事件） ==========
-    # 上游是 MaiCraft 的注意流（内容很杂），由 maicraft_attention 采集器分类：
-    # 只把"值得向观众叙述的遭遇"转成下面 8 个事件，遥测（血量/坐标/游标）不入事件。
+    # 上游是 MaiCraft 的任务事件流，由 maicraft_attention 采集器分类：
+    # 只把"值得向观众叙述的遭遇"转成下面 9 个事件，遥测（血量/坐标/游标）不入事件。
     # kind 是判别字段（与事件名末段一致），未知上游类型归 game.body.unknown 并留
     # source_event_type——所以事件面不随上游漂移。
     # 用三层名而非 "game.*"：单层通配是游戏 Agent 的低频里程碑通道（落 game_events、
@@ -139,11 +139,13 @@ class CoreEvents:
     GAME_BODY_REFLEX_STARTED = "game.body.reflex_started"
     GAME_BODY_REFLEX_FINISHED = "game.body.reflex_finished"
     GAME_BODY_DIMENSION_CHANGED = "game.body.dimension_changed"
+    # 角色自己处理不了的生存需求（饿了没吃上、封顶没封上……），需要主播或游戏 Agent 拿主意
+    GAME_BODY_NEED_UNHANDLED = "game.body.need_unhandled"
     GAME_BODY_UNKNOWN = "game.body.unknown"
 
     # ========== v2 语义域事件（game.body.* 通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名：订阅方用它一站式
-    # 监听上面 8 类身体事件（emit 时用具体常量）。
+    # 监听上面 9 类身体事件（emit 时用具体常量）。
     GAME_BODY_WILDCARD = "game.body.#"
 
     # ========== v2 语义域事件（game.chat.* 游戏内聊天） ==========

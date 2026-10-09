@@ -1,15 +1,15 @@
 """
 事件 Payload 定义：game.body.* 身体事件（AI 玩家遭遇，已叙事化）
 
-上游是 MaiCraft 的注意流；**分类与叙事化**（哪些值得讲、怎么讲）由
+上游是 MaiCraft 的任务事件流；**分类与叙事化**（哪些值得讲、怎么讲）由
 ``src/agents/minecraft/attention_matrix.py`` 负责——那是游戏侧知识。
-本模块只定义事件契约：8 个具名事件共享一个 payload 类，``kind`` 为判别字段。
+本模块只定义事件契约：9 个具名事件共享一个 payload 类，``kind`` 为判别字段。
 
 契约约定：
-- **封闭集合**：``kind`` 8 个取值与 8 个事件名一一对应；上游类型可增可减，
+- **封闭集合**：``kind`` 9 个取值与 9 个事件名一一对应；上游类型可增可减，
   未知类型归 ``unknown`` 并保留 ``source_event_type``，事件面不随上游漂移。
 - **遥测不入事件**：血量数值、坐标、游标编号不在这里；主播要这些时走
-  工具直读（``perceive``），不占用叙事通道。
+  工具直读（``minecraft_glance``），不占用叙事通道。
 - ``summary`` 是一句可直接讲述的中文事实，由结构化字段生成，
   只陈述有证据的部分。
 """
@@ -23,7 +23,7 @@ from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
 from src.modules.time_utils import now_ms
 
-#: 叙事种类（判别字段取值；与 8 个事件名末段一一对应）
+#: 叙事种类（判别字段取值；与 9 个事件名末段一一对应）
 BodyKind = Literal[
     "attacked",
     "attack_ended",
@@ -32,6 +32,7 @@ BodyKind = Literal[
     "reflex_started",
     "reflex_finished",
     "dimension_changed",
+    "need_unhandled",
     "unknown",
 ]
 
@@ -43,6 +44,7 @@ BodyKind = Literal[
 @register_event(CoreEvents.GAME_BODY_REFLEX_STARTED)
 @register_event(CoreEvents.GAME_BODY_REFLEX_FINISHED)
 @register_event(CoreEvents.GAME_BODY_DIMENSION_CHANGED)
+@register_event(CoreEvents.GAME_BODY_NEED_UNHANDLED)
 @register_event(CoreEvents.GAME_BODY_UNKNOWN)
 class BodyEventPayload(BasePayload):
     """AI 玩家身体事件（已分类、已叙事化）。
@@ -56,7 +58,7 @@ class BodyEventPayload(BasePayload):
         game: 游戏标识（发布方必填，如 "minecraft"）
         kind: 叙事种类（判别字段；与事件名末段一致）
         summary: 一句可直接讲述的中文事实（只陈述有证据的部分）
-        source_event_type: 上游注意流事件类型（如 ``agent.damaged``），留痕用
+        source_event_type: 上游事件种类（如 ``temporary_task_started``），留痕用
         attacker: 攻击者实体 id（如 ``minecraft:zombie``；无来源时为空串）
         hits: 该次遭遇的命中次数（来自上游片段聚合；0 = 上游未提供）
         resolved: 该次遭遇是否已结束（供主播措辞滞后：已结束就不说"正在被攻击"）
@@ -65,7 +67,7 @@ class BodyEventPayload(BasePayload):
     """
 
     # 判别字段：EventBus 在 emit 期校验"事件名末段 == 该字段值"，
-    # 八重注册共享一类，挂错事件名直接报错。
+    # 九重注册共享一类，挂错事件名直接报错。
     # 必须标 ClassVar：否则 pydantic 会把它当成私有属性（ModelPrivateAttr），
     # 校验期取属性名会直接抛 TypeError。
     _DISCRIMINANT_FIELD: ClassVar[str] = "kind"
@@ -77,7 +79,7 @@ class BodyEventPayload(BasePayload):
     game: str = Field(..., description="游戏标识（发布方必填：框架不假定是哪款游戏）")
     kind: BodyKind = Field(..., description="叙事种类（与事件名末段一致）")
     summary: str = Field(default="", description="一句可直接讲述的中文事实")
-    source_event_type: str = Field(default="", description="上游注意流事件类型（留痕）")
+    source_event_type: str = Field(default="", description="上游事件种类（留痕）")
     attacker: str = Field(default="", description="攻击者实体 id；无来源时为空串")
     hits: int = Field(default=0, description="该次遭遇的命中次数（0 = 上游未提供）")
     resolved: bool = Field(default=False, description="该次遭遇是否已结束")
