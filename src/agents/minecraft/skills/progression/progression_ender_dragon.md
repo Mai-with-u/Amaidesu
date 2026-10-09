@@ -3,6 +3,9 @@ name: progression_ender_dragon
 description: 原版通关路线：铁装→钻石→下界与烈焰棒→末影之眼→要塞→末地击败末影龙，以及每段需要主播给的授权；接到“通关/打龙/去下界/找要塞”类目标时读
 agents: [minecraft]
 category: progression
+requires:
+  # 写的是旧版 Mod 的能力：v1 有了对应能力、按 v1 重写之后去掉这一行，技能才进目录
+  maicraft: [v0]
 tags: [通关, 下界, 要塞, 末影龙, 鞘翅]
 ---
 

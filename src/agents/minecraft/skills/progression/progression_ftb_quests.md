@@ -4,6 +4,8 @@ description: 整合包任务书推进：读 FTB Quests 当前可做的任务、�
 agents: [minecraft]
 category: progression
 requires:
+  # 写的是旧版 Mod 的能力：v1 有了对应能力、按 v1 重写之后去掉这一行，技能才进目录
+  maicraft: [v0]
   mods: [ftbquests]
 tags: [整合包, 任务书, FTB]
 ---

@@ -4,6 +4,8 @@ description: 机械动力机器从需求到产出：选工艺、勘测场地、�
 agents: [minecraft]
 category: create
 requires:
+  # 写的是旧版 Mod 的能力：v1 有了对应能力、按 v1 重写之后去掉这一行，技能才进目录
+  maicraft: [v0]
   mods: [create]
 tags: [机械动力, 机器, 蓝图, 验收]
 ---

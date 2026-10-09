@@ -4,6 +4,8 @@ description: 通用机械矿物倍增：2/3/4/5 倍处理链各需要什么、�
 agents: [minecraft]
 category: mekanism
 requires:
+  # 写的是旧版 Mod 的能力：v1 有了对应能力、按 v1 重写之后去掉这一行，技能才进目录
+  maicraft: [v0]
   mods: [mekanism]
 tags: [通用机械, 矿物处理, 倍增]
 ---

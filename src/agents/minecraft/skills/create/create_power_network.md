@@ -4,6 +4,8 @@ description: 机械动力的动力网：选动力源、估应力与转速、接�
 agents: [minecraft]
 category: create
 requires:
+  # 写的是旧版 Mod 的能力：v1 有了对应能力、按 v1 重写之后去掉这一行，技能才进目录
+  maicraft: [v0]
   mods: [create]
 tags: [机械动力, 应力, 传动]
 ---
