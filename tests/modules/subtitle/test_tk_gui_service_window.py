@@ -622,8 +622,9 @@ class FakeLabelForAutoHide:
     def _draw_text(self) -> None:
         self.draws += 1
 
-    def configure_text(self, text: str = "", **_kwargs: object) -> None:
-        self.display_text = text
+    def configure_text(self, text: str | None = None, **_kwargs: object) -> None:
+        if text is not None:
+            self.display_text = text
         self._content_height_px = None
 
 
@@ -688,3 +689,34 @@ def test_auto_hide_does_not_shrink_window_while_updating_text():
     assert root.winfo_height() == 220, "渲染期间被自动隐藏缩回了默认高度"
     assert label.display_text.startswith("这是一条"), "文本被巡检清空了"
     assert svc.last_voice_time_ms > 0, "计时器要在渲染前就刷新"
+
+
+def test_clear_subtitle_enqueues_none_sentinel():
+    """清空请求以 None 哨兵入队（线程安全），不触碰任何 Tk 对象。"""
+    svc = SubtitleGuiService(config={"window_width": 800, "window_height": 100, "window_offset_y": 100})
+
+    svc.clear_subtitle()
+
+    assert svc.text_queue.get_nowait() is None
+    assert svc.text_queue.empty()
+
+
+def test_check_queue_dispatches_text_and_clear_sentinel():
+    """队列分发：None 哨兵执行清空、字符串按字幕显示，均在消费线程完成。"""
+    svc = SubtitleGuiService(config={"window_width": 800, "window_height": 100, "window_offset_y": 100})
+    root = FakeRootWithUpdate(
+        width=800, height=100, x=624, y=1080, scale=1.0, screen=(2048, 2160), monitors=[PRIMARY_MONITOR]
+    )
+    svc.root = root
+    shown: list[str] = []
+    cleared: list[bool] = []
+    svc._update_subtitle_display = shown.append  # type: ignore[method-assign]
+    svc._clear_content = lambda: cleared.append(True)  # type: ignore[method-assign]
+
+    svc.push_subtitle("一条字幕")
+    svc.clear_subtitle()
+    svc._check_queue()
+
+    assert shown == ["一条字幕"], "文本指令应分发给字幕显示"
+    assert cleared == [True], "None 哨兵应分发给清空"
+    assert svc.text_queue.empty()

@@ -8,8 +8,8 @@ GUI 服务本体（``tk_gui_service``）与本 Backend 同包。
 
 - ``show`` → 转发到 ``SubtitleGuiService.push_subtitle(text)``
   （线程安全入队）
-- ``clear`` → 转发到 ``SubtitleGuiService._clear_content()``
-  （既有私有方法，调用方约定；包装层只做协议形态适配）
+- ``clear`` → 转发到 ``SubtitleGuiService.clear_subtitle()``
+  （同样线程安全入队，GUI 线程消费执行）
 - ``enabled`` → 转发 ``SubtitleGuiService.enabled`` 属性
   （CustomTkinter 不可用时为 False）
 
@@ -68,13 +68,13 @@ class TkGuiBackend:
         self._service.push_subtitle(text)
 
     async def clear(self) -> None:
-        """清空字幕显示。
+        """清空字幕显示——入队清空指令，GUI 线程消费执行。
 
-        调用 ``SubtitleGuiService._clear_content()``——属既有私有
-        API，由 ``SubtitleProvider.invoke`` 也同样调用；保持同一
-        调用约定。
+        必须走队列：本方法运行在调用方的 asyncio 线程，直接调 Tk 方法
+        （如历史上的 ``_clear_content`` 直调）会在与字幕推流的并发时序
+        下死锁 GUI 线程——窗口转入"未响应"、此后字幕永不更新。
         """
-        self._service._clear_content()
+        self._service.clear_subtitle()
 
 
 __all__ = ["TkGuiBackend"]

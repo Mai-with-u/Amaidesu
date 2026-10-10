@@ -302,3 +302,106 @@ def test_wrap_lines_uses_distinct_emoji_metrics(monkeypatch: pytest.MonkeyPatch)
     assert label._wrap_lines(main_font, 100) == ["A✅B", "✅C"]
     assert main_font.getlength.call_count == 3
     assert emoji_font.getlength.call_count == 2
+
+
+def test_draw_text_ignores_stale_content_height_cache() -> None:
+    """渲染高度不得复用上一条文本的 ``_content_height_px`` 缓存。
+
+    事故形态：超时巡检把长文本窗口缩回最小高度后，下一条短字幕换入时缓存
+    仍是多行旧值（或反之），渲染高度与实际行数错位——首行 y 被算成负数，
+    字形顶部被裁进图像外。绘制必须按当前文本现算折行。
+    """
+
+    class RecordingCanvas:
+        def __init__(self, width: int, height: int) -> None:
+            self.width = width
+            self.height = height
+            self.images: list[tuple[int, int]] = []
+
+        def delete(self, _tag: str) -> None:
+            pass
+
+        def configure(self, **_kwargs: Any) -> None:
+            pass
+
+        def winfo_width(self) -> int:
+            return self.width
+
+        def winfo_height(self) -> int:
+            return self.height
+
+        def create_image(self, _x: int, _y: int, image: Any) -> None:
+            self.images.append((image.width(), image.height()))
+
+    class FakePhoto:
+        def __init__(self, img: Any) -> None:
+            self._img = img
+
+        def width(self) -> int:
+            return self._img.width
+
+        def height(self) -> int:
+            return self._img.height
+
+    label = _make_label(text="这是一条很长很长的字幕内容需要折成三行来展示窗口高度自适应" * 2)
+    font = label._load_font()
+    assert font is not None
+    true_height = label._content_height_for(label._wrap_lines(font, 800))
+    assert true_height > 100, "前提：该文本确为多行"
+
+    # 模拟上一条单行字幕遗留的过期缓存
+    label._content_height_px = label._content_height_for(label._wrap_lines(font, 800)[:0] or ["x"])
+    label.canvas = RecordingCanvas(width=800, height=true_height)
+    with patch("src.modules.subtitle.backends.tk_gui_service.ImageTk.PhotoImage", FakePhoto):
+        label._draw_text()
+
+    assert canvas_images_height(label) == true_height, "贴图高度应按当前文本现算，而非过期缓存"
+
+
+def canvas_images_height(label: Any) -> int:
+    canvas = label.canvas
+    assert canvas.images, "应当把渲染结果贴到画布上"
+    return canvas.images[-1][1]
+
+
+def test_configure_text_empty_string_clears_and_none_keeps_text() -> None:
+    """空串是显式清空，None 表示不动文本——两者不能混用同一默认值。"""
+
+    class StubCanvas:
+        def delete(self, _tag: str) -> None:
+            pass
+
+        def configure(self, **_kwargs: Any) -> None:
+            pass
+
+        def winfo_width(self) -> int:
+            return 800
+
+        def winfo_height(self) -> int:
+            return 100
+
+        def create_image(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+    class FakePhoto:
+        def __init__(self, img: Any) -> None:
+            self._img = img
+
+        def width(self) -> int:
+            return self._img.width
+
+        def height(self) -> int:
+            return self._img.height
+
+    label = _make_label(text="原有字幕")
+    label.canvas = StubCanvas()
+
+    with patch("src.modules.subtitle.backends.tk_gui_service.ImageTk.PhotoImage", FakePhoto):
+        label.configure_text()
+        assert label.display_text == "原有字幕", "只改样式时不得动文本"
+
+        label.configure_text(text="")
+        assert label.display_text == "", "空串必须真的清空文本"
+
+        label.configure_text(text="新字幕")
+        assert label.display_text == "新字幕"

@@ -4,8 +4,8 @@
 
 - ``show`` 转发到 ``SubtitleGuiService.push_subtitle``（不消费
   ``utterance_id``——GUI 服务暂未提供该键的展示位）
-- ``clear`` 转发到 ``SubtitleGuiService._clear_content``（既有私有
-  API 调用约定）
+- ``clear`` 转发到 ``SubtitleGuiService.clear_subtitle``（线程安全
+  入队，GUI 线程消费执行；禁止跨线程直调 Tk——那会死锁 GUI 线程）
 - ``enabled`` 转发 ``SubtitleGuiService.enabled``（CustomTkinter
   不可用时为 False）
 - 实例满足 ``SubtitleBackend`` 协议（结构类型校验通过）
@@ -25,7 +25,7 @@ def mock_service() -> MagicMock:
     """构造一个 ``SubtitleGuiService`` 形状的 MagicMock。
 
     仅声明本 Backend 实际使用的三个成员（``enabled`` 属属性 /
-    ``push_subtitle`` / ``_clear_content``）；其他 ``SubtitleGuiService``
+    ``push_subtitle`` / ``clear_subtitle``）；其他 ``SubtitleGuiService``
     成员（Tk 线程、队列等）不模拟——本测试只验证转发关系。
     """
     svc = MagicMock()
@@ -60,13 +60,13 @@ class TestShowForwards:
 
 
 class TestClearForwards:
-    async def test_clear_calls_private_clear_content(self, mock_service):
-        """``clear`` 转发到 ``_clear_content``（既有私有 API）。"""
+    async def test_clear_forwards_to_clear_subtitle(self, mock_service):
+        """``clear`` 转发到 ``clear_subtitle``（线程安全入队，不直调 Tk）。"""
         backend = TkGuiBackend(mock_service)
 
         await backend.clear()
 
-        mock_service._clear_content.assert_called_once_with()
+        mock_service.clear_subtitle.assert_called_once_with()
 
 
 class TestEnabledForwarding:

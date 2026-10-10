@@ -3,7 +3,8 @@ SubtitleGuiService - 字幕 GUI 长驻 Tk 线程服务
 
 CustomTkinter 窗口、长驻线程、文本队列、自动隐藏、右键菜单、拖动。
 该服务不在 Tool 系统内，由 main.py 在应用启动时直接实例化并调用
-``start()``，字幕文本通过 ``push_subtitle(text)`` 入队（线程安全）。
+``start()``，字幕文本通过 ``push_subtitle(text)`` 入队、清空通过
+``clear_subtitle()`` 入队（均线程安全，Tk 调用全部收敛在 GUI 线程内）。
 """
 
 from __future__ import annotations
@@ -219,12 +220,17 @@ class OutlineLabel:
         self._draw_text()
 
     def _draw_text(self) -> None:
-        """按"算好的内容高度"渲染并居中贴到画布上。
+        """按本次折行现算的内容高度渲染并居中贴到画布上。
 
         不用 ``winfo_height()`` 定渲染高度：那里读的是 Tk 已经算完的布局，几何请求
         尚未处理时拿到的是旧值，据此渲染会画出被裁的图（窗口已改、画布未跟上的那
         一瞬）。渲染高度由文本折行自己算，画布何时跟上都不影响画面正确性——画布比
         内容矮的短暂瞬间里，居中贴图也不会切到字形。
+
+        内容高度每次现算而不读 ``_content_height_px`` 缓存：缓存可能还属于上一条
+        文本（``configure_text`` 换文本不经过 ``required_height``，不会刷新它），
+        复用过期值会让渲染高度与实际行数错位——高度小于行高需求时首行 y 被算成
+        负数，字形顶部被裁进图像外。现算结果回写缓存，供窗口高度链路读取。
         """
         self.canvas.delete("all")
         self._photo = None
@@ -238,16 +244,13 @@ class OutlineLabel:
         canvas_width = self.canvas.winfo_width()
         if canvas_width <= 1:
             return
-        content_height = self._content_height_px
-        if content_height is None:
-            # 画布尺寸刚变过（或首次绘制）：按当前宽度重新折行，同时把内容高度记下
-            font = self._load_font()
-            if font is None:
-                return
-            lines = self._wrap_lines(font, canvas_width)
-            if not lines:
-                return
-            content_height = self._content_height_px = self._content_height_for(lines)
+        font = self._load_font()
+        if font is None:
+            return
+        lines = self._wrap_lines(font, canvas_width)
+        if not lines:
+            return
+        content_height = self._content_height_px = self._content_height_for(lines)
         img = self._render_text(canvas_width, content_height, bg_color)
         if img is None:
             return
@@ -493,8 +496,15 @@ class OutlineLabel:
             lines.append(current)
         return lines
 
-    def configure_text(self, text: str = "", **kwargs: Any) -> None:
-        if text != "":
+    def configure_text(self, text: Optional[str] = None, **kwargs: Any) -> None:
+        """更新文本与样式属性后重绘。
+
+        ``text=None`` 表示本次只改样式、不动文本；空串是显式清空。二者
+        不能共用默认值：历史上空串兼作"未传"，清空成了空操作——超时巡检
+        "清空"后旧文本继续渲染、窗口却缩回最小高度，贴图超出画布被裁并
+        长驻到下一条字幕。
+        """
+        if text is not None:
             self.display_text = text
         if "text_color" in kwargs:
             self.text_color = kwargs["text_color"]
@@ -513,7 +523,8 @@ class SubtitleGuiService:
     """字幕 GUI 服务（长驻 Tk 线程）
 
     集成方式：
-    - 字幕后端通过 ``service`` 依赖注入调用 ``push_subtitle(text)``
+    - 字幕后端通过 ``service`` 依赖注入调用 ``push_subtitle(text)`` /
+      ``clear_subtitle()``，两者都只入队，Tk 调用由 GUI 线程统一执行
     - ``start()`` / ``stop()`` 在组合根中管理生命周期
     - 字幕渲染走 GUI 服务，不走 ToolResult 反馈给 LLM
     """
@@ -582,7 +593,11 @@ class SubtitleGuiService:
         self.window_minimizable = self.typed_config.window_minimizable
         self.show_waiting_text = self.typed_config.show_waiting_text
 
-        self.text_queue: "queue.Queue[str]" = queue.Queue()
+        # 队列元素：字幕文本 str，或清空哨兵 None（clear_subtitle 入队，
+        # GUI 线程消费到即执行清空）。Tk 方法跨线程调用会在与推流并发的
+        # 时序下死锁 GUI 线程（窗口"未响应"、字幕停更），所以对 GUI 的
+        # 全部操作都以指令形式入队、由 GUI 线程独占执行
+        self.text_queue: "queue.Queue[Optional[str]]" = queue.Queue()
         self.gui_thread: Optional[threading.Thread] = None
         self.root: Any = None
         self.text_label: Any = None
@@ -668,6 +683,20 @@ class SubtitleGuiService:
             self.last_voice_time_ms = now_ms()
         except Exception as e:
             self.logger.exception(f"放入字幕队列时出错: {e}")
+
+    def clear_subtitle(self) -> None:
+        """外部调用方请求清空字幕（线程安全）。
+
+        入队 ``None`` 哨兵，由 GUI 线程消费后执行 ``_clear_content``。
+        与 ``push_subtitle`` 一样只入队不动 Tk——调用方线程（asyncio
+        事件循环）直接调 Tk 方法会死锁 GUI 线程，禁止回退到跨线程直调。
+        """
+        if not self._enabled:
+            return
+        try:
+            self.text_queue.put(None)
+        except Exception as e:
+            self.logger.exception(f"放入清空指令时出错: {e}")
 
     def _run_gui(self) -> None:
         """Tk GUI 主循环（长驻线程入口）"""
@@ -776,7 +805,10 @@ class SubtitleGuiService:
         try:
             while not self.text_queue.empty():
                 text = self.text_queue.get_nowait()
-                self._update_subtitle_display(text)
+                if text is None:
+                    self._clear_content()
+                else:
+                    self._update_subtitle_display(text)
         except queue.Empty:
             pass
         except Exception as e:
