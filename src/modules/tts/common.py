@@ -20,6 +20,7 @@ utterance 生命周期事件发布上存在重复逻辑，本模块集中收纳�
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.modules.events.names import CoreEvents
@@ -32,6 +33,35 @@ from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
+
+
+# ---------------------------------------------------------------------------
+# 文本规范化
+# ---------------------------------------------------------------------------
+
+# 保留集：中文、字母数字、空白、TTS 通用切分标点、英文构词符（撇号/连字符）。
+# 保留集之外的一切符号（emoji/波浪号/数学符/装饰符/未知的未来符号）统一映射为
+# 中文逗号——保留停顿边界且零维护：新符号自动成为停顿而非造成前后文粘连。
+# 标点本身在各引擎音素化时不发音，语气由参考音频与切句边界承载。
+_TTS_KEEP_PATTERN = re.compile(
+    r"[^\u4e00-\u9fff"
+    r"a-zA-Z0-9\s"
+    r",.;?!、，。？！；：…"
+    r"'\-]+"
+)
+
+# 映射产生的连续逗号合并为单个
+_TTS_MULTI_COMMA = re.compile("，{2,}")
+
+
+def normalize_tts_text(text: str) -> str:
+    """引擎无关的合成文本规范化：保留集之外的符号一律映射为中文逗号。
+
+    各 TTS 引擎对 emoji 等符号的处理不可控（忽略/怪读/导致前后文粘连），
+    统一映射为停顿既保住语义边界又免维护符号表。各引擎在合成前调用。
+    """
+    text = _TTS_KEEP_PATTERN.sub("，", text)
+    return _TTS_MULTI_COMMA.sub("，", text)
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from ...common import (
     build_stats_dict,
+    normalize_tts_text,
     emit_utterance_failed,
     emit_utterance_finished,
     emit_utterance_started,
@@ -158,6 +159,10 @@ class OmniTTSProvider:
         """
         if not self._has_started:
             await self.setup()
+        text = normalize_tts_text(text)
+        if not text.strip():
+            self.logger.debug("文本规范化后为空，跳过渲染")
+            return
         async with self.tts_lock:
             await self._synthesize(text, utterance_id=utterance_id)
 

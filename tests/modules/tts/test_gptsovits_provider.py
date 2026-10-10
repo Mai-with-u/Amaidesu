@@ -158,20 +158,6 @@ class TestDeTooled:
 # =============================================================================
 
 
-class TestTextSanitization:
-    """_sanitize_text_for_tts 白名单清洗行为"""
-
-    def test_unsupported_chars_stripped(self, event_bus: EventBus):
-        from src.modules.tts.backends.gptsovits.provider import _sanitize_text_for_tts
-
-        # 中英文数字 + 标点 = 保留；emoji 等 = 剥离
-        sanitized = _sanitize_text_for_tts("你好 hello 123！🎉")
-        assert "你好" in sanitized
-        assert "hello" in sanitized
-        assert "123" in sanitized
-        assert "🎉" not in sanitized
-
-
 # =============================================================================
 # handle_speech：自治 ensure_setup
 # =============================================================================

@@ -23,6 +23,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from ...common import (
     build_stats_dict,
+    normalize_tts_text,
     compute_duration_ms,
     emit_utterance_failed,
     emit_utterance_finished,
@@ -133,6 +134,10 @@ class EdgeTTSProvider:
             await self.setup()
         if not text:
             self.logger.debug("TTS 文本为空，跳过渲染")
+            return
+        text = normalize_tts_text(text)
+        if not text.strip():
+            self.logger.debug("文本规范化后为空，跳过渲染")
             return
         async with self.tts_lock:
             await self._synthesize(text, utterance_id=utterance_id)

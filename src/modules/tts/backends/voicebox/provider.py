@@ -23,6 +23,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from ...common import (
     build_stats_dict,
+    normalize_tts_text,
     compute_duration_ms,
     emit_utterance_failed,
     emit_utterance_finished,
@@ -149,6 +150,10 @@ class VoiceboxProvider:
         """
         if not self._has_started:
             await self.setup()
+        text = normalize_tts_text(text)
+        if not text.strip():
+            self.logger.debug("文本规范化后为空，跳过渲染")
+            return
         if self.tts_lock is None:
             self.tts_lock = asyncio.Lock()
         async with self.tts_lock:

@@ -21,6 +21,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceStartedPayload,
 )
 from src.modules.tts.common import (
+    normalize_tts_text,
     build_stats_dict,
     compute_duration_ms,
     emit_utterance_failed,
@@ -327,3 +328,40 @@ class TestEmitUtteranceFailed:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# =============================================================================
+# normalize_tts_text：保留集之外的符号映射为停顿
+# =============================================================================
+
+
+class TestNormalizeTtsText:
+    def test_emoji_maps_to_pause(self):
+        """emoji 映射为逗号，保留停顿边界（旧实现直接删除导致前后文粘连）"""
+        assert normalize_tts_text("还扛得住😱 现在一边砍树") == "还扛得住， 现在一边砍树"
+
+    def test_tilde_maps_to_pause(self):
+        """波浪号：服务端 cut5 不切且无发音价值，映射为逗号"""
+        assert normalize_tts_text("我是麦麦～今天带你们玩生存！") == "我是麦麦，今天带你们玩生存！"
+
+    def test_consecutive_symbols_merge_to_single_comma(self):
+        """连续符号（emoji 连发/符号贴连）合并为单个逗号"""
+        assert normalize_tts_text("吓死我了😱😱——完蛋") == "吓死我了，完蛋"
+
+    def test_gsv_cut5_punctuation_kept(self):
+        """服务端 cut5 认识的切分标点原样保留（供按标点切句）"""
+        text = "大家好，我是麦麦。要三连？嗯…：好；来、试试!"
+        assert normalize_tts_text(text) == text
+
+    def test_english_word_forming_symbols_kept(self):
+        """英文构词符（撇号/连字符）与小数点保留，不被映射拆词"""
+        text = "don't stop, state-of-the-art costs 3.14"
+        assert normalize_tts_text(text) == text
+
+    def test_decoration_symbols_become_pauses(self):
+        """装饰/数学符号（【】——%↑）映射为停顿"""
+        assert normalize_tts_text("50%↑【材料】——搞定") == "50，材料，搞定"
+
+    def test_pure_symbol_text_becomes_single_comma(self):
+        """纯符号文本退化为单个逗号（调用方负责空检查后跳过）"""
+        assert normalize_tts_text("🎉🎉") == "，"

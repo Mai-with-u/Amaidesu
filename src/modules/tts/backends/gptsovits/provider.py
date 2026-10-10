@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections import deque
 from typing import Any, AsyncIterator, Dict, Optional, TYPE_CHECKING, cast
 
@@ -22,6 +21,7 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from ...common import (
+    normalize_tts_text,
     build_stats_dict,
     emit_utterance_failed,
     emit_utterance_finished,
@@ -39,24 +39,6 @@ DTYPE = np.int16
 BLOCKSIZE = 1024
 SAMPLE_SIZE = DTYPE().itemsize
 BUFFER_REQUIRED_BYTES = BLOCKSIZE * CHANNELS * SAMPLE_SIZE
-
-
-# GPT-SoVITS 中文归一化器文本清洗
-_TTS_UNSAFE_CHARS = re.compile(
-    r"[^\u4e00-\u9fff"
-    r"\u3000-\u303f"
-    r"\uff01-\uff0f"
-    r"\uff1a-\uff20"
-    r"\uff3b-\uff40"
-    r"\uff5b-\uff5e"
-    r"a-zA-Z0-9\s"
-    r"!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~]"
-)
-
-
-def _sanitize_text_for_tts(text: str) -> str:
-    """白名单字符集规避 KeyError bug"""
-    return _TTS_UNSAFE_CHARS.sub("", text)
 
 
 class GPTSoVITSProvider:
@@ -252,7 +234,7 @@ class GPTSoVITSProvider:
         self.logger.debug(f"准备 TTS: '{original_text[:50]}...'")
 
         # 文本清洗
-        final_text = _sanitize_text_for_tts(original_text)
+        final_text = normalize_tts_text(original_text)
         if final_text != original_text:
             self.logger.debug(f"文本清洗: 移除了 {len(original_text) - len(final_text)} 个不支持字符")
         if not final_text.strip():
