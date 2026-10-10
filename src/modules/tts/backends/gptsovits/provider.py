@@ -66,7 +66,15 @@ class GPTSoVITSProvider:
         prompt_language: str = Field(default="zh", pattern=r"^(zh|en|ja)$", description="提示语言")
         top_k: int = Field(default=20, ge=1, le=100, description="Top-K 采样")
         top_p: float = Field(default=0.6, ge=0.0, le=1.0, description="Top-P 采样")
-        temperature: float = Field(default=0.3, ge=0.0, le=2.0, description="温度参数")
+        temperature: float = Field(
+            default=1.0,
+            ge=0.0,
+            le=2.0,
+            description=(
+                "温度参数（GPT 语义 token 采样）：低温度会诱发 token 复读"
+                "（音频拉长数倍并伴随异常音），保持服务端默认 1.0"
+            ),
+        )
         speed_factor: float = Field(default=1.0, ge=0.1, le=3.0, description="语速因子")
         streaming_mode: int = Field(
             default=1,
