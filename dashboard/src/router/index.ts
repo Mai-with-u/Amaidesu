@@ -99,6 +99,11 @@ const router = createRouter({
       component: () => import('@/views/SimulatorPanel.vue'),
     },
     {
+      path: '/debug',
+      name: 'debug',
+      component: () => import('@/views/Debug.vue'),
+    },
+    {
       path: '/outline',
       name: 'outline-workbench',
       component: () => import('@/views/OutlineWorkbench.vue'),

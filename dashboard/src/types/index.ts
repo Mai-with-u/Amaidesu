@@ -186,6 +186,52 @@ export interface EventBusStatsResponse {
   events_by_name: Record<string, number>;
 }
 
+// 调试台：基础设施直测（字幕 / TTS）
+
+export interface SubtitleTestRequest {
+  text: string;
+}
+
+/** show 盲发：逐后端成败以 status 端点与目视为准 */
+export interface SubtitleTestResponse {
+  success: boolean;
+  backend_count: number;
+  error?: string;
+}
+
+export interface SubtitleClearResponse {
+  success: boolean;
+  error?: string;
+}
+
+/** 单个字幕后端诊断项：enabled=false 即"静默降级"（如 CustomTkinter 不可用） */
+export interface SubtitleBackendInfo {
+  name: string;
+  enabled: boolean;
+}
+
+export interface SubtitleStatusResponse {
+  available: boolean;
+  backend_count: number;
+  backends: SubtitleBackendInfo[];
+}
+
+export interface TtsTestRequest {
+  text: string;
+}
+
+/** 同步长请求：等待合成与播放，前端需放宽超时 */
+export interface TtsTestResponse {
+  success: boolean;
+  utterance_id?: string;
+  error?: string;
+}
+
+export interface TtsStatusResponse {
+  available: boolean;
+  stats: Record<string, unknown>;
+}
+
 // Streamer 测试台（主播发言调试）
 
 /**

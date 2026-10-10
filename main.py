@@ -806,6 +806,9 @@ async def create_app_components(
             memory=memory,
             # 任务卡快照与运营委派的数据源（通用任务基建，ADR-013）
             task_tracker=task_tracker,
+            # 基础设施直测面：/api/v1/debug/subtitle|tts 端点的数据源
+            subtitle_service=subtitle_service,
+            tts_engine=tts_engine,
         )
 
     # Dashboard 字幕后端注册：StreamerAgent 与 Dashboard 共享同一
@@ -1069,6 +1072,8 @@ async def _start_dashboard(
     chat_repo=None,
     memory=None,
     task_tracker=None,
+    subtitle_service=None,
+    tts_engine=None,
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
@@ -1098,6 +1103,9 @@ async def _start_dashboard(
             memory=memory,
             # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源
             task_tracker=task_tracker,
+            # 字幕服务与 TTS 引擎：/api/v1/debug 直测端点经此驱动真实基础设施
+            subtitle_service=subtitle_service,
+            tts_engine=tts_engine,
             # 事件历史服务所有权在 EventHistoryRecorder，这里共享引用供
             # REST（/events、/traces）与 WS（events.history 推送）读取
             event_history=(event_recorder.event_history if event_recorder else None),

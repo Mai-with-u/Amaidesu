@@ -8,6 +8,7 @@
 - 无 Backend 时 ``show`` / ``clear`` 不抛错
 - ``start`` / ``stop`` 幂等（重复调用早退，不炸）
 - ``is_running`` / ``backend_count`` 诊断属性
+- ``backend_diagnostics`` 后端诊断清单（name + enabled，缺失成员按 True 兜底）
 - ``register_backend`` 追加行为（多次注册累加）
 """
 
@@ -15,7 +16,6 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-import pytest
 
 from src.modules.subtitle import SubtitleBackend, SubtitleService
 
@@ -54,6 +54,14 @@ class _FakeBackend:
             raise self._raise_on_clear
 
 
+class _EnabledFakeBackend(_FakeBackend):
+    """带 ``enabled`` 成员的假后端（模拟 TkGuiBackend / DashboardBackend 的可用性语义）。"""
+
+    def __init__(self, *, enabled: bool = True, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self.enabled = enabled
+
+
 # ---------------------------------------------------------------------------
 # 协议契约
 # ---------------------------------------------------------------------------
@@ -70,6 +78,34 @@ class TestProtocolConformance:
         assert not isinstance(object(), SubtitleBackend)
         assert not isinstance({}, SubtitleBackend)
         assert not isinstance(None, SubtitleBackend)
+
+
+# ---------------------------------------------------------------------------
+# 后端诊断清单
+# ---------------------------------------------------------------------------
+
+
+class TestBackendDiagnostics:
+    def test_diagnostics_reflect_name_and_enabled(self):
+        """诊断清单回传后端类名与 enabled 成员值。"""
+        svc = SubtitleService()
+        svc.register_backend(_EnabledFakeBackend(enabled=True))
+        svc.register_backend(_EnabledFakeBackend(enabled=False))
+
+        diag = svc.backend_diagnostics
+        assert [item["name"] for item in diag] == ["_EnabledFakeBackend", "_EnabledFakeBackend"]
+        assert [item["enabled"] for item in diag] == [True, False]
+
+    def test_diagnostics_defaults_enabled_true_when_member_absent(self):
+        """协议最小契约不含 ``enabled``，缺失成员按 True 处理。"""
+        svc = SubtitleService()
+        svc.register_backend(_FakeBackend())
+
+        assert svc.backend_diagnostics == [{"name": "_FakeBackend", "enabled": True}]
+
+    def test_diagnostics_empty_when_no_backends(self):
+        """零后端返回空清单。"""
+        assert SubtitleService().backend_diagnostics == []
 
 
 # ---------------------------------------------------------------------------

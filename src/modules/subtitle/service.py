@@ -27,7 +27,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
@@ -71,6 +71,20 @@ class SubtitleService:
     def backend_count(self) -> int:
         """当前已注册的 Backend 数量（诊断用）。"""
         return len(self._backends)
+
+    @property
+    def backend_diagnostics(self) -> List[Dict[str, Any]]:
+        """已注册 Backend 的诊断清单（调试面用）。
+
+        每项含 ``name``（类名）与 ``enabled``（后端可用性）。协议最小
+        契约只含 ``show`` / ``clear``，``enabled`` 是两个具体后端的约定
+        俗成成员，缺失时按 True 处理——本属性专治"后端静默降级"（如
+        CustomTkinter 不可用导致 Tk GUI 后端入队无人消费）的可观测缺口。
+        """
+        return [
+            {"name": type(backend).__name__, "enabled": bool(getattr(backend, "enabled", True))}
+            for backend in self._backends
+        ]
 
     @property
     def is_running(self) -> bool:

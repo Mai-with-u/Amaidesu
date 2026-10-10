@@ -78,6 +78,8 @@ class DashboardServer:
         rundown_repo: Optional[Any] = None,
         memory: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
+        subtitle_service: Optional[Any] = None,
+        tts_engine: Optional[Any] = None,
     ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
@@ -119,6 +121,10 @@ class DashboardServer:
         # 注入 SimpleMemory 让 `/api/v1/memory/*` 承载记忆管理面（检索/增改/
         # 删除/召回测试）；未注入（极简启动/测试）时相关端点返回 503
         self.memory = memory
+        # 注入字幕服务与 TTS 引擎让 `/api/v1/debug/subtitle|tts` 直测端点
+        # 可用；未注入（极简启动/测试）时相关端点返回 503
+        self.subtitle_service = subtitle_service
+        self.tts_engine = tts_engine
 
         self.port = dashboard_config.port
         self.host = dashboard_config.host

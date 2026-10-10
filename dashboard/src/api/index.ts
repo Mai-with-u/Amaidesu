@@ -22,6 +22,13 @@ import type {
   InjectMessageRequest,
   InjectMessageResponse,
   EventBusStatsResponse,
+  SubtitleTestRequest,
+  SubtitleTestResponse,
+  SubtitleClearResponse,
+  SubtitleStatusResponse,
+  TtsTestRequest,
+  TtsTestResponse,
+  TtsStatusResponse,
   ConfigUpdateResponse,
   LLMContextBreakdown,
   LLMUsageStats,
@@ -115,11 +122,19 @@ export const configApi = {
 // 调试注入
 //
 // `injectMessage` 发布 `room.message.danmaku` 走真实弹幕链路（消息写入
-// `live` 会话，主播 Agent 决策历史可读）。
+// `live` 会话，主播 Agent 决策历史可读）。字幕 / TTS 直测端点不碰业务
+// 链（无 LLM / 采集器），直接驱动基础设施；TTS 试说为同步长请求。
 export const debugApi = {
   injectMessage: (request: InjectMessageRequest) =>
     api.post<InjectMessageResponse>('/debug/inject-message', request),
   getEventBusStats: () => api.get<EventBusStatsResponse>('/debug/event-bus/stats'),
+  testSubtitle: (request: SubtitleTestRequest) =>
+    api.post<SubtitleTestResponse>('/debug/subtitle/test', request),
+  clearSubtitle: () => api.post<SubtitleClearResponse>('/debug/subtitle/clear'),
+  getSubtitleStatus: () => api.get<SubtitleStatusResponse>('/debug/subtitle/status'),
+  testTts: (request: TtsTestRequest) =>
+    api.post<TtsTestResponse>('/debug/tts/test', request, { timeout: 60000 }),
+  getTtsStatus: () => api.get<TtsStatusResponse>('/debug/tts/status'),
 };
 
 // LLM

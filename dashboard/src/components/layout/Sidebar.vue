@@ -49,6 +49,10 @@
           <el-icon><MagicStick /></el-icon>
           <span>模拟器</span>
         </el-menu-item>
+        <el-menu-item index="/debug">
+          <el-icon><Odometer /></el-icon>
+          <span>调试</span>
+        </el-menu-item>
         <el-menu-item index="/llm/usage">
           <el-icon><TrendCharts /></el-icon>
           <span>LLM 用量</span>
@@ -109,6 +113,7 @@ import {
   VideoCamera,
   List,
   MagicStick,
+  Odometer,
   User,
   Collection,
   Memo,
