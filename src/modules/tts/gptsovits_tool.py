@@ -75,7 +75,10 @@ class GPTSoVITSProvider:
         type: str = "gptsovits"
         host: str = Field(default="127.0.0.1", description="API 主机地址")
         port: int = Field(default=9880, ge=1, le=65535, description="API 端口")
-        ref_audio_path: str = Field(default="", description="参考音频路径")
+        ref_audio_path: str = Field(
+            default="",
+            description="参考音频路径（由 GPT-SoVITS 服务端读取，建议绝对路径）",
+        )
         prompt_text: str = Field(default="", description="提示文本")
         text_language: str = Field(default="zh", pattern=r"^(zh|en|ja|auto)$", description="文本语言")
         prompt_language: str = Field(default="zh", pattern=r"^(zh|en|ja)$", description="提示语言")
