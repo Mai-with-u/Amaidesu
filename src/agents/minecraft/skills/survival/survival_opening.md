@@ -28,7 +28,7 @@ tags: [开局, 生存, 第一天]
 
 - **天色**：黄昏前还没有过夜的地方就先回据点，夜里的刷怪比浪费几分钟更贵。
 - **饥饿**：饿了身体会自己吃身上的食物；收到“饿了但没吃上”的 `[身体]` 通知，说明身上没有能吃的，把弄食物排到最前。
-- **工具等级**：挖不动或不掉落先查工具等级（`maicraft_lookup` 读 `maicraft://knowledge/game_mechanics/tool-tiers`），不要反复重试同一挖掘。
+- **工具等级**：挖不动或不掉落先查工具等级（`maicraft_lookup(topic=knowledge, id=maicraft://knowledge/game_mechanics/tool-tiers)`），不要反复重试同一挖掘。
 - **取材来源**：`obtain` 会翻记得的和眼前看到的箱子。别人的箱子不该动时，用 `via` 指定别的途径（例如 `via=craft`），或把那里写进 `permissions.protected_landmarks`。
 
 ## 常见坑
