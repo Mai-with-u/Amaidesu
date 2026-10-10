@@ -83,8 +83,20 @@ class GPTSoVITSProvider:
         top_p: float = Field(default=0.6, ge=0.0, le=1.0, description="Top-P 采样")
         temperature: float = Field(default=0.3, ge=0.0, le=2.0, description="温度参数")
         speed_factor: float = Field(default=1.0, ge=0.1, le=3.0, description="语速因子")
-        streaming_mode: bool = Field(default=True, description="是否启用流式模式")
-        media_type: str = Field(default="wav", pattern=r"^(wav|mp3|ogg)$", description="媒体类型")
+        streaming_mode: int = Field(
+            default=1,
+            ge=0,
+            le=3,
+            description=(
+                "流式档位：0=整段合成完一次性返回；1=按句流式（质量最好，首包=首句合成完）；"
+                "2=token级流式（质量中等，首包更低）；3=token级定长chunk（响应最快，质量略降）"
+            ),
+        )
+        media_type: str = Field(
+            default="wav",
+            pattern=r"^(wav|ogg)$",
+            description="媒体类型（api_v2 支持 wav/ogg/aac/raw；流式 wav 为首块 WAV 头 + 裸 PCM）",
+        )
         text_split_method: str = Field(
             default="cut5",
             pattern=r"^(cut0|cut1|cut2|cut3|cut4|cut5)$",
@@ -139,6 +151,8 @@ class GPTSoVITSProvider:
         self.audio_manager: Any = None
         self._is_connected = False
         self._has_started = False
+        # 启动预热任务（服务端首推理惩罚挪出直播首句）；可变状态在 __init__ 初始化
+        self._warmup_task: Optional[asyncio.Task] = None
         # 串行化锁
         self.tts_lock = asyncio.Lock()
 
@@ -157,6 +171,11 @@ class GPTSoVITSProvider:
 
         if self.ref_audio_path and self.prompt_text:
             self.tts_client.set_refer_audio(self.ref_audio_path, self.prompt_text)
+        else:
+            self.logger.error(
+                "GPT-SoVITS api_v2 每请求必填参考音频：请在配置 [tts.gptsovits] 填写 "
+                "ref_audio_path（相对 GPT-SoVITS 根目录）与 prompt_text（参考音频转写），否则合成将失败"
+            )
 
         from src.modules.audio import AudioDeviceManager
 
@@ -171,12 +190,37 @@ class GPTSoVITSProvider:
         self.tts_client.load_preset("default")
         self._has_started = True
         self._is_connected = True
+        self._warmup_task = asyncio.create_task(self._warmup())
         self.logger.info("GPTSoVITSProvider 设置完成")
+
+    async def _warmup(self) -> None:
+        """启动预热：把服务端冷启动惩罚挪出直播首句。
+
+        两步——/set_refer_audio 触发参考音频预处理缓存；极短文本合成触发
+        模型加载后的首次推理（CUDA Graph 编译等，实测约 5 秒）。全程
+        fire-and-forget：服务未起/预热失败只记 warning，不影响装配，真实
+        首句合成自带兜底（最多退化为承担一次冷启动延迟）。
+        """
+        try:
+            if self.ref_audio_path:
+                await asyncio.to_thread(
+                    lambda: self.tts_client.set_refer_audio_remote(self.ref_audio_path)  # type: ignore[union-attr]
+                )
+            await asyncio.to_thread(
+                lambda: self.tts_client.tts("预热。")  # type: ignore[union-attr]
+            )
+            self.logger.info("GPT-SoVITS 预热完成，首句合成已是热态")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.logger.warning(f"GPT-SoVITS 预热未完成（服务未启动或异常，首句合成将承担冷启动延迟）: {e}")
 
     async def cleanup(self) -> None:
         if not self._has_started:
             return
         self.logger.info("GPTSoVITSProvider 清理中...")
+        if self._warmup_task is not None and not self._warmup_task.done():
+            self._warmup_task.cancel()
         if self.audio_manager:
             self.audio_manager.stop_stream()
         self.input_pcm_queue.clear()
@@ -222,6 +266,12 @@ class GPTSoVITSProvider:
         )
 
         try:
+            if not (self.ref_audio_path and self.prompt_text):
+                raise RuntimeError(
+                    "参考音频未配置：api_v2 每请求必填，请在配置 [tts.gptsovits] "
+                    "填写 ref_audio_path（相对 GPT-SoVITS 根目录）与 prompt_text"
+                )
+
             async with self.tts_lock:
                 # 同步 requests 调用（连接+等待响应头），放线程池执行：GPTSoVITS
                 # 推理慢时在事件循环线程内等待会冻结整个循环（WebUI 同循环全卡）
@@ -241,6 +291,7 @@ class GPTSoVITSProvider:
                         sample_steps=self.sample_steps,
                         super_sampling=self.super_sampling,
                         media_type=self.media_type,
+                        streaming_mode=self.streaming_mode,
                     )
                 )
 
@@ -329,12 +380,15 @@ class GPTSoVITSProvider:
             raise
 
     def get_stats(self) -> Dict[str, Any]:
-        return build_stats_dict(
+        stats = build_stats_dict(
             name=self.__class__.__name__,
             is_connected=self._is_connected,
             render_count=self.render_count,
             error_count=self.error_count,
         )
+        # 对接的 GPT-SoVITS API 后端（调试页状态 chip 展示用）
+        stats["backend"] = "api_v2"
+        return stats
 
 
 def create_gptsovits_provider(

@@ -65,7 +65,7 @@
           <template v-if="ttsAvailable">
             <span class="backend-chip">
               <span class="chip-dot" :class="ttsConnected ? 'is-ok' : 'is-down'" />
-              {{ ttsEngineName || 'TTS 引擎' }}
+              {{ ttsChipLabel }}
             </span>
           </template>
           <span v-else-if="ttsChecked" class="backend-chip">
@@ -122,6 +122,14 @@ const ttsEngineName = computed(() => {
   return typeof name === 'string' ? name : '';
 });
 const ttsConnected = computed(() => ttsStatus.value?.stats?.is_connected === true);
+/** 引擎对接的 GPT-SoVITS API 后端（api_v2），缺失时不显示 */
+const ttsBackend = computed(() => {
+  const backend = ttsStatus.value?.stats?.backend;
+  return typeof backend === 'string' ? backend : '';
+});
+const ttsChipLabel = computed(() =>
+  ttsBackend.value ? `${ttsEngineName.value || 'TTS 引擎'} · ${ttsBackend.value}` : ttsEngineName.value || 'TTS 引擎',
+);
 
 /** 从 axios 错误中取可读文案：优先后端 detail（如 503 的"未注入"），退回通用文案 */
 function extractError(err: unknown, fallback: string): string {

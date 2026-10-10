@@ -1,9 +1,11 @@
 """
-GPT-SoVITS TTS 客户端
+GPT-SoVITS TTS 客户端（api_v2 方言）
 
-提供 GPT-SoVITS API 客户端实现：
-- 支持同步和流式 TTS
-- 参考音频管理
+对接 GPT-SoVITS api_v2.py 的 ``GET /tts`` 接口：参考音频与采样参数
+逐请求携带（v1 的"服务端启动参数绑定默认参考音频"模式已不适用），
+合成参数（top_k/temperature/speed 等）在 v2 下真实生效。
+
+- 支持同步和流式 TTS（流式 = 首块 WAV 头 + 裸 PCM 块序列）
 - 预设管理
 """
 
@@ -28,7 +30,7 @@ class GPTSoVITSClient:
     """
     GPT-SoVITS TTS 客户端
 
-    封装 GPT-SoVITS API 调用逻辑，提供同步和流式 TTS 功能。
+    封装 GPT-SoVITS api_v2 调用逻辑，提供同步和流式 TTS 功能。
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 9880) -> None:
@@ -44,7 +46,7 @@ class GPTSoVITSClient:
         self.base_url = f"http://{self.host}:{self.port}"
         self.logger = get_logger("GPTSoVITSClient")
 
-        # 参考音频配置
+        # 参考音频配置（api_v2 每请求必填，由 provider 从配置注入）
         self._ref_audio_path: Optional[str] = None
         self._prompt_text: str = ""
 
@@ -60,7 +62,7 @@ class GPTSoVITSClient:
         if self._initialized:
             return
         self._initialized = True
-        self.logger.info(f"GPTSoVITSClient 初始化完成: {self.base_url}")
+        self.logger.info(f"GPTSoVITSClient 初始化完成: {self.base_url}（api_v2）")
 
     def load_preset(self, preset_name: str = "default") -> None:
         """
@@ -77,10 +79,10 @@ class GPTSoVITSClient:
 
     def set_refer_audio(self, audio_path: str, prompt_text: str) -> None:
         """
-        设置参考音频和对应的提示文本
+        设置参考音频和对应的提示文本（每请求携带）
 
         Args:
-            audio_path: 参考音频文件路径
+            audio_path: 参考音频文件路径（相对 GPT-SoVITS 根目录）
             prompt_text: 提示文本
 
         Raises:
@@ -95,34 +97,34 @@ class GPTSoVITSClient:
         self._prompt_text = prompt_text
         self.logger.debug(f"设置参考音频: {audio_path}")
 
-    def set_refer_audio_remote(self, ref_audio_path: str, prompt_text: str, prompt_language: str = "zh") -> None:
+    def set_refer_audio_remote(self, ref_audio_path: str, prompt_text: str = "", prompt_language: str = "zh") -> None:
         """
-        通过 api.py 的 /change_refer 接口远程设置参考音频。
+        通过 api_v2 的 /set_refer_audio 接口远程预热参考音频。
+
+        v2 端点只收路径（服务端做预处理缓存）；提示文本在 v2 下
+        逐请求携带，不再有"远程设置默认提示文本"的概念。
 
         Args:
             ref_audio_path: 参考音频路径(相对于 GPT-SoVITS 根目录)
-            prompt_text: 参考文本
-            prompt_language: 参考文本语言
+            prompt_text: 兼容旧签名的未用参数
+            prompt_language: 兼容旧签名的未用参数
 
         Raises:
             Exception: 如果设置失败
         """
-        params = {
-            "refer_wav_path": ref_audio_path,
-            "prompt_text": prompt_text,
-            "prompt_language": prompt_language,
-        }
         response = requests.get(
-            f"{self.base_url}/change_refer",
-            params=params,
+            f"{self.base_url}/set_refer_audio",
+            params={"refer_audio_path": ref_audio_path},
             timeout=self._timeout[0],
         )
         if response.status_code != 200:
             error_msg = response.json().get("message", "Unknown error")
             raise Exception(f"远程设置参考音频失败: {error_msg}")
-        # 也同步到本地
-        self.set_refer_audio(ref_audio_path, prompt_text)
-        self.logger.info(f"远程参考音频已设置: {ref_audio_path}")
+        # 同步到本地（v2 端点不收 prompt，只记录路径；prompt 仍逐请求提供）
+        self._ref_audio_path = ref_audio_path
+        if prompt_text:
+            self._prompt_text = prompt_text
+        self.logger.info(f"远程参考音频已预热: {ref_audio_path}")
 
     def set_gpt_weights(self, weights_path: str) -> None:
         """
@@ -192,55 +194,54 @@ class GPTSoVITSClient:
         batch_size: Optional[int] = None,
         batch_threshold: Optional[float] = None,
         speed_factor: Optional[float] = None,
-        streaming_mode: bool = True,
+        streaming_mode: int = 0,
         media_type: str = "wav",
         repetition_penalty: Optional[float] = None,
         sample_steps: Optional[int] = None,
         super_sampling: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        """构建 api_v2 ``/tts`` 请求参数。
+
+        api_v2 语义：参考音频三键（ref_audio_path/prompt_text/prompt_lang）
+        每请求必填；采样与语速参数真实生效，None 值不携带、由服务端默认兜底。
+        streaming_mode 为 api_v2 档位（0=关闭 1=按句 2=token级 3=token级定长chunk）。
         """
-        构建 TTS 请求参数
-
-        Args:
-            text: 输入文本
-            ref_audio_path: 参考音频路径
-            text_lang: 文本语言
-            prompt_text: 提示文本
-            prompt_lang: 提示语言
-            top_k: Top-K 采样
-            top_p: Top-P 采样
-            temperature: 温度参数
-            text_split_method: 文本分割方法
-            batch_size: 批处理大小
-            batch_threshold: 批处理阈值
-            speed_factor: 语速因子
-            streaming_mode: 是否流式
-            media_type: 媒体类型
-            repetition_penalty: 重复惩罚
-            sample_steps: 采样步数
-            super_sampling: 超采样
-
-        Returns:
-            请求参数字典
-        """
-        # 使用传入的 ref_audio_path 和 prompt_text，否则使用持久化的值
-        ref_audio_path = ref_audio_path or self._ref_audio_path
-        prompt_text = prompt_text if prompt_text is not None else self._prompt_text
-
-        # 语言检测
-        if text_lang:
-            text_lang = self._detect_language(text, text_lang)
+        # v1 的"省略三键用服务端默认"模式在 v2 不存在：ref_audio_path 必填
+        effective_ref = ref_audio_path or self._ref_audio_path
+        if not effective_ref:
+            raise ValueError(
+                "ref_audio_path 不能为空：api_v2 每请求必填参考音频，"
+                "请在配置 [tts.gptsovits] 填写 ref_audio_path 与 prompt_text"
+            )
+        effective_prompt = prompt_text if prompt_text is not None else self._prompt_text
 
         params: Dict[str, Any] = {
             "text": text,
-            "text_language": text_lang,
+            "text_lang": self._detect_language(text, text_lang or "zh"),
+            "ref_audio_path": effective_ref,
+            "prompt_lang": prompt_lang or "zh",
+            "streaming_mode": streaming_mode,
+            "media_type": media_type,
         }
-        # 参考音频三键仅在已设置时携带；省略时服务端使用其启动参数
-        # 配置的默认参考音频（GPT-SoVITS API 约定），不再本地强制拦截
-        if ref_audio_path:
-            params["refer_wav_path"] = ref_audio_path
-            params["prompt_text"] = prompt_text
-            params["prompt_language"] = prompt_lang or "zh"
+        if effective_prompt:
+            params["prompt_text"] = effective_prompt
+
+        # 可选采样参数：显式给出才携带（服务端对各值域有默认与校验）
+        optional_args = {
+            "top_k": top_k,
+            "top_p": top_p,
+            "temperature": temperature,
+            "text_split_method": text_split_method,
+            "batch_size": batch_size,
+            "batch_threshold": batch_threshold,
+            "speed_factor": speed_factor,
+            "repetition_penalty": repetition_penalty,
+            "sample_steps": sample_steps,
+            "super_sampling": super_sampling,
+        }
+        for key, value in optional_args.items():
+            if value is not None:
+                params[key] = value
         return params
 
     def _raise_service_error(self, e: requests.exceptions.RequestException) -> NoReturn:
@@ -265,40 +266,13 @@ class GPTSoVITSClient:
         batch_size: Optional[int] = None,
         batch_threshold: Optional[float] = None,
         speed_factor: Optional[float] = None,
-        streaming_mode: bool = False,
+        streaming_mode: int = 0,
         media_type: str = "wav",
         repetition_penalty: Optional[float] = None,
         sample_steps: Optional[int] = None,
         super_sampling: Optional[bool] = None,
     ) -> bytes:
-        """
-        同步文本转语音
-
-        Args:
-            text: 输入文本
-            ref_audio_path: 参考音频路径
-            text_lang: 文本语言
-            prompt_text: 提示文本
-            prompt_lang: 提示语言
-            top_k: Top-K 采样
-            top_p: Top-P 采样
-            temperature: 温度参数
-            text_split_method: 文本分割方法
-            batch_size: 批处理大小
-            batch_threshold: 批处理阈值
-            speed_factor: 语速因子
-            streaming_mode: 是否流式
-            media_type: 媒体类型
-            repetition_penalty: 重复惩罚
-            sample_steps: 采样步数
-            super_sampling: 超采样
-
-        Returns:
-            音频数据（bytes）
-
-        Raises:
-            Exception: 如果 TTS 失败
-        """
+        """同步文本转语音（一次性返回完整音频）"""
         if not self._initialized:
             self.initialize()
 
@@ -324,7 +298,7 @@ class GPTSoVITSClient:
 
         try:
             response = requests.get(
-                f"{self.base_url}/",
+                f"{self.base_url}/tts",
                 params=params,
                 timeout=self._timeout[1],
             )
@@ -356,33 +330,13 @@ class GPTSoVITSClient:
         repetition_penalty: Optional[float] = None,
         sample_steps: Optional[int] = None,
         super_sampling: Optional[bool] = None,
+        streaming_mode: int = 1,
     ) -> Iterator[bytes]:
-        """
-        流式文本转语音
+        """流式文本转语音。
 
-        Args:
-            text: 输入文本
-            ref_audio_path: 参考音频路径
-            text_lang: 文本语言
-            prompt_text: 提示文本
-            prompt_lang: 提示语言
-            top_k: Top-K 采样
-            top_p: Top-P 采样
-            temperature: 温度参数
-            text_split_method: 文本分割方法
-            batch_size: 批处理大小
-            batch_threshold: 批处理阈值
-            speed_factor: 语速因子
-            media_type: 媒体类型
-            repetition_penalty: 重复惩罚
-            sample_steps: 采样步数
-            super_sampling: 超采样
-
-        Yields:
-            音频数据块（bytes）
-
-        Raises:
-            Exception: 如果 TTS 失败
+        streaming_mode 传 api_v2 档位（1=按句，2/3=token级）。媒体形态均为
+        wav：首块 44 字节 WAV 头 + 后续裸 PCM——``decode_wav_chunk`` 的既有
+        分支持此形态。
         """
         if not self._initialized:
             self.initialize()
@@ -400,7 +354,7 @@ class GPTSoVITSClient:
             batch_size=batch_size,
             batch_threshold=batch_threshold,
             speed_factor=speed_factor,
-            streaming_mode=True,
+            streaming_mode=streaming_mode,
             media_type=media_type,
             repetition_penalty=repetition_penalty,
             sample_steps=sample_steps,
@@ -409,7 +363,7 @@ class GPTSoVITSClient:
 
         try:
             response = requests.get(
-                f"{self.base_url}/",
+                f"{self.base_url}/tts",
                 params=params,
                 stream=True,
                 timeout=self._timeout,
@@ -426,20 +380,16 @@ class GPTSoVITSClient:
         return response.iter_content(chunk_size=4096)
 
     def check_connection(self) -> bool:
-        """
-        检查与 GPT-SoVITS 服务器的连接
+        """检查与 GPT-SoVITS 服务器的连接。
 
-        Returns:
-            是否连接成功
+        api_v2 没有专门探活端点：无参 ``GET /tts`` 会被应用层参数校验
+        以 4xx/5xx 拒绝——但只要收到任何 HTTP 响应就证明服务进程可达，
+        仅连接类异常（拒连/超时）判不可达。
         """
         try:
-            response = requests.get(f"{self.base_url}/", timeout=3)
-            is_connected = response.status_code == 200
-            if is_connected:
-                self.logger.debug("GPT-SoVITS 服务器连接正常")
-            else:
-                self.logger.warning(f"GPT-SoVITS 服务器响应异常: {response.status_code}")
-            return is_connected
+            response = requests.get(f"{self.base_url}/tts", timeout=3)
+            self.logger.debug(f"GPT-SoVITS 服务器可达（HTTP {response.status_code}）")
+            return True
         except Exception as e:
             self.logger.error(f"检查 GPT-SoVITS 连接失败: {e}")
             return False
