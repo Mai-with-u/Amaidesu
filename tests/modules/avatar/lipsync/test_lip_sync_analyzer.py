@@ -123,7 +123,7 @@ async def test_renderer_exception_is_fail_soft():
 
 @pytest.mark.asyncio
 async def test_multiple_renderers_all_receive():
-    """一个分析器扇出多具皮套渲染器（D4：不重复计算）。"""
+    """一个分析器扇出多具虚拟形象渲染器（D4：不重复计算）。"""
     r1, r2 = _RecordingRenderer(), _RecordingRenderer()
     analyzer = LipSyncAnalyzer(config={"update_interval_ms": 1.0}, renderers=[r1, r2])
 

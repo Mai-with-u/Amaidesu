@@ -296,7 +296,7 @@ class Replyer:
 
         reply 是 Agent 内部协议工具——只服务主播自身 LLM 会话，不进 ToolRegistry。
         LLM 通过调用此函数输出 speech + emotion（emotion 是 emotion_vocab 17 枚举之一）
-        + intensity（情绪强度，驱动下游皮套表情权重）。
+        + intensity（情绪强度，驱动下游虚拟形象表情权重）。
         """
         return {
             "name": _REPLY_FUNCTION_NAME,

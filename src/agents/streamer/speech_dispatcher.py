@@ -2,8 +2,8 @@
 
 决策循环消费 reply 结构化结果后的全部下游扇出收在这里：
 业务事件 ``streamer.speech``、TTS 编排队列、字幕推送。情绪渲染不在
-本管线扇出——皮套适配器订阅 ``streamer.speech`` 自行反射（自动情绪
-路径），主播域不携带任何皮套平台知识。TTS 队列生命周期由本组件自持
+本管线扇出——虚拟形象适配器订阅 ``streamer.speech`` 自行反射（自动情绪
+路径），主播域不携带任何虚拟形象平台知识。TTS 队列生命周期由本组件自持
 （``start``/``stop``），失败一律降级不阻断决策循环。
 
 扇出策略：``streamer.speech`` 业务事件在派发路径上同步 ``await`` 发出——
@@ -215,7 +215,7 @@ class SpeechDispatcher:
           复用同一 utterance_id 入 TTS 队列（与 ``tts.utterance.*`` 共用关联键）
         - 业务事件同步 await 发出，先于本轮 ``planner.decision`` 与 idle 状态——
           观察端时间线按实际发生顺序渲染依赖该先后关系
-        - emotion 随业务事件发布，由皮套适配器订阅反射（本管线不做情绪扇出）
+        - emotion 随业务事件发布，由虚拟形象适配器订阅反射（本管线不做情绪扇出）
         """
         if not isinstance(reply_payload, dict):
             self._logger.warning(f"reply structured_content 非 dict，跳过发言管线: {type(reply_payload).__name__}")

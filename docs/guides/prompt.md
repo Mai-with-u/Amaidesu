@@ -180,7 +180,7 @@ input_config = config_service.get_config_with_defaults(
 | `agents.toml` | 业务 Agent（`[agents].enabled` + streamer/minecraft/text_adv 子树） |
 | `collectors.toml` | 采集器（顶层 `enabled` 名单 + 各采集器子段） |
 | `tools.toml` | 工具域（`[tools]` 提供者开关 / `disabled_tools` / `[tools.tasks]` 异步任务基建） |
-| `avatar.toml` | 皮套域（`[avatar.platform]` 启用名单 + 各平台成员段 + `[avatar.lipsync]` 口型共享件） |
+| `avatar.toml` | 虚拟形象域（`[avatar.platform]` 启用名单 + 各平台成员段 + `[avatar.lipsync]` 口型共享件） |
 | `model.toml` | 三层模型结构（`[[llm_providers]]` / `[[llm_models]]` / `[llm_profiles]` 六用途 profile） |
 | `storage.toml` | 顶层扁平存储（`[sqlite]` / `[memory]`） |
 | `infra.toml` | 基础设施（`[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` / `[interceptors.*]` / `[simulator]`） |
@@ -194,7 +194,7 @@ input_config = config_service.get_config_with_defaults(
 [agents]
 enabled = ["streamer"]        # 可选: streamer / minecraft / text_adv
 
-# config/avatar.toml —— 皮套平台启用（名单成员 = 平台工具全部可见）
+# config/avatar.toml —— 虚拟形象平台启用（名单成员 = 平台工具全部可见）
 [platform]
 enabled = ["vts"]             # 合法名: vts / warudo / vrchat
 

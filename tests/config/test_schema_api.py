@@ -182,7 +182,7 @@ class TestUiMarkerPassthrough:
     """控件语义标记（x-options / x-ui-widget / x-ui-precision）进入生成结果"""
 
     def test_avatar_enabled_has_closed_options(self):
-        """皮套平台启用名单携带封闭候选池（合法名 vts/warudo/vrchat）"""
+        """虚拟形象平台启用名单携带封闭候选池（合法名 vts/warudo/vrchat）"""
         from src.modules.config.avatar_schemas import PLATFORM_NAMES, AvatarRootConfig
 
         schema = _generate(AvatarRootConfig)

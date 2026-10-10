@@ -12,7 +12,7 @@
     config/agents.toml      - 业务 Agent（含主播人设/上下文/后台维护段）
     config/collectors.toml  - 采集器（enabled 名单 + 各采集器段）
     config/tools.toml       - 工具提供者启用/配置
-    config/avatar.toml      - 皮套（平台启用名单 + 平台成员段 + 口型共享件）
+    config/avatar.toml      - 虚拟形象（平台启用名单 + 平台成员段 + 口型共享件）
     config/model.toml       - LLM/VLM 模型配置（三层：providers/models/profiles）
     config/storage.toml     - 存储（顶层 [sqlite] + [memory]）
     config/infra.toml       - 基础设施（tts/subtitle/events/interceptors/dashboard/logging/simulator）
@@ -97,7 +97,7 @@ _FILE_COMMENTS: dict[str, str] = {
     "agents.toml": "业务 Agent 配置 - Amaidesu",
     "collectors.toml": "采集器配置 - Amaidesu",
     "tools.toml": "工具配置 - Amaidesu",
-    "avatar.toml": "皮套配置 - Amaidesu",
+    "avatar.toml": "虚拟形象配置 - Amaidesu",
     "model.toml": "模型配置 - LLM/VLM 参数",
     "storage.toml": "存储配置 - Amaidesu",
     "infra.toml": "基础设施配置 - Amaidesu",

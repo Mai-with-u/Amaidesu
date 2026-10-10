@@ -6,7 +6,7 @@
 调用链（Planner ReAct 架构）：
 - Planner（决策主体，ReAct 循环）决定说话时调用 reply 工具
 - reply 工具 invoke → Replyer.generate（人设渲染 + 情绪词表 + 敏感词净化）
-- 返回 {speech, emotion, metadata}——由 StreamerAgent 送发言队列（TTS/字幕/皮套）
+- 返回 {speech, emotion, metadata}——由 StreamerAgent 送发言队列（TTS/字幕/虚拟形象）
 
 工具契约：
 - kind: ``"sync"``（gather 等齐结果；Replyer 是一次性 LLM 调用，不是 fire-and-forget）

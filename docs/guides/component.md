@@ -876,7 +876,7 @@ class MyToolProvider(ToolProvider):
 11. ToolExecutionResult{success=True, structured_content={speech, emotion, metadata}}
          ↓
 12. Planner 循环收到 reply 成功即收尾 → outcome{replied/speech/...} → Agent 解析 speech 生成 utterance_id 入 UtteranceQueue（fire-and-forget，不阻塞决策循环）；
-    emotion → 随 streamer.speech 业务事件发布；皮套适配器订阅后自行反射
+    emotion → 随 streamer.speech 业务事件发布；虚拟形象适配器订阅后自行反射
    （自动情绪路径，主播域零平台知识——见 ADR-023）
          ↓
 13. 队列 worker 串行 await speak(text, utterance_id)（speak 是构造期注入的适配器，绑定装配期由 build_tts_infrastructure 选中的 tts_engine.handle_speech）→ 引擎合成 + 播放

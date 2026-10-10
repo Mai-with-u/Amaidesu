@@ -382,7 +382,7 @@ async def control_tool_provider(
         return {
             "success": True,
             "enabled": enable,
-            "message": f"皮套平台 {category}.{key} 已{action_text}（写入 avatar.toml），重启后生效",
+            "message": f"虚拟形象平台 {category}.{key} 已{action_text}（写入 avatar.toml），重启后生效",
         }
     elif (category, key) in PROVIDER_DESCRIPTIONS:
         dotted_key = f"tools.{category}.enabled" if key in CATEGORY_LEVEL_KEYS else f"tools.{category}.{key}.enabled"

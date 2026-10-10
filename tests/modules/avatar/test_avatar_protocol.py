@@ -2,7 +2,7 @@
 
 覆盖：
 
-- 三个皮套 Provider（VTS / Warudo / VRChat）都能通过
+- 三个虚拟形象 Provider（VTS / Warudo / VRChat）都能通过
   ``isinstance(p, AvatarProvider)`` 校验（结构契约的"形"满足）；
 - 缺成员的类不满足契约（负例，证明 ``@runtime_checkable`` 生效）；
 - 协议从 ``src.modules.avatar`` 与 ``src.modules.avatar.protocol``

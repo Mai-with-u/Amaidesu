@@ -1,4 +1,4 @@
-# ADR-028：avatar 配置迁出 tools 域——第七配置文件与皮套配置结构
+# ADR-028：avatar 配置迁出 tools 域——第七配置文件与虚拟形象配置结构
 
 - 状态：已采纳
 - 日期：2026-09-21
@@ -6,7 +6,7 @@
 
 ## 背景（Context）
 
-avatar 是代码结构最完整的域之一——独立模块目录 `src/modules/avatar/`、跨平台协议 `AvatarProvider`、四篇架构决策记录（ADR-023/024/025/026）——但它的配置一直没有自己的文件：皮套平台的配置放在 `[tools.avatar.<name>]`（"avatar" 对配置系统来说只是 tools.toml 里的一个分组标签，角色是反的：avatar 是皮套平台本体，工具只是它的能力，配置却让 avatar 依附在 tools 底下，加任何 avatar 内容都得先过 tools 这一层的目录结构）；口型调参另在 infra.toml 的 `[avatar.lipsync]`。
+avatar 是代码结构最完整的域之一——独立模块目录 `src/modules/avatar/`、跨平台协议 `AvatarProvider`、四篇架构决策记录（ADR-023/024/025/026）——但它的配置一直没有自己的文件：虚拟形象平台的配置放在 `[tools.avatar.<name>]`（"avatar" 对配置系统来说只是 tools.toml 里的一个分组标签，角色是反的：avatar 是虚拟形象平台本体，工具只是它的能力，配置却让 avatar 依附在 tools 底下，加任何 avatar 内容都得先过 tools 这一层的目录结构）；口型调参另在 infra.toml 的 `[avatar.lipsync]`。
 
 同时，对 17 个 VTS 模型（5 个官方样例 + 12 个真实/创意工坊模型）的接线数据（`.vtube.json` 的 ParameterSettings，即"哪个输入参数被模型作者绑到了哪个部位"）汇总分析后，暴露三处配置缺陷：
 
@@ -46,6 +46,6 @@ avatar 是代码结构最完整的域之一——独立模块目录 `src/modules
 ## 参考（References）
 
 - [ADR-014：配置体系六文件重构](014-config-six-file-refactor.md)（本 ADR 修订其文件数边界，机制判据沿用）
-- [ADR-023：皮套平台无关边界——平台差异全关进适配器](023-avatar-platform-agnostic-boundary.md)
+- [ADR-023：虚拟形象平台无关边界——平台差异全关进适配器](023-avatar-platform-agnostic-boundary.md)
 - [ADR-027：动态配置段统一注册表机制](027-dynamic-config-section-registry.md)
 - 讨论全档与模型实测数据：`.omo/drafts/avatar-config-boundary.md`

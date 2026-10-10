@@ -1,12 +1,12 @@
-# ADR-026：皮套工具面契约——语义参数、发现协议与结构类型规范
+# ADR-026：虚拟形象工具面契约——语义参数、发现协议与结构类型规范
 
 - 状态：已采纳（2026-09-20）
 - 日期：2026-09-20
-- 实现提交：`2a918d0e0213b68cfd00004bf00f730b71a18f65`（feat: 皮套工具面收敛28至11并立契约协议）
+- 实现提交：`2a918d0e0213b68cfd00004bf00f730b71a18f65`（feat: 虚拟形象工具面收敛28至11并立契约协议）
 
 ## 背景（Context）
 
-皮套三后端共注册 28 个 LLM 工具，构成失控：VTS 有 `smile` / `close_eyes` / `set_parameter_value` 等设备微旋钮（参数名不可发现）、`load_item`（14 个参数）；Warudo 有 `set_eyebrow` / `set_eye` / `set_pupil` / `set_mouth` 四件面部通道工具——而 `eyebrow_happy_strong` 这类键本就是情绪映射的底层通道，属适配器内部；运维件（`reconnect` / `get_stats` / `get_parameter_value`）与已定案机制（自动重连循环、熔断健康、输出投影禁令）重复。LLM 面对的是一排设备旋钮而不是表达意图。
+虚拟形象三后端共注册 28 个 LLM 工具，构成失控：VTS 有 `smile` / `close_eyes` / `set_parameter_value` 等设备微旋钮（参数名不可发现）、`load_item`（14 个参数）；Warudo 有 `set_eyebrow` / `set_eye` / `set_pupil` / `set_mouth` 四件面部通道工具——而 `eyebrow_happy_strong` 这类键本就是情绪映射的底层通道，属适配器内部；运维件（`reconnect` / `get_stats` / `get_parameter_value`）与已定案机制（自动重连循环、熔断健康、输出投影禁令）重复。LLM 面对的是一排设备旋钮而不是表达意图。
 
 同时，三后端的同语义工具名与参数形状各说各话（VTS `trigger_hotkey` / VRChat `trigger_gesture` / Warudo 蓝图三件），情绪入口在主播域还有一份私印的参数表。
 
@@ -33,4 +33,4 @@
 
 - LLM 工具面从 28 减到 11，schema 全语义化；情绪词表 17 值全覆盖（VTS 映射用足面部参数，Warudo 走 blendshape 状态件，VRChat 情绪面诚实返回未应用）。
 - 动作目录改走工具结果，注册期快照缺陷（`list_tools` 依赖运行期状态、启动不刷新）对目录可达性不再必要修；缺陷本身登记备查——若将来再出现同类 provider，修 `start_providers` 后刷新。
-- 新增皮套后端的验收集：实现 `AvatarProvider` 契约成员 + 通过契约测试 + 工具面逐字对齐终态清单。
+- 新增虚拟形象后端的验收集：实现 `AvatarProvider` 契约成员 + 通过契约测试 + 工具面逐字对齐终态清单。

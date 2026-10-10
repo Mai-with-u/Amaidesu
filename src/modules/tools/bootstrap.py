@@ -192,7 +192,7 @@ def bind_core_tools(
         avatar_platform: avatar.toml 拍平合并视图中的顶层 ``platform`` 段
             （启用名单 + 各平台成员段）；``None`` 表示 avatar 域未提供配置，
             平台一律不装配
-        event_bus: 事件总线（皮套适配器的被动半订阅 streamer.speech /
+        event_bus: 事件总线（虚拟形象适配器的被动半订阅 streamer.speech /
             tts.utterance.* 需要；组合根透传，None 时适配器退化为仅工具面）
         lipsync_analyzer: 共享口型分析器（avatar 域渲染器接线；组合根透传，
             None = 不渲染口型；统一装配签名，studio 域忽略）

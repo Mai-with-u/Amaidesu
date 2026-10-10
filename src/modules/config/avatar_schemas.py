@@ -46,7 +46,7 @@ PLATFORM_NAMES: tuple[str, ...] = ("vts", "warudo", "vrchat")
 
 
 class AvatarPlatformConfig(BaseConfig):
-    """皮套平台组段（``[avatar.platform]``）
+    """虚拟形象平台组段（``[avatar.platform]``）
 
     ``enabled`` 名单管哪些平台参与装配；成员段缺省 = 该平台以全默认
     配置待命（写回补出），段存在但不在名单 = 声明但不装配。
@@ -59,7 +59,7 @@ class AvatarPlatformConfig(BaseConfig):
     enabled: List[str] = Field(
         default_factory=lambda: ["vts"],
         title="启用平台名单",
-        description="启用的皮套平台名单（合法名：vts / warudo / vrchat）",
+        description="启用的虚拟形象平台名单（合法名：vts / warudo / vrchat）",
         json_schema_extra={"x-options": list(PLATFORM_NAMES)},
     )
     vts: VTSProvider.ConfigSchema = Field(
@@ -83,13 +83,13 @@ class AvatarRootConfig(BaseConfig):
     """Avatar 配置根类（对应 ``config/avatar.toml`` 文件）"""
 
     __file_name__ = "avatar.toml"
-    __section_label__ = "皮套"
+    __section_label__ = "虚拟形象"
 
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     platform: AvatarPlatformConfig = Field(
         default_factory=AvatarPlatformConfig,
-        title="皮套平台",
-        description="皮套平台（启用名单 + 各平台成员段）",
+        title="虚拟形象平台",
+        description="虚拟形象平台（启用名单 + 各平台成员段）",
     )
     lipsync: LipSyncConfig = Field(
         default_factory=LipSyncConfig,

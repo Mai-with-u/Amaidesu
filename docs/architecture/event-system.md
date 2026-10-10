@@ -196,7 +196,7 @@ event_bus.reset_stats(event_name=None)
 - **`room.state.watched_count`**：状态子层（非行为流），不落明细表——主播侧 RoomState 承接为内存快照，经后台记账写 `live_sessions.audience_total`。数据源是 B 站 WATCHED_CHANGE 推送（累计观看人次，UV 口径）；open-live 协议无"当前在线人数"推送，`live_sessions.viewer_count` 暂无数据源、维持 0
 - **`rundown.changed`**：唯一变更边界（工具 / Dashboard / 编辑写穿 / 装配层 load 四路同径）；`by` 区分 agent/human/system；finish 时 `segment_id=""` 且 `index==total`；写穿后游标重置时 `index==-1`
 - **`tts.utterance.*`**：终点广播，消费者不得触发新一轮决策（防环；与 TTS 是否启用正交）
-- **`streamer.speech`**：业务信号，与 TTS 启用正交；`utterance_id` 与 `tts.utterance.*` 共用关联键；`emotion`（17 枚举值）+ `emotion_intensity` 必选（生产者保证必有值），皮套适配器订阅它作自动情绪反射
+- **`streamer.speech`**：业务信号，与 TTS 启用正交；`utterance_id` 与 `tts.utterance.*` 共用关联键；`emotion`（17 枚举值）+ `emotion_intensity` 必选（生产者保证必有值），虚拟形象适配器订阅它作自动情绪反射
 - **`tool.result.<tool_name>`**：事件名 emit 时动态填（`ToolSpec.result_event` 可定制）；工具执行完成即广播（无论成败）
 - **`game.body.*`**（9 类，判别字段 `kind`）：`attacked` / `attack_ended` / `died` / `respawned` / `reflex_started` / `reflex_finished` / `dimension_changed` / `need_unhandled` / `unknown`。发布方是 `maicraft_attention` 采集器：它常驻长轮询 Mod 的任务事件流，**分类**后只把"值得向观众叙述的遭遇"转成事件——血量数值、坐标、游标这类遥测留在上游（主播要时用工具直读），未知上游类型归 `unknown` 并保留 `source_event_type`，所以事件面不随上游漂移。分类表与摘要生成在 `src/agents/minecraft/attention_matrix.py`；订阅方用 `CoreEvents.GAME_BODY_WILDCARD`（`game.body.#`）一站式监听。用三层名而非 `game.*`：单层通配是游戏 Agent 的低频里程碑通道（落 `game_events`、进主播只留 10 条的叙事缓冲），身体事件是流，不与之混层
 - **`game.chat.received`**（`kind` = `player` / `system`）：游戏里别人说的话。发布方是 `maicraft_chat` 采集器：它常驻长轮询 Mod 的聊天事件流（`events(topic=chat)`），按流编号与游标找出新消息转出；AI 玩家自己说的话 Mod 已经滤掉；别人私聊角色的话标 `private`，主播只拿它做决定，不交给表达侧、不在直播里念出或转述；`content` 是不可信的外部原话，不带任何授权。主播侧把它们放进【游戏里的聊天】参考段，玩家聊天促发一轮决策，系统消息只作参考。订阅方用 `CoreEvents.GAME_CHAT_WILDCARD`（`game.chat.#`）；同样用三层名，不混进 `game.*` 里程碑通道
@@ -315,7 +315,7 @@ event_bus.get_interceptor_names()            # 已挂载拦截器（按执行顺
 **防环约束**
 
 - `tts.utterance.*` 是**终点广播**：消费者不得基于这些事件触发新一轮决策（否则形成 "TTS→决策→TTS" 无限循环）
-- `streamer.speech` 是业务信号：订阅者（节奏唤醒 / 落库 / 字幕 / 皮套情绪反射）不得反向触发表演类副作用
+- `streamer.speech` 是业务信号：订阅者（节奏唤醒 / 落库 / 字幕 / 虚拟形象情绪反射）不得反向触发表演类副作用
 - 工具不订阅数据事件（仅 fire-and-forget 后回传 `tool.result.*`）
 
 **通道选择**

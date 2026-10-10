@@ -5,7 +5,7 @@
 - platform/vrchat/ — VRChat OSC 桥接（独立平台，与 VTS 无关）
 - platform/warudo/ — Warudo 控制
 
-一个皮套平台 = 一个 Provider 实例 = 一个启用单元，
+一个虚拟形象平台 = 一个 Provider 实例 = 一个启用单元，
 ``avatar.toml`` 的 ``[avatar.platform].enabled`` 名单控制装配：名单内 = 全部
 工具可见，名单外 = 全部消失。共享件（口型分析 lipsync/）与平台平级。
 

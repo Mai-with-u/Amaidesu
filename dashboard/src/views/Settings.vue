@@ -335,7 +335,7 @@ const FALLBACK_FILE_TABS = [
   { key: 'tools.toml', label: '工具包', icon: Tools, desc: '工具域开关与提供者', restart: true },
   {
     key: 'avatar.toml',
-    label: '皮套',
+    label: '虚拟形象',
     icon: Picture,
     desc: '虚拟形象平台 / 口型同步',
     restart: true,

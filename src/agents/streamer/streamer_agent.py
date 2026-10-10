@@ -399,7 +399,7 @@ class StreamerAgent(BaseAgent):
 
         # ===== 发言管线（speech → TTS / 字幕）=====
         # 队列生命周期由 dispatcher 自持（start/stop）；未启用时决策循环
-        # 只读 result.success，不消费 result.content。情绪渲染由皮套适配器
+        # 只读 result.success，不消费 result.content。情绪渲染由虚拟形象适配器
         # 订阅 streamer.speech 反射，不在本管线扇出。
         self._speech = SpeechDispatcher(
             event_bus=event_bus,

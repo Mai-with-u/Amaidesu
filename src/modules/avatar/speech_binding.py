@@ -1,4 +1,4 @@
-"""皮套适配器的事件订阅绑定（被动半）
+"""虚拟形象适配器的事件订阅绑定（被动半）
 
 被动半的事件入口，函数级共享（纯逻辑，不引入基类）：
 
@@ -52,7 +52,7 @@ async def _on_streamer_speech(
 def bind_speech_emotion(event_bus: Optional[EventBus], provider: Any, logger: ModuleLogger) -> Optional[Any]:
     """订阅 ``streamer.speech`` 驱动情绪反射；返回 handler 供退订（未绑定为 None）。
 
-    皮套是主播的可见身体，情绪是潜意识产物：派发时刻的发言事实（含 text /
+    虚拟形象是主播的可见身体，情绪是潜意识产物：派发时刻的发言事实（含 text /
     emotion / intensity）即渲染依据，不依赖 TTS 启用与否。
     """
     if event_bus is None:

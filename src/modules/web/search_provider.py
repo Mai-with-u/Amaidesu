@@ -278,7 +278,7 @@ def register_web_search_tools(
     """构造并注册到 registry。返回 Provider 实例供调用方管理生命周期。
 
     ``event_bus`` / ``lipsync_analyzer`` 为 bootstrap 统一签名的占位参数，
-    本 provider 无事件与皮套依赖，忽略。
+    本 provider 无事件与虚拟形象依赖，忽略。
     """
     provider = create_web_search_provider(config=config)
     registry.register_provider(provider)
