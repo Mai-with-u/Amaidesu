@@ -27,7 +27,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
 )
-from src.modules.tts.omni_tts_tool import OmniTTSProvider
+from src.modules.tts.backends.omni.provider import OmniTTSProvider
 
 
 # =============================================================================
@@ -348,7 +348,7 @@ class TestConfigRequirements:
             captured_params.update(params or {})
             raise ConnectionError("diagnostic stop")
 
-        with patch("src.modules.tts.omni_tts_tool.requests.get", side_effect=_capture_get):
+        with patch("src.modules.tts.backends.omni.provider.requests.get", side_effect=_capture_get):
             await _prepare_started_provider(provider)
             with pytest.raises(ConnectionError, match="diagnostic stop"):
                 await provider.handle_speech("x")

@@ -20,11 +20,11 @@ import pytest
 from loguru import logger as _loguru_logger
 
 from src.modules.tts import TTSProvider, build_tts_infrastructure
-from src.modules.tts.edge_tts_tool import EdgeTTSProvider
-from src.modules.tts.gptsovits_tool import GPTSoVITSProvider
-from src.modules.tts.omni_tts_tool import OmniTTSProvider
+from src.modules.tts.backends.edge.provider import EdgeTTSProvider
+from src.modules.tts.backends.gptsovits.provider import GPTSoVITSProvider
+from src.modules.tts.backends.omni.provider import OmniTTSProvider
 from src.modules.tts.protocol import TTSProvider as TTSProviderDirect
-from src.modules.tts.voicebox_tool import VoiceboxProvider
+from src.modules.tts.backends.voicebox.provider import VoiceboxProvider
 
 
 # ---------------------------------------------------------------------------

@@ -28,8 +28,8 @@ from src.modules.events.payloads.utterance import (
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
 )
-from src.modules.tts.gptsovits_client import GPTSoVITSServiceError
-from src.modules.tts.gptsovits_tool import (
+from src.modules.tts.backends.gptsovits.client import GPTSoVITSServiceError
+from src.modules.tts.backends.gptsovits.provider import (
     DTYPE,
     GPTSoVITSProvider,
 )
@@ -162,7 +162,7 @@ class TestTextSanitization:
     """_sanitize_text_for_tts 白名单清洗行为"""
 
     def test_unsupported_chars_stripped(self, event_bus: EventBus):
-        from src.modules.tts.gptsovits_tool import _sanitize_text_for_tts
+        from src.modules.tts.backends.gptsovits.provider import _sanitize_text_for_tts
 
         # 中英文数字 + 标点 = 保留；emoji 等 = 剥离
         sanitized = _sanitize_text_for_tts("你好 hello 123！🎉")

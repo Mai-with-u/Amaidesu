@@ -23,7 +23,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
 )
-from src.modules.tts.voicebox_tool import VoiceboxProvider
+from src.modules.tts.backends.voicebox.provider import VoiceboxProvider
 
 
 # =============================================================================

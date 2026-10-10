@@ -21,13 +21,13 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from .common import (
+from ...common import (
     build_stats_dict,
     emit_utterance_failed,
     emit_utterance_finished,
     emit_utterance_started,
 )
-from .gptsovits_client import GPTSoVITSClient, GPTSoVITSServiceError
+from .client import GPTSoVITSClient, GPTSoVITSServiceError
 
 if TYPE_CHECKING:
     pass

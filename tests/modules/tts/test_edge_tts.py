@@ -23,7 +23,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
 )
-from src.modules.tts.edge_tts_tool import EdgeTTSProvider
+from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 
 
 # =============================================================================

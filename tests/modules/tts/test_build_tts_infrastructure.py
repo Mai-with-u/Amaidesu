@@ -89,7 +89,7 @@ class TestEnabledGate:
 class TestKnownProviders:
     def test_edge_tts_constructs_provider(self):
         """provider=edge_tts + 子配置 → EdgeTTSProvider 实例。"""
-        from src.modules.tts.edge_tts_tool import EdgeTTSProvider
+        from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 
         result = build_tts_infrastructure(
             {
@@ -105,7 +105,7 @@ class TestKnownProviders:
 
     def test_gptsovits_constructs_provider(self):
         """provider=gptsovits + 子配置 → GPTSoVITSProvider 实例。"""
-        from src.modules.tts.gptsovits_tool import GPTSoVITSProvider
+        from src.modules.tts.backends.gptsovits.provider import GPTSoVITSProvider
 
         result = build_tts_infrastructure(
             {
@@ -121,7 +121,7 @@ class TestKnownProviders:
 
     def test_voicebox_constructs_provider(self):
         """provider=voicebox + 子配置 → VoiceboxProvider 实例。"""
-        from src.modules.tts.voicebox_tool import VoiceboxProvider
+        from src.modules.tts.backends.voicebox.provider import VoiceboxProvider
 
         result = build_tts_infrastructure(
             {
@@ -136,7 +136,7 @@ class TestKnownProviders:
 
     def test_omni_tts_constructs_provider(self):
         """provider=omni_tts + 子配置 → OmniTTSProvider 实例。"""
-        from src.modules.tts.omni_tts_tool import OmniTTSProvider
+        from src.modules.tts.backends.omni.provider import OmniTTSProvider
 
         result = build_tts_infrastructure(
             {
@@ -153,7 +153,7 @@ class TestKnownProviders:
     def test_event_bus_passed_through_to_engine(self):
         """event_bus 注入 → 引擎持有该引用。"""
         from src.modules.events.event_bus import EventBus
-        from src.modules.tts.edge_tts_tool import EdgeTTSProvider
+        from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 
         bus = EventBus()
         result = build_tts_infrastructure(
@@ -167,7 +167,7 @@ class TestKnownProviders:
 
     def test_missing_sub_config_uses_schema_defaults(self):
         """子配置缺失 → 工厂用空 dict 构造，引擎走 Schema 默认值。"""
-        from src.modules.tts.edge_tts_tool import EdgeTTSProvider
+        from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 
         result = build_tts_infrastructure({"enabled": True, "provider": "edge_tts"})
         assert isinstance(result, EdgeTTSProvider)
@@ -177,7 +177,7 @@ class TestKnownProviders:
 
     def test_sub_config_not_dict_falls_back_to_empty(self):
         """子配置形态非 dict（字符串 / 数字）→ 当空 dict 处理。"""
-        from src.modules.tts.edge_tts_tool import EdgeTTSProvider
+        from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 
         result = build_tts_infrastructure({"enabled": True, "provider": "edge_tts", "edge_tts": "oops"})
         assert isinstance(result, EdgeTTSProvider)
@@ -191,7 +191,7 @@ class TestKnownProviders:
 class TestUnknownProviderFallback:
     def test_unknown_provider_falls_back_to_edge_tts(self, loguru_capture):
         """未知 provider 名 → ERROR 日志 + 回退到 edge_tts（仍可装配）。"""
-        from src.modules.tts.edge_tts_tool import EdgeTTSProvider
+        from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 
         result = build_tts_infrastructure({"enabled": True, "provider": "definitely_not_a_real_engine"})
         assert isinstance(result, EdgeTTSProvider)

@@ -24,11 +24,11 @@ from typing import Any, Optional, TYPE_CHECKING
 
 from src.modules.logging import get_logger
 
-from .edge_tts_tool import create_edge_tts_provider
-from .gptsovits_tool import create_gptsovits_provider
-from .omni_tts_tool import create_omni_tts_provider
+from .backends.edge.provider import create_edge_tts_provider
+from .backends.gptsovits.provider import create_gptsovits_provider
+from .backends.omni.provider import create_omni_tts_provider
 from .protocol import TTSProvider
-from .voicebox_tool import create_voicebox_provider
+from .backends.voicebox.provider import create_voicebox_provider
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
