@@ -16,6 +16,7 @@
 - [模拟直播间](guides/simulator.md)
 - [文字冒险 Agent](guides/text-adv-agent.md)
 - [发布](guides/release.md)
+- [GPT-SoVITS 语音服务部署](guides/gptsovits.md)
 
 ## 架构与设计
 
