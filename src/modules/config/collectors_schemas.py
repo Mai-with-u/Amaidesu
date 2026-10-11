@@ -16,10 +16,11 @@ class CollectorsRootConfig(BaseConfig):
 
     顶层字段：
     - ``meta``：文件元数据（版本号 + 描述，独立于配置本体）
-    - ``enabled``：启用的采集器列表（名单驱动装配）
+    - ``enabled``：启用的采集器列表（名单驱动装配）；只放通用采集器——随某个 Agent 开关的
+      附属采集器不在这里（见 ``src.modules.agents.companions``）
 
     各采集器的具体配置段（``[console_input]`` 等，与 ``enabled`` 同级）由
-    ``extra="allow"`` 透传——因为 5 个采集器的 ConfigSchema 类型各异，
+    ``extra="allow"`` 透传——因为各采集器的 ConfigSchema 类型各异，
     无法在静态类定义里聚合。每个 ``[<name>]`` 子段的具体形状
     由对应采集器包内 ConfigSchema 验证，multi_file_loader 在加载时按
     注册表分发校验与漂移检测。
@@ -32,9 +33,9 @@ class CollectorsRootConfig(BaseConfig):
 
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     enabled: list[str] = Field(
-        default_factory=lambda: ["console_input", "maicraft_attention", "maicraft_chat"],
+        default_factory=lambda: ["console_input"],
         title="启用的采集器",
-        description="启用的 Collector 列表（注册名 = 配置段名）",
+        description="启用的通用采集器列表（注册名 = 配置段名）；随 Agent 开关的附属采集器不在这里",
     )
 
 

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from src.modules.agents.companions import owner_of, start_companions, stop_companions
 from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.config.errors import ConfigValidationError
 from src.modules.config.multi_file_loader import update_config_values
@@ -118,6 +119,13 @@ async def control_component(
     """
     if group not in _GROUP_TO_FILE:
         raise HTTPException(status_code=400, detail=f"Invalid group: {group}")
+    # 附属采集器随所属 Agent 开关，单独开关没有意义（Agent 不在时只会空转重试），也不该写进 collectors.toml
+    owner = owner_of(name) if group == "collectors" else None
+    if owner is not None:
+        return ComponentControlResponse(
+            success=False,
+            message=f"采集器 {name} 随 Agent {owner} 一同开关，请开关 Agent {owner}",
+        )
 
     if request.action == ComponentControlAction.START:
         dyn = await _try_dynamic_start(server, group, name)
@@ -175,6 +183,8 @@ async def _try_dynamic_start(server: "DashboardServer", group: str, name: str) -
             return None
         if manager.get_agent_by_name(name) is not None:
             ok = await manager.start_agent(name)
+            if ok:
+                await _start_agent_companions(server, name, sub_cfg)
             return ComponentControlResponse(
                 success=ok, message=f"Agent {name} 已启动" if ok else f"Agent {name} 启动失败"
             )
@@ -187,6 +197,7 @@ async def _try_dynamic_start(server: "DashboardServer", group: str, name: str) -
         )
         if ok:
             _sync_enabled_config(server, group, name, enable=True)
+            await _start_agent_companions(server, name, sub_cfg)
             return ComponentControlResponse(success=True, message=f"Agent {name} 已启动并加入启用配置")
         return ComponentControlResponse(success=False, message=f"Agent {name} 启动失败（已尝试动态启用）")
 
@@ -212,10 +223,31 @@ async def _try_dynamic_stop(server: "DashboardServer", group: str, name: str) ->
         ok = await manager.disable_agent(name)
         if ok:
             _sync_enabled_config(server, group, name, enable=False)
+            await _stop_agent_companions(server, name)
             return ComponentControlResponse(success=True, message=f"Agent {name} 已停止并从启用配置移除")
         return ComponentControlResponse(success=False, message=f"Agent {name} 停止失败")
 
     return None
+
+
+async def _start_agent_companions(server: "DashboardServer", agent_name: str, agent_config: dict) -> None:
+    """Agent 启用后把它的附属采集器一并装上并启动（没有采集器管理器时随下次重启装配）。"""
+    manager = server.collector_manager
+    if manager is None:
+        return
+    started = await start_companions(manager, agent_name, agent_config, getattr(server, "event_bus", None))
+    if started:
+        logger.info(f"Agent {agent_name} 的附属采集器已随之启动：{started}")
+
+
+async def _stop_agent_companions(server: "DashboardServer", agent_name: str) -> None:
+    """Agent 停用后把它的附属采集器一并停掉移除。"""
+    manager = server.collector_manager
+    if manager is None:
+        return
+    stopped = await stop_companions(manager, agent_name)
+    if stopped:
+        logger.info(f"Agent {agent_name} 的附属采集器已随之停止：{stopped}")
 
 
 def _read_sub_config(server: "DashboardServer", group: str, name: str) -> dict:

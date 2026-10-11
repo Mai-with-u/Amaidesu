@@ -22,10 +22,11 @@ import os
 import signal
 import sys
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger as loguru_logger
 
+from src.modules.agents.companions import companion_names, register_companions
 from src.modules.agents.factory import instantiate_agent
 from src.modules.agents.manager import AgentManager
 from src.modules.collectors.factory import instantiate_collector
@@ -452,16 +453,20 @@ async def create_app_components(
     #  采集器一个都不会装配）
     collector_manager: Optional["CollectorManager"] = None
     collectors_config = config_service.get_file_section("collectors")
-    if collectors_config:
+    agents_for_companions = config.get("agents", {}) if isinstance(config, dict) else {}
+    if collectors_config or _enabled_agents_with_companions(agents_for_companions):
         logger.info("初始化 CollectorManager（src/modules/collectors/）...")
         collector_manager = CollectorManager()
         await _register_collectors_from_config(
             collector_manager,
-            collectors_config,
+            collectors_config or {},
             config_service,
             event_bus,
             llm_service=llm_service,
         )
+        # 启用的 Agent 带的附属采集器（例如 Minecraft 的身体事件流、聊天流）随 Agent 一同装上，
+        # 和通用采集器一起由 start_all 启动；它们不在 collectors.toml 的名单里
+        _register_companion_collectors(collector_manager, agents_for_companions, event_bus)
         await collector_manager.start_all()
         logger.info(f"CollectorManager 已启动（{len(collector_manager)} 个 Collector）")
 
@@ -989,6 +994,28 @@ async def _register_collectors_from_config(
             )
             continue
         manager.register(instance, description=sub_cfg.get("description", ""))
+
+
+def _enabled_agents_with_companions(agents_config: Dict[str, Any]) -> List[str]:
+    """启用的 Agent 里带附属采集器的那些（按启用名单顺序）。"""
+    enabled = agents_config.get("enabled") if isinstance(agents_config, dict) else None
+    return [name for name in (enabled or []) if isinstance(name, str) and companion_names(name)]
+
+
+def _register_companion_collectors(manager, agents_config: Dict[str, Any], event_bus=None) -> None:
+    """把每个启用的 Agent 的附属采集器登记进 CollectorManager（启动由调用方的 start_all 统一做）。
+
+    附属采集器只对所属 Agent 有意义：Agent 没启用就不装，免得对着连不上的游戏空转重试；
+    配置由 Agent 自己的配置段换算（见 ``src.modules.agents.companions``）。
+    """
+    for agent_name in _enabled_agents_with_companions(agents_config):
+        agent_section = agents_config.get(agent_name)
+        register_companions(
+            manager,
+            agent_name,
+            agent_section if isinstance(agent_section, dict) else {},
+            event_bus=event_bus,
+        )
 
 
 async def _register_agents_from_config(

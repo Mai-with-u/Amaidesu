@@ -63,8 +63,6 @@ class TestRegistryDomainSplit:
             "bili_danmaku",
             "bili_danmaku_official",
             "console_input",
-            "maicraft_attention",
-            "maicraft_chat",
             "stt",
         }
         expected_agents = {"minecraft", "game_2048"}
@@ -75,6 +73,15 @@ class TestRegistryDomainSplit:
         registry.fill_component_schemas()
         assert not set(registry.COLLECTOR_SCHEMAS) & set(registry.AGENT_SCHEMAS)
         assert set(registry.COMPONENT_SCHEMAS) == set(registry.COLLECTOR_SCHEMAS) | set(registry.AGENT_SCHEMAS)
+
+    def test_companion_collectors_never_in_collector_table(self):
+        """随 Agent 开关的附属采集器不进 collectors.toml 的段全集（否则物化会把它们写回去）。"""
+        from src.modules.agents.companions import COMPANION_COLLECTORS
+
+        registry.fill_component_schemas()
+        for names in COMPANION_COLLECTORS.values():
+            for name in names:
+                assert name not in registry.COLLECTOR_SCHEMAS
 
     def test_agent_names_never_in_collector_table(self):
         """负例锚点：物化/校验若误用合并视图，Agent 段会被写进 collectors.toml。"""

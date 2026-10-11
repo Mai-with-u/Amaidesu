@@ -16,7 +16,8 @@ import pytest
 
 from src.agents.minecraft.chat_collector import MaicraftChatCollector
 from src.modules.collectors.base import BaseCollector
-from src.modules.collectors.factory import SUPPORTED_COLLECTORS, instantiate_collector
+from src.modules.agents.companions import build_companion_collectors, owner_of
+from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game_chat import GameChatPayload
 
@@ -60,10 +61,12 @@ async def _primed(
 def test_collector_metadata_and_registration() -> None:
     assert issubclass(MaicraftChatCollector, BaseCollector)
     assert MaicraftChatCollector.name == "maicraft_chat"
-    assert "maicraft_chat" in SUPPORTED_COLLECTORS
-    assert instantiate_collector("maicraft_chat", {}, None) is not None
+    assert "maicraft_chat" not in SUPPORTED_COLLECTORS
+    assert owner_of("maicraft_chat") == "minecraft"
+    names = [collector.name for collector in build_companion_collectors("minecraft", {})]
+    assert "maicraft_chat" in names
     cfg = MaicraftChatCollector.ConfigSchema()
-    assert cfg.url.endswith("/mcp")
+    assert cfg.mcp.url.endswith("/mcp")
 
 
 async def test_reads_the_chat_topic_and_does_not_replay_history() -> None:

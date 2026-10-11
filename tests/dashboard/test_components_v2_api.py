@@ -63,8 +63,12 @@ def test_list_includes_disabled_collectors() -> None:
     grouped = get_v2_component_list(config, server)
 
     # 新契约：组件全集 = 采集器段 ∪ enabled 名单（stt 仅在名单中，空配置占位）
+    # ∪ agents.toml 里有段的 Agent 的附属采集器（启用跟所属 Agent 走，owner 标明归属）
     by_name = {c.name: c for c in grouped["collectors"]}
-    assert set(by_name) == {"bili_danmaku", "bili_danmaku_official", "stt"}
+    assert set(by_name) == {"bili_danmaku", "bili_danmaku_official", "stt", "maicraft_attention", "maicraft_chat"}
+    assert by_name["maicraft_chat"].owner == "minecraft"
+    assert by_name["maicraft_chat"].is_enabled is False  # minecraft 有段但未启用
+    assert by_name["bili_danmaku"].owner is None
     assert "meta" not in by_name  # 文件级键不算组件
 
     danmaku = by_name["bili_danmaku"]

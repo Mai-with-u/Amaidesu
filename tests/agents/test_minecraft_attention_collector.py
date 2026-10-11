@@ -24,7 +24,8 @@ from pydantic import ValidationError
 from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
 from src.agents.minecraft.attention_matrix import KIND_TO_EVENT, classify, summarize, without_coordinates
 from src.modules.collectors.base import BaseCollector, CollectorState
-from src.modules.collectors.factory import SUPPORTED_COLLECTORS, instantiate_collector
+from src.modules.agents.companions import build_companion_collectors, owner_of
+from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
 
@@ -62,15 +63,18 @@ async def _primed(bus: _FakeEventBus, cursor: int = 5) -> tuple[MaicraftAttentio
 
 
 def test_collector_metadata_and_registration() -> None:
+    """身体事件流是 Minecraft Agent 的附属采集器：不在通用采集器名单里，随 Minecraft Agent 构造。"""
     assert issubclass(MaicraftAttentionCollector, BaseCollector)
     assert MaicraftAttentionCollector.name == "maicraft_attention"
-    assert "maicraft_attention" in SUPPORTED_COLLECTORS
-    assert instantiate_collector("maicraft_attention", {}, None) is not None
+    assert "maicraft_attention" not in SUPPORTED_COLLECTORS
+    assert owner_of("maicraft_attention") == "minecraft"
+    names = [collector.name for collector in build_companion_collectors("minecraft", {})]
+    assert "maicraft_attention" in names
 
 
 def test_config_defaults() -> None:
     cfg = MaicraftAttentionCollector.ConfigSchema()
-    assert cfg.url.endswith("/mcp")
+    assert cfg.mcp.url.endswith("/mcp")
     assert 1000 <= cfg.wait_ms <= 55_000
 
 

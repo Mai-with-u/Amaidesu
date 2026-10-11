@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from src.modules.agents.companions import COMPANION_COLLECTORS
 from src.modules.dashboard.schemas.component import ComponentSummary
 from src.modules.logging import get_logger
 
@@ -109,6 +110,13 @@ def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) ->
         running_names=running_collectors,
         descriptions=collector_descriptions,
     )
+    collectors.extend(
+        _build_companion_components(
+            agents_section=config_main.get("agents") or {},
+            running_names=running_collectors,
+            descriptions=collector_descriptions,
+        )
+    )
     agents = _build_agent_components(
         agents_section=config_main.get("agents") or {},
         running_names=running_agents,
@@ -180,6 +188,35 @@ def _build_from_config(
                 description=descriptions.get(name, ""),
             )
         )
+    return components
+
+
+def _build_companion_components(
+    agents_section: Dict[str, Any],
+    running_names: set[str],
+    descriptions: Dict[str, str],
+) -> List[ComponentSummary]:
+    """Agent 附属采集器：不在 collectors.toml 里；所属 Agent 在 agents.toml 里有段才列出，
+    启用与否跟所属 Agent 走，``owner`` 标明随哪个 Agent 开关。"""
+    agents_enabled = list(agents_section.get("enabled") or [])
+    components: List[ComponentSummary] = []
+    for agent_name, names in COMPANION_COLLECTORS.items():
+        if agent_name not in agents_section:
+            continue
+        is_enabled = agent_name in agents_enabled
+        for name in names:
+            components.append(
+                ComponentSummary(
+                    name=name,
+                    phase="input",
+                    group="collectors",
+                    type="collector",
+                    is_started=is_enabled and name in running_names,
+                    is_enabled=is_enabled,
+                    description=descriptions.get(name, ""),
+                    owner=agent_name,
+                )
+            )
     return components
 
 

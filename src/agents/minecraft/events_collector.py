@@ -6,15 +6,17 @@ MaiCraft v1 的 ``events`` 按 ``topic`` 分两条流：``self`` 是角色身上
 不补发）、读失败游标不动并重连、服务端没按要求等就空手返回时停一下；不一样的只有读哪条流、一条事件怎么转出去，
 由子类给出 ``topic`` 与 ``_forward``。
 
-代码归属：读的是 Minecraft 的事件流，是**游戏相关**的外部世界适配器，故放在 Minecraft Agent 包内；
-装配与起停走采集器框架（``config/collectors.toml`` + 工厂），生命周期挂装配期而非游戏 Agent——
-游戏 Agent 空闲、重建或停机时，这些流照样有人读。
+代码归属：读的是 Minecraft 的事件流，是**游戏相关**的外部世界适配器，故放在 Minecraft Agent 包内。
+它们是 Minecraft Agent 的**附属采集器**：不在 ``collectors.toml`` 里单独开关，Minecraft Agent 启用就装上、
+停用就停掉（声明见 ``companions.py``）；连接参数直接取 ``[agents.minecraft.mcp]``，等待与重试间隔取
+``[agents.minecraft]`` 的 ``events_wait_ms`` / ``events_retry_interval_ms``。开关跟的是"Agent 在不在启用名单里"，
+不跟 Agent 实例的忙碌或重建——游戏 Agent 空闲、重建时，这些流照样有人读。
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncIterator, ClassVar, Dict, Literal, Optional
+from typing import Any, AsyncIterator, ClassVar, Dict, Optional
 
 from pydantic import Field
 
@@ -23,6 +25,7 @@ from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
+from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ToolInvocation
 
 #: 连接失败的退避上限（秒）。Mod 常年不开时按最短间隔硬重连纯属空转：
@@ -45,19 +48,16 @@ class MaicraftEventsCollector(BaseCollector):
     stream_label: ClassVar[str] = "事件流"
 
     class ConfigSchema(BaseConfig):
-        """采集器配置（包内权威 Schema）。
+        """采集器配置：由 Minecraft Agent 的配置换算而来（见 ``companions.py``），不单独写进配置文件。
 
-        连接参数与 ``[agents.minecraft.mcp]`` 指向同一个 Mod 服务，但本采集器
-        自带独立连接；两处地址需要保持一致。
+        连接与 ``[agents.minecraft.mcp]`` 是同一份（地址、传输方式、请求头、超时都一样），
+        但本采集器自带一条独立连接：事件流按读者各自的游标读，和游戏 Agent 互不影响。
         """
 
-        url: str = Field(
-            default="http://127.0.0.1:8766/mcp",
-            description="Mod 的 MCP 端点（与 agents.minecraft.mcp.url 保持一致）",
+        mcp: McpServerConfig = Field(
+            default_factory=lambda: McpServerConfig(url="http://127.0.0.1:8766/mcp"),
+            description="Mod 的 MCP 服务（取自 agents.minecraft.mcp）",
         )
-        transport: Literal["http", "stdio"] = Field(default="http", description="传输方式")
-        timeout_seconds: float = Field(default=30.0, ge=1.0, description="连接超时（秒）")
-        reconnect: bool = Field(default=True, description="连接中断后自动重连")
         retry_interval_ms: int = Field(default=5000, ge=200, description="连接/读取失败后的重试间隔（毫秒）")
         wait_ms: int = Field(
             default=25_000,
@@ -137,18 +137,12 @@ class MaicraftEventsCollector(BaseCollector):
         """确保连接与工具清单就绪；未就绪返回 False（由循环稍后重试）。"""
         if self._client is not None:
             return True
-        # 函数内 import：mcp 模块涉及 fastmcp 重型依赖，且仅在本采集器启用时使用
+        # 函数内 import：mcp 客户端涉及 fastmcp 重型依赖，且仅在本采集器启用时使用
         from src.modules.mcp.client import McpClient
-        from src.modules.mcp.config import McpServerConfig
         from src.modules.mcp.provider import McpToolProvider
 
-        server = McpServerConfig(
-            enabled=True,
-            transport=self.typed_config.transport,
-            url=self.typed_config.url,
-            reconnect=self.typed_config.reconnect,
-            timeout_seconds=self.typed_config.timeout_seconds,
-        )
+        # 只有 Agent 的 MCP 开着才会装上本采集器；这里照抄一份并确保是开着的，独立连接不改动 Agent 那份
+        server = self.typed_config.mcp.model_copy(update={"enabled": True})
         client = McpClient(name="maicraft", config=server)
         provider = McpToolProvider(client=client, server_name="maicraft", provider="maicraft")
         try:
@@ -169,7 +163,7 @@ class MaicraftEventsCollector(BaseCollector):
         self._client = client
         self._provider = provider
         self._unavailable_reason = ""  # 接上了：失败特征串复位
-        self.logger.info(f"{self.stream_label}已接入（{self.typed_config.url}）")
+        self.logger.info(f"{self.stream_label}已接入（{self.typed_config.mcp.url or self.typed_config.mcp.command}）")
         return True
 
     async def _teardown(self) -> None:

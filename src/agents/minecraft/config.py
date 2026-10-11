@@ -29,7 +29,9 @@ class MinecraftConfig(BaseConfig):
             _on_start 装配 McpToolProvider 并以逐工具可见名单（
             fail-closed）注册进 ToolRegistry；false 时不装配（Agent 命令
             驱动，MCP 不可用即降级）。
-        events_wait_ms: 跟踪后台目标时，一次读事件流最多等多久；没有新事件就空手返回再等下一次。
+        events_wait_ms: 一次读事件流最多等多久；没有新事件就空手返回再等下一次。跟踪后台目标的读取
+            与两个附属采集器（身体事件流、聊天流）共用。
+        events_retry_interval_ms: 附属采集器连不上 Mod 或读失败后，隔多久重试（按倍数退避，最长 60 秒）。
     """
 
     context: MinecraftContextConfig = Field(default_factory=MinecraftContextConfig, description="游戏任务上下文预算")
@@ -37,7 +39,12 @@ class MinecraftConfig(BaseConfig):
         default=25_000,
         ge=1000,
         le=55_000,
-        description="跟踪后台目标时一次读事件流最多等多久（毫秒；MaiCraft 上限 60 秒）",
+        description="一次读事件流最多等多久（毫秒；跟踪后台目标与附属采集器共用，MaiCraft 上限 60 秒）",
+    )
+    events_retry_interval_ms: int = Field(
+        default=5000,
+        ge=200,
+        description="附属采集器（身体事件流、聊天流）连接或读取失败后的重试间隔（毫秒，按倍数退避到 60 秒）",
     )
     mcp: McpServerConfig = Field(
         default_factory=lambda: McpServerConfig(url="http://127.0.0.1:8766/mcp"),

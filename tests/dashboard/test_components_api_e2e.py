@@ -88,13 +88,18 @@ def test_list_components_returns_all_groups_with_disabled(client) -> None:
     assert set(data) == {"collectors", "agents"}
 
     collectors = {c["name"]: c for c in data["collectors"]}
-    # 组件契约全集 = collectors.toml 物化段全集（未启用也出卡，可先配后启）；
+    # 组件契约全集 = collectors.toml 物化段全集（未启用也出卡，可先配后启）∪ 各 Agent 的附属采集器；
     # enabled 名单看 is_enabled。conftest 手写的 bili/console_input 两段
-    # 之外，物化补齐的 maicraft_attention / maicraft_chat / stt / bili_official 同样在列。
+    # 之外，物化补齐的 stt / bili_official 同样在列；附属采集器按所属 Agent 是否启用列出并标 owner。
+    from src.modules.agents.companions import COMPANION_COLLECTORS
     from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
 
     ensure_component_registry()
-    assert set(collectors) == set(COLLECTOR_SCHEMAS)
+    companions = {name for names in COMPANION_COLLECTORS.values() for name in names}
+    assert set(collectors) == set(COLLECTOR_SCHEMAS) | companions
+    assert collectors["maicraft_attention"]["owner"] == "minecraft"
+    assert collectors["maicraft_attention"]["is_enabled"] is False  # minecraft 未启用
+    assert collectors["console_input"]["owner"] is None
     assert collectors["bili_danmaku"]["is_enabled"] is True
     assert collectors["bili_danmaku"]["is_started"] is False  # 未动态启动前均如此
     assert collectors["console_input"]["is_enabled"] is False
@@ -108,6 +113,17 @@ def test_list_components_returns_all_groups_with_disabled(client) -> None:
     assert agents["minecraft"]["is_enabled"] is False
     assert agents["text_adv"]["is_enabled"] is False
     assert agents["game_2048"]["is_enabled"] is False
+
+
+def test_companion_collector_cannot_be_toggled_alone(client) -> None:
+    """附属采集器随所属 Agent 开关：单独开关被拒，提示去开关 Agent，也不写进 collectors.toml。"""
+    http_client, config_dir = client
+    resp = http_client.post("/api/v1/components/collectors/maicraft_attention/control", json={"action": "start"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert "随 Agent minecraft" in body["message"]
+    assert "maicraft_attention" not in (config_dir / "collectors.toml").read_text(encoding="utf-8-sig")
 
 
 def test_control_start_dynamically_starts_collector(client) -> None:

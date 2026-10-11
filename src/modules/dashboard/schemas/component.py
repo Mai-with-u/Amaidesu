@@ -28,6 +28,7 @@ class ComponentSummary(BaseModel):
     is_enabled: bool
     group: Optional[str] = None  # v2 分组：collectors/agents/tools
     description: str = ""  # 描述（来自管理器注册/工具规格；前端可选展示）
+    owner: Optional[str] = None  # 附属采集器随哪个 Agent 开关；通用采集器与 Agent 为 None
 
 
 class ComponentListResponse(BaseModel):

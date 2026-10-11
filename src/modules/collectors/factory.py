@@ -6,9 +6,10 @@
 - bili_danmaku         → BiliDanmakuCollector（legacy）
 - bili_danmaku_official→ BiliDanmakuOfficialCollector
 - console_input        → ConsoleInputCollector
-- maicraft_attention   → MaicraftAttentionCollector
-- maicraft_chat        → MaicraftChatCollector
 - stt                  → STTCollector
+
+只管**通用采集器**。Agent 附属采集器（随所属 Agent 开关，例如 Minecraft 的身体事件流与聊天流）
+不经本工厂，由 ``src.modules.agents.companions`` 按 Agent 配置构造。
 """
 
 from __future__ import annotations
@@ -22,8 +23,6 @@ SUPPORTED_COLLECTORS: tuple[str, ...] = (
     "bili_danmaku",
     "bili_danmaku_official",
     "console_input",
-    "maicraft_attention",
-    "maicraft_chat",
     "stt",
 )
 
@@ -54,16 +53,6 @@ def instantiate_collector(
         from src.modules.collectors.console.console_input_collector import ConsoleInputCollector
 
         return ConsoleInputCollector(config=config or {}, event_bus=event_bus)
-    if name == "maicraft_attention":
-        # 代码归属 Minecraft Agent 包（游戏相关外部世界适配器内聚），装配仍走本工厂
-        from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
-
-        return MaicraftAttentionCollector(config=config or {}, event_bus=event_bus)
-    if name == "maicraft_chat":
-        # 游戏里别人说的话：同属 Minecraft Agent 包的游戏适配器，装配走本工厂
-        from src.agents.minecraft.chat_collector import MaicraftChatCollector
-
-        return MaicraftChatCollector(config=config or {}, event_bus=event_bus)
     if name == "stt":
         from src.modules.collectors.stt.stt_collector import STTCollector
 

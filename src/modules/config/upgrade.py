@@ -534,6 +534,53 @@ register_cross_file_hook(
 )
 
 
+# Minecraft 的两个事件流采集器改为随 Minecraft Agent 开关的附属采集器（见 src.modules.agents.companions）
+_MINECRAFT_COMPANION_SECTIONS = ("maicraft_attention", "maicraft_chat")
+_COMPANION_OLD_DEFAULTS = {"url": "http://127.0.0.1:8766/mcp", "retry_interval_ms": 5000}
+_COMPANION_NEW_HOMES = {
+    "url": "agents.minecraft.mcp.url",
+    "retry_interval_ms": "agents.minecraft.events_retry_interval_ms",
+}
+
+
+def _drop_minecraft_companion_collectors(data: Dict[str, Any]) -> List[str]:
+    """collectors.toml v2.0.43：Minecraft 的身体事件流、聊天流两个采集器搬出 collectors.toml。
+
+    它们只对 Minecraft Agent 有意义，改为随 Agent 一同开关、配置由 ``[agents.minecraft]`` 换算：
+    从 ``enabled`` 名单去掉这两个名字，删掉两个段。只动本文件（各文件版本流独立，不去改 agents.toml）；
+    段里改过的地址或重试间隔（不等于旧默认）记一条警告，写明今后在 agents.toml 哪一项设置。
+    对已迁移数据零变更（幂等）。
+    """
+    changed: List[str] = []
+    enabled = data.get("enabled")
+    if isinstance(enabled, list):
+        kept = [name for name in enabled if name not in _MINECRAFT_COMPANION_SECTIONS]
+        if len(kept) != len(enabled):
+            data["enabled"] = kept
+            changed.append("enabled")
+    for name in _MINECRAFT_COMPANION_SECTIONS:
+        if name not in data:
+            continue
+        section = data.pop(name)
+        changed.append(name)
+        if not isinstance(section, dict):
+            continue
+        for key, old_default in _COMPANION_OLD_DEFAULTS.items():
+            value = section.get(key)
+            if value is not None and value != old_default:
+                logger.warning(
+                    f"collectors.toml [{name}].{key} = {value!r} 已随该采集器搬出：它改为随 Minecraft Agent 开关，"
+                    f"今后在 agents.toml 的 {_COMPANION_NEW_HOMES[key]} 设置"
+                )
+    return changed
+
+
+# 生产钩子登记：collectors.toml v2.0.43（Minecraft 两个采集器改为随 Agent 开关，搬出 collectors.toml）
+register_file_hook(
+    "collectors.toml", "drop_minecraft_companion_collectors", "2.0.43", _drop_minecraft_companion_collectors
+)
+
+
 def _version_tuple(version: str) -> tuple[int, ...]:
     """版本号 → 可比较元组（"2.0.31" → (2, 0, 31)）；解析失败按 0 处理"""
     try:
