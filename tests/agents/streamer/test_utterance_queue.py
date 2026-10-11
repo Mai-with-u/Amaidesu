@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Awaitable, Callable, List, Optional
+from typing import List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
@@ -174,9 +174,7 @@ async def test_queue_serializes_concurrent_invocations():
         await _wait_for(lambda: len(recorder.calls) == 4, timeout=3.0)
 
         # 任意时刻 inflight ≤ 1（串行）
-        assert recorder._max_inflight == 1, (
-            f"队列应串行执行，但观察到最大并发 = {recorder._max_inflight}"
-        )
+        assert recorder._max_inflight == 1, f"队列应串行执行，但观察到最大并发 = {recorder._max_inflight}"
     finally:
         await queue.stop()
 
@@ -208,13 +206,10 @@ async def test_overflow_drops_oldest_with_warning(loguru_capture):
         drop_records = [
             r
             for r in loguru_capture.records
-            if r["level"] == "WARNING"
-            and "丢弃最旧 utterance" in r["message"]
-            and "utt_oldest" in r["message"]
+            if r["level"] == "WARNING" and "丢弃最旧 utterance" in r["message"] and "utt_oldest" in r["message"]
         ]
         assert drop_records, (
-            f"应记录 utt_oldest 的丢弃 WARN 日志，实际: "
-            f"{[r['message'] for r in loguru_capture.records]}"
+            f"应记录 utt_oldest 的丢弃 WARN 日志，实际: {[r['message'] for r in loguru_capture.records]}"
         )
 
         stats = queue.get_stats()
@@ -274,11 +269,80 @@ async def test_per_item_timeout_skips_and_continues(loguru_capture):
         timeout_records = [
             r
             for r in loguru_capture.records
-            if r["level"] == "ERROR"
-            and "等待超时" in r["message"]
-            and "utt_slow" in r["message"]
+            if r["level"] == "ERROR" and "等待超时" in r["message"] and "utt_slow" in r["message"]
         ]
         assert timeout_records, "应记录超时 ERROR 日志"
+    finally:
+        await queue.stop()
+
+
+# ---------------------------------------------------------------------------
+# wait_idle / busy（发言等播放的背压原语）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_wait_idle_returns_immediately_when_idle():
+    """队列空且 worker 闲：wait_idle 立即返回 True（未启动与已启动都成立）。"""
+    queue = UtteranceQueue(speak=_MockSpeakRecorder(), max_queue=5, render_timeout_ms=2000)
+    assert await queue.wait_idle(timeout_ms=100) is True
+
+    await queue.start()
+    try:
+        assert await queue.wait_idle(timeout_ms=100) is True
+        assert queue.busy is False
+    finally:
+        await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_wait_idle_blocks_until_processing_completes():
+    """正在播放时 busy=True，wait_idle 阻塞到播完才返回 True。"""
+    recorder = _MockSpeakRecorder(delay_s=0.3)
+    queue = UtteranceQueue(speak=recorder, max_queue=5, render_timeout_ms=2000)
+    await queue.start()
+    try:
+        await queue.enqueue("utt_a", "text")
+        await _wait_for(lambda: queue.busy, timeout=1.0)
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        assert queue.busy is False
+        assert len(recorder.calls) == 1
+    finally:
+        await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_wait_idle_times_out_when_busy():
+    """播放中 wait_idle 超时返回 False，不抛异常。"""
+    speak_started = asyncio.Event()
+
+    async def _long_speak(text: str, utterance_id: Optional[str]) -> None:
+        speak_started.set()
+        await asyncio.sleep(1.0)
+
+    queue = UtteranceQueue(speak=_long_speak, max_queue=5, render_timeout_ms=5000)
+    await queue.start()
+    try:
+        await queue.enqueue("utt_a", "text")
+        await _wait_for(lambda: speak_started.is_set(), timeout=1.0)
+        assert await queue.wait_idle(timeout_ms=100) is False
+        assert queue.busy is True
+    finally:
+        await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_wait_idle_waits_for_whole_queue_drain():
+    """多条积压时 wait_idle 只在全部播完后返回（逐条完成唤醒重判谓词）。"""
+    recorder = _MockSpeakRecorder(delay_s=0.1)
+    queue = UtteranceQueue(speak=recorder, max_queue=5, render_timeout_ms=2000)
+    await queue.start()
+    try:
+        await queue.enqueue("utt_a", "a")
+        await queue.enqueue("utt_b", "b")
+        assert await queue.wait_idle(timeout_ms=2000) is True
+        assert len(recorder.calls) == 2
+        assert queue.busy is False
     finally:
         await queue.stop()
 

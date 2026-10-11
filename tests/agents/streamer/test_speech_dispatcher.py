@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -163,6 +164,140 @@ async def test_disabled_config_never_builds_queue():
     await dispatcher.start()
     assert dispatcher.tts_enabled is False
     assert dispatcher.utterance_queue is None
+
+
+# ---------------------------------------------------------------------------
+# 发言等播放（背压闸）
+# ---------------------------------------------------------------------------
+
+
+class _PlaybackEngine:
+    """慢播放 TTS 引擎替身：handle_speech 拖延 delay_s 模拟"合成+播放"全周期。"""
+
+    def __init__(self, delay_s: float = 0.0) -> None:
+        self.calls: list[tuple[str, Optional[str]]] = []
+        self.delay_s = delay_s
+
+    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+        self.calls.append((text, utterance_id))
+        if self.delay_s > 0:
+            await asyncio.sleep(self.delay_s)
+
+
+def _speech_config(wait_playback: bool, wait_timeout_ms: int = 5000) -> dict:
+    return {
+        "enabled": True,
+        "max_queue": 3,
+        "render_timeout_ms": 5000,
+        "wait_playback": wait_playback,
+        "wait_playback_timeout_ms": wait_timeout_ms,
+    }
+
+
+async def _capture_emit_times(bus: EventBus) -> list[float]:
+    """订阅 streamer.speech 并按发出时刻记录，返回时刻列表（原地填充）。"""
+    emit_times: list[float] = []
+
+    async def _capture(event_name, payload, source=None):
+        if isinstance(payload, StreamerSpeechPayload):
+            emit_times.append(time.monotonic())
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
+    return emit_times
+
+
+@pytest.mark.asyncio
+async def test_dispatch_waits_for_playback_before_emit():
+    """wait_playback 开启：第二句的业务事件发出要等第一句播完（嘴空才放行）。"""
+    bus = EventBus()
+    emit_times = await _capture_emit_times(bus)
+    engine = _PlaybackEngine(delay_s=0.4)
+    dispatcher = _make_dispatcher(
+        event_bus=bus,
+        tts_engine=engine,
+        speech_config=_speech_config(wait_playback=True),
+    )
+    await dispatcher.start()
+    try:
+        await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+        await dispatcher.dispatch({"speech": "第二句", "emotion": {}})
+
+        # EventBus.emit 对 handler 是后台扇出：等两条事件都送达再断言时序
+        await asyncio.wait_for(_all_spoken(engine, 2), timeout=2.0)
+        await _wait_emitted(emit_times, 2)
+        gap = emit_times[1] - emit_times[0]
+        assert gap >= 0.3, f"第二句应等第一句播完（0.4s）后才发出，实际间隔 {gap:.3f}s"
+        # 两条都已入 TTS 队列并按序播放
+        assert [text for text, _uid in engine.calls] == ["第一句", "第二句"]
+    finally:
+        await dispatcher.stop()
+
+
+async def _all_spoken(engine: _PlaybackEngine, count: int) -> None:
+    """轮询等待引擎收满 count 次 speak 调用。"""
+    while len(engine.calls) < count:
+        await asyncio.sleep(0.01)
+
+
+async def _wait_emitted(emit_times: list[float], count: int, timeout_s: float = 2.0) -> None:
+    """轮询等待事件 handler 收满 count 条（EventBus.emit 对 handler 是后台扇出）。"""
+    deadline = time.monotonic() + timeout_s
+    while len(emit_times) < count:
+        if time.monotonic() > deadline:
+            raise AssertionError(f"等待 {count} 条 streamer.speech 超时，实际收到 {len(emit_times)} 条")
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_no_wait_when_wait_playback_disabled():
+    """wait_playback 关闭：连续 dispatch 立即返回（fire-and-forget 语义）。"""
+    bus = EventBus()
+    emit_times = await _capture_emit_times(bus)
+    engine = _PlaybackEngine(delay_s=0.4)
+    dispatcher = _make_dispatcher(
+        event_bus=bus,
+        tts_engine=engine,
+        speech_config=_speech_config(wait_playback=False),
+    )
+    await dispatcher.start()
+    try:
+        t0 = time.monotonic()
+        await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+        await dispatcher.dispatch({"speech": "第二句", "emotion": {}})
+        elapsed = time.monotonic() - t0
+
+        assert elapsed < 0.3, f"关闭等播时两次 dispatch 不应阻塞，实际 {elapsed:.3f}s"
+        await asyncio.wait_for(_all_spoken(engine, 2), timeout=2.0)
+        await _wait_emitted(emit_times, 2)
+        assert emit_times[1] - emit_times[0] < 0.3
+    finally:
+        await dispatcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_fails_open_on_wait_timeout():
+    """等播超时 fail-open：放行发言不丢话，不无限阻塞决策循环。"""
+    bus = EventBus()
+    emit_times = await _capture_emit_times(bus)
+    engine = _PlaybackEngine(delay_s=1.0)
+    dispatcher = _make_dispatcher(
+        event_bus=bus,
+        tts_engine=engine,
+        speech_config=_speech_config(wait_playback=True, wait_timeout_ms=150),
+    )
+    await dispatcher.start()
+    try:
+        await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+        t0 = time.monotonic()
+        result = await dispatcher.dispatch({"speech": "第二句", "emotion": {}})
+        elapsed = time.monotonic() - t0
+
+        # 等了约 150ms 超时放行，没等满 1s 的播放
+        assert result is not None and result[0] == "第二句"
+        assert 0.1 <= elapsed < 0.9, f"应在超时后放行，实际等待 {elapsed:.3f}s"
+        await _wait_emitted(emit_times, 2)
+    finally:
+        await dispatcher.stop()
 
 
 # ---------------------------------------------------------------------------

@@ -8,10 +8,13 @@
 
 扇出策略：``streamer.speech`` 业务事件在派发路径上同步 ``await`` 发出——
 观察端时间线按实际发生顺序渲染，依赖"发言先于轮末决策记录与空闲状态"
-的先后契约，不能延后一拍；字幕推送与 TTS 入队仍为异步扇出（任务强引用
-持有 ``_bg_tasks`` 集合，``stop()`` 末尾限期 2 秒汇合，防止悬挂任务在
-进程退出/重启窗口继续调用业务事件总线），对齐 ``EventBus._background_tasks``
-正典模式。
+的先后契约，不能延后一拍；TTS 启用且开启发言等播放时，业务事件发出前
+先在播放队列上做背压等待（嘴空才放行，发言节奏 = 语音播放节奏；决策循
+环单点串行，该等待同时把思考节奏限到嘴速），TTS 入队为等待后的同步
+``await``（纯内存操作，dispatch 返回即已入队）；字幕推送仍为异步扇出
+（任务强引用持有 ``_bg_tasks`` 集合，``stop()`` 末尾限期 2 秒汇合，防止
+悬挂任务在进程退出/重启窗口继续调用业务事件总线），对齐
+``EventBus._background_tasks`` 正典模式。
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from src.modules.time_utils import now_ms
 from .utterance_queue import (
     DEFAULT_MAX_QUEUE,
     DEFAULT_RENDER_TIMEOUT_MS,
+    DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS,
     UtteranceQueue,
 )
 
@@ -47,9 +51,10 @@ class SpeechDispatcher:
         logger: Optional[ModuleLogger] = None,
     ) -> None:
         """``speech_config`` 形态见 StreamerAgent 构造参数文档
-        （enabled / max_queue / render_timeout_ms）；``None`` 或
-        ``enabled=False`` 时管线整体关闭。``subtitle_service`` /
-        ``tts_engine`` 均鸭子消费（仅调公开方法）。
+        （enabled / max_queue / render_timeout_ms / wait_playback /
+        wait_playback_timeout_ms）；``None`` 或 ``enabled=False`` 时管线
+        整体关闭。``subtitle_service`` / ``tts_engine`` 均鸭子消费（仅调
+        公开方法）。
         """
         self._logger = logger or get_logger("StreamerAgent.SpeechDispatcher")
         self._event_bus = event_bus
@@ -57,6 +62,13 @@ class SpeechDispatcher:
         self._tts_enabled: bool = bool(speech_cfg.get("enabled", False))
         self._speech_max_queue: int = int(speech_cfg.get("max_queue", DEFAULT_MAX_QUEUE))
         self._speech_render_timeout_ms: int = int(speech_cfg.get("render_timeout_ms", DEFAULT_RENDER_TIMEOUT_MS))
+        # 发言等播放（背压）：上一句播完才放行下一句，发言节奏 = 嘴速。
+        # 默认开启——TTS 开着时思考快过嘴速的错位（想完五句嘴还在念第二句）
+        # 是直播观感缺陷；关闭即退回 fire-and-forget。超时 fail-open 不丢发言。
+        self._speech_wait_playback: bool = bool(speech_cfg.get("wait_playback", True))
+        self._speech_wait_timeout_ms: int = int(
+            speech_cfg.get("wait_playback_timeout_ms", DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS)
+        )
         self._tts_engine = tts_engine
         self._subtitle_service = subtitle_service
         self._utterance_queue: Optional[UtteranceQueue] = None
@@ -213,6 +225,10 @@ class SpeechDispatcher:
           （TTS 启用与否与主播发言业务事实正交；下游消费者仅依赖业务事件）
         - speech 非空 → 生成 utterance_id + 发布业务事件 + 写入历史；TTS 启用时
           复用同一 utterance_id 入 TTS 队列（与 ``tts.utterance.*`` 共用关联键）
+        - TTS 启用且开启发言等播放（wait_playback）→ 业务事件发出前先等
+          播放队列排空（背压：上一句播完才放行本次发言；决策循环单点串行，
+          该等待把"想"的节奏限到"说"的节奏）；等待超时 fail-open 放行，
+          TTS 关闭/降级/开关关闭时直接放行
         - 业务事件同步 await 发出，先于本轮 ``planner.decision`` 与 idle 状态——
           观察端时间线按实际发生顺序渲染依赖该先后关系
         - emotion 随业务事件发布，由虚拟形象适配器订阅反射（本管线不做情绪扇出）
@@ -236,9 +252,11 @@ class SpeechDispatcher:
         except (TypeError, ValueError):
             cleaned_emotion_intensity = 0.5
 
-        # speech 非空：先发布业务事件 + 写历史（与 TTS 启用与否正交），
-        # TTS 启用时复用同一 utterance_id 入 TTS 队列。
+        # speech 非空：先等播放队列排空（背压闸，见 _wait_for_playback_slot），
+        # 再发布业务事件 + 写历史（与 TTS 启用与否正交），TTS 启用时复用
+        # 同一 utterance_id 入 TTS 队列。
         if cleaned_speech:
+            await self._wait_for_playback_slot()
             utterance_id = self._next_utterance_id()
             await self._emit_streamer_speech(
                 utterance_id,
@@ -252,13 +270,28 @@ class SpeechDispatcher:
             )
             self._schedule_subtitle_show(cleaned_speech, utterance_id)
             if self._tts_enabled and self._utterance_queue is not None:
-                self._spawn(
-                    self._utterance_queue.enqueue(utterance_id, cleaned_speech),
-                    label="utterance 入队",
-                )
+                await self._utterance_queue.enqueue(utterance_id, cleaned_speech)
             return cleaned_speech, cleaned_emotion, utterance_id
 
         return None
+
+    async def _wait_for_playback_slot(self) -> None:
+        """背压闸：上一句播完（队列排空）才放行本次发言。
+
+        发言节奏跟随语音播放，消除"思考快过嘴速"的错位（想完五句嘴还在
+        念第二句）；决策循环单点串行（``_flush_lock``），此处等待即把整个
+        "想"的节奏限到"说"的节奏。放行条件任一即跳过等待：开关关闭、TTS
+        未启用/降级（无队列）。等待超时 fail-open——发言总是要发，节奏
+        错位可接受，丢发言不可接受；超时上限 0 表示不限时（依赖引擎侧
+        fail-fast 与 render_timeout 看门狗排空队列）。
+        """
+        queue = self._utterance_queue
+        if not self._speech_wait_playback or not self._tts_enabled or queue is None:
+            return
+        timeout_ms = self._speech_wait_timeout_ms
+        ok = await queue.wait_idle(timeout_ms=timeout_ms if timeout_ms > 0 else None)
+        if not ok:
+            self._logger.warning(f"等待上一句播完超时（>{timeout_ms}ms），放行本轮发言（播放继续追赶）")
 
     # ==================================================================
     # 下游扇出（业务事件同步发出；字幕/TTS 异步扇出不阻塞决策循环）

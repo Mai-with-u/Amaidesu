@@ -211,7 +211,9 @@ class StreamerAgent(BaseAgent):
                     {
                         "enabled": bool,  # 是否启用 TTS 下游管线
                         "max_queue": int,  # 队列容量（默认 3）
-                        "render_timeout_ms": int,  # 单 utterance 超时（默认 10000）
+                        "render_timeout_ms": int,  # 单 utterance 超时（默认 60000）
+                        "wait_playback": bool,  # 发言等上一句播完（默认 True）
+                        "wait_playback_timeout_ms": int,  # 等播排空上限（默认 60000，0 不限时）
                     }
 
                 ``None`` 或 ``enabled=False`` 时发言管线整体关闭（决策循环

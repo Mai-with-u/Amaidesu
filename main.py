@@ -1073,11 +1073,14 @@ async def _register_agents_from_config(
             logger.warning(f"未知的 Agent 类型: {agent_name}（升级 hook 应已过滤 maibot 等）")
             continue
         tts = tts_section if isinstance(tts_section, dict) else {}
-        # render_timeout_ms 兜底与 Schema 默认一致（防引擎卡死的上限语义）
+        # 兜底与 Schema 默认一致（render_timeout_ms 防引擎卡死的上限语义；
+        # wait_playback* 发言等播放的背压语义，0 = 不限时的约定同上）
         speech_cfg = {
             "enabled": bool(tts.get("enabled", False)),
             "max_queue": int(tts.get("max_queue", 3) or 3),
             "render_timeout_ms": int(tts.get("render_timeout_ms", 60000) or 0),
+            "wait_playback": bool(tts.get("wait_playback", True)),
+            "wait_playback_timeout_ms": int(tts.get("wait_playback_timeout_ms", 60000) or 0),
         }
         agent = instantiate_agent(
             agent_name,

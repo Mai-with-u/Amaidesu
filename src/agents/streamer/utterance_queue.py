@@ -12,6 +12,9 @@
 - 入队即返回（fire-and-forget），不阻塞上游决策循环的 tick 节奏
 - 单 utterance 超时由 `render_timeout_ms` 看门狗保护（防止合成/播放卡死拖垮队列）
 - 丢弃的 utterance 不进入 TTS 引擎，自然不会触发 ``tts.utterance.*`` 事件
+- ``wait_idle`` 暴露"嘴空"判定（队列空且当前句播完），供发言管线做
+  背压等待（发言节奏跟随语音播放）——是否等待由调用方决定，本队列只
+  提供状态与阻塞原语
 
 约定：
 - 时刻字段使用 int 毫秒；时长字段命名 ``_ms``
@@ -35,6 +38,11 @@ DEFAULT_MAX_QUEUE = 3
 # 播放时长与语音等长（长句可达数十秒），此值是防引擎卡死的兜底，
 # 不是正常耗时的上限；超时取消时引擎侧会停止已提交的播放。
 DEFAULT_RENDER_TIMEOUT_MS = 60_000
+
+# 默认发言等播放的等待上限（毫秒）：覆盖"当前句剩余播放 + 队列积压数句"
+# 的最坏排空时间，量级对齐 render_timeout_ms；0 表示不限时（不推荐，
+# 引擎故障时决策循环会被无限拖住——引擎侧 fail 快速排空则不受影响）。
+DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS = 60_000
 
 # speak 可调用对象的形态：
 #   await speak(text: str, utterance_id: Optional[str]) -> None
@@ -114,6 +122,12 @@ class UtteranceQueue:
         self._stopping = asyncio.Event()
         self._worker_task: Optional[asyncio.Task[None]] = None
         self._lock = asyncio.Lock()
+        # worker 正在处理一条 utterance（合成+播放全周期）的标志：
+        # 与队列深度共同构成 busy 判定（wait_idle 的谓词）；取件临界区内
+        # 置位、_dispatch 结束 finally 复位并唤醒 idle 等待方
+        self._processing = False
+        # "变闲"通知：wait_idle 等待方在此挂起，worker 完成一条后唤醒
+        self._idle_cond = asyncio.Condition()
 
         # 统计（轻量自监控）
         self._total_enqueued = 0
@@ -218,6 +232,33 @@ class UtteranceQueue:
         return len(self._queue)
 
     @property
+    def busy(self) -> bool:
+        """是否仍有发声占用（队列有待播条目或 worker 正在合成/播放）。"""
+        return bool(self._queue) or self._processing
+
+    async def wait_idle(self, timeout_ms: Optional[int] = None) -> bool:
+        """阻塞等待嘴空（队列排空且当前句播完），返回是否达到空闲。
+
+        供发言管线做背压：上一句没播完就不放行下一句，使发言节奏跟随
+        语音播放。``timeout_ms=None`` 表示不限时；超时返回 ``False`` 不抛
+        异常（放行与否由调用方决定）。worker 完成一条 utterance 时唤醒
+        等待方重新判定谓词；空闲状态调用立即返回 ``True``。
+        """
+
+        def _is_idle() -> bool:
+            return not self._queue and not self._processing
+
+        if _is_idle():
+            return True
+        timeout_s: Optional[float] = None if timeout_ms is None else timeout_ms / 1000.0
+        try:
+            async with self._idle_cond:
+                await asyncio.wait_for(self._idle_cond.wait_for(_is_idle), timeout=timeout_s)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    @property
     def is_running(self) -> bool:
         """worker 是否仍在运行（用于测试断言）。"""
         return self._worker_task is not None and not self._worker_task.done() and not self._stopping.is_set()
@@ -256,9 +297,18 @@ class UtteranceQueue:
                     if not self._queue:
                         # 取完后队列为空，清除 wakeup 让下一次 enqueue 再唤醒
                         self._wakeup.clear()
+                    # 置位与取件同临界区：wait_idle 的谓词读 (queue, processing)
+                    # 二元组，同步段内事件循环不切换协程，不会观察到
+                    # "队列已空但 processing 未置位"的假空闲窗口
+                    self._processing = True
 
                 # 在锁外执行 speak（避免阻塞其他 enqueue）
-                await self._dispatch(item)
+                try:
+                    await self._dispatch(item)
+                finally:
+                    self._processing = False
+                    async with self._idle_cond:
+                        self._idle_cond.notify_all()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - worker 边界兜底
@@ -298,4 +348,5 @@ __all__ = [
     "SpeakCallable",
     "DEFAULT_MAX_QUEUE",
     "DEFAULT_RENDER_TIMEOUT_MS",
+    "DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS",
 ]

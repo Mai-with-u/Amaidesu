@@ -266,6 +266,8 @@ class TTSConfig(BaseConfig):
         provider: 装配时据此选择唯一激活引擎（edge_tts/gptsovits/voicebox/omni_tts）。
         max_queue: 发声播放队列上限；队列满时丢最旧一条保证新鲜度。
         render_timeout_ms: 单次发声（合成+播放）超时（毫秒）；0 表示不限制。
+        wait_playback: 主播发言等上一句播完再放行（发言节奏 = 嘴速）。
+        wait_playback_timeout_ms: 等待播放队列排空的上限（毫秒）；0 不限制。
         edge_tts: EdgeTTS 引擎参数（仅 provider=edge_tts 时生效）。
         gptsovits: GPT-SoVITS 引擎参数（仅 provider=gptsovits 时生效）。
         voicebox: Voicebox 引擎参数（仅 provider=voicebox 时生效；需填写 profile_id）。
@@ -300,6 +302,19 @@ class TTSConfig(BaseConfig):
         title="发声超时",
         description="单次发声等待超时（合成+播放，毫秒）；0 表示不限制。"
         "播放时长与语音等长，此值是防引擎卡死的兜底而非正常耗时上限",
+    )
+    wait_playback: bool = Field(
+        default=True,
+        title="发言等播放",
+        description="主播发言等待上一句播完再放行（发言节奏跟随语音播放，"
+        "消除思考快过嘴速的错位）；关闭后退回入队即返回的 fire-and-forget",
+    )
+    wait_playback_timeout_ms: int = Field(
+        default=60000,
+        ge=0,
+        title="等播超时",
+        description="发言等待播放队列排空的上限（毫秒）；超时放行发言不丢话，"
+        "0 表示不限制。量级覆盖当前句剩余播放加队列积压排空的最坏时间",
     )
     edge_tts: EdgeTTSParams = Field(
         default_factory=EdgeTTSParams,
