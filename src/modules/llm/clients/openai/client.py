@@ -12,7 +12,7 @@ import json
 import mimetypes
 import os
 from io import BytesIO
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from openai import (
     APIConnectionError,
@@ -391,6 +391,8 @@ class OpenAIClient(BaseLLMClient):
             error=result.error,
             request_id=result.request_id,
             usage_raw_json=result.usage_raw_json,
+            audio_base64=result.audio_base64,
+            audio_format=result.audio_format,
         )
 
     async def generate(
@@ -443,6 +445,34 @@ class OpenAIClient(BaseLLMClient):
         )
         return self._to_payload_response(result)
 
+    async def generate_audio(
+        self,
+        request: GenerateRequest,
+        *,
+        model: str,
+        voice: str,
+        audio_format: str = "wav",
+        temperature: Optional[float] = None,
+        interrupt_flag: Optional[asyncio.Event] = None,
+    ) -> Response:
+        """中立契约音频输出请求：payload → OpenAI 协议 modalities=audio 形态翻译。
+
+        面向带语音输出模态的大模型（qwen-omni / gpt-4o-audio 等 OpenAI 兼容
+        端点）；仅非流式（音频模态无增量回调路径），错误分类同聊天路径。
+        """
+        result = await self._chat_impl(
+            self._request_to_openai_messages(request),
+            model=model,
+            temperature=temperature if temperature is not None else request.temperature,
+            interrupt_flag=interrupt_flag,
+            request_extra={
+                "modalities": ["text", "audio"],
+                "audio": {"voice": voice, "format": audio_format},
+            },
+        )
+        result.audio_format = audio_format
+        return self._to_payload_response(result)
+
     async def chat(
         self,
         messages: List[Dict[str, Any]],
@@ -476,6 +506,19 @@ class OpenAIClient(BaseLLMClient):
             self.logger.error(error_msg)
             return LLMResponse(success=False, content=None, error=error_msg)
 
+    @staticmethod
+    def _extract_message_audio(message: Any) -> Tuple[Optional[str], Optional[str]]:
+        """提取音频输出模态响应的 base64 载荷与语音 transcript；无音频返回 (None, None)。
+
+        兼容两种形态：SDK typed message.audio 与兼容端点透传的 dict。
+        """
+        audio = getattr(message, "audio", None)
+        if audio is None:
+            return None, None
+        if isinstance(audio, dict):
+            return audio.get("data"), audio.get("transcript")
+        return getattr(audio, "data", None), getattr(audio, "transcript", None)
+
     async def _chat_impl(
         self,
         messages: List[Dict[str, Any]],
@@ -487,6 +530,7 @@ class OpenAIClient(BaseLLMClient):
         interrupt_flag: Optional[asyncio.Event] = None,
         on_delta: Optional[Callable[[str, str], None]] = None,
         strict_tool_arguments: bool = False,
+        request_extra: Optional[Dict[str, Any]] = None,
     ) -> LLMResponse:
         """聊天调用实现：SDK 异常翻译为错误分类异常后抛出（不自行重试）。
 
@@ -494,6 +538,9 @@ class OpenAIClient(BaseLLMClient):
         组装完整 LLMResponse 返回（传输层流式、语义层整段）。
         流式请求建立失败时自动降级为非流式一次性调用（回调不触发）。
         """
+        if request_extra and on_delta is not None:
+            # 扩展参数（音频模态等）只在非流式路径生效，静默丢弃会造成请求形态错乱
+            raise ValueError("request_extra 不支持流式路径")
         if on_delta is not None:
             try:
                 return await self._chat_streaming(
@@ -523,6 +570,8 @@ class OpenAIClient(BaseLLMClient):
                 "temperature": self.temperature if temperature is None else temperature,
             }
             self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort)
+            if request_extra:
+                request_params.update(request_extra)
             if tools:
                 request_params["tools"] = self._normalize_tool_definitions(tools)
                 request_params["tool_choice"] = "auto"
@@ -532,11 +581,18 @@ class OpenAIClient(BaseLLMClient):
                 interrupt_flag=interrupt_flag,
             )
             message = response.choices[0].message
-            content, reasoning_content = parse_reasoning(
-                message.content or "",
-                getattr(message, "reasoning_content", None),
-                ReasoningParseMode(self.config.get("reasoning_parse_mode", "auto")),
-            )
+            audio_base64, transcript = self._extract_message_audio(message)
+            raw_content = message.content or ""
+            if audio_base64 is not None and not raw_content:
+                # 音频模态响应：语音文本由 transcript 回填 content（即模型产出
+                # 文本），不做 reasoning 解析
+                content, reasoning_content = transcript or "", None
+            else:
+                content, reasoning_content = parse_reasoning(
+                    raw_content,
+                    getattr(message, "reasoning_content", None),
+                    ReasoningParseMode(self.config.get("reasoning_parse_mode", "auto")),
+                )
             usage = self._extract_usage(response.usage)
             result = LLMResponse(
                 success=True,
@@ -546,6 +602,7 @@ class OpenAIClient(BaseLLMClient):
                 reasoning_content=reasoning_content,
                 finish_reason=getattr(response.choices[0], "finish_reason", None),
                 usage_raw_json=self._vendor_usage_to_raw_json(response.usage),
+                audio_base64=audio_base64,
             )
             if message.tool_calls:
                 result.tool_calls = []

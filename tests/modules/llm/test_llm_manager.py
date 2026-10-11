@@ -865,6 +865,7 @@ def test_profile_names_includes_all_purposes() -> None:
         ProfileNames.MINECRAFT,
         ProfileNames.MINECRAFT_BUILDER,
         ProfileNames.VISION,
+        ProfileNames.TTS,
         ProfileNames.SIMULATOR,
     }
 
@@ -886,3 +887,95 @@ def test_validate_profile_binding_rejects_unknown():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
+
+
+# =============================================================================
+# generate_audio - 音频输出入口（omni_tts 引擎消费）
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_defaults_to_tts_profile_and_dispatches():
+    """缺省走 tts 档位，failover 按 model_identifier 分发并透传 voice/format"""
+    manager = LLMManager()
+    backend = _make_mock_backend()
+    backend.generate_audio = AsyncMock(
+        return_value=PayloadResponse(
+            success=True,
+            content="你好",
+            model="qwen3-omni",
+            audio_base64="QUJD",
+            audio_format="wav",
+        )
+    )
+    config: Dict[str, Any] = {
+        "llm_providers": [
+            {"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1", "api_key": "k"}
+        ],
+        "llm_models": [{"name": "omni", "model_identifier": "qwen3-omni", "api_provider": "test"}],
+        "llm_profiles": {
+            "tts": {"model_list": ["omni"]},
+            "planner": {"model_list": ["omni"]},
+        },
+    }
+    with patch.dict(_CLIENT_DISPATCH, {"openai": MagicMock(return_value=backend)}):
+        await manager.setup(config)
+
+    result = await manager.generate_audio("你好", voice="Chelsie")
+
+    assert result.success is True
+    # 两段转换后音频字段无损（payload → legacy 记账 → payload 出口）
+    assert result.audio_base64 == "QUJD"
+    assert result.audio_format == "wav"
+    assert result.content == "你好"
+    kwargs = backend.generate_audio.await_args.kwargs
+    assert kwargs["model"] == "qwen3-omni"
+    assert kwargs["voice"] == "Chelsie"
+    assert kwargs["audio_format"] == "wav"
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_missing_voice_fails_fast_without_dispatch():
+    """音色缺失在进入 failover 前快速失败（配置错误不进重试/切换链路）"""
+    manager = LLMManager()
+    backend = _make_mock_backend()
+    backend.generate_audio = AsyncMock()
+    config: Dict[str, Any] = {
+        "llm_providers": [
+            {"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1", "api_key": "k"}
+        ],
+        "llm_models": [{"name": "omni", "model_identifier": "qwen3-omni", "api_provider": "test"}],
+        "llm_profiles": {"tts": {"model_list": ["omni"]}},
+    }
+    with patch.dict(_CLIENT_DISPATCH, {"openai": MagicMock(return_value=backend)}):
+        await manager.setup(config)
+
+    with pytest.raises(ValueError, match="voice"):
+        await manager.generate_audio("你好", voice="")
+
+    backend.generate_audio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_explicit_profile_dispatch():
+    """显式传封闭集内 profile 名时按该档位解析（覆盖非缺省路径）"""
+    manager = LLMManager()
+    backend = _make_mock_backend()
+    backend.generate_audio = AsyncMock(
+        return_value=PayloadResponse(success=True, content="x", model="qwen3-omni", audio_base64="QQ==")
+    )
+    config: Dict[str, Any] = {
+        "llm_providers": [
+            {"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1", "api_key": "k"}
+        ],
+        "llm_models": [{"name": "omni", "model_identifier": "qwen3-omni", "api_provider": "test"}],
+        "llm_profiles": {
+            "tts": {"model_list": ["omni"]},
+            "summary": {"model_list": ["omni"]},
+        },
+    }
+    with patch.dict(_CLIENT_DISPATCH, {"openai": MagicMock(return_value=backend)}):
+        await manager.setup(config)
+
+    result = await manager.generate_audio("x", profile="summary", voice="Chelsie")
+    assert result.success is True

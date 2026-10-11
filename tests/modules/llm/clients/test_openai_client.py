@@ -744,3 +744,75 @@ async def test_vision_omits_reasoning_effort_and_extra_body_when_unset():
     sent = sdk_client.chat.completions.create.await_args.kwargs
     assert "reasoning_effort" not in sent
     assert "extra_body" not in sent
+
+
+# =============================================================================
+# generate_audio - 音频输出模态（omni_tts 引擎消费）
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_sends_modalities_and_audio_params():
+    """音频请求带 modalities=audio 与 voice/format 参数，且不走流式"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response(content=None, model="qwen3-omni")
+    msg = sdk_client.chat.completions.create.return_value.choices[0].message
+    msg.audio = SimpleNamespace(data="QUJD", transcript="你好世界")
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["你好世界"])])
+    result = await client.generate_audio(request, model="qwen3-omni", voice="Chelsie", audio_format="wav")
+
+    assert sdk_client.chat.completions.create.await_count == 1
+    kwargs = sdk_client.chat.completions.create.await_args.kwargs
+    assert kwargs["modalities"] == ["text", "audio"]
+    assert kwargs["audio"] == {"voice": "Chelsie", "format": "wav"}
+    assert "stream" not in kwargs
+    assert result.success is True
+    assert result.audio_base64 == "QUJD"
+    assert result.audio_format == "wav"
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_transcript_backfills_content():
+    """语音文本经 transcript 回填 content（模型产出文本），不空响应"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response(content=None, model="qwen3-omni")
+    msg = sdk_client.chat.completions.create.return_value.choices[0].message
+    msg.audio = SimpleNamespace(data="QUJD", transcript="你好，欢迎来到直播间")
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["你好，欢迎来到直播间"])])
+    result = await client.generate_audio(request, model="qwen3-omni", voice="Chelsie")
+
+    assert result.content == "你好，欢迎来到直播间"
+    assert result.audio_base64 == "QUJD"
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_accepts_dict_shaped_audio():
+    """兼容端点以 dict 形态透传 message.audio 时同样解析"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response(content=None, model="qwen3-omni")
+    sdk_client.chat.completions.create.return_value.choices[0].message.audio = {
+        "data": "QUJD",
+        "transcript": "你好",
+    }
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["你好"])])
+    result = await client.generate_audio(request, model="qwen3-omni", voice="Chelsie")
+
+    assert result.audio_base64 == "QUJD"
+    assert result.content == "你好"
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_without_audio_treated_as_plain_text_response():
+    """端点未回音频（不支持 modalities 时）：不报错，按普通文本响应语义返回"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response(content="plain", model="qwen3-omni")
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["你好"])])
+    result = await client.generate_audio(request, model="qwen3-omni", voice="Chelsie")
+
+    assert result.success is True
+    assert result.audio_base64 is None
+    assert result.content == "plain"

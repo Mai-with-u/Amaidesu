@@ -88,7 +88,7 @@ _RETRY_POLICY: Dict[type, str] = {
 
 # === 契约归一化与新旧响应适配（Engine 的固定职责：消费方输入 → payload → Client）===
 
-_PAYLOAD_METHODS = frozenset({"generate", "generate_vision"})
+_PAYLOAD_METHODS = frozenset({"generate", "generate_vision", "generate_audio"})
 """走中立 payload 契约的客户端能力名（Client 返回 payload.Response）。"""
 
 
@@ -288,6 +288,8 @@ def _payload_response_to_legacy(resp: Response) -> LLMResponse:
         error=resp.error,
         request_id=resp.request_id,
         usage_raw_json=resp.usage_raw_json,
+        audio_base64=resp.audio_base64,
+        audio_format=resp.audio_format,
     )
 
 
@@ -325,6 +327,8 @@ def _legacy_response_to_payload(result: LLMResponse) -> Response:
         error=result.error,
         request_id=result.request_id,
         usage_raw_json=result.usage_raw_json,
+        audio_base64=result.audio_base64,
+        audio_format=result.audio_format,
     )
 
 
@@ -532,6 +536,42 @@ class LLMManager:
             method="generate_vision",
             request=request,
             images=images,
+            interrupt_flag=interrupt,
+        )
+        return _legacy_response_to_payload(result)
+
+    async def generate_audio(
+        self,
+        input: Union[str, List[Union[Message, Dict[str, Any]]]],
+        *,
+        profile: Optional[str] = None,
+        voice: str,
+        audio_format: str = "wav",
+        system: Optional[str] = None,
+        temperature: Optional[float] = None,
+        interrupt: Optional[asyncio.Event] = None,
+    ) -> Response:
+        """执行一次音频输出调用（对外唯一音频入口，返回中立 payload.Response）。
+
+        面向带语音输出模态的大模型（OpenAI 兼容线协议 modalities=audio
+        形态）：input 是待合成的定稿台词，voice / audio_format
+        为厂商词表音色与封装格式；语音文本经 transcript 回填响应的
+        content，音频字节经 audio_base64 携带。
+        profile 缺省走 tts 档位（须指向带语音输出模态的模型）。
+        """
+        if not voice:
+            raise ValueError("generate_audio 缺少 voice（音色）参数；请在 [tts.omni_tts].voice 配置厂商音色名")
+        if profile is None:
+            profile_name = ProfileNames.TTS
+        else:
+            profile_name = self._resolve_profile_name(profile)
+        request = _normalize_generate_input(input, system=system, tools=None, temperature=temperature)
+        result = await self._call_with_failover(
+            profile_name,
+            method="generate_audio",
+            request=request,
+            voice=voice,
+            audio_format=audio_format,
             interrupt_flag=interrupt,
         )
         return _legacy_response_to_payload(result)

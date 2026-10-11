@@ -39,6 +39,7 @@ class TestClosedSet:
             "minecraft_builder",
             "vision",
             "simulator",
+            "tts",
         }
 
     def test_unknown_profile_rejected_on_direct_construction(self):
@@ -59,7 +60,7 @@ class TestClosedSet:
         """封闭集合校验挂在 model.toml 的加载路径上"""
         assert _ROOT_SCHEMAS["model.toml"] is ModelRootConfig
 
-    def test_six_profiles_pass_load(self):
-        """六成员齐全 + 全部引用已知模型 → 加载通过"""
+    def test_all_profiles_pass_load(self):
+        """成员齐全 + 全部引用已知模型 → 加载通过（tts 缺省沿用决策模型引用）"""
         instance, _report = _validate_file("model.toml", _base_model_raw())
         assert set(instance.llm_profiles.model_dump().keys()) == set(LLMProfilesConfig.model_fields)

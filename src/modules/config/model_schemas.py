@@ -250,6 +250,7 @@ _PROFILE_PRESETS: dict[str, dict[str, Any]] = {
     },
     "vision": {"slow_threshold_ms": 10_000, "temperature": 0.3},
     "simulator": {"slow_threshold_ms": 15_000, "temperature": 0.9},
+    "tts": {"slow_threshold_ms": 30_000, "temperature": 0.3},
 }
 
 
@@ -301,6 +302,11 @@ class LLMProfilesConfig(BaseConfig):
         title="模拟 Profile",
         description="模拟 profile（虚拟用户消息生成，高温活跃）",
     )
+    tts: LLMProfileConfig = Field(
+        default_factory=lambda: _seed_profile("tts"),
+        title="语音合成 Profile",
+        description="语音合成 profile（omni_tts 引擎用，须指向带语音输出模态的模型）",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -318,6 +324,29 @@ class LLMProfilesConfig(BaseConfig):
             "minecraft_builder": {
                 **_PROFILE_PRESETS["minecraft_builder"],
                 "model_list": list(minecraft["model_list"]),
+            },
+        }
+
+    @model_validator(mode="before")
+    @classmethod
+    def seed_tts_models(cls, data: Any) -> Any:
+        """已有安装新增语音合成用途时沿用决策模型引用，避免引用不存在的 default 模型。
+
+        tts 档位须指向带语音输出模态的模型才能真正可用；此处只保证既有
+        配置在封闭集扩员后照常加载，启用 omni_tts 引擎前须显式改配。
+        """
+        if not isinstance(data, dict) or "tts" in data:
+            return data
+        planner = data.get("planner", {})
+        if isinstance(planner, LLMProfileConfig):
+            planner = planner.model_dump()
+        if not isinstance(planner, dict) or not isinstance(planner.get("model_list"), list):
+            return data
+        return {
+            **data,
+            "tts": {
+                **_PROFILE_PRESETS["tts"],
+                "model_list": list(planner["model_list"]),
             },
         }
 
