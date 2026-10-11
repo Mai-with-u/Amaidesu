@@ -39,7 +39,9 @@ async def manager(store: SQLiteDatabase) -> AsyncGenerator[RequestHistoryManager
     yield m
 
 
-def _record(request_id: str, *, ts_ms: int, model: str = "glm-x", success: bool = True, tokens: int = 10) -> RequestRecord:
+def _record(
+    request_id: str, *, ts_ms: int, model: str = "glm-x", success: bool = True, tokens: int = 10
+) -> RequestRecord:
     return RequestRecord(
         request_id=request_id,
         timestamp=ts_ms,
@@ -102,7 +104,10 @@ async def test_get_history_from_store_pagination(store: SQLiteDatabase) -> None:
     assert first["usage"]["total_tokens"] == 15
     # 未上报的思考 token 经 schema 落 0；reasoning_tokens 字段随新 schema 一定存在
     assert "reasoning_tokens" in first["usage"]
-    assert first["request_params"] == {"messages": [{"role": "user", "content": "hi"}]}
+    # v14 起正文出库：列表路径 request_params 不再还原（详情接口按 request_id
+    # 回查诊断文件），统计列与 preview_text 摘要正常
+    assert first["request_params"] == {}
+    assert first["preview_text"] == "hi"
 
 
 @pytest.mark.asyncio
@@ -134,7 +139,11 @@ async def test_get_request_by_id_from_store(store: SQLiteDatabase) -> None:
 
 @pytest.mark.asyncio
 async def test_record_request_persists_v12_columns(store: SQLiteDatabase) -> None:
-    """v12 三列（reasoning_tokens / usage_raw_json / profile_name）落库与还原完整。"""
+    """v12 三列（reasoning_tokens / usage_raw_json / profile_name）统计侧落库与还原。
+
+    v14 起正文大字段出库（usage_raw_json 落库一律 NULL，正文在诊断文件），
+    统计列与 profile_name 落库语义不变。
+    """
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
     record = RequestRecord(
         request_id="req-v12",
@@ -162,24 +171,61 @@ async def test_record_request_persists_v12_columns(store: SQLiteDatabase) -> Non
     manager.record_request_from_dict(record_dict)
     await _wait_for_count(store, 1)
 
-    rows = await store.execute(
-        "SELECT profile_name, reasoning_tokens, usage_raw_json FROM llm_requests"
-    )
+    rows = await store.execute("SELECT profile_name, reasoning_tokens, usage_raw_json FROM llm_requests")
     assert len(rows) == 1
     row = rows[0]
     assert row["profile_name"] == "planner"
     assert int(row["reasoning_tokens"]) == 3
-    import json
+    # 正文出库：usage_raw_json 不再落库（正文在 logs/llm_requests/ 诊断文件）
+    assert row["usage_raw_json"] is None
 
-    raw = json.loads(row["usage_raw_json"]) if row["usage_raw_json"] else {}
-    assert raw["completion_tokens_details"]["reasoning_tokens"] == 3
-
-    # 还原：profile_name / reasoning_tokens / usage_raw_json 都透传
+    # 还原：profile_name / reasoning_tokens 统计侧透传
     fetched = await manager.get_request_by_id("req-v12")
     assert fetched is not None
     assert fetched["profile_name"] == "planner"
     assert fetched["usage"]["reasoning_tokens"] == 3
-    assert fetched["usage_raw_json"] is not None
+
+
+@pytest.mark.asyncio
+async def test_record_request_bare_statistics_and_preview(store: SQLiteDatabase) -> None:
+    """v14 新契约：正文五字段落库一律 NULL，preview_text 摘要落库。"""
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
+    record_dict = {
+        "request_id": "req-v14",
+        "timestamp": 7_000,
+        "profile_name": "planner",
+        "model_name": "glm-x",
+        "request_params": {
+            "messages": [
+                {"role": "system", "content": "system prompt"},
+                {"role": "user", "content": "帮我看看这局局势如何，下一步应该怎么走才稳妥"},
+            ]
+        },
+        "response_content": "ok",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+        "success": True,
+        "latency_ms": 50,
+    }
+    manager.record_request_from_dict(record_dict)
+    await _wait_for_count(store, 1)
+
+    rows = await store.execute(
+        "SELECT request_params, reasoning_content, tool_calls, usage_raw_json, breakdown_json, preview_text"
+        " FROM llm_requests WHERE request_id = 'req-v14'"
+    )
+    row = rows[0]
+    assert row["request_params"] is None
+    assert row["reasoning_content"] is None
+    assert row["tool_calls"] is None
+    assert row["usage_raw_json"] is None
+    assert row["breakdown_json"] is None
+    # 预览摘要取最后一条有正文的消息，截 50 字符
+    assert row["preview_text"].startswith("帮我看看这局局势")
+    assert len(row["preview_text"]) <= 50
+
+    # 列表路径透出 preview_text
+    history = await manager.get_history()
+    assert history["records"][0]["preview_text"] == row["preview_text"]
 
 
 @pytest.mark.asyncio

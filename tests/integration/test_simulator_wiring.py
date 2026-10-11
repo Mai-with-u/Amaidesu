@@ -101,11 +101,11 @@ class TestSimulatorWiring:
             dev_webui=False,
             log_streamer_persist=False,
         )
-        # 组合根契约（create_app_components 返回元组，共 13 项）：
+        # 组合根契约（create_app_components 返回元组，共 14 项）：
         # 第 7 项 (index=6) 是 simulator_service；第 10 项 (index=9) 是 session_manager；
-        # 末尾三项 (index=10/11/12) 是工具系统重设计后追加的
-        # tool_registry / health_monitor / task_tracker
-        assert len(result) == 13, f"组合根元组应返回 13 项，实际 {len(result)}"
+        # index=10/11/12 是工具系统重设计后追加的
+        # tool_registry / health_monitor / task_tracker；末项是 TTS 合成诊断记录器
+        assert len(result) == 14, f"组合根元组应返回 14 项，实际 {len(result)}"
         simulator_service = result[6]
         assert simulator_service is None, "enabled=false 时 simulator_service 应为 None（零装配）"
         session_manager = result[9]

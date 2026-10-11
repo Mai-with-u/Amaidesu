@@ -111,8 +111,11 @@ class _RecordingEventBus:
 def _make_manager_with_fake_client(
     store: SQLiteDatabase | None,
     event_bus: Any | None = None,
+    diagnostics_writer: Any | None = None,
 ) -> LLMManager:
-    manager = LLMManager(llm_repo=store.llm if store is not None else None, event_bus=event_bus)
+    manager = LLMManager(
+        llm_repo=store.llm if store is not None else None, event_bus=event_bus, diagnostics_writer=diagnostics_writer
+    )
     # 直接注入客户端与配置，绕过 setup() 的真实 provider 装配
     fake_client = _FakeUsageClient()
     manager._provider_clients["zhipu"] = fake_client
@@ -174,16 +177,31 @@ async def test_persist_failure_degrades_without_breaking_call(store: SQLiteDatab
 
 
 @pytest.mark.asyncio
-async def test_successful_call_persists_breakdown_and_emits_event(store: SQLiteDatabase) -> None:
-    """成功调用：breakdown_json 随请求明细落库 + llm.context.used 事件各一条。"""
+async def test_successful_call_persists_breakdown_and_emits_event(store: SQLiteDatabase, tmp_path: Path) -> None:
+    """成功调用：breakdown 出库到诊断文件 + 每模型最新快照 + llm.context.used 事件。
+
+    v14 起 breakdown 不再落库（breakdown_json 列 NULL，存量旧行保留），
+    正文与分段占用走 ``logs/llm_requests/`` 小时流与 latest.json 快照。
+    """
+    from src.modules.diagnostics.readers import read_latest_breakdowns
+    from src.modules.diagnostics.writer import DiagnosticsWriter
+
     bus = _RecordingEventBus()
-    manager = _make_manager_with_fake_client(store, event_bus=bus)
+    writer = DiagnosticsWriter(base_dir=tmp_path, retention_days=0)
+    manager = _make_manager_with_fake_client(store, event_bus=bus, diagnostics_writer=writer)
     result = await manager.generate("你好", profile="planner")
     assert result.success
+    writer.stop()
 
     rows = await store.execute("SELECT breakdown_json FROM llm_requests")
     assert len(rows) == 1
-    breakdown = json.loads(rows[0]["breakdown_json"])
+    assert rows[0]["breakdown_json"] is None  # v14 起不再落库
+
+    streams = list((tmp_path / "llm_requests").rglob("*.jsonl"))
+    assert len(streams) == 1
+    record = json.loads(streams[0].read_text(encoding="utf-8").strip())
+    assert record["request_id"] == result.request_id
+    breakdown = record["breakdown"]
     assert breakdown["request_id"] == result.request_id
     assert breakdown["api_prompt_tokens"] == 10
     assert breakdown["calibrated"] is True
@@ -194,6 +212,10 @@ async def test_successful_call_persists_breakdown_and_emits_event(store: SQLiteD
         "skills",
         "system",
     }
+    assert isinstance(record["timestamp_ms"], int)
+
+    models = read_latest_breakdowns(base_dir=tmp_path)
+    assert models["glm-4.7"]["request_id"] == result.request_id
 
     assert len(bus.emitted) == 1
     event_name, payload, source = bus.emitted[0]
@@ -213,13 +235,18 @@ async def test_successful_call_persists_breakdown_and_emits_event(store: SQLiteD
 
 
 @pytest.mark.asyncio
-async def test_call_without_event_bus_does_not_emit(store: SQLiteDatabase) -> None:
+async def test_call_without_event_bus_does_not_emit(store: SQLiteDatabase, tmp_path: Path) -> None:
     """未注入事件总线：事件通道静默跳过，落库与调用链不受影响。"""
-    manager = _make_manager_with_fake_client(store, event_bus=None)
+    from src.modules.diagnostics.writer import DiagnosticsWriter
+
+    writer = DiagnosticsWriter(base_dir=tmp_path, retention_days=0)
+    manager = _make_manager_with_fake_client(store, event_bus=None, diagnostics_writer=writer)
     result = await manager.generate("你好", profile="planner")
     assert result.success
-    rows = await store.execute("SELECT breakdown_json FROM llm_requests")
-    assert json.loads(rows[0]["breakdown_json"])["api_prompt_tokens"] == 10
+    writer.stop()
+    streams = list((tmp_path / "llm_requests").rglob("*.jsonl"))
+    assert len(streams) == 1
+    assert json.loads(streams[0].read_text(encoding="utf-8").strip())["breakdown"]["api_prompt_tokens"] == 10
 
 
 @pytest.mark.asyncio

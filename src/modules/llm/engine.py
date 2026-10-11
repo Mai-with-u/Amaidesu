@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
+from src.modules.diagnostics.writer import DiagnosticsWriter
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.llm import LLMContextUsedPayload
@@ -46,6 +47,7 @@ from src.modules.llm.context_meter import ContextBreakdown, estimate_breakdown, 
 from src.modules.llm.errors import FatalError, LLMError, LLMInterruptedError, LLMTimeoutError, RetryableError
 from src.modules.llm.interrupt import guarded_call
 from src.modules.llm.observation import calculate_cost, record_usage
+from src.modules.llm.request_history_manager import build_prompt_preview
 from src.modules.llm.payload import (
     ContextPart,
     GenerateRequest,
@@ -364,6 +366,7 @@ class LLMManager:
         llm_repo: Optional[LLMRepo] = None,
         event_bus: Optional[EventBus] = None,
         live_session_resolver: Optional[Callable[[], Optional[int]]] = None,
+        diagnostics_writer: Optional[DiagnosticsWriter] = None,
     ) -> None:
         self.logger = get_logger("LLMManager")
         # provider_name -> provider 配置 + 客户端实例（共享连接）
@@ -392,6 +395,9 @@ class LLMManager:
         # 注入后每次落库解析当前直播场次主键写入 llm_usage.live_session_id；
         # None（未注入或无进行中场次）落 NULL = 场间消耗。解析失败只告警
         self._live_session_resolver = live_session_resolver
+        # 注入后每次调用（成功/失败）把请求正文出库到诊断文件（logs/llm_requests/
+        # 按小时流）；None 时不写文件。fire-and-forget 旁路，失败不阻断调用链
+        self._diagnostics_writer = diagnostics_writer
         # 随机策略 RNG（lazy 创建，按 seed 决定是否固定）
         self._rng: Optional[random.Random] = None
 
@@ -885,6 +891,7 @@ class LLMManager:
             result=result,
             kwargs=kwargs,
             start_time=start_time,
+            breakdown=breakdown,
         )
         await self._emit_context_used(breakdown=breakdown, result=result)
 
@@ -1009,16 +1016,17 @@ class LLMManager:
                 _, provider_name = self._models[model_name]
             # 请求明细行与 _record_request_history 的 RequestRecord 同源同构
             # （request_params 构造共用）；先于历史链路落库，其 INSERT OR
-            # IGNORE 对同一 request_id 幂等
+            # IGNORE 对同一 request_id 幂等。正文大字段出库到诊断文件
+            # （_record_request_history 统一写），库行只存统计与预览摘要
             request_row = LLMRequestInsert(
                 request_id=request_id,
                 timestamp_ms=int(time.time() * 1000),
                 profile_name=profile_name,
                 model_name=result.model or model_name,
-                request_params_json=json.dumps(self._build_request_params(kwargs), ensure_ascii=False, default=str),
+                request_params_json=None,
                 response_content=result.content,
-                reasoning_content=result.reasoning_content,
-                tool_calls_json=json.dumps(result.tool_calls or [], ensure_ascii=False, default=str),
+                reasoning_content=None,
+                tool_calls_json=None,
                 prompt_tokens=int(usage.get("prompt_tokens", 0)),
                 completion_tokens=int(usage.get("completion_tokens", 0)),
                 total_tokens=int(usage.get("total_tokens", 0)),
@@ -1029,10 +1037,9 @@ class LLMManager:
                 success=result.success,
                 error=result.error,
                 latency_ms=duration_ms,
-                usage_raw_json=result.usage_raw_json,
-                breakdown_json=(
-                    json.dumps(breakdown.model_dump(), ensure_ascii=False) if breakdown is not None else None
-                ),
+                usage_raw_json=None,
+                breakdown_json=None,
+                preview_text=build_prompt_preview(self._build_request_params(kwargs)),
             )
             # 落库统一走 observation.record_usage（两表唯一写入点）；携带明细
             # 载荷即两账同事务，缓存列与成本入参的处理收敛在 observation 侧
@@ -1067,6 +1074,7 @@ class LLMManager:
         result: LLMResponse,
         kwargs: Dict[str, Any],
         start_time: float,
+        breakdown: Optional[ContextBreakdown] = None,
     ) -> None:
         """记录请求历史（成功 / 失败路径均调用）
 
@@ -1074,6 +1082,9 @@ class LLMManager:
         / minecraft_builder / vision / simulator）；与 ``LLMProviderConfig.client_type``
         （客户端实现标识）概念不同——两者曾共用 ``client_type`` 字段名导致历史值域
         混杂，现已将落库列改名为 ``profile_name``。
+
+        同时把请求正文出库到诊断文件（成功/失败都写——失败请求的上下文正是
+        排障的第一手材料）；fire-and-forget 旁路，任何失败只告警。
         """
         try:
             # 必须函数体内 import：测试用 patch 拦截该路径，顶部 import 会使 patch 失效
@@ -1087,6 +1098,15 @@ class LLMManager:
             model_name = result.model or "unknown"
 
             request_params = self._build_request_params(kwargs)
+
+            self._write_request_payload(
+                request_id=request_id,
+                profile_name=profile_name,
+                model_name=model_name,
+                request_params=request_params,
+                result=result,
+                breakdown=breakdown,
+            )
 
             usage = None
             if result.usage:
@@ -1128,6 +1148,61 @@ class LLMManager:
             history_manager.record_request(record)
         except Exception as e:  # noqa: BLE001
             self.logger.warning(f"记录请求历史失败: {e}")
+
+    def _write_request_payload(
+        self,
+        *,
+        request_id: str,
+        profile_name: str,
+        model_name: str,
+        request_params: Dict[str, Any],
+        result: LLMResponse,
+        breakdown: Optional[ContextBreakdown] = None,
+    ) -> None:
+        """请求正文出库：单请求一条诊断记录进 ``logs/llm_requests/`` 小时流。
+
+        与库统计行经 ``request_id`` 关联（读侧按库行 ``timestamp_ms`` 定位
+        小时文件回查）。fire-and-forget：writer 只入队即返回；未注入或失败
+        只告警，不阻断调用链。成功路径同时覆写每模型最新上下文水位快照。
+        """
+        if self._diagnostics_writer is None:
+            return
+        timestamp_ms = int(time.time() * 1000)
+        payload: Dict[str, Any] = {
+            "request_id": request_id,
+            "timestamp_ms": timestamp_ms,
+            "profile_name": profile_name,
+            "model_name": model_name,
+            "success": result.success,
+            "request_params": request_params,
+            "response_content": result.content,
+            "reasoning_content": result.reasoning_content,
+            "tool_calls": result.tool_calls or [],
+            "usage_raw_json": result.usage_raw_json,
+            "breakdown": breakdown.model_dump() if breakdown is not None else None,
+        }
+        try:
+            self._diagnostics_writer.append("llm_requests", payload)
+            if breakdown is not None:
+                self._update_context_breakdown_snapshot(breakdown)
+        except Exception as exc:  # noqa: BLE001 出库旁路，失败不阻断调用链
+            self.logger.warning(f"请求正文出库失败: {exc}")
+
+    def _update_context_breakdown_snapshot(self, breakdown: ContextBreakdown) -> None:
+        """覆写每模型最新上下文水位快照（``logs/llm_context/latest.json``）。"""
+        if self._diagnostics_writer is None:
+            return
+        try:
+            snapshot = self._diagnostics_writer.read_snapshot("llm_context", "latest.json")
+            models = snapshot.get("models") if isinstance(snapshot, dict) else None
+            merged = dict(models) if isinstance(models, dict) else {}
+            entry = breakdown.model_dump()
+            # timestamp_ms 供快照消费方（水位悬停接口）组响应行；breakdown 本体无时刻字段
+            entry["timestamp_ms"] = int(time.time() * 1000)
+            merged[breakdown.model_name or "unknown"] = entry
+            self._diagnostics_writer.write_snapshot("llm_context", "latest.json", {"models": merged})
+        except Exception as exc:  # noqa: BLE001 快照旁路，失败不阻断调用链
+            self.logger.warning(f"上下文水位快照写入失败: {exc}")
 
     # === 清理 ===
 
