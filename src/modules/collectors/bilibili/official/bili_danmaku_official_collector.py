@@ -326,6 +326,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 platform=_PLATFORM,
                 user=RoomMessageUser(id=user_id, name=user_name),
                 content=bili_msg.msg,
+                message_id=bili_msg.msg_id,
                 timestamp_ms=timestamp_ms,
             )
 
