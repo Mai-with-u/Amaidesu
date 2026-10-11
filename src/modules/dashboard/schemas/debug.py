@@ -73,17 +73,30 @@ class SubtitleStatusResponse(BaseModel):
 
 
 class TtsTestRequest(BaseModel):
-    """TTS 试说请求：文本经真实引擎合成并从音频汇播放"""
+    """TTS 调试请求。
+
+    双模式：``play_on_device=True`` 试说（合成 + 声卡播放 + utterance
+    事件 + 字幕联动，忽略覆盖参数）；``False`` 生成试听音频（配置参数 +
+    ``overrides`` 覆盖合成，返回 wav 数据，不占声卡）。
+    """
 
     text: str
+    play_on_device: bool = True
+    temperature: Optional[float] = None
+    speed_factor: Optional[float] = None
+    sample_steps: Optional[int] = None
+    top_k: Optional[int] = None
+    top_p: Optional[float] = None
 
 
 class TtsTestResponse(BaseModel):
-    """TTS 试说响应（同步长请求；合成失败时引擎已发 tts.utterance.failed）"""
+    """TTS 调试响应（同步长请求；合成失败时引擎已发 tts.utterance.failed）"""
 
     success: bool
     utterance_id: Optional[str] = None
     error: Optional[str] = None
+    # play_on_device=False 时返回的完整 wav 音频（base64）
+    audio_base64: Optional[str] = None
 
 
 class TtsStatusResponse(BaseModel):

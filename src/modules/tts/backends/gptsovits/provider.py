@@ -372,6 +372,40 @@ class GPTSoVITSProvider:
             self.logger.exception(f"处理音频流失败: {e}")
             raise
 
+    async def debug_synthesize(self, text: str, overrides: Optional[Dict[str, Any]] = None) -> bytes:
+        """调试合成：按配置 + 覆盖参数合成完整音频并返回 wav 字节。
+
+        与 ``handle_speech`` 的差异：不写声卡、不发 utterance 事件，供调
+        试面板做参数对比试听与下载。覆盖键与合成参数同名（temperature /
+        speed_factor / sample_steps / top_k / top_p），None 值不覆盖。
+        自治 ensure_setup 与 ``tts_lock`` 串行化内聚于此（与 handle_speech
+        同语义），调用方无需预调 setup——首次直调（未试说过）也能工作。
+        """
+        if not self._has_started:
+            await self.setup()
+        clean = normalize_tts_text(text)
+        if not clean.strip():
+            raise ValueError("文本规范化后为空，无可合成内容")
+
+        params: Dict[str, Any] = {
+            "text": clean,
+            "text_lang": self.text_language,
+            "prompt_lang": self.prompt_language,
+            "temperature": self.temperature,
+            "speed_factor": self.speed_factor,
+            "sample_steps": self.sample_steps,
+            "top_k": self.top_k,
+            "top_p": self.top_p,
+            # 调试合成取完整 wav：固定非流式，忽略外部 streaming_mode
+            "streaming_mode": 0,
+            "media_type": self.media_type,
+        }
+        for key, value in (overrides or {}).items():
+            if value is not None and key in params:
+                params[key] = value
+        async with self.tts_lock:
+            return await asyncio.to_thread(self.tts_client.tts, **params)  # type: ignore[union-attr]
+
     def get_stats(self) -> Dict[str, Any]:
         stats = build_stats_dict(
             name=self.__class__.__name__,
@@ -381,6 +415,16 @@ class GPTSoVITSProvider:
         )
         # 对接的 GPT-SoVITS API 后端（调试页状态 chip 展示用）
         stats["backend"] = "api_v2"
+        # 调试页参数表单的默认值与重置基准：引擎当前生效的合成配置
+        stats["defaults"] = {
+            "temperature": self.temperature,
+            "speed_factor": self.speed_factor,
+            "sample_steps": self.sample_steps,
+            "top_k": self.top_k,
+            "top_p": self.top_p,
+        }
+        # 参考音频转写：调试页文本框的默认值（试说参考音频原句）
+        stats["prompt_text"] = self.prompt_text
         return stats
 
 

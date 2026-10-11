@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -62,16 +63,34 @@ class FakeSubtitleService:
 
 
 class FakeTtsEngine:
-    """最小 TTS 引擎替身：记录 handle_speech，get_stats 返回固定统计。"""
+    """最小 TTS 引擎替身：记录 handle_speech / debug_synthesize，get_stats 固定统计。"""
 
-    def __init__(self, *, speech_exception: Optional[Exception] = None) -> None:
+    def __init__(
+        self,
+        *,
+        speech_exception: Optional[Exception] = None,
+        synth_exception: Optional[Exception] = None,
+        synth_audio: bytes = b"RIFF-fake-audio",
+    ) -> None:
         self.speech_calls: List[Dict[str, Any]] = []
+        self.synth_calls: List[Dict[str, Any]] = []
         self._speech_exception = speech_exception
+        self._synth_exception = synth_exception
+        self._synth_audio = synth_audio
+        import asyncio
+
+        self.tts_lock = asyncio.Lock()
 
     async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
         self.speech_calls.append({"text": text, "utterance_id": utterance_id})
         if self._speech_exception is not None:
             raise self._speech_exception
+
+    async def debug_synthesize(self, text: str, overrides: Optional[Dict[str, Any]] = None) -> bytes:
+        self.synth_calls.append({"text": text, "overrides": overrides or {}})
+        if self._synth_exception is not None:
+            raise self._synth_exception
+        return self._synth_audio
 
     def get_stats(self) -> Dict[str, Any]:
         return {"name": "FakeTTS", "is_connected": True, "render_count": 1, "error_count": 0}
@@ -266,6 +285,87 @@ def test_tts_test_synthesis_failure_returns_success_false(config_dir: Path) -> N
     assert body["success"] is False
     assert "TTS 服务不可达" in body["error"]
     assert body["utterance_id"] is not None
+
+
+def test_tts_test_audio_mode_returns_base64(config_dir: Path) -> None:
+    """play_on_device=False：走 debug_synthesize（overrides 透传），返回 base64 wav。"""
+    _write_config(config_dir)
+    engine = FakeTtsEngine()
+    client = _make_client(config_dir, tts_engine=engine)
+
+    resp = client.post(
+        "/api/v1/debug/tts/test",
+        json={
+            "text": "试听文本",
+            "play_on_device": False,
+            "temperature": 1.0,
+            "speed_factor": 1.0,
+            "sample_steps": 8,
+            "top_k": 20,
+            "top_p": 0.6,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert base64.b64decode(body["audio_base64"]) == b"RIFF-fake-audio"
+    assert engine.synth_calls == [
+        {
+            "text": "试听文本",
+            "overrides": {
+                "temperature": 1.0,
+                "speed_factor": 1.0,
+                "sample_steps": 8,
+                "top_k": 20,
+                "top_p": 0.6,
+            },
+        }
+    ]
+
+
+def test_tts_test_audio_mode_none_overrides_filtered(config_dir: Path) -> None:
+    """未填的覆盖参数（None）不透传给引擎（用引擎配置值）。"""
+    _write_config(config_dir)
+    engine = FakeTtsEngine()
+    client = _make_client(config_dir, tts_engine=engine)
+
+    resp = client.post("/api/v1/debug/tts/test", json={"text": "试听", "play_on_device": False})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert engine.synth_calls[0]["overrides"] == {}
+
+
+def test_tts_test_audio_mode_engine_without_synthesize(config_dir: Path) -> None:
+    """引擎无 debug_synthesize（非 GSV 后端）→ success=false 携带说明。"""
+    _write_config(config_dir)
+
+    class MinimalEngine:
+        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+            pass
+
+        def get_stats(self) -> Dict[str, Any]:
+            return {"name": "Minimal"}
+
+    client = _make_client(config_dir, tts_engine=MinimalEngine())
+    resp = client.post("/api/v1/debug/tts/test", json={"text": "试听", "play_on_device": False})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert "不支持音频合成" in body["error"]
+
+
+def test_tts_test_audio_mode_synthesis_failure_returns_error(config_dir: Path) -> None:
+    """音频模式合成失败 → success=false + error。"""
+    _write_config(config_dir)
+    engine = FakeTtsEngine(synth_exception=RuntimeError("GSV 服务不可达"))
+    client = _make_client(config_dir, tts_engine=engine)
+
+    resp = client.post("/api/v1/debug/tts/test", json={"text": "试听", "play_on_device": False})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert "GSV 服务不可达" in body["error"]
 
 
 def test_tts_status_passthrough_stats(config_dir: Path) -> None:
