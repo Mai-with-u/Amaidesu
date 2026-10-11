@@ -28,7 +28,8 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
                 "llm_providers.0.timeout",
                 "llm_providers.0.max_tokens",
             ),
-            "2.0.40",
+            # model.toml 钩子链最长（cache 开关键退役 v2.0.43）
+            "2.0.43",
         ),
         (
             "agents.toml",

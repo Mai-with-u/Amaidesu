@@ -51,10 +51,12 @@ def calculate_cost(
     """计算 token 使用费用。
 
     缓存命中按 ``cache_price_in`` 单独计费，未命中按 ``price_in`` 计费；
-    仅当价格表条目声明 ``cache`` 类型且 ``cache_price_in > 0`` 时启用分段
-    口径——这是修复"缓存命中 token 按全价记账"的既有缺陷。OpenAI 风格
-    单字段上报由 Client 层反推 miss 后传 ``cache_miss_tokens``，DeepSeek
-    双字段直取两个值；调用方负责从 usage dict 取值传入。
+    仅当价格表条目声明分段口径（``cache != "none"``）且 ``cache_price_in > 0``
+    时启用——显式双条件防呆，缺一即整单退回全价，不会静默半生效。
+    分段模式下端点未上报缓存字段时未命中按 prompt − hit 反推兜底
+    （退化为全价，不会按 0 记账）；OpenAI 风格单字段上报由 Client 层
+    反推 miss 后传 ``cache_miss_tokens``，DeepSeek 双字段直取两个值；
+    调用方负责从 usage dict 取值传入。
 
     Args:
         model_prices: 价格表（``{model_identifier: {price_in, price_out, ...}}``）
@@ -83,10 +85,14 @@ def calculate_cost(
     price_in = price_config.get("price_in", 0.0)
     price_out = price_config.get("price_out", 0.0)
     cache_price_in = float(price_config.get("cache_price_in", 0.0) or 0.0)
-    cache_type = price_config.get("cache", "") or ""
-    use_segmented = bool(cache_type) and cache_price_in > 0
-    if use_segmented:
-        cost_in = (cache_hit_tokens / 1000000.0) * cache_price_in + (cache_miss_tokens / 1000000.0) * price_in
+    cache_mode = str(price_config.get("cache", "none") or "none")
+    if cache_mode != "none" and cache_price_in > 0:
+        # 分段口径：命中走缓存价、未命中走全价；端点未上报缓存字段时未命中
+        # 按 prompt − hit 反推兜底（上报数据不收缩，只向上补齐）
+        miss_tokens = cache_miss_tokens
+        if cache_hit_tokens + miss_tokens < prompt_tokens:
+            miss_tokens = prompt_tokens - cache_hit_tokens
+        cost_in = (cache_hit_tokens / 1000000.0) * cache_price_in + (miss_tokens / 1000000.0) * price_in
     else:
         cost_in = (prompt_tokens / 1000000.0) * price_in
     cost_out = (completion_tokens / 1000000.0) * price_out

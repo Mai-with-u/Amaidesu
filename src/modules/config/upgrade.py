@@ -333,6 +333,38 @@ def _drop_minecraft_builder_section(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "drop_minecraft_builder_section", "2.0.40", _drop_minecraft_builder_section)
 
 
+def _normalize_llm_model_cache_mode(data: Dict[str, Any]) -> List[str]:
+    """model.toml v2.0.43：``[[llm_models]].cache`` 开关串归一为显式枚举。
+
+    旧形态是空串/任意非空串当布尔开关用（仅 truthy 判断，无类型分支消费）；
+    新值域封闭为 none（全价）/ hit_discount（命中按缓存价分段）。空串按
+    cache_price_in 是否已填分流归一——填了价说明启用分段的意图明确，归
+    hit_discount，否则归 none；非空旧值（"anthropic" 等）统一归 hit_discount。
+    对已归一数据零变更（幂等）。
+    """
+    models = data.get("llm_models")
+    if not isinstance(models, list):
+        return []
+    changed: List[str] = []
+    for index, model in enumerate(models):
+        if not isinstance(model, dict) or "cache" not in model:
+            continue
+        old = model["cache"]
+        if old in ("none", "hit_discount"):
+            continue
+        if old == "" or old is None:
+            new = "hit_discount" if float(model.get("cache_price_in", 0.0) or 0.0) > 0 else "none"
+        else:
+            new = "hit_discount"
+        model["cache"] = new
+        changed.append(f"llm_models[{index}].cache: {old!r} -> {new}")
+    return changed
+
+
+# 生产钩子登记：model.toml v2.0.43（llm_models[].cache 开关串归一为显式枚举）
+register_file_hook("model.toml", "normalize_llm_model_cache_mode", "2.0.43", _normalize_llm_model_cache_mode)
+
+
 def _drop_memory_injection_limit(data: Dict[str, Any]) -> List[str]:
     """storage.toml v2.0.40：删 ``[memory].profile_injection_max`` 并清理空段。
 

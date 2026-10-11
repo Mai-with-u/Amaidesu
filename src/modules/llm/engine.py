@@ -469,7 +469,7 @@ class LLMManager:
                 "price_in": mcfg.get("price_in", 0.0),
                 "price_out": mcfg.get("price_out", 0.0),
                 "cache_price_in": mcfg.get("cache_price_in", 0.0),
-                "cache": mcfg.get("cache", ""),
+                "cache": mcfg.get("cache", "none"),
             }
             for mname, (mcfg, _prov) in self._models.items()
             if mcfg.get("price_in", 0.0) > 0 or mcfg.get("price_out", 0.0) > 0

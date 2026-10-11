@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, List, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -149,10 +149,10 @@ class LLMModelConfig(BaseConfig):
         model_identifier: 实际 API 模型标识（如 "gpt-4o-mini"）
         api_provider: 关联的 provider 名（对应 llm_providers[].name）
         visual: 是否支持视觉（影响 chat_vision 是否装配）
-        price_in: 输入 token 单价（per 1k，缺失时 cost 计为 0）
-        price_out: 输出 token 单价（per 1k）
-        cache: 缓存类型（非空 = 按缓存价计费，命中 token 走 cache_price_in；空 = 无缓存）
-        cache_price_in: 缓存输入 token 单价（per 1k；cache 为空时忽略）
+        price_in: 输入 token 单价（每百万 token，缺失时 cost 计为 0）
+        price_out: 输出 token 单价（每百万 token）
+        cache: 缓存计费方式（none=全价；hit_discount=命中按 cache_price_in 分段）
+        cache_price_in: 缓存命中输入 token 单价（每百万 token；cache 为 none 时必须为 0）
         context_window: 上下文窗口 token 总量（用于 Dashboard 水位展示；0 = 不展示）
     """
 
@@ -170,13 +170,18 @@ class LLMModelConfig(BaseConfig):
     visual: bool = Field(default=False, title="是否支持视觉", description="是否支持视觉（影响 chat_vision 是否装配）")
     price_in: float = Field(default=0.0, ge=0.0, title="输入单价", description="输入 token 单价（每百万 token）")
     price_out: float = Field(default=0.0, ge=0.0, title="输出单价", description="输出 token 单价（每百万 token）")
-    cache: str = Field(
-        default="",
-        title="缓存类型",
-        description="缓存类型（非空 = 按缓存价计费，命中 token 走 cache_price_in；空 = 无缓存）",
+    cache: Literal["none", "hit_discount"] = Field(
+        default="none",
+        title="缓存计费",
+        description=(
+            "缓存计费方式：none = 缓存命中也按输入价（price_in）全价记账；"
+            "hit_discount = 分段记账（命中 token 按 cache_price_in，未命中按 price_in）。"
+            "用 DeepSeek 等缓存价差大的模型选 hit_discount 并填 cache_price_in"
+        ),
+        json_schema_extra={"x-ui-type": "select", "x-options": ["none", "hit_discount"]},
     )
     cache_price_in: float = Field(
-        default=0.0, ge=0.0, title="缓存输入单价", description="缓存输入 token 单价（每百万 token）"
+        default=0.0, ge=0.0, title="缓存输入单价", description="缓存命中输入 token 单价（每百万 token）"
     )
     context_window: int = Field(
         default=0,
@@ -184,6 +189,17 @@ class LLMModelConfig(BaseConfig):
         title="上下文窗口",
         description="上下文窗口 token 总量（用于 Dashboard 水位展示；0 = 不展示）",
     )
+
+    @model_validator(mode="after")
+    def _validate_cache_pricing(self) -> "LLMModelConfig":
+        """缓存计费自洽：声明 none 却填缓存价 = 配置矛盾（分段不会生效），启动拦下。"""
+        if self.cache == "none" and self.cache_price_in > 0:
+            raise ValueError(
+                f"模型 {self.name!r} 配置矛盾：cache='none' 时缓存分段计费不生效，"
+                f"但填了 cache_price_in={self.cache_price_in}；"
+                "改为 'hit_discount' 启用分段计费，或把 cache_price_in 置 0"
+            )
+        return self
 
     @field_validator("name", "api_provider", mode="before")
     @classmethod
