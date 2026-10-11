@@ -347,6 +347,42 @@ class GPTSoVITSProvider:
             )
             raise
 
+    def synthesize_bytes(self, text: str) -> bytes:
+        """按当前配置合成整段音频字节（不播放、不发事件）。
+
+        与 ``handle_speech`` 同源的合成路径：同一份文本规范化与参数组装，
+        供批量回放/巡检等离线场景复用；仅传输方式为整段返回（服务端合成
+        逻辑与流式完全一致）。
+
+        Args:
+            text: 待合成文本（内部先做规范化）。
+
+        Returns:
+            完整 WAV 字节；规范化后为空文本时返回空字节。
+        """
+        if not self._has_started or self.tts_client is None:
+            raise RuntimeError("引擎未初始化：请先调用 setup()")
+        final_text = normalize_tts_text(text)
+        if not final_text.strip():
+            return b""
+        return self.tts_client.tts(
+            text=final_text,
+            text_lang=self.text_language,
+            prompt_lang=self.prompt_language,
+            top_k=self.top_k,
+            top_p=self.top_p,
+            temperature=self.temperature,
+            speed_factor=self.speed_factor,
+            text_split_method=self.text_split_method,
+            batch_size=self.batch_size,
+            batch_threshold=self.batch_threshold,
+            repetition_penalty=self.repetition_penalty,
+            sample_steps=self.sample_steps,
+            super_sampling=self.super_sampling,
+            media_type=self.media_type,
+            streaming_mode=False,
+        )
+
     async def _process_audio_stream(self, audio_stream: Any) -> AsyncIterator[np.ndarray]:
         """处理音频流（同步/异步迭代器）"""
         # 函数体内导入：单元测试 patch wav_decoder.decode_wav_chunk 拦截解码，

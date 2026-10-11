@@ -421,6 +421,48 @@ class TestStartupWarmup:
 
 
 @pytest.mark.asyncio
+class TestSynthesizeBytes:
+    """synthesize_bytes：批量回放/巡检用的整段合成（不播放、不发事件）"""
+
+    async def test_synthesize_bytes_passes_provider_params(self, event_bus_async: EventBus):
+        """规范化后按 provider 配置全量传参，streaming 关闭、返回客户端字节"""
+        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
+        client_mock = MagicMock()
+        client_mock.tts.return_value = b"RIFF....wav"
+        await _prepare_started_provider(provider, tts_client_mock=client_mock)
+        client_mock.reset_mock()
+        client_mock.tts.return_value = b"RIFF....wav"
+
+        out = provider.synthesize_bytes("你好🎉世界")
+
+        assert out == b"RIFF....wav"
+        client_mock.tts.assert_called_once()
+        kwargs = client_mock.tts.call_args.kwargs
+        assert kwargs["text"] == "你好，世界"  # emoji 已映射为停顿
+        assert kwargs["streaming_mode"] is False
+        assert kwargs["temperature"] == 1.0
+        assert kwargs["repetition_penalty"] == 1.35
+        assert kwargs["sample_steps"] == 10  # Schema 默认值（非直播配置的 8）
+        assert kwargs["media_type"] == "wav"
+
+    async def test_synthesize_bytes_empty_after_normalize(self, event_bus_async: EventBus):
+        """纯空白（规范化后 strip 为空）：不调客户端，返回空字节"""
+        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
+        client_mock = MagicMock()
+        await _prepare_started_provider(provider, tts_client_mock=client_mock)
+        client_mock.reset_mock()
+
+        assert provider.synthesize_bytes("   ") == b""
+        client_mock.tts.assert_not_called()
+
+    def test_synthesize_bytes_before_setup_raises(self, event_bus: EventBus):
+        """未 setup：直接 RuntimeError 指引初始化"""
+        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus)
+        with pytest.raises(RuntimeError, match="setup"):
+            provider.synthesize_bytes("你好")
+
+
+@pytest.mark.asyncio
 class TestApiV2Migration:
     """api_v2 每请求必填参考音频；get_stats 标记后端类型"""
 
