@@ -11,10 +11,18 @@
 - Amaidesu 数据库存在（data/amaidesu.db，只读访问）
 
 用法：
-    uv run python scripts/tts_replay.py                 # 回放最新场次全部台词
+    uv run python scripts/tts_replay.py                 # 静默回放最新场次全部台词（约 30 分钟）
+    uv run python scripts/tts_replay.py --play          # 实时播放模式：扬声器出声，走完整生产播放链路
     uv run python scripts/tts_replay.py --session 21    # 指定场次
     uv run python scripts/tts_replay.py --limit 10      # 只回放前 10 条（快速验证）
     uv run python scripts/tts_replay.py --save-all      # 保存全部音频（默认只存异常句）
+
+两种模式：
+- 默认静默合成：只收字节，判读"内容类"异常（token 复读在音频字节里留下
+  拉长特征），最快
+- --play 实时播放：走 handle_speech 完整链路（流式收块→实时写声卡），
+  额外覆盖"播放类"异常（声卡欠载咔声等只存在于实时路径的问题），
+  扬声器会实时出声，耗时≈音频时长；**直播进行中勿用（会串播）**
 
 数据源：live_chat 表（sender_role='assistant' AND message_type='speak'），
 表结构权威定义见 src/modules/storage/schema.py。
@@ -83,11 +91,57 @@ def latest_session_id() -> int:
     return int(row[0])
 
 
+class _CollectingSink:
+    """AudioSink 协议实现：采集实时播放链路递入的音频块。
+
+    ``handle_speech`` 每句走一次 ``start → feed×N → stop``；``begin_capture``
+    / ``take_wav`` 由脚本在每句前后调用，把本次发言的全部 PCM 拼成
+    44B 头 + 裸 PCM 的 wav 字节（与 ``wav_duration`` 的解析形态一致）。
+    """
+
+    def __init__(self) -> None:
+        self._chunks: list[tuple["object", int]] = []
+
+    def begin_capture(self) -> None:
+        self._chunks = []
+
+    def take_wav(self) -> bytes | None:
+        if not self._chunks:
+            return None
+        sample_rate = self._chunks[0][1]
+        pcm = b"".join(bytes(chunk) for chunk, _sr in self._chunks)  # type: ignore[arg-type]
+        header = (
+            b"RIFF"
+            + struct.pack("<I", 36 + len(pcm))
+            + b"WAVEfmt "
+            + struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16)
+            + b"data"
+            + struct.pack("<I", len(pcm))
+        )
+        return header + pcm
+
+    # ---- AudioSink 协议（被 AudioDeviceManager 调用）----
+    def start(self, utterance_id: str = "") -> None:
+        self._chunks = []
+
+    def feed(self, chunk: "object", sample_rate: int) -> None:
+        self._chunks.append((chunk, sample_rate))
+
+    def stop(self) -> None:
+        pass
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="TTS 回放巡检：重放历史台词并自动判读合成异常")
     parser.add_argument("--session", type=int, default=None, help="live_sessions.id（默认取最新场次）")
     parser.add_argument("--limit", type=int, default=None, help="只回放前 N 条")
     parser.add_argument("--save-all", action="store_true", help="保存全部音频（默认只存异常句）")
+    parser.add_argument(
+        "--play",
+        action="store_true",
+        help="实时播放模式：走 handle_speech 完整生产链路（扬声器出声），"
+        "可复现仅存在于实时流式播放路径的问题（如声卡欠载咔声）",
+    )
     parser.add_argument("--out", type=Path, default=ROOT / "output" / "tts_replay", help="音频落盘目录")
     args = parser.parse_args()
 
@@ -99,15 +153,17 @@ async def main() -> None:
         raise SystemExit(f"场次 {session_id} 没有主播台词（live_chat 无 assistant/speak 记录）")
 
     tts_cfg = dict(dict(load_toml_with_comments(ROOT / "config" / "infra.toml")["tts"])["gptsovits"])
-    engine = GPTSoVITSProvider(config=tts_cfg)
+    sink = _CollectingSink() if args.play else None
+    engine = GPTSoVITSProvider(config=tts_cfg, audio_sink=sink)
     await engine.setup()
     await engine._warmup_task  # noqa: SLF001 — 巡检脚本等待预热完成再开始计量
 
+    mode_desc = "实时播放（走 handle_speech 完整生产链路，扬声器会出声）" if args.play else "静默合成（只收字节不播放）"
     est_sec = sum(len(normalize_tts_text(c)) for _, _, c in utterances) / 4.5
-    print(f"场次 {session_id} | 台词 {len(utterances)} 条 | 预计合成 {est_sec / 60:.0f} 分钟左右")
+    print(f"场次 {session_id} | 台词 {len(utterances)} 条 | 预计 {est_sec / 60:.0f} 分钟左右 | 模式: {mode_desc}")
     print(
         f"参数: temp={engine.temperature} rep={engine.repetition_penalty} steps={engine.sample_steps} "
-        f"streaming_mode={engine.streaming_mode}（回放走整段返回，合成路径一致）"
+        f"streaming_mode={engine.streaming_mode}"
     )
     print("-" * 72)
 
@@ -120,13 +176,26 @@ async def main() -> None:
         chars = len(normalize_tts_text(content))
         status, audio_sec, data = "ok", None, b""
         try:
-            data = engine.synthesize_bytes(content)
-            if len(data) < 1000:
-                status = "空音频"
+            if args.play:
+                # 完整生产播放链路：流式收块 → 实时写声卡；音频经分接采集供判读
+                replay_id = f"replay_{utt_id}"
+                sink.begin_capture()
+                await engine.handle_speech(content, utterance_id=replay_id)
+                data = sink.take_wav()
+                if data is None:
+                    status = "无音频输出"
+                else:
+                    audio_sec = wav_duration(data)
+                    if audio_sec is None or audio_sec <= 0:
+                        status = "WAV解析失败"
             else:
-                audio_sec = wav_duration(data)
-                if audio_sec is None:
-                    status = "WAV解析失败"
+                data = engine.synthesize_bytes(content)
+                if len(data) < 1000:
+                    status = "空音频"
+                else:
+                    audio_sec = wav_duration(data)
+                    if audio_sec is None:
+                        status = "WAV解析失败"
         except Exception as e:  # noqa: BLE001 — 逐条隔离，单条失败不中断回放
             status = f"失败: {type(e).__name__}"
 
