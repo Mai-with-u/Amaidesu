@@ -64,8 +64,12 @@ def test_observation_keeps_every_field() -> None:
 
 
 def test_single_large_field_and_non_mapping_results_remain_valid() -> None:
-    """大字段、字符串和数组仍是完整 JSON，尾部任务条件可以被解析。"""
-    for payload in ({"tasks": ["任务" * 10000 + "保留入口"]}, ["x" * 9000], "内容" * 9000):
+    """大字段、字符串和数组仍是完整 JSON，尾部任务条件可以被解析。
+
+    大字段用含空白的形态：纯 base64 字符集且无空白的超长串属二进制载荷，
+    对话视图里有专门的占位符契约（见下方 base64 用例）。
+    """
+    for payload in ({"tasks": ["任务" * 10000 + "保留入口"]}, ["x " * 5000], "内容" * 9000):
         assert json.loads(_render_observation(payload)) == payload
 
 
@@ -137,3 +141,60 @@ async def test_action_tool_with_empty_content_keeps_ok_only_shape() -> None:
 
     observed = await planner._invoke_registry_tool("some_action", {})
     assert json.loads(observed) == {"ok": True}
+
+
+async def test_base64_image_becomes_placeholder_in_observation() -> None:
+    """base64 截图载荷以占位符进观察，二进制本体不出现在对话消息里。
+
+    回归锚点：vision_look_at_screen 的 structured_content["image"] 是
+    WebUI 工具卡的截图展示契约（tool.result 事件原样携带），对话观察
+    曾把它整包渲染进消息，单笔请求图片 token 冲到数十万。
+    """
+    registry = MagicMock()
+    image = "A" * 2048  # 纯 base64 字符集、超 1KB、无空白
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="vision_look_at_screen",
+            success=True,
+            content="(no text extracted)",
+            structured_content={
+                "text": "",
+                "width": 1920,
+                "height": 1080,
+                "latency_ms": 36,
+                "image": image,
+            },
+        )
+    )
+    planner = _make_planner(registry)
+
+    observed = await planner._invoke_registry_tool("vision_look_at_screen", {"monitor_index": 0})
+    parsed = json.loads(observed)
+
+    assert image not in observed
+    assert parsed["image"] == "[图像 1 KB 已省略]"
+    assert parsed["ok"] is True
+    assert parsed["width"] == 1920
+    assert parsed["height"] == 1080
+
+
+async def test_long_prose_and_urls_pass_through_untouched() -> None:
+    """合法长文本不被占位符误伤：中文长文与带标点的 URL 原样进观察。"""
+    registry = MagicMock()
+    article = "这是一段很长的中文检索正文，讲 Minecraft 的红石机制。" * 200
+    url = "https://example.com/wiki/红石?lang=zh&q=redstone+repeater&section=3#比较器"
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="web_fetch_url",
+            success=True,
+            structured_content={"url": url, "content": article},
+        )
+    )
+    planner = _make_planner(registry)
+
+    observed = await planner._invoke_registry_tool("web_fetch_url", {"url": url})
+    parsed = json.loads(observed)
+
+    assert parsed["ok"] is True
+    assert parsed["url"] == url
+    assert parsed["content"] == article

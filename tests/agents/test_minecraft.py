@@ -1,6 +1,7 @@
 """MinecraftAgent 测试：工具契约 / ReAct 循环 / 事件 / 递话 / handoff / 装配"""
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1531,6 +1532,34 @@ async def test_own_tool_invoke_emits_tool_result_event() -> None:
             await agent.stop()
     finally:
         await bus.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_replaces_base64_payload_with_placeholder() -> None:
+    """registry 工具的观察走对话安全视图：base64 二进制载荷以占位符出现。
+
+    对话消息不携带二进制；完整载荷仍经 tool.result 事件进 WebUI（registry
+    侧契约，见 test_tool_registry.py 的 UI 通道用例）。
+    """
+    agent = MinecraftAgent(
+        _offline_config(),
+        llm_manager=MagicMock(),
+        event_bus=MagicMock(),
+        tool_registry=MagicMock(),
+    )
+    image = "A" * 2048  # 纯 base64 字符集、超 1KB、无空白
+    agent._tool_registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="vision_look_at_screen",
+            success=True,
+            structured_content={"text": "", "latency_ms": 12, "image": image},
+        )
+    )
+
+    observation = await agent._execute_tool("vision_look_at_screen", {"monitor_index": 0})
+
+    assert image not in json.dumps(observation, ensure_ascii=False)
+    assert observation["image"] == "[图像 1 KB 已省略]"
 
 
 # ---------------------------------------------------------------------------

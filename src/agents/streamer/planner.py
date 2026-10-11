@@ -48,6 +48,7 @@ from src.agents.streamer.topic_gate import check_topic, rejection_reason
 from src.modules.llm.history_compaction import HistoryCompactor
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
+from src.modules.tools.conversation import to_conversation_view
 from src.modules.tools.models import ToolInvocation
 
 from .room_state import RoomState
@@ -61,8 +62,13 @@ PLANNER_PROFILE: str = "planner"
 
 
 def _render_observation(data: Any) -> str:
-    """完整保留工具结果，让模型读取所有字段及其真实值。"""
-    return json.dumps(data, ensure_ascii=False, default=str)
+    """工具结果 → 对话观察文本。
+
+    字段与真实值全部保留（完整观察原则），但 base64 二进制载荷（截图等）
+    替换为占位符——二进制属 tool.result 事件的 UI 展示通道，整包进对话
+    会把单笔请求的图片 token 推到数十万量级。
+    """
+    return json.dumps(to_conversation_view(data), ensure_ascii=False, default=str)
 
 
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。

@@ -381,6 +381,41 @@ async def test_invoke_emits_tool_result_event_when_event_bus_attached() -> None:
     assert payload.result == {"content": "done"}
 
 
+async def test_tool_result_event_keeps_full_base64_image_for_ui() -> None:
+    """UI 通道契约：tool.result payload 原样携带 structured_content 的 base64 截图。
+
+    对话观察侧把二进制载荷替换为占位符（agents 侧测试覆盖）；WebUI 工具卡
+    靠本事件展示截图，事件 payload 必须完整。
+    """
+    from src.modules.events.event_bus import EventBus
+    from src.modules.events.payloads.tool_result import ToolResultPayload
+
+    bus = EventBus(enable_stats=False)
+    received: list[ToolResultPayload] = []
+
+    async def _on_result(event_name: str, payload: ToolResultPayload, source: str) -> None:
+        received.append(payload)
+
+    bus.on("tool.result.#", _on_result, ToolResultPayload)
+    registry = ToolRegistry(event_bus=bus)
+
+    image = "A" * 2048  # 形似截图载荷的纯 base64 串
+
+    async def _screen(inv: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(
+            tool_name=inv.tool_name,
+            success=True,
+            structured_content={"text": "", "latency_ms": 12, "image": image},
+        )
+
+    registry.register(ToolSpec(name="look_at_screen", description="d", kind="sync", provider="vision"), _screen)
+    await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", source="test"))
+    await asyncio.sleep(0.01)  # emit 为 fire-and-forget，让派发任务跑完
+
+    assert len(received) == 1
+    assert received[0].result["image"] == image
+
+
 async def test_invoke_emits_tool_result_with_arguments_echo(registry: ToolRegistry) -> None:
     """tool.result 事件携带调用方入参（arguments 透传），供 WebUI 对齐展示。"""
     from src.modules.events.event_bus import EventBus

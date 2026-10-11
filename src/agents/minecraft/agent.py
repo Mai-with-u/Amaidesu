@@ -57,6 +57,7 @@ from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
 from src.modules.llm.context_meter import SECTION_SKILLS
 from src.modules.skills import SkillEnvironment, SkillLibrary, render_catalog
+from src.modules.tools.conversation import to_conversation_view
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 
@@ -831,6 +832,8 @@ class MinecraftAgent(BaseAgent):
         """串行执行单个工具调用：统一经 ToolRegistry（观测/停用/熔断复用既有机制）。
 
         MaiCraft 工具的观察就是它原样的 JSON 回复；连接失败等拿不到回复时写明原因。
+        registry 工具的观察走对话安全视图：base64 二进制载荷（截图等）属
+        tool.result 事件的 UI 展示通道，在对话里以占位符出现。
         """
         if self._tool_registry is None:
             return {"ok": False, "error": "工具执行失败：tool_registry 未注入", "tool": name}
@@ -840,7 +843,7 @@ class MinecraftAgent(BaseAgent):
         if name.startswith(f"{PROVIDER}_"):
             return reply_of(result).raw
         if result.success:
-            return (
+            data: Dict[str, Any] = (
                 dict(result.structured_content)
                 if isinstance(result.structured_content, dict)
                 else {
@@ -848,6 +851,7 @@ class MinecraftAgent(BaseAgent):
                     "content": result.content,
                 }
             )
+            return to_conversation_view(data)
         return {"ok": False, "error": result.error_message or "工具执行失败", "tool": name}
 
     async def _call_maicraft(self, name: str, arguments: Dict[str, Any]) -> MaicraftReply:
