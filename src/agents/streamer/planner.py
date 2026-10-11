@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional, Union
 
 from pydantic import Field
 
@@ -48,7 +48,12 @@ from src.agents.streamer.topic_gate import check_topic, rejection_reason
 from src.modules.llm.history_compaction import HistoryCompactor
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.tools.conversation import to_conversation_view
+from src.modules.tools.conversation import (
+    build_tool_message,
+    extract_image_data_urls,
+    is_tool_message,
+    to_conversation_view,
+)
 from src.modules.tools.models import ToolInvocation
 
 from .room_state import RoomState
@@ -578,14 +583,18 @@ class Planner:
                         round_id=round_id,
                         source_dialogue=source_dialogue,
                         relay_without_input=relay_without_input,
+                        tool_call_id=str(call.get("id", "") or ""),
                     )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": str(call.get("id", "") or ""),
-                        "content": observation,
-                    }
-                )
+                if is_tool_message(observation):
+                    messages.append(observation)
+                else:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": str(call.get("id", "") or ""),
+                            "content": observation,
+                        }
+                    )
                 if replied:
                     return outcome
 
@@ -736,6 +745,21 @@ class Planner:
         history_messages = [canonical.turn_to_message(turn) for turn in canonical.trim_batch_echo(history, batch)]
         return self._compact_history(history_messages) + batch_messages
 
+    def _visual_caller(self) -> bool:
+        """本档位主模型能否看图（能力协商出口，ADR-037）。
+
+        引擎不可查（测试假件 / 未注入）或查询异常一律按非视觉——判错方向
+        是多一次 VLM 转述，而不是把图塞给看不懂的模型。
+        """
+        getter = getattr(self._llm_service, "is_profile_visual", None)
+        if not callable(getter):
+            return False
+        try:
+            return getter(PLANNER_PROFILE) is True
+        except Exception as e:
+            self.logger.warning(f"视觉能力查询失败，按非视觉处理: {e}", exc=True)
+            return False
+
     def _compact_history(self, history_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """按 profile 配置的历史 token 预算压缩对话历史。
 
@@ -779,7 +803,12 @@ class Planner:
                 if isinstance(result.structured_content, dict) and result.structured_content
                 else result.content
             )
-            text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False, default=str)
+            # 参考段与工具观察同走对话安全视图：参考工具返回截图等二进制载荷时以占位符进文本
+            text = (
+                body
+                if isinstance(body, str)
+                else json.dumps(to_conversation_view(body), ensure_ascii=False, default=str)
+            )
             # 现场速览来自 minecraft 查询工具，回执里常带观测引用等内部标识：进参考段前脱敏
             parts.append(f"{name}: {sanitize_internal_terms(text)}")
         return "\n".join(parts)
@@ -915,8 +944,14 @@ class Planner:
         round_id: str = "",
         source_dialogue: Optional[List[Dict[str, Any]]] = None,
         relay_without_input: bool = False,
-    ) -> str:
-        """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。"""
+        tool_call_id: str = "",
+    ) -> Union[str, Dict[str, Any]]:
+        """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。
+
+        视觉调用方（本档位主模型声明 visual）且工具结果带图时返回完整
+        tool 消息 dict——图以独立 image part 附在观察文本之后（ADR-037），
+        调用方经 :func:`is_tool_message` 识别后直接追加进消息流。
+        """
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
         if name == "framework_prompt" and relay_without_input:
@@ -1007,7 +1042,16 @@ class Planner:
                 self._recent_relays.append(_Relay(at_ms=now_ms(), agent=agent, content=own_relay))
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
-        return _render_observation(data)
+        rendered = _render_observation(data)
+        if self._visual_caller():
+            image_data_urls = extract_image_data_urls(result)
+            if image_data_urls:
+                return build_tool_message(
+                    rendered=rendered,
+                    image_data_urls=image_data_urls,
+                    tool_call_id=tool_call_id,
+                )
+        return rendered
 
     # ==================== 人物画像注入 ====================
 

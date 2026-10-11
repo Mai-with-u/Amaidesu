@@ -11,7 +11,8 @@ from src.agents.streamer.planner import (
     _render_observation,
 )
 from src.agents.streamer.room_state import RoomState
-from src.modules.tools.models import ToolExecutionResult
+from src.modules.tools.conversation import is_tool_message
+from src.modules.tools.models import ResultBlock, ToolExecutionResult
 
 
 def _surroundings_shaped() -> Dict[str, Any]:
@@ -45,10 +46,12 @@ def _surroundings_shaped() -> Dict[str, Any]:
     }
 
 
-def _make_planner(tool_registry: Any) -> Planner:
+def _make_planner(tool_registry: Any, *, visual: bool = False) -> Planner:
+    llm_service = MagicMock()
+    llm_service.is_profile_visual = MagicMock(return_value=visual)
     return Planner(
         config={"planner_max_steps": 2},
-        llm_service=MagicMock(),
+        llm_service=llm_service,
         prompt_service=MagicMock(),
         room_state=RoomState(),
         tool_registry=tool_registry,
@@ -215,3 +218,76 @@ async def test_caller_profile_forwarded_to_registry() -> None:
     invocation = registry.invoke.call_args[0][0]
     assert invocation.caller_profile == "planner"
     assert invocation.source == "planner-react"
+
+
+async def test_visual_caller_receives_image_parts_in_tool_message() -> None:
+    """视觉调用方的带图观察 = 占位符版观察文本 + 独立 image part 的完整 tool 消息。
+
+    图走 blocks → image_url part（ADR-037 定案的内部契约带图形态）；
+    文本 part 不重复携带 base64。调用方按 is_tool_message 识别后整条追加。
+    """
+    registry = MagicMock()
+    image = "A" * 2048
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="vision_look_at_screen",
+            success=True,
+            content="(no text extracted)",
+            blocks=[ResultBlock(kind="image", data=image, mime_type="image/png")],
+            structured_content={"text": "", "width": 1920, "image": image},
+        )
+    )
+    planner = _make_planner(registry, visual=True)
+
+    observation = await planner._invoke_registry_tool("vision_look_at_screen", {}, tool_call_id="call_1")
+
+    assert is_tool_message(observation)
+    assert observation["tool_call_id"] == "call_1"
+    parts = observation["content"]
+    assert parts[0]["type"] == "text"
+    assert image not in parts[0]["text"]
+    assert "[图像 1 KB 已省略]" in parts[0]["text"]
+    assert parts[1] == {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image}"}}
+
+
+async def test_visual_caller_without_image_keeps_text_observation() -> None:
+    """视觉调用方调无图工具：观察维持纯文本（消息 dict 只在有图时出现）。"""
+    registry = MagicMock()
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(tool_name="minecraft_glance", success=True, structured_content={"ok": True})
+    )
+    planner = _make_planner(registry, visual=True)
+
+    observation = await planner._invoke_registry_tool("minecraft_glance", {}, tool_call_id="call_2")
+
+    assert isinstance(observation, str)
+    assert json.loads(observation) == {"ok": True}
+
+
+async def test_reference_tools_view_filters_binary_payloads() -> None:
+    """参考段与工具观察同走对话安全视图：参考工具返回截图时占位符进文本。
+
+    回归锚点：_read_reference_tools 曾把 structured_content 直接 json.dumps
+    进参考段——look_at_screen 若被配进 reference_tools，base64 会从这里
+    绕过对话视图进上下文（P0 只收口了 _render_observation 一处）。
+    """
+    registry = MagicMock()
+    image = "A" * 2048
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="vision_look_at_screen",
+            success=True,
+            structured_content={"text": "画面正常", "image": image},
+        )
+    )
+    planner = _make_planner(
+        registry,
+        visual=False,
+    )
+    planner.typed_config.reference_tools = ["vision_look_at_screen"]
+
+    reference = await planner._read_reference_tools("round-1")
+
+    assert image not in reference
+    assert "[图像 1 KB 已省略]" in reference
+    assert "画面正常" in reference

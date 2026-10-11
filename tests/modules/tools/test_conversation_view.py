@@ -1,15 +1,22 @@
-"""to_conversation_view：工具结果 → 对话安全视图的单元测试。
+"""对话观察渲染契约单元测试：安全视图滤除 + 视觉带图消息组装。
 
 判定契约：长度超过 1KB、仅含 base64 字符集（A-Za-z0-9+/=）且无空白
 字符的字符串判为二进制载荷，替换为带真实 KB 数的占位符；中文长文、
-URL、JSON 文本等合法长内容必须原样保留。
+URL、JSON 文本等合法长内容必须原样保留。视觉调用方的带图观察由
+extract_image_data_urls + build_tool_message 组装（ADR-037）。
 """
 
 from __future__ import annotations
 
 import json
 
-from src.modules.tools.conversation import to_conversation_view
+from src.modules.tools.conversation import (
+    build_tool_message,
+    extract_image_data_urls,
+    is_tool_message,
+    to_conversation_view,
+)
+from src.modules.tools.models import ResultBlock, ToolExecutionResult
 
 
 def test_base64_image_replaced_with_placeholder() -> None:
@@ -87,3 +94,50 @@ def test_plain_string_payload_is_sanitized_too() -> None:
     """载荷本身就是字符串（content 透传形态）同样按判定处理。"""
     assert to_conversation_view("正文" * 10) == "正文" * 10
     assert to_conversation_view("A" * 2048) == "[图像 1 KB 已省略]"
+
+
+# =============================================================================
+# 视觉带图观察组装（extract_image_data_urls / build_tool_message / is_tool_message）
+# =============================================================================
+
+
+def test_extract_image_data_urls_from_blocks() -> None:
+    """图像块转 data URL；文本块与缺数据的块跳过；无图返回空列表。"""
+    image = "A" * 2048
+    result = ToolExecutionResult(
+        tool_name="vision_look_at_screen",
+        success=True,
+        blocks=[
+            ResultBlock(kind="text", text="画面描述"),
+            ResultBlock(kind="image", data=image, mime_type="image/png"),
+            ResultBlock(kind="image", data="", mime_type="image/jpeg"),
+        ],
+    )
+
+    urls = extract_image_data_urls(result)
+
+    assert urls == [f"data:image/png;base64,{image}"]
+    assert extract_image_data_urls(ToolExecutionResult(tool_name="x", success=True)) == []
+
+
+def test_build_tool_message_shapes_openai_dialect() -> None:
+    """带图消息 = 观察文本 part + 图 image_url part，tool_call_id 配对当前调用。"""
+    message = build_tool_message(
+        rendered='{"ok": true, "image": "[图像 1 KB 已省略]"}',
+        image_data_urls=["data:image/png;base64,AAAA"],
+        tool_call_id="call_1",
+    )
+
+    assert message["role"] == "tool"
+    assert message["tool_call_id"] == "call_1"
+    assert message["content"][0] == {"type": "text", "text": '{"ok": true, "image": "[图像 1 KB 已省略]"}'}
+    assert message["content"][1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+
+def test_is_tool_message_distinguishes_observation_shapes() -> None:
+    """三种观察返回形态的判别：视觉消息 dict / 纯文本 / 载荷 dict。"""
+    message = build_tool_message(rendered="{}", image_data_urls=["data:image/png;base64,A"], tool_call_id="c")
+    assert is_tool_message(message) is True
+    assert is_tool_message('{"ok": true}') is False
+    assert is_tool_message({"ok": True}) is False
+    assert is_tool_message(None) is False

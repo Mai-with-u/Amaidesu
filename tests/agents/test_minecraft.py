@@ -16,7 +16,8 @@ from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.conversation import is_tool_message
+from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.registry import ToolRegistry
 
@@ -1584,6 +1585,62 @@ async def test_execute_tool_forwards_caller_profile() -> None:
     invocation = agent._tool_registry.invoke.call_args[0][0]
     assert invocation.caller_profile == "minecraft"
     assert invocation.source == "minecraft-react"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_visual_caller_receives_image_parts() -> None:
+    """视觉调用方的带图观察返回完整 tool 消息 dict（图以独立 image part 附上）。
+
+    文本 part 为占位符版观察 JSON（base64 不重复携带）；非视觉调用方同
+    参数返回观察载荷 dict（P0 用例覆盖）。
+    """
+    llm = MagicMock()
+    llm.is_profile_visual = MagicMock(return_value=True)
+    agent = MinecraftAgent(
+        _offline_config(),
+        llm_manager=llm,
+        event_bus=MagicMock(),
+        tool_registry=MagicMock(),
+    )
+    image = "A" * 2048
+    agent._tool_registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="vision_look_at_screen",
+            success=True,
+            blocks=[ResultBlock(kind="image", data=image, mime_type="image/png")],
+            structured_content={"text": "", "image": image},
+        )
+    )
+
+    observation = await agent._execute_tool("vision_look_at_screen", {}, call_id="call_9")
+
+    assert is_tool_message(observation)
+    assert observation["tool_call_id"] == "call_9"
+    parts = observation["content"]
+    assert parts[0]["type"] == "text"
+    assert image not in parts[0]["text"]
+    assert parts[1] == {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image}"}}
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_visual_caller_without_image_keeps_payload() -> None:
+    """视觉调用方调无图工具：返回观察载荷 dict（消息 dict 只在有图时出现）。"""
+    llm = MagicMock()
+    llm.is_profile_visual = MagicMock(return_value=True)
+    agent = MinecraftAgent(
+        _offline_config(),
+        llm_manager=llm,
+        event_bus=MagicMock(),
+        tool_registry=MagicMock(),
+    )
+    agent._tool_registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(tool_name="minecraft_glance", success=True, structured_content={"ok": True})
+    )
+
+    observation = await agent._execute_tool("minecraft_glance", {}, call_id="call_10")
+
+    assert is_tool_message(observation) is False
+    assert observation == {"ok": True}
 
 
 # ---------------------------------------------------------------------------
