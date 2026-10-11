@@ -1174,6 +1174,26 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
         logger.debug(f"恢复信号处理器时出错: {e}")
 
 
+async def fallback_close_active_session(session_manager: Optional["LiveSessionManager"]) -> None:
+    """进程退出兜底收工：有进行中场次则复用正常收尾路径补账，无则静默通过。
+
+    ``run_shutdown`` 内的常规结账位于关闭链中段，二次 Ctrl+C 或某个关闭
+    步骤抛异常会把链路打断在结账之前——本兜底挂在 main() 的 finally 位，
+    对同一幂等入口 ``close_session`` 再调一次：正常退出时场次已结账，
+    返回 False 静默通过；异常中断时在此补写 ended_at_ms 并广播 live.ended。
+    自身任何异常只记日志，不得阻断退出。
+    """
+    if session_manager is None:
+        return
+    try:
+        closed = await session_manager.close_session(reason="进程退出兜底收工")
+    except Exception:
+        logger.exception("进程退出兜底收工失败，场次账目待下次启动收口")
+        return
+    if closed:
+        logger.warning("进程退出兜底收工：已补写进行中场次结束时刻并广播 live.ended")
+
+
 async def run_shutdown(
     event_bus: EventBus,
     llm_service: LLMManager,
@@ -1355,16 +1375,66 @@ async def main() -> None:
         log_streamer_persist=not args.dry,
     )
 
-    # 启动完成广播：此时 EventHistoryRecorder 已就绪，core.startup 会进事件历史
-    await event_bus.emit(
-        CoreEvents.CORE_STARTUP,
-        CoreStartupPayload(event=CoreEvents.CORE_STARTUP, message="Amaidesu 组件装配完成"),
-        source="Main",
-    )
+    # 兜底位：以下任一路径异常退出（含关闭链中途被 KeyboardInterrupt 打断）
+    # 都要在 finally 里补一次场次结账；正常退出时 run_shutdown 已结账，兜底幂等静默通过
+    try:
+        # 启动完成广播：此时 EventHistoryRecorder 已就绪，core.startup 会进事件历史
+        await event_bus.emit(
+            CoreEvents.CORE_STARTUP,
+            CoreStartupPayload(event=CoreEvents.CORE_STARTUP, message="Amaidesu 组件装配完成"),
+            source="Main",
+        )
 
-    if args.dry:
-        logger.info("--dry 模式：仅验证组合根构造，组件已构造但不进入主循环")
-        logger.info("（此模式用于快速检查 wiring 是否完整，关闭后退出）")
+        if args.dry:
+            logger.info("--dry 模式：仅验证组合根构造，组件已构造但不进入主循环")
+            logger.info("（此模式用于快速检查 wiring 是否完整，关闭后退出）")
+            await run_shutdown(
+                event_bus,
+                llm_service,
+                dashboard_server,
+                event_recorder,
+                collector_manager,
+                agent_manager,
+                simulator_service,
+                database=database,
+                storage_ledger=storage_ledger,
+                session_manager=session_manager,
+                tool_registry=tool_registry,
+                health_monitor=health_monitor,
+                task_tracker=task_tracker,
+            )
+            return
+
+        stop_event = asyncio.Event()
+        orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)
+
+        # 事件循环心跳探测：sleep(1) 的唤醒间隔异常拉长，说明循环被同步
+        # 调用冻结（如阻塞式 HTTP/控制台写入），输入丢行类问题由此定位
+        async def event_loop_heartbeat() -> None:
+            last = time.perf_counter()
+            while True:
+                await asyncio.sleep(1)
+                now = time.perf_counter()
+                gap = now - last
+                last = now
+                if gap > 2.5:
+                    logger.warning(f"事件循环心跳间隔 {gap:.1f}s（存在同步阻塞调用冻结循环）")
+
+        heartbeat_task = asyncio.create_task(event_loop_heartbeat(), name="event-loop-heartbeat")
+
+        logger.info("应用程序正在运行。按 Ctrl+C 退出。")
+
+        try:
+            await stop_event.wait()
+            logger.info("收到关闭信号，开始执行清理...")
+        except KeyboardInterrupt:
+            logger.info("检测到 KeyboardInterrupt，开始清理...")
+        finally:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+        restore_signal_handlers(orig_sigint, orig_sigterm)
         await run_shutdown(
             event_bus,
             llm_service,
@@ -1380,53 +1450,8 @@ async def main() -> None:
             health_monitor=health_monitor,
             task_tracker=task_tracker,
         )
-        return
-
-    stop_event = asyncio.Event()
-    orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)
-
-    # 事件循环心跳探测：sleep(1) 的唤醒间隔异常拉长，说明循环被同步
-    # 调用冻结（如阻塞式 HTTP/控制台写入），输入丢行类问题由此定位
-    async def event_loop_heartbeat() -> None:
-        last = time.perf_counter()
-        while True:
-            await asyncio.sleep(1)
-            now = time.perf_counter()
-            gap = now - last
-            last = now
-            if gap > 2.5:
-                logger.warning(f"事件循环心跳间隔 {gap:.1f}s（存在同步阻塞调用冻结循环）")
-
-    heartbeat_task = asyncio.create_task(event_loop_heartbeat(), name="event-loop-heartbeat")
-
-    logger.info("应用程序正在运行。按 Ctrl+C 退出。")
-
-    try:
-        await stop_event.wait()
-        logger.info("收到关闭信号，开始执行清理...")
-    except KeyboardInterrupt:
-        logger.info("检测到 KeyboardInterrupt，开始清理...")
     finally:
-        heartbeat_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await heartbeat_task
-
-    restore_signal_handlers(orig_sigint, orig_sigterm)
-    await run_shutdown(
-        event_bus,
-        llm_service,
-        dashboard_server,
-        event_recorder,
-        collector_manager,
-        agent_manager,
-        simulator_service,
-        database=database,
-        storage_ledger=storage_ledger,
-        session_manager=session_manager,
-        tool_registry=tool_registry,
-        health_monitor=health_monitor,
-        task_tracker=task_tracker,
-    )
+        await fallback_close_active_session(session_manager)
 
 
 if __name__ == "__main__":
