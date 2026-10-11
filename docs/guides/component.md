@@ -907,7 +907,7 @@ class MyToolProvider(ToolProvider):
 | 弹幕聚合 | `src/agents/streamer/message_buffer.py` + `timing_gate.py` | 批窗口 / 强制响应规则 |
 | Planner ReAct 决策 | `src/agents/streamer/planner.py` | `planner_llm`（默认 llm 高质量模型）；工具列表=registry 全量+reply；`planner_max_steps=8` |
 | Reply 工具 | `src/agents/streamer/tools/reply_tool.py` | 局部工具（不进 ToolRegistry）；Planner 循环内直连 invoke |
-| Replyer 表达 | `src/agents/streamer/replyer.py` | 调 `llm` profile + ProfanityFilter；LLM 只见 reply |
+| Replyer 表达 | `src/agents/streamer/replyer.py` | 调 `replyer` profile + WordFilter；复古提示词生成纯文本，不发送工具；情绪由 Planner 提供 |
 | 发声队列 | `src/agents/streamer/utterance_queue.py` | FIFO 串行；满时丢最旧；单条 render_timeout_ms 看门狗；构造期注入 `speak` 适配器（绑定 `tts_engine.handle_speech`） |
 | TTS 播出 | `src/modules/tts/` 基础模块（4 引擎 Provider）+ `build_tts_infrastructure` 装配入口 | 引擎（`handle_speech`）发 `tts.utterance.*` 事件；详见 ADR-007 |
 

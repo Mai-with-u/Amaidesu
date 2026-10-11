@@ -56,6 +56,7 @@ class LLMProviderConfig(BaseConfig):
         max_retries: 请求失败时的最大重试次数
         retry_delay: 重试间隔（秒）
         reasoning_parse_mode: 推理内容解析模式（auto/native/think_tag/none）
+        supports_streaming: 是否支持 SSE；不支持时即使有增量回调也使用完整响应
         extra_body: provider 级方言逃生舱（自由 dict 原样合并进请求体；空 dict=不注入）
     """
 
@@ -125,6 +126,12 @@ class LLMProviderConfig(BaseConfig):
         title="推理解析模式",
         description="推理内容解析模式：auto / native / think_tag / none",
         json_schema_extra={"x-ui-type": "select", "x-options": ["auto", "native", "think_tag", "none"]},
+    )
+    supports_streaming: bool = Field(
+        default=True,
+        title="支持流式响应",
+        description="兼容端点不支持 SSE 时关闭；即使存在增量回调也使用非流式请求，仍返回完整回复",
+        json_schema_extra={"x-ui-advanced": True},
     )
     # provider 级方言逃生舱：原样合并进请求体的自由字段集（仅适配端消费，
     # 引擎不读不传不存；空 dict = 不注入；非空 dict 由适配端合并进 JSON body）

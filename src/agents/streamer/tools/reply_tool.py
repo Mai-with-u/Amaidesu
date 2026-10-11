@@ -5,13 +5,13 @@
 
 调用链（Planner ReAct 架构）：
 - Planner（决策主体，ReAct 循环）决定说话时调用 reply 工具
-- reply 工具 invoke → Replyer.generate（人设渲染 + 情绪词表 + 敏感词净化）
+- reply 工具 invoke → Replyer.generate（复古提示词渲染 + 纯文本台词 + 敏感词净化）
 - 返回 {speech, emotion, metadata}——由 StreamerAgent 送发言队列（TTS/字幕/虚拟形象）
 
 工具契约：
 - kind: ``"sync"``（gather 等齐结果；Replyer 是一次性 LLM 调用，不是 fire-and-forget）
 - provider: ``"streamer"``（主播 Agent 自有工具；全名 streamer_reply）
-- arguments: ``{topic_summary, reply_guidance, target?, confidence?}``
+- arguments: ``{topic_summary, emotion, intensity, reply_guidance?, target?, confidence?}``
 - 失败兜底：ToolExecutionResult(success=False, error_message=...)
 """
 
@@ -26,6 +26,7 @@ from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.provider import BaseToolProvider
+from src.modules.types.emotion_vocab import Emotion
 
 from ..plan import DecisionPlan
 from ..replyer import Replyer
@@ -43,9 +44,9 @@ __all__ = [
 _REPLY_TOOL_NAME = "reply"
 _REPLY_TOOL_DESCRIPTION = (
     "主播发言：消费 Planner 决策（topic_summary / reply_guidance / target），"
-    "调 Replyer 表达引擎生成实际台词 + 情绪 + 动作。"
+    "由 Planner 提供情绪与强度，Replyer 只生成纯文本台词。"
     "仅在 Planner 明确 should_reply=true 时调用；否则 LLM 应保持沉默。"
-    "返回 {speech, emotion, action, metadata}，由下游工具层消费。"
+    "返回 {speech, emotion, metadata}，由发声管线消费。"
 )
 
 
@@ -64,6 +65,17 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "要回应的弹幕 message_id 或片段（可空；面向全体时省略）",
         },
+        "emotion": {
+            "type": "string",
+            "enum": [emotion.value for emotion in Emotion],
+            "description": "Planner 决定本句台词的情绪，结合消息和回复指引选择",
+        },
+        "intensity": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Planner 决定本句情绪强度（0.0-1.0）",
+        },
         "confidence": {
             "type": "number",
             "minimum": 0.0,
@@ -71,7 +83,7 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
             "description": "Planner 决策置信度（0.0-1.0；可空）",
         },
     },
-    "required": ["topic_summary"],
+    "required": ["topic_summary", "emotion", "intensity"],
 }
 
 
@@ -208,7 +220,7 @@ class ReplyToolProvider(BaseToolProvider):
         """reply 工具的 invoke（ToolProvider 协议）。
 
         契约：
-        - 接收 invocation.arguments：topic_summary / reply_guidance / target / confidence
+        - 接收 invocation.arguments：topic_summary / reply_guidance / target / confidence / emotion / intensity
         - 把意图参数适配为 DecisionPlan(should_reply=True)（Replyer.generate 接口形态）
         - 调用 Replyer.generate
         - 返回 ToolExecutionResult（成功时 structured_content 为结果 dict，失败时 error_message 非空）
@@ -239,13 +251,23 @@ class ReplyToolProvider(BaseToolProvider):
         batch: List[Any] = list(self._round_batch)
 
         # 构造 plan（must should_reply=true）
-        plan = DecisionPlan(
-            should_reply=True,
-            target=target,
-            topic_summary=topic_summary,
-            reply_guidance=reply_guidance,
-            confidence=confidence,
-        )
+        try:
+            plan = DecisionPlan(
+                should_reply=True,
+                target=target,
+                topic_summary=topic_summary,
+                reply_guidance=reply_guidance,
+                confidence=confidence,
+                emotion=args.get("emotion", "neutral"),
+                intensity=args.get("intensity", 0.5),
+            )
+        except (TypeError, ValueError) as exc:
+            self._logger.warning(f"reply_tool: Planner 情绪参数无效: {exc}", exc=True)
+            return ToolExecutionResult(
+                tool_name=invocation.tool_name,
+                success=False,
+                error_message=f"Planner 情绪参数无效: {exc}",
+            )
 
         try:
             history = await self._resolve_history()
@@ -282,11 +304,22 @@ class ReplyToolProvider(BaseToolProvider):
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,
-                error_message=("Replyer 返回 None（降级：LLM 失败 / 脏 JSON / 空 text / word_filter 丢弃）"),
+                error_message="Replyer 返回 None（LLM 失败 / 空台词 / word_filter 丢弃）",
             )
 
         return ToolExecutionResult(
             tool_name=invocation.tool_name,
             success=True,
-            structured_content=result,
+            structured_content={
+                "speech": result["speech"],
+                "emotion": {"name": plan.emotion.value, "intensity": plan.intensity},
+                "metadata": {
+                    "source_id": "streamer_agent",
+                    "target": plan.target,
+                    "topic_summary": plan.topic_summary,
+                    "reply_guidance": plan.reply_guidance,
+                    "confidence": plan.confidence,
+                },
+                "llm_request_id": result.get("llm_request_id"),
+            },
         )

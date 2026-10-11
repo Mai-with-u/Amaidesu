@@ -1,33 +1,20 @@
-"""Replyer - 主播 Agent 表达引擎（reply 工具的实现载体）
+"""主播表达引擎：按复古提示词格式生成纯文本台词。
 
-定位（Planner ReAct 架构下）：
-- Planner 是决策主体，以 ReAct 循环运行（查信息 → 决定说不说 → 调 reply 工具）。
-- Replyer 是 reply 工具的内部实现：被 Planner 的 reply 调用触发，注入人设，
-  把决策意图（topic_summary / reply_guidance / target）渲染成实际回复。
-- reply 工具契约由 ``tools/reply_tool.py`` 暴露；本类**不**注册为工具、
-  **不**持有任何工具列表（reply 是唯一 function 定义，纯结构化输出口）。
-
-职责边界：
-- 调用 LLMManager.generate(messages, system=稳定段, tools=[reply_fn_def], profile=...)——LLM 只见 reply。
-- 解析 response.tool_calls（中立 payload.ToolCall 扁平形状）：reply call 取
-  speech/emotion/intensity；其余忽略。
-- **敏感词净化**（输出端）：内置 WordFilter 做"嘴"端净化——speech 输出前
-  经词表过滤（替换或丢弃）。
-- 两者使用不同的 LLM profile：Planner 用 ``planner`` profile，Replyer 用 ``replyer`` profile。
+人设与注意事项放进 system；聊天历史、当前消息与回复要求合并进一条 user。
+模型只负责措辞，不接收工具。情绪、强度及输出元数据由上层 reply 调用组装。
+词表净化只处理台词，避免思考正文进入发声管线。
 """
 
 from __future__ import annotations
 
-import json
 import re
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.modules.llm.history_compaction import HistoryCompactor
 from src.modules.logging import get_logger
-from src.modules.types.emotion_vocab import Emotion
 
 from . import canonical
-from .message_buffer import MessageBuffer
 from .plan import DecisionPlan
 
 # 默认人设兜底值（cold-start 兜底：构造 config 未提供对应字段时使用）
@@ -44,15 +31,9 @@ _DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和观众互动"
 _DEFAULT_STYLE_CONSTRAINTS = "口语化，使用网络流行语，避免机械式回复，适当使用emoji"
 _DEFAULT_AUDIENCE_SALUTATION = "大家"
 
-# Replyer 模板名：system 模板承载全程稳定段（人设/风格/规则），本轮输入
-# 模板承载每轮变化段（决策/弹幕/流程单）。稳定段独立成模板进 system 参数，
-# 变化段渲染为本轮 user 消息——请求前缀（system + 对话历史）跨轮逐字稳定，
-# LLM 供应商的前缀缓存才能命中。
+# 复古消息布局：稳定人设放进 system，历史与本轮要求合并进单条 user。
 _REPLYER_SYSTEM_TEMPLATE = "amaidesu_replyer_system"
 _REPLYER_TEMPLATE = "amaidesu_replyer"
-
-# reply function 名称（Agent 内部协议工具，与 tools/reply_tool.py 的 _REPLY_TOOL_NAME 对齐）
-_REPLY_FUNCTION_NAME = "reply"
 
 # Replyer 绑定的 LLM profile（封闭六成员之一）。绑定由代码显式声明，
 # 配置不承载绑定、无静默兜底——表达引擎固定走 replyer 档位。
@@ -60,11 +41,7 @@ REPLYER_PROFILE = "replyer"
 
 
 class Replyer:
-    """表达引擎：消费 DecisionPlan + 弹幕 + 人设，生成实际回复。
-
-    通过标准 function calling 协议产出 speech + emotion（reply 是唯一出口）；
-    返回 ``Optional[dict]``，由 reply_tool 包装后返回给 LLM。
-    """
+    """消费决策与对话上下文，只生成台词，不决定情绪或调用工具。"""
 
     def __init__(
         self,
@@ -114,64 +91,26 @@ class Replyer:
         on_delta: Optional[Any] = None,
         game_chat: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """根据 Planner 的决策计划 + 弹幕批次，生成本方人设下的实际回复。
+        """按一条 system 与一条 user 的复古布局请求纯文本台词。
 
-        流程：system 渲染稳定段（amaidesu_replyer_system，含 $personality/
-        $style_constraints/$bot_name）+ 本轮输入渲染变化段（amaidesu_replyer）→
-        消息序列 = 对话历史（canonical 原生消息，append-only）+ 本轮输入（序列尾）
-        → 调用 LLM（profile 固定 REPLYER_PROFILE，**generate 标准接口**，
-        system=稳定段，tools=[reply_fn_def]，reply 是唯一 function 定义）→ 解析
-        response.tool_calls（中立 payload.ToolCall）提取 reply(speech/emotion/intensity)
-        → 情绪降级 neutral → 敏感词净化 → 返回 dict（不发布事件；reply_tool
-        负责 ToolExecutionResult 包装）。
-
-            Args:
-                plan: Planner 产出的决策计划（should_reply=True 时才应到达此处）。
-                batch: 本批弹幕（RoomMessagePayload 列表）。
-                history: 可选的最近会话历史（鸭子类型对象列表，需有 ``role`` 和 ``content`` 属性）；
-                         role 可能是枚举（取 ``.value``），content 是 str。None 表示无历史可用，
-                         渲染为占位文本。
-                rundown: 当前流程单的渲染文本（可选）。由调用方（如 StreamerAgent
-                    主循环）从 ``RundownState`` 拼装后传入，描述当前环节的
-                    title / task_description / key_points / 环节剩余时长 + 整场进度。
-                    透传到 prompt 的 ``$rundown`` 变量。
-                on_delta: 思考流回调（LLM 层形态 (kind, text_delta)）。
-                game_chat: 本决策窗新到的游戏聊天原话（游戏里玩家与系统消息；可选）。
-                    游戏里有人搭话促发的一轮弹幕批是空的，没有它表达侧只看得到
-                    Planner 的转述，会把这一轮当成冷场自言自语。
-
-            Returns:
-                Dict 实例（含 speech/emotion/metadata）；LLM 异常、tool_calls 缺失
-                reply call、或 speech 为空时返回 None（silent 降级）。
-                reply_tool 直接将此 dict 包装进 ToolExecutionResult 返回给 LLM。
+        历史只包含实际观众消息和主播发言，压缩后放入 user 的聊天记录块。
+        游戏聊天、目标原文与流程单保持可见；不发送 tools 或 JSON 输出约束。
+        返回台词与请求历史指针，供上层组装发声数据；失败或空台词返回 None。
         """
         # 防御：Planner 已裁决 should_reply=True 才会进入此处；False 直接放弃。
         if not plan.should_reply:
             self.logger.debug("DecisionPlan.should_reply=False，Replyer 跳过生成")
             return None
 
-        # 注入人设 + 决策意图 + 弹幕上下文 + 会话历史 + 流程单上下文
         system_prompt = self._render_system_prompt()
         turn_input = self._render_turn_input(plan, batch, rundown, history=history, game_chat=game_chat)
-        # 对话历史走原生消息通道（canonical 单一映射，与 Planner 同源）：
-        # 历史段跨轮逐字稳定、只追加不重排，是请求前缀缓存命中的前提；
-        # 文本拍平进单条 user 消息会让每轮请求前缀全变，缓存无从命中。
-        # 本批弹幕已在"本批弹幕"段完整呈现，历史尾部落库的同一批不再重复一遍
-        history_messages = [
-            canonical.turn_to_message(msg) for msg in canonical.trim_batch_echo(list(history or []), batch)
-        ]
-        history_messages = self._compact_history(history_messages)
-        messages: List[Dict[str, Any]] = [*history_messages, {"role": "user", "content": turn_input}]
-
-        # reply 是唯一工具——表达引擎不持有任何信息/动作类工具列表
-        tools = [self._build_reply_function_def()]
+        messages: List[Dict[str, Any]] = [{"role": "user", "content": turn_input}]
 
         try:
             self.logger.info(f"Replyer 生成回复中 (plan.target={plan.target!r}, client={self.profile})")
             response = await self._llm_service.generate(
                 messages,
                 system=system_prompt,
-                tools=tools,
                 profile=self.profile,
                 on_delta=on_delta,
             )
@@ -183,43 +122,17 @@ class Replyer:
             self.logger.warning(f"Replyer LLM 返回失败: {getattr(response, 'error', 'unknown')}, silent 降级")
             return None
 
-        speech, emotion_name, emotion_intensity = self._parse_tool_calls(getattr(response, "tool_calls", None))
+        speech = _plain_text_speech(getattr(response, "content", None))
         if not speech:
-            # 实测 MiniMax-M3 常把台词直接写成正文、不调 reply：正文就是要说的话，拿来当台词而不是整轮静默。
-            # 否则连续静默会让 reply 工具被熔断摘除，主播一分钟左右张不开嘴。
-            speech = _plain_text_speech(getattr(response, "content", None))
-            if speech:
-                self.logger.info("Replyer 未调用 reply，改用正文作为台词")
-
-        if not speech:
-            self.logger.info("Replyer LLM 未返回 reply 或 speech 为空，silent 降级")
+            self.logger.warning("Replyer 返回空台词，本轮不发声")
             return None
-
-        # 情绪校验：合法枚举保留，非枚举降级 neutral
-        valid_emotion_names = {e.value for e in Emotion}
-        if emotion_name not in valid_emotion_names:
-            self.logger.warning(f"Replyer 情绪 '{emotion_name}' 不在枚举中，降级为 neutral")
-            emotion_name = "neutral"
 
         result = {
             "speech": speech,
-            "emotion": {
-                "name": emotion_name,
-                "intensity": emotion_intensity,
-            },
-            "metadata": {
-                "source_id": "streamer_agent",
-                "target": plan.target,
-                "topic_summary": plan.topic_summary,
-                "reply_guidance": plan.reply_guidance,
-                "confidence": plan.confidence,
-            },
-            # 表达生成的 LLM 请求历史指针（随 reply_payload 一路透传到
-            # streamer.speech 事件，观察端回应卡据此懒取 Token/缓存统计）
             "llm_request_id": getattr(response, "request_id", None) or None,
         }
 
-        # ⑦ 敏感词净化（净化职责归 Replyer 表达引擎）
+        # 敏感词净化只影响台词
         result = self._apply_word_filter(result)
         if result is None:
             self.logger.warning("Replyer 输出被 word filter 丢弃（drop_on_match=True）")
@@ -247,8 +160,8 @@ class Replyer:
     def _render_system_prompt(self) -> str:
         """渲染 system 提示词（全程稳定段）。
 
-        人设分离承诺：$personality / $style_constraints / $bot_name /
-        $audience_salutation 四个字段均读构造期注入的自身人设（StreamerAgent
+        人设分离承诺：$personality / $bot_name /
+        $audience_salutation 人设字段均读构造期注入的自身人设（StreamerAgent
         从 config.persona 单点构建）。稳定段每轮渲染结果逐字一致——请求前缀
         缓存命中靠它。
         """
@@ -256,7 +169,6 @@ class Replyer:
             _REPLYER_SYSTEM_TEMPLATE,
             bot_name=self._bot_name,
             personality=self._personality,
-            style_constraints=self._style_constraints,
             audience_salutation=self._audience_salutation,
         )
 
@@ -269,115 +181,56 @@ class Replyer:
         history: Optional[List[Any]] = None,
         game_chat: Optional[List[str]] = None,
     ) -> str:
-        """渲染本轮 user 消息（每轮变化段）：Planner 决策 + 弹幕批 + 游戏聊天 + 流程单上下文。
-
-        会话历史不在此渲染——历史经 canonical 走原生消息通道（见 generate）。
-        流程单上下文（$rundown）是任务上下文注入（当前环节 / 整场进度），由
-        调用方拼装后传入；None / 空串时用占位文本，避免模板出现字面 $rundown。
-        target 能按消息 ID 在本批或历史里找到原话时，随决策一起给出：
-        一批里有好几条弹幕时，表达侧不用自己拿 ID 去对号。
-        """
+        """历史与本轮信息合并成一条 user，表达风格放在输出指令之前。"""
         # 流程单上下文：None / 空串时用占位文本，与 Planner 对齐
         rundown_render = rundown if rundown else "（当前无流程单）"
         target_text = canonical.find_target_message(plan.target, batch, list(history or []))
+        # 已落库的弹幕保留在历史中的原位置，避免挪到主播回复后面。
+        history_messages = [canonical.turn_to_message(msg) for msg in list(history or [])]
+        history_messages = self._compact_history(history_messages)
+        # 批消息可能尚未落库或已被历史预算裁掉，只追加历史中缺失的消息。
+        # 按出现次数匹配，无 ID 的同文消息也不会被全部合并成一条。
+        seen = Counter((message["role"], message["content"]) for message in history_messages)
+        seen_ids = {
+            match.group(1)
+            for message in history_messages
+            if message["role"] == "user"
+            and (match := re.search(r" \[id:(.+)\]$", message["content"]))
+        }
+        for item in batch:
+            message = canonical.batch_item_to_message(item)
+            message_id = getattr(item, "message_id", "")
+            key = (message["role"], message["content"])
+            if message_id and message_id in seen_ids:
+                continue
+            if seen[key] > 0:
+                seen[key] -= 1
+                continue
+            history_messages.append(message)
+            if message_id:
+                seen_ids.add(message_id)
+        dialogue_lines = []
+        for message in history_messages:
+            content = message["content"]
+            if message["role"] == "assistant":
+                dialogue_lines.append(f"{self._bot_name}(你)说：{content}")
+            else:
+                nickname, separator, body = content.partition(": ")
+                dialogue_lines.append(f"{nickname}说：{body}" if separator else content)
         return self._prompt_service.render(
             _REPLYER_TEMPLATE,
             plan=_render_plan_text(plan, target_text=target_text),
-            danmaku_batch=_batch_prompt_text(batch),
+            dialogue_prompt="\n".join(dialogue_lines) or "（暂无聊天记录）",
+            bot_name=self._bot_name,
+            style_constraints=self._style_constraints,
+            turn_context=(
+                "本轮有新观众消息，请结合聊天记录与回复指引接话。"
+                if batch
+                else "本轮没有新观众消息；有游戏聊天时按游戏情况说，否则这是主动发言。"
+            ),
             game_chat="\n".join(game_chat) if game_chat else "（无）",
             rundown=rundown_render,
         )
-
-    # ==================== function 定义构造 ====================
-
-    @staticmethod
-    def _build_reply_function_def() -> Dict[str, Any]:
-        """构造 reply function 定义（OpenAI function calling 形态）。
-
-        reply 是 Agent 内部协议工具——只服务主播自身 LLM 会话，不进 ToolRegistry。
-        LLM 通过调用此函数输出 speech + emotion（emotion 是 emotion_vocab 17 枚举之一）
-        + intensity（情绪强度，驱动下游虚拟形象表情权重）。
-        """
-        return {
-            "name": _REPLY_FUNCTION_NAME,
-            "description": (
-                "主播发言：输出你要对直播间说的话和情绪。"
-                "必填：speech（1-2 句口语化文本）；可选：emotion（17 枚举之一，缺省 neutral）、"
-                "intensity（0.0-1.0 情绪强度，缺省 0.5）。"
-                "调用此工具即代表你决定本轮发言；reply 是你唯一的输出出口。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "speech": {
-                        "type": "string",
-                        "description": "要说的台词（1-2 句话，口语化，符合人设语气）",
-                    },
-                    "emotion": {
-                        "type": "string",
-                        "enum": [e.value for e in Emotion],
-                        "description": "情绪（17 枚举之一）",
-                    },
-                    "intensity": {
-                        "type": "number",
-                        "minimum": 0.0,
-                        "maximum": 1.0,
-                        "description": "情绪强度（0.0-1.0，缺省 0.5；驱动虚拟形象表情幅度）",
-                    },
-                },
-                "required": ["speech"],
-            },
-        }
-
-    # ==================== tool_calls 解析 ====================
-
-    @staticmethod
-    def _parse_tool_calls(
-        tool_calls: Optional[List[Any]],
-    ) -> Tuple[str, Optional[str], float]:
-        """从 payload.Response.tool_calls 解析 reply(speech/emotion/intensity)。
-
-        Replyer 工具列表只有 reply，非 reply 调用一律忽略。
-
-        Args:
-            tool_calls: LLM 返回的 tool_calls 列表（中立 payload.ToolCall
-                        扁平形状：``name`` / ``arguments``（已解析 dict）。
-
-        Returns:
-            ``(speech, emotion_name, emotion_intensity)``：
-            - speech: 找到 reply call 时的 speech 字符串；找不到 reply 或 speech 为空时为 ``""``
-            - emotion_name: reply call 提供的 emotion；未提供/非法时为 ``None``
-            - emotion_intensity: reply call 提供的情绪强度，clamp 到 [0.0, 1.0]；
-              未提供/非法时默认 0.5
-        """
-        if not tool_calls:
-            return "", None, 0.5
-
-        speech = ""
-        emotion_name: Optional[str] = None
-        emotion_intensity = 0.5
-
-        for call in tool_calls:
-            name = getattr(call, "name", None)
-            if name != _REPLY_FUNCTION_NAME:
-                continue
-            args = getattr(call, "arguments", None)
-            if not isinstance(args, dict):
-                args = _parse_call_arguments(args)
-            if isinstance(args, dict):
-                raw_speech = args.get("speech", "")
-                if isinstance(raw_speech, str):
-                    speech = raw_speech.strip()
-                raw_emotion = args.get("emotion")
-                if isinstance(raw_emotion, str) and raw_emotion:
-                    emotion_name = raw_emotion.lower()
-                raw_intensity = args.get("intensity")
-                try:
-                    emotion_intensity = min(1.0, max(0.0, float(raw_intensity)))
-                except (TypeError, ValueError):
-                    emotion_intensity = 0.5
-
-        return speech, emotion_name, emotion_intensity
 
     # ==================== 敏感词净化（输出端） ====================
 
@@ -388,7 +241,7 @@ class Replyer:
         """敏感词净化（Replyer 表达引擎内部净化）。
 
         Args:
-            result: 待净化的回复 dict（含 speech / emotion）
+            result: 待净化的台词 dict（含 speech 与请求历史指针）
 
         Returns:
             净化后的 result；``drop_on_match=True`` 且命中时返回 None（丢弃整条）。
@@ -500,40 +353,16 @@ class WordFilter:
 # ============================================================================
 
 
-def _parse_call_arguments(raw: Any) -> Any:
-    """解析 tool_call 的 arguments（兜底兼容 str/dict 两种形态）。
-
-    中立 payload.ToolCall 的 arguments 已由适配端解析为 dict，此函数仅在
-    形态异常（如 JSON 字符串）时兜底；解析失败返回原始值（让 caller 自行降级）。
-    """
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return raw
-    return {}
-
-
 #: 正文里的思考段：闭合的整段去掉；只有开头没有结尾的，从开头起全是思考，整段都不能念
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 _THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL)
 
 
 def _plain_text_speech(content: Any) -> str:
-    """模型没调 reply、把台词写进正文时，取出可以直接念的那句话。
-
-    先去掉思考段（实测有 208 秒的请求只回了一段没闭合的 ``<think>``，那种整段都不能念）；
-    正文若是 ``{"speech": ...}`` 形状的 JSON，取其中的 speech。取不出就返回空串，照常静默。
-    """
+    """取纯文本台词，剔除闭合或未闭合的思考段，避免把推理念出来。"""
     if not isinstance(content, str):
         return ""
     text = _THINK_UNCLOSED.sub("", _THINK_BLOCK.sub("", content)).strip()
-    if text.startswith("{"):
-        parsed = _parse_call_arguments(text)
-        if isinstance(parsed, dict) and isinstance(parsed.get("speech"), str):
-            return parsed["speech"].strip()
     return text
 
 
@@ -548,13 +377,6 @@ def _render_plan_text(plan: DecisionPlan, *, target_text: str = "") -> str:
         f"reply_guidance: {plan.reply_guidance or '（无额外指引）'}\n"
         f"confidence: {plan.confidence:.2f}"
     )
-
-
-def _batch_prompt_text(batch: List[Any]) -> str:
-    """把弹幕批次渲染为文本（复用 MessageBuffer.render_batch_text）。"""
-    if not batch:
-        return "（本批无弹幕）"
-    return MessageBuffer.render_batch_text(batch)
 
 
 __all__ = ["Replyer", "WordFilter"]

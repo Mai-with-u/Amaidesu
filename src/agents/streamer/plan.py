@@ -16,13 +16,16 @@
 - ``topic_summary``: 当前话题摘要（来自态势缓存，给表达阶段提供上下文）
 - ``reply_guidance``: 给 Replyer 的回复指引（语气、重点等）
 - ``confidence``: 参与判断置信度 [0.0, 1.0]
+- ``emotion`` / ``intensity``: Planner 决定的情绪与强度，上层组装发声数据使用
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from src.modules.types.emotion_vocab import Emotion
 
 
 class DecisionPlan(BaseModel):
@@ -39,6 +42,8 @@ class DecisionPlan(BaseModel):
     topic_summary: str = ""
     reply_guidance: str = ""
     confidence: float = 0.0
+    emotion: Emotion = Emotion.NEUTRAL
+    intensity: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 __all__ = ["DecisionPlan"]

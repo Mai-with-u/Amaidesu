@@ -5,6 +5,7 @@ Dashboard 服务器主类
 """
 
 import asyncio
+import mimetypes
 import os
 import socket
 import subprocess
@@ -174,6 +175,9 @@ class DashboardServer:
         if DASHBOARD_DIST.exists() and DASHBOARD_DIST.is_dir():
             assets_dir = DASHBOARD_DIST / "assets"
             if assets_dir.exists():
+                # Windows 注册表可能将 .js 标记为 text/plain，模块脚本需要正确的 MIME 类型。
+                mimetypes.add_type("text/javascript", ".js")
+                mimetypes.add_type("text/javascript", ".mjs")
                 self.app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
             # FileResponse|dict 混合返回无法生成 Pydantic 响应模型，须显式关闭

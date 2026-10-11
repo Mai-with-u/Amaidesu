@@ -10,7 +10,7 @@
 
 为发言（speech）做流式存在三重约束，经排查均不可绕：
 
-1. **输出协议**：Replyer 的 LLM 调用采用 function calling 形态拿结构化输出（`reply(speech, emotion)` 是纯结构化输出口，非真实工具），speech 埋在 tool call 的 arguments JSON 里；流式下到达的是 JSON 碎片，实时提取需要部分 JSON 解析。
+1. **输出协议**：Replyer 使用复古提示词直接生成纯文本台词，情绪由 Planner 的 `reply` 工具参数提供。提供商支持 SSE 时观察面仍接收内容增量；`supports_streaming=false` 的兼容端点使用非流式请求，只返回最终整段内容。
 2. **净化约束**：敏感词净化在整段 speech 上做（含 `drop_on_match` 整条丢弃），流式上屏后无法撤回——直播公开画面"说出的话收不回"。
 3. **下游整段语义**：TTS 入队、字幕、落库、`streamer.speech` 业务事件全部按整段设计。
 
@@ -65,13 +65,13 @@ Agent 侧组装：sink 注入 Agent 构造器一次，LLM 调用时以回调参�
 
 ### 3. LLM 层增量回调（双入口统一）
 
-- `llm/manager` 底层执行处统一增加 `on_delta` 回调出口，`chat_messages`（Planner）与 `call_tools`（Replyer）两个入口全部透传——漏一个即出现"半边思考流"
+- `LLMManager.generate` 统一透传 `on_delta`，Planner 与 Replyer 均使用该入口；提供商可通过 `supports_streaming` 关闭不兼容的 SSE 传输。
 - 流式消费分离三类增量：`reasoning_delta`（外发 sink）/ `content_delta`（现状行为不变）/ tool call arguments 碎片（**Agent 侧直接丢弃**，不转发）
 - **中断能力剥离出本期**（YAGNI）："手动停止生成"涉及决策循环半截流取消语义，另立项
 
-### 4. 输出协议保持 function calling 不变
+### 4. 播出面保持整段台词
 
-speech 的 JSON 碎片在 Agent 侧丢弃，**不做 speech 实时预览**——控制台 speech 区域在流结束前为空（维持"生成中"占位），流完整段卡片出现。用户可见的新增内容只有思考滚动区，永远看不到 JSON 源码。
+Replyer 返回纯文本，情绪由上层 `reply` 工具组装；**播出面不做 speech 实时预览**——字幕、TTS 与发言卡片消费净化后的整段台词。观察面可以显示增量，但不把未净化正文提前送去发声。
 
 ### 5. WS 流消息独立信封
 

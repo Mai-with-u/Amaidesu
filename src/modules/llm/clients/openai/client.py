@@ -552,10 +552,11 @@ class OpenAIClient(BaseLLMClient):
         组装完整 LLMResponse 返回（传输层流式、语义层整段）。
         流式请求建立失败时自动降级为非流式一次性调用（回调不触发）。
         """
-        if request_extra and on_delta is not None:
+        use_streaming = on_delta is not None and self.config.get("supports_streaming", True)
+        if request_extra and use_streaming:
             # 扩展参数（音频模态等）只在非流式路径生效，静默丢弃会造成请求形态错乱
             raise ValueError("request_extra 不支持流式路径")
-        if on_delta is not None:
+        if on_delta is not None and use_streaming:
             try:
                 return await self._chat_streaming(
                     messages,

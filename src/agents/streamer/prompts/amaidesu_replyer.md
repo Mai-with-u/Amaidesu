@@ -1,37 +1,22 @@
 ---
 name: amaidesu_replyer
-version: "3.1"
-description: "Amaidesu 表达引擎本轮输入模板（每轮变化段）：Planner 决策（含 target 原文）+ 本批弹幕 + 游戏里刚有人说的话 + 当前流程单环节，渲染为本轮 user 消息，跟在对话历史之后。人设/风格/规则等全程稳定段在 amaidesu_replyer_system。"
+version: "4.1"
+description: "复古表达输入：历史与新弹幕合并在同一段聊天记录中，模型只输出台词。"
 variables:
   - plan
-  - danmaku_batch
+  - turn_context
   - game_chat
   - rundown
+  - dialogue_prompt
+  - bot_name
+  - style_constraints
 author: Amaidesu
-tags: [decision, live, vtuber, replyer, tool-calling]
+tags: [decision, live, vtuber, replyer, retro]
 ---
 
-# 本轮输入
-
-## Planner 决策
-
-上游 Planner 已经完成了"是否回复 / 回复谁 / 聊什么 / 用什么情绪基调"的决策。你**只需执行**，不需要重新判断是否值得回复——Planner 已保证本批需要回复。
-
-$plan
-
-其中：
-- `target`：本次应当回应的对象（弹幕用户 / 游戏角色 / 话题）。
-- `target 原文`：target 指向的那条消息原话（找得到时才有）——接话以这句原话为准，别回成同批里的另一条。
-- `topic_summary`：本次回应应当围绕的话题摘要。
-- `reply_guidance`：Planner 给出的回复方向、情绪基调或风格提示（如"回应夸奖、带点得意"、"安慰失落的观众"）。
-
-请严格围绕 Planner 指定的 `target` 与 `topic_summary` 组织回复，并把 `reply_guidance` 作为语气/情绪的参考。
-
-## 本批弹幕
-
-$danmaku_batch
-
-> **当本批弹幕为"（本批无弹幕）"时**：表示这是**主动发言**（冷场救场 / 定时话题 / 运营指令触发），观众此刻没有说话。此时不要"等观众接话"，而是**以你自己输出为主**——按 system 中的"主动发言规则"执行。若下面"游戏里刚有人说的话"里有玩家在跟你说话，这一轮多半是因为它：围绕那句话跟观众聊，不是冷场自言自语。
+你正在直播间和观众聊天，下面是之前的聊天记录。
+其中标注 $bot_name(你) 的发言是你自己的发言，请注意区分：
+$dialogue_prompt
 
 ## 游戏里刚有人说的话
 
@@ -40,3 +25,18 @@ $game_chat
 ## 当前流程单环节
 
 $rundown
+
+## 本次回复要求
+
+上游 Planner 已决定本轮需要发言，请按以下话题和指引组织台词。
+target 原文是要回应的那条消息；没有特定目标时，面向全体观众。
+$plan
+
+$turn_context
+主动发言时，先有自己的内容，不要空手提问。
+游戏里有人搭话时，按游戏聊天和 Planner 指引说，不要当成观众弹幕或无事可说的冷场。
+请读读之前的聊天记录，把握当前话题，给出日常且简短的回复。
+最好一次只回应一个话题，不重复你刚说过的内容。
+$style_constraints
+不要输出多余内容、角色名前缀、思考过程、JSON 或情绪标签，只输出发言内容就好。
+现在，你说：
