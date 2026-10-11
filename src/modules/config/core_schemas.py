@@ -6,7 +6,7 @@
 ``InfraRootConfig`` 持有。
 """
 
-from typing import Any, Dict, List
+from typing import List
 
 from pydantic import Field
 
@@ -142,8 +142,120 @@ class EventHistoryConfig(BaseConfig):
 
 
 # ---------------------------------------------------------------------------
-# TTS（4 引擎子段；free-form dict 由 provider schema 补全机制按需校验）
+# TTS（4 引擎子段 typed 化：字段全集在文件/WebUI 可发现，加载期校验；
+# 引擎 Provider 经 ConfigSchema 别名引用本处定义，单一事实源在 config 侧）
 # ---------------------------------------------------------------------------
+
+
+class EdgeTTSParams(BaseConfig):
+    """Edge TTS 引擎参数（``[tts.edge_tts]`` 段）"""
+
+    voice: str = Field(default="zh-CN-XiaoxiaoNeural", title="语音", description="Edge TTS 语音（微软官方预设音色名）")
+
+
+class GPTSoVITSParams(BaseConfig):
+    """GPT-SoVITS 引擎参数（``[tts.gptsovits]`` 段；对接 api_v2）"""
+
+    host: str = Field(default="127.0.0.1", title="API 主机地址", description="API 主机地址")
+    port: int = Field(default=9880, ge=1, le=65535, title="API 端口", description="API 端口")
+    ref_audio_path: str = Field(
+        default="",
+        title="参考音频路径",
+        description="参考音频路径（由 GPT-SoVITS 服务端读取，建议绝对路径）",
+    )
+    prompt_text: str = Field(default="", title="提示文本", description="提示文本")
+    text_language: str = Field(default="zh", pattern=r"^(zh|en|ja|auto)$", title="文本语言", description="文本语言")
+    prompt_language: str = Field(default="zh", pattern=r"^(zh|en|ja)$", title="提示语言", description="提示语言")
+    top_k: int = Field(default=20, ge=1, le=100, title="Top-K 采样", description="Top-K 采样")
+    top_p: float = Field(default=0.6, ge=0.0, le=1.0, title="Top-P 采样", description="Top-P 采样")
+    temperature: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=2.0,
+        title="温度参数",
+        description=(
+            "温度参数（GPT 语义 token 采样）：低温度会诱发 token 复读（音频拉长数倍并伴随异常音），保持服务端默认 1.0"
+        ),
+    )
+    speed_factor: float = Field(default=1.0, ge=0.1, le=3.0, title="语速因子", description="语速因子")
+    streaming_mode: int = Field(
+        default=1,
+        ge=0,
+        le=3,
+        title="流式档位",
+        description=(
+            "流式档位：0=整段合成完一次性返回；1=按句流式（质量最好，首包=首句合成完）；"
+            "2=token级流式（质量中等，首包更低）；3=token级定长chunk（响应最快，质量略降）"
+        ),
+    )
+    media_type: str = Field(
+        default="wav",
+        pattern=r"^(wav|ogg)$",
+        title="媒体类型",
+        description="媒体类型（api_v2 支持 wav/ogg/aac/raw；流式 wav 为首块 WAV 头 + 裸 PCM）",
+    )
+    text_split_method: str = Field(
+        default="cut5",
+        pattern=r"^(cut0|cut1|cut2|cut3|cut4|cut5)$",
+        title="文本分割方法",
+        description="文本分割方法",
+    )
+    batch_size: int = Field(default=1, ge=1, le=10, title="批处理大小", description="批处理大小")
+    batch_threshold: float = Field(default=0.7, ge=0.0, le=1.0, title="批处理阈值", description="批处理阈值")
+    repetition_penalty: float = Field(
+        default=1.35,
+        ge=0.5,
+        le=2.0,
+        title="重复惩罚",
+        description=(
+            "重复惩罚（GPT 语义 token 防复读）：1.0 等于关闭，实测在 v5 系"
+            "底模上约 40% 句子诱发 token 循环（音频拉长伴杂音）；保持服务端默认 1.35"
+        ),
+    )
+    sample_steps: int = Field(default=10, ge=1, le=50, title="采样步数", description="采样步数")
+    super_sampling: bool = Field(default=True, title="超采样", description="是否启用超采样")
+    sample_rate: int = Field(default=32000, ge=8000, le=48000, title="采样率", description="采样率")
+
+
+class VoiceboxParams(BaseConfig):
+    """Voicebox 引擎参数（``[tts.voicebox]`` 段）"""
+
+    host: str = Field(default="127.0.0.1", title="API 主机地址", description="Voicebox API 主机地址")
+    port: int = Field(default=17493, ge=1, le=65535, title="API 端口", description="Voicebox API 端口")
+    profile_id: str = Field(
+        default="",
+        title="音色 Profile ID",
+        description="音色 profile ID（在 Voicebox 中克隆音色后获得；留空时合成会报错提示）",
+    )
+    language: str = Field(default="zh", title="语言代码", description="语言代码")
+    sample_rate: int = Field(default=24000, ge=8000, le=48000, title="输出采样率", description="输出采样率")
+    generation_timeout_ms: int = Field(
+        default=120000, ge=5000, le=300000, title="生成超时", description="生成超时（毫秒）"
+    )
+
+
+class OmniTTSParams(BaseConfig):
+    """全模态大模型 TTS 引擎参数（``[tts.omni_tts]`` 段；OpenAI 兼容线协议）"""
+
+    llm_profile: str = Field(
+        default="tts",
+        title="LLM 用途档位",
+        description="LLM 用途 profile（model.toml [llm_profiles] 键，须指向带语音输出模态的模型）",
+    )
+    voice: str = Field(
+        default="",
+        title="音色",
+        description="音色（厂商词表，如 DashScope 的 Chelsie；必填，留空合成会报错提示）",
+    )
+    audio_format: str = Field(default="wav", title="音频格式", description="音频封装格式（wav/pcm16 等，随端点支持）")
+    sample_rate: int = Field(
+        default=24000, ge=8000, le=48000, title="采样率", description="输出采样率（播放与时长计算用）"
+    )
+    style_prompt: str = Field(
+        default="",
+        title="语音风格提示",
+        description="语音风格提示（系统提示词静态注入；不承载台词内容）",
+    )
 
 
 class TTSConfig(BaseConfig):
@@ -189,23 +301,23 @@ class TTSConfig(BaseConfig):
         description="单次发声等待超时（合成+播放，毫秒）；0 表示不限制。"
         "播放时长与语音等长，此值是防引擎卡死的兜底而非正常耗时上限",
     )
-    edge_tts: Dict[str, Any] = Field(
-        default_factory=dict,
+    edge_tts: EdgeTTSParams = Field(
+        default_factory=EdgeTTSParams,
         title="EdgeTTS 参数",
         description="EdgeTTS 引擎参数（仅 provider=edge_tts 时生效）",
     )
-    gptsovits: Dict[str, Any] = Field(
-        default_factory=dict,
+    gptsovits: GPTSoVITSParams = Field(
+        default_factory=GPTSoVITSParams,
         title="GPT-SoVITS 参数",
         description="GPT-SoVITS 引擎参数（仅 provider=gptsovits 时生效）",
     )
-    voicebox: Dict[str, Any] = Field(
-        default_factory=dict,
+    voicebox: VoiceboxParams = Field(
+        default_factory=VoiceboxParams,
         title="Voicebox 参数",
         description="Voicebox 引擎参数（仅 provider=voicebox 时生效；需填写 profile_id）",
     )
-    omni_tts: Dict[str, Any] = Field(
-        default_factory=dict,
+    omni_tts: OmniTTSParams = Field(
+        default_factory=OmniTTSParams,
         title="全模态大模型 TTS 参数",
         description="全模态大模型 TTS 引擎参数（OpenAI 兼容线协议；仅 provider=omni_tts 时生效）",
     )
@@ -216,6 +328,38 @@ class TTSConfig(BaseConfig):
 # ---------------------------------------------------------------------------
 
 
+class SubtitleGuiParams(BaseConfig):
+    """Tk GUI 字幕后端参数（``[subtitle.tk_gui]`` 段）"""
+
+    window_width: int = Field(default=800, ge=100, le=3840, title="窗口宽度", description="字幕窗口宽度")
+    window_height: int = Field(default=100, ge=50, le=2160, title="窗口高度", description="字幕窗口高度")
+    window_offset_y: int = Field(default=100, ge=0, le=2160, title="底部偏移", description="字幕窗口距离底部的偏移")
+    font_family: str = Field(default="Microsoft YaHei UI", title="字体名称", description="字体名称")
+    font_size: int = Field(default=28, ge=10, le=100, title="字体大小", description="字体大小")
+    font_weight: str = Field(default="bold", title="字体粗细", description="字体粗细")
+    text_color: str = Field(default="white", pattern=r"^[a-zA-Z#]+$", title="文字颜色", description="文字颜色")
+    outline_enabled: bool = Field(default=True, title="启用描边", description="是否启用描边")
+    outline_color: str = Field(default="black", pattern=r"^[a-zA-Z#]+$", title="描边颜色", description="描边颜色")
+    outline_width: int = Field(default=2, ge=0, le=10, title="描边宽度", description="描边宽度")
+    background_color: str = Field(
+        default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$", title="背景颜色", description="背景颜色"
+    )
+    fade_delay_ms: int = Field(default=5000, ge=0, le=300000, title="淡出延迟", description="淡出延迟（毫秒）")
+    auto_hide: bool = Field(default=True, title="自动隐藏", description="是否自动隐藏")
+    window_alpha: float = Field(default=0.95, ge=0.0, le=1.0, title="窗口透明度", description="窗口透明度")
+    always_on_top: bool = Field(default=False, title="窗口置顶", description="是否置顶")
+    obs_friendly_mode: bool = Field(default=True, title="OBS 友好模式", description="OBS 友好模式")
+    window_title: str = Field(default="Amaidesu-Subtitle-OBS", title="窗口标题", description="窗口标题")
+    use_chroma_key: bool = Field(default=False, title="使用色度键", description="是否使用色度键")
+    chroma_key_color: str = Field(
+        default="#00FF00", pattern=r"^#[0-9A-Fa-f]{6}$", title="色度键颜色", description="色度键颜色"
+    )
+    always_show_window: bool = Field(default=True, title="始终显示窗口", description="是否始终显示窗口")
+    show_in_taskbar: bool = Field(default=True, title="任务栏显示", description="是否在任务栏显示")
+    window_minimizable: bool = Field(default=True, title="可最小化", description="窗口是否可最小化")
+    show_waiting_text: bool = Field(default=False, title="显示等待文字", description="是否显示等待文字")
+
+
 class SubtitleInfraConfig(BaseConfig):
     """字幕基础设施配置（``[subtitle]`` 段）
 
@@ -224,7 +368,7 @@ class SubtitleInfraConfig(BaseConfig):
             到全部启用后端。
         backends: 启用的字幕后端列表（多后端可同时启用，如 tk_gui /
             dashboard）。
-        tk_gui: Tk GUI 字幕后端参数（键对应 SubtitleGuiService.ConfigSchema；
+        tk_gui: Tk GUI 字幕后端参数（键由 SubtitleGuiParams 声明；
             free-form dict，缺失键由多文件加载器的后端 schema 补全机制填充）。
     """
 
@@ -241,10 +385,10 @@ class SubtitleInfraConfig(BaseConfig):
             "x-options": ["tk_gui", "dashboard"],
         },
     )
-    tk_gui: Dict[str, Any] = Field(
-        default_factory=dict,
+    tk_gui: SubtitleGuiParams = Field(
+        default_factory=SubtitleGuiParams,
         title="Tk GUI 后端参数",
-        description="Tk GUI 字幕后端参数（SubtitleGuiService.ConfigSchema 键；缺失键自动补齐）",
+        description="Tk GUI 字幕后端参数（仅 backends 含 tk_gui 时生效）",
     )
 
 

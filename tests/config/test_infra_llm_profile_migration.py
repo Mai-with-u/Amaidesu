@@ -59,6 +59,10 @@ def test_migration_writeback_on_load(tmp_path: Path):
 
     load_config_dir(tmp_path)
 
+    # 按 section 解析断言（全文子串会误伤 [tts.omni_tts] 的合法同名键）
+    import tomllib
+
     content = infra.read_text(encoding="utf-8")
-    assert "llm_profile" not in content
+    data = tomllib.loads(content)
+    assert "llm_profile" not in data.get("simulator", {})
     assert 'version = "2.0.42"' in content

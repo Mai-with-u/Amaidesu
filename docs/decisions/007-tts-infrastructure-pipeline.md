@@ -122,4 +122,6 @@ v2 主体性架构确立后，Amaidesu 已形成 Agent + 工具 + 存储 + 编�
 
 **后果更新**：omni_tts 引擎重写为全模态大模型语音合成后成为首个有额外共享依赖（LLMManager）的引擎；"构造签名统一"由"装配适配行统一"取代——引擎工厂仅持真实依赖，注册表登记 `_assemble_*` 适配行（统一接受 config/event_bus/audio_sink/llm_service 并决定转发什么），避免依赖并集随引擎特化而膨胀到所有工厂签名。
 
+**后果更新**：本文"引擎子段为自由 dict"的设计被 typed 子段取代（`EdgeTTSParams` / `GPTSoVITSParams` / `VoiceboxParams` / `OmniTTSParams` 与字幕 GUI 的 `SubtitleGuiParams`，定义于 config 侧 core_schemas、组件经 `ConfigSchema` 别名引用）。动因：自由 dict 使物化快照对该段无字段可写，用户看文件不知可配什么，违反"配置文件是用户唯一契约面"原则——这是"静态命名段 typed 引用"教义（动态键段走注册表、静态命名段走 typed）在全部历史残留上的收敛完成。typed 化后字段全集带默认值与注释落盘、WebUI 表单化、校验前置到加载期；未知键按 infra 域既有语义剥离记录（硬错对齐属全域二期）。
+
 ---

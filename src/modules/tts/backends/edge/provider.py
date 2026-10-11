@@ -16,9 +16,8 @@ import tempfile
 from typing import Any, Dict, Optional, TYPE_CHECKING, Tuple
 
 import numpy as np
-from pydantic import Field
 
-from src.modules.config.schemas.base import BaseConfig
+from src.modules.config.core_schemas import EdgeTTSParams
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from ...common import (
@@ -56,11 +55,8 @@ class EdgeTTSProvider:
 
     PROVIDER_NAME = "edge_tts"
 
-    class ConfigSchema(BaseConfig):
-        """EdgeTTS 配置"""
-
-        type: str = "edge_tts"
-        voice: str = Field(default="zh-CN-XiaoxiaoNeural", description="Edge TTS 语音")
+    # 参数 Schema 单一事实源在 config 侧（core_schemas），此处仅别名引用
+    ConfigSchema = EdgeTTSParams
 
     def __init__(
         self,

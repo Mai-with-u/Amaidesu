@@ -22,9 +22,8 @@ import base64
 from typing import Any, Dict, Optional, Protocol
 
 import numpy as np
-from pydantic import Field
 
-from src.modules.config.schemas.base import BaseConfig
+from src.modules.config.core_schemas import OmniTTSParams
 from src.modules.events.event_bus import EventBus
 from src.modules.llm.bootstrap import validate_profile_binding
 from src.modules.llm.payload import Response
@@ -71,18 +70,8 @@ class OmniTTSProvider:
 
     PROVIDER_NAME = "omni_tts"
 
-    class ConfigSchema(BaseConfig):
-        """omni_tts 配置"""
-
-        type: str = "omni_tts"
-        llm_profile: str = Field(
-            default="tts",
-            description="LLM 用途 profile（model.toml [llm_profiles] 键，须指向带语音输出模态的模型）",
-        )
-        voice: str = Field(default="", description="音色（厂商词表，如 Chelsie/alloy；必填，留空合成会报错）")
-        audio_format: str = Field(default="wav", description="音频封装格式（wav/pcm16 等，随端点支持）")
-        sample_rate: int = Field(default=24000, ge=8000, le=48000, description="输出采样率（播放与时长计算用）")
-        style_prompt: str = Field(default="", description="语音风格提示（系统提示词静态注入；不承载台词内容）")
+    # 参数 Schema 单一事实源在 config 侧（core_schemas），此处仅别名引用
+    ConfigSchema = OmniTTSParams
 
     def __init__(
         self,

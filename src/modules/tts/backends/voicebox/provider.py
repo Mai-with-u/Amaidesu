@@ -16,9 +16,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import aiohttp
 import numpy as np
-from pydantic import Field
 
-from src.modules.config.schemas.base import BaseConfig
+from src.modules.config.core_schemas import VoiceboxParams
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from ...common import (
@@ -49,17 +48,8 @@ class VoiceboxProvider:
 
     PROVIDER_NAME = "voicebox"
 
-    class ConfigSchema(BaseConfig):
-        type: str = "voicebox"
-        host: str = Field(default="127.0.0.1", description="Voicebox API 主机地址")
-        port: int = Field(default=17493, ge=1, le=65535, description="Voicebox API 端口")
-        profile_id: str = Field(
-            default="",
-            description="音色 profile ID（在 Voicebox 中克隆音色后获得；留空时合成会报错提示）",
-        )
-        language: str = Field(default="zh", description="语言代码")
-        sample_rate: int = Field(default=24000, ge=8000, le=48000, description="输出采样率")
-        generation_timeout_ms: int = Field(default=120000, ge=5000, le=300000, description="生成超时（毫秒）")
+    # 参数 Schema 单一事实源在 config 侧（core_schemas），此处仅别名引用
+    ConfigSchema = VoiceboxParams
 
     def __init__(
         self,

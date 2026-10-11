@@ -15,9 +15,8 @@ from collections import deque
 from typing import Any, AsyncIterator, Dict, Optional, TYPE_CHECKING, cast
 
 import numpy as np
-from pydantic import Field
 
-from src.modules.config.schemas.base import BaseConfig
+from src.modules.config.core_schemas import GPTSoVITSParams
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from ...common import (
@@ -51,64 +50,8 @@ class GPTSoVITSProvider:
 
     PROVIDER_NAME = "gptsovits"
 
-    class ConfigSchema(BaseConfig):
-        """GPT-SoVITS 配置"""
-
-        type: str = "gptsovits"
-        host: str = Field(default="127.0.0.1", description="API 主机地址")
-        port: int = Field(default=9880, ge=1, le=65535, description="API 端口")
-        ref_audio_path: str = Field(
-            default="",
-            description="参考音频路径（由 GPT-SoVITS 服务端读取，建议绝对路径）",
-        )
-        prompt_text: str = Field(default="", description="提示文本")
-        text_language: str = Field(default="zh", pattern=r"^(zh|en|ja|auto)$", description="文本语言")
-        prompt_language: str = Field(default="zh", pattern=r"^(zh|en|ja)$", description="提示语言")
-        top_k: int = Field(default=20, ge=1, le=100, description="Top-K 采样")
-        top_p: float = Field(default=0.6, ge=0.0, le=1.0, description="Top-P 采样")
-        temperature: float = Field(
-            default=1.0,
-            ge=0.0,
-            le=2.0,
-            description=(
-                "温度参数（GPT 语义 token 采样）：低温度会诱发 token 复读"
-                "（音频拉长数倍并伴随异常音），保持服务端默认 1.0"
-            ),
-        )
-        speed_factor: float = Field(default=1.0, ge=0.1, le=3.0, description="语速因子")
-        streaming_mode: int = Field(
-            default=1,
-            ge=0,
-            le=3,
-            description=(
-                "流式档位：0=整段合成完一次性返回；1=按句流式（质量最好，首包=首句合成完）；"
-                "2=token级流式（质量中等，首包更低）；3=token级定长chunk（响应最快，质量略降）"
-            ),
-        )
-        media_type: str = Field(
-            default="wav",
-            pattern=r"^(wav|ogg)$",
-            description="媒体类型（api_v2 支持 wav/ogg/aac/raw；流式 wav 为首块 WAV 头 + 裸 PCM）",
-        )
-        text_split_method: str = Field(
-            default="cut5",
-            pattern=r"^(cut0|cut1|cut2|cut3|cut4|cut5)$",
-            description="文本分割方法",
-        )
-        batch_size: int = Field(default=1, ge=1, le=10, description="批处理大小")
-        batch_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="批处理阈值")
-        repetition_penalty: float = Field(
-            default=1.35,
-            ge=0.5,
-            le=2.0,
-            description=(
-                "重复惩罚（GPT 语义 token 防复读）：1.0 等于关闭，实测在 v5 系"
-                "底模上约 40% 句子诱发 token 循环（音频拉长伴杂音）；保持服务端默认 1.35"
-            ),
-        )
-        sample_steps: int = Field(default=10, ge=1, le=50, description="采样步数")
-        super_sampling: bool = Field(default=True, description="是否启用超采样")
-        sample_rate: int = Field(default=32000, ge=8000, le=48000, description="采样率")
+    # 参数 Schema 单一事实源在 config 侧（core_schemas），此处仅别名引用
+    ConfigSchema = GPTSoVITSParams
 
     def __init__(
         self,

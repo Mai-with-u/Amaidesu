@@ -20,9 +20,8 @@ import tkinter as tk
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageColor, ImageFilter, ImageFont, ImageTk
-from pydantic import Field
 
-from src.modules.config.schemas.base import BaseConfig
+from src.modules.config.core_schemas import SubtitleGuiParams
 from src.modules.logging import ModuleLogger, get_logger
 from src.modules.time_utils import now_ms
 
@@ -529,34 +528,8 @@ class SubtitleGuiService:
     - 字幕渲染走 GUI 服务，不走 ToolResult 反馈给 LLM
     """
 
-    class ConfigSchema(BaseConfig):
-        """字幕 GUI 配置"""
-
-        type: str = "subtitle"
-
-        window_width: int = Field(default=800, ge=100, le=3840, description="字幕窗口宽度")
-        window_height: int = Field(default=100, ge=50, le=2160, description="字幕窗口高度")
-        window_offset_y: int = Field(default=100, ge=0, le=2160, description="字幕窗口距离底部的偏移")
-        font_family: str = Field(default="Microsoft YaHei UI", description="字体名称")
-        font_size: int = Field(default=28, ge=10, le=100, description="字体大小")
-        font_weight: str = Field(default="bold", description="字体粗细")
-        text_color: str = Field(default="white", pattern=r"^[a-zA-Z#]+$", description="文字颜色")
-        outline_enabled: bool = Field(default=True, description="是否启用描边")
-        outline_color: str = Field(default="black", pattern=r"^[a-zA-Z#]+$", description="描边颜色")
-        outline_width: int = Field(default=2, ge=0, le=10, description="描边宽度")
-        background_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$", description="背景颜色")
-        fade_delay_ms: int = Field(default=5000, ge=0, le=300000, description="淡出延迟（毫秒）")
-        auto_hide: bool = Field(default=True, description="是否自动隐藏")
-        window_alpha: float = Field(default=0.95, ge=0.0, le=1.0, description="窗口透明度")
-        always_on_top: bool = Field(default=False, description="是否置顶")
-        obs_friendly_mode: bool = Field(default=True, description="OBS 友好模式")
-        window_title: str = Field(default="Amaidesu-Subtitle-OBS", description="窗口标题")
-        use_chroma_key: bool = Field(default=False, description="是否使用色度键")
-        chroma_key_color: str = Field(default="#00FF00", pattern=r"^#[0-9A-Fa-f]{6}$", description="色度键颜色")
-        always_show_window: bool = Field(default=True, description="是否始终显示窗口")
-        show_in_taskbar: bool = Field(default=True, description="是否在任务栏显示")
-        window_minimizable: bool = Field(default=True, description="窗口是否可最小化")
-        show_waiting_text: bool = Field(default=False, description="是否显示等待文字")
+    # 参数 Schema 单一事实源在 config 侧（core_schemas），此处仅别名引用
+    ConfigSchema = SubtitleGuiParams
 
     def __init__(self, config: Dict[str, Any]) -> None:
         self.config = config

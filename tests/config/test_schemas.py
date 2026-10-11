@@ -100,3 +100,80 @@ class TestModelConfig:
             "simulator",
             "tts",
         )
+
+
+class TestTTSTypedSections:
+    """``[tts]`` 四引擎子段 typed 化：字段全集物化可发现、漂移带点路径"""
+
+    def _infra_root(self, tts_section: dict) -> "InfraRootConfig":
+        from src.modules.config.infra_schemas import InfraRootConfig
+
+        raw = {"meta": {"version": "0.0.0"}, **tts_section}
+        instance, report = InfraRootConfig.from_dict_with_drift_check(raw)
+        return instance, report
+
+    def test_engine_sections_typed_defaults(self) -> None:
+        """缺省构造：四引擎子段为 typed 实例，字段全集带默认值"""
+        instance, _report = self._infra_root({"tts": {"enabled": True, "provider": "gptsovits"}})
+        tts = instance.tts
+        assert tts.gptsovits.host == "127.0.0.1" and tts.gptsovits.port == 9880
+        assert tts.omni_tts.llm_profile == "tts" and tts.omni_tts.voice == ""
+        assert tts.voicebox.profile_id == "" and tts.edge_tts.voice == "zh-CN-XiaoxiaoNeural"
+
+    def test_missing_engine_keys_reported_with_dotted_path(self) -> None:
+        """子段缺键 → 漂移报告带 <段>.<键> 点路径（写回据此补默认）"""
+        _instance, report = self._infra_root(
+            {"tts": {"enabled": True, "provider": "omni_tts", "omni_tts": {"voice": "Chelsie"}}}
+        )
+        assert "tts.omni_tts.llm_profile" in report.missing
+        assert "tts.omni_tts.voice" not in report.missing
+
+    def test_unknown_engine_key_stripped_as_redundant(self) -> None:
+        """子段未知键按 infra 域既有语义剥离并计入 redundant（硬错对齐属全域二期）"""
+        instance, report = self._infra_root(
+            {
+                "tts": {
+                    "enabled": True,
+                    "provider": "omni_tts",
+                    "omni_tts": {"voice": "Chelsie", "junk_key": 1},
+                }
+            }
+        )
+        assert "tts.omni_tts.junk_key" in report.redundant
+        assert "junk_key" not in instance.tts.omni_tts.model_dump()
+
+    def test_user_filled_values_survive_roundtrip(self) -> None:
+        """用户已填值经校验后原样保留（dump 即写回形态）"""
+        instance, _report = self._infra_root(
+            {
+                "tts": {
+                    "enabled": True,
+                    "provider": "gptsovits",
+                    "gptsovits": {"sample_rate": 48000, "sample_steps": 8},
+                }
+            }
+        )
+        dumped = instance.tts.gptsovits.model_dump()
+        assert dumped["sample_rate"] == 48000 and dumped["sample_steps"] == 8
+        assert dumped["temperature"] == 1.0  # 缺失键补默认
+
+
+class TestSubtitleGuiTypedSection:
+    """``[subtitle.tk_gui]`` typed 化：最后一个静态命名自由 dict 段归位"""
+
+    def _load(self, subtitle_section: dict) -> tuple:
+        from src.modules.config.infra_schemas import InfraRootConfig
+
+        raw = {"meta": {"version": "0.0.0"}, **subtitle_section}
+        return InfraRootConfig.from_dict_with_drift_check(raw)
+
+    def test_tk_gui_typed_defaults(self) -> None:
+        instance, _report = self._load({"subtitle": {"enabled": True, "backends": ["tk_gui"]}})
+        gui = instance.subtitle.tk_gui
+        assert gui.window_width == 800 and gui.font_size == 28
+        assert gui.obs_friendly_mode is True
+
+    def test_tk_gui_missing_keys_reported_with_dotted_path(self) -> None:
+        _instance, report = self._load({"subtitle": {"tk_gui": {"font_size": 36}}})
+        assert "subtitle.tk_gui.window_width" in report.missing
+        assert "subtitle.tk_gui.font_size" not in report.missing
