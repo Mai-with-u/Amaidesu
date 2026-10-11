@@ -1562,6 +1562,30 @@ async def test_execute_tool_replaces_base64_payload_with_placeholder() -> None:
     assert observation["image"] == "[图像 1 KB 已省略]"
 
 
+@pytest.mark.asyncio
+async def test_execute_tool_forwards_caller_profile() -> None:
+    """registry 工具调用携带 caller_profile（结果消费方维度，ADR-037）。
+
+    react 循环的工具结果进 minecraft 档位对话，caller_profile 填档位名；
+    宿主直读（minecraft-host，不进对话）则保持空串走非视觉语义。
+    """
+    agent = MinecraftAgent(
+        _offline_config(),
+        llm_manager=MagicMock(),
+        event_bus=MagicMock(),
+        tool_registry=MagicMock(),
+    )
+    agent._tool_registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(tool_name="some_tool", success=True, content="")
+    )
+
+    await agent._execute_tool("some_tool", {})
+
+    invocation = agent._tool_registry.invoke.call_args[0][0]
+    assert invocation.caller_profile == "minecraft"
+    assert invocation.source == "minecraft-react"
+
+
 # ---------------------------------------------------------------------------
 # S3：上报契约（任务上下文 + 发生时刻 + 是否已结束）
 # ---------------------------------------------------------------------------

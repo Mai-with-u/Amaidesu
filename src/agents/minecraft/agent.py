@@ -838,7 +838,13 @@ class MinecraftAgent(BaseAgent):
         if self._tool_registry is None:
             return {"ok": False, "error": "工具执行失败：tool_registry 未注入", "tool": name}
         result = await self._tool_registry.invoke(
-            ToolInvocation(tool_name=name, arguments=arguments, source="minecraft-react", round_id=round_id)
+            ToolInvocation(
+                tool_name=name,
+                arguments=arguments,
+                source="minecraft-react",
+                round_id=round_id,
+                caller_profile=MINECRAFT_PROFILE,
+            )
         )
         if name.startswith(f"{PROVIDER}_"):
             return reply_of(result).raw

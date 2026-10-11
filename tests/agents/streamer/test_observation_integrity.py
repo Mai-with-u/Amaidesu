@@ -198,3 +198,20 @@ async def test_long_prose_and_urls_pass_through_untouched() -> None:
     assert parsed["ok"] is True
     assert parsed["url"] == url
     assert parsed["content"] == article
+
+
+async def test_caller_profile_forwarded_to_registry() -> None:
+    """对话式调用携带 caller_profile（能力判定维度），与场景标识 source 正交。
+
+    caller_profile 供视觉工具按调用方能力分叉（ADR-037）；source 记调用
+    出于什么场景（观测维度），两者语义不同、各填各的。
+    """
+    registry = MagicMock()
+    registry.invoke = AsyncMock(return_value=ToolExecutionResult(tool_name="some_action", success=True, content=""))
+    planner = _make_planner(registry)
+
+    await planner._invoke_registry_tool("some_action", {})
+
+    invocation = registry.invoke.call_args[0][0]
+    assert invocation.caller_profile == "planner"
+    assert invocation.source == "planner-react"

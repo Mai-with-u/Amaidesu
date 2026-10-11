@@ -979,3 +979,39 @@ async def test_generate_audio_explicit_profile_dispatch():
 
     result = await manager.generate_audio("x", profile="summary", voice="Chelsie")
     assert result.success is True
+
+
+# =============================================================================
+# 能力协商出口：is_profile_visual（ADR-037）
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_is_profile_visual_follows_primary_model():
+    """出口取 profile failover 首位模型的 visual 位。
+
+    主模型 visual → True；主模型未声明 → False；未知 profile → False
+    （判错方向 = 多一次 VLM 转述，而非 agent 拿到看不懂的图）。
+    """
+    manager = LLMManager()
+    config: Dict[str, Any] = {
+        "llm_providers": [
+            {"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1", "api_key": "k"}
+        ],
+        "llm_models": [
+            {"name": "vision-model", "model_identifier": "vision-id", "api_provider": "test", "visual": True},
+            {"name": "text-only", "model_identifier": "text-id", "api_provider": "test"},
+        ],
+        "llm_profiles": {
+            "planner": {"model_list": ["vision-model", "text-only"]},
+            "replyer": {"model_list": ["text-only", "vision-model"]},
+            "vision": {"model_list": ["vision-model"]},
+        },
+    }
+    with patch.dict(_CLIENT_DISPATCH, {"openai": MagicMock(return_value=_make_mock_backend())}):
+        await manager.setup(config)
+
+    assert manager.is_profile_visual("planner") is True
+    assert manager.is_profile_visual("replyer") is False
+    assert manager.is_profile_visual("vision") is True
+    assert manager.is_profile_visual("no-such-profile") is False

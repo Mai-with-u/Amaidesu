@@ -759,7 +759,13 @@ class Planner:
         for name in self.typed_config.reference_tools:
             try:
                 result = await self._tool_registry.invoke(
-                    ToolInvocation(tool_name=name, arguments={}, source="planner-reference", round_id=round_id)
+                    ToolInvocation(
+                        tool_name=name,
+                        arguments={},
+                        source="planner-reference",
+                        round_id=round_id,
+                        caller_profile=PLANNER_PROFILE,
+                    )
                 )
             except Exception as e:
                 self.logger.warning(f"参考工具 '{name}' 调用异常: {e}", exc=True)
@@ -846,7 +852,13 @@ class Planner:
                 # 游戏里有人搭话促发的一轮弹幕批是空的，原话同样交给表达侧，调用后清空
                 set_game_chat(game_chat)
             result = await self._tool_registry.invoke(
-                ToolInvocation(tool_name="streamer_reply", arguments=args, source="planner-react", round_id=round_id)
+                ToolInvocation(
+                    tool_name="streamer_reply",
+                    arguments=args,
+                    source="planner-react",
+                    round_id=round_id,
+                    caller_profile=PLANNER_PROFILE,
+                )
             )
         except Exception as e:
             self.logger.warning(f"reply 工具执行异常: {e}", exc=True)
@@ -957,7 +969,13 @@ class Planner:
             )
         try:
             result = await self._tool_registry.invoke(
-                ToolInvocation(tool_name=name, arguments=args, source="planner-react", round_id=round_id)
+                ToolInvocation(
+                    tool_name=name,
+                    arguments=args,
+                    source="planner-react",
+                    round_id=round_id,
+                    caller_profile=PLANNER_PROFILE,
+                )
             )
         except Exception as e:
             self.logger.warning(f"工具 '{name}' 执行异常: {e}", exc=True)

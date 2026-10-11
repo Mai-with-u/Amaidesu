@@ -77,11 +77,14 @@ class _ResolvedModel(BaseModel):
         model_name: model 注册名（对应 ``llm_models[].name``）
         model_identifier: 实际 API 模型标识
         provider_name: 关联 provider 名
+        visual: 是否声明视觉能力（对应 ``llm_models[].visual``）；能力协商
+            的查询出口经此判定"当前主模型能否看图"（ADR-037）
     """
 
     model_name: str
     model_identifier: str
     provider_name: str
+    visual: bool = False
 
     model_config = {"frozen": True}
 
@@ -173,6 +176,7 @@ def build_resolved_profile(
                 model_name=mname,
                 model_identifier=mcfg.get("model_identifier", mname),
                 provider_name=provider_name,
+                visual=bool(mcfg.get("visual", False)),
             )
         )
 

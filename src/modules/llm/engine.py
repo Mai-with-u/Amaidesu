@@ -610,6 +610,22 @@ class LLMManager:
             return 0
         return resolved.history_token_budget if resolved is not None else 0
 
+    def is_profile_visual(self, profile: Optional[str]) -> bool:
+        """该 profile 当前主模型是否声明视觉能力（``llm_models[].visual``）。
+
+        能力协商出口（ADR-037）：观察组装（工具结果图附不附）与视觉工具
+        （VLM 调不调）据此分叉。"当前主模型" = selection_strategy 排序后的
+        failover 首位，与实际请求的首选一致。解析失败 / 无模型按 False——
+        判错方向的代价是多一次 VLM 转述，而不是 agent 拿到看不懂的图。
+        """
+        try:
+            resolved = self._profiles.get(self._resolve_profile_name(profile))
+        except ValueError:
+            return False
+        if resolved is None or not resolved.models:
+            return False
+        return bool(self._select_models_for_call(resolved)[0].visual)
+
     def _get_profile(self, profile_name: str) -> _ResolvedProfile:
         if profile_name not in self._profiles:
             raise ValueError(f"profile {profile_name!r} 未配置。已配置的 profile: {list(self._profiles.keys())}")
