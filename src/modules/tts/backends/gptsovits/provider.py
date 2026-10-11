@@ -318,9 +318,9 @@ class GPTSoVITSProvider:
             )
 
         except asyncio.CancelledError:
-            # 队列看门狗超时取消：声卡流必须显式关闭，否则已写入的
-            # PCM 会继续播出，与下一条 utterance 的音频重叠
-            self.audio_manager.stop_stream()
+            # 队列看门狗超时取消：声卡流必须显式关闭并丢弃未播预缓冲，
+            # 否则 PCM 残留会继续播出，与下一条 utterance 的音频重叠
+            self.audio_manager.stop_stream(discard_pending=True)
             self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except GPTSoVITSServiceError as e:

@@ -92,18 +92,31 @@ def latest_session_id() -> int:
 
 
 class _CollectingSink:
-    """AudioSink 协议实现：采集实时播放链路递入的音频块。
+    """AudioSink 协议实现：采集实时播放链路递入的音频块 + 喂入时间戳。
 
     ``handle_speech`` 每句走一次 ``start → feed×N → stop``；``begin_capture``
     / ``take_wav`` 由脚本在每句前后调用，把本次发言的全部 PCM 拼成
     44B 头 + 裸 PCM 的 wav 字节（与 ``wav_duration`` 的解析形态一致）。
+    feed 时间戳用于欠载诊断：音频只能按实时消费，"墙钟耗时 - 音频时长"
+    即声卡饥饿量（数据没到、驱动空转的窗口）。
     """
 
     def __init__(self) -> None:
         self._chunks: list[tuple["object", int]] = []
+        self._feed_times: list[float] = []
+        self._wall_total = 0.0
 
     def begin_capture(self) -> None:
         self._chunks = []
+        self._feed_times = []
+
+    def start_capture_wall(self) -> None:
+        """记录本句回放墙钟起点（handle_speech 调用前）。"""
+        self._wall_total = time.monotonic()
+
+    @property
+    def wall_elapsed(self) -> float:
+        return time.monotonic() - self._wall_total
 
     def take_wav(self) -> bytes | None:
         if not self._chunks:
@@ -126,9 +139,24 @@ class _CollectingSink:
 
     def feed(self, chunk: "object", sample_rate: int) -> None:
         self._chunks.append((chunk, sample_rate))
+        self._feed_times.append(time.monotonic())
 
     def stop(self) -> None:
         pass
+
+    def starvation_report(self, audio_sec: float | None) -> str:
+        """欠载诊断行：墙钟耗时 vs 音频时长，差值≈声卡饥饿窗口。"""
+        if not self._feed_times or audio_sec is None:
+            return "n/a"
+        wall = self._feed_times[-1] - self._feed_times[0]
+        starve = wall - audio_sec
+        gaps = [
+            f"{self._feed_times[i + 1] - self._feed_times[i]:.1f}s空窗"
+            for i in range(len(self._feed_times) - 1)
+            if self._feed_times[i + 1] - self._feed_times[i] > 2.0
+        ]
+        gap_desc = f" | 大空窗: {', '.join(gaps)}" if gaps else ""
+        return f"墙钟{wall:.1f}s - 音频{audio_sec:.1f}s = 饥饿{starve:.1f}s{gap_desc}"
 
 
 async def main() -> None:
@@ -180,7 +208,21 @@ async def main() -> None:
                 # 完整生产播放链路：流式收块 → 实时写声卡；音频经分接采集供判读
                 replay_id = f"replay_{utt_id}"
                 sink.begin_capture()
-                await engine.handle_speech(content, utterance_id=replay_id)
+                # 欠载定位插桩：write_chunk 耗时（sounddevice 写阻塞）逐块记录
+                mgr = engine.audio_manager
+                orig_write_chunk = mgr.write_chunk
+                write_stats: list[float] = []
+
+                def _timed_write(chunk: "object", _orig=orig_write_chunk, _stats=write_stats) -> None:
+                    t0 = time.perf_counter()
+                    _orig(chunk)
+                    _stats.append(time.perf_counter() - t0)
+
+                mgr.write_chunk = _timed_write  # type: ignore[method-assign]
+                try:
+                    await engine.handle_speech(content, utterance_id=replay_id)
+                finally:
+                    mgr.write_chunk = orig_write_chunk  # type: ignore[method-assign]
                 data = sink.take_wav()
                 if data is None:
                     status = "无音频输出"
@@ -207,6 +249,12 @@ async def main() -> None:
             f"[{idx}/{len(utterances)}] #{utt_id} {chars}字 {f'{audio_sec:.1f}s' if audio_sec else status} | {preview}",
             flush=True,
         )
+        if args.play and status == "ok":
+            slow_writes = [w for w in write_stats if w > 1.0]
+            write_desc = f"写阻塞: 共{len(write_stats)}块, 慢写(>1s){len(slow_writes)}块" + (
+                f" 最大{max(write_stats):.1f}s" if slow_writes else ""
+            )
+            print(f"    欠载诊断: {sink.starvation_report(audio_sec)} | {write_desc}", flush=True)
 
         if args.save_all and audio_sec is not None:
             (out_dir / f"utt_{utt_id}.wav").write_bytes(data)

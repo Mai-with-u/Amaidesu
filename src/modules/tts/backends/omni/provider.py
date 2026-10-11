@@ -217,8 +217,9 @@ class OmniTTSProvider:
             )
         except asyncio.CancelledError:
             # 协程取消不会自动关闭声卡流，超时取消时必须显式截断
+            # （丢弃未播预缓冲，避免残留与下一次发声重叠）
             if self.audio_manager:
-                self.audio_manager.stop_stream()
+                self.audio_manager.stop_stream(discard_pending=True)
             self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except Exception as e:
