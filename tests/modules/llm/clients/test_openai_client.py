@@ -7,7 +7,7 @@ import pytest
 
 from src.modules.llm.clients.openai.client import OpenAIClient
 from src.modules.llm.errors import RetryableError
-from src.modules.llm.payload import GenerateRequest, Message, ToolCall
+from src.modules.llm.payload import GenerateRequest, ImagePart, Message, ToolCall
 
 
 MESSAGES = [{"role": "user", "content": "hello"}]
@@ -816,3 +816,73 @@ async def test_generate_audio_without_audio_treated_as_plain_text_response():
     assert result.success is True
     assert result.audio_base64 is None
     assert result.content == "plain"
+
+
+# =============================================================================
+# tool 观察带图的协议拆分（ADR-037）
+# =============================================================================
+
+
+def test_tool_message_with_image_splits_into_tool_text_and_user_image():
+    """tool 观察带图：tool 消息只留文本，图像提升为紧随的 user 消息。
+
+    OpenAI 协议 tool 角色只收文本（"image URLs are only allowed for
+    role: 'user'"）；拆分保证协议合法且图不丢，位置紧邻即配对语义。
+    """
+    client = OpenAIClient({"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1"})
+    request = GenerateRequest(
+        messages=[
+            Message(role="user", parts=["画面里有什么？"]),
+            Message(
+                role="tool",
+                parts=[
+                    '{"ok": true, "image": "[图像 1 KB 已省略]"}',
+                    ImagePart(image="data:image/png;base64,AAAA"),
+                ],
+                tool_call_id="call_1",
+            ),
+        ]
+    )
+
+    messages = client._request_to_openai_messages(request)
+
+    assert len(messages) == 3
+    tool_msg = messages[1]
+    assert tool_msg["role"] == "tool"
+    assert tool_msg["tool_call_id"] == "call_1"
+    assert tool_msg["content"] == '{"ok": true, "image": "[图像 1 KB 已省略]"}'
+    user_msg = messages[2]
+    assert user_msg["role"] == "user"
+    assert user_msg["content"][0]["type"] == "text"
+    assert "[系统附图" in user_msg["content"][0]["text"]
+    assert user_msg["content"][1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+
+def test_tool_message_without_image_stays_single_text():
+    """无图 tool 观察：纯文本折叠为字符串 content，单条输出（现状不回归）。"""
+    client = OpenAIClient({"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1"})
+    request = GenerateRequest(
+        messages=[Message(role="tool", parts=['{"ok": true}'], tool_call_id="call_2")]
+    )
+
+    messages = client._request_to_openai_messages(request)
+
+    assert len(messages) == 1
+    assert messages[0]["content"] == '{"ok": true}'
+
+
+def test_user_message_with_image_keeps_parts_list():
+    """user 消息带图（vision 既有形态）：content 保持 parts 列表，不折叠。"""
+    client = OpenAIClient({"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1"})
+    request = GenerateRequest(
+        messages=[
+            Message(role="user", parts=["看这张图", ImagePart(image="data:image/png;base64,BBBB")]),
+        ]
+    )
+
+    messages = client._request_to_openai_messages(request)
+
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"][0] == {"type": "text", "text": "看这张图"}
+    assert messages[0]["content"][1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,BBBB"}}

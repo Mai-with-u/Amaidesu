@@ -198,19 +198,20 @@ class OpenAIClient(BaseLLMClient):
         raise TypeError(f"未知的消息片段类型: {type(part).__name__}")
 
     @classmethod
-    def _message_to_openai(cls, message: Message) -> Dict[str, Any]:
-        """中立 Message → OpenAI 消息 dict（纯文本折叠为字符串 content）
+    def _message_to_openai(cls, message: Message) -> List[Dict[str, Any]]:
+        """中立 Message → OpenAI 消息 dict 列表（1..N 条）
 
         assistant 既往发起的调用还原为 ``tool_calls``（arguments 回到协议要求
         的 JSON 字符串形态），tool 观察还原 ``tool_call_id``——喂回多轮工具
         循环时这两项是协议合法性前提，缺则服务端拒绝整个消息序列。
+
+        tool 观察携带图像片段时按协议拆分：OpenAI 协议 tool 角色只收文本
+        （图像仅 user 角色可带），tool 消息保留文本、图像提升为紧随的 user
+        消息（ADR-037）——位置紧邻即配对语义。能走到这里的带图观察必然来
+        自视觉调用方（组装层已按主模型 visual 位分叉），此处不做能力兜底。
         """
         contents = [cls._part_to_openai(p) for p in message.parts]
-        if contents and all(c["type"] == "text" for c in contents):
-            content: Any = "".join(c["text"] for c in contents)
-        else:
-            content = contents
-        result: Dict[str, Any] = {"role": message.role, "content": content}
+        result: Dict[str, Any] = {"role": message.role, "content": contents}
         if message.tool_calls:
             result["tool_calls"] = [
                 {
@@ -227,7 +228,19 @@ class OpenAIClient(BaseLLMClient):
             ]
         if message.tool_call_id:
             result["tool_call_id"] = message.tool_call_id
-        return result
+        if message.role == "tool":
+            images = [c for c in contents if c["type"] == "image_url"]
+            if images:
+                result["content"] = "".join(c["text"] for c in contents if c["type"] == "text")
+                note_content: List[Dict[str, Any]] = [
+                    {"type": "text", "text": "[系统附图：上一条工具消息的截图]"},
+                    *images,
+                ]
+                return [result, {"role": "user", "content": note_content}]
+        if contents and all(c["type"] == "text" for c in contents):
+            content: Any = "".join(c["text"] for c in contents)
+            result["content"] = content
+        return [result]
 
     @classmethod
     def _request_to_openai_messages(cls, request: GenerateRequest) -> List[Dict[str, Any]]:
@@ -235,7 +248,8 @@ class OpenAIClient(BaseLLMClient):
         messages: List[Dict[str, Any]] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
-        messages.extend(cls._message_to_openai(m) for m in request.messages)
+        for message in request.messages:
+            messages.extend(cls._message_to_openai(message))
         return messages
 
     @staticmethod
