@@ -86,6 +86,28 @@ def test_classification_keeps_body_encounters_and_drops_goal_progress() -> None:
     assert classify("") is None
 
 
+def test_hurt_and_dimension_change_are_encounters_and_reminders_stay_silent() -> None:
+    """一阵挨打只来一条、归 attacked；换维度归 dimension_changed；提醒是写给游戏 Agent 的，不进叙事通道。"""
+    assert classify("hurt") == "attacked"
+    assert classify("dimension_changed") == "dimension_changed"
+    assert classify("reminder") is None
+    assert classify("gear_broken") == "unknown", "装备用坏没有专门事件名，走 unknown 但有说清性质的开头"
+    assert classify("discovered") == "unknown"
+
+
+def test_summary_tells_what_kind_of_encounter_it_was() -> None:
+    """挨打、换维度、装备用坏、探索发现：开头说清是什么事，坐标与观察编号不念给观众。"""
+    assert (
+        summarize("attacked", "hurt", "被骷髅（e12）射中 3 下，掉了 6 点血，还剩 8 点")
+        == "身体挨了一阵打：被骷髅射中 3 下，掉了 6 点血，还剩 8 点"
+    )
+    assert summarize("dimension_changed", "dimension_changed", "从主世界到了下界，落在 12, 70, -8") == (
+        "换了个维度：从主世界到了下界"
+    )
+    assert summarize("unknown", "gear_broken", "铁镐用坏了") == "手上的装备用坏了：铁镐用坏了"
+    assert summarize("unknown", "discovered", "看见一片岩浆湖") == "探索时发现了值得记的东西：看见一片岩浆湖"
+
+
 def test_summary_drops_coordinates_and_keeps_the_rest() -> None:
     """摘要只陈述事件里有的事实，带坐标的分句整句去掉，不留"停在了"这种残片。"""
     assert (

@@ -1,8 +1,8 @@
 """
 MaicraftAttentionCollector —— AI 玩家身体事件采集器
 
-上游是 MaiCraft v1 的事件流（``events`` 默认的 ``self``：角色身上发生的事）：生存需求插进来的临时任务（自卫、夜里封顶自保、
-退离边沿）开始与结束、角色自己处理不了的需求、角色死亡，都写在这条流上。本采集器**常驻**带着游标长轮询，
+上游是 MaiCraft v1 的事件流（``events`` 默认的 ``self``：角色身上发生的事）：挨了一阵打、换了维度、生存需求插进来的
+临时任务（自卫、夜里封顶自保、退离边沿）开始与结束、角色自己处理不了的需求、角色死亡，都写在这条流上。本采集器**常驻**带着游标长轮询，
 把其中的身体遭遇转成 ``game.body.*`` 事件；目标运行的处境变化归游戏 Agent 的任务通道，不转。
 连接、长轮询与游标都在 :class:`MaicraftEventsCollector`，这里只管分类与转发。
 
@@ -28,7 +28,9 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
     """AI 玩家身体事件采集器（常驻长轮询 MaiCraft 的任务事件流）。"""
 
     name = "maicraft_attention"
-    description = "常驻读 MaiCraft 的任务事件流，把身体先处理的急事、处理不了的需求与角色死亡转成 game.body.* 事件"
+    description = (
+        "常驻读 MaiCraft 的任务事件流，把挨打、换维度、身体先处理的急事、处理不了的需求与角色死亡转成 game.body.* 事件"
+    )
     stream_label = "任务事件流"
 
     async def _forward(self, event: Dict[str, Any]) -> bool:
