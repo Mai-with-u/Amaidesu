@@ -96,6 +96,9 @@ _PAYLOAD_METHODS = frozenset({"generate", "generate_vision", "generate_audio"})
 
 def _content_to_parts(content: Any) -> List[Any]:
     """OpenAI 风格 content（str / 分段列表）→ 中立 parts 列表"""
+    if content is None:
+        # 协议允许 assistant 发起 tool_calls 时 content 为 null（无伴随文本）
+        return []
     if isinstance(content, str):
         return [content]
     if not isinstance(content, list):
