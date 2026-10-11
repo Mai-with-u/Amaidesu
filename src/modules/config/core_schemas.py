@@ -157,7 +157,8 @@ class TTSConfig(BaseConfig):
         edge_tts: EdgeTTS 引擎参数（仅 provider=edge_tts 时生效）。
         gptsovits: GPT-SoVITS 引擎参数（仅 provider=gptsovits 时生效）。
         voicebox: Voicebox 引擎参数（仅 provider=voicebox 时生效；需填写 profile_id）。
-        omni_tts: OmniTTS 引擎参数（仅 provider=omni_tts 时生效）。
+        omni_tts: 全模态大模型 TTS 引擎参数（OpenAI 兼容线协议，经 LLMManager
+            语音 profile 调用带语音输出模态的模型；仅 provider=omni_tts 时生效）。
     """
 
     enabled: bool = Field(
@@ -205,8 +206,8 @@ class TTSConfig(BaseConfig):
     )
     omni_tts: Dict[str, Any] = Field(
         default_factory=dict,
-        title="OmniTTS 参数",
-        description="OmniTTS 引擎参数（仅 provider=omni_tts 时生效）",
+        title="全模态大模型 TTS 参数",
+        description="全模态大模型 TTS 引擎参数（OpenAI 兼容线协议；仅 provider=omni_tts 时生效）",
     )
 
 

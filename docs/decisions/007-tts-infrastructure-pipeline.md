@@ -120,4 +120,6 @@ v2 主体性架构确立后，Amaidesu 已形成 Agent + 工具 + 存储 + 编�
 
 **后果更新**：`src/modules/tools/output/tts/` 迁至 `src/modules/tts/`；`tools.toml` 不再有任何 TTS 段；四个引擎类（`EdgeTTSProvider` / `GPTSoVITSProvider` / `VoiceboxProvider` / `OmniTTSProvider`）保留类名，但只暴露 `handle_speech` / `setup` / `cleanup` / `get_stats` / `ConfigSchema`，不再是 ToolProvider。
 
+**后果更新**：omni_tts 引擎重写为全模态大模型语音合成后成为首个有额外共享依赖（LLMManager）的引擎；"构造签名统一"由"装配适配行统一"取代——引擎工厂仅持真实依赖，注册表登记 `_assemble_*` 适配行（统一接受 config/event_bus/audio_sink/llm_service 并决定转发什么），避免依赖并集随引擎特化而膨胀到所有工厂签名。
+
 ---

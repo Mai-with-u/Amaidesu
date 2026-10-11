@@ -135,20 +135,33 @@ class TestKnownProviders:
         assert result.profile_id == "abc-123"
 
     def test_omni_tts_constructs_provider(self):
-        """provider=omni_tts + 子配置 → OmniTTSProvider 实例。"""
+        """provider=omni_tts + llm_service 注入 → OmniTTSProvider 实例（持有 LLM 引用）。"""
         from src.modules.tts.backends.omni.provider import OmniTTSProvider
 
+        llm_service = MagicMock()
         result = build_tts_infrastructure(
             {
                 "enabled": True,
                 "provider": "omni_tts",
-                "omni_tts": {"host": "192.168.0.1", "port": 9999},
-            }
+                "omni_tts": {"voice": "Chelsie"},
+            },
+            llm_service=llm_service,
         )
         assert isinstance(result, OmniTTSProvider)
         assert isinstance(result, TTSProvider)
-        assert result.host == "192.168.0.1"
-        assert result.port == 9999
+        assert result._llm is llm_service
+        assert result.voice == "Chelsie"
+
+    def test_omni_tts_without_llm_service_fails_soft(self, loguru_capture):
+        """omni_tts 缺 llm_service → 工厂抛错 fail-soft 返回 None + ERROR 日志。"""
+        result = build_tts_infrastructure(
+            {"enabled": True, "provider": "omni_tts", "omni_tts": {"voice": "Chelsie"}}
+        )
+        assert result is None
+        error_records = [
+            r for r in loguru_capture.records if r["level"] == "ERROR" and "构造" in r["message"]
+        ]
+        assert error_records
 
     def test_event_bus_passed_through_to_engine(self):
         """event_bus 注入 → 引擎持有该引用。"""

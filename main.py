@@ -543,8 +543,11 @@ async def create_app_components(
 
         # TTS 引擎实例（基础设施，不经 ToolRegistry）：按 [tts] 段装配；
         # 失败 / 关闭时返回 None，StreamerAgent 走 TTS 关闭路径。口型分析器经
-        # 构造链注入播放器分接（播放器对所有 sink 调用 fail-soft）。
-        tts_engine = build_tts_infrastructure(tts_section, event_bus=event_bus, audio_sink=lipsync_analyzer)
+        # 构造链注入播放器分接（播放器对所有 sink 调用 fail-soft）；
+        # LLMManager 经签名透传（仅 omni_tts 引擎消费）。
+        tts_engine = build_tts_infrastructure(
+            tts_section, event_bus=event_bus, audio_sink=lipsync_analyzer, llm_service=llm_service
+        )
 
         # 字幕源择流（装配期取事实，两种模式互斥）：TTS 引擎在位 → 字幕跟随
         # 播放事件（started/failed 显示、finished 清空），编排层不再派发直出；
