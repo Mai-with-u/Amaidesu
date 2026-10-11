@@ -684,10 +684,11 @@ async def create_app_components(
                         llm_manager=llm_service,
                         prompt_manager=get_prompt_manager(),
                     ),
+                    llm_manager=llm_service,
                 ),
                 visible_to={"vision_look_at_screen": ["*"]},
             )
-            logger.info("look_at_screen 已注册（mss 截屏后端 + VLM reader）")
+            logger.info("look_at_screen 已注册（mss 截屏后端 + VLM reader，视觉调用方按需跳过 VLM）")
 
         # --- 通用 MCP 外部工具源（[tools.mcp] 段驱动；可选能力，失败不阻断启动）---
         # 必须在 start_all() 之前装配：任何启动阶段查询工具清单的消费方

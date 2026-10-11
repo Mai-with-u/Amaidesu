@@ -273,6 +273,7 @@ class LookAtScreenProvider(BaseToolProvider):
         *,
         screen_capture: Optional[ScreenCapture] = None,
         text_reader: Optional[TextReader] = None,
+        llm_manager: Optional[Any] = None,
     ) -> None:
         # 配置转 typed（config: dict 必填；空 dict = 全部默认；失败 log+raise）
         self._config_raw = dict(config) if config is not None else {}
@@ -289,8 +290,29 @@ class LookAtScreenProvider(BaseToolProvider):
 
         self._capture = screen_capture
         self._reader = text_reader
+        # 能力协商查询用（ADR-037）：判定调用方主模型能否看图，能看则跳过 VLM
+        self._llm_manager = llm_manager
 
         self._call_count = 0
+
+    def _caller_is_visual(self, invocation: ToolInvocation) -> bool:
+        """调用方主模型能否看图（能力协商，ADR-037）。
+
+        管线式调用（``caller_profile`` 空串，如 text_adv 读屏）按非视觉——
+        它们消费的是 VLM 的结构化文本输出（选项中心像素坐标），跳过 VLM 会让
+        解析管线断裂。引擎不可查 / 查询异常同样按非视觉：判错方向是多一次
+        VLM 转述，而不是管线拿到一份没有文字答案的图。
+        """
+        if not invocation.caller_profile or self._llm_manager is None:
+            return False
+        getter = getattr(self._llm_manager, "is_profile_visual", None)
+        if not callable(getter):
+            return False
+        try:
+            return getter(invocation.caller_profile) is True
+        except Exception as exc:  # noqa: BLE001 - 能力查询失败退化为 VLM 照旧
+            logger.warning(f"视觉能力查询失败（{invocation.caller_profile}），VLM 照旧: {exc}", exc=True)
+            return False
 
     @property
     def name(self) -> str:
@@ -395,10 +417,11 @@ class LookAtScreenProvider(BaseToolProvider):
                 error="capture_failed: empty image (no display / permission denied / mss unavailable)",
             )
 
-        # 可选 VLM 文本提取（异步：避免阻塞事件循环；reader 内部负责超时/降级）
+        # 可选 VLM 文本提取（异步：避免阻塞事件循环；reader 内部负责超时/降级）。
+        # 视觉调用方跳过 VLM（ADR-037）：主模型自己看图，省一次视觉调用与转述延迟
         text = ""
         vlm_error: Optional[str] = None
-        if self._reader is not None:
+        if self._reader is not None and not self._caller_is_visual(invocation):
             try:
                 text = await self._reader.read(
                     result.image,
