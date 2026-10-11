@@ -2,8 +2,8 @@
 
 主播的职责是把身体在做什么、遇到了什么讲给观众听，不替身体做工程判断。观察里的观察编号、
 相对方位、俯视网格是给游戏 Agent 规划用的，交给主播只会让它去猜坐标。这里只保留：身体状态、
-背包物品与数量、身边的生物与设施（近处的才算"身边"）、时段天气。上游没给的字段不写
-（缺失是"未知"，不是"没有"），读取失败照实写出原因。
+背包物品与数量、身边的生物与设施（近处的才算"身边"）、远处的生物（只按种类报只数）、时段天气。
+上游没给的字段不写（缺失是"未知"，不是"没有"），读取失败照实写出原因。
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
 
 
 def glance_scene(reply: MaicraftReply) -> Dict[str, Any]:
-    """周边：时段天气、生物群系、身边的生物与设施（各带距离和大致方位）。"""
+    """周边：时段天气、生物群系、身边的生物与设施（各带距离和大致方位），远处的生物按种类计数。"""
     if not reply.ok:
         return {"nearby_error": _failure(reply)}
     data = reply.data
@@ -76,10 +76,44 @@ def glance_scene(reply: MaicraftReply) -> Dict[str, Any]:
     entities = _nearby(data.get("entities"), ("type", "name", "direction", "distance", "hostile"))
     if entities:
         result["entities"] = entities
+    distant = _distant(data.get("entities"), data.get("distant_entities"))
+    if distant:
+        result["distant_entities"] = distant
     facilities = _nearby(data.get("facilities"), ("block", "direction", "distance"))
     if facilities:
         result["facilities"] = facilities
     return result
+
+
+def _distant(entities: Any, counts: Any) -> List[str]:
+    """身边范围外的生物，按种类报只数，写成 ``种类 ×只数``；敌对的排前面，其余多的在前。
+
+    远处的生物来自两处：Mod 不论远近逐只列出的（敌对的、盯着角色的、有名字的、玩家），
+    以及它对远处不相干的生物只按种类计数的 ``distant_entities``。主播只需要"远处还有一只苦力怕、
+    一群鱿鱼"这种程度，用不上逐只的方位距离，所以两处合在一起按种类数。
+    有名字的（玩家、起了名的生物）把名字带在种类后面，主播才能叫得出是谁。
+    """
+    tally: Dict[str, int] = {}
+    hostile: set[str] = set()
+    if isinstance(entities, list):
+        for item in entities:
+            if not isinstance(item, dict) or not item.get("type"):
+                continue
+            distance = item.get("distance")
+            # 没有距离的不知道远近，身边和远处都不算；身边范围内的已经在 entities 里逐只给了
+            if not isinstance(distance, (int, float)) or distance <= NEARBY_BLOCKS:
+                continue
+            kind = f"{item['type']}（{item['name']}）" if item.get("name") else str(item["type"])
+            tally[kind] = tally.get(kind, 0) + 1
+            if item.get("hostile") is True:
+                hostile.add(kind)
+    if isinstance(counts, dict):
+        for kind, count in counts.items():
+            if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+                tally[str(kind)] = tally.get(str(kind), 0) + count
+    # 远处的敌对生物是直播里值得提的事，放在一群鱿鱼、蝙蝠前面
+    ordered = sorted(tally.items(), key=lambda pair: (pair[0] not in hostile, -pair[1], pair[0]))
+    return [f"{kind} ×{count}" for kind, count in ordered]
 
 
 def _nearby(items: Any, keys: tuple[str, ...]) -> List[Dict[str, Any]]:

@@ -13,7 +13,8 @@ import pytest
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
-from src.agents.minecraft.maicraft import goal_run_of
+from src.agents.minecraft.glance import glance_scene
+from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
@@ -293,11 +294,36 @@ async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     assert view["body"]["position"] == [4, 64, -7] and view["body"]["held"] == "minecraft:stone_axe"
     assert view["inventory"] == ["minecraft:oak_log ×6"]
     assert [entity["type"] for entity in view["entities"]] == ["minecraft:cow"], "远处的苦力怕不算身边"
+    assert view["distant_entities"] == [
+        "minecraft:creeper ×1",
+        "minecraft:squid ×30",
+        "minecraft:bat ×12",
+        "minecraft:player（Steve） ×1",
+    ], "远处的按种类计数：逐只列出的与只计数的合在一起，敌对的在前，玩家带名字"
     assert view["facilities"][0]["block"] == "minecraft:chest"
     assert view["work"]["goals"] == [
         {"ability": "maicraft:gather", "purpose": "砍树", "state": "running", "doing": "走向树"}
     ]
     await agent.stop()
+
+
+def test_glance_distant_entities_only_counts_what_is_known_to_be_far() -> None:
+    """远处计数只收确实在远处的：没距离的不算，坏计数不算，远处什么都没有时不写这一栏。"""
+    scene = {
+        "entities": [
+            {"type": "minecraft:zombie", "distance": 30, "hostile": True},
+            {"type": "minecraft:zombie", "distance": 50, "hostile": True},
+            {"type": "minecraft:sheep"},
+            {"type": "minecraft:pig", "distance": 10},
+        ],
+        "distant_entities": {"minecraft:squid": 3, "minecraft:bat": 0, "minecraft:cod": "很多", "minecraft:fox": True},
+    }
+    view = glance_scene(MaicraftReply(ok=True, data=scene))
+    assert view["distant_entities"] == ["minecraft:zombie ×2", "minecraft:squid ×3"]
+    assert [entity["type"] for entity in view["entities"]] == ["minecraft:pig"]
+
+    nearby_only = glance_scene(MaicraftReply(ok=True, data={"entities": [{"type": "minecraft:pig", "distance": 10}]}))
+    assert "distant_entities" not in nearby_only, "远处没有东西不写这一栏，上游没给也不写"
 
 
 @pytest.mark.asyncio

@@ -57,7 +57,17 @@ class FakeMaicraft(BaseToolProvider):
             "entities": [
                 {"id": "e1", "type": "minecraft:cow", "direction": "前方", "distance": 6, "hostile": False},
                 {"id": "e2", "type": "minecraft:creeper", "direction": "后方", "distance": 90, "hostile": True},
+                {
+                    "id": "e3",
+                    "type": "minecraft:player",
+                    "name": "Steve",
+                    "direction": "左侧",
+                    "distance": 40,
+                    "hostile": False,
+                },
             ],
+            # 远处不相干的生物，Mod 只按种类报只数
+            "distant_entities": {"minecraft:bat": 12, "minecraft:squid": 30},
             "facilities": [{"id": "b1", "block": "minecraft:chest", "direction": "左侧", "distance": 4}],
         }
         self._next_id = 1

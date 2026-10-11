@@ -216,7 +216,8 @@ def build_glance_spec() -> ToolSpec:
         name="glance",
         description=(
             "看一眼游戏里的自己：身体状态（维度/位置/血量/饥饿/手上拿的/护甲/效果）、背包物品与数量、"
-            "时段天气、身边的生物与设施，以及身体手头的工作（待办、正在跑的游戏内目标）。"
+            "时段天气、身边的生物与设施、远处的生物（按种类报只数，敌对的在前），"
+            "以及身体手头的工作（待办、正在跑的游戏内目标）。"
             "只读、即时，面向直播叙事；更细的勘查、判断或任何操作都交给委派，不要自己琢磨方块坐标。"
         ),
         parameters_schema={"type": "object", "properties": {}, "required": []},
@@ -228,6 +229,7 @@ def build_glance_spec() -> ToolSpec:
                 "body": {"type": "object"},
                 "inventory": {"type": "array"},
                 "entities": {"type": "array"},
+                "distant_entities": {"type": "array"},
                 "facilities": {"type": "array"},
                 "work": {"type": "object"},
             },
