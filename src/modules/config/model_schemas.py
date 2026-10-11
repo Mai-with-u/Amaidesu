@@ -20,10 +20,21 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
+
+
+def _strip_ref_name(value: Any) -> Any:
+    """引用身份字段的规范化：字符串剥离首尾空白，非字符串原样返回交由类型校验。
+
+    provider 名 / 模型名 / api_provider / model_list 是相互引用的身份字段，
+    经 WebUI 手输产生，混入首尾空格后引用校验会报出"目标名在可用列表里
+    却判未找到"的自相矛盾错误（报错 repr 中空格几乎不可见）；在 Schema
+    层规范化使 TOML 加载、WebUI 写回与运行时装配共用同一口径。
+    """
+    return value.strip() if isinstance(value, str) else value
 
 
 class LLMProviderConfig(BaseConfig):
@@ -124,6 +135,11 @@ class LLMProviderConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, value: Any) -> Any:
+        return _strip_ref_name(value)
+
 
 class LLMModelConfig(BaseConfig):
     """模型注册表条目（``[[llm_models]]`` 表）
@@ -168,6 +184,11 @@ class LLMModelConfig(BaseConfig):
         title="上下文窗口",
         description="上下文窗口 token 总量（用于 Dashboard 水位展示；0 = 不展示）",
     )
+
+    @field_validator("name", "api_provider", mode="before")
+    @classmethod
+    def _strip_ref_fields(cls, value: Any) -> Any:
+        return _strip_ref_name(value)
 
 
 class LLMSelectionStrategy(BaseConfig):
@@ -237,6 +258,13 @@ class LLMProfileConfig(BaseConfig):
             "（planner / replyer）对话历史装配消费；minecraft 侧沿用自身字符预算整理"
         ),
     )
+
+    @field_validator("model_list", mode="before")
+    @classmethod
+    def _strip_model_list(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [_strip_ref_name(item) for item in value]
+        return value
 
 
 _PROFILE_PRESETS: dict[str, dict[str, Any]] = {
