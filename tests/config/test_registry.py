@@ -54,6 +54,48 @@ class TestRegistryAssert:
             registry.ensure_component_registry()
 
 
+class TestRegistryDomainSplit:
+    """采集器/Agent 拆表契约：collectors.toml 的段全集只认采集器名单。"""
+
+    def test_split_tables_match_expected(self):
+        registry.fill_component_schemas()
+        expected_collectors = {
+            "bili_danmaku",
+            "bili_danmaku_official",
+            "console_input",
+            "maicraft_attention",
+            "maicraft_chat",
+            "stt",
+        }
+        expected_agents = {"minecraft", "game_2048"}
+        assert set(registry.COLLECTOR_SCHEMAS) == expected_collectors
+        assert set(registry.AGENT_SCHEMAS) == expected_agents
+
+    def test_split_tables_disjoint_and_merged_view_consistent(self):
+        registry.fill_component_schemas()
+        assert not set(registry.COLLECTOR_SCHEMAS) & set(registry.AGENT_SCHEMAS)
+        assert set(registry.COMPONENT_SCHEMAS) == set(registry.COLLECTOR_SCHEMAS) | set(registry.AGENT_SCHEMAS)
+
+    def test_agent_names_never_in_collector_table(self):
+        """负例锚点：物化/校验若误用合并视图，Agent 段会被写进 collectors.toml。"""
+        registry.fill_component_schemas()
+        for name in registry.AGENT_SCHEMAS:
+            assert name not in registry.COLLECTOR_SCHEMAS
+
+
+class TestFactoryRegistryContract:
+    def test_supported_collectors_match_registry(self):
+        """契约：factory 装配名单必须与采集器注册表键集一致。
+
+        物化后注册表是 collectors.toml 段全集的唯一来源，factory
+        名单与其脱节意味着"注册表认得但装配不了"（或反之）的漂移。
+        """
+        from src.modules.collectors.factory import SUPPORTED_COLLECTORS
+
+        registry.fill_component_schemas()
+        assert set(SUPPORTED_COLLECTORS) == set(registry.COLLECTOR_SCHEMAS)
+
+
 class TestToolProviderRegistry:
     def test_fill_populates_all_expected_providers(self):
         registry.fill_component_schemas()

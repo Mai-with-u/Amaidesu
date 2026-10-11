@@ -88,12 +88,18 @@ def test_list_components_returns_all_groups_with_disabled(client) -> None:
     assert set(data) == {"collectors", "agents"}
 
     collectors = {c["name"]: c for c in data["collectors"]}
-    # 新契约：全集 = collectors.toml 顶层段 ∪ enabled 名单（console_input 仅在名单中）
-    assert set(collectors) == {"bili_danmaku", "console_input"}
+    # 组件契约全集 = collectors.toml 物化段全集（未启用也出卡，可先配后启）；
+    # enabled 名单看 is_enabled。conftest 手写的 bili/console_input 两段
+    # 之外，物化补齐的 maicraft_attention / maicraft_chat / stt / bili_official 同样在列。
+    from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+
+    ensure_component_registry()
+    assert set(collectors) == set(COLLECTOR_SCHEMAS)
     assert collectors["bili_danmaku"]["is_enabled"] is True
-    assert collectors["bili_danmaku"]["is_started"] is False  # 未动态启动前不运行
+    assert collectors["bili_danmaku"]["is_started"] is False  # 未动态启动前均如此
     assert collectors["console_input"]["is_enabled"] is False
     assert collectors["console_input"]["is_started"] is False
+    assert collectors["stt"]["is_enabled"] is False  # 物化补的段不自动启用
 
     agents = {c["name"]: c for c in data["agents"]}
     assert set(agents) == {"streamer", "minecraft", "text_adv", "game_2048"}

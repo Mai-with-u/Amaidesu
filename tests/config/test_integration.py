@@ -79,7 +79,9 @@ class TestExistingConfigLoad:
 class TestDriftDetection:
     """漂移检测"""
 
-    def test_redundant_key_stripped(self, temp_project: Path):
+    def test_redundant_key_hard_fails(self, temp_project: Path):
+        """冗余段全域硬错：infra.toml 手写未知段在初始化时拦下，cause 链携带原始校验错误。"""
+        from src.modules.config.errors import ConfigValidationError
         from src.modules.config.multi_file_loader import generate_default_configs
 
         generate_default_configs(temp_project / "config")
@@ -89,6 +91,8 @@ class TestDriftDetection:
         infra_path.write_text(content + "\n[zombie_section]\nkey = \"dead\"\n", encoding="utf-8-sig")
 
         service = ConfigService(base_dir=str(temp_project))
-        config, _ = service.initialize()
-
-        assert "zombie_section" not in config
+        with pytest.raises(RuntimeError) as exc_info:
+            service.initialize()
+        cause = exc_info.value.__cause__
+        assert isinstance(cause, ConfigValidationError)
+        assert "zombie_section" in str(cause)

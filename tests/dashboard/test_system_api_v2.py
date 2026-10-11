@@ -106,12 +106,19 @@ def test_status_does_not_leak_phase_fields(client: TestClient) -> None:
 
 
 def test_status_groups_count_correctly(client: TestClient) -> None:
-    """采集器/Agent 计数来自 component_helper（enabled = 配置 enabled 列表）。"""
+    """采集器/Agent 计数来自 component_helper（total = 文件段全集，enabled = 配置名单）。
+
+    物化语义下 collectors.toml 含全部在册段（未启用也出卡），total =
+    注册表采集器全集而非 enabled 子集。
+    """
+    from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+
+    ensure_component_registry()
     resp = client.get("/api/v1/system/status").json()
 
     collectors = resp["groups"]["collectors"]
-    assert collectors["total"] == 3  # 生成基线的默认 enabled：console_input + maicraft_attention + maicraft_chat
-    assert collectors["enabled"] == 3  # 三者都启用
+    assert collectors["total"] == len(COLLECTOR_SCHEMAS)  # 物化全集：6 段全部出卡
+    assert collectors["enabled"] == 3  # 生成基线的默认 enabled：console_input + maicraft_attention + maicraft_chat
 
     agents = resp["groups"]["agents"]
     assert agents["total"] == 4  # streamer + minecraft + text_adv + game_2048（Schema 占位）

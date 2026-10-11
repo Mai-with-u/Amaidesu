@@ -55,9 +55,14 @@ class BiliDanmakuCollector(BaseCollector):
     description = "通过轮询 Bilibili 旧版 API 获取直播间弹幕（与官方版并存）"
 
     class ConfigSchema(BaseConfig):
-        """Bilibili弹幕采集器配置"""
+        """Bilibili弹幕采集器配置
 
-        room_id: int = Field(..., description="直播间ID", gt=0)
+        room_id 默认 0（=未配置）：默认值会随物化落盘，下次加载是
+        显式键、跑完整校验，因此默认值必须自身满足约束、不能靠
+        gt 正数约束表达"必填"——未配置的轮询在运行期失败暴露。
+        """
+
+        room_id: int = Field(default=0, description="直播间ID（0=未配置）")
         poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1)
         message_config: BiliDanmakuMessageConfig = Field(
             default_factory=BiliDanmakuMessageConfig,

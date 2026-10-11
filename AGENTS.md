@@ -86,7 +86,10 @@
 - 修改既有字段的默认值只影响新生成的配置文件——已落盘文件保留现值，漂移写回不会写入新默认；需要存量配置跟随的默认值变更按数据变换档处理（升版本 + hook + 迁移测试），hook 内区分"用户显式设置值"与"旧默认落盘值"（如仅值等于旧默认时才改写），不得覆盖用户显式配置
 - **升版本 ≠ 迁移生效**：提交前实际验证迁移写回落盘（跑 `tests/config/` 或手动触发配置加载检查升级日志）——"只改 Schema 不升版本/不验证迁移"是本区最高频事故形态，此类提交视为未完成
 - 存储表结构变更升 `SCHEMA_VERSION`，迁移记录幂等推进
-- 动态键配置段（键名运行期确定、每键一份 Schema，如 `[tools.avatar.<name>].config`）的校验与默认值补全走注册表（采集器/Agent 段 `COMPONENT_SCHEMAS`、工具提供者段 `TOOL_PROVIDER_SCHEMAS`）；静态命名段走 typed 引用（先例 `VisionProviderConfig.config`）。**新增工具 provider 两处登记**：`tools/bootstrap.py` 成员表 + `src/modules/config/registry.py` 注册表与 EXPECTED 清单（契约测试守护两表一致，漏登记 = 该 provider 的 config 段退化为无校验自由 dict）
+- 配置文件是用户唯一契约面：**启动迁移后的配置文件 = 可配置全集的物化快照**——在册段缺失由物化器按注册表补默认值落盘（含首次生成/单缺重建路径），退役段由迁移钩子处置；用户看文件（或 WebUI 读文件）即知全集
+- **未知即硬错（全域）**：文件里任何 Schema/注册表不认识的条目——段、enabled 名、字段键——一律加载期 `ConfigValidationError` 拦下（点名 + 合法名单 + 出路提示），不做静默剥离或 warning 跳过。键改名/退役场景由迁移钩子在阶段②③先行搬走旧结构，走到校验的未知条目只可能是钩子欠账或手写笔误；由此**忘配钩子的后果 = 启动硬错**（钩子纪律的执行器）。infra 引擎段 free-form 无 Schema，暂无"认识/不认识"概念（二期补 loader schema 后对齐）
+- 动态键配置段（键名运行期确定、每键一份 Schema，如 `[tools.avatar.<name>].config`）的校验与默认值补全走注册表（采集器 `COLLECTOR_SCHEMAS` / Agent `AGENT_SCHEMAS` / 合并视图 `COMPONENT_SCHEMAS`、工具提供者段 `TOOL_PROVIDER_SCHEMAS`）；collectors.toml 的段全集判定只认 `COLLECTOR_SCHEMAS`（混入 Agent 名会让物化把 Agent 段写进 collectors.toml）；静态命名段走 typed 引用（先例 `VisionProviderConfig.config`）。**新增工具 provider 两处登记**：`tools/bootstrap.py` 成员表 + `src/modules/config/registry.py` 注册表与 EXPECTED 清单（契约测试守护两表一致，漏登记 = 该 provider 的 config 段退化为无校验自由 dict）
+- 采集器 ConfigSchema 必须可默认构造（`schema_cls()` 无参成立）：物化按注册表补缺段依赖此前提；凭证类字段用空串/0 占位表达"未配置"（默认值会随物化落盘、下次加载是显式键跑完整校验，故默认值必须自身满足字段约束——不能靠 `gt` 等约束表达必填），未配置的连接失败在运行期暴露
 - 组件嵌套配置（采集器/Agent/工具包）变更时同步更新对应 schema 测试
 
 ### 文档维护

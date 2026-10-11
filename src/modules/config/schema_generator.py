@@ -390,12 +390,34 @@ class ConfigSchemaGenerator:
             schema["uiLabel"] = ui_label
         schema["uiAdvanced"] = ui_advanced
 
+        _apply_registry_options(schema, config_class)
+
         return schema
 
 
 # ---------------------------------------------------------------------------
 # 便捷入口
 # ---------------------------------------------------------------------------
+
+
+def _apply_registry_options(schema: Dict[str, Any], config_class: type) -> None:
+    """把注册表驱动的动态候选名单注入 schema（读取侧单点化）。
+
+    collectors.enabled 的候选 = 采集器注册表键集，名单随注册表走，
+    Schema 定义处不再手抄（手抄与注册表必然漂移）。定义处直引注册表
+    会成环（collectors_schemas → registry → 组件包 → multi_file_loader
+    → collectors_schemas），故在 schema 服务路径上注入。二期 tools/avatar
+    域接入时在此扩展。
+    """
+    if getattr(config_class, "__file_name__", "") != "collectors.toml":
+        return
+    # 函数内 import 规避循环依赖（注册表拉起组件包，组件包引用本包）
+    from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+
+    ensure_component_registry()
+    for field in schema.get("fields", []):
+        if field.get("name") == "enabled":
+            field["options"] = sorted(COLLECTOR_SCHEMAS)
 
 
 def get_field_count(schema: Dict[str, Any]) -> int:

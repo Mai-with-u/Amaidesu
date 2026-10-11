@@ -16,9 +16,6 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from src.modules.collectors.base import BaseCollector
-from src.modules.logging import get_logger
-
-_logger = get_logger(__name__)
 
 # 已实现的采集器注册名
 SUPPORTED_COLLECTORS: tuple[str, ...] = (
@@ -36,8 +33,13 @@ def instantiate_collector(
     config: Optional[dict[str, Any]] = None,
     event_bus: Any = None,
     llm_manager: Any = None,
-) -> Optional[BaseCollector]:
-    """按名实例化采集器；未知名字记录 warning 并返回 None。"""
+) -> BaseCollector:
+    """按名实例化采集器。
+
+    未知名属程序缺陷而非合法输入：collectors.toml 的未知名在加载期
+    已被硬错拦截，能到达此处的名字必然在 SUPPORTED_COLLECTORS 内
+    （Dashboard 动态启停的 API 入口另行校验用户输入）。
+    """
     if name == "bili_danmaku":
         from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import BiliDanmakuCollector
 
@@ -66,12 +68,10 @@ def instantiate_collector(
         from src.modules.collectors.stt.stt_collector import STTCollector
 
         return STTCollector(config=config or {}, event_bus=event_bus)
-    # 未知采集器名：跳过 + warning，不抛异常（允许配置残留段平滑过渡）
-    _logger.warning(
-        f"未知的 Collector 名称 '{name}'：未在 SUPPORTED_COLLECTORS 中找到对应实现，已跳过注册。"
-        f"如该采集器已退役，可从 config/collectors.toml 的 enabled 列表移除。"
+    raise RuntimeError(
+        f"未知的 Collector 名称 '{name}'（合法名单：{list(SUPPORTED_COLLECTORS)}）。"
+        f"collectors.toml 加载期已硬错拦截未知名，此处出现即程序缺陷（名单传递链路 bug）。"
     )
-    return None
 
 
 __all__ = ["SUPPORTED_COLLECTORS", "instantiate_collector"]

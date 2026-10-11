@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.config.errors import ConfigValidationError
 from src.modules.config.multi_file_loader import update_config_values
 from src.modules.dashboard.dependencies import get_dashboard_server
@@ -150,6 +151,13 @@ async def _try_dynamic_start(server: "DashboardServer", group: str, name: str) -
         manager = server.collector_manager
         if manager is None:
             return None
+        # 用户输入拦截放 API 边界：factory 对未知名直接 raise（程序缺陷语义），
+        # 表外名在这里以 4xx 语义响应而不是穿透到装配层
+        if name not in SUPPORTED_COLLECTORS:
+            return ComponentControlResponse(
+                success=False,
+                message=f"未知采集器名 '{name}'（合法名单：{list(SUPPORTED_COLLECTORS)}）",
+            )
         if manager.get_collector_by_name(name) is not None:
             ok = await manager.start_collector(name)
             return ComponentControlResponse(

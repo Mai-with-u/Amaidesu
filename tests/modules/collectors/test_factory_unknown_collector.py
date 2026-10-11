@@ -1,7 +1,8 @@
-"""未知名 Collector 跳过 + warning 行为测试
+"""未知名 Collector 硬错语义测试
 
 覆盖：
-- instantiate_collector 遇未知名：返回 None、记录 warning、不抛异常
+- instantiate_collector 遇未知名：raise RuntimeError（加载期已硬错拦截，
+  此处出现即程序缺陷），消息含名字与合法名单
 - SUPPORTED_COLLECTORS 已不包含已退役的注册名（screen）
 - 已知名仍正常实例化（冒烟）
 """
@@ -64,37 +65,28 @@ def test_supported_collectors_does_not_include_screen() -> None:
     assert "stt" in SUPPORTED_COLLECTORS
 
 
-def test_instantiate_collector_unknown_returns_none_and_warns(loguru_capture) -> None:
-    """遇未知名：返回 None、warning 日志、不抛异常"""
-    result = instantiate_collector("nonexistent_collector_xyz")
+def test_instantiate_collector_unknown_raises() -> None:
+    """遇未知名：raise RuntimeError，消息含名字与合法名单、缺陷语义提示。"""
+    with pytest.raises(RuntimeError) as exc_info:
+        instantiate_collector("nonexistent_collector_xyz")
 
-    assert result is None
-    # 警告包含原因上下文（采集器名 + 已退役提示）
-    assert any(
-        "nonexistent_collector_xyz" in record["message"] and "未知的 Collector" in record["message"]
-        for record in loguru_capture.records
-        if record["level"] == "WARNING"
-    )
+    message = str(exc_info.value)
+    assert "nonexistent_collector_xyz" in message
+    assert "console_input" in message
+    assert "程序缺陷" in message
 
 
-def test_instantiate_collector_legacy_screen_returns_none_and_warns(loguru_capture) -> None:
-    """退役的 screen 名仍能被优雅跳过（残留段容忍）"""
-    result = instantiate_collector("screen")
-
-    assert result is None
-    assert any(
-        "screen" in record["message"] and "退役" in record["message"]
-        for record in loguru_capture.records
-        if record["level"] == "WARNING"
-    )
+def test_instantiate_collector_legacy_screen_raises() -> None:
+    """退役的 screen 名同样硬错（未知名语义统一，不再优雅跳过）。"""
+    with pytest.raises(RuntimeError) as exc_info:
+        instantiate_collector("screen")
+    assert "screen" in str(exc_info.value)
 
 
-def test_instantiate_collector_empty_string_returns_none_and_warns(loguru_capture) -> None:
-    """空串视为未知名：返回 None + warning"""
-    result = instantiate_collector("")
-
-    assert result is None
-    assert any(record["level"] == "WARNING" for record in loguru_capture.records)
+def test_instantiate_collector_empty_string_raises() -> None:
+    """空串视为未知名：raise RuntimeError。"""
+    with pytest.raises(RuntimeError):
+        instantiate_collector("")
 
 
 def test_instantiate_collector_known_returns_instance(loguru_capture) -> None:

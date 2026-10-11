@@ -4,11 +4,9 @@
 - 写回短路：内容不变时不写盘、不产生备份
 - 冗余物理删除：写回后磁盘上的冗余段真实消失
 - 自写抑制：标记/消费/TTL 语义 + 管线写回自动压标（FileWatcher 跳过的前提）
-- 校验硬错：类型违约 / 未注册采集器容忍（warn + 跳过，不抛）
+- 校验硬错：类型违约 / 未注册采集器段与 enabled 名 → 硬错（点名 + 合法名单）
 - 注册表动态装配：伪组件注入后按其包内 Schema 校验子段
-
-注：``TestValidationHardFail`` 历史用例中"未注册采集器段 / enabled 名"两条
-已从硬错改为 warn+跳过（Task 7 残留容忍），断言相应更新为"不抛 + warning"。
+- 物化不变量：加载后 collectors.toml 段全集 ⊇ 注册表采集器全集
 """
 
 from __future__ import annotations
@@ -52,6 +50,21 @@ def _append(config_dir, file_name: str, text: str) -> None:
     path.write_text(content, encoding="utf-8-sig")
 
 
+def _remove_key(config_dir, file_name: str, *path: str) -> None:
+    """从 TOML 文件删除指定键（造 missing 漂移：缺键由写回补默认）。"""
+    import tomlkit
+
+    target = config_dir / file_name
+    with open(target, encoding="utf-8-sig") as f:
+        doc = tomlkit.load(f)
+    node = doc
+    for p in path[:-1]:
+        node = node[p]
+    del node[path[-1]]
+    with open(target, "w", encoding="utf-8-sig") as f:
+        tomlkit.dump(doc, f)
+
+
 class TestWritebackShortCircuit:
     def test_unchanged_content_no_rewrite(self, temp_config_dir):
         """无漂移的常规加载不写盘：mtime 不动、无备份目录。"""
@@ -73,7 +86,7 @@ class TestWritebackShortCircuit:
     def test_serialize_identical_returns_none(self, temp_config_dir):
         """内容不变短路：对已写回（序列化形态）的文件重复写回 → 不写盘返回 None。"""
         generate_default_configs(temp_config_dir)
-        _append(temp_config_dir, "agents.toml", "\nstale_section = true\n")
+        _remove_key(temp_config_dir, "agents.toml", "agents", "game_2048")
         load_config_dir(temp_config_dir)  # 第一次写回：磁盘进入序列化形态
 
         import tomlkit
@@ -90,7 +103,7 @@ class TestWritebackShortCircuit:
     def test_drift_write_creates_backup_once(self, temp_config_dir):
         """有漂移才写盘：一次加载产生的备份在同一个批次目录。"""
         generate_default_configs(temp_config_dir)
-        _append(temp_config_dir, "agents.toml", "\nstale_section = true\n")
+        _remove_key(temp_config_dir, "agents.toml", "agents", "game_2048")
 
         _config, _report = load_config_dir(temp_config_dir)
 
@@ -100,18 +113,15 @@ class TestWritebackShortCircuit:
         assert len(backups) == 1
 
 
-class TestRedundantPhysicalRemoval:
-    def test_redundant_section_removed_from_disk(self, temp_config_dir):
-        """写回后冗余段在磁盘上真实消失（非仅报告层剥离）。"""
+class TestRedundantHardFail:
+    def test_redundant_section_hard_fails(self, temp_config_dir):
+        """冗余段全域硬错：文件里程序不认识的段在加载期当面拦下（不再静默清理）。"""
         generate_default_configs(temp_config_dir)
         _append(temp_config_dir, "tools.toml", '\n[dead_tool]\nkey = "stale"\n')
 
-        config, report = load_config_dir(temp_config_dir)
-
-        assert config["tools"].get("dead_tool") is None
-        assert not report.has_drift  # 写回后残余漂移为净
-        disk_text = (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
-        assert "dead_tool" not in disk_text
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(temp_config_dir)
+        assert "dead_tool" in str(exc_info.value)
 
 
 class TestSelfWriteGuard:
@@ -143,7 +153,7 @@ class TestPipelineMarksSelfWrite:
         # 预热：生成基线之后新钩子的版本推进先行落定，并清掉预热轮的自写标记
         load_config_dir(temp_config_dir)
         consume_self_write(temp_config_dir / "infra.toml")
-        _append(temp_config_dir, "agents.toml", "\nstale_section = true\n")
+        _remove_key(temp_config_dir, "agents.toml", "agents", "game_2048")
 
         load_config_dir(temp_config_dir)
 
@@ -207,19 +217,19 @@ class TestValidationHardFail:
         with pytest.raises(ConfigValidationError):
             load_config_dir(temp_config_dir)
 
-    def test_unregistered_collector_section_warns_and_skips(self, temp_config_dir):
-        """未注册的采集器段 → warning + 跳过，不抛（残留段容忍）。"""
+    def test_unregistered_collector_section_hard_fails(self, temp_config_dir):
+        """未注册的采集器段 → 硬错，消息含段名与合法名单。"""
         generate_default_configs(temp_config_dir)
         _append(temp_config_dir, "collectors.toml", "\n[ghost_collector]\nenabled = true\n")
 
-        with _LoguruCapture() as cap:
-            cfg, _report = load_config_dir(temp_config_dir)
-        # 不抛 + 加载成功
-        assert cfg
-        assert any("ghost_collector" in r["message"] and r["level"] == "WARNING" for r in cap.records)
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(temp_config_dir)
+        message = str(exc_info.value)
+        assert "ghost_collector" in message
+        assert "console_input" in message
 
-    def test_unregistered_enabled_name_warns_and_skips(self, temp_config_dir):
-        """enabled 名单出现未注册名 → warning + 跳过，不抛。"""
+    def test_unregistered_enabled_name_hard_fails(self, temp_config_dir):
+        """enabled 名单出现未注册名 → 硬错，消息含名字与合法名单。"""
         generate_default_configs(temp_config_dir)
         _replace_enabled(
             temp_config_dir,
@@ -227,10 +237,11 @@ class TestValidationHardFail:
             'enabled = ["console_input", "maicraft_attention", "no_such_collector"]',
         )
 
-        with _LoguruCapture() as cap:
-            cfg, _report = load_config_dir(temp_config_dir)
-        assert cfg
-        assert any("no_such_collector" in r["message"] and r["level"] == "WARNING" for r in cap.records)
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(temp_config_dir)
+        message = str(exc_info.value)
+        assert "no_such_collector" in message
+        assert "console_input" in message
 
 
 class _PseudoSchema(BaseConfig):
@@ -252,36 +263,92 @@ def pseudo_registry(monkeypatch):
 
     def _fill_with_pseudo():
         result = real_fill()
+        # 采集器名单与合并视图都注入：collectors.toml 校验只认 COLLECTOR_SCHEMAS
+        registry_module.COLLECTOR_SCHEMAS["pseudo"] = _PseudoSchema
         result["pseudo"] = _PseudoSchema
         return result
 
     monkeypatch.setattr(registry_module, "fill_component_schemas", _fill_with_pseudo)
 
 
+class TestMaterializationInvariant:
+    def test_disk_contains_full_collector_set_after_load(self, temp_config_dir):
+        """物化不变量：加载任意存量 collectors.toml 后，磁盘段全集 ⊇ 注册表采集器全集。
+
+        这是"9-12 补全机制被删、全库无红"事故的直接免疫护栏——
+        任何让"文件缺在册段"重新静默发生的改动都会在这里红。
+        按解析后的表名断言（段全是子表时 tomlkit 合法省略超表头，
+        文本匹配 [name] 会误报）。
+        """
+        import tomlkit
+
+        from src.modules.config.registry import COLLECTOR_SCHEMAS
+
+        generate_default_configs(temp_config_dir)
+        load_config_dir(temp_config_dir)
+
+        with open(temp_config_dir / "collectors.toml", encoding="utf-8-sig") as f:
+            disk_data = tomlkit.load(f).unwrap()
+        for name in COLLECTOR_SCHEMAS:
+            assert name in disk_data, f"物化不变量破坏：磁盘 collectors.toml 缺在册段 [{name}]"
+
+    def test_generated_file_materialized_without_load(self, temp_config_dir):
+        """生成路径物化：generate_default_configs 产出的文件直接含段全集
+        （不经加载管线补齐）——新用户首启看到的文件就是可配置全集。"""
+        import tomlkit
+
+        from src.modules.config.registry import COLLECTOR_SCHEMAS
+
+        generate_default_configs(temp_config_dir)
+
+        with open(temp_config_dir / "collectors.toml", encoding="utf-8-sig") as f:
+            disk_data = tomlkit.load(f).unwrap()
+        for name in COLLECTOR_SCHEMAS:
+            assert name in disk_data, f"首启生成文件缺在册段 [{name}]（生成路径物化失效）"
+
+    def test_materialization_does_not_touch_enabled(self, temp_config_dir):
+        """物化只补段不扩名单：enabled 保持用户控制（可先配后启，不自动启用）。"""
+        import tomlkit
+
+        generate_default_configs(temp_config_dir)
+        _replace_enabled(temp_config_dir, "collectors.toml", 'enabled = ["console_input"]')
+
+        load_config_dir(temp_config_dir)
+
+        with open(temp_config_dir / "collectors.toml", encoding="utf-8-sig") as f:
+            disk_data = tomlkit.load(f).unwrap()
+        assert disk_data["enabled"] == ["console_input"]
+        for name in ("bili_danmaku", "stt"):
+            assert name in disk_data
+
+
 class TestRegistryDynamicAssembly:
+    @staticmethod
+    def _rewrite_pseudo_section(temp_config_dir, section_body: str) -> None:
+        """改写已物化生成的 [pseudo] 段（生成路径接物化后骨架不再存在，追加会重复表头）。"""
+        path = temp_config_dir / "collectors.toml"
+        content = path.read_text(encoding="utf-8-sig")
+        start = content.index("[pseudo]")
+        end = content.find("\n[", start + 1)
+        replaced = content[:start] + section_body + (content[end + 1 :] if end != -1 else "")
+        path.write_text(replaced, encoding="utf-8-sig")
+
     def test_registered_pseudo_section_validated_and_written(self, temp_config_dir, pseudo_registry):
         """伪组件注入注册表后：子段按其 Schema 校验，漂移写回落盘。"""
         generate_default_configs(temp_config_dir)
-        _append(
-            temp_config_dir,
-            "collectors.toml",
-            "\n[pseudo]\ninterval_ms = 42\nstale_key = 1\n",
-        )
+        self._rewrite_pseudo_section(temp_config_dir, "[pseudo]\ninterval_ms = 42\n")
 
         config, report = load_config_dir(temp_config_dir)
 
-        # 子段值可读 + 冗余键写回清理 + 默认值全量补齐
+        # 子段值可读 + 用户值保留 + 默认值全量补齐
         assert config["collectors"]["pseudo"]["interval_ms"] == 42
-        assert "stale_key" not in config["collectors"]["pseudo"]
         assert config["collectors"]["pseudo"]["label"] == ""
         assert not report.has_drift
-        disk_text = (temp_config_dir / "collectors.toml").read_text(encoding="utf-8-sig")
-        assert "stale_key" not in disk_text
 
     def test_pseudo_type_violation_raises_value_error(self, temp_config_dir, pseudo_registry):
         """伪组件子段类型违约 → ConfigValidationError 且消息含段名。"""
         generate_default_configs(temp_config_dir)
-        _append(temp_config_dir, "collectors.toml", '\n[pseudo]\ninterval_ms = "abc"\n')
+        self._rewrite_pseudo_section(temp_config_dir, '[pseudo]\ninterval_ms = "abc"\n')
 
         with pytest.raises(ConfigValidationError, match="pseudo"):
             load_config_dir(temp_config_dir)

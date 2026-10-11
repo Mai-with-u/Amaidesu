@@ -10,11 +10,16 @@ from src.modules.config.schemas.base import BaseConfig
 
 
 class IflytekAsrConfig(BaseModel):
-    """讯飞 ASR 配置"""
+    """讯飞 ASR 配置
 
-    appid: str = Field(..., description="讯飞应用 ID")
-    api_key: str = Field(..., description="讯飞 API Key")
-    api_secret: str = Field(..., description="讯飞 API Secret")
+    凭证字段默认空串（=未配置）：采集器配置段必须可默认构造，
+    物化机制按注册表为文件缺的段补默认值；未配置凭证的 STT
+    在运行期连接失败暴露，而非加载期拒绝整个配置文件。
+    """
+
+    appid: str = Field("", description="讯飞应用 ID")
+    api_key: str = Field("", description="讯飞 API Key")
+    api_secret: str = Field("", description="讯飞 API Secret")
     host: str = Field(default="iat.xf-yun.com", description="讯飞 API 主机")
     path: str = Field(default="/v1", description="讯飞 API 路径")
     language: str = Field(default="zh_cn", description="语言类型")
@@ -65,7 +70,7 @@ class MessageConfig(BaseModel):
 class STTInputConfig(BaseConfig):
     """STT 输入组件配置"""
 
-    iflytek_asr: IflytekAsrConfig = Field(..., description="讯飞 ASR 配置")
+    iflytek_asr: IflytekAsrConfig = Field(default_factory=IflytekAsrConfig, description="讯飞 ASR 配置")
     vad: VadConfig = Field(default_factory=VadConfig, description="VAD 配置")
     audio: AudioConfig = Field(default_factory=AudioConfig, description="音频配置")
     message_config: MessageConfig = Field(default_factory=MessageConfig, description="消息配置")
