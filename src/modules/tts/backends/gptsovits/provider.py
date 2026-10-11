@@ -97,7 +97,15 @@ class GPTSoVITSProvider:
         )
         batch_size: int = Field(default=1, ge=1, le=10, description="批处理大小")
         batch_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="批处理阈值")
-        repetition_penalty: float = Field(default=1.0, ge=0.5, le=2.0, description="重复惩罚")
+        repetition_penalty: float = Field(
+            default=1.35,
+            ge=0.5,
+            le=2.0,
+            description=(
+                "重复惩罚（GPT 语义 token 防复读）：1.0 等于关闭，实测在 v5 系"
+                "底模上约 40% 句子诱发 token 循环（音频拉长伴杂音）；保持服务端默认 1.35"
+            ),
+        )
         sample_steps: int = Field(default=10, ge=1, le=50, description="采样步数")
         super_sampling: bool = Field(default=True, description="是否启用超采样")
         sample_rate: int = Field(default=32000, ge=8000, le=48000, description="采样率")
