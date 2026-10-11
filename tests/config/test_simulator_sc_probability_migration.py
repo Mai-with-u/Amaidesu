@@ -39,7 +39,7 @@ def test_sc_probability_dropped_and_written_back(tmp_path: Path):
     assert "sc_probability" not in simulator
     assert "sc_pay_probability" in simulator  # 实际生效的付费 SC 概率不受影响
     assert simulator["gift_probability"] == before["simulator"]["gift_probability"]
-    assert doc["meta"]["version"] == "2.0.41"
+    assert doc["meta"]["version"] == "2.0.42"
 
 
 def test_sc_probability_migration_idempotent(tmp_path: Path):
@@ -73,4 +73,4 @@ def test_no_key_file_version_advances(tmp_path: Path):
 
     doc = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     assert "sc_probability" not in doc["simulator"]
-    assert doc["meta"]["version"] == "2.0.41"
+    assert doc["meta"]["version"] == "2.0.42"

@@ -196,6 +196,25 @@ def _drop_simulator_sc_probability(data: Dict[str, Any]) -> List[str]:
 register_file_hook("infra.toml", "drop_simulator_sc_probability", "2.0.41", _drop_simulator_sc_probability)
 
 
+def _upgrade_logging_directory_subdir(data: Dict[str, Any]) -> List[str]:
+    """infra.toml v2.0.42：运行日志收进 ``logs/app/`` 子目录。
+
+    ``logs/`` 根改为只放平铺子目录（app / llm_requests / llm_context /
+    events / tts / webui），运行日志落盘目录相应内收。仅改写值等于旧默认
+    ``"logs"`` 的落盘值，用户显式自设的其他目录原样保留。对已迁移数据
+    零变更（幂等）。
+    """
+    logging_section = data.get("logging")
+    if not isinstance(logging_section, dict) or logging_section.get("directory") != "logs":
+        return []
+    logging_section["directory"] = "logs/app"
+    return ["logging.directory: logs -> logs/app"]
+
+
+# 生产钩子登记：infra.toml v2.0.42（[logging].directory 收进子目录）
+register_file_hook("infra.toml", "logging_directory_subdir", "2.0.42", _upgrade_logging_directory_subdir)
+
+
 def _upgrade_builder_scene_transport(data: Dict[str, Any]) -> List[str]:
     """设计与施工复用 Mod 受理通道，独立校验入口不再有消费者。"""
     builder = ((data.get("agents") or {}).get("minecraft") or {}).get("builder")

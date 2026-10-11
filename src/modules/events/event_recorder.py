@@ -13,7 +13,7 @@ EventHistoryService。与 Dashboard / EventBroadcaster 解耦——即使 WebUI
 - ``data``：经开放载荷（``OpenPayload``）原样保留完整字段
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel
 
@@ -24,6 +24,7 @@ from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 
 if TYPE_CHECKING:
+    from src.modules.diagnostics.writer import DiagnosticsWriter
     from src.modules.events.event_bus import EventBus
 
 logger = get_logger("EventHistoryRecorder")
@@ -52,9 +53,17 @@ class EventHistoryRecorder:
     由 `main.py` 的 `create_app_components` 创建。
     """
 
-    def __init__(self, event_bus: "EventBus", event_history: EventHistoryService) -> None:
+    def __init__(
+        self,
+        event_bus: "EventBus",
+        event_history: EventHistoryService,
+        diagnostics_writer: Optional["DiagnosticsWriter"] = None,
+    ) -> None:
         self.event_bus = event_bus
         self.event_history = event_history
+        # 注入后事件全量落诊断文件（内存环形缓冲是"运行周期观察窗"，
+        # 文件流延长回看窗口；两者同为可丢弃旁路，不改变事实源定位）
+        self.diagnostics_writer = diagnostics_writer
 
     async def start(self) -> None:
         """订阅全部事件，统一走通用记录通路。"""
@@ -68,18 +77,19 @@ class EventHistoryRecorder:
     async def _on_any_event(self, event_name: str, data: BasePayload, source: str) -> None:
         try:
             dict_data = data.model_dump() if isinstance(data, BaseModel) else {}
-            self.event_history.record(
-                EventRecord(
-                    id=dict_data.get("id", ""),
-                    type=infer_record_type(event_name),
-                    event_name=event_name,
-                    timestamp_ms=self._payload_timestamp_ms(dict_data),
-                    level=infer_event_level(event_name),
-                    source=str(dict_data.get("live_session_id", "") or source),
-                    summary=self._build_summary(event_name, dict_data),
-                    data=dict_data,
-                )
+            record = EventRecord(
+                id=dict_data.get("id", ""),
+                type=infer_record_type(event_name),
+                event_name=event_name,
+                timestamp_ms=self._payload_timestamp_ms(dict_data),
+                level=infer_event_level(event_name),
+                source=str(dict_data.get("live_session_id", "") or source),
+                summary=self._build_summary(event_name, dict_data),
+                data=dict_data,
             )
+            self.event_history.record(record)
+            if self.diagnostics_writer is not None:
+                self.diagnostics_writer.append("events", record.model_dump())
         except Exception as e:
             logger.warning(f"记录 {event_name} 事件失败: {e}")
 

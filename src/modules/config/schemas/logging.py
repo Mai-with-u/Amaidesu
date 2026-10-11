@@ -18,7 +18,7 @@ class LoggingConfig(BaseModel):
         default="jsonl", title="日志格式", description="日志格式：jsonl（每行一个JSON对象）或 text（纯文本）"
     )
 
-    directory: str = Field(default="logs", title="日志目录", description="日志目录（相对于项目根目录）")
+    directory: str = Field(default="logs/app", title="日志目录", description="日志目录（相对于项目根目录）")
 
     level: str = Field(
         default="INFO",

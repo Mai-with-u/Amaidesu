@@ -24,7 +24,10 @@ class LogStreamer:
     """日志流广播器 - 捕获日志并广播到 WebSocket"""
 
     # 日志持久化默认参数
-    DEFAULT_PERSIST_DIR = "data/logs"
+    DEFAULT_PERSIST_DIR = "logs/webui"
+    # 旧落盘目录（历史版本值）：启动搬移到 DEFAULT_PERSIST_DIR，日志类数据
+    # 统一归 logs/ 心智（data/ 只放业务事实），非业务数据不放 data/
+    LEGACY_PERSIST_DIR = "data/logs"
 
     def __init__(
         self,
@@ -65,6 +68,7 @@ class LogStreamer:
         _LIVE_STREAMERS.add(self)
         if self.persist:
             project_root = Path(__file__).resolve().parents[3]
+            self._migrate_legacy_persist_dir(project_root)
             self._persist_dir = (project_root / persist_dir).resolve()
             self._persist_dir.mkdir(parents=True, exist_ok=True)
             self._cleanup_expired_persist_files()
@@ -84,6 +88,36 @@ class LogStreamer:
     @staticmethod
     def _date_string(timestamp: float) -> str:
         return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+
+    @staticmethod
+    def _migrate_legacy_persist_dir(project_root: Path) -> None:
+        """旧落盘目录一次性搬移（``data/logs`` → ``logs/webui``），幂等。
+
+        旧目录不存在或为空即跳过；目标已存在时逐文件搬移不覆盖（同天文件
+        以旧目录内容为准补入，重复行由下游日志页容忍）。
+        """
+        legacy = project_root / LogStreamer.LEGACY_PERSIST_DIR
+        target = project_root / LogStreamer.DEFAULT_PERSIST_DIR
+        if not legacy.is_dir():
+            return
+        target.mkdir(parents=True, exist_ok=True)
+        moved = 0
+        try:
+            for file_path in legacy.glob("*.jsonl"):
+                destination = target / file_path.name
+                if not destination.exists():
+                    file_path.replace(destination)
+                    moved += 1
+            # 空了才删旧目录（残留文件保留原地，不静默丢数据）
+            if not any(legacy.iterdir()):
+                legacy.rmdir()
+                loguru_logger.bind(module="LogStreamer").info(
+                    f"旧日志持久化目录已搬移: {LogStreamer.LEGACY_PERSIST_DIR} -> {LogStreamer.DEFAULT_PERSIST_DIR}"
+                )
+        except OSError as exc:
+            loguru_logger.bind(module="LogStreamer").warning(f"旧日志目录搬移失败（保留原地继续）: {exc}")
+        if moved:
+            loguru_logger.bind(module="LogStreamer").info(f"已搬移 {moved} 个日志落盘文件到 {target}")
 
     def _cleanup_expired_persist_files(self) -> None:
         """启动时清理超过保留期的落盘文件（按文件名日期判定，解析失败按 mtime）。"""

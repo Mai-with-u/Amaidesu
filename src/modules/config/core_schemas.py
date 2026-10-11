@@ -290,3 +290,29 @@ class AgentSupervisorConfig(BaseConfig):
         title="重建失败上限",
         description="时间窗内重建失败达到该次数 → 置 ERRORED 并停止自动重试",
     )
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics（本地诊断记录落盘：LLM 正文 / 事件流 / TTS 逐句记录）
+# ---------------------------------------------------------------------------
+
+
+class DiagnosticsConfig(BaseConfig):
+    """本地诊断记录配置（``[diagnostics]`` 段）
+
+    落盘根固定为 ``logs/`` 平铺子目录（``logs/<kind>/...``），本段只管
+    保留期与总开关。正文文件可丢弃、按保留期滚动清理；统计事实永远在
+    SQLite，删正文不伤账。
+    """
+
+    enabled: bool = Field(
+        default=True,
+        title="启用诊断落盘",
+        description="关闭后 LLM 请求正文 / 事件流 / TTS 合成记录不再写文件（统计落库不受影响）",
+    )
+    retention_days: int = Field(
+        default=14,
+        ge=0,
+        title="保留天数",
+        description="诊断正文文件保留天数，超期天目录整体删除；0 = 永不清理",
+    )
