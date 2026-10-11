@@ -23,6 +23,20 @@ def temp_config_dir(tmp_path):
         shutil.rmtree(config_dir)
 
 
+def _remove_toml_key(path, path_chain: tuple[str, ...]) -> None:
+    """从 TOML 文件删除指定键（造 missing 漂移：缺键由写回补默认）。"""
+    import tomlkit
+
+    with open(path, encoding="utf-8-sig") as f:
+        doc = tomlkit.load(f)
+    node = doc
+    for p in path_chain[:-1]:
+        node = node[p]
+    del node[path_chain[-1]]
+    with open(path, "w", encoding="utf-8-sig") as f:
+        tomlkit.dump(doc, f)
+
+
 class TestGeneration:
     def test_needs_generation_for_missing_dir(self, temp_config_dir):
         assert needs_generation(temp_config_dir) is True
@@ -127,14 +141,12 @@ class TestLoading:
         assert get_config_version(temp_config_dir, "infra.toml") == CONFIG_BASELINE_VERSION
 
     def test_drift_fixed_on_load(self, temp_config_dir):
+        """missing 漂移写回：删除已有键后加载，键由默认值补齐写回。"""
         generate_default_configs(temp_config_dir)
-        agents_path = temp_config_dir / "agents.toml"
-        content = agents_path.read_text(encoding="utf-8-sig")
-        content += '\n[dg_lab]\napi = "stale"\n'
-        agents_path.write_text(content, encoding="utf-8-sig")
+        _remove_toml_key(temp_config_dir / "agents.toml", ("agents", "game_2048"))
         config, report = load_config_dir(temp_config_dir)
         assert not report.redundant
-        assert "dg_lab" not in agents_path.read_text(encoding="utf-8-sig")
+        assert config["agents"]["agents"]["game_2048"]
 
 
 class TestCollectorsSectionBackfill:
@@ -142,18 +154,21 @@ class TestCollectorsSectionBackfill:
 
     def test_backfill_strips_none_values(self, monkeypatch):
         """Schema 含 Optional-None 字段且值为 None 时，回填 dict 不含 None——
-        TOML 无 null 字面量，裸 None 留在回填 dict 里会在写回落盘时炸。"""
+        TOML 无 null 字面量，裸 None 留在回填 dict 里会在写回落盘时炸。
+        注册表整表替换为仅含伪造段：隔离物化器（它会把真实采集器段
+        全部补进 extras，污染本测试的断言面）。"""
         from types import SimpleNamespace
 
+        import src.modules.config.registry as registry_module
+
         from src.modules.config.multi_file_loader import _validate_collectors_sections
-        from src.modules.config.registry import COMPONENT_SCHEMAS
         from src.modules.config.schemas.base import BaseConfig, DriftReport
 
         class _FakeCollectorSchema(BaseConfig):
             name: str = "fake"
             maybe: Optional[int] = None
 
-        monkeypatch.setitem(COMPONENT_SCHEMAS, "fake_collector", _FakeCollectorSchema)
+        monkeypatch.setattr(registry_module, "COLLECTOR_SCHEMAS", {"fake_collector": _FakeCollectorSchema})
 
         root = SimpleNamespace(
             enabled=[],

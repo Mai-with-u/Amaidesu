@@ -308,7 +308,7 @@ class TestVersionPipeline:
         assert get_config_version(tmp_path, "tools.toml") == "2.0.30"
         # 未拨版本的文件：infra.toml 有适用钩子（链尾 2.0.41）随调度推进；
         # avatar.toml 无宿主钩子，保持基线种子值
-        assert get_config_version(tmp_path, "infra.toml") == "2.0.41"
+        assert get_config_version(tmp_path, "infra.toml") == "2.0.42"
         assert get_config_version(tmp_path, "avatar.toml") == CONFIG_BASELINE_VERSION
 
         # 二次 load：全部文件 old == 各自当前值，零写回

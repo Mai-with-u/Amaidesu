@@ -228,3 +228,20 @@ class TestFakeVendorThroughGenerate:
     def test_vision_is_default_profile_for_generate_vision(self):
         """generate_vision 缺省走 vision 档位（与旧 chat_vision 语义一致）"""
         assert ProfileNames.VISION == "vision"
+
+
+def test_content_none_folds_to_empty_parts():
+    """content 为 None（assistant 发起 tool_calls 时的协议合法形态）→ 空 parts。
+
+    回归锚点：视觉直连端到端冒烟用协议原生形态构造 assistant 消息时，
+    归一化对 None 抛「不支持的消息 content 类型: NoneType」——planner
+    实际链路塞的是 json 字符串从未触发，属引擎对协议的宽容缺口。
+    """
+    from src.modules.llm.engine import _content_to_parts
+
+    assert _content_to_parts(None) == []
+    assert _content_to_parts("你好") == ["你好"]
+    mixed = _content_to_parts(
+        [{"type": "text", "text": "a"}, {"type": "image_url", "image_url": {"url": "u"}}]
+    )
+    assert [type(part).__name__ for part in mixed] == ["TextPart", "ImagePart"]

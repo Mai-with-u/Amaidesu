@@ -23,6 +23,11 @@ from src.modules.dashboard.schemas.llm import (
     TokenUsageSchema,
 )
 from src.modules.dashboard.services.llm_stats import build_usage_trends, cache_hit_rate
+from src.modules.diagnostics.readers import (
+    read_latest_breakdowns,
+    read_llm_request_payload,
+    read_request_breakdown,
+)
 from src.modules.llm.request_history_manager import get_global_request_history_manager
 
 if TYPE_CHECKING:
@@ -116,18 +121,32 @@ def _context_windows_of(server: "DashboardServer") -> Dict[str, int]:
 async def get_context_breakdown(server: ServerDep) -> Dict[str, LLMContextBreakdownResponse]:
     """每模型最近一次调用的上下文分段占用（"上下文水位"悬停明细数据源）。
 
-    数据取 ``llm_requests.breakdown_json``（``LLMManager`` 成功路径估算落库），
-    窗口上限取 LLMManager 装配索引；无记录/未落库的模型不返回键，库空返回
-    空对象。``breakdown_json`` 解析失败的行跳过（不伪造分段）。
+    数据取每模型最新水位快照（``logs/llm_context/latest.json``，引擎成功
+    路径覆写），窗口上限取 LLMManager 装配索引；快照空时回退库存量行
+    （``llm_requests.breakdown_json``，正文出库前的历史形态）。
+    ``breakdown`` 解析失败的条目跳过（不伪造分段）。
     """
+    context_windows = _context_windows_of(server)
+    result: Dict[str, LLMContextBreakdownResponse] = {}
+
+    snapshot_models = read_latest_breakdowns()
+    if snapshot_models:
+        for model_name, breakdown in snapshot_models.items():
+            row = {
+                "timestamp_ms": breakdown.get("timestamp_ms"),
+                "profile_name": breakdown.get("profile_name"),
+                "request_id": breakdown.get("request_id"),
+            }
+            result[model_name] = _assemble_breakdown_response(
+                breakdown, model_name=model_name, row=row, context_windows=context_windows
+            )
+        return result
+
     llm_repo = server.llm_repo
     if llm_repo is None:
         return {}
 
     rows = await llm_repo.llm_requests_latest_breakdowns()
-    context_windows = _context_windows_of(server)
-
-    result: Dict[str, LLMContextBreakdownResponse] = {}
     for model_name, row in rows.items():
         try:
             breakdown = json.loads(str(row.get("breakdown_json") or ""))
@@ -149,8 +168,10 @@ async def get_context_breakdown(server: ServerDep) -> Dict[str, LLMContextBreakd
 async def get_context_breakdown_by_request(request_id: str, server: ServerDep) -> Optional[LLMContextBreakdownResponse]:
     """按请求 ID 取单次调用的上下文分段占用（时间线决策卡水位胶囊悬停明细）。
 
-    行存在但无分段（估算不可用的历史行）或行不存在一律返回 null（前端按
-    空态渲染，不报错）；窗口上限同口径取 LLMManager 装配索引。
+    库行 ``breakdown_json`` 有值（存量旧行）直读；新行正文出库后列值为空，
+    按库行 ``timestamp_ms`` 回查诊断文件。两者都无分段（估算不可用的行）或
+    行不存在一律返回 null（前端按空态渲染，不报错）；窗口上限同口径取
+    LLMManager 装配索引。
     """
     llm_repo = server.llm_repo
     if llm_repo is None:
@@ -159,10 +180,17 @@ async def get_context_breakdown_by_request(request_id: str, server: ServerDep) -
     row = await llm_repo.get_llm_request_by_id(request_id)
     if row is None:
         return None
-    try:
-        breakdown = json.loads(str(row.get("breakdown_json") or ""))
-    except ValueError:
-        return None
+
+    breakdown: Optional[Dict[str, Any]] = None
+    raw = row.get("breakdown_json")
+    if raw:
+        try:
+            parsed = json.loads(str(raw))
+            breakdown = parsed if isinstance(parsed, dict) else None
+        except ValueError:
+            breakdown = None
+    if breakdown is None:
+        breakdown = read_request_breakdown(request_id, int(row.get("timestamp_ms") or 0))
     if not isinstance(breakdown, dict):
         return None
     model_name = str(row.get("model_name") or "")
@@ -306,7 +334,28 @@ async def get_request_by_id(request_id: str) -> Optional[LLMRequestHistoryRespon
     if not record:
         return None
 
-    return _convert_record_to_response(record)
+    return _convert_record_to_response(_merge_payload_from_file(record))
+
+
+def _merge_payload_from_file(record: Dict[str, Any]) -> Dict[str, Any]:
+    """正文出库后按 request_id 回查诊断文件补齐详情记录。
+
+    新行库列正文一律 NULL（正文在 ``logs/llm_requests/`` 诊断文件），按库行
+    ``timestamp_ms`` 推导小时文件回查；存量旧行正文仍在库列（判空不触发），
+    文件未命中时原样返回（前端拿到无正文的统计行）。无库模式（内存缓存）
+    记录自带全量正文，同样不触发。
+    """
+    if record.get("request_params") or record.get("reasoning_content") or record.get("tool_calls"):
+        return record
+    payload = read_llm_request_payload(str(record.get("request_id") or ""), int(record.get("timestamp") or 0))
+    if payload is None:
+        return record
+    merged = dict(record)
+    merged["request_params"] = payload.get("request_params") or {}
+    merged["reasoning_content"] = payload.get("reasoning_content")
+    merged["tool_calls"] = payload.get("tool_calls") or []
+    merged["usage_raw_json"] = payload.get("usage_raw_json")
+    return merged
 
 
 def _convert_usage(usage_data: Any) -> Optional[TokenUsageSchema]:
@@ -385,17 +434,20 @@ def _message_text(message: Any) -> str:
 def _build_list_item(record: Dict[str, Any]) -> LLMRequestHistoryListItem:
     """列表行保留所选消息和首个工具调用的完整文本；详情接口提供完整请求。
 
-    request_params 的 messages 里最后一条有正文的消息即列表展示的 Prompt 预览。
+    ``preview_text`` 列（v14 写侧摘要）优先；存量旧行无摘要，回退从
+    request_params 解析——messages 里最后一条有正文的消息即列表展示的
+    Prompt 预览。
     """
-    prompt_preview = ""
-    params = record.get("request_params")
-    messages = params.get("messages") if isinstance(params, dict) else None
-    if isinstance(messages, list):
-        for message in reversed(messages):
-            text = _message_text(message).strip()
-            if text:
-                prompt_preview = _preview(text)
-                break
+    prompt_preview = str(record.get("preview_text") or "")
+    if not prompt_preview:
+        params = record.get("request_params")
+        messages = params.get("messages") if isinstance(params, dict) else None
+        if isinstance(messages, list):
+            for message in reversed(messages):
+                text = _message_text(message).strip()
+                if text:
+                    prompt_preview = _preview(text)
+                    break
 
     response_preview = _preview(record.get("response_content"))
     if not response_preview:

@@ -44,6 +44,10 @@ class LLMResponse(BaseModel):
     # 厂商原始 usage dict 的 JSON 序列化字符串：追溯重放唯一兜底，解析即弃
     # 链路上保留原始字节，存库字段 ``llm_requests.usage_raw_json`` 由此填充
     usage_raw_json: Optional[str] = None
+    # 音频输出模态（generate_audio 路径）：base64 音频载荷与请求指定的封装
+    # 格式；文本路径恒为 None。语音文本经 transcript 回填 content，不在此重复
+    audio_base64: Optional[str] = None
+    audio_format: Optional[str] = None
 
 
 class BaseLLMClient(abc.ABC):
@@ -98,6 +102,24 @@ class BaseLLMClient(abc.ABC):
     ) -> Response:
         """执行视觉请求（中立契约）；不支持时由默认实现明确报告。model 必填。"""
         raise NotImplementedError("该客户端不支持视觉请求")
+
+    async def generate_audio(
+        self,
+        request: GenerateRequest,
+        *,
+        model: str,
+        voice: str,
+        audio_format: str = "wav",
+        temperature: Optional[float] = None,
+        interrupt_flag: Optional[Any] = None,
+    ) -> Response:
+        """执行音频输出请求（中立契约）；不支持时由默认实现明确报告。model 必填。
+
+        ``voice`` / ``audio_format`` 为厂商词表的音色与封装格式；语音文本由
+        服务端 transcript 经 ``content`` 回填，音频字节经 ``audio_base64``
+        携带。仅支持非流式（音频模态不走增量回调路径）。
+        """
+        raise NotImplementedError("该客户端不支持音频输出请求")
 
     async def cleanup(self) -> None:
         """释放客户端资源；默认无需执行任何操作。"""

@@ -7,16 +7,21 @@ ConfigSchema 在自己包内定义，是唯一权威。
 注册副作用，import 链断裂或组件缺 Schema 会在启动期被断言
 拦下（缺失清单随异常给出），杜绝静默漏注册。
 
-两张表对应两类动态键段（加载期按表分发校验与默认值补全，见
-``multi_file_loader``）：
+组件表按配置宿主拆分为采集器与 Agent 两份名单（``_fill_collectors``
+/ ``_fill_agents`` 各自填充）：collectors.toml 的段全集、物化补缺、
+WebUI 候选注入等"枚举全集"诉求只认 ``COLLECTOR_SCHEMAS``——
+collectors.toml 是唯一靠这份名单干活的文件，混入 Agent 名会让
+物化把 Agent 段写进 collectors.toml；agents.toml 的段由 typed
+字段直连承载，``AGENT_SCHEMAS`` 成员仅承担启动断言与 schema 服务。
+``COMPONENT_SCHEMAS`` 是两者的合并视图，供既有消费方（启动断言、
+既有校验分支）继续整体查询。
 
-- ``COMPONENT_SCHEMAS``：单层名键——采集器（``[collectors.<name>]``）
-  与 Agent（``[agents.<name>]``）；
-- ``TOOL_PROVIDER_SCHEMAS``：二层身份键——工具提供者
-  （``[tools.<domain>.<key>].config``），键形与装配侧
-  ``tools.bootstrap._DOMAIN_MEMBERS`` 的成员身份同构；
-  两表一致性由契约测试守护（装配成员必须有 Schema，否则该
-  provider 的 config 段退化为无校验、无默认值补全的自由 dict）。
+工具提供者表对应二层身份键段（加载期按表分发校验与默认值补全，见
+``multi_file_loader``）：``TOOL_PROVIDER_SCHEMAS``——
+（``[tools.<domain>.<key>].config``），键形与装配侧
+``tools.bootstrap._DOMAIN_MEMBERS`` 的成员身份同构；
+两表一致性由契约测试守护（装配成员必须有 Schema，否则该
+provider 的 config 段退化为无校验、无默认值补全的自由 dict）。
 
 静态命名段不走注册表——直接在聚合 Schema 里 typed 引用包内
 ConfigSchema（先例：``VisionProviderConfig.config``）。
@@ -24,7 +29,13 @@ ConfigSchema（先例：``VisionProviderConfig.config``）。
 
 from src.modules.config.schemas.base import BaseConfig
 
-# 组件名 → 该组件包内权威 ConfigSchema
+# 采集器注册名 → 包内权威 ConfigSchema（collectors.toml 的合法段全集）
+COLLECTOR_SCHEMAS: dict[str, type[BaseConfig]] = {}
+
+# Agent 注册名 → 包内权威 ConfigSchema（启动断言与 schema 服务用）
+AGENT_SCHEMAS: dict[str, type[BaseConfig]] = {}
+
+# 采集器 + Agent 的合并视图（既有消费方整体查询用；勿用于 collectors.toml 段全集判定）
 COMPONENT_SCHEMAS: dict[str, type[BaseConfig]] = {}
 
 # 工具提供者身份 (分类段, 提供者键) → 包内权威 ConfigSchema
@@ -119,10 +130,19 @@ def fill_component_schemas() -> dict[str, type[BaseConfig]]:
 
     逐包显式 import 各组件的权威 ConfigSchema；组件包本身
     不产生注册副作用，装配确定性由本函数的静态 import 链保证。
+    采集器与 Agent 分表填充后合成 COMPONENT_SCHEMAS 合并视图。
     """
+    collectors = _fill_collectors()
+    agents = _fill_agents()
+
+    COLLECTOR_SCHEMAS.clear()
+    COLLECTOR_SCHEMAS.update(collectors)
+    AGENT_SCHEMAS.clear()
+    AGENT_SCHEMAS.update(agents)
+
     schemas: dict[str, type[BaseConfig]] = {}
-    schemas.update(_fill_collectors())
-    schemas.update(_fill_agents())
+    schemas.update(collectors)
+    schemas.update(agents)
     COMPONENT_SCHEMAS.clear()
     COMPONENT_SCHEMAS.update(schemas)
     TOOL_PROVIDER_SCHEMAS.clear()
@@ -155,6 +175,8 @@ def ensure_component_registry() -> dict[str, type[BaseConfig]]:
 
 
 __all__ = [
+    "COLLECTOR_SCHEMAS",
+    "AGENT_SCHEMAS",
     "COMPONENT_SCHEMAS",
     "TOOL_PROVIDER_SCHEMAS",
     "EXPECTED_COMPONENTS",

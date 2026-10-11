@@ -1,4 +1,4 @@
-"""视觉配置由提供者 Schema 生成和写回，同时容忍已停用采集器的历史配置残留。"""
+"""视觉配置由提供者 Schema 生成和写回；历史配置残留按全域硬错语义在加载期拦下。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import Optional
 import pytest
 from loguru import logger as _loguru_logger
 
+from src.modules.config.errors import ConfigValidationError
 from src.modules.config.multi_file_loader import (
     _CONFIG_FILES,
     generate_default_configs,
@@ -121,13 +122,8 @@ class TestVisionConfigDefaults:
         disk_text = tools_path.read_text(encoding="utf-8-sig")
         assert "monitor_index = 2" in disk_text
 
-    def test_unknown_field_in_vision_config_stripped(self, temp_config_dir):
-        """vision config 出现未知字段：drift 视为冗余，写回自动清理（不抛）。
-
-        BaseConfig.extra='forbid' 在 ``from_dict_with_drift_check`` 内被显式
-        旁路（多余字段被剥离后再构造实例），保证加载稳健性。冗余项写入
-        ``report.redundant``，写回阶段一并清出磁盘。
-        """
+    def test_unknown_field_in_vision_config_hard_fails(self, temp_config_dir):
+        """vision config 出现未知字段：冗余全域硬错（不再静默剥离清理）。"""
         generate_default_configs(temp_config_dir)
         tools_path = temp_config_dir / "tools.toml"
         original = tools_path.read_text(encoding="utf-8-sig")
@@ -139,33 +135,22 @@ class TestVisionConfigDefaults:
         assert patched != original
         tools_path.write_text(patched, encoding="utf-8-sig")
 
-        cfg, _report = load_config_dir(temp_config_dir)
-        # 加载不抛；未知字段被剥离
-        # 返回的 report 是"写回后残余漂移"——冗余项若被写回清掉则不再列出
-        # （漂移过程的可见性在日志，不在残留报告）；故断言"磁盘上消失"。
-        assert "unknown_field" not in cfg["tools"]["tools"]["vision"]["config"]
-        # 写回后磁盘上无 unknown_field
-        disk_text = tools_path.read_text(encoding="utf-8-sig")
-        assert "unknown_field" not in disk_text
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(temp_config_dir)
+        assert "unknown_field" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
-# (b) 残留 [collectors.screen] 段加载容忍
+# (b) 残留 [collectors.screen] 段全域硬错
 # ---------------------------------------------------------------------------
 
 
 class TestResidualCollectorSection:
-    """``[collectors.<退役名>]`` 残留段：CollectorsRootConfig.extra='allow'
-    保留段不删除；阶段④ 校验改为 warn + 跳过而非 raise。"""
+    """``[collectors.<退役名>]`` 残留段：加载期硬错（collectors.toml 是
+    用户契约面，未知段留任即欺骗读者）。"""
 
-    def test_residual_screen_section_loaded_without_raise(self, temp_config_dir):
-        """残留 ``[screen]`` 段（已退役 screen 采集器的历史段名）不抛、warning 含跳过原因。
-
-        段名匹配 :data:`COMPONENT_SCHEMAS` 的 key：注册表中以采集器名为顶层
-        key（``screen``，不带 ``collectors.`` 前缀）。TOML 中 ``[screen]`` 段
-        是顶层键，与 extras 入口对齐。Task 1 删除 ``screen`` 注册后该段成
-        残留，需 ``CollectorsRootConfig.extra='allow'`` 容忍。
-        """
+    def test_residual_screen_section_hard_fails(self, temp_config_dir):
+        """残留 ``[screen]`` 段（已退役 screen 采集器的历史段名）→ ConfigValidationError。"""
         generate_default_configs(temp_config_dir)
         collectors_path = temp_config_dir / "collectors.toml"
         original = collectors_path.read_text(encoding="utf-8-sig")
@@ -173,39 +158,20 @@ class TestResidualCollectorSection:
         patched = original + "\n[screen]\nenabled = true\n"
         collectors_path.write_text(patched, encoding="utf-8-sig")
 
-        with _LoguruCapture() as cap:
-            cfg, _report = load_config_dir(temp_config_dir)
-
-        # 不抛、加载成功（其他 scope 仍正常）
-        assert "tools" in cfg
-        # warning 含 'screen' 段名 + 跳过提示
-        assert any("screen" in r["message"] and r["level"] == "WARNING" for r in cap.records), (
-            f"未发现 warning: {cap.records}"
-        )
-
-    def test_residual_screen_section_preserved_on_disk(self, temp_config_dir):
-        """残留段在磁盘上保留（extra='allow' 语义）；漂移写回不删除。"""
-        generate_default_configs(temp_config_dir)
-        collectors_path = temp_config_dir / "collectors.toml"
-        original = collectors_path.read_text(encoding="utf-8-sig")
-        patched = original + "\n[screen]\nenabled = true\n"
-        collectors_path.write_text(patched, encoding="utf-8-sig")
-
-        load_config_dir(temp_config_dir)
-
-        final = collectors_path.read_text(encoding="utf-8-sig")
-        assert "[screen]" in final
-        assert "enabled = true" in final
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(temp_config_dir)
+        message = str(exc_info.value)
+        assert "screen" in message
+        assert "console_input" in message  # 合法名单随错误给出
 
 
 # ---------------------------------------------------------------------------
-# (c) enabled 含未知名加载容忍（与 factory.instantiate_collector 对齐）
+# (c) enabled 含未知名全域硬错
 # ---------------------------------------------------------------------------
 
 
 class TestEnabledUnknownName:
-    """``enabled`` 名单出现未注册采集器名（如退役 ``screen``）→
-    加载不抛 + warn；与 Task 1 的 `instantiate_collector` skip+warn 行为对齐。"""
+    """``enabled`` 名单出现未注册采集器名 → 加载期硬错（点名 + 合法名单）。"""
 
     @staticmethod
     def _append_enabled(config_dir, extra: str) -> None:
@@ -220,27 +186,25 @@ class TestEnabledUnknownName:
         lines[targets[0]] = f"enabled = [{merged}]\n"
         path.write_text("".join(lines), encoding="utf-8-sig")
 
-    def test_unknown_enabled_screen_loaded_without_raise(self, temp_config_dir):
+    def test_unknown_enabled_screen_hard_fails(self, temp_config_dir):
         generate_default_configs(temp_config_dir)
         # enabled 列表追加已退役的 "screen"
         self._append_enabled(temp_config_dir, '"screen"')
 
-        with _LoguruCapture() as cap:
-            cfg, _report = load_config_dir(temp_config_dir)
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(temp_config_dir)
+        message = str(exc_info.value)
+        assert "screen" in message
+        assert "collectors.enabled" in message
 
-        assert "tools" in cfg  # 加载成功
-        assert any("screen" in r["message"] and r["level"] == "WARNING" for r in cap.records)
-
-    def test_unknown_typo_enabled_loaded_without_raise(self, temp_config_dir):
-        """未知名不仅限退役名；任意拼写错的 enabled 项同样 warn + 跳过。"""
+    def test_unknown_typo_enabled_hard_fails(self, temp_config_dir):
+        """未知名不仅限退役名；任意拼写错的 enabled 项同样硬错。"""
         generate_default_configs(temp_config_dir)
         self._append_enabled(temp_config_dir, '"typo_collector_xyz"')
 
-        with _LoguruCapture() as cap:
-            cfg, _report = load_config_dir(temp_config_dir)
-
-        assert "tools" in cfg
-        assert any("typo_collector_xyz" in r["message"] and r["level"] == "WARNING" for r in cap.records)
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(temp_config_dir)
+        assert "typo_collector_xyz" in str(exc_info.value)
 
 
 # 守门：与 _CONFIG_FILES 联动验证（避免误删文件清单后此用例失锚）

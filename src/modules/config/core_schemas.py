@@ -157,7 +157,8 @@ class TTSConfig(BaseConfig):
         edge_tts: EdgeTTS 引擎参数（仅 provider=edge_tts 时生效）。
         gptsovits: GPT-SoVITS 引擎参数（仅 provider=gptsovits 时生效）。
         voicebox: Voicebox 引擎参数（仅 provider=voicebox 时生效；需填写 profile_id）。
-        omni_tts: OmniTTS 引擎参数（仅 provider=omni_tts 时生效）。
+        omni_tts: 全模态大模型 TTS 引擎参数（OpenAI 兼容线协议，经 LLMManager
+            语音 profile 调用带语音输出模态的模型；仅 provider=omni_tts 时生效）。
     """
 
     enabled: bool = Field(
@@ -205,8 +206,8 @@ class TTSConfig(BaseConfig):
     )
     omni_tts: Dict[str, Any] = Field(
         default_factory=dict,
-        title="OmniTTS 参数",
-        description="OmniTTS 引擎参数（仅 provider=omni_tts 时生效）",
+        title="全模态大模型 TTS 参数",
+        description="全模态大模型 TTS 引擎参数（OpenAI 兼容线协议；仅 provider=omni_tts 时生效）",
     )
 
 
@@ -288,4 +289,30 @@ class AgentSupervisorConfig(BaseConfig):
         ge=1,
         title="重建失败上限",
         description="时间窗内重建失败达到该次数 → 置 ERRORED 并停止自动重试",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics（本地诊断记录落盘：LLM 正文 / 事件流 / TTS 逐句记录）
+# ---------------------------------------------------------------------------
+
+
+class DiagnosticsConfig(BaseConfig):
+    """本地诊断记录配置（``[diagnostics]`` 段）
+
+    落盘根固定为 ``logs/`` 平铺子目录（``logs/<kind>/...``），本段只管
+    保留期与总开关。正文文件可丢弃、按保留期滚动清理；统计事实永远在
+    SQLite，删正文不伤账。
+    """
+
+    enabled: bool = Field(
+        default=True,
+        title="启用诊断落盘",
+        description="关闭后 LLM 请求正文 / 事件流 / TTS 合成记录不再写文件（统计落库不受影响）",
+    )
+    retention_days: int = Field(
+        default=14,
+        ge=0,
+        title="保留天数",
+        description="诊断正文文件保留天数，超期天目录整体删除；0 = 永不清理",
     )

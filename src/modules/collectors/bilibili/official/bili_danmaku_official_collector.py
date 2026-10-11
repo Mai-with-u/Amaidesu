@@ -68,12 +68,17 @@ class BiliDanmakuOfficialCollector(BaseCollector):
     description = "通过 Bilibili 官方开放平台 WebSocket API 采集弹幕/SC/礼物/进房事件"
 
     class ConfigSchema(BaseConfig):
-        """Bilibili官方弹幕采集器配置"""
+        """Bilibili官方弹幕采集器配置
 
-        id_code: str = Field(..., description="主播身份码")
-        app_id: str = Field(..., description="应用ID")
-        access_key: str = Field(..., description="访问密钥")
-        access_key_secret: str = Field(..., description="访问密钥Secret")
+        凭证字段默认空串（=未配置）：采集器配置段必须可默认构造，
+        物化机制按注册表为文件缺的段补默认值；未配置凭证的连接
+        在运行期失败暴露，而非加载期拒绝整个配置文件。
+        """
+
+        id_code: str = Field("", description="主播身份码")
+        app_id: str = Field("", description="应用ID")
+        access_key: str = Field("", description="访问密钥")
+        access_key_secret: str = Field("", description="访问密钥Secret")
         api_host: str = Field(default="https://live-open.biliapi.com", description="API主机地址")
         message_cache_size: int = Field(default=1000, description="消息缓存大小", ge=1)
         context_tags: Optional[list] = Field(default=None, description="Prompt上下文标签")
@@ -326,6 +331,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 platform=_PLATFORM,
                 user=RoomMessageUser(id=user_id, name=user_name),
                 content=bili_msg.msg,
+                message_id=bili_msg.msg_id,
                 timestamp_ms=timestamp_ms,
             )
 

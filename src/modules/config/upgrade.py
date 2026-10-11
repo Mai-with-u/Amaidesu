@@ -196,6 +196,25 @@ def _drop_simulator_sc_probability(data: Dict[str, Any]) -> List[str]:
 register_file_hook("infra.toml", "drop_simulator_sc_probability", "2.0.41", _drop_simulator_sc_probability)
 
 
+def _upgrade_logging_directory_subdir(data: Dict[str, Any]) -> List[str]:
+    """infra.toml v2.0.42：运行日志收进 ``logs/app/`` 子目录。
+
+    ``logs/`` 根改为只放平铺子目录（app / llm_requests / llm_context /
+    events / tts / webui），运行日志落盘目录相应内收。仅改写值等于旧默认
+    ``"logs"`` 的落盘值，用户显式自设的其他目录原样保留。对已迁移数据
+    零变更（幂等）。
+    """
+    logging_section = data.get("logging")
+    if not isinstance(logging_section, dict) or logging_section.get("directory") != "logs":
+        return []
+    logging_section["directory"] = "logs/app"
+    return ["logging.directory: logs -> logs/app"]
+
+
+# 生产钩子登记：infra.toml v2.0.42（[logging].directory 收进子目录）
+register_file_hook("infra.toml", "logging_directory_subdir", "2.0.42", _upgrade_logging_directory_subdir)
+
+
 def _upgrade_builder_scene_transport(data: Dict[str, Any]) -> List[str]:
     """设计与施工复用 Mod 受理通道，独立校验入口不再有消费者。"""
     builder = ((data.get("agents") or {}).get("minecraft") or {}).get("builder")
@@ -296,9 +315,40 @@ def _drop_tool_input_limits(data: Dict[str, Any]) -> List[str]:
     )
 
 
+def _drop_minecraft_builder_section(data: Dict[str, Any]) -> List[str]:
+    """agents.toml v2.0.40：删 [agents.minecraft.builder] 残段。
+
+    独立校验/预览入口已随场景施工迁移删除（builder_scene_transport 只
+    处理三个协议键），残余键（max_steps 等）亦无消费者，整段退役。
+    对已迁移数据零变更（幂等）。
+    """
+    agents = data.get("agents")
+    minecraft = agents.get("minecraft") if isinstance(agents, dict) else None
+    if not isinstance(minecraft, dict) or "builder" not in minecraft:
+        return []
+    del minecraft["builder"]
+    return ["agents.minecraft.builder"]
+
+
+register_file_hook("agents.toml", "drop_minecraft_builder_section", "2.0.40", _drop_minecraft_builder_section)
+
+
 def _drop_memory_injection_limit(data: Dict[str, Any]) -> List[str]:
-    """本批观众的已有画像全部可见，画像生成策略继续保留。"""
-    return _drop_config_paths(data, ("memory.profile_injection_max",))
+    """storage.toml v2.0.40：删 ``[memory].profile_injection_max`` 并清理空段。
+
+    本批观众的已有画像全部可见，注入上限失去消费者；``[memory]`` 段
+    亦无其他存活键，删键后的空段残留在 forbid 根下属冗余硬错，一并
+    移除。对已迁移数据零变更（幂等）。
+    """
+    memory = data.get("memory")
+    if not isinstance(memory, dict) or "profile_injection_max" not in memory:
+        return []
+    changed: List[str] = ["memory.profile_injection_max"]
+    del memory["profile_injection_max"]
+    if not memory:
+        del data["memory"]
+        changed.append("memory")
+    return changed
 
 
 register_file_hook("model.toml", "drop_generation_limits", "2.0.40", _drop_model_generation_limits)

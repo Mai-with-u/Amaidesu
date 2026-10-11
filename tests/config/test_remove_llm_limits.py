@@ -40,7 +40,7 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
             "2.0.40",
         ),
         # infra.toml 的钩子链更长（sc_probability 死键清理 v2.0.41）
-        ("infra.toml", ("simulator.context_window_size", "simulator.max_message_chars"), "2.0.41"),
+        ("infra.toml", ("simulator.context_window_size", "simulator.max_message_chars"), "2.0.42"),
         (
             "tools.toml",
             (

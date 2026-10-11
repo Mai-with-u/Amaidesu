@@ -72,9 +72,14 @@ async def _reference(planner: Planner) -> str:
     return text
 
 
+def _topic_lines(text: str) -> List[str]:
+    """取【已聊话题】段内的话题行（段尾附硬规则行，不属话题清单）。"""
+    return [line for line in text.split("【已聊话题】", 1)[1].splitlines()[1:] if line.startswith("- ")]
+
+
 @pytest.mark.asyncio
 async def test_spoken_intents_listed_oldest_first() -> None:
-    """说出口的每轮话题一句话按先后列进【我最近几轮想说的】，下一窗就看得到自己连着讲了什么。
+    """说出口的每轮话题一句话按先后列进【已聊话题】，下一窗就看得到自己连着讲了什么。
 
     指引全文不随行注入：那轮的原话已在对话历史 assistant 消息里，同一信息双份
     只会让参考段每轮平白多出几百字。
@@ -85,8 +90,9 @@ async def test_spoken_intents_listed_oldest_first() -> None:
     await planner.plan([], proactive=True)
     text = await _reference(planner)
 
-    assert "【我最近几轮想说的】" in text
-    section = text.split("【我最近几轮想说的】", 1)[1].splitlines()[1:]
+    assert "【已聊话题】" in text
+    assert "硬规则" in text and "实质性新角度" in text
+    section = _topic_lines(text)
     assert section == ["- 刚刚 话题：报平安：满血了", "- 刚刚 话题：还是满血"]
 
 
@@ -97,14 +103,14 @@ async def test_failed_reply_is_not_recorded() -> None:
 
     await planner.plan([], proactive=True)
 
-    assert "【我最近几轮想说的】" not in await _reference(planner)
+    assert "【已聊话题】" not in await _reference(planner)
 
 
 @pytest.mark.asyncio
 async def test_intents_keep_only_configured_count() -> None:
     """只回看配置的轮数，最早的先出列。"""
     planner = _planner(
-        [_reply_call(f"话题{i}", "") for i in range(3)],
+        [_reply_call(t, "") for t in ("今天天气不错", "水车修好了", "晚饭想吃火锅")],
         config={"planner_recent_intents_max": 2},
     )
 
@@ -112,7 +118,7 @@ async def test_intents_keep_only_configured_count() -> None:
         await planner.plan([], proactive=True)
     text = await _reference(planner)
 
-    assert "话题0" not in text and "话题1" in text and "话题2" in text
+    assert "今天天气不错" not in text and "水车修好了" in text and "晚饭想吃火锅" in text
 
 
 @pytest.mark.asyncio
@@ -122,7 +128,7 @@ async def test_zero_intents_disables_section() -> None:
 
     await planner.plan([], proactive=True)
 
-    assert "【我最近几轮想说的】" not in await _reference(planner)
+    assert "【已聊话题】" not in await _reference(planner)
 
 
 @pytest.mark.asyncio
@@ -202,12 +208,11 @@ async def test_intent_outside_delegation_window_is_not_superseded() -> None:
     )
     text = await _reference(planner)
 
-    section = text.split("【我最近几轮想说的】", 1)[1].splitlines()[1:]
+    section = _topic_lines(text)
     assert len(section) == 2
     assert all("已被游戏回执覆盖" not in line for line in section)
     assert "话题：和观众打了个招呼" in section[0]
     assert "话题：包里攒了 19 块圆石" in section[1]
-
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import MagicMock
 
 
 from src.modules.tools.models import ToolInvocation
@@ -592,3 +593,90 @@ class TestModuleExports:
         assert params[1] == "monitor_index"
         assert params[2] == "region"
         assert params[3] == "max_width"
+
+
+# ===========================================================================
+# VLM 按调用方能力按需执行（ADR-037）
+# ===========================================================================
+
+
+class TestCallerCapabilityGatedVlm:
+    def _manager(self, visual: bool, *, raises: bool = False) -> MagicMock:
+        manager = MagicMock()
+        if raises:
+            manager.is_profile_visual = MagicMock(side_effect=RuntimeError("引擎未就绪"))
+        else:
+            manager.is_profile_visual = MagicMock(return_value=visual)
+        return manager
+
+    async def _invoke(self, provider: LookAtScreenProvider, caller_profile: str = "planner") -> object:
+        capture = FakeScreenCapture()
+        capture.queue_png(b"\x89PNG_FAKE", width=320, height=240)
+        provider._capture = capture
+        return await provider.invoke(
+            ToolInvocation(tool_name="vision_look_at_screen", arguments={}, caller_profile=caller_profile)
+        )
+
+    async def test_visual_caller_skips_vlm(self) -> None:
+        """视觉调用方（主模型 visual）：跳过 VLM，text 空但图照常返回。"""
+        reader = FakeTextReader()
+        reader.queue_text("VLM 转述不应出现")
+        provider = LookAtScreenProvider(config={}, text_reader=reader, llm_manager=self._manager(visual=True))
+
+        result = await self._invoke(provider, caller_profile="planner")
+
+        assert reader.calls == []  # VLM 未调用
+        assert result.success is True
+        assert result.structured_content["text"] == ""
+        assert "error" not in result.structured_content
+        assert any(block.kind == "image" for block in result.blocks)
+
+    async def test_non_visual_caller_still_runs_vlm(self) -> None:
+        """非视觉调用方：VLM 照旧（现状回归锚点）。"""
+        reader = FakeTextReader()
+        reader.queue_text("画面描述文本")
+        provider = LookAtScreenProvider(config={}, text_reader=reader, llm_manager=self._manager(visual=False))
+
+        result = await self._invoke(provider, caller_profile="minecraft")
+
+        assert len(reader.calls) == 1
+        assert result.structured_content["text"] == "画面描述文本"
+
+    async def test_pipeline_call_with_empty_profile_runs_vlm(self) -> None:
+        """管线式调用（caller_profile 空串，text_adv 读屏形态）：VLM 照旧。
+
+        空串语义 = 结果不进任何 LLM 对话而进解析管线——text_adv 消费 VLM
+        的结构化文本输出（选项中心像素坐标），跳过会让坐标管线断裂。
+        """
+        reader = FakeTextReader()
+        reader.queue_text("正文：…\n1. 选项甲 (160, 120)")
+        provider = LookAtScreenProvider(config={}, text_reader=reader, llm_manager=self._manager(visual=True))
+
+        result = await self._invoke(provider, caller_profile="")
+
+        assert len(reader.calls) == 1
+        assert result.structured_content["text"].startswith("正文：")
+
+    async def test_capability_query_failure_falls_back_to_vlm(self) -> None:
+        """引擎能力查询异常：按非视觉降级，VLM 照旧不抛。"""
+        reader = FakeTextReader()
+        reader.queue_text("降级转述")
+        provider = LookAtScreenProvider(
+            config={}, text_reader=reader, llm_manager=self._manager(visual=True, raises=True)
+        )
+
+        result = await self._invoke(provider, caller_profile="planner")
+
+        assert len(reader.calls) == 1
+        assert result.structured_content["text"] == "降级转述"
+
+    async def test_no_llm_manager_always_runs_vlm(self) -> None:
+        """未注入 llm_manager（旧组装形态）：VLM 照旧，向后兼容。"""
+        reader = FakeTextReader()
+        reader.queue_text("无引擎转述")
+        provider = LookAtScreenProvider(config={}, text_reader=reader)
+
+        result = await self._invoke(provider, caller_profile="planner")
+
+        assert len(reader.calls) == 1
+        assert result.structured_content["text"] == "无引擎转述"

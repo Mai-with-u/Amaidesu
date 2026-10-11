@@ -147,13 +147,23 @@ class LiveSessionManager:
             return await self._close_active(reason=reason, ended_at_ms=now_ms())
 
     async def _close_active(self, *, reason: str, ended_at_ms: int) -> bool:
-        """结束当前显式场次（调用方持锁）。空场次（无任何明细行）整行丢弃。"""
+        """结束当前显式场次（调用方持锁）。空场次（无任何明细行）整行丢弃。
+
+        幂等：目标行不存在或已结账（``ended_at_ms`` 非空）时只复位内存态
+        并返回 False，不重复结算、不重复广播 ``live.ended``、不误删行——
+        进程退出收尾链（``run_shutdown`` 常规结账 + 退出兜底）会对本方法
+        发起多次调用，重复路径不得产生二次副作用。
+        """
         assert self._active_pk is not None
         pk = self._active_pk
         source = self._active_source or "manual"
 
         row = await self._sessions.get_live_session(live_session_id=pk)
-        started_at = int(row["started_at_ms"]) if row is not None else ended_at_ms
+        if row is None or row["ended_at_ms"] is not None:
+            self._active_pk = None
+            self._active_source = ""
+            return False
+        started_at = int(row["started_at_ms"])
         await self._sessions.close_live_session(live_session_id=pk, ended_at_ms=ended_at_ms)
 
         details = await self._chat.count_session_details(live_session_id=pk)
@@ -172,7 +182,7 @@ class LiveSessionManager:
                 live_session_id=pk,
                 source=source,
                 reason=reason,
-                duration_ms=max(ended_at_ms - started_at, 0) if row is not None else None,
+                duration_ms=max(ended_at_ms - started_at, 0),
                 empty_discarded=empty_discarded,
                 ended_at_ms=ended_at_ms,
             ),

@@ -39,6 +39,7 @@ class AudioDeviceManager:
         channels: int = 1,
         dtype: type = np.int16,
         sink: Optional[Any] = None,
+        prebuffer_seconds: float = 2.5,
     ) -> None:
         """
         初始化音频设备管理器
@@ -49,12 +50,16 @@ class AudioDeviceManager:
             dtype: 数据类型
             sink: 可选音频分接接收方（``AudioSink`` 协议形状；口型分析等
                 消费者经构造链注入）
+            prebuffer_seconds: 流式播放预缓冲秒数——声卡流攒够这么多音频才
+                开播，吸收上游合成/网络的短暂停顿；上游吞吐长期低于实时时
+                仍会欠载（那需要上游提速，缓冲无法根治）
         """
         self.logger = get_logger("AudioDeviceManager")
         self.sample_rate = sample_rate
         self.channels = channels
         self.dtype = dtype
         self._sink = sink
+        self.prebuffer_seconds = prebuffer_seconds
 
         # 设备配置
         self.output_device_name: Optional[str] = None
@@ -64,6 +69,10 @@ class AudioDeviceManager:
         self.is_playing = False
         self.current_stream: Optional[Any] = None
         self._stream: Optional[Any] = None
+        # 预缓冲状态：攒够 prebuffer_seconds 才启动声卡流
+        self._pending_chunks: list[np.ndarray] = []
+        self._pending_samples = 0
+        self._stream_started = False
 
         if not DEPENDENCIES_OK:
             self.logger.error("音频依赖缺失，请安装: pip install sounddevice soundfile")
@@ -241,7 +250,11 @@ class AudioDeviceManager:
             raise
 
     def start_stream(self, utterance_id: str = "") -> None:
-        """启动流式播放,创建 OutputStream 准备接收音频块。"""
+        """启动流式播放：创建声卡流但暂不开播，等预缓冲攒够再启动。
+
+        上游块先入 pending；攒满 ``prebuffer_seconds`` 后由 ``write_chunk``
+        统一冲入声卡。短句（总量不足预缓冲）在 ``stop_stream`` 收尾冲播。
+        """
         if not DEPENDENCIES_OK:
             self.logger.error("sounddevice 库不可用")
             return
@@ -252,18 +265,36 @@ class AudioDeviceManager:
                 dtype=self.dtype,
                 device=self.output_device_index,
             )
-            self._stream.start()
+            self._pending_chunks = []
+            self._pending_samples = 0
+            self._stream_started = False
             self.is_playing = True
             # 分接：开播同步开 session（流式播法逐块 feed）
             self._sink_start(utterance_id)
-            self.logger.debug("流式播放已启动")
+            self.logger.debug("流式播放已就绪（等待预缓冲）")
         except Exception as e:
             self.logger.error(f"启动流式播放失败: {e}")
             self._stream = None
             self._sink_stop()
 
+    def _flush_pending(self) -> None:
+        """把预缓冲冲入声卡：首次冲入时启动流，随后逐块写入。"""
+        if self._stream is None:
+            return
+        if not self._stream_started:
+            self._stream.start()
+            self._stream_started = True
+            self.logger.debug(f"预缓冲达阈值（{self.prebuffer_seconds:.1f}s），声卡流开播")
+        for chunk in self._pending_chunks:
+            self._stream.write(chunk)
+        self._pending_chunks = []
+        self._pending_samples = 0
+
     def write_chunk(self, chunk: np.ndarray) -> None:
         """向流写入一个音频块,立即输出到扬声器。
+
+        预缓冲未满时块入 pending（声卡流保持未启动）；攒够阈值统一冲入。
+        此后各块直接写声卡（write 在缓冲满时按实时节奏阻塞，形成背压）。
 
         Args:
             chunk: 音频数据块 (1D 或 2D ndarray)
@@ -275,23 +306,40 @@ class AudioDeviceManager:
         if self._stream is None:
             return
         try:
-            self._stream.write(chunk)
+            if not self._stream_started:
+                self._pending_chunks.append(chunk)
+                self._pending_samples += len(chunk)
+                if self._pending_samples >= int(self.prebuffer_seconds * self.sample_rate):
+                    self._flush_pending()
+            else:
+                self._stream.write(chunk)
         except Exception as e:
             self.logger.error(f"写入音频流失败: {e}")
 
-    def stop_stream(self) -> None:
-        """停止并关闭流式播放。"""
+    def stop_stream(self, discard_pending: bool = False) -> None:
+        """停止并关闭流式播放。
+
+        Args:
+            discard_pending: True 时直接丢弃未冲播的预缓冲（取消/截断语义，
+                避免 buffer 残留与下一次发声重叠）；默认 False 先冲播残余
+                （正常收尾，短句兜底）。
+        """
         if not DEPENDENCIES_OK:
             return
         if self._stream is None:
             return
         try:
+            if self._pending_chunks and not discard_pending:
+                self._flush_pending()
             self._stream.stop()
             self._stream.close()
         except Exception as e:
             self.logger.warning(f"停止音频流失败: {e}")
         finally:
             self._stream = None
+            self._pending_chunks = []
+            self._pending_samples = 0
+            self._stream_started = False
             self.is_playing = False
             # 分接：播完同步收 session
             self._sink_stop()

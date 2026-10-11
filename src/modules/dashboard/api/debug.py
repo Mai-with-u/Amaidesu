@@ -4,6 +4,7 @@
 提供调试和测试接口。
 """
 
+import base64
 import uuid
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -213,14 +214,38 @@ async def test_tts(
     request: TtsTestRequest,
     server: ServerDep,
 ) -> TtsTestResponse:
-    """驱动 TTS 引擎试说一句：合成 + 真实音频汇播放 + tts.utterance.* 事件。
+    """驱动 TTS 引擎调试合成。
 
-    同步长请求（等待合成与播放，时长随文本长度），前端需放宽超时并做
-    loading 防连点；引擎内部有编排队列，与直播发声互斥排队是真实语义。
-    传入 utterance_id 使字幕跟随器同步点亮——TTS 卡与字幕卡的分层归因
-    依据：此处有声有字 = 播放链通，字幕卡有字无声 = 显示链通。
+    双模式：``play_on_device=True`` 试说一句（合成 + 真实音频汇播放 +
+    tts.utterance.* 事件 + 字幕联动，忽略覆盖参数）；``False`` 生成试
+    听音频（配置参数 + 覆盖参数合成，返回 base64 wav，不占声卡、不驱
+    动字幕）。同步长请求，前端需放宽超时并做 loading 防连点。
     """
     engine = _get_tts_engine(server)
+    if not request.play_on_device:
+        synth = getattr(engine, "debug_synthesize", None)
+        if not callable(synth):
+            return TtsTestResponse(success=False, error="当前引擎不支持音频合成接口（仅 GPT-SoVITS 支持）")
+        overrides = {
+            k: v
+            for k, v in {
+                "temperature": request.temperature,
+                "speed_factor": request.speed_factor,
+                "sample_steps": request.sample_steps,
+                "top_k": request.top_k,
+                "top_p": request.top_p,
+            }.items()
+            if v is not None
+        }
+        try:
+            audio = await synth(request.text, overrides)
+        except Exception as e:
+            logger.exception(f"TTS 调试合成失败: {e}")
+            return TtsTestResponse(success=False, error=str(e))
+        audio_base64 = base64.b64encode(audio).decode("ascii")
+        logger.info(f"TTS 调试合成完成: {len(audio)} bytes, overrides={overrides}")
+        return TtsTestResponse(success=True, audio_base64=audio_base64)
+
     utterance_id = f"debug-test-{now_ms()}"
     try:
         await engine.handle_speech(request.text, utterance_id=utterance_id)

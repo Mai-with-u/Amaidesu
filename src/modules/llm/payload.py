@@ -150,6 +150,10 @@ class Response(BaseModel):
     # 厂商原始 usage dict 的 JSON 序列化字符串：用于追溯重放（如解析字段更新后回填）；
     # 解析即弃链路唯一兜底，不做任何加工（包含未上报字段、嵌套对象原样保留）
     usage_raw_json: Optional[str] = None
+    # 音频输出模态（generate_audio 路径）：base64 音频载荷与请求指定的封装格式；
+    # 文本路径恒为 None。语音文本经 transcript 回填 content，不在此重复
+    audio_base64: Optional[str] = None
+    audio_format: Optional[str] = None
 
 
 __all__ = [

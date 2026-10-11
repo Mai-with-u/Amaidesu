@@ -38,8 +38,8 @@ def test_enabled_unknown_platform_hard_fails(tmp_path):
     assert "warudo" in str(exc_info.value)  # 合法名单随错误给出
 
 
-def test_unregistered_platform_section_tolerated(tmp_path):
-    """未注册平台残留段（extra=allow 保留）→ redundant 报告 + 数据不落盘丢失。"""
+def test_unregistered_platform_section_hard_fails(tmp_path):
+    """未注册平台残留段 → 硬错（avatar.toml 同为契约面，残留段当面拦下）。"""
     generate_default_configs(tmp_path)
     path = tmp_path / "avatar.toml"
     content = path.read_text(encoding="utf-8-sig")
@@ -47,14 +47,11 @@ def test_unregistered_platform_section_tolerated(tmp_path):
     path.write_text(content, encoding="utf-8-sig")
 
     raw_doc = tomlkit.parse(path.read_text(encoding="utf-8-sig")).unwrap()
-    instance, report = _validate_file("avatar.toml", raw_doc)
-    assert "platform.retired_platform" in report.redundant
-    # 残留段保留在 extras（校验不剥离）
-    assert instance.platform.__pydantic_extra__["retired_platform"] == {"some_key": 1}
-
-    # 加载写回后段仍在磁盘（数据完整性：不因未注册静默丢弃）
-    load_config_dir(tmp_path)
-    assert "retired_platform" in path.read_text(encoding="utf-8-sig")
+    with pytest.raises(ConfigValidationError) as exc_info:
+        _validate_file("avatar.toml", raw_doc)
+    message = str(exc_info.value)
+    assert "retired_platform" in message
+    assert "warudo" in message  # 合法名单随错误给出
 
 
 def test_member_section_drift_check_via_typed_ref(tmp_path):

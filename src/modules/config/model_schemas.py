@@ -20,10 +20,21 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
+
+
+def _strip_ref_name(value: Any) -> Any:
+    """引用身份字段的规范化：字符串剥离首尾空白，非字符串原样返回交由类型校验。
+
+    provider 名 / 模型名 / api_provider / model_list 是相互引用的身份字段，
+    经 WebUI 手输产生，混入首尾空格后引用校验会报出"目标名在可用列表里
+    却判未找到"的自相矛盾错误（报错 repr 中空格几乎不可见）；在 Schema
+    层规范化使 TOML 加载、WebUI 写回与运行时装配共用同一口径。
+    """
+    return value.strip() if isinstance(value, str) else value
 
 
 class LLMProviderConfig(BaseConfig):
@@ -124,6 +135,11 @@ class LLMProviderConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, value: Any) -> Any:
+        return _strip_ref_name(value)
+
 
 class LLMModelConfig(BaseConfig):
     """模型注册表条目（``[[llm_models]]`` 表）
@@ -168,6 +184,11 @@ class LLMModelConfig(BaseConfig):
         title="上下文窗口",
         description="上下文窗口 token 总量（用于 Dashboard 水位展示；0 = 不展示）",
     )
+
+    @field_validator("name", "api_provider", mode="before")
+    @classmethod
+    def _strip_ref_fields(cls, value: Any) -> Any:
+        return _strip_ref_name(value)
 
 
 class LLMSelectionStrategy(BaseConfig):
@@ -238,6 +259,13 @@ class LLMProfileConfig(BaseConfig):
         ),
     )
 
+    @field_validator("model_list", mode="before")
+    @classmethod
+    def _strip_model_list(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [_strip_ref_name(item) for item in value]
+        return value
+
 
 _PROFILE_PRESETS: dict[str, dict[str, Any]] = {
     "planner": {"slow_threshold_ms": 15_000, "temperature": 0.7},
@@ -250,6 +278,7 @@ _PROFILE_PRESETS: dict[str, dict[str, Any]] = {
     },
     "vision": {"slow_threshold_ms": 10_000, "temperature": 0.3},
     "simulator": {"slow_threshold_ms": 15_000, "temperature": 0.9},
+    "tts": {"slow_threshold_ms": 30_000, "temperature": 0.3},
 }
 
 
@@ -301,6 +330,11 @@ class LLMProfilesConfig(BaseConfig):
         title="模拟 Profile",
         description="模拟 profile（虚拟用户消息生成，高温活跃）",
     )
+    tts: LLMProfileConfig = Field(
+        default_factory=lambda: _seed_profile("tts"),
+        title="语音合成 Profile",
+        description="语音合成 profile（omni_tts 引擎用，须指向带语音输出模态的模型）",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -318,6 +352,29 @@ class LLMProfilesConfig(BaseConfig):
             "minecraft_builder": {
                 **_PROFILE_PRESETS["minecraft_builder"],
                 "model_list": list(minecraft["model_list"]),
+            },
+        }
+
+    @model_validator(mode="before")
+    @classmethod
+    def seed_tts_models(cls, data: Any) -> Any:
+        """已有安装新增语音合成用途时沿用决策模型引用，避免引用不存在的 default 模型。
+
+        tts 档位须指向带语音输出模态的模型才能真正可用；此处只保证既有
+        配置在封闭集扩员后照常加载，启用 omni_tts 引擎前须显式改配。
+        """
+        if not isinstance(data, dict) or "tts" in data:
+            return data
+        planner = data.get("planner", {})
+        if isinstance(planner, LLMProfileConfig):
+            planner = planner.model_dump()
+        if not isinstance(planner, dict) or not isinstance(planner.get("model_list"), list):
+            return data
+        return {
+            **data,
+            "tts": {
+                **_PROFILE_PRESETS["tts"],
+                "model_list": list(planner["model_list"]),
             },
         }
 

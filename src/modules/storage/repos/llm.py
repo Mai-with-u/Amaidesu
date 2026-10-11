@@ -72,6 +72,9 @@ class LLMRequestInsert:
     usage_raw_json: Optional[str] = None
     # 上下文分段占用解剖 JSON（见 src/modules/llm/context_meter.py）；估算不可用时为 None
     breakdown_json: Optional[str] = None
+    # 列表页 Prompt 预览摘要（写侧从正文最后一条有正文的消息截取；正文出库后
+    # 新行唯一预览来源）
+    preview_text: str = ""
 
 
 class LLMRepo(BaseRepo):
@@ -135,6 +138,7 @@ class LLMRepo(BaseRepo):
             row.latency_ms,
             row.usage_raw_json,
             row.breakdown_json,
+            row.preview_text,
         )
 
     @staticmethod
@@ -144,8 +148,8 @@ class LLMRepo(BaseRepo):
             "request_id, timestamp_ms, profile_name, model_name, request_params, response_content,"
             " reasoning_content, tool_calls, prompt_tokens, completion_tokens, total_tokens,"
             " cache_hit_tokens, cache_miss_tokens, reasoning_tokens, cost, success, error,"
-            " latency_ms, usage_raw_json, breakdown_json"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " latency_ms, usage_raw_json, breakdown_json, preview_text"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
 
     async def insert_llm_usage_row(self, row: LLMUsageInsert) -> int:
@@ -185,6 +189,7 @@ class LLMRepo(BaseRepo):
         latency_ms: int = 0,
         usage_raw_json: Optional[str] = None,
         breakdown_json: Optional[str] = None,
+        preview_text: str = "",
     ) -> bool:
         """插入一条请求历史行；``request_id`` 冲突时忽略（幂等）。
 
@@ -212,6 +217,7 @@ class LLMRepo(BaseRepo):
             latency_ms=latency_ms,
             usage_raw_json=usage_raw_json,
             breakdown_json=breakdown_json,
+            preview_text=preview_text,
         )
 
         def _exec() -> bool:

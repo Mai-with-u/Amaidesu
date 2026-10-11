@@ -33,11 +33,13 @@ from src.modules.collectors.manager import CollectorManager
 from src.modules.config.core_schemas import (
     AgentSupervisorConfig,
     DashboardConfig,
+    DiagnosticsConfig,
     EventHistoryConfig,
 )
 from src.modules.config.service import ConfigService
 from src.modules.dashboard.server import DashboardServer
 from src.modules.dashboard.stream_preview import StreamPreviewHub
+from src.modules.diagnostics import DiagnosticsWriter, TtsDiagnosticsRecorder
 from src.modules.events import (
     EventBus,
     ensure_registry_consistency,
@@ -333,6 +335,8 @@ async def create_app_components(
     "LiveSessionManager",
     Optional[ToolRegistry],
     Optional[ToolHealthMonitor],
+    Optional[TaskTracker],
+    Optional[TtsDiagnosticsRecorder],
 ]:
     """组合根：构造并连接所有核心组件。
 
@@ -357,8 +361,8 @@ async def create_app_components(
             关闭链（``run_shutdown``）无论如何都会 ``stop()`` 一次，幂等安全。
         session_manager_auto_start: 是否启动 LiveSessionManager（残留场次收口）。
             ``--dry`` 模式传 False，避免冒烟写库。
-        log_streamer_persist: LogStreamer 是否落盘 JSONL（data/logs/）。
-            ``--dry`` 与测试装配传 False，避免向真实 ``data/logs/`` 写入运行数据。
+        log_streamer_persist: LogStreamer 是否落盘 JSONL（logs/webui/）。
+            ``--dry`` 与测试装配传 False，避免向真实 ``logs/webui/`` 写入运行数据。
         log_streamer_persist_dir: LogStreamer 落盘目录（None 用默认）。
             集成测试需要验证持久化时指向临时目录，实现与真实数据隔离。
 
@@ -366,7 +370,7 @@ async def create_app_components(
         (event_bus, llm_service, dashboard_server,
          event_recorder, collector_manager, agent_manager,
          simulator_service, database, storage_ledger, session_manager,
-         tool_registry, health_monitor)
+         tool_registry, health_monitor, tts_diagnostics_recorder)
     """
     # --- 存储与记忆（SQLiteDatabase + SimpleMemory）---
     # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
@@ -388,6 +392,18 @@ async def create_app_components(
     if session_manager_auto_start:
         await session_manager.start()
 
+    # --- 本地诊断记录落盘（LLM 正文/事件流/TTS 记录 → logs/ 平铺子目录）---
+    diagnostics_cfg_raw = config.get("diagnostics", {}) if isinstance(config, dict) else {}
+    diagnostics_config = (
+        DiagnosticsConfig(**diagnostics_cfg_raw) if isinstance(diagnostics_cfg_raw, dict) else DiagnosticsConfig()
+    )
+    diagnostics_writer: Optional[DiagnosticsWriter] = None
+    if diagnostics_config.enabled:
+        diagnostics_writer = DiagnosticsWriter(retention_days=diagnostics_config.retention_days)
+        diagnostics_writer.start()
+    else:
+        logger.info("[diagnostics].enabled=false，诊断正文不落盘（统计落库不受影响）")
+
     # --- LLM 服务 ---
     logger.info("初始化 LLM 服务...")
     # 场次归属解析器：落库时取当前显式场次主键（无场次 → NULL = 场间消耗）
@@ -395,6 +411,7 @@ async def create_app_components(
         llm_repo=database.llm,
         event_bus=event_bus,
         live_session_resolver=lambda: session_manager.active_pk,
+        diagnostics_writer=diagnostics_writer,
     )
     await llm_service.setup(config)
     # 请求历史落库目标注入（全局单例可能已被惰性创建，须显式 attach）
@@ -411,9 +428,14 @@ async def create_app_components(
     register_event_interceptors(event_bus, config, session_manager=session_manager)
     logger.info("事件总线已初始化，事件拦截器已挂载")
 
-    # --- 事件历史（系统级）---
-    event_recorder = await _start_event_recorder(event_bus, config)
+    # --- 事件历史（系统级）+ TTS 合成诊断记录 ---
+    event_recorder = await _start_event_recorder(event_bus, config, diagnostics_writer=diagnostics_writer)
     logger.info("事件历史记录器已启动")
+    tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = None
+    if diagnostics_writer is not None:
+        tts_diagnostics_recorder = TtsDiagnosticsRecorder(event_bus=event_bus, writer=diagnostics_writer)
+        await tts_diagnostics_recorder.start()
+        logger.info("TTS 合成诊断记录已启动")
 
     # --- StorageLedger（订阅 room.message.# 落业务表）---
     storage_ledger: Optional[StorageLedger] = await _start_storage_ledger(
@@ -543,8 +565,11 @@ async def create_app_components(
 
         # TTS 引擎实例（基础设施，不经 ToolRegistry）：按 [tts] 段装配；
         # 失败 / 关闭时返回 None，StreamerAgent 走 TTS 关闭路径。口型分析器经
-        # 构造链注入播放器分接（播放器对所有 sink 调用 fail-soft）。
-        tts_engine = build_tts_infrastructure(tts_section, event_bus=event_bus, audio_sink=lipsync_analyzer)
+        # 构造链注入播放器分接（播放器对所有 sink 调用 fail-soft）；
+        # LLMManager 经签名透传（仅 omni_tts 引擎消费）。
+        tts_engine = build_tts_infrastructure(
+            tts_section, event_bus=event_bus, audio_sink=lipsync_analyzer, llm_service=llm_service
+        )
 
         # 字幕源择流（装配期取事实，两种模式互斥）：TTS 引擎在位 → 字幕跟随
         # 播放事件（started/failed 显示、finished 清空），编排层不再派发直出；
@@ -659,10 +684,11 @@ async def create_app_components(
                         llm_manager=llm_service,
                         prompt_manager=get_prompt_manager(),
                     ),
+                    llm_manager=llm_service,
                 ),
                 visible_to={"vision_look_at_screen": ["*"]},
             )
-            logger.info("look_at_screen 已注册（mss 截屏后端 + VLM reader）")
+            logger.info("look_at_screen 已注册（mss 截屏后端 + VLM reader，视觉调用方按需跳过 VLM）")
 
         # --- 通用 MCP 外部工具源（[tools.mcp] 段驱动；可选能力，失败不阻断启动）---
         # 必须在 start_all() 之前装配：任何启动阶段查询工具清单的消费方
@@ -775,7 +801,7 @@ async def create_app_components(
 
     # --- DashboardServer ---
     # LogStreamer 仅在有消费者（Dashboard 日志页）时装配：dashboard 关闭时
-    # 它只剩落盘副作用（无 WS 广播出口），照建不误正是测试污染 data/logs 的
+    # 它只剩落盘副作用（无 WS 广播出口），照建不误正是测试污染 logs/webui 的
     # 入口之一。persist 开关与落盘目录由调用方决定（--dry/测试装配传 False）。
     dashboard_server: Optional["DashboardServer"] = None
     log_streamer: Optional[LogStreamer] = None
@@ -845,6 +871,7 @@ async def create_app_components(
         tool_registry if agents_config else None,
         health_monitor if agents_config else None,
         task_tracker if agents_config else None,
+        tts_diagnostics_recorder,
     )
 
 
@@ -853,13 +880,17 @@ async def create_app_components(
 # ---------------------------------------------------------------------------
 
 
-async def _start_event_recorder(event_bus: EventBus, config: Dict[str, Any]):
+async def _start_event_recorder(
+    event_bus: EventBus, config: Dict[str, Any], *, diagnostics_writer: Optional[DiagnosticsWriter] = None
+):
     """启动事件历史记录器（系统级，与 Dashboard 解耦）。"""
     events_config = config.get("events", {}) if isinstance(config, dict) else {}
     typed_events_config = EventHistoryConfig(**events_config)
     try:
         service = EventHistoryService(max_events=typed_events_config.history_size)
-        recorder = EventHistoryRecorder(event_bus=event_bus, event_history=service)
+        recorder = EventHistoryRecorder(
+            event_bus=event_bus, event_history=service, diagnostics_writer=diagnostics_writer
+        )
         await recorder.start()
         logger.info(f"事件历史记录器已启动（size={typed_events_config.history_size}）")
         return recorder
@@ -910,8 +941,8 @@ async def _start_log_streamer(
 ) -> LogStreamer:
     """启动 LogStreamer（用于 Dashboard 抓取实时日志）。
 
-    persist=False 不落盘（``--dry``/测试装配传 False，避免向真实 data/logs/
-    写入运行数据）；persist_dir 透传落盘目录（None 用默认 data/logs），
+    persist=False 不落盘（``--dry``/测试装配传 False，避免向真实 logs/webui/
+    写入运行数据）；persist_dir 透传落盘目录（None 用默认 logs/webui），
     测试可指向临时目录实现隔离。
     """
     streamer = LogStreamer(
@@ -1174,6 +1205,26 @@ def restore_signal_handlers(original_sigint: Optional[Any], original_sigterm: Op
         logger.debug(f"恢复信号处理器时出错: {e}")
 
 
+async def fallback_close_active_session(session_manager: Optional["LiveSessionManager"]) -> None:
+    """进程退出兜底收工：有进行中场次则复用正常收尾路径补账，无则静默通过。
+
+    ``run_shutdown`` 内的常规结账位于关闭链中段，二次 Ctrl+C 或某个关闭
+    步骤抛异常会把链路打断在结账之前——本兜底挂在 main() 的 finally 位，
+    对同一幂等入口 ``close_session`` 再调一次：正常退出时场次已结账，
+    返回 False 静默通过；异常中断时在此补写 ended_at_ms 并广播 live.ended。
+    自身任何异常只记日志，不得阻断退出。
+    """
+    if session_manager is None:
+        return
+    try:
+        closed = await session_manager.close_session(reason="进程退出兜底收工")
+    except Exception:
+        logger.exception("进程退出兜底收工失败，场次账目待下次启动收口")
+        return
+    if closed:
+        logger.warning("进程退出兜底收工：已补写进行中场次结束时刻并广播 live.ended")
+
+
 async def run_shutdown(
     event_bus: EventBus,
     llm_service: LLMManager,
@@ -1189,8 +1240,10 @@ async def run_shutdown(
     tool_registry: Optional[ToolRegistry] = None,
     health_monitor: Optional[ToolHealthMonitor] = None,
     task_tracker: Optional[TaskTracker] = None,
+    tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = None,
+    diagnostics_writer: Optional[DiagnosticsWriter] = None,
 ) -> None:
-    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），最后 EventBus/LLMManager 清理，SQLiteDatabase.close 收尾落盘。"""
+    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），诊断落盘线程冲刷收尾，最后 EventBus/LLMManager 清理，SQLiteDatabase.close 收尾落盘。"""
     _saw_cancelled = False
 
     async def safe_log(coro, name: str):
@@ -1248,6 +1301,16 @@ async def run_shutdown(
             except Exception as e:
                 logger.debug(f"event_history cleanup: {e}")
         logger.info("事件历史记录器已停止")
+
+    # TTS 合成诊断记录摘除订阅；诊断落盘线程随后冲刷收尾（正文本体可能
+    # 尚在队列，停机前必须落盘——取证材料不可静默丢失）
+    if tts_diagnostics_recorder is not None:
+        await safe_log(tts_diagnostics_recorder.stop(), "TtsDiagnosticsRecorder")
+    if diagnostics_writer is None and event_recorder is not None:
+        diagnostics_writer = event_recorder.diagnostics_writer
+    if diagnostics_writer is not None:
+        diagnostics_writer.stop()
+        logger.info("诊断记录落盘线程已收工")
 
     if storage_ledger is not None:
         logger.info("正在停止 StorageLedger...")
@@ -1344,6 +1407,7 @@ async def main() -> None:
         tool_registry,
         health_monitor,
         task_tracker,
+        tts_diagnostics_recorder,
     ) = await create_app_components(
         config,
         config_service,
@@ -1355,16 +1419,67 @@ async def main() -> None:
         log_streamer_persist=not args.dry,
     )
 
-    # 启动完成广播：此时 EventHistoryRecorder 已就绪，core.startup 会进事件历史
-    await event_bus.emit(
-        CoreEvents.CORE_STARTUP,
-        CoreStartupPayload(event=CoreEvents.CORE_STARTUP, message="Amaidesu 组件装配完成"),
-        source="Main",
-    )
+    # 兜底位：以下任一路径异常退出（含关闭链中途被 KeyboardInterrupt 打断）
+    # 都要在 finally 里补一次场次结账；正常退出时 run_shutdown 已结账，兜底幂等静默通过
+    try:
+        # 启动完成广播：此时 EventHistoryRecorder 已就绪，core.startup 会进事件历史
+        await event_bus.emit(
+            CoreEvents.CORE_STARTUP,
+            CoreStartupPayload(event=CoreEvents.CORE_STARTUP, message="Amaidesu 组件装配完成"),
+            source="Main",
+        )
 
-    if args.dry:
-        logger.info("--dry 模式：仅验证组合根构造，组件已构造但不进入主循环")
-        logger.info("（此模式用于快速检查 wiring 是否完整，关闭后退出）")
+        if args.dry:
+            logger.info("--dry 模式：仅验证组合根构造，组件已构造但不进入主循环")
+            logger.info("（此模式用于快速检查 wiring 是否完整，关闭后退出）")
+            await run_shutdown(
+                event_bus,
+                llm_service,
+                dashboard_server,
+                event_recorder,
+                collector_manager,
+                agent_manager,
+                simulator_service,
+                database=database,
+                storage_ledger=storage_ledger,
+                session_manager=session_manager,
+                tool_registry=tool_registry,
+                health_monitor=health_monitor,
+                task_tracker=task_tracker,
+                tts_diagnostics_recorder=tts_diagnostics_recorder,
+            )
+            return
+
+        stop_event = asyncio.Event()
+        orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)
+
+        # 事件循环心跳探测：sleep(1) 的唤醒间隔异常拉长，说明循环被同步
+        # 调用冻结（如阻塞式 HTTP/控制台写入），输入丢行类问题由此定位
+        async def event_loop_heartbeat() -> None:
+            last = time.perf_counter()
+            while True:
+                await asyncio.sleep(1)
+                now = time.perf_counter()
+                gap = now - last
+                last = now
+                if gap > 2.5:
+                    logger.warning(f"事件循环心跳间隔 {gap:.1f}s（存在同步阻塞调用冻结循环）")
+
+        heartbeat_task = asyncio.create_task(event_loop_heartbeat(), name="event-loop-heartbeat")
+
+        logger.info("应用程序正在运行。按 Ctrl+C 退出。")
+
+        try:
+            await stop_event.wait()
+            logger.info("收到关闭信号，开始执行清理...")
+        except KeyboardInterrupt:
+            logger.info("检测到 KeyboardInterrupt，开始清理...")
+        finally:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+        restore_signal_handlers(orig_sigint, orig_sigterm)
         await run_shutdown(
             event_bus,
             llm_service,
@@ -1379,54 +1494,10 @@ async def main() -> None:
             tool_registry=tool_registry,
             health_monitor=health_monitor,
             task_tracker=task_tracker,
+            tts_diagnostics_recorder=tts_diagnostics_recorder,
         )
-        return
-
-    stop_event = asyncio.Event()
-    orig_sigint, orig_sigterm = setup_signal_handlers(stop_event)
-
-    # 事件循环心跳探测：sleep(1) 的唤醒间隔异常拉长，说明循环被同步
-    # 调用冻结（如阻塞式 HTTP/控制台写入），输入丢行类问题由此定位
-    async def event_loop_heartbeat() -> None:
-        last = time.perf_counter()
-        while True:
-            await asyncio.sleep(1)
-            now = time.perf_counter()
-            gap = now - last
-            last = now
-            if gap > 2.5:
-                logger.warning(f"事件循环心跳间隔 {gap:.1f}s（存在同步阻塞调用冻结循环）")
-
-    heartbeat_task = asyncio.create_task(event_loop_heartbeat(), name="event-loop-heartbeat")
-
-    logger.info("应用程序正在运行。按 Ctrl+C 退出。")
-
-    try:
-        await stop_event.wait()
-        logger.info("收到关闭信号，开始执行清理...")
-    except KeyboardInterrupt:
-        logger.info("检测到 KeyboardInterrupt，开始清理...")
     finally:
-        heartbeat_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await heartbeat_task
-
-    restore_signal_handlers(orig_sigint, orig_sigterm)
-    await run_shutdown(
-        event_bus,
-        llm_service,
-        dashboard_server,
-        event_recorder,
-        collector_manager,
-        agent_manager,
-        simulator_service,
-        database=database,
-        storage_ledger=storage_ledger,
-        session_manager=session_manager,
-        tool_registry=tool_registry,
-        health_monitor=health_monitor,
-        task_tracker=task_tracker,
-    )
+        await fallback_close_active_session(session_manager)
 
 
 if __name__ == "__main__":

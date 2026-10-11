@@ -52,7 +52,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 13
+SCHEMA_VERSION: int = 14
 
 
 # =============================================================================
@@ -439,8 +439,11 @@ CREATE TABLE IF NOT EXISTS sim_gifts (
 
 
 # --- llm_requests —— LLM 请求历史（RequestHistoryManager 落库）---
-# usage 拆平为多列以便 SQL 聚合（statistics/费用汇总）；request_params 与
-# tool_calls 结构不定，存 JSON 文本。dashboard 历史页按时间倒序分页查询。
+# usage 拆平为多列以便 SQL 聚合（statistics/费用汇总）。正文大字段
+# （request_params / reasoning_content / tool_calls / usage_raw_json /
+# breakdown_json）自 v14 起出库到 logs/llm_requests/ 诊断文件，列保留作
+# 存量旧行的降级回退（新行一律 NULL）；``preview_text`` 为列表页 Prompt
+# 预览摘要（写侧从最后一条有正文的消息截取，新行专用）。
 # ``profile_name`` 替换历史 ``client_type`` 列（§2 扩容正名）；新增
 # ``reasoning_tokens`` 思考量列与 ``usage_raw_json`` 解析即弃唯一兜底；
 # ``breakdown_json`` 为上下文分段占用解剖（监控面板数据源，见
@@ -467,7 +470,8 @@ CREATE TABLE IF NOT EXISTS llm_requests (
     error               TEXT,
     latency_ms          INTEGER NOT NULL DEFAULT 0,
     usage_raw_json      TEXT,
-    breakdown_json      TEXT
+    breakdown_json      TEXT,
+    preview_text        TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_llm_requests_ts ON llm_requests(timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_llm_requests_model ON llm_requests(model_name);

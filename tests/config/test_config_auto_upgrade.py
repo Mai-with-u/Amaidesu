@@ -1,7 +1,8 @@
 """配置自动升级闭环测试（七文件布局）
 
 覆盖 load_config_dir 的自动升级行为：
-- 漂移（缺失/冗余字段）→ 备份 + 写回
+- missing 漂移 → 备份 + 写回补默认
+- 冗余段/键 → 全域硬错（不再静默清理）
 - 缺失文件自动补齐
 - 稳定配置不重写（防抖动）
 """
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from src.modules.config.errors import ConfigValidationError
 from src.modules.config.multi_file_loader import (
     generate_default_configs,
     load_config_dir,
@@ -69,11 +71,12 @@ class TestDriftWriteBack:
         assert "[events]" in (config_dir / "infra.toml").read_text(encoding="utf-8-sig")
 
     def test_upgrade_removes_redundant_sections(self, config_dir: Path):
+        """冗余段全域硬错：手写未知段在加载期当面拦下（不再静默清理）。"""
         _append_section(config_dir, "infra.toml", '[zombie_section]\nkey = "dead"\n')
 
-        load_config_dir(config_dir)
-
-        assert "zombie_section" not in (config_dir / "infra.toml").read_text(encoding="utf-8-sig")
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(config_dir)
+        assert "zombie_section" in str(exc_info.value)
 
     def test_upgrade_creates_backup(self, config_dir: Path):
         """漂移触发的写回必须先备份原文件。"""
@@ -103,8 +106,12 @@ class TestDriftWriteBack:
 class TestAgendaToRundownMigration:
     """Agenda→Rundown 重设计：旧 agenda_* 键被 Schema 剥离，写回落盘清除。"""
 
-    def test_agenda_keys_stripped_and_rundown_written_back(self, config_dir: Path):
-        """旧配置含 agenda_* 键：加载后剥离，写回落盘清除并补 rundown 默认字段。"""
+    def test_agenda_keys_hard_fail_without_hook(self, config_dir: Path):
+        """历史迁移（agenda_* → rundown_*）未配钩子时 → 冗余键硬错点名。
+
+        该迁移若已配钩子则阶段②③先行搬走旧键、不会走到这里；
+        本测试锁定的是"忘配钩子"的兜底语义：当面拦下而非静默清理。
+        """
         _remove_section(config_dir, "agents", "agents.streamer")
         _append_section(
             config_dir,
@@ -118,11 +125,8 @@ class TestAgendaToRundownMigration:
             ),
         )
 
-        load_config_dir(config_dir)
-
-        content = (config_dir / "agents.toml").read_text(encoding="utf-8-sig")
-        assert "agenda_enabled" not in content
-        assert "agenda_path" not in content
-        assert "agenda_speech_interval_ms" not in content
-        assert "rundown_id" in content
-        assert "rundown_speech_interval_ms" in content
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(config_dir)
+        message = str(exc_info.value)
+        assert "agenda_enabled" in message
+        assert "迁移钩子" in message

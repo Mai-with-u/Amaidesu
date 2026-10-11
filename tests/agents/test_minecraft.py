@@ -1,6 +1,7 @@
 """MinecraftAgent 测试：工具契约 / ReAct 循环 / 事件 / 递话 / handoff / 装配"""
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,7 +16,8 @@ from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.conversation import is_tool_message
+from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.registry import ToolRegistry
 
@@ -1531,6 +1533,114 @@ async def test_own_tool_invoke_emits_tool_result_event() -> None:
             await agent.stop()
     finally:
         await bus.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_replaces_base64_payload_with_placeholder() -> None:
+    """registry 工具的观察走对话安全视图：base64 二进制载荷以占位符出现。
+
+    对话消息不携带二进制；完整载荷仍经 tool.result 事件进 WebUI（registry
+    侧契约，见 test_tool_registry.py 的 UI 通道用例）。
+    """
+    agent = MinecraftAgent(
+        _offline_config(),
+        llm_manager=MagicMock(),
+        event_bus=MagicMock(),
+        tool_registry=MagicMock(),
+    )
+    image = "A" * 2048  # 纯 base64 字符集、超 1KB、无空白
+    agent._tool_registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="vision_look_at_screen",
+            success=True,
+            structured_content={"text": "", "latency_ms": 12, "image": image},
+        )
+    )
+
+    observation = await agent._execute_tool("vision_look_at_screen", {"monitor_index": 0})
+
+    assert image not in json.dumps(observation, ensure_ascii=False)
+    assert observation["image"] == "[图像 1 KB 已省略]"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_forwards_caller_profile() -> None:
+    """registry 工具调用携带 caller_profile（结果消费方维度，ADR-037）。
+
+    react 循环的工具结果进 minecraft 档位对话，caller_profile 填档位名；
+    宿主直读（minecraft-host，不进对话）则保持空串走非视觉语义。
+    """
+    agent = MinecraftAgent(
+        _offline_config(),
+        llm_manager=MagicMock(),
+        event_bus=MagicMock(),
+        tool_registry=MagicMock(),
+    )
+    agent._tool_registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(tool_name="some_tool", success=True, content="")
+    )
+
+    await agent._execute_tool("some_tool", {})
+
+    invocation = agent._tool_registry.invoke.call_args[0][0]
+    assert invocation.caller_profile == "minecraft"
+    assert invocation.source == "minecraft-react"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_visual_caller_receives_image_parts() -> None:
+    """视觉调用方的带图观察返回完整 tool 消息 dict（图以独立 image part 附上）。
+
+    文本 part 为占位符版观察 JSON（base64 不重复携带）；非视觉调用方同
+    参数返回观察载荷 dict（P0 用例覆盖）。
+    """
+    llm = MagicMock()
+    llm.is_profile_visual = MagicMock(return_value=True)
+    agent = MinecraftAgent(
+        _offline_config(),
+        llm_manager=llm,
+        event_bus=MagicMock(),
+        tool_registry=MagicMock(),
+    )
+    image = "A" * 2048
+    agent._tool_registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="vision_look_at_screen",
+            success=True,
+            blocks=[ResultBlock(kind="image", data=image, mime_type="image/png")],
+            structured_content={"text": "", "image": image},
+        )
+    )
+
+    observation = await agent._execute_tool("vision_look_at_screen", {}, call_id="call_9")
+
+    assert is_tool_message(observation)
+    assert observation["tool_call_id"] == "call_9"
+    parts = observation["content"]
+    assert parts[0]["type"] == "text"
+    assert image not in parts[0]["text"]
+    assert parts[1] == {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image}"}}
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_visual_caller_without_image_keeps_payload() -> None:
+    """视觉调用方调无图工具：返回观察载荷 dict（消息 dict 只在有图时出现）。"""
+    llm = MagicMock()
+    llm.is_profile_visual = MagicMock(return_value=True)
+    agent = MinecraftAgent(
+        _offline_config(),
+        llm_manager=llm,
+        event_bus=MagicMock(),
+        tool_registry=MagicMock(),
+    )
+    agent._tool_registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(tool_name="minecraft_glance", success=True, structured_content={"ok": True})
+    )
+
+    observation = await agent._execute_tool("minecraft_glance", {}, call_id="call_10")
+
+    assert is_tool_message(observation) is False
+    assert observation == {"ok": True}
 
 
 # ---------------------------------------------------------------------------

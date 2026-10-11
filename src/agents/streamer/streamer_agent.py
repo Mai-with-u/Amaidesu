@@ -48,6 +48,7 @@ from src.modules.task_utils import spawn_background_task
 from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.time_utils import now_ms
+from src.modules.types.currency import to_cny
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.room_state import RoomStateWatchedPayload
 
@@ -112,6 +113,27 @@ def _text_field(item: Any, name: str) -> str:
     """鸭子字段取文本：只接受 str，其余（None/Mock 等）按空串处理。"""
     value = getattr(item, name, "")
     return value if isinstance(value, str) else ""
+
+
+#: 走"付费行为直落观众事实"通道的消息类型（结构化数据，不经 LLM 提取）
+_PAID_FACT_MESSAGE_TYPES = frozenset({"gift", "super_chat", "guard"})
+
+#: 舰队等级 → 人读称谓（开通事实用；未知等级兜底"舰队"）
+_GUARD_LEVEL_LABELS: Dict[int, str] = {1: "总督", 2: "提督", 3: "舰长"}
+
+
+def _paid_fact_text(msg: RoomMessagePayload) -> str:
+    """付费消息 → 观众事实一句话（纯函数，单测钉住文案口径）。"""
+    if msg.message_type == "gift" and msg.gift is not None:
+        return f"送过礼物：{msg.gift.name}×{msg.gift.count}"
+    if msg.message_type == "super_chat" and msg.sc is not None:
+        amount = f"（¥{to_cny(msg.sc.total_price, msg.sc.currency):.0f}）"
+        text = msg.content.strip()
+        return f"SC：{text}{amount}" if text else f"SC{amount}"
+    if msg.message_type == "guard" and msg.guard is not None:
+        label = _GUARD_LEVEL_LABELS.get(msg.guard.guard_level, "舰队")
+        return f"开通{label}"
+    return ""
 
 
 class StreamerAgent(BaseAgent):
@@ -245,6 +267,9 @@ class StreamerAgent(BaseAgent):
         self._timing_gate = TimingGate(
             force_message_types=config.force.force_message_types,
         )
+        # 已落过事实的付费消息 ID（进程内判重；重启后由 add_viewer_fact 的
+        # 同观众同文本去重兜底，不会重复累积同一事实）
+        self._paid_fact_seen_ids: deque[str] = deque(maxlen=512)
 
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
@@ -805,6 +830,35 @@ class StreamerAgent(BaseAgent):
         forced = self._timing_gate.is_forced(msg)
         # 入缓冲
         self._buffer.add(msg, arrival_ms=now_ms(), forced=forced)
+        # 结构化付费行为直落观众事实（记忆原料修复：开播至今 summary 链路几乎
+        # 提不出 facts，礼物/SC/上舰不依赖 LLM）；失败降级不阻断决策链
+        if msg.message_type in _PAID_FACT_MESSAGE_TYPES:
+            self._record_paid_fact(msg)
+
+    def _record_paid_fact(self, msg: RoomMessagePayload) -> None:
+        """把一条付费消息落成观众事实（fire-and-forget，不阻断消息主链路）。"""
+        if self._memory is None:
+            return
+        message_id = msg.message_id
+        if message_id and message_id in self._paid_fact_seen_ids:
+            return
+        fact_text = _paid_fact_text(msg)
+        if not fact_text:
+            return
+        if message_id:
+            self._paid_fact_seen_ids.append(message_id)
+        spawn_background_task(
+            self._memory.add_viewer_fact(
+                platform=msg.platform,
+                user_id=msg.user.id,
+                fact_text=fact_text,
+                source_message_id=message_id,
+                created_at_ms=msg.timestamp_ms,
+            ),
+            logger=self._logger,
+            tasks=self._bg_tasks,
+            label="StreamerAgent.paid_fact",
+        )
 
     def trigger_external_proactive(self, topic_hint: Optional[str] = None) -> None:
         """外部 API 触发主动发言（Dashboard / API 调用）。"""

@@ -81,13 +81,72 @@
           clearable
           @keyup.enter="testTts"
         />
-        <div class="card-actions">
-          <el-button type="primary" :disabled="!ttsAvailable" :loading="ttsTesting" @click="testTts"
-            >试说一句</el-button
+        <div class="tts-param-grid">
+          <label class="tts-param">
+            <span>温度</span>
+            <el-input-number
+              v-model="ttsParams.temperature"
+              :min="0"
+              :max="2"
+              :step="0.1"
+              :precision="1"
+            />
+          </label>
+          <label class="tts-param">
+            <span>语速</span>
+            <el-input-number
+              v-model="ttsParams.speed_factor"
+              :min="0.1"
+              :max="3"
+              :step="0.1"
+              :precision="1"
+            />
+          </label>
+          <label class="tts-param">
+            <span>采样步数</span>
+            <el-input-number v-model="ttsParams.sample_steps" :min="1" :max="50" :step="1" />
+          </label>
+          <label class="tts-param">
+            <span>Top-K</span>
+            <el-input-number v-model="ttsParams.top_k" :min="1" :max="100" :step="1" />
+          </label>
+          <label class="tts-param">
+            <span>Top-P</span>
+            <el-input-number
+              v-model="ttsParams.top_p"
+              :min="0"
+              :max="1"
+              :step="0.05"
+              :precision="2"
+            />
+          </label>
+          <el-button
+            class="tts-param-reset"
+            link
+            type="primary"
+            :disabled="!ttsDefaults"
+            @click="resetTtsParams"
+            >重置为引擎配置</el-button
           >
         </div>
+        <div class="card-actions">
+          <el-button :disabled="!ttsAvailable" :loading="ttsTesting" @click="testTts"
+            >试说一句（扬声器）</el-button
+          >
+          <el-button
+            type="primary"
+            :disabled="!ttsAvailable || !ttsText.trim()"
+            :loading="ttsRendering"
+            @click="renderTtsAudio"
+            >生成试听音频</el-button
+          >
+          <el-button v-if="ttsAudioUrl" tag="a" :href="ttsAudioUrl" :download="ttsAudioFilename"
+            >下载 wav</el-button
+          >
+        </div>
+        <audio v-if="ttsAudioUrl" controls :src="ttsAudioUrl" class="tts-audio" />
         <p class="card-hint">
-          经真实语音引擎合成并从扬声器播放，字幕会同步显示；等待时长随文本长度。
+          试说经扬声器播放并联动字幕；生成试听按上方参数合成（表单初始值为引擎配置），可在页面内播放与下载对比。
         </p>
       </div>
     </section>
@@ -112,6 +171,25 @@ const ttsStatus = ref<TtsStatusResponse | null>(null);
 const ttsChecked = ref(false);
 const ttsText = ref('');
 const ttsTesting = ref(false);
+const ttsRendering = ref(false);
+// 生成试听参数表单：初始/重置基准 = 引擎上报的配置值（get_stats.defaults）
+type TtsParamKey = 'temperature' | 'speed_factor' | 'sample_steps' | 'top_k' | 'top_p';
+const ttsParams = ref<Record<TtsParamKey, number>>({
+  temperature: 1.0,
+  speed_factor: 1.0,
+  sample_steps: 8,
+  top_k: 20,
+  top_p: 0.6,
+});
+const ttsDefaults = ref<Record<TtsParamKey, number> | null>(null);
+const ttsAudioUrl = ref('');
+const ttsAudioFilename = ref('tts-debug.wav');
+
+function resetTtsParams(): void {
+  if (ttsDefaults.value) {
+    ttsParams.value = { ...ttsDefaults.value };
+  }
+}
 
 const statusesLoading = ref(false);
 
@@ -128,7 +206,9 @@ const ttsBackend = computed(() => {
   return typeof backend === 'string' ? backend : '';
 });
 const ttsChipLabel = computed(() =>
-  ttsBackend.value ? `${ttsEngineName.value || 'TTS 引擎'} · ${ttsBackend.value}` : ttsEngineName.value || 'TTS 引擎',
+  ttsBackend.value
+    ? `${ttsEngineName.value || 'TTS 引擎'} · ${ttsBackend.value}`
+    : ttsEngineName.value || 'TTS 引擎',
 );
 
 /** 从 axios 错误中取可读文案：优先后端 detail（如 503 的"未注入"），退回通用文案 */
@@ -153,6 +233,31 @@ async function loadStatuses(): Promise<void> {
     ttsStatus.value =
       ttsRes.status === 'fulfilled' ? ttsRes.value.data : { available: false, stats: {} };
     ttsChecked.value = true;
+    // 文本框与参数表单默认值：引擎上报的参考转写与配置值（仅首次填充）
+    const stats = ttsStatus.value?.stats;
+    if (!ttsText.value) {
+      const promptText = stats?.prompt_text;
+      if (typeof promptText === 'string' && promptText) {
+        ttsText.value = promptText;
+      }
+    }
+    if (ttsDefaults.value === null && stats?.defaults && typeof stats.defaults === 'object') {
+      const d = stats.defaults as Record<string, unknown>;
+      const num = (v: unknown): number | null =>
+        typeof v === 'number' && Number.isFinite(v) ? v : null;
+      const defaults = {
+        temperature: num(d.temperature),
+        speed_factor: num(d.speed_factor),
+        sample_steps: num(d.sample_steps),
+        top_k: num(d.top_k),
+        top_p: num(d.top_p),
+      };
+      if (Object.values(defaults).every(v => v !== null)) {
+        const filled = defaults as Record<TtsParamKey, number>;
+        ttsDefaults.value = filled;
+        ttsParams.value = { ...filled };
+      }
+    }
   } finally {
     statusesLoading.value = false;
   }
@@ -203,7 +308,7 @@ async function testTts(): Promise<void> {
   }
   ttsTesting.value = true;
   try {
-    const { data } = await debugApi.testTts({ text });
+    const { data } = await debugApi.testTts({ text, play_on_device: true });
     if (data.success) {
       ElMessage.success('已播放');
     } else {
@@ -213,6 +318,41 @@ async function testTts(): Promise<void> {
     ElMessage.error(extractError(err, '合成失败'));
   } finally {
     ttsTesting.value = false;
+  }
+}
+
+/** 生成试听音频：按参数覆盖合成（不占声卡），返回 wav 供页面播放与下载 */
+async function renderTtsAudio(): Promise<void> {
+  const text = ttsText.value.trim();
+  if (!text) {
+    ElMessage.warning('请先输入朗读文本');
+    return;
+  }
+  ttsRendering.value = true;
+  try {
+    const { data } = await debugApi.testTts({
+      text,
+      play_on_device: false,
+      temperature: ttsParams.value.temperature,
+      speed_factor: ttsParams.value.speed_factor,
+      sample_steps: ttsParams.value.sample_steps,
+      top_k: ttsParams.value.top_k,
+      top_p: ttsParams.value.top_p,
+    });
+    if (!data.success || !data.audio_base64) {
+      ElMessage.error(data.error || '合成失败');
+      return;
+    }
+    const bytes = Uint8Array.from(atob(data.audio_base64), ch => ch.charCodeAt(0));
+    const blob = new Blob([bytes], { type: 'audio/wav' });
+    if (ttsAudioUrl.value) URL.revokeObjectURL(ttsAudioUrl.value);
+    ttsAudioUrl.value = URL.createObjectURL(blob);
+    ttsAudioFilename.value = `tts-debug-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.wav`;
+    ElMessage.success('试听音频已生成');
+  } catch (err) {
+    ElMessage.error(extractError(err, '合成失败'));
+  } finally {
+    ttsRendering.value = false;
   }
 }
 
@@ -317,5 +457,33 @@ onMounted(() => {
   margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.tts-param-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm) var(--spacing-md);
+}
+
+.tts-param {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tts-param :deep(.el-input-number) {
+  width: 120px;
+}
+
+.tts-param-reset {
+  margin-left: auto;
+}
+
+.tts-audio {
+  width: 100%;
+  height: 36px;
 }
 </style>

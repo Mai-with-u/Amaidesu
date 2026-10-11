@@ -128,6 +128,11 @@ class ToolInvocation:
             经 registry invoke 后透传到 tool.result 事件的 caller_source
         round_id: 关联决策轮次 ID（调用发生在主播决策轮上下文内时填写；
             经 registry invoke 后透传到 tool.result 事件的 round_id）
+        caller_profile: 调用方 LLM 用途档名（如 "planner"），供工具按调用方
+            视觉能力分叉（ADR-037）。与 source 的分工：source 记"调用出于
+            什么场景"（观测维度），本字段记"结果由谁消费"（能力维度）。
+            管线式调用（结果不进任何 LLM 对话，如 text_adv 读屏）留空串
+            ——空串按非视觉处理（保守降级）
     """
 
     tool_name: str
@@ -136,6 +141,7 @@ class ToolInvocation:
     invoked_at_ms: int = 0
     source: str = ""
     round_id: str = ""
+    caller_profile: str = ""
 
 
 __all__ = [

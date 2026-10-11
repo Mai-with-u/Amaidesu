@@ -182,7 +182,12 @@ class TestPlatformAndIdentity:
     def test_platform_stamped_on_all_types(self, collector: BiliDanmakuOfficialCollector) -> None:
         """platform 是装配期常量,全部消息类型统一盖章。"""
         for msg in (
-            DanmakuMessage.from_dict({"cmd": "LIVE_OPEN_PLATFORM_DM", "data": {"open_id": "u1", "uname": "甲", "msg": "hi", "timestamp": 1700000000}}),
+            DanmakuMessage.from_dict(
+                {
+                    "cmd": "LIVE_OPEN_PLATFORM_DM",
+                    "data": {"open_id": "u1", "uname": "甲", "msg": "hi", "timestamp": 1700000000},
+                }
+            ),
             GiftMessage.from_dict(_gift_raw()),
             SuperChatMessage.from_dict(_sc_raw()),
             GuardMessage.from_dict(_guard_raw()),
@@ -196,3 +201,20 @@ class TestPlatformAndIdentity:
         raw = _gift_raw()
         raw["data"]["open_id"] = ""
         assert collector._create_payload(GiftMessage.from_dict(raw)) is None
+
+    def test_danmaku_message_id_passthrough(self, collector: BiliDanmakuOfficialCollector) -> None:
+        """弹幕 msg_id 透传 payload.message_id：回复关联键（canonical [id:] 拼接、
+        reply_to 反查、对话页交织）全依赖此列，漏传即断链（场次21 复盘实锤）。"""
+        raw = {
+            "cmd": "LIVE_OPEN_PLATFORM_DM",
+            "data": {
+                "open_id": "u1",
+                "uname": "甲",
+                "msg": "磨磨唧唧的",
+                "msg_id": "9527",
+                "timestamp": 1700000000,
+            },
+        }
+        payload = collector._create_payload(DanmakuMessage.from_dict(raw))
+        assert payload is not None
+        assert payload.message_id == "9527"

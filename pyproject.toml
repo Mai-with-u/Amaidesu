@@ -84,6 +84,10 @@ select = [
 
 ignore = ["E711", "E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# scripts/ 下的独立脚本需先注入 sys.path 再 import src 包，import 前有语句属预期
+"scripts/*" = ["E402"]
+
 [tool.ruff.format]
 docstring-code-format = true
 indent-style = "space"

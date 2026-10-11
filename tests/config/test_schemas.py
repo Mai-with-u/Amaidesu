@@ -98,4 +98,5 @@ class TestModelConfig:
             "minecraft_builder",
             "vision",
             "simulator",
+            "tts",
         )

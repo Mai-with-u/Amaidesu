@@ -79,8 +79,8 @@ class TestProvidersConform:
         assert isinstance(provider, TTSProvider)
 
     def test_omni_tts_satisfies_protocol(self):
-        """``OmniTTSProvider`` 在最小配置下满足 ``TTSProvider`` 契约。"""
-        provider = OmniTTSProvider(config={})
+        """``OmniTTSProvider`` 在最小配置下满足 ``TTSProvider`` 契约（llm_service 为硬前置）。"""
+        provider = OmniTTSProvider(config={}, llm_service=object())
         assert isinstance(provider, TTSProvider)
 
     def test_protocol_import_path_consistency(self):
@@ -100,12 +100,17 @@ class TestProvidersConform:
 
     def test_provider_class_attribute_name_present(self):
         """每个 Provider 都有 ``PROVIDER_NAME`` 与 ``name`` 属性（协议成员）。"""
-        for cls in (EdgeTTSProvider, GPTSoVITSProvider, VoiceboxProvider, OmniTTSProvider):
+        for cls in (EdgeTTSProvider, GPTSoVITSProvider, VoiceboxProvider):
             assert hasattr(cls, "PROVIDER_NAME")
             instance = cls(config={})
             # name 是 @property，访问时返回字符串
             assert isinstance(instance.name, str)
             assert instance.name == cls.PROVIDER_NAME
+        # omni_tts 构造有 llm_service 硬前置
+        assert hasattr(OmniTTSProvider, "PROVIDER_NAME")
+        omni = OmniTTSProvider(config={}, llm_service=object())
+        assert isinstance(omni.name, str)
+        assert omni.name == OmniTTSProvider.PROVIDER_NAME
 
 
 # ---------------------------------------------------------------------------

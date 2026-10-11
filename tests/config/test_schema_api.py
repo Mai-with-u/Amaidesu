@@ -181,6 +181,15 @@ class TestReadonlyPassthrough:
 class TestUiMarkerPassthrough:
     """控件语义标记（x-options / x-ui-widget / x-ui-precision）进入生成结果"""
 
+    def test_collectors_enabled_options_from_registry(self):
+        """采集器 enabled 候选名单来自注册表注入（读取侧单点化，非定义处手抄）"""
+        from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+
+        ensure_component_registry()
+        schema = _generate(CollectorsRootConfig)
+        enabled_field = next(f for f in schema["fields"] if f["name"] == "enabled")
+        assert enabled_field.get("options") == sorted(COLLECTOR_SCHEMAS)
+
     def test_avatar_enabled_has_closed_options(self):
         """虚拟形象平台启用名单携带封闭候选池（合法名 vts/warudo/vrchat）"""
         from src.modules.config.avatar_schemas import PLATFORM_NAMES, AvatarRootConfig

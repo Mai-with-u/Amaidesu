@@ -12,6 +12,7 @@ from pydantic import Field
 from src.modules.config.core_schemas import (
     AgentSupervisorConfig,
     DashboardConfig,
+    DiagnosticsConfig,
     EventHistoryConfig,
     SubtitleInfraConfig,
     TTSConfig,
@@ -34,6 +35,7 @@ class InfraRootConfig(BaseConfig):
     - ``[dashboard]``   — Web Dashboard
     - ``[agent_supervisor]`` — Agent 心跳与自动重建（守护）
     - ``[logging]``     — 日志
+    - ``[diagnostics]`` — 本地诊断记录落盘（LLM 正文/事件流/TTS 记录）
     - ``[simulator]``   — 模拟直播间
     """
 
@@ -82,6 +84,11 @@ class InfraRootConfig(BaseConfig):
         default_factory=DashboardConfig, title="Dashboard 配置", description="Dashboard 配置"
     )
     logging: LoggingConfig = Field(default_factory=LoggingConfig, title="日志配置", description="日志配置")
+    diagnostics: DiagnosticsConfig = Field(
+        default_factory=DiagnosticsConfig,
+        title="诊断记录",
+        description="本地诊断记录落盘（LLM 请求正文/事件流/TTS 合成记录，logs/ 平铺子目录）",
+    )
     simulator: SimulatorConfigSchema = Field(
         default_factory=SimulatorConfigSchema,
         title="模拟直播间配置",

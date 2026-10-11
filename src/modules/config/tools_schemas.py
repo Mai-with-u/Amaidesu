@@ -96,6 +96,9 @@ class VisionProviderConfig(ToolProviderConfig):
     包内的 schema 是默认值与字段权威的唯一事实源，配置层只持有引用，
     保证漂移写回自动补齐 ``monitor_index`` / ``default_region`` /
     显示器与默认截屏区域等字段。
+
+    段本体走 BaseConfig 默认 forbid：enabled/config 之外的键进冗余
+    报告并随全域硬错拦截（段本体无"任意键"合法用途）。
     """
 
     config: LookAtScreenProvider.ConfigSchema = Field(
@@ -104,19 +107,16 @@ class VisionProviderConfig(ToolProviderConfig):
         description="视觉提供者配置（直接复用 LookAtScreenProvider.ConfigSchema）",
     )
 
-    model_config = ConfigDict(extra="allow")
-
 
 class MemoryProviderConfig(ToolProviderConfig):
     """记忆分类（工具出口 query_memory；LLM 主动检索关键词记忆）
 
     默认 enabled=true：缺省配置下 query_memory 已注册，与 main.py 消费端
     ``.get("enabled", True)`` 兜底对齐，消除原"配置 false 时仍注册"的漂移。
+    段本体走 BaseConfig 默认 forbid（同 VisionProviderConfig）。
     """
 
     enabled: bool = Field(default=True, title="是否启用记忆检索", description="是否启用 query_memory 记忆检索工具")
-
-    model_config = ConfigDict(extra="allow")
 
 
 class McpProviderConfig(ToolProviderConfig):
@@ -127,9 +127,8 @@ class McpProviderConfig(ToolProviderConfig):
     （仅服务于特定 Agent 的工具集，如 minecraft 专属）不走本段，
     而是写在 agents.toml 各 Agent 自己的段（位置即归属）：``[agents.<name>.mcp]``。
     装配即声明；调度与基建由全局 ToolRegistry + McpToolProvider 统一承担。
+    段本体走 BaseConfig 默认 forbid（同 VisionProviderConfig）。
     """
-
-    model_config = ConfigDict(extra="allow")
 
 
 class WebProviderConfig(ToolProviderConfig):

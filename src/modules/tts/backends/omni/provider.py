@@ -1,49 +1,68 @@
-"""OmniTTSProvider - Omni TTS 语音合成引擎
+"""OmniTTSProvider - 全模态大模型语音合成引擎（omni_tts）
 
-- 引擎：GPT-SoVITS HTTP 流式请求 + wav 解码 + AudioDeviceManager 播放
+- 引擎：经 LLMManager 语音 profile 调用带语音输出模态的大模型（OpenAI
+  兼容线协议 ``modalities=audio`` 形态，qwen-omni / gpt-4o-audio 等），
+  全量收齐音频后经 AudioDeviceManager 播放
 - 调用方：``src.agents.streamer.utterance_queue``（编排层确定性调用）
 - 自治生命周期：``handle_speech()`` 入口自动 ensure_setup，调用方无需预调
 - 错误语义：合成失败主动发 ``tts.utterance.failed`` 并 raise，由队列兜底
 - 接受可选 ``utterance_id`` 参数：传入时按 ``tts.utterance.*`` 生命周期发布
   事件；缺省/None 时静默跳过（手动 / 直调场景无 utterance 上下文）
+
+红线边界：引擎是被动驱动的工具，只做"文本→音频"纯转换——说什么永远由
+主播 Agent 定稿；``style_prompt`` 仅静态注入语音风格，不承载台词内容。
+chat 形态的对面是生成模型，存在改写台词的可能，引擎以 transcript 与输入
+文本比对告警暴露该偏差，不静默吞掉。
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
-from typing import Any, Dict, Iterator, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, Protocol
 
 import numpy as np
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
+from src.modules.llm.bootstrap import validate_profile_binding
+from src.modules.llm.payload import Response
 from src.modules.logging import get_logger
 from ...common import (
     build_stats_dict,
-    normalize_tts_text,
+    compute_duration_ms,
     emit_utterance_failed,
     emit_utterance_finished,
     emit_utterance_started,
+    normalize_tts_text,
 )
 
-if TYPE_CHECKING:
-    pass
+DTYPE = np.int16
 
 
-# 检查依赖
-TTS_DEPENDENCIES_OK = False
-try:
-    import requests
+class AudioLLMInvoker(Protocol):
+    """TTS 引擎消费的 LLM 窄接口（结构契约；LLMManager 满足即注入）。
 
-    TTS_DEPENDENCIES_OK = True
-except ImportError:
-    pass
+    引擎只依赖音频入口，不接触 profile 调度与计费面——注入窄接口而非
+    具体类型，测试以任意满足形状的替身即可。
+    """
+
+    async def generate_audio(
+        self,
+        input: Any,
+        *,
+        profile: Optional[str] = None,
+        voice: str,
+        audio_format: str = "wav",
+        system: Optional[str] = None,
+        temperature: Optional[float] = None,
+        interrupt: Optional[Any] = None,
+    ) -> Response: ...
 
 
 class OmniTTSProvider:
-    """Omni TTS 语音合成引擎。
+    """全模态大模型语音合成引擎。
 
     引擎通过 ``handle_speech(text, utterance_id)`` 暴露唯一入口；调用方
     （编排队列）无需关心 setup / cleanup 生命周期——``handle_speech`` 开头
@@ -53,62 +72,48 @@ class OmniTTSProvider:
     PROVIDER_NAME = "omni_tts"
 
     class ConfigSchema(BaseConfig):
-        """Omni TTS 配置"""
+        """omni_tts 配置"""
 
         type: str = "omni_tts"
-        host: str = Field(default="127.0.0.1", description="API 主机地址")
-        port: int = Field(default=9880, ge=1, le=65535, description="API 端口")
-        ref_audio_path: str = Field(default="", description="参考音频路径")
-        prompt_text: str = Field(default="", description="提示文本")
-        text_language: str = Field(default="zh", pattern=r"^(zh|en|ja|auto)$", description="文本语言")
-        prompt_language: str = Field(default="zh", pattern=r"^(zh|en|ja)$", description="提示语言")
-        top_k: int = Field(default=20, ge=1, le=100, description="Top-K 采样")
-        top_p: float = Field(default=0.6, ge=0.0, le=1.0, description="Top-P 采样")
-        temperature: float = Field(default=0.3, ge=0.0, le=2.0, description="温度参数")
-        speed_factor: float = Field(default=1.0, ge=0.1, le=3.0, description="语速因子")
-        streaming_mode: bool = Field(default=True, description="是否启用流式模式")
-        sample_rate: int = Field(default=32000, ge=8000, le=48000, description="采样率")
-        use_text_cleanup: bool = Field(default=True, description="是否使用文本清理")
+        llm_profile: str = Field(
+            default="tts",
+            description="LLM 用途 profile（model.toml [llm_profiles] 键，须指向带语音输出模态的模型）",
+        )
+        voice: str = Field(default="", description="音色（厂商词表，如 Chelsie/alloy；必填，留空合成会报错）")
+        audio_format: str = Field(default="wav", description="音频封装格式（wav/pcm16 等，随端点支持）")
+        sample_rate: int = Field(default=24000, ge=8000, le=48000, description="输出采样率（播放与时长计算用）")
+        style_prompt: str = Field(default="", description="语音风格提示（系统提示词静态注入；不承载台词内容）")
 
     def __init__(
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
         audio_sink: Optional[Any] = None,
+        llm_service: Optional[AudioLLMInvoker] = None,
     ) -> None:
+        if llm_service is None:
+            raise RuntimeError("omni_tts 引擎需要注入 LLM 服务（llm_service），装配链未提供")
         self.config = config
         self.event_bus = event_bus
         # 音频分接（AudioSink 协议形状；口型分析等消费者经装配链注入）
         self.audio_sink = audio_sink
+        # LLM 窄接口引用（仅 generate_audio；不接触 profile 调度与计费面）
+        self._llm: AudioLLMInvoker = llm_service
         self.logger = get_logger(self.__class__.__name__)
 
         self.typed_config = self.ConfigSchema.from_dict(config)
-
-        self.host = self.typed_config.host
-        self.port = self.typed_config.port
-        self.base_url = f"http://{self.host}:{self.port}"
-        self.ref_audio_path = self.typed_config.ref_audio_path
-        self.prompt_text = self.typed_config.prompt_text
-        self.text_language = self.typed_config.text_language
-        self.prompt_language = self.typed_config.prompt_language
-        self.top_k = self.typed_config.top_k
-        self.top_p = self.typed_config.top_p
-        self.temperature = self.typed_config.temperature
-        self.speed_factor = self.typed_config.speed_factor
-        self.streaming_mode = self.typed_config.streaming_mode
+        self.llm_profile = self.typed_config.llm_profile
+        self.voice = self.typed_config.voice
+        self.audio_format = self.typed_config.audio_format
         self.sample_rate = self.typed_config.sample_rate
-        self.channels = 1
-        self.dtype = np.int16
-
-        self.use_text_cleanup = self.typed_config.use_text_cleanup
+        self.style_prompt = self.typed_config.style_prompt
 
         self.render_count = 0
         self.error_count = 0
-        self.sequence_count = 0
         self.audio_manager: Any = None
         self._is_connected = False
         self._has_started = False
-        self.tts_lock = asyncio.Lock()
+        self.tts_lock: Optional[asyncio.Lock] = None
 
     @property
     def name(self) -> str:
@@ -117,25 +122,35 @@ class OmniTTSProvider:
     # ===== 生命周期 =====
 
     async def setup(self) -> None:
-        """初始化引擎（幂等）。"""
+        """初始化引擎（幂等）。
+
+        调用方在装配阶段和 ``handle_speech`` 自治入口都可能触发；重复调用
+        早退，不重复初始化。配置缺陷（未知 profile / 未填音色）在此硬错。
+        """
         if self._has_started:
             return
-        if not TTS_DEPENDENCIES_OK:
-            raise ImportError("TTS dependencies not available")
+
+        # 封闭集合校验：未知 profile 在首次使用前暴露，不允许静默兜底
+        validate_profile_binding(self.llm_profile)
+        if not self.voice:
+            raise RuntimeError("未配置 voice 音色：请在 [tts.omni_tts].voice 填写端点厂商的音色名")
+
+        if self.tts_lock is None:
+            self.tts_lock = asyncio.Lock()
 
         from src.modules.audio import AudioDeviceManager
 
         manager = AudioDeviceManager(
             sample_rate=self.sample_rate,
-            channels=self.channels,
-            dtype=self.dtype,
+            channels=1,
+            dtype=DTYPE,
             sink=self.audio_sink,
         )
         self.audio_manager = manager
 
         self._has_started = True
         self._is_connected = True
-        self.logger.info("OmniTTSProvider 设置完成")
+        self.logger.info(f"OmniTTSProvider 设置完成（profile={self.llm_profile}, voice={self.voice}）")
 
     async def cleanup(self) -> None:
         if not self._has_started:
@@ -150,7 +165,7 @@ class OmniTTSProvider:
     # ===== 业务方法 =====
 
     async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
-        """TTS 播放入口。
+        """合成并播放语音。
 
         Args:
             text: 要合成的文本。
@@ -163,69 +178,65 @@ class OmniTTSProvider:
         if not text.strip():
             self.logger.debug("文本规范化后为空，跳过渲染")
             return
+        if self.tts_lock is None:
+            self.tts_lock = asyncio.Lock()
         async with self.tts_lock:
             await self._synthesize(text, utterance_id=utterance_id)
 
     async def _synthesize(self, text: str, utterance_id: Optional[str] = None) -> None:
-        """HTTP 流式拉取 → 解码 → AudioDeviceManager 流式播放
+        """调用音频模态生成 → 解码 → 播放（全量引擎：合成完拿完整 PCM）
 
-        流式播放按 start_stream → 每块 write_chunk → stop_stream 模式进行。
-        started 在首块 PCM 写声卡前发布（流式引擎合成未完，duration_ms=None）；
-        finished 在 stop_stream 后发布。
+        异常处理：合成或播放任一阶段失败都先发 failed 事件再向上抛，由
+        编排队列兜底。
         """
-        self.sequence_count = 0
-
-        # 流式引擎合成未完 → started payload duration_ms 传 None
-        await emit_utterance_started(
-            self.event_bus,
-            utterance_id=utterance_id,
-            speech_text=text,
-            engine=self.PROVIDER_NAME,
-            duration_ms=None,
-        )
-
         try:
-            # 同步 requests 调用（连接+等待响应头）放线程池：推理等待不能冻结事件循环
-            audio_stream = await asyncio.to_thread(self._tts_stream, text)
-            self.audio_manager.start_stream(utterance_id=utterance_id)
+            response = await self._llm.generate_audio(
+                text,
+                profile=self.llm_profile,
+                voice=self.voice,
+                audio_format=self.audio_format,
+                system=self.style_prompt or None,
+            )
+            if not response.success:
+                raise RuntimeError(f"音频合成失败: {response.error or '未知错误'}")
+            if not response.audio_base64:
+                raise RuntimeError("模型响应未携带音频（audio_base64 为空）")
 
-            # requests 流式生成器的 next() 会同步阻塞读 socket，逐块放线程池迭代：
-            # 服务端推理间隙（chunk 间隔可达数十秒）是冻结事件循环的元凶
-            loop = asyncio.get_running_loop()
-            chunk_iter = iter(audio_stream)
-            sentinel = object()
-            while True:
-                chunk = await loop.run_in_executor(None, next, chunk_iter, sentinel)
-                if chunk is sentinel:
-                    break
-                if not chunk:
-                    continue
-                pcm_array = self._decode_to_pcm(chunk)
-                if pcm_array is None or len(pcm_array) == 0:
-                    continue
-                self.audio_manager.write_chunk(pcm_array)
-                self.sequence_count += 1
+            audio_array = self._decode_to_pcm(response.audio_base64)
+            if len(audio_array) == 0:
+                self.logger.warning("音频解码结果为空，跳过播放")
+                return
 
-            self.audio_manager.stop_stream()
+            self._warn_if_rewritten(text, response.content)
+
+            duration_ms = compute_duration_ms(len(audio_array), self.sample_rate)
+
+            await emit_utterance_started(
+                self.event_bus,
+                utterance_id=utterance_id,
+                speech_text=text,
+                engine=self.PROVIDER_NAME,
+                duration_ms=duration_ms,
+            )
+
+            await self.audio_manager.play_audio(audio_array, samplerate=self.sample_rate)
             self.render_count += 1
 
             await emit_utterance_finished(
                 self.event_bus,
                 utterance_id=utterance_id,
                 engine=self.PROVIDER_NAME,
-                duration_ms=0,
+                duration_ms=duration_ms,
             )
         except asyncio.CancelledError:
-            # 协程取消不会自动关闭声卡流，超时取消时必须显式截断
+            # 协程取消不会停止已提交给声卡的播放，超时取消时必须显式截断
             if self.audio_manager:
-                self.audio_manager.stop_stream()
+                self.audio_manager.stop_audio()
             self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except Exception as e:
             self.error_count += 1
-            self.logger.error(f"TTS 播放失败: {e}")
-            if self.audio_manager:
-                self.audio_manager.stop_stream()
+            self.logger.exception(f"omni_tts 合成/播放失败: {e}")
             await emit_utterance_failed(
                 self.event_bus,
                 utterance_id=utterance_id,
@@ -235,65 +246,30 @@ class OmniTTSProvider:
             )
             raise
 
-    def _tts_stream(self, text: str) -> Iterator[bytes]:
-        """HTTP 流式 TTS 请求"""
-        params = {
-            "text": text,
-            "text_lang": self.text_language,
-        }
-        # 参考音频三键仅在已设置时携带；省略时由服务端使用其启动配置的
-        # 默认参考音频（与 GPT-SoVITS API 同源的约定）
-        if self.ref_audio_path:
-            params["ref_audio_path"] = self.ref_audio_path
-            params["prompt_text"] = self.prompt_text
-            params["prompt_lang"] = self.prompt_language
-        params["top_k"] = self.top_k
-        params["top_p"] = self.top_p
-        params["temperature"] = self.temperature
-        params["speed_factor"] = self.speed_factor
-        params["streaming_mode"] = True
-        params["media_type"] = "wav"
+    def _decode_to_pcm(self, audio_base64: str) -> np.ndarray:
+        """base64 音频（wav 封装）解码为 int16 PCM 数组。
 
-        response = requests.get(
-            f"{self.base_url}/tts",
-            params=params,
-            stream=True,
-            timeout=(3.05, None),
-            headers={"Connection": "keep-alive"},
-        )
-
-        if response.status_code != 200:
-            error_msg = (
-                response.json().get("message", "未知错误")
-                if response.headers.get("content-type", "").startswith("application/json")
-                else "未知错误"
-            )
-            raise Exception(f"TTS API 错误: {error_msg}")
-
-        return response.iter_content(chunk_size=4096)
-
-    def _decode_to_pcm(self, wav_chunk: bytes) -> Optional[np.ndarray]:
-        """解码 WAV 块为 int16 numpy 数组，失败返回 None。
-
-        整块解码后交给 AudioDeviceManager 流式播放。
+        函数体内导入：单元测试 patch wav_decoder.extract_pcm_from_wav 拦截
+        解码，顶部导入会使 patch 失效。
         """
-        # 函数体内导入：单元测试 patch wav_decoder.extract_pcm_from_wav 拦截
-        # 解码，顶部导入会使 patch 失效
         from src.modules.tts.wav_decoder import extract_pcm_from_wav
 
-        try:
-            if isinstance(wav_chunk, str):
-                wav_data = base64.b64decode(wav_chunk)
-            else:
-                wav_data = wav_chunk
+        wav_bytes = base64.b64decode(audio_base64)
+        pcm_data = extract_pcm_from_wav(wav_bytes)
+        return np.frombuffer(pcm_data, dtype=DTYPE)
 
-            pcm_data = extract_pcm_from_wav(wav_data)
-            if not pcm_data:
-                return None
-            return np.frombuffer(pcm_data, dtype=self.dtype)
-        except Exception as e:
-            self.logger.warning(f"解码音频块失败，跳过该块: {e}")
-            return None
+    def _warn_if_rewritten(self, requested_text: str, spoken_text: Optional[str]) -> None:
+        """模型语音 transcript 与定稿台词不一致时告警（改写偏差可见化）。
+
+        chat 形态对面是生成模型，"演绎"改词会导致语音与字幕/时间线不一致；
+        此处仅告警不替换——播出的音频已是既成事实，告警供运营感知。
+        """
+        if not spoken_text:
+            return
+        if spoken_text.strip() != requested_text.strip():
+            self.logger.warning(
+                f"omni_tts transcript 与输入台词不一致（模型可能改写）：输入={requested_text!r} 实说={spoken_text!r}"
+            )
 
     def get_stats(self) -> Dict[str, Any]:
         return build_stats_dict(
@@ -301,6 +277,7 @@ class OmniTTSProvider:
             is_connected=self._is_connected,
             render_count=self.render_count,
             error_count=self.error_count,
+            extra={"llm_profile": self.llm_profile, "voice": self.voice},
         )
 
 
@@ -308,16 +285,19 @@ def create_omni_tts_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
     audio_sink: Optional[Any] = None,
+    llm_service: Optional[AudioLLMInvoker] = None,
 ) -> OmniTTSProvider:
     """工厂：构造 ``OmniTTSProvider`` 实例。
 
-    装配阶段由编排队列持有 Provider 实例并直接调用 ``handle_speech``。
+    装配阶段由编排队列持有 Provider 实例并直接调用 ``handle_speech``；
+    ``llm_service`` 由组合根注入 LLMManager（本引擎的消费面）。
     """
     return OmniTTSProvider(
         config=config,
         event_bus=event_bus,
         audio_sink=audio_sink,
+        llm_service=llm_service,
     )
 
 
-__all__ = ["OmniTTSProvider", "create_omni_tts_provider"]
+__all__ = ["AudioLLMInvoker", "OmniTTSProvider", "create_omni_tts_provider"]

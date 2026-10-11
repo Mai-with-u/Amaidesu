@@ -97,7 +97,15 @@ class GPTSoVITSProvider:
         )
         batch_size: int = Field(default=1, ge=1, le=10, description="批处理大小")
         batch_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="批处理阈值")
-        repetition_penalty: float = Field(default=1.0, ge=0.5, le=2.0, description="重复惩罚")
+        repetition_penalty: float = Field(
+            default=1.35,
+            ge=0.5,
+            le=2.0,
+            description=(
+                "重复惩罚（GPT 语义 token 防复读）：1.0 等于关闭，实测在 v5 系"
+                "底模上约 40% 句子诱发 token 循环（音频拉长伴杂音）；保持服务端默认 1.35"
+            ),
+        )
         sample_steps: int = Field(default=10, ge=1, le=50, description="采样步数")
         super_sampling: bool = Field(default=True, description="是否启用超采样")
         sample_rate: int = Field(default=32000, ge=8000, le=48000, description="采样率")
@@ -310,9 +318,9 @@ class GPTSoVITSProvider:
             )
 
         except asyncio.CancelledError:
-            # 队列看门狗超时取消：声卡流必须显式关闭，否则已写入的
-            # PCM 会继续播出，与下一条 utterance 的音频重叠
-            self.audio_manager.stop_stream()
+            # 队列看门狗超时取消：声卡流必须显式关闭并丢弃未播预缓冲，
+            # 否则 PCM 残留会继续播出，与下一条 utterance 的音频重叠
+            self.audio_manager.stop_stream(discard_pending=True)
             self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except GPTSoVITSServiceError as e:
@@ -338,6 +346,42 @@ class GPTSoVITSProvider:
                 error_message=f"{type(e).__name__}: {e}",
             )
             raise
+
+    def synthesize_bytes(self, text: str) -> bytes:
+        """按当前配置合成整段音频字节（不播放、不发事件）。
+
+        与 ``handle_speech`` 同源的合成路径：同一份文本规范化与参数组装，
+        供批量回放/巡检等离线场景复用；仅传输方式为整段返回（服务端合成
+        逻辑与流式完全一致）。
+
+        Args:
+            text: 待合成文本（内部先做规范化）。
+
+        Returns:
+            完整 WAV 字节；规范化后为空文本时返回空字节。
+        """
+        if not self._has_started or self.tts_client is None:
+            raise RuntimeError("引擎未初始化：请先调用 setup()")
+        final_text = normalize_tts_text(text)
+        if not final_text.strip():
+            return b""
+        return self.tts_client.tts(
+            text=final_text,
+            text_lang=self.text_language,
+            prompt_lang=self.prompt_language,
+            top_k=self.top_k,
+            top_p=self.top_p,
+            temperature=self.temperature,
+            speed_factor=self.speed_factor,
+            text_split_method=self.text_split_method,
+            batch_size=self.batch_size,
+            batch_threshold=self.batch_threshold,
+            repetition_penalty=self.repetition_penalty,
+            sample_steps=self.sample_steps,
+            super_sampling=self.super_sampling,
+            media_type=self.media_type,
+            streaming_mode=False,
+        )
 
     async def _process_audio_stream(self, audio_stream: Any) -> AsyncIterator[np.ndarray]:
         """处理音频流（同步/异步迭代器）"""
@@ -372,6 +416,40 @@ class GPTSoVITSProvider:
             self.logger.exception(f"处理音频流失败: {e}")
             raise
 
+    async def debug_synthesize(self, text: str, overrides: Optional[Dict[str, Any]] = None) -> bytes:
+        """调试合成：按配置 + 覆盖参数合成完整音频并返回 wav 字节。
+
+        与 ``handle_speech`` 的差异：不写声卡、不发 utterance 事件，供调
+        试面板做参数对比试听与下载。覆盖键与合成参数同名（temperature /
+        speed_factor / sample_steps / top_k / top_p），None 值不覆盖。
+        自治 ensure_setup 与 ``tts_lock`` 串行化内聚于此（与 handle_speech
+        同语义），调用方无需预调 setup——首次直调（未试说过）也能工作。
+        """
+        if not self._has_started:
+            await self.setup()
+        clean = normalize_tts_text(text)
+        if not clean.strip():
+            raise ValueError("文本规范化后为空，无可合成内容")
+
+        params: Dict[str, Any] = {
+            "text": clean,
+            "text_lang": self.text_language,
+            "prompt_lang": self.prompt_language,
+            "temperature": self.temperature,
+            "speed_factor": self.speed_factor,
+            "sample_steps": self.sample_steps,
+            "top_k": self.top_k,
+            "top_p": self.top_p,
+            # 调试合成取完整 wav：固定非流式，忽略外部 streaming_mode
+            "streaming_mode": 0,
+            "media_type": self.media_type,
+        }
+        for key, value in (overrides or {}).items():
+            if value is not None and key in params:
+                params[key] = value
+        async with self.tts_lock:
+            return await asyncio.to_thread(self.tts_client.tts, **params)  # type: ignore[union-attr]
+
     def get_stats(self) -> Dict[str, Any]:
         stats = build_stats_dict(
             name=self.__class__.__name__,
@@ -381,6 +459,16 @@ class GPTSoVITSProvider:
         )
         # 对接的 GPT-SoVITS API 后端（调试页状态 chip 展示用）
         stats["backend"] = "api_v2"
+        # 调试页参数表单的默认值与重置基准：引擎当前生效的合成配置
+        stats["defaults"] = {
+            "temperature": self.temperature,
+            "speed_factor": self.speed_factor,
+            "sample_steps": self.sample_steps,
+            "top_k": self.top_k,
+            "top_p": self.top_p,
+        }
+        # 参考音频转写：调试页文本框的默认值（试说参考音频原句）
+        stats["prompt_text"] = self.prompt_text
         return stats
 
 

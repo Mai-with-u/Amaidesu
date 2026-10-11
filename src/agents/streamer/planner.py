@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional, Union
 
 from pydantic import Field
 
@@ -44,9 +44,16 @@ from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
+from src.agents.streamer.topic_gate import check_topic, rejection_reason
 from src.modules.llm.history_compaction import HistoryCompactor
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
+from src.modules.tools.conversation import (
+    build_tool_message,
+    extract_image_data_urls,
+    is_tool_message,
+    to_conversation_view,
+)
 from src.modules.tools.models import ToolInvocation
 
 from .room_state import RoomState
@@ -60,8 +67,13 @@ PLANNER_PROFILE: str = "planner"
 
 
 def _render_observation(data: Any) -> str:
-    """完整保留工具结果，让模型读取所有字段及其真实值。"""
-    return json.dumps(data, ensure_ascii=False, default=str)
+    """工具结果 → 对话观察文本。
+
+    字段与真实值全部保留（完整观察原则），但 base64 二进制载荷（截图等）
+    替换为占位符——二进制属 tool.result 事件的 UI 展示通道，整包进对话
+    会把单笔请求的图片 token 推到数十万量级。
+    """
+    return json.dumps(to_conversation_view(data), ensure_ascii=False, default=str)
 
 
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
@@ -82,11 +94,16 @@ class _Delegation:
 
 @dataclass(frozen=True)
 class _Intent:
-    """一轮已说出口的打算：何时说的、围绕什么话题、给表达侧的指引。"""
+    """一轮已说出口的打算：何时说的、围绕什么话题、给表达侧的指引、说出的台词。
+
+    台词一并保留：重复闸（topic_gate）需要拿"说出口的原话"与新话题做
+    字面重叠检测——指引只是给表达侧的方向，最终落在观众耳朵里的是台词。
+    """
 
     at_ms: int
     topic_summary: str
     reply_guidance: str
+    speech: str = ""
 
 
 @dataclass(frozen=True)
@@ -315,7 +332,7 @@ class Planner:
         return "\n".join(rows)
 
     def _render_recent_intents(self, current_ms: int) -> str:
-        """我最近几轮想说的：由旧到新只列每轮的话题一句话，供判断是否在连着讲同一件事。
+        """我最近几轮想说的：由旧到新只列每轮的话题一句话，作为"已聊话题"清单供重叠判断。
 
         指引全文不在此重复注入——那轮说出口的原话（指引的最终落点）已在对话历史
         assistant 消息里，同一信息双份会让每轮参考段平白多出几百字。游戏回执到达前
@@ -397,6 +414,7 @@ class Planner:
             - reply_payload: reply 工具完整结果（发言管线消费）
             - reply_duration_ms: reply 工具调用累计耗时（毫秒；未调用为 0）
             - reply_failures: reply 工具失败次数（成功轮为 0）
+            - topic_gate_retries: 重复闸打回 reply 的次数（本轮内累计）
         """
         self.last_raw_content = ""
         self.last_request_id = None
@@ -419,6 +437,7 @@ class Planner:
             "reply_payload": None,
             "reply_duration_ms": 0,
             "reply_failures": 0,
+            "topic_gate_retries": 0,
         }
 
         system_prompt = self._render_system_prompt()
@@ -456,6 +475,12 @@ class Planner:
         source_dialogue = [
             message for message in self._build_dialogue_messages(batch, []) if message.get("role") == "user"
         ]
+        # 重复闸的新实体豁免语料：本窗弹幕原话 + 本窗新到的游戏聊天 + 游戏叙事。
+        # 叙事里的旧条目无害：真被说过的词已在最近发言语料里，不会被豁免判成"新"
+        fresh_texts = [str(message.get("content") or "") for message in source_dialogue]
+        fresh_texts.extend(fresh_game_chat or [])
+        if game_narrative:
+            fresh_texts.append(game_narrative)
         # 流程单推进、冷场、定时这类主动窗没有观众、运营或游戏聊天的新输入：此时再给手上的游戏活
         # 补充要求，只会把游戏侧自己汇报过的进展或我的猜测转述回去，变成过时或互相矛盾的指令。
         # 游戏聊天只认本窗新到的：全文里还留着已经看过的旧聊天，拿全文判断会让几分钟前的
@@ -549,6 +574,7 @@ class Planner:
                         thinking=thinking,
                         round_id=round_id,
                         game_chat=fresh_game_chat,
+                        fresh_texts=fresh_texts,
                     )
                 else:
                     observation = await self._invoke_registry_tool(
@@ -557,14 +583,18 @@ class Planner:
                         round_id=round_id,
                         source_dialogue=source_dialogue,
                         relay_without_input=relay_without_input,
+                        tool_call_id=str(call.get("id", "") or ""),
                     )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": str(call.get("id", "") or ""),
-                        "content": observation,
-                    }
-                )
+                if is_tool_message(observation):
+                    messages.append(observation)
+                else:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": str(call.get("id", "") or ""),
+                            "content": observation,
+                        }
+                    )
                 if replied:
                     return outcome
 
@@ -643,9 +673,14 @@ class Planner:
             lines.append(f"【我最近给手上的事补充过的要求】\n{relays}")
         intents = self._render_recent_intents(current_ms)
         if intents:
-            # 我最近几轮想说的：对话历史里只有台词，这里给出每轮定下的话题，
-            # 连着几轮都是同一件事又没有新进展时，就该换话题、换角度或者不开口
-            lines.append(f"【我最近几轮想说的】（由旧到新，只列话题一句话；说出口的原话见对话历史）\n{intents}")
+            # 已聊话题清单 + 硬规则：复盘发现 46% 的决策窗里模型自己写"别复述"却做不到——
+            # 把"重叠必须有新角度，否则沉默"写成显式注入规则，而不是靠模型自觉
+            lines.append(
+                "【已聊话题】（由旧到新，只列话题一句话；说出口的原话见对话历史）\n"
+                f"{intents}\n"
+                "硬规则：本轮想说的话题若与上述清单重叠，必须给出实质性新角度"
+                "（新事实/新进展/新互动对象），否则选择本轮沉默。"
+            )
         if reminders:
             # 运营提醒：后台递话，必达素材——不伪装观众弹幕、不进对话历史，
             # 仅进本轮参考块（消费即送达，由调用方在决策窗入口取空队列）。
@@ -710,6 +745,21 @@ class Planner:
         history_messages = [canonical.turn_to_message(turn) for turn in canonical.trim_batch_echo(history, batch)]
         return self._compact_history(history_messages) + batch_messages
 
+    def _visual_caller(self) -> bool:
+        """本档位主模型能否看图（能力协商出口，ADR-037）。
+
+        引擎不可查（测试假件 / 未注入）或查询异常一律按非视觉——判错方向
+        是多一次 VLM 转述，而不是把图塞给看不懂的模型。
+        """
+        getter = getattr(self._llm_service, "is_profile_visual", None)
+        if not callable(getter):
+            return False
+        try:
+            return getter(PLANNER_PROFILE) is True
+        except Exception as e:
+            self.logger.warning(f"视觉能力查询失败，按非视觉处理: {e}", exc=True)
+            return False
+
     def _compact_history(self, history_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """按 profile 配置的历史 token 预算压缩对话历史。
 
@@ -733,7 +783,13 @@ class Planner:
         for name in self.typed_config.reference_tools:
             try:
                 result = await self._tool_registry.invoke(
-                    ToolInvocation(tool_name=name, arguments={}, source="planner-reference", round_id=round_id)
+                    ToolInvocation(
+                        tool_name=name,
+                        arguments={},
+                        source="planner-reference",
+                        round_id=round_id,
+                        caller_profile=PLANNER_PROFILE,
+                    )
                 )
             except Exception as e:
                 self.logger.warning(f"参考工具 '{name}' 调用异常: {e}", exc=True)
@@ -747,7 +803,12 @@ class Planner:
                 if isinstance(result.structured_content, dict) and result.structured_content
                 else result.content
             )
-            text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False, default=str)
+            # 参考段与工具观察同走对话安全视图：参考工具返回截图等二进制载荷时以占位符进文本
+            text = (
+                body
+                if isinstance(body, str)
+                else json.dumps(to_conversation_view(body), ensure_ascii=False, default=str)
+            )
             # 现场速览来自 minecraft 查询工具，回执里常带观测引用等内部标识：进参考段前脱敏
             parts.append(f"{name}: {sanitize_internal_terms(text)}")
         return "\n".join(parts)
@@ -779,6 +840,7 @@ class Planner:
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
         game_chat: Optional[List[str]] = None,
+        fresh_texts: Optional[List[str]] = None,
     ) -> tuple[str, bool]:
         """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出写进 outcome 并返回 (观察, replied=True)。
 
@@ -786,7 +848,20 @@ class Planner:
         熔断复用既有机制，tool.result 事件照发）。thinking 回调槽位机制保留：
         调用前把 replyer 阶段回调设到 Provider 的临时槽位，调用后立即清理
         （一次性语义，防跨轮残留）——槽位挂在 Provider 实例上，不经注册表。
+        产出侧重复闸：新话题与最近发言字面大面积重合、又没有本窗新词背书时，
+        当工具错误打回（首次给改题机会，再次拒绝并引导本轮沉默）。
         """
+        verdict = check_topic(
+            str(args.get("topic_summary") or ""),
+            recent_topics=[intent.topic_summary for intent in self._recent_intents],
+            recent_speeches=[intent.speech for intent in self._recent_intents],
+            fresh_texts=fresh_texts or [],
+        )
+        if not verdict.allowed:
+            attempt = int(outcome.get("topic_gate_retries") or 0)
+            outcome["topic_gate_retries"] = attempt + 1
+            self.logger.info(f"重复闸打回 reply（第 {attempt + 1} 次）：{args.get('topic_summary')!r}")
+            return json.dumps({"ok": False, "error": rejection_reason(attempt >= 1)}, ensure_ascii=False), False
         if self._tool_registry is None:
             outcome["reply_failures"] += 1
             return json.dumps(
@@ -806,7 +881,13 @@ class Planner:
                 # 游戏里有人搭话促发的一轮弹幕批是空的，原话同样交给表达侧，调用后清空
                 set_game_chat(game_chat)
             result = await self._tool_registry.invoke(
-                ToolInvocation(tool_name="streamer_reply", arguments=args, source="planner-react", round_id=round_id)
+                ToolInvocation(
+                    tool_name="streamer_reply",
+                    arguments=args,
+                    source="planner-react",
+                    round_id=round_id,
+                    caller_profile=PLANNER_PROFILE,
+                )
             )
         except Exception as e:
             self.logger.warning(f"reply 工具执行异常: {e}", exc=True)
@@ -845,7 +926,12 @@ class Planner:
         outcome["reply_to"] = reply_to if isinstance(reply_to, str) and reply_to else None
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
         self._recent_intents.append(
-            _Intent(at_ms=now_ms(), topic_summary=outcome["topic_summary"], reply_guidance=outcome["reply_guidance"])
+            _Intent(
+                at_ms=now_ms(),
+                topic_summary=outcome["topic_summary"],
+                reply_guidance=outcome["reply_guidance"],
+                speech=str(payload.get("speech") or ""),
+            )
         )
 
         self.logger.info(f"Planner ReAct 收尾：reply 成功 (target={outcome['target']!r}, steps={outcome['steps']})")
@@ -858,8 +944,14 @@ class Planner:
         round_id: str = "",
         source_dialogue: Optional[List[Dict[str, Any]]] = None,
         relay_without_input: bool = False,
-    ) -> str:
-        """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。"""
+        tool_call_id: str = "",
+    ) -> Union[str, Dict[str, Any]]:
+        """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。
+
+        视觉调用方（本档位主模型声明 visual）且工具结果带图时返回完整
+        tool 消息 dict——图以独立 image part 附在观察文本之后（ADR-037），
+        调用方经 :func:`is_tool_message` 识别后直接追加进消息流。
+        """
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
         if name == "framework_prompt" and relay_without_input:
@@ -912,7 +1004,13 @@ class Planner:
             )
         try:
             result = await self._tool_registry.invoke(
-                ToolInvocation(tool_name=name, arguments=args, source="planner-react", round_id=round_id)
+                ToolInvocation(
+                    tool_name=name,
+                    arguments=args,
+                    source="planner-react",
+                    round_id=round_id,
+                    caller_profile=PLANNER_PROFILE,
+                )
             )
         except Exception as e:
             self.logger.warning(f"工具 '{name}' 执行异常: {e}", exc=True)
@@ -944,7 +1042,16 @@ class Planner:
                 self._recent_relays.append(_Relay(at_ms=now_ms(), agent=agent, content=own_relay))
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
-        return _render_observation(data)
+        rendered = _render_observation(data)
+        if self._visual_caller():
+            image_data_urls = extract_image_data_urls(result)
+            if image_data_urls:
+                return build_tool_message(
+                    rendered=rendered,
+                    image_data_urls=image_data_urls,
+                    tool_call_id=tool_call_id,
+                )
+        return rendered
 
     # ==================== 人物画像注入 ====================
 

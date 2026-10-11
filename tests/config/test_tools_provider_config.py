@@ -103,24 +103,17 @@ class TestProviderConfigBackfill:
 
 
 class TestProviderConfigDrift:
-    def test_unknown_config_key_stripped_and_reported(self, temp_config_dir):
-        """config 内未知键 → 剥离 + redundant 报告（带完整路径前缀）。"""
+    def test_unknown_config_key_hard_fails(self, temp_config_dir):
+        """config 内未知键 → 冗余全域硬错（静默剥离 = 用户数据丢失）。"""
         generate_default_configs(temp_config_dir)
         _add_vts_section(temp_config_dir, _VTS_SECTION + "stale_key = 1\n")
 
-        import tomlkit
-
-        with open(temp_config_dir / "tools.toml", "r", encoding="utf-8-sig") as f:
-            raw = tomlkit.load(f).unwrap()
-        _instance, report = _validate_file("tools.toml", raw)
-
-        assert "tools.studio.obs.config.stale_key" in report.redundant
-        # 落盘后物理消失
-        load_config_dir(temp_config_dir)
-        assert "stale_key" not in (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(temp_config_dir)
+        assert "stale_key" in str(exc_info.value)
 
     def test_section_level_unknown_key_reported(self, temp_config_dir):
-        """段本体未知键（enabled 拼写错误等）→ redundant 报告可见（写回时清理）。"""
+        """段本体未知键（enabled 拼写错误等）→ redundant 报告可见（加载层聚合硬错接管）。"""
         generate_default_configs(temp_config_dir)
         _add_vts_section(
             temp_config_dir,
@@ -167,9 +160,9 @@ class TestProviderConfigHardFail:
             )
 
 
-class TestUnregisteredSectionTolerance:
-    def test_unregistered_section_warns_and_keeps(self, temp_config_dir):
-        """残留段（已退役 provider）→ warning 跳过、不抛错、段原样保留。"""
+class TestUnregisteredSectionHardFail:
+    def test_unregistered_section_hard_fails(self, temp_config_dir):
+        """残留段（已退役 provider）→ 硬错（点名 + 合法名单 + 处置指引）。"""
         generate_default_configs(temp_config_dir)
         _add_vts_section(
             temp_config_dir,
@@ -182,11 +175,11 @@ some_key = 1
 """,
         )
 
-        # 不抛错即通过（残留容忍）；段保留在合并视图
-        config, _report = load_config_dir(temp_config_dir)
-
-        retired = config["tools"]["tools"]["studio"]["retired_thing"]
-        assert retired["config"]["some_key"] == 1
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config_dir(temp_config_dir)
+        message = str(exc_info.value)
+        assert "retired_thing" in message
+        assert "studio.obs" in message
 
 
 class TestWebSearchProviderConfig:

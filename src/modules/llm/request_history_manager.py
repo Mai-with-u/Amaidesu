@@ -47,6 +47,54 @@ def get_global_request_history_manager() -> "RequestHistoryManager":
 
 CACHE_SIZE = 100  # 内存缓存大小
 
+# 列表预览摘要长度（字符）：统计行的"一眼认出"口径，避免摘要列自身膨胀
+_PREVIEW_MAX_CHARS = 50
+
+
+def build_prompt_preview(request_params: Any) -> str:
+    """从请求参数提取列表页 Prompt 预览摘要。
+
+    取 ``messages`` 里最后一条有正文的消息（与触发语境最接近），兼容两种
+    消息形态：OpenAI 原生（``content`` 字符串或多模态列表）与中立 payload
+    契约（``parts`` 片段列表，图像片段以占位符呈现）。截取固定长度——正文
+    已出库到诊断文件，摘要列只承担列表页辨识。
+    """
+    messages = request_params.get("messages") if isinstance(request_params, dict) else None
+    if not isinstance(messages, list):
+        return ""
+    for message in reversed(messages):
+        text = _message_body_text(message).strip()
+        if text:
+            return text[:_PREVIEW_MAX_CHARS]
+    return ""
+
+
+def _message_body_text(message: Any) -> str:
+    """单条消息的正文文本（OpenAI content 形态与中立 parts 形态通吃）。"""
+    if not isinstance(message, dict):
+        return ""
+    lines: List[str] = []
+    content = message.get("content")
+    if isinstance(content, str):
+        lines.append(content)
+    elif isinstance(content, list):
+        for piece in content:
+            if isinstance(piece, str):
+                lines.append(piece)
+            elif isinstance(piece, dict) and piece.get("type") == "text" and isinstance(piece.get("text"), str):
+                lines.append(piece["text"])
+    parts = message.get("parts")
+    if isinstance(parts, list):
+        for piece in parts:
+            if isinstance(piece, str):
+                lines.append(piece)
+            elif isinstance(piece, dict):
+                if isinstance(piece.get("text"), str):
+                    lines.append(piece["text"])
+                elif piece.get("type") == "image":
+                    lines.append("[图片内容已省略]")
+    return "\n".join(line for line in lines if line)
+
 
 class TokenUsage(BaseModel):
     """Token 使用量"""
@@ -210,9 +258,12 @@ class RequestHistoryManager:
     async def _persist_request(self, record_dict: Dict[str, Any]) -> None:
         """写单条请求到 ``llm_requests`` 表；失败仅告警（记账旁路语义）。
 
-        SQLite 写入统一走 observation（两表唯一写入者），本方法只负责把
-        请求记录字典整理成插入载荷。profile_name 字段承载 LLM 用途 profile
-        名；历史数据经 v12 迁移后该列已改名，传入字段名仍维持 ``profile_name``。
+        库行只存统计与摘要：正文大字段（request_params / reasoning_content /
+        tool_calls / usage_raw_json）由调用链写侧出库到诊断文件，列留 NULL
+        （存量旧行仍在库列，读侧降级回退）。SQLite 写入统一走 observation
+        （两表唯一写入者），本方法只负责把请求记录字典整理成插入载荷。
+        profile_name 字段承载 LLM 用途 profile 名；历史数据经 v12 迁移后该列
+        已改名，传入字段名仍维持 ``profile_name``。
         """
         if self._llm_repo is None:
             return
@@ -225,12 +276,10 @@ class RequestHistoryManager:
                     timestamp_ms=record_dict.get("timestamp", 0),
                     profile_name=record_dict.get("profile_name", ""),
                     model_name=record_dict.get("model_name", ""),
-                    request_params_json=json.dumps(
-                        record_dict.get("request_params") or {}, ensure_ascii=False, default=str
-                    ),
+                    request_params_json=None,
                     response_content=record_dict.get("response_content"),
-                    reasoning_content=record_dict.get("reasoning_content"),
-                    tool_calls_json=json.dumps(record_dict.get("tool_calls") or [], ensure_ascii=False, default=str),
+                    reasoning_content=None,
+                    tool_calls_json=None,
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
                     completion_tokens=int(usage.get("completion_tokens", 0)),
                     total_tokens=int(usage.get("total_tokens", 0)),
@@ -241,7 +290,8 @@ class RequestHistoryManager:
                     success=bool(record_dict.get("success", True)),
                     error=record_dict.get("error"),
                     latency_ms=int(record_dict.get("latency_ms", 0)),
-                    usage_raw_json=record_dict.get("usage_raw_json"),
+                    usage_raw_json=None,
+                    preview_text=build_prompt_preview(record_dict.get("request_params")),
                 ),
             )
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
@@ -270,7 +320,8 @@ class RequestHistoryManager:
         """DB 行 → 历史记录字典（usage 嵌套与 JSON 列还原）。
 
         读取 ``profile_name`` 列（v12 迁移后该列已改名）；同时回带 reasoning_tokens
-        与 usage_raw_json（解析即弃链路唯一兜底）。
+        与 usage_raw_json（解析即弃链路唯一兜底）、preview_text（v14 列表预览
+        摘要；正文大字段 v14 起出库，旧行列值仍在，新行为 NULL 由读侧文件回查）。
         """
         usage = None
         if row.get("prompt_tokens") or row.get("completion_tokens") or row.get("total_tokens"):
@@ -306,6 +357,7 @@ class RequestHistoryManager:
             "cache_hit_tokens": int(row.get("cache_hit_tokens") or 0),
             "cache_miss_tokens": int(row.get("cache_miss_tokens") or 0),
             "usage_raw_json": row.get("usage_raw_json"),
+            "preview_text": row.get("preview_text") or "",
         }
 
     async def get_request_by_id(self, request_id: str) -> Optional[Dict[str, Any]]:

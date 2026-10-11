@@ -57,6 +57,12 @@ from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
 from src.modules.llm.context_meter import SECTION_SKILLS
 from src.modules.skills import SkillEnvironment, SkillLibrary, render_catalog
+from src.modules.tools.conversation import (
+    build_tool_message,
+    extract_image_data_urls,
+    is_tool_message,
+    to_conversation_view,
+)
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 
@@ -646,16 +652,19 @@ class MinecraftAgent(BaseAgent):
                         "error": "minecraft_wait 必须单独调用；先完成本轮其他动作",
                     }
                 else:
-                    observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
+                    observation = await self._execute_tool(call.name, arguments, round_id=mc_round, call_id=call.id)
                 self._absorb_reply(call.name, arguments, observation)
                 polling_only &= self._polls_running_goal(call.name, arguments)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": json.dumps(observation, ensure_ascii=False, default=str),
-                    }
-                )
+                if is_tool_message(observation):
+                    messages.append(observation)
+                else:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": json.dumps(observation, ensure_ascii=False, default=str),
+                        }
+                    )
 
             if self._task_reported:
                 self._logger.info(f"LLM 已上报，任务批次结束（{steps} 步）")
@@ -827,20 +836,50 @@ class MinecraftAgent(BaseAgent):
         )
         messages.extend(results)
 
-    async def _execute_tool(self, name: str, arguments: Dict[str, Any], *, round_id: str = "") -> Dict[str, Any]:
+    def _visual_caller(self) -> bool:
+        """本档位主模型能否看图（能力协商出口，ADR-037）。
+
+        引擎不可查（测试假件 / 未注入）或查询异常一律按非视觉——判错方向
+        是多一次 VLM 转述，而不是把图塞给看不懂的模型。
+        """
+        if self._llm is None:
+            return False
+        getter = getattr(self._llm, "is_profile_visual", None)
+        if not callable(getter):
+            return False
+        try:
+            return getter(MINECRAFT_PROFILE) is True
+        except Exception as e:
+            self.logger.warning(f"视觉能力查询失败，按非视觉处理: {e}", exc=True)
+            return False
+
+    async def _execute_tool(
+        self, name: str, arguments: Dict[str, Any], *, round_id: str = "", call_id: str = ""
+    ) -> Dict[str, Any]:
         """串行执行单个工具调用：统一经 ToolRegistry（观测/停用/熔断复用既有机制）。
 
         MaiCraft 工具的观察就是它原样的 JSON 回复；连接失败等拿不到回复时写明原因。
+        registry 工具的观察走对话安全视图：base64 二进制载荷（截图等）属
+        tool.result 事件的 UI 展示通道，在对话里以占位符出现。视觉调用方
+        （本档位主模型声明 visual）且工具结果带图时返回完整 tool 消息
+        dict——图以独立 image part 附在观察 JSON 之后（ADR-037），调用方
+        经 :func:`is_tool_message` 识别后直接追加进消息流。
         """
         if self._tool_registry is None:
             return {"ok": False, "error": "工具执行失败：tool_registry 未注入", "tool": name}
         result = await self._tool_registry.invoke(
-            ToolInvocation(tool_name=name, arguments=arguments, source="minecraft-react", round_id=round_id)
+            ToolInvocation(
+                tool_name=name,
+                arguments=arguments,
+                source="minecraft-react",
+                round_id=round_id,
+                caller_profile=MINECRAFT_PROFILE,
+            )
         )
         if name.startswith(f"{PROVIDER}_"):
             return reply_of(result).raw
         if result.success:
-            return (
+            data: Dict[str, Any] = (
                 dict(result.structured_content)
                 if isinstance(result.structured_content, dict)
                 else {
@@ -848,6 +887,16 @@ class MinecraftAgent(BaseAgent):
                     "content": result.content,
                 }
             )
+            observation = to_conversation_view(data)
+            if self._visual_caller():
+                image_data_urls = extract_image_data_urls(result)
+                if image_data_urls:
+                    return build_tool_message(
+                        rendered=json.dumps(observation, ensure_ascii=False, default=str),
+                        image_data_urls=image_data_urls,
+                        tool_call_id=call_id,
+                    )
+            return observation
         return {"ok": False, "error": result.error_message or "工具执行失败", "tool": name}
 
     async def _call_maicraft(self, name: str, arguments: Dict[str, Any]) -> MaicraftReply:

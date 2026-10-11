@@ -218,6 +218,14 @@ export interface SubtitleStatusResponse {
 
 export interface TtsTestRequest {
   text: string;
+  /** true=试说（声卡播放+字幕联动）；false=生成试听音频（返回 wav 数据） */
+  play_on_device?: boolean;
+  /** 覆盖参数：仅生成试听模式生效，缺省用引擎配置值 */
+  temperature?: number;
+  speed_factor?: number;
+  sample_steps?: number;
+  top_k?: number;
+  top_p?: number;
 }
 
 /** 同步长请求：等待合成与播放，前端需放宽超时 */
@@ -225,6 +233,8 @@ export interface TtsTestResponse {
   success: boolean;
   utterance_id?: string;
   error?: string;
+  /** 生成试听模式返回的完整 wav 音频（base64） */
+  audio_base64?: string;
 }
 
 export interface TtsStatusResponse {

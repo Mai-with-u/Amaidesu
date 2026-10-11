@@ -7,7 +7,7 @@ import pytest
 
 from src.modules.llm.clients.openai.client import OpenAIClient
 from src.modules.llm.errors import RetryableError
-from src.modules.llm.payload import GenerateRequest, Message, ToolCall
+from src.modules.llm.payload import GenerateRequest, ImagePart, Message, ToolCall
 
 
 MESSAGES = [{"role": "user", "content": "hello"}]
@@ -744,3 +744,145 @@ async def test_vision_omits_reasoning_effort_and_extra_body_when_unset():
     sent = sdk_client.chat.completions.create.await_args.kwargs
     assert "reasoning_effort" not in sent
     assert "extra_body" not in sent
+
+
+# =============================================================================
+# generate_audio - 音频输出模态（omni_tts 引擎消费）
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_sends_modalities_and_audio_params():
+    """音频请求带 modalities=audio 与 voice/format 参数，且不走流式"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response(content=None, model="qwen3-omni")
+    msg = sdk_client.chat.completions.create.return_value.choices[0].message
+    msg.audio = SimpleNamespace(data="QUJD", transcript="你好世界")
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["你好世界"])])
+    result = await client.generate_audio(request, model="qwen3-omni", voice="Chelsie", audio_format="wav")
+
+    assert sdk_client.chat.completions.create.await_count == 1
+    kwargs = sdk_client.chat.completions.create.await_args.kwargs
+    assert kwargs["modalities"] == ["text", "audio"]
+    assert kwargs["audio"] == {"voice": "Chelsie", "format": "wav"}
+    assert "stream" not in kwargs
+    assert result.success is True
+    assert result.audio_base64 == "QUJD"
+    assert result.audio_format == "wav"
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_transcript_backfills_content():
+    """语音文本经 transcript 回填 content（模型产出文本），不空响应"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response(content=None, model="qwen3-omni")
+    msg = sdk_client.chat.completions.create.return_value.choices[0].message
+    msg.audio = SimpleNamespace(data="QUJD", transcript="你好，欢迎来到直播间")
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["你好，欢迎来到直播间"])])
+    result = await client.generate_audio(request, model="qwen3-omni", voice="Chelsie")
+
+    assert result.content == "你好，欢迎来到直播间"
+    assert result.audio_base64 == "QUJD"
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_accepts_dict_shaped_audio():
+    """兼容端点以 dict 形态透传 message.audio 时同样解析"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response(content=None, model="qwen3-omni")
+    sdk_client.chat.completions.create.return_value.choices[0].message.audio = {
+        "data": "QUJD",
+        "transcript": "你好",
+    }
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["你好"])])
+    result = await client.generate_audio(request, model="qwen3-omni", voice="Chelsie")
+
+    assert result.audio_base64 == "QUJD"
+    assert result.content == "你好"
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_without_audio_treated_as_plain_text_response():
+    """端点未回音频（不支持 modalities 时）：不报错，按普通文本响应语义返回"""
+    client, sdk_client = _make_client()
+    sdk_client.chat.completions.create.return_value = _response(content="plain", model="qwen3-omni")
+
+    request = GenerateRequest(messages=[Message(role="user", parts=["你好"])])
+    result = await client.generate_audio(request, model="qwen3-omni", voice="Chelsie")
+
+    assert result.success is True
+    assert result.audio_base64 is None
+    assert result.content == "plain"
+
+
+# =============================================================================
+# tool 观察带图的协议拆分（ADR-037）
+# =============================================================================
+
+
+def test_tool_message_with_image_splits_into_tool_text_and_user_image():
+    """tool 观察带图：tool 消息只留文本，图像提升为紧随的 user 消息。
+
+    OpenAI 协议 tool 角色只收文本（"image URLs are only allowed for
+    role: 'user'"）；拆分保证协议合法且图不丢，位置紧邻即配对语义。
+    """
+    client = OpenAIClient({"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1"})
+    request = GenerateRequest(
+        messages=[
+            Message(role="user", parts=["画面里有什么？"]),
+            Message(
+                role="tool",
+                parts=[
+                    '{"ok": true, "image": "[图像 1 KB 已省略]"}',
+                    ImagePart(image="data:image/png;base64,AAAA"),
+                ],
+                tool_call_id="call_1",
+            ),
+        ]
+    )
+
+    messages = client._request_to_openai_messages(request)
+
+    assert len(messages) == 3
+    tool_msg = messages[1]
+    assert tool_msg["role"] == "tool"
+    assert tool_msg["tool_call_id"] == "call_1"
+    assert tool_msg["content"] == '{"ok": true, "image": "[图像 1 KB 已省略]"}'
+    user_msg = messages[2]
+    assert user_msg["role"] == "user"
+    assert user_msg["content"][0]["type"] == "text"
+    assert "[系统附图" in user_msg["content"][0]["text"]
+    assert user_msg["content"][1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+
+def test_tool_message_without_image_stays_single_text():
+    """无图 tool 观察：纯文本折叠为字符串 content，单条输出（现状不回归）。"""
+    client = OpenAIClient({"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1"})
+    request = GenerateRequest(
+        messages=[Message(role="tool", parts=['{"ok": true}'], tool_call_id="call_2")]
+    )
+
+    messages = client._request_to_openai_messages(request)
+
+    assert len(messages) == 1
+    assert messages[0]["content"] == '{"ok": true}'
+
+
+def test_user_message_with_image_keeps_parts_list():
+    """user 消息带图（vision 既有形态）：content 保持 parts 列表，不折叠。"""
+    client = OpenAIClient({"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1"})
+    request = GenerateRequest(
+        messages=[
+            Message(role="user", parts=["看这张图", ImagePart(image="data:image/png;base64,BBBB")]),
+        ]
+    )
+
+    messages = client._request_to_openai_messages(request)
+
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"][0] == {"type": "text", "text": "看这张图"}
+    assert messages[0]["content"][1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,BBBB"}}

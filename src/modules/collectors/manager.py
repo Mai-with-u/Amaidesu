@@ -136,6 +136,8 @@ class CollectorManager:
 
         段名 = 注册名：实例化后强制对齐实例 name 为段名，保证
         list_collectors()/get_by_name() 与配置 enabled 列表一致。
+        未知名由 factory 直接 raise（加载期已硬错拦截，此处出现
+        即程序缺陷），不再返回 None 静默跳过。
 
         Args:
             name: 配置段名（如 "console_input"）。
@@ -145,9 +147,6 @@ class CollectorManager:
         from src.modules.collectors.factory import instantiate_collector
 
         instance = instantiate_collector(name, config or {}, event_bus=event_bus)
-        if instance is None:
-            logger.warning(f"未实现的 Collector: {name}")
-            return False
         if instance.name != name:
             instance.name = name
         if not self.register(instance):

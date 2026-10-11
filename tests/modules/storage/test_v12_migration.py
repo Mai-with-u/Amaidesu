@@ -168,9 +168,7 @@ async def test_v11_db_upgrades_renames_column_and_preserves_legacy_values(temp_d
     try:
         assert await store.get_schema_version() == SCHEMA_VERSION
         # 旧行 profile_name 列已改名，旧值原样保留
-        rows = await store.execute(
-            "SELECT request_id, profile_name FROM llm_requests ORDER BY timestamp_ms"
-        )
+        rows = await store.execute("SELECT request_id, profile_name FROM llm_requests ORDER BY timestamp_ms")
         profile_by_req = {r["request_id"]: r["profile_name"] for r in rows}
         assert profile_by_req == {
             "req-old-llm": "llm",
@@ -271,8 +269,8 @@ def _make_manager_with_fake_client(store) -> LLMManager:
 
 @pytest.mark.asyncio
 async def test_engine_persists_reasoning_tokens_and_usage_raw_json(temp_db_path: Path) -> None:
-    """v12 端到端：engine 成功调用 → llm_usage + llm_requests 两表均含 reasoning_tokens；
-    llm_requests 额外含 usage_raw_json（JSON 字符串）与 profile_name（用途 profile 名）。"""
+    """v12 端到端（v14 契约）：engine 成功调用 → 两表统计列落库；usage_raw_json
+    正文出库到诊断文件，库列为 NULL。"""
     store = SQLiteDatabase(temp_db_path)
     await store.initialize()
     try:
@@ -283,16 +281,12 @@ async def test_engine_persists_reasoning_tokens_and_usage_raw_json(temp_db_path:
         usage_rows = await store.execute("SELECT reasoning_tokens FROM llm_usage")
         assert int(usage_rows[0]["reasoning_tokens"]) == 7
 
-        request_rows = await store.execute(
-            "SELECT profile_name, reasoning_tokens, usage_raw_json FROM llm_requests"
-        )
+        request_rows = await store.execute("SELECT profile_name, reasoning_tokens, usage_raw_json FROM llm_requests")
         assert len(request_rows) == 1
         row = request_rows[0]
         assert row["profile_name"] == "planner"
         assert int(row["reasoning_tokens"]) == 7
-        # usage_raw_json 含 OpenAI 风格嵌套结构（解析即弃链路唯一兜底，保留厂商原始字段）
-        raw = json.loads(row["usage_raw_json"]) if row["usage_raw_json"] else {}
-        assert raw["prompt_tokens"] == 10
-        assert raw["completion_tokens_details"]["reasoning_tokens"] == 7
+        # v14 起正文出库：usage_raw_json 不再落库（厂商原始字段保留在诊断文件）
+        assert row["usage_raw_json"] is None
     finally:
         await store.close()

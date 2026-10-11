@@ -152,7 +152,13 @@ class ConfigService:
             multi_config, drift = load_config_dir(config_dir)
         except Exception as e:
             self.logger.error(f"多文件配置加载失败: {e}")
-            return False, False
+            # 原样带 cause 传播：加载硬错的消息（未注册段名/合法名单/出路
+            # 指引）是用户修复配置的唯一入口，吞成布尔失败会让硬错退化
+            # 为一句无信息量的失败提示
+            raise RuntimeError(
+                "配置初始化失败：无法加载 config/ 目录下的配置文件。"
+                "按上方错误详情修正配置后重启；无法定位时可删除 config/ 目录重新生成。"
+            ) from e
 
         if drift.has_drift:
             for key in drift.redundant:
