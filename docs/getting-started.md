@@ -128,7 +128,7 @@ enabled = ["streamer", "text_adv"]
 
 #### 启用采集器
 
-采集器配置宿主是 `config/collectors.toml`（顶层 `enabled` 名单驱动装配）。默认已启用"控制台输入"、游戏注意流 `maicraft_attention` 与游戏聊天流 `maicraft_chat`（游戏未运行时空转、无感），零依赖就能对话：
+采集器配置宿主是 `config/collectors.toml`（顶层 `enabled` 名单驱动装配）。默认只启用"控制台输入"；Minecraft 的注意流 `maicraft_attention` 与聊天流 `maicraft_chat` 是 Minecraft Agent 的附属采集器，随 `agents.enabled` 里的 `minecraft` 一同开关，不在这里配置（游戏未运行时空转、无感），零依赖就能对话：
 
 ```toml
 # config/collectors.toml
@@ -214,8 +214,13 @@ uv run python main.py --dry
 | `bili_danmaku` | B 站 legacy 弹幕（轮询） | `room_id` / `poll_interval` |
 | `bili_danmaku_official` | B 站官方长连弹幕 | `id_code` / `app_id` / `access_key(_secret)` / `api_host` |
 | `stt` | 语音转文字（讯飞 ASR + VAD） | 包内 ConfigSchema（iflytek_asr / vad / audio） |
-| `maicraft_attention` | 游戏注意流：观察 Minecraft 身体遭遇（受伤/死亡等），分类叙事化后发布 | 同名子段（实现位于游戏 Agent 包 `src/agents/minecraft/`） |
-| `maicraft_chat` | 游戏聊天流：把 Minecraft 里其他玩家的聊天与服务器系统消息转给主播（AI 自己的话不收，私聊标出来、主播不念原话） | 同名子段（实现位于游戏 Agent 包 `src/agents/minecraft/`） |
+
+Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agent 开关，名单见 `src/modules/agents/companions.py`）：
+
+| 名称 | 所属 Agent | 用途 | 配置 |
+|------|-----------|------|------|
+| `maicraft_attention` | `minecraft` | 游戏注意流：观察 Minecraft 身体遭遇（挨打/死亡/换维度等），分类叙事化后发布 | 连接取 `[agents.minecraft.mcp]`；`events_wait_ms` / `events_retry_interval_ms` |
+| `maicraft_chat` | `minecraft` | 游戏聊天流：把 Minecraft 里其他玩家的聊天与服务器系统消息转给主播（AI 自己的话不收，私聊标出来、主播不念原话） | 同上 |
 
 
 #### 业务 Agent（`SUPPORTED_AGENTS`）

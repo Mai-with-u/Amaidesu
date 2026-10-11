@@ -61,3 +61,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-035：escalation 账面语义修正（failed 终态改写 waiting_for_decision）](035-escalation-ledger-semantics.md)
 - [ADR-036：Skill 系统——Agent 侧玩法经验文档（目录常驻 + 正文按需 + 环境门控）](036-skill-system.md)
 - [ADR-037：视觉直连——工具图像进对话观察（内部契约带图 / 翻译层拆分 / 能力协商按需 VLM）](037-vision-direct-tool-image-observation.md)
+- [ADR-038：Agent 附属采集器——只对某个 Agent 有意义的流随它一同开关](038-agent-companion-collectors.md)

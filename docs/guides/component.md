@@ -290,13 +290,24 @@ async def asyncio_sleep_ms(ms: int) -> None:
 
 | 步骤 | 位置 | 操作 |
 |------|------|------|
-| ① 放代码 | `src/modules/collectors/<your_name>/<your_name>_collector.py` | 类名 `XxxCollector`，`name = "<注册名>"`。**例外**：读的是某个**游戏/具体内容**的流（如 MaiCraft 注意流）时，按"游戏内容逻辑内聚 `src/agents/<Agent 名>/`"放在该 Agent 包内——代码归属跟随内容，装配路径不变 |
+| ① 放代码 | `src/modules/collectors/<your_name>/<your_name>_collector.py` | 类名 `XxxCollector`，`name = "<注册名>"`。读的是某个**游戏/具体内容**的流时，它是那个 Agent 的附属采集器，不走本表，见下方"Agent 附属采集器" |
 | ② 注册工厂 | `src/modules/collectors/factory.py` | 加一行 `if name == "<注册名>":` → `return XxxCollector(config, event_bus)`；同时把 `<注册名>` 加进 `SUPPORTED_COLLECTORS` 元组 |
 | ③ 写配置 | `config/collectors.toml` | 顶层 `enabled` 加 `"<注册名>"`；同名子段 `[<注册名>]` 放具体参数（由该采集器包内 ConfigSchema 校验） |
 | ④ 启停接口 | 自动接入 | `CollectorManager.enable_collector(name, config, event_bus)` 会走工厂 `instantiate_collector` 实例化；`disable_collector` 停止+移除 |
 | ⑤ Dashboard | 自动可见 | 组件管理页从 `SUPPORTED_COLLECTORS` 拉清单；通过 `src/modules/dashboard/api/components.py` 的 `_sync_enabled_config` 写回 `enabled` 列表 |
 
-**代码归属 ≠ 装配路径**：无论代码放在 `src/modules/collectors/` 还是游戏 Agent 包内，装配一律走工厂 + `collectors.toml`，生命周期都挂装配期（不随 Agent 起停）——"待机时该流是否还在"由这个生命周期决定，不由代码位置决定。
+本表只管**通用采集器**（直播间与操作者的输入：弹幕、控制台、语音转写），它们谁都能用，在 `collectors.toml` 里单独开关。
+
+### Agent 附属采集器
+
+读某个 Agent 所接外部世界的持续流（例如 Minecraft 的身体事件流、游戏聊天流）的采集器，离开那个 Agent 就没有意义——Agent 没开时只会对着连不上的游戏一直重试。它们是该 Agent 的**附属采集器**（ADR-038）：
+
+- **代码**放在 Agent 包内（`src/agents/<Agent 名>/`），仍是 `BaseCollector` 子类，事件照样自产自发；
+- **构造**由 Agent 包提供一个函数（例如 `src/agents/minecraft/companions.py` 的 `build_companion_collectors`），配置从 Agent 自己的配置段换算——连接复用 Agent 的 MCP 配置，不在别处另抄一份；
+- **登记**在 `src/modules/agents/companions.py`：`COMPANION_COLLECTORS` 加一行 `"<Agent 名>": ("<采集器名>", ...)`，`build_companion_collectors` 加一个分支指向 Agent 包的构造函数（这是装配登记表，和 Agent 工厂同一类位置）；
+- **不进** `collectors.toml`、不进采集器工厂与配置注册表；
+- **开关**只看所属 Agent 在不在 `agents.enabled`：启动时随 Agent 装上，Dashboard 启停 Agent 时一并启停，Agent 重启或心跳自愈（重建）时不动——附属采集器重新接入只对齐游标、不补发，跟着重建就会漏掉重建期间的事；
+- **Dashboard** 照常列出运行状态，`owner` 字段写所属 Agent，单独开关会被拒绝并提示去开关 Agent。
 
 **谁调用注册？** `main.py` 的 `_register_collectors_from_config` 在启动装配时遍历 `collectors.toml` 顶层 `enabled` 列表逐个 `instantiate_collector` → `CollectorManager.register` → `CollectorManager.start_all`；未知名走 warn + 跳过，不 raise。
 
