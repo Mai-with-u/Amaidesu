@@ -669,6 +669,15 @@ const tokenStatsFetching = new Set<string>();
  * 声明在下方 immediate watch 之前——watch 首次同步执行就会读它 */
 const openedPayloads = ref<Set<string>>(new Set());
 
+/** 决策/裁决/响应卡的思考正文（llm_request_id → reasoning_content，懒取 + 一次性缓存）。
+ * 与实时思考流不同源：这里是按请求整段的模型推理正文（LLM 请求历史出库合并回供），
+ * 回看模式下没有逐 token 思考流，诊断回看这条。取到空串表示该请求无思考正文。
+ * 声明必须先于下方 immediate watch：watch 首跑会收缩这些标记，声明在后即 TDZ */
+const reasoningByRequest = ref<Map<string, string>>(new Map());
+const reasoningFetching = new Set<string>();
+/** 已展开思考区的条目 id（v-if 挂载；与 openedPayloads 同款收展语义） */
+const expandedThinking = ref<Set<string>>(new Set());
+
 async function fetchTokenStats(requestId: string): Promise<void> {
   tokenStatsFetching.add(requestId);
   try {
@@ -758,14 +767,7 @@ function statsOf(entry: ShowEntry): RoundTokenStats | null {
   return entry.llmRequestId ? (roundTokenStats.value.get(entry.llmRequestId) ?? null) : null;
 }
 
-/** 决策/裁决/响应卡的思考正文（llm_request_id → reasoning_content，懒取 + 一次性缓存）。
- * 与实时思考流不同源：这里是按请求整段的模型推理正文（LLM 请求历史出库合并回供），
- * 回看模式下没有逐 token 思考流，诊断回看这条。取到空串表示该请求无思考正文。 */
-const reasoningByRequest = ref<Map<string, string>>(new Map());
-const reasoningFetching = new Set<string>();
-/** 已展开思考区的条目 id（v-if 挂载；与 openedPayloads 同款收展语义） */
-const expandedThinking = ref<Set<string>>(new Set());
-
+/** 思考正文懒取（状态声明在上方 immediate watch 之前，TDZ 纪律同 openedPayloads） */
 async function fetchReasoning(requestId: string): Promise<void> {
   if (reasoningByRequest.value.has(requestId) || reasoningFetching.has(requestId)) return;
   reasoningFetching.add(requestId);
