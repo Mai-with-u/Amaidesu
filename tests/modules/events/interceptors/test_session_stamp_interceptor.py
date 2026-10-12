@@ -128,3 +128,38 @@ async def test_stamps_rundown_changed_via_chain() -> None:
     assert out is not None
     assert out["live_session_id"] == 42
     assert sm.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_stamps_task_and_agent_domains_via_chain() -> None:
+    """task. / agent. 域在盖章作用域内：任务账本与 Agent 响应/递话归属场次。
+
+    三个载荷类型均已声明 live_session_id 字段且 docstring 承诺由拦截器注入，
+    前缀表此前漏登记导致真实运行零盖章（回看按场过滤缺卡）。
+    """
+    sm = _FakeSessionManager(42)
+    chain = InterceptorChain()
+    chain.register(SessionStampInterceptor(sm))
+
+    for event_name in ("task.changed", "agent.replied", "agent.prompted"):
+        out = await chain.apply(event_name, {"live_session_id": 0}, "test")
+        assert out is not None, event_name
+        assert out["live_session_id"] == 42, event_name
+    assert sm.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_stamps_streamer_stage_payload() -> None:
+    """streamer.stage 载荷补声明 live_session_id 后进入盖章作用域（前缀已在域内）。"""
+    from src.modules.events.payloads.planner import StreamerStagePayload
+
+    sm = _FakeSessionManager(42)
+    chain = InterceptorChain()
+    chain.register(SessionStampInterceptor(sm))
+
+    payload = StreamerStagePayload(stage="planning").model_dump()
+    assert payload["live_session_id"] == 0
+
+    out = await chain.apply("streamer.stage", payload, "StreamerAgent")
+    assert out is not None
+    assert out["live_session_id"] == 42

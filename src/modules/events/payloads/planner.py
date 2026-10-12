@@ -126,6 +126,7 @@ class StreamerStagePayload(BasePayload):
         stage: 阶段名（planning=决策中 / replying=生成中 / idle=空闲等待）
         agent_state: agent_state（running=执行中 / wait=等待输入）
         round_id: 关联决策轮次 ID（idle 阶段为刚结束的轮次，可能为 None）
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
         detail: 人类可读补充（如触发原因、耗时备注）
         timestamp_ms: 事件发布时间戳（Unix 毫秒）
     """
@@ -133,6 +134,10 @@ class StreamerStagePayload(BasePayload):
     stage: str = Field(..., description="阶段名：planning / replying / idle")
     agent_state: str = Field(default="running", description="agent_state：running / wait")
     round_id: Optional[str] = Field(default=None, description="关联决策轮次 ID")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）",
+    )
     detail: str = Field(default="", description="人类可读补充说明")
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
