@@ -28,7 +28,17 @@ from src.modules.llm.clients.openai.arguments import decode_tool_call
 from src.modules.llm.clients.openai.compat import build_openai_compatible_client_config
 from src.modules.llm.errors import FatalError, LLMError, LLMTimeoutError, RetryableError
 from src.modules.llm.interrupt import guarded_call
-from src.modules.llm.payload import GenerateRequest, ImagePart, Message, Response, TextPart, ToolCall, ToolSpec, Usage
+from src.modules.llm.payload import (
+    GenerateRequest,
+    ImagePart,
+    ImageRefPart,
+    Message,
+    Response,
+    TextPart,
+    ToolCall,
+    ToolSpec,
+    Usage,
+)
 from src.modules.llm.reasoning import ReasoningParseMode, parse_reasoning
 from src.modules.logging import get_logger
 
@@ -195,6 +205,11 @@ class OpenAIClient(BaseLLMClient):
             return {"type": "text", "text": text}
         if isinstance(part, ImagePart):
             return {"type": "image_url", "image_url": {"url": part.image}}
+        if isinstance(part, ImageRefPart):
+            # 第二道结构校验：图像引用只允许存在于历史，到达翻译层即装配期
+            # 注水未执行（引擎 image store 缺失或注水遗漏），把句柄字符串发
+            # 给服务端是结构性缺陷，就地硬错
+            raise TypeError("图像引用未经装配期注水就到达翻译层（引擎注水遗漏），禁止把引用句柄发给服务端")
         raise TypeError(f"未知的消息片段类型: {type(part).__name__}")
 
     @classmethod

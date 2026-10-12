@@ -34,7 +34,20 @@ class ImagePart(BaseModel):
     image: str
 
 
-Part = Union[str, TextPart, ImagePart]
+class ImageRefPart(BaseModel):
+    """图像引用片段——会话历史中图像的唯一合法形态
+
+    ``ref`` 是 VisionImageStore 的进程内句柄；base64 本体不进历史，
+    引擎装配期按新鲜度窗口注水为 :class:`ImagePart`，过期/逐出降级为
+    提示文本。翻译层（client 适配端）见到本类型即结构缺陷——注水未
+    执行就到了出网点，必须硬错而不是把句柄字符串发给服务端。
+    """
+
+    type: Literal["image_ref"] = "image_ref"
+    ref: str
+
+
+Part = Union[str, TextPart, ImagePart, ImageRefPart]
 """消息内容片段：裸字符串是文本的简写形式。"""
 
 
@@ -159,6 +172,7 @@ class Response(BaseModel):
 __all__ = [
     "TextPart",
     "ImagePart",
+    "ImageRefPart",
     "Part",
     "Message",
     "ToolSpec",

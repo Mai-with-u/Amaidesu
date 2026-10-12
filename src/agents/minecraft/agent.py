@@ -65,6 +65,7 @@ from src.modules.tools.conversation import (
 )
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
+from src.modules.vision.image_store import get_image_store
 
 from .config import MinecraftConfig
 
@@ -862,8 +863,9 @@ class MinecraftAgent(BaseAgent):
         registry 工具的观察走对话安全视图：base64 二进制载荷（截图等）属
         tool.result 事件的 UI 展示通道，在对话里以占位符出现。视觉调用方
         （本档位主模型声明 visual）且工具结果带图时返回完整 tool 消息
-        dict——图以独立 image part 附在观察 JSON 之后（ADR-037），调用方
-        经 :func:`is_tool_message` 识别后直接追加进消息流。
+        dict——图以 ``image_ref`` 引用 part 附在观察 JSON 之后（base64 本体
+        入 VisionImageStore，引擎装配期按新鲜度窗口注水），调用方经
+        :func:`is_tool_message` 识别后直接追加进消息流。
         """
         if self._tool_registry is None:
             return {"ok": False, "error": "工具执行失败：tool_registry 未注入", "tool": name}
@@ -891,9 +893,10 @@ class MinecraftAgent(BaseAgent):
             if self._visual_caller():
                 image_data_urls = extract_image_data_urls(result)
                 if image_data_urls:
+                    image_refs = [get_image_store().put(url) for url in image_data_urls]
                     return build_tool_message(
                         rendered=json.dumps(observation, ensure_ascii=False, default=str),
-                        image_data_urls=image_data_urls,
+                        image_refs=image_refs,
                         tool_call_id=call_id,
                     )
             return observation

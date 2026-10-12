@@ -55,6 +55,7 @@ from src.modules.tools.conversation import (
     to_conversation_view,
 )
 from src.modules.tools.models import ToolInvocation
+from src.modules.vision.image_store import get_image_store
 
 from .room_state import RoomState
 from .thinking_stream import ThinkingStreamContext
@@ -949,7 +950,8 @@ class Planner:
         """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。
 
         视觉调用方（本档位主模型声明 visual）且工具结果带图时返回完整
-        tool 消息 dict——图以独立 image part 附在观察文本之后（ADR-037），
+        tool 消息 dict——图以 ``image_ref`` 引用 part 附在观察文本之后
+        （base64 本体入 VisionImageStore，引擎装配期按新鲜度窗口注水），
         调用方经 :func:`is_tool_message` 识别后直接追加进消息流。
         """
         if self._tool_registry is None:
@@ -1046,9 +1048,10 @@ class Planner:
         if self._visual_caller():
             image_data_urls = extract_image_data_urls(result)
             if image_data_urls:
+                image_refs = [get_image_store().put(url) for url in image_data_urls]
                 return build_tool_message(
                     rendered=rendered,
-                    image_data_urls=image_data_urls,
+                    image_refs=image_refs,
                     tool_call_id=tool_call_id,
                 )
         return rendered

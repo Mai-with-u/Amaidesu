@@ -1,5 +1,6 @@
 """验证任务历史按预算集中整理、保留原要求和完整调用组。"""
 
+import json
 from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock
 
@@ -87,6 +88,37 @@ async def test_failed_checkpoint_keeps_original_history(response: Response) -> N
     with pytest.raises(ValueError, match="摘要未完整"):
         await compactor.compact(messages, [], {"original_instructions": ["建好"]})
     assert messages == before and compactor.checkpoints == 0
+
+
+@pytest.mark.asyncio
+async def test_compact_summarize_request_carries_refs_not_base64() -> None:
+    """带图历史的压缩摘要请求只携带引用句柄，体积与纯文本历史同量级。
+
+    回归锚点：截图以 image part 进历史的时代，压缩器把全历史 json_text
+    序列化进摘要请求，base64 被当文本重发（单笔 50-86 万 tokens、缓存
+    命中≈0）。引用化后摘要请求里图只能是几十字节的句柄。
+    """
+    llm = MagicMock()
+    llm.generate = AsyncMock(return_value=Response(success=True, content="摘要", finish_reason="stop"))
+    messages = history()
+    messages.insert(
+        2,
+        {
+            "role": "tool",
+            "tool_call_id": "c0",
+            "content": [
+                {"type": "text", "text": '{"ok":true,"image":"[图像 1400 KB 已省略]"}'},
+                {"type": "image_ref", "ref": "img_ab12"},
+            ],
+        },
+    )
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000, recent_turns=2))
+    assert await compactor.compact(messages, [], {"original_instructions": ["建好"]})
+    summarize_request = llm.generate.call_args[0][0]
+    serialized = json.dumps(summarize_request, ensure_ascii=False, default=str)
+    assert "data:image" not in serialized
+    assert "image_ref" in serialized and "img_ab12" in serialized
+    assert len(serialized) < 100_000
 
 
 def test_interrupted_calls_have_unknown_receipts_and_config_stays_in_minecraft() -> None:
