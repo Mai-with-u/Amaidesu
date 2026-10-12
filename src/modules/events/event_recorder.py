@@ -61,8 +61,9 @@ class EventHistoryRecorder:
     ) -> None:
         self.event_bus = event_bus
         self.event_history = event_history
-        # 注入后事件全量落诊断文件（内存环形缓冲是"运行周期观察窗"，
-        # 文件流延长回看窗口；两者同为可丢弃旁路，不改变事实源定位）
+        # 注入后事件全量落诊断文件：内存环形缓冲是"运行周期观察窗"，文件流
+        # 承载跨重启的场次回看（ADR-039）；诊断正文默认不滚删，用户显式设置
+        # 保留期才会清理，删除后回看事件侧相应降级
         self.diagnostics_writer = diagnostics_writer
 
     async def start(self) -> None:
