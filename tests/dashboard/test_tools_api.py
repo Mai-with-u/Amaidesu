@@ -1,0 +1,1130 @@
+"""Tools API 测试套件
+
+覆盖：
+1. **GET /api/v1/tools** — 工具清单 + provider/kind/category 元数据 +
+   full_name（注册表调用键）+ 异步工具 result_event；参数 schema →
+   前端 ParameterSpec 形状；disabled 按全名判定
+2. **GET /api/v1/tools/categories** — 提供者分类目录（分类 → 提供者 →
+   开关状态 + 运行态计数）
+3. **POST /api/v1/tools/categories/{category}/{key}/control** — 提供者开关
+   经统一写回器 update_config_values 写 tools.toml（重启后生效；未知成员 /
+   Agent 自声明分类 400）
+4. **POST /api/v1/tools/{full_name}/control** — 工具级停用/启用（写
+   tools.disabled_tools，全名口径，重启后生效）
+5. **POST /api/v1/tools/{full_name}/invoke** — 调试调用（source=
+   dashboard-debug 透传 registry；未知 404 / arguments 超限 400 /
+   工具级失败 200+success=false）
+6. tool_registry=None → 503
+"""
+
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+def _load_tools_toml(config_dir: Path) -> dict:
+    """读测试 config 目录下的 tools.toml 为 dict（tomllib 只读，用于落盘断言；
+    配置管线落盘带 BOM，需以 utf-8-sig 剥除）。"""
+    text = (config_dir / "tools.toml").read_text(encoding="utf-8-sig")
+    return tomllib.loads(text)
+
+
+def _make_spec(
+    name: str,
+    description: str,
+    parameters_schema=None,
+    provider: str = "framework",
+    kind: str = "sync",
+    result_event: str = "",
+):
+    from src.modules.tools.models import ToolSpec
+
+    return ToolSpec(
+        name=name,
+        description=description,
+        parameters_schema=parameters_schema,
+        kind=kind,
+        result_event=result_event,
+        provider=provider,
+    )
+
+
+class _FakeToolRegistry:
+    """最小 registry 替身（list_tools + category_of + 停用集 + invoke）。
+
+    停用集与 invoke 键均按全名（``spec.full_name``）索引，对齐真实
+    registry 的 ``_tools`` / ``_disabled`` 口径。
+    """
+
+    def __init__(
+        self,
+        specs,
+        categories: dict[str, str] | None = None,
+        providers: list[dict] | None = None,
+    ) -> None:
+        self._specs = list(specs)
+        self._categories = dict(categories or {})
+        self._disabled: set[str] = set()
+        self._scoped_owner: dict[str, str] = {}
+        self._supports_reconnect: dict[str, bool] = {}
+        self._providers_view = list(providers or [])
+        # 调试调用记录与按工具名钉死的返回结果（未钉死走默认成功结果）
+        self.invocations: list[Any] = []
+        self._invoke_results: dict[str, Any] = {}
+
+    def list_providers(self) -> list[dict]:
+        """Provider 运营摘要（注册表驱动工具页的卡片数据源）。"""
+        return list(self._providers_view)
+
+    def list_tools(
+        self,
+        provider=None,
+        *,
+        include_disabled: bool = False,
+        include_tripped: bool = False,
+        include_scoped: bool = False,
+    ):
+        specs = [s for s in self._specs if include_disabled or s.full_name not in self._disabled]
+        if provider is not None:
+            specs = [s for s in specs if s.provider == provider]
+        if provider is None and not include_scoped:
+            specs = [s for s in specs if s.name not in self._scoped_owner]
+        return specs
+
+    def category_of(self, name: str) -> str:
+        """语义对齐真实 registry：按注册键（全名）查 spec，再按 provider 反查分类。"""
+        spec = next((s for s in self._specs if s.full_name == name), None)
+        if spec is None:
+            return ""
+        return self._categories.get(spec.provider, "")
+
+    def has(self, name: str) -> bool:
+        return any(s.full_name == name for s in self._specs)
+
+    async def invoke(self, invocation) -> Any:
+        from src.modules.tools.models import ToolExecutionResult
+        from src.modules.time_utils import now_ms
+
+        self.invocations.append(invocation)
+        handler = self._invoke_results.get(invocation.tool_name)
+        if handler is not None:
+            return handler(invocation)
+        return ToolExecutionResult(
+            tool_name=invocation.tool_name,
+            success=True,
+            content="ok",
+            timestamp_ms=now_ms(),
+        )
+
+    def set_invoke_result(self, full_name: str, handler: Any) -> None:
+        """钉死某工具的调用返回（handler: invocation → ToolExecutionResult）。"""
+        self._invoke_results[full_name] = handler
+
+    def apply_disabled(self, names) -> int:
+        self._disabled = {n for n in names if any(s.full_name == n for s in self._specs)}
+        return len(self._disabled)
+
+    def is_disabled(self, name: str) -> bool:
+        return name in self._disabled
+
+    def scoped_owner_of(self, name: str) -> str:
+        return self._scoped_owner.get(name, "")
+
+    def provider_supports_reconnect(self, name: str) -> bool:
+        return self._supports_reconnect.get(name, False)
+
+    def set_supports_reconnect(self, name: str, value: bool) -> None:
+        self._supports_reconnect[name] = value
+
+
+def _default_specs():
+    return [
+        _make_spec(
+            "vts_trigger_hotkey",
+            "触发 VTS 热键",
+            {
+                "type": "object",
+                "properties": {
+                    "hotkey": {"type": "string", "description": "热键名"},
+                    "speed": {
+                        "type": "number",
+                        "default": 1.0,
+                        "minimum": 0.5,
+                        "maximum": 2.0,
+                    },
+                },
+                "required": ["hotkey"],
+            },
+            provider="vts",
+        ),
+        _make_spec(
+            "reply_to_user",
+            "回复用户",
+            {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+            provider="streamer",
+            kind="async",
+            result_event="tool.result.reply_to_user",
+        ),
+        # framework provider 的 LLM 工具面代表（委派原语）
+        _make_spec("framework_delegate", "委派工作", provider="framework"),
+    ]
+
+
+def _default_categories() -> dict[str, str]:
+    # 键 = provider 名（分类按 provider 归账，对齐真实 registry 的 _categories 形状）
+    return {
+        "vts": "avatar",
+        "streamer": "streamer",
+        "framework": "framework",
+    }
+
+
+def _build_server(config_dir: Path, registry):
+    from src.modules.config.core_schemas import DashboardConfig
+    from src.modules.config.service import ConfigService
+    from src.modules.dashboard.server import DashboardServer
+
+    svc = ConfigService(base_dir=str(config_dir.parent))
+    svc.initialize()
+    return DashboardServer(
+        event_bus=None,  # type: ignore[arg-type]
+        config_service=svc,
+        dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
+        tool_registry=registry,  # type: ignore[arg-type]
+    )
+
+
+def _prepare_config(config_dir: Path) -> None:
+    """首启生成七文件基线，再经统一写回器铺出覆盖全部成员形态的配置态：
+    avatar 平台名单（avatar.toml）+ 分类成员（studio）+ 分类级开关（vision）
+    + mcp server（通用通道）。"""
+    from src.modules.config.multi_file_loader import update_config_values
+    from src.modules.config.service import ConfigService
+
+    ConfigService(base_dir=str(config_dir.parent)).initialize()
+    update_config_values(
+        config_dir,
+        "tools.toml",
+        {
+            "tools.studio.obs": {"enabled": False},
+            "tools.vision.enabled": True,
+            "tools.mcp.enabled": False,
+            "tools.mcp.config.servers.generic_mcp": {"enabled": True},
+        },
+    )
+    update_config_values(
+        config_dir,
+        "avatar.toml",
+        {"platform.enabled": ["vts"]},
+    )
+
+
+@pytest.fixture
+def config_dir(tmp_path: Path) -> Path:
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    return cfg
+
+
+@pytest.fixture
+def tools_config_dir(tmp_path: Path) -> Path:
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    _prepare_config(cfg)
+    return cfg
+
+
+@pytest.fixture
+def client(config_dir: Path):
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    yield TestClient(create_app())
+    set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+@pytest.fixture
+def tools_client(tools_config_dir: Path):
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    server = _build_server(tools_config_dir, registry)
+    set_dashboard_server(server)
+    yield TestClient(create_app())
+    set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def _current_registry() -> "_FakeToolRegistry":
+    """取当前 fixture 装配的 registry 替身（断言 invocation 透传用）。"""
+    from src.modules.dashboard.dependencies import get_dashboard_server
+
+    return get_dashboard_server().tool_registry  # type: ignore[return-value]
+
+
+# ==================== GET /tools ====================
+
+
+def test_tools_returns_tools_with_name(client: TestClient) -> None:
+    """动作名 = 工具自身名（名称已含 provider 前缀，不再拼接）。"""
+    resp = client.get("/api/v1/tools")
+    assert resp.status_code == 200
+    body = resp.json()
+    names = {a["name"] for a in body["tools"]}
+    assert "vts_trigger_hotkey" in names
+    assert "reply_to_user" in names
+
+
+def test_tools_action_description_passthrough(client: TestClient) -> None:
+    resp = client.get("/api/v1/tools")
+    by_name = {a["name"]: a for a in resp.json()["tools"]}
+    assert by_name["vts_trigger_hotkey"]["description"] == "触发 VTS 热键"
+    assert by_name["reply_to_user"]["description"] == "回复用户"
+
+
+def test_tools_expose_provider_kind_category_metadata(client: TestClient) -> None:
+    """ToolSpec 的 provider/kind 与 registry 分类透传给前端。"""
+    resp = client.get("/api/v1/tools")
+    by_name = {a["name"]: a for a in resp.json()["tools"]}
+
+    hotkey = by_name["vts_trigger_hotkey"]
+    assert hotkey["provider"] == "vts"
+    assert hotkey["kind"] == "sync"
+    assert hotkey["category"] == "avatar"
+    assert "result_event" not in hotkey  # 同步工具无结果事件
+
+    reply = by_name["reply_to_user"]
+    assert reply["kind"] == "async"
+    assert reply["result_event"] == "tool.result.reply_to_user"
+
+
+def test_tools_expose_full_name_registry_key(client: TestClient) -> None:
+    """条目带 full_name（注册表调用键 = <provider>_<裸名>），前端调试调用/停用以它为标识。"""
+    resp = client.get("/api/v1/tools")
+    by_name = {a["name"]: a for a in resp.json()["tools"]}
+    assert by_name["vts_trigger_hotkey"]["full_name"] == "vts_vts_trigger_hotkey"
+    assert by_name["framework_delegate"]["full_name"] == "framework_framework_delegate"
+
+
+def test_tools_non_scalar_params_map_to_json_type(config_dir: Path) -> None:
+    """array/object/缺失 type 的参数 → type=json 保留（不静默丢弃，MCP 复杂参数形态）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    specs = [
+        _make_spec(
+            "complex_tool",
+            "复杂参数工具",
+            {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "目标"},
+                    "blueprint": {"type": "object", "description": "蓝图对象"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "mystery": {"description": "无 type 声明"},
+                },
+                "required": ["goal"],
+            },
+            provider="mcp",
+        ),
+    ]
+    registry = _FakeToolRegistry(specs, {"mcp": "mcp"})
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        by_name = {a["name"]: a for a in resp.json()["tools"]}
+        params = by_name["complex_tool"]["parameters"]
+        assert set(params) == {"goal", "blueprint", "tags", "mystery"}
+        assert params["goal"]["type"] == "string"
+        assert params["blueprint"]["type"] == "json"
+        assert params["tags"]["type"] == "json"
+        assert params["mystery"]["type"] == "json"
+        assert params["blueprint"]["description"] == "蓝图对象"
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_includes_disabled_flag(config_dir: Path) -> None:
+    """/tools 返回全集（含停用），disabled 按全名（注册表停用集口径）标记状态。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    registry.apply_disabled(["vts_vts_trigger_hotkey"])
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        by_name = {a["name"]: a for a in resp.json()["tools"]}
+        assert by_name["vts_trigger_hotkey"]["disabled"] is True
+        assert by_name["reply_to_user"]["disabled"] is False
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_expose_owner_agent_for_scoped_tools(config_dir: Path) -> None:
+    """/tools 条目含 owner_agent 字段；归属限定的工具标其 Agent 名，无归属为空串。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    # 模拟归属限定：vts_trigger_hotkey 归属 'minecraft'
+    registry._scoped_owner["vts_trigger_hotkey"] = "minecraft"
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        by_name = {a["name"]: a for a in resp.json()["tools"]}
+        assert by_name["vts_trigger_hotkey"]["owner_agent"] == "minecraft"
+        assert by_name["reply_to_user"]["owner_agent"] == ""
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_provider_query_filter(client: TestClient) -> None:
+    """?provider= 过滤透传 registry。"""
+    resp = client.get("/api/v1/tools", params={"provider": "vts"})
+    names = {a["name"] for a in resp.json()["tools"]}
+    assert names == {"vts_trigger_hotkey"}
+
+
+def test_tools_parameters_map_to_parameter_spec(client: TestClient) -> None:
+    """parameters_schema.properties[*] → Record<key, ParameterSpec>。"""
+    resp = client.get("/api/v1/tools")
+    by_name = {a["name"]: a for a in resp.json()["tools"]}
+
+    hotkey_params = by_name["vts_trigger_hotkey"]["parameters"]
+    assert hotkey_params["hotkey"]["type"] == "string"
+    assert hotkey_params["hotkey"]["required"] is True
+    assert hotkey_params["hotkey"]["description"] == "热键名"
+    assert hotkey_params["speed"]["type"] == "number"
+    assert hotkey_params["speed"]["default"] == 1.0
+    assert hotkey_params["speed"]["minimum"] == 0.5
+    assert hotkey_params["speed"]["maximum"] == 2.0
+    assert hotkey_params["speed"]["required"] is False
+
+
+def test_tools_handlers_endpoint_removed(client: TestClient) -> None:
+    resp = client.get("/api/v1/handlers")
+    assert resp.status_code == 404
+
+
+def test_tools_returns_503_when_registry_missing(config_dir: Path) -> None:
+    """tool_registry 未注入时返回 503（与原契约一致）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    server = _build_server(config_dir, None)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        assert resp.status_code == 503
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_empty_when_registry_empty(config_dir: Path) -> None:
+    """空注册表返回 tools=[]（不抛 500）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    server = _build_server(config_dir, _FakeToolRegistry([]))
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        assert resp.status_code == 200
+        assert resp.json() == {"tools": []}
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_magicmock_registry_returns_tools(config_dir: Path) -> None:
+    """MagicMock（test_components_v2_api 风格）作为 registry 也能跑通（无异常路径）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    class _EmptyRegistry:
+        def list_tools(self, provider=None, *, include_disabled: bool = False, include_tripped: bool = False):
+            return []
+
+        def category_of(self, name: str) -> str:
+            return ""
+
+    server = _build_server(config_dir, MagicMock(spec=_EmptyRegistry))
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        assert resp.status_code == 200
+        assert resp.json()["tools"] == []
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+# ==================== GET /tools/categories ====================
+
+
+def test_categories_lists_static_members(tools_client: TestClient) -> None:
+    """静态成员按分类聚组，携带配置态与运行态计数。"""
+    resp = tools_client.get("/api/v1/tools/categories")
+    assert resp.status_code == 200
+    by_category = {c["category"]: c for c in resp.json()["categories"]}
+    assert list(by_category) == ["avatar", "studio", "vision", "memory", "web", "mcp", "game", "framework"]
+
+    avatar_keys = {p["key"]: p for p in by_category["avatar"]["providers"]}
+    assert set(avatar_keys) == {"vts", "vrchat", "warudo"}
+    assert avatar_keys["vts"]["enabled"] is True
+    assert avatar_keys["vts"]["in_config"] is True
+    assert avatar_keys["vts"]["switchable"] is True
+    assert avatar_keys["vts"]["tool_count"] == 1
+    assert avatar_keys["vts"]["disabled_count"] == 0
+    assert avatar_keys["vts"]["provider_name"] == "vts"
+    # 配置未声明的已知成员仍列出（供面板直接开启）
+    assert avatar_keys["vrchat"]["in_config"] is False
+    assert avatar_keys["vrchat"]["enabled"] is False
+
+    obs = {p["key"]: p for p in by_category["studio"]["providers"]}["obs"]
+    assert obs["enabled"] is False
+    assert obs["provider_name"] == "obs"
+    assert obs["tool_count"] == 0
+
+    vision = {p["key"]: p for p in by_category["vision"]["providers"]}["vision"]
+    assert vision["enabled"] is True
+    assert vision["tool_count"] == 0  # 配置开但 fake registry 无该分类工具
+
+
+def test_categories_lists_mcp_servers_dynamically(tools_client: TestClient) -> None:
+    """mcp 分类提供者 = 配置声明的各 server（注册表无该 Provider 时为声明态卡片）。"""
+    resp = tools_client.get("/api/v1/tools/categories")
+    by_category = {c["category"]: c for c in resp.json()["categories"]}
+    mcp_providers = {p["key"]: p for p in by_category["mcp"]["providers"]}
+    assert mcp_providers == {
+        "generic_mcp": {
+            "key": "generic_mcp",
+            "provider_name": "generic_mcp",
+            "description": "MCP server",
+            "enabled": True,
+            "in_config": True,
+            "switchable": True,
+            "tool_count": 0,
+            "disabled_count": 0,
+            "registered": False,
+            "degraded": False,
+            "supports_reconnect": False,
+            "last_error": "",
+            "notice": "",
+        }
+    }
+
+
+def test_categories_agent_categories_not_switchable(tools_client: TestClient) -> None:
+    """game / framework 随 agents.toml 启用列表存在，不可开关。
+
+    新契约：随 Agent 分类的提供者由注册表动态发现（``list_providers``），
+    不做静态预设——旧注册表替身（无 list_providers）下两类均为空列表，
+    空分类仍输出以保持侧边栏稳定。
+    """
+    resp = tools_client.get("/api/v1/tools/categories")
+    by_category = {c["category"]: c for c in resp.json()["categories"]}
+
+    assert by_category["game"]["providers"] == []
+    assert by_category["framework"]["providers"] == []
+
+
+def test_categories_runtime_count_uses_registry_category(tools_client: TestClient) -> None:
+    """运行时计数按 (分类, provider 标识) 聚合，不按名字猜测。"""
+    resp = tools_client.get("/api/v1/tools/categories")
+    by_category = {c["category"]: c for c in resp.json()["categories"]}
+    avatar_keys = {p["key"]: p for p in by_category["avatar"]["providers"]}
+    assert avatar_keys["vts"]["tool_count"] == 1
+    assert avatar_keys["warudo"]["tool_count"] == 0
+
+
+def _registry_with_degraded_mcp() -> "_FakeToolRegistry":
+    """带降级 MCP Provider 记录的 registry 替身（Agent 私有 maicraft 形态）。"""
+    return _FakeToolRegistry(
+        [],
+        categories={},
+        providers=[
+            {
+                "name": "maicraft",
+                "category": "mcp",
+                "tool_count": 0,
+                "disabled_count": 0,
+                "supports_reconnect": True,
+                "last_error": "RuntimeError: Client failed to connect",
+                "switch": {"file": "agents.toml", "key": "agents.minecraft.mcp.enabled"},
+            }
+        ],
+    )
+
+
+def test_categories_registry_provider_card_degraded(config_dir: Path) -> None:
+    """注册表驱动的降级卡片：连接失败 0 工具的 Provider 也可见（degraded + 原因）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    server = _build_server(config_dir, _registry_with_degraded_mcp())
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools/categories")
+        assert resp.status_code == 200
+        by_category = {c["category"]: c for c in resp.json()["categories"]}
+        mcp = {p["key"]: p for p in by_category["mcp"]["providers"]}
+        card = mcp["maicraft"]
+        assert card["registered"] is True
+        assert card["degraded"] is True, "已登记但 0 工具 = 降级态"
+        assert card["supports_reconnect"] is True
+        assert "Client failed to connect" in card["last_error"]
+        assert "身体事件采集器" in card["notice"], "Agent 私有 MCP 卡片带采集器提示"
+        assert card["enabled"] is True, "开关状态读自 agents.minecraft.mcp.enabled（基线默认启用）"
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_control_agent_private_mcp_routes_to_agents_toml(
+    tools_config_dir: Path,
+) -> None:
+    """Agent 私有 MCP 开关：按 switch 声明写回 agents.toml（非 tools.toml）。"""
+    import tomllib
+
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    server = _build_server(tools_config_dir, _registry_with_degraded_mcp())
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post(
+            "/api/v1/tools/categories/mcp/maicraft/control",
+            json={"action": "disable"},
+        )
+        assert resp.status_code == 200
+        assert "agents.toml" in resp.json()["message"]
+        text = (tools_config_dir / "agents.toml").read_text(encoding="utf-8-sig")
+        doc = tomllib.loads(text)
+        assert doc["agents"]["minecraft"]["mcp"]["enabled"] is False
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+# ==================== POST /tools/categories/.../control ====================
+
+
+def test_control_disables_avatar_member(tools_client: TestClient, tools_config_dir: Path) -> None:
+    """avatar 平台开关 = 启用名单增删（写 avatar.toml [avatar.platform].enabled）。"""
+    resp = tools_client.post("/api/v1/tools/categories/avatar/vts/control", json={"action": "disable"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["enabled"] is False
+    assert "重启后生效" in body["message"]
+
+    # 落盘形态用 tomllib 只读断言：名单移除 vts（文件根即 AvatarRootConfig）
+    text = (tools_config_dir / "avatar.toml").read_text(encoding="utf-8-sig")
+    assert "vts" not in tomllib.loads(text)["platform"]["enabled"]
+
+
+def test_control_enables_studio_member(tools_client: TestClient, tools_config_dir: Path) -> None:
+    resp = tools_client.post("/api/v1/tools/categories/studio/obs/control", json={"action": "enable"})
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is True
+
+    assert _load_tools_toml(tools_config_dir)["tools"]["studio"]["obs"]["enabled"] is True
+
+
+def test_control_category_level_member_writes_flat_section(tools_client: TestClient, tools_config_dir: Path) -> None:
+    """vision/memory 为分类级开关，写 [tools.<分类>]，不落嵌套段。"""
+    resp = tools_client.post("/api/v1/tools/categories/vision/vision/control", json={"action": "disable"})
+    assert resp.status_code == 200
+
+    doc = _load_tools_toml(tools_config_dir)
+    assert doc["tools"]["vision"]["enabled"] is False
+    assert "vision" not in doc["tools"].get("vision", {})
+
+
+def test_control_mcp_server_writes_server_section(tools_client: TestClient, tools_config_dir: Path) -> None:
+    """mcp server 开关写 [tools.mcp.config.servers.<键>].enabled。"""
+    resp = tools_client.post("/api/v1/tools/categories/mcp/generic_mcp/control", json={"action": "disable"})
+    assert resp.status_code == 200
+
+    server_cfg = _load_tools_toml(tools_config_dir)["tools"]["mcp"]["config"]["servers"]["generic_mcp"]
+    assert server_cfg["enabled"] is False
+
+
+def test_control_rejects_agent_category(tools_client: TestClient) -> None:
+    """Agent 自声明分类不可开关。"""
+    resp = tools_client.post("/api/v1/tools/categories/game/game/control", json={"action": "enable"})
+    assert resp.status_code == 400
+
+
+def test_control_rejects_unknown_member(tools_client: TestClient) -> None:
+    resp = tools_client.post("/api/v1/tools/categories/bogus/key/control", json={"action": "enable"})
+    assert resp.status_code == 400
+
+
+# ==================== POST /tools/{full_name}/control（工具级） ====================
+
+
+def test_tool_control_disable_writes_disabled_list(tools_client: TestClient, tools_config_dir: Path) -> None:
+    """停用工具 → 全名进入 tools.disabled_tools（新契约：写盘后不触发热重载）。"""
+    resp = tools_client.post("/api/v1/tools/vts_vts_trigger_hotkey/control", json={"action": "disable"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["enabled"] is False
+    assert "重启后生效" in body["message"]
+
+    assert _load_tools_toml(tools_config_dir)["tools"]["disabled_tools"] == ["vts_vts_trigger_hotkey"]
+
+
+def test_tool_control_enable_removes_from_disabled_list(tools_client: TestClient, tools_config_dir: Path) -> None:
+    tools_client.post("/api/v1/tools/vts_vts_trigger_hotkey/control", json={"action": "disable"})
+    resp = tools_client.post("/api/v1/tools/vts_vts_trigger_hotkey/control", json={"action": "enable"})
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is True
+
+    # 新契约：落盘断言走 tomllib 只读（写路径经统一写回器，注释不保留）
+    assert _load_tools_toml(tools_config_dir)["tools"]["disabled_tools"] == []
+
+
+def test_tool_control_unknown_name_returns_404(tools_client: TestClient) -> None:
+    """停用未注册工具名 → 404（防拼写错误静默写入无效条目；全名口径）。"""
+    resp = tools_client.post("/api/v1/tools/ghost_tool/control", json={"action": "disable"})
+    assert resp.status_code == 404
+
+
+def test_tool_control_bare_name_is_not_registry_key(tools_client: TestClient) -> None:
+    """裸名不是注册表键 → 404（停用链路只认全名，防裸名静默写入无效条目）。"""
+    resp = tools_client.post("/api/v1/tools/vts_trigger_hotkey/control", json={"action": "disable"})
+    assert resp.status_code == 404
+
+
+# ==================== POST /tools/{full_name}/invoke（调试调用） ====================
+
+
+def test_invoke_success_passes_invocation_to_registry(client: TestClient) -> None:
+    """200 + 结果字段完整；registry 收到的 invocation 带 dashboard-debug 标记与全名。"""
+    resp = client.post(
+        "/api/v1/tools/vts_vts_trigger_hotkey/invoke",
+        json={"arguments": {"hotkey": "greet"}},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["content"] == "ok"
+    assert body["blocks"] == []
+    assert body["error_message"] == ""
+    assert body["structured_content"] is None
+    assert isinstance(body["duration_ms"], int)
+    assert isinstance(body["timestamp_ms"], int)
+
+    assert len(_current_registry().invocations) == 1
+
+
+def test_invoke_invocation_fields_source_call_id(client: TestClient) -> None:
+    """source=dashboard-debug、call_id 非空、arguments 原样透传（与 Agent 同路径的标识纪律）。"""
+    resp = client.post("/api/v1/tools/vts_vts_trigger_hotkey/invoke", json={"arguments": {"hotkey": "hi"}})
+    assert resp.status_code == 200
+    inv = _current_registry().invocations[0]
+    assert inv.tool_name == "vts_vts_trigger_hotkey"
+    assert inv.source == "dashboard-debug"
+    assert inv.call_id != ""
+    assert inv.arguments == {"hotkey": "hi"}
+
+
+def test_invoke_empty_body_defaults_arguments(client: TestClient) -> None:
+    """无参数工具：省略 arguments → 空 dict 透传。"""
+    resp = client.post("/api/v1/tools/framework_framework_delegate/invoke", json={})
+    assert resp.status_code == 200
+    assert _current_registry().invocations[0].arguments == {}
+
+
+def test_invoke_unknown_tool_returns_404(client: TestClient) -> None:
+    """未知全名 → 404（不触达 registry.invoke）。"""
+    resp = client.post("/api/v1/tools/ghost_tool/invoke", json={"arguments": {}})
+    assert resp.status_code == 404
+    assert "ghost_tool" in resp.json()["detail"]
+
+
+def test_invoke_rejects_oversized_arguments(client: TestClient) -> None:
+    """arguments 超过 64KB → 400（防大文本进 tool.result 事件流/落库）。"""
+    resp = client.post(
+        "/api/v1/tools/vts_vts_trigger_hotkey/invoke",
+        json={"arguments": {"hotkey": "x" * (64 * 1024 + 1)}},
+    )
+    assert resp.status_code == 400
+    assert "超限" in resp.json()["detail"]
+
+
+def test_invoke_tool_failure_is_200_with_success_false(client: TestClient) -> None:
+    """工具级失败（含停用/熔断短路）= 200 + success=false，失败原因是有效调试产出。"""
+    from src.modules.tools.models import ToolExecutionResult
+    from src.modules.time_utils import now_ms
+
+    registry = _current_registry()
+    registry.set_invoke_result(
+        "vts_vts_trigger_hotkey",
+        lambda inv: ToolExecutionResult(
+            tool_name=inv.tool_name,
+            success=False,
+            error_message="工具 'vts_vts_trigger_hotkey' 已停用（可在 Web UI 工具页重新启用）",
+            timestamp_ms=now_ms(),
+        ),
+    )
+    resp = client.post("/api/v1/tools/vts_vts_trigger_hotkey/invoke", json={"arguments": {}})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert "已停用" in body["error_message"]
+
+
+def test_invoke_serializes_structured_content_and_blocks(client: TestClient) -> None:
+    """structured_content dict 原样、非可序列化对象 str() 兜底；blocks 透出。"""
+    from src.modules.tools.models import ResultBlock, ToolExecutionResult
+    from src.modules.time_utils import now_ms
+
+    sentinel = object()  # 不可 JSON 序列化 → 兜底 str()
+
+    def _handler(inv) -> ToolExecutionResult:
+        return ToolExecutionResult(
+            tool_name=inv.tool_name,
+            success=True,
+            content="done",
+            blocks=[ResultBlock(kind="text", text="块文本")],
+            structured_content={"count": 2, "weird": sentinel},
+            duration_ms=12,
+            timestamp_ms=now_ms(),
+        )
+
+    registry = _current_registry()
+    registry.set_invoke_result("vts_vts_trigger_hotkey", _handler)
+    resp = client.post("/api/v1/tools/vts_vts_trigger_hotkey/invoke", json={"arguments": {}})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["structured_content"] == {"count": 2, "weird": str(sentinel)}
+    assert body["blocks"] == [{"kind": "text", "text": "块文本", "data": "", "mime_type": ""}]
+    assert body["duration_ms"] == 12
+
+
+def test_tool_control_enable_unregistered_name_is_noop(tools_client: TestClient) -> None:
+    """启用一个本来就不在停用列表的名字 → 幂等成功。"""
+    resp = tools_client.post("/api/v1/tools/ghost_tool/control", json={"action": "enable"})
+    assert resp.status_code == 200
+
+
+# ==================== 关键内部件停用保护（警示确认语义） ====================
+# 控制类工具已移出 LLM 工具面（控制面直调 AgentControl），关键件清单当前为空；
+# 警示确认语义由 tools.py 保留，此处仅覆盖非关键工具不受 confirm 约束。
+
+
+def test_tool_control_non_critical_tool_ignores_confirm(tools_client: TestClient) -> None:
+    """非关键工具停用不需要 confirm（缺省 False 不拦截）。"""
+    resp = tools_client.post("/api/v1/tools/vts_vts_trigger_hotkey/control", json={"action": "disable"})
+    assert resp.status_code == 200
+
+
+# ==================== health 字段合并（熔断/恢复快照注入响应） ====================
+
+
+class _HealthStubRegistry:
+    """最小 stub：list_tools 接 include_tripped，tool_health_snapshot 返回钉死数据。"""
+
+    def __init__(self, specs, *, snapshot: dict[str, dict[str, Any]] | None = None) -> None:
+        self._specs = list(specs)
+        self._snapshot = dict(snapshot or {})
+        self._disabled: set[str] = set()
+        self._tripped: set[str] = set()
+        self._categories: dict[str, str] = {}
+        self._scoped_owner: dict[str, str] = {}
+
+    def list_tools(
+        self,
+        provider=None,
+        *,
+        include_disabled: bool = False,
+        include_tripped: bool = False,
+        include_scoped: bool = False,
+    ):
+        specs = list(self._specs)
+        if not include_disabled:
+            specs = [s for s in specs if s.name not in self._disabled]
+        if not include_tripped:
+            specs = [s for s in specs if s.name not in self._tripped]
+        if provider is not None:
+            specs = [s for s in specs if s.provider == provider]
+        if provider is None and not include_scoped:
+            specs = [s for s in specs if s.name not in self._scoped_owner]
+        return specs
+
+    def category_of(self, name: str) -> str:
+        return self._categories.get(name, "")
+
+    def is_disabled(self, name: str) -> bool:
+        return name in self._disabled
+
+    def scoped_owner_of(self, name: str) -> str:
+        return self._scoped_owner.get(name, "")
+
+    def tool_health_snapshot(self) -> dict[str, dict[str, Any]]:
+        return {k: dict(v) for k, v in self._snapshot.items()}
+
+    def apply_tripped(self, names) -> None:
+        self._tripped = {n for n in names if any(s.name == n for s in self._specs)}
+
+
+def _build_health_server(config_dir: Path, registry):
+    from src.modules.config.core_schemas import DashboardConfig
+    from src.modules.config.service import ConfigService
+    from src.modules.dashboard.server import DashboardServer
+
+    svc = ConfigService(base_dir=str(config_dir.parent))
+    svc.initialize()
+    return DashboardServer(
+        event_bus=None,  # type: ignore[arg-type]
+        config_service=svc,
+        dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
+        tool_registry=registry,  # type: ignore[arg-type]
+    )
+
+
+def test_tools_response_exposes_health_field_for_tripped_tool(config_dir: Path) -> None:
+    """tripped 工具的 health 字段是带 state/tripped_at_ms 的对象；其他工具为 None。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    snapshot = {
+        "vts_trigger_hotkey": {
+            "provider": "vts",
+            "state": "tripped",
+            "failure_count": 5,
+            "last_error": "ConnectionError: VTS 不可达",
+            "tripped_at_ms": 1700000000000,
+        },
+    }
+    registry = _HealthStubRegistry(_default_specs(), snapshot=snapshot)
+    server = _build_health_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        assert resp.status_code == 200
+        by_name = {a["name"]: a for a in resp.json()["tools"]}
+
+        assert by_name["vts_trigger_hotkey"]["health"] == {
+            "state": "tripped",
+            "failure_count": 5,
+            "last_error": "ConnectionError: VTS 不可达",
+            "tripped_at_ms": 1700000000000,
+        }
+        assert by_name["reply_to_user"]["health"] is None
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_response_health_none_when_snapshot_missing_method(config_dir: Path) -> None:
+    """registry 不实现 tool_health_snapshot 时，所有 health 字段都是 None（不抛 500）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    server = _build_health_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        assert resp.status_code == 200
+        for entry in resp.json()["tools"]:
+            assert entry["health"] is None
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_listing_includes_tripped_tools(config_dir: Path) -> None:
+    """include_tripped=True 路径：默认被熔断摘除的工具仍出现在 listing（带 health 对象）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    snapshot = {
+        "vts_trigger_hotkey": {
+            "provider": "vts",
+            "state": "tripped",
+            "failure_count": 3,
+            "last_error": "boom",
+            "tripped_at_ms": 1700000000000,
+        },
+    }
+    registry = _HealthStubRegistry(_default_specs(), snapshot=snapshot)
+    registry.apply_tripped(["vts_trigger_hotkey"])
+    server = _build_health_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        names = {a["name"] for a in resp.json()["tools"]}
+        assert "vts_trigger_hotkey" in names
+        assert "reply_to_user" in names
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+# ==================== supports_reconnect 字段（GET /tools 暴露）====================
+
+
+def test_tools_response_includes_supports_reconnect_field(client: TestClient) -> None:
+    """GET /tools 条目默认带 supports_reconnect 字段（值由 registry 决定）。"""
+    resp = client.get("/api/v1/tools")
+    by_name = {a["name"]: a for a in resp.json()["tools"]}
+    assert "supports_reconnect" in by_name["vts_trigger_hotkey"]
+    assert by_name["vts_trigger_hotkey"]["supports_reconnect"] is False
+    assert by_name["reply_to_user"]["supports_reconnect"] is False
+
+
+def test_tools_response_supports_reconnect_true_when_provider_supports(config_dir: Path) -> None:
+    """registry 报告某工具归属 Provider 支持重连 → 条目字段为 True。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    registry.set_supports_reconnect("vts_trigger_hotkey", True)
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        by_name = {a["name"]: a for a in resp.json()["tools"]}
+        assert by_name["vts_trigger_hotkey"]["supports_reconnect"] is True
+        assert by_name["reply_to_user"]["supports_reconnect"] is False
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_tools_response_supports_reconnect_false_when_registry_missing_method(config_dir: Path) -> None:
+    """registry 不实现 provider_supports_reconnect → 字段统一 False（不抛 500）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    class _NoReconnectQueryRegistry(_FakeToolRegistry):
+        # 故意不实现 provider_supports_reconnect
+        pass
+
+    registry = _NoReconnectQueryRegistry(_default_specs(), _default_categories())
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).get("/api/v1/tools")
+        for entry in resp.json()["tools"]:
+            assert entry["supports_reconnect"] is False
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+# ==================== POST /tools/providers/{provider_id}/reconnect ====================
+
+
+class _ReconnectFakeRegistry(_FakeToolRegistry):
+    """带 reconnect_provider 行为的 stub registry。"""
+
+    def __init__(self, specs, categories=None, *, reconnect_result: dict | None = None) -> None:
+        super().__init__(specs, categories)
+        self._reconnect_result = reconnect_result
+        self.reconnect_calls: list[str] = []
+
+    async def reconnect_provider(self, provider_id: str) -> dict:
+        self.reconnect_calls.append(provider_id)
+        if self._reconnect_result is None:
+            return {"ok": False, "error": f"未注册 Provider: {provider_id}"}
+        # 按 provider_id 选择性返回
+        return dict(self._reconnect_result)
+
+
+def test_reconnect_provider_success_returns_report(config_dir: Path) -> None:
+    """成功路径：200 + 报告 dict。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    result = {"ok": True, "provider_id": "vts", "recovered": ["vts_trigger_hotkey"], "still_tripped": []}
+    registry = _ReconnectFakeRegistry(_default_specs(), _default_categories(), reconnect_result=result)
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post("/api/v1/tools/providers/vts/reconnect")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["provider_id"] == "vts"
+        assert body["recovered"] == ["vts_trigger_hotkey"]
+        assert body["still_tripped"] == []
+        assert registry.reconnect_calls == ["vts"]
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_reconnect_provider_unknown_returns_404(config_dir: Path) -> None:
+    """未注册 provider_id → 404。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _ReconnectFakeRegistry(_default_specs(), _default_categories())
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post("/api/v1/tools/providers/ghost/reconnect")
+        assert resp.status_code == 404
+        assert "未注册 Provider" in resp.json()["detail"]
+        assert "ghost" in resp.json()["detail"]
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_reconnect_provider_unsupported_returns_409(config_dir: Path) -> None:
+    """已注册但不支持重连 → 409。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    result = {"ok": False, "error": "Provider 'reply' 不支持手动重连"}
+    registry = _ReconnectFakeRegistry(_default_specs(), _default_categories(), reconnect_result=result)
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post("/api/v1/tools/providers/reply/reconnect")
+        assert resp.status_code == 409
+        assert "不支持手动重连" in resp.json()["detail"]
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_reconnect_provider_failure_returns_500(config_dir: Path) -> None:
+    """重连失败（非未注册/非不支持）→ 500。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    result = {"ok": False, "error": "重连失败: 通道超时"}
+    registry = _ReconnectFakeRegistry(_default_specs(), _default_categories(), reconnect_result=result)
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post("/api/v1/tools/providers/vts/reconnect")
+        assert resp.status_code == 500
+        assert "通道超时" in resp.json()["detail"]
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
+
+
+def test_reconnect_provider_registry_missing_method_returns_503(config_dir: Path) -> None:
+    """registry 不实现 reconnect_provider → 503（旧版兼容路径）。"""
+    from src.modules.dashboard.api.router import create_app
+    from src.modules.dashboard.dependencies import set_dashboard_server
+
+    registry = _FakeToolRegistry(_default_specs(), _default_categories())
+    server = _build_server(config_dir, registry)
+    set_dashboard_server(server)
+    try:
+        resp = TestClient(create_app()).post("/api/v1/tools/providers/vts/reconnect")
+        assert resp.status_code == 503
+    finally:
+        set_dashboard_server(None)  # type: ignore[arg-type]
