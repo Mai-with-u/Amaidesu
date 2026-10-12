@@ -24,7 +24,9 @@ ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 @router.get("/events", response_model=EventListResponse)
 async def list_events(
     server: ServerDep,
-    limit: int = Query(50, ge=1, le=500, description="最大返回条数"),
+    # le=1000 对齐前端 events store 的 MAX_EVENTS：带游标拉缺口固定传 1000，
+    # 上限低于它即整请求 422（内存环形缓冲读取，放宽无成本）
+    limit: int = Query(50, ge=1, le=1000, description="最大返回条数"),
     type: Optional[str] = Query(None, description="事件类型筛选，逗号分隔"),
     level: Optional[str] = Query(None, description="严重级别筛选"),
     before_timestamp_ms: Optional[int] = Query(None, description="游标：返回此时间戳（Unix 毫秒）之前的事件"),
