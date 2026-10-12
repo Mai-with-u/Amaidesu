@@ -52,6 +52,7 @@ from src.modules.llm.payload import (
     ContextPart,
     GenerateRequest,
     ImagePart,
+    ImageRefPart,
     Message,
     Response,
     TextPart,
@@ -62,6 +63,7 @@ from src.modules.llm.payload import (
 from src.modules.logging import get_logger
 from src.modules.storage.repos import LLMRepo
 from src.modules.storage.repos.llm import LLMRequestInsert
+from src.modules.vision.image_store import get_image_store
 
 __all__ = ["LLMManager", "LLMResponse", "RetryConfig"]
 
@@ -95,7 +97,13 @@ _PAYLOAD_METHODS = frozenset({"generate", "generate_vision", "generate_audio"})
 
 
 def _content_to_parts(content: Any) -> List[Any]:
-    """OpenAI 风格 content（str / 分段列表）→ 中立 parts 列表"""
+    """OpenAI 风格 content（str / 分段列表）→ 中立 parts 列表
+
+    会话历史不允许内联图像（``image_url`` 分段）：base64 本体属
+    VisionImageStore，历史中只允许 ``image_ref`` 引用分段——历史被压缩器/
+    预算等多个消费者共享，任何整体序列化路径都会把内联 base64 当文本重发
+    （场次22-24 实锤单笔 86 万 tokens）。图要进对话，须经观察组装层放引用。
+    """
     if content is None:
         # 协议允许 assistant 发起 tool_calls 时 content 为 null（无伴随文本）
         return []
@@ -109,10 +117,13 @@ def _content_to_parts(content: Any) -> List[Any]:
             parts.append(piece)
         elif isinstance(piece, dict) and piece.get("type") == "text":
             parts.append(TextPart(text=str(piece.get("text", ""))))
+        elif isinstance(piece, dict) and piece.get("type") == "image_ref":
+            ref = str(piece.get("ref") or "")
+            if not ref:
+                raise TypeError("image_ref 分段缺少引用句柄（ref 为空）")
+            parts.append(ImageRefPart(ref=ref))
         elif isinstance(piece, dict) and piece.get("type") == "image_url":
-            image_url = piece.get("image_url")
-            url = image_url.get("url", "") if isinstance(image_url, dict) else str(image_url or "")
-            parts.append(ImagePart(image=url))
+            raise TypeError("对话消息不允许内联图像（image_url 分段）；图须经 VisionImageStore 以 image_ref 引用进历史")
         else:
             raise TypeError(f"不支持的消息 content 片段: {type(piece).__name__}")
     return parts
@@ -251,6 +262,66 @@ def _normalize_generate_input(
         temperature=temperature,
         system_parts=system_parts,
     )
+
+
+# 装配守卫阈值：请求文本字段超过该长度即硬错。注水后的 data URL 图像走
+# ImagePart 专用通道不在此列；文本字段里的超长内容只能是内联大载荷泄漏
+# （观察占位符契约被绕过），宁可拒发也不静默烧 token
+_MAX_INLINE_TEXT_CHARS = 200_000
+
+
+def _hydrate_image_refs(request: GenerateRequest) -> None:
+    """把消息中的图像引用按新鲜度窗口注水为内联 ImagePart。
+
+    窗口按位置计：引用所属消息之后的 assistant 消息数不足
+    ``VisionImageStore.visible_turns`` 才注水——截图的场景几轮就过期，
+    老图不值得每轮重发（场次22-24 的 8.4 万 token 轮次即残留图重发）。
+    逐出/越窗降级为提示文本，模型被明确告知图没了而不是收到静默缺图。
+    替换经 ``model_copy`` 重建消息，不改写入参对象（归一化可能原样引用
+    调用方手中的 Message）。
+    """
+    store = get_image_store()
+    messages = request.messages
+    for i, msg in enumerate(messages):
+        if not any(isinstance(part, ImageRefPart) for part in msg.parts):
+            continue
+        turns_after = sum(1 for later in messages[i + 1 :] if later.role == "assistant")
+        new_parts: List[Any] = []
+        for part in msg.parts:
+            if not isinstance(part, ImageRefPart):
+                new_parts.append(part)
+                continue
+            data = store.get(part.ref) if turns_after < store.visible_turns else None
+            if data is not None:
+                new_parts.append(ImagePart(image=data))
+            else:
+                reason = "已被逐出" if turns_after < store.visible_turns else f"距今已 {turns_after} 轮"
+                new_parts.append(TextPart(text=f"[截图不可用（{reason}），需要时重新截图]"))
+        messages[i] = msg.model_copy(update={"parts": new_parts})
+
+
+def _guard_inline_payload(request: GenerateRequest) -> None:
+    """装配守卫：请求文本字段超长即硬错（2026-10-12 拍板：宁拒发不静默烧）。
+
+    只扫文本承载字段（system / 文本 part）——注水后的 ImagePart.image 是
+    base64 唯一合法形态且经窗口限额；文本里出现超长内容只能说明某个工具
+    回执把二进制当文本带进了对话。
+    """
+    candidates: List[str] = []
+    if request.system:
+        candidates.append(request.system)
+    for msg in request.messages:
+        for part in msg.parts:
+            if isinstance(part, str):
+                candidates.append(part)
+            elif isinstance(part, TextPart):
+                candidates.append(part.text)
+    for text in candidates:
+        if len(text) > _MAX_INLINE_TEXT_CHARS:
+            raise ValueError(
+                f"装配守卫：请求文本含 {len(text)} 字符超长字段（上限 {_MAX_INLINE_TEXT_CHARS}），"
+                "疑似内联大载荷泄漏，拒绝发送；请检查工具回执是否把 base64 当文本进了对话"
+            )
 
 
 def _payload_response_to_legacy(resp: Response) -> LLMResponse:
@@ -511,6 +582,10 @@ class LLMManager:
         profile_name = self._resolve_profile_name(profile)
         request = _normalize_generate_input(input, system=system, tools=tools, temperature=temperature)
         request.strict_tool_arguments = strict_tool_arguments
+        # 图像引用先注水（引用→内联，越窗降级），再守卫（拒发内联大载荷）；
+        # 都在故障切换之前——结构性问题重试无意义
+        _hydrate_image_refs(request)
+        _guard_inline_payload(request)
         result = await self._call_with_failover(
             profile_name,
             method="generate",

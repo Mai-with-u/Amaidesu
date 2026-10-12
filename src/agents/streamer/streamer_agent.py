@@ -734,11 +734,18 @@ class StreamerAgent(BaseAgent):
         两者形状不同、更新频率不同，混在一条缓冲里会让高频的遭遇把进展挤掉，
         所以各留各的；同一件事若两条线都报（任务中遭遇攻击），由提示词规定
         只讲一次、以带任务上下文的那条为准。
+        死亡是要紧事：置位待定夺信号（与 game.report 同款），下次空缓冲 tick
+        立即促发一轮决策，主播当场知道、当场解说。
         """
         try:
             marker = "（已结束）" if getattr(payload, "resolved", False) else ""
             line = f"[{payload.game}·{payload.kind}] {sanitize_internal_terms(payload.summary)}{marker}"
             self._body_narrative.add(line, now_ms())
+            if payload.kind == "died":
+                # 死亡是要紧事：与 game.report 同款置位待定夺信号，下次空缓冲 tick 立即
+                # 促发一轮决策（绕最小间隔与每小时上限）。死亡连发时连窗是有意行为——
+                # 那是叙事价值最高的时刻，主播应当场知道、当场解说。
+                self._game_decision_pending = True
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集身体近况失败: {exc}")
 

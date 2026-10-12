@@ -101,6 +101,11 @@ _DEFAULT_RUNDOWN_OVERDUE_INTERVAL_MS: int = 60_000
 # hourly 窗口宽度：3 600 秒 = 3 600 000 毫秒
 _HOURLY_WINDOW_MS: int = 3_600_000
 
+# 内容推进类触发源：在 should_trigger 里本来就绕过 max_per_hour，记录时不占
+# hourly 额度——自己绕过上限的来源不该占别人的额度（否则话痨期几十个流程单
+# 窗把账记满，冷场/定时触发在此后一小时内全被上限扣死）。
+_UNCAPPED_REASONS = frozenset({"rundown", "game", "reminder"})
+
 
 def _cfg(config: Any, key: str, default: Any) -> Any:
     """从配置对象读取字段值。
@@ -324,17 +329,21 @@ class ProactiveTrigger:
     def record_trigger(self, reason: str, now_ms: int) -> None:
         """记录一次主动触发（由 StreamerAgent 在发布发言成功后调用）。
 
-        更新 ``_last_trigger_ms`` 并在 hourly 窗口中追加 ``now_ms``。
-        ``reason`` 仅由调用方用于日志/统计；本组件内部行为对所有 reason 一致。
+        更新 ``_last_trigger_ms``；受限触发源（``external`` / ``schedule`` /
+        ``cold``）还会在 hourly 窗口中追加 ``now_ms``。内容推进类触发源
+        （``rundown`` / ``game`` / ``reminder``）只在 should_trigger 里绕过
+        ``max_per_hour``——它们照常记账的话，高频推进窗会把 hourly 账本记满，
+        受限源此后一小时内全被 6 次上限扣死；自己绕过上限的来源不该占别人的
+        额度，因此只更新时刻、不追加历史。
 
         Args:
             reason: 触发原因字符串（``"external"`` / ``"rundown"`` /
-                ``"schedule"`` / ``"cold"``）。
+                ``"game"`` / ``"reminder"`` / ``"schedule"`` / ``"cold"``）。
             now_ms: 触发时刻（Unix 毫秒）。
         """
-        del reason  # 接口完整性保留；当前实现不分原因处理
         self._last_trigger_ms = now_ms
-        self._trigger_history.append(now_ms)
+        if reason not in _UNCAPPED_REASONS:
+            self._trigger_history.append(now_ms)
 
     # ------------------------------------------------------------------
     # 内部

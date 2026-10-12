@@ -8,6 +8,12 @@ MaiCraft v1 的事件流里大部分是目标运行的处境变化（开始、�
 退离边沿）、角色自己处理不了的需求（饿了没吃上、封顶没封上）、角色死亡；装备用坏和探索途中的发现
 也是主播能讲的经历。`maicraft_attention` 采集器只把这些转成 `game.body.*` 事件，任务通道的事件留在上游。
 
+事件流里剩余种类的去向三分（判据）：
+- 步进完成（`step_finished`）：主播可讲的进展——画面在动、Mod 自带结论句（如"采集完成：8 个
+  橡木原木进了背包"）——转成 `game.milestone`，走主播侧现成的订阅与落库；
+- 目标开始/提问/暂停/继续：游戏 Agent 的任务通道，留在上游；
+- 目标完成/失败/卡住：不经这里——交付与升级走 `game.report`（自带主播唤醒）。
+
 提醒（快溺水、装备快坏、黑暗里反复挨打这类）是写给游戏 Agent 的维护提示，证据在 observe(self) 里，
 不是遭遇本身；转给主播只会变成一串重复的"身体事件"，把真正的挨打和死亡挤掉，所以不进叙事通道。
 
@@ -36,6 +42,8 @@ KIND_TO_EVENT: Dict[str, str] = {
     "dimension_changed": CoreEvents.GAME_BODY_DIMENSION_CHANGED,
     "need_unhandled": CoreEvents.GAME_BODY_NEED_UNHANDLED,
     "unknown": CoreEvents.GAME_BODY_UNKNOWN,
+    # 步进完成不进身体事件通道，转 game.milestone（主播可讲的进展）
+    "milestone": CoreEvents.GAME_MILESTONE,
 }
 
 #: 已经是"结局面"的种类（主播据此把措辞从"正在"改成"刚才"）
@@ -51,12 +59,13 @@ _SOURCE_KINDS: Dict[str, str] = {
     "need_unhandled": "need_unhandled",
     # 角色血量见底进了死亡流程：Mod 只发这一条，重生后接着做原来的目标，不另发重生事件。
     "character_died": "died",
+    # 步进完成是主播可讲的进展（画面在动、自带结论句），转 milestone 通道
+    "step_finished": "milestone",
 }
 
 #: 目标运行的处境变化与死亡恢复决策的执行结果：游戏 Agent 的任务通道，不进叙事通道
-_GOAL_KINDS = frozenset(
-    {"started", "asked", "paused", "resumed", "step_finished", "finished", "death_recovery_applied"}
-)
+# （步进完成除外——它转 milestone；目标完成/失败/卡住不经这里，交付与升级走 game.report）
+_GOAL_KINDS = frozenset({"started", "asked", "paused", "resumed", "finished", "death_recovery_applied"})
 
 #: 写给游戏 Agent 的维护提示：证据在 observe(self) 里，不是遭遇，不进叙事通道
 _SILENT_KINDS = frozenset({"reminder"})

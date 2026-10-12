@@ -3,8 +3,8 @@
 对话通道与 UI 通道分离：LLM 观察只看文本答案与轻量元数据；base64
 二进制载荷（截图等）属于 UI 展示通道，经 ``tool.result`` 事件进 WebUI
 工具卡。本模块承载"载荷 → 对话安全视图"（递归滤除二进制）与视觉调用
-方的带图观察组装（图以独立 image part 进消息，OpenAI content parts
-方言经引擎归一化直通中立 ImagePart）。
+方的带图观察组装（图以 ``image_ref`` 引用 part 进消息——base64 本体在
+VisionImageStore，引擎装配期按新鲜度窗口注水，历史里不出现内联大载荷）。
 
 判定刻意保守：长度超过 1KB、仅含 base64 字符集（A-Za-z0-9+/=）且无
 空白字符，三者同时成立才替换。中文长文、URL、JSON 文本必然含空白或
@@ -76,15 +76,17 @@ def is_tool_message(value: Any) -> bool:
     return isinstance(value, dict) and value.get("role") == "tool" and "content" in value
 
 
-def build_tool_message(*, rendered: str, image_data_urls: List[str], tool_call_id: str) -> Dict[str, Any]:
-    """组装带图的 tool 消息（OpenAI content parts 方言）。
+def build_tool_message(*, rendered: str, image_refs: List[str], tool_call_id: str) -> Dict[str, Any]:
+    """组装带图引用的 tool 消息。
 
-    ``rendered`` 是占位符版观察 JSON 文本——图以独立 image part 附上，
-    文本部分不重复携带 base64；``tool_call_id`` 由调用方传当前工具调用
-    的配对 ID（tool 消息必须回应带 tool_calls 的 assistant 消息）。
+    ``rendered`` 是占位符版观察 JSON 文本；图以 ``image_ref`` 引用 part
+    附上——base64 本体在 VisionImageStore，引擎装配期按新鲜度窗口注水，
+    历史与压缩等任何整体序列化消费者都只见几十字节的句柄。
+    ``tool_call_id`` 由调用方传当前工具调用的配对 ID（tool 消息必须回应
+    带 tool_calls 的 assistant 消息）。
     """
     content: List[Dict[str, Any]] = [{"type": "text", "text": rendered}]
-    content.extend({"type": "image_url", "image_url": {"url": url}} for url in image_data_urls)
+    content.extend({"type": "image_ref", "ref": ref} for ref in image_refs)
     return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
 
 

@@ -3,7 +3,8 @@ MaicraftAttentionCollector —— AI 玩家身体事件采集器
 
 上游是 MaiCraft v1 的事件流（``events`` 默认的 ``self``：角色身上发生的事）：挨了一阵打、换了维度、生存需求插进来的
 临时任务（自卫、夜里封顶自保、退离边沿）开始与结束、角色自己处理不了的需求、角色死亡，都写在这条流上。本采集器**常驻**带着游标长轮询，
-把其中的身体遭遇转成 ``game.body.*`` 事件；目标运行的处境变化归游戏 Agent 的任务通道，不转。
+把其中的身体遭遇转成 ``game.body.*`` 事件；步进完成（主播可讲的进展）转成 ``game.milestone``；
+目标运行的处境变化归游戏 Agent 的任务通道，不转。
 连接、长轮询与游标都在 :class:`MaicraftEventsCollector`，这里只管分类与转发。
 
 为什么是独立的流而不是让游戏 Agent 兼职转发：
@@ -19,9 +20,16 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from src.agents.minecraft.attention_matrix import KIND_TO_EVENT, RESOLVED_KINDS, classify, summarize
+from src.agents.minecraft.attention_matrix import (
+    KIND_TO_EVENT,
+    RESOLVED_KINDS,
+    classify,
+    summarize,
+    without_coordinates,
+)
 from src.agents.minecraft.events_collector import MaicraftEventsCollector
 from src.modules.events.payloads.body import BodyEventPayload
+from src.modules.events.payloads.game import GamePayload
 
 
 class MaicraftAttentionCollector(MaicraftEventsCollector):
@@ -29,16 +37,29 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
 
     name = "maicraft_attention"
     description = (
-        "常驻读 MaiCraft 的任务事件流，把挨打、换维度、身体先处理的急事、处理不了的需求与角色死亡转成 game.body.* 事件"
+        "常驻读 MaiCraft 的任务事件流，把挨打、换维度、身体先处理的急事、处理不了的需求与角色死亡"
+        "转成 game.body.* 事件；步进完成的进展转成 game.milestone"
     )
     stream_label = "任务事件流"
 
     async def _forward(self, event: Dict[str, Any]) -> bool:
-        """一条上游事件 → 一条叙事化 ``game.body.*`` 事件；目标运行的处境变化返回 False。"""
+        """一条上游事件 → 一条叙事化 ``game.body.*`` 事件（步进完成转 ``game.milestone``）；其余处境变化返回 False。"""
         source_type = str(event.get("kind") or "")
         kind = classify(source_type)
         if kind is None:
             return False
+        if kind == "milestone":
+            # 步进完成是主播可讲的进展：Mod 自带结论句，去坐标/观察编号后直接讲；
+            # 不走 summarize()（那是为身体事件配的开头句式）。
+            message = str(event.get("message") or "")
+            payload = GamePayload(
+                game="minecraft",
+                event_type="milestone",
+                message=without_coordinates(message),
+            )
+            await self.emit_event(KIND_TO_EVENT[kind], payload, source=self.name)
+            self.logger.info(f"[进展事件] {payload.message}（{source_type}）")
+            return True
         payload = BodyEventPayload(
             game="minecraft",
             kind=kind,

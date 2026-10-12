@@ -266,6 +266,15 @@ class LookAtScreenProvider(BaseToolProvider):
             default=None,
             description="默认区域 [x1, y1, x2, y2]（相对显示器左上角）；None = 全屏",
         )
+        # 默认缩放上限（像素宽）：调用方未传 max_width 时生效。全尺寸 1080p 截图
+        # base64 约 1.8MB；1280 宽等比缩放省一半以上体积——进对话的图按引用注水，
+        # 单价虽省，窗口内每轮重发与视觉编码成本仍随像素走
+        default_max_width: int = Field(
+            title="默认最大宽度",
+            default=1280,
+            ge=100,
+            description="调用方未指定 max_width 时的等比缩放上限（像素）",
+        )
 
     def __init__(
         self,
@@ -378,8 +387,9 @@ class LookAtScreenProvider(BaseToolProvider):
         if max_width_arg is not None and max_width_arg > 0:
             max_width = max_width_arg
         else:
-            # 默认读取原始画面，只有调用方明确请求缩放时才改变像素尺寸。
-            max_width = None
+            # 缺省走配置的缩放上限：进对话的图按引用注水，但窗口内每轮重发
+            # 与视觉编码成本仍随像素走，默认 1280 而不是原始全尺寸
+            max_width = self.typed_config.default_max_width
 
         # 采集后端不可用 → 优雅降级（不抛，返回成功 + 空文本 + error）
         if self._capture is None:
