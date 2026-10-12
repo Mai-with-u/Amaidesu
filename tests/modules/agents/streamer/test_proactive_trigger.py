@@ -229,6 +229,47 @@ class TestProactiveTriggerRecord:
         assert len(t._trigger_history) == 3
 
 
+class TestProactiveTriggerUncappedReasons:
+    """内容推进类触发源（rundown/game/reminder）不占 hourly 额度。
+
+    这些源在 should_trigger 里本来就绕过 max_per_hour；照常记账的话，话痨期
+    几十个流程单窗把账记满，冷场/定时触发此后一小时内全被上限扣死。
+    """
+
+    def test_uncapped_reasons_do_not_fill_history(self):
+        for reason in ("rundown", "game", "reminder"):
+            t = ProactiveTrigger({"enabled": True, "max_per_hour": 6})
+            for i in range(5):
+                t.record_trigger(reason, now_ms=10_000_000 + i * 1000)
+            assert len(t._trigger_history) == 0, f"{reason} 绕过上限的来源不该占 hourly 额度"
+            assert t._last_trigger_ms == 10_004_000, "上次触发时刻仍要更新（schedule 判定依赖它）"
+
+    def test_capped_reasons_still_fill_history(self):
+        for reason in ("external", "schedule", "cold"):
+            t = ProactiveTrigger({"enabled": True, "max_per_hour": 6})
+            t.record_trigger(reason, now_ms=10_000_000)
+            assert len(t._trigger_history) == 1, f"{reason} 受限源照旧记账"
+
+    def test_rundown_windows_do_not_block_cold(self):
+        """集成：6 次 rundown 窗记满普通源的账之后，冷场条件仍能触发 cold（场次 21 教训）。"""
+        t = ProactiveTrigger(
+            {
+                "enabled": True,
+                "cold_timeout_ms": 45_000,
+                "min_interval_ms": 120_000,
+                "max_per_hour": 6,
+                "topic_required": False,
+                "schedule_interval_ms": 0,
+            }
+        )
+        for i in range(6):
+            t.record_trigger("rundown", now_ms=10_000_000 + i * 60_000)
+        room = _MockRoomState(last_speech_ms=10_300_000, last_message_ms=10_300_000)
+        # now = 10_500_000：距上次发言 200s 过了防接龙间隔，冷场也成立；
+        # 若 rundown 照旧记账，hourly 上限已满 → 这里会返回 None
+        assert t.should_trigger(room, now_ms=10_500_000) == "cold"
+
+
 class TestProactiveTriggerPriority:
     """优先级：external > rundown_pending > rundown_overdue > rundown_ready > schedule > cold。"""
 

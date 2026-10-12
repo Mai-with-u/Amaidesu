@@ -191,6 +191,35 @@ async def test_body_event_feeds_the_body_narrative_line() -> None:
 
 
 @pytest.mark.asyncio
+async def test_death_wakes_the_streamer_but_other_body_events_do_not() -> None:
+    """死亡立即唤醒主播（与 game.report 同款置位待定夺信号）；其余身体事件只是素材。"""
+    bus = EventBus()
+    agent = _build_streamer_agent(event_bus=bus)
+    agent._subscribe_events()
+    agent._live_active = True
+
+    await bus.emit(
+        CoreEvents.GAME_BODY_REFLEX_STARTED,
+        BodyEventPayload(
+            game="minecraft", kind="reflex_started", summary="身体先停下手上的活处理急事：被威胁，插入自卫"
+        ),
+        source="maicraft_attention",
+    )
+    await _wait_until(lambda: len(agent._body_narrative) == 1)
+    assert agent._game_decision_pending is False
+
+    await bus.emit(
+        CoreEvents.GAME_BODY_DIED,
+        BodyEventPayload(game="minecraft", kind="died", summary="角色倒下了：被苦力怕炸死"),
+        source="maicraft_attention",
+    )
+    await _wait_until(lambda: agent._game_decision_pending is True)
+    assert "[minecraft·died] 角色倒下了：被苦力怕炸死" in agent._body_narrative_text()
+
+    await bus.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_game_chat_feeds_its_own_block_and_player_wakes_streamer() -> None:
     """game.chat.* → 独立"游戏里的聊天"缓冲；玩家搭话促发决策，系统消息只作参考。"""
     bus = EventBus()

@@ -84,8 +84,10 @@ def test_classification_keeps_body_encounters_and_drops_goal_progress() -> None:
     assert classify("temporary_task_finished") == "reflex_finished"
     assert classify("need_unhandled") == "need_unhandled"
     assert classify("character_died") == "died", "角色死亡归已有的 died 事件"
-    for goal_kind in ("started", "asked", "paused", "resumed", "step_finished", "finished", "death_recovery_applied"):
+    for goal_kind in ("started", "asked", "paused", "resumed", "finished", "death_recovery_applied"):
         assert classify(goal_kind) is None, f"{goal_kind} 是游戏 Agent 的任务通道"
+    # 步进完成是主播可讲的进展，转 game.milestone 通道
+    assert classify("step_finished") == "milestone"
     assert classify("something_new") == "unknown", "上游新增种类不丢，但事件面保持封闭"
     assert classify("") is None
 
@@ -131,7 +133,7 @@ def test_summary_drops_coordinates_and_keeps_the_rest() -> None:
 
 
 def test_body_event_names_are_the_closed_kind_set() -> None:
-    """9 个具名事件与判别字段一一对应，通配订阅仍然可用。"""
+    """9 个身体事件与 milestone 转发事件各就各位，通配订阅仍然可用。"""
     assert CoreEvents.GAME_BODY_WILDCARD == "game.body.#"
     assert set(KIND_TO_EVENT.values()) == {
         CoreEvents.GAME_BODY_ATTACKED,
@@ -143,6 +145,7 @@ def test_body_event_names_are_the_closed_kind_set() -> None:
         CoreEvents.GAME_BODY_DIMENSION_CHANGED,
         CoreEvents.GAME_BODY_NEED_UNHANDLED,
         CoreEvents.GAME_BODY_UNKNOWN,
+        CoreEvents.GAME_MILESTONE,
     }
     for kind, event_name in KIND_TO_EVENT.items():
         assert event_name.rsplit(".", 1)[-1] == kind, "判别字段必须等于事件名末段"
@@ -211,6 +214,33 @@ async def test_incremental_read_forwards_only_body_encounters() -> None:
     second = client.read_calls[-1]["arguments"]
     assert second == {"stream_id": "stream-A", "after_cursor": 5, "wait_ms": 25_000}
     assert collector._cursor == 8
+
+
+@pytest.mark.asyncio
+async def test_step_finished_forwards_to_milestone_without_coordinates() -> None:
+    """步进完成 → game.milestone：结论句原样转出（去坐标/观察编号），目标完成仍不转发。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    client.pages.append(
+        _page(
+            [
+                _event(6, "step_finished", "采集完成：8 个橡木原木进了背包，位置 3, 64, -9", goal_id=3),
+                _event(7, "finished", "目标完成", goal_id=3),
+            ],
+            cursor=7,
+        )
+    )
+
+    await collector._drain()
+
+    assert [name for name, _ in bus.events] == [CoreEvents.GAME_MILESTONE]
+    name, payload = bus.events[0]
+    assert name == CoreEvents.GAME_MILESTONE
+    assert payload.game == "minecraft"
+    assert payload.event_type == "milestone"
+    # 坐标这类遥测不进事件，结论句本身保留（冒号是 without_coordinates 的断句符，重组为逗号）
+    assert payload.message == "采集完成，8 个橡木原木进了背包"
+    assert "-9" not in payload.message
 
 
 @pytest.mark.asyncio
