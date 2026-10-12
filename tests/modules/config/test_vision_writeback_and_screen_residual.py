@@ -75,7 +75,7 @@ class TestVisionConfigDefaults:
         assert cfg.config.monitor_index == provider_schema.monitor_index == 1
         assert cfg.config.default_region is None
         assert "vlm_timeout_ms" not in cfg.config.model_dump()
-        assert "default_max_width" not in cfg.config.model_dump()
+        assert cfg.config.default_max_width == 1280
 
     def test_empty_vision_config_section_populated_on_load(self, temp_config_dir):
         """空 ``[tools.vision].config`` 经加载管线后写入全部默认字段（除 None 字段）。"""
@@ -85,10 +85,10 @@ class TestVisionConfigDefaults:
         assert not report.has_drift
 
         tools_text = (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
-        # monitor_index / vlm_timeout_ms / default_max_width 必须落盘
+        # monitor_index / default_max_width 必须落盘；vlm_timeout_ms 为 None 默认不落盘
         assert "monitor_index = 1" in tools_text
         assert "vlm_timeout_ms" not in tools_text
-        assert "default_max_width" not in tools_text
+        assert "default_max_width = 1280" in tools_text
         # type 标记也写入（class marker，provider ConfigSchema 自带）
         assert 'type = "vision"' in tools_text
         # default_region = None 遵循 _set_toml_value / _table_from_model 兜底：不落盘
@@ -115,9 +115,9 @@ class TestVisionConfigDefaults:
         vision_cfg = cfg["tools"]["tools"]["vision"]["config"]
         # monitor_index 保留为 2（用户值）
         assert vision_cfg["monitor_index"] == 2
-        # 其他字段走默认
+        # 其他字段走默认（None 字段不进合并视图，非 None 补默认值）
         assert "vlm_timeout_ms" not in vision_cfg
-        assert "default_max_width" not in vision_cfg
+        assert vision_cfg["default_max_width"] == 1280
         # 用户修改后写回不丢用户值
         disk_text = tools_path.read_text(encoding="utf-8-sig")
         assert "monitor_index = 2" in disk_text
