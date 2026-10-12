@@ -131,7 +131,7 @@ class TestConfigSchema:
             screen_capture=capture,
             text_reader=reader,
         )
-        result = await provider.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}))
+        await provider.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}))
         assert capture.calls[-1]["max_width"] == 800
 
     def test_provider_does_not_inject_reader_deadline(self) -> None:

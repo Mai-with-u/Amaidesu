@@ -46,7 +46,6 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
             "tools.toml",
             (
                 "tools.vision.config.vlm_timeout_ms",
-                "tools.vision.config.default_max_width",
                 "tools.web.search.config.max_fetch_chars",
             ),
             "2.0.40",
@@ -80,6 +79,29 @@ def test_legacy_limits_removed_from_disk_only_for_affected_file(
     written = target.read_bytes()
     _, report = load_config_dir(tmp_path)
     assert not report.has_drift and target.read_bytes() == written
+
+
+def test_revived_default_max_width_materializes_after_removal_hook(tmp_path: Path) -> None:
+    """default_max_width 以新语义复活（进对话图像的传输降采样默认）。
+
+    2.0.40 钩子按退役处置移除旧值（旧值属 VLM 转述时代语义，不保留），
+    物化器随后按注册表补回新默认 1280；vlm_timeout_ms 保持退役不回写。
+    """
+    generate_default_configs(tmp_path)
+    load_config_dir(tmp_path)
+    target = tmp_path / "tools.toml"
+    data = tomlkit.parse(target.read_text(encoding="utf-8-sig"))
+    data["meta"]["version"] = "2.0.39"
+    section = data["tools"]["vision"]["config"]
+    section["vlm_timeout_ms"] = 12345
+    section["default_max_width"] = 800
+    target.write_text(tomlkit.dumps(data), encoding="utf-8")
+
+    load_config_dir(tmp_path)
+
+    migrated = tomlkit.parse(target.read_text(encoding="utf-8-sig"))["tools"]["vision"]["config"]
+    assert "vlm_timeout_ms" not in migrated
+    assert migrated["default_max_width"] == 1280
 
 
 def test_summary_thresholds_and_custom_values_survive_upgrade(tmp_path: Path) -> None:

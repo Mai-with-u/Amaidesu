@@ -134,7 +134,8 @@ class TestSpecializedDomains:
         assert cfg.config.monitor_index == 1
         assert cfg.config.default_region is None
         assert "vlm_timeout_ms" not in cfg.config.model_dump()
-        assert "default_max_width" not in cfg.config.model_dump()
+        # 图进对话后默认降采样（传输成本），default_max_width 以新语义在册
+        assert cfg.config.default_max_width == 1280
 
     def test_memory_default_enabled_true(self):
         """记忆分类默认 enabled=true（消除配置漂移）"""
