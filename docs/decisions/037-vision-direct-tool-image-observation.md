@@ -10,16 +10,16 @@
 
 ## 决策（Decision）
 
-核心一句：**内部契约工具消息允许携带 `ImagePart`（与 MCP `CallToolResult.ImageContent` / Anthropic `tool_result` image block 同构）；OpenAI 翻译层负责把工具消息里的图拆为紧随的 user 消息；agent 层按 `is_profile_visual(profile)` 判定图附不附与 VLM 调不调。**
+核心一句：**内部契约工具消息允许携带 `ImagePart`（与 MCP `CallToolResult.ImageContent` / Anthropic `tool_result` image block 同构）；OpenAI 翻译层负责把工具消息里的图拆为 user 消息（落位在该回合整段 tool 回执结束之后）；agent 层按 `is_profile_visual(profile)` 判定图附不附与 VLM 调不调。**
 
-- 承载位置分层：agent 与 engine 只见"一条带图的工具消息"（图与工具结果同消息，breakdown 计量自动归属工具名）；拆分方言归 OpenAI client（工具文本照发 + 图提为紧随 user 消息）——援引 ADR-033"方言是端点属性"先例
+- 承载位置分层：agent 与 engine 只见"一条带图的工具消息"（图与工具结果同消息，breakdown 计量自动归属工具名）；拆分方言归 OpenAI client（工具文本照发 + 图提为 user 消息，落位整段回执之后）——援引 ADR-033"方言是端点属性"先例
 - 能力协商：engine 加 `is_profile_visual(profile) -> bool` 出口（取该 profile 当前主模型的 `visual` 位，激活既有死字段）；组装层 visual=True → 文本视图照旧 + 附 `ImagePart`，False → 纯文本视图
 - VLM 按需：`look_at_screen` 的 VLM 步骤对 visual 调用方跳过（模型亲眼看图，省一次 vision 调用与 1–9s 延迟）；非 visual 调用方照旧。调用方身份经 `ToolInvocation.caller_profile` 新字段显式传递（既有 `source` 保持"调用场景"语义）；**空串 = 管线式调用 = 按非视觉处理**——text_adv 的结构化读屏管线（VLM 固定格式输出中心像素坐标）零改动且语义正确
 - 图生命周期 = 单个工具回合（与文本工具结果同生共死），跨回合画面记忆不做
 
 ## 替代方案（Alternatives）
 
-- **agent 组装层直接产出两条消息**（工具文本 + 紧随 user 带图）：线上形态相同，但把"OpenAI 系要拆"的方言知识散进每个 agent 循环，未来接 Anthropic 形态端点（tool_result 原生带图）时需返工
+- **agent 组装层直接产出两条消息**（工具文本 + user 带图）：线上形态相同，但把"OpenAI 系要拆"的方言知识散进每个 agent 循环，未来接 Anthropic 形态端点（tool_result 原生带图）时需返工
 - **engine 层判定**（agent 全量带图、engine 按实际模型剥）：非视觉调用方的历史囤图，上下文计量需处理"图在内部消息但未发出"的账
 - **profile 级配置开关**：违反"模型固有属性归模型级"（ADR-033 §4 先例），配置一致性责任压给用户
 - **VLM 总是执行**（visual 调用方拿答案+图双份）：visual 调用方白付费用与延迟，转述文字对能亲眼看图的模型是冗余/误读干扰
@@ -30,5 +30,6 @@
 - 全部档位现状配 MiniMax-M3.1（visual=true）→ 实现落地当日即激活：planner/minecraft 直看原图、VLM 默认不执行、vision 档位降级为配置回退路径
 - 看图链路从"截屏→VLM(1–9s)→续轮"缩为"截屏→续轮"；单图成本从 85 万 tokens（伪影）降为千级（正规视觉编码）
 - 故障切换边缘：主模型 visual、备选非 visual 时带图请求失败——接受单轮损失 + 错误日志（主备能力不一致属配置问题）
+- 落位修正（2026-10-12 无场次冒烟实锤）：提图 user 消息原设计紧随自己的回执插入，多工具并发轮里会打断 assistant 回合的回执连续性，被 DeepSeek 400 拒收（insufficient tool messages following tool_calls message）——翻译层统一推迟到整段回执结束之后落位，按来源回执分组保序，配对语义不变
 - DeepSeek flash 的图像请求形态（data URL vs 公网 URL）我方未实测，列入实现切片冒烟验收；context_meter 对 ImagePart 采用千级标称估算（API usage 仍为真值）
 - 关联：缺陷修复 `e0405d70`（base64 滤除）、设计讨论草稿 `.omo/drafts/vision-direct-design.md`

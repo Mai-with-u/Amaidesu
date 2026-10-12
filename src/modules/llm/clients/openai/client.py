@@ -55,6 +55,24 @@ _EMPTY_OBJECT_SCHEMA: Dict[str, Any] = {"type": "object", "properties": {}}
 # 错误翻译路径不走此处——那里对 SDK 异常类型的捕获是具体的
 _LEGACY_FALLBACK_ERRORS = (Exception,)
 
+# 错误消息携带的服务端响应体长度上限：足够容纳拒绝原因原文，
+# 又不撑爆决策卡与日志里的单行展示
+_MAX_ERROR_DETAIL_CHARS = 500
+
+
+def _server_error_detail(exc: BaseException) -> str:
+    """提取服务端错误响应文本（压成单行、超长截断），供错误消息携带定位上下文。
+
+    SDK 的 APIStatusError 把响应体解析进 ``body``（4xx 时是服务端给出的
+    拒绝原因原文，如"消息序列非法/字段不识别"——定位 400 类问题的第一手
+    证据，缺失时回退异常自身的 message。
+    """
+    body = getattr(exc, "body", None)
+    text = " ".join(str(body).split()) if body else " ".join(str(exc).split())
+    if len(text) > _MAX_ERROR_DETAIL_CHARS:
+        text = text[:_MAX_ERROR_DETAIL_CHARS] + "…（截断）"
+    return text
+
 
 class OpenAIClient(BaseLLMClient):
     """OpenAI 兼容 API 客户端。
@@ -164,7 +182,8 @@ class OpenAIClient(BaseLLMClient):
 
         - 超时 → LLMTimeoutError（切下一个模型）
         - 限流 429 / 服务端 5xx / 网络连接失败 → RetryableError（有上限重试）
-        - 参数错误 400 / 鉴权失败 401 等其余 HTTP 状态 → FatalError（不重试）
+        - 参数错误 400 / 鉴权失败 401 等其余 HTTP 状态 → FatalError（不重试），
+          携带服务端响应体原文（截断）——拒绝原因是定位参数问题的第一手证据
         """
         if isinstance(exc, APITimeoutError):
             return LLMTimeoutError("LLM 请求超时", original=exc)
@@ -176,7 +195,10 @@ class OpenAIClient(BaseLLMClient):
             status = exc.status_code
             if status == 429 or status >= 500:
                 return RetryableError(f"服务端临时性失败（HTTP {status}）", original=exc)
-            return FatalError(f"请求被服务端拒绝（HTTP {status}），重试无意义", original=exc)
+            return FatalError(
+                f"请求被服务端拒绝（HTTP {status}）：{_server_error_detail(exc)}，重试无意义",
+                original=exc,
+            )
         # 防御：调用方应传入 _TRANSLATABLE_SDK_ERRORS 内的类型
         return FatalError(f"未识别的 SDK 异常: {type(exc).__name__}", original=exc)
 
@@ -221,9 +243,11 @@ class OpenAIClient(BaseLLMClient):
         循环时这两项是协议合法性前提，缺则服务端拒绝整个消息序列。
 
         tool 观察携带图像片段时按协议拆分：OpenAI 协议 tool 角色只收文本
-        （图像仅 user 角色可带），tool 消息保留文本、图像提升为紧随的 user
-        消息（ADR-037）——位置紧邻即配对语义。能走到这里的带图观察必然来
-        自视觉调用方（组装层已按主模型 visual 位分叉），此处不做能力兜底。
+        （图像仅 user 角色可带），tool 消息保留文本、图像提升为 user 消息
+        （ADR-037）；提图消息的落位由 ``_request_to_openai_messages`` 统一
+        推迟到整段回执结束之后——紧邻插入会在多工具并发轮里打断回执连续
+        性，被严格端点 400 拒收。能走到这里的带图观察必然来自视觉调用方
+        （组装层已按主模型 visual 位分叉），此处不做能力兜底。
         """
         contents = [cls._part_to_openai(p) for p in message.parts]
         result: Dict[str, Any] = {"role": message.role, "content": contents}
@@ -248,7 +272,7 @@ class OpenAIClient(BaseLLMClient):
             if images:
                 result["content"] = "".join(c["text"] for c in contents if c["type"] == "text")
                 note_content: List[Dict[str, Any]] = [
-                    {"type": "text", "text": "[系统附图：上一条工具消息的截图]"},
+                    {"type": "text", "text": "[系统附图：上方工具回执的截图]"},
                     *images,
                 ]
                 return [result, {"role": "user", "content": note_content}]
@@ -259,12 +283,30 @@ class OpenAIClient(BaseLLMClient):
 
     @classmethod
     def _request_to_openai_messages(cls, request: GenerateRequest) -> List[Dict[str, Any]]:
-        """GenerateRequest → OpenAI messages 列表（system 置于首条）"""
+        """GenerateRequest → OpenAI messages 列表（system 置于首条）
+
+        带图 tool 观察提升出的 user 消息统一推迟到整段 tool 回执结束之后
+        落位：协议要求 assistant 带 tool_calls 后连续跟完全部回执，多工具
+        并发轮里提图消息若紧随自己的回执插入，会打断回执连续性被严格端点
+        400 拒收（DeepSeek 实测：insufficient tool messages following
+        tool_calls message）。按来源回执分组挂起，段尾按序落位，配对语义
+        不变。
+        """
         messages: List[Dict[str, Any]] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
+        lifted: List[Dict[str, Any]] = []
         for message in request.messages:
-            messages.extend(cls._message_to_openai(message))
+            wire = cls._message_to_openai(message)
+            if message.role == "tool":
+                # 回执段还在继续：回执本体落位，提图 user 消息挂起到段尾
+                messages.append(wire[0])
+                lifted.extend(wire[1:])
+                continue
+            messages.extend(lifted)
+            lifted = []
+            messages.extend(wire)
+        messages.extend(lifted)
         return messages
 
     @staticmethod

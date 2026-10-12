@@ -3,10 +3,12 @@ from typing import Any
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from openai import APIStatusError
 
 from src.modules.llm.clients.openai.client import OpenAIClient
-from src.modules.llm.errors import RetryableError
+from src.modules.llm.errors import FatalError, RetryableError
 from src.modules.llm.payload import GenerateRequest, ImagePart, Message, ToolCall
 
 
@@ -494,6 +496,7 @@ def test_extract_usage_omits_reasoning_tokens_when_not_reported():
 async def test_chat_response_captures_usage_raw_json():
     """chat 返回的 Response.usage_raw_json 是厂商原始 usage 的 JSON 序列化字符串。"""
     client, sdk_client = _make_client()
+
     # 模拟真实 OpenAI SDK CompletionUsage：model_dump 输出 dict（含嵌套对象），
     # 同时属性访问也能拿到嵌套字段（SDK 对象自身暴露命名属性）
     class _FakeUsage:
@@ -861,9 +864,7 @@ def test_tool_message_with_image_splits_into_tool_text_and_user_image():
 def test_tool_message_without_image_stays_single_text():
     """无图 tool 观察：纯文本折叠为字符串 content，单条输出（现状不回归）。"""
     client = OpenAIClient({"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1"})
-    request = GenerateRequest(
-        messages=[Message(role="tool", parts=['{"ok": true}'], tool_call_id="call_2")]
-    )
+    request = GenerateRequest(messages=[Message(role="tool", parts=['{"ok": true}'], tool_call_id="call_2")])
 
     messages = client._request_to_openai_messages(request)
 
@@ -886,3 +887,102 @@ def test_user_message_with_image_keeps_parts_list():
     assert messages[0]["role"] == "user"
     assert messages[0]["content"][0] == {"type": "text", "text": "看这张图"}
     assert messages[0]["content"][1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,BBBB"}}
+
+
+def test_image_tool_message_in_multi_tool_run_lands_after_run():
+    """多工具并发轮：带图回执的提图 user 消息推迟到整段回执结束之后。
+
+    紧邻插入会打断 assistant 回合的回执连续性，被严格端点 400 拒收
+    （DeepSeek 实测：insufficient tool messages following tool_calls message）。
+    """
+    client = OpenAIClient({"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1"})
+    request = GenerateRequest(
+        messages=[
+            Message(role="user", parts=["画面里有什么？"]),
+            Message(
+                role="assistant",
+                parts=[""],
+                tool_calls=[
+                    ToolCall(id="c1", name="vision_look_at_screen", arguments={"question": "屏幕上有什么"}),
+                    ToolCall(id="c2", name="minecraft_glance", arguments={}),
+                ],
+            ),
+            Message(
+                role="tool",
+                parts=['{"ok": true}', ImagePart(image="data:image/png;base64,AAAA")],
+                tool_call_id="c1",
+            ),
+            Message(role="tool", parts=['{"ok": true}'], tool_call_id="c2"),
+        ]
+    )
+
+    messages = client._request_to_openai_messages(request)
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool", "tool", "user"]
+    assert messages[2]["tool_call_id"] == "c1"
+    assert messages[2]["content"] == '{"ok": true}'
+    assert messages[3]["tool_call_id"] == "c2"
+    lifted = messages[4]
+    assert lifted["content"][0]["type"] == "text"
+    assert "[系统附图" in lifted["content"][0]["text"]
+    assert lifted["content"][1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+
+def test_two_image_tool_messages_lift_after_run_in_order():
+    """两条带图回执：各自保留一条提图 user 消息，段尾按原序落位，配对语义不变。"""
+    client = OpenAIClient({"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1"})
+    request = GenerateRequest(
+        messages=[
+            Message(
+                role="assistant",
+                parts=[""],
+                tool_calls=[
+                    ToolCall(id="c1", name="screenshot_a", arguments={}),
+                    ToolCall(id="c2", name="screenshot_b", arguments={}),
+                ],
+            ),
+            Message(
+                role="tool",
+                parts=['{"ok": true}', ImagePart(image="data:image/png;base64,AAAA")],
+                tool_call_id="c1",
+            ),
+            Message(
+                role="tool",
+                parts=['{"ok": true}', ImagePart(image="data:image/png;base64,BBBB")],
+                tool_call_id="c2",
+            ),
+        ]
+    )
+
+    messages = client._request_to_openai_messages(request)
+
+    assert [m["role"] for m in messages] == ["assistant", "tool", "tool", "user", "user"]
+    assert messages[2]["tool_call_id"] == "c2"
+    assert messages[3]["content"][1]["image_url"]["url"].endswith("AAAA")
+    assert messages[4]["content"][1]["image_url"]["url"].endswith("BBBB")
+
+
+def test_translate_status_error_carries_server_body():
+    """400 类 FatalError 携带服务端响应体原文（截断）——拒绝原因是定位参数问题的第一手证据。"""
+    body = {"error": {"message": "insufficient tool messages following tool_calls message"}}
+    response = httpx.Response(400, json=body, request=httpx.Request("POST", "https://api.test.com/v1/chat/completions"))
+    exc = APIStatusError(f"Error code: 400 - {body}", response=response, body=body)
+
+    translated = OpenAIClient._translate_sdk_error(exc)
+
+    assert isinstance(translated, FatalError)
+    assert "HTTP 400" in str(translated)
+    assert "insufficient tool messages" in str(translated)
+
+
+def test_translate_status_error_truncates_huge_body():
+    """超长响应体截断到上限，错误消息不撑爆单行展示。"""
+    body = {"error": {"message": "x" * 800}}
+    response = httpx.Response(422, json=body, request=httpx.Request("POST", "https://api.test.com/v1/chat/completions"))
+    exc = APIStatusError(f"Error code: 422 - {body}", response=response, body=body)
+
+    translated = OpenAIClient._translate_sdk_error(exc)
+
+    assert isinstance(translated, FatalError)
+    assert "…（截断）" in str(translated)
+    assert len(str(translated)) < 600
