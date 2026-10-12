@@ -175,10 +175,30 @@
             >
               完整请求 ↗
             </a>
+            <a
+              v-if="entry.llmRequestId"
+              class="d-link"
+              role="button"
+              :title="
+                expandedThinking.has(entry.id)
+                  ? '收起模型推理正文'
+                  : '展开该请求的模型推理正文（LLM 请求历史）'
+              "
+              @click.stop="toggleThinking(entry)"
+            >
+              {{ expandedThinking.has(entry.id) ? '收起思考' : '思考' }}
+            </a>
             <details v-if="rawOf(entry)" class="d-raw">
               <summary @click.stop>原始输出</summary>
               <pre class="mono">{{ rawOf(entry) }}</pre>
             </details>
+          </div>
+          <div v-if="expandedThinking.has(entry.id)" class="d-thinking">
+            <pre v-if="reasoningOf(entry)" class="mono">{{ reasoningOf(entry) }}</pre>
+            <span v-else-if="reasoningOf(entry) === ''" class="d-thinking-empty"
+              >该请求无思考正文</span
+            >
+            <span v-else class="d-thinking-empty">思考正文加载中…</span>
           </div>
         </div>
 
@@ -245,6 +265,25 @@
             >
               完整请求 ↗
             </a>
+            <a
+              class="d-link"
+              role="button"
+              :title="
+                expandedThinking.has(entry.id)
+                  ? '收起模型推理正文'
+                  : '展开该请求的模型推理正文（LLM 请求历史）'
+              "
+              @click.stop="toggleThinking(entry)"
+            >
+              {{ expandedThinking.has(entry.id) ? '收起思考' : '思考' }}
+            </a>
+          </div>
+          <div v-if="expandedThinking.has(entry.id)" class="d-thinking">
+            <pre v-if="reasoningOf(entry)" class="mono">{{ reasoningOf(entry) }}</pre>
+            <span v-else-if="reasoningOf(entry) === ''" class="d-thinking-empty"
+              >该请求无思考正文</span
+            >
+            <span v-else class="d-thinking-empty">思考正文加载中…</span>
           </div>
         </div>
 
@@ -684,6 +723,9 @@ watch(
     for (const key of roundTokenStats.value.keys()) {
       if (!visible.has(key)) roundTokenStats.value.delete(key);
     }
+    for (const key of reasoningByRequest.value.keys()) {
+      if (!visible.has(key)) reasoningByRequest.value.delete(key);
+    }
     for (const requestId of visible) {
       if (!roundTokenStats.value.has(requestId) && !tokenStatsFetching.has(requestId)) {
         void fetchTokenStats(requestId);
@@ -691,15 +733,22 @@ watch(
     }
     if (visible.size > 0) void ensureContextWindows();
     // 懒渲染集合同步收缩：只保留当前在列条目，避免长会话下随事件 id 无限增长
-    if (openedPayloads.value.size > 0) {
+    if (openedPayloads.value.size > 0 || expandedThinking.value.size > 0) {
       const liveIds = new Set(entries.map(entry => entry.id));
       let pruned = false;
-      const next = new Set<string>();
+      const nextPayloads = new Set<string>();
       for (const id of openedPayloads.value) {
-        if (liveIds.has(id)) next.add(id);
+        if (liveIds.has(id)) nextPayloads.add(id);
         else pruned = true;
       }
-      if (pruned) openedPayloads.value = next;
+      if (pruned) openedPayloads.value = nextPayloads;
+      const nextThinking = new Set<string>();
+      let thinkingPruned = false;
+      for (const id of expandedThinking.value) {
+        if (liveIds.has(id)) nextThinking.add(id);
+        else thinkingPruned = true;
+      }
+      if (thinkingPruned) expandedThinking.value = nextThinking;
     }
   },
   { immediate: true },
@@ -707,6 +756,48 @@ watch(
 
 function statsOf(entry: ShowEntry): RoundTokenStats | null {
   return entry.llmRequestId ? (roundTokenStats.value.get(entry.llmRequestId) ?? null) : null;
+}
+
+/** 决策/裁决/响应卡的思考正文（llm_request_id → reasoning_content，懒取 + 一次性缓存）。
+ * 与实时思考流不同源：这里是按请求整段的模型推理正文（LLM 请求历史出库合并回供），
+ * 回看模式下没有逐 token 思考流，诊断回看这条。取到空串表示该请求无思考正文。 */
+const reasoningByRequest = ref<Map<string, string>>(new Map());
+const reasoningFetching = new Set<string>();
+/** 已展开思考区的条目 id（v-if 挂载；与 openedPayloads 同款收展语义） */
+const expandedThinking = ref<Set<string>>(new Set());
+
+async function fetchReasoning(requestId: string): Promise<void> {
+  if (reasoningByRequest.value.has(requestId) || reasoningFetching.has(requestId)) return;
+  reasoningFetching.add(requestId);
+  try {
+    const response = await llmApi.getRequestById(requestId);
+    reasoningByRequest.value.set(requestId, response.data?.reasoning_content ?? '');
+  } catch (e) {
+    console.warn(`[FeedTimeline] 思考正文获取失败: ${requestId}`, e);
+    reasoningByRequest.value.set(requestId, '');
+  } finally {
+    reasoningFetching.delete(requestId);
+  }
+}
+
+function toggleThinking(entry: ShowEntry): void {
+  if (!entry.llmRequestId) return;
+  const next = new Set(expandedThinking.value);
+  if (next.has(entry.id)) {
+    next.delete(entry.id);
+    expandedThinking.value = next;
+    return;
+  }
+  next.add(entry.id);
+  expandedThinking.value = next;
+  void fetchReasoning(entry.llmRequestId);
+}
+
+/** 思考区正文：null=未取到（展示加载中）；空串=已确认无思考正文 */
+function reasoningOf(entry: ShowEntry): string | null {
+  if (!entry.llmRequestId) return null;
+  const value = reasoningByRequest.value.get(entry.llmRequestId);
+  return value ?? null;
 }
 
 /** 响应卡步骤号（agent.replied payload.step；缺省 0 不渲染） */
@@ -1417,6 +1508,30 @@ async function copyText(text: string): Promise<void> {
   word-break: break-word;
   max-height: 220px;
   overflow-y: auto;
+}
+
+/* 思考区：决策/裁决/响应卡的推理正文（LLM 请求历史懒取，整段非流式） */
+.d-thinking {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border-color-dark);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+}
+.d-thinking pre {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.d-thinking-empty {
+  font-size: 10px;
+  color: var(--text-placeholder);
 }
 
 /* 思考行：ReAct 各步/生成段思考流（默认折叠，预览行随流式增量增长） */

@@ -89,21 +89,60 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
     { immediate: true },
   );
 
-  // 回看时间线：REST 明细 → ShowEntry（映射规则见 utils/replayFeed.ts）
+  // 回看时间线：REST 明细 → ShowEntry（映射规则见 utils/replayFeed.ts）；
+  // 事件侧由后端从诊断文件 ∪ 环形缓冲收集，游标向前翻页加载更早条目
 
   const replayEntries = ref<ShowEntry[]>([]);
   const replayLoading = ref(false);
+  /** 是否还有更早条目（后端 has_more，"加载更早"按钮的显示依据） */
+  const replayHasMore = ref(false);
+  /** 诊断天目录缺失（被清理）：回看头部降级提示的数据源 */
+  const replayPruned = ref(false);
+  const replayLoadingMore = ref(false);
 
   async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
     replayLoading.value = true;
     try {
       const response = await liveSessionsApi.timeline(item.live_session_id);
       replayEntries.value = buildReplayEntries(response.data.items);
+      replayHasMore.value = response.data.has_more;
+      replayPruned.value = response.data.events_pruned;
     } catch (error) {
       ElMessage.error(error instanceof Error ? error.message : '回看加载失败');
       replayEntries.value = [];
+      replayHasMore.value = false;
+      replayPruned.value = false;
     } finally {
       replayLoading.value = false;
+    }
+  }
+
+  /** 加载更早一页：以当前最旧条目时刻为游标，结果按时间前插 */
+  async function loadOlderReplay(): Promise<void> {
+    const item = selectedSession.value;
+    if (
+      sessionMode.value !== 'replay' ||
+      !item ||
+      !replayHasMore.value ||
+      replayLoadingMore.value
+    ) {
+      return;
+    }
+    const oldestTs = replayEntries.value[0]?.tsMs;
+    if (oldestTs === undefined) return;
+    replayLoadingMore.value = true;
+    try {
+      const response = await liveSessionsApi.timeline(item.live_session_id, {
+        before_timestamp_ms: oldestTs,
+      });
+      const older = buildReplayEntries(response.data.items);
+      replayEntries.value = [...older, ...replayEntries.value];
+      replayHasMore.value = response.data.has_more;
+      replayPruned.value = replayPruned.value || response.data.events_pruned;
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : '更早内容加载失败');
+    } finally {
+      replayLoadingMore.value = false;
     }
   }
 
@@ -117,13 +156,19 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
     { immediate: true },
   );
 
-  /** 展示条目：实时模式把思考行与事件条目按时间归并后过 agentFilter；
-   *  回看模式取 REST 时间线全量（思考流不落库，回看没有思考行）。
-   *  过滤只针对 Agent 产生的卡，观众消息与场次边界（room 组）始终可见。
-   *  事件条目本身已按 MAX_ENTRIES 限长，但思考行归并会突破上限（实测长任务
-   *  805/400）；展示条目统一限长保尾，与计数显示口径一致 */
+  /** 展示条目：两个模式都把 Agent 产生的卡过 agentFilter（观众消息与场次
+   *  边界（room 组）始终可见）。实时模式先归并思考行；回看模式没有思考行
+   *  （思考流不落库，思考正文按请求指针在卡片上懒取）。事件条目本身已按
+   *  MAX_ENTRIES 限长，但思考行归并会突破上限（实测长任务 805/400）；
+   *  展示条目统一限长保尾，与计数显示口径一致 */
   const entries = computed<ShowEntry[]>(() => {
-    if (sessionMode.value === 'replay') return replayEntries.value;
+    if (sessionMode.value === 'replay') {
+      return agentFilter.value === 'all'
+        ? replayEntries.value
+        : replayEntries.value.filter(
+            entry => agentGroupOf(entry) === 'room' || agentGroupOf(entry) === agentFilter.value,
+          );
+    }
     const thinkingRows = paused.value ? (frozenThinkingRows.value ?? []) : liveThinkingRows.value;
     const list = mergeEntriesByTime(liveEntries.value, thinkingRows);
     const filtered =
@@ -165,5 +210,9 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
     entries,
     togglePause,
     clearTimeline,
+    replayHasMore,
+    replayPruned,
+    replayLoadingMore,
+    loadOlderReplay,
   };
 }

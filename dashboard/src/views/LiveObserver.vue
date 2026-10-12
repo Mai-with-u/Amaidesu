@@ -127,41 +127,43 @@
                   ? paused
                     ? '已暂停 · 事件仍在后台累积'
                     : '消息与决策按时间交织，最新在下方'
-                  : '历史回看（事件侧仅保留环形缓冲窗口内的记录）'
+                  : replayPruned
+                    ? '部分时段的事件诊断数据已清理，对应区间仅显示消息明细'
+                    : '历史回看（事件侧与实时同卡面：工具/决策/思考等）'
               }}
             </span>
             <span class="grow" />
+            <!-- 来源过滤 chips：仅过滤 Agent 产生的卡（tool/speech/decision/verdict/stage/game），
+                观众消息与场次边界始终可见；实时与回看两模式通用 -->
+            <span class="agent-filter">
+              <el-check-tag
+                :checked="agentFilter === 'all'"
+                size="small"
+                @change="(checked: boolean) => handleAgentChip('all', checked)"
+              >
+                全部
+              </el-check-tag>
+              <el-check-tag
+                :checked="agentFilter === 'streamer'"
+                size="small"
+                @change="(checked: boolean) => handleAgentChip('streamer', checked)"
+              >
+                主播
+              </el-check-tag>
+              <el-check-tag
+                :checked="agentFilter === 'game'"
+                size="small"
+                @change="(checked: boolean) => handleAgentChip('game', checked)"
+              >
+                游戏 Agent
+              </el-check-tag>
+            </span>
             <template v-if="sessionMode === 'live'">
               <!-- 显示模式：时间线=单列沿脊线；会话=观众左/主播右气泡对齐 -->
               <el-radio-group v-model="displayMode" size="small">
                 <el-radio-button value="timeline">时间线</el-radio-button>
                 <el-radio-button value="chat">会话</el-radio-button>
               </el-radio-group>
-              <!-- 来源过滤 chips：仅过滤 Agent 产生的卡（tool/speech/decision/verdict/stage/game），
-                观众消息与场次边界始终可见；与既有 el-button 族风格一致 -->
-              <span class="agent-filter">
-                <el-check-tag
-                  :checked="agentFilter === 'all'"
-                  size="small"
-                  @change="(checked: boolean) => handleAgentChip('all', checked)"
-                >
-                  全部
-                </el-check-tag>
-                <el-check-tag
-                  :checked="agentFilter === 'streamer'"
-                  size="small"
-                  @change="(checked: boolean) => handleAgentChip('streamer', checked)"
-                >
-                  主播
-                </el-check-tag>
-                <el-check-tag
-                  :checked="agentFilter === 'game'"
-                  size="small"
-                  @change="(checked: boolean) => handleAgentChip('game', checked)"
-                >
-                  游戏 Agent
-                </el-check-tag>
-              </span>
               <span class="stage-count mono">{{ entries.length }} / {{ MAX_ENTRIES }}</span>
               <el-button size="small" :type="paused ? 'primary' : 'default'" @click="togglePause">
                 {{ paused ? '继续' : '暂停' }}
@@ -175,6 +177,17 @@
 
           <div class="stage-body">
             <div ref="scrollRef" class="stage-scroll" @scroll.passive="onScroll">
+              <!-- 回看向前翻页：置顶"加载更早"，与滚动容器同流（滚回顶部即见） -->
+              <div v-if="sessionMode === 'replay' && replayHasMore" class="replay-older">
+                <el-button
+                  size="small"
+                  :loading="replayLoadingMore"
+                  :disabled="replayLoadingMore"
+                  @click="loadOlderReplay"
+                >
+                  加载更早
+                </el-button>
+              </div>
               <FeedTimeline
                 :entries="entries"
                 :layout="displayMode"
@@ -296,7 +309,10 @@
  * 数据来源：
  * - 实时：events store（全局 WS + 游标回填，刷新/断线不丢时间线）+ 思考流旁路
  *   （kind="stream"，仅视图层合成思考行、按时间归并进时间线，不入 store 不回看）
- * - 回看：GET /live-sessions/{id}/timeline（明细行 + 事件历史按时间合并；无思考数据）
+ * - 回看：GET /live-sessions/{id}/timeline——明细行 + 事件侧（诊断事件流文件
+ *   logs/events ∪ 内存环形缓冲，与实时同卡面；游标"加载更早"向前翻页；诊断
+ *   天目录被清理时事件侧降级，页面头部如实提示）。思考流不落库：卡片上的
+ *   "思考"按 llm_request_id 从 LLM 请求历史懒取 reasoning_content
  * 渲染字段一律取自后端真实 Payload（src/modules/events/payloads/），不臆造字段。
  *
  * 页面私有逻辑按块拆在 composables/live/：场次侧边栏（useLiveSessions）、
@@ -366,6 +382,10 @@ const {
   entries,
   togglePause,
   clearTimeline: clearTimelineEntries,
+  replayHasMore,
+  replayPruned,
+  replayLoadingMore,
+  loadOlderReplay,
 } = useLiveTimeline({
   liveThinkingRows,
   thinkingHiddenBeforeMs,
@@ -1040,6 +1060,13 @@ onMounted(() => {
 .stage-scroll::-webkit-scrollbar-thumb {
   background: var(--border-color-dark);
   border-radius: 3px;
+}
+
+/* 回看向旧翻页条：滚动流内置顶居中 */
+.replay-older {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0 12px;
 }
 
 .jump {

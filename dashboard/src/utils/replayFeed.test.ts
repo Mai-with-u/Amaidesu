@@ -122,10 +122,10 @@ describe('buildReplayEntries：事件类明细', () => {
       note: '环节 1/3',
       badge: '手动',
     });
+    // 完成态形状与实时 fromRundown 对齐（note 留空，完成语义由 text 承载）
     expect(entries[1]).toMatchObject({
       kind: 'rundown',
       text: '流程单完成',
-      note: '流程单已全部完成',
       badge: 'Agent',
     });
   });
@@ -157,6 +157,117 @@ describe('buildReplayEntries：事件类明细', () => {
     ]);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ kind: 'game', badge: '升级提醒' });
+  });
+
+  it('tool.result.* → tool 条目（入参药丸/成败徽标与实时同管线）', () => {
+    const entries = buildReplayEntries([
+      item({
+        kind: 'event',
+        ts_ms: 100,
+        event_type: 'tool.result.minecraft_glance',
+        data: {
+          tool_name: 'minecraft_glance',
+          status: 'success',
+          arguments: { target: 'chest' },
+          result: '箱子里有 3 组铁锭',
+          round_id: 'r1',
+        },
+      }),
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: 'tool',
+      actor: 'minecraft_glance',
+      badge: '成功',
+      roundId: 'r1',
+    });
+  });
+
+  it('planner.verdict → verdict 条目', () => {
+    const entries = buildReplayEntries([
+      item({
+        kind: 'event',
+        ts_ms: 100,
+        event_type: 'planner.verdict',
+        data: { topic_summary: '聊玩什么', round_id: 'r2' },
+      }),
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: 'verdict',
+      text: '聊玩什么',
+      badge: '回应',
+      roundId: 'r2',
+    });
+  });
+
+  it('verdict + decision 同轮：decision 统计回填裁决卡（轮次合并与实时一致）', () => {
+    const entries = buildReplayEntries([
+      item({
+        kind: 'event',
+        ts_ms: 100,
+        event_type: 'planner.verdict',
+        data: { topic_summary: '聊玩什么', round_id: 'r3' },
+      }),
+      item({
+        kind: 'event',
+        ts_ms: 200,
+        event_type: 'planner.decision',
+        data: {
+          should_reply: true,
+          topic_summary: '聊玩什么',
+          round_id: 'r3',
+          llm_request_id: 'req-1',
+        },
+      }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ kind: 'verdict', roundId: 'r3', llmRequestId: 'req-1' });
+  });
+
+  it('agent.prompted / agent.replied → prompt / agent_reply 条目', () => {
+    const entries = buildReplayEntries([
+      item({
+        kind: 'event',
+        ts_ms: 100,
+        event_type: 'agent.prompted',
+        data: { source: 'operator', content: '去挖矿吧', target: 'minecraft' },
+      }),
+      item({
+        kind: 'event',
+        ts_ms: 200,
+        event_type: 'agent.replied',
+        data: {
+          agent: 'minecraft',
+          content: '开始挖矿',
+          round_id: 'g1',
+          step: 2,
+          llm_request_id: 'req-2',
+        },
+      }),
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: 'prompt',
+      actor: '运营',
+      text: '去挖矿吧',
+      note: 'minecraft',
+    });
+    expect(entries[1]).toMatchObject({
+      kind: 'agent_reply',
+      text: '开始挖矿',
+      llmRequestId: 'req-2',
+    });
+  });
+
+  it('事件与明细行按时间归并（同一毫秒事件在前）', () => {
+    const entries = buildReplayEntries([
+      item({ kind: 'danmaku', ts_ms: 100, content: '弹幕', user_name: '观众' }),
+      item({
+        kind: 'event',
+        ts_ms: 50,
+        event_type: 'planner.decision',
+        data: { should_reply: false },
+      }),
+    ]);
+    expect(entries.map(e => e.tsMs)).toEqual([50, 100]);
   });
 
   it('未知事件类型跳过不产出条目', () => {

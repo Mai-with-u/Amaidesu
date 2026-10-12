@@ -793,6 +793,10 @@ export interface SessionTimelineItem {
 export interface SessionTimelineResponse {
   live_session_id: number;
   items: SessionTimelineItem[];
+  /** 是否还有更早条目（以最旧条目 ts_ms 为 before_timestamp_ms 游标续翻） */
+  has_more: boolean;
+  /** 场次时间范围内存在缺失的诊断天目录（被清理或未落盘），事件侧降级 */
+  events_pruned: boolean;
 }
 
 // ==================== Vision（视觉捕获） ====================
