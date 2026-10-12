@@ -33,6 +33,12 @@ def _reset_global_loguru_handlers():
     logger_module._HANDLER_IDS.extend(old_tracked)
 
 
+def test_default_persist_retention_keeps_files():
+    """默认不滚动删除落盘日志：persist_retention_days 默认 0（长期保留）。"""
+    streamer = LogStreamer(min_level="DEBUG")
+    assert streamer.persist_retention_days == 0
+
+
 def test_sink_entry_contains_exception_field():
     """异常日志经 sink 进缓冲应携带 exception 字段，普通日志不带。"""
 

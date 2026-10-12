@@ -37,7 +37,7 @@ class LogStreamer:
         persist: bool = False,
         persist_dir: str = DEFAULT_PERSIST_DIR,
         persist_min_level: str = "INFO",
-        persist_retention_days: int = 14,
+        persist_retention_days: int = 0,
     ) -> None:
         """
         Args:
@@ -48,7 +48,8 @@ class LogStreamer:
             persist_dir: 持久化目录（相对项目根）
             persist_min_level: 落盘最低级别（内存缓冲仍按 min_level；
                 DEBUG 级全量落盘增长过快，默认只落 INFO 及以上）
-            persist_retention_days: 落盘文件保留天数，启动时清理更早的文件
+            persist_retention_days: 落盘文件保留天数，启动时清理更早的文件；
+                0 = 永不清理（默认，落盘日志长期保留，用户手动管理空间）
         """
         self.ws_handler = ws_handler
         self.min_level = min_level
