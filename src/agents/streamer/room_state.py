@@ -48,6 +48,12 @@ HEAT_HIGH_THRESHOLD_MPS: float = 0.5
 #: topics 返回的最多关键词数
 TOPIC_TOP_K: int = 5
 
+#: 观众进入增量的观察窗口（毫秒）：累计口径的导数，近似"最近有没有人进来"
+AUDIENCE_WINDOW_MS: int = 600_000
+
+#: 观众进入样本的容量上限（防御性：正常推送频率下远达不到）
+_AUDIENCE_SAMPLE_CAP: int = 64
+
 #: 中文停用词表(高频无意义字/语气词)。后续可扩展。
 _STOPWORDS: frozenset[str] = frozenset(
     "的了吗啊呀呢吧哦呐哈你我他她它是最和在有无要都也就还又把这被让给跟和与及个么不没很太非常"
@@ -122,6 +128,9 @@ class RoomState:
         # 时保持 0,语义为"未知"而非"没人看")
         self._audience_total: int = 0
         self._audience_total_at_ms: int = 0
+        # 观看数推送样本 (ts, 累计人次):增量观察窗口的原料(累计口径只增不减,
+        # 窗口两端之差 = 近 N 分钟新增进入)
+        self._audience_samples: List[Tuple[int, int]] = []
 
     # ------------------------------------------------------------------
     # 时钟注入
@@ -269,6 +278,41 @@ class RoomState:
         ts = self._resolve_now(now_ms)
         self._audience_total = count
         self._audience_total_at_ms = ts
+        self._audience_samples.append((ts, count))
+        if len(self._audience_samples) > _AUDIENCE_SAMPLE_CAP:
+            # 容量裁剪保留最近样本;窗口计算只需要两端,中间值丢弃不影响增量
+            self._audience_samples = self._audience_samples[-_AUDIENCE_SAMPLE_CAP:]
+        cutoff = ts - AUDIENCE_WINDOW_MS
+        while len(self._audience_samples) > 1 and self._audience_samples[1][0] < cutoff:
+            # 头部裁剪到窗口:窗口外只留一条作为增量基线(下一条即窗口内最早样本)
+            self._audience_samples.pop(0)
+
+    def _audience_increment(self, now_ms: int) -> Optional[int]:
+        """观察窗口内的观众进入增量(累计口径两端之差)。
+
+        Returns:
+            增量人次;样本不足两端(少于 2 条)时返回 None,语义为"未知"。
+        """
+        samples = [(t, c) for t, c in self._audience_samples if t >= now_ms - AUDIENCE_WINDOW_MS]
+        if len(samples) < 2:
+            return None
+        return samples[-1][1] - samples[0][1]
+
+    def activity_line(self, *, now_ms: Optional[int] = None) -> str:
+        """房间活跃度一句话（planner 参考段用，校准互动密度与发言策略）。
+
+        事实陈述不带指令：近 10 分钟新增观看（累计口径的窗口增量；推送样本
+        不足时如实说未知）+ 近 1 分钟弹幕量与热度等级。全部有源：观看增量
+        来自 ``room.state.watched_count`` 推送，弹幕量来自滑动窗口。
+        """
+        ts = self._resolve_now(now_ms)
+        self._trim(ts)
+        increment = self._audience_increment(ts)
+        if increment is None:
+            audience_text = "近 10 分钟新增观看未知（推送样本不足）"
+        else:
+            audience_text = f"近 10 分钟新增观看 {increment}"
+        return f"{audience_text}；近 1 分钟弹幕 {len(self._window)} 条（热度 {self._compute_heat(ts)}）"
 
     # ------------------------------------------------------------------
     # 冷场判定
