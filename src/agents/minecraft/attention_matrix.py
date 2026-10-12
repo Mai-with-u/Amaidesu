@@ -75,6 +75,7 @@ _LEADS: Dict[str, str] = {
 _SOURCE_LEADS: Dict[str, str] = {
     "gear_broken": "手上的装备用坏了",
     "discovered": "探索时发现了值得记的东西",
+    "follow_status": "跟着人走时",
 }
 
 # 一个分句里出现"x, y, z"三个整数就是坐标：整句去掉，不在半句话里留下"停在了"这种残片。

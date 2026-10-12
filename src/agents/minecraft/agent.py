@@ -91,6 +91,12 @@ _BODY_NOTICES = {
     ),
 }
 
+# 跟随中的处境变化：跟随还在进行，角色自己会等、会找，模型据此决定要不要换许可重下、取消或跟主播说一声。
+_FOLLOW_NOTICE = (
+    "[跟随] {message}。这是观察不是命令：跟随还在进行，跟不过去会原地等、跟丢了会自己找；"
+    "需要时换许可重下（例如放开 change_blocks）、取消，或跟主播说一声。"
+)
+
 # 结束了的目标在任务状态里保留几条：交付前对照用，再多只会挤占上下文。
 _RECENT_FINISHED_GOALS = 6
 
@@ -1050,13 +1056,18 @@ class MinecraftAgent(BaseAgent):
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:
-        """生存需求的临时任务、处理不了的需求与角色死亡：记进本批上下文，后两种告诉任务与主播。"""
+        """生存需求的临时任务、处理不了的需求、角色死亡与跟随的处境变化：记进本批上下文，后三种告诉任务（前两种同时告诉主播）。"""
         kind = str(event.get("kind") or "")
         message = str(event.get("message") or kind)
         record = {"event_type": kind, "message": message, "cursor": event.get("cursor")}
         self._batch_body_events.append(record)
         if len(self._batch_body_events) > _MAX_BATCH_BODY_EVENTS:
             self._batch_body_events = self._batch_body_events[-_MAX_BATCH_BODY_EVENTS:]
+        if kind == "follow_status":
+            # 跟随的处境变了：任务还没结束就告诉模型；给观众的叙述由注意流采集器出，这里不再上报主播。
+            if self._batch_active or not self._task_finished:
+                self._inject_wakeup_message(_FOLLOW_NOTICE.format(message=message))
+            return
         notice = _BODY_NOTICES.get(kind)
         if notice is not None:
             # 处理不了的需求、角色死亡：身体自己顾不过来，任务还没结束就注入一条通知唤醒模型，同时上报主播。

@@ -34,8 +34,11 @@ _RETRY_DELAYS_S = (1.0, 2.0, 5.0, 10.0, 30.0)
 _EMPTY_READ_FLOOR_S = 1.0
 # 这些事件说明目标的处境变了，需要取它此刻的完整样子。
 _GOAL_CHANGE_KINDS = frozenset({"asked", "paused", "resumed", "finished"})
-# 与目标无关的身体事件：生存需求的临时任务开始与结束、处理不了的需求、角色死亡。
-_BODY_EVENT_KINDS = frozenset({"temporary_task_started", "temporary_task_finished", "need_unhandled", "character_died"})
+# 与目标无关的身体事件：生存需求的临时任务开始与结束、处理不了的需求、角色死亡；
+# 跟随中的处境变化（跟不过去、跟丢了、过门、上下车、帮打）也不带目标编号，同样交给身体事件回调。
+_BODY_EVENT_KINDS = frozenset(
+    {"temporary_task_started", "temporary_task_finished", "need_unhandled", "character_died", "follow_status"}
+)
 
 McpCall = Callable[[str, Dict[str, Any]], Awaitable[MaicraftReply]]
 GoalChanged = Callable[[GoalRun], Awaitable[None]]
