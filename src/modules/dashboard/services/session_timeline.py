@@ -1,33 +1,13 @@
 """场次时间线装配
 
 单场时间线回看的条目装配：明细行（消息/发言/礼物/SC）的 kind 映射 +
-事件历史（决策/阶段/边界）过滤与合并排序。纯数据变换，不含 HTTP 语义。
+事件记录（已由 SessionEventReader 收集：环形缓冲 ∪ 诊断文件、去重、
+白名单过滤）合并排序与游标分页。纯数据变换，不含 HTTP 语义与 IO。
 """
 
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Tuple
 
-from src.modules.events.names import CoreEvents
-
-
-class _EventHistory(Protocol):
-    """event_history 环形缓冲的最小消费契约。"""
-
-    def get_by_session(self, session_id: int, limit: int) -> List[Any]: ...
-
-
-# 时间线只消费事件历史中的这些类型——消息/发言已由明细行承载，
-# 事件记录仅补充明细表没有的决策与状态事实
-TIMELINE_EVENT_TYPES = frozenset(
-    {
-        CoreEvents.PLANNER_DECISION,
-        CoreEvents.STREAMER_STAGE,
-        CoreEvents.LIVE_STARTED,
-        CoreEvents.LIVE_ENDED,
-        CoreEvents.RUNDOWN_CHANGED,
-        CoreEvents.GAME_MILESTONE,
-        CoreEvents.GAME_REPORT,
-    }
-)
+from src.modules.dashboard.services.session_events import trim_long_strings
 
 
 # 明细行 kind → 前端卡片 kind 的映射（gift_row/super_chat_row 为仓储层的
@@ -37,15 +17,19 @@ _KIND_MAP = {"gift_row": "gift", "super_chat_row": "super_chat"}
 
 def build_timeline_items(
     detail_rows: List[Dict[str, Any]],
-    event_history: Optional[_EventHistory],
-    session_id: int,
+    event_records: List[Any],
     limit: int,
-) -> List[Dict[str, Any]]:
-    """合并明细行与事件历史为按 ``ts_ms`` 升序的时间线条目（截取最近 ``limit`` 条）。
+    *,
+    before_timestamp_ms: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """合并明细行与事件记录为按 ``ts_ms`` 升序的时间线条目。
 
-    礼物/SC 明细行与 room.message 事件同义，统一映射为前端卡片 kind；
-    事件历史为内存环形缓冲，重启后事件侧条目不可回看（明细行不受影响）。
-    入参 ``detail_rows`` 不被修改——kind 映射落在浅拷贝的新条目上。
+    返回 ``(items, has_more)``：``before_timestamp_ms`` 游标只保留严格早于
+    该时刻的条目；合并后超出 ``limit`` 时保留最近一段并把 ``has_more`` 置真
+    （调用方以返回条目中最旧的 ``ts_ms`` 作为下一页游标续翻）。
+
+    礼物/SC 明细行与消息事件同义，统一映射为前端卡片 kind；事件记录的
+    超长字符串在返回侧截断（不改落盘文件）。入参均不被修改。
     """
     items: List[Dict[str, Any]] = []
     for row in detail_rows:
@@ -53,18 +37,22 @@ def build_timeline_items(
         entry["kind"] = _KIND_MAP.get(row["kind"], row["kind"])
         items.append(entry)
 
-    if event_history is not None:
-        for record in event_history.get_by_session(session_id, limit=limit):
-            if record.type not in TIMELINE_EVENT_TYPES:
-                continue
-            items.append(
-                {
-                    "kind": "event",
-                    "event_type": record.type,
-                    "ts_ms": record.timestamp_ms,
-                    "data": record.data,
-                }
-            )
+    for record in event_records:
+        items.append(
+            {
+                "kind": "event",
+                "event_type": record.type,
+                "ts_ms": record.timestamp_ms,
+                "data": trim_long_strings(record.data),
+            }
+        )
+
+    if before_timestamp_ms is not None:
+        items = [item for item in items if item["ts_ms"] < before_timestamp_ms]
 
     items.sort(key=lambda item: item["ts_ms"])
-    return items[-limit:]
+    has_more = len(items) > limit
+    return items[-limit:], has_more
+
+
+__all__ = ["build_timeline_items"]

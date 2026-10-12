@@ -1167,6 +1167,9 @@ async def _start_dashboard(
             # 字幕服务与 TTS 引擎：/api/v1/debug 直测端点经此驱动真实基础设施
             subtitle_service=subtitle_service,
             tts_engine=tts_engine,
+            # 诊断落盘器：场次回看事件侧读 logs/events 诊断流的目录来源
+            # （所有权在 EventHistoryRecorder，这里共享引用）
+            diagnostics_writer=(event_recorder.diagnostics_writer if event_recorder else None),
             # 事件历史服务所有权在 EventHistoryRecorder，这里共享引用供
             # REST（/events、/traces）与 WS（events.history 推送）读取
             event_history=(event_recorder.event_history if event_recorder else None),

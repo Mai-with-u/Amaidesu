@@ -54,11 +54,18 @@ class SessionTimelineResponse(BaseModel):
     """单场时间线回看响应。
 
     ``items`` 条目形状与实时视图（WS 推送）共用：明细行（消息/发言/礼物/SC）
-    与事件条目（``kind="event"``）按 ``ts_ms`` 升序合并。
+    与事件条目（``kind="event"``，事件侧覆盖环形缓冲与诊断文件两来源）按
+    ``ts_ms`` 升序合并；游标分页由 ``before_timestamp_ms`` 请求参数驱动，
+    ``has_more`` 指示是否还有更早条目。
     """
 
     live_session_id: int = Field(..., description="场次主键")
     items: List["SessionTimelineItem"] = Field(default_factory=list, description="时间线条目（按 ts_ms 升序）")
+    has_more: bool = Field(default=False, description="是否还有更早条目（以最旧条目 ts_ms 为游标续翻）")
+    events_pruned: bool = Field(
+        default=False,
+        description="场次时间范围内存在缺失的诊断天目录（被清理或未落盘），事件侧降级为空/部分",
+    )
 
 
 class _TimelineEntry(BaseModel):
@@ -112,7 +119,11 @@ class TimelineSuperChatItem(_TimelineEntry):
 
 
 class TimelineEventItem(_TimelineEntry):
-    """事件历史条目（决策/阶段/直播边界等，仅内存缓冲期内可回看）。"""
+    """事件历史条目（工具/决策/裁决/阶段/游戏/递话/响应等，与实时卡面同源）。
+
+    事件侧事实源为诊断事件流文件（logs/events）∪ 内存环形缓冲；诊断天目录
+    被清理后相应时段事件条目缺失（``events_pruned`` 如实回报）。
+    """
 
     kind: Literal["event"]
     event_type: str

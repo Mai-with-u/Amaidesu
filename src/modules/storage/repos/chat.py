@@ -376,31 +376,58 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_session_gifts(self, *, live_session_id: int, limit: int = 300) -> List[sqlite3.Row]:
-        """取指定场次的礼物明细行（时间正序），供回看时间线合并。"""
+    async def list_session_gifts(
+        self,
+        *,
+        live_session_id: int,
+        limit: int = 300,
+        before_timestamp_ms: Optional[int] = None,
+    ) -> List[sqlite3.Row]:
+        """取指定场次的礼物明细行（时间正序），供回看时间线合并。
+
+        ``before_timestamp_ms`` 游标只保留严格早于该时刻的行（倒序取最近
+        ``limit`` 行后反转回正序，与 list_recent_live_chat 同语义）。
+        """
 
         def _exec() -> List[sqlite3.Row]:
+            clauses = ["live_session_id=?"]
+            params: List[Any] = [live_session_id]
+            if before_timestamp_ms is not None:
+                clauses.append("timestamp_ms<?")
+                params.append(before_timestamp_ms)
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT * FROM gifts WHERE live_session_id=? ORDER BY timestamp_ms ASC LIMIT ?",
-                        (live_session_id, limit),
-                    ).fetchall()
+                cur = conn.execute(
+                    "SELECT * FROM gifts WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms DESC LIMIT ?",
+                    params + [limit],
                 )
+                return list(reversed(cur.fetchall()))
 
         return await self._run_in_executor(_exec)
 
-    async def list_session_super_chats(self, *, live_session_id: int, limit: int = 300) -> List[sqlite3.Row]:
-        """取指定场次的 SC 明细行（时间正序），供回看时间线合并。"""
+    async def list_session_super_chats(
+        self,
+        *,
+        live_session_id: int,
+        limit: int = 300,
+        before_timestamp_ms: Optional[int] = None,
+    ) -> List[sqlite3.Row]:
+        """取指定场次的 SC 明细行（时间正序），供回看时间线合并。
+
+        ``before_timestamp_ms`` 游标语义同 list_session_gifts。
+        """
 
         def _exec() -> List[sqlite3.Row]:
+            clauses = ["live_session_id=?"]
+            params: List[Any] = [live_session_id]
+            if before_timestamp_ms is not None:
+                clauses.append("timestamp_ms<?")
+                params.append(before_timestamp_ms)
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT * FROM super_chats WHERE live_session_id=? ORDER BY timestamp_ms ASC LIMIT ?",
-                        (live_session_id, limit),
-                    ).fetchall()
+                cur = conn.execute(
+                    "SELECT * FROM super_chats WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms DESC LIMIT ?",
+                    params + [limit],
                 )
+                return list(reversed(cur.fetchall()))
 
         return await self._run_in_executor(_exec)
 

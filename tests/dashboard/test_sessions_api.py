@@ -198,6 +198,47 @@ def test_session_timeline_merges_details_and_events(client: TestClient) -> None:
     # 回复关联在明细行上可直接查询
     speech = next(item for item in items if item["kind"] == "speech")
     assert speech["reply_to_message_id"] == "msg_seed_1"
+    # 降级字段缺省：诊断未装配时不报裁剪
+    assert body["has_more"] is False
+    assert body["events_pruned"] is False
+
+
+def test_session_timeline_cursor_pagination(client: TestClient) -> None:
+    """limit 截断 + has_more + 游标续翻：向前翻页不重复、翻尽后 has_more 归假。"""
+    import asyncio
+
+    from src.modules.events.event_history import EventRecord
+
+    pk = client.post("/api/v1/live-sessions/open", json={"title": "游标翻页"}).json()["live_session_id"]
+    server = _server_ref()
+    loop = asyncio.new_event_loop()
+
+    async def _seed():
+        for seq in range(1, 4):
+            server.event_history.record(
+                EventRecord(
+                    id=f"evt-{seq}",
+                    type="planner.decision",
+                    level="info",
+                    source=str(pk),
+                    summary=f"决策{seq}",
+                    data={"live_session_id": pk, "round_id": f"rnd_{seq}"},
+                    timestamp_ms=1_700_000_000_000 + seq * 1_000,
+                )
+            )
+
+    loop.run_until_complete(_seed())
+    loop.close()
+
+    base = f"/api/v1/live-sessions/{pk}/timeline"
+    page1 = client.get(base, params={"limit": 2}).json()
+    assert [i["data"]["round_id"] for i in page1["items"]] == ["rnd_2", "rnd_3"]
+    assert page1["has_more"] is True
+
+    oldest_ts = page1["items"][0]["ts_ms"]
+    page2 = client.get(base, params={"limit": 2, "before_timestamp_ms": oldest_ts}).json()
+    assert [i["data"]["round_id"] for i in page2["items"]] == ["rnd_1"]
+    assert page2["has_more"] is False
 
 
 def test_list_sessions_with_filters(client: TestClient) -> None:

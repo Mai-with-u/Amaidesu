@@ -261,13 +261,21 @@ class LiveSessionManager:
         """明细仓储（回看数据面只读访问：补录/核对明细行等）。"""
         return self._chat
 
-    async def get_session_details(self, live_session_id: int, *, limit: int = 300) -> List[dict]:
+    async def get_session_details(
+        self, live_session_id: int, *, limit: int = 300, before_timestamp_ms: Optional[int] = None
+    ) -> List[dict]:
         """单场明细行（live_chat + gifts + super_chats 合并，时间正序）。
 
         回看时间线的数据面：把三张明细表拉平为带 kind 的条目流，
         消息行带 message_id / reply_to_message_id 关联键。
+        ``before_timestamp_ms`` 游标只保留严格早于该时刻的行（回看"加载更早"
+        翻页），三张明细表各取游标前最近 ``limit`` 行后合并截断。
         """
-        rows = await self._chat.list_recent_live_chat(live_session_id=live_session_id, limit=limit)
+        rows = await self._chat.list_recent_live_chat(
+            live_session_id=live_session_id,
+            limit=limit,
+            before_timestamp_ms=before_timestamp_ms,
+        )
         items: List[dict] = []
         for row in rows:
             ts = int(row["timestamp_ms"])
@@ -293,7 +301,11 @@ class LiveSessionManager:
                         "simulated": bool(row["simulated"]),
                     }
                 )
-        gift_rows = await self._chat.list_session_gifts(live_session_id=live_session_id, limit=limit)
+        gift_rows = await self._chat.list_session_gifts(
+            live_session_id=live_session_id,
+            limit=limit,
+            before_timestamp_ms=before_timestamp_ms,
+        )
         for row in gift_rows:
             items.append(
                 {
@@ -307,7 +319,11 @@ class LiveSessionManager:
                     "simulated": bool(row["simulated"]),
                 }
             )
-        sc_rows = await self._chat.list_session_super_chats(live_session_id=live_session_id, limit=limit)
+        sc_rows = await self._chat.list_session_super_chats(
+            live_session_id=live_session_id,
+            limit=limit,
+            before_timestamp_ms=before_timestamp_ms,
+        )
         for row in sc_rows:
             items.append(
                 {

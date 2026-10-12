@@ -56,6 +56,11 @@ class DiagnosticsWriter:
         self._dropped = 0
         self._last_cleanup_date: Optional[str] = None
 
+    @property
+    def base_dir(self) -> Path:
+        """落盘根目录（读侧按 ``<base_dir>/<kind>/`` 定位各诊断流）。"""
+        return self._base_dir
+
     # -------------------- 对外接口（主调用链，零阻塞） --------------------
 
     def append(self, kind: str, record: Mapping[str, Any]) -> None:

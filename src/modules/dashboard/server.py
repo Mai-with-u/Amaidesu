@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from src.modules.config.service import ConfigService
+    from src.modules.diagnostics.writer import DiagnosticsWriter
     from src.modules.events.event_bus import EventBus
     from src.modules.events.event_history import EventHistoryService
     from src.modules.simulator.service import SimulatorService
@@ -81,6 +82,7 @@ class DashboardServer:
         task_tracker: Optional[Any] = None,
         subtitle_service: Optional[Any] = None,
         tts_engine: Optional[Any] = None,
+        diagnostics_writer: Optional["DiagnosticsWriter"] = None,
     ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
@@ -126,6 +128,9 @@ class DashboardServer:
         # 可用；未注入（极简启动/测试）时相关端点返回 503
         self.subtitle_service = subtitle_service
         self.tts_engine = tts_engine
+        # 注入诊断落盘器让场次回看事件侧能读到 logs/events 诊断流；
+        # 未注入（极简启动/测试）时回看事件侧只有内存环形缓冲
+        self.diagnostics_writer = diagnostics_writer
 
         self.port = dashboard_config.port
         self.host = dashboard_config.host

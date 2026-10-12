@@ -12,6 +12,8 @@
 显式场次。
 """
 
+import asyncio
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -25,6 +27,7 @@ from src.modules.dashboard.schemas.session import (
     SessionOpenResponse,
     SessionTimelineResponse,
 )
+from src.modules.dashboard.services.session_events import SessionEventReader
 from src.modules.dashboard.services.session_timeline import build_timeline_items
 from src.modules.logging import get_logger
 
@@ -126,11 +129,17 @@ async def session_timeline(
     session_id: int,
     server: ServerDep,
     limit: Annotated[int, Query(ge=1, le=2000, description="最多返回条数")] = 500,
+    before_timestamp_ms: Annotated[
+        Optional[int], Query(description="游标：只返回严格早于该时刻的条目（加载更早一页）")
+    ] = None,
 ) -> SessionTimelineResponse:
-    """单场时间线回看：明细行（消息/发言/礼物/SC）+ 事件历史（决策/阶段/边界）按时间合并。
+    """单场时间线回看：明细行（消息/发言/礼物/SC）+ 事件侧按时间合并。
 
-    与实时视图（WS 推送）共用同一条目形状的语义：前端用同一套卡片渲染。
-    条目装配（kind 映射、事件过滤、合并排序）见 ``services.session_timeline``。
+    事件侧事实源为诊断事件流文件（logs/events，覆盖重启前完整场次）∪ 内存
+    环形缓冲，白名单与实时 WS 卡面对齐（工具/决策/裁决/阶段/游戏/递话/响应）。
+    游标 ``before_timestamp_ms`` 供"加载更早"翻页；``has_more`` 指示还有更早
+    条目；诊断天目录被清理时 ``events_pruned`` 如实回报，事件侧相应降级。
+    条目装配见 ``services.session_timeline``，事件收集见 ``services.session_events``。
     """
     manager = _require_session_manager(server)
     if manager is None:
@@ -139,9 +148,34 @@ async def session_timeline(
     if row is None:
         raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
 
-    detail_rows = await manager.get_session_details(session_id, limit=limit)
-    items = build_timeline_items(detail_rows, getattr(server, "event_history", None), session_id, limit)
-    return SessionTimelineResponse(live_session_id=session_id, items=items)
+    detail_rows = await manager.get_session_details(session_id, limit=limit, before_timestamp_ms=before_timestamp_ms)
+    reader = SessionEventReader(
+        event_history=getattr(server, "event_history", None),
+        events_dir=_events_dir_of(server),
+    )
+    # 文件扫描是同步 IO，放线程池避免阻塞事件循环（回看是低频操作，无缓存）
+    window = await asyncio.to_thread(
+        reader.collect,
+        live_session_id=session_id,
+        started_at_ms=int(row["started_at_ms"]),
+        ended_at_ms=row["ended_at_ms"],
+        before_timestamp_ms=before_timestamp_ms,
+    )
+    items, has_more = build_timeline_items(detail_rows, window.records, limit, before_timestamp_ms=before_timestamp_ms)
+    return SessionTimelineResponse(
+        live_session_id=session_id,
+        items=items,
+        has_more=has_more,
+        events_pruned=window.days_pruned,
+    )
+
+
+def _events_dir_of(server: "DashboardServer") -> Optional[Path]:
+    """从装配取诊断事件流目录；诊断未装配（极简启动/测试）时返回 None。"""
+    writer = getattr(server, "diagnostics_writer", None)
+    if writer is None:
+        return None
+    return writer.base_dir / "events"
 
 
 @router.delete("/{session_id}", response_model=SessionActionResponse)
