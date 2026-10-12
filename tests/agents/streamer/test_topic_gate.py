@@ -60,6 +60,32 @@ def test_new_entity_exempt_even_when_literal_overlap() -> None:
     assert verdict.duplicate  # 字面确实重合，放行凭的是新词
 
 
+def test_numeric_rewrite_is_rejected() -> None:
+    """数值变化不构成新角度：同一句话换数字写法（五点 → 2.8）仍判重复。"""
+    verdict = check_topic(
+        "背包里就剩2.8滴血了，僵尸还在贴脸",
+        recent_topics=["血量见底"],
+        recent_speeches=["背包里就剩五滴血了，僵尸还在贴脸"],
+    )
+
+    assert not verdict.allowed
+    assert verdict.duplicate
+
+
+def test_fresh_numbers_do_not_arm_exemption() -> None:
+    """本窗新语料里的数字（三十五只、十六只）不充当新实体豁免的证据——
+    游戏叙事的数值刷新不是新角度。"""
+    verdict = check_topic(
+        "那群苦力怕在远处排队，血就剩五点了",
+        recent_topics=["怪群围观"],
+        recent_speeches=["那群苦力怕在远处排队"],
+        fresh_texts=["远处那三十五只苦力怕、十六只骷髅都没散"],
+    )
+
+    assert not verdict.allowed
+    assert verdict.duplicate
+
+
 def test_short_or_blank_topic_passes() -> None:
     """空白或单字话题没有可比对成分，交由提示词纪律而非框架拦下。"""
     for topic in ("", "   ", "好"):
