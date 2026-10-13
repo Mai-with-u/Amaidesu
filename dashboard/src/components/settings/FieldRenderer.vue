@@ -12,17 +12,47 @@
         <el-tag v-if="field.readonly" size="small" type="info" effect="plain" class="readonly-tag"
           >只读</el-tag
         >
+        <!-- 描述图标模式：ⓘ 悬浮展示，替代内联段落（密集字段列表节省纵向空间） -->
+        <el-tooltip
+          v-if="field.description && showDescriptionIcon"
+          :content="field.description"
+          placement="top"
+        >
+          <el-icon class="description-icon"><InfoFilled /></el-icon>
+        </el-tooltip>
       </label>
       <el-tag v-if="isModified" size="small" type="warning" effect="plain">已修改</el-tag>
     </div>
 
-    <!-- 字段描述 -->
-    <p v-if="field.description" class="field-description">{{ field.description }}</p>
+    <!-- 字段描述（icon 模式改走上方 ⓘ 悬浮，不重复渲染内联段落） -->
+    <p v-if="field.description && !showDescriptionIcon" class="field-description">
+      {{ field.description }}
+    </p>
 
     <!-- 字段输入 -->
     <div class="field-input">
+      <!-- 滑条控件：slider 拖拽 + 数字框精调绑同一值。置于链头：slider 字段的 type 多为
+           integer/float，若排在 type 分支之后会被整数/浮点分支先拦截，滑条永不渲染 -->
+      <template v-if="field.widget === 'slider'">
+        <div class="slider-control">
+          <el-slider
+            v-model="sliderModel"
+            :min="field.validation?.min"
+            :max="field.validation?.max"
+            :disabled="field.readonly"
+          />
+          <el-input-number
+            v-model="sliderModel"
+            :min="field.validation?.min"
+            :max="field.validation?.max"
+            :disabled="field.readonly"
+            controls-position="right"
+          />
+        </div>
+      </template>
+
       <!-- 字符串类型 -->
-      <template v-if="field.type === 'string'">
+      <template v-else-if="field.type === 'string'">
         <el-input
           v-if="field.sensitive"
           v-model="localValue"
@@ -172,6 +202,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { InfoFilled } from '@element-plus/icons-vue';
 import type { ConfigFieldSchema } from '@/types/settings';
 import ArrayEditor from './ArrayEditor.vue';
 import DictEditor from './DictEditor.vue';
@@ -202,6 +233,22 @@ const isLongText = computed(() => {
   if (props.field.type !== 'string') return false;
   const desc = props.field.description || '';
   return desc.length > 50 || (props.field.validation?.max_length ?? 0) > 100;
+});
+
+// 描述展示形态：icon = 标签旁 ⓘ 悬浮（缺省 inline = 内联段落）
+const showDescriptionIcon = computed(() => (props.field.descriptionDisplay ?? 'inline') === 'icon');
+
+// 滑条 + 数字框共用的数值视图：localValue 缺失时回退字段默认值，非数值输入不驱动控件
+const sliderModel = computed<number>({
+  get: () => {
+    if (typeof localValue.value === 'number') return localValue.value;
+    const d = props.field.default;
+    return typeof d === 'number' ? d : (props.field.validation?.min ?? 0);
+  },
+  set: val => {
+    localValue.value = val;
+    handleChange();
+  },
 });
 
 // 占位提示：默认值加「默认」前缀，与已填值区分（裸默认值会被误读为来源不明的灰字建议）；
@@ -367,6 +414,14 @@ function setObjectValue(key: string, value: unknown) {
   vertical-align: middle;
 }
 
+.description-icon {
+  margin-left: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  vertical-align: middle;
+  cursor: help;
+}
+
 .field-description {
   font-size: 12px;
   color: var(--text-secondary);
@@ -397,6 +452,22 @@ function setObjectValue(key: string, value: unknown) {
 .fixed-tuple :deep(.el-input-number) {
   flex: 1;
   min-width: 0;
+}
+
+/* 滑条 + 数字框：并排布局，数字框固定宽精调 */
+.slider-control {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.slider-control :deep(.el-slider) {
+  flex: 1;
+}
+
+.slider-control :deep(.el-input-number) {
+  width: 130px;
+  flex-shrink: 0;
 }
 
 .field-error {

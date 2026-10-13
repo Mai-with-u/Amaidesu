@@ -49,6 +49,8 @@ export interface ConfigFieldSchema {
   tupleLength?: number;
   /** x-ui-precision 标记：浮点小数位数；缺省 = 不强制舍入 */
   precision?: number;
+  /** 描述展示形态：icon = 标签旁 ⓘ 悬浮，inline = 内联段落；缺省 inline */
+  descriptionDisplay?: 'icon' | 'inline';
 }
 
 // 配置分组 Schema

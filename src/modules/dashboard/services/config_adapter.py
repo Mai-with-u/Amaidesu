@@ -314,6 +314,9 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
         gfield["tupleLength"] = field["x-ui-tuple-length"]
     if isinstance(field.get("x-ui-precision"), int):
         gfield["precision"] = field["x-ui-precision"]
+    # 描述展示形态：icon = 前端标签旁 ⓘ 悬浮提示（缺省 inline = 内联段落）
+    if field.get("x-ui-description-display"):
+        gfield["descriptionDisplay"] = field["x-ui-description-display"]
     validation: dict = {}
     for k in ("minValue", "maxValue", "options", "pattern"):
         if k in field:

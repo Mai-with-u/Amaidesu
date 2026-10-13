@@ -19,10 +19,12 @@ const sfcSource = readFileSync(
   'utf-8',
 );
 
-/** 截取 field-input 容器内的模板片段（输入分支链所在区域） */
+/** 截取 field-input 容器内的模板片段（输入分支链所在区域）。
+ *  不能用「首个 </div>」截断：链头 slider 分支内部含 <div class="slider-control">，
+ *  会提前闭合导致链体为空；改以错误提示段落为右边界。 */
 function extractFieldInputBlock(source: string): string {
   const start = source.indexOf('<div class="field-input">');
-  const end = source.indexOf('</div>', start);
+  const end = source.indexOf('<!-- 错误提示 -->', start);
   expect(start, '找不到 field-input 容器').toBeGreaterThan(-1);
   expect(end, 'field-input 容器未闭合').toBeGreaterThan(start);
   return source.slice(start, end);
@@ -42,5 +44,15 @@ describe('FieldRenderer 输入分支条件链', () => {
   it('fixed-tuple 分支挂在条件链上（v-else-if），不与 type 控件并存双渲染', () => {
     expect(sfcSource).toContain('v-else-if="field.widget === \'fixed-tuple\'"');
     expect(sfcSource).not.toMatch(/v-if="field\.widget === 'fixed-tuple'"/);
+  });
+
+  it('slider 分支占据链头（v-if），滑条与数字框绑同一计算值', () => {
+    // slider 必须先于 type 分支判定：slider 字段的 type 多为 integer/float，
+    // 排在 type 分支之后会被先拦截，滑条永不渲染
+    const block = extractFieldInputBlock(sfcSource);
+    expect(block).toContain('<template v-if="field.widget === \'slider\'">');
+    expect(sfcSource).not.toMatch(/v-else-if="field\.widget === 'slider'"/);
+    // 两个控件共用 sliderModel，避免出现第二套绑 localValue 的输入
+    expect(sfcSource.match(/v-model="sliderModel"/g)).toHaveLength(2);
   });
 });
