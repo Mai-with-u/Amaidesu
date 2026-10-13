@@ -35,6 +35,7 @@
         :get-original="getOriginal"
         :update-value="updateValue"
         :get-change-count="getChangeCount"
+        :show-advanced="showAdvanced"
         layout="grid"
       />
     </div>
@@ -65,6 +66,8 @@ const props = defineProps<{
   getChangeCount?: (key: string) => number;
   /** 工具栏「全部展开/全部收起」命令；seq 递增触发执行 */
   expandCommand?: { action: 'expand' | 'collapse'; seq: number } | null;
+  /** 高级字段总开关（透传卡体 SubFieldGroup）；false = 卡内不渲染 advanced 字段 */
+  showAdvanced?: boolean;
 }>();
 
 // 默认展开：配置卡内容即页面主体，折叠与否交给工具栏命令

@@ -98,6 +98,10 @@
           class="search-input"
         />
         <div class="toolbar-actions">
+          <div class="advanced-switch">
+            <span class="advanced-switch-label">高级设置</span>
+            <el-switch v-model="showAdvanced" size="default" />
+          </div>
           <el-button size="default" @click="issueExpandCommand('expand')">
             <el-icon><Expand /></el-icon>
             全部展开
@@ -137,7 +141,7 @@
               </el-icon>
             </span>
           </template>
-          <!-- 搜索模式：跨文件结果 -->
+          <!-- 搜索模式：跨文件结果（搜索命中即展示，不受高级开关过滤） -->
           <div v-if="searchQuery" class="search-results">
             <div
               v-for="match in globalSearchResults"
@@ -210,6 +214,7 @@
                   :update-value="updateFieldValue"
                   :get-change-count="getPendingChangeCount"
                   :expand-command="cardExpandCommand"
+                  :show-advanced="showAdvanced"
                 />
               </div>
             </div>
@@ -386,6 +391,8 @@ const showRestartDialog = ref(false);
 const restarting = ref(false);
 const searchQuery = ref('');
 const activeFileTab = ref('agents.toml');
+/** 高级字段总开关：关时浏览模式不渲染 advanced 字段（搜索结果不受影响） */
+const showAdvanced = ref(false);
 /** 最近一次保存失败的逐 key 错误；可点 key 跳转定位，关闭面板或再次保存时清除 */
 const saveErrors = ref<{ key: string; message: string }[]>([]);
 /** 变更清单面板（保存前 diff 预览 + 逐项撤销） */
@@ -647,6 +654,7 @@ async function handleSave() {
 /**
  * 保存失败定位：key 首段即文件 scope，切到对应文件 Tab、清搜索（搜索态下
  * 浏览卡片不渲染）后按 data-config-key 滚动高亮。
+ * 目标是 advanced 字段且总开关为关时，先自动打开开关再定位。
  */
 async function jumpToField(key: string) {
   const fileKey = `${key.split('.')[0]}.toml`;
@@ -654,6 +662,9 @@ async function jumpToField(key: string) {
     activeFileTab.value = fileKey;
   }
   if (searchQuery.value) searchQuery.value = '';
+  if (!showAdvanced.value && isAdvancedField(key)) {
+    showAdvanced.value = true;
+  }
   await nextTick();
   const el = document.querySelector<HTMLElement>(`[data-config-key="${key}"]`);
   if (!el) return;
@@ -677,6 +688,34 @@ async function jumpFromChangesPanel(key: string) {
   showChangesPanel.value = false;
   await nextTick();
   await jumpToField(key);
+}
+
+/** 在 schema 全字段树（children/properties/对象数组元素树）中按 key 查找字段 */
+function findFieldInSchema(fields: ConfigFieldSchema[], key: string): ConfigFieldSchema | undefined {
+  for (const f of fields) {
+    if (f.key === key) return f;
+    if (f.children) {
+      const found = findFieldInSchema(f.children, key);
+      if (found) return found;
+    }
+    if (f.properties) {
+      const found = findFieldInSchema(Object.values(f.properties), key);
+      if (found) return found;
+    }
+    if (f.items?.fields) {
+      const found = findFieldInSchema(f.items.fields, key);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+function isAdvancedField(key: string): boolean {
+  for (const group of settingsStore.groups) {
+    const found = findFieldInSchema(group.fields, key);
+    if (found) return found.advanced === true;
+  }
+  return false;
 }
 
 // 清单逐项撤销至空时自动收起面板
@@ -862,6 +901,17 @@ async function handleRestart() {
   align-items: center;
   gap: var(--spacing-sm);
   flex-shrink: 0;
+}
+
+.advanced-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.advanced-switch-label {
+  font-size: 13px;
+  color: var(--text-regular);
 }
 
 .search-input {

@@ -1,8 +1,13 @@
 <template>
   <div class="sub-field-group" :class="{ 'sub-field-group--grid': layout === 'grid' }">
     <template v-for="field in fields" :key="field.key">
-      <!-- 有子字段 → 增强版子卡片（accent bar + 卡片化） -->
-      <div v-if="field.children && field.children.length > 0" class="sub-card">
+      <!-- 有子字段 → 增强版子卡片（accent bar + 卡片化）；高级总开关显式关闭时不渲染 advanced 容器 -->
+      <div
+        v-if="
+          field.children && field.children.length > 0 && (showAdvanced !== false || !field.advanced)
+        "
+        class="sub-card"
+      >
         <div class="sub-card-header" @click="toggleCard(field.key)">
           <div class="sub-card-header-left">
             <el-icon class="sub-card-toggle">
@@ -38,13 +43,14 @@
             :get-original="getOriginal"
             :update-value="updateValue"
             :get-change-count="getChangeCount"
+            :show-advanced="showAdvanced"
           />
         </div>
       </div>
 
-      <!-- 叶子字段 → 卡片化渲染（grid 布局下宽字段占整行） -->
+      <!-- 叶子字段 → 卡片化渲染（grid 布局下宽字段占整行；高级总开关显式关闭时隐藏 advanced 叶子） -->
       <div
-        v-else
+        v-else-if="showAdvanced !== false || !field.advanced"
         class="field-card"
         :class="{ 'field-card--wide': layout === 'grid' && isWideField(field) }"
       >
@@ -75,6 +81,8 @@ const props = defineProps<{
    * 用于子卡片徽标。未提供时徽标隐藏（保留向后兼容）。
    */
   getChangeCount?: (key: string) => number;
+  /** 高级字段总开关：false 时不渲染 advanced 字段（含容器与叶子）；缺省 true = 全显示 */
+  showAdvanced?: boolean;
   /** 布局形态：grid = 双列网格（宽字段占整行），缺省 list = 纵向堆叠 */
   layout?: 'list' | 'grid';
 }>();

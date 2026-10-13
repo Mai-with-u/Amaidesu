@@ -29,6 +29,7 @@
             :update-value="updateValue"
             :get-change-count="getChangeCount"
             :expand-command="expandCommand"
+            :show-advanced="showAdvanced"
           />
         </div>
 
@@ -70,6 +71,7 @@
           :get-change-count="getChangeCount"
           :on-toggle="handleToggle"
           :expand-command="expandCommand"
+          :show-advanced="showAdvanced"
         />
       </template>
     </div>
@@ -93,6 +95,8 @@ const props = defineProps<{
   getChangeCount?: (key: string) => number;
   /** 工具栏「全部展开/全部收起」命令，透传给实体卡 */
   expandCommand?: { action: 'expand' | 'collapse'; seq: number } | null;
+  /** 高级字段总开关：false = 名单/实体卡不含 advanced 字段；缺省 true = 全显示 */
+  showAdvanced?: boolean;
 }>();
 
 function hasChildren(f: ConfigFieldSchema): boolean {
@@ -110,9 +114,18 @@ function isCategoryGroup(f: ConfigFieldSchema): boolean {
   return children.length > 0 && children.every(c => hasChildren(c));
 }
 
-// 实体卡 = 容器字段 + 对象数组字段；其余叶子与简单数组进紧凑元数据条
-const entityCards = computed(() => props.fields.filter(f => hasChildren(f) || isObjectArray(f)));
-const metaFields = computed(() => props.fields.filter(f => !hasChildren(f) && !isObjectArray(f)));
+// 实体卡 = 容器字段 + 对象数组字段；其余叶子与简单数组进紧凑元数据条。
+// 高级总开关关闭时同步过滤 advanced 字段（对象数组卡自带折叠区，不走此开关）
+const entityCards = computed(() =>
+  visibleFields(props.fields).filter(f => hasChildren(f) || isObjectArray(f)),
+);
+const metaFields = computed(() =>
+  visibleFields(props.fields).filter(f => !hasChildren(f) && !isObjectArray(f)),
+);
+
+function visibleFields(fields: ConfigFieldSchema[]): ConfigFieldSchema[] {
+  return props.showAdvanced === false ? fields.filter(f => !f.advanced) : fields;
+}
 
 /** 卡片布尔开关寻址：无名单语义时，卡片若有布尔型 enabled 子字段则开关绑定之 */
 function booleanEnabledKey(card: ConfigFieldSchema): string | null {
