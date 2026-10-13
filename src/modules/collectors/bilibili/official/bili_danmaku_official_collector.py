@@ -75,17 +75,48 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         在运行期失败暴露，而非加载期拒绝整个配置文件。
         """
 
-        id_code: str = Field("", description="主播身份码")
-        app_id: str = Field("", description="应用ID")
-        access_key: str = Field("", description="访问密钥")
-        access_key_secret: str = Field("", description="访问密钥Secret")
-        api_host: str = Field(default="https://live-open.biliapi.com", description="API主机地址")
-        message_cache_size: int = Field(default=1000, description="消息缓存大小", ge=1)
-        context_tags: Optional[list] = Field(default=None, description="Prompt上下文标签")
-        enable_template_info: bool = Field(default=False, description="启用模板信息")
-        template_items: dict = Field(default_factory=dict, description="模板项")
+        id_code: str = Field("", title="主播身份码", description="B站开放平台的主播身份码")
+        app_id: str = Field("", title="应用 ID", description="B站开放平台的应用 ID")
+        access_key: str = Field("", title="访问密钥", description="B站开放平台的访问密钥")
+        access_key_secret: str = Field("", title="访问密钥 Secret", description="B站开放平台的访问密钥 Secret")
+        api_host: str = Field(
+            default="https://live-open.biliapi.com",
+            title="API 主机",
+            description="B站开放平台服务地址",
+            json_schema_extra={"x-ui-advanced": True},
+        )
+        message_cache_size: int = Field(
+            default=1000,
+            title="消息缓存上限",
+            description="本地保留的最近消息条数（用于去重）",
+            ge=1,
+            json_schema_extra={"x-ui-advanced": True},
+        )
+        context_tags: Optional[list] = Field(
+            default=None,
+            title="上下文标签",
+            description="弹幕消息附带的上下文标签",
+            json_schema_extra={"x-ui-advanced": True},
+        )
+        enable_template_info: bool = Field(
+            default=False,
+            title="启用模板项",
+            description="是否启用消息模板",
+            json_schema_extra={"x-ui-advanced": True},
+        )
+        template_items: dict = Field(
+            default_factory=dict,
+            title="模板项",
+            description="消息模板内容",
+            json_schema_extra={"x-ui-advanced": True},
+        )
         # 是否 emit 语义域事件（默认 True）
-        emit_semantic_events: bool = Field(default=True, description="emit room.message.*/room.state.* 语义事件")
+        emit_semantic_events: bool = Field(
+            default=True,
+            title="发语义事件",
+            description="是否向系统发出弹幕/SC/礼物等标准事件（关闭后主播感知不到直播动态）",
+            json_schema_extra={"x-ui-advanced": True},
+        )
 
     def __init__(
         self,

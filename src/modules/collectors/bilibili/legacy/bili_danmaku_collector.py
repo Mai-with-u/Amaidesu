@@ -36,11 +36,15 @@ class BiliDanmakuMessageConfig(BaseModel):
 
     default_user_id: str = Field(
         default="",
-        description="未提供 uid 时使用的占位标识（空 = 用 nickname 兜底）",
+        title="默认用户 ID",
+        description="弹幕未带 uid 时使用的占位标识（空 = 用昵称兜底）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     platform: str = Field(
         default="bilibili",
-        description="来源平台标识",
+        title="来源平台",
+        description="消息的来源平台标识",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 
@@ -62,13 +66,19 @@ class BiliDanmakuCollector(BaseCollector):
         gt 正数约束表达"必填"——未配置的轮询在运行期失败暴露。
         """
 
-        room_id: int = Field(default=0, description="直播间ID（0=未配置）")
-        poll_interval: int = Field(default=3, description="轮询间隔（秒）", ge=1)
+        room_id: int = Field(default=0, title="直播间号", description="B站直播间号（0 = 未配置）")
+        poll_interval: int = Field(default=3, title="轮询间隔", description="多久拉一次新弹幕（秒）", ge=1)
         message_config: BiliDanmakuMessageConfig = Field(
             default_factory=BiliDanmakuMessageConfig,
-            description="消息处理配置（default_user_id / platform）",
+            title="消息设置",
+            description="弹幕消息的身份与平台标识配置",
         )
-        emit_semantic_events: bool = Field(default=True, description="emit room.message.danmaku 语义事件")
+        emit_semantic_events: bool = Field(
+            default=True,
+            title="发语义事件",
+            description="是否向系统发出标准弹幕事件（关闭后主播听不到弹幕）",
+            json_schema_extra={"x-ui-advanced": True},
+        )
 
     def __init__(
         self,

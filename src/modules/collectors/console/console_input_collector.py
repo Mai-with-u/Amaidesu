@@ -87,8 +87,8 @@ class ConsoleInputCollector(BaseCollector):
     class ConfigSchema(BaseConfig):
         """控制台输入采集器配置"""
 
-        user_id: str = Field(default="console_user", description="用户ID")
-        user_nickname: str = Field(default="控制台", description="用户昵称")
+        user_id: str = Field(default="console_user", title="用户 ID", description="控制台消息展示用的用户 ID")
+        user_nickname: str = Field(default="控制台", title="用户昵称", description="控制台消息展示用的昵称")
 
     def __init__(
         self,
