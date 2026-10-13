@@ -156,22 +156,54 @@ class EventHistoryConfig(BaseConfig):
 class EdgeTTSParams(BaseConfig):
     """Edge TTS 引擎参数（``[tts.edge_tts]`` 段）"""
 
-    voice: str = Field(default="zh-CN-XiaoxiaoNeural", title="语音", description="Edge TTS 语音（微软官方预设音色名）")
+    voice: str = Field(
+        default="zh-CN-XiaoxiaoNeural",
+        title="语音",
+        description="Edge TTS 语音（微软官方预设音色名）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
 
 class GPTSoVITSParams(BaseConfig):
     """GPT-SoVITS 引擎参数（``[tts.gptsovits]`` 段；对接 api_v2）"""
 
-    host: str = Field(default="127.0.0.1", title="API 主机地址", description="API 主机地址")
-    port: int = Field(default=9880, ge=1, le=65535, title="API 端口", description="API 端口")
+    host: str = Field(
+        default="127.0.0.1",
+        title="API 主机地址",
+        description="API 主机地址",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    port: int = Field(
+        default=9880,
+        ge=1,
+        le=65535,
+        title="API 端口",
+        description="API 端口",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     ref_audio_path: str = Field(
         default="",
         title="参考音频路径",
         description="参考音频路径（由 GPT-SoVITS 服务端读取，建议绝对路径）",
+        json_schema_extra={"x-ui-advanced": True},
     )
-    prompt_text: str = Field(default="", title="提示文本", description="提示文本")
-    text_language: str = Field(default="zh", pattern=r"^(zh|en|ja|auto)$", title="文本语言", description="文本语言")
-    prompt_language: str = Field(default="zh", pattern=r"^(zh|en|ja)$", title="提示语言", description="提示语言")
+    prompt_text: str = Field(
+        default="", title="提示文本", description="提示文本", json_schema_extra={"x-ui-advanced": True}
+    )
+    text_language: str = Field(
+        default="zh",
+        pattern=r"^(zh|en|ja|auto)$",
+        title="文本语言",
+        description="文本语言",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    prompt_language: str = Field(
+        default="zh",
+        pattern=r"^(zh|en|ja)$",
+        title="提示语言",
+        description="提示语言",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     top_k: int = Field(
         default=20,
         ge=1,
@@ -198,7 +230,14 @@ class GPTSoVITSParams(BaseConfig):
         ),
         json_schema_extra={"x-ui-advanced": True},
     )
-    speed_factor: float = Field(default=1.0, ge=0.1, le=3.0, title="语速因子", description="语速因子")
+    speed_factor: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=3.0,
+        title="语速因子",
+        description="语速因子",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     streaming_mode: int = Field(
         default=1,
         ge=0,
@@ -278,12 +317,25 @@ class GPTSoVITSParams(BaseConfig):
 class VoiceboxParams(BaseConfig):
     """Voicebox 引擎参数（``[tts.voicebox]`` 段）"""
 
-    host: str = Field(default="127.0.0.1", title="API 主机地址", description="Voicebox API 主机地址")
-    port: int = Field(default=17493, ge=1, le=65535, title="API 端口", description="Voicebox API 端口")
+    host: str = Field(
+        default="127.0.0.1",
+        title="API 主机地址",
+        description="Voicebox API 主机地址",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    port: int = Field(
+        default=17493,
+        ge=1,
+        le=65535,
+        title="API 端口",
+        description="Voicebox API 端口",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     profile_id: str = Field(
         default="",
         title="音色 Profile ID",
         description="音色 profile ID（在 Voicebox 中克隆音色后获得；留空时合成会报错提示）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     language: str = Field(
         default="zh",
@@ -316,11 +368,13 @@ class OmniTTSParams(BaseConfig):
         default="tts",
         title="LLM 用途档位",
         description="LLM 用途 profile（model.toml [llm_profiles] 键，须指向带语音输出模态的模型）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     voice: str = Field(
         default="",
         title="音色",
         description="音色（厂商词表，如 DashScope 的 Chelsie；必填，留空合成会报错提示）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     audio_format: str = Field(
         default="wav",
@@ -340,6 +394,7 @@ class OmniTTSParams(BaseConfig):
         default="",
         title="语音风格提示",
         description="语音风格提示（系统提示词静态注入；不承载台词内容）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 

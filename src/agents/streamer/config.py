@@ -298,22 +298,43 @@ class StreamerNarrativeConfig(BaseConfig):
         default=900_000,
         ge=0,
         description="游戏进展与上报交给过决策窗后，自到达起保留多久（毫秒）；更早的进展要靠查询工具",
+        json_schema_extra={"x-ui-advanced": True},
     )
-    game_max_items: int = Field(title="游戏叙事条数上限", default=20, ge=1, description="游戏叙事最多保留条数")
+    game_max_items: int = Field(
+        title="游戏叙事条数上限",
+        default=20,
+        ge=1,
+        description="游戏叙事最多保留条数",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     body_ttl_ms: int = Field(
         title="身体近况保留期",
         default=300_000,
         ge=0,
         description="被袭击/死亡/重生等遭遇交给过决策窗后，自到达起保留多久（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
-    body_max_items: int = Field(title="身体近况条数上限", default=10, ge=1, description="身体近况最多保留条数")
+    body_max_items: int = Field(
+        title="身体近况条数上限",
+        default=10,
+        ge=1,
+        description="身体近况最多保留条数",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     chat_ttl_ms: int = Field(
         title="游戏聊天保留期",
         default=300_000,
         ge=0,
         description="游戏里玩家与系统消息交给过决策窗后，自到达起保留多久（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
-    chat_max_items: int = Field(title="游戏聊天条数上限", default=10, ge=1, description="游戏聊天最多保留条数")
+    chat_max_items: int = Field(
+        title="游戏聊天条数上限",
+        default=10,
+        ge=1,
+        description="游戏聊天最多保留条数",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
 
 class StreamerThinkingStreamConfig(BaseConfig):
@@ -389,6 +410,7 @@ class StreamerConfig(BaseConfig):
         default=8,
         ge=1,
         description="Planner 单决策窗 ReAct 循环最大步数（超出静默收场，防失控）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     planner_recent_intents_max: int = Field(
         title="回看最近几轮打算",
@@ -407,6 +429,7 @@ class StreamerConfig(BaseConfig):
         default_factory=list,
         description="决策前自动调用的只读工具全名（无参数），结果放进参考段的【现场速览】；"
         "省掉“先查一步再开口”的请求。按所接游戏配置，空 = 不调用",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
     # 子段

@@ -82,7 +82,12 @@ class TextAdvConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
     max_recent_screens: int = Field(
-        default=10, title="剧情缓冲屏数", ge=1, le=100, description="累积剧情环缓冲保留的最近屏数"
+        default=10,
+        title="剧情缓冲屏数",
+        ge=1,
+        le=100,
+        description="累积剧情环缓冲保留的最近屏数",
+        json_schema_extra={"x-ui-advanced": True},
     )
     auto_button_xy: Optional[tuple[int, int]] = Field(
         default=None,
