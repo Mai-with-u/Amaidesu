@@ -90,6 +90,7 @@
         >
           <div class="act-head">
             <span class="act-kind">决策</span>
+            <span class="d-internal" title="主播的内部盘算，不会作为台词念出来">内部</span>
             <code v-if="entry.roundId" class="d-round mono">{{ entry.roundId }}</code>
             <span v-if="confidenceLabel(entry)" class="d-conf mono">{{
               confidenceLabel(entry)
@@ -118,8 +119,17 @@
             </template>
             <span v-else class="reply-quote-fallback">回复了一条弹幕</span>
           </div>
-          <p class="act-text">{{ entry.text }}</p>
-          <p v-if="guidanceOf(entry)" class="d-guidance">{{ guidanceOf(entry) }}</p>
+          <!-- 主行 = 表达指引（决策的语义本体：决定怎么讲）→ 带「怎么讲」标签；
+               失败轮与无指引的旧数据回退原文（错误/沉默说明/话题摘要） -->
+          <p v-if="guidanceOf(entry) && !entry.failed" class="act-text">
+            <span class="d-tag">怎么讲</span>{{ guidanceOf(entry) }}
+          </p>
+          <p v-else class="act-text">{{ entry.text }}</p>
+          <!-- 话题摘要带「聊什么」标签降级为次行：Planner 用第一人称写的草稿腔，
+               与发言卡台词同声同调，不标会被当成又一段台词 -->
+          <p v-if="guidanceOf(entry) && !entry.failed && topicOf(entry)" class="d-topic">
+            <span class="d-tag">聊什么</span><span class="d-topic-text">{{ topicOf(entry) }}</span>
+          </p>
           <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
           <div class="d-meta">
             <span v-if="batchSizeOf(entry) > 0" class="mono">批次 {{ batchSizeOf(entry) }} 条</span>
@@ -581,6 +591,7 @@ import {
   rawOf,
   relativeTime,
   replyMsOf,
+  topicOf,
   type ShowEntry,
 } from '@/utils/liveFeed';
 import { useNowTick } from '@/composables/useNowTick';
@@ -1279,21 +1290,23 @@ async function copyText(text: string): Promise<void> {
 }
 
 /* 决策记录：居左宽卡——本轮为什么这么做                            */
+/* 决策卡走中性灰系：决策是主播的内部盘算（不播出），紫色只留给真正说出口的发言卡——
+ * "想的"与"说的"靠底色一眼分层，不依赖读头部标签 */
 .decision {
   margin-left: 38px; /* 28px 头像 + 10px 间距：与气泡体对齐 */
   max-width: 92%;
   padding: 9px 12px;
   border-radius: var(--radius-md);
-  background: var(--color-agent-bg);
-  border-left: 3px solid var(--color-agent);
+  background: var(--bg-hover);
+  border-left: 3px solid var(--border-color-dark);
 }
 .decision.is-failed {
   background: var(--color-danger-bg);
   border-left-color: var(--color-danger);
 }
 .decision.is-silent {
-  background: var(--bg-hover);
-  border-left-color: var(--border-color-dark);
+  background: var(--bg-card);
+  border-left-color: var(--border-color);
 }
 
 /* Agent 响应卡（kind='agent_reply'）：决定卡同布局，游戏绿色系变体 */
@@ -1318,6 +1331,17 @@ async function copyText(text: string): Promise<void> {
 }
 .act-kind--speech {
   color: var(--color-agent);
+}
+/* 内部角标：与"回应/沉默"徽标（实底）区分，用描边中性款——只做分类标记，不抢状态语义 */
+.d-internal {
+  padding: 0 5px;
+  border: 1px solid var(--border-color-dark);
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
 }
 .act-emotion {
   padding: 0 6px;
@@ -1413,11 +1437,37 @@ async function copyText(text: string): Promise<void> {
   color: var(--text-placeholder);
 }
 
-.d-guidance {
-  margin: 4px 0 0;
-  font-size: 11px;
+/* 话题摘要行：带「聊什么」标签的次行——正文已让给表达指引，话题摘要降级展示，
+ * 第一人称草稿腔不再与发言卡台词混作一团 */
+.d-topic {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 5px 0 0;
+  font-size: 12px;
   line-height: 1.5;
   color: var(--text-secondary);
+  word-break: break-word;
+}
+/* 行标签：「怎么讲」（表达指引主行）/「聊什么」（话题摘要次行）——决策卡两行自由文本
+ * 不带标签就无法与台词区分，也互相分不清 */
+.d-tag {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--border-color-dark);
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.act-text .d-tag {
+  margin-right: 6px;
+}
+.d-topic-text {
+  min-width: 0;
+  white-space: pre-wrap;
   word-break: break-word;
 }
 

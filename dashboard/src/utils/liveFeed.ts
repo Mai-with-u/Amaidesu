@@ -628,6 +628,11 @@ export function guidanceOf(entry: ShowEntry): string {
   return str(decisionDetail(entry).reply_guidance);
 }
 
+/** 话题摘要（topic_summary）：Planner 以主播第一人称写的"打算说什么"，决策卡上作带标签的次行展示 */
+export function topicOf(entry: ShowEntry): string {
+  return str(decisionDetail(entry).topic_summary);
+}
+
 export function batchSizeOf(entry: ShowEntry): number {
   const batch = decisionDetail(entry).batch;
   return Array.isArray(batch) ? batch.length : 0;
