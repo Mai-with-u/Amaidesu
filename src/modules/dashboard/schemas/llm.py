@@ -6,7 +6,7 @@ LLM 管理 Schema
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TokenUsageSchema(BaseModel):
@@ -214,3 +214,25 @@ class LLMUsageTrendsResponse(BaseModel):
     days: int
     points: List[LLMUsageTrendPoint] = []
     model_points: List[LLMUsageTrendModelPoint] = []
+
+
+class LLMRequestStatsItem(BaseModel):
+    """单条请求的统计列（不含正文大字段，统计胶囊合批懒取专用）"""
+
+    model_name: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+
+
+class LLMRequestStatsBatchRequest(BaseModel):
+    """按 id 批量取请求统计的请求体（一次回看首屏可达数百个请求指针）"""
+
+    request_ids: List[str] = Field(..., min_length=1, max_length=500)
+
+
+class LLMRequestStatsBatchResponse(BaseModel):
+    """批量统计响应：id → 统计；未命中的 id 不在映射中"""
+
+    stats: Dict[str, LLMRequestStatsItem] = Field(default_factory=dict)

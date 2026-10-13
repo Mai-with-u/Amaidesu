@@ -379,6 +379,44 @@ class RequestHistoryManager:
                 return record
         return None
 
+    async def get_request_stats_by_ids(self, request_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """按 id 批量取请求统计（仅统计列，不含正文大字段）。
+
+        观察面统计胶囊合批懒取的数据面：返回 ``id → 统计字典``，未命中的
+        id 不在结果中（前端按缺渲染不取数）。无库模式扫内存缓存的同名列。
+        """
+        unique = [rid for rid in dict.fromkeys(request_ids) if rid]
+        if not unique:
+            return {}
+        if self._llm_repo is not None:
+            rows = await self._llm_repo.get_llm_request_stats(unique)
+            return {
+                str(row.get("request_id")): {
+                    "model_name": str(row.get("model_name") or ""),
+                    "prompt_tokens": int(row.get("prompt_tokens") or 0),
+                    "completion_tokens": int(row.get("completion_tokens") or 0),
+                    "cache_hit_tokens": int(row.get("cache_hit_tokens") or 0),
+                    "cache_miss_tokens": int(row.get("cache_miss_tokens") or 0),
+                }
+                for row in rows
+            }
+
+        wanted = set(unique)
+        stats: Dict[str, Dict[str, Any]] = {}
+        for record in self._cache:
+            request_id = record.get("request_id")
+            if request_id not in wanted:
+                continue
+            usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
+            stats[str(request_id)] = {
+                "model_name": str(record.get("model_name") or ""),
+                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                "completion_tokens": int(usage.get("completion_tokens") or 0),
+                "cache_hit_tokens": int(record.get("cache_hit_tokens") or 0),
+                "cache_miss_tokens": int(record.get("cache_miss_tokens") or 0),
+            }
+        return stats
+
     async def get_history(
         self,
         profile_name: Optional[str] = None,

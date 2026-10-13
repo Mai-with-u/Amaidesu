@@ -317,6 +317,26 @@ class LLMRepo(BaseRepo):
         rows = await self._execute("SELECT * FROM llm_requests WHERE request_id = ?", (request_id,))
         return dict(rows[0]) if rows else None
 
+    async def get_llm_request_stats(self, request_ids: List[str]) -> List[Dict[str, Any]]:
+        """按 id 批量取请求统计列（不含 request_params 等正文大字段）。
+
+        观察面统计胶囊合批懒取专用：只回统计列，避免逐卡取详情时回传整段
+        请求正文。未命中的 id 不在结果中。
+        """
+
+        def _exec() -> List[Dict[str, Any]]:
+            placeholders = ",".join("?" for _ in request_ids)
+            with self._manager.transaction() as conn:
+                cursor = conn.execute(
+                    "SELECT request_id, model_name, prompt_tokens, completion_tokens,"
+                    " cache_hit_tokens, cache_miss_tokens"
+                    f" FROM llm_requests WHERE request_id IN ({placeholders})",
+                    list(request_ids),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+
+        return await self._run_in_executor(_exec)
+
     async def delete_llm_requests_before(self, *, before_date: Optional[str] = None) -> int:
         """删除请求历史；``before_date``（本地日 YYYY-MM-DD）为 None 时清空全部，返回删除行数。"""
 

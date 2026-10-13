@@ -560,7 +560,7 @@
  * 可选的决策轮点击（roundClickable）：开启后带轮次 ID 的决策/裁决/工具/发言行
  * 可点并上抛 roundClick，由页面决定跳转去向；默认关闭，首页复用不受影响。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, onScopeDispose, ref, watch } from 'vue';
 import { CopyDocument, Monitor } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
@@ -651,8 +651,9 @@ function rowAlignClass(entry: ShowEntry): string {
 const nowMs = useNowTick();
 
 /** 决策/发言卡 LLM 统计徽标（llm_request_id → 输入/输出/缓存命中）。
- * planner.decision 只带请求指针不带 token 数，详情按 id 懒取；speech 带的是
- * Replyer 表达请求指针，同一套懒取。缓存口径取 hit/prompt_tokens 而非聚合的
+ * planner.decision 只带请求指针不带 token 数，统计按可见指针合批懒取
+ * （POST /llm/history/stats，仅统计列）；speech 带的是 Replyer 表达请求
+ * 指针，同一套懒取。缓存口径取 hit/prompt_tokens 而非聚合的
  * hit/(hit+miss)：OpenAI 风格只上报 cached_tokens 不上报 miss，后者会算出假
  * 100%；命中为 0（含上游未上报）不渲染缓存徽标。 */
 interface RoundTokenStats {
@@ -678,27 +679,45 @@ const reasoningFetching = new Set<string>();
 /** 已展开思考区的条目 id（v-if 挂载；与 openedPayloads 同款收展语义） */
 const expandedThinking = ref<Set<string>>(new Set());
 
-async function fetchTokenStats(requestId: string): Promise<void> {
-  tokenStatsFetching.add(requestId);
+async function fetchTokenStatsBatch(requestIds: string[]): Promise<void> {
+  for (const requestId of requestIds) tokenStatsFetching.add(requestId);
   try {
-    const response = await llmApi.getRequestById(requestId);
-    const record = response.data;
-    if (!record) return;
-    const prompt = record.usage?.prompt_tokens ?? 0;
-    if (prompt > 0) {
-      roundTokenStats.value.set(requestId, {
-        promptTokens: prompt,
-        completionTokens: record.usage?.completion_tokens ?? 0,
-        hitTokens: record.cache_hit_tokens ?? 0,
-        modelName: record.model_name ?? '',
-      });
+    const response = await llmApi.getRequestStats(requestIds);
+    const stats = response.data?.stats ?? {};
+    for (const [requestId, item] of Object.entries(stats)) {
+      // 与旧逐卡口径一致：prompt 为 0（含上游未上报）不渲染统计胶囊
+      if (item.prompt_tokens > 0) {
+        roundTokenStats.value.set(requestId, {
+          promptTokens: item.prompt_tokens,
+          completionTokens: item.completion_tokens,
+          hitTokens: item.cache_hit_tokens,
+          modelName: item.model_name,
+        });
+      }
     }
   } catch (e) {
-    console.warn(`[FeedTimeline] 决策卡 token 统计获取失败: ${requestId}`, e);
+    console.warn('[FeedTimeline] 批量 token 统计获取失败', e);
   } finally {
-    tokenStatsFetching.delete(requestId);
+    for (const requestId of requestIds) tokenStatsFetching.delete(requestId);
   }
 }
+
+/** 合批调度：一次回看首屏可达数百个请求指针，逐卡取详情会回传整段请求
+ * 正文并触发读侧文件回查（整应用冻结）；短防抖合并同批可见指针为一次
+ * 轻量批量请求（POST /llm/history/stats，仅 usage/model 列） */
+let tokenStatsTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleTokenStats(missingIds: string[]): void {
+  if (tokenStatsTimer) clearTimeout(tokenStatsTimer);
+  tokenStatsTimer = setTimeout(() => {
+    tokenStatsTimer = null;
+    void fetchTokenStatsBatch(missingIds);
+  }, 150);
+}
+
+onScopeDispose(() => {
+  if (tokenStatsTimer) clearTimeout(tokenStatsTimer);
+});
 
 /** 模型上下文窗口（model_name → token 总量，取自 GET /llm/usage 装配期快照）。
  * 整页只取一次——窗口来自 [[llm_models]].context_window 配置，改配置需重启应用，
@@ -735,11 +754,10 @@ watch(
     for (const key of reasoningByRequest.value.keys()) {
       if (!visible.has(key)) reasoningByRequest.value.delete(key);
     }
-    for (const requestId of visible) {
-      if (!roundTokenStats.value.has(requestId) && !tokenStatsFetching.has(requestId)) {
-        void fetchTokenStats(requestId);
-      }
-    }
+    const missing = [...visible].filter(
+      requestId => !roundTokenStats.value.has(requestId) && !tokenStatsFetching.has(requestId),
+    );
+    if (missing.length > 0) scheduleTokenStats(missing);
     if (visible.size > 0) void ensureContextWindows();
     // 懒渲染集合同步收缩：只保留当前在列条目，避免长会话下随事件 id 无限增长
     if (openedPayloads.value.size > 0 || expandedThinking.value.size > 0) {

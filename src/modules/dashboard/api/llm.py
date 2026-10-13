@@ -4,6 +4,7 @@ LLM 管理 API
 提供 LLM 用量统计、用量趋势图表和请求历史的查询接口。
 """
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
 
@@ -17,6 +18,9 @@ from src.modules.dashboard.schemas.llm import (
     LLMHistoryStatisticsResponse,
     LLMRequestHistoryListItem,
     LLMRequestHistoryResponse,
+    LLMRequestStatsBatchRequest,
+    LLMRequestStatsBatchResponse,
+    LLMRequestStatsItem,
     LLMUsageStatsResponse,
     LLMUsageSummaryResponse,
     LLMUsageTrendsResponse,
@@ -190,7 +194,8 @@ async def get_context_breakdown_by_request(request_id: str, server: ServerDep) -
         except ValueError:
             breakdown = None
     if breakdown is None:
-        breakdown = read_request_breakdown(request_id, int(row.get("timestamp_ms") or 0))
+        # 文件回查线性扫描小时文件，挪线程池避免冻结事件循环（悬停触发，低频）
+        breakdown = await asyncio.to_thread(read_request_breakdown, request_id, int(row.get("timestamp_ms") or 0))
     if not isinstance(breakdown, dict):
         return None
     model_name = str(row.get("model_name") or "")
@@ -334,7 +339,26 @@ async def get_request_by_id(request_id: str) -> Optional[LLMRequestHistoryRespon
     if not record:
         return None
 
-    return _convert_record_to_response(_merge_payload_from_file(record))
+    # 正文回查线性扫描小时文件（峰值 18.7MB/文件），同步跑在事件循环里会
+    # 冻结整个 WebUI；挪线程池（浏览器逐卡展开时触发，低频）
+    merged = await asyncio.to_thread(_merge_payload_from_file, record)
+    return _convert_record_to_response(merged)
+
+
+@router.post("/history/stats", response_model=LLMRequestStatsBatchResponse)
+async def get_request_stats_batch(request: LLMRequestStatsBatchRequest) -> LLMRequestStatsBatchResponse:
+    """按 id 批量取请求统计（仅库查询统计列，不含正文大字段）。
+
+    时间线统计胶囊合批懒取专用：一次回看首屏有数百张带请求指针的卡，
+    逐卡 GET /history/{id} 会回传整段请求正文并触发读侧诊断文件回查
+    （统计胶囊只消费 usage/model 几个数），合批轻端点把 N 个重请求收敛
+    为 1 个轻请求。
+    """
+    history_manager = get_global_request_history_manager()
+    stats = await history_manager.get_request_stats_by_ids(request.request_ids)
+    return LLMRequestStatsBatchResponse(
+        stats={request_id: LLMRequestStatsItem(**item) for request_id, item in stats.items()}
+    )
 
 
 def _merge_payload_from_file(record: Dict[str, Any]) -> Dict[str, Any]:
