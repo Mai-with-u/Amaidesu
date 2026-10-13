@@ -82,23 +82,27 @@ class DashboardConfig(BaseConfig):
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:60315", "http://127.0.0.1:60315"],
         title="CORS 来源列表",
-        description="允许的 CORS 来源列表（Vite 开发服务器端口，由 dashboard/vite.config.ts 配置）",
+        description="允许的跨域来源列表（Vite 开发服务器端口，由 dashboard/vite.config.ts 配置）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     max_history_messages: int = Field(
         default=1000,
         title="最大历史消息数",
-        description="WebSocket 推送的最大历史消息数",
+        description="打开面板时最多回放多少条历史消息",
+        json_schema_extra={"x-ui-advanced": True},
     )
     websocket_heartbeat: int = Field(
         default=30,
         title="心跳间隔",
-        description="WebSocket 心跳间隔（秒）",
+        description="面板连接保活心跳间隔（秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     auto_open_browser: bool = Field(default=True, title="是否自动打开浏览器", description="启动时自动打开浏览器")
     dev_mode: bool = Field(
         default=False,
         title="是否开发模式",
         description="开发模式：自动启动 Vite 开发服务器，通常通过 CLI --dev-webui 启用",
+        json_schema_extra={"x-ui-advanced": True},
     )
     vite_dev_port: int = Field(
         default=60315,
@@ -106,6 +110,7 @@ class DashboardConfig(BaseConfig):
         le=65535,
         title="Vite 开发端口",
         description="Vite 开发服务器端口（需与 dashboard/vite.config.ts 中的 server.port 保持一致）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     danmaku_widget: DanmakuWidgetConfig = Field(
         default_factory=DanmakuWidgetConfig,
@@ -137,7 +142,8 @@ class EventHistoryConfig(BaseConfig):
         ge=100,
         le=50000,
         title="历史缓冲大小",
-        description="事件历史内存环形缓冲大小",
+        description="事件历史在内存里保留多少条（超出丢最旧）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 
@@ -166,8 +172,22 @@ class GPTSoVITSParams(BaseConfig):
     prompt_text: str = Field(default="", title="提示文本", description="提示文本")
     text_language: str = Field(default="zh", pattern=r"^(zh|en|ja|auto)$", title="文本语言", description="文本语言")
     prompt_language: str = Field(default="zh", pattern=r"^(zh|en|ja)$", title="提示语言", description="提示语言")
-    top_k: int = Field(default=20, ge=1, le=100, title="Top-K 采样", description="Top-K 采样")
-    top_p: float = Field(default=0.6, ge=0.0, le=1.0, title="Top-P 采样", description="Top-P 采样")
+    top_k: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        title="Top-K 采样",
+        description="Top-K 采样",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    top_p: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        title="Top-P 采样",
+        description="Top-P 采样",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     temperature: float = Field(
         default=1.0,
         ge=0.0,
@@ -176,6 +196,7 @@ class GPTSoVITSParams(BaseConfig):
         description=(
             "温度参数（GPT 语义 token 采样）：低温度会诱发 token 复读（音频拉长数倍并伴随异常音），保持服务端默认 1.0"
         ),
+        json_schema_extra={"x-ui-advanced": True},
     )
     speed_factor: float = Field(default=1.0, ge=0.1, le=3.0, title="语速因子", description="语速因子")
     streaming_mode: int = Field(
@@ -187,21 +208,38 @@ class GPTSoVITSParams(BaseConfig):
             "流式档位：0=整段合成完一次性返回；1=按句流式（质量最好，首包=首句合成完）；"
             "2=token级流式（质量中等，首包更低）；3=token级定长chunk（响应最快，质量略降）"
         ),
+        json_schema_extra={"x-ui-advanced": True},
     )
     media_type: str = Field(
         default="wav",
         pattern=r"^(wav|ogg)$",
         title="媒体类型",
         description="媒体类型（api_v2 支持 wav/ogg/aac/raw；流式 wav 为首块 WAV 头 + 裸 PCM）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     text_split_method: str = Field(
         default="cut5",
         pattern=r"^(cut0|cut1|cut2|cut3|cut4|cut5)$",
         title="文本分割方法",
         description="文本分割方法",
+        json_schema_extra={"x-ui-advanced": True},
     )
-    batch_size: int = Field(default=1, ge=1, le=10, title="批处理大小", description="批处理大小")
-    batch_threshold: float = Field(default=0.7, ge=0.0, le=1.0, title="批处理阈值", description="批处理阈值")
+    batch_size: int = Field(
+        default=1,
+        ge=1,
+        le=10,
+        title="批处理大小",
+        description="批处理大小",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    batch_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        title="批处理阈值",
+        description="批处理阈值",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     repetition_penalty: float = Field(
         default=1.35,
         ge=0.5,
@@ -211,10 +249,30 @@ class GPTSoVITSParams(BaseConfig):
             "重复惩罚（GPT 语义 token 防复读）：1.0 等于关闭，实测在 v5 系"
             "底模上约 40% 句子诱发 token 循环（音频拉长伴杂音）；保持服务端默认 1.35"
         ),
+        json_schema_extra={"x-ui-advanced": True},
     )
-    sample_steps: int = Field(default=10, ge=1, le=50, title="采样步数", description="采样步数")
-    super_sampling: bool = Field(default=True, title="超采样", description="是否启用超采样")
-    sample_rate: int = Field(default=32000, ge=8000, le=48000, title="采样率", description="采样率")
+    sample_steps: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        title="采样步数",
+        description="采样步数",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    super_sampling: bool = Field(
+        default=True,
+        title="超采样",
+        description="是否启用超采样",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    sample_rate: int = Field(
+        default=32000,
+        ge=8000,
+        le=48000,
+        title="采样率",
+        description="采样率",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
 
 class VoiceboxParams(BaseConfig):
@@ -227,10 +285,27 @@ class VoiceboxParams(BaseConfig):
         title="音色 Profile ID",
         description="音色 profile ID（在 Voicebox 中克隆音色后获得；留空时合成会报错提示）",
     )
-    language: str = Field(default="zh", title="语言代码", description="语言代码")
-    sample_rate: int = Field(default=24000, ge=8000, le=48000, title="输出采样率", description="输出采样率")
+    language: str = Field(
+        default="zh",
+        title="语言代码",
+        description="语言代码",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    sample_rate: int = Field(
+        default=24000,
+        ge=8000,
+        le=48000,
+        title="输出采样率",
+        description="输出采样率",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     generation_timeout_ms: int = Field(
-        default=120000, ge=5000, le=300000, title="生成超时", description="生成超时（毫秒）"
+        default=120000,
+        ge=5000,
+        le=300000,
+        title="生成超时",
+        description="生成超时（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 
@@ -247,9 +322,19 @@ class OmniTTSParams(BaseConfig):
         title="音色",
         description="音色（厂商词表，如 DashScope 的 Chelsie；必填，留空合成会报错提示）",
     )
-    audio_format: str = Field(default="wav", title="音频格式", description="音频封装格式（wav/pcm16 等，随端点支持）")
+    audio_format: str = Field(
+        default="wav",
+        title="音频格式",
+        description="音频封装格式（wav/pcm16 等，随端点支持）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     sample_rate: int = Field(
-        default=24000, ge=8000, le=48000, title="采样率", description="输出采样率（播放与时长计算用）"
+        default=24000,
+        ge=8000,
+        le=48000,
+        title="采样率",
+        description="输出采样率（播放与时长计算用）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     style_prompt: str = Field(
         default="",
@@ -295,6 +380,7 @@ class TTSConfig(BaseConfig):
         le=20,
         title="播放队列上限",
         description="发声播放队列上限，满时丢最旧",
+        json_schema_extra={"x-ui-advanced": True},
     )
     render_timeout_ms: int = Field(
         default=60000,
@@ -302,6 +388,7 @@ class TTSConfig(BaseConfig):
         title="发声超时",
         description="单次发声等待超时（合成+播放，毫秒）；0 表示不限制。"
         "播放时长与语音等长，此值是防引擎卡死的兜底而非正常耗时上限",
+        json_schema_extra={"x-ui-advanced": True},
     )
     wait_playback: bool = Field(
         default=True,
@@ -315,6 +402,7 @@ class TTSConfig(BaseConfig):
         title="等播超时",
         description="发言等待播放队列排空的上限（毫秒）；超时放行发言不丢话，"
         "0 表示不限制。量级覆盖当前句剩余播放加队列积压排空的最坏时间",
+        json_schema_extra={"x-ui-advanced": True},
     )
     edge_tts: EdgeTTSParams = Field(
         default_factory=EdgeTTSParams,
@@ -424,30 +512,35 @@ class AgentSupervisorConfig(BaseConfig):
         ge=0,
         title="心跳间隔",
         description="Agent 心跳间隔（毫秒）；0 = 关闭心跳任务",
+        json_schema_extra={"x-ui-advanced": True},
     )
     check_interval_ms: int = Field(
         default=30000,
         ge=0,
         title="巡检间隔",
-        description="AgentManager 巡检循环周期（毫秒）；0 = 关闭巡检",
+        description="多久检查一次各 Agent 是否存活（毫秒）；0 = 关闭巡检",
+        json_schema_extra={"x-ui-advanced": True},
     )
     dead_threshold_ms: int = Field(
         default=60000,
         ge=1000,
         title="判死阈值",
-        description="心跳距今超过该阈值判死（毫秒）；需显著大于心跳间隔",
+        description="心跳多久没来判定 Agent 已死（毫秒）；需显著大于心跳间隔",
+        json_schema_extra={"x-ui-advanced": True},
     )
     rebuild_failure_window_ms: int = Field(
         default=300000,
         ge=1000,
         title="重建失败时间窗",
-        description="重建失败计数时间窗（毫秒）",
+        description="统计重建失败的滚动时间窗（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     max_rebuild_failures: int = Field(
         default=3,
         ge=1,
         title="重建失败上限",
-        description="时间窗内重建失败达到该次数 → 置 ERRORED 并停止自动重试",
+        description="时间窗内重建失败达到该次数后停止自动重试（标记为出错）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 
@@ -477,4 +570,5 @@ class DiagnosticsConfig(BaseConfig):
             "诊断正文文件保留天数，超期天目录整体删除；默认 0 = 永不清理，"
             "仅显式设置正整数才滚动删除（删除后对应场次的回看降级为仅消息明细）"
         ),
+        json_schema_extra={"x-ui-advanced": True},
     )

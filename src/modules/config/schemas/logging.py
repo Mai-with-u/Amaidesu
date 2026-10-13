@@ -41,11 +41,17 @@ class LoggingConfig(BaseModel):
     )
 
     rotation: str = Field(
-        default="10 MB", title="轮转条件", description="日志轮转触发条件（如 '10 MB', '500 MB', '1 GB'）"
+        default="10 MB",
+        title="轮转条件",
+        description="日志轮转触发条件（如 '10 MB', '500 MB', '1 GB'）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
     retention: str = Field(
-        default="7 days", title="保留时长", description="日志保留时间（如 '7 days', '1 week', '1 month'）"
+        default="7 days",
+        title="保留时长",
+        description="日志保留时间（如 '7 days', '1 week', '1 month'）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
     compression: str = Field(
@@ -59,6 +65,7 @@ class LoggingConfig(BaseModel):
         default=False,
         title="是否按会话分割",
         description="是否按会话分割日志文件（每次启动生成新文件，文件名包含时间戳）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
     @classmethod

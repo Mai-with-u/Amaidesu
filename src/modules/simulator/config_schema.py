@@ -83,9 +83,23 @@ class SimulatorConfigSchema(BaseConfig):
         description="idle 模式下的生成率倍率",
     )
     warmup_duration_s: float = Field(default=300.0, title="暖场时长", ge=0.0, description="启动暖场期时长（秒）")
-    llm_temperature: float = Field(default=0.9, title="生成温度", ge=0.0, le=2.0)
+    llm_temperature: float = Field(
+        default=0.9,
+        title="生成温度",
+        ge=0.0,
+        le=2.0,
+        description="模拟观众发言的 LLM 采样温度",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     token_budget_per_hour: int = Field(default=50000, title="Token 时预算", ge=1000, description="每小时 token 硬上限")
-    max_concurrent_llm: int = Field(default=8, title="最大并发数", ge=1, le=32, description="最大并发 LLM 请求数")
+    max_concurrent_llm: int = Field(
+        default=8,
+        title="最大并发数",
+        ge=1,
+        le=32,
+        description="最大并发 LLM 请求数",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     enable_hater: bool = Field(default=False, title="是否启用黑粉", description="是否启用黑粉人设（仅 dev）")
     language: str = Field(default="zh", title="生成语言", description="生成消息语言")
     cadence_mode: str = Field(
