@@ -104,6 +104,8 @@ class TimelineGiftItem(_TimelineEntry):
     user_id: str
     gift_name: str
     gift_count: int
+    # 仓储行自带总价（贝壳*数量），声明以通过 extra=forbid 的响应校验
+    total_price: int = 0
     simulated: bool = False
 
 

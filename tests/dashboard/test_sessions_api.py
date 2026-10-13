@@ -166,6 +166,16 @@ def test_session_timeline_merges_details_and_events(client: TestClient) -> None:
             message_type="speak",
             reply_to_message_id="msg_seed_1",
         )
+        # 礼物行带 total_price：响应模型 extra=forbid 下漏声明该字段曾使整响应 500
+        await manager.chat.insert_gift(
+            live_session_id=pk,
+            timestamp_ms=1_700_000_006_000,
+            user_id="u2",
+            user_name="土豪B",
+            gift_name="小花花",
+            quantity=3,
+            total_price=3000,
+        )
         if server.event_history is not None:
             server.event_history.record(
                 EventRecord(
@@ -193,6 +203,9 @@ def test_session_timeline_merges_details_and_events(client: TestClient) -> None:
     kinds = [item["kind"] for item in items]
     assert "danmaku" in kinds
     assert "speech" in kinds
+    assert "gift" in kinds
+    gift = next(item for item in items if item["kind"] == "gift")
+    assert gift["gift_name"] == "小花花" and gift["total_price"] == 3000
     decision = next(item for item in items if item["kind"] == "event" and item["event_type"] == "planner.decision")
     assert decision["data"]["round_id"] == "rnd_1"
     # 回复关联在明细行上可直接查询
