@@ -35,8 +35,22 @@ class MinecraftContextConfig(ContextBudgetConfig):
     target_ratio: float = Field(
         default=0.6, gt=0.0, lt=1.0, title="整理后回落线", description="集中整理把历史压回到预算的这一比例"
     )
-    recent_turns: int = Field(default=6, ge=1, le=20, description="集中整理时优先保留的近期完整决策轮数")
-    summary_max_chars: int = Field(default=6000, ge=1000, le=12000, description="推理摘要的最大字符数")
+    recent_turns: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        title="保留近期轮数",
+        description="集中整理时优先原样保留的最近几轮决策记录",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    summary_max_chars: int = Field(
+        default=6000,
+        ge=1000,
+        le=12000,
+        title="摘要长度上限",
+        description="整理出的历史摘要的最大字符数",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
 
 class MinecraftConfig(BaseConfig):
@@ -52,21 +66,30 @@ class MinecraftConfig(BaseConfig):
         events_retry_interval_ms: 附属采集器连不上 Mod 或读失败后，隔多久重试（按倍数退避，最长 60 秒）。
     """
 
-    context: MinecraftContextConfig = Field(default_factory=MinecraftContextConfig, description="游戏任务上下文预算")
+    context: MinecraftContextConfig = Field(
+        default_factory=MinecraftContextConfig,
+        title="上下文预算",
+        description="游戏任务时带给模型的上下文体积预算（超出部分整理成摘要）",
+    )
     events_wait_ms: int = Field(
         default=25_000,
         ge=1000,
         le=55_000,
-        description="一次读事件流最多等多久（毫秒；跟踪后台目标与附属采集器共用，MaiCraft 上限 60 秒）",
+        title="事件等待",
+        description="一次读游戏事件流最多等多久（毫秒；跟踪后台目标与附属采集器共用，MaiCraft 上限 60 秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     events_retry_interval_ms: int = Field(
         default=5000,
         ge=200,
-        description="附属采集器（身体事件流、聊天流）连接或读取失败后的重试间隔（毫秒，按倍数退避到 60 秒）",
+        title="事件重试间隔",
+        description="身体事件流、聊天流连不上 Mod 或读失败后的重试间隔（毫秒，逐次加长到最长 60 秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     mcp: McpServerConfig = Field(
         default_factory=lambda: McpServerConfig(url="http://127.0.0.1:8766/mcp"),
-        description="Agent 私有 MCP server（enabled=false 时不装配）",
+        title="MCP 连接",
+        description="连接游戏 Mod 的 MCP 服务地址（关闭后 Agent 降级运行）",
     )
 
 

@@ -50,16 +50,36 @@ class TextAdvConfig(BaseConfig):
         description="动作名 → 按键名映射（advance=推进/skip=快进（按住）/menu=菜单）",
     )
     stability_sample_ms: int = Field(
-        default=150, title="稳定采样间隔", ge=10, le=2000, description="画面稳定判定的采样间隔（毫秒）"
+        default=150,
+        title="稳定采样间隔",
+        ge=10,
+        le=2000,
+        description="判断画面是否停止变化的采样间隔（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     stability_consecutive: int = Field(
-        default=2, title="稳定判定次数", ge=2, le=10, description="判定画面稳定所需的连续一致采样次数"
+        default=2,
+        title="稳定判定次数",
+        ge=2,
+        le=10,
+        description="连续多少次采样一致才算画面稳定",
+        json_schema_extra={"x-ui-advanced": True},
     )
     stability_timeout_ms: int = Field(
-        default=5000, title="稳定判定超时", ge=100, le=60_000, description="稳定判定超时兜底（毫秒）"
+        default=5000,
+        title="稳定判定超时",
+        ge=100,
+        le=60_000,
+        description="稳定判定等待的超时兜底（毫秒）——到点按当前画面放行",
+        json_schema_extra={"x-ui-advanced": True},
     )
     no_change_limit: int = Field(
-        default=20, title="画面静止阈值", ge=1, le=1000, description="连续无变化采样次数上限（超过判画面静止）"
+        default=20,
+        title="画面静止阈值",
+        ge=1,
+        le=1000,
+        description="连续无变化的采样次数上限（超过判画面静止并触发兜底）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     max_recent_screens: int = Field(
         default=10, title="剧情缓冲屏数", ge=1, le=100, description="累积剧情环缓冲保留的最近屏数"

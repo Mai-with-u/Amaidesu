@@ -59,23 +59,51 @@ class McpServerConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = Field(default=True, description="是否连接此 MCP server")
+    enabled: bool = Field(default=True, title="启用连接", description="是否连接此 MCP server")
     transport: McpTransportType = Field(
         default="http",
-        description="传输方式：http（Streamable HTTP）/ stdio（子进程）",
+        title="传输方式",
+        description="传输方式：http（远程服务）/ stdio（本机子进程）",
+        json_schema_extra={"x-ui-type": "select", "x-options": ["http", "stdio"]},
     )
     url: str = Field(
         default="",
-        description="http 传输的端点 URL（如 http://127.0.0.1:8766/mcp）；空串 = 未设置",
+        title="服务地址",
+        description="http 传输的服务地址（如 http://127.0.0.1:8766/mcp）；空串 = 未设置",
     )
-    command: str = Field(default="", description="stdio 传输的启动命令；空串 = 未设置")
-    args: List[str] = Field(default_factory=list, description="stdio 传输的命令行参数")
-    env: Dict[str, str] = Field(default_factory=dict, description="stdio 传输的环境变量")
-    headers: Dict[str, str] = Field(default_factory=dict, description="http 传输附加请求头")
-    reconnect: bool = Field(default=True, description="连接中断后自动重连")
-    timeout_seconds: float = Field(default=30.0, ge=1.0, description="连接超时（秒）")
+    command: str = Field(default="", title="启动命令", description="stdio 传输的启动命令；空串 = 未设置")
+    args: List[str] = Field(
+        default_factory=list,
+        title="启动参数",
+        description="stdio 传输的命令行参数",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        title="环境变量",
+        description="stdio 传输的环境变量",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    headers: Dict[str, str] = Field(
+        default_factory=dict,
+        title="附加请求头",
+        description="http 传输附加请求头（如鉴权 token）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    reconnect: bool = Field(default=True, title="自动重连", description="连接中断后自动重连")
+    timeout_seconds: float = Field(
+        default=30.0,
+        ge=1.0,
+        title="连接超时",
+        description="建立连接的超时时间（秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     request_timeout_ms: int = Field(
-        default=DEFAULT_REQUEST_TIMEOUT_MS, ge=1, description="单次 MCP 请求总等待上限（毫秒，包含服务端主动等待）"
+        default=DEFAULT_REQUEST_TIMEOUT_MS,
+        ge=1,
+        title="请求超时",
+        description="单次请求的总等待上限（毫秒，包含服务端主动等待）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
     @field_validator("url")

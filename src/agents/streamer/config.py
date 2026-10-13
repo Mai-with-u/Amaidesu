@@ -126,13 +126,15 @@ class StreamerCompressorConfig(BaseConfig):
         default=1,
         ge=1,
         le=8,
-        description="压缩 worker 并发数（默认 1 保顺序，避免乱序覆盖）",
+        description="后台压缩的同时工作数（默认 1 保顺序，避免乱序覆盖）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     queue_max: int = Field(
         title="压缩队列上限",
         default=100,
         ge=1,
-        description="压缩队列上限（防止积压耗尽内存）",
+        description="待压缩内容的排队上限（防止积压耗尽内存）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 
@@ -148,7 +150,8 @@ class StreamerBackgroundConfig(BaseConfig):
         default=5_000,
         ge=100,
         le=60_000,
-        description="轻循环 tick 间隔（毫秒）",
+        description="后台维护循环的巡检间隔（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     cold_timeout_ms: int = Field(
         title="冷场判定阈值",
@@ -160,7 +163,8 @@ class StreamerBackgroundConfig(BaseConfig):
         title="摘要间隔",
         default=60_000,
         ge=0,
-        description="低频 LLM 摘要间隔（毫秒）",
+        description="后台定期做 LLM 摘要的间隔（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     compressor: StreamerCompressorConfig = Field(
         title="压缩 worker 配置",
@@ -177,7 +181,13 @@ class StreamerBatchConfig(BaseConfig):
 
     batch_window_ms: int = Field(title="聚合窗口", default=3_000, ge=0, description="弹幕聚合时间窗口（毫秒）")
     batch_max_size: int = Field(title="单批条数上限", default=20, ge=1, description="单批最多聚合的弹幕条数")
-    tick_interval_ms: int = Field(title="聚合检查间隔", default=300, ge=50, description="后台聚合检查间隔（毫秒）")
+    tick_interval_ms: int = Field(
+        title="聚合检查间隔",
+        default=300,
+        ge=50,
+        description="后台检查聚合窗口到期的间隔（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     enable_idle_compensation: bool = Field(title="是否启用空窗补偿", default=True, description="空窗补偿开关")
 
 
@@ -259,8 +269,20 @@ class StreamerCommandConfig(BaseConfig):
             "（换游戏时只需改 agents.enabled，不必回来改这里）"
         ),
     )
-    rate_window_ms: int = Field(title="限频时间窗", default=60_000, ge=1, description="限频时间窗（毫秒）")
-    rate_max: int = Field(title="限频条数上限", default=3, ge=1, description="同一用户在时间窗内允许的命令条数上限")
+    rate_window_ms: int = Field(
+        title="限频时间窗",
+        default=60_000,
+        ge=1,
+        description="命令限频的统计时间窗（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    rate_max: int = Field(
+        title="限频条数上限",
+        default=3,
+        ge=1,
+        description="同一用户在一个时间窗内允许发出的命令条数上限",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
 
 class StreamerNarrativeConfig(BaseConfig):
@@ -309,13 +331,15 @@ class StreamerThinkingStreamConfig(BaseConfig):
         title="推送间隔",
         default=100,
         ge=20,
-        description="思考流合帧推送间隔（毫秒）",
+        description="思考流合并推送的间隔（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     buffer_max: int = Field(
         title="缓冲上限",
         default=400,
         ge=10,
         description="思考流环形缓冲上限（条）；超限丢最旧",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 
