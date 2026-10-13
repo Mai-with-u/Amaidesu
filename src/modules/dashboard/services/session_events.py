@@ -29,12 +29,15 @@ if TYPE_CHECKING:
 logger = get_logger("SessionEventReader")
 
 # 回看时间线收录的事件类型（与实时 WS 卡面对齐）：
-# 精确名单收状态与决策事实——消息/发言/礼物/SC 已由明细行承载，不重复收录；
+# 消息/礼物/SC 由明细行承载，不重复收录；发言是双源特例——事件侧收录以承载
+# 富卡语义（情绪/Replyer 统计/轮次关联），装配处与明细行按同文本同时刻一对
+# 一去重，诊断流缺失时明细行兜底为裸卡；
 # task.changed 非时间线卡面（实时侧由任务账本渲染），不收录
 REPLAY_EVENT_TYPES = frozenset(
     {
         "planner.decision",
         "planner.verdict",
+        "streamer.speech",
         "streamer.stage",
         "live.started",
         "live.ended",

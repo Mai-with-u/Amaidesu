@@ -216,6 +216,63 @@ def test_session_timeline_merges_details_and_events(client: TestClient) -> None:
     assert body["events_pruned"] is False
 
 
+def test_session_timeline_speech_dedupe_prefers_event_side(client: TestClient) -> None:
+    """发言双源去重：与 streamer.speech 事件同文本同时刻的明细行让位（事件侧
+    是富卡：情绪/统计/轮次关联）；无事件对应的明细行保留，作诊断流缺失的兜底。"""
+    import asyncio
+
+    from src.modules.events.event_history import EventRecord
+
+    pk = client.post("/api/v1/live-sessions/open", json={"title": "发言去重"}).json()["live_session_id"]
+    server = _server_ref()
+    manager = server.session_manager
+    loop = asyncio.new_event_loop()
+
+    async def _seed():
+        base_ts = 1_700_000_010_000
+        # 有事件对应的发言：明细行应被去重
+        await manager.chat.insert_live_chat(
+            live_session_id=pk,
+            timestamp_ms=base_ts,
+            sender_role="assistant",
+            sender_name="主播",
+            content="有事件对应的发言",
+            message_type="speak",
+        )
+        server.event_history.record(
+            EventRecord(
+                id="evt-speech-1",
+                type="streamer.speech",
+                level="info",
+                source=str(pk),
+                summary="发言",
+                data={"live_session_id": pk, "text": "有事件对应的发言", "utterance_id": "utt_1"},
+                timestamp_ms=base_ts,
+            )
+        )
+        # 无事件对应的发言（诊断流缺失场景）：明细行保留兜底
+        await manager.chat.insert_live_chat(
+            live_session_id=pk,
+            timestamp_ms=base_ts + 1_000,
+            sender_role="assistant",
+            sender_name="主播",
+            content="只有明细行的发言",
+            message_type="speak",
+        )
+
+    loop.run_until_complete(_seed())
+    loop.close()
+
+    body = client.get(f"/api/v1/live-sessions/{pk}/timeline").json()
+    speech_rows = [item for item in body["items"] if item["kind"] == "speech"]
+    speech_events = [
+        item for item in body["items"] if item["kind"] == "event" and item["event_type"] == "streamer.speech"
+    ]
+    assert len(speech_events) == 1
+    assert len(speech_rows) == 1
+    assert speech_rows[0]["text"] == "只有明细行的发言"
+
+
 def test_session_timeline_cursor_pagination(client: TestClient) -> None:
     """limit 截断 + has_more + 游标续翻：向前翻页不重复、翻尽后 has_more 归假。"""
     import asyncio
