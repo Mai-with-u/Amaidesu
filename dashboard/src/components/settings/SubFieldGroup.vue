@@ -1,5 +1,5 @@
 <template>
-  <div class="sub-field-group">
+  <div class="sub-field-group" :class="{ 'sub-field-group--grid': layout === 'grid' }">
     <template v-for="field in fields" :key="field.key">
       <!-- 有子字段 → 增强版子卡片（accent bar + 卡片化） -->
       <div v-if="field.children && field.children.length > 0" class="sub-card">
@@ -42,8 +42,12 @@
         </div>
       </div>
 
-      <!-- 叶子字段 → 卡片化渲染（grid 布局） -->
-      <div v-else class="field-card">
+      <!-- 叶子字段 → 卡片化渲染（grid 布局下宽字段占整行） -->
+      <div
+        v-else
+        class="field-card"
+        :class="{ 'field-card--wide': layout === 'grid' && isWideField(field) }"
+      >
         <FieldRenderer
           :field="field"
           :model-value="getValue(field.key)"
@@ -71,7 +75,21 @@ const props = defineProps<{
    * 用于子卡片徽标。未提供时徽标隐藏（保留向后兼容）。
    */
   getChangeCount?: (key: string) => number;
+  /** 布局形态：grid = 双列网格（宽字段占整行），缺省 list = 纵向堆叠 */
+  layout?: 'list' | 'grid';
 }>();
+
+/**
+ * grid 布局下的宽字段：array/object 与长文本（textarea）一类需要横向空间的字段，
+ * 占满整行，避免被压缩成半列窄条。长文本判定与 FieldRenderer 的 isLongText 同口径。
+ */
+function isWideField(field: ConfigFieldSchema): boolean {
+  if (field.type === 'array' || field.type === 'object') return true;
+  if (field.type === 'string') {
+    return (field.description?.length ?? 0) > 50 || (field.validation?.max_length ?? 0) > 100;
+  }
+  return false;
+}
 
 const expanded = ref<Set<string>>(new Set());
 
@@ -131,6 +149,22 @@ function getChildrenChangeCount(field: ConfigFieldSchema): number {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
+}
+
+/* ── grid 布局：双列排布，子卡片与宽字段占整行（仅直接子级参与分列，嵌套层级递归走自身布局） ── */
+.sub-field-group--grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--spacing-sm);
+  align-items: start;
+}
+
+.sub-field-group--grid > .sub-card {
+  grid-column: 1 / -1;
+}
+
+.sub-field-group--grid > .field-card--wide {
+  grid-column: 1 / -1;
 }
 
 /* ── 叶子字段卡片（grid 布局） ── */

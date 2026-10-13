@@ -843,7 +843,7 @@ async function handleRestart() {
   box-shadow: var(--shadow-sm);
 }
 
-/* 顶部栏：搜索框 + 全局展开/收起 */
+/* 顶部栏：搜索框 + 高级开关 + 全局展开/收起（与节列表同一居中列宽） */
 .settings-toolbar {
   flex-shrink: 0;
   display: flex;
@@ -851,6 +851,10 @@ async function handleRestart() {
   justify-content: space-between;
   gap: var(--spacing-md);
   padding: var(--spacing-md) var(--spacing-lg) 0;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .toolbar-actions {
@@ -929,10 +933,13 @@ async function handleRestart() {
 }
 
 /* ── 搜索模式结果 ──────────────────────────────────────── */
+/* 搜索结果与节列表同列宽：内容区 1100px 上限水平居中（页头、Tab 栏保持全宽） */
 .search-results {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
+  max-width: 1100px;
+  margin: 0 auto;
 }
 
 .search-section {
@@ -964,10 +971,13 @@ async function handleRestart() {
 }
 
 /* ── 分区卡片列表 ──────────────────────────────────────── */
+/* 单列全宽分节，与搜索框同列宽居中 */
 .section-cards {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
+  max-width: 1100px;
+  margin: 0 auto;
 }
 
 .section-card {

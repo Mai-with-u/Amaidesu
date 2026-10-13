@@ -35,6 +35,7 @@
         :get-original="getOriginal"
         :update-value="updateValue"
         :get-change-count="getChangeCount"
+        layout="grid"
       />
     </div>
   </div>
@@ -135,6 +136,11 @@ function toggleEnabled(val: boolean) {
   border-left: 3px solid var(--color-primary);
 }
 
+/* 禁用节整卡降不透明度示意不可用；保持默认展开，配置内容仍可查看 */
+.component-card.is-disabled {
+  opacity: 0.55;
+}
+
 .card-header {
   display: flex;
   align-items: center;
@@ -189,13 +195,11 @@ function toggleEnabled(val: boolean) {
   flex-shrink: 0;
 }
 
-/* 卡体固定高度：展开时不超过此限，卡内滚动，页面节奏可预期 */
+/* 节体自然生长：不设高度上限，滚动交给页面级（卡内滚动会让长节来回找不到上下文） */
 .card-body {
   border-top: 1px solid var(--border-color-light);
   padding: var(--spacing-md) var(--spacing-lg);
   background: var(--bg-elevated);
-  max-height: 420px;
-  overflow-y: auto;
 }
 
 .card-body :deep(.sub-card) {

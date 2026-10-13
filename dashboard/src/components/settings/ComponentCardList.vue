@@ -211,15 +211,15 @@ function findField(fields: ConfigFieldSchema[], key: string): ConfigFieldSchema 
   width: 140px;
 }
 
+/* 卡列表：单列全宽分节（节=组件卡，纵向自然生长，页面级滚动） */
 .card-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: var(--spacing-md);
 }
 
-/* 分类分组（studio / web 等实例集合）：占满整行，标题下递归卡网格 */
+/* 分类分组（studio / web 等实例集合）：标题下递归卡列表 */
 .category-group {
-  grid-column: 1 / -1;
   border: 1px solid var(--border-color-light);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
