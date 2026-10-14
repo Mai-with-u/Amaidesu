@@ -66,6 +66,13 @@ describe('ModelConfigPage 节卡视觉', () => {
     expect(pageSource).toContain('toggleProviderEnabled(entry.index, $event as boolean)');
     expect(pageSource).not.toContain("normalFields(providerItemFields, ['name'])");
   });
+
+  it('无 enabled 字段的 provider 不得灰显（灰显仅限显式停用）', () => {
+    // provider schema 无 enabled 概念，fail-closed 判定会把全部节永久降透明
+    expect(pageSource).toContain(
+      "'is-disabled': providerEnabledKey !== null && isProviderEnabled(entry.item) === false",
+    );
+  });
 });
 
 describe('ModelConfigPage 改名引用守护', () => {

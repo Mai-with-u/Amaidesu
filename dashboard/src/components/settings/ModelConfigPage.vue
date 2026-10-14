@@ -5,7 +5,7 @@
       v-for="entry in providerEntries"
       :key="entry.index"
       class="entity-section"
-      :class="{ 'is-disabled': isProviderEnabled(entry.item) === false }"
+      :class="{ 'is-disabled': providerEnabledKey !== null && isProviderEnabled(entry.item) === false }"
       :data-config-key="PROVIDERS_KEY"
     >
       <div class="entity-section-header" @click="toggleProviderExpand(entry.index)">
