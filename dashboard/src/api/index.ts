@@ -38,6 +38,7 @@ import type {
   LLMHistoryResponse,
   LLMHistoryStatistics,
   LLMRequestHistory,
+  LLMRequestStatsBatch,
   ToolsView,
   ToolCategoriesView,
   ToolInvokeResult,
@@ -154,6 +155,9 @@ export const llmApi = {
   getStatistics: (params?: { start_time?: number; end_time?: number }) =>
     api.get<LLMHistoryStatistics>('/llm/history/statistics', { params }),
   getRequestById: (requestId: string) => api.get<LLMRequestHistory>(`/llm/history/${requestId}`),
+  /** 批量统计（仅 usage/model 列）：时间线统计胶囊合批懒取专用，避免逐卡取详情回传整段请求正文 */
+  getRequestStats: (requestIds: string[]) =>
+    api.post<LLMRequestStatsBatch>('/llm/history/stats', { request_ids: requestIds }),
 };
 
 // Tools（工具清单 + 提供者分类面板）

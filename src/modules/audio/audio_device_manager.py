@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -73,6 +74,8 @@ class AudioDeviceManager:
         self._pending_chunks: list[np.ndarray] = []
         self._pending_samples = 0
         self._stream_started = False
+        # 供给断流监控：块间间隔超阈值说明上游断供，声卡缓冲即将耗尽（欠载前兆）
+        self._last_feed_monotonic: float | None = None
 
         if not DEPENDENCIES_OK:
             self.logger.error("音频依赖缺失，请安装: pip install sounddevice soundfile")
@@ -268,6 +271,7 @@ class AudioDeviceManager:
             self._pending_chunks = []
             self._pending_samples = 0
             self._stream_started = False
+            self._last_feed_monotonic = None
             self.is_playing = True
             # 分接：开播同步开 session（流式播法逐块 feed）
             self._sink_start(utterance_id)
@@ -306,6 +310,14 @@ class AudioDeviceManager:
         if self._stream is None:
             return
         try:
+            now = time.monotonic()
+            if self._last_feed_monotonic is not None:
+                gap = now - self._last_feed_monotonic
+                if gap > 2.0:
+                    self.logger.warning(
+                        f"上游供给断流 {gap:.1f}s（欠载风险：声卡缓冲即将耗尽，若听感出现拉长尾音即此次断流所致）"
+                    )
+            self._last_feed_monotonic = now
             if not self._stream_started:
                 self._pending_chunks.append(chunk)
                 self._pending_samples += len(chunk)
@@ -340,6 +352,7 @@ class AudioDeviceManager:
             self._pending_chunks = []
             self._pending_samples = 0
             self._stream_started = False
+            self._last_feed_monotonic = None
             self.is_playing = False
             # 分接：播完同步收 session
             self._sink_stop()

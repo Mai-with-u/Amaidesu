@@ -303,3 +303,38 @@ async def test_no_store_falls_back_to_cache() -> None:
     stats = await manager.get_statistics()
     assert stats["total_requests"] == 1
     assert await manager.get_available_dates() == []
+
+
+@pytest.mark.asyncio
+async def test_get_request_stats_by_ids_from_store(store: SQLiteDatabase) -> None:
+    """批量统计：仅回统计列、去重入参、未命中 id 不在结果中。"""
+    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
+    manager.record_request(_record("req-s1", ts_ms=1_000, tokens=100))
+    manager.record_request(_record("req-s2", ts_ms=2_000, model="glm-y", tokens=30))
+    await _wait_for_count(store, 2)
+
+    stats = await manager.get_request_stats_by_ids(["req-s1", "req-s1", "req-s2", "missing"])
+    assert set(stats.keys()) == {"req-s1", "req-s2"}
+    assert stats["req-s1"] == {
+        "model_name": "glm-x",
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "cache_hit_tokens": 0,
+        "cache_miss_tokens": 0,
+    }
+    assert stats["req-s2"]["model_name"] == "glm-y"
+    assert stats["req-s2"]["prompt_tokens"] == 30
+
+    assert await manager.get_request_stats_by_ids([]) == {}
+
+
+@pytest.mark.asyncio
+async def test_get_request_stats_by_ids_from_cache() -> None:
+    """无库模式：批量统计走内存缓存路径，口径与库路径一致。"""
+    manager = RequestHistoryManager(use_global=False, llm_repo=None)
+    manager.record_request(_record("req-cache-s", ts_ms=1_000, tokens=8))
+
+    stats = await manager.get_request_stats_by_ids(["req-cache-s", "missing"])
+    assert stats["req-cache-s"]["prompt_tokens"] == 8
+    assert stats["req-cache-s"]["completion_tokens"] == 4
+    assert "missing" not in stats

@@ -230,3 +230,17 @@ export interface LLMHistoryStatistics {
   /** 统计窗口起止；全量统计时两端均为 null */
   time_range: { start: number | null; end: number | null };
 }
+
+/** 批量统计端点的单条统计（仅 usage/model 列，不含正文） */
+export interface LLMRequestStatsItem {
+  model_name: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_hit_tokens: number;
+  cache_miss_tokens: number;
+}
+
+/** POST /llm/history/stats 响应：id → 统计；未命中的 id 不在映射中 */
+export interface LLMRequestStatsBatch {
+  stats: Record<string, LLMRequestStatsItem>;
+}
