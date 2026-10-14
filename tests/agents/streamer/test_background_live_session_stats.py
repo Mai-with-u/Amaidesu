@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from src.agents.streamer.background import BackgroundMaintainer
 from src.agents.streamer.room_state import RoomState
 
@@ -43,50 +45,26 @@ def _make_maintainer(
     )
 
 
-async def test_write_live_session_persists_audience_total() -> None:
-    """推送到达后的心跳把快照累计观看人次写入 live_sessions"""
+@pytest.mark.parametrize("audience_total", [1234, 0], ids=["after_push", "before_any_push"])
+async def test_write_live_session_persists_audience_total(audience_total: int) -> None:
+    """心跳写入快照累计观看人次（推送未到过时为 0 = 未知）。"""
     repo = MagicMock()
     repo.update_live_session_stats = AsyncMock(return_value=True)
-    maintainer = _make_maintainer(repo, _FakeSessionManager(777), audience_total=1234)
-
-    await maintainer._write_live_session(now_ms=2_000)
+    await _make_maintainer(repo, _FakeSessionManager(777), audience_total=audience_total)._write_live_session(
+        now_ms=2_000
+    )
 
     kwargs = repo.update_live_session_stats.await_args.kwargs
-    assert kwargs["live_session_id"] == 777
-    assert kwargs["audience_total"] == 1234
     # open-live 无当前在线推送，viewer_count 无数据源
-    assert kwargs["viewer_count"] == 0
+    assert (kwargs["live_session_id"], kwargs["audience_total"], kwargs["viewer_count"]) == (777, audience_total, 0)
 
 
-async def test_write_live_session_zero_before_any_push() -> None:
-    """推送未到过时 audience_total=0（未知语义），心跳照常写入"""
+@pytest.mark.parametrize(
+    "session_manager", [None, _FakeSessionManager(raises=RuntimeError("boom"))], ids=["no_manager", "resolve_fails"]
+)
+async def test_write_live_session_skips_without_session(session_manager) -> None:
+    """场次管理器缺失或归属解析失败：降级跳过，不阻断轻循环。"""
     repo = MagicMock()
     repo.update_live_session_stats = AsyncMock(return_value=True)
-    maintainer = _make_maintainer(repo, _FakeSessionManager(777))
-
-    await maintainer._write_live_session(now_ms=2_000)
-
-    kwargs = repo.update_live_session_stats.await_args.kwargs
-    assert kwargs["audience_total"] == 0
-
-
-async def test_write_live_session_skips_without_session_manager() -> None:
-    """场次管理器缺失：心跳整体降级跳过，仓储不被触达"""
-    repo = MagicMock()
-    repo.update_live_session_stats = AsyncMock(return_value=True)
-    maintainer = _make_maintainer(repo, None)  # type: ignore[arg-type]
-
-    await maintainer._write_live_session(now_ms=2_000)
-
-    repo.update_live_session_stats.assert_not_awaited()
-
-
-async def test_write_live_session_skips_when_resolve_fails() -> None:
-    """场次归属解析失败：降级跳过，不阻断轻循环"""
-    repo = MagicMock()
-    repo.update_live_session_stats = AsyncMock(return_value=True)
-    maintainer = _make_maintainer(repo, _FakeSessionManager(raises=RuntimeError("boom")))
-
-    await maintainer._write_live_session(now_ms=2_000)
-
+    await _make_maintainer(repo, session_manager)._write_live_session(now_ms=2_000)
     repo.update_live_session_stats.assert_not_awaited()

@@ -1,11 +1,4 @@
-"""PlannerAssembler 参考段组装器单元测试。
-
-- 4 输入字段（session_recap_section / stage_descriptions / environment /
-  person_profile_section）——对话内容走 canonical 原生消息通道，不进组装器
-- 空段规则：有数据才渲染段，无占位文本
-- 段顺序锁定：上场回顾 → 环节描述 → 直播间快照 → 人物画像；整段作为参考段固定在
-  消息序列尾（append-only，服务端 LLM 前缀缓存命中既有前缀）
-"""
+"""Planner 参考段组装器：有数据才渲染段、无占位文本、段序固定（上场回顾 → 环节描述 → 直播间快照 → 人物画像），时刻按本地时区"""
 
 from __future__ import annotations
 
@@ -34,46 +27,27 @@ def _production_inputs() -> AssemblerInputs:
     )
 
 
-def test_production_inputs_render_all_sections() -> None:
-    """生产型输入 → 4 段全部渲染。"""
+def test_sections_render_in_fixed_order() -> None:
     text = PlannerAssembler().assemble(_production_inputs())
-    assert "## 上场回顾-内部参考" in text
-    assert "## 环节描述" in text
-    assert "## 直播间快照" in text
-    assert "## 人物画像-内部参考" in text
+    sections = ("## 上场回顾-内部参考", "## 环节描述", "## 直播间快照", "## 人物画像-内部参考")
+    assert [text.index(section) for section in sections] == sorted(text.index(section) for section in sections)
+    # 空输入整段省略，连段标题也不出现
+    assert PlannerAssembler().assemble(AssemblerInputs()) == ""
+    assert "上场回顾-内部参考" not in PlannerAssembler().assemble(AssemblerInputs(stage_descriptions="有环节"))
 
 
-def test_no_placeholder_text_in_output() -> None:
-    """任何输入组合下都不出现旧占位文本（（未配置 persona）/（暂无）/（空）/（无））。"""
-    assembler = PlannerAssembler()
-    cases = [
+@pytest.mark.parametrize(
+    "inputs",
+    [
         AssemblerInputs(),
         AssemblerInputs(stage_descriptions="有环节"),
         AssemblerInputs(environment=EnvironmentBlock(minute_bucket_ms=0, duration_so_far_ms=0)),
         _production_inputs(),
-    ]
-    for inputs in cases:
-        text = assembler.assemble(inputs)
-        for placeholder in ("（未配置 persona）", "（暂无）", "（空）", "（无）"):
-            assert placeholder not in text
-
-
-def test_empty_sections_omitted() -> None:
-    """空输入 → 空段整段省略（段标题也不出现）。"""
-    text = PlannerAssembler().assemble(AssemblerInputs())
-    assert text == ""
-    assert "环节描述" not in text
-    assert "直播间快照" not in text
-    assert "人物画像-内部参考" not in text
-    assert "上场回顾-内部参考" not in text
-
-
-def test_section_order_locked() -> None:
-    """段顺序锁定：上场回顾 → 环节描述 → 直播间快照 → 人物画像。"""
-    text = PlannerAssembler().assemble(_production_inputs())
-    assert text.index("## 上场回顾-内部参考") < text.index("## 环节描述")
-    assert text.index("## 环节描述") < text.index("## 直播间快照")
-    assert text.index("## 直播间快照") < text.index("## 人物画像-内部参考")
+    ],
+)
+def test_no_placeholder_text_in_output(inputs: AssemblerInputs) -> None:
+    text = PlannerAssembler().assemble(inputs)
+    assert not any(p in text for p in ("（未配置 persona）", "（暂无）", "（空）", "（无）"))
 
 
 def test_environment_render_details() -> None:

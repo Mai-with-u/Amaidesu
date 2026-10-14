@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.narrative import NarrativeBuffer
-from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
+from tests.agents.streamer.helpers import make_streamer_agent
 
 _MINUTE = 60_000
 
@@ -77,13 +74,7 @@ def test_zero_ttl_replays_each_entry_once() -> None:
 
 async def test_agent_buffers_follow_narrative_config() -> None:
     """StreamerAgent 的身体近况缓冲按 [agents.streamer.narrative] 段的上限裁剪。"""
-    prompt = MagicMock()
-    prompt.render = MagicMock(return_value="PROMPT")
-    agent = StreamerAgent(
-        config=StreamerConfig.from_dict({"proactive": {"enabled": False}, "narrative": {"body_max_items": 2}}),
-        llm_manager=MagicMock(),
-        prompt_manager=prompt,
-    )
+    agent = make_streamer_agent({"narrative": {"body_max_items": 2}})
 
     for index in range(4):
         await agent._on_body_event(

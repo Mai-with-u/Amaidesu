@@ -8,11 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.payloads.room_state import RoomStateFramePayload
+from tests.agents.streamer.helpers import make_streamer_agent
 
 
 def _frame(ref: str, at_ms: int) -> RoomStateFramePayload:
@@ -102,16 +101,8 @@ async def test_stale_or_missing_frame_and_non_visual_model_skip(monkeypatch: pyt
     assert not _has_frame((await blind.window())[0])
 
 
-def _agent(enabled: bool) -> StreamerAgent:
-    prompt = MagicMock()
-    prompt.render = MagicMock(return_value="PROMPT")
-    return StreamerAgent(
-        config=StreamerConfig.from_dict({"proactive": {"enabled": False}, "live_frame": {"enabled": enabled}}),
-        llm_manager=MagicMock(),
-        prompt_manager=prompt,
-        event_bus=None,
-        tool_registry=None,
-    )
+def _agent(enabled: bool):
+    return make_streamer_agent({"live_frame": {"enabled": enabled}})
 
 
 async def test_agent_keeps_latest_frame_and_binds_only_when_enabled() -> None:
