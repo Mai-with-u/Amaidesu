@@ -575,6 +575,31 @@ class ToolRegistry:
             specs = [s for s in specs if self._categories.get(s.provider) == category]
         return specs
 
+    def guides(self, for_agent: str) -> List[tuple[str, str]]:
+        """收集对某 Agent 可见的各工具面使用说明，按提供者注册顺序返回 (提供者名, 说明)。
+
+        只收录至少有一个工具对该 Agent 可见（未停用、未熔断）的提供者，说明为
+        空串的跳过。调用方（如主播的 Planner）把它们拼进系统提示词，知道眼前这组
+        工具合起来怎么用：游戏 Agent 由此告诉主播这款游戏是委派型还是遥控型，
+        框架的委派工具面则只在有能接收委派的 Agent 时才给出说明。
+        单个提供者读说明失败只记日志并跳过，不影响其余说明。
+        """
+        result: List[tuple[str, str]] = []
+        for provider in self._providers:
+            if not self.list_tools(provider=provider.name, for_agent=for_agent):
+                continue
+            guide_fn = getattr(provider, "guide_for", None)
+            if not callable(guide_fn):
+                continue
+            try:
+                text = str(guide_fn(for_agent) or "").strip()
+            except Exception as exc:  # noqa: BLE001 - 单个提供者的说明失败不拖垮整份拼装
+                logger.warning(f"Provider '{provider.name}' 使用说明读取失败（跳过）: {type(exc).__name__}: {exc}")
+                continue
+            if text:
+                result.append((provider.name, text))
+        return result
+
     def _is_visible_to(self, full_name: str, agent_name: str) -> bool:
         """名单判定：未声明（不在表中）= 默认名单（仅主播）；声明则须命中该 Agent 名或 "*"。"""
         entries = self._visible_to.get(full_name)

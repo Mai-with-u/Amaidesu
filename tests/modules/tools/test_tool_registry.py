@@ -12,7 +12,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.tools import ToolInvocation, ToolProvider, ToolRegistry, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
-from src.modules.tools.provider import make_provider_from_specs
+from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
 from src.modules.tools.registry import default_tool_registry, set_default_registry
 
 
@@ -270,3 +270,74 @@ def test_apply_disabled_warns_on_unmatched_names_and_defers_until_registration(r
     registry.register(ToolSpec(name="late_tool", description="d", kind="sync", provider="game"), provider.invoke)
     assert registry.is_disabled("game_late_tool") is True
     assert all(s.full_name != "game_late_tool" for s in registry.list_tools())  # 转正后对 LLM 不可见
+
+
+# =============================================================================
+# 工具面使用说明：guides(for_agent) 按可见名单收集
+# =============================================================================
+
+
+class _GuidedProvider(BaseToolProvider):
+    """带使用说明的 Provider：说明文本可按读者区分，也可配置为抛异常。"""
+
+    category = "game"
+
+    def __init__(self, name: str, guide: str, *, raise_on_guide: bool = False) -> None:
+        self._name = name
+        self._guide = guide
+        self._raise = raise_on_guide
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def list_tools(self):
+        return [ToolSpec(name="act", description="动作", kind="sync", provider=self._name)]
+
+    async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
+
+    def guide_for(self, agent_name: str) -> str:
+        if self._raise:
+            raise RuntimeError("说明坏了")
+        return f"{self._guide}（读者 {agent_name}）" if self._guide else ""
+
+
+def test_guides_collects_visible_providers_in_registration_order(registry: ToolRegistry) -> None:
+    """只收对该 Agent 可见且说明非空的提供者，按注册顺序返回 (提供者名, 说明)。"""
+    registry.register_provider(_GuidedProvider("alpha", "甲的玩法"), visible_to={"alpha_act": ["streamer"]})
+    registry.register_provider(_GuidedProvider("beta", ""), visible_to={"beta_act": ["streamer"]})
+    registry.register_provider(_GuidedProvider("gamma", "丙的玩法"), visible_to={"gamma_act": ["other"]})
+    registry.register_provider(_GuidedProvider("delta", "丁的玩法"), visible_to={"delta_act": ["*"]})
+
+    guides = registry.guides(for_agent="streamer")
+
+    assert guides == [("alpha", "甲的玩法（读者 streamer）"), ("delta", "丁的玩法（读者 streamer）")]
+    assert registry.guides(for_agent="other") == [
+        ("gamma", "丙的玩法（读者 other）"),
+        ("delta", "丁的玩法（读者 other）"),
+    ]
+
+
+def test_guides_skips_disabled_tools_and_broken_guides(registry: ToolRegistry) -> None:
+    """工具全部停用的提供者不算可见；说明抛异常的提供者跳过，不影响其余说明。"""
+    registry.register_provider(_GuidedProvider("alpha", "甲的玩法"), visible_to={"alpha_act": ["streamer"]})
+    registry.register_provider(
+        _GuidedProvider("broken", "坏的", raise_on_guide=True), visible_to={"broken_act": ["streamer"]}
+    )
+    registry.register_provider(_GuidedProvider("muted", "静音的"), visible_to={"muted_act": ["streamer"]})
+    registry.apply_disabled(["muted_act"])
+
+    assert registry.guides(for_agent="streamer") == [("alpha", "甲的玩法（读者 streamer）")]
+
+
+def test_guides_default_empty_for_plain_provider(registry: ToolRegistry) -> None:
+    """没覆写说明的 Provider（基类默认空串、简单工具路径）不出现在结果里。"""
+
+    async def _impl(invocation: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
+
+    spec = ToolSpec(name="echo", description="回显", kind="sync", provider="plain")
+    registry.register_provider(make_provider_from_specs("plain", [(spec, _impl)]), visible_to={"plain_echo": ["*"]})
+
+    assert registry.guides(for_agent="streamer") == []
