@@ -25,10 +25,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceStartedPayload,
 )
 
-
-# =============================================================================
 # Fixture：保证 EVENT_REGISTRY 在每次测试前已填充
-# =============================================================================
 
 
 @pytest.fixture(autouse=True)
@@ -38,9 +35,7 @@ def _ensure_registry_loaded():
     yield
 
 
-# =============================================================================
 # 构造测试：合法字段
-# =============================================================================
 
 
 class TestStartedPayloadConstruction:
@@ -180,9 +175,7 @@ class TestFailedPayloadConstruction:
             )
 
 
-# =============================================================================
 # 序列化往返测试
-# =============================================================================
 
 
 class TestSerializationRoundTrip:
@@ -258,9 +251,7 @@ class TestSerializationRoundTrip:
         assert restored.timestamp_ms == original.timestamp_ms
 
 
-# =============================================================================
 # 注册表测试：事件名 + 常量 + Payload 类三者绑定
-# =============================================================================
 
 
 class TestEventRegistration:

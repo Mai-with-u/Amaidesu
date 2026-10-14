@@ -24,10 +24,7 @@ from src.modules.events.interceptors import (
     InterceptorChain,
 )
 
-
-# =============================================================================
 # 测试数据模型
-# =============================================================================
 
 
 class SimpleTestEvent(BaseModel):
@@ -37,9 +34,7 @@ class SimpleTestEvent(BaseModel):
     value: int = Field(default=0, description="数值")
 
 
-# =============================================================================
 # 测试用拦截器
-# =============================================================================
 
 
 class _AppendInterceptor(EventInterceptor):
@@ -144,15 +139,12 @@ class _ScopedAppendInterceptor(EventInterceptor):
         return payload
 
 
-# =============================================================================
 # InterceptorChain 单元测试
-# =============================================================================
 
 
 class TestInterceptorChainBasics:
     """InterceptorChain 自身的纯行为（不挂 EventBus）"""
 
-    @pytest.mark.asyncio
     async def test_empty_chain_returns_payload_unchanged(self):
         """空链 → 直接返回入参 payload"""
         chain = InterceptorChain()
@@ -163,7 +155,6 @@ class TestInterceptorChainBasics:
         result = await chain.apply("any.event", payload, "src")
         assert result is payload  # 同一对象引用（空链短路）
 
-    @pytest.mark.asyncio
     async def test_register_appends_in_order(self):
         """register 按调用顺序追加"""
         chain = InterceptorChain()
@@ -177,7 +168,6 @@ class TestInterceptorChainBasics:
         await chain.apply("evt", {}, "src")
         assert record == ["a", "b"]
 
-    @pytest.mark.asyncio
     async def test_chain_executes_in_registration_order(self):
         """同优先级时链内拦截器按注册顺序依次执行"""
         chain = InterceptorChain()
@@ -190,7 +180,6 @@ class TestInterceptorChainBasics:
         await chain.apply("evt", {}, "src")
         assert record == ["first", "second", "third"]
 
-    @pytest.mark.asyncio
     async def test_chain_executes_in_priority_order(self):
         """链按 priority 升序执行，与注册顺序无关（数值小者先行）"""
         chain = InterceptorChain()
@@ -203,7 +192,6 @@ class TestInterceptorChainBasics:
         await chain.apply("evt", {}, "src")
         assert record == ["B", "A"]
 
-    @pytest.mark.asyncio
     async def test_priority_insert_keeps_stable_order_for_equal_priority(self):
         """优先级插入不破坏同优先级注册顺序；更低优先级插到队首"""
         chain = InterceptorChain()
@@ -232,7 +220,6 @@ class TestInterceptorChainBasics:
         # 重复 unregister 同名返回 False
         assert chain.unregister("a") is False
 
-    @pytest.mark.asyncio
     async def test_first_none_return_drops_immediately(self):
         """第一个返回 None 的拦截器立即终止链，返回 None"""
         chain = InterceptorChain()
@@ -247,7 +234,6 @@ class TestInterceptorChainBasics:
         # "before" 调用了；"after" 因 drop 终止**不**调用
         assert record == ["before"]
 
-    @pytest.mark.asyncio
     async def test_exception_in_interceptor_is_caught_and_passed_through(self):
         """拦截器抛异常被捕获 + 视为 pass-through（不影响后续/handler）"""
         chain = InterceptorChain()
@@ -265,7 +251,6 @@ class TestInterceptorChainBasics:
         # "before"/"after" 都应被调用（异常隔离）
         assert record == ["before", "after"]
 
-    @pytest.mark.asyncio
     async def test_interceptor_can_modify_payload(self):
         """拦截器可原地修改 payload，下一个拦截器/最终结果看到修改"""
         chain = InterceptorChain()
@@ -277,9 +262,7 @@ class TestInterceptorChainBasics:
         assert result == {"message": "hello[A][B]"}
 
 
-# =============================================================================
 # EventBus 集成测试
-# =============================================================================
 
 
 class TestEventBusInterceptorIntegration:
@@ -289,7 +272,6 @@ class TestEventBusInterceptorIntegration:
     def event_bus(self) -> EventBus:
         return EventBus(enable_stats=False)
 
-    @pytest.mark.asyncio
     async def test_no_interceptors_means_default_behavior_unchanged(self, event_bus: EventBus):
         """无拦截器时，emit 行为与未启用拦截器时字节级一致"""
         received = []
@@ -304,7 +286,6 @@ class TestEventBusInterceptorIntegration:
         assert len(received) == 1
         assert received[0] == ("test.event", "hello", "src")
 
-    @pytest.mark.asyncio
     async def test_interceptor_modifies_payload_handler_sees_change(self, event_bus: EventBus):
         """拦截器修改 payload → handler 接收修改后的数据"""
         event_bus.add_interceptor(_AppendInterceptor("!"))
@@ -320,7 +301,6 @@ class TestEventBusInterceptorIntegration:
 
         assert received == ["hi!"]
 
-    @pytest.mark.asyncio
     async def test_dropping_interceptor_skips_handler_dispatch(self, event_bus: EventBus):
         """拦截器返回 None → 事件被丢弃，handler **不**被调用"""
         event_bus.add_interceptor(_DropInterceptor())
@@ -336,7 +316,6 @@ class TestEventBusInterceptorIntegration:
 
         assert received == []
 
-    @pytest.mark.asyncio
     async def test_chained_interceptors_execute_in_registration_order(self, event_bus: EventBus):
         """多个拦截器按注册顺序应用，handler 看到累积修改"""
         event_bus.add_interceptor(_AppendInterceptor("[1]"))
@@ -354,7 +333,6 @@ class TestEventBusInterceptorIntegration:
 
         assert received == ["x[1][2][3]"]
 
-    @pytest.mark.asyncio
     async def test_interceptor_exception_does_not_drop_or_break(self, event_bus: EventBus):
         """拦截器异常被隔离：handler 仍被调用，后续拦截器继续执行"""
         event_bus.add_interceptor(_AppendInterceptor("[A]"))
@@ -375,7 +353,6 @@ class TestEventBusInterceptorIntegration:
         # [C] 继续应用 → message="x[A][C]"
         assert received == ["x[A][C]"]
 
-    @pytest.mark.asyncio
     async def test_remove_interceptor_by_name(self, event_bus: EventBus):
         """remove_interceptor(name) 按名移除"""
         event_bus.add_interceptor(_AppendInterceptor("[A]"))
@@ -404,7 +381,6 @@ class TestEventBusInterceptorIntegration:
 
         assert received == ["x[B]"]
 
-    @pytest.mark.asyncio
     async def test_interceptor_only_called_for_emitted_event(self, event_bus: EventBus):
         """未 emit 的事件不触发拦截器（仅 emit 时调用 apply）"""
         record: List[str] = []
@@ -421,7 +397,6 @@ class TestEventBusInterceptorIntegration:
 
         assert record == ["track"]
 
-    @pytest.mark.asyncio
     async def test_drop_after_modify_does_not_dispatch(self, event_bus: EventBus):
         """拦截器先修改再 drop → handler 不被调用（修改也无意义）"""
         event_bus.add_interceptor(_AppendInterceptor("[A]"))
@@ -439,15 +414,12 @@ class TestEventBusInterceptorIntegration:
         assert received == []
 
 
-# =============================================================================
 # 拦截器作用域测试
-# =============================================================================
 
 
 class TestInterceptorScope:
     """``EventInterceptor.scope_prefixes`` 作用域过滤行为"""
 
-    @pytest.mark.asyncio
     async def test_scoped_interceptor_skipped_out_of_scope(self):
         """声明作用域后，域外事件不经过该拦截器"""
         chain = InterceptorChain()
@@ -456,7 +428,6 @@ class TestInterceptorScope:
         result = await chain.apply("game.milestone", {"message": "x"}, "src")
         assert result == {"message": "x"}  # 域外：未追加
 
-    @pytest.mark.asyncio
     async def test_scoped_interceptor_applies_in_scope(self):
         """声明作用域后，域内事件正常经过该拦截器"""
         chain = InterceptorChain()
@@ -465,7 +436,6 @@ class TestInterceptorScope:
         result = await chain.apply("room.message.danmaku", {"message": "x"}, "src")
         assert result == {"message": "x[R]"}
 
-    @pytest.mark.asyncio
     async def test_empty_scope_applies_to_all_events(self):
         """空作用域元组 = 不限域，对所有事件生效（基类默认）"""
         chain = InterceptorChain()
@@ -475,7 +445,6 @@ class TestInterceptorScope:
             result = await chain.apply(event_name, {"message": "x"}, "src")
             assert result == {"message": "x[A]"}
 
-    @pytest.mark.asyncio
     async def test_rate_limit_interceptor_declares_room_message_scope(self):
         """限流/相似过滤拦截器显式声明 room.message.* 作用域（防下游事件误伤）"""
         from src.modules.events.interceptors import RateLimitInterceptor, SimilarFilterInterceptor
@@ -484,9 +453,7 @@ class TestInterceptorScope:
         assert SimilarFilterInterceptor.scope_prefixes == ("room.message.",)
 
 
-# =============================================================================
 # EventInterceptor 抽象类契约
-# =============================================================================
 
 
 class TestEventInterceptorContract:
@@ -520,9 +487,7 @@ class TestEventInterceptorContract:
             _NoIntercept()  # type: ignore[abstract]
 
 
-# =============================================================================
 # 运行入口
-# =============================================================================
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

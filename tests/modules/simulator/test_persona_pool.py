@@ -50,7 +50,6 @@ async def _seed_residents(store: SQLiteDatabase, count: int = 10, include_hater:
         )
 
 
-@pytest.mark.asyncio
 async def test_load_default_filters_hater(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema()
@@ -62,7 +61,6 @@ async def test_load_default_filters_hater(store):
     assert len(residents) == 9  # 10 - 1 hater
 
 
-@pytest.mark.asyncio
 async def test_load_enable_hater(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema(enable_hater=True)
@@ -71,7 +69,6 @@ async def test_load_enable_hater(store):
     assert len(pool.list_residents()) == 10
 
 
-@pytest.mark.asyncio
 async def test_load_empty_pool_when_no_data(store):
     cfg = SimulatorConfigSchema()
     pool = PersonaPool(sim_repo=store.sim)
@@ -79,7 +76,6 @@ async def test_load_empty_pool_when_no_data(store):
     assert pool.list_residents() == []
 
 
-@pytest.mark.asyncio
 async def test_pick_one_falls_back_to_passerby_on_empty_pool(store):
     cfg = SimulatorConfigSchema()
     pool = PersonaPool(sim_repo=store.sim)
@@ -89,7 +85,6 @@ async def test_pick_one_falls_back_to_passerby_on_empty_pool(store):
     assert p.role == PersonaRole.PASSERBY
 
 
-@pytest.mark.asyncio
 async def test_pick_one_returns_valid_persona(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema(enable_hater=True)
@@ -101,7 +96,6 @@ async def test_pick_one_returns_valid_persona(store):
     assert p.role in PersonaRole
 
 
-@pytest.mark.asyncio
 async def test_record_message_increments(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema(enable_hater=True)
@@ -113,7 +107,6 @@ async def test_record_message_increments(store):
     assert p.messages_generated == before + 1
 
 
-@pytest.mark.asyncio
 async def test_get_stats(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema(enable_hater=True)
@@ -132,7 +125,6 @@ def _new_pool(store: SQLiteDatabase) -> PersonaPool:
     return PersonaPool(sim_repo=store.sim)
 
 
-@pytest.mark.asyncio
 async def test_generate_temporary_passerby(store):
     pool = _new_pool(store)
     passerby = pool.generate_temporary_passerby()
@@ -141,7 +133,6 @@ async def test_generate_temporary_passerby(store):
     assert passerby.user_id.startswith("passerby_")
 
 
-@pytest.mark.asyncio
 async def test_passerby_pool_cap(store):
     pool = _new_pool(store)
     for _ in range(60):
@@ -149,7 +140,7 @@ async def test_passerby_pool_cap(store):
     assert len(pool._passersby) <= 50  # type: ignore[attr-defined]
 
 
-# --- 持久化管理（add/update/delete，写穿 DB） ---
+# 持久化管理（add/update/delete，写穿 DB）
 
 
 def _new_persona(user_id: str, nickname: str) -> Persona:
@@ -162,7 +153,6 @@ def _new_persona(user_id: str, nickname: str) -> Persona:
     )
 
 
-@pytest.mark.asyncio
 async def test_add_personas_persists(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema()
@@ -177,7 +167,6 @@ async def test_add_personas_persists(store):
     assert "resident_new" in ids
 
 
-@pytest.mark.asyncio
 async def test_update_persona_persists(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema()
@@ -192,7 +181,6 @@ async def test_update_persona_persists(store):
     assert updated.fans_medal_level == 30
 
 
-@pytest.mark.asyncio
 async def test_update_persona_not_found(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema()
@@ -201,7 +189,6 @@ async def test_update_persona_not_found(store):
     assert await pool.update_persona("nonexistent", {"user_nickname": "x"}) is False
 
 
-@pytest.mark.asyncio
 async def test_delete_persona_persists(store):
     await _seed_residents(store)
     cfg = SimulatorConfigSchema()
@@ -216,7 +203,6 @@ async def test_delete_persona_persists(store):
     assert "resident_000" not in ids
 
 
-@pytest.mark.asyncio
 async def test_empty_pool_add_then_load(store):
     cfg = SimulatorConfigSchema()
     pool = _new_pool(store)

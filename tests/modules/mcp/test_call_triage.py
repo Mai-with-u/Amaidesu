@@ -38,7 +38,6 @@ class _TriagedClient(McpClient):
         self._client = _InnerRaiser(exc)
 
 
-@pytest.mark.asyncio
 async def test_tool_error_keeps_connection_and_reraises() -> None:
     """业务错误：连接保持（不断连），异常上抛由 Provider 转述。"""
     from fastmcp.exceptions import ToolError
@@ -52,7 +51,6 @@ async def test_tool_error_keeps_connection_and_reraises() -> None:
     assert client._client is not None
 
 
-@pytest.mark.asyncio
 async def test_transport_error_marks_disconnected_and_returns_none() -> None:
     """传输故障：标记断连 + 返回 None（维持既有惰性重连语义）。"""
     client = _TriagedClient(ConnectionError("connection reset"), name="triage", config=AnyConfig())
@@ -62,7 +60,6 @@ async def test_transport_error_marks_disconnected_and_returns_none() -> None:
     assert client._client is not None
 
 
-@pytest.mark.asyncio
 async def test_provider_invoke_converts_tool_error_to_failure_result() -> None:
     """全链路：真实分诊保持连接 → Provider 转失败结果（错误文本透传），永不外抛。"""
     from fastmcp.exceptions import ToolError

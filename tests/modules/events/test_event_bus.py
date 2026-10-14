@@ -23,9 +23,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import GiftInfo, RoomMessagePayload, RoomMessageUser
 from src.modules.events.registry import EVENT_REGISTRY
 
-# =============================================================================
 # Test Models
-# =============================================================================
 
 
 class SimpleTestEvent(BaseModel):
@@ -35,9 +33,7 @@ class SimpleTestEvent(BaseModel):
     id: int = Field(default=0, description="ID")
 
 
-# =============================================================================
 # Test Fixtures
-# =============================================================================
 
 
 @pytest.fixture
@@ -57,12 +53,9 @@ def sample_event_model():
     return TestEventData
 
 
-# =============================================================================
 # 事件订阅和取消订阅测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_on_register_handler(event_bus: EventBus):
     """测试注册事件处理器"""
     call_count = 0
@@ -75,7 +68,6 @@ async def test_on_register_handler(event_bus: EventBus):
     assert event_bus.get_listeners_count("test.event") == 1
 
 
-@pytest.mark.asyncio
 async def test_on_multiple_handlers(event_bus: EventBus):
     """测试多个处理器订阅同一事件"""
     handler1_calls = []
@@ -101,7 +93,6 @@ async def test_on_multiple_handlers(event_bus: EventBus):
     assert len(handler2_calls) == 1
 
 
-@pytest.mark.asyncio
 async def test_off_remove_handler(event_bus: EventBus):
     """测试取消订阅"""
     call_count = 0
@@ -123,7 +114,6 @@ async def test_off_remove_handler(event_bus: EventBus):
     assert call_count == 0
 
 
-@pytest.mark.asyncio
 async def test_off_non_existent_handler(event_bus: EventBus):
     """测试移除不存在的处理器（不应报错）"""
 
@@ -143,7 +133,6 @@ async def test_off_non_existent_handler(event_bus: EventBus):
     assert event_bus.get_listeners_count("test.event") == initial_count
 
 
-@pytest.mark.asyncio
 async def test_off_removes_event_entry_when_empty(event_bus: EventBus):
     """测试移除最后一个处理器后删除事件条目"""
 
@@ -157,12 +146,9 @@ async def test_off_removes_event_entry_when_empty(event_bus: EventBus):
     assert "test.event" not in event_bus.list_events()
 
 
-# =============================================================================
 # 事件发布测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_emit_model_data(event_bus: EventBus):
     """测试发布 Pydantic Model 格式数据"""
     received_data = []
@@ -179,7 +165,6 @@ async def test_emit_model_data(event_bus: EventBus):
     assert received_data[0].message == "hello"
 
 
-@pytest.mark.asyncio
 async def test_emit_no_listeners(event_bus: EventBus):
     """测试发布到没有监听器的事件（不应报错）"""
     # 应该正常执行，不抛出异常
@@ -187,7 +172,6 @@ async def test_emit_no_listeners(event_bus: EventBus):
     await asyncio.sleep(0.1)
 
 
-@pytest.mark.asyncio
 async def test_emit_with_sync_handler_rejected(event_bus: EventBus):
     """同步 handler 在注册时被直接拒绝（避免阻塞事件循环）"""
     result = []
@@ -201,7 +185,6 @@ async def test_emit_with_sync_handler_rejected(event_bus: EventBus):
     assert event_bus.get_listeners_count("test.event") == 0
 
 
-@pytest.mark.asyncio
 async def test_emit_async_handler(event_bus: EventBus):
     """测试异步处理器在事件总线中的执行"""
     result = []
@@ -219,7 +202,6 @@ async def test_emit_async_handler(event_bus: EventBus):
     assert result[0] == "async"
 
 
-@pytest.mark.asyncio
 async def test_emit_with_pydantic_model(event_bus: EventBus, sample_event_model):
     """测试使用 emit 发布 Pydantic Model"""
     received_data = []
@@ -240,7 +222,6 @@ async def test_emit_with_pydantic_model(event_bus: EventBus, sample_event_model)
     assert received_data[0].count == 42
 
 
-@pytest.mark.asyncio
 async def test_emit_with_dict_and_pydantic_model(event_bus: EventBus, sample_event_model):
     """测试 emit 既支持 dict 也支持 Pydantic Model"""
     received_data = []
@@ -259,7 +240,6 @@ async def test_emit_with_dict_and_pydantic_model(event_bus: EventBus, sample_eve
     assert received_data[0].count == 2
 
 
-@pytest.mark.asyncio
 async def test_event_validation_with_registered_event(event_bus: EventBus):
     """测试已注册事件的验证功能"""
     received_data = []
@@ -285,12 +265,9 @@ async def test_event_validation_with_registered_event(event_bus: EventBus):
     EVENT_REGISTRY.pop("core.test.validation.danmaku", None)
 
 
-# =============================================================================
 # 判别字段一致性校验测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_discriminant_mismatch_raises(event_bus: EventBus):
     """事件名末段与判别字段不符时 emit 报错（RoomMessagePayload.message_type）"""
     payload = RoomMessagePayload(
@@ -302,7 +279,6 @@ async def test_discriminant_mismatch_raises(event_bus: EventBus):
         await event_bus.emit("room.message.danmaku", payload, source="test")
 
 
-@pytest.mark.asyncio
 async def test_discriminant_match_passes(event_bus: EventBus):
     """事件名末段与判别字段一致时正常分发"""
     received = []
@@ -323,7 +299,6 @@ async def test_discriminant_match_passes(event_bus: EventBus):
     assert len(received) == 1
 
 
-@pytest.mark.asyncio
 async def test_discriminant_check_skipped_for_plain_payload(event_bus: EventBus):
     """无判别字段的 payload 不做末段校验（事件名与字段无对应关系）"""
     received = []
@@ -339,12 +314,9 @@ async def test_discriminant_check_skipped_for_plain_payload(event_bus: EventBus)
     assert len(received) == 1
 
 
-# =============================================================================
 # 并发互不影响与错误计数测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_one_handler_failure_does_not_affect_others(event_bus: EventBus):
     """单个订阅者抛异常不影响其他订阅者执行"""
     results = []
@@ -367,7 +339,6 @@ async def test_one_handler_failure_does_not_affect_others(event_bus: EventBus):
     assert "normal" in results
 
 
-@pytest.mark.asyncio
 async def test_handler_error_counted_in_stats(event_bus: EventBus):
     """订阅者异常被计入事件统计（error_count / last_error_time）"""
 
@@ -385,7 +356,6 @@ async def test_handler_error_counted_in_stats(event_bus: EventBus):
     assert stats.last_error_time > 0
 
 
-@pytest.mark.asyncio
 async def test_handler_error_recorded_on_wrapper(event_bus: EventBus):
     """订阅者异常同时记录到 HandlerWrapper（error_count / last_error）"""
 
@@ -404,12 +374,9 @@ async def test_handler_error_recorded_on_wrapper(event_bus: EventBus):
     assert "Test error" in (handlers[0].last_error or "")
 
 
-# =============================================================================
 # 生命周期管理测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_clear_removes_all_handlers(event_bus: EventBus):
     """测试 clear() 清除所有处理器"""
 
@@ -432,12 +399,9 @@ async def test_clear_removes_all_handlers(event_bus: EventBus):
     assert len(event_bus.list_events()) == 0
 
 
-# =============================================================================
 # 辅助方法测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_get_listeners_count(event_bus: EventBus):
     """测试获取监听器数量"""
 
@@ -456,7 +420,6 @@ async def test_get_listeners_count(event_bus: EventBus):
     assert event_bus.get_listeners_count("test.event") == 2
 
 
-@pytest.mark.asyncio
 async def test_list_events(event_bus: EventBus):
     """测试列出所有已注册的事件"""
 
@@ -474,12 +437,9 @@ async def test_list_events(event_bus: EventBus):
     assert "event3" in events
 
 
-# =============================================================================
 # 并发测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_concurrent_emits(event_bus: EventBus):
     """测试并发发布多个事件"""
     results = []
@@ -498,7 +458,6 @@ async def test_concurrent_emits(event_bus: EventBus):
     assert len(results) == 10
 
 
-@pytest.mark.asyncio
 async def test_concurrent_handlers(event_bus: EventBus):
     """测试多个处理器并发执行"""
     execution_order = []
@@ -533,12 +492,9 @@ async def test_concurrent_handlers(event_bus: EventBus):
     assert "handler3" in execution_order
 
 
-# =============================================================================
 # 边界情况测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_empty_event_name(event_bus: EventBus):
     """测试空事件名称"""
 
@@ -559,20 +515,15 @@ async def test_empty_event_name(event_bus: EventBus):
 # EventBus 现在强制要求 Pydantic BaseModel，不再支持 None 数据
 
 
-# =============================================================================
 # 运行入口
-# =============================================================================
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
 
 
-# =============================================================================
 # tool.health.# 通配路由集成测试（真实 EventBus emit → 通配分发）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_tool_health_wildcard_matches_concrete_emit(event_bus: EventBus):
     """真实 emit 路径验证：``tool.health.#`` 通配订阅能收到具体名 ``tool.health.<tool>`` 事件"""
     from src.modules.events.payloads.tool_health import ToolHealthPayload

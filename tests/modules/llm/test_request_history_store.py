@@ -70,7 +70,6 @@ async def _wait_for_count(store: SQLiteDatabase, expected: int, timeout: float =
     await asyncio.wait_for(_poll(), timeout)
 
 
-@pytest.mark.asyncio
 async def test_record_request_persists_to_store(store: SQLiteDatabase) -> None:
     """record_request 经 fire-and-forget 写入 llm_requests 表。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -85,7 +84,6 @@ async def test_record_request_persists_to_store(store: SQLiteDatabase) -> None:
     assert row["success"] == 1
 
 
-@pytest.mark.asyncio
 async def test_get_history_from_store_pagination(store: SQLiteDatabase) -> None:
     """get_history 走 SQL 分页（时间倒序），记录字段还原完整。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -110,7 +108,6 @@ async def test_get_history_from_store_pagination(store: SQLiteDatabase) -> None:
     assert first["preview_text"] == "hi"
 
 
-@pytest.mark.asyncio
 async def test_get_history_filters(store: SQLiteDatabase) -> None:
     """模型/成功状态筛选生效。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -125,7 +122,6 @@ async def test_get_history_filters(store: SQLiteDatabase) -> None:
     assert by_model["total"] == 2
 
 
-@pytest.mark.asyncio
 async def test_get_request_by_id_from_store(store: SQLiteDatabase) -> None:
     """按 request_id 从库里取单条详情。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -137,7 +133,6 @@ async def test_get_request_by_id_from_store(store: SQLiteDatabase) -> None:
     assert await manager.get_request_by_id("missing") is None
 
 
-@pytest.mark.asyncio
 async def test_record_request_persists_v12_columns(store: SQLiteDatabase) -> None:
     """v12 三列（reasoning_tokens / usage_raw_json / profile_name）统计侧落库与还原。
 
@@ -186,7 +181,6 @@ async def test_record_request_persists_v12_columns(store: SQLiteDatabase) -> Non
     assert fetched["usage"]["reasoning_tokens"] == 3
 
 
-@pytest.mark.asyncio
 async def test_record_request_bare_statistics_and_preview(store: SQLiteDatabase) -> None:
     """v14 新契约：正文五字段落库一律 NULL，preview_text 摘要落库。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -228,7 +222,6 @@ async def test_record_request_bare_statistics_and_preview(store: SQLiteDatabase)
     assert history["records"][0]["preview_text"] == row["preview_text"]
 
 
-@pytest.mark.asyncio
 async def test_get_history_profile_name_filter(store: SQLiteDatabase) -> None:
     """profile_name 筛选生效（替代历史的 client_type 筛选语义）。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -241,7 +234,6 @@ async def test_get_history_profile_name_filter(store: SQLiteDatabase) -> None:
     assert planner_only["total"] == 1
 
 
-@pytest.mark.asyncio
 async def test_get_statistics_from_store(store: SQLiteDatabase) -> None:
     """统计接口走 SQL 聚合，model_stats/client_stats 形状与旧实现一致。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -260,7 +252,6 @@ async def test_get_statistics_from_store(store: SQLiteDatabase) -> None:
     assert stats["time_range"] == {"start": None, "end": None}
 
 
-@pytest.mark.asyncio
 async def test_clear_history_from_store(store: SQLiteDatabase) -> None:
     """clear_history 删除库记录并修剪缓存。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -277,7 +268,6 @@ async def test_clear_history_from_store(store: SQLiteDatabase) -> None:
     assert int(rows[0]["n"]) == 0
 
 
-@pytest.mark.asyncio
 async def test_available_dates_desc(store: SQLiteDatabase) -> None:
     """日期清单降序（最新在前）。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -290,7 +280,6 @@ async def test_available_dates_desc(store: SQLiteDatabase) -> None:
     assert dates == sorted(dates, reverse=True)
 
 
-@pytest.mark.asyncio
 async def test_no_store_falls_back_to_cache() -> None:
     """未注入 store：查询退化为内存缓存路径，不报错。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=None)
@@ -305,7 +294,6 @@ async def test_no_store_falls_back_to_cache() -> None:
     assert await manager.get_available_dates() == []
 
 
-@pytest.mark.asyncio
 async def test_get_request_stats_by_ids_from_store(store: SQLiteDatabase) -> None:
     """批量统计：仅回统计列、去重入参、未命中 id 不在结果中。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
@@ -328,7 +316,6 @@ async def test_get_request_stats_by_ids_from_store(store: SQLiteDatabase) -> Non
     assert await manager.get_request_stats_by_ids([]) == {}
 
 
-@pytest.mark.asyncio
 async def test_get_request_stats_by_ids_from_cache() -> None:
     """无库模式：批量统计走内存缓存路径，口径与库路径一致。"""
     manager = RequestHistoryManager(use_global=False, llm_repo=None)

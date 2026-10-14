@@ -11,8 +11,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from src.modules.llm.engine import LLMManager
 from src.modules.storage.connection import SQLiteConnectionManager
 from src.modules.storage.repos.llm import LLMRepo
@@ -50,7 +48,6 @@ async def _rows(conn_manager: SQLiteConnectionManager) -> list[dict[str, Any]]:
         return [dict(r) for r in db.execute("SELECT live_session_id, total_tokens FROM llm_usage").fetchall()]
 
 
-@pytest.mark.asyncio
 async def test_usage_attributed_to_active_session(tmp_path) -> None:
     """场内调用归属当前场次主键。"""
     conn = SQLiteConnectionManager(tmp_path / "t1.db")
@@ -63,7 +60,6 @@ async def test_usage_attributed_to_active_session(tmp_path) -> None:
     assert rows[0]["live_session_id"] == 42
 
 
-@pytest.mark.asyncio
 async def test_usage_between_sessions_is_null(tmp_path) -> None:
     """无进行中场次（场间消耗）落 NULL，与存储惯例对齐。"""
     conn = SQLiteConnectionManager(tmp_path / "t2.db")
@@ -76,7 +72,6 @@ async def test_usage_between_sessions_is_null(tmp_path) -> None:
     assert rows[0]["live_session_id"] is None
 
 
-@pytest.mark.asyncio
 async def test_resolver_failure_falls_back_to_null(tmp_path) -> None:
     """归属解析失败只告警，落 NULL，不阻断落库。"""
 
@@ -93,7 +88,6 @@ async def test_resolver_failure_falls_back_to_null(tmp_path) -> None:
     assert rows[0]["live_session_id"] is None
 
 
-@pytest.mark.asyncio
 async def test_no_resolver_keeps_null(tmp_path) -> None:
     """未注入解析器时保持旧行为（落 NULL），既有装配不受影响。"""
     conn = SQLiteConnectionManager(tmp_path / "t4.db")

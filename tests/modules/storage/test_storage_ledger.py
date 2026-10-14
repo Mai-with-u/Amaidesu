@@ -13,8 +13,8 @@ StorageLedger 集成测试（溯源链收口）
 """
 
 from __future__ import annotations
-import asyncio
 
+import asyncio
 import shutil
 import tempfile
 from pathlib import Path
@@ -33,7 +33,6 @@ from src.modules.storage.repos import ChatRepo
 from src.modules.storage.storage_ledger import StorageLedger
 from tests.modules.storage.helpers import make_room_message
 
-
 # 测试用场次管理器替身：固定返回预置主键（模拟"显式场次进行中"的解析结果）
 _FAKE_PK = 4242
 
@@ -46,9 +45,7 @@ class _FakeSessionManager:
         return self._pk
 
 
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 
 @pytest.fixture
@@ -87,12 +84,9 @@ async def ledger(event_bus: EventBus, store: SQLiteDatabase) -> AsyncGenerator[S
     await storage_ledger.stop()
 
 
-# =============================================================================
 # 分发：danmaku / gift / super_chat / enter
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_ledger_dispatches_danmaku_to_live_chat(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -110,7 +104,6 @@ async def test_ledger_dispatches_danmaku_to_live_chat(
     assert len(await store.execute("SELECT * FROM super_chats")) == 0
 
 
-@pytest.mark.asyncio
 async def test_ledger_dispatches_gift_to_gifts(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -133,7 +126,6 @@ async def test_ledger_dispatches_gift_to_gifts(
     assert len(await store.execute("SELECT * FROM super_chats")) == 0
 
 
-@pytest.mark.asyncio
 async def test_ledger_dispatches_super_chat_to_super_chats(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -153,7 +145,6 @@ async def test_ledger_dispatches_super_chat_to_super_chats(
     assert int(rows[0]["simulated"]) == 0
 
 
-@pytest.mark.asyncio
 async def test_ledger_dispatches_guard_to_live_chat(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -172,7 +163,6 @@ async def test_ledger_dispatches_guard_to_live_chat(
     assert len(await store.execute("SELECT * FROM super_chats")) == 0
 
 
-@pytest.mark.asyncio
 async def test_ledger_enter_does_not_persist(ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus) -> None:
     """enter 事件 schema 无对应明细表——debug 日志后丢弃，不应落任何业务表。"""
     payload = make_room_message(message_type="enter")
@@ -184,12 +174,9 @@ async def test_ledger_enter_does_not_persist(ledger: StorageLedger, store: SQLit
         assert len(rows) == 0, f"{table} 应为空，实际 {len(rows)} 行"
 
 
-# =============================================================================
 # simulated 端到端（payload bool → 列 INTEGER）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_ledger_simulated_true_flows_to_column(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -205,7 +192,6 @@ async def test_ledger_simulated_true_flows_to_column(
     assert int(all_rows[0]["simulated"]) == 1
 
 
-@pytest.mark.asyncio
 async def test_ledger_mixed_real_and_simulated_excluded(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -223,12 +209,9 @@ async def test_ledger_mixed_real_and_simulated_excluded(
     assert [str(r["content"]) for r in all_rows] == ["真弹幕", "假弹幕"]
 
 
-# =============================================================================
 # 同一 session_id 多次事件：session_pk 稳定（PK 复用）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_ledger_session_pk_resolved_via_session_manager(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -244,12 +227,9 @@ async def test_ledger_session_pk_resolved_via_session_manager(
     assert pks == {_FAKE_PK}, f"全部明细应归属场次管理器解析的主键，实际 {pks}"
 
 
-# =============================================================================
 # 写入异常隔离（不阻断主循环）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_ledger_write_failure_does_not_break_subsequent_writes(
     event_bus: EventBus, store: SQLiteDatabase
 ) -> None:
@@ -292,12 +272,9 @@ async def test_ledger_write_failure_does_not_break_subsequent_writes(
     await ledger.stop()
 
 
-# =============================================================================
 # stop 后停止订阅
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_ledger_stop_unsubscribes(event_bus: EventBus, store: SQLiteDatabase) -> None:
     """stop 后再 emit 不应再触发落库。"""
     ledger = StorageLedger(
@@ -318,12 +295,9 @@ async def test_ledger_stop_unsubscribes(event_bus: EventBus, store: SQLiteDataba
     assert len(rows) == 0
 
 
-# =============================================================================
 # start 幂等
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_ledger_start_idempotent(event_bus: EventBus, store: SQLiteDatabase) -> None:
     ledger = StorageLedger(
         event_bus=event_bus,
@@ -337,12 +311,9 @@ async def test_ledger_start_idempotent(event_bus: EventBus, store: SQLiteDatabas
     await ledger.stop()
 
 
-# =============================================================================
 # streamer.speech → live_chat（sender_role=assistant, message_type=speak）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_ledger_start_subscribes_streamer_speech(event_bus: EventBus, store: SQLiteDatabase) -> None:
     """start() 后应在 EventBus 上注册 streamer.speech 监听器。"""
     ledger = StorageLedger(
@@ -361,7 +332,6 @@ async def test_ledger_start_subscribes_streamer_speech(event_bus: EventBus, stor
         await ledger.stop()
 
 
-@pytest.mark.asyncio
 async def test_ledger_streamer_speech_writes_live_chat_with_assistant_role(
     event_bus: EventBus, store: SQLiteDatabase
 ) -> None:
@@ -399,7 +369,6 @@ async def test_ledger_streamer_speech_writes_live_chat_with_assistant_role(
         await ledger.stop()
 
 
-@pytest.mark.asyncio
 async def test_ledger_streamer_speech_skips_when_session_id_is_none(event_bus: EventBus, store: SQLiteDatabase) -> None:
     """未注入 session_id 时，streamer.speech 事件应跳过落库（不抛、不写）。"""
     ledger = StorageLedger(
@@ -423,7 +392,6 @@ async def test_ledger_streamer_speech_skips_when_session_id_is_none(event_bus: E
         await ledger.stop()
 
 
-@pytest.mark.asyncio
 async def test_ledger_streamer_speech_swallows_handler_exception(
     event_bus: EventBus, store: SQLiteDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -480,12 +448,9 @@ async def test_ledger_streamer_speech_swallows_handler_exception(
         await ledger.stop()
 
 
-# =============================================================================
 # 写穿伴随：viewers 统计画像（danmaku/gift 落库同点 upsert）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_room_message_danmaku_upserts_viewer(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -511,7 +476,6 @@ async def test_room_message_danmaku_upserts_viewer(
     assert int(row["last_active_ms"]) == 1_700_000_000_001
 
 
-@pytest.mark.asyncio
 async def test_room_message_gift_upserts_viewer(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -540,7 +504,6 @@ async def test_room_message_gift_upserts_viewer(
     assert int(row["last_active_ms"]) == 1_700_000_000_002
 
 
-@pytest.mark.asyncio
 async def test_room_message_super_chat_upserts_viewer_paid(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -565,7 +528,6 @@ async def test_room_message_super_chat_upserts_viewer_paid(
     assert int(row["interaction_count"]) == 1
 
 
-@pytest.mark.asyncio
 async def test_danmaku_upsert_failure_does_not_break_flow(
     event_bus: EventBus, store: SQLiteDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -617,12 +579,9 @@ async def test_danmaku_upsert_failure_does_not_break_flow(
         await ledger.stop()
 
 
-# =============================================================================
 # streamer.speech → viewers replied_count 闭环（target_user_id 写穿）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_streamer_speech_with_target_upserts_replied(
     event_bus: EventBus, store: SQLiteDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -672,7 +631,6 @@ async def test_streamer_speech_with_target_upserts_replied(
         await ledger.stop()
 
 
-@pytest.mark.asyncio
 async def test_streamer_speech_without_target_skips_replied(
     event_bus: EventBus, store: SQLiteDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -716,7 +674,6 @@ async def test_streamer_speech_without_target_skips_replied(
         await ledger.stop()
 
 
-@pytest.mark.asyncio
 async def test_streamer_speech_upsert_failure_isolated(
     event_bus: EventBus, store: SQLiteDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -757,12 +714,9 @@ async def test_streamer_speech_upsert_failure_isolated(
         await ledger.stop()
 
 
-# =============================================================================
 # 分发：game.* → game_events
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_ledger_dispatches_game_milestone_to_game_events(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -788,7 +742,6 @@ async def test_ledger_dispatches_game_milestone_to_game_events(
     assert row["timestamp_ms"] == 1_700_000_000_020
 
 
-@pytest.mark.asyncio
 async def test_ledger_dispatches_attention_required_and_error(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -810,7 +763,6 @@ async def test_ledger_dispatches_attention_required_and_error(
     assert all(r["game"] == "minecraft" for r in rows)
 
 
-@pytest.mark.asyncio
 async def test_ledger_game_event_scene_empty_becomes_null(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -828,7 +780,6 @@ async def test_ledger_game_event_scene_empty_becomes_null(
     assert rows[0]["scene"] is None
 
 
-@pytest.mark.asyncio
 async def test_ledger_game_write_failure_does_not_break_flow(
     event_bus: EventBus, store: SQLiteDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -863,7 +814,6 @@ async def test_ledger_game_write_failure_does_not_break_flow(
         await ledger.stop()
 
 
-@pytest.mark.asyncio
 async def test_ledger_stop_unsubscribes_game_events(event_bus: EventBus, store: SQLiteDatabase) -> None:
     ledger = StorageLedger(
         event_bus=event_bus,
@@ -887,12 +837,9 @@ async def test_ledger_stop_unsubscribes_game_events(event_bus: EventBus, store: 
     assert rows[0]["n"] == 0
 
 
-# =============================================================================
 # 联动对象发言（partner_speech）：落 live_chat 但不计观众统计
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_partner_speech_persists_without_viewer_stats(
     ledger: StorageLedger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
@@ -911,12 +858,9 @@ async def test_partner_speech_persists_without_viewer_stats(
     assert viewers == [], "联动对象发言不应计入观众统计"
 
 
-# =============================================================================
 # 回复关联：reply_to_message_id 落库（"主播回应了哪条弹幕"可查询）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_ledger_streamer_speech_persists_reply_to_message_id(event_bus: EventBus, store: SQLiteDatabase) -> None:
     """speech payload 携带 reply_to_message_id 时应落 live_chat.reply_to_message_id 列。"""
     ledger = StorageLedger(
@@ -966,9 +910,7 @@ async def test_ledger_streamer_speech_persists_reply_to_message_id(event_bus: Ev
         await ledger.stop()
 
 
-# =============================================================================
 # 无显式场次：resolve_pk() 返回 None → 全类型事件不落库
-# =============================================================================
 
 
 class _CountingChatRepo(ChatRepo):
@@ -991,7 +933,6 @@ class _CountingChatRepo(ChatRepo):
         return await super().insert_super_chat(**kwargs)
 
 
-@pytest.mark.asyncio
 async def test_ledger_danmaku_skipped_when_no_active_session(event_bus: EventBus, temp_db_path: Path) -> None:
     """``resolve_pk()`` 返回 None 时，danmaku 不应调用 ``insert_live_chat``，表中无新行。"""
     db = SQLiteDatabase(temp_db_path)
@@ -1019,7 +960,6 @@ async def test_ledger_danmaku_skipped_when_no_active_session(event_bus: EventBus
         await store.close()
 
 
-@pytest.mark.asyncio
 async def test_ledger_gift_skipped_when_no_active_session(event_bus: EventBus, temp_db_path: Path) -> None:
     db = SQLiteDatabase(temp_db_path)
     await db.initialize()
@@ -1046,7 +986,6 @@ async def test_ledger_gift_skipped_when_no_active_session(event_bus: EventBus, t
         await store.close()
 
 
-@pytest.mark.asyncio
 async def test_ledger_streamer_speech_skipped_when_no_active_session(event_bus: EventBus, temp_db_path: Path) -> None:
     db = SQLiteDatabase(temp_db_path)
     await db.initialize()
@@ -1079,7 +1018,6 @@ async def test_ledger_streamer_speech_skipped_when_no_active_session(event_bus: 
         await store.close()
 
 
-@pytest.mark.asyncio
 async def test_ledger_game_event_skipped_when_no_active_session(event_bus: EventBus, temp_db_path: Path) -> None:
     db = SQLiteDatabase(temp_db_path)
     await db.initialize()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import Generator
 
 import pytest
 
@@ -32,12 +32,9 @@ async def store(temp_db_path: Path):  # noqa: ANN201 仓储实例
     await db.close()
 
 
-# =============================================================================
 # sim_personas CRUD
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_persona_insert_and_list(store: SQLiteDatabase) -> None:
     """插入后人设可列出；停用行默认不可见。"""
     await store.insert_sim_persona(
@@ -63,7 +60,6 @@ async def test_persona_insert_and_list(store: SQLiteDatabase) -> None:
     assert {row["user_id"] for row in all_rows} == {"sim_a", "sim_b"}
 
 
-@pytest.mark.asyncio
 async def test_persona_duplicate_user_id_rejected(store: SQLiteDatabase) -> None:
     """user_id 唯一约束生效。"""
     await store.insert_sim_persona(
@@ -85,7 +81,6 @@ async def test_persona_duplicate_user_id_rejected(store: SQLiteDatabase) -> None
         )
 
 
-@pytest.mark.asyncio
 async def test_persona_update_whitelist_and_timestamp(store: SQLiteDatabase) -> None:
     """白名单外字段拒绝；合法更新维护 updated_at_ms。"""
     await store.insert_sim_persona(
@@ -107,14 +102,12 @@ async def test_persona_update_whitelist_and_timestamp(store: SQLiteDatabase) -> 
         await store.update_sim_persona(user_id="sim_u", fields={"user_id": "hack"})
 
 
-@pytest.mark.asyncio
 async def test_persona_update_nonexistent_returns_false(store: SQLiteDatabase) -> None:
     """更新不存在的 user_id 返回 False。"""
     updated = await store.update_sim_persona(user_id="ghost", fields={"personality": "x"})
     assert updated is False
 
 
-@pytest.mark.asyncio
 async def test_persona_delete(store: SQLiteDatabase) -> None:
     """删除存在的人设返回 True，再删返回 False。"""
     await store.insert_sim_persona(
@@ -129,12 +122,9 @@ async def test_persona_delete(store: SQLiteDatabase) -> None:
     assert await store.count_sim_personas() == 0
 
 
-# =============================================================================
 # sim_gifts CRUD
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_gift_insert_list_update_delete(store: SQLiteDatabase) -> None:
     """礼物目录增查改删全链。"""
     await store.insert_sim_gift(
@@ -169,12 +159,9 @@ async def test_gift_insert_list_update_delete(store: SQLiteDatabase) -> None:
     assert await store.count_sim_gifts() == 1
 
 
-# =============================================================================
 # 启动期种子导入
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_seed_imports_into_empty_tables(store: SQLiteDatabase) -> None:
     """空表导入内置默认值，数量与常量一致。"""
     await seed_simulator_data(store)
@@ -185,7 +172,6 @@ async def test_seed_imports_into_empty_tables(store: SQLiteDatabase) -> None:
     assert personas == {p["user_id"] for p in DEFAULT_PERSONAS}
 
 
-@pytest.mark.asyncio
 async def test_seed_is_idempotent(store: SQLiteDatabase) -> None:
     """非空表重复 seed 不追加（幂等）。"""
     await seed_simulator_data(store)
@@ -194,7 +180,6 @@ async def test_seed_is_idempotent(store: SQLiteDatabase) -> None:
     assert await store.count_sim_gifts() == len(DEFAULT_GIFTS)
 
 
-@pytest.mark.asyncio
 async def test_seed_skips_existing_user_data(store: SQLiteDatabase) -> None:
     """用户已有数据（哪怕只剩一行）不被种子覆盖。"""
     await store.insert_sim_persona(

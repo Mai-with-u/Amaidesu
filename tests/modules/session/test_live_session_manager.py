@@ -63,7 +63,6 @@ class _Collector:
         self.ended.append(payload)
 
 
-@pytest.mark.asyncio
 async def test_resolve_pk_returns_none_without_active_session(store: SQLiteDatabase, bus: EventBus) -> None:
     """无显式场次时 ``resolve_pk()`` 返回 ``None``，且不创建任何 live_sessions 行。"""
     manager = _make_manager(store, bus)
@@ -79,10 +78,7 @@ async def test_resolve_pk_returns_none_without_active_session(store: SQLiteDatab
     assert collector.started == []
 
 
-@pytest.mark.asyncio
-async def test_open_session_emits_started_and_switches_resolution(
-    store: SQLiteDatabase, bus: EventBus
-) -> None:
+async def test_open_session_emits_started_and_switches_resolution(store: SQLiteDatabase, bus: EventBus) -> None:
     manager = _make_manager(store, bus)
     collector = _Collector(bus)
     await manager.start()
@@ -100,7 +96,6 @@ async def test_open_session_emits_started_and_switches_resolution(
     assert row["ended_at_ms"] is None
 
 
-@pytest.mark.asyncio
 async def test_open_twice_auto_closes_previous(store: SQLiteDatabase, bus: EventBus) -> None:
     manager = _make_manager(store, bus)
     collector = _Collector(bus)
@@ -114,13 +109,10 @@ async def test_open_twice_auto_closes_previous(store: SQLiteDatabase, bus: Event
     # 不变量：至多一个显式进行中场次
     assert len(collector.ended) == 1
     assert collector.ended[0].live_session_id == first
-    rows = await store.execute(
-        "SELECT * FROM live_sessions WHERE source='manual' AND ended_at_ms IS NULL"
-    )
+    rows = await store.execute("SELECT * FROM live_sessions WHERE source='manual' AND ended_at_ms IS NULL")
     assert len(rows) == 1
 
 
-@pytest.mark.asyncio
 async def test_close_empty_session_discards_row(store: SQLiteDatabase, bus: EventBus) -> None:
     """空场次不留行：开启后无任何明细就结束 → 整行丢弃，事件带 empty_discarded 标记。"""
     manager = _make_manager(store, bus)
@@ -136,7 +128,6 @@ async def test_close_empty_session_discards_row(store: SQLiteDatabase, bus: Even
     assert collector.ended[0].duration_ms is not None
 
 
-@pytest.mark.asyncio
 async def test_close_session_with_details_keeps_row(store: SQLiteDatabase, bus: EventBus) -> None:
     manager = _make_manager(store, bus)
     await manager.start()
@@ -156,14 +147,12 @@ async def test_close_session_with_details_keeps_row(store: SQLiteDatabase, bus: 
     assert row["ended_at_ms"] is not None
 
 
-@pytest.mark.asyncio
 async def test_close_without_active_returns_false(store: SQLiteDatabase, bus: EventBus) -> None:
     manager = _make_manager(store, bus)
     await manager.start()
     assert await manager.close_session() is False
 
 
-@pytest.mark.asyncio
 async def test_delete_active_session_closes_first(store: SQLiteDatabase, bus: EventBus) -> None:
     manager = _make_manager(store, bus)
     collector = _Collector(bus)
@@ -176,7 +165,6 @@ async def test_delete_active_session_closes_first(store: SQLiteDatabase, bus: Ev
     assert collector.ended and collector.ended[0].live_session_id == pk
 
 
-@pytest.mark.asyncio
 async def test_delete_session_cascades_detail_rows(store: SQLiteDatabase, bus: EventBus) -> None:
     """删除场次：live_chat 等明细级联清除；行不存在返回 False。"""
     manager = _make_manager(store, bus)
@@ -198,7 +186,6 @@ async def test_delete_session_cascades_detail_rows(store: SQLiteDatabase, bus: E
     assert await manager.delete_session(pk) is False
 
 
-@pytest.mark.asyncio
 async def test_startup_closes_dangling_sessions(store: SQLiteDatabase, bus: EventBus) -> None:
     """上次进程未正常退出的"进行中"显式场次，启动时以最后活动时刻收口。"""
     dangling = await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")
@@ -215,7 +202,6 @@ async def test_startup_closes_dangling_sessions(store: SQLiteDatabase, bus: Even
     assert manager.active_pk is None
 
 
-@pytest.mark.asyncio
 async def test_resolve_pk_after_close_returns_none(store: SQLiteDatabase, bus: EventBus) -> None:
     """显式场次结束 → ``resolve_pk()`` 回到 None，无兜底行补建。"""
     manager = _make_manager(store, bus)

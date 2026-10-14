@@ -77,7 +77,6 @@ async def _open_session_with_detail(store: SQLiteDatabase, manager: LiveSessionM
     return pk
 
 
-@pytest.mark.asyncio
 async def test_exit_fallback_settles_active_session(store: SQLiteDatabase, bus: EventBus) -> None:
     """兜底触发：活跃场次经 close_session 落账，ended_at_ms 写库 + live.ended 带 reason。"""
     manager = _make_manager(store, bus)
@@ -96,7 +95,6 @@ async def test_exit_fallback_settles_active_session(store: SQLiteDatabase, bus: 
     assert collector.ended[0].live_session_id == pk
 
 
-@pytest.mark.asyncio
 async def test_repeated_exit_does_not_settle_twice(store: SQLiteDatabase, bus: EventBus) -> None:
     """重复退出（run_shutdown 常规结账后再触发兜底）不二次落账、不二次广播。"""
     manager = _make_manager(store, bus)
@@ -117,7 +115,6 @@ async def test_repeated_exit_does_not_settle_twice(store: SQLiteDatabase, bus: E
     assert len(collector.ended) == 1, "重复退出不得产生第二条 live.ended"
 
 
-@pytest.mark.asyncio
 async def test_exit_fallback_silent_without_active_session(store: SQLiteDatabase, bus: EventBus) -> None:
     """无活跃场次时兜底静默通过：返回 False，不建行、不发事件。"""
     manager = _make_manager(store, bus)
@@ -130,7 +127,6 @@ async def test_exit_fallback_silent_without_active_session(store: SQLiteDatabase
     assert collector.ended == []
 
 
-@pytest.mark.asyncio
 async def test_close_session_idempotent_when_row_already_settled(store: SQLiteDatabase, bus: EventBus) -> None:
     """幂等守卫：行已被外部结账（如上次收尾中断残留内存态）→ 复位静默返回，
     不重复广播 live.ended、不误删行。"""
@@ -165,13 +161,11 @@ class _ExplodingManager:
         raise RuntimeError(f"db closed（reason={reason}）")
 
 
-@pytest.mark.asyncio
 async def test_fallback_helper_skips_none_manager() -> None:
     """session_manager 未装配（None）时兜底静默通过。"""
     await app_main.fallback_close_active_session(None)
 
 
-@pytest.mark.asyncio
 async def test_fallback_helper_swallows_exception() -> None:
     """兜底函数自身异常只吞不抛——不得阻断退出路径。"""
     exploding = _ExplodingManager()
@@ -179,7 +173,6 @@ async def test_fallback_helper_swallows_exception() -> None:
     assert exploding.calls == 1, "兜底必须真实尝试过 close_session"
 
 
-@pytest.mark.asyncio
 async def test_fallback_helper_settles_via_real_manager(store: SQLiteDatabase, bus: EventBus) -> None:
     """兜底函数经真实管理器走完整链路：活跃场次被补账。"""
     manager = _make_manager(store, bus)

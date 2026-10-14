@@ -92,7 +92,6 @@ def _engine(store: SQLiteDatabase, **cfg_kwargs) -> ReplayEngine:
 DATE = "2026-09-01"
 
 
-@pytest.mark.asyncio
 async def test_load_filters_non_danmaku(store: SQLiteDatabase) -> None:
     """非弹幕行（主播发言等）不入回放队列。"""
     await _seed_day(
@@ -106,7 +105,6 @@ async def test_load_filters_non_danmaku(store: SQLiteDatabase) -> None:
     assert await engine.load(DATE) == 1
 
 
-@pytest.mark.asyncio
 async def test_load_simulated_only_filter(store: SQLiteDatabase) -> None:
     """simulated_only=True 时跳过录制中的真实消息。"""
     base = _day_base_ms(DATE)
@@ -127,7 +125,6 @@ async def test_load_simulated_only_filter(store: SQLiteDatabase) -> None:
     assert engine.pop_next() is None
 
 
-@pytest.mark.asyncio
 async def test_gap_seconds_by_timestamp_diff_and_speed(store: SQLiteDatabase) -> None:
     """间隔 = 相邻 timestamp_ms 差 / 速度倍率。"""
     base = _day_base_ms(DATE)
@@ -147,7 +144,6 @@ async def test_gap_seconds_by_timestamp_diff_and_speed(store: SQLiteDatabase) ->
     assert engine.next_gap_seconds() == pytest.approx(5.0)  # 10s / 2x
 
 
-@pytest.mark.asyncio
 async def test_gap_cap_truncates_long_silence(store: SQLiteDatabase) -> None:
     """超长冷场按 replay_gap_cap_s 截断。"""
     base = _day_base_ms(DATE)
@@ -166,7 +162,6 @@ async def test_gap_cap_truncates_long_silence(store: SQLiteDatabase) -> None:
     assert engine.next_gap_seconds() == 60.0
 
 
-@pytest.mark.asyncio
 async def test_pop_exhaustion_returns_none(store: SQLiteDatabase) -> None:
     """队列耗尽后 pop_next 返回 None，remaining 归零。"""
     await _seed_day(store, DATE, [_payload(content="唯一一条", ts_ms=_day_base_ms(DATE))])
@@ -179,7 +174,6 @@ async def test_pop_exhaustion_returns_none(store: SQLiteDatabase) -> None:
     assert engine.remaining == 0
 
 
-@pytest.mark.asyncio
 async def test_load_missing_date_returns_zero(store: SQLiteDatabase) -> None:
     """无录制记录的日期加载 0 条，replay_date 置 None。"""
     engine = _engine(store)
@@ -187,7 +181,6 @@ async def test_load_missing_date_returns_zero(store: SQLiteDatabase) -> None:
     assert engine.replay_date is None
 
 
-@pytest.mark.asyncio
 async def test_empty_content_row_skipped(store: SQLiteDatabase) -> None:
     """空 content 的弹幕行跳过不中断读取。"""
     await _seed_day(
@@ -201,7 +194,6 @@ async def test_empty_content_row_skipped(store: SQLiteDatabase) -> None:
     assert await engine.load(DATE) == 1
 
 
-@pytest.mark.asyncio
 async def test_row_fields_restored_to_payload(store: SQLiteDatabase) -> None:
     """业务行字段正确还原为 payload：user/content/message_id/simulated。"""
     base = _day_base_ms(DATE)
@@ -227,7 +219,6 @@ async def test_row_fields_restored_to_payload(store: SQLiteDatabase) -> None:
     assert loaded.simulated is True
 
 
-@pytest.mark.asyncio
 async def test_replay_forces_simulated_true(store: SQLiteDatabase) -> None:
     """录制行 simulated=0（真实弹幕）回放时也一律标记 simulated=True。"""
     base = _day_base_ms(DATE)
@@ -249,7 +240,6 @@ async def test_replay_forces_simulated_true(store: SQLiteDatabase) -> None:
     assert loaded.simulated is True
 
 
-@pytest.mark.asyncio
 async def test_live_session_id_normalized_to_zero(store: SQLiteDatabase) -> None:
     """历史场次主键不入回放队列：live_session_id 统一清零，由场次盖章归属当前场次。"""
     base = _day_base_ms(DATE)

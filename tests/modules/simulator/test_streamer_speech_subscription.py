@@ -9,8 +9,8 @@
 """
 
 from __future__ import annotations
-import asyncio
 
+import asyncio
 import shutil
 import tempfile
 from pathlib import Path
@@ -95,12 +95,9 @@ async def _start_with_cadence(
     return service
 
 
-# ---------------------------------------------------------------------------
 # start 后订阅生效
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_start_subscribes_streamer_speech_handler(
     event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteDatabase
 ) -> None:
@@ -114,7 +111,6 @@ async def test_start_subscribes_streamer_speech_handler(
         await service.cleanup()
 
 
-@pytest.mark.asyncio
 async def test_streamer_speech_event_triggers_cadence_notify(
     event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteDatabase
 ) -> None:
@@ -144,12 +140,9 @@ async def test_streamer_speech_event_triggers_cadence_notify(
         await service.cleanup()
 
 
-# ---------------------------------------------------------------------------
 # stop 后 off 生效
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_stop_unsubscribes_streamer_speech_handler(
     event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteDatabase
 ) -> None:
@@ -170,19 +163,16 @@ async def test_stop_unsubscribes_streamer_speech_handler(
         utterance_id="utt_after_stop_1",
         text="late",
         emotion="neutral",
-            emotion_intensity=0.5,
+        emotion_intensity=0.5,
     )
     await event_bus.emit(CoreEvents.STREAMER_SPEECH, payload, source="test")
     # cadence 状态保持 IDLE（未被唤醒）
     assert cadence.get_state() == CadenceGenerator.IDLE
 
 
-# ---------------------------------------------------------------------------
 # 重复 start 不重复订阅
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_double_start_does_not_double_subscribe(
     event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteDatabase
 ) -> None:
@@ -203,12 +193,9 @@ async def test_double_start_does_not_double_subscribe(
         await service.cleanup()
 
 
-# ---------------------------------------------------------------------------
 # handler 不触发 LLM / 决策出口（防环）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_handler_only_calls_notify_no_llm_side_effect(
     event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteDatabase
 ) -> None:
@@ -240,12 +227,9 @@ async def test_handler_only_calls_notify_no_llm_side_effect(
         await service.cleanup()
 
 
-# ---------------------------------------------------------------------------
 # disabled 状态：start 早返回，不订阅
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_disabled_config_does_not_subscribe(
     event_bus: EventBus, fake_llm: _FakeLLMService, sim_store: SQLiteDatabase
 ) -> None:

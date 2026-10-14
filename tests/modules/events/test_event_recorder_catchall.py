@@ -13,6 +13,7 @@ import asyncio
 
 import pytest
 
+from src.modules.events.event_bus import EventBus
 from src.modules.events.event_history import EventHistoryService
 from src.modules.events.event_recorder import EventHistoryRecorder
 from src.modules.events.names import CoreEvents
@@ -23,7 +24,6 @@ from src.modules.events.payloads import (
     ToolResultPayload,
     UtteranceStartedPayload,
 )
-from src.modules.events.event_bus import EventBus
 
 
 @pytest.fixture
@@ -46,7 +46,6 @@ def _danmaku(content: str) -> RoomMessagePayload:
     )
 
 
-@pytest.mark.asyncio
 async def test_catch_all_records_long_tail_events(recorder_setup) -> None:
     """tts.utterance.started 与 tool.result.speak 等长尾事件都被记录。"""
     bus, service = recorder_setup
@@ -68,7 +67,6 @@ async def test_catch_all_records_long_tail_events(recorder_setup) -> None:
     assert "tool.result.speak" in types
 
 
-@pytest.mark.asyncio
 async def test_core_event_type_is_exact_name(recorder_setup) -> None:
     """core.error 的 type 为精确事件名（不再用 system.error 兼容名）。"""
     bus, service = recorder_setup
@@ -81,7 +79,6 @@ async def test_core_event_type_is_exact_name(recorder_setup) -> None:
     assert record.level == "error"
 
 
-@pytest.mark.asyncio
 async def test_room_message_type_folded(recorder_setup) -> None:
     """room.message.* 记录的 type 折叠为 room.message。"""
     bus, service = recorder_setup

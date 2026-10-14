@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-
 from src.modules.mcp.client import McpClient
 from src.modules.mcp.provider import McpToolProvider
 
@@ -94,9 +93,7 @@ def _provider() -> tuple[FakeMcpClient, McpToolProvider]:
     return client, prov
 
 
-# =============================================================================
 # supports_reconnect
-# =============================================================================
 
 
 def test_mcp_provider_supports_reconnect() -> None:
@@ -105,9 +102,7 @@ def test_mcp_provider_supports_reconnect() -> None:
     assert prov.supports_reconnect is True
 
 
-# =============================================================================
 # connect
-# =============================================================================
 
 
 async def test_mcp_connect_short_circuit_when_already_connected() -> None:
@@ -139,9 +134,7 @@ async def test_mcp_connect_returns_false_on_failure() -> None:
     assert client.connect_calls == 1
 
 
-# =============================================================================
 # disconnect
-# =============================================================================
 
 
 async def test_mcp_disconnect_delegates_to_client_close() -> None:
@@ -162,9 +155,7 @@ async def test_mcp_disconnect_is_idempotent() -> None:
     assert client.close_calls == 2
 
 
-# =============================================================================
 # reconnect 覆写（disconnect + connect + specs 重拉换血）
-# =============================================================================
 
 
 async def test_mcp_reconnect_rebuilds_channel_and_resyncs_specs() -> None:

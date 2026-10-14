@@ -47,14 +47,12 @@ def _new_gen(store: SQLiteDatabase) -> GiftGenerator:
     return GiftGenerator(SimulatorConfigSchema(), sim_repo=store.sim)
 
 
-@pytest.mark.asyncio
 async def test_load_gifts(seeded_store):
     gen = _new_gen(seeded_store)
     await gen.load()
     assert len(gen._gifts) > 0  # type: ignore[attr-defined]
 
 
-@pytest.mark.asyncio
 async def test_load_empty_catalog(store):
     """空目录 load 后礼物列表为空（生成降级返回 None）"""
     gen = _new_gen(store)
@@ -63,7 +61,6 @@ async def test_load_empty_catalog(store):
     assert await gen.generate_gift(StreamerContextSnapshot()) is None
 
 
-@pytest.mark.asyncio
 async def test_generate_gift(seeded_store):
     gen = _new_gen(seeded_store)
     await gen.load()
@@ -73,7 +70,6 @@ async def test_generate_gift(seeded_store):
     assert msg.data_type == "gift"
 
 
-@pytest.mark.asyncio
 async def test_generate_sc_no_llm(seeded_store):
     gen = _new_gen(seeded_store)
     await gen.load()
@@ -84,7 +80,6 @@ async def test_generate_sc_no_llm(seeded_store):
     assert msg.sc_amount_rmb is not None
 
 
-@pytest.mark.asyncio
 async def test_generate_gift_excludes_sc_category(seeded_store):
     gen = _new_gen(seeded_store)
     await gen.load()
@@ -97,7 +92,6 @@ async def test_generate_gift_excludes_sc_category(seeded_store):
         assert msg.gift.category != "sc"
 
 
-@pytest.mark.asyncio
 async def test_pick_random_gift_exclude_categories(seeded_store):
     gen = _new_gen(seeded_store)
     await gen.load()
@@ -106,10 +100,9 @@ async def test_pick_random_gift_exclude_categories(seeded_store):
     assert picked.category != "sc"
 
 
-# --- 礼物目录 CRUD（写穿 DB） ---
+# 礼物目录 CRUD（写穿 DB）
 
 
-@pytest.mark.asyncio
 async def test_add_gift_persists(seeded_store):
     gen = _new_gen(seeded_store)
     await gen.load()
@@ -124,7 +117,6 @@ async def test_add_gift_persists(seeded_store):
     assert "custom_1" in ids
 
 
-@pytest.mark.asyncio
 async def test_add_gift_duplicate_rejected(seeded_store):
     gen = _new_gen(seeded_store)
     await gen.load()
@@ -134,7 +126,6 @@ async def test_add_gift_duplicate_rejected(seeded_store):
     assert added is False
 
 
-@pytest.mark.asyncio
 async def test_update_gift_persists(seeded_store):
     gen = _new_gen(seeded_store)
     await gen.load()
@@ -146,7 +137,6 @@ async def test_update_gift_persists(seeded_store):
     assert updated.weight == 99
 
 
-@pytest.mark.asyncio
 async def test_update_gift_invalid_field_rejected(seeded_store):
     gen = _new_gen(seeded_store)
     await gen.load()
@@ -154,7 +144,6 @@ async def test_update_gift_invalid_field_rejected(seeded_store):
         await gen.update_gift("small_heart", {"gift_id": "hack"})
 
 
-@pytest.mark.asyncio
 async def test_delete_gift_persists(seeded_store):
     gen = _new_gen(seeded_store)
     await gen.load()

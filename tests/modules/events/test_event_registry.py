@@ -14,9 +14,7 @@ from pydantic import BaseModel
 
 from src.modules.events.registry import EVENT_REGISTRY, EventRegistry
 
-# =============================================================================
 # 测试数据模型
-# =============================================================================
 
 
 class CoreEventData(BaseModel):
@@ -26,9 +24,7 @@ class CoreEventData(BaseModel):
     timestamp: float
 
 
-# =============================================================================
 # Fixture
-# =============================================================================
 
 
 @pytest.fixture(autouse=True)
@@ -41,9 +37,7 @@ def reset_registry():
     EVENT_REGISTRY.update(saved)
 
 
-# =============================================================================
 # 注册和查询测试
-# =============================================================================
 
 
 def test_register_and_query():
@@ -85,9 +79,7 @@ def test_is_registered():
     assert EventRegistry.is_registered("test.unregistered") is False
 
 
-# =============================================================================
 # 事件列表测试
-# =============================================================================
 
 
 def test_list_all_events():
@@ -106,9 +98,7 @@ def test_list_all_events():
     assert EventRegistry.is_registered("new.event") is False
 
 
-# =============================================================================
 # 边界情况测试
-# =============================================================================
 
 
 def test_empty_registry():

@@ -103,7 +103,6 @@ class TestPayloadZeroVendor:
 
 
 class TestFakeVendorThroughGenerate:
-    @pytest.mark.asyncio
     async def test_generate_with_plain_string(self, fake_vendor_manager):
         """裸字符串输入经 generate 调通 fake 厂商，返回中立 Response"""
         manager = fake_vendor_manager
@@ -120,7 +119,6 @@ class TestFakeVendorThroughGenerate:
         # temperature 缺省回退 profile 档位（planner=0.7）
         assert fake.temperatures == [0.7]
 
-    @pytest.mark.asyncio
     async def test_generate_normalizes_openai_style_dicts(self, fake_vendor_manager):
         """OpenAI 风格 dict 列表归一化：system 折叠为独立 system 参数"""
         manager = fake_vendor_manager
@@ -142,7 +140,6 @@ class TestFakeVendorThroughGenerate:
         assert request.messages[0].role == "user"
         assert request.messages[0].parts == ["问题"]
 
-    @pytest.mark.asyncio
     async def test_generate_with_tool_specs(self, fake_vendor_manager):
         """ToolSpec 声明原样到达 Client（翻译责任在适配端）"""
         manager = fake_vendor_manager
@@ -158,7 +155,6 @@ class TestFakeVendorThroughGenerate:
         request = fake.requests[0]
         assert request.tools[0] == ToolSpec(name="get_time", description="查时间", parameters={"type": "object"})
 
-    @pytest.mark.asyncio
     async def test_generate_vision_end_to_end(self, fake_vendor_manager):
         """视觉入口：prompt + images 经 generate_vision 调通 fake 厂商"""
         manager = fake_vendor_manager
@@ -174,7 +170,6 @@ class TestFakeVendorThroughGenerate:
         assert request.system == "视觉助手"
         assert request.messages[0].parts == ["描述屏幕"]
 
-    @pytest.mark.asyncio
     async def test_generate_preserves_tool_context(self, fake_vendor_manager):
         """喂回的多轮 ReAct 上下文（assistant tool_calls + tool 观察）经归一化不丢失。
 
@@ -207,7 +202,6 @@ class TestFakeVendorThroughGenerate:
         assert request.messages[0].tool_calls == [ToolCall(id="c1", name="query_memory", arguments={"q": "x"})]
         assert request.messages[1].tool_call_id == "c1"
 
-    @pytest.mark.asyncio
     async def test_unknown_profile_rejected_at_setup(self):
         """装配期封闭集合校验：未知 profile 硬错（机制证明）"""
         bad_config = dict(FAKE_CONFIG)

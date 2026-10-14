@@ -13,7 +13,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import Generator
 
 import pytest
 
@@ -36,10 +36,9 @@ async def store(temp_db_path: Path):
     await db.close()
 
 
-# ===== insert_live_chat =====
+# insert_live_chat
 
 
-@pytest.mark.asyncio
 async def test_insert_live_chat_basic(store: SQLiteDatabase) -> None:
     rowid = await store.chat.insert_live_chat(
         live_session_id=1,
@@ -61,7 +60,6 @@ async def test_insert_live_chat_basic(store: SQLiteDatabase) -> None:
     assert int(row["simulated"]) == 0
 
 
-@pytest.mark.asyncio
 async def test_insert_live_chat_simulated_true(store: SQLiteDatabase) -> None:
     rowid = await store.chat.insert_live_chat(
         live_session_id=1,
@@ -75,7 +73,6 @@ async def test_insert_live_chat_simulated_true(store: SQLiteDatabase) -> None:
     assert int(rows[0]["simulated"]) == 1
 
 
-@pytest.mark.asyncio
 async def test_insert_live_chat_optionals_default(store: SQLiteDatabase) -> None:
     """sender_id/sender_name/tool_result 缺省应能落库（NULL/默认值），不报错。"""
     rowid = await store.chat.insert_live_chat(
@@ -92,10 +89,9 @@ async def test_insert_live_chat_optionals_default(store: SQLiteDatabase) -> None
     assert row["tool_result"] is None
 
 
-# ===== insert_gift =====
+# insert_gift
 
 
-@pytest.mark.asyncio
 async def test_insert_gift_basic(store: SQLiteDatabase) -> None:
     rowid = await store.chat.insert_gift(
         live_session_id=3,
@@ -114,7 +110,6 @@ async def test_insert_gift_basic(store: SQLiteDatabase) -> None:
     assert int(row["simulated"]) == 0
 
 
-@pytest.mark.asyncio
 async def test_insert_gift_simulated_true(store: SQLiteDatabase) -> None:
     rowid = await store.chat.insert_gift(
         live_session_id=3,
@@ -129,10 +124,9 @@ async def test_insert_gift_simulated_true(store: SQLiteDatabase) -> None:
     assert int(rows[0]["simulated"]) == 1
 
 
-# ===== insert_super_chat =====
+# insert_super_chat
 
 
-@pytest.mark.asyncio
 async def test_insert_super_chat_basic(store: SQLiteDatabase) -> None:
     rowid = await store.chat.insert_super_chat(
         live_session_id=4,
@@ -152,7 +146,6 @@ async def test_insert_super_chat_basic(store: SQLiteDatabase) -> None:
     assert int(row["simulated"]) == 0
 
 
-@pytest.mark.asyncio
 async def test_insert_super_chat_simulated_true(store: SQLiteDatabase) -> None:
     rowid = await store.chat.insert_super_chat(
         live_session_id=4,
@@ -168,10 +161,9 @@ async def test_insert_super_chat_simulated_true(store: SQLiteDatabase) -> None:
     assert int(rows[0]["simulated"]) == 1
 
 
-# ===== 端到端：写入 + 排除查询 =====
+# 端到端：写入 + 排除查询
 
 
-@pytest.mark.asyncio
 async def test_where_simulated_zero_excludes_simulated_rows(store: SQLiteDatabase) -> None:
     """消费者统计查询 WHERE simulated=0 应只返回真实源数据。"""
     # live_chat

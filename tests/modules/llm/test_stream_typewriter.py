@@ -14,8 +14,6 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from src.modules.llm.client import BaseLLMClient
 from src.modules.llm.clients import _CLIENT_DISPATCH
 from src.modules.llm.engine import LLMManager
@@ -78,7 +76,6 @@ def _config() -> Dict[str, Any]:
     }
 
 
-@pytest.mark.asyncio
 async def test_on_delta_fires_before_call_completes():
     """增量在调用完成前即到达调用方（打字机效果恢复）"""
 

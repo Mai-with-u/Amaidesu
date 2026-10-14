@@ -48,10 +48,7 @@ from src.modules.llm.engine import LLMManager, RetryConfig
 from src.modules.llm.payload import Response as PayloadResponse
 from src.modules.llm.payload import Usage as PayloadUsage
 
-
-# =============================================================================
 # normalize_tool_calls_for_protocol - 喂回协议规整
-# =============================================================================
 
 
 class TestNormalizeToolCallsForProtocol:
@@ -83,9 +80,7 @@ class TestNormalizeToolCallsForProtocol:
         assert normalize_tool_calls_for_protocol([]) == []
 
 
-# =============================================================================
 # 标准配置：三层结构（1 个 provider / 3 个 model / 3 个 profile）
-# =============================================================================
 
 
 PROVIDER_CONFIG = {
@@ -110,9 +105,7 @@ STANDARD_MOCK_CONFIG: Dict[str, Any] = {
 }
 
 
-# =============================================================================
 # Helper: 标准 mock backend（中立 payload 契约的 generate 能力）
-# =============================================================================
 
 
 def _make_mock_backend() -> MagicMock:
@@ -134,9 +127,7 @@ def _make_mock_backend() -> MagicMock:
     return mock_backend
 
 
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 
 @pytest.fixture
@@ -160,12 +151,9 @@ async def setup_llm_manager(llm_manager: LLMManager, mock_config: Dict[str, Any]
         yield llm_manager, mock_backend
 
 
-# =============================================================================
 # 初始化和配置测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_setup_initializes_providers_and_profiles(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试 setup 初始化 providers / models / profiles"""
     mock_backend_class = MagicMock(return_value=_make_mock_backend())
@@ -180,7 +168,6 @@ async def test_setup_initializes_providers_and_profiles(llm_manager: LLMManager,
         assert set(llm_manager._profiles) == {"planner", "replyer", "vision"}
 
 
-@pytest.mark.asyncio
 async def test_setup_builds_model_price_table(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """setup 构建按 model_identifier 键入的价格表（费用计算唯一口径的输入）"""
     mock_backend_class = MagicMock(return_value=_make_mock_backend())
@@ -210,7 +197,6 @@ async def test_setup_builds_model_price_table(llm_manager: LLMManager, mock_conf
         assert llm_manager._model_prices["paid-model-id"]["price_in"] == 1.0
 
 
-@pytest.mark.asyncio
 async def test_setup_with_custom_config(llm_manager: LLMManager):
     """测试自定义 provider 配置初始化"""
     custom_provider = {
@@ -240,7 +226,6 @@ async def test_setup_with_custom_config(llm_manager: LLMManager):
         assert "model" not in call_args  # model 由调用方每次传入
 
 
-@pytest.mark.asyncio
 async def test_setup_unknown_client_type_raises_error(llm_manager: LLMManager):
     """测试未注册的 client_type 立即 fail-fast"""
     config = {
@@ -257,7 +242,6 @@ async def test_setup_unknown_client_type_raises_error(llm_manager: LLMManager):
         await llm_manager.setup(config)
 
 
-@pytest.mark.asyncio
 async def test_setup_unknown_provider_in_model_raises_error(llm_manager: LLMManager):
     """测试 model 引用了不存在的 provider 时 fail-fast"""
     mock_backend_class = MagicMock(return_value=MagicMock())
@@ -274,7 +258,6 @@ async def test_setup_unknown_provider_in_model_raises_error(llm_manager: LLMMana
             await llm_manager.setup(config)
 
 
-@pytest.mark.asyncio
 async def test_setup_duplicate_provider_name_raises_error(llm_manager: LLMManager):
     """测试 llm_providers 中存在重复 name 时 fail-fast"""
     mock_backend_class = MagicMock(return_value=MagicMock())
@@ -294,7 +277,6 @@ async def test_setup_duplicate_provider_name_raises_error(llm_manager: LLMManage
             await llm_manager.setup(config)
 
 
-@pytest.mark.asyncio
 async def test_setup_empty_providers_raises_error(llm_manager: LLMManager):
     """测试 llm_providers 为空时 fail-fast"""
     config: Dict[str, Any] = {
@@ -306,7 +288,6 @@ async def test_setup_empty_providers_raises_error(llm_manager: LLMManager):
         await llm_manager.setup(config)
 
 
-@pytest.mark.asyncio
 async def test_setup_profile_references_unknown_model_raises_error(llm_manager: LLMManager):
     """测试 profile.model_list 引用未知 model 时 fail-fast"""
     mock_backend_class = MagicMock(return_value=MagicMock())
@@ -321,7 +302,6 @@ async def test_setup_profile_references_unknown_model_raises_error(llm_manager: 
             await llm_manager.setup(config)
 
 
-@pytest.mark.asyncio
 async def test_setup_profile_empty_model_list_raises_error(llm_manager: LLMManager):
     """测试 profile.model_list 为空时 fail-fast"""
     mock_backend_class = MagicMock(return_value=MagicMock())
@@ -336,12 +316,9 @@ async def test_setup_profile_empty_model_list_raises_error(llm_manager: LLMManag
             await llm_manager.setup(config)
 
 
-# =============================================================================
 # generate 入口测试（唯一对外入口；契约细节见 test_generate_contract.py）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_generate_with_unknown_profile_raises(setup_llm_manager):
     """测试调用未注册的 profile 立即 fail-fast"""
     llm_manager, _ = setup_llm_manager
@@ -350,12 +327,9 @@ async def test_generate_with_unknown_profile_raises(setup_llm_manager):
         await llm_manager.generate("Test", profile="unknown_profile")
 
 
-# =============================================================================
 # 重试机制测试（单模型内的重试，不跨模型；分类异常口径见 test_retry_policy.py）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_retry_on_failure(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试失败时在单模型上自动重试"""
     call_count = 0
@@ -385,7 +359,6 @@ async def test_retry_on_failure(llm_manager: LLMManager, mock_config: Dict[str, 
         assert call_count == 3  # 失败 2 次，第 3 次成功
 
 
-@pytest.mark.asyncio
 async def test_retry_exhaustion(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试单模型重试耗尽（max_retries 默认 3）"""
 
@@ -405,7 +378,6 @@ async def test_retry_exhaustion(llm_manager: LLMManager, mock_config: Dict[str, 
         assert "Persistent API Error" in response.error
 
 
-@pytest.mark.asyncio
 async def test_retry_with_custom_config(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """测试自定义重试配置"""
     llm_manager._retry_config = RetryConfig(max_retries=2, base_delay=0.1)
@@ -435,12 +407,9 @@ async def test_retry_with_custom_config(llm_manager: LLMManager, mock_config: Di
         assert elapsed >= 0.1
 
 
-# =============================================================================
 # 模型选择策略测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_sequential_strategy_uses_first_model(llm_manager: LLMManager):
     """sequential 策略：始终取 model_list[0]"""
     config = {
@@ -468,7 +437,6 @@ async def test_sequential_strategy_uses_first_model(llm_manager: LLMManager):
         assert used_models == ["id-m1", "id-m1", "id-m1"]
 
 
-@pytest.mark.asyncio
 async def test_balance_strategy_picks_least_used(llm_manager: LLMManager):
     """balance 策略：调用次数最少的优先"""
     config = {
@@ -501,7 +469,6 @@ async def test_balance_strategy_picks_least_used(llm_manager: LLMManager):
         assert first != second
 
 
-@pytest.mark.asyncio
 async def test_random_strategy_with_seed(llm_manager: LLMManager):
     """random 策略：seed 固定时 RNG 可重现"""
     config = {
@@ -534,7 +501,6 @@ async def test_random_strategy_with_seed(llm_manager: LLMManager):
     assert chosen_1 == chosen_2
 
 
-@pytest.mark.asyncio
 async def test_invalid_selection_strategy_raises(llm_manager: LLMManager):
     """未知策略在 setup 阶段 fail-fast"""
     config = {
@@ -553,12 +519,9 @@ async def test_invalid_selection_strategy_raises(llm_manager: LLMManager):
         await llm_manager.setup(config)
 
 
-# =============================================================================
 # 故障切换测试（跨模型；超时/中断口径见 test_hard_timeout.py / test_retry_policy.py）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_failover_advances_to_second_model(llm_manager: LLMManager):
     """当前模型失败切到下一个"""
     config = {
@@ -604,7 +567,6 @@ async def test_failover_advances_to_second_model(llm_manager: LLMManager):
         assert call_count["id-m2"] == 1
 
 
-@pytest.mark.asyncio
 async def test_failover_all_models_fail_returns_error_listing_all(llm_manager: LLMManager):
     """全列表失败：返回 success=False 且 error 含所有模型名"""
     config = {
@@ -639,12 +601,9 @@ async def test_failover_all_models_fail_returns_error_listing_all(llm_manager: L
         assert "m2" in response.error
 
 
-# =============================================================================
 # 生命周期管理测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_cleanup_all_providers(llm_manager: LLMManager):
     """3 个独立 provider 时各清理 1 次"""
     config = {
@@ -683,7 +642,6 @@ async def test_cleanup_all_providers(llm_manager: LLMManager):
         assert len(llm_manager._providers) == 0
 
 
-@pytest.mark.asyncio
 async def test_cleanup_handles_provider_errors(llm_manager: LLMManager):
     """清理时单个 provider 错误不阻断其他清理"""
 
@@ -722,7 +680,6 @@ async def test_cleanup_handles_provider_errors(llm_manager: LLMManager):
         assert len(llm_manager._provider_clients) == 0
 
 
-@pytest.mark.asyncio
 async def test_cleanup_dedups_shared_provider(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """同一 provider 被多个 profile 共享时只 cleanup 一次"""
     mock_backend = MagicMock()
@@ -739,12 +696,9 @@ async def test_cleanup_dedups_shared_provider(llm_manager: LLMManager, mock_conf
         assert mock_backend.cleanup.call_count == 1
 
 
-# =============================================================================
 # Provider 共享 / 引用测试
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_multiple_profiles_share_same_provider_client(llm_manager: LLMManager, mock_config: Dict[str, Any]):
     """3 个 profile 共享同一 provider 客户端实例"""
     mock_backend = _make_mock_backend()
@@ -756,7 +710,6 @@ async def test_multiple_profiles_share_same_provider_client(llm_manager: LLMMana
         assert list(llm_manager._providers) == ["test"]
 
 
-@pytest.mark.asyncio
 async def test_multiple_independent_providers_create_separate_clients(llm_manager: LLMManager):
     """不同 provider 各自独立 client"""
     config = {
@@ -786,9 +739,7 @@ async def test_multiple_independent_providers_create_separate_clients(llm_manage
         assert llm_manager._provider_clients["p2"] is mock_backend2
 
 
-# =============================================================================
 # RetryConfig 测试
-# =============================================================================
 
 
 def test_retry_config_defaults():
@@ -807,9 +758,7 @@ def test_retry_config_custom_values():
     assert config.max_delay == 20.0
 
 
-# =============================================================================
 # LLMResponse 测试（遗留形状：请求历史/记账链路仍消费）
-# =============================================================================
 
 
 def test_llm_response_defaults():
@@ -851,9 +800,7 @@ def test_llm_response_error_case():
     assert response.error == "API Error"
 
 
-# =============================================================================
 # ProfileNames 回归保护（新用途名）
-# =============================================================================
 
 
 def test_profile_names_includes_all_purposes() -> None:
@@ -880,21 +827,16 @@ def test_validate_profile_binding_rejects_unknown():
         validate_profile_binding("unknown")
 
 
-# =============================================================================
 # 运行入口
-# =============================================================================
 
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
 
 
-# =============================================================================
 # generate_audio - 音频输出入口（omni_tts 引擎消费）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_generate_audio_defaults_to_tts_profile_and_dispatches():
     """缺省走 tts 档位，failover 按 model_identifier 分发并透传 voice/format"""
     manager = LLMManager()
@@ -934,7 +876,6 @@ async def test_generate_audio_defaults_to_tts_profile_and_dispatches():
     assert kwargs["audio_format"] == "wav"
 
 
-@pytest.mark.asyncio
 async def test_generate_audio_missing_voice_fails_fast_without_dispatch():
     """音色缺失在进入 failover 前快速失败（配置错误不进重试/切换链路）"""
     manager = LLMManager()
@@ -956,7 +897,6 @@ async def test_generate_audio_missing_voice_fails_fast_without_dispatch():
     backend.generate_audio.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_generate_audio_explicit_profile_dispatch():
     """显式传封闭集内 profile 名时按该档位解析（覆盖非缺省路径）"""
     manager = LLMManager()
@@ -981,12 +921,9 @@ async def test_generate_audio_explicit_profile_dispatch():
     assert result.success is True
 
 
-# =============================================================================
 # 能力协商出口：is_profile_visual（ADR-037）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_is_profile_visual_follows_primary_model():
     """出口取 profile failover 首位模型的 visual 位。
 
@@ -1017,7 +954,6 @@ async def test_is_profile_visual_follows_primary_model():
     assert manager.is_profile_visual("no-such-profile") is False
 
 
-@pytest.mark.asyncio
 async def test_profile_context_window_takes_smallest_configured_model():
     """上下文预算按 profile 名单里已配置窗口的最小值换算：故障切换可能落到任何一个模型。
 

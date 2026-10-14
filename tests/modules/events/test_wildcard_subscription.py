@@ -28,10 +28,7 @@ from src.modules.events.payloads import (
     ToolResultPayload,
 )
 
-
-# =============================================================================
 # 测试数据模型
-# =============================================================================
 
 
 class SimpleTestEvent(BaseModel):
@@ -69,12 +66,9 @@ def _make_tool_result_payload(tool_name: str = "speak") -> ToolResultPayload:
     )
 
 
-# =============================================================================
 # 精确订阅向后兼容
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_exact_subscription_still_works():
     """精确订阅行为与旧 EventBus 完全一致（向后兼容）"""
     bus = EventBus(enable_stats=False)
@@ -91,7 +85,6 @@ async def test_exact_subscription_still_works():
     assert received[0] == ("test.event", "hi", "src")
 
 
-@pytest.mark.asyncio
 async def test_exact_subscription_no_wildcard_match():
     """精确订阅**不**被通配订阅误触发"""
     bus = EventBus(enable_stats=False)
@@ -117,12 +110,9 @@ async def test_exact_subscription_no_wildcard_match():
     # 不验证执行次数（内部 _collect_handlers 处理），仅验证无副作用
 
 
-# =============================================================================
 # 单层通配 * 行为
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_single_level_wildcard_matches_exactly_one_segment():
     """``room.*`` 匹配 ``room.connected`` 但**不**匹配 ``room.message.danmaku``"""
     bus = EventBus(enable_stats=False)
@@ -153,12 +143,9 @@ async def test_single_level_wildcard_matches_exactly_one_segment():
     assert unmatched == []
 
 
-# =============================================================================
 # 多层通配 # 行为
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_multi_level_wildcard_matches_multiple_segments():
     """``tool.result.#`` 匹配多层 + 父名 ``tool.result``"""
     bus = EventBus(enable_stats=False)
@@ -180,7 +167,6 @@ async def test_multi_level_wildcard_matches_multiple_segments():
     assert received == ["tool.result.speak", "tool.result.a.b.c", "tool.result"]
 
 
-@pytest.mark.asyncio
 async def test_multi_level_wildcard_does_not_match_sibling_domain():
     """``tool.result.#`` **不**匹配 ``tool.something``（前缀约束）"""
     bus = EventBus(enable_stats=False)
@@ -198,12 +184,9 @@ async def test_multi_level_wildcard_does_not_match_sibling_domain():
     assert received == []
 
 
-# =============================================================================
 # 独立 # 通配
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_standalone_hash_matches_everything():
     """独立 ``#`` 匹配一切事件名"""
     bus = EventBus(enable_stats=False)
@@ -221,12 +204,9 @@ async def test_standalone_hash_matches_everything():
     assert received == ["a", "a.b", "x.y.z", "anything.you.want"]
 
 
-# =============================================================================
 # 混合订阅
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_mixed_exact_and_wildcard_both_fire():
     """同一 emit 事件：精确 + 通配订阅都应触发"""
     bus = EventBus(enable_stats=False)
@@ -249,7 +229,6 @@ async def test_mixed_exact_and_wildcard_both_fire():
     assert wildcard_called == ["room.message.danmaku"]
 
 
-@pytest.mark.asyncio
 async def test_wildcard_subscription_does_not_fire_for_unrelated_events():
     """``room.message.#`` **不**触发 ``room.state.heat``（不同子层）"""
     bus = EventBus(enable_stats=False)
@@ -266,12 +245,9 @@ async def test_wildcard_subscription_does_not_fire_for_unrelated_events():
     assert received == []
 
 
-# =============================================================================
 # off() 移除通配订阅
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_off_removes_wildcard_subscription():
     """``off("pattern.#", handler)`` 移除通配订阅"""
     bus = EventBus(enable_stats=False)
@@ -291,7 +267,6 @@ async def test_off_removes_wildcard_subscription():
     assert received == []
 
 
-@pytest.mark.asyncio
 async def test_off_wildcard_does_not_affect_exact_subscription():
     """``off`` 通配订阅不影响同 handler 注册的精确订阅"""
     bus = EventBus(enable_stats=False)
@@ -320,12 +295,9 @@ async def test_off_wildcard_does_not_affect_exact_subscription():
     assert wildcard_called == []
 
 
-# =============================================================================
 # 类型化订阅与通配
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_typed_subscription_over_wildcard_validates_payload():
     """类型化订阅 + 通配 pattern 时，handler 接收 Pydantic Model 实例（而非 dict）"""
     bus = EventBus(enable_stats=False)
@@ -347,7 +319,6 @@ async def test_typed_subscription_over_wildcard_validates_payload():
     assert received[0].content == "hello"
 
 
-@pytest.mark.asyncio
 async def test_typed_subscription_wildcard_logs_validation_error():
     """类型化订阅 + 通配：payload 不匹配 model_class 时记录错误（handler 不被调用）"""
     bus = EventBus(enable_stats=False)
@@ -366,7 +337,6 @@ async def test_typed_subscription_wildcard_logs_validation_error():
     assert received == []  # 验证失败，handler 不被调用
 
 
-@pytest.mark.asyncio
 async def test_discriminant_mismatch_rejected_at_emit():
     """同族 payload 挂错事件名（末段 != 判别字段值）在 emit 期直接报错"""
     bus = EventBus(enable_stats=False)
@@ -384,12 +354,9 @@ async def test_discriminant_mismatch_rejected_at_emit():
     assert received == []
 
 
-# =============================================================================
 # 统计按真实事件名入键（与通配解耦）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_stats_keyed_by_actual_event_name_not_pattern():
     """统计**始终按真实 emit 的 event_name** 入键，永不为通配 pattern 建条目"""
     bus = EventBus(enable_stats=True)
@@ -417,9 +384,7 @@ async def test_stats_keyed_by_actual_event_name_not_pattern():
     assert "tool.result.#" not in bus.get_all_stats()
 
 
-# =============================================================================
 # match helper 单元测试
-# =============================================================================
 
 
 class TestMatchWildcardHelper:
@@ -481,9 +446,7 @@ class TestIsWildcardPattern:
         assert self._is_wildcard("#") is True
 
 
-# =============================================================================
 # 运行入口
-# =============================================================================
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

@@ -51,10 +51,9 @@ class _FakeSessionManager:
         return self._pk
 
 
-# ===== insert_live_session / update_live_session_stats =====
+# insert_live_session / update_live_session_stats
 
 
-@pytest.mark.asyncio
 async def test_insert_live_session_opens_active_row(store: SQLiteDatabase) -> None:
     pk = await store.sessions.insert_live_session(
         stream_id="room-1",
@@ -74,7 +73,6 @@ async def test_insert_live_session_opens_active_row(store: SQLiteDatabase) -> No
     assert row["ended_at_ms"] is None
 
 
-@pytest.mark.asyncio
 async def test_stats_update_existing_row_only(store: SQLiteDatabase) -> None:
     pk = await store.sessions.insert_live_session(started_at_ms=1_000)
     ok = await store.sessions.update_live_session_stats(
@@ -107,7 +105,6 @@ async def test_stats_update_existing_row_only(store: SQLiteDatabase) -> None:
     assert len(rows) == 1
 
 
-@pytest.mark.asyncio
 async def test_close_live_session_idempotent(store: SQLiteDatabase) -> None:
     pk = await store.sessions.insert_live_session(started_at_ms=1_000)
     assert await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=9_000) is True
@@ -121,15 +118,13 @@ async def test_close_live_session_idempotent(store: SQLiteDatabase) -> None:
     assert row["ended_at_ms"] == 9_000
 
 
-@pytest.mark.asyncio
 async def test_close_missing_session_returns_false(store: SQLiteDatabase) -> None:
     assert await store.sessions.close_live_session(live_session_id=424_242, ended_at_ms=9_000) is False
 
 
-# ===== 明细计数与级联删除 =====
+# 明细计数与级联删除
 
 
-@pytest.mark.asyncio
 async def test_count_and_cascade_delete(store: SQLiteDatabase) -> None:
     pk = await store.sessions.insert_live_session(started_at_ms=1_000)
     await store.chat.insert_live_chat(
@@ -164,7 +159,6 @@ async def test_count_and_cascade_delete(store: SQLiteDatabase) -> None:
     assert [r["content"] for r in rows] == ["keep"]
 
 
-@pytest.mark.asyncio
 async def test_list_dangling_live_sessions_returns_unclosed(store: SQLiteDatabase) -> None:
     """未结账（ended_at_ms IS NULL）的场次被列入 dangling；已结账行不入选。"""
     await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")  # 进行中显式场次（dangling）
@@ -176,10 +170,9 @@ async def test_list_dangling_live_sessions_returns_unclosed(store: SQLiteDatabas
     assert dangling[0]["source"] == "manual"
 
 
-# ===== 场次列表 =====
+# 场次列表
 
 
-@pytest.mark.asyncio
 async def test_list_live_sessions_orders_desc_with_counts(store: SQLiteDatabase) -> None:
     old = await store.sessions.insert_live_session(started_at_ms=1_000)
     new = await store.sessions.insert_live_session(started_at_ms=9_000)
@@ -197,10 +190,9 @@ async def test_list_live_sessions_orders_desc_with_counts(store: SQLiteDatabase)
     assert counts[old] == 0
 
 
-# ===== BackgroundMaintainer 轻 tick → live_sessions（经 LiveSessionManager 解析） =====
+# BackgroundMaintainer 轻 tick → live_sessions（经 LiveSessionManager 解析）
 
 
-@pytest.mark.asyncio
 async def test_background_light_tick_persists_stats_via_session_manager(store: SQLiteDatabase) -> None:
     pk = await store.sessions.insert_live_session(started_at_ms=1_000)
     room_state = RoomState()
@@ -224,7 +216,6 @@ async def test_background_light_tick_persists_stats_via_session_manager(store: S
     assert row["heat"] == 1
 
 
-@pytest.mark.asyncio
 async def test_background_tick_skipped_without_session_manager(store: SQLiteDatabase) -> None:
     """无场次管理器时心跳整体降级跳过（心跳不建行，场次行归 LiveSessionManager）。"""
     room_state = RoomState()
@@ -242,7 +233,7 @@ async def test_background_tick_skipped_without_session_manager(store: SQLiteData
     assert len(rows) == 0
 
 
-# ===== 辅助：保留类型引用检查（Any 导入防 ruff 误报移除） =====
+# 辅助：保留类型引用检查（Any 导入防 ruff 误报移除）
 
 
 def test_fake_session_manager_contract() -> None:
@@ -253,10 +244,9 @@ def test_fake_session_manager_contract() -> None:
     assert asyncio.run(manager.resolve_pk()) == 7
 
 
-# ===== 场次列表排序与筛选 =====
+# 场次列表排序与筛选
 
 
-@pytest.mark.asyncio
 async def test_list_live_sessions_orders_by_started_at_desc(store: SQLiteDatabase) -> None:
     """无默认场次兜底：列表按开始时间倒序（最新场次在前）。"""
     old = await store.sessions.insert_live_session(started_at_ms=1_000, source="manual", title="早场")
@@ -267,7 +257,6 @@ async def test_list_live_sessions_orders_by_started_at_desc(store: SQLiteDatabas
     assert ids == [newest, old], f"按 started_at_ms 倒序，实际 {ids}"
 
 
-@pytest.mark.asyncio
 async def test_list_sessions_filters_by_source_and_title(store: SQLiteDatabase) -> None:
     await store.sessions.insert_live_session(started_at_ms=1_000, source="manual", title="周五晚间场")
     await store.sessions.insert_live_session(started_at_ms=2_000, source="replay", title="回放 2026-09-01")

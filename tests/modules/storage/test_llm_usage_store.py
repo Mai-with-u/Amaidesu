@@ -44,10 +44,9 @@ async def store(temp_db_path: Path):
     await db.close()
 
 
-# ===== insert_llm_usage =====
+# insert_llm_usage
 
 
-@pytest.mark.asyncio
 async def test_insert_llm_usage_roundtrip(store: SQLiteDatabase) -> None:
     rowid = await store.llm.insert_llm_usage(
         model_name="glm-4.7",
@@ -83,7 +82,7 @@ async def test_insert_llm_usage_roundtrip(store: SQLiteDatabase) -> None:
     assert row["live_session_id"] is None
 
 
-# ===== LLMManager 旁路落库 =====
+# LLMManager 旁路落库
 
 
 class _FakeUsageClient:
@@ -136,7 +135,6 @@ def _make_manager_with_fake_client(
     return manager
 
 
-@pytest.mark.asyncio
 async def test_successful_call_persists_llm_usage(store: SQLiteDatabase, monkeypatch) -> None:
     manager = _make_manager_with_fake_client(store)
     result = await manager.generate("你好", profile="planner")
@@ -153,14 +151,12 @@ async def test_successful_call_persists_llm_usage(store: SQLiteDatabase, monkeyp
     assert row["duration_ms"] >= 0
 
 
-@pytest.mark.asyncio
 async def test_call_without_store_does_not_persist(monkeypatch) -> None:
     manager = _make_manager_with_fake_client(None)  # 未注入 store：不落库也不报错
     result = await manager.generate("你好", profile="planner")
     assert result.success
 
 
-@pytest.mark.asyncio
 async def test_persist_failure_degrades_without_breaking_call(store: SQLiteDatabase, monkeypatch) -> None:
     manager = _make_manager_with_fake_client(store)
 
@@ -173,10 +169,9 @@ async def test_persist_failure_degrades_without_breaking_call(store: SQLiteDatab
     assert result.success
 
 
-# ===== 上下文分段解剖落库 + llm.context.used 事件 =====
+# 上下文分段解剖落库 + llm.context.used 事件
 
 
-@pytest.mark.asyncio
 async def test_successful_call_persists_breakdown_and_emits_event(store: SQLiteDatabase, tmp_path: Path) -> None:
     """成功调用：breakdown 出库到诊断文件 + 每模型最新快照 + llm.context.used 事件。
 
@@ -234,7 +229,6 @@ async def test_successful_call_persists_breakdown_and_emits_event(store: SQLiteD
     }
 
 
-@pytest.mark.asyncio
 async def test_call_without_event_bus_does_not_emit(store: SQLiteDatabase, tmp_path: Path) -> None:
     """未注入事件总线：事件通道静默跳过，落库与调用链不受影响。"""
     from src.modules.diagnostics.writer import DiagnosticsWriter
@@ -249,7 +243,6 @@ async def test_call_without_event_bus_does_not_emit(store: SQLiteDatabase, tmp_p
     assert json.loads(streams[0].read_text(encoding="utf-8").strip())["breakdown"]["api_prompt_tokens"] == 10
 
 
-@pytest.mark.asyncio
 async def test_latest_breakdowns_query_returns_latest_per_model(store: SQLiteDatabase) -> None:
     """每模型最新一条带解剖行；无解剖/空模型名行不进入结果。"""
 

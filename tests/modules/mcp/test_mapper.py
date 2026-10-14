@@ -48,9 +48,7 @@ class FakeCallToolResult:
         self.structured_content = structured_content
 
 
-# ---------------------------------------------------------------------------
 # to_spec（声明名 = server 原始名；全名派生）
-# ---------------------------------------------------------------------------
 
 
 class TestToSpec:
@@ -91,9 +89,7 @@ class TestToSpec:
         assert spec.parameters_schema is None
 
 
-# ---------------------------------------------------------------------------
 # to_result
-# ---------------------------------------------------------------------------
 
 
 class TestToResult:

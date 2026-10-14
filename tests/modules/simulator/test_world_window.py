@@ -84,7 +84,6 @@ def _persona(role: PersonaRole) -> Persona:
     )
 
 
-@pytest.mark.asyncio
 async def test_window_reads_mixed_stream(store: SQLiteDatabase) -> None:
     """窗口同时包含观众弹幕与主播发言（公共流语义）。"""
     await _seed_chat(store, count=10)
@@ -97,7 +96,6 @@ async def test_window_reads_mixed_stream(store: SQLiteDatabase) -> None:
     assert all(": " in line for line in window)
 
 
-@pytest.mark.asyncio
 async def test_window_per_role_defaults(store: SQLiteDatabase) -> None:
     """不同角色都读取完整公共对话，由人设决定如何回应。"""
     await _seed_chat(store, count=20)
@@ -110,7 +108,6 @@ async def test_window_per_role_defaults(store: SQLiteDatabase) -> None:
     assert len(passerby_window) == 20
 
 
-@pytest.mark.asyncio
 async def test_context_preserves_all_messages_beyond_old_window(store: SQLiteDatabase) -> None:
     """超过原有条数上限的场次也完整返回，首条与末条都能读取。"""
     await _seed_chat(store, count=60)
@@ -120,7 +117,6 @@ async def test_context_preserves_all_messages_beyond_old_window(store: SQLiteDat
     assert window[0].endswith("消息0") and window[-1].endswith("消息59")
 
 
-@pytest.mark.asyncio
 async def test_window_latest_messages_last(store: SQLiteDatabase) -> None:
     """窗口按时间正序（最新在末尾），与对话顺序一致。"""
     await _seed_chat(store, count=20)
@@ -130,7 +126,6 @@ async def test_window_latest_messages_last(store: SQLiteDatabase) -> None:
     assert window[-1].endswith("消息19"), "最新消息应在窗口末尾"
 
 
-@pytest.mark.asyncio
 async def test_window_session_isolation(store: SQLiteDatabase) -> None:
     """窗口按场次隔离：其他场次的消息不进入。"""
     await _seed_chat(store, count=5)

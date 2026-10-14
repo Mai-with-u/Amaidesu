@@ -11,7 +11,6 @@ import pytest
 from src.modules.events.event_history import EventHistoryService, EventRecord
 
 
-@pytest.mark.asyncio
 async def test_record_keeps_buffer_order() -> None:
     """record 顺序进缓冲，get_recent 倒序（最新在前）。"""
     service = EventHistoryService(max_events=10)
@@ -21,7 +20,6 @@ async def test_record_keeps_buffer_order() -> None:
     assert [r.id for r in recent] == ["evt-2", "evt-1", "evt-0"]
 
 
-@pytest.mark.asyncio
 async def test_maxlen_evicts_oldest() -> None:
     """超过容量后自动淘汰最旧记录。"""
     service = EventHistoryService(max_events=5)
@@ -32,14 +30,12 @@ async def test_maxlen_evicts_oldest() -> None:
     assert [r.id for r in reversed(recent)] == ["evt-3", "evt-4", "evt-5", "evt-6", "evt-7"]
 
 
-@pytest.mark.asyncio
 async def test_zero_max_events_rejected() -> None:
     """非正容量在构造期报错。"""
     with pytest.raises(ValueError, match="max_events"):
         EventHistoryService(max_events=0)
 
 
-@pytest.mark.asyncio
 async def test_record_without_event_loop_keeps_buffer() -> None:
     """纯同步上下文下 record 仍可用（仅内存缓冲）。"""
     service = EventHistoryService(max_events=10)

@@ -11,7 +11,6 @@ from tests.modules.llm.clients.test_openai_client import _make_client
 from tests.modules.llm.test_output_integrity import sdk_response
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("supplied", "expected_temperature"),
     [
@@ -46,13 +45,10 @@ async def test_explicit_parameters_and_profile_defaults_reach_sdk(supplied: dict
     assert sent["temperature"] == expected_temperature
 
 
-# ---------------------------------------------------------------------------
 # 思考强度档位（reasoning_effort）优先级：与 temperature 同构的双路径先例
 #   request.reasoning_effort（请求级覆盖） > profile.reasoning_effort（用途兜底） > 不发
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("profile_reasoning_effort", "request_reasoning_effort", "expected"),
     [
@@ -105,7 +101,6 @@ async def test_reasoning_effort_precedence_request_over_profile(
     assert sent.get("reasoning_effort") == expected
 
 
-@pytest.mark.asyncio
 async def test_reasoning_effort_unset_everywhere_omits_key_from_sdk() -> None:
     """profile 与 request 都未设置 reasoning_effort → 请求参数里完全不出现该键（设了才发）。"""
     client, sdk = _make_client()
@@ -132,7 +127,6 @@ async def test_reasoning_effort_unset_everywhere_omits_key_from_sdk() -> None:
     assert "reasoning_effort" not in sent
 
 
-@pytest.mark.asyncio
 async def test_extra_body_provider_default_reaches_sdk_when_set() -> None:
     """provider 级 extra_body 非空 → 请求参数里带 extra_body（OpenAI SDK 合并进 JSON body）。"""
     client, sdk = _make_client({"extra_body": {"vendor_x": {"nested": True}, "flag": "on"}})
@@ -165,7 +159,6 @@ async def test_extra_body_provider_default_reaches_sdk_when_set() -> None:
     assert sent["extra_body"] == {"vendor_x": {"nested": True}, "flag": "on"}
 
 
-@pytest.mark.asyncio
 async def test_extra_body_provider_default_omitted_when_empty() -> None:
     """provider 级 extra_body 空 dict → 请求参数里不出现 extra_body 键。"""
     client, sdk = _make_client()

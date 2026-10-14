@@ -44,9 +44,7 @@ async def sim_store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
     await s.close()
 
 
-# ---------------------------------------------------------------------------
 # 测试夹具：fake LLMManager（duck-type 注入 services_by_type）
-# ---------------------------------------------------------------------------
 
 
 class _FakeLLMService:
@@ -93,9 +91,7 @@ def _disabled_config() -> Dict[str, Any]:
     return {"enabled": False}
 
 
-# ---------------------------------------------------------------------------
 # ① 构造 + setup 读配置（enabled=false 不启动）
-# ---------------------------------------------------------------------------
 
 
 class TestSetupAndReadConfig:
@@ -107,7 +103,6 @@ class TestSetupAndReadConfig:
         service = SimulatorService(event_bus=event_bus)
         assert service.is_running is False
 
-    @pytest.mark.asyncio
     async def test_setup_disabled_does_not_start(self) -> None:
         """enabled=false 时 setup() 不启动主循环，也不需要 LLMManager。"""
         event_bus = EventBus()
@@ -118,7 +113,6 @@ class TestSetupAndReadConfig:
         await service.setup(_FakeConfigService(_disabled_config()))
         assert service.is_running is False
 
-    @pytest.mark.asyncio
     async def test_setup_with_auto_start_false_skips_run(self) -> None:
         """auto_start=False 时 setup() 不启动主循环（即使 enabled=true）。"""
         event_bus = EventBus()
@@ -135,12 +129,9 @@ class TestSetupAndReadConfig:
         assert fake_llm.chat_calls == 0  # 没产生 LLM 调用
 
 
-# ---------------------------------------------------------------------------
 # ② enabled=true 启动并 emit room.message.danmaku（simulated=True）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_enabled_emits_danmaku_with_simulated_flag(sim_store: SQLiteDatabase) -> None:
     """enabled=true + mock EventBus 下启动 → emit room.message.danmaku 且 payload.simulated=True。"""
     event_bus = EventBus()
@@ -192,15 +183,12 @@ async def test_enabled_emits_danmaku_with_simulated_flag(sim_store: SQLiteDataba
         await service.cleanup()
 
 
-# ---------------------------------------------------------------------------
 # ③ stop/cleanup 幂等
-# ---------------------------------------------------------------------------
 
 
 class TestStopCleanupIdempotent:
     """stop/cleanup 重复调用不抛异常，资源正确清理。"""
 
-    @pytest.mark.asyncio
     async def test_stop_without_start_is_noop(self) -> None:
         """未启动时 stop() 直接返回，不抛异常。"""
         event_bus = EventBus()
@@ -208,14 +196,12 @@ class TestStopCleanupIdempotent:
         await service.stop()  # 不应抛
         assert service.is_running is False
 
-    @pytest.mark.asyncio
     async def test_cleanup_without_start_is_noop(self) -> None:
         """未启动时 cleanup() 直接返回，不抛异常。"""
         event_bus = EventBus()
         service = SimulatorService(event_bus=event_bus)
         await service.cleanup()  # 不应抛
 
-    @pytest.mark.asyncio
     async def test_double_cleanup_idempotent(self) -> None:
         """重复 cleanup() 不抛异常。"""
         event_bus = EventBus()
@@ -223,7 +209,6 @@ class TestStopCleanupIdempotent:
         await service.cleanup()
         await service.cleanup()  # 重复调用不抛
 
-    @pytest.mark.asyncio
     async def test_full_lifecycle_cleanup(self, sim_store: SQLiteDatabase) -> None:
         """start → stop → cleanup → 再次 cleanup 全流程幂等。"""
         event_bus = EventBus()
@@ -245,15 +230,12 @@ class TestStopCleanupIdempotent:
         assert service._persona_pool is None
 
 
-# ---------------------------------------------------------------------------
 # ④ CancelledError 传播语义（服务停止时取消必须透传）
-# ---------------------------------------------------------------------------
 
 
 class TestCancelledErrorPropagation:
     """stop() / cleanup() 期间外层 CancelledError 必须透传，不被吞成正常返回。"""
 
-    @pytest.mark.asyncio
     async def test_stop_propagates_cancellation(self, sim_store: SQLiteDatabase) -> None:
         """在 stop() 内部模拟外层取消：CancelledError 必须传播到调用方。"""
         event_bus = EventBus()
@@ -276,7 +258,6 @@ class TestCancelledErrorPropagation:
         with pytest.raises(asyncio.CancelledError):
             await service.stop()
 
-    @pytest.mark.asyncio
     async def test_run_loop_re_raises_cancelled(self, sim_store: SQLiteDatabase) -> None:
         """主循环 _run() 捕获 CancelledError 后必须重新 raise，保持任务取消语义。"""
         event_bus = EventBus()
@@ -297,15 +278,12 @@ class TestCancelledErrorPropagation:
         await service.cleanup()
 
 
-# ---------------------------------------------------------------------------
 # ⑤ 回放自然完成收场（队列耗尽 → 落场复位，可再次启动）
-# ---------------------------------------------------------------------------
 
 
 class TestReplayNaturalFinish:
     """回放队列耗尽后服务必须自动落场：is_running 复位、task 清空、可立即再启动。"""
 
-    @pytest.mark.asyncio
     async def test_natural_finish_resets_running_and_restartable(self, sim_store: SQLiteDatabase) -> None:
         event_bus = EventBus()
         received: List[RoomMessagePayload] = []
@@ -361,9 +339,7 @@ class TestReplayNaturalFinish:
             await service.cleanup()
 
 
-# ---------------------------------------------------------------------------
 # ⑥ start 顺序与语义（场次先于回放循环 / 拒绝原因 / 启动即完成 / Fatal 收场）
-# ---------------------------------------------------------------------------
 
 
 class _FakeSessionManager:
@@ -428,7 +404,6 @@ async def _insert_danmaku(store: SQLiteDatabase, date_str: str, rows: int) -> No
 class TestReplayStartOrdering:
     """start() 内部顺序契约：场次必须先于回放循环开启（小队列回放竞态防护）。"""
 
-    @pytest.mark.asyncio
     async def test_session_opens_before_first_replay_message(self, sim_store: SQLiteDatabase) -> None:
         event_bus = EventBus()
         session_mgr = _FakeSessionManager()
@@ -471,7 +446,6 @@ class TestReplayStartOrdering:
 class TestStartRejectionAndInstantFinish:
     """start() 拒绝原因返回 + 小队列"启动即完成"语义。"""
 
-    @pytest.mark.asyncio
     async def test_start_without_date_returns_reason(self, sim_store: SQLiteDatabase) -> None:
         fake_llm = _FakeLLMService()
         service = SimulatorService(
@@ -488,7 +462,6 @@ class TestStartRejectionAndInstantFinish:
         finally:
             await service.cleanup()
 
-    @pytest.mark.asyncio
     async def test_start_empty_date_returns_reason(self, sim_store: SQLiteDatabase) -> None:
         fake_llm = _FakeLLMService()
         service = SimulatorService(
@@ -505,7 +478,6 @@ class TestStartRejectionAndInstantFinish:
         finally:
             await service.cleanup()
 
-    @pytest.mark.asyncio
     async def test_single_message_replay_finishes_immediately(self, sim_store: SQLiteDatabase) -> None:
         """1 条全速回放启动即完成：start 不拒绝、随后 is_running 复位（API 据此报"已完成"）。"""
         event_bus = EventBus()
@@ -539,7 +511,6 @@ class TestStartRejectionAndInstantFinish:
 class TestGenerateFatalErrorShutdown:
     """generate 循环遇 LLM FatalError 的收场契约。"""
 
-    @pytest.mark.asyncio
     async def test_fatal_llm_error_stops_loop_and_sets_last_error(self, sim_store: SQLiteDatabase) -> None:
         fatal_llm = _FatalLLMService()
         service = SimulatorService(
@@ -571,9 +542,7 @@ class TestGenerateFatalErrorShutdown:
             await service.cleanup()
 
 
-# ---------------------------------------------------------------------------
 # ⑥ 付费概率路径（上舰 / SC 概率读配置，不再写死在代码里）
-# ---------------------------------------------------------------------------
 
 
 async def _collect_pay_messages(
@@ -637,7 +606,6 @@ async def _collect_pay_messages(
     return received
 
 
-@pytest.mark.asyncio
 async def test_guard_probability_from_config(monkeypatch: pytest.MonkeyPatch, sim_store: SQLiteDatabase) -> None:
     """guard_probability 命中时走上舰分支（原 0.05 硬编码改读配置）。"""
     received = await _collect_pay_messages(
@@ -651,7 +619,6 @@ async def test_guard_probability_from_config(monkeypatch: pytest.MonkeyPatch, si
     assert received[0].guard is not None
 
 
-@pytest.mark.asyncio
 async def test_sc_pay_probability_from_config(monkeypatch: pytest.MonkeyPatch, sim_store: SQLiteDatabase) -> None:
     """pay_roll 落在上舰概率之外、SC 累计上限之内时走 SC 分支（原 0.20 硬编码改读配置）。"""
     received = await _collect_pay_messages(
@@ -666,7 +633,6 @@ async def test_sc_pay_probability_from_config(monkeypatch: pytest.MonkeyPatch, s
     assert received[0].sc is not None
 
 
-@pytest.mark.asyncio
 async def test_pay_fallback_to_gift_when_probabilities_zero(
     monkeypatch: pytest.MonkeyPatch, sim_store: SQLiteDatabase
 ) -> None:

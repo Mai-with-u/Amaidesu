@@ -15,7 +15,7 @@ import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import Generator
 
 import pytest
 
@@ -29,10 +29,7 @@ from src.modules.storage.models.rundown import (
 from src.modules.storage.schema import build_schema_sql
 from src.modules.time_utils import now_ms
 
-
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 
 @pytest.fixture
@@ -70,12 +67,9 @@ def _make_rundown(
     return Rundown(rundown_id=rundown_id, title=title, segments=segments)
 
 
-# =============================================================================
 # 建表自检
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_rundowns_table_exists_after_initialize(store: SQLiteDatabase) -> None:
     """``store.initialize()`` 后 ``rundowns`` 表存在；``agenda_*`` 不在。"""
     assert await store.table_exists("rundowns")
@@ -86,12 +80,9 @@ async def test_rundowns_table_exists_after_initialize(store: SQLiteDatabase) -> 
     assert "agenda_runtime" not in list_expected_tables()
 
 
-# =============================================================================
 # CRUD 往返
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_rundown_round_trip(store: SQLiteDatabase) -> None:
     """upsert → get → list → delete 全链。"""
     rundown = _make_rundown(rundown_id="rd_1", title="首播流程单")
@@ -121,7 +112,6 @@ async def test_rundown_round_trip(store: SQLiteDatabase) -> None:
     assert await store.rundowns.list_rundowns() == []
 
 
-@pytest.mark.asyncio
 async def test_rundown_upsert_preserves_created_at_updates_only_updated_at(
     store: SQLiteDatabase,
 ) -> None:
@@ -170,7 +160,6 @@ async def test_rundown_upsert_preserves_created_at_updates_only_updated_at(
     assert fetched.segments[0].expected_ms == 20_000
 
 
-@pytest.mark.asyncio
 async def test_rundown_list_ordered_by_created_at_asc(store: SQLiteDatabase) -> None:
     """``list_rundowns`` 按 ``created_at_ms`` 升序返回。"""
     r1 = _make_rundown(rundown_id="rd_1")
@@ -184,13 +173,11 @@ async def test_rundown_list_ordered_by_created_at_asc(store: SQLiteDatabase) -> 
     assert [r.rundown_id for r in listed] == ["rd_1", "rd_2", "rd_3"]
 
 
-@pytest.mark.asyncio
 async def test_rundown_get_unknown_returns_none(store: SQLiteDatabase) -> None:
     """``get_rundown`` 未命中返回 ``None``。"""
     assert await store.rundowns.get_rundown("ghost") is None
 
 
-@pytest.mark.asyncio
 async def test_rundown_segments_serialization_round_trip(store: SQLiteDatabase) -> None:
     """复杂 segments（含 ``key_points`` / ``min_duration_ms`` / ``notes``）往返无损。"""
     rundown = Rundown(
@@ -226,7 +213,6 @@ async def test_rundown_segments_serialization_round_trip(store: SQLiteDatabase) 
     assert fetched.segments[1].notes is None
 
 
-@pytest.mark.asyncio
 async def test_rundown_default_rundown_upserts_and_round_trips(store: SQLiteDatabase) -> None:
     """``DEFAULT_RUNDOWN`` 落库 / 读回无损。"""
     await store.rundowns.upsert_rundown(DEFAULT_RUNDOWN)
@@ -243,12 +229,9 @@ async def test_rundown_default_rundown_upserts_and_round_trips(store: SQLiteData
         assert round_tripped.expected_ms == original.expected_ms
 
 
-# =============================================================================
 # v5 → v6 迁移
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_v5_to_v6_migration_drops_agenda_and_creates_rundowns(temp_db_path: Path) -> None:
     """v5 形状的旧库升级：``agenda_plan`` / ``agenda_runtime`` 被 DROP，``rundowns`` 表创建。"""
     conn = sqlite3.connect(str(temp_db_path))
@@ -320,7 +303,6 @@ async def test_v5_to_v6_migration_drops_agenda_and_creates_rundowns(temp_db_path
         await s.close()
 
 
-@pytest.mark.asyncio
 async def test_v6_migration_is_idempotent(temp_db_path: Path) -> None:
     """v5 → v6 迁移幂等：再次 ``initialize()`` 不重复迁移、不破坏数据。"""
     # 旧库（v5）创建
@@ -377,7 +359,6 @@ async def test_v6_migration_is_idempotent(temp_db_path: Path) -> None:
         await second.close()
 
 
-@pytest.mark.asyncio
 async def test_fresh_db_reaches_current_schema_version(temp_db_path: Path) -> None:
     """全新库首次 ``initialize()`` 直接走到当前 SCHEMA_VERSION；无 agenda 表。"""
     s = SQLiteDatabase(temp_db_path)
@@ -397,7 +378,6 @@ async def test_fresh_db_reaches_current_schema_version(temp_db_path: Path) -> No
         await s.close()
 
 
-@pytest.mark.asyncio
 async def test_build_schema_sql_contains_rundowns_not_agenda() -> None:
     """``build_schema_sql()`` 包含 ``rundowns`` DDL、不含 agenda DDL。"""
     sql = build_schema_sql()

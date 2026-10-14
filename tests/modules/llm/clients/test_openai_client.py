@@ -1,6 +1,6 @@
 import asyncio
-from typing import Any
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -10,7 +10,6 @@ from openai import APIStatusError
 from src.modules.llm.clients.openai.client import OpenAIClient
 from src.modules.llm.errors import FatalError, RetryableError
 from src.modules.llm.payload import GenerateRequest, ImagePart, Message, ToolCall
-
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 
@@ -54,7 +53,6 @@ def _make_client(config: dict[str, object] | None = None) -> tuple[OpenAIClient,
     return client, sdk_client
 
 
-@pytest.mark.asyncio
 async def test_chat_basic():
     client, sdk_client = _make_client()
     sdk_client.chat.completions.create.return_value = _response(
@@ -74,7 +72,6 @@ async def test_chat_basic():
     )
 
 
-@pytest.mark.asyncio
 async def test_chat_waits_past_legacy_provider_timeout() -> None:
     """较慢的完整回复不会因旧 provider 时限被取消。"""
     client, sdk = _make_client({"timeout": 0.001})
@@ -93,7 +90,6 @@ async def test_chat_waits_past_legacy_provider_timeout() -> None:
     assert result.success and result.content == "world"
 
 
-@pytest.mark.asyncio
 async def test_chat_interrupt():
     client, sdk_client = _make_client({"timeout": 5})
     interrupt_flag = asyncio.Event()
@@ -112,7 +108,6 @@ async def test_chat_interrupt():
     assert "中断" in result.error
 
 
-@pytest.mark.asyncio
 async def test_vision():
     client, sdk_client = _make_client()
     sdk_client.chat.completions.create.return_value = _response(
@@ -132,7 +127,6 @@ async def test_vision():
     assert user_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
-@pytest.mark.asyncio
 async def test_tool_calls():
     client, sdk_client = _make_client()
     tool_call = SimpleNamespace(
@@ -156,7 +150,6 @@ async def test_tool_calls():
     assert sdk_client.chat.completions.create.await_args.kwargs["tool_choice"] == "auto"
 
 
-@pytest.mark.asyncio
 async def test_tool_args_json_repair():
     client, sdk_client = _make_client()
     tool_call = SimpleNamespace(
@@ -171,7 +164,6 @@ async def test_tool_args_json_repair():
     assert result.tool_calls[0]["function"]["arguments"] == {"city": "Tokyo"}
 
 
-@pytest.mark.asyncio
 async def test_reasoning_native():
     client, sdk_client = _make_client({"reasoning_parse_mode": "native"})
     sdk_client.chat.completions.create.return_value = _response(reasoning_content="思考过程")
@@ -181,7 +173,6 @@ async def test_reasoning_native():
     assert result.reasoning_content == "思考过程"
 
 
-@pytest.mark.asyncio
 async def test_reasoning_think_tag():
     client, sdk_client = _make_client({"reasoning_parse_mode": "think_tag"})
     sdk_client.chat.completions.create.return_value = _response(content="<think>internal</think>hello")
@@ -191,7 +182,6 @@ async def test_reasoning_think_tag():
     assert result.reasoning_content == "internal"
 
 
-@pytest.mark.asyncio
 async def test_reasoning_none():
     client, sdk_client = _make_client({"reasoning_parse_mode": "none"})
     sdk_client.chat.completions.create.return_value = _response(
@@ -288,9 +278,7 @@ def test_base_url_normalization():
     }
 
 
-# ---------------------------------------------------------------------------
 # 流式传输路径（on_delta 非 None）：传输层流式、语义层整段（旁路通道）
-# ---------------------------------------------------------------------------
 
 
 class _FakeStream:
@@ -329,7 +317,6 @@ def _stream_chunk(delta=None, usage=None, model="test-model"):
     return SimpleNamespace(choices=choices, usage=usage, model=model)
 
 
-@pytest.mark.asyncio
 async def test_chat_streaming_emits_reasoning_and_content_deltas():
     """reasoning/content 增量逐帧回调，最终响应组装为整段文本。"""
     client, sdk_client = _make_client()
@@ -355,7 +342,6 @@ async def test_chat_streaming_emits_reasoning_and_content_deltas():
     assert received == [("reasoning", "想一"), ("reasoning", "想二"), ("content", "你"), ("content", "好")]
 
 
-@pytest.mark.asyncio
 async def test_chat_streaming_accumulates_tool_call_fragments():
     """tool call arguments 碎片客户端拼接（不外发），最终完整 JSON 解析。"""
     client, sdk_client = _make_client({"reasoning_parse_mode": "none"})
@@ -382,7 +368,6 @@ async def test_chat_streaming_accumulates_tool_call_fragments():
     ]
 
 
-@pytest.mark.asyncio
 async def test_chat_streaming_falls_back_to_non_streaming_on_create_error():
     """流式 create 失败（如端点不支持 stream_options）→ 降级非流式，返回完整结果。"""
     client, sdk_client = _make_client()
@@ -420,13 +405,10 @@ async def test_empty_completed_stream_is_left_to_engine_retry(finish_reason: str
     assert "考虑当前任务" not in str(error.value)
 
 
-# ---------------------------------------------------------------------------
 # 中立 payload 路径：Engine 归一化后的 Message → OpenAI 协议翻译
 # （legacy chat/vision 直接收 dict，不经过该路径，故单列覆盖）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_generate_payload_path_folds_bare_string_parts():
     """裸字符串 parts（中立契约的文本简写）→ OpenAI 字符串 content。
 
@@ -446,9 +428,7 @@ async def test_generate_payload_path_folds_bare_string_parts():
     ]
 
 
-# ---------------------------------------------------------------------------
 # 思考 token 捕获 + 原始 usage 兜底（§2 决策第 1/2 条）
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -492,7 +472,6 @@ def test_extract_usage_omits_reasoning_tokens_when_not_reported():
     assert "reasoning_tokens" not in usage
 
 
-@pytest.mark.asyncio
 async def test_chat_response_captures_usage_raw_json():
     """chat 返回的 Response.usage_raw_json 是厂商原始 usage 的 JSON 序列化字符串。"""
     client, sdk_client = _make_client()
@@ -530,7 +509,6 @@ async def test_chat_response_captures_usage_raw_json():
     assert raw["completion_tokens_details"]["reasoning_tokens"] == 42
 
 
-@pytest.mark.asyncio
 async def test_streaming_response_captures_usage_raw_json_at_final_chunk():
     """流式末帧的 usage 对象的 JSON 序列化也带出 usage_raw_json。"""
     client, sdk_client = _make_client()
@@ -577,7 +555,6 @@ async def test_streaming_response_captures_usage_raw_json_at_final_chunk():
     assert raw["completion_tokens_details"]["reasoning_tokens"] == 5
 
 
-@pytest.mark.asyncio
 async def test_generate_payload_path_restores_tool_context():
     """assistant tool_calls 还原协议嵌套形态（arguments 回 JSON 字符串），tool 观察带 tool_call_id。"""
     client, sdk_client = _make_client({"reasoning_parse_mode": "none"})
@@ -602,12 +579,9 @@ async def test_generate_payload_path_restores_tool_context():
     assert messages[1] == {"role": "tool", "tool_call_id": "c1", "content": '{"ok": true}'}
 
 
-# ---------------------------------------------------------------------------
 # 思考强度档位 + provider 级方言逃生舱：非流式 / 流式 / 视觉三处请求参数拼装两态断言
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_chat_includes_reasoning_effort_and_extra_body_when_set():
     """非流式 chat：reasoning_effort 与 extra_body 都显式传入 → request_params 两键都在。"""
     client, sdk_client = _make_client({"extra_body": {"vendor_x": {"nested": True}, "flag": "on"}})
@@ -621,7 +595,6 @@ async def test_chat_includes_reasoning_effort_and_extra_body_when_set():
     assert sent["extra_body"] == {"vendor_x": {"nested": True}, "flag": "on"}
 
 
-@pytest.mark.asyncio
 async def test_chat_omits_reasoning_effort_and_extra_body_when_unset():
     """非流式 chat：未配置 → request_params 两键都不出现（设了才发）。"""
     client, sdk_client = _make_client()
@@ -635,7 +608,6 @@ async def test_chat_omits_reasoning_effort_and_extra_body_when_unset():
     assert "extra_body" not in sent
 
 
-@pytest.mark.asyncio
 async def test_chat_omits_reasoning_effort_when_empty_string():
     """非流式 chat：reasoning_effort 显式空串 → 视为未配置（不发出）。"""
     client, sdk_client = _make_client()
@@ -648,7 +620,6 @@ async def test_chat_omits_reasoning_effort_when_empty_string():
     assert "reasoning_effort" not in sent
 
 
-@pytest.mark.asyncio
 async def test_chat_omits_extra_body_when_empty_dict():
     """非流式 chat：provider extra_body 空 dict → 视为未配置（不发出）。"""
     client, sdk_client = _make_client({"extra_body": {}})
@@ -662,7 +633,6 @@ async def test_chat_omits_extra_body_when_empty_dict():
     assert "extra_body" not in sent
 
 
-@pytest.mark.asyncio
 async def test_chat_streaming_includes_reasoning_effort_and_extra_body_when_set():
     """流式 chat：reasoning_effort 与 extra_body 都显式传入 → request_params 两键都在。"""
     client, sdk_client = _make_client({"extra_body": {"vendor_stream": 1}})
@@ -689,7 +659,6 @@ async def test_chat_streaming_includes_reasoning_effort_and_extra_body_when_set(
     assert sent["extra_body"] == {"vendor_stream": 1}
 
 
-@pytest.mark.asyncio
 async def test_chat_streaming_omits_reasoning_effort_and_extra_body_when_unset():
     """流式 chat：未配置 → 两键都不出现。"""
     client, sdk_client = _make_client()
@@ -715,7 +684,6 @@ async def test_chat_streaming_omits_reasoning_effort_and_extra_body_when_unset()
     assert "extra_body" not in sent
 
 
-@pytest.mark.asyncio
 async def test_vision_includes_reasoning_effort_and_extra_body_when_set():
     """vision 调用：reasoning_effort 与 extra_body 都显式传入 → request_params 两键都在。"""
     client, sdk_client = _make_client({"extra_body": {"vendor_vision": True}})
@@ -732,7 +700,6 @@ async def test_vision_includes_reasoning_effort_and_extra_body_when_set():
     assert sent["extra_body"] == {"vendor_vision": True}
 
 
-@pytest.mark.asyncio
 async def test_vision_omits_reasoning_effort_and_extra_body_when_unset():
     """vision 调用：未配置 → 两键都不出现。"""
     client, sdk_client = _make_client()
@@ -749,12 +716,9 @@ async def test_vision_omits_reasoning_effort_and_extra_body_when_unset():
     assert "extra_body" not in sent
 
 
-# =============================================================================
 # generate_audio - 音频输出模态（omni_tts 引擎消费）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_generate_audio_sends_modalities_and_audio_params():
     """音频请求带 modalities=audio 与 voice/format 参数，且不走流式"""
     client, sdk_client = _make_client()
@@ -775,7 +739,6 @@ async def test_generate_audio_sends_modalities_and_audio_params():
     assert result.audio_format == "wav"
 
 
-@pytest.mark.asyncio
 async def test_generate_audio_transcript_backfills_content():
     """语音文本经 transcript 回填 content（模型产出文本），不空响应"""
     client, sdk_client = _make_client()
@@ -790,7 +753,6 @@ async def test_generate_audio_transcript_backfills_content():
     assert result.audio_base64 == "QUJD"
 
 
-@pytest.mark.asyncio
 async def test_generate_audio_accepts_dict_shaped_audio():
     """兼容端点以 dict 形态透传 message.audio 时同样解析"""
     client, sdk_client = _make_client()
@@ -807,7 +769,6 @@ async def test_generate_audio_accepts_dict_shaped_audio():
     assert result.content == "你好"
 
 
-@pytest.mark.asyncio
 async def test_generate_audio_without_audio_treated_as_plain_text_response():
     """端点未回音频（不支持 modalities 时）：不报错，按普通文本响应语义返回"""
     client, sdk_client = _make_client()
@@ -821,9 +782,7 @@ async def test_generate_audio_without_audio_treated_as_plain_text_response():
     assert result.content == "plain"
 
 
-# =============================================================================
 # tool 观察带图的协议拆分（ADR-037）
-# =============================================================================
 
 
 def test_tool_message_with_image_splits_into_tool_text_and_user_image():

@@ -26,10 +26,7 @@ from src.modules.storage import (
 )
 from src.modules.storage.database import SQLiteDatabase
 
-
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 
 @pytest.fixture
@@ -48,12 +45,9 @@ async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
     await db.close()
 
 
-# =============================================================================
 # 13 张权威表 + schema_migrations
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_all_expected_tables_created(store: SQLiteDatabase) -> None:
     """13 张权威表 + schema_migrations 全部应被建立。"""
     for table_name in list_expected_tables():
@@ -69,25 +63,20 @@ async def test_all_expected_tables_created(store: SQLiteDatabase) -> None:
         assert t in tables, f"业务表 {t} 不在 sqlite_master"
 
 
-@pytest.mark.asyncio
 async def test_schema_migration_recorded(store: SQLiteDatabase) -> None:
     """schema_migrations 记录当前 SCHEMA_VERSION。"""
     version = await store.get_schema_version()
     assert version == SCHEMA_VERSION, f"已应用版本={version} 应等于代码期望={SCHEMA_VERSION}"
 
 
-@pytest.mark.asyncio
 async def test_assert_schema_ready_passes(store: SQLiteDatabase) -> None:
     """assert_schema_ready 自检通过。"""
     await store.assert_schema_ready()
 
 
-# =============================================================================
 # simulated 贯穿列（默认 False / True 标记 / 消费方排除）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_simulated_column_present_on_live_chat(store: SQLiteDatabase) -> None:
     """live_chat 表必须包含 ``simulated`` 列（default 0）。"""
     rows = await store.execute("PRAGMA table_info(live_chat)")
@@ -97,7 +86,6 @@ async def test_simulated_column_present_on_live_chat(store: SQLiteDatabase) -> N
     assert int(cols["simulated"]["dflt_value"]) == 0, "simulated 列默认值应为 0（真实源）"
 
 
-@pytest.mark.asyncio
 async def test_simulated_column_present_on_gifts(store: SQLiteDatabase) -> None:
     """gifts 表必须包含 simulated 列。"""
     rows = await store.execute("PRAGMA table_info(gifts)")
@@ -105,7 +93,6 @@ async def test_simulated_column_present_on_gifts(store: SQLiteDatabase) -> None:
     assert "simulated" in cols
 
 
-@pytest.mark.asyncio
 async def test_simulated_column_present_on_super_chats(store: SQLiteDatabase) -> None:
     """super_chats 表必须包含 simulated 列。"""
     rows = await store.execute("PRAGMA table_info(super_chats)")
@@ -113,7 +100,6 @@ async def test_simulated_column_present_on_super_chats(store: SQLiteDatabase) ->
     assert "simulated" in cols
 
 
-@pytest.mark.asyncio
 async def test_simulated_exclusion_query(store: SQLiteDatabase) -> None:
     """消费者 WHERE ``simulated=0`` 排除模拟数据——模拟观众不污染真实统计。
 
@@ -141,17 +127,13 @@ async def test_simulated_exclusion_query(store: SQLiteDatabase) -> None:
     assert len(all_rows) == 2
 
 
-# =============================================================================
 # 健康检查 / 时间戳 / 字段命名规范（_ms）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_is_healthy(store: SQLiteDatabase) -> None:
     assert await store.is_healthy() is True
 
 
-@pytest.mark.asyncio
 async def test_millisecond_fields_exist(store: SQLiteDatabase) -> None:
     """权威表必须以 *_ms 为时间字段命名。抽查关键表。"""
     # live_sessions 必须有 started_at_ms / updated_at_ms
@@ -170,7 +152,6 @@ async def test_millisecond_fields_exist(store: SQLiteDatabase) -> None:
     assert "duration_ms" in cols_topics
 
 
-@pytest.mark.asyncio
 async def test_message_type_values_live_chat(store: SQLiteDatabase) -> None:
     """message_type 列存在（live_chat 字段语义）。"""
     rows = await store.execute("PRAGMA table_info(live_chat)")
@@ -178,12 +159,9 @@ async def test_message_type_values_live_chat(store: SQLiteDatabase) -> None:
     assert "message_type" in cols
 
 
-# =============================================================================
 # ConnectionManager（被 SQLiteDatabase 间接覆盖；此为直接单元测试）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_connection_manager_pragmas(temp_db_path: Path) -> None:
     """SQLiteConnectionManager 应设置 WAL + foreign_keys PRAGMA。"""
     manager = SQLiteConnectionManager(temp_db_path)
@@ -201,7 +179,6 @@ async def test_connection_manager_pragmas(temp_db_path: Path) -> None:
         manager.close_all()
 
 
-@pytest.mark.asyncio
 async def test_initialize_idempotent(temp_db_path: Path) -> None:
     """多次调用 initialize 不应报错（幂等）。"""
     s = SQLiteDatabase(temp_db_path)
@@ -210,9 +187,7 @@ async def test_initialize_idempotent(temp_db_path: Path) -> None:
     await s.close()
 
 
-# =============================================================================
 # 领域查询方法：live_chat / viewers
-# =============================================================================
 
 
 async def _seed_chat(
@@ -234,7 +209,6 @@ async def _seed_chat(
         )
 
 
-@pytest.mark.asyncio
 async def test_list_recent_live_chat_returns_chronological(store: SQLiteDatabase) -> None:
     """回灌正序语义：5 条乱序时间戳，limit=3 返回**时间正序**的最近 3 条。
 
@@ -261,7 +235,6 @@ async def test_list_recent_live_chat_returns_chronological(store: SQLiteDatabase
     assert contents == ["第 3 条", "第 4 条", "第 5 条"]
 
 
-@pytest.mark.asyncio
 async def test_list_recent_live_chat_before_window(store: SQLiteDatabase) -> None:
     """``before_timestamp_ms`` 窗口截断：只取 < 该阈值的消息，再按时间正序。"""
     items = [
@@ -284,7 +257,6 @@ async def test_list_recent_live_chat_before_window(store: SQLiteDatabase) -> Non
     assert timestamps2 == [3000, 4000], f"窗口+limit 错误，实得 {timestamps2}"
 
 
-@pytest.mark.asyncio
 async def test_list_recent_live_chat_session_isolation(store: SQLiteDatabase) -> None:
     """不同 live_session_id 的消息互不串扰。"""
     await _seed_chat(store, live_session_id=1, items=[(1000, "u1", "张三", "s1-msg1")])
@@ -298,7 +270,6 @@ async def test_list_recent_live_chat_session_isolation(store: SQLiteDatabase) ->
     assert int(rows2[0]["live_session_id"]) == 2
 
 
-@pytest.mark.asyncio
 async def test_list_messages_by_user_filters_and_window(store: SQLiteDatabase) -> None:
     """按 sender_id 过滤 + since_timestamp_ms 窗口 + 时间正序。"""
     items = [
@@ -329,7 +300,6 @@ async def test_list_messages_by_user_filters_and_window(store: SQLiteDatabase) -
     assert rows_none == []
 
 
-@pytest.mark.asyncio
 async def test_upsert_viewer_message_count(store: SQLiteDatabase) -> None:
     """upsert_viewer_message：首次插入 + 再次 upsert 后 message_count=2。"""
     ts1 = 1_700_000_000_000
@@ -347,7 +317,9 @@ async def test_upsert_viewer_message_count(store: SQLiteDatabase) -> None:
     assert str(row["user_name"]) == "张三"
 
     # 再次
-    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u1", user_name="张三（新昵称）", timestamp_ms=ts2)
+    await store.viewers.upsert_viewer_message(
+        platform="bilibili", user_id="u1", user_name="张三（新昵称）", timestamp_ms=ts2
+    )
     row2 = await store.viewers.get_viewer_stats(platform="bilibili", user_id="u1")
     assert row2 is not None
     assert int(row2["message_count"]) == 2, "message_count 应累计到 2"
@@ -356,7 +328,6 @@ async def test_upsert_viewer_message_count(store: SQLiteDatabase) -> None:
     assert str(row2["user_name"]) == "张三（新昵称）", "user_name 应被 excluded 覆盖"
 
 
-@pytest.mark.asyncio
 async def test_upsert_viewer_gift_count(store: SQLiteDatabase) -> None:
     """upsert_viewer_gift：gift_count 与 interaction_count 各 +1；不影响 message_count。"""
     ts1 = 1_700_000_001_000
@@ -374,7 +345,6 @@ async def test_upsert_viewer_gift_count(store: SQLiteDatabase) -> None:
     assert int(row["last_active_ms"]) == ts2
 
 
-@pytest.mark.asyncio
 async def test_upsert_viewer_replied_count(store: SQLiteDatabase) -> None:
     """upsert_viewer_replied：+1 replied，+1 interaction；未存在的 user_id 首建 user_name="?"。"""
     # 未存在的用户：首建
@@ -395,11 +365,12 @@ async def test_upsert_viewer_replied_count(store: SQLiteDatabase) -> None:
     assert int(row2["interaction_count"]) == 2
 
 
-@pytest.mark.asyncio
 async def test_upsert_viewer_replied_keeps_known_name(store: SQLiteDatabase) -> None:
     """upsert_viewer_replied 不应覆盖已知 user_name（DO UPDATE 不动 user_name）。"""
     # 先 message upsert 写 user_name，再 replied upsert
-    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=1_700_000_000_000)
+    await store.viewers.upsert_viewer_message(
+        platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=1_700_000_000_000
+    )
     await store.viewers.upsert_viewer_replied(platform="bilibili", user_id="u1", timestamp_ms=1_700_000_001_000)
     row = await store.viewers.get_viewer_stats(platform="bilibili", user_id="u1")
     assert row is not None
@@ -408,11 +379,12 @@ async def test_upsert_viewer_replied_keeps_known_name(store: SQLiteDatabase) -> 
     assert int(row["message_count"]) == 1
 
 
-@pytest.mark.asyncio
 async def test_get_viewer_stats_hit_and_miss(store: SQLiteDatabase) -> None:
     """get_viewer_stats：命中返回 Row，未命中返回 None。"""
     # 命中
-    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=1_700_000_000_000)
+    await store.viewers.upsert_viewer_message(
+        platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=1_700_000_000_000
+    )
     hit = await store.viewers.get_viewer_stats(platform="bilibili", user_id="u1")
     assert hit is not None
     assert str(hit["user_id"]) == "u1"
@@ -422,15 +394,24 @@ async def test_get_viewer_stats_hit_and_miss(store: SQLiteDatabase) -> None:
     assert miss is None
 
 
-@pytest.mark.asyncio
 async def test_list_viewer_stats_order_by_whitelist(store: SQLiteDatabase) -> None:
     """list_viewer_stats：合法 order_by 排序、limit/offset 生效、total 全计数；非法值抛 ValueError。"""
     # 准备 3 个不同指标的观众
-    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u_msg", user_name="msg 用户", timestamp_ms=1_700_000_000_000)
-    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u_msg", user_name="msg 用户", timestamp_ms=1_700_000_001_000)
-    await store.viewers.upsert_viewer_gift(platform="bilibili", user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_002_000)
-    await store.viewers.upsert_viewer_gift(platform="bilibili", user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_003_000)
-    await store.viewers.upsert_viewer_gift(platform="bilibili", user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_004_000)
+    await store.viewers.upsert_viewer_message(
+        platform="bilibili", user_id="u_msg", user_name="msg 用户", timestamp_ms=1_700_000_000_000
+    )
+    await store.viewers.upsert_viewer_message(
+        platform="bilibili", user_id="u_msg", user_name="msg 用户", timestamp_ms=1_700_000_001_000
+    )
+    await store.viewers.upsert_viewer_gift(
+        platform="bilibili", user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_002_000
+    )
+    await store.viewers.upsert_viewer_gift(
+        platform="bilibili", user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_003_000
+    )
+    await store.viewers.upsert_viewer_gift(
+        platform="bilibili", user_id="u_gift", user_name="gift 用户", timestamp_ms=1_700_000_004_000
+    )
     await store.viewers.upsert_viewer_replied(platform="bilibili", user_id="u_repl", timestamp_ms=1_700_000_005_000)
     await store.viewers.upsert_viewer_replied(platform="bilibili", user_id="u_repl", timestamp_ms=1_700_000_006_000)
 

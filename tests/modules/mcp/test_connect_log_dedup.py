@@ -11,8 +11,6 @@ import sys
 import types
 from typing import Any, Dict, List
 
-import pytest
-
 from src.modules.mcp.client import McpClient
 from src.modules.mcp.config import McpServerConfig
 
@@ -48,7 +46,6 @@ def _connect_failures(cap: Any) -> List[Dict[str, Any]]:
     return [r for r in cap.records if r["level"] == "WARNING" and "连接失败" in r["message"]]
 
 
-@pytest.mark.asyncio
 async def test_same_failure_warns_once_and_resets_after_success(monkeypatch, loguru_capture) -> None:
     """同因失败只报首次；理由变化或连上一次后再次失败，重新 warning。"""
     client = _client()

@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.modules.llm.payload import Response, Usage
-
 from src.modules.simulator.config_schema import (
     SimulatorConfigSchema,
 )
@@ -42,7 +41,6 @@ def context():
     return StreamerContextSnapshot(recent_messages=["大家好"], recent_emotion="happy", is_online=True)
 
 
-@pytest.mark.asyncio
 async def test_generate_viewer_message(mock_llm, persona, context):
     cfg = SimulatorConfigSchema()
     wrapper = SimulatorLLMWrapper(cfg, mock_llm)
@@ -53,7 +51,6 @@ async def test_generate_viewer_message(mock_llm, persona, context):
     assert msg.tokens_used == 10
 
 
-@pytest.mark.asyncio
 async def test_llm_failure_returns_none(mock_llm, persona, context):
     mock_llm.generate = AsyncMock(return_value=Response(success=False, content="", usage=Usage(total_tokens=0)))
     cfg = SimulatorConfigSchema()
@@ -62,7 +59,6 @@ async def test_llm_failure_returns_none(mock_llm, persona, context):
     assert msg is None
 
 
-@pytest.mark.asyncio
 async def test_fatal_error_is_surfaced(mock_llm, persona, context):
     """FatalError（flatten 进 error 字符串）必须暴露到 last_fatal_error 供循环收场。"""
     mock_llm.generate = AsyncMock(
@@ -81,7 +77,6 @@ async def test_fatal_error_is_surfaced(mock_llm, persona, context):
     assert "FatalError" in wrapper.last_fatal_error
 
 
-@pytest.mark.asyncio
 async def test_retryable_error_does_not_set_fatal(mock_llm, persona, context):
     """临时性失败（限流/网络）不算致命，last_fatal_error 保持 None。"""
     mock_llm.generate = AsyncMock(
@@ -99,7 +94,6 @@ async def test_retryable_error_does_not_set_fatal(mock_llm, persona, context):
     assert wrapper.last_fatal_error is None
 
 
-@pytest.mark.asyncio
 async def test_empty_response_returns_none(mock_llm, persona, context):
     mock_llm.generate = AsyncMock(return_value=Response(success=True, content="   ", usage=Usage(total_tokens=0)))
     cfg = SimulatorConfigSchema()
@@ -108,7 +102,6 @@ async def test_empty_response_returns_none(mock_llm, persona, context):
     assert msg is None
 
 
-@pytest.mark.asyncio
 async def test_long_message_is_complete(
     mock_llm: MagicMock, persona: Persona, context: StreamerContextSnapshot
 ) -> None:
@@ -122,7 +115,6 @@ async def test_long_message_is_complete(
     assert msg.text == long_text
 
 
-@pytest.mark.asyncio
 async def test_budget_exceeded(mock_llm, persona, context):
     cfg = SimulatorConfigSchema(token_budget_per_hour=1000)
     wrapper = SimulatorLLMWrapper(cfg, mock_llm)
@@ -135,7 +127,6 @@ async def test_budget_exceeded(mock_llm, persona, context):
     assert wrapper.is_budget_exceeded()
 
 
-@pytest.mark.asyncio
 async def test_token_tracking(mock_llm, persona, context):
     cfg = SimulatorConfigSchema()
     wrapper = SimulatorLLMWrapper(cfg, mock_llm)
@@ -143,21 +134,19 @@ async def test_token_tracking(mock_llm, persona, context):
     assert wrapper.get_token_usage()["total"] >= 10
 
 
-@pytest.mark.asyncio
 async def test_concurrency_semaphore(mock_llm, persona, context):
     cfg = SimulatorConfigSchema(max_concurrent_llm=2)
     wrapper = SimulatorLLMWrapper(cfg, mock_llm)
     assert wrapper._semaphore._value == 2  # type: ignore[attr-defined]
 
 
-# --- generate_personas ---
+# generate_personas
 
 
 def _mock_generate(content: str):
     return AsyncMock(return_value=Response(success=True, content=content, usage=Usage(total_tokens=50)))
 
 
-@pytest.mark.asyncio
 async def test_generate_personas(mock_llm):
     mock_llm.generate = _mock_generate(
         '[{"user_nickname": "麦芽糖", "role": "fan", "personality": "热情捧场", '
@@ -172,7 +161,6 @@ async def test_generate_personas(mock_llm):
     assert personas[0].user_id.startswith("resident_")
 
 
-@pytest.mark.asyncio
 async def test_generate_personas_markdown_wrapped_json(mock_llm):
     mock_llm.generate = _mock_generate(
         '```json\n[{"user_nickname": "黑粉一号", "role": "hater", "personality": "毒舌", '
@@ -185,7 +173,6 @@ async def test_generate_personas_markdown_wrapped_json(mock_llm):
     assert personas[0].role == PersonaRole.HATER
 
 
-@pytest.mark.asyncio
 async def test_generate_personas_invalid_json_returns_empty(mock_llm):
     mock_llm.generate = _mock_generate("这不是 JSON")
     cfg = SimulatorConfigSchema()
@@ -194,7 +181,6 @@ async def test_generate_personas_invalid_json_returns_empty(mock_llm):
     assert personas == []
 
 
-@pytest.mark.asyncio
 async def test_generate_personas_llm_failure_returns_empty(mock_llm):
     mock_llm.generate = AsyncMock(return_value=Response(success=False, content="", usage=Usage(total_tokens=0)))
     cfg = SimulatorConfigSchema()
@@ -203,7 +189,6 @@ async def test_generate_personas_llm_failure_returns_empty(mock_llm):
     assert personas == []
 
 
-@pytest.mark.asyncio
 async def test_generate_personas_no_truncation(mock_llm):
     long_json = (
         "["
@@ -221,10 +206,9 @@ async def test_generate_personas_no_truncation(mock_llm):
     assert len(personas) == 10  # 完整解析全部人设
 
 
-# --- 推理模型空 content 兜底重试 ---
+# 推理模型空 content 兜底重试
 
 
-@pytest.mark.asyncio
 async def test_empty_content_with_thinking_retries_same_budget(mock_llm, persona, context):
     empty_with_thinking = Response(success=True, content="", reasoning_content="x" * 200, usage=Usage(total_tokens=150))
     ok_response = Response(success=True, content="终于有内容了", usage=Usage(total_tokens=300))
@@ -241,7 +225,6 @@ async def test_empty_content_with_thinking_retries_same_budget(mock_llm, persona
     assert second_max_tokens is None  # 重试保持相同参数，不提高输出上限（宿主不发送输出额度）
 
 
-@pytest.mark.asyncio
 async def test_empty_content_without_thinking_no_retry(mock_llm, persona, context):
     empty_no_thinking = Response(success=True, content="", reasoning_content=None, usage=Usage(total_tokens=10))
     mock_llm.generate = AsyncMock(return_value=empty_no_thinking)

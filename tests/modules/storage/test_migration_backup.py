@@ -19,8 +19,8 @@ from typing import AsyncGenerator, Generator
 
 import pytest
 
-from src.modules.storage.schema import SCHEMA_VERSION
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.schema import SCHEMA_VERSION
 
 
 @pytest.fixture
@@ -56,7 +56,6 @@ def _make_legacy_db(db_path: Path) -> None:
         conn.close()
 
 
-@pytest.mark.asyncio
 async def test_legacy_db_backed_up_and_upgraded(temp_dir: Path) -> None:
     """旧库升级：先备份（含遗留数据），再推进到当前版本。"""
     db_path = temp_dir / "legacy.db"
@@ -85,7 +84,6 @@ async def test_legacy_db_backed_up_and_upgraded(temp_dir: Path) -> None:
         await store.close()
 
 
-@pytest.mark.asyncio
 async def test_version_lagged_db_backed_up(temp_dir: Path) -> None:
     """版本记录落后（如停在 1）的库升级时也生成备份。"""
     db_path = temp_dir / "lagged.db"
@@ -103,7 +101,6 @@ async def test_version_lagged_db_backed_up(temp_dir: Path) -> None:
         await reopened.close()
 
 
-@pytest.mark.asyncio
 async def test_fresh_db_no_backup(temp_dir: Path) -> None:
     """全新库（文件不存在）首次初始化不生成备份。"""
     db_path = temp_dir / "fresh.db"
@@ -116,7 +113,6 @@ async def test_fresh_db_no_backup(temp_dir: Path) -> None:
         await store.close()
 
 
-@pytest.mark.asyncio
 async def test_backup_failure_does_not_block_migration(temp_dir: Path) -> None:
     """备份目标不可创建（backups 被文件占用）时降级告警，迁移照常完成。"""
     db_path = temp_dir / "blocked.db"
@@ -133,7 +129,6 @@ async def test_backup_failure_does_not_block_migration(temp_dir: Path) -> None:
         await store.close()
 
 
-@pytest.mark.asyncio
 async def test_backups_not_auto_pruned(store: SQLiteDatabase, temp_dir: Path) -> None:
     """备份不做自动清理：同一库多次备份文件共存，由用户自行管理。"""
     db_path = temp_dir / "test.db"

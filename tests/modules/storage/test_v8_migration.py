@@ -20,9 +20,9 @@ import pytest
 
 from src.modules.llm.observation import record_call
 from src.modules.storage.database import SQLiteDatabase
-from src.modules.storage.schema import SCHEMA_VERSION
 from src.modules.storage.migrations.v8_llm_request_link import migrate as v8_migrate
 from src.modules.storage.repos.llm import LLMRequestInsert, LLMUsageInsert
+from src.modules.storage.schema import SCHEMA_VERSION
 
 # v7 形状的两表 DDL（无 v8 新列），用于注入存量库
 _V7_LLM_TABLES_SQL = """
@@ -89,7 +89,6 @@ def test_v8_migrate_is_idempotent_directly() -> None:
     assert {"cache_hit_tokens", "cache_miss_tokens"} <= _column_names(conn, "llm_requests")
 
 
-@pytest.mark.asyncio
 async def test_fresh_db_has_new_columns(temp_db_path: Path) -> None:
     """新库直建即含 v8 新列。"""
     store = SQLiteDatabase(temp_db_path)
@@ -108,7 +107,6 @@ async def test_fresh_db_has_new_columns(temp_db_path: Path) -> None:
         await store.close()
 
 
-@pytest.mark.asyncio
 async def test_v7_db_upgrades_keeps_rows_and_defaults(temp_db_path: Path) -> None:
     """v7 形状旧库升级：旧行保留、新列默认值、版本推进、再次初始化幂等。"""
     conn = sqlite3.connect(str(temp_db_path))
@@ -160,7 +158,6 @@ async def test_v7_db_upgrades_keeps_rows_and_defaults(temp_db_path: Path) -> Non
         await again.close()
 
 
-@pytest.mark.asyncio
 async def test_two_table_atomic(temp_db_path: Path) -> None:
     """同事务第二步（llm_requests）注入失败 → 两表均无新行。"""
     store = SQLiteDatabase(temp_db_path)
@@ -195,7 +192,6 @@ async def test_two_table_atomic(temp_db_path: Path) -> None:
         await store.close()
 
 
-@pytest.mark.asyncio
 async def test_usage_request_join_on_request_id(temp_db_path: Path) -> None:
     """同 request_id 两行可 join（连接键生效）。"""
     store = SQLiteDatabase(temp_db_path)

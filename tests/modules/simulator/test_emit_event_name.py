@@ -23,7 +23,6 @@ def _make_service() -> SimulatorService:
     return SimulatorService(event_bus=event_bus)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("message_type", "expected_event"),
     [
@@ -50,7 +49,6 @@ async def test_emit_message_selects_event_by_type(message_type: str, expected_ev
     assert payload.simulated is True
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("message_type", "expected_event"),
     [
@@ -80,7 +78,6 @@ async def test_emit_replay_payload_selects_event_by_type(message_type: str, expe
     assert args[1].message_type == message_type
 
 
-@pytest.mark.asyncio
 async def test_emit_message_unknown_type_falls_back_to_danmaku() -> None:
     """未知 message_type 回退弹幕事件名，且不抛错。"""
     service = _make_service()

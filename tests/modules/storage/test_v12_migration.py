@@ -26,8 +26,8 @@ import pytest
 from src.modules.llm.bootstrap import _ResolvedModel, _ResolvedProfile
 from src.modules.llm.engine import LLMManager
 from src.modules.storage.database import SQLiteDatabase
-from src.modules.storage.schema import SCHEMA_VERSION
 from src.modules.storage.migrations.v12_llm_observation_and_profile_rename import migrate as v12_migrate
+from src.modules.storage.schema import SCHEMA_VERSION
 
 # v11 形状的两表 DDL（无 v12 新列；client_type 列名未改）
 _V11_LLM_TABLES_SQL = """
@@ -102,7 +102,6 @@ def test_v12_migrate_is_idempotent_directly() -> None:
     assert "client_type" not in req_cols
 
 
-@pytest.mark.asyncio
 async def test_fresh_db_has_v12_columns(temp_db_path: Path) -> None:
     """新库直建即含 v12 全套新列（含 client_type 已不存在、profile_name 就位）。"""
     store = SQLiteDatabase(temp_db_path)
@@ -130,7 +129,6 @@ async def test_fresh_db_has_v12_columns(temp_db_path: Path) -> None:
         await store.close()
 
 
-@pytest.mark.asyncio
 async def test_v11_db_upgrades_renames_column_and_preserves_legacy_values(temp_db_path: Path) -> None:
     """v11 形状旧库升级：client_type 列改名 profile_name、旧值原样保留、版本推进、再次初始化幂等。
 
@@ -221,7 +219,8 @@ class _FakeReasoningClient:
         on_delta=None,
         interrupt_flag=None,
     ):
-        from src.modules.llm.payload import Response as PayloadResponse, Usage as PayloadUsage
+        from src.modules.llm.payload import Response as PayloadResponse
+        from src.modules.llm.payload import Usage as PayloadUsage
 
         # 同时设置 usage_raw_json：模拟真实厂商响应（OpenAI SDK 解析即弃链路）
         # 该兜底供 §2 决策第 2 条追溯重放使用，fake 模拟 SDK CompletionUsage 对象
@@ -267,7 +266,6 @@ def _make_manager_with_fake_client(store) -> LLMManager:
     return manager
 
 
-@pytest.mark.asyncio
 async def test_engine_persists_reasoning_tokens_and_usage_raw_json(temp_db_path: Path) -> None:
     """v12 端到端（v14 契约）：engine 成功调用 → 两表统计列落库；usage_raw_json
     正文出库到诊断文件，库列为 NULL。"""

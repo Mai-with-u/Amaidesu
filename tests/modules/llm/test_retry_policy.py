@@ -104,7 +104,6 @@ async def _run_generate(client_cls: type):
         return fake, response
 
 
-@pytest.mark.asyncio
 async def test_fatal_no_retry():
     """Fatal 分类：不重试，每模型只调 1 次并切到 model_list 下一个模型"""
     client_cls = _make_policy_client(lambda _model: FatalError("请求被服务端拒绝（HTTP 400）"))
@@ -116,7 +115,6 @@ async def test_fatal_no_retry():
     assert "全部模型失败" in (response.error or "")
 
 
-@pytest.mark.asyncio
 async def test_retryable_bounded():
     """Retryable 分类：同一模型上有上限重试，耗尽后才切换"""
     client_cls = _make_policy_client(lambda _model: RetryableError("请求过于频繁（429）"))
@@ -126,7 +124,6 @@ async def test_retryable_bounded():
     assert response.success is False
 
 
-@pytest.mark.asyncio
 async def test_timeout_switches_to_next_model():
     """Timeout 分类：不在本模型重试，直接切下一个模型成功返回"""
     client_cls = _make_policy_client(lambda model: LLMTimeoutError("LLM 请求超时") if model == "fake-1" else None)
@@ -137,7 +134,6 @@ async def test_timeout_switches_to_next_model():
     assert response.content == "fake-2 接管"
 
 
-@pytest.mark.asyncio
 async def test_interrupted_aborts_whole_call():
     """Interrupted 分类：整体中止，异常向调用方传播且不再触碰后续模型"""
     client_cls = _make_policy_client(lambda _model: LLMInterruptedError("调用被中断"))
