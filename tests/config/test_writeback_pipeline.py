@@ -15,7 +15,6 @@ import shutil
 import time
 
 import pytest
-from loguru import logger as _loguru_logger
 from pydantic import ConfigDict
 
 from src.modules.config.errors import ConfigValidationError
@@ -125,25 +124,18 @@ class TestRedundantHardFail:
 
 
 class TestSelfWriteGuard:
-    def test_mark_then_consume_once(self, tmp_path):
+    def test_marks_are_one_shot_and_accept_str_or_path(self, tmp_path):
         target = tmp_path / "agents.toml"
-        mark_self_write(target)
+        mark_self_write(str(target))
         assert consume_self_write(target) is True
         assert consume_self_write(target) is False  # 一次性消费
+        assert consume_self_write(tmp_path / "never_marked.toml") is False
 
     def test_ttl_expiry(self, tmp_path):
         target = tmp_path / "agents.toml"
         mark_self_write(target, ttl_s=0.01)
         time.sleep(0.05)
         assert consume_self_write(target) is False
-
-    def test_unmarked_path_not_consumed(self, tmp_path):
-        assert consume_self_write(tmp_path / "never_marked.toml") is False
-
-    def test_string_path_matches_path_object(self, tmp_path):
-        target = tmp_path / "agents.toml"
-        mark_self_write(str(target))
-        assert consume_self_write(target) is True
 
 
 class TestPipelineMarksSelfWrite:
@@ -177,33 +169,6 @@ def _replace_enabled(config_dir, file_name: str, new: str) -> None:
     path.write_text("".join(lines), encoding="utf-8-sig")
 
 
-class _LoguruCapture:
-    """内存里捕获 loguru 日志（项目用 loguru，caplog 不适用）。"""
-
-    def __init__(self) -> None:
-        self.records: list[dict] = []
-        self._sink_id: int | None = None
-
-    def __enter__(self):
-        def _sink(message) -> None:
-            record = message.record
-            self.records.append(
-                {
-                    "level": record["level"].name,
-                    "message": record["message"],
-                    "module": record["name"],
-                }
-            )
-
-        self._sink_id = _loguru_logger.add(_sink, level="DEBUG")
-        return self
-
-    def __exit__(self, *exc_info) -> None:
-        if self._sink_id is not None:
-            _loguru_logger.remove(self._sink_id)
-            self._sink_id = None
-
-
 class TestValidationHardFail:
     def test_type_violation_raises(self, temp_config_dir):
         """字段类型违约 → 硬错，无 raw dict 降级。"""
@@ -217,31 +182,32 @@ class TestValidationHardFail:
         with pytest.raises(ConfigValidationError):
             load_config_dir(temp_config_dir)
 
-    def test_unregistered_collector_section_hard_fails(self, temp_config_dir):
-        """未注册的采集器段 → 硬错，消息含段名与合法名单。"""
+    @pytest.mark.parametrize(
+        ("file_name", "edit", "needles"),
+        [
+            # 未注册的采集器段 / enabled 名：硬错，消息含名字与合法名单
+            (
+                "collectors.toml",
+                "append:" + chr(10) + "[ghost_collector]" + chr(10) + "enabled = true" + chr(10),
+                ("ghost_collector", "console_input"),
+            ),
+            (
+                "collectors.toml",
+                'enabled = ["console_input", "maicraft_attention", "no_such_collector"]',
+                ("no_such_collector", "console_input"),
+            ),
+        ],
+    )
+    def test_unregistered_collector_entries_hard_fail(self, temp_config_dir, file_name, edit, needles):
         generate_default_configs(temp_config_dir)
-        _append(temp_config_dir, "collectors.toml", "\n[ghost_collector]\nenabled = true\n")
+        if edit.startswith("append:"):
+            _append(temp_config_dir, file_name, edit[len("append:") :])
+        else:
+            _replace_enabled(temp_config_dir, file_name, edit)
 
         with pytest.raises(ConfigValidationError) as exc_info:
             load_config_dir(temp_config_dir)
-        message = str(exc_info.value)
-        assert "ghost_collector" in message
-        assert "console_input" in message
-
-    def test_unregistered_enabled_name_hard_fails(self, temp_config_dir):
-        """enabled 名单出现未注册名 → 硬错，消息含名字与合法名单。"""
-        generate_default_configs(temp_config_dir)
-        _replace_enabled(
-            temp_config_dir,
-            "collectors.toml",
-            'enabled = ["console_input", "maicraft_attention", "no_such_collector"]',
-        )
-
-        with pytest.raises(ConfigValidationError) as exc_info:
-            load_config_dir(temp_config_dir)
-        message = str(exc_info.value)
-        assert "no_such_collector" in message
-        assert "console_input" in message
+        assert all(needle in str(exc_info.value) for needle in needles)
 
 
 class _PseudoSchema(BaseConfig):
