@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List
 
-
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.tasks import TaskChangedPayload
@@ -23,10 +22,7 @@ from src.modules.tools.tasks import (
     resolve_tasks_config,
 )
 
-
-# ---------------------------------------------------------------------------
 # 测试用 provider 型工具（查询/通知适配器可控）
-# ---------------------------------------------------------------------------
 
 
 class FakeReceiptProvider(BaseToolProvider):
@@ -96,9 +92,7 @@ async def _drain() -> None:
         await asyncio.wait(pending, timeout=min(remaining, 0.5))
 
 
-# ---------------------------------------------------------------------------
 # 记录表写入规则：状态变化 / 幂等 / 回退忽略 / 终态移除
-# ---------------------------------------------------------------------------
 
 
 async def test_state_transitions_drive_events_and_idempotent() -> None:
@@ -195,9 +189,7 @@ def test_same_status_snapshot_change_refreshes_stall_clock() -> None:
     assert record.snapshot == {"progress": 2} and record.updated_at_ms >= before
 
 
-# ---------------------------------------------------------------------------
 # 订阅起停随任务（通知适配器）
-# ---------------------------------------------------------------------------
 
 
 async def test_subscription_starts_and_stops_with_task() -> None:
@@ -227,9 +219,7 @@ async def test_wakeup_flag_triggers_step_without_poll() -> None:
         await tracker.stop()
 
 
-# ---------------------------------------------------------------------------
 # [tools.tasks] 节拍读取（本段缺省用默认）
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_tasks_config_new_key_wins() -> None:
@@ -248,9 +238,7 @@ def test_resolve_tasks_config_defaults_when_missing() -> None:
     assert (poll, wait) == (2000, 1_800_000)
 
 
-# ---------------------------------------------------------------------------
 # 事件常量与 payload 形状
-# ---------------------------------------------------------------------------
 
 
 def test_task_changed_constant_registered() -> None:

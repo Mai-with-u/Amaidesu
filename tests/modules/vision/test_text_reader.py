@@ -12,10 +12,7 @@ from src.modules.vision.look_at_screen import (
     LlmVisionTextReader,
 )
 
-
-# ---------------------------------------------------------------------------
 # Fixtures / Helpers
-# ---------------------------------------------------------------------------
 
 
 class StubPromptManager:
@@ -83,9 +80,7 @@ class FakeLlmManager:
         return self._responses.pop(0)
 
 
-# ---------------------------------------------------------------------------
 # 默认超时常量
-# ---------------------------------------------------------------------------
 
 
 async def test_long_question_and_answer_are_preserved() -> None:
@@ -98,9 +93,7 @@ async def test_long_question_and_answer_are_preserved() -> None:
     assert llm.calls[0]["prompt"] == question
 
 
-# ---------------------------------------------------------------------------
 # 成功路径
-# ---------------------------------------------------------------------------
 
 
 async def test_read_returns_trimmed_content_on_success() -> None:
@@ -148,9 +141,7 @@ async def test_read_works_without_prompt_manager() -> None:
     assert llm.calls[0]["system"] is None
 
 
-# ---------------------------------------------------------------------------
 # 降级路径：超时
-# ---------------------------------------------------------------------------
 
 
 async def test_active_read_propagates_parent_cancellation() -> None:
@@ -164,9 +155,7 @@ async def test_active_read_propagates_parent_cancellation() -> None:
         await task
 
 
-# ---------------------------------------------------------------------------
 # 降级路径：success=False
-# ---------------------------------------------------------------------------
 
 
 async def test_read_degrades_to_empty_on_success_false() -> None:
@@ -180,9 +169,7 @@ async def test_read_degrades_to_empty_on_success_false() -> None:
     assert llm.calls  # 真调到 generate_vision
 
 
-# ---------------------------------------------------------------------------
 # 降级路径：异常
-# ---------------------------------------------------------------------------
 
 
 async def test_read_degrades_to_empty_on_exception() -> None:

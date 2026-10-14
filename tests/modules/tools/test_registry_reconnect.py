@@ -93,9 +93,7 @@ class _NonBaseProvider:
         return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
 
 
-# =============================================================================
 # provider_supports_reconnect
-# =============================================================================
 
 
 def test_provider_supports_reconnect_true_for_connectable(registry: ToolRegistry) -> None:
@@ -124,9 +122,7 @@ def test_provider_supports_reconnect_false_for_unknown_tool(registry: ToolRegist
     assert registry.provider_supports_reconnect("ghost") is False
 
 
-# =============================================================================
 # reconnect_provider 四路径
-# =============================================================================
 
 
 async def test_reconnect_provider_unknown_returns_error(registry: ToolRegistry) -> None:

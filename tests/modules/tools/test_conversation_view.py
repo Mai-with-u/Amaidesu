@@ -91,9 +91,7 @@ def test_plain_string_payload_is_sanitized_too() -> None:
     assert to_conversation_view("A" * 2048) == "[图像 1 KB 已省略]"
 
 
-# =============================================================================
 # 视觉调用方取图（extract_image_data_urls）
-# =============================================================================
 
 
 def test_extract_image_data_urls_from_blocks() -> None:

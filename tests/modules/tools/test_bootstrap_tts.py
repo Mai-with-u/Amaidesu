@@ -18,10 +18,7 @@ import pytest
 from src.modules.tools import ToolRegistry
 from src.modules.tools.bootstrap import bind_core_tools
 
-
-# ---------------------------------------------------------------------------
 # bind_core_tools 不再处理 TTS
-# ---------------------------------------------------------------------------
 
 
 class TestBootstrapNoLongerHandlesTTS:
@@ -43,9 +40,7 @@ class TestBootstrapNoLongerHandlesTTS:
         assert tts_names == [], f"bind_core_tools 不应注册 TTS 工具，实际: {tts_names}"
 
 
-# ---------------------------------------------------------------------------
 # bind_core_tools 仍然只处理非 TTS 包（回归契约）
-# ---------------------------------------------------------------------------
 
 
 class TestNonTTSPackagesUnchanged:

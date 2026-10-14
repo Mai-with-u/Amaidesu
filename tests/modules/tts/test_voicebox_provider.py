@@ -25,10 +25,7 @@ from src.modules.events.payloads.utterance import (
 )
 from src.modules.tts.backends.voicebox.provider import VoiceboxProvider
 
-
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 
 @pytest.fixture
@@ -81,9 +78,7 @@ def _setup_session(provider: VoiceboxProvider) -> Any:
     return patch.object(provider, "_session", new=session)
 
 
-# =============================================================================
 # 配置 Schema：output_device_name 已删除
-# =============================================================================
 
 
 class TestConfigSchemaCleanup:
@@ -101,9 +96,7 @@ class TestConfigSchemaCleanup:
         assert not hasattr(provider, "output_device_name")
 
 
-# =============================================================================
 # 工具化退役：引擎不再实现 ToolProvider 协议
-# =============================================================================
 
 
 class TestDeTooled:
@@ -122,12 +115,9 @@ class TestDeTooled:
         assert not hasattr(provider, "list_tools")
 
 
-# =============================================================================
 # 配置缺失 profile_id 时的失败语义
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestConfigRequirements:
     """Voicebox 业务前置条件：profile_id 必须设置"""
 
@@ -145,12 +135,9 @@ class TestConfigRequirements:
                 await provider.handle_speech("x")
 
 
-# =============================================================================
 # utterance 生命周期事件（全量引擎）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestUtteranceEventsFullBuffer:
     """全量引擎：started 含精确 duration_ms，finished 与 started duration 一致"""
 
@@ -291,7 +278,6 @@ class TestUtteranceEventsFullBuffer:
         assert "～" not in synth_text
 
 
-@pytest.mark.asyncio
 class TestUtteranceEventsFailed:
     """失败路径：发布 failed 事件并 raise（编排队列兜底）"""
 
@@ -333,7 +319,6 @@ class TestUtteranceEventsFailed:
         assert "HTTP 502" in failed.error_message
 
 
-@pytest.mark.asyncio
 class TestUtteranceEventsNoBus:
     """event_bus=None：不抛，按"手动/直调场景"语义静默跳过"""
 

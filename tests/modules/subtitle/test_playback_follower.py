@@ -12,11 +12,13 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock
 
-import pytest
-
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.utterance import UtteranceFailedPayload, UtteranceFinishedPayload, UtteranceStartedPayload
+from src.modules.events.payloads.utterance import (
+    UtteranceFailedPayload,
+    UtteranceFinishedPayload,
+    UtteranceStartedPayload,
+)
 from src.modules.subtitle.playback_follower import bind_playback_subtitle
 
 
@@ -32,42 +34,49 @@ async def _emit(bus: EventBus, event_name: str, payload) -> None:
     await asyncio.sleep(0.05)
 
 
-@pytest.mark.asyncio
 async def test_started_shows_text():
     bus, svc = EventBus(), _service()
     handlers = bind_playback_subtitle(bus, svc, MagicMockLogger())
     assert handlers is not None
 
-    await _emit(bus, CoreEvents.TTS_UTTERANCE_STARTED, UtteranceStartedPayload(
-        utterance_id="utt_p1", speech_text="这句正在播", engine="edge", duration_ms=100))
+    await _emit(
+        bus,
+        CoreEvents.TTS_UTTERANCE_STARTED,
+        UtteranceStartedPayload(utterance_id="utt_p1", speech_text="这句正在播", engine="edge", duration_ms=100),
+    )
 
     svc.show.assert_awaited_once_with("这句正在播", "utt_p1")
 
 
-@pytest.mark.asyncio
 async def test_failed_still_shows_text():
     """合成失败该句照常显示（逐句降级，无声音也要给文本）。"""
     bus, svc = EventBus(), _service()
     bind_playback_subtitle(bus, svc, MagicMockLogger())
 
-    await _emit(bus, CoreEvents.TTS_UTTERANCE_FAILED, UtteranceFailedPayload(
-        utterance_id="utt_p2", speech_text="这句失败了但字幕要显示", engine="edge", error_message="boom"))
+    await _emit(
+        bus,
+        CoreEvents.TTS_UTTERANCE_FAILED,
+        UtteranceFailedPayload(
+            utterance_id="utt_p2", speech_text="这句失败了但字幕要显示", engine="edge", error_message="boom"
+        ),
+    )
 
     svc.show.assert_awaited_once_with("这句失败了但字幕要显示", "utt_p2")
 
 
-@pytest.mark.asyncio
 async def test_finished_clears():
     bus, svc = EventBus(), _service()
     bind_playback_subtitle(bus, svc, MagicMockLogger())
 
-    await _emit(bus, CoreEvents.TTS_UTTERANCE_FINISHED, UtteranceFinishedPayload(
-        utterance_id="utt_p3", engine="edge", duration_ms=100))
+    await _emit(
+        bus,
+        CoreEvents.TTS_UTTERANCE_FINISHED,
+        UtteranceFinishedPayload(utterance_id="utt_p3", engine="edge", duration_ms=100),
+    )
 
     svc.clear.assert_awaited_once()
 
 
-@pytest.mark.asyncio
 async def test_show_exception_is_fail_soft():
     """字幕服务异常不影响总线分发（装饰性路径）。"""
     bus, svc = EventBus(), _service()
@@ -80,8 +89,11 @@ async def test_show_exception_is_fail_soft():
         seen.append(payload.utterance_id)
 
     bus.on(CoreEvents.TTS_UTTERANCE_STARTED, _follower, model_class=UtteranceStartedPayload)
-    await _emit(bus, CoreEvents.TTS_UTTERANCE_STARTED, UtteranceStartedPayload(
-        utterance_id="utt_p4", speech_text="x", engine="edge", duration_ms=1))
+    await _emit(
+        bus,
+        CoreEvents.TTS_UTTERANCE_STARTED,
+        UtteranceStartedPayload(utterance_id="utt_p4", speech_text="x", engine="edge", duration_ms=1),
+    )
     assert seen == ["utt_p4"]
 
 

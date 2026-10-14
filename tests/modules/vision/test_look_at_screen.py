@@ -5,26 +5,22 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import MagicMock
 
-
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.vision.look_at_screen import (
     LOOK_AT_SCREEN_SPEC,
-    LlmVisionTextReader,
-    LookAtScreenProvider,
     PROVIDER_NAME,
     SCREEN_VLM_PROMPT_KEY,
     SCREEN_VLM_SYSTEM_KEY,
     TOOL_NAME,
     FakeScreenCapture,
     FakeTextReader,
+    LlmVisionTextReader,
+    LookAtScreenProvider,
 )
 from src.modules.vision.mss_capture import MssScreenCapture
 
-
-# ===========================================================================
 # 工具规格断言
-# ===========================================================================
 
 
 class TestLookAtScreenSpec:
@@ -92,9 +88,7 @@ class TestLookAtScreenSpec:
         assert LOOK_AT_SCREEN_SPEC.provider == PROVIDER_NAME
 
 
-# ===========================================================================
 # ConfigSchema：新字段
-# ===========================================================================
 
 
 class TestConfigSchema:
@@ -166,9 +160,7 @@ class TestConfigSchema:
         assert capture_threads[0] != loop_thread_ident
 
 
-# ===========================================================================
 # 零参调用兼容锚点（text_adv）
-# ===========================================================================
 
 
 class TestZeroArgumentCompatibility:
@@ -212,9 +204,7 @@ class TestZeroArgumentCompatibility:
         assert capture.calls[0]["max_width"] == 640
 
 
-# ===========================================================================
 # 入参透传
-# ===========================================================================
 
 
 class TestArgumentPassthrough:
@@ -350,9 +340,7 @@ class TestArgumentPassthrough:
         assert capture.calls[0]["region"] == (5, 5, 50, 50)
 
 
-# ===========================================================================
 # 失败降级
-# ===========================================================================
 
 
 class TestGracefulDegradation:
@@ -449,9 +437,7 @@ class TestGracefulDegradation:
         assert "image" in res.structured_content
 
 
-# ===========================================================================
 # 块组装与图片生命周期
-# ===========================================================================
 
 
 class TestBlocksAndImageLifecycle:
@@ -535,9 +521,7 @@ class TestBlocksAndImageLifecycle:
         assert decoded == png_bytes
 
 
-# ===========================================================================
 # 工具名稳定（compat 锚点）
-# ===========================================================================
 
 
 class TestProviderRegistrationContract:
@@ -565,9 +549,7 @@ class TestProviderRegistrationContract:
         assert getattr(provider, "visible_to", None) in (None, ["*"])
 
 
-# ===========================================================================
 # Module-level 常量与导出
-# ===========================================================================
 
 
 class TestModuleExports:
@@ -601,9 +583,7 @@ class TestModuleExports:
         assert params[3] == "max_width"
 
 
-# ===========================================================================
 # VLM 按调用方能力按需执行（ADR-037）
-# ===========================================================================
 
 
 class TestCallerCapabilityGatedVlm:

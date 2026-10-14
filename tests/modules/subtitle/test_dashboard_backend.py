@@ -14,8 +14,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.modules.subtitle import DashboardBackend, SubtitleBackend
 
 
@@ -37,9 +35,7 @@ def _make_widget(
     return widget
 
 
-# ---------------------------------------------------------------------------
 # 协议契约
-# ---------------------------------------------------------------------------
 
 
 class TestProtocolConformance:
@@ -49,13 +45,10 @@ class TestProtocolConformance:
         assert isinstance(backend, SubtitleBackend)
 
 
-# ---------------------------------------------------------------------------
 # show 转发
-# ---------------------------------------------------------------------------
 
 
 class TestShowForwards:
-    @pytest.mark.asyncio
     async def test_show_calls_widget_show_subtitle(self):
         """``show`` 转发到 ``widget.show_subtitle``，传入 text。"""
         widget = _make_widget()
@@ -65,7 +58,6 @@ class TestShowForwards:
 
         widget.show_subtitle.assert_awaited_once_with("hello world")
 
-    @pytest.mark.asyncio
     async def test_show_ignores_utterance_id(self):
         """``show`` 不把 ``utterance_id`` 透传给 widget（widget 暂无该键
         的展示位——Dashboard 字幕展示位未消费 utterance_id）。"""
@@ -78,13 +70,10 @@ class TestShowForwards:
         widget.show_subtitle.assert_awaited_once_with("hello")
 
 
-# ---------------------------------------------------------------------------
 # clear 转发
-# ---------------------------------------------------------------------------
 
 
 class TestClearForwards:
-    @pytest.mark.asyncio
     async def test_clear_calls_widget_clear_subtitle(self):
         """``clear`` 转发到 ``widget.clear_subtitle``。"""
         widget = _make_widget()
@@ -95,9 +84,7 @@ class TestClearForwards:
         widget.clear_subtitle.assert_awaited_once_with()
 
 
-# ---------------------------------------------------------------------------
 # enabled 转发
-# ---------------------------------------------------------------------------
 
 
 class TestEnabledForwarding:

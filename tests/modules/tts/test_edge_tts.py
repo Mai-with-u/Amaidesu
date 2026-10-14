@@ -25,10 +25,7 @@ from src.modules.events.payloads.utterance import (
 )
 from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 
-
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 
 @pytest.fixture
@@ -75,9 +72,7 @@ async def _prepare_started_provider(
     return audio_manager
 
 
-# =============================================================================
 # 配置 Schema：output_device_name 已删除
-# =============================================================================
 
 
 class TestConfigSchemaCleanup:
@@ -93,9 +88,7 @@ class TestConfigSchemaCleanup:
         assert not hasattr(provider, "output_device_name")
 
 
-# =============================================================================
 # 工具化退役：引擎不再实现 ToolProvider 协议
-# =============================================================================
 
 
 class TestDeTooled:
@@ -110,12 +103,9 @@ class TestDeTooled:
         assert not hasattr(provider, "list_tools")
 
 
-# =============================================================================
 # handle_speech：自治 ensure_setup + 事件发布
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestHandleSpeechBasic:
     """handle_speech 入口：自治 ensure_setup / 文本空 / 事件"""
 
@@ -148,7 +138,6 @@ class TestHandleSpeechBasic:
         assert provider._has_started is True
 
 
-@pytest.mark.asyncio
 class TestUtteranceEventsFullBuffer:
     """全量引擎：started 含精确 duration_ms，finished 与 started duration 一致"""
 
@@ -250,7 +239,6 @@ class TestUtteranceEventsFullBuffer:
         assert "～" not in synth_text
 
 
-@pytest.mark.asyncio
 class TestUtteranceEventsFailed:
     """失败路径：发布 failed 事件并 raise（编排队列兜底）"""
 
@@ -287,7 +275,6 @@ class TestUtteranceEventsFailed:
         assert "boom" in failed.error_message
 
 
-@pytest.mark.asyncio
 class TestUtteranceEventsNoBus:
     """event_bus=None：不抛，按"手动/直调场景"语义静默跳过"""
 

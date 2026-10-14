@@ -28,10 +28,7 @@ from src.modules.tools import (
 from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
 
-
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 
 @pytest.fixture
@@ -39,9 +36,7 @@ def registry() -> ToolRegistry:
     return ToolRegistry()
 
 
-# =============================================================================
 # 核心契约：未知工具不抛异常，返回失败 result
-# =============================================================================
 
 
 async def test_invoke_unknown_tool_returns_failure_result_not_raises(
@@ -66,9 +61,7 @@ async def test_invoke_unknown_tool_chain_does_not_propagate(registry: ToolRegist
         assert r.success is False
 
 
-# =============================================================================
 # 已知工具的正常路径
-# =============================================================================
 
 
 async def test_invoke_known_tool_returns_correct_result(registry: ToolRegistry) -> None:
@@ -108,9 +101,7 @@ async def test_register_dedup_keeps_first_registration(registry: ToolRegistry) -
     assert res.content == "A", "后注册的实现不应替换先注册的"
 
 
-# =============================================================================
 # 实现异常 → 失败 result，不抛
-# =============================================================================
 
 
 async def test_invoke_implementation_exception_isolation(registry: ToolRegistry) -> None:
@@ -127,9 +118,7 @@ async def test_invoke_implementation_exception_isolation(registry: ToolRegistry)
     assert "boom!" in res.error_message
 
 
-# =============================================================================
 # Provider 整体注册
-# =============================================================================
 
 
 class _SampleProvider(ToolProvider):
@@ -224,9 +213,7 @@ async def test_register_provider_is_idempotent(registry: ToolRegistry) -> None:
     assert registry.register_provider(provider) == 0, "同一 Provider 重复注册返 0"
 
 
-# =============================================================================
 # Async tool：result_event 默认 tool.result.<name>
-# =============================================================================
 
 
 async def test_async_tool_default_result_event(registry: ToolRegistry) -> None:
@@ -247,9 +234,7 @@ async def test_async_tool_custom_result_event(registry: ToolRegistry) -> None:
     assert spec.resolve_result_event() == "tool.result.set_goal_feedback"
 
 
-# =============================================================================
 # to_llm_definitions 转换
-# =============================================================================
 
 
 async def test_to_llm_definitions_shape(registry: ToolRegistry) -> None:
@@ -274,9 +259,7 @@ async def test_to_llm_definitions_shape(registry: ToolRegistry) -> None:
     assert "parameters" in defs[0]
 
 
-# =============================================================================
 # 简单工具路径：make_provider_from_specs
-# =============================================================================
 
 
 def _build_hello_provider() -> ToolProvider:
@@ -328,9 +311,7 @@ def test_make_provider_from_specs_no_side_effects_on_default_registry():
         set_default_registry(saved)
 
 
-# =============================================================================
 # 通用：has / get / __len__
-# =============================================================================
 
 
 def test_registry_collections_protocol(registry: ToolRegistry) -> None:
@@ -346,9 +327,7 @@ def test_registry_collections_protocol(registry: ToolRegistry) -> None:
     assert spec.name == "x"
 
 
-# =============================================================================
 # tool.result.<name> 结果事件广播
-# =============================================================================
 
 
 async def test_invoke_emits_tool_result_event_when_event_bus_attached() -> None:
@@ -480,13 +459,11 @@ async def test_invoke_without_event_bus_skips_emit(registry: ToolRegistry) -> No
     assert res.success is True  # 不抛即通过
 
 
-# =============================================================================
 # 可见名单（visible_to，fail-closed）
 #
 # - 注册处逐工具声明（值 = Agent 注册名列表或 ["*"]；未声明默认 DEFAULT_VISIBLE_TO 仅主播）
 # - for_agent 按名单计算工具列表；不传 for_agent = 运营全集
 # - invoke() 不查名单——受众治理只管可见性（编名直调是已知边界）
-# =============================================================================
 
 
 def test_unregistered_visible_to_defaults_to_streamer(registry: ToolRegistry) -> None:
@@ -636,9 +613,7 @@ async def test_invoke_not_in_visible_list_is_not_blocked(registry: ToolRegistry)
     assert res.tool_name == "game_p_a"
 
 
-# =============================================================================
 # 命名模型：full_name 派生与停用列表警告
-# =============================================================================
 
 
 def test_full_name_derivation() -> None:

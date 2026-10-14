@@ -10,7 +10,6 @@ BaseToolProvider / ToolProvider 连接动作契约单测。
 
 from __future__ import annotations
 
-
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
 
@@ -59,9 +58,7 @@ class _ConnectableProvider(BaseToolProvider):
         return True
 
 
-# =============================================================================
 # 默认实现
-# =============================================================================
 
 
 async def test_base_provider_connect_default_returns_false() -> None:
@@ -83,9 +80,7 @@ async def test_base_provider_reconnect_default_composes_disconnect_and_connect()
     assert await p.reconnect() is False
 
 
-# =============================================================================
 # supports_reconnect 单点判定
-# =============================================================================
 
 
 def test_base_provider_supports_reconnect_default_is_false() -> None:
@@ -119,9 +114,7 @@ def test_spec_impl_provider_does_not_support_reconnect() -> None:
     assert isinstance(p, BaseToolProvider)
 
 
-# =============================================================================
 # 覆写 connect 即触发重连默认组合
-# =============================================================================
 
 
 async def test_connectable_reconnect_uses_default_composition() -> None:

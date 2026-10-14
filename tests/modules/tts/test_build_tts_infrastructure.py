@@ -20,10 +20,7 @@ from loguru import logger as _loguru_logger
 
 from src.modules.tts import TTSProvider, build_tts_infrastructure
 
-
-# ---------------------------------------------------------------------------
 # loguru 日志捕获
-# ---------------------------------------------------------------------------
 
 
 class _LoguruCapture:
@@ -51,9 +48,7 @@ def loguru_capture():
         yield cap
 
 
-# ---------------------------------------------------------------------------
 # enabled 门控
-# ---------------------------------------------------------------------------
 
 
 class TestEnabledGate:
@@ -81,9 +76,7 @@ class TestEnabledGate:
         assert build_tts_infrastructure([1, 2, 3]) is None  # type: ignore[arg-type]
 
 
-# ---------------------------------------------------------------------------
 # 已知 provider 装配
-# ---------------------------------------------------------------------------
 
 
 class TestKnownProviders:
@@ -154,13 +147,9 @@ class TestKnownProviders:
 
     def test_omni_tts_without_llm_service_fails_soft(self, loguru_capture):
         """omni_tts 缺 llm_service → 工厂抛错 fail-soft 返回 None + ERROR 日志。"""
-        result = build_tts_infrastructure(
-            {"enabled": True, "provider": "omni_tts", "omni_tts": {"voice": "Chelsie"}}
-        )
+        result = build_tts_infrastructure({"enabled": True, "provider": "omni_tts", "omni_tts": {"voice": "Chelsie"}})
         assert result is None
-        error_records = [
-            r for r in loguru_capture.records if r["level"] == "ERROR" and "构造" in r["message"]
-        ]
+        error_records = [r for r in loguru_capture.records if r["level"] == "ERROR" and "构造" in r["message"]]
         assert error_records
 
     def test_event_bus_passed_through_to_engine(self):
@@ -196,9 +185,7 @@ class TestKnownProviders:
         assert isinstance(result, EdgeTTSProvider)
 
 
-# ---------------------------------------------------------------------------
 # 未知 provider：ERROR + 回退
-# ---------------------------------------------------------------------------
 
 
 class TestUnknownProviderFallback:
@@ -215,9 +202,7 @@ class TestUnknownProviderFallback:
         assert error_records, "未知 provider 应记录 ERROR 日志"
 
 
-# ---------------------------------------------------------------------------
 # 工厂构造异常：fail-soft
-# ---------------------------------------------------------------------------
 
 
 class TestConstructionFailure:
@@ -245,9 +230,7 @@ class TestConstructionFailure:
         assert error_records, "工厂异常应记录 ERROR 日志"
 
 
-# ---------------------------------------------------------------------------
 # 已知 provider 集合完整性
-# ---------------------------------------------------------------------------
 
 
 def test_known_providers_set_complete():

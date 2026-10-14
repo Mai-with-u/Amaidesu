@@ -32,10 +32,7 @@ from src.modules.events.payloads.utterance import (
 from src.modules.llm.payload import Response
 from src.modules.tts.backends.omni.provider import OmniTTSProvider
 
-
-# =============================================================================
 # 测试替身与夹具
-# =============================================================================
 
 
 def _make_wav_base64(sample_count: int = 2400) -> str:
@@ -142,9 +139,7 @@ async def _prepare_started_provider(provider: OmniTTSProvider, mgr: MagicMock | 
         await provider.setup()
 
 
-# =============================================================================
 # 构造与配置校验
-# =============================================================================
 
 
 class TestConstruction:
@@ -164,12 +159,9 @@ class TestConstruction:
             await provider.setup()
 
 
-# =============================================================================
 # 合成成功路径
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestSynthesisSuccess:
     async def test_llm_invoked_with_configured_params(self, event_bus: EventBus):
         """LLM 窄接口按配置的 profile/voice/format/style_prompt 调用"""
@@ -228,12 +220,9 @@ class TestSynthesisSuccess:
         assert stats["voice"] == "Chelsie"
 
 
-# =============================================================================
 # utterance 生命周期事件（全量引擎：duration_ms 精确）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestUtteranceEvents:
     async def test_started_then_finished_with_duration(self, event_bus_async: EventBus):
         provider, _ = _make_provider(event_bus_async)
@@ -311,12 +300,9 @@ class TestUtteranceEvents:
         await provider.handle_speech("hi", utterance_id="utt_no_bus")
 
 
-# =============================================================================
 # 失败与取消路径
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestFailurePaths:
     async def test_llm_failure_emits_failed_and_raises(self, event_bus_async: EventBus):
         provider, _ = _make_provider(event_bus_async, llm=_FakeLLM(_audio_response(success=False, error="boom")))
@@ -382,12 +368,9 @@ class TestFailurePaths:
         mgr.stop_audio.assert_called()
 
 
-# =============================================================================
 # 模型改写偏差可见化与渲染跳过
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestTranscriptGuardAndSkips:
     async def test_rewritten_transcript_warns_but_plays(self, event_bus: EventBus, loguru_capture):
         """transcript 与输入不一致：告警暴露，不阻断播放"""

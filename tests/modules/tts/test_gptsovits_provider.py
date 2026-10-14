@@ -34,10 +34,7 @@ from src.modules.tts.backends.gptsovits.provider import (
     GPTSoVITSProvider,
 )
 
-
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 # api_v2 每请求必填参考音频：走合成路径的测试统一用已配置参考音频的引擎
 _CONFIGURED_CONFIG = {
@@ -114,9 +111,7 @@ async def _prepare_started_provider(
         await asyncio.gather(provider._warmup_task, return_exceptions=True)
 
 
-# =============================================================================
 # 配置 Schema：output_device_name 已删除
-# =============================================================================
 
 
 class TestConfigSchemaCleanup:
@@ -138,9 +133,7 @@ class TestConfigSchemaCleanup:
             GPTSoVITSProvider.ConfigSchema.from_dict({"type": "gptsovits", "media_type": "mp3"})
 
 
-# =============================================================================
 # 工具化退役：引擎不再实现 ToolProvider 协议
-# =============================================================================
 
 
 class TestDeTooled:
@@ -153,17 +146,12 @@ class TestDeTooled:
         assert not hasattr(provider, "list_tools")
 
 
-# =============================================================================
 # 文本清洗白名单（保留旧行为）
-# =============================================================================
 
 
-# =============================================================================
 # handle_speech：自治 ensure_setup
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestHandleSpeechBasic:
     async def test_handle_speech_triggers_lazy_setup(self, event_bus: EventBus):
         """handle_speech 首次调用前未 setup：自动 ensure_setup"""
@@ -182,12 +170,9 @@ class TestHandleSpeechBasic:
         assert provider.render_count == 1
 
 
-# =============================================================================
 # utterance 生命周期事件（流式引擎）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestUtteranceEventsStreaming:
     """流式引擎：started 必发，duration_ms=None；finished 在 stop_stream 后发"""
 
@@ -297,7 +282,6 @@ class TestUtteranceEventsStreaming:
         assert "～" not in sent_text
 
 
-@pytest.mark.asyncio
 class TestUtteranceEventsFailed:
     """失败路径：发布 failed 事件并 raise（编排队列兜底）"""
 
@@ -361,7 +345,6 @@ class TestUtteranceEventsFailed:
         assert "HTTPConnectionPool" not in failed.error_message
 
 
-@pytest.mark.asyncio
 class TestUtteranceEventsNoBus:
     """event_bus=None：不抛，按"手动/直调场景"语义静默跳过"""
 
@@ -376,12 +359,9 @@ class TestUtteranceEventsNoBus:
         await provider.handle_speech("hi", utterance_id="utt_no_bus")
 
 
-# =============================================================================
 # 音频流顺序：start_stream / write_chunk / stop_stream
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestStreamingPlaybackOrder:
     """确保 start_stream → 多次 write_chunk → stop_stream 顺序"""
 
@@ -424,12 +404,9 @@ class TestStreamingPlaybackOrder:
         assert len(call_log) == 1 + len(chunks) + 1  # start + N writes + stop
 
 
-# =============================================================================
 # api_v2 迁移：参考音频必填 + 后端标识
-# =============================================================================
 
 
-@pytest.mark.asyncio
 class TestStartupWarmup:
     """启动预热：服务端冷启动惩罚挪出直播首句；失败不影响装配"""
 
@@ -454,7 +431,6 @@ class TestStartupWarmup:
         assert provider._warmup_task.done()
 
 
-@pytest.mark.asyncio
 class TestSynthesizeBytes:
     """synthesize_bytes：批量回放/巡检用的整段合成（不播放、不发事件）"""
 
@@ -496,7 +472,6 @@ class TestSynthesizeBytes:
             provider.synthesize_bytes("你好")
 
 
-@pytest.mark.asyncio
 class TestApiV2Migration:
     """api_v2 每请求必填参考音频；get_stats 标记后端类型"""
 

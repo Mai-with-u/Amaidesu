@@ -35,10 +35,7 @@ from src.modules.tools import (
 )
 from src.modules.tools.provider import BaseToolProvider
 
-
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 
 @pytest.fixture
@@ -78,9 +75,7 @@ async def _flush() -> None:
     await asyncio.sleep(0.02)
 
 
-# =============================================================================
 # Registry：熔断阈值 + 摘除行为
-# =============================================================================
 
 
 async def test_consecutive_failures_trip_at_threshold() -> None:
@@ -180,11 +175,15 @@ async def test_success_resets_consecutive_counter() -> None:
 async def test_business_rejection_breaks_execution_failure_streak() -> None:
     """业务拒绝确认服务可应答，前后的传输故障不能拼成一次连续故障。"""
     registry = ToolRegistry(failure_threshold=2)
-    replies = iter([
-        ToolExecutionResult(tool_name="p_read", success=False, error_message="connection reset"),
-        ToolExecutionResult(tool_name="p_read", success=False, error_message="invalid request", failure_kind="business"),
-        ToolExecutionResult(tool_name="p_read", success=False, error_message="connection reset"),
-    ])
+    replies = iter(
+        [
+            ToolExecutionResult(tool_name="p_read", success=False, error_message="connection reset"),
+            ToolExecutionResult(
+                tool_name="p_read", success=False, error_message="invalid request", failure_kind="business"
+            ),
+            ToolExecutionResult(tool_name="p_read", success=False, error_message="connection reset"),
+        ]
+    )
 
     async def respond(invocation: ToolInvocation) -> ToolExecutionResult:
         return next(replies)
@@ -234,9 +233,7 @@ async def test_threshold_zero_disables_tripping() -> None:
     assert snap["p_never"]["failure_count"] == 10
 
 
-# =============================================================================
 # Registry.probe_tool —— 新版探活入口（替换旧的反射式 provider_health_check）
-# =============================================================================
 
 
 async def test_probe_tool_returns_true_for_default_base_provider() -> None:
@@ -398,9 +395,7 @@ async def test_register_non_base_provider_logs_warning() -> None:
     assert await registry.probe_tool("Legacy_ltool") is True
 
 
-# =============================================================================
 # ToolHealthMonitor：probe_cycle
-# =============================================================================
 
 
 class _ProbeProvider(BaseToolProvider):
@@ -516,9 +511,7 @@ async def test_probe_cycle_probe_exception_logs_and_stays_tripped() -> None:
     assert registry.is_tripped("probe_ptool")
 
 
-# =============================================================================
 # 工具健康快照：Dashboard 行为契约
-# =============================================================================
 
 
 async def test_health_snapshot_only_includes_tripped_or_failed_tools() -> None:

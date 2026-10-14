@@ -54,15 +54,16 @@ async def _seed_viewer(
     """造一行观众统计（发言/送礼计数与最后活跃时间）。"""
     ts = last_active_ms if last_active_ms is not None else now_ms()
     for _ in range(messages):
-        await store.viewers.upsert_viewer_message(platform=PLATFORM, user_id=user_id, user_name=user_name, timestamp_ms=ts)
+        await store.viewers.upsert_viewer_message(
+            platform=PLATFORM, user_id=user_id, user_name=user_name, timestamp_ms=ts
+        )
     for _ in range(gifts):
         await store.viewers.upsert_viewer_gift(platform=PLATFORM, user_id=user_id, user_name=user_name, timestamp_ms=ts)
 
 
-# ===== list_viewer_stats：搜索与分页 =====
+# list_viewer_stats：搜索与分页
 
 
-@pytest.mark.asyncio
 async def test_list_search_by_name_and_id(store: SQLiteDatabase) -> None:
     await _seed_viewer(store, "u1", "小明")
     await _seed_viewer(store, "u2", "小红")
@@ -79,7 +80,6 @@ async def test_list_search_by_name_and_id(store: SQLiteDatabase) -> None:
     assert rows == []
 
 
-@pytest.mark.asyncio
 async def test_list_search_like_metachars_literal(store: SQLiteDatabase) -> None:
     """搜索词中的 % 与 _ 按字面匹配，不当通配符解释。"""
     await _seed_viewer(store, "u1", "小明")
@@ -90,7 +90,6 @@ async def test_list_search_like_metachars_literal(store: SQLiteDatabase) -> None
     assert [str(r["user_id"]) for r in rows] == ["u_"]
 
 
-@pytest.mark.asyncio
 async def test_list_pagination_total_decoupled_from_limit(store: SQLiteDatabase) -> None:
     for i in range(5):
         await _seed_viewer(store, f"u{i}", f"观众{i}")
@@ -106,7 +105,6 @@ async def test_list_pagination_total_decoupled_from_limit(store: SQLiteDatabase)
     assert total == 5
 
 
-@pytest.mark.asyncio
 async def test_list_search_combines_with_pagination(store: SQLiteDatabase) -> None:
     for i in range(4):
         await _seed_viewer(store, f"vip{i}", f"贵宾{i}")
@@ -116,10 +114,9 @@ async def test_list_search_combines_with_pagination(store: SQLiteDatabase) -> No
     assert len(rows) == 2
 
 
-# ===== viewer_insight_buckets：活跃分桶 =====
+# viewer_insight_buckets：活跃分桶
 
 
-@pytest.mark.asyncio
 async def test_insight_buckets_mutually_exclusive(store: SQLiteDatabase) -> None:
     now = now_ms()
     # 造四个观众分别落在四个桶（以 now 为锚错开数量级，避开本地时区零点临界）
@@ -141,7 +138,6 @@ async def test_insight_buckets_mutually_exclusive(store: SQLiteDatabase) -> None
     assert buckets["never_replied"] == 4
 
 
-@pytest.mark.asyncio
 async def test_insight_buckets_empty_table(store: SQLiteDatabase) -> None:
     buckets = await store.viewers.viewer_insight_buckets()
     assert buckets == {
@@ -155,7 +151,7 @@ async def test_insight_buckets_empty_table(store: SQLiteDatabase) -> None:
     }
 
 
-# ===== list_user_dialogue：交织与游标 =====
+# list_user_dialogue：交织与游标
 
 
 async def _seed_dialogue(store: SQLiteDatabase, session_id: int) -> dict[str, int]:
@@ -184,7 +180,6 @@ async def _seed_dialogue(store: SQLiteDatabase, session_id: int) -> dict[str, in
     return ts
 
 
-@pytest.mark.asyncio
 async def test_dialogue_interleaves_reply_in_order(store: SQLiteDatabase) -> None:
     ts = await _seed_dialogue(store, session_id=1)
     rows = await store.chat.list_user_dialogue(user_id="u_d", limit=10)
@@ -194,7 +189,6 @@ async def test_dialogue_interleaves_reply_in_order(store: SQLiteDatabase) -> Non
     assert [s[1] for s in seq] == [ts["m1"], ts["m2"], ts["m2"] + 500, ts["m3"]]
 
 
-@pytest.mark.asyncio
 async def test_dialogue_cursor_batches(store: SQLiteDatabase) -> None:
     ts = await _seed_dialogue(store, session_id=1)
     # 首批取最近 2 条观众消息（m2/m3），reply(m2) 交织进来
@@ -206,7 +200,6 @@ async def test_dialogue_cursor_batches(store: SQLiteDatabase) -> None:
     assert [str(r["message_id"]) for r in batch2] == ["m1"]
 
 
-@pytest.mark.asyncio
 async def test_dialogue_other_users_replies_excluded(store: SQLiteDatabase) -> None:
     """只交织对本观众消息的回复——回复他人消息的 assistant 行不混入。"""
     base = 1_700_000_000_000
@@ -243,10 +236,9 @@ async def test_dialogue_other_users_replies_excluded(store: SQLiteDatabase) -> N
     assert str(rows[0]["message_id"]) == "mine"
 
 
-# ===== get_user_activity_bounds =====
+# get_user_activity_bounds
 
 
-@pytest.mark.asyncio
 async def test_activity_bounds_covers_three_tables(store: SQLiteDatabase) -> None:
     base = 1_700_000_000_000
     await store.chat.insert_live_chat(
@@ -258,34 +250,69 @@ async def test_activity_bounds_covers_three_tables(store: SQLiteDatabase) -> Non
         message_type="danmaku",
     )
     await store.chat.insert_gift(
-        live_session_id=1, timestamp_ms=base, platform=PLATFORM, user_id="u_b", user_name="礼官", gift_name="小心心", quantity=1, total_price=1000
+        live_session_id=1,
+        timestamp_ms=base,
+        platform=PLATFORM,
+        user_id="u_b",
+        user_name="礼官",
+        gift_name="小心心",
+        quantity=1,
+        total_price=1000,
     )
     await store.chat.insert_super_chat(
-        live_session_id=1, timestamp_ms=base + 9_000, platform=PLATFORM, user_id="u_b", user_name="礼官", total_price=30_000, currency="bilibili_gold_coin", message="SC"
+        live_session_id=1,
+        timestamp_ms=base + 9_000,
+        platform=PLATFORM,
+        user_id="u_b",
+        user_name="礼官",
+        total_price=30_000,
+        currency="bilibili_gold_coin",
+        message="SC",
     )
     bounds = await store.chat.get_user_activity_bounds(user_id="u_b")
     assert bounds == (base, base + 9_000)
 
 
-@pytest.mark.asyncio
 async def test_activity_bounds_no_details_returns_none(store: SQLiteDatabase) -> None:
     assert await store.chat.get_user_activity_bounds(user_id="ghost") is None
 
 
-# ===== 贡献：明细与汇总 =====
+# 贡献：明细与汇总
 
 
-@pytest.mark.asyncio
 async def test_user_contributions_detail_and_summary(store: SQLiteDatabase) -> None:
     base = 1_700_000_000_000
     await store.chat.insert_gift(
-        live_session_id=1, timestamp_ms=base, platform=PLATFORM, user_id="u_c", user_name="贡献者", gift_name="小心心", quantity=2, total_price=2000, currency="bilibili_gold_coin"
+        live_session_id=1,
+        timestamp_ms=base,
+        platform=PLATFORM,
+        user_id="u_c",
+        user_name="贡献者",
+        gift_name="小心心",
+        quantity=2,
+        total_price=2000,
+        currency="bilibili_gold_coin",
     )
     await store.chat.insert_gift(
-        live_session_id=1, timestamp_ms=base + 1_000, platform=PLATFORM, user_id="u_c", user_name="贡献者", gift_name="辣条", quantity=3, total_price=300, currency="bilibili_gold_coin"
+        live_session_id=1,
+        timestamp_ms=base + 1_000,
+        platform=PLATFORM,
+        user_id="u_c",
+        user_name="贡献者",
+        gift_name="辣条",
+        quantity=3,
+        total_price=300,
+        currency="bilibili_gold_coin",
     )
     await store.chat.insert_super_chat(
-        live_session_id=2, timestamp_ms=base + 2_000, platform=PLATFORM, user_id="u_c", user_name="贡献者", total_price=50_000, currency="bilibili_gold_coin", message="加油"
+        live_session_id=2,
+        timestamp_ms=base + 2_000,
+        platform=PLATFORM,
+        user_id="u_c",
+        user_name="贡献者",
+        total_price=50_000,
+        currency="bilibili_gold_coin",
+        message="加油",
     )
     gifts = await store.chat.list_user_gifts(user_id="u_c")
     assert [int(r["quantity"]) for r in gifts] == [3, 2]  # 时间倒序
@@ -297,17 +324,15 @@ async def test_user_contributions_detail_and_summary(store: SQLiteDatabase) -> N
     assert summary["sc_total_count"] == 1
 
 
-@pytest.mark.asyncio
 async def test_user_contributions_empty(store: SQLiteDatabase) -> None:
     summary = await store.chat.summarize_user_contributions(user_id="nobody")
     assert summary == {"gift_total_count": 0, "gift_total_amount": 0, "sc_total_amount": 0, "sc_total_count": 0}
     assert await store.chat.list_user_gifts(user_id="nobody") == []
 
 
-# ===== list_user_sessions =====
+# list_user_sessions
 
 
-@pytest.mark.asyncio
 async def test_user_sessions_grouped_and_titled(store: SQLiteDatabase) -> None:
     base = 1_700_000_000_000
     # 两场次各发言一次；场次 202 有真实标题（join 取回），101 不存在（LEFT JOIN 容忍 NULL）
@@ -339,10 +364,9 @@ async def test_user_sessions_grouped_and_titled(store: SQLiteDatabase) -> None:
     assert rows[1]["title"] is None
 
 
-# ===== daily_danmaku_counts =====
+# daily_danmaku_counts
 
 
-@pytest.mark.asyncio
 async def test_daily_danmaku_counts_only_danmaku_type(store: SQLiteDatabase) -> None:
     now = now_ms()
     await store.chat.insert_live_chat(

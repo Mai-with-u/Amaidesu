@@ -23,13 +23,10 @@ from src.modules.tts import TTSProvider, build_tts_infrastructure
 from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 from src.modules.tts.backends.gptsovits.provider import GPTSoVITSProvider
 from src.modules.tts.backends.omni.provider import OmniTTSProvider
-from src.modules.tts.protocol import TTSProvider as TTSProviderDirect
 from src.modules.tts.backends.voicebox.provider import VoiceboxProvider
+from src.modules.tts.protocol import TTSProvider as TTSProviderDirect
 
-
-# ---------------------------------------------------------------------------
 # loguru 日志捕获（与 test_build_tts_infrastructure 风格保持一致）
-# ---------------------------------------------------------------------------
 
 
 class _LoguruCapture:
@@ -57,9 +54,7 @@ def loguru_capture():
         yield cap
 
 
-# ---------------------------------------------------------------------------
 # 正例：四个 Provider 都满足契约
-# ---------------------------------------------------------------------------
 
 
 class TestProvidersConform:
@@ -113,9 +108,7 @@ class TestProvidersConform:
         assert omni.name == OmniTTSProvider.PROVIDER_NAME
 
 
-# ---------------------------------------------------------------------------
 # 负例：缺方法 / 非引擎对象被协议拒绝
-# ---------------------------------------------------------------------------
 
 
 class TestProtocolRejects:
@@ -161,9 +154,7 @@ class TestProtocolRejects:
         assert not isinstance(None, TTSProvider)
 
 
-# ---------------------------------------------------------------------------
 # 装配层 fail-fast：工厂返回不满足契约的对象 → 返回 None + ERROR 日志
-# ---------------------------------------------------------------------------
 
 
 class TestAssemblyFailFast:

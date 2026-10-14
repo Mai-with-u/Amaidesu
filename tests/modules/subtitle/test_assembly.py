@@ -46,9 +46,7 @@ def _no_real_tk_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(SubtitleGuiService, "start", lambda self: None)
 
 
-# ---------------------------------------------------------------------------
 # 合法配置：装配成功 + Backend 注册
-# ---------------------------------------------------------------------------
 
 
 class TestAssemblySuccess:
@@ -87,9 +85,7 @@ class TestAssemblySuccess:
         assert service.is_running is False
 
 
-# ---------------------------------------------------------------------------
 # 真实 SubtitleGuiService 装配：后端联动 + enabled 联动
-# ---------------------------------------------------------------------------
 
 
 class TestBackendWiring:
@@ -115,9 +111,7 @@ class TestBackendWiring:
         assert service.backend_count == 1
 
 
-# ---------------------------------------------------------------------------
 # 输入防御：非 dict / None
-# ---------------------------------------------------------------------------
 
 
 class TestInvalidConfig:
@@ -135,9 +129,7 @@ class TestInvalidConfig:
             assert service.backend_count == 0, f"failed for {bad_input!r}"
 
 
-# ---------------------------------------------------------------------------
 # 构造异常兜底：装配边界 fail-soft
-# ---------------------------------------------------------------------------
 
 
 class TestGuiServiceConstructionFailure:
@@ -163,9 +155,7 @@ class TestGuiServiceConstructionFailure:
         assert service.backend_count == 0
 
 
-# ---------------------------------------------------------------------------
 # GUI 服务启动行为：Tk 线程启动（仅 enabled=True 时）
-# ---------------------------------------------------------------------------
 
 
 class TestGuiServiceStart:

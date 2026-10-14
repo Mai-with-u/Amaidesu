@@ -33,9 +33,7 @@ def _make_obs_provider(monkeypatch: pytest.MonkeyPatch) -> "obs_mod.OBSProvider"
     )
 
 
-# =============================================================================
 # supports_reconnect
-# =============================================================================
 
 
 def test_obs_supports_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,9 +42,7 @@ def test_obs_supports_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
     assert provider.supports_reconnect is True
 
 
-# =============================================================================
 # connect
-# =============================================================================
 
 
 async def test_obs_connect_delegates_to_internal(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -73,9 +69,7 @@ async def test_obs_connect_does_not_reset_has_started(monkeypatch: pytest.Monkey
     assert provider._has_started is True
 
 
-# =============================================================================
 # disconnect
-# =============================================================================
 
 
 async def test_obs_disconnect_closes_connection_and_keeps_has_started(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,9 +108,7 @@ async def test_obs_disconnect_swallows_close_exception(monkeypatch: pytest.Monke
     assert provider.is_connected is False
 
 
-# =============================================================================
 # reconnect 默认组合
-# =============================================================================
 
 
 async def test_obs_reconnect_default_compose(monkeypatch: pytest.MonkeyPatch) -> None:

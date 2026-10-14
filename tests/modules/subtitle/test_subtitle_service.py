@@ -16,13 +16,9 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-
 from src.modules.subtitle import SubtitleBackend, SubtitleService
 
-
-# ---------------------------------------------------------------------------
 # 测试用假后端：记录所有调用 + 可配置抛错
-# ---------------------------------------------------------------------------
 
 
 class _FakeBackend:
@@ -62,9 +58,7 @@ class _EnabledFakeBackend(_FakeBackend):
         self.enabled = enabled
 
 
-# ---------------------------------------------------------------------------
 # 协议契约
-# ---------------------------------------------------------------------------
 
 
 class TestProtocolConformance:
@@ -80,9 +74,7 @@ class TestProtocolConformance:
         assert not isinstance(None, SubtitleBackend)
 
 
-# ---------------------------------------------------------------------------
 # 后端诊断清单
-# ---------------------------------------------------------------------------
 
 
 class TestBackendDiagnostics:
@@ -108,9 +100,7 @@ class TestBackendDiagnostics:
         assert SubtitleService().backend_diagnostics == []
 
 
-# ---------------------------------------------------------------------------
 # 生命周期
-# ---------------------------------------------------------------------------
 
 
 class TestLifecycle:
@@ -155,9 +145,7 @@ class TestLifecycle:
         assert svc.is_running is True
 
 
-# ---------------------------------------------------------------------------
 # 广播
-# ---------------------------------------------------------------------------
 
 
 class TestBroadcast:
@@ -210,9 +198,7 @@ class TestBroadcast:
         await svc.clear()
 
 
-# ---------------------------------------------------------------------------
 # 故障隔离
-# ---------------------------------------------------------------------------
 
 
 class TestFaultIsolation:

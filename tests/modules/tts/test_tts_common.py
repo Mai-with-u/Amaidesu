@@ -21,18 +21,15 @@ from src.modules.events.payloads.utterance import (
     UtteranceStartedPayload,
 )
 from src.modules.tts.common import (
-    normalize_tts_text,
     build_stats_dict,
     compute_duration_ms,
     emit_utterance_failed,
     emit_utterance_finished,
     emit_utterance_started,
+    normalize_tts_text,
 )
 
-
-# =============================================================================
 # compute_duration_ms
-# =============================================================================
 
 
 class TestComputeDurationMs:
@@ -60,9 +57,7 @@ class TestComputeDurationMs:
         assert compute_duration_ms(48000, -1) == 0
 
 
-# =============================================================================
 # build_stats_dict
-# =============================================================================
 
 
 class TestBuildStatsDict:
@@ -101,9 +96,7 @@ class TestBuildStatsDict:
         assert stats["is_connected"] is False
 
 
-# =============================================================================
 # emit_utterance_* : 通过 EventBus 发事件 / event_bus=None 静默
-# =============================================================================
 
 
 @pytest.fixture
@@ -115,7 +108,6 @@ async def event_bus() -> EventBus:
         await bus.cleanup()
 
 
-@pytest.mark.asyncio
 class TestEmitUtteranceStarted:
     """emit_utterance_started"""
 
@@ -210,7 +202,6 @@ class TestEmitUtteranceStarted:
         assert captured == []
 
 
-@pytest.mark.asyncio
 class TestEmitUtteranceFinished:
     """emit_utterance_finished"""
 
@@ -266,7 +257,6 @@ class TestEmitUtteranceFinished:
         assert captured == []
 
 
-@pytest.mark.asyncio
 class TestEmitUtteranceFailed:
     """emit_utterance_failed"""
 
@@ -330,9 +320,7 @@ if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
 
-# =============================================================================
 # normalize_tts_text：保留集之外的符号映射为停顿
-# =============================================================================
 
 
 class TestNormalizeTtsText:
