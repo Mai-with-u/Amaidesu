@@ -30,6 +30,7 @@ from src.modules.collectors.base import BaseCollector
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room_state import RoomStateFramePayload
 from src.modules.logging import get_logger, silence_third_party_logger
+from src.modules.studio.obs.obs_errors import describe_obs_error
 from src.modules.time_utils import now_ms
 from src.modules.vision.image_store import get_image_store
 from src.modules.vision.mss_capture import MssScreenCapture
@@ -39,7 +40,7 @@ __all__ = [
     "GrabbedFrame",
     "LiveFrameCollector",
     "ObsFrameGrabber",
-    "describe_obs_error",
+    "describe_live_frame_obs_error",
     "frame_change",
 ]
 
@@ -83,39 +84,22 @@ def frame_change(previous: Optional[List[int]], current: List[int]) -> float:
     return sum(abs(a - b) for a, b in zip(previous, current, strict=True)) / (255 * len(current))
 
 
-def describe_obs_error(error: BaseException, *, host: str, port: int, source: str) -> str:
+def describe_live_frame_obs_error(error: BaseException, *, host: str, port: int, source: str) -> str:
     """把 OBS 取帧失败翻译成能照着改的原因（采集器告警与诊断脚本共用）。
 
-    obsws-python 与 websocket-client 的异常按类名识别，不在这里导入它们：
-    没装依赖时同样要能说清原因。
+    配置项一律指向 ``collectors.toml`` 的 ``[live_frame]``；采集器取帧时不区分连接与请求阶段
+    （断了就丢掉客户端、下次重连），连接被关闭按握手阶段理解为身份验证被拒。
     """
-    name = type(error).__name__
-    text = str(error)
-    where = f"{host}:{port}"
-    if isinstance(error, ImportError):
-        return "没装 obsws-python：在项目目录执行 uv sync 安装依赖"
-    if isinstance(error, ConnectionRefusedError):
-        return (
-            f"连不上 OBS（{where}）：OBS 没开，或没在「工具 → WebSocket 服务器设置」里勾选启用 WebSocket 服务器"
-            "（需要 OBS 28 及以上，端口默认 4455）"
-        )
-    if isinstance(error, TimeoutError) or name in ("WebSocketTimeoutException", "OBSSDKTimeoutError"):
-        return f"连接 OBS（{where}）超时：检查地址、端口与防火墙；OBS 卡死时也会超时"
-    if "no password provided" in text:
-        return "OBS 开启了身份验证：在 collectors.toml 的 [live_frame].obs_password 填 WebSocket 服务器密码"
-    if name == "WebSocketConnectionClosedException" or "failed to identify" in text:
-        return "OBS 拒绝了身份验证：obs_password 与 OBS「WebSocket 服务器设置」里的密码不一致"
-    if name == "OBSSDKRequestError":
-        code = getattr(error, "code", None)
-        if code == 600:
-            return (
-                f"OBS 里找不到要截的场景或来源「{source or '当前节目场景'}」："
-                "检查 [live_frame].obs_source 的拼写（区分大小写），留空则截当前节目场景"
-            )
-        return f"OBS 拒绝了 {getattr(error, 'req_name', '请求')}（代码 {code}）：{text}"
-    if isinstance(error, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
-        return f"与 OBS（{where}）的连接断开了（OBS 重启或关闭），下次取帧会重连"
-    return f"{name}: {text}"
+    return describe_obs_error(
+        error,
+        host=host,
+        port=port,
+        password_setting="collectors.toml 的 [live_frame].obs_password",
+        not_found=(
+            f"OBS 里找不到要截的场景或来源「{source or '当前节目场景'}」："
+            "检查 [live_frame].obs_source 的拼写（区分大小写），留空则截当前节目场景"
+        ),
+    )
 
 
 class ObsFrameGrabber:
@@ -148,7 +132,7 @@ class ObsFrameGrabber:
             await asyncio.to_thread(self._disconnect, client)
 
     def describe(self, error: BaseException) -> str:
-        return describe_obs_error(error, host=self._host, port=self._port, source=self._source)
+        return describe_live_frame_obs_error(error, host=self._host, port=self._port, source=self._source)
 
     def _disconnect(self, client: Any) -> None:
         try:

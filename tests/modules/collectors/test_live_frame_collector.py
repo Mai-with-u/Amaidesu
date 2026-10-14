@@ -15,7 +15,7 @@ from src.modules.collectors.frame.live_frame_collector import (
     GrabbedFrame,
     LiveFrameCollector,
     ObsFrameGrabber,
-    describe_obs_error,
+    describe_live_frame_obs_error,
     frame_change,
 )
 from src.modules.events.names import CoreEvents
@@ -187,7 +187,7 @@ def test_obs_errors_are_translated_to_fixes() -> None:
     from obsws_python.error import OBSSDKError, OBSSDKRequestError
 
     def describe(error: BaseException) -> str:
-        return describe_obs_error(error, host="localhost", port=4455, source="游戏画面")
+        return describe_live_frame_obs_error(error, host="localhost", port=4455, source="游戏画面")
 
     assert "启用 WebSocket 服务器" in describe(ConnectionRefusedError())
     assert "obs_password" in describe(OBSSDKError("authentication enabled but no password provided"))

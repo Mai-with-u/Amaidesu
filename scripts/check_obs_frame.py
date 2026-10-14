@@ -26,7 +26,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from PIL import Image  # noqa: E402
 
-from src.modules.collectors.frame.live_frame_collector import LiveFrameCollector, describe_obs_error  # noqa: E402
+from src.modules.collectors.frame.live_frame_collector import (  # noqa: E402
+    LiveFrameCollector,
+    describe_live_frame_obs_error,
+)
 from src.modules.logging import silence_third_party_logger  # noqa: E402
 
 # 连续截几帧算平均耗时
@@ -58,7 +61,9 @@ def _load_config(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def _fail(step: str, error: BaseException, config: Dict[str, Any]) -> int:
-    reason = describe_obs_error(error, host=config["obs_host"], port=config["obs_port"], source=config["obs_source"])
+    reason = describe_live_frame_obs_error(
+        error, host=config["obs_host"], port=config["obs_port"], source=config["obs_source"]
+    )
     print(f"  [失败] {step}失败：{reason}")
     return 1
 

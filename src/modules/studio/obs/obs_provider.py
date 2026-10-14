@@ -18,7 +18,8 @@ from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.logging import get_logger
+from src.modules.logging import get_logger, silence_third_party_logger
+from src.modules.studio.obs.obs_errors import describe_obs_error
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 
@@ -31,6 +32,9 @@ try:
     import obsws_python as obs
 except ImportError:
     obs = None
+
+# 失败原因里指向的密码配置项（工具段在 tools.toml，与直播画面采集器的 [live_frame] 分开配置）
+_PASSWORD_SETTING = "tools.toml 的 [tools.studio.obs.config].password"
 
 
 _OBS_SEND_TEXT_SCHEMA: Dict[str, Any] = {
@@ -250,7 +254,9 @@ class OBSProvider(BaseToolProvider):
             self.logger.info(f"已切换到场景: {scene_name}")
             return True
         except Exception as e:
-            self.logger.error(f"切换场景失败: {e}")
+            # 场景名不对（OBS 回 600）或连接已断：翻译成原因后记录，工具调用返回失败
+            missing = f"OBS 里找不到场景「{scene_name}」：场景名区分大小写，需与 OBS「场景」面板里的名字完全一致"
+            self.logger.error(f"切换场景「{scene_name}」失败：{self._describe(e, not_found=missing)}")
             return False
 
     async def set_source_visibility(self, source_name: str, visible: bool) -> bool:
@@ -262,7 +268,8 @@ class OBSProvider(BaseToolProvider):
             self.logger.debug(f"已设置源 '{source_name}' 可见性: {visible}")
             return True
         except Exception as e:
-            self.logger.error(f"设置源可见性失败: {e}")
+            missing = f"OBS 里找不到来源「{source_name}」：来源名区分大小写，需与 OBS「来源」面板里的名字完全一致"
+            self.logger.error(f"设置来源「{source_name}」可见性失败：{self._describe(e, not_found=missing)}")
             return False
 
     async def _send_text_to_obs(self, text: str, typewriter: Optional[bool] = None) -> bool:
@@ -278,7 +285,7 @@ class OBSProvider(BaseToolProvider):
                 self.logger.debug(f"已发送文本到 OBS: {text[:50]}{'...' if len(text) > 50 else ''}")
             return True
         except Exception as e:
-            self.logger.error(f"发送文本到 OBS 失败: {e}")
+            self.logger.error(f"发送文本到 OBS 失败：{self._describe(e, not_found=self._text_source_missing())}")
             return False
 
     async def _set_text_source(self, text: str) -> None:
@@ -303,7 +310,9 @@ class OBSProvider(BaseToolProvider):
             await asyncio.sleep(self.typewriter_delay)
             self.logger.debug(f"已逐字显示文本: {text[:50]}{'...' if len(text) > 50 else ''}")
         except Exception as e:
-            self.logger.error(f"逐字效果执行失败: {e}")
+            # 逐字写入中途失败：记下原因后直接写全文；全文也写不进去时异常交给调用方记录
+            reason = self._describe(e, not_found=self._text_source_missing())
+            self.logger.error(f"逐字效果执行失败，改为直接显示全文：{reason}")
             await self._set_text_source(text)
 
     async def _send_test_message(self) -> None:
@@ -316,31 +325,68 @@ class OBSProvider(BaseToolProvider):
                 await self._set_text_source(test_message)
                 self.logger.info(f"已发送测试消息到 OBS 文本源 '{self.text_source_name}'")
         except Exception as e:
-            self.logger.error(f"发送测试消息失败: {e}")
-            self.logger.warning(f"请确认 OBS 中存在名为 '{self.text_source_name}' 的文本源")
+            self.logger.error(f"发送测试消息失败：{self._describe(e, not_found=self._text_source_missing())}")
             raise
 
     async def _connect_obs(self) -> bool:
         if not obs:
             self.logger.error("obsws-python库未安装")
             return False
+        # obsws-python 连接时以 INFO 级明文打印密码，连不上、请求被拒时每次都打整段堆栈，
+        # 且经标准库兜底处理器直出控制台；先压住，失败原因由本类翻译后经项目日志记录
+        silence_third_party_logger("obsws_python")
         try:
-            self.obs_connection = obs.ReqClient(
+            client = obs.ReqClient(
                 host=self.host,
                 port=self.port,
                 password=self.password if self.password else None,
             )
-            if self.test_on_connect:
-                await self._send_test_message()
-            self.is_connected = True
-            self.logger.info(f"成功连接到 OBS WebSocket: {self.host}:{self.port}")
-            return True
         except Exception as e:
-            self.logger.error(f"连接 OBS 失败: {e}")
-            self.logger.error("请检查: 1) OBS 是否开启 WebSocket 服务; 2) 端口和密码是否正确; 3) 网络是否通畅")
+            # 握手阶段失败（OBS 没开、没启用 WebSocket 服务器、密码不对等）：翻译原因后报连接失败
+            self.logger.error(f"连接 OBS 失败：{self._describe(e, connected=False)}")
             self.is_connected = False
             self.obs_connection = None
             return False
+        self.obs_connection = client
+        if self.test_on_connect:
+            try:
+                await self._send_test_message()
+            except Exception:
+                # 握手成功但测试消息发不出去（多半是文本源不存在，原因已由 _send_test_message 记录）：
+                # 先断开这条半开的连接再报连接失败，不泄漏 WebSocket
+                self.logger.warning("OBS 测试消息未发出（原因见上一条），断开本次连接")
+                self._close_client(client)
+                self.is_connected = False
+                self.obs_connection = None
+                return False
+        self.is_connected = True
+        self.logger.info(f"成功连接到 OBS WebSocket: {self.host}:{self.port}")
+        return True
+
+    def _close_client(self, client: Any) -> None:
+        """断开一条 obsws 连接；断开阶段的失败只记录，不影响之后重连。"""
+        try:
+            client.disconnect()
+        except Exception as e:
+            self.logger.warning(f"断开 OBS 连接时出错（忽略）：{e}")
+
+    def _text_source_missing(self) -> str:
+        """文本源不存在时的原因：在 OBS 建同名文本源，或改配置指向已有的文本源。"""
+        return (
+            f"OBS 里找不到文本源「{self.text_source_name}」：在 OBS 里新建同名的文本源，"
+            "或把 tools.toml 的 [tools.studio.obs.config].text_source_name 改成已有文本源的名字（区分大小写）"
+        )
+
+    def _describe(self, error: BaseException, *, not_found: str = "", connected: bool = True) -> str:
+        """把 OBS 失败翻译成能照着改的原因；默认按请求阶段（连接已建立）理解连接被关闭。"""
+        return describe_obs_error(
+            error,
+            host=self.host,
+            port=self.port,
+            password_setting=_PASSWORD_SETTING,
+            not_found=not_found,
+            connected=connected,
+        )
 
 
 def _ok(tool_name: str, success: bool, structured: Any = None) -> ToolExecutionResult:
