@@ -2,20 +2,15 @@
 
 判定契约：长度超过 1KB、仅含 base64 字符集（A-Za-z0-9+/=）且无空白
 字符的字符串判为二进制载荷，替换为带真实 KB 数的占位符；中文长文、
-URL、JSON 文本等合法长内容必须原样保留。视觉调用方的带图观察由
-extract_image_data_urls + build_tool_message 组装（ADR-037）。
+URL、JSON 文本等合法长内容必须原样保留。视觉调用方经
+extract_image_data_urls 取图，图只挂在下一次请求尾部，不进观察消息。
 """
 
 from __future__ import annotations
 
 import json
 
-from src.modules.tools.conversation import (
-    build_tool_message,
-    extract_image_data_urls,
-    is_tool_message,
-    to_conversation_view,
-)
+from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
 from src.modules.tools.models import ResultBlock, ToolExecutionResult
 
 
@@ -97,7 +92,7 @@ def test_plain_string_payload_is_sanitized_too() -> None:
 
 
 # =============================================================================
-# 视觉带图观察组装（extract_image_data_urls / build_tool_message / is_tool_message）
+# 视觉调用方取图（extract_image_data_urls）
 # =============================================================================
 
 
@@ -118,26 +113,3 @@ def test_extract_image_data_urls_from_blocks() -> None:
 
     assert urls == [f"data:image/png;base64,{image}"]
     assert extract_image_data_urls(ToolExecutionResult(tool_name="x", success=True)) == []
-
-
-def test_build_tool_message_shapes_ref_dialect() -> None:
-    """带图消息 = 观察文本 part + 图 image_ref 引用 part，tool_call_id 配对当前调用。"""
-    message = build_tool_message(
-        rendered='{"ok": true, "image": "[图像 1 KB 已省略]"}',
-        image_refs=["img_ab12"],
-        tool_call_id="call_1",
-    )
-
-    assert message["role"] == "tool"
-    assert message["tool_call_id"] == "call_1"
-    assert message["content"][0] == {"type": "text", "text": '{"ok": true, "image": "[图像 1 KB 已省略]"}'}
-    assert message["content"][1] == {"type": "image_ref", "ref": "img_ab12"}
-
-
-def test_is_tool_message_distinguishes_observation_shapes() -> None:
-    """三种观察返回形态的判别：视觉消息 dict / 纯文本 / 载荷 dict。"""
-    message = build_tool_message(rendered="{}", image_refs=["img_ab12"], tool_call_id="c")
-    assert is_tool_message(message) is True
-    assert is_tool_message('{"ok": true}') is False
-    assert is_tool_message({"ok": True}) is False
-    assert is_tool_message(None) is False

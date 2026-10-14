@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional, Union
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 from pydantic import Field
 
@@ -45,15 +45,11 @@ from src.agents.streamer import canonical
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.topic_gate import check_topic, rejection_reason
+from src.modules.context import TailImages
 from src.modules.llm.history_compaction import HistoryCompactor
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
-from src.modules.tools.conversation import (
-    build_tool_message,
-    extract_image_data_urls,
-    is_tool_message,
-    to_conversation_view,
-)
+from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
 from src.modules.tools.models import ToolInvocation
 from src.modules.vision.image_store import get_image_store
 
@@ -283,6 +279,8 @@ class Planner:
         self._recent_relays: Deque[_Relay] = deque(maxlen=self.typed_config.planner_recent_relays_max)
 
         self._assembler = PlannerAssembler()
+        # 工具刚返回的截图：观察里只留文字，真图挂在下一步请求的尾部让模型看一次
+        self._tail_images = TailImages()
 
         # 可观测副产品（决策事件消费；每轮 plan() 入口重置）
         self.last_raw_content: str = ""
@@ -420,6 +418,8 @@ class Planner:
         self.last_raw_content = ""
         self.last_request_id = None
         self.last_failure = None
+        # 上一窗没来得及看的截图属于旧画面，新的决策窗不带
+        self._tail_images.drain()
 
         outcome: Dict[str, Any] = {
             "replied": False,
@@ -503,9 +503,12 @@ class Planner:
             steps += 1
             outcome["steps"] = steps
 
+            # 上一步工具返回的截图只挂在这一次请求尾部、不写回消息序列：下一步请求时它已消失，
+            # 前缀与这一次逐字一致；画面内容由模型这一步的思考与决定带下去
+            tail = self._tail_images.drain()
             try:
                 response = await self._llm_service.generate(
-                    messages,
+                    [*messages, tail] if tail is not None else messages,
                     tools=tool_list,
                     profile=PLANNER_PROFILE,
                     on_delta=thinking.callback_for("planner", steps) if thinking else None,
@@ -584,18 +587,14 @@ class Planner:
                         round_id=round_id,
                         source_dialogue=source_dialogue,
                         relay_without_input=relay_without_input,
-                        tool_call_id=str(call.get("id", "") or ""),
                     )
-                if is_tool_message(observation):
-                    messages.append(observation)
-                else:
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": str(call.get("id", "") or ""),
-                            "content": observation,
-                        }
-                    )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": str(call.get("id", "") or ""),
+                        "content": observation,
+                    }
+                )
                 if replied:
                     return outcome
 
@@ -951,14 +950,12 @@ class Planner:
         round_id: str = "",
         source_dialogue: Optional[List[Dict[str, Any]]] = None,
         relay_without_input: bool = False,
-        tool_call_id: str = "",
-    ) -> Union[str, Dict[str, Any]]:
+    ) -> str:
         """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。
 
-        视觉调用方（本档位主模型声明 visual）且工具结果带图时返回完整
-        tool 消息 dict——图以 ``image_ref`` 引用 part 附在观察文本之后
-        （base64 本体入 VisionImageStore，引擎装配期按新鲜度窗口注水），
-        调用方经 :func:`is_tool_message` 识别后直接追加进消息流。
+        视觉调用方（本档位主模型声明 visual）且工具结果带图时，图存进
+        VisionImageStore、句柄登记到尾部临时图片，下一步请求时挂在序列最后
+        让模型看一次；观察文本里图位是占位说明。
         """
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
@@ -1050,17 +1047,11 @@ class Planner:
                 self._recent_relays.append(_Relay(at_ms=now_ms(), agent=agent, content=own_relay))
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
-        rendered = _render_observation(data)
         if self._visual_caller():
             image_data_urls = extract_image_data_urls(result)
             if image_data_urls:
-                image_refs = [get_image_store().put(url) for url in image_data_urls]
-                return build_tool_message(
-                    rendered=rendered,
-                    image_refs=image_refs,
-                    tool_call_id=tool_call_id,
-                )
-        return rendered
+                self._tail_images.add([get_image_store().put(url) for url in image_data_urls], source=name)
+        return _render_observation(data)
 
     # ==================== 人物画像注入 ====================
 

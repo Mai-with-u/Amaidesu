@@ -48,6 +48,7 @@ from src.agents.minecraft.maicraft import (
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
+from src.modules.context import TailImages
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentRepliedPayload
@@ -57,12 +58,7 @@ from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
 from src.modules.llm.context_meter import SECTION_SKILLS
 from src.modules.skills import SkillEnvironment, SkillLibrary, render_catalog
-from src.modules.tools.conversation import (
-    build_tool_message,
-    extract_image_data_urls,
-    is_tool_message,
-    to_conversation_view,
-)
+from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.vision.image_store import get_image_store
@@ -202,6 +198,8 @@ class MinecraftAgent(BaseAgent):
         # 最近一次完整进入历史的任务状态；唤醒续做只补交它之后的变化。
         self._shown_context: Dict[str, Any] = {}
         self._idle_compaction: Optional[asyncio.Task[None]] = None
+        # 工具刚返回的截图：历史里只留文字回执，真图挂在下一次推理请求的尾部，用完即弃
+        self._tail_images = TailImages()
         # 本批已吸收的委派任务号（进入 running）与待写终态的委派任务号
         self._delegated_batch_ids: List[str] = []
         self._delegated_finished_ids: List[str] = []
@@ -594,9 +592,13 @@ class MinecraftAgent(BaseAgent):
             self._task_steps += 1
 
             on_delta = self._build_thinking_callback(mc_round, steps, mc_seq_box) if mc_round else None
+            # 上一步看过的截图只挂在这一次请求尾部，不写回历史：下一步请求时它已消失，
+            # 历史前缀与这一次逐字一致，缓存照常命中；画面内容由模型这一步的说明带下去
+            tail = self._tail_images.drain()
+            request_messages = [*messages, tail] if tail is not None else messages
             try:
                 response = await self._llm.generate(
-                    messages, profile=MINECRAFT_PROFILE, tools=tool_defs, on_delta=on_delta
+                    request_messages, profile=MINECRAFT_PROFILE, tools=tool_defs, on_delta=on_delta
                 )
             except asyncio.CancelledError:
                 raise
@@ -659,19 +661,16 @@ class MinecraftAgent(BaseAgent):
                         "error": "minecraft_wait 必须单独调用；先完成本轮其他动作",
                     }
                 else:
-                    observation = await self._execute_tool(call.name, arguments, round_id=mc_round, call_id=call.id)
+                    observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
                 self._absorb_reply(call.name, arguments, observation)
                 polling_only &= self._polls_running_goal(call.name, arguments)
-                if is_tool_message(observation):
-                    messages.append(observation)
-                else:
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": json.dumps(observation, ensure_ascii=False, default=str),
-                        }
-                    )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": json.dumps(observation, ensure_ascii=False, default=str),
+                    }
+                )
 
             if self._task_reported:
                 self._logger.info(f"LLM 已上报，任务批次结束（{steps} 步）")
@@ -701,6 +700,8 @@ class MinecraftAgent(BaseAgent):
         """上一个任务已交付，新指令开新任务：历史、待办与目标记录重新开始。"""
         self._task_instructions.clear()
         messages[:] = [dict(system_message)]
+        # 上个任务最后看过还没来得及用的截图属于旧现场，新任务不带
+        self._tail_images.drain()
         self._context_compactor.checkpoints = 0
         self._shown_context = {}
         self._mc_state.set_todos([])
@@ -860,18 +861,15 @@ class MinecraftAgent(BaseAgent):
             self.logger.warning(f"视觉能力查询失败，按非视觉处理: {e}", exc=True)
             return False
 
-    async def _execute_tool(
-        self, name: str, arguments: Dict[str, Any], *, round_id: str = "", call_id: str = ""
-    ) -> Dict[str, Any]:
+    async def _execute_tool(self, name: str, arguments: Dict[str, Any], *, round_id: str = "") -> Dict[str, Any]:
         """串行执行单个工具调用：统一经 ToolRegistry（观测/停用/熔断复用既有机制）。
 
         MaiCraft 工具的观察就是它原样的 JSON 回复；连接失败等拿不到回复时写明原因。
         registry 工具的观察走对话安全视图：base64 二进制载荷（截图等）属
         tool.result 事件的 UI 展示通道，在对话里以占位符出现。视觉调用方
-        （本档位主模型声明 visual）且工具结果带图时返回完整 tool 消息
-        dict——图以 ``image_ref`` 引用 part 附在观察 JSON 之后（base64 本体
-        入 VisionImageStore，引擎装配期按新鲜度窗口注水），调用方经
-        :func:`is_tool_message` 识别后直接追加进消息流。
+        （本档位主模型声明 visual）且工具结果带图时，图存进 VisionImageStore、
+        句柄登记到尾部临时图片，下一次推理请求时挂在序列最后让模型看一次；
+        历史里始终只有文字观察。
         """
         if self._tool_registry is None:
             return {"ok": False, "error": "工具执行失败：tool_registry 未注入", "tool": name}
@@ -899,12 +897,7 @@ class MinecraftAgent(BaseAgent):
             if self._visual_caller():
                 image_data_urls = extract_image_data_urls(result)
                 if image_data_urls:
-                    image_refs = [get_image_store().put(url) for url in image_data_urls]
-                    return build_tool_message(
-                        rendered=json.dumps(observation, ensure_ascii=False, default=str),
-                        image_refs=image_refs,
-                        tool_call_id=call_id,
-                    )
+                    self._tail_images.add([get_image_store().put(url) for url in image_data_urls], source=name)
             return observation
         return {"ok": False, "error": result.error_message or "工具执行失败", "tool": name}
 

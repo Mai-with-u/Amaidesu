@@ -68,9 +68,9 @@ def test_ttl_expiry() -> None:
 
 
 def test_visible_turns_default() -> None:
-    """窗口默认 2 轮；引擎注水判定读此值。"""
-    assert DEFAULT_VISIBLE_TURNS == 2
-    assert _store().visible_turns == 2
+    """窗口默认 1 轮：只认最后一条 assistant 之后（请求尾部）的引用；引擎注水判定读此值。"""
+    assert DEFAULT_VISIBLE_TURNS == 1
+    assert _store().visible_turns == 1
 
 
 def test_singleton_get_set() -> None:

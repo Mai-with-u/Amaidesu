@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,7 +12,6 @@ from src.agents.streamer.planner import (
     _render_observation,
 )
 from src.agents.streamer.room_state import RoomState
-from src.modules.tools.conversation import is_tool_message
 from src.modules.tools.models import ResultBlock, ToolExecutionResult
 from src.modules.vision.image_store import VisionImageStore, set_image_store
 
@@ -221,12 +221,11 @@ async def test_caller_profile_forwarded_to_registry() -> None:
     assert invocation.source == "planner-react"
 
 
-async def test_visual_caller_receives_image_parts_in_tool_message() -> None:
-    """视觉调用方的带图观察 = 占位符版观察文本 + image_ref 引用 part 的完整 tool 消息。
+async def test_visual_caller_gets_text_observation_and_tail_image() -> None:
+    """视觉调用方的带图观察：观察本身是纯文本（图位是占位说明），图句柄登记到尾部临时图片。
 
-    图走 blocks → image_ref 引用 part：base64 本体入 VisionImageStore，
-    历史里只放句柄（注水是引擎装配期职责）。调用方按 is_tool_message
-    识别后整条追加。
+    下一步请求时图作为一条 user 消息挂在序列最后，只看这一次；消息序列里
+    始终没有图片引用，前缀不会因为图过期被改写。
     """
     store = VisionImageStore()
     set_image_store(store)
@@ -244,35 +243,79 @@ async def test_visual_caller_receives_image_parts_in_tool_message() -> None:
         )
         planner = _make_planner(registry, visual=True)
 
-        observation = await planner._invoke_registry_tool("vision_look_at_screen", {}, tool_call_id="call_1")
+        observation = await planner._invoke_registry_tool("vision_look_at_screen", {})
 
-        assert is_tool_message(observation)
-        assert observation["tool_call_id"] == "call_1"
-        parts = observation["content"]
-        assert parts[0]["type"] == "text"
-        assert image not in parts[0]["text"]
-        assert "[图像 1 KB 已省略]" in parts[0]["text"]
-        # 历史里只放引用句柄；句柄在 store 里能取回原图（注水依据），且 base64 不落历史
-        assert parts[1]["type"] == "image_ref"
-        assert parts[1]["ref"].startswith("img_")
-        assert store.get(parts[1]["ref"]) == f"data:image/png;base64,{image}"
-        assert image not in json.dumps(observation, ensure_ascii=False)
+        assert isinstance(observation, str)
+        assert image not in observation
+        assert "[图像 1 KB 已省略]" in observation
+        tail = planner._tail_images.drain()
+        assert tail is not None and tail["role"] == "user"
+        refs = [part["ref"] for part in tail["content"] if part["type"] == "image_ref"]
+        assert len(refs) == 1 and store.get(refs[0]) == f"data:image/png;base64,{image}"
+        assert planner._tail_images.drain() is None
+    finally:
+        store.clear()
+
+
+async def test_tail_image_rides_only_the_next_request() -> None:
+    """截图只出现在紧随回执的那一次请求尾部；再下一步请求里只剩文字回执，前缀与上一次一致。"""
+    store = VisionImageStore()
+    set_image_store(store)
+    try:
+        registry = MagicMock()
+        registry.list_tools = MagicMock(return_value=[])
+        registry.invoke = AsyncMock(
+            return_value=ToolExecutionResult(
+                tool_name="vision_look_at_screen",
+                success=True,
+                blocks=[ResultBlock(kind="image", data="A" * 2048, mime_type="image/png")],
+                structured_content={"text": ""},
+            )
+        )
+        planner = _make_planner(registry, visual=True)
+        planner.max_steps = 3
+        sent: list = []
+        look = SimpleNamespace(id="c1", name="vision_look_at_screen", arguments={})
+        responses = [
+            SimpleNamespace(success=True, content="看一眼", tool_calls=[look], request_id="r1"),
+            SimpleNamespace(success=True, content="画面里在下雨", tool_calls=[look], request_id="r2"),
+            SimpleNamespace(success=True, content="不说了", tool_calls=[], request_id="r3"),
+        ]
+
+        async def generate(messages: list, **_: Any) -> Any:
+            sent.append(list(messages))
+            return responses[len(sent) - 1]
+
+        planner._llm_service.generate = generate
+        await planner.plan([], proactive=True)
+
+        def has_image(messages: list) -> bool:
+            return any(
+                isinstance(m.get("content"), list) and any(p.get("type") == "image_ref" for p in m["content"])
+                for m in messages
+            )
+
+        assert [has_image(messages) for messages in sent] == [False, True, True]
+        # 第二次请求的尾部图在第三次请求里已消失：第三次的前缀 = 第二次去掉尾部那条
+        assert sent[2][: len(sent[1]) - 1] == sent[1][:-1]
+        assert not has_image(sent[2][: len(sent[1]) - 1])
     finally:
         store.clear()
 
 
 async def test_visual_caller_without_image_keeps_text_observation() -> None:
-    """视觉调用方调无图工具：观察维持纯文本（消息 dict 只在有图时出现）。"""
+    """视觉调用方调无图工具：观察维持纯文本，不登记尾部图片。"""
     registry = MagicMock()
     registry.invoke = AsyncMock(
         return_value=ToolExecutionResult(tool_name="minecraft_glance", success=True, structured_content={"ok": True})
     )
     planner = _make_planner(registry, visual=True)
 
-    observation = await planner._invoke_registry_tool("minecraft_glance", {}, tool_call_id="call_2")
+    observation = await planner._invoke_registry_tool("minecraft_glance", {})
 
     assert isinstance(observation, str)
     assert json.loads(observation) == {"ok": True}
+    assert planner._tail_images.drain() is None
 
 
 async def test_reference_tools_view_filters_binary_payloads() -> None:

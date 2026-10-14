@@ -1,6 +1,6 @@
 """截图等图像大载荷的进程内有界暂存（引用进历史的本体保管所）
 
-会话历史中图像只以 :class:`~src.modules.llm.payload.ImageRefPart` 引用存在，
+请求尾部的图像只以 :class:`~src.modules.llm.payload.ImageRefPart` 引用存在，
 base64 本体保存在这里。截图是几轮就过期的易腐数据：容量按 LRU 逐出、按 TTL
 过期，逐出即引用失效（装配期降级为"截图已过期"提示），不持久化、不入库。
 
@@ -22,9 +22,10 @@ from src.modules.logging import get_logger
 
 logger = get_logger("VisionImageStore")
 
-# 图在装配请求里保持可见的 assistant 轮数：到达后第一次请求必可见（模型
-# 读回执并决策），再留一轮余量；更老的图场景已变，重看应重新截屏
-DEFAULT_VISIBLE_TURNS = 2
+# 图在装配请求里保持可见的 assistant 轮数：只认最后一条 assistant 之后的
+# 引用（Agent 把图挂在请求尾部，紧随回执的那一次请求看一次）；更早位置的
+# 引用说明有图残留在历史里，一律降级为文字，不再每次请求重传
+DEFAULT_VISIBLE_TURNS = 1
 
 # 容量与 TTL 的保守默认：16 张已远超单任务并发看屏需求；截图 15 分钟后
 # 场景大概率已变，留引用只会让模型拿到过期画面

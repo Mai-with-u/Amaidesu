@@ -273,10 +273,11 @@ _MAX_INLINE_TEXT_CHARS = 200_000
 def _hydrate_image_refs(request: GenerateRequest) -> None:
     """把消息中的图像引用按新鲜度窗口注水为内联 ImagePart。
 
-    窗口按位置计：引用所属消息之后的 assistant 消息数不足
-    ``VisionImageStore.visible_turns`` 才注水——截图的场景几轮就过期，
-    老图不值得每轮重发（场次22-24 的 8.4 万 token 轮次即残留图重发）。
-    逐出/越窗降级为提示文本，模型被明确告知图没了而不是收到静默缺图。
+    Agent 只把图挂在请求尾部（最后一条 assistant 之后），紧随回执的那一次
+    请求看一次。窗口按位置计：引用所属消息之后的 assistant 消息数不足
+    ``VisionImageStore.visible_turns`` 才注水；更早位置的引用说明有图残留在
+    历史里，降级为提示文本，不让残留图每次请求重传（场次22-24 的 8.4 万
+    token 轮次即残留图重发）。逐出同样降级，模型被明确告知图没了。
     替换经 ``model_copy`` 重建消息，不改写入参对象（归一化可能原样引用
     调用方手中的 Message）。
     """

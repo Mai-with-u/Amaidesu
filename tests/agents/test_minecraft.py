@@ -16,7 +16,6 @@ from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
-from src.modules.tools.conversation import is_tool_message
 from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.registry import ToolRegistry
@@ -1589,12 +1588,11 @@ async def test_execute_tool_forwards_caller_profile() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_tool_visual_caller_receives_image_parts() -> None:
-    """视觉调用方的带图观察返回完整 tool 消息 dict（图以 image_ref 引用 part 附上）。
+async def test_execute_tool_visual_caller_queues_tail_image() -> None:
+    """视觉调用方的带图观察：观察载荷是文字（base64 换成占位说明），图句柄登记到尾部临时图片。
 
-    文本 part 为占位符版观察 JSON（base64 不重复携带）；引用句柄在
-    VisionImageStore 可取回原图，base64 本体不落历史；非视觉调用方同
-    参数返回观察载荷 dict（P0 用例覆盖）。
+    历史里始终只有文字回执；图只在下一次推理请求的尾部出现一次，
+    过期时不必改写历史，前缀缓存不受影响。
     """
     store = VisionImageStore()
     set_image_store(store)
@@ -1617,24 +1615,22 @@ async def test_execute_tool_visual_caller_receives_image_parts() -> None:
             )
         )
 
-        observation = await agent._execute_tool("vision_look_at_screen", {}, call_id="call_9")
+        observation = await agent._execute_tool("vision_look_at_screen", {})
 
-        assert is_tool_message(observation)
-        assert observation["tool_call_id"] == "call_9"
-        parts = observation["content"]
-        assert parts[0]["type"] == "text"
-        assert image not in parts[0]["text"]
-        assert parts[1]["type"] == "image_ref"
-        assert parts[1]["ref"].startswith("img_")
-        assert store.get(parts[1]["ref"]) == f"data:image/png;base64,{image}"
+        # 观察是文字（图位是占位说明），图句柄登记到尾部，下一次推理请求时挂在最后看一次
+        assert isinstance(observation, dict)
         assert image not in json.dumps(observation, ensure_ascii=False)
+        tail = agent._tail_images.drain()
+        assert tail is not None and tail["role"] == "user"
+        refs = [part["ref"] for part in tail["content"] if part["type"] == "image_ref"]
+        assert len(refs) == 1 and store.get(refs[0]) == f"data:image/png;base64,{image}"
     finally:
         store.clear()
 
 
 @pytest.mark.asyncio
 async def test_execute_tool_visual_caller_without_image_keeps_payload() -> None:
-    """视觉调用方调无图工具：返回观察载荷 dict（消息 dict 只在有图时出现）。"""
+    """视觉调用方调无图工具：返回观察载荷 dict，不登记尾部图片。"""
     llm = MagicMock()
     llm.is_profile_visual = MagicMock(return_value=True)
     agent = MinecraftAgent(
@@ -1647,10 +1643,10 @@ async def test_execute_tool_visual_caller_without_image_keeps_payload() -> None:
         return_value=ToolExecutionResult(tool_name="minecraft_glance", success=True, structured_content={"ok": True})
     )
 
-    observation = await agent._execute_tool("minecraft_glance", {}, call_id="call_10")
+    observation = await agent._execute_tool("minecraft_glance", {})
 
-    assert is_tool_message(observation) is False
     assert observation == {"ok": True}
+    assert agent._tail_images.drain() is None
 
 
 # ---------------------------------------------------------------------------

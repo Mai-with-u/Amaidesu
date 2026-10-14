@@ -3,8 +3,8 @@
 对话通道与 UI 通道分离：LLM 观察只看文本答案与轻量元数据；base64
 二进制载荷（截图等）属于 UI 展示通道，经 ``tool.result`` 事件进 WebUI
 工具卡。本模块承载"载荷 → 对话安全视图"（递归滤除二进制）与视觉调用
-方的带图观察组装（图以 ``image_ref`` 引用 part 进消息——base64 本体在
-VisionImageStore，引擎装配期按新鲜度窗口注水，历史里不出现内联大载荷）。
+方的取图（工具结果图像块 → data URL；调用方存进 VisionImageStore 后只把
+句柄挂到下一次请求尾部，历史里不出现内联大载荷，也不出现图片引用）。
 
 判定刻意保守：长度超过 1KB、仅含 base64 字符集（A-Za-z0-9+/=）且无
 空白字符，三者同时成立才替换。中文长文、URL、JSON 文本必然含空白或
@@ -14,7 +14,7 @@ VisionImageStore，引擎装配期按新鲜度窗口注水，历史里不出现�
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, List
 
 from src.modules.tools.models import ToolExecutionResult
 
@@ -67,27 +67,4 @@ def extract_image_data_urls(result: ToolExecutionResult) -> List[str]:
     return urls
 
 
-def is_tool_message(value: Any) -> bool:
-    """观察返回值是否为完整 tool 消息 dict（视觉组装形态）。
-
-    区别于纯文本观察（str）与观察载荷 dict（无 role 键）——调用方据此
-    决定直接追加消息还是按现状包装 ``{"role": "tool", "content": ...}``。
-    """
-    return isinstance(value, dict) and value.get("role") == "tool" and "content" in value
-
-
-def build_tool_message(*, rendered: str, image_refs: List[str], tool_call_id: str) -> Dict[str, Any]:
-    """组装带图引用的 tool 消息。
-
-    ``rendered`` 是占位符版观察 JSON 文本；图以 ``image_ref`` 引用 part
-    附上——base64 本体在 VisionImageStore，引擎装配期按新鲜度窗口注水，
-    历史与压缩等任何整体序列化消费者都只见几十字节的句柄。
-    ``tool_call_id`` 由调用方传当前工具调用的配对 ID（tool 消息必须回应
-    带 tool_calls 的 assistant 消息）。
-    """
-    content: List[Dict[str, Any]] = [{"type": "text", "text": rendered}]
-    content.extend({"type": "image_ref", "ref": ref} for ref in image_refs)
-    return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
-
-
-__all__ = ["to_conversation_view", "extract_image_data_urls", "is_tool_message", "build_tool_message"]
+__all__ = ["to_conversation_view", "extract_image_data_urls"]
