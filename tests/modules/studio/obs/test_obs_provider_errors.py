@@ -1,13 +1,14 @@
-"""OBSProvider 失败路径：obsws-python 日志被压住、失败原因翻译后经项目日志记录、半开连接被断开。
+"""OBSProvider 对接 obsws-python：日志被压住、失败原因翻译后经项目日志记录、半开连接被断开、来源显隐走场景项。
 
 用 obsws ReqClient 替身，不发真实 WebSocket 请求；替身按 obsws-python 1.8 的行为在连接时以
-INFO 级打印含明文密码的连接参数。
+INFO 级打印含明文密码的连接参数，只提供真实客户端也有的方法。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from types import SimpleNamespace
 from typing import Any, Dict, Iterator, List, Optional
 
 import pytest
@@ -24,6 +25,9 @@ class _FakeReqClient:
     """obsws ReqClient 替身：记录调用；连接时照 obsws-python 的习惯明文打印密码，可按需让握手或请求失败。"""
 
     instances: List["_FakeReqClient"] = []
+    # 当前节目场景及其顶层来源（来源名 → 场景项 ID）：与 obs-websocket 5 一样，显隐挂在场景项上
+    program_scene = "游戏场景"
+    scene_items: Dict[str, int] = {"摄像头": 7}
     fail_connect: Optional[BaseException] = None
     fail_request: Optional[BaseException] = None
 
@@ -39,6 +43,7 @@ class _FakeReqClient:
         self.disconnected = False
         self.scenes: List[str] = []
         self.texts: List[str] = []
+        self.toggles: List[tuple] = []
         _FakeReqClient.instances.append(self)
 
     def _check(self) -> None:
@@ -52,6 +57,20 @@ class _FakeReqClient:
     def set_input_settings(self, name: str, settings: Dict[str, Any], overlay: bool) -> None:
         self._check()
         self.texts.append(settings["text"])
+
+    def get_current_program_scene(self) -> Any:
+        self._check()
+        return SimpleNamespace(current_program_scene_name=self.program_scene)
+
+    def get_scene_item_id(self, scene_name: str, source_name: str, offset: Optional[int] = None) -> Any:
+        self._check()
+        if source_name not in self.scene_items:
+            raise OBSSDKRequestError("GetSceneItemId", 600, f"No scene items were found with the name `{source_name}`.")
+        return SimpleNamespace(scene_item_id=self.scene_items[source_name])
+
+    def set_scene_item_enabled(self, scene_name: str, item_id: int, enabled: bool) -> None:
+        self._check()
+        self.toggles.append((scene_name, item_id, enabled))
 
     def disconnect(self) -> None:
         self.disconnected = True
@@ -171,6 +190,27 @@ async def test_request_after_obs_closed_reports_lost_connection(
     errors = _errors(loguru_capture)
     assert any("连接断开了" in message for message in errors)
     assert not any("密码" in message for message in errors)
+
+
+async def test_set_source_visibility_toggles_scene_item_in_program_scene(fake_obs: type[_FakeReqClient]) -> None:
+    """显隐挂在场景项上：在当前节目场景里找到来源的场景项，再设这个场景项的显隐。"""
+    provider = _provider()
+    assert await provider.connect() is True
+
+    assert await provider.set_source_visibility("摄像头", False) is True
+    assert fake_obs.instances[0].toggles == [("游戏场景", 7, False)]
+
+
+async def test_set_source_visibility_missing_source_names_the_scene(
+    fake_obs: type[_FakeReqClient], loguru_capture: Any
+) -> None:
+    """来源不在当前节目场景顶层（OBS 回 600）：不改任何场景项，原因点名场景与来源。"""
+    provider = _provider()
+    assert await provider.connect() is True
+
+    assert await provider.set_source_visibility("贴纸", True) is False
+    assert fake_obs.instances[0].toggles == []
+    assert any("当前节目场景「游戏场景」里找不到来源「贴纸」" in message for message in _errors(loguru_capture))
 
 
 def test_closed_connection_reads_as_auth_rejection_only_during_handshake() -> None:

@@ -57,7 +57,7 @@ _OBS_SWITCH_SCENE_SCHEMA: Dict[str, Any] = {
 _OBS_SET_VISIBILITY_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "source_name": {"type": "string", "description": "OBS 源名称"},
+        "source_name": {"type": "string", "description": "当前节目场景里的 OBS 来源名称（不含分组内的来源）"},
         "visible": {"type": "boolean", "description": "是否可见"},
     },
     "required": ["source_name", "visible"],
@@ -263,12 +263,21 @@ class OBSProvider(BaseToolProvider):
         if not self.is_connected or not self.obs_connection:
             self.logger.warning("OBS 未连接，无法设置源可见性")
             return False
+        scene_name = ""
         try:
-            self.obs_connection.set_source_enabled(source_name, visible)
-            self.logger.debug(f"已设置源 '{source_name}' 可见性: {visible}")
+            # obs-websocket 5 没有全局的来源开关，显隐挂在场景项上：
+            # 取当前节目场景（观众正看到的）→ 在其中找到该来源的场景项 → 设这个场景项的显隐
+            scene_name = self.obs_connection.get_current_program_scene().current_program_scene_name
+            item_id = self.obs_connection.get_scene_item_id(scene_name, source_name).scene_item_id
+            self.obs_connection.set_scene_item_enabled(scene_name, item_id, visible)
+            self.logger.debug(f"已设置场景「{scene_name}」里来源「{source_name}」的可见性: {visible}")
             return True
         except Exception as e:
-            missing = f"OBS 里找不到来源「{source_name}」：来源名区分大小写，需与 OBS「来源」面板里的名字完全一致"
+            # 查找只看当前节目场景的顶层来源：别的场景里、或收在分组里的来源都会回 600
+            missing = (
+                f"当前节目场景「{scene_name}」里找不到来源「{source_name}」：来源名区分大小写，"
+                "需与 OBS「来源」面板里的名字完全一致；收在分组里的来源找不到"
+            )
             self.logger.error(f"设置来源「{source_name}」可见性失败：{self._describe(e, not_found=missing)}")
             return False
 
