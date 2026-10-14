@@ -1,327 +1,153 @@
-"""llm_requests 表 + RequestHistoryManager 落库/查询 单测"""
+"""RequestHistoryManager：llm_requests 落库（正文出库只留统计与预览）、分页筛选、统计、清理与无库缓存回退"""
 
 from __future__ import annotations
 
 import asyncio
-import shutil
-import tempfile
-from pathlib import Path
-from typing import AsyncGenerator, Generator
 
 import pytest
 
-from src.modules.llm.request_history_manager import (
-    RequestHistoryManager,
-    RequestRecord,
-    TokenUsage,
-)
+from src.modules.llm.request_history_manager import RequestHistoryManager, RequestRecord, TokenUsage
 from src.modules.storage.database import SQLiteDatabase
 
 
 @pytest.fixture
-def temp_dir() -> Generator[Path, None, None]:
-    td = Path(tempfile.mkdtemp(prefix="llm-request-history-"))
-    yield td
-    shutil.rmtree(td, ignore_errors=True)
+def manager(store: SQLiteDatabase) -> RequestHistoryManager:
+    return RequestHistoryManager(use_global=False, llm_repo=store.llm)
 
 
-@pytest.fixture
-async def store(temp_dir: Path) -> AsyncGenerator[SQLiteDatabase, None]:
-    s = SQLiteDatabase(temp_dir / "llm-history.db")
-    await s.initialize()
-    yield s
-    await s.close()
-
-
-@pytest.fixture
-async def manager(store: SQLiteDatabase) -> AsyncGenerator[RequestHistoryManager, None]:
-    m = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    yield m
-
-
-def _record(
-    request_id: str, *, ts_ms: int, model: str = "glm-x", success: bool = True, tokens: int = 10
-) -> RequestRecord:
+def _record(request_id: str, *, ts_ms: int, model: str = "glm-x", success: bool = True, tokens: int = 10, **kwargs):
+    usage = TokenUsage(prompt_tokens=tokens, completion_tokens=tokens // 2, total_tokens=tokens + tokens // 2)
     return RequestRecord(
         request_id=request_id,
         timestamp=ts_ms,
-        profile_name="planner",
+        profile_name=kwargs.pop("profile_name", "planner"),
         model_name=model,
         request_params={"messages": [{"role": "user", "content": "hi"}]},
         response_content="回复" if success else None,
-        usage=TokenUsage(prompt_tokens=tokens, completion_tokens=tokens // 2, total_tokens=tokens + tokens // 2)
-        if success
-        else None,
+        usage=usage if success else None,
         cost=0.01,
         success=success,
         error=None if success else "boom",
         latency_ms=123,
+        **kwargs,
     )
 
 
-async def _wait_for_count(store: SQLiteDatabase, expected: int, timeout: float = 3.0) -> None:
+async def _wait_for_count(store: SQLiteDatabase, expected: int) -> None:
+    """record_request 是 fire-and-forget 写入，轮询等落库。"""
+
     async def _poll() -> None:
-        while True:
-            rows = await store.execute("SELECT COUNT(*) AS n FROM llm_requests")
-            if int(rows[0]["n"]) >= expected:
-                return
+        while (await store.execute("SELECT COUNT(*) AS n FROM llm_requests"))[0]["n"] < expected:
             await asyncio.sleep(0.01)
 
-    await asyncio.wait_for(_poll(), timeout)
+    await asyncio.wait_for(_poll(), 3.0)
 
 
-async def test_record_request_persists_to_store(store: SQLiteDatabase) -> None:
-    """record_request 经 fire-and-forget 写入 llm_requests 表。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    manager.record_request(_record("req-1", ts_ms=1_000))
-    await _wait_for_count(store, 1)
-
-    rows = await store.execute("SELECT * FROM llm_requests")
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["request_id"] == "req-1"
-    assert row["total_tokens"] == 15
-    assert row["success"] == 1
-
-
-async def test_get_history_from_store_pagination(store: SQLiteDatabase) -> None:
-    """get_history 走 SQL 分页（时间倒序），记录字段还原完整。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    for idx in range(3):
-        manager.record_request(_record(f"req-{idx}", ts_ms=1_000 * (idx + 1)))
+async def test_records_persist_and_query_with_paging_filters_and_detail(store, manager) -> None:
+    manager.record_request(_record("req-0", ts_ms=1_000))
+    manager.record_request(_record("req-1", ts_ms=2_000, success=False))
+    manager.record_request(_record("req-2", ts_ms=3_000, model="glm-y", profile_name="replyer"))
     await _wait_for_count(store, 3)
 
+    row = (await store.execute("SELECT * FROM llm_requests WHERE request_id='req-0'"))[0]
+    assert (row["total_tokens"], row["success"]) == (15, 1)
+
     page = await manager.get_history(page=1, page_size=2)
-    assert page["total"] == 3
-    assert page["total_pages"] == 2
-    assert [r["request_id"] for r in page["records"]] == ["req-2", "req-1"]
-
+    assert (page["total"], page["total_pages"]) == (3, 2)
+    assert [r["request_id"] for r in page["records"]] == ["req-2", "req-1"]  # 时间倒序
     first = page["records"][0]
-    assert first["usage"]["prompt_tokens"] == 10
-    assert first["usage"]["completion_tokens"] == 5
-    assert first["usage"]["total_tokens"] == 15
-    # 未上报的思考 token 经 schema 落 0；reasoning_tokens 字段随新 schema 一定存在
+    assert first["usage"] == first["usage"] | {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
     assert "reasoning_tokens" in first["usage"]
-    # v14 起正文出库：列表路径 request_params 不再还原（详情接口按 request_id
-    # 回查诊断文件），统计列与 preview_text 摘要正常
-    assert first["request_params"] == {}
-    assert first["preview_text"] == "hi"
+    # 正文出库：列表不还原 request_params，只给 preview_text 摘要
+    assert (first["request_params"], first["preview_text"]) == ({}, "hi")
 
+    def ids(history) -> list[str]:
+        return [r["request_id"] for r in history["records"]]
 
-async def test_get_history_filters(store: SQLiteDatabase) -> None:
-    """模型/成功状态筛选生效。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    manager.record_request(_record("req-ok", ts_ms=1_000))
-    manager.record_request(_record("req-bad", ts_ms=2_000, success=False))
-    await _wait_for_count(store, 2)
-
-    ok_only = await manager.get_history(success_only=True)
-    assert [r["request_id"] for r in ok_only["records"]] == ["req-ok"]
-
-    by_model = await manager.get_history(model_name="glm-x")
-    assert by_model["total"] == 2
-
-
-async def test_get_request_by_id_from_store(store: SQLiteDatabase) -> None:
-    """按 request_id 从库里取单条详情。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    manager.record_request(_record("req-detail", ts_ms=5_000))
-    await _wait_for_count(store, 1)
-
-    record = await manager.get_request_by_id("req-detail")
-    assert record is not None and record["request_id"] == "req-detail"
+    assert ids(await manager.get_history(success_only=True)) == ["req-2", "req-0"]
+    assert ids(await manager.get_history(model_name="glm-x")) == ["req-1", "req-0"]
+    assert ids(await manager.get_history(profile_name="replyer")) == ["req-2"]
+    assert (await manager.get_request_by_id("req-0"))["request_id"] == "req-0"
     assert await manager.get_request_by_id("missing") is None
 
 
-async def test_record_request_persists_v12_columns(store: SQLiteDatabase) -> None:
-    """v12 三列（reasoning_tokens / usage_raw_json / profile_name）统计侧落库与还原。
-
-    v14 起正文大字段出库（usage_raw_json 落库一律 NULL，正文在诊断文件），
-    统计列与 profile_name 落库语义不变。
-    """
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    record = RequestRecord(
-        request_id="req-v12",
-        timestamp=6_000,
-        profile_name="planner",
-        model_name="glm-x",
-        request_params={"reasoning_effort": "medium"},
-        response_content="ok",
-        usage=TokenUsage(
-            prompt_tokens=12,
-            completion_tokens=4,
-            total_tokens=16,
-            reasoning_tokens=3,
-        ),
-        cost=0.01,
-        success=True,
-        error=None,
-        latency_ms=80,
-    )
-    record_dict = record.to_dict()
-    record_dict["usage_raw_json"] = (
-        '{"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16,'
-        ' "completion_tokens_details": {"reasoning_tokens": 3}}'
-    )
-    manager.record_request_from_dict(record_dict)
-    await _wait_for_count(store, 1)
-
-    rows = await store.execute("SELECT profile_name, reasoning_tokens, usage_raw_json FROM llm_requests")
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["profile_name"] == "planner"
-    assert int(row["reasoning_tokens"]) == 3
-    # 正文出库：usage_raw_json 不再落库（正文在 logs/llm_requests/ 诊断文件）
-    assert row["usage_raw_json"] is None
-
-    # 还原：profile_name / reasoning_tokens 统计侧透传
-    fetched = await manager.get_request_by_id("req-v12")
-    assert fetched is not None
-    assert fetched["profile_name"] == "planner"
-    assert fetched["usage"]["reasoning_tokens"] == 3
-
-
-async def test_record_request_bare_statistics_and_preview(store: SQLiteDatabase) -> None:
-    """v14 新契约：正文五字段落库一律 NULL，preview_text 摘要落库。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    record_dict = {
-        "request_id": "req-v14",
-        "timestamp": 7_000,
-        "profile_name": "planner",
-        "model_name": "glm-x",
-        "request_params": {
-            "messages": [
-                {"role": "system", "content": "system prompt"},
-                {"role": "user", "content": "帮我看看这局局势如何，下一步应该怎么走才稳妥"},
-            ]
-        },
-        "response_content": "ok",
-        "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
-        "success": True,
-        "latency_ms": 50,
+async def test_body_fields_leave_db_keeping_statistics_and_preview(store, manager) -> None:
+    """正文五字段落库一律 NULL（正文在诊断文件）；profile_name / reasoning_tokens / preview_text 落库并还原。"""
+    record = _record("req-v14", ts_ms=7_000).to_dict()
+    record["request_params"] = {
+        "messages": [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "帮我看看这局局势如何，下一步应该怎么走才稳妥，" * 3},
+        ]
     }
-    manager.record_request_from_dict(record_dict)
+    record["usage"]["reasoning_tokens"] = 3
+    record["usage_raw_json"] = '{"completion_tokens_details": {"reasoning_tokens": 3}}'
+    manager.record_request_from_dict(record)
     await _wait_for_count(store, 1)
 
-    rows = await store.execute(
-        "SELECT request_params, reasoning_content, tool_calls, usage_raw_json, breakdown_json, preview_text"
-        " FROM llm_requests WHERE request_id = 'req-v14'"
-    )
-    row = rows[0]
-    assert row["request_params"] is None
-    assert row["reasoning_content"] is None
-    assert row["tool_calls"] is None
-    assert row["usage_raw_json"] is None
-    assert row["breakdown_json"] is None
+    row = (await store.execute("SELECT * FROM llm_requests"))[0]
+    for column in ("request_params", "reasoning_content", "tool_calls", "usage_raw_json", "breakdown_json"):
+        assert row[column] is None
+    assert (row["profile_name"], row["reasoning_tokens"]) == ("planner", 3)
     # 预览摘要取最后一条有正文的消息，截 50 字符
-    assert row["preview_text"].startswith("帮我看看这局局势")
-    assert len(row["preview_text"]) <= 50
+    assert row["preview_text"].startswith("帮我看看这局局势") and len(row["preview_text"]) <= 50
 
-    # 列表路径透出 preview_text
-    history = await manager.get_history()
-    assert history["records"][0]["preview_text"] == row["preview_text"]
-
-
-async def test_get_history_profile_name_filter(store: SQLiteDatabase) -> None:
-    """profile_name 筛选生效（替代历史的 client_type 筛选语义）。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    manager.record_request_from_dict({**_record("req-planner", ts_ms=1_000).to_dict(), "profile_name": "planner"})
-    manager.record_request_from_dict({**_record("req-replyer", ts_ms=2_000).to_dict(), "profile_name": "replyer"})
-    await _wait_for_count(store, 2)
-
-    planner_only = await manager.get_history(profile_name="planner")
-    assert [r["request_id"] for r in planner_only["records"]] == ["req-planner"]
-    assert planner_only["total"] == 1
+    fetched = await manager.get_request_by_id("req-v14")
+    assert (fetched["profile_name"], fetched["usage"]["reasoning_tokens"]) == ("planner", 3)
+    assert (await manager.get_history())["records"][0]["preview_text"] == row["preview_text"]
 
 
-async def test_get_statistics_from_store(store: SQLiteDatabase) -> None:
-    """统计接口走 SQL 聚合，model_stats/client_stats 形状与旧实现一致。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    manager.record_request(_record("req-1", ts_ms=1_000))
-    manager.record_request(_record("req-2", ts_ms=2_000, success=False))
+async def test_statistics_dates_and_clear(store, manager) -> None:
+    manager.record_request(_record("req-1", ts_ms=1_750_000_000_000))
+    manager.record_request(_record("req-2", ts_ms=1_790_000_000_000, success=False))
     await _wait_for_count(store, 2)
 
     stats = await manager.get_statistics()
-    assert stats["total_requests"] == 2
-    assert stats["successful_requests"] == 1
-    assert stats["failed_requests"] == 1
+    assert (stats["total_requests"], stats["successful_requests"], stats["failed_requests"]) == (2, 1, 1)
     assert stats["success_rate"] == pytest.approx(0.5)
-    assert stats["total_tokens"] == 15  # 失败请求 usage 为空不计
-    assert stats["model_stats"]["glm-x"]["count"] == 2
-    assert stats["client_stats"]["planner"] == 2
+    assert stats["total_tokens"] == 15  # 失败请求无 usage 不计
+    assert (stats["model_stats"]["glm-x"]["count"], stats["client_stats"]["planner"]) == (2, 2)
     assert stats["time_range"] == {"start": None, "end": None}
 
-
-async def test_clear_history_from_store(store: SQLiteDatabase) -> None:
-    """clear_history 删除库记录并修剪缓存。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    manager.record_request(_record("req-1", ts_ms=1_000))
-    await _wait_for_count(store, 1)
-
-    refused = await manager.clear_history(confirm=False)
-    assert refused["success"] is False
-
-    result = await manager.clear_history(confirm=True)
-    assert result["success"] is True
-    assert result["cleared_records"] == 1
-    rows = await store.execute("SELECT COUNT(*) AS n FROM llm_requests")
-    assert int(rows[0]["n"]) == 0
-
-
-async def test_available_dates_desc(store: SQLiteDatabase) -> None:
-    """日期清单降序（最新在前）。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
-    manager.record_request(_record("req-1", ts_ms=1_750_000_000_000))  # 约某日
-    manager.record_request(_record("req-2", ts_ms=1_790_000_000_000))  # 更晚日期
-    await _wait_for_count(store, 2)
-
     dates = await manager.get_available_dates()
-    assert len(dates) == 2
-    assert dates == sorted(dates, reverse=True)
+    assert len(dates) == 2 and dates == sorted(dates, reverse=True)
+
+    assert (await manager.clear_history(confirm=False))["success"] is False
+    result = await manager.clear_history(confirm=True)
+    assert (result["success"], result["cleared_records"]) == (True, 2)
+    assert (await store.execute("SELECT COUNT(*) AS n FROM llm_requests"))[0]["n"] == 0
 
 
-async def test_no_store_falls_back_to_cache() -> None:
-    """未注入 store：查询退化为内存缓存路径，不报错。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=None)
-    manager.record_request(_record("req-cache", ts_ms=1_000))
-    assert manager.get_cache_size() == 1
-
-    history = await manager.get_history()
-    assert history["total"] == 1 and history["records"][0]["request_id"] == "req-cache"
-    assert await manager.get_request_by_id("req-cache") is not None
-    stats = await manager.get_statistics()
-    assert stats["total_requests"] == 1
-    assert await manager.get_available_dates() == []
-
-
-async def test_get_request_stats_by_ids_from_store(store: SQLiteDatabase) -> None:
-    """批量统计：仅回统计列、去重入参、未命中 id 不在结果中。"""
-    manager = RequestHistoryManager(use_global=False, llm_repo=store.llm)
+async def test_request_stats_by_ids_from_store(store, manager) -> None:
     manager.record_request(_record("req-s1", ts_ms=1_000, tokens=100))
     manager.record_request(_record("req-s2", ts_ms=2_000, model="glm-y", tokens=30))
     await _wait_for_count(store, 2)
 
     stats = await manager.get_request_stats_by_ids(["req-s1", "req-s1", "req-s2", "missing"])
-    assert set(stats.keys()) == {"req-s1", "req-s2"}
-    assert stats["req-s1"] == {
-        "model_name": "glm-x",
-        "prompt_tokens": 100,
-        "completion_tokens": 50,
-        "cache_hit_tokens": 0,
-        "cache_miss_tokens": 0,
+    assert stats == {
+        "req-s1": {
+            "model_name": "glm-x",
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+        },
+        "req-s2": stats["req-s2"],
     }
-    assert stats["req-s2"]["model_name"] == "glm-y"
-    assert stats["req-s2"]["prompt_tokens"] == 30
-
+    assert (stats["req-s2"]["model_name"], stats["req-s2"]["prompt_tokens"]) == ("glm-y", 30)
     assert await manager.get_request_stats_by_ids([]) == {}
 
 
-async def test_get_request_stats_by_ids_from_cache() -> None:
-    """无库模式：批量统计走内存缓存路径，口径与库路径一致。"""
+async def test_without_store_queries_fall_back_to_memory_cache() -> None:
     manager = RequestHistoryManager(use_global=False, llm_repo=None)
-    manager.record_request(_record("req-cache-s", ts_ms=1_000, tokens=8))
+    manager.record_request(_record("req-cache", ts_ms=1_000, tokens=8))
+    assert manager.get_cache_size() == 1
 
-    stats = await manager.get_request_stats_by_ids(["req-cache-s", "missing"])
-    assert stats["req-cache-s"]["prompt_tokens"] == 8
-    assert stats["req-cache-s"]["completion_tokens"] == 4
-    assert "missing" not in stats
+    history = await manager.get_history()
+    assert history["total"] == 1 and history["records"][0]["request_id"] == "req-cache"
+    assert await manager.get_request_by_id("req-cache") is not None
+    assert (await manager.get_statistics())["total_requests"] == 1
+    assert await manager.get_available_dates() == []
+    stats = await manager.get_request_stats_by_ids(["req-cache", "missing"])
+    assert list(stats) == ["req-cache"]
+    assert (stats["req-cache"]["prompt_tokens"], stats["req-cache"]["completion_tokens"]) == (8, 4)
