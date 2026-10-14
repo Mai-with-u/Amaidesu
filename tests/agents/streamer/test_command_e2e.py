@@ -1,26 +1,12 @@
-"""命令线端到端测试（弹幕事件 → StreamerAgent → framework_delegate → 任务台账）。
+"""命令线端到端：弹幕事件 → 经 AgentManager 装配的 StreamerAgent → framework_delegate → 任务台账。
 
-与 test_command_wiring.py 的区别：走完整装配层——
-- StreamerAgent 经 ``factory.instantiate_agent``（经 AgentManager.enable_agent）
-- 真实 EventBus / ToolRegistry / TaskLedger / AgentManager
-- framework provider 经 ``build_agent_control_provider`` 真实注册
-- 仅 mock 必然的外部重资源：LLM 管理器与提示词管理器
-
-minecraft 端用登记了 ``receive_delegation`` 的轻量替身 Agent 注册进
-AgentManager（只验证收到委派/入台账，不跑真实游戏）。
-
-覆盖：
-- happy 链路：弹幕 /come → 台账出现该任务（initiator=streamer、
-  executor=minecraft、source=agent、快照含映射语义目标），替身收到委派
-- 拒绝面：白名单外命令不委派、限频第 4 条起拒绝、minecraft 未注册时
-  受理失败不崩且记日志
+真实 EventBus / ToolRegistry / TaskLedger / AgentManager，只替换 LLM 与提示词；minecraft 用只登记委派的替身。
 """
 
 from __future__ import annotations
 
 import asyncio
 from typing import List, Optional
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -34,6 +20,7 @@ from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger
+from tests.agents.streamer.helpers import stub_llm, stub_prompt
 
 # 与 [agents.streamer.command] 生产起步配置一致的映射语义
 _COME_INSTRUCTION = "到观众这儿来（跟随观众）"
@@ -78,29 +65,20 @@ class _Harness:
             self.minecraft_stub = _MinecraftStubAgent()
             self.manager.register(self.minecraft_stub)
 
-    async def start_streamer(self, command_overrides: Optional[dict] = None) -> None:
-        llm = MagicMock()
-        llm.call_tools = AsyncMock()
-        prompt = MagicMock()
-        prompt.render = MagicMock(return_value="PROMPT")
-        command = {"enabled": True, "mappings": dict(_COMMAND_MAPPINGS)}
-        if command_overrides:
-            command.update(command_overrides)
+    async def start_streamer(self) -> None:
         config = {
             "proactive": {"enabled": False},
             "word_filter": {"enabled": False},
-            "batch": {"batch_window_ms": 100, "tick_interval_ms": 50},
-            "command": command,
+            "command": {"enabled": True, "mappings": dict(_COMMAND_MAPPINGS)},
         }
-        ok = await self.manager.enable_agent(
+        assert await self.manager.enable_agent(
             "streamer",
             config,
-            llm_manager=llm,
-            prompt_manager=prompt,
+            llm_manager=stub_llm(),
+            prompt_manager=stub_prompt(),
             event_bus=self.bus,
             tool_registry=self.registry,
         )
-        assert ok, "streamer 装配应成功"
 
     async def emit_danmaku(self, text: str, user_id: str = "u1") -> None:
         payload = RoomMessagePayload(
@@ -152,13 +130,8 @@ async def test_danmaku_command_delegates_and_registers_task(
     assert instruction == expected_instruction
 
     record = harness.ledger.get(task_id)
-    assert record is not None, "台账应出现该委派任务"
-    assert record.provider == "framework"
-    assert record.tool == "framework_delegate"
-    assert record.initiator == "streamer"
-    assert record.executor == "minecraft"
-    assert record.source == "agent"
-    assert record.status == "accepted"
+    assert (record.provider, record.tool, record.status) == ("framework", "framework_delegate", "accepted")
+    assert (record.initiator, record.executor, record.source) == ("streamer", "minecraft", "agent")
     assert record.snapshot["instruction"] == expected_instruction
 
     # 台账可通过 framework_task_status 查到（同一张表的完整链路）
@@ -169,49 +142,26 @@ async def test_danmaku_command_delegates_and_registers_task(
     assert q.structured_content["status"] == "accepted"
 
 
-# 拒绝面
-
-
-async def test_unwhitelisted_command_no_delegation_no_task(harness: _Harness) -> None:
-    """白名单外命令（/admin）端到端不委派、台账无新任务。"""
+async def test_unwhitelisted_and_rate_limited_commands_do_not_delegate(harness: _Harness) -> None:
+    """白名单外不委派；同一用户默认 rate_max=3，第 4 条起不委派，其他用户不受影响。"""
     await harness.start_streamer()
-
     await harness.emit_danmaku("/admin all")
-
-    assert harness.minecraft_stub is not None
-    assert harness.minecraft_stub.received == []
-    assert len(harness.ledger) == 0
-
-
-async def test_rate_limit_rejects_from_fourth_command(harness: _Harness) -> None:
-    """同一用户连发：默认 rate_max=3，第 4 条起不委派、台账不再增长。"""
-    await harness.start_streamer()
+    assert harness.minecraft_stub.received == [] and len(harness.ledger) == 0
 
     for _ in range(4):
         await harness.emit_danmaku("/come", user_id="u1")
-
-    assert harness.minecraft_stub is not None
-    assert len(harness.minecraft_stub.received) == 3, "前 3 条受理，第 4 条被限频拒绝"
     assert len(harness.ledger) == 3
-    assert len({t for t, _ in harness.minecraft_stub.received}) == 3, "任务号互不相同"
-
-    # 其他用户不受该用户限频影响
+    assert len({task_id for task_id, _ in harness.minecraft_stub.received}) == 3
     await harness.emit_danmaku("/sleep", user_id="u2")
-    assert len(harness.minecraft_stub.received) == 4
-    assert len(harness.ledger) == 4
+    assert len(harness.minecraft_stub.received) == len(harness.ledger) == 4
 
 
-async def test_minecraft_not_enabled_invoke_fails_no_crash(
-    loguru_capture,
-) -> None:
-    """minecraft 未注册：受理失败、不崩、记日志、台账无新任务。"""
+async def test_minecraft_not_enabled_rejects_without_crash(loguru_capture) -> None:
     h = _Harness(with_minecraft=False)
     try:
-        with loguru_capture as cap:
-            await h.start_streamer()
+        await h.start_streamer()
         await h.emit_danmaku("/come")
-
-        assert len(h.ledger) == 0, "受理失败不登记台账"
-        assert any("受理失败" in r["message"] for r in cap.records), "委派受理失败应记日志"
+        assert len(h.ledger) == 0
+        assert any("受理失败" in r["message"] for r in loguru_capture.records)
     finally:
         await h.teardown()

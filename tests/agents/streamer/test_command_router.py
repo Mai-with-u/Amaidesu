@@ -1,13 +1,10 @@
-"""CommandRouter 单元测试：安全闸与委派全分支。
-
-端到端行为（命令不进决策缓冲等）由 ``test_command_wiring`` /
-``test_command_e2e`` 经 Agent 公共入口覆盖；本文件直接打 router，
-覆盖四类分支的边界：白名单外 / 限频 / 委派成功 / ToolRegistry 缺失。
-"""
+"""CommandRouter：非命令放行、白名单外静默丢弃、限频、委派契约参数、受理失败与注册表缺失"""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from src.agents.streamer.command.router import CommandRouter
 from src.agents.streamer.config import StreamerCommandConfig
@@ -15,114 +12,64 @@ from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult
 
-_MAPPINGS = {"come": "到主播身边来", "sleep": "回床睡觉"}
+
+def _router(registry, **overrides) -> CommandRouter:
+    fields = {"enabled": True, "mappings": {"come": "到主播身边来", "sleep": "回床睡觉"}, **overrides}
+    return CommandRouter(StreamerCommandConfig.from_dict(fields), registry)
 
 
-def _make_config(**overrides) -> StreamerCommandConfig:
-    fields = {"enabled": True, "mappings": dict(_MAPPINGS)}
-    fields.update(overrides)
-    return StreamerCommandConfig.from_dict(fields)
+def _danmaku(content: str, user_id: str = "u1") -> RoomMessagePayload:
+    user = RoomMessageUser(id=user_id, name="测试观众")
+    return RoomMessagePayload(message_type="danmaku", user=user, content=content, timestamp_ms=now_ms())
 
 
-def _make_router(registry: MagicMock | None, **config_overrides) -> CommandRouter:
-    return CommandRouter(_make_config(**config_overrides), registry)
-
-
-def _make_danmaku(content: str, user_id: str = "u1") -> RoomMessagePayload:
-    return RoomMessagePayload(
-        message_type="danmaku",
-        user=RoomMessageUser(id=user_id, name="测试观众"),
-        content=content,
-        timestamp_ms=now_ms(),
-    )
-
-
-def _ok_registry() -> MagicMock:
+def _registry(success: bool = True) -> MagicMock:
     registry = MagicMock()
     registry.invoke = AsyncMock(
         return_value=ToolExecutionResult(
             tool_name="framework_delegate",
-            success=True,
-            structured_content={"accepted": True, "task_id": "deleg_1", "executor": "minecraft"},
+            success=success,
+            structured_content={"accepted": True, "task_id": "deleg_1", "executor": "minecraft"} if success else None,
+            error_message="" if success else "agent 'minecraft' not found",
         )
     )
     return registry
 
 
-# 四类分支
+@pytest.mark.parametrize(
+    ("text", "consumed", "invoked"),
+    [("主播好可爱", False, 0), ("/admin all", True, 0), ("/sleep", True, 1)],
+    ids=["not_command", "out_of_whitelist", "whitelisted"],
+)
+async def test_dispatch_branches(text: str, consumed: bool, invoked: int) -> None:
+    registry = _registry()
+    assert await _router(registry).try_dispatch(_danmaku(text)) is consumed
+    assert registry.invoke.await_count == invoked
 
 
-async def test_non_command_text_not_consumed() -> None:
-    """非命令文本返回 False，调用方继续进决策链。"""
-    router = _make_router(_ok_registry())
-    assert await router.try_dispatch(_make_danmaku("主播好可爱")) is False
+@pytest.mark.parametrize(("target", "agent"), [(None, ""), ("text_adv", "text_adv")])
+async def test_delegation_contract_arguments(target, agent: str) -> None:
+    """目标未配置时留空，由框架委派原语解析为当前唯一启用的游戏 Agent；显式配置原样透传。"""
+    registry = _registry()
+    overrides = {"target_agent": target} if target else {}
+    await _router(registry, **overrides).try_dispatch(_danmaku("/sleep"))
+
+    invocation = registry.invoke.call_args.args[0]
+    assert invocation.tool_name == "framework_delegate" and invocation.source == "streamer"
+    assert invocation.arguments == {"agent": agent, "instruction": "回床睡觉"}
 
 
-async def test_out_of_whitelist_silently_dropped() -> None:
-    """白名单外命令静默丢弃：消费消息但不触发 invoke。"""
-    registry = _ok_registry()
-    router = _make_router(registry)
-    assert await router.try_dispatch(_make_danmaku("/admin all")) is True
-    registry.invoke.assert_not_awaited()
-
-
-async def test_rate_limit_drops_excess_commands() -> None:
-    """同一用户窗口内超过 rate_max 条后，后续命令被丢弃（不 invoke）。"""
-    registry = _ok_registry()
-    router = _make_router(registry, rate_max=2)
-    assert await router.try_dispatch(_make_danmaku("/come", user_id="u1")) is True
-    assert await router.try_dispatch(_make_danmaku("/come", user_id="u1")) is True
+async def test_rate_limit_is_per_user() -> None:
+    registry = _registry()
+    router = _router(registry, rate_max=2)
+    for _ in range(3):
+        assert await router.try_dispatch(_danmaku("/come", user_id="u1")) is True
     assert registry.invoke.await_count == 2
-    # 第三条同用户命令被限频丢弃
-    assert await router.try_dispatch(_make_danmaku("/come", user_id="u1")) is True
-    assert registry.invoke.await_count == 2
-    # 其他用户不受影响
-    assert await router.try_dispatch(_make_danmaku("/come", user_id="u2")) is True
+    await router.try_dispatch(_danmaku("/come", user_id="u2"))
     assert registry.invoke.await_count == 3
 
 
-async def test_whitelisted_command_delegates_with_contract_arguments() -> None:
-    """命中白名单：framework_delegate 收到 agent/instruction 契约参数与 source=streamer。
-
-    目标未配置时留空——由框架委派原语解析为当前唯一启用的游戏 Agent，
-    主播侧不写死任何游戏名。
-    """
-    registry = _ok_registry()
-    router = _make_router(registry)
-    assert await router.try_dispatch(_make_danmaku("/sleep")) is True
-    registry.invoke.assert_awaited_once()
-    invocation = registry.invoke.call_args.args[0]
-    assert invocation.tool_name == "framework_delegate"
-    assert invocation.arguments == {"agent": "", "instruction": "回床睡觉"}
-    assert invocation.source == "streamer"
-
-
-async def test_configured_target_passed_through() -> None:
-    """显式配置的目标注册名原样透传（多游戏并存时点名用）。"""
-    registry = _ok_registry()
-    router = _make_router(registry, target_agent="text_adv")
-    assert await router.try_dispatch(_make_danmaku("/sleep")) is True
-    assert registry.invoke.call_args.args[0].arguments == {
-        "agent": "text_adv",
-        "instruction": "回床睡觉",
-    }
-
-
-async def test_delegate_accept_failure_still_consumed() -> None:
-    """委派受理失败（目标不在名册）：拒绝执行、消息仍被消费、不抛异常。"""
-    registry = MagicMock()
-    registry.invoke = AsyncMock(
-        return_value=ToolExecutionResult(
-            tool_name="framework_delegate",
-            success=False,
-            error_message="agent 'minecraft' not found",
-        )
-    )
-    router = _make_router(registry)
-    assert await router.try_dispatch(_make_danmaku("/come")) is True
-
-
-async def test_missing_registry_warns_and_consumes() -> None:
-    """ToolRegistry 缺失：告警、不委派、消息被消费（不进决策链）。"""
-    router = _make_router(None)
-    assert await router.try_dispatch(_make_danmaku("/come")) is True
+@pytest.mark.parametrize("registry", [_registry(success=False), None], ids=["accept_failed", "no_registry"])
+async def test_command_consumed_even_when_delegation_impossible(registry) -> None:
+    """受理失败或注册表缺失：不抛异常，消息仍被消费（不进决策链）。"""
+    assert await _router(registry).try_dispatch(_danmaku("/come")) is True
