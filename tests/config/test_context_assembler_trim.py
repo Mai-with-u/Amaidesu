@@ -56,9 +56,9 @@ class TestContextAssemblerFieldTrim:
         """保留字段的用户值不被默认值覆盖。"""
         agents_path = config_dir / "agents.toml"
         content = agents_path.read_text(encoding="utf-8-sig")
-        # [agents.streamer.context] 段的 enabled 改为 false
+        # [agents.streamer.context] 段的 enabled 改为 false（段内还有历史预算字段与注释行）
         new_content = re.sub(
-            r"(\[agents\.streamer\.context\]\n(?:#[^\n]*\n)*enabled = )true",
+            r"(\[agents\.streamer\.context\]\n(?:(?:#|\w+ = )[^\n]*\n)*?enabled = )true",
             r"\1false",
             content,
         )

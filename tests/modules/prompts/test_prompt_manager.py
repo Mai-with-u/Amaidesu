@@ -401,6 +401,8 @@ class TestRealRepoTemplates:
                 "amaidesu_minecraft_agent",
                 # T4 内联提示词归置新增
                 "summary_system",
+                # 主播时间线前情提要系统提示词
+                "chapter_system",
                 # 画像增量压缩系统提示词
                 "profile_system",
                 "screen_vlm_system",

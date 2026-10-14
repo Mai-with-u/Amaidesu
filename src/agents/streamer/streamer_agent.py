@@ -55,7 +55,7 @@ from src.modules.events.payloads.room_state import RoomStateWatchedPayload
 from .rundown.presentation import apply_rundown_control, build_rundown_view
 from .rundown.rundown_state import RundownState
 from .tools.rundown_tool import RundownControlProvider, build_rundown_tool_provider
-from .background import BackgroundMaintainer
+from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
 from .message_buffer import MessageBuffer
 from .narrative import NarrativeBuffer, NarrativeView
@@ -66,6 +66,7 @@ from .room_state import RoomState
 from .speech_dispatcher import SpeechDispatcher
 from .stats import StreamerStats
 from .term_sanitizer import sanitize_internal_terms
+from .timeline import StreamerTimeline
 from .timing_gate import TimingGate
 from .tools.reply_tool import ReplyToolProvider
 from .command.router import CommandRouter
@@ -408,6 +409,15 @@ class StreamerAgent(BaseAgent):
         # live_chat，由这里按时间并入历史——主播问"要不要拉一下"、观众回"拉"时，
         # 下一轮决策仍看得到自己刚问过什么。场次开始/结束时清空，与 live_chat 同以场次为界。
         self._unpersisted_turns: List[_LiveChatTurn] = []
+        # 本场对话进 LLM 前的只追加投影：Planner 与 Replyer 共用同一份历史，
+        # 超预算时后台按章压成前情提要，两次换章之间历史前缀逐字不变
+        self._timeline = StreamerTimeline(
+            budget=config.context,
+            llm_service=llm_manager,
+            prompt_service=self._prompt,
+            profiles=(_PROFILE_PLANNER, _PROFILE_REPLYER),
+            summary_profile=SUMMARY_PROFILE,
+        )
 
         # 运营递话提醒队列（receive_prompt 入队；下个决策窗以【运营提醒】段
         # 注入参考块，读取即取空——送达一次制）。满时拒收，必达不允许静默挤旧。
@@ -514,6 +524,9 @@ class StreamerAgent(BaseAgent):
             except asyncio.CancelledError:
                 pass
         self._flush_task = None
+
+        # 时间线在跑的后台整理随 Agent 停止作废
+        await self._timeline.reset()
 
         # 资源清理契约：摘除本 Agent 注册的 provider（reply / rundown）
         removed = self.unregister_tool_providers()
@@ -674,6 +687,7 @@ class StreamerAgent(BaseAgent):
         self._live_active = True
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
         self._unpersisted_turns.clear()
+        await self._timeline.reset()
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
 
     async def _on_live_ended(
@@ -687,6 +701,7 @@ class StreamerAgent(BaseAgent):
         self._live_active = False
         # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
         self._unpersisted_turns.clear()
+        await self._timeline.reset()
         self._logger.info("场次已结束：主动发言收闸")
 
     async def _on_game_event(
@@ -1263,13 +1278,14 @@ class StreamerAgent(BaseAgent):
         return self._read_history()
 
     async def _read_history(self) -> Optional[List[Any]]:
-        """按时间正序读取当前对话，保留早期要求与已有承诺。
+        """读取当前对话并经时间线投影：前情提要各章 + 工作层原文，按主播看到的先后排列。
 
         显式场次进行中时，live_chat 是已落库对话的事实源；没开场次时的对话与
         调试注入的观众消息不会落库，由内存对话轮按发生时刻并入同一条时间线。
         读库失败返回 None（宁可本轮无历史，也不拿残缺历史冒充完整对话）。
         """
         stored: List[_LiveChatTurn] = []
+        live_pk: Optional[int] = None
         if self._chat is not None and self._session_manager is not None:
             try:
                 live_pk = await self._session_manager.resolve_pk()
@@ -1292,10 +1308,10 @@ class StreamerAgent(BaseAgent):
                 )
                 for row in rows
             ]
-        if not self._unpersisted_turns:
-            return stored
-        # 稳定排序：同一时刻的落库行与内存轮保持各自原有先后，历史前缀跨轮逐字稳定
-        return sorted([*stored, *self._unpersisted_turns], key=lambda turn: turn.timestamp_ms)
+        if self._unpersisted_turns:
+            # 稳定排序：同一时刻的落库行与内存轮保持各自原有先后，历史前缀跨轮逐字稳定
+            stored = sorted([*stored, *self._unpersisted_turns], key=lambda turn: turn.timestamp_ms)
+        return await self._timeline.project(stored, scope=live_pk)
 
     # ==================================================================
     # 统计信息

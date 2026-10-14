@@ -11,11 +11,11 @@ import re
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.modules.llm.history_compaction import HistoryCompactor
 from src.modules.logging import get_logger
 
 from . import canonical
 from .plan import DecisionPlan
+from .timeline import CHAPTER_MESSAGE_TYPE
 
 # 默认人设兜底值（cold-start 兜底：构造 config 未提供对应字段时使用）
 #
@@ -74,9 +74,6 @@ class Replyer:
         self._audience_salutation: str = self._config.get("audience_salutation", _DEFAULT_AUDIENCE_SALUTATION)
 
         self._llm_service = llm_service
-        # 对话历史 token 预算压缩器：预算来自 profile 配置（history_token_budget），
-        # 与 Planner 同一机制；预算查询失败退化为不压缩，不影响表达链
-        self._history_compactor = HistoryCompactor()
         self._prompt_service = prompt_service
         self._tool_registry = tool_registry
         self._word_filter = word_filter
@@ -143,20 +140,6 @@ class Replyer:
 
     # ==================== prompt 渲染（人设注入核心） ====================
 
-    def _compact_history(self, history_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """按 profile 配置的历史 token 预算压缩对话历史（与 Planner 同一机制）。
-
-        预算查询失败按无预算处理；未超预算时压缩器原样返回入参，零开销。
-        """
-        budget = 0
-        getter = getattr(self._llm_service, "get_history_token_budget", None)
-        if callable(getter):
-            try:
-                budget = int(getter(REPLYER_PROFILE) or 0)
-            except Exception as exc:  # noqa: BLE001 - 预算查询失败退化为不压缩
-                self.logger.warning(f"读取历史 token 预算失败（本轮不压缩）: {exc}")
-        return self._history_compactor.compact(history_messages, budget, profile_name=REPLYER_PROFILE)
-
     def _render_system_prompt(self) -> str:
         """渲染 system 提示词（全程稳定段）。
 
@@ -185,17 +168,19 @@ class Replyer:
         # 流程单上下文：None / 空串时用占位文本，与 Planner 对齐
         rundown_render = rundown if rundown else "（当前无流程单）"
         target_text = canonical.find_target_message(plan.target, batch, list(history or []))
-        # 已落库的弹幕保留在历史中的原位置，避免挪到主播回复后面。
-        history_messages = [canonical.turn_to_message(msg) for msg in list(history or [])]
-        history_messages = self._compact_history(history_messages)
+        # 已落库的弹幕保留在历史中的原位置，避免挪到主播回复后面；历史已由时间线控制在预算内。
+        # 前情提要条目带标记：渲染时原样输出，不按"昵称: 内容"拆成某人说的话
+        history_messages: List[Dict[str, Any]] = [
+            {**canonical.turn_to_message(msg), "chapter": getattr(msg, "message_type", "") == CHAPTER_MESSAGE_TYPE}
+            for msg in list(history or [])
+        ]
         # 批消息可能尚未落库或已被历史预算裁掉，只追加历史中缺失的消息。
         # 按出现次数匹配，无 ID 的同文消息也不会被全部合并成一条。
         seen = Counter((message["role"], message["content"]) for message in history_messages)
         seen_ids = {
             match.group(1)
             for message in history_messages
-            if message["role"] == "user"
-            and (match := re.search(r" \[id:(.+)\]$", message["content"]))
+            if message["role"] == "user" and (match := re.search(r" \[id:(.+)\]$", message["content"]))
         }
         for item in batch:
             message = canonical.batch_item_to_message(item)
@@ -212,7 +197,9 @@ class Replyer:
         dialogue_lines = []
         for message in history_messages:
             content = message["content"]
-            if message["role"] == "assistant":
+            if message.get("chapter"):
+                dialogue_lines.append(content)
+            elif message["role"] == "assistant":
                 dialogue_lines.append(f"{self._bot_name}(你)说：{content}")
             else:
                 nickname, separator, body = content.partition(": ")

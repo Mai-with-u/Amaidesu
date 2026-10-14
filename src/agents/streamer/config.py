@@ -59,6 +59,7 @@ from typing import Dict, List, Optional
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
+from src.modules.context import ContextBudgetConfig
 
 
 # ---------------------------------------------------------------------------
@@ -97,12 +98,14 @@ class StreamerPersonaConfig(BaseConfig):
     )
 
 
-class StreamerContextConfig(BaseConfig):
+class StreamerContextConfig(BaseConfig, ContextBudgetConfig):
     """[agents.streamer.context] 段
 
-    控制 Planner 的上下文组装路径开关。人物画像行为参数（门槛/长度/
-    注入上限/提取开关等）集中在 [memory] 段（storage.toml）——画像写入
-    （后台循环）与注入（Planner）共享同一组策略值，不拆两处。
+    控制 Planner 的上下文组装路径开关，以及本场对话历史（时间线）的预算：
+    预算 = min(模型窗口 × window_ratio, max_tokens)，越过提前整理线时后台把最老
+    一段写成前情提要，压回到回落线。人物画像行为参数（门槛/长度/注入上限/
+    提取开关等）集中在 [memory] 段（storage.toml）——画像写入（后台循环）与
+    注入（Planner）共享同一组策略值，不拆两处。
     """
 
     enabled: bool = Field(

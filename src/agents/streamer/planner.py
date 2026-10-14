@@ -46,7 +46,6 @@ from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBloc
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.topic_gate import check_topic, rejection_reason
 from src.modules.context import TailImages
-from src.modules.llm.history_compaction import HistoryCompactor
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
@@ -265,9 +264,6 @@ class Planner:
         self._behavior_style: str = behavior_style or ""
         self._reply_provider = reply_provider
         self._elapsed_live_provider = elapsed_live_provider
-        # 对话历史 token 预算压缩器：预算来自 profile 配置（history_token_budget），
-        # 每次 _build_dialogue_messages 现查现用——Dashboard 改配置下一窗即生效
-        self._history_compactor = HistoryCompactor()
         # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派 27 次、
         # 目标来回反转——主播看不到身体手上正做着什么，就会把每条弹幕都改派成新目标
         self._delegations: Dict[str, _Delegation] = {}
@@ -748,8 +744,9 @@ class Planner:
         batch_messages = [canonical.batch_item_to_message(msg) for msg in batch]
         if not history:
             return batch_messages
+        # 历史已由时间线控制在预算内（超预算的旧段换成了前情提要），这里原样映射
         history_messages = [canonical.turn_to_message(turn) for turn in canonical.trim_batch_echo(history, batch)]
-        return self._compact_history(history_messages) + batch_messages
+        return history_messages + batch_messages
 
     def _visual_caller(self) -> bool:
         """本档位主模型能否看图（能力协商出口，ADR-037）。
@@ -765,21 +762,6 @@ class Planner:
         except Exception as e:
             self.logger.warning(f"视觉能力查询失败，按非视觉处理: {e}", exc=True)
             return False
-
-    def _compact_history(self, history_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """按 profile 配置的历史 token 预算压缩对话历史。
-
-        预算查询失败按无预算处理（决策链不因可观测辅助能力中断）；
-        未超预算时压缩器原样返回入参，零开销。
-        """
-        budget = 0
-        getter = getattr(self._llm_service, "get_history_token_budget", None)
-        if callable(getter):
-            try:
-                budget = int(getter(PLANNER_PROFILE) or 0)
-            except Exception as exc:  # noqa: BLE001 - 预算查询失败退化为不压缩
-                self.logger.warning(f"读取历史 token 预算失败（本轮不压缩）: {exc}")
-        return self._history_compactor.compact(history_messages, budget, profile_name=PLANNER_PROFILE)
 
     async def _read_reference_tools(self, round_id: str) -> str:
         """逐个调用配置的只读参考工具（无参数），按工具名列出结果；失败照实写出原因，不中断决策。"""
