@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Dict, List
 
 import pytest
@@ -187,3 +188,29 @@ def test_tail_images_drain_once() -> None:
     assert refs == ["img_1", "img_2"]
     assert "vision_look_at_screen" in message["content"][0]["text"]
     assert not tail and tail.drain() is None
+
+
+def test_structured_parts_serialized_once_per_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    """同一个工具调用对象只序列化一次；换成新对象（哪怕内容相同）才重算。"""
+    dumps: List[Any] = []
+    real_dumps = json.dumps
+
+    def counting_dumps(value: Any, **kwargs: Any) -> str:
+        dumps.append(value)
+        return real_dumps(value, **kwargs)
+
+    monkeypatch.setattr("src.modules.context.tokens.json.dumps", counting_dumps)
+    counter = TokenCounter()
+    call = _call("c1")
+    first = counter.message(call)
+    assert counter.message(call) == first and len(dumps) == 1
+    counter.message(_call("c1"))
+    assert len(dumps) == 2
+
+
+def test_prefix_guard_flags_replaced_tool_calls() -> None:
+    """工具调用被换成内容不同的新对象时照样识别为改写。"""
+    guard = PrefixGuard("测试")
+    guard.observe([_user("a"), _call("c1")])
+    assert guard.observe([_user("a"), _call("c1"), _user("b")]) is None
+    assert guard.observe([_user("a"), _call("c2")]) is not None

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from collections import OrderedDict
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Tuple
 
 from src.modules.llm.context_meter import count_text_tokens
 
@@ -35,6 +35,9 @@ class TokenCounter:
     def __init__(self, *, cache_size: int = _DEFAULT_CACHE_SIZE) -> None:
         self._cache_size = cache_size
         self._cache: "OrderedDict[str, int]" = OrderedDict()
+        # 工具调用、工具声明这类结构按对象身份缓存：历史条目写入后不再改动，
+        # 同一对象不必每次请求都重新序列化（长任务里这是每步 O(历史长度) 的开销）
+        self._structured: "OrderedDict[int, Tuple[Any, int]]" = OrderedDict()
 
     def text(self, text: str) -> int:
         """一段文本的 token 数；同一文本只分词一次。"""
@@ -58,7 +61,7 @@ class TokenCounter:
         total = _TOKENS_PER_MESSAGE + self._content(message.get("content"))
         tool_calls = message.get("tool_calls")
         if tool_calls:
-            total += self.text(json.dumps(tool_calls, ensure_ascii=False, sort_keys=True, default=str))
+            total += self._structured_tokens(tool_calls)
         return total
 
     def messages(self, messages: Iterable[Mapping[str, Any]]) -> int:
@@ -67,7 +70,20 @@ class TokenCounter:
 
     def tools(self, tools: Iterable[Mapping[str, Any]]) -> int:
         """工具声明的 token 总数：工具声明每次请求都随行，必须计入预算。"""
-        return sum(self.text(json.dumps(tool, ensure_ascii=False, sort_keys=True, default=str)) for tool in tools)
+        return sum(self._structured_tokens(tool) for tool in tools)
+
+    def _structured_tokens(self, value: Any) -> int:
+        """结构化内容的 token 数：同一对象只序列化一次（缓存持有对象引用，身份不会被复用）。"""
+        key = id(value)
+        cached = self._structured.get(key)
+        if cached is not None and cached[0] is value:
+            self._structured.move_to_end(key)
+            return cached[1]
+        tokens = self.text(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str))
+        self._structured[key] = (value, tokens)
+        if len(self._structured) > self._cache_size:
+            self._structured.popitem(last=False)
+        return tokens
 
     def _content(self, content: Any) -> int:
         """消息正文：字符串直接计；分段列表逐段计，图像引用按固定估值。"""
