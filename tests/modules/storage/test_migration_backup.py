@@ -1,21 +1,10 @@
-"""迁移前自动备份机制单测
-
-覆盖：
-- 前版本时代的旧库（有业务表、无 schema_migrations）升级时生成备份，数据无损
-- 版本落后于 SCHEMA_VERSION 的旧库升级时生成备份
-- 全新库不生成备份
-- 备份失败不阻塞迁移（降级告警）
-- 备份文件不做自动清理（同一目录多次备份共存，由用户自行管理）
-"""
+"""迁移前自动备份：旧库/版本落后的库升级前备份，全新库不备份，备份失败不阻塞，备份不自动清理"""
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
-import tempfile
 from datetime import datetime, tzinfo
 from pathlib import Path
-from typing import AsyncGenerator, Generator
 
 import pytest
 
@@ -23,126 +12,70 @@ from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.schema import SCHEMA_VERSION
 
 
-@pytest.fixture
-def temp_dir() -> Generator[Path, None, None]:
-    td = Path(tempfile.mkdtemp(prefix="migration-backup-"))
-    yield td
-    shutil.rmtree(td, ignore_errors=True)
-
-
-@pytest.fixture
-async def store(temp_dir: Path) -> AsyncGenerator[SQLiteDatabase, None]:
-    s = SQLiteDatabase(temp_dir / "test.db")
-    await s.initialize()
-    yield s
-    await s.close()
-
-
 def _backup_files(db_path: Path) -> list[Path]:
     backup_dir = db_path.parent / "backups"
-    if not backup_dir.exists():
-        return []
-    return sorted(backup_dir.glob("*.db"))
+    return sorted(backup_dir.glob("*.db")) if backup_dir.is_dir() else []
 
 
 def _make_legacy_db(db_path: Path) -> None:
-    """造一个"前版本时代"的旧库：有业务表与数据，但无 schema_migrations。"""
+    """ "前版本时代"的旧库：有业务表与数据，但无 schema_migrations。"""
     conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE legacy_tbl (id INTEGER PRIMARY KEY, note TEXT)")
+    conn.execute("INSERT INTO legacy_tbl (note) VALUES ('升级前的数据')")
+    conn.commit()
+    conn.close()
+
+
+async def _initialize(db_path: Path) -> list[str]:
+    """初始化到当前版本，返回 legacy_tbl 里保留的数据（无该表则为空）。"""
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
     try:
-        conn.execute("CREATE TABLE legacy_tbl (id INTEGER PRIMARY KEY, note TEXT)")
-        conn.execute("INSERT INTO legacy_tbl (note) VALUES ('升级前的数据')")
-        conn.commit()
+        assert await db.get_schema_version() == SCHEMA_VERSION
+        if not await db.table_exists("legacy_tbl"):
+            return []
+        return [r["note"] for r in await db.execute("SELECT note FROM legacy_tbl")]
     finally:
-        conn.close()
+        await db.close()
 
 
-async def test_legacy_db_backed_up_and_upgraded(temp_dir: Path) -> None:
-    """旧库升级：先备份（含遗留数据），再推进到当前版本。"""
-    db_path = temp_dir / "legacy.db"
+async def test_legacy_db_backed_up_then_upgraded(db_path: Path) -> None:
     _make_legacy_db(db_path)
+    assert await _initialize(db_path) == ["升级前的数据"]
 
-    store = SQLiteDatabase(db_path)
-    try:
-        await store.initialize()
-        assert await store.get_schema_version() == SCHEMA_VERSION
-
-        backups = _backup_files(db_path)
-        assert len(backups) == 1
-
-        # 备份内容可读且包含遗留数据
-        conn = sqlite3.connect(str(backups[0]))
-        try:
-            rows = conn.execute("SELECT note FROM legacy_tbl").fetchall()
-            assert rows == [("升级前的数据",)]
-        finally:
-            conn.close()
-
-        # 遗留数据在升级后的库中仍然可读
-        remain = await store.execute("SELECT note FROM legacy_tbl")
-        assert [r["note"] for r in remain] == ["升级前的数据"]
-    finally:
-        await store.close()
+    (backup,) = _backup_files(db_path)
+    conn = sqlite3.connect(str(backup))
+    assert conn.execute("SELECT note FROM legacy_tbl").fetchall() == [("升级前的数据",)]
+    conn.close()
 
 
-async def test_version_lagged_db_backed_up(temp_dir: Path) -> None:
-    """版本记录落后（如停在 1）的库升级时也生成备份。"""
-    db_path = temp_dir / "lagged.db"
-    first = SQLiteDatabase(db_path)
-    await first.initialize()
-    await first.execute("DELETE FROM schema_migrations WHERE version > 1")
-    await first.close()
+async def test_version_lagged_db_backed_up_but_fresh_db_not(db_path: Path) -> None:
+    await _initialize(db_path)
+    assert _backup_files(db_path) == []
 
-    reopened = SQLiteDatabase(db_path)
-    try:
-        await reopened.initialize()
-        assert await reopened.get_schema_version() == SCHEMA_VERSION
-        assert len(_backup_files(db_path)) == 1
-    finally:
-        await reopened.close()
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
+    await db.execute("DELETE FROM schema_migrations WHERE version > 1")
+    await db.close()
+    await _initialize(db_path)
+    assert len(_backup_files(db_path)) == 1
 
 
-async def test_fresh_db_no_backup(temp_dir: Path) -> None:
-    """全新库（文件不存在）首次初始化不生成备份。"""
-    db_path = temp_dir / "fresh.db"
-    store = SQLiteDatabase(db_path)
-    try:
-        await store.initialize()
-        assert await store.get_schema_version() == SCHEMA_VERSION
-        assert _backup_files(db_path) == []
-    finally:
-        await store.close()
-
-
-async def test_backup_failure_does_not_block_migration(temp_dir: Path) -> None:
-    """备份目标不可创建（backups 被文件占用）时降级告警，迁移照常完成。"""
-    db_path = temp_dir / "blocked.db"
+async def test_backup_failure_does_not_block_migration(db_path: Path) -> None:
     _make_legacy_db(db_path)
-    (temp_dir / "backups").write_text("not a dir", encoding="utf-8")
-
-    store = SQLiteDatabase(db_path)
-    try:
-        await store.initialize()
-        assert await store.get_schema_version() == SCHEMA_VERSION
-        remain = await store.execute("SELECT note FROM legacy_tbl")
-        assert [r["note"] for r in remain] == ["升级前的数据"]
-    finally:
-        await store.close()
+    (db_path.parent / "backups").write_text("not a dir", encoding="utf-8")  # 备份目录被文件占用
+    assert await _initialize(db_path) == ["升级前的数据"]
 
 
-async def test_backups_not_auto_pruned(store: SQLiteDatabase, temp_dir: Path) -> None:
-    """备份不做自动清理：同一库多次备份文件共存，由用户自行管理。"""
-    db_path = temp_dir / "test.db"
+async def test_backups_are_not_auto_pruned(store: SQLiteDatabase, db_path: Path) -> None:
     store._backup_before_migration(SCHEMA_VERSION - 1)
     store._backup_before_migration(SCHEMA_VERSION - 1)
-
     # 撞名会自动避让，两次备份必然是两个文件，不依赖时钟分辨率
-    backups = _backup_files(db_path)
-    assert len(backups) == 2
+    assert len(_backup_files(db_path)) == 2
 
 
-@pytest.mark.asyncio
 async def test_backups_with_identical_timestamp_do_not_overwrite(
-    store: SQLiteDatabase, temp_dir: Path, monkeypatch: pytest.MonkeyPatch
+    store: SQLiteDatabase, db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """时钟返回同一时刻（粗粒度时钟或极快连续迁移）时，备份追加序号避让而非互相覆盖。"""
     frozen = datetime(2026, 10, 15, 12, 0, 0, 123456)
@@ -154,11 +87,9 @@ async def test_backups_with_identical_timestamp_do_not_overwrite(
 
     monkeypatch.setattr("src.modules.storage.database.datetime", _FrozenDatetime)
 
-    db_path = temp_dir / "test.db"
     # 连续三次备份拿到同一时间戳：第一份占原名，后两份依次追加 -1、-2
     for _ in range(3):
         store._backup_before_migration(SCHEMA_VERSION - 1)
 
     base = f"test-pre-v{SCHEMA_VERSION}-20261015-120000123456"
-    names = [path.name for path in _backup_files(db_path)]
-    assert names == sorted([f"{base}.db", f"{base}-1.db", f"{base}-2.db"])
+    assert [path.name for path in _backup_files(db_path)] == sorted([f"{base}.db", f"{base}-1.db", f"{base}-2.db"])
