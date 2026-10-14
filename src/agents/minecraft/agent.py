@@ -25,7 +25,7 @@ from contextlib import suppress
 from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional, Set
 
-from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars, json_text
+from src.agents.minecraft.context import FACTS_KEY, MinecraftHistoryCompactor, close_interrupted_calls, json_text
 from src.agents.minecraft.glance import glance_scene, glance_self
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.maicraft import (
@@ -48,7 +48,7 @@ from src.agents.minecraft.maicraft import (
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
-from src.modules.context import TailImages
+from src.modules.context import PrefixGuard, TailImages
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentRepliedPayload
@@ -69,9 +69,6 @@ __all__ = ["MinecraftAgent"]
 
 # 游戏决策使用独立用途。
 MINECRAFT_PROFILE = "minecraft"
-
-# 让出等待后台目标时，历史超过预算的这一比例就提前整理；整理目标仍按完整预算的六成计算。
-_IDLE_COMPACTION_RATIO = 0.7
 
 # 递话来源标签：运营在控制面直接说的话与主播决策循环递来的补充分开标注。
 _PROMPT_SOURCE_LABELS = {"operator": "[运营原话]", "planner-react": "[主播补充]"}
@@ -200,6 +197,8 @@ class MinecraftAgent(BaseAgent):
         self._idle_compaction: Optional[asyncio.Task[None]] = None
         # 工具刚返回的截图：历史里只留文字回执，真图挂在下一次推理请求的尾部，用完即弃
         self._tail_images = TailImages()
+        # 相邻两次推理请求的历史只该在尾部追加；集中整理与开新任务之外的改写记告警
+        self._prefix_guard = PrefixGuard("MinecraftAgent")
         # 本批已吸收的委派任务号（进入 running）与待写终态的委派任务号
         self._delegated_batch_ids: List[str] = []
         self._delegated_finished_ids: List[str] = []
@@ -550,7 +549,7 @@ class MinecraftAgent(BaseAgent):
                 {
                     "role": "user",
                     "content": "[继续原游戏任务]\n" + json_text(self._continue_task_context()),
-                    "_minecraft_context_facts": True,
+                    FACTS_KEY: True,
                 }
             )
 
@@ -596,6 +595,7 @@ class MinecraftAgent(BaseAgent):
             # 历史前缀与这一次逐字一致，缓存照常命中；画面内容由模型这一步的说明带下去
             tail = self._tail_images.drain()
             request_messages = [*messages, tail] if tail is not None else messages
+            self._prefix_guard.observe(messages)
             try:
                 response = await self._llm.generate(
                     request_messages, profile=MINECRAFT_PROFILE, tools=tool_defs, on_delta=on_delta
@@ -702,6 +702,7 @@ class MinecraftAgent(BaseAgent):
         messages[:] = [dict(system_message)]
         # 上个任务最后看过还没来得及用的截图属于旧现场，新任务不带
         self._tail_images.drain()
+        self._prefix_guard.expect_rewrite("开新任务")
         self._context_compactor.checkpoints = 0
         self._shown_context = {}
         self._mc_state.set_todos([])
@@ -1156,8 +1157,8 @@ class MinecraftAgent(BaseAgent):
         """让出等待时若历史已过提前整理线，就在后台整理；身体此刻本来就在等游戏结果。"""
         if self._idle_compaction is not None and not self._idle_compaction.done():
             return
-        trigger = int(self.typed_config.context.max_context_chars * _IDLE_COMPACTION_RATIO)
-        if context_chars(messages, tools) <= trigger:
+        trigger = self._context_compactor.watermarks().prepare
+        if self._context_compactor.measure(messages, tools) <= trigger:
             return
         facts = self._current_task_context()
         self._idle_compaction = asyncio.create_task(self._compact_while_waiting(messages, tools, facts, trigger))
@@ -1166,8 +1167,10 @@ class MinecraftAgent(BaseAgent):
         self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], facts: Dict[str, Any], trigger: int
     ) -> None:
         try:
-            if await self._context_compactor.compact(messages, tools, facts, trigger_chars=trigger):
+            if await self._context_compactor.compact(messages, tools, facts, trigger_tokens=trigger):
                 self._shown_context = deepcopy(facts)
+                # 整理就地改写了历史前段，醒来后的第一次请求重算前缀是预期内的
+                self._prefix_guard.expect_rewrite("等待期间集中整理")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 提前整理失败不影响任务，醒来后按正常预算处理
@@ -1181,7 +1184,7 @@ class MinecraftAgent(BaseAgent):
         if task is None:
             return
         if not task.done():
-            if context_chars(self._messages, tools) > self.typed_config.context.max_context_chars:
+            if self._context_compactor.measure(self._messages, tools) > self._context_compactor.watermarks().budget:
                 await task
                 return
             task.cancel()
@@ -1190,12 +1193,13 @@ class MinecraftAgent(BaseAgent):
 
     async def _prepare_context(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> bool:
         """历史超预算才整理；失败保留原件并挂起，避免无上下文地继续操作游戏。"""
-        if context_chars(messages, tools) <= self.typed_config.context.max_context_chars:
+        if self._context_compactor.measure(messages, tools) <= self._context_compactor.watermarks().budget:
             return True
         facts = self._current_task_context()
         try:
             if await self._context_compactor.compact(messages, tools, facts):
                 self._shown_context = deepcopy(facts)
+                self._prefix_guard.expect_rewrite("集中整理")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 整理失败保留任务，不用半份摘要继续游戏

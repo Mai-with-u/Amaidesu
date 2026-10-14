@@ -1,7 +1,8 @@
 """上下文预算：按模型窗口比例换算 token 预算与三条水位线。
 
 预算由两方共同决定：窗口是模型属性（``[[llm_models]].context_window``），
-用多大比例、上限多少是消费方 Agent 的策略。窗口未配置（0）时直接取上限。
+用多大比例、上限多少是消费方 Agent 的策略。窗口未配置（0）时按保守的
+128k 窗口换算——不知道模型能吃多少时，按上限发过去可能直接被拒收。
 
 三条水位线的含义（都以预算为基准）：
 
@@ -18,7 +19,10 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field, model_validator
 
-__all__ = ["ContextBudgetConfig", "Watermarks", "resolve_watermarks"]
+__all__ = ["ContextBudgetConfig", "Watermarks", "resolve_watermarks", "UNKNOWN_WINDOW_TOKENS"]
+
+# 模型窗口未配置时假定的窗口：主流模型都不小于它，按它换算不会撞窗口
+UNKNOWN_WINDOW_TOKENS = 128_000
 
 
 class ContextBudgetConfig(BaseModel):
@@ -29,7 +33,7 @@ class ContextBudgetConfig(BaseModel):
         gt=0.0,
         le=1.0,
         title="窗口占比",
-        description="预算占模型上下文窗口的比例；窗口未配置时按预算上限计",
+        description="预算占模型上下文窗口的比例；窗口未配置时按 128k 窗口换算",
     )
     max_tokens: int = Field(
         default=128_000,
@@ -77,9 +81,8 @@ def resolve_watermarks(config: ContextBudgetConfig, window_tokens: int) -> Water
 
     窗口每次装配现查：Dashboard 换了模型或改了窗口，下一次请求即按新窗口计。
     """
-    budget = config.max_tokens
-    if window_tokens > 0:
-        budget = min(int(window_tokens * config.window_ratio), config.max_tokens)
+    window = window_tokens if window_tokens > 0 else UNKNOWN_WINDOW_TOKENS
+    budget = min(int(window * config.window_ratio), config.max_tokens)
     return Watermarks(
         budget=budget,
         prepare=int(budget * config.prepare_ratio),

@@ -8,10 +8,21 @@ import pytest
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig, MinecraftContextConfig
-from src.agents.minecraft.context import MinecraftHistoryCompactor, close_interrupted_calls, context_chars
+from src.agents.minecraft.context import SUMMARY_KEY, MinecraftHistoryCompactor, close_interrupted_calls
 from src.modules.config.agents_schemas import AgentsConfig
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
+
+
+@pytest.fixture(autouse=True)
+def _chars_as_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """按字符数计 token：预算断言与是否装了 tiktoken 词表无关，数值也直观。"""
+    monkeypatch.setattr("src.modules.context.tokens.count_text_tokens", len)
+
+
+def tokens(messages: list[dict]) -> int:
+    """与整理器同口径的历史 token 数（不含工具声明）。"""
+    return MinecraftHistoryCompactor(MagicMock(), MinecraftContextConfig()).measure(messages, [])
 
 
 def history() -> list[dict]:
@@ -40,7 +51,7 @@ async def test_checkpoint_preserves_facts_and_recent_protocol_groups_then_stays_
     llm.generate = AsyncMock(
         return_value=Response(success=True, content="已完成设计，等待验证供料结果", finish_reason="stop")
     )
-    config = MinecraftContextConfig(max_context_chars=24000, recent_turns=2)
+    config = MinecraftContextConfig(max_tokens=24000, recent_turns=2)
     compactor = MinecraftHistoryCompactor(llm, config)
     messages = history()
     # 当前计划独立于旧笔记保存；真正整理历史后，编号和 ready 状态仍留在事实区。
@@ -52,7 +63,7 @@ async def test_checkpoint_preserves_facts_and_recent_protocol_groups_then_stays_
         "plan_facts": [{"plan_id": "validated-plan", "state": "ready", "result_ref": "plan-observation"}],
     }
     assert await compactor.compact(messages, [], facts)
-    assert context_chars(messages, []) < config.max_context_chars
+    assert tokens(messages) < config.max_tokens
     assert "禁止取私人箱子" in messages[1]["content"] and '"outcome_known":false' in messages[1]["content"]
     assert '"plan_id":"validated-plan"' in messages[1]["content"] and '"state":"ready"' in messages[1]["content"]
     pending = set()
@@ -84,7 +95,7 @@ async def test_failed_checkpoint_keeps_original_history(response: Response) -> N
     llm.generate = AsyncMock(return_value=response)
     messages = history()
     before = deepcopy(messages)
-    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000))
     with pytest.raises(ValueError, match="摘要未完整"):
         await compactor.compact(messages, [], {"original_instructions": ["建好"]})
     assert messages == before and compactor.checkpoints == 0
@@ -112,7 +123,7 @@ async def test_compact_summarize_request_carries_refs_not_base64() -> None:
             ],
         },
     )
-    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000, recent_turns=2))
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000, recent_turns=2))
     assert await compactor.compact(messages, [], {"original_instructions": ["建好"]})
     summarize_request = llm.generate.call_args[0][0]
     serialized = json.dumps(summarize_request, ensure_ascii=False, default=str)
@@ -130,8 +141,8 @@ def test_interrupted_calls_have_unknown_receipts_and_config_stays_in_minecraft()
     stable = deepcopy(messages)
     close_interrupted_calls(messages)
     assert messages == stable
-    config = AgentsConfig.model_validate({"minecraft": {"context": {"max_context_chars": 64000}}})
-    assert config.minecraft.context.max_context_chars == 64000
+    config = AgentsConfig.model_validate({"minecraft": {"context": {"max_tokens": 64000}}})
+    assert config.minecraft.context.max_tokens == 64000
     assert "context" not in config.text_adv.model_dump()
 
 
@@ -151,7 +162,7 @@ async def test_oversized_or_incomplete_summary_is_rewritten_before_commit(first:
     )
     messages = history()
     messages.insert(2, {"role": "user", "content": "旧索引不要进入摘要", "_minecraft_context_facts": True})
-    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000))
     assert await compactor.compact(messages, [], {"original_instructions": ["禁止取私人箱子"]})
     assert compactor.last_calls == 2 and compactor.checkpoints == 1
     assert "旧索引不要进入摘要" not in str(llm.generate.call_args_list[0].args[0])
@@ -166,7 +177,7 @@ async def test_failed_rewrite_is_bounded_by_remaining_budget() -> None:
     llm.generate = AsyncMock(return_value=Response(success=True, content="摘" * 6575, finish_reason="stop"))
     messages = history()
     before = deepcopy(messages)
-    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000))
     with pytest.raises(ValueError, match="6575"):
         await compactor.compact(messages, [], {}, max_attempts=1)
     assert compactor.last_calls == 1 and messages == before
@@ -184,7 +195,7 @@ async def test_summary_reads_inert_history_and_rejects_textual_tool_calls() -> N
         ]
     )
     messages = history()
-    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000))
     assert await compactor.compact(messages, [], {"original_instructions": ["在原平台建好机器"]})
     request = llm.generate.call_args_list[0].args[0]
     assert [item["role"] for item in request] == ["system", "user", "user"]
@@ -202,7 +213,7 @@ async def test_repeated_textual_calls_do_not_replace_history() -> None:
     )
     messages = history()
     before = deepcopy(messages)
-    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000))
     with pytest.raises(ValueError, match="工具调用标记"):
         await compactor.compact(messages, [], {"original_instructions": ["建好"]})
     assert messages == before and compactor.last_calls == 2
@@ -222,7 +233,7 @@ async def test_checkpoint_compares_old_doubts_with_current_decisions() -> None:
         "background_tasks": [{"task_id": "survey", "status": "succeeded", "snapshot_id": "site"}],
         "observations": [{"ref": "大索引由主上下文保存"}],
     }
-    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_context_chars=24000))
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000))
     assert await compactor.compact(messages, [], facts)
     request = llm.generate.call_args.args[0]
     current = request[-1]["content"]
@@ -244,7 +255,7 @@ async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: i
             Response(success=True, content="施工已核验，目标完成", finish_reason="stop"),
         ]
     )
-    agent = MinecraftAgent(MinecraftConfig(context=MinecraftContextConfig(max_context_chars=24000)), llm_manager=llm)
+    agent = MinecraftAgent(MinecraftConfig(context=MinecraftContextConfig(max_tokens=24000)), llm_manager=llm)
     agent._task_instructions = ["建好，保留原有约束"]
     agent._task_finished = False
     agent._task_steps = used_steps
@@ -254,6 +265,44 @@ async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: i
     assert agent._task_steps == used_steps + 3 and not agent._task_suspended
     assert agent._task_finished and llm.generate.await_count == 3
     assert agent._context_compactor.last_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_later_checkpoint_appends_segment_without_rewriting_earlier_one() -> None:
+    """第二次整理只把上次以来的原始记录压成新一段，第一段原样保留、不进摘要请求。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(
+        side_effect=[
+            Response(success=True, content="第一段：已查清资料", finish_reason="stop"),
+            Response(success=True, content="第二段：开始施工", finish_reason="stop"),
+        ]
+    )
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000, recent_turns=2))
+    messages = history()
+    assert await compactor.compact(messages, [], {"original_instructions": ["建好"]})
+    first = deepcopy(messages[2])
+    assert first[SUMMARY_KEY] and "第 1 段" in first["content"]
+
+    messages.extend(history()[2:])
+    assert await compactor.compact(messages, [], {"original_instructions": ["建好"]})
+    assert messages[2] == first
+    assert messages[3][SUMMARY_KEY] and "第 2 段" in messages[3]["content"] and "开始施工" in messages[3]["content"]
+    assert "第一段：已查清资料" not in str(llm.generate.call_args_list[1].args[0][1])
+
+
+@pytest.mark.asyncio
+async def test_oversized_segments_fold_into_new_one() -> None:
+    """旧摘要段总量超过预算两成时，下次整理把它们一并并入新的一段，避免摘要段无限累积。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(return_value=Response(success=True, content="并入后的摘要", finish_reason="stop"))
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000, recent_turns=2))
+    messages = history()
+    bulky = {"role": "user", "content": "[历史推理摘要·第 1 段]\n" + "旧段" * 3000, SUMMARY_KEY: True}
+    messages.insert(1, bulky)
+    assert await compactor.compact(messages, [], {"original_instructions": ["建好"]})
+    segments = [message for message in messages if message.get(SUMMARY_KEY)]
+    assert len(segments) == 1 and "并入后的摘要" in segments[0]["content"] and "第 1 段" in segments[0]["content"]
+    assert "旧段旧段" in str(llm.generate.call_args.args[0][1])
 
 
 def _history_with_unread_receipt(receipt_chars: int) -> list[dict]:
@@ -293,11 +342,11 @@ async def test_unread_oversized_receipt_is_read_before_one_compaction() -> None:
     """
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=Response(success=True, content="背包打开一直失败", finish_reason="stop"))
-    config = MinecraftContextConfig(max_context_chars=24000, recent_turns=2)
+    config = MinecraftContextConfig(max_tokens=24000, recent_turns=2)
     compactor = MinecraftHistoryCompactor(llm, config)
     messages = _history_with_unread_receipt(20000)
-    before = context_chars(messages, [])
-    assert config.max_context_chars < before <= config.max_context_chars * 1.5
+    before = tokens(messages)
+    assert config.max_tokens < before <= config.max_tokens * 1.5
     snapshot = deepcopy(messages)
 
     assert not await compactor.compact(messages, [], {"original_instructions": ["取一块铁板"]})
@@ -315,7 +364,7 @@ async def test_unread_oversized_receipt_is_read_before_one_compaction() -> None:
         ]
     )
     assert await compactor.compact(messages, [], {"original_instructions": ["取一块铁板"]})
-    assert llm.generate.await_count == 1 and context_chars(messages, []) < config.max_context_chars
+    assert llm.generate.await_count == 1 and tokens(messages) < config.max_tokens
 
 
 @pytest.mark.asyncio
@@ -323,10 +372,10 @@ async def test_far_oversized_context_still_compacts_before_reading() -> None:
     """超过预算 1.5 倍时不再跳过，照常整理旧历史，避免撞上模型上下文窗口。"""
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=Response(success=True, content="背包打开一直失败", finish_reason="stop"))
-    config = MinecraftContextConfig(max_context_chars=24000, recent_turns=2)
+    config = MinecraftContextConfig(max_tokens=24000, recent_turns=2)
     compactor = MinecraftHistoryCompactor(llm, config)
     messages = _history_with_unread_receipt(40000)
-    assert context_chars(messages, []) > config.max_context_chars * 1.5
+    assert tokens(messages) > config.max_tokens * 1.5
 
     assert await compactor.compact(messages, [], {"original_instructions": ["取一块铁板"]})
     assert llm.generate.await_count == 1

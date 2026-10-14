@@ -34,6 +34,8 @@ def _write_old_collectors_layout(config_dir: Path) -> None:
 
 def test_companion_sections_moved_out_and_written_back(tmp_path: Path) -> None:
     generate_default_configs(tmp_path)
+    # 新生成的各文件先加载一次走完各自的版本链，之后的比较只看这次迁移
+    load_config_dir(tmp_path)
     agents_before = (tmp_path / "agents.toml").read_text(encoding="utf-8-sig")
     _write_old_collectors_layout(tmp_path)
 

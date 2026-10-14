@@ -38,7 +38,8 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
                 "agents.minecraft.context.observation_inline_chars",
                 "agents.minecraft.context.archive_max_chars",
             ),
-            "2.0.40",
+            # agents.toml 钩子链延到 Minecraft 上下文预算改 token（v2.0.44）
+            "2.0.44",
         ),
         # infra.toml 的钩子链更长（sc_probability 死键清理 v2.0.41）
         ("infra.toml", ("simulator.context_window_size", "simulator.max_message_chars"), "2.0.42"),
@@ -105,13 +106,15 @@ def test_revived_default_max_width_materializes_after_removal_hook(tmp_path: Pat
 
 
 def test_summary_thresholds_and_custom_values_survive_upgrade(tmp_path: Path) -> None:
-    """此次清理保留玩家的摘要阈值、近期轮数及摘要长度。"""
+    """此次清理保留玩家的摘要阈值、近期轮数及摘要长度；字符预算随后换算成 token 预算。"""
     generate_default_configs(tmp_path)
     path = tmp_path / "agents.toml"
     data = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     data["meta"]["version"] = "2.0.39"
     minecraft = data["agents"]["minecraft"]
     for section in (minecraft["context"],):
+        # 旧布局只有字符预算，没有 token 预算字段
+        section.pop("max_tokens", None)
         section["max_context_chars"] = 234000
         section["summary_max_chars"] = 7000
         section["recent_turns"] = 8
@@ -119,6 +122,6 @@ def test_summary_thresholds_and_custom_values_survive_upgrade(tmp_path: Path) ->
     load_config_dir(tmp_path)
     migrated = tomlkit.parse(path.read_text(encoding="utf-8-sig"))["agents"]["minecraft"]
     for section in (migrated["context"],):
-        assert section["max_context_chars"] == 234000
+        assert "max_context_chars" not in section and section["max_tokens"] == 78000
         assert section["summary_max_chars"] == 7000
         assert section["recent_turns"] == 8

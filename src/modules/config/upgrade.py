@@ -613,6 +613,40 @@ register_file_hook(
 )
 
 
+# Minecraft 字符预算的历届默认值：等于其中之一说明用户没改过，换用新的 token 预算默认值
+_MINECRAFT_CHAR_BUDGET_DEFAULTS = (120_000, 160_000)
+# 实测 Minecraft 历史约 2.9 字符折 1 token（16 万字符 ≈ 55k token），换算取整按 3
+_MINECRAFT_CHARS_PER_TOKEN = 3
+
+
+def _upgrade_minecraft_context_tokens(data: Dict[str, Any]) -> List[str]:
+    """agents.toml v2.0.44：Minecraft 上下文预算由字符改为 token。
+
+    ``max_context_chars`` 退役；用户显式改过的值按约 3 字符/token 换算成 ``max_tokens``
+    并记警告，历届默认值直接删除、由新默认（窗口一半、上限 20 万 token）接管。
+    已有 ``max_tokens`` 时不覆盖（幂等）。
+    """
+    agents = data.get("agents")
+    minecraft = agents.get("minecraft") if isinstance(agents, dict) else None
+    context = minecraft.get("context") if isinstance(minecraft, dict) else None
+    if not isinstance(context, dict) or "max_context_chars" not in context:
+        return []
+    chars = context.pop("max_context_chars")
+    changed = ["agents.minecraft.context.max_context_chars"]
+    if isinstance(chars, int) and chars not in _MINECRAFT_CHAR_BUDGET_DEFAULTS and "max_tokens" not in context:
+        tokens = max(4_000, chars // _MINECRAFT_CHARS_PER_TOKEN)
+        context["max_tokens"] = tokens
+        changed.append("agents.minecraft.context.max_tokens")
+        logger.warning(
+            f"agents.toml [agents.minecraft.context].max_context_chars = {chars} 已改为 token 预算："
+            f"换算为 max_tokens = {tokens}；实际预算还受 window_ratio × 模型上下文窗口约束"
+        )
+    return changed
+
+
+register_file_hook("agents.toml", "minecraft_context_tokens", "2.0.44", _upgrade_minecraft_context_tokens)
+
+
 def _version_tuple(version: str) -> tuple[int, ...]:
     """版本号 → 可比较元组（"2.0.31" → (2, 0, 31)）；解析失败按 0 处理"""
     try:

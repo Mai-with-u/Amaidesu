@@ -10,7 +10,7 @@
 本包只提供与具体 Agent 无关的机制；每层放什么、摘要怎么写，留在各 Agent 包内。
 """
 
-from src.modules.context.budget import ContextBudgetConfig, Watermarks, resolve_watermarks
+from src.modules.context.budget import UNKNOWN_WINDOW_TOKENS, ContextBudgetConfig, Watermarks, resolve_watermarks
 from src.modules.context.checkpoint import BackgroundCheckpoint, fold_count, group_messages
 from src.modules.context.prefix import PrefixGuard
 from src.modules.context.tail import TailImages
@@ -23,6 +23,7 @@ __all__ = [
     "PrefixGuard",
     "TailImages",
     "TokenCounter",
+    "UNKNOWN_WINDOW_TOKENS",
     "Watermarks",
     "fold_count",
     "group_messages",

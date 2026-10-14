@@ -103,6 +103,8 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 - 消息累积：任务内多轮，经 `LLMManager.generate(messages, profile=..., tools=...)`（OpenAI 格式消息）；工具结果以 `tool` role + `tool_call_id` 关联作为观察返回，内容就是 MaiCraft 原样的 JSON 回复
 - 同一逻辑任务跨后台等待沿用历史；历史超过预算时只总结旧调用组，最新调用组保持可读。原始指令、待办、笔记、在跑的目标与最近结束的目标独立于摘要保留；让出等待时若历史已接近预算，借这段空档在后台提前整理
+- 每次整理只把上次整理以来的原始记录压成新的一段摘要，追加在旧段之后，不重写旧段；旧段总量超过预算两成时才一并并入新的一段
+- 工具返回的截图不进历史：历史里只有文字回执，图挂在下一次推理请求的尾部看一次
 - 唤醒续做只补交相对上一份完整任务状态的变化
 - 流式不做：决策 Agent 非聊天 Agent，文本断续；对外叙事经事件→主播侧已有流式表达
 
@@ -112,8 +114,11 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 [agents.minecraft]
 events_wait_ms = 25000            # 跟踪后台目标时一次读事件流最多等多久（MaiCraft 上限 60 秒）
 
-[agents.minecraft.context]        # 工作上下文预算
-max_context_chars = 160000
+[agents.minecraft.context]        # 工作上下文预算（token，按模型窗口比例换算）
+window_ratio = 0.5                # 预算 = min(模型窗口 × window_ratio, max_tokens)
+max_tokens = 200000
+prepare_ratio = 0.7               # 让出等待时超过这一比例就借空档提前整理
+target_ratio = 0.6                # 整理后压回到这一比例
 
 [agents.minecraft.mcp]            # Agent 私有 MCP（位置即归属，owner_agent="minecraft"）
 enabled = true

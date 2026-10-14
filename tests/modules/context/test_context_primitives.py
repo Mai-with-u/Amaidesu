@@ -41,13 +41,13 @@ def _receipt(call_id: str, text: str = "ok") -> Dict[str, Any]:
 
 
 def test_watermarks_follow_window_ratio_and_cap() -> None:
-    """窗口 × 比例与上限取小；窗口未配置时直接用上限。"""
+    """窗口 × 比例与上限取小；窗口未配置时按保守的 128k 窗口换算，不按上限盲发。"""
     config = ContextBudgetConfig(window_ratio=0.25, max_tokens=128_000, prepare_ratio=0.7, target_ratio=0.4)
     big = resolve_watermarks(config, 1_000_000)
     assert (big.budget, big.prepare, big.target) == (128_000, 89_600, 51_200)
     small = resolve_watermarks(config, 200_000)
     assert small.budget == 50_000
-    assert resolve_watermarks(config, 0).budget == 128_000
+    assert resolve_watermarks(config, 0).budget == 32_000
 
 
 def test_target_ratio_must_stay_below_prepare_ratio() -> None:

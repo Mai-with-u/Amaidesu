@@ -1,15 +1,21 @@
-"""按预算集中整理 Minecraft 任务历史，普通推进期间只追加消息。"""
+"""按预算集中整理 Minecraft 任务历史，普通推进期间只追加消息。
+
+整理后的历史布局：系统说明 → 任务事实（代码保留，不经摘要）→ 历史推理摘要（按段
+只追加）→ 最近的原始调用组。每次整理只把上次整理以来的原始记录压成新的一段，
+不重写旧段，避免"摘要的摘要"层层丢细节；旧段总量超过预算的一定比例时，才把它们
+一并并入新的一段。
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import re
-from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
 from src.agents.minecraft.config import MinecraftContextConfig
+from src.modules.context import TokenCounter, Watermarks, resolve_watermarks
 from src.modules.logging import get_logger
 
 logger = get_logger("MinecraftContext")
@@ -18,15 +24,17 @@ logger = get_logger("MinecraftContext")
 # 下一轮再一次性整理掉；再大就照常整理，避免撞上模型上下文窗口
 _UNREAD_RECEIPT_HEADROOM = 1.5
 
+# 历史推理摘要各段总量超过预算的这一比例时，下次整理把旧段一并并入新的一段
+_SUMMARY_SHARE = 0.2
+
+# 消息内部标记：任务事实块与历史推理摘要段（模型看不到，整理时据此识别）
+FACTS_KEY = "_minecraft_context_facts"
+SUMMARY_KEY = "_minecraft_context_summary"
+
 
 def json_text(value: Any) -> str:
     """稳定序列化工作证据，避免空格变化制造重复正文。"""
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
-
-
-def context_chars(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> int:
-    """把工具声明一起计入呈现预算，避免只限制观察而遗漏大参数 Schema。"""
-    return len(json_text(messages)) + len(json_text(tools))
 
 
 def close_interrupted_calls(messages: list[dict[str, Any]]) -> None:
@@ -73,6 +81,23 @@ class MinecraftHistoryCompactor:
         self._interrupt = interrupt
         self.checkpoints = 0
         self.last_calls = 0
+        self._counter = TokenCounter()
+
+    def watermarks(self) -> Watermarks:
+        """按当前模型窗口换算本次生效的预算与水位线（窗口每次现查，换模型即时生效）。"""
+        window = 0
+        getter = getattr(self._llm, "get_profile_context_window", None)
+        if callable(getter):
+            try:
+                value = getter(self._profile)
+                window = value if isinstance(value, int) else 0
+            except Exception as exc:  # noqa: BLE001 - 窗口查不到按未配置处理，预算换算不中断任务
+                logger.warning(f"查询模型上下文窗口失败，按未配置处理：{exc}")
+        return resolve_watermarks(self._config, window)
+
+    def measure(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> int:
+        """历史与工具声明的 token 数：工具声明每步都随请求发出，一并计入预算。"""
+        return self._counter.messages(messages) + self._counter.tools(tools)
 
     async def compact(
         self,
@@ -81,28 +106,32 @@ class MinecraftHistoryCompactor:
         facts: dict[str, Any],
         *,
         max_attempts: int = 2,
-        context_projector: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
-        trigger_chars: int | None = None,
+        trigger_tokens: int | None = None,
     ) -> bool:
         """成功后一次性替换旧片段；失败保留原历史，避免半份摘要丢失建造约束。
 
-        ``trigger_chars`` 供等待后台任务时提前整理：身体本来就在等游戏结果，
+        ``trigger_tokens`` 供等待后台任务时提前整理：身体本来就在等游戏结果，
         借这段空档把历史整理好，醒来后的行动轮就不必先停下来等摘要。
         """
         self.last_calls = 0
-        project = context_projector or (lambda values: values)
-        before = context_chars(project(messages), tools)
-        if before <= (self._config.max_context_chars if trigger_chars is None else trigger_chars):
+        marks = self.watermarks()
+        before = self.measure(messages, tools)
+        if before <= (marks.budget if trigger_tokens is None else trigger_tokens):
             return False
         if not messages or messages[0].get("role") != "system":
             raise ValueError("任务历史缺少固定系统说明，无法整理")
+        # 旧摘要段原样留在事实块之后；它们总量过大时这次一并并入新的一段
+        summaries = [message for message in messages[1:] if message.get(SUMMARY_KEY)]
+        fold_summaries = self._counter.messages(summaries) > marks.budget * _SUMMARY_SHARE
+        kept = [] if fold_summaries else [deepcopy(message) for message in summaries]
         fixed = [
             deepcopy(messages[0]),
             {
                 "role": "user",
                 "content": "[原任务事实与已有证据]\n" + json_text(facts),
-                "_minecraft_context_facts": True,
+                FACTS_KEY: True,
             },
+            *kept,
         ]
         # 最新调用组尚未交给决策模型阅读，必须连同完整回执保留；只整理它之前已处理的历史。
         cuts = [i for i, message in enumerate(messages) if message.get("role") == "assistant"]
@@ -110,30 +139,28 @@ class MinecraftHistoryCompactor:
             return False
         protected_start = cuts[-1]
         start = max(0, len(cuts) - self._config.recent_turns)
-        # 留出后续工作空间，避免刚整理完又因几次观察重复总结；事实较多时保留原有可用余量。
+        # 新摘要段的占位按字符上限估（中文约一字一 token，偏保守）
+        reserve = self._config.summary_max_chars
+        # 压到回落线给后续工作留空间，避免刚整理完又因几次观察重复总结；事实较多压不到时退到提前整理线。
         cut = next(
             (
                 i
-                for ratio in (0.6, 0.8)
+                for ratio in (self._config.target_ratio, self._config.prepare_ratio)
                 for i in cuts[start:]
-                if context_chars(project(fixed + messages[i:]), tools) + self._config.summary_max_chars
-                <= self._config.max_context_chars * ratio
+                if self.measure(fixed + messages[i:], tools) + reserve <= marks.budget * ratio
             ),
             None,
         )
         # 单份新回执很大时，触发阈值允许暂时超出；先让模型读完，下一轮再整理已读回执。
         # 不能为了压到目标体积，把刚查到的决策编号和失败详情先交给摘要模型删掉。
         if cut is None:
-            unread_floor = context_chars(project(fixed + messages[protected_start:]), tools)
-            if (
-                unread_floor + self._config.summary_max_chars > self._config.max_context_chars
-                and before <= self._config.max_context_chars * _UNREAD_RECEIPT_HEADROOM
-            ):
+            unread_floor = self.measure(fixed + messages[protected_start:], tools)
+            if unread_floor + reserve > marks.budget and before <= marks.budget * _UNREAD_RECEIPT_HEADROOM:
                 # 这一轮整理完仍超预算（大头是还没读的新回执），下一轮又得再整理一次；
                 # 不如这轮跳过、让身体少等一次摘要，模型读完后下一轮一次整理到位
                 logger.info(
-                    f"Minecraft 上下文暂不整理：最新回执尚未阅读，整理后仍有 {unread_floor} 字符，"
-                    f"本轮带 {before} 字符先读完"
+                    f"Minecraft 上下文暂不整理：最新回执尚未阅读，整理后仍有 {unread_floor} token，"
+                    f"本轮带 {before} token 先读完"
                 )
                 return False
             cut = protected_start
@@ -152,28 +179,38 @@ class MinecraftHistoryCompactor:
                 f"直接输出中文短摘要，目标不超过 {min(2000, self._config.summary_max_chars // 2)} 字符，不调用工具。"
             ),
         }
-        # 旧事实已由 fixed 更新，避免模型把重复索引再次写成越来越长的摘要。
-        source = [deepcopy(message) for message in messages[1:cut] if not message.get("_minecraft_context_facts")]
+        # 旧事实已由 fixed 更新，避免模型把重复索引再次写成越来越长的摘要；保留下来的旧摘要段不再重写。
+        source = [
+            deepcopy(message)
+            for message in messages[1:cut]
+            if not message.get(FACTS_KEY) and (fold_summaries or not message.get(SUMMARY_KEY))
+        ]
         # 压缩旧片段时也提供最新决策与回执作对照；索引无需重抄，旧摘要不能复活已解决的问题。
         current = {key: value for key, value in facts.items() if key != "observations"}
         summary = await self._summarize(
             # 旧工具调用只作为已发生的数据交给整理模型；保留其原始角色协议会诱使模型接着执行旧任务。
             [
                 prompt,
-                {"role": "user", "content": "[已发生的历史记录，仅作摘要数据]\n" + json_text(project(source))},
+                {"role": "user", "content": "[已发生的历史记录，仅作摘要数据]\n" + json_text(source)},
                 {"role": "user", "content": "[当前任务状态，仅作核对]\n" + json_text(current)},
             ],
             max_attempts,
         )
+        segment = len(kept) + 1
         candidate = [
             *fixed,
-            {"role": "user", "content": "[历史推理摘要，不能覆盖原始要求]\n" + summary},
+            {
+                "role": "user",
+                "content": f"[历史推理摘要·第 {segment} 段，不能覆盖原始要求]\n" + summary,
+                SUMMARY_KEY: True,
+            },
             *messages[cut:],
         ]
         messages[:] = candidate
         self.checkpoints += 1
         logger.info(
-            f"Minecraft 上下文集中整理：{before} -> {context_chars(project(messages), tools)} 字符，整理次数={self.checkpoints}"
+            f"Minecraft 上下文集中整理：{before} -> {self.measure(messages, tools)} token（预算 {marks.budget}，"
+            f"摘要第 {segment} 段{'，旧段已并入' if fold_summaries else ''}），整理次数={self.checkpoints}"
         )
         return True
 
