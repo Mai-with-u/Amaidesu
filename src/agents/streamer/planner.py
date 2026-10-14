@@ -267,6 +267,13 @@ class Planner:
         # 委派受理后把"我在哪个游戏里开始做什么"记进时间线（StreamerAgent 绑定）；
         # 参考段只留每个游戏最近一次委派，时间线里留下整场的先后
         self._action_recorder: Optional[Callable[[str, str], None]] = None
+        # 直播画面（StreamerAgent 在启用时绑定）：返回最新一帧画面快照或 None。
+        # 看过的那一帧与时刻用来去重、限频——画面每次都按未命中缓存计费
+        self._frame_provider: Optional[Callable[[], Optional[Any]]] = None
+        self._frame_max_age_ms = 0
+        self._frame_min_interval_ms = 0
+        self._last_frame_ref = ""
+        self._last_frame_ms = 0
         # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派 27 次、
         # 目标来回反转——主播看不到身体手上正做着什么，就会把每条弹幕都改派成新目标
         self._delegations: Dict[str, _Delegation] = {}
@@ -295,6 +302,44 @@ class Planner:
     def bind_elapsed_live_provider(self, provider: Callable[[], Optional[int]]) -> None:
         """注入开播时长查询（StreamerAgent 构造 RundownState 后绑定，同 bind 模式）。"""
         self._elapsed_live_provider = provider
+
+    def bind_frame_provider(
+        self, provider: Callable[[], Optional[Any]], *, max_age_ms: int, min_interval_ms: int
+    ) -> None:
+        """注入直播画面来源与看画面的时效、间隔（StreamerAgent 在 live_frame 启用时绑定）。"""
+        self._frame_provider = provider
+        self._frame_max_age_ms = max_age_ms
+        self._frame_min_interval_ms = min_interval_ms
+
+    def _live_frame_message(self) -> Optional[Dict[str, Any]]:
+        """这一窗要不要看一眼直播画面：主模型能看图、画面够新、没看过这一帧、离上次够久才看。
+
+        返回挂在第一次请求尾部的 user 消息（说明 + 图片句柄），不写进消息序列；
+        画面带来的印象由模型这一步的思考与决定带下去。
+        """
+        if self._frame_provider is None or not self._visual_caller():
+            return None
+        try:
+            frame = self._frame_provider()
+        except Exception as exc:  # noqa: BLE001 - 取不到画面就不看，决策照常
+            self.logger.warning(f"读取直播画面失败，本窗不看画面：{exc}", exc=True)
+            return None
+        ref = getattr(frame, "image_ref", "") if frame is not None else ""
+        if not ref:
+            return None
+        current_ms = now_ms()
+        age_ms = current_ms - int(getattr(frame, "timestamp_ms", 0) or 0)
+        if age_ms > self._frame_max_age_ms or ref == self._last_frame_ref:
+            return None
+        if current_ms - self._last_frame_ms < self._frame_min_interval_ms:
+            return None
+        self._last_frame_ref = ref
+        self._last_frame_ms = current_ms
+        note = (
+            f"【直播画面】观众此刻看到的画面（{age_text(age_ms)}截取）。描述观感、氛围时可以参考；"
+            "游戏里的数值和进展以游戏记录和查询结果为准，画面里看不清的不要猜。"
+        )
+        return {"role": "user", "content": [{"type": "text", "text": note}, {"type": "image_ref", "ref": ref}]}
 
     def bind_action_recorder(self, recorder: Callable[[str, str], None]) -> None:
         """注入委派记录回调（执行者名, 主播自己的原话），同 bind 模式。"""
@@ -499,6 +544,8 @@ class Planner:
             # 空窗兜底：对话与参考全空时保底一条 user 消息（部分协议要求非 system 消息存在）
             messages.append({"role": "user", "content": "（本窗无对话与参考内容）"})
 
+        # 直播画面只挂在本窗第一次请求的尾部：后续 ReAct 步骤靠模型第一步的判断继续
+        frame_tail = self._live_frame_message()
         steps = 0
         while steps < self.max_steps:
             steps += 1
@@ -507,9 +554,10 @@ class Planner:
             # 上一步工具返回的截图只挂在这一次请求尾部、不写回消息序列：下一步请求时它已消失，
             # 前缀与这一次逐字一致；画面内容由模型这一步的思考与决定带下去
             tail = self._tail_images.drain()
+            extra = [item for item in (frame_tail if steps == 1 else None, tail) if item is not None]
             try:
                 response = await self._llm_service.generate(
-                    [*messages, tail] if tail is not None else messages,
+                    [*messages, *extra] if extra else messages,
                     tools=tool_list,
                     profile=PLANNER_PROFILE,
                     on_delta=thinking.callback_for("planner", steps) if thinking else None,
