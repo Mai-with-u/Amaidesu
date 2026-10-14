@@ -44,6 +44,10 @@ class CoreEvents:
     # 变化即推）；订阅者：主播侧 RoomState（更新快照供后台记账写 live_sessions）。
     # open-live 协议无"当前在线人数"推送，累计口径是与协议唯一对得上的真值。
     ROOM_STATE_WATCHED_COUNT = "room.state.watched_count"
+    # 直播画面快照：观众此刻看到的画面（发布者：画面采集器 live_frame，按低频采样、
+    # 画面明显变化或隔太久才发；载荷只带图像暂存句柄，不带图像本体）。
+    # 订阅者：主播侧把最新一帧挂在决策请求尾部看一眼。
+    ROOM_STATE_FRAME = "room.state.frame"
 
     # ========== v2 语义域事件（game.* 游戏里程碑） ==========
     # 低频、只发重大变化。四类：milestone / attention_required / error / report。

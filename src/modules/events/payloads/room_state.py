@@ -75,4 +75,36 @@ class RoomStateWatchedPayload(BasePayload):
     )
 
 
-__all__ = ["RoomStateWatchedPayload"]
+@register_event(CoreEvents.ROOM_STATE_FRAME)
+class RoomStateFramePayload(BasePayload):
+    """
+    直播画面快照（``room.state.frame``）
+
+    数据源：画面采集器（OBS 节目画面截图，或桌面截屏回退）按低频采样，
+    与上一次发布的画面相比明显变化、或距上次发布太久时才发一条。
+    图像本体存进进程内图像暂存（``VisionImageStore``），事件只带句柄——
+    事件流会进诊断记录与 WebUI，图像本体进去就是几十万字节的噪声。
+
+    发布者：画面采集器（``live_frame``）
+    订阅者：主播 Agent（保留最新一帧，决策时挂在请求尾部）
+
+    Attributes:
+        image_ref: 图像暂存句柄（``img_<hex>``；过期或被逐出后取不回）
+        width: 图像像素宽（已按采集器配置缩放）
+        height: 图像像素高
+        source: 画面来源（obs=OBS 节目画面 / screen=桌面截屏）
+        change: 与上一次发布画面的差异程度（0–1，首帧为 1）
+        timestamp_ms: 采集时刻（Unix 毫秒）
+        simulated: 数据溯源标记：True=模拟/回放源
+    """
+
+    image_ref: str = Field(..., description="图像暂存句柄（VisionImageStore 引用）")
+    width: int = Field(default=0, ge=0, description="图像像素宽")
+    height: int = Field(default=0, ge=0, description="图像像素高")
+    source: str = Field(default="", description="画面来源：obs / screen")
+    change: float = Field(default=1.0, ge=0.0, le=1.0, description="与上一次发布画面的差异（0–1）")
+    timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="采集时刻（Unix 毫秒）")
+    simulated: bool = Field(default=False, description="数据溯源标记：True=模拟/回放源")
+
+
+__all__ = ["RoomStateFramePayload", "RoomStateWatchedPayload"]

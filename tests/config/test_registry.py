@@ -63,6 +63,7 @@ class TestRegistryDomainSplit:
             "bili_danmaku",
             "bili_danmaku_official",
             "console_input",
+            "live_frame",
             "stt",
         }
         expected_agents = {"minecraft", "game_2048"}

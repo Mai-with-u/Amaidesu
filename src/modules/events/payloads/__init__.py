@@ -66,7 +66,7 @@ from .room import (
     RoomMessageUser,
     SuperChatInfo,
 )
-from .room_state import RoomStateWatchedPayload
+from .room_state import RoomStateFramePayload, RoomStateWatchedPayload
 from .rundown import RundownChangedPayload
 from .speech import StreamerSpeechPayload
 from .tasks import TaskChangedPayload
@@ -97,6 +97,7 @@ __all__ = [
     "SuperChatInfo",
     "RoomMessagePayload",
     # room.state.* 直播间状态快照
+    "RoomStateFramePayload",
     "RoomStateWatchedPayload",
     # game.* 游戏里程碑
     "GamePayload",

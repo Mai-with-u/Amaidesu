@@ -6,6 +6,7 @@
 - bili_danmaku         → BiliDanmakuCollector（legacy）
 - bili_danmaku_official→ BiliDanmakuOfficialCollector
 - console_input        → ConsoleInputCollector
+- live_frame           → LiveFrameCollector
 - stt                  → STTCollector
 
 只管**通用采集器**。Agent 附属采集器（随所属 Agent 开关，例如 Minecraft 的身体事件流与聊天流）
@@ -23,6 +24,7 @@ SUPPORTED_COLLECTORS: tuple[str, ...] = (
     "bili_danmaku",
     "bili_danmaku_official",
     "console_input",
+    "live_frame",
     "stt",
 )
 
@@ -53,6 +55,10 @@ def instantiate_collector(
         from src.modules.collectors.console.console_input_collector import ConsoleInputCollector
 
         return ConsoleInputCollector(config=config or {}, event_bus=event_bus)
+    if name == "live_frame":
+        from src.modules.collectors.frame.live_frame_collector import LiveFrameCollector
+
+        return LiveFrameCollector(config=config or {}, event_bus=event_bus)
     if name == "stt":
         from src.modules.collectors.stt.stt_collector import STTCollector
 
