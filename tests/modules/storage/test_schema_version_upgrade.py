@@ -1,156 +1,95 @@
-"""
-Schema 版本升级机制单测
-
-覆盖：
-- 新库直接建到当前 SCHEMA_VERSION，schema_migrations 补齐 [1, N] 全部版本记录
-- 旧库（版本记录停留在 1）重新 initialize 后单调推进到当前版本，数据不被破坏
-- 私有表机制已废除：无 ``_`` 前缀表，所有表统一进入启动闸门
-- v9 → v10 迁移语义：付费明细补全、金额单位统一金瓜子、平台身份复合键、
-  ``_memory_facts`` 废弃、画像两表新建
-"""
+"""Schema 版本机制：新库版本链、旧库单调升级、私有表废除，以及 v6/v9/v11/v12/v14 迁移语义"""
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
-import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import AsyncIterator
 
-import pytest
 
-from src.modules.storage.migrations import SCHEMA_MIGRATIONS
-from src.modules.storage.schema import (
-    SCHEMA_VERSION,
-    build_schema_sql,
-)
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.migrations import SCHEMA_MIGRATIONS
+from src.modules.storage.migrations.v14_llm_request_preview_column import migrate as v14_migrate
+from src.modules.storage.schema import _GIFTS_SQL, SCHEMA_VERSION, build_schema_sql
 
 
-@pytest.fixture
-def temp_db_path() -> Generator[Path, None, None]:
-    td = Path(tempfile.mkdtemp(prefix="storage-schema-upgrade-"))
-    yield td / "test.db"
-    shutil.rmtree(td, ignore_errors=True)
-
-
-@pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
-    s = SQLiteDatabase(temp_db_path)
-    await s.initialize()
-    yield s
-    await s.close()
-
-
-@pytest.mark.asyncio
-async def test_fresh_db_records_all_versions_up_to_current(store: SQLiteDatabase) -> None:
-    version = await store.get_schema_version()
-    assert version == SCHEMA_VERSION
-    rows = await store.execute("SELECT version FROM schema_migrations ORDER BY version")
-    assert [r["version"] for r in rows] == list(range(1, SCHEMA_VERSION + 1))
-
-
-def test_migration_registry_covers_every_version() -> None:
-    """守护严格 +1 版本纪律：1..SCHEMA_VERSION 每版都在迁移注册表内。"""
-    missing = set(range(1, SCHEMA_VERSION + 1)) - set(SCHEMA_MIGRATIONS)
-    extra = set(SCHEMA_MIGRATIONS) - set(range(1, SCHEMA_VERSION + 1))
-    assert not missing and not extra, f"迁移注册表与版本链不一致: 缺失版本={sorted(missing)} 多余版本={sorted(extra)}"
-
-
-@pytest.mark.asyncio
-async def test_old_db_upgrades_monotonically(temp_db_path: Path) -> None:
-    # 先造一个"版本停留在 1"的旧库
-    old = SQLiteDatabase(temp_db_path)
-    await old.initialize()
-    await old.execute("DELETE FROM schema_migrations WHERE version > 1")
-    assert await old.get_schema_version() == 1
-    # 旧库预置一行业务数据，升级后必须原样保留
-    await old.chat.insert_live_chat(
-        live_session_id=7,
-        timestamp_ms=1_000,
-        sender_role="viewer",
-        content="升级前的话",
-        message_type="danmaku",
-    )
-    await old.close()
-
-    reopened = SQLiteDatabase(temp_db_path)
-    await reopened.initialize()
+@asynccontextmanager
+async def _opened(path: Path, **kwargs) -> AsyncIterator[SQLiteDatabase]:
+    db = SQLiteDatabase(path, **kwargs)
+    await db.initialize()
     try:
+        yield db
+    finally:
+        await db.close()
+
+
+async def _rollback_to(path: Path, version: int, *statements: str) -> None:
+    """建当前库后把版本记录回退到 version，并执行造旧形状的语句。"""
+    async with _opened(path) as old:
+        await old.execute(f"DELETE FROM schema_migrations WHERE version > {version}")
+        for sql in statements:
+            await old.execute(sql)
+        assert await old.get_schema_version() == version
+
+
+async def test_fresh_db_records_full_version_chain_without_private_tables(db_path: Path) -> None:
+    # 严格 +1 版本纪律：1..SCHEMA_VERSION 每版都在迁移注册表内
+    assert set(SCHEMA_MIGRATIONS) == set(range(1, SCHEMA_VERSION + 1))
+    async with _opened(db_path) as store:
+        rows = await store.execute("SELECT version FROM schema_migrations ORDER BY version")
+        assert [r["version"] for r in rows] == list(range(1, SCHEMA_VERSION + 1))
+        # 私有表机制已废除：所有表统一进入缺一即拒启闸门
+        tables = await store.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        assert [r["name"] for r in tables if str(r["name"]).startswith("_")] == []
+        await store.assert_schema_ready()
+
+
+def test_build_schema_sql_is_current_shape() -> None:
+    sql = build_schema_sql()
+    for marker in (
+        "CREATE TABLE IF NOT EXISTS guards",
+        "CREATE TABLE IF NOT EXISTS viewer_profiles",
+        "CREATE TABLE IF NOT EXISTS session_recaps",
+        "UNIQUE(platform, user_id)",
+        "breakdown_json",
+        "preview_text",
+    ):
+        assert marker in sql
+    # gifts 已改名 quantity（viewers 的 gift_count 属不同语义）；扁平事实私有表与观众事实中间表均已移除
+    assert "gift_count" not in _GIFTS_SQL
+    assert "_memory_facts" not in sql and "viewer_facts" not in sql
+
+
+async def test_old_db_upgrades_monotonically_keeping_data(db_path: Path) -> None:
+    async with _opened(db_path) as old:
+        await old.chat.insert_live_chat(
+            live_session_id=7, timestamp_ms=1_000, sender_role="viewer", content="升级前的话", message_type="danmaku"
+        )
+    await _rollback_to(db_path, 1)
+
+    async with _opened(db_path) as reopened:
         assert await reopened.get_schema_version() == SCHEMA_VERSION
-        rows = await reopened.execute("SELECT content FROM live_chat")
-        assert [r["content"] for r in rows] == ["升级前的话"]
-    finally:
-        await reopened.close()
+        assert [r["content"] for r in await reopened.execute("SELECT content FROM live_chat")] == ["升级前的话"]
 
 
-@pytest.mark.asyncio
-async def test_no_private_tables_all_tables_in_startup_gate(store: SQLiteDatabase) -> None:
-    """私有表机制已废除：库内无 ``_`` 前缀表，所有表统一进入缺一即拒启闸门。"""
-    rows = await store.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    underscored = [r["name"] for r in rows if str(r["name"]).startswith("_")]
-    assert underscored == [], f"存在私有前缀表: {underscored}"
-    # 启动闸门覆盖全部业务表（自检通过 = list_expected_tables 全部就位）
-    await store.assert_schema_ready()
-
-
-@pytest.mark.asyncio
-async def test_v6_to_v7_migration_drops_memory_profiles(temp_db_path: Path) -> None:
-    """v6 形状的旧库升级到 v7：人物画像私有表被幂等 DROP，业务数据保留。"""
-
-    # 造 v7 新库后手工回退版本记录并补建旧表，模拟 v6 存量库
-    old = SQLiteDatabase(temp_db_path)
-    await old.initialize()
-    await old.execute("DELETE FROM schema_migrations WHERE version > 6")
-    await old.execute(
-        "CREATE TABLE _memory_profiles ("
-        "person_id TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '', "
-        "tags TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '', "
-        "updated_at_ms INTEGER NOT NULL)"
+async def test_v6_to_v7_drops_memory_profiles_idempotently(db_path: Path) -> None:
+    await _rollback_to(
+        db_path,
+        6,
+        "CREATE TABLE _memory_profiles (person_id TEXT PRIMARY KEY, updated_at_ms INTEGER NOT NULL)",
+        "INSERT INTO _memory_profiles VALUES ('u_1', 123)",
     )
-    await old.execute(
-        "INSERT INTO _memory_profiles(person_id, display_name, tags, summary, updated_at_ms) "
-        "VALUES ('u_1', 'alice', 'tag', 'sum', 123)"
-    )
-    assert await old.get_schema_version() == 6
-    await old.close()
-
-    # 重新 initialize：迁移 7 执行 DROP，版本推进到当前
-    reopened = SQLiteDatabase(temp_db_path)
-    await reopened.initialize()
-    try:
-        assert await reopened.get_schema_version() == SCHEMA_VERSION
-        assert await reopened.table_exists("_memory_profiles") is False
-    finally:
-        await reopened.close()
-
-    # 幂等：再次 initialize 成功，表保持不存在
-    again = SQLiteDatabase(temp_db_path)
-    await again.initialize()
-    try:
-        assert await again.get_schema_version() == SCHEMA_VERSION
-        assert await again.table_exists("_memory_profiles") is False
-    finally:
-        await again.close()
+    for _ in range(2):
+        async with _opened(db_path) as reopened:
+            assert await reopened.get_schema_version() == SCHEMA_VERSION
+            assert await reopened.table_exists("_memory_profiles") is False
 
 
 def _make_v9_schema(conn: sqlite3.Connection) -> None:
     """构造 v9 形状的存量库（付费明细无金额列、单键 viewers、_memory_facts 在位）。"""
     conn.executescript(
         """
-        CREATE TABLE live_sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            stream_id TEXT NOT NULL DEFAULT '',
-            platform TEXT NOT NULL DEFAULT 'unknown',
-            started_at_ms INTEGER NOT NULL,
-            ended_at_ms INTEGER,
-            title TEXT,
-            source TEXT NOT NULL DEFAULT 'manual',
-            heat INTEGER NOT NULL DEFAULT 0,
-            viewer_count INTEGER NOT NULL DEFAULT 0,
-            audience_total INTEGER NOT NULL DEFAULT 0,
-            updated_at_ms INTEGER NOT NULL
-        );
         CREATE TABLE live_chat (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             live_session_id INTEGER NOT NULL,
@@ -185,16 +124,6 @@ def _make_v9_schema(conn: sqlite3.Connection) -> None:
             message TEXT NOT NULL,
             simulated INTEGER NOT NULL DEFAULT 0
         );
-        CREATE TABLE topics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            live_session_id INTEGER NOT NULL,
-            label TEXT NOT NULL,
-            source TEXT NOT NULL,
-            score REAL NOT NULL,
-            trend REAL NOT NULL,
-            duration_ms INTEGER NOT NULL,
-            count INTEGER NOT NULL DEFAULT 0
-        );
         CREATE TABLE viewers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT NOT NULL UNIQUE,
@@ -204,93 +133,6 @@ def _make_v9_schema(conn: sqlite3.Connection) -> None:
             replied_count INTEGER NOT NULL DEFAULT 0,
             interaction_count INTEGER NOT NULL DEFAULT 0,
             last_active_ms INTEGER NOT NULL
-        );
-        CREATE TABLE sim_personas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL UNIQUE,
-            user_nickname TEXT NOT NULL,
-            role TEXT NOT NULL,
-            personality TEXT NOT NULL,
-            speaking_style TEXT NOT NULL,
-            fans_medal_level INTEGER NOT NULL DEFAULT 0,
-            guard_level INTEGER NOT NULL DEFAULT 0,
-            context_window_size INTEGER,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            messages_generated INTEGER NOT NULL DEFAULT 0,
-            created_at_ms INTEGER NOT NULL,
-            updated_at_ms INTEGER NOT NULL
-        );
-        CREATE TABLE sim_gifts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            gift_id TEXT NOT NULL UNIQUE,
-            gift_name TEXT NOT NULL,
-            category TEXT NOT NULL,
-            weight INTEGER NOT NULL DEFAULT 1,
-            data_type TEXT NOT NULL,
-            sc_amount_rmb INTEGER,
-            created_at_ms INTEGER NOT NULL,
-            updated_at_ms INTEGER NOT NULL
-        );
-        CREATE TABLE rundowns (
-            id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            segments_json TEXT NOT NULL,
-            created_at_ms INTEGER NOT NULL,
-            updated_at_ms INTEGER NOT NULL
-        );
-        CREATE TABLE game_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            live_session_id INTEGER NOT NULL,
-            game TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            message TEXT NOT NULL,
-            scene TEXT,
-            timestamp_ms INTEGER NOT NULL
-        );
-        CREATE TABLE timeline_summary (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            live_session_id INTEGER NOT NULL,
-            start_ms INTEGER NOT NULL,
-            end_ms INTEGER NOT NULL,
-            summary TEXT NOT NULL,
-            tags TEXT
-        );
-        CREATE TABLE llm_usage (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            live_session_id INTEGER,
-            model_name TEXT NOT NULL,
-            assign_name TEXT,
-            profile_name TEXT,
-            provider_name TEXT NOT NULL,
-            request_type TEXT NOT NULL,
-            prompt_tokens INTEGER NOT NULL,
-            completion_tokens INTEGER NOT NULL,
-            total_tokens INTEGER NOT NULL,
-            cache_hit_tokens INTEGER NOT NULL,
-            cache_miss_tokens INTEGER NOT NULL,
-            cost REAL NOT NULL,
-            duration_ms INTEGER NOT NULL,
-            timestamp_ms INTEGER NOT NULL,
-            request_id TEXT
-        );
-        CREATE TABLE llm_requests (
-            request_id TEXT PRIMARY KEY,
-            timestamp_ms INTEGER NOT NULL,
-            client_type TEXT NOT NULL DEFAULT '',
-            model_name TEXT NOT NULL DEFAULT '',
-            request_params TEXT,
-            response_content TEXT,
-            reasoning_content TEXT,
-            tool_calls TEXT,
-            prompt_tokens INTEGER NOT NULL DEFAULT 0,
-            completion_tokens INTEGER NOT NULL DEFAULT 0,
-            total_tokens INTEGER NOT NULL DEFAULT 0,
-            cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
-            cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
-            cost REAL NOT NULL DEFAULT 0,
-            success INTEGER NOT NULL DEFAULT 1,
-            error TEXT,
-            latency_ms INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE _memory_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -331,93 +173,37 @@ def _make_v9_schema(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO _memory_facts(text, timestamp_ms) VALUES ('旧事实', 100)")
 
 
-@pytest.mark.asyncio
-async def test_v9_to_v10_migration_semantics(temp_db_path: Path) -> None:
-    """v9 存量库 → v10：三表补全、金额统一金瓜子、身份复合键、扁平事实废弃、画像两表就位。"""
-    conn = sqlite3.connect(temp_db_path)
+async def test_v9_to_v10_migration_semantics(db_path: Path) -> None:
+    """v9 存量库 → v10：付费明细补全、金额统一金瓜子、身份复合键、扁平事实废弃、画像表就位。"""
+    conn = sqlite3.connect(db_path)
     _make_v9_schema(conn)
     conn.commit()
     conn.close()
 
-    store = SQLiteDatabase(temp_db_path)
-    await store.initialize()
-    try:
+    async with _opened(db_path) as store:
         assert await store.get_schema_version() == SCHEMA_VERSION
-
-        # gifts：改名 + 补列 + 存量行 platform 回填
         gift = (await store.execute("SELECT * FROM gifts"))[0]
-        assert gift["quantity"] == 3
-        assert gift["platform"] == "bilibili"
-        assert gift["currency"] == ""
-
-        # super_chats：金额元 → 金瓜子（50.0 元 → 50000），币种标注
+        assert (gift["quantity"], gift["platform"], gift["currency"]) == (3, "bilibili", "")
+        # 金额元 → 金瓜子（50.0 元 → 50000）
         sc = (await store.execute("SELECT * FROM super_chats"))[0]
-        assert sc["total_price"] == 50_000
-        assert sc["currency"] == "bilibili_gold_coin"
-        assert sc["platform"] == "bilibili"
-
-        # viewers：复合键唯一约束 + 付费统计列 + 存量行归入历史生产平台
+        assert (sc["total_price"], sc["currency"], sc["platform"]) == (50_000, "bilibili_gold_coin", "bilibili")
         viewer = (await store.execute("SELECT * FROM viewers"))[0]
-        assert viewer["platform"] == "bilibili"
-        assert viewer["paid_count"] == 0
-        assert viewer["paid_amount"] == 0
-        idx_rows = await store.execute("PRAGMA index_list(viewers)")
-        unique_cols: set[tuple[str, ...]] = set()
-        for idx in idx_rows:
-            if not idx["unique"]:
-                continue
-            cols = await store.execute(f"PRAGMA index_info({idx['name']})")
-            unique_cols.add(tuple(c["name"] for c in cols))
+        assert (viewer["platform"], viewer["paid_count"], viewer["paid_amount"]) == ("bilibili", 0, 0)
+        unique_cols = set()
+        for idx in await store.execute("PRAGMA index_list(viewers)"):
+            if idx["unique"]:
+                cols = await store.execute(f"PRAGMA index_info({idx['name']})")
+                unique_cols.add(tuple(c["name"] for c in cols))
         assert ("platform", "user_id") in unique_cols
-
-        # live_chat：platform 列 + 回填
-        chat = (await store.execute("SELECT * FROM live_chat"))[0]
-        assert chat["platform"] == "bilibili"
-
-        # _memory_facts 废弃、画像两表新建
+        assert (await store.execute("SELECT * FROM live_chat"))[0]["platform"] == "bilibili"
         assert await store.table_exists("_memory_facts") is False
-        # viewer_facts 已随 v15 退役：旧库升级后不应再有该表
-        assert await store.table_exists("viewer_facts") is False
-        assert await store.table_exists("viewer_profiles") is True
-        assert await store.table_exists("session_recaps") is True
-        assert await store.table_exists("guards") is True
+        assert await store.table_exists("viewer_facts") is False  # 随 v15 退役：旧库升级后不应再有该表
+        for table in ("viewer_profiles", "session_recaps", "guards"):
+            assert await store.table_exists(table) is True
 
-        # 新库形态幂等：重复 initialize 不破坏数据
-        count = await store.execute("SELECT COUNT(*) AS n FROM viewers")
-        assert int(count[0]["n"]) == 1
-    finally:
-        await store.close()
+    async with _opened(db_path) as again:
+        assert [r["total_price"] for r in await again.execute("SELECT total_price FROM super_chats")] == [50_000]
 
-    again = SQLiteDatabase(temp_db_path)
-    await again.initialize()
-    try:
-        assert await again.get_schema_version() == SCHEMA_VERSION
-        rows = await again.execute("SELECT total_price FROM super_chats")
-        assert int(rows[0]["total_price"]) == 50_000
-    finally:
-        await again.close()
-
-
-@pytest.mark.asyncio
-async def test_build_schema_sql_contains_v10_tables() -> None:
-    """建库 DDL 含 v10 新形态（guards / viewer_profiles / 画像复合键）；事实表已随 v15 退役。"""
-    from src.modules.storage.schema import _GIFTS_SQL
-
-    sql = build_schema_sql()
-    for marker in (
-        "CREATE TABLE IF NOT EXISTS guards",
-        "CREATE TABLE IF NOT EXISTS viewer_profiles",
-        "CREATE TABLE IF NOT EXISTS session_recaps",
-        "UNIQUE(platform, user_id)",
-    ):
-        assert marker in sql, f"DDL 缺少 {marker}"
-    # gifts 表段内已改名 quantity（viewers 统计列 gift_count 保留，属不同语义）
-    assert "gift_count" not in _GIFTS_SQL, "gifts 表应已改名 quantity"
-    assert "_memory_facts" not in sql, "扁平事实私有表应已从 DDL 移除"
-    assert "viewer_facts" not in sql, "观众事实中间表应已从 DDL 移除"
-
-
-# ===== v12 → v13：llm_requests 补上下文分段解剖列 =====
 
 _V12_LLM_REQUESTS_SQL = """
 CREATE TABLE llm_requests (
@@ -444,44 +230,53 @@ CREATE TABLE llm_requests (
 """.strip()
 
 
-@pytest.mark.asyncio
-async def test_build_schema_sql_contains_breakdown_column() -> None:
-    """建库 DDL 已是 v13 形态：llm_requests 自带 breakdown_json 列。"""
-    assert "breakdown_json" in build_schema_sql()
-
-
-@pytest.mark.asyncio
-async def test_v12_to_v13_migration_adds_breakdown_column(temp_db_path: Path) -> None:
-    """v12 形状旧库升级到 v13：补 breakdown_json 列，存量行原样保留（NULL）。"""
-    old = SQLiteDatabase(temp_db_path)
-    await old.initialize()
-    # 回退到 v12 形状：重建无 breakdown_json 的 llm_requests + 存量行
-    await old.execute("DROP TABLE llm_requests")
-    await old.execute(_V12_LLM_REQUESTS_SQL)
-    await old.execute(
+async def test_v12_to_v13_adds_breakdown_column(db_path: Path) -> None:
+    await _rollback_to(
+        db_path,
+        12,
+        "DROP TABLE llm_requests",
+        _V12_LLM_REQUESTS_SQL,
         "INSERT INTO llm_requests(request_id, timestamp_ms, profile_name, model_name, prompt_tokens)"
-        " VALUES ('r_old', 1000, 'replyer', 'model-a', 100)"
+        " VALUES ('r_old', 1000, 'replyer', 'model-a', 100)",
     )
-    await old.execute("DELETE FROM schema_migrations WHERE version > 12")
-    assert await old.get_schema_version() == 12
-    await old.close()
+    for _ in range(2):
+        async with _opened(db_path) as reopened:
+            assert await reopened.get_schema_version() == SCHEMA_VERSION
+            rows = await reopened.execute("SELECT request_id, breakdown_json FROM llm_requests")
+            assert [(r["request_id"], r["breakdown_json"]) for r in rows] == [("r_old", None)]
 
-    reopened = SQLiteDatabase(temp_db_path)
-    await reopened.initialize()
-    try:
-        assert await reopened.get_schema_version() == SCHEMA_VERSION
-        rows = await reopened.execute("SELECT request_id, breakdown_json FROM llm_requests")
-        assert [r["request_id"] for r in rows] == ["r_old"]
-        assert all(r["breakdown_json"] is None for r in rows)
-    finally:
-        await reopened.close()
 
-    # 幂等：再次 initialize 不破坏数据
-    again = SQLiteDatabase(temp_db_path)
-    await again.initialize()
-    try:
-        assert await again.get_schema_version() == SCHEMA_VERSION
-        count = await again.execute("SELECT COUNT(*) AS n FROM llm_requests")
-        assert int(count[0]["n"]) == 1
-    finally:
-        await again.close()
+def test_v14_adds_preview_column_idempotently() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        _V12_LLM_REQUESTS_SQL.replace("usage_raw_json      TEXT", "usage_raw_json TEXT, breakdown_json TEXT")
+    )
+    conn.execute("INSERT INTO llm_requests (request_id, timestamp_ms) VALUES ('req-old', 1000)")
+    for _ in range(2):
+        v14_migrate(conn)
+        assert conn.execute("SELECT preview_text FROM llm_requests").fetchall() == [("",)]
+
+
+async def test_v11_drops_sim_window_column_keeping_personas(db_path: Path) -> None:
+    async with _opened(db_path) as store:
+        await store.sim.insert_sim_persona(
+            user_id="viewer",
+            user_nickname="老观众",
+            role="veteran",
+            personality="耐心",
+            speaking_style="简洁",
+            messages_generated=23,
+        )
+    # 让 v11 在重开时真正重跑一次（不受 SCHEMA_VERSION 后续推进影响）
+    await _rollback_to(
+        db_path,
+        10,
+        "ALTER TABLE sim_personas ADD COLUMN context_window_size INTEGER",
+        "UPDATE sim_personas SET context_window_size=5",
+    )
+    for _ in range(2):
+        async with _opened(db_path) as reopened:
+            columns = await reopened.execute("PRAGMA table_info(sim_personas)")
+            assert "context_window_size" not in {row["name"] for row in columns}
+            rows = await reopened.sim.list_sim_personas()
+            assert [(r["user_nickname"], r["messages_generated"]) for r in rows] == [("老观众", 23)]
