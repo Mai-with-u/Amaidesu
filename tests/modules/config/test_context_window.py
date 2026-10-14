@@ -25,8 +25,7 @@ from src.modules.config.multi_file_loader import generate_default_configs, load_
 from src.modules.llm.clients import _CLIENT_DISPATCH
 from src.modules.llm.engine import LLMManager
 
-
-# === Schema 默认值（零值默认：0，与 price_in = 0.0 先例一致）===
+# Schema 默认值（零值默认：0，与 price_in = 0.0 先例一致）
 
 
 class TestContextWindowDefaults:
@@ -55,7 +54,7 @@ class TestContextWindowDefaults:
             assert model.context_window == 0
 
 
-# === 漂移写回补默认（纯新增字段零成本，不改版本）===
+# 漂移写回补默认（纯新增字段零成本，不改版本）
 
 
 def _pristine_load_version() -> str:
@@ -114,7 +113,7 @@ class TestDriftWritebackFillsContextWindow:
         assert target_written["context_window"] == 128_000
 
 
-# === 引擎装配期：context_window 经 self._model_context_windows 暴露 ===
+# 引擎装配期：context_window 经 self._model_context_windows 暴露
 
 
 class TestEngineExposesContextWindow:
@@ -146,7 +145,6 @@ class TestEngineExposesContextWindow:
         config, _report = load_config_dir(config_dir)
         return config["model"]
 
-    @pytest.mark.asyncio
     async def test_get_model_context_windows_returns_all_registered_models(
         self, setup_manager_with_context_window: LLMManager
     ) -> None:
@@ -156,7 +154,6 @@ class TestEngineExposesContextWindow:
         identifier = next(iter(windows))
         assert windows[identifier] == 128_000
 
-    @pytest.mark.asyncio
     async def test_get_model_context_window_returns_zero_for_unset(self) -> None:
         """``get_model_context_window`` 在窗口未配置时返回 0（不抛、不取相邻值）。"""
         manager = LLMManager()

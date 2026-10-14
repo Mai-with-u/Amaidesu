@@ -14,9 +14,8 @@
 
 from __future__ import annotations
 
-from typing import AsyncGenerator, Iterable, Optional
-
 import asyncio
+from typing import AsyncGenerator, Iterable, Optional
 
 import pytest
 
@@ -26,10 +25,7 @@ from src.modules.agents.control import AgentControl
 from src.modules.config.core_schemas import AgentSupervisorConfig
 from src.modules.tools.models import ToolSpec
 
-
-# =============================================================================
 # 测试替身
-# =============================================================================
 
 
 class _SampleAgent(BaseAgent):
@@ -98,9 +94,7 @@ async def _enable_sample(mgr: AgentManager) -> _SampleAgent:
     return agent
 
 
-# =============================================================================
 # BaseAgent 心跳后台任务
-# =============================================================================
 
 
 async def test_heartbeat_task_created_on_start_and_cancelled_on_stop() -> None:
@@ -135,9 +129,7 @@ def test_heartbeat_interval_default_from_supervisor_config() -> None:
     assert agent._heartbeat_interval_ms == expected  # noqa: SLF001
 
 
-# =============================================================================
 # 巡检：心跳停 → 标死 → 自动重建
-# =============================================================================
 
 
 async def test_supervisor_rebuilds_dead_agent_and_increments_restart_count(
@@ -173,9 +165,7 @@ async def test_supervisor_ignores_terminal_states(manager: AgentManager) -> None
     assert manager.get_agent_by_name("sample_agent") is agent
 
 
-# =============================================================================
 # 防重启风暴：窗口内连续失败达上限 → ERRORED + 停止重试
-# =============================================================================
 
 
 async def test_storm_protection_stops_retrying_after_failure_limit(
@@ -240,9 +230,7 @@ async def test_manual_enable_resets_storm_protection(manager: AgentManager) -> N
     assert agent.state == AgentState.STOPPED  # 旧实例已被 disable 停止
 
 
-# =============================================================================
 # 观测面：is_agent_alive / state_of
-# =============================================================================
 
 
 async def test_is_agent_alive_uses_supervisor_threshold(manager: AgentManager) -> None:
@@ -266,9 +254,7 @@ async def test_state_of_exposes_heartbeat_alive_restart(manager: AgentManager) -
     assert info["state"] == "running"
 
 
-# =============================================================================
 # 守护循环启停
-# =============================================================================
 
 
 async def test_supervisor_loop_start_stop(manager: AgentManager) -> None:

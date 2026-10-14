@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-
 from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider, create_warudo_provider
 
 
@@ -21,9 +20,7 @@ def _build_provider() -> WarudoProvider:
     return provider
 
 
-# =============================================================================
 # supports_reconnect
-# =============================================================================
 
 
 def test_warudo_supports_reconnect() -> None:
@@ -32,9 +29,7 @@ def test_warudo_supports_reconnect() -> None:
     assert provider.supports_reconnect is True
 
 
-# =============================================================================
 # connect
-# =============================================================================
 
 
 async def test_warudo_connect_returns_is_connected_when_connected() -> None:
@@ -51,9 +46,7 @@ async def test_warudo_connect_returns_false_when_disconnected() -> None:
     assert await provider.connect() is False
 
 
-# =============================================================================
 # disconnect
-# =============================================================================
 
 
 async def test_warudo_disconnect_closes_websocket_and_keeps_loop() -> None:
@@ -99,9 +92,7 @@ async def test_warudo_disconnect_swallows_close_exception() -> None:
     assert provider._is_connected is False
 
 
-# =============================================================================
 # reconnect 默认组合
-# =============================================================================
 
 
 async def test_warudo_reconnect_default_compose() -> None:

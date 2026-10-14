@@ -12,10 +12,7 @@ import pytest
 
 from src.modules.dashboard.services.llm_stats import build_usage_trends, cache_hit_rate
 
-
-# ---------------------------------------------------------------------------
 # cache_hit_rate
-# ---------------------------------------------------------------------------
 
 
 class TestCacheHitRate:
@@ -34,9 +31,7 @@ class TestCacheHitRate:
         assert cache_hit_rate(30, 70) == pytest.approx(0.3)
 
 
-# ---------------------------------------------------------------------------
 # build_usage_trends
-# ---------------------------------------------------------------------------
 
 
 class _FakeRepo:
@@ -62,7 +57,6 @@ def _midnight_ms(day: date) -> int:
 class TestBuildUsageTrends:
     """趋势装配：逐日补零对齐时间轴、窗口起点、逐模型透传。"""
 
-    @pytest.mark.asyncio
     async def test_缺失日期补零且首尾对齐窗口(self) -> None:
         days = 4
         first_day = _expected_first_day(days)
@@ -108,7 +102,6 @@ class TestBuildUsageTrends:
         # 每个点携带本地零点时间戳
         assert result.points[1].timestamp_ms == _midnight_ms(first_day + timedelta(days=1))
 
-    @pytest.mark.asyncio
     async def test_by_model_逐行透传且空模型名归unknown(self) -> None:
         repo = _FakeRepo(
             {
@@ -134,7 +127,6 @@ class TestBuildUsageTrends:
         assert result.model_points[1].cache_hit_tokens == 0
         assert result.model_points[1].cache_hit_rate is None
 
-    @pytest.mark.asyncio
     async def test_仓储为None时返回空趋势(self) -> None:
         result = await build_usage_trends(None, 7)
         assert result.days == 7

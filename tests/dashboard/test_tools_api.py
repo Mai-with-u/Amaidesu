@@ -108,8 +108,8 @@ class _FakeToolRegistry:
         return any(s.full_name == name for s in self._specs)
 
     async def invoke(self, invocation) -> Any:
-        from src.modules.tools.models import ToolExecutionResult
         from src.modules.time_utils import now_ms
+        from src.modules.tools.models import ToolExecutionResult
 
         self.invocations.append(invocation)
         handler = self._invoke_results.get(invocation.tool_name)
@@ -271,7 +271,7 @@ def _current_registry() -> "_FakeToolRegistry":
     return get_dashboard_server().tool_registry  # type: ignore[return-value]
 
 
-# ==================== GET /tools ====================
+# GET /tools
 
 
 def test_tools_returns_tools_with_name(client: TestClient) -> None:
@@ -470,7 +470,7 @@ def test_tools_magicmock_registry_returns_tools(config_dir: Path) -> None:
         set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-# ==================== GET /tools/categories ====================
+# GET /tools/categories
 
 
 def test_categories_lists_static_members(tools_client: TestClient) -> None:
@@ -616,7 +616,7 @@ def test_control_agent_private_mcp_routes_to_agents_toml(
         set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-# ==================== POST /tools/categories/.../control ====================
+# POST /tools/categories/.../control
 
 
 def test_control_disables_avatar_member(tools_client: TestClient, tools_config_dir: Path) -> None:
@@ -671,7 +671,7 @@ def test_control_rejects_unknown_member(tools_client: TestClient) -> None:
     assert resp.status_code == 400
 
 
-# ==================== POST /tools/{full_name}/control（工具级） ====================
+# POST /tools/{full_name}/control（工具级）
 
 
 def test_tool_control_disable_writes_disabled_list(tools_client: TestClient, tools_config_dir: Path) -> None:
@@ -708,7 +708,7 @@ def test_tool_control_bare_name_is_not_registry_key(tools_client: TestClient) ->
     assert resp.status_code == 404
 
 
-# ==================== POST /tools/{full_name}/invoke（调试调用） ====================
+# POST /tools/{full_name}/invoke（调试调用）
 
 
 def test_invoke_success_passes_invocation_to_registry(client: TestClient) -> None:
@@ -767,8 +767,8 @@ def test_invoke_rejects_oversized_arguments(client: TestClient) -> None:
 
 def test_invoke_tool_failure_is_200_with_success_false(client: TestClient) -> None:
     """工具级失败（含停用/熔断短路）= 200 + success=false，失败原因是有效调试产出。"""
-    from src.modules.tools.models import ToolExecutionResult
     from src.modules.time_utils import now_ms
+    from src.modules.tools.models import ToolExecutionResult
 
     registry = _current_registry()
     registry.set_invoke_result(
@@ -789,8 +789,8 @@ def test_invoke_tool_failure_is_200_with_success_false(client: TestClient) -> No
 
 def test_invoke_serializes_structured_content_and_blocks(client: TestClient) -> None:
     """structured_content dict 原样、非可序列化对象 str() 兜底；blocks 透出。"""
-    from src.modules.tools.models import ResultBlock, ToolExecutionResult
     from src.modules.time_utils import now_ms
+    from src.modules.tools.models import ResultBlock, ToolExecutionResult
 
     sentinel = object()  # 不可 JSON 序列化 → 兜底 str()
 
@@ -821,7 +821,7 @@ def test_tool_control_enable_unregistered_name_is_noop(tools_client: TestClient)
     assert resp.status_code == 200
 
 
-# ==================== 关键内部件停用保护（警示确认语义） ====================
+# 关键内部件停用保护（警示确认语义）
 # 控制类工具已移出 LLM 工具面（控制面直调 AgentControl），关键件清单当前为空；
 # 警示确认语义由 tools.py 保留，此处仅覆盖非关键工具不受 confirm 约束。
 
@@ -832,7 +832,7 @@ def test_tool_control_non_critical_tool_ignores_confirm(tools_client: TestClient
     assert resp.status_code == 200
 
 
-# ==================== health 字段合并（熔断/恢复快照注入响应） ====================
+# health 字段合并（熔断/恢复快照注入响应）
 
 
 class _HealthStubRegistry:
@@ -973,7 +973,7 @@ def test_tools_listing_includes_tripped_tools(config_dir: Path) -> None:
         set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-# ==================== supports_reconnect 字段（GET /tools 暴露）====================
+# supports_reconnect 字段（GET /tools 暴露）
 
 
 def test_tools_response_includes_supports_reconnect_field(client: TestClient) -> None:
@@ -1023,7 +1023,7 @@ def test_tools_response_supports_reconnect_false_when_registry_missing_method(co
         set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-# ==================== POST /tools/providers/{provider_id}/reconnect ====================
+# POST /tools/providers/{provider_id}/reconnect
 
 
 class _ReconnectFakeRegistry(_FakeToolRegistry):

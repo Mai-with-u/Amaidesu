@@ -21,8 +21,7 @@ from src.modules.config.model_schemas import (
 )
 from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
 
-
-# === Schema 默认值（零值默认：空串 / 空 dict，与 price_in / cache 先例一致）===
+# Schema 默认值（零值默认：空串 / 空 dict，与 price_in / cache 先例一致）
 
 
 class TestReasoningEffortAndExtraBodyDefaults:
@@ -59,7 +58,7 @@ class TestReasoningEffortAndExtraBodyDefaults:
             assert provider.extra_body == {}
 
 
-# === 漂移写回补默认（纯新增字段零成本，不改版本）===
+# 漂移写回补默认（纯新增字段零成本，不改版本）
 
 
 def _pristine_load_version() -> str:

@@ -20,10 +20,7 @@ from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSp
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.registry import ToolRegistry
 
-
-# =============================================================================
 # 测试用件
-# =============================================================================
 
 
 class _TagProvider(BaseToolProvider):
@@ -78,12 +75,9 @@ async def manager() -> AsyncGenerator[tuple[AgentManager, ToolRegistry], None]:
         yield mgr, registry
 
 
-# =============================================================================
 # minecraft stop → provider 摘除 + MCP close
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_minecraft_stop_unregisters_providers_and_closes_mcp() -> None:
     """minecraft start 装配 MCP 后 stop：maicraft 工具摘除、MCP close 恰好一次。"""
     from src.agents.minecraft.agent import MinecraftAgent
@@ -121,12 +115,9 @@ async def test_minecraft_stop_unregisters_providers_and_closes_mcp() -> None:
     assert mock_client.close.await_count == 1
 
 
-# =============================================================================
 # streamer stop → reply / rundown provider 摘除
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_streamer_stop_unregisters_reply_and_rundown() -> None:
     """streamer 注册 reply/rundown 后 stop：两个 provider 均被摘除。"""
     from src.agents.streamer.config import StreamerConfig
@@ -153,12 +144,9 @@ async def test_streamer_stop_unregisters_reply_and_rundown() -> None:
     assert registry._providers == []
 
 
-# =============================================================================
 # enable/disable 循环无泄漏
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_enable_disable_loop_does_not_leak_providers(manager) -> None:
     """enable → disable 循环 2 次：registry 的 provider 与工具总数不增长。"""
     mgr, registry = manager

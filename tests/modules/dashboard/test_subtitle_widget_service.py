@@ -18,8 +18,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-import pytest
-
 from src.modules.dashboard.widget.models import SubtitleWidgetConfig
 from src.modules.dashboard.widget.service import DanmakuWidgetService
 from src.modules.events.event_bus import EventBus
@@ -40,13 +38,10 @@ def _make_service(
     )
 
 
-# ---------------------------------------------------------------------------
 # show_subtitle：公开方法 + 队列追加 + callback 广播
-# ---------------------------------------------------------------------------
 
 
 class TestShowSubtitle:
-    @pytest.mark.asyncio
     async def test_appends_to_subtitle_messages(self):
         """``show_subtitle`` 追加 ``SubtitleWidgetMessage`` 到内部队列。"""
         svc = _make_service()
@@ -54,21 +49,18 @@ class TestShowSubtitle:
         assert len(svc.subtitle_messages) == 1
         assert svc.subtitle_messages[0].text == "hello"
 
-    @pytest.mark.asyncio
     async def test_default_duration_uses_config(self):
         """``duration_ms=None`` → 落 ``subtitle_config.auto_hide_after_ms``。"""
         svc = _make_service(auto_hide_after_ms=7000)
         await svc.show_subtitle("hi")
         assert svc.subtitle_messages[0].duration_ms == 7000
 
-    @pytest.mark.asyncio
     async def test_explicit_duration_overrides_config(self):
         """``duration_ms`` 显式传入 → 覆盖 ``auto_hide_after_ms``。"""
         svc = _make_service(auto_hide_after_ms=7000)
         await svc.show_subtitle("hi", duration_ms=2500)
         assert svc.subtitle_messages[0].duration_ms == 2500
 
-    @pytest.mark.asyncio
     async def test_subtitle_callback_receives_subtitle_payload(self):
         """``_subtitle_callback`` 收到 ``type='subtitle'`` data 字典。"""
         svc = _make_service()
@@ -80,7 +72,6 @@ class TestShowSubtitle:
         assert data["text"] == "hello"
         assert data["duration_ms"] == 5000
 
-    @pytest.mark.asyncio
     async def test_no_callbacks_does_not_raise(self):
         """未注册 callback 时 ``show_subtitle`` 不抛错（仅入队）。"""
         svc = _make_service()
@@ -88,13 +79,10 @@ class TestShowSubtitle:
         assert len(svc.subtitle_messages) == 1
 
 
-# ---------------------------------------------------------------------------
 # show_subtitle：subtitle_config.enabled gate
-# ---------------------------------------------------------------------------
 
 
 class TestShowSubtitleDisabled:
-    @pytest.mark.asyncio
     async def test_disabled_does_not_append_or_broadcast(self):
         """``subtitle_config.enabled=False`` 时 ``show_subtitle`` 早退
         ——不追加消息、不广播。"""
@@ -105,13 +93,10 @@ class TestShowSubtitleDisabled:
         svc._subtitle_callback.assert_not_awaited()
 
 
-# ---------------------------------------------------------------------------
 # clear_subtitle：公开方法 + 清空 + 广播清空信号
-# ---------------------------------------------------------------------------
 
 
 class TestClearSubtitle:
-    @pytest.mark.asyncio
     async def test_clears_subtitle_messages(self):
         """``clear_subtitle`` 清空 ``subtitle_messages`` deque。"""
         svc = _make_service()
@@ -122,7 +107,6 @@ class TestClearSubtitle:
         await svc.clear_subtitle()
         assert len(svc.subtitle_messages) == 0
 
-    @pytest.mark.asyncio
     async def test_broadcasts_empty_text_message(self):
         """``clear_subtitle`` 广播 ``text=''`` 且 ``duration_ms=0`` 的清空消息。"""
         svc = _make_service()
@@ -136,13 +120,10 @@ class TestClearSubtitle:
         assert subtitle_data["duration_ms"] == 0
 
 
-# ---------------------------------------------------------------------------
 # start() / stop()：订阅面收敛在 room.message.*
-# ---------------------------------------------------------------------------
 
 
 class TestSubscriptions:
-    @pytest.mark.asyncio
     async def test_start_does_not_subscribe_other_domains(self):
         """``start()`` 订阅面收敛在 ``room.message.*``：业务决策/流程单域
         事件不进本服务（字幕显示由 ``SubtitleService`` 驱动）。"""
@@ -154,7 +135,6 @@ class TestSubscriptions:
 
         await svc.stop()
 
-    @pytest.mark.asyncio
     async def test_start_subscribes_room_message_danmaku(self):
         """``start()`` 仍订阅 ``room.message.danmaku``（弹幕订阅主路径）。"""
         svc = _make_service()

@@ -8,8 +8,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
 from src.agents.minecraft.companions import companion_config
 from src.modules.agents.companions import (
@@ -62,7 +60,6 @@ def test_agent_without_companions_builds_nothing() -> None:
     assert build_companion_collectors("streamer", {}) == []
 
 
-@pytest.mark.asyncio
 async def test_register_then_stop_round_trip() -> None:
     """启动装配时登记（start_all 统一启动）；Agent 停用时停掉并移出管理器。"""
     manager = CollectorManager()

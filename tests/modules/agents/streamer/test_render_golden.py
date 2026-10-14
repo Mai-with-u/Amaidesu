@@ -31,9 +31,7 @@ def _batch_msg(
     )
 
 
-# ---------------------------------------------------------------------------
 # golden：单条 canonical content（批/历史/摘要三通道共用）
-# ---------------------------------------------------------------------------
 
 
 def test_golden_canonical_content_bytes() -> None:
@@ -61,9 +59,7 @@ def test_golden_long_message_is_complete() -> None:
     assert out == "小明: " + long_text + " [id:m1]"
 
 
-# ---------------------------------------------------------------------------
 # golden：文本视图（replyer 历史注入 / 后台摘要共用 to_text_view）
-# ---------------------------------------------------------------------------
 
 
 def test_golden_text_view_bytes() -> None:
@@ -93,9 +89,7 @@ def test_golden_text_view_assistant_placeholder_not_annotated() -> None:
     assert canonical.to_text_view(messages) == "主播: （主动发言，主题：测试）"
 
 
-# ---------------------------------------------------------------------------
 # golden：批渲染（MessageBuffer / replyer 包装）
-# ---------------------------------------------------------------------------
 
 
 def test_golden_render_batch_text_bytes() -> None:
@@ -113,9 +107,7 @@ def test_golden_render_batch_text_missing_id_no_suffix() -> None:
     assert MessageBuffer.render_batch_text([_batch_msg("hello")]) == "小明: hello"
 
 
-# ---------------------------------------------------------------------------
 # golden：批与历史同形（收敛的核心等价断言）
-# ---------------------------------------------------------------------------
 
 
 def test_golden_batch_and_history_equivalence() -> None:

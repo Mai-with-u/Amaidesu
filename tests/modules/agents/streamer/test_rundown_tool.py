@@ -11,8 +11,6 @@ import json
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.rundown.rundown_state import RundownState
@@ -102,7 +100,6 @@ def test_visible_to_streamer_with_full_function_shape() -> None:
     assert fn_defs["rundown_control"]["parameters"]["required"] == ["action"]
 
 
-@pytest.mark.asyncio
 async def test_registry_invoke_advances_state_machine() -> None:
     """回归：经 registry.invoke 调 rundown_control，状态机变更落同一处。"""
     clock = _FakeClock()
@@ -123,7 +120,6 @@ async def test_registry_invoke_advances_state_machine() -> None:
     assert state.get_snapshot()["current"]["id"] == "self_intro"
 
 
-@pytest.mark.asyncio
 async def test_planner_dispatches_rundown_control_via_registry() -> None:
     """回归：Planner ReAct 循环调 rundown_control 走 registry 单一路径，观察完整回灌。
 

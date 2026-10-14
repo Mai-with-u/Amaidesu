@@ -10,8 +10,6 @@
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.modules.avatar.platform.vts.vts_provider import VTSProvider, create_vts_provider
 from src.modules.tools.models import ToolInvocation
 
@@ -30,12 +28,9 @@ def _build_provider(
     return provider
 
 
-# =============================================================================
 # trigger_hotkey：按名优先 / id 兜底
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_trigger_hotkey_by_name_resolves_id():
     provider = _build_provider()
     provider.hotkey_matcher.find_by_name.return_value = "uuid-1"
@@ -46,7 +41,6 @@ async def test_trigger_hotkey_by_name_resolves_id():
     provider.hotkey_matcher.trigger_hotkey.assert_awaited_once_with("uuid-1")
 
 
-@pytest.mark.asyncio
 async def test_trigger_hotkey_falls_back_to_id_when_name_unmatched():
     provider = _build_provider()
     provider.hotkey_matcher.find_by_name.return_value = None
@@ -56,7 +50,6 @@ async def test_trigger_hotkey_falls_back_to_id_when_name_unmatched():
     provider.hotkey_matcher.trigger_hotkey.assert_awaited_once_with("uuid-2")
 
 
-@pytest.mark.asyncio
 async def test_trigger_hotkey_fails_when_name_unmatched_and_no_id():
     provider = _build_provider()
     provider.hotkey_matcher.find_by_name.return_value = None
@@ -65,7 +58,6 @@ async def test_trigger_hotkey_fails_when_name_unmatched_and_no_id():
     provider.hotkey_matcher.trigger_hotkey.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_trigger_hotkey_fails_when_both_empty():
     provider = _build_provider()
 
@@ -74,7 +66,6 @@ async def test_trigger_hotkey_fails_when_both_empty():
     provider.hotkey_matcher.trigger_hotkey.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_trigger_hotkey_by_id_only():
     provider = _build_provider()
 
@@ -83,12 +74,9 @@ async def test_trigger_hotkey_by_id_only():
     provider.hotkey_matcher.trigger_hotkey.assert_awaited_once_with("uuid-3")
 
 
-# =============================================================================
 # list_preset_actions / trigger_preset_action：目录走结果，不进描述
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_list_preset_actions_empty_when_no_hotkeys():
     provider = _build_provider(hotkey_list=[])
     result = await provider.list_preset_actions()
@@ -96,7 +84,6 @@ async def test_list_preset_actions_empty_when_no_hotkeys():
     assert result.structured_content == {"actions": []}
 
 
-@pytest.mark.asyncio
 async def test_list_preset_actions_lists_hotkey_names():
     provider = _build_provider(
         hotkey_list=[
@@ -139,12 +126,9 @@ def test_list_tools_empty_when_disconnected():
     assert provider.list_tools() == []
 
 
-# =============================================================================
 # invoke 分发：vts_trigger_preset_action 参数契约
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_invoke_trigger_preset_action_with_known_name():
     provider = _build_provider()
     provider.hotkey_matcher.find_by_name.return_value = "uuid-9"
@@ -157,7 +141,6 @@ async def test_invoke_trigger_preset_action_with_known_name():
     provider.hotkey_matcher.trigger_hotkey.assert_awaited_once_with("uuid-9")
 
 
-@pytest.mark.asyncio
 async def test_invoke_trigger_preset_action_unknown_name_returns_catalog():
     provider = _build_provider(hotkey_list=[{"name": "Wave", "hotkeyID": "u1"}])
     provider.hotkey_matcher.find_by_name.return_value = None
@@ -170,7 +153,6 @@ async def test_invoke_trigger_preset_action_unknown_name_returns_catalog():
     assert "Wave" in result.structured_content["available_actions"]
 
 
-@pytest.mark.asyncio
 async def test_invoke_trigger_preset_action_without_args_fails_gracefully():
     provider = _build_provider()
 
@@ -179,12 +161,9 @@ async def test_invoke_trigger_preset_action_without_args_fails_gracefully():
     assert result.success is False
 
 
-# =============================================================================
 # set_expression：情绪映射 + 强度缩放
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_set_expression_scales_params_by_intensity():
     provider = _build_provider()
     provider.expression = MagicMock()
@@ -200,7 +179,6 @@ async def test_set_expression_scales_params_by_intensity():
     assert written == {"MouthSmile": 0.4, "Brows": 0.3}
 
 
-@pytest.mark.asyncio
 async def test_set_expression_unknown_emotion_fails():
     provider = _build_provider()
 
@@ -211,7 +189,6 @@ async def test_set_expression_unknown_emotion_fails():
     assert result.success is False
 
 
-@pytest.mark.asyncio
 async def test_set_expression_covers_seventeen_emotions():
     """词表 17 值全部在映射表中（映射键与 Emotion 词表一致）。"""
     from src.modules.types.emotion_vocab import Emotion
@@ -220,12 +197,9 @@ async def test_set_expression_covers_seventeen_emotions():
     assert set(provider._emotion_map.keys()) == {e.value for e in Emotion}
 
 
-# =============================================================================
 # idle 绑定解析：纯配置（无候选猜测）、空停用、缺失警告停写
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_resolve_idle_bindings_config_only_and_unavailable_reported():
     """绑定名解析纯配置：配置名原样返回，VTS 参数清单之外的名字进不可用清单。"""
     provider = _build_provider()
@@ -239,7 +213,6 @@ async def test_resolve_idle_bindings_config_only_and_unavailable_reported():
     assert unavailable == []
 
 
-@pytest.mark.asyncio
 async def test_resolve_idle_bindings_empty_means_disabled():
     """空配置名 = 该轴停用（不进不可用清单、不产生警告）。"""
     provider = _build_provider(config={"idle_param_body_x": "", "idle_param_head_x": ""})
@@ -252,7 +225,6 @@ async def test_resolve_idle_bindings_empty_means_disabled():
     assert unavailable == []
 
 
-@pytest.mark.asyncio
 async def test_resolve_idle_bindings_unavailable_name_flagged():
     """非空名不在 VTS 参数清单 → 返回不可用清单（调用方预置 failed_params 停写）。"""
     provider = _build_provider(config={"idle_param_body_x": "TorsoX"})
@@ -285,12 +257,9 @@ def _build_idle_controller():
     )
 
 
-# =============================================================================
 # 换模跟随：健康心跳内模型名轮询 → 解析链重跑
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_follow_model_switch_reruns_reload_chain():
     """模型名变化 → 记录新名并重跑解析链（热键重拉等）。"""
     provider = _build_provider()
@@ -304,7 +273,6 @@ async def test_follow_model_switch_reruns_reload_chain():
     provider._reload_model_state.assert_awaited_once()
 
 
-@pytest.mark.asyncio
 async def test_follow_model_switch_skips_when_same_model():
     """模型名未变 → 不重跑解析链。"""
     provider = _build_provider()
@@ -317,7 +285,6 @@ async def test_follow_model_switch_skips_when_same_model():
     provider._reload_model_state.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_follow_model_switch_skips_when_name_unknown():
     """查询不到当前模型名（连接异常等）→ 不触发重跑、不清基线。"""
     provider = _build_provider()

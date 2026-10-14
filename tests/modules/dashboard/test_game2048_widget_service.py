@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from src.modules.dashboard.widget.game2048_service import Game2048WidgetService
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -39,7 +37,6 @@ async def _emit(bus: EventBus, payload: GameBoardStatePayload) -> None:
         await asyncio.sleep(0.02)
 
 
-@pytest.mark.asyncio
 async def test_subscription_updates_latest_and_broadcasts() -> None:
     bus = EventBus()
     svc = Game2048WidgetService(event_bus=bus)
@@ -61,7 +58,6 @@ async def test_subscription_updates_latest_and_broadcasts() -> None:
     await svc.stop()
 
 
-@pytest.mark.asyncio
 async def test_single_slot_overwrites_previous_state() -> None:
     bus = EventBus()
     svc = Game2048WidgetService(event_bus=bus)
@@ -79,14 +75,12 @@ async def test_single_slot_overwrites_previous_state() -> None:
     await svc.stop()
 
 
-@pytest.mark.asyncio
 async def test_latest_is_none_before_any_state() -> None:
     svc = Game2048WidgetService(event_bus=EventBus())
     assert svc.get_latest_state() is None
     assert svc.get_stats() == {"is_running": False, "has_state": False, "score": 0}
 
 
-@pytest.mark.asyncio
 async def test_stop_unsubscribes_from_events() -> None:
     bus = EventBus()
     svc = Game2048WidgetService(event_bus=bus)

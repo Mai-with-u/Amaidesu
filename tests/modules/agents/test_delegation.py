@@ -91,9 +91,7 @@ async def _drain() -> None:
     await asyncio.sleep(0.03)
 
 
-# ---------------------------------------------------------------------------
 # 委派全程（happy path）
-# ---------------------------------------------------------------------------
 
 
 async def test_delegation_full_chain() -> None:
@@ -150,9 +148,7 @@ async def test_delegation_status_query_mid_flight() -> None:
     assert data["snapshot"]["instruction"] == "去挖矿"
 
 
-# ---------------------------------------------------------------------------
 # 受理失败与任务失败分开
-# ---------------------------------------------------------------------------
 
 
 async def test_acceptance_failures_do_not_register() -> None:
@@ -247,9 +243,7 @@ async def test_unknown_task_id_query_fails() -> None:
     assert q.success is False and "任务不存在" in q.error_message
 
 
-# ---------------------------------------------------------------------------
 # 递话原语（framework_prompt：受理不记账）
-# ---------------------------------------------------------------------------
 
 
 async def test_prompt_delivers_without_ledger_entry() -> None:
@@ -332,9 +326,7 @@ async def test_prompt_default_refusal_when_no_channel() -> None:
     assert res.success is False and "拒收" in res.error_message
 
 
-# ---------------------------------------------------------------------------
 # minecraft 接收委派（真实 Agent：入队带任务号 + 批次状态写回）
-# ---------------------------------------------------------------------------
 
 
 async def test_minecraft_receives_delegation_and_reports_terminal() -> None:
@@ -393,9 +385,7 @@ async def test_minecraft_receives_delegation_and_reports_terminal() -> None:
     assert ledger.get(task_id) is None, "delivery 后委派任务终态移除"
 
 
-# ---------------------------------------------------------------------------
 # minecraft 硬取消（清追踪清单 + 账面 cancelled + 停手通知）
-# ---------------------------------------------------------------------------
 
 
 def _minecraft_agent_with_ledger(bus: EventBus, registry: ToolRegistry, ledger: TaskLedger) -> "object":  # noqa: ANN401 - 返回真实 MinecraftAgent
@@ -488,9 +478,7 @@ async def test_minecraft_cancel_clears_suspended_zombie() -> None:
     assert minecraft._delegated_finished_ids == []
 
 
-# ---------------------------------------------------------------------------
 # minecraft 断连恢复续跑（escalation 账面语义 + 恢复唤醒）
-# ---------------------------------------------------------------------------
 
 
 async def test_escalation_writes_waiting_for_decision_not_failed() -> None:

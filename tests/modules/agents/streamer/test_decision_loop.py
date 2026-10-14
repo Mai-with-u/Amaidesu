@@ -16,18 +16,16 @@ import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
+from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response as PayloadResponse
 from src.modules.llm.payload import ToolCall as PayloadToolCall
 from src.modules.tools import ToolRegistry
-from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
-from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 
 
 def _make_payload(text: str = "主播好可爱") -> RoomMessagePayload:
@@ -38,9 +36,7 @@ def _make_payload(text: str = "主播好可爱") -> RoomMessagePayload:
     )
 
 
-# ---------------------------------------------------------------------------
 # 响应工厂（Planner ReAct / Replyer 均走 generate；tool_calls 为中立 ToolCall）
-# ---------------------------------------------------------------------------
 
 
 def _planner_tool_call(name: str, args: dict, call_id: str = "call_p1") -> PayloadToolCall:
@@ -99,9 +95,7 @@ def _decision_finished(bus: EventBus) -> asyncio.Event:
     return finished
 
 
-# ---------------------------------------------------------------------------
 # Agent 装配（Planner ReAct + Replyer 均走 generate）
-# ---------------------------------------------------------------------------
 
 
 def _setup_agent(
@@ -158,7 +152,6 @@ def _setup_agent(
     return agent, bus, registry, llm, prompt
 
 
-@pytest.mark.asyncio
 async def test_decision_loop_danmaku_to_reply_provider():
     """决策循环端到端：弹幕事件 → Planner generate（ReAct 调 reply）→ Replyer generate → 发言管线。
 
@@ -204,7 +197,6 @@ async def test_decision_loop_danmaku_to_reply_provider():
         await agent.cleanup()
 
 
-@pytest.mark.asyncio
 async def test_decision_loop_planner_no_reply_path():
     """Planner 自然终止（无 tool_calls）→ 不触发 Replyer 生成，静默收场。"""
     chat_responses = [_planner_react_response([])]
@@ -255,8 +247,6 @@ async def test_decision_loop_planner_no_reply_path():
         await agent.cleanup()
 
 
-@pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_decision_loop_proactive_gated_until_live_started():
     """主动发言场次闸：开播前静默且 pending 信号保留，开播后首个 tick 触发。"""
     agent, bus, registry, llm, prompt = _setup_agent(
@@ -286,7 +276,6 @@ async def test_decision_loop_proactive_gated_until_live_started():
         await agent.cleanup()
 
 
-@pytest.mark.asyncio
 async def test_decision_loop_proactive_gated_after_live_ended():
     """下播收闸：live.ended 后主动发言静默，弹幕回复不受影响。"""
     agent, bus, registry, llm, prompt = _setup_agent(
@@ -321,7 +310,6 @@ async def test_decision_loop_proactive_gated_after_live_ended():
         await agent.cleanup()
 
 
-@pytest.mark.asyncio
 async def test_decision_loop_danmaku_reply_not_gated_by_live_session() -> None:
     """场次闸只挡主动发言分支：弹幕回复路径不受开播状态影响。"""
     agent, bus, registry, llm, prompt = _setup_agent()
@@ -346,8 +334,6 @@ async def test_decision_loop_danmaku_reply_not_gated_by_live_session() -> None:
         await agent.cleanup()
 
 
-@pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_decision_loop_handle_message_direct():
     """handle_message 直接入口（测试用）：跳过 EventBus，直接调 Agent。"""
     llm = MagicMock()
@@ -379,7 +365,6 @@ async def test_decision_loop_handle_message_direct():
 class TestDecisionObservability:
     """决策可观测收口：每轮决策恰好一条 planner.decision + 阶段事件成对。"""
 
-    @pytest.mark.asyncio
     async def test_decision_round_emits_decision_and_stage_events(self):
         agent, bus, registry, llm, prompt = _setup_agent()
 
@@ -421,7 +406,6 @@ class TestDecisionObservability:
             await agent.stop()
             await bus.cleanup()
 
-    @pytest.mark.asyncio
     async def test_planner_failure_still_emits_decision_event(self):
         """Planner LLM 失败也必须发决策事件——失败可见性是核心价值。"""
         agent, bus, registry, llm, prompt = _setup_agent()
@@ -449,7 +433,6 @@ class TestDecisionObservability:
             await agent.stop()
             await bus.cleanup()
 
-    @pytest.mark.asyncio
     async def test_reply_to_flows_into_decision_event(self):
         """reply 意图的 target → 决策事件携带 reply_to_message_id（互动分析关联键）。"""
         agent, bus, registry, llm, prompt = _setup_agent(
@@ -494,7 +477,6 @@ class TestDecisionObservability:
 class TestStatisticsFields:
     """统计字段口径验证：reply_duration_ms 实测写回 / replyer_failures 失败递增。"""
 
-    @pytest.mark.asyncio
     async def test_reply_duration_ms_measured_on_successful_reply(self):
         """成功回复轮：reply_duration_ms 由 reply 工具调用实测写回，必须 > 0。"""
         agent, bus, registry, llm, prompt = _setup_agent()
@@ -522,7 +504,6 @@ class TestStatisticsFields:
         )
         assert agent.get_statistics()["replyer_failures"] == 0
 
-    @pytest.mark.asyncio
     async def test_replyer_failure_increments_counter(self):
         """reply 工具失败（Replyer LLM 失败 → ToolExecutionResult.success=False）→ _replyer_failures 递增。"""
         agent, bus, registry, llm, prompt = _setup_agent(
@@ -562,7 +543,6 @@ class TestStatisticsFields:
         assert stats["total_replies"] == 0
         assert stats["total_no_action"] == 1
 
-    @pytest.mark.asyncio
     async def test_no_reply_round_with_consecutive_replyer_failures_stats_consistent(self):
         """边界：无成功回复轮 + replyer 连续失败 → get_statistics 正常返回且口径自洽。"""
         agent, bus, registry, llm, prompt = _setup_agent(

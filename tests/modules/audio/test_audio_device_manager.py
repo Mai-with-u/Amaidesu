@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from src.modules.audio.audio_device_manager import DEPENDENCIES_OK, AudioDeviceManager
+from src.modules.audio.audio_device_manager import AudioDeviceManager
 
 
 @pytest.fixture
@@ -121,7 +121,6 @@ class TestAudioDeviceManager:
         assert devices[0]["name"] == "Device 1"
         assert devices[1]["name"] == "Device 3"
 
-    @pytest.mark.asyncio
     @patch("src.modules.audio.audio_device_manager.sd")
     @patch("src.modules.audio.audio_device_manager.asyncio.sleep")
     async def test_play_audio_success(self, mock_sleep, mock_sd, manager):

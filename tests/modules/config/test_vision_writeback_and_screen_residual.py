@@ -53,9 +53,7 @@ class _LoguruCapture:
             self._sink_id = None
 
 
-# ---------------------------------------------------------------------------
 # (a) vision 字段默认值自动生成 + 漂移写回
-# ---------------------------------------------------------------------------
 
 
 class TestVisionConfigDefaults:
@@ -140,9 +138,7 @@ class TestVisionConfigDefaults:
         assert "unknown_field" in str(exc_info.value)
 
 
-# ---------------------------------------------------------------------------
 # (b) 残留 [collectors.screen] 段全域硬错
-# ---------------------------------------------------------------------------
 
 
 class TestResidualCollectorSection:
@@ -165,9 +161,7 @@ class TestResidualCollectorSection:
         assert "console_input" in message  # 合法名单随错误给出
 
 
-# ---------------------------------------------------------------------------
 # (c) enabled 含未知名全域硬错
-# ---------------------------------------------------------------------------
 
 
 class TestEnabledUnknownName:

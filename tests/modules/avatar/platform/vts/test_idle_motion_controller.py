@@ -40,7 +40,6 @@ def controller():
     )
 
 
-@pytest.mark.asyncio
 async def test_start_stop_and_params_are_sent(controller):
     """启动后应持续发送参数，停止后归零"""
     ctrl, calls = controller
@@ -58,7 +57,6 @@ async def test_start_stop_and_params_are_sent(controller):
     assert len(zero_values) >= 6
 
 
-@pytest.mark.asyncio
 async def test_speaking_pauses_idle(controller):
     """说话期间 idle 应暂停/衰减"""
     speaking = True
@@ -91,7 +89,6 @@ async def test_speaking_pauses_idle(controller):
         (False, True),  # 配置为 False：说话期间继续 idle
     ],
 )
-@pytest.mark.asyncio
 async def test_speech_pause_flag(speech_pause_enabled, expect_nonzero):
     """说话时是否暂停 idle 取决于 speech_pause_enabled 开关"""
     speaking = True
@@ -123,7 +120,6 @@ async def test_speech_pause_flag(speech_pause_enabled, expect_nonzero):
         assert max_abs <= 0.001, "speech_pause_enabled=True 时说话期间 idle 应暂停归零"
 
 
-@pytest.mark.asyncio
 async def test_set_parameter_names_updates_targets():
     """动态更新参数名后，应写入新参数名并重置状态"""
     calls = []
@@ -153,7 +149,6 @@ async def test_set_parameter_names_updates_targets():
     assert "HeadX" not in {c[0] for c in calls}
 
 
-@pytest.mark.asyncio
 async def test_shared_head_body_params_are_merged():
     """head/body 使用相同参数名时，body 信号应叠加合并而不是覆盖 head"""
     import random
@@ -237,7 +232,6 @@ def test_merge_target_only_combines_existing_names():
     assert "" not in targets
 
 
-@pytest.mark.asyncio
 async def test_extra_params_are_swayed_independently():
     """extra_params（如袖子参数）应参与 idle 摆动，幅度独立且不超过配置值"""
     calls = []

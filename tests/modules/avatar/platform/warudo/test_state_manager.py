@@ -63,7 +63,6 @@ class TestSightState:
         assert result["danmu"] == 0.0
         assert result["phone"] == 0.0
 
-    @pytest.mark.asyncio
     async def test_send_state(self):
         """测试发送视线状态"""
         state = SightState()
@@ -116,7 +115,6 @@ class TestEyebrowState:
 
         assert result["eyebrow_happy_strong"] == 0.7
 
-    @pytest.mark.asyncio
     async def test_send_state(self):
         """测试发送眉毛状态"""
         state = EyebrowState()
@@ -178,7 +176,6 @@ class TestEyeState:
 
         assert result == ALL_EYE_STATE
 
-    @pytest.mark.asyncio
     async def test_send_state(self):
         """测试发送眼睛状态"""
         state = EyeState()
@@ -231,7 +228,6 @@ class TestPupilState:
 
         assert result["eye_shift_down"] == 0.6
 
-    @pytest.mark.asyncio
     async def test_send_state(self):
         """测试发送瞳孔状态"""
         state = PupilState()
@@ -305,7 +301,6 @@ class TestMouthState:
         # 第一层的值不应该出现在结果中
         assert result["mouth_happy_strong"] == 0.0
 
-    @pytest.mark.asyncio
     async def test_send_state(self):
         """测试发送嘴巴状态"""
         state = MouthState()
@@ -339,7 +334,6 @@ class TestWarudoStateManager:
         assert state_manager.sight_state is not None
         assert state_manager._is_monitoring is False
 
-    @pytest.mark.asyncio
     async def test_start_monitoring(self, state_manager):
         """测试启动监控"""
         state_manager.start_monitoring()
@@ -349,7 +343,6 @@ class TestWarudoStateManager:
         # 清理
         state_manager.stop_monitoring()
 
-    @pytest.mark.asyncio
     async def test_start_monitoring_idempotent(self, state_manager):
         """测试重复启动监控不会创建多个任务"""
         state_manager.start_monitoring()
@@ -363,7 +356,6 @@ class TestWarudoStateManager:
         # 清理
         state_manager.stop_monitoring()
 
-    @pytest.mark.asyncio
     async def test_stop_monitoring(self, state_manager):
         """测试停止监控"""
         state_manager.start_monitoring()
@@ -371,7 +363,6 @@ class TestWarudoStateManager:
 
         assert state_manager._is_monitoring is False
 
-    @pytest.mark.asyncio
     async def test_stop_monitoring_idempotent(self, state_manager):
         """测试重复停止监控不会出错"""
         state_manager.start_monitoring()
@@ -381,7 +372,6 @@ class TestWarudoStateManager:
         state_manager.stop_monitoring()
         assert state_manager._is_monitoring is False
 
-    @pytest.mark.asyncio
     async def test_monitor_loop(self, state_manager):
         """测试监控循环"""
         state_manager.start_monitoring()
@@ -395,7 +385,6 @@ class TestWarudoStateManager:
         # 验证日志被调用（监控循环会记录日志）
         assert state_manager.logger.info.called or state_manager.logger.debug.called
 
-    @pytest.mark.asyncio
     async def test_monitor_loop_sends_changed_states(self, state_manager):
         """测试监控循环发送变化的状态"""
         # 标记一些状态为已变化
@@ -413,7 +402,6 @@ class TestWarudoStateManager:
         # 验证 send_action 被调用
         assert mock_callback.called
 
-    @pytest.mark.asyncio
     async def test_monitor_loop_only_sends_changed_states(self, state_manager):
         """测试监控循环只发送变化的状态"""
         # 所有状态都标记为未变化

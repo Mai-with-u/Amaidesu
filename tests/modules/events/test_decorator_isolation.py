@@ -20,12 +20,8 @@ from src.modules.events import (
     register_core_events,
     register_event,
 )
-from src.modules.events.names import CoreEvents
 
-
-# =============================================================================
 # 准备：调用一次 register_core_events() 触发 Payload 模块导入
-# =============================================================================
 
 
 @pytest.fixture(autouse=True)
@@ -35,9 +31,7 @@ def ensure_registered():
     yield
 
 
-# =============================================================================
 # 注册表填充测试
-# =============================================================================
 
 
 class TestRegistryPopulation:
@@ -45,9 +39,7 @@ class TestRegistryPopulation:
 
     def test_registry_is_not_empty_after_register(self):
         """register_core_events() 之后 EVENT_REGISTRY 非空"""
-        assert len(EVENT_REGISTRY) > 0, (
-            "EVENT_REGISTRY 在 register_core_events() 之后应至少包含一个事件"
-        )
+        assert len(EVENT_REGISTRY) > 0, "EVENT_REGISTRY 在 register_core_events() 之后应至少包含一个事件"
 
     def test_list_registered_events_returns_dict(self):
         """list_registered_events() 返回非空字典"""
@@ -63,9 +55,7 @@ class TestRegistryPopulation:
         assert len(list_registered_events()) == original_len
 
 
-# =============================================================================
 # CoreEvents 覆盖率测试
-# =============================================================================
 
 
 class TestDecoratorFrameworkContract:
@@ -104,9 +94,7 @@ class TestDecoratorFrameworkContract:
 
         try:
             reverse_name = getattr(_ReverseRefPayload, "_registered_event_name", None)
-            assert reverse_name == test_event_name, (
-                f"_registered_event_name 应等于注册键: got {reverse_name!r}"
-            )
+            assert reverse_name == test_event_name, f"_registered_event_name 应等于注册键: got {reverse_name!r}"
         finally:
             EVENT_REGISTRY.pop(test_event_name, None)
             if hasattr(_ReverseRefPayload, "_registered_event_name"):
@@ -154,6 +142,7 @@ class TestDecoratorFrameworkContract:
 
         try:
             with pytest.raises(ValueError, match="已被注册"):
+
                 @register_event(test_event_name)
                 class _SecondClass(BaseModel):
                     pass
@@ -171,6 +160,7 @@ class TestEventNameValidation:
         """未在 CoreEvents 登记的事件名在注册期直接拒绝（拼写漂移即时暴露）"""
 
         with pytest.raises(ValueError, match="未在 CoreEvents"):
+
             @register_event("typo.room.mesage")
             class _TypoPayload(BaseModel):
                 value: int = 0
@@ -217,21 +207,15 @@ class TestEventNameConvention:
     def test_all_registered_events_have_dot_separator(self):
         """所有已注册事件名应包含至少一个点号（命名空间.动作）"""
         invalid = {n for n in EVENT_REGISTRY.keys() if "." not in n}
-        assert not invalid, (
-            f"以下事件名缺少命名空间分隔符 '.': {sorted(invalid)}"
-        )
+        assert not invalid, f"以下事件名缺少命名空间分隔符 '.': {sorted(invalid)}"
 
     def test_no_plugin_namespace_in_registry(self):
         """plugin.* 命名空间不应出现在 EVENT_REGISTRY 中（plugin 系统已废弃）"""
         plugin_events = {n for n in EVENT_REGISTRY.keys() if n.startswith("plugin.")}
-        assert not plugin_events, (
-            f"plugin.* 事件不应通过 register_core_events() 注册: {sorted(plugin_events)}"
-        )
+        assert not plugin_events, f"plugin.* 事件不应通过 register_core_events() 注册: {sorted(plugin_events)}"
 
 
-# =============================================================================
 # Payload 类型校验
-# =============================================================================
 
 
 class TestPayloadTypeContract:
@@ -244,9 +228,7 @@ class TestPayloadTypeContract:
             for name, cls in EVENT_REGISTRY.items()
             if not (isinstance(cls, type) and issubclass(cls, BaseModel))
         }
-        assert not invalid, (
-            f"以下事件名注册了非 BaseModel 类型: {invalid}"
-        )
+        assert not invalid, f"以下事件名注册了非 BaseModel 类型: {invalid}"
 
     def test_registered_payload_has_event_name_attribute(self):
         """注册的 Payload 类应携带反向引用属性 _registered_event_name"""
@@ -256,14 +238,11 @@ class TestPayloadTypeContract:
                 f"{cls.__name__} 缺少 _registered_event_name 属性（装饰器未正确设置反向引用）"
             )
             assert reverse_name == event_name, (
-                f"{cls.__name__}._registered_event_name 与注册键不一致: "
-                f"got {reverse_name!r}, expected {event_name!r}"
+                f"{cls.__name__}._registered_event_name 与注册键不一致: got {reverse_name!r}, expected {event_name!r}"
             )
 
 
-# =============================================================================
 # 幂等性测试
-# =============================================================================
 
 
 class TestIdempotency:
@@ -280,9 +259,7 @@ class TestIdempotency:
         for _ in range(3):
             register_core_events()
         after = len(EVENT_REGISTRY)
-        assert before == after, (
-            f"重复调用导致 EVENT_REGISTRY 大小变化: {before} -> {after}"
-        )
+        assert before == after, f"重复调用导致 EVENT_REGISTRY 大小变化: {before} -> {after}"
 
     def test_call_multiple_times_keeps_payload_classes(self):
         """多次调用不会替换为不同的类（同一个事件名应保持同一个类型）"""
@@ -290,14 +267,10 @@ class TestIdempotency:
         for _ in range(3):
             register_core_events()
         for event_name, cls in snapshot.items():
-            assert EVENT_REGISTRY.get(event_name) is cls, (
-                f"重复调用后 {event_name} 的 Payload 类被替换"
-            )
+            assert EVENT_REGISTRY.get(event_name) is cls, f"重复调用后 {event_name} 的 Payload 类被替换"
 
 
-# =============================================================================
 # 启动钩子验证
-# =============================================================================
 
 
 class TestStartupHook:

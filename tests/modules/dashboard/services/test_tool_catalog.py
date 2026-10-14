@@ -70,9 +70,7 @@ def _providers_by_category(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]
     return {p["key"]: p for cat in catalog["categories"] for p in cat["providers"]}
 
 
-# ---------------------------------------------------------------------------
 # safe_list_providers / runtime_tool_counts 兜底
-# ---------------------------------------------------------------------------
 
 
 class TestSafeListProviders:
@@ -116,9 +114,7 @@ class TestRuntimeToolCounts:
         assert counts == {("framework", "vts"): (1, 1)}
 
 
-# ---------------------------------------------------------------------------
 # build_tool_catalog 三路拼装
-# ---------------------------------------------------------------------------
 
 
 class TestBuildToolCatalog:

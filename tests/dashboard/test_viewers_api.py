@@ -107,7 +107,7 @@ def _seed_viewers(count: int) -> None:
     _run(_seed())
 
 
-# ===== 列表：搜索 / 排序 / 分页 =====
+# 列表：搜索 / 排序 / 分页
 
 
 def test_viewers_empty(client: TestClient) -> None:
@@ -140,7 +140,11 @@ def test_viewers_seeded_fields(client: TestClient) -> None:
 def test_viewers_order_by_gift(client: TestClient) -> None:
     _seed_viewers(3)
     store = _server_ref_cache["store"]
-    _run(store.viewers.upsert_viewer_gift(platform="bilibili", user_id="u0", user_name="观众0", timestamp_ms=1_700_000_001_000))
+    _run(
+        store.viewers.upsert_viewer_gift(
+            platform="bilibili", user_id="u0", user_name="观众0", timestamp_ms=1_700_000_001_000
+        )
+    )
     body = client.get("/api/v1/viewers", params={"order_by": "gift_count", "limit": 2}).json()
     assert body["items"][0]["user_id"] == "u0"
     assert body["items"][0]["gift_count"] == 1
@@ -162,7 +166,7 @@ def test_viewers_invalid_order_by_returns_400(client: TestClient) -> None:
     assert r.status_code == 400
 
 
-# ===== 档案 / 对话 / 贡献 / 场次 =====
+# 档案 / 对话 / 贡献 / 场次
 
 
 def _seed_full_viewer() -> None:
@@ -171,7 +175,9 @@ def _seed_full_viewer() -> None:
     base = 1_700_000_000_000
 
     async def _seed():
-        await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u_full", user_name="富观众", timestamp_ms=base + 5_000)
+        await store.viewers.upsert_viewer_message(
+            platform="bilibili", user_id="u_full", user_name="富观众", timestamp_ms=base + 5_000
+        )
         await store.viewers.upsert_viewer_replied(platform="bilibili", user_id="u_full", timestamp_ms=base + 5_500)
         await store.chat.insert_live_chat(
             live_session_id=1,
@@ -284,7 +290,7 @@ def test_viewer_sessions(client: TestClient) -> None:
     assert body["items"][0]["message_count"] == 2
 
 
-# ===== 互动分析 =====
+# 互动分析
 
 
 def test_insights_buckets_and_daily(client: TestClient) -> None:
@@ -292,13 +298,14 @@ def test_insights_buckets_and_daily(client: TestClient) -> None:
     now = now_ms()
 
     async def _seed():
-        await store.viewers.upsert_viewer_message(platform="bilibili", user_id="a_today", user_name="今日观众", timestamp_ms=now)
+        await store.viewers.upsert_viewer_message(
+            platform="bilibili", user_id="a_today", user_name="今日观众", timestamp_ms=now
+        )
         await store.viewers.upsert_viewer_message(
             platform="bilibili", user_id="b_week", user_name="本周观众", timestamp_ms=now - 3 * 86_400_000
         )
         await store.viewers.upsert_viewer_message(
-            platform="bilibili",
-            user_id="c_old", user_name="老观众", timestamp_ms=now - 60 * 86_400_000
+            platform="bilibili", user_id="c_old", user_name="老观众", timestamp_ms=now - 60 * 86_400_000
         )
         await store.chat.insert_live_chat(
             live_session_id=1,

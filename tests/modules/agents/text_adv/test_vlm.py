@@ -32,9 +32,7 @@ REPLY_MISSING_COORD = "正文：\n正文文字。\n选项：\n1. 看不清位置
 REPLY_MALFORMED = "这是一段完全没有格式标记的乱序文本，随口说说而已。"
 
 
-# ---------------------------------------------------------------------------
 # build_question / 模板
-# ---------------------------------------------------------------------------
 
 
 def test_template_renders_nonempty_with_key_guidance() -> None:
@@ -64,9 +62,7 @@ def test_build_question_without_options_differs() -> None:
     assert 1 <= len(question) <= 500
 
 
-# ---------------------------------------------------------------------------
 # parse_reply
-# ---------------------------------------------------------------------------
 
 
 def test_parse_reply_ok_two_options() -> None:
@@ -133,9 +129,7 @@ def test_parse_reply_empty_is_failure() -> None:
     assert reading.parse_error
 
 
-# ---------------------------------------------------------------------------
 # reader：假件与注册表真件
-# ---------------------------------------------------------------------------
 
 
 def test_fake_vision_reader_parses_injected_reply() -> None:

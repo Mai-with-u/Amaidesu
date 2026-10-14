@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-
 from src.modules.avatar.platform.vts.vts_provider import (
     VTSProvider,
     create_vts_provider,
@@ -34,9 +33,7 @@ def _build_provider() -> VTSProvider:
     return provider
 
 
-# =============================================================================
 # supports_reconnect
-# =============================================================================
 
 
 def test_vts_supports_reconnect() -> None:
@@ -45,9 +42,7 @@ def test_vts_supports_reconnect() -> None:
     assert provider.supports_reconnect is True
 
 
-# =============================================================================
 # connect / disconnect
-# =============================================================================
 
 
 async def test_vts_connect_returns_is_connected_when_connected() -> None:
@@ -77,9 +72,7 @@ async def test_vts_disconnect_calls_internal_disconnect() -> None:
     assert provider._has_started is True
 
 
-# =============================================================================
 # reconnect 默认组合（不覆写 → disconnect + connect）
-# =============================================================================
 
 
 async def test_vts_reconnect_default_compose() -> None:
@@ -93,9 +86,7 @@ async def test_vts_reconnect_default_compose() -> None:
     provider._connect.assert_awaited_once_with()
 
 
-# =============================================================================
 # 手动重连后自动重连循环恢复
-# =============================================================================
 
 
 async def test_connect_restores_reconnect_loop_after_manual_disconnect() -> None:
@@ -148,9 +139,7 @@ async def test_connect_skips_loop_restore_before_setup() -> None:
     assert provider._reconnect_task is None
 
 
-# =============================================================================
 # 连接态迁移回调 / last_error / health_check
-# =============================================================================
 
 
 def _make_connect_success_stub(provider: VTSProvider) -> None:
@@ -250,9 +239,7 @@ async def test_health_check_delegates_to_real_probe() -> None:
     assert await provider.health_check() is False
 
 
-# =============================================================================
 # register_vts_tools 接线：降级登记 ↔ 连接态换血
-# =============================================================================
 
 
 def test_register_vts_tools_degrades_and_replenishes() -> None:

@@ -18,8 +18,6 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.modules.agents.factory import instantiate_agent
 
 # 特征 persona（非默认值，特征串让"落回硬编码默认"的回归一眼可见）
@@ -76,7 +74,6 @@ def _replyer_llm_response(speech: str = "测试回复") -> object:
 class TestPersonaConfigToPromptEndToEnd:
     """配置→提示词端到端：表达侧四字段必须来自配置而非硬编码默认。"""
 
-    @pytest.mark.asyncio
     async def test_replyer_renders_config_persona_into_prompt(self) -> None:
         """Replyer system 渲染的四字段必须全部等于配置值（非 _DEFAULT_*）。
 
@@ -120,7 +117,6 @@ class TestPersonaConfigToPromptEndToEnd:
             f"实际: {user_kwargs.get('style_constraints')!r}"
         )
 
-    @pytest.mark.asyncio
     async def test_replyer_does_not_render_behavior_style(self) -> None:
         """反向锁定：behavior_style 只进 Planner，不进 Replyer（决策/表达侧分离契约）。"""
         agent, llm, prompt = _make_agent_with_persona_config()
@@ -148,7 +144,6 @@ class TestPersonaConfigToPromptEndToEnd:
 class TestDecisionExpressionSeparation:
     """决策/表达分离反向断言：Planner 侧只见 behavior_style。"""
 
-    @pytest.mark.asyncio
     async def test_planner_injects_behavior_style_only(self) -> None:
         """Planner 渲染 kwargs 必须含配置 behavior_style；不得含表达侧三字段。"""
         agent, llm, prompt = _make_agent_with_persona_config()

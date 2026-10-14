@@ -38,7 +38,7 @@ def _receipt(call_id: str, text: str = "ok") -> Dict[str, Any]:
     return {"role": "tool", "tool_call_id": call_id, "content": text}
 
 
-# ---- 预算换算 ----
+# 预算换算
 
 
 def test_watermarks_follow_window_ratio_and_cap() -> None:
@@ -57,7 +57,7 @@ def test_target_ratio_must_stay_below_prepare_ratio() -> None:
         ContextBudgetConfig(prepare_ratio=0.5, target_ratio=0.5)
 
 
-# ---- 计量 ----
+# 计量
 
 
 def test_token_counter_caches_text_and_counts_structure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,7 +90,7 @@ def test_token_counter_evicts_least_recent(monkeypatch: pytest.MonkeyPatch) -> N
     assert calls == ["a", "b", "c", "b"]
 
 
-# ---- 按组切分 ----
+# 按组切分
 
 
 def test_group_messages_binds_calls_with_receipts() -> None:
@@ -108,7 +108,7 @@ def test_fold_count_keeps_protected_tail() -> None:
     assert fold_count([10, 10, 10], keep_tokens=0, protect_last=2) == 1
 
 
-# ---- 后台准备 ----
+# 后台准备
 
 
 async def test_background_checkpoint_single_flight_and_take() -> None:
@@ -151,7 +151,7 @@ async def test_background_checkpoint_cancel() -> None:
     assert not runner.busy and runner.meta == {}
 
 
-# ---- 前缀自检 ----
+# 前缀自检
 
 
 def test_prefix_guard_accepts_append_and_flags_rewrite() -> None:
@@ -173,7 +173,7 @@ def test_prefix_guard_ignores_internal_markers() -> None:
     assert guard.observe([{"role": "user", "content": "a"}]) is None
 
 
-# ---- 尾部图片 ----
+# 尾部图片
 
 
 def test_tail_images_drain_once() -> None:

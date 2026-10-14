@@ -1,4 +1,4 @@
-﻿"""口型幅度链路回归测试（复现"幅度很小 + 抽搐回闭"症状）
+"""口型幅度链路回归测试（复现"幅度很小 + 抽搐回闭"症状）
 
 反馈环：以 GPT-SoVITS 实况形态（32kHz int16 流式逐块、真实时间节奏、
 音节能量包络 + 段间停顿）喂 LipSyncAnalyzer，录制 MouthSignal 轨迹，
@@ -17,9 +17,7 @@ import pytest
 
 from src.modules.avatar.lipsync import LipSyncAnalyzer, LipSyncRenderer, MouthSignal
 
-# ---------------------------------------------------------------------------
 # 用户 config/avatar.toml [lipsync] 的现值（2026-09-22 实测配置）
-# ---------------------------------------------------------------------------
 
 USER_LIPSYNC_CONFIG = {
     "enabled": True,
@@ -135,8 +133,7 @@ class TestLipsyncAmplitudeChain:
         trace = [f"{m:.3f}" for _, m, _ in ticks[-40:]]
         print(f"\n[当前配置 16k] 帧数={len(ticks)} 峰值={peak:.3f} 尾迹={trace}")
         assert peak >= 0.35, (
-            f"口型幅度过小：峰值 {peak:.3f} < 0.35（max_mouth_open=0.6 的可见下限）——"
-            f"复现用户症状'口型幅度很小'"
+            f"口型幅度过小：峰值 {peak:.3f} < 0.35（max_mouth_open=0.6 的可见下限）——复现用户症状'口型幅度很小'"
         )
 
     def test_no_repeated_mid_sentence_mouth_collapse(self) -> None:
@@ -145,9 +142,7 @@ class TestLipsyncAmplitudeChain:
         twitches = _twitch_count(ticks)
         trace = [f"{m:.3f}" for _, m, _ in ticks[-40:]]
         print(f"\n[当前配置 16k] 抽搐次数={twitches} 尾迹={trace}")
-        assert twitches <= 1, (
-            f"句中 mouth 反复闭合回弹 {twitches} 次 > 1——复现用户症状'抽搐回初始状态'"
-        )
+        assert twitches <= 1, f"句中 mouth 反复闭合回弹 {twitches} 次 > 1——复现用户症状'抽搐回初始状态'"
 
     def test_real_sample_rate_beats_mismatched_config(self) -> None:
         """差分证据：同一音频，分析器采样率=实际喂入率(32k) 的峰值
@@ -157,9 +152,7 @@ class TestLipsyncAmplitudeChain:
         peak_mismatch = _peak_mouth(ticks_mismatch)
         peak_match = _peak_mouth(ticks_match)
         print(f"\n[差分] 16k 错配峰值={peak_mismatch:.3f}  32k 匹配峰值={peak_match:.3f}")
-        assert peak_match >= peak_mismatch - 0.02, (
-            "使用真实采样率反而更差——假设不成立，需重查"
-        )
+        assert peak_match >= peak_mismatch - 0.02, "使用真实采样率反而更差——假设不成立，需重查"
 
 
 if __name__ == "__main__":

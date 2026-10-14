@@ -9,8 +9,6 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
-
 from src.modules.dashboard.widget.models import MessageType
 from src.modules.dashboard.widget.service import DanmakuWidgetService
 from src.modules.events.event_bus import EventBus
@@ -98,7 +96,6 @@ def test_convert_simulated_flag_propagates() -> None:
     assert fake.simulated is True
 
 
-@pytest.mark.asyncio
 async def test_start_subscribes_all_room_message_events() -> None:
     """弹幕小部件需订阅全部 4 种 room.message 事件（礼物/SC/进场也要上屏）。"""
     svc = _make_service()
@@ -122,7 +119,6 @@ async def test_start_subscribes_all_room_message_events() -> None:
         assert not svc.event_bus._handlers.get(event_name), f"stop 后未解除订阅: {event_name}"
 
 
-@pytest.mark.asyncio
 async def test_on_input_message_roundtrip() -> None:
     """端到端：事件回调 → 转换 → 入队 → 广播（回归无 AttributeError/NoneType）"""
     svc = _make_service()
@@ -132,7 +128,6 @@ async def test_on_input_message_roundtrip() -> None:
     svc._danmaku_callback.assert_awaited_once()
 
 
-@pytest.mark.asyncio
 async def test_on_input_message_missing_user_fallback() -> None:
     svc = _make_service()
     await svc._on_input_message("room.message.danmaku", _make_payload(), "console")

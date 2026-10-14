@@ -32,9 +32,7 @@ def loaded_model_config(tmp_path: Path) -> Dict[str, Any]:
     return config["model"]
 
 
-# =============================================================================
 # Scenario A: ModelRootConfig 保留 summary 用途 profile（schema 层验证）
-# =============================================================================
 
 
 class TestScenarioAConfigRetainsSummary:
@@ -86,9 +84,7 @@ class TestScenarioAConfigRetainsSummary:
         assert "summary" != "replyer"
 
 
-# =============================================================================
 # Scenario B: LLMManager 为 summary 构造 model_list 解析
-# =============================================================================
 
 
 class TestScenarioBLLMManagerParsesSummary:
@@ -111,12 +107,10 @@ class TestScenarioBLLMManagerParsesSummary:
             await manager.setup(loaded_model_config)
             yield manager, created_instances, mock_backend_class
 
-    @pytest.mark.asyncio
     async def test_has_profile_summary(self, setup_manager_with_real_config):
         manager, _, _ = setup_manager_with_real_config
         assert "summary" in manager._profiles
 
-    @pytest.mark.asyncio
     async def test_summary_profile_resolves_model_list(self, setup_manager_with_real_config):
         manager, _, _ = setup_manager_with_real_config
         summary_profile = manager._profiles["summary"]
@@ -127,7 +121,6 @@ class TestScenarioBLLMManagerParsesSummary:
             assert m.model_identifier
             assert m.provider_name
 
-    @pytest.mark.asyncio
     async def test_summary_shares_provider_with_other_profiles(self, setup_manager_with_real_config):
         """summary 与 replyer 等 profile 共享同一 provider 时复用同一连接。"""
         manager, _, _ = setup_manager_with_real_config

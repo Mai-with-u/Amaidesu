@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-import pytest
-
 from src.modules.events.interceptors.chain import InterceptorChain
 from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
 from src.modules.events.payloads.rundown import RundownChangedPayload
@@ -29,7 +27,6 @@ class _FakeSessionManager:
         return self._pk
 
 
-@pytest.mark.asyncio
 async def test_stamps_unstamped_payload() -> None:
     ic = SessionStampInterceptor(_FakeSessionManager(42))
     payload: Dict[str, Any] = {"live_session_id": 0, "content": "hi"}
@@ -38,7 +35,6 @@ async def test_stamps_unstamped_payload() -> None:
     assert out["live_session_id"] == 42
 
 
-@pytest.mark.asyncio
 async def test_stamps_game_events() -> None:
     """game.* 域事件同样盖章：发布方不填的场次主键由拦截器注入 int 值。"""
     ic = SessionStampInterceptor(_FakeSessionManager(42))
@@ -48,7 +44,6 @@ async def test_stamps_game_events() -> None:
     assert out["live_session_id"] == 42
 
 
-@pytest.mark.asyncio
 async def test_stamps_planner_verdict() -> None:
     """planner 域整体盖章（含 verdict）：裁决与决策同轮归属同一场次，回看归因不缺卡。"""
     ic = SessionStampInterceptor(_FakeSessionManager(42))
@@ -58,7 +53,6 @@ async def test_stamps_planner_verdict() -> None:
     assert out["live_session_id"] == 42
 
 
-@pytest.mark.asyncio
 async def test_skips_when_already_stamped() -> None:
     sm = _FakeSessionManager(42)
     ic = SessionStampInterceptor(sm)
@@ -69,7 +63,6 @@ async def test_skips_when_already_stamped() -> None:
     assert sm.calls == 0
 
 
-@pytest.mark.asyncio
 async def test_skips_payload_without_field() -> None:
     """无 live_session_id 字段的 payload 不被注入未知键（域前缀 + 字段双重过滤）。"""
     ic = SessionStampInterceptor(_FakeSessionManager(42))
@@ -79,7 +72,6 @@ async def test_skips_payload_without_field() -> None:
     assert "live_session_id" not in out
 
 
-@pytest.mark.asyncio
 async def test_resolve_failure_passes_payload_through() -> None:
     ic = SessionStampInterceptor(_FakeSessionManager(raise_on_resolve=True))
     payload: Dict[str, Any] = {"live_session_id": 0}
@@ -88,7 +80,6 @@ async def test_resolve_failure_passes_payload_through() -> None:
     assert out["live_session_id"] == 0
 
 
-@pytest.mark.asyncio
 async def test_passthrough_when_resolve_returns_none() -> None:
     """``resolve_pk()`` 返回 None 时 payload 原样放行（live_session_id 保持 0），由落库路径跳过。"""
     ic = SessionStampInterceptor(_FakeSessionManager(pk=None))
@@ -98,7 +89,6 @@ async def test_passthrough_when_resolve_returns_none() -> None:
     assert out["live_session_id"] == 0
 
 
-@pytest.mark.asyncio
 async def test_scope_prefixes_filter_via_chain() -> None:
     """作用域外的同名键事件（core.*）不进拦截器。"""
     sm = _FakeSessionManager(42)
@@ -114,7 +104,6 @@ async def test_scope_prefixes_filter_via_chain() -> None:
     assert out["live_session_id"] == 42
 
 
-@pytest.mark.asyncio
 async def test_stamps_rundown_changed_via_chain() -> None:
     """rundown.changed 域在盖章作用域内：流程单变更可归属到单场回看时间线。"""
     sm = _FakeSessionManager(42)
@@ -130,7 +119,6 @@ async def test_stamps_rundown_changed_via_chain() -> None:
     assert sm.calls == 1
 
 
-@pytest.mark.asyncio
 async def test_stamps_task_and_agent_domains_via_chain() -> None:
     """task. / agent. 域在盖章作用域内：任务账本与 Agent 响应/递话归属场次。
 
@@ -148,7 +136,6 @@ async def test_stamps_task_and_agent_domains_via_chain() -> None:
     assert sm.calls == 3
 
 
-@pytest.mark.asyncio
 async def test_stamps_streamer_stage_payload() -> None:
     """streamer.stage 载荷补声明 live_session_id 后进入盖章作用域（前缀已在域内）。"""
     from src.modules.events.payloads.planner import StreamerStagePayload

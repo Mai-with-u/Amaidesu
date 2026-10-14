@@ -109,7 +109,6 @@ def test_no_sink_is_passthrough() -> None:
     mgr._sink_stop()
 
 
-@pytest.mark.asyncio
 async def test_full_playback_taps_sink(fake_sounddevice: MagicMock) -> None:
     """完整验证全量播放分接，不吞掉播放路径上的意外异常。"""
     sink = _StubSink()

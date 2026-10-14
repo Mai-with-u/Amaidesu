@@ -14,7 +14,6 @@ import asyncio
 from typing import List
 
 import numpy as np
-import pytest
 
 from src.modules.avatar.lipsync import LipSyncAnalyzer, MouthSignal
 
@@ -45,7 +44,6 @@ def _sine_pcm(freq_hz: int = 200, seconds: float = 0.5, sample_rate: int = 16000
     return wave.astype(np.float32)
 
 
-@pytest.mark.asyncio
 async def test_session_emits_loud_signal_and_rests_on_stop():
     """喂正弦 PCM → 出现非零张嘴信号；stop+wait_finished 后收静止值。"""
     renderer = _RecordingRenderer()
@@ -57,7 +55,7 @@ async def test_session_emits_loud_signal_and_rests_on_stop():
 
     assert analyzer.is_speaking is True
     loud = [s for s in renderer.signals if s.mouth_open > 0.01]
-    assert loud, f"应有非零张嘴信号，实际 {[ (s.mouth_open, s.volume) for s in renderer.signals[:5] ]}"
+    assert loud, f"应有非零张嘴信号，实际 {[(s.mouth_open, s.volume) for s in renderer.signals[:5]]}"
     assert loud[0].utterance_id == "utt_a1"
 
     analyzer.stop()
@@ -69,7 +67,6 @@ async def test_session_emits_loud_signal_and_rests_on_stop():
     assert renderer.signals[-1].mouth_open == 0.0
 
 
-@pytest.mark.asyncio
 async def test_silence_keeps_mouth_closed():
     """喂静音 PCM → 张嘴信号保持 0（静音检测）。"""
     renderer = _RecordingRenderer()
@@ -84,7 +81,6 @@ async def test_silence_keeps_mouth_closed():
     assert all(s.mouth_open == 0.0 for s in renderer.signals)
 
 
-@pytest.mark.asyncio
 async def test_float32_input_normalized():
     """float32 归一化输入被接受（引擎播放器 dtype 形态之一）。"""
     analyzer = LipSyncAnalyzer(config={"update_interval_ms": 1.0})
@@ -96,7 +92,6 @@ async def test_float32_input_normalized():
     # 不抛、缓冲有数据即通过
 
 
-@pytest.mark.asyncio
 async def test_feed_before_start_is_noop():
     """未开会话时 feed 静默丢弃（无会话上下文）。"""
     analyzer = LipSyncAnalyzer()
@@ -104,7 +99,6 @@ async def test_feed_before_start_is_noop():
     assert analyzer.is_speaking is False
 
 
-@pytest.mark.asyncio
 async def test_renderer_exception_is_fail_soft():
     """渲染器抛异常 → 分析循环继续、其他渲染器仍收到信号（fail-soft）。"""
     broken = _RecordingRenderer()
@@ -121,7 +115,6 @@ async def test_renderer_exception_is_fail_soft():
     assert healthy.signals, "健康渲染器应照常收到信号"
 
 
-@pytest.mark.asyncio
 async def test_multiple_renderers_all_receive():
     """一个分析器扇出多具虚拟形象渲染器（D4：不重复计算）。"""
     r1, r2 = _RecordingRenderer(), _RecordingRenderer()

@@ -84,7 +84,6 @@ class TestSimulatorWiring:
         monkeypatch.setattr("src.modules.llm.engine.LLMManager.setup", _noop_setup)
         monkeypatch.setattr("src.modules.llm.engine.LLMManager.cleanup", _noop_cleanup)
 
-    @pytest.mark.asyncio
     async def test_disabled_means_zero_wiring(self, config_service_factory, monkeypatch: pytest.MonkeyPatch) -> None:
         """[simulator].enabled=false → simulator_service 元组项为 None（零装配）。"""
         from main import create_app_components
@@ -121,7 +120,6 @@ class TestSimulatorWiring:
 
         assert not [s for s in _LIVE_STREAMERS if s.persist], "测试装配不得留下 persist LogStreamer 实例"
 
-    @pytest.mark.asyncio
     async def test_enabled_dry_mode_no_llm_call(self, config_service_factory, monkeypatch: pytest.MonkeyPatch) -> None:
         """enabled=true + auto_start=False（--dry 模式）→ 装配但 is_running=False（不产生 LLM 调用）。"""
         from main import create_app_components
@@ -151,7 +149,6 @@ class TestSimulatorWiring:
         if result[1] is not None:
             await result[1].cleanup()
 
-    @pytest.mark.asyncio
     async def test_enabled_runs_when_auto_started(
         self, config_service_factory, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -181,7 +178,6 @@ class TestSimulatorWiring:
         if result[1] is not None:
             await result[1].cleanup()
 
-    @pytest.mark.asyncio
     async def test_simulator_setup_runs_after_agents_started(
         self, config_service_factory, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -190,10 +186,9 @@ class TestSimulatorWiring:
         回放模式开播经 open_session 发 live.started；若 setup 早于 Agent 订阅，
         开播边界事件会被主播 Agent 错过（主动发言闸不置位）。
         """
+        from main import create_app_components
         from src.modules.agents.manager import AgentManager
         from src.modules.simulator.service import SimulatorService
-
-        from main import create_app_components
 
         monkeypatch.setattr("main._BASE_DIR", str(Path.cwd()))
 
@@ -246,7 +241,6 @@ class TestSimulatorWiring:
 class TestLogStreamerWiring:
     """LogStreamer 装配透传契约：persist 开关与落盘目录可由调用方控制。"""
 
-    @pytest.mark.asyncio
     async def test_start_log_streamer_persist_dir_passthrough(self, tmp_path: Path) -> None:
         """persist_dir 透传生效：绝对路径原样作为落盘目录（不落入真实 data/logs/）。"""
         from main import _start_log_streamer
@@ -273,7 +267,6 @@ class TestMainDryModeShutdown:
         monkeypatch.setattr("src.modules.llm.engine.LLMManager.setup", _noop_setup)
         monkeypatch.setattr("src.modules.llm.engine.LLMManager.cleanup", _noop_cleanup)
 
-    @pytest.mark.asyncio
     async def test_dry_mode_does_not_start_simulator(
         self, config_service_factory, monkeypatch: pytest.MonkeyPatch
     ) -> None:

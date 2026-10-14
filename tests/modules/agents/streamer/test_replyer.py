@@ -9,10 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.plan import DecisionPlan
-from src.agents.streamer.replyer import WordFilter, Replyer
+from src.agents.streamer.replyer import Replyer, WordFilter
 from src.modules.llm.payload import Response
 
 
@@ -96,7 +94,6 @@ def _make_replyer(
 class TestReplyerGenerate:
     """基础生成行为。"""
 
-    @pytest.mark.asyncio
     async def test_replyer_generates_result(self) -> None:
         """mock LLM 正文返回台词 → 生成含 speech 的 dict，请求 ID 透传。"""
         r, _llm, _prompt = _make_replyer(
@@ -110,7 +107,6 @@ class TestReplyerGenerate:
         assert result["speech"] == "好耶！"
         assert result["llm_request_id"] == "req_1"
 
-    @pytest.mark.asyncio
     async def test_replyer_persona_in_system_and_data_in_turn_input(self) -> None:
         """稳定段渲染入参含构造 config 注入的人设；变化段渲染入参含决策与弹幕。
 
@@ -142,7 +138,6 @@ class TestReplyerGenerate:
         assert user_kwargs["rundown"] == "（当前无流程单）"
         assert "personality" not in user_kwargs and "audience_salutation" not in user_kwargs
 
-    @pytest.mark.asyncio
     async def test_replyer_history_merged_into_turn_input(self) -> None:
         """对话历史与本轮要求合并进单条 user：历史逐条映射为对话行，决策收尾。
 
@@ -168,7 +163,6 @@ class TestReplyerGenerate:
         assert "小明说：大家好呀 [id:m1]" in dialogue
         assert "麦麦(你)说：晚上好" in dialogue
 
-    @pytest.mark.asyncio
     async def test_replyer_system_stable_across_requests(self) -> None:
         """缓存契约：system 稳定段两次请求逐字一致，只有本轮输入 user 变化。
 
@@ -197,7 +191,6 @@ class TestReplyerGenerate:
         assert first_system == second_system == "SYSTEM-STABLE"
         assert first_msgs[0]["content"] != second_msgs[0]["content"]
 
-    @pytest.mark.asyncio
     async def test_replyer_passes_system_without_tools(self) -> None:
         """generate 以 system 参数携带稳定段；表达引擎不发送工具面。"""
         r, llm, _prompt = _make_replyer(
@@ -209,7 +202,6 @@ class TestReplyerGenerate:
         assert kwargs.get("system") == "PROMPT"
         assert "tools" not in kwargs
 
-    @pytest.mark.asyncio
     async def test_replyer_uses_replyer_profile(self) -> None:
         """断言 generate 绑定 replyer profile（代码显式常量，与 Planner 的 planner 分离）。"""
         r, llm, _prompt = _make_replyer(
@@ -220,11 +212,11 @@ class TestReplyerGenerate:
 
         assert llm.generate.await_args.kwargs.get("profile") == "replyer"
 
-    @pytest.mark.asyncio
     async def test_replyer_registry_tools_not_consumed(self) -> None:
         """表达引擎无工具面：registry 工具不进入表达会话，也不被查询。"""
-        from src.modules.tools.models import ToolSpec
         from unittest.mock import MagicMock
+
+        from src.modules.tools.models import ToolSpec
 
         registry = MagicMock()
         registry.list_tools.return_value = [
@@ -242,7 +234,6 @@ class TestReplyerGenerate:
         assert "tools" not in kwargs
         registry.list_tools.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_replyer_on_delta_passthrough(self) -> None:
         """on_delta 回调透传给 generate（流式行为不变）。"""
         r, llm, _prompt = _make_replyer(
@@ -254,7 +245,6 @@ class TestReplyerGenerate:
 
         assert llm.generate.await_args.kwargs.get("on_delta") is on_delta
 
-    @pytest.mark.asyncio
     async def test_replyer_plain_text_becomes_speech(self) -> None:
         """正文即台词（自训练模型纯文本输出契约），首尾空白剔除。"""
         r, _llm, _prompt = _make_replyer(
@@ -265,7 +255,6 @@ class TestReplyerGenerate:
         assert result is not None
         assert result["speech"] == "到了到了，机器就在面前～马上开整！"
 
-    @pytest.mark.asyncio
     async def test_replyer_plain_text_drops_thinking(self) -> None:
         """正文里的思考段不能念：闭合的去掉留下台词；只有没闭合的思考就照常静默。"""
         r, _llm, _prompt = _make_replyer(
@@ -278,7 +267,6 @@ class TestReplyerGenerate:
         )
         assert await r.generate(_make_plan(), []) is None
 
-    @pytest.mark.asyncio
     async def test_replyer_content_taken_verbatim(self) -> None:
         """纯文本契约：正文不做 JSON 解析，原样成为台词。"""
         r, _llm, _prompt = _make_replyer(
@@ -289,7 +277,6 @@ class TestReplyerGenerate:
         assert result is not None
         assert result["speech"] == '{"speech": "蜂蜜胶还在弄", "emotion": "happy"}'
 
-    @pytest.mark.asyncio
     async def test_replyer_empty_speech_silent(self) -> None:
         """正文为空 → silent 降级返回 None。"""
         r, _llm, _prompt = _make_replyer(
@@ -300,7 +287,6 @@ class TestReplyerGenerate:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_replyer_llm_failure_silent(self) -> None:
         """LLM 调用抛异常 → 返回 None（silent 降级），不抛出。"""
         r, _llm, _prompt = _make_replyer(llm_side_effect=RuntimeError("LLM 挂了"))
@@ -309,7 +295,6 @@ class TestReplyerGenerate:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_replyer_llm_response_failure_silent(self) -> None:
         """payload.Response.success=False → 返回 None（silent 降级）。"""
         r, _llm, _prompt = _make_replyer(
@@ -320,7 +305,6 @@ class TestReplyerGenerate:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_replyer_should_reply_false_skips(self) -> None:
         """plan.should_reply=False → 不调 LLM，直接返回 None。"""
         r, llm, _prompt = _make_replyer(
@@ -350,7 +334,6 @@ class TestReplyerWordFilter:
         assert cleaned == "这是***测试"
         assert dropped is True
 
-    @pytest.mark.asyncio
     async def test_word_filter_drop_on_match(self) -> None:
         """drop_on_match=True 时整条返回 None。"""
         flt = WordFilter(
@@ -367,7 +350,6 @@ class TestReplyerWordFilter:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_word_filter_replace_keep_result(self) -> None:
         """drop_on_match=False（默认）时净化后保留 result。"""
         flt = WordFilter(words=["脏话"], replacement="***")

@@ -12,14 +12,11 @@ import pytest
 from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider as VRChatHandler
 from src.modules.events.event_bus import EventBus
 
-
 # GESTURE_MAP 是 VRChatHandler 的类变量
 GESTURE_MAP = VRChatHandler.GESTURE_MAP
 
 
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 
 @pytest.fixture
@@ -49,9 +46,7 @@ def mock_logger():
     return MagicMock()
 
 
-# =============================================================================
 # Tests - 不需要外部环境
-# =============================================================================
 
 
 class TestVRChatHandlerGestures:

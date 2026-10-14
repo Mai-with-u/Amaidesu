@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from src.modules.config.multi_file_loader import resolve_root_schema
+from src.modules.config.registry import COMPONENT_SCHEMAS
 from src.modules.dashboard.services.config_adapter import (
     _build_frontend_groups,
     _fill_array_placeholders,
@@ -18,13 +20,8 @@ from src.modules.dashboard.services.config_adapter import (
     _walk_schema,
     apply_config_updates,
 )
-from src.modules.config.registry import COMPONENT_SCHEMAS
-from src.modules.config.multi_file_loader import resolve_root_schema
 
-
-# ---------------------------------------------------------------------------
 # 测试用本地 Schema（_walk_schema 接受任意 BaseModel 子类）
-# ---------------------------------------------------------------------------
 
 
 class _SubConfig(BaseModel):
@@ -44,9 +41,7 @@ class _HostConfig(BaseModel):
     free: dict[str, Any] = {}
 
 
-# ---------------------------------------------------------------------------
 # _mask_sensitive_values
-# ---------------------------------------------------------------------------
 
 
 class TestMaskSensitiveValues:
@@ -89,9 +84,7 @@ class TestMaskSensitiveValues:
         assert masked["simulator"]["enabled"] is True
 
 
-# ---------------------------------------------------------------------------
 # _find_placeholder_write
-# ---------------------------------------------------------------------------
 
 
 class TestFindPlaceholderWrite:
@@ -117,9 +110,7 @@ class TestFindPlaceholderWrite:
         assert _find_placeholder_write([]) is None
 
 
-# ---------------------------------------------------------------------------
 # _walk_schema
-# ---------------------------------------------------------------------------
 
 
 class TestWalkSchema:
@@ -230,9 +221,7 @@ class TestWalkSchemaToolProviders:
         assert payload[1].annotation is int
 
 
-# ---------------------------------------------------------------------------
 # _build_frontend_groups
-# ---------------------------------------------------------------------------
 
 
 class _FakeConfigService:

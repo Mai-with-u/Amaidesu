@@ -20,10 +20,7 @@ from src.modules.storage.models.rundown import (
     RundownSegment,
 )
 
-
-# ---------------------------------------------------------------------------
 # 基础构造与默认值
-# ---------------------------------------------------------------------------
 
 
 def test_segment_minimal_construction() -> None:
@@ -78,9 +75,7 @@ def test_rundown_minimal_construction() -> None:
     assert len(rundown.segments) == 1
 
 
-# ---------------------------------------------------------------------------
 # 字段下界与可选性
-# ---------------------------------------------------------------------------
 
 
 def test_segment_expected_ms_ge_1000() -> None:
@@ -112,9 +107,7 @@ def test_segment_min_duration_ms_ge_1000_when_set() -> None:
     assert seg.min_duration_ms is None
 
 
-# ---------------------------------------------------------------------------
 # extra="forbid"
-# ---------------------------------------------------------------------------
 
 
 def test_segment_extra_field_rejected() -> None:
@@ -142,9 +135,7 @@ def test_rundown_extra_field_rejected() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # 列表长度
-# ---------------------------------------------------------------------------
 
 
 def test_rundown_segments_min_length_one() -> None:
@@ -153,9 +144,7 @@ def test_rundown_segments_min_length_one() -> None:
         Rundown(rundown_id="r", title="t", segments=[])
 
 
-# ---------------------------------------------------------------------------
 # 跨字段：id 唯一 / min_duration_ms <= expected_ms
-# ---------------------------------------------------------------------------
 
 
 def test_rundown_segment_id_unique_within_rundown() -> None:
@@ -213,9 +202,7 @@ def test_rundown_min_duration_equal_to_expected_allowed() -> None:
     assert rundown.segments[0].min_duration_ms == rundown.segments[0].expected_ms
 
 
-# ---------------------------------------------------------------------------
 # DEFAULT_RUNDOWN
-# ---------------------------------------------------------------------------
 
 
 def test_default_rundown_validates() -> None:

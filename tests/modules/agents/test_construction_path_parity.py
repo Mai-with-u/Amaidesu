@@ -24,10 +24,7 @@ from src.modules.agents.factory import SUPPORTED_AGENTS, instantiate_agent
 from src.modules.agents.manager import AgentManager
 from src.modules.tools.registry import ToolRegistry
 
-
-# ---------------------------------------------------------------------------
 # 测试替身
-# ---------------------------------------------------------------------------
 
 
 def _make_stub_agent(name: str) -> BaseAgent:
@@ -81,12 +78,9 @@ _SHARED_SERVICES: dict[str, Any] = {
 }
 
 
-# ---------------------------------------------------------------------------
 # 等价性：kwargs 关键字集合一致
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_startup_and_enable_paths_pass_same_kwarg_names(recorded_factory) -> None:
     """启动装配与 enable_agent 对每个注册名传入相同集合的构造关键字。"""
     (main_patcher, factory_patcher), calls = recorded_factory
@@ -141,9 +135,7 @@ async def test_startup_and_enable_paths_pass_same_kwarg_names(recorded_factory) 
         )
 
 
-# ---------------------------------------------------------------------------
 # llm_profile 统一：以 Agent 类默认为准
-# ---------------------------------------------------------------------------
 
 
 def test_factory_does_not_expose_llm_profile() -> None:
@@ -162,12 +154,9 @@ def test_minecraft_uses_agent_default_llm_profile() -> None:
     assert MINECRAFT_PROFILE == "minecraft"
 
 
-# ---------------------------------------------------------------------------
 # 工厂基础设施参数透传（streamer 发言管线 / 场次 / 思考流）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_streamer_infra_kwargs_forwarded() -> None:
     """工厂把 speech/tts/subtitle/session/thinking 基建透传给 StreamerAgent。"""
     from unittest.mock import MagicMock
@@ -195,9 +184,7 @@ async def test_streamer_infra_kwargs_forwarded() -> None:
     assert agent._speech._speech_max_queue == 5
 
 
-# ---------------------------------------------------------------------------
 # 工厂仓储透传（对话历史/流程单/场次状态/话题快照四件；缺失 = 历史读取短路）
-# ---------------------------------------------------------------------------
 
 
 def test_streamer_repos_forwarded() -> None:
@@ -228,7 +215,6 @@ def test_streamer_repos_forwarded() -> None:
     assert agent._chat is not None
 
 
-@pytest.mark.asyncio
 async def test_enable_agent_repos_fall_back_to_manager_members() -> None:
     """enable_agent 未显式传仓储时回退构造成员（Dashboard 动态启用路径）。"""
     from unittest.mock import patch

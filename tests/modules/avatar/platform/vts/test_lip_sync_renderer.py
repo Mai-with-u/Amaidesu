@@ -31,7 +31,6 @@ def _signal(mouth_open: float, volume: float) -> MouthSignal:
     return MouthSignal(mouth_open=mouth_open, volume=volume)
 
 
-@pytest.mark.asyncio
 async def test_mouth_open_follows_signal(renderer):
     """张嘴信号直写 MouthOpen；同值不重复写。"""
     r, calls = renderer
@@ -44,7 +43,6 @@ async def test_mouth_open_follows_signal(renderer):
     assert all(name != "MouthOpen" for name, _ in calls[1:])
 
 
-@pytest.mark.asyncio
 async def test_base_expression_maintained_while_speaking(renderer):
     """说话（音量足）时微笑基线推到目标值；静音时收回。"""
     r, calls = renderer
@@ -56,7 +54,6 @@ async def test_base_expression_maintained_while_speaking(renderer):
     assert ("MouthSmile", 0.0) in calls
 
 
-@pytest.mark.asyncio
 async def test_session_end_zeros_mouth(renderer):
     """会话结束：MouthOpen 归零、表情收回。"""
     r, calls = renderer
@@ -68,7 +65,6 @@ async def test_session_end_zeros_mouth(renderer):
     assert r.current_mouth_open == 0.0
 
 
-@pytest.mark.asyncio
 async def test_mouth_open_param_not_in_base_expressions():
     """基线表情里的 MouthOpen 被过滤（张嘴归口型信号管）。"""
     calls = []

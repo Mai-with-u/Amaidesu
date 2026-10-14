@@ -15,12 +15,10 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
-from src.modules.avatar.speech_binding import bind_speech_emotion, bind_speaking_state
+from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
 from src.modules.avatar.platform.vts.vts_provider import VTSProvider
 from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider
-from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
+from src.modules.avatar.speech_binding import bind_speaking_state, bind_speech_emotion
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
@@ -41,12 +39,9 @@ async def _emit_and_settle(bus: EventBus, event_name: str, payload) -> None:
     await asyncio.sleep(0.05)  # 让 handler 跑完
 
 
-# ---------------------------------------------------------------------------
 # 情绪反射（streamer.speech → set_expression）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_speech_reflected_to_vts_parameters():
     """发 streamer.speech → VTS 按映射写参数（happy 0.8 → MouthSmile 0.64 ...）。"""
     provider = VTSProvider(config={})
@@ -66,7 +61,6 @@ async def test_speech_reflected_to_vts_parameters():
     assert written == {"MouthSmile": 0.8 * 0.8, "Brows": 0.6 * 0.8}
 
 
-@pytest.mark.asyncio
 async def test_speech_reflected_to_vrchat_without_render():
     """VRChat 无情绪通道：反射调用不抛，返回未应用结果。"""
     provider = VRChatProvider(config={})
@@ -78,7 +72,6 @@ async def test_speech_reflected_to_vrchat_without_render():
         pass  # fail-soft 路径已覆盖；bus 随用例销毁
 
 
-@pytest.mark.asyncio
 async def test_speech_binding_soft_fails_on_provider_error():
     """set_expression 抛异常 → 不外传（fail-soft），总线继续工作。"""
     provider = MagicMock()
@@ -105,24 +98,27 @@ def test_bind_without_event_bus_is_noop():
     assert bind_speaking_state(None, provider.logger, on_change=lambda s: None) is None
 
 
-# ---------------------------------------------------------------------------
 # 说话状态（tts.utterance.* → 各适配器反应）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_speaking_state_flips_vts_flag():
     provider = VTSProvider(config={})
     bus = EventBus()
     handles = bind_speaking_state(bus, provider.logger, on_change=provider._set_speaking)
     assert handles is not None
     try:
-        await _emit_and_settle(bus, CoreEvents.TTS_UTTERANCE_STARTED, UtteranceStartedPayload(
-            utterance_id="utt_s1", speech_text="hi", engine="edge", duration_ms=100))
+        await _emit_and_settle(
+            bus,
+            CoreEvents.TTS_UTTERANCE_STARTED,
+            UtteranceStartedPayload(utterance_id="utt_s1", speech_text="hi", engine="edge", duration_ms=100),
+        )
         assert provider._is_speaking is True
 
-        await _emit_and_settle(bus, CoreEvents.TTS_UTTERANCE_FINISHED, UtteranceFinishedPayload(
-            utterance_id="utt_s1", engine="edge", duration_ms=100))
+        await _emit_and_settle(
+            bus,
+            CoreEvents.TTS_UTTERANCE_FINISHED,
+            UtteranceFinishedPayload(utterance_id="utt_s1", engine="edge", duration_ms=100),
+        )
         assert provider._is_speaking is False
     finally:
         started_handler, finished_handler = handles
@@ -130,7 +126,6 @@ async def test_speaking_state_flips_vts_flag():
         bus.off(CoreEvents.TTS_UTTERANCE_FINISHED, finished_handler)
 
 
-@pytest.mark.asyncio
 async def test_speaking_state_drives_warudo_talking_head():
     provider = WarudoProvider(config={})
     assert provider.talking_head_task is not None
@@ -138,12 +133,18 @@ async def test_speaking_state_drives_warudo_talking_head():
     handles = bind_speaking_state(bus, provider.logger, on_change=provider._set_speaking)
     assert handles is not None
     try:
-        await _emit_and_settle(bus, CoreEvents.TTS_UTTERANCE_STARTED, UtteranceStartedPayload(
-            utterance_id="utt_s2", speech_text="hi", engine="edge", duration_ms=100))
+        await _emit_and_settle(
+            bus,
+            CoreEvents.TTS_UTTERANCE_STARTED,
+            UtteranceStartedPayload(utterance_id="utt_s2", speech_text="hi", engine="edge", duration_ms=100),
+        )
         assert provider.talking_head_task.is_talking is True
 
-        await _emit_and_settle(bus, CoreEvents.TTS_UTTERANCE_FINISHED, UtteranceFinishedPayload(
-            utterance_id="utt_s2", engine="edge", duration_ms=100))
+        await _emit_and_settle(
+            bus,
+            CoreEvents.TTS_UTTERANCE_FINISHED,
+            UtteranceFinishedPayload(utterance_id="utt_s2", engine="edge", duration_ms=100),
+        )
         assert provider.talking_head_task.is_talking is False
     finally:
         started_handler, finished_handler = handles
@@ -151,12 +152,9 @@ async def test_speaking_state_drives_warudo_talking_head():
         bus.off(CoreEvents.TTS_UTTERANCE_FINISHED, finished_handler)
 
 
-# ---------------------------------------------------------------------------
 # setup/cleanup 全链（provider 自持订阅生命周期）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_vts_setup_binds_and_cleanup_unbinds():
     """VTS setup 绑定订阅；cleanup 退订后事件不再触发反射。"""
     provider = VTSProvider(config={})
@@ -167,9 +165,7 @@ async def test_vts_setup_binds_and_cleanup_unbinds():
     bus = EventBus()
     provider.event_bus = bus
     provider._speech_emotion_handler = bind_speech_emotion(bus, provider, provider.logger)
-    provider._speaking_state_handles = bind_speaking_state(
-        bus, provider.logger, on_change=provider._set_speaking
-    )
+    provider._speaking_state_handles = bind_speaking_state(bus, provider.logger, on_change=provider._set_speaking)
 
     await _emit_and_settle(bus, CoreEvents.STREAMER_SPEECH, _speech_payload())
     assert provider.expression.set_multi_parameter.await_count == 1

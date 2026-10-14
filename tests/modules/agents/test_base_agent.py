@@ -13,9 +13,8 @@ BaseAgent / AgentManager / AgentControl 单元测试（框架统一控制）
 
 from __future__ import annotations
 
-from typing import AsyncGenerator, Iterable
-
 import asyncio
+from typing import AsyncGenerator, Iterable
 
 import pytest
 
@@ -29,10 +28,7 @@ from src.modules.tools import ToolInvocation, ToolProvider, ToolRegistry
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.tasks import TaskLedger
 
-
-# =============================================================================
 # Fixtures
-# =============================================================================
 
 
 class _SampleAgent(BaseAgent):
@@ -105,9 +101,7 @@ async def started_agent(sample_agent: _SampleAgent) -> AsyncGenerator[_SampleAge
         await sample_agent.stop()
 
 
-# =============================================================================
 # BaseAgent 协议六项
-# =============================================================================
 
 
 def test_protocol_six_facets(sample_agent: _SampleAgent) -> None:
@@ -130,7 +124,7 @@ def test_metadata_is_required(sample_agent: _SampleAgent) -> None:
     assert mgr.register(a) is False
 
 
-# -------------------- 协议 1：生命周期 --------------------
+# 协议 1：生命周期
 
 
 async def test_start_stop_cleanup_lifecycle(sample_agent: _SampleAgent) -> None:
@@ -183,7 +177,7 @@ async def test_start_failure_leaves_errorred(sample_agent: _SampleAgent) -> None
     assert a.state == AgentState.ERRORED
 
 
-# -------------------- 协议 2：工具提供 --------------------
+# 协议 2：工具提供
 
 
 def test_list_tools_yields_specs(sample_agent: _SampleAgent) -> None:
@@ -194,7 +188,7 @@ def test_list_tools_yields_specs(sample_agent: _SampleAgent) -> None:
     assert specs[0].provider == "game"
 
 
-# -------------------- 协议 3：事件上报 --------------------
+# 协议 3：事件上报
 
 
 async def test_emit_event_without_bus_is_noop(sample_agent: _SampleAgent) -> None:
@@ -204,7 +198,7 @@ async def test_emit_event_without_bus_is_noop(sample_agent: _SampleAgent) -> Non
     await sample_agent.emit_event("test.event", payload=None)
 
 
-# -------------------- 协议 4：状态读写 --------------------
+# 协议 4：状态读写
 
 
 def test_state_property(sample_agent: _SampleAgent) -> None:
@@ -221,7 +215,7 @@ def test_restart_count_increments(sample_agent: _SampleAgent) -> None:
     assert sample_agent.restart_count == 2
 
 
-# -------------------- 协议 5：心跳 --------------------
+# 协议 5：心跳
 
 
 def test_heartbeat_tracks_timestamp(sample_agent: _SampleAgent) -> None:
@@ -247,7 +241,7 @@ def test_is_alive_threshold_respected(sample_agent: _SampleAgent) -> None:
     assert sample_agent.is_alive(dead_threshold_ms=10**15) is True
 
 
-# -------------------- 控制（框架统一控制面） --------------------
+# 控制（框架统一控制面）
 
 
 async def test_pause_resume_invocations(started_agent: _SampleAgent) -> None:
@@ -304,9 +298,7 @@ async def test_shutdown_calls_stop_plus_hook(started_agent: _SampleAgent) -> Non
     assert shutdown_called["value"] == 1
 
 
-# =============================================================================
 # AgentManager
-# =============================================================================
 
 
 async def test_agent_manager_register_dedup(sample_agent: _SampleAgent) -> None:
@@ -425,9 +417,7 @@ def test_agent_manager_get_and_contains(sample_agent: _SampleAgent) -> None:
     assert "other" not in mgr
 
 
-# =============================================================================
 # AgentControl + ToolProvider
-# =============================================================================
 
 
 async def test_agent_control_list_tools_via_registry(sample_agent: _SampleAgent) -> None:
@@ -526,9 +516,7 @@ async def test_agent_control_provider_is_provider(sample_agent: _SampleAgent) ->
     assert isinstance(cp, ToolProvider)
 
 
-# ---------------------------------------------------------------------------
 # task.changed 唤醒（BaseAgent 默认行为：订阅 + 发起方过滤 + 退订清理）
-# ---------------------------------------------------------------------------
 
 
 async def test_task_wakeup_filters_by_initiator_and_unsubscribes() -> None:
@@ -575,9 +563,7 @@ async def test_task_wakeup_filters_by_initiator_and_unsubscribes() -> None:
     await bus.cleanup()
 
 
-# =============================================================================
 # 递话原语（receive_prompt 默认拒收契约）
-# =============================================================================
 
 
 def test_receive_prompt_default_refusal(sample_agent: _SampleAgent) -> None:

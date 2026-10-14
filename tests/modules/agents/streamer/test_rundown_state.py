@@ -13,10 +13,7 @@ import pytest
 from src.agents.streamer.rundown.rundown_state import RundownReject, RundownState
 from src.modules.storage.models.rundown import Rundown, RundownSegment
 
-
-# ---------------------------------------------------------------------------
 # 测试素材
-# ---------------------------------------------------------------------------
 
 
 class _FakeClock:
@@ -72,9 +69,7 @@ def _drive_to_last(state: RundownState, clock: _FakeClock) -> None:
     assert state.current_segment_id == "closing"
 
 
-# ---------------------------------------------------------------------------
 # 派生状态与 load
-# ---------------------------------------------------------------------------
 
 
 def test_initial_status_is_idle() -> None:
@@ -118,9 +113,7 @@ def test_load_clears_previous_pause_accumulation() -> None:
     assert state.get_current_remaining_ms(now_ms=clock.now) == 600_000
 
 
-# ---------------------------------------------------------------------------
 # goto
-# ---------------------------------------------------------------------------
 
 
 def test_goto_happy_path_emits_and_notifies() -> None:
@@ -190,9 +183,7 @@ def test_goto_without_rundown_rejected() -> None:
     assert reject.reason == "no_rundown_loaded"
 
 
-# ---------------------------------------------------------------------------
 # next 与 finish
-# ---------------------------------------------------------------------------
 
 
 def test_next_advances_and_finish_marks_done() -> None:
@@ -252,9 +243,7 @@ def test_next_after_min_duration_met_advances() -> None:
     assert state.current_segment_id == "chat"
 
 
-# ---------------------------------------------------------------------------
 # pause / resume
-# ---------------------------------------------------------------------------
 
 
 def test_pause_freezes_elapsed_then_resume_accumulates() -> None:
@@ -310,9 +299,7 @@ def test_pause_resume_invalid_by_raises() -> None:
         state.resume(by="robot", now_ms=clock.now)
 
 
-# ---------------------------------------------------------------------------
 # replace_definition（直播中编辑写穿）
-# ---------------------------------------------------------------------------
 
 
 def test_replace_definition_keeps_position_and_elapsed() -> None:
@@ -446,9 +433,7 @@ def test_replace_definition_keeps_pause_frozen() -> None:
     assert state.get_current_remaining_ms(now_ms=clock.now) == 800_000 - 100_000
 
 
-# ---------------------------------------------------------------------------
 # 只读派生
-# ---------------------------------------------------------------------------
 
 
 def test_progress_percent_clamped() -> None:
@@ -492,9 +477,7 @@ def test_snapshot_shape() -> None:
     assert current["remaining_ms"] == 540_000
 
 
-# ---------------------------------------------------------------------------
 # 变更边界契约：transitions / fail-soft
-# ---------------------------------------------------------------------------
 
 
 def test_transitions_buffer_capped_at_maxlen() -> None:
@@ -532,9 +515,7 @@ def test_emit_exception_does_not_block_state_change() -> None:
     assert state.index == 1
 
 
-# ---------------------------------------------------------------------------
 # 情境注入与整场时长
-# ---------------------------------------------------------------------------
 
 
 def test_build_context_text_and_elapsed_none_before_load() -> None:
@@ -595,9 +576,7 @@ def test_get_elapsed_live_ms_advances_with_clock() -> None:
     assert state.get_elapsed_live_ms() == 120_000
 
 
-# ---------------------------------------------------------------------------
 # renew（续期）与超时注入
-# ---------------------------------------------------------------------------
 
 
 def test_renew_resets_timer_and_keeps_segment() -> None:
