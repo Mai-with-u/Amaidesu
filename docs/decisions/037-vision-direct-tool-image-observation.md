@@ -16,6 +16,7 @@
 - 能力协商：engine 加 `is_profile_visual(profile) -> bool` 出口（取该 profile 当前主模型的 `visual` 位，激活既有死字段）；组装层 visual=True → 文本视图照旧 + 附 `ImagePart`，False → 纯文本视图
 - VLM 按需：`look_at_screen` 的 VLM 步骤对 visual 调用方跳过（模型亲眼看图，省一次 vision 调用与 1–9s 延迟）；非 visual 调用方照旧。调用方身份经 `ToolInvocation.caller_profile` 新字段显式传递（既有 `source` 保持"调用场景"语义）；**空串 = 管线式调用 = 按非视觉处理**——text_adv 的结构化读屏管线（VLM 固定格式输出中心像素坐标）零改动且语义正确
 - 图生命周期 = 单个工具回合（与文本工具结果同生共死），跨回合画面记忆不做
+- 图像承载与生命周期两项已由 [ADR-040](040-context-layering-and-checkpoints.md) 取代：工具消息不再带图，图只挂在紧随回执的那一次请求尾部；能力协商与按需 VLM 仍按本 ADR
 
 ## 替代方案（Alternatives）
 
