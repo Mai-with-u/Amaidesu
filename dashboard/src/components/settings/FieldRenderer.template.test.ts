@@ -56,3 +56,15 @@ describe('FieldRenderer 输入分支条件链', () => {
     expect(sfcSource.match(/v-model="sliderModel"/g)).toHaveLength(2);
   });
 });
+
+describe('长文本判定（isLongText）', () => {
+  it('显式 widget 声明优先，按值形态判断，不用描述长度', () => {
+    // 回归背景：旧启发式按 description 长度 >50 判文本域，短枚举值配长描述
+    // （如 思考强度="max"）被误判成多行框；描述长度衡量的是说明文案，与输入形态无关
+    expect(sfcSource).toContain("props.field.widget === 'textarea'");
+    expect(sfcSource).toContain("props.field.widget === 'input'");
+    expect(sfcSource).toContain("value.includes('\\n')");
+    expect(sfcSource).toContain('value.length > 80');
+    expect(sfcSource).not.toContain('desc.length');
+  });
+});

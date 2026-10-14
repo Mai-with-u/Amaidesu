@@ -228,11 +228,14 @@ watch(
   },
 );
 
-// 是否为长文本
+// 是否为长文本：显式 widget 声明优先（x-ui-widget: textarea / input）；无声明按值
+// 形态判断——描述长度与输入形态无关（短枚举值配长描述会被误判成文本域）
 const isLongText = computed(() => {
+  if (props.field.widget === 'textarea') return true;
+  if (props.field.widget === 'input') return false;
   if (props.field.type !== 'string') return false;
-  const desc = props.field.description || '';
-  return desc.length > 50 || (props.field.validation?.max_length ?? 0) > 100;
+  const value = String(props.modelValue ?? '');
+  return value.includes('\n') || value.length > 80 || (props.field.validation?.max_length ?? 0) > 100;
 });
 
 // 描述展示形态：icon = 标签旁 ⓘ 悬浮（缺省 inline = 内联段落）
