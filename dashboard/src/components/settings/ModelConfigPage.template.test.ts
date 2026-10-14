@@ -48,8 +48,18 @@ describe('ModelConfigPage 节卡视觉', () => {
   it('provider/profile 节头带 chevron 折叠，禁用节降透明（沿用节卡视觉）', () => {
     expect(pageSource).toContain('toggleProviderExpand');
     expect(pageSource).toContain('toggleProfileExpand');
-    expect(pageSource).toMatch(/ArrowRight v-if="!providerExpanded/);
+    // 默认全展开：undefined=展开，仅显式置 false 才收起（箭头与节体都按 ===false / !==false 判）
+    expect(pageSource).toMatch(/ArrowRight v-if="providerExpanded\[entry\.index\] === false"/);
+    expect(pageSource).toContain('providerExpanded[entry.index] !== false');
+    expect(pageSource).toContain('profileExpanded[profile.key] !== false');
     expect(pageSource).toContain(".entity-section.is-disabled {\n  opacity: 0.55;\n}");
+  });
+
+  it('页头全部展开/收起命令接入专用页', () => {
+    expect(pageSource).toContain('expandCommand');
+    expect(pageSource).toMatch(/watch\(\s*\(\) => props\.expandCommand\?\.seq/);
+    // expand = 清空显式收起记录（undefined 即展开）
+    expect(pageSource).toContain('providerExpanded.value = {};');
   });
 
   it('provider 节头 enabled 开关写同一整值路径，节体不再重复渲染该字段', () => {

@@ -10,7 +10,7 @@
     >
       <div class="entity-section-header" @click="toggleProviderExpand(entry.index)">
         <el-icon class="entity-section-toggle">
-          <ArrowRight v-if="!providerExpanded[entry.index]" />
+          <ArrowRight v-if="providerExpanded[entry.index] === false" />
           <ArrowDown v-else />
         </el-icon>
         <el-icon class="entity-section-icon"><Connection /></el-icon>
@@ -37,7 +37,7 @@
         </div>
       </div>
 
-      <div v-if="providerExpanded[entry.index]" class="entity-section-body">
+      <div v-if="providerExpanded[entry.index] !== false" class="entity-section-body">
         <!-- 身份字段（name）：专用输入，失焦/回车提交——改名触发引用守护，
              不能逐键提交（逐键弹窗+级联会把中间态名字写进引用方） -->
         <div class="name-field">
@@ -145,7 +145,7 @@
     >
       <div class="entity-section-header" @click="toggleProfileExpand(profile.key)">
         <el-icon class="entity-section-toggle">
-          <ArrowRight v-if="!profileExpanded[profile.key]" />
+          <ArrowRight v-if="profileExpanded[profile.key] === false" />
           <ArrowDown v-else />
         </el-icon>
         <el-icon class="entity-section-icon"><Collection /></el-icon>
@@ -154,7 +154,7 @@
           已修改
         </el-tag>
       </div>
-      <div v-if="profileExpanded[profile.key]" class="entity-section-body">
+      <div v-if="profileExpanded[profile.key] !== false" class="entity-section-body">
         <!-- 结构性绑定：model_list 用 el-select multiple（选项 = 已注册模型名），
              仍写数组叶字段，走同一条逐 key 更新路径 -->
         <div class="model-list-field" :data-config-key="profile.modelListField?.key">
@@ -200,7 +200,7 @@
  * 第二条保存/脏跟踪路径。数组整值写回（与 ArrayEditor 同机制），provider/model
  * 改名经引用守护确认后级联更新引用方（每条引用更新是独立变更条目或数组整值条目）。
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   ArrowDown,
@@ -242,6 +242,8 @@ const props = defineProps<{
   updateValue: (field: ConfigFieldSchema, value: unknown) => void;
   getChangeCount: (key: string) => number;
   showAdvanced: boolean;
+  /** 页头"全部展开/收起"命令（与 ComponentCardList 同源），seq 变化即执行 */
+  expandCommand?: { action: 'expand' | 'collapse'; seq: number } | null;
 }>();
 
 // ── Schema 定位 ──────────────────────────────────────────
@@ -274,6 +276,7 @@ function normalFields(fields: ConfigFieldSchema[], excluded: string[]): ConfigFi
 }
 
 // ── 节折叠与 provider 启用开关（沿用 ComponentCard 节卡视觉） ──
+// 折叠语义：undefined = 展开（默认全展开，与节卡约定一致），false = 收起，true = 展开
 const providerExpanded = ref<Record<number, boolean>>({});
 const profileExpanded = ref<Record<string, boolean>>({});
 
@@ -284,6 +287,30 @@ function toggleProviderExpand(index: number) {
 function toggleProfileExpand(key: string) {
   profileExpanded.value[key] = profileExpanded.value[key] === false;
 }
+
+// 页头"全部展开/收起"：expand 清空显式收起记录（undefined 即展开），collapse 对现存节全量置 false
+watch(
+  () => props.expandCommand?.seq,
+  () => {
+    const cmd = props.expandCommand;
+    if (!cmd) return;
+    if (cmd.action === 'expand') {
+      providerExpanded.value = {};
+      profileExpanded.value = {};
+      return;
+    }
+    const collapsedProviders: Record<number, boolean> = {};
+    providerEntries.value.forEach(entry => {
+      collapsedProviders[entry.index] = false;
+    });
+    providerExpanded.value = collapsedProviders;
+    const collapsedProfiles: Record<string, boolean> = {};
+    profileEntries.value.forEach(profile => {
+      collapsedProfiles[profile.key] = false;
+    });
+    profileExpanded.value = collapsedProfiles;
+  },
+);
 
 /** provider 条目的布尔 enabled 子字段（存在才在节头渲染开关，节体不再重复渲染） */
 const providerEnabledKey = computed(() => {

@@ -214,6 +214,7 @@
                   :update-value="updateFieldValue"
                   :get-change-count="getPendingChangeCount"
                   :show-advanced="showAdvanced"
+                  :expand-command="cardExpandCommand"
                 />
                 <!-- 浏览模式统一走卡片列表：实体卡 + 分类分组 + 紧凑元数据条 -->
                 <ComponentCardList
