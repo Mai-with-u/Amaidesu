@@ -13,7 +13,7 @@ from src.agents.streamer.plan import DecisionPlan
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.timeline import CHAPTER_MESSAGE_TYPE, StreamerTimeline, TimelineTurn
+from src.agents.streamer.timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE, StreamerTimeline, TimelineTurn, note_turn
 from src.modules.llm.payload import Response
 
 
@@ -152,16 +152,18 @@ def test_planner_maps_chapter_as_plain_user_message() -> None:
 
 
 async def test_replyer_renders_chapter_line_verbatim() -> None:
-    """Replyer 的聊天记录里，前情提要原样一行，不被拆成"某人说"。"""
+    """Replyer 的聊天记录里，前情提要与游戏记录原样成行，不被拆成"某人说"。"""
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="PROMPT")
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=Response(success=True, content="好"))
     replyer = Replyer(config={}, llm_service=llm, prompt_service=prompt)
     chapter = TimelineTurn(role="user", content="[前情提要·第 1 章]\n主播: 答应唱歌", message_type=CHAPTER_MESSAGE_TYPE)
+    note = note_turn("游戏·minecraft·report", "交付: 木头砍好了", 0)
+    assert note.message_type == GAME_MESSAGE_TYPE and note.content == "[游戏·minecraft·report] 交付: 木头砍好了"
     plan = DecisionPlan(should_reply=True, target="", topic_summary="唱歌", reply_guidance="兑现", confidence=0.9)
-    await replyer.generate(plan, [], history=[chapter])
+    await replyer.generate(plan, [], history=[chapter, note])
     dialogue = next(
         call.kwargs["dialogue_prompt"] for call in prompt.render.call_args_list if "dialogue_prompt" in call.kwargs
     )
-    assert dialogue.startswith("[前情提要·第 1 章]\n主播: 答应唱歌")
+    assert dialogue == "[前情提要·第 1 章]\n主播: 答应唱歌\n[游戏·minecraft·report] 交付: 木头砍好了"

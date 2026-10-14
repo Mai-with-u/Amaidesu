@@ -390,7 +390,7 @@ async def test_planner_sees_what_the_body_is_doing_until_it_reports() -> None:
 
     planner.note_game_report("minecraft", "delivery")
     await planner.plan([_msg("好了吗", "m3")])
-    assert "做完，结果见【游戏叙事】" in captured[-1][-1]["content"]
+    assert "做完，结果见游戏记录" in captured[-1][-1]["content"]
 
 
 def test_planner_prompt_keeps_viewer_method_and_relays_instead_of_redelegating() -> None:

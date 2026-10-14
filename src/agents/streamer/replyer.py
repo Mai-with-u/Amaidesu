@@ -15,7 +15,7 @@ from src.modules.logging import get_logger
 
 from . import canonical
 from .plan import DecisionPlan
-from .timeline import CHAPTER_MESSAGE_TYPE
+from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE
 
 # 默认人设兜底值（cold-start 兜底：构造 config 未提供对应字段时使用）
 #
@@ -169,9 +169,12 @@ class Replyer:
         rundown_render = rundown if rundown else "（当前无流程单）"
         target_text = canonical.find_target_message(plan.target, batch, list(history or []))
         # 已落库的弹幕保留在历史中的原位置，避免挪到主播回复后面；历史已由时间线控制在预算内。
-        # 前情提要条目带标记：渲染时原样输出，不按"昵称: 内容"拆成某人说的话
+        # 前情提要与游戏记录带标记：渲染时原样输出，不按"昵称: 内容"拆成某人说的话
         history_messages: List[Dict[str, Any]] = [
-            {**canonical.turn_to_message(msg), "chapter": getattr(msg, "message_type", "") == CHAPTER_MESSAGE_TYPE}
+            {
+                **canonical.turn_to_message(msg),
+                "verbatim": getattr(msg, "message_type", "") in (CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE),
+            }
             for msg in list(history or [])
         ]
         # 批消息可能尚未落库或已被历史预算裁掉，只追加历史中缺失的消息。
@@ -197,7 +200,7 @@ class Replyer:
         dialogue_lines = []
         for message in history_messages:
             content = message["content"]
-            if message.get("chapter"):
+            if message.get("verbatim"):
                 dialogue_lines.append(content)
             elif message["role"] == "assistant":
                 dialogue_lines.append(f"{self._bot_name}(你)说：{content}")

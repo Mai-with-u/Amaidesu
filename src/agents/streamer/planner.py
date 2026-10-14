@@ -264,6 +264,9 @@ class Planner:
         self._behavior_style: str = behavior_style or ""
         self._reply_provider = reply_provider
         self._elapsed_live_provider = elapsed_live_provider
+        # 委派受理后把"我在哪个游戏里开始做什么"记进时间线（StreamerAgent 绑定）；
+        # 参考段只留每个游戏最近一次委派，时间线里留下整场的先后
+        self._action_recorder: Optional[Callable[[str, str], None]] = None
         # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派 27 次、
         # 目标来回反转——主播看不到身体手上正做着什么，就会把每条弹幕都改派成新目标
         self._delegations: Dict[str, _Delegation] = {}
@@ -293,6 +296,10 @@ class Planner:
         """注入开播时长查询（StreamerAgent 构造 RundownState 后绑定，同 bind 模式）。"""
         self._elapsed_live_provider = provider
 
+    def bind_action_recorder(self, recorder: Callable[[str, str], None]) -> None:
+        """注入委派记录回调（执行者名, 主播自己的原话），同 bind 模式。"""
+        self._action_recorder = recorder
+
     def note_game_report(self, game: str, report_kind: str) -> None:
         """游戏侧上报（交付/卡住待定夺）到达：把对应执行 Agent 手头那次委派标成已上报。
 
@@ -316,11 +323,9 @@ class Planner:
             # 同一执行者手上只保留最近一次委派，注入前转成人类可读描述；原话同样脱敏
             head = f"{age_text(current_ms - delegation.at_ms)}{game}开始做一个任务：{sanitize_internal_terms(delegation.instruction)}"
             if delegation.report_kind == "delivery":
-                state = f"已在{age_text(current_ms - delegation.reported_ms)}做完，结果见【游戏叙事】。"
+                state = f"已在{age_text(current_ms - delegation.reported_ms)}做完，结果见游戏记录。"
             elif delegation.report_kind == "escalation":
-                state = (
-                    f"在{age_text(current_ms - delegation.reported_ms)}卡住了，正等我和观众一起定夺（见【游戏叙事】）。"
-                )
+                state = f"在{age_text(current_ms - delegation.reported_ms)}卡住了，正等我和观众一起定夺（见游戏记录）。"
             else:
                 state = "还在做，还没做完。"
             rows.append(f"- {head}\n  {state}")
@@ -332,14 +337,14 @@ class Planner:
         指引全文不在此重复注入——那轮说出口的原话（指引的最终落点）已在对话历史
         assistant 消息里，同一信息双份会让每轮参考段平白多出几百字。游戏回执到达前
         说出口的条目里，对游戏进展的说法只是当时的猜测（"还没挖进包"），回执才是
-        权威事实；已被回执覆盖的条目标注以【游戏叙事】为准，避免模型在两条都标
+        权威事实；已被回执覆盖的条目标注以游戏记录为准，避免模型在两条都标
         "刚刚"的矛盾说法里任选一条播报。
         """
         lines: List[str] = []
         for intent in self._recent_intents:
             line = f"- {age_text(current_ms - intent.at_ms)} 话题：{intent.topic_summary or '（无）'}"
             if self._superseded_by_game_report(intent):
-                line += "（其中对游戏进展的说法已被游戏回执覆盖，以【游戏叙事】为准）"
+                line += "（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
             lines.append(line)
         return "\n".join(lines)
 
@@ -1023,6 +1028,11 @@ class Planner:
                 self._delegations[agent] = _Delegation(
                     agent=agent, instruction=own_instruction, task_id=str(data.get("task_id") or ""), at_ms=now_ms()
                 )
+                if self._action_recorder is not None:
+                    try:
+                        self._action_recorder(agent, own_instruction)
+                    except Exception as exc:  # noqa: BLE001 - 记录失败不影响已受理的委派
+                        self.logger.warning(f"委派记录写入时间线失败：{exc}", exc=True)
             if name == "framework_prompt" and data.get("delivered") and own_relay.strip():
                 # 补充要求送达了才记；被拒收的没交代到，不能当成"已经说过"
                 agent = str(data.get("executor") or args.get("agent") or "")

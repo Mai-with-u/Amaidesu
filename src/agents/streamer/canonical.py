@@ -44,8 +44,9 @@ PROMPT_TEMPLATES: Dict[str, str] = {
     "guard": "[上舰] {nickname}: {content}",
     "enter": "[入场] {nickname}: {content}",
     "partner_speech": "{nickname}: {content}",
-    # 时间线的前情提要：正文自带标题，原样渲染
+    # 时间线的前情提要与游戏记录：正文自带标题与时刻，原样渲染
     "chapter": "{content}",
+    "game": "{content}",
 }
 
 

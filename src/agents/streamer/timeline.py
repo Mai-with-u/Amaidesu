@@ -11,7 +11,8 @@ Planner 与 Replyer 每个决策窗都要带上本场对话。对话事实源仍
 
 投影出的条目与 ``live_chat`` 历史行同形（role / content / sender_name /
 message_type / message_id / timestamp_ms），canonical 映射原样可用；前情提要是
-``message_type = "chapter"`` 的 user 条目。
+``message_type = "chapter"`` 的 user 条目，游戏里程碑与主播自己在游戏里开始做的
+事是 ``message_type = "game"`` 的 user 条目（行首带绝对时刻，写入后不再变化）。
 """
 
 from __future__ import annotations
@@ -25,12 +26,15 @@ from src.modules.context import BackgroundCheckpoint, ContextBudgetConfig, Prefi
 from src.modules.context import fold_count, resolve_watermarks
 from src.modules.logging import get_logger
 
-__all__ = ["CHAPTER_MESSAGE_TYPE", "StreamerTimeline", "TimelineTurn"]
+__all__ = ["CHAPTER_MESSAGE_TYPE", "GAME_MESSAGE_TYPE", "StreamerTimeline", "TimelineTurn", "note_turn"]
 
 logger = get_logger("StreamerTimeline")
 
 #: 前情提要条目的消息类型（canonical 按原文渲染，不加昵称前缀与消息 ID）
 CHAPTER_MESSAGE_TYPE = "chapter"
+
+#: 游戏记录条目的消息类型：游戏里程碑、主播在游戏里开始做的事（同样按原文渲染）
+GAME_MESSAGE_TYPE = "game"
 
 #: 前情提要的系统提示词模板
 _CHAPTER_TEMPLATE = "chapter_system"
@@ -73,6 +77,19 @@ def _clock(timestamp_ms: int) -> str:
     if timestamp_ms <= 0:
         return ""
     return datetime.fromtimestamp(timestamp_ms / 1000).strftime("%H:%M")
+
+
+def note_turn(label: str, body: str, timestamp_ms: int) -> TimelineTurn:
+    """一条游戏记录：``[HH:MM 标签] 正文``。
+
+    用绝对时刻而不是"几分钟前"：条目进了时间线就不再改写，相对时间每窗都会变，
+    只能放在参考段里。
+    """
+    clock = _clock(timestamp_ms)
+    head = f"{clock} {label}" if clock else label
+    return TimelineTurn(
+        role="user", content=f"[{head}] {body}", message_type=GAME_MESSAGE_TYPE, timestamp_ms=timestamp_ms
+    )
 
 
 class StreamerTimeline:

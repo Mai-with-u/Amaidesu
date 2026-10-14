@@ -22,6 +22,9 @@ from src.agents.streamer.background import BackgroundMaintainer
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.config import StreamerConfig
+from src.agents.streamer.timeline import GAME_MESSAGE_TYPE
+from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.llm.client import LLMResponse
 from src.modules.llm.payload import Response
 from src.modules.prompts import PromptManager
@@ -326,3 +329,29 @@ async def test_summarize_topic_only_assistant_rows_clears_summary(store: SQLiteD
     llm.generate.assert_not_awaited()
     snap = maintainer._room_state.get_snapshot(now_ms=300_000)
     assert snap.topic_summary == ""
+
+
+@pytest.mark.asyncio
+async def test_game_milestones_and_delegations_enter_timeline_in_time_order(store: SQLiteDatabase) -> None:
+    """游戏里程碑与我开始做的事以发生时刻进时间线，排在同时段聊天之间；开播时一起清空。"""
+    agent = _make_agent(store, _FakeSessionManager(1))
+    await _insert_turns(store, 2, start_index=1)
+    await agent._on_game_event(
+        "game.report",
+        GamePayload(game="minecraft", event_type="report", message="木头砍好了", timestamp_ms=1001),
+        "test",
+    )
+    await _insert_turns(store, 1, start_index=5)
+    view = await agent._read_history()
+    assert [getattr(turn, "message_id", "") or "note" for turn in view] == ["m1", "note", "m2", "m5"]
+    note = view[1]
+    # 行首是发生时刻的钟点，写入后不再变化
+    assert note.message_type == GAME_MESSAGE_TYPE and note.content.endswith(" 游戏·minecraft·report] 木头砍好了")
+
+    agent._record_delegation("minecraft", "去砍点木头")
+    later = await agent._read_history()
+    assert later[: len(view)] == view
+    assert later[-1].content.endswith("我在 minecraft 里开始做] 去砍点木头")
+
+    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=2), "test")
+    assert agent._timeline_notes == []

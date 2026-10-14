@@ -66,7 +66,7 @@ from .room_state import RoomState
 from .speech_dispatcher import SpeechDispatcher
 from .stats import StreamerStats
 from .term_sanitizer import sanitize_internal_terms
-from .timeline import StreamerTimeline
+from .timeline import StreamerTimeline, TimelineTurn, note_turn
 from .timing_gate import TimingGate
 from .tools.reply_tool import ReplyToolProvider
 from .command.router import CommandRouter
@@ -418,6 +418,11 @@ class StreamerAgent(BaseAgent):
             profiles=(_PROFILE_PLANNER, _PROFILE_REPLYER),
             summary_profile=SUMMARY_PROFILE,
         )
+        # 进时间线的游戏记录：游戏里程碑（game.*）与我在游戏里开始做的事。参考段的
+        # 【游戏叙事】只回放最近一阵，这里留下整场的先后，换章时一起写进前情提要。
+        # 与对话轮同以场次为界
+        self._timeline_notes: List[TimelineTurn] = []
+        self._planner.bind_action_recorder(self._record_delegation)
 
         # 运营递话提醒队列（receive_prompt 入队；下个决策窗以【运营提醒】段
         # 注入参考块，读取即取空——送达一次制）。满时拒收，必达不允许静默挤旧。
@@ -687,6 +692,7 @@ class StreamerAgent(BaseAgent):
         self._live_active = True
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
         self._unpersisted_turns.clear()
+        self._timeline_notes.clear()
         await self._timeline.reset()
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
 
@@ -701,6 +707,7 @@ class StreamerAgent(BaseAgent):
         self._live_active = False
         # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
         self._unpersisted_turns.clear()
+        self._timeline_notes.clear()
         await self._timeline.reset()
         self._logger.info("场次已结束：主动发言收闸")
 
@@ -719,14 +726,24 @@ class StreamerAgent(BaseAgent):
         停在选项处等主播定夺，下次空缓冲 tick 应促发一轮主动决策。
         """
         try:
-            line = f"[{payload.game}·{payload.event_type}] {sanitize_internal_terms(payload.message)}"
+            message = sanitize_internal_terms(payload.message)
+            line = f"[{payload.game}·{payload.event_type}] {message}"
             self._game_narrative.add(line, now_ms())
+            # 同一条里程碑以发生时刻进时间线：参考段过了保留期不再回放，时间线里一直留着
+            self._timeline_notes.append(
+                note_turn(f"游戏·{payload.game}·{payload.event_type}", message, payload.timestamp_ms or now_ms())
+            )
             if payload.event_type == "report":
                 self._game_decision_pending = True
                 # 游戏里做完或卡住待定夺：【我手头在游戏里做的事】里那件事随之标成已上报
                 self._planner.note_game_report(payload.game, payload.report_kind or "")
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏叙事失败: {exc}")
+
+    def _record_delegation(self, agent: str, instruction: str) -> None:
+        """Planner 受理委派后回调：把"我在哪个游戏里开始做什么"按此刻进时间线。"""
+        where = f"我在 {agent} 里开始做" if agent else "我在游戏里开始做"
+        self._timeline_notes.append(note_turn(where, sanitize_internal_terms(instruction), now_ms()))
 
     def _game_narrative_text(self) -> str:
         """导出游戏叙事全文（Planner 上下文用），并把本次交出的条目记为"已给过"。
@@ -1308,9 +1325,12 @@ class StreamerAgent(BaseAgent):
                 )
                 for row in rows
             ]
-        if self._unpersisted_turns:
-            # 稳定排序：同一时刻的落库行与内存轮保持各自原有先后，历史前缀跨轮逐字稳定
-            stored = sorted([*stored, *self._unpersisted_turns], key=lambda turn: turn.timestamp_ms)
+        if self._unpersisted_turns or self._timeline_notes:
+            # 对话、未落库的对话轮与游戏记录按发生时刻合并；稳定排序保持同一时刻各自的先后。
+            # 已进时间线的条目不再挪位置，排序只决定同一窗里新条目的先后
+            stored = sorted(
+                [*stored, *self._unpersisted_turns, *self._timeline_notes], key=lambda turn: turn.timestamp_ms
+            )
         return await self._timeline.project(stored, scope=live_pk)
 
     # ==================================================================
