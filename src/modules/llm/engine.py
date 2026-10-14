@@ -676,6 +676,22 @@ class LLMManager:
         """返回 ``{model_identifier: context_window}`` 浅拷贝（0 值保留，标识"未配置"）。"""
         return dict(self._model_context_windows)
 
+    def get_profile_context_window(self, profile: Optional[str]) -> int:
+        """该 profile 可用的上下文窗口：名单内已配置窗口的模型取最小值；都未配置返回 0。
+
+        上下文预算按它换算。取最小值是因为故障切换可能落到名单里任何一个模型，
+        按最大窗口定预算，切到小窗口模型时请求会被拒收。
+        """
+        try:
+            resolved = self._profiles.get(self._resolve_profile_name(profile))
+        except ValueError:
+            return 0
+        if resolved is None:
+            return 0
+        windows = [self._model_context_windows.get(model.model_identifier, 0) for model in resolved.models]
+        configured = [window for window in windows if window > 0]
+        return min(configured) if configured else 0
+
     def get_history_token_budget(self, profile: Optional[str]) -> int:
         """取用途 profile 的对话历史 token 预算；0 = 不启用压缩。
 

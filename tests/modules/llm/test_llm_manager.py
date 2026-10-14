@@ -1015,3 +1015,34 @@ async def test_is_profile_visual_follows_primary_model():
     assert manager.is_profile_visual("replyer") is False
     assert manager.is_profile_visual("vision") is True
     assert manager.is_profile_visual("no-such-profile") is False
+
+
+@pytest.mark.asyncio
+async def test_profile_context_window_takes_smallest_configured_model():
+    """上下文预算按 profile 名单里已配置窗口的最小值换算：故障切换可能落到任何一个模型。
+
+    未配置窗口（0）的模型不参与取最小值；全部未配置或 profile 未知时返回 0。
+    """
+    manager = LLMManager()
+    config: Dict[str, Any] = {
+        "llm_providers": [
+            {"name": "test", "client_type": "openai", "base_url": "https://api.test.com/v1", "api_key": "k"}
+        ],
+        "llm_models": [
+            {"name": "big", "model_identifier": "big-id", "api_provider": "test", "context_window": 1_000_000},
+            {"name": "small", "model_identifier": "small-id", "api_provider": "test", "context_window": 128_000},
+            {"name": "unknown", "model_identifier": "unknown-id", "api_provider": "test"},
+        ],
+        "llm_profiles": {
+            "planner": {"model_list": ["big", "small", "unknown"]},
+            "replyer": {"model_list": ["big", "unknown"]},
+            "summary": {"model_list": ["unknown"]},
+        },
+    }
+    with patch.dict(_CLIENT_DISPATCH, {"openai": MagicMock(return_value=_make_mock_backend())}):
+        await manager.setup(config)
+
+    assert manager.get_profile_context_window("planner") == 128_000
+    assert manager.get_profile_context_window("replyer") == 1_000_000
+    assert manager.get_profile_context_window("summary") == 0
+    assert manager.get_profile_context_window("no-such-profile") == 0
