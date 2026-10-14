@@ -6,6 +6,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 - 只有主播 Agent 自我驱动；游戏 Agent 命令驱动（类 Code Agent）——收到命令启动任务循环，完成即停、空闲零消耗
 - 因有自身状态与任务内自主决策，游戏 Agent 仍是 Agent 而非工具（三分判据见 [v2-architecture.md](v2-architecture.md)）
+- 游戏 Agent 与主播有两种交互形态：**委派型**（本文——主播交代目标，游戏侧自带 LLM 拆解）与**遥控型**（主播直接按键、选项，游戏侧零 LLM，如 text_adv、game_2048）。主播按各工具面的使用说明拼装【当前游戏的玩法】，两种形态的定案见 [ADR-043](../decisions/043-game-agent-interaction-shapes.md)
 
 ## 核心意象
 

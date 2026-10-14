@@ -463,6 +463,8 @@ registry.register_provider(
 - **公用域工具**：装配根按域装配——avatar 平台经 `bind_core_tools(..., avatar_section=...)` 按 avatar.toml 启用名单注册、studio 分类按 `[tools.<域>.<键>].enabled` 开关注册，vision（`vision_look_at_screen`）由组合根注入 mss 抓屏 + VLM 文本读取后端后注册。
 - **工具注册聚合**：生产路径下不存在任何 manager 级聚合函数——Agent 子类在 `_register_tools()` 中自己 `registry.register_provider(provider, visible_to=...)`；avatar/studio 分类工具由 `main.py` 的 `bind_core_tools(..., avatar_section=...)` 按平台名单与域开关装配；启动结束后 `audit_tools(registry)` 只做只读审计（声明与注册按派生全名对账），不参与注入。
 
+**工具面说明（可选）**：Provider 覆写 `guide_for(agent_name) -> str` 给出"这组工具合起来怎么用"的协议级说明（粒度粗于单个 `ToolSpec.description`）；调用方经 `ToolRegistry.guides(for_agent=...)` 按可见名单收集。主播的 Planner 用它拼装【当前游戏的玩法】——游戏 Agent 的工具面必须写（说明自己是委派型还是遥控型、该调哪些工具），其他公用工具一般不需要。
+
 ### 测试要点
 
 - **Fake 后端 / Mock Provider**：构造一个返回固定值的 Provider 注入测试
@@ -614,7 +616,7 @@ reply 走注册表后三事件都发——观测冗余是**有意接受**的（�
 典型用例：
 
 - **业务 Agent**（如 `streamer`）——主播决策核心
-- **游戏 Agent**（如 `text_adv` / `minecraft`）——感知游戏画面 → 推进剧情/操作
+- **游戏 Agent**（如 `text_adv` / `minecraft`）——感知游戏画面 → 推进剧情/操作。与主播的交互分两种形态：委派型（主播交代目标，覆写 `receive_delegation`）与遥控型（主播直接调它的工具，不接委派）；形态由它的工具面说明（`guide_for`）告诉主播，见 [ADR-043](../decisions/043-game-agent-interaction-shapes.md)
 - **自定义 Agent**（如 `custom`）——任何不归属业务/游戏的特殊决策体
 
 ### 协议六项（最小契约）

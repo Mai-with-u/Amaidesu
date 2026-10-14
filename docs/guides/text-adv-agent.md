@@ -81,9 +81,17 @@ enabled = true
 - `game_window_title_keyword`：游戏窗口标题关键词。**留空则窗口护栏形同虚设**（可能锚定到任意窗口），强烈建议填写
 - `monitor_index`：游戏窗口所在显示器（0 起），与 `[tools.vision.config].monitor_index` 指向同一块屏
 
-### 4. 委派目标
+### 4. 观众命令与委派
 
-主播的委派目标（`[agents.streamer.command]`）留空时，框架解析为**当前唯一启用的游戏 Agent**。换游戏只需改 `enabled` 列表；但 minecraft 与 text_adv **同时启用**时必须在委派配置里显式指定目标。
+text_adv 是**遥控型**游戏 Agent：不接收 `framework_delegate` 委派，主播直接调它的四个工具；主播提示词里的【当前游戏的玩法】由它的工具面说明自动拼出，换游戏不用改提示词（两种形态的定案见 [ADR-043](../decisions/043-game-agent-interaction-shapes.md)）。观众命令要直接驱动它时，在 `[agents.streamer.command]` 的 `tool_mappings` 里把命令映射为一次固定的工具调用：
+
+```toml
+[[agents.streamer.command.tool_mappings]]
+command = "next"
+tool = "text_adv_advance"
+```
+
+`mappings` 里的自然语言指令只给委派型游戏（如 minecraft）；两种游戏同时启用时各走各的表，委派的留空目标也只在能接收委派的 Agent 里解析。
 
 ## 工具面（仅主播可见）
 
