@@ -124,10 +124,14 @@ def test_game_agent_labels_relay_sources() -> None:
 
 
 def test_prompts_state_relay_and_completion_rules() -> None:
-    """提示词写明：补充只写新要求、完成要收进背包、原话优先于转述、一次一个身体动作。"""
+    """提示词写明：补充只写新要求、完成要收进背包、原话优先于转述、一次一个身体动作。
+
+    补充要求与完成口径属于委派型游戏守则，经 game_rules 拼进主播提示词。
+    """
     reset_prompt_manager()
     try:
-        planner = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+        rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
+        planner = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动", game_rules=rules)
         game = get_prompt_manager().render("amaidesu_minecraft_agent")
     finally:
         reset_prompt_manager()

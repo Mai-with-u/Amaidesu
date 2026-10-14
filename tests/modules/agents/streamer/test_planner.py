@@ -308,3 +308,81 @@ async def test_session_recap_goes_first_in_the_reference_and_is_omitted_when_abs
 
     await planner.plan([_msg()])
     assert "上场回顾" not in _reference_message(llm)["content"]
+
+
+# ---------------------------------------------------------------------------
+# 当前游戏的玩法：按工具面说明拼装，经 game_rules 注入系统提示词
+# ---------------------------------------------------------------------------
+
+
+class _GuideProvider:
+    """最小工具面桩：一个对主播可见的工具 + 一段使用说明。"""
+
+    category = "game"
+
+    def __init__(self, name: str, guide: str) -> None:
+        self._name = name
+        self._guide = guide
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def list_tools(self):
+        return [ToolSpec(name="act", description="动作", kind="sync", provider=self._name)]
+
+    async def invoke(self, invocation):  # type: ignore[no-untyped-def]
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
+
+    def guide_for(self, agent_name: str) -> str:
+        return self._guide
+
+
+def test_game_rules_without_guides_says_no_game() -> None:
+    """没有任何游戏工具面：玩法段明说没有游戏，模型不对不存在的游戏工具硬凑动作。"""
+    planner, _llm, _prompt = _make_planner()
+
+    assert planner._render_game_rules() == Planner.NO_GAME_RULES
+
+
+def test_game_rules_lists_remote_game_guide_without_delegate_rules() -> None:
+    """只有遥控型游戏：玩法段就是它的说明，不追加委派守则（prompt 只渲染主模板）。"""
+    reg = ToolRegistry()
+    reg.register_provider(
+        _GuideProvider("game_x", "X 是遥控型游戏：用 game_x_act 按一下"), visible_to={"game_x_act": ["streamer"]}
+    )
+    planner, _llm, prompt = _make_planner(registry=reg)
+
+    rules = planner._render_game_rules()
+
+    assert rules == "- X 是遥控型游戏：用 game_x_act 按一下"
+    prompt.render.assert_not_called()
+
+
+def test_game_rules_appends_delegate_rules_when_framework_guide_present() -> None:
+    """framework 工具面给出说明（有能接收委派的 Agent）：玩法段追加委派守则子模板。"""
+    reg = ToolRegistry()
+    reg.register_provider(_GuideProvider("framework", "委派型游戏：mc=..."), visible_to={"framework_act": ["*"]})
+    reg.register_provider(_GuideProvider("mc", "Minecraft 走委派"), visible_to={"mc_act": ["streamer"]})
+    planner, _llm, prompt = _make_planner(registry=reg)
+    prompt.render = MagicMock(return_value="【委派守则】")
+
+    rules = planner._render_game_rules()
+
+    assert rules.split(chr(10)) == ["- 委派型游戏：mc=...", "- Minecraft 走委派", "【委派守则】"]
+    prompt.render.assert_called_once_with(Planner.DELEGATE_RULES_TEMPLATE)
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_render_receives_game_rules() -> None:
+    """plan() 渲染系统提示词时把拼好的玩法段作为 game_rules 变量传给模板。"""
+    reg = ToolRegistry()
+    reg.register_provider(_GuideProvider("game_x", "X 的玩法"), visible_to={"game_x_act": ["streamer"]})
+    planner, _llm, prompt = _make_planner(chat_responses=[_resp()], registry=reg)
+
+    await planner.plan([_msg("主播好")])
+
+    kwargs = prompt.render.call_args.kwargs
+    assert prompt.render.call_args.args[0] == "amaidesu_planner_react"
+    assert kwargs["game_rules"] == "- X 的玩法"
+

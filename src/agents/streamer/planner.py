@@ -47,6 +47,7 @@ from src.agents.streamer.state_facts import extract_state_facts
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.topic_gate import check_topic, rejection_reason
 from src.modules.context import TailImages
+from src.modules.agents.control import PROVIDER_NAME as FRAMEWORK_PROVIDER
 from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
@@ -197,6 +198,10 @@ class Planner:
 
     #: Planner 专用系统提示词模板名（零表达人设注入）
     TEMPLATE_NAME: str = "amaidesu_planner_react"
+    #: 委派型游戏守则模板名：有能接收委派的 Agent 时追加进【当前游戏的玩法】
+    DELEGATE_RULES_TEMPLATE: str = "amaidesu_planner_delegate_rules"
+    #: 没有任何游戏工具面时的玩法段：明说没有游戏，模型不对不存在的游戏工具硬凑动作
+    NO_GAME_RULES: str = "当前没有启用任何游戏：没有游戏工具可用，不要安排主播在游戏里动手，让她专心陪观众聊天。"
 
     def __init__(
         self,
@@ -669,17 +674,41 @@ class Planner:
     # ==================== 提示词与上下文 ====================
 
     def _render_system_prompt(self) -> Optional[str]:
-        """渲染 ReAct 系统提示词（行为准则 + 工具守则）。"""
+        """渲染 ReAct 系统提示词（行为准则 + 当前游戏的玩法 + 工具守则）。"""
         behavior_style_render = self._behavior_style or "（未配置行动准则，请依据直播间态势与对话历史自行决策）"
         try:
             return self._prompt_service.render(
                 self.TEMPLATE_NAME,
                 behavior_style=behavior_style_render,
+                game_rules=self._render_game_rules(),
             )
         except Exception as e:
             self.logger.exception(f"渲染 Planner 系统提示词失败: {e}")
             self.last_failure = f"prompt_render_failed: {e}"
             return None
+
+    def _render_game_rules(self) -> str:
+        """拼装【当前游戏的玩法】：各工具面的使用说明 + 委派型游戏的守则。
+
+        说明来自注册表里对主播可见的各工具面（每个游戏 Agent 自己说这款游戏是
+        委派型还是遥控型、该调哪些工具）；框架的委派工具面只在有能接收委派的
+        Agent 时才给说明，这时再追加委派型游戏的完整守则（开始做事、补充要求、
+        完成口径）。什么说明都没有就明说没有游戏——接哪款游戏只由启用名单决定，
+        这里不写死任何游戏名。
+        """
+        guides: List[tuple[str, str]] = []
+        if self._tool_registry is not None:
+            try:
+                guides = list(self._tool_registry.guides(for_agent="streamer"))
+            except Exception as exc:
+                self.logger.warning(f"读取工具面使用说明失败（本轮按没有游戏处理）: {exc}", exc=True)
+                guides = []
+        if not guides:
+            return self.NO_GAME_RULES
+        lines = [f"- {text}" for _provider, text in guides]
+        if any(provider == FRAMEWORK_PROVIDER for provider, _text in guides):
+            lines.append(self._prompt_service.render(self.DELEGATE_RULES_TEMPLATE))
+        return "\n".join(lines)
 
     async def _assemble_reference(
         self,

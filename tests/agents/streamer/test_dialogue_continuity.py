@@ -258,14 +258,24 @@ async def test_planner_sees_what_it_is_doing_in_game_until_reported() -> None:
         assert phrase in references[-1]
 
 
+def _render_planner_with_delegate_rules() -> str:
+    """按生产拼装方式渲染主播提示词：委派型游戏在场时【当前游戏的玩法】里带委派守则。"""
+    manager = get_prompt_manager()
+    rules = manager.render("amaidesu_planner_delegate_rules")
+    return manager.render("amaidesu_planner_react", behavior_style="积极互动", game_rules=rules)
+
+
 def test_planner_prompt_keeps_viewer_method_and_relays_instead_of_redelegating() -> None:
-    """Planner 守则：我拿主意并写成完整决定，观众的具体说法用「」逐字引用；手头的事没做完时补充不换目标；
-    观众给的做法默认采纳，不用早先判断否定；物品名不翻译。"""
+    """委派守则：我拿主意并写成完整决定，观众的具体说法用「」逐字引用；手头的事没做完时补充不换目标；
+    观众给的做法默认采纳，不用早先判断否定；物品名不翻译。这些只在委派型游戏在场时才进提示词。"""
     reset_prompt_manager()
     try:
-        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+        prompt = _render_planner_with_delegate_rules()
+        bare = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动", game_rules="")
     finally:
         reset_prompt_manager()
+    assert "framework_delegate" not in bare and "手头的事没做完时补充" not in bare
+    assert "# 当前游戏的玩法" in bare and "没列出的游戏工具就是没有" in bare
     assert "手头的事没做完时补充，不换目标" in prompt and "framework_prompt" in prompt
     assert "观众给的做法默认采纳去试" in prompt and "不要用你自己或早先游戏叙事里的判断否定它" in prompt
     assert "我拿主意，写成完整的决定" in prompt and "用「」逐字写进去" in prompt
@@ -280,7 +290,7 @@ def test_streamer_prompts_speak_as_one_streamer() -> None:
     reset_prompt_manager()
     try:
         manager = get_prompt_manager()
-        planner = manager.render("amaidesu_planner_react", behavior_style="积极互动")
+        planner = _render_planner_with_delegate_rules()
         replyer = manager.render(
             "amaidesu_replyer_system",
             bot_name="麦麦",
@@ -304,7 +314,7 @@ def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
     """
     reset_prompt_manager()
     try:
-        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动", game_rules="")
     finally:
         reset_prompt_manager()
     assert "发言交接契约" in prompt and "任务书" in prompt and "不是台词草稿" in prompt
@@ -317,7 +327,7 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
     """进展只说有凭据的：实测游戏侧每次执行都被拒，主播却说"机器在嗡嗡响、蜂蜜胶在冒出来"。"""
     reset_prompt_manager()
     try:
-        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动", game_rules="")
     finally:
         reset_prompt_manager()
     assert "进展只说有凭据的" in prompt and '让主播说"还在弄"' in prompt
@@ -325,10 +335,13 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
 
 
 def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
-    """游戏里的聊天是游戏世界里的人在说话：开口他们听不到，要回就在游戏里打字；不带额外授权。"""
+    """游戏里的聊天是游戏世界里的人在说话：开口他们听不到，要回就在游戏里打字；不带额外授权。
+
+    在游戏里打字回话走委派型游戏的补充要求通道，所以这条守则随委派守则一起进提示词。
+    """
     reset_prompt_manager()
     try:
-        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+        prompt = _render_planner_with_delegate_rules()
     finally:
         reset_prompt_manager()
     assert "【游戏里的聊天】是游戏里的人在说话" in prompt and "主播开口说话他们听不到" in prompt
@@ -390,7 +403,9 @@ def prompts():
 
 
 def test_streamer_prompts_keep_rules(prompts) -> None:
-    planner = prompts.render("amaidesu_planner_react", behavior_style="积极互动")
+    # 清单横跨主模板与委派守则子模板：按生产拼装方式（委派型游戏在场）渲染后一并核对
+    rules = prompts.render("amaidesu_planner_delegate_rules")
+    planner = prompts.render("amaidesu_planner_react", behavior_style="积极互动", game_rules=rules)
     assert [rule for rule in _PLANNER_PROMPT_RULES if rule not in planner] == []
     assert "【身体" not in planner
 

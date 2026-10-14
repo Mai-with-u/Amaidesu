@@ -124,6 +124,7 @@ def test_singleton_is_shared_resettable_auto_scans_and_loads_exactly_the_declare
         assert isinstance(first, PromptManager) and get_prompt_manager() is first and first.auto_scan_src is True
         assert set(first.list_templates()) == {  # 全仓声明式键全集，防漂移回归网
             "amaidesu_planner_react",
+            "amaidesu_planner_delegate_rules",
             "amaidesu_replyer_system",
             "amaidesu_replyer",
             "viewer_message",
