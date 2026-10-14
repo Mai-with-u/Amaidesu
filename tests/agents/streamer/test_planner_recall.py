@@ -6,15 +6,16 @@ import json
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-from src.agents.streamer.config import StreamerConfig
+import pytest
+
 from src.agents.streamer.planner import Planner, _Intent
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
+from tests.agents.streamer.helpers import make_streamer_agent
 
 
 def _reply_call(topic: str, guidance: str) -> Response:
@@ -93,35 +94,27 @@ async def test_spoken_intents_listed_oldest_first() -> None:
     assert section == ["- 刚刚 话题：报平安：满血了", "- 刚刚 话题：还是满血"]
 
 
-async def test_failed_reply_is_not_recorded() -> None:
-    """表达失败（观众没听到）的打算不算说过。"""
-    planner = _planner([_reply_call("报平安", "轻松")], reply_ok=False, config={"planner_max_steps": 1})
-
-    await planner.plan([], proactive=True)
-
-    assert "【已聊话题】" not in await _reference(planner)
-
-
 async def test_intents_keep_only_configured_count() -> None:
     """只回看配置的轮数，最早的先出列。"""
     planner = _planner(
         [_reply_call(t, "") for t in ("今天天气不错", "水车修好了", "晚饭想吃火锅")],
         config={"planner_recent_intents_max": 2},
     )
-
     for _ in range(3):
         await planner.plan([], proactive=True)
     text = await _reference(planner)
-
     assert "今天天气不错" not in text and "水车修好了" in text and "晚饭想吃火锅" in text
 
 
-async def test_zero_intents_disables_section() -> None:
-    """配置为 0 时不列这一段。"""
-    planner = _planner([_reply_call("报平安", "")], config={"planner_recent_intents_max": 0})
-
+@pytest.mark.parametrize(
+    ("reply_ok", "config"),
+    [(False, {"planner_max_steps": 1}), (True, {"planner_recent_intents_max": 0})],
+    ids=["reply_failed", "section_disabled"],
+)
+async def test_intent_section_absent(reply_ok: bool, config: dict) -> None:
+    """表达失败（观众没听到）的打算不算说过；配置为 0 时不列这一段。"""
+    planner = _planner([_reply_call("报平安", "轻松")], reply_ok=reply_ok, config=config)
     await planner.plan([], proactive=True)
-
     assert "【已聊话题】" not in await _reference(planner)
 
 
@@ -141,6 +134,13 @@ async def test_unread_summary_consumed_once() -> None:
     assert "未读摘要" not in second
 
 
+_DELEGATED = ToolExecutionResult(
+    tool_name="framework_delegate",
+    success=True,
+    structured_content={"accepted": True, "executor": "minecraft", "task_id": "deleg_1"},
+)
+
+
 def _relay_planner(result: ToolExecutionResult) -> tuple[Planner, MagicMock]:
     registry = MagicMock()
     registry.invoke = AsyncMock(return_value=result)
@@ -153,13 +153,7 @@ async def test_game_report_supersedes_inflight_intents() -> None:
     实测同一轮注入里两条都标"刚刚"且互相矛盾（"石料还没挖进包" vs "攒了 19 块圆石"），
     模型任选一条播报就会前后打脸——回执才是权威事实。
     """
-    planner, _registry = _relay_planner(
-        ToolExecutionResult(
-            tool_name="framework_delegate",
-            success=True,
-            structured_content={"accepted": True, "executor": "minecraft", "task_id": "deleg_1"},
-        )
-    )
+    planner, _registry = _relay_planner(_DELEGATED)
 
     await planner._invoke_registry_tool("framework_delegate", {"agent": "minecraft", "instruction": "挖石料"})
     # 委派在途期间说出口的对进展的猜测（此刻与回执说法矛盾）
@@ -176,13 +170,7 @@ async def test_game_report_supersedes_inflight_intents() -> None:
 
 async def test_intent_outside_delegation_window_is_not_superseded() -> None:
     """委派窗口之外的条目不受回执影响：委派开始前的旧话、上报后说的新话都完整保留。"""
-    planner, _registry = _relay_planner(
-        ToolExecutionResult(
-            tool_name="framework_delegate",
-            success=True,
-            structured_content={"accepted": True, "executor": "minecraft", "task_id": "deleg_1"},
-        )
-    )
+    planner, _registry = _relay_planner(_DELEGATED)
 
     base = now_ms()
     # 委派开始前说的一轮
@@ -245,15 +233,5 @@ async def test_rejected_or_blocked_relay_is_not_recorded() -> None:
 
 def test_agent_passes_recall_limits_to_planner() -> None:
     """[agents.streamer] 的回看条数一路传到 Planner。"""
-    prompt = MagicMock()
-    prompt.render = MagicMock(return_value="PROMPT")
-    agent = StreamerAgent(
-        config=StreamerConfig.from_dict(
-            {"proactive": {"enabled": False}, "planner_recent_intents_max": 3, "planner_recent_relays_max": 1}
-        ),
-        llm_manager=MagicMock(),
-        prompt_manager=prompt,
-    )
-
-    assert agent._planner._recent_intents.maxlen == 3
-    assert agent._planner._recent_relays.maxlen == 1
+    agent = make_streamer_agent({"planner_recent_intents_max": 3, "planner_recent_relays_max": 1})
+    assert (agent._planner._recent_intents.maxlen, agent._planner._recent_relays.maxlen) == (3, 1)
