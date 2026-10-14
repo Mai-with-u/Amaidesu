@@ -1,9 +1,11 @@
-"""话题重复闸——纯函数检测口径 + planner reply 打回路径 + 闸后沉默兜底。"""
+"""话题重复闸：纯函数判重口径、Planner 的 reply 打回路径与闸后沉默兜底"""
 
 from __future__ import annotations
 
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from src.agents.streamer.planner import Planner, _Intent
 from src.agents.streamer.room_state import RoomState
@@ -14,92 +16,44 @@ from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
 
-# 纯函数口径
+
+@pytest.mark.parametrize(
+    ("topic", "recent_topics", "recent_speeches", "fresh_texts", "allowed", "duplicate"),
+    [
+        # 换皮复述（同义改写、加语气词）bigram 大面积重合
+        ("我在游戏里挖到了石料", ["石料进展"], ["我在游戏里挖到了石料"], None, False, True),
+        # 同话题但超过一半成分是新的
+        ("石料要拿去修水车了", ["挖石料"], ["我在游戏里挖到了石料"], None, True, False),
+        # 新实体豁免：字面重合，但带进了本窗新语料里才出现的新词
+        ("我在游戏里挖到了附魔书", ["石料进展"], ["我在游戏里挖到了石料"], ["观众：附魔书是什么"], True, True),
+        # 换数字写法不构成新角度
+        ("背包里就剩2.8滴血了，僵尸还在贴脸", ["血量见底"], ["背包里就剩五滴血了，僵尸还在贴脸"], None, False, True),
+        # 新语料里的数字不充当新实体证据：叙事数值刷新不是新角度
+        (
+            "那群苦力怕在远处排队，血就剩五点了",
+            ["怪群围观"],
+            ["那群苦力怕在远处排队"],
+            ["远处那三十五只苦力怕、十六只骷髅都没散"],
+            False,
+            True,
+        ),
+        # 空白/单字话题与无历史语料：无从比对，交由提示词纪律
+        ("   ", ["石料"], ["挖到石料了"], None, True, False),
+        ("好", ["石料"], ["挖到石料了"], None, True, False),
+        ("随便什么话题", [], [], None, True, False),
+    ],
+)
+def test_check_topic(topic, recent_topics, recent_speeches, fresh_texts, allowed: bool, duplicate: bool) -> None:
+    kwargs = {"fresh_texts": fresh_texts} if fresh_texts else {}
+    verdict = check_topic(topic, recent_topics=recent_topics, recent_speeches=recent_speeches, **kwargs)
+    assert (verdict.allowed, verdict.duplicate) == (allowed, duplicate)
+    if duplicate and not allowed:
+        assert verdict.overlap_ratio >= 0.5
 
 
-def test_paraphrased_repeat_is_rejected() -> None:
-    """换皮复述（同义改写、加语气词）bigram 大面积重合，判重拒绝。"""
-    verdict = check_topic(
-        "我在游戏里挖到了石料",
-        recent_topics=["石料进展"],
-        recent_speeches=["我在游戏里挖到了石料"],
-    )
-
-    assert not verdict.allowed
-    assert verdict.duplicate
-    assert verdict.overlap_ratio >= 0.5
-
-
-def test_fresh_angle_passes() -> None:
-    """同话题但换了实质角度（超过一半成分是新的），放行。"""
-    verdict = check_topic(
-        "石料要拿去修水车了",
-        recent_topics=["挖石料"],
-        recent_speeches=["我在游戏里挖到了石料"],
-    )
-
-    assert verdict.allowed
-    assert not verdict.duplicate
-
-
-def test_new_entity_exempt_even_when_literal_overlap() -> None:
-    """新实体豁免：字面大面积重合，但话题带进了本窗新语料里才出现的新词。"""
-    verdict = check_topic(
-        "我在游戏里挖到了附魔书",
-        recent_topics=["石料进展"],
-        recent_speeches=["我在游戏里挖到了石料"],
-        fresh_texts=["观众：附魔书是什么"],
-    )
-
-    assert verdict.allowed
-    assert verdict.duplicate  # 字面确实重合，放行凭的是新词
-
-
-def test_numeric_rewrite_is_rejected() -> None:
-    """数值变化不构成新角度：同一句话换数字写法（五点 → 2.8）仍判重复。"""
-    verdict = check_topic(
-        "背包里就剩2.8滴血了，僵尸还在贴脸",
-        recent_topics=["血量见底"],
-        recent_speeches=["背包里就剩五滴血了，僵尸还在贴脸"],
-    )
-
-    assert not verdict.allowed
-    assert verdict.duplicate
-
-
-def test_fresh_numbers_do_not_arm_exemption() -> None:
-    """本窗新语料里的数字（三十五只、十六只）不充当新实体豁免的证据——
-    游戏叙事的数值刷新不是新角度。"""
-    verdict = check_topic(
-        "那群苦力怕在远处排队，血就剩五点了",
-        recent_topics=["怪群围观"],
-        recent_speeches=["那群苦力怕在远处排队"],
-        fresh_texts=["远处那三十五只苦力怕、十六只骷髅都没散"],
-    )
-
-    assert not verdict.allowed
-    assert verdict.duplicate
-
-
-def test_short_or_blank_topic_passes() -> None:
-    """空白或单字话题没有可比对成分，交由提示词纪律而非框架拦下。"""
-    for topic in ("", "   ", "好"):
-        verdict = check_topic(topic, recent_topics=["石料"], recent_speeches=["挖到石料了"])
-        assert verdict.allowed
-
-
-def test_no_recent_history_passes() -> None:
-    """无最近发言语料时无从判重，直接放行。"""
-    verdict = check_topic("随便什么话题", recent_topics=[], recent_speeches=[])
-
-    assert verdict.allowed
-
-
-def test_retry_rejection_guides_silence() -> None:
-    """打回话术：首次给改题机会，再次拒绝显式引导本轮沉默。"""
+def test_rejection_reason_offers_new_angle_then_silence() -> None:
     assert "换新角度" in rejection_reason(False)
-    assert "保持沉默" in rejection_reason(True)
-    assert "不再调用任何工具" in rejection_reason(True)
+    assert "保持沉默" in rejection_reason(True) and "不再调用任何工具" in rejection_reason(True)
 
 
 # planner 接线：打回 → 再次拒绝 → 沉默兜底；新话题放行
@@ -178,11 +132,8 @@ async def test_gate_rejects_repeat_then_silence_fallback() -> None:
 
     outcome = await planner.plan([], proactive=True, game_narrative="挖到了石料")
 
-    assert outcome["replied"] is False
-    assert outcome["silent_reason"] == "natural"
-    assert outcome["topic_gate_retries"] == 2
-    assert outcome["reply_failures"] == 0
-    assert outcome["speech"] is None
+    assert (outcome["replied"], outcome["silent_reason"], outcome["speech"]) == (False, "natural", None)
+    assert (outcome["topic_gate_retries"], outcome["reply_failures"]) == (2, 0)
     # reply 从未真正执行到表达侧
     assert reply.topics == []
     # 打回经工具回执喂回：最后一次请求里两条 tool 回执，先改题机会、后沉默引导
