@@ -1,30 +1,14 @@
-"""上下文分段计量器单测（src/modules/llm/context_meter.py）
-
-覆盖：
-- 分段估算（messages / mcp_tools / system_tools / skills / system）与条目明细形状
-- 归属标注：MCP 与内置工具分段、技能读取结果与系统提示词片段记入技能段
-- API 总数校准：分段等比缩放、总和与 api_prompt_tokens 一致
-- 上游未回报（api_prompt_tokens=0）时展示原始估算值
-- extract_request_sections 双路径（中立 payload / 遗留 kwargs）与缺失返回 None
-- tokenizer 不可用时退化字符启发式（monkeypatch 隔离网络词表拉取）
-- 多模态消息：图像 part 按固定估值计入
-
-tiktoken 词表首次加载需联网拉取；单测通过 monkeypatch 计数函数或强制
-启发式路径，保证离线可跑、不依赖缓存状态。
-"""
+"""上下文分段计量：分段估算与明细、归属标注、API 总数校准、请求分段提取与离线启发式（不碰 tiktoken 词表）"""
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
 from src.modules.llm import context_meter as cm
-from src.modules.llm.context_meter import (
-    ContextBreakdown,
-    estimate_breakdown,
-    extract_request_sections,
-)
+from src.modules.llm.context_meter import ContextBreakdown, estimate_breakdown, extract_request_sections
+from src.modules.llm.payload import ContextPart, GenerateRequest, Message, ToolSpec
 
 
 def _make_breakdown(
@@ -107,24 +91,12 @@ class TestEstimateBreakdown:
             raw_ratio = system.raw_tokens / messages.raw_tokens
             assert abs(system.tokens / messages.tokens - raw_ratio) < 0.05
 
-    def test_no_api_total_keeps_raw_values(self) -> None:
+    def test_without_api_total_keeps_raw_values(self) -> None:
         breakdown = _make_breakdown(api_prompt_tokens=0)
         assert breakdown.calibrated is False
-        for section in breakdown.sections:
-            assert section.tokens == section.raw_tokens
-
-    def test_empty_request_produces_zero_sections(self) -> None:
-        breakdown = estimate_breakdown(
-            request_id="req_empty",
-            profile_name="replyer",
-            model_name="m",
-            system="",
-            messages=[],
-            tools=[],
-            api_prompt_tokens=0,
-        )
-        assert all(section.tokens == 0 for section in breakdown.sections)
-        assert all(section.count == 0 for section in breakdown.sections)
+        assert all(section.tokens == section.raw_tokens for section in breakdown.sections)
+        empty = _make_breakdown(system="", messages=[], tools=[])
+        assert all(section.tokens == 0 and section.count == 0 for section in empty.sections)
 
     def test_image_part_counted_with_fixed_estimate(self) -> None:
         text_only = _make_breakdown(messages=[{"role": "user", "content": "看这里"}])
@@ -217,67 +189,46 @@ class TestAttribution:
         assert _section(breakdown, cm.SECTION_SKILLS).raw_tokens == 0
 
 
-class TestExtractRequestSections:
-    def test_payload_request_path(self) -> None:
-        from src.modules.llm.payload import ContextPart, GenerateRequest, Message, ToolSpec
+def test_extract_request_sections_from_payload_and_legacy_kwargs() -> None:
+    request = GenerateRequest(
+        messages=[Message(role="user", content="hi")],
+        system="sys",
+        tools=[ToolSpec(name="t", description="d"), ToolSpec(name="m", context_section="mcp_tools")],
+        system_parts=[ContextPart(section="skills", name="技能目录", text="sys")],
+    )
+    sections = extract_request_sections({"request": request})
+    assert sections.system == "sys"
+    # 中立 payload dump：role 保留，文本在 parts；未设置的归属字段不进入计数用的 dump
+    assert sections.messages[0]["role"] == "user" and "parts" in sections.messages[0]
+    assert sections.tools[0] == {"name": "t", "description": "d", "parameters": {}}
+    assert sections.tools[1]["context_section"] == "mcp_tools"
+    assert sections.system_parts == [{"section": "skills", "name": "技能目录", "text": "sys"}]
 
-        request = GenerateRequest(
-            messages=[Message(role="user", content="hi")],
-            system="sys",
-            tools=[ToolSpec(name="t", description="d"), ToolSpec(name="m", context_section="mcp_tools")],
-            system_parts=[ContextPart(section="skills", name="技能目录", text="sys")],
-        )
-        sections = extract_request_sections({"request": request})
-        assert sections is not None
-        assert sections.system == "sys"
-        # 中立 payload dump 形状：role 保留，文本在 parts
-        assert sections.messages[0]["role"] == "user"
-        assert "parts" in sections.messages[0]
-        # 未设置的归属字段不进入计数用的 dump
-        assert sections.tools[0] == {"name": "t", "description": "d", "parameters": {}}
-        assert sections.tools[1]["context_section"] == "mcp_tools"
-        assert sections.system_parts == [{"section": "skills", "name": "技能目录", "text": "sys"}]
-
-    def test_legacy_kwargs_path(self) -> None:
-        kwargs: Dict[str, Any] = {
+    legacy = extract_request_sections(
+        {
             "messages": [{"role": "user", "content": "hi"}],
             "system": "sys",
             "tools": [{"type": "function", "function": {"name": "t"}}],
         }
-        sections = extract_request_sections(kwargs)
-        assert sections is not None
-        assert sections.system == "sys"
-        assert len(sections.tools) == 1
-        assert sections.system_parts == []
-
-    def test_missing_messages_returns_none(self) -> None:
-        assert extract_request_sections({}) is None
-        assert extract_request_sections({"messages": None}) is None
+    )
+    assert (legacy.system, len(legacy.tools), legacy.system_parts) == ("sys", 1, [])
+    assert extract_request_sections({}) is None
+    assert extract_request_sections({"messages": None}) is None
 
 
-class TestHeuristicFallback:
-    def test_cjk_text_positive_tokens(self) -> None:
-        tokens = cm.count_text_tokens("这是一段中文测试文本")
-        assert tokens > 0
-
-    def test_empty_text_is_zero(self) -> None:
-        assert cm.count_text_tokens("") == 0
-
-    def test_heuristic_cjk_denser_than_ascii(self) -> None:
-        cjk = cm._heuristic_tokens("一二三四五六七八九十" * 10)
-        ascii_tokens = cm._heuristic_tokens("abcdefghij" * 10)
-        assert cjk > ascii_tokens
+def test_heuristic_token_counting() -> None:
+    assert cm.count_text_tokens("这是一段中文测试文本") > 0
+    assert cm.count_text_tokens("") == 0
+    assert cm._heuristic_tokens("一二三四五六七八九十" * 10) > cm._heuristic_tokens("abcdefghij" * 10)
 
 
-class TestNormalizeToolSpec:
-    def test_openai_style_function_dict(self) -> None:
-        name, _dump = cm._normalize_tool_spec({"type": "function", "function": {"name": "reply"}})
-        assert name == "reply"
-
-    def test_neutral_dict(self) -> None:
-        name, _dump = cm._normalize_tool_spec({"name": "speak"})
-        assert name == "speak"
-
-    def test_objects_fall_back_to_unknown(self) -> None:
-        name, _ = cm._normalize_tool_spec(object())
-        assert name == "unknown"
+@pytest.mark.parametrize(
+    ("spec", "name"),
+    [
+        ({"type": "function", "function": {"name": "reply"}}, "reply"),
+        ({"name": "speak"}, "speak"),
+        (object(), "unknown"),
+    ],
+)
+def test_normalize_tool_spec_name(spec: Any, name: str) -> None:
+    assert cm._normalize_tool_spec(spec)[0] == name
