@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
 import sys
 import time
@@ -262,5 +263,18 @@ def get_logger(module_name: str) -> ModuleLogger:
     return ModuleLogger(module_name)
 
 
+def silence_third_party_logger(name: str) -> None:
+    """让第三方库自带的标准库日志器闭嘴，由调用方用项目门面自行记录失败原因。
+
+    用于两类第三方日志：会把敏感参数写进日志（如 obsws-python 以 INFO 级明文
+    打印连接密码），或在可预期的失败上每次都打整段堆栈（目标服务没开时每次重试
+    都刷屏）。项目不接管标准库日志，这些输出原本会经标准库兜底处理器直接打到
+    控制台、绕过项目的日志过滤与抽样。
+    """
+    third_party = logging.getLogger(name)
+    third_party.setLevel(logging.CRITICAL + 1)
+    third_party.propagate = False
+
+
 # 导出配置好的 logger 获取函数
-__all__ = ["get_logger", "configure_from_config"]
+__all__ = ["get_logger", "configure_from_config", "silence_third_party_logger"]

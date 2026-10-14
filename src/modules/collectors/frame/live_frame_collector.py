@@ -29,12 +29,19 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.collectors.base import BaseCollector
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room_state import RoomStateFramePayload
-from src.modules.logging import get_logger
+from src.modules.logging import get_logger, silence_third_party_logger
 from src.modules.time_utils import now_ms
 from src.modules.vision.image_store import get_image_store
 from src.modules.vision.mss_capture import MssScreenCapture
 
-__all__ = ["FrameGrabber", "GrabbedFrame", "LiveFrameCollector", "frame_change"]
+__all__ = [
+    "FrameGrabber",
+    "GrabbedFrame",
+    "LiveFrameCollector",
+    "ObsFrameGrabber",
+    "describe_obs_error",
+    "frame_change",
+]
 
 # 变化比较用的缩略图尺寸：足够分辨场景切换、大块移动，又不被细碎动画干扰
 _THUMB_SIZE = (32, 18)
@@ -54,11 +61,13 @@ class GrabbedFrame:
 
 
 class FrameGrabber(Protocol):
-    """取帧后端：返回一帧画面，取不到返回 None（原因由后端记日志）。"""
+    """取帧后端：返回一帧画面，取不到返回 None；失败抛异常，由 ``describe`` 翻译成可操作的原因。"""
 
     async def grab(self) -> Optional[GrabbedFrame]: ...
 
     async def close(self) -> None: ...
+
+    def describe(self, error: BaseException) -> str: ...
 
 
 def _thumbnail(image: bytes) -> List[int]:
@@ -74,8 +83,49 @@ def frame_change(previous: Optional[List[int]], current: List[int]) -> float:
     return sum(abs(a - b) for a, b in zip(previous, current, strict=True)) / (255 * len(current))
 
 
+def describe_obs_error(error: BaseException, *, host: str, port: int, source: str) -> str:
+    """把 OBS 取帧失败翻译成能照着改的原因（采集器告警与诊断脚本共用）。
+
+    obsws-python 与 websocket-client 的异常按类名识别，不在这里导入它们：
+    没装依赖时同样要能说清原因。
+    """
+    name = type(error).__name__
+    text = str(error)
+    where = f"{host}:{port}"
+    if isinstance(error, ImportError):
+        return "没装 obsws-python：在项目目录执行 uv sync 安装依赖"
+    if isinstance(error, ConnectionRefusedError):
+        return (
+            f"连不上 OBS（{where}）：OBS 没开，或没在「工具 → WebSocket 服务器设置」里勾选启用 WebSocket 服务器"
+            "（需要 OBS 28 及以上，端口默认 4455）"
+        )
+    if isinstance(error, TimeoutError) or name in ("WebSocketTimeoutException", "OBSSDKTimeoutError"):
+        return f"连接 OBS（{where}）超时：检查地址、端口与防火墙；OBS 卡死时也会超时"
+    if "no password provided" in text:
+        return "OBS 开启了身份验证：在 collectors.toml 的 [live_frame].obs_password 填 WebSocket 服务器密码"
+    if name == "WebSocketConnectionClosedException" or "failed to identify" in text:
+        return "OBS 拒绝了身份验证：obs_password 与 OBS「WebSocket 服务器设置」里的密码不一致"
+    if name == "OBSSDKRequestError":
+        code = getattr(error, "code", None)
+        if code == 600:
+            return (
+                f"OBS 里找不到要截的场景或来源「{source or '当前节目场景'}」："
+                "检查 [live_frame].obs_source 的拼写（区分大小写），留空则截当前节目场景"
+            )
+        return f"OBS 拒绝了 {getattr(error, 'req_name', '请求')}（代码 {code}）：{text}"
+    if isinstance(error, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        return f"与 OBS（{where}）的连接断开了（OBS 重启或关闭），下次取帧会重连"
+    return f"{name}: {text}"
+
+
 class ObsFrameGrabber:
-    """经 obs-websocket 截 OBS 画面（同步客户端放线程里跑，不阻塞事件循环）。"""
+    """经 obs-websocket 截 OBS 画面（同步客户端放线程里跑，不阻塞事件循环）。
+
+    首次取帧时连接：读 OBS 支持的图片格式（优先 JPEG）与输出分辨率（按宽度等比
+    算高度）。连接中途断开就丢掉客户端，下次取帧重连。obsws-python 自带的日志会以
+    INFO 级明文打印连接密码、连不上时每次都打整段堆栈，一律压住，失败原因由
+    ``describe`` 翻译后经项目日志按抽样记录。
+    """
 
     def __init__(self, *, host: str, port: int, password: str, source: str, max_width: int) -> None:
         self._host = host
@@ -85,7 +135,9 @@ class ObsFrameGrabber:
         self._max_width = max_width
         self._client: Any = None
         self._height = 0
+        self._format = "jpg"
         self._logger = get_logger("LiveFrameCollector")
+        silence_third_party_logger("obsws_python")
 
     async def grab(self) -> Optional[GrabbedFrame]:
         return await asyncio.to_thread(self._grab_sync)
@@ -95,22 +147,35 @@ class ObsFrameGrabber:
         if client is not None:
             await asyncio.to_thread(self._disconnect, client)
 
+    def describe(self, error: BaseException) -> str:
+        return describe_obs_error(error, host=self._host, port=self._port, source=self._source)
+
     def _disconnect(self, client: Any) -> None:
         try:
             client.disconnect()
-        except Exception as exc:  # noqa: BLE001 - 关闭阶段的断开失败只记录
+        except Exception as exc:  # noqa: BLE001 - 断开阶段的失败只记录，不影响下次重连
             self._logger.debug(f"断开 OBS 画面连接时出错：{exc}")
 
     def _connect(self) -> Any:
-        """首次取帧时连接 OBS，并按输出分辨率算出缩放后的高度。"""
+        """连接 OBS，读支持的图片格式与输出分辨率；中途失败先断开再抛出。"""
         # 可选重型依赖延迟加载：没装 obsws-python 时只有 obs 来源不可用，桌面截屏照常
         import obsws_python as obs
 
         client = obs.ReqClient(host=self._host, port=self._port, password=self._password or None, timeout=3)
-        video = client.get_video_settings()
+        try:
+            formats = [
+                str(item).lower() for item in getattr(client.get_version(), "supported_image_formats", None) or []
+            ]
+            self._format = next(
+                (item for item in ("jpg", "jpeg", "png") if item in formats), formats[0] if formats else "jpg"
+            )
+            video = client.get_video_settings()
+        except Exception:
+            self._disconnect(client)
+            raise
         width = int(getattr(video, "output_width", 0) or getattr(video, "base_width", 0) or 16)
         height = int(getattr(video, "output_height", 0) or getattr(video, "base_height", 0) or 9)
-        self._height = max(1, round(self._max_width * height / width))
+        self._height = max(8, round(self._max_width * height / width))
         return client
 
     def _grab_sync(self) -> Optional[GrabbedFrame]:
@@ -118,16 +183,22 @@ class ObsFrameGrabber:
             self._client = self._connect()
         try:
             source = self._source or self._client.get_current_program_scene().current_program_scene_name
-            response = self._client.get_source_screenshot(source, "jpg", self._max_width, self._height, 70)
+            response = self._client.get_source_screenshot(source, self._format, self._max_width, self._height, 70)
         except Exception:
-            # 连接断了（OBS 重启等）：丢掉客户端，下次取帧重连
-            self._client = None
+            # 连接断了（OBS 重启等）或来源名不对：丢掉客户端，下次取帧重连
+            client, self._client = self._client, None
+            self._disconnect(client)
             raise
         data_url = str(getattr(response, "image_data", "") or "")
-        _, _, encoded = data_url.partition(",")
+        head, _, encoded = data_url.partition(",")
         if not encoded:
             return None
-        return GrabbedFrame(data_url, base64.b64decode(encoded), self._max_width, self._height)
+        image = base64.b64decode(encoded)
+        # OBS 给 JPEG 标的是 image/jpg，不是标准 MIME，部分模型端点会拒收
+        head = head.replace("image/jpg;", "image/jpeg;")
+        with Image.open(io.BytesIO(image)) as picture:
+            width, height = picture.size
+        return GrabbedFrame(f"{head},{encoded}", image, width, height)
 
 
 class ScreenFrameGrabber:
@@ -148,6 +219,9 @@ class ScreenFrameGrabber:
 
     async def close(self) -> None:
         return None
+
+    def describe(self, error: BaseException) -> str:
+        return f"截取显示器 {self._monitor_index} 失败：{type(error).__name__}: {error}"
 
 
 class LiveFrameCollector(BaseCollector):
@@ -253,7 +327,8 @@ class LiveFrameCollector(BaseCollector):
         except Exception as exc:  # noqa: BLE001 - 来源不可用（OBS 未开等）按间隔重试
             if self._failures % _FAILURE_LOG_EVERY == 0:
                 self.logger.warning(
-                    f"直播画面取帧失败（来源 {self.typed_config.source}，已连续 {self._failures + 1} 次）：{exc}"
+                    f"直播画面取帧失败（来源 {self.typed_config.source}，已连续 {self._failures + 1} 次）："
+                    f"{self._grabber.describe(exc)}"
                 )
             self._failures += 1
             return None

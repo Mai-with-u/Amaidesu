@@ -5,12 +5,13 @@ Amaidesu 日志模块
 """
 
 # 导出核心组件
-from .logger import ModuleLogger, configure_from_config, get_logger
+from .logger import ModuleLogger, configure_from_config, get_logger, silence_third_party_logger
 from .log_streamer import LogStreamer
 
 __all__ = [
     "ModuleLogger",
     "configure_from_config",
     "get_logger",
+    "silence_third_party_logger",
     "LogStreamer",
 ]
