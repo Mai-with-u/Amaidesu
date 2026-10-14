@@ -46,6 +46,7 @@ def test_streamer_defaults_are_the_full_package_config() -> None:
     assert (streamer.background.compressor.queue_max, streamer.batch.batch_window_ms) == (100, 3_000)
     assert streamer.force.force_message_types == ["super_chat", "guard", "gift"]
     assert (streamer.proactive.enabled, streamer.word_filter.enabled, streamer.command.prefix) == (True, False, "/")
+    assert streamer.command.tool_mappings == []  # 工具映射表默认空：委派 mappings 不受影响
     assert streamer.thinking_stream.enabled is True
     narrative = streamer.narrative
     assert (narrative.body_ttl_ms, narrative.game_ttl_ms, narrative.chat_max_items) == (300_000, 900_000, 10)
@@ -85,3 +86,29 @@ def test_model_dump_round_trip_keeps_custom_values() -> None:
     cfg = AgentsConfig(streamer={"persona": {"bot_name": "测试"}}, minecraft={"events_wait_ms": 4000})
     restored = AgentsConfig.model_validate(cfg.model_dump())
     assert restored.streamer.persona.bot_name == "测试" and restored.minecraft.events_wait_ms == 4000
+
+
+class TestStreamerCommandToolMappings:
+    """观众命令的工具映射表：遥控型游戏的命令直接变成一次固定工具调用。"""
+
+    def test_tool_mappings_parse_as_list_of_tables(self):
+        cfg = StreamerConfig.from_dict(
+            {
+                "command": {
+                    "tool_mappings": [
+                        {"command": "up", "tool": "game_2048_press", "arguments": {"key": "up"}},
+                        {"command": "restart", "tool": "game_2048_press"},
+                    ]
+                }
+            }
+        )
+        items = cfg.command.tool_mappings
+        assert [(m.command, m.tool, m.arguments) for m in items] == [
+            ("up", "game_2048_press", {"key": "up"}),
+            ("restart", "game_2048_press", {}),
+        ]
+
+    def test_tool_mappings_default_empty_keeps_delegate_mappings_independent(self):
+        cfg = StreamerConfig.from_dict({"command": {"mappings": {"come": "到主播身边来"}}})
+        assert cfg.command.mappings == {"come": "到主播身边来"}
+        assert cfg.command.tool_mappings == []

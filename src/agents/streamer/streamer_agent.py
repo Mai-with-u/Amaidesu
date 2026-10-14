@@ -448,12 +448,12 @@ class StreamerAgent(BaseAgent):
         # 注入参考块，读取即取空——送达一次制）。满时拒收，必达不允许静默挤旧。
         self._reminder_queue: deque[str] = deque(maxlen=_REMINDER_QUEUE_MAX)
 
-        # 观众命令接线（最小接线：玩法待扩展）。enabled + mappings 非空才激活；
-        # mappings 即白名单，限频窗口/次数 config 化。命令路由是代码直连的
-        # 内部件，不进 ToolRegistry。
+        # 观众命令接线（最小接线：玩法待扩展）。enabled + 任一映射表非空才激活；
+        # 两张映射表（委派指令 / 工具调用）合起来即白名单，限频窗口/次数 config 化。
+        # 命令路由是代码直连的内部件，不进 ToolRegistry。
         cmd_cfg = config.command
         self._command_router: Optional[CommandRouter] = None
-        if cmd_cfg.enabled and cmd_cfg.mappings:
+        if cmd_cfg.enabled and (cmd_cfg.mappings or cmd_cfg.tool_mappings):
             self._command_router = CommandRouter(cmd_cfg, tool_registry, logger=self._logger)
 
         # 工具 Provider 实例（用于 invoke）

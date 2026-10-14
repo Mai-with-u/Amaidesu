@@ -73,3 +73,67 @@ async def test_rate_limit_is_per_user() -> None:
 async def test_command_consumed_even_when_delegation_impossible(registry) -> None:
     """受理失败或注册表缺失：不抛异常，消息仍被消费（不进决策链）。"""
     assert await _router(registry).try_dispatch(_danmaku("/come")) is True
+
+
+# =============================================================================
+# 工具动作：遥控型游戏的命令直接变成一次固定工具调用
+# =============================================================================
+
+_TOOL_MAPPINGS = [
+    {"command": "up", "tool": "game_2048_press", "arguments": {"key": "up"}},
+    {"command": "restart", "tool": "game_2048_press", "arguments": {"key": "restart"}},
+]
+
+
+def _tool_registry(success: bool = True) -> MagicMock:
+    registry = MagicMock()
+    registry.invoke = AsyncMock(
+        return_value=ToolExecutionResult(
+            tool_name="game_2048_press", success=success, error_message=None if success else "终局后不能按"
+        )
+    )
+    return registry
+
+
+async def test_tool_mapping_invokes_tool_with_fixed_arguments() -> None:
+    """命中工具映射：按配置里写死的工具名与参数调用一次，source=streamer；观众参数不透传。"""
+    registry = _tool_registry()
+    router = _router(registry, mappings={}, tool_mappings=_TOOL_MAPPINGS)
+    assert await router.try_dispatch(_danmaku("/up 左 右 随便写")) is True
+    registry.invoke.assert_awaited_once()
+    invocation = registry.invoke.call_args.args[0]
+    assert invocation.tool_name == "game_2048_press"
+    assert invocation.arguments == {"key": "up"}
+    assert invocation.source == "streamer"
+
+
+async def test_tool_mapping_wins_over_delegate_mapping_with_same_name() -> None:
+    """同名命令两表都配：以工具动作为准，不再走 framework_delegate。"""
+    registry = _tool_registry()
+    router = _router(registry, mappings={"up": "往上走"}, tool_mappings=_TOOL_MAPPINGS)
+    assert await router.try_dispatch(_danmaku("/up")) is True
+    assert registry.invoke.call_args.args[0].tool_name == "game_2048_press"
+
+
+async def test_tool_mapping_failure_still_consumed() -> None:
+    """工具调用失败（游戏侧拒绝）：记日志、消息仍被消费、不抛异常、不进决策链。"""
+    router = _router(_tool_registry(success=False), mappings={}, tool_mappings=_TOOL_MAPPINGS)
+    assert await router.try_dispatch(_danmaku("/restart")) is True
+
+
+async def test_incomplete_tool_mapping_is_skipped() -> None:
+    """命令名或工具名留空的映射不入白名单：命中它的命令静默丢弃。"""
+    registry = _tool_registry()
+    router = _router(registry, mappings={}, tool_mappings=[{"command": "left", "tool": ""}])
+    assert await router.try_dispatch(_danmaku("/left")) is True
+    registry.invoke.assert_not_awaited()
+
+
+async def test_tool_mapping_shares_rate_limit_with_delegate_commands() -> None:
+    """限频闸对两类动作一视同仁：同一用户的委派命令与工具命令合计计数。"""
+    registry = _tool_registry()
+    router = _router(registry, rate_max=2, tool_mappings=_TOOL_MAPPINGS)
+    assert await router.try_dispatch(_danmaku("/come")) is True
+    assert await router.try_dispatch(_danmaku("/up")) is True
+    assert await router.try_dispatch(_danmaku("/up")) is True
+    assert registry.invoke.await_count == 2

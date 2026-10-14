@@ -54,7 +54,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import Field
 
@@ -242,12 +242,31 @@ class StreamerWordFilterConfig(BaseConfig):
     drop_on_match: bool = Field(title="命中是否整条丢弃", default=False, description="命中时是否整条丢弃")
 
 
+class CommandToolMapping(BaseConfig):
+    """``[[agents.streamer.command.tool_mappings]]`` 元素：观众命令 → 一次固定的工具调用
+
+    遥控型游戏（按键、选项）没有可委派的后台任务，观众命令直接变成一次工具
+    调用（如 ``/up`` → ``game_2048_press(key=up)``）。参数由配置写死，观众
+    的命令参数不透传——命令面只认白名单里的固定动作。
+    """
+
+    command: str = Field(title="命令名", default="", description="命令名（不含前缀，大小写不敏感）")
+    tool: str = Field(title="工具全名", default="", description="要调用的工具全名（如 game_2048_press）")
+    arguments: Dict[str, Any] = Field(
+        title="调用参数",
+        default_factory=dict,
+        description="固定的调用参数（观众不能改）",
+    )
+
+
 class StreamerCommandConfig(BaseConfig):
     """[agents.streamer.command] 段
 
     观众弹幕命令接线（最小接线：玩法待扩展）。命令解析是代码直连的
     内部件，不是 LLM 工具；本段只承载解析前缀、白名单映射与安全闸参数。
-    mappings 即天然白名单：映射表里没有的命令一律静默丢弃。
+    两张映射表合起来即天然白名单：表里没有的命令一律静默丢弃。
+    ``mappings`` 给委派型游戏（命令 → 自然语言指令，经 framework_delegate），
+    ``tool_mappings`` 给遥控型游戏（命令 → 固定工具调用）；同名以后者为准。
     """
 
     enabled: bool = Field(
@@ -260,6 +279,13 @@ class StreamerCommandConfig(BaseConfig):
         title="命令映射表",
         default_factory=dict,
         description="命令名 → 委派语义目标（给游戏 Agent 的自然语言指令，作为 framework_delegate 的 instruction）",
+    )
+    tool_mappings: List[CommandToolMapping] = Field(
+        title="命令工具映射表",
+        default_factory=list,
+        description=(
+            "命令名 → 固定的工具调用（遥控型游戏用，如 /up → game_2048_press(key=up)）；与 mappings 同名时以本表为准"
+        ),
     )
     target_agent: Optional[str] = Field(
         title="委派目标 Agent",

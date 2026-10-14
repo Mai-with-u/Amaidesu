@@ -83,3 +83,22 @@ def test_command_parsing_is_not_an_llm_tool() -> None:
     for py_file in Path("src/agents/streamer/command").glob("*.py"):
         source = py_file.read_text(encoding="utf-8")
         assert not any(word in source for word in ("ToolSpec", "ToolRegistry", "register_tool_provider")), py_file
+
+
+async def test_tool_mapping_command_invokes_tool_through_agent() -> None:
+    """只配 tool_mappings 也能激活命令接线：/up 直接调 game_2048_press(key=up)，不走委派、不进缓冲。"""
+    agent, registry = _agent(
+        command={
+            "mappings": {},
+            "tool_mappings": [{"command": "up", "tool": "game_2048_press", "arguments": {"key": "up"}}],
+        }
+    )
+    registry.invoke = AsyncMock(return_value=ToolExecutionResult(tool_name="game_2048_press", success=True))
+    await agent.handle_message(_danmaku("/up"))
+
+    registry.invoke.assert_awaited_once()
+    invocation = registry.invoke.call_args.args[0]
+    assert invocation.tool_name == "game_2048_press"
+    assert invocation.arguments == {"key": "up"}
+    assert invocation.source == "streamer"
+    assert agent._buffer.size == 0
