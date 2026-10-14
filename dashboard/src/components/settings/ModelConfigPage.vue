@@ -58,6 +58,19 @@
               <el-option v-for="name in modelNames" :key="name" :label="name" :value="name" />
             </el-select>
           </div>
+          <!-- 其余真实子字段：低调折叠条（控件非指引），无子字段的卡不渲染 -->
+          <details v-if="profile.otherChildren.length > 0" class="more-block">
+            <summary class="more-toggle">更多设置（{{ profile.otherChildren.length }}）</summary>
+            <SubFieldGroup
+              :fields="profile.otherChildren"
+              :get-value="getValue"
+              :get-original="getOriginal"
+              :update-value="updateValue"
+              :get-change-count="getChangeCount"
+              :show-advanced="showAdvanced"
+              layout="list"
+            />
+          </details>
         </div>
       </div>
     </section>
@@ -279,6 +292,7 @@ import {
   Plus,
 } from '@element-plus/icons-vue';
 import FieldRenderer from './FieldRenderer.vue';
+import SubFieldGroup from './SubFieldGroup.vue';
 import { confirmAction } from '@/utils/confirmAction';
 import type { ConfigFieldSchema } from '@/types/settings';
 import {
@@ -437,6 +451,8 @@ const profileEntries = computed(() =>
       key: profile.key,
       modelListField,
       modelList: Array.isArray(modelList) ? (modelList as string[]) : [],
+      // model_list 之外的真实子字段（如 selection_strategy），进卡底"更多设置"折叠条
+      otherChildren: (profile.children ?? []).filter(c => c !== modelListField),
     };
   }),
 );
@@ -771,6 +787,24 @@ async function removeModel(index: number) {
 
 .add-fallback {
   width: 96px;
+}
+
+/* ── 用途卡"更多设置"折叠条（卡片一体，不套节卡头） ──── */
+.more-block {
+  border-top: 1px dashed var(--border-color-light);
+  padding-top: var(--spacing-xs);
+  margin-top: auto;
+}
+
+.more-toggle {
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.more-toggle:hover {
+  color: var(--color-primary);
 }
 
 /* ── 第二层：模型注册表 ───────────────────────────────── */

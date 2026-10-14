@@ -29,6 +29,15 @@ describe('ModelConfigPage 三层结构', () => {
     expect(pageSource).toMatch(/props\.updateValue\(profile\.modelListField, value\)/);
   });
 
+  it('profile 卡底"更多设置"折叠条仅在存在 otherChildren 时渲染，内部走 SubFieldGroup', () => {
+    expect(pageSource).toMatch(/<details v-if="profile\.otherChildren\.length > 0" class="more-block">/);
+    expect(pageSource).toMatch(/<SubFieldGroup[\s\S]*?:fields="profile\.otherChildren"/);
+    // 同一条逐 key 更新路径：SubFieldGroup 直接接注入的 updateValue
+    expect(pageSource).toMatch(/<SubFieldGroup[\s\S]*?:update-value="updateValue"/);
+    // 卡片一体，不套节卡头结构
+    expect(pageSource).not.toMatch(/class="more-block[\s\S]{0,120}entity-section-header/s);
+  });
+
   it('第一层悬空引用警示条只在有悬空引用时出现', () => {
     expect(pageSource).toContain('v-if="danglingRefs(profile).length > 0"');
     expect(pageSource).toContain('danglingModelRefs(profile.modelList, modelNames.value)');
