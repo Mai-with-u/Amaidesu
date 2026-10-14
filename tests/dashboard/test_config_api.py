@@ -21,9 +21,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
 import pytest
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -49,8 +48,8 @@ def config_service(config_dir: Path):
 @pytest.fixture
 def dashboard_server(config_service):
     from src.modules.config.core_schemas import DashboardConfig
-    from src.modules.dashboard.server import DashboardServer
     from src.modules.dashboard.dependencies import set_dashboard_server
+    from src.modules.dashboard.server import DashboardServer
 
     cfg = DashboardConfig(host="127.0.0.1", port=60214)
     server = DashboardServer(
@@ -66,15 +65,14 @@ def dashboard_server(config_service):
 @pytest.fixture
 def client(dashboard_server, config_service):
     from fastapi.testclient import TestClient
+
     from src.modules.dashboard.api.router import create_app
 
     app = create_app()
     return TestClient(app)
 
 
-# ===========================================================================
 # 1. GET /api/v1/config
-# ===========================================================================
 
 
 class TestGetConfigEndpoint:
@@ -114,9 +112,7 @@ class TestGetConfigEndpoint:
         assert config["dashboard"]["port"] == 60214
 
 
-# ===========================================================================
 # 2. PATCH /api/v1/config — 统一管线写回
-# ===========================================================================
 
 
 class TestPatchConfigEndpoint:
@@ -263,9 +259,7 @@ class TestPatchConfigEndpoint:
         assert "空键" in resp.json()["detail"]
 
 
-# ===========================================================================
 # 3. POST /api/v1/config/batch — 事务语义
-# ===========================================================================
 
 
 class TestBatchConfigEndpoint:
@@ -345,9 +339,7 @@ class TestBatchConfigEndpoint:
         assert len(backups) == 1
 
 
-# ===========================================================================
 # 4. GET /api/v1/config/schema — 自描述分组
-# ===========================================================================
 
 
 class TestGetConfigSchemaEndpoint:

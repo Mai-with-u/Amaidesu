@@ -13,14 +13,12 @@ from dataclasses import dataclass
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer import canonical
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.tools.models import ToolExecutionResult
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 
 @dataclass(frozen=True)
@@ -73,9 +71,7 @@ def _make_planner() -> tuple[Planner, MagicMock, List[List[dict]]]:
     return planner, llm, captured
 
 
-# ---------------------------------------------------------------------------
 # canonical 映射
-# ---------------------------------------------------------------------------
 
 
 def test_canonical_batch_and_history_same_shape() -> None:
@@ -107,12 +103,9 @@ def test_canonical_text_view() -> None:
     assert text == "小明: 大家好 [id:m1]\n主播: 晚上好"
 
 
-# ---------------------------------------------------------------------------
 # 消息构成
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_message_composition_roles_and_order() -> None:
     """[system] → 历史（user/assistant）→ 本批（user）→ 参考段（user，序列尾）。
 
@@ -133,7 +126,6 @@ async def test_message_composition_roles_and_order() -> None:
     assert "## 环节描述" in ref["content"]  # 参考段在尾，且只含元数据段（无直播流）
 
 
-@pytest.mark.asyncio
 async def test_react_messages_appended_after_reference() -> None:
     """ReAct 循环的 assistant/tool 消息追加在参考段之后（append-only，不插中间）。"""
     # 快照捕获：planner 原地追加消息，必须复制每次调用时的列表
@@ -180,7 +172,6 @@ async def test_react_messages_appended_after_reference() -> None:
     assert sum(1 for m in second if m.get("content") == ref_content) == 1
 
 
-@pytest.mark.asyncio
 async def test_dedup_text_fallback_without_message_id() -> None:
     """message_id 为空的行靠文本兜底去重：历史尾部同文行剔除，弹幕只注入一次。
 
@@ -203,12 +194,9 @@ async def test_dedup_text_fallback_without_message_id() -> None:
     assert user_contents == ["小明: 大家好 [id:m1]", "小明: 来个落地水 [id:m2]", "小明: 上大分"]
 
 
-# ---------------------------------------------------------------------------
 # 跨窗逐字稳定（缓存硬要求）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_cross_window_byte_stability() -> None:
     """相邻两窗：旧消息（历史 + 上一窗本批）在新窗中逐字一致，只追加不重排。"""
     planner, llm, captured = _make_planner()

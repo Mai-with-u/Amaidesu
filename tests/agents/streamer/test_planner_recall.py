@@ -6,8 +6,6 @@ import json
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.planner import Planner, _Intent
 from src.agents.streamer.room_state import RoomState
@@ -77,7 +75,6 @@ def _topic_lines(text: str) -> List[str]:
     return [line for line in text.split("【已聊话题】", 1)[1].splitlines()[1:] if line.startswith("- ")]
 
 
-@pytest.mark.asyncio
 async def test_spoken_intents_listed_oldest_first() -> None:
     """说出口的每轮话题一句话按先后列进【已聊话题】，下一窗就看得到自己连着讲了什么。
 
@@ -96,7 +93,6 @@ async def test_spoken_intents_listed_oldest_first() -> None:
     assert section == ["- 刚刚 话题：报平安：满血了", "- 刚刚 话题：还是满血"]
 
 
-@pytest.mark.asyncio
 async def test_failed_reply_is_not_recorded() -> None:
     """表达失败（观众没听到）的打算不算说过。"""
     planner = _planner([_reply_call("报平安", "轻松")], reply_ok=False, config={"planner_max_steps": 1})
@@ -106,7 +102,6 @@ async def test_failed_reply_is_not_recorded() -> None:
     assert "【已聊话题】" not in await _reference(planner)
 
 
-@pytest.mark.asyncio
 async def test_intents_keep_only_configured_count() -> None:
     """只回看配置的轮数，最早的先出列。"""
     planner = _planner(
@@ -121,7 +116,6 @@ async def test_intents_keep_only_configured_count() -> None:
     assert "今天天气不错" not in text and "水车修好了" in text and "晚饭想吃火锅" in text
 
 
-@pytest.mark.asyncio
 async def test_zero_intents_disables_section() -> None:
     """配置为 0 时不列这一段。"""
     planner = _planner([_reply_call("报平安", "")], config={"planner_recent_intents_max": 0})
@@ -131,7 +125,6 @@ async def test_zero_intents_disables_section() -> None:
     assert "【已聊话题】" not in await _reference(planner)
 
 
-@pytest.mark.asyncio
 async def test_unread_summary_consumed_once() -> None:
     """未读摘要被一个决策窗取走后不再重复注入，直到后台写入新摘要。
 
@@ -154,7 +147,6 @@ def _relay_planner(result: ToolExecutionResult) -> tuple[Planner, MagicMock]:
     return Planner({}, MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False), registry
 
 
-@pytest.mark.asyncio
 async def test_game_report_supersedes_inflight_intents() -> None:
     """游戏回执到达后，回执前说出口的在途条目标注已被覆盖，不再带指引全文。
 
@@ -182,7 +174,6 @@ async def test_game_report_supersedes_inflight_intents() -> None:
     assert "懊恼" not in text  # 指引全文不随行注入（原话已在对话历史）
 
 
-@pytest.mark.asyncio
 async def test_intent_outside_delegation_window_is_not_superseded() -> None:
     """委派窗口之外的条目不受回执影响：委派开始前的旧话、上报后说的新话都完整保留。"""
     planner, _registry = _relay_planner(
@@ -215,7 +206,6 @@ async def test_intent_outside_delegation_window_is_not_superseded() -> None:
     assert "话题：包里攒了 19 块圆石" in section[1]
 
 
-@pytest.mark.asyncio
 async def test_delivered_relay_records_own_words_without_source() -> None:
     """送达的补充要求记主播自己的原话，不带附加的来源对话；游戏侧仍收到带来源的版本。"""
     planner, registry = _relay_planner(
@@ -239,7 +229,6 @@ async def test_delivered_relay_records_own_words_without_source() -> None:
     assert "来源对话" not in text
 
 
-@pytest.mark.asyncio
 async def test_rejected_or_blocked_relay_is_not_recorded() -> None:
     """拒收的、没有新输入被拦下的补充都没交代到，不能当成说过。"""
     planner, _registry = _relay_planner(

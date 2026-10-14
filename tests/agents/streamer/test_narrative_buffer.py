@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.narrative import NarrativeBuffer
 from src.agents.streamer.streamer_agent import StreamerAgent
@@ -77,7 +75,6 @@ def test_zero_ttl_replays_each_entry_once() -> None:
     assert buffer.render(now=2).text == ""
 
 
-@pytest.mark.asyncio
 async def test_agent_buffers_follow_narrative_config() -> None:
     """StreamerAgent 的身体近况缓冲按 [agents.streamer.narrative] 段的上限裁剪。"""
     prompt = MagicMock()

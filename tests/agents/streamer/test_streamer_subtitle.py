@@ -20,8 +20,6 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.event_bus import EventBus
@@ -78,12 +76,9 @@ class _MockTTSEngine:
         self.handle_speech_calls.append((text, utterance_id))
 
 
-# ---------------------------------------------------------------------------
 # subtitle_service 注入 + 正确参数调用
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_subtitle_service_show_called_with_speech_and_utterance_id():
     """speech 非空 + 字幕服务注入 → ``subtitle_service.show(text, utterance_id)`` 被调一次。"""
     subtitle_service = MagicMock()
@@ -123,7 +118,6 @@ async def test_subtitle_service_show_called_with_speech_and_utterance_id():
         await agent._on_stop()
 
 
-@pytest.mark.asyncio
 async def test_subtitle_service_shares_utterance_id_with_streamer_speech_and_tts():
     """字幕服务 ``show`` 收到的 ``utterance_id`` 与 STREAMER_SPEECH / TTS 队列一致。"""
     subtitle_service = MagicMock()
@@ -176,12 +170,9 @@ async def test_subtitle_service_shares_utterance_id_with_streamer_speech_and_tts
         await agent._on_stop()
 
 
-# ---------------------------------------------------------------------------
 # subtitle_service=None / 缺注入：跳过 + 不抛
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_subtitle_service_none_skips_show_without_error():
     """``subtitle_service=None`` → 跳过字幕调用，不抛异常。"""
     bus = EventBus()
@@ -208,12 +199,9 @@ async def test_subtitle_service_none_skips_show_without_error():
         await agent._on_stop()
 
 
-# ---------------------------------------------------------------------------
 # speech 空 / 仅空白：不触发字幕
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_empty_speech_does_not_trigger_subtitle():
     """speech 空 / 仅空白 → 不触发字幕调用（业务事实不存在）。"""
     subtitle_service = MagicMock()
@@ -247,12 +235,9 @@ async def test_empty_speech_does_not_trigger_subtitle():
         await agent._on_stop()
 
 
-# ---------------------------------------------------------------------------
 # 字幕服务抛异常：决策循环不受影响
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_subtitle_service_exception_does_not_break_decision_loop(loguru_capture):
     """字幕服务 ``show`` 抛异常 → _dispatch 兜底，决策循环不受影响。"""
     subtitle_service = MagicMock()

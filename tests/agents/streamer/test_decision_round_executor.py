@@ -90,12 +90,9 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
     return executor, deps
 
 
-# ---------------------------------------------------------------------------
 # happy：一轮决策的完整产出
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_execute_full_round_emits_stage_and_decision():
     executor, deps = _make_executor(dict(_OKAY_OUTCOME))
     batch = [MagicMock(message_id="m1", content="主播好", user=MagicMock(id="u1", name="观众"))]
@@ -146,7 +143,6 @@ async def test_execute_full_round_emits_stage_and_decision():
     deps["proactive_trigger"].record_trigger.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_execute_proactive_records_trigger_with_reason_body():
     outcome = dict(_OKAY_OUTCOME)
     outcome["reply_payload"] = {"speech": "大家好", "emotion": "", "actions": []}
@@ -160,12 +156,9 @@ async def test_execute_proactive_records_trigger_with_reason_body():
     assert deps["stats"].total_proactive == 0  # total_proactive 由调度半记，执行半不碰
 
 
-# ---------------------------------------------------------------------------
 # 边界：planner 失败路径（早返回语义逐字锁定）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_planner_exception_short_circuits_with_error_prefix():
     executor, deps = _make_executor(None, planner_error=True)
 
@@ -183,7 +176,6 @@ async def test_planner_exception_short_circuits_with_error_prefix():
     deps["speech"].dispatch.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_planner_no_reply_counts_no_action_and_replyer_failures():
     outcome = {
         "replied": False,
@@ -204,7 +196,6 @@ async def test_planner_no_reply_counts_no_action_and_replyer_failures():
     deps["speech"].dispatch.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_planner_no_reply_with_error_marks_planner_failure():
     outcome = {"replied": False, "reply_failures": 0, "error": "reply tool exploded"}
     executor, deps = _make_executor(outcome)
@@ -216,9 +207,7 @@ async def test_planner_no_reply_with_error_marks_planner_failure():
     assert deps["stats"].total_no_action == 1
 
 
-# ---------------------------------------------------------------------------
 # 阶段补充文案：原因码 → 可读中文（面板 detail 不裸奔英文单词）
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -252,7 +241,6 @@ def test_silent_reason_text_maps_known_codes(reason: str, expected: str):
     assert _silent_reason_text(reason) == expected
 
 
-@pytest.mark.asyncio
 async def test_execute_emits_human_readable_stage_detail():
     executor, deps = _make_executor(dict(_OKAY_OUTCOME))
 

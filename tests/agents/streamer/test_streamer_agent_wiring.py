@@ -27,8 +27,6 @@ import re
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.llm.client import LLMResponse
@@ -118,12 +116,9 @@ class _MockTTSEngine:
         self.setup_called += 1
 
 
-# ---------------------------------------------------------------------------
 # speech 入队：utterance_id 格式 + seq 递增
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_speech_enqueued_with_correct_utterance_id_format():
     """speech 非空 + TTS enabled → 入队 payload 含正确格式的 utterance_id。
 
@@ -165,7 +160,6 @@ async def test_speech_enqueued_with_correct_utterance_id_format():
         await agent._on_stop()
 
 
-@pytest.mark.asyncio
 async def test_utterance_seq_increments_per_call():
     """多次 dispatch → seq 递增；utterance_id 格式 ``utt_{ms}_{seq}``。"""
     engine = _MockTTSEngine()
@@ -208,12 +202,9 @@ async def test_utterance_seq_increments_per_call():
         await agent._on_stop()
 
 
-# ---------------------------------------------------------------------------
 # structured_content 非 dict 兜底（Y 模型：消费 dict，不再解析 JSON）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_payload_not_dict_logs_and_skips(loguru_capture):
     """structured_content 非 dict（list/str 等）→ 记录 WARN 日志，不入队。
 
@@ -238,12 +229,9 @@ async def test_payload_not_dict_logs_and_skips(loguru_capture):
         await agent._on_stop()
 
 
-# ---------------------------------------------------------------------------
 # TTS 关闭路径
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_tts_disabled_means_no_enqueue_and_no_vts_call():
     """speech_config.enabled=False → 不构造队列、不入队、不调 VTS。
 
@@ -280,7 +268,6 @@ async def test_tts_disabled_means_no_enqueue_and_no_vts_call():
         await agent._on_stop()
 
 
-@pytest.mark.asyncio
 async def test_speech_config_none_means_disabled():
     """speech_config=None（默认）→ TTS 关闭。"""
     agent = _build_streamer_agent(tts_engine=None, speech_config=None)
@@ -292,7 +279,6 @@ async def test_speech_config_none_means_disabled():
         await agent._on_stop()
 
 
-@pytest.mark.asyncio
 async def test_tts_enabled_but_no_engine_disables_pipeline():
     """TTS enabled 但 tts_engine=None → 降级关闭，队列不构造。"""
     agent = _build_streamer_agent(
@@ -307,7 +293,6 @@ async def test_tts_enabled_but_no_engine_disables_pipeline():
         await agent._on_stop()
 
 
-@pytest.mark.asyncio
 async def test_empty_speech_does_not_enqueue():
     """speech 为空字符串或仅空白 → 不入队、不发业务事件。"""
     engine = _MockTTSEngine()
@@ -333,12 +318,9 @@ async def test_empty_speech_does_not_enqueue():
         await agent._on_stop()
 
 
-# ---------------------------------------------------------------------------
 # 决策循环回归：TTS 关闭时正常完成（Y 模型：call_tools 形态）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_decision_loop_unaffected_when_tts_disabled():
     """TTS disabled → _make_two_stage_decision 仍正常完成（不因新管线报错）。
 

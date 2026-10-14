@@ -16,13 +16,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer import canonical
 from src.agents.streamer.config import StreamerConfig
+from src.agents.streamer.narrative import NarrativeEntry, render_narrative
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.narrative import NarrativeEntry, render_narrative
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.modules.events.payloads.live import LiveStartedPayload
@@ -86,12 +84,9 @@ def _make_agent(*, chat_repo: Any = None, session_manager: Any = None) -> Stream
     )
 
 
-# ---------------------------------------------------------------------------
 # 内存对话轮
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_unopened_session_keeps_last_question_for_next_round() -> None:
     """没开场次：主播问"要不要拉一下"，观众回"拉"时，历史里有上一问一答。"""
     agent = _make_agent(chat_repo=_FakeChatRepo([]), session_manager=_FakeSessionManager(None))
@@ -109,7 +104,6 @@ async def test_unopened_session_keeps_last_question_for_next_round() -> None:
     assert canonical.turn_to_message(history[0])["content"].startswith("调试观众: 麦麦会操作这个机器吗")
 
 
-@pytest.mark.asyncio
 async def test_open_session_merges_debug_message_with_stored_rows_by_time() -> None:
     """开着场次：调试注入的观众消息不落库，按发生时刻并入 live_chat 行；已落库的发言不重复。"""
     rows = [
@@ -139,7 +133,6 @@ async def test_open_session_merges_debug_message_with_stored_rows_by_time() -> N
     ]
 
 
-@pytest.mark.asyncio
 async def test_open_session_normal_batch_not_duplicated_in_memory() -> None:
     """开着场次的正常弹幕已经由落库链路写入 live_chat，内存不再另记一份。"""
     agent = _make_agent(chat_repo=_FakeChatRepo([]), session_manager=_FakeSessionManager(7))
@@ -150,7 +143,6 @@ async def test_open_session_normal_batch_not_duplicated_in_memory() -> None:
     assert agent._unpersisted_turns == []
 
 
-@pytest.mark.asyncio
 async def test_live_started_clears_memory_turns() -> None:
     """开播即清空开播前的调试对话，这一场历史从 live_chat 重新开始。"""
     agent = _make_agent(session_manager=_FakeSessionManager(None))
@@ -167,9 +159,7 @@ async def test_live_started_clears_memory_turns() -> None:
     assert agent._unpersisted_turns == []
 
 
-# ---------------------------------------------------------------------------
 # reply 工具拿到本批弹幕 + 同步执行顺序
-# ---------------------------------------------------------------------------
 
 
 def _planner_with(responses: List[Response], registry: MagicMock, reply_provider: Any) -> Planner:
@@ -188,7 +178,6 @@ def _planner_with(responses: List[Response], registry: MagicMock, reply_provider
     return planner
 
 
-@pytest.mark.asyncio
 async def test_reply_runs_after_sibling_tools_in_same_step() -> None:
     """模型把 reply 写在环节切换前面：环节切换仍被执行，且先于 reply。"""
     invoked: List[str] = []
@@ -222,7 +211,6 @@ async def test_reply_runs_after_sibling_tools_in_same_step() -> None:
     assert invoked == ["rundown_control", "streamer_reply"]
 
 
-@pytest.mark.asyncio
 async def test_planner_hands_round_batch_to_reply_tool() -> None:
     """reply 调用期间 reply 工具持有本批弹幕，调用结束后槽位清空。"""
     seen_batches: List[List[Any]] = []
@@ -265,9 +253,7 @@ def test_trim_batch_echo_drops_only_tail_copy_of_batch() -> None:
     assert [turn.content for turn in trimmed] == ["拉", "要不要拉一下？"]
 
 
-# ---------------------------------------------------------------------------
 # 叙事时间标注 + 付费情境
-# ---------------------------------------------------------------------------
 
 
 def test_narrative_marks_age_and_new_since_last_round() -> None:
@@ -285,7 +271,6 @@ def test_narrative_marks_age_and_new_since_last_round() -> None:
     ]
 
 
-@pytest.mark.asyncio
 async def test_forced_debug_batch_is_not_labeled_as_paid() -> None:
     """控制台点名必答，但没人付费：情境不说 SC，真有醒目留言时才说付费点名。"""
     captured: List[List[dict]] = []
@@ -312,7 +297,6 @@ async def test_forced_debug_batch_is_not_labeled_as_paid() -> None:
     assert "含付费消息：SC" in paid_ref
 
 
-@pytest.mark.asyncio
 async def test_registry_observation_keeps_one_copy_of_duplicated_json_body() -> None:
     """MCP 工具正文只是结构化结果的 JSON 时只给一份；正文另有信息时照常附上。"""
     structured = {"health": 20.0, "position": {"x": -86, "y": 105, "z": 27}}
@@ -337,12 +321,9 @@ async def test_registry_observation_keeps_one_copy_of_duplicated_json_body() -> 
     assert distinct["content"] == "附近有一块写着蜂房的牌子"
 
 
-# ---------------------------------------------------------------------------
 # 我手头在游戏里做的事：开始做事时的原话与进展进入每轮参考段
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_planner_sees_what_the_body_is_doing_until_it_reports() -> None:
     """开始做事后每轮都看得到自己手上的原话与进展；做完或卡住后状态随之改变，且全程第一人称。
 
@@ -454,7 +435,6 @@ def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
     assert "不带额外授权" in prompt and "【游戏里的聊天】每条行首" in prompt
 
 
-@pytest.mark.asyncio
 async def test_planner_reference_shows_game_chat_block() -> None:
     """游戏里的聊天单独成段进参考块，主动窗的情境说明不再只写冷场/定时。"""
     captured: List[List[dict]] = []

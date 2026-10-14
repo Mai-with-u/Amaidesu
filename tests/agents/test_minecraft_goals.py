@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-import pytest
-
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.maicraft import GoalRun, MaicraftReply, goal_run_of, reply_of
 from src.modules.tools.models import ToolInvocation
@@ -64,7 +62,6 @@ async def _launch(server: FakeMaicraft, watch: GoalWatch, ability: str = "maicra
     return run.goal_id
 
 
-@pytest.mark.asyncio
 async def test_first_read_only_sets_the_cursor_and_does_not_replay_old_events() -> None:
     """接手前就有的事件不补发：首次读取只建立游标。"""
     server, recorder = FakeMaicraft(), _Recorder()
@@ -77,7 +74,6 @@ async def test_first_read_only_sets_the_cursor_and_does_not_replay_old_events() 
     assert watch._cursor == 1
 
 
-@pytest.mark.asyncio
 async def test_finished_goal_is_read_in_full_and_no_longer_tracked() -> None:
     """目标结束：取它此刻的完整样子交出去，之后不再跟踪。"""
     server, recorder = FakeMaicraft(), _Recorder()
@@ -95,7 +91,6 @@ async def test_finished_goal_is_read_in_full_and_no_longer_tracked() -> None:
     assert not watch.tracking(goal_id)
 
 
-@pytest.mark.asyncio
 async def test_questions_are_handed_over_and_the_goal_stays_tracked() -> None:
     server, recorder = FakeMaicraft(), _Recorder()
     watch = _watch(server, recorder)
@@ -109,7 +104,6 @@ async def test_questions_are_handed_over_and_the_goal_stays_tracked() -> None:
     assert watch.tracking(goal_id)
 
 
-@pytest.mark.asyncio
 async def test_other_goals_are_ignored_and_body_events_pass_through() -> None:
     """别人下达的目标不管；生存需求的事件原样交给身体回调。"""
     server, recorder = FakeMaicraft(), _Recorder()
@@ -127,7 +121,6 @@ async def test_other_goals_are_ignored_and_body_events_pass_through() -> None:
     assert server.calls_to("goal") == [], "没在跟踪的目标不去查"
 
 
-@pytest.mark.asyncio
 async def test_after_a_world_change_missing_goals_are_reported_gone() -> None:
     """事件流换了：逐个查在跟踪的目标，查不到的如实说不在了。"""
     server, recorder = FakeMaicraft(), _Recorder()
@@ -142,7 +135,6 @@ async def test_after_a_world_change_missing_goals_are_reported_gone() -> None:
     assert not watch.tracking(goal_id)
 
 
-@pytest.mark.asyncio
 async def test_a_reused_id_for_another_ability_is_not_mistaken_for_the_old_goal() -> None:
     """换世界后编号撞上别的目标：能力都不一样，按原来的不在了处理。"""
     server, recorder = FakeMaicraft(), _Recorder()
@@ -159,7 +151,6 @@ async def test_a_reused_id_for_another_ability_is_not_mistaken_for_the_old_goal(
     assert recorder.changed == []
 
 
-@pytest.mark.asyncio
 async def test_unreadable_or_failed_reads_do_not_raise() -> None:
     """读事件失败：退避后重试，不抛出、不改游标。"""
     recorder = _Recorder()
@@ -184,7 +175,6 @@ async def test_unreadable_or_failed_reads_do_not_raise() -> None:
     assert watch._stream_id is None and recorder.changed == []
 
 
-@pytest.mark.asyncio
 async def test_a_death_recovery_question_is_handed_over_without_tracking_it() -> None:
     """死亡恢复是 Mod 自己挂出的决策：死亡照常算身体事件，提问读一次交给决策回调，不进跟踪名单。"""
     server, recorder = FakeMaicraft(), _Recorder()

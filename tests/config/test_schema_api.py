@@ -38,9 +38,7 @@ def _generate(cls) -> dict:
     return ConfigSchemaGenerator.generate_config_schema(cls)
 
 
-# ===========================================================================
 # 1. 输出格式
-# ===========================================================================
 
 
 class TestSchemaFormat:
@@ -70,9 +68,7 @@ class TestSchemaFormat:
         assert "llm_profiles" in schema["nested"]
 
 
-# ===========================================================================
 # 2. 字段形状
-# ===========================================================================
 
 
 class TestFieldShape:
@@ -103,9 +99,7 @@ class TestFieldShape:
             assert "zh_CN" in label, f"label must contain zh_CN, got {label}"
 
 
-# ===========================================================================
 # 3. 六根覆盖与自描述协议
-# ===========================================================================
 
 
 class TestSixRootSchemas:
@@ -153,9 +147,7 @@ class TestSixRootSchemas:
         assert "model" not in field_names
 
 
-# ===========================================================================
 # 4. readonly 透传
-# ===========================================================================
 
 
 class TestReadonlyPassthrough:
@@ -228,9 +220,7 @@ class TestUiMarkerPassthrough:
             assert fields[name].get("maxValue") == 65535, f"{name} 缺上界"
 
 
-# ===========================================================================
 # 参数化冒烟：六根逐个生成不抛
-# ===========================================================================
 
 
 @pytest.mark.parametrize("cls", _ALL_ROOTS, ids=lambda c: c.__name__)

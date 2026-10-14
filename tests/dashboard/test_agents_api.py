@@ -15,7 +15,7 @@ tests/modules/agents/test_supervisor.py 同一测试基建）。
 from __future__ import annotations
 
 from pathlib import Path
-from typing import AsyncGenerator, Generator, Iterable, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, AsyncGenerator, Generator, Iterable, Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -140,7 +140,7 @@ def _current_task_ledger() -> "TaskLedger":
     return server.task_tracker.ledger
 
 
-# ==================== GET /api/v1/agents ====================
+# GET /api/v1/agents
 
 
 def test_agents_list_non_empty_and_covers_enabled(client: TestClient) -> None:
@@ -166,7 +166,7 @@ def test_agents_list_entry_fields_complete(client: TestClient) -> None:
     assert entry["enabled"] is False
 
 
-# ==================== GET /api/v1/agents/{name}/state ====================
+# GET /api/v1/agents/{name}/state
 
 
 def test_agent_state_fields_complete(client: TestClient) -> None:
@@ -186,7 +186,7 @@ def test_agent_state_unknown_name_returns_404(client: TestClient) -> None:
     assert "ghost" in resp.json()["detail"]
 
 
-# ==================== POST /api/v1/agents/{name}/control ====================
+# POST /api/v1/agents/{name}/control
 
 
 def test_pause_and_resume_need_no_confirm(client: TestClient) -> None:
@@ -253,7 +253,7 @@ def test_control_unknown_agent_returns_404(client: TestClient) -> None:
     assert "ghost" in resp.json()["detail"]
 
 
-# ==================== POST /api/v1/agents/{name}/prompt ====================
+# POST /api/v1/agents/{name}/prompt
 
 
 def test_prompt_delivers_with_operator_source(client: TestClient, manager: AgentManager) -> None:
@@ -281,7 +281,7 @@ def test_prompt_refusal_returns_409(client: TestClient, manager: AgentManager) -
     assert "拒收" in resp.json()["detail"]
 
 
-# ==================== agent_control 未注入 ====================
+# agent_control 未注入
 
 
 def test_agents_endpoints_return_503_without_control(config_dir: Path) -> None:
@@ -308,7 +308,7 @@ def test_agents_endpoints_return_503_without_control(config_dir: Path) -> None:
         set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-# ==================== POST /api/v1/agents/{name}/tasks/{task_id}/cancel ====================
+# POST /api/v1/agents/{name}/tasks/{task_id}/cancel
 
 
 def test_cancel_task_succeeds(client: TestClient, manager: AgentManager) -> None:
@@ -336,7 +336,7 @@ def test_cancel_task_unknown_or_terminal_returns_404(client: TestClient, manager
     assert "deleg_gone" in resp.json()["detail"]
 
 
-# ==================== POST /api/v1/agents/{name}/delegate ====================
+# POST /api/v1/agents/{name}/delegate
 
 
 def test_delegate_registers_ledger_and_delivers(client: TestClient, manager: AgentManager) -> None:

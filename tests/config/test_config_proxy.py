@@ -25,10 +25,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field
 
-
-# =============================================================================
 # Test data: simple dict and Pydantic model
-# =============================================================================
 
 
 class _MockConfig(BaseModel):
@@ -42,9 +39,7 @@ class _MockConfig(BaseModel):
     show_danmaku: bool = Field(default=True, description="显示弹幕")
 
 
-# =============================================================================
 # __getitem__ forwarding
-# =============================================================================
 
 
 class TestGetitemForwarding:
@@ -67,9 +62,7 @@ class TestGetitemForwarding:
             _ = proxy["missing"]
 
 
-# =============================================================================
 # __getattr__ forwarding
-# =============================================================================
 
 
 class TestGetattrForwarding:
@@ -118,9 +111,7 @@ class TestGetattrForwarding:
         assert proxy.show_danmaku is True
 
 
-# =============================================================================
 # .get() forwarding
-# =============================================================================
 
 
 class TestGetForwarding:
@@ -148,9 +139,7 @@ class TestGetForwarding:
         assert proxy.get("missing") is None
 
 
-# =============================================================================
 # Hot-reload: swap underlying dict
-# =============================================================================
 
 
 class TestHotReload:
@@ -221,9 +210,7 @@ class TestHotReload:
         assert old_ref is proxy
 
 
-# =============================================================================
 # len(), "in", iteration
-# =============================================================================
 
 
 class TestContainerDunder:
@@ -281,9 +268,7 @@ class TestContainerDunder:
         assert list(proxy) == ["new"]
 
 
-# =============================================================================
 # Pydantic model attribute access
-# =============================================================================
 
 
 class TestPydanticAccess:
@@ -314,9 +299,7 @@ class TestPydanticAccess:
         assert proxy.get("missing", "fallback") == "fallback"
 
 
-# =============================================================================
 # Thread-safety / concurrency safety
-# =============================================================================
 
 
 class TestConcurrency:
@@ -378,9 +361,7 @@ class TestConcurrency:
             assert not_has is True
 
 
-# =============================================================================
 # __setattr__: only _getter itself can be set
-# =============================================================================
 
 
 class TestSetattrBehavior:
@@ -421,9 +402,7 @@ class TestSetattrBehavior:
         assert proxy.foo == 123
 
 
-# =============================================================================
 # Repr / diagnostics
-# =============================================================================
 
 
 class TestRepr:

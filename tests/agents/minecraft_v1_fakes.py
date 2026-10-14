@@ -73,7 +73,7 @@ class FakeMaicraft(BaseToolProvider):
         self._next_id = 1
         self._new_event = asyncio.Event()
 
-    # ----- 工具清单与分发 -----
+    # 工具清单与分发
 
     def list_tools(self) -> List[ToolSpec]:
         return [
@@ -101,7 +101,7 @@ class FakeMaicraft(BaseToolProvider):
     def calls_to(self, name: str) -> List[Dict[str, Any]]:
         return [arguments for called, arguments in self.calls if called == name]
 
-    # ----- 五个工具 -----
+    # 五个工具
 
     async def _observe(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         what = arguments.get("what", "scene")
@@ -165,7 +165,7 @@ class FakeMaicraft(BaseToolProvider):
             {"stream_id": self.stream_id, "cursor": cursor, "has_more": False, "cursor_status": status, "events": page}
         )
 
-    # ----- 测试推进目标 -----
+    # 测试推进目标
 
     def _append(self, kind: str, goal_id: int, message: str, status: Optional[str] = None) -> None:
         event: Dict[str, Any] = {"cursor": len(self.events) + 1, "kind": kind, "goal_id": goal_id, "message": message}

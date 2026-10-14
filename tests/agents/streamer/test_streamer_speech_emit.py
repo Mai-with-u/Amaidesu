@@ -20,8 +20,6 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
 from src.agents.streamer.speech_dispatcher import SpeechDispatcher
@@ -106,12 +104,9 @@ async def _wait_speech(
     return received[0] if received else None
 
 
-# ---------------------------------------------------------------------------
 # TTS 关闭仍 emit 业务事件
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_streamer_speech_emitted_when_tts_disabled():
     """speech 非空 + TTS 关闭 → 仍 emit ``streamer.speech``（业务事实与 TTS 无关）。"""
     bus = EventBus()
@@ -146,7 +141,6 @@ async def test_streamer_speech_emitted_when_tts_disabled():
         await agent._on_stop()
 
 
-@pytest.mark.asyncio
 async def test_streamer_speech_emitted_when_tts_enabled_and_no_engine():
     """speech_config.enabled=True 但 tts_engine=None → 降级关闭，仍 emit。"""
     bus = EventBus()
@@ -177,12 +171,9 @@ async def test_streamer_speech_emitted_when_tts_enabled_and_no_engine():
         await agent._on_stop()
 
 
-# ---------------------------------------------------------------------------
 # TTS 启用：emit 与 TTS 队列复用同一 utterance_id
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_streamer_speech_and_tts_share_same_utterance_id():
     """TTS 启用时 STREAMER_SPEECH 与 TTS 入队使用同一 utterance_id。"""
     bus = EventBus()
@@ -233,12 +224,9 @@ async def test_streamer_speech_and_tts_share_same_utterance_id():
         await agent._on_stop()
 
 
-# ---------------------------------------------------------------------------
 # speech 空 / 仅空白：不 emit
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_empty_speech_does_not_emit_streamer_speech():
     """speech 空 / 仅空白 → 不 emit 业务事件（业务事实不存在）。"""
     bus = EventBus()
@@ -268,9 +256,7 @@ async def test_empty_speech_does_not_emit_streamer_speech():
         await agent._on_stop()
 
 
-# ---------------------------------------------------------------------------
 # 顺序契约：speech 先于轮末 decision 与 idle 状态发出
-# ---------------------------------------------------------------------------
 
 _REPLY_OUTCOME = {
     "replied": True,
@@ -285,7 +271,6 @@ _REPLY_OUTCOME = {
 }
 
 
-@pytest.mark.asyncio
 async def test_speech_event_emitted_before_round_end_events():
     """``streamer.speech`` 同步发出：先于本轮 ``planner.decision`` 与 idle 状态。
 

@@ -9,12 +9,10 @@
 """
 
 from __future__ import annotations
-import asyncio
 
+import asyncio
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.planner import Planner
@@ -55,12 +53,9 @@ def _make_message(message_type: str, content: str = "") -> RoomMessagePayload:
     )
 
 
-# =============================================================================
 # 付费事件 → 缓冲 + forced 判定
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_paid_messages_buffered_with_forced_flag() -> None:
     """三类付费消息入缓冲且 TimingGate 判定 forced=true（类型驱动）。"""
     agent = _build_agent()
@@ -71,7 +66,6 @@ async def test_paid_messages_buffered_with_forced_flag() -> None:
         assert agent._buffer.force is True, message_type
 
 
-@pytest.mark.asyncio
 async def test_paid_events_subscribed_and_routed() -> None:
     """事件订阅接线：bus 上发三类付费事件 → 回调进缓冲（早退已去除）。"""
     bus = EventBus()
@@ -96,12 +90,9 @@ async def test_paid_events_subscribed_and_routed() -> None:
         await bus.cleanup()
 
 
-# =============================================================================
 # 决策轮：paid → forced=True 驱动 Planner；普通 danmaku → forced=False
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_paid_message_flushes_decision_with_forced_true() -> None:
     """付费消息触发立即 flush，Planner 以 forced=True 进入决策轮。"""
     agent = _build_agent()
@@ -115,7 +106,6 @@ async def test_paid_message_flushes_decision_with_forced_true() -> None:
     assert plan_mock.await_args.kwargs.get("forced") is True
 
 
-@pytest.mark.asyncio
 async def test_normal_danmaku_not_forced_and_no_immediate_flush() -> None:
     """普通弹幕：不误置 forced，窗口未到期不触发决策轮。"""
     agent = _build_agent()
@@ -129,12 +119,9 @@ async def test_normal_danmaku_not_forced_and_no_immediate_flush() -> None:
     plan_mock.assert_not_awaited()
 
 
-# =============================================================================
 # Planner forced 情境标注（钉住）
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_planner_forced_context_contains_priority_annotation() -> None:
     """forced 批次 → 参考段含"优先回应"情境标注。"""
     planner = Planner(

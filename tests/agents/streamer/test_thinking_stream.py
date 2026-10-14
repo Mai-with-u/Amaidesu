@@ -12,8 +12,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, cast
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.thinking_stream import ThinkingStreamContext
@@ -21,10 +19,7 @@ from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.modules.llm.payload import Response
 from src.modules.tools.models import ToolInvocation
 
-
-# ---------------------------------------------------------------------------
 # ThinkingStreamContext
-# ---------------------------------------------------------------------------
 
 
 class _RecordingSink:
@@ -74,9 +69,7 @@ def test_context_replyer_phase_gets_step_1():
     assert sink.calls[0]["round_id"] == "round_9"
 
 
-# ---------------------------------------------------------------------------
 # Planner：thinking 透传到 generate
-# ---------------------------------------------------------------------------
 
 
 def _make_planner() -> tuple[Planner, Dict[str, Any]]:
@@ -103,7 +96,6 @@ def _make_planner() -> tuple[Planner, Dict[str, Any]]:
     return planner, captured
 
 
-@pytest.mark.asyncio
 async def test_planner_passes_thinking_callback_to_llm():
     planner, captured = _make_planner()
     sink = _RecordingSink()
@@ -117,7 +109,6 @@ async def test_planner_passes_thinking_callback_to_llm():
     assert any(c["text_delta"] == "决策中思考" and c["phase"] == "planner" for c in sink.calls)
 
 
-@pytest.mark.asyncio
 async def test_planner_without_thinking_passes_none():
     planner, captured = _make_planner()
 
@@ -126,9 +117,7 @@ async def test_planner_without_thinking_passes_none():
     assert captured.get("on_delta") is None
 
 
-# ---------------------------------------------------------------------------
 # ReplyToolProvider：思考回调一次性槽位
-# ---------------------------------------------------------------------------
 
 
 def _make_provider_with_replyer_capture() -> tuple[ReplyToolProvider, Dict[str, Any]]:
@@ -147,7 +136,6 @@ def _make_provider_with_replyer_capture() -> tuple[ReplyToolProvider, Dict[str, 
     return provider, captured
 
 
-@pytest.mark.asyncio
 async def test_provider_sets_and_clears_thinking_callback():
     provider, captured = _make_provider_with_replyer_capture()
     sink = _RecordingSink()
@@ -170,12 +158,9 @@ async def test_provider_sets_and_clears_thinking_callback():
     assert provider._thinking_callback is None
 
 
-# ---------------------------------------------------------------------------
 # ReplyToolProvider：观测旁路（planner.verdict）异常隔离
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_provider_emit_verdict_failure_does_not_block_invoke():
     """观测旁路失败不应反噬调用方：emit 抛异常时 invoke 仍正常返回结果。
 

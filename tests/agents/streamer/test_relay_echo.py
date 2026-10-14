@@ -9,8 +9,6 @@ from __future__ import annotations
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftInstruction
@@ -62,7 +60,6 @@ def _msg(text: str) -> RoomMessagePayload:
     )
 
 
-@pytest.mark.asyncio
 async def test_rundown_window_without_new_input_does_not_relay() -> None:
     """流程单推进窗没有新输入：递话被拦下，模型收到"直接说话"的观察，游戏侧什么也收不到。"""
     invoked: List[ToolInvocation] = []
@@ -71,7 +68,6 @@ async def test_rundown_window_without_new_input_does_not_relay() -> None:
     assert invoked == []
 
 
-@pytest.mark.asyncio
 async def test_game_request_and_reminder_windows_still_relay() -> None:
     """游戏侧请求定夺、运营提醒到达的主动窗仍可补充要求。"""
     invoked: List[ToolInvocation] = []
@@ -85,7 +81,6 @@ async def test_game_request_and_reminder_windows_still_relay() -> None:
     assert [call.tool_name for call in invoked] == ["framework_prompt"]
 
 
-@pytest.mark.asyncio
 async def test_only_fresh_game_chat_counts_as_new_input() -> None:
     """冷场窗里只有看过的旧聊天不算新输入，递话被拦；本窗新到玩家原话才放行。"""
     old_chat = "[3 分钟前] [minecraft] 玩家 Steve：在吗"
@@ -105,7 +100,6 @@ async def test_only_fresh_game_chat_counts_as_new_input() -> None:
     assert [call.tool_name for call in invoked] == ["framework_prompt"]
 
 
-@pytest.mark.asyncio
 async def test_relay_with_viewer_words_carries_them_verbatim() -> None:
     """弹幕窗的补充要求附上观众逐字原话，游戏侧不只看到一层转述。"""
     invoked: List[ToolInvocation] = []

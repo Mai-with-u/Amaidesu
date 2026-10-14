@@ -16,20 +16,17 @@ from typing import Any, Dict, List
 
 import pytest
 
+from src.modules.config import upgrade
+from src.modules.config.errors import ConfigValidationError
 from src.modules.config.file_meta import CONFIG_BASELINE_VERSION
 from src.modules.config.multi_file_loader import (
     generate_default_configs,
     get_config_version,
     load_config_dir,
 )
-from src.modules.config import upgrade
-from src.modules.config.errors import ConfigValidationError
 from src.modules.config.upgrade import advance_file_versions
 
-
-# ---------------------------------------------------------------------------
 # 演示样例钩子（自测用，不注册生效）
-# ---------------------------------------------------------------------------
 
 
 def sample_hook_v2_0_31(data: Dict[str, Any]) -> List[str]:
@@ -57,9 +54,7 @@ def sample_cross_hook(host_data: Dict[str, Any], target_data: Dict[str, Any]) ->
     return ["agents.sample_migrated", "tools.sample_received"]
 
 
-# ---------------------------------------------------------------------------
 # 调度器单测
-# ---------------------------------------------------------------------------
 
 
 class TestAdvanceFileVersions:
@@ -219,9 +214,7 @@ class TestAdvanceFileVersions:
         assert changed["tools.toml"] == []
 
 
-# ---------------------------------------------------------------------------
 # 加载管线闭环（真实文件）
-# ---------------------------------------------------------------------------
 
 
 class TestVersionPipeline:

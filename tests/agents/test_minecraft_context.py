@@ -44,7 +44,6 @@ def history() -> list[dict]:
     return messages
 
 
-@pytest.mark.asyncio
 async def test_checkpoint_preserves_facts_and_recent_protocol_groups_then_stays_stable() -> None:
     """整理一次后正常追加不再改旧消息，原始授权和未知结果独立于模型摘要保留。"""
     llm = MagicMock()
@@ -80,7 +79,6 @@ async def test_checkpoint_preserves_facts_and_recent_protocol_groups_then_stays_
     assert messages[: len(stable)] == stable and llm.generate.await_count == 1
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "response",
     [
@@ -101,7 +99,6 @@ async def test_failed_checkpoint_keeps_original_history(response: Response) -> N
     assert messages == before and compactor.checkpoints == 0
 
 
-@pytest.mark.asyncio
 async def test_compact_summarize_request_carries_refs_not_base64() -> None:
     """带图历史的压缩摘要请求只携带引用句柄，体积与纯文本历史同量级。
 
@@ -175,7 +172,6 @@ def test_interrupted_calls_have_unknown_receipts_and_config_stays_in_minecraft()
     assert "context" not in config.text_adv.model_dump()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "first",
     [
@@ -199,7 +195,6 @@ async def test_oversized_or_incomplete_summary_is_rewritten_before_commit(first:
     assert "已确认接口" in messages[2]["content"] and "摘" * 100 not in str(messages)
 
 
-@pytest.mark.asyncio
 async def test_failed_rewrite_is_bounded_by_remaining_budget() -> None:
     """只剩一次预算时不得隐藏重试，失败原因包含实际长度且原历史完整。"""
     llm = MagicMock()
@@ -212,7 +207,6 @@ async def test_failed_rewrite_is_bounded_by_remaining_budget() -> None:
     assert compactor.last_calls == 1 and messages == before
 
 
-@pytest.mark.asyncio
 async def test_summary_reads_inert_history_and_rejects_textual_tool_calls() -> None:
     """复现 DSML 混入摘要：旧调用只作为数据读取，模型写出的未执行动作必须被拒绝后重写。"""
     llm = MagicMock()
@@ -233,7 +227,6 @@ async def test_summary_reads_inert_history_and_rejects_textual_tool_calls() -> N
     assert "十九个准备目标" in messages[2]["content"]
 
 
-@pytest.mark.asyncio
 async def test_repeated_textual_calls_do_not_replace_history() -> None:
     """连续两次伪调用都不能覆盖未完成机器的原要求、方块证据和工具回执。"""
     llm = MagicMock()
@@ -248,7 +241,6 @@ async def test_repeated_textual_calls_do_not_replace_history() -> None:
     assert messages == before and compactor.last_calls == 2
 
 
-@pytest.mark.asyncio
 async def test_checkpoint_compares_old_doubts_with_current_decisions() -> None:
     """旧片段仍在讨论目标时，摘要必须看到后续已经采用的解释和真实执行回执。"""
     llm = MagicMock()
@@ -272,7 +264,6 @@ async def test_checkpoint_compares_old_doubts_with_current_decisions() -> None:
     assert "大索引由主上下文保存" in messages[1]["content"]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("used_steps", [49, 50, 75])
 async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: int) -> None:
     """长任务接近或超过五十步时仍可重写摘要，随后继续核验并交付原游戏目标。"""
@@ -296,7 +287,6 @@ async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: i
     assert agent._context_compactor.last_calls == 2
 
 
-@pytest.mark.asyncio
 async def test_later_checkpoint_appends_segment_without_rewriting_earlier_one() -> None:
     """第二次整理只把上次以来的原始记录压成新一段，第一段原样保留、不进摘要请求。"""
     llm = MagicMock()
@@ -319,7 +309,6 @@ async def test_later_checkpoint_appends_segment_without_rewriting_earlier_one() 
     assert "第一段：已查清资料" not in str(llm.generate.call_args_list[1].args[0][1])
 
 
-@pytest.mark.asyncio
 async def test_oversized_segments_fold_into_new_one() -> None:
     """旧摘要段总量超过预算两成时，下次整理把它们一并并入新的一段，避免摘要段无限累积。"""
     llm = MagicMock()
@@ -363,7 +352,6 @@ def _history_with_unread_receipt(receipt_chars: int) -> list[dict]:
     return messages
 
 
-@pytest.mark.asyncio
 async def test_unread_oversized_receipt_is_read_before_one_compaction() -> None:
     """最新回执还没读、整理后仍超预算时本轮跳过；读完后下一轮一次整理到预算内。
 
@@ -396,7 +384,6 @@ async def test_unread_oversized_receipt_is_read_before_one_compaction() -> None:
     assert llm.generate.await_count == 1 and tokens(messages) < config.max_tokens
 
 
-@pytest.mark.asyncio
 async def test_far_oversized_context_still_compacts_before_reading() -> None:
     """超过预算 1.5 倍时不再跳过，照常整理旧历史，避免撞上模型上下文窗口。"""
     llm = MagicMock()

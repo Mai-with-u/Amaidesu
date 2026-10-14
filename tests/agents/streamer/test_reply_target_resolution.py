@@ -16,14 +16,12 @@ import asyncio
 from typing import List, Optional
 from unittest.mock import MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.speech import StreamerSpeechPayload
 
 
 def _make_minimal_agent(*, event_bus: Optional[EventBus] = None) -> StreamerAgent:
@@ -60,9 +58,7 @@ def _make_msg(
     )
 
 
-# ---------------------------------------------------------------------------
 # _resolve_reply_target_user：5 个匹配/兜底分支
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_target_by_message_id():
@@ -111,12 +107,9 @@ def test_resolve_target_empty_batch():
     assert agent._rounds._resolve_reply_target_user(plan, []) is None
 
 
-# ---------------------------------------------------------------------------
 # _emit_streamer_speech：透传 target_user_id 到 StreamerSpeechPayload
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_emit_streamer_speech_passes_target():
     """_emit_streamer_speech 接受 target_user_id 并透传到 StreamerSpeechPayload。"""
     bus = EventBus()
@@ -144,7 +137,6 @@ async def test_emit_streamer_speech_passes_target():
 class TestReplyToMessageIdResolution:
     """plan.reply_to（Planner 指向的具体弹幕 message_id）优先于 target 文本匹配。"""
 
-    @pytest.mark.asyncio
     async def test_reply_to_hits_exact_message_id(self) -> None:
         agent = _make_minimal_agent()
         batch = [
@@ -155,7 +147,6 @@ class TestReplyToMessageIdResolution:
         user_id = agent._rounds._resolve_reply_target_user(plan, batch)
         assert user_id == "u2", "reply_to 应精确命中对应弹幕的观众"
 
-    @pytest.mark.asyncio
     async def test_reply_to_miss_returns_none_no_fallback(self) -> None:
         agent = _make_minimal_agent()
         batch = [_make_msg(text="今天玩什么？", user_id="u1", message_id="m1")]
@@ -163,7 +154,6 @@ class TestReplyToMessageIdResolution:
         user_id = agent._rounds._resolve_reply_target_user(plan, batch)
         assert user_id is None, "reply_to 未命中时不做文本兜底（防误关联）"
 
-    @pytest.mark.asyncio
     async def test_speech_payload_carries_reply_to_message_id(self) -> None:
         """_dispatch_speech_and_emotion 把 reply_to_message_id 透传到 streamer.speech 事件。"""
         bus = EventBus()

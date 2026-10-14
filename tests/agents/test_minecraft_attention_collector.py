@@ -23,8 +23,8 @@ from pydantic import ValidationError
 
 from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
 from src.agents.minecraft.attention_matrix import KIND_TO_EVENT, classify, summarize, without_coordinates
-from src.modules.collectors.base import BaseCollector, CollectorState
 from src.modules.agents.companions import build_companion_collectors, owner_of
+from src.modules.collectors.base import BaseCollector, CollectorState
 from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
@@ -57,9 +57,7 @@ async def _primed(bus: _FakeEventBus, cursor: int = 5) -> tuple[MaicraftAttentio
     return collector, client
 
 
-# ---------------------------------------------------------------------------
 # 契约面
-# ---------------------------------------------------------------------------
 
 
 def test_collector_metadata_and_registration() -> None:
@@ -165,12 +163,9 @@ def test_body_payload_requires_game_and_kind() -> None:
         BodyEventPayload(kind="reflex_started", summary="身体先停下手上的活处理急事")
 
 
-# ---------------------------------------------------------------------------
 # 增量读取与转发
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_first_read_skips_the_backlog_without_forwarding() -> None:
     """首读拿到的是流里最早保留的事件：翻到最新再开始，陈年事件不灌进系统。"""
     bus = _FakeEventBus()
@@ -188,7 +183,6 @@ async def test_first_read_skips_the_backlog_without_forwarding() -> None:
     assert client.read_calls[1]["arguments"] == {"stream_id": "stream-A", "after_cursor": 1, "wait_ms": 0}
 
 
-@pytest.mark.asyncio
 async def test_incremental_read_forwards_only_body_encounters() -> None:
     """增量读取：只把身体遭遇转出去，目标运行的事件留给游戏 Agent。"""
     bus = _FakeEventBus()
@@ -222,7 +216,6 @@ async def test_incremental_read_forwards_only_body_encounters() -> None:
     assert collector._cursor == 8
 
 
-@pytest.mark.asyncio
 async def test_step_finished_forwards_to_milestone_without_coordinates() -> None:
     """步进完成 → game.milestone：结论句原样转出（去坐标/观察编号），目标完成仍不转发。"""
     bus = _FakeEventBus()
@@ -249,7 +242,6 @@ async def test_step_finished_forwards_to_milestone_without_coordinates() -> None
     assert "-9" not in payload.message
 
 
-@pytest.mark.asyncio
 async def test_finished_temporary_task_is_marked_resolved() -> None:
     bus = _FakeEventBus()
     collector, client = await _primed(bus)
@@ -261,7 +253,6 @@ async def test_finished_temporary_task_is_marked_resolved() -> None:
     assert name == CoreEvents.GAME_BODY_REFLEX_FINISHED and payload.resolved is True
 
 
-@pytest.mark.asyncio
 async def test_stream_change_resets_cursor_without_forwarding_history() -> None:
     """换了世界或 Mod 重启：事件流换新编号，只重新建立游标，旧流和新流的积压都不转发。"""
     bus = _FakeEventBus()
@@ -276,7 +267,6 @@ async def test_stream_change_resets_cursor_without_forwarding_history() -> None:
     assert collector._stream_id == "stream-B" and collector._cursor == 1
 
 
-@pytest.mark.asyncio
 async def test_read_failure_keeps_cursor_and_surfaces_to_the_loop() -> None:
     """读取失败：游标不动（那一段事件不能因此永久丢失），异常上抛给采集循环处理重连。"""
     bus = _FakeEventBus()
@@ -290,7 +280,6 @@ async def test_read_failure_keeps_cursor_and_surfaces_to_the_loop() -> None:
     assert bus.events == []
 
 
-@pytest.mark.asyncio
 async def test_mod_without_events_tool_is_not_ready(monkeypatch: pytest.MonkeyPatch, loguru_capture: Any) -> None:
     """连上的不是 MaiCraft v1（没有 events 工具）：不当成就绪，如实说明原因。"""
 
@@ -306,7 +295,6 @@ async def test_mod_without_events_tool_is_not_ready(monkeypatch: pytest.MonkeyPa
     assert any("events" in record["message"] for record in _unavailable_warnings(loguru_capture))
 
 
-@pytest.mark.asyncio
 async def test_collect_loop_survives_unavailable_game(monkeypatch: pytest.MonkeyPatch) -> None:
     """游戏没起来时：启动不失败、循环不终止，连接就绪后照常转发。"""
 
@@ -333,16 +321,13 @@ async def test_collect_loop_survives_unavailable_game(monkeypatch: pytest.Monkey
     assert collector.state == CollectorState.STOPPED
 
 
-# ---------------------------------------------------------------------------
 # 常驻重试：不刷屏、不硬撞
-# ---------------------------------------------------------------------------
 
 
 def _unavailable_warnings(cap: Any) -> List[Dict[str, Any]]:
     return [r for r in cap.records if r["level"] == "WARNING" and "事件流不可用" in r["message"]]
 
 
-@pytest.mark.asyncio
 async def test_unavailable_reported_once_per_reason(loguru_capture: Any) -> None:
     """同因不可用只 warning 一次；理由变化、或接上之后再次失败，才重新报。"""
     collector = _collector(_FakeEventBus())
@@ -362,7 +347,6 @@ async def test_unavailable_reported_once_per_reason(loguru_capture: Any) -> None
     await collector._close_client(collector._client)
 
 
-@pytest.mark.asyncio
 async def test_connect_failure_backs_off_up_to_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     """连不上时按 2 倍退避重试、60 秒封顶（不按最短间隔硬撞）。"""
     collector = MaicraftAttentionCollector(  # type: ignore[arg-type]

@@ -3,14 +3,11 @@
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
 from src.modules.tools.models import ToolExecutionResult
 
 
-@pytest.mark.asyncio
 async def test_delegation_keeps_source_without_rewriting_model_history() -> None:
     """即使规划摘要泛化了目标，接收方仍看到原词和禁用范围；原工具请求对象不被原地修改。
 
@@ -37,7 +34,6 @@ async def test_delegation_keeps_source_without_rewriting_model_history() -> None
     assert json.loads(result)["accepted"] is True
 
 
-@pytest.mark.asyncio
 async def test_source_does_not_create_an_instruction_or_change_other_tools() -> None:
     """没有目标时仍交给原有校验拒绝；普通查询不附带观众对话。"""
     registry = MagicMock()

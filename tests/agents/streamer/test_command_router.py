@@ -9,13 +9,11 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.command.router import CommandRouter
 from src.agents.streamer.config import StreamerCommandConfig
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-from src.modules.tools.models import ToolExecutionResult
 from src.modules.time_utils import now_ms
+from src.modules.tools.models import ToolExecutionResult
 
 _MAPPINGS = {"come": "到主播身边来", "sleep": "回床睡觉"}
 
@@ -51,19 +49,15 @@ def _ok_registry() -> MagicMock:
     return registry
 
 
-# =============================================================================
 # 四类分支
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_non_command_text_not_consumed() -> None:
     """非命令文本返回 False，调用方继续进决策链。"""
     router = _make_router(_ok_registry())
     assert await router.try_dispatch(_make_danmaku("主播好可爱")) is False
 
 
-@pytest.mark.asyncio
 async def test_out_of_whitelist_silently_dropped() -> None:
     """白名单外命令静默丢弃：消费消息但不触发 invoke。"""
     registry = _ok_registry()
@@ -72,7 +66,6 @@ async def test_out_of_whitelist_silently_dropped() -> None:
     registry.invoke.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_rate_limit_drops_excess_commands() -> None:
     """同一用户窗口内超过 rate_max 条后，后续命令被丢弃（不 invoke）。"""
     registry = _ok_registry()
@@ -88,7 +81,6 @@ async def test_rate_limit_drops_excess_commands() -> None:
     assert registry.invoke.await_count == 3
 
 
-@pytest.mark.asyncio
 async def test_whitelisted_command_delegates_with_contract_arguments() -> None:
     """命中白名单：framework_delegate 收到 agent/instruction 契约参数与 source=streamer。
 
@@ -105,7 +97,6 @@ async def test_whitelisted_command_delegates_with_contract_arguments() -> None:
     assert invocation.source == "streamer"
 
 
-@pytest.mark.asyncio
 async def test_configured_target_passed_through() -> None:
     """显式配置的目标注册名原样透传（多游戏并存时点名用）。"""
     registry = _ok_registry()
@@ -117,7 +108,6 @@ async def test_configured_target_passed_through() -> None:
     }
 
 
-@pytest.mark.asyncio
 async def test_delegate_accept_failure_still_consumed() -> None:
     """委派受理失败（目标不在名册）：拒绝执行、消息仍被消费、不抛异常。"""
     registry = MagicMock()
@@ -132,7 +122,6 @@ async def test_delegate_accept_failure_still_consumed() -> None:
     assert await router.try_dispatch(_make_danmaku("/come")) is True
 
 
-@pytest.mark.asyncio
 async def test_missing_registry_warns_and_consumes() -> None:
     """ToolRegistry 缺失：告警、不委派、消息被消费（不进决策链）。"""
     router = _make_router(None)

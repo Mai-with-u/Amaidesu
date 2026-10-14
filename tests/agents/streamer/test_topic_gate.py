@@ -5,8 +5,6 @@ from __future__ import annotations
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.planner import Planner, _Intent
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.topic_gate import check_topic, rejection_reason
@@ -16,10 +14,7 @@ from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
 
-
-# ---------------------------------------------------------------------------
 # 纯函数口径
-# ---------------------------------------------------------------------------
 
 
 def test_paraphrased_repeat_is_rejected() -> None:
@@ -107,9 +102,7 @@ def test_retry_rejection_guides_silence() -> None:
     assert "不再调用任何工具" in rejection_reason(True)
 
 
-# ---------------------------------------------------------------------------
 # planner 接线：打回 → 再次拒绝 → 沉默兜底；新话题放行
-# ---------------------------------------------------------------------------
 
 
 def _reply_response(topic: str) -> Response:
@@ -172,7 +165,6 @@ def _seed_spoken(planner: Planner) -> None:
     )
 
 
-@pytest.mark.asyncio
 async def test_gate_rejects_repeat_then_silence_fallback() -> None:
     """重复话题两次被打回后模型选择沉默：自然终止（无产出结束）是合法终态。
 
@@ -201,7 +193,6 @@ async def test_gate_rejects_repeat_then_silence_fallback() -> None:
     assert "保持沉默" in tool_texts[1]
 
 
-@pytest.mark.asyncio
 async def test_gate_passes_fresh_topic_and_records_intent() -> None:
     """新话题正常放行：reply 成功收尾，台词随意图留档供后续窗口比对。"""
     planner, _llm, reply = _planner([_reply_response("新话题：水车修好了")])
@@ -215,7 +206,6 @@ async def test_gate_passes_fresh_topic_and_records_intent() -> None:
     assert planner._recent_intents[-1].speech == "说了：新话题：水车修好了"
 
 
-@pytest.mark.asyncio
 async def test_gate_retries_reset_per_plan() -> None:
     """打回计数是本轮口径：上一窗打回过，下一窗从零计。"""
     planner, llm, _reply = _planner([_reply_response(_REPEAT_TOPIC), _silent_response()])

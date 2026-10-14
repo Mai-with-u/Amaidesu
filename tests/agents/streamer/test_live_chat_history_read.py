@@ -19,9 +19,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.background import BackgroundMaintainer
+from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.streamer_agent import StreamerAgent
-from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.timeline import GAME_MESSAGE_TYPE
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.live import LiveStartedPayload
@@ -56,19 +56,15 @@ class _FakeSessionManager:
         return self._pk
 
 
-# ---------------------------------------------------------------------------
 # 索引
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_initialize_creates_live_chat_session_ts_index(store: SQLiteDatabase) -> None:
     """全新库 initialize → sqlite_master 含组合索引。"""
     rows = await store.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_live_chat_session_ts'")
     assert len(rows) == 1
 
 
-@pytest.mark.asyncio
 async def test_initialize_index_idempotent(store: SQLiteDatabase) -> None:
     """重复 initialize 不因索引 DDL 报错（IF NOT EXISTS 幂等）。"""
     store2 = SQLiteDatabase(store.db_path)
@@ -76,12 +72,9 @@ async def test_initialize_index_idempotent(store: SQLiteDatabase) -> None:
     await store2.close()
 
 
-# ---------------------------------------------------------------------------
 # 读取改道：sender_role 过滤 + 空读
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_list_recent_live_chat_role_filter(store: SQLiteDatabase) -> None:
     """sender_role='viewer' 只取观众行；空表返回 []。"""
     empty = await store.chat.list_recent_live_chat(live_session_id=1, sender_role="viewer")
@@ -124,7 +117,6 @@ def _make_agent(store: SQLiteDatabase, session_manager) -> StreamerAgent:
     )
 
 
-@pytest.mark.asyncio
 async def test_read_history_no_active_session_returns_empty(store: SQLiteDatabase) -> None:
     """无显式场次（首场/未开播）→ 空列表，不抛错。"""
     agent = _make_agent(store, _FakeSessionManager(None))
@@ -132,7 +124,6 @@ async def test_read_history_no_active_session_returns_empty(store: SQLiteDatabas
     assert history == []
 
 
-@pytest.mark.asyncio
 async def test_read_history_empty_session_returns_empty(store: SQLiteDatabase) -> None:
     """场次存在但 live_chat 无行（首决定窗）→ 空列表，不抛错。"""
     agent = _make_agent(store, _FakeSessionManager(1))
@@ -140,7 +131,6 @@ async def test_read_history_empty_session_returns_empty(store: SQLiteDatabase) -
     assert history == []
 
 
-@pytest.mark.asyncio
 async def test_read_history_returns_turns_in_chronological_order(store: SQLiteDatabase) -> None:
     """历史按时间正序返回，role 承载 sender_role。"""
     await store.chat.insert_live_chat(
@@ -167,9 +157,7 @@ async def test_read_history_returns_turns_in_chronological_order(store: SQLiteDa
     ]
 
 
-# ---------------------------------------------------------------------------
 # 历史窗口滞回：满窗后成块推进，窗口内前缀逐字稳定（前缀缓存前提）
-# ---------------------------------------------------------------------------
 
 
 async def _insert_turns(store: SQLiteDatabase, count: int, *, start_index: int, session_id: int = 1) -> None:
@@ -186,7 +174,6 @@ async def _insert_turns(store: SQLiteDatabase, count: int, *, start_index: int, 
         )
 
 
-@pytest.mark.asyncio
 async def test_history_window_grows_append_only_before_limit(store: SQLiteDatabase) -> None:
     """未满窗时全量返回且只追加：旧消息跨读逐字稳定。"""
     agent = _make_agent(store, _FakeSessionManager(1))
@@ -199,7 +186,6 @@ async def test_history_window_grows_append_only_before_limit(store: SQLiteDataba
     assert [t.message_id for t in second] == ["m1", "m2", "m3", "m4", "m5"]
 
 
-@pytest.mark.asyncio
 async def test_history_keeps_early_messages_after_many_new_turns(store: SQLiteDatabase) -> None:
     """读取跨过旧条数限制后，最初指令仍在场次前缀中。"""
     agent = _make_agent(store, _FakeSessionManager(1))
@@ -212,7 +198,6 @@ async def test_history_keeps_early_messages_after_many_new_turns(store: SQLiteDa
     assert second[:45] == first
 
 
-@pytest.mark.asyncio
 async def test_history_window_reset_on_session_switch(store: SQLiteDatabase) -> None:
     """场次切换（新开播）：旧场次锚点作废，新场次从空窗重新生长。"""
     session = _FakeSessionManager(1)
@@ -228,9 +213,7 @@ async def test_history_window_reset_on_session_switch(store: SQLiteDatabase) -> 
     assert [t.message_id for t in fresh] == ["m101", "m102"]
 
 
-# ---------------------------------------------------------------------------
 # 摘要链路复活：live_chat viewer 行 → topic_summary
-# ---------------------------------------------------------------------------
 
 
 def _make_maintainer(
@@ -257,7 +240,6 @@ def _make_maintainer(
     return maintainer, llm
 
 
-@pytest.mark.asyncio
 async def test_summarize_topic_reads_live_chat_viewer_rows(store: SQLiteDatabase) -> None:
     """seed live_chat viewer 行 → 摘要 LLM 收到弹幕文本，topic_summary 被写入。"""
     # 真实 PromptManager：完整摘要路径会调 manager.render("summary_system")，需模板被加载
@@ -283,7 +265,6 @@ async def test_summarize_topic_reads_live_chat_viewer_rows(store: SQLiteDatabase
     assert snap.topic_summary == "观众在聊新版本更新"
 
 
-@pytest.mark.asyncio
 async def test_summarize_topic_no_active_session_is_noop(store: SQLiteDatabase) -> None:
     """无显式场次 → 静默跳过（不调 LLM、不写摘要）。"""
     room_state = RoomState()
@@ -307,7 +288,6 @@ async def test_summarize_topic_no_active_session_is_noop(store: SQLiteDatabase) 
     assert room_state.get_snapshot(now_ms=300_000).topic_summary == ""
 
 
-@pytest.mark.asyncio
 async def test_summarize_topic_only_assistant_rows_clears_summary(store: SQLiteDatabase) -> None:
     """窗口内只有主播发言（无观众弹幕）→ 清空 topic_summary 防自嗨循环。"""
     maintainer, llm = _make_maintainer(store)
@@ -328,7 +308,6 @@ async def test_summarize_topic_only_assistant_rows_clears_summary(store: SQLiteD
     assert snap.topic_summary == ""
 
 
-@pytest.mark.asyncio
 async def test_game_milestones_and_delegations_enter_timeline_in_time_order(store: SQLiteDatabase) -> None:
     """游戏里程碑与我开始做的事以发生时刻进时间线，排在同时段聊天之间；开播时一起清空。"""
     agent = _make_agent(store, _FakeSessionManager(1))

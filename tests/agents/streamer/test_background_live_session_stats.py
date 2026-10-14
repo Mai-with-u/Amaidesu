@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.background import BackgroundMaintainer
 from src.agents.streamer.room_state import RoomState
 
@@ -45,7 +43,6 @@ def _make_maintainer(
     )
 
 
-@pytest.mark.asyncio
 async def test_write_live_session_persists_audience_total() -> None:
     """推送到达后的心跳把快照累计观看人次写入 live_sessions"""
     repo = MagicMock()
@@ -61,7 +58,6 @@ async def test_write_live_session_persists_audience_total() -> None:
     assert kwargs["viewer_count"] == 0
 
 
-@pytest.mark.asyncio
 async def test_write_live_session_zero_before_any_push() -> None:
     """推送未到过时 audience_total=0（未知语义），心跳照常写入"""
     repo = MagicMock()
@@ -74,7 +70,6 @@ async def test_write_live_session_zero_before_any_push() -> None:
     assert kwargs["audience_total"] == 0
 
 
-@pytest.mark.asyncio
 async def test_write_live_session_skips_without_session_manager() -> None:
     """场次管理器缺失：心跳整体降级跳过，仓储不被触达"""
     repo = MagicMock()
@@ -86,7 +81,6 @@ async def test_write_live_session_skips_without_session_manager() -> None:
     repo.update_live_session_stats.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_write_live_session_skips_when_resolve_fails() -> None:
     """场次归属解析失败：降级跳过，不阻断轻循环"""
     repo = MagicMock()

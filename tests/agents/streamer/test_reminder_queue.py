@@ -13,8 +13,6 @@ from __future__ import annotations
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
@@ -59,19 +57,15 @@ def _spy_rounds(agent: StreamerAgent) -> AsyncMock:
     return spy
 
 
-# ---------------------------------------------------------------------------
 # L1：提醒队列行为
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_receive_prompt_enqueues_with_source():
     agent = _build_streamer_agent()
     assert agent.receive_prompt(content="多讲讲基地建设", source="operator") is True
     assert list(agent._reminder_queue) == ["多讲讲基地建设"]
 
 
-@pytest.mark.asyncio
 async def test_receive_prompt_full_queue_refuses():
     """队列上限 5：满后拒收（必达不允许静默挤掉旧条目）。"""
     agent = _build_streamer_agent()
@@ -81,14 +75,12 @@ async def test_receive_prompt_full_queue_refuses():
     assert list(agent._reminder_queue) == [f"提醒 {i}" for i in range(5)]
 
 
-@pytest.mark.asyncio
 async def test_receive_prompt_empty_content_refuses():
     agent = _build_streamer_agent()
     assert agent.receive_prompt(content="   ", source="operator") is False
     assert len(agent._reminder_queue) == 0
 
 
-@pytest.mark.asyncio
 async def test_drain_reminders_once():
     """决策窗入口取空队列——送达一次制。"""
     agent = _build_streamer_agent()
@@ -101,12 +93,9 @@ async def test_drain_reminders_once():
     assert agent._drain_reminders() == "", "第二次取空为空（消费即送达）"
 
 
-# ---------------------------------------------------------------------------
 # L2：催醒触发
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_reminder_wakes_proactive_round_when_live():
     agent = _build_streamer_agent()
     rounds_spy = _spy_rounds(agent)
@@ -122,7 +111,6 @@ async def test_reminder_wakes_proactive_round_when_live():
     assert call.kwargs["trigger_reason"] == "proactive:reminder"
 
 
-@pytest.mark.asyncio
 async def test_executor_reminders_provider_wired_to_agent_queue():
     """决策执行器持有的提醒来源即 Agent 队列（真实决策窗入口取空——送达一次制）。"""
     agent = _build_streamer_agent()
@@ -135,7 +123,6 @@ async def test_executor_reminders_provider_wired_to_agent_queue():
     assert len(agent._reminder_queue) == 0
 
 
-@pytest.mark.asyncio
 async def test_reminder_respects_anti_chain_interval_and_keeps_queue():
     """防接龙窗口内不催醒；队列保留到窗口过后自然送达。"""
     agent = _build_streamer_agent()
@@ -150,7 +137,6 @@ async def test_reminder_respects_anti_chain_interval_and_keeps_queue():
     assert len(agent._reminder_queue) == 1, "防接龙阻塞时提醒保留（必达，等下一 tick）"
 
 
-@pytest.mark.asyncio
 async def test_reminder_bypasses_proactive_master_switch():
     """总开关关闭时提醒催醒仍生效（三道闸豁免：必达不辖自主找话说的规矩）。"""
     agent = _build_streamer_agent(proactive={"enabled": False})
@@ -164,7 +150,6 @@ async def test_reminder_bypasses_proactive_master_switch():
     assert rounds_spy.execute.call_args.kwargs["trigger_reason"] == "proactive:reminder"
 
 
-@pytest.mark.asyncio
 async def test_reminder_not_consumed_when_not_live():
     """未开播：不促发也不消费（与环节变更/待定夺信号同一边界）。"""
     agent = _build_streamer_agent()
@@ -177,12 +162,9 @@ async def test_reminder_not_consumed_when_not_live():
     assert len(agent._reminder_queue) == 1
 
 
-# ---------------------------------------------------------------------------
 # 注入：Planner 参考块
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_planner_reference_contains_reminder_section():
     """reminders 非空 → 参考块出现【运营提醒】段；为空 → 整段不出现。"""
     planner = Planner(

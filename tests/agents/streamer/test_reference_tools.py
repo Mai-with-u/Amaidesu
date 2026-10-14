@@ -8,8 +8,6 @@ from __future__ import annotations
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
@@ -43,7 +41,6 @@ def _planner(reference_tools: List[str], invoke: Any) -> tuple[Planner, List[Lis
     return planner, captured
 
 
-@pytest.mark.asyncio
 async def test_configured_reference_tools_feed_the_reference_block() -> None:
     """配置的参考工具在第一次推理前调用一次，结果作为【现场速览】进参考段。"""
     calls: List[ToolInvocation] = []
@@ -61,7 +58,6 @@ async def test_configured_reference_tools_feed_the_reference_block() -> None:
     assert "【现场速览（本轮决策前自动读取）】" in reference and "蜂房旁" in reference
 
 
-@pytest.mark.asyncio
 async def test_failed_reference_tool_is_reported_without_blocking() -> None:
     """参考工具失败时照实写出原因，决策照常进行；未配置时不调用任何工具。"""
 

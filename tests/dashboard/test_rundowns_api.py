@@ -20,10 +20,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-
-# ---------------------------------------------------------------------------
 # Fake 仓储与 Agent
-# ---------------------------------------------------------------------------
 
 
 class FakeRundownRepo:
@@ -74,9 +71,7 @@ class _FakeAgentManager:
         return None
 
 
-# ---------------------------------------------------------------------------
 # Fixtures 与素材
-# ---------------------------------------------------------------------------
 
 
 def _write_config(config_dir: Path) -> None:
@@ -148,9 +143,7 @@ def config_dir(tmp_path: Path) -> Path:
     return cfg
 
 
-# ---------------------------------------------------------------------------
 # GET /rundowns
-# ---------------------------------------------------------------------------
 
 
 def test_list_rundowns_repo_missing_degrades(config_dir: Path) -> None:
@@ -179,9 +172,7 @@ def test_list_rundowns_returns_definitions_and_current_id(config_dir: Path) -> N
     assert body["current_id"] == ""
 
 
-# ---------------------------------------------------------------------------
 # GET /rundowns/template
-# ---------------------------------------------------------------------------
 
 
 def test_get_template_returns_default_rundown(config_dir: Path) -> None:
@@ -196,9 +187,7 @@ def test_get_template_returns_default_rundown(config_dir: Path) -> None:
     assert len(definition["segments"]) >= 1
 
 
-# ---------------------------------------------------------------------------
 # POST /rundowns（upsert）
-# ---------------------------------------------------------------------------
 
 
 def test_upsert_creates_and_persists(config_dir: Path) -> None:
@@ -249,9 +238,7 @@ def test_upsert_other_running_rundown_keeps_runtime(config_dir: Path) -> None:
     assert len(agent.applied) == 1
 
 
-# ---------------------------------------------------------------------------
 # DELETE /rundowns/{id}
-# ---------------------------------------------------------------------------
 
 
 def test_delete_existing_and_missing(config_dir: Path) -> None:
@@ -281,9 +268,7 @@ def test_delete_referenced_by_config_mentions_fallback(config_dir: Path) -> None
     assert "回退" in ok["message"]
 
 
-# ---------------------------------------------------------------------------
 # POST /rundowns/{id}/duplicate
-# ---------------------------------------------------------------------------
 
 
 def test_duplicate_creates_copy(config_dir: Path) -> None:
@@ -304,9 +289,7 @@ def test_duplicate_creates_copy(config_dir: Path) -> None:
     assert missing["success"] is False
 
 
-# ---------------------------------------------------------------------------
 # POST /rundowns/{id}/activate
-# ---------------------------------------------------------------------------
 
 
 def test_activate_persists_config(config_dir: Path) -> None:

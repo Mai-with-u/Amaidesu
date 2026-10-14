@@ -9,8 +9,6 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.glance import glance_scene
@@ -108,7 +106,6 @@ def _called(messages: List[Dict[str, Any]], tool: str) -> bool:
     )
 
 
-@pytest.mark.asyncio
 async def test_look_around_and_remember_a_place_end_to_end() -> None:
     """WP-2.6 验收：委派"看一眼周围并记住一个地点"，开局资料就位，记地点当场完成，交付一次。"""
     server = FakeMaicraft()
@@ -141,7 +138,6 @@ async def test_look_around_and_remember_a_place_end_to_end() -> None:
     await agent.stop()
 
 
-@pytest.mark.asyncio
 async def test_a_background_goal_wakes_the_task_with_its_full_result() -> None:
     """要动手的目标在后台跑：模型让出后零推理等待，目标结束时带着完整结果唤醒，再交付。"""
     server = FakeMaicraft()
@@ -176,7 +172,6 @@ async def test_a_background_goal_wakes_the_task_with_its_full_result() -> None:
     await agent.stop()
 
 
-@pytest.mark.asyncio
 async def test_delivery_is_refused_while_a_goal_is_still_running() -> None:
     server = FakeMaicraft()
 
@@ -197,7 +192,6 @@ async def test_delivery_is_refused_while_a_goal_is_still_running() -> None:
     await agent.stop()
 
 
-@pytest.mark.asyncio
 async def test_a_question_wakes_the_task_and_waiting_is_refused_until_answered() -> None:
     """目标提问：唤醒任务并说清怎么回答；没回答之前不允许让出等待。"""
     server = FakeMaicraft()
@@ -233,7 +227,6 @@ async def test_a_question_wakes_the_task_and_waiting_is_refused_until_answered()
     await agent.stop()
 
 
-@pytest.mark.asyncio
 async def test_polling_a_running_goal_is_folded_into_waiting() -> None:
     """一整轮只在查还在跑的目标：先提醒，第二次直接替它让出，不再推理。"""
     server = FakeMaicraft()
@@ -254,7 +247,6 @@ async def test_polling_a_running_goal_is_folded_into_waiting() -> None:
     await agent.stop()
 
 
-@pytest.mark.asyncio
 async def test_goals_are_mirrored_into_the_shared_task_ledger() -> None:
     """后台目标同时记进通用账本：主播查任务看得到，结束时写终态。"""
     server = FakeMaicraft()
@@ -279,7 +271,6 @@ async def test_goals_are_mirrored_into_the_shared_task_ledger() -> None:
     await agent.stop()
 
 
-@pytest.mark.asyncio
 async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     server = FakeMaicraft()
     agent, llm, bus = await _start(server, lambda messages: _resp("好"))
@@ -326,7 +317,6 @@ def test_glance_distant_entities_only_counts_what_is_known_to_be_far() -> None:
     assert "distant_entities" not in nearby_only, "远处没有东西不写这一栏，上游没给也不写"
 
 
-@pytest.mark.asyncio
 async def test_character_death_tells_the_running_task_and_the_streamer() -> None:
     """角色死了：在跑的任务被唤醒，知道目标保留着、重生后接着做；同时上报主播。"""
     server = FakeMaicraft()
@@ -356,7 +346,6 @@ async def test_character_death_tells_the_running_task_and_the_streamer() -> None
     await agent.stop()
 
 
-@pytest.mark.asyncio
 async def test_skill_catalog_follows_the_abilities_the_mod_has(tmp_path: Path) -> None:
     """技能目录按 Mod 的能力清单筛：用到的能力都在才进目录，为旧版 Mod 写的不进；正文按名读。"""
     for name, requires in (
@@ -395,7 +384,6 @@ async def test_skill_catalog_follows_the_abilities_the_mod_has(tmp_path: Path) -
     await agent.stop()
 
 
-@pytest.mark.asyncio
 async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
     """角色死了：死亡通知说明要回答死亡恢复决策，决策提问带着选项唤醒任务，模型按选项回答。"""
     server = FakeMaicraft()

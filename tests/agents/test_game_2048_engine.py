@@ -22,10 +22,7 @@ from src.agents.game_2048.board import (
     slide_line,
 )
 
-
-# ---------------------------------------------------------------------------
 # slide_line（向左压缩合并）
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -49,9 +46,7 @@ def test_slide_line_table(line: list[int], expected: list[int], gained: int) -> 
     assert got == gained
 
 
-# ---------------------------------------------------------------------------
 # apply_direction（方向变换）
-# ---------------------------------------------------------------------------
 
 
 def test_apply_direction_left() -> None:
@@ -91,9 +86,7 @@ def test_apply_direction_does_not_mutate_input() -> None:
     assert grid[0] == [2, 2, 0, 0]
 
 
-# ---------------------------------------------------------------------------
 # Board2048
-# ---------------------------------------------------------------------------
 
 
 def test_new_game_spawns_two_tiles() -> None:

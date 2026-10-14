@@ -54,7 +54,6 @@ def bus_and_handler():
     return bus, ws
 
 
-@pytest.mark.asyncio
 async def test_broadcaster_subscribes_to_4_new_events(bus_and_handler) -> None:
     """start() 应订阅 gift / super_chat / enter / rundown.changed / tool.result.# 四类。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
@@ -76,7 +75,6 @@ async def test_broadcaster_subscribes_to_4_new_events(bus_and_handler) -> None:
     await broadcaster.stop()
 
 
-@pytest.mark.asyncio
 async def test_room_message_events_broadcast_as_room_message_type(bus_and_handler) -> None:
     """room.message.{danmaku,gift,super_chat,enter} 一致映射到 ws type 'room.message'。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
@@ -111,7 +109,6 @@ async def test_room_message_events_broadcast_as_room_message_type(bus_and_handle
         assert call.kwargs.get("message_id") == payload.id
 
 
-@pytest.mark.asyncio
 async def test_rundown_changed_broadcast_as_rundown_changed_type(bus_and_handler) -> None:
     """rundown.changed → ws type 'rundown.changed'。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
@@ -139,7 +136,6 @@ async def test_rundown_changed_broadcast_as_rundown_changed_type(bus_and_handler
     assert call.args[1]["by"] == "human"
 
 
-@pytest.mark.asyncio
 async def test_tool_result_wildcard_preserves_concrete_event_name(bus_and_handler) -> None:
     """tool.result.# 通配订阅收到具体事件名（tool.result.speak）后，
     WS type 沿用该具体名（不是通配串）。"""
@@ -166,7 +162,6 @@ async def test_tool_result_wildcard_preserves_concrete_event_name(bus_and_handle
     assert call.args[1]["status"] == "success"
 
 
-@pytest.mark.asyncio
 async def test_tool_health_wildcard_preserves_concrete_event_name(bus_and_handler) -> None:
     """tool.health.# 通配订阅收到具体事件名（tool.health.maicraft_speak）后，
     WS type 沿用该具体名（不是通配串）；payload 字段透传。"""
@@ -201,7 +196,6 @@ async def test_tool_health_wildcard_preserves_concrete_event_name(bus_and_handle
     assert call.kwargs.get("message_id") == payload.id
 
 
-@pytest.mark.asyncio
 async def test_broadcaster_subscribes_to_tool_health_wildcard(bus_and_handler) -> None:
     """broadcaster.start() 应订阅 CoreEvents.TOOL_HEALTH_WILDCARD。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
@@ -213,7 +207,6 @@ async def test_broadcaster_subscribes_to_tool_health_wildcard(bus_and_handler) -
     await broadcaster.stop()
 
 
-@pytest.mark.asyncio
 async def test_streamer_speech_broadcast_as_streamer_speech_type(bus_and_handler) -> None:
     """streamer.speech → ws type 'streamer.speech'（payload 含 utterance_id/text/emotion）。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
@@ -241,7 +234,6 @@ async def test_streamer_speech_broadcast_as_streamer_speech_type(bus_and_handler
     assert call.kwargs.get("message_id") == payload.id
 
 
-@pytest.mark.asyncio
 async def test_broadcaster_subscribes_to_game_events(bus_and_handler) -> None:
     """start() 应订阅 game.* 四事件（游戏 Agent 的汇报/求助/异常/里程碑进直播时间线）。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
@@ -261,7 +253,6 @@ async def test_broadcaster_subscribes_to_game_events(bus_and_handler) -> None:
     await broadcaster.stop()
 
 
-@pytest.mark.asyncio
 async def test_game_events_broadcast_as_concrete_event_name(bus_and_handler) -> None:
     """game.* 四事件直通：ws type = 具体事件名，payload 字段透传。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
@@ -291,7 +282,6 @@ async def test_game_events_broadcast_as_concrete_event_name(bus_and_handler) -> 
     await broadcaster.stop()
 
 
-@pytest.mark.asyncio
 async def test_broadcaster_unsubscribes_all_events_on_stop(bus_and_handler) -> None:
     """stop() 调用 event_bus.off() 清理全部订阅。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
@@ -308,7 +298,6 @@ async def test_broadcaster_unsubscribes_all_events_on_stop(bus_and_handler) -> N
     assert len(bus.subscribed) == 0
 
 
-@pytest.mark.asyncio
 async def test_broadcaster_subscribes_to_task_changed(bus_and_handler) -> None:
     """任务卡实时增量：订阅 task.changed 并以事件名直通转发。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
@@ -336,7 +325,6 @@ async def test_broadcaster_subscribes_to_task_changed(bus_and_handler) -> None:
     await broadcaster.stop()
 
 
-@pytest.mark.asyncio
 async def test_broadcaster_subscribes_to_llm_context_used(bus_and_handler) -> None:
     """llm.context.used：订阅 + 直通转发（上下文水位面板的实时刷新源）。"""
     from src.modules.dashboard.websocket.broadcaster import EventBroadcaster

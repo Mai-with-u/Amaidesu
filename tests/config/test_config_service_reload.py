@@ -17,17 +17,14 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Sequence
 
 import pytest
-
-from src.modules.config.file_watcher import FileChange
 from watchfiles import Change
 
+from src.modules.config.file_watcher import FileChange
 
-# ===========================================================================
 # Fixtures
-# ===========================================================================
 
 
 @pytest.fixture
@@ -63,9 +60,7 @@ def initialized_service(config_dir_with_toml: Path):
     return service
 
 
-# ===========================================================================
 # 1. register_reload_callback / unregister_reload_callback
-# ===========================================================================
 
 
 class TestReloadCallbackRegistration:
@@ -73,7 +68,6 @@ class TestReloadCallbackRegistration:
 
     def test_register_stores_callback(self, initialized_service):
         """register_reload_callback 必须把回调存到内部列表"""
-        from src.modules.config.service import ConfigService
 
         # 内部状态: 应该是空列表（或包含 _reload_callbacks 字段的某个容器）
         assert hasattr(initialized_service, "_reload_callbacks")
@@ -122,15 +116,12 @@ class TestReloadCallbackRegistration:
         assert initialized_service._reload_callbacks == []
 
 
-# ===========================================================================
 # 2. reload_config + callback dispatch
-# ===========================================================================
 
 
 class TestReloadConfig:
     """reload_config 必须重载配置并调用所有回调"""
 
-    @pytest.mark.asyncio
     async def test_reload_re_reads_files(self, initialized_service, config_dir_with_toml):
         """reload_config 后 _main_config 必须反映磁盘上最新的 TOML 内容"""
         # 写完整 toml：覆盖原 agents.toml，仅修改 persona.bot_name。
@@ -152,7 +143,6 @@ class TestReloadConfig:
         streamer_cfg = initialized_service.get_section("agents", {}).get("streamer", {})
         assert streamer_cfg.get("persona", {}).get("bot_name") == "新名字"
 
-    @pytest.mark.asyncio
     async def test_reload_invokes_callbacks_with_scopes(self, initialized_service):
         """reload_config 必须用 hot 段 scopes 调用所有已注册回调
 
@@ -174,7 +164,6 @@ class TestReloadConfig:
         assert ("cb1", ["infra"]) in calls
         assert ("cb2", ["infra"]) in calls
 
-    @pytest.mark.asyncio
     async def test_reload_supports_callback_without_scopes(self, initialized_service):
         """reload_config 也必须支持无参回调（不接收 scopes）"""
         calls = []
@@ -188,7 +177,6 @@ class TestReloadConfig:
 
         assert "no_arg" in calls
 
-    @pytest.mark.asyncio
     async def test_reload_supports_async_callbacks(self, initialized_service):
         """reload_config 必须支持 async 回调"""
         calls = []
@@ -203,7 +191,6 @@ class TestReloadConfig:
 
         assert ("async", ["infra"]) in calls
 
-    @pytest.mark.asyncio
     async def test_reload_callback_exception_does_not_break_others(self, initialized_service):
         """一个回调抛异常不能阻止其他回调执行"""
         calls = []
@@ -229,7 +216,6 @@ class TestReloadConfig:
         assert "good1" in calls
         assert "good2" in calls
 
-    @pytest.mark.asyncio
     async def test_reload_default_scopes_when_none(self, initialized_service):
         """reload_config() 不传 scopes 时应使用全部 scope"""
         calls = []
@@ -245,18 +231,13 @@ class TestReloadConfig:
         assert len(calls[0]) > 0  # 应至少有一个 scope
 
 
-# ===========================================================================
 # 3. _handle_reload — FileChange 批次处理
-# ===========================================================================
 
 
 class TestHandleReload:
     """_handle_reload 必须把 FileChange 列表转换为 scopes 并触发 reload"""
 
-    @pytest.mark.asyncio
-    async def test_handle_reload_resolves_scopes_from_filenames(
-        self, initialized_service, config_dir_with_toml
-    ):
+    async def test_handle_reload_resolves_scopes_from_filenames(self, initialized_service, config_dir_with_toml):
         """FileChange 的 path.name → scope 映射；restart 段不分发回调
 
         agents/model 均为 restart 策略：reload 成功但回调不触发
@@ -280,7 +261,6 @@ class TestHandleReload:
         # reload 本身成功；restart 段不分发回调
         assert calls == []
 
-    @pytest.mark.asyncio
     async def test_handle_reload_ignores_unknown_files(self, initialized_service, tmp_path):
         """未知的文件名不应触发 reload (scope 解析失败)"""
         calls = []
@@ -299,7 +279,6 @@ class TestHandleReload:
         # 没有有效 scope → 不应调用回调
         assert len(calls) == 0
 
-    @pytest.mark.asyncio
     async def test_handle_reload_empty_changes_is_noop(self, initialized_service):
         """空变更列表必须直接返回，不调用任何回调"""
         calls = []
@@ -314,15 +293,12 @@ class TestHandleReload:
         assert calls == []
 
 
-# ===========================================================================
 # 4. start_file_watcher / stop_file_watcher
-# ===========================================================================
 
 
 class TestFileWatcherLifecycle:
     """start/stop_file_watcher 必须正确管理 FileWatcher"""
 
-    @pytest.mark.asyncio
     async def test_start_creates_file_watcher(self, initialized_service):
         """start_file_watcher 必须创建 FileWatcher 实例"""
         # 初始: _file_watcher 为 None
@@ -336,7 +312,6 @@ class TestFileWatcherLifecycle:
         # 清理
         await initialized_service.stop_file_watcher()
 
-    @pytest.mark.asyncio
     async def test_start_is_idempotent(self, initialized_service):
         """重复 start_file_watcher 不应重启 watcher"""
         await initialized_service.start_file_watcher()
@@ -347,7 +322,6 @@ class TestFileWatcherLifecycle:
 
         await initialized_service.stop_file_watcher()
 
-    @pytest.mark.asyncio
     async def test_stop_cleans_up_watcher(self, initialized_service):
         """stop_file_watcher 必须把 _file_watcher 置 None 并停止 watcher"""
         await initialized_service.start_file_watcher()
@@ -357,16 +331,12 @@ class TestFileWatcherLifecycle:
 
         assert initialized_service._file_watcher is None
 
-    @pytest.mark.asyncio
     async def test_stop_without_start_is_noop(self, initialized_service):
         """未 start 时 stop 必须不抛异常"""
         # 不应抛异常
         await initialized_service.stop_file_watcher()
 
-    @pytest.mark.asyncio
-    async def test_watcher_monitors_all_config_files(
-        self, initialized_service, config_dir_with_toml
-    ):
+    async def test_watcher_monitors_all_config_files(self, initialized_service, config_dir_with_toml):
         """watcher 必须监听 config/ 下全部 6 个 TOML 文件"""
         await initialized_service.start_file_watcher()
         try:
@@ -385,21 +355,17 @@ class TestFileWatcherLifecycle:
             await initialized_service.stop_file_watcher()
 
 
-# ===========================================================================
 # 5. 端到端: 文件变更触发 reload + ConfigProxy 反映新值
-# ===========================================================================
 
 
 class TestHotReloadEndToEnd:
     """修改 TOML 文件 → FileWatcher 检测 → reload → ConfigProxy 看到新值"""
 
-    @pytest.mark.asyncio
     async def test_modify_agents_toml_triggers_reload_and_proxy_reflects_new_value(
         self, initialized_service, config_dir_with_toml
     ):
         """修改 agents.toml 后, ConfigProxy 必须能看到新值"""
         from src.modules.config.config_proxy import ConfigProxy
-        import tomlkit
 
         # 建立 proxy: 始终返回最新配置
         proxy = ConfigProxy(getter=lambda: initialized_service._main_config)
@@ -417,9 +383,7 @@ class TestHotReloadEndToEnd:
         try:
             # 写完整 toml：保留 [agents.streamer.*] 全树，仅修改 persona.bot_name
             content = (config_dir_with_toml / "agents.toml").read_text(encoding="utf-8-sig")
-            new_agents_toml = content.replace(
-                'bot_name = "麦麦"', 'bot_name = "热重载后的名字"', 1
-            )
+            new_agents_toml = content.replace('bot_name = "麦麦"', 'bot_name = "热重载后的名字"', 1)
             (config_dir_with_toml / "agents.toml").write_text(new_agents_toml, encoding="utf-8")
 
             # 等待 FileWatcher 检测 (debounce ~600ms) + reload
@@ -435,16 +399,11 @@ class TestHotReloadEndToEnd:
                         new_value = nb
                         break
 
-            assert new_value == "热重载后的名字", (
-                f"ConfigProxy 未反映热重载新值 (旧值={old_bot_name})"
-            )
+            assert new_value == "热重载后的名字", f"ConfigProxy 未反映热重载新值 (旧值={old_bot_name})"
         finally:
             await initialized_service.stop_file_watcher()
 
-    @pytest.mark.asyncio
-    async def test_reload_callback_fires_on_hot_scope_change(
-        self, initialized_service, config_dir_with_toml
-    ):
+    async def test_reload_callback_fires_on_hot_scope_change(self, initialized_service, config_dir_with_toml):
         """hot 段（infra）有效变更 → 回调被调用
 
         reload 策略契约：回调只对 hot 段分发（经 ConfigProxy 即时生效）；
@@ -465,9 +424,7 @@ class TestHotReloadEndToEnd:
         try:
             # 触发 hot 段文件变更（追加注释行，内容仍为合法 TOML）
             infra = config_dir_with_toml / "infra.toml"
-            infra.write_text(
-                infra.read_text(encoding="utf-8-sig") + "\n# touched\n", encoding="utf-8-sig"
-            )
+            infra.write_text(infra.read_text(encoding="utf-8-sig") + "\n# touched\n", encoding="utf-8-sig")
 
             # 等待回调触发 (最多 10s)
             await asyncio.wait_for(callback_called.wait(), timeout=10.0)
@@ -475,10 +432,7 @@ class TestHotReloadEndToEnd:
         finally:
             await initialized_service.stop_file_watcher()
 
-    @pytest.mark.asyncio
-    async def test_invalid_change_keeps_old_config(
-        self, initialized_service, config_dir_with_toml
-    ):
+    async def test_invalid_change_keeps_old_config(self, initialized_service, config_dir_with_toml):
         """restart 段写入非法内容（缺版本号）→ 旧配置保留 + 回调不触发
 
         热重载失败语义：校验硬错被 reload 捕获并大声记日志，内存配置
@@ -508,7 +462,6 @@ class TestHotReloadEndToEnd:
         finally:
             await initialized_service.stop_file_watcher()
 
-    @pytest.mark.asyncio
     async def test_multiple_callbacks_all_fire_on_reload(self, initialized_service):
         """reload_config 时所有注册的回调都必须被调用"""
         calls = []

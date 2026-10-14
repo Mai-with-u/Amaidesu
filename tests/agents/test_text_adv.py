@@ -39,10 +39,7 @@ from src.modules.tools.registry import ToolRegistry
 from src.modules.vision import LookAtScreenProvider
 from src.modules.vision.look_at_screen import ScreenCaptureResult
 
-
-# =============================================================================
 # 假件与辅助
-# =============================================================================
 
 
 class StaticCapture:
@@ -155,9 +152,7 @@ def make_agent(
     return agent, collected
 
 
-# =============================================================================
 # 元数据
-# =============================================================================
 
 
 def test_text_adv_agent_metadata() -> None:
@@ -215,9 +210,7 @@ def test_factory_enables_tools_for_streamer_and_stop_removes(monkeypatch: Monkey
     assert not any(name.startswith("text_adv_") for name in after_stop)
 
 
-# =============================================================================
 # set_auto：幂等启停
-# =============================================================================
 
 
 async def test_set_auto_true_is_idempotent() -> None:
@@ -246,9 +239,7 @@ async def test_set_auto_false_cancels_loop() -> None:
     assert task.done() or task.cancelled()
 
 
-# =============================================================================
 # 首屏上报与去重
-# =============================================================================
 
 
 async def test_first_screen_with_options_emits_report_once() -> None:
@@ -300,9 +291,7 @@ async def test_same_text_not_reported_twice_and_vlm_pauses() -> None:
     await agent.set_auto(False)
 
 
-# =============================================================================
 # 错误分流
-# =============================================================================
 
 
 async def test_perception_failure_quiet_loop_survives() -> None:
@@ -362,9 +351,7 @@ async def test_window_not_found_stops_with_single_error() -> None:
     await agent.set_auto(False)
 
 
-# =============================================================================
 # 生命周期
-# =============================================================================
 
 
 async def test_on_stop_cancels_observe_loop() -> None:
@@ -387,9 +374,7 @@ async def test_state_snapshot_carries_auto_flag() -> None:
     assert snap["auto"] is False
 
 
-# =============================================================================
 # 屏幕线既有契约（原样保留：感知失败不外抛、不发业务事件）
-# =============================================================================
 
 
 async def test_look_at_screen_capture_failure_has_error_in_structured() -> None:
@@ -411,9 +396,7 @@ async def test_look_at_screen_capture_failure_has_error_in_structured() -> None:
     assert res.structured_content.get("text") == ""
 
 
-# =============================================================================
 # 工具面（text_adv_advance / choose / set_auto / get_state）
-# =============================================================================
 
 
 def geometry_resolver(geom: MonitorGeometry | None) -> Callable[[int], MonitorGeometry | None]:

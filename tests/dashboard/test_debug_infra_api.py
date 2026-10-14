@@ -20,10 +20,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-
-# ---------------------------------------------------------------------------
 # Fake 服务（鸭子类型：实现调试端点关心的门面即可）
-# ---------------------------------------------------------------------------
 
 
 class FakeSubtitleService:
@@ -96,9 +93,7 @@ class FakeTtsEngine:
         return {"name": "FakeTTS", "is_connected": True, "render_count": 1, "error_count": 0}
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 def _write_config(config_dir: Path) -> None:
@@ -141,9 +136,7 @@ def config_dir(tmp_path: Path) -> Path:
     return cfg
 
 
-# ---------------------------------------------------------------------------
 # 字幕直测端点
-# ---------------------------------------------------------------------------
 
 
 def test_subtitle_test_503_when_service_missing(config_dir: Path) -> None:
@@ -239,9 +232,7 @@ def test_subtitle_endpoints_503_when_missing(config_dir: Path) -> None:
     assert client.post("/api/v1/debug/subtitle/clear").status_code == 503
 
 
-# ---------------------------------------------------------------------------
 # TTS 直测端点
-# ---------------------------------------------------------------------------
 
 
 def test_tts_test_503_when_engine_missing(config_dir: Path) -> None:

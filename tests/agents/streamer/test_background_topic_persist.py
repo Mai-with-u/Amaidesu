@@ -63,12 +63,9 @@ def _make_maintainer(store: SQLiteDatabase, pk: int = 777) -> BackgroundMaintain
     )
 
 
-@pytest.mark.asyncio
 async def test_persist_writes_timeline_and_topics(store: SQLiteDatabase) -> None:
     maintainer = _make_maintainer(store, pk=777)
-    await maintainer._persist_topic_snapshot(
-        "观众在讨论新版本更新", now_ms=120_000, previous_summary_ms=60_000
-    )
+    await maintainer._persist_topic_snapshot("观众在讨论新版本更新", now_ms=120_000, previous_summary_ms=60_000)
 
     timeline = await store.execute("SELECT * FROM timeline_summary")
     assert len(timeline) == 1
@@ -84,7 +81,6 @@ async def test_persist_writes_timeline_and_topics(store: SQLiteDatabase) -> None
     assert topics[0]["score"] == pytest.approx(1.0)
 
 
-@pytest.mark.asyncio
 async def test_persist_refreshes_topics_snapshot(store: SQLiteDatabase) -> None:
     maintainer = _make_maintainer(store)
     await maintainer._persist_topic_snapshot("第一轮摘要", now_ms=60_000, previous_summary_ms=0)
@@ -105,7 +101,6 @@ async def test_persist_refreshes_topics_snapshot(store: SQLiteDatabase) -> None:
     assert first[0]["end_ms"] == 60_000
 
 
-@pytest.mark.asyncio
 async def test_persist_skipped_without_store() -> None:
     # 摘要渲染路径在 _persist_topic_snapshot 早返回前不被触达：注入满足 render() -> str 的最小 fake
     prompt_manager = MagicMock()

@@ -23,8 +23,6 @@ import asyncio
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.llm.client import LLMResponse
@@ -96,12 +94,9 @@ _REPLY_STRUCTURED: Dict[str, Any] = {
     "metadata": {},
 }
 
-# ---------------------------------------------------------------------------
 # 入参校验
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_rejects_proactive_with_batch():
     agent = _build_agent()
     result = await agent.debug_test_decision(
@@ -112,7 +107,6 @@ async def test_rejects_proactive_with_batch():
     assert "proactive" in result["error"]
 
 
-@pytest.mark.asyncio
 async def test_rejects_empty_batch():
     agent = _build_agent()
     result = await agent.debug_test_decision(batch=[])
@@ -123,7 +117,6 @@ async def test_rejects_empty_batch():
     assert result_none["success"] is False
 
 
-@pytest.mark.asyncio
 async def test_rejects_batch_of_empty_texts():
     """全部 text 为空白的批次等同空批（校验在前，不进决策）。"""
     agent = _build_agent()
@@ -131,12 +124,9 @@ async def test_rejects_batch_of_empty_texts():
     assert result["success"] is False
 
 
-# ---------------------------------------------------------------------------
 # 弹幕模式：成功路径
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_danmaku_mode_success_returns_full_view():
     agent = _build_agent()
     _patch_planner(
@@ -184,7 +174,6 @@ async def test_danmaku_mode_success_returns_full_view():
     await asyncio.sleep(0.05)
 
 
-@pytest.mark.asyncio
 async def test_danmaku_default_nickname_when_missing():
     """nickname 缺省时用「测试观众」占位。"""
     agent = _build_agent()
@@ -196,12 +185,9 @@ async def test_danmaku_default_nickname_when_missing():
     assert batch[0].user.name == "测试观众"
 
 
-# ---------------------------------------------------------------------------
 # Planner 拒绝 / 失败
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_planner_rejected_returns_plan_without_speech():
     agent = _build_agent()
     _patch_planner(
@@ -221,7 +207,6 @@ async def test_planner_rejected_returns_plan_without_speech():
     agent._reply_provider.invoke.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_planner_failure_returns_error():
     agent = _build_agent()
     _patch_planner(agent, None)  # LLM 异常/脏 JSON 降级
@@ -235,12 +220,9 @@ async def test_planner_failure_returns_error():
     assert result["plan"] is None
 
 
-# ---------------------------------------------------------------------------
 # Reply 工具失败
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_reply_tool_failure_returns_error():
     agent = _build_agent()
     _patch_planner(
@@ -258,12 +240,9 @@ async def test_reply_tool_failure_returns_error():
     assert result["speech"] is None
 
 
-# ---------------------------------------------------------------------------
 # proactive 直跑模式
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_proactive_mode_bypasses_rate_limit():
     """proactive=True 直跑：空批 + proactive=True 进决策，
     不经过 ProactiveTrigger 限流（proactive_enabled=False 也能跑）。"""

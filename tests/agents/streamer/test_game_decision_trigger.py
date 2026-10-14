@@ -13,8 +13,6 @@ import asyncio
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.event_bus import EventBus
@@ -70,12 +68,9 @@ async def _wait_until(cond: Any, timeout_s: float = 2.0) -> None:
     raise AssertionError("等待条件超时")
 
 
-# ---------------------------------------------------------------------------
 # L1：叙事行带事件类型标记
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_narrative_line_contains_event_type_and_message_unchanged():
     """叙事行形如 [到达距今] [game·event_type] message；message 本体原样保留。"""
     agent = _build_streamer_agent()
@@ -90,7 +85,6 @@ async def test_narrative_line_contains_event_type_and_message_unchanged():
     assert agent._game_narrative_text().splitlines()[0] == "[刚刚] [minecraft·report] 迷宫尽头有两个门：左或右？"
 
 
-@pytest.mark.asyncio
 async def test_only_report_sets_decision_pending():
     """仅 report 类型置位待定夺信号；milestone 等推进类不置位。"""
     agent = _build_streamer_agent()
@@ -102,9 +96,7 @@ async def test_only_report_sets_decision_pending():
     assert agent._game_decision_pending is True
 
 
-# ---------------------------------------------------------------------------
 # L2 端到端：game.report 促发一轮决策轮 / 离线 pending 保留
-# ---------------------------------------------------------------------------
 
 
 def _spy_rounds(agent: StreamerAgent) -> AsyncMock:
@@ -115,7 +107,6 @@ def _spy_rounds(agent: StreamerAgent) -> AsyncMock:
     return spy
 
 
-@pytest.mark.asyncio
 async def test_game_report_triggers_proactive_round_when_live():
     """直播态：emit game.report → 空缓冲 tick 消费 pending → 促发一轮决策。"""
     bus = EventBus()
@@ -146,7 +137,6 @@ async def test_game_report_triggers_proactive_round_when_live():
     await bus.cleanup()
 
 
-@pytest.mark.asyncio
 async def test_body_event_feeds_the_body_narrative_line() -> None:
     """game.body.* → 独立"身体近况"缓冲（与游戏叙事分两条线）。"""
     bus = EventBus()
@@ -190,7 +180,6 @@ async def test_body_event_feeds_the_body_narrative_line() -> None:
     await bus.cleanup()
 
 
-@pytest.mark.asyncio
 async def test_death_wakes_the_streamer_but_other_body_events_do_not() -> None:
     """死亡立即唤醒主播（与 game.report 同款置位待定夺信号）；其余身体事件只是素材。"""
     bus = EventBus()
@@ -219,7 +208,6 @@ async def test_death_wakes_the_streamer_but_other_body_events_do_not() -> None:
     await bus.cleanup()
 
 
-@pytest.mark.asyncio
 async def test_game_chat_feeds_its_own_block_and_player_wakes_streamer() -> None:
     """game.chat.* → 独立"游戏里的聊天"缓冲；玩家搭话促发决策，系统消息只作参考。"""
     bus = EventBus()
@@ -262,7 +250,6 @@ async def test_game_chat_feeds_its_own_block_and_player_wakes_streamer() -> None
     await bus.cleanup()
 
 
-@pytest.mark.asyncio
 async def test_private_game_chat_reaches_the_planner_but_not_the_replyer() -> None:
     """私聊：决策看得到、标着私聊，玩家搭话照样促发决策；但不交给表达侧，免得当众念出或转述。"""
     bus = EventBus()
@@ -290,7 +277,6 @@ async def test_private_game_chat_reaches_the_planner_but_not_the_replyer() -> No
     await bus.cleanup()
 
 
-@pytest.mark.asyncio
 async def test_body_narrative_keeps_all_events() -> None:
     """还没交给决策窗的连续身体事件在条数上限内全部保留，主播能看到最初遇险与最新反应。"""
     bus = EventBus()
@@ -310,7 +296,6 @@ async def test_body_narrative_keeps_all_events() -> None:
     await bus.cleanup()
 
 
-@pytest.mark.asyncio
 async def test_game_report_pending_preserved_when_offline():
     """非直播态：pending 不被消费；开播后首个 tick 消费并促发决策。"""
     bus = EventBus()

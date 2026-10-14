@@ -39,9 +39,7 @@ def _msg(text: str, mid: str, nickname: str) -> RoomMessagePayload:
     )
 
 
-# ---------------------------------------------------------------------------
 # 按消息 ID 找原话
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("target", ["m2", "[id:m2]", "id:m2", " [ID：m2] "])
@@ -61,9 +59,7 @@ def test_find_target_prefers_batch_then_recent_history() -> None:
     assert canonical.find_target_message(None, batch, history) == ""
 
 
-# ---------------------------------------------------------------------------
 # Replyer 本轮输入
-# ---------------------------------------------------------------------------
 
 
 def _replyer() -> tuple[Replyer, MagicMock]:
@@ -82,7 +78,6 @@ def _turn_kwargs(prompt: MagicMock) -> Dict[str, Any]:
     return {call.args[0]: call.kwargs for call in prompt.render.call_args_list}["amaidesu_replyer"]
 
 
-@pytest.mark.asyncio
 async def test_plan_carries_target_original_text() -> None:
     """一批有好几条时，决策里直接给出 target 那条原话，表达侧不用自己对号。"""
     replyer, prompt = _replyer()
@@ -94,7 +89,6 @@ async def test_plan_carries_target_original_text() -> None:
     assert "target: [id:m2]\ntarget 原文: 观众B: 锯子修好了吗 [id:m2]\n" in plan_text
 
 
-@pytest.mark.asyncio
 async def test_plan_omits_target_text_when_not_found() -> None:
     """找不到 target 原话时不出现这一行，不拿别人的话凑数。"""
     replyer, prompt = _replyer()
@@ -106,7 +100,6 @@ async def test_plan_omits_target_text_when_not_found() -> None:
     assert "target 原文" not in _turn_kwargs(prompt)["plan"]
 
 
-@pytest.mark.asyncio
 async def test_game_chat_rendered_or_placeholder() -> None:
     """本窗新到的游戏聊天逐行给出；没有时用占位，模板不会出现字面变量。"""
     replyer, prompt = _replyer()
@@ -120,12 +113,9 @@ async def test_game_chat_rendered_or_placeholder() -> None:
     assert _turn_kwargs(prompt)["game_chat"] == "（无）"
 
 
-# ---------------------------------------------------------------------------
 # 原话一路交到表达侧
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
     """玩家搭话促发的一轮（弹幕批为空）：原话随 reply 交给表达侧，调用后槽位清空。"""
     seen: List[List[str]] = []
@@ -166,7 +156,6 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
     assert provider._round_game_chat == []
 
 
-@pytest.mark.asyncio
 async def test_executor_splits_game_chat_view() -> None:
     """决策执行器把游戏聊天全文交给 Planner 参考段，本窗新到的原话另传。"""
     planner = MagicMock()
@@ -186,7 +175,9 @@ async def test_executor_splits_game_chat_view() -> None:
         rundown_text_provider=MagicMock(return_value=None),
         game_narrative_provider=MagicMock(return_value=""),
         game_chat_provider=MagicMock(
-            return_value=NarrativeView(text="[新·刚刚] [minecraft] 玩家 Steve：在吗", fresh=("[minecraft] 玩家 Steve：在吗",))
+            return_value=NarrativeView(
+                text="[新·刚刚] [minecraft] 玩家 Steve：在吗", fresh=("[minecraft] 玩家 Steve：在吗",)
+            )
         ),
     )
 

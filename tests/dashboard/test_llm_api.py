@@ -395,7 +395,7 @@ def test_history_models_dedup_sorted(client: TestClient) -> None:
     assert body == ["a-model", "z-model"]
 
 
-# === context_window + last_call_prompt_tokens：Dashboard 水位展示数据源 ===
+# context_window + last_call_prompt_tokens：Dashboard 水位展示数据源
 #
 # 切片 4 验收点：
 # - /usage 返回每模型 context_window（来自 LLMManager 装配期索引）
@@ -498,7 +498,7 @@ def test_usage_threads_context_window_from_engine_assembly(client_with_context_w
     assert body[MODEL_B]["last_call_prompt_tokens"] == 300
 
 
-# === /context-breakdown：上下文水位悬停明细数据源 ===
+# /context-breakdown：上下文水位悬停明细数据源
 
 
 def _seed_breakdown(

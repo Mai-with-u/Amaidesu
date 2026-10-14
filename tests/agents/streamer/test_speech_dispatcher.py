@@ -14,8 +14,6 @@ import time
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.speech_dispatcher import SpeechDispatcher
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -36,12 +34,9 @@ def _make_dispatcher(
     )
 
 
-# ---------------------------------------------------------------------------
 # dispatch 扇出
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_dispatch_fans_out_to_all_downstreams():
     """speech+emotion 齐备：业务事件 / 字幕各路到位，返回三元组。"""
     bus = EventBus()
@@ -99,18 +94,14 @@ async def test_dispatch_fans_out_to_all_downstreams():
     assert subtitle.show.await_args.args[0] == "你好"
 
 
-@pytest.mark.asyncio
 async def test_dispatch_non_dict_payload_returns_none():
     dispatcher = _make_dispatcher()
     assert await dispatcher.dispatch(["speech", "emotion"]) is None
 
 
-# ---------------------------------------------------------------------------
 # TTS 队列生命周期：降级与幂等
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_start_degrades_when_enabled_but_no_engine():
     """启用但无引擎：start 不抛、TTS 关闭、speech 业务事件照发。"""
     bus = EventBus()
@@ -139,7 +130,6 @@ async def test_start_degrades_when_enabled_but_no_engine():
     await dispatcher.stop()  # 降级态 stop 安全
 
 
-@pytest.mark.asyncio
 async def test_stop_is_idempotent_and_stops_queue():
     """stop 后队列置空；重复 stop 不报错。"""
     engine = MagicMock()
@@ -157,7 +147,6 @@ async def test_stop_is_idempotent_and_stops_queue():
     await dispatcher.stop()  # 幂等
 
 
-@pytest.mark.asyncio
 async def test_disabled_config_never_builds_queue():
     """未启用（默认）：start 是 no-op，不构造队列。"""
     dispatcher = _make_dispatcher(tts_engine=MagicMock())
@@ -166,9 +155,7 @@ async def test_disabled_config_never_builds_queue():
     assert dispatcher.utterance_queue is None
 
 
-# ---------------------------------------------------------------------------
 # 发言等播放（背压闸）
-# ---------------------------------------------------------------------------
 
 
 class _PlaybackEngine:
@@ -206,7 +193,6 @@ async def _capture_emit_times(bus: EventBus) -> list[float]:
     return emit_times
 
 
-@pytest.mark.asyncio
 async def test_dispatch_waits_for_playback_before_emit():
     """wait_playback 开启：第二句的业务事件发出要等第一句播完（嘴空才放行）。"""
     bus = EventBus()
@@ -248,7 +234,6 @@ async def _wait_emitted(emit_times: list[float], count: int, timeout_s: float = 
         await asyncio.sleep(0.01)
 
 
-@pytest.mark.asyncio
 async def test_dispatch_no_wait_when_wait_playback_disabled():
     """wait_playback 关闭：连续 dispatch 立即返回（fire-and-forget 语义）。"""
     bus = EventBus()
@@ -274,7 +259,6 @@ async def test_dispatch_no_wait_when_wait_playback_disabled():
         await dispatcher.stop()
 
 
-@pytest.mark.asyncio
 async def test_dispatch_fails_open_on_wait_timeout():
     """等播超时 fail-open：放行发言不丢话，不无限阻塞决策循环。"""
     bus = EventBus()
@@ -300,12 +284,9 @@ async def test_dispatch_fails_open_on_wait_timeout():
         await dispatcher.stop()
 
 
-# ---------------------------------------------------------------------------
 # 异步扇出持有 + 停止汇合（P1-2）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_stop_drains_inflight_fanout_without_pending_warnings():
     """dispatch 后立即 stop：在飞扇出任务被汇合，无 "Task was destroyed but it is pending"。
 
@@ -354,7 +335,6 @@ async def test_stop_drains_inflight_fanout_without_pending_warnings():
     assert dispatcher._bg_tasks == set()
 
 
-@pytest.mark.asyncio
 async def test_dispatch_returns_synchronously_without_awaiting_slow_invoke():
     """决策循环安全：dispatch 在慢 TTS 入队面前仍同步返回（fire-and-forget 语义保留）。
 
@@ -397,7 +377,6 @@ async def test_dispatch_returns_synchronously_without_awaiting_slow_invoke():
     assert dispatcher._bg_tasks == set()
 
 
-@pytest.mark.asyncio
 async def test_stop_is_bounded_when_speak_hangs_longer_than_timeout():
     """汇合有界：speak 永远不结束时 stop 仍及时返回、不抛。
 

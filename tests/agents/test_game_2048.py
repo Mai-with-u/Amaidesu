@@ -16,8 +16,6 @@ import asyncio
 import random
 from typing import List, Optional
 
-import pytest
-
 from src.agents.game_2048 import (
     Board2048,
     Game2048Agent,
@@ -34,10 +32,7 @@ from src.modules.events.payloads.game import GameBoardStatePayload, GamePayload
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 
-
-# ---------------------------------------------------------------------------
 # 事件收集辅助
-# ---------------------------------------------------------------------------
 
 
 class EventCollector:
@@ -85,9 +80,7 @@ def _make_agent(
     )
 
 
-# ---------------------------------------------------------------------------
 # 元数据与事件族
-# ---------------------------------------------------------------------------
 
 
 def test_metadata_and_events() -> None:
@@ -99,12 +92,9 @@ def test_metadata_and_events() -> None:
     assert CoreEvents.GAME_ERROR in Game2048Agent.emits_events
 
 
-# ---------------------------------------------------------------------------
 # press：懒开局 / 快照事件 / 里程碑
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_press_starts_game_and_emits_state() -> None:
     bus = EventBus()
     collector = EventCollector(bus, {CoreEvents.GAME_STATE_CHANGED: GameBoardStatePayload})
@@ -134,7 +124,6 @@ async def test_press_starts_game_and_emits_state() -> None:
     assert payload2.history == ["up", "left"]
 
 
-@pytest.mark.asyncio
 async def test_milestone_emits_once_per_tier() -> None:
     bus = EventBus()
     collector = EventCollector(bus, {CoreEvents.GAME_MILESTONE: GamePayload})
@@ -157,7 +146,6 @@ async def test_milestone_emits_once_per_tier() -> None:
     assert len(collector.of(CoreEvents.GAME_MILESTONE)) == 1
 
 
-@pytest.mark.asyncio
 async def test_press_after_over_is_noop() -> None:
     bus = EventBus()
     agent = _make_agent(bus, rng_seed=5)
@@ -172,7 +160,6 @@ async def test_press_after_over_is_noop() -> None:
     assert agent.get_state_snapshot()["over"] is True
 
 
-@pytest.mark.asyncio
 async def test_invalid_move_dead_board_emits_report_once() -> None:
     bus = EventBus()
     collector = EventCollector(bus, {CoreEvents.GAME_REPORT: GamePayload})
@@ -201,12 +188,9 @@ async def test_invalid_move_dead_board_emits_report_once() -> None:
     assert len(collector.of(CoreEvents.GAME_REPORT)) == 1
 
 
-# ---------------------------------------------------------------------------
 # restart
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_restart_resets_board() -> None:
     bus = EventBus()
     collector = EventCollector(bus, {CoreEvents.GAME_STATE_CHANGED: GameBoardStatePayload})
@@ -229,12 +213,9 @@ async def test_restart_resets_board() -> None:
     assert last.history == []
 
 
-# ---------------------------------------------------------------------------
 # 工具面
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_tool_press_invalid_key_fails() -> None:
     bus = EventBus()
     agent = _make_agent(bus, rng_seed=7)
@@ -245,7 +226,6 @@ async def test_tool_press_invalid_key_fails() -> None:
     assert result.error_message is not None and "key" in result.error_message
 
 
-@pytest.mark.asyncio
 async def test_tool_press_move_returns_board_render() -> None:
     bus = EventBus()
     agent = _make_agent(bus, rng_seed=21)
@@ -258,7 +238,6 @@ async def test_tool_press_move_returns_board_render() -> None:
     assert structured["moves"] == 1
 
 
-@pytest.mark.asyncio
 async def test_tool_press_restart_and_get_state() -> None:
     bus = EventBus()
     agent = _make_agent(bus, rng_seed=21)
@@ -281,9 +260,7 @@ def test_visible_to_all_streamer_only() -> None:
     assert set(visible_to.keys()) == {"game_2048_press", "game_2048_get_state"}
 
 
-# ---------------------------------------------------------------------------
 # 规则引擎（board.py 归属本包的补充断言）
-# ---------------------------------------------------------------------------
 
 
 def test_board_new_game_spawns_two_tiles() -> None:

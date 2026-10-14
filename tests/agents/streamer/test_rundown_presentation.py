@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from src.agents.streamer.rundown.presentation import apply_rundown_control, build_rundown_view
 from src.agents.streamer.rundown.rundown_state import RundownState
 from src.modules.storage.models.rundown import DEFAULT_RUNDOWN
@@ -20,9 +18,7 @@ def _loaded_state() -> RundownState:
     return state
 
 
-# ---------------------------------------------------------------------------
 # 视图拼装
-# ---------------------------------------------------------------------------
 
 
 def test_build_view_segment_keys() -> None:
@@ -48,12 +44,9 @@ def test_build_view_none_when_not_loaded() -> None:
     assert build_rundown_view(RundownState()) is None
 
 
-# ---------------------------------------------------------------------------
 # 控制翻译：拒绝话术逐字锁定
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_control_no_rundown_loaded_rejected() -> None:
     """未加载时 goto 被 no_rundown_loaded 拒绝（pause 走状态机 not_running）。"""
     success, message, snapshot = apply_rundown_control(RundownState(), "goto", segment_id="x")
@@ -62,7 +55,6 @@ async def test_control_no_rundown_loaded_rejected() -> None:
     assert snapshot is not None and snapshot["status"] == "idle"
 
 
-@pytest.mark.asyncio
 async def test_control_pause_rejected_when_not_running() -> None:
     success, message, snapshot = apply_rundown_control(RundownState(), "pause")
     assert success is False
@@ -70,7 +62,6 @@ async def test_control_pause_rejected_when_not_running() -> None:
     assert snapshot is not None and snapshot["status"] == "idle"
 
 
-@pytest.mark.asyncio
 async def test_control_goto_requires_segment_id() -> None:
     success, message, snapshot = apply_rundown_control(_loaded_state(), "goto")
     assert success is False
@@ -78,7 +69,6 @@ async def test_control_goto_requires_segment_id() -> None:
     assert snapshot is None
 
 
-@pytest.mark.asyncio
 async def test_control_unknown_action() -> None:
     success, message, snapshot = apply_rundown_control(_loaded_state(), "rewind")
     assert success is False
@@ -86,7 +76,6 @@ async def test_control_unknown_action() -> None:
     assert snapshot is None
 
 
-@pytest.mark.asyncio
 async def test_control_unknown_segment_id_lists_available() -> None:
     success, message, _ = apply_rundown_control(_loaded_state(), "goto", segment_id="不存在的环节")
     assert success is False
@@ -94,7 +83,6 @@ async def test_control_unknown_segment_id_lists_available() -> None:
     assert "不存在的环节" not in message
 
 
-@pytest.mark.asyncio
 async def test_control_pause_then_resume_again_rejected() -> None:
     """pause → resume 正常链；重复 resume 被 not_paused 话术拒绝。"""
     state = _loaded_state()
@@ -108,12 +96,9 @@ async def test_control_pause_then_resume_again_rejected() -> None:
     assert snapshot is not None
 
 
-# ---------------------------------------------------------------------------
 # renew（续期）翻译
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_control_renew_resets_timer_by_human() -> None:
     """Dashboard 手动续期走 by="human"：成功后快照剩余时长回到完整周期。"""
     state = _loaded_state()
@@ -128,7 +113,6 @@ async def test_control_renew_resets_timer_by_human() -> None:
     assert state.get_transitions()[-1]["by"] == "human"
 
 
-@pytest.mark.asyncio
 async def test_control_renew_rejected_when_paused() -> None:
     """暂停中续期被 not_running 话术拒绝（renew 仅 running 合法）。"""
     state = _loaded_state()

@@ -63,9 +63,7 @@ async def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
     await store.close()
 
 
-# ---------------------------------------------------------------------------
 # status
-# ---------------------------------------------------------------------------
 
 
 def test_status_reports_mode_and_availability(client: TestClient) -> None:
@@ -76,9 +74,7 @@ def test_status_reports_mode_and_availability(client: TestClient) -> None:
     assert body["replay_progress"] is None
 
 
-# ---------------------------------------------------------------------------
 # replay dates
-# ---------------------------------------------------------------------------
 
 
 def test_replay_dates_empty(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -155,9 +151,7 @@ def test_replay_dates_from_live_chat(client: TestClient, monkeypatch: pytest.Mon
         asyncio.run(store.close())
 
 
-# ---------------------------------------------------------------------------
 # personas CRUD
-# ---------------------------------------------------------------------------
 
 
 def test_persona_create_list_update_delete(client: TestClient) -> None:
@@ -222,9 +216,7 @@ def test_persona_update_nonexistent(client: TestClient) -> None:
     assert resp.json()["success"] is False
 
 
-# ---------------------------------------------------------------------------
 # gifts CRUD
-# ---------------------------------------------------------------------------
 
 
 def test_gift_create_list_update_delete(client: TestClient) -> None:

@@ -17,8 +17,8 @@ AgentManager（只验证收到委派/入台账，不跑真实游戏）。
 """
 
 from __future__ import annotations
-import asyncio
 
+import asyncio
 from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -30,10 +30,10 @@ from src.modules.agents.manager import AgentManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger
-from src.modules.time_utils import now_ms
 
 # 与 [agents.streamer.command] 生产起步配置一致的映射语义
 _COME_INSTRUCTION = "到观众这儿来（跟随观众）"
@@ -128,12 +128,9 @@ async def harness():
     await h.teardown()
 
 
-# =============================================================================
 # happy 链路
-# =============================================================================
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("text", "expected_instruction"),
     [
@@ -172,12 +169,9 @@ async def test_danmaku_command_delegates_and_registers_task(
     assert q.structured_content["status"] == "accepted"
 
 
-# =============================================================================
 # 拒绝面
-# =============================================================================
 
 
-@pytest.mark.asyncio
 async def test_unwhitelisted_command_no_delegation_no_task(harness: _Harness) -> None:
     """白名单外命令（/admin）端到端不委派、台账无新任务。"""
     await harness.start_streamer()
@@ -189,7 +183,6 @@ async def test_unwhitelisted_command_no_delegation_no_task(harness: _Harness) ->
     assert len(harness.ledger) == 0
 
 
-@pytest.mark.asyncio
 async def test_rate_limit_rejects_from_fourth_command(harness: _Harness) -> None:
     """同一用户连发：默认 rate_max=3，第 4 条起不委派、台账不再增长。"""
     await harness.start_streamer()
@@ -208,7 +201,6 @@ async def test_rate_limit_rejects_from_fourth_command(harness: _Harness) -> None
     assert len(harness.ledger) == 4
 
 
-@pytest.mark.asyncio
 async def test_minecraft_not_enabled_invoke_fails_no_crash(
     loguru_capture,
 ) -> None:

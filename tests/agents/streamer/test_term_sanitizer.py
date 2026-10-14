@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.streamer_agent import StreamerAgent
@@ -61,7 +59,6 @@ def test_game_narrative_line_sanitized_at_boundary() -> None:
     assert "chest" in line
 
 
-@pytest.mark.asyncio
 async def test_reference_overview_sanitized() -> None:
     """参考工具的现场速览进参考段前脱敏：观测引用转人类可读。"""
 
@@ -91,7 +88,6 @@ async def test_reference_overview_sanitized() -> None:
     assert "一次现场观察" in overview
 
 
-@pytest.mark.asyncio
 async def test_delegation_render_without_task_id() -> None:
     """手头的事一栏不再携带任务号，原话中的标识符同样脱敏。"""
     registry = MagicMock()

@@ -20,10 +20,7 @@ from typing import Any, Dict, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-
-# ---------------------------------------------------------------------------
 # Fake Agent（鸭子类型：实现 dashboard 关心的门面即可）
-# ---------------------------------------------------------------------------
 
 
 class FakeStreamerAgent:
@@ -94,9 +91,7 @@ class _FakeAgentManager:
         return None
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 def _write_config(config_dir: Path, *, proactive_enabled: bool = False) -> None:
@@ -180,9 +175,7 @@ _REJECTED_DEBUG_RESULT: Dict[str, Any] = {
 }
 
 
-# ---------------------------------------------------------------------------
 # GET /api/v1/streamer/status
-# ---------------------------------------------------------------------------
 
 
 def test_status_unavailable_when_no_streamer_agent(config_dir: Path) -> None:
@@ -212,9 +205,7 @@ def test_status_returns_statistics_and_config(config_dir: Path) -> None:
     assert body["config"]["proactive_enabled"] is True
 
 
-# ---------------------------------------------------------------------------
 # POST /api/v1/streamer/test-decision
-# ---------------------------------------------------------------------------
 
 
 def test_test_decision_unavailable_when_no_streamer_agent(config_dir: Path) -> None:
@@ -363,9 +354,7 @@ def test_test_decision_facade_exception_does_not_500(config_dir: Path) -> None:
     assert "调用失败" in body["message"]
 
 
-# ---------------------------------------------------------------------------
 # POST /api/v1/streamer/trigger-proactive
-# ---------------------------------------------------------------------------
 
 
 def test_trigger_proactive_calls_facade(config_dir: Path) -> None:

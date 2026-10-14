@@ -28,10 +28,7 @@ from src.agents.streamer.utterance_queue import (
     UtteranceQueue,
 )
 
-
-# ---------------------------------------------------------------------------
 # 测试辅助：可记录调用顺序的 mock speak callable
-# ---------------------------------------------------------------------------
 
 
 class _MockSpeakRecorder:
@@ -71,9 +68,7 @@ class _MockSpeakRecorder:
                     self.completed.set()
 
 
-# ---------------------------------------------------------------------------
 # loguru 日志捕获（与 conftest 中的 helper 复制）
-# ---------------------------------------------------------------------------
 
 
 from loguru import logger as _loguru_logger  # noqa: E402
@@ -117,12 +112,9 @@ def loguru_capture():
         yield cap
 
 
-# ---------------------------------------------------------------------------
 # FIFO / 串行
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_enqueue_processes_in_fifo_order():
     """FIFO：先入队的先被 speak 处理。"""
     recorder = _MockSpeakRecorder(delay_s=0.01)
@@ -155,7 +147,6 @@ async def test_enqueue_processes_in_fifo_order():
         await queue.stop()
 
 
-@pytest.mark.asyncio
 async def test_queue_serializes_concurrent_invocations():
     """串行：即使多个 utterance 在队列中，speak 一次最多执行一个。"""
     recorder = _MockSpeakRecorder(delay_s=0.05)
@@ -179,12 +170,9 @@ async def test_queue_serializes_concurrent_invocations():
         await queue.stop()
 
 
-# ---------------------------------------------------------------------------
 # 容量溢出：丢最旧
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_overflow_drops_oldest_with_warning(loguru_capture):
     """队列满时丢最旧，记录 WARNING 日志，新条目仍能入队。"""
     recorder = _MockSpeakRecorder(delay_s=0.2)
@@ -226,12 +214,9 @@ async def test_overflow_drops_oldest_with_warning(loguru_capture):
         await queue.stop()
 
 
-# ---------------------------------------------------------------------------
 # 单 utterance 超时
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_per_item_timeout_skips_and_continues(loguru_capture):
     """单 speak 超过 render_timeout_ms → 取消并继续下一条。"""
     invocation_count = 0
@@ -276,12 +261,9 @@ async def test_per_item_timeout_skips_and_continues(loguru_capture):
         await queue.stop()
 
 
-# ---------------------------------------------------------------------------
 # wait_idle / busy（发言等播放的背压原语）
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_wait_idle_returns_immediately_when_idle():
     """队列空且 worker 闲：wait_idle 立即返回 True（未启动与已启动都成立）。"""
     queue = UtteranceQueue(speak=_MockSpeakRecorder(), max_queue=5, render_timeout_ms=2000)
@@ -295,7 +277,6 @@ async def test_wait_idle_returns_immediately_when_idle():
         await queue.stop()
 
 
-@pytest.mark.asyncio
 async def test_wait_idle_blocks_until_processing_completes():
     """正在播放时 busy=True，wait_idle 阻塞到播完才返回 True。"""
     recorder = _MockSpeakRecorder(delay_s=0.3)
@@ -311,7 +292,6 @@ async def test_wait_idle_blocks_until_processing_completes():
         await queue.stop()
 
 
-@pytest.mark.asyncio
 async def test_wait_idle_times_out_when_busy():
     """播放中 wait_idle 超时返回 False，不抛异常。"""
     speak_started = asyncio.Event()
@@ -331,7 +311,6 @@ async def test_wait_idle_times_out_when_busy():
         await queue.stop()
 
 
-@pytest.mark.asyncio
 async def test_wait_idle_waits_for_whole_queue_drain():
     """多条积压时 wait_idle 只在全部播完后返回（逐条完成唤醒重判谓词）。"""
     recorder = _MockSpeakRecorder(delay_s=0.1)
@@ -347,12 +326,9 @@ async def test_wait_idle_waits_for_whole_queue_drain():
         await queue.stop()
 
 
-# ---------------------------------------------------------------------------
 # 干净停止 / 禁用 no-op
-# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_stop_cancels_worker_cleanly():
     """stop() 后 worker 退出，未播放条目被丢弃（不进入 TTS）。"""
     recorder = _MockSpeakRecorder(delay_s=0.5)
@@ -372,7 +348,6 @@ async def test_stop_cancels_worker_cleanly():
     assert queue._worker_task is None or queue._worker_task.done()
 
 
-@pytest.mark.asyncio
 async def test_enqueue_before_start_buffers_for_later_start():
     """未 start 时 enqueue 不报错（缓冲在内部 deque）；start 后开始消费。"""
     recorder = _MockSpeakRecorder(delay_s=0.0)
@@ -395,7 +370,6 @@ async def test_enqueue_before_start_buffers_for_later_start():
         await queue.stop()
 
 
-@pytest.mark.asyncio
 async def test_enqueue_after_stop_rejected():
     """stop() 之后的 enqueue 被拒绝并返回 False。"""
     recorder = _MockSpeakRecorder()
@@ -410,7 +384,6 @@ async def test_enqueue_after_stop_rejected():
     assert accepted is False
 
 
-@pytest.mark.asyncio
 async def test_start_is_idempotent():
     """start() 幂等：重复调用不会重建 worker。"""
     recorder = _MockSpeakRecorder()
@@ -429,9 +402,7 @@ async def test_start_is_idempotent():
     await queue.stop()
 
 
-# ---------------------------------------------------------------------------
 # 构造参数校验
-# ---------------------------------------------------------------------------
 
 
 def test_constructor_rejects_non_callable_speak():
@@ -456,9 +427,7 @@ def test_defaults_match_design_constants():
     assert DEFAULT_RENDER_TIMEOUT_MS == 60_000
 
 
-# ---------------------------------------------------------------------------
 # 工具：等待异步条件
-# ---------------------------------------------------------------------------
 
 
 async def _wait_for(predicate, *, timeout: float = 2.0, interval: float = 0.01) -> None:

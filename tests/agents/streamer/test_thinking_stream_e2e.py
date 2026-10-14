@@ -10,8 +10,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.llm.payload import Response
@@ -54,7 +52,6 @@ def _build_agent(thinking_sink: Optional[Any], enabled: bool = True) -> Streamer
     )
 
 
-@pytest.mark.asyncio
 async def test_decide_round_delivers_reasoning_to_sink():
     sink = _RecordingSink()
     agent = _build_agent(thinking_sink=sink)
@@ -76,7 +73,6 @@ async def test_decide_round_delivers_reasoning_to_sink():
     assert seqs == sorted(seqs)
 
 
-@pytest.mark.asyncio
 async def test_disabled_switch_short_circuits_sink():
     sink = _RecordingSink()
     agent = _build_agent(thinking_sink=sink, enabled=False)
@@ -93,7 +89,6 @@ async def test_disabled_switch_short_circuits_sink():
     assert sink.calls == []
 
 
-@pytest.mark.asyncio
 async def test_no_sink_means_no_crash():
     agent = _build_agent(thinking_sink=None)
 
