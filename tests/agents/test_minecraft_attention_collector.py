@@ -124,6 +124,12 @@ def test_summary_drops_coordinates_and_keeps_the_rest() -> None:
         without_coordinates("自卫结束但走不回打点（还差 7 格），停在了 3, 64, 9；主任务已暂停，等下一步指示")
         == "自卫结束但走不回打点（还差 7 格），主任务已暂停，等下一步指示"
     )
+    # 物品、能力 ID 里的英文冒号不是断句符：sequence 每步做完的结论原样保留 ID，句间冒号照旧重组为逗号
+    assert (
+        without_coordinates("第 3 步（maicraft:build，砌东墙）：按图建好了")
+        == "第 3 步（maicraft:build，砌东墙），按图建好了"
+    )
+    assert without_coordinates("挖到了: 3 个 minecraft:iron_ore") == "挖到了，3 个 minecraft:iron_ore"
     assert summarize("reflex_finished", "temporary_task_finished", "退回了安全处，继续干活") == (
         "身体处理完急事：退回了安全处，继续干活"
     )

@@ -92,7 +92,9 @@ _COORDINATES = re.compile(r"-?\d+\s*,\s*-?\d+\s*,\s*-?\d+")
 # 括号里的观察编号（e12、b5 这类）是给游戏 Agent 指东西用的，念给观众没有意义，去掉括号连同编号。
 _OBSERVATION_IDS = re.compile(r"\s*[（(][a-z]\d+[）)]")
 # 只按中文标点与分号、冒号断句；英文逗号不断，否则坐标本身会被拆开。
-_CLAUSE_BREAK = re.compile(r"[，；：;:]")
+# 英文冒号后面紧跟字母数字时是物品、方块、能力的 ID（minecraft:oak_log、"第 3 步（maicraft:build）"），
+# 不断开，否则重组后变成"minecraft，oak_log"念给观众。
+_CLAUSE_BREAK = re.compile(r"[，；：;]|:(?![\w./-])")
 
 
 def classify(source_event_type: str) -> Optional[str]:
