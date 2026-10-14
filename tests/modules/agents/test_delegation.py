@@ -332,3 +332,58 @@ async def test_live_ended_settles_suspended_delegations(mc: _McRig) -> None:
     await asyncio.sleep(0.05)  # task.changed 经后台任务调度广播，让一拍再断言
     assert changed[-1].status == "cancelled"
     assert "下播自动收尾" in changed[-1].summary
+
+
+# ---------------------------------------------------------------------------
+# 遥控型 Agent 在场：不接委派的 Agent 不构成留空目标的歧义
+# ---------------------------------------------------------------------------
+
+
+class _RemoteStubAgent(BaseAgent):
+    """遥控型游戏 Agent 桩：不覆写接收入口（默认拒收委派与递话），只靠工具被驱动。"""
+
+    name = "remote_game"
+    description = "遥控型游戏桩"
+
+    def list_tools(self):
+        return []
+
+
+async def test_empty_target_ignores_agents_without_receive_entry(rig: _Rig) -> None:
+    """留空目标只在覆写了接收入口的名册里解析：同时启用一个遥控型 Agent 不算第二个候选。"""
+    rig.manager.register(_RemoteStubAgent())
+    provider = rig.registry._providers[0]  # noqa: SLF001 - 取已注册的 framework provider 读名册
+
+    res = await rig.call("framework_delegate", {"agent": "", "instruction": "去挖矿"})
+
+    assert res.success is True and res.structured_content["executor"] == "agent_b"
+    assert _agent(rig, "agent_b").received[0][1] == "去挖矿"
+    enum = provider._delegate_spec().parameters_schema["properties"]["agent"].get("enum", [])  # noqa: SLF001
+    assert "remote_game" not in enum and "agent_b" in enum
+
+
+async def test_empty_target_with_no_receivers_fails_clearly() -> None:
+    """名册里没有能接收委派的 Agent：留空目标受理失败，错误信息指向"直接用它自己的操作工具"。"""
+    no_receiver = _Rig(_StubAgent("agent_a"), _RemoteStubAgent())
+    res = await no_receiver.call("framework_delegate", {"agent": "", "instruction": "按一下"})
+
+    assert res.success is False
+    assert "没有能接收的 Agent" in res.error_message and "操作工具" in res.error_message
+    assert len(no_receiver.ledger) == 0
+
+
+async def test_framework_guide_lists_delegable_agents_or_stays_silent(rig: _Rig) -> None:
+    """framework 工具面说明：有能接收委派的 Agent 才给（读者自己不算），否则空串。"""
+    provider = rig.registry._providers[0]  # noqa: SLF001 - 取已注册的 framework provider
+
+    guide = provider.guide_for("agent_a")
+    assert "agent_b=stub agent_b" in guide and "agent_a=" not in guide
+    assert "framework_delegate" in guide and "framework_prompt" in guide and "framework_task_status" in guide
+    # framework 工具面未声明名单 → 默认仅主播可见：主播读到的说明列出全部能接收委派的 Agent
+    streamer_guide = provider.guide_for("streamer")
+    assert "agent_a=stub agent_a" in streamer_guide and "agent_b=stub agent_b" in streamer_guide
+    assert rig.registry.guides(for_agent="streamer") == [("framework", streamer_guide)]
+    assert rig.registry.guides(for_agent="agent_a") == []
+
+    silent = _Rig(_StubAgent("solo"), _RemoteStubAgent())
+    assert silent.registry._providers[0].guide_for("solo") == ""  # noqa: SLF001

@@ -49,6 +49,16 @@ logger = get_logger("TextAdvTools")
 # 提供者标识统一来源（ToolSpec.provider / 追溯用），避免字面量重复
 PROVIDER_NAME = "text_adv"
 
+# 工具面使用说明（给主播的玩法）：文字冒险是遥控型游戏——推进与选择都由主播直接
+# 用工具做，观察循环只负责把新剧情与待选项上报；没有委派，也没有任务号。
+STREAMER_GUIDE = (
+    "文字冒险（视觉小说）是遥控型游戏：剧情由主播自己推进、选项由她自己点——"
+    "想让剧情自动走就 text_adv_set_auto(on=true)，之后新剧情会以游戏记录送来；"
+    "画面出现选项时游戏记录会写明「请调用 text_adv_choose(option=N)」，按主播人设定夺后直接调它；"
+    "想手动逐屏看就 text_adv_set_auto(on=false) 再用 text_adv_advance，随时用 text_adv_get_state 看当前屏。"
+    "它没有后台任务：不要对它用 framework_delegate 或 framework_prompt。"
+)
+
 
 # ---------------------------------------------------------------------------
 # 监视器几何（坐标反算的显示器原点来源；可注入替换以便测试）
@@ -256,6 +266,11 @@ class TextAdvToolProvider(BaseToolProvider):
 
     def list_tools(self) -> Iterable[ToolSpec]:
         return [build_advance_spec(), build_choose_spec(), build_set_auto_spec(), build_get_state_spec()]
+
+    def guide_for(self, agent_name: str) -> str:
+        """玩法说明：四个工具只对主播可见，读者固定是主播，不按读者区分。"""
+        del agent_name
+        return STREAMER_GUIDE
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         name = invocation.tool_name
@@ -537,6 +552,7 @@ class TextAdvToolProvider(BaseToolProvider):
 
 __all__ = [
     "PROVIDER_NAME",
+    "STREAMER_GUIDE",
     "MonitorGeometry",
     "TextAdvToolProvider",
     "build_advance_spec",

@@ -14,6 +14,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GameBoardStatePayload, GamePayload
 from src.modules.tools.models import ToolInvocation
+from src.modules.tools.registry import ToolRegistry
 
 _DEAD_BOARD = [[2, 4, 2, 4], [4, 2, 4, 2], [2, 4, 2, 4], [4, 2, 4, 2]]
 
@@ -154,3 +155,22 @@ def test_board_new_game_spawns_two_tiles() -> None:
     board.new_game()
 
     assert sum(1 for row in board.grid for value in row if value) == 2 and board.moves == 0
+
+
+# ---------------------------------------------------------------------------
+# 工具面使用说明：告诉主播这是遥控型游戏
+# ---------------------------------------------------------------------------
+
+
+def test_tool_guide_declares_remote_control_shape() -> None:
+    """玩法说明点名两个工具、说明没有后台任务、不走委派；经注册表按名单可取。"""
+    agent = Game2048Agent(Game2048Config(), rng=random.Random(1))
+    provider = Game2048ToolProvider(agent=agent)
+    guide = provider.guide_for("streamer")
+    assert "遥控型" in guide and "game_2048_press" in guide and "game_2048_get_state" in guide
+    assert "framework_delegate" in guide and "没有后台任务" in guide
+
+    registry = ToolRegistry()
+    registry.register_provider(provider, visible_to=build_game_2048_visible_to())
+    assert registry.guides(for_agent="streamer") == [("game_2048", guide)]
+    assert registry.guides(for_agent="minecraft") == []

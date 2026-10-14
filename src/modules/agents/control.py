@@ -36,6 +36,9 @@ from src.modules.time_utils import now_ms
 
 logger = get_logger("AgentControl")
 
+# 提供者标识统一来源（ToolSpec.provider / 注册名前缀；主播 Planner 据此识别委派工具面）
+PROVIDER_NAME = "framework"
+
 
 def _emit_prompted(event_bus: Any, *, target: str, content: str, source: str) -> None:
     """广播 agent.prompted（递话受理成功后调用；观测旁路，失败仅记日志）。"""
@@ -89,7 +92,7 @@ _TASK_STATUS_SPEC: ToolSpec = ToolSpec(
         "required": ["task_id"],
     },
     kind="sync",
-    provider="framework",
+    provider=PROVIDER_NAME,
 )
 
 
@@ -264,7 +267,7 @@ class AgentControlProvider(BaseToolProvider):
 
     @property
     def name(self) -> str:
-        return "framework"
+        return PROVIDER_NAME
 
     def list_tools(self) -> Iterable[ToolSpec]:
         """委派 + 递话 + 任务状态工具（恒三件）。
@@ -313,7 +316,25 @@ class AgentControlProvider(BaseToolProvider):
                 f"目标 Agent 注册名（当前可委派：{listed}；留空 = 当前唯一启用的游戏 Agent，"
                 "有多个候选时必须点名；不能指定自己）"
             )
-        return "目标 Agent 注册名（当前名册为空，省略即派给当前唯一启用的游戏 Agent）"
+        return "目标 Agent 注册名（当前没有能接收的 Agent：启用的游戏若不走委派，直接用它自己的操作工具）"
+
+    def guide_for(self, agent_name: str) -> str:
+        """framework 工具面的使用说明：有能接收委派的 Agent 才给，否则空串。
+
+        读说明的 Agent 自己不算候选（禁自派）。说明只点明"可以委派给谁"
+        与三件工具的分工；委派型游戏的完整守则由读说明的一方按自己的提示词
+        追加——框架不写主播口吻的话。
+        """
+        roster = {name: desc for name, desc in self._roster("receive_delegation").items() if name != agent_name}
+        if not roster:
+            return ""
+        listed = "；".join(f"{name}={desc or '（无描述）'}" for name, desc in sorted(roster.items()))
+        return (
+            f"委派型游戏（可以把一件事交给它在后台做）：{listed}。"
+            "用 framework_delegate 开始做一件事（只给目标与约束，不给步骤），"
+            "用 framework_prompt 给手上正在做的事补充要求；进度以它的上报与 "
+            "framework_task_status 的查询结果为准，不要自己推测。"
+        )
 
     def _delegate_spec(self) -> ToolSpec:
         """构造委派规格：把名册（注册名 + 描述）写进 agent 参数说明与枚举。"""
@@ -336,7 +357,7 @@ class AgentControlProvider(BaseToolProvider):
             description=_DELEGATE_DESCRIPTION,
             parameters_schema=schema,
             kind="sync",
-            provider="framework",
+            provider=PROVIDER_NAME,
         )
 
     def _prompt_spec(self) -> ToolSpec:
@@ -357,7 +378,7 @@ class AgentControlProvider(BaseToolProvider):
             description=_PROMPT_DESCRIPTION,
             parameters_schema=schema,
             kind="sync",
-            provider="framework",
+            provider=PROVIDER_NAME,
         )
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -391,18 +412,24 @@ class AgentControlProvider(BaseToolProvider):
         return _generate_task_id()
 
     def _resolve_target(
-        self, target_name: str, caller: str, tool_name: str
+        self, target_name: str, caller: str, tool_name: str, hook: str
     ) -> tuple[Optional[Any], Optional[ToolExecutionResult]]:
         """解析目标 Agent（委派/递话共用）：留空兜底 + 名册校验 + 禁自派。
 
-        留空目标按**当前唯一启用的游戏 Agent** 解析：接的是哪个游戏由配置的
-        enabled 名单决定，这里不写死任何游戏名；候选不唯一就拒绝并要求点名，
-        避免把话递错游戏。解析失败返回 ``(None, failure)``。
+        留空目标按**当前唯一能接收 ``hook`` 入口的 Agent** 解析：接的是哪个游戏
+        由配置的 enabled 名单决定，这里不写死任何游戏名；只在覆写了接收入口的
+        名册里挑——遥控型游戏（按键、选项，不接委派）同时启用也不构成歧义，
+        它们本来就不是委派对象。候选不唯一就拒绝并要求点名，避免把话递错游戏。
+        解析失败返回 ``(None, failure)``。
         """
         if not target_name:
-            candidates = [name for name in self.manager.list_agents() if name != caller]
+            candidates = [name for name in self._roster(hook) if name != caller]
             if len(candidates) != 1:
-                detail = "当前没有其他已启用的 Agent" if not candidates else f"当前启用多个（{'、'.join(candidates)}）"
+                detail = (
+                    "当前没有能接收的 Agent（启用的游戏若不走委派，直接用它自己的操作工具）"
+                    if not candidates
+                    else f"当前有多个候选（{'、'.join(candidates)}）"
+                )
                 return None, ToolExecutionResult(
                     tool_name=tool_name,
                     success=False,
@@ -447,7 +474,7 @@ class AgentControlProvider(BaseToolProvider):
             )
         # 发起方 = 调用方（invocation.source；装配侧可按需要扩展映射）
         initiator = caller or "unknown"
-        target, failure = self._resolve_target(target_name, caller, "framework_delegate")
+        target, failure = self._resolve_target(target_name, caller, "framework_delegate", "receive_delegation")
         if failure is not None:
             return failure
         assert target is not None  # 解析成功时必有实例（类型收窄）
@@ -498,7 +525,7 @@ class AgentControlProvider(BaseToolProvider):
                 error_message="prompt 需要 content（递话文本）",
             )
         target_name = str(args.get("agent", "") or "")
-        target, failure = self._resolve_target(target_name, caller, "framework_prompt")
+        target, failure = self._resolve_target(target_name, caller, "framework_prompt", "receive_prompt")
         if failure is not None:
             return failure
         assert target is not None  # 解析成功时必有实例（类型收窄）
@@ -556,6 +583,7 @@ def build_agent_control_provider(
 
 
 __all__ = [
+    "PROVIDER_NAME",
     "AgentControl",
     "AgentControlProvider",
     "build_agent_control_provider",

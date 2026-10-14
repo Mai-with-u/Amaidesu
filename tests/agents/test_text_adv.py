@@ -372,3 +372,21 @@ async def test_advance_presses_records_the_screen_and_fails_softly() -> None:
     await asyncio.sleep(0.05)
     for events in (collected, guarded_events, blind_events):
         assert events["error"] == [] and events["milestone"] == [] and events["report"] == []  # 工具调用本身零事件
+
+
+# ---------------------------------------------------------------------------
+# 工具面使用说明：告诉主播这是遥控型游戏
+# ---------------------------------------------------------------------------
+
+
+def test_tool_guide_declares_remote_control_shape() -> None:
+    """玩法说明点名四个工具、说明选项上报后直接 choose、不走委派；经注册表按名单可取。"""
+    _agent, provider, _input, _collected = make_tools()
+    guide = provider.guide_for("streamer")
+    for tool_name in ("text_adv_set_auto", "text_adv_choose", "text_adv_advance", "text_adv_get_state"):
+        assert tool_name in guide
+    assert "遥控型" in guide and "framework_delegate" in guide
+
+    registry = ToolRegistry()
+    registry.register_provider(provider, visible_to=build_text_adv_visible_to())
+    assert registry.guides(for_agent="streamer") == [("text_adv", guide)]

@@ -46,6 +46,16 @@ logger = get_logger("MinecraftTools")
 # 提供者标识统一来源（ToolSpec.provider / 追溯用），避免字面量重复
 PROVIDER_NAME = "minecraft"
 
+# 工具面使用说明（给主播的玩法）：Minecraft 是委派型游戏——主播交代目标，游戏里的
+# 身体自己拆解动手、做完或卡住再上报；主播只拿两件只读工具看现场与工作文档。
+STREAMER_GUIDE = (
+    "Minecraft 是委派型游戏：交代一个目标（framework_delegate）就是安排主播在游戏里开始做一件事，"
+    "游戏里的身体自己拆解、动手，做完或卡住再以游戏记录上报；中途要改要求用 framework_prompt。"
+    "想看一眼现场（身体状态、背包、身边的生物与设施）用 minecraft_glance；"
+    "想看待办、笔记和近期上报用 minecraft_get_work_log。"
+    "方向键、选项这类逐步操作在这款游戏里不存在，所有游戏内行动都走委派。"
+)
+
 # 上报回调形态：kind/content/scene 入参 → 拒绝原因（None=受理）。
 # 拒绝语义（交付门禁）由 Agent 侧判定——工具层只透传结果。
 ReportCallback = Callable[[str, str, str], Awaitable[Optional[str]]]
@@ -304,6 +314,10 @@ class MinecraftToolProvider(BaseToolProvider):
         if self.skill_reader is not None:
             specs.append(build_skill_spec(PROVIDER_NAME))
         return specs
+
+    def guide_for(self, agent_name: str) -> str:
+        """玩法说明只给别的 Agent（主播）：自己的工具协议写在自己的系统提示词里。"""
+        return "" if agent_name == PROVIDER_NAME else STREAMER_GUIDE
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         started_ms = int(time.time() * 1000)

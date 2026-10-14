@@ -40,6 +40,16 @@ PROVIDER_NAME = "game_2048"
 # press.key 的合法取值（四个方向 + 重开）
 PRESS_KEYS: tuple[str, ...] = ("up", "down", "left", "right", "restart")
 
+# 工具面使用说明（给主播的玩法）：2048 是遥控型游戏——每一步都是主播自己按出来的，
+# 没有后台任务，也就没有委派、补充要求、任务号这些事。主播的 Planner 把它拼进
+# 【当前游戏的玩法】，据此知道该直接调 press 而不是 framework_delegate。
+STREAMER_GUIDE = (
+    "2048 是遥控型游戏：棋盘在主播自己手里，每一步都由她亲自按出来——"
+    "用 game_2048_press(key=up/down/left/right) 让她滑动一步，想换局就 press(key=restart)，"
+    "用 game_2048_get_state 看当前盘面与得分。它没有后台任务：不要对它用 framework_delegate "
+    "或 framework_prompt，观众指挥方向时直接按，按完就安排她讲盘面变化；终局会以游戏记录上报。"
+)
+
 
 # ---------------------------------------------------------------------------
 # ToolSpec 工厂
@@ -141,6 +151,11 @@ class Game2048ToolProvider(BaseToolProvider):
     def list_tools(self) -> Iterable[ToolSpec]:
         return [build_press_spec(), build_get_state_spec()]
 
+    def guide_for(self, agent_name: str) -> str:
+        """玩法说明：两个工具只对主播可见，读者固定是主播，不按读者区分。"""
+        del agent_name
+        return STREAMER_GUIDE
+
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         name = invocation.tool_name
         args: Dict[str, Any] = invocation.arguments or {}
@@ -228,6 +243,7 @@ class Game2048ToolProvider(BaseToolProvider):
 __all__ = [
     "PRESS_KEYS",
     "PROVIDER_NAME",
+    "STREAMER_GUIDE",
     "Game2048ToolProvider",
     "build_game_2048_visible_to",
     "build_get_state_spec",

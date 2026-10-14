@@ -744,3 +744,17 @@ async def test_visual_caller_without_image_keeps_payload() -> None:
     agent = _agent_with_result(result, visual=True)
     assert await agent._execute_tool("minecraft_glance", {}) == {"ok": True}
     assert agent._tail_images.drain() is None
+
+
+# ---------------------------------------------------------------------------
+# 工具面使用说明：告诉主播这是委派型游戏；对自己不给说明
+# ---------------------------------------------------------------------------
+
+
+def test_tool_guide_declares_delegate_shape_for_streamer_only() -> None:
+    """玩法说明只给别的读者（主播）：点名委派工具与两件只读工具；读者是自己时为空串。"""
+    provider = MinecraftToolProvider(state=MinecraftAgentState())
+    guide = provider.guide_for("streamer")
+    assert "委派型" in guide and "framework_delegate" in guide and "framework_prompt" in guide
+    assert "minecraft_glance" in guide and "minecraft_get_work_log" in guide
+    assert provider.guide_for("minecraft") == ""
