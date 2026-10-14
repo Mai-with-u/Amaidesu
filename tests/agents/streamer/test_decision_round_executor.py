@@ -1,9 +1,4 @@
-"""DecisionRoundExecutor 单元测试：决策结果视图 + 可观测事件 + 失败分支。
-
-全链路（弹幕 → flush → 决策 → 发言）由 ``test_decision_loop`` 覆盖；
-本文件直接打 executor，锁定执行半的分支行为与早返回语义
-（planner 失败早返回的字面行为在 ``test_decision_loop`` 有全链路依赖）。
-"""
+"""DecisionRoundExecutor：决策结果视图、可观测事件顺序、失败与沉默分支的记账，以及原因码中文文案"""
 
 from __future__ import annotations
 
@@ -118,20 +113,16 @@ async def test_execute_full_round_emits_stage_and_decision():
         "reply_duration_ms",
         "total_duration_ms",
     }
-    assert result["speech"] == "你好呀"
-    assert result["emotion"] == "happy"
-    assert result["utterance_id"] == "utt_1_1"
-    assert result["plan"]["should_reply"] is True
-    assert result["error"] is None
+    assert (result["speech"], result["emotion"], result["utterance_id"]) == ("你好呀", "happy", "utt_1_1")
+    assert result["plan"]["should_reply"] is True and result["error"] is None
     assert result["round_id"].startswith("rnd_")
 
-    # 恰好两条 stage（planning → idle）+ 恰好一条 planner.decision
-    events = [(name, source) for name, _, source in deps["emissions"]]
-    assert events.count((CoreEvents.STREAMER_STAGE, "streamer_agent.stage")) == 2
-    assert events.count((CoreEvents.PLANNER_DECISION, "streamer_agent.decision")) == 1
-    # 顺序：planning → decision → idle
-    order = [name for name, _, _ in deps["emissions"]]
-    assert order == [CoreEvents.STREAMER_STAGE, CoreEvents.PLANNER_DECISION, CoreEvents.STREAMER_STAGE]
+    # planning → decision → idle，各自带来源标识
+    assert [(name, source) for name, _, source in deps["emissions"]] == [
+        (CoreEvents.STREAMER_STAGE, "streamer_agent.stage"),
+        (CoreEvents.PLANNER_DECISION, "streamer_agent.decision"),
+        (CoreEvents.STREAMER_STAGE, "streamer_agent.stage"),
+    ]
 
     # 发言管线与记账
     deps["speech"].dispatch.assert_called_once()
@@ -165,46 +156,41 @@ async def test_planner_exception_short_circuits_with_error_prefix():
     result = await executor.execute([], forced=False, trigger_reason="batch:flush")
 
     assert result["error"].startswith("planner_failed:")
-    assert result["plan"] is None
-    assert result["speech"] is None
-    assert deps["stats"].planner_failures == 1
-    assert deps["stats"].total_no_action == 1
-    assert deps["stats"].total_replies == 0
+    assert result["plan"] is None and result["speech"] is None
+    stats = deps["stats"]
+    assert (stats.planner_failures, stats.total_no_action, stats.total_replies) == (1, 1, 0)
     # 失败也收口：planning → decision → idle 三事件齐全
     order = [name for name, _, _ in deps["emissions"]]
     assert order == [CoreEvents.STREAMER_STAGE, CoreEvents.PLANNER_DECISION, CoreEvents.STREAMER_STAGE]
     deps["speech"].dispatch.assert_not_called()
 
 
-async def test_planner_no_reply_counts_no_action_and_replyer_failures():
-    outcome = {
-        "replied": False,
-        "silent_reason": "low_confidence",
-        "reply_failures": 2,
-        "error": None,
-    }
+@pytest.mark.parametrize(
+    ("outcome", "error", "planner_failures", "replyer_failures"),
+    [
+        ({"replied": False, "silent_reason": "low_confidence", "reply_failures": 2, "error": None}, None, 0, 2),
+        (
+            {"replied": False, "reply_failures": 0, "error": "reply tool exploded"},
+            "planner_failed: reply tool exploded",
+            1,
+            0,
+        ),
+    ],
+    ids=["silent", "silent_with_error"],
+)
+async def test_no_reply_outcomes_count_no_action(outcome, error, planner_failures, replyer_failures):
     executor, deps = _make_executor(outcome)
-
     result = await executor.execute([], forced=False, trigger_reason="batch:flush")
 
-    assert result["plan"]["should_reply"] is False
-    assert result["silent_reason"] == "low_confidence"
-    assert result["error"] is None  # outcome 无 error 时不标 planner 失败
-    assert deps["stats"].total_no_action == 1
-    assert deps["stats"].replyer_failures == 2
-    assert deps["stats"].planner_failures == 0
+    assert result["plan"]["should_reply"] is False and result["error"] == error
+    assert result["silent_reason"] == outcome.get("silent_reason")
+    stats = deps["stats"]
+    assert (stats.total_no_action, stats.planner_failures, stats.replyer_failures) == (
+        1,
+        planner_failures,
+        replyer_failures,
+    )
     deps["speech"].dispatch.assert_not_called()
-
-
-async def test_planner_no_reply_with_error_marks_planner_failure():
-    outcome = {"replied": False, "reply_failures": 0, "error": "reply tool exploded"}
-    executor, deps = _make_executor(outcome)
-
-    result = await executor.execute([], forced=False, trigger_reason="batch:flush")
-
-    assert result["error"] == "planner_failed: reply tool exploded"
-    assert deps["stats"].planner_failures == 1
-    assert deps["stats"].total_no_action == 1
 
 
 # 阶段补充文案：原因码 → 可读中文（面板 detail 不裸奔英文单词）
@@ -229,16 +215,9 @@ def test_trigger_reason_text_maps_known_codes(reason: str, expected: str):
     assert _trigger_reason_text(reason) == expected
 
 
-@pytest.mark.parametrize(
-    ("reason", "expected"),
-    [
-        ("natural", "自然终止"),
-        ("max_steps", "超出步数上限"),
-        ("brand_new_reason", "brand_new_reason"),
-    ],
-)
-def test_silent_reason_text_maps_known_codes(reason: str, expected: str):
-    assert _silent_reason_text(reason) == expected
+def test_silent_reason_text_maps_known_codes():
+    texts = [_silent_reason_text(r) for r in ("natural", "max_steps", "brand_new_reason")]
+    assert texts == ["自然终止", "超出步数上限", "brand_new_reason"]
 
 
 async def test_execute_emits_human_readable_stage_detail():
