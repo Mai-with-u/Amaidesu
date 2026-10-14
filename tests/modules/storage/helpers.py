@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
+from src.modules.llm.bootstrap import _ResolvedModel, _ResolvedProfile
+from src.modules.llm.engine import LLMManager
 from src.modules.events.payloads.room import (
     GiftInfo,
     GuardInfo,
@@ -82,4 +84,22 @@ def make_room_message(
     return RoomMessagePayload(**common)
 
 
-__all__ = ["DEFAULT_PLATFORM", "make_room_message"]
+def make_llm_manager(client: Any, *, llm_repo: Any = None, **kwargs: Any) -> LLMManager:
+    """绕过 setup() 的真实 provider 装配：planner 档位单模型 glm-4.7，走注入的客户端替身。"""
+    manager = LLMManager(llm_repo=llm_repo, **kwargs)
+    manager._provider_clients["fake"] = client
+    manager._providers["fake"] = ({"name": "fake", "client_type": "openai"}, client)
+    manager._models["glm-4.7"] = ({"name": "glm-4.7", "model_identifier": "glm-4.7", "api_provider": "fake"}, "fake")
+    manager._profiles["planner"] = _ResolvedProfile(
+        profile_name="planner",
+        slow_threshold_ms=15_000,
+        selection_strategy="sequential",
+        seed=0,
+        temperature=0.3,
+        models=[_ResolvedModel(model_name="glm-4.7", model_identifier="glm-4.7", provider_name="fake")],
+    )
+    manager._model_call_counts["planner"] = {}
+    return manager
+
+
+__all__ = ["DEFAULT_PLATFORM", "make_llm_manager", "make_room_message"]
