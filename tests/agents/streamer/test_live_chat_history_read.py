@@ -1,333 +1,154 @@
-"""live_chat 单一事实源读取链路测试（ContextService 删除后）。
-
-覆盖：
-- 组合索引 ``idx_live_chat_session_ts`` 随 initialize 建立（幂等 DDL）
-- ``list_recent_live_chat`` 的 sender_role 过滤与空表空读
-- ``StreamerAgent._read_history``：无显式场次 / 空场次 → 空列表，不抛错
-- ``BackgroundMaintainer._summarize_topic``：live_chat viewer 行 → topic_summary
-  可被写入（摘要链路复活：弹幕进 live_chat 即进话题摘要输入）
-"""
+"""live_chat 单一事实源读取链路：会话历史、场次切换、时间线笔记与话题摘要输入"""
 
 from __future__ import annotations
 
-import shutil
-import tempfile
-from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.agents.streamer.background import BackgroundMaintainer
-from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.timeline import GAME_MESSAGE_TYPE
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.live import LiveStartedPayload
-from src.modules.llm.client import LLMResponse
 from src.modules.llm.payload import Response
 from src.modules.prompts import PromptManager
 from src.modules.storage.database import SQLiteDatabase
-
-
-@pytest.fixture
-def temp_db_path() -> Generator[Path, None, None]:
-    td = Path(tempfile.mkdtemp(prefix="streamer-live-chat-read-"))
-    yield td / "test.db"
-    shutil.rmtree(td, ignore_errors=True)
-
-
-@pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
-    s = SQLiteDatabase(temp_db_path)
-    await s.initialize()
-    yield s
-    await s.close()
+from tests.agents.streamer.helpers import make_streamer_agent, stub_prompt
 
 
 class _FakeSessionManager:
-    """resolve_pk 返回固定主键；pk=None 表示无显式场次。"""
+    def __init__(self, pk: Optional[int]) -> None:
+        self.pk = pk
 
-    def __init__(self, pk) -> None:
-        self._pk = pk
-
-    async def resolve_pk(self):
-        return self._pk
+    async def resolve_pk(self) -> Optional[int]:
+        return self.pk
 
 
-# 索引
-
-
-async def test_initialize_creates_live_chat_session_ts_index(store: SQLiteDatabase) -> None:
-    """全新库 initialize → sqlite_master 含组合索引。"""
-    rows = await store.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_live_chat_session_ts'")
-    assert len(rows) == 1
-
-
-async def test_initialize_index_idempotent(store: SQLiteDatabase) -> None:
-    """重复 initialize 不因索引 DDL 报错（IF NOT EXISTS 幂等）。"""
-    store2 = SQLiteDatabase(store.db_path)
-    await store2.initialize()
-    await store2.close()
-
-
-# 读取改道：sender_role 过滤 + 空读
-
-
-async def test_list_recent_live_chat_role_filter(store: SQLiteDatabase) -> None:
-    """sender_role='viewer' 只取观众行；空表返回 []。"""
-    empty = await store.chat.list_recent_live_chat(live_session_id=1, sender_role="viewer")
-    assert empty == []
-
+async def _chat(store: SQLiteDatabase, ts: int, role: str, content: str, session: int = 1, mid: str = "") -> None:
     await store.chat.insert_live_chat(
-        live_session_id=1,
-        timestamp_ms=100,
-        sender_role="viewer",
-        sender_name="观众A",
-        content="你好",
-        message_type="danmaku",
+        live_session_id=session,
+        timestamp_ms=ts,
+        sender_role=role,
+        sender_name="观众" if role == "viewer" else "主播",
+        content=content,
+        message_type="danmaku" if role == "viewer" else "speak",
+        message_id=mid or None,
     )
-    await store.chat.insert_live_chat(
-        live_session_id=1,
-        timestamp_ms=200,
-        sender_role="assistant",
-        sender_name="主播",
-        content="欢迎",
-        message_type="speak",
-    )
+
+
+async def _viewer_turns(store: SQLiteDatabase, start: int, count: int, session: int = 1) -> None:
+    for i in range(start, start + count):
+        await _chat(store, 1000 + i, "viewer", f"消息{i}", session=session, mid=f"m{i}")
+
+
+def _agent(store: SQLiteDatabase, pk: Optional[int]):
+    return make_streamer_agent(chat_repo=store.chat, session_manager=_FakeSessionManager(pk))
+
+
+async def test_session_index_and_role_filter(store: SQLiteDatabase) -> None:
+    index = "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_live_chat_session_ts'"
+    assert len(await store.execute(index)) == 1
+    again = SQLiteDatabase(store.db_path)
+    await again.initialize()  # 索引 DDL 幂等
+    await again.close()
+
+    assert await store.chat.list_recent_live_chat(live_session_id=1, sender_role="viewer") == []
+    await _chat(store, 100, "viewer", "你好")
+    await _chat(store, 200, "assistant", "欢迎")
     rows = await store.chat.list_recent_live_chat(live_session_id=1, sender_role="viewer")
     assert [r["content"] for r in rows] == ["你好"]
 
 
-def _make_agent(store: SQLiteDatabase, session_manager) -> StreamerAgent:
-    llm = MagicMock()
-    llm.call_tools = AsyncMock(return_value=LLMResponse(success=False, error="not used"))
-    llm.generate = AsyncMock(return_value=Response(success=False, error="not used"))
-    prompt = MagicMock()
-    prompt.render = MagicMock(return_value="PROMPT")
-    return StreamerAgent(
-        config=StreamerConfig.from_dict({"proactive": {"enabled": False}}),
-        llm_manager=llm,
-        prompt_manager=prompt,
-        event_bus=None,
-        tool_registry=None,
-        chat_repo=store.chat,
-        session_manager=session_manager,
-    )
+@pytest.mark.parametrize("pk", [None, 1], ids=["no_session", "empty_session"])
+async def test_read_history_without_rows_is_empty(store: SQLiteDatabase, pk) -> None:
+    assert await _agent(store, pk)._read_history() == []
 
 
-async def test_read_history_no_active_session_returns_empty(store: SQLiteDatabase) -> None:
-    """无显式场次（首场/未开播）→ 空列表，不抛错。"""
-    agent = _make_agent(store, _FakeSessionManager(None))
-    history = await agent._read_history()
-    assert history == []
+async def test_history_is_chronological_and_append_only(store: SQLiteDatabase) -> None:
+    """窗口内前缀逐字稳定（前缀缓存前提）；跨过旧条数限制后最初指令仍在。"""
+    agent = _agent(store, 1)
+    await _chat(store, 100, "viewer", "先问")
+    await _chat(store, 200, "assistant", "后答")
+    assert [(t.role, t.content) for t in await agent._read_history()] == [("viewer", "先问"), ("assistant", "后答")]
 
-
-async def test_read_history_empty_session_returns_empty(store: SQLiteDatabase) -> None:
-    """场次存在但 live_chat 无行（首决定窗）→ 空列表，不抛错。"""
-    agent = _make_agent(store, _FakeSessionManager(1))
-    history = await agent._read_history()
-    assert history == []
-
-
-async def test_read_history_returns_turns_in_chronological_order(store: SQLiteDatabase) -> None:
-    """历史按时间正序返回，role 承载 sender_role。"""
-    await store.chat.insert_live_chat(
-        live_session_id=1,
-        timestamp_ms=100,
-        sender_role="viewer",
-        sender_name="观众A",
-        content="先问",
-        message_type="danmaku",
-    )
-    await store.chat.insert_live_chat(
-        live_session_id=1,
-        timestamp_ms=200,
-        sender_role="assistant",
-        sender_name="主播",
-        content="后答",
-        message_type="speak",
-    )
-    agent = _make_agent(store, _FakeSessionManager(1))
-    history = await agent._read_history()
-    assert [(t.role, t.content) for t in history] == [
-        ("viewer", "先问"),
-        ("assistant", "后答"),
-    ]
-
-
-# 历史窗口滞回：满窗后成块推进，窗口内前缀逐字稳定（前缀缓存前提）
-
-
-async def _insert_turns(store: SQLiteDatabase, count: int, *, start_index: int, session_id: int = 1) -> None:
-    """按时间序插入 count 条带 message_id 的观众行，message_id 即断言用的窗口锚点。"""
-    for i in range(start_index, start_index + count):
-        await store.chat.insert_live_chat(
-            live_session_id=session_id,
-            timestamp_ms=1000 + i,
-            sender_role="viewer",
-            sender_name="观众",
-            content=f"消息{i}",
-            message_type="danmaku",
-            message_id=f"m{i}",
-        )
-
-
-async def test_history_window_grows_append_only_before_limit(store: SQLiteDatabase) -> None:
-    """未满窗时全量返回且只追加：旧消息跨读逐字稳定。"""
-    agent = _make_agent(store, _FakeSessionManager(1))
-    await _insert_turns(store, 3, start_index=1)
+    await _viewer_turns(store, 1, 45)
     first = await agent._read_history()
-    assert [t.message_id for t in first] == ["m1", "m2", "m3"]
-
-    await _insert_turns(store, 2, start_index=4)
+    await _viewer_turns(store, 46, 3)
     second = await agent._read_history()
-    assert [t.message_id for t in second] == ["m1", "m2", "m3", "m4", "m5"]
+    assert [t.message_id for t in second][2:] == [f"m{i}" for i in range(1, 49)]
+    assert second[: len(first)] == first
 
 
-async def test_history_keeps_early_messages_after_many_new_turns(store: SQLiteDatabase) -> None:
-    """读取跨过旧条数限制后，最初指令仍在场次前缀中。"""
-    agent = _make_agent(store, _FakeSessionManager(1))
-    await _insert_turns(store, 45, start_index=1)
-    first = await agent._read_history()
-    assert [turn.message_id for turn in first] == [f"m{i}" for i in range(1, 46)]
-    await _insert_turns(store, 3, start_index=46)
-    second = await agent._read_history()
-    assert [turn.message_id for turn in second] == [f"m{i}" for i in range(1, 49)]
-    assert second[:45] == first
-
-
-async def test_history_window_reset_on_session_switch(store: SQLiteDatabase) -> None:
-    """场次切换（新开播）：旧场次锚点作废，新场次从空窗重新生长。"""
+async def test_history_resets_on_session_switch(store: SQLiteDatabase) -> None:
     session = _FakeSessionManager(1)
-    agent = _make_agent(store, session)
-    await _insert_turns(store, 6, start_index=1)
+    agent = make_streamer_agent(chat_repo=store.chat, session_manager=session)
+    await _viewer_turns(store, 1, 6)
     await agent._read_history()
 
-    session._pk = 2
+    session.pk = 2
     assert await agent._read_history() == []
-
-    await _insert_turns(store, 2, start_index=101, session_id=2)
-    fresh = await agent._read_history()
-    assert [t.message_id for t in fresh] == ["m101", "m102"]
+    await _viewer_turns(store, 101, 2, session=2)
+    assert [t.message_id for t in await agent._read_history()] == ["m101", "m102"]
 
 
-# 摘要链路复活：live_chat viewer 行 → topic_summary
+async def test_game_reports_and_delegations_enter_timeline_in_time_order(store: SQLiteDatabase) -> None:
+    """游戏事件与我开始做的事以发生时刻进时间线，排在同时段聊天之间；开播时清空。"""
+    agent = _agent(store, 1)
+    await _viewer_turns(store, 1, 2)
+    report = GamePayload(game="minecraft", event_type="report", message="木头砍好了", timestamp_ms=1001)
+    await agent._on_game_event("game.report", report, "test")
+    await _viewer_turns(store, 5, 1)
+
+    view = await agent._read_history()
+    assert [getattr(turn, "message_id", "") or "note" for turn in view] == ["m1", "note", "m2", "m5"]
+    # 行首是发生时刻的钟点，写入后不再变化
+    assert view[1].message_type == GAME_MESSAGE_TYPE
+    assert view[1].content.endswith(" 游戏·minecraft·report] 木头砍好了")
+
+    agent._record_delegation("minecraft", "去砍点木头")
+    later = await agent._read_history()
+    assert later[: len(view)] == view and later[-1].content.endswith("我在 minecraft 里开始做] 去砍点木头")
+
+    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=2), "test")
+    assert agent._timeline_notes == []
 
 
-def _make_maintainer(
-    store: SQLiteDatabase,
-    *,
-    prompt_manager: PromptManager | None = None,
-) -> tuple[BackgroundMaintainer, MagicMock]:
-    room_state = RoomState()
+def _maintainer(store: SQLiteDatabase, pk: Optional[int] = 1, prompt_manager=None):
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=Response(success=True, content="观众在聊新版本更新"))
-    # 不触达摘要渲染路径时，传满足 render() -> str 的最小 fake；调用方若需
-    # 真实渲染可显式传入 ``PromptManager(auto_scan_src=True).load_all()``
-    if prompt_manager is None:
-        prompt_manager = MagicMock()
-        prompt_manager.render = MagicMock(return_value="PROMPT")
     maintainer = BackgroundMaintainer(
         {"enabled": True},
-        room_state=room_state,
+        room_state=RoomState(),
         llm_service=llm,
-        session_manager=_FakeSessionManager(1),
+        session_manager=_FakeSessionManager(pk),
         chat_repo=store.chat,
-        prompt_manager=prompt_manager,
+        prompt_manager=prompt_manager or stub_prompt(),
     )
     return maintainer, llm
 
 
-async def test_summarize_topic_reads_live_chat_viewer_rows(store: SQLiteDatabase) -> None:
-    """seed live_chat viewer 行 → 摘要 LLM 收到弹幕文本，topic_summary 被写入。"""
-    # 真实 PromptManager：完整摘要路径会调 manager.render("summary_system")，需模板被加载
-    real_prompt_manager = PromptManager(auto_scan_src=True)
-    real_prompt_manager.load_all()
-    maintainer, llm = _make_maintainer(store, prompt_manager=real_prompt_manager)
-    await store.chat.insert_live_chat(
-        live_session_id=1,
-        timestamp_ms=100,
-        sender_role="viewer",
-        sender_name="观众A",
-        content="新版本什么时候上线",
-        message_type="danmaku",
-    )
+async def test_topic_summary_reads_viewer_rows(store: SQLiteDatabase) -> None:
+    """弹幕进 live_chat 即进话题摘要输入；摘要写入房间态势供主动发言的话题门使用。"""
+    prompt_manager = PromptManager(auto_scan_src=True)
+    prompt_manager.load_all()
+    maintainer, llm = _maintainer(store, prompt_manager=prompt_manager)
+    await _chat(store, 100, "viewer", "新版本什么时候上线")
 
     await maintainer._summarize_topic(now_ms=200_000)
-
-    # LLM 输入含观众弹幕（摘要输入不再恒空）
-    prompt_text = llm.generate.await_args.args[0]
-    assert "新版本什么时候上线" in prompt_text
-    # topic_summary 写入房间态势（下游 ProactiveTrigger 的 topic 门据此放行）
-    snap = maintainer._room_state.get_snapshot(now_ms=300_000)
-    assert snap.topic_summary == "观众在聊新版本更新"
+    assert "新版本什么时候上线" in llm.generate.await_args.args[0]
+    assert maintainer._room_state.get_snapshot(now_ms=300_000).topic_summary == "观众在聊新版本更新"
 
 
-async def test_summarize_topic_no_active_session_is_noop(store: SQLiteDatabase) -> None:
-    """无显式场次 → 静默跳过（不调 LLM、不写摘要）。"""
-    room_state = RoomState()
-    llm = MagicMock()
-    llm.generate = AsyncMock(return_value=Response(success=True, content="x"))
-    # 早返回路径不走 render：满足 render() -> str 的最小 fake 即可
-    prompt_manager = MagicMock()
-    prompt_manager.render = MagicMock(return_value="PROMPT")
-    maintainer = BackgroundMaintainer(
-        {"enabled": True},
-        room_state=room_state,
-        llm_service=llm,
-        session_manager=_FakeSessionManager(None),
-        chat_repo=store.chat,
-        prompt_manager=prompt_manager,
-    )
-
-    await maintainer._summarize_topic(now_ms=200_000)
-
-    llm.generate.assert_not_awaited()
-    assert room_state.get_snapshot(now_ms=300_000).topic_summary == ""
-
-
-async def test_summarize_topic_only_assistant_rows_clears_summary(store: SQLiteDatabase) -> None:
-    """窗口内只有主播发言（无观众弹幕）→ 清空 topic_summary 防自嗨循环。"""
-    maintainer, llm = _make_maintainer(store)
+@pytest.mark.parametrize("pk", [None, 1], ids=["no_session", "only_assistant_rows"])
+async def test_topic_summary_skips_without_viewer_input(store: SQLiteDatabase, pk) -> None:
+    """无场次静默跳过；窗口内只有主播发言则清空摘要，防自嗨循环。"""
+    maintainer, llm = _maintainer(store, pk)
     maintainer._room_state.set_topic_summary("旧话题", now_ms=1)
-    await store.chat.insert_live_chat(
-        live_session_id=1,
-        timestamp_ms=100,
-        sender_role="assistant",
-        sender_name="主播",
-        content="大家好",
-        message_type="speak",
-    )
+    await _chat(store, 100, "assistant", "大家好")
 
     await maintainer._summarize_topic(now_ms=200_000)
-
     llm.generate.assert_not_awaited()
-    snap = maintainer._room_state.get_snapshot(now_ms=300_000)
-    assert snap.topic_summary == ""
-
-
-async def test_game_milestones_and_delegations_enter_timeline_in_time_order(store: SQLiteDatabase) -> None:
-    """游戏里程碑与我开始做的事以发生时刻进时间线，排在同时段聊天之间；开播时一起清空。"""
-    agent = _make_agent(store, _FakeSessionManager(1))
-    await _insert_turns(store, 2, start_index=1)
-    await agent._on_game_event(
-        "game.report",
-        GamePayload(game="minecraft", event_type="report", message="木头砍好了", timestamp_ms=1001),
-        "test",
-    )
-    await _insert_turns(store, 1, start_index=5)
-    view = await agent._read_history()
-    assert [getattr(turn, "message_id", "") or "note" for turn in view] == ["m1", "note", "m2", "m5"]
-    note = view[1]
-    # 行首是发生时刻的钟点，写入后不再变化
-    assert note.message_type == GAME_MESSAGE_TYPE and note.content.endswith(" 游戏·minecraft·report] 木头砍好了")
-
-    agent._record_delegation("minecraft", "去砍点木头")
-    later = await agent._read_history()
-    assert later[: len(view)] == view
-    assert later[-1].content.endswith("我在 minecraft 里开始做] 去砍点木头")
-
-    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=2), "test")
-    assert agent._timeline_notes == []
+    expected = "旧话题" if pk is None else ""
+    assert maintainer._room_state.get_snapshot(now_ms=300_000).topic_summary == expected

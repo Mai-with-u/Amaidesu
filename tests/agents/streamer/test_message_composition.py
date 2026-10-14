@@ -1,11 +1,4 @@
-"""T9 消息构成单测——对话原生化后的消息序列契约。
-
-覆盖：
-- 角色映射（live_chat 行 user/assistant；弹幕批恒 user）
-- 顺序：[system] → 历史 → 本批 → 参考段（尾）；ReAct 追加在参考段之后
-- 跨窗逐字稳定：相邻两决策窗的旧消息字节一致（append-only 缓存硬要求）
-- canonical 映射本身：批与历史同形、类型前缀、[id:…] 目标机制
-"""
+"""对话原生化的消息序列契约：canonical 映射、[system] → 历史 → 本批 → 参考段（尾）、跨窗逐字稳定"""
 
 from __future__ import annotations
 
@@ -74,33 +67,21 @@ def _make_planner() -> tuple[Planner, MagicMock, List[List[dict]]]:
 # canonical 映射
 
 
-def test_canonical_batch_and_history_same_shape() -> None:
-    """同一弹幕经批通道与历史通道序列化结果逐字一致（批与历史同形）。"""
+def test_canonical_mapping() -> None:
+    """批与历史同形；类型前缀按登记表渲染；assistant 行原样、不加 id；文本视图主播行加前缀。"""
     batch_msg = canonical.batch_item_to_message(_batch_msg("来个落地水", "m9", nickname="小明"))
     history_msg = canonical.turn_to_message(
         FakeTurn(role="user", content="来个落地水", sender_name="小明", message_id="m9")
     )
     assert batch_msg == history_msg == {"role": "user", "content": "小明: 来个落地水 [id:m9]"}
 
-
-def test_canonical_type_prefix_and_role_mapping() -> None:
-    """类型前缀按登记表渲染；assistant 行原样内容、不加 id。"""
     gift = canonical.batch_item_to_message(_batch_msg("送出 小花花 x1", "m2", nickname="小红", message_type="gift"))
     assert gift == {"role": "user", "content": "[礼物] 小红: 送出 小花花 x1 [id:m2]"}
     speak = canonical.turn_to_message(
         FakeTurn(role="assistant", content="晚上好", message_type="speak", message_id="m3")
     )
     assert speak == {"role": "assistant", "content": "晚上好"}
-
-
-def test_canonical_text_view() -> None:
-    """文本视图：观众行渲染 canonical content，主播行加"主播:"前缀。"""
-    messages = [
-        canonical.turn_to_message(FakeTurn(role="user", content="大家好", sender_name="小明", message_id="m1")),
-        canonical.turn_to_message(FakeTurn(role="assistant", content="晚上好", message_type="speak")),
-    ]
-    text = canonical.to_text_view(messages)
-    assert text == "小明: 大家好 [id:m1]\n主播: 晚上好"
+    assert canonical.to_text_view([history_msg, speak]) == "小明: 来个落地水 [id:m9]\n主播: 晚上好"
 
 
 # 消息构成
