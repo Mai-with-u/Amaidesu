@@ -72,10 +72,8 @@ def client(tmp_path: Path):
     set_dashboard_server(None)  # type: ignore[arg-type]
 
 
-@pytest.fixture
-def http_client(client):
-    """只取 TestClient 的便捷别名。"""
-    yield client[0]
+def _collectors(http_client) -> dict:
+    return {c["name"]: c for c in http_client.get("/api/v1/components").json()["collectors"]}
 
 
 def test_list_components_returns_all_groups_with_disabled(client) -> None:
@@ -126,50 +124,22 @@ def test_companion_collector_cannot_be_toggled_alone(client) -> None:
     assert "maicraft_attention" not in (config_dir / "collectors.toml").read_text(encoding="utf-8-sig")
 
 
-def test_control_start_dynamically_starts_collector(client) -> None:
-    http_client, _config_dir = client
-    resp = http_client.post("/api/v1/components/collectors/console_input/control", json={"action": "start"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["success"] is True
-
-    listed = http_client.get("/api/v1/components").json()
-    collectors = {c["name"]: c for c in listed["collectors"]}
-    assert collectors["console_input"]["is_enabled"] is True
-    # 注：TestClient 每请求独立事件循环，后台消费任务跨请求会被取消，
-    # is_started 反映配置启用状态（真实运行态由 CollectorManager 单测覆盖）
-    assert "console_input" in [c["name"] for c in listed["collectors"]]
-
-
-def test_control_stop_dynamically_stops_collector(client) -> None:
+def test_control_start_stop_are_idempotent_and_move_enabled_list(client) -> None:
     http_client, config_dir = client
-    http_client.post("/api/v1/components/collectors/console_input/control", json={"action": "start"})
-    resp = http_client.post("/api/v1/components/collectors/console_input/control", json={"action": "stop"})
-    assert resp.status_code == 200
-    assert resp.json()["success"] is True
+    control = "/api/v1/components/collectors/console_input/control"
+    for _ in range(2):  # 重复 start 幂等
+        assert http_client.post(control, json={"action": "start"}).json()["success"] is True
+    # TestClient 每请求独立事件循环，后台消费任务跨请求会被取消，is_started 只反映配置启用状态
+    assert _collectors(http_client)["console_input"]["is_enabled"] is True
 
-    # 新契约：enabled 在 collectors.toml 顶层，子段名仍在（配置），名单已移除
-    doc = _load_toml(config_dir, "collectors.toml")
-    assert "console_input" not in doc["enabled"]
-    assert "bili_danmaku" in doc["enabled"]
-
-    listed = http_client.get("/api/v1/components").json()
-    collectors = {c["name"]: c for c in listed["collectors"]}
-    assert collectors["console_input"]["is_enabled"] is False
-    assert collectors["console_input"]["is_started"] is False
+    assert http_client.post(control, json={"action": "stop"}).json()["success"] is True
+    # enabled 在 collectors.toml 顶层：名单已移除，子段仍在
+    assert "console_input" not in _load_toml(config_dir, "collectors.toml")["enabled"]
+    assert "bili_danmaku" in _load_toml(config_dir, "collectors.toml")["enabled"]
+    stopped = _collectors(http_client)["console_input"]
+    assert (stopped["is_enabled"], stopped["is_started"]) == (False, False)
 
 
-def test_control_start_is_idempotent(client) -> None:
-    http_client, _config_dir = client
-    first = http_client.post("/api/v1/components/collectors/console_input/control", json={"action": "start"})
-    second = http_client.post("/api/v1/components/collectors/console_input/control", json={"action": "start"})
-    assert first.json()["success"] is True
-    assert second.json()["success"] is True
-    listed = http_client.get("/api/v1/components").json()
-    collectors = {c["name"]: c for c in listed["collectors"]}
-    assert collectors["console_input"]["is_enabled"] is True
-
-
-def test_control_unknown_group_returns_400(http_client) -> None:
-    resp = http_client.post("/api/v1/components/unknown/foo/control", json={"action": "start"})
+def test_control_unknown_group_returns_400(client) -> None:
+    resp = client[0].post("/api/v1/components/unknown/foo/control", json={"action": "start"})
     assert resp.status_code == 400

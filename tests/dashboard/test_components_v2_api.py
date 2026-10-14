@@ -1,16 +1,5 @@
-"""v2 组件管理 API 测试套件（collectors/agents 两组）
-
-覆盖:
-1. **get_v2_component_list** — 配置全集构建：
-   - 采集器全集 = collectors.toml 视图（顶层各采集器段 ∪ 顶层 enabled 名单，
-     enabled/meta 为文件级键不算组件）
-   - Agent 全集 = agents.toml [agents] 段子键（enabled 之外的键）
-   - 未启用组件 is_enabled=False / is_started=False
-   - 已启用 + 运行中 is_started=True
-   - 工具不在组件清单（工具以域开关单元管理，见 test_tools_api.py）
-2. **ComponentListResponse** — 两组字段透传
-3. **description 字段** —— 来自管理器注册
-"""
+"""组件清单构建（collectors / agents 两组）：采集器全集 = 顶层各段 ∪ enabled 名单（meta 等文件级键不算），
+Agent 全集 = agents 段子键；未启用 is_enabled=False，运行中 is_started=True"""
 
 from __future__ import annotations
 
@@ -85,78 +74,36 @@ def test_list_includes_disabled_collectors() -> None:
     assert stt.is_started is False
 
 
-def test_list_includes_disabled_agents() -> None:
-    config = _make_config()
-    server = _make_server(agent_running={"streamer"})
-    grouped = get_v2_component_list(config, server)
-
+def test_list_includes_disabled_agents_and_excludes_tools_group() -> None:
+    grouped = get_v2_component_list(_make_config(), _make_server(agent_running={"streamer"}))
     by_name = {c.name: c for c in grouped["agents"]}
     assert set(by_name) == {"streamer", "minecraft"}
-    assert by_name["streamer"].is_enabled is True
-    assert by_name["streamer"].is_started is True
+    assert (by_name["streamer"].is_enabled, by_name["streamer"].is_started) == (True, True)
     assert by_name["minecraft"].is_enabled is False
-
-
-def test_list_excludes_tools_group() -> None:
-    """工具不在组件清单（域开关单元归 tools API 的 domains 端点管）。"""
-    config = _make_config()
-    grouped = get_v2_component_list(config, _make_server())
-
+    # 工具不在组件清单（域开关单元归 tools API 的 categories 端点管）
     assert set(grouped) == {"collectors", "agents"}
 
 
-def test_empty_config_returns_empty_groups() -> None:
-    grouped = get_v2_component_list({}, _make_server())
-    assert grouped == {"collectors": [], "agents": []}
-
-
-def test_component_list_response_serializes_v2_groups() -> None:
-    config = _make_config()
-    grouped = get_v2_component_list(config, _make_server())
-
-    resp = ComponentListResponse(
-        collectors=grouped["collectors"],
-        agents=grouped["agents"],
-    )
-    data = resp.model_dump()
-    assert set(data["collectors"][0].keys()) >= {"name", "group", "phase", "type", "is_started", "is_enabled"}
-
-
-def test_agents_section_without_enabled_still_lists_children() -> None:
-    config = {"agents": {"streamer": {}, "minecraft": {"x": 1}}}
-    grouped = get_v2_component_list(config, _make_server())
-    names = {c.name for c in grouped["agents"]}
-    assert names == {"streamer", "minecraft"}
+def test_edge_configs_and_response_serialization() -> None:
+    assert get_v2_component_list({}, _make_server()) == {"collectors": [], "agents": []}
+    # agents 段没有 enabled 名单时子段照样出卡，全部未启用
+    grouped = get_v2_component_list({"agents": {"streamer": {}, "minecraft": {"x": 1}}}, _make_server())
+    assert {c.name for c in grouped["agents"]} == {"streamer", "minecraft"}
     assert all(c.is_enabled is False for c in grouped["agents"])
 
+    grouped = get_v2_component_list(_make_config(), _make_server())
+    data = ComponentListResponse(collectors=grouped["collectors"], agents=grouped["agents"]).model_dump()
+    assert set(data["collectors"][0]) >= {"name", "group", "phase", "type", "is_started", "is_enabled"}
 
-class TestDescriptionEnrichment:
-    """description 字段从管理器 / ToolSpec 填充（缺失时空串）。"""
 
-    def test_collector_description_from_manager(self) -> None:
-        config = _make_config()
-        server = _make_server(
-            collector_running={"bili_danmaku"},
-            collector_descs={"bili_danmaku": "B站弹幕接收器"},
-        )
-        grouped = get_v2_component_list(config, server)
-        by_name = {c.name: c for c in grouped["collectors"]}
-        assert by_name["bili_danmaku"].description == "B站弹幕接收器"
-        assert by_name["bili_danmaku_official"].description == ""
-
-    def test_agent_description_from_manager(self) -> None:
-        config = _make_config()
-        server = _make_server(
-            agent_running={"streamer"},
-            agent_descs={"streamer": "主播 Agent"},
-        )
-        grouped = get_v2_component_list(config, server)
-        by_name = {c.name: c for c in grouped["agents"]}
-        assert by_name["streamer"].description == "主播 Agent"
-        assert by_name["minecraft"].description == ""
-
-    def test_default_description_is_empty(self) -> None:
-        config = _make_config()
-        grouped = get_v2_component_list(config, _make_server())
-        for summary in grouped["collectors"] + grouped["agents"]:
-            assert summary.description == ""
+def test_description_comes_from_manager_and_defaults_to_empty() -> None:
+    server = _make_server(
+        collector_running={"bili_danmaku"},
+        collector_descs={"bili_danmaku": "B站弹幕接收器"},
+        agent_descs={"streamer": "主播 Agent"},
+    )
+    grouped = get_v2_component_list(_make_config(), server)
+    collectors = {c.name: c.description for c in grouped["collectors"]}
+    agents = {c.name: c.description for c in grouped["agents"]}
+    assert (collectors["bili_danmaku"], collectors["bili_danmaku_official"]) == ("B站弹幕接收器", "")
+    assert (agents["streamer"], agents["minecraft"]) == ("主播 Agent", "")

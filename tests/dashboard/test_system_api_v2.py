@@ -1,11 +1,4 @@
-"""系统状态 API 测试套件
-
-覆盖：
-1. **GET /api/v1/system/status** — v2 响应形状（groups + event_bus）
-2. **/api/v1/system/stats 端点已下线**（旧桩清理）
-3. 工具组计数全部等于 len(tool_registry)（被动契约，无启用/运行区分）
-4. EventBus 总吞吐 = sum(emit_count)
-"""
+"""系统状态 API：/system/status 的 v2 形状与计数口径、健康检查、更新日志降级，旧 /stats 端点已下线"""
 
 from __future__ import annotations
 
@@ -13,183 +6,92 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
 
-
-class _FakeEventStats:
-    def __init__(self, emit_count: int) -> None:
-        self.emit_count = emit_count
+import src.modules.dashboard.api.system as system_api
+from src.modules.agents.companions import COMPANION_COLLECTORS
+from src.modules.config.multi_file_loader import generate_default_configs
+from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+from src.modules.config.service import ConfigService
 
 
 class _FakeEventBus:
-    def __init__(self, stats: dict[str, int]) -> None:
-        self._stats = {k: _FakeEventStats(v) for k, v in stats.items()}
+    def __init__(self, emit_counts: dict[str, int]) -> None:
+        self._stats = {name: MagicMock(emit_count=count) for name, count in emit_counts.items()}
 
-    def get_all_stats(self) -> dict[str, _FakeEventStats]:
+    def get_all_stats(self) -> dict:
         return dict(self._stats)
 
 
-class _FakeToolRegistry:
-    def __init__(self, n: int) -> None:
-        self._n = n
-
-    def __len__(self) -> int:
-        return self._n
-
-
 @pytest.fixture
-def config_dir(tmp_path: Path) -> Path:
-    """七文件基线（组件计数断言基于生成基线：5 采集器段 + 3 Agent 段）。"""
-    from src.modules.config.multi_file_loader import generate_default_configs
-
+def config_service(tmp_path: Path) -> ConfigService:
+    """七文件基线（组件计数断言基于生成基线）。"""
     cfg = tmp_path / "config"
     cfg.mkdir()
     generate_default_configs(cfg)
-    return cfg
+    service = ConfigService(base_dir=str(tmp_path))
+    service.initialize()
+    return service
 
 
 @pytest.fixture
-def client(config_dir: Path):
-    from src.modules.config.core_schemas import DashboardConfig
-    from src.modules.config.service import ConfigService
-    from src.modules.dashboard.api.router import create_app
-    from src.modules.dashboard.dependencies import set_dashboard_server
-    from src.modules.dashboard.server import DashboardServer
+def client(mount, config_service: ConfigService):
+    registry = MagicMock()
+    registry.__len__.return_value = 2
+    server_kwargs = {
+        "event_bus": _FakeEventBus({"room.message.danmaku": 7, "tool.result.speak": 3}),
+        "config_service": config_service,
+        "collector_manager": MagicMock(),
+        "agent_manager": MagicMock(),
+        "tool_registry": registry,
+    }
+    client = mount(**server_kwargs)
+    from src.modules.dashboard.dependencies import get_dashboard_server
 
-    svc = ConfigService(base_dir=str(config_dir.parent))
-    svc.initialize()
-
-    event_bus = _FakeEventBus({"room.message.danmaku": 7, "tool.result.speak": 3})
-    tool_registry = _FakeToolRegistry(n=2)
-
-    server = DashboardServer(
-        event_bus=event_bus,  # type: ignore[arg-type]
-        config_service=svc,
-        dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
-        collector_manager=MagicMock(),
-        agent_manager=MagicMock(),
-        tool_registry=tool_registry,  # type: ignore[arg-type]
-    )
-    server._is_running = True
-    set_dashboard_server(server)
-    yield TestClient(create_app())
-    set_dashboard_server(None)  # type: ignore[arg-type]
+    get_dashboard_server()._is_running = True
+    return client
 
 
-def test_status_shape_matches_v2_contract(client: TestClient) -> None:
-    """v2 响应字段：running/uptime/version/python_version/groups/event_bus"""
-    resp = client.get("/api/v1/system/status")
-    assert resp.status_code == 200
-    data = resp.json()
-
-    assert data["running"] is True
-    assert isinstance(data["uptime_ms"], int)
-    assert isinstance(data["version"], str)
-    assert isinstance(data["python_version"], str)
-
+def test_status_shape_and_event_bus_total(client) -> None:
+    data = client.get("/api/v1/system/status").json()
+    assert data["running"] is True and isinstance(data["uptime_ms"], int)
+    assert isinstance(data["version"], str) and isinstance(data["python_version"], str)
     assert set(data["groups"]) == {"collectors", "agents", "tools"}
     for group in data["groups"].values():
-        assert set(group) == {"enabled", "started", "total"}
-        assert all(isinstance(v, int) for v in group.values())
-
-    assert set(data["event_bus"]) == {"total_events"}
-    assert data["event_bus"]["total_events"] == 10
+        assert set(group) == {"enabled", "started", "total"} and all(isinstance(v, int) for v in group.values())
+    assert data["event_bus"] == {"total_events": 10}  # sum(emit_count)
+    assert not {"input_phase", "decision_phase", "output_phase"} & set(data)  # PhaseStatus 字段已彻底移除
 
 
-def test_status_does_not_leak_phase_fields(client: TestClient) -> None:
-    """v2：PhaseStatus 字段（input_phase/decision_phase/output_phase）已彻底移除"""
-    resp = client.get("/api/v1/system/status")
-    data = resp.json()
-    assert "input_phase" not in data
-    assert "decision_phase" not in data
-    assert "output_phase" not in data
-
-
-def test_status_groups_count_correctly(client: TestClient) -> None:
-    """采集器/Agent 计数来自 component_helper（total = 文件段全集 + 附属采集器，enabled = 配置名单）。
-
-    物化语义下 collectors.toml 含全部在册段（未启用也出卡），total =
-    注册表采集器全集而非 enabled 子集；随 Agent 开关的附属采集器另外列出，
-    所属 Agent 未启用时算未启用。
-    """
-    from src.modules.agents.companions import COMPANION_COLLECTORS
-    from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
-
+def test_status_groups_count_correctly(client) -> None:
+    """物化语义下 collectors.toml 含全部在册段（未启用也出卡），total = 注册表采集器全集 + 随 Agent 的附属采集器。"""
     ensure_component_registry()
-    resp = client.get("/api/v1/system/status").json()
+    groups = client.get("/api/v1/system/status").json()["groups"]
 
     companions = sum(len(names) for names in COMPANION_COLLECTORS.values())
-    collectors = resp["groups"]["collectors"]
-    assert collectors["total"] == len(COLLECTOR_SCHEMAS) + companions  # 物化全集 4 段 + Minecraft 的 2 个附属采集器
-    assert collectors["enabled"] == 1  # 生成基线的默认 enabled 只有 console_input；minecraft 未启用，附属采集器不算
-
-    agents = resp["groups"]["agents"]
-    assert agents["total"] == 4  # streamer + minecraft + text_adv + game_2048（Schema 占位）
-    assert agents["enabled"] == 1  # streamer
-
-    tools = resp["groups"]["tools"]
-    assert tools["total"] == 2  # tool_registry 长度
-    assert tools["enabled"] == tools["total"]  # 工具无启用语义，三项相等
-    assert tools["started"] == tools["total"]
+    assert groups["collectors"]["total"] == len(COLLECTOR_SCHEMAS) + companions
+    assert groups["collectors"]["enabled"] == 1  # 基线默认只有 console_input；附属采集器随未启用的 Agent 不算
+    assert (groups["agents"]["total"], groups["agents"]["enabled"]) == (4, 1)  # 4 个 Agent 段，仅 streamer 启用
+    # 工具无启用语义：三项都等于 len(tool_registry)
+    assert groups["tools"] == {"enabled": 2, "started": 2, "total": 2}
 
 
-def test_stats_endpoint_removed(client: TestClient) -> None:
-    """/api/v1/system/stats 端点已下线：GET 应返回 404。"""
-    resp = client.get("/api/v1/system/stats")
-    assert resp.status_code == 404
-
-
-def test_health_endpoint_still_present(client: TestClient) -> None:
-    """健康检查端点独立于统计端点：仍返回 ok。"""
-    resp = client.get("/api/v1/system/health")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-
-
-def test_changelog_returns_markdown_content(client: TestClient) -> None:
-    """/system/changelog 返回仓库根 CHANGELOG.md 原文。"""
-    resp = client.get("/api/v1/system/changelog")
-    assert resp.status_code == 200
-    data = resp.json()
-
-    assert set(data) == {"content"}
-    # 与仓库根真实文件比对，端点读的就是同一份
-    repo_changelog = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
-    assert data["content"] == repo_changelog.read_text(encoding="utf-8")
-
-
-def test_changelog_missing_file_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """CHANGELOG 文件缺失时降级 503，不抛 500。"""
-    import src.modules.dashboard.api.system as system_api
-
-    monkeypatch.setattr(system_api, "_CHANGELOG_PATH", Path("<nonexistent>") / "CHANGELOG.md")
-    resp = client.get("/api/v1/system/changelog")
-    assert resp.status_code == 503
-
-
-def test_status_event_bus_empty_when_stats_disabled(config_dir: Path) -> None:
-    """EventBus 无 get_all_stats() 时 total_events 兜底为 0。"""
-    from src.modules.config.core_schemas import DashboardConfig
-    from src.modules.config.service import ConfigService
-    from src.modules.dashboard.api.router import create_app
-    from src.modules.dashboard.dependencies import set_dashboard_server
-    from src.modules.dashboard.server import DashboardServer
-
-    svc = ConfigService(base_dir=str(config_dir.parent))
-    svc.initialize()
-
+def test_event_bus_total_falls_back_to_zero_without_stats(mount, config_service) -> None:
     bus = MagicMock()
     bus.get_all_stats = MagicMock(return_value={})
+    body = mount(event_bus=bus, config_service=config_service).get("/api/v1/system/status").json()
+    assert body["event_bus"]["total_events"] == 0
 
-    server = DashboardServer(
-        event_bus=bus,
-        config_service=svc,
-        dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
-    )
-    set_dashboard_server(server)
-    try:
-        resp = TestClient(create_app()).get("/api/v1/system/status")
-        assert resp.status_code == 200
-        assert resp.json()["event_bus"]["total_events"] == 0
-    finally:
-        set_dashboard_server(None)  # type: ignore[arg-type]
+
+def test_removed_stats_endpoint_and_health(client) -> None:
+    assert client.get("/api/v1/system/stats").status_code == 404
+    resp = client.get("/api/v1/system/health")
+    assert (resp.status_code, resp.json()["status"]) == (200, "ok")
+
+
+def test_changelog_serves_repo_file_and_degrades_to_503(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    resp = client.get("/api/v1/system/changelog")
+    repo_changelog = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
+    assert resp.status_code == 200 and resp.json() == {"content": repo_changelog.read_text(encoding="utf-8")}
+
+    monkeypatch.setattr(system_api, "_CHANGELOG_PATH", Path("<nonexistent>") / "CHANGELOG.md")
+    assert client.get("/api/v1/system/changelog").status_code == 503
