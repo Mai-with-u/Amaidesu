@@ -6,14 +6,10 @@
 
 from __future__ import annotations
 
-import shutil
-import tempfile
-from pathlib import Path
-from typing import Generator
-
 import pytest
 from fastapi.testclient import TestClient
 
+from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.events.event_bus import EventBus
 from src.modules.simulator import SimulatorService
 from src.modules.simulator.seed_data import seed_simulator_data
@@ -27,40 +23,19 @@ class _FakeConfigService:
         self.main_config = {"simulator": {"enabled": False}}
 
 
-def _make_service(store: SQLiteDatabase) -> SimulatorService:
-    return SimulatorService(event_bus=EventBus(), sim_repo=store.sim, chat_repo=store.chat)
-
-
 @pytest.fixture
-def temp_db_path() -> Generator[Path, None, None]:
-    td = Path(tempfile.mkdtemp(prefix="sim-api-"))
-    yield td / "test.db"
-    shutil.rmtree(td, ignore_errors=True)
-
-
-@pytest.fixture
-async def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
-    from src.modules.config.core_schemas import DashboardConfig
-    from src.modules.dashboard.api.router import create_app
-    from src.modules.dashboard.dependencies import set_dashboard_server
-    from src.modules.dashboard.server import DashboardServer
-
-    store = SQLiteDatabase(temp_db_path)
-    await store.initialize()
+async def client(mount, store: SQLiteDatabase) -> TestClient:
     await seed_simulator_data(store.sim)
-    service = _make_service(store)
+    service = SimulatorService(event_bus=EventBus(), sim_repo=store.sim, chat_repo=store.chat)
     await service.setup(_FakeConfigService(), auto_start=False)  # type: ignore[arg-type]
+    client = mount()
+    set_dashboard_server_simulator(service)
+    return client
 
-    server = DashboardServer(
-        event_bus=None,  # type: ignore[arg-type]
-        config_service=None,  # type: ignore[arg-type]
-        dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
-    )
-    server.simulator_service = service  # type: ignore[attr-defined]
-    set_dashboard_server(server)
-    yield TestClient(create_app())
-    set_dashboard_server(None)
-    await store.close()
+
+def set_dashboard_server_simulator(service: SimulatorService) -> None:
+    """simulator_service 是装配后挂到 server 上的属性，不走构造器。"""
+    get_dashboard_server().simulator_service = service  # type: ignore[attr-defined]
 
 
 # status
@@ -77,78 +52,30 @@ def test_status_reports_mode_and_availability(client: TestClient) -> None:
 # replay dates
 
 
-def test_replay_dates_empty(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """event_history 表无录制记录时返回空列表。
+async def test_replay_dates_from_live_chat_only(client, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """空表 → 空列表；有弹幕时按时间正序返回日期并带各日条数，主播发言行不计入。
 
-    端点经默认 store 工厂取连接；打桩到临时空库，测试只关心"空表 → 空列表"的契约
-    （默认库在本机可能存有历史录制）。
+    端点经默认 store 工厂取连接，打桩到临时库（默认库在本机可能存有历史录制）。
     """
-    import asyncio
-
-    from src.modules.storage.database import SQLiteDatabase
-
-    async def _make() -> SQLiteDatabase:
-        store = SQLiteDatabase(tmp_path / "replay-dates.db")
-        await store.initialize()
-        return store
-
-    store = asyncio.run(_make())
-    monkeypatch.setattr("src.modules.dashboard.api.simulator.get_default_db", lambda: store)
+    replay_store = SQLiteDatabase(tmp_path / "replay-dates.db")
+    await replay_store.initialize()
+    monkeypatch.setattr("src.modules.dashboard.api.simulator.get_default_db", lambda: replay_store)
     try:
-        body = client.get("/api/v1/simulator/replay/dates").json()
-        assert body == {"dates": []}
+        assert client.get("/api/v1/simulator/replay/dates").json() == {"dates": []}
+
+        for ts, role, mtype in (
+            (1_790_000_000_000, "viewer", "danmaku"),
+            (1_750_000_000_000, "viewer", "danmaku"),
+            (1_760_000_000_000, "assistant", "speech"),
+        ):
+            await replay_store.chat.insert_live_chat(
+                live_session_id=1, timestamp_ms=ts, sender_role=role, content="x", message_type=mtype
+            )
+        dates = client.get("/api/v1/simulator/replay/dates").json()["dates"]
+        assert [d["date"] for d in dates] == sorted(d["date"] for d in dates)
+        assert [d["danmaku_count"] for d in dates] == [1, 1]
     finally:
-        asyncio.run(store.close())
-
-
-def test_replay_dates_from_live_chat(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """live_chat 业务表有弹幕时按时间正序返回日期（非弹幕行不混入）。"""
-    import asyncio
-
-    from src.modules.storage.database import SQLiteDatabase
-
-    async def _make() -> SQLiteDatabase:
-        store = SQLiteDatabase(tmp_path / "replay-dates-populated.db")
-        await store.initialize()
-        await store.chat.insert_live_chat(
-            live_session_id=1,
-            timestamp_ms=1_790_000_000_000,  # 晚日期
-            sender_role="viewer",
-            sender_id="u1",
-            sender_name="观众甲",
-            content="晚上好",
-            message_type="danmaku",
-        )
-        await store.chat.insert_live_chat(
-            live_session_id=1,
-            timestamp_ms=1_750_000_000_000,  # 早日期
-            sender_role="viewer",
-            sender_id="u2",
-            sender_name="观众乙",
-            content="来了来了",
-            message_type="danmaku",
-        )
-        await store.chat.insert_live_chat(
-            live_session_id=1,
-            timestamp_ms=1_760_000_000_000,
-            sender_role="assistant",
-            sender_name="主播",
-            content="欢迎欢迎",
-            message_type="speech",  # 主播发言行，不计入可回放日期
-        )
-        return store
-
-    store = asyncio.run(_make())
-    monkeypatch.setattr("src.modules.dashboard.api.simulator.get_default_db", lambda: store)
-    try:
-        body = client.get("/api/v1/simulator/replay/dates").json()
-        dates = [entry["date"] for entry in body["dates"]]
-        assert dates == sorted(dates)
-        assert len(dates) == 2  # core.startup 不计入
-        # 新契约携带各日条数：两条 danmaku 分属两个日期、各 1 条
-        assert sum(entry["danmaku_count"] for entry in body["dates"]) == 2
-    finally:
-        asyncio.run(store.close())
+        await replay_store.close()
 
 
 # personas CRUD
