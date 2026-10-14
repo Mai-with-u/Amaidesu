@@ -200,11 +200,12 @@ class GPTSoVITSProvider:
             self.logger.debug("清洗后文本为空，跳过渲染")
             return
 
-        # 流式引擎合成未完时 duration_ms 传 None；started 在首块 PCM 写声卡前发布
+        # 流式引擎合成未完时 duration_ms 传 None；started 在首块 PCM 写声卡前发布。
+        # 事件 speech_text 传规范化前原文：字幕是展示面，不随合成清洗改写
         await emit_utterance_started(
             self.event_bus,
             utterance_id=utterance_id,
-            speech_text=final_text,
+            speech_text=original_text,
             engine=self.PROVIDER_NAME,
             duration_ms=None,
         )

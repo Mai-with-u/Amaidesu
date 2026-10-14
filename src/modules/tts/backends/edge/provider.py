@@ -131,15 +131,23 @@ class EdgeTTSProvider:
         if not text:
             self.logger.debug("TTS 文本为空，跳过渲染")
             return
-        text = normalize_tts_text(text)
-        if not text.strip():
+        # 合成前的符号清洗只作用于合成文本；utterance 事件的 speech_text
+        # 是字幕等消费方的展示面，必须携带规范化前原文
+        final_text = normalize_tts_text(text)
+        if not final_text.strip():
             self.logger.debug("文本规范化后为空，跳过渲染")
             return
         async with self.tts_lock:
-            await self._synthesize(text, utterance_id=utterance_id)
+            await self._synthesize(final_text, utterance_id=utterance_id, speech_text=text)
 
-    async def _synthesize(self, text: str, utterance_id: Optional[str] = None) -> None:
-        """执行 TTS 合成 + 播放"""
+    async def _synthesize(self, text: str, utterance_id: Optional[str] = None, *, speech_text: str) -> None:
+        """执行 TTS 合成 + 播放
+
+        Args:
+            text: 送合成的规范化文本。
+            utterance_id: 一次发声实例的唯一 ID；非 None 时发布生命周期事件。
+            speech_text: 事件展示文本（规范化前原文，字幕按此展示）。
+        """
         self.logger.debug(f"开始 TTS 渲染: '{text[:30]}...'")
         try:
             audio_array, samplerate = await self._edge_tts_synthesize(text)
@@ -149,7 +157,7 @@ class EdgeTTSProvider:
             await emit_utterance_started(
                 self.event_bus,
                 utterance_id=utterance_id,
-                speech_text=text,
+                speech_text=speech_text,
                 engine=self.PROVIDER_NAME,
                 duration_ms=duration_ms,
             )
@@ -177,7 +185,7 @@ class EdgeTTSProvider:
             await emit_utterance_failed(
                 self.event_bus,
                 utterance_id=utterance_id,
-                speech_text=text,
+                speech_text=speech_text,
                 engine=self.PROVIDER_NAME,
                 error_message=f"{type(e).__name__}: {e}",
             )

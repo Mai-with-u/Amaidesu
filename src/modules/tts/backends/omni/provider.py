@@ -163,20 +163,27 @@ class OmniTTSProvider:
         """
         if not self._has_started:
             await self.setup()
-        text = normalize_tts_text(text)
-        if not text.strip():
+        # 合成前的符号清洗只作用于合成文本；utterance 事件的 speech_text
+        # 是字幕等消费方的展示面，必须携带规范化前原文
+        final_text = normalize_tts_text(text)
+        if not final_text.strip():
             self.logger.debug("文本规范化后为空，跳过渲染")
             return
         if self.tts_lock is None:
             self.tts_lock = asyncio.Lock()
         async with self.tts_lock:
-            await self._synthesize(text, utterance_id=utterance_id)
+            await self._synthesize(final_text, utterance_id=utterance_id, speech_text=text)
 
-    async def _synthesize(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def _synthesize(self, text: str, utterance_id: Optional[str] = None, *, speech_text: str) -> None:
         """调用音频模态生成 → 解码 → 播放（全量引擎：合成完拿完整 PCM）
 
         异常处理：合成或播放任一阶段失败都先发 failed 事件再向上抛，由
         编排队列兜底。
+
+        Args:
+            text: 送合成的规范化文本。
+            utterance_id: 一次发声实例的唯一 ID；非 None 时发布生命周期事件。
+            speech_text: 事件展示文本（规范化前原文，字幕按此展示）。
         """
         try:
             response = await self._llm.generate_audio(
@@ -203,7 +210,7 @@ class OmniTTSProvider:
             await emit_utterance_started(
                 self.event_bus,
                 utterance_id=utterance_id,
-                speech_text=text,
+                speech_text=speech_text,
                 engine=self.PROVIDER_NAME,
                 duration_ms=duration_ms,
             )
@@ -229,7 +236,7 @@ class OmniTTSProvider:
             await emit_utterance_failed(
                 self.event_bus,
                 utterance_id=utterance_id,
-                speech_text=text,
+                speech_text=speech_text,
                 engine=self.PROVIDER_NAME,
                 error_message=f"{type(e).__name__}: {e}",
             )

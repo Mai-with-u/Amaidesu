@@ -58,7 +58,9 @@ def normalize_tts_text(text: str) -> str:
     """引擎无关的合成文本规范化：保留集之外的符号一律映射为中文逗号。
 
     各 TTS 引擎对 emoji 等符号的处理不可控（忽略/怪读/导致前后文粘连），
-    统一映射为停顿既保住语义边界又免维护符号表。各引擎在合成前调用。
+    统一映射为停顿既保住语义边界又免维护符号表。各引擎在合成前调用，
+    只作用于送合成的文本——utterance 事件的 ``speech_text`` 必须传规范化
+    前原文（字幕等展示面不被清洗改写）。
     """
     text = _TTS_KEEP_PATTERN.sub("，", text)
     return _TTS_MULTI_COMMA.sub("，", text)
@@ -148,7 +150,8 @@ async def emit_utterance_started(
     Args:
         event_bus: 事件总线（None 时静默跳过）。
         utterance_id: 一次发声实例的唯一 ID（None 时静默跳过）。
-        speech_text: 本次发声对应的文本内容。
+        speech_text: 本次发声的展示文本（规范化前原文，字幕等消费方按此
+            展示；与送合成的规范化文本可不同）。
         engine: TTS 引擎标识（"edge" / "gptsovits" / "omni" / "voicebox"）。
         duration_ms: 预计播放时长（毫秒）；全量引擎为合成后精确值；流式
             引擎合成未完时为 None。
@@ -210,7 +213,7 @@ async def emit_utterance_failed(
     Args:
         event_bus: 事件总线（None 时静默跳过）。
         utterance_id: 一次发声实例的唯一 ID（None 时静默跳过）。
-        speech_text: 本次发声对应的文本内容（合成失败也必带原文）。
+        speech_text: 本次发声的展示文本（规范化前原文，合成失败也必带）。
         engine: TTS 引擎标识。
         error_message: 失败原因描述（异常 message / 错误码 / 阶段标记）。
     """

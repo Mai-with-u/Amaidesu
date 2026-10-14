@@ -266,6 +266,29 @@ class TestUtteranceEvents:
         assert finished.utterance_id == "utt_omni_1"
         assert finished.engine == "omni_tts"
 
+    async def test_speech_text_keeps_symbols_not_normalized(self, event_bus_async: EventBus):
+        """含符号文本：事件 speech_text 传规范化前原文，清洗只进合成侧"""
+        provider, fake = _make_provider(event_bus_async)
+        captured: list[object] = []
+
+        async def capture(event_name: str, data: object, source: str) -> None:
+            captured.append(data)
+
+        event_bus_async.on(CoreEvents.TTS_UTTERANCE_STARTED, capture, model_class=UtteranceStartedPayload)
+
+        await _prepare_started_provider(provider)
+        await provider.handle_speech("大家好～(鼓掌)", utterance_id="utt_omni_sym")
+        await event_bus_async.cleanup()
+
+        assert len(captured) == 1
+        started = captured[0]
+        assert isinstance(started, UtteranceStartedPayload)
+        assert started.speech_text == "大家好～(鼓掌)"
+        # 合成侧仍拿规范化文本（符号映射为停顿），与展示文本分离
+        synth_text = fake.calls[0]["input"]
+        assert synth_text != started.speech_text
+        assert "～" not in synth_text
+
     async def test_no_utterance_id_emits_no_events(self, event_bus_async: EventBus):
         provider, _ = _make_provider(event_bus_async)
         captured: list[tuple[str, object]] = []
@@ -296,9 +319,7 @@ class TestUtteranceEvents:
 @pytest.mark.asyncio
 class TestFailurePaths:
     async def test_llm_failure_emits_failed_and_raises(self, event_bus_async: EventBus):
-        provider, _ = _make_provider(
-            event_bus_async, llm=_FakeLLM(_audio_response(success=False, error="boom"))
-        )
+        provider, _ = _make_provider(event_bus_async, llm=_FakeLLM(_audio_response(success=False, error="boom")))
         captured: list[tuple[str, object]] = []
 
         async def capture(event_name: str, data: object, source: str) -> None:
@@ -342,9 +363,7 @@ class TestFailurePaths:
         assert len(failed) == 1
 
     async def test_empty_audio_payload_fails(self, event_bus_async: EventBus):
-        provider, _ = _make_provider(
-            event_bus_async, llm=_FakeLLM(_audio_response(audio_base64=""))
-        )
+        provider, _ = _make_provider(event_bus_async, llm=_FakeLLM(_audio_response(audio_base64="")))
         await _prepare_started_provider(provider)
 
         with pytest.raises(RuntimeError, match="未携带音频"):
@@ -372,9 +391,7 @@ class TestFailurePaths:
 class TestTranscriptGuardAndSkips:
     async def test_rewritten_transcript_warns_but_plays(self, event_bus: EventBus, loguru_capture):
         """transcript 与输入不一致：告警暴露，不阻断播放"""
-        provider, _ = _make_provider(
-            event_bus, llm=_FakeLLM(_audio_response(content="你好，欢迎来到直播间！"))
-        )
+        provider, _ = _make_provider(event_bus, llm=_FakeLLM(_audio_response(content="你好，欢迎来到直播间！")))
         mgr = _build_mock_audio_manager()
         await _prepare_started_provider(provider, mgr=mgr)
 

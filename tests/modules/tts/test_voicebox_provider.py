@@ -251,6 +251,45 @@ class TestUtteranceEventsFullBuffer:
         assert finished.engine == "voicebox"
         assert finished.duration_ms == 2000
 
+    async def test_speech_text_keeps_symbols_not_normalized(self, event_bus_async: EventBus):
+        """含符号文本：事件 speech_text 传规范化前原文，清洗只进合成侧"""
+        provider = VoiceboxProvider(
+            config={"type": "voicebox", "profile_id": "p1", "sample_rate": 24000},
+            event_bus=event_bus_async,
+        )
+        captured: list[object] = []
+
+        async def capture(event_name: str, data: object, source: str) -> None:
+            captured.append(data)
+
+        event_bus_async.on(CoreEvents.TTS_UTTERANCE_STARTED, capture, model_class=UtteranceStartedPayload)
+
+        await _prepare_started_provider(provider)
+
+        create_gen_mock = AsyncMock(return_value="gen-1")
+        with (
+            _setup_session(provider),
+            patch.object(provider, "_create_generation", new=create_gen_mock),
+            patch.object(provider, "_wait_for_completion", new=AsyncMock()),
+            patch.object(provider, "_download_audio", new=AsyncMock(return_value=b"raw_pcm_payload")),
+            patch(
+                "src.modules.tts.wav_decoder.extract_pcm_from_wav",
+                return_value=bytes(48000 * 2),
+            ),
+        ):
+            await provider.handle_speech("大家好～(鼓掌)", utterance_id="utt_vb_sym")
+
+        await event_bus_async.cleanup()
+
+        assert len(captured) == 1
+        started = captured[0]
+        assert isinstance(started, UtteranceStartedPayload)
+        assert started.speech_text == "大家好～(鼓掌)"
+        # 合成请求仍拿规范化文本（符号映射为停顿），与展示文本分离
+        synth_text = create_gen_mock.call_args.args[0]
+        assert synth_text != started.speech_text
+        assert "～" not in synth_text
+
 
 @pytest.mark.asyncio
 class TestUtteranceEventsFailed:
