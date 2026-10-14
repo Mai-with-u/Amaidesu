@@ -167,3 +167,43 @@ export function profileLabel(profileKey: string): string {
   const short = profileKey.slice(PROFILES_CONTAINER_KEY.length + 1);
   return PROFILE_LABELS[short] ?? short;
 }
+
+/**
+ * 模型的反向引用 chips：被哪些 profile 引用及角色。
+ * 主模型（model_list[0]）直接显示用途名，备选追加「·备选」后缀，
+ * 供模型注册表"被用途引用"列与删除确认文案复用。
+ */
+export function modelUsageChips(
+  profileEntries: { key: string; modelList: string[] }[],
+  modelName: string,
+): string[] {
+  const chips: string[] = [];
+  for (const entry of profileEntries) {
+    if (!entry.modelList.includes(modelName)) continue;
+    const label = profileLabel(entry.key);
+    chips.push(entry.modelList[0] === modelName ? label : `${label}·备选`);
+  }
+  return chips;
+}
+
+/**
+ * 悬空引用检测：model_list 中不在已注册模型名集合内的名字。
+ * 用途卡上仅在有悬空引用时出警示条，正常引用零提示。
+ */
+export function danglingModelRefs(modelList: string[], registeredNames: string[]): string[] {
+  const registered = new Set(registeredNames);
+  return [...new Set(modelList.filter(n => n !== '' && !registered.has(n)))];
+}
+
+/** provider 密钥状态：api_key 有非空值即视为已设置（占位符 sk-dummy 也按已设置呈现） */
+export function apiKeySet(value: unknown): boolean {
+  return String(value ?? '').trim() !== '';
+}
+
+/** 单价显示：数值一律带 ¥ 前缀（0 也要显示，表示本地/免费），缺值显示 — */
+export function formatPrice(value: unknown): string {
+  if (value === undefined || value === null || value === '') return '—';
+  const n = Number(value);
+  if (Number.isNaN(n)) return String(value);
+  return `¥${n}`;
+}

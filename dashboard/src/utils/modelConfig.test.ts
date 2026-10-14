@@ -8,13 +8,17 @@ import { ConfigFieldType, type ConfigFieldSchema } from '@/types/settings';
 import {
   MODELS_KEY,
   PROVIDERS_KEY,
+  apiKeySet,
   applyModelRenameToProfileLists,
   applyProviderRenameToModels,
   buildDefaultItem,
+  danglingModelRefs,
   diffCountAgainst,
+  formatPrice,
   groupModelsByProvider,
   makeItemField,
   modelNameReferences,
+  modelUsageChips,
   parseArrayItemKey,
   profileLabel,
   providerNameReferences,
@@ -166,5 +170,36 @@ describe('profileLabel', () => {
   it('固定用途映射中文名，未知键回退短名', () => {
     expect(profileLabel('model.llm_profiles.planner')).toBe('决策 Profile');
     expect(profileLabel('model.llm_profiles.custom')).toBe('custom');
+  });
+});
+
+describe('modelUsageChips / danglingModelRefs / apiKeySet / formatPrice', () => {
+  const entries = [
+    { key: 'model.llm_profiles.planner', modelList: ['a', 'b'] },
+    { key: 'model.llm_profiles.replyer', modelList: ['a'] },
+  ];
+
+  it('modelUsageChips 主模型显示用途名，备选追加·备选后缀', () => {
+    expect(modelUsageChips(entries, 'a')).toEqual(['决策 Profile', '表达 Profile']);
+    expect(modelUsageChips(entries, 'b')).toEqual(['决策 Profile·备选']);
+    expect(modelUsageChips(entries, 'c')).toEqual([]);
+  });
+
+  it('danglingModelRefs 返回不在注册表的名字并去重，空串不算', () => {
+    expect(danglingModelRefs(['a', 'x', 'y', 'x'], ['a'])).toEqual(['x', 'y']);
+    expect(danglingModelRefs(['', 'a'], ['a'])).toEqual([]);
+  });
+
+  it('apiKeySet 判定非空即已设置，undefined/空白为未设置', () => {
+    expect(apiKeySet('sk-1')).toBe(true);
+    expect(apiKeySet('  ')).toBe(false);
+    expect(apiKeySet(undefined)).toBe(false);
+  });
+
+  it('formatPrice 数值带 ¥ 前缀，缺值显示 —', () => {
+    expect(formatPrice(1)).toBe('¥1');
+    expect(formatPrice(0)).toBe('¥0');
+    expect(formatPrice(undefined)).toBe('—');
+    expect(formatPrice('')).toBe('—');
   });
 });
