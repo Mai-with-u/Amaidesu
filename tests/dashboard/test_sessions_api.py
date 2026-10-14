@@ -1,350 +1,150 @@
-"""Sessions API 测试：场次列表 / 开启 / 结束 / 删除。
-
-使用真实 LiveSessionManager（tmp SQLiteDatabase + EventBus），走完整 HTTP 层。
-"""
+"""Sessions API：场次列表 / 开启 / 结束 / 删除，以及回看时间线（明细与事件历史按时间合并、发言去重、游标翻页）"""
 
 from __future__ import annotations
 
-import shutil
-import tempfile
-from pathlib import Path
-from typing import Generator
-
 import pytest
-from fastapi.testclient import TestClient
 
-from src.modules.events.event_bus import EventBus
-from src.modules.session import LiveSessionManager
-from src.modules.storage.database import SQLiteDatabase
+from src.modules.events.event_history import EventHistoryService, EventRecord
 
-
-@pytest.fixture
-def temp_db_path() -> Generator[Path, None, None]:
-    td = Path(tempfile.mkdtemp(prefix="sessions-api-"))
-    yield td / "test.db"
-    shutil.rmtree(td, ignore_errors=True)
-
-
-_server_ref_cache = {}
-
-
-def _server_ref():
-    """返回最近一次 fixture 构造的 DashboardServer（供造数用例直连底层组件）。"""
-    return _server_ref_cache["server"]
+BASE = 1_700_000_000_000
 
 
 @pytest.fixture
-def client(temp_db_path: Path) -> Generator[TestClient, None, None]:
-    from src.modules.config.core_schemas import DashboardConfig
-    from src.modules.dashboard.api.router import create_app
-    from src.modules.dashboard.dependencies import set_dashboard_server
-    from src.modules.dashboard.server import DashboardServer
-
-    async def _build():
-        from src.modules.events.event_history import EventHistoryService
-
-        store = SQLiteDatabase(temp_db_path)
-        await store.initialize()
-        bus = EventBus()
-        manager = LiveSessionManager(store.sessions, store.chat, bus)
-        await manager.start()
-        event_history = EventHistoryService(max_events=100)
-
-        server = DashboardServer(
-            event_bus=bus,
-            config_service=None,  # type: ignore[arg-type]
-            dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
-            session_manager=manager,
-            event_history=event_history,
-        )
-        return store, bus, manager, server
-
-    import asyncio
-
-    loop = asyncio.new_event_loop()
-    store, bus, manager, server = loop.run_until_complete(_build())
-    loop.close()
-
-    _server_ref_cache["server"] = server
-    set_dashboard_server(server)
-    app = create_app()
-    with TestClient(app) as c:
-        yield c
-
-    set_dashboard_server(None)
-
-    async def _teardown():
-        if manager.active_pk is not None:
-            await manager.close_session()
-        await bus.cleanup()
-        await store.close()
-
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(_teardown())
-    loop.close()
+def event_history() -> EventHistoryService:
+    return EventHistoryService(max_events=100)
 
 
-def test_open_list_close_flow(client: TestClient) -> None:
-    # 初始：无任何场次（启动不自动开新场次）
-    body = client.get("/api/v1/live-sessions").json()
-    assert body["active_session_id"] is None
-    assert body["items"] == []
+@pytest.fixture
+async def sessions_client(api, event_bus, session_manager, event_history):
+    return await api(event_bus=event_bus, session_manager=session_manager, event_history=event_history)
 
-    # 开启
-    opened = client.post("/api/v1/live-sessions/open", json={"title": "晚间场"}).json()
-    pk = opened["live_session_id"]
-    assert pk > 0
 
-    # 列表显示进行中场次
-    body = client.get("/api/v1/live-sessions").json()
+async def _open(client, title: str = "") -> int:
+    return (await client.post("/api/v1/live-sessions/open", json={"title": title} if title else {})).json()[
+        "live_session_id"
+    ]
+
+
+def _decision(pk: int, seq: int, ts: int, **data) -> EventRecord:
+    return EventRecord(
+        id=f"evt-{seq}",
+        type="planner.decision",
+        level="info",
+        source=str(pk),
+        summary=f"决策{seq}",
+        data={"live_session_id": pk, "round_id": f"rnd_{seq}", **data},
+        timestamp_ms=ts,
+    )
+
+
+async def test_open_list_close_flow(sessions_client) -> None:
+    client = sessions_client
+    # 启动不自动开新场次
+    body = (await client.get("/api/v1/live-sessions")).json()
+    assert (body["active_session_id"], body["items"]) == (None, [])
+
+    pk = await _open(client, "晚间场")
+    body = (await client.get("/api/v1/live-sessions")).json()
     assert body["active_session_id"] == pk
-    active = [item for item in body["items"] if item["is_active"]]
-    assert len(active) == 1
-    assert active[0]["title"] == "晚间场"
-    assert active[0]["ended_at_ms"] is None
+    (active,) = [item for item in body["items"] if item["is_active"]]
+    assert (active["title"], active["ended_at_ms"]) == ("晚间场", None)
 
     # 空场次结束 → 整行丢弃（防膨胀）
-    closed = client.post(f"/api/v1/live-sessions/{pk}/close").json()
-    assert closed["success"] is True
-    body = client.get("/api/v1/live-sessions").json()
-    assert body["active_session_id"] is None
-    assert all(item["live_session_id"] != pk for item in body["items"])
+    assert (await client.post(f"/api/v1/live-sessions/{pk}/close")).json()["success"] is True
+    body = (await client.get("/api/v1/live-sessions")).json()
+    assert body["active_session_id"] is None and all(i["live_session_id"] != pk for i in body["items"])
 
 
-def test_close_mismatched_session_returns_409(client: TestClient) -> None:
-    client.post("/api/v1/live-sessions/open", json={})
-    client.post("/api/v1/live-sessions/open", json={})
-    # 开第二个场次时第一个已被自动结束；指定一个已结束的 id → 409
-    stale = client.get("/api/v1/live-sessions").json()["active_session_id"]
-    r = client.post(f"/api/v1/live-sessions/{stale + 100000}/close")
-    assert r.status_code == 409
+async def test_close_mismatched_and_delete_missing(sessions_client) -> None:
+    client = sessions_client
+    await _open(client)
+    await _open(client)  # 开第二场时第一场已被自动结束
+    active = (await client.get("/api/v1/live-sessions")).json()["active_session_id"]
+    assert (await client.post(f"/api/v1/live-sessions/{active + 100000}/close")).status_code == 409
+
+    pk = await _open(client, "待删")
+    deleted = await client.delete(f"/api/v1/live-sessions/{pk}")
+    assert (deleted.status_code, deleted.json()["success"]) == (200, True)
+    assert (await client.delete(f"/api/v1/live-sessions/{pk}")).status_code == 404
 
 
-def test_delete_session(client: TestClient) -> None:
-    opened = client.post("/api/v1/live-sessions/open", json={"title": "待删"}).json()
-    pk = opened["live_session_id"]
-    r = client.delete(f"/api/v1/live-sessions/{pk}")
-    assert r.status_code == 200
-    assert r.json()["success"] is True
-    # 再删 → 404
-    r = client.delete(f"/api/v1/live-sessions/{pk}")
-    assert r.status_code == 404
+async def test_list_filters_by_source_and_title(sessions_client, session_manager) -> None:
+    """前两个显式场次都需有明细，否则自动结束时会被整行丢弃。"""
+    client = sessions_client
+    first = await _open(client, "筛选测试场")
+    await session_manager.chat.insert_live_chat(
+        live_session_id=first, timestamp_ms=BASE, sender_role="viewer", content="让这场不被丢弃", message_type="danmaku"
+    )
+    second = await _open(client, "另一个场次")
+    await client.post(f"/api/v1/live-sessions/{second}/close")
+
+    manual = (await client.get("/api/v1/live-sessions", params={"source": "manual"})).json()
+    assert [i["title"] for i in manual["items"]] == ["筛选测试场"]
+    keyword = (await client.get("/api/v1/live-sessions", params={"q": "筛选测试"})).json()
+    assert [i["title"] for i in keyword["items"]] == ["筛选测试场"]
+    assert (await client.get("/api/v1/live-sessions", params={"source": "hacker"})).status_code == 400
 
 
-def test_session_timeline_merges_details_and_events(client: TestClient) -> None:
-    """回看时间线：明细行（弹幕/发言/礼物）与事件历史（决策/阶段）按时间合并。"""
-    import asyncio
-
-    from src.modules.events.event_history import EventRecord
-
-    # 开启一场显式场次用于回看（启动不自动开新场次，需手动开）
-    opened = client.post("/api/v1/live-sessions/open", json={"title": "回看测试"}).json()
-    pk = opened["live_session_id"]
-
-    # 直连底层组件造数据（HTTP 层没有造数端点）
-    server = _server_ref()
-    manager = server.session_manager
-    loop = asyncio.new_event_loop()
-
-    async def _seed():
-        await manager.chat.insert_live_chat(
-            live_session_id=pk,
-            timestamp_ms=1_700_000_000_000,
-            sender_role="viewer",
-            sender_id="u1",
-            sender_name="观众A",
-            content="主播玩什么？",
-            message_type="danmaku",
-            message_id="msg_seed_1",
+async def test_timeline_merges_details_and_events_and_dedupes_speech(
+    sessions_client, session_manager, event_history
+) -> None:
+    client = sessions_client
+    pk = await _open(client, "回看测试")
+    chat = session_manager.chat
+    await chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=BASE, sender_role="viewer", sender_id="u1", sender_name="观众A",
+        content="主播玩什么？", message_type="danmaku", message_id="msg_seed_1",
+    )  # fmt: skip
+    await chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=BASE + 5_000, sender_role="assistant", sender_name="主播",
+        content="今天玩《双人成行》！", message_type="speak", reply_to_message_id="msg_seed_1",
+    )  # fmt: skip
+    # 礼物行带 total_price：响应模型 extra=forbid 下漏声明该字段曾使整响应 500
+    await chat.insert_gift(
+        live_session_id=pk, timestamp_ms=BASE + 6_000, user_id="u2", user_name="土豪B",
+        gift_name="小花花", quantity=3, total_price=3000,
+    )  # fmt: skip
+    event_history.record(_decision(pk, 1, BASE + 4_000, reply_to_message_id="msg_seed_1"))
+    # 发言双源去重：与 streamer.speech 事件同文本同时刻的明细行让位（事件侧是富卡）；无事件对应的明细行保留兜底
+    await chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=BASE + 10_000, sender_role="assistant", sender_name="主播",
+        content="有事件对应的发言", message_type="speak",
+    )  # fmt: skip
+    event_history.record(
+        EventRecord(
+            id="evt-speech-1", type="streamer.speech", level="info", source=str(pk), summary="发言",
+            data={"live_session_id": pk, "text": "有事件对应的发言", "utterance_id": "utt_1"},
+            timestamp_ms=BASE + 10_000,
         )
-        await manager.chat.insert_live_chat(
-            live_session_id=pk,
-            timestamp_ms=1_700_000_005_000,
-            sender_role="assistant",
-            sender_name="主播",
-            content="今天玩《双人成行》！",
-            message_type="speak",
-            reply_to_message_id="msg_seed_1",
-        )
-        # 礼物行带 total_price：响应模型 extra=forbid 下漏声明该字段曾使整响应 500
-        await manager.chat.insert_gift(
-            live_session_id=pk,
-            timestamp_ms=1_700_000_006_000,
-            user_id="u2",
-            user_name="土豪B",
-            gift_name="小花花",
-            quantity=3,
-            total_price=3000,
-        )
-        if server.event_history is not None:
-            server.event_history.record(
-                EventRecord(
-                    id="evt-decision-1",
-                    type="planner.decision",
-                    level="info",
-                    source=str(pk),
-                    summary="决策",
-                    data={
-                        "live_session_id": pk,
-                        "round_id": "rnd_1",
-                        "should_reply": True,
-                        "speech": "今天玩《双人成行》！",
-                        "reply_to_message_id": "msg_seed_1",
-                    },
-                    timestamp_ms=1_700_000_004_000,
-                )
-            )
+    )  # fmt: skip
+    await chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=BASE + 11_000, sender_role="assistant", sender_name="主播",
+        content="只有明细行的发言", message_type="speak",
+    )  # fmt: skip
 
-    loop.run_until_complete(_seed())
-    loop.close()
-
-    body = client.get(f"/api/v1/live-sessions/{pk}/timeline").json()
+    body = (await client.get(f"/api/v1/live-sessions/{pk}/timeline")).json()
     items = body["items"]
-    kinds = [item["kind"] for item in items]
-    assert "danmaku" in kinds
-    assert "speech" in kinds
-    assert "gift" in kinds
-    gift = next(item for item in items if item["kind"] == "gift")
-    assert gift["gift_name"] == "小花花" and gift["total_price"] == 3000
-    decision = next(item for item in items if item["kind"] == "event" and item["event_type"] == "planner.decision")
+    gift = next(i for i in items if i["kind"] == "gift")
+    assert (gift["gift_name"], gift["total_price"]) == ("小花花", 3000)
+    decision = next(i for i in items if i["kind"] == "event" and i["event_type"] == "planner.decision")
     assert decision["data"]["round_id"] == "rnd_1"
-    # 回复关联在明细行上可直接查询
-    speech = next(item for item in items if item["kind"] == "speech")
-    assert speech["reply_to_message_id"] == "msg_seed_1"
-    # 降级字段缺省：诊断未装配时不报裁剪
-    assert body["has_more"] is False
-    assert body["events_pruned"] is False
+    speech_rows = [i for i in items if i["kind"] == "speech"]
+    assert {r["reply_to_message_id"] for r in speech_rows if r.get("reply_to_message_id")} == {"msg_seed_1"}
+    assert "有事件对应的发言" not in [r["text"] for r in speech_rows]
+    assert "只有明细行的发言" in [r["text"] for r in speech_rows]
+    assert len([i for i in items if i["kind"] == "event" and i["event_type"] == "streamer.speech"]) == 1
+    # 诊断未装配时不报裁剪
+    assert (body["has_more"], body["events_pruned"]) == (False, False)
 
 
-def test_session_timeline_speech_dedupe_prefers_event_side(client: TestClient) -> None:
-    """发言双源去重：与 streamer.speech 事件同文本同时刻的明细行让位（事件侧
-    是富卡：情绪/统计/轮次关联）；无事件对应的明细行保留，作诊断流缺失的兜底。"""
-    import asyncio
+async def test_timeline_cursor_pagination(sessions_client, event_history) -> None:
+    client = sessions_client
+    pk = await _open(client, "游标翻页")
+    for seq in range(1, 4):
+        event_history.record(_decision(pk, seq, BASE + seq * 1_000))
 
-    from src.modules.events.event_history import EventRecord
-
-    pk = client.post("/api/v1/live-sessions/open", json={"title": "发言去重"}).json()["live_session_id"]
-    server = _server_ref()
-    manager = server.session_manager
-    loop = asyncio.new_event_loop()
-
-    async def _seed():
-        base_ts = 1_700_000_010_000
-        # 有事件对应的发言：明细行应被去重
-        await manager.chat.insert_live_chat(
-            live_session_id=pk,
-            timestamp_ms=base_ts,
-            sender_role="assistant",
-            sender_name="主播",
-            content="有事件对应的发言",
-            message_type="speak",
-        )
-        server.event_history.record(
-            EventRecord(
-                id="evt-speech-1",
-                type="streamer.speech",
-                level="info",
-                source=str(pk),
-                summary="发言",
-                data={"live_session_id": pk, "text": "有事件对应的发言", "utterance_id": "utt_1"},
-                timestamp_ms=base_ts,
-            )
-        )
-        # 无事件对应的发言（诊断流缺失场景）：明细行保留兜底
-        await manager.chat.insert_live_chat(
-            live_session_id=pk,
-            timestamp_ms=base_ts + 1_000,
-            sender_role="assistant",
-            sender_name="主播",
-            content="只有明细行的发言",
-            message_type="speak",
-        )
-
-    loop.run_until_complete(_seed())
-    loop.close()
-
-    body = client.get(f"/api/v1/live-sessions/{pk}/timeline").json()
-    speech_rows = [item for item in body["items"] if item["kind"] == "speech"]
-    speech_events = [
-        item for item in body["items"] if item["kind"] == "event" and item["event_type"] == "streamer.speech"
-    ]
-    assert len(speech_events) == 1
-    assert len(speech_rows) == 1
-    assert speech_rows[0]["text"] == "只有明细行的发言"
-
-
-def test_session_timeline_cursor_pagination(client: TestClient) -> None:
-    """limit 截断 + has_more + 游标续翻：向前翻页不重复、翻尽后 has_more 归假。"""
-    import asyncio
-
-    from src.modules.events.event_history import EventRecord
-
-    pk = client.post("/api/v1/live-sessions/open", json={"title": "游标翻页"}).json()["live_session_id"]
-    server = _server_ref()
-    loop = asyncio.new_event_loop()
-
-    async def _seed():
-        for seq in range(1, 4):
-            server.event_history.record(
-                EventRecord(
-                    id=f"evt-{seq}",
-                    type="planner.decision",
-                    level="info",
-                    source=str(pk),
-                    summary=f"决策{seq}",
-                    data={"live_session_id": pk, "round_id": f"rnd_{seq}"},
-                    timestamp_ms=1_700_000_000_000 + seq * 1_000,
-                )
-            )
-
-    loop.run_until_complete(_seed())
-    loop.close()
-
-    base = f"/api/v1/live-sessions/{pk}/timeline"
-    page1 = client.get(base, params={"limit": 2}).json()
-    assert [i["data"]["round_id"] for i in page1["items"]] == ["rnd_2", "rnd_3"]
-    assert page1["has_more"] is True
-
-    oldest_ts = page1["items"][0]["ts_ms"]
-    page2 = client.get(base, params={"limit": 2, "before_timestamp_ms": oldest_ts}).json()
-    assert [i["data"]["round_id"] for i in page2["items"]] == ["rnd_1"]
-    assert page2["has_more"] is False
-
-
-def test_list_sessions_with_filters(client: TestClient) -> None:
-    """来源与标题筛选走服务端；非法来源返回 400。
-
-    前两个显式场次都注入一条明细再被自动结束（空场次会被整行丢弃，
-    防膨胀语义详见 test_open_list_close_flow）。
-    """
-    import asyncio
-
-    first = client.post("/api/v1/live-sessions/open", json={"title": "筛选测试场"}).json()["live_session_id"]
-    manager = _server_ref().session_manager
-    loop = asyncio.new_event_loop()
-
-    async def _seed():
-        await manager.chat.insert_live_chat(
-            live_session_id=first,
-            timestamp_ms=1_700_000_000_000,
-            sender_role="viewer",
-            content="让这场不被丢弃",
-            message_type="danmaku",
-        )
-
-    loop.run_until_complete(_seed())
-    loop.close()
-
-    second = client.post("/api/v1/live-sessions/open", json={"title": "另一个场次"}).json()["live_session_id"]
-    client.post(f"/api/v1/live-sessions/{second}/close")
-
-    manual = client.get("/api/v1/live-sessions", params={"source": "manual"}).json()
-    assert [item["title"] for item in manual["items"]] == ["筛选测试场"]
-    assert all(item["source"] == "manual" for item in manual["items"])
-
-    keyword = client.get("/api/v1/live-sessions", params={"q": "筛选测试"}).json()
-    assert len(keyword["items"]) == 1
-    assert keyword["items"][0]["title"] == "筛选测试场"
-
-    bad = client.get("/api/v1/live-sessions", params={"source": "hacker"})
-    assert bad.status_code == 400
+    url = f"/api/v1/live-sessions/{pk}/timeline"
+    page1 = (await client.get(url, params={"limit": 2})).json()
+    assert [i["data"]["round_id"] for i in page1["items"]] == ["rnd_2", "rnd_3"] and page1["has_more"] is True
+    page2 = (await client.get(url, params={"limit": 2, "before_timestamp_ms": page1["items"][0]["ts_ms"]})).json()
+    assert [i["data"]["round_id"] for i in page2["items"]] == ["rnd_1"] and page2["has_more"] is False
