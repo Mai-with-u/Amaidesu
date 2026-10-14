@@ -205,7 +205,7 @@
                 />
               </div>
               <div class="section-fields">
-                <!-- 模型域：关系结构专用页（provider 节 → 名下模型 → profile 名单） -->
+                <!-- 模型域：三层关系结构专用页（用途分配 → 模型注册 → 提供商接入） -->
                 <ModelConfigPage
                   v-if="section.key === 'model'"
                   :fields="getSectionFields(section)"

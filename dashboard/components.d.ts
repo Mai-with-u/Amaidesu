@@ -76,7 +76,6 @@ declare module 'vue' {
     InterventionInput: typeof import('./src/components/dashboard/InterventionInput.vue')['default']
     ModelConfigPage: typeof import('./src/components/settings/ModelConfigPage.vue')['default']
     ModelCostDonut: typeof import('./src/components/llm/ModelCostDonut.vue')['default']
-    ModelItemCard: typeof import('./src/components/settings/ModelItemCard.vue')['default']
     PulseChart: typeof import('./src/components/dashboard/PulseChart.vue')['default']
     RestartOverlay: typeof import('./src/components/layout/RestartOverlay.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
