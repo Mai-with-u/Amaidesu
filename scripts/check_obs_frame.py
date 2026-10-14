@@ -45,8 +45,8 @@ def _load_config(args: argparse.Namespace) -> Dict[str, Any]:
     section: Dict[str, Any] = {}
     path = PROJECT_ROOT / "config" / "collectors.toml"
     if path.exists():
-        with path.open("rb") as handle:
-            section = dict(tomllib.load(handle).get("live_frame") or {})
+        # utf-8-sig 兼容用户编辑器写出的 BOM 头：裸 tomllib 会把它当非法语句在第 1 列报错
+        section = dict(tomllib.loads(path.read_text(encoding="utf-8-sig")).get("live_frame") or {})
     config = LiveFrameCollector.ConfigSchema.from_dict(section).model_dump()
     for key, value in (
         ("obs_host", args.host),
