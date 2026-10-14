@@ -205,8 +205,19 @@
                 />
               </div>
               <div class="section-fields">
+                <!-- 模型域：关系结构专用页（provider 节 → 名下模型 → profile 名单） -->
+                <ModelConfigPage
+                  v-if="section.key === 'model'"
+                  :fields="getSectionFields(section)"
+                  :get-value="getFieldValue"
+                  :get-original="settingsStore.originalValueAt"
+                  :update-value="updateFieldValue"
+                  :get-change-count="getPendingChangeCount"
+                  :show-advanced="showAdvanced"
+                />
                 <!-- 浏览模式统一走卡片列表：实体卡 + 分类分组 + 紧凑元数据条 -->
                 <ComponentCardList
+                  v-else
                   :fields="getSectionFields(section)"
                   :enabled-field-key="ENABLED_LIST_KEYS[section.key] ?? null"
                   :get-value="getFieldValue"
@@ -317,6 +328,7 @@ import { useSettingsStore } from '@/stores/settings';
 import type { ConfigFieldSchema, ConfigGroupSchema } from '@/types/settings';
 import SubFieldGroup from '@/components/settings/SubFieldGroup.vue';
 import ComponentCardList from '@/components/settings/ComponentCardList.vue';
+import ModelConfigPage from '@/components/settings/ModelConfigPage.vue';
 
 // ── 文件 Tab 定义（v2：7 文件配置树） ──────────────────────
 // Tab 列表为前端硬编码（此处顺序即展示顺序）；后端 /config/schema 的 groups
