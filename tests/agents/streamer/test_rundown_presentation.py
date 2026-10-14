@@ -1,11 +1,8 @@
-"""rundown/presentation 单元测试：视图形状 + 控制翻译拒绝话术。
-
-视图/控制逻辑从 StreamerAgent 下沉到 ``rundown/presentation.py`` 后，
-本文件直接打两个函数（真实 ``RundownState`` + 内置默认流程单），
-话术字符串逐字锁定——dashboard 端点原样透传给 UI。
-"""
+"""流程单展示层：视图形状，以及控制动作翻译成状态机调用与拒绝话术"""
 
 from __future__ import annotations
+
+import pytest
 
 from src.agents.streamer.rundown.presentation import apply_rundown_control, build_rundown_view
 from src.agents.streamer.rundown.rundown_state import RundownState
@@ -21,10 +18,10 @@ def _loaded_state() -> RundownState:
 # 视图拼装
 
 
-def test_build_view_segment_keys() -> None:
-    """加载后视图含三把 key，segments 每项字段形状完整。"""
+def test_build_view_shape() -> None:
+    # 未加载返回 None，dashboard 降级为不可用视图
+    assert build_rundown_view(RundownState()) is None
     view = build_rundown_view(_loaded_state())
-    assert view is not None
     assert set(view.keys()) == {"snapshot", "transitions", "segments"}
     assert view["segments"], "默认流程单应有环节"
     for seg in view["segments"]:
@@ -39,48 +36,27 @@ def test_build_view_segment_keys() -> None:
         }
 
 
-def test_build_view_none_when_not_loaded() -> None:
-    """未加载流程单返回 None（dashboard 降级为不可用视图）。"""
-    assert build_rundown_view(RundownState()) is None
+# 控制翻译：拒绝话术逐字锁定（dashboard 端点原样透传给 UI）
 
 
-# 控制翻译：拒绝话术逐字锁定
-
-
-async def test_control_no_rundown_loaded_rejected() -> None:
-    """未加载时 goto 被 no_rundown_loaded 拒绝（pause 走状态机 not_running）。"""
-    success, message, snapshot = apply_rundown_control(RundownState(), "goto", segment_id="x")
-    assert success is False
-    assert message == "未加载流程单"
-    assert snapshot is not None and snapshot["status"] == "idle"
-
-
-async def test_control_pause_rejected_when_not_running() -> None:
-    success, message, snapshot = apply_rundown_control(RundownState(), "pause")
-    assert success is False
-    assert message == "流程单未在运行"
-    assert snapshot is not None and snapshot["status"] == "idle"
-
-
-async def test_control_goto_requires_segment_id() -> None:
-    success, message, snapshot = apply_rundown_control(_loaded_state(), "goto")
-    assert success is False
-    assert message == "goto 必须提供 segment_id"
-    assert snapshot is None
-
-
-async def test_control_unknown_action() -> None:
-    success, message, snapshot = apply_rundown_control(_loaded_state(), "rewind")
-    assert success is False
-    assert message.startswith("未知 action:")
-    assert snapshot is None
-
-
-async def test_control_unknown_segment_id_lists_available() -> None:
-    success, message, _ = apply_rundown_control(_loaded_state(), "goto", segment_id="不存在的环节")
-    assert success is False
-    assert message.startswith("环节不存在（可用:")
-    assert "不存在的环节" not in message
+@pytest.mark.parametrize(
+    ("loaded", "action", "kwargs", "message", "has_snapshot"),
+    [
+        (False, "goto", {"segment_id": "x"}, "未加载流程单", True),
+        (False, "pause", {}, "流程单未在运行", True),
+        (True, "goto", {}, "goto 必须提供 segment_id", False),
+        (True, "rewind", {}, "未知 action:", False),
+        # 列出可用环节，但不回显输入的环节名
+        (True, "goto", {"segment_id": "不存在的环节"}, "环节不存在（可用:", True),
+    ],
+)
+def test_control_rejections(loaded: bool, action: str, kwargs: dict, message: str, has_snapshot: bool) -> None:
+    state = _loaded_state() if loaded else RundownState()
+    success, text, snapshot = apply_rundown_control(state, action, **kwargs)
+    assert success is False and text.startswith(message) and "不存在的环节" not in text
+    assert (snapshot is not None) is has_snapshot
+    if not loaded:
+        assert snapshot["status"] == "idle"
 
 
 async def test_control_pause_then_resume_again_rejected() -> None:

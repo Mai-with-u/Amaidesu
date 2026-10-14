@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import AUDIENCE_WINDOW_MS, RoomState
 
@@ -15,49 +17,29 @@ class _Danmaku:
         self.content = text
 
 
-def test_activity_line_unknown_without_pushes() -> None:
-    """未收到观看数推送：增量如实报未知，不冒充 0。"""
+@pytest.mark.parametrize(
+    ("samples", "now", "expected"),
+    [
+        ([], 1_000_000, "新增观看未知"),  # 未收到推送：如实报未知，不冒充 0
+        ([(10, 0), (12, 60_000), (18, 120_000)], 120_000, "新增观看 8"),  # 窗口两端累计人次之差
+        ([(10, 0), (10, 300_000)], 300_000, "新增观看 0"),  # 曲线平稳 = 没人进来，事实照报
+        # 窗口外的旧样本不参与：窗口内只剩 1 条样本，无从求差
+        ([(10, 0), (40, AUDIENCE_WINDOW_MS + 60_000)], AUDIENCE_WINDOW_MS + 60_000, "新增观看未知"),
+    ],
+)
+def test_activity_line_audience_increment(samples: list, now: int, expected: str) -> None:
     state = RoomState()
-    line = state.activity_line(now_ms=1_000_000)
-    assert "新增观看未知" in line
-    assert "弹幕 0 条" in line
-
-
-def test_activity_line_counts_window_increment() -> None:
-    """窗口两端的累计人次之差 = 新增观看。"""
-    state = RoomState()
-    state.set_audience_total(10, now_ms=0)
-    state.set_audience_total(12, now_ms=60_000)
-    state.set_audience_total(18, now_ms=120_000)
-    line = state.activity_line(now_ms=120_000)
-    assert "新增观看 8" in line  # 18 - 10（窗口含全部样本）
-
-
-def test_activity_line_zero_increment_means_nobody_in() -> None:
-    """累计曲线平稳（增量 0）= 没人进来，事实照报，措辞交给提示词。"""
-    state = RoomState()
-    state.set_audience_total(10, now_ms=0)
-    state.set_audience_total(10, now_ms=300_000)
-    line = state.activity_line(now_ms=300_000)
-    assert "新增观看 0" in line
-
-
-def test_activity_line_ignores_samples_beyond_window() -> None:
-    """观察窗口外的旧样本不参与增量：两端都落在窗口内才可测。"""
-    state = RoomState()
-    state.set_audience_total(10, now_ms=0)
-    state.set_audience_total(40, now_ms=0 + AUDIENCE_WINDOW_MS + 60_000)
-    line = state.activity_line(now_ms=AUDIENCE_WINDOW_MS + 60_000)
-    assert "新增观看未知" in line  # 窗口内只有 1 条样本
+    for total, at in samples:
+        state.set_audience_total(total, now_ms=at)
+    assert expected in state.activity_line(now_ms=now)
 
 
 def test_activity_line_counts_recent_danmaku() -> None:
-    """近 1 分钟弹幕条数进入信号行。"""
     state = RoomState()
+    assert "弹幕 0 条" in state.activity_line(now_ms=1_000_000)
     state.update(_Danmaku("哈哈"), now_ms=1_000_000)
-    state.update(_Danmaku("666"), now_ms=1_000_000 + 1_000)
-    line = state.activity_line(now_ms=1_000_000 + 2_000)
-    assert "弹幕 2 条" in line
+    state.update(_Danmaku("666"), now_ms=1_001_000)
+    assert "弹幕 2 条" in state.activity_line(now_ms=1_002_000)
 
 
 async def test_planner_reference_contains_activity_section() -> None:

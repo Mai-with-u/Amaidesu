@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.streamer_agent import StreamerAgent
@@ -12,37 +14,26 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 
 
-def test_task_id_becomes_human_readable() -> None:
-    assert sanitize_internal_terms("任务 deleg_1791384781841_1 已交付") == "任务 一个游戏任务 已交付"
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("任务 deleg_1791384781841_1 已交付", "任务 一个游戏任务 已交付"),
+        ("证据见 obs_f794817a_fc2e9d31aabbccdd，现场无异常", "证据见 一次现场观察，现场无异常"),
+        ("拿到了 simulated:honey_glue", "拿到了 honey_glue"),  # 去前缀但保留物品名
+        ("我在 minecraft 里挖到了 19 块圆石，obsidian 还没找到", None),  # 普通文本不动
+        ("", ""),
+    ],
+)
+def test_sanitize_internal_terms(text: str, expected) -> None:
+    assert sanitize_internal_terms(text) == (text if expected is None else expected)
 
 
-def test_observation_ref_becomes_human_readable() -> None:
-    sanitized = sanitize_internal_terms("证据见 obs_f794817a_fc2e9d31aabbccdd，现场无异常")
-    assert "obs_" not in sanitized
-    assert "一次现场观察" in sanitized
-
-
-def test_simulated_prefix_stripped_but_item_name_kept() -> None:
-    assert sanitize_internal_terms("拿到了 simulated:honey_glue") == "拿到了 honey_glue"
-
-
-def test_plain_text_untouched() -> None:
-    text = "我在 minecraft 里挖到了 19 块圆石，obsidian 还没找到"
-    assert sanitize_internal_terms(text) == text
-
-
-def test_empty_text_short_circuit() -> None:
-    assert sanitize_internal_terms("") == ""
-
-
-def test_game_narrative_line_sanitized_at_boundary() -> None:
+async def test_game_narrative_line_sanitized_at_boundary() -> None:
     """game.* 叙事进入缓冲前脱敏：任务号不进主播上下文。"""
     agent = StreamerAgent.__new__(StreamerAgent)  # 只测事件行组装，不走完整装配
     agent._game_narrative = MagicMock()
     agent._planner = MagicMock()
     agent._logger = MagicMock()
-
-    import asyncio
 
     payload = GamePayload(
         game="minecraft",
@@ -50,13 +41,11 @@ def test_game_narrative_line_sanitized_at_boundary() -> None:
         message="任务 deleg_1791384781841_1 完成，蜂蜜胶已放进 simulated:chest",
         report_kind="delivery",
     )
-    asyncio.run(agent._on_game_event("game.report", payload, "test"))
+    await agent._on_game_event("game.report", payload, "test")
 
     line = agent._game_narrative.add.call_args.args[0]
-    assert "deleg_" not in line
-    assert "simulated:" not in line
-    assert "一个游戏任务" in line
-    assert "chest" in line
+    assert "deleg_" not in line and "simulated:" not in line
+    assert "一个游戏任务" in line and "chest" in line
 
 
 async def test_reference_overview_sanitized() -> None:

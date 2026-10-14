@@ -1,11 +1,4 @@
-"""思考流旁路通道测试。
-
-覆盖：
-- ThinkingStreamContext：reasoning 转发 + seq 递增 + content 丢弃 + 多阶段
-- Planner：thinking 透传到 generate 的 on_delta（每步/每阶段形态正确）
-- ReplyToolProvider：思考回调一次性槽位（设置 → invoke 消费 → 清理）
-- ReplyToolProvider：观测发射（planner.verdict）抛异常时不反噬 invoke（观测旁路）
-"""
+"""思考流旁路通道：上下文只转发 reasoning 增量，Planner/Replyer 拿到回调，观测失败不反噬 reply"""
 
 from __future__ import annotations
 
@@ -30,43 +23,22 @@ class _RecordingSink:
         self.calls.append({"round_id": round_id, "phase": phase, "step": step, "seq": seq, "text_delta": text_delta})
 
 
-def test_context_forwards_reasoning_with_increasing_seq():
+def test_context_forwards_reasoning_only_with_increasing_seq():
     sink = _RecordingSink()
     ctx = ThinkingStreamContext(sink, round_id="round_1")
-
     planner_cb = ctx.callback_for("planner", 1)
     planner_cb("reasoning", "想一")
+    planner_cb("content", "正文增量")
+    planner_cb("reasoning", "")
     planner_cb("reasoning", "想二")
-
-    assert [(c["phase"], c["seq"], c["text_delta"]) for c in sink.calls] == [
-        ("planner", 1, "想一"),
-        ("planner", 2, "想二"),
-    ]
-    assert all(c["round_id"] == "round_1" for c in sink.calls)
-
-
-def test_context_drops_content_and_empty_deltas():
-    sink = _RecordingSink()
-    ctx = ThinkingStreamContext(sink, round_id="round_1")
-
-    cb = ctx.callback_for("planner", 1)
-    cb("content", "正文增量")
-    cb("reasoning", "")
-    cb("reasoning", "思考")
-
-    assert len(sink.calls) == 1
-    assert sink.calls[0]["text_delta"] == "思考"
-
-
-def test_context_replyer_phase_gets_step_1():
-    sink = _RecordingSink()
-    ctx = ThinkingStreamContext(sink, round_id="round_9")
-
     ctx.callback_for("replyer", 1)("reasoning", "表达侧思考")
 
-    assert sink.calls[0]["phase"] == "replyer"
-    assert sink.calls[0]["step"] == 1
-    assert sink.calls[0]["round_id"] == "round_9"
+    assert [(c["phase"], c["step"], c["seq"], c["text_delta"]) for c in sink.calls] == [
+        ("planner", 1, 1, "想一"),
+        ("planner", 1, 2, "想二"),
+        ("replyer", 1, 3, "表达侧思考"),
+    ]
+    assert {c["round_id"] for c in sink.calls} == {"round_1"}
 
 
 # Planner：thinking 透传到 generate
@@ -98,23 +70,13 @@ def _make_planner() -> tuple[Planner, Dict[str, Any]]:
 
 async def test_planner_passes_thinking_callback_to_llm():
     planner, captured = _make_planner()
-    sink = _RecordingSink()
-    thinking = ThinkingStreamContext(sink, round_id="round_1")
-
-    outcome = await planner.plan(batch=[], thinking=thinking)
-
-    assert outcome["silent_reason"] == "natural"
-    assert callable(captured.get("on_delta"))
-    # LLM mock 内触发的 reasoning 增量经 context 组装到达 sink
-    assert any(c["text_delta"] == "决策中思考" and c["phase"] == "planner" for c in sink.calls)
-
-
-async def test_planner_without_thinking_passes_none():
-    planner, captured = _make_planner()
-
     await planner.plan(batch=[])
-
     assert captured.get("on_delta") is None
+
+    sink = _RecordingSink()
+    outcome = await planner.plan(batch=[], thinking=ThinkingStreamContext(sink, round_id="round_1"))
+    assert outcome["silent_reason"] == "natural" and callable(captured["on_delta"])
+    assert any(c["text_delta"] == "决策中思考" and c["phase"] == "planner" for c in sink.calls)
 
 
 # ReplyToolProvider：思考回调一次性槽位

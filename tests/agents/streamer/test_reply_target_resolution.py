@@ -1,179 +1,35 @@
-"""StreamerAgent 从 batch 反查"本次回复观众 user_id"链路测试。
-
-覆盖需求：
-- ``_resolve_reply_target_user`` 五种匹配/兜底分支
-- ``_emit_streamer_speech`` 接受 ``target_user_id`` 参数并透传到
-  ``StreamerSpeechPayload``（业务事件 ``streamer.speech``）
-
-测试方法：构造最小可用 ``StreamerAgent`` 实例（不调 ``_on_start``），
-对反查方法直接同步调用；对 emit 走真 ``EventBus`` + 等待 fire-and-forget
-任务完成（沿用 ``test_streamer_speech_emit.py`` 的等待模式）。
-"""
+"""从本批弹幕反查"本次回复的观众"：reply_to 精确优先，其次 target 的消息 ID / 文本，最后兜底最后一条"""
 
 from __future__ import annotations
 
-import asyncio
-from typing import List, Optional
-from unittest.mock import MagicMock
+from typing import Optional
 
-from src.agents.streamer.config import StreamerConfig
-from src.agents.streamer.streamer_agent import StreamerAgent
-from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
+import pytest
+
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-from src.modules.events.payloads.speech import StreamerSpeechPayload
+from tests.agents.streamer.helpers import make_streamer_agent
 
 
-def _make_minimal_agent(*, event_bus: Optional[EventBus] = None) -> StreamerAgent:
-    """构造测试用最小 StreamerAgent（不调 _on_start）。"""
-    config = StreamerConfig.from_dict(
-        {
-            "proactive": {"enabled": False},
-            "batch": {"batch_window_ms": 100, "tick_interval_ms": 50},
-        }
-    )
-    return StreamerAgent(
-        config=config,
-        llm_manager=MagicMock(),
-        prompt_manager=MagicMock(),
-        event_bus=event_bus,
-        tool_registry=None,
-        speech_config=None,
-        tts_engine=None,
-    )
+def _msg(text: str, user_id: str, message_id: str) -> RoomMessagePayload:
+    user = RoomMessageUser(id=user_id, name=f"user_{user_id}")
+    return RoomMessagePayload(message_type="danmaku", user=user, content=text, message_id=message_id)
 
 
-def _make_msg(
-    *,
-    text: str,
-    user_id: str,
-    message_id: Optional[str] = None,
-) -> RoomMessagePayload:
-    """构造测试用 RoomMessagePayload。"""
-    return RoomMessagePayload(
-        message_type="danmaku",
-        user=RoomMessageUser(id=user_id, name=f"user_{user_id}"),
-        content=text,
-        message_id=message_id or f"auto_{text}_{user_id}",
-    )
+_BATCH = [_msg("今天玩什么？", "alice", "m1"), _msg("你好呀主播", "bob", "m2"), _msg("ccc", "carol", "m3")]
 
 
-# _resolve_reply_target_user：5 个匹配/兜底分支
-
-
-def test_resolve_target_by_message_id():
-    """plan.target 命中 batch 中某条消息的 message_id → 返回该消息的 user_id。"""
-    agent = _make_minimal_agent()
-    msg = _make_msg(text="主播好", user_id="alice", message_id="msg_123")
-    plan = {"target": "msg_123"}
-
-    assert agent._rounds._resolve_reply_target_user(plan, [msg]) == "alice"
-
-
-def test_resolve_target_by_text_fallback():
-    """plan.target 未命中 message_id，但命中 text 子串 → 返回 user_id。"""
-    agent = _make_minimal_agent()
-    msg = _make_msg(text="你好呀主播", user_id="bob")
-    plan = {"target": "你好呀"}
-
-    assert agent._rounds._resolve_reply_target_user(plan, [msg]) == "bob"
-
-
-def test_resolve_target_none_when_no_target():
-    """plan.target=None → 返回 None（主动发言/无特定目标）。"""
-    agent = _make_minimal_agent()
-    msg = _make_msg(text="hi", user_id="alice")
-    plan = {"target": None}
-
-    assert agent._rounds._resolve_reply_target_user(plan, [msg]) is None
-
-
-def test_resolve_target_fallback_last_message():
-    """plan.target 全未命中 → 返回 batch 最后一条的 user_id（保守兜底）。"""
-    agent = _make_minimal_agent()
-    m1 = _make_msg(text="aaa", user_id="alice")
-    m2 = _make_msg(text="bbb", user_id="bob")
-    m3 = _make_msg(text="ccc", user_id="carol")
-    plan = {"target": "zzz_unmatched"}
-
-    assert agent._rounds._resolve_reply_target_user(plan, [m1, m2, m3]) == "carol"
-
-
-def test_resolve_target_empty_batch():
-    """batch=[] → 返回 None（无消息可兜底）。"""
-    agent = _make_minimal_agent()
-    plan = {"target": "msg_123"}
-
-    assert agent._rounds._resolve_reply_target_user(plan, []) is None
-
-
-# _emit_streamer_speech：透传 target_user_id 到 StreamerSpeechPayload
-
-
-async def test_emit_streamer_speech_passes_target():
-    """_emit_streamer_speech 接受 target_user_id 并透传到 StreamerSpeechPayload。"""
-    bus = EventBus()
-    captured: List[StreamerSpeechPayload] = []
-    captured_event = asyncio.Event()
-
-    async def _capture(event_name, payload, source=None):
-        if isinstance(payload, StreamerSpeechPayload):
-            captured.append(payload)
-            captured_event.set()
-
-    bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
-
-    agent = _make_minimal_agent(event_bus=bus)
-    await agent._speech._emit_streamer_speech("utt_1", "你好", "neutral", 0.5, "viewer123")
-
-    await asyncio.wait_for(captured_event.wait(), timeout=2.0)
-    assert len(captured) == 1
-    assert captured[0].utterance_id == "utt_1"
-    assert captured[0].text == "你好"
-    assert captured[0].emotion == "neutral"
-    assert captured[0].target_user_id == "viewer123"
-
-
-class TestReplyToMessageIdResolution:
-    """plan.reply_to（Planner 指向的具体弹幕 message_id）优先于 target 文本匹配。"""
-
-    async def test_reply_to_hits_exact_message_id(self) -> None:
-        agent = _make_minimal_agent()
-        batch = [
-            _make_msg(text="今天玩什么？", user_id="u1", message_id="m1"),
-            _make_msg(text="主播好可爱", user_id="u2", message_id="m2"),
-        ]
-        plan = {"target": "观众A", "reply_to": "m2"}
-        user_id = agent._rounds._resolve_reply_target_user(plan, batch)
-        assert user_id == "u2", "reply_to 应精确命中对应弹幕的观众"
-
-    async def test_reply_to_miss_returns_none_no_fallback(self) -> None:
-        agent = _make_minimal_agent()
-        batch = [_make_msg(text="今天玩什么？", user_id="u1", message_id="m1")]
-        plan = {"reply_to": "不存在的id"}
-        user_id = agent._rounds._resolve_reply_target_user(plan, batch)
-        assert user_id is None, "reply_to 未命中时不做文本兜底（防误关联）"
-
-    async def test_speech_payload_carries_reply_to_message_id(self) -> None:
-        """_dispatch_speech_and_emotion 把 reply_to_message_id 透传到 streamer.speech 事件。"""
-        bus = EventBus()
-        received: list = []
-
-        async def _capture(name, payload, source):
-            received.append(payload)
-
-        bus.on(CoreEvents.STREAMER_SPEECH, _capture, model_class=StreamerSpeechPayload)
-        agent = _make_minimal_agent(event_bus=bus)
-        reply_payload = {
-            "speech": "回复内容",
-            "emotion": {"name": "happy", "intensity": 0.5},
-            "actions": [],
-            "metadata": {},
-        }
-        await agent._speech.dispatch(reply_payload, target_user_id="u1", reply_to_message_id="m9")
-        await asyncio.sleep(0.05)
-        await bus.cleanup()
-
-        assert len(received) == 1
-        assert received[0].reply_to_message_id == "m9"
-        assert received[0].target_user_id == "u1"
+@pytest.mark.parametrize(
+    ("plan", "batch", "expected"),
+    [
+        ({"target": "m1"}, _BATCH, "alice"),  # 命中消息 ID
+        ({"target": "你好呀"}, _BATCH, "bob"),  # 文本子串兜底
+        ({"target": "观众A", "reply_to": "m2"}, _BATCH, "bob"),  # reply_to 优先于 target
+        ({"reply_to": "不存在的id"}, _BATCH, None),  # reply_to 未命中不做文本兜底，防误关联
+        ({"target": "zzz_unmatched"}, _BATCH, "carol"),  # 全未命中：保守兜底最后一条
+        ({"target": None}, _BATCH, None),  # 主动发言/无特定目标
+        ({"target": "m1"}, [], None),
+    ],
+)
+def test_resolve_reply_target_user(plan: dict, batch: list, expected: Optional[str]) -> None:
+    agent = make_streamer_agent()
+    assert agent._rounds._resolve_reply_target_user(plan, batch) == expected

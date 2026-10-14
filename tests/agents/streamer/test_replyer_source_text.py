@@ -78,26 +78,25 @@ def _turn_kwargs(prompt: MagicMock) -> Dict[str, Any]:
     return {call.args[0]: call.kwargs for call in prompt.render.call_args_list}["amaidesu_replyer"]
 
 
-async def test_plan_carries_target_original_text() -> None:
-    """一批有好几条时，决策里直接给出 target 那条原话，表达侧不用自己对号。"""
+@pytest.mark.parametrize(
+    ("target", "expected_line"),
+    [
+        # 一批有好几条时直接给出 target 那条原话，表达侧不用自己对号
+        ("[id:m2]", "target: [id:m2]\ntarget 原文: 观众B: 锯子修好了吗 [id:m2]\n"),
+        # 找不到原话时不出这一行，不拿别人的话凑数
+        ("观众C", None),
+    ],
+)
+async def test_plan_carries_target_original_text(target: str, expected_line) -> None:
     replyer, prompt = _replyer()
     batch = [_msg("今天玩什么", "m1", "观众A"), _msg("锯子修好了吗", "m2", "观众B")]
-
-    await replyer.generate(DecisionPlan(should_reply=True, target="[id:m2]", topic_summary="锯子"), batch)
+    await replyer.generate(DecisionPlan(should_reply=True, target=target, topic_summary="锯子"), batch)
 
     plan_text = _turn_kwargs(prompt)["plan"]
-    assert "target: [id:m2]\ntarget 原文: 观众B: 锯子修好了吗 [id:m2]\n" in plan_text
-
-
-async def test_plan_omits_target_text_when_not_found() -> None:
-    """找不到 target 原话时不出现这一行，不拿别人的话凑数。"""
-    replyer, prompt = _replyer()
-
-    await replyer.generate(
-        DecisionPlan(should_reply=True, target="观众B", topic_summary="锯子"), [_msg("在吗", "m1", "观众A")]
-    )
-
-    assert "target 原文" not in _turn_kwargs(prompt)["plan"]
+    if expected_line is None:
+        assert "target 原文" not in plan_text
+    else:
+        assert expected_line in plan_text
 
 
 async def test_game_chat_rendered_or_placeholder() -> None:
