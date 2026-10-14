@@ -75,9 +75,6 @@ def _make_replyer(
     else:
         resp = llm_response or _make_llm_response()
         llm.generate = AsyncMock(return_value=resp)
-    # 历史预算接口显式返回 0（不启用压缩）——裸 MagicMock 的 int() 为 1，
-    # 会让 26 token 的微型历史也触发压缩，破坏本文件对渲染内容的断言
-    llm.get_history_token_budget = MagicMock(return_value=0)
 
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="PROMPT")

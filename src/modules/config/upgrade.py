@@ -647,6 +647,27 @@ def _upgrade_minecraft_context_tokens(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "minecraft_context_tokens", "2.0.44", _upgrade_minecraft_context_tokens)
 
 
+def _drop_profile_history_budget(data: Dict[str, Any]) -> List[str]:
+    """model.toml v2.0.44：删 ``[llm_profiles.*].history_token_budget``。
+
+    对话历史预算是消费方 Agent 的策略、按模型窗口比例换算，改由各 Agent 的上下文段
+    承载（主播 ``[agents.streamer.context]``、Minecraft ``[agents.minecraft.context]``）；
+    profile 上的这个键失去全部消费者。旧值不搬迁：它是固定 token 数，与新的
+    "窗口比例 + 上限"语义不对应，且主播侧的默认值 8000 正是要淘汰的配置。
+    """
+    changed: List[str] = []
+    profiles = data.get("llm_profiles")
+    if isinstance(profiles, dict):
+        for name, profile in profiles.items():
+            if isinstance(profile, dict) and "history_token_budget" in profile:
+                del profile["history_token_budget"]
+                changed.append(f"llm_profiles.{name}.history_token_budget")
+    return changed
+
+
+register_file_hook("model.toml", "drop_profile_history_budget", "2.0.44", _drop_profile_history_budget)
+
+
 def _version_tuple(version: str) -> tuple[int, ...]:
     """版本号 → 可比较元组（"2.0.31" → (2, 0, 31)）；解析失败按 0 处理"""
     try:

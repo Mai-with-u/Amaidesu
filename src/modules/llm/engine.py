@@ -693,18 +693,6 @@ class LLMManager:
         configured = [window for window in windows if window > 0]
         return min(configured) if configured else 0
 
-    def get_history_token_budget(self, profile: Optional[str]) -> int:
-        """取用途 profile 的对话历史 token 预算；0 = 不启用压缩。
-
-        未配置的 profile 按 0 处理（预算查询发生在请求装配期，缺配置应退化为
-        不压缩而不是中断决策链，因此解析失败不硬错）。
-        """
-        try:
-            resolved = self._profiles.get(self._resolve_profile_name(profile))
-        except ValueError:
-            return 0
-        return resolved.history_token_budget if resolved is not None else 0
-
     def is_profile_visual(self, profile: Optional[str]) -> bool:
         """该 profile 当前主模型是否声明视觉能力（``llm_models[].visual``）。
 

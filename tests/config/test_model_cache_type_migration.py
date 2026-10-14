@@ -36,7 +36,7 @@ def test_cache_switch_normalized_to_enum(tmp_path: Path, old_cache: str, cache_p
     load_config_dir(tmp_path)
 
     migrated = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
-    assert migrated["meta"]["version"] == "2.0.43"
+    assert migrated["meta"]["version"] == "2.0.44"
     migrated_model = migrated["llm_models"][0]
     assert migrated_model["cache"] == expected
     assert migrated_model["cache_price_in"] == cache_price_in
