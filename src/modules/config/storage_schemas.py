@@ -56,7 +56,8 @@ class SqliteStorageConfig(BaseConfig):
         default=5000,
         ge=0,
         title="忙等待超时",
-        description="数据库忙时等待超时（毫秒；连接模块读此值注入 PRAGMA busy_timeout）",
+        description="数据库被占用时最多等多久（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 

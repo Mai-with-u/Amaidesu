@@ -252,7 +252,7 @@ class LookAtScreenProvider(BaseToolProvider):
         TOML 段位：[tools.vision].config
         """
 
-        type: str = Field(default="vision", title="段位标识")
+        type: str = Field(default="vision", title="段位标识", json_schema_extra={"x-ui-advanced": True})
         # 默认显示器索引（1..N 物理显示器）；对应 ToolSpec 的 monitor_index 入参缺省
         monitor_index: int = Field(
             title="显示器索引",

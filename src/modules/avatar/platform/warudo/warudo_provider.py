@@ -156,12 +156,22 @@ class WarudoProvider(BaseToolProvider):
         type: str = Field(default="warudo", title="段位标识")
         ws_host: str = Field(title="Warudo 主机地址", default="localhost", description="Warudo WebSocket 主机地址")
         ws_port: int = Field(title="Warudo 端口", default=19190, ge=1, le=65535, description="Warudo WebSocket 端口")
-        reconnect_delay_seconds: float = Field(title="重连间隔", default=5.0, ge=0.0, description="断线重连间隔秒数")
+        reconnect_delay_seconds: float = Field(
+            title="重连间隔",
+            default=5.0,
+            ge=0.0,
+            description="断线重连间隔秒数",
+            json_schema_extra={"x-ui-advanced": True},
+        )
         talking_head_enabled: bool = Field(
             title="是否启用 TalkingHead", default=True, description="是否启用 TalkingHead 后台任务"
         )
         talking_head_interval: float = Field(
-            title="TalkingHead 间隔", default=0.1, ge=0.01, description="TalkingHead 最小间隔秒数"
+            title="TalkingHead 间隔",
+            default=0.1,
+            ge=0.01,
+            description="TalkingHead 最小间隔秒数",
+            json_schema_extra={"x-ui-advanced": True},
         )
         throw_fish_cooldown: float = Field(title="抛鱼冷却时间", default=5.0, ge=0.0, description="抛鱼动画冷却秒数")
         # 动作目录（人类登记的可用动作名+说明；类似 MCP servers 的动态键例外，

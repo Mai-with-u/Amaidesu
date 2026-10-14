@@ -76,14 +76,23 @@ class OBSProvider(BaseToolProvider):
         """OBS 控制配置"""
 
         type: str = "obs"
-        host: str = Field(default="localhost", description="OBS WebSocket 主机地址")
-        port: int = Field(default=4455, ge=1, le=65535, description="OBS WebSocket 端口")
-        password: str = Field(default="", description="OBS WebSocket 密码（空串=无密码）")
-        text_source_name: str = Field(default="text", description="文本源名称")
-        typewriter_enabled: bool = Field(default=False, description="是否启用逐字显示效果")
-        typewriter_speed: float = Field(default=0.1, ge=0.01, le=2.0, description="每个字符间隔秒数")
-        typewriter_delay: float = Field(default=0.5, ge=0.0, le=10.0, description="完整显示后延迟秒数")
-        test_on_connect: bool = Field(default=True, description="连接时是否发送测试消息")
+        host: str = Field(default="localhost", title="OBS 主机地址", description="OBS WebSocket 主机地址")
+        port: int = Field(default=4455, ge=1, le=65535, title="OBS 端口", description="OBS WebSocket 端口")
+        password: str = Field(default="", title="OBS 密码", description="OBS WebSocket 密码（空串=无密码）")
+        text_source_name: str = Field(default="text", title="文本源名称", description="要写入的 OBS 文本源名称")
+        typewriter_enabled: bool = Field(default=False, title="逐字显示", description="是否启用逐字显示效果")
+        typewriter_speed: float = Field(
+            default=0.1, ge=0.01, le=2.0, title="逐字间隔", description="每个字符的间隔秒数"
+        )
+        typewriter_delay: float = Field(
+            default=0.5, ge=0.0, le=10.0, title="显示后停留", description="完整显示后的停留秒数"
+        )
+        test_on_connect: bool = Field(
+            default=True,
+            title="连接自检",
+            description="连接成功后是否发送一条测试消息验证通路",
+            json_schema_extra={"x-ui-advanced": True},
+        )
 
     def __init__(
         self,

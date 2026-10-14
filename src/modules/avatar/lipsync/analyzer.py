@@ -52,32 +52,79 @@ class LipSyncConfig(BaseConfig):
     enabled: bool = Field(
         title="是否启用口型分析", default=True, description="是否启用口型分析（关 = 不构造分析器、不分接播放音频）"
     )
-    sample_rate: int = Field(title="采样率", default=16000, ge=8000, le=48000, description="口型分析采样率 Hz")
-    volume_threshold: float = Field(title="音量阈值", default=0.01, ge=0.0, description="音量阈值")
-    smoothing_factor: float = Field(title="平滑系数", default=0.3, ge=0.0, le=1.0, description="平滑系数")
+    sample_rate: int = Field(
+        title="采样率",
+        default=16000,
+        ge=8000,
+        le=48000,
+        description="口型分析采样率 Hz",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    volume_threshold: float = Field(
+        title="音量阈值", default=0.01, ge=0.0, description="音量阈值", json_schema_extra={"x-ui-advanced": True}
+    )
+    smoothing_factor: float = Field(
+        title="平滑系数", default=0.3, ge=0.0, le=1.0, description="平滑系数", json_schema_extra={"x-ui-advanced": True}
+    )
     vowel_detection_sensitivity: float = Field(
-        title="元音检测灵敏度", default=0.5, ge=0.0, le=1.0, description="元音检测灵敏度"
+        title="元音检测灵敏度",
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="元音检测灵敏度",
+        json_schema_extra={"x-ui-advanced": True},
     )
-    volume_gain: float = Field(title="音量增益", default=1.0, ge=0.0, description="音量增益")
-    max_mouth_open: float = Field(title="最大张嘴度", default=0.6, ge=0.0, le=1.0, description="最大张嘴度")
-    silence_threshold: float = Field(title="静音阈值", default=0.02, ge=0.0, description="静音阈值")
+    volume_gain: float = Field(
+        title="音量增益", default=1.0, ge=0.0, description="音量增益", json_schema_extra={"x-ui-advanced": True}
+    )
+    max_mouth_open: float = Field(
+        title="最大张嘴度",
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="最大张嘴度",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    silence_threshold: float = Field(
+        title="静音阈值", default=0.02, ge=0.0, description="静音阈值", json_schema_extra={"x-ui-advanced": True}
+    )
     close_mouth_threshold: float = Field(
-        title="闭嘴阈值", default=0.06, ge=0.0, description="闭嘴阈值（低于此值触发闭嘴）"
+        title="闭嘴阈值",
+        default=0.06,
+        ge=0.0,
+        description="闭嘴阈值（低于此值触发闭嘴）",
+        json_schema_extra={"x-ui-advanced": True},
     )
-    power_curve: float = Field(title="功率曲线指数", default=1.0, ge=0.0, description="功率曲线指数")
-    vowel_open_weight: float = Field(title="元音张嘴权重", default=0.5, ge=0.0, description="元音张嘴权重")
+    power_curve: float = Field(
+        title="功率曲线指数", default=1.0, ge=0.0, description="功率曲线指数", json_schema_extra={"x-ui-advanced": True}
+    )
+    vowel_open_weight: float = Field(
+        title="元音张嘴权重", default=0.5, ge=0.0, description="元音张嘴权重", json_schema_extra={"x-ui-advanced": True}
+    )
     update_interval_ms: float = Field(
-        title="信号更新间隔", default=30.0, ge=0.0, description="信号更新间隔（秒；命名沿用）"
+        title="信号更新间隔",
+        default=30.0,
+        ge=0.0,
+        description="信号更新间隔（秒；命名沿用）",
+        json_schema_extra={"x-ui-advanced": True},
     )
-    mouth_open_lerp_speed: float = Field(title="张嘴插值速度", default=0.35, ge=0.0, description="张嘴插值速度")
-    vowel_decay: float = Field(title="元音衰减", default=0.4, ge=0.0, description="元音衰减")
+    mouth_open_lerp_speed: float = Field(
+        title="张嘴插值速度",
+        default=0.35,
+        ge=0.0,
+        description="张嘴插值速度",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    vowel_decay: float = Field(
+        title="元音衰减", default=0.4, ge=0.0, description="元音衰减", json_schema_extra={"x-ui-advanced": True}
+    )
     # 精度标记：默认 0.005 低于两位小数分辨率，声明 3 位小数防前端静默舍入
     min_mouth_delta: float = Field(
         title="最小张嘴变化阈值",
         default=0.005,
         ge=0.0,
         description="最小张嘴变化阈值",
-        json_schema_extra={"x-ui-precision": 3},
+        json_schema_extra={"x-ui-precision": 3, "x-ui-advanced": True},
     )
 
 

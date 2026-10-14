@@ -223,7 +223,12 @@ class LLMSelectionStrategy(BaseConfig):
     """
 
     name: str = Field(default="sequential", title="策略名", description="选择策略名")
-    seed: int = Field(default=0, title="随机种子", description="random 策略的可选 seed（0=不固定）")
+    seed: int = Field(
+        default=0,
+        title="随机种子",
+        description="random 策略的可选 seed（0=不固定）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
 
 class LLMProfileConfig(BaseConfig):
@@ -251,7 +256,8 @@ class LLMProfileConfig(BaseConfig):
         default=15_000,
         ge=100,
         title="慢调用阈值",
-        description="慢调用阈值（毫秒）；超阈值仅告警，不切换",
+        description="调用超过该时长记一次慢调用告警（毫秒）；只告警不切换",
+        json_schema_extra={"x-ui-advanced": True},
     )
     temperature: float = Field(
         default=0.3,

@@ -96,6 +96,7 @@ class WebSearchProvider(BaseToolProvider):
 
         base_url: str = Field(
             default="https://cn.bing.com/search",
+            title="搜索入口",
             description="搜索引擎结果页入口（默认 Bing 网页版，免 API key）",
         )
         user_agent: str = Field(
@@ -103,19 +104,24 @@ class WebSearchProvider(BaseToolProvider):
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
             ),
+            title="浏览器标识",
             description="HTTP 请求 User-Agent（搜索引擎与网站对无 UA 请求常拒答）",
+            json_schema_extra={"x-ui-advanced": True},
         )
         timeout_ms: int = Field(
             default=10000,
             ge=1000,
             le=60000,
-            description="单次 HTTP 请求超时（毫秒）",
+            title="请求超时",
+            description="单次搜索请求的等待上限（毫秒）",
+            json_schema_extra={"x-ui-advanced": True},
         )
         default_max_results: int = Field(
             default=5,
             ge=1,
             le=10,
-            description="搜索结果默认返回条数（调用方可用 max_results 覆盖）",
+            title="默认结果条数",
+            description="搜索结果默认返回条数（调用方可临时覆盖）",
         )
 
     def __init__(self, config: Optional["WebSearchProvider.ConfigSchema"] = None) -> None:

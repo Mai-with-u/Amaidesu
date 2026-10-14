@@ -157,12 +157,14 @@ class ToolsTasksConfig(BaseConfig):
         ge=100,
         title="轮询间隔",
         description="异步任务跟踪循环轮询间隔（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     wait_timeout_ms: int = Field(
         default=1_800_000,
         ge=1000,
         title="等待超时",
         description="异步任务最长等待时长（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 
@@ -176,17 +178,24 @@ class ToolsHealthConfig(BaseConfig):
       "熔断后最小驻留时长"——monitor 在 dwell 时间未到时不会尝试恢复
     """
 
-    enabled: bool = Field(default=True, title="是否启用", description="是否启用 ToolHealthMonitor 探活循环")
+    enabled: bool = Field(
+        default=True,
+        title="是否启用",
+        description="是否启用工具探活循环（关闭后工具连续失败只熔断、不再自动探测恢复）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     failure_threshold: int = Field(
         default=3,
         title="熔断阈值",
-        description="ToolRegistry 连续失败熔断阈值（<=0 关闭熔断，monitor 仍可装配但永不跳闸）",
+        description="工具连续失败多少次后停止调用它（0 或负数 = 永不停止）",
+        json_schema_extra={"x-ui-advanced": True},
     )
     probe_interval_ms: int = Field(
         default=30000,
         gt=0,
         title="探活间隔",
-        description="ToolHealthMonitor 探活节拍毫秒；兼作熔断后最小驻留时长",
+        description="熔断后隔多久试一次工具是否恢复（毫秒）；也是熔断后的最短等待时长",
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 

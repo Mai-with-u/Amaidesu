@@ -138,38 +138,87 @@ class VTSProvider(BaseToolProvider):
         # 连接
         vts_host: str = Field(title="VTS 主机地址", default="localhost", description="VTS WebSocket 主机地址")
         vts_port: int = Field(title="VTS 端口", default=8001, ge=1, le=65535, description="VTS WebSocket 端口")
-        base_smile: float = Field(title="微笑基线值", default=0.3, ge=-1.0, le=1.0, description="MouthSmile 静止基线值")
+        base_smile: float = Field(
+            title="微笑基线值",
+            default=0.3,
+            ge=-1.0,
+            le=1.0,
+            description="MouthSmile 静止基线值",
+            json_schema_extra={"x-ui-advanced": True},
+        )
         # Idle 运动
         idle_enabled: bool = Field(title="是否启用 Idle 动画", default=True, description="是否启用 Idle 拟人动画")
         idle_param_head_x: str = Field(
-            title="Idle 头部 X 参数名", default="FaceAngleX", description="Idle 头部 X 参数名（空串停用该轴）"
+            title="Idle 头部 X 参数名",
+            default="FaceAngleX",
+            description="Idle 头部 X 参数名（空串停用该轴）",
+            json_schema_extra={"x-ui-advanced": True},
         )
         idle_param_head_y: str = Field(
-            title="Idle 头部 Y 参数名", default="FaceAngleY", description="Idle 头部 Y 参数名（空串停用该轴）"
+            title="Idle 头部 Y 参数名",
+            default="FaceAngleY",
+            description="Idle 头部 Y 参数名（空串停用该轴）",
+            json_schema_extra={"x-ui-advanced": True},
         )
         idle_param_head_z: str = Field(
-            title="Idle 头部 Z 参数名", default="FaceAngleZ", description="Idle 头部 Z 参数名（空串停用该轴）"
+            title="Idle 头部 Z 参数名",
+            default="FaceAngleZ",
+            description="Idle 头部 Z 参数名（空串停用该轴）",
+            json_schema_extra={"x-ui-advanced": True},
         )
         idle_param_body_x: str = Field(
-            title="Idle 身体 X 参数名", default="", description="Idle 身体 X 参数名（空串停用；按模型配置躯干输入）"
+            title="Idle 身体 X 参数名",
+            default="",
+            description="Idle 身体 X 参数名（空串停用；按模型配置躯干输入）",
+            json_schema_extra={"x-ui-advanced": True},
         )
         idle_param_body_y: str = Field(
-            title="Idle 身体 Y 参数名", default="", description="Idle 身体 Y 参数名（空串停用；按模型配置躯干输入）"
+            title="Idle 身体 Y 参数名",
+            default="",
+            description="Idle 身体 Y 参数名（空串停用；按模型配置躯干输入）",
+            json_schema_extra={"x-ui-advanced": True},
         )
         idle_param_body_z: str = Field(
-            title="Idle 身体 Z 参数名", default="", description="Idle 身体 Z 参数名（空串停用；按模型配置躯干输入）"
+            title="Idle 身体 Z 参数名",
+            default="",
+            description="Idle 身体 Z 参数名（空串停用；按模型配置躯干输入）",
+            json_schema_extra={"x-ui-advanced": True},
         )
         idle_head_amplitude: float = Field(
-            title="Idle 头部摆动幅度", default=0.05, ge=0.0, description="Idle 头部摆动幅度"
+            title="Idle 头部摆动幅度",
+            default=0.05,
+            ge=0.0,
+            description="Idle 头部摆动幅度",
+            json_schema_extra={"x-ui-advanced": True},
         )
         idle_body_amplitude: float = Field(
-            title="Idle 身体摆动幅度", default=0.02, ge=0.0, description="Idle 身体摆动幅度"
+            title="Idle 身体摆动幅度",
+            default=0.02,
+            ge=0.0,
+            description="Idle 身体摆动幅度",
+            json_schema_extra={"x-ui-advanced": True},
         )
-        idle_speed: float = Field(title="Idle 摆动速度", default=1.0, ge=0.0, description="Idle 摆动速度系数")
+        idle_speed: float = Field(
+            title="Idle 摆动速度",
+            default=1.0,
+            ge=0.0,
+            description="Idle 摆动速度系数",
+            json_schema_extra={"x-ui-advanced": True},
+        )
         idle_update_interval_ms: float = Field(
-            title="Idle 更新间隔", default=40.0, ge=0.0, description="Idle 更新间隔（秒；命名沿用）"
+            title="Idle 更新间隔",
+            default=40.0,
+            ge=0.0,
+            description="Idle 更新间隔（秒；命名沿用）",
+            json_schema_extra={"x-ui-advanced": True},
         )
-        idle_fade_speed: float = Field(title="Idle 渐变速度", default=0.15, ge=0.0, description="Idle 渐变速度")
+        idle_fade_speed: float = Field(
+            title="Idle 渐变速度",
+            default=0.15,
+            ge=0.0,
+            description="Idle 渐变速度",
+            json_schema_extra={"x-ui-advanced": True},
+        )
         idle_head_enabled: bool = Field(title="是否启用 Idle 头部摆动", default=True, description="Idle 头部摆动开关")
         idle_body_enabled: bool = Field(title="是否启用 Idle 身体摆动", default=True, description="Idle 身体摆动开关")
         idle_pause_while_speaking: bool = Field(
@@ -180,10 +229,14 @@ class VTSProvider(BaseToolProvider):
             title="Idle 额外参数",
             default_factory=dict,
             description="Idle 额外参数 {参数名: 目标值}，人类配置预声明",
+            json_schema_extra={"x-ui-advanced": True},
         )
         # Optional[float] 历史兼容 →；空值不可用空串表达，保留字段类型 Optional 但默认 None
         idle_extra_speed: Optional[float] = Field(
-            title="Idle 额外参数速度", default=None, description="Idle 额外参数速度（None=不额外调整）"
+            title="Idle 额外参数速度",
+            default=None,
+            description="Idle 额外参数速度（None=不额外调整）",
+            json_schema_extra={"x-ui-advanced": True},
         )
 
     def __init__(
