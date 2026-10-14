@@ -1,14 +1,4 @@
-"""EventBroadcaster 订阅测试
-
-覆盖：
-1. 订阅 CoreEvents.ROOM_MESSAGE_{GIFT,SUPER_CHAT,ENTER} 并以 "room.message"
-   WS type 转发（与已有 danmaku 一致）
-2. 订阅 CoreEvents.RUNDOWN_CHANGED 并以 "rundown.changed" WS type 转发
-3. 订阅 CoreEvents.TOOL_RESULT_WILDCARD 通配模式，WS type 沿用具体事件名
-4. 订阅 CoreEvents.TOOL_HEALTH_WILDCARD 通配模式，WS type 沿用具体事件名
-5. 订阅 game.* 四事件并以具体事件名直通转发（游戏 Agent 上报进直播时间线）
-6. 取消订阅（stop）正常
-"""
+"""EventBroadcaster：start 订阅哪些事件、各事件转成什么 WS type 与载荷、stop 退订全部"""
 
 from __future__ import annotations
 
@@ -17,21 +7,19 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     GamePayload,
+    LLMContextUsedPayload,
     RoomMessagePayload,
     RoomMessageUser,
     RundownChangedPayload,
     StreamerSpeechPayload,
+    TaskChangedPayload,
     ToolResultPayload,
 )
 from src.modules.events.payloads.tool_health import ToolHealthPayload
-
-
-class _FakeWSHandler:
-    def __init__(self) -> None:
-        self.broadcast = AsyncMock(return_value=1)
 
 
 class _FakeEventBus:
@@ -47,131 +35,100 @@ class _FakeEventBus:
         self.subscribed.pop(event_name, None)
 
 
+class _FakeWS:
+    def __init__(self) -> None:
+        self.broadcast = AsyncMock(return_value=1)
+
+
 @pytest.fixture
-def bus_and_handler():
-    bus = _FakeEventBus()
-    ws = _FakeWSHandler()
-    return bus, ws
-
-
-async def test_broadcaster_subscribes_to_4_new_events(bus_and_handler) -> None:
-    """start() 应订阅 gift / super_chat / enter / rundown.changed / tool.result.# 四类。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-
-    bus, ws = bus_and_handler
+async def started():
+    """(bus, ws, deliver)：deliver(event, payload) 走已订阅的 handler，返回最近一次广播调用。"""
+    bus, ws = _FakeEventBus(), _FakeWS()
     broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
     await broadcaster.start()
+    bus.broadcaster = broadcaster  # type: ignore[attr-defined]
 
-    for event_name in (
+    async def deliver(event_name: str, payload: Any, subscription: str | None = None):
+        handler, _model = bus.subscribed[subscription or event_name]
+        await handler(event_name, payload, source="test")
+        return ws.broadcast.await_args
+
+    yield bus, ws, deliver
+    await broadcaster.stop()
+
+
+def _room(message_type: str) -> RoomMessagePayload:
+    return RoomMessagePayload(message_type=message_type, user=RoomMessageUser(id="u1", name="测试"), content="")  # type: ignore[arg-type]
+
+
+async def test_start_subscribes_to_every_forwarded_event_and_stop_unsubscribes_all(started) -> None:
+    bus, _ws, _deliver = started
+    expected = {
         CoreEvents.ROOM_MESSAGE_DANMAKU,
         CoreEvents.ROOM_MESSAGE_GIFT,
         CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
         CoreEvents.ROOM_MESSAGE_ENTER,
         CoreEvents.RUNDOWN_CHANGED,
         CoreEvents.TOOL_RESULT_WILDCARD,
-    ):
-        assert event_name in bus.subscribed, f"未订阅 {event_name}"
+        CoreEvents.TOOL_HEALTH_WILDCARD,
+        CoreEvents.STREAMER_SPEECH,
+        CoreEvents.GAME_REPORT,
+        CoreEvents.GAME_ATTENTION_REQUIRED,
+        CoreEvents.GAME_ERROR,
+        CoreEvents.GAME_MILESTONE,
+        CoreEvents.TASK_CHANGED,
+        CoreEvents.LLM_CONTEXT_USED,
+    }
+    assert expected <= set(bus.subscribed)
+    assert bus.subscribed[CoreEvents.TASK_CHANGED][1] is TaskChangedPayload
+    assert bus.subscribed[CoreEvents.LLM_CONTEXT_USED][1] is LLMContextUsedPayload
 
-    await broadcaster.stop()
-
-
-async def test_room_message_events_broadcast_as_room_message_type(bus_and_handler) -> None:
-    """room.message.{danmaku,gift,super_chat,enter} 一致映射到 ws type 'room.message'。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
-
-    for source_event in (
-        CoreEvents.ROOM_MESSAGE_GIFT,
-        CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
-        CoreEvents.ROOM_MESSAGE_ENTER,
-    ):
-        payload = RoomMessagePayload(
-            message_type=(
-                "gift"
-                if source_event.endswith("gift")
-                else "super_chat"
-                if source_event.endswith("super_chat")
-                else "enter"
-            ),
-            user=RoomMessageUser(id="u1", name="测试"),
-            content="",
-        )
-        handler, _model_cls = bus.subscribed[source_event]
-        await handler(source_event, payload, source="test")
-
-        ws.broadcast.assert_awaited()
-        call = ws.broadcast.await_args
-        assert call.args[0] == "room.message", f"event {source_event} 应映射到 'room.message'"
-        assert isinstance(call.args[1], dict)
-        assert call.kwargs.get("message_id") == payload.id
+    subscribed_count = len(bus.subscribed)
+    await bus.broadcaster.stop()  # type: ignore[attr-defined]
+    assert len(bus.unsubscribed) == subscribed_count and bus.subscribed == {}
 
 
-async def test_rundown_changed_broadcast_as_rundown_changed_type(bus_and_handler) -> None:
-    """rundown.changed → ws type 'rundown.changed'。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
+@pytest.mark.parametrize(
+    "event_name", [CoreEvents.ROOM_MESSAGE_GIFT, CoreEvents.ROOM_MESSAGE_SUPER_CHAT, CoreEvents.ROOM_MESSAGE_ENTER]
+)
+async def test_room_message_events_share_one_ws_type(started, event_name: str) -> None:
+    _bus, _ws, deliver = started
+    payload = _room(event_name.rsplit(".", 1)[-1])
+    call = await deliver(event_name, payload)
+    assert call.args[0] == "room.message" and isinstance(call.args[1], dict)
+    assert call.kwargs.get("message_id") == payload.id
 
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
 
-    payload = RundownChangedPayload(
-        rundown_id="rd_test",
-        segment_id="self_intro",
-        segment_title="自我介绍",
-        index=1,
-        total=4,
-        by="human",
+async def test_rundown_changed_and_streamer_speech_payloads(started) -> None:
+    _bus, _ws, deliver = started
+    rundown = RundownChangedPayload(
+        rundown_id="rd_test", segment_id="self_intro", segment_title="自我介绍", index=1, total=4, by="human"
     )
-    handler, _model_cls = bus.subscribed[CoreEvents.RUNDOWN_CHANGED]
-    await handler(CoreEvents.RUNDOWN_CHANGED, payload, source="test")
-
-    ws.broadcast.assert_awaited_once()
-    call = ws.broadcast.await_args
+    call = await deliver(CoreEvents.RUNDOWN_CHANGED, rundown)
     assert call.args[0] == "rundown.changed"
-    assert isinstance(call.args[1], dict)
-    assert call.args[1]["segment_id"] == "self_intro"
-    assert call.args[1]["by"] == "human"
+    assert (call.args[1]["segment_id"], call.args[1]["by"]) == ("self_intro", "human")
 
-
-async def test_tool_result_wildcard_preserves_concrete_event_name(bus_and_handler) -> None:
-    """tool.result.# 通配订阅收到具体事件名（tool.result.speak）后，
-    WS type 沿用该具体名（不是通配串）。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
-
-    payload = ToolResultPayload(
-        tool_name="speak",
-        status="success",
-        result={"speech_text": "你好", "audio_duration_ms": 3200},
+    speech = StreamerSpeechPayload(
+        utterance_id="utt_1700000000000_1", text="欢迎来到直播间！", emotion="happy", emotion_intensity=0.5
     )
-    handler, _model_cls = bus.subscribed[CoreEvents.TOOL_RESULT_WILDCARD]
-    concrete_event = "tool.result.speak"
-    await handler(concrete_event, payload, source="test")
+    call = await deliver(CoreEvents.STREAMER_SPEECH, speech)
+    assert call.args[0] == "streamer.speech" and call.kwargs.get("message_id") == speech.id
+    assert (call.args[1]["utterance_id"], call.args[1]["text"], call.args[1]["emotion"]) == (
+        "utt_1700000000000_1",
+        "欢迎来到直播间！",
+        "happy",
+    )
 
-    ws.broadcast.assert_awaited_once()
-    call = ws.broadcast.await_args
-    # ws type 沿用具体事件名本身（不是 "tool.result.#" 通配串）
+
+async def test_wildcard_subscriptions_keep_concrete_event_name_as_ws_type(started) -> None:
+    """tool.result.# / tool.health.# 通配订阅收到具体事件名后，WS type 沿用该具体名而不是通配串。"""
+    _bus, _ws, deliver = started
+    result = ToolResultPayload(tool_name="speak", status="success", result={"speech_text": "你好"})
+    call = await deliver("tool.result.speak", result, CoreEvents.TOOL_RESULT_WILDCARD)
     assert call.args[0] == "tool.result.speak"
-    assert call.args[1]["tool_name"] == "speak"
-    assert call.args[1]["status"] == "success"
+    assert (call.args[1]["tool_name"], call.args[1]["status"]) == ("speak", "success")
 
-
-async def test_tool_health_wildcard_preserves_concrete_event_name(bus_and_handler) -> None:
-    """tool.health.# 通配订阅收到具体事件名（tool.health.maicraft_speak）后，
-    WS type 沿用该具体名（不是通配串）；payload 字段透传。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
-
-    payload = ToolHealthPayload(
+    health = ToolHealthPayload(
         tool_name="maicraft_speak",
         provider="maicraft",
         state="open",
@@ -179,187 +136,49 @@ async def test_tool_health_wildcard_preserves_concrete_event_name(bus_and_handle
         last_error="ConnectionError: MCP server 未连接且重连失败",
         timestamp_ms=1706745600000,
     )
-    handler, _model_cls = bus.subscribed[CoreEvents.TOOL_HEALTH_WILDCARD]
-    concrete_event = "tool.health.maicraft_speak"
-    await handler(concrete_event, payload, source="test")
-
-    ws.broadcast.assert_awaited_once()
-    call = ws.broadcast.await_args
-    # ws type 沿用具体事件名本身（不是 "tool.health.#" 通配串）
-    assert call.args[0] == "tool.health.maicraft_speak"
-    assert call.args[1]["tool_name"] == "maicraft_speak"
-    assert call.args[1]["provider"] == "maicraft"
-    assert call.args[1]["state"] == "open"
-    assert call.args[1]["failure_count"] == 3
-    assert call.args[1]["last_error"] == "ConnectionError: MCP server 未连接且重连失败"
-    assert call.args[1]["timestamp_ms"] == 1706745600000
-    assert call.kwargs.get("message_id") == payload.id
+    call = await deliver("tool.health.maicraft_speak", health, CoreEvents.TOOL_HEALTH_WILDCARD)
+    assert call.args[0] == "tool.health.maicraft_speak" and call.kwargs.get("message_id") == health.id
+    for field in ("tool_name", "provider", "state", "failure_count", "last_error", "timestamp_ms"):
+        assert call.args[1][field] == getattr(health, field)
 
 
-async def test_broadcaster_subscribes_to_tool_health_wildcard(bus_and_handler) -> None:
-    """broadcaster.start() 应订阅 CoreEvents.TOOL_HEALTH_WILDCARD。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
-    assert CoreEvents.TOOL_HEALTH_WILDCARD in bus.subscribed
-    await broadcaster.stop()
-
-
-async def test_streamer_speech_broadcast_as_streamer_speech_type(bus_and_handler) -> None:
-    """streamer.speech → ws type 'streamer.speech'（payload 含 utterance_id/text/emotion）。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
-
-    payload = StreamerSpeechPayload(
-        utterance_id="utt_1700000000000_1",
-        text="欢迎来到直播间！",
-        emotion="happy",
-        emotion_intensity=0.5,
-    )
-    handler, _model_cls = bus.subscribed[CoreEvents.STREAMER_SPEECH]
-    await handler(CoreEvents.STREAMER_SPEECH, payload, source="test")
-
-    ws.broadcast.assert_awaited_once()
-    call = ws.broadcast.await_args
-    assert call.args[0] == "streamer.speech"
-    assert isinstance(call.args[1], dict)
-    assert call.args[1]["utterance_id"] == "utt_1700000000000_1"
-    assert call.args[1]["text"] == "欢迎来到直播间！"
-    assert call.args[1]["emotion"] == "happy"
-    assert call.kwargs.get("message_id") == payload.id
-
-
-async def test_broadcaster_subscribes_to_game_events(bus_and_handler) -> None:
-    """start() 应订阅 game.* 四事件（游戏 Agent 的汇报/求助/异常/里程碑进直播时间线）。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
-
-    for event_name in (
-        CoreEvents.GAME_REPORT,
-        CoreEvents.GAME_ATTENTION_REQUIRED,
-        CoreEvents.GAME_ERROR,
-        CoreEvents.GAME_MILESTONE,
-    ):
-        assert event_name in bus.subscribed, f"未订阅 {event_name}"
-
-    await broadcaster.stop()
-
-
-async def test_game_events_broadcast_as_concrete_event_name(bus_and_handler) -> None:
-    """game.* 四事件直通：ws type = 具体事件名，payload 字段透传。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
-
-    cases = [
+@pytest.mark.parametrize(
+    ("event_name", "event_type", "extra"),
+    [
         (CoreEvents.GAME_REPORT, "report", {"report_kind": "delivery"}),
         (CoreEvents.GAME_ATTENTION_REQUIRED, "attention_required", {}),
         (CoreEvents.GAME_ERROR, "error", {}),
         (CoreEvents.GAME_MILESTONE, "milestone", {}),
+    ],
+)
+async def test_game_events_pass_through_with_concrete_name(started, event_name, event_type, extra) -> None:
+    _bus, _ws, deliver = started
+    payload = GamePayload(game="minecraft", event_type=event_type, message="交付总结", **extra)  # type: ignore[arg-type]
+    call = await deliver(event_name, payload)
+    assert call.args[0] == event_name and call.kwargs.get("message_id") == payload.id
+    assert (call.args[1]["event_type"], call.args[1]["message"]) == (event_type, "交付总结")
+
+
+async def test_task_and_context_events_pass_through(started) -> None:
+    _bus, _ws, deliver = started
+    task = TaskChangedPayload(
+        task_id="deleg_1", status="running", initiator="operator", executor="minecraft", summary="执行 Agent 已开始处理"
+    )
+    assert (await deliver(CoreEvents.TASK_CHANGED, task)).args[0] == CoreEvents.TASK_CHANGED
+
+    sections = [
+        {"key": "system", "tokens": 100, "raw_tokens": 90, "count": 1, "items": []},
+        {"key": "messages", "tokens": 700, "raw_tokens": 630, "count": 8, "items": []},
+        {"key": "tools", "tokens": 200, "raw_tokens": 180, "count": 2, "items": []},
     ]
-    for event_name, event_type, extra in cases:
-        payload = GamePayload(game="minecraft", event_type=event_type, message="交付总结", **extra)  # type: ignore[arg-type]
-        handler, _model_cls = bus.subscribed[event_name]
-        await handler(event_name, payload, source="test")
-
-        call = ws.broadcast.await_args
-        assert call.args[0] == event_name, f"{event_name} 应以具体事件名直通"
-        assert call.args[1]["event_type"] == event_type
-        assert call.args[1]["message"] == "交付总结"
-        assert call.kwargs.get("message_id") == payload.id
-
-    assert ws.broadcast.await_count == 4
-    await broadcaster.stop()
-
-
-async def test_broadcaster_unsubscribes_all_events_on_stop(bus_and_handler) -> None:
-    """stop() 调用 event_bus.off() 清理全部订阅。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
-
-    subscribed_count = len(bus.subscribed)
-    assert subscribed_count > 0
-
-    await broadcaster.stop()
-    assert len(bus.unsubscribed) == subscribed_count
-    assert len(bus.subscribed) == 0
-
-
-async def test_broadcaster_subscribes_to_task_changed(bus_and_handler) -> None:
-    """任务卡实时增量：订阅 task.changed 并以事件名直通转发。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-    from src.modules.events.payloads import TaskChangedPayload
-
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
-
-    assert CoreEvents.TASK_CHANGED in bus.subscribed, "未订阅 task.changed"
-    handler, model_cls = bus.subscribed[CoreEvents.TASK_CHANGED]
-    assert model_cls is TaskChangedPayload
-
-    payload = TaskChangedPayload(
-        task_id="deleg_1",
-        status="running",
-        initiator="operator",
-        executor="minecraft",
-        summary="执行 Agent 已开始处理",
+    usage = LLMContextUsedPayload(
+        request_id="req_cb", profile_name="replyer", model_name="glm-4.7", context_window=128_000,
+        api_prompt_tokens=1_000, completion_tokens=200, sections=sections, calibrated=True,
+    )  # fmt: skip
+    call = await deliver(CoreEvents.LLM_CONTEXT_USED, usage)
+    assert call.args[0] == "llm.context.used" and call.kwargs.get("message_id") == usage.id
+    assert (call.args[1]["request_id"], call.args[1]["api_prompt_tokens"], len(call.args[1]["sections"])) == (
+        "req_cb",
+        1_000,
+        3,
     )
-    await handler(CoreEvents.TASK_CHANGED, payload, source="TaskLedger")
-    ws.broadcast.assert_awaited()
-    assert ws.broadcast.await_args.args[0] == CoreEvents.TASK_CHANGED
-
-    await broadcaster.stop()
-
-
-async def test_broadcaster_subscribes_to_llm_context_used(bus_and_handler) -> None:
-    """llm.context.used：订阅 + 直通转发（上下文水位面板的实时刷新源）。"""
-    from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
-    from src.modules.events.payloads import LLMContextUsedPayload
-
-    bus, ws = bus_and_handler
-    broadcaster = EventBroadcaster(event_bus=bus, ws_handler=ws)
-    await broadcaster.start()
-
-    assert CoreEvents.LLM_CONTEXT_USED in bus.subscribed, "未订阅 llm.context.used"
-    handler, model_cls = bus.subscribed[CoreEvents.LLM_CONTEXT_USED]
-    assert model_cls is LLMContextUsedPayload
-
-    payload = LLMContextUsedPayload(
-        request_id="req_cb",
-        profile_name="replyer",
-        model_name="glm-4.7",
-        context_window=128_000,
-        api_prompt_tokens=1_000,
-        completion_tokens=200,
-        sections=[
-            {"key": "system", "tokens": 100, "raw_tokens": 90, "count": 1, "items": []},
-            {"key": "messages", "tokens": 700, "raw_tokens": 630, "count": 8, "items": []},
-            {"key": "tools", "tokens": 200, "raw_tokens": 180, "count": 2, "items": []},
-        ],
-        calibrated=True,
-    )
-    await handler(CoreEvents.LLM_CONTEXT_USED, payload, source="LLMManager")
-
-    ws.broadcast.assert_awaited_once()
-    call = ws.broadcast.await_args
-    assert call.args[0] == "llm.context.used"
-    assert call.args[1]["request_id"] == "req_cb"
-    assert call.args[1]["api_prompt_tokens"] == 1_000
-    assert len(call.args[1]["sections"]) == 3
-    assert call.kwargs.get("message_id") == payload.id
-
-    await broadcaster.stop()
