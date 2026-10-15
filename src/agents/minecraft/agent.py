@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import time
 import uuid
 from collections import deque
 from collections.abc import Callable
@@ -96,6 +98,13 @@ _FOLLOW_NOTICE = (
 _GAME_NOT_CONNECTED = (
     "游戏没连上：maicraft 一个工具都没有（Minecraft 客户端没开，或 MaiCraft 的 MCP 没连上），没法操作角色；连上后再派"
 )
+
+# 暂停前的身体急事多久之内还算这次暂停的来由：撤离甩开追兵后，Mod 在急事收尾的同一刻把主任务挂成暂停，
+# 两条事件前后脚到；隔久了的急事和这次暂停无关，不拿来解释。
+_URGENT_BEFORE_PAUSE_S = 60.0
+
+# Mod 没写暂停原因时 doing 只有这一句（"目标 maicraft:build 已暂停（第 0 步）"）：多出来的内容就是 Mod 写的原因。
+_BARE_PAUSE_DOING = re.compile(r"目标 \S+ 已暂停（第 \d+ 步）")
 
 # 结束了的目标在任务状态里保留几条：交付前对照用，再多只会挤占上下文。
 _RECENT_FINISHED_GOALS = 6
@@ -213,6 +222,8 @@ class MinecraftAgent(BaseAgent):
         self._goal_notes: Dict[int, Dict[str, Any]] = {}
         self._finished_goals: Deque[Dict[str, Any]] = deque(maxlen=_RECENT_FINISHED_GOALS)
         self._paused_goals: set[int] = set()
+        # 最近一条身体急事收尾的那句话与收到的时刻：紧接着到的暂停通知带上它，说清主任务为什么停在半路。
+        self._urgent_before_pause: Optional[tuple[str, float]] = None
 
         # 通用任务基建（组合根注入；缺省 None = 委派与目标都不记账，只在本 Agent 内跟踪）
         self._task_tracker: Optional[Any] = task_tracker
@@ -1048,8 +1059,11 @@ class MinecraftAgent(BaseAgent):
             if note.get("state") == AWAITING_ANSWER or goal_id in self._paused_goals
         )
 
-    async def _on_goal_changed(self, run: GoalRun) -> None:
-        """事件流说目标变了：记账，并在需要模型处理时带着完整结果唤醒任务。"""
+    async def _on_goal_changed(self, run: GoalRun, after_world_change: bool = False) -> None:
+        """事件流说目标变了：记账，并在需要模型处理时带着完整结果唤醒任务。
+
+        ``after_world_change``：事件流换了编号（重进世界或游戏重启）后重新核对时查到的样子。
+        """
         before = self._goal_notes.get(run.goal_id, {})
         if run.finished:
             self._goal_notes.pop(run.goal_id, None)
@@ -1069,11 +1083,31 @@ class MinecraftAgent(BaseAgent):
                 f"用 maicraft_goal(operation=answer, goal_id={run.goal_id}, answer=选项编号) 回答。"
             )
         elif run.state == PAUSED and before.get("state") != PAUSED:
-            self._inject_wakeup_message(
-                f"[系统] 目标 {run.goal_id}（{self._goal_label(run)}）被暂停了，身体没在做它"
-                "（重启游戏或重进世界后，没做完的目标都会恢复为暂停）。"
-                f"先看现场，再用 maicraft_goal(operation=resume 或 cancel, goal_id={run.goal_id}) 继续或取消。"
-            )
+            self._inject_wakeup_message(self._pause_notice(run, after_world_change))
+
+    def _pause_notice(self, run: GoalRun, after_world_change: bool) -> str:
+        """目标被暂停的通知：说清为什么停，只有事件流真换了才说重进世界。
+
+        原因按这个顺序取：事件流换了编号（重进世界或游戏重启，没做完的目标读回来都先停着）；
+        Mod 在 doing 里写了原因就照抄 Mod 的；都没有时带上暂停前最近一条身体急事
+        （撤离甩开追兵后"离打点 N 格，主任务停在半路等下一步指示"那句）；还没有就如实说没写原因。
+        急事用一次就清掉，不拿去解释之后别的暂停。
+        """
+        urgent, self._urgent_before_pause = self._urgent_before_pause, None
+        fresh = urgent is not None and time.monotonic() - urgent[1] <= _URGENT_BEFORE_PAUSE_S
+        doing = run.doing.strip().rstrip("。")
+        if after_world_change:
+            why = "游戏重进了世界或重启过，没做完的目标读回来都先停着"
+        elif doing and not _BARE_PAUSE_DOING.fullmatch(doing):
+            why = f"Mod 说：{doing}"
+        elif fresh and urgent is not None:
+            why = f"暂停前身体刚处理完一件急事：{urgent[0].strip().rstrip('。')}"
+        else:
+            why = "Mod 没写暂停原因"
+        return (
+            f"[系统] 目标 {run.goal_id}（{self._goal_label(run)}）被暂停了，身体没在做它。{why}。"
+            f"先看现场，再用 maicraft_goal(operation=resume 或 cancel, goal_id={run.goal_id}) 继续或取消。"
+        )
 
     async def _on_decision_asked(self, run: GoalRun) -> None:
         """Mod 自己挂出的决策（死亡恢复）在等回答：带着问题与选项唤醒任务，让模型按问题里给的选项选。
@@ -1096,13 +1130,20 @@ class MinecraftAgent(BaseAgent):
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:
-        """生存需求的临时任务、处理不了的需求、角色死亡与跟随的处境变化：记进本批上下文，后三种告诉任务（前两种同时告诉主播）。"""
+        """生存需求的临时任务、处理不了的需求、角色死亡与跟随的处境变化：记进本批上下文，后三种告诉任务（前两种同时告诉主播）。
+
+        临时任务收尾那句话另外留给紧接着的暂停通知：撤离后主任务停在半路时，游戏 Agent 从暂停通知里读到它。
+        """
         kind = str(event.get("kind") or "")
         message = str(event.get("message") or kind)
         record = {"event_type": kind, "message": message, "cursor": event.get("cursor")}
         self._batch_body_events.append(record)
         if len(self._batch_body_events) > _MAX_BATCH_BODY_EVENTS:
             self._batch_body_events = self._batch_body_events[-_MAX_BATCH_BODY_EVENTS:]
+        if kind == "temporary_task_finished":
+            # 急事收尾：撤离甩开追兵后人已不在原地，Mod 写"主任务停在半路等下一步指示"，紧接着把主任务挂成暂停。
+            # 记下这句交给随后的暂停通知，游戏 Agent 才知道是撤离把角色带离了原地，不会猜成游戏重连。
+            self._urgent_before_pause = (message, time.monotonic())
         if kind == "follow_status":
             # 跟随的处境变了：任务还没结束就告诉模型；给观众的叙述由注意流采集器出，这里不再上报主播。
             if self._batch_active or not self._task_finished:

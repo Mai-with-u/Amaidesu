@@ -16,12 +16,14 @@ class _Recorder:
 
     def __init__(self) -> None:
         self.changed: List[GoalRun] = []
+        self.after_world_change: List[bool] = []
         self.gone: List[tuple[int, str]] = []
         self.body: List[Dict[str, Any]] = []
         self.decisions: List[GoalRun] = []
 
-    async def on_changed(self, run: GoalRun) -> None:
+    async def on_changed(self, run: GoalRun, after_world_change: bool) -> None:
         self.changed.append(run)
+        self.after_world_change.append(after_world_change)
 
     async def on_gone(self, goal_id: int, reason: str) -> None:
         self.gone.append((goal_id, reason))
@@ -133,6 +135,36 @@ async def test_after_a_world_change_missing_goals_are_reported_gone() -> None:
 
     assert [gone[0] for gone in recorder.gone] == [goal_id]
     assert not watch.tracking(goal_id)
+
+
+async def test_only_a_changed_stream_is_reported_as_a_world_change() -> None:
+    """撤离后挂的暂停是同一条流里的普通事件；重进世界后读回来先停着的目标，流编号变了，交回调时说明是换流后查到的。"""
+    server, recorder = FakeMaicraft(), _Recorder()
+    watch = _watch(server, recorder)
+    await watch.step()
+    goal_id = await _launch(server, watch)
+
+    # 同一条流里的暂停事件：不是重进世界。
+    server.pause(goal_id)
+    await watch.step()
+    assert [run.state for run in recorder.changed] == ["paused"]
+    assert recorder.after_world_change == [False]
+
+    # 连接重建后流没换（只是游标重建）：也不是重进世界。
+    server.goals[goal_id]["state"] = "running"
+    watch.forget_stream()
+    await watch.step()
+    assert recorder.after_world_change[-1] is False
+
+    # 重进同一个世界：Mod 换了一条流，没做完的目标读回来先停着；连接重建后第一次读也认得出流换了。
+    server.stream_id = "stream-2"
+    server.events.clear()
+    server.goals[goal_id]["state"] = "paused"
+    watch.forget_stream()
+    await watch.step()
+    assert recorder.changed[-1].state == "paused"
+    assert recorder.after_world_change[-1] is True
+    assert watch.tracking(goal_id)
 
 
 async def test_a_reused_id_for_another_ability_is_not_mistaken_for_the_old_goal() -> None:

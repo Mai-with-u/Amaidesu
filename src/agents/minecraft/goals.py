@@ -8,7 +8,9 @@ MaiCraft v1 把目标运行的处境变化写进一条事件流（``events``）�
 - 与目标无关的事件（生存需求插进来的临时任务、角色自己处理不了的需求、角色死亡）原样交给身体事件回调；
 - Mod 自己挂出的决策（死亡恢复：编号是负数，不是谁下达的目标）提问时，读一次交给决策回调，等模型按选项回答；
 - 事件流换了（换世界、重进世界）时游标作废，逐个重新查询在跟踪的目标：查得到就照常交回调，
-  查不到或已经不是原来那个目标，就按"不在了"交给回调，不让它挂在待办里永远等不到结果。
+  查不到或已经不是原来那个目标，就按"不在了"交给回调，不让它挂在待办里永远等不到结果；
+  流编号真变了（连接重建后也和之前读到的比）时告诉回调这是换流后查到的，目标停着多半是读回来先停着，
+  别的暂停不说成重进世界。
 
 连接没就绪或读取失败时退避重试，不抛出；跟踪循环本身不调用模型，空闲时只是一条挂着的长轮询。
 """
@@ -41,7 +43,8 @@ _BODY_EVENT_KINDS = frozenset(
 )
 
 McpCall = Callable[[str, Dict[str, Any]], Awaitable[MaicraftReply]]
-GoalChanged = Callable[[GoalRun], Awaitable[None]]
+# 第二个参数：这次是事件流换了编号（重进世界或游戏重启）后重新核对时查到的。
+GoalChanged = Callable[[GoalRun, bool], Awaitable[None]]
 GoalGone = Callable[[int, str], Awaitable[None]]
 DecisionAsked = Callable[[GoalRun], Awaitable[None]]
 BodyEvent = Callable[[Dict[str, Any]], Awaitable[None]]
@@ -79,6 +82,8 @@ class GoalWatch:
         self._wait_ms = wait_ms
         self._goals: Dict[int, TrackedGoal] = {}
         self._stream_id: Optional[str] = None
+        # 读到过的最后一个流编号：连接重建（forget_stream）时也留着，拿来认出 Mod 是不是换了流。
+        self._seen_stream_id: Optional[str] = None
         self._cursor = 0
         self._failures = 0
         self._task: Optional[asyncio.Task[None]] = None
@@ -168,11 +173,14 @@ class GoalWatch:
             # 首次读取：之前的事件发生在本 Agent 接手之前，不补发；事件流换了：旧游标作废，
             # 在跟踪的目标可能随换世界不在了，逐个查清楚。
             changed = not first
-            self._stream_id = page.stream_id
+            # 换没换流看编号本身：连接重建后首次读到的编号和之前的不一样，也是重进了世界或 Mod 重启过；
+            # 同一条流只是游标失效、或接手时第一次读，都不算。
+            world_changed = self._seen_stream_id is not None and page.stream_id != self._seen_stream_id
+            self._stream_id = self._seen_stream_id = page.stream_id
             self._cursor = page.cursor
             await self._skip_backlog(page.has_more)
             if changed or self._goals:
-                await self._resync()
+                await self._resync(world_changed)
             return
         for event in page.events:
             await self._absorb(event)
@@ -207,7 +215,7 @@ class GoalWatch:
             return
         await self._refresh(goal_id)
 
-    async def _refresh(self, goal_id: int) -> None:
+    async def _refresh(self, goal_id: int, after_world_change: bool = False) -> None:
         """取目标此刻的完整样子交给回调；结束了就不再跟踪。查询失败留着，等下一条事件或重新同步。"""
         reply = await self._call(GOAL, {"operation": "get", "goal_id": goal_id})
         tracked = self._goals.get(goal_id)
@@ -231,7 +239,7 @@ class GoalWatch:
             return
         if run.finished:
             self.untrack(goal_id)
-        await self._on_goal_changed(run)
+        await self._on_goal_changed(run, after_world_change)
 
     async def _decision_asked(self, decision_id: int) -> None:
         """取 Mod 挂出的决策此刻的样子：还在等回答就交给决策回调；读不到或已答复就不打扰模型。"""
@@ -246,9 +254,9 @@ class GoalWatch:
             return
         await self._on_decision_asked(run)
 
-    async def _resync(self) -> None:
+    async def _resync(self, after_world_change: bool = False) -> None:
         for goal_id in list(self._goals):
-            await self._refresh(goal_id)
+            await self._refresh(goal_id, after_world_change)
 
 
 __all__ = ["DEFAULT_WAIT_MS", "GoalWatch", "TrackedGoal"]
