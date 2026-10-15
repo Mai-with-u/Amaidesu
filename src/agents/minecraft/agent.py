@@ -272,9 +272,36 @@ class MinecraftAgent(BaseAgent):
         self._live_active = False
         dropped = len(self._message_queue)
         self._message_queue.clear()
+        settled = self._settle_delegated_on_live_end()
         self._logger.info(
-            f"场次已结束（id={payload.live_session_id}）：minecraft 收工（在途批跑完当前步即停；丢弃 {dropped} 条未处理消息）"
+            f"场次已结束（id={payload.live_session_id}）：minecraft 收工"
+            f"（在途批跑完当前步即停；丢弃 {dropped} 条未处理消息；强制结算 {settled} 个悬置委派任务）"
         )
+
+    def _settle_delegated_on_live_end(self) -> int:
+        """下播强制结算：名下所有非终态委派任务置 cancelled（结算原因"下播自动收尾"）。
+
+        挂在 waiting_for_decision 的悬置条目若不收尾，任务账本跨场残留、
+        下次开播前状态不清——收工兜底（丢消息 + 收工态拒收新委派）之外
+        把已在账的也一并结清。单写者规则不破：agent 型任务本就由执行
+        Agent（自己）写入。 Returns: 结算条数。
+        """
+        if self._task_tracker is None:
+            return 0
+        ledger = self._task_tracker.ledger
+        settled = 0
+        for task_id in ledger.active_task_ids():
+            record = ledger.get(task_id)
+            if record is None or record.source != "agent" or record.executor != self.name:
+                continue
+            if ledger.update(task_id, "cancelled", summary="下播自动收尾") is not None:
+                settled += 1
+            else:
+                self._logger.debug(f"下播结算跳过任务 {task_id}（幂等或已终态移除）")
+        # 追踪清单随账面清空：跨场不再有可"重写 running"的旧任务
+        self._delegated_batch_ids.clear()
+        self._delegated_finished_ids.clear()
+        return settled
 
     async def _bind_agent_owned_mcp(self) -> None:
         """装配 Agent 私有 MCP server（[agents.minecraft.mcp]）——失败常驻重试。

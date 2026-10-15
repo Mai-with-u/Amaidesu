@@ -19,7 +19,7 @@ from src.modules.agents.control import build_agent_control_provider
 from src.modules.agents.manager import AgentManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import AgentPromptedPayload, TaskChangedPayload
+from src.modules.events.payloads import AgentPromptedPayload, LiveEndedPayload, TaskChangedPayload
 from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
@@ -304,3 +304,31 @@ async def test_escalation_waits_for_decision_and_mcp_recovery_resumes(mc: _McRig
     assert mc.ledger.get(task_id).status == "running"
     await mc.minecraft._handle_report("delivery", "现场评估后继续并完成", scene="")
     assert mc.ledger.get(task_id) is None
+
+
+async def test_live_ended_settles_suspended_delegations(mc: _McRig) -> None:
+    """下播强制结算：waiting_for_decision 悬置账随收工置 cancelled（下播自动收尾）。"""
+    changed: list[TaskChangedPayload] = []
+
+    async def _capture(name: str, payload: TaskChangedPayload, source: str) -> None:
+        changed.append(payload)
+
+    mc.bus.on(CoreEvents.TASK_CHANGED, _capture, model_class=TaskChangedPayload)
+
+    task_id = await mc.delegate()
+    mc.absorb_into_batch()
+    await mc.minecraft._handle_report("escalation", "迷宫尽头卡住，需要决策", scene="")
+    record = mc.ledger.get(task_id)
+    assert record is not None and record.status == "waiting_for_decision"
+
+    await mc.minecraft._on_live_ended(
+        CoreEvents.LIVE_ENDED,
+        LiveEndedPayload(live_session_id=1, reason="手动下播"),
+        source="LiveSessionManager",
+    )
+
+    assert mc.ledger.get(task_id) is None, "悬置条目已强制结算移除"
+    assert mc.minecraft._delegated_finished_ids == [] and mc.minecraft._delegated_batch_ids == []
+    await asyncio.sleep(0.05)  # task.changed 经后台任务调度广播，让一拍再断言
+    assert changed[-1].status == "cancelled"
+    assert "下播自动收尾" in changed[-1].summary
