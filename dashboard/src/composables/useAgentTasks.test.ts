@@ -1,10 +1,13 @@
+/* eslint-disable vue/one-component-per-file -- 测试需要宿主+消费两个内联组件 */
+// @vitest-environment happy-dom
 // useAgentTasks.ts 任务账本共享组合式的测试
 //
 // 覆盖：executor 过滤、目标切换重过滤与就绪拉快照、task.changed 计数变化
 // 触发静默刷新、cancelTask 的 API 调用与刷新、失败路径的静默/提示语义。
 
-import { effectScope, ref, type EffectScope, type Ref } from 'vue';
+import { defineComponent, effectScope, h, KeepAlive, ref, type EffectScope, type Ref } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
+import { mount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { agentsApi, tasksApi } from '@/api';
@@ -190,5 +193,81 @@ describe('useAgentTasks', () => {
     expect(taskStatusText('running')).toBe('进行中');
     expect(taskStatusText('waiting_for_decision')).toBe('待定夺');
     expect(taskStatusText('mystery')).toBe('mystery');
+  });
+});
+
+// 轮询随激活态启停的生命周期回归：15s 轮询曾因常驻成为 bug，effectScope
+// 不触发 activated/deactivated，须以真实组件挂在 <KeepAlive> 内验证
+describe('useAgentTasks 轮询随激活态启停', () => {
+  let scope: EffectScope;
+  let wrapper: VueWrapper | null = null;
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.useFakeTimers();
+    scope = effectScope();
+    listTasksMock.mockReset();
+    listTasksMock.mockResolvedValue(snapshot([]));
+    useEventsStore().events = [];
+  });
+
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+    scope.stop();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  /** 宿主组件：消费组件挂在 <KeepAlive> 内，动态显隐触发激活钩子 */
+  function mountInKeepAlive(target: Ref<string | null>) {
+    const Consumer = defineComponent({
+      setup() {
+        useAgentTasks(target);
+        return () => h('div');
+      },
+    });
+    const Host = defineComponent({
+      props: { show: { type: Boolean, default: true } },
+      setup(props) {
+        return () => h(KeepAlive, () => (props.show ? h(Consumer) : null));
+      },
+    });
+    return mount(Host);
+  }
+
+  it('激活时建立轮询：一个周期后静默刷新', async () => {
+    const target = ref<string | null>('minecraft');
+    wrapper = mountInKeepAlive(target);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listTasksMock).toHaveBeenCalledTimes(1); // 就绪快照
+
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(listTasksMock).toHaveBeenCalledTimes(2); // 轮询兜底
+  });
+
+  it('deactivated 后轮询停止', async () => {
+    const target = ref<string | null>('minecraft');
+    wrapper = mountInKeepAlive(target);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listTasksMock).toHaveBeenCalledTimes(1);
+
+    await wrapper.setProps({ show: false });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(listTasksMock).toHaveBeenCalledTimes(1); // 隐藏期不拉取
+  });
+
+  it('再激活后轮询恢复', async () => {
+    const target = ref<string | null>('minecraft');
+    wrapper = mountInKeepAlive(target);
+    await vi.advanceTimersByTimeAsync(0);
+
+    await wrapper.setProps({ show: false });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(listTasksMock).toHaveBeenCalledTimes(1);
+
+    await wrapper.setProps({ show: true });
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(listTasksMock).toHaveBeenCalledTimes(2); // 恢复后重新兜底
   });
 });
