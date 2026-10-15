@@ -28,7 +28,7 @@ from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE
 # 故这里复制文本（保持依赖方向 agents → config 干净）。
 _DEFAULT_BOT_NAME = "麦麦"
 _DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和观众互动"
-_DEFAULT_STYLE_CONSTRAINTS = "口语化，使用网络流行语，避免机械式回复，适当使用emoji"
+_DEFAULT_STYLE_CONSTRAINTS = "口语化，使用网络流行语，避免机械式回复"
 _DEFAULT_AUDIENCE_SALUTATION = "大家"
 
 # 复古消息布局：稳定人设放进 system，历史与本轮要求合并进单条 user。

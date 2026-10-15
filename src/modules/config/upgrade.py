@@ -767,6 +767,31 @@ def advance_file_versions(raw_docs: Dict[str, Dict[str, Any]]) -> Dict[str, List
     return changed
 
 
+#: 历届 style_constraints 默认值（含"适当使用emoji"，与表达侧统一禁 emoji 的模板指令矛盾）
+_STYLE_EMOJI_DEFAULTS = frozenset(
+    {
+        "口语化，使用网络流行语，避免机械式回复，适当使用emoji",
+    }
+)
+
+
+def _upgrade_replyer_style_drop_emoji(data: Dict[str, Any]) -> List[str]:
+    """agents.toml v2.0.45：style_constraints 旧默认删除"适当使用emoji"。
+
+    表达侧模板已统一禁 emoji，旧默认落盘值与指令自相矛盾；仅值等于旧默认时改写
+    为新默认，用户显式设置的其他值不动（幂等）。
+    """
+    streamer = (data.get("agents") or {}).get("streamer")
+    persona = streamer.get("persona") if isinstance(streamer, dict) else None
+    if not isinstance(persona, dict) or persona.get("style_constraints") not in _STYLE_EMOJI_DEFAULTS:
+        return []
+    persona["style_constraints"] = "口语化，使用网络流行语，避免机械式回复"
+    return ["agents.streamer.persona.style_constraints"]
+
+
+register_file_hook("agents.toml", "replyer_style_drop_emoji", "2.0.45", _upgrade_replyer_style_drop_emoji)
+
+
 __all__ = [
     "FileUpgradeHook",
     "CrossFileHook",
