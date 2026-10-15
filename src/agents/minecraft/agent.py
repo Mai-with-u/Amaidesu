@@ -91,6 +91,12 @@ _FOLLOW_NOTICE = (
     "需要时换许可重下（例如放开 change_blocks）、取消，或跟主播说一声。"
 )
 
+# 游戏没连上时拒收委派的原因：经委派工具原样回给派活的一方，它据此等连上再派，
+# 不让这边接了活却只能拿截屏一块块显示器去找游戏窗口。
+_GAME_NOT_CONNECTED = (
+    "游戏没连上：maicraft 一个工具都没有（Minecraft 客户端没开，或 MaiCraft 的 MCP 没连上），没法操作角色；连上后再派"
+)
+
 # 结束了的目标在任务状态里保留几条：交付前对照用，再多只会挤占上下文。
 _RECENT_FINISHED_GOALS = 6
 
@@ -395,6 +401,11 @@ class MinecraftAgent(BaseAgent):
         client = self._mcp_client
         return client is not None and bool(getattr(client, "connected", False))
 
+    def _has_maicraft_tools(self) -> bool:
+        """maicraft 至少有一个工具：连接失败时按 0 个工具降级登记，没开私有 MCP 时连 provider 都没有。"""
+        provider = self._mcp_provider
+        return provider is not None and bool(list(provider.list_tools()))
+
     async def _on_stop(self) -> None:
         """停止钩子：取消命令 worker、目标跟踪与恢复循环，摘除工具并关闭 MCP。"""
         self._running = False
@@ -489,13 +500,18 @@ class MinecraftAgent(BaseAgent):
         self._logger.info(f"MinecraftAgent 收到递话（source={source or '未知'}）：{content[:60]}")
         return True
 
-    def receive_delegation(self, *, instruction: str, task_id: str) -> None:
-        """接收委派（framework_delegate）：指令入队（带任务号）+ 唤醒；收工态拒收并如实记账。"""
+    def receive_delegation(self, *, instruction: str, task_id: str) -> Optional[str]:
+        """接收委派（framework_delegate）：指令入队（带任务号）+ 唤醒；收工态拒收并如实记账；游戏没连上时拒收并说明原因。"""
         if not self._live_active:
             self._logger.warning(f"收工态拒收委派（task_id={task_id}）：{instruction[:60]}")
             if self._task_tracker is not None:
                 self._task_tracker.ledger.update(task_id, "cancelled", summary="收工态拒收（下播即收工）")
             return None
+        if not self._has_maicraft_tools():
+            # 开播了但 maicraft 一个工具都没有（客户端没开、MCP 没连上）：接下来没有任何办法操作角色，
+            # 接了只会拿截屏翻显示器找游戏窗口白耗几分钟。直接拒收，原因原样回给派活的一方，等连上再派。
+            self._logger.warning(f"游戏没连上，拒收委派（task_id={task_id}）：{instruction[:60]}")
+            return _GAME_NOT_CONNECTED
         self._message_queue.append(MinecraftInstruction(task_id, instruction))
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到委派（task_id={task_id}）：{instruction[:60]}")

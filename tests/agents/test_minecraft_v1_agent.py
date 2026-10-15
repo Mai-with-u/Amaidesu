@@ -413,3 +413,24 @@ async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
     assert server.calls_to("goal")[-1] == {"operation": "answer", "goal_id": -1, "answer": "respawn"}
     assert agent._goals.tracked_ids() == [1], "决策不进跟踪名单，原来的目标还在跟"
     await agent.stop()
+
+
+async def test_a_delegation_is_refused_when_the_game_is_not_connected() -> None:
+    """10-15 15:30 那场 maicraft 一个工具都没有，游戏 Agent 照样接了委派，拿截屏翻四块显示器找游戏窗口。
+    现在直接拒收，原因原样回给派活的一方；连上（有工具）后照常接。"""
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp")),
+        llm_manager=MagicMock(),
+    )
+    agent._live_active = True
+
+    agent._mcp_provider = SimpleNamespace(list_tools=lambda: [])
+    refused = agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    assert refused is not None and refused.startswith("游戏没连上")
+    agent._mcp_provider = None
+    assert (agent.receive_delegation(instruction="去砍点木头", task_id="d-2") or "").startswith("游戏没连上")
+    assert len(agent._message_queue) == 0
+
+    agent._mcp_provider = FakeMaicraft()
+    assert agent.receive_delegation(instruction="去砍点木头", task_id="d-3") is None
+    assert len(agent._message_queue) == 1

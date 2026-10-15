@@ -19,6 +19,8 @@ from src.modules.mcp.config import McpServerConfig
 from src.agents.minecraft.state import MinecraftInstruction
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 
+from .minecraft_v1_fakes import FakeMaicraft
+
 
 def _offline_config() -> MinecraftConfig:
     """不连私有 MCP 的配置：本机正开着 MaiCraft 时，测试也不能连上真实的 8766 端口。"""
@@ -91,6 +93,8 @@ async def test_start_enters_offline_until_live_started() -> None:
     agent.receive_delegation(instruction="建房子", task_id="t1")
     assert len(agent._message_queue) == 0
     await agent._on_live_started("live.started", _started_payload(), "test")
+    # 开播且游戏连上了（maicraft 有工具）才接委派；游戏没连上的拒收另有测试。
+    agent._mcp_provider = FakeMaicraft()
     agent.receive_delegation(instruction="建房子", task_id="t2")
     assert len(agent._message_queue) == 1
 
