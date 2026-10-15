@@ -88,7 +88,7 @@ def _make_label(**overrides: Any) -> OutlineLabel:
 
 def _colors(img: Any) -> set:
     assert img is not None
-    return set(img.getdata())
+    return {color for _, color in img.getcolors(maxcolors=1 << 20)}  # 取调色统计，避开已弃用的 getdata
 
 
 def test_render_is_binary_three_colors_and_outline_can_be_disabled() -> None:
