@@ -111,6 +111,8 @@ let tiles = new Map<string, TileEntity>();
 let lastBoard: number[][] | null = null;
 let lastMoves: number | null = null;
 let ws: WebSocket | null = null;
+// 主动关闭标志：组件销毁后的 close 不应触发重连
+let disposed = false;
 
 const keyEls = computed(() => ({
   up: keyUp.value,
@@ -336,6 +338,7 @@ function connect() {
   };
 
   ws.onclose = () => {
+    if (disposed) return;
     setTimeout(connect, 3000);
   };
 
@@ -349,6 +352,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  disposed = true;
   if (ws) {
     ws.close();
   }
