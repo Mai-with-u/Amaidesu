@@ -13,6 +13,11 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 
 
+# Vite 开发服务器默认端口（需与 dashboard/vite.config.ts 的 server.port 保持一致）；
+# CORS 默认来源列表同源于此端口
+DEFAULT_VITE_DEV_PORT = 60315
+
+
 # ---------------------------------------------------------------------------
 # SubtitleWidget / DanmakuWidget（Dashboard 子段）
 # ---------------------------------------------------------------------------
@@ -80,7 +85,10 @@ class DashboardConfig(BaseConfig):
     host: str = Field(default="127.0.0.1", title="监听地址", description="Dashboard 监听地址")
     port: int = Field(default=60214, ge=1, le=65535, title="监听端口", description="Dashboard 监听端口")
     cors_origins: list[str] = Field(
-        default_factory=lambda: ["http://localhost:60315", "http://127.0.0.1:60315"],
+        default_factory=lambda: [
+            f"http://localhost:{DEFAULT_VITE_DEV_PORT}",
+            f"http://127.0.0.1:{DEFAULT_VITE_DEV_PORT}",
+        ],
         title="CORS 来源列表",
         description="允许的跨域来源列表（Vite 开发服务器端口，由 dashboard/vite.config.ts 配置）",
         json_schema_extra={"x-ui-advanced": True},
@@ -105,7 +113,7 @@ class DashboardConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
     vite_dev_port: int = Field(
-        default=60315,
+        default=DEFAULT_VITE_DEV_PORT,
         ge=1,
         le=65535,
         title="Vite 开发端口",

@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from src.modules.agents.control import AgentControl
 from src.modules.dashboard.api.router import create_app, setup_cors
 from src.modules.dashboard.dependencies import set_dashboard_server
-from src.modules.config.core_schemas import DashboardConfig
+from src.modules.config.core_schemas import DEFAULT_VITE_DEV_PORT, DashboardConfig
 from src.modules.dashboard.vite_dev import ViteDevServer
 from src.modules.dashboard.widget import DanmakuWidgetService, Game2048WidgetService
 from src.modules.dashboard.widget.models import DanmakuWidgetConfig, SubtitleWidgetConfig
@@ -209,7 +209,10 @@ class DashboardServer:
                     "name": "Amaidesu Dashboard API",
                     "version": "1.0.0",
                     "docs": "/docs",
-                    "message": "前端未构建（dashboard/dist/ 不存在），开发模式请先执行 'cd dashboard && pnpm run dev' 并访问 http://localhost:60315",
+                    "message": (
+                        "前端未构建（dashboard/dist/ 不存在），开发模式请先执行 'cd dashboard && pnpm run dev' "
+                        f"并访问 http://localhost:{DEFAULT_VITE_DEV_PORT}"
+                    ),
                 }
 
             self.logger.info("前端未构建，仅 API 模式运行")

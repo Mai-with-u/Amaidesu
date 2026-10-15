@@ -20,6 +20,7 @@ from typing import Any, AsyncIterator, ClassVar, Dict, Optional
 
 from pydantic import Field
 
+from src.agents.minecraft.config import DEFAULT_MAICRAFT_MCP_URL
 from src.agents.minecraft.maicraft import EVENTS, events_page_of, reply_of
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
@@ -55,7 +56,7 @@ class MaicraftEventsCollector(BaseCollector):
         """
 
         mcp: McpServerConfig = Field(
-            default_factory=lambda: McpServerConfig(url="http://127.0.0.1:8766/mcp"),
+            default_factory=lambda: McpServerConfig(url=DEFAULT_MAICRAFT_MCP_URL),
             description="Mod 的 MCP 服务（取自 agents.minecraft.mcp）",
         )
         retry_interval_ms: int = Field(default=5000, ge=200, description="连接/读取失败后的重试间隔（毫秒）")

@@ -12,6 +12,9 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.context import ContextBudgetConfig
 from src.modules.mcp.config import McpServerConfig
 
+#: 游戏 Mod MCP 服务的默认端点（MaiCraft 本机默认端口 8766）
+DEFAULT_MAICRAFT_MCP_URL = "http://127.0.0.1:8766/mcp"
+
 
 class MinecraftContextConfig(ContextBudgetConfig):
     """本玩家的工作上下文预算：按模型窗口比例换算 token 预算，历史涨到预算时集中整理。
@@ -87,7 +90,7 @@ class MinecraftConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
     mcp: McpServerConfig = Field(
-        default_factory=lambda: McpServerConfig(url="http://127.0.0.1:8766/mcp"),
+        default_factory=lambda: McpServerConfig(url=DEFAULT_MAICRAFT_MCP_URL),
         title="MCP 连接",
         description="连接游戏 Mod 的 MCP 服务地址（关闭后 Agent 降级运行）",
     )
