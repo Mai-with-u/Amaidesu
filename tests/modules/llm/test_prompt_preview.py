@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.modules.llm.request_history_manager import build_prompt_preview
+from src.modules.llm.request_history_manager import build_prompt_preview, count_image_parts
 
 
 @pytest.mark.parametrize(
@@ -36,3 +36,19 @@ from src.modules.llm.request_history_manager import build_prompt_preview
 def test_prompt_preview(messages: list, expected: str) -> None:
     assert build_prompt_preview({"messages": messages}) == expected
     assert build_prompt_preview(None) == build_prompt_preview({}) == ""
+
+
+def test_count_image_parts_counts_neutral_image_parts() -> None:
+    """注入截图计数：中立契约 messages 里 {type:"image"} part 逐条累加。"""
+    messages = [
+        {"role": "system", "parts": ["系统提示"]},
+        {
+            "role": "user",
+            "parts": [{"type": "text", "text": "看到了什么"}, {"type": "image", "image": "data:image/png;base64,xxx"}],
+        },
+        {"role": "assistant", "parts": [{"type": "text", "text": "一只猫"}]},
+        {"role": "user", "parts": [{"type": "image", "image": "data:image/jpeg;base64,yyy"}, {"type": "image"}]},
+    ]
+    assert count_image_parts({"messages": messages}) == 3
+    assert count_image_parts({"messages": [{"role": "user", "content": "纯文本"}]}) == 0
+    assert count_image_parts(None) == count_image_parts({}) == 0

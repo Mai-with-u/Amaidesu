@@ -167,6 +167,8 @@ export interface LLMRequestHistorySummary {
   reasoning_tokens: number | null;
   /** 上游原始 usage 字典（JSON 字符串），详情展开 JSON 查看 */
   usage_raw_json: string | null;
+  /** 本次请求注入的截图数（写侧统计落库）；0 不渲染徽标 */
+  image_count: number;
 }
 
 /** 单条请求历史完整记录（GET /llm/history/{id} 详情） */

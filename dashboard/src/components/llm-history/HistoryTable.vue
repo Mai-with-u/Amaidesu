@@ -75,6 +75,19 @@
         </template>
       </el-table-column>
 
+      <el-table-column label="截图" width="70" align="center">
+        <template #default="{ row }">
+          <el-tooltip
+            v-if="row.image_count > 0"
+            :content="`本次请求注入了 ${row.image_count} 张截图，详情内点击查看`"
+            placement="top"
+          >
+            <span class="image-badge">🖼 {{ row.image_count }}</span>
+          </el-tooltip>
+          <span v-else class="text-muted">—</span>
+        </template>
+      </el-table-column>
+
       <el-table-column prop="success" label="状态" width="80" align="center">
         <template #default="{ row }">
           <el-tag :type="row.success ? 'success' : 'danger'" size="small" effect="plain">
@@ -177,6 +190,12 @@ function handleCurrentChange(page: number) {
 .cache-rate {
   font-variant-numeric: tabular-nums;
   font-size: 12px;
+}
+
+.image-badge {
+  font-size: 12px;
+  color: var(--color-warning);
+  white-space: nowrap;
 }
 .model-name {
   font-family: var(--font-mono);

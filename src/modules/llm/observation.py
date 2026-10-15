@@ -184,6 +184,7 @@ async def record_request(repo: LLMRepo, row: LLMRequestInsert) -> bool:
         latency_ms=row.latency_ms,
         usage_raw_json=row.usage_raw_json,
         preview_text=row.preview_text,
+        image_count=row.image_count,
     )
 
 

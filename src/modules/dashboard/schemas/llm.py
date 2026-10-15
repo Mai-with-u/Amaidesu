@@ -134,6 +134,8 @@ class LLMRequestHistoryListItem(BaseModel):
     cache_miss_tokens: int = 0
     reasoning_tokens: Optional[int] = None
     usage_raw_json: Optional[str] = None
+    # 本次请求注入的截图数（写侧从消息图像片段统计）；0 不渲染徽标
+    image_count: int = 0
 
 
 class LLMHistoryListResponse(BaseModel):

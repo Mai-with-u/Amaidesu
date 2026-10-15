@@ -75,6 +75,8 @@ class LLMRequestInsert:
     # 列表页 Prompt 预览摘要（写侧从正文最后一条有正文的消息截取；正文出库后
     # 新行唯一预览来源）
     preview_text: str = ""
+    # 注入截图计数（写侧从消息图像片段统计；正文出库后列表徽标唯一来源）
+    image_count: int = 0
 
 
 class LLMRepo(BaseRepo):
@@ -139,6 +141,7 @@ class LLMRepo(BaseRepo):
             row.usage_raw_json,
             row.breakdown_json,
             row.preview_text,
+            row.image_count,
         )
 
     @staticmethod
@@ -148,8 +151,8 @@ class LLMRepo(BaseRepo):
             "request_id, timestamp_ms, profile_name, model_name, request_params, response_content,"
             " reasoning_content, tool_calls, prompt_tokens, completion_tokens, total_tokens,"
             " cache_hit_tokens, cache_miss_tokens, reasoning_tokens, cost, success, error,"
-            " latency_ms, usage_raw_json, breakdown_json, preview_text"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " latency_ms, usage_raw_json, breakdown_json, preview_text, image_count"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
 
     async def insert_llm_usage_row(self, row: LLMUsageInsert) -> int:
@@ -190,6 +193,7 @@ class LLMRepo(BaseRepo):
         usage_raw_json: Optional[str] = None,
         breakdown_json: Optional[str] = None,
         preview_text: str = "",
+        image_count: int = 0,
     ) -> bool:
         """插入一条请求历史行；``request_id`` 冲突时忽略（幂等）。
 
@@ -218,6 +222,7 @@ class LLMRepo(BaseRepo):
             usage_raw_json=usage_raw_json,
             breakdown_json=breakdown_json,
             preview_text=preview_text,
+            image_count=image_count,
         )
 
         def _exec() -> bool:

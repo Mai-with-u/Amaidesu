@@ -47,7 +47,7 @@ from src.modules.llm.context_meter import ContextBreakdown, estimate_breakdown, 
 from src.modules.llm.errors import FatalError, LLMError, LLMInterruptedError, LLMTimeoutError, RetryableError
 from src.modules.llm.interrupt import guarded_call
 from src.modules.llm.observation import calculate_cost, record_usage
-from src.modules.llm.request_history_manager import build_prompt_preview
+from src.modules.llm.request_history_manager import build_prompt_preview, count_image_parts
 from src.modules.llm.payload import (
     ContextPart,
     GenerateRequest,
@@ -1128,6 +1128,7 @@ class LLMManager:
             # （request_params 构造共用）；先于历史链路落库，其 INSERT OR
             # IGNORE 对同一 request_id 幂等。正文大字段出库到诊断文件
             # （_record_request_history 统一写），库行只存统计与预览摘要
+            request_params_snapshot = self._build_request_params(kwargs)
             request_row = LLMRequestInsert(
                 request_id=request_id,
                 timestamp_ms=int(time.time() * 1000),
@@ -1149,7 +1150,8 @@ class LLMManager:
                 latency_ms=duration_ms,
                 usage_raw_json=None,
                 breakdown_json=None,
-                preview_text=build_prompt_preview(self._build_request_params(kwargs)),
+                preview_text=build_prompt_preview(request_params_snapshot),
+                image_count=count_image_parts(request_params_snapshot),
             )
             # 落库统一走 observation.record_usage（两表唯一写入点）；携带明细
             # 载荷即两账同事务，缓存列与成本入参的处理收敛在 observation 侧

@@ -33,7 +33,10 @@ from src.modules.diagnostics.readers import (
     read_request_breakdown,
 )
 from src.modules.llm.quota import ProviderQuota
-from src.modules.llm.request_history_manager import get_global_request_history_manager
+from src.modules.llm.request_history_manager import (
+    count_image_parts,
+    get_global_request_history_manager,
+)
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -509,7 +512,16 @@ def _build_list_item(record: Dict[str, Any]) -> LLMRequestHistoryListItem:
         cache_miss_tokens=int(record.get("cache_miss_tokens") or 0),
         reasoning_tokens=_extract_reasoning_tokens(record.get("usage")),
         usage_raw_json=record.get("usage_raw_json"),
+        image_count=_extract_image_count(record),
     )
+
+
+def _extract_image_count(record: Dict[str, Any]) -> int:
+    """注入截图数：优先取写侧落库列；无库模式（内存缓存行自带正文）现场计数。"""
+    stored = int(record.get("image_count") or 0)
+    if stored:
+        return stored
+    return count_image_parts(record.get("request_params"))
 
 
 def _convert_record_to_response(record: Dict[str, Any]) -> LLMRequestHistoryResponse:

@@ -96,6 +96,26 @@ def _message_body_text(message: Any) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def count_image_parts(request_params: Any) -> int:
+    """统计请求消息里的图像片段数量（中立契约 ``{type:"image"}`` part）。
+
+    正文大字段已出库到诊断文件，列表行无消息体可查，计数必须在写侧随行
+    落库（WebUI 历史列表"本次注入 N 张截图"徽标的数据源）。非列表形态的
+    输入一律计 0。
+    """
+    messages = request_params.get("messages") if isinstance(request_params, dict) else None
+    if not isinstance(messages, list):
+        return 0
+    count = 0
+    for message in messages:
+        if not isinstance(message, dict) or not isinstance(message.get("parts"), list):
+            continue
+        for piece in message["parts"]:
+            if isinstance(piece, dict) and piece.get("type") == "image":
+                count += 1
+    return count
+
+
 class TokenUsage(BaseModel):
     """Token 使用量"""
 
@@ -292,6 +312,7 @@ class RequestHistoryManager:
                     latency_ms=int(record_dict.get("latency_ms", 0)),
                     usage_raw_json=None,
                     preview_text=build_prompt_preview(record_dict.get("request_params")),
+                    image_count=count_image_parts(record_dict.get("request_params")),
                 ),
             )
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
@@ -358,6 +379,7 @@ class RequestHistoryManager:
             "cache_miss_tokens": int(row.get("cache_miss_tokens") or 0),
             "usage_raw_json": row.get("usage_raw_json"),
             "preview_text": row.get("preview_text") or "",
+            "image_count": int(row.get("image_count") or 0),
         }
 
     async def get_request_by_id(self, request_id: str) -> Optional[Dict[str, Any]]:

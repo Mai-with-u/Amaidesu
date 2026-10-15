@@ -1,7 +1,7 @@
 """v15 迁移单测：场次回顾表上线 + 观众事实表退役。
 
 覆盖：
-- 新库建表即含 session_recaps、不含 viewer_facts，SCHEMA_VERSION 推进到 15
+- 新库建表即含 session_recaps、不含 viewer_facts（版本随后续迁移继续推进）
 - v14 形状旧库升级：viewer_facts 被 DROP、viewer_profiles 原样保留、重复执行幂等
 - 场次删除级联清掉该场的回顾行
 """
@@ -36,7 +36,7 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 
 def test_new_database_has_recaps_and_no_facts(temp_dir: Path) -> None:
     """新库：session_recaps 在启动闸门内，viewer_facts 不再建表。"""
-    assert SCHEMA_VERSION == 15
+    assert SCHEMA_VERSION >= 15
     assert "session_recaps" in list_expected_tables()
     assert "viewer_facts" not in list_expected_tables()
     db = SQLiteDatabase(temp_dir / "fresh.db")

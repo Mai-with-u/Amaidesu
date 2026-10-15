@@ -77,7 +77,13 @@ async def test_body_fields_leave_db_keeping_statistics_and_preview(store, manage
     record["request_params"] = {
         "messages": [
             {"role": "system", "content": "system prompt"},
-            {"role": "user", "content": "帮我看看这局局势如何，下一步应该怎么走才稳妥，" * 3},
+            {
+                "role": "user",
+                "parts": [
+                    {"type": "text", "text": "帮我看看这局局势如何，下一步应该怎么走才稳妥，" * 3},
+                    {"type": "image", "image": "data:image/jpeg;base64,xxx"},
+                ],
+            },
         ]
     }
     record["usage"]["reasoning_tokens"] = 3
@@ -91,10 +97,13 @@ async def test_body_fields_leave_db_keeping_statistics_and_preview(store, manage
     assert (row["profile_name"], row["reasoning_tokens"]) == ("planner", 3)
     # 预览摘要取最后一条有正文的消息，截 50 字符
     assert row["preview_text"].startswith("帮我看看这局局势") and len(row["preview_text"]) <= 50
+    # 注入截图计数写侧落库，列表行徽标唯一来源
+    assert row["image_count"] == 1
 
     fetched = await manager.get_request_by_id("req-v14")
     assert (fetched["profile_name"], fetched["usage"]["reasoning_tokens"]) == ("planner", 3)
-    assert (await manager.get_history())["records"][0]["preview_text"] == row["preview_text"]
+    first = (await manager.get_history())["records"][0]
+    assert first["preview_text"] == row["preview_text"] and first["image_count"] == 1
 
 
 async def test_statistics_dates_and_clear(store, manager) -> None:

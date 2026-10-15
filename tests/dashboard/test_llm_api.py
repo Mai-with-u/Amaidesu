@@ -214,6 +214,7 @@ async def test_history_rows_carry_tool_call_preview_and_usage_details(llm_client
         tool_calls_json=json.dumps(tool_calls, ensure_ascii=False),
         reasoning_tokens=42,
         usage_raw_json=raw_usage,
+        image_count=2,
     )
 
     body = (await client.get("/api/v1/llm/history", params={"page": 1, "page_size": 10})).json()
@@ -225,6 +226,9 @@ async def test_history_rows_carry_tool_call_preview_and_usage_details(llm_client
         assert (item["cache_hit_tokens"], item["cache_miss_tokens"], item["profile_name"]) == (3840, 84, "planner")
         assert (item["reasoning_tokens"], item["usage_raw_json"]) == (42, raw_usage)
         assert "client_type" not in item
+    # 注入截图计数随列表行透出（WebUI 徽标数据源）；详情响应不携带
+    assert row["image_count"] == 2
+    assert "image_count" not in detail
 
 
 async def test_history_models_are_distinct_and_sorted(llm_client, store) -> None:
