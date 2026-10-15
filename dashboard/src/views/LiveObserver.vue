@@ -63,24 +63,24 @@
               }}</span>
             </div>
             <div class="session-meta mono">
-              <span>{{ sessionTimeLabel(item) }}</span>
+              <span class="session-time">{{ sessionTimeLabel(item) }}</span>
               <span class="grow" />
-              <span>{{ item.message_count }} 条</span>
-            </div>
-            <div class="session-actions">
-              <el-button class="session-ren" link size="small" @click.stop="renameSession(item)"
-                >改名</el-button
-              >
-              <el-popconfirm
-                v-if="!item.is_active && item.source !== 'legacy'"
-                title="删除该场次及其全部明细？"
-                width="220"
-                @confirm="removeSession(item)"
-              >
-                <template #reference>
-                  <el-button class="session-del" link size="small" @click.stop>删除</el-button>
-                </template>
-              </el-popconfirm>
+              <span class="msg-count">{{ item.message_count }} 条</span>
+              <span class="session-actions">
+                <el-button class="session-ren" link size="small" @click.stop="renameSession(item)"
+                  >改名</el-button
+                >
+                <el-popconfirm
+                  v-if="!item.is_active && item.source !== 'legacy'"
+                  title="删除该场次及其全部明细？"
+                  width="220"
+                  @confirm="removeSession(item)"
+                >
+                  <template #reference>
+                    <el-button class="session-del" link size="small" @click.stop>删除</el-button>
+                  </template>
+                </el-popconfirm>
+              </span>
             </div>
           </li>
         </ul>
@@ -737,11 +737,41 @@ onMounted(() => {
   font-size: 10px;
   color: var(--text-secondary);
 }
+.session-time {
+  min-width: 0;
+}
+.msg-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 
+/* 操作按钮与消息数共用 meta 行右槽：悬停/选中时按钮换入，避免绝对定位叠字；
+   时间标签仅悬停时收为单行省略，静止态始终完整（超长自然换行） */
+.session-card:hover .session-time,
+.session-card.is-selected .session-time {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .session-actions {
-  position: absolute;
-  right: 8px;
-  bottom: 4px;
+  display: none;
+  flex-shrink: 0;
+  align-items: center;
+}
+.session-actions :deep(.el-button) {
+  padding: 0;
+  font-size: inherit;
+}
+.session-actions :deep(.el-button + .el-button) {
+  margin-left: 6px;
+}
+.session-card:hover .session-actions,
+.session-card.is-selected .session-actions {
+  display: inline-flex;
+}
+.session-card:hover .msg-count,
+.session-card.is-selected .msg-count {
+  display: none;
 }
 .session-ren {
   color: var(--text-placeholder);
