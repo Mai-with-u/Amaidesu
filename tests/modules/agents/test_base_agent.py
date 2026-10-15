@@ -1,57 +1,31 @@
-"""
-BaseAgent / AgentManager / AgentControl 单元测试（框架统一控制）
-
-覆盖：
-- BaseAgent 协议六项（生命周期 / 工具提供 / 事件上报 / 状态 / 心跳 / 元数据）
-- start → stop → cleanup 状态机
-- pause / resume / shutdown 控制
-- 心跳 + is_alive 判定
-- AgentManager 注册 / 启动 / 停止 / cleanup 全部
-- AgentControl 工具注册进 ToolRegistry 后可调用
-- 同名重复注册跳过后注册（去重）
-"""
+"""BaseAgent / AgentManager / AgentControl：生命周期状态机、心跳、框架统一控制、名册与工具审计、task.changed 唤醒"""
 
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncGenerator, Iterable
+from typing import AsyncGenerator, Iterable, Optional
 
 import pytest
 
-from src.modules.agents import (
-    AgentManager,
-    AgentState,
-    BaseAgent,
-    build_agent_control_provider,
-)
+from src.modules.agents import AgentManager, AgentState, BaseAgent, build_agent_control_provider
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.tools import ToolInvocation, ToolProvider, ToolRegistry
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.tasks import TaskLedger
 
-# Fixtures
-
 
 class _SampleAgent(BaseAgent):
-    """最小可工作子类（满足协议六项）。"""
-
     name = "sample_agent"
     description = "Sample Agent for testing the protocol"
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.started = 0
-        self.stopped = 0
-        self.paused = 0
-        self.resumed = 0
-        self.cleanup_calls = 0
+        self.started = self.stopped = self.paused = self.resumed = self.cleanup_calls = 0
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        yield ToolSpec(
-            name="sample_tool",
-            description="sample",
-            kind="sync",
-            provider="game",
-        )
+        yield ToolSpec(name="sample_tool", description="sample", kind="sync", provider="game")
 
     async def _on_start(self) -> None:
         self.started += 1
@@ -79,11 +53,9 @@ class _ReceivingAgent(BaseAgent):
         return []
 
     def receive_delegation(self, *, instruction: str, task_id: str) -> Optional[str]:
-        del instruction, task_id
         return None
 
     def receive_prompt(self, *, content: str, source: str = "") -> bool:
-        del content, source
         return True
 
 
@@ -94,73 +66,26 @@ def sample_agent() -> _SampleAgent:
 
 @pytest.fixture
 async def started_agent(sample_agent: _SampleAgent) -> AsyncGenerator[_SampleAgent, None]:
-    """已 start 的 Agent（yield 时已 RUNNING）。"""
     await sample_agent.start()
     yield sample_agent
     if sample_agent.state in (AgentState.RUNNING, AgentState.PAUSED, AgentState.STARTING):
         await sample_agent.stop()
 
 
-# BaseAgent 协议六项
-
-
-def test_protocol_six_facets(sample_agent: _SampleAgent) -> None:
-    """元数据（name/description）。"""
-    assert sample_agent.name == "sample_agent"
-    assert "Sample" in sample_agent.description
-
-
-def test_metadata_is_required(sample_agent: _SampleAgent) -> None:
-    """子类未设置 name 时——基类不自动填，由 AgentManager.register 显式拒绝（保错位）。"""
-
-    class _Anon(BaseAgent):
-        def list_tools(self):
-            return []
-
-    a = _Anon()
-    assert a.name == "", "基类不兜底 name——必须在子类显式声明"
-    # AgentManager.register 应拒绝
-    mgr = AgentManager()
-    assert mgr.register(a) is False
-
-
-# 协议 1：生命周期
-
-
-async def test_start_stop_cleanup_lifecycle(sample_agent: _SampleAgent) -> None:
-    """start → RUNNING → stop → STOPPED → cleanup。"""
-    assert sample_agent.state == AgentState.CREATED
+async def test_lifecycle_state_machine(sample_agent: _SampleAgent) -> None:
+    assert (sample_agent.name, sample_agent.state) == ("sample_agent", AgentState.CREATED)
     await sample_agent.start()
-    assert sample_agent.state == AgentState.RUNNING
-    assert sample_agent.started == 1
-
+    assert (sample_agent.state, sample_agent.started) == (AgentState.RUNNING, 1)
     await sample_agent.stop()
-    assert sample_agent.state == AgentState.STOPPED
-    assert sample_agent.stopped == 1
-
+    await sample_agent.stop()  # 重复 stop 是 no-op
+    assert (sample_agent.state, sample_agent.stopped) == (AgentState.STOPPED, 1)
     await sample_agent.cleanup()
     assert sample_agent.cleanup_calls == 1
-
-
-async def test_idempotent_stop(sample_agent: _SampleAgent) -> None:
-    """重复 stop 不应崩。"""
-    await sample_agent.start()
-    await sample_agent.stop()
-    await sample_agent.stop()  # 第二次是 no-op
-
-
-async def test_start_from_stopped_is_allowed(sample_agent: _SampleAgent) -> None:
-    """STOPPED 状态可再次 start。"""
-    await sample_agent.start()
-    await sample_agent.stop()
-    # 二次 start 不应抛
-    await sample_agent.start()
+    await sample_agent.start()  # STOPPED 可再次 start
     assert sample_agent.state == AgentState.RUNNING
 
 
-async def test_start_failure_leaves_errorred(sample_agent: _SampleAgent) -> None:
-    """start 钩子失败 → 状态 ERRORED + 异常向上抛。"""
-
+async def test_start_hook_failure_leaves_errored_and_reraises() -> None:
     class _Bad(BaseAgent):
         name = "bad"
         description = "bad"
@@ -171,211 +96,93 @@ async def test_start_failure_leaves_errorred(sample_agent: _SampleAgent) -> None
         async def _on_start(self) -> None:
             raise RuntimeError("start_failed")
 
-    a = _Bad()
+    agent = _Bad()
     with pytest.raises(RuntimeError, match="start_failed"):
-        await a.start()
-    assert a.state == AgentState.ERRORED
+        await agent.start()
+    assert agent.state == AgentState.ERRORED
 
 
-# 协议 2：工具提供
+async def test_pause_resume_and_illegal_transitions(sample_agent: _SampleAgent) -> None:
+    """非法转移一律拒绝：状态不变、钩子不触发（与 start/stop 守卫同一策略）。"""
+    await sample_agent.pause()
+    await sample_agent.resume()
+    assert (sample_agent.state, sample_agent.paused, sample_agent.resumed) == (AgentState.CREATED, 0, 0)
+
+    await sample_agent.start()
+    await sample_agent.resume()  # RUNNING 下 resume 拒绝
+    assert (sample_agent.state, sample_agent.resumed) == (AgentState.RUNNING, 0)
+    await sample_agent.pause()
+    assert (sample_agent.state, sample_agent.paused) == (AgentState.PAUSED, 1)
+    await sample_agent.resume()
+    assert (sample_agent.state, sample_agent.resumed) == (AgentState.RUNNING, 1)
+
+    await sample_agent.stop()
+    await sample_agent.pause()  # STOPPED 下 pause 拒绝
+    assert (sample_agent.state, sample_agent.paused) == (AgentState.STOPPED, 1)
 
 
-def test_list_tools_yields_specs(sample_agent: _SampleAgent) -> None:
-    """list_tools 返回 ToolSpec 列表。"""
-    specs = list(sample_agent.list_tools())
-    assert len(specs) == 1
-    assert specs[0].name == "sample_tool"
-    assert specs[0].provider == "game"
+async def test_shutdown_is_stop_plus_hook() -> None:
+    class _WithShutdown(_SampleAgent):
+        shutdowns = 0
+
+        async def _on_shutdown(self) -> None:
+            self.shutdowns += 1
+
+    agent = _WithShutdown()
+    await agent.start()
+    await agent.shutdown()
+    assert (agent.state, agent.stopped, agent.shutdowns) == (AgentState.STOPPED, 1, 1)
 
 
-# 协议 3：事件上报
-
-
-async def test_emit_event_without_bus_is_noop(sample_agent: _SampleAgent) -> None:
-    """未注入 EventBus 时 emit 不应爆。"""
+def test_heartbeat_restart_counter_and_default_refusals(sample_agent: _SampleAgent) -> None:
+    initial = sample_agent.heartbeat.last_heartbeat_ms
+    assert initial > 0 and sample_agent.is_alive() is True  # 心跳在 __init__ 写入
     sample_agent.note_heartbeat()
-    # 直接 await——无 bus 应 no-op
-    await sample_agent.emit_event("test.event", payload=None)
+    assert sample_agent.heartbeat.last_heartbeat_ms >= initial
 
+    sample_agent._heartbeat.last_heartbeat_ms = 1
+    assert sample_agent.is_alive(dead_threshold_ms=60_000) is False
+    assert sample_agent.is_alive(dead_threshold_ms=10**15) is True
 
-# 协议 4：状态读写
-
-
-def test_state_property(sample_agent: _SampleAgent) -> None:
-    """state 暴露只读属性。"""
-    assert sample_agent.state == AgentState.CREATED
-    # 直接修改应失败（status 是 dataclass-style 属性，依赖实现）
-
-
-def test_restart_count_increments(sample_agent: _SampleAgent) -> None:
-    """restart_count 可增量。"""
-    assert sample_agent.restart_count == 0
     sample_agent.increment_restart_counter()
     sample_agent.increment_restart_counter()
     assert sample_agent.restart_count == 2
 
-
-# 协议 5：心跳
-
-
-def test_heartbeat_tracks_timestamp(sample_agent: _SampleAgent) -> None:
-    """note_heartbeat 写入当前时刻。"""
-    initial = sample_agent.heartbeat.last_heartbeat_ms
-    assert initial > 0
-    # 调用后时间应 >= initial
-    sample_agent.note_heartbeat()
-    assert sample_agent.heartbeat.last_heartbeat_ms >= initial
+    specs = list(sample_agent.list_tools())
+    assert [(s.name, s.provider) for s in specs] == [("sample_tool", "game")]
+    # 未实现递话消化 / 取消入口的子类走基类默认拒收，不抛异常
+    assert sample_agent.receive_prompt(content="插句话", source="operator") is False
+    assert sample_agent.cancel_task("t-nonexistent", source="operator") is False
 
 
-def test_is_alive_default(sample_agent: _SampleAgent) -> None:
-    """newly constructed → alive（心跳在 __init__ 写入）。"""
-    assert sample_agent.is_alive() is True
+async def test_emit_event_without_bus_is_noop(sample_agent: _SampleAgent) -> None:
+    await sample_agent.emit_event("test.event", payload=None)
 
 
-def test_is_alive_threshold_respected(sample_agent: _SampleAgent) -> None:
-    """dead_threshold_ms 参数可用。"""
-    # 把心跳改成 1 小时前
-    sample_agent._heartbeat.last_heartbeat_ms = 1  # noqa: SLF001
-    assert sample_agent.is_alive(dead_threshold_ms=60_000) is False
-    # 阈值大到能跨越（Unix epoch 到现在的 ms 量级 → 用 1e15）
-    assert sample_agent.is_alive(dead_threshold_ms=10**15) is True
-
-
-# 控制（框架统一控制面）
-
-
-async def test_pause_resume_invocations(started_agent: _SampleAgent) -> None:
-    """pause/resume 切换状态并触发钩子。"""
-    a = started_agent
-    assert a.state == AgentState.RUNNING
-    await a.pause()
-    assert a.state == AgentState.PAUSED
-    assert a.paused == 1
-
-    await a.resume()
-    assert a.state == AgentState.RUNNING
-    assert a.resumed == 1
-
-
-async def test_illegal_transitions_rejected(sample_agent: _SampleAgent) -> None:
-    """非法转移一律拒绝：状态不变、钩子不触发（与 start/stop 守卫同一策略）。"""
-    a = sample_agent
-
-    # CREATED 下 pause/resume 均拒绝
-    await a.pause()
-    assert a.state == AgentState.CREATED
-    assert a.paused == 0
-    await a.resume()
-    assert a.state == AgentState.CREATED
-    assert a.resumed == 0
-
-    # RUNNING 下 resume 拒绝
-    await a.start()
-    await a.resume()
-    assert a.state == AgentState.RUNNING
-    assert a.resumed == 0
-
-    # STOPPED 下 pause 拒绝
-    await a.stop()
-    await a.pause()
-    assert a.state == AgentState.STOPPED
-    assert a.paused == 0
-
-
-async def test_shutdown_calls_stop_plus_hook(started_agent: _SampleAgent) -> None:
-    """shutdown = stop + _on_shutdown。"""
-    shutdown_called = {"value": 0}
-
-    class _WithShutdown(_SampleAgent):
-        async def _on_shutdown(self) -> None:
-            shutdown_called["value"] += 1
-
-    a: _WithShutdown = _WithShutdown()
-    await a.start()
-    await a.shutdown()
-    assert a.state == AgentState.STOPPED
-    assert a.stopped == 1
-    assert shutdown_called["value"] == 1
-
-
-# AgentManager
-
-
-async def test_agent_manager_register_dedup(sample_agent: _SampleAgent) -> None:
-    """同名 Agent 重复注册跳过后注册。"""
-    mgr = AgentManager()
-    assert mgr.register(sample_agent) is True
-    # 再次注册同名
-    other = _SampleAgent()
-    assert mgr.register(other) is False
-    # 取出来仍是第一个
-    assert mgr.get_agent_by_name("sample_agent") is sample_agent
-
-
-async def test_agent_manager_register_missing_name_rejected() -> None:
-    """未设置 name 的子类被拒绝。"""
-
-    class _NoName(BaseAgent):
-        name = ""
-        description = "no name"
-
+async def test_manager_registration_rules_and_batch_control(sample_agent: _SampleAgent) -> None:
+    class _Anon(BaseAgent):
         def list_tools(self):
             return []
 
+    anon = _Anon()
     mgr = AgentManager()
-    assert mgr.register(_NoName()) is False
-    assert len(mgr) == 0
+    # 基类不兜底 name，由 register 显式拒绝
+    assert anon.name == "" and mgr.register(anon) is False and len(mgr) == 0
 
+    assert mgr.register(sample_agent) is True
+    assert mgr.register(_SampleAgent()) is False  # 同名重复注册跳过
+    assert mgr.get_agent_by_name("sample_agent") is sample_agent and mgr.get_agent_by_name("nonexistent") is None
+    assert "sample_agent" in mgr and "other" not in mgr
 
-async def test_agent_manager_start_all_stop_all(sample_agent: _SampleAgent) -> None:
-    """start_all / stop_all 批量。"""
-    mgr = AgentManager()
-    mgr.register(sample_agent)
     await mgr.start_all()
-    assert sample_agent.state == AgentState.RUNNING
-    assert "sample_agent" in mgr.list_running()
-
+    assert sample_agent.state == AgentState.RUNNING and "sample_agent" in mgr.list_running()
+    assert mgr.unregister("sample_agent") is False  # 未停止的不能 unregister（防状态泄漏）
     await mgr.stop_all()
     assert sample_agent.state == AgentState.STOPPED
+    assert mgr.unregister("sample_agent") is True and "sample_agent" not in mgr
 
 
-async def test_audit_tools_reports_missing_when_impl_absent(
-    sample_agent: _SampleAgent,
-) -> None:
-    """audit_tools：Agent 声明了工具但 registry 未注册 → 报告缺失。"""
-    mgr = AgentManager()
-    mgr.register(sample_agent)
-    reg = ToolRegistry()  # 空 registry，无任何工具
-    assert mgr.audit_tools(reg) == ["game_sample_tool"]
-
-
-async def test_audit_tools_empty_when_impl_registered(
-    sample_agent: _SampleAgent,
-) -> None:
-    """audit_tools：Agent 声明的工具已被注册（impl 来自 Agent 自身） → 缺失列表为空。"""
-    mgr = AgentManager()
-    mgr.register(sample_agent)
-    reg = ToolRegistry()
-
-    # 真实注册：把 sample_agent 声明的 spec + 一个最小实现塞进 registry
-    spec = next(iter(sample_agent.list_tools()))
-
-    async def _impl(invocation: ToolInvocation) -> ToolExecutionResult:
-        return ToolExecutionResult(
-            tool_name="sample_tool",
-            success=True,
-            content="ok",
-        )
-
-    assert reg.register(spec, _impl) is True
-    assert mgr.audit_tools(reg) == []
-
-
-async def test_audit_tools_skips_agents_whose_list_tools_raises(
-    sample_agent: _SampleAgent,
-) -> None:
-    """audit_tools：list_tools 抛异常的 Agent 被跳过，审计不崩。"""
-
+async def test_audit_tools_reports_missing_and_survives_broken_agents(sample_agent: _SampleAgent) -> None:
     class _RaisingListTools(BaseAgent):
         name = "raising_list_tools"
         description = "raises on list_tools"
@@ -385,146 +192,64 @@ async def test_audit_tools_skips_agents_whose_list_tools_raises(
 
     mgr = AgentManager()
     mgr.register(sample_agent)
-    mgr.register(_RaisingListTools())
+    mgr.register(_RaisingListTools())  # list_tools 抛异常的 Agent 被跳过，审计不崩
     reg = ToolRegistry()
+    assert mgr.audit_tools(reg) == ["game_sample_tool"]
 
-    # sample_agent 的 sample_tool 仍应被报告为缺失；
-    # raising Agent 不应导致审计崩溃。
-    missing = mgr.audit_tools(reg)
-    assert missing == ["game_sample_tool"]
+    async def impl(invocation: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name="sample_tool", success=True, content="ok")
 
-
-async def test_agent_manager_unregister_only_when_stopped() -> None:
-    """未停止的 Agent 不能 unregister（防御状态泄漏）。"""
-    mgr = AgentManager()
-    a = _SampleAgent()
-    mgr.register(a)
-    await a.start()
-    # RUNNING 状态不能 unregister
-    assert mgr.unregister("sample_agent") is False
-    await a.stop()
-    # STOPPED 状态可以
-    assert mgr.unregister("sample_agent") is True
-    assert "sample_agent" not in mgr
+    assert reg.register(next(iter(sample_agent.list_tools())), impl) is True
+    assert mgr.audit_tools(reg) == []
 
 
-def test_agent_manager_get_and_contains(sample_agent: _SampleAgent) -> None:
-    mgr = AgentManager()
-    mgr.register(sample_agent)
-    assert mgr.get_agent_by_name("sample_agent") is sample_agent
-    assert mgr.get_agent_by_name("nonexistent") is None
-    assert "sample_agent" in mgr
-    assert "other" not in mgr
-
-
-# AgentControl + ToolProvider
-
-
-async def test_agent_control_list_tools_via_registry(sample_agent: _SampleAgent) -> None:
-    """framework provider 含委派/递话/任务状态 3 件；6 个控制工具不在 LLM 工具面。"""
-    mgr = AgentManager()
-    mgr.register(sample_agent)
-    # 委派/递话名册按接收入口覆写过滤：注册一个已接入的 Agent 让两工具出现
-    receiving = _ReceivingAgent()
-    mgr.register(receiving)
-    await sample_agent.start()
-
-    control_provider = build_agent_control_provider(mgr)
-    reg = ToolRegistry()
-    n = reg.register_provider(control_provider)
-    assert n == 3, "framework provider 应暴露 delegate/prompt/task_status 三个工具"
-
-    # 控制工具已移出 LLM 工具面（控制面经 DashboardServer 直调 AgentControl）
-    removed = {
-        "framework_pause_agent",
-        "framework_resume_agent",
-        "framework_shutdown_agent",
-        "framework_restart_agent",
-        "framework_list_agents",
-        "framework_agent_state",
-    }
-    names = {spec.full_name for spec in reg.list_tools(for_agent="streamer")}
-    assert {"framework_delegate", "framework_prompt", "framework_task_status"}.issubset(names)
-    assert removed.isdisjoint(names)
-
-    # 名册枚举只含覆写了接收入口的 Agent——未接入的 sample_agent 不可委派
-    delegate_spec = next(s for s in control_provider.list_tools() if s.name == "delegate")
-    assert delegate_spec.parameters_schema["properties"]["agent"]["enum"] == ["receiving_agent"]
-    prompt_spec = next(s for s in control_provider.list_tools() if s.name == "prompt")
-    assert prompt_spec.parameters_schema["properties"]["agent"]["enum"] == ["receiving_agent"]
-
-
-async def test_agent_control_roster_filters_unreceiving_agent(
-    sample_agent: _SampleAgent,
-) -> None:
-    """未覆写接收入口的 Agent 不进名册枚举（无论名册是否为空，工具恒三件）。"""
+async def test_agent_control_provider_exposes_roster_only_for_receiving_agents(sample_agent: _SampleAgent) -> None:
     mgr = AgentManager()
     mgr.register(sample_agent)  # 未覆写接收入口 → 不进任何名册
+    bare = build_agent_control_provider(mgr)
+    assert isinstance(bare, ToolProvider)
+    assert {s.name for s in bare.list_tools()} == {"delegate", "prompt", "task_status"}
+    assert (
+        "enum"
+        not in next(s for s in bare.list_tools() if s.name == "delegate").parameters_schema["properties"]["agent"]
+    )
 
-    control_provider = build_agent_control_provider(mgr)
-    names = {spec.name for spec in control_provider.list_tools()}
-    assert names == {"delegate", "prompt", "task_status"}
-
-    delegate_spec = next(s for s in control_provider.list_tools() if s.name == "delegate")
-    agent_prop = delegate_spec.parameters_schema["properties"]["agent"]
-    assert "enum" not in agent_prop, "名册空时无枚举（未接入者不在其中）"
-
-
-async def test_agent_control_invoke_removed_tool_returns_unknown(
-    sample_agent: _SampleAgent,
-) -> None:
-    """对已移出的控制工具发起 invoke → 失败结果（未知工具），不抛异常。"""
-    mgr = AgentManager()
-    mgr.register(sample_agent)
+    mgr.register(_ReceivingAgent())
     await sample_agent.start()
-
-    control_provider = build_agent_control_provider(mgr)
+    provider = build_agent_control_provider(mgr)
     reg = ToolRegistry()
-    reg.register_provider(control_provider)
+    assert reg.register_provider(provider) == 3
 
-    res = await reg.invoke(ToolInvocation(tool_name="framework_pause_agent", arguments={"name": "sample_agent"}))
-    assert res.success is False
-    assert "未知" in res.error_message
-    assert sample_agent.state == AgentState.RUNNING
+    # 6 个控制工具已移出 LLM 工具面（控制面经 DashboardServer 直调 AgentControl）
+    removed = {
+        f"framework_{n}"
+        for n in ("pause_agent", "resume_agent", "shutdown_agent", "restart_agent", "list_agents", "agent_state")
+    }
+    names = {spec.full_name for spec in reg.list_tools(for_agent="streamer")}
+    assert {"framework_delegate", "framework_prompt", "framework_task_status"} <= names and removed.isdisjoint(names)
+    for tool in ("delegate", "prompt"):
+        spec = next(s for s in provider.list_tools() if s.name == tool)
+        assert spec.parameters_schema["properties"]["agent"]["enum"] == ["receiving_agent"]
+
+    gone = await reg.invoke(ToolInvocation(tool_name="framework_pause_agent", arguments={"name": "sample_agent"}))
+    assert gone.success is False and "未知" in gone.error_message
+    assert sample_agent.state == AgentState.RUNNING  # 对已移出的控制工具 invoke 只失败，不抛、不生效
 
 
-async def test_agent_control_invoke_unknown_agent_returns_failure(
-    sample_agent: _SampleAgent,
-) -> None:
-    """委派对未知目标 Agent 返回受理失败 result，不抛。"""
+async def test_delegate_to_unknown_agent_fails_without_raising(sample_agent: _SampleAgent) -> None:
     mgr = AgentManager()
     mgr.register(sample_agent)
     mgr.register(_ReceivingAgent())  # 让 delegate 工具进入工具面（名册非空）
-
-    control_provider = build_agent_control_provider(mgr, task_ledger=TaskLedger())
     reg = ToolRegistry()
-    reg.register_provider(control_provider)
+    reg.register_provider(build_agent_control_provider(mgr, task_ledger=TaskLedger()))
 
     res = await reg.invoke(
         ToolInvocation(tool_name="framework_delegate", arguments={"agent": "absent", "instruction": "干活"})
     )
-    assert res.success is False
-    assert "absent" in res.error_message
+    assert res.success is False and "absent" in res.error_message
 
 
-async def test_agent_control_provider_is_provider(sample_agent: _SampleAgent) -> None:
-    """control_provider 满足 ToolProvider 协议。"""
-
-    mgr = AgentManager()
-    mgr.register(sample_agent)
-    cp = build_agent_control_provider(mgr)
-    assert isinstance(cp, ToolProvider)
-
-
-# task.changed 唤醒（BaseAgent 默认行为：订阅 + 发起方过滤 + 退订清理）
-
-
-async def test_task_wakeup_filters_by_initiator_and_unsubscribes() -> None:
-    """task.changed：只唤醒发起方（initiator 匹配）；stop 后退订（后续事件不再派发）。"""
-    from src.modules.events.event_bus import EventBus
-    from src.modules.events.names import CoreEvents
-    from src.modules.events.payloads.tasks import TaskChangedPayload
-
+async def test_task_changed_wakes_only_the_initiator_and_stop_unsubscribes() -> None:
     class _WakeupAgent(_SampleAgent):
         def __init__(self, **kwargs) -> None:
             super().__init__(**kwargs)
@@ -533,44 +258,23 @@ async def test_task_wakeup_filters_by_initiator_and_unsubscribes() -> None:
         def on_task_notification(self, payload) -> None:
             self.notified.append(payload.task_id)
 
-    agent = _WakeupAgent(event_bus=EventBus(enable_stats=False))
+    bus = EventBus(enable_stats=False)
+    agent = _WakeupAgent(event_bus=bus)
     await agent.start()
-    bus = agent._event_bus
+
+    async def fire(initiator: str, task_id: str) -> None:
+        payload = TaskChangedPayload(task_id=task_id, status="running", initiator=initiator, executor="minecraft")
+        await bus.emit(CoreEvents.TASK_CHANGED, payload, source="TaskLedger")
+
     try:
-
-        async def _fire(initiator: str, task_id: str) -> None:
-            await bus.emit(
-                CoreEvents.TASK_CHANGED,
-                TaskChangedPayload(task_id=task_id, status="running", initiator=initiator, executor="minecraft"),
-                source="TaskLedger",
-            )
-
-        await _fire("sample_agent", "t-mine")  # 发起方是自己 → 派发
-        await _fire("other_agent", "t-other")  # 发起方是别人 → 过滤
+        await fire("sample_agent", "t-mine")
+        await fire("other_agent", "t-other")  # 发起方是别人 → 过滤
         await asyncio.sleep(0.05)
-        assert agent.notified == ["t-mine"], "只唤醒发起方"
+        assert agent.notified == ["t-mine"]
     finally:
         await agent.stop()
 
-    # stop 后退订：后续事件不再派发
-    await bus.emit(
-        CoreEvents.TASK_CHANGED,
-        TaskChangedPayload(task_id="t-after", status="running", initiator="sample_agent", executor="minecraft"),
-        source="TaskLedger",
-    )
+    await fire("sample_agent", "t-after")  # stop 后退订，不再派发
     await asyncio.sleep(0.05)
-    assert agent.notified == ["t-mine"], "退订清理生效（stop 后不再派发）"
+    assert agent.notified == ["t-mine"]
     await bus.cleanup()
-
-
-# 递话原语（receive_prompt 默认拒收契约）
-
-
-def test_receive_prompt_default_refusal(sample_agent: _SampleAgent) -> None:
-    """未实现递话消化的子类走基类默认拒收：返回 False，不抛异常。"""
-    assert sample_agent.receive_prompt(content="插句话", source="operator") is False
-
-
-def test_cancel_task_default_refusal(sample_agent: _SampleAgent) -> None:
-    """未实现取消入口的子类走基类默认拒收：返回 False。"""
-    assert sample_agent.cancel_task("t-nonexistent", source="operator") is False
