@@ -1,149 +1,67 @@
-"""组件配置 Schema 注册表测试（确定性装配）"""
+"""组件配置 Schema 注册表（确定性装配）：填充幂等、缺失断言、采集器/Agent 拆表、与 factory/bootstrap 的契约"""
 
 import pytest
 
+from src.modules.agents.companions import COMPANION_COLLECTORS
+from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.config import registry
+from src.modules.tools.bootstrap import _DOMAIN_MEMBERS
 
 
-class TestRegistryFill:
-    def test_fill_populates_all_expected(self):
-        schemas = registry.fill_component_schemas()
-        for name in registry.EXPECTED_COMPONENTS:
-            assert name in schemas, f"期望组件 {name} 未注册"
-            assert issubclass(schemas[name], registry.BaseConfig)
-
-    def test_fill_is_idempotent(self):
-        first = registry.fill_component_schemas()
-        second = registry.fill_component_schemas()
-        assert set(first.keys()) == set(second.keys())
-
-    def test_ensure_returns_complete_registry(self):
-        schemas = registry.ensure_component_registry()
-        missing = [n for n in registry.EXPECTED_COMPONENTS if n not in schemas]
-        assert not missing
+def test_fill_registers_every_expected_component_idempotently() -> None:
+    first = registry.fill_component_schemas()
+    for name in registry.EXPECTED_COMPONENTS:
+        assert name in first and issubclass(first[name], registry.BaseConfig), f"期望组件 {name} 未注册"
+    assert set(registry.fill_component_schemas()) == set(first)
+    assert not [n for n in registry.EXPECTED_COMPONENTS if n not in registry.ensure_component_registry()]
 
 
-class TestRegistryAssert:
-    def test_empty_registry_raises_with_missing_list(self, monkeypatch):
-        """负例：注册表被清空 → 断言抛错且信息含缺失组件清单。"""
-        monkeypatch.setattr(registry, "COMPONENT_SCHEMAS", {})
+def test_missing_registrations_are_asserted_with_names(monkeypatch) -> None:
+    monkeypatch.setattr(registry, "COMPONENT_SCHEMAS", {})
+    with pytest.raises(RuntimeError) as exc_info:
+        registry.assert_components_registered()
+    assert all(name in str(exc_info.value) for name in ("bili_danmaku", "console_input", "minecraft"))
 
-        with pytest.raises(RuntimeError) as exc_info:
-            registry.assert_components_registered()
+    partial = dict(registry.fill_component_schemas())
+    del partial["stt"]
+    monkeypatch.setattr(registry, "COMPONENT_SCHEMAS", partial)
+    with pytest.raises(RuntimeError, match="stt"):
+        registry.assert_components_registered()
 
-        message = str(exc_info.value)
-        for name in ("bili_danmaku", "console_input", "minecraft"):
-            assert name in message, f"缺失清单应含 {name}: {message}"
-
-    def test_partial_registry_raises_with_missing(self, monkeypatch):
-        schemas = dict(registry.fill_component_schemas())
-        del schemas["stt"]
-        monkeypatch.setattr(registry, "COMPONENT_SCHEMAS", schemas)
-
-        with pytest.raises(RuntimeError) as exc_info:
-            registry.assert_components_registered()
-
-        assert "stt" in str(exc_info.value)
-
-    def test_ensure_raises_when_fill_broken(self, monkeypatch):
-        """组合根 import 链断裂（填充产物为空）→ 装配入口直接失败。"""
-        monkeypatch.setattr(registry, "fill_component_schemas", lambda: {})
-        monkeypatch.setattr(registry, "COMPONENT_SCHEMAS", {})
-
-        with pytest.raises(RuntimeError):
-            registry.ensure_component_registry()
+    monkeypatch.setattr(registry, "fill_component_schemas", lambda: {})  # 组合根 import 链断裂：装配入口直接失败
+    monkeypatch.setattr(registry, "COMPONENT_SCHEMAS", {})
+    with pytest.raises(RuntimeError):
+        registry.ensure_component_registry()
 
 
-class TestRegistryDomainSplit:
-    """采集器/Agent 拆表契约：collectors.toml 的段全集只认采集器名单。"""
-
-    def test_split_tables_match_expected(self):
-        registry.fill_component_schemas()
-        expected_collectors = {
-            "bili_danmaku",
-            "bili_danmaku_official",
-            "console_input",
-            "live_frame",
-            "stt",
-        }
-        expected_agents = {"minecraft", "game_2048"}
-        assert set(registry.COLLECTOR_SCHEMAS) == expected_collectors
-        assert set(registry.AGENT_SCHEMAS) == expected_agents
-
-    def test_split_tables_disjoint_and_merged_view_consistent(self):
-        registry.fill_component_schemas()
-        assert not set(registry.COLLECTOR_SCHEMAS) & set(registry.AGENT_SCHEMAS)
-        assert set(registry.COMPONENT_SCHEMAS) == set(registry.COLLECTOR_SCHEMAS) | set(registry.AGENT_SCHEMAS)
-
-    def test_companion_collectors_never_in_collector_table(self):
-        """随 Agent 开关的附属采集器不进 collectors.toml 的段全集（否则物化会把它们写回去）。"""
-        from src.modules.agents.companions import COMPANION_COLLECTORS
-
-        registry.fill_component_schemas()
-        for names in COMPANION_COLLECTORS.values():
-            for name in names:
-                assert name not in registry.COLLECTOR_SCHEMAS
-
-    def test_agent_names_never_in_collector_table(self):
-        """负例锚点：物化/校验若误用合并视图，Agent 段会被写进 collectors.toml。"""
-        registry.fill_component_schemas()
-        for name in registry.AGENT_SCHEMAS:
-            assert name not in registry.COLLECTOR_SCHEMAS
+def test_collector_and_agent_tables_are_split_disjoint_and_match_factory() -> None:
+    registry.fill_component_schemas()
+    collectors, agents = set(registry.COLLECTOR_SCHEMAS), set(registry.AGENT_SCHEMAS)
+    assert collectors == {"bili_danmaku", "bili_danmaku_official", "console_input", "live_frame", "stt"}
+    assert agents == {"minecraft", "game_2048"}
+    assert (
+        not collectors & agents and set(registry.COMPONENT_SCHEMAS) == collectors | agents
+    )  # collectors.toml 的段全集只认采集器名单
+    assert set(SUPPORTED_COLLECTORS) == collectors  # factory 与注册表脱节意味着"认得但装配不了"（或反之）
+    companions = {name for names in COMPANION_COLLECTORS.values() for name in names}
+    assert not companions & collectors  # 随 Agent 开关的附属采集器不进段全集，否则物化会把它们写回去
 
 
-class TestFactoryRegistryContract:
-    def test_supported_collectors_match_registry(self):
-        """契约：factory 装配名单必须与采集器注册表键集一致。
+def test_tool_provider_registry_is_complete_and_consistent_with_bootstrap(monkeypatch) -> None:
+    registry.fill_component_schemas()
+    for identity in registry.EXPECTED_TOOL_PROVIDERS:
+        assert issubclass(registry.TOOL_PROVIDER_SCHEMAS[identity], registry.BaseConfig), (
+            f"期望工具提供者 {identity} 未注册"
+        )
+    for domain in registry.TOOL_PROVIDER_DOMAINS:  # 每个动态分类域至少一个在册成员
+        assert any(d == domain for d, _ in registry.EXPECTED_TOOL_PROVIDERS)
+    for (domain, key), _description, _loader in _DOMAIN_MEMBERS:
+        # 只登记装配、不登记 Schema 的 provider，其 config 段会退化为无校验无默认值补全的自由 dict
+        assert (domain, key) in registry.TOOL_PROVIDER_SCHEMAS, (
+            f"装配成员 {domain}.{key} 未在 TOOL_PROVIDER_SCHEMAS 注册"
+        )
 
-        物化后注册表是 collectors.toml 段全集的唯一来源，factory
-        名单与其脱节意味着"注册表认得但装配不了"（或反之）的漂移。
-        """
-        from src.modules.collectors.factory import SUPPORTED_COLLECTORS
-
-        registry.fill_component_schemas()
-        assert set(SUPPORTED_COLLECTORS) == set(registry.COLLECTOR_SCHEMAS)
-
-
-class TestToolProviderRegistry:
-    def test_fill_populates_all_expected_providers(self):
-        registry.fill_component_schemas()
-        for identity in registry.EXPECTED_TOOL_PROVIDERS:
-            assert identity in registry.TOOL_PROVIDER_SCHEMAS, f"期望工具提供者 {identity} 未注册"
-            assert issubclass(registry.TOOL_PROVIDER_SCHEMAS[identity], registry.BaseConfig)
-
-    def test_provider_registry_assert_lists_missing(self, monkeypatch):
-        """负例：工具提供者注册表被清空 → 断言信息含 provider 缺失清单。"""
-        registry.fill_component_schemas()
-        monkeypatch.setattr(registry, "TOOL_PROVIDER_SCHEMAS", {})
-
-        with pytest.raises(RuntimeError) as exc_info:
-            registry.assert_components_registered()
-
-        message = str(exc_info.value)
-        assert "avatar.vts" in message
-        assert "studio.obs" in message
-
-    def test_provider_domains_derived_from_expected(self):
-        """动态分类域清单从期望清单派生：每个域至少一个在册成员、可被加载管线引用。"""
-        registry.fill_component_schemas()
-        assert registry.TOOL_PROVIDER_DOMAINS
-        for domain in registry.TOOL_PROVIDER_DOMAINS:
-            assert any(d == domain for d, _ in registry.EXPECTED_TOOL_PROVIDERS), (
-                f"动态分类域 {domain} 无在册成员：TOOL_PROVIDER_DOMAINS 与期望清单脱节"
-            )
-
-
-class TestBootstrapRegistryContract:
-    def test_every_assembly_member_has_schema(self):
-        """契约：bootstrap 装配成员表的每个成员必须在注册表有 ConfigSchema。
-
-        只登记装配、不登记 Schema 的 provider，其 config 段会退化为无校验、
-        无默认值补全的自由 dict——正是本机制修复前的缺陷形态。
-        """
-        from src.modules.tools.bootstrap import _DOMAIN_MEMBERS
-
-        registry.fill_component_schemas()
-        for (domain, key), _description, _loader in _DOMAIN_MEMBERS:
-            assert (domain, key) in registry.TOOL_PROVIDER_SCHEMAS, (
-                f"装配成员 {domain}.{key} 未在 TOOL_PROVIDER_SCHEMAS 注册：其 config 段将不做校验与默认值补全"
-            )
+    monkeypatch.setattr(registry, "TOOL_PROVIDER_SCHEMAS", {})
+    with pytest.raises(RuntimeError) as exc_info:
+        registry.assert_components_registered()
+    assert "avatar.vts" in str(exc_info.value) and "studio.obs" in str(exc_info.value)
