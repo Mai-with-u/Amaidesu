@@ -1,21 +1,17 @@
-"""bind_mcp_tools 装配入口单测：报告结构 + 单 server 隔离
-
-mock McpClient/McpToolProvider（不发网络请求）——
-- 多个 server 逐个装配，单个失败不影响其它
-- 报告结构 {"server": {"ok", "tools", "error"}}
-- 配置中 disabled server 跳过
-"""
+"""bind_mcp_tools 装配入口（报告结构、单 server 隔离、同名工具不冲突、disabled 跳过）与 MCP 配置校验"""
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 import pytest
-
-from src.modules.tools.models import ToolExecutionResult, ToolSpec
-from src.modules.tools.registry import ToolRegistry
+from pydantic import ValidationError
 
 import src.modules.mcp as mcp_module
+from src.modules.mcp import bind_mcp_tools
+from src.modules.mcp.config import McpExternalConfig, McpServerConfig
+from src.modules.tools.models import ToolExecutionResult, ToolSpec
+from src.modules.tools.registry import ToolRegistry
 
 
 class FakeTool:
@@ -29,7 +25,6 @@ class FakeClient:
     def __init__(self, tools: List[FakeTool], *, connect_ok: bool = True) -> None:
         self.tools = tools
         self.connect_ok = connect_ok
-        self.closed = False
 
     async def connect(self, timeout_seconds: Optional[float] = None) -> bool:
         return self.connect_ok
@@ -41,35 +36,25 @@ class FakeClient:
         return None
 
     async def close(self) -> None:
-        self.closed = True
+        return None
 
 
 class FakeProvider:
-    def __init__(
-        self,
-        *,
-        client: FakeClient,
-        server_name: str,
-        provider: Optional[str] = None,
-    ) -> None:
+    def __init__(self, *, client: FakeClient, server_name: str, provider: Optional[str] = None) -> None:
         self.client = client
-        self.server_name = server_name
         self.provider = provider or server_name
         self._specs: List[ToolSpec] = []
 
     @property
     def name(self) -> str:
-        # 与真实 McpToolProvider 对齐：单名 = provider（默认 server 名）
-        return self.provider
+        return self.provider  # 与真实 McpToolProvider 对齐：单名 = provider（默认 server 名）
 
     async def setup(self) -> int:
         if not self.client.connect_ok:
             return 0
-        # 与真实 McpToolProvider 对齐：声明名 = server 原始名，
-        # 全名 = <provider>_<原始名>（ToolSpec.full_name 派生）
+        # 声明名 = server 原始名，全名 = <provider>_<原始名>
         self._specs = [
-            ToolSpec(name=t.name, description=t.description, provider=self.provider)
-            for t in self.client.tools
+            ToolSpec(name=t.name, description=t.description, provider=self.provider) for t in self.client.tools
         ]
         return len(self._specs)
 
@@ -84,128 +69,93 @@ class FakeProvider:
 
 
 @pytest.fixture
-def patch_mcp(monkeypatch: pytest.MonkeyPatch) -> Dict[str, FakeClient]:
-    """把 mcp 模块的 McpClient/McpToolProvider 替换为假实现。
+def clients(monkeypatch: pytest.MonkeyPatch) -> Dict[str, FakeClient]:
+    """把 mcp 模块的 McpClient/McpToolProvider 换成假实现；按 server 名预注册，未注册的默认暴露一个 ping 工具。"""
+    registered: Dict[str, FakeClient] = {}
 
-    测试可通过 ``patch_mcp[name] = FakeClient([...])`` 预注册 server 的工具；
-    未预注册的 server 默认暴露 1 个 ping 工具。
-    """
-    clients: Dict[str, FakeClient] = {}
+    def fake_client(name: str, config: Any) -> FakeClient:
+        return registered.setdefault(name, FakeClient([FakeTool("ping")]))
 
-    def fake_client_cls(name: str, config: Any) -> FakeClient:
-        c = clients.get(name)
-        if c is None:
-            c = FakeClient([FakeTool("ping")])
-            clients[name] = c
-        return c
-
-    def fake_provider_cls(
-        *,
-        client: FakeClient,
-        server_name: str,
-        provider: Optional[str] = None,
-    ) -> FakeProvider:
-        return FakeProvider(client=client, server_name=server_name, provider=provider)
-
-    monkeypatch.setattr(mcp_module, "McpClient", fake_client_cls)
-    monkeypatch.setattr(mcp_module, "McpToolProvider", fake_provider_cls)
-    return clients
+    monkeypatch.setattr(mcp_module, "McpClient", fake_client)
+    monkeypatch.setattr(
+        mcp_module,
+        "McpToolProvider",
+        lambda *, client, server_name, provider=None: FakeProvider(
+            client=client, server_name=server_name, provider=provider
+        ),
+    )
+    return registered
 
 
-async def test_bind_two_servers_all_ok(patch_mcp) -> None:
-    from src.modules.mcp import bind_mcp_tools
-
-    patch_mcp["serverA"] = FakeClient([FakeTool("perceive"), FakeTool("execute")])
-    patch_mcp["other"] = FakeClient([FakeTool("ping")])
-    raw_cfg = {
+def _servers(**enabled_by_name: bool) -> dict:
+    return {
         "servers": {
-            "serverA": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:8766/mcp"},
-            "other": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:9999/mcp"},
+            name: {"enabled": enabled, "transport": "http", "url": f"http://127.0.0.1:{i + 1}/mcp"}
+            for i, (name, enabled) in enumerate(enabled_by_name.items())
         }
     }
 
+
+async def test_servers_bind_independently_with_report_and_derived_full_names(clients) -> None:
+    clients["serverA"] = FakeClient([FakeTool("perceive"), FakeTool("execute")])
+    clients["broken"] = FakeClient([FakeTool("perceive")], connect_ok=False)
     registry = ToolRegistry()
-    report = await bind_mcp_tools(registry, raw_cfg)
+    report = await bind_mcp_tools(registry, _servers(serverA=True, broken=True, other=True, off=False))
 
-    assert report["serverA"]["ok"] is True
-    assert report["serverA"]["tools"] == 2
-    assert report["other"]["ok"] is True
-    assert report["other"]["tools"] == 1
-    assert len(registry) == 3  # serverA 2 + other 1
+    assert report["serverA"]["ok"] is True and report["serverA"]["tools"] == 2
+    assert report["other"]["ok"] is True and report["other"]["tools"] == 1
+    assert (
+        report["broken"]["ok"] is False and report["broken"]["tools"] == 0 and "连接失败" in report["broken"]["error"]
+    )
+    assert "off" not in report  # disabled 不装配也不报告
+    assert {s.full_name for s in registry.list_tools()} == {
+        "serverA_perceive",
+        "serverA_execute",
+        "other_ping",
+    }  # 单个失败不影响其它
 
-    # 注册进 registry 的工具对外全名 = <provider>_<原始名>
-    full_names = {s.full_name for s in registry.list_tools()}
-    assert "serverA_perceive" in full_names
-    assert "other_ping" in full_names
+
+async def test_same_raw_tool_name_on_two_servers_does_not_collide(clients) -> None:
+    clients["first"] = FakeClient([FakeTool("ping")])
+    clients["second"] = FakeClient([FakeTool("ping")])
+    registry = ToolRegistry()
+    report = await bind_mcp_tools(registry, _servers(first=True, second=True))
+    assert report["first"]["ok"] and report["second"]["ok"]
+    assert {s.full_name for s in registry.list_tools()} == {"first_ping", "second_ping"}  # 全名带各自 provider 前缀
 
 
-async def test_single_server_failure_isolated(patch_mcp) -> None:
-    from src.modules.mcp import bind_mcp_tools
+async def test_empty_config_binds_nothing(clients) -> None:
+    registry = ToolRegistry()
+    assert await bind_mcp_tools(registry, None) == {} and len(registry) == 0
 
-    patch_mcp["broken"] = FakeClient([FakeTool("perceive")], connect_ok=False)
-    patch_mcp["good"] = FakeClient([FakeTool("do")])
-    raw_cfg = {
-        "servers": {
-            "broken": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:1/mcp"},
-            "good": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:2/mcp"},
+
+def test_server_config_validation() -> None:
+    http = McpServerConfig(transport="http", url="http://127.0.0.1:8766/mcp")
+    assert http.url == "http://127.0.0.1:8766/mcp" and http.enabled is True
+    stdio = McpServerConfig(transport="stdio", command="npx", args=["-y", "server"])
+    assert (stdio.transport, stdio.command) == ("stdio", "npx")
+    assert http.timeout_seconds >= 1.0 and http.request_timeout_ms == 90_000  # 默认请求期限容纳主动等待
+
+    for bad in (
+        {"transport": "http", "url": "127.0.0.1:8766"},  # url 缺协议
+        {"transport": "http", "url": "http://x/mcp", "unknown_key": 1},  # extra=forbid
+        {"request_timeout_ms": 0},
+    ):
+        with pytest.raises(ValidationError):
+            McpServerConfig(**bad)
+
+
+def test_external_config_parsing_is_tolerant() -> None:
+    cfg = McpExternalConfig.parse_extra(
+        {
+            "servers": {
+                "serverA": {"transport": "http", "url": "http://127.0.0.1:8766/mcp"},
+                "off": {"enabled": False, "url": "http://b/mcp"},
+                "bad_server": {"transport": "stdio", "command": "npx", "args": ["-y", "mcp"]},
+            },
+            "future_key": 1,  # extra=allow：未知键不抛，为未来扩展容错
         }
-    }
-    registry = ToolRegistry()
-    report = await bind_mcp_tools(registry, raw_cfg)
-
-    assert report["broken"]["ok"] is False
-    assert report["broken"]["tools"] == 0
-    assert "连接失败" in report["broken"]["error"]
-    assert report["good"]["ok"] is True
-    assert report["good"]["tools"] == 1
-    assert len(registry) == 1  # 只有 good 注册了工具
-
-
-async def test_disabled_server_skipped(patch_mcp) -> None:
-    from src.modules.mcp import bind_mcp_tools
-
-    raw_cfg = {
-        "servers": {
-            "enabled_one": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:3/mcp"},
-            "disabled_one": {"enabled": False, "transport": "http", "url": "http://127.0.0.1:4/mcp"},
-        }
-    }
-    registry = ToolRegistry()
-    report = await bind_mcp_tools(registry, raw_cfg)
-
-    assert "disabled_one" not in report  # disabled 不装配也不报告
-    assert report["enabled_one"]["ok"] is True
-
-
-async def test_empty_config_no_servers(patch_mcp) -> None:
-    from src.modules.mcp import bind_mcp_tools
-
-    registry = ToolRegistry()
-    report = await bind_mcp_tools(registry, None)  # None → 空配置
-    assert report == {}
-    assert len(registry) == 0
-
-
-async def test_same_raw_name_servers_do_not_collide(patch_mcp) -> None:
-    """两个 server 暴露同名工具：全名含各自 provider（server 名）前缀，
-    仍全局唯一，不冲突（全名 = <provider>_<原始名> 机制的兜底）。"""
-    from src.modules.mcp import bind_mcp_tools
-
-    patch_mcp["first"] = FakeClient([FakeTool("ping")])
-    patch_mcp["second"] = FakeClient([FakeTool("ping")])
-    raw_cfg = {
-        "servers": {
-            "first": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:5/mcp"},
-            "second": {"enabled": True, "transport": "http", "url": "http://127.0.0.1:6/mcp"},
-        }
-    }
-
-    registry = ToolRegistry()
-    report = await bind_mcp_tools(registry, raw_cfg)
-
-    assert report["first"]["ok"] is True
-    assert report["first"]["tools"] == 1
-    assert report["second"]["ok"] is True
-    assert report["second"]["tools"] == 1  # 全名 first_ping / second_ping，互不冲突
-    full_names = {s.full_name for s in registry.list_tools()}
-    assert full_names == {"first_ping", "second_ping"}
+    )
+    assert len(cfg.servers) == 3 and cfg.enabled_servers() == ["serverA", "bad_server"]
+    assert McpExternalConfig.parse_extra(None).servers == {} and McpExternalConfig.parse_extra("garbage").servers == {}
+    assert McpExternalConfig.parse_extra({}).enabled_servers() == []
