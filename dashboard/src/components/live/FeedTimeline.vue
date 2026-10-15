@@ -580,12 +580,10 @@
  * 可选的决策轮点击（roundClickable）：开启后带轮次 ID 的决策/裁决/工具/发言行
  * 可点并上抛 roundClick，由页面决定跳转去向；默认关闭，首页复用不受影响。
  */
-import { computed, onScopeDispose, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { CopyDocument, Monitor } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
-import { llmApi } from '@/api';
-import type { LLMContextBreakdown } from '@/types';
 import ContextBreakdownCard from '@/components/llm/ContextBreakdownCard.vue';
 import { formatNumber } from '@/utils/format';
 import {
@@ -605,6 +603,9 @@ import {
   type ShowEntry,
 } from '@/utils/liveFeed';
 import { useNowTick } from '@/composables/useNowTick';
+import { useRoundTokenStats } from '@/composables/live/useRoundTokenStats';
+import { useEntryReasoning } from '@/composables/live/useEntryReasoning';
+import { useContextBreakdowns } from '@/composables/live/useContextBreakdowns';
 
 interface Props {
   /** 已折叠好的时间线条目（顺序即展示顺序） */
@@ -671,117 +672,22 @@ function rowAlignClass(entry: ShowEntry): string {
 // 1s tick：让相对时间标签（"刚刚 / 12s 前"）每秒刷新一次；独立维护不依赖父组件
 const nowMs = useNowTick();
 
-/** 决策/发言卡 LLM 统计徽标（llm_request_id → 输入/输出/缓存命中）。
- * planner.decision 只带请求指针不带 token 数，统计按可见指针合批懒取
- * （POST /llm/history/stats，仅统计列）；speech 带的是 Replyer 表达请求
- * 指针，同一套懒取。缓存口径取 hit/prompt_tokens 而非聚合的
- * hit/(hit+miss)：OpenAI 风格只上报 cached_tokens 不上报 miss，后者会算出假
- * 100%；命中为 0（含上游未上报）不渲染缓存徽标。 */
-interface RoundTokenStats {
-  promptTokens: number;
-  completionTokens: number;
-  hitTokens: number;
-  /** 本轮 Planner 请求实际使用的模型标识（取自请求历史记录） */
-  modelName: string;
-}
-const roundTokenStats = ref<Map<string, RoundTokenStats>>(new Map());
-const tokenStatsFetching = new Set<string>();
+// 条目引用统一交给三套拉取缓存组合式（token 统计 / 思考正文 / 上下文分段），
+// 它们各自 watch 条目变化做懒取与缓存收缩
+const entriesRef = computed<ShowEntry[]>(() => props.entries);
+const { statsOf, contextWindowOf } = useRoundTokenStats(entriesRef);
+const { expandedThinking, toggleThinking, reasoningOf } = useEntryReasoning(entriesRef);
+const { ctxBreakdownOf, onCtxPillShow } = useContextBreakdowns();
 
 /** 已展开过载荷折叠区的条目 id：展开时才挂载 JSON 树，收起后保留已挂载内容不卸载。
  * 声明在下方 immediate watch 之前——watch 首次同步执行就会读它 */
 const openedPayloads = ref<Set<string>>(new Set());
 
-/** 决策/裁决/响应卡的思考正文（llm_request_id → reasoning_content，懒取 + 一次性缓存）。
- * 与实时思考流不同源：这里是按请求整段的模型推理正文（LLM 请求历史出库合并回供），
- * 回看模式下没有逐 token 思考流，诊断回看这条。取到空串表示该请求无思考正文。
- * 声明必须先于下方 immediate watch：watch 首跑会收缩这些标记，声明在后即 TDZ */
-const reasoningByRequest = ref<Map<string, string>>(new Map());
-const reasoningFetching = new Set<string>();
-/** 已展开思考区的条目 id（v-if 挂载；与 openedPayloads 同款收展语义） */
-const expandedThinking = ref<Set<string>>(new Set());
-
-async function fetchTokenStatsBatch(requestIds: string[]): Promise<void> {
-  for (const requestId of requestIds) tokenStatsFetching.add(requestId);
-  try {
-    const response = await llmApi.getRequestStats(requestIds);
-    const stats = response.data?.stats ?? {};
-    for (const [requestId, item] of Object.entries(stats)) {
-      // 与旧逐卡口径一致：prompt 为 0（含上游未上报）不渲染统计胶囊
-      if (item.prompt_tokens > 0) {
-        roundTokenStats.value.set(requestId, {
-          promptTokens: item.prompt_tokens,
-          completionTokens: item.completion_tokens,
-          hitTokens: item.cache_hit_tokens,
-          modelName: item.model_name,
-        });
-      }
-    }
-  } catch (e) {
-    console.warn('[FeedTimeline] 批量 token 统计获取失败', e);
-  } finally {
-    for (const requestId of requestIds) tokenStatsFetching.delete(requestId);
-  }
-}
-
-/** 合批调度：一次回看首屏可达数百个请求指针，逐卡取详情会回传整段请求
- * 正文并触发读侧文件回查（整应用冻结）；短防抖合并同批可见指针为一次
- * 轻量批量请求（POST /llm/history/stats，仅 usage/model 列） */
-let tokenStatsTimer: ReturnType<typeof setTimeout> | null = null;
-
-function scheduleTokenStats(missingIds: string[]): void {
-  if (tokenStatsTimer) clearTimeout(tokenStatsTimer);
-  tokenStatsTimer = setTimeout(() => {
-    tokenStatsTimer = null;
-    void fetchTokenStatsBatch(missingIds);
-  }, 150);
-}
-
-onScopeDispose(() => {
-  if (tokenStatsTimer) clearTimeout(tokenStatsTimer);
-});
-
-/** 模型上下文窗口（model_name → token 总量，取自 GET /llm/usage 装配期快照）。
- * 整页只取一次——窗口来自 [[llm_models]].context_window 配置，改配置需重启应用，
- * 运行期不变。未配置（0）的模型不进映射，水位胶囊按 v-if 隐藏（与用量页一致）。
- * 声明必须先于下方 immediate watch：首跑同步触发的 ensureContextWindows 会读这些
- * 标记，声明在后会触发 TDZ ReferenceError 并中断 watch 回调。 */
-const contextWindows = ref<Map<string, number>>(new Map());
-let contextWindowsLoading = false;
-let contextWindowsLoaded = false;
-
 watch(
-  () => props.entries,
+  entriesRef,
   entries => {
-    const visible = new Set<string>();
-    for (const entry of entries) {
-      // 真实流程里 decision 轮末会合并进先到的 verdict 卡（llmRequestId 一并回填），
-      // 独立 decision 卡只出现在无裁决的失败/静默轮，两种都要取数；
-      // speech 卡带的是 Replyer 表达请求的指针（与决策卡的 Planner 请求互补），同样取数；
-      // agent_reply 响应卡带本步请求指针，同一套懒取
-      if (
-        (entry.kind === 'decision' ||
-          entry.kind === 'verdict' ||
-          entry.kind === 'speech' ||
-          entry.kind === 'agent_reply') &&
-        entry.llmRequestId
-      ) {
-        visible.add(entry.llmRequestId);
-      }
-    }
-    // 离场条目的徽标顺手清掉，长直播下 map 不随轮次无限增长
-    for (const key of roundTokenStats.value.keys()) {
-      if (!visible.has(key)) roundTokenStats.value.delete(key);
-    }
-    for (const key of reasoningByRequest.value.keys()) {
-      if (!visible.has(key)) reasoningByRequest.value.delete(key);
-    }
-    const missing = [...visible].filter(
-      requestId => !roundTokenStats.value.has(requestId) && !tokenStatsFetching.has(requestId),
-    );
-    if (missing.length > 0) scheduleTokenStats(missing);
-    if (visible.size > 0) void ensureContextWindows();
     // 懒渲染集合同步收缩：只保留当前在列条目，避免长会话下随事件 id 无限增长
-    if (openedPayloads.value.size > 0 || expandedThinking.value.size > 0) {
+    if (openedPayloads.value.size > 0) {
       const liveIds = new Set(entries.map(entry => entry.id));
       let pruned = false;
       const nextPayloads = new Set<string>();
@@ -790,56 +696,10 @@ watch(
         else pruned = true;
       }
       if (pruned) openedPayloads.value = nextPayloads;
-      const nextThinking = new Set<string>();
-      let thinkingPruned = false;
-      for (const id of expandedThinking.value) {
-        if (liveIds.has(id)) nextThinking.add(id);
-        else thinkingPruned = true;
-      }
-      if (thinkingPruned) expandedThinking.value = nextThinking;
     }
   },
   { immediate: true },
 );
-
-function statsOf(entry: ShowEntry): RoundTokenStats | null {
-  return entry.llmRequestId ? (roundTokenStats.value.get(entry.llmRequestId) ?? null) : null;
-}
-
-/** 思考正文懒取（状态声明在上方 immediate watch 之前，TDZ 纪律同 openedPayloads） */
-async function fetchReasoning(requestId: string): Promise<void> {
-  if (reasoningByRequest.value.has(requestId) || reasoningFetching.has(requestId)) return;
-  reasoningFetching.add(requestId);
-  try {
-    const response = await llmApi.getRequestById(requestId);
-    reasoningByRequest.value.set(requestId, response.data?.reasoning_content ?? '');
-  } catch (e) {
-    console.warn(`[FeedTimeline] 思考正文获取失败: ${requestId}`, e);
-    reasoningByRequest.value.set(requestId, '');
-  } finally {
-    reasoningFetching.delete(requestId);
-  }
-}
-
-function toggleThinking(entry: ShowEntry): void {
-  if (!entry.llmRequestId) return;
-  const next = new Set(expandedThinking.value);
-  if (next.has(entry.id)) {
-    next.delete(entry.id);
-    expandedThinking.value = next;
-    return;
-  }
-  next.add(entry.id);
-  expandedThinking.value = next;
-  void fetchReasoning(entry.llmRequestId);
-}
-
-/** 思考区正文：null=未取到（展示加载中）；空串=已确认无思考正文 */
-function reasoningOf(entry: ShowEntry): string | null {
-  if (!entry.llmRequestId) return null;
-  const value = reasoningByRequest.value.get(entry.llmRequestId);
-  return value ?? null;
-}
 
 /** 响应卡步骤号（agent.replied payload.step；缺省 0 不渲染） */
 function detailStepOf(entry: ShowEntry): number {
@@ -885,31 +745,6 @@ function modelNameOf(entry: ShowEntry): string {
   return statsOf(entry)?.modelName ?? '';
 }
 
-async function ensureContextWindows(): Promise<void> {
-  if (contextWindowsLoaded || contextWindowsLoading) return;
-  contextWindowsLoading = true;
-  try {
-    const response = await llmApi.getUsage();
-    const next = new Map<string, number>();
-    for (const [model, stats] of Object.entries(response.data ?? {})) {
-      if (stats.context_window > 0) next.set(model, stats.context_window);
-    }
-    contextWindows.value = next;
-    contextWindowsLoaded = true;
-  } catch (e) {
-    console.warn('[FeedTimeline] 模型上下文窗口获取失败（下一条目到达时重试）', e);
-  } finally {
-    contextWindowsLoading = false;
-  }
-}
-
-/** 本条目请求所用模型的上下文窗口（未配置/未加载返回 0） */
-function contextWindowOf(entry: ShowEntry): number {
-  const stats = statsOf(entry);
-  if (!stats || !stats.modelName) return 0;
-  return contextWindows.value.get(stats.modelName) ?? 0;
-}
-
 /** 上下文水位（prompt_tokens / context_window）；窗口未配置返回 null（胶囊不渲染） */
 function ctxRatioOf(entry: ShowEntry): number | null {
   const stats = statsOf(entry);
@@ -935,32 +770,6 @@ function ctxTitleOf(entry: ShowEntry): string {
   const stats = statsOf(entry);
   const win = contextWindowOf(entry);
   return `本轮输入 ${formatNumber(stats?.promptTokens ?? 0)} / 窗口 ${formatNumber(win)} tokens`;
-}
-
-/** 决策/发言卡水位胶囊的悬停明细（llm_request_id → 该次调用的分段占用）。
- * 弹层首次展开时才拉取（按请求 ID 精确取行），同请求缓存复用；失败静默降级
- * 为空态文案，不影响胶囊本体与统计徽标。 */
-const ctxBreakdowns = ref<Map<string, LLMContextBreakdown>>(new Map());
-const ctxBreakdownFetching = new Set<string>();
-
-function ctxBreakdownOf(entry: ShowEntry): LLMContextBreakdown | null {
-  if (!entry.llmRequestId) return null;
-  return ctxBreakdowns.value.get(entry.llmRequestId) ?? null;
-}
-
-async function onCtxPillShow(entry: ShowEntry): Promise<void> {
-  const requestId = entry.llmRequestId;
-  if (!requestId || ctxBreakdowns.value.has(requestId) || ctxBreakdownFetching.has(requestId))
-    return;
-  ctxBreakdownFetching.add(requestId);
-  try {
-    const response = await llmApi.getContextBreakdownByRequest(requestId);
-    if (response.data) ctxBreakdowns.value.set(requestId, response.data);
-  } catch (e) {
-    console.warn(`[FeedTimeline] 上下文分段明细获取失败: ${requestId}`, e);
-  } finally {
-    ctxBreakdownFetching.delete(requestId);
-  }
 }
 
 /** 弹幕 message_id → 时间线条目（用于发言/决策卡回复引用反查）。
