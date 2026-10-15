@@ -1,9 +1,14 @@
-"""视觉工具完整传递识别问题与结果，默认读取原图，显式区域及缩放参数按请求执行。"""
+"""vision_look_at_screen：工具规格、配置、入参透传、失败降级（不抛）、块组装与图片生命周期、按调用方视觉能力决定是否跑 VLM"""
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import inspect
+import threading
 from unittest.mock import MagicMock
+
+import pytest
 
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
@@ -20,649 +25,231 @@ from src.modules.vision.look_at_screen import (
 )
 from src.modules.vision.mss_capture import MssScreenCapture
 
-# 工具规格断言
+FULL_NAME = "vision_look_at_screen"
 
 
-class TestLookAtScreenSpec:
-    def test_full_name_is_stable_for_compatibility(self) -> None:
-        """兼容锚点：ToolSpec.full_name = "vision_look_at_screen"。"""
-        assert TOOL_NAME == "look_at_screen"
-        assert PROVIDER_NAME == "vision"
-        assert LOOK_AT_SCREEN_SPEC.full_name == "vision_look_at_screen"
-
-    def test_description_prioritizes_when_to_use(self) -> None:
-        """description 含"何时用"表述 + 失败降级语义（不抛）。"""
-        desc = LOOK_AT_SCREEN_SPEC.description
-        assert "需要知道" in desc or "调用" in desc
-        assert "屏幕" in desc
-        # 失败语义：不抛
-        assert "失败" in desc or "error" in desc.lower()
-        assert "不抛" in desc or "降级" in desc
-
-    def test_required_is_empty_all_args_optional(self) -> None:
-        """所有入参可选：required == []。"""
-        params = LOOK_AT_SCREEN_SPEC.parameters_schema or {}
-        assert params.get("required") == []
-
-    def test_parameters_have_four_optional_fields(self) -> None:
-        """四个可选参数：question / region / monitor_index / max_width。"""
-        props = (LOOK_AT_SCREEN_SPEC.parameters_schema or {}).get("properties", {})
-        assert set(props.keys()) == {"question", "region", "monitor_index", "max_width"}
-
-    def test_question_constraints(self) -> None:
-        q = (LOOK_AT_SCREEN_SPEC.parameters_schema or {})["properties"]["question"]
-        assert q["type"] == "string"
-        assert q.get("minLength") == 1
-        assert "maxLength" not in q
-
-    def test_region_constraints(self) -> None:
-        r = (LOOK_AT_SCREEN_SPEC.parameters_schema or {})["properties"]["region"]
-        assert r["type"] == "array"
-        assert r["items"] == {"type": "integer"}
-        assert r.get("minItems") == 4
-        assert r.get("maxItems") == 4
-
-    def test_monitor_index_constraints(self) -> None:
-        m = (LOOK_AT_SCREEN_SPEC.parameters_schema or {})["properties"]["monitor_index"]
-        assert m["type"] == "integer"
-        assert m.get("minimum") == 0
-
-    def test_max_width_constraints(self) -> None:
-        mw = (LOOK_AT_SCREEN_SPEC.parameters_schema or {})["properties"]["max_width"]
-        assert mw["type"] == "integer"
-        assert mw.get("minimum") == 100
-        assert mw.get("maximum") == 3840
-
-    def test_output_schema_has_all_required_fields(self) -> None:
-        """output_schema 含 text/image?/width/height/monitor_index/region/error?/latency_ms。"""
-        props = (LOOK_AT_SCREEN_SPEC.output_schema or {}).get("properties", {})
-        for field in ("text", "width", "height", "monitor_index", "region", "latency_ms"):
-            assert field in props, f"output_schema 缺字段: {field}"
-        # image 与 error 可选（采集失败时缺失）
-        assert "image" in props
-        assert "error" in props
-
-    def test_kind_and_provider(self) -> None:
-        """kind=sync；provider=vision。"""
-        assert LOOK_AT_SCREEN_SPEC.kind == "sync"
-        assert LOOK_AT_SCREEN_SPEC.provider == PROVIDER_NAME
+def _setup(config=None, *, text="x", width=320, height=240, png=b"\x89PNG_FAKE", **kwargs):
+    capture = FakeScreenCapture()
+    capture.queue_png(png, width=width, height=height)
+    reader = FakeTextReader()
+    reader.queue_text(text)
+    provider = LookAtScreenProvider(config=config or {}, screen_capture=capture, text_reader=reader, **kwargs)
+    return provider, capture, reader
 
 
-# ConfigSchema：新字段
+async def _look(provider: LookAtScreenProvider, caller_profile: str | None = None, **arguments):
+    extra = {} if caller_profile is None else {"caller_profile": caller_profile}
+    return await provider.invoke(ToolInvocation(tool_name=FULL_NAME, arguments=arguments, source="test", **extra))
 
 
-class TestConfigSchema:
-    def test_default_fields(self) -> None:
-        """默认捕获完整显示器；默认缩放上限 1280（图进对话，默认降采样控传输成本）。"""
-        cfg = LookAtScreenProvider.ConfigSchema.from_dict({})
-        assert cfg.monitor_index == 1 and cfg.default_region is None
-        assert cfg.default_max_width == 1280
-        # VLM 调用时限是已删除的生成限制，不得随缩放配置一起复活
-        assert "vlm_timeout_ms" not in cfg.model_dump()
-
-    def test_overrides_apply(self) -> None:
-        """显示器和显式区域继续按用户选择生效。"""
-        cfg = LookAtScreenProvider.ConfigSchema.from_dict({"monitor_index": 2, "default_region": [10, 20, 110, 120]})
-        assert cfg.monitor_index == 2
-        assert cfg.default_region == [10, 20, 110, 120]
-
-    def test_extra_fields_stripped_silently(self) -> None:
-        """未知字段被 from_dict 静默剥离（不抛）；BaseConfig.from_dict 行为约定。"""
-        cfg = LookAtScreenProvider.ConfigSchema.from_dict({"monitor_index": 1, "unknown_field": "x"})
-        # 未知字段不影响构造
-        assert cfg.monitor_index == 1
-        # 实例上不存在该字段
-        assert not hasattr(cfg, "unknown_field")
-
-    async def test_configured_default_max_width_applies(self) -> None:
-        """配置的默认缩放上限在调用方未传 max_width 时生效。"""
-        capture = FakeScreenCapture()
-        capture.queue_png(b"image", width=2560, height=1440)
-        reader = FakeTextReader()
-        reader.queue_text("缩放画面")
-        provider = LookAtScreenProvider(
-            config={"default_max_width": 800},
-            screen_capture=capture,
-            text_reader=reader,
-        )
-        await provider.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}))
-        assert capture.calls[-1]["max_width"] == 800
-
-    def test_provider_does_not_inject_reader_deadline(self) -> None:
-        """装配视觉工具时不再给 reader 写入时钟截止配置。"""
-        reader = LlmVisionTextReader(llm_manager=object())
-        LookAtScreenProvider(config={}, text_reader=reader)
-        assert not hasattr(reader, "_timeout_s")
-
-    async def test_capture_runs_off_event_loop_thread(self) -> None:
-        """抓屏同步调用移入 worker 线程执行——截图期间事件循环不被冻结。"""
-        import threading
-
-        capture = FakeScreenCapture()
-        capture.queue_png(b"image", width=64, height=48)
-        reader = FakeTextReader()
-        reader.queue_text("线程验证")
-        provider = LookAtScreenProvider(config={}, screen_capture=capture, text_reader=reader)
-
-        loop_thread_ident = threading.get_ident()
-        capture_threads: list[int] = []
-        original_capture = capture.capture
-
-        def _capture_with_thread_probe(**kwargs: object) -> object:
-            capture_threads.append(threading.get_ident())
-            return original_capture(**kwargs)
-
-        capture.capture = _capture_with_thread_probe  # type: ignore[method-assign]
-
-        await provider.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}))
-
-        assert len(capture_threads) == 1
-        assert capture_threads[0] != loop_thread_ident
+# 规格与配置
 
 
-# 零参调用兼容锚点（text_adv）
+def test_spec_is_stable_and_every_argument_is_optional() -> None:
+    assert (TOOL_NAME, PROVIDER_NAME, LOOK_AT_SCREEN_SPEC.full_name) == (
+        "look_at_screen",
+        "vision",
+        FULL_NAME,
+    )  # 兼容锚点
+    assert LOOK_AT_SCREEN_SPEC.kind == "sync" and LOOK_AT_SCREEN_SPEC.provider == PROVIDER_NAME
+    desc = LOOK_AT_SCREEN_SPEC.description
+    assert ("需要知道" in desc or "调用" in desc) and "屏幕" in desc and ("不抛" in desc or "降级" in desc)
+
+    schema = LOOK_AT_SCREEN_SPEC.parameters_schema or {}
+    props = schema["properties"]
+    assert schema.get("required") == [] and set(props) == {"question", "region", "monitor_index", "max_width"}
+    assert (
+        props["question"]["type"] == "string"
+        and props["question"]["minLength"] == 1
+        and "maxLength" not in props["question"]
+    )
+    assert props["region"] == {
+        **props["region"],
+        "type": "array",
+        "items": {"type": "integer"},
+        "minItems": 4,
+        "maxItems": 4,
+    }
+    assert (props["monitor_index"]["type"], props["monitor_index"]["minimum"]) == ("integer", 0)
+    assert (props["max_width"]["minimum"], props["max_width"]["maximum"]) == (100, 3840)
+    output = (LOOK_AT_SCREEN_SPEC.output_schema or {})["properties"]
+    assert {"text", "image", "error", "width", "height", "monitor_index", "region", "latency_ms"} <= set(output)
 
 
-class TestZeroArgumentCompatibility:
-    async def test_zero_arg_invoke_succeeds_with_text_string(self) -> None:
-        """``invoke(arguments={})`` → success=True 且 ``structured_content["text"]`` 为 str。"""
-        registry = ToolRegistry()
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG_FAKE", width=320, height=240)
-        reader = FakeTextReader()
-        reader.queue_text("hello screen")
-        provider = LookAtScreenProvider(
-            config={"monitor_index": 1, "default_max_width": 320},
-            screen_capture=capture,
-            text_reader=reader,
-        )
-        registry.register_provider(provider)
-
-        res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
-
-        assert res.success is True
-        assert isinstance(res.structured_content, dict)
-        assert isinstance(res.structured_content.get("text"), str)
-        assert res.structured_content["text"] == "hello screen"
-
-    async def test_zero_arg_uses_provider_defaults(self) -> None:
-        """零参时 capture 收到 provider 配置默认的 monitor_index 与 max_width。"""
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG_FAKE", width=800, height=600)
-        reader = FakeTextReader()
-        reader.queue_text("text")
-        provider = LookAtScreenProvider(
-            config={"monitor_index": 2, "default_max_width": 640, "default_region": [10, 10, 100, 100]},
-            screen_capture=capture,
-            text_reader=reader,
-        )
-
-        await provider.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
-
-        assert capture.calls[0]["monitor_index"] == 2
-        assert capture.calls[0]["region"] == (10, 10, 100, 100)
-        assert capture.calls[0]["max_width"] == 640
+def test_registration_name_template_keys_and_mss_signature() -> None:
+    registry = ToolRegistry()
+    registry.register_provider(
+        LookAtScreenProvider(config={}, screen_capture=FakeScreenCapture(), text_reader=FakeTextReader())
+    )
+    assert registry.has(FULL_NAME)  # 兼容 text_adv 的硬编码调用
+    assert (SCREEN_VLM_PROMPT_KEY, SCREEN_VLM_SYSTEM_KEY) == ("screen_vlm_prompt", "screen_vlm_system")
+    params = list(inspect.signature(MssScreenCapture.capture).parameters)  # 生产实现与 ScreenCapture 协议形参一致
+    assert params[:4] == ["self", "monitor_index", "region", "max_width"]
 
 
-# 入参透传
+async def test_config_defaults_overrides_and_default_max_width_applies() -> None:
+    cfg = LookAtScreenProvider.ConfigSchema.from_dict({})
+    assert (cfg.monitor_index, cfg.default_region, cfg.default_max_width) == (
+        1,
+        None,
+        1280,
+    )  # 图进对话，默认降采样控传输成本
+    fields = LookAtScreenProvider.ConfigSchema.model_fields
+    assert "vlm_timeout_ms" not in fields and "vlm_timeout_ms" not in cfg.model_dump()  # 已删除的 VLM 时限不得复活
+    custom = LookAtScreenProvider.ConfigSchema.from_dict(
+        {"monitor_index": 2, "default_region": [10, 20, 110, 120], "unknown_field": "x"}
+    )
+    assert (custom.monitor_index, custom.default_region) == (2, [10, 20, 110, 120]) and not hasattr(
+        custom, "unknown_field"
+    )
+
+    provider, capture, _ = _setup({"default_max_width": 800}, width=2560, height=1440)
+    await _look(provider)
+    assert capture.calls[-1]["max_width"] == 800  # 调用方未传 max_width 时用配置默认
+
+    reader = LlmVisionTextReader(llm_manager=object())
+    LookAtScreenProvider(config={}, text_reader=reader)
+    assert not hasattr(reader, "_timeout_s")  # 装配时不再给 reader 写入时钟截止配置
 
 
-class TestArgumentPassthrough:
-    async def test_question_passed_to_reader(self) -> None:
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG", width=320, height=240)
-        reader = FakeTextReader()
-        reader.queue_text("answer")
-        provider = LookAtScreenProvider(
-            config={},
-            screen_capture=capture,
-            text_reader=reader,
-        )
+async def test_capture_runs_off_the_event_loop_thread() -> None:
+    provider, capture, _ = _setup(width=64, height=48)
+    threads: list[int] = []
+    original = capture.capture
 
-        await provider.invoke(
-            ToolInvocation(
-                tool_name="vision_look_at_screen",
-                arguments={"question": "屏幕上有几个选项？"},
-                source="test",
-            )
-        )
+    def probe(**kwargs: object) -> object:
+        threads.append(threading.get_ident())
+        return original(**kwargs)
 
-        assert reader.calls[0]["question"] == "屏幕上有几个选项？"
+    capture.capture = probe  # type: ignore[method-assign]
+    await _look(provider)
+    assert (
+        len(threads) == 1 and threads[0] != threading.get_ident()
+    )  # 抓屏同步调用移入 worker 线程，截图期间事件循环不冻结
+
+
+# 入参
+
+
+async def test_zero_arg_call_succeeds_with_text_and_uses_provider_defaults() -> None:
+    config = {"monitor_index": 2, "default_max_width": 640, "default_region": [10, 10, 100, 100]}
+    provider, capture, reader = _setup(config, text="hello screen", width=800, height=600)
+    result = await _look(provider)
+    assert result.success is True and result.structured_content["text"] == "hello screen"  # text_adv 零参兼容锚点
+    assert capture.calls[0] == {**capture.calls[0], "monitor_index": 2, "region": (10, 10, 100, 100), "max_width": 640}
+
+
+@pytest.mark.parametrize(
+    ("arguments", "target", "key", "expected"),
+    [
+        ({"question": "屏幕上有几个选项？"}, "reader", "question", "屏幕上有几个选项？"),
+        ({"question": "   "}, "reader", "question", None),  # 全空白视为未提问，用默认提示
+        ({"monitor_index": 3}, "capture", "monitor_index", 3),
+        ({"region": [100, 200, 500, 600]}, "capture", "region", (100, 200, 500, 600)),
+        ({"region": [1, 2, 3]}, "capture", "region", (5, 5, 50, 50)),  # 长度不对 → 回落配置的 default_region
+        ({"max_width": 200}, "capture", "max_width", 200),
+    ],
+)
+async def test_arguments_are_passed_through_or_normalized(arguments, target, key, expected) -> None:
+    provider, capture, reader = _setup({"default_region": [5, 5, 50, 50]})
+    await _look(provider, **arguments)
+    assert (reader if target == "reader" else capture).calls[0][key] == expected
+    if target == "reader" and expected is not None:
         assert reader.calls[0]["image_bytes_len"] > 0
 
-    async def test_monitor_index_passed_to_capture(self) -> None:
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG", width=320, height=240)
-        reader = FakeTextReader()
-        reader.queue_text("x")
-        provider = LookAtScreenProvider(
-            config={},
-            screen_capture=capture,
-            text_reader=reader,
-        )
 
-        await provider.invoke(
-            ToolInvocation(
-                tool_name="vision_look_at_screen",
-                arguments={"monitor_index": 3},
-                source="test",
-            )
-        )
-
-        assert capture.calls[0]["monitor_index"] == 3
-
-    async def test_region_passed_to_capture(self) -> None:
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG", width=320, height=240)
-        reader = FakeTextReader()
-        reader.queue_text("x")
-        provider = LookAtScreenProvider(
-            config={},
-            screen_capture=capture,
-            text_reader=reader,
-        )
-
-        await provider.invoke(
-            ToolInvocation(
-                tool_name="vision_look_at_screen",
-                arguments={"region": [100, 200, 500, 600]},
-                source="test",
-            )
-        )
-
-        assert capture.calls[0]["region"] == (100, 200, 500, 600)
-
-    async def test_max_width_passed_to_capture(self) -> None:
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG", width=320, height=240)
-        reader = FakeTextReader()
-        reader.queue_text("x")
-        provider = LookAtScreenProvider(
-            config={},
-            screen_capture=capture,
-            text_reader=reader,
-        )
-
-        await provider.invoke(
-            ToolInvocation(
-                tool_name="vision_look_at_screen",
-                arguments={"max_width": 200},
-                source="test",
-            )
-        )
-
-        assert capture.calls[0]["max_width"] == 200
-
-    async def test_question_whitespace_stripped(self) -> None:
-        """question 入参全空白 → 视为 None（用默认提示）。"""
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG", width=320, height=240)
-        reader = FakeTextReader()
-        reader.queue_text("x")
-        provider = LookAtScreenProvider(
-            config={},
-            screen_capture=capture,
-            text_reader=reader,
-        )
-
-        await provider.invoke(
-            ToolInvocation(
-                tool_name="vision_look_at_screen",
-                arguments={"question": "   "},
-                source="test",
-            )
-        )
-
-        # reader 收到的 question 应是 None（被 strip 后判空）
-        assert reader.calls[0]["question"] is None
-
-    async def test_invalid_region_falls_back_to_default(self) -> None:
-        """region 入参非法（长度不对 / 非数字）→ 用 provider 配置默认。"""
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG", width=320, height=240)
-        reader = FakeTextReader()
-        reader.queue_text("x")
-        provider = LookAtScreenProvider(
-            config={"default_region": [5, 5, 50, 50]},
-            screen_capture=capture,
-            text_reader=reader,
-        )
-
-        await provider.invoke(
-            ToolInvocation(
-                tool_name="vision_look_at_screen",
-                arguments={"region": [1, 2, 3]},  # 长度不是 4
-                source="test",
-            )
-        )
-
-        # 非法 → 走 default_region
-        assert capture.calls[0]["region"] == (5, 5, 50, 50)
+# 失败降级：永不抛，success=True 带 error 字段
 
 
-# 失败降级
-
-
-class TestGracefulDegradation:
-    async def test_no_backend_returns_success_with_error(self) -> None:
-        """未注入 ScreenCapture → success=True + text="" + error 含 'capture_failed'。"""
-        registry = ToolRegistry()
-        provider = LookAtScreenProvider(config={}, screen_capture=None, text_reader=None)
-        registry.register_provider(provider)
-
-        res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
-
-        assert res.success is True
-        assert res.structured_content["text"] == ""
-        assert "capture_failed" in res.structured_content["error"]
-
-    async def test_capture_exception_returns_success_with_error(self) -> None:
-        """capture 抛异常 → success=True + text="" + error 含 'capture_failed'。"""
-        capture = FakeScreenCapture()
+@pytest.mark.parametrize(
+    ("scenario", "error_keyword", "extra_keyword"),
+    [
+        ("no-backend", "capture_failed", None),
+        ("capture-exception", "capture_failed", "screen unavailable"),
+        ("capture-empty", "capture_failed", "empty"),
+        ("reader-timeout", "vlm_failed", None),
+        ("reader-exception", "vlm_failed", None),
+    ],
+)
+async def test_failures_degrade_to_success_with_error_field(scenario, error_keyword, extra_keyword) -> None:
+    capture, reader = FakeScreenCapture(), FakeTextReader()
+    if scenario == "no-backend":
+        capture = reader = None
+    elif scenario == "capture-exception":
         capture.set_raise(RuntimeError("screen unavailable"))
-        provider = LookAtScreenProvider(config={}, screen_capture=capture, text_reader=FakeTextReader())
-        registry = ToolRegistry()
-        registry.register_provider(provider)
-
-        res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
-
-        assert res.success is True
-        assert res.structured_content["text"] == ""
-        assert "capture_failed" in res.structured_content["error"]
-        assert "screen unavailable" in res.structured_content["error"]
-
-    async def test_capture_empty_image_returns_success_with_error(self) -> None:
-        """capture 返回空图像 → success=True + text="" + error 含 'capture_failed'。"""
-        capture = FakeScreenCapture()
+    elif scenario == "capture-empty":
         capture.queue_empty()
-        provider = LookAtScreenProvider(config={}, screen_capture=capture, text_reader=FakeTextReader())
-        registry = ToolRegistry()
-        registry.register_provider(provider)
-
-        res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
-
-        assert res.success is True
-        assert res.structured_content["text"] == ""
-        assert "capture_failed" in res.structured_content["error"]
-        assert "empty" in res.structured_content["error"].lower()
-
-    async def test_reader_timeout_returns_success_with_error(self) -> None:
-        """reader 抛 asyncio.TimeoutError → success=True + text="" + error 含 'vlm_failed'。
-
-        超时由 reader 内部管理（``LlmVisionTextReader`` 用 ``asyncio.wait_for`` 包裹）；
-        FakeTextReader 通过 set_raise(asyncio.TimeoutError()) 模拟"reader 已按自身超时降级"。
-        Provider 兜底任何 reader 抛出的异常 → success=True + error 字段。
-        """
-        capture = FakeScreenCapture()
+    else:
         capture.queue_png(b"\x89PNG", width=320, height=240)
-        reader = FakeTextReader()
-        reader.set_raise(asyncio.TimeoutError("simulated vlm timeout"))
-        provider = LookAtScreenProvider(
-            config={"vlm_timeout_ms": 100},
-            screen_capture=capture,
-            text_reader=reader,
+        reader.set_raise(
+            asyncio.TimeoutError("simulated vlm timeout")
+            if scenario == "reader-timeout"
+            else RuntimeError("vlm broken")
         )
-        registry = ToolRegistry()
-        registry.register_provider(provider)
+    registry = ToolRegistry()
+    registry.register_provider(LookAtScreenProvider(config={}, screen_capture=capture, text_reader=reader))
 
-        res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
+    result = await registry.invoke(ToolInvocation(tool_name=FULL_NAME, arguments={}, source="test"))
 
-        assert res.success is True
-        assert res.structured_content["text"] == ""
-        # vlm 失败路径 → structured_content 里有 error 字段（vlm_failed）
-        assert "vlm_failed" in (res.structured_content.get("error") or "")
-        # image 仍可用（采集成功，reader 失败）
-        assert "image" in res.structured_content
-
-    async def test_reader_exception_returns_success_with_error(self) -> None:
-        """reader 抛异常 → success=True + text="" + error 含 'vlm_failed'。"""
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG", width=320, height=240)
-        reader = FakeTextReader()
-        reader.set_raise(RuntimeError("vlm transport broken"))
-        provider = LookAtScreenProvider(
-            config={"vlm_timeout_ms": 5000},
-            screen_capture=capture,
-            text_reader=reader,
-        )
-        registry = ToolRegistry()
-        registry.register_provider(provider)
-
-        res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
-
-        assert res.success is True
-        assert res.structured_content["text"] == ""
-        assert "vlm_failed" in (res.structured_content.get("error") or "")
-        # image 仍可用（采集成功但 reader 失败）
-        assert "image" in res.structured_content
+    structured = result.structured_content
+    assert result.success is True and structured["text"] == "" and error_keyword in structured["error"]
+    if extra_keyword:
+        assert extra_keyword in structured["error"].lower()
+    assert ("image" in structured) is error_keyword.startswith("vlm")  # 仅 VLM 失败时采集已成功，图仍可用
 
 
 # 块组装与图片生命周期
 
 
-class TestBlocksAndImageLifecycle:
-    async def test_blocks_have_text_and_image(self) -> None:
-        """成功路径 → blocks 含 text + image。"""
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG_FAKE", width=320, height=240)
-        reader = FakeTextReader()
-        reader.queue_text("屏幕上有一个选项")
-        provider = LookAtScreenProvider(config={}, screen_capture=capture, text_reader=reader)
-        registry = ToolRegistry()
-        registry.register_provider(provider)
+async def test_success_result_carries_text_and_decodable_image_with_metadata() -> None:
+    png = b"\x89PNG_FAKE_TEST_BYTES"
+    provider, _, _ = _setup({"monitor_index": 1}, text="屏幕上有一个选项", width=640, height=480, png=png)
+    result = await _look(provider)
 
-        res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
-
-        kinds = {b.kind for b in res.blocks}
-        assert "text" in kinds
-        assert "image" in kinds
-        # structured_content 同时含 image 键（base64）
-        assert "image" in res.structured_content
-        assert isinstance(res.structured_content["image"], str)
-        assert len(res.structured_content["image"]) > 0
-
-    async def test_structured_content_includes_metadata(self) -> None:
-        """structured_content 含 width/height/monitor_index/region/latency_ms。"""
-        capture = FakeScreenCapture()
-        capture.queue_png(
-            b"\x89PNG",
-            width=640,
-            height=480,
-        )  # width/height 提示为 PNG bytes
-        reader = FakeTextReader()
-        reader.queue_text("x")
-        provider = LookAtScreenProvider(
-            config={"monitor_index": 1},
-            screen_capture=capture,
-            text_reader=reader,
-        )
-        registry = ToolRegistry()
-        registry.register_provider(provider)
-
-        res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
-
-        sc = res.structured_content
-        assert isinstance(sc.get("width"), int)
-        assert isinstance(sc.get("height"), int)
-        assert sc.get("monitor_index") == 1
-        assert "latency_ms" in sc
-        assert isinstance(sc["latency_ms"], int)
-
-    async def test_no_image_field_when_capture_fails(self) -> None:
-        """capture 失败 → structured_content 不含 image 字段。"""
-        capture = FakeScreenCapture()
-        capture.set_raise(RuntimeError("boom"))
-        provider = LookAtScreenProvider(config={}, screen_capture=capture, text_reader=None)
-        registry = ToolRegistry()
-        registry.register_provider(provider)
-
-        res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
-
-        assert "image" not in res.structured_content
-
-    async def test_image_base64_in_blocks_is_decodable(self) -> None:
-        """blocks 中 image.data 可被 base64 解码回原 bytes。"""
-        import base64
-
-        png_bytes = b"\x89PNG_FAKE_TEST_BYTES"
-        capture = FakeScreenCapture()
-        capture.queue_png(png_bytes, width=320, height=240)
-        reader = FakeTextReader()
-        reader.queue_text("x")
-        provider = LookAtScreenProvider(config={}, screen_capture=capture, text_reader=reader)
-        registry = ToolRegistry()
-        registry.register_provider(provider)
-
-        res = await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", arguments={}, source="test"))
-
-        image_block = next((b for b in res.blocks if b.kind == "image"), None)
-        assert image_block is not None
-        decoded = base64.b64decode(image_block.data)
-        assert decoded == png_bytes
+    assert {b.kind for b in result.blocks} == {"text", "image"}
+    image_block = next(b for b in result.blocks if b.kind == "image")
+    assert base64.b64decode(image_block.data) == png
+    structured = result.structured_content
+    assert isinstance(structured["image"], str) and structured["image"]
+    assert isinstance(structured["width"], int) and isinstance(structured["height"], int)
+    assert structured["monitor_index"] == 1 and isinstance(structured["latency_ms"], int)
 
 
-# 工具名稳定（compat 锚点）
+# 按调用方视觉能力决定是否跑 VLM
 
 
-class TestProviderRegistrationContract:
-    def test_provider_registers_with_full_name(self) -> None:
-        """注册后工具全名 = vision_look_at_screen（兼容 text_adv 的硬编码调用）。"""
-        registry = ToolRegistry()
-        provider = LookAtScreenProvider(
-            config={},
-            screen_capture=FakeScreenCapture(),
-            text_reader=FakeTextReader(),
-        )
-        registry.register_provider(provider)
-        assert registry.has("vision_look_at_screen")
-        assert LOOK_AT_SCREEN_SPEC.full_name == "vision_look_at_screen"
-
-    def test_provider_visible_to_all_by_default(self) -> None:
-        """visible_to 默认 = ['*']（所有 Planner 可见，工具可被发现）。"""
-        # visible_to 在 ToolRegistry 一侧由 Provider 自己声明（BaseToolProvider 默认 ["*"]）
-        provider = LookAtScreenProvider(
-            config={},
-            screen_capture=FakeScreenCapture(),
-            text_reader=FakeTextReader(),
-        )
-        # Provider 不显式覆写 visible_to → 走 ToolRegistry 默认 ("*" / 全可见)
-        assert getattr(provider, "visible_to", None) in (None, ["*"])
+def _manager(visual: bool, *, raises: bool = False) -> MagicMock:
+    manager = MagicMock()
+    if raises:
+        manager.is_profile_visual = MagicMock(side_effect=RuntimeError("引擎未就绪"))
+    else:
+        manager.is_profile_visual = MagicMock(return_value=visual)
+    return manager
 
 
-# Module-level 常量与导出
+@pytest.mark.parametrize(
+    ("caller_profile", "manager", "vlm_runs", "text"),
+    [
+        ("planner", _manager(True), False, ""),  # 视觉调用方（主模型能看图）：跳过 VLM，text 空但图照常返回
+        ("minecraft", _manager(False), True, "画面描述文本"),  # 非视觉调用方：照旧跑 VLM
+        (
+            "",
+            _manager(True),
+            True,
+            "画面描述文本",
+        ),  # 管线式调用（text_adv 读屏）：结果不进 LLM 对话，要解析 VLM 的坐标文本
+        ("planner", _manager(True, raises=True), True, "画面描述文本"),  # 能力查询异常：按非视觉降级，不抛
+        ("planner", None, True, "画面描述文本"),  # 未注入 llm_manager（旧组装形态）：向后兼容
+    ],
+    ids=["visual-skips", "non-visual-runs", "pipeline-runs", "query-failure-runs", "no-manager-runs"],
+)
+async def test_vlm_runs_only_when_caller_cannot_see_images(caller_profile, manager, vlm_runs, text) -> None:
+    kwargs = {} if manager is None else {"llm_manager": manager}
+    provider, _, reader = _setup(text="画面描述文本", **kwargs)
+    result = await _look(provider, caller_profile=caller_profile)
 
-
-class TestModuleExports:
-    def test_vlm_controls_are_not_exposed(self) -> None:
-        """配置界面从 Schema 生成，已删除的 VLM 调用时限不得再次显示。
-
-        ``default_max_width`` 曾随 VLM 限制一起删除（当图只喂 VLM 转述时
-        保原始分辨率利识别），后以新理由单独复活：图进对话主模型后按配置
-        默认降采样控传输成本——与 VLM 时限的删除无关。
-        """
-        fields = LookAtScreenProvider.ConfigSchema.model_fields
-        assert "vlm_timeout_ms" not in fields
-        assert "default_max_width" in fields
-
-    def test_template_keys_unchanged(self) -> None:
-        """模板键名保留（Task 3 迁移后）。"""
-        assert SCREEN_VLM_PROMPT_KEY == "screen_vlm_prompt"
-        assert SCREEN_VLM_SYSTEM_KEY == "screen_vlm_system"
-
-    def test_mss_capture_production_protocol_compatible(self) -> None:
-        """生产 MssScreenCapture 满足 ScreenCapture 协议形态（capture 形参一致）。"""
-        # 仅做静态形参核对（运行时 mss 不一定可用）
-        import inspect
-
-        cap_sig = inspect.signature(MssScreenCapture.capture)
-        # 形参顺序：self, monitor_index, region, max_width
-        params = list(cap_sig.parameters.keys())
-        assert params[0] == "self"
-        assert params[1] == "monitor_index"
-        assert params[2] == "region"
-        assert params[3] == "max_width"
-
-
-# VLM 按调用方能力按需执行（ADR-037）
-
-
-class TestCallerCapabilityGatedVlm:
-    def _manager(self, visual: bool, *, raises: bool = False) -> MagicMock:
-        manager = MagicMock()
-        if raises:
-            manager.is_profile_visual = MagicMock(side_effect=RuntimeError("引擎未就绪"))
-        else:
-            manager.is_profile_visual = MagicMock(return_value=visual)
-        return manager
-
-    async def _invoke(self, provider: LookAtScreenProvider, caller_profile: str = "planner") -> object:
-        capture = FakeScreenCapture()
-        capture.queue_png(b"\x89PNG_FAKE", width=320, height=240)
-        provider._capture = capture
-        return await provider.invoke(
-            ToolInvocation(tool_name="vision_look_at_screen", arguments={}, caller_profile=caller_profile)
-        )
-
-    async def test_visual_caller_skips_vlm(self) -> None:
-        """视觉调用方（主模型 visual）：跳过 VLM，text 空但图照常返回。"""
-        reader = FakeTextReader()
-        reader.queue_text("VLM 转述不应出现")
-        provider = LookAtScreenProvider(config={}, text_reader=reader, llm_manager=self._manager(visual=True))
-
-        result = await self._invoke(provider, caller_profile="planner")
-
-        assert reader.calls == []  # VLM 未调用
-        assert result.success is True
-        assert result.structured_content["text"] == ""
+    assert result.success is True and len(reader.calls) == (1 if vlm_runs else 0)
+    assert result.structured_content["text"] == text
+    assert any(block.kind == "image" for block in result.blocks)
+    if not vlm_runs:
         assert "error" not in result.structured_content
-        assert any(block.kind == "image" for block in result.blocks)
-
-    async def test_non_visual_caller_still_runs_vlm(self) -> None:
-        """非视觉调用方：VLM 照旧（现状回归锚点）。"""
-        reader = FakeTextReader()
-        reader.queue_text("画面描述文本")
-        provider = LookAtScreenProvider(config={}, text_reader=reader, llm_manager=self._manager(visual=False))
-
-        result = await self._invoke(provider, caller_profile="minecraft")
-
-        assert len(reader.calls) == 1
-        assert result.structured_content["text"] == "画面描述文本"
-
-    async def test_pipeline_call_with_empty_profile_runs_vlm(self) -> None:
-        """管线式调用（caller_profile 空串，text_adv 读屏形态）：VLM 照旧。
-
-        空串语义 = 结果不进任何 LLM 对话而进解析管线——text_adv 消费 VLM
-        的结构化文本输出（选项中心像素坐标），跳过会让坐标管线断裂。
-        """
-        reader = FakeTextReader()
-        reader.queue_text("正文：…\n1. 选项甲 (160, 120)")
-        provider = LookAtScreenProvider(config={}, text_reader=reader, llm_manager=self._manager(visual=True))
-
-        result = await self._invoke(provider, caller_profile="")
-
-        assert len(reader.calls) == 1
-        assert result.structured_content["text"].startswith("正文：")
-
-    async def test_capability_query_failure_falls_back_to_vlm(self) -> None:
-        """引擎能力查询异常：按非视觉降级，VLM 照旧不抛。"""
-        reader = FakeTextReader()
-        reader.queue_text("降级转述")
-        provider = LookAtScreenProvider(
-            config={}, text_reader=reader, llm_manager=self._manager(visual=True, raises=True)
-        )
-
-        result = await self._invoke(provider, caller_profile="planner")
-
-        assert len(reader.calls) == 1
-        assert result.structured_content["text"] == "降级转述"
-
-    async def test_no_llm_manager_always_runs_vlm(self) -> None:
-        """未注入 llm_manager（旧组装形态）：VLM 照旧，向后兼容。"""
-        reader = FakeTextReader()
-        reader.queue_text("无引擎转述")
-        provider = LookAtScreenProvider(config={}, text_reader=reader)
-
-        result = await self._invoke(provider, caller_profile="planner")
-
-        assert len(reader.calls) == 1
-        assert result.structured_content["text"] == "无引擎转述"
