@@ -317,7 +317,7 @@ async def asyncio_sleep_ms(ms: int) -> None:
 - **断言事件**：订阅 `room.message.danmaku` 等到 bus 后断言 `RoomMessagePayload` 字段
 - **状态机**：起停后断言 `collector.state == CollectorState.RUNNING / STOPPED`
 - **后台任务幂等**：重复 `start()` 不应产生多个后台任务（参考 `BaseCollector._start_collect_task` 的幂等设计）
-- **真实范例测试**：`tests/modules/collectors/test_console_collector.py`、`tests/modules/collectors/test_bilibili_collectors.py`
+- **真实范例测试**：`tests/modules/collectors/test_collector_framework.py`、`tests/modules/collectors/test_bili_payload_fields.py`
 
 ### 真实范例指引
 
@@ -845,7 +845,7 @@ class MyToolProvider(ToolProvider):
 - **后台循环**：起停后断言 `agent.state == AgentState.RUNNING / STOPPED`；重复 `start()` 幂等
 - **事件驱动**：手动 `event_bus.emit(ROOM_MESSAGE_DANMAKU, payload)` 后断言 Agent 内部状态变化（用 `note_heartbeat` + 自定义 counter）
 - **工具调用**：注入 Mock `ToolRegistry`，断言 Agent 通过 `tool_registry.invoke(...)` 调工具
-- **真实范例测试**：`tests/agents/streamer/test_streamer_agent_wiring.py`、`tests/agents/test_text_adv.py`
+- **真实范例测试**：`tests/agents/streamer/test_speech_dispatcher.py`、`tests/agents/test_text_adv.py`
 
 ### 真实范例指引
 

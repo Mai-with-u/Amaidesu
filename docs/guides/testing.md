@@ -168,7 +168,7 @@ class _FakeEventBus:
 
 
 class _SampleCollector(BaseCollector):
-    """最小可测的 Collector 子类（与 tests/modules/collectors/test_collector_manager.py 中同形态）"""
+    """最小可测的 Collector 子类（与 tests/modules/collectors/test_collector_framework.py 中同形态）"""
     name = "sample_collector"
     description = "示例采集器（用于测试）"
 
@@ -229,7 +229,7 @@ async def test_collector_start_lifecycle(sample_collector):
     assert sample_collector.state == CollectorState.STOPPED
 ```
 
-> 真实触发链与各子采集器（console/bilibili/stt）的差异化测试见 [tests/modules/collectors/](../../tests/modules/collectors/)：每个采集器一个测试文件，覆盖该采集器特有的输入源与语义域事件组合。完整的错误隔离与 `CollectorManager` 健康监控测试见 `tests/modules/collectors/test_collector_manager.py`。
+> 真实触发链与各子采集器（console/bilibili/stt）的差异化测试见 [tests/modules/collectors/](../../tests/modules/collectors/)：每个采集器一个测试文件，覆盖该采集器特有的输入源与语义域事件组合。完整的错误隔离与 `CollectorManager` 健康监控测试见 `tests/modules/collectors/test_collector_framework.py`。
 
 ### 3.3 事件拦截器测试
 
@@ -298,7 +298,7 @@ class _FakeEventBus:
 
 
 class _SampleCollector(BaseCollector):
-    """最小可测的 Collector 子类（与 tests/modules/collectors/test_collector_manager.py 同步）"""
+    """最小可测的 Collector 子类（与 tests/modules/collectors/test_collector_framework.py 同步）"""
     name = "sample_collector"
     description = "示例采集器（用于测试）"
 
@@ -321,7 +321,7 @@ class _FailingCollector(_SampleCollector):
         raise RuntimeError("模拟启动失败")
 ```
 
-更完整的错误隔离测试与 `CollectorManager` 健康监控见 `tests/modules/collectors/test_collector_manager.py`。
+更完整的错误隔离测试与 `CollectorManager` 健康监控见 `tests/modules/collectors/test_collector_framework.py`。
 
 ## 4. 运行测试
 
@@ -542,7 +542,7 @@ async def event_bus() -> EventBus:
 
 ### 7.2 模块特定 Fixtures
 
-按需在 `tests/<子域>/conftest.py` 中定义该子域共享的 fixtures。现有 conftest.py 位置：`tests/conftest.py`（全局）、`tests/integration/conftest.py`、`tests/agents/streamer/conftest.py`、`tests/modules/llm/conftest.py`、`tests/modules/avatar/warudo/conftest.py`。
+按需在 `tests/<子域>/conftest.py` 中定义该子域共享的 fixtures。现有 conftest.py 位置：`tests/conftest.py`（全局）、`tests/dashboard/conftest.py`（Dashboard 服务挂载）、`tests/modules/llm/conftest.py`。
 
 ```python
 # tests/modules/<子域>/conftest.py（如该子域需共享 fixture 可新建）
