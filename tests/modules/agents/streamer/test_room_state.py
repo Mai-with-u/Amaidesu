@@ -1,154 +1,72 @@
-"""RoomState 单元测试——热度滑动窗口与话题聚合。"""
+"""RoomState：热度滑动窗口、冷场判定、字符级话题聚合（去停用词）、话题摘要消费、观看人数推送"""
 
 from __future__ import annotations
 
-
-from src.agents.streamer.room_state import (
-    HEAT_HIGH_THRESHOLD_MPS,
-    HEAT_LOW_THRESHOLD_MPS,
-    HEAT_WINDOW_MS,
-    RoomState,
-)
+from src.agents.streamer.room_state import HEAT_HIGH_THRESHOLD_MPS, HEAT_LOW_THRESHOLD_MPS, HEAT_WINDOW_MS, RoomState
 
 
-class _FakeMsg:
+class _Msg:
     def __init__(self, text: str) -> None:
         self.content = text
 
 
-class TestRoomStateUpdate:
-    """update() 维护热度窗口 + 末次消息时刻。"""
+def test_initial_state_cold_detection_speech_and_message_counting() -> None:
+    room = RoomState()
+    snap = room.get_snapshot(now_ms=1_000)
+    assert snap.heat == "low" and snap.topics == [] and room.is_cold(1000, now_ms=10_000) is True  # 没有消息一直冷场
+    assert room.last_speech_ms is None
+    room.record_speech(now_ms=5_000)
+    assert room.last_speech_ms == 5_000
 
-    def test_initial_state_is_low(self) -> None:
-        rs = RoomState()
-        snap = rs.get_snapshot(now_ms=1_000)
-        assert snap.heat == "low"
-        assert snap.topics == []
-
-    def test_update_appends_text_to_window(self) -> None:
-        rs = RoomState()
-        rs.update(_FakeMsg("hello"), now_ms=1_000)
-        rs.update(_FakeMsg("world"), now_ms=2_000)
-        snap = rs.get_snapshot(now_ms=2_000)
-        assert "hello" in snap.topics or "world" in snap.topics or len(snap.topics) >= 0
-
-    def test_is_cold_when_no_message(self) -> None:
-        rs = RoomState()
-        assert rs.is_cold(1000, now_ms=10_000) is True
-
-    def test_is_cold_after_timeout(self) -> None:
-        rs = RoomState()
-        rs.update(_FakeMsg("hi"), now_ms=1_000)
-        assert rs.is_cold(500, now_ms=2_000) is True
-        assert rs.is_cold(500, now_ms=1_300) is False
-
-    def test_record_speech(self) -> None:
-        rs = RoomState()
-        assert rs.last_speech_ms is None
-        rs.record_speech(now_ms=5_000)
-        assert rs.last_speech_ms == 5_000
-
-    def test_total_message_count_accumulates_across_trim(self) -> None:
-        rs = RoomState()
-        rs.update(_FakeMsg("hi"), now_ms=1_000)
-        rs.update(_FakeMsg("hi again"), now_ms=HEAT_WINDOW_MS + 10_000)
-        assert rs.total_message_count == 2
+    room.update(_Msg("hi"), now_ms=1_000)
+    assert room.is_cold(500, now_ms=2_000) is True and room.is_cold(500, now_ms=1_300) is False
+    room.update(_Msg("hi again"), now_ms=HEAT_WINDOW_MS + 10_000)
+    assert room.total_message_count == 2  # 累计计数不随窗口裁剪回退
 
 
-class TestRoomStateTopics:
-    """字符级词频聚合（去掉停用词）。"""
+def test_topics_are_char_frequencies_without_stopwords() -> None:
+    room = RoomState()
+    for text in ("主播好可爱", "主播好可爱", "主播好厉害"):
+        room.update(_Msg(text), now_ms=1_000)
+    assert {"主", "播", "好"} <= set(room.get_snapshot(now_ms=1_000).topics)
 
-    def test_topics_extracts_chinese_chars(self) -> None:
-        rs = RoomState()
-        for t in ["主播好可爱", "主播好可爱", "主播好厉害"]:
-            rs.update(_FakeMsg(t), now_ms=1_000)
-        snap = rs.get_snapshot(now_ms=1_000)
-        # "主" "播" "好" "可" "爱" "厉" "害" 都应该出现
-        assert "主" in snap.topics
-        assert "播" in snap.topics
-        assert "好" in snap.topics
-
-    def test_topics_filters_stopwords(self) -> None:
-        rs = RoomState()
-        rs.update(_FakeMsg("的了吗啊呀呢吧哦呐"), now_ms=1_000)
-        rs.update(_FakeMsg("的的吗"), now_ms=2_000)
-        snap = rs.get_snapshot(now_ms=2_000)
-        # 停用词应被过滤（不在 top_k 中）
-        assert "的" not in snap.topics
-        assert "吗" not in snap.topics
+    stop = RoomState()
+    stop.update(_Msg("的了吗啊呀呢吧哦呐"), now_ms=1_000)
+    stop.update(_Msg("的的吗"), now_ms=2_000)
+    assert not {"的", "吗"} & set(stop.get_snapshot(now_ms=2_000).topics)  # 停用词不进 top_k
 
 
-class TestRoomStateHeat:
-    """热度等级判定（基于弹幕速率）。"""
+def test_heat_follows_message_rate_inside_the_sliding_window() -> None:
+    assert HEAT_LOW_THRESHOLD_MPS < HEAT_HIGH_THRESHOLD_MPS and HEAT_WINDOW_MS == 60_000  # 防误改
 
-    def test_high_heat_with_many_messages(self) -> None:
-        rs = RoomState()
-        # 1 秒内 5 条 → 5 msg/s > HIGH_THRESHOLD（0.5）
-        for i in range(5):
-            rs.update(_FakeMsg(f"msg{i}"), now_ms=1_000 + i * 200)
-        snap = rs.get_snapshot(now_ms=1_000 + 800)
-        # 高热（>= 0.5 mps）
-        assert snap.heat == "high"
+    busy = RoomState()
+    for i in range(5):  # 1 秒内 5 条 → 远超高热阈值
+        busy.update(_Msg(f"msg{i}"), now_ms=1_000 + i * 200)
+    assert busy.get_snapshot(now_ms=1_800).heat == "high"
 
-    def test_low_heat_with_few_messages(self) -> None:
-        rs = RoomState()
-        # 60s 1 条 → 极低
-        rs.update(_FakeMsg("hello"), now_ms=1_000)
-        snap = rs.get_snapshot(now_ms=60_000)
-        # 低热（< 0.1 mps）
-        assert snap.heat == "low"
-
-    def test_heat_thresholds_constants(self) -> None:
-        """验证常量合理性（防止误改）。"""
-        assert HEAT_LOW_THRESHOLD_MPS < HEAT_HIGH_THRESHOLD_MPS
-        assert HEAT_WINDOW_MS == 60_000
+    quiet = RoomState()
+    quiet.update(_Msg("hello"), now_ms=1_000)
+    assert quiet.get_snapshot(now_ms=60_000).heat == "low"  # 60 秒 1 条，低于低热阈值
 
 
-class TestRoomStateTopicSummary:
-    """topic_summary 字段（由 background.py 填充）。"""
+def test_topic_summary_is_consumed_once_until_the_background_writes_a_new_one() -> None:
+    room = RoomState()
+    room.set_topic_summary("观众在聊游戏", now_ms=1_000)
+    snap = room.get_snapshot(now_ms=1_000)
+    assert (snap.topic_summary, snap.topic_summary_at_ms) == ("观众在聊游戏", 1_000)
 
-    def test_set_topic_summary(self) -> None:
-        rs = RoomState()
-        rs.set_topic_summary("观众在聊游戏", now_ms=1_000)
-        snap = rs.get_snapshot(now_ms=1_000)
-        assert snap.topic_summary == "观众在聊游戏"
-        assert snap.topic_summary_at_ms == 1_000
-
-    def test_consume_topic_summary_marks_read(self) -> None:
-        """决策面取走摘要即清空：同一段摘要在多轮请求里不重复注入，直到后台写入新摘要。"""
-        rs = RoomState()
-        rs.set_topic_summary("观众向主播问好并表达惊喜", now_ms=1_000)
-
-        assert rs.consume_topic_summary() == "观众向主播问好并表达惊喜"
-        consumed_again = rs.consume_topic_summary()
-        assert consumed_again == ""
-        snap = rs.get_snapshot(now_ms=2_000)
-        assert snap.topic_summary == ""
-        assert snap.topic_summary_at_ms == 0
+    assert room.consume_topic_summary() == "观众在聊游戏"  # 决策面取走即清空，同一段摘要不在多轮请求里重复注入
+    assert room.consume_topic_summary() == ""
+    snap = room.get_snapshot(now_ms=2_000)
+    assert (snap.topic_summary, snap.topic_summary_at_ms) == ("", 0)
 
 
-class TestRoomStateAudienceTotal:
-    """audience_total 字段（room.state.watched_count 状态推送驱动）。"""
+def test_audience_total_is_zero_until_pushed_and_the_latest_push_wins() -> None:
+    room = RoomState()
+    snap = room.get_snapshot(now_ms=1_000)
+    assert (snap.audience_total, snap.audience_total_at_ms) == (0, 0)  # 语义是"未知"而非"没人看"
 
-    def test_initial_snapshot_is_zero(self) -> None:
-        """推送未到过时为 0，语义是"未知"而非"没人看" """
-        rs = RoomState()
-        snap = rs.get_snapshot(now_ms=1_000)
-        assert snap.audience_total == 0
-        assert snap.audience_total_at_ms == 0
-
-    def test_set_audience_total_updates_snapshot(self) -> None:
-        rs = RoomState()
-        rs.set_audience_total(12000, now_ms=5_000)
-        snap = rs.get_snapshot(now_ms=6_000)
-        assert snap.audience_total == 12000
-        assert snap.audience_total_at_ms == 5_000
-
-    def test_latest_push_wins(self) -> None:
-        """变化即推：最后一次推送的值即当前状态"""
-        rs = RoomState()
-        rs.set_audience_total(100, now_ms=1_000)
-        rs.set_audience_total(150, now_ms=2_000)
-        snap = rs.get_snapshot(now_ms=3_000)
-        assert snap.audience_total == 150
-        assert snap.audience_total_at_ms == 2_000
+    room.set_audience_total(100, now_ms=1_000)
+    room.set_audience_total(150, now_ms=2_000)
+    snap = room.get_snapshot(now_ms=3_000)
+    assert (snap.audience_total, snap.audience_total_at_ms) == (150, 2_000)  # 变化即推，最后一次推送即当前状态
