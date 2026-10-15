@@ -7,6 +7,7 @@ import pytest
 import tomlkit
 
 from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
+from tests.config.helpers import tail_version
 
 
 def _section(data: Any, path: str) -> tuple[Any, str]:
@@ -18,7 +19,7 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
 
 
 @pytest.mark.parametrize(
-    ("filename", "removed", "final_version"),
+    ("filename", "removed"),
     [
         (
             "model.toml",
@@ -28,8 +29,6 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
                 "llm_providers.0.timeout",
                 "llm_providers.0.max_tokens",
             ),
-            # model.toml 钩子链延到 profile 历史预算退役（v2.0.44）
-            "2.0.44",
         ),
         (
             "agents.toml",
@@ -38,25 +37,20 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
                 "agents.minecraft.context.observation_inline_chars",
                 "agents.minecraft.context.archive_max_chars",
             ),
-            # agents.toml 钩子链延到 Minecraft 上下文预算改 token（v2.0.44）
-            "2.0.44",
         ),
-        # infra.toml 的钩子链更长（sc_probability 死键清理 v2.0.41）
-        ("infra.toml", ("simulator.context_window_size", "simulator.max_message_chars"), "2.0.42"),
+        ("infra.toml", ("simulator.context_window_size", "simulator.max_message_chars")),
         (
             "tools.toml",
             (
                 "tools.vision.config.vlm_timeout_ms",
                 "tools.web.search.config.max_fetch_chars",
             ),
-            # tools.toml 钩子链延到 [tools.memory] 段退役（v2.0.45）
-            "2.0.45",
         ),
-        ("storage.toml", ("memory.profile_injection_max",), "2.0.40"),
+        ("storage.toml", ("memory.profile_injection_max",)),
     ],
 )
 def test_legacy_limits_removed_from_disk_only_for_affected_file(
-    tmp_path: Path, filename: str, removed: tuple[str, ...], final_version: str
+    tmp_path: Path, filename: str, removed: tuple[str, ...]
 ) -> None:
     """自定义旧上限被删除；无关文件不动，重载不重复写回。"""
     generate_default_configs(tmp_path)
@@ -73,7 +67,7 @@ def test_legacy_limits_removed_from_disk_only_for_affected_file(
     load_config_dir(tmp_path)
 
     migrated = tomlkit.parse(target.read_text(encoding="utf-8-sig"))
-    assert migrated["meta"]["version"] == final_version
+    assert migrated["meta"]["version"] == tail_version(filename)  # 钩子链尾由注册表给出，不硬编码
     for path in removed:
         section, key = _section(migrated, path)
         assert key not in section
