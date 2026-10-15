@@ -24,7 +24,14 @@ async def _bad(inv: ToolInvocation) -> ToolExecutionResult:
 
 
 async def _flush() -> None:
-    await asyncio.sleep(0.02)  # 让 emit 的 fire-and-forget 派发任务跑完
+    await asyncio.sleep(0.02)  # 让 emit 的 fire-and-forget 派发任务跑完（用于断言"没有事件"的场景）
+
+
+async def _until(condition, timeout: float = 2.0) -> None:
+    """轮询到条件成立：emit 是 fire-and-forget 派发，满载时固定睡眠可能赶不上，断言"有事件"时改等条件。"""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition() and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.005)
 
 
 def _registry_with(name: str, impl=_bad, provider: str = "p", **kwargs) -> ToolRegistry:
@@ -96,7 +103,7 @@ async def test_tripped_invoke_short_circuits_without_tool_result_event() -> None
     registry = _registry_with("x", event_bus=bus, failure_threshold=1)
     try:
         await registry.invoke(ToolInvocation(tool_name="p_x"))  # 第 1 次失败即熔断
-        await _flush()
+        await _until(lambda: len(results) == 1)
         results.clear()
         res = await registry.invoke(ToolInvocation(tool_name="p_x"))
         await _flush()
@@ -151,10 +158,10 @@ async def test_trip_and_recover_emit_open_and_closed_health_events() -> None:
     registry = _registry_with("z", event_bus=bus, failure_threshold=1)
     try:
         await registry.invoke(ToolInvocation(tool_name="p_z"))
-        await _flush()
+        await _until(lambda: len(events) == 1)
         assert [(e.state, e.tool_name) for e in events] == [("open", "p_z")]
         registry.recover_tool("p_z")
-        await _flush()
+        await _until(lambda: len(events) == 2)
         assert events[-1].state == "closed" and not registry.is_tripped("p_z")
     finally:
         await bus.cleanup()
