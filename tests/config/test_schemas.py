@@ -10,7 +10,6 @@ from src.modules.config.infra_schemas import InfraRootConfig
 from src.modules.config.model_schemas import LLMProfilesConfig, ModelConfig
 from src.modules.config.tools_schemas import (
     McpProviderConfig,
-    MemoryProviderConfig,
     StudioProviderConfig,
     ToolProviderConfig,
     ToolsConfig,
@@ -33,7 +32,9 @@ def test_streamer_persona_and_context_defaults() -> None:
     assert persona.behavior_style.startswith("积极与观众互动")  # Planner 决策侧注入契约，必须非空
 
     context = StreamerContextConfig()
-    assert context.enabled is True and not hasattr(context, "memory_recall_long_term")  # 画像按本批发言人全量注入，无条数上限
+    assert context.enabled is True and not hasattr(
+        context, "memory_recall_long_term"
+    )  # 画像按本批发言人全量注入，无条数上限
 
 
 def test_model_config_three_layer_defaults() -> None:
@@ -122,7 +123,8 @@ def test_migrated_out_sections_are_rejected_by_extra_forbid(legacy: dict, keywor
 def test_tool_domains_defaults_and_provider_switch_semantics() -> None:
     tools = ToolsConfig()  # 禁 None 契约：动态分类缺省空 dict，单实例分类缺省具体实例
     assert tools.studio == {} and tools.web == {} and isinstance(tools.mcp, McpProviderConfig)
-    assert tools.vision.enabled is False and tools.memory.enabled is True  # vision 缺省关态；memory 与消费端兜底对齐
+    assert tools.vision.enabled is False  # vision 缺省关态
+    assert not hasattr(tools, "memory")  # memory 段已退役：主播记忆工具随主播 Agent 注册，无独立开关
 
     provider = ToolProviderConfig()
     assert provider.enabled is True and provider.config == {}
@@ -134,7 +136,6 @@ def test_tool_domains_defaults_and_provider_switch_semantics() -> None:
     assert dynamic.studio["obs"].enabled is True and isinstance(dynamic.web["search"], WebProviderConfig)
     assert StudioProviderConfig(enabled=True, extra_field="x").extra_field == "x"  # 域内允许 extra
 
-    assert MemoryProviderConfig().config == {}
     assert McpProviderConfig(enabled=True, config={"servers": {}}).config == {"servers": {}}
 
 

@@ -1,16 +1,12 @@
-"""工具提供者 config 子段的注册表校验与默认值补全测试
+"""工具提供者 config 子段（tools 动态分类段 [tools.studio.<name>] / [tools.web.<name>]）的注册表校验与默认值补全
 
-覆盖 tools 动态分类段（[tools.studio.<name>]；avatar 分类已迁出为 avatar.toml
-[avatar.platform.*]，平台段校验见 test_avatar_migration.py）的
-加载期行为：默认值补齐落盘（含注释渲染）、未知键剥离、类型违约硬错、
-残留段容忍、WebUI 写入口校验。机制与采集器子段（_validate_collectors_
-sections）同构，断言形状对齐 test_writeback_pipeline 的既有用例。
+覆盖加载期行为：默认值补齐落盘（含字段注释）、未知键与残留段硬错、类型违约硬错、WebUI 写入口校验。
+机制与采集器子段同构。avatar 分类已迁出为 avatar.toml [avatar.platform.*]。
 """
 
 from __future__ import annotations
 
-import shutil
-
+import tomlkit
 import pytest
 
 from src.modules.config.errors import ConfigValidationError
@@ -21,195 +17,85 @@ from src.modules.config.multi_file_loader import (
     validate_config_updates,
 )
 
+OBS_SECTION = "\n[tools.studio.obs]\nenabled = true\n\n[tools.studio.obs.config]\n"
+WEB_SEARCH_SECTION = "\n[tools.web.search]\nenabled = true\n\n[tools.web.search.config]\n"
+
 
 @pytest.fixture
-def temp_config_dir(tmp_path):
-    config_dir = tmp_path / "config"
-    yield config_dir
-    if config_dir.exists():
-        shutil.rmtree(config_dir, ignore_errors=True)
+def config_dir(tmp_path):
+    directory = tmp_path / "config"
+    generate_default_configs(directory)
+    return directory
 
 
-def _add_vts_section(config_dir, section_text: str) -> None:
-    """在 tools.toml 尾部追加 [tools.studio.obs] 段（绝对表头，尾追安全）。"""
+def _append(config_dir, section_text: str) -> None:
+    """在 tools.toml 尾部追加段（绝对表头，尾追安全）。"""
     path = config_dir / "tools.toml"
-    content = path.read_text(encoding="utf-8-sig")
-    path.write_text(content + section_text.strip("\n") + "\n", encoding="utf-8-sig")
+    path.write_text(path.read_text(encoding="utf-8-sig") + section_text.strip("\n") + "\n", encoding="utf-8-sig")
 
 
-_VTS_SECTION = """
-[tools.studio.obs]
-enabled = true
-
-[tools.studio.obs.config]
-"""
-
-_WEB_SEARCH_SECTION = """
-[tools.web.search]
-enabled = true
-
-[tools.web.search.config]
-"""
+def _tools_text(config_dir) -> str:
+    return (config_dir / "tools.toml").read_text(encoding="utf-8-sig")
 
 
-class TestProviderConfigBackfill:
-    def test_empty_config_backfills_defaults_to_disk(self, temp_config_dir):
-        """空 config 段 → 默认值补齐并写回落盘（本机制的核心验收锚点）。"""
-        generate_default_configs(temp_config_dir)
-        _add_vts_section(temp_config_dir, _VTS_SECTION)
+def test_empty_config_backfills_defaults_with_comments_into_disk_and_runtime_view(config_dir) -> None:
+    _append(config_dir, OBS_SECTION)
+    config, _ = load_config_dir(config_dir)
 
-        _config, _report = load_config_dir(temp_config_dir)
+    content = _tools_text(config_dir)
+    assert 'host = "localhost"' in content and "port = 4455" in content and "text_source_name" in content
+    assert (
+        "# OBS WebSocket 主机地址" in content and "# OBS WebSocket 端口" in content
+    )  # ConfigSchema description 落盘为字段注释
+    obs = config["tools"]["tools"]["studio"]["obs"]["config"]  # 补全后的 config 进入运行时配置树，装配侧消费同一份数据
+    assert (obs["text_source_name"], obs["port"]) == ("text", 4455)
+    assert not load_config_dir(config_dir)[1].has_drift  # 写回后无残余漂移
 
-        content = (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
-        assert 'host = "localhost"' in content
-        assert "port = 4455" in content
-        assert "text_source_name" in content
-
-    def test_backfilled_config_reaches_merged_view(self, temp_config_dir):
-        """补全后的 config 进入运行时配置树（装配侧消费同一份数据）。
-
-        ``load_config_dir`` 返回 ``{scope: 根 dump}``（ConfigService 再展平），
-        故 tools 段在 ``config["tools"]["tools"]`` 下。
-        """
-        generate_default_configs(temp_config_dir)
-        _add_vts_section(temp_config_dir, _VTS_SECTION)
-
-        config, _report = load_config_dir(temp_config_dir)
-
-        obs_config = config["tools"]["tools"]["studio"]["obs"]["config"]
-        assert obs_config["text_source_name"] == "text"
-        assert obs_config["port"] == 4455
-
-    def test_defaults_render_with_field_comments(self, temp_config_dir):
-        """写回的 config 子表带字段级注释（ConfigSchema description 落盘）。"""
-        generate_default_configs(temp_config_dir)
-        _add_vts_section(temp_config_dir, _VTS_SECTION)
-
-        load_config_dir(temp_config_dir)
-
-        content = (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
-        assert "# OBS WebSocket 主机地址" in content
-        assert "# OBS WebSocket 端口" in content
-
-    def test_second_load_is_stable(self, temp_config_dir):
-        """补全写回后再加载：无残余漂移、不再改写文件（写回短路）。"""
-        generate_default_configs(temp_config_dir)
-        _add_vts_section(temp_config_dir, _VTS_SECTION)
-        load_config_dir(temp_config_dir)
-
-        _config, report = load_config_dir(temp_config_dir)
-
-        assert not report.has_drift
+    other = config_dir.parent / "web"
+    generate_default_configs(other)
+    _append(other, WEB_SEARCH_SECTION)
+    load_config_dir(other)
+    web = _tools_text(other)  # web 动态分类域走同一注册表管线
+    assert 'base_url = "https://cn.bing.com/search"' in web and "timeout_ms = 10000" in web
+    assert "max_fetch_chars" not in web
 
 
-class TestProviderConfigDrift:
-    def test_unknown_config_key_hard_fails(self, temp_config_dir):
-        """config 内未知键 → 冗余全域硬错（静默剥离 = 用户数据丢失）。"""
-        generate_default_configs(temp_config_dir)
-        _add_vts_section(temp_config_dir, _VTS_SECTION + "stale_key = 1\n")
+def test_unknown_keys_and_retired_sections_hard_fail_with_pointers(config_dir) -> None:
+    _append(config_dir, OBS_SECTION + "stale_key = 1\n")
+    with pytest.raises(ConfigValidationError) as exc_info:  # 静默剥离 = 用户数据丢失，冗余键全域硬错
+        load_config_dir(config_dir)
+    assert "stale_key" in str(exc_info.value)
 
-        with pytest.raises(ConfigValidationError) as exc_info:
-            load_config_dir(temp_config_dir)
-        assert "stale_key" in str(exc_info.value)
+    typo = config_dir.parent / "typo"
+    generate_default_configs(typo)
+    _append(typo, "\n[tools.studio.obs]\nenabled = true\nenbled_typo = false\n\n[tools.studio.obs.config]\n")
+    raw = tomlkit.loads((typo / "tools.toml").read_text(encoding="utf-8-sig")).unwrap()
+    _, report = _validate_file("tools.toml", raw)
+    assert "tools.studio.obs.enbled_typo" in report.redundant  # 段本体未知键：报告可见，加载层聚合硬错接管
 
-    def test_section_level_unknown_key_reported(self, temp_config_dir):
-        """段本体未知键（enabled 拼写错误等）→ redundant 报告可见（加载层聚合硬错接管）。"""
-        generate_default_configs(temp_config_dir)
-        _add_vts_section(
-            temp_config_dir,
-            """
-[tools.studio.obs]
-enabled = true
-enbled_typo = false
-
-[tools.studio.obs.config]
-""",
-        )
-
-        import tomlkit
-
-        with open(temp_config_dir / "tools.toml", "r", encoding="utf-8-sig") as f:
-            raw = tomlkit.load(f).unwrap()
-        _instance, report = _validate_file("tools.toml", raw)
-
-        assert "tools.studio.obs.enbled_typo" in report.redundant
+    retired = config_dir.parent / "retired"
+    generate_default_configs(retired)
+    _append(
+        retired,
+        "\n[tools.studio.retired_thing]\nenabled = false\n\n[tools.studio.retired_thing.config]\nsome_key = 1\n",
+    )
+    with pytest.raises(ConfigValidationError) as exc_info:  # 残留段（已退役 provider）：点名 + 合法名单
+        load_config_dir(retired)
+    assert "retired_thing" in str(exc_info.value) and "studio.obs" in str(exc_info.value)
 
 
-class TestProviderConfigHardFail:
-    def test_type_violation_raises_with_dotted_path(self, temp_config_dir):
-        """类型违约 → 加载期硬错，路径含 tools.studio.obs.config（前移自运行期）。"""
-        generate_default_configs(temp_config_dir)
-        _add_vts_section(temp_config_dir, _VTS_SECTION + 'port = "abc"\n')
+def test_type_violations_fail_at_load_and_on_the_webui_write_path(config_dir) -> None:
+    broken = config_dir.parent / "broken"
+    generate_default_configs(broken)
+    _append(broken, OBS_SECTION + 'port = "abc"\n')
+    with pytest.raises(ConfigValidationError) as exc_info:  # 加载期硬错，路径含 tools.studio.obs.config
+        load_config_dir(broken)
+    assert "tools.studio.obs.config" in str(exc_info.value)
 
-        with pytest.raises(ConfigValidationError) as exc_info:
-            load_config_dir(temp_config_dir)
-
-        message = str(exc_info.value)
-        assert "tools.studio.obs.config" in message
-
-    def test_update_path_type_violation_raises(self, temp_config_dir):
-        """WebUI 写入口：错误类型经统一校验事务拒绝（磁盘零写入）。"""
-        generate_default_configs(temp_dir := temp_config_dir)
-        _add_vts_section(temp_dir, _VTS_SECTION)
-
-        with pytest.raises(ConfigValidationError):
-            validate_config_updates(
-                temp_config_dir,
-                "tools.toml",
-                {"tools.studio.obs.config.port": "not-a-port"},
-            )
-
-
-class TestUnregisteredSectionHardFail:
-    def test_unregistered_section_hard_fails(self, temp_config_dir):
-        """残留段（已退役 provider）→ 硬错（点名 + 合法名单 + 处置指引）。"""
-        generate_default_configs(temp_config_dir)
-        _add_vts_section(
-            temp_config_dir,
-            """
-[tools.studio.retired_thing]
-enabled = false
-
-[tools.studio.retired_thing.config]
-some_key = 1
-""",
-        )
-
-        with pytest.raises(ConfigValidationError) as exc_info:
-            load_config_dir(temp_config_dir)
-        message = str(exc_info.value)
-        assert "retired_thing" in message
-        assert "studio.obs" in message
-
-
-class TestWebSearchProviderConfig:
-    """web 动态分类域（[tools.web.search]）与 avatar/studio 同管线的锚点用例。"""
-
-    def _add_web_search_section(self, config_dir, section_text: str) -> None:
-        path = config_dir / "tools.toml"
-        content = path.read_text(encoding="utf-8-sig")
-        path.write_text(content + section_text.strip("\n") + "\n", encoding="utf-8-sig")
-
-    def test_empty_config_backfills_defaults_to_disk(self, temp_config_dir):
-        """空 config 段 → 默认值补齐并写回落盘（web 域走注册表管线的验收锚点）。"""
-        generate_default_configs(temp_config_dir)
-        self._add_web_search_section(temp_config_dir, _WEB_SEARCH_SECTION)
-
-        load_config_dir(temp_config_dir)
-
-        content = (temp_config_dir / "tools.toml").read_text(encoding="utf-8-sig")
-        assert 'base_url = "https://cn.bing.com/search"' in content
-        assert "timeout_ms = 10000" in content
-        assert "max_fetch_chars" not in content
-
-    def test_update_path_type_violation_raises(self, temp_config_dir):
-        """WebUI 写入口：web.search.config 字段类型违约经统一校验事务拒绝。"""
-        generate_default_configs(temp_config_dir)
-        self._add_web_search_section(temp_config_dir, _WEB_SEARCH_SECTION)
-
-        with pytest.raises(ConfigValidationError):
-            validate_config_updates(
-                temp_config_dir,
-                "tools.toml",
-                {"tools.web.search.config.timeout_ms": "not-a-number"},
-            )
+    _append(config_dir, OBS_SECTION + WEB_SEARCH_SECTION)
+    for updates in (
+        {"tools.studio.obs.config.port": "not-a-port"},
+        {"tools.web.search.config.timeout_ms": "not-a-number"},
+    ):
+        with pytest.raises(ConfigValidationError):  # WebUI 写入口：统一校验事务拒绝，磁盘零写入
+            validate_config_updates(config_dir, "tools.toml", updates)
