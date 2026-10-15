@@ -1,46 +1,25 @@
-"""Game2048Agent 测试（按键驱动 + 事件分流）
-
-覆盖：
-- 元数据：name / description / emits_events（game.state.changed 等 4 族）
-- press 懒开局：首次按键自动发牌 + 发 game.state.changed 快照
-- 里程碑：首次合成出 ≥ 阈值档位发 game.milestone，同档不重复播
-- 终局：死局按键 → game.report（delivery）恰好一条 + over 置位
-- restart：重开清盘 + 快照事件 + 终局标志复位
-- 工具面：press 非法 key 失败结果、press 方向键、press restart、
-  get_state 快照形状、名单映射（press/get_state 两工具，全 ["streamer"]）
-"""
+"""Game2048Agent（按键驱动 + 事件分流）：懒开局与快照事件、里程碑、终局上报、重开、工具面与名单映射"""
 
 from __future__ import annotations
 
 import asyncio
 import random
-from typing import List, Optional
+from typing import List
 
-from src.agents.game_2048 import (
-    Board2048,
-    Game2048Agent,
-    Game2048Config,
-    MoveDirection,
-)
-from src.agents.game_2048.tools import (
-    Game2048ToolProvider,
-    build_game_2048_visible_to,
-)
+import pytest
+
+from src.agents.game_2048 import Board2048, Game2048Agent, Game2048Config, MoveDirection
+from src.agents.game_2048.tools import Game2048ToolProvider, build_game_2048_visible_to
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GameBoardStatePayload, GamePayload
 from src.modules.tools.models import ToolInvocation
-from src.modules.tools.registry import ToolRegistry
 
-# 事件收集辅助
+_DEAD_BOARD = [[2, 4, 2, 4], [4, 2, 4, 2], [2, 4, 2, 4], [4, 2, 4, 2]]
 
 
 class EventCollector:
-    """订阅若干事件名收集 (event_name, payload)，供断言。
-
-    EventBus.emit 把回调调度为后续 tick 的 Task——断言事件数前先
-    ``await settle()`` 让出事件循环等回调落地。
-    """
+    """订阅若干事件名收集 payload。EventBus.emit 把回调调度为后续 tick 的 Task，断言前先 ``await settle()``。"""
 
     def __init__(self, bus: EventBus, spec: dict[str, type]) -> None:
         self.items: List[tuple[str, object]] = []
@@ -51,221 +30,127 @@ class EventCollector:
         self.items.append((event_name, payload))
 
     async def settle(self) -> None:
-        """让出事件循环若干轮，等待已 emit 事件的回调 Task 执行完。"""
         for _ in range(3):
             await asyncio.sleep(0.02)
 
     def of(self, event_name: str) -> List[object]:
         return [payload for name, payload in self.items if name == event_name]
 
-    def first_of(self, event_name: str) -> Optional[object]:
-        for name, payload in self.items:
-            if name == event_name:
-                return payload
-        return None
+
+def _agent(bus: EventBus, seed: int = 7) -> Game2048Agent:
+    return Game2048Agent(Game2048Config(), tool_registry=None, event_bus=bus, rng=random.Random(seed))
 
 
-def _make_agent(
-    bus: EventBus,
-    *,
-    registry: bool = False,
-    rng_seed: int = 7,
-) -> Game2048Agent:
-    tool_registry = ToolRegistry() if registry else None
-    return Game2048Agent(
-        Game2048Config(),
-        tool_registry=tool_registry,
-        event_bus=bus,
-        rng=random.Random(rng_seed),
-    )
+def _tile_count(agent: Game2048Agent) -> int:
+    return sum(1 for row in agent.get_state_snapshot()["board"] for value in row if value)
 
 
-# 元数据与事件族
+def test_metadata_declares_the_four_game_event_families() -> None:
+    assert Game2048Agent.name == "game_2048" and Game2048Agent.description
+    assert {
+        CoreEvents.GAME_STATE_CHANGED,
+        CoreEvents.GAME_MILESTONE,
+        CoreEvents.GAME_REPORT,
+        CoreEvents.GAME_ERROR,
+    } <= set(Game2048Agent.emits_events)
 
 
-def test_metadata_and_events() -> None:
-    assert Game2048Agent.name == "game_2048"
-    assert Game2048Agent.description
-    assert CoreEvents.GAME_STATE_CHANGED in Game2048Agent.emits_events
-    assert CoreEvents.GAME_MILESTONE in Game2048Agent.emits_events
-    assert CoreEvents.GAME_REPORT in Game2048Agent.emits_events
-    assert CoreEvents.GAME_ERROR in Game2048Agent.emits_events
+async def test_first_press_deals_the_board_and_each_move_emits_a_snapshot_with_growing_history(event_bus) -> None:
+    states = EventCollector(event_bus, {CoreEvents.GAME_STATE_CHANGED: GameBoardStatePayload})
+    agent = _agent(event_bus, seed=11)
 
+    assert (await agent.press(MoveDirection.UP)).moved
+    assert _tile_count(agent) == 3  # 懒开局：初始 2 块 + 落子后新块
+    await states.settle()
+    (first,) = states.of(CoreEvents.GAME_STATE_CHANGED)
+    assert (first.game, first.moves, first.last_direction, first.history) == ("game_2048", 1, "up", ["up"])
 
-# press：懒开局 / 快照事件 / 里程碑
-
-
-async def test_press_starts_game_and_emits_state() -> None:
-    bus = EventBus()
-    collector = EventCollector(bus, {CoreEvents.GAME_STATE_CHANGED: GameBoardStatePayload})
-    agent = _make_agent(bus, rng_seed=11)
-
-    outcome = await agent.press(MoveDirection.UP)
-    assert outcome.moved
-    tiles = [v for row in agent.get_state_snapshot()["board"] for v in row if v != 0]
-    assert len(tiles) == 3  # 初始 2 块 + 落子后新块
-
-    await collector.settle()
-    states = collector.of(CoreEvents.GAME_STATE_CHANGED)
-    assert len(states) == 1
-    payload = states[0]
-    assert isinstance(payload, GameBoardStatePayload)
-    assert payload.game == "game_2048"
-    assert payload.moves == 1
-    assert payload.last_direction == "up"
-    assert payload.history == ["up"]
-
-    # 第二步：历史累积（旧→新）
     await agent.press(MoveDirection.LEFT)
-    await collector.settle()
-    payload2 = collector.of(CoreEvents.GAME_STATE_CHANGED)[-1]
-    assert isinstance(payload2, GameBoardStatePayload)
-    assert payload2.last_direction == "left"
-    assert payload2.history == ["up", "left"]
+    await states.settle()
+    last = states.of(CoreEvents.GAME_STATE_CHANGED)[-1]
+    assert (last.last_direction, last.history) == ("left", ["up", "left"])  # 历史旧→新累积
 
 
-async def test_milestone_emits_once_per_tier() -> None:
-    bus = EventBus()
-    collector = EventCollector(bus, {CoreEvents.GAME_MILESTONE: GamePayload})
-    agent = _make_agent(bus, rng_seed=5)
-    agent._board.grid = [  # noqa: SLF001 - 构造可合并 256 的残局
-        [128, 128, 0, 0],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-    ]
+async def test_milestone_is_announced_once_per_tier(event_bus) -> None:
+    milestones = EventCollector(event_bus, {CoreEvents.GAME_MILESTONE: GamePayload})
+    agent = _agent(event_bus, seed=5)
+    agent._board.grid = [[128, 128, 0, 0], [0] * 4, [0] * 4, [0] * 4]  # 残局：一步合成 256
 
     await agent.press(MoveDirection.LEFT)
     assert agent.get_state_snapshot()["max_tile"] == 256
-    await collector.settle()
-    assert len(collector.of(CoreEvents.GAME_MILESTONE)) == 1
+    await milestones.settle()
+    assert len(milestones.of(CoreEvents.GAME_MILESTONE)) == 1
 
-    # 同档再落子不重复播
-    await agent.press(MoveDirection.UP)
-    await collector.settle()
-    assert len(collector.of(CoreEvents.GAME_MILESTONE)) == 1
+    await agent.press(MoveDirection.UP)  # 同档再落子不重复播
+    await milestones.settle()
+    assert len(milestones.of(CoreEvents.GAME_MILESTONE)) == 1
 
 
-async def test_press_after_over_is_noop() -> None:
-    bus = EventBus()
-    agent = _make_agent(bus, rng_seed=5)
-    agent._board.grid = [  # noqa: SLF001 - 直接构造死局
-        [2, 4, 2, 4],
-        [4, 2, 4, 2],
-        [2, 4, 2, 4],
-        [4, 2, 4, 2],
-    ]
-    outcome = await agent.press(MoveDirection.LEFT)
-    assert not outcome.moved
+async def test_pressing_on_a_dead_board_ends_the_game_and_reports_delivery_exactly_once(event_bus) -> None:
+    reports = EventCollector(event_bus, {CoreEvents.GAME_REPORT: GamePayload})
+    agent = _agent(event_bus, seed=5)
+    agent._board.grid = [list(row) for row in _DEAD_BOARD]
+
+    assert not (await agent.press(MoveDirection.LEFT)).moved
     assert agent.get_state_snapshot()["over"] is True
+    await reports.settle()
+    (report,) = reports.of(CoreEvents.GAME_REPORT)
+    assert report.report_kind == "delivery"
+
+    await agent.press(MoveDirection.LEFT)  # 对终局再按键不重复上报
+    await reports.settle()
+    assert len(reports.of(CoreEvents.GAME_REPORT)) == 1
 
 
-async def test_invalid_move_dead_board_emits_report_once() -> None:
-    bus = EventBus()
-    collector = EventCollector(bus, {CoreEvents.GAME_REPORT: GamePayload})
-    agent = _make_agent(bus, rng_seed=5)
-    agent._board.grid = [  # noqa: SLF001 - 直接构造死局
-        [2, 4, 2, 4],
-        [4, 2, 4, 2],
-        [2, 4, 2, 4],
-        [4, 2, 4, 2],
-    ]
-
-    outcome = await agent.press(MoveDirection.LEFT)
-    assert not outcome.moved
-    # 死局按键：终局判定 + delivery 上报恰好一次
-    assert agent.get_state_snapshot()["over"] is True
-    await collector.settle()
-    reports = collector.of(CoreEvents.GAME_REPORT)
-    assert len(reports) == 1
-    payload = reports[0]
-    assert isinstance(payload, GamePayload)
-    assert payload.report_kind == "delivery"
-
-    # 对终局再按键不重复上报
-    await agent.press(MoveDirection.LEFT)
-    await collector.settle()
-    assert len(collector.of(CoreEvents.GAME_REPORT)) == 1
-
-
-# restart
-
-
-async def test_restart_resets_board() -> None:
-    bus = EventBus()
-    collector = EventCollector(bus, {CoreEvents.GAME_STATE_CHANGED: GameBoardStatePayload})
-    agent = _make_agent(bus, rng_seed=9)
+async def test_restart_clears_the_board_and_emits_a_fresh_frame(event_bus) -> None:
+    states = EventCollector(event_bus, {CoreEvents.GAME_STATE_CHANGED: GameBoardStatePayload})
+    agent = _agent(event_bus, seed=9)
 
     await agent.press(MoveDirection.LEFT)
     await agent.restart()
+
     snapshot = agent.get_state_snapshot()
-    assert snapshot["moves"] == 0
-    assert snapshot["over"] is False
-    tiles = [v for row in snapshot["board"] for v in row if v != 0]
-    assert len(tiles) == 2
-    await collector.settle()
-    states = collector.of(CoreEvents.GAME_STATE_CHANGED)
-    assert len(states) == 2
-    # 重开帧：方向为 None、历史清空
-    last = states[-1]
-    assert isinstance(last, GameBoardStatePayload)
-    assert last.last_direction is None
-    assert last.history == []
+    assert (snapshot["moves"], snapshot["over"], _tile_count(agent)) == (0, False, 2)
+    await states.settle()
+    frames = states.of(CoreEvents.GAME_STATE_CHANGED)
+    assert len(frames) == 2 and frames[-1].last_direction is None and frames[-1].history == []  # 重开帧：方向与历史清空
 
 
-# 工具面
+@pytest.fixture
+def provider(event_bus) -> Game2048ToolProvider:
+    return Game2048ToolProvider(agent=_agent(event_bus, seed=21))
 
 
-async def test_tool_press_invalid_key_fails() -> None:
-    bus = EventBus()
-    agent = _make_agent(bus, rng_seed=7)
-    provider = Game2048ToolProvider(agent=agent)
-
-    result = await provider.invoke(ToolInvocation(tool_name="game_2048_press", arguments={"key": "diagonal"}))
-    assert not result.success
-    assert result.error_message is not None and "key" in result.error_message
+def _press(provider: Game2048ToolProvider, key: str):
+    return provider.invoke(ToolInvocation(tool_name="game_2048_press", arguments={"key": key}))
 
 
-async def test_tool_press_move_returns_board_render() -> None:
-    bus = EventBus()
-    agent = _make_agent(bus, rng_seed=21)
-    provider = Game2048ToolProvider(agent=agent)
+async def test_press_tool_rejects_unknown_keys_and_renders_moves_and_restarts(provider) -> None:
+    invalid = await _press(provider, "diagonal")
+    assert not invalid.success and "key" in invalid.error_message
 
-    result = await provider.invoke(ToolInvocation(tool_name="game_2048_press", arguments={"key": "left"}))
-    assert result.success
-    assert result.content is not None and "score=" in result.content
-    structured = result.structured_content or {}
-    assert structured["moves"] == 1
+    moved = await _press(provider, "left")
+    assert moved.success and "score=" in moved.content and moved.structured_content["moves"] == 1
+
+    restarted = await _press(provider, "restart")
+    assert restarted.success and restarted.structured_content["moves"] == 0
 
 
-async def test_tool_press_restart_and_get_state() -> None:
-    bus = EventBus()
-    agent = _make_agent(bus, rng_seed=21)
-    provider = Game2048ToolProvider(agent=agent)
-
-    restart = await provider.invoke(ToolInvocation(tool_name="game_2048_press", arguments={"key": "restart"}))
-    assert restart.success
-    structured = restart.structured_content or {}
-    assert structured["moves"] == 0
-
+async def test_get_state_tool_returns_the_snapshot_shape(provider) -> None:
     snapshot = await provider.invoke(ToolInvocation(tool_name="game_2048_get_state", arguments={}))
-    assert snapshot.success
-    keys = set((snapshot.structured_content or {}).keys())
-    assert {"board", "score", "moves", "max_tile", "over"} <= keys
+
+    assert snapshot.success and {"board", "score", "moves", "max_tile", "over"} <= set(snapshot.structured_content)
 
 
-def test_visible_to_all_streamer_only() -> None:
+def test_both_tools_are_visible_to_the_streamer_only() -> None:
     visible_to = build_game_2048_visible_to()
+
+    assert set(visible_to) == {"game_2048_press", "game_2048_get_state"}
     assert all(agents == ["streamer"] for agents in visible_to.values())
-    assert set(visible_to.keys()) == {"game_2048_press", "game_2048_get_state"}
-
-
-# 规则引擎（board.py 归属本包的补充断言）
 
 
 def test_board_new_game_spawns_two_tiles() -> None:
     board = Board2048(rng=random.Random(42))
     board.new_game()
-    tiles = [v for row in board.grid for v in row if v != 0]
-    assert len(tiles) == 2
-    assert board.moves == 0
+
+    assert sum(1 for row in board.grid for value in row if value) == 2 and board.moves == 0
