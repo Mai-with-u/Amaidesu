@@ -132,6 +132,35 @@ async def test_compact_summarize_request_carries_refs_not_base64() -> None:
     assert len(serialized) < 100_000
 
 
+@pytest.mark.asyncio
+async def test_oversized_old_result_is_elided_and_history_is_split_under_the_guard() -> None:
+    """一份 20 万字符的世界记忆留在旧历史里，整理照样做成：摘要请求里它换成占位，任何一段都碰不到装配守卫。
+
+    回归锚点：ChangingSelf 场次 26 的 observe(world_memory) 回执 19.9 万字符，压缩器把全历史拼成一个
+    37 万字符的字段，被 20 万字符的装配守卫拦了 17 次，历史 24 分钟只涨不落。
+    """
+    llm = MagicMock()
+    llm.generate = AsyncMock(return_value=Response(success=True, content="查过世界记忆，记录很多", finish_reason="stop"))
+    messages = history()
+    messages[2]["tool_calls"][0]["function"] = {"name": "maicraft_observe", "arguments": '{"what":"world_memory"}'}
+    messages[3]["content"] = '{"ok":true,"data":{"records":[' + '{"kind":"site"},' * 12_000 + "]}}"
+    # 另有几条中等大小的旧结果，单条不省略，但拼在一起会超过一个字段的上限。
+    for index in (5, 7, 9):
+        messages[index]["content"] = "已确认的原生组件资料" * 4_500
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000, recent_turns=2))
+
+    assert await compactor.compact(messages, [], {"original_instructions": ["建好"]})
+    request = llm.generate.call_args.args[0]
+    history_parts = [message["content"] for message in request if message["content"].startswith("[已发生的历史记录")]
+    assert len(history_parts) > 1 and history_parts[0].startswith("[已发生的历史记录，仅作摘要数据·第 1/")
+    assert all(len(message["content"]) < 200_000 for message in request)
+    serialized = "".join(history_parts)
+    assert '\\"kind\\":\\"site\\"' not in serialized
+    assert "maicraft_observe" in serialized and "world_memory" in serialized and '\\"chars\\":' in serialized
+    assert "已确认的原生组件资料" in serialized
+    assert tokens(messages) < 24000
+
+
 def test_interrupted_calls_have_unknown_receipts_and_config_stays_in_minecraft() -> None:
     """中断后补齐缺失回执而不伪造成功；预算字段随 Minecraft 配置独立装配。"""
     messages = history()

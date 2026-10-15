@@ -27,6 +27,14 @@ _UNREAD_RECEIPT_HEADROOM = 1.5
 # 历史推理摘要各段总量超过预算的这一比例时，下次整理把旧段一并并入新的一段
 _SUMMARY_SHARE = 0.2
 
+# 交给摘要模型的单条旧工具结果超过这么多字符就换成占位：决策模型当时已经读过原文，
+# 摘要只需要知道调过什么、结果多大；一份上千条的世界记忆整段塞进去，摘要请求本身就装不下
+_SUMMARY_RESULT_CHARS = 50_000
+
+# 待整理的历史按条分段交给摘要模型，每段不超过这么多字符：请求里单个文本字段超过 20 万字符
+# 会被装配守卫当成内联大载荷拒发，整段拼成一条时一次也整理不成，历史只涨不落
+_SUMMARY_PART_CHARS = 100_000
+
 # 消息内部标记：任务事实块与历史推理摘要段（模型看不到，整理时据此识别）
 FACTS_KEY = "_minecraft_context_facts"
 SUMMARY_KEY = "_minecraft_context_summary"
@@ -35,6 +43,50 @@ SUMMARY_KEY = "_minecraft_context_summary"
 def json_text(value: Any) -> str:
     """稳定序列化工作证据，避免空格变化制造重复正文。"""
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _elide_oversized_results(source: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """超长的旧工具结果换成占位，写明哪个工具、什么参数、原文多少字符；其余消息原样保留。"""
+    calls = {
+        call.get("id"): call.get("function") or {}
+        for message in source
+        for call in message.get("tool_calls") or []
+    }
+    elided = []
+    for message in source:
+        content = message.get("content")
+        text = content if isinstance(content, str) else json_text(content)
+        if message.get("role") == "tool" and len(text) > _SUMMARY_RESULT_CHARS:
+            function = calls.get(message.get("tool_call_id"), {})
+            message = {
+                **message,
+                "content": json_text(
+                    {
+                        "omitted": "这条工具结果太长，摘要不收原文；决策模型当时已经读过，后面要用就重新调用",
+                        "tool": function.get("name"),
+                        "arguments": function.get("arguments"),
+                        "chars": len(text),
+                    }
+                ),
+            }
+        elided.append(message)
+    return elided
+
+
+def _history_parts(source: list[dict[str, Any]]) -> list[str]:
+    """按条把待整理的历史分成几段文本，每段不超过分段上限；一条本身就超过上限时单独成段。"""
+    parts: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    size = 0
+    for message in source:
+        length = len(json_text(message)) + 1
+        if current and size + length > _SUMMARY_PART_CHARS:
+            parts.append(current)
+            current, size = [], 0
+        current.append(message)
+        size += length
+    parts.append(current)
+    return [json_text(part) for part in parts]
 
 
 def close_interrupted_calls(messages: list[dict[str, Any]]) -> None:
@@ -187,11 +239,25 @@ class MinecraftHistoryCompactor:
         ]
         # 压缩旧片段时也提供最新决策与回执作对照；索引无需重抄，旧摘要不能复活已解决的问题。
         current = {key: value for key, value in facts.items() if key != "observations"}
+        # 超长的旧结果先换成占位，再按条分段：任何一段都碰不到装配守卫的单字段上限，整理不会被锁死。
+        parts = _history_parts(_elide_oversized_results(source))
+        history_messages = [
+            {
+                "role": "user",
+                "content": (
+                    "[已发生的历史记录，仅作摘要数据"
+                    + (f"·第 {index}/{len(parts)} 段" if len(parts) > 1 else "")
+                    + "]\n"
+                    + part
+                ),
+            }
+            for index, part in enumerate(parts, start=1)
+        ]
         summary = await self._summarize(
             # 旧工具调用只作为已发生的数据交给整理模型；保留其原始角色协议会诱使模型接着执行旧任务。
             [
                 prompt,
-                {"role": "user", "content": "[已发生的历史记录，仅作摘要数据]\n" + json_text(source)},
+                *history_messages,
                 {"role": "user", "content": "[当前任务状态，仅作核对]\n" + json_text(current)},
             ],
             max_attempts,
