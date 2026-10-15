@@ -83,6 +83,7 @@ import { Sunny, Moon, SwitchButton } from '@element-plus/icons-vue';
 import { ref, onUnmounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
+import { getApiErrorMessage } from '@/utils/apiError';
 import Sidebar from './Sidebar.vue';
 import RestartOverlay from './RestartOverlay.vue';
 import { useThemeStore, useWebSocketStore } from '@/stores';
@@ -193,7 +194,7 @@ async function handleRestart() {
   } catch (e) {
     clearAllTimers();
     overlayStatus.value = 'failed';
-    ElMessage.error(`重启失败: ${e instanceof Error ? e.message : '网络错误'}`);
+    ElMessage.error(`重启失败: ${getApiErrorMessage(e, '网络错误')}`);
     restarting.value = false;
   }
 }

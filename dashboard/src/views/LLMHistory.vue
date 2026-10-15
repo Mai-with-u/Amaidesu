@@ -55,6 +55,7 @@ import type {
   LLMHistoryQueryParams,
   LLMHistoryStatistics,
 } from '@/types';
+import { getApiErrorMessage } from '@/utils/apiError';
 import { formatNumber as formatCacheTokens } from '@/utils/format';
 import HistoryFilter from '@/components/llm-history/HistoryFilter.vue';
 import HistoryTable from '@/components/llm-history/HistoryTable.vue';
@@ -134,7 +135,7 @@ async function fetchHistory() {
     });
     availableModels.value = Array.from(models);
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '获取历史记录失败');
+    ElMessage.error(getApiErrorMessage(error, '获取历史记录失败'));
   } finally {
     loading.value = false;
   }
@@ -159,7 +160,7 @@ async function showDetail(row: LLMRequestHistorySummary) {
     currentDetail.value = response.data;
     detailVisible.value = true;
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '获取详情失败');
+    ElMessage.error(getApiErrorMessage(error, '获取详情失败'));
   }
 }
 
@@ -176,7 +177,7 @@ async function openFromQuery() {
       ElMessage.warning(`未找到请求: ${requestId}`);
     }
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '获取详情失败');
+    ElMessage.error(getApiErrorMessage(error, '获取详情失败'));
   }
 }
 

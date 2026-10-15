@@ -439,6 +439,7 @@
 import { onActivated, onDeactivated, onMounted, reactive, ref, computed } from 'vue';
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
+import { getApiErrorMessage } from '@/utils/apiError';
 import { simulatorApi } from '@/api';
 import type { SimulatorReplayProgress, SimPersona, SimGift, ReplayDateEntry } from '@/types';
 
@@ -592,7 +593,9 @@ async function fetchStatus() {
     Object.assign(status, res.data);
     lastError.value = '';
   } catch (err) {
-    lastError.value = err instanceof Error ? `状态获取失败：${err.message}` : '状态获取失败';
+    // getApiErrorMessage 无可提取文案时返回空串，回落为不带前缀的原始兜底文案
+    const detail = getApiErrorMessage(err, '');
+    lastError.value = detail ? `状态获取失败：${detail}` : '状态获取失败';
   }
 }
 
@@ -650,7 +653,8 @@ async function startReplay() {
       ElMessage.warning(res.data.message || '启动被拒绝');
     }
   } catch (err) {
-    lastError.value = err instanceof Error ? `启动失败：${err.message}` : '启动失败';
+    const detail = getApiErrorMessage(err, '');
+    lastError.value = detail ? `启动失败：${detail}` : '启动失败';
     ElMessage.error(lastError.value);
   } finally {
     toggling.value = null;
@@ -678,7 +682,8 @@ async function toggleSimulator() {
       ElMessage.warning(res.data.message || '操作被拒绝');
     }
   } catch (err) {
-    lastError.value = err instanceof Error ? `操作失败：${err.message}` : '操作失败';
+    const detail = getApiErrorMessage(err, '');
+    lastError.value = detail ? `操作失败：${detail}` : '操作失败';
     ElMessage.error(lastError.value);
   } finally {
     toggling.value = null;
@@ -698,7 +703,8 @@ async function stopSimulator() {
       ElMessage.warning(res.data.message || '停止被拒绝');
     }
   } catch (err) {
-    lastError.value = err instanceof Error ? `停止失败：${err.message}` : '停止失败';
+    const detail = getApiErrorMessage(err, '');
+    lastError.value = detail ? `停止失败：${detail}` : '停止失败';
     ElMessage.error(lastError.value);
   } finally {
     toggling.value = null;
@@ -761,7 +767,7 @@ async function savePersona() {
     personaDialogVisible.value = false;
     await fetchPersonas();
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '保存失败');
+    ElMessage.error(getApiErrorMessage(err, '保存失败'));
   } finally {
     saving.value = false;
   }
@@ -779,7 +785,7 @@ async function removePersona(row: SimPersona) {
     }
     await fetchPersonas();
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '删除失败');
+    ElMessage.error(getApiErrorMessage(err, '删除失败'));
   }
 }
 
@@ -839,7 +845,7 @@ async function saveGift() {
     giftDialogVisible.value = false;
     await fetchGifts();
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '保存失败');
+    ElMessage.error(getApiErrorMessage(err, '保存失败'));
   } finally {
     saving.value = false;
   }
@@ -857,7 +863,7 @@ async function removeGift(row: SimGift) {
     }
     await fetchGifts();
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '删除失败');
+    ElMessage.error(getApiErrorMessage(err, '删除失败'));
   }
 }
 
