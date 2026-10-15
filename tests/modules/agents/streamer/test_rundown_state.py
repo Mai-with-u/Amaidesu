@@ -1,8 +1,4 @@
-"""RundownState 状态机单元测试
-
-可注入假时钟驱动全部时间场景，不依赖 ``time.sleep``；emit / on_changed
-用捕获列表记录调用，验证唯一变更边界的发射与通知契约。
-"""
+"""RundownState 状态机：假时钟驱动全部时间场景，emit / on_changed 用捕获列表验证唯一变更边界的发射与通知契约"""
 
 from __future__ import annotations
 
@@ -13,12 +9,8 @@ import pytest
 from src.agents.streamer.rundown.rundown_state import RundownReject, RundownState
 from src.modules.storage.models.rundown import Rundown, RundownSegment
 
-# 测试素材
-
 
 class _FakeClock:
-    """可手动拨动的假时钟（毫秒）。"""
-
     def __init__(self, start: int = 1_000_000) -> None:
         self.now = start
 
@@ -29,656 +21,302 @@ class _FakeClock:
         self.now += ms
 
 
-def _make_rundown() -> Rundown:
-    """三段流程单：opening 带 min_duration 守卫，chat / closing 无。"""
-    return Rundown(
-        rundown_id="test_rd",
-        title="测试流程单",
-        segments=[
-            RundownSegment(
-                id="opening",
-                title="开场",
-                task_description="开场目标",
-                expected_ms=600_000,
-                min_duration_ms=60_000,
-            ),
-            RundownSegment(id="chat", title="闲聊", task_description="闲聊目标", expected_ms=600_000),
-            RundownSegment(id="closing", title="收尾", task_description="收尾目标", expected_ms=300_000),
-        ],
+def _segment(seg_id: str, title: str, expected_ms: int = 600_000, **kwargs: Any) -> RundownSegment:
+    return RundownSegment(id=seg_id, title=title, task_description=f"{title}目标", expected_ms=expected_ms, **kwargs)
+
+
+def _rundown(*segments: RundownSegment, title: str = "测试流程单", rundown_id: str = "test_rd") -> Rundown:
+    return Rundown(rundown_id=rundown_id, title=title, segments=list(segments))
+
+
+def _default_rundown() -> Rundown:
+    """三段：opening 带 min_duration 守卫，chat / closing 无。"""
+    return _rundown(
+        _segment("opening", "开场", min_duration_ms=60_000),
+        _segment("chat", "闲聊"),
+        _segment("closing", "收尾", 300_000),
     )
 
 
-def _make_state(
-    clock: _FakeClock,
-    events: List[Tuple[str, Any]],
-    changed: List[Tuple[str, str]],
-) -> RundownState:
-    """构造带捕获回调的状态机。"""
-    return RundownState(
-        emit=lambda name, payload: events.append((name, payload)),
-        on_changed=lambda segment_id, by: changed.append((segment_id, by)),
-        clock=clock,
+class _Harness:
+    def __init__(self) -> None:
+        self.clock = _FakeClock()
+        self.events: List[Tuple[str, Any]] = []
+        self.changed: List[Tuple[str, str]] = []
+        self.state = RundownState(
+            emit=lambda name, payload: self.events.append((name, payload)),
+            on_changed=lambda segment_id, by: self.changed.append((segment_id, by)),
+            clock=self.clock,
+        )
+
+    @property
+    def now(self) -> int:
+        return self.clock.now
+
+    def load(self, rundown: Rundown | None = None) -> "_Harness":
+        self.state.load(rundown or _default_rundown(), now_ms=self.now)
+        return self
+
+    def drive_to_last(self) -> None:
+        """推进到末段（human 免 min_duration 检查）。"""
+        self.clock.advance(60_001)
+        assert self.state.next(by="human") is None and self.state.next(by="human") is None
+        assert self.state.current_segment_id == "closing"
+
+    def finish(self) -> None:
+        self.drive_to_last()
+        assert self.state.next(by="human") is None and self.state.status == "done"
+
+
+@pytest.fixture
+def h() -> _Harness:
+    return _Harness().load()
+
+
+def test_initial_state_and_load_emit() -> None:
+    idle = RundownState()
+    assert (idle.status, idle.get_snapshot()["rundown_id"], idle.get_snapshot()["status"]) == ("idle", "", "idle")
+
+    harness = _Harness().load()
+    state = harness.state
+    assert (state.status, state.current_segment_id, state.rundown_started_at_ms) == ("running", "opening", harness.now)
+    ((name, payload),) = harness.events
+    assert (name, payload.segment_id, payload.index, payload.total, payload.by) == (
+        "rundown.changed",
+        "opening",
+        0,
+        3,
+        "system",
     )
+    assert harness.changed == [("opening", "system")]
+
+    # 重新 load 清掉此前的暂停累计
+    state.pause(by="human", now_ms=harness.now)
+    harness.load()
+    assert state.paused_at_ms is None and state.get_current_remaining_ms(now_ms=harness.now) == 600_000
 
 
-def _drive_to_last(state: RundownState, clock: _FakeClock) -> None:
-    """推进到末段（绕过 opening 的 min_duration：human 免检）。"""
-    clock.advance(60_001)
-    assert state.next(by="human") is None
-    assert state.next(by="human") is None
-    assert state.current_segment_id == "closing"
+def test_goto_moves_and_notifies(h: _Harness) -> None:
+    h.events.clear()
+    h.changed.clear()
+    h.clock.advance(60_001)
+    assert h.state.goto("chat", by="agent", now_ms=h.now) is None
+    assert (h.state.index, h.state.current_segment_id) == (1, "chat")
+    assert (h.events[-1][1].segment_id, h.events[-1][1].by) == ("chat", "agent")
+    assert h.changed == [("chat", "agent")]
 
 
-# 派生状态与 load
+def test_goto_and_next_reject_agent_inside_min_duration_but_not_human(h: _Harness) -> None:
+    reject = h.state.goto("chat", by="agent", now_ms=h.now)
+    assert isinstance(reject, RundownReject) and reject.reason == "min_duration_not_met"
+    assert reject.remaining_ms == 60_000 and h.state.index == 0
+    assert h.state.next(by="agent", now_ms=h.now).reason == "min_duration_not_met"
+
+    assert h.state.goto("chat", by="human", now_ms=h.now) is None and h.state.index == 1
+    h.load()
+    assert h.state.next(by="human", now_ms=h.now) is None and h.state.current_segment_id == "chat"
+    h.load()
+    h.clock.advance(60_000)
+    assert h.state.next(by="agent", now_ms=h.now) is None and h.state.current_segment_id == "chat"
 
 
-def test_initial_status_is_idle() -> None:
-    state = RundownState()
-    assert state.status == "idle"
-    snapshot = state.get_snapshot()
-    assert snapshot["rundown_id"] == ""
-    assert snapshot["status"] == "idle"
+def test_goto_unknown_id_and_no_rundown_are_rejected_without_mutation(h: _Harness) -> None:
+    h.events.clear()
+    reject = h.state.goto("nope", by="agent", now_ms=h.now)
+    assert reject.reason == "unknown_segment_id" and reject.available_ids == ["opening", "chat", "closing"]
+    assert h.state.index == 0 and h.events == []
+    assert RundownState().goto("opening", by="human").reason == "no_rundown_loaded"
 
 
-def test_load_resets_and_emits() -> None:
-    clock = _FakeClock()
-    events: List[Tuple[str, Any]] = []
-    changed: List[Tuple[str, str]] = []
-    state = _make_state(clock, events, changed)
-
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    assert state.status == "running"
-    assert state.current_segment_id == "opening"
-    assert state.rundown_started_at_ms == clock.now
-    assert len(events) == 1
-    name, payload = events[0]
-    assert name == "rundown.changed"
-    assert payload.segment_id == "opening"
-    assert payload.index == 0
-    assert payload.total == 3
-    assert payload.by == "system"
-    assert changed == [("opening", "system")]
+def test_next_finishes_then_rejects_further_advance(h: _Harness) -> None:
+    h.drive_to_last()
+    h.events.clear()
+    assert h.state.next(by="agent", now_ms=h.now) is None
+    assert (h.state.status, h.state.index, h.state.current_segment_id) == ("done", 3, "")
+    finish = h.events[-1][1]
+    assert (finish.segment_id, finish.index, finish.total) == ("", 3, 3) and h.changed[-1] == ("", "agent")
+    assert h.state.next(by="human", now_ms=h.now).reason == "already_done"
 
 
-def test_load_clears_previous_pause_accumulation() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    state.pause(by="human", now_ms=clock.now)
-
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    assert state.paused_at_ms is None
-    assert state.get_current_remaining_ms(now_ms=clock.now) == 600_000
-
-
-# goto
-
-
-def test_goto_happy_path_emits_and_notifies() -> None:
-    clock = _FakeClock()
-    events: List[Tuple[str, Any]] = []
-    changed: List[Tuple[str, str]] = []
-    state = _make_state(clock, events, changed)
-    state.load(_make_rundown(), now_ms=clock.now)
-    events.clear()
-    changed.clear()
-    clock.advance(60_001)
-
-    assert state.goto("chat", by="agent", now_ms=clock.now) is None
-
-    assert state.index == 1
-    assert state.current_segment_id == "chat"
-    assert events[-1][1].segment_id == "chat"
-    assert events[-1][1].by == "agent"
-    assert changed == [("chat", "agent")]
-
-
-def test_goto_unknown_id_rejected_without_mutation() -> None:
-    clock = _FakeClock()
-    events: List[Tuple[str, Any]] = []
-    state = _make_state(clock, events, [])
-    state.load(_make_rundown(), now_ms=clock.now)
-    events.clear()
-
-    reject = state.goto("nope", by="agent", now_ms=clock.now)
-
-    assert isinstance(reject, RundownReject)
-    assert reject.reason == "unknown_segment_id"
-    assert reject.available_ids == ["opening", "chat", "closing"]
-    assert state.index == 0
-    assert events == []
-
-
-def test_goto_within_min_duration_rejected_for_agent_only() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    agent_reject = state.goto("chat", by="agent", now_ms=clock.now)
-    assert isinstance(agent_reject, RundownReject)
-    assert agent_reject.reason == "min_duration_not_met"
-    assert agent_reject.remaining_ms == 60_000
-    assert state.index == 0
-
-    human_reject = state.goto("chat", by="human", now_ms=clock.now)
-    assert human_reject is None
-    assert state.index == 1
-
-
-def test_goto_with_invalid_by_raises() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-
+@pytest.mark.parametrize("method", ["goto", "pause", "resume", "renew", "next"])
+def test_invalid_actor_raises(h: _Harness, method: str) -> None:
+    args = ("chat",) if method == "goto" else ()
     with pytest.raises(ValueError):
-        state.goto("chat", by="robot", now_ms=clock.now)
+        getattr(h.state, method)(*args, by="robot", now_ms=h.now)
 
 
-def test_goto_without_rundown_rejected() -> None:
-    state = RundownState()
-    reject = state.goto("opening", by="human")
-    assert reject is not None
-    assert reject.reason == "no_rundown_loaded"
+def test_pause_freezes_elapsed_and_resume_accumulates(h: _Harness) -> None:
+    h.clock.advance(100_000)
+    assert h.state.pause(by="human", now_ms=h.now) is None and h.state.status == "paused"
+    h.clock.advance(200_000)
+    assert h.state.get_current_remaining_ms(now_ms=h.now) == 500_000
+    assert h.state.resume(by="human", now_ms=h.now) is None and h.state.status == "running"
+    h.clock.advance(50_000)
+    assert h.state.get_current_remaining_ms(now_ms=h.now) == 450_000
 
 
-# next 与 finish
+def test_pause_resume_rejections(h: _Harness) -> None:
+    assert RundownState().pause(by="human").reason == "not_running"
+    assert h.state.resume(by="human", now_ms=h.now).reason == "not_paused"
+    assert h.state.pause(by="human", now_ms=h.now) is None
+    assert h.state.pause(by="human", now_ms=h.now).reason == "not_running"
 
 
-def test_next_advances_and_finish_marks_done() -> None:
-    clock = _FakeClock()
-    events: List[Tuple[str, Any]] = []
-    changed: List[Tuple[str, str]] = []
-    state = _make_state(clock, events, changed)
-    state.load(_make_rundown(), now_ms=clock.now)
-    _drive_to_last(state, clock)
-    events.clear()
-
-    assert state.next(by="agent", now_ms=clock.now) is None
-
-    assert state.status == "done"
-    assert state.index == 3
-    assert state.current_segment_id == ""
-    finish_payload = events[-1][1]
-    assert finish_payload.segment_id == ""
-    assert finish_payload.index == 3
-    assert finish_payload.total == 3
-    assert changed[-1] == ("", "agent")
+def _replace(h: _Harness, *segments: RundownSegment, rundown_id: str = "test_rd"):
+    return h.state.replace_definition(_rundown(*segments, title="v2", rundown_id=rundown_id), now_ms=h.now)
 
 
-def test_next_after_done_rejected() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    _drive_to_last(state, clock)
-    state.next(by="human", now_ms=clock.now)
+def test_replace_definition_keeps_position_and_elapsed(h: _Harness) -> None:
+    h.clock.advance(120_000)
+    assert h.state.next(by="human") is None
+    h.clock.advance(30_000)  # chat 段已播 30s
 
-    reject = state.next(by="human", now_ms=clock.now)
-
-    assert isinstance(reject, RundownReject)
-    assert reject.reason == "already_done"
-
-
-def test_next_within_min_duration_rejected_for_agent_only() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    agent_reject = state.next(by="agent", now_ms=clock.now)
-    assert isinstance(agent_reject, RundownReject)
-    assert agent_reject.reason == "min_duration_not_met"
-
-    assert state.next(by="human", now_ms=clock.now) is None
-    assert state.current_segment_id == "chat"
-
-
-def test_next_after_min_duration_met_advances() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    clock.advance(60_000)
-
-    assert state.next(by="agent", now_ms=clock.now) is None
-    assert state.current_segment_id == "chat"
-
-
-# pause / resume
-
-
-def test_pause_freezes_elapsed_then_resume_accumulates() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    clock.advance(100_000)
-    assert state.pause(by="human", now_ms=clock.now) is None
-    assert state.status == "paused"
-
-    clock.advance(200_000)
-    frozen_remaining = state.get_current_remaining_ms(now_ms=clock.now)
-    assert frozen_remaining == 500_000
-
-    assert state.resume(by="human", now_ms=clock.now) is None
-    assert state.status == "running"
-    clock.advance(50_000)
-    assert state.get_current_remaining_ms(now_ms=clock.now) == 450_000
-
-
-def test_pause_twice_rejected_and_resume_without_pause_rejected() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    assert state.pause(by="human", now_ms=clock.now) is None
-    second = state.pause(by="human", now_ms=clock.now)
-    assert isinstance(second, RundownReject)
-    assert second.reason == "not_running"
-
-    assert state.resume(by="human", now_ms=clock.now) is None
-    again = state.resume(by="human", now_ms=clock.now)
-    assert isinstance(again, RundownReject)
-    assert again.reason == "not_paused"
-
-
-def test_pause_before_load_rejected() -> None:
-    state = RundownState()
-    reject = state.pause(by="human")
-    assert reject is not None
-    assert reject.reason == "not_running"
-
-
-def test_pause_resume_invalid_by_raises() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    with pytest.raises(ValueError):
-        state.pause(by="robot", now_ms=clock.now)
-    with pytest.raises(ValueError):
-        state.resume(by="robot", now_ms=clock.now)
-
-
-# replace_definition（直播中编辑写穿）
-
-
-def test_replace_definition_keeps_position_and_elapsed() -> None:
-    clock = _FakeClock()
-    events: List[Tuple[str, Any]] = []
-    changed: List[Tuple[str, str]] = []
-    state = _make_state(clock, events, changed)
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    clock.advance(120_000)
-    assert state.next(by="human") is None
-    assert state.current_segment_id == "chat"
-    clock.advance(30_000)
-
-    # 替换定义：chat 保留但缩时，并在其后新增环节
-    updated = Rundown(
-        rundown_id="test_rd",
-        title="测试流程单 v2",
-        segments=[
-            RundownSegment(id="opening", title="开场", task_description="开场目标", expected_ms=600_000),
-            RundownSegment(id="chat", title="闲聊", task_description="闲聊目标", expected_ms=900_000),
-            RundownSegment(id="qa", title="问答", task_description="问答目标", expected_ms=300_000),
-            RundownSegment(id="closing", title="收尾", task_description="收尾目标", expected_ms=300_000),
-        ],
+    updated = (
+        _segment("opening", "开场"),
+        _segment("chat", "闲聊", 900_000),
+        _segment("qa", "问答", 300_000),
+        _segment("closing", "收尾", 300_000),
     )
-    assert state.replace_definition(updated, now_ms=clock.now) is None
+    assert _replace(h, *updated) is None
 
-    assert state.current_segment_id == "chat"
-    assert state.status == "running"
-    # 计时锚点保留：chat 段已播 30_000，剩余按新 expected_ms 计算
-    assert state.get_current_remaining_ms(now_ms=clock.now) == 900_000 - 30_000
-
-    name, payload = events[-1]
-    assert name == "rundown.changed"
-    assert payload.segment_id == "chat"
-    assert payload.total == 4
-    assert payload.by == "human"
-    assert changed[-1] == ("chat", "human")
-    assert state.get_transitions()[-1]["action"] == "reload"
+    assert (h.state.current_segment_id, h.state.status) == ("chat", "running")
+    assert h.state.get_current_remaining_ms(now_ms=h.now) == 900_000 - 30_000  # 计时锚点保留，剩余按新时长算
+    name, payload = h.events[-1]
+    assert (name, payload.segment_id, payload.total, payload.by) == ("rundown.changed", "chat", 4, "human")
+    assert h.changed[-1] == ("chat", "human") and h.state.get_transitions()[-1]["action"] == "reload"
 
 
-def test_replace_definition_resets_when_current_segment_removed() -> None:
-    clock = _FakeClock()
-    events: List[Tuple[str, Any]] = []
-    state = RundownState(
-        emit=lambda n, p: events.append((n, p)),
-        clock=clock,
-    )
-    state.load(_make_rundown(), now_ms=clock.now)
-    clock.advance(60_001)
-    assert state.next(by="human") is None
-    assert state.next(by="human") is None
-    assert state.current_segment_id == "closing"
+def test_replace_definition_edge_cases(h: _Harness) -> None:
+    # 不同 id 拒绝
+    reject = _replace(h, _segment("only", "唯一环节", 60_000), rundown_id="other_rd")
+    assert reject.reason == "rundown_id_mismatch" and h.state.rundown.rundown_id == "test_rd"
 
-    # 新定义不再包含 closing → 游标重置为未开始，Agent 从情境重新定位
-    updated = Rundown(
-        rundown_id="test_rd",
-        title="测试流程单",
-        segments=[
-            RundownSegment(id="opening", title="开场", task_description="开场目标", expected_ms=600_000),
-            RundownSegment(id="chat", title="闲聊", task_description="闲聊目标", expected_ms=600_000),
-        ],
-    )
-    assert state.replace_definition(updated, now_ms=clock.now) is None
+    # 暂停冻结保持
+    h.clock.advance(100_000)
+    h.state.pause(by="human", now_ms=h.now)
+    assert _replace(h, _segment("opening", "开场", 800_000), _segment("chat", "闲聊")) is None
+    h.clock.advance(200_000)
+    assert h.state.status == "paused" and h.state.get_current_remaining_ms(now_ms=h.now) == 800_000 - 100_000
 
-    assert state.index == -1
-    assert state.current_segment is None
-    assert state.status == "running"
-    _, payload = events[-1]
-    assert payload.segment_id == ""
+    # 当前环节被删：游标重置为未开始，由 Agent 从情境重新定位
+    h.load()
+    h.drive_to_last()
+    h.events.clear()
+    assert _replace(h, _segment("opening", "开场"), _segment("chat", "闲聊")) is None
+    assert (h.state.index, h.state.current_segment, h.state.status) == (-1, None, "running")
+    assert h.events[-1][1].segment_id == ""
+
+    # 已完成状态保持
+    h.load()
+    h.finish()
+    assert _replace(h, _segment("opening", "开场"), _segment("chat", "闲聊")) is None
+    assert h.state.status == "done"
 
 
-def test_replace_definition_rejects_id_mismatch() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    other = Rundown(
-        rundown_id="other_rd",
-        title="另一份流程单",
-        segments=[RundownSegment(id="only", title="唯一环节", task_description="目标", expected_ms=60_000)],
-    )
-    reject = state.replace_definition(other, now_ms=clock.now)
-    assert isinstance(reject, RundownReject)
-    assert reject.reason == "rundown_id_mismatch"
-    assert state.rundown is not None and state.rundown.rundown_id == "test_rd"
-
-
-def test_replace_definition_keeps_done_state() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    _drive_to_last(state, clock)
-    clock.advance(60_001)
-    assert state.next(by="human") is None
-    assert state.status == "done"
-
-    updated = Rundown(
-        rundown_id="test_rd",
-        title="测试流程单",
-        segments=[
-            RundownSegment(id="opening", title="开场", task_description="开场目标", expected_ms=600_000),
-            RundownSegment(id="chat", title="闲聊", task_description="闲聊目标", expected_ms=600_000),
-        ],
-    )
-    assert state.replace_definition(updated, now_ms=clock.now) is None
-
-    assert state.status == "done"
-
-
-def test_replace_definition_keeps_pause_frozen() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    clock.advance(100_000)
-    assert state.pause(by="human", now_ms=clock.now) is None
-
-    updated = Rundown(
-        rundown_id="test_rd",
-        title="测试流程单",
-        segments=[
-            RundownSegment(id="opening", title="开场", task_description="开场目标", expected_ms=800_000),
-            RundownSegment(id="chat", title="闲聊", task_description="闲聊目标", expected_ms=600_000),
-        ],
-    )
-    assert state.replace_definition(updated, now_ms=clock.now) is None
-
-    assert state.status == "paused"
-    clock.advance(200_000)
-    # 暂停冻结保持：elapsed 仍为 100_000，剩余按新 expected_ms 计算
-    assert state.get_current_remaining_ms(now_ms=clock.now) == 800_000 - 100_000
-
-
-# 只读派生
-
-
-def test_progress_percent_clamped() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    early = state.get_progress_percent(now_ms=clock.now)
-    assert early is not None and early >= 0.0
-
-    clock.advance(10_000_000_000)
-    assert state.get_progress_percent(now_ms=clock.now) == 100.0
-
-
-def test_progress_percent_none_before_load() -> None:
+def test_derived_views(h: _Harness) -> None:
     assert RundownState().get_progress_percent() is None
-
-
-def test_remaining_zero_when_no_current_segment() -> None:
     assert RundownState().get_current_remaining_ms() == 0
+    assert (RundownState().build_context_text(), RundownState().get_elapsed_live_ms()) == (None, None)
+
+    early = h.state.get_progress_percent(now_ms=h.now)
+    assert early is not None and early >= 0.0
+    h.clock.advance(60_000)
+    snapshot = h.state.get_snapshot(now_ms=h.now)
+    assert (snapshot["status"], snapshot["rundown_id"], snapshot["title"]) == ("running", "test_rd", "测试流程单")
+    assert (snapshot["index"], snapshot["total"], snapshot["paused"]) == (0, 3, False)
+    assert (snapshot["current"]["id"], snapshot["current"]["elapsed_ms"], snapshot["current"]["remaining_ms"]) == (
+        "opening",
+        60_000,
+        540_000,
+    )
+    assert h.state.get_elapsed_live_ms() == 60_000
+
+    h.clock.advance(10_000_000_000)
+    assert h.state.get_progress_percent(now_ms=h.now) == 100.0
 
 
-def test_snapshot_shape() -> None:
+def test_transitions_are_capped_and_emit_failures_are_soft() -> None:
     clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    clock.advance(60_000)
-
-    snapshot = state.get_snapshot(now_ms=clock.now)
-
-    assert snapshot["status"] == "running"
-    assert snapshot["rundown_id"] == "test_rd"
-    assert snapshot["title"] == "测试流程单"
-    assert snapshot["index"] == 0
-    assert snapshot["total"] == 3
-    assert snapshot["paused"] is False
-    current = snapshot["current"]
-    assert current is not None
-    assert current["id"] == "opening"
-    assert current["elapsed_ms"] == 60_000
-    assert current["remaining_ms"] == 540_000
-
-
-# 变更边界契约：transitions / fail-soft
-
-
-def test_transitions_buffer_capped_at_maxlen() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-
+    state = RundownState(clock=clock)  # 无 emit / on_changed 也能工作
+    state.load(_default_rundown(), now_ms=clock.now)
     for _ in range(60):
         assert state.goto("chat", by="human", now_ms=clock.now) is None
-
     transitions = state.get_transitions()
-    assert len(transitions) == 50
-    assert transitions[-1]["action"] == "goto"
+    assert (len(transitions), transitions[-1]["action"]) == (50, "goto")
 
-
-def test_fail_soft_without_emit_and_on_changed() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-
-    state.load(_make_rundown(), now_ms=clock.now)
-    assert state.goto("chat", by="human", now_ms=clock.now) is None
-    assert state.index == 1
-
-
-def test_emit_exception_does_not_block_state_change() -> None:
-    clock = _FakeClock()
-
-    def _boom(name: str, payload: Any) -> None:
+    def boom(name: str, payload: Any) -> None:
         raise RuntimeError("bus down")
 
-    state = RundownState(emit=_boom, clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-
-    assert state.goto("chat", by="human", now_ms=clock.now) is None
-    assert state.index == 1
+    noisy = RundownState(emit=boom, clock=clock)
+    noisy.load(_default_rundown(), now_ms=clock.now)
+    assert noisy.goto("chat", by="human", now_ms=clock.now) is None and noisy.index == 1
 
 
-# 情境注入与整场时长
-
-
-def test_build_context_text_and_elapsed_none_before_load() -> None:
-    state = RundownState()
-    assert state.build_context_text() is None
-    assert state.get_elapsed_live_ms() is None
-
-
-def test_build_context_text_renders_segment_fields() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    rundown = Rundown(
-        rundown_id="ctx_rd",
-        title="上下文流程单",
-        segments=[
-            RundownSegment(
-                id="opening",
-                title="开场",
-                task_description="开场目标",
-                key_points=["问好", "预告"],
-                notes="备注内容",
-                expected_ms=600_000,
-            ),
-            RundownSegment(id="chat", title="闲聊", task_description="闲聊目标", expected_ms=600_000),
-        ],
+def test_build_context_text_renders_segment_fields_and_hides_when_done() -> None:
+    harness = _Harness().load(
+        _rundown(
+            _segment("opening", "开场", key_points=["问好", "预告"], notes="备注内容"),
+            _segment("chat", "闲聊"),
+            rundown_id="ctx_rd",
+        )
     )
-    state.load(rundown, now_ms=clock.now)
-    clock.advance(60_000)
+    harness.clock.advance(60_000)
+    text = harness.state.build_context_text(now_ms=harness.now)
+    for fragment in (
+        "[流程单] 环节 1/2：开场",
+        "剩 约 9 分钟",
+        "目标：开场目标",
+        "要点：问好、预告",
+        "备注：备注内容",
+        "后续环节：闲聊(chat)",
+        "rundown_control",
+    ):
+        assert fragment in text
 
-    text = state.build_context_text(now_ms=clock.now)
-
-    assert text is not None
-    assert "[流程单] 环节 1/2：开场" in text
-    assert "剩 约 9 分钟" in text
-    assert "目标：开场目标" in text
-    assert "要点：问好、预告" in text
-    assert "备注：备注内容" in text
-    assert "后续环节：闲聊(chat)" in text
-    assert "rundown_control" in text
-
-
-def test_build_context_text_none_when_done() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    _drive_to_last(state, clock)
-    state.next(by="human", now_ms=clock.now)
-
-    assert state.build_context_text(now_ms=clock.now) is None
+    done = _Harness().load()
+    done.finish()
+    assert done.state.build_context_text(now_ms=done.now) is None
 
 
-def test_get_elapsed_live_ms_advances_with_clock() -> None:
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    clock.advance(120_000)
+def test_renew_resets_timer_keeps_segment_and_emits(h: _Harness) -> None:
+    h.clock.advance(700_000)
+    assert h.state.get_current_remaining_ms(now_ms=h.now) == 0
+    assert h.state.renew(by="agent", now_ms=h.now) is None
 
-    assert state.get_elapsed_live_ms() == 120_000
+    assert (h.state.current_segment_id, h.state.index) == ("opening", 0)
+    assert h.state.get_current_remaining_ms(now_ms=h.now) == 600_000
+    assert h.state.is_current_segment_overdue(now_ms=h.now) is False
+    assert h.events[-1][0] == "rundown.changed" and h.state.get_transitions()[-1]["action"] == "renew"
 
-
-# renew（续期）与超时注入
-
-
-def test_renew_resets_timer_and_keeps_segment() -> None:
-    """续期后计时锚点重置：elapsed 归零、剩余回到完整预期周期、环节不变。"""
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    clock.advance(700_000)
-    assert state.get_current_remaining_ms(now_ms=clock.now) == 0
-
-    assert state.renew(by="agent", now_ms=clock.now) is None
-
-    assert state.current_segment_id == "opening"
-    assert state.index == 0
-    assert state.get_current_remaining_ms(now_ms=clock.now) == 600_000
-    assert state.is_current_segment_overdue(now_ms=clock.now) is False
+    # 续期清空累计暂停，旧暂停折算不带入新周期
+    h.clock.advance(60_000)
+    h.state.pause(by="human", now_ms=h.now)
+    h.clock.advance(30_000)
+    h.state.resume(by="human", now_ms=h.now)
+    h.state.renew(by="human", now_ms=h.now)
+    h.clock.advance(600_000)
+    assert (
+        h.state.get_current_remaining_ms(now_ms=h.now) == 0
+        and h.state.is_current_segment_overdue(now_ms=h.now) is False
+    )
 
 
-def test_renew_clears_accumulated_pause() -> None:
-    """续期清空累计暂停：此前暂停折算不带入新周期。"""
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    clock.advance(60_000)
-    assert state.pause(by="human", now_ms=clock.now) is None
-    clock.advance(30_000)
-    assert state.resume(by="human", now_ms=clock.now) is None
-    assert state.renew(by="human", now_ms=clock.now) is None
-    clock.advance(600_000)
-
-    assert state.get_current_remaining_ms(now_ms=clock.now) == 0
-    assert state.is_current_segment_overdue(now_ms=clock.now) is False
+def test_renew_rejections(h: _Harness) -> None:
+    assert RundownState().renew(by="agent").reason == "no_rundown_loaded"
+    h.state.pause(by="human", now_ms=h.now)
+    assert h.state.renew(by="agent", now_ms=h.now).reason == "not_running" and h.state.paused_at_ms is not None
+    h.state.resume(by="human", now_ms=h.now)
+    h.finish()
+    assert h.state.renew(by="agent", now_ms=h.now).reason == "already_done"
 
 
-def test_renew_rejected_when_not_running() -> None:
-    """暂停 / 完成 / 未加载时续期被结构化拒绝，状态不变。"""
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    assert state.renew(by="agent").reason == "no_rundown_loaded"
+def test_overdue_context_text_names_the_way_out_then_recovers_after_renew(h: _Harness) -> None:
+    """超时后明确标注已超时与出路，不渲染"剩 0 秒"僵尸态；续期后恢复正常展示。"""
+    h.clock.advance(760_000)
+    text = h.state.build_context_text(now_ms=h.now)
+    assert "已超时 约 3 分钟" in text and "剩 0 秒" not in text and "renew" in text and "goto/next" in text
 
-    state.load(_make_rundown(), now_ms=clock.now)
-    state.pause(by="human", now_ms=clock.now)
-    assert state.renew(by="agent", now_ms=clock.now).reason == "not_running"
-    assert state.paused_at_ms is not None
-
-    state.resume(by="human", now_ms=clock.now)
-    _drive_to_last(state, clock)
-    state.next(by="human", now_ms=clock.now)
-    assert state.renew(by="agent", now_ms=clock.now).reason == "already_done"
-
-
-def test_renew_invalid_by_raises() -> None:
-    """非法 by 抛 ValueError（程序员错误通道）。"""
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    with pytest.raises(ValueError):
-        state.renew(by="robot", now_ms=clock.now)
-
-
-def test_renew_emits_change_event() -> None:
-    """续期走统一变更收口：记录推进历史并发射 rundown.changed。"""
-    clock = _FakeClock()
-    events: List[Tuple[str, Any]] = []
-    state = RundownState(clock=clock, emit=lambda name, payload: events.append((name, payload)))
-    state.load(_make_rundown(), now_ms=clock.now)
-    clock.advance(650_000)
-
-    assert state.renew(by="agent", now_ms=clock.now) is None
-
-    assert events[-1][0] == "rundown.changed"
-    assert events[-1][1].segment_id == "opening"
-    assert state.get_transitions()[-1]["action"] == "renew"
-
-
-def test_build_context_text_marks_overdue_instead_of_zero_remaining() -> None:
-    """超时后注入明确标注已超时与出路，不再渲染"剩 0 秒"僵尸态。"""
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    clock.advance(760_000)
-
-    text = state.build_context_text(now_ms=clock.now)
-
-    assert text is not None
-    assert "已超时 约 3 分钟" in text
-    assert "剩 0 秒" not in text
-    assert "renew" in text
-    assert "goto/next" in text
-
-
-def test_build_context_text_normal_remaining_after_renew() -> None:
-    """续期后注入恢复正常剩余时长展示。"""
-    clock = _FakeClock()
-    state = RundownState(clock=clock)
-    state.load(_make_rundown(), now_ms=clock.now)
-    clock.advance(700_000)
-    assert state.renew(by="agent", now_ms=clock.now) is None
-    clock.advance(60_000)
-
-    text = state.build_context_text(now_ms=clock.now)
-
-    assert text is not None
-    assert "剩 约 9 分钟" in text
-    assert "已超时" not in text
+    h.state.renew(by="agent", now_ms=h.now)
+    h.clock.advance(60_000)
+    recovered = h.state.build_context_text(now_ms=h.now)
+    assert "剩 约 9 分钟" in recovered and "已超时" not in recovered
