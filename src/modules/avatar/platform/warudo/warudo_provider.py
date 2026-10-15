@@ -27,7 +27,7 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec, tool_result_fail, tool_result_ok
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.types.emotion_vocab import Emotion
 
@@ -309,10 +309,10 @@ class WarudoProvider(BaseToolProvider):
                 return await self.trigger_preset_action(str(args.get("action", "")))
             if n == "warudo_set_sight":
                 return await self.set_sight(str(args.get("target", "")))
-            return _fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
+            return tool_result_fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
         except Exception as exc:  # noqa: BLE001 — Provider 边界兜底
             self.logger.exception(f"Warudo 工具 {invocation.tool_name} 调用异常: {exc}")
-            return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
+            return tool_result_fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
 
     # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
 
@@ -324,7 +324,7 @@ class WarudoProvider(BaseToolProvider):
         """
         states = _WARUDO_EMOTION_STATES.get(emotion)
         if states is None:
-            return _fail("warudo_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
+            return tool_result_fail("warudo_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
         factor = min(1.0, max(0.0, float(intensity)))
         applied: Dict[str, Any] = {}
         state_manager = self.state_manager
@@ -339,11 +339,13 @@ class WarudoProvider(BaseToolProvider):
                 continue
             component.set_first_layer(key, weight * factor)
             applied[channel] = {"key": key, "weight": round(weight * factor, 4)}
-        return _ok("warudo_set_expression", True, {"emotion": emotion, "intensity": factor, "applied": applied})
+        return tool_result_ok(
+            "warudo_set_expression", True, {"emotion": emotion, "intensity": factor, "applied": applied}
+        )
 
     async def list_preset_actions(self) -> ToolExecutionResult:
         """列出可演预设目录（配置 ``action_catalog`` + 内置条目）。"""
-        return _ok("warudo_list_preset_actions", True, {"actions": self._preset_action_catalog()})
+        return tool_result_ok("warudo_list_preset_actions", True, {"actions": self._preset_action_catalog()})
 
     async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
         """触发一个预设动作；未知名把目录随失败结果返回（失败即发现）。
@@ -354,14 +356,14 @@ class WarudoProvider(BaseToolProvider):
         action = action.strip()
         if action == _THROW_FISH_ACTION:
             fired = await self.throw_fish_task.throw_fish()
-            return _ok(
+            return tool_result_ok(
                 "warudo_trigger_preset_action",
                 True,
                 {"action": action, "fired": bool(fired), "cooldown_seconds": self.throw_fish_cooldown},
             )
         if action in self.action_catalog:
             await self._send_action_internal(action, 1)
-            return _ok("warudo_trigger_preset_action", True, {"action": action})
+            return tool_result_ok("warudo_trigger_preset_action", True, {"action": action})
         catalog = [entry["name"] for entry in self._preset_action_catalog()]
         return ToolExecutionResult(
             tool_name="warudo_trigger_preset_action",
@@ -374,9 +376,9 @@ class WarudoProvider(BaseToolProvider):
     async def set_sight(self, target: str) -> ToolExecutionResult:
         """设置视线目标（camera/danmu/phone）；程度由适配器定（满幅）。"""
         if target not in ("camera", "danmu", "phone"):
-            return _fail("warudo_set_sight", f"未知视线目标 '{target}'（应为 camera/danmu/phone）")
+            return tool_result_fail("warudo_set_sight", f"未知视线目标 '{target}'（应为 camera/danmu/phone）")
         self.state_manager.sight_state.set_state(target, 1.0)
-        return _ok("warudo_set_sight", True, {"target": target})
+        return tool_result_ok("warudo_set_sight", True, {"target": target})
 
     # ===== 生命周期 =====
 
@@ -654,23 +656,6 @@ class WarudoProvider(BaseToolProvider):
 # =============================================================================
 # 工厂 / 注册辅助
 # =============================================================================
-
-
-def _ok(tool_name: str, success: bool, structured: Any = None) -> ToolExecutionResult:
-    return ToolExecutionResult(
-        tool_name=tool_name,
-        success=bool(success),
-        structured_content=structured,
-        content="" if structured is None else str(structured),
-    )
-
-
-def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
-    return ToolExecutionResult(
-        tool_name=tool_name,
-        success=False,
-        error_message=error_message,
-    )
 
 
 def create_warudo_provider(

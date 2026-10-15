@@ -115,6 +115,29 @@ class ToolExecutionResult:
     failure_kind: Optional[Literal["business", "execution"]] = None
 
 
+def tool_result_ok(tool_name: str, success: bool, structured: Any = None) -> ToolExecutionResult:
+    """成功/业务结果工厂：``structured`` 非空时同步文本化进 ``content``。
+
+    各平台 Provider 的工具实现共用同一种结果形状（原来在 vts / warudo 等
+    provider 内各有一份同构私有工厂，收敛到结果类型旁统一定义）。
+    """
+    return ToolExecutionResult(
+        tool_name=tool_name,
+        success=bool(success),
+        structured_content=structured,
+        content="" if structured is None else str(structured),
+    )
+
+
+def tool_result_fail(tool_name: str, error_message: str) -> ToolExecutionResult:
+    """失败结果工厂（``success=False``，仅携带错误信息）。"""
+    return ToolExecutionResult(
+        tool_name=tool_name,
+        success=False,
+        error_message=error_message,
+    )
+
+
 @dataclass(slots=True)
 class ToolInvocation:
     """工具调用请求（Planner → Registry → 执行函数）
@@ -151,5 +174,7 @@ __all__ = [
     "ToolSpec",
     "ResultBlock",
     "ToolExecutionResult",
+    "tool_result_ok",
+    "tool_result_fail",
     "ToolInvocation",
 ]

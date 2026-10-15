@@ -38,6 +38,8 @@ from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
+    tool_result_fail,
+    tool_result_ok,
 )
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.types.emotion_vocab import Emotion
@@ -459,14 +461,14 @@ class VTSProvider(BaseToolProvider):
                 return await self.trigger_preset_action(str(args.get("action", "")))
             if invocation.tool_name == "vts_set_idle_enabled":
                 self._set_idle_enabled(bool(args["enabled"]))
-                return _ok("vts_set_idle_enabled", True)
-            return _fail(
+                return tool_result_ok("vts_set_idle_enabled", True)
+            return tool_result_fail(
                 invocation.tool_name,
                 f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'",
             )
         except Exception as exc:  # noqa: BLE001 — Provider 边界兜底
             self.logger.exception(f"VTS 工具 {invocation.tool_name} 调用异常: {exc}")
-            return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
+            return tool_result_fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
 
     async def health_check(self) -> bool:
         """探活钩子（BaseToolProvider 契约：维护外部连接者必须真实检查）。
@@ -609,11 +611,11 @@ class VTSProvider(BaseToolProvider):
         """
         params = self._emotion_map.get(emotion)
         if params is None:
-            return _fail("vts_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
+            return tool_result_fail("vts_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
         factor = min(1.0, max(0.0, float(intensity)))
         scaled = {name: value * factor for name, value in params.items()}
         success = await self.expression.set_multi_parameter(scaled, 1.0)
-        return _ok(
+        return tool_result_ok(
             "vts_set_expression",
             bool(success),
             {"emotion": emotion, "intensity": factor, "parameters": scaled},
@@ -630,7 +632,7 @@ class VTSProvider(BaseToolProvider):
             for hotkey in self.hotkey_matcher.hotkey_list
             if hotkey.get("name")
         ]
-        return _ok("vts_list_preset_actions", True, {"actions": actions})
+        return tool_result_ok("vts_list_preset_actions", True, {"actions": actions})
 
     async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
         """触发一个预设动作（按名解析热键）；未知名把目录随失败结果返回。"""
@@ -646,7 +648,7 @@ class VTSProvider(BaseToolProvider):
                 content=str(catalog),
             )
         success = await self.hotkey_matcher.trigger_hotkey(resolved)
-        return _ok("vts_trigger_preset_action", bool(success), {"action": action})
+        return tool_result_ok("vts_trigger_preset_action", bool(success), {"action": action})
 
     async def trigger_hotkey(self, name: str = "", hotkey_id: str = "") -> bool:
         """触发热键：按热键名解析（``find_by_name``）优先，``hotkey_id`` 兜底。
@@ -1072,23 +1074,6 @@ class VTSProvider(BaseToolProvider):
 # =============================================================================
 # 工厂与注册辅助
 # =============================================================================
-
-
-def _ok(tool_name: str, success: bool, structured: Any = None) -> ToolExecutionResult:
-    return ToolExecutionResult(
-        tool_name=tool_name,
-        success=bool(success),
-        structured_content=structured,
-        content="" if structured is None else str(structured),
-    )
-
-
-def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
-    return ToolExecutionResult(
-        tool_name=tool_name,
-        success=False,
-        error_message=error_message,
-    )
 
 
 def create_vts_provider(
