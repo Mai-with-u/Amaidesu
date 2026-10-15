@@ -157,7 +157,9 @@ class STTCollector(BaseCollector):
         try:
             self.logger.info("加载 Silero VAD 模型...")
 
-            import torch
+            # torch 已在 _check_dependencies 缓存并校验非空，直接复用
+            assert self.torch is not None
+            torch = self.torch
 
             original_hub_dir = torch.hub.get_dir()
             # 缓存放用户目录：包源码目录会被清理/重装，运行时下载的模型产物不进源码树
