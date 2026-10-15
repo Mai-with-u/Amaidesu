@@ -31,7 +31,7 @@ def _reserve_port() -> int:
 
 @contextmanager
 def _occupied(*ports: int) -> Iterator[None]:
-    """占住端口（保持绑定不关闭），模拟被其他进程占用；候选端口恰被占用时跳过测试"""
+    """占住端口（保持绑定不关闭），模拟被其他进程占用；预占失败说明环境异常，显式失败不静默跳过"""
     socks: list[socket.socket] = []
     try:
         for port in ports:
@@ -39,8 +39,8 @@ def _occupied(*ports: int) -> Iterator[None]:
             socks.append(sock)
             try:
                 sock.bind(("127.0.0.1", port))
-            except OSError:
-                pytest.skip(f"候选端口 {port} 不可用，跳过")
+            except OSError as exc:
+                pytest.fail(f"预占候选端口 {port} 失败，测试环境异常：{exc}")
         yield
     finally:
         for sock in socks:
