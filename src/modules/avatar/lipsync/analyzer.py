@@ -244,10 +244,19 @@ class LipSyncAnalyzer:
     def start(self, utterance_id: str = "") -> None:
         """会话开始（播放器开播时同步调用）。
 
-        复位游标与缓冲、启动后台分析循环。若上一会话未正常结束，先收尾。
+        复位游标与缓冲、启动后台分析循环。若上一会话循环尚未退出，新循环
+        接管后旧循环在下一拍自行收尾退出，新循环等它收尾完再出首帧。
         """
         if self.is_speaking:
             self.stop()
+
+        # 上一会话循环仍在跑（未 stop 就开新句，或 stop 后还没醒来就紧接
+        # start）：不取消它——取消会打断进行中的收尾、漏掉 on_session_end；
+        # 改由新循环接管 _analysis_task，旧循环醒来发现自己不再是当前会话
+        # 循环即走正常收尾退出，新循环先等它收尾完，两个循环不会同时出帧
+        previous = self._analysis_task
+        if previous is not None and previous.done():
+            previous = None
 
         self.is_speaking = True
         self.current_utterance_id = utterance_id
@@ -255,7 +264,7 @@ class LipSyncAnalyzer:
         self.last_signal = MouthSignal(utterance_id=utterance_id)
         self._last_emit_time = 0.0
 
-        self._analysis_task = asyncio.create_task(self._analysis_loop())
+        self._analysis_task = asyncio.create_task(self._analysis_loop(utterance_id, previous))
         self._analysis_task.set_name(f"{self._logger_name}.analysis_loop")
 
     def feed(self, chunk: "np.ndarray", sample_rate: int) -> None:
@@ -320,13 +329,21 @@ class LipSyncAnalyzer:
         if len(self._audio_buffer) > max_bytes:
             self._audio_buffer = self._audio_buffer[-max_bytes:]
 
-    def _has_pending_audio(self) -> bool:
-        return len(self._audio_buffer) >= 1024
+    async def _analysis_loop(self, utterance_id: str, previous: Optional[asyncio.Task] = None) -> None:
+        """后台分析循环：按真实时间游标定期分析最近音频窗口，会话结束即收静止退出。
 
-    async def _analysis_loop(self) -> None:
-        """后台分析循环：按真实时间游标定期分析最近音频窗口，结束后收静止。"""
+        Args:
+            utterance_id: 本循环所属会话的发声 ID（收尾静止信号携带）。
+            previous: 尚未退出的上一会话循环；先等它收尾完再出首帧。
+        """
         try:
-            while self.is_speaking or self._has_pending_audio():
+            # 上一句的静止信号与 on_session_end 必须落在本句首帧之前，
+            # 否则会在本句说话中途把嘴和表情收回静止值
+            if previous is not None:
+                await asyncio.wait({previous})
+            # 播放器 stop（is_speaking 落 False）或下一句 start 接管
+            # _analysis_task 时退出；停止后缓冲里的音频不再分析，不必等它
+            while self.is_speaking and self._analysis_task is asyncio.current_task():
                 await self._analyze_and_dispatch()
                 await asyncio.sleep(self._loop_interval)
         except asyncio.CancelledError:
@@ -334,8 +351,9 @@ class LipSyncAnalyzer:
         except Exception as e:
             self.logger.exception(f"口型分析循环异常: {e}")
         finally:
-            # 会话收尾：静止信号（嘴收到 0）分发给全部渲染器
-            rest = MouthSignal(utterance_id=self.current_utterance_id)
+            # 会话收尾：静止信号（嘴收到 0）分发给全部渲染器；ID 用本循环
+            # 自己的会话——被下一句接管时共享的 current_utterance_id 已是新句
+            rest = MouthSignal(utterance_id=utterance_id)
             self.last_signal = rest
             await self._dispatch(rest)
             for renderer in list(self._renderers):
