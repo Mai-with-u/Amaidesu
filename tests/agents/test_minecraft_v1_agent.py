@@ -389,6 +389,11 @@ async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
     server = FakeMaicraft()
 
     def script(messages: List[Dict[str, Any]]) -> Response:
+        # 下砍树目标 -> 等砍树 -> 角色死了被决策唤醒 -> 回答一次重生 -> 回去接着等砍树。
+        # 答过就让出：决策提问一直留在历史里，若照着它一直答，替身模型与替身 Mod 都不让出事件循环，
+        # 任务循环会空转到上下文超预算才停，测试等条件的轮询一直轮不上。
+        if _called(messages, "maicraft_goal"):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
         if "Mod 挂出的决策" in _texts(messages):
             return _resp(calls=[_call("maicraft_goal", {"operation": "answer", "goal_id": -1, "answer": "respawn"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
