@@ -61,11 +61,11 @@
           v-for="group in detailGroups"
           :key="group.key"
           class="cbc-group"
-          :class="{ collapsed: collapsed.has(group.key) }"
+          :class="{ collapsed: !expanded.has(group.key) }"
         >
           <div
             class="cbc-group-head"
-            @click="toggleCollapsed(group.key)"
+            @click="toggleExpanded(group.key)"
             @mouseenter="hoverKey = group.key"
             @mouseleave="hoverKey = null"
           >
@@ -127,14 +127,17 @@ const props = defineProps<{
   loading?: boolean;
 }>();
 
-/** 折叠状态在换模型（数据源变化）时重置，默认全部展开 */
-const collapsed = ref<Set<string>>(new Set());
+/**
+ * 记录用户手动展开的明细组。明细逐项列表较长，弹出面板时默认全部折叠，
+ * 只看分段总览；点开某组才展开。换模型（数据源变化）时重置回全部折叠。
+ */
+const expanded = ref<Set<string>>(new Set());
 /** 鼠标所在的分段（含 free），用于在分段条上高亮对应色块 */
 const hoverKey = ref<string | null>(null);
 watch(
   () => props.breakdown?.model_name,
   () => {
-    collapsed.value = new Set();
+    expanded.value = new Set();
   },
 );
 
@@ -192,14 +195,14 @@ const detailGroups = computed(() =>
     })),
 );
 
-function toggleCollapsed(key: string): void {
-  const next = new Set(collapsed.value);
+function toggleExpanded(key: string): void {
+  const next = new Set(expanded.value);
   if (next.has(key)) {
     next.delete(key);
   } else {
     next.add(key);
   }
-  collapsed.value = next;
+  expanded.value = next;
 }
 
 /** 紧凑数字：1.0M 写成 1M，与 Claude 面板一致 */
