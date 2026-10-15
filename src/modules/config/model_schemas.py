@@ -18,12 +18,16 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Literal
+from typing import Any, List, Literal, get_args
 
 from pydantic import Field, field_validator, model_validator
 
 from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
+
+QuotaPlatformName = Literal[
+    "auto", "off", "minimax", "deepseek", "openrouter", "zhipu", "kimi_code", "moonshot", "siliconflow", "newapi"
+]
 
 
 def _strip_ref_name(value: Any) -> Any:
@@ -58,6 +62,7 @@ class LLMProviderConfig(BaseConfig):
         reasoning_parse_mode: 推理内容解析模式（auto/native/think_tag/none）
         supports_streaming: 是否支持 SSE；不支持时即使有增量回调也使用完整响应
         extra_body: provider 级方言逃生舱（自由 dict 原样合并进请求体；空 dict=不注入）
+        quota_platform: Dashboard 用量面板查询余额 / 套餐额度的平台（auto 按域名识别）
     """
 
     name: str = Field(
@@ -140,6 +145,21 @@ class LLMProviderConfig(BaseConfig):
         title="请求体扩展",
         description="provider 级方言逃生舱：自由 dict 原样合并进请求体（OpenAI SDK create 的 extra_body 参数；空 dict=不注入）",
         json_schema_extra={"x-ui-advanced": True},
+    )
+    # 取值集合与 llm.quota 的平台注册表一致（契约测试守护）；auto 按 base_url
+    # 域名识别，反代域名或 NewAPI 类中转站识别不到时在这里显式指定
+    quota_platform: QuotaPlatformName = Field(
+        default="auto",
+        title="额度查询平台",
+        description=(
+            "Dashboard 上下文面板 Usage 区查询余额 / 套餐额度的平台：auto = 按 base_url 域名识别；"
+            "off = 不查询；填平台名用于反代域名或 NewAPI 类中转站"
+        ),
+        json_schema_extra={
+            "x-ui-type": "select",
+            "x-options": list(get_args(QuotaPlatformName)),
+            "x-ui-advanced": True,
+        },
     )
 
     @field_validator("name", mode="before")

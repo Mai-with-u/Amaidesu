@@ -677,6 +677,17 @@ class LLMManager:
         """返回 ``{model_identifier: context_window}`` 浅拷贝（0 值保留，标识"未配置"）。"""
         return dict(self._model_context_windows)
 
+    def get_model_provider(self, model_identifier: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """按 API 模型标识反查所属 provider 的名称与配置；未知标识返回 None。
+
+        Dashboard 用量面板按模型查平台额度时用它找到 base_url 与 Key。多个注册名
+        共用同一标识时取注册表中的第一个。
+        """
+        for model_name, (model_config, provider_name) in self._models.items():
+            if (model_config.get("model_identifier") or model_name) == model_identifier:
+                return provider_name, self._providers[provider_name][0]
+        return None
+
     def get_profile_context_window(self, profile: Optional[str]) -> int:
         """该 profile 可用的上下文窗口：名单内已配置窗口的模型取最小值；都未配置返回 0。
 
