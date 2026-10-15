@@ -210,6 +210,17 @@ class LiveSessionManager:
             logger.info(f"场次已删除: id={live_session_id}（明细级联清除）")
             return True
 
+    # -------------------- 重命名 --------------------
+
+    async def rename_session(self, live_session_id: int, title: Optional[str]) -> bool:
+        """改写场次标题（None/空串的清除语义由调用方规范化后传入）。行不存在返回 False。"""
+        renamed = await self._sessions.update_live_session_title(
+            live_session_id=live_session_id, title=title, updated_at_ms=now_ms()
+        )
+        if renamed:
+            logger.info(f"场次已重命名: id={live_session_id} title={title!r}")
+        return renamed
+
     # -------------------- 场次归属解析 --------------------
 
     async def resolve_pk(self) -> Optional[int]:

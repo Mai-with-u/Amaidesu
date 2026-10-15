@@ -251,6 +251,7 @@ export const simulatorApi = {
 // `GET /live-sessions`：场次列表（倒序 + 消息数）。
 // `POST /live-sessions/open`：开启新场次（进行中场次自动结束）。
 // `POST /live-sessions/{id}/close`：结束场次（空场次整行丢弃）。
+// `PATCH /live-sessions/{id}`：重命名场次（title 空=清除标题，列表回落"场次 #id"）。
 // `DELETE /live-sessions/{id}`：删除场次（级联清明细）。
 // `GET /live-sessions/{id}/timeline`：单场时间线回看（明细行 + 事件侧合并；
 // before_timestamp_ms 游标向前翻页，响应 has_more / events_pruned 指示续翻与降级）。
@@ -261,6 +262,8 @@ export const liveSessionsApi = {
     api.post<{ live_session_id: number }>('/live-sessions/open', payload ?? {}),
   close: (id: number) =>
     api.post<{ success: boolean; detail: string }>(`/live-sessions/${id}/close`),
+  rename: (id: number, title?: string) =>
+    api.patch<{ success: boolean; detail: string }>(`/live-sessions/${id}`, { title }),
   remove: (id: number) => api.delete<{ success: boolean; detail: string }>(`/live-sessions/${id}`),
   timeline: (id: number, params?: { limit?: number; before_timestamp_ms?: number }) =>
     api.get<SessionTimelineResponse>(`/live-sessions/${id}/timeline`, { params }),

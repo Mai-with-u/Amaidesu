@@ -5,6 +5,7 @@
 - ``GET  /sessions``           场次列表（倒序 + 消息数，供控制台场次侧边栏）
 - ``POST /sessions/open``      开启新场次（进行中场次先自动结束）
 - ``POST /sessions/{id}/close`` 结束指定场次（须为当前进行中场次）
+- ``PATCH /sessions/{id}``     重命名场次（title 空=清除标题）
 - ``DELETE /sessions/{id}``    删除场次（级联清除明细）
 
 场次归属由 ``LiveSessionManager`` 负责（唯一事实源）；本层只做参数校验与
@@ -25,6 +26,7 @@ from src.modules.dashboard.schemas.session import (
     SessionListResponse,
     SessionOpenRequest,
     SessionOpenResponse,
+    SessionRenameRequest,
     SessionTimelineResponse,
 )
 from src.modules.dashboard.services.session_events import SessionEventReader
@@ -122,6 +124,19 @@ async def close_session(session_id: int, server: ServerDep) -> SessionActionResp
         )
     closed = await manager.close_session(reason="API 手动结束")
     return SessionActionResponse(success=closed, detail="场次已结束" if closed else "结束失败")
+
+
+@router.patch("/{session_id}", response_model=SessionActionResponse)
+async def rename_session(session_id: int, request: SessionRenameRequest, server: ServerDep) -> SessionActionResponse:
+    """重命名场次（进行中/历史场次均可；title 空串规范化为 None=清除标题）。"""
+    manager = _require_session_manager(server)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
+    title = (request.title or "").strip() or None
+    renamed = await manager.rename_session(session_id, title)
+    if not renamed:
+        raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
+    return SessionActionResponse(success=True, detail="场次已重命名" if title else "场次标题已清除")
 
 
 @router.get("/{session_id}/timeline", response_model=SessionTimelineResponse)

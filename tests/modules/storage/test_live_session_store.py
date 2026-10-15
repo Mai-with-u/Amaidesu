@@ -1,4 +1,4 @@
-"""live_sessions 写链（一行 = 一场直播）：开行、心跳、结账、级联删除、列表筛选与后台心跳落库"""
+"""live_sessions 写链（一行 = 一场直播）：开行、心跳、结账、重命名、级联删除、列表筛选与后台心跳落库"""
 
 from __future__ import annotations
 
@@ -51,6 +51,20 @@ async def test_session_row_lifecycle(store: SQLiteDatabase) -> None:
     assert await sessions.close_live_session(live_session_id=pk, ended_at_ms=12_000) is False
     assert (await sessions.get_live_session(live_session_id=pk))["ended_at_ms"] == 9_000
     assert await sessions.close_live_session(live_session_id=424_242, ended_at_ms=9_000) is False
+
+
+async def test_rename_session_title(store: SQLiteDatabase) -> None:
+    sessions = store.sessions
+    pk = await sessions.insert_live_session(started_at_ms=1_000, title="旧标题")
+    assert await sessions.update_live_session_title(live_session_id=pk, title="新标题", updated_at_ms=2_000) is True
+    row = await sessions.get_live_session(live_session_id=pk)
+    assert (row["title"], row["updated_at_ms"]) == ("新标题", 2_000)
+
+    # None 清除标题；行不存在返回 False 且不建行
+    assert await sessions.update_live_session_title(live_session_id=pk, title=None, updated_at_ms=3_000) is True
+    assert (await sessions.get_live_session(live_session_id=pk))["title"] is None
+    assert await sessions.update_live_session_title(live_session_id=999_999, title="x", updated_at_ms=4_000) is False
+    assert len(await store.execute("SELECT * FROM live_sessions")) == 1
 
 
 async def test_count_details_and_cascade_delete(store: SQLiteDatabase) -> None:

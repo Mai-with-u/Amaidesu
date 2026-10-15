@@ -73,6 +73,25 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def update_live_session_title(
+        self,
+        *,
+        live_session_id: int,
+        title: Optional[str],
+        updated_at_ms: int,
+    ) -> bool:
+        """改写场次标题（重命名；None 即清除标题）。行不存在返回 False。"""
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE live_sessions SET title=?, updated_at_ms=? WHERE id=?",
+                    (title, updated_at_ms, live_session_id),
+                )
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
     async def get_live_session(self, *, live_session_id: int) -> Optional[sqlite3.Row]:
         """按场次主键查单行；未命中返回 None。"""
 

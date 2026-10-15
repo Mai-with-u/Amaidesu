@@ -50,6 +50,12 @@ class SessionActionResponse(BaseModel):
     detail: str = Field(default="", description="动作结果说明")
 
 
+class SessionRenameRequest(BaseModel):
+    """场次重命名请求"""
+
+    title: Optional[str] = Field(default=None, description="新标题；None/空串=清除标题")
+
+
 class SessionTimelineResponse(BaseModel):
     """单场时间线回看响应。
 

@@ -1,4 +1,4 @@
-"""Sessions API：场次列表 / 开启 / 结束 / 删除，以及回看时间线（明细与事件历史按时间合并、发言去重、游标翻页）"""
+"""Sessions API：场次列表 / 开启 / 结束 / 重命名 / 删除，以及回看时间线（明细与事件历史按时间合并、发言去重、游标翻页）"""
 
 from __future__ import annotations
 
@@ -66,6 +66,24 @@ async def test_close_mismatched_and_delete_missing(sessions_client) -> None:
     deleted = await client.delete(f"/api/v1/live-sessions/{pk}")
     assert (deleted.status_code, deleted.json()["success"]) == (200, True)
     assert (await client.delete(f"/api/v1/live-sessions/{pk}")).status_code == 404
+
+
+async def test_rename_session(sessions_client) -> None:
+    """重命名：进行中场次可直接改名；空串规范化为清除标题；不存在的场次 404。"""
+    client = sessions_client
+    pk = await _open(client, "旧标题")
+
+    renamed = await client.patch(f"/api/v1/live-sessions/{pk}", json={"title": "  新标题  "})
+    assert (renamed.status_code, renamed.json()["success"]) == (200, True)
+
+    async def titles() -> dict:
+        return {i["live_session_id"]: i["title"] for i in (await client.get("/api/v1/live-sessions")).json()["items"]}
+
+    assert (await titles())[pk] == "新标题"
+    cleared = await client.patch(f"/api/v1/live-sessions/{pk}", json={"title": "   "})
+    assert (cleared.status_code, cleared.json()["detail"]) == (200, "场次标题已清除")
+    assert (await titles())[pk] is None
+    assert (await client.patch(f"/api/v1/live-sessions/{pk + 99999}", json={"title": "x"})).status_code == 404
 
 
 async def test_list_filters_by_source_and_title(sessions_client, session_manager) -> None:

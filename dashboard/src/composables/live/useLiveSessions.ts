@@ -3,8 +3,8 @@
  *
  * 页面私有状态（仅直播控制台消费），走 composable 而非 Pinia——场次列表与
  * 筛选词离开页面即失效，没有跨页共享语义。场次生命周期本身归后端
- * LiveSessionManager，这里只是控制面：开启 / 结束 / 删除 + 生命周期事件
- * 驱动侧边栏刷新。
+ * LiveSessionManager，这里只是控制面：开启 / 结束 / 重命名 / 删除 + 生命周期
+ * 事件驱动侧边栏刷新。
  */
 
 import { computed, ref, watch } from 'vue';
@@ -13,7 +13,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { liveSessionsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
-import { formatTimeHM } from '@/utils/format';
+import { formatDateMD, formatTimeHM } from '@/utils/format';
 import type { LiveSessionItem } from '@/types';
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -21,6 +21,13 @@ const SOURCE_LABEL: Record<string, string> = {
   replay: '回放',
   legacy: '历史',
 };
+
+/** 场次默认标题（yyyy-MM-dd HH:mm 周X，按给定时刻）：开场次预填与未命名场次重命名预填共用 */
+export function defaultSessionTitle(at: Date = new Date()): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][at.getDay()] ?? '';
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())} ${weekday}`;
+}
 
 /** 侧栏时钟/时长的时刻标签（事件→条目取值助手见 utils/liveFeed.ts） */
 function clockLabel(ms: number): string {
@@ -55,9 +62,14 @@ export function useLiveSessions() {
   }
 
   function sessionTimeLabel(item: LiveSessionItem): string {
-    const start = clockLabel(item.started_at_ms);
+    const start = `${formatDateMD(item.started_at_ms)} ${clockLabel(item.started_at_ms)}`;
     if (item.ended_at_ms == null) return `${start} 起`;
-    return `${start} – ${clockLabel(item.ended_at_ms)}`;
+    const sameDay =
+      new Date(item.ended_at_ms).toDateString() === new Date(item.started_at_ms).toDateString();
+    const end = sameDay
+      ? clockLabel(item.ended_at_ms)
+      : `${formatDateMD(item.ended_at_ms)} ${clockLabel(item.ended_at_ms)}`;
+    return `${start} – ${end}`;
   }
 
   function isSelected(item: LiveSessionItem): boolean {
@@ -89,14 +101,19 @@ export function useLiveSessions() {
   });
 
   async function openSession(): Promise<void> {
-    let title: string | undefined;
+    const fallbackTitle = defaultSessionTitle();
+    let title: string;
     try {
-      const { value } = await ElMessageBox.prompt('为新的直播场次起个标题（可留空）', '开启场次', {
-        confirmButtonText: '开启',
-        cancelButtonText: '取消',
-        inputPlaceholder: '例如：周五晚间场',
-      });
-      title = value?.trim() || undefined;
+      const { value } = await ElMessageBox.prompt(
+        '场次标题（可直接修改，留空使用默认名）',
+        '开启场次',
+        {
+          confirmButtonText: '开启',
+          cancelButtonText: '取消',
+          inputValue: fallbackTitle,
+        },
+      );
+      title = value?.trim() || fallbackTitle;
     } catch {
       return; // 取消输入
     }
@@ -131,6 +148,34 @@ export function useLiveSessions() {
     }
     if (selectedSession.value?.live_session_id === item.live_session_id) backToLive();
     await loadSessions();
+  }
+
+  /** 重命名场次：预填当前标题（未命名回落开播时刻默认名），保存后刷新并同步回看选中引用 */
+  async function renameSession(item: LiveSessionItem): Promise<void> {
+    let title: string | undefined;
+    try {
+      const { value } = await ElMessageBox.prompt('场次标题（留空恢复未命名）', '重命名场次', {
+        confirmButtonText: '保存',
+        cancelButtonText: '取消',
+        inputValue: item.title ?? defaultSessionTitle(new Date(item.started_at_ms)),
+      });
+      title = value?.trim() || undefined;
+    } catch {
+      return; // 取消输入
+    }
+    try {
+      await liveSessionsApi.rename(item.live_session_id, title);
+      ElMessage.success('场次已重命名');
+    } catch (error) {
+      ElMessage.error(getApiErrorMessage(error, '重命名失败'));
+      return;
+    }
+    await loadSessions();
+    // 回看中的该场换上新引用，回看标题跟随新名
+    if (selectedSession.value?.live_session_id === item.live_session_id) {
+      selectedSession.value =
+        sessions.value.find(s => s.live_session_id === item.live_session_id) ?? null;
+    }
   }
 
   /** 历史场次 → 回看模式；进行中场次 → 实时模式 */
@@ -175,6 +220,7 @@ export function useLiveSessions() {
     loadSessions,
     openSession,
     closeSession,
+    renameSession,
     removeSession,
     selectSession,
     backToLive,

@@ -67,8 +67,12 @@
               <span class="grow" />
               <span>{{ item.message_count }} 条</span>
             </div>
-            <div v-if="!item.is_active && item.source !== 'legacy'" class="session-actions">
+            <div class="session-actions">
+              <el-button class="session-ren" link size="small" @click.stop="renameSession(item)"
+                >改名</el-button
+              >
               <el-popconfirm
+                v-if="!item.is_active && item.source !== 'legacy'"
                 title="删除该场次及其全部明细？"
                 width="220"
                 @confirm="removeSession(item)"
@@ -367,6 +371,7 @@ const {
   loadSessions,
   openSession,
   closeSession,
+  renameSession,
   removeSession,
   selectSession,
   backToLive,
@@ -737,6 +742,12 @@ onMounted(() => {
   position: absolute;
   right: 8px;
   bottom: 4px;
+}
+.session-ren {
+  color: var(--text-placeholder);
+}
+.session-ren:hover {
+  color: var(--color-primary);
 }
 .session-del {
   color: var(--text-placeholder);

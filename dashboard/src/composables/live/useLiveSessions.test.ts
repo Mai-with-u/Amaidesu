@@ -1,7 +1,8 @@
 // useLiveSessions.ts 场次侧边栏组合式函数的测试
 //
 // 覆盖：列表加载与筛选透传、筛选防抖、模式切换（实时/回看）、选中语义、
-// 生命周期开关（开启/结束/删除）、生命周期事件驱动的侧边栏刷新。
+// 生命周期开关（开启/结束/重命名/删除，含默认标题预填与留空回落）、
+// 生命周期事件驱动的侧边栏刷新。
 
 import { effectScope, nextTick, type EffectScope } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
@@ -10,7 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { liveSessionsApi } from '@/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useEventsStore, useWebSocketStore } from '@/stores';
-import { useLiveSessions } from '@/composables/live/useLiveSessions';
+import { defaultSessionTitle, useLiveSessions } from '@/composables/live/useLiveSessions';
+import { formatDateMD } from '@/utils/format';
 import type { LiveSessionItem } from '@/types';
 
 vi.mock('@/api/websocket', () => ({
@@ -32,6 +34,7 @@ vi.mock('@/api', async importOriginal => ({
     list: vi.fn(),
     open: vi.fn(),
     close: vi.fn(),
+    rename: vi.fn(),
     remove: vi.fn(),
     timeline: vi.fn(),
   },
@@ -60,6 +63,7 @@ function sessionItem(partial: Partial<LiveSessionItem>): LiveSessionItem {
 const listMock = vi.mocked(liveSessionsApi.list);
 const openMock = vi.mocked(liveSessionsApi.open);
 const closeMock = vi.mocked(liveSessionsApi.close);
+const renameMock = vi.mocked(liveSessionsApi.rename);
 const removeMock = vi.mocked(liveSessionsApi.remove);
 const promptMock = vi.mocked(ElMessageBox.prompt);
 
@@ -161,10 +165,54 @@ describe('useLiveSessions', () => {
     promptMock.mockResolvedValueOnce({ value: '' } as never);
     openMock.mockRejectedValue(new Error('boom'));
     await composable.openSession();
-    expect(openMock).toHaveBeenCalledWith({ title: undefined });
+    // 留空回落为默认标题（与对话框预填一致）
+    expect(openMock).toHaveBeenCalledWith({ title: defaultSessionTitle() });
     // 措辞统一：直接展示可读错误消息，不再拼前缀
     expect(ElMessage.error).toHaveBeenCalledWith('boom');
     expect(composable.activeExplicitSession.value).toBe(false);
+  });
+
+  it('openSession：对话框预填默认标题（yyyy-MM-dd HH:mm 周X）', async () => {
+    const composable = mount();
+    promptMock.mockRejectedValueOnce('cancel');
+    await composable.openSession();
+    expect(promptMock).toHaveBeenCalledWith(
+      expect.any(String),
+      '开启场次',
+      expect.objectContaining({ inputValue: defaultSessionTitle() }),
+    );
+    expect(openMock).not.toHaveBeenCalled();
+  });
+
+  it('renameSession：确认后调接口并刷新，回看选中引用同步新名', async () => {
+    const composable = mount();
+    const target = sessionItem({ live_session_id: 2, title: '旧名' });
+    composable.selectSession(target);
+    listMock.mockResolvedValue({
+      data: {
+        items: [sessionItem({ live_session_id: 2, title: '新名' })],
+        active_session_id: null,
+      },
+    } as never);
+    renameMock.mockResolvedValue({ data: { success: true, detail: '' } } as never);
+    promptMock.mockResolvedValueOnce({ value: '  新名  ' } as never);
+    await composable.renameSession(target);
+    expect(renameMock).toHaveBeenCalledWith(2, '新名');
+    expect(ElMessage.success).toHaveBeenCalledWith('场次已重命名');
+    expect(composable.selectedSession.value?.title).toBe('新名');
+  });
+
+  it('renameSession：取消不调接口；未命名场次预填开播时刻默认标题', async () => {
+    const composable = mount();
+    const unnamed = sessionItem({ live_session_id: 3, title: null, started_at_ms: 9_000_000 });
+    promptMock.mockRejectedValueOnce('cancel');
+    await composable.renameSession(unnamed);
+    expect(renameMock).not.toHaveBeenCalled();
+    expect(promptMock).toHaveBeenCalledWith(expect.any(String), '重命名场次', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: defaultSessionTitle(new Date(9_000_000)),
+    });
   });
 
   it('closeSession：无进行中场次时直接返回', async () => {
@@ -206,8 +254,16 @@ describe('useLiveSessions', () => {
     );
     expect(composable.sourceLabel('replay')).toBe('回放');
     expect(composable.sourceLabel('other')).toBe('other');
+    // 时间标签带日期：同日终点只显时刻，跨天终点带日期
     const ended = sessionItem({ started_at_ms: 9_000_000, ended_at_ms: 9_060_000 });
     const label = composable.sessionTimeLabel(ended);
     expect(label).toContain('–');
+    expect(label).toContain(formatDateMD(9_000_000));
+    const crossDay = sessionItem({
+      started_at_ms: 9_000_000,
+      ended_at_ms: 9_000_000 + 26 * 3_600_000,
+    });
+    const crossLabel = composable.sessionTimeLabel(crossDay);
+    expect(crossLabel).toContain(formatDateMD(9_000_000 + 26 * 3_600_000));
   });
 });
