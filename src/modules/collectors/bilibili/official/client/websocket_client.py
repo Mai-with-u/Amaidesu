@@ -386,7 +386,7 @@ class BiliWebSocketClient:
                 self.logger.warning(f"应用心跳循环出错: {e}")
                 break
 
-    async def _recv_loop(self, message_handler: Callable, queue: asyncio.Queue = None) -> None:
+    async def _recv_loop(self, message_handler: Callable, queue: Optional[asyncio.Queue] = None) -> None:
         """接收消息循环"""
         while self.is_started and self.websocket:
             try:
