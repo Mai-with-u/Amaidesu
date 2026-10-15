@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import ExitStack
-from typing import Any
+from typing import Any, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -41,6 +41,7 @@ class _Engine:
 
     name: str
     duration_ms: int | None  # started 事件里的时长：全量引擎是精确值，流式引擎是 None
+    sent_text: Callable[[], str]  # synth_patches 之后可读：送进合成的文本（规范化后）
 
     def build(self, bus: EventBus | None, fail: bool) -> Any:
         raise NotImplementedError
@@ -65,6 +66,7 @@ class _Edge(_Engine):
         synth = AsyncMock(side_effect=RuntimeError("boom") if fail else None)
         synth.return_value = (np.zeros(48000, dtype=np.float32), 48000)
         stack.enter_context(patch.object(provider, "_edge_tts_synthesize", new=synth))
+        self.sent_text = lambda: synth.call_args.args[0]
 
 
 class _Voicebox(_Engine):
@@ -79,6 +81,7 @@ class _Voicebox(_Engine):
     def synth_patches(self, provider, stack, fail):
         create = AsyncMock(side_effect=RuntimeError("boom")) if fail else AsyncMock(return_value="gen-1")
         stack.enter_context(patch.object(provider, "_create_generation", new=create))
+        self.sent_text = lambda: create.call_args.args[0]
         stack.enter_context(patch.object(provider, "_wait_for_completion", new=AsyncMock()))
         stack.enter_context(patch.object(provider, "_download_audio", new=AsyncMock(return_value=b"raw")))
         stack.enter_context(patch("src.modules.tts.wav_decoder.extract_pcm_from_wav", return_value=bytes(48000 * 2)))
@@ -100,6 +103,7 @@ class _GptSovits(_Engine):
     def synth_patches(self, provider, stack, fail):
         stream = MagicMock(side_effect=RuntimeError("boom")) if fail else MagicMock(return_value=iter([b"c1", b"c2"]))
         stack.enter_context(patch.object(provider, "tts_client", new=MagicMock(tts_stream=stream)))
+        self.sent_text = lambda: stream.call_args.kwargs["text"]
 
         async def decode(chunk: bytes, dtype: Any = None) -> np.ndarray:
             return np.arange(1024, dtype=DTYPE)
@@ -111,17 +115,19 @@ class _Omni(_Engine):
     name, duration_ms = "omni_tts", 100  # 2400 样本 @ 24kHz
 
     def build(self, bus, fail):
-        llm = FakeLLM(error=RuntimeError("boom")) if fail else FakeLLM(audio_response())
-        return OmniTTSProvider(config={"type": "omni_tts", "voice": "Chelsie"}, event_bus=bus, llm_service=llm)
+        self.llm = FakeLLM(error=RuntimeError("boom")) if fail else FakeLLM(audio_response())
+        return OmniTTSProvider(config={"type": "omni_tts", "voice": "Chelsie"}, event_bus=bus, llm_service=self.llm)
 
     def synth_patches(self, provider, stack, fail):
-        return None  # 合成走 FakeLLM，无需补丁
+        self.sent_text = lambda: self.llm.calls[0]["input"]  # 合成走 FakeLLM，无需补丁
 
 
 ENGINES = [_Edge(), _Voicebox(), _GptSovits(), _Omni()]
 
 
-async def _speak(engine: _Engine, bus: EventBus | None, *, utterance_id: str | None, fail: bool = False) -> None:
+async def _speak(
+    engine: _Engine, bus: EventBus | None, *, utterance_id: str | None, fail: bool = False, text: str = "你好"
+) -> None:
     provider = engine.build(bus, fail)
     with ExitStack() as stack:
         engine.setup_patches(stack)
@@ -129,7 +135,7 @@ async def _speak(engine: _Engine, bus: EventBus | None, *, utterance_id: str | N
     await engine.prepare(provider)
     with ExitStack() as stack:
         engine.synth_patches(provider, stack, fail)
-        await provider.handle_speech("你好", utterance_id=utterance_id)
+        await provider.handle_speech(text, utterance_id=utterance_id)
 
 
 @pytest.mark.parametrize("engine", ENGINES, ids=lambda e: e.name)
@@ -146,6 +152,21 @@ async def test_utterance_events_started_then_finished(engine: _Engine, event_bus
     assert (finished.utterance_id, finished.engine) == ("utt_1", engine.name)
     if engine.duration_ms is not None:
         assert finished.duration_ms == engine.duration_ms
+
+
+@pytest.mark.parametrize("engine", ENGINES, ids=lambda e: e.name)
+async def test_event_keeps_the_original_text_while_synthesis_gets_the_normalized_one(
+    engine: _Engine, event_bus: EventBus
+) -> None:
+    """含符号文本：事件 speech_text 传规范化前原文（字幕等展示面不被清洗改写），清洗只进合成侧。"""
+    captured = record_lifecycle(event_bus)
+    await _speak(engine, event_bus, utterance_id="utt_sym", text="大家好～(鼓掌)")
+    await event_bus.cleanup()
+
+    started = next(payload for name, payload in captured if name == CoreEvents.TTS_UTTERANCE_STARTED)
+    assert started.speech_text == "大家好～(鼓掌)"
+    sent = engine.sent_text()
+    assert sent != started.speech_text and "～" not in sent  # 符号映射为停顿，与展示文本分离
 
 
 @pytest.mark.parametrize("engine", ENGINES, ids=lambda e: e.name)
