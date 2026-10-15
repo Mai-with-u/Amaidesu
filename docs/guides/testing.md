@@ -53,6 +53,12 @@ tests/
 | 测试类 | `Test*` | `class TestEventBus:` |
 | Fixture | `*_fixture` 或直接用功能名 | `event_bus`, `sample_providers` |
 
+### 文件组织与共享替身
+
+- **按域合并，不开微文件**：同域内主题相近的用例合并到少数文件（如事件域按总线 / 注册表 / 载荷 / 拦截器各一文件），不"一个类一个测试文件"；新增用例先找现有文件并入，主题确实独立才新建。
+- **共享替身与构造器进 `helpers.py` / `fakes.py`**：跨测试文件复用的替身（fake）、工厂构造器收拢到该域的 `helpers.py` 或 `fakes.py`，写测试前先查该域现有文件复用，勿复制装配样板；pytest fixture 仍按作用域放 `conftest.py`（见 §7.2）。
+- **合并 / 移动测试文件后同步文档**：本文档与其他指南点名的测试路径随之更新，不留指向不存在文件的引用。
+
 ## 3. 测试示例
 
 ### 3.1 基础测试结构
@@ -71,11 +77,6 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
 
-# =============================================================================
-# Fixtures - 测试依赖
-# =============================================================================
-
-
 @pytest.fixture
 def event_bus():
     """创建 EventBus 实例"""
@@ -92,12 +93,6 @@ def sample_message():
     )
 
 
-# =============================================================================
-# 测试用例
-# =============================================================================
-
-
-@pytest.mark.asyncio
 async def test_event_bus_publish(event_bus, sample_message):
     """测试事件总线发布订阅功能"""
     received = []
@@ -117,7 +112,6 @@ async def test_event_bus_publish(event_bus, sample_message):
     assert received[0].content == "测试消息"
 
 
-@pytest.mark.asyncio
 async def test_event_bus_error_isolation(event_bus):
     """测试错误隔离功能"""
     results = []
@@ -199,7 +193,6 @@ def test_register_dedup(manager, sample_collector):
     assert manager.register(sample_collector) is False  # 同名 Collector 跳过
 
 
-@pytest.mark.asyncio
 async def test_collector_emit_room_message(sample_collector):
     """v2：Collector 主动推语义域事件（room.message.danmaku 等）"""
     bus = _FakeEventBus()
@@ -217,7 +210,6 @@ async def test_collector_emit_room_message(sample_collector):
     assert bus.events[-1][1].content == "主播好可爱！"
 
 
-@pytest.mark.asyncio
 async def test_collector_start_lifecycle(sample_collector):
     """Collector start/stop 生命周期（start 进入 RUNNING，stop 进入 STOPPED）"""
     from src.modules.collectors.base import CollectorState
@@ -259,14 +251,12 @@ def create_payload(text: str, user_id: str = "test_user") -> dict:
     return {"text": text, "user_id": user_id, "source": "test"}
 
 
-@pytest.mark.asyncio
 async def test_intercept_pass(interceptor):
     """测试事件通过限流"""
     result = await interceptor.intercept("room.message.danmaku", create_payload("测试消息"), "Test")
     assert result is not None
 
 
-@pytest.mark.asyncio
 async def test_intercept_rate_limited(interceptor):
     """测试超出频率的事件被丢弃"""
     slow = RateLimitInterceptor(global_rate_limit=2, user_rate_limit=10, window_size=60)
@@ -391,13 +381,11 @@ uv run pytest -n auto
 
 ```python
 # ✅ 正确：清晰描述测试内容
-@pytest.mark.asyncio
 async def test_event_bus_publish_message_to_multiple_subscribers(event_bus):
     """测试事件总线向多个订阅者发布消息"""
     ...
 
 # ❌ 错误：模糊的测试名称
-@pytest.mark.asyncio
 async def test_eb(event_bus):
     """test eb"""
     ...
@@ -411,33 +399,43 @@ async def test_eb(event_bus):
 def event_bus():
     return EventBus()
 
-@pytest.mark.asyncio
 async def test_event(event_bus):  # 自动注入
     ...
 
 # ❌ 错误：在测试函数内部创建依赖
-@pytest.mark.asyncio
 async def test_event():
     event_bus = EventBus()  # 每次都创建新的
     ...
 ```
 
-### 5.3 异步测试
+### 5.3 异步测试与结果断言
+
+项目启用 `asyncio_mode = "auto"`，异步测试直接写 `async def`，**不加 `@pytest.mark.asyncio`**——auto 模式下该标记冗余，误挂到同步测试还会产生 PytestWarning：
 
 ```python
-# ✅ 正确：使用 @pytest.mark.asyncio 装饰器
-@pytest.mark.asyncio
+# ✅ 正确：无需任何标记
 async def test_async_operation():
     result = await async_function()
     assert result is not None
-
-# ✅ 正确：等待异步操作完成
-@pytest.mark.asyncio
-async def test_event_handling(event_bus):
-    await event_bus.emit("test", payload, source="test")
-    await asyncio.sleep(0.1)  # 等待异步处理器执行
-    assert received
 ```
+
+异步 / 事件驱动的结果断言**等条件成立，不用固定睡眠猜进度**：fire-and-forget 派发在满载运行时固定 sleep 可能赶不上，是偶发红的主要来源（真实先例：`tests/modules/tools/test_health.py` 的 `_until`）：
+
+```python
+# ✅ 正确：轮询到条件成立，带超时上限
+async def _until(condition, timeout: float = 2.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not condition() and loop.time() < deadline:
+        await asyncio.sleep(0.005)
+
+async def test_health_event_published():
+    await registry.invoke(...)
+    await _until(lambda: len(events) == 1)
+    assert events[-1].state == "open"
+```
+
+断言"没有事件"的场景才允许固定等待（等满时间窗口确认没发生）。等待上限按全量回归满载运行估算余量，不留贴着正常耗时的紧上限。
 
 ### 5.4 Mock 外部依赖
 
@@ -446,7 +444,6 @@ async def test_event_handling(event_bus):
 from unittest.mock import AsyncMock, MagicMock
 
 # 示例：Mock LLM 客户端
-@pytest.mark.asyncio
 async def test_llm_client():
     mock_client = AsyncMock()
     mock_client.chat.return_value = "Mock response"
@@ -460,14 +457,12 @@ async def test_llm_client():
 
 ```python
 # ✅ 正确：每个测试独立，不依赖执行顺序
-@pytest.mark.asyncio
 async def test_first(event_bus):
     collector = MockInputCollector({"name": "test"}, event_bus)
     await collector.start()
     # 测试逻辑
     await collector.stop()
 
-@pytest.mark.asyncio
 async def test_second(event_bus):  # 独立运行，不依赖 test_first
     collector = MockInputCollector({"name": "test"}, event_bus)
     ...
@@ -475,9 +470,8 @@ async def test_second(event_bus):  # 独立运行，不依赖 test_first
 
 ### 5.6 跳过测试
 
-```bash
+```python
 # 使用 pytest.skip 跳过需要特定条件的测试
-@pytest.mark.asyncio
 async def test_feature_requiring_config():
     if not has_config():
         pytest.skip("需要配置文件")
@@ -485,6 +479,24 @@ async def test_feature_requiring_config():
     # 测试逻辑
     ...
 ```
+
+### 5.7 重复场景参数化
+
+同一流程多组输入输出，用一张参数表，**禁止复制粘贴成长手写**（真实先例：`tests/modules/llm/clients/test_openai_client.py` 的 `test_auth_modes` 将四种鉴权方式并为一条用例）：
+
+```python
+@pytest.mark.parametrize(
+    ("word", "masked"),
+    [
+        ("傻逼", "**"),
+        ("hello", "hello"),
+    ],
+)
+def test_word_filter_masks(word: str, masked: str) -> None:
+    assert mask(word) == masked
+```
+
+断言差异也用参数表达，只有控制流真正不同才拆独立测试函数。同文件内命名成族（`test_x_includes_*` / `test_x_omits_*` 一类）的多条用例，是应当并表的信号。
 
 ## 6. 测试类型
 
@@ -524,6 +536,16 @@ def test_tool_does_not_subscribe_to_input_events(self):
 
 四层依赖方向（Core ← Input ← Agent ← Tool）由 `test_proper_layer_hierarchy` 强制保证；事件流约束（单向、防环）由 `test_event_based_communication_pattern` 验证。
 
+### 6.4 配置迁移测试（表驱动）
+
+配置迁移测试收拢在 `tests/config/test_migrations.py`：一个 `Case`（`id` / `files` / `seed` / `check`）描述"怎样把默认配置拨回旧布局"（seed）与"迁移后应是什么样"（check），两条通用参数化断言对所有 Case 执行——迁移生效落盘且版本推进到钩子链尾；二次加载零漂移零写回（幂等）。
+
+- 版本断言一律用 `tests/config/helpers.py` 的 `tail_version(file)` 从钩子注册表（`_FILE_HOOKS`）推导，**禁止硬编码版本串**——否则每次新增钩子都会撞断言；
+- 在 `src/modules/config/upgrade.py` 注册新钩子时，必须在 `CASES` 表补对应 Case（迁移测试是配置数据变换硬约束的落地形态，见 [AGENTS.md](../../AGENTS.md) 配置与存储变更节）；
+- 复杂钩子的额外场景（多步、跨文件、边界值）在该文件内以独立测试补充。
+
+不再为每个钩子新建独立迁移测试文件；新增 Case 以文件内现有 Case 为模板。
+
 ## 7. Fixtures 共享
 
 ### 7.1 全局 Fixtures
@@ -540,22 +562,11 @@ async def event_bus() -> EventBus:
     await bus.cleanup()
 ```
 
-### 7.2 模块特定 Fixtures
+### 7.2 子域共享
 
-按需在 `tests/<子域>/conftest.py` 中定义该子域共享的 fixtures。现有 conftest.py 位置：`tests/conftest.py`（全局）、`tests/dashboard/conftest.py`（Dashboard 服务挂载）、`tests/modules/llm/conftest.py`。
+pytest fixture 按作用域放 `conftest.py`：全局在 `tests/conftest.py`，子域共享时在该域新建（现有如 `tests/dashboard/conftest.py`、`tests/modules/llm/conftest.py`）。
 
-```python
-# tests/modules/<子域>/conftest.py（如该子域需共享 fixture 可新建）
-import pytest
-
-from src.modules.collectors import CollectorManager
-
-
-@pytest.fixture
-def manager() -> CollectorManager:
-    """CollectorManager 实例（共享给该子域所有测试）"""
-    return CollectorManager()
-```
+非 fixture 的共享替身（fake）与工厂构造器**不放 conftest**，放该域 `helpers.py` / `fakes.py` 供同域各测试文件 import 复用（示例：`tests/modules/llm/fakes.py`、`tests/modules/mcp/fakes.py`、`tests/config/helpers.py`），规范见 §2"文件组织与共享替身"。
 
 ## 8. 调试测试
 
@@ -574,7 +585,6 @@ uv run pytest tests/ -v --log-cli-level=DEBUG -k test_event_bus
 ```python
 import pytest
 
-@pytest.mark.asyncio
 async def test_debug():
     result = await some_operation()
     # 设置断点
@@ -589,16 +599,9 @@ uv run pytest tests/test_file.py::test_debug -v -s
 
 ## 9. 常见问题
 
-### 9.1 异步测试超时
+### 9.1 异步测试偶发超时
 
-如果遇到异步测试超时错误：
-
-```python
-# 增加超时时间
-@pytest.mark.asyncio(timeout=30)  # 30 秒超时
-async def test_slow_operation():
-    ...
-```
+异步测试偶发超时先分清两类：**结果没等到**（fire-and-forget 派发慢于固定睡眠）改用 §5.3 的"等条件成立"轮询；**操作真的慢**则放宽该用例自己的等待上限（按全量回归满载估算余量），不要为迁就测试去压缩生产路径的时序参数。
 
 ### 9.2 Fixture 循环依赖
 
