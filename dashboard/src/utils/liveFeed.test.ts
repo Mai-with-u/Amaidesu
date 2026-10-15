@@ -474,6 +474,23 @@ describe('rundown.changed / game.*', () => {
     expect(blankTitle).toMatchObject({ text: '（未命名环节）' });
   });
 
+  it('语音合成失败行：错误文案带原因与原文', () => {
+    const entry = toEntry(
+      evt('tts.utterance.failed', {
+        speech_text: '大家好呀',
+        engine: 'gptsovits',
+        error_message: 'connection refused',
+      }),
+    );
+    expect(entry).toMatchObject({
+      kind: 'tts',
+      text: '大家好呀',
+      note: '语音合成失败：connection refused',
+      badge: '合成失败',
+      failed: true,
+    });
+  });
+
   it('里程碑：message + game·scene 元信息', () => {
     const entry = toEntry(
       evt('game.milestone', { message: '下了矿井', game: 'Minecraft', scene: '主世界' }),

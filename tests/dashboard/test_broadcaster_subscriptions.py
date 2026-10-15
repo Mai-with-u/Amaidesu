@@ -18,6 +18,7 @@ from src.modules.events.payloads import (
     StreamerSpeechPayload,
     TaskChangedPayload,
     ToolResultPayload,
+    UtteranceFailedPayload,
 )
 from src.modules.events.payloads.tool_health import ToolHealthPayload
 
@@ -182,3 +183,21 @@ async def test_task_and_context_events_pass_through(started) -> None:
         1_000,
         3,
     )
+
+
+@pytest.mark.asyncio
+async def test_tts_utterance_failed_passes_through(started) -> None:
+    """TTS 发声失败进时间线：订阅 tts.utterance.failed 并以事件名直通转发。"""
+    bus, _ws, deliver = started
+    _handler, model_cls = bus.subscribed[CoreEvents.TTS_UTTERANCE_FAILED]
+    assert model_cls is UtteranceFailedPayload, "模型类必须是 UtteranceFailedPayload"
+
+    payload = UtteranceFailedPayload(
+        utterance_id="utt_1",
+        speech_text="大家好呀",
+        engine="gptsovits",
+        error_message="connection refused",
+    )
+    call = await deliver(CoreEvents.TTS_UTTERANCE_FAILED, payload)
+    assert call.args[0] == CoreEvents.TTS_UTTERANCE_FAILED
+    assert call.args[1]["error_message"] == "connection refused"
