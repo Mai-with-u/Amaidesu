@@ -4,8 +4,8 @@
 - **纯函数组件**（无循环/无定时/无 LLM，被 Planner 每轮调用）
 - 对话部分（历史 + 本批弹幕 + 主播发言）由 canonical 映射承载为原生
   user/assistant 消息，**不经过本模块**；本模块只渲染元数据参考段
-  （情境标注之外的环节描述 / 直播间快照 / 记忆召回），由 Planner 固定在
-  消息序列尾部追加（append-only，不插中间）
+  （情境标注之外的上场回顾 / 环节描述 / 直播间快照 / 人物画像），由 Planner
+  固定在消息序列尾部追加（append-only，不插中间）
 - 空段规则：有数据才渲染段（无占位文本）
 """
 
@@ -35,16 +35,18 @@ class AssemblerInputs:
     消息通道；本集合只收参考性质的元数据。
     """
 
+    session_recap_section: str = ""  # 上场回顾段（开播后固定，整场不变；由场次回顾读出）
     stage_descriptions: str = ""  # 环节描述
     environment: Optional[EnvironmentBlock] = None
-    person_profile_section: str = ""  # 人物画像段（观众画像注入，由 memory 服务取得）
+    person_profile_section: str = ""  # 人物画像段（本批发言人里有印象的常客，由常客名册取得）
 
 
 class PlannerAssembler:
     """Planner 参考段组装器
 
-    组装顺序：环节描述 → 直播间快照 → 人物画像。顺序由测试锁定
-    （test_planner_context.py）；整段作为一条 user 消息固定在消息序列尾部，
+    组装顺序：上场回顾 → 环节描述 → 直播间快照 → 人物画像。顺序由测试锁定
+    （test_planner_context.py）；上场回顾放最前——它是整场不变的背景，
+    其后才是随环节与本批变化的段；整段作为一条 user 消息固定在消息序列尾部，
     ReAct 循环的 assistant/tool 消息追加在其后（append-only，服务端 LLM
     前缀缓存可命中既有前缀）。
 
@@ -53,6 +55,9 @@ class PlannerAssembler:
 
     def assemble(self, inputs: AssemblerInputs) -> str:
         sections: List[Tuple[str, str]] = []
+
+        if inputs.session_recap_section:
+            sections.append(("上场回顾-内部参考", inputs.session_recap_section))
 
         if inputs.stage_descriptions:
             sections.append(("环节描述", inputs.stage_descriptions))

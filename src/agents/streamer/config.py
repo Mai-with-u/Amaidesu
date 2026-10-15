@@ -396,6 +396,61 @@ class StreamerLiveFrameConfig(BaseConfig):
 # ---------------------------------------------------------------------------
 
 
+class StreamerMemoryConfig(BaseConfig):
+    """[agents.streamer.memory] —— 主播自己的记忆：场次回顾 + 常客名册
+
+    场次回顾在收播时写（启动时补写上一场缺失的），开播后注入最近几场；
+    常客名册在收播时为本场最活跃、互动量达门槛的几位常客更新印象。
+    两样都用 summary 档位的模型，失败只降级不阻断直播主链路。
+    """
+
+    recap_enabled: bool = Field(
+        title="是否启用场次回顾",
+        default=True,
+        description="收播时写本场回顾、开播后注入上场回顾（关闭后主播跨场次不记得自己做过什么）",
+    )
+    recap_max_length: int = Field(
+        title="回顾长度上限",
+        default=500,
+        ge=100,
+        le=2000,
+        description="单场回顾文本长度上限（字符；提示词约束 LLM 篇幅，超出截断）",
+    )
+    recap_inject_count: int = Field(
+        title="开播注入最近几场",
+        default=1,
+        ge=0,
+        le=5,
+        description="开播后注入最近几场的回顾（0 = 不注入，只留工具按需查）",
+    )
+    roster_enabled: bool = Field(
+        title="是否启用常客名册",
+        default=True,
+        description="收播时为本场活跃常客更新印象（关闭后名册不再增长，已有印象仍注入）",
+    )
+    roster_min_interactions: int = Field(
+        title="建档门槛",
+        default=3,
+        ge=1,
+        le=100,
+        description="累计互动量（viewers.interaction_count）达到多少才建档；不够格不建、自然不注入",
+    )
+    roster_batch_max: int = Field(
+        title="每场更新人数上限",
+        default=5,
+        ge=1,
+        le=20,
+        description="每场收播最多为几位常客更新印象（按本场弹幕数取最活跃的）",
+    )
+    profile_max_length: int = Field(
+        title="印象长度上限",
+        default=400,
+        ge=100,
+        le=1000,
+        description="单人印象文本长度上限（字符；提示词约束 LLM 篇幅，超出截断）",
+    )
+
+
 class StreamerConfig(BaseConfig):
     """主播 Agent 完整配置（[agents.streamer] 段及子段）
 
@@ -441,7 +496,12 @@ class StreamerConfig(BaseConfig):
     context: StreamerContextConfig = Field(
         title="上下文组装器配置",
         default_factory=StreamerContextConfig,
-        description="上下文组装器配置（enabled/memory_recall_long_term）",
+        description="上下文组装器配置（enabled + 对话历史预算）",
+    )
+    memory: StreamerMemoryConfig = Field(
+        title="主播记忆",
+        default_factory=StreamerMemoryConfig,
+        description="主播自己的记忆：场次回顾（收播写、开播注入）与常客名册（收播更新常客印象）",
     )
     background: StreamerBackgroundConfig = Field(
         title="后台维护配置",
@@ -494,6 +554,7 @@ __all__ = [
     "StreamerConfig",
     "StreamerPersonaConfig",
     "StreamerContextConfig",
+    "StreamerMemoryConfig",
     "StreamerBackgroundConfig",
     "StreamerCompressorConfig",
     "StreamerBatchConfig",

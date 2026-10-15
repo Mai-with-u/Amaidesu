@@ -1,7 +1,7 @@
 """Planner ReAct 循环测试。
 
 覆盖：工具列表构造 / ReAct 循环（reply 收尾、自然终止、超步）/ registry 路由
-与观察作为观察返回 / LLM 失败降级 / 上下文组装两路径 / 记忆召回 / 可观测副产品。
+与观察作为观察返回 / LLM 失败降级 / 上下文组装两路径 / 人物画像与上场回顾注入 / 可观测副产品。
 """
 
 from typing import Any
@@ -29,7 +29,7 @@ def _make_planner(
     chat_responses: list | None = None,
     registry: Any | None = None,
     reply_provider: Any | None = None,
-    memory: Any | None = None,
+    profile_repo: Any | None = None,
     viewer_repo: Any | None = None,
     context_enabled: bool = True,
     max_steps: int = 8,
@@ -88,7 +88,7 @@ def _make_planner(
         prompt_service=prompt,
         room_state=RoomState(),
         tool_registry=reg,
-        memory=memory,
+        profile_repo=profile_repo,
         viewer_repo=viewer_repo,
         context_enabled=context_enabled,
         reply_provider=prov,
@@ -350,22 +350,22 @@ async def test_context_game_narrative_in_reference_tail() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 记忆召回
+# 人物画像（常客名册）与上场回顾
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_person_profile_hits_in_context() -> None:
     """本批发言人有画像 → 注入组装器；昵称从 viewers 实时取（画像段与弹幕对得上号）。"""
-    memory = MagicMock()
-    memory.get_viewer_profile = AsyncMock(return_value="老粉，喜欢工作台话题")
+    profile_repo = MagicMock()
+    profile_repo.get_profile_text = AsyncMock(return_value="老粉，喜欢工作台话题")
     viewer_repo = MagicMock()
     viewer_repo.get_viewer_stats = AsyncMock(return_value={"user_name": "老王"})
-    planner, llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory, viewer_repo=viewer_repo)
+    planner, llm, _prompt = _make_planner(chat_responses=[_resp()], profile_repo=profile_repo, viewer_repo=viewer_repo)
 
     await planner.plan([_msg("工作台")])
 
-    memory.get_viewer_profile.assert_awaited()
+    profile_repo.get_profile_text.assert_awaited()
     viewer_repo.get_viewer_stats.assert_awaited()
     # 参考段固定在消息序列尾（最后一条 user 消息），画像行与弹幕侧"老王: ..."同源可关联
     reference = [m for m in llm.generate.await_args.args[0] if m["role"] == "user"][-1]
@@ -375,13 +375,13 @@ async def test_person_profile_hits_in_context() -> None:
 @pytest.mark.asyncio
 async def test_person_profile_no_placeholder_for_portraitless() -> None:
     """无画像的候选不占位：前几人无画像时继续遍历，有画像者照常注入。"""
-    memory = MagicMock()
+    profile_repo = MagicMock()
 
-    async def _profile(platform: str, user_id: str) -> str:
+    async def _profile(*, platform: str, user_id: str) -> str:
         return "" if user_id == "u_无画像" else "有画像"
 
-    memory.get_viewer_profile = AsyncMock(side_effect=_profile)
-    planner, _llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory)
+    profile_repo.get_profile_text = AsyncMock(side_effect=_profile)
+    planner, _llm, _prompt = _make_planner(chat_responses=[_resp()], profile_repo=profile_repo)
 
     # batch 时间正序:最无画像者在最前(倒序遍历的最后),有画像者在后
     portraitless = _msg("随便聊聊")
@@ -394,9 +394,9 @@ async def test_person_profile_no_placeholder_for_portraitless() -> None:
 @pytest.mark.asyncio
 async def test_person_profile_section_hard_cap() -> None:
     """本批全部观众画像完整注入，不丢掉尾部经历。"""
-    memory = MagicMock()
-    memory.get_viewer_profile = AsyncMock(return_value="画" * 900)
-    planner, _llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory)
+    profile_repo = MagicMock()
+    profile_repo.get_profile_text = AsyncMock(return_value="画" * 900)
+    planner, _llm, _prompt = _make_planner(chat_responses=[_resp()], profile_repo=profile_repo)
 
     batch = [_msg(f"第{i}条") for i in range(5)]
     for i, msg in enumerate(batch):
@@ -411,9 +411,9 @@ async def test_person_profile_section_hard_cap() -> None:
 @pytest.mark.asyncio
 async def test_person_profile_failure_not_blocking() -> None:
     """画像查询异常 → 不阻断决策（静默降级）。"""
-    memory = MagicMock()
-    memory.get_viewer_profile = AsyncMock(side_effect=RuntimeError("db down"))
-    planner, _llm, _prompt = _make_planner(chat_responses=[_resp()], memory=memory)
+    profile_repo = MagicMock()
+    profile_repo.get_profile_text = AsyncMock(side_effect=RuntimeError("db down"))
+    planner, _llm, _prompt = _make_planner(chat_responses=[_resp()], profile_repo=profile_repo)
 
     outcome = await planner.plan([_msg()])
 
@@ -582,3 +582,27 @@ async def test_context_elapsed_provider_failure_degrades() -> None:
     ref_msg = _reference_message(llm)
     assert "已开播时长" not in ref_msg["content"]
     assert outcome["silent_reason"] == "natural"
+
+
+@pytest.mark.asyncio
+async def test_session_recap_injected_first_in_reference() -> None:
+    """上场回顾进参考段，且排在环节描述与直播间快照之前（整场不变的背景放最前）。"""
+    planner, llm, _prompt = _make_planner(chat_responses=[_resp()])
+
+    await planner.plan([_msg()], rundown_text="## 开场", session_recap="【2026-10-13 的直播】这场我挖到了钻石")
+
+    reference = [m for m in llm.generate.await_args.args[0] if m["role"] == "user"][-1]["content"]
+    assert "## 上场回顾-内部参考" in reference
+    assert "这场我挖到了钻石" in reference
+    assert reference.index("## 上场回顾-内部参考") < reference.index("## 环节描述")
+
+
+@pytest.mark.asyncio
+async def test_session_recap_absent_omits_section() -> None:
+    """没有上场回顾 → 段整段省略。"""
+    planner, llm, _prompt = _make_planner(chat_responses=[_resp()])
+
+    await planner.plan([_msg()])
+
+    reference = [m for m in llm.generate.await_args.args[0] if m["role"] == "user"][-1]["content"]
+    assert "上场回顾" not in reference

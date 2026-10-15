@@ -403,8 +403,10 @@ class TestRealRepoTemplates:
                 "summary_system",
                 # 主播时间线前情提要系统提示词
                 "chapter_system",
-                # 画像增量压缩系统提示词
+                # 常客名册收播更新系统提示词
                 "profile_system",
+                # 场次回顾收播总结系统提示词
+                "session_recap_system",
                 "screen_vlm_system",
                 "screen_vlm_prompt",
                 "text_adv_vlm_question",

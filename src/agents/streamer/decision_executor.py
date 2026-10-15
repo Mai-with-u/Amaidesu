@@ -111,6 +111,7 @@ class DecisionRoundExecutor:
         reminders_provider: Optional[Callable[[], str]] = None,
         logger: Optional[ModuleLogger] = None,
         game_chat_provider: Optional[Callable[[], NarrativeView]] = None,
+        session_recap_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         """``history_provider`` 等 provider 返回值形态：
 
@@ -122,6 +123,7 @@ class DecisionRoundExecutor:
           送达一次制，缺省 = 不注入）
         - game_chat: ``NarrativeView``（全文进 Planner 参考段，本窗新到的原话随说话交给
           表达侧；缺省 = 不注入）
+        - session_recap: ``str``（可为空串；上场回顾，开播后固定整场不变，缺省 = 不注入）
         """
         self._logger = logger or get_logger("StreamerAgent.DecisionRoundExecutor")
         self._planner = planner
@@ -138,6 +140,7 @@ class DecisionRoundExecutor:
         self._body_narrative_provider = body_narrative_provider
         self._reminders_provider = reminders_provider
         self._game_chat_provider = game_chat_provider
+        self._session_recap_provider = session_recap_provider
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
 
@@ -273,6 +276,9 @@ class DecisionRoundExecutor:
         # 运营递话留言（读取即取空队列——送达一次制；缺省不注入）
         reminders = self._reminders_provider() if self._reminders_provider else ""
 
+        # 上场回顾（开播后固定整场不变；缺省不注入）
+        session_recap = self._session_recap_provider() if self._session_recap_provider else ""
+
         # Planner ReAct 决策（循环内完成查信息与 reply 调用；失败细节经
         # Planner.last_failure 带出，供决策事件区分降级原因）
         planner_started_ms = now_ms()
@@ -294,6 +300,7 @@ class DecisionRoundExecutor:
                 round_id=round_id,
                 trigger_reason=trigger_reason,
                 fresh_game_chat=list(game_chat.fresh),
+                session_recap=session_recap,
             )
         except Exception as exc:
             self._logger.exception(f"Planner 调用异常: {exc}")

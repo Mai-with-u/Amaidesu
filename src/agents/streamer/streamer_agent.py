@@ -21,6 +21,8 @@ agent = StreamerAgent(
     chat_repo=store.chat,
     sessions_repo=store.sessions,
     topic_repo=store.topics,
+    viewer_profile_repo=store.viewer_profiles,
+    recap_repo=store.recaps,
 )
 await agent.start()
 # Agent now: subscribes room.message.danmaku → buffers → planner → reply tool → ...
@@ -48,7 +50,6 @@ from src.modules.task_utils import spawn_background_task
 from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.time_utils import now_ms
-from src.modules.types.currency import to_cny
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.room_state import RoomStateFramePayload, RoomStateWatchedPayload
 
@@ -57,6 +58,7 @@ from .rundown.rundown_state import RundownState
 from .tools.rundown_tool import RundownControlProvider, build_rundown_tool_provider
 from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
+from .memory import RegularsRosterWriter, SessionRecapWriter, build_memory_tool_provider
 from .message_buffer import MessageBuffer
 from .narrative import NarrativeBuffer, NarrativeView
 from .planner import Planner
@@ -116,27 +118,6 @@ def _text_field(item: Any, name: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-#: 走"付费行为直落观众事实"通道的消息类型（结构化数据，不经 LLM 提取）
-_PAID_FACT_MESSAGE_TYPES = frozenset({"gift", "super_chat", "guard"})
-
-#: 舰队等级 → 人读称谓（开通事实用；未知等级兜底"舰队"）
-_GUARD_LEVEL_LABELS: Dict[int, str] = {1: "总督", 2: "提督", 3: "舰长"}
-
-
-def _paid_fact_text(msg: RoomMessagePayload) -> str:
-    """付费消息 → 观众事实一句话（纯函数，单测钉住文案口径）。"""
-    if msg.message_type == "gift" and msg.gift is not None:
-        return f"送过礼物：{msg.gift.name}×{msg.gift.count}"
-    if msg.message_type == "super_chat" and msg.sc is not None:
-        amount = f"（¥{to_cny(msg.sc.total_price, msg.sc.currency):.0f}）"
-        text = msg.content.strip()
-        return f"SC：{text}{amount}" if text else f"SC{amount}"
-    if msg.message_type == "guard" and msg.guard is not None:
-        label = _GUARD_LEVEL_LABELS.get(msg.guard.guard_level, "舰队")
-        return f"开通{label}"
-    return ""
-
-
 class StreamerAgent(BaseAgent):
     """主播 Agent：编排 Planner + Replyer + 工具 + 后台任务 + 流程单。
 
@@ -171,8 +152,9 @@ class StreamerAgent(BaseAgent):
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
         viewer_repo: Optional[Any] = None,
-        memory: Any = None,
-        memory_policy: Optional[Dict[str, Any]] = None,
+        viewer_profile_repo: Optional[Any] = None,
+        recap_repo: Optional[Any] = None,
+        event_repo: Optional[Any] = None,
         context_assembler_config: Optional[Any] = None,
         speech_config: Optional[Dict[str, Any]] = None,
         tts_engine: Optional["TTSProvider"] = None,
@@ -195,17 +177,17 @@ class StreamerAgent(BaseAgent):
             sessions_repo: 可选 ``SessionRepo``（live_sessions 实时状态，转交后台维护器）
             topic_repo: 可选 ``TopicRepo``（摘要/话题快照落地，转交后台维护器）
             viewer_repo: 可选 ``ViewerRepo``（观众统计仓储）——Planner 画像注入
-                时经它实时取观众昵称；None 时注入行回退 platform/user_id
+                时经它实时取观众昵称、常客名册按互动量筛候选、工具按昵称反查；
+                None 时注入行回退 platform/user_id、名册不更新
+            viewer_profile_repo: 可选 ``ViewerProfileRepo``（常客名册）。``None`` 时
+                名册相关功能整体降级——Planner 走无画像注入路径、收播不更新印象、
+                ``memory_recall_viewer`` 工具不注册
+            recap_repo: 可选 ``SessionRecapRepo``（场次回顾）。``None`` 时收播不写
+                回顾、开播不注入上场回顾、``memory_recall_session`` 工具不注册
+            event_repo: 可选 ``EventRepo``（游戏事件）——场次回顾的游戏进展原料；
+                None 时回顾少这一类原料
             context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
-                控制 Planner 组装路径开关与长记忆召回条数；None 时 Planner 走内置默认）
-            memory: 可选观众事实/画像读写服务（``SimpleMemory`` 结构契约）。
-                传 ``None`` 时记忆相关功能整体降级——Planner 走无画像注入路径，
-                BackgroundMaintainer 跳过事实写入。这是契约保证的"功能
-                可关闭"而非"崩溃友好"。
-            memory_policy: 可选画像行为策略（核心 ``[memory]`` 段，storage.toml）。
-                形如 ``{"profile_min_interactions": 3, ...}``；
-                Planner 注入上限与后台事实提取/画像生成参数同源。``None`` 时
-                各参数走内置默认。
+                控制 Planner 组装路径开关；None 时 Planner 走内置默认）
             speech_config: 可选发言管线配置（来自核心 ``[tts]`` 段）。
                 形态::
 
@@ -250,12 +232,12 @@ class StreamerAgent(BaseAgent):
         self._session_manager = session_manager
         # 思考流旁路出口（可选；观察面专用，不进 EventBus 不落库）
         self._thinking_sink = thinking_sink
-        # 记忆后端（可选；None 时记忆相关功能整体降级）
-        self._memory = memory
         # 观众统计仓储（Planner 注入画像时实时取昵称用；None 时回退 platform/user_id）
         self._viewer_repo = viewer_repo
-        # 画像行为策略（[memory] 段；控制后台事实提取与画像生成）
-        self._memory_policy = memory_policy if isinstance(memory_policy, dict) else {}
+        # 主播记忆的两张表（可选；None 时对应记忆功能整体降级）
+        self._profile_repo = viewer_profile_repo
+        self._recap_repo = recap_repo
+        self._event_repo = event_repo
         self._logger = get_logger("StreamerAgent")
         # fire-and-forget 后台任务强引用（防 GC 中途回收 + 异常可见化）
         self._bg_tasks: set = set()
@@ -270,17 +252,13 @@ class StreamerAgent(BaseAgent):
         self._timing_gate = TimingGate(
             force_message_types=config.force.force_message_types,
         )
-        # 已落过事实的付费消息 ID（进程内判重；重启后由 add_viewer_fact 的
-        # 同观众同文本去重兜底，不会重复累积同一事实）
-        self._paid_fact_seen_ids: deque[str] = deque(maxlen=512)
-
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
 
         # Planner（决策核心，Agent 内部件——非工具）
         # 行为准则（behavior_style）只读包内配置权威 config.persona（决策侧通道）
         _behavior_style = config.persona.behavior_style or ""
-        # context 组装器路径开关——直接读包内权威；注入上限读 [memory] 策略段
+        # context 组装器路径开关——直接读包内权威
         _context_enabled = config.context.enabled
         self._planner = Planner(
             config={
@@ -294,7 +272,7 @@ class StreamerAgent(BaseAgent):
             prompt_service=prompt_manager,
             room_state=self._room_state,
             tool_registry=tool_registry,
-            memory=memory,
+            profile_repo=viewer_profile_repo,
             viewer_repo=viewer_repo,
             context_enabled=bool(_context_enabled),
             behavior_style=_behavior_style,
@@ -368,12 +346,46 @@ class StreamerAgent(BaseAgent):
             sessions_repo=sessions_repo,  # live_sessions 实时状态落库（按 session_manager 解析的当前场次）
             chat_repo=chat_repo,  # 话题摘要读 live_chat 最近观众行
             session_manager=session_manager,  # 场次归属解析（None 时心跳降级跳过）
-            memory=memory,  # 事实提取/画像生成写入面；None 时降级
-            memory_policy=self._memory_policy,  # [memory] 段策略（提取开关/门槛/长度/条数）
             event_bus=event_bus,
             topic_repo=topic_repo,  # 摘要落地：timeline_summary + topics 快照
             prompt_manager=self._prompt,  # 摘要/画像系统提示词渲染（复用 Agent 持有的 PromptManager）
         )
+
+        # 主播记忆：场次回顾（收播写 / 启动补写 / 开播注入）与常客名册（收播更新）。
+        # 仓储或开关缺一则该项降级为 None；两者都用 summary 档位模型，不抢决策优先级
+        memory_cfg = config.memory
+        self._recap_inject_count: int = int(memory_cfg.recap_inject_count)
+        self._recap_writer: Optional[SessionRecapWriter] = None
+        if memory_cfg.recap_enabled and recap_repo is not None and sessions_repo is not None and chat_repo is not None:
+            self._recap_writer = SessionRecapWriter(
+                sessions_repo=sessions_repo,
+                chat_repo=chat_repo,
+                recap_repo=recap_repo,
+                topic_repo=topic_repo,
+                event_repo=event_repo,
+                llm_service=llm_manager,
+                prompt_manager=prompt_manager,
+                max_length=memory_cfg.recap_max_length,
+            )
+        self._roster_writer: Optional[RegularsRosterWriter] = None
+        if (
+            memory_cfg.roster_enabled
+            and viewer_profile_repo is not None
+            and chat_repo is not None
+            and viewer_repo is not None
+        ):
+            self._roster_writer = RegularsRosterWriter(
+                chat_repo=chat_repo,
+                viewer_repo=viewer_repo,
+                profile_repo=viewer_profile_repo,
+                llm_service=llm_manager,
+                prompt_manager=prompt_manager,
+                min_interactions=memory_cfg.roster_min_interactions,
+                batch_max=memory_cfg.roster_batch_max,
+                profile_max_length=memory_cfg.profile_max_length,
+            )
+        # 上场回顾段文本：开播（live.started）时从库里读出并固定，整场不变
+        self._recap_section: str = ""
 
         # 后台 flush 循环（Agent 主循环）
         self._flush_task: Optional[asyncio.Task] = None
@@ -474,6 +486,7 @@ class StreamerAgent(BaseAgent):
             body_narrative_provider=self._body_narrative_text,
             game_chat_provider=self._game_chat_view,
             reminders_provider=self._drain_reminders,
+            session_recap_provider=self._session_recap_text,
             logger=self._logger,
         )
 
@@ -508,6 +521,16 @@ class StreamerAgent(BaseAgent):
         if self.typed_config.background.enabled:
             await self._background.start()
 
+        # 收播整理善后：上次进程退出时没来得及写的回顾，启动后在后台补写一场、
+        # 顺带补跑该场的常客名册，补完再把"上场回顾"段读出来（开播前就能用）
+        if self._recap_writer is not None:
+            spawn_background_task(
+                self._bootstrap_recaps(),
+                logger=self._logger,
+                tasks=self._bg_tasks,
+                label="StreamerAgent.recap_bootstrap",
+            )
+
         # 启动流程单（fail-soft：加载失败降级为无流程单）
         await self._start_rundown()
 
@@ -541,7 +564,7 @@ class StreamerAgent(BaseAgent):
         # 时间线在跑的后台整理随 Agent 停止作废
         await self._timeline.reset()
 
-        # 资源清理契约：摘除本 Agent 注册的 provider（reply / rundown）
+        # 资源清理契约：摘除本 Agent 注册的 provider（reply / rundown / memory）
         removed = self.unregister_tool_providers()
 
         self._logger.info(f"StreamerAgent 已停止（摘除 {removed} 个工具）")
@@ -571,7 +594,7 @@ class StreamerAgent(BaseAgent):
         return [build_reply_tool_spec()]
 
     def _register_tools(self) -> None:
-        """构造 reply Provider；reply 与 rundown_control 注册进 ToolRegistry。
+        """构造 reply Provider；reply / rundown_control / memory_* 注册进 ToolRegistry。
 
         名单口径（注册处声明）：
         - ``streamer_reply``：LLM 可调的真工具，注册 + 名单 ``["streamer"]``
@@ -580,6 +603,8 @@ class StreamerAgent(BaseAgent):
         - ``rundown_control``：注册（provider="rundown"，名单 ``["streamer"]``）
           进 ToolRegistry，与其他工具同一路径被 Planner 调用；可见性随
           Provider 注册/摘除进出名单（Agent 启动即注册，无需二次开关）。
+        - ``memory_recall_session`` / ``memory_recall_viewer``：主播记忆工具
+          （provider="memory"，名单 ``["streamer"]``），两张记忆表都注入时才注册。
         """
 
         # reply tool（无条件构造——thinking 槽位与注册共用同一实例）
@@ -605,7 +630,20 @@ class StreamerAgent(BaseAgent):
                 registry=self._tool_registry,
                 visible_to={"rundown_control": ["streamer"]},
             )
-            self._logger.info("StreamerAgent 工具已注册：streamer_reply / rundown_control（名单 [streamer]）")
+            registered = "streamer_reply / rundown_control"
+            if self._recap_repo is not None and self._profile_repo is not None:
+                self.register_tool_provider(
+                    build_memory_tool_provider(
+                        recap_repo=self._recap_repo,
+                        profile_repo=self._profile_repo,
+                        viewer_repo=self._viewer_repo,
+                        current_session_provider=self._current_session_pk,
+                    ),
+                    registry=self._tool_registry,
+                    visible_to={"memory_recall_session": ["streamer"], "memory_recall_viewer": ["streamer"]},
+                )
+                registered += " / memory_recall_session / memory_recall_viewer"
+            self._logger.info(f"StreamerAgent 工具已注册：{registered}（名单 [streamer]）")
 
     # ==================================================================
     # 事件订阅
@@ -701,13 +739,15 @@ class StreamerAgent(BaseAgent):
         payload: LiveStartedPayload,
         source: str,
     ) -> None:
-        """live.started 回调：开播，放行主动发言。"""
+        """live.started 回调：开播，放行主动发言，读出上场回顾固定整场。"""
         del event_name, source
         self._live_active = True
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
         self._unpersisted_turns.clear()
         self._timeline_notes.clear()
         await self._timeline.reset()
+        # 上场回顾：开播这一刻从库里读最近几场（排除本场），整场固定不再变
+        await self._refresh_recap_section(exclude_session_id=payload.live_session_id)
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
 
     async def _on_live_ended(
@@ -716,7 +756,7 @@ class StreamerAgent(BaseAgent):
         payload: LiveEndedPayload,
         source: str,
     ) -> None:
-        """live.ended 回调：下播，主动发言收闸。"""
+        """live.ended 回调：下播，主动发言收闸，后台写本场回顾并更新常客名册。"""
         del event_name, source
         self._live_active = False
         # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
@@ -724,6 +764,72 @@ class StreamerAgent(BaseAgent):
         self._timeline_notes.clear()
         await self._timeline.reset()
         self._logger.info("场次已结束：主动发言收闸")
+        # 收播整理：先写这一场的回顾，再给本场活跃的常客更新印象（两次 LLM 调用，
+        # 放后台不阻塞事件回调）。空场次（无任何明细行，行已删）没东西可整理
+        if not payload.empty_discarded and (self._recap_writer is not None or self._roster_writer is not None):
+            spawn_background_task(
+                self._settle_session(payload.live_session_id),
+                logger=self._logger,
+                tasks=self._bg_tasks,
+                label="StreamerAgent.settle_session",
+            )
+
+    # ==================================================================
+    # 主播记忆：场次回顾 / 常客名册
+    # ==================================================================
+
+    def _session_recap_text(self) -> str:
+        """上场回顾段（DecisionRoundExecutor 每窗读；开播时固定，整场不变）。"""
+        return self._recap_section
+
+    def _current_session_pk(self) -> Optional[int]:
+        """进行中场次主键（无场次管理器或未开播为 None）；回忆往前第 n 场时要排除本场。"""
+        if self._session_manager is None:
+            return None
+        pk = getattr(self._session_manager, "active_pk", None)
+        return int(pk) if isinstance(pk, int) else None
+
+    async def _refresh_recap_section(self, *, exclude_session_id: Optional[int] = None) -> None:
+        """从库里读最近几场回顾渲染成注入段；未启用或没有上一场时为空串（段整段省略）。"""
+        if self._recap_writer is None or self._recap_inject_count <= 0:
+            self._recap_section = ""
+            return
+        current = exclude_session_id if exclude_session_id is not None else self._current_session_pk()
+        self._recap_section = await self._recap_writer.render_recent(
+            count=self._recap_inject_count, exclude_session_id=current
+        )
+        if self._recap_section:
+            self._logger.info(f"上场回顾已装入参考段（{len(self._recap_section)} 字）")
+
+    async def _bootstrap_recaps(self) -> None:
+        """启动善后：补写上次退出时漏掉的回顾（最多一场）并补跑该场名册，再装入上场回顾段。
+
+        名册按原料水位只吃新话，即使上次其实已经更新过也不会重复调用模型。
+        """
+        assert self._recap_writer is not None  # noqa: S101 调用方已 guard
+        written = await self._recap_writer.backfill_missing(limit=1)
+        if written:
+            self._logger.info(f"启动补写了场次回顾：{written}")
+        if self._roster_writer is not None:
+            for live_session_id in written:
+                try:
+                    await self._roster_writer.update_for_session(live_session_id)
+                except Exception as exc:
+                    self._logger.warning(f"启动补跑常客名册失败（场次 {live_session_id}）: {exc}")
+        await self._refresh_recap_section()
+
+    async def _settle_session(self, live_session_id: int) -> None:
+        """收播整理：回顾 → 常客名册。逐项降级，一项失败不影响另一项。"""
+        if self._recap_writer is not None:
+            try:
+                await self._recap_writer.write_recap(live_session_id)
+            except Exception as exc:
+                self._logger.warning(f"收播写回顾失败（场次 {live_session_id}）: {exc}")
+        if self._roster_writer is not None:
+            try:
+                await self._roster_writer.update_for_session(live_session_id)
+            except Exception as exc:
+                self._logger.warning(f"收播更新常客名册失败（场次 {live_session_id}）: {exc}")
 
     async def _on_game_event(
         self,
@@ -890,35 +996,6 @@ class StreamerAgent(BaseAgent):
         forced = self._timing_gate.is_forced(msg)
         # 入缓冲
         self._buffer.add(msg, arrival_ms=now_ms(), forced=forced)
-        # 结构化付费行为直落观众事实（记忆原料修复：开播至今 summary 链路几乎
-        # 提不出 facts，礼物/SC/上舰不依赖 LLM）；失败降级不阻断决策链
-        if msg.message_type in _PAID_FACT_MESSAGE_TYPES:
-            self._record_paid_fact(msg)
-
-    def _record_paid_fact(self, msg: RoomMessagePayload) -> None:
-        """把一条付费消息落成观众事实（fire-and-forget，不阻断消息主链路）。"""
-        if self._memory is None:
-            return
-        message_id = msg.message_id
-        if message_id and message_id in self._paid_fact_seen_ids:
-            return
-        fact_text = _paid_fact_text(msg)
-        if not fact_text:
-            return
-        if message_id:
-            self._paid_fact_seen_ids.append(message_id)
-        spawn_background_task(
-            self._memory.add_viewer_fact(
-                platform=msg.platform,
-                user_id=msg.user.id,
-                fact_text=fact_text,
-                source_message_id=message_id,
-                created_at_ms=msg.timestamp_ms,
-            ),
-            logger=self._logger,
-            tasks=self._bg_tasks,
-            label="StreamerAgent.paid_fact",
-        )
 
     def trigger_external_proactive(self, topic_hint: Optional[str] = None) -> None:
         """外部 API 触发主动发言（Dashboard / API 调用）。"""

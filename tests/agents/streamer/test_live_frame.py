@@ -66,7 +66,7 @@ async def test_frame_rides_first_request_only(monkeypatch: pytest.MonkeyPatch) -
     """画面挂在本窗第一次请求尾部；同窗后续步骤不再带。"""
     harness = _Harness(monkeypatch)
     harness.frame = _frame("img_a", harness.now - 2_000)
-    call = SimpleNamespace(id="c1", name="memory_query_memory", arguments={})
+    call = SimpleNamespace(id="c1", name="memory_recall_session", arguments={})
     harness.replies = [
         SimpleNamespace(success=True, content="查一下", tool_calls=[call], request_id="r1"),
         SimpleNamespace(success=True, content="不说", tool_calls=[], request_id="r2"),

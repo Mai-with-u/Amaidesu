@@ -67,7 +67,6 @@ def _make_planner() -> tuple[Planner, MagicMock, List[List[dict]]]:
         prompt_service=prompt,
         room_state=RoomState(),
         tool_registry=registry,
-        memory=None,
         context_enabled=True,
         reply_provider=MagicMock(),
     )

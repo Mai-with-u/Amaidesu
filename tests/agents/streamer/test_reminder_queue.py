@@ -191,7 +191,6 @@ async def test_planner_reference_contains_reminder_section():
         prompt_service=MagicMock(),
         room_state=RoomState(),
         tool_registry=MagicMock(),
-        memory=None,
         context_enabled=False,  # 裸路径：仅情境标注与叙事段，便于断言
     )
 

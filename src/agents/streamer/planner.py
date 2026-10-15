@@ -204,7 +204,7 @@ class Planner:
         prompt_service: Any,
         room_state: RoomState,
         tool_registry: Any = None,
-        memory: Any = None,
+        profile_repo: Any = None,
         viewer_repo: Any = None,
         context_enabled: bool = True,
         behavior_style: str = "",
@@ -220,7 +220,8 @@ class Planner:
             prompt_service: 提示词管理器，需提供 ``render(name, **vars) -> str``。
             room_state: 直播间态势规则层实例。
             tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
-            memory: 观众画像/事实读写服务（鸭子类型 ``SimpleMemory``）；None 时无画像注入。
+            profile_repo: 常客名册读面（``ViewerProfileRepo`` 结构契约，只用
+                ``get_profile_text``）；None 时无画像注入。
             viewer_repo: ``ViewerRepo``（观众统计仓储）——画像注入时经它实时取
                 昵称（昵称会漂移不进画像文本）；None 时注入行回退 platform/user_id。
             context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
@@ -258,7 +259,7 @@ class Planner:
         self._prompt_service = prompt_service
         self._room_state = room_state
         self._tool_registry = tool_registry
-        self._memory = memory
+        self._profile_repo = profile_repo
         self._viewer_repo = viewer_repo
         self._context_enabled = context_enabled
         self._behavior_style: str = behavior_style or ""
@@ -427,6 +428,7 @@ class Planner:
         game_chat: str = "",
         trigger_reason: str = "",
         fresh_game_chat: Optional[List[str]] = None,
+        session_recap: str = "",
     ) -> Dict[str, Any]:
         """对一个决策窗跑 ReAct 循环，产出 outcome dict。
 
@@ -447,6 +449,7 @@ class Planner:
                 tool.result 事件，供观察器归属；空串表示无轮次关联）。
             trigger_reason: 本窗触发原因码（如 ``proactive:rundown``）；用于判断这一窗
                 有没有新的外部输入，没有时不给手上的游戏活补充要求。
+            session_recap: 上场回顾文本（开播后固定，整场不变；空串 = 没有上一场或未启用）。
 
         Returns:
             outcome dict：
@@ -507,6 +510,7 @@ class Planner:
             reminders,
             game_chat,
             overview=overview,
+            session_recap=session_recap,
         )
         if reference_text is None:
             outcome["error"] = self.last_failure
@@ -679,11 +683,12 @@ class Planner:
         reminders: str = "",
         game_chat: str = "",
         overview: str = "",
+        session_recap: str = "",
     ) -> Optional[str]:
         """构造参考段（一条 user 消息，固定在消息序列尾）。
 
         内容 = 情境标注（强制/主动）+ 游戏叙事 + 身体侧近况 + 游戏里的聊天 + 运营提醒 +
-        组装器元数据段（环节描述 / 直播间快照 / 记忆召回）。对话内容不在此
+        组装器元数据段（上场回顾 / 环节描述 / 直播间快照 / 人物画像）。对话内容不在此
         处——历史与本批走 canonical 映射的原生消息通道。
         """
         lines: List[str] = []
@@ -769,6 +774,7 @@ class Planner:
 
         try:
             assembler_inputs = AssemblerInputs(
+                session_recap_section=session_recap or "",
                 stage_descriptions=rundown_text or "",
                 environment=env_block,
                 person_profile_section=person_profile_section,
@@ -1099,8 +1105,8 @@ class Planner:
         self,
         batch: List[Any],
     ) -> str:
-        """按本批发言时间倒序注入全部已有画像，完整保留人物经历与偏好。"""
-        if self._memory is None or not batch:
+        """按本批发言时间倒序注入全部已有印象（常客名册），完整保留人物经历与偏好。"""
+        if self._profile_repo is None or not batch:
             return ""
 
         # 候选收集：发言时间倒序去重（最新发言优先；batch 本身按时间正序）
@@ -1124,7 +1130,7 @@ class Planner:
         lines: List[str] = []
         for platform, user_id in candidates:
             try:
-                profile_text = await self._memory.get_viewer_profile(platform=platform, user_id=user_id)
+                profile_text = await self._profile_repo.get_profile_text(platform=platform, user_id=user_id)
             except Exception as exc:
                 self.logger.warning(f"画像查询失败（{platform}/{user_id}，跳过该人）: {exc}")
                 continue

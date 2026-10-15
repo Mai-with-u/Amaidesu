@@ -1,9 +1,9 @@
 """PlannerAssembler 参考段组装器单元测试。
 
-- 3 输入字段（stage_descriptions / environment / person_profile_section）——
-  对话内容走 canonical 原生消息通道，不进组装器
+- 4 输入字段（session_recap_section / stage_descriptions / environment /
+  person_profile_section）——对话内容走 canonical 原生消息通道，不进组装器
 - 空段规则：有数据才渲染段，无占位文本
-- 段顺序锁定：环节描述 → 直播间快照 → 人物画像；整段作为参考段固定在
+- 段顺序锁定：上场回顾 → 环节描述 → 直播间快照 → 人物画像；整段作为参考段固定在
   消息序列尾（append-only，服务端 LLM 前缀缓存命中既有前缀）
 """
 
@@ -21,6 +21,7 @@ from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBloc
 def _production_inputs() -> AssemblerInputs:
     """生产型输入——模拟 planner 生产路径实际传递的数据形态。"""
     return AssemblerInputs(
+        session_recap_section="【2026-10-13 的直播，时长 2 小时】这场我答应 alice 下次画新皮肤",
         stage_descriptions="## 开场聊天\n自由闲聊，观察弹幕节奏。",
         environment=EnvironmentBlock(
             minute_bucket_ms=1_760_000_000_000,
@@ -34,8 +35,9 @@ def _production_inputs() -> AssemblerInputs:
 
 
 def test_production_inputs_render_all_sections() -> None:
-    """生产型输入 → 3 段全部渲染。"""
+    """生产型输入 → 4 段全部渲染。"""
     text = PlannerAssembler().assemble(_production_inputs())
+    assert "## 上场回顾-内部参考" in text
     assert "## 环节描述" in text
     assert "## 直播间快照" in text
     assert "## 人物画像-内部参考" in text
@@ -63,11 +65,13 @@ def test_empty_sections_omitted() -> None:
     assert "环节描述" not in text
     assert "直播间快照" not in text
     assert "人物画像-内部参考" not in text
+    assert "上场回顾-内部参考" not in text
 
 
 def test_section_order_locked() -> None:
-    """段顺序锁定：环节描述 → 直播间快照 → 人物画像。"""
+    """段顺序锁定：上场回顾 → 环节描述 → 直播间快照 → 人物画像。"""
     text = PlannerAssembler().assemble(_production_inputs())
+    assert text.index("## 上场回顾-内部参考") < text.index("## 环节描述")
     assert text.index("## 环节描述") < text.index("## 直播间快照")
     assert text.index("## 直播间快照") < text.index("## 人物画像-内部参考")
 

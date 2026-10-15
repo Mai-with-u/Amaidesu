@@ -241,8 +241,6 @@ def _make_maintainer(
     room_state = RoomState()
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=Response(success=True, content="观众在聊新版本更新"))
-    memory = MagicMock()
-    memory.ingest = AsyncMock(return_value=None)
     # 不触达摘要渲染路径时，传满足 render() -> str 的最小 fake；调用方若需
     # 真实渲染可显式传入 ``PromptManager(auto_scan_src=True).load_all()``
     if prompt_manager is None:
@@ -253,7 +251,6 @@ def _make_maintainer(
         room_state=room_state,
         llm_service=llm,
         session_manager=_FakeSessionManager(1),
-        memory=memory,
         chat_repo=store.chat,
         prompt_manager=prompt_manager,
     )
