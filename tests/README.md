@@ -36,7 +36,6 @@ tests/
 │   ├── dashboard/                   # Dashboard 服务
 │   ├── events/                      # EventBus / 拦截器 / Payload 注册表
 │   ├── llm/                         # LLMManager 与客户端
-│   ├── memory/                      # MemoryProvider / SimpleMemory
 │   ├── storage/                     # SQLite 存储层
 │   ├── tools/                       # 工具契约（ToolSpec / Registry / as_tool_impl / tasks）
 │   │   └── output/                  # 渲染工具（remote_stream）

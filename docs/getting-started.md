@@ -50,7 +50,7 @@ config/
 ├── tools.toml       # 工具域（[tools] 提供者开关 / disabled_tools / [tools.tasks]）
 ├── avatar.toml      # 虚拟形象（[avatar.platform] 启用名单 + 各平台成员段 + [avatar.lipsync] 口型共享件）
 ├── model.toml       # 三层模型结构（[[llm_providers]] / [[llm_models]] / [llm_profiles]）
-├── storage.toml     # 存储与记忆（顶层 [sqlite] / [memory]）
+├── storage.toml     # 存储（顶层 [sqlite]）
 └── infra.toml       # 基础设施（[tts] / [subtitle] / [dashboard] / [logging] / [interceptors.*] / [simulator]）
 ```
 
@@ -182,10 +182,10 @@ uv run python main.py --dry
 |---------|--------|------|
 | `agents.toml` | `[meta]` / `[agents].enabled` / `[agents.<name>]` | 业务 Agent 启用与子树配置（streamer 子树含 persona/context/proactive/background/command 等） |
 | `collectors.toml` | `enabled` + 各采集器同名段 | 采集器名单驱动装配；子段由包内 ConfigSchema 校验 |
-| `tools.toml` | `[tools]` | 提供者开关（`[tools.studio.*]` / `[tools.vision]` / `[tools.memory]` / `[tools.mcp]`）+ `disabled_tools` + `[tools.tasks]` / `[tools.health]` |
+| `tools.toml` | `[tools]` | 提供者开关（`[tools.studio.*]` / `[tools.vision]` / `[tools.mcp]` / `[tools.web.*]`）+ `disabled_tools` + `[tools.tasks]` / `[tools.health]` |
 | `avatar.toml` | `[avatar.platform]` / `[avatar.platform.<名>]` / `[avatar.lipsync]` | 虚拟形象平台（enabled 启用名单 + 各平台成员段直接铺键 + 口型分析共享件调参） |
 | `model.toml` | `[[llm_providers]]` / `[[llm_models]]` / `[llm_profiles.<用途>]` | 三层模型结构；六用途 profile（planner/replyer/summary/minecraft/vision/simulator）必填 |
-| `storage.toml` | `[sqlite]` / `[memory]` | SQLite 连接（db_path / busy_timeout_ms）与记忆后端（backend="simple"） |
+| `storage.toml` | `[sqlite]` | SQLite 连接（db_path / busy_timeout_ms） |
 | `infra.toml` | `[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` / `[simulator]` / `[events]` / `[agent_supervisor]` / `[interceptors.*]` | 基础设施段集（hot 段：写后即时重载） |
 
 > 字段权威定义在 `src/modules/config/*_schemas.py`；修改后加载管线自动写回补齐默认值；每文件 `[meta].version` 独立递进。
@@ -236,16 +236,15 @@ Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agen
 
 #### 工具（按族列举，代表工具名）
 
-工具注册走 `src/modules/tools/registry.py` 的 `ToolRegistry`。StreamerAgent 自带 `streamer_reply`（发言出口）与 `rundown_control`（流程单推进，随 rundown 注册项），均只对 `streamer` Agent 可见；`memory_query_memory`（记忆检索）由 `[tools.memory]` 开关注册（默认配置启用）。主动发言判定与观众 `/命令` 解析是代码直连的内部件，不是工具。其他族系需要启用对应 `[tools.<pack>]` 包才会注入。
+工具注册走 `src/modules/tools/registry.py` 的 `ToolRegistry`。StreamerAgent 自带 `streamer_reply`（发言出口）、`rundown_control`（流程单推进，随 rundown 注册项）与 `memory_recall_session` / `memory_recall_viewer`（场次回顾 / 常客印象），均只对 `streamer` Agent 可见。主动发言判定与观众 `/命令` 解析是代码直连的内部件，不是工具。其他族系需要启用对应 `[tools.<pack>]` 包才会注入。
 
 | 工具包（`[tools.<pack>]`） | 代表工具 | 说明 |
 |----------------------------|---------|------|
 | `vision` | `vision_look_at_screen` | 屏幕感知（mss 多显示器抓屏 + 可选区域 + VLM 转文本） |
 | `avatar.*`（vts / vrchat / warudo） | `vts_trigger_hotkey` / VRChat OSC 工具 / Warudo 工具 | 虚拟形象控制族（由 avatar.toml `[avatar.platform].enabled` 名单装配） |
 | `studio.obs` | `obs_switch_scene` | 演播控制族（由 `[tools.studio.obs].enabled` 分类开关装配） |
-| Streamer 自带 | `streamer_reply` / `rundown_control` | 主播自有工具（开 `streamer` 即生效；`rundown_control` 随 rundown 注册项声明） |
+| Streamer 自带 | `streamer_reply` / `rundown_control` / `memory_recall_*` | 主播自有工具（开 `streamer` 即生效；`rundown_control` 随 rundown 注册项声明） |
 | `framework`（AgentControl） | `framework_delegate` / `framework_task_status` | 框架级委派与任务状态查询（随任一 Agent 启用生效） |
-| `memory` | `memory_query_memory` | 记忆检索（`[tools.memory]` 开关，默认开启） |
 | `game` | （由具体游戏 Agent 注入） | 游戏专属推进工具（如 text_adv 的选单推进） |
 | `external` | （预留） | 外部工具源（MCP 桥接经 `[tools.mcp]` 启用） |
 
@@ -388,7 +387,7 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 ```
 [Info] 配置验证通过（v2 6-file tree 存在性 + 类型检查）
 [Info] 所有必要的配置文件已存在。继续正常启动...
-[Info] 初始化存储与记忆（SQLiteDatabase + SimpleMemory）...
+[Info] 初始化存储（SQLiteDatabase）...
 [Info] 初始化 LLM 服务...
 [Info] 已创建 LLM 服务实例
 [Info] 初始化事件总线...

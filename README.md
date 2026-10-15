@@ -56,8 +56,8 @@ sequenceDiagram
     总线->>总线: 拦截器：限流 + 相似合并（拦刷屏与复读）
     总线->>主播: 分发
     主播->>主播: MessageBuffer 攒批（默认窗口 3 秒 / 满 20 条）
-    主播->>工具: memory_query_memory("游戏 计划")
-    工具-->>主播: 命中记忆「周末开 Minecraft 新坑」
+    主播->>工具: memory_recall_session(n_back=1)
+    工具-->>主播: 上场回顾「答应大家这周开 Minecraft 新坑」
     Note over 主播,工具: Planner ReAct 决策（有步数上限，防失控）
     主播->>工具: obs_switch_scene（切到游戏场景）
     主播->>工具: streamer_reply（生成台词与情绪）

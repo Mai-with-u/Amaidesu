@@ -182,7 +182,7 @@ input_config = config_service.get_config_with_defaults(
 | `tools.toml` | 工具域（`[tools]` 提供者开关 / `disabled_tools` / `[tools.tasks]` 异步任务基建） |
 | `avatar.toml` | 虚拟形象域（`[avatar.platform]` 启用名单 + 各平台成员段 + `[avatar.lipsync]` 口型共享件） |
 | `model.toml` | 三层模型结构（`[[llm_providers]]` / `[[llm_models]]` / `[llm_profiles]` 六用途 profile） |
-| `storage.toml` | 顶层扁平存储（`[sqlite]` / `[memory]`） |
+| `storage.toml` | 顶层扁平存储（`[sqlite]`） |
 | `infra.toml` | 基础设施（`[tts]` / `[subtitle]` / `[dashboard]` / `[logging]` / `[interceptors.*]` / `[simulator]`） |
 
 ### 组件启用配置
@@ -200,9 +200,6 @@ enabled = ["vts"]             # 合法名: vts / warudo / vrchat
 
 [tools.vision]
 enabled = true                # vision_look_at_screen（mss 抓屏 + VLM 转文本）
-
-[tools.memory]
-enabled = true                # memory_query_memory
 ```
 
 每个组件的独立配置节位于对应工具包/Agent 段内（Schema 权威定义见 `src/modules/config/*_schemas.py`，Pydantic Schema 驱动生成/校验/迁移）。
@@ -225,7 +222,7 @@ config = config_service.get_config_with_defaults(
 )
 ```
 
-> Schema 权威定义在 `src/modules/config/{core,model,agents,collectors,tools,memory,storage,infra}_schemas.py`（Pydantic），组件嵌套配置类随所属域定义，由 `multi_file_loader` 的漂移写回闭环自动补齐用户文件缺失字段。
+> Schema 权威定义在 `src/modules/config/{core,model,agents,collectors,tools,storage,infra}_schemas.py`（Pydantic），组件嵌套配置类随所属域定义，由 `multi_file_loader` 的漂移写回闭环自动补齐用户文件缺失字段。
 
 ### 配置 API
 

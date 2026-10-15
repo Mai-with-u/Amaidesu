@@ -369,7 +369,7 @@ LLM 工具面 = 全部注册工具 − 名单停用 − 熔断中 − 归属限�
 | `ToolProvider`（Protocol） | `src/modules/tools/provider.py` | `name` 属性（与全部 spec 的 `provider` 同值同源，注册期校验）、`list_tools()`、`async invoke(invocation) -> ToolExecutionResult`（**永不抛异常**）；可选钩子 `query_task` / `subscribe_task_notifications`（任务适配器，默认不支持） |
 | `BaseToolProvider`（ABC） | `src/modules/tools/provider.py` | 所有经 `register_provider` 装配的 Provider 的继承基类；带 `category` ClassVar 与 `health_check` 探活钩子默认实现 |
 | `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider, *, visible_to=...)`（可见名单，ADR-012）/ `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(for_agent=...)`（按名单计算工具列表）/ `visible_to_of(name)` / `probe_tool(name)`（熔断器探活入口） |
-| `as_tool_impl` / `make_provider_from_specs` | `src/modules/tools/provider.py` | 简单工具正典路径：普通 async 函数 + spec 组装标准 Provider（样板 `src/modules/memory/query_tool.py`） |
+| `as_tool_impl` / `make_provider_from_specs` | `src/modules/tools/provider.py` | 简单工具正典路径：普通 async 函数 + spec 组装标准 Provider（样板 `src/agents/streamer/memory/tools.py`） |
 
 ### Provider 探活契约（与熔断器配套）
 
@@ -385,7 +385,7 @@ LLM 工具面 = 全部注册工具 − 名单停用 − 熔断中 − 归属限�
 3. `make_provider_from_specs` 组装 Provider，装配处一行
    `registry.register_provider(provider, visible_to=...)` 注册
 
-样板：`src/modules/memory/query_tool.py`（QueryMemory）。
+样板：`src/agents/streamer/memory/tools.py`（主播记忆工具——无连接、无状态，按键读两张表）。
 
 **升级为手写 Provider 类的判据**（出现任一条才升级）：需要连接重连
 （覆写 `connect`/`health_check`）/ 共享状态 / 动态工具表 / 任务适配器
@@ -395,7 +395,7 @@ LLM 工具面 = 全部注册工具 − 名单停用 − 熔断中 − 归属限�
 
 ### 最小骨架代码（正典路径）
 
-参考样板：`src/modules/memory/query_tool.py`（QueryMemory——无连接、无状态的最纯形态）。
+参考样板：`src/agents/streamer/memory/tools.py`（主播记忆工具——无连接、无状态，按键读两张表）。
 
 ```python
 # my_tool.py —— 简单工具正典路径样板
@@ -451,7 +451,7 @@ registry.register_provider(
 
 | 步骤 | 位置 | 操作 |
 |------|------|------|
-| ① 放代码 | `src/modules/<domain>/…`（avatar/studio/vision/memory 等公用域工具）或 `src/agents/<name>/tools.py`（Agent 专属） | Provider 类 `XxxToolProvider` + `build_xxx_spec()` |
+| ① 放代码 | `src/modules/<domain>/…`（avatar/studio/vision 等公用域工具）或 `src/agents/<name>/tools.py`（Agent 专属） | Provider 类 `XxxToolProvider` + `build_xxx_spec()` |
 | ② 注册（带名单） | Agent 专属：在该 Agent 的 `_register_tools` 中 `self._tool_registry.register_provider(provider, visible_to=...)`；公用：在装配根 `main.py` 注册（默认全员） | 名单是注册处代码事实（ADR-012）：值 = Agent 注册名列表或 `["*"]`；未列工具默认仅主播（fail-closed） |
 | ③ 配置（可选） | Agent 专属工具一般无独立配置段（行为由 Agent 配置决定）；公用工具按分类开关（`[tools.<domain>.<key>].enabled`） | |
 | ④ 列出与转换 | `ToolRegistry.to_llm_definitions()` 自动从 `ToolSpec.parameters_schema` 派生 OpenAI 风格 function calling 定义供 LLM 看 | |
@@ -460,7 +460,7 @@ registry.register_provider(
 **谁调用注册？**
 
 - **Agent 专属工具**：Agent 子类 `_register_tools()` 方法（参考 `StreamerAgent._register_tools`、`TextAdvGameAgent._register_tools`）。在 Agent `_on_start` 阶段调用。
-- **公用域工具**：装配根按域装配——avatar 平台经 `bind_core_tools(..., avatar_section=...)` 按 avatar.toml 启用名单注册、studio 分类按 `[tools.<域>.<键>].enabled` 开关注册，memory 经 `bind_memory_tools`，vision（`vision_look_at_screen`）由组合根注入 mss 抓屏 + VLM 文本读取后端后注册。
+- **公用域工具**：装配根按域装配——avatar 平台经 `bind_core_tools(..., avatar_section=...)` 按 avatar.toml 启用名单注册、studio 分类按 `[tools.<域>.<键>].enabled` 开关注册，vision（`vision_look_at_screen`）由组合根注入 mss 抓屏 + VLM 文本读取后端后注册。
 - **工具注册聚合**：生产路径下不存在任何 manager 级聚合函数——Agent 子类在 `_register_tools()` 中自己 `registry.register_provider(provider, visible_to=...)`；avatar/studio 分类工具由 `main.py` 的 `bind_core_tools(..., avatar_section=...)` 按平台名单与域开关装配；启动结束后 `audit_tools(registry)` 只做只读审计（声明与注册按派生全名对账），不参与注入。
 
 ### 测试要点
@@ -476,7 +476,7 @@ registry.register_provider(
 
 | 范例 | 文件 | 形态 |
 |------|------|------|
-| `memory_query_memory`（公用查询，正典样板） | `src/modules/memory/query_tool.py` | 正典路径（`as_tool_impl` + `make_provider_from_specs`） |
+| `memory_recall_session` / `memory_recall_viewer`（主播记忆，名单 `["streamer"]`，正典样板） | `src/agents/streamer/memory/tools.py` | 正典路径（`as_tool_impl` + `make_provider_from_specs`） |
 | `vision_look_at_screen`（公用感知） | `src/modules/vision/look_at_screen.py` | 手写 Provider（DI `ScreenCapture` + `TextReader` 后端；多显示器 + 可选区域 + VLM 转文本；失败降级 success=True + error） |
 | `text_adv_advance` / `text_adv_choose` / `text_adv_set_auto` / `text_adv_get_state`（Agent 专属，名单 `["streamer"]`） | `src/agents/text_adv/tools.py` | 手写 Provider（`provider="text_adv"`） |
 | `streamer_reply`（主播发言出口，注册 + 名单 `["streamer"]`） | `src/agents/streamer/tools/reply_tool.py` | 手写 Provider（thinking 槽位） |

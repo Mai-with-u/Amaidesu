@@ -55,7 +55,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
 
     subgraph Tools["工具族 src/modules/tools/"]
         RT["streamer_reply 工具<br/>ReplyToolProvider"]
-        Other["vision / memory / framework<br/>+ VTS / OBS 等渲染工具"]
+        Other["vision / framework / 主播记忆<br/>+ VTS / OBS 等渲染工具"]
     end
 
     subgraph InFra["基础模块 src/modules/tts/"]

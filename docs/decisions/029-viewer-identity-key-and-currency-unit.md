@@ -66,5 +66,5 @@
 
 ## 关联
 
-- [ADR-030：观众画像系统与记忆层重构](030-viewer-profile-system.md)——本决策是其地基
+- [ADR-042：主播记忆改为场次回顾 + 常客名册](042-streamer-memory-recap-and-roster.md)——常客名册以本决策的身份键定位观众
 - 表结构权威：`src/modules/storage/schema.py`；展示换算：`src/modules/types/currency.py`

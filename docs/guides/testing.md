@@ -37,7 +37,6 @@ tests/
     ├── config/             # 配置加载 / 回归修复
     ├── events/             # EventBus / 拦截器 / Payload 注册表（含 test_interceptors.py）
     ├── llm/                # LLMManager 与客户端
-    ├── memory/             # MemoryProvider / SimpleMemory
     ├── storage/            # SQLite 存储层
     ├── tools/              # 工具契约（ToolSpec / Registry / as_tool_impl）
     │   └── output/         # 渲染工具（remote_stream）
