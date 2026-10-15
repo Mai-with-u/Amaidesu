@@ -1,182 +1,88 @@
-"""思考强度档位与 provider 级方言逃生舱的 schema 默认 + 漂移写回补默认测试。
+"""思考强度档位（profile.reasoning_effort）与 provider 级方言逃生舱（extra_body）：零值默认、旧安装漂移补默认、用户显式值写回保留
 
-跟随 ``tests/modules/config/`` 既有模式：
-- 新字段默认值（零值默认：空串 / 空 dict，与 ``price_in`` / ``cache`` 先例一致）
-- 旧安装缺新字段 → 漂移写回补默认（不改文件版本，纯新增字段零成本）
-- 旧安装写入非空值 → 写回保留用户值（不覆盖用户显式配置）
+纯新增字段零成本：补默认不升版本，版本只随在册钩子推进。
 """
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
 import tomlkit
 
-from src.modules.config.model_schemas import (
-    LLMProfileConfig,
-    LLMProviderConfig,
-    ModelRootConfig,
-)
+from src.modules.config.model_schemas import LLMProfileConfig, LLMProviderConfig, ModelRootConfig
 from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
-
-# Schema 默认值（零值默认：空串 / 空 dict，与 price_in / cache 先例一致）
-
-
-class TestReasoningEffortAndExtraBodyDefaults:
-    def test_llm_profile_reasoning_effort_default_empty_string(self) -> None:
-        """profile.reasoning_effort 缺省空串（不控制 = 请求不含该字段）。"""
-        profile = LLMProfileConfig(model_list=["default"])
-        assert profile.reasoning_effort == ""
-
-    def test_llm_profile_reasoning_effort_accepts_free_string(self) -> None:
-        """profile.reasoning_effort 是自由字符串（不做封闭枚举校验）。
-
-        各厂商档位词汇（low/medium/high 等）随模型代际漂移；Schema 拒合法值即腐烂。
-        """
-        for value in ("low", "medium", "high", "ultra", "minimal", "xhigh"):
-            profile = LLMProfileConfig(model_list=["default"], reasoning_effort=value)
-            assert profile.reasoning_effort == value
-
-    def test_llm_provider_extra_body_default_empty_dict(self) -> None:
-        """provider.extra_body 缺省空 dict（不注入 = 请求不含该字段）。"""
-        provider = LLMProviderConfig()
-        assert provider.extra_body == {}
-
-    def test_llm_provider_extra_body_accepts_arbitrary_keys(self) -> None:
-        """provider.extra_body 是自由 dict（原样合并进请求体；schema 不限键）。"""
-        provider = LLMProviderConfig(extra_body={"vendor_x": {"nested": 1}, "custom_flag": "yes"})
-        assert provider.extra_body == {"vendor_x": {"nested": 1}, "custom_flag": "yes"}
-
-    def test_model_root_default_has_no_reasoning_effort_or_extra_body(self) -> None:
-        """全新安装的 ModelRootConfig 默认无 reasoning_effort / extra_body（设了才发语义）。"""
-        root = ModelRootConfig()
-        for profile in root.llm_profiles.model_dump().values():
-            assert profile["reasoning_effort"] == ""
-        for provider in root.llm_providers:
-            assert provider.extra_body == {}
+from tests.config.helpers import tail_version
 
 
-# 漂移写回补默认（纯新增字段零成本，不改版本）
+def _model_doc(config_dir: Path) -> tuple[Path, tomlkit.TOMLDocument]:
+    path = config_dir / "model.toml"
+    return path, tomlkit.parse(path.read_text(encoding="utf-8-sig"))
 
 
-def _pristine_load_version() -> str:
-    """纯净生成配置加载后的 model.toml 版本（在册钩子的推进终点）。
-
-    生成的基线版本落后于在册钩子 target 时，加载会把版本推进到最后一个
-    已执行钩子的 target（如 cache 计费迁移钩子）；本值即"未被测字段扰动"
-    的参照版本。
-    """
-    with tempfile.TemporaryDirectory() as td:
-        pristine_dir = Path(td) / "config"
-        generate_default_configs(pristine_dir)
-        _config, _report = load_config_dir(pristine_dir)
-        doc = tomlkit.parse((pristine_dir / "model.toml").read_text(encoding="utf-8-sig"))
-        return str(doc["meta"]["version"])
+def _fresh_config(tmp_path: Path) -> Path:
+    config_dir = tmp_path / "config"
+    generate_default_configs(config_dir)
+    return config_dir
 
 
-class TestDriftWritebackFillsNewFields:
-    def test_existing_profile_missing_reasoning_effort_gets_default_on_load(self, tmp_path: Path) -> None:
-        """旧安装 profile 缺 reasoning_effort → 加载时按 schema 默认空串补齐落盘。"""
-        config_dir = tmp_path / "config"
-        generate_default_configs(config_dir)
-        model_path = config_dir / "model.toml"
-        model_doc = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-        # 模拟旧安装：所有 profile 缺 reasoning_effort 字段
-        for profile in model_doc["llm_profiles"].values():
-            if "reasoning_effort" in profile:
-                del profile["reasoning_effort"]
-        model_path.write_text(tomlkit.dumps(model_doc), encoding="utf-8-sig")
+def test_defaults_are_zero_values_and_both_fields_accept_free_form_values() -> None:
+    assert LLMProfileConfig(model_list=["default"]).reasoning_effort == ""  # 不控制 = 请求不含该字段
+    for value in (
+        "low",
+        "medium",
+        "high",
+        "ultra",
+        "minimal",
+        "xhigh",
+    ):  # 厂商档位词汇随模型代际漂移，Schema 不做封闭枚举
+        assert LLMProfileConfig(model_list=["default"], reasoning_effort=value).reasoning_effort == value
+    assert LLMProviderConfig().extra_body == {}  # 不注入 = 请求不含该字段
+    nested = {"vendor_x": {"nested": 1}, "custom_flag": "yes"}
+    assert LLMProviderConfig(extra_body=nested).extra_body == nested  # 原样合并进请求体，schema 不限键
 
-        _config, report = load_config_dir(config_dir)
+    root = ModelRootConfig()  # 设了才发
+    assert all(profile["reasoning_effort"] == "" for profile in root.llm_profiles.model_dump().values())
+    assert all(provider.extra_body == {} for provider in root.llm_providers)
 
-        written = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-        for profile_name, profile in written["llm_profiles"].items():
-            assert profile.get("reasoning_effort", "<missing>") == "", (
-                f"profile {profile_name!r} 漂移写回后 reasoning_effort 必须为空串（默认零值）"
-            )
-        # 纯新增字段零成本：补默认本身不升版本（版本只随在册钩子推进，与纯净加载一致）
-        assert written["meta"]["version"] == _pristine_load_version()
-        assert not report.has_drift
 
-    def test_existing_provider_missing_extra_body_gets_default_on_load(self, tmp_path: Path) -> None:
-        """旧安装 provider 缺 extra_body → 加载时按 schema 默认空 dict 补齐落盘。"""
-        config_dir = tmp_path / "config"
-        generate_default_configs(config_dir)
-        model_path = config_dir / "model.toml"
-        model_doc = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-        # 模拟旧安装：所有 provider 缺 extra_body 字段
-        for provider in model_doc["llm_providers"]:
-            if "extra_body" in provider:
-                del provider["extra_body"]
-        model_path.write_text(tomlkit.dumps(model_doc), encoding="utf-8-sig")
+def test_old_installs_missing_the_new_fields_get_defaults_written_back_without_a_version_bump(tmp_path: Path) -> None:
+    config_dir = _fresh_config(tmp_path / "old")
+    path, doc = _model_doc(config_dir)
+    for profile in doc["llm_profiles"].values():
+        profile.pop("reasoning_effort", None)
+    for provider in doc["llm_providers"]:
+        provider.pop("extra_body", None)
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8-sig")
 
-        _config, report = load_config_dir(config_dir)
+    _, report = load_config_dir(config_dir)
 
-        written = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-        for provider in written["llm_providers"]:
-            assert provider.get("extra_body", "<missing>") == {}, (
-                "provider 漂移写回后 extra_body 必须为空 dict（默认零值）"
-            )
-        assert written["meta"]["version"] == _pristine_load_version()
-        assert not report.has_drift
-
-    def test_user_supplied_reasoning_effort_is_preserved_on_writeback(self, tmp_path: Path) -> None:
-        """用户显式设置 reasoning_effort=high → 写回保留用户值（不覆盖显式配置）。"""
-        config_dir = tmp_path / "config"
-        generate_default_configs(config_dir)
-        model_path = config_dir / "model.toml"
-        model_doc = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-        model_doc["llm_profiles"]["planner"]["reasoning_effort"] = "high"
-        model_path.write_text(tomlkit.dumps(model_doc), encoding="utf-8-sig")
-
-        _config, _report = load_config_dir(config_dir)
-
-        written = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-        assert written["llm_profiles"]["planner"]["reasoning_effort"] == "high"
-
-    def test_user_supplied_extra_body_is_preserved_on_writeback(self, tmp_path: Path) -> None:
-        """用户显式配置 extra_body → 写回保留用户值（不覆盖显式配置）。"""
-        config_dir = tmp_path / "config"
-        generate_default_configs(config_dir)
-        model_path = config_dir / "model.toml"
-        model_doc = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-        model_doc["llm_providers"][0]["extra_body"] = {"thinking": {"type": "enabled"}}
-        model_path.write_text(tomlkit.dumps(model_doc), encoding="utf-8-sig")
-
-        _config, _report = load_config_dir(config_dir)
-
-        written = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-        assert written["llm_providers"][0]["extra_body"] == {"thinking": {"type": "enabled"}}
+    written = _model_doc(config_dir)[1]
+    assert all(profile.get("reasoning_effort", "<missing>") == "" for profile in written["llm_profiles"].values())
+    assert all(provider.get("extra_body", "<missing>") == {} for provider in written["llm_providers"])
+    assert written["meta"]["version"] == tail_version("model.toml") and not report.has_drift
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
+    ("section", "field", "value"),
     [
-        ("reasoning_effort", "low"),
-        ("reasoning_effort", "medium"),
-        ("reasoning_effort", "high"),
-        ("extra_body", {"k": "v"}),
-        ("extra_body", {"nested": {"deep": 1}}),
+        ("profile", "reasoning_effort", "low"),
+        ("profile", "reasoning_effort", "high"),
+        ("provider", "extra_body", {"k": "v"}),
+        ("provider", "extra_body", {"thinking": {"type": "enabled"}}),
     ],
 )
-def test_round_trip_preserves_field(field: str, value: object, tmp_path: Path) -> None:
-    """任意合法配置值都能完整 round-trip：写入 → 加载 → 写出 = 原值。"""
-    config_dir = tmp_path / "config"
-    generate_default_configs(config_dir)
-    model_path = config_dir / "model.toml"
-    doc = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-    if field == "reasoning_effort":
-        doc["llm_profiles"]["planner"][field] = value  # type: ignore[index]
-    else:
-        doc["llm_providers"][0][field] = value  # type: ignore[index]
-    model_path.write_text(tomlkit.dumps(doc), encoding="utf-8-sig")
+def test_user_supplied_values_survive_the_load_and_writeback_round_trip(
+    tmp_path: Path, section: str, field: str, value
+) -> None:
+    config_dir = _fresh_config(tmp_path)
+    path, doc = _model_doc(config_dir)
+    target = doc["llm_profiles"]["planner"] if section == "profile" else doc["llm_providers"][0]
+    target[field] = value
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8-sig")
 
     load_config_dir(config_dir)
 
-    written = tomlkit.parse(model_path.read_text(encoding="utf-8-sig"))
-    if field == "reasoning_effort":
-        assert written["llm_profiles"]["planner"][field] == value  # type: ignore[index]
-    else:
-        assert written["llm_providers"][0][field] == value  # type: ignore[index]
+    written = _model_doc(config_dir)[1]
+    written_target = written["llm_profiles"]["planner"] if section == "profile" else written["llm_providers"][0]
+    assert written_target[field] == value  # 不覆盖用户显式配置
