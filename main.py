@@ -1214,6 +1214,11 @@ def setup_signal_handlers(stop_event: asyncio.Event) -> Tuple[Optional[Any], Opt
         original_sigterm = signal.signal(signal.SIGTERM, handler)
     except (ValueError, OSError):
         original_sigterm = None
+    # Windows 任务管理器/taskkill 与新进程组投递的是 CTRL_BREAK（SIGBREAK），
+    # 与 SIGINT 同样走优雅关闭，避免外部终止绕过收尾链（不参与恢复——恢复仅测试用）
+    if hasattr(signal, "SIGBREAK"):
+        with contextlib.suppress(ValueError, OSError):
+            signal.signal(signal.SIGBREAK, handler)
 
     with contextlib.suppress(Exception):
         loop = asyncio.get_running_loop()
@@ -1281,7 +1286,8 @@ async def run_shutdown(
             return await coro
         except (Exception, asyncio.CancelledError) as e:
             _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            logger.error(f"{name} 失败: {e}")
+            # 异常消息可能为空（如 CancelledError），带上类型名与堆栈才有排查上下文
+            logger.error(f"{name} 失败: {type(e).__name__}: {e}", exc=True)
 
     # 关闭起点广播：趁 EventHistoryRecorder 还在订阅，先落 core.shutdown
     if event_bus is not None:
@@ -1318,7 +1324,8 @@ async def run_shutdown(
             await dashboard_server.cleanup()
         except (Exception, asyncio.CancelledError) as e:
             _saw_cancelled = _saw_cancelled or isinstance(e, asyncio.CancelledError)
-            logger.error(f"Dashboard 停止失败: {e}")
+            # 异常消息可能为空（如 CancelledError），带上类型名与堆栈才有排查上下文
+            logger.error(f"Dashboard 停止失败: {type(e).__name__}: {e}", exc=True)
         logger.info("Dashboard 已停止")
 
     if event_recorder is not None:
