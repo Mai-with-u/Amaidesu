@@ -500,7 +500,7 @@ function fromRundown(event: FeedEvent, data: Record<string, unknown>): ShowEntry
     id: event.id,
     kind: 'rundown',
     tsMs: event.timestamp_ms,
-    text: str(data.segment_title) || (finished ? '流程单完成' : '环节切换'),
+    text: str(data.segment_title) || (finished ? '流程单完成' : '（未命名环节）'),
     note: finished ? '' : index != null && total != null ? `环节 ${index}/${total}` : '',
     badge: by === 'human' ? '手动' : by === 'system' ? '系统' : 'Agent',
   });

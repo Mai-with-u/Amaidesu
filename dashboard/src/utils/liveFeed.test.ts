@@ -469,6 +469,9 @@ describe('rundown.changed / game.*', () => {
 
     const bySystem = toEntry(evt('rundown.changed', { by: 'system' }));
     expect(bySystem?.badge).toBe('系统');
+
+    const blankTitle = toEntry(evt('rundown.changed', { segment_title: '  ', index: 3, total: 5 }));
+    expect(blankTitle).toMatchObject({ text: '（未命名环节）' });
   });
 
   it('里程碑：message + game·scene 元信息', () => {

@@ -71,7 +71,7 @@ import { truncateText } from '@/utils/format';
     const index = typeof d.index === 'number' ? d.index : null;
     const total = typeof d.total === 'number' ? d.total : null;
     if (index != null && total != null && index >= total) return '流程单完成';
-    return seg ? `切换到 ${seg}` : type;
+    return seg ? `切换到 ${seg}` : '切换到（未命名环节）';
   }
 
   if (type.startsWith('game.')) {
