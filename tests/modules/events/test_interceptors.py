@@ -1,103 +1,63 @@
-"""
-EventBus 事件拦截器测试
-
-测试 ``EventInterceptor`` + ``InterceptorChain`` 与 EventBus 的集成行为：
-- 链按优先级升序执行（同优先级保持注册顺序）
-- 拦截器返回 ``None`` 丢弃事件（handler 不被调用）
-- 拦截器抛异常被捕获 + 日志 + 视为 pass-through（不丢事件，不影响后续）
-- EventBus 默认（无拦截器）行为与旧版字节级一致
-- EventBus 挂载丢弃拦截器时跳过 handler 分发
-- 拦截器可修改 payload，handler 接收修改后的数据
-
-运行: uv run pytest tests/modules/events/test_interceptors.py -v
-"""
+"""EventInterceptor / InterceptorChain 与 EventBus 的集成：优先级、丢弃、异常隔离、改写 payload、作用域过滤"""
 
 import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.interceptors import (
     EventInterceptor,
     InterceptorChain,
+    RateLimitInterceptor,
+    SimilarFilterInterceptor,
 )
-
-# 测试数据模型
 
 
 class SimpleTestEvent(BaseModel):
-    """简单测试事件 Model"""
-
-    message: str = Field(default="test", description="测试消息")
-    value: int = Field(default=0, description="数值")
+    message: str = "test"
 
 
-# 测试用拦截器
+class _Append(EventInterceptor):
+    """把 marker 追加到 payload['message'] 末尾；可选声明作用域。"""
 
-
-class _AppendInterceptor(EventInterceptor):
-    """把 ``marker`` 串追加到 payload['message'] 末尾"""
-
-    def __init__(self, marker: str) -> None:
+    def __init__(self, marker: str, scope: Tuple[str, ...] = ()) -> None:
         self._marker = marker
+        self.scope_prefixes = scope
 
     @property
     def name(self) -> str:
         return f"append_{self._marker}"
 
-    async def intercept(
-        self,
-        event_name: str,
-        payload: Dict[str, Any],
-        source: str,
-    ) -> Optional[Dict[str, Any]]:
-        if "message" in payload and isinstance(payload["message"], str):
-            payload["message"] = payload["message"] + self._marker
+    async def intercept(self, event_name: str, payload: Dict[str, Any], source: str) -> Optional[Dict[str, Any]]:
+        payload["message"] += self._marker
         return payload
 
 
-class _DropInterceptor(EventInterceptor):
-    """总是丢弃事件（返回 None）"""
-
+class _Drop(EventInterceptor):
     @property
     def name(self) -> str:
         return "always_drop"
 
-    async def intercept(
-        self,
-        event_name: str,
-        payload: Dict[str, Any],
-        source: str,
-    ) -> Optional[Dict[str, Any]]:
+    async def intercept(self, event_name: str, payload: Dict[str, Any], source: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-class _RaiseInterceptor(EventInterceptor):
-    """intercept() 总是抛异常——必须被链捕获 + 视为 pass-through"""
-
-    def __init__(self, exc: Optional[Exception] = None) -> None:
-        self._exc = exc or RuntimeError("boom")
-        self._call_count = 0
+class _Raise(EventInterceptor):
+    def __init__(self) -> None:
+        self.calls = 0
 
     @property
     def name(self) -> str:
         return "raise"
 
-    async def intercept(
-        self,
-        event_name: str,
-        payload: Dict[str, Any],
-        source: str,
-    ) -> Optional[Dict[str, Any]]:
-        self._call_count += 1
-        raise self._exc
+    async def intercept(self, event_name: str, payload: Dict[str, Any], source: str) -> Optional[Dict[str, Any]]:
+        self.calls += 1
+        raise RuntimeError("boom")
 
 
-class _RecordCallInterceptor(EventInterceptor):
-    """记录每个事件被传给它的次数，便于断言调用顺序"""
-
+class _Record(EventInterceptor):
     def __init__(self, name: str, record: List[str], priority: int = 100) -> None:
         self._name = name
         self._record = record
@@ -107,387 +67,114 @@ class _RecordCallInterceptor(EventInterceptor):
     def name(self) -> str:
         return self._name
 
-    async def intercept(
-        self,
-        event_name: str,
-        payload: Dict[str, Any],
-        source: str,
-    ) -> Optional[Dict[str, Any]]:
+    async def intercept(self, event_name: str, payload: Dict[str, Any], source: str) -> Optional[Dict[str, Any]]:
         self._record.append(self._name)
         return payload
 
 
-class _ScopedAppendInterceptor(EventInterceptor):
-    """声明了 ``scope_prefixes`` 的追加拦截器（用于作用域过滤测试）"""
+async def _emit_and_collect(bus: EventBus, message: str = "x") -> list[str]:
+    received: list[str] = []
+
+    async def handler(event_name, payload: SimpleTestEvent, source: str) -> None:
+        received.append(payload.message)
+
+    bus.on("evt", handler, SimpleTestEvent)
+    await bus.emit("evt", SimpleTestEvent(message=message), source="s")
+    await asyncio.sleep(0.05)
+    return received
+
+
+async def test_empty_chain_short_circuits_and_register_order_is_priority_stable() -> None:
+    chain = InterceptorChain()
+    payload = {"x": 1}
+    assert not chain and await chain.apply("any", payload, "src") is payload  # 空链原样返回同一对象
+
+    record: List[str] = []
+    for name, priority in (("late", 200), ("early", 50), ("mid1", 100), ("mid2", 100)):
+        chain.register(_Record(name, record, priority))
+    assert chain.get_order() == ["early", "mid1", "mid2", "late"]  # 数值小者先行，同优先级保持注册序
+    await chain.apply("evt", {}, "src")
+    assert record == ["early", "mid1", "mid2", "late"]
+
+    assert chain.unregister("mid1") is True and chain.unregister("mid1") is False and len(chain) == 3
+
+
+async def test_chain_drop_stops_later_interceptors_and_exception_is_passed_through() -> None:
+    chain = InterceptorChain()
+    record: List[str] = []
+    chain.register(_Record("before", record, 10))
+    chain.register(_Drop())
+    chain.register(_Record("after", record, 200))
+    assert await chain.apply("evt", {"x": 1}, "src") is None
+    assert record == ["before"]  # drop 后链立即终止
+
+    chain = InterceptorChain()
+    record.clear()
+    raiser = _Raise()
+    chain.register(_Record("before", record, 10))
+    chain.register(raiser)
+    chain.register(_Record("after", record, 200))
+    assert await chain.apply("evt", {"x": 1}, "src") == {"x": 1}  # 异常被捕获，视为 pass-through
+    assert raiser.calls == 1 and record == ["before", "after"]
+
+
+async def test_scope_prefixes_filter_events_per_interceptor() -> None:
+    chain = InterceptorChain()
+    chain.register(_Append("[R]", ("room.message.",)))
+    assert await chain.apply("game.milestone", {"message": "x"}, "src") == {"message": "x"}  # 域外跳过
+    assert await chain.apply("room.message.danmaku", {"message": "x"}, "src") == {"message": "x[R]"}
+
+    unscoped = InterceptorChain()
+    unscoped.register(_Append("[A]"))  # 空作用域 = 对所有事件生效
+    for event_name in ("game.error", "room.message.gift", "tool.result.speak"):
+        assert await unscoped.apply(event_name, {"message": "x"}, "src") == {"message": "x[A]"}
+
+    # 限流/相似过滤显式声明 room.message.*，防下游事件被误伤
+    assert RateLimitInterceptor.scope_prefixes == SimilarFilterInterceptor.scope_prefixes == ("room.message.",)
+
+
+async def test_bus_applies_interceptors_in_order_and_handler_sees_modified_payload() -> None:
+    bus = EventBus(enable_stats=False)
+    assert await _emit_and_collect(bus, "plain") == ["plain"]  # 无拦截器：行为不变
+
+    bus = EventBus(enable_stats=False)
+    for marker in ("[1]", "[2]", "[3]"):
+        bus.add_interceptor(_Append(marker))
+    assert await _emit_and_collect(bus) == ["x[1][2][3]"]
+
+
+async def test_bus_drop_skips_dispatch_and_exception_does_not_break_emit() -> None:
+    bus = EventBus(enable_stats=False)
+    bus.add_interceptor(_Append("[A]"))
+    bus.add_interceptor(_Drop())
+    assert await _emit_and_collect(bus) == []  # 先改写再丢弃：handler 不被调用
+
+    bus = EventBus(enable_stats=False)
+    bus.add_interceptor(_Append("[A]"))
+    bus.add_interceptor(_Raise())
+    bus.add_interceptor(_Append("[C]"))
+    assert await _emit_and_collect(bus) == ["x[A][C]"]  # 中间拦截器异常被隔离，前后改写都生效
+
+
+async def test_remove_interceptor_by_name() -> None:
+    bus = EventBus(enable_stats=False)
+    bus.add_interceptor(_Append("[A]"))
+    bus.add_interceptor(_Append("[B]"))
+    assert bus.remove_interceptor("append_[A]") is True and bus.remove_interceptor("nonexistent") is False
+    assert bus.get_interceptor_names() == ["append_[B]"]
+    assert await _emit_and_collect(bus) == ["x[B]"]
+
+
+def test_interceptor_is_abstract_without_name_or_intercept() -> None:
+    class _NoName(EventInterceptor):
+        async def intercept(self, event_name, payload, source):
+            return payload
+
+    class _NoIntercept(EventInterceptor):
+        @property
+        def name(self) -> str:
+            return "no_intercept"
 
-    def __init__(self, marker: str, scope: Tuple[str, ...]) -> None:
-        self._marker = marker
-        self.scope_prefixes = scope
-
-    @property
-    def name(self) -> str:
-        return f"scoped_append_{self._marker}"
-
-    async def intercept(
-        self,
-        event_name: str,
-        payload: Dict[str, Any],
-        source: str,
-    ) -> Optional[Dict[str, Any]]:
-        if "message" in payload and isinstance(payload["message"], str):
-            payload["message"] = payload["message"] + self._marker
-        return payload
-
-
-# InterceptorChain 单元测试
-
-
-class TestInterceptorChainBasics:
-    """InterceptorChain 自身的纯行为（不挂 EventBus）"""
-
-    async def test_empty_chain_returns_payload_unchanged(self):
-        """空链 → 直接返回入参 payload"""
-        chain = InterceptorChain()
-        assert len(chain) == 0
-        assert not chain  # __bool__ == False
-
-        payload = {"x": 1}
-        result = await chain.apply("any.event", payload, "src")
-        assert result is payload  # 同一对象引用（空链短路）
-
-    async def test_register_appends_in_order(self):
-        """register 按调用顺序追加"""
-        chain = InterceptorChain()
-        record: List[str] = []
-
-        chain.register(_RecordCallInterceptor("a", record))
-        chain.register(_RecordCallInterceptor("b", record))
-
-        assert len(chain) == 2
-
-        await chain.apply("evt", {}, "src")
-        assert record == ["a", "b"]
-
-    async def test_chain_executes_in_registration_order(self):
-        """同优先级时链内拦截器按注册顺序依次执行"""
-        chain = InterceptorChain()
-        record: List[str] = []
-
-        chain.register(_RecordCallInterceptor("first", record))
-        chain.register(_RecordCallInterceptor("second", record))
-        chain.register(_RecordCallInterceptor("third", record))
-
-        await chain.apply("evt", {}, "src")
-        assert record == ["first", "second", "third"]
-
-    async def test_chain_executes_in_priority_order(self):
-        """链按 priority 升序执行，与注册顺序无关（数值小者先行）"""
-        chain = InterceptorChain()
-        record: List[str] = []
-
-        # B(100) 先注册、A(200) 后注册——执行顺序仍按优先级
-        chain.register(_RecordCallInterceptor("B", record, priority=100))
-        chain.register(_RecordCallInterceptor("A", record, priority=200))
-
-        await chain.apply("evt", {}, "src")
-        assert record == ["B", "A"]
-
-    async def test_priority_insert_keeps_stable_order_for_equal_priority(self):
-        """优先级插入不破坏同优先级注册顺序；更低优先级插到队首"""
-        chain = InterceptorChain()
-        record: List[str] = []
-
-        chain.register(_RecordCallInterceptor("late", record, priority=200))
-        chain.register(_RecordCallInterceptor("early", record, priority=50))
-        chain.register(_RecordCallInterceptor("mid1", record, priority=100))
-        chain.register(_RecordCallInterceptor("mid2", record, priority=100))
-
-        assert chain.get_order() == ["early", "mid1", "mid2", "late"]
-
-    def test_unregister_removes_by_name(self):
-        """按 name 移除首个匹配"""
-        chain = InterceptorChain()
-        record: List[str] = []
-
-        chain.register(_RecordCallInterceptor("a", record))
-        chain.register(_RecordCallInterceptor("b", record))
-        assert len(chain) == 2
-
-        removed = chain.unregister("a")
-        assert removed is True
-        assert len(chain) == 1
-
-        # 重复 unregister 同名返回 False
-        assert chain.unregister("a") is False
-
-    async def test_first_none_return_drops_immediately(self):
-        """第一个返回 None 的拦截器立即终止链，返回 None"""
-        chain = InterceptorChain()
-        record: List[str] = []
-
-        chain.register(_RecordCallInterceptor("before", record))
-        chain.register(_DropInterceptor())
-        chain.register(_RecordCallInterceptor("after", record))
-
-        result = await chain.apply("evt", {"x": 1}, "src")
-        assert result is None
-        # "before" 调用了；"after" 因 drop 终止**不**调用
-        assert record == ["before"]
-
-    async def test_exception_in_interceptor_is_caught_and_passed_through(self):
-        """拦截器抛异常被捕获 + 视为 pass-through（不影响后续/handler）"""
-        chain = InterceptorChain()
-        record: List[str] = []
-
-        raiser = _RaiseInterceptor()
-        chain.register(_RecordCallInterceptor("before", record))
-        chain.register(raiser)
-        chain.register(_RecordCallInterceptor("after", record))
-
-        # 异常**不**传播；链继续
-        result = await chain.apply("evt", {"x": 1}, "src")
-        assert result == {"x": 1}  # pass-through：payload 原样返回
-        assert raiser._call_count == 1
-        # "before"/"after" 都应被调用（异常隔离）
-        assert record == ["before", "after"]
-
-    async def test_interceptor_can_modify_payload(self):
-        """拦截器可原地修改 payload，下一个拦截器/最终结果看到修改"""
-        chain = InterceptorChain()
-        chain.register(_AppendInterceptor("[A]"))
-        chain.register(_AppendInterceptor("[B]"))
-
-        result = await chain.apply("evt", {"message": "hello"}, "src")
-        # 两个拦截器都追加 → 顺序应用
-        assert result == {"message": "hello[A][B]"}
-
-
-# EventBus 集成测试
-
-
-class TestEventBusInterceptorIntegration:
-    """EventBus.add_interceptor + emit 集成行为"""
-
-    @pytest.fixture
-    def event_bus(self) -> EventBus:
-        return EventBus(enable_stats=False)
-
-    async def test_no_interceptors_means_default_behavior_unchanged(self, event_bus: EventBus):
-        """无拦截器时，emit 行为与未启用拦截器时字节级一致"""
-        received = []
-
-        async def handler(event_name, payload: SimpleTestEvent, source: str):
-            received.append((event_name, payload.message, source))
-
-        event_bus.on("test.event", handler, SimpleTestEvent)
-        await event_bus.emit("test.event", SimpleTestEvent(message="hello"), source="src")
-        await asyncio.sleep(0.05)
-
-        assert len(received) == 1
-        assert received[0] == ("test.event", "hello", "src")
-
-    async def test_interceptor_modifies_payload_handler_sees_change(self, event_bus: EventBus):
-        """拦截器修改 payload → handler 接收修改后的数据"""
-        event_bus.add_interceptor(_AppendInterceptor("!"))
-
-        received = []
-
-        async def handler(event_name, payload: SimpleTestEvent, source: str):
-            received.append(payload.message)
-
-        event_bus.on("test.event", handler, SimpleTestEvent)
-        await event_bus.emit("test.event", SimpleTestEvent(message="hi"), source="src")
-        await asyncio.sleep(0.05)
-
-        assert received == ["hi!"]
-
-    async def test_dropping_interceptor_skips_handler_dispatch(self, event_bus: EventBus):
-        """拦截器返回 None → 事件被丢弃，handler **不**被调用"""
-        event_bus.add_interceptor(_DropInterceptor())
-
-        received = []
-
-        async def handler(event_name, payload: SimpleTestEvent, source: str):
-            received.append("called")
-
-        event_bus.on("test.event", handler, SimpleTestEvent)
-        await event_bus.emit("test.event", SimpleTestEvent(message="x"), source="src")
-        await asyncio.sleep(0.05)
-
-        assert received == []
-
-    async def test_chained_interceptors_execute_in_registration_order(self, event_bus: EventBus):
-        """多个拦截器按注册顺序应用，handler 看到累积修改"""
-        event_bus.add_interceptor(_AppendInterceptor("[1]"))
-        event_bus.add_interceptor(_AppendInterceptor("[2]"))
-        event_bus.add_interceptor(_AppendInterceptor("[3]"))
-
-        received = []
-
-        async def handler(event_name, payload: SimpleTestEvent, source: str):
-            received.append(payload.message)
-
-        event_bus.on("evt", handler, SimpleTestEvent)
-        await event_bus.emit("evt", SimpleTestEvent(message="x"), source="s")
-        await asyncio.sleep(0.05)
-
-        assert received == ["x[1][2][3]"]
-
-    async def test_interceptor_exception_does_not_drop_or_break(self, event_bus: EventBus):
-        """拦截器异常被隔离：handler 仍被调用，后续拦截器继续执行"""
-        event_bus.add_interceptor(_AppendInterceptor("[A]"))
-        event_bus.add_interceptor(_RaiseInterceptor())
-        event_bus.add_interceptor(_AppendInterceptor("[C]"))
-
-        received = []
-
-        async def handler(event_name, payload: SimpleTestEvent, source: str):
-            received.append(payload.message)
-
-        event_bus.on("evt", handler, SimpleTestEvent)
-        await event_bus.emit("evt", SimpleTestEvent(message="x"), source="s")
-        await asyncio.sleep(0.05)
-
-        # [A] 应用 → message="x[A]"
-        # Raise 抛异常 → 被捕获视为 pass-through → message 仍为 "x[A]"
-        # [C] 继续应用 → message="x[A][C]"
-        assert received == ["x[A][C]"]
-
-    async def test_remove_interceptor_by_name(self, event_bus: EventBus):
-        """remove_interceptor(name) 按名移除"""
-        event_bus.add_interceptor(_AppendInterceptor("[A]"))
-        event_bus.add_interceptor(_AppendInterceptor("[B]"))
-
-        assert len(event_bus.get_interceptor_names()) == 2
-
-        # 移除 [A]
-        removed = event_bus.remove_interceptor("append_[A]")
-        assert removed is True
-        assert len(event_bus.get_interceptor_names()) == 1
-        assert event_bus.get_interceptor_names() == ["append_[B]"]
-
-        # 再次移除不存在的 name → False
-        assert event_bus.remove_interceptor("nonexistent") is False
-
-        # emit 时只 [B] 应用
-        received = []
-
-        async def handler(event_name, payload: SimpleTestEvent, source: str):
-            received.append(payload.message)
-
-        event_bus.on("evt", handler, SimpleTestEvent)
-        await event_bus.emit("evt", SimpleTestEvent(message="x"), source="s")
-        await asyncio.sleep(0.05)
-
-        assert received == ["x[B]"]
-
-    async def test_interceptor_only_called_for_emitted_event(self, event_bus: EventBus):
-        """未 emit 的事件不触发拦截器（仅 emit 时调用 apply）"""
-        record: List[str] = []
-        interceptor = _RecordCallInterceptor("track", record)
-        event_bus.add_interceptor(interceptor)
-
-        # emit 一个无关事件
-        async def handler(event_name, payload: SimpleTestEvent, source: str):
-            pass
-
-        event_bus.on("evt", handler, SimpleTestEvent)
-        await event_bus.emit("evt", SimpleTestEvent(), source="s")
-        await asyncio.sleep(0.05)
-
-        assert record == ["track"]
-
-    async def test_drop_after_modify_does_not_dispatch(self, event_bus: EventBus):
-        """拦截器先修改再 drop → handler 不被调用（修改也无意义）"""
-        event_bus.add_interceptor(_AppendInterceptor("[A]"))
-        event_bus.add_interceptor(_DropInterceptor())
-
-        received = []
-
-        async def handler(event_name, payload: SimpleTestEvent, source: str):
-            received.append("called")
-
-        event_bus.on("evt", handler, SimpleTestEvent)
-        await event_bus.emit("evt", SimpleTestEvent(message="x"), source="s")
-        await asyncio.sleep(0.05)
-
-        assert received == []
-
-
-# 拦截器作用域测试
-
-
-class TestInterceptorScope:
-    """``EventInterceptor.scope_prefixes`` 作用域过滤行为"""
-
-    async def test_scoped_interceptor_skipped_out_of_scope(self):
-        """声明作用域后，域外事件不经过该拦截器"""
-        chain = InterceptorChain()
-        chain.register(_ScopedAppendInterceptor("[R]", ("room.message.",)))
-
-        result = await chain.apply("game.milestone", {"message": "x"}, "src")
-        assert result == {"message": "x"}  # 域外：未追加
-
-    async def test_scoped_interceptor_applies_in_scope(self):
-        """声明作用域后，域内事件正常经过该拦截器"""
-        chain = InterceptorChain()
-        chain.register(_ScopedAppendInterceptor("[R]", ("room.message.",)))
-
-        result = await chain.apply("room.message.danmaku", {"message": "x"}, "src")
-        assert result == {"message": "x[R]"}
-
-    async def test_empty_scope_applies_to_all_events(self):
-        """空作用域元组 = 不限域，对所有事件生效（基类默认）"""
-        chain = InterceptorChain()
-        chain.register(_AppendInterceptor("[A]"))  # 未声明作用域
-
-        for event_name in ("game.error", "room.message.gift", "tool.result.speak"):
-            result = await chain.apply(event_name, {"message": "x"}, "src")
-            assert result == {"message": "x[A]"}
-
-    async def test_rate_limit_interceptor_declares_room_message_scope(self):
-        """限流/相似过滤拦截器显式声明 room.message.* 作用域（防下游事件误伤）"""
-        from src.modules.events.interceptors import RateLimitInterceptor, SimilarFilterInterceptor
-
-        assert RateLimitInterceptor.scope_prefixes == ("room.message.",)
-        assert SimilarFilterInterceptor.scope_prefixes == ("room.message.",)
-
-
-# EventInterceptor 抽象类契约
-
-
-class TestEventInterceptorContract:
-    """EventInterceptor 抽象基类的接口契约"""
-
-    def test_cannot_instantiate_abstract_class(self):
-        """EventInterceptor 是抽象类，不能直接实例化"""
+    for cls in (EventInterceptor, _NoName, _NoIntercept):
         with pytest.raises(TypeError):
-            EventInterceptor()  # type: ignore[abstract]
-
-    def test_subclass_missing_name_is_abstract(self):
-        """子类若未实现 ``name`` 属性，仍为抽象类（不可实例化）"""
-
-        class _NoName(EventInterceptor):
-            async def intercept(self, event_name, payload, source):
-                return payload
-
-        # _NoName 继承但未覆盖 name 的 @property 装饰器，故仍是抽象类
-        with pytest.raises(TypeError):
-            _NoName()  # type: ignore[abstract]
-
-    def test_subclass_missing_intercept_is_abstract(self):
-        """子类若未实现 ``intercept`` 方法，仍为抽象类"""
-
-        class _NoIntercept(EventInterceptor):
-            @property
-            def name(self) -> str:
-                return "no_intercept"
-
-        with pytest.raises(TypeError):
-            _NoIntercept()  # type: ignore[abstract]
-
-
-# 运行入口
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
+            cls()  # type: ignore[abstract]
