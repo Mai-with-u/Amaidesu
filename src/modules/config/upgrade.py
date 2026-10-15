@@ -668,6 +668,24 @@ def _drop_profile_history_budget(data: Dict[str, Any]) -> List[str]:
 register_file_hook("model.toml", "drop_profile_history_budget", "2.0.44", _drop_profile_history_budget)
 
 
+def _drop_tools_memory_section(data: Dict[str, Any]) -> List[str]:
+    """tools.toml v2.0.45：删 ``[tools.memory]`` 段。
+
+    通用记忆检索工具（query_memory / query_viewer_profile）退役，主播记忆改为
+    随主播 Agent 注册的 ``memory_recall_session`` / ``memory_recall_viewer``，
+    不再有独立开关；段留在 forbid 根下属未知段硬错，整段删除。对已迁移数据
+    零变更（幂等）。
+    """
+    tools = data.get("tools")
+    if not isinstance(tools, dict) or "memory" not in tools:
+        return []
+    del tools["memory"]
+    return ["tools.memory"]
+
+
+register_file_hook("tools.toml", "drop_tools_memory_section", "2.0.45", _drop_tools_memory_section)
+
+
 def _version_tuple(version: str) -> tuple[int, ...]:
     """版本号 → 可比较元组（"2.0.31" → (2, 0, 31)）；解析失败按 0 处理"""
     try:

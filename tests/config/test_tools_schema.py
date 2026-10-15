@@ -2,12 +2,11 @@
 
 测试 src/modules/config/tools_schemas.py：
 1. ToolsRootConfig 根结构（tools 子段）
-2. ToolsConfig 聚合：异步任务基建 + 各提供者分类（studio/vision/memory/mcp）
+2. ToolsConfig 聚合：异步任务基建 + 各提供者分类（studio/vision/mcp/web）
 3. ToolProviderConfig 开关语义（enabled + config）
 4. studio 动态子段（Dict[str, ProviderConfig]）
 5. [tools.tasks] 段定义 + 默认值
-6. [tools.memory].enabled 默认 true
-7. 已迁出段拒收（perception/output 顶层禁用；avatar 已迁出为 avatar.toml）
+6. 已迁出段拒收（perception/output 顶层禁用；avatar 已迁出为 avatar.toml）
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ from pydantic import ValidationError
 
 from src.modules.config.tools_schemas import (
     McpProviderConfig,
-    MemoryProviderConfig,
     StudioProviderConfig,
     ToolProviderConfig,
     ToolsConfig,
@@ -82,13 +80,13 @@ class TestToolsConfigDomains:
         """禁 None 契约：动态分类缺省空 dict；单实例分类缺省具体实例。
 
         vision 缺省关态（enabled=False，等价旧 None 语义）；
-        memory 缺省 enabled=true（与消费端兜底对齐）。
+        memory 段已退役（主播记忆工具随主播 Agent 注册，无独立开关）。
         """
         cfg = ToolsConfig()
         assert cfg.studio == {}
         assert cfg.web == {}
         assert cfg.vision.enabled is False
-        assert cfg.memory.enabled is True
+        assert not hasattr(cfg, "memory")
         assert isinstance(cfg.mcp, McpProviderConfig)
 
 
@@ -136,12 +134,6 @@ class TestSpecializedDomains:
         assert "vlm_timeout_ms" not in cfg.config.model_dump()
         # 图进对话后默认降采样（传输成本），default_max_width 以新语义在册
         assert cfg.config.default_max_width == 1280
-
-    def test_memory_default_enabled_true(self):
-        """记忆分类默认 enabled=true（消除配置漂移）"""
-        cfg = MemoryProviderConfig()
-        assert cfg.enabled is True
-        assert cfg.config == {}
 
     def test_mcp(self):
         cfg = McpProviderConfig(enabled=True, config={"servers": {}})

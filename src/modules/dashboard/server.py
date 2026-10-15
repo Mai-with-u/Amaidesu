@@ -78,7 +78,7 @@ class DashboardServer:
         chat_repo: Optional[Any] = None,
         llm_repo: Optional[Any] = None,
         rundown_repo: Optional[Any] = None,
-        memory: Optional[Any] = None,
+        viewer_profile_repo: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
         subtitle_service: Optional[Any] = None,
         tts_engine: Optional[Any] = None,
@@ -121,9 +121,9 @@ class DashboardServer:
         # 注入 RundownRepo 让 `/api/v1/rundowns*` 承载流程单库 CRUD；
         # 未注入（极简启动/测试）时相关端点降级 success=false
         self.rundown_repo = rundown_repo
-        # 注入 SimpleMemory 让 `/api/v1/memory/*` 承载记忆管理面（检索/增改/
-        # 删除/召回测试）；未注入（极简启动/测试）时相关端点返回 503
-        self.memory = memory
+        # 注入 ViewerProfileRepo 让 `/api/v1/memory/*` 承载常客名册管理面
+        # （列表/纠正/删除）；未注入（极简启动/测试）时相关端点返回 503
+        self.viewer_profile_repo = viewer_profile_repo
         # 注入字幕服务与 TTS 引擎让 `/api/v1/debug/subtitle|tts` 直测端点
         # 可用；未注入（极简启动/测试）时相关端点返回 503
         self.subtitle_service = subtitle_service

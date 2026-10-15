@@ -78,7 +78,6 @@ import type {
   ViewerSessionsResponse,
   ViewerProfileListResponse,
   ViewerProfileUpdatePayload,
-  ViewerFactListResponse,
   MemoryMutationResponse,
   MemoryStatsResponse,
   WebSocketMessage,
@@ -353,14 +352,12 @@ export const rundownApi = {
     api.post<RundownMutateResponse>(`/rundowns/${rundownId}/activate`),
 };
 
-// 观众画像管理（viewer_profiles / viewer_facts 管理消费面）
+// 常客名册管理（viewer_profiles 管理消费面）
 //
-// 读写全部经后端 SimpleMemory（画像/事实读写服务）。
-// `GET /memory/profiles`：画像列表（搜索 / 分页）。
-// `PATCH / DELETE /memory/profiles/{platform}/{user_id}`：人工纠正 / 删除画像。
-// `GET /memory/facts`：事实列表（按人查或关键词搜索）。
-// `DELETE /memory/facts/{id}`：删除单条事实（修正提取错误）。
-// `GET /memory/stats`：总量统计（画像数 / 事实数）。
+// 读写全部经后端 ViewerProfileRepo（常客印象读写）。
+// `GET /memory/profiles`：名册列表（搜索 / 分页）。
+// `PATCH / DELETE /memory/profiles/{platform}/{user_id}`：人工纠正 / 删除印象。
+// `GET /memory/stats`：总量统计（常客数 / 最近更新）。
 export const memoryApi = {
   listProfiles: (params?: { search?: string; limit?: number; offset?: number }) =>
     api.get<ViewerProfileListResponse>('/memory/profiles', { params }),
@@ -373,14 +370,6 @@ export const memoryApi = {
     api.delete<MemoryMutationResponse>(
       `/memory/profiles/${encodeURIComponent(platform)}/${encodeURIComponent(userId)}`,
     ),
-  listFacts: (params?: {
-    platform?: string;
-    user_id?: string;
-    search?: string;
-    limit?: number;
-    offset?: number;
-  }) => api.get<ViewerFactListResponse>('/memory/facts', { params }),
-  deleteFact: (id: number) => api.delete<MemoryMutationResponse>(`/memory/facts/${id}`),
   getStats: () => api.get<MemoryStatsResponse>('/memory/stats'),
 };
 

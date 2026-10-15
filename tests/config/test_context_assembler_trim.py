@@ -1,7 +1,7 @@
 """[agents.streamer.context] 组装器字段收口测试。
 
 StreamerContextConfig 删除 ``memory_recall_viewers`` / ``cache_ttl_ms``
-（前者无召回后端载体——SimpleMemory 无画像批量召回接口；后者在纯函数
+（前者无召回后端载体——画像注入按本批发言人逐人查，无批量召回接口；后者在纯函数
 组装器 + 每批动态窗口下无正确缓存语义）。冗余键全域硬错语义下，用户
 文件中的已删字段在加载期当面拦下（而非静默剥离）。
 context 段已从顶层 [context] 迁入 [agents.streamer.context]。

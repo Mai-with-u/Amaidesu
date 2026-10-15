@@ -60,7 +60,7 @@ from src.modules.llm.engine import LLMManager
 from src.modules.llm.request_history_manager import get_global_request_history_manager
 from src.modules.logging import configure_from_config, get_logger
 from src.modules.logging.log_streamer import LogStreamer
-from src.modules.memory.bootstrap import bind_memory_tools, build_memory_stack
+from src.modules.storage.bootstrap import build_database
 from src.modules.prompts import get_prompt_manager
 from src.modules.session import LiveSessionManager
 from src.modules.simulator import SimulatorService
@@ -234,15 +234,10 @@ def validate_config(config: Dict[str, Any]) -> None:
     elif not isinstance(collectors_cfg, dict):
         logger.warning("[collectors] 配置类型异常（期望 dict）")
 
-    # storage.toml 段（顶层 [sqlite] + [memory]）
+    # storage.toml 段（顶层 [sqlite]）
     sqlite_cfg = config.get("sqlite")
     if not sqlite_cfg:
         logger.debug("未检测到 [sqlite] 配置，使用默认 db_path")
-    memory_cfg = config.get("memory")
-    if not memory_cfg:
-        logger.debug("未检测到 [memory] 配置，使用 SimpleMemory 默认值")
-    elif not isinstance(memory_cfg, dict):
-        logger.warning("[memory] 配置类型异常（期望 dict），Memory 功能将退化")
 
     # background 段已归位到 [agents.streamer.background]；此处不再单独校验
 
@@ -373,11 +368,11 @@ async def create_app_components(
          simulator_service, database, storage_ledger, session_manager,
          tool_registry, health_monitor, tts_diagnostics_recorder)
     """
-    # --- 存储与记忆（SQLiteDatabase + SimpleMemory）---
+    # --- 存储（SQLiteDatabase：建表 + 迁移 + 自检）---
     # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
-    logger.info("初始化存储与记忆（SQLiteDatabase + SimpleMemory）...")
-    database, memory = await build_memory_stack(config)
-    logger.info(f"存储与记忆已就绪（db={database.db_path}）")
+    logger.info("初始化存储（SQLiteDatabase）...")
+    database = await build_database(config)
+    logger.info(f"存储已就绪（db={database.db_path}）")
 
     # --- EventBus（先于 LLMManager：水位事件经构造器注入引擎）---
     logger.info("初始化事件总线...")
@@ -423,7 +418,7 @@ async def create_app_components(
     # CoreService 构造走内置默认。
 
     # --- 启动期不进行任何上下文重新写入（每次启动 = 干净测试环境）---
-    # 跨场次对话记忆由 SimpleMemory / 摘要机制承载，不在组合根做 live_chat 重新写入。
+    # 跨场次记忆由主播 Agent 的场次回顾 / 常客名册承载，不在组合根做 live_chat 重新写入。
     # 无显式场次期间消息仅在内存流转，落库路径依据 0 值跳过。
 
     register_event_interceptors(event_bus, config, session_manager=session_manager)
@@ -539,18 +534,20 @@ async def create_app_components(
         if not isinstance(supervisor_section, dict):
             supervisor_section = {}
         supervisor_config = AgentSupervisorConfig.from_dict(supervisor_section)
-        # 仓储四件随构造注入成员：Dashboard 动态启用 Agent 时 enable_agent
-        # 回退到这些成员（与 tool_registry/memory 同一回退模式），
+        # 仓储随构造注入成员：Dashboard 动态启用 Agent 时 enable_agent
+        # 回退到这些成员（与 tool_registry 同一回退模式），
         # 保证动态启用的 StreamerAgent 与启动装配拿到同一批仓储
         agent_manager = AgentManager(
             tool_registry=tool_registry,
-            memory=memory,
-            memory_policy=config.get("memory") if isinstance(config.get("memory"), dict) else {},
             rundown_repo=database.rundowns,
             chat_repo=database.chat,
             sessions_repo=database.sessions,
             topic_repo=database.topics,
             viewer_repo=database.viewers,
+            # 主播记忆两仓储 + 游戏事件读面（场次回顾原料）
+            viewer_profile_repo=database.viewer_profiles,
+            recap_repo=database.recaps,
+            event_repo=database.events,
             supervisor_config=supervisor_config,
         )
 
@@ -621,7 +618,6 @@ async def create_app_components(
             llm_service,
             event_bus,
             tool_registry,
-            memory,
             task_tracker,
             tts_section=tts_section,
             tts_engine=tts_engine,
@@ -633,9 +629,11 @@ async def create_app_components(
             sessions_repo=database.sessions,
             topic_repo=database.topics,
             viewer_repo=database.viewers,
+            # 主播记忆两仓储 + 游戏事件读面（场次回顾原料）
+            viewer_profile_repo=database.viewer_profiles,
+            recap_repo=database.recaps,
+            event_repo=database.events,
             thinking_sink=thinking_hub,
-            # 画像行为策略（[memory] 段）：Planner 注入上限与后台提取参数同源
-            memory_policy=config.get("memory") if isinstance(config.get("memory"), dict) else {},
         )
 
         # --- 核心域工具（avatar 平台名单 / studio 域开关，L2 Provider）---
@@ -667,12 +665,6 @@ async def create_app_components(
             f"核心工具包已绑定: 成功 {core_succeeded}/{len(core_report)}（尝试装配数）"
             f"{skipped_note}，合计新增 {sum(core_report.values())} 个工具" + failed_note
         )
-
-        # --- 记忆检索工具（LLM 主动查询；[tools.memory] 域开关）---
-        memory_tools_cfg = tools_section.get("memory", {}) if isinstance(tools_section, dict) else {}
-        if isinstance(memory_tools_cfg, dict) and memory_tools_cfg.get("enabled", False):
-            memory_tool_count = bind_memory_tools(tool_registry, memory, viewer_repo=database.viewers)
-            logger.info(f"记忆域工具已注册（query_memory/query_viewer_profile，新增 {memory_tool_count} 个）")
 
         # --- 视觉基础模块工具 look_at_screen（L2 DI：组合根注入 mss 截屏后端）---
         # bootstrap 明文不接管 DI 工具（见 bootstrap.py 注释），由组合根按 [tools.vision] 开关装配
@@ -833,8 +825,8 @@ async def create_app_components(
             # 观众域只读消费面：列表 / 档案 / 对话 / 贡献聚合直查存储层
             viewer_repo=database.viewers,
             chat_repo=database.chat,
-            # 记忆栈实例：/api/v1/memory/* 管理面与 Agent 共用同一 SimpleMemory
-            memory=memory,
+            # 常客名册仓储：/api/v1/memory/* 管理面与主播 Agent 共用同一张表
+            viewer_profile_repo=database.viewer_profiles,
             # 任务卡快照与运营委派的数据源（通用任务基建，ADR-013）
             task_tracker=task_tracker,
             # 基础设施直测面：/api/v1/debug/subtitle|tts 端点的数据源
@@ -1025,7 +1017,6 @@ async def _register_agents_from_config(
     llm_service,
     event_bus,
     tool_registry=None,
-    memory=None,
     task_tracker=None,
     *,
     tts_section: Optional[Dict[str, Any]] = None,
@@ -1037,8 +1028,10 @@ async def _register_agents_from_config(
     sessions_repo: Optional[Any] = None,
     topic_repo: Optional[Any] = None,
     viewer_repo: Optional[Any] = None,
+    viewer_profile_repo: Optional[Any] = None,
+    recap_repo: Optional[Any] = None,
+    event_repo: Optional[Any] = None,
     thinking_sink: Optional[Any] = None,
-    memory_policy: Optional[Dict[str, Any]] = None,
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
@@ -1052,7 +1045,8 @@ async def _register_agents_from_config(
         [agents.minecraft] = { max_steps = 50, mcp = {...} }
         [agents.text_adv]  = { monitor_index, region, keys, stability_*, no_change_limit, auto_button_xy, game_window_title_keyword }
 
-    memory 为 SimpleMemory 记忆后端，仅 streamer Agent 消费。
+    viewer_profile_repo / recap_repo / event_repo 为主播记忆（常客名册 / 场次
+    回顾）与游戏事件的仓储，仅 streamer Agent 消费。
 
     tts_section 为核心 ``[tts]`` 段，仅 streamer Agent 在构造时消费
     ``speech_config``（enabled / max_queue / render_timeout_ms）。
@@ -1089,8 +1083,6 @@ async def _register_agents_from_config(
             prompt_manager=get_prompt_manager(),
             event_bus=event_bus,
             tool_registry=tool_registry,
-            memory=memory,
-            memory_policy=memory_policy,
             thinking_sink=thinking_sink,
             speech_config=speech_cfg,
             tts_engine=tts_engine,
@@ -1104,6 +1096,10 @@ async def _register_agents_from_config(
             sessions_repo=sessions_repo,
             topic_repo=topic_repo,
             viewer_repo=viewer_repo,
+            # 主播记忆两仓储 + 游戏事件读面（场次回顾原料）
+            viewer_profile_repo=viewer_profile_repo,
+            recap_repo=recap_repo,
+            event_repo=event_repo,
             # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
             context_assembler_config=None,
             task_tracker=task_tracker,
@@ -1131,7 +1127,7 @@ async def _start_dashboard(
     rundown_repo=None,
     viewer_repo=None,
     chat_repo=None,
-    memory=None,
+    viewer_profile_repo=None,
     task_tracker=None,
     subtitle_service=None,
     tts_engine=None,
@@ -1160,8 +1156,8 @@ async def _start_dashboard(
             # 观众域仓储：统计表（viewers）与明细三表（live_chat 族）
             viewer_repo=viewer_repo,
             chat_repo=chat_repo,
-            # 记忆栈实例：/api/v1/memory/* 管理面与 Agent 共用同一 SimpleMemory
-            memory=memory,
+            # 常客名册仓储：/api/v1/memory/* 管理面与主播 Agent 共用同一张表
+            viewer_profile_repo=viewer_profile_repo,
             # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源
             task_tracker=task_tracker,
             # 字幕服务与 TTS 引擎：/api/v1/debug 直测端点经此驱动真实基础设施

@@ -70,7 +70,8 @@ def test_platform_graduation_migrates_and_written_back(tmp_path: Path):
     assert "avatar" not in tools_doc["tools"]
 
     # 版本推进：tools 链尾 2.0.38（迁移钩子 target），目标文件跟进不回退基线
-    assert get_config_version(tmp_path, "tools.toml") == "2.0.40"
+    # tools.toml 钩子链尾已延到 [tools.memory] 段退役（2.0.45）
+    assert get_config_version(tmp_path, "tools.toml") == "2.0.45"
     assert get_config_version(tmp_path, "avatar.toml") == CONFIG_BASELINE_VERSION
 
 

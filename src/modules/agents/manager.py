@@ -47,12 +47,10 @@ class AgentManager:
         tool_registry: 构造时注入的默认 ``ToolRegistry``；传给
             ``enable_agent`` 时如未显式覆盖则用此成员（Dashboard 动态启停
             场景可能不传 tool_registry，回退到成员避免 Agent 拿 None）。
-        memory: 构造时注入的默认 ``MemoryProvider`` 实例；Agent（如
-            ``StreamerAgent``）构造时需要它做观众画像/长记忆读写。Dashboard
-            动态启用 Agent 时如未显式传 ``memory``，回退到此成员。
-        rundown_repo / chat_repo / sessions_repo / topic_repo: 构造时注入的
-            默认仓储（直播对话历史的单一事实源在 live_chat 表，StreamerAgent
-            的历史读取/后台维护依赖这四件）。回退语义同 tool_registry/memory
+        rundown_repo / chat_repo / sessions_repo / topic_repo / viewer_repo /
+        viewer_profile_repo / recap_repo / event_repo: 构造时注入的默认仓储
+            （直播对话历史的单一事实源在 live_chat 表，StreamerAgent 的历史
+            读取 / 后台维护 / 收播记忆整理依赖它们）。回退语义同 tool_registry
             ——Dashboard 动态启用不传时回退成员，避免 Agent 拿 None 降级。
     """
 
@@ -60,13 +58,14 @@ class AgentManager:
         self,
         *,
         tool_registry: Optional[ToolRegistry] = None,
-        memory: Optional[Any] = None,
-        memory_policy: Optional[Dict[str, Any]] = None,
         rundown_repo: Optional[Any] = None,
         chat_repo: Optional[Any] = None,
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
         viewer_repo: Optional[Any] = None,
+        viewer_profile_repo: Optional[Any] = None,
+        recap_repo: Optional[Any] = None,
+        event_repo: Optional[Any] = None,
         supervisor_config: Optional[AgentSupervisorConfig] = None,
     ) -> None:
         self._agents: Dict[str, AgentRegistration] = {}
@@ -74,13 +73,14 @@ class AgentManager:
         # rebuild 按它经同一构造路径重建实例
         self._enable_args: Dict[str, Dict[str, Any]] = {}
         self._tool_registry = tool_registry
-        self._memory = memory
-        self._memory_policy = memory_policy
         self._rundown_repo = rundown_repo
         self._chat_repo = chat_repo
         self._sessions_repo = sessions_repo
         self._topic_repo = topic_repo
         self._viewer_repo = viewer_repo
+        self._viewer_profile_repo = viewer_profile_repo
+        self._recap_repo = recap_repo
+        self._event_repo = event_repo
         self._lock = asyncio.Lock()
         # ----- 守护（心跳巡检 + 自动重建 + 风暴保护）-----
         self._supervisor_config = supervisor_config if supervisor_config is not None else AgentSupervisorConfig()
@@ -201,8 +201,6 @@ class AgentManager:
         prompt_manager: Optional[object] = None,
         event_bus: Optional[object] = None,
         tool_registry: Optional[ToolRegistry] = None,
-        memory: Optional[Any] = None,
-        memory_policy: Optional[Dict[str, Any]] = None,
         thinking_sink: Optional[Any] = None,
         speech_config: Optional[Dict[str, Any]] = None,
         tts_engine: Optional[Any] = None,
@@ -213,6 +211,9 @@ class AgentManager:
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
         viewer_repo: Optional[Any] = None,
+        viewer_profile_repo: Optional[Any] = None,
+        recap_repo: Optional[Any] = None,
+        event_repo: Optional[Any] = None,
         context_assembler_config: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
     ) -> bool:
@@ -226,20 +227,20 @@ class AgentManager:
         （speech/tts/subtitle/session/thinking/task_tracker 等）按需透传，
         Dashboard 场景无对应基建时保持 None（Agent 各自降级）。
 
-        ``tool_registry`` / ``memory`` / 四仓储未显式传入时回退到
-        ``__init__`` 成员；Dashboard 动态启停场景一般不传这些，回退保证
-        Agent 不再拿到 None。
+        ``tool_registry`` / 各仓储未显式传入时回退到 ``__init__`` 成员；
+        Dashboard 动态启停场景一般不传这些，回退保证 Agent 不再拿到 None。
         """
         from src.modules.agents.factory import instantiate_agent
 
         effective_registry = tool_registry if tool_registry is not None else self._tool_registry
-        effective_memory = memory if memory is not None else self._memory
-        effective_memory_policy = memory_policy if memory_policy is not None else self._memory_policy
         effective_rundown_repo = rundown_repo if rundown_repo is not None else self._rundown_repo
         effective_chat_repo = chat_repo if chat_repo is not None else self._chat_repo
         effective_sessions_repo = sessions_repo if sessions_repo is not None else self._sessions_repo
         effective_topic_repo = topic_repo if topic_repo is not None else self._topic_repo
         effective_viewer_repo = viewer_repo if viewer_repo is not None else self._viewer_repo
+        effective_profile_repo = viewer_profile_repo if viewer_profile_repo is not None else self._viewer_profile_repo
+        effective_recap_repo = recap_repo if recap_repo is not None else self._recap_repo
+        effective_event_repo = event_repo if event_repo is not None else self._event_repo
 
         instance = instantiate_agent(
             name,
@@ -248,8 +249,6 @@ class AgentManager:
             prompt_manager=prompt_manager,
             event_bus=event_bus,
             tool_registry=effective_registry,
-            memory=effective_memory,
-            memory_policy=effective_memory_policy,
             thinking_sink=thinking_sink,
             speech_config=speech_config,
             tts_engine=tts_engine,
@@ -260,6 +259,9 @@ class AgentManager:
             sessions_repo=effective_sessions_repo,
             topic_repo=effective_topic_repo,
             viewer_repo=effective_viewer_repo,
+            viewer_profile_repo=effective_profile_repo,
+            recap_repo=effective_recap_repo,
+            event_repo=effective_event_repo,
             context_assembler_config=context_assembler_config,
             task_tracker=task_tracker,
         )
@@ -287,7 +289,6 @@ class AgentManager:
             "prompt_manager": prompt_manager,
             "event_bus": event_bus,
             "tool_registry": tool_registry,
-            "memory": memory,
             "thinking_sink": thinking_sink,
             "speech_config": speech_config,
             "tts_engine": tts_engine,
@@ -297,6 +298,10 @@ class AgentManager:
             "chat_repo": chat_repo,
             "sessions_repo": sessions_repo,
             "topic_repo": topic_repo,
+            "viewer_repo": viewer_repo,
+            "viewer_profile_repo": viewer_profile_repo,
+            "recap_repo": recap_repo,
+            "event_repo": event_repo,
             "context_assembler_config": context_assembler_config,
             "task_tracker": task_tracker,
         }

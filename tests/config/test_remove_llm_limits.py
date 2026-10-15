@@ -49,7 +49,8 @@ def _section(data: Any, path: str) -> tuple[Any, str]:
                 "tools.vision.config.vlm_timeout_ms",
                 "tools.web.search.config.max_fetch_chars",
             ),
-            "2.0.40",
+            # tools.toml 钩子链延到 [tools.memory] 段退役（v2.0.45）
+            "2.0.45",
         ),
         ("storage.toml", ("memory.profile_injection_max",), "2.0.40"),
     ],

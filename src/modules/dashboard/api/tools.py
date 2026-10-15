@@ -327,9 +327,9 @@ async def control_tool_provider(
       的文件与键（``agents.minecraft.mcp.enabled`` → agents.toml）
     - avatar 平台成员：``platform.enabled`` 启用名单增删（avatar.toml 文件内路径）
     - studio 成员：``tools.<分类>.<键>.enabled``
-    - vision / memory（键与分类名相同）：``tools.<分类>.enabled``
+    - vision（键与分类名相同）：``tools.<分类>.enabled``
     - mcp 全局 server：``tools.mcp.config.servers.<键>.enabled``
-    - game / framework 等随 Agent 分类不可开关（400）
+    - game / framework / memory 等随 Agent 分类不可开关（400）
 
     工具注册发生在组合根装配期（启动时），无动态启停语义——写盘后不触发热
     重载，重启后生效。

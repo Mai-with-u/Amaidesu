@@ -72,7 +72,8 @@ def test_lipsync_keys_moved_to_infra_and_written_back(tmp_path: Path):
 
     # tools.toml 推进到本文件钩子链尾 target（2.0.36 迁移 + 2.0.37 删键
     # + 2.0.38 迁移）；infra.toml 随自身钩子链推进（sc_probability 死键清理 @2.0.41）
-    assert get_config_version(tmp_path, "tools.toml") == "2.0.40"
+    # tools.toml 钩子链尾已延到 [tools.memory] 段退役（2.0.45）
+    assert get_config_version(tmp_path, "tools.toml") == "2.0.45"
     assert get_config_version(tmp_path, "infra.toml") == "2.0.42"
 
 

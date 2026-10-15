@@ -24,7 +24,7 @@ PROVIDER_DESCRIPTIONS: Dict[Tuple[str, str], str] = {
     ("avatar", "warudo"): "Warudo 控制",
     ("studio", "obs"): "OBS Studio 控制",
     ("vision", "vision"): "视觉感知（vision_look_at_screen）",
-    ("memory", "memory"): "记忆检索（memory_query_memory）",
+    ("memory", "memory"): "主播记忆（memory_recall_session / memory_recall_viewer）",
     ("web", "search"): "联网搜索（web_search / web_fetch_url）",
     ("game", "text_adv"): "文字冒险游戏（text_adv_*）",
     ("framework", "framework"): "框架内置（framework_*，如 AgentControl）",
@@ -40,10 +40,11 @@ _CONFIG_MEMBER_CATEGORIES: Tuple[str, ...] = ("studio", "web")
 _NON_GAME_AGENT_NAMES: Tuple[str, ...] = ("streamer",)
 
 # 分类级开关的成员（键与分类名相同，配置段为 [tools.<分类>]）。
-CATEGORY_LEVEL_KEYS = {"vision", "memory"}
+CATEGORY_LEVEL_KEYS = {"vision"}
 
 # 随 Agent 启用的分类（不可开关；提供者 = Agent 自声明，注册表动态发现）。
-AGENT_CATEGORIES: Tuple[str, ...] = ("game", "framework")
+# memory = 主播记忆工具，随主播 Agent 注册；game = 游戏 Agent 自有工具；framework = 框架内置
+AGENT_CATEGORIES: Tuple[str, ...] = ("game", "framework", "memory")
 
 # MCP 分类（提供者 = 注册表 MCP Provider ∪ [tools.mcp.config.servers] 配置键）。
 MCP_CATEGORY = "mcp"
@@ -208,11 +209,12 @@ def build_tool_catalog(
             )
         elif category in AGENT_CATEGORIES:
             # 随 Agent 启用：分类级 flag（有启用中的游戏 Agent / 主播 Agent 在册）
-            entry["enabled"] = (
-                any(name not in _NON_GAME_AGENT_NAMES for name in agents_enabled)
-                if category == "game"
-                else category in agents_enabled
-            )
+            if category == "game":
+                entry["enabled"] = any(name not in _NON_GAME_AGENT_NAMES for name in agents_enabled)
+            elif category == "memory":
+                entry["enabled"] = all(name in agents_enabled for name in _NON_GAME_AGENT_NAMES)
+            else:
+                entry["enabled"] = category in agents_enabled
             entry["in_config"] = True
             entry["notice"] = ""
         elif key in CATEGORY_LEVEL_KEYS and category == key:

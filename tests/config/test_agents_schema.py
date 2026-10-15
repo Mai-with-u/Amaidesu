@@ -95,7 +95,7 @@ class TestStreamerConfigInAgentsTree:
         s = cfg.streamer
         assert s.persona.audience_salutation == "大家"
         assert s.context.enabled is True
-        # 记忆召回条数字段已废弃（画像注入上限归 [memory] 段）
+        # 记忆召回条数字段已废弃（画像按本批发言人全量注入，无条数上限）
         assert not hasattr(s.context, "memory_recall_long_term")
         assert s.background.light_tick_ms == 5_000
         assert s.background.compressor.concurrency == 1

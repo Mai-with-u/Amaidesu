@@ -944,14 +944,14 @@ export interface ViewerSessionsResponse {
   items: ViewerSessionItem[];
 }
 
-// ===== 观众画像管理（/api/v1/memory） =====
+// ===== 常客名册管理（/api/v1/memory） =====
 
-/** 单份观众画像（viewer_profiles 行投影） */
+/** 一位常客的印象（viewer_profiles 行投影） */
 export interface ViewerProfileItem {
   platform: string;
   user_id: string;
   profile_text: string;
-  /** 增量压缩水位：该时刻前的原料已摄入画像 */
+  /** 原料水位：该时刻前的弹幕与付费记录已融进印象 */
   last_compressed_at_ms: number;
   updated_at_ms: number;
 }
@@ -973,22 +973,6 @@ export interface MemoryMutationResponse {
 
 export interface MemoryStatsResponse {
   profile_count: number;
-  fact_count: number;
-  /** 最新画像更新时刻，空库为 0 */
+  /** 最近一次印象更新时刻，空库为 0 */
   latest_updated_ms: number;
-}
-
-/** 单条观众事实（viewer_facts 行投影） */
-export interface ViewerFactItem {
-  id: number;
-  platform: string;
-  user_id: string;
-  fact_text: string;
-  source_message_id: string;
-  created_at_ms: number;
-}
-
-export interface ViewerFactListResponse {
-  total: number;
-  items: ViewerFactItem[];
 }

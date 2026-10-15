@@ -19,10 +19,6 @@
     enabled = true
     config = {...}
 
-    # 记忆分类（工具出口：query_memory；默认 enabled=true）
-    [tools.memory]
-    enabled = true
-
     # 通用 MCP 外部工具源通道
     [tools.mcp]
     enabled = true
@@ -106,17 +102,6 @@ class VisionProviderConfig(ToolProviderConfig):
         title="视觉配置",
         description="视觉提供者配置（直接复用 LookAtScreenProvider.ConfigSchema）",
     )
-
-
-class MemoryProviderConfig(ToolProviderConfig):
-    """记忆分类（工具出口 query_memory；LLM 主动检索关键词记忆）
-
-    默认 enabled=true：缺省配置下 query_memory 已注册，与 main.py 消费端
-    ``.get("enabled", True)`` 兜底对齐，消除原"配置 false 时仍注册"的漂移。
-    段本体走 BaseConfig 默认 forbid（同 VisionProviderConfig）。
-    """
-
-    enabled: bool = Field(default=True, title="是否启用记忆检索", description="是否启用 query_memory 记忆检索工具")
 
 
 class McpProviderConfig(ToolProviderConfig):
@@ -207,7 +192,7 @@ class ToolsHealthConfig(BaseConfig):
 class ToolsConfig(BaseConfig):
     """[tools] 段聚合
 
-    包含工具提供者开关（studio/vision/memory/mcp/web）+ 异步任务基建 +
+    包含工具提供者开关（studio/vision/mcp/web）+ 异步任务基建 +
     工具熔断器配置 + disabled_tools 平铺列表。使用 ``extra="forbid"`` 拒绝未知子段。
     """
 
@@ -233,12 +218,6 @@ class ToolsConfig(BaseConfig):
         default_factory=lambda: VisionProviderConfig(enabled=False),
         title="视觉模块",
         description="视觉基础模块（工具出口 look_at_screen；enabled=true 时组合根注入 Pillow 后端；缺省关态）",
-        json_schema_extra={"x-ui-type": "object"},
-    )
-    memory: MemoryProviderConfig = Field(
-        default_factory=MemoryProviderConfig,
-        title="记忆工具",
-        description="记忆分类（工具出口 query_memory；默认 enabled=true）",
         json_schema_extra={"x-ui-type": "object"},
     )
     mcp: McpProviderConfig = Field(
@@ -299,7 +278,6 @@ __all__ = [
     # 分类配置
     "StudioProviderConfig",
     "VisionProviderConfig",
-    "MemoryProviderConfig",
     "McpProviderConfig",
     "WebProviderConfig",
     # 异步任务基建

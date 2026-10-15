@@ -8,11 +8,8 @@
     db_path = "data/amaidesu.db"
     busy_timeout_ms = 5000
 
-    [memory]
-    backend = "simple"
-
-> **db_path 单一权威**：存储与 SimpleMemory 共用同一 SQLite 文件，
-> 路径权威在 ``[sqlite].db_path``。
+> **db_path 单一权威**：所有业务表（含主播记忆的常客名册与场次回顾）共用
+> 同一 SQLite 文件，路径权威在 ``[sqlite].db_path``。
 >
 > **wal / foreign_keys 不再配置化**：WAL 与外键约束在
 > ``src/modules/storage/connection.py`` 内 PRAGMA 硬编码（写死开启），
@@ -42,8 +39,8 @@ class SqliteStorageConfig(BaseConfig):
     """SQLite 存储配置（``[sqlite]`` 顶层段）
 
     Attributes:
-        db_path: 数据库文件路径（相对项目根目录）。**单一事实源**：存储与
-            SimpleMemory 共用此文件。
+        db_path: 数据库文件路径（相对项目根目录）。**单一事实源**：全部
+            业务表共用此文件。
         busy_timeout_ms: 单线程占用超时（毫秒；实际生效 5000ms，对齐 PRAGMA）
     """
 
@@ -71,10 +68,9 @@ class StorageRootConfig(BaseConfig):
 
     对应 ``config/storage.toml`` 文件。顶层扁平结构：
     - ``[sqlite]``：数据库连接配置
-    - ``[memory]``：记忆子系统装配（backend 行切换）
 
-    注：记忆子模块（bootstrap.py）按新扁平结构从 ``config["sqlite"]`` /
-    ``config["memory"]`` 直接读取（顶层扁平段位，无包裹层）。
+    注：存储装配（``storage/bootstrap.py``）从 ``config["sqlite"]`` 直接读取
+    （顶层扁平段位，无包裹层）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -86,7 +82,7 @@ class StorageRootConfig(BaseConfig):
     sqlite: SqliteStorageConfig = Field(
         default_factory=SqliteStorageConfig,
         title="SQLite 配置",
-        description="SQLite 存储后端配置（存储与 SimpleMemory 共用）",
+        description="SQLite 存储后端配置（全部业务表共用同一库）",
     )
 
 

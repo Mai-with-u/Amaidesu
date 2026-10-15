@@ -63,7 +63,6 @@ _SHARED_SERVICES: dict[str, Any] = {
     "prompt_manager": object(),
     "event_bus": object(),
     "tool_registry": ToolRegistry(),
-    "memory": object(),
     "thinking_sink": object(),
     "speech_config": {"enabled": False, "max_queue": 3, "render_timeout_ms": 60000},
     "tts_engine": object(),
@@ -73,6 +72,10 @@ _SHARED_SERVICES: dict[str, Any] = {
     "chat_repo": object(),
     "sessions_repo": object(),
     "topic_repo": object(),
+    "viewer_repo": object(),
+    "viewer_profile_repo": object(),
+    "recap_repo": object(),
+    "event_repo": object(),
     "context_assembler_config": None,
     "task_tracker": object(),
 }
@@ -99,7 +102,6 @@ async def test_startup_and_enable_paths_pass_same_kwarg_names(recorded_factory) 
             llm_service=_SHARED_SERVICES["llm_manager"],
             event_bus=_SHARED_SERVICES["event_bus"],
             tool_registry=_SHARED_SERVICES["tool_registry"],
-            memory=_SHARED_SERVICES["memory"],
             task_tracker=_SHARED_SERVICES["task_tracker"],
             tts_section={"enabled": False, "max_queue": 3, "render_timeout_ms": 60000},
             tts_engine=_SHARED_SERVICES["tts_engine"],
@@ -109,6 +111,10 @@ async def test_startup_and_enable_paths_pass_same_kwarg_names(recorded_factory) 
             chat_repo=_SHARED_SERVICES["chat_repo"],
             sessions_repo=_SHARED_SERVICES["sessions_repo"],
             topic_repo=_SHARED_SERVICES["topic_repo"],
+            viewer_repo=_SHARED_SERVICES["viewer_repo"],
+            viewer_profile_repo=_SHARED_SERVICES["viewer_profile_repo"],
+            recap_repo=_SHARED_SERVICES["recap_repo"],
+            event_repo=_SHARED_SERVICES["event_repo"],
             thinking_sink=_SHARED_SERVICES["thinking_sink"],
         )
     finally:
@@ -117,10 +123,7 @@ async def test_startup_and_enable_paths_pass_same_kwarg_names(recorded_factory) 
     startup_calls = {c["name"]: set(c) - {"name", "config"} for c in calls}
     calls.clear()
 
-    manager = AgentManager(
-        tool_registry=_SHARED_SERVICES["tool_registry"],
-        memory=_SHARED_SERVICES["memory"],
-    )
+    manager = AgentManager(tool_registry=_SHARED_SERVICES["tool_registry"])
     factory_patcher.start()
     try:
         for name in SUPPORTED_AGENTS:

@@ -14,7 +14,7 @@
     config/tools.toml       - 工具提供者启用/配置
     config/avatar.toml      - 虚拟形象（平台启用名单 + 平台成员段 + 口型共享件）
     config/model.toml       - LLM/VLM 模型配置（三层：providers/models/profiles）
-    config/storage.toml     - 存储（顶层 [sqlite] + [memory]）
+    config/storage.toml     - 存储（顶层 [sqlite]）
     config/infra.toml       - 基础设施（tts/subtitle/events/interceptors/dashboard/logging/simulator）
 
 设计约定：

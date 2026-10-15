@@ -3,11 +3,11 @@
     <!-- 页面头：身份 + 总量 + 刷新                                               -->
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">观众画像</h1>
+        <h1 class="page-title">常客名册</h1>
         <p class="page-subtitle">
-          主播对观众的长期认识 · 查看 / 纠正 / 清理
+          主播对常客的印象 · 查看 / 纠正 / 清理
           <template v-if="stats && stats.profile_count > 0">
-            （画像 {{ stats.profile_count }} 份 · 事实 {{ stats.fact_count }} 条）</template
+            （常客 {{ stats.profile_count }} 位）</template
           >
         </p>
       </div>
@@ -21,7 +21,7 @@
       <el-input
         v-model="searchText"
         class="search-input"
-        placeholder="搜索画像内容 / 用户 ID"
+        placeholder="搜索印象内容 / 用户 ID"
         clearable
         :prefix-icon="Search"
       />
@@ -29,7 +29,7 @@
       <span class="count-hint mono">{{ shownRange }} / {{ total }}</span>
     </div>
 
-    <!-- 画像表                                                                  -->
+    <!-- 名册表                                                                  -->
     <section class="table-card">
       <el-table
         v-loading="loading"
@@ -38,43 +38,17 @@
         style="width: 100%"
         :header-cell-style="{ background: 'var(--bg-hover)', color: 'var(--text-primary)' }"
       >
-        <el-table-column type="expand">
-          <template #default="{ row }">
-            <div class="expand-body">
-              <div class="expand-header">
-                <span class="expand-title">该观众的事实原料</span>
-                <el-button
-                  link
-                  size="small"
-                  :loading="factsLoadingKey === rowKey(row)"
-                  @click.stop="loadFacts(row)"
-                  >刷新事实</el-button
-                >
-              </div>
-              <div v-if="(factsByViewer[rowKey(row)] || []).length > 0" class="fact-list">
-                <div v-for="fact in factsByViewer[rowKey(row)]" :key="fact.id" class="fact-row">
-                  <span class="fact-time">{{ relativeAge(fact.created_at_ms) }}</span>
-                  <span class="fact-text">{{ fact.fact_text }}</span>
-                  <el-button link size="small" type="danger" @click.stop="removeFact(row, fact)"
-                    >删除</el-button
-                  >
-                </div>
-              </div>
-              <div v-else class="none-hint">暂无事实（展开后可点「刷新事实」加载）</div>
-            </div>
-          </template>
-        </el-table-column>
         <el-table-column label="观众" width="220">
           <template #default="{ row }">
             <span class="mono viewer-cell">{{ row.platform }}/{{ row.user_id }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="画像" min-width="320">
+        <el-table-column label="印象" min-width="320">
           <template #default="{ row }">
             <span class="text-cell">{{ row.profile_text }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="压缩水位" width="120">
+        <el-table-column label="原料水位" width="120">
           <template #default="{ row }">
             <span
               v-if="row.last_compressed_at_ms > 0"
@@ -103,8 +77,8 @@
       <div v-if="!loading && items.length === 0" class="empty-hint">
         {{
           searchText
-            ? '没有匹配的画像'
-            : '还没有画像——观众互动达到门槛后，后台会从弹幕与付费记录中提炼画像'
+            ? '没有匹配的常客'
+            : '还没有常客印象——每场收播后，会为本场最活跃且互动达门槛的观众整理印象'
         }}
       </div>
     </section>
@@ -119,10 +93,10 @@
       @current-change="onPageChange"
     />
 
-    <!-- 画像纠正对话框                                                          -->
-    <el-dialog v-model="editVisible" title="纠正画像" width="560px">
+    <!-- 印象纠正对话框                                                          -->
+    <el-dialog v-model="editVisible" title="纠正印象" width="560px">
       <p class="edit-desc">
-        直接编辑画像文本。纠正后主播下次决策即读到新内容；后台压缩会以人工纠正版为旧画像继续增量更新。
+        直接编辑印象文本。纠正后主播下次决策即读到新内容；之后收播整理会以人工纠正版为旧印象继续更新。
       </p>
       <el-input
         v-model="editForm.profileText"
@@ -130,7 +104,7 @@
         :rows="6"
         maxlength="1000"
         show-word-limit
-        placeholder="画像正文"
+        placeholder="印象正文"
       />
       <template #footer>
         <el-button @click="editVisible = false">取消</el-button>
@@ -142,17 +116,17 @@
 
 <script setup lang="ts">
 /**
- * 观众画像管理 —— viewer_profiles 的查看 / 纠正 / 清理入口
+ * 常客名册管理 —— viewer_profiles 的查看 / 纠正 / 清理入口
  *
- * 数据面：/api/v1/memory/*（画像列表 / 纠正 / 删除；事实查看 / 单条删除）。
- * 搜索 250ms 防抖走服务端 LIKE（画像文本 / user_id）；行展开懒加载该观众
- * 的事实原料，提取错误的事实可单条删除，画像不受影响。
+ * 数据面：/api/v1/memory/*（名册列表 / 纠正 / 删除 / 统计）。印象由主播在每场
+ * 收播时为本场活跃的常客整理，这里只提供人工查看与纠正。
+ * 搜索 250ms 防抖走服务端 LIKE（印象文本 / user_id）。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { Search } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { memoryApi } from '@/api';
-import type { ViewerProfileItem, ViewerFactItem, MemoryStatsResponse } from '@/types';
+import type { ViewerProfileItem, MemoryStatsResponse } from '@/types';
 import { formatDateTimeCn as formatTime, relativeAge } from '@/utils/format';
 import { confirmAction } from '@/utils/confirmAction';
 
@@ -188,7 +162,7 @@ async function loadProfiles(): Promise<void> {
     items.value = response.data.items;
     total.value = response.data.total;
   } catch {
-    ElMessage.error('画像列表加载失败');
+    ElMessage.error('常客名册加载失败');
   } finally {
     loading.value = false;
   }
@@ -222,41 +196,7 @@ watch(searchText, () => {
   }, 250);
 });
 
-// ===== 行展开：事实原料懒加载 =====
-
-const factsByViewer = ref<Record<string, ViewerFactItem[]>>({});
-const factsLoadingKey = ref('');
-
-async function loadFacts(profile: ViewerProfileItem): Promise<void> {
-  factsLoadingKey.value = rowKey(profile);
-  try {
-    const response = await memoryApi.listFacts({
-      platform: profile.platform,
-      user_id: profile.user_id,
-      limit: 50,
-    });
-    factsByViewer.value[rowKey(profile)] = response.data.items;
-  } catch {
-    ElMessage.error('事实加载失败');
-  } finally {
-    factsLoadingKey.value = '';
-  }
-}
-
-async function removeFact(profile: ViewerProfileItem, fact: ViewerFactItem): Promise<void> {
-  const preview = fact.fact_text.length > 40 ? `${fact.fact_text.slice(0, 37)}...` : fact.fact_text;
-  if (!(await confirmAction(`删除这条事实？「${preview}」`, '删除事实'))) return;
-  try {
-    await memoryApi.deleteFact(fact.id);
-    ElMessage.success('已删除');
-    await loadFacts(profile);
-    void loadStats();
-  } catch {
-    ElMessage.error('删除失败');
-  }
-}
-
-// ===== 画像纠正 =====
+// ===== 印象纠正 =====
 
 const editVisible = ref(false);
 const saving = ref(false);
@@ -274,13 +214,13 @@ async function saveProfile(): Promise<void> {
   const text = editForm.value.profileText.trim();
   if (!target) return;
   if (!text) {
-    ElMessage.warning('画像内容不能为空');
+    ElMessage.warning('印象内容不能为空');
     return;
   }
   saving.value = true;
   try {
     await memoryApi.updateProfile(target.platform, target.user_id, { profile_text: text });
-    ElMessage.success('已纠正画像');
+    ElMessage.success('已纠正印象');
     editVisible.value = false;
     reload();
   } catch {
@@ -293,8 +233,8 @@ async function saveProfile(): Promise<void> {
 async function removeProfile(profile: ViewerProfileItem): Promise<void> {
   if (
     !(await confirmAction(
-      `删除「${rowKey(profile)}」的画像？删除后该观众回到无画像态（随新事实重新生成）。`,
-      '删除画像',
+      `删除「${rowKey(profile)}」的印象？删除后该观众回到无印象态（之后收播时若仍活跃会重新整理）。`,
+      '删除印象',
     ))
   )
     return;
@@ -394,51 +334,6 @@ onMounted(() => {
 
 .pager {
   justify-content: flex-end;
-}
-
-.expand-body {
-  padding: var(--spacing-sm) var(--spacing-md);
-}
-
-.expand-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--spacing-sm);
-}
-
-.expand-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.fact-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.fact-row {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  padding: 4px 8px;
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-hover);
-}
-
-.fact-time {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--text-placeholder);
-}
-
-.fact-text {
-  flex: 1;
-  font-size: 12px;
-  color: var(--text-primary);
 }
 
 .edit-desc {

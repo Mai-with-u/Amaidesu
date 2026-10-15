@@ -40,7 +40,7 @@ ToolProvider Protocol 与 BaseToolProvider 基类
 - ``make_provider_from_specs``——用一组 ``(spec, impl)`` 构造固定 Provider，
   装配处一行 ``registry.register_provider(...)`` 完成注册
 
-样板见 ``src/modules/memory/query_tool.py``（QueryMemory）。
+样板见 ``src/agents/streamer/memory/tools.py``（主播记忆工具）。
 升级为手写 Provider 类的判据：需要连接重连 / 共享状态 / 动态工具表 / 任务适配器。
 
 ## 契约要点

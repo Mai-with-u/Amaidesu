@@ -50,7 +50,8 @@ def test_warudo_subtitle_keys_dropped_and_written_back(tmp_path: Path):
         assert key not in warudo_config, f"{key} 应已删除"
     # 同段非字幕键不受影响
     assert warudo_config["ws_port"] == 19190
-    assert get_config_version(tmp_path, "tools.toml") == "2.0.40"
+    # tools.toml 钩子链尾已延到 [tools.memory] 段退役（2.0.45）
+    assert get_config_version(tmp_path, "tools.toml") == "2.0.45"
 
 
 def test_migration_idempotent_on_second_load(tmp_path: Path):

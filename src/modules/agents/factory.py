@@ -34,8 +34,6 @@ def instantiate_agent(
     prompt_manager: Any,
     event_bus: Any = None,
     tool_registry: Any = None,
-    memory: Any = None,
-    memory_policy: Optional[dict[str, Any]] = None,
     thinking_sink: Optional[Any] = None,
     speech_config: Optional[dict[str, Any]] = None,
     tts_engine: Optional[Any] = None,
@@ -46,17 +44,21 @@ def instantiate_agent(
     sessions_repo: Optional[Any] = None,
     topic_repo: Optional[Any] = None,
     viewer_repo: Optional[Any] = None,
+    viewer_profile_repo: Optional[Any] = None,
+    recap_repo: Optional[Any] = None,
+    event_repo: Optional[Any] = None,
     context_assembler_config: Optional[Any] = None,
     task_tracker: Optional[Any] = None,
 ) -> Optional[BaseAgent]:
     """按名实例化 Agent；未知名字返回 None。
 
     基础设施参数按 Agent 各自消费面透传（未列出的 Agent 忽略对应参数）：
-    - streamer：memory / memory_policy / thinking_sink / speech_config /
-      tts_engine / subtitle_service / session_manager / rundown_repo / chat_repo /
-      sessions_repo / topic_repo / context_assembler_config。仓储四件
-      缺省 None 时对应能力降级（chat_repo 缺失 = 对话历史读取整体短路，
-      Planner/Replyer 无历史上下文），组合根必须传入
+    - streamer：thinking_sink / speech_config / tts_engine / subtitle_service /
+      session_manager / rundown_repo / chat_repo / sessions_repo / topic_repo /
+      viewer_repo / viewer_profile_repo / recap_repo / event_repo /
+      context_assembler_config。仓储缺省 None 时对应能力降级（chat_repo 缺失
+      = 对话历史读取整体短路，Planner/Replyer 无历史上下文；记忆两仓储缺失
+      = 场次回顾 / 常客名册整体关闭），组合根必须传入
     - minecraft：thinking_sink / task_tracker；llm_profile 使用 Agent
       类默认值（``[llm_profiles.minecraft]`` 段）；技能库在工厂内取全局单例注入
     - text_adv：基础四件套 + 工厂内装配的感知/动作依赖（读屏 reader /
@@ -91,13 +93,14 @@ def instantiate_agent(
             prompt_manager=prompt_manager,
             event_bus=event_bus,
             tool_registry=tool_registry,
-            memory=memory,
-            memory_policy=memory_policy,
             rundown_repo=rundown_repo,
             chat_repo=chat_repo,
             sessions_repo=sessions_repo,
             topic_repo=topic_repo,
             viewer_repo=viewer_repo,
+            viewer_profile_repo=viewer_profile_repo,
+            recap_repo=recap_repo,
+            event_repo=event_repo,
             context_assembler_config=context_assembler_config,
             speech_config=speech_config,
             tts_engine=tts_engine,
