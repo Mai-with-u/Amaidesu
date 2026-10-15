@@ -1,17 +1,8 @@
-"""联网搜索工具测试
-
-覆盖三面：
-1. 解析纯函数（``parse_search_results`` / ``html_to_text``）——固化 HTML 片段，
-   不打网络
-2. ``WebSearchProvider.invoke`` 全链路——mock 掉 HTTP 层，验证分发、格式化、
-   参数防御与"失败转结果不外抛"契约
-3. 装配冒烟——``register_web_search_tools`` 后工具以派生全名进入 ToolRegistry
-"""
+"""联网搜索工具：解析纯函数（固化 HTML 片段不打网络）、``invoke`` 全链路（mock HTTP 层）、装配进 ToolRegistry"""
 
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
-
 
 import pytest
 
@@ -36,126 +27,80 @@ _BING_HTML = """
 <li class="b_algo"><p>无标题条目应被跳过</p></li>
 </ol></body></html>
 """
+_PAGE_HTML = (
+    "<html><head><style>.x{}</style></head><body><h1>页标题</h1><script>bad()</script><p>页正文</p></body></html>"
+)
 
 
-def _invocation(tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> ToolInvocation:
-    return ToolInvocation(tool_name=tool_name, arguments=arguments or {})
+def _invoke(provider: WebSearchProvider, tool_name: str, **arguments: Any):
+    return provider.invoke(ToolInvocation(tool_name=tool_name, arguments=arguments))
 
 
-class TestParseSearchResults:
-    def test_extracts_title_url_snippet(self):
-        hits = parse_search_results(_BING_HTML, limit=10)
-        assert len(hits) == 2
-        title, url, snippet = hits[0]
-        assert title == "第一个结果"
-        assert url == "https://example.com/a"
-        assert snippet == "这是第一条摘要"
-
-    def test_limit_truncates(self):
-        assert len(parse_search_results(_BING_HTML, limit=1)) == 1
-
-    def test_unparseable_page_returns_empty(self):
-        """验证码/改版页 → 空列表（调用方呈现无结果，而非报错）。"""
-        assert parse_search_results("<html><body>blocked</body></html>", limit=5) == []
+@pytest.fixture
+def provider() -> WebSearchProvider:
+    return WebSearchProvider(config=WebSearchProvider.ConfigSchema())
 
 
-class TestHtmlToText:
-    def test_strips_script_and_compresses_blank_lines(self):
-        html = (
-            "<html><head><style>.x{}</style></head><body><h1>标题</h1><script>evil()</script><p>正文</p></body></html>"
-        )
-        text = html_to_text(html)
-        assert "标题" in text and "正文" in text
-        assert "evil()" not in text and ".x{}" not in text
+def _serve(monkeypatch: pytest.MonkeyPatch, provider: WebSearchProvider, html: str) -> None:
+    async def fake_get(url: str, params: Optional[Dict[str, str]] = None) -> str:
+        return html
+
+    monkeypatch.setattr(provider, "_http_get", fake_get)
 
 
-class TestInvoke:
-    def _provider(self) -> WebSearchProvider:
-        return WebSearchProvider(config=WebSearchProvider.ConfigSchema())
-
-    @staticmethod
-    def _mock_http(monkeypatch, provider: WebSearchProvider, html: str) -> None:
-        async def fake_get(url: str, params: Optional[Dict[str, str]] = None) -> str:
-            return html
-
-        monkeypatch.setattr(provider, "_http_get", fake_get)
-
-    async def test_search_formats_results(self, monkeypatch):
-        provider = self._provider()
-        self._mock_http(monkeypatch, provider, _BING_HTML)
-
-        result = await provider.invoke(_invocation("web_search", {"query": "测试"}))
-
-        assert result.success is True
-        assert "第一个结果" in result.content
-        assert "https://example.com/a" in result.content
-
-    async def test_fetch_url_returns_plain_text(self, monkeypatch):
-        provider = self._provider()
-        self._mock_http(
-            monkeypatch,
-            provider,
-            "<html><body><h1>页标题</h1><script>bad()</script><p>页正文</p></body></html>",
-        )
-
-        result = await provider.invoke(_invocation("web_fetch_url", {"url": "https://example.com/page"}))
-
-        assert result.success is True
-        assert "页标题" in result.content and "页正文" in result.content
-        assert "bad()" not in result.content
-
-    async def test_fetch_rejects_non_http_scheme(self):
-        provider = self._provider()
-        result = await provider.invoke(_invocation("web_fetch_url", {"url": "ftp://example.com/x"}))
-        assert result.success is False
-        assert "http/https" in result.error_message
-
-    async def test_fetch_preserves_long_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """网页中的尾部信息完整返回，供模型继续阅读。"""
-        provider = WebSearchProvider(config=WebSearchProvider.ConfigSchema())
-        self._mock_http(monkeypatch, provider, "<html><body>" + "字" * 12000 + "</body></html>")
-
-        result = await provider.invoke(_invocation("web_fetch_url", {"url": "https://example.com/long"}))
-
-        assert result.success is True
-        assert result.content == "字" * 12000
-
-    async def test_empty_query_returns_hint_without_http(self):
-        provider = self._provider()
-        result = await provider.invoke(_invocation("web_search", {"query": "  "}))
-        assert result.success is True
-        assert "空查询" in result.content
-
-    async def test_http_failure_becomes_failed_result(self, monkeypatch):
-        """网络异常 → 失败结果（不外抛），符合 invoke 契约。"""
-        provider = self._provider()
-
-        async def boom(url: str, params: Optional[Dict[str, str]] = None) -> str:
-            raise TimeoutError("连接超时")
-
-        monkeypatch.setattr(provider, "_http_get", boom)
-        result = await provider.invoke(_invocation("web_search", {"query": "测试"}))
-        assert result.success is False
-        assert "TimeoutError" in result.error_message
-
-    async def test_unknown_tool_fails_without_raise(self):
-        provider = self._provider()
-        result = await provider.invoke(_invocation("web_nonexistent"))
-        assert result.success is False
+def test_parse_search_results_extracts_hits_honours_limit_and_tolerates_unparseable_pages() -> None:
+    hits = parse_search_results(_BING_HTML, limit=10)
+    assert hits[0] == ("第一个结果", "https://example.com/a", "这是第一条摘要") and len(hits) == 2  # 无标题条目跳过
+    assert len(parse_search_results(_BING_HTML, limit=1)) == 1
+    assert parse_search_results("<html><body>blocked</body></html>", limit=5) == []  # 验证码/改版页：呈现无结果而非报错
 
 
-class TestAssemblySmoke:
-    def test_register_adds_two_tools_with_full_names(self):
-        registry = ToolRegistry()
-        provider = register_web_search_tools(registry=registry, config={})
+def test_html_to_text_drops_scripts_and_styles() -> None:
+    text = html_to_text(_PAGE_HTML)
+    assert "页标题" in text and "页正文" in text and "bad()" not in text and ".x{}" not in text
 
-        assert provider.name == "web"
-        names = {spec.full_name for spec in registry.list_tools()}
-        assert {SEARCH_SPEC.full_name, FETCH_URL_SPEC.full_name} <= names
-        assert SEARCH_SPEC.full_name == "web_search"
-        assert FETCH_URL_SPEC.full_name == "web_fetch_url"
 
-    def test_config_defaults_applied_from_raw_dict(self):
-        provider = register_web_search_tools(registry=ToolRegistry(), config={"timeout_ms": 5000})
-        assert provider._config.timeout_ms == 5000
-        assert provider._config.default_max_results == 5
+async def test_search_formats_results_and_empty_query_skips_http(monkeypatch, provider) -> None:
+    _serve(monkeypatch, provider, _BING_HTML)
+    result = await _invoke(provider, "web_search", query="测试")
+    assert result.success is True and "第一个结果" in result.content and "https://example.com/a" in result.content
+
+    async def must_not_fetch(*args: Any, **kwargs: Any) -> str:
+        raise AssertionError("空查询不应发起 HTTP")
+
+    monkeypatch.setattr(provider, "_http_get", must_not_fetch)
+    blank = await _invoke(provider, "web_search", query="  ")
+    assert blank.success is True and "空查询" in blank.content
+
+
+async def test_fetch_url_returns_plain_text_and_keeps_long_pages_whole(monkeypatch, provider) -> None:
+    _serve(monkeypatch, provider, _PAGE_HTML)
+    result = await _invoke(provider, "web_fetch_url", url="https://example.com/page")
+    assert result.success is True and "页正文" in result.content and "bad()" not in result.content
+
+    _serve(monkeypatch, provider, "<html><body>" + "字" * 12000 + "</body></html>")
+    long_page = await _invoke(provider, "web_fetch_url", url="https://example.com/long")
+    assert long_page.content == "字" * 12000  # 尾部信息完整返回，供模型继续阅读
+
+
+async def test_bad_calls_become_failed_results_instead_of_raising(monkeypatch, provider) -> None:
+    ftp = await _invoke(provider, "web_fetch_url", url="ftp://example.com/x")
+    assert ftp.success is False and "http/https" in ftp.error_message
+    assert (await _invoke(provider, "web_nonexistent")).success is False
+
+    async def boom(url: str, params: Optional[Dict[str, str]] = None) -> str:
+        raise TimeoutError("连接超时")
+
+    monkeypatch.setattr(provider, "_http_get", boom)
+    failed = await _invoke(provider, "web_search", query="测试")
+    assert failed.success is False and "TimeoutError" in failed.error_message  # 网络异常转失败结果，符合 invoke 契约
+
+
+def test_register_adds_both_tools_under_derived_full_names_and_applies_config_defaults() -> None:
+    registry = ToolRegistry()
+    provider = register_web_search_tools(registry=registry, config={"timeout_ms": 5000})
+
+    assert provider.name == "web"
+    assert {SEARCH_SPEC.full_name, FETCH_URL_SPEC.full_name} <= {spec.full_name for spec in registry.list_tools()}
+    assert (SEARCH_SPEC.full_name, FETCH_URL_SPEC.full_name) == ("web_search", "web_fetch_url")
+    assert (provider._config.timeout_ms, provider._config.default_max_results) == (5000, 5)
