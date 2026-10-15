@@ -118,8 +118,8 @@ def test_missing_files_are_regenerated_and_a_missing_section_is_refilled_after_o
     _remove_section(config_dir, "infra.toml", "events")
     load_config_dir(config_dir)
     assert "[events]" in (config_dir / "infra.toml").read_text(encoding="utf-8-sig")
-    backups = [path for path in (config_dir / "old").iterdir() if (path / "infra.toml").exists()]
-    assert len(backups) == 1  # 漂移触发的写回先备份原文件
+    latest = max(path for path in (config_dir / "old").iterdir() if (path / "infra.toml").exists())
+    assert "[events]" not in (latest / "infra.toml").read_text(encoding="utf-8-sig")  # 漂移触发的写回先备份写前的原文件
 
 
 def test_legacy_agenda_keys_without_a_migration_hook_hard_fail_naming_the_hook_gap(config_dir) -> None:

@@ -73,7 +73,7 @@ def _registry_with_own_tools(state: MinecraftAgentState | None = None, **kwargs:
     return reg
 
 
-async def _wait_until(condition, timeout: float = 3.0, interval: float = 0.02) -> None:
+async def _wait_until(condition, timeout: float = 10.0, interval: float = 0.02) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         if condition():

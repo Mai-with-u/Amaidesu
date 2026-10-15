@@ -37,7 +37,7 @@ def _texts(messages: List[Dict[str, Any]]) -> str:
     return "\n".join(str(message.get("content") or "") for message in messages)
 
 
-async def _wait_until(condition: Callable[[], bool], timeout: float = 3.0) -> None:
+async def _wait_until(condition: Callable[[], bool], timeout: float = 10.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         if condition():

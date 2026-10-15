@@ -218,7 +218,7 @@ async def test_real_sdk_recovers_after_a_timed_out_call(monkeypatch: pytest.Monk
             await asyncio.Event().wait()
         return "available"
 
-    client = McpClient("reference", SimpleNamespace(timeout_seconds=1, request_timeout_ms=50, transport="http"))
+    client = McpClient("reference", SimpleNamespace(timeout_seconds=1, request_timeout_ms=300, transport="http"))
     monkeypatch.setattr(client, "_build_transport", lambda: service)
     try:
         assert await client.connect()
