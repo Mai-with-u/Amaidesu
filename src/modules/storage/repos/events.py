@@ -7,13 +7,14 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import sqlite3
+from typing import List, Optional
 
 from src.modules.storage.repos._base import BaseRepo
 
 
 class EventRepo(BaseRepo):
-    """game_events 表的写入。"""
+    """game_events 表的写入与按场读取。"""
 
     async def insert_game_event(
         self,
@@ -35,6 +36,21 @@ class EventRepo(BaseRepo):
                     (live_session_id, game, event_type, message, scene, timestamp_ms),
                 )
                 return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
+    async def list_session_game_events(self, *, live_session_id: int, limit: int = 60) -> List[sqlite3.Row]:
+        """取指定场次的游戏事件（时间正序，最多 ``limit`` 条最近的）——场次回顾的游戏进展原料。"""
+        page_limit = max(1, min(int(limit), 500))
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT game, event_type, message, scene, timestamp_ms FROM game_events"
+                    " WHERE live_session_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                    (int(live_session_id), page_limit),
+                ).fetchall()
+                return list(reversed(rows))
 
         return await self._run_in_executor(_exec)
 

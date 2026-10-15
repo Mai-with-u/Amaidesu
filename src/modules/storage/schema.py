@@ -52,7 +52,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 14
+SCHEMA_VERSION: int = 15
 
 
 # =============================================================================
@@ -65,8 +65,8 @@ SCHEMA_VERSION: int = 14
 # - guards                  大航海开通/续费明细（购买事件表）
 # - topics                  话题（每行一个，1NF）
 # - viewers                 观众统计（跨场客观数字）
-# - viewer_facts            观众事实（画像原料：从弹幕/SC 提取的"关于观众的事实"）
-# - viewer_profiles         观众画像（LLM 压缩后的画像文本，主播认人的依据）
+# - viewer_profiles         常客名册（每位常客一份 LLM 维护的印象文本，主播认人的依据）
+# - session_recaps          场次回顾（每场一份收播总结，主播跨场次记得自己做过什么）
 # - game_events             游戏里程碑事件
 # - timeline_summary        摘要层
 # - llm_usage               LLM 调用记录
@@ -102,11 +102,11 @@ def build_schema_sql() -> str:
         # viewers —— 观众统计
         + _VIEWERS_SQL
         + "\n"
-        # viewer_facts —— 观众事实（画像原料）
-        + _VIEWER_FACTS_SQL
-        + "\n"
-        # viewer_profiles —— 观众画像
+        # viewer_profiles —— 常客名册
         + _VIEWER_PROFILES_SQL
+        + "\n"
+        # session_recaps —— 场次回顾
+        + _SESSION_RECAPS_SQL
         + "\n"
         # rundowns —— 流程单
         + _RUNDOWNS_SQL
@@ -144,8 +144,8 @@ def list_expected_tables() -> List[str]:
         "guards",
         "topics",
         "viewers",
-        "viewer_facts",
         "viewer_profiles",
+        "session_recaps",
         "rundowns",
         "game_events",
         "timeline_summary",
@@ -309,28 +309,10 @@ CREATE TABLE IF NOT EXISTS viewers (
 """.strip()
 
 
-# --- viewer_facts —— 观众事实（画像原料）---
-# 每行一条"关于某观众的事实"（由后台循环从弹幕/SC 批提取），归属程序化：
-# 提取输出 message_id → 批内消息 → (platform, user_id)，不靠 LLM 报人名。
-# 身份快照/付费明细等结构化原料直读明细表，不入本表。
-
-_VIEWER_FACTS_SQL = """
-CREATE TABLE IF NOT EXISTS viewer_facts (
-    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    platform           TEXT NOT NULL,
-    user_id            TEXT NOT NULL,
-    fact_text          TEXT NOT NULL,
-    source_message_id  TEXT NOT NULL DEFAULT '',
-    created_at_ms      INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_viewer_facts_identity ON viewer_facts(platform, user_id);
-CREATE INDEX IF NOT EXISTS idx_viewer_facts_created ON viewer_facts(created_at_ms);
-""".strip()
-
-
-# --- viewer_profiles —— 观众画像 ---
-# 每观众一行 LLM 压缩画像；``last_compressed_at_ms`` 是增量压缩水位
-# （只把水位后的新原料喂给下次压缩）。有画像才注入 planner——主播由此认人。
+# --- viewer_profiles —— 常客名册 ---
+# 每位常客一行印象文本；``last_compressed_at_ms`` 是原料水位：该时刻之前的
+# 弹幕与付费记录已经融进印象，下次只喂水位之后的新原料。有印象才注入
+# planner——主播由此认出老观众。
 
 _VIEWER_PROFILES_SQL = """
 CREATE TABLE IF NOT EXISTS viewer_profiles (
@@ -342,6 +324,23 @@ CREATE TABLE IF NOT EXISTS viewer_profiles (
     updated_at_ms          INTEGER NOT NULL,
     UNIQUE(platform, user_id)
 );
+""".strip()
+
+
+# --- session_recaps —— 场次回顾 ---
+# 每场直播一份收播总结（主播做了什么、答应过什么、聊了什么梗、谁来得多）。
+# 下一场开播时注入"上场回顾"，主播才不会每次开播都失忆。
+
+_SESSION_RECAPS_SQL = """
+CREATE TABLE IF NOT EXISTS session_recaps (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id  INTEGER NOT NULL UNIQUE,
+    started_at_ms    INTEGER NOT NULL,
+    ended_at_ms      INTEGER NOT NULL,
+    recap_text       TEXT NOT NULL,
+    created_at_ms    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_recaps_started ON session_recaps(started_at_ms);
 """.strip()
 
 

@@ -60,7 +60,7 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
 
 def test_new_database_has_preview_column(temp_dir: Path) -> None:
     """新库建表即含 preview_text 列，SCHEMA_VERSION 已推进到 14。"""
-    assert SCHEMA_VERSION == 14
+    assert SCHEMA_VERSION >= 14
     db = SQLiteDatabase(temp_dir / "fresh.db")
     import asyncio
 

@@ -650,5 +650,73 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_session_speakers(self, *, live_session_id: int, limit: int = 10) -> List[sqlite3.Row]:
+        """本场发言最多的观众（按弹幕条数倒序），常客名册收播更新的候选来源。
+
+        只统计 ``sender_role='viewer'`` 且带身份键的行；昵称权威仍在 viewers，
+        这里的 user_name 只是该观众本场留下的昵称之一（聚合近似）。
+        """
+        page_limit = max(1, min(int(limit), 100))
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT platform, sender_id AS user_id, MAX(sender_name) AS user_name,"
+                        " COUNT(*) AS message_count, MAX(timestamp_ms) AS last_ms"
+                        " FROM live_chat"
+                        " WHERE live_session_id=? AND sender_role='viewer'"
+                        " AND sender_id IS NOT NULL AND sender_id<>'' AND platform<>''"
+                        " GROUP BY platform, sender_id"
+                        " ORDER BY message_count DESC, last_ms DESC LIMIT ?",
+                        (int(live_session_id), page_limit),
+                    ).fetchall()
+                )
+
+        return await self._run_in_executor(_exec)
+
+    async def list_session_user_messages(
+        self,
+        *,
+        live_session_id: int,
+        platform: str,
+        user_id: str,
+        since_ms: int = 0,
+        limit: int = 30,
+    ) -> List[sqlite3.Row]:
+        """某观众在本场、某时刻之后的弹幕（时间正序，最多 ``limit`` 条最近的）。
+
+        常客印象的原料窗口：``since_ms`` 传该观众印象的原料水位，只喂新话。
+        先 DESC LIMIT 取最近一批，再反转回正序（排序不变量见模块说明）。
+        """
+        page_limit = max(1, min(int(limit), 200))
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM live_chat"
+                    " WHERE live_session_id=? AND platform=? AND sender_id=? AND sender_role='viewer'"
+                    " AND timestamp_ms>?"
+                    " ORDER BY timestamp_ms DESC LIMIT ?",
+                    (int(live_session_id), platform, user_id, int(since_ms), page_limit),
+                ).fetchall()
+                return list(reversed(rows))
+
+        return await self._run_in_executor(_exec)
+
+    async def list_session_guards(self, *, live_session_id: int, limit: int = 100) -> List[sqlite3.Row]:
+        """取指定场次的上舰明细行（时间正序），场次回顾的付费原料。"""
+        page_limit = max(1, min(int(limit), 500))
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM guards WHERE live_session_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                    (int(live_session_id), page_limit),
+                ).fetchall()
+                return list(reversed(rows))
+
+        return await self._run_in_executor(_exec)
+
 
 __all__ = ["ChatRepo"]

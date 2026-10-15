@@ -5,7 +5,6 @@ Schema 版本升级机制单测
 - 新库直接建到当前 SCHEMA_VERSION，schema_migrations 补齐 [1, N] 全部版本记录
 - 旧库（版本记录停留在 1）重新 initialize 后单调推进到当前版本，数据不被破坏
 - 私有表机制已废除：无 ``_`` 前缀表，所有表统一进入启动闸门
-- SimpleMemory.initialize() 在画像/事实表缺失时 fail-fast
 - v9 → v10 迁移语义：付费明细补全、金额单位统一金瓜子、平台身份复合键、
   ``_memory_facts`` 废弃、画像两表新建
 """
@@ -20,7 +19,6 @@ from typing import AsyncGenerator, Generator
 
 import pytest
 
-from src.modules.memory.simple_memory import SimpleMemory
 from src.modules.storage.migrations import SCHEMA_MIGRATIONS
 from src.modules.storage.schema import (
     SCHEMA_VERSION,
@@ -94,18 +92,6 @@ async def test_no_private_tables_all_tables_in_startup_gate(store: SQLiteDatabas
     assert underscored == [], f"存在私有前缀表: {underscored}"
     # 启动闸门覆盖全部业务表（自检通过 = list_expected_tables 全部就位）
     await store.assert_schema_ready()
-
-
-@pytest.mark.asyncio
-async def test_simple_memory_initialize_fails_fast_on_missing_tables(temp_db_path: Path) -> None:
-    store = SQLiteDatabase(temp_db_path, auto_apply_schema=False)
-    await store.initialize()
-    try:
-        memory = SimpleMemory(store)
-        with pytest.raises(RuntimeError, match="viewer_facts"):
-            await memory.initialize()
-    finally:
-        await store.close()
 
 
 @pytest.mark.asyncio
@@ -390,8 +376,10 @@ async def test_v9_to_v10_migration_semantics(temp_db_path: Path) -> None:
 
         # _memory_facts 废弃、画像两表新建
         assert await store.table_exists("_memory_facts") is False
-        assert await store.table_exists("viewer_facts") is True
+        # viewer_facts 已随 v15 退役：旧库升级后不应再有该表
+        assert await store.table_exists("viewer_facts") is False
         assert await store.table_exists("viewer_profiles") is True
+        assert await store.table_exists("session_recaps") is True
         assert await store.table_exists("guards") is True
 
         # 新库形态幂等：重复 initialize 不破坏数据
@@ -412,20 +400,21 @@ async def test_v9_to_v10_migration_semantics(temp_db_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_build_schema_sql_contains_v10_tables() -> None:
-    """建库 DDL 含 v10 新形态（guards / viewer_facts / viewer_profiles / 画像复合键）。"""
+    """建库 DDL 含 v10 新形态（guards / viewer_profiles / 画像复合键）；事实表已随 v15 退役。"""
     from src.modules.storage.schema import _GIFTS_SQL
 
     sql = build_schema_sql()
     for marker in (
         "CREATE TABLE IF NOT EXISTS guards",
-        "CREATE TABLE IF NOT EXISTS viewer_facts",
         "CREATE TABLE IF NOT EXISTS viewer_profiles",
+        "CREATE TABLE IF NOT EXISTS session_recaps",
         "UNIQUE(platform, user_id)",
     ):
         assert marker in sql, f"DDL 缺少 {marker}"
     # gifts 表段内已改名 quantity（viewers 统计列 gift_count 保留，属不同语义）
     assert "gift_count" not in _GIFTS_SQL, "gifts 表应已改名 quantity"
     assert "_memory_facts" not in sql, "扁平事实私有表应已从 DDL 移除"
+    assert "viewer_facts" not in sql, "观众事实中间表应已从 DDL 移除"
 
 
 # ===== v12 → v13：llm_requests 补上下文分段解剖列 =====

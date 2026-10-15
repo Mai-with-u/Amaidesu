@@ -97,13 +97,22 @@ class SessionRepo(BaseRepo):
     async def delete_live_session(self, *, live_session_id: int) -> bool:
         """删除场次行并级联清除其明细数据。
 
-        级联范围：live_chat / gifts / super_chats / topics / game_events /
-        timeline_summary（均以 ``live_session_id`` 引用场次主键）。
+        级联范围：live_chat / gifts / super_chats / guards / topics / game_events /
+        timeline_summary / session_recaps（均以 ``live_session_id`` 引用场次主键）。
         """
 
         def _exec() -> bool:
             with self._manager.transaction() as conn:
-                for table in ("live_chat", "gifts", "super_chats", "topics", "game_events", "timeline_summary"):
+                for table in (
+                    "live_chat",
+                    "gifts",
+                    "super_chats",
+                    "guards",
+                    "topics",
+                    "game_events",
+                    "timeline_summary",
+                    "session_recaps",
+                ):
                     conn.execute(f"DELETE FROM {table} WHERE live_session_id=?", (live_session_id,))  # noqa: S608 表名为代码内常量
                 cur = conn.execute("DELETE FROM live_sessions WHERE id=?", (live_session_id,))
                 return cur.rowcount > 0

@@ -7,13 +7,14 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import sqlite3
+from typing import List, Optional
 
 from src.modules.storage.repos._base import BaseRepo
 
 
 class TopicRepo(BaseRepo):
-    """topics / timeline_summary 两张快照表的写面。"""
+    """topics / timeline_summary 两张快照表的写面，外加 timeline_summary 的按场读取。"""
 
     async def insert_timeline_summary(
         self,
@@ -68,6 +69,21 @@ class TopicRepo(BaseRepo):
                     (live_session_id, label, source, score, trend, duration_ms, count),
                 )
                 return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
+    async def list_session_summaries(self, *, live_session_id: int, limit: int = 120) -> List[sqlite3.Row]:
+        """取指定场次的话题摘要轨迹（时间正序，最多 ``limit`` 条最近的）——场次回顾的话题原料。"""
+        page_limit = max(1, min(int(limit), 1000))
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT start_ms, end_ms, summary FROM timeline_summary"
+                    " WHERE live_session_id=? ORDER BY end_ms DESC, id DESC LIMIT ?",
+                    (int(live_session_id), page_limit),
+                ).fetchall()
+                return list(reversed(rows))
 
         return await self._run_in_executor(_exec)
 

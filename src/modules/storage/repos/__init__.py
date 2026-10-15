@@ -10,10 +10,12 @@ from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.chat import ChatRepo
 from src.modules.storage.repos.events import EventRepo
 from src.modules.storage.repos.llm import LLMRepo
+from src.modules.storage.repos.recaps import SessionRecapRepo
 from src.modules.storage.repos.rundowns import RundownRepo
 from src.modules.storage.repos.sessions import SessionRepo
 from src.modules.storage.repos.sim import SimRepo
 from src.modules.storage.repos.topics import TopicRepo
+from src.modules.storage.repos.viewer_profiles import ViewerProfileRepo
 from src.modules.storage.repos.viewers import ViewerRepo
 
 __all__ = [
@@ -22,8 +24,10 @@ __all__ = [
     "EventRepo",
     "LLMRepo",
     "RundownRepo",
+    "SessionRecapRepo",
     "SessionRepo",
     "SimRepo",
     "TopicRepo",
+    "ViewerProfileRepo",
     "ViewerRepo",
 ]

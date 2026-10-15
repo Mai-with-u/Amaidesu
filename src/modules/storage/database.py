@@ -7,11 +7,10 @@ SQLiteDatabase —— 存储装配入口（组合根）
 - **schema 迁移自动应用**：``initialize()`` 时自动 ``CREATE TABLE IF NOT EXISTS``、
   按版本执行 ``migrations/`` 注册表回调并写入 ``schema_migrations``
 - **健康自检**：``is_healthy()`` / ``table_exists()`` / 表清单 / 版本号
-- **按域装配仓储**：``sessions`` / ``chat`` / ``viewers`` / ``sim`` /
-  ``events`` / ``llm`` / ``rundowns`` / ``topics`` 八个域仓储（见
-  ``repos/``）。业务消费者按需注入仓储，不经过本类做领域读写
-- **原始执行面**：``execute`` 系列保留给"模块私有表自管"的消费者
-  （如 SimpleMemory 的 ``_memory_*`` 表）与运维脚本；业务表读写一律走仓储
+- **按域装配仓储**：``sessions`` / ``chat`` / ``viewers`` / ``viewer_profiles`` /
+  ``recaps`` / ``sim`` / ``events`` / ``llm`` / ``rundowns`` / ``topics`` 十个域
+  仓储（见 ``repos/``）。业务消费者按需注入仓储，不经过本类做领域读写
+- **原始执行面**：``execute`` 系列保留给运维脚本、自检与测试；业务表读写一律走仓储
 
 ## 重要不变量
 - 一个进程一个 ``SQLiteDatabase`` 单例（管理多线程连接；推荐复用
@@ -38,9 +37,11 @@ from src.modules.storage.repos import (
     EventRepo,
     LLMRepo,
     RundownRepo,
+    SessionRecapRepo,
     SessionRepo,
     SimRepo,
     TopicRepo,
+    ViewerProfileRepo,
     ViewerRepo,
 )
 from src.modules.storage.schema import (
@@ -83,8 +84,8 @@ class SQLiteDatabase:
         await db.initialize()
         # 领域读写经仓储（组合根按消费者需要分发）
         rows = await db.chat.list_recent_live_chat(live_session_id=1)
-        # 模块自管表/自定义查询的原始执行面
-        rows = await db.execute("SELECT * FROM viewer_facts WHERE user_id = ?", ("123",))
+        # 运维/自检的原始执行面
+        rows = await db.execute("SELECT * FROM viewers WHERE user_id = ?", ("123",))
         await db.close()
 
     多实例场景（不同 DB 文件）可独立创建；共用一个文件的不同实例
@@ -112,6 +113,9 @@ class SQLiteDatabase:
         self.llm = LLMRepo(self._manager)
         self.rundowns = RundownRepo(self._manager)
         self.topics = TopicRepo(self._manager)
+        # 主播记忆的两张表：常客名册 + 场次回顾（写入归主播 Agent，读取面给 Planner/工具/WebUI）
+        self.viewer_profiles = ViewerProfileRepo(self._manager)
+        self.recaps = SessionRecapRepo(self._manager)
 
     # -------------------- 属性 --------------------
 
@@ -196,8 +200,7 @@ class SQLiteDatabase:
         return int(rows[0]["version"])
 
     # -------------------- 原始执行面（async 包装） --------------------
-    # 仅供"模块私有表自管"消费者（SimpleMemory 的 _memory_* 表）与运维/自检
-    # 使用；业务表读写一律走 repos/ 的域仓储。
+    # 仅供运维脚本、自检与测试使用；业务表读写一律走 repos/ 的域仓储。
 
     async def execute(
         self,
