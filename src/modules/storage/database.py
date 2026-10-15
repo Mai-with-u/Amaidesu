@@ -344,9 +344,16 @@ class SQLiteDatabase:
         try:
             backup_dir = self._db_path.parent / "backups"
             backup_dir.mkdir(parents=True, exist_ok=True)
-            # 微秒精度：避免同秒多次备份（或极快重连）时同名覆盖
+            # 微秒精度：尽量让同秒多次备份（或极快重连）的文件名不同
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S%f")
-            target = backup_dir / f"{self._db_path.stem}-pre-v{SCHEMA_VERSION}-{stamp}.db"
+            base_name = f"{self._db_path.stem}-pre-v{SCHEMA_VERSION}-{stamp}"
+            target = backup_dir / f"{base_name}.db"
+            # Windows 时钟分辨率较粗，连续两次备份可能拿到同一时间戳；目标已存在时追加
+            # -1、-2 序号避让，否则 backup() 会覆盖上一份，违背"多次备份共存"的约定
+            suffix = 0
+            while target.exists():
+                suffix += 1
+                target = backup_dir / f"{base_name}-{suffix}.db"
             source = sqlite3.connect(str(self._db_path))
             try:
                 destination = sqlite3.connect(str(target))

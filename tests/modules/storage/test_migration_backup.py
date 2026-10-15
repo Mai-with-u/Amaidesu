@@ -13,6 +13,7 @@ from __future__ import annotations
 import shutil
 import sqlite3
 import tempfile
+from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 
@@ -139,5 +140,30 @@ async def test_backups_not_auto_pruned(store: SQLiteDatabase, temp_dir: Path) ->
     store._backup_before_migration(SCHEMA_VERSION - 1)
     store._backup_before_migration(SCHEMA_VERSION - 1)
 
+    # 撞名会自动避让，两次备份必然是两个文件，不依赖时钟分辨率
     backups = _backup_files(db_path)
-    assert len(backups) >= 2
+    assert len(backups) == 2
+
+
+@pytest.mark.asyncio
+async def test_backups_with_identical_timestamp_do_not_overwrite(
+    store: SQLiteDatabase, temp_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """时钟返回同一时刻（粗粒度时钟或极快连续迁移）时，备份追加序号避让而非互相覆盖。"""
+    frozen = datetime(2026, 10, 15, 12, 0, 0, 123456)
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return frozen
+
+    monkeypatch.setattr("src.modules.storage.database.datetime", _FrozenDatetime)
+
+    db_path = temp_dir / "test.db"
+    # 连续三次备份拿到同一时间戳：第一份占原名，后两份依次追加 -1、-2
+    for _ in range(3):
+        store._backup_before_migration(SCHEMA_VERSION - 1)
+
+    base = f"test-pre-v{SCHEMA_VERSION}-20261015-120000123456"
+    names = [path.name for path in _backup_files(db_path)]
+    assert names == sorted([f"{base}.db", f"{base}-1.db", f"{base}-2.db"])
