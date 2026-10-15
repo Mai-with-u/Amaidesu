@@ -2,36 +2,30 @@
 STTCollector —— 语音转文字采集器
 
 - 继承 ``BaseCollector``（流型感知者）
-- 技术栈：讯飞 WebSocket 流式 ASR、Silero VAD、音频采集
+- 技术栈：讯飞 WebSocket 流式 ASR（``XunfeiIatClient``）、Silero VAD、音频采集
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
-import hmac
-import json
 import os
-import ssl
 import time
-from datetime import datetime
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 import numpy as np
 
 from src.modules.collectors.base import BaseCollector
+from src.modules.collectors.stt.xunfei_client import (
+    STATUS_CONTINUE_FRAME,
+    STATUS_FIRST_FRAME,
+    XunfeiIatClient,
+)
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
 
 from .config import STTInputConfig
-
-STATUS_FIRST_FRAME = 0
-STATUS_CONTINUE_FRAME = 1
-STATUS_LAST_FRAME = 2
 
 
 class STTCollector(BaseCollector):
@@ -104,16 +98,17 @@ class STTCollector(BaseCollector):
         self.vad_model = None
         self.vad_utils = None
 
-        self._session = None
-        self._active_ws = None
-        self._active_receiver_task = None
+        self._xunfei = XunfeiIatClient(
+            config=self.iflytek_config,
+            sample_rate=self.sample_rate,
+            vad_eos_ms=self.min_silence_duration_ms,
+            message_config=self.message_config,
+            should_run=lambda: self.is_started,
+        )
         self._internal_audio_queue = None
-        self._result_queue = None
 
         self._is_speaking: bool = False
         self._silence_started_time: Optional[float] = None
-        self.full_text = ""
-        self._last_audio_chunk: Optional[bytes] = None
 
         self.is_started = False
 
@@ -236,17 +231,14 @@ class STTCollector(BaseCollector):
         """清理资源"""
         self.logger.info("清理 STTCollector 资源...")
 
-        if self._session and not self._session.closed:
-            await self._session.close()
-            self.logger.info("aiohttp session 已关闭")
-            self._session = None
+        await self._xunfei.dispose()
 
-        self._active_ws = None
-        self._active_receiver_task = None
         self._is_speaking = False
         self._silence_started_time = None
 
         self.logger.info("STTCollector 清理完成")
+
+    # -------------------- 采集循环（按阶段拆分） --------------------
 
     async def collect(self) -> AsyncIterator[RoomMessagePayload]:
         """采集语音数据并生成事件载荷（直发 room.message.partner_speech）"""
@@ -257,12 +249,99 @@ class STTCollector(BaseCollector):
         loop = asyncio.get_event_loop()
         stream = None
         self._internal_audio_queue = asyncio.Queue()
-        self._result_queue = asyncio.Queue()
 
         input_device_index = self._find_device_index(self.input_device_name, kind="input")
 
+        try:
+            stream = self._open_audio_stream(loop, input_device_index)
+
+            speech_chunk_count = 0
+            timeout_duration = max(0.1, self.min_silence_duration_ms / 1000.0 * 0.8)
+
+            while self.is_started:
+                try:
+                    audio_chunk_bytes = await asyncio.wait_for(
+                        self._internal_audio_queue.get(), timeout=timeout_duration
+                    )
+                    self._internal_audio_queue.task_done()
+
+                except asyncio.TimeoutError:
+                    speech_chunk_count = await self._handle_input_silence(speech_chunk_count)
+                    continue
+
+                except asyncio.CancelledError:
+                    break
+
+                evaluated = self._evaluate_speech(audio_chunk_bytes)
+                if evaluated is None:
+                    continue
+                is_speech, speech_prob = evaluated
+
+                now = time.monotonic()
+
+                if is_speech:
+                    if not self._is_speaking:
+                        started_count = await self._begin_utterance(audio_chunk_bytes, speech_prob)
+                        if started_count is None:
+                            continue
+                        speech_chunk_count = started_count
+
+                    elif speech_chunk_count > 0 and self._xunfei.is_open:
+                        speech_chunk_count = await self._continue_utterance(audio_chunk_bytes, speech_chunk_count)
+
+                else:
+                    if self._is_speaking:
+                        speech_chunk_count = await self._end_utterance(audio_chunk_bytes, now, speech_chunk_count)
+
+                    elif self._silence_started_time is not None:
+                        if now - self._silence_started_time > self.min_silence_duration_ms / 1000.0:
+                            if self._xunfei.has_ws:
+                                self.logger.debug(f"静音阈值已达到 ({self.min_silence_duration_ms}ms)，结束话语")
+                                speech_chunk_count = await self._close_current_utterance(speech_chunk_count)
+                            self._silence_started_time = None
+
+                async for payload in self._drain_results():
+                    yield payload
+
+        except Exception as e:
+            self.logger.exception(f"STT worker 循环出错: {e}")
+
+        finally:
+            self.logger.info("STT worker 循环结束，清理资源...")
+
+            if not self.use_remote_stream and stream is not None:
+                try:
+                    stream.stop()
+                    stream.close()
+                    self.logger.debug("本地麦克风流已停止并关闭")
+                except Exception as e:
+                    self.logger.exception(f"停止麦克流出错: {e}")
+
+            await self._xunfei.close(send_last_frame=False)
+
+    def _open_audio_stream(self, loop: asyncio.AbstractEventLoop, input_device_index: Optional[int]) -> Any:
+        """打开本地麦克风输入流（远程流模式只记日志，返回 None）。"""
+        if self.use_remote_stream:
+            self.logger.info(f"使用远程音频流模式 (VAD 阈值: {self.vad_threshold})")
+            return None
+
+        self.logger.info("启动本地麦克风输入流...")
+        stream = self.sd.InputStream(
+            samplerate=self.sample_rate,
+            blocksize=self.block_size_samples,
+            device=input_device_index,
+            channels=self.channels,
+            dtype=self.dtype_str,
+            callback=self._make_audio_callback(loop),
+        )
+        stream.start()
+        self.logger.info(f"本地音频流已启动 (VAD 阈值: {self.vad_threshold})")
+        return stream
+
+    def _make_audio_callback(self, loop: asyncio.AbstractEventLoop) -> Any:
+        """构造 sounddevice 音频回调：归一化为 int16 单声道字节后入队。"""
+
         def audio_callback(indata: "np.ndarray", frame_count: int, time_info: dict, status: Any) -> None:
-            """sounddevice 音频回调"""
             if status:
                 self.logger.warning(f"音频输入状态: {status}")
 
@@ -288,415 +367,121 @@ class STTCollector(BaseCollector):
             except Exception as e:
                 self.logger.exception(f"音频回调出错: {e}")
 
-        try:
-            if not self.use_remote_stream:
-                self.logger.info("启动本地麦克风输入流...")
-                stream = self.sd.InputStream(
-                    samplerate=self.sample_rate,
-                    blocksize=self.block_size_samples,
-                    device=input_device_index,
-                    channels=self.channels,
-                    dtype=self.dtype_str,
-                    callback=audio_callback,
-                )
-                stream.start()
-                self.logger.info(f"本地音频流已启动 (VAD 阈值: {self.vad_threshold})")
-            else:
-                self.logger.info(f"使用远程音频流模式 (VAD 阈值: {self.vad_threshold})")
+        return audio_callback
 
-            speech_chunk_count = 0
-            timeout_duration = max(0.1, self.min_silence_duration_ms / 1000.0 * 0.8)
+    async def _handle_input_silence(self, speech_chunk_count: int) -> int:
+        """取音频超时（输入静音）时的状态维护：说话中转入静默计时，静默满阈值即收尾话语。"""
+        if self._is_speaking:
+            self._is_speaking = False
+            self._silence_started_time = time.monotonic()
 
-            while self.is_started:
-                try:
-                    audio_chunk_bytes = await asyncio.wait_for(
-                        self._internal_audio_queue.get(), timeout=timeout_duration
-                    )
-                    self._internal_audio_queue.task_done()
-
-                except asyncio.TimeoutError:
-                    if self._is_speaking:
-                        self._is_speaking = False
-                        self._silence_started_time = time.monotonic()
-
-                    if self._silence_started_time is not None and (
-                        time.monotonic() - self._silence_started_time > self.min_silence_duration_ms / 1000.0
-                    ):
-                        if self._active_ws:
-                            self.logger.debug(f"静音超过阈值 ({self.min_silence_duration_ms}ms)，结束话语")
-                            if speech_chunk_count > 0:
-                                await self._close_iflytek_connection(send_last_frame=True)
-                            else:
-                                await self._close_iflytek_connection(send_last_frame=False)
-                            speech_chunk_count = 0
-                            self._is_speaking = False
-                        self._silence_started_time = None
-                    continue
-
-                except asyncio.CancelledError:
-                    break
-
-                try:
-                    audio_np = np.frombuffer(audio_chunk_bytes, dtype=np.int16)
-                    audio_float32 = audio_np.astype(np.float32) / 32768.0
-
-                    if audio_float32.ndim == 0 or audio_float32.size == 0:
-                        continue
-
-                    audio_tensor = self.torch.from_numpy(audio_float32)
-                    speech_prob = self.vad_model(audio_tensor, self.sample_rate).item()
-                    is_speech = speech_prob > self.vad_threshold
-
-                except Exception as e:
-                    self.logger.exception(f"VAD 处理出错: {e}")
-                    continue
-
-                now = time.monotonic()
-
-                if is_speech:
-                    if not self._is_speaking:
-                        self.logger.debug(f"VAD: 话语开始 (Prob: {speech_prob:.2f})")
-                        self._is_speaking = True
-                        self._silence_started_time = None
-                        speech_chunk_count = 0
-
-                        if not await self._ensure_iflytek_connection():
-                            self.logger.error("无法建立讯飞连接")
-                            self._is_speaking = False
-                            continue
-
-                        if self._active_ws:
-                            try:
-                                first_frame = self._build_iflytek_frame(STATUS_FIRST_FRAME, audio_chunk_bytes)
-                                await asyncio.wait_for(self._active_ws.send_bytes(first_frame), timeout=2.0)
-                                speech_chunk_count += 1
-                                self.logger.debug("已发送第一帧")
-                            except Exception as e:
-                                self.logger.exception(f"发送第一帧失败: {e}")
-                                await self._close_iflytek_connection(send_last_frame=False)
-                                self._is_speaking = False
-                                speech_chunk_count = 0
-                                continue
-
-                    elif speech_chunk_count > 0 and self._active_ws and not self._active_ws.closed:
-                        try:
-                            data_frame = self._build_iflytek_frame(STATUS_CONTINUE_FRAME, audio_chunk_bytes)
-                            await asyncio.wait_for(self._active_ws.send_bytes(data_frame), timeout=1.0)
-                            speech_chunk_count += 1
-                            self._last_audio_chunk = audio_chunk_bytes
-                        except Exception as e:
-                            self.logger.exception(f"发送音频帧失败: {e}")
-                            await self._close_iflytek_connection(send_last_frame=False)
-                            self._is_speaking = False
-                            speech_chunk_count = 0
-
+        if self._silence_started_time is not None and (
+            time.monotonic() - self._silence_started_time > self.min_silence_duration_ms / 1000.0
+        ):
+            if self._xunfei.has_ws:
+                self.logger.debug(f"静音超过阈值 ({self.min_silence_duration_ms}ms)，结束话语")
+                if speech_chunk_count > 0:
+                    await self._xunfei.close(send_last_frame=True)
                 else:
-                    if self._is_speaking:
-                        self.logger.debug("VAD: 话语结束 (静音检测)")
-                        self._is_speaking = False
-                        self._silence_started_time = now
+                    await self._xunfei.close(send_last_frame=False)
+                speech_chunk_count = 0
+                self._is_speaking = False
+            self._silence_started_time = None
+        return speech_chunk_count
 
-                        if self._active_ws and not self._active_ws.closed:
-                            try:
-                                data_frame = self._build_iflytek_frame(STATUS_CONTINUE_FRAME, audio_chunk_bytes)
-                                await asyncio.wait_for(self._active_ws.send_bytes(data_frame), timeout=1.0)
-                            except Exception as e:
-                                self.logger.exception(f"发送静音帧失败: {e}")
-                                await self._close_iflytek_connection(send_last_frame=False)
-                                self._silence_started_time = None
-                                speech_chunk_count = 0
+    def _evaluate_speech(self, audio_chunk_bytes: bytes) -> Optional[Tuple[bool, float]]:
+        """VAD 判定单个音频块；处理出错或空块返回 None（调用方跳过该块）。"""
+        try:
+            audio_np = np.frombuffer(audio_chunk_bytes, dtype=np.int16)
+            audio_float32 = audio_np.astype(np.float32) / 32768.0
 
-                    elif self._silence_started_time is not None:
-                        if now - self._silence_started_time > self.min_silence_duration_ms / 1000.0:
-                            if self._active_ws:
-                                self.logger.debug(f"静音阈值已达到 ({self.min_silence_duration_ms}ms)，结束话语")
-                                if speech_chunk_count > 0:
-                                    await self._close_iflytek_connection(send_last_frame=True)
-                                else:
-                                    await self._close_iflytek_connection(send_last_frame=False)
-                                speech_chunk_count = 0
-                            self._silence_started_time = None
+            if audio_float32.ndim == 0 or audio_float32.size == 0:
+                return None
 
-                try:
-                    while not self._result_queue.empty():
-                        payload = await asyncio.wait_for(self._result_queue.get(), timeout=0.01)
-                        # 直发联动对象发言事件（场次归属由盖章拦截器统一注入；
-                        # 落库走 sender_role="partner"，不计观众统计）
-                        await self.emit_event(CoreEvents.ROOM_MESSAGE_PARTNER_SPEECH, payload)
-                        yield payload
-                        self._result_queue.task_done()
-                except asyncio.TimeoutError:
-                    pass
+            audio_tensor = self.torch.from_numpy(audio_float32)
+            speech_prob = self.vad_model(audio_tensor, self.sample_rate).item()
+            return (speech_prob > self.vad_threshold, speech_prob)
 
         except Exception as e:
-            self.logger.exception(f"STT worker 循环出错: {e}")
+            self.logger.exception(f"VAD 处理出错: {e}")
+            return None
 
-        finally:
-            self.logger.info("STT worker 循环结束，清理资源...")
+    async def _begin_utterance(self, audio_chunk_bytes: bytes, speech_prob: float) -> Optional[int]:
+        """话语开始：建立讯飞连接并发送首帧。
 
-            if not self.use_remote_stream and stream is not None:
-                try:
-                    stream.stop()
-                    stream.close()
-                    self.logger.debug("本地麦克风流已停止并关闭")
-                except Exception as e:
-                    self.logger.exception(f"停止麦克流出错: {e}")
+        Returns:
+            成功进入说话态返回已发送帧数（1）；建连或首帧发送失败返回 None
+            （调用方跳过本轮后续阶段）。
+        """
+        self.logger.debug(f"VAD: 话语开始 (Prob: {speech_prob:.2f})")
+        self._is_speaking = True
+        self._silence_started_time = None
+        speech_chunk_count = 0
 
-            await self._close_iflytek_connection(send_last_frame=False)
+        if not await self._xunfei.ensure_connection():
+            self.logger.error("无法建立讯飞连接")
+            self._is_speaking = False
+            return None
 
-    async def _ensure_iflytek_connection(self) -> bool:
-        """确保讯飞 WebSocket 连接存在"""
-        if self._active_ws and not self._active_ws.closed:
-            if self._active_receiver_task and not self._active_receiver_task.done():
-                return True
-            else:
-                self.logger.warning("WebSocket 存在但接收器任务未运行，重新连接")
-                await self._close_iflytek_connection(send_last_frame=False)
-
-        if not self._session or self._session.closed:
+        if self._xunfei.has_ws:
             try:
-                self._session = self.aiohttp.ClientSession()
-                self.logger.info("已创建新的 aiohttp session")
+                await self._xunfei.send_frame(STATUS_FIRST_FRAME, audio_chunk_bytes, timeout=2.0)
+                speech_chunk_count += 1
+                self.logger.debug("已发送第一帧")
             except Exception as e:
-                self.logger.exception(f"创建 aiohttp session 失败: {e}")
-                return False
+                self.logger.exception(f"发送第一帧失败: {e}")
+                await self._xunfei.close(send_last_frame=False)
+                self._is_speaking = False
+                speech_chunk_count = 0
+                return None
 
+        return speech_chunk_count
+
+    async def _continue_utterance(self, audio_chunk_bytes: bytes, speech_chunk_count: int) -> int:
+        """说话中的后续音频块：发送中间帧；失败则收尾连接并复位说话态。"""
         try:
-            auth_url = self._build_iflytek_auth_url()
-            self.logger.debug("连接到讯飞 WebSocket...")
-
-            ssl_context = ssl.create_default_context()
-            self._active_ws = await self._session.ws_connect(
-                auth_url,
-                autoping=True,
-                heartbeat=30,
-                ssl=ssl_context,
-            )
-            self.logger.info("成功连接到讯飞 WebSocket")
-
-            if self._active_receiver_task and not self._active_receiver_task.done():
-                self._active_receiver_task.cancel()
-                try:
-                    await asyncio.wait_for(self._active_receiver_task, timeout=1.0)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-
-            self._active_receiver_task = asyncio.create_task(self._iflytek_receiver(self._active_ws))
-            self.logger.info("已启动讯飞接收器任务")
-            return True
-
+            await self._xunfei.send_frame(STATUS_CONTINUE_FRAME, audio_chunk_bytes, timeout=1.0)
+            speech_chunk_count += 1
         except Exception as e:
-            self.logger.exception(f"建立讯飞连接失败: {e}")
-            if self._active_ws and not self._active_ws.closed:
-                await self._active_ws.close()
-            self._active_ws = None
-            if self._active_receiver_task and not self._active_receiver_task.done():
-                self._active_receiver_task.cancel()
-            self._active_receiver_task = None
-            return False
+            self.logger.exception(f"发送音频帧失败: {e}")
+            await self._xunfei.close(send_last_frame=False)
+            self._is_speaking = False
+            speech_chunk_count = 0
+        return speech_chunk_count
 
-    async def _close_iflytek_connection(
-        self, send_last_frame: bool = True, last_audio_chunk: Optional[bytes] = None
-    ) -> None:
-        """关闭讯飞 WebSocket 连接"""
-        ws_to_close = self._active_ws
-        receiver_task_to_await = self._active_receiver_task
+    async def _end_utterance(self, audio_chunk_bytes: bytes, now: float, speech_chunk_count: int) -> int:
+        """VAD 判定话语结束：补发一帧尾部音频后转入静默计时；发送失败则收尾复位。"""
+        self.logger.debug("VAD: 话语结束 (静音检测)")
+        self._is_speaking = False
+        self._silence_started_time = now
 
-        self._active_ws = None
-        self._active_receiver_task = None
-        self._last_audio_chunk = None
+        if self._xunfei.is_open:
+            try:
+                await self._xunfei.send_frame(STATUS_CONTINUE_FRAME, audio_chunk_bytes, timeout=1.0)
+            except Exception as e:
+                self.logger.exception(f"发送静音帧失败: {e}")
+                await self._xunfei.close(send_last_frame=False)
+                self._silence_started_time = None
+                speech_chunk_count = 0
+        return speech_chunk_count
 
-        if not ws_to_close:
-            if receiver_task_to_await and not receiver_task_to_await.done():
-                receiver_task_to_await.cancel()
-            return
-
-        if ws_to_close.closed:
-            if receiver_task_to_await and not receiver_task_to_await.done():
-                receiver_task_to_await.cancel()
-            return
-
-        self.logger.debug(f"关闭讯飞连接 (发送结束帧: {send_last_frame})...")
-
-        try:
-            if send_last_frame:
-                try:
-                    audio_for_end = last_audio_chunk or self._last_audio_chunk
-                    last_frame = self._build_iflytek_frame(STATUS_LAST_FRAME, audio_for_end or b"")
-                    await asyncio.wait_for(ws_to_close.send_bytes(last_frame), timeout=2.0)
-                    self.logger.debug("已发送结束帧")
-                except Exception as e:
-                    self.logger.warning(f"发送结束帧失败: {e}")
-
-            if receiver_task_to_await and not receiver_task_to_await.done():
-                try:
-                    await asyncio.wait_for(receiver_task_to_await, timeout=1.0)
-                except asyncio.TimeoutError:
-                    receiver_task_to_await.cancel()
-                except Exception as e:
-                    self.logger.exception(f"等待接收器任务出错: {e}")
-
-            await ws_to_close.close()
-            self.logger.debug(f"讯飞连接已关闭 (代码: {ws_to_close.close_code})")
-
-        except Exception as e:
-            self.logger.exception(f"关闭连接出错: {e}")
-        finally:
-            if receiver_task_to_await and not receiver_task_to_await.done():
-                receiver_task_to_await.cancel()
-
-    async def _iflytek_receiver(self, ws: Any) -> None:
-        """接收讯飞 WebSocket 消息并处理识别结果"""
-        self.logger.debug("讯飞接收器任务启动")
-        self.full_text = ""
-        utterance_failed = False
-
-        try:
-            async for msg in ws:
-                if not self.is_started:
-                    break
-
-                if msg.type == self.aiohttp.WSMsgType.TEXT:
-                    try:
-                        resp = json.loads(msg.data)
-                        self.logger.debug(f"讯飞原始响应: {json.dumps(resp, ensure_ascii=False)[:500]}")
-
-                        if resp.get("code", -1) != 0:
-                            msg_content = resp.get("message", "")
-                            err_msg = f"讯飞 API 错误: Code={resp.get('code')}, Message={msg_content}"
-                            self.logger.error(err_msg)
-                            utterance_failed = True
-                            break
-
-                        data = resp.get("data", {})
-                        result_data = data.get("result", {})
-                        status = data.get("status", -1)
-
-                        if "ws" in result_data:
-                            try:
-                                for w in result_data["ws"]:
-                                    for cw in w.get("cw", []):
-                                        self.full_text += cw.get("w", "")
-                            except Exception as e:
-                                self.logger.warning(f"解析识别结果文本失败: {e}")
-
-                        self.logger.debug(
-                            f"检查最后一帧: status={status}, STATUS_LAST_FRAME={STATUS_LAST_FRAME}, full_text='{self.full_text}'"
-                        )
-                        if status == STATUS_LAST_FRAME:
-                            full_text = self.full_text.strip()
-                            self.logger.debug(f"讯飞识别结果: '{full_text}'")
-
-                            if full_text and not utterance_failed:
-                                await self._result_queue.put(
-                                    RoomMessagePayload(
-                                        message_type="partner_speech",
-                                        user=RoomMessageUser(
-                                            id=str(self.message_config.get("user_id") or "partner"),
-                                            name=str(self.message_config.get("user_nickname") or "联动对象"),
-                                        ),
-                                        content=full_text,
-                                        timestamp_ms=now_ms(),
-                                    )
-                                )
-                                self.full_text = ""
-                                break
-
-                    except json.JSONDecodeError:
-                        self.logger.error(f"无法解码讯飞 JSON: {msg.data}")
-                        utterance_failed = True
-                        break
-                    except Exception as e:
-                        self.logger.exception(f"处理讯飞消息出错: {e}")
-                        utterance_failed = True
-                        break
-
-                elif msg.type == self.aiohttp.WSMsgType.ERROR:
-                    err = ws.exception() or RuntimeError("WebSocket 错误")
-                    self.logger.error(f"讯飞 WebSocket 错误: {err}")
-                    utterance_failed = True
-                    break
-
-                elif msg.type == self.aiohttp.WSMsgType.CLOSED:
-                    self.logger.warning(f"讯飞连接已关闭: Code={ws.close_code}")
-                    break
-
-        except asyncio.CancelledError:
-            self.logger.info("讯飞接收器任务被取消")
-        except Exception as e:
-            self.logger.exception(f"讯飞接收器任务异常: {e}")
-        finally:
-            self.logger.debug("讯飞接收器任务结束")
-
-    def _build_iflytek_auth_url(self) -> str:
-        """构建讯飞认证 URL"""
-        cfg = self.iflytek_config
-
-        host = cfg.get("host", "iat-api.xfyun.com")
-        path = cfg.get("path", "/v2/iat")
-
-        if not all([host, path, cfg.get("api_secret"), cfg.get("api_key")]):
-            raise ValueError("讯飞配置缺少必要字段")
-
-        url = f"wss://{host}{path}"
-
-        date = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")
-        signature_origin = f"host: {host}\ndate: {date}\nGET {path} HTTP/1.1"
-
-        self.logger.debug(f"signature_origin: {repr(signature_origin)}")
-
-        signature_sha = hmac.new(
-            cfg["api_secret"].encode("utf-8"), signature_origin.encode("utf-8"), digestmod=hashlib.sha256
-        ).digest()
-        signature_sha_base64 = base64.b64encode(signature_sha).decode(encoding="utf-8")
-
-        self.logger.debug(f"signature_sha_base64: {signature_sha_base64}")
-
-        authorization_origin = f'api_key="{cfg["api_key"]}", algorithm="hmac-sha256", headers="host date request-line", signature="{signature_sha_base64}"'
-
-        self.logger.debug(f"authorization_origin: {authorization_origin[:50]}...")
-
-        authorization = base64.b64encode(authorization_origin.encode("utf-8")).decode(encoding="utf-8")
-
-        self.logger.debug(f"讯飞认证 - host: {host}, path: {path}, date: {date}")
-
-        params = f"authorization={authorization}&date={date}&host={host}"
-        signed_url = url + "?" + params
-
-        self.logger.debug(f"讯飞认证 URL: {signed_url[:150]}...")
-        return signed_url
-
-    def _build_iflytek_frame(self, status: int, audio_chunk_bytes: bytes = b"") -> bytes:
-        """构建讯飞帧（语音听写流式版 API 格式）"""
-        is_first = status == STATUS_FIRST_FRAME
-
-        business = {}
-        if is_first:
-            business = {
-                "language": self.iflytek_config.get("language", "zh_cn"),
-                "domain": self.iflytek_config.get("domain", "iat"),
-                "accent": self.iflytek_config.get("accent", "mandarin"),
-                "vad_eos": self.min_silence_duration_ms,
-            }
-
-        format_str = f"audio/L16;rate={self.sample_rate}"
-        data = {
-            "status": status,
-            "format": format_str,
-            "encoding": "raw",
-            "audio": base64.b64encode(audio_chunk_bytes).decode("utf-8") if audio_chunk_bytes else "",
-        }
-
-        if is_first:
-            frame = {
-                "common": {"app_id": str(self.iflytek_config["appid"])},
-                "business": business,
-                "data": data,
-            }
-            self.logger.debug(
-                f"发送第一帧: common={frame['common']}, business={frame['business']}, data.status={data['status']}, format={format_str}"
-            )
+    async def _close_current_utterance(self, speech_chunk_count: int) -> int:
+        """静默满阈值收尾话语：按是否已有音频帧决定是否携带结束帧。复位帧计数。"""
+        if speech_chunk_count > 0:
+            await self._xunfei.close(send_last_frame=True)
         else:
-            frame = {"data": data}
+            await self._xunfei.close(send_last_frame=False)
+        return 0
 
-        return json.dumps(frame).encode("utf-8")
+    async def _drain_results(self) -> AsyncIterator[RoomMessagePayload]:
+        """排空识别结果队列：逐条直发联动对象发言事件并交还给消费方。"""
+        try:
+            while not self._xunfei.result_queue.empty():
+                payload = await asyncio.wait_for(self._xunfei.result_queue.get(), timeout=0.01)
+                # 直发联动对象发言事件（场次归属由盖章拦截器统一注入；
+                # 落库走 sender_role="partner"，不计观众统计）
+                await self.emit_event(CoreEvents.ROOM_MESSAGE_PARTNER_SPEECH, payload)
+                yield payload
+                self._xunfei.result_queue.task_done()
+        except asyncio.TimeoutError:
+            pass
