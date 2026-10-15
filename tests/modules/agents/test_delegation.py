@@ -1,28 +1,26 @@
-"""委派/递话原语集成测试（framework_delegate / framework_prompt / framework_task_status）。
+"""委派 / 递话原语（framework_delegate / framework_prompt / framework_task_status）
 
-覆盖：
-- 委派全程：回执 accepted+task_id → 状态推进（task.changed 按发起方过滤）→
-  task_status 查询 → 终态移除
-- 受理失败与任务失败分开：目标不存在 / 默认拒收（未实现入口）/ 自派 →
-  受理失败（不登记）；执行失败 → 记录表 failed 终态
-- 目标留空 → 解析为当前唯一启用的游戏 Agent；候选不唯一 → 拒绝并要求点名
-- 未知任务号查询 → 失败结果
-- 递话：受理不记账（无任务号、无 ledger 条目）/ 默认拒收 / 禁自派 /
-  内容留空拒绝；目标解析与委派同款
-- minecraft 接收委派（入队带任务号 + 唤醒 + 批次状态写回）
+受理失败与任务失败分开（受理失败不登记）；目标留空解析为唯一游戏 Agent；递话受理不记账；
+最后用真实 minecraft Agent 验证入队带任务号、批次状态写回、硬取消与断连恢复续跑。
 """
 
 from __future__ import annotations
 
 import asyncio
 from typing import List
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from src.agents.minecraft.agent import MinecraftAgent
+from src.agents.minecraft.config import MinecraftConfig
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.control import build_agent_control_provider
 from src.modules.agents.manager import AgentManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import AgentPromptedPayload, TaskChangedPayload
+from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger, TaskTracker
@@ -33,18 +31,15 @@ def _inv(tool: str, args: dict, source: str = "agent_a") -> ToolInvocation:
 
 
 class _StubAgent(BaseAgent):
-    """最小 Agent 桩：可配置是否接收委派、是否模拟执行失败。"""
+    """可配置拒收原因的最小 Agent 桩；name 用动态子类隔离（name 是类属性，同类多实例会互相覆盖）。"""
 
     name = ""
     description = "stub"
 
-    def __init__(self, name: str, *, refuse: str | None = None, fail_later: bool = False) -> None:
-        # 动态子类隔离 name（BaseAgent 的 name 是类属性；同类多实例会互相覆盖）
-        cls = type(f"_StubAgent_{name}", (type(self),), {"name": name, "description": f"stub {name}"})
-        self.__class__ = cls
+    def __init__(self, name: str, *, refuse: str | None = None) -> None:
+        self.__class__ = type(f"_StubAgent_{name}", (type(self),), {"name": name, "description": f"stub {name}"})
         super().__init__()
         self._refuse = refuse
-        self._fail_later = fail_later
         self.received: List[tuple[str, str]] = []  # (task_id, instruction)
         self.prompts_received: List[tuple[str, str]] = []  # (content, source)
 
@@ -61,477 +56,251 @@ class _StubAgent(BaseAgent):
         self.prompts_received.append((content, source))
         return True
 
-    async def run_and_finish(self, ledger: TaskLedger, *, failed: bool = False) -> None:
-        """测试驱动：把收到的委派任务推进到终态（写回记录表）。"""
+    def finish(self, ledger: TaskLedger, *, failed: bool = False) -> None:
         for task_id, _ in self.received:
             ledger.update(task_id, "running", summary="开始执行")
-            ledger.update(
-                task_id,
-                "failed" if failed else "succeeded",
-                summary="执行失败" if failed else "全部完成",
-            )
+            ledger.update(task_id, "failed" if failed else "succeeded", summary="执行失败" if failed else "全部完成")
 
 
-def _setup(
-    refuse_target: bool = False, fail_target: bool = False
-) -> tuple[ToolRegistry, TaskLedger, EventBus, _StubAgent, _StubAgent]:
-    bus = EventBus(enable_stats=False)
-    registry = ToolRegistry(event_bus=bus)
-    ledger = TaskLedger(event_bus=bus)
-    manager = AgentManager()
-    a = _StubAgent("agent_a")
-    b = _StubAgent("agent_b", refuse="忙不过来" if refuse_target else None, fail_later=fail_target)
-    manager.register(a)
-    manager.register(b)
-    registry.register_provider(build_agent_control_provider(manager, ledger))
-    return registry, ledger, bus, a, b
+class _Rig:
+    def __init__(self, *agents: BaseAgent) -> None:
+        self.bus = EventBus(enable_stats=False)
+        self.registry = ToolRegistry(event_bus=self.bus)
+        self.ledger = TaskLedger(event_bus=self.bus)
+        self.manager = AgentManager()
+        for agent in agents:
+            self.manager.register(agent)
+        self.registry.register_provider(build_agent_control_provider(self.manager, self.ledger, event_bus=self.bus))
+
+    async def call(self, tool: str, args: dict, source: str = "agent_a"):
+        return await self.registry.invoke(_inv(tool, args, source))
 
 
-async def _drain() -> None:
-    await asyncio.sleep(0.03)
+@pytest.fixture
+def rig() -> _Rig:
+    """agent_a（调用方）+ agent_b（接收方）。"""
+    return _Rig(_StubAgent("agent_a"), _StubAgent("agent_b"))
 
 
-# 委派全程（happy path）
+def _agent(rig: _Rig, name: str) -> _StubAgent:
+    return rig.manager.get_agent_by_name(name)  # type: ignore[return-value]
 
 
-async def test_delegation_full_chain() -> None:
-    """A 委派 B → 回执 task_id → B 推进状态 → A 收 task.changed → 查询终态。"""
-    registry, ledger, bus, a, b = _setup()
-    received_by_a: List[TaskChangedPayload] = []
+async def test_delegation_full_chain_and_status_query(rig: _Rig) -> None:
+    received: List[TaskChangedPayload] = []
 
-    async def _on_a(name: str, payload: TaskChangedPayload, source: str) -> None:
-        received_by_a.append(payload)
-
-    # A 订阅 task.changed（BaseAgent 默认行为在 start()；此处直接订阅验证过滤）
-    bus.on(CoreEvents.TASK_CHANGED, _on_a, model_class=TaskChangedPayload)
-
-    # 1. 委派 → 受理回执
-    res = await registry.invoke(_inv("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"}))
-    assert res.success is True
-    task_id = res.structured_content["task_id"]
-    assert res.structured_content["accepted"] is True
-    assert res.structured_content["executor"] == "agent_b"
-    assert b.received == [(task_id, "盖一座房子")], "目标已接收（指令 + 任务号）"
-
-    # 2. 记录表登记（agent 型）
-    record = ledger.get(task_id)
-    assert record is not None and record.initiator == "agent_a" and record.executor == "agent_b"
-    assert record.source == "agent"
-
-    # 3. B 推进 [running → succeeded]
-    await b.run_and_finish(ledger)
-    await _drain()
-
-    # 4. A 收到状态变化事件（按发起方过滤在本测试由 BaseAgent 行为覆盖；此处验证事件内容）
-    statuses = [p.status for p in received_by_a if p.task_id == task_id]
-    # accepted→running 属安静组（受理转进行中不唤醒，A 已持回执）；终态必达
-    assert statuses == ["succeeded"]
-    assert all(p.initiator == "agent_a" and p.executor == "agent_b" for p in received_by_a)
-
-    # 5. task_status 查询（终态已移除 → 任务不存在）
-    q = await registry.invoke(_inv("framework_task_status", {"task_id": task_id}))
-    assert q.success is False and "任务不存在" in q.error_message
-
-
-async def test_delegation_status_query_mid_flight() -> None:
-    """进行中的委派任务可查：状态 + 快照（指令在快照里）。"""
-    registry, ledger, bus, a, b = _setup()
-    res = await registry.invoke(_inv("framework_delegate", {"agent": "agent_b", "instruction": "去挖矿"}))
-    task_id = res.structured_content["task_id"]
-    b.received.clear()  # 仅查询，不推进
-
-    q = await registry.invoke(_inv("framework_task_status", {"task_id": task_id}))
-    assert q.success is True
-    data = q.structured_content
-    assert data["status"] == "accepted"  # 尚未开始执行
-    assert data["initiator"] == "agent_a" and data["executor"] == "agent_b"
-    assert data["snapshot"]["instruction"] == "去挖矿"
-
-
-# 受理失败与任务失败分开
-
-
-async def test_acceptance_failures_do_not_register() -> None:
-    """三类受理失败（不存在 / 拒收 / 自派）→ 失败结果且不登记任务。"""
-    registry, ledger, bus, a, b = _setup(refuse_target=True)
-
-    # 目标不存在
-    r1 = await registry.invoke(_inv("framework_delegate", {"agent": "ghost", "instruction": "干活"}))
-    assert r1.success is False and "不在名册" in r1.error_message
-
-    # 目标拒收（明确拒收原因）
-    r2 = await registry.invoke(_inv("framework_delegate", {"agent": "agent_b", "instruction": "干活"}))
-    assert r2.success is False and "拒收" in r2.error_message and "忙不过来" in r2.error_message
-
-    # 自派（调用方 agent_a 委派 agent_a）
-    r3 = await registry.invoke(_inv("framework_delegate", {"agent": "agent_a", "instruction": "自己干"}))
-    assert r3.success is False and "自派" in r3.error_message
-
-    assert len(ledger) == 0, "受理失败一律不登记"
-
-
-async def test_default_refusal_when_no_receive_entry() -> None:
-    """未实现接收入口的 stub（默认拒收路径）→ 受理失败。"""
-
-    class _NoEntryAgent(_StubAgent):
-        # 删掉 receive_delegation → 走 BaseAgent 默认拒收
-        receive_delegation = BaseAgent.receive_delegation  # type: ignore[assignment]
-
-    bus = EventBus(enable_stats=False)
-    registry = ToolRegistry(event_bus=bus)
-    ledger = TaskLedger(event_bus=bus)
-    manager = AgentManager()
-    a = _StubAgent("agent_a")
-    c = _NoEntryAgent("agent_c")
-    manager.register(a)
-    manager.register(c)
-    registry.register_provider(build_agent_control_provider(manager, ledger))
-
-    res = await registry.invoke(_inv("framework_delegate", {"agent": "agent_c", "instruction": "试试"}))
-    assert res.success is False and "拒收" in res.error_message
-    assert len(ledger) == 0, "默认拒收不登记"
-
-
-async def test_empty_target_resolves_sole_game_agent() -> None:
-    """目标留空 → 解析为当前唯一启用的游戏 Agent（框架不写死任何游戏名）。"""
-    registry, ledger, _bus, _a, b = _setup()
-
-    res = await registry.invoke(_inv("framework_delegate", {"agent": "", "instruction": "去挖矿"}))
-
-    assert res.success is True
-    assert res.structured_content["executor"] == "agent_b"
-    assert b.received and b.received[0][1] == "去挖矿"
-    assert len(ledger) == 1
-
-
-async def test_empty_target_rejects_ambiguous_roster() -> None:
-    """目标留空但候选不唯一 → 拒绝并要求点名，不猜目标（避免派错游戏）。"""
-    bus = EventBus(enable_stats=False)
-    registry = ToolRegistry(event_bus=bus)
-    ledger = TaskLedger(event_bus=bus)
-    manager = AgentManager()
-    for name in ("agent_a", "agent_b", "agent_c"):
-        manager.register(_StubAgent(name))
-    registry.register_provider(build_agent_control_provider(manager, ledger))
-
-    res = await registry.invoke(_inv("framework_delegate", {"agent": "", "instruction": "去挖矿"}))
-
-    assert res.success is False
-    assert "点名" in res.error_message and "agent_b" in res.error_message
-    assert len(ledger) == 0
-
-
-async def test_task_failure_distinct_from_acceptance_failure() -> None:
-    """执行中失败 → 记录表 failed 终态（与受理失败形态不同：任务已登记过）。"""
-    registry, ledger, bus, a, b = _setup()
-    res = await registry.invoke(_inv("framework_delegate", {"agent": "agent_b", "instruction": "会失败的工作"}))
-    task_id = res.structured_content["task_id"]
-    assert res.success is True
-
-    await b.run_and_finish(ledger, failed=True)
-    await _drain()
-
-    q = await registry.invoke(_inv("framework_task_status", {"task_id": task_id}))
-    assert q.success is False and "任务不存在" in q.error_message  # failed 终态已移除
-    # 终态事件曾以 failed 发出（对账：直接查 ledger 已移除，事件由 bus 转发）
-
-
-async def test_unknown_task_id_query_fails() -> None:
-    """未知任务号查询 → 失败结果（任务不存在）。"""
-    registry, ledger, bus, a, b = _setup()
-    q = await registry.invoke(_inv("framework_task_status", {"task_id": "nope-123"}))
-    assert q.success is False and "任务不存在" in q.error_message
-
-
-# 递话原语（framework_prompt：受理不记账）
-
-
-async def test_prompt_delivers_without_ledger_entry() -> None:
-    """递话受理 → 回执 delivered（无任务号）；记录表零条目。"""
-    registry, ledger, _bus, _a, b = _setup()
-
-    res = await registry.invoke(_inv("framework_prompt", {"agent": "agent_b", "content": "先去东侧看看"}))
-
-    assert res.success is True
-    assert res.structured_content == {"delivered": True, "executor": "agent_b"}
-    assert b.prompts_received == [("先去东侧看看", "agent_a")], "递话内容与来源（调用方）到达目标"
-    assert len(ledger) == 0, "递话不进任务记录表（记账分家）"
-
-
-async def test_prompt_emits_agent_prompted_event() -> None:
-    """递话受理 → 广播 agent.prompted（载荷带目标/内容/来源；不进账本）。"""
-    bus = EventBus(enable_stats=False)
-    registry = ToolRegistry(event_bus=bus)
-    ledger = TaskLedger(event_bus=bus)
-    manager = AgentManager()
-    manager.register(_StubAgent("agent_a"))
-    manager.register(_StubAgent("agent_b"))
-    registry.register_provider(build_agent_control_provider(manager, ledger, event_bus=bus))
-    received: List[AgentPromptedPayload] = []
-
-    async def _on(name: str, payload: AgentPromptedPayload, source: str) -> None:
+    async def on_changed(name: str, payload: TaskChangedPayload, source: str) -> None:
         received.append(payload)
 
-    bus.on(CoreEvents.AGENT_PROMPTED, _on, model_class=AgentPromptedPayload)
+    rig.bus.on(CoreEvents.TASK_CHANGED, on_changed, model_class=TaskChangedPayload)
+    b = _agent(rig, "agent_b")
 
-    res = await registry.invoke(_inv("framework_prompt", {"agent": "agent_b", "content": "先去东侧看看"}))
-    await _drain()
+    res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
+    task_id = res.structured_content["task_id"]
+    assert (
+        res.success and res.structured_content["accepted"] is True and res.structured_content["executor"] == "agent_b"
+    )
+    assert b.received == [(task_id, "盖一座房子")]
+    record = rig.ledger.get(task_id)
+    assert (record.initiator, record.executor, record.source) == ("agent_a", "agent_b", "agent")
 
-    assert res.success is True
-    assert len(received) == 1, "受理成功恰好广播一条"
-    assert received[0].target == "agent_b"
-    assert received[0].content == "先去东侧看看"
-    assert received[0].source == "agent_a"
-    assert len(ledger) == 0, "事件只做观测，记账分家不变"
+    # 进行中可查：状态 + 快照（指令在快照里）；尚未开始执行
+    status = (await rig.call("framework_task_status", {"task_id": task_id})).structured_content
+    assert (status["status"], status["initiator"], status["executor"]) == ("accepted", "agent_a", "agent_b")
+    assert status["snapshot"]["instruction"] == "盖一座房子"
 
-
-async def test_prompt_target_resolution_matches_delegate() -> None:
-    """递话的目标解析与委派同款：不在名册 / 自派 / 留空唯一候选。"""
-    registry, ledger, _bus, a, b = _setup()
-
-    r1 = await registry.invoke(_inv("framework_prompt", {"agent": "ghost", "content": "在吗"}))
-    assert r1.success is False and "不在名册" in r1.error_message
-
-    r2 = await registry.invoke(_inv("framework_prompt", {"agent": "agent_a", "content": "自言自语"}))
-    assert r2.success is False and "自派" in r2.error_message
-
-    r3 = await registry.invoke(_inv("framework_prompt", {"content": "留空目标"}))
-    assert r3.success is True and r3.structured_content["executor"] == "agent_b"
-    assert b.prompts_received[-1] == ("留空目标", "agent_a")
-
-    r4 = await registry.invoke(_inv("framework_prompt", {"agent": "agent_b", "content": ""}))
-    assert r4.success is False and "content" in r4.error_message
-
-    assert len(ledger) == 0
+    b.finish(rig.ledger)
+    await asyncio.sleep(0.03)
+    # accepted→running 属安静组（发起方已持回执，不唤醒）；终态必达
+    assert [p.status for p in received if p.task_id == task_id] == ["succeeded"]
+    assert all(p.initiator == "agent_a" and p.executor == "agent_b" for p in received)
+    gone = await rig.call("framework_task_status", {"task_id": task_id})  # 终态已移除
+    assert gone.success is False and "任务不存在" in gone.error_message
 
 
-async def test_prompt_default_refusal_when_no_channel() -> None:
-    """未实现递话消化的 stub（默认拒收路径）→ 失败结果。"""
+async def test_execution_failure_ends_in_failed_terminal_after_being_registered(rig: _Rig) -> None:
+    task_id = (
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "会失败的工作"})
+    ).structured_content["task_id"]
+    statuses: List[str] = []
 
-    class _NoChannelAgent(_StubAgent):
-        # 删掉 receive_prompt → 走 BaseAgent 默认拒收
+    async def on_changed(name: str, payload: TaskChangedPayload, source: str) -> None:
+        statuses.append(payload.status)
+
+    rig.bus.on(CoreEvents.TASK_CHANGED, on_changed, model_class=TaskChangedPayload)
+    _agent(rig, "agent_b").finish(rig.ledger, failed=True)
+    await asyncio.sleep(0.03)
+    assert statuses[-1] == "failed" and rig.ledger.get(task_id) is None
+    unknown = await rig.call("framework_task_status", {"task_id": "nope-123"})
+    assert unknown.success is False and "任务不存在" in unknown.error_message
+
+
+@pytest.mark.parametrize(
+    ("args", "needle"),
+    [
+        ({"agent": "ghost", "instruction": "干活"}, "不在名册"),
+        ({"agent": "agent_b", "instruction": "干活"}, "忙不过来"),  # 目标明确拒收
+        ({"agent": "agent_a", "instruction": "自己干"}, "自派"),
+    ],
+)
+async def test_acceptance_failures_do_not_register(args: dict, needle: str) -> None:
+    rig = _Rig(_StubAgent("agent_a"), _StubAgent("agent_b", refuse="忙不过来"))
+    res = await rig.call("framework_delegate", args)
+    assert res.success is False and needle in res.error_message and len(rig.ledger) == 0
+
+
+async def test_default_refusal_without_receive_entry_is_acceptance_failure() -> None:
+    class _NoEntry(_StubAgent):
+        receive_delegation = BaseAgent.receive_delegation  # type: ignore[assignment]
         receive_prompt = BaseAgent.receive_prompt  # type: ignore[assignment]
 
-    bus = EventBus(enable_stats=False)
-    registry = ToolRegistry(event_bus=bus)
-    ledger = TaskLedger(event_bus=bus)
-    manager = AgentManager()
-    a = _StubAgent("agent_a")
-    c = _NoChannelAgent("agent_c")
-    manager.register(a)
-    manager.register(c)
-    registry.register_provider(build_agent_control_provider(manager, ledger))
-
-    res = await registry.invoke(_inv("framework_prompt", {"agent": "agent_c", "content": "试试"}))
+    rig = _Rig(_StubAgent("agent_a"), _NoEntry("agent_c"))
+    res = await rig.call("framework_delegate", {"agent": "agent_c", "instruction": "试试"})
+    assert res.success is False and "拒收" in res.error_message and len(rig.ledger) == 0
+    res = await rig.call("framework_prompt", {"agent": "agent_c", "content": "试试"})
     assert res.success is False and "拒收" in res.error_message
 
 
-# minecraft 接收委派（真实 Agent：入队带任务号 + 批次状态写回）
+async def test_empty_target_resolves_sole_game_agent_or_demands_a_name(rig: _Rig) -> None:
+    res = await rig.call("framework_delegate", {"agent": "", "instruction": "去挖矿"})
+    assert res.success and res.structured_content["executor"] == "agent_b"
+    assert _agent(rig, "agent_b").received[0][1] == "去挖矿" and len(rig.ledger) == 1
+
+    ambiguous = _Rig(_StubAgent("agent_a"), _StubAgent("agent_b"), _StubAgent("agent_c"))
+    res = await ambiguous.call("framework_delegate", {"agent": "", "instruction": "去挖矿"})
+    assert res.success is False and "点名" in res.error_message and "agent_b" in res.error_message
+    assert len(ambiguous.ledger) == 0  # 不猜目标，避免派错游戏
 
 
-async def test_minecraft_receives_delegation_and_reports_terminal() -> None:
-    """framework_delegate → minecraft 入队（带任务号）→ 批次 running → delivery → succeeded。"""
-    from unittest.mock import AsyncMock, MagicMock
+async def test_prompt_is_acknowledged_without_ledger_entry_and_broadcast(rig: _Rig) -> None:
+    prompted: List[AgentPromptedPayload] = []
 
-    from src.agents.minecraft.agent import MinecraftAgent
-    from src.agents.minecraft.config import MinecraftConfig
-    from src.modules.mcp.config import McpServerConfig
+    async def on_prompted(name: str, payload: AgentPromptedPayload, source: str) -> None:
+        prompted.append(payload)
 
-    bus = EventBus(enable_stats=False)
-    registry = ToolRegistry(event_bus=bus)
-    ledger = TaskLedger(event_bus=bus)
-    manager = AgentManager()
-    tracker = TaskTracker(registry, ledger, poll_interval_ms=20)
+    rig.bus.on(CoreEvents.AGENT_PROMPTED, on_prompted, model_class=AgentPromptedPayload)
+    res = await rig.call("framework_prompt", {"agent": "agent_b", "content": "先去东侧看看"})
+    await asyncio.sleep(0.03)
 
-    llm = MagicMock()
-    llm.chat_messages = AsyncMock(side_effect=[])
-    minecraft = MinecraftAgent(
-        MinecraftConfig(mcp=McpServerConfig(enabled=False)),
-        llm_manager=llm,
-        event_bus=bus,
-        tool_registry=registry,
-        task_tracker=tracker,
-    )
-    manager.register(minecraft)
-    registry.register_provider(build_agent_control_provider(manager, ledger))
+    assert res.success and res.structured_content == {"delivered": True, "executor": "agent_b"}  # 无任务号
+    assert _agent(rig, "agent_b").prompts_received == [("先去东侧看看", "agent_a")]
+    assert [(p.target, p.content, p.source) for p in prompted] == [("agent_b", "先去东侧看看", "agent_a")]
+    assert len(rig.ledger) == 0  # 记账分家
 
-    # 1. 委派受理（目标 minecraft）
-    res = await registry.invoke(
-        ToolInvocation(
-            tool_name="framework_delegate",
-            arguments={"agent": "minecraft", "instruction": "建一座木头房子"},
-            source="streamer",
+
+async def test_prompt_target_resolution_matches_delegate(rig: _Rig) -> None:
+    ghost = await rig.call("framework_prompt", {"agent": "ghost", "content": "在吗"})
+    assert ghost.success is False and "不在名册" in ghost.error_message
+    selfie = await rig.call("framework_prompt", {"agent": "agent_a", "content": "自言自语"})
+    assert selfie.success is False and "自派" in selfie.error_message
+    blank_target = await rig.call("framework_prompt", {"content": "留空目标"})
+    assert blank_target.success and blank_target.structured_content["executor"] == "agent_b"
+    assert _agent(rig, "agent_b").prompts_received[-1] == ("留空目标", "agent_a")
+    blank_content = await rig.call("framework_prompt", {"agent": "agent_b", "content": ""})
+    assert blank_content.success is False and "content" in blank_content.error_message
+    assert len(rig.ledger) == 0
+
+
+# 真实 minecraft Agent：入队带任务号、批次状态写回、硬取消、断连恢复续跑
+
+
+class _McRig(_Rig):
+    def __init__(self) -> None:
+        bus = EventBus(enable_stats=False)
+        registry = ToolRegistry(event_bus=bus)
+        ledger = TaskLedger(event_bus=bus)
+        llm = MagicMock()
+        llm.chat_messages = AsyncMock(side_effect=[])
+        self.minecraft = MinecraftAgent(
+            MinecraftConfig(mcp=McpServerConfig(enabled=False)),
+            llm_manager=llm,
+            event_bus=bus,
+            tool_registry=registry,
+            task_tracker=TaskTracker(registry, ledger, poll_interval_ms=20),
         )
-    )
-    assert res.success is True
-    task_id = res.structured_content["task_id"]
-    record = ledger.get(task_id)
-    assert record is not None and record.initiator == "streamer" and record.executor == "minecraft"
+        super().__init__(self.minecraft)
+        # 复用上面 _Rig 构造出的 bus/registry/ledger 会与 Agent 持有的不一致，这里改为沿用 Agent 的那一套
+        self.bus, self.registry, self.ledger = bus, registry, ledger
+        registry.register_provider(build_agent_control_provider(self.manager, ledger))
 
-    # 2. 指令已在队列且带任务号
-    assert list(minecraft._message_queue) == [(task_id, "建一座木头房子")]
-
-    # 3. 批次 flush 吸收指令（复刻 _run_task 的消息 flush）→ 委派任务 running
-    while minecraft._message_queue:
-        tid, _content = minecraft._message_queue.popleft()
-        if tid:
-            minecraft._delegated_batch_ids.append(tid)
-    minecraft._mark_delegated_running()
-    record = ledger.get(task_id)
-    assert record is not None and record.status == "running"
-
-    # 4. 交付 → succeeded + 终态移除
-    await minecraft._handle_report("delivery", "房子建好了", scene="0,0,0")
-    assert ledger.get(task_id) is None, "delivery 后委派任务终态移除"
-
-
-# minecraft 硬取消（清追踪清单 + 账面 cancelled + 停手通知）
-
-
-def _minecraft_agent_with_ledger(bus: EventBus, registry: ToolRegistry, ledger: TaskLedger) -> "object":  # noqa: ANN401 - 返回真实 MinecraftAgent
-    from unittest.mock import AsyncMock, MagicMock
-
-    from src.agents.minecraft.agent import MinecraftAgent
-    from src.agents.minecraft.config import MinecraftConfig
-    from src.modules.mcp.config import McpServerConfig
-
-    llm = MagicMock()
-    llm.chat_messages = AsyncMock(side_effect=[])
-    tracker = TaskTracker(registry, ledger, poll_interval_ms=20)
-    return MinecraftAgent(
-        MinecraftConfig(mcp=McpServerConfig(enabled=False)),
-        llm_manager=llm,
-        event_bus=bus,
-        tool_registry=registry,
-        task_tracker=tracker,
-    )
-
-
-async def _delegate_to_minecraft(registry: ToolRegistry, instruction: str = "建一座木头房子") -> tuple["object", str]:  # noqa: ANN401
-    res = await registry.invoke(
-        ToolInvocation(
-            tool_name="framework_delegate",
-            arguments={"agent": "minecraft", "instruction": instruction},
-            source="streamer",
+    async def delegate(self, instruction: str = "建一座木头房子") -> str:
+        res = await self.call(
+            "framework_delegate", {"agent": "minecraft", "instruction": instruction}, source="streamer"
         )
-    )
-    assert res.success is True
-    return res.structured_content["task_id"]
+        assert res.success is True
+        return res.structured_content["task_id"]
+
+    def absorb_into_batch(self) -> None:
+        """复刻 _run_task 的消息 flush：委派指令吸收进本批并标记 running。"""
+        queue = self.minecraft._message_queue
+        while queue:
+            tid, _content = queue.popleft()
+            if tid:
+                self.minecraft._delegated_batch_ids.append(tid)
+        self.minecraft._mark_delegated_running()
+
+    def queued_notices(self) -> List[str]:
+        return [content for tid, content in self.minecraft._message_queue if not tid]
 
 
-def _absorb_into_batch(minecraft: "object", task_id: str) -> None:  # noqa: ANN401
-    """复刻 _run_task 的消息 flush：委派指令吸收进本批并标记 running。"""
-    del task_id  # 任务号随队列项携带
-    while minecraft._message_queue:
-        tid, _content = minecraft._message_queue.popleft()
-        if tid:
-            minecraft._delegated_batch_ids.append(tid)
-    minecraft._mark_delegated_running()
+@pytest.fixture
+def mc() -> _McRig:
+    return _McRig()
 
 
-async def test_minecraft_cancel_task_clears_ledger_and_tracking() -> None:
-    """硬取消：账面 cancelled 终态移除 + 追踪清单清空 + 停手通知入队；迟到收尾写不进账。"""
-    bus = EventBus(enable_stats=False)
-    registry = ToolRegistry(event_bus=bus)
-    ledger = TaskLedger(event_bus=bus)
-    manager = AgentManager()
-    minecraft = _minecraft_agent_with_ledger(bus, registry, ledger)
-    manager.register(minecraft)
-    registry.register_provider(build_agent_control_provider(manager, ledger))
+async def test_minecraft_receives_delegation_and_reports_terminal(mc: _McRig) -> None:
+    task_id = await mc.delegate()
+    record = mc.ledger.get(task_id)
+    assert (record.initiator, record.executor) == ("streamer", "minecraft")
+    assert list(mc.minecraft._message_queue) == [(task_id, "建一座木头房子")]  # 指令入队带任务号
 
-    task_id = await _delegate_to_minecraft(registry)
-    _absorb_into_batch(minecraft, task_id)
-    assert ledger.get(task_id) is not None and ledger.get(task_id).status == "running"
-
-    assert minecraft.cancel_task(task_id, source="operator") is True
-    assert ledger.get(task_id) is None, "cancelled 终态条目已移除"
-    assert minecraft._delegated_batch_ids == [] and minecraft._delegated_finished_ids == []
-    queued = [content for tid, content in minecraft._message_queue if not tid]
-    assert any(task_id in content and "已被取消" in content for content in queued), "停手通知已入队"
-
-    # LLM 收尾（如误报 succeeded）——追踪清单已清空，账面不被污染
-    minecraft._finish_delegated("succeeded", summary="迟到的收尾")
-    assert ledger.get(task_id) is None
-
-    # 已终态再取消 → False（REST 侧映射 404）
-    assert minecraft.cancel_task(task_id, source="operator") is False
+    mc.absorb_into_batch()
+    assert mc.ledger.get(task_id).status == "running"
+    await mc.minecraft._handle_report("delivery", "房子建好了", scene="0,0,0")
+    assert mc.ledger.get(task_id) is None  # delivery 后终态移除
 
 
-async def test_minecraft_cancel_clears_suspended_zombie() -> None:
-    """僵尸账（waiting_for_decision 挂起）可经硬取消清场。"""
-    bus = EventBus(enable_stats=False)
-    registry = ToolRegistry(event_bus=bus)
-    ledger = TaskLedger(event_bus=bus)
-    manager = AgentManager()
-    minecraft = _minecraft_agent_with_ledger(bus, registry, ledger)
-    manager.register(minecraft)
-    registry.register_provider(build_agent_control_provider(manager, ledger))
+async def test_minecraft_hard_cancel_clears_ledger_tracking_and_notifies(mc: _McRig) -> None:
+    task_id = await mc.delegate()
+    mc.absorb_into_batch()
 
-    task_id = await _delegate_to_minecraft(registry)
-    _absorb_into_batch(minecraft, task_id)
-    await minecraft._suspend_with_report("迷宫尽头卡住，需要决策")
-    record = ledger.get(task_id)
+    assert mc.minecraft.cancel_task(task_id, source="operator") is True
+    assert mc.ledger.get(task_id) is None
+    assert mc.minecraft._delegated_batch_ids == [] and mc.minecraft._delegated_finished_ids == []
+    assert any(task_id in notice and "已被取消" in notice for notice in mc.queued_notices())  # 停手通知已入队
+
+    mc.minecraft._finish_delegated("succeeded", summary="迟到的收尾")  # 追踪清单已清空，账面不被污染
+    assert mc.ledger.get(task_id) is None
+    assert mc.minecraft.cancel_task(task_id, source="operator") is False  # 已终态再取消（REST 映射 404）
+
+
+async def test_minecraft_cancel_clears_suspended_zombie(mc: _McRig) -> None:
+    task_id = await mc.delegate()
+    mc.absorb_into_batch()
+    await mc.minecraft._suspend_with_report("迷宫尽头卡住，需要决策")
+    assert mc.ledger.get(task_id).status == "waiting_for_decision"
+
+    assert mc.minecraft.cancel_task(task_id, source="operator") is True
+    assert mc.ledger.get(task_id) is None and mc.minecraft._delegated_finished_ids == []
+
+
+async def test_escalation_waits_for_decision_and_mcp_recovery_resumes(mc: _McRig) -> None:
+    """escalation = 受阻上报待定夺：账面 waiting_for_decision（非 failed 终态），追踪保留；MCP 恢复后解锁续跑直至交付。"""
+    task_id = await mc.delegate()
+    mc.absorb_into_batch()
+    await mc.minecraft._handle_report("escalation", "连接失败受阻", scene="")
+
+    record = mc.ledger.get(task_id)
     assert record is not None and record.status == "waiting_for_decision"
-
-    assert minecraft.cancel_task(task_id, source="operator") is True
-    assert ledger.get(task_id) is None
-    assert minecraft._delegated_finished_ids == []
-
-
-# minecraft 断连恢复续跑（escalation 账面语义 + 恢复唤醒）
-
-
-async def test_escalation_writes_waiting_for_decision_not_failed() -> None:
-    """escalation = 受阻上报待定夺：账面 waiting_for_decision（非 failed 终态），追踪保留。"""
-    bus = EventBus(enable_stats=False)
-    registry = ToolRegistry(event_bus=bus)
-    ledger = TaskLedger(event_bus=bus)
-    manager = AgentManager()
-    minecraft = _minecraft_agent_with_ledger(bus, registry, ledger)
-    manager.register(minecraft)
-    registry.register_provider(build_agent_control_provider(manager, ledger))
-
-    task_id = await _delegate_to_minecraft(registry)
-    _absorb_into_batch(minecraft, task_id)
-    await minecraft._handle_report("escalation", "迷宫尽头卡住，需要决策", scene="")
-
-    record = ledger.get(task_id)
-    assert record is not None, "waiting_for_decision 非终态，条目保留在账"
-    assert record.status == "waiting_for_decision"
     assert record.snapshot.get("waiting_for_instruction") is True
-    assert minecraft._delegated_finished_ids == [task_id], "追踪清单保留（挂起可被唤醒续跑）"
-    assert minecraft._task_suspended is True
+    assert mc.minecraft._delegated_finished_ids == [task_id] and mc.minecraft._task_suspended is True
 
+    mc.minecraft._on_mcp_recovered()
+    assert mc.minecraft._task_suspended is False and mc.minecraft._wake_event.is_set()
+    assert any("连接已恢复" in notice for notice in mc.queued_notices())
 
-async def test_mcp_recovery_resumes_suspended_task() -> None:
-    """断连挂起 → 恢复 → 通知注入 + 解锁挂起 → 批次续跑 → 交付 succeeded。"""
-    bus = EventBus(enable_stats=False)
-    registry = ToolRegistry(event_bus=bus)
-    ledger = TaskLedger(event_bus=bus)
-    manager = AgentManager()
-    minecraft = _minecraft_agent_with_ledger(bus, registry, ledger)
-    manager.register(minecraft)
-    registry.register_provider(build_agent_control_provider(manager, ledger))
-
-    task_id = await _delegate_to_minecraft(registry)
-    _absorb_into_batch(minecraft, task_id)
-    await minecraft._handle_report("escalation", "连接失败受阻", scene="")
-    assert minecraft._task_suspended is True
-
-    # MCP 恢复成功（_mcp_recover_loop 装配恢复分支调用）
-    minecraft._on_mcp_recovered()
-    assert minecraft._task_suspended is False, "挂起已解锁"
-    assert minecraft._wake_event.is_set(), "worker 已被唤醒"
-    queued = [content for tid, content in minecraft._message_queue if not tid]
-    assert any("连接已恢复" in content for content in queued), "恢复通知已入队"
-
-    # 批次续跑：通知被下一步 flush 吸收，旧委派重写 running（账面复活）
-    while minecraft._message_queue:
-        minecraft._message_queue.popleft()
-    minecraft._mark_delegated_running()
-    record = ledger.get(task_id)
-    assert record is not None and record.status == "running"
-
-    # 交付 → succeeded 终态移除
-    await minecraft._handle_report("delivery", "现场评估后继续并完成", scene="")
-    assert ledger.get(task_id) is None
+    mc.minecraft._message_queue.clear()  # 通知被下一步 flush 吸收，旧委派重写 running（账面复活）
+    mc.minecraft._mark_delegated_running()
+    assert mc.ledger.get(task_id).status == "running"
+    await mc.minecraft._handle_report("delivery", "现场评估后继续并完成", scene="")
+    assert mc.ledger.get(task_id) is None
