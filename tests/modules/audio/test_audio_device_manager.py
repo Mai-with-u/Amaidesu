@@ -262,3 +262,67 @@ class TestStreamPrebuffer:
         stream.write.assert_not_called()
         stream.stop.assert_called_once()
         assert big_manager._stream is None
+
+
+class TestSupplyGapAlert:
+    """供给断流告警：间隔扣除写背压后才判定真断流（防背压假阳性）"""
+
+    def _manager_with_fake_clock(self):
+        """prebuffer 100s（write 直写路径）+ 可控单调时钟"""
+        from src.modules.audio import audio_device_manager as adm
+
+        manager = AudioDeviceManager(sample_rate=32000, channels=1, dtype=np.int16, prebuffer_seconds=100.0)
+        manager.logger = MagicMock()
+        clock = {"t": 1000.0}
+        self.clock = clock
+        patcher = patch.object(adm, "time")
+        mock_time = patcher.start()
+        self.addCleanup = patcher.stop
+        mock_time.monotonic = lambda: clock["t"]
+        mock_time.perf_counter = lambda: clock["t"]
+        return manager
+
+    @patch("src.modules.audio.audio_device_manager.sd")
+    def test_real_supply_gap_alerts(self, mock_sd):
+        """两块间隔 3s 且写无阻塞：净间隔 3s > 2s，告警真断流"""
+        import time as real_time
+
+        manager = self._manager_with_fake_clock()
+        self.clock["t"] = 1000.0
+        manager.start_stream(utterance_id="g1")
+        manager.write_chunk(np.zeros(100, dtype=np.int16))
+        self.clock["t"] += 3.0  # 3s 后下一块，期间无写阻塞
+        manager.write_chunk(np.zeros(100, dtype=np.int16))
+
+        warnings = [str(c) for c in manager.logger.warning.call_args_list]
+        assert any("供给断流" in t for t in warnings)
+        real_time.sleep(0)
+
+    @patch("src.modules.audio.audio_device_manager.sd")
+    def test_write_backpressure_not_reported_as_gap(self, mock_sd):
+        """写背压不计入断流：块2 的 write 等播放消费阻塞 2.5s（时钟随阻塞
+        推进），块3 到达时毛间隔 3.0s 扣除背压 2.5s 后净 0.5s，不告警"""
+        manager = self._manager_with_fake_clock()
+        manager.start_stream(utterance_id="g2")
+        stream = mock_sd.OutputStream.return_value
+
+        # 块1：基线（建立 last_feed 与写阻塞基线）
+        self.clock["t"] += 1.0
+        manager.write_chunk(np.zeros(100, dtype=np.int16))
+
+        # 块2：write 阻塞 2.5s（缓冲满，等播放消费腾空间——背压）
+        def slow_write(chunk):
+            self.clock["t"] += 2.5
+
+        self.clock["t"] += 0.5
+        stream.write.side_effect = slow_write
+        manager.write_chunk(np.zeros(100, dtype=np.int16))
+        manager.logger.reset_mock()
+
+        # 块3：到达（毛间隔 3.0s，其中 2.5s 是块2 的写背压）
+        self.clock["t"] += 0.5
+        stream.write.side_effect = None
+        manager.write_chunk(np.zeros(100, dtype=np.int16))
+
+        warnings = [str(c) for c in manager.logger.warning.call_args_list]
+        assert not any("供给断流" in t for t in warnings)

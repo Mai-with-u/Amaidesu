@@ -74,8 +74,11 @@ class AudioDeviceManager:
         self._pending_chunks: list[np.ndarray] = []
         self._pending_samples = 0
         self._stream_started = False
-        # 供给断流监控：块间间隔超阈值说明上游断供，声卡缓冲即将耗尽（欠载前兆）
+        # 供给断流监控：块间间隔扣除写背压（write 等播放消费的阻塞）后仍超
+        # 阈值，才判定上游真断供（欠载前兆）——不扣除会把"数据过剩的背压"
+        # 误报成断流（turbo 吞吐大于实时时背压为常态，实测每场 80+ 次假阳性）
         self._last_feed_monotonic: float | None = None
+        self._last_write_block_sec: float = 0.0
 
         if not DEPENDENCIES_OK:
             self.logger.error("音频依赖缺失，请安装: pip install sounddevice soundfile")
@@ -272,6 +275,7 @@ class AudioDeviceManager:
             self._pending_samples = 0
             self._stream_started = False
             self._last_feed_monotonic = None
+            self._last_write_block_sec = 0.0
             self.is_playing = True
             # 分接：开播同步开 session（流式播法逐块 feed）
             self._sink_start(utterance_id)
@@ -289,8 +293,10 @@ class AudioDeviceManager:
             self._stream.start()
             self._stream_started = True
             self.logger.debug(f"预缓冲达阈值（{self.prebuffer_seconds:.1f}s），声卡流开播")
+        t0 = time.perf_counter()
         for chunk in self._pending_chunks:
             self._stream.write(chunk)
+        self._last_write_block_sec = time.perf_counter() - t0
         self._pending_chunks = []
         self._pending_samples = 0
 
@@ -312,10 +318,11 @@ class AudioDeviceManager:
         try:
             now = time.monotonic()
             if self._last_feed_monotonic is not None:
-                gap = now - self._last_feed_monotonic
-                if gap > 2.0:
+                net_gap = (now - self._last_feed_monotonic) - self._last_write_block_sec
+                if net_gap > 2.0:
                     self.logger.warning(
-                        f"上游供给断流 {gap:.1f}s（欠载风险：声卡缓冲即将耗尽，若听感出现拉长尾音即此次断流所致）"
+                        f"上游供给断流 {net_gap:.1f}s（已扣除写背压 {self._last_write_block_sec:.1f}s；"
+                        "欠载风险：声卡缓冲即将耗尽，若听感出现拉长尾音即此次断流所致）"
                     )
             self._last_feed_monotonic = now
             if not self._stream_started:
@@ -324,7 +331,9 @@ class AudioDeviceManager:
                 if self._pending_samples >= int(self.prebuffer_seconds * self.sample_rate):
                     self._flush_pending()
             else:
+                t0 = time.perf_counter()
                 self._stream.write(chunk)
+                self._last_write_block_sec = time.perf_counter() - t0
         except Exception as e:
             self.logger.error(f"写入音频流失败: {e}")
 
@@ -353,6 +362,7 @@ class AudioDeviceManager:
             self._pending_samples = 0
             self._stream_started = False
             self._last_feed_monotonic = None
+            self._last_write_block_sec = 0.0
             self.is_playing = False
             # 分接：播完同步收 session
             self._sink_stop()

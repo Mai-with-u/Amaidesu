@@ -243,12 +243,18 @@ class GPTSoVITSProvider:
                 self.audio_manager.start_stream(utterance_id=utterance_id)
 
                 chunk_index = 0
+                write_task: asyncio.Task | None = None
                 async for chunk in self._process_audio_stream(audio_stream):
                     if chunk is not None:
-                        self.audio_manager.write_chunk(chunk)
+                        # 写声卡放工作线程：预缓冲冲入与背压会阻塞 write 达
+                        # 数秒（等播放消费腾缓冲），同步执行会冻结事件循环
+                        # （心跳/弹幕/WS 每句停顿 2.6~3.5s，实测场次 24/26）
+                        write_task = asyncio.create_task(asyncio.to_thread(self.audio_manager.write_chunk, chunk))
+                        await write_task
                         chunk_index += 1
 
-                self.audio_manager.stop_stream()
+                # 收尾含预缓冲残余冲播（同样阻塞数秒），一并放工作线程
+                await asyncio.to_thread(self.audio_manager.stop_stream)
 
             self.logger.debug(f"TTS 播放完成: '{final_text[:30]}...'")
             self.render_count += 1
@@ -263,7 +269,14 @@ class GPTSoVITSProvider:
 
         except asyncio.CancelledError:
             # 队列看门狗超时取消：声卡流必须显式关闭并丢弃未播预缓冲，
-            # 否则 PCM 残留会继续播出，与下一条 utterance 的音频重叠
+            # 否则 PCM 残留会继续播出，与下一条 utterance 的音频重叠。
+            # 先等在途的写线程退出（PortAudio 并发 write/close 未定义），
+            # 线程会在流关闭异常上快速失败，shield 防止连带取消。
+            if write_task is not None and not write_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(write_task), timeout=1.0)
+                except Exception:  # noqa: BLE001 — 流已关闭的写失败属预期，仅需等待收敛
+                    pass
             self.audio_manager.stop_stream(discard_pending=True)
             self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
