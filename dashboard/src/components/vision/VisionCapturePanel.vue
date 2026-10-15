@@ -164,7 +164,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { visionApi } from '@/api';
+import { visionApi, configApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
+import { formatTimeHMS as formatTime } from '@/utils/format';
 import type { VisionMonitor } from '@/types';
 import api from '@/api';
 
@@ -280,7 +282,7 @@ async function loadMonitors() {
     }
   } catch (e) {
     monitors.value = [];
-    ElMessage.error(`获取显示器列表失败：${extractError(e)}`);
+    ElMessage.error(`获取显示器列表失败：${getApiErrorMessage(e, '未知错误')}`);
   } finally {
     monitorsLoading.value = false;
   }
@@ -290,12 +292,16 @@ async function loadMonitors() {
 
 async function loadInitialConfig() {
   try {
-    const resp = await api.get<{ config: Record<string, unknown> }>('/config');
+    const resp = await configApi.getConfig();
     const cfg = resp.data?.config ?? {};
-    // 取 tools.vision.config.*
-    const visionCfg = getNested(cfg, ['tools', 'vision', 'config']) as
-      | Record<string, unknown>
-      | undefined;
+    // 取 tools.vision.config.*（合并视图中 vision 段缺失时保持当前面板默认）
+    const tools = cfg['tools'];
+    const vision =
+      tools && typeof tools === 'object' ? (tools as Record<string, unknown>)['vision'] : undefined;
+    const visionCfg =
+      vision && typeof vision === 'object'
+        ? ((vision as Record<string, unknown>)['config'] as Record<string, unknown> | undefined)
+        : undefined;
     if (visionCfg) {
       const m = visionCfg.monitor_index;
       if (typeof m === 'number' && m > 0) {
@@ -353,7 +359,7 @@ async function loadPreview() {
     if (mySeq !== previewSeq) return;
     previewSrc.value = '';
     previewSize.value = null;
-    previewError.value = extractError(e);
+    previewError.value = getApiErrorMessage(e, '未知错误');
   } finally {
     if (mySeq === previewSeq) previewLoading.value = false;
   }
@@ -482,7 +488,7 @@ async function saveConfig() {
       ElMessage.error(detail);
     }
   } catch (e) {
-    ElMessage.error(`保存失败：${extractError(e)}`);
+    ElMessage.error(`保存失败：${getApiErrorMessage(e, '未知错误')}`);
   } finally {
     saving.value = false;
   }
@@ -491,31 +497,6 @@ async function saveConfig() {
 function clearRegion() {
   regionMonitor.value = null;
   dragRectPx.value = null;
-}
-
-// 工具
-
-function extractError(e: unknown): string {
-  const ax = e as { response?: { data?: { detail?: string; message?: string } }; message?: string };
-  return ax?.response?.data?.detail ?? ax?.response?.data?.message ?? ax?.message ?? '未知错误';
-}
-
-function getNested(obj: Record<string, unknown>, path: string[]): unknown {
-  let cur: unknown = obj;
-  for (const k of path) {
-    if (cur && typeof cur === 'object' && k in (cur as Record<string, unknown>)) {
-      cur = (cur as Record<string, unknown>)[k];
-    } else {
-      return undefined;
-    }
-  }
-  return cur;
-}
-
-function formatTime(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 // 生命周期
