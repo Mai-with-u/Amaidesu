@@ -7,8 +7,9 @@ ToolRegistry —— 工具注册中心
 - 接受 ``ToolProvider`` 整体注册（Provider.list_tools 全量展开）
 - 可选挂载 ``EventBus``：每次调用完成后 emit ``tool.result.<name>``，
   供 Dashboard 溯源（broadcaster 通配订阅 ``tool.result.#``）
-- 可选熔断器：连续失败计数达阈值则摘除工具（tripped），
-  配套 ``ToolHealthMonitor`` 做探活恢复（``src/modules/tools/health.py``）
+- 可选熔断器（``ToolCircuitBreaker``，注册表持有并委托）：连续失败计数达
+  阈值则摘除工具（tripped），配套 ``ToolHealthMonitor`` 做探活恢复
+  （``src/modules/tools/tool_health_monitor.py``）
 - 可见名单：``register_provider(visible_to=...)`` 注册处逐工具声明
   可见给哪些 Agent（默认 ``DEFAULT_VISIBLE_TO``，仅主播）；``list_tools(for_agent=...)`` 按
   Agent 计算工具列表。名单只约束可见性，``invoke()`` 不校验。
@@ -27,20 +28,18 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional, Union
 
-from src.modules.events.payloads.tool_health import ToolHealthPayload
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.llm.context_meter import SECTION_MCP_TOOLS, SECTION_SYSTEM_TOOLS
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
 )
 from src.modules.tools.provider import MCP_CATEGORY, BaseToolProvider, ToolProvider
+from src.modules.tools.tool_health_monitor import ToolCircuitBreaker
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -61,25 +60,6 @@ DEFAULT_VISIBLE_TO: List[str] = ["streamer"]
 
 
 logger = get_logger("ToolRegistry")
-
-
-# =============================================================================
-# 单工具健康状态（熔断器内部数据）
-# =============================================================================
-
-
-@dataclass(slots=True)
-class _ToolHealth:
-    """单工具熔断器状态（ToolRegistry 内部使用）。
-
-    字段全部为零值起步；invocation 完成后由 ``invoke`` 维护；外部仅通过
-    ``tool_health_snapshot`` / ``is_tripped`` / ``recover_tool`` 触达。
-    """
-
-    consecutive_failures: int = 0
-    tripped: bool = False
-    tripped_at_ms: int = 0
-    last_error: str = ""
 
 
 # =============================================================================
@@ -153,10 +133,9 @@ class ToolRegistry:
         # 可选事件总线：挂载后每次调用完成 emit tool.result.<name>
         # 熔断/恢复时额外 emit tool.health.<name>
         self._event_bus = event_bus
-        # 单工具熔断器状态（仅在 invoke 触发失败/成功后维护）
-        self._health: Dict[str, _ToolHealth] = {}
-        # 连续失败达阈值即熔断（<=0 关闭熔断：状态仍记录、绝不跳闸）
-        self._failure_threshold = failure_threshold
+        # 单工具熔断器（仅在 invoke 触发失败/成功后由其记账；熔断/恢复
+        # 跃迁事件经其挂载的事件总线广播）
+        self._health = ToolCircuitBreaker(event_bus=event_bus, failure_threshold=failure_threshold)
         # 注册名 → 所属 BaseToolProvider 实例（register_provider 时记录；
         # 探活按此直查归属，避免 provider.name 与 spec.provider 的字符串耦合）
         self._tool_owner: Dict[str, BaseToolProvider] = {}
@@ -303,7 +282,7 @@ class ToolRegistry:
             self._tools.pop(name, None)
             self._tool_owner.pop(name, None)
             self._visible_to.pop(name, None)
-            self._health.pop(name, None)
+            self._health.discard(name)
         self._categories.pop(provider.name, None)
         self._visible_to_source.pop(provider.name, None)
         logger.info(f"Provider '{provider.name}' 已移除（摘除 {len(owned)} 个工具，总数={len(self._tools)}）")
@@ -413,7 +392,7 @@ class ToolRegistry:
             if name not in new_names:
                 # 熔断历史只随工具消失而清除；存续工具保留"待探活复位"状态，
                 # 不能借刷新把"熔断待核实"洗成"健康"（reconnect 流程随后探活）
-                self._health.pop(name, None)
+                self._health.discard(name)
         # 分类落账保鲜（0 工具换血也不丢分类归属）
         category = getattr(provider, "category", "") or ""
         self._record_category(provider.name, category)
@@ -733,7 +712,7 @@ class ToolRegistry:
                 error_message=f"{type(exc).__name__}: {exc}",
                 timestamp_ms=int(time.time() * 1000),
             )
-        await self._record_health(spec, result)
+        await self._health.record(spec, result)
         await self._emit_tool_result(spec, result, invocation)
         return result
 
@@ -764,139 +743,24 @@ class ToolRegistry:
         except Exception as exc:  # noqa: BLE001 - 观测旁路，不反噬调用方
             logger.warning(f"tool.result 事件广播失败（工具: {spec.full_name}）: {exc}")
 
-    # -------------------- 熔断器：内部维护 --------------------
-
-    def _ensure_health(self, name: str) -> _ToolHealth:
-        """懒初始化健康状态（首次失败/恢复前不存在）。"""
-        health = self._health.get(name)
-        if health is None:
-            health = _ToolHealth()
-            self._health[name] = health
-        return health
-
-    async def _record_health(self, spec: ToolSpec, result: ToolExecutionResult) -> None:
-        """在 ``invoke`` 主路径上更新单工具熔断器状态。
-
-        - 成功或明确业务拒绝 → 服务已应答，重置连续故障
-        - 执行故障或未分类失败 → 递增计数；达到阈值且未跳闸 → 触发熔断并广播
-        """
-        health = self._ensure_health(spec.full_name)
-        # 业务拒绝仍作为失败结果返回和广播；仅健康计数认定服务已正常应答。
-        if result.success or result.failure_kind == "business":
-            health.consecutive_failures = 0
-            health.last_error = ""
-            return
-        health.consecutive_failures += 1
-        health.last_error = result.error_message or ""
-        threshold = self._failure_threshold
-        if threshold > 0 and not health.tripped and health.consecutive_failures >= threshold:
-            health.tripped = True
-            health.tripped_at_ms = now_ms()
-            logger.warning(
-                f"工具 '{spec.full_name}' 连续失败 {health.consecutive_failures} 次（阈值 {threshold}），"
-                "已熔断摘除，等待探活恢复"
-            )
-            await self._emit_tool_health(
-                spec.full_name,
-                spec.provider,
-                state="open",
-                failure_count=health.consecutive_failures,
-                last_error=health.last_error,
-            )
-
-    async def _emit_tool_health(
-        self,
-        tool_name: str,
-        provider: str,
-        *,
-        state: Literal["open", "closed"],
-        failure_count: int,
-        last_error: str,
-    ) -> None:
-        """广播工具健康切换事件（``tool.health.<name>``）；事件总线缺失或广播失败仅记日志。"""
-        if self._event_bus is None:
-            return
-        try:
-            payload = ToolHealthPayload(
-                tool_name=tool_name,
-                provider=provider,
-                state=state,
-                failure_count=failure_count,
-                last_error=last_error,
-            )
-            await self._event_bus.emit(
-                f"tool.health.{tool_name}",
-                payload,
-                source="ToolRegistry",
-            )
-        except Exception as exc:  # noqa: BLE001 - 观测旁路
-            logger.warning(f"tool.health 事件广播失败（工具: {tool_name}）: {exc}")
-
-    # -------------------- 熔断器：公共 API --------------------
+    # -------------------- 熔断器（委托 ToolCircuitBreaker） --------------------
 
     def is_tripped(self, name: str) -> bool:
-        """工具是否处于熔断状态。"""
-        health = self._health.get(name)
-        return bool(health and health.tripped)
+        """工具是否处于熔断状态（熔断器状态见 ``ToolCircuitBreaker``）。"""
+        return self._health.is_tripped(name)
 
     @property
     def tripped_tools(self) -> List[str]:
         """当前熔断中的工具名（排序快照，供 ToolHealthMonitor 遍历）。"""
-        return sorted(name for name, h in self._health.items() if h.tripped)
+        return self._health.tripped_tools
 
     def tool_health_snapshot(self) -> Dict[str, Dict[str, Any]]:
-        """返回对 Dashboard 有意义的工具健康快照。
-
-        仅包含熔断中或近期有失败的工具；其余工具按 "健康" 处理（Dashboard
-        按缺席键推断）。键为注册名，值包含 provider/state/failure_count/
-        last_error/tripped_at_ms 字段。
-        """
-        snapshot: Dict[str, Dict[str, Any]] = {}
-        for name, health in self._health.items():
-            if not health.tripped and health.consecutive_failures <= 0:
-                continue
-            spec = self._tools.get(name)
-            snapshot[name] = {
-                "provider": spec[0].provider if spec is not None else "",
-                "state": "tripped" if health.tripped else "healthy",
-                "failure_count": health.consecutive_failures,
-                "last_error": health.last_error,
-                "tripped_at_ms": health.tripped_at_ms,
-            }
-        return snapshot
+        """返回对 Dashboard 有意义的工具健康快照（熔断器状态委托）。"""
+        return self._health.tool_health_snapshot()
 
     def recover_tool(self, name: str) -> bool:
-        """手动/探活通过时复位熔断器；返回是否真做了恢复动作。
-
-        同步语义：状态在调用瞬间翻转；``tool.health.<name>`` 切换事件通过
-        ``asyncio.create_task`` 后台调度（调用方在 async 上下文时生效，
-        无运行循环时静默丢弃——此情形下事件消费方也不会启动）。
-        """
-        health = self._health.get(name)
-        if health is None or not health.tripped:
-            return False
-        health.consecutive_failures = 0
-        health.tripped = False
-        health.tripped_at_ms = 0
-        health.last_error = ""
-        spec = self._tools.get(name)
-        provider_id = spec[0].provider if spec is not None else ""
-        logger.info(f"工具 '{name}' 已恢复可用（探活通过）")
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # 无运行循环：事件总线也无法调度；状态已翻转即可
-            return True
-        loop.create_task(
-            self._emit_tool_health(
-                name,
-                provider_id,
-                state="closed",
-                failure_count=0,
-                last_error="",
-            )
-        )
-        return True
+        """手动/探活通过时复位熔断器；返回是否真做了恢复动作（委托熔断器）。"""
+        return self._health.recover(name)
 
     async def probe_tool(self, tool_name: str) -> bool:
         """对指定工具调用其所属 provider 的 ``health_check``。

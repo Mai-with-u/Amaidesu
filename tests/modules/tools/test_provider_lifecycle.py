@@ -8,7 +8,7 @@ import pytest
 
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
-from src.modules.tools.registry import ToolRegistry, _ToolHealth
+from src.modules.tools.registry import ToolRegistry
 
 
 class _Minimal(BaseToolProvider):
@@ -83,8 +83,13 @@ def registry() -> ToolRegistry:
     return ToolRegistry()
 
 
-def _tripped() -> _ToolHealth:
-    return _ToolHealth(consecutive_failures=3, tripped=True, tripped_at_ms=1, last_error="boom")
+def _force_tripped(registry: ToolRegistry, name: str) -> None:
+    """直接在熔断器上标记工具为熔断态（极早 tripped_at_ms，保证已超最短驻留）。"""
+    state = registry._health.state(name)
+    state.consecutive_failures = 3
+    state.tripped = True
+    state.tripped_at_ms = 1
+    state.last_error = "boom"
 
 
 # 连接动作契约
@@ -154,8 +159,8 @@ async def test_reconnect_success_classifies_tripped_tools_by_probe(registry: Too
     provider = _Connectable()
     provider.tool_names = ["a", "a_fail"]  # 重连刷新换血后两者都存续，熔断历史不因刷新洗白
     registry.register_provider(provider)
-    registry._health["conn_a"] = _tripped()
-    registry._health["conn_a_fail"] = _tripped()
+    for _name in ("conn_a", "conn_a_fail"):
+        _force_tripped(registry, _name)
     results = iter([True, False])  # 按工具顺序探活：先通过后失败
 
     async def probe() -> bool:
@@ -230,8 +235,8 @@ def test_refresh_rederives_visibility_and_keeps_persisting_tripped_state(registr
         return {s.full_name: ["minecraft"] for s in specs}
 
     registry.register_provider(provider, visible_to=policy)
-    registry._health["mprov_a"] = _tripped()
-    registry._health["mprov_gone"] = _tripped()
+    for _name in ("mprov_a", "mprov_gone"):
+        _force_tripped(registry, _name)
 
     provider.tool_names = ["a", "new_tool"]
     report = registry.refresh_provider_tools(provider)

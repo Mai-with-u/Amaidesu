@@ -69,7 +69,7 @@ class _Provider(BaseToolProvider):
 
 
 def _force_trip(registry: ToolRegistry, name: str) -> None:
-    health = registry._ensure_health(name)
+    health = registry._health.state(name)
     health.consecutive_failures = 1
     health.tripped = True
     health.tripped_at_ms = 0  # 极早熔断，保证已超过最短驻留

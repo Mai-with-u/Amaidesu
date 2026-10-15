@@ -40,7 +40,7 @@ bind_core_tools(registry, config=...)  # L2 Provider 注入
 """
 
 from src.modules.tools.bootstrap import bind_core_tools
-from src.modules.tools.health import ToolHealthMonitor
+from src.modules.tools.tool_health_monitor import ToolHealthMonitor
 from src.modules.tools.tasks import TaskLedger, TaskTracker, resolve_tasks_config
 from src.modules.tools.models import (
     ResultBlock,
