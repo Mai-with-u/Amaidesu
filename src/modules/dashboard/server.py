@@ -25,6 +25,7 @@ from src.modules.dashboard.vite_dev import ViteDevServer
 from src.modules.dashboard.widget import DanmakuWidgetService, Game2048WidgetService
 from src.modules.dashboard.widget.models import DanmakuWidgetConfig, SubtitleWidgetConfig
 from src.modules.dashboard.widget.routes import WidgetGateway, create_widget_router
+from src.modules.llm.quota import ProviderQuotaService
 from src.modules.logging import get_logger
 from src.modules.logging.log_streamer import LogStreamer
 
@@ -104,6 +105,11 @@ class DashboardServer:
         )
         self.tool_registry = tool_registry
         self.llm_manager = llm_manager
+        # 平台额度查询（上下文面板 Usage 区）按模型反查 provider 配置，依附 LLMManager；
+        # 未注入（极简启动/测试）时 /llm/quota 恒返回 null
+        self.provider_quota: Optional[ProviderQuotaService] = (
+            ProviderQuotaService(llm_manager) if llm_manager is not None else None
+        )
         self.prompt_manager = prompt_manager
         self.config_service = config_service
         # 注入 SimulatorService 让 `/api/v1/simulator/*` 控制面可用。

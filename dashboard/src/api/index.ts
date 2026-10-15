@@ -31,6 +31,7 @@ import type {
   TtsStatusResponse,
   ConfigUpdateResponse,
   LLMContextBreakdown,
+  LLMProviderQuota,
   LLMUsageStats,
   LLMUsageSummary,
   LLMUsageTrendsResponse,
@@ -145,6 +146,9 @@ export const llmApi = {
   // 按请求 ID 取单次调用的分段占用（时间线决策卡水位胶囊悬停明细）；无分段返回 null
   getContextBreakdownByRequest: (requestId: string) =>
     api.get<LLMContextBreakdown | null>(`/llm/context-breakdown/${encodeURIComponent(requestId)}`),
+  // 模型所属平台的余额 / 套餐额度（上下文面板 Usage 区）；平台不支持或查询失败返回 null
+  getProviderQuota: (modelName: string) =>
+    api.get<LLMProviderQuota | null>('/llm/quota', { params: { model_name: modelName } }),
   getUsageSummary: () => api.get<LLMUsageSummary>('/llm/usage/summary'),
   getUsageTrends: (days: number) =>
     api.get<LLMUsageTrendsResponse>('/llm/usage/trends', { params: { days } }),

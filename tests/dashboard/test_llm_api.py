@@ -628,3 +628,38 @@ def test_context_breakdown_by_request_threads_window(client_with_context_window:
     body = client_with_context_window.get("/api/v1/llm/context-breakdown/cbrw-1").json()
     assert body["context_window"] == 128_000
     assert body["free_tokens"] == 118_000
+
+
+# === /quota：上下文面板 Usage 区数据源 ===
+
+
+def test_quota_returns_null_without_llm_manager(client: TestClient) -> None:
+    """未注入 LLMManager 时额度服务不装配，端点返回 null（前端隐藏 Usage 区）而非报错。"""
+    resp = client.get("/api/v1/llm/quota", params={"model_name": MODEL_A})
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+
+def test_quota_passes_model_identifier_with_slash(client: TestClient) -> None:
+    """模型标识走查询参数，OpenRouter 式带斜杠的标识原样到达额度服务。"""
+    from src.modules.llm.quota import ProviderQuota, QuotaWindow
+
+    received = []
+
+    class _StubQuotaService:
+        async def get_quota_for_model(self, model_identifier: str) -> ProviderQuota:
+            received.append(model_identifier)
+            return ProviderQuota(
+                provider_name="or",
+                platform="openrouter",
+                platform_label="OpenRouter",
+                plan_label="Pay-as-you-go",
+                windows=[QuotaWindow(kind="balance", label="Credits", amount=12.5, currency="USD")],
+                fetched_at_ms=1_700_000_000_000,
+            )
+
+    _server_ref_cache["server"].provider_quota = _StubQuotaService()
+    body = client.get("/api/v1/llm/quota", params={"model_name": "anthropic/claude-sonnet"}).json()
+    assert received == ["anthropic/claude-sonnet"]
+    assert body["platform"] == "openrouter"
+    assert body["windows"][0]["amount"] == 12.5

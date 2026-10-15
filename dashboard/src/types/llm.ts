@@ -112,6 +112,31 @@ export interface LLMContextBreakdown {
   free_tokens: number | null;
 }
 
+/** 一条平台额度：套餐限额窗口（limit）或账户余额（balance） */
+export interface LLMQuotaWindow {
+  kind: 'limit' | 'balance';
+  /** 展示名（Session / Weekly / Balance / Credits ...） */
+  label: string;
+  /** 已用百分比 0-100；平台未给出时 null（不画进度条） */
+  used_percent: number | null;
+  /** 下次重置时刻（Unix 毫秒）；无重置周期时 null */
+  resets_at_ms: number | null;
+  /** 剩余金额（余额类）；限额窗口为 null */
+  amount: number | null;
+  currency: string | null;
+}
+
+/** 模型所属 provider 的平台额度快照（上下文面板 Usage 区） */
+export interface LLMProviderQuota {
+  provider_name: string;
+  platform: string;
+  platform_label: string;
+  /** 计费方式（Token Plan / Pay-as-you-go / ...） */
+  plan_label: string;
+  windows: LLMQuotaWindow[];
+  fetched_at_ms: number;
+}
+
 // Token 用量详情
 export interface LLMTokenUsage {
   prompt_tokens: number;

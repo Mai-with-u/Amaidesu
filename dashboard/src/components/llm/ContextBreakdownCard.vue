@@ -1,7 +1,8 @@
 <!--
   ContextBreakdownCard - 上下文窗口占用面板（版式对齐 Claude Desktop 的 Context window 面板）
   头部总水位 → 分段堆叠细条 → 分段行（色块 / 名称 / token / 占比）→ 剩余空间 →
-  可折叠明细组（MCP 工具、内置工具、技能、对话消息逐项 token）。
+  可折叠明细组（MCP 工具、内置工具、技能、对话消息逐项 token）→
+  用量区（模型所属平台的余额或套餐限额，平台查不到时整块隐藏）。
   数据口径见 src/modules/llm/context_meter.py：总数以 API 回报为准，分段为校准后估算。
 -->
 <template>
@@ -95,6 +96,28 @@
           breakdown.calibrated ? '' : ' · 上游未回报总量，展示原始估算'
         }}
       </div>
+
+      <!-- 用量区：平台能查到余额或套餐额度时才出现，版式对齐 Claude 面板底部的用量限额 -->
+      <section v-if="quota && quota.windows.length > 0" class="cbc-usage">
+        <div class="cbc-usage-head">
+          <span class="cbc-title">Usage</span>
+          <span class="cbc-usage-plan">{{ quota.platform_label }} · {{ quota.plan_label }}</span>
+        </div>
+        <div v-for="entry in quota.windows" :key="entry.label" class="cbc-quota">
+          <div class="cbc-quota-line">
+            <span class="cbc-name">{{ entry.label }}</span>
+            <span class="cbc-quota-meta">{{ quotaMeta(entry) }}</span>
+            <span class="cbc-quota-value">{{ quotaValue(entry) }}</span>
+          </div>
+          <div v-if="entry.used_percent !== null" class="cbc-quota-track">
+            <div
+              class="cbc-quota-fill"
+              :class="`is-${quotaLevel(entry.used_percent)}`"
+              :style="{ width: `${entry.used_percent}%` }"
+            ></div>
+          </div>
+        </div>
+      </section>
     </template>
     <div v-else class="cbc-empty">
       {{ loading ? '加载中…' : '暂无上下文分段数据（需一次成功调用后生成）' }}
@@ -104,7 +127,10 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { LLMContextBreakdown, LLMContextSection } from '@/types';
+import type { LLMContextBreakdown, LLMContextSection, LLMQuotaWindow } from '@/types';
+import { useNowTick } from '@/composables/useNowTick';
+import { useProviderQuota } from '@/composables/useProviderQuota';
+import { formatQuotaAmount, formatResetIn, quotaLevel } from '@/utils/providerQuota';
 
 /**
  * 分段展示名与配色（顺序即行序，与 Claude Desktop 面板一致）。
@@ -134,6 +160,10 @@ const props = defineProps<{
 const expanded = ref<Set<string>>(new Set());
 /** 鼠标所在的分段（含 free），用于在分段条上高亮对应色块 */
 const hoverKey = ref<string | null>(null);
+/** 面板对应模型所属平台的额度；平台不支持或查询失败为 null，用量区随之隐藏 */
+const quota = useProviderQuota(computed(() => props.breakdown?.model_name));
+/** 驱动重置倒计时逐秒刷新 */
+const now = useNowTick();
 watch(
   () => props.breakdown?.model_name,
   () => {
@@ -217,6 +247,24 @@ function shortNumber(value: number): string {
   return scaled.replace('.0', '');
 }
 
+/** 用量行中间的次要信息：限额窗口写重置倒计时，带总额的余额写已用比例 */
+function quotaMeta(entry: LLMQuotaWindow): string {
+  if (entry.kind === 'limit') {
+    if (entry.resets_at_ms === null) return '';
+    const left = formatResetIn(entry.resets_at_ms, now.value);
+    return left === 'soon' ? 'Resets soon' : `Resets in ${left}`;
+  }
+  return entry.used_percent !== null ? `${Math.round(entry.used_percent)}% used` : '';
+}
+
+/** 用量行右侧的主数值：限额窗口写已用百分比，余额写剩余金额 */
+function quotaValue(entry: LLMQuotaWindow): string {
+  if (entry.kind === 'balance') {
+    return entry.amount !== null ? formatQuotaAmount(entry.amount, entry.currency) : '—';
+  }
+  return entry.used_percent !== null ? `${Math.round(entry.used_percent)}%` : '—';
+}
+
 function percentText(tokens: number): string {
   const window = props.breakdown?.context_window ?? 0;
   if (window <= 0 || !Number.isFinite(tokens)) {
@@ -227,9 +275,16 @@ function percentText(tokens: number): string {
 </script>
 
 <style scoped>
+/* 容器内边距接住两类"伸出"，再用等量负外边距抵消，版面位置不变：
+   - 两侧 6px：行悬停底色用 -6px 外边距伸出文字两侧；
+   - 底部 4px：末块用量区的上浮动画起点在下方 4px。
+   否则它们超出容器，overflow-y:auto 会闪出横向或纵向滚动条；
+   内容真超过 70vh 时的纵向滚动条照常保留 */
 .cbc {
   --cbc-free-color: var(--el-fill-color-darker);
   max-height: 70vh;
+  margin: 0 -6px -4px;
+  padding: 0 6px 4px;
   overflow-y: auto;
   font-size: 13px;
   line-height: 1.5;
@@ -464,6 +519,76 @@ function percentText(tokens: number): string {
   border-top: 1px solid var(--el-border-color-lighter);
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+/* 用量区：与上方脚注同样用细线分隔，随面板一起上浮淡入 */
+.cbc-usage {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  animation: cbc-rise-in 0.32s var(--ease-out) 0.24s backwards;
+}
+
+.cbc-usage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.cbc-usage-plan,
+.cbc-quota-meta {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cbc-quota + .cbc-quota {
+  margin-top: 8px;
+}
+
+.cbc-quota-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.cbc-quota-meta {
+  font-variant-numeric: tabular-nums;
+}
+
+.cbc-quota-value {
+  min-width: 48px;
+  flex: none;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* 用量条：底色同"剩余空间"，弹出时与分段条同款从左向右展开 */
+.cbc-quota-track {
+  height: 6px;
+  margin-top: 4px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--cbc-free-color);
+}
+
+.cbc-quota-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--el-color-primary);
+  transition: width 0.5s var(--ease-out);
+  animation: cbc-bar-reveal 0.6s var(--ease-out);
+}
+
+.cbc-quota-fill.is-warning {
+  background: var(--el-color-warning);
+}
+
+.cbc-quota-fill.is-danger {
+  background: var(--el-color-danger);
 }
 
 .cbc-empty {

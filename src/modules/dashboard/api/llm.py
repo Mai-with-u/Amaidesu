@@ -32,6 +32,7 @@ from src.modules.diagnostics.readers import (
     read_llm_request_payload,
     read_request_breakdown,
 )
+from src.modules.llm.quota import ProviderQuota
 from src.modules.llm.request_history_manager import get_global_request_history_manager
 
 if TYPE_CHECKING:
@@ -202,6 +203,22 @@ async def get_context_breakdown_by_request(request_id: str, server: ServerDep) -
     return _assemble_breakdown_response(
         breakdown, model_name=model_name, row=row, context_windows=_context_windows_of(server)
     )
+
+
+@router.get("/quota", response_model=Optional[ProviderQuota])
+async def get_provider_quota(
+    server: ServerDep,
+    model_name: Annotated[str, Query(min_length=1, description="API 模型标识（与用量统计的 model_name 同口径）")],
+) -> Optional[ProviderQuota]:
+    """模型所属 provider 的平台额度（上下文面板 Usage 区数据源）。
+
+    模型标识走查询参数而非路径段：OpenRouter 等平台的标识含斜杠。平台不支持、
+    未配置 Key、查询失败或未注入 LLMManager 时一律返回 null，前端隐藏 Usage 区。
+    """
+    service = server.provider_quota
+    if service is None:
+        return None
+    return await service.get_quota_for_model(model_name)
 
 
 @router.get("/usage/trends", response_model=LLMUsageTrendsResponse)
