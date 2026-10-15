@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import time
 from pathlib import Path
@@ -98,6 +99,42 @@ def test_self_write_marks_are_one_shot_expire_and_only_cover_the_written_file(co
     assert consume_self_write(config_dir / "agents.toml") is True
     assert consume_self_write(config_dir / "agents.toml") is False
     assert consume_self_write(config_dir / "infra.toml") is False
+
+
+def _remove_section(config_dir: Path, file_name: str, section: str) -> None:
+    path = config_dir / file_name
+    content = re.sub(rf"\[{section}\].*?(?=\n\[|\Z)", "", path.read_text(encoding="utf-8-sig"), flags=re.S)
+    path.write_text(content, encoding="utf-8-sig")
+
+
+def test_missing_files_are_regenerated_and_a_missing_section_is_refilled_after_one_backup(config_dir) -> None:
+    generate_default_configs(config_dir)
+    names = {path.name for path in config_dir.glob("*.toml")}
+    for name in names - {"agents.toml"}:
+        (config_dir / name).unlink()
+    load_config_dir(config_dir)
+    assert {path.name for path in config_dir.glob("*.toml")} == names  # 缺失文件自动补齐
+
+    _remove_section(config_dir, "infra.toml", "events")
+    load_config_dir(config_dir)
+    assert "[events]" in (config_dir / "infra.toml").read_text(encoding="utf-8-sig")
+    backups = [path for path in (config_dir / "old").iterdir() if (path / "infra.toml").exists()]
+    assert len(backups) == 1  # 漂移触发的写回先备份原文件
+
+
+def test_legacy_agenda_keys_without_a_migration_hook_hard_fail_naming_the_hook_gap(config_dir) -> None:
+    """agenda_* → rundown_* 迁移若配了钩子会先行搬走旧键；这里锁定"忘配钩子"的兜底：当面拦下而非静默清理。"""
+    generate_default_configs(config_dir)
+    _remove_section(config_dir, "agents.toml", "agents.streamer")
+    _append(
+        config_dir,
+        "agents.toml",
+        '\n[agents.streamer]\nagenda_enabled = true\nagenda_path = "config/agenda/live.toml"\n',
+    )
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_config_dir(config_dir)
+    assert "agenda_enabled" in str(exc_info.value) and "迁移钩子" in str(exc_info.value)
 
 
 @pytest.mark.parametrize(
