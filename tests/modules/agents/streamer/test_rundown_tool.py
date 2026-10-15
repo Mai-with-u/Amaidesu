@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict
+
+import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -169,3 +171,30 @@ def test_renew_resets_the_segment_timer_and_is_rejected_after_completion() -> No
         _call(provider, action="next")
     done = _call(provider, action="renew")
     assert (done["ok"], done["reason"]) == (False, "already_done")
+
+
+def _rundown_with_blank_title() -> Rundown:
+    """中段标题全空白的流程单（编辑器漏填的脏数据形态）。"""
+    return Rundown(
+        rundown_id="blank_rd",
+        title="空标题流程单",
+        segments=[
+            RundownSegment(id="a", title="开场", task_description="目标", expected_ms=60_000),
+            RundownSegment(id="b", title="   ", task_description="目标", expected_ms=60_000),
+        ],
+    )
+
+
+@pytest.mark.parametrize("action", ["next", "goto"])
+def test_invoke_blank_title_target_rejected(action: str) -> None:
+    """切换到标题为空/全空白的目标环节被工具校验拒绝（不发 rundown.changed）。"""
+    provider, _clock = _provider(_rundown_with_blank_title())
+    emitted: list[Any] = []
+    provider._state._emit = lambda name, payload: emitted.append(payload)
+
+    result = _call(provider, action=action, segment_id="b")
+
+    assert result["ok"] is False
+    assert "标题" in result["error"]
+    assert emitted == []
+    assert provider._state.get_snapshot()["current"]["id"] == "a"

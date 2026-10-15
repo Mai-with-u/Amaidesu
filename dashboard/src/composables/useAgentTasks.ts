@@ -8,7 +8,7 @@
  * 且回填失败）账面就会停在旧快照，故另有轻量轮询兜底追平。硬取消走 agents
  * REST。确认框等交互语义归页面层，本组合式只管数据。
  */
-import { computed, onScopeDispose, ref, watch, type Ref } from 'vue';
+import { computed, onActivated, onDeactivated, onScopeDispose, ref, watch, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { agentsApi, tasksApi } from '@/api';
@@ -76,9 +76,22 @@ export function useAgentTasks(target: Ref<string | null>) {
     { immediate: true },
   );
 
-  // 轮询兜底：task.changed 只在状态跃迁时发射，稳态运行期无事件可依赖
-  const pollTimer = setInterval(() => void refresh(true), POLL_INTERVAL_MS);
-  onScopeDispose(() => clearInterval(pollTimer));
+  // 轮询兜底：task.changed 只在状态跃迁时发射，稳态运行期无事件可依赖。
+  // 消费方多在全局 keep-alive 内，scope 永不 dispose——激活态启停 + 销毁兜底
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+  const startPolling = (): void => {
+    if (pollTimer !== undefined) return;
+    pollTimer = setInterval(() => void refresh(true), POLL_INTERVAL_MS);
+  };
+  const stopPolling = (): void => {
+    if (pollTimer === undefined) return;
+    clearInterval(pollTimer);
+    pollTimer = undefined;
+  };
+  startPolling();
+  onActivated(startPolling);
+  onDeactivated(stopPolling);
+  onScopeDispose(stopPolling);
 
   /** 硬取消：清追踪 + 账面 cancelled + 通知停手；成败都刷新账面 */
   async function cancelTask(taskId: string): Promise<void> {

@@ -258,6 +258,85 @@ async def test_planner_sees_what_it_is_doing_in_game_until_reported() -> None:
         assert phrase in references[-1]
 
 
+def test_planner_prompt_keeps_viewer_method_and_relays_instead_of_redelegating() -> None:
+    """Planner 守则：我拿主意并写成完整决定，观众的具体说法用「」逐字引用；手头的事没做完时补充不换目标；
+    观众给的做法默认采纳，不用早先判断否定；物品名不翻译。"""
+    reset_prompt_manager()
+    try:
+        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+    finally:
+        reset_prompt_manager()
+    assert "手头的事没做完时补充，不换目标" in prompt and "framework_prompt" in prompt
+    assert "观众给的做法默认采纳去试" in prompt and "不要用你自己或早先游戏叙事里的判断否定它" in prompt
+    assert "我拿主意，写成完整的决定" in prompt and "用「」逐字写进去" in prompt
+    assert "「蜂蜜胶」不是「蜂蜜块」" in prompt and "做什么以我的决定为准" in prompt
+
+
+def test_streamer_prompts_speak_as_one_streamer() -> None:
+    """一体化自我认知：决策和表达都把游戏里的动作当成自己做的，不对观众说"派下去了"。
+
+    实测主播常说"活已经派下去了"，观众会疑惑派给了谁。
+    """
+    reset_prompt_manager()
+    try:
+        manager = get_prompt_manager()
+        planner = manager.render("amaidesu_planner_react", behavior_style="积极互动")
+        replyer = manager.render(
+            "amaidesu_replyer_system",
+            bot_name="麦麦",
+            personality="活泼",
+            style_constraints="",
+            audience_salutation="大家",
+        )
+    finally:
+        reset_prompt_manager()
+    # 决策侧是房管（第三方视角），表达侧仍是主播本人第一人称：身份分离契约
+    assert "# 你与主播的关系" in planner and "房管（运营）" in planner and "不替主播发言" in planner
+    assert "没有小伙伴、没有游戏 Agent" in planner and "【我手头在游戏里做的事】" in planner
+    assert "你就是" not in planner and "【身体" not in planner
+    assert "游戏里干活的就是你自己" in replyer and "活已经派下去了" in replyer
+
+
+def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
+    """发言交接契约：topic_summary/reply_guidance 是任务书不是台词草稿——客观状态 + 纯方向意图 + 正误对照在场。
+
+    实测虚构剧情根因：planner 以主播身份写出带腔调的台词草稿，replyer 退化为扩写草稿。
+    """
+    reset_prompt_manager()
+    try:
+        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+    finally:
+        reset_prompt_manager()
+    assert "发言交接契约" in prompt and "任务书" in prompt and "不是台词草稿" in prompt
+    assert "可核对的客观状态陈述" in prompt and "禁止第一人称叙事" in prompt
+    assert "纯方向意图" in prompt and "情绪已由 `reply` 的 emotion / intensity" in prompt
+    assert "错误示范" in prompt and "正确示范" in prompt
+
+
+def test_planner_prompt_only_reports_progress_with_evidence() -> None:
+    """进展只说有凭据的：实测游戏侧每次执行都被拒，主播却说"机器在嗡嗡响、蜂蜜胶在冒出来"。"""
+    reset_prompt_manager()
+    try:
+        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+    finally:
+        reset_prompt_manager()
+    assert "进展只说有凭据的" in prompt and '让主播说"还在弄"' in prompt
+    assert '"已经拿到"这类没凭据的细节' in prompt and "想讲具体进度就先查" in prompt
+
+
+def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
+    """游戏里的聊天是游戏世界里的人在说话：开口他们听不到，要回就在游戏里打字；不带额外授权。"""
+    reset_prompt_manager()
+    try:
+        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动")
+    finally:
+        reset_prompt_manager()
+    assert "【游戏里的聊天】是游戏里的人在说话" in prompt and "主播开口说话他们听不到" in prompt
+    assert "安排主播在游戏里打字回一句" in prompt
+    assert "不带额外授权" in prompt and "【游戏里的聊天】每条行首" in prompt
+
+
+@pytest.mark.asyncio
 async def test_planner_reference_shows_game_chat_block() -> None:
     """游戏聊天单独成段进参考块，主动窗情境说明不再只写冷场/定时。"""
     planner = _planner()
@@ -281,19 +360,19 @@ _PLANNER_PROMPT_RULES = [
     "「蜂蜜胶」不是「蜂蜜块」",
     "做什么以我的决定为准",
     # 一体化自我认知：游戏里的动作就是自己做的
-    "# 你是谁",
-    "只有一个你",
+    "# 你与主播的关系",
+    "观众看到的只有她一个人",
     "没有小伙伴、没有游戏 Agent",
     "【我手头在游戏里做的事】",
     # 进展只说有凭据的（实测游戏侧执行全被拒，主播却说"蜂蜜胶在冒出来"）
     "进展只说有凭据的",
-    '就说"还在弄"',
+    '让主播说"还在弄"',
     '"已经拿到"这类没凭据的细节',
     "想讲具体进度就先查",
     # 游戏聊天是游戏世界里的人在说话：开口他们听不到，要回就在游戏里打字，不带额外授权
     "【游戏里的聊天】是游戏里的人在说话",
-    "我开口说话他们听不到",
-    "用 `framework_prompt` 让自己在游戏里打字回一句",
+    "主播开口说话他们听不到",
+    "用 `framework_prompt` 安排主播在游戏里打字回一句",
     "不带额外授权",
     "【游戏里的聊天】每条行首",
     "【现场速览】是本轮决策前自动读取的现场",

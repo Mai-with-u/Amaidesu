@@ -63,6 +63,16 @@
           <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
         </div>
 
+        <!-- 语音合成失败：安静单行错误样式（冷启动服务不可用等，运营者可见跳句原因） -->
+        <div v-else-if="entry.kind === 'tts'" class="whisper is-tts-failed">
+          <span class="whisper-dot" aria-hidden="true" />
+          <span class="whisper-text tts-failed-text">
+            {{ entry.note }}<template v-if="entry.text"> · 「{{ entry.text }}」</template>
+          </span>
+          <span class="grow" />
+          <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+        </div>
+
         <!-- 思考行：ReAct 各步/生成段思考流（视图层合成条目）。
              默认折叠只留单行预览，流式期间预览实时增长；展开看全文 -->
         <details v-else-if="entry.kind === 'thinking'" class="think">
@@ -1287,6 +1297,11 @@ async function copyText(text: string): Promise<void> {
 }
 .whisper-text.is-running {
   color: var(--color-agent);
+}
+
+/* 语音合成失败行：错误色突出，与安静单行区分 */
+.whisper.is-tts-failed .whisper-text {
+  color: var(--color-danger);
 }
 
 /* 决策记录：居左宽卡——本轮为什么这么做                            */

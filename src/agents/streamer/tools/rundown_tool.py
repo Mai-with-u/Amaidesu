@@ -18,12 +18,14 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from src.modules.logging import get_logger
 from src.modules.tools import ToolInvocation
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
+
+from src.modules.storage.models.rundown import RundownSegment
 
 from ..rundown.rundown_state import RundownState
 
@@ -104,17 +106,49 @@ class RundownControlProvider:
         self._state = state
         self._logger = get_logger("RundownControlTool")
 
+    def _blank_title_target(self, action: str, segment_id: str) -> bool:
+        """判断即将切入的目标环节标题是否为空/全空白（next 看下一段，goto 看目标段）。
+
+        其余动作或无目标（未加载 / 已到末段 / id 不存在）返回 ``False``——
+        那些情况由状态机的结构化拒绝负责，此处不越权。
+        """
+        rundown = self._state.rundown
+        if rundown is None:
+            return False
+        target: Optional[RundownSegment] = None
+        if action == "next":
+            next_idx = self._state.index + 1
+            if 0 <= next_idx < len(rundown.segments):
+                target = rundown.segments[next_idx]
+        elif action == "goto":
+            target = next((seg for seg in rundown.segments if seg.id == segment_id), None)
+        return target is not None and not target.title.strip()
+
     def invoke(self, args: Dict[str, Any]) -> str:
         """执行控制动作，返回观察 JSON 文本（成功与结构化拒绝都重新写入给 LLM）。"""
         action = str(args.get("action", "") or "")
         try:
             if action == "next":
+                segment_id = ""
+                if self._blank_title_target(action, segment_id):
+                    return json.dumps(
+                        {"ok": False, "error": "下一环节标题为空：环节必须提供标题，请先在流程单中补全标题再切换"},
+                        ensure_ascii=False,
+                    )
                 reject = self._state.next(by="agent")
             elif action == "goto":
                 segment_id = str(args.get("segment_id", "") or "")
                 if not segment_id:
                     return json.dumps(
                         {"ok": False, "error": "goto 需要 segment_id（可从情境注入的后续环节列表取得）"},
+                        ensure_ascii=False,
+                    )
+                if self._blank_title_target(action, segment_id):
+                    return json.dumps(
+                        {
+                            "ok": False,
+                            "error": f"目标环节 {segment_id!r} 标题为空：环节必须提供标题，请先在流程单中补全标题再切换",
+                        },
                         ensure_ascii=False,
                     )
                 reject = self._state.goto(segment_id, by="agent")

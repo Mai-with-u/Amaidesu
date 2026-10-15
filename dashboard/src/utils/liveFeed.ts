@@ -46,6 +46,7 @@ export type EntryKind =
   | 'verdict'
   | 'decision'
   | 'stage'
+  | 'tts'
   | 'boundary'
   | 'game'
   /** 递话受理（agent.prompted）：运营/跨 Agent 留言送达目标 */
@@ -210,7 +211,8 @@ export function agentGroupOf(entry: ShowEntry): AgentGroup {
     entry.kind === 'speech' ||
     entry.kind === 'decision' ||
     entry.kind === 'verdict' ||
-    entry.kind === 'stage'
+    entry.kind === 'stage' ||
+    entry.kind === 'tts'
   ) {
     return 'streamer';
   }
@@ -500,9 +502,25 @@ function fromRundown(event: FeedEvent, data: Record<string, unknown>): ShowEntry
     id: event.id,
     kind: 'rundown',
     tsMs: event.timestamp_ms,
-    text: str(data.segment_title) || (finished ? '流程单完成' : '环节切换'),
+    text: str(data.segment_title) || (finished ? '流程单完成' : '（未命名环节）'),
     note: finished ? '' : index != null && total != null ? `环节 ${index}/${total}` : '',
     badge: by === 'human' ? '手动' : by === 'system' ? '系统' : 'Agent',
+  });
+}
+
+/** 语音合成失败：tts.utterance.failed（UtteranceFailedPayload）。
+ *  运营者据此看懂主播"静默跳句"的原因（冷启动服务未启动等）；不改后端放弃语义 */
+function fromTtsFailed(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  const error = str(data.error_message) || '原因未知';
+  return makeEntry({
+    id: event.id,
+    kind: 'tts',
+    tsMs: event.timestamp_ms,
+    actor: '主播',
+    text: str(data.speech_text),
+    note: `语音合成失败：${error}`,
+    badge: '合成失败',
+    failed: true,
   });
 }
 
@@ -597,6 +615,7 @@ export function toEntry(event: FeedEvent): ShowEntry | null {
     return fromLiveBoundary(event, data);
   if (event.type.startsWith('tool.result.')) return fromToolResult(event, data);
   if (event.type === 'rundown.changed') return fromRundown(event, data);
+  if (event.type === 'tts.utterance.failed') return fromTtsFailed(event, data);
   // game.milestone 旧路径由 LiveObserver 本地处理；其他 game.*（report/attention_required/error）统一走 toGameEntry
   if (event.type === 'game.milestone') return fromMilestone(event, data);
   if (

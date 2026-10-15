@@ -130,8 +130,8 @@ describe('rundown.changed', () => {
     ).toBe('切换到 闲聊环节');
   });
 
-  it('无信息回退事件 type', () => {
-    expect(summarizeEvent('rundown.changed', {})).toBe('rundown.changed');
+  it('空标题回退未命名环节文案', () => {
+    expect(summarizeEvent('rundown.changed', { index: 1, total: 3 })).toBe('切换到（未命名环节）');
   });
 });
 

@@ -1,6 +1,6 @@
 ---
 name: amaidesu_replyer
-version: "4.2"
+version: "4.4"
 description: "复古表达输入：历史与新弹幕合并在同一段聊天记录中，模型只输出台词。"
 variables:
   - plan
@@ -8,6 +8,7 @@ variables:
   - game_chat
   - rundown
   - dialogue_prompt
+  - state_facts
   - bot_name
   - style_constraints
 author: Amaidesu
@@ -22,13 +23,17 @@ $dialogue_prompt
 
 $game_chat
 
+## 当前状态（客观事实）
+
+$state_facts
+
 ## 当前流程单环节
 
 $rundown
 
 ## 本次回复要求
 
-上游 Planner 已决定本轮需要发言，请按以下话题和指引组织台词。
+上游 Planner 已决定本轮需要发言，请按以下话题和指引组织台词。话题与指引是任务书（方向与事实），不是台词草稿——从你的人设与下方材料**从零创作**，禁止逐句扩写；指引视情况采纳，不必完全遵守。
 target 原文是要回应的那条消息；没有特定目标时，面向全体观众。
 $plan
 

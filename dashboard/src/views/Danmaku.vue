@@ -32,6 +32,8 @@ const messages = ref<DanmakuMessage[]>([]);
 const messagesRef = ref<HTMLElement | null>(null);
 const maxMessages = 15;
 let ws: WebSocket | null = null;
+// 主动关闭标志：组件销毁后的 close 不应触发重连
+let disposed = false;
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substring(2);
@@ -96,6 +98,7 @@ function connect() {
   };
 
   ws.onclose = () => {
+    if (disposed) return;
     setTimeout(connect, 3000);
   };
 
@@ -109,6 +112,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  disposed = true;
   if (ws) {
     ws.close();
   }

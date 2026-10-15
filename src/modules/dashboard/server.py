@@ -353,6 +353,11 @@ class DashboardServer:
                 pass
             self._heartbeat_task = None
 
+        # 先排干全部 WS 客户端 writer task，再让 uvicorn 优雅关闭：
+        # 否则连接被 uvicorn 关闭后残留 writer 仍可能 send，报"connection is closing"
+        if self.ws_handler is not None:
+            await self.ws_handler.shutdown()
+
         if self._server:
             # 优雅关闭：should_exit 让 main_loop 正常退出并触发 uvicorn shutdown，
             # 释放监听 socket（直接 cancel 会跳过 shutdown，端口残留占用）

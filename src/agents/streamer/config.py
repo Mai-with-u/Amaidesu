@@ -83,7 +83,7 @@ class StreamerPersonaConfig(BaseConfig):
     )
     style_constraints: str = Field(
         title="说话风格约束",
-        default="口语化，使用网络流行语，避免机械式回复，适当使用emoji",
+        default="口语化，使用网络流行语，避免机械式回复",
         description="说话风格约束（注入 Replyer 表达侧）",
     )
     behavior_style: str = Field(

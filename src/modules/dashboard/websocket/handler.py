@@ -100,6 +100,15 @@ class WebSocketHandler:
 
         logger.info(f"WebSocket 客户端断开: {client_id}，当前连接数: {self.client_count}")
 
+    async def shutdown(self) -> None:
+        """服务停机：排干全部客户端 writer task 并清空注册表。
+
+        必须先于 uvicorn 优雅关闭执行——否则 uvicorn 关闭连接后残留的
+        writer task 仍可能尝试 send，报"connection is closing"。
+        """
+        for client_id in list(self._writer_tasks.keys()):
+            await self.disconnect(client_id)
+
     async def handle_message(self, client_id: str, message: str) -> None:
         """处理客户端消息"""
         try:

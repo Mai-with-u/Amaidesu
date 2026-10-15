@@ -138,6 +138,8 @@ class ReplyToolProvider(BaseToolProvider):
         # 本窗新到的游戏聊天原话（Planner 在 reply 调用前设置、调用后清理）：玩家在游戏里搭话
         # 促发的一轮弹幕批是空的，没有它表达侧只能看到转述，会当成冷场自言自语
         self._round_game_chat: List[str] = []
+        # 本窗状态跃迁事实块（Planner 在 reply 调用前设置、调用后清理）：表达侧的客观事实底稿
+        self._round_state_facts: str = ""
         # 可选 EventBus：reply 调用入口发布 planner.verdict（裁决时刻即时事实）
         self._event_bus = event_bus
         self._logger = get_logger("ReplyTool")
@@ -153,6 +155,10 @@ class ReplyToolProvider(BaseToolProvider):
     def set_round_game_chat(self, lines: Optional[List[str]]) -> None:
         """设置/清理本窗新到的游戏聊天原话（Planner 每轮一次性注入；None 即清空）。"""
         self._round_game_chat = list(lines or [])
+
+    def set_round_state_facts(self, text: Optional[str]) -> None:
+        """设置/清理本窗状态跃迁事实块（Planner 每轮一次性注入；None 即清空）。"""
+        self._round_state_facts = str(text or "")
 
     async def _emit_verdict(self, args: Dict[str, Any], round_id: str) -> None:
         """发布 ``planner.verdict``（裁决时刻即时事实；观测旁路，失败不阻断）。
@@ -291,6 +297,7 @@ class ReplyToolProvider(BaseToolProvider):
                 rundown=rundown,
                 on_delta=thinking_callback,
                 game_chat=list(self._round_game_chat),
+                state_facts=self._round_state_facts,
             )
         except Exception as exc:
             self._logger.exception(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}")

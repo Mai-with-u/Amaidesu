@@ -41,6 +41,7 @@ from src.modules.events.payloads import (
     StreamerStagePayload,
     TaskChangedPayload,
     ToolHealthPayload,
+    UtteranceFailedPayload,
     ToolResultPayload,
 )
 from src.modules.events.payloads.base import BasePayload
@@ -138,6 +139,8 @@ class EventBroadcaster:
         CoreEvents.AGENT_REPLIED: (None, AgentRepliedPayload),
         # LLM 调用上下文水位（监控面板分段明细的实时刷新源）
         CoreEvents.LLM_CONTEXT_USED: (None, LLMContextUsedPayload),
+        # TTS 发声失败（冷启动服务不可用等）：运营者要在时间线看到"静默跳句"的原因
+        CoreEvents.TTS_UTTERANCE_FAILED: (None, UtteranceFailedPayload),
         CoreEvents.TOOL_RESULT_WILDCARD: (None, ToolResultPayload),
         CoreEvents.TOOL_HEALTH_WILDCARD: (None, ToolHealthPayload),
         CoreEvents.CORE_STARTUP: (None, CoreStartupPayload),
