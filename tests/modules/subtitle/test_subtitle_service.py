@@ -1,240 +1,134 @@
-"""测试 SubtitleService - 多 Backend 并行广播 + 故障隔离 + 幂等生命周期
-
-覆盖：
-
-- ``show`` 广播到全部已注册 Backend
-- ``clear`` 广播到全部已注册 Backend
-- 单 Backend 抛异常不影响其他 Backend（其他后端仍被调用）
-- 无 Backend 时 ``show`` / ``clear`` 不抛错
-- ``start`` / ``stop`` 幂等（重复调用早退，不炸）
-- ``is_running`` / ``backend_count`` 诊断属性
-- ``backend_diagnostics`` 后端诊断清单（name + enabled，缺失成员按 True 兜底）
-- ``register_backend`` 追加行为（多次注册累加）
-"""
+"""SubtitleService（多后端并行广播、故障隔离、幂等生命周期、诊断清单）与 build_subtitle_infrastructure 装配入口"""
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Optional
+from unittest.mock import patch
 
-from src.modules.subtitle import SubtitleBackend, SubtitleService
+import pytest
 
-# 测试用假后端：记录所有调用 + 可配置抛错
+from src.modules.subtitle import SubtitleBackend, SubtitleService, TkGuiBackend, build_subtitle_infrastructure
+from src.modules.subtitle.backends.tk_gui_service import SubtitleGuiService
 
 
-class _FakeBackend:
-    """满足 ``SubtitleBackend`` 协议的最小假后端。
+class _Backend:
+    """满足 SubtitleBackend 协议的假后端：记录调用，可配置抛错；enabled 为 None 时不带该成员。"""
 
-    记录每次 ``show`` / ``clear`` 调用（文本 / utterance_id），并允许
-    通过 ``raise_on_show`` / ``raise_on_clear`` 配置抛错。
-    """
-
-    def __init__(
-        self,
-        *,
-        raise_on_show: Optional[BaseException] = None,
-        raise_on_clear: Optional[BaseException] = None,
-    ) -> None:
-        self.show_calls: List[tuple[str, Optional[str]]] = []
-        self.clear_calls: int = 0
-        self._raise_on_show = raise_on_show
-        self._raise_on_clear = raise_on_clear
+    def __init__(self, *, show_error: Optional[BaseException] = None, clear_error: Optional[BaseException] = None):
+        self.show_calls: list[tuple[str, Optional[str]]] = []
+        self.clear_calls = 0
+        self._show_error = show_error
+        self._clear_error = clear_error
 
     async def show(self, text: str, utterance_id: Optional[str] = None) -> None:
         self.show_calls.append((text, utterance_id))
-        if self._raise_on_show is not None:
-            raise self._raise_on_show
+        if self._show_error is not None:
+            raise self._show_error
 
     async def clear(self) -> None:
         self.clear_calls += 1
-        if self._raise_on_clear is not None:
-            raise self._raise_on_clear
+        if self._clear_error is not None:
+            raise self._clear_error
 
 
-class _EnabledFakeBackend(_FakeBackend):
-    """带 ``enabled`` 成员的假后端（模拟 TkGuiBackend / DashboardBackend 的可用性语义）。"""
-
-    def __init__(self, *, enabled: bool = True, **kwargs: object) -> None:
-        super().__init__(**kwargs)  # type: ignore[arg-type]
+class _EnabledBackend(_Backend):
+    def __init__(self, enabled: bool) -> None:
+        super().__init__()
         self.enabled = enabled
 
 
-# 协议契约
+def test_protocol_conformance_and_diagnostics() -> None:
+    assert isinstance(_Backend(), SubtitleBackend)
+    assert not any(isinstance(obj, SubtitleBackend) for obj in (object(), {}, None))
+
+    svc = SubtitleService()
+    assert svc.backend_count == 0 and svc.backend_diagnostics == []
+    svc.register_backend(_EnabledBackend(True))
+    svc.register_backend(_EnabledBackend(False))
+    svc.register_backend(_Backend())  # 协议最小契约不含 enabled，缺失按 True 兜底
+    assert svc.backend_count == 3
+    assert [(d["name"], d["enabled"]) for d in svc.backend_diagnostics] == [
+        ("_EnabledBackend", True),
+        ("_EnabledBackend", False),
+        ("_Backend", True),
+    ]
 
 
-class TestProtocolConformance:
-    def test_fake_backend_satisfies_protocol(self):
-        """假后端满足 ``SubtitleBackend`` 协议（运行时校验通过）。"""
-        backend = _FakeBackend()
-        assert isinstance(backend, SubtitleBackend)
-
-    def test_object_missing_methods_rejected(self):
-        """缺 ``show`` / ``clear`` 的对象不满足契约。"""
-        assert not isinstance(object(), SubtitleBackend)
-        assert not isinstance({}, SubtitleBackend)
-        assert not isinstance(None, SubtitleBackend)
-
-
-# 后端诊断清单
+async def test_start_and_stop_are_idempotent_even_without_backends() -> None:
+    svc = SubtitleService()
+    await svc.stop()  # 未启动先停：早退
+    assert svc.is_running is False
+    await svc.start()
+    await svc.start()
+    assert svc.is_running is True
+    await svc.stop()
+    await svc.stop()
+    assert svc.is_running is False
+    await svc.show("anything")  # 无后端时广播不抛错
+    await svc.clear()
 
 
-class TestBackendDiagnostics:
-    def test_diagnostics_reflect_name_and_enabled(self):
-        """诊断清单回传后端类名与 enabled 成员值。"""
-        svc = SubtitleService()
-        svc.register_backend(_EnabledFakeBackend(enabled=True))
-        svc.register_backend(_EnabledFakeBackend(enabled=False))
+async def test_show_and_clear_broadcast_to_every_backend() -> None:
+    svc = SubtitleService()
+    first, second = _Backend(), _Backend()
+    svc.register_backend(first)
+    svc.register_backend(second)
 
-        diag = svc.backend_diagnostics
-        assert [item["name"] for item in diag] == ["_EnabledFakeBackend", "_EnabledFakeBackend"]
-        assert [item["enabled"] for item in diag] == [True, False]
+    await svc.show("hello", utterance_id="u-1")
+    await svc.show("plain text")  # utterance_id 缺省时透传 None
+    await svc.clear()
+    await svc.clear()
 
-    def test_diagnostics_defaults_enabled_true_when_member_absent(self):
-        """协议最小契约不含 ``enabled``，缺失成员按 True 处理。"""
-        svc = SubtitleService()
-        svc.register_backend(_FakeBackend())
-
-        assert svc.backend_diagnostics == [{"name": "_FakeBackend", "enabled": True}]
-
-    def test_diagnostics_empty_when_no_backends(self):
-        """零后端返回空清单。"""
-        assert SubtitleService().backend_diagnostics == []
+    for backend in (first, second):
+        assert backend.show_calls == [("hello", "u-1"), ("plain text", None)] and backend.clear_calls == 2
 
 
-# 生命周期
+async def test_failing_backend_never_blocks_the_others() -> None:
+    svc = SubtitleService()
+    boom = _Backend(show_error=RuntimeError("boom"), clear_error=RuntimeError("boom"))
+    ok = _Backend()
+    svc.register_backend(boom)
+    svc.register_backend(ok)
+    await svc.show("hello")  # 异常不向上传播，其他后端照常被调用
+    await svc.clear()
+    assert len(boom.show_calls) == 1 and ok.show_calls == [("hello", None)]
+    assert boom.clear_calls == 1 and ok.clear_calls == 1
+
+    everyone_fails = SubtitleService()
+    everyone_fails.register_backend(_Backend(show_error=RuntimeError("a")))
+    everyone_fails.register_backend(_Backend(show_error=ValueError("b")))
+    await everyone_fails.show("hello")  # 全部失败也正常返回
 
 
-class TestLifecycle:
-    async def test_start_stop_idempotent(self):
-        """``start`` / ``stop`` 重复调用不抛错，标志位翻转正确。"""
-        svc = SubtitleService()
-        assert svc.is_running is False
-
-        await svc.start()
-        assert svc.is_running is True
-
-        # 重复 start 不抛错，状态保持
-        await svc.start()
-        assert svc.is_running is True
-
-        await svc.stop()
-        assert svc.is_running is False
-
-        # 重复 stop 不抛错
-        await svc.stop()
-        assert svc.is_running is False
-
-    async def test_stop_without_start_is_noop(self):
-        """未启动时调 ``stop`` 不抛错（早退）。"""
-        svc = SubtitleService()
-        await svc.stop()
-        assert svc.is_running is False
-
-    async def test_backend_count_after_register(self):
-        """``backend_count`` 正确反映已注册数量。"""
-        svc = SubtitleService()
-        assert svc.backend_count == 0
-        svc.register_backend(_FakeBackend())
-        assert svc.backend_count == 1
-        svc.register_backend(_FakeBackend())
-        assert svc.backend_count == 2
-
-    async def test_start_without_backends_does_not_raise(self):
-        """无 Backend 注册时 ``start`` 不抛错（允许装配期留空后续追加）。"""
-        svc = SubtitleService()
-        await svc.start()
-        assert svc.is_running is True
+# 装配入口
 
 
-# 广播
+@pytest.fixture
+def no_real_tk_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """装配入口会启动 Tk 守护线程且无人停止；多个用例累积出并发 Tk 解释器，会让同进程后续测试随机段错误。"""
+    monkeypatch.setattr(SubtitleGuiService, "start", lambda self: None)
 
 
-class TestBroadcast:
-    async def test_show_broadcasts_to_all_backends(self):
-        """``show`` 广播到全部已注册 Backend，每个后端收到 (text, utterance_id)。"""
-        svc = SubtitleService()
-        b1 = _FakeBackend()
-        b2 = _FakeBackend()
-        svc.register_backend(b1)
-        svc.register_backend(b2)
+@pytest.mark.usefixtures("no_real_tk_thread")
+def test_assembly_registers_one_tk_backend_without_starting_the_service() -> None:
+    service = build_subtitle_infrastructure({"window_title": "test-title", "font_size": 32})
+    assert isinstance(service, SubtitleService) and service.backend_count == 1
+    assert service.is_running is False  # 装配不触发 start，生命周期由组合根管理，与 TTS 引擎构造时不 setup 对齐
 
-        await svc.show("hello", utterance_id="u-1")
-
-        assert b1.show_calls == [("hello", "u-1")]
-        assert b2.show_calls == [("hello", "u-1")]
-
-    async def test_show_passes_none_utterance_id(self):
-        """``utterance_id=None`` 时透传到后端。"""
-        svc = SubtitleService()
-        b = _FakeBackend()
-        svc.register_backend(b)
-
-        await svc.show("plain text")
-
-        assert b.show_calls == [("plain text", None)]
-
-    async def test_clear_broadcasts_to_all_backends(self):
-        """``clear`` 广播到全部已注册 Backend，每个后端调用计数 +1。"""
-        svc = SubtitleService()
-        b1 = _FakeBackend()
-        b2 = _FakeBackend()
-        svc.register_backend(b1)
-        svc.register_backend(b2)
-
-        await svc.clear()
-        await svc.clear()
-
-        assert b1.clear_calls == 2
-        assert b2.clear_calls == 2
-
-    async def test_no_backends_show_is_noop(self):
-        """无 Backend 时 ``show`` 不抛错。"""
-        svc = SubtitleService()
-        # 不抛错即可
-        await svc.show("anything")
-
-    async def test_no_backends_clear_is_noop(self):
-        """无 Backend 时 ``clear`` 不抛错。"""
-        svc = SubtitleService()
-        await svc.clear()
+    gui = SubtitleGuiService(config={})
+    backend = TkGuiBackend(service=gui)
+    assert isinstance(backend, SubtitleBackend) and backend.enabled == gui.enabled  # CustomTkinter 不可用时联动为 False
 
 
-# 故障隔离
+@pytest.mark.usefixtures("no_real_tk_thread")
+@pytest.mark.parametrize("bad_config", [None, "not-a-dict", 123, ["a", "b"], object()])
+def test_assembly_with_non_dict_config_returns_empty_service(bad_config) -> None:
+    service = build_subtitle_infrastructure(bad_config)
+    assert isinstance(service, SubtitleService) and service.backend_count == 0  # fail-soft，不阻断冷启动
 
 
-class TestFaultIsolation:
-    async def test_single_backend_show_failure_does_not_affect_others(self):
-        """单 Backend ``show`` 抛异常 → 其他 Backend 仍被调用。"""
-        svc = SubtitleService()
-        boom = _FakeBackend(raise_on_show=RuntimeError("boom"))
-        ok = _FakeBackend()
-        svc.register_backend(boom)
-        svc.register_backend(ok)
-
-        # 不应向上传播异常
-        await svc.show("hello")
-
-        # 异常后端被调用了一次（抛错前），正常后端也调用了
-        assert len(boom.show_calls) == 1
-        assert ok.show_calls == [("hello", None)]
-
-    async def test_single_backend_clear_failure_does_not_affect_others(self):
-        """单 Backend ``clear`` 抛异常 → 其他 Backend 仍被调用。"""
-        svc = SubtitleService()
-        boom = _FakeBackend(raise_on_clear=RuntimeError("boom"))
-        ok = _FakeBackend()
-        svc.register_backend(boom)
-        svc.register_backend(ok)
-
-        await svc.clear()
-
-        assert boom.clear_calls == 1
-        assert ok.clear_calls == 1
-
-    async def test_all_backends_failing_still_returns_cleanly(self):
-        """所有 Backend 都抛异常 → ``show`` 仍正常返回（隔离保证）。"""
-        svc = SubtitleService()
-        svc.register_backend(_FakeBackend(raise_on_show=RuntimeError("a")))
-        svc.register_backend(_FakeBackend(raise_on_show=ValueError("b")))
-
-        # 不应抛错
-        await svc.show("hello")
+@pytest.mark.parametrize("error", [RuntimeError("simulated validation failure"), ValueError("bad config")])
+def test_assembly_swallows_gui_service_construction_errors(error: Exception) -> None:
+    with patch("src.modules.subtitle.assembly.SubtitleGuiService", side_effect=error):
+        service = build_subtitle_infrastructure({})
+    assert isinstance(service, SubtitleService) and service.backend_count == 0
