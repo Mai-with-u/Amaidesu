@@ -10,6 +10,7 @@ import {
   formatDateTime,
   formatDateTimeCn,
   formatDurationShort,
+  formatImageSize,
   formatLatency,
   formatNumber,
   formatTimeHM,
@@ -153,5 +154,13 @@ describe('formatNumber', () => {
   it('千分位分组', () => {
     expect(formatNumber(1234567)).toBe('1,234,567');
     expect(formatNumber(42)).toBe('42');
+  });
+});
+
+describe('formatImageSize', () => {
+  it('不满 1KB 显示字节，其余取整 KB', () => {
+    expect(formatImageSize(512)).toBe('512 B');
+    expect(formatImageSize(1024)).toBe('1 KB');
+    expect(formatImageSize((91811 * 3) / 4)).toBe('67 KB');
   });
 });

@@ -158,3 +158,14 @@ export function relativeAge(ms: number, now: number = Date.now()): string {
   if (diffSec < 30 * 86_400) return `${Math.floor(diffSec / 86_400)} 天前`;
   return new Date(ms).toLocaleDateString('zh-CN');
 }
+
+// ==================== 注入截图 ====================
+
+/**
+ * base64 估算字节数 → 人读大小（不满 1KB 显示字节，否则取整 KB）。
+ * 占位符标注口径，无需精确到小数。
+ */
+export function formatImageSize(sizeBytes: number): string {
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  return `${(sizeBytes / 1024).toFixed(0)} KB`;
+}

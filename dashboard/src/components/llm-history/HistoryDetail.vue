@@ -76,6 +76,29 @@
               class="prompt-message-body"
               v-html="renderMarkdown(m.content)"
             ></div>
+            <!-- 注入截图：默认只渲染占位符，点击才把该张渲染成 <img> -->
+            <div v-if="m.images.length" class="image-chip-list">
+              <template v-for="(img, j) in m.images" :key="`${i}:${j}`">
+                <img
+                  v-if="isImageExpanded(i, j)"
+                  class="image-preview"
+                  :src="img.data"
+                  alt="注入截图"
+                  @click="toggleImage(i, j)"
+                />
+                <button
+                  v-else
+                  type="button"
+                  class="image-chip"
+                  :title="`约 ${formatImageSize(img.sizeBytes)}，点击查看`"
+                  @click="toggleImage(i, j)"
+                >
+                  🖼 截图{{ m.images.length > 1 ? ` #${j + 1}` : '' }}（{{
+                    formatImageSize(img.sizeBytes)
+                  }}，点击查看）
+                </button>
+              </template>
+            </div>
             <div v-if="m.toolCalls.length" class="tool-calls-list">
               <div v-for="tc in m.toolCalls" :key="tc.id ?? tc.name" class="tool-call-item">
                 <div class="tool-call-head">
@@ -178,7 +201,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { ElMessage } from 'element-plus';
@@ -190,6 +213,7 @@ import type { LLMRequestHistory } from '@/types';
 import {
   formatCost,
   formatDateTime,
+  formatImageSize,
   formatLatency,
   formatNumber,
   getProfileNameLabel,
@@ -206,6 +230,35 @@ interface Emits {
 
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
+
+// 展开的截图占位符（"消息序号:图序号"）；仅展开的单张渲染 <img>，换详情即清空
+const expandedImages = ref(new Set<string>());
+
+function imageKey(messageIndex: number, imageIndex: number): string {
+  return `${messageIndex}:${imageIndex}`;
+}
+
+function isImageExpanded(messageIndex: number, imageIndex: number): boolean {
+  return expandedImages.value.has(imageKey(messageIndex, imageIndex));
+}
+
+function toggleImage(messageIndex: number, imageIndex: number): void {
+  const key = imageKey(messageIndex, imageIndex);
+  const next = new Set(expandedImages.value);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  expandedImages.value = next;
+}
+
+watch(
+  () => props.detail?.request_id,
+  () => {
+    expandedImages.value = new Set();
+  },
+);
 
 // 提示词消息按序完整渲染（含 assistant 的 tool_calls 与 tool 返回）
 const promptMessages = computed<PreviewMessage[]>(() => {
@@ -466,6 +519,45 @@ function handleClose(value: boolean) {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-xs);
+}
+
+/* 注入截图占位符行：默认占位、点击展开单张 */
+.image-chip-list {
+  margin-top: var(--spacing-xs);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+}
+
+.image-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px dashed var(--border-color-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition:
+    color 0.2s,
+    border-color 0.2s;
+}
+
+.image-chip:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.image-preview {
+  max-width: 360px;
+  max-height: 240px;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-sm);
+  cursor: zoom-out;
+  display: block;
 }
 
 .tool-call-item {
