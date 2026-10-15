@@ -7,7 +7,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed } from 'vue';
+import { useRawWebSocket } from '@/composables/useRawWebSocket';
 
 interface SubtitleData {
   type: string;
@@ -23,9 +24,6 @@ const fontSize = ref<number>(32);
 const fontColor = ref<string>('#ffffff');
 const backgroundColor = ref<string>('rgba(0,0,0,0.45)');
 const borderColor = ref<string>('#ff8800');
-let ws: WebSocket | null = null;
-// 主动关闭标志：组件销毁后的 close 不应触发重连
-let disposed = false;
 
 const containerStyle = computed(() => ({
   paddingBottom: '30px',
@@ -49,11 +47,8 @@ const textStyle = computed(() => ({
   lineHeight: '1.4',
 }));
 
-function connect() {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${protocol}//${window.location.host}/ws/subtitle`);
-
-  ws.onmessage = event => {
+useRawWebSocket('/ws/subtitle', {
+  onMessage: event => {
     try {
       const data: SubtitleData = JSON.parse(event.data);
       if (data.type === 'subtitle') {
@@ -66,27 +61,7 @@ function connect() {
     } catch (e) {
       console.error('解析消息失败:', e);
     }
-  };
-
-  ws.onclose = () => {
-    if (disposed) return;
-    setTimeout(connect, 3000);
-  };
-
-  ws.onerror = () => {
-    ws?.close();
-  };
-}
-
-onMounted(() => {
-  connect();
-});
-
-onUnmounted(() => {
-  disposed = true;
-  if (ws) {
-    ws.close();
-  }
+  },
 });
 </script>
 

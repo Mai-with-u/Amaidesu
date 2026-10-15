@@ -12,7 +12,8 @@
 </template>
 
 <script setup lang="tsx">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, nextTick } from 'vue';
+import { useRawWebSocket } from '@/composables/useRawWebSocket';
 
 interface DanmakuMessage {
   id: string;
@@ -31,9 +32,6 @@ interface DanmakuMessage {
 const messages = ref<DanmakuMessage[]>([]);
 const messagesRef = ref<HTMLElement | null>(null);
 const maxMessages = 15;
-let ws: WebSocket | null = null;
-// 主动关闭标志：组件销毁后的 close 不应触发重连
-let disposed = false;
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substring(2);
@@ -71,17 +69,14 @@ function getDisplayText(msg: DanmakuMessage): string {
   }
 }
 
-function connect() {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${protocol}//${window.location.host}/ws/danmaku`);
-
-  ws.onmessage = event => {
+// /ws/danmaku 专用协议（与主 WS 事件流无关）：
+// - 实时推送：{ type: "new_message", message: {...} }
+// - 连接握手：{ type: "history", messages: [...] }（最近 15 条）
+// 模拟消息（simulated=true）不在弹幕小部件展示
+useRawWebSocket('/ws/danmaku', {
+  onMessage: event => {
     try {
       const data = JSON.parse(event.data);
-      // /ws/danmaku 专用协议（与主 WS 事件流无关）：
-      // - 实时推送：{ type: "new_message", message: {...} }
-      // - 连接握手：{ type: "history", messages: [...] }（最近 15 条）
-      // 模拟消息（simulated=true）不在弹幕小部件展示
       if (data.type === 'new_message') {
         const msg = data.message as DanmakuMessage | undefined;
         if (msg && msg.simulated !== true) {
@@ -95,27 +90,7 @@ function connect() {
     } catch (e) {
       console.error('解析消息失败:', e);
     }
-  };
-
-  ws.onclose = () => {
-    if (disposed) return;
-    setTimeout(connect, 3000);
-  };
-
-  ws.onerror = () => {
-    ws?.close();
-  };
-}
-
-onMounted(() => {
-  connect();
-});
-
-onUnmounted(() => {
-  disposed = true;
-  if (ws) {
-    ws.close();
-  }
+  },
 });
 </script>
 

@@ -55,7 +55,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed } from 'vue';
+import { useRawWebSocket } from '@/composables/useRawWebSocket';
 
 /** game.state.changed 快照载荷（/ws/game2048 单槽推送，与 GameBoardStatePayload 对齐） */
 interface Game2048State {
@@ -110,9 +111,6 @@ interface TileEntity {
 let tiles = new Map<string, TileEntity>();
 let lastBoard: number[][] | null = null;
 let lastMoves: number | null = null;
-let ws: WebSocket | null = null;
-// 主动关闭标志：组件销毁后的 close 不应触发重连
-let disposed = false;
 
 const keyEls = computed(() => ({
   up: keyUp.value,
@@ -320,42 +318,19 @@ function applyFrame(state: Game2048State) {
   lastMoves = state.moves;
 }
 
-function connect() {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${protocol}//${window.location.host}/ws/game2048`);
-
-  ws.onmessage = event => {
+// /ws/game2048 专用协议（与主 WS 事件流无关）：
+// 接入即推单槽最新快照，后续每步落子增量推送：{ type: "state", state: {...} }
+useRawWebSocket('/ws/game2048', {
+  onMessage: event => {
     try {
       const data = JSON.parse(event.data);
-      // /ws/game2048 专用协议（与主 WS 事件流无关）：
-      // 接入即推单槽最新快照，后续每步落子增量推送：{ type: "state", state: {...} }
       if (data.type === 'state' && data.state) {
         applyFrame(data.state as Game2048State);
       }
     } catch (e) {
       console.error('解析消息失败:', e);
     }
-  };
-
-  ws.onclose = () => {
-    if (disposed) return;
-    setTimeout(connect, 3000);
-  };
-
-  ws.onerror = () => {
-    ws?.close();
-  };
-}
-
-onMounted(() => {
-  connect();
-});
-
-onUnmounted(() => {
-  disposed = true;
-  if (ws) {
-    ws.close();
-  }
+  },
 });
 </script>
 
