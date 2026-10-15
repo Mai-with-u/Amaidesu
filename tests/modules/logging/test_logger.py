@@ -1,637 +1,153 @@
-"""日志系统单元测试。
-
-测试 src.modules.logging 模块的功能，包括：
-- JSONL 和文本格式输出
-- 控制台专用模式
-- 目录创建
-- 轮转配置
-- 向后兼容性
-- 默认行为和延迟初始化
-- 处理器清理
-- 导入时副作用移除
-"""
+"""日志系统：JSONL/文本输出、控制台专用、目录创建与回退、轮转配置、重配置清理、默认处理器、级别过滤、异常堆栈字段"""
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
 from loguru import logger
 
-
-@pytest.fixture
-def temp_log_dir(tmp_path):
-    """测试期间的临时日志目录。"""
-    log_dir = tmp_path / "logs"
-    log_dir.mkdir(exist_ok=True)
-    return str(log_dir)
+from src.modules.logging import configure_from_config, get_logger
+from src.modules.logging import logger as logger_module
 
 
 @pytest.fixture(autouse=True)
 def reset_logger_state():
-    """测试间重置 logger 状态。"""
-    from src.modules.logging import logger as logger_module
-
-    # 保存初始状态
-    old_configured = logger_module._CONFIGURED
-    old_handler_ids = logger_module._HANDLER_IDS.copy()
-    old_default_handler_id = logger_module._DEFAULT_HANDLER_ID
-
+    """测试间保存并恢复 logger 全局状态，并清掉测试期间添加的 loguru 处理器。"""
+    configured = logger_module._CONFIGURED
+    handler_ids = logger_module._HANDLER_IDS.copy()
+    default_handler_id = logger_module._DEFAULT_HANDLER_ID
     yield
-
-    # 恢复初始状态
-    logger_module._CONFIGURED = old_configured
+    logger_module._CONFIGURED = configured
     logger_module._HANDLER_IDS.clear()
-    logger_module._HANDLER_IDS.extend(old_handler_ids)
-    logger_module._DEFAULT_HANDLER_ID = old_default_handler_id
-
-    # 清理所有可能添加的处理器
+    logger_module._HANDLER_IDS.extend(handler_ids)
+    logger_module._DEFAULT_HANDLER_ID = default_handler_id
     for handler_id in list(logger._core.handlers.keys()):
         logger.remove(handler_id)
 
 
-class TestJSONLFormat:
-    """测试 JSONL 格式输出。"""
-
-    def test_jsonl_format(self, temp_log_dir):
-        """验证 JSONL 输出为清晰 JSON 格式。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        config = {
-            "enabled": True,
-            "format": "jsonl",
-            "directory": temp_log_dir,
-            "level": "INFO",
-        }
-
-        configure_from_config(config)
-
-        test_logger = get_logger("test_module")
-        test_logger.info("Test message")
-
-        # 读取生成的日志文件
-        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
-        assert len(log_files) == 1, "应创建一个 JSONL 日志文件"
-
-        with open(log_files[0], "r", encoding="utf-8") as f:
-            log_entry = f.readline().strip()
-
-        log_obj = json.loads(log_entry)
-
-        # 验证 JSON 结构
-        assert "timestamp" in log_obj, "JSON 对象应包含 timestamp 字段"
-        assert "level" in log_obj, "JSON 对象应包含 level 字段"
-        assert "module" in log_obj, "JSON 对象应包含 module 字段"
-        assert "message" in log_obj, "JSON 对象应包含 message 字段"
-
-        # 验证值
-        assert log_obj["level"] == "INFO", "日志级别应为 INFO"
-        assert log_obj["module"] == "test_module", "模块名应为 test_module"
-        assert log_obj["message"] == "Test message", "消息内容应匹配"
-
-    def test_jsonl_multiple_entries(self, temp_log_dir):
-        """验证 JSONL 文件中多个条目被正确分隔。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        config = {
-            "enabled": True,
-            "format": "jsonl",
-            "directory": temp_log_dir,
-            "level": "DEBUG",
-        }
-
-        configure_from_config(config)
-        test_logger = get_logger("multi_test")
-
-        # 写入多条日志
-        test_logger.debug("Debug message")
-        test_logger.info("Info message")
-        test_logger.warning("Warning message")
-
-        # 读取并验证
-        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
-        with open(log_files[0], "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        assert len(lines) == 3, "应有 3 条日志记录"
-
-        # 验证每行都是有效的 JSON
-        for line in lines:
-            log_obj = json.loads(line.strip())
-            assert "timestamp" in log_obj
-            assert "level" in log_obj
-            assert "message" in log_obj
-
-
-class TestTextFormat:
-    """测试文本格式输出。"""
-
-    def test_text_format(self, temp_log_dir):
-        """验证文本输出格式。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        config = {
-            "enabled": True,
-            "format": "text",
-            "directory": temp_log_dir,
-            "level": "INFO",
-        }
-
-        configure_from_config(config)
-        test_logger = get_logger("text_test")
-        test_logger.info("Text format message")
-
-        # 读取生成的日志文件
-        log_files = list(Path(temp_log_dir).glob("*.log"))
-        assert len(log_files) >= 1, "应创建至少一个文本日志文件"
-
-        # 找到最新文件
-        latest_file = max(log_files, key=os.path.getctime)
-        with open(latest_file, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # 验证格式元素
-        assert "text_test" in content, "应包含模块名"
-        assert "Text format message" in content, "应包含消息内容"
-        assert "INFO" in content, "应包含日志级别"
-
-    def test_text_format_timestamp(self, temp_log_dir):
-        """验证文本格式包含时间戳。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        config = {
-            "enabled": True,
-            "format": "text",
-            "directory": temp_log_dir,
-        }
-
-        configure_from_config(config)
-        test_logger = get_logger("timestamp_test")
-        test_logger.info("Timestamp test")
-
-        log_files = list(Path(temp_log_dir).glob("*.log"))
-        latest_file = max(log_files, key=os.path.getctime)
-        with open(latest_file, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # 验证时间戳格式 (YYYY-MM-DD HH:mm:ss.SSS)
-        import re
-
-        timestamp_pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}"
-        assert re.search(timestamp_pattern, content), "应包含时间戳"
-
-
-class TestConsoleOnly:
-    """测试控制台专用模式。"""
-
-    def test_console_only(self, temp_log_dir, capsys):
-        """验证 enabled=False 时不创建文件。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        config = {
-            "enabled": False,
-            "directory": temp_log_dir,
-        }
-
-        configure_from_config(config)
-        test_logger = get_logger("console_test")
-        test_logger.info("Console only message")
-
-        # 验证没有创建日志文件
-        log_files = list(Path(temp_log_dir).glob("*"))
-        assert len(log_files) == 0, "enabled=False 时不应创建日志文件"
-
-        # 验证控制台输出存在
-        captured = capsys.readouterr()
-        # 注意：loguru 可能输出到 stderr
-        output = captured.err + captured.out
-        assert "Console only message" in output or len(output) > 0, "应输出到控制台"
-
-
-class TestDirectoryCreation:
-    """测试目录创建。"""
-
-    def test_directory_creation(self, tmp_path):
-        """验证缺失时创建目录。"""
-        from src.modules.logging import configure_from_config
-
-        non_existent_dir = str(tmp_path / "new_logs_dir")
-        assert not os.path.exists(non_existent_dir), "目录不应预先存在"
-
-        config = {
-            "enabled": True,
-            "format": "text",
-            "directory": non_existent_dir,
-        }
-
-        configure_from_config(config)
-
-        assert os.path.exists(non_existent_dir), "应自动创建日志目录"
-
-    def test_directory_creation_permission_error(self, tmp_path):
-        """验证目录创建失败时的回退行为。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        # 使用一个不太可能成功创建的路径
-        # 在 Windows 上，某些特殊路径会失败
-        impossible_path = "/nonexistent_root/log_dir" if os.name != "nt" else "Z:\\nonexistent\\log_dir"
-
-        config = {
-            "enabled": True,
-            "format": "text",
-            "directory": impossible_path,
-        }
-
-        # 应该优雅地失败，不抛出异常
-        configure_from_config(config)
-
-        # logger 仍然应该工作（仅控制台）
-        test_logger = get_logger("fallback_test")
-        test_logger.info("Fallback message")  # 不应抛出异常
-
-
-class TestRotationConfig:
-    """测试轮转配置。"""
-
-    def test_rotation_config(self, temp_log_dir):
-        """验证轮转设置生效。"""
-        from src.modules.logging import configure_from_config
-
-        config = {
-            "enabled": True,
-            "format": "text",
-            "directory": temp_log_dir,
-            "rotation": "5 MB",
-            "retention": "3 days",
-            "compression": "gz",
-        }
-
-        configure_from_config(config)
-
-        # 验证处理器已添加
-        from src.modules.logging import logger as logger_module
-
-        assert len(logger_module._HANDLER_IDS) == 2, "应有 2 个处理器（stderr + 文件）"
-
-        # 注意：我们无法轻易测试实际的轮转行为，
-        # 因为需要写入大量数据或修改系统时间
-        # 但我们可以验证配置被接受且不抛出异常
-
-
-class TestBackwardCompatibility:
-    """测试向后兼容性。"""
-
-    def test_get_logger_backward_compat(self, temp_log_dir):
-        """验证旧 API 仍可用。"""
-        from src.modules.logging import get_logger
-
-        # 即使不调用 configure_from_config，get_logger 也应工作
-        test_logger = get_logger("compat_test")
-
-        # 应返回一个 logger 实例
-        assert test_logger is not None, "应返回 logger 实例"
-
-        # 应能正常使用
-        test_logger.info("Compatibility test")  # 不应抛出异常
-
-
-class TestDefaultBehavior:
-    """测试默认行为。"""
-
-    def test_default_behavior_without_config(self):
-        """验证未提供配置时的行为（延迟默认处理器）。"""
-        from src.modules.logging import logger as logger_module
-        from src.modules.logging import get_logger
-
-        # 保存当前默认处理器 ID（如果存在）
-        original_default_id = logger_module._DEFAULT_HANDLER_ID
-
-        try:
-            # 重置默认处理器 ID 以模拟未配置状态
-            logger_module._DEFAULT_HANDLER_ID = None
-
-            # 不调用 configure_from_config，直接使用 get_logger
-            test_logger = get_logger("default_test")
-
-            # 应创建默认处理器
-            assert logger_module._DEFAULT_HANDLER_ID is not None, "应创建默认处理器"
-
-            # 验证 logger 可以正常使用（不抛出异常）
-            test_logger.info("Default handler test")
-        finally:
-            # 恢复原始状态
-            logger_module._DEFAULT_HANDLER_ID = original_default_id
-
-    def test_default_behavior_with_none_config(self):
-        """验证传入 None 配置时的行为。"""
-        from src.modules.logging import configure_from_config
-
-        # 传入 None 应使用默认值
-        configure_from_config(None)
-
-        from src.modules.logging import logger as logger_module
-
-        assert logger_module._CONFIGURED, "应标记为已配置"
-
-
-class TestHandlerCleanup:
-    """测试处理器清理。"""
-
-    def test_handler_cleanup(self, temp_log_dir):
-        """验证重新配置前正确移除处理器。"""
-        from src.modules.logging import configure_from_config
-
-        # 第一次配置
-        config1 = {
-            "enabled": True,
-            "format": "text",
-            "directory": temp_log_dir,
-            "level": "DEBUG",
-        }
-
-        configure_from_config(config1)
-
-        from src.modules.logging import logger as logger_module
-
-        first_handler_count = len(logger_module._HANDLER_IDS)
-        assert first_handler_count == 2, "首次配置应有 2 个处理器"
-
-        # 第二次配置（不同参数）
-        config2 = {
-            "enabled": True,
-            "format": "jsonl",
-            "directory": temp_log_dir,
-            "level": "WARNING",
-        }
-
-        configure_from_config(config2)
-
-        second_handler_count = len(logger_module._HANDLER_IDS)
-        assert second_handler_count == 2, "重新配置后应有 2 个处理器"
-
-        # 验证处理器 ID 不同（旧处理器已被移除）
-        # 我们通过检查 loguru 的处理器数量来验证
-        active_handlers = list(logger._core.handlers.keys())
-        assert len(active_handlers) == 2, "loguru 应只有 2 个活动处理器"
-
-    def test_default_handler_removed_on_configure(self, capsys):
-        """验证配置时移除默认处理器。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        # 触发默认处理器创建
-        test_logger = get_logger("test")
-        test_logger.info("Before configure")
-
-        from src.modules.logging import logger as logger_module
-
-        assert logger_module._DEFAULT_HANDLER_ID is not None, "应创建默认处理器"
-
-        # 配置 logger
-        configure_from_config({"enabled": False})
-
-        # 默认处理器应被移除
-        assert logger_module._DEFAULT_HANDLER_ID is None, "配置后应移除默认处理器"
-
-
-class TestImportTimeSideEffects:
-    """测试导入时副作用移除。"""
-
-    def test_import_time_side_effects_removed(self):
-        """验证导入时不添加处理器。"""
-        # 重新导入模块以测试干净的导入
-        from src.modules.logging import logger as logger_module
-
-        # 保存当前状态
-
-        # 检查导入前的处理器数量
-        len(list(logger._core.handlers.keys()))
-
-        # 重新加载模块
-        # 注意：这在测试环境中可能不会完美工作，因为模块已被导入
-        # 但我们可以验证 _CONFIGURED 的初始状态
-
-        # 重置状态（模拟新导入）
-        logger_module._CONFIGURED = False
-        logger_module._HANDLER_IDS.clear()
-        logger_module._DEFAULT_HANDLER_ID = None
-
-        # 验证初始状态
-        assert not logger_module._CONFIGURED, "导入后 _CONFIGURED 应为 False"
-        assert len(logger_module._HANDLER_IDS) == 0, "导入后 _HANDLER_IDS 应为空"
-        assert logger_module._DEFAULT_HANDLER_ID is None, "导入后 _DEFAULT_HANDLER_ID 应为 None"
-
-    def test_configure_called_explicitly(self, temp_log_dir):
-        """验证只有显式调用 configure_from_config 才会添加处理器。"""
-        from src.modules.logging import logger as logger_module
-        from src.modules.logging import configure_from_config
-
-        # 重置状态
-        logger_module._CONFIGURED = False
-        logger_module._HANDLER_IDS.clear()
-        logger_module._DEFAULT_HANDLER_ID = None
-
-        # 在配置前，不应有文件处理器
-        assert len(logger_module._HANDLER_IDS) == 0, "配置前不应有处理器"
-
-        # 显式配置
-        configure_from_config({"enabled": True, "directory": temp_log_dir})
-
-        # 现在应该有处理器
-        assert len(logger_module._HANDLER_IDS) > 0, "配置后应有处理器"
-
-
-class TestModuleBinding:
-    """测试模块名绑定。"""
-
-    def test_module_binding(self, temp_log_dir):
-        """验证 get_logger 正确绑定模块名。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        # 使用 JSONL 格式来验证模块名被正确记录
-        configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
-
-        logger1 = get_logger("module_a")
-        logger2 = get_logger("module_b")
-
-        logger1.info("Test message A")
-        logger2.info("Test message B")
-
-        # 读取日志文件验证模块名
-        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
-        with open(log_files[0], "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        assert len(lines) == 2
-        log1 = json.loads(lines[0])
-        log2 = json.loads(lines[1])
-
-        assert log1["module"] == "module_a"
-        assert log2["module"] == "module_b"
-
-    def test_logger_reuse(self, temp_log_dir):
-        """验证同一模块名返回一致的行为。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
-
-        logger1 = get_logger("same_module")
-        logger2 = get_logger("same_module")
-
-        logger1.info("Message 1")
-        logger2.info("Message 2")
-
-        # 读取日志文件验证模块名一致
-        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
-        with open(log_files[0], "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        assert len(lines) == 2
-        log1 = json.loads(lines[0])
-        log2 = json.loads(lines[1])
-
-        # 两条日志都应有相同的模块名
-        assert log1["module"] == "same_module"
-        assert log2["module"] == "same_module"
-
-
-class TestLogLevelFiltering:
-    """测试日志级别过滤。"""
-
-    def test_level_filtering(self, temp_log_dir):
-        """验证日志级别过滤正确工作。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        config = {
-            "enabled": True,
-            "format": "jsonl",
-            "directory": temp_log_dir,
-            "level": "WARNING",
-        }
-
-        configure_from_config(config)
-        test_logger = get_logger("level_test")
-
-        test_logger.debug("Debug message")
-        test_logger.info("Info message")
-        test_logger.warning("Warning message")
-        test_logger.error("Error message")
-
-        # 读取日志文件
-        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
-        with open(log_files[0], "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        # 应只有 WARNING 和 ERROR
-        assert len(lines) == 2, "应只有 2 条日志（WARNING 和 ERROR）"
-
-        # 验证级别
-        levels = [json.loads(line)["level"] for line in lines]
-        assert "WARNING" in levels
-        assert "ERROR" in levels
-        assert "DEBUG" not in levels
-        assert "INFO" not in levels
-
-
-class TestConsoleLevelConfiguration:
-    """测试控制台日志级别配置。"""
-
-    def test_console_level(self, temp_log_dir, capsys):
-        """验证控制台级别可独立配置。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        config = {
-            "enabled": True,
-            "format": "text",
-            "directory": temp_log_dir,
-            "level": "DEBUG",  # 文件级别
-            "console_level": "ERROR",  # 控制台级别
-        }
-
-        configure_from_config(config)
-        test_logger = get_logger("console_level_test")
-
-        test_logger.debug("Debug message")
-        test_logger.info("Info message")
-        test_logger.warning("Warning message")
-        test_logger.error("Error message")
-
-        # 控制台应只显示 ERROR
-        captured = capsys.readouterr()
-        captured.err + captured.out
-
-        # 注意：这个测试可能不太可靠，因为 capsys 可能捕获不到 loguru 的输出
-        # 但至少验证配置不抛出异常
-
-        # 验证文件包含所有级别
-        log_files = list(Path(temp_log_dir).glob("*.log"))
-        latest_file = max(log_files, key=os.path.getctime)
-        with open(latest_file, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        assert "Debug message" in content
-        assert "Info message" in content
-        assert "Warning message" in content
-        assert "Error message" in content
-
-
-class TestExceptionField:
-    """异常日志应在 JSONL 中携带完整堆栈，普通日志不引入 exception 字段。"""
-
-    def test_jsonl_exception_traceback(self, temp_log_dir):
-        """exception() 写出的条目应含格式化 traceback。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
-        log = get_logger("exc_test")
-
-        try:
-            raise ValueError("boom-root-cause")
-        except ValueError:
-            log.exception("记录异常")
-
-        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
-        entry = json.loads(log_files[0].read_text(encoding="utf-8").splitlines()[0])
-        assert entry["level"] == "ERROR", "exception() 应为 ERROR 级"
-        assert "Traceback (most recent call last)" in entry["exception"], "应含 traceback 头"
-        assert "ValueError: boom-root-cause" in entry["exception"], "应含异常类型与消息"
-
-    def test_jsonl_plain_entry_has_no_exception_key(self, temp_log_dir):
-        """无异常日志的字段集应与旧版一致（timestamp/level/module/message）。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
-        log = get_logger("plain_test")
-        log.info("plain entry")
-
-        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
-        entry = json.loads(log_files[0].read_text(encoding="utf-8").splitlines()[0])
-        assert set(entry.keys()) == {"timestamp", "level", "module", "message"}
-
-    def test_jsonl_warning_with_exc_keeps_level(self, temp_log_dir):
-        """warning(exc=True) 应保持 WARNING 级且带堆栈。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
-        log = get_logger("warn_exc_test")
-
-        try:
-            raise KeyError("missing-key")
-        except KeyError:
-            log.warning("工具执行异常", exc=True)
-
-        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
-        entry = json.loads(log_files[0].read_text(encoding="utf-8").splitlines()[0])
-        assert entry["level"] == "WARNING", "exc=True 不应改变日志级别"
-        assert "KeyError: 'missing-key'" in entry["exception"]
-
-    def test_jsonl_exc_true_outside_except_no_junk(self, temp_log_dir):
-        """exc=True 落在无活动异常处时，JSONL 不应出现占位堆栈字段。"""
-        from src.modules.logging import configure_from_config, get_logger
-
-        configure_from_config({"enabled": True, "format": "jsonl", "directory": temp_log_dir})
-        log = get_logger("noop_exc_test")
-        log.error("无活动异常的 exc=True", exc=True)
-
-        log_files = list(Path(temp_log_dir).glob("*.jsonl"))
-        entry = json.loads(log_files[0].read_text(encoding="utf-8").splitlines()[0])
-        assert "exception" not in entry, "占位异常不应写入 JSONL"
+@pytest.fixture
+def log_dir(tmp_path) -> Path:
+    directory = tmp_path / "logs"
+    directory.mkdir()
+    return directory
+
+
+def _configure(directory: Path, fmt: str = "jsonl", **extra):
+    configure_from_config({"enabled": True, "format": fmt, "directory": str(directory), **extra})
+
+
+def _jsonl(directory: Path) -> list[dict]:
+    (path,) = directory.glob("*.jsonl")
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_jsonl_entries_have_structure_module_binding_and_level_filtering(log_dir: Path) -> None:
+    _configure(log_dir, level="WARNING")
+    a, b = get_logger("module_a"), get_logger("module_b")
+    a.debug("Debug message")
+    a.info("Info message")
+    a.warning("Warning from A")
+    b.error("Error from B")
+
+    entries = _jsonl(log_dir)
+    assert [
+        (e["level"], e["module"], e["message"]) for e in entries
+    ] == [  # 只有 WARNING 及以上，且模块名按 logger 绑定
+        ("WARNING", "module_a", "Warning from A"),
+        ("ERROR", "module_b", "Error from B"),
+    ]
+    assert {"timestamp", "level", "module", "message"} <= set(entries[0])
+
+
+def test_text_format_has_module_level_message_and_millisecond_timestamp(log_dir: Path) -> None:
+    _configure(log_dir, "text", level="INFO")
+    get_logger("text_test").info("Text format message")
+    content = max(log_dir.glob("*.log"), key=os.path.getctime).read_text(encoding="utf-8")
+    assert "text_test" in content and "Text format message" in content and "INFO" in content
+    assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}", content)
+
+
+def test_console_only_mode_creates_no_files(log_dir: Path) -> None:
+    configure_from_config({"enabled": False, "directory": str(log_dir)})
+    get_logger("console_test").info("Console only message")
+    assert list(log_dir.glob("*")) == []
+
+
+def test_missing_directory_is_created_and_uncreatable_one_falls_back_to_console(tmp_path) -> None:
+    new_dir = tmp_path / "new_logs_dir"
+    _configure(new_dir, "text")
+    assert new_dir.exists()
+
+    impossible = "Z:\\nonexistent\\log_dir" if os.name == "nt" else "/nonexistent_root/log_dir"
+    configure_from_config({"enabled": True, "format": "text", "directory": impossible})
+    get_logger("fallback_test").info("Fallback message")  # 优雅降级为仅控制台，不抛
+
+
+def test_reconfigure_replaces_handlers_and_console_level_is_independent(log_dir: Path) -> None:
+    _configure(
+        log_dir, "text", level="DEBUG", console_level="ERROR", rotation="5 MB", retention="3 days", compression="gz"
+    )
+    assert len(logger_module._HANDLER_IDS) == 2  # stderr + 文件，轮转配置被接受
+
+    log = get_logger("console_level_test")
+    for method in (log.debug, log.info, log.warning, log.error):
+        method(f"{method.__name__} message")
+    content = max(log_dir.glob("*.log"), key=os.path.getctime).read_text(encoding="utf-8")
+    assert all(
+        f"{level} message" in content for level in ("debug", "info", "warning", "error")
+    )  # 文件级别独立于控制台级别
+
+    _configure(log_dir, "jsonl", level="WARNING")  # 重配置前先移除旧处理器
+    assert len(logger_module._HANDLER_IDS) == 2 and len(logger._core.handlers) == 2
+
+
+def test_default_handler_is_lazy_and_replaced_by_explicit_configuration() -> None:
+    logger_module._DEFAULT_HANDLER_ID = None
+    get_logger("default_test").info("Default handler test")  # 未配置时延迟创建默认处理器
+    assert logger_module._DEFAULT_HANDLER_ID is not None
+
+    configure_from_config({"enabled": False})
+    assert logger_module._DEFAULT_HANDLER_ID is None  # 显式配置后移除默认处理器
+
+    logger_module._CONFIGURED = False
+    configure_from_config(None)  # None 配置走默认值
+    assert logger_module._CONFIGURED
+
+
+@pytest.mark.parametrize(
+    ("raise_exc", "call", "level", "traceback_text"),
+    [
+        (ValueError("boom-root-cause"), lambda log: log.exception("记录异常"), "ERROR", "ValueError: boom-root-cause"),
+        (
+            KeyError("missing-key"),
+            lambda log: log.warning("工具执行异常", exc=True),
+            "WARNING",
+            "KeyError: 'missing-key'",
+        ),
+    ],
+    ids=["exception", "warning-exc-true"],
+)
+def test_jsonl_exception_entries_carry_the_full_traceback(
+    log_dir: Path, raise_exc, call, level, traceback_text
+) -> None:
+    _configure(log_dir)
+    log = get_logger("exc_test")
+    try:
+        raise raise_exc
+    except Exception:
+        call(log)
+    (entry,) = _jsonl(log_dir)
+    assert entry["level"] == level  # exc=True 不改变日志级别
+    assert "Traceback (most recent call last)" in entry["exception"] and traceback_text in entry["exception"]
+
+
+def test_jsonl_exception_key_only_appears_for_real_exceptions(log_dir: Path) -> None:
+    _configure(log_dir)
+    log = get_logger("plain_test")
+    log.info("plain entry")
+    log.error("无活动异常的 exc=True", exc=True)
+    plain, no_active_exception = _jsonl(log_dir)
+    assert set(plain) == {"timestamp", "level", "module", "message"}  # 普通日志字段集不变
+    assert "exception" not in no_active_exception  # 占位异常不写入 JSONL
