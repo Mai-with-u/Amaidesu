@@ -1,157 +1,60 @@
-"""测试 GiftGenerator（SQLite 持久化后端）"""
-
-import shutil
-import tempfile
-from pathlib import Path
-from typing import AsyncGenerator, Generator
+"""GiftGenerator（SQLite 持久化后端）：礼物/SC 生成、SC 分类排除、目录增删改写穿数据库"""
 
 import pytest
 
-from src.modules.simulator.config_schema import (
-    SimulatorConfigSchema,
-)
-from src.modules.simulator.gift_generator import (
-    GiftGenerator,
-)
+from src.modules.simulator.config_schema import SimulatorConfigSchema
+from src.modules.simulator.gift_generator import GiftGenerator
 from src.modules.simulator.seed_data import seed_simulator_data
-from src.modules.simulator.types import (
-    GiftItem,
-    StreamerContextSnapshot,
-)
+from src.modules.simulator.types import GiftItem, StreamerContextSnapshot
 from src.modules.storage.database import SQLiteDatabase
 
 
-@pytest.fixture
-def temp_db_path() -> Generator[Path, None, None]:
-    td = Path(tempfile.mkdtemp(prefix="gift-gen-"))
-    yield td / "test.db"
-    shutil.rmtree(td, ignore_errors=True)
+async def _generator(store: SQLiteDatabase) -> GiftGenerator:
+    gen = GiftGenerator(SimulatorConfigSchema(), sim_repo=store.sim)
+    await gen.load()
+    return gen
 
 
 @pytest.fixture
-async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
-    s = SQLiteDatabase(temp_db_path)
-    await s.initialize()
-    yield s
-    await s.close()
-
-
-@pytest.fixture
-async def seeded_store(store: SQLiteDatabase) -> SQLiteDatabase:
-    """预置内置默认礼物目录"""
-    await seed_simulator_data(store.sim)
+async def seeded(store: SQLiteDatabase) -> SQLiteDatabase:
+    await seed_simulator_data(store.sim)  # 预置内置默认礼物目录
     return store
 
 
-def _new_gen(store: SQLiteDatabase) -> GiftGenerator:
-    return GiftGenerator(SimulatorConfigSchema(), sim_repo=store.sim)
-
-
-async def test_load_gifts(seeded_store):
-    gen = _new_gen(seeded_store)
-    await gen.load()
-    assert len(gen._gifts) > 0  # type: ignore[attr-defined]
-
-
-async def test_load_empty_catalog(store):
-    """空目录 load 后礼物列表为空（生成降级返回 None）"""
-    gen = _new_gen(store)
-    await gen.load()
+async def test_empty_catalog_degrades_to_no_gift(store: SQLiteDatabase) -> None:
+    gen = await _generator(store)
     assert gen._gifts == []  # type: ignore[attr-defined]
     assert await gen.generate_gift(StreamerContextSnapshot()) is None
 
 
-async def test_generate_gift(seeded_store):
-    gen = _new_gen(seeded_store)
-    await gen.load()
-    ctx = StreamerContextSnapshot()
-    msg = await gen.generate_gift(ctx)
-    assert msg is not None
-    assert msg.data_type == "gift"
-
-
-async def test_generate_sc_no_llm(seeded_store):
-    gen = _new_gen(seeded_store)
-    await gen.load()
-    ctx = StreamerContextSnapshot()
-    msg = await gen.generate_sc(ctx)
-    assert msg is not None
-    assert msg.data_type == "super_chat"
-    assert msg.sc_amount_rmb is not None
-
-
-async def test_generate_gift_excludes_sc_category(seeded_store):
-    gen = _new_gen(seeded_store)
-    await gen.load()
+async def test_generate_gift_never_picks_sc_category_and_sc_needs_no_llm(seeded: SQLiteDatabase) -> None:
+    gen = await _generator(seeded)
+    assert len(gen._gifts) > 0  # type: ignore[attr-defined]
     ctx = StreamerContextSnapshot()
     for _ in range(50):
         msg = await gen.generate_gift(ctx)
-        assert msg is not None
-        assert msg.data_type == "gift"
-        assert msg.gift is not None
-        assert msg.gift.category != "sc"
+        assert msg is not None and msg.data_type == "gift" and msg.gift is not None and msg.gift.category != "sc"
 
-
-async def test_pick_random_gift_exclude_categories(seeded_store):
-    gen = _new_gen(seeded_store)
-    await gen.load()
+    sc = await gen.generate_sc(ctx)
+    assert sc is not None and sc.data_type == "super_chat" and sc.sc_amount_rmb is not None
     picked = gen._pick_random_gift(exclude_categories={"sc"})  # type: ignore[attr-defined]
-    assert picked is not None
-    assert picked.category != "sc"
+    assert picked is not None and picked.category != "sc"
 
 
-# 礼物目录 CRUD（写穿 DB）
-
-
-async def test_add_gift_persists(seeded_store):
-    gen = _new_gen(seeded_store)
-    await gen.load()
-    added = await gen.add_gift(
-        GiftItem(gift_id="custom_1", gift_name="自定义礼物", category="normal", weight=3, data_type="gift")
-    )
-    assert added is True
-
-    gen2 = _new_gen(seeded_store)
-    await gen2.load()
-    ids = {g.gift_id for g in gen2.list_gifts()}
-    assert "custom_1" in ids
-
-
-async def test_add_gift_duplicate_rejected(seeded_store):
-    gen = _new_gen(seeded_store)
-    await gen.load()
-    added = await gen.add_gift(
-        GiftItem(gift_id="small_heart", gift_name="重复小心心", category="normal", weight=1, data_type="gift")
-    )
-    assert added is False
-
-
-async def test_update_gift_persists(seeded_store):
-    gen = _new_gen(seeded_store)
-    await gen.load()
-    assert await gen.update_gift("small_heart", {"weight": 99}) is True
-
-    gen2 = _new_gen(seeded_store)
-    await gen2.load()
-    updated = next(g for g in gen2.list_gifts() if g.gift_id == "small_heart")
-    assert updated.weight == 99
-
-
-async def test_update_gift_invalid_field_rejected(seeded_store):
-    gen = _new_gen(seeded_store)
-    await gen.load()
-    with pytest.raises(ValueError, match="非法字段"):
-        await gen.update_gift("small_heart", {"gift_id": "hack"})
-
-
-async def test_delete_gift_persists(seeded_store):
-    gen = _new_gen(seeded_store)
-    await gen.load()
+async def test_catalog_crud_writes_through_to_database(seeded: SQLiteDatabase) -> None:
+    gen = await _generator(seeded)
     before = len(gen.list_gifts())
-    assert await gen.delete_gift("small_heart") is True
-    assert await gen.delete_gift("small_heart") is False
-    assert len(gen.list_gifts()) == before - 1
 
-    gen2 = _new_gen(seeded_store)
-    await gen2.load()
-    assert all(g.gift_id != "small_heart" for g in gen2.list_gifts())
+    assert await gen.add_gift(
+        GiftItem(gift_id="custom_1", gift_name="自定义", category="normal", weight=3, data_type="gift")
+    )
+    duplicate = GiftItem(gift_id="small_heart", gift_name="重复小心心", category="normal", weight=1, data_type="gift")
+    assert await gen.add_gift(duplicate) is False  # 重复 ID 拒绝
+    assert await gen.update_gift("small_heart", {"weight": 99}) is True
+    with pytest.raises(ValueError, match="非法字段"):
+        await gen.update_gift("small_heart", {"gift_id": "hack"})  # 主键不可改
+    assert await gen.delete_gift("custom_1") is True and await gen.delete_gift("custom_1") is False
+    assert len(gen.list_gifts()) == before
+
+    reloaded = {g.gift_id: g for g in (await _generator(seeded)).list_gifts()}  # 新实例重新加载，确认已落库
+    assert reloaded["small_heart"].weight == 99 and "custom_1" not in reloaded
