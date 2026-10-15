@@ -1,98 +1,38 @@
-"""ConfigService.initialize() 集成测试 — 验证完整启动流程
+"""ConfigService.initialize() 启动流程：首次运行生成 config/、已有目录正常加载、幂等、冗余段硬错"""
 
-覆盖场景:
-- 首次运行自动生成 config/ 目录
-- 旧 config.toml 自动迁移
-- 已有 config/ 正常加载
-- 漂移检测日志
-"""
-
-import shutil
 from pathlib import Path
 
 import pytest
 
+from src.modules.config.errors import ConfigValidationError
+from src.modules.config.multi_file_loader import generate_default_configs
 from src.modules.config.service import ConfigService
 
 
-@pytest.fixture
-def temp_project(tmp_path: Path) -> Path:
-    """创建临时项目目录"""
-    return tmp_path
+def test_first_run_generates_commented_config_files(tmp_path: Path) -> None:
+    config, was_created = ConfigService(base_dir=str(tmp_path)).initialize()
+    assert was_created is True
+    config_dir = tmp_path / "config"
+    for name in ("agents.toml", "collectors.toml", "tools.toml", "model.toml", "storage.toml", "infra.toml"):
+        assert (config_dir / name).exists(), name
+    infra = (config_dir / "infra.toml").read_text(encoding="utf-8-sig")
+    assert "#" in infra and "rate_limit" in infra and "similar_filter" in infra  # 带注释，含拦截器默认段
 
 
-class TestFirstRunGeneration:
-    """首次运行：config/ 不存在 + 无旧 config.toml → 自动生成"""
-
-    def test_generates_config_dir_on_first_run(self, temp_project: Path):
-        service = ConfigService(base_dir=str(temp_project))
-        config, was_created = service.initialize()
-
-        config_dir = temp_project / "config"
-        assert config_dir.exists()
-        for fname in ("agents.toml", "collectors.toml", "tools.toml", "model.toml", "storage.toml", "infra.toml"):
-            assert (config_dir / fname).exists(), fname
-
-    def test_first_run_sets_copied_flag(self, temp_project: Path):
-        service = ConfigService(base_dir=str(temp_project))
-        _, was_created = service.initialize()
-        assert was_created is True
-
-    def test_generated_config_has_comments(self, temp_project: Path):
-        service = ConfigService(base_dir=str(temp_project))
-        service.initialize()
-
-        infra_content = (temp_project / "config" / "infra.toml").read_text(encoding="utf-8-sig")
-        assert "#" in infra_content
-
-    def test_generated_config_has_interceptor_defaults(self, temp_project: Path):
-        service = ConfigService(base_dir=str(temp_project))
-        service.initialize()
-
-        infra_content = (temp_project / "config" / "infra.toml").read_text(encoding="utf-8-sig")
-        assert "rate_limit" in infra_content
-        assert "similar_filter" in infra_content
+def test_existing_config_directory_loads_normally_and_initialize_is_idempotent(tmp_path: Path) -> None:
+    generate_default_configs(tmp_path / "config")
+    service = ConfigService(base_dir=str(tmp_path))
+    config, was_created = service.initialize()
+    assert was_created is False and "agents" in config and "tts" in config
+    service.initialize()  # 第二次调用应跳过
 
 
-class TestExistingConfigLoad:
-    """已有 config/ → 正常加载"""
+def test_redundant_section_hard_fails_initialization_with_the_validation_error_as_cause(tmp_path: Path) -> None:
+    generate_default_configs(tmp_path / "config")
+    infra = tmp_path / "config" / "infra.toml"
+    infra.write_text(infra.read_text(encoding="utf-8-sig") + '\n[zombie_section]\nkey = "dead"\n', encoding="utf-8-sig")
 
-    def test_loads_existing_config(self, temp_project: Path):
-        from src.modules.config.multi_file_loader import generate_default_configs
-
-        generate_default_configs(temp_project / "config")
-
-        service = ConfigService(base_dir=str(temp_project))
-        config, was_created = service.initialize()
-
-        assert was_created is False
-        assert "agents" in config
-        assert "tts" in config
-
-    def test_idempotent_initialize(self, temp_project: Path):
-        service = ConfigService(base_dir=str(temp_project))
-        service.initialize()
-
-        service.initialize()  # 第二次调用应跳过
-
-
-class TestDriftDetection:
-    """漂移检测"""
-
-    def test_redundant_key_hard_fails(self, temp_project: Path):
-        """冗余段全域硬错：infra.toml 手写未知段在初始化时拦下，cause 链携带原始校验错误。"""
-        from src.modules.config.errors import ConfigValidationError
-        from src.modules.config.multi_file_loader import generate_default_configs
-
-        generate_default_configs(temp_project / "config")
-
-        infra_path = temp_project / "config" / "infra.toml"
-        content = infra_path.read_text(encoding="utf-8-sig")
-        infra_path.write_text(content + "\n[zombie_section]\nkey = \"dead\"\n", encoding="utf-8-sig")
-
-        service = ConfigService(base_dir=str(temp_project))
-        with pytest.raises(RuntimeError) as exc_info:
-            service.initialize()
-        cause = exc_info.value.__cause__
-        assert isinstance(cause, ConfigValidationError)
-        assert "zombie_section" in str(cause)
+    with pytest.raises(RuntimeError) as exc_info:
+        ConfigService(base_dir=str(tmp_path)).initialize()
+    assert isinstance(exc_info.value.__cause__, ConfigValidationError)
+    assert "zombie_section" in str(exc_info.value.__cause__)

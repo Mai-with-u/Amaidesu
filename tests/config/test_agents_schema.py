@@ -1,12 +1,4 @@
-"""Agents 配置 Schema 测试
-
-覆盖 src/modules/config/agents_schemas.py:
-1. **AgentsRootConfig 顶层结构**：包含 agents (AgentsConfig)
-2. **AgentsConfig 元数据**：enabled 列表 + 各 Agent 自包含子配置
-3. **各 Agent Config**：minecraft / text_adv 字段与校验（streamer 侧已迁
-   至包内权威 src/agents/streamer/config.py；本文件保留类型断言）
-4. **json_schema_extra**：UI 元数据保留
-"""
+"""Agents 配置 Schema：enabled 名单、各 Agent 子配置（类型由包内权威配置提供，中央树只引用）、UI 元数据、往返"""
 
 from __future__ import annotations
 
@@ -16,184 +8,80 @@ import pytest
 from pydantic import ValidationError
 
 from src.agents.minecraft.config import MinecraftConfig
+from src.agents.streamer.config import StreamerConfig
 from src.agents.text_adv.config import TextAdvConfig
-from src.modules.config.agents_schemas import (
-    AgentType,
-    AgentsConfig,
-    AgentsRootConfig,
-)
+from src.modules.agents.factory import SUPPORTED_AGENTS
+from src.modules.config.agents_schemas import AgentsConfig, AgentsRootConfig, AgentType
 
 
-class TestAgentsRootConfig:
-    def test_default_construction(self):
-        cfg = AgentsRootConfig()
-        assert isinstance(cfg.agents, AgentsConfig)
-
-    def test_agents_section_present(self):
-        cfg = AgentsRootConfig()
-        assert cfg.agents is not None
-
-
-class TestAgentsConfigEnabled:
-    def test_default_enabled_is_list(self):
-        cfg = AgentsConfig()
-        assert isinstance(cfg.enabled, list)
-
-    def test_default_enabled_contains_streamer(self):
-        cfg = AgentsConfig()
-        assert "streamer" in cfg.enabled
-
-    def test_accepts_known_agents(self):
-        cfg = AgentsConfig(enabled=["streamer", "minecraft", "text_adv"])
-        assert len(cfg.enabled) == 3
-
-    def test_unknown_agent_rejected(self):
+def test_enabled_list_accepts_known_agents_only() -> None:
+    assert isinstance(AgentsRootConfig().agents, AgentsConfig)
+    cfg = AgentsConfig()
+    assert isinstance(cfg.enabled, list) and "streamer" in cfg.enabled
+    assert len(AgentsConfig(enabled=["streamer", "minecraft", "text_adv"]).enabled) == 3
+    for bad in (["unknown_agent"], ["streamer", "game"]):  # [agents.game] 分类层已移除，"game" 不再是合法 Agent 名
         with pytest.raises(ValidationError):
-            AgentsConfig(enabled=["unknown_agent"])
-
-    def test_legacy_game_name_rejected(self):
-        """[agents.game] 分类层已移除，"game" 不再是合法 Agent 名。"""
-        with pytest.raises(ValidationError):
-            AgentsConfig(enabled=["streamer", "game"])
+            AgentsConfig(enabled=bad)
+    with pytest.raises(ValidationError):
+        AgentsConfig(game={"engine": "minecraft", "max_steps": 50})
 
 
-class TestAgentsConfigSubConfigs:
-    def test_streamer_default_is_full_config(self):
-        """streamer 默认是完整 StreamerConfig 实例（确保加载器自动补齐子树）。"""
-        cfg = AgentsConfig()
-        assert cfg.streamer is not None
-        assert cfg.streamer.persona.bot_name == "麦麦"
-        assert cfg.streamer.persona.audience_salutation == "大家"
-
-    def test_minecraft_subconfig_self_contained(self) -> None:
-        """minecraft 是顶级子配置，类型由包内权威 MinecraftConfig 提供。"""
-        cfg = AgentsConfig(minecraft={"events_wait_ms": 4000})
-        assert isinstance(cfg.minecraft, MinecraftConfig)
-        assert cfg.minecraft.events_wait_ms == 4000
-
-    def test_text_adv_subconfig_self_contained(self):
-        cfg = AgentsConfig(text_adv={"monitor_index": 0})
-        assert isinstance(cfg.text_adv, TextAdvConfig)
-        assert cfg.text_adv.monitor_index == 0
-
-    def test_game_section_rejected(self):
-        with pytest.raises(ValidationError):
-            AgentsConfig(game={"engine": "minecraft", "max_steps": 50})
+def test_enabled_options_and_agent_type_stay_aligned_with_the_factory() -> None:
+    extra = AgentsConfig.model_fields["enabled"].json_schema_extra or {}
+    assert extra.get("x-options") == list(get_args(AgentType)) and "x-ui-type" not in extra  # 候选名单供下拉/多选渲染
+    assert (
+        set(get_args(AgentType)) == set(SUPPORTED_AGENTS) == {"streamer", "minecraft", "text_adv", "game_2048"}
+    )  # 双源对齐，无分类层
 
 
-class TestStreamerConfigInAgentsTree:
-    """streamer 字段类型由包内权威 StreamerConfig 提供；中央树仅引用。"""
-
-    def test_streamer_uses_package_authoritative_schema(self):
-        from src.agents.streamer.config import StreamerConfig
-
-        cfg = AgentsConfig()
-        assert isinstance(cfg.streamer, StreamerConfig)
-
-    def test_streamer_nested_subkeys_present(self):
-        cfg = AgentsConfig()
-        s = cfg.streamer
-        assert s.persona.audience_salutation == "大家"
-        assert s.context.enabled is True
-        # 记忆召回条数字段已废弃（画像按本批发言人全量注入，无条数上限）
-        assert not hasattr(s.context, "memory_recall_long_term")
-        assert s.background.light_tick_ms == 5_000
-        assert s.background.compressor.concurrency == 1
-        assert s.background.compressor.queue_max == 100
-        assert s.batch.batch_window_ms == 3_000
-        assert s.force.force_message_types == ["super_chat", "guard", "gift"]
-        assert s.proactive.enabled is True
-        assert s.word_filter.enabled is False
-        assert s.command.prefix == "/"
-        assert s.thinking_stream.enabled is True
-        assert s.narrative.body_ttl_ms == 300_000
-        assert s.narrative.game_ttl_ms == 900_000
-        assert s.narrative.chat_max_items == 10
+def test_streamer_defaults_are_the_full_package_config() -> None:
+    cfg = AgentsConfig()
+    streamer = cfg.streamer
+    assert isinstance(streamer, StreamerConfig)  # 默认就是完整配置，确保加载器自动补齐子树
+    assert (streamer.persona.bot_name, streamer.persona.audience_salutation) == ("麦麦", "大家")
+    assert streamer.context.enabled is True and not hasattr(
+        streamer.context, "memory_recall_long_term"
+    )  # 画像按本批发言人全量注入，无条数上限
+    assert (streamer.background.light_tick_ms, streamer.background.compressor.concurrency) == (5_000, 1)
+    assert (streamer.background.compressor.queue_max, streamer.batch.batch_window_ms) == (100, 3_000)
+    assert streamer.force.force_message_types == ["super_chat", "guard", "gift"]
+    assert (streamer.proactive.enabled, streamer.word_filter.enabled, streamer.command.prefix) == (True, False, "/")
+    assert streamer.thinking_stream.enabled is True
+    narrative = streamer.narrative
+    assert (narrative.body_ttl_ms, narrative.game_ttl_ms, narrative.chat_max_items) == (300_000, 900_000, 10)
 
 
-class TestMinecraftPackageConfig:
-    """minecraft 字段类型由包内权威 MinecraftConfig 提供；中央树仅引用。"""
+def test_minecraft_config_comes_from_its_package_and_has_no_step_limit() -> None:
+    cfg = AgentsConfig(minecraft={"events_wait_ms": 4000})
+    assert isinstance(cfg.minecraft, MinecraftConfig) and cfg.minecraft.events_wait_ms == 4000
 
-    def test_uses_package_authoritative_schema(self):
-        cfg = AgentsConfig()
-        assert isinstance(cfg.minecraft, MinecraftConfig)
-
-    def test_defaults(self) -> None:
-        """游戏主任务配置保留上下文预算，界面与生成配置均不再暴露累计步数限制。"""
-        cfg = AgentsConfig()
-        assert cfg.minecraft.context.max_tokens == 200_000 and cfg.minecraft.context.window_ratio == 0.5
-        assert "max_steps" not in cfg.minecraft.model_dump()
-        assert "max_steps" not in MinecraftConfig.model_json_schema()["properties"]
-
-    def test_field_overrides(self) -> None:
-        """自定义后台核查间隔随玩家子配置保留。"""
-        cfg = AgentsConfig(minecraft={"events_wait_ms": 4000})
-        assert cfg.minecraft.events_wait_ms == 4000
-
-    def test_removed_step_limit_rejected(self) -> None:
-        """旧步数键须经配置迁移清理，不能成为仍可编辑但不生效的参数。"""
-        with pytest.raises(ValidationError):
-            AgentsConfig(minecraft={"max_steps": 50})
+    defaults = AgentsConfig().minecraft
+    assert (defaults.context.max_tokens, defaults.context.window_ratio) == (200_000, 0.5)  # 保留上下文预算
+    assert (
+        "max_steps" not in defaults.model_dump()
+        and "max_steps" not in MinecraftConfig.model_json_schema()["properties"]
+    )
+    with pytest.raises(ValidationError):  # 旧步数键须经配置迁移清理，不能成为可编辑但不生效的参数
+        AgentsConfig(minecraft={"max_steps": 50})
 
 
-class TestTextAdvPackageConfig:
-    """text_adv 字段类型由包内权威 TextAdvConfig 提供；中央树仅引用。"""
+def test_text_adv_config_comes_from_its_package() -> None:
+    text_adv = AgentsConfig().text_adv
+    assert isinstance(text_adv, TextAdvConfig)
+    assert (text_adv.monitor_index, text_adv.region, text_adv.auto_button_xy) == (1, None, None)
+    assert text_adv.keys == {"advance": "space", "skip": "ctrl", "menu": "backspace"}
+    assert (text_adv.stability_sample_ms, text_adv.stability_consecutive, text_adv.stability_timeout_ms) == (
+        150,
+        2,
+        5_000,
+    )
+    assert (text_adv.no_change_limit, text_adv.max_recent_screens, text_adv.game_window_title_keyword) == (20, 10, "")
 
-    def test_uses_package_authoritative_schema(self):
-        cfg = AgentsConfig()
-        assert isinstance(cfg.text_adv, TextAdvConfig)
-
-    def test_defaults(self):
-        cfg = AgentsConfig()
-        assert cfg.text_adv.monitor_index == 1
-        assert cfg.text_adv.region is None
-        assert cfg.text_adv.keys == {"advance": "space", "skip": "ctrl", "menu": "backspace"}
-        assert cfg.text_adv.stability_sample_ms == 150
-        assert cfg.text_adv.stability_consecutive == 2
-        assert cfg.text_adv.stability_timeout_ms == 5_000
-        assert cfg.text_adv.no_change_limit == 20
-        assert cfg.text_adv.max_recent_screens == 10
-        assert cfg.text_adv.auto_button_xy is None
-        assert cfg.text_adv.game_window_title_keyword == ""
-
-    def test_field_overrides(self):
-        cfg = AgentsConfig(text_adv={"auto_button_xy": [120, 240], "region": [0, 0, 1920, 1080]})
-        assert cfg.text_adv.auto_button_xy == (120, 240)
-        assert cfg.text_adv.region == [0, 0, 1920, 1080]
+    custom = AgentsConfig(text_adv={"auto_button_xy": [120, 240], "region": [0, 0, 1920, 1080]}).text_adv
+    assert custom.auto_button_xy == (120, 240) and custom.region == [0, 0, 1920, 1080]
 
 
-class TestJsonSchemaExtra:
-    def test_enabled_has_ui_metadata(self):
-        """enabled 的 UI 元数据：候选名单（x-options）供下拉/多选渲染。"""
-        field_info = AgentsConfig.model_fields["enabled"]
-        extra = field_info.json_schema_extra or {}
-        assert "x-ui-type" not in extra  # 非规范 ui-type 标记已清（T28）
-        assert extra.get("x-options") == list(get_args(AgentType))
-
-
-class TestAgentsConfigRoundTrip:
-    def test_model_dump_round_trip(self):
-        cfg = AgentsConfig(streamer={"persona": {"bot_name": "测试"}})
-        dumped = cfg.model_dump()
-        cfg2 = AgentsConfig.model_validate(dumped)
-        assert cfg2.streamer.persona.bot_name == "测试"
-
-    def test_game_agent_round_trip(self) -> None:
-        """序列化再加载后保留游戏后台核查节奏。"""
-        cfg = AgentsConfig(minecraft={"events_wait_ms": 4000})
-        dumped = cfg.model_dump()
-        cfg2 = AgentsConfig.model_validate(dumped)
-        assert cfg2.minecraft.events_wait_ms == 4000
-
-
-class TestAgentTypeLiteral:
-    def test_agent_type_matches_supported_agents(self):
-        """双源对齐：AgentType 字面量全集与 factory.SUPPORTED_AGENTS 必须一致。"""
-        from src.modules.agents.factory import SUPPORTED_AGENTS
-
-        assert set(get_args(AgentType)) == set(SUPPORTED_AGENTS)
-
-    def test_agent_type_values_flat(self):
-        """无分类层：AgentType 即顶级注册名全集（游戏 Agent 平级展开）。"""
-        values = get_args(AgentType)
-        assert set(values) == {"streamer", "minecraft", "text_adv", "game_2048"}
+def test_model_dump_round_trip_keeps_custom_values() -> None:
+    cfg = AgentsConfig(streamer={"persona": {"bot_name": "测试"}}, minecraft={"events_wait_ms": 4000})
+    restored = AgentsConfig.model_validate(cfg.model_dump())
+    assert restored.streamer.persona.bot_name == "测试" and restored.minecraft.events_wait_ms == 4000

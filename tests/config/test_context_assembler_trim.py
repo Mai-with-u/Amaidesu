@@ -1,71 +1,55 @@
-"""[agents.streamer.context] 组装器字段收口测试。
+"""已删除字段在旧用户文件里的处置：冗余键全域硬错，加载期当面拦下（不静默剥离），保留字段的用户值不被覆盖
 
-StreamerContextConfig 删除 ``memory_recall_viewers`` / ``cache_ttl_ms``
-（前者无召回后端载体——画像注入按本批发言人逐人查，无批量召回接口；后者在纯函数
-组装器 + 每批动态窗口下无正确缓存语义）。冗余键全域硬错语义下，用户
-文件中的已删字段在加载期当面拦下（而非静默剥离）。
-context 段已从顶层 [context] 迁入 [agents.streamer.context]。
+- [agents.streamer.context] 的 memory_recall_viewers / cache_ttl_ms（无召回后端载体；纯函数组装器下无正确缓存语义）
+- [agents.streamer] 的死开关 enable_action_selection（Replyer 从不读取）
 """
 
 from __future__ import annotations
 
 import re
-import shutil
 
 import pytest
 
 from src.modules.config.errors import ConfigValidationError
-from src.modules.config.multi_file_loader import (
-    generate_default_configs,
-    load_config_dir,
-)
+from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
 
 
 @pytest.fixture
-def config_dir(tmp_path):
+def agents_path(tmp_path):
     config_dir = tmp_path / "config"
     generate_default_configs(config_dir)
-    yield config_dir
-    if config_dir.exists():
-        shutil.rmtree(config_dir)
+    return config_dir / "agents.toml"
 
 
-class TestContextAssemblerFieldTrim:
-    """[agents.streamer.context] 已删字段 → 加载硬错（点名 + 出路提示）。"""
-
-    def test_removed_fields_hard_fail(self, config_dir):
-        """旧文件的已删字段 → ConfigValidationError，消息含字段名与钩子/修正指引。"""
-        agents_path = config_dir / "agents.toml"
-        content = agents_path.read_text(encoding="utf-8-sig")
-        assert "[agents.streamer.context]" in content
-        new_content = content.replace(
+@pytest.mark.parametrize(
+    ("anchor", "injected", "removed"),
+    [
+        (
             "[agents.streamer.context]",
-            '[agents.streamer.context]\nmemory_recall_viewers = 5\ncache_ttl_ms = 2000',
-            1,
-        )
-        agents_path.write_text(new_content, encoding="utf-8-sig")
+            "memory_recall_viewers = 5\ncache_ttl_ms = 2000",
+            ("memory_recall_viewers", "cache_ttl_ms"),
+        ),
+        ("[agents.streamer]", "enable_action_selection = true", ("enable_action_selection",)),
+    ],
+    ids=["context-fields", "action-selection-switch"],
+)
+def test_removed_fields_hard_fail_naming_the_key_and_the_migration_hook(agents_path, anchor, injected, removed) -> None:
+    content = agents_path.read_text(encoding="utf-8-sig")
+    assert anchor in content
+    agents_path.write_text(content.replace(anchor, f"{anchor}\n{injected}", 1), encoding="utf-8-sig")
 
-        with pytest.raises(ConfigValidationError) as exc_info:
-            load_config_dir(config_dir)
-        message = str(exc_info.value)
-        assert "memory_recall_viewers" in message
-        assert "cache_ttl_ms" in message
-        assert "迁移钩子" in message
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_config_dir(agents_path.parent)
+    message = str(exc_info.value)
+    assert all(key in message for key in removed) and "迁移钩子" in message
 
-    def test_user_values_of_kept_fields_preserved(self, config_dir):
-        """保留字段的用户值不被默认值覆盖。"""
-        agents_path = config_dir / "agents.toml"
-        content = agents_path.read_text(encoding="utf-8-sig")
-        # [agents.streamer.context] 段的 enabled 改为 false（段内还有历史预算字段与注释行）
-        new_content = re.sub(
-            r"(\[agents\.streamer\.context\]\n(?:(?:#|\w+ = )[^\n]*\n)*?enabled = )true",
-            r"\1false",
-            content,
-        )
-        assert new_content != content
-        agents_path.write_text(new_content, encoding="utf-8-sig")
 
-        config, _ = load_config_dir(config_dir)
+def test_user_values_of_kept_context_fields_are_preserved(agents_path) -> None:
+    content = agents_path.read_text(encoding="utf-8-sig")
+    # [agents.streamer.context] 段的 enabled 改为 false（段内还有历史预算字段与注释行）
+    changed = re.sub(r"(\[agents\.streamer\.context\]\n(?:(?:#|\w+ = )[^\n]*\n)*?enabled = )true", r"\1false", content)
+    assert changed != content
+    agents_path.write_text(changed, encoding="utf-8-sig")
 
-        context_cfg = config["agents"]["agents"]["streamer"]["context"]
-        assert context_cfg["enabled"] is False
+    config, _ = load_config_dir(agents_path.parent)
+    assert config["agents"]["agents"]["streamer"]["context"]["enabled"] is False

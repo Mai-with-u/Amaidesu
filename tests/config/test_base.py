@@ -1,4 +1,4 @@
-"""ConfigBase 漂移检测和 TOML 生成测试"""
+"""BaseConfig 漂移检测（冗余/缺失/嵌套路径）、from_dict 剥离未知字段、TOML 生成"""
 
 import pytest
 from pydantic import Field
@@ -6,95 +6,58 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig, DriftReport
 
 
-class _SampleConfig(BaseConfig):
+class _Sample(BaseConfig):
     type: str = Field(default="sample", description="类型")
     name: str = Field(default="default", description="名称")
     port: int = Field(default=8080, description="端口")
 
 
-class _NestedConfig(BaseConfig):
+class _Nested(BaseConfig):
     type: str = Field(default="nested", description="嵌套类型")
     host: str = Field(default="localhost", description="主机")
 
 
-class _ParentConfig(BaseConfig):
+class _Parent(BaseConfig):
     type: str = Field(default="parent", description="父类型")
-    child: _NestedConfig = Field(default_factory=_NestedConfig)
+    child: _Nested = Field(default_factory=_Nested)
 
 
-class TestDriftReport:
-    def test_empty_report_has_no_drift(self):
-        report = DriftReport()
-        assert not report.has_drift
-
-    def test_redundant_triggers_drift(self):
-        report = DriftReport(redundant=["zombie"])
-        assert report.has_drift
-
-    def test_missing_triggers_drift(self):
-        report = DriftReport(missing=["new_field"])
-        assert report.has_drift
-
-    def test_merge_prefixes_keys(self):
-        base = DriftReport()
-        other = DriftReport(redundant=["x"], missing=["y"])
-        base.merge("section", other)
-        assert "section.x" in base.redundant
-        assert "section.y" in base.missing
+def test_drift_report_flags_and_prefixes_merged_keys() -> None:
+    assert not DriftReport().has_drift
+    assert DriftReport(redundant=["zombie"]).has_drift and DriftReport(missing=["new_field"]).has_drift
+    base = DriftReport()
+    base.merge("section", DriftReport(redundant=["x"], missing=["y"]))
+    assert "section.x" in base.redundant and "section.y" in base.missing
 
 
-class TestFromDictWithDriftCheck:
-    def test_normal_data_no_drift(self):
-        data = {"type": "sample", "name": "test", "port": 9090}
-        instance, report = _SampleConfig.from_dict_with_drift_check(data)
-        assert not report.has_drift
-        assert instance.name == "test"
-        assert instance.port == 9090
+def test_drift_check_reports_redundant_missing_and_nested_paths() -> None:
+    instance, report = _Sample.from_dict_with_drift_check({"type": "sample", "name": "test", "port": 9090})
+    assert not report.has_drift and (instance.name, instance.port) == ("test", 9090)
 
-    def test_redundant_field_detected(self):
-        data = {"type": "sample", "name": "test", "port": 8080, "zombie": "bad"}
-        instance, report = _SampleConfig.from_dict_with_drift_check(data)
-        assert "zombie" in report.redundant
-        assert not hasattr(instance, "zombie")
+    instance, report = _Sample.from_dict_with_drift_check({"type": "sample", "name": "t", "port": 1, "zombie": "bad"})
+    assert "zombie" in report.redundant and not hasattr(instance, "zombie")
 
-    def test_missing_field_uses_default(self):
-        data = {"type": "sample"}
-        instance, report = _SampleConfig.from_dict_with_drift_check(data)
-        assert "name" in report.missing
-        assert "port" in report.missing
-        assert instance.name == "default"
-        assert instance.port == 8080
+    instance, report = _Sample.from_dict_with_drift_check({"type": "sample"})
+    assert {"name", "port"} <= set(report.missing) and (instance.name, instance.port) == (
+        "default",
+        8080,
+    )  # 缺失键用默认值
 
-    def test_nested_drift_detection(self):
-        data = {
-            "type": "parent",
-            "child": {"type": "nested", "host": "1.2.3.4", "extra": "bad"},
-        }
-        instance, report = _ParentConfig.from_dict_with_drift_check(data)
-        assert "child.extra" in report.redundant
-
-    def test_extra_forbidden_on_direct_init(self):
-        with pytest.raises(Exception):
-            _SampleConfig(type="sample", name="ok", unknown="ignored")
-
-    def test_from_dict_strips_unknown_fields(self):
-        instance = _SampleConfig.from_dict({"type": "sample", "name": "ok", "unknown": "ignored"})
-        assert instance.name == "ok"
-        assert not hasattr(instance, "unknown")
+    _, report = _Parent.from_dict_with_drift_check(
+        {"type": "parent", "child": {"type": "nested", "host": "1.2.3.4", "extra": "bad"}}
+    )
+    assert "child.extra" in report.redundant
 
 
-class TestGenerateToml:
-    def test_generates_toml_with_comments(self):
-        toml_str = _SampleConfig.generate_toml_string(name="sample_config")
-        assert "[sample_config]" in toml_str
-        assert "name" in toml_str
-        assert "port" in toml_str
+def test_unknown_fields_are_forbidden_on_init_but_stripped_by_from_dict() -> None:
+    with pytest.raises(Exception):  # noqa: B017 - extra=forbid 的具体异常类型是 pydantic 内部细节
+        _Sample(type="sample", name="ok", unknown="ignored")
+    instance = _Sample.from_dict({"type": "sample", "name": "ok", "unknown": "ignored"})
+    assert instance.name == "ok" and not hasattr(instance, "unknown")
 
-    def test_generates_toml_string_has_description_comments(self):
-        toml_str = _SampleConfig.generate_toml_string(name="test")
-        assert "#" in toml_str
 
-    def test_get_default_dict(self):
-        d = _SampleConfig.get_default_dict()
-        assert d["name"] == "default"
-        assert d["port"] == 8080
+def test_toml_generation_includes_fields_comments_and_default_dict() -> None:
+    text = _Sample.generate_toml_string(name="sample_config")
+    assert "[sample_config]" in text and "name" in text and "port" in text and "#" in text  # 描述渲染为注释
+    defaults = _Sample.get_default_dict()
+    assert (defaults["name"], defaults["port"]) == ("default", 8080)
