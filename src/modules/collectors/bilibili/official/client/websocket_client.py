@@ -10,7 +10,7 @@ import json
 import random
 import time
 from hashlib import sha256
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import requests
 import urllib3
@@ -18,6 +18,7 @@ import websockets
 
 from src.modules.logging import get_logger
 
+from .game_checkpoint import GameIdCheckpoint
 from .proto import Proto
 
 # 禁用HTTPS证书警告
@@ -38,12 +39,25 @@ _RECONNECT_MAX_ATTEMPTS = 0  # 最大重连次数，0 = 无限
 class BiliWebSocketClient:
     """Bilibili官方WebSocket客户端"""
 
-    def __init__(self, id_code: str, app_id: int, access_key: str, access_key_secret: str, api_host: str) -> None:
+    def __init__(
+        self,
+        id_code: str,
+        app_id: int,
+        access_key: str,
+        access_key_secret: str,
+        api_host: str,
+        game_id_checkpoint: Optional[GameIdCheckpoint] = None,
+        start_error_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> None:
         self.id_code = id_code
         self.app_id = app_id
         self.access_key = access_key
         self.access_key_secret = access_key_secret
         self.api_host = api_host
+        # 检查点：game_id 落盘，进程异常退出后下次启动仍能 end 掉服务端残留会话
+        self.game_id_checkpoint = game_id_checkpoint or GameIdCheckpoint()
+        # app/start 失败的外显回调（如采集器经事件总线向 WebUI 发告警），可为空
+        self.start_error_callback = start_error_callback
         self.logger = get_logger("BiliWebSocketClient")
 
         self.game_id = ""
@@ -64,6 +78,12 @@ class BiliWebSocketClient:
             return
 
         self.is_started = True
+
+        # B 站开放平台一个 app_id 同时只允许一场进行中的游戏：
+        # 上次进程异常退出未 end 的残留会话会在 app/start 撞"房间重复游戏"，
+        # 启动前先按检查点幂等清理一次（end 失败一律忽略，不阻塞正常 start）
+        await self._clear_stale_game()
+
         attempt = 0
 
         while self.is_started:
@@ -174,6 +194,17 @@ class BiliWebSocketClient:
         # verify=False 为既有取舍：显式跳过证书校验（历史行为，恢复需单独评估）
         return requests.post(url=url, headers=headers, data=body, verify=False, timeout=timeout)
 
+    async def _clear_stale_game(self) -> None:
+        """按检查点清理上次异常退出遗留的服务端游戏会话（幂等，可安全重复）"""
+        stale_game_id = self.game_id_checkpoint.load()
+        if not stale_game_id:
+            self.logger.debug("无残留检查点，跳过清残留")
+            return
+        # 残留可能已失效：end 返回任何错误都不阻塞启动
+        await self._end_app(game_id=stale_game_id)
+        self.game_id_checkpoint.clear()
+        self.logger.info(f"检测到残留 game_id={stale_game_id}，已清理")
+
     async def _get_websocket_info(self) -> tuple[Optional[str], Optional[str]]:
         """获取WebSocket连接信息"""
         try:
@@ -193,17 +224,24 @@ class BiliWebSocketClient:
 
             if data.get("code") != 0:
                 self.logger.error(f"应用启动失败: {data}")
+                await self._notify_start_error(
+                    f"B 站应用启动失败（code={data.get('code')}）: {data.get('message', data)}"
+                )
                 return None, None
 
             self.game_id = str(data["data"]["game_info"]["game_id"])
             wss_link = data["data"]["websocket_info"]["wss_link"][0]
             auth_body = data["data"]["websocket_info"]["auth_body"]
 
+            # 检查点落盘：进程异常退出后下次启动仍能 end 掉本场会话
+            self.game_id_checkpoint.save(self.game_id)
+
             self.logger.info(f"应用启动成功，游戏ID: {self.game_id}")
             return wss_link, auth_body
 
         except Exception as e:
             self.logger.exception(f"获取WebSocket信息失败: {e}")
+            await self._notify_start_error(f"B 站应用启动异常: {e}")
             return None, None
 
     async def _send_app_heartbeat(self) -> None:
@@ -230,14 +268,20 @@ class BiliWebSocketClient:
         except Exception as e:
             self.logger.warning(f"发送应用心跳时出错: {e}")
 
-    async def _end_app(self) -> None:
-        """结束应用"""
-        if not self.game_id:
+    async def _end_app(self, game_id: Optional[str] = None) -> None:
+        """结束应用
+
+        Args:
+            game_id: 要结束的会话 ID；缺省用当前实例的 game_id（清理
+                历史残留时传入外部 game_id，不依赖实例状态）
+        """
+        target_game_id = game_id if game_id is not None else self.game_id
+        if not target_game_id:
             return
 
         try:
             post_url = f"{self.api_host}/v2/app/end"
-            params = json.dumps({"game_id": self.game_id, "app_id": self.app_id})
+            params = json.dumps({"game_id": target_game_id, "app_id": self.app_id})
             header_map = self._sign(params)
 
             response = await asyncio.to_thread(
@@ -248,11 +292,22 @@ class BiliWebSocketClient:
             data = response.json()
             if data.get("code") == 0:
                 self.logger.info("应用结束成功")
+                # 会话已正常终结：检查点使命完成（end 失败则保留，供下次启动再清）
+                self.game_id_checkpoint.clear()
             else:
                 self.logger.warning(f"应用结束失败: {data}")
 
         except Exception as e:
             self.logger.warning(f"结束应用时出错: {e}")
+
+    async def _notify_start_error(self, message: str) -> None:
+        """app/start 失败外显：经回调上抛（采集器转事件总线告警），回调自身异常不外溢"""
+        if self.start_error_callback is None:
+            return
+        try:
+            await self.start_error_callback(message)
+        except Exception as e:
+            self.logger.warning(f"启动失败回调执行出错: {e}")
 
     async def _auth(self, websocket: Any, auth_body: str) -> None:
         """WebSocket认证"""

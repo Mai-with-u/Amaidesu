@@ -19,6 +19,7 @@ from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.core import CoreErrorPayload
 from src.modules.events.payloads.room import (
     GiftInfo,
     GuardInfo,
@@ -206,6 +207,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             access_key=self.access_key,
             access_key_secret=self.access_key_secret,
             api_host=self.api_host,
+            start_error_callback=self._emit_start_error_alert,
         )
 
         self.logger.info("开始采集 Bilibili 官方弹幕数据...")
@@ -247,6 +249,17 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             self.logger.exception(f"WebSocket运行出错: {e}")
         finally:
             await message_queue.put(None)
+
+    async def _emit_start_error_alert(self, message: str) -> None:
+        """app/start 失败显性化：经事件总线发 core.error，WebUI 告警可见
+
+        重试为无限指数退避，不终止启动——告警只补可见性，不做流程分支。
+        """
+        self.logger.error(message)
+        await self.emit_event(
+            CoreEvents.CORE_ERROR,
+            CoreErrorPayload(message=message, data={"collector": self.name}),
+        )
 
     async def _handle_message_from_bili(self, message_data: Dict[str, Any], message_queue: asyncio.Queue) -> None:
         """处理从 Bilibili 接收到的消息"""
