@@ -1,7 +1,4 @@
-"""ModuleLogger 门面单元测试。
-
-验证项目日志门面的级别、模块绑定、exc 参数语义与 raw() 逃生舱。
-"""
+"""ModuleLogger 门面：级别透传、模块绑定、exc 参数语义与 raw() 逃生舱。"""
 
 import pytest
 from loguru import logger
@@ -18,83 +15,52 @@ def records():
     logger.remove(handler_id)
 
 
-class TestModuleLogger:
-    def test_levels_and_module_binding(self, records):
-        """四个级别方法逐级透传，module 绑定全程保留。"""
-        log = ModuleLogger("facade_test")
-        log.debug("d")
-        log.info("i")
-        log.warning("w")
-        log.error("e")
+def test_levels_pass_through_with_the_module_binding_and_no_exception(records) -> None:
+    log = ModuleLogger("facade_test")
+    log.debug("d")
+    log.info("i")
+    log.warning("w")
+    log.error("e")
 
-        assert [r["level"].name for r in records] == ["DEBUG", "INFO", "WARNING", "ERROR"]
-        assert all(r["extra"]["module"] == "facade_test" for r in records)
-        assert all(r["exception"] is None for r in records)
+    assert [r["level"].name for r in records] == ["DEBUG", "INFO", "WARNING", "ERROR"]
+    assert all(r["extra"]["module"] == "facade_test" and r["exception"] is None for r in records)
 
-    def test_exception_logs_error_with_stack(self, records):
-        """exception() 为 ERROR 级且附着当前异常。"""
-        log = ModuleLogger("facade_exc")
-        try:
-            raise RuntimeError("boom")
-        except RuntimeError:
-            log.exception("处理失败")
 
-        rec = records[-1]
-        assert rec["level"].name == "ERROR"
-        assert rec["exception"] is not None
-        assert rec["exception"].value.args[0] == "boom"
+def test_exception_logs_error_level_with_the_active_stack(records) -> None:
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        ModuleLogger("facade_exc").exception("处理失败")
 
-    def test_error_exc_true_inside_except(self, records):
-        """error(exc=True) 在 except 块内附着当前异常。"""
-        log = ModuleLogger("facade_err")
-        try:
-            raise ValueError("inner")
-        except ValueError:
-            log.error("失败", exc=True)
+    assert records[-1]["level"].name == "ERROR" and records[-1]["exception"].value.args[0] == "boom"
 
-        rec = records[-1]
-        assert rec["exception"] is not None
-        assert isinstance(rec["exception"].value, ValueError)
 
-    def test_error_with_exception_instance(self, records):
-        """exc 可直接传异常对象（如 gather 捞回的结果）。"""
-        log = ModuleLogger("facade_inst")
-        err = ValueError("pre-built")
-        log.error("后端失败", exc=err)
+def test_exc_true_inside_except_attaches_the_stack_and_keeps_the_level(records) -> None:
+    log = ModuleLogger("facade_exc")
+    try:
+        raise ValueError("inner")
+    except ValueError:
+        log.error("失败", exc=True)
+        log.warning("warn with stack", exc=True)
 
-        rec = records[-1]
-        assert rec["exception"] is not None
-        assert rec["exception"].value is err
+    error, warning = records
+    assert (error["level"].name, warning["level"].name) == ("ERROR", "WARNING")  # 附着堆栈不改级别
+    assert isinstance(error["exception"].value, ValueError) and warning["exception"] is not None
 
-    def test_warning_exc_keeps_level(self, records):
-        """warning(exc=True) 保持 WARNING 级。"""
-        log = ModuleLogger("facade_warn")
-        try:
-            raise KeyError("k")
-        except KeyError:
-            log.warning("warn with stack", exc=True)
 
-        rec = records[-1]
-        assert rec["level"].name == "WARNING"
-        assert rec["exception"] is not None
+def test_exc_accepts_a_prebuilt_exception_instance_and_is_a_noop_without_an_active_one(records) -> None:
+    log = ModuleLogger("facade_inst")
+    prebuilt = ValueError("pre-built")  # 如 gather 捞回的结果
+    log.error("后端失败", exc=prebuilt)
+    assert records[-1]["exception"].value is prebuilt
 
-    def test_exc_outside_except_is_noop(self, records):
-        """无活动异常时 exc=True 不报错；记录至多留 (None,..) 占位，无真实堆栈。"""
-        log = ModuleLogger("facade_noop")
-        log.error("plain", exc=True)
+    log.error("plain", exc=True)  # 无活动异常：不报错，记录至多留占位，无真实堆栈
+    assert records[-1]["exception"] is None or records[-1]["exception"].type is None
 
-        exc = records[-1]["exception"]
-        assert exc is None or exc.type is None
 
-    def test_raw_returns_underlying_loguru_logger(self, records):
-        """raw() 返回底层 logger：原生 API 可用，模块绑定保留。"""
-        log = get_logger("raw_test")
-        raw = log.raw()
-        assert callable(raw.bind), "应暴露 loguru 原生 API"
+def test_get_logger_returns_the_facade_and_raw_exposes_loguru_with_the_binding(records) -> None:
+    log = get_logger("raw_test")
+    assert isinstance(log, ModuleLogger) and callable(log.raw().bind)  # 原生 API 可用
 
-        raw.info("via raw")
-        assert records[-1]["extra"]["module"] == "raw_test"
-
-    def test_get_logger_returns_facade(self):
-        """get_logger 应返回门面实例。"""
-        assert isinstance(get_logger("any"), ModuleLogger)
+    log.raw().info("via raw")
+    assert records[-1]["extra"]["module"] == "raw_test"
