@@ -21,7 +21,6 @@ dependencies = [
     # 数据验证
     "pydantic>=2.0",
     "jsonschema>=4.23.0",
-    "referencing>=0.35.0",
     # VTube Studio 控制
     "pyvts>=0.3.0",
     # TTS 相关
