@@ -1,101 +1,51 @@
-"""对话观察渲染契约单元测试：安全视图滤除 + 视觉带图消息组装。
-
-判定契约：长度超过 1KB、仅含 base64 字符集（A-Za-z0-9+/=）且无空白
-字符的字符串判为二进制载荷，替换为带真实 KB 数的占位符；中文长文、
-URL、JSON 文本等合法长内容必须原样保留。视觉调用方经
-extract_image_data_urls 取图，图只挂在下一次请求尾部，不进观察消息。
-"""
+"""对话观察渲染：超过 1KB 且仅含 base64 字符集的无空白串判为二进制载荷并替换为占位符；其余长内容原样保留"""
 
 from __future__ import annotations
 
 import json
 
+import pytest
+
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
 from src.modules.tools.models import ResultBlock, ToolExecutionResult
 
+PLACEHOLDER = "[图像 1 KB 已省略]"
 
-def test_base64_image_replaced_with_placeholder() -> None:
-    """形似截图载荷的 base64 串替换为占位符，二进制本体不进对话视图。"""
+
+def test_base64_payload_replaced_without_mutating_original() -> None:
     image = "A" * 2048  # 纯 base64 字符集、超 1KB、无空白
-    payload = {"text": "", "latency_ms": 36, "image": image}
+    payload = {"text": "", "latency_ms": 36, "image": image, "nested": {"frame": [image]}, "b": 3, "c": None}
 
     view = to_conversation_view(payload)
 
-    assert view["image"] == "[图像 1 KB 已省略]"
-    assert "AAA" not in json.dumps(view)
+    assert view["image"] == PLACEHOLDER and view["nested"]["frame"] == [PLACEHOLDER]
+    assert (view["b"], view["c"]) == (3, None) and "AAA" not in json.dumps(view)  # 递归处理，标量原样
+    assert payload["image"] == image and payload["nested"]["frame"] == [image]  # 返回新容器，UI 事件通道仍取完整载荷
+    assert to_conversation_view("A" * 2048) == PLACEHOLDER  # 载荷本身是字符串同样处理；KB 数按解码后字节量换算
 
 
-def test_original_payload_not_mutated() -> None:
-    """返回新容器，原载荷不动——UI 事件通道仍要完整取用 structured_content。"""
-    image = "A" * 2048
-    payload = {"image": image, "nested": {"frame": [image]}}
-
-    view = to_conversation_view(payload)
-
-    assert view["image"] == "[图像 1 KB 已省略]"
-    assert payload["image"] == image
-    assert payload["nested"]["frame"] == [image]
-
-
-def test_placeholder_reports_decoded_size() -> None:
-    """KB 数按 base64 解码后的真实字节量换算：2048 字符 ≈ 1536 字节 → 1 KB。"""
-    assert to_conversation_view("A" * 2048) == "[图像 1 KB 已省略]"
-
-
-def test_short_base64_like_strings_are_kept() -> None:
-    """1KB 以内的短编码（ID、校验值、短 token）原样保留。"""
-    short = "abc123+/=" * 100  # 900 字符，未过长度阈值
+def test_one_kb_boundary_and_short_encodings_are_kept() -> None:
+    assert to_conversation_view("A" * 1024) == "A" * 1024
+    assert to_conversation_view("A" * 1025) == PLACEHOLDER
+    short = "abc123+/=" * 100  # ID、校验值、短 token 不过阈值
     assert to_conversation_view({"token": short}) == {"token": short}
 
 
-def test_length_boundary_at_one_kb() -> None:
-    """阈值边界：恰好 1KB 保留，超出 1 字符即判为载荷。"""
-    assert to_conversation_view("A" * 1024) == "A" * 1024
-    assert to_conversation_view("A" * 1025) == "[图像 1 KB 已省略]"
-
-
-def test_long_chinese_prose_and_json_text_are_kept() -> None:
-    """合法长文本不被误伤：中文长文（远超 1KB）与 JSON 文本原样保留。"""
-    article = "这是一段很长的中文正文，讨论红石比较器的次序语义。" * 200
-    blob = json.dumps({"results": [article], "source": "web_search"}, ensure_ascii=False)
-    payload = {"content": article, "raw": blob}
-
-    assert to_conversation_view(payload) == payload
-
-
-def test_urls_and_whitespace_bearing_text_are_kept() -> None:
-    """含标点的 URL、含空白的长串不是 base64 形态，原样保留。"""
-    url = "https://example.com/wiki/红石?lang=zh&q=" + "术语+".join(["redstone"] * 100)
-    cases = [url, "x " * 2000, "word\n" * 500]
-    for text in cases:
-        assert to_conversation_view(text) == text
-
-
-def test_nested_structures_and_scalars_pass_through() -> None:
-    """递归处理 dict / list；标量与其他类型原样返回。"""
-    image = "A" * 2048
-    payload = {"a": [{"deep": image}], "b": 3, "c": None, "d": True, "e": 1.5}
-
-    view = to_conversation_view(payload)
-
-    assert view["a"][0]["deep"] == "[图像 1 KB 已省略]"
-    assert view["b"] == 3
-    assert view["c"] is None
-    assert view["d"] is True
-    assert view["e"] == 1.5
-
-
-def test_plain_string_payload_is_sanitized_too() -> None:
-    """载荷本身就是字符串（content 透传形态）同样按判定处理。"""
-    assert to_conversation_view("正文" * 10) == "正文" * 10
-    assert to_conversation_view("A" * 2048) == "[图像 1 KB 已省略]"
-
-
-# 视觉调用方取图（extract_image_data_urls）
+@pytest.mark.parametrize(
+    "text",
+    [
+        "这是一段很长的中文正文，讨论红石比较器的次序语义。" * 200,
+        json.dumps({"results": ["正文" * 500], "source": "web_search"}, ensure_ascii=False),
+        "https://example.com/wiki/红石?lang=zh&q=" + "术语+".join(["redstone"] * 100),
+        "x " * 2000,
+        "word\n" * 500,
+    ],
+)
+def test_legitimate_long_content_is_kept(text: str) -> None:
+    assert to_conversation_view(text) == text
 
 
 def test_extract_image_data_urls_from_blocks() -> None:
-    """图像块转 data URL；文本块与缺数据的块跳过；无图返回空列表。"""
     image = "A" * 2048
     result = ToolExecutionResult(
         tool_name="vision_look_at_screen",
@@ -103,11 +53,8 @@ def test_extract_image_data_urls_from_blocks() -> None:
         blocks=[
             ResultBlock(kind="text", text="画面描述"),
             ResultBlock(kind="image", data=image, mime_type="image/png"),
-            ResultBlock(kind="image", data="", mime_type="image/jpeg"),
+            ResultBlock(kind="image", data="", mime_type="image/jpeg"),  # 缺数据的图像块跳过
         ],
     )
-
-    urls = extract_image_data_urls(result)
-
-    assert urls == [f"data:image/png;base64,{image}"]
+    assert extract_image_data_urls(result) == [f"data:image/png;base64,{image}"]
     assert extract_image_data_urls(ToolExecutionResult(tool_name="x", success=True)) == []

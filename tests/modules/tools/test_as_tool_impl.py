@@ -1,83 +1,40 @@
-"""as_tool_impl 返回值归一化助手单测。
-
-覆盖：str 返回 → success + content；异常 → failure + error_message 含异常类型；
-自动计时 duration_ms > 0；ToolExecutionResult 透传与时间字段补全。
-"""
+"""as_tool_impl 返回值归一化：str/None 包成功结果、异常包失败结果（带异常类型）、自动计时、结果对象透传"""
 
 from __future__ import annotations
+
+import pytest
 
 from src.modules.tools import ToolInvocation
 from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.provider import as_tool_impl
 
 
-async def test_str_return_wrapped_as_success_content() -> None:
+async def _run(returned):
     async def plain(inv: ToolInvocation):
-        return "hello"
+        if isinstance(returned, Exception):
+            raise returned
+        return returned
 
-    impl = as_tool_impl("demo", plain)
-    res = await impl(ToolInvocation(tool_name="demo"))
-    assert res.success is True
-    assert res.content == "hello"
-    assert res.tool_name == "demo"
+    return await as_tool_impl("demo", plain)(ToolInvocation(tool_name="demo"))
 
 
-async def test_none_return_wrapped_as_empty_content() -> None:
-    async def plain(inv: ToolInvocation):
-        return None
-
-    impl = as_tool_impl("demo", plain)
-    res = await impl(ToolInvocation(tool_name="demo"))
-    assert res.success is True
-    assert res.content == ""
+@pytest.mark.parametrize(("returned", "content"), [("hello", "hello"), (None, "")])
+async def test_plain_return_is_wrapped_as_success_with_timing(returned, content) -> None:
+    res = await _run(returned)
+    assert (res.success, res.content, res.tool_name) == (True, content, "demo")
+    assert res.duration_ms >= 0 and res.timestamp_ms > 0
 
 
-async def test_exception_wrapped_as_failure_with_type_in_message() -> None:
-    async def plain(inv: ToolInvocation):
-        raise RuntimeError("后端挂了")
-
-    impl = as_tool_impl("demo", plain)
-    res = await impl(ToolInvocation(tool_name="demo"))
-    assert res.success is False
-    assert "RuntimeError" in res.error_message
-    assert "后端挂了" in res.error_message
+async def test_exception_is_wrapped_as_failure_with_type_in_message() -> None:
+    res = await _run(RuntimeError("后端挂了"))
+    assert res.success is False and "RuntimeError" in res.error_message and "后端挂了" in res.error_message
 
 
-async def test_duration_ms_recorded_positive() -> None:
-    async def plain(inv: ToolInvocation):
-        return "x"
+async def test_execution_result_passes_through_and_fills_or_keeps_time_fields() -> None:
+    filled = await _run(ToolExecutionResult(tool_name="demo", success=True, content="ok"))
+    assert (filled.content, filled.timestamp_ms > 0, filled.duration_ms >= 0) == ("ok", True, True)
 
-    impl = as_tool_impl("demo", plain)
-    res = await impl(ToolInvocation(tool_name="demo"))
-    assert res.duration_ms >= 0
-    assert res.timestamp_ms > 0
-
-
-async def test_execution_result_passthrough_with_time_fill() -> None:
-    async def plain(inv: ToolInvocation):
-        return ToolExecutionResult(tool_name="demo", success=True, content="ok")
-
-    impl = as_tool_impl("demo", plain)
-    res = await impl(ToolInvocation(tool_name="demo"))
-    assert res.success is True
-    assert res.content == "ok"
-    assert res.timestamp_ms > 0
-    assert res.duration_ms >= 0
-
-
-async def test_execution_result_keeps_explicit_time_fields() -> None:
-    explicit = ToolExecutionResult(
-        tool_name="demo",
-        success=True,
-        content="ok",
-        timestamp_ms=123,
-        duration_ms=45,
+    explicit = await _run(
+        ToolExecutionResult(tool_name="demo", success=True, content="ok", timestamp_ms=123, duration_ms=45)
     )
-
-    async def plain(inv: ToolInvocation):
-        return explicit
-
-    impl = as_tool_impl("demo", plain)
-    res = await impl(ToolInvocation(tool_name="demo"))
-    assert res.timestamp_ms == 123
-    assert res.duration_ms == 45
+    assert (explicit.timestamp_ms, explicit.duration_ms) == (123, 45)
