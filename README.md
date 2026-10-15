@@ -115,15 +115,12 @@ sequenceDiagram
 
 - Python 3.12+，包管理使用 [uv](https://docs.astral.sh/uv/)
 - Web Dashboard 的前端构建需要 Node.js + pnpm（不使用 Dashboard 时无需安装）
-- Windows / macOS / Linux 均可
 
 ### 快速开始
 
 ```bash
 # 1. 安装 uv（Windows PowerShell）
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 2. 克隆仓库
 git clone https://github.com/Mai-with-u/Amaidesu.git

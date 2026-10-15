@@ -6,7 +6,6 @@ Amaidesu 是一个 VTuber 直播辅助工具，支持弹幕互动、语音合成
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) 包管理器
-- Windows / macOS / Linux 均可（Windows PowerShell 示例见下文）
 
 ## 2. 安装步骤
 
@@ -14,12 +13,6 @@ Amaidesu 是一个 VTuber 直播辅助工具，支持弹幕互动、语音合成
 
 ```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-macOS / Linux：
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 ### 2.2 克隆仓库
