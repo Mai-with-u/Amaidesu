@@ -1,22 +1,12 @@
-"""
-配置加载集成测试
+"""配置加载：Schema 默认值与主配置合并、agents 启用名单、deep_merge 规则，以及历史重构遗留的契约守卫"""
 
-测试二级配置合并系统：
-1. Schema默认值（Pydantic）
-2. 主配置覆盖（[agents.<agent>] / [tools.<pack>.config.<component>]）
-
-兼容期保留旧 phase-based 查询 API（输入/输出/决策阶段）。
-新查询应使用 tools/agents 段。
-
-运行: uv run pytest tests/modules/config/test_config_loading.py -v
-"""
-
-import os
-import tempfile
+import inspect
 
 import pytest
 from pydantic import BaseModel
 
+from src.modules.config import schemas
+from src.modules.config.core_schemas import DiagnosticsConfig
 from src.modules.config.service import ConfigService, deep_merge_configs
 
 
@@ -28,179 +18,63 @@ class InputProviderSchema(BaseModel):
     custom_field: str = "default_value"
 
 
-class OutputProviderSchema(BaseModel):
-    enabled: bool = True
-    voice_id: str = "default"
-    speed: float = 1.0
-    volume: float = 0.8
-    output_format: str = "mp3"
+def _service(base_dir) -> ConfigService:
+    service = ConfigService(base_dir=str(base_dir))
+    service.initialize()
+    return service
 
 
-class DecisionProviderSchema(BaseModel):
-    enabled: bool = True
-    model: str = "default-model"
-    temperature: float = 0.7
-    max_tokens: int = 512
-    timeout: int = 30
-
-
-@pytest.fixture
-def temp_base_dir():
-    temp_dir = tempfile.mkdtemp()
-    yield temp_dir
-    import shutil
-
-    shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-def _write_main_config(base_dir: str, content: str) -> None:
-    """写入遗留 config.toml（单文件旧格式；多文件体系不读取该文件）。"""
-    config_path = os.path.join(base_dir, "config.toml")
-    with open(config_path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-def _write_agents_config(base_dir: str, content: str) -> None:
-    """写入 config/agents.toml（多文件格式）。"""
-    config_dir = os.path.join(base_dir, "config")
-    os.makedirs(config_dir, exist_ok=True)
-    with open(os.path.join(config_dir, "agents.toml"), "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-def test_schema_defaults_only(temp_base_dir):
-    """无主配置时使用 Schema 默认值。"""
-    _write_main_config(
-        temp_base_dir,
-        """
-[general]
-platform_id = "test"
-""",
+def test_schema_defaults_apply_and_unknown_phase_or_uninitialized_service_yield_nothing(tmp_path) -> None:
+    (tmp_path / "config.toml").write_text(
+        '[general]\nplatform_id = "test"\n\n[collectors]\nenabled = ["test_input"]\n', encoding="utf-8"
     )
+    service = _service(tmp_path)
+    merged = service.get_config_with_defaults("test_input", "input", InputProviderSchema)
+    assert merged == {
+        "enabled": True,
+        "priority": 100,
+        "message_prefix": "",
+        "max_messages": 10,
+        "custom_field": "default_value",
+    }
+    assert service.get_config_with_defaults("test_component", "invalid_phase") == {}
 
-    config_service = ConfigService(base_dir=temp_base_dir)
-    config_service.initialize()
-
-    merged_config = config_service.get_config_with_defaults("test_input", "input", InputProviderSchema)
-
-    assert merged_config["enabled"] is True
-    assert merged_config["priority"] == 100
-    assert merged_config["message_prefix"] == ""
-    assert merged_config["max_messages"] == 10
-    assert merged_config["custom_field"] == "default_value"
+    assert (
+        ConfigService(base_dir=str(tmp_path / "other")).get_config_with_defaults("test_input", "input") == {}
+    )  # 未初始化
 
 
-def test_agent_enabled_check_based_on_list_v2(temp_base_dir):
-    """agents 段 enabled 列表应保留用户启用项。
-
-    取值必须是 AgentType 已知名（streamer/minecraft/text_adv）——
-    未知名在校验阶段硬错（校验硬错语义，无 raw 降级）。
-    文件必须自带 [meta].version（每文件版本硬性要求）。
-    """
-    _write_agents_config(
-        temp_base_dir,
-        '[meta]\nversion = "2.0.31"\n\n[agents]\nenabled = ["streamer", "minecraft"]\n',
+def test_agents_enabled_list_keeps_the_users_choice(tmp_path) -> None:
+    """取值必须是 AgentType 已知名，文件必须自带 [meta].version（每文件版本硬性要求）。"""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "agents.toml").write_text(
+        '[meta]\nversion = "2.0.31"\n\n[agents]\nenabled = ["streamer", "minecraft"]\n', encoding="utf-8"
     )
-
-    config_service = ConfigService(base_dir=temp_base_dir)
-    config_service.initialize()
-
-    agents_config = config_service.get_section("agents", {})
-    enabled_list = agents_config.get("enabled", [])
-
-    assert "streamer" in enabled_list
-    assert "minecraft" in enabled_list
-    assert len(enabled_list) == 2
+    assert _service(tmp_path).get_section("agents", {}).get("enabled") == ["streamer", "minecraft"]
 
 
-def test_provider_not_initialized(temp_base_dir):
-    config_service = ConfigService(base_dir=temp_base_dir)
-
-    merged_config = config_service.get_config_with_defaults("test_input", "input")
-
-    assert merged_config == {}
-
-
-def test_invalid_provider_layer(temp_base_dir):
-    _write_main_config(
-        temp_base_dir,
-        """
-[general]
-platform_id = "test"
-""",
+def test_deep_merge_overrides_scalars_recurses_dicts_replaces_lists_and_ignores_none() -> None:
+    merged = deep_merge_configs(
+        {"a": 1, "b": 2, "nested": {"x": 10, "y": 20}, "items": [1, 2, 3]},
+        {"b": None, "c": 3, "nested": {"y": 200, "z": 30}, "items": [4, 5]},
     )
-
-    config_service = ConfigService(base_dir=temp_base_dir)
-    config_service.initialize()
-
-    merged_config = config_service.get_config_with_defaults("test_component", "invalid_phase")
-
-    assert merged_config == {}
+    assert merged == {"a": 1, "b": 2, "c": 3, "nested": {"x": 10, "y": 200, "z": 30}, "items": [4, 5]}  # None 不覆盖
+    assert deep_merge_configs({"a": 1, "b": 2}, {"b": 20, "c": 3}) == {"a": 1, "b": 20, "c": 3}
 
 
-def test_empty_overrides_section(temp_base_dir):
-    _write_main_config(
-        temp_base_dir,
-        """
-[general]
-platform_id = "test"
-
-[collectors]
-enabled = ["test_input"]
-""",
-    )
-
-    config_service = ConfigService(base_dir=temp_base_dir)
-    config_service.initialize()
-
-    merged_config = config_service.get_config_with_defaults("test_input", "input", InputProviderSchema)
-
-    assert merged_config["priority"] == 100
+def test_historical_refactor_contracts() -> None:
+    assert "list_all_providers" not in schemas.__all__  # __all__ 里的名称必须实际定义
+    assert all(hasattr(schemas, name) for name in schemas.__all__)
+    assert "phase" in inspect.signature(ConfigService.get_config_with_defaults).parameters  # 签名用 phase 而非 layer
+    assert "layer" not in inspect.signature(ConfigService.get_config_with_defaults).parameters
+    assert "phase" in inspect.signature(ConfigService.load_global_overrides).parameters
 
 
-def test_deep_merge_basic_types():
-    base = {"a": 1, "b": 2}
-    override = {"b": 20, "c": 3}
-
-    result = deep_merge_configs(base, override)
-
-    assert result["a"] == 1
-    assert result["b"] == 20
-    assert result["c"] == 3
-
-
-def test_deep_merge_nested_dicts_simple():
-    base = {"a": 1, "nested": {"x": 10, "y": 20}}
-    override = {"nested": {"y": 200, "z": 30}, "b": 2}
-
-    result = deep_merge_configs(base, override)
-
-    assert result["a"] == 1
-    assert result["nested"]["x"] == 10
-    assert result["nested"]["y"] == 200
-    assert result["nested"]["z"] == 30
-    assert result["b"] == 2
-
-
-def test_deep_merge_lists():
-    base = {"items": [1, 2, 3]}
-    override = {"items": [4, 5]}
-
-    result = deep_merge_configs(base, override)
-
-    assert result["items"] == [4, 5]
-
-
-def test_deep_merge_none_values():
-    base = {"a": 1, "b": 2}
-    override = {"b": None, "c": 3}
-
-    result = deep_merge_configs(base, override)
-
-    assert result["a"] == 1
-    assert result["b"] == 2
-    assert result["c"] == 3
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
+def test_diagnostics_keep_forever_by_default_and_reject_negative_retention() -> None:
+    """诊断正文是场次回看的事件侧事实源，默认不滚动删除；显式正整数保留天数才启用清理。"""
+    default = DiagnosticsConfig()
+    assert (default.enabled, default.retention_days) == (True, 0)
+    assert DiagnosticsConfig(retention_days=7).retention_days == 7
+    with pytest.raises(ValueError):
+        DiagnosticsConfig(retention_days=-1)
