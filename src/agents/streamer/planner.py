@@ -36,13 +36,14 @@ from __future__ import annotations
 import json
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
+from src.agents.streamer.state_facts import extract_state_facts
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.topic_gate import check_topic, rejection_reason
 from src.modules.context import TailImages
@@ -284,6 +285,11 @@ class Planner:
         # 最近几次给手上的游戏活补充过的要求（主播自己的原话，不含附带的来源对话）：
         # 看得到自己刚交代过什么，没有新要求时才不会把同样的话再补一遍
         self._recent_relays: Deque[_Relay] = deque(maxlen=self.typed_config.planner_recent_relays_max)
+        # 本决策窗的状态素材：游戏/身体叙事原文与本轮回执（每轮 plan() 入口重置），
+        # 状态跃迁事实块（planner 参考段与表达侧交接各一份）由 state_facts 提取器从这些素材生成
+        self._round_game_narrative: str = ""
+        self._round_body_narrative: str = ""
+        self._round_tool_receipts: List[Tuple[str, Any]] = []
 
         self._assembler = PlannerAssembler()
         # 工具刚返回的截图：观察里只留文字，真图挂在下一步请求的尾部让模型看一次
@@ -469,6 +475,10 @@ class Planner:
         self.last_failure = None
         # 上一窗没来得及看的截图属于旧画面，新的决策窗不带
         self._tail_images.drain()
+        # 本窗状态素材重置（首轮参考段用叙事，回执随 ReAct 循环逐步累积，reply 交接时取全量）
+        self._round_game_narrative = game_narrative or ""
+        self._round_body_narrative = body_narrative or ""
+        self._round_tool_receipts = []
 
         outcome: Dict[str, Any] = {
             "replied": False,
@@ -720,6 +730,11 @@ class Planner:
         if overview:
             # 本轮决策前自动读取的现场：已经足够时直接据此决定，不再调用同样的查询工具
             lines.append(f"【现场速览（本轮决策前自动读取）】\n{overview}")
+        state_facts = extract_state_facts(self._round_game_narrative, self._round_body_narrative)
+        if state_facts:
+            # 状态跃迁事实块：只收死亡/重生/任务开始结束/交付类条目，供客观核对，
+            # 不与叙事混排——叙事讲经历，这里只列可核对的状态
+            lines.append(f"【当前状态（客观事实）】\n{state_facts}")
         current_ms = now_ms()
         work = self._render_delegations(current_ms)
         if work:
@@ -917,6 +932,7 @@ class Planner:
         set_thinking = getattr(self._reply_provider, "set_thinking_callback", None)
         set_batch = getattr(self._reply_provider, "set_round_batch", None)
         set_game_chat = getattr(self._reply_provider, "set_round_game_chat", None)
+        set_state_facts = getattr(self._reply_provider, "set_round_state_facts", None)
         invoke_started_ms = now_ms()
         try:
             if set_thinking is not None:
@@ -927,6 +943,15 @@ class Planner:
             if set_game_chat is not None:
                 # 游戏里有人搭话促发的一轮弹幕批是空的，原话同样交给表达侧，调用后清空
                 set_game_chat(game_chat)
+            if set_state_facts is not None:
+                # 状态跃迁事实块：表达侧的客观事实底稿（含本轮观察工具回执要点），调用后清空
+                set_state_facts(
+                    extract_state_facts(
+                        self._round_game_narrative,
+                        self._round_body_narrative,
+                        self._round_tool_receipts,
+                    )
+                )
             result = await self._tool_registry.invoke(
                 ToolInvocation(
                     tool_name="streamer_reply",
@@ -948,6 +973,8 @@ class Planner:
                 set_batch(None)
             if set_game_chat is not None:
                 set_game_chat(None)
+            if set_state_facts is not None:
+                set_state_facts(None)
         outcome["reply_duration_ms"] += now_ms() - invoke_started_ms
 
         if not result.success:
@@ -1091,6 +1118,8 @@ class Planner:
                 # 补充要求送达了才记；被拒收的没交代到，不能当成"已经说过"
                 agent = str(data.get("executor") or args.get("agent") or "")
                 self._recent_relays.append(_Relay(at_ms=now_ms(), agent=agent, content=own_relay))
+            # 本轮回执进状态素材：reply 交接时的状态跃迁事实块从这里取观察工具的关键字段
+            self._round_tool_receipts.append((name, data))
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
         if self._visual_caller():

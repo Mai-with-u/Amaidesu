@@ -1,6 +1,6 @@
 ---
 name: amaidesu_replyer
-version: "4.3"
+version: "4.4"
 description: "复古表达输入：历史与新弹幕合并在同一段聊天记录中，模型只输出台词。"
 variables:
   - plan
@@ -8,6 +8,7 @@ variables:
   - game_chat
   - rundown
   - dialogue_prompt
+  - state_facts
   - bot_name
   - style_constraints
 author: Amaidesu
@@ -21,6 +22,10 @@ $dialogue_prompt
 ## 游戏里刚有人说的话
 
 $game_chat
+
+## 当前状态（客观事实）
+
+$state_facts
 
 ## 当前流程单环节
 

@@ -87,11 +87,14 @@ class Replyer:
         rundown: Optional[str] = None,
         on_delta: Optional[Any] = None,
         game_chat: Optional[List[str]] = None,
+        state_facts: str = "",
     ) -> Optional[Dict[str, Any]]:
         """按一条 system 与一条 user 的复古布局请求纯文本台词。
 
         历史只包含实际观众消息和主播发言，压缩后放入 user 的聊天记录块。
         游戏聊天、目标原文与流程单保持可见；不发送 tools 或 JSON 输出约束。
+        ``state_facts`` 是状态跃迁事实块（客观事实底稿，规则式提取器产出），
+        以"当前状态（客观事实）"分节进 user；空串时占位为"（无）"。
         返回台词与请求历史指针，供上层组装发声数据；失败或空台词返回 None。
         """
         # 防御：Planner 已裁决 should_reply=True 才会进入此处；False 直接放弃。
@@ -100,7 +103,9 @@ class Replyer:
             return None
 
         system_prompt = self._render_system_prompt()
-        turn_input = self._render_turn_input(plan, batch, rundown, history=history, game_chat=game_chat)
+        turn_input = self._render_turn_input(
+            plan, batch, rundown, history=history, game_chat=game_chat, state_facts=state_facts
+        )
         messages: List[Dict[str, Any]] = [{"role": "user", "content": turn_input}]
 
         try:
@@ -163,6 +168,7 @@ class Replyer:
         *,
         history: Optional[List[Any]] = None,
         game_chat: Optional[List[str]] = None,
+        state_facts: str = "",
     ) -> str:
         """历史与本轮信息合并成一条 user，表达风格放在输出指令之前。"""
         # 流程单上下文：None / 空串时用占位文本，与 Planner 对齐
@@ -220,6 +226,7 @@ class Replyer:
             ),
             game_chat="\n".join(game_chat) if game_chat else "（无）",
             rundown=rundown_render,
+            state_facts=state_facts.strip() or "（无）",
         )
 
     # ==================== 敏感词净化（输出端） ====================
