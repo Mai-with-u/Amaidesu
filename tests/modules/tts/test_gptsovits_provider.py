@@ -1,15 +1,6 @@
-"""GPTSoVITSProvider 测试
+"""GPTSoVITSProvider 特有行为：流式播放顺序、参考音频必填、服务不可达的简短报错、启动预热、整段合成
 
-覆盖：
-- ``output_device_name`` 字段已从 ConfigSchema 中删除
-- 无 utterance_id 时不发布事件
-- 有 utterance_id 时按 started → finished 顺序发布事件；流式引擎
-  duration_ms=None（合成未完）
-- 文本清洗（白名单字符）正常生效
-- 合成失败时主动发 failed 事件并 raise（不再返回 ToolExecutionResult）
-- 失败路径不会泄漏 started 已发布事件（应发 failed）
-- 音频流播放路径：start_stream / write_chunk / stop_stream 顺序调用
-- 工具化退役：invoke / list_tools 不再存在
+四个引擎共同的事件契约见 test_engine_contract.py。
 """
 
 from __future__ import annotations
@@ -20,494 +11,121 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.utterance import (
-    UtteranceFailedPayload,
-    UtteranceFinishedPayload,
-    UtteranceStartedPayload,
-)
+from src.modules.events.payloads.utterance import UtteranceFailedPayload
 from src.modules.tts.backends.gptsovits.client import GPTSoVITSServiceError
-from src.modules.tts.backends.gptsovits.provider import (
-    DTYPE,
-    GPTSoVITSProvider,
-)
-
-# Fixtures
+from src.modules.tts.backends.gptsovits.provider import DTYPE, GPTSoVITSProvider
+from tests.modules.tts.helpers import make_audio_manager, record_lifecycle, setup_with_audio_manager
 
 # api_v2 每请求必填参考音频：走合成路径的测试统一用已配置参考音频的引擎
-_CONFIGURED_CONFIG = {
-    "type": "gptsovits",
-    "ref_audio_path": "referenceAudio/ref.wav",
-    "prompt_text": "参考转写",
-}
+CONFIGURED = {"type": "gptsovits", "ref_audio_path": "referenceAudio/ref.wav", "prompt_text": "参考转写"}
 
 
-@pytest.fixture
-def event_bus() -> EventBus:
-    return EventBus()
-
-
-@pytest.fixture
-async def event_bus_async() -> EventBus:
-    bus = EventBus()
-    try:
-        yield bus
-    finally:
-        await bus.cleanup()
-
-
-def _build_mock_audio_manager() -> MagicMock:
-    """构造一个最小可用的 AudioDeviceManager mock
-
-    三个流式方法都是同步方法（write_chunk / stop_stream），start_stream 同；
-    GPT-SoVITS 在 provider 代码里直接调用，不走 await。
-    """
-    mgr = MagicMock()
-    mgr.start_stream = MagicMock()
-    mgr.write_chunk = MagicMock()
-    mgr.stop_stream = MagicMock()
+async def _started(provider: GPTSoVITSProvider, client: MagicMock, mgr: MagicMock | None = None) -> MagicMock:
+    """先 setup 再换上替身客户端，并等启动预热任务收尾（替身下瞬时完成），避免测试 loop 关闭时残留任务。"""
+    mgr = await setup_with_audio_manager(provider, mgr or make_audio_manager())
+    provider.tts_client = client
+    if provider._warmup_task is not None:
+        await asyncio.gather(provider._warmup_task, return_exceptions=True)
     return mgr
 
 
-def _patch_audio_manager(provider: GPTSoVITSProvider, mgr: MagicMock | None = None) -> Any:
-    """把 provider.audio_manager 替换为 mock"""
-    return patch.object(provider, "audio_manager", new=(mgr or _build_mock_audio_manager()))
+def _stream_client(*chunks: bytes, error: Exception | None = None) -> MagicMock:
+    return MagicMock(tts_stream=MagicMock(side_effect=error) if error else MagicMock(return_value=iter(chunks)))
 
 
-def _patch_audio_manager_constructor(mgr: MagicMock | None = None) -> Any:
-    """在 ``src.modules.audio`` 的 ``AudioDeviceManager`` 导入处替换为 mock。
+def test_schema_rejects_mp3_and_backend_is_api_v2() -> None:
+    with pytest.raises(ValidationError):  # api_v2 不支持 mp3，值域收紧为 wav/ogg
+        GPTSoVITSProvider.ConfigSchema.from_dict({"type": "gptsovits", "media_type": "mp3"})
+    assert GPTSoVITSProvider(config={"type": "gptsovits"}).get_stats()["backend"] == "api_v2"
 
-    ``handle_speech`` 自治 ensure_setup 会构造真实的 AudioDeviceManager，
-    因此必须拦截构造函数本身而非事后 patch 实例属性。引擎内的 import 形式
-    为 ``from src.modules.audio import AudioDeviceManager``，所以 patch 目标
-    是 ``src.modules.audio.AudioDeviceManager``。
-    """
-    return patch(
-        "src.modules.audio.AudioDeviceManager",
-        return_value=(mgr or _build_mock_audio_manager()),
-    )
 
+async def test_handle_speech_with_empty_stream_counts_one_render() -> None:
+    provider = GPTSoVITSProvider(config=dict(CONFIGURED))
+    assert provider._has_started is False
+    await _started(provider, _stream_client())
+    await provider.handle_speech("你好")
+    assert provider._has_started is True and provider.render_count == 1
 
-async def _prepare_started_provider(
-    provider: GPTSoVITSProvider,
-    *,
-    tts_client_mock: MagicMock | None = None,
-    mgr: MagicMock | None = None,
-) -> None:
-    """提前完成 setup：让 ``handle_speech`` 的自治 ensure_setup 不再覆盖 mock。
 
-    在 ``with`` 块外调用：先 setup 一次，让 tts_client / audio_manager 字段被
-    初始化；进入 ``with`` 块后再用 mock 覆盖实例属性即可。setup 会调度启动
-    预热任务，这里一并 await 收尾（mock client 下瞬时完成），避免测试 loop
-    关闭时残留 pending task。
-    """
-    with _patch_audio_manager_constructor(mgr):
-        await provider.setup()
-    if tts_client_mock is not None:
-        provider.tts_client = tts_client_mock
-    if provider._warmup_task is not None:
-        await asyncio.gather(provider._warmup_task, return_exceptions=True)
+async def test_stream_lifecycle_start_then_writes_then_stop() -> None:
+    provider = GPTSoVITSProvider(config=dict(CONFIGURED))
+    mgr = make_audio_manager()
+    log: list[str] = []
+    mgr.start_stream.side_effect = lambda utterance_id="": log.append(f"start:{utterance_id}")
+    mgr.write_chunk.side_effect = lambda chunk: log.append(f"write:{len(chunk)}")
+    mgr.stop_stream.side_effect = lambda: log.append("stop")
+    await _started(provider, _stream_client(b"c1", b"c2", b"c3"), mgr)
 
+    async def decode(chunk: bytes, dtype: Any = None) -> np.ndarray:
+        return np.arange(2048, dtype=DTYPE)
 
-# 配置 Schema：output_device_name 已删除
+    with patch("src.modules.tts.wav_decoder.decode_wav_chunk", new=decode):
+        await provider.handle_speech("x", utterance_id="utt_order")
 
+    assert log == ["start:utt_order", "write:2048", "write:2048", "write:2048", "stop"]
 
-class TestConfigSchemaCleanup:
-    """output_device_name 字段已从 ConfigSchema 中删除"""
 
-    def test_config_schema_does_not_contain_output_device_name(self):
-        fields = GPTSoVITSProvider.ConfigSchema.model_fields
-        assert "output_device_name" not in fields
+async def test_missing_reference_audio_fails_before_synthesis(event_bus: EventBus) -> None:
+    provider = GPTSoVITSProvider(config={"type": "gptsovits"}, event_bus=event_bus)
+    captured = record_lifecycle(event_bus)
+    await _started(provider, _stream_client())
+    provider.ref_audio_path = provider.prompt_text = ""  # 模拟配置缺失
 
-    def test_provider_initializes_without_output_device_name_attr(self, event_bus: EventBus):
-        provider = GPTSoVITSProvider(config={"type": "gptsovits"}, event_bus=event_bus)
-        assert not hasattr(provider, "output_device_name")
+    with pytest.raises(RuntimeError, match="参考音频未配置"):
+        await provider.handle_speech("你好", utterance_id="utt_no_ref")
+    await event_bus.cleanup()
 
-    def test_media_type_rejects_mp3(self):
-        """api_v2 不支持 mp3：schema 值域收紧为 wav/ogg"""
-        from pydantic import ValidationError
+    (failed,) = [p for name, p in captured if name == CoreEvents.TTS_UTTERANCE_FAILED]
+    assert isinstance(failed, UtteranceFailedPayload) and "ref_audio_path" in failed.error_message
 
-        with pytest.raises(ValidationError):
-            GPTSoVITSProvider.ConfigSchema.from_dict({"type": "gptsovits", "media_type": "mp3"})
 
+async def test_service_unreachable_reports_short_message_without_transport_noise(event_bus: EventBus) -> None:
+    provider = GPTSoVITSProvider(config=dict(CONFIGURED), event_bus=event_bus)
+    captured = record_lifecycle(event_bus)
+    error = GPTSoVITSServiceError("GPT-SoVITS 服务不可达 (http://127.0.0.1:9880)，请确认服务已启动")
+    await _started(provider, _stream_client(error=error))
 
-# 工具化退役：引擎不再实现 ToolProvider 协议
+    with pytest.raises(GPTSoVITSServiceError, match="服务不可达"):
+        await provider.handle_speech("你好", utterance_id="utt_svc_down")
+    await event_bus.cleanup()
 
+    (failed,) = [p for name, p in captured if name == CoreEvents.TTS_UTTERANCE_FAILED]
+    assert "服务不可达" in failed.error_message and "HTTPConnectionPool" not in failed.error_message
 
-class TestDeTooled:
-    def test_provider_has_no_invoke(self, event_bus: EventBus):
-        provider = GPTSoVITSProvider(config={"type": "gptsovits"}, event_bus=event_bus)
-        assert not hasattr(provider, "invoke")
 
-    def test_provider_has_no_list_tools(self, event_bus: EventBus):
-        provider = GPTSoVITSProvider(config={"type": "gptsovits"}, event_bus=event_bus)
-        assert not hasattr(provider, "list_tools")
+async def test_startup_warmup_primes_server_and_failure_is_swallowed() -> None:
+    provider = GPTSoVITSProvider(config=dict(CONFIGURED))
+    client = MagicMock()
+    await _started(provider, client)
+    # 参考音频预处理 + 一次短文本合成：把服务端冷启动惩罚挪出直播首句
+    client.set_refer_audio_remote.assert_called_once_with("referenceAudio/ref.wav")
+    client.tts.assert_called_once()
 
+    broken = GPTSoVITSProvider(config=dict(CONFIGURED))
+    await _started(broken, MagicMock(tts=MagicMock(side_effect=RuntimeError("connection refused"))))
+    assert broken._warmup_task.done()  # 预热失败只告警，不向装配方传播
 
-# 文本清洗白名单（保留旧行为）
 
+async def test_synthesize_bytes_passes_provider_params_and_guards_inputs() -> None:
+    provider = GPTSoVITSProvider(config=dict(CONFIGURED))
+    with pytest.raises(RuntimeError, match="setup"):  # 未 setup 直接报错指引初始化
+        provider.synthesize_bytes("你好")
 
-# handle_speech：自治 ensure_setup
+    client = MagicMock()
+    await _started(provider, client)
+    client.reset_mock()
+    client.tts.return_value = b"RIFF....wav"
 
+    assert provider.synthesize_bytes("你好🎉世界") == b"RIFF....wav"
+    kwargs = client.tts.call_args.kwargs
+    assert kwargs["text"] == "你好，世界"  # emoji 已映射为停顿
+    assert (kwargs["streaming_mode"], kwargs["media_type"]) == (False, "wav")
+    assert (kwargs["temperature"], kwargs["repetition_penalty"], kwargs["sample_steps"]) == (1.0, 1.35, 10)
 
-class TestHandleSpeechBasic:
-    async def test_handle_speech_triggers_lazy_setup(self, event_bus: EventBus):
-        """handle_speech 首次调用前未 setup：自动 ensure_setup"""
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus)
-        assert provider._has_started is False
-
-        await _prepare_started_provider(
-            provider,
-            tts_client_mock=MagicMock(tts_stream=MagicMock(return_value=iter([]))),
-        )
-
-        with patch.object(provider, "tts_client", new=MagicMock(tts_stream=MagicMock(return_value=iter([])))):
-            await provider.handle_speech("你好")
-
-        assert provider._has_started is True
-        assert provider.render_count == 1
-
-
-# utterance 生命周期事件（流式引擎）
-
-
-class TestUtteranceEventsStreaming:
-    """流式引擎：started 必发，duration_ms=None；finished 在 stop_stream 后发"""
-
-    async def test_no_utterance_id_emits_no_events(self, event_bus_async: EventBus):
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
-        captured: list[tuple[str, object]] = []
-
-        async def capture(event_name: str, data: object, source: str) -> None:
-            captured.append((event_name, data))
-
-        event_bus_async.on(CoreEvents.TTS_UTTERANCE_STARTED, capture, model_class=UtteranceStartedPayload)
-        event_bus_async.on(CoreEvents.TTS_UTTERANCE_FINISHED, capture, model_class=UtteranceFinishedPayload)
-
-        # 模拟流式：tts_client.tts_stream 返回空字节流的同步迭代器
-        await _prepare_started_provider(
-            provider,
-            tts_client_mock=MagicMock(tts_stream=MagicMock(return_value=iter([]))),
-        )
-
-        await provider.handle_speech("你好")
-
-        await event_bus_async.cleanup()
-        assert captured == []
-
-    async def test_utterance_id_emits_started_then_finished_with_streaming_call(self, event_bus_async: EventBus):
-        """有 utterance_id：started → finished；duration_ms=None；start/write/stop 流式调用"""
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
-        captured_events: list[tuple[str, object]] = []
-
-        async def capture(event_name: str, data: object, source: str) -> None:
-            captured_events.append((event_name, data))
-
-        event_bus_async.on(CoreEvents.TTS_UTTERANCE_STARTED, capture, model_class=UtteranceStartedPayload)
-        event_bus_async.on(CoreEvents.TTS_UTTERANCE_FINISHED, capture, model_class=UtteranceFinishedPayload)
-
-        mgr = _build_mock_audio_manager()
-
-        async def fake_decode_wav_chunk(chunk: bytes, dtype: Any = None) -> np.ndarray:
-            return np.arange(1024, dtype=DTYPE)
-
-        await _prepare_started_provider(
-            provider,
-            tts_client_mock=MagicMock(tts_stream=MagicMock(return_value=iter([b"chunk1", b"chunk2"]))),
-            mgr=mgr,
-        )
-
-        with patch("src.modules.tts.wav_decoder.decode_wav_chunk", new=fake_decode_wav_chunk):
-            await provider.handle_speech("你好", utterance_id="utt_gptsovits_1")
-
-        await event_bus_async.cleanup()
-
-        # 流式 API 顺序调用
-        mgr.start_stream.assert_called_once_with(utterance_id="utt_gptsovits_1")
-        assert mgr.write_chunk.call_count == 2
-        mgr.stop_stream.assert_called_once_with()
-
-        # 事件顺序与字段
-        assert [e[0] for e in captured_events] == [
-            CoreEvents.TTS_UTTERANCE_STARTED,
-            CoreEvents.TTS_UTTERANCE_FINISHED,
-        ]
-        started = captured_events[0][1]
-        assert isinstance(started, UtteranceStartedPayload)
-        assert started.utterance_id == "utt_gptsovits_1"
-        assert started.speech_text == "你好"
-        assert started.engine == "gptsovits"
-        # 流式引擎：合成未完 → duration_ms=None
-        assert started.duration_ms is None
-
-        finished = captured_events[1][1]
-        assert isinstance(finished, UtteranceFinishedPayload)
-        assert finished.utterance_id == "utt_gptsovits_1"
-        assert finished.engine == "gptsovits"
-
-    async def test_speech_text_keeps_symbols_not_normalized(self, event_bus_async: EventBus):
-        """含符号文本：事件 speech_text 传规范化前原文，清洗只进合成请求"""
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
-        captured: list[object] = []
-
-        async def capture(event_name: str, data: object, source: str) -> None:
-            captured.append(data)
-
-        event_bus_async.on(CoreEvents.TTS_UTTERANCE_STARTED, capture, model_class=UtteranceStartedPayload)
-
-        mgr = _build_mock_audio_manager()
-
-        async def fake_decode_wav_chunk(chunk: bytes, dtype: Any = None) -> np.ndarray:
-            return np.zeros(1, dtype=DTYPE)
-
-        tts_client = MagicMock(tts_stream=MagicMock(return_value=iter([b"chunk1"])))
-        await _prepare_started_provider(provider, tts_client_mock=tts_client, mgr=mgr)
-
-        with (
-            patch("src.modules.tts.wav_decoder.decode_wav_chunk", new=fake_decode_wav_chunk),
-        ):
-            await provider.handle_speech("大家好～(鼓掌)", utterance_id="utt_gsv_sym")
-
-        await event_bus_async.cleanup()
-
-        assert len(captured) == 1
-        started = captured[0]
-        assert isinstance(started, UtteranceStartedPayload)
-        assert started.speech_text == "大家好～(鼓掌)"
-        # 合成请求仍拿规范化文本（符号映射为停顿），与展示文本分离
-        sent_text = tts_client.tts_stream.call_args.kwargs["text"]
-        assert sent_text != started.speech_text
-        assert "～" not in sent_text
-
-
-class TestUtteranceEventsFailed:
-    """失败路径：发布 failed 事件并 raise（编排队列兜底）"""
-
-    async def test_synthesis_failure_emits_failed_and_raises(self, event_bus_async: EventBus):
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
-        captured: list[tuple[str, object]] = []
-
-        async def capture(event_name: str, data: object, source: str) -> None:
-            captured.append((event_name, data))
-
-        event_bus_async.on(CoreEvents.TTS_UTTERANCE_STARTED, capture, model_class=UtteranceStartedPayload)
-        event_bus_async.on(CoreEvents.TTS_UTTERANCE_FAILED, capture, model_class=UtteranceFailedPayload)
-
-        await _prepare_started_provider(
-            provider,
-            tts_client_mock=MagicMock(tts_stream=MagicMock(side_effect=RuntimeError("ws closed"))),
-        )
-
-        with pytest.raises(RuntimeError, match="ws closed"):
-            await provider.handle_speech("你好", utterance_id="utt_fail_1")
-
-        await event_bus_async.cleanup()
-
-        failed_events = [e for e in captured if e[0] == CoreEvents.TTS_UTTERANCE_FAILED]
-        assert len(failed_events) == 1
-        failed = failed_events[0][1]
-        assert isinstance(failed, UtteranceFailedPayload)
-        assert failed.utterance_id == "utt_fail_1"
-        assert failed.engine == "gptsovits"
-        assert "ws closed" in failed.error_message
-
-    async def test_service_unavailable_emits_failed_with_short_message(self, event_bus_async: EventBus):
-        """服务未启动（GPTSoVITSServiceError）：failed 事件携带简短消息并 raise"""
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
-        captured: list[tuple[str, object]] = []
-
-        async def capture(event_name: str, data: object, source: str) -> None:
-            captured.append((event_name, data))
-
-        event_bus_async.on(CoreEvents.TTS_UTTERANCE_FAILED, capture, model_class=UtteranceFailedPayload)
-
-        await _prepare_started_provider(
-            provider,
-            tts_client_mock=MagicMock(
-                tts_stream=MagicMock(
-                    side_effect=GPTSoVITSServiceError("GPT-SoVITS 服务不可达 (http://127.0.0.1:9880)，请确认服务已启动")
-                )
-            ),
-        )
-
-        with pytest.raises(GPTSoVITSServiceError, match="服务不可达"):
-            await provider.handle_speech("你好", utterance_id="utt_svc_down")
-
-        await event_bus_async.cleanup()
-
-        failed_events = [e for e in captured if e[0] == CoreEvents.TTS_UTTERANCE_FAILED]
-        assert len(failed_events) == 1
-        failed = failed_events[0][1]
-        assert isinstance(failed, UtteranceFailedPayload)
-        assert "服务不可达" in failed.error_message
-        assert "HTTPConnectionPool" not in failed.error_message
-
-
-class TestUtteranceEventsNoBus:
-    """event_bus=None：不抛，按"手动/直调场景"语义静默跳过"""
-
-    async def test_handle_speech_with_none_event_bus_succeeds(self):
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=None)
-
-        await _prepare_started_provider(
-            provider,
-            tts_client_mock=MagicMock(tts_stream=MagicMock(return_value=iter([]))),
-        )
-
-        await provider.handle_speech("hi", utterance_id="utt_no_bus")
-
-
-# 音频流顺序：start_stream / write_chunk / stop_stream
-
-
-class TestStreamingPlaybackOrder:
-    """确保 start_stream → 多次 write_chunk → stop_stream 顺序"""
-
-    async def test_stream_lifecycle_called_in_order(self, event_bus: EventBus):
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus)
-        mgr = _build_mock_audio_manager()
-
-        call_log: list[str] = []
-
-        def record_start(utterance_id: str = "") -> None:
-            call_log.append("start")
-
-        def record_write(chunk: np.ndarray) -> None:
-            call_log.append(f"write:{len(chunk)}")
-
-        def record_stop_stream() -> None:
-            call_log.append("stop")
-
-        mgr.start_stream.side_effect = record_start
-        mgr.write_chunk.side_effect = record_write
-        mgr.stop_stream.side_effect = record_stop_stream
-
-        async def fake_decode_wav_chunk(chunk: bytes, dtype: Any = None) -> np.ndarray:
-            return np.arange(2048, dtype=DTYPE)
-
-        chunks = [b"c1", b"c2", b"c3"]
-
-        await _prepare_started_provider(
-            provider,
-            tts_client_mock=MagicMock(tts_stream=MagicMock(return_value=iter(chunks))),
-            mgr=mgr,
-        )
-
-        with patch("src.modules.tts.wav_decoder.decode_wav_chunk", new=fake_decode_wav_chunk):
-            await provider.handle_speech("x", utterance_id="utt_stream_order")
-
-        assert call_log[0] == "start"
-        assert all(c.startswith("write:") for c in call_log[1:-1])
-        assert call_log[-1] == "stop"
-        assert len(call_log) == 1 + len(chunks) + 1  # start + N writes + stop
-
-
-# api_v2 迁移：参考音频必填 + 后端标识
-
-
-class TestStartupWarmup:
-    """启动预热：服务端冷启动惩罚挪出直播首句；失败不影响装配"""
-
-    async def test_setup_schedules_warmup_and_completes(self, event_bus_async: EventBus):
-        """setup 调度预热任务：参考音频预热 + 短文本合成，正常路径无异常"""
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
-        client_mock = MagicMock()
-        await _prepare_started_provider(provider, tts_client_mock=client_mock)
-
-        assert provider._warmup_task is not None
-        client_mock.set_refer_audio_remote.assert_called_once_with("referenceAudio/ref.wav")
-        client_mock.tts.assert_called_once()
-
-    async def test_warmup_failure_is_swallowed(self, event_bus_async: EventBus):
-        """预热阶段服务不可达：异常被吞（warning），不向装配方传播"""
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
-        client_mock = MagicMock()
-        client_mock.tts.side_effect = RuntimeError("connection refused")
-        await _prepare_started_provider(provider, tts_client_mock=client_mock)
-
-        # gather(return_exceptions=True) 已收尾；任务自身不应带异常逃逸语义
-        assert provider._warmup_task.done()
-
-
-class TestSynthesizeBytes:
-    """synthesize_bytes：批量回放/巡检用的整段合成（不播放、不发事件）"""
-
-    async def test_synthesize_bytes_passes_provider_params(self, event_bus_async: EventBus):
-        """规范化后按 provider 配置全量传参，streaming 关闭、返回客户端字节"""
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
-        client_mock = MagicMock()
-        client_mock.tts.return_value = b"RIFF....wav"
-        await _prepare_started_provider(provider, tts_client_mock=client_mock)
-        client_mock.reset_mock()
-        client_mock.tts.return_value = b"RIFF....wav"
-
-        out = provider.synthesize_bytes("你好🎉世界")
-
-        assert out == b"RIFF....wav"
-        client_mock.tts.assert_called_once()
-        kwargs = client_mock.tts.call_args.kwargs
-        assert kwargs["text"] == "你好，世界"  # emoji 已映射为停顿
-        assert kwargs["streaming_mode"] is False
-        assert kwargs["temperature"] == 1.0
-        assert kwargs["repetition_penalty"] == 1.35
-        assert kwargs["sample_steps"] == 10  # Schema 默认值（非直播配置的 8）
-        assert kwargs["media_type"] == "wav"
-
-    async def test_synthesize_bytes_empty_after_normalize(self, event_bus_async: EventBus):
-        """纯空白（规范化后 strip 为空）：不调客户端，返回空字节"""
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus_async)
-        client_mock = MagicMock()
-        await _prepare_started_provider(provider, tts_client_mock=client_mock)
-        client_mock.reset_mock()
-
-        assert provider.synthesize_bytes("   ") == b""
-        client_mock.tts.assert_not_called()
-
-    def test_synthesize_bytes_before_setup_raises(self, event_bus: EventBus):
-        """未 setup：直接 RuntimeError 指引初始化"""
-        provider = GPTSoVITSProvider(config=dict(_CONFIGURED_CONFIG), event_bus=event_bus)
-        with pytest.raises(RuntimeError, match="setup"):
-            provider.synthesize_bytes("你好")
-
-
-class TestApiV2Migration:
-    """api_v2 每请求必填参考音频；get_stats 标记后端类型"""
-
-    async def test_missing_ref_audio_emits_failed_and_raises(self, event_bus_async: EventBus):
-        """配置缺参考音频：started 后合成前报错，发 failed 事件并 raise"""
-        provider = GPTSoVITSProvider(config={"type": "gptsovits"}, event_bus=event_bus_async)
-        captured: list[tuple[str, object]] = []
-
-        async def capture(event_name: str, data: object, source: str) -> None:
-            captured.append((event_name, data))
-
-        event_bus_async.on(CoreEvents.TTS_UTTERANCE_FAILED, capture, model_class=UtteranceFailedPayload)
-
-        await _prepare_started_provider(
-            provider,
-            tts_client_mock=MagicMock(tts_stream=MagicMock(return_value=iter([]))),
-        )
-        # 模拟配置缺失：参考音频与提示文本均为空
-        provider.ref_audio_path = ""
-        provider.prompt_text = ""
-
-        with pytest.raises(RuntimeError, match="参考音频未配置"):
-            await provider.handle_speech("你好", utterance_id="utt_no_ref")
-
-        await event_bus_async.cleanup()
-
-        failed_events = [e for e in captured if e[0] == CoreEvents.TTS_UTTERANCE_FAILED]
-        assert len(failed_events) == 1
-        failed = failed_events[0][1]
-        assert isinstance(failed, UtteranceFailedPayload)
-        assert "ref_audio_path" in failed.error_message
-
-    def test_get_stats_reports_api_v2_backend(self, event_bus: EventBus):
-        provider = GPTSoVITSProvider(config={"type": "gptsovits"}, event_bus=event_bus)
-        assert provider.get_stats()["backend"] == "api_v2"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    client.reset_mock()
+    assert provider.synthesize_bytes("   ") == b""  # 规范化后为空：不调客户端
+    client.tts.assert_not_called()
