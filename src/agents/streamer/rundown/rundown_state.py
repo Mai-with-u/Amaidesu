@@ -32,11 +32,17 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Literal, Optional, cast
 
 from src.modules.logging import get_logger
-from src.modules.storage.models.rundown import Rundown, RundownSegment
+from src.modules.storage.models.rundown import Rundown, RundownInstance, RundownSegment
 from src.modules.time_utils import now_ms as _real_now_ms
 
 
-__all__ = ["RundownActor", "RundownReject", "RundownState", "TRANSITIONS_MAXLEN"]
+__all__ = [
+    "RundownActor",
+    "RundownReject",
+    "RundownState",
+    "SEGMENTS_MAX",
+    "TRANSITIONS_MAXLEN",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +91,12 @@ _MIN_GUARD_BY: frozenset[str] = frozenset({"agent"})
 
 #: restart 的独立白名单：单的生死归导演（human / system），Agent 在单内自主但无权重开
 _RESTART_VALID_BY: frozenset[str] = frozenset({"human", "system"})
+
+#: append 的独立白名单：追加是 Agent 的计划扩展权（导演改单走编辑写穿通道）
+_APPEND_VALID_BY: frozenset[str] = frozenset({"agent"})
+
+#: 单场流程单环节总数上限：防止 Agent 无限追加把情境文本撑爆
+SEGMENTS_MAX: int = 20
 
 
 def _format_duration_ms(ms: int) -> str:
@@ -470,6 +482,59 @@ class RundownState:
         )
         return None
 
+    def append_segment(
+        self,
+        segment: RundownSegment,
+        *,
+        by: str,
+        now_ms: Optional[int] = None,
+    ) -> Optional[RundownReject]:
+        """尾部追加环节（Agent 的计划扩展权）。
+
+        ``by`` 用独立白名单，仅接受 ``"agent"``（与 ``restart`` 对称：导演
+        改单走编辑写穿通道，不在此处）；非法值抛 ``ValueError``。
+
+        - 未加载 / ``seg_id`` 与现有环节冲突 / 环节总数达 :data:`SEGMENTS_MAX`
+          → 结构化拒绝（不变更、不发事件）。
+        - **running / paused 态游标不动**：新环节进入后续环节列表，Agent
+          可 ``goto`` 过去；paused 态保持暂停冻结。
+        - **done 态（index >= total）续命**：游标指向新追加环节（原 total
+          位置）、``segment_started_at_ms`` 重置为 ``now``，status 派生回
+          running——流程单走完后直播仍要继续时由此接续。
+
+        Returns:
+            ``None`` 表示接受；``RundownReject`` 表示拒绝（不变更、不发事件）。
+        """
+        if by not in _APPEND_VALID_BY:
+            raise ValueError(f"RundownState.append_segment: 非法 by={by!r}，仅接受 {_APPEND_VALID_BY}")
+        if self.rundown is None:
+            return RundownReject(reason="no_rundown_loaded")
+        available = [seg.id for seg in self.rundown.segments]
+        if segment.id in available:
+            return RundownReject(reason="duplicate_segment_id", available_ids=available)
+        if len(available) >= SEGMENTS_MAX:
+            return RundownReject(reason="limit_reached")
+
+        now = self._resolve_now(now_ms)
+        was_done = self.index >= len(self.rundown.segments)
+        # model_copy 替换环节列表而非原地改：self.rundown 可能是内置
+        # DEFAULT_RUNDOWN 常量，原地 append 会污染全局单例
+        self.rundown = self.rundown.model_copy(update={"segments": [*self.rundown.segments, segment]})
+        if was_done:
+            # 续命：游标指到新环节（原 total 位置），锚点从现在起算；
+            # paused_at_ms 在 done 态必为 None，无需处理
+            self.index = len(available)
+            self.segment_started_at_ms = now
+
+        self._apply_change(
+            action="append",
+            segment_id=segment.id,
+            segment_title=segment.title,
+            by=cast(RundownActor, by),
+            now_ms=now,
+        )
+        return None
+
     def replace_definition(
         self,
         rundown: Rundown,
@@ -568,6 +633,7 @@ class RundownState:
         )
 
         payload = RundownChangedPayload(
+            action=action,
             rundown_id=self.rundown.rundown_id if self.rundown is not None else "",
             segment_id=segment_id,
             segment_title=segment_title,
@@ -588,6 +654,75 @@ class RundownState:
                 self._on_changed(segment_id, by)
             except Exception as exc:
                 self._logger.warning(f"rundown on_changed 回调失败（状态已变更）: {exc}")
+
+    # ------------------------------------------------------------------
+    # 崩溃恢复
+    # ------------------------------------------------------------------
+
+    def restore(
+        self,
+        rundown: Rundown,
+        instance: RundownInstance,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> Optional[RundownReject]:
+        """从实例快照还原运行时进度（崩溃恢复通道）。
+
+        相比规格的 ``restore(instance)`` 多收一份 ``rundown``：状态机的
+        ``self.rundown`` 契约是 :class:`Rundown`，而实例快照不含标题等
+        模板字段——由调用方（已加载模板）把快照环节行换装进模板定义后传入，
+        避免"标题回填模板 id"这类脏数据。
+
+        快照损坏防御：``segments`` 为空或 ``seg_index`` 越界（不在
+        ``[-1, len(segments)]``）返回 ``invalid_snapshot`` 拒绝且**完全不动
+        现状**，调用方回退常规 load 路径。
+
+        计时锚点取**绝对时刻语义**原样还原：恢复后 elapsed 自然包含宕机
+        时间，超时闹钟照常报量，衔接决策归 Agent。``on_changed`` 照常置位
+        proactive pending——Agent 醒来看到"第 N 环节 + 已超时 X 分钟"自行
+        衔接，不重说开场白。
+        """
+        now = self._resolve_now(now_ms)
+        if not instance.segments:
+            return RundownReject(reason="invalid_snapshot")
+        if instance.seg_index < -1 or instance.seg_index > len(instance.segments):
+            return RundownReject(reason="invalid_snapshot")
+
+        self.rundown = rundown
+        self.index = instance.seg_index
+        self.segment_started_at_ms = instance.segment_started_at_ms
+        self.paused_at_ms = instance.paused_at_ms
+        self.rundown_started_at_ms = instance.rundown_started_at_ms
+        self._accumulated_pause_ms = instance.accumulated_pause_ms
+        self._accumulated_session_pause_ms = instance.accumulated_session_pause_ms
+
+        self._apply_change(
+            action="restore",
+            segment_id=self.current_segment_id,
+            segment_title=self.current_segment.title if self.current_segment else "",
+            by="system",
+            now_ms=now,
+        )
+        return None
+
+    def export_progress(self) -> Dict[str, Any]:
+        """导出实例写穿所需的进度头字段（只读快照，最小暴露面）。
+
+        返回 ``RundownInstance`` 头部对应的进度字段（不含 ``live_session_id``
+        与 ``updated_at_ms``——前者由桥接层按场次补，后者由仓储层刷新）；
+        未加载流程单返回空 dict，调用方据此跳过写穿。
+        """
+        if self.rundown is None:
+            return {}
+        return {
+            "template_id": self.rundown.rundown_id,
+            "seg_index": self.index,
+            "segment_started_at_ms": self.segment_started_at_ms,
+            "paused_at_ms": self.paused_at_ms,
+            "rundown_started_at_ms": self.rundown_started_at_ms,
+            "accumulated_pause_ms": self._accumulated_pause_ms,
+            "accumulated_session_pause_ms": self._accumulated_session_pause_ms,
+        }
 
     # ------------------------------------------------------------------
     # 只读派生

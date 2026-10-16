@@ -5,8 +5,8 @@
 契约约定
 --------
 - ``RundownState`` 是该事件**唯一发布者**：每次 load / goto / next / pause / resume /
-  replace_definition（编辑写穿）校验通过后即发射；拒绝路径（未知 id / 未达
-  min_duration）不发事件。
+  append（Agent 追加环节）/ restore（崩溃恢复）/ replace_definition（编辑写穿）
+  校验通过后即发射；拒绝路径（未知 id / 未达 min_duration）不发事件。
 - ``segment_id`` 含义：
   - 正常切换：变更后的环节 id
   - finish（next 越过末段）：``segment_id=""`` 且 ``index == total``，订阅者据此识别"流程单走完"
@@ -38,6 +38,8 @@ class RundownChangedPayload(BasePayload):
     订阅者：Dashboard（流程单控制台实时刷新）、事件记录器（事后回看"为什么跳到这里"）
 
     Attributes:
+        action: 变更动作名（load/goto/next/pause/resume/renew/append/restore 等）；
+            早期事件无此字段，空串 = 未声明
         rundown_id: 流程单 id（与 ``Rundown.rundown_id`` 一致）
         segment_id: 变更后的环节 id；finish 时为空字符串
         segment_title: 变更后的环节标题；finish 时为空字符串
@@ -49,6 +51,10 @@ class RundownChangedPayload(BasePayload):
         live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
     """
 
+    action: str = Field(
+        default="",
+        description="变更动作名（load/goto/next/pause/resume/renew/append/restore 等）",
+    )
     rundown_id: str = Field(..., description="流程单 id")
     segment_id: str = Field(default="", description="变更后的环节 id；finish 时为空字符串")
     segment_title: str = Field(default="", description="变更后的环节标题；finish 时为空字符串")

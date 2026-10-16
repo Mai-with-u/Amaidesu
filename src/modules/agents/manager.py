@@ -59,6 +59,8 @@ class AgentManager:
         *,
         tool_registry: Optional[ToolRegistry] = None,
         rundown_repo: Optional[Any] = None,
+        rundown_instance_repo: Optional[Any] = None,
+        rundown_transition_repo: Optional[Any] = None,
         chat_repo: Optional[Any] = None,
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
@@ -74,6 +76,8 @@ class AgentManager:
         self._enable_args: Dict[str, Dict[str, Any]] = {}
         self._tool_registry = tool_registry
         self._rundown_repo = rundown_repo
+        self._rundown_instance_repo = rundown_instance_repo
+        self._rundown_transition_repo = rundown_transition_repo
         self._chat_repo = chat_repo
         self._sessions_repo = sessions_repo
         self._topic_repo = topic_repo
@@ -207,6 +211,8 @@ class AgentManager:
         subtitle_service: Optional[Any] = None,
         session_manager: Optional[Any] = None,
         rundown_repo: Optional[Any] = None,
+        rundown_instance_repo: Optional[Any] = None,
+        rundown_transition_repo: Optional[Any] = None,
         chat_repo: Optional[Any] = None,
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
@@ -234,6 +240,12 @@ class AgentManager:
 
         effective_registry = tool_registry if tool_registry is not None else self._tool_registry
         effective_rundown_repo = rundown_repo if rundown_repo is not None else self._rundown_repo
+        effective_instance_repo = (
+            rundown_instance_repo if rundown_instance_repo is not None else self._rundown_instance_repo
+        )
+        effective_transition_repo = (
+            rundown_transition_repo if rundown_transition_repo is not None else self._rundown_transition_repo
+        )
         effective_chat_repo = chat_repo if chat_repo is not None else self._chat_repo
         effective_sessions_repo = sessions_repo if sessions_repo is not None else self._sessions_repo
         effective_topic_repo = topic_repo if topic_repo is not None else self._topic_repo
@@ -255,6 +267,8 @@ class AgentManager:
             subtitle_service=subtitle_service,
             session_manager=session_manager,
             rundown_repo=effective_rundown_repo,
+            rundown_instance_repo=effective_instance_repo,
+            rundown_transition_repo=effective_transition_repo,
             chat_repo=effective_chat_repo,
             sessions_repo=effective_sessions_repo,
             topic_repo=effective_topic_repo,

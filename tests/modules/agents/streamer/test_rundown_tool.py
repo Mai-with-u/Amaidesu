@@ -87,10 +87,13 @@ def test_tool_is_visible_to_the_planner_with_a_complete_function_shape() -> None
     provider, _ = _provider()
     fn_defs = {f["name"]: f for f in _planner(_registry_with(provider))._build_tool_list()}
     parameters = fn_defs["rundown_control"]["parameters"]
-    assert parameters["properties"]["action"]["enum"] == ["next", "goto", "pause", "resume", "renew"]
+    assert parameters["properties"]["action"]["enum"] == ["next", "goto", "pause", "resume", "renew", "append"]
     assert parameters["required"] == ["action"]
     assert "renew" in _PARAMETERS_SCHEMA["properties"]["action"]["enum"]  # Planner 侧可见续期能力
     assert "restart" not in _PARAMETERS_SCHEMA["properties"]["action"]["enum"]  # 整场重开是导演通道，Agent 无权
+    seg_schema = _PARAMETERS_SCHEMA["properties"]["segment"]
+    assert seg_schema["type"] == "object"
+    assert set(seg_schema["required"]) == {"seg_id", "title", "task_description", "expected_ms"}
 
 
 async def test_registry_invoke_and_planner_dispatch_share_one_state_machine() -> None:
@@ -205,3 +208,77 @@ def test_invoke_blank_title_target_rejected(action: str) -> None:
     assert "标题" in result["error"]
     assert emitted == []
     assert provider._state.get_snapshot()["current"]["id"] == "a"
+
+
+# ---------------------------------------------------------------------------
+# append（第六动作）
+# ---------------------------------------------------------------------------
+
+
+def test_append_appends_segment_and_returns_snapshot() -> None:
+    provider, clock = _provider()
+    result = _call(
+        provider,
+        action="append",
+        segment={
+            "seg_id": "bonus",
+            "title": "临时加场",
+            "task_description": "回应弹幕热点",
+            "expected_ms": 120_000,
+        },
+    )
+    assert result["ok"] is True and result["rundown"]["status"] == "running"
+    assert result["rundown"]["total"] == 5
+    # running 态游标不动，新环节进 upcoming
+    assert result["rundown"]["current"]["id"] == "opening"
+    appended = provider._state.rundown.segments[-1]
+    assert (appended.id, appended.title, appended.expected_ms) == ("bonus", "临时加场", 120_000)
+    assert clock is not None
+
+
+def test_append_after_done_extends_lifecycle() -> None:
+    provider, _ = _provider()
+    for _ in range(4):
+        _call(provider, action="next")
+    assert provider._state.get_snapshot()["status"] == "done"
+    result = _call(
+        provider,
+        action="append",
+        segment={"seg_id": "encore", "title": "返场", "task_description": "自由闲聊", "expected_ms": 300_000},
+    )
+    # 续命：追加后 status 回 running，游标指到新环节
+    assert result["ok"] is True
+    assert (result["rundown"]["status"], result["rundown"]["current"]["id"]) == ("running", "encore")
+
+
+def test_append_expected_ms_lower_bound_rejected() -> None:
+    provider, _ = _provider()
+    result = _call(
+        provider,
+        action="append",
+        segment={"seg_id": "tiny", "title": "太短", "task_description": "x", "expected_ms": 30_000},
+    )
+    assert result["ok"] is False
+    assert "至少 1 分钟" in result["error"]
+    assert len(provider._state.rundown.segments) == 4  # 拒绝不变更
+
+
+def test_append_missing_or_malformed_segment_rejected() -> None:
+    provider, _ = _provider()
+    missing = _call(provider, action="append")
+    assert missing["ok"] is False and "segment" in missing["error"]
+
+    bad = _call(
+        provider,
+        action="append",
+        segment={"seg_id": "", "title": "  ", "task_description": "x", "expected_ms": 120_000},
+    )
+    assert bad["ok"] is False and "校验失败" in bad["error"]
+
+    dup = _call(
+        provider,
+        action="append",
+        segment={"seg_id": "opening", "title": "撞 id", "task_description": "x", "expected_ms": 120_000},
+    )
+    assert dup["ok"] is False and dup["reason"] == "duplicate_segment_id"
+    assert "opening" in dup["available_segment_ids"]

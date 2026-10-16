@@ -45,7 +45,14 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.logging import get_logger
-from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown
+from src.modules.storage.models.rundown import (
+    DEFAULT_RUNDOWN,
+    Rundown,
+    RundownInstance,
+    RundownInstanceSegment,
+    RundownSegment,
+    RundownTransition,
+)
 from src.modules.task_utils import spawn_background_task
 from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
@@ -149,6 +156,8 @@ class StreamerAgent(BaseAgent):
         event_bus: Optional[EventBus] = None,
         tool_registry: Optional[ToolRegistry] = None,
         rundown_repo: Optional[Any] = None,
+        rundown_instance_repo: Optional[Any] = None,
+        rundown_transition_repo: Optional[Any] = None,
         chat_repo: Optional[Any] = None,
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
@@ -174,6 +183,10 @@ class StreamerAgent(BaseAgent):
                 VTS 表情工具仍走该 registry，TTS 不再走；
                 Planner/Replyer 也从它读取 game 工具清单做动作选择）
             rundown_repo: 可选 ``RundownRepo``（流程单库；配置 rundown_id 时启动读取）
+            rundown_instance_repo: 可选 ``RundownInstanceRepo``（实例快照仓储）。
+                ``None`` 时崩溃恢复与实例写穿整体跳过（保持可测试性）
+            rundown_transition_repo: 可选 ``RundownTransitionRepo``（变更事实仓储）。
+                ``None`` 时变更不落行（保持可测试性）
             chat_repo: 可选 ``ChatRepo``（live_chat 会话历史读取，reply tool 历史源）
             sessions_repo: 可选 ``SessionRepo``（live_sessions 实时状态，转交后台维护器）
             topic_repo: 可选 ``TopicRepo``（摘要/话题快照落地，转交后台维护器）
@@ -229,6 +242,9 @@ class StreamerAgent(BaseAgent):
         self._tool_registry = tool_registry
         # 仓储注入（组合根按需分发；None 时对应能力降级）
         self._rundowns = rundown_repo
+        # 流程单持久化两仓储（可选；None 时对应持久化能力整体跳过）
+        self._rundown_instance_repo = rundown_instance_repo
+        self._rundown_transition_repo = rundown_transition_repo
         self._chat = chat_repo
         self._session_manager = session_manager
         # 思考流旁路出口（可选；观察面专用，不进 EventBus 不落库）
@@ -1317,8 +1333,65 @@ class StreamerAgent(BaseAgent):
                 self._logger.warning(f"流程单 '{rundown_id}' 不存在，回退内置默认流程单")
         if rundown is None:
             rundown = DEFAULT_RUNDOWN
+        if await self._try_restore_rundown(rundown):
+            return
         self._rundown_state.load(rundown)
         self._logger.info(f"流程单已加载: id={rundown.rundown_id!r}, segments={len(rundown.segments)}")
+
+    async def _try_restore_rundown(self, template: Rundown) -> bool:
+        """崩溃恢复：有活跃场次且实例快照与本单模板匹配时还原进度。
+
+        - 无实例仓储 / 无活跃场次 / 无快照 → ``False``（走常规 load）。
+        - ``template_id`` 不匹配（导演开播前换了单）或快照无环节行 →
+          ``False`` + info 日志，绝不拿别的单的进度套本单。
+        - 快照损坏（越界游标等）→ ``RundownState.restore`` 拒绝，回退常规
+          load + warning。
+        - 成功 → 用快照环节行（含 Agent 追加环节，防模板漂移）构造清单并
+          ``restore``，info 日志含恢复到的环节位置。
+        """
+        if self._rundown_instance_repo is None or self._session_manager is None:
+            return False
+        try:
+            pk = await self._session_manager.resolve_pk()
+        except Exception as exc:
+            self._logger.warning(f"崩溃恢复跳过：场次主键解析失败: {exc}", exc=True)
+            return False
+        if pk is None:
+            return False
+        try:
+            snapshot = await self._rundown_instance_repo.get_by_session(pk)
+        except Exception as exc:
+            self._logger.warning(f"崩溃恢复跳过：实例快照读取失败（回退常规加载）: {exc}", exc=True)
+            return False
+        if snapshot is None:
+            return False
+        if snapshot.template_id != template.rundown_id or not snapshot.segments:
+            self._logger.info(f"实例快照与流程单不匹配（template={snapshot.template_id!r}），回退常规加载")
+            return False
+        rundown = template.model_copy(
+            update={
+                "segments": [
+                    RundownSegment(
+                        id=s.seg_id,
+                        title=s.title,
+                        task_description=s.task_description,
+                        expected_ms=s.expected_ms,
+                        min_duration_ms=s.min_duration_ms,
+                        notes=s.notes,
+                    )
+                    for s in snapshot.segments
+                ]
+            }
+        )
+        reject = self._rundown_state.restore(rundown, snapshot)
+        if reject is not None:
+            self._logger.warning(f"实例快照损坏（{reject.reason}），回退常规加载")
+            return False
+        self._logger.info(
+            f"流程单已从实例快照恢复: id={template.rundown_id!r}, "
+            f"恢复到第 {snapshot.seg_index + 1}/{len(snapshot.segments)} 环节"
+        )
+        return True
 
     def _on_rundown_changed(self, segment_id: str, by: str) -> None:
         """流程单变更通知：置位 proactive 即时信号（新环节开场要马上说）。"""
@@ -1326,14 +1399,97 @@ class StreamerAgent(BaseAgent):
         self._logger.info(f"流程单变更: segment={segment_id!r}, by={by!r}")
 
     def _emit_rundown_changed(self, event_name: str, payload: Any) -> None:
-        """桥接 RundownState 的事件回调到 EventBus（异步 emit 经任务调度）。"""
-        if self._event_bus is None:
+        """桥接 RundownState 的事件回调：EventBus 异步 emit + 场次持久化（落行/写穿）。"""
+        if self._event_bus is not None:
+            spawn_background_task(
+                self._event_bus.emit(event_name, payload, source="RundownState"),
+                logger=self._logger,
+                tasks=self._bg_tasks,
+                label="StreamerAgent.rundown_changed_emit",
+            )
+        self._persist_rundown_change(payload)
+
+    def _persist_rundown_change(self, payload: Any) -> None:
+        """流程单变更的持久化旁路：transitions 落行 + 实例快照写穿（fire-and-forget）。
+
+        两仓储任一未注入则整体跳过（测试与降级场景）；无活跃场次
+        （``resolve_pk()`` 为 None）不落任何行。落行与写穿各自独立
+        try/except——失败只 warning，不阻断状态机与事件链路，也不互相阻断。
+        """
+        if self._rundown_instance_repo is None and self._rundown_transition_repo is None:
             return
+
+        async def _run() -> None:
+            try:
+                pk = await self._session_manager.resolve_pk() if self._session_manager is not None else None
+            except Exception as exc:
+                self._logger.warning(f"流程单持久化跳过：场次主键解析失败: {exc}", exc=True)
+                return
+            if pk is None:
+                return
+
+            # --- 变更事实行（append-only）---
+            if self._rundown_transition_repo is not None:
+                try:
+                    current = self._rundown_state.current_segment
+                    task_desc: Optional[str] = None
+                    if payload.action == "append" and self._rundown_state.rundown is not None:
+                        appended = next(
+                            (s for s in self._rundown_state.rundown.segments if s.id == payload.segment_id),
+                            None,
+                        )
+                        task_desc = appended.task_description if appended is not None else None
+                    await self._rundown_transition_repo.insert(
+                        RundownTransition(
+                            live_session_id=pk,
+                            rundown_id=payload.rundown_id,
+                            action=payload.action,
+                            seg_id=payload.segment_id,
+                            seg_title=payload.segment_title,
+                            seg_index=payload.index,
+                            by=payload.by,
+                            at_ms=payload.at_ms,
+                            expected_ms=current.expected_ms if current is not None else None,
+                            task_description=task_desc,
+                            updated_at_ms=now_ms(),
+                        )
+                    )
+                except Exception as exc:
+                    self._logger.warning(f"rundown_transitions 落行失败（不阻断链路）: {exc}", exc=True)
+
+            # --- 实例快照写穿（头 + 环节行全量替换）---
+            if self._rundown_instance_repo is not None:
+                try:
+                    progress = self._rundown_state.export_progress()
+                    state_rundown = self._rundown_state.rundown
+                    if progress and state_rundown is not None:
+                        await self._rundown_instance_repo.upsert(
+                            RundownInstance(
+                                live_session_id=pk,
+                                updated_at_ms=now_ms(),
+                                segments=[
+                                    RundownInstanceSegment(
+                                        seq=i,
+                                        seg_id=seg.id,
+                                        title=seg.title,
+                                        task_description=seg.task_description,
+                                        expected_ms=seg.expected_ms,
+                                        min_duration_ms=seg.min_duration_ms,
+                                        notes=seg.notes,
+                                    )
+                                    for i, seg in enumerate(state_rundown.segments)
+                                ],
+                                **progress,
+                            )
+                        )
+                except Exception as exc:
+                    self._logger.warning(f"rundown_instances 写穿失败（不阻断链路）: {exc}", exc=True)
+
         spawn_background_task(
-            self._event_bus.emit(event_name, payload, source="RundownState"),
+            _run(),
             logger=self._logger,
             tasks=self._bg_tasks,
-            label="StreamerAgent.rundown_changed_emit",
+            label="StreamerAgent.rundown_persist",
         )
 
     # ==================================================================

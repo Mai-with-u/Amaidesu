@@ -540,6 +540,9 @@ async def create_app_components(
         agent_manager = AgentManager(
             tool_registry=tool_registry,
             rundown_repo=database.rundowns,
+            # 流程单持久化两仓储（崩溃恢复 + 变更事实）
+            rundown_instance_repo=database.rundown_instances,
+            rundown_transition_repo=database.rundown_transitions,
             chat_repo=database.chat,
             sessions_repo=database.sessions,
             topic_repo=database.topics,
@@ -625,6 +628,8 @@ async def create_app_components(
             subtitle_service=None if subtitle_follows_playback else subtitle_service,
             session_manager=session_manager,
             rundown_repo=database.rundowns,
+            rundown_instance_repo=database.rundown_instances,
+            rundown_transition_repo=database.rundown_transitions,
             chat_repo=database.chat,
             sessions_repo=database.sessions,
             topic_repo=database.topics,
@@ -1027,6 +1032,8 @@ async def _register_agents_from_config(
     subtitle_service: Optional[Any] = None,
     session_manager: Optional[Any] = None,
     rundown_repo: Optional[Any] = None,
+    rundown_instance_repo: Optional[Any] = None,
+    rundown_transition_repo: Optional[Any] = None,
     chat_repo: Optional[Any] = None,
     sessions_repo: Optional[Any] = None,
     topic_repo: Optional[Any] = None,
@@ -1095,6 +1102,8 @@ async def _register_agents_from_config(
             # 仓储四件（对话历史/流程单/场次状态/话题快照的读侧面）；
             # chat_repo 缺失 = StreamerAgent 历史读取整体短路
             rundown_repo=rundown_repo,
+            rundown_instance_repo=rundown_instance_repo,
+            rundown_transition_repo=rundown_transition_repo,
             chat_repo=chat_repo,
             sessions_repo=sessions_repo,
             topic_repo=topic_repo,

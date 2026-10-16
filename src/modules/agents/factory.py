@@ -40,6 +40,8 @@ def instantiate_agent(
     subtitle_service: Optional[Any] = None,
     session_manager: Optional[Any] = None,
     rundown_repo: Optional[Any] = None,
+    rundown_instance_repo: Optional[Any] = None,
+    rundown_transition_repo: Optional[Any] = None,
     chat_repo: Optional[Any] = None,
     sessions_repo: Optional[Any] = None,
     topic_repo: Optional[Any] = None,
@@ -54,7 +56,8 @@ def instantiate_agent(
 
     基础设施参数按 Agent 各自消费面透传（未列出的 Agent 忽略对应参数）：
     - streamer：thinking_sink / speech_config / tts_engine / subtitle_service /
-      session_manager / rundown_repo / chat_repo / sessions_repo / topic_repo /
+      session_manager / rundown_repo / rundown_instance_repo /
+      rundown_transition_repo / chat_repo / sessions_repo / topic_repo /
       viewer_repo / viewer_profile_repo / recap_repo / event_repo /
       context_assembler_config。仓储缺省 None 时对应能力降级（chat_repo 缺失
       = 对话历史读取整体短路，Planner/Replyer 无历史上下文；记忆两仓储缺失
@@ -94,6 +97,8 @@ def instantiate_agent(
             event_bus=event_bus,
             tool_registry=tool_registry,
             rundown_repo=rundown_repo,
+            rundown_instance_repo=rundown_instance_repo,
+            rundown_transition_repo=rundown_transition_repo,
             chat_repo=chat_repo,
             sessions_repo=sessions_repo,
             topic_repo=topic_repo,

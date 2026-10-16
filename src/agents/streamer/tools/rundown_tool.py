@@ -34,21 +34,40 @@ __all__ = [
     "RundownControlProvider",
 ]
 
+# append 动作的预期时长下界：追加环节至少值 1 分钟的直播时间，
+# 挡掉"随口起意 30 秒"这类碎片动作（超短内容不值得占用环节位）
+_APPEND_MIN_EXPECTED_MS: int = 60_000
+
 _PARAMETERS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["next", "goto", "pause", "resume", "renew"],
+            "enum": ["next", "goto", "pause", "resume", "renew", "append"],
             "description": (
                 "next=结束当前环节切到下一环节（当前是末段时结束整场流程单）；"
                 "goto=跳到指定环节（不限方向）；pause=暂停环节计时；resume=恢复计时；"
-                "renew=续期当前环节（计时重新起算，本环节再给一个完整预期周期）"
+                "renew=续期当前环节（计时重新起算，本环节再给一个完整预期周期）；"
+                "append=在流程单尾部追加新环节（需 segment 参数）"
             ),
         },
         "segment_id": {
             "type": "string",
             "description": "goto 的目标环节 id（action=goto 时必填；可从情境注入的后续环节列表取得）",
+        },
+        "segment": {
+            "type": "object",
+            "description": "action=append 时必填：新环节定义（seg_id / title / task_description /"
+            " expected_ms 必填，min_duration_ms / notes 可选）",
+            "properties": {
+                "seg_id": {"type": "string", "description": "新环节唯一标识（与现有环节 id 不得重复）"},
+                "title": {"type": "string", "description": "环节标题（非空）"},
+                "task_description": {"type": "string", "description": "给 AI 的目标指引"},
+                "expected_ms": {"type": "integer", "description": "预期停留时长（毫秒，至少 60000）"},
+                "min_duration_ms": {"type": "integer", "description": "最少停留时长（毫秒，可选）"},
+                "notes": {"type": "string", "description": "备注（可选）"},
+            },
+            "required": ["seg_id", "title", "task_description", "expected_ms"],
         },
     },
     "required": ["action"],
@@ -61,6 +80,8 @@ _CONTROL_SPEC = ToolSpec(
         "流程单控制：切换直播环节或暂停/恢复/续期环节计时。"
         "当本环节目标已达成、或剩余时间不多且话题自然收束时，用 next/goto 推进；"
         "环节已超时但话题仍值得继续时，用 renew 为本环节续一个周期；"
+        "流程单走完但直播仍要继续、或临时起意要做一件值得持续几分钟的事时，"
+        "用 append 在流程单尾部追加环节（新环节自带预期时长与超时闹钟）；"
         "被拒绝时读取原因（如最少停留未到），不要盲目重试同一调用。"
     ),
     parameters_schema=_PARAMETERS_SCHEMA,
@@ -158,6 +179,41 @@ class RundownControlProvider:
                 reject = self._state.resume(by="agent")
             elif action == "renew":
                 reject = self._state.renew(by="agent")
+            elif action == "append":
+                # append 的参数整形与下界校验在工具层完成（先挡 LLM 传参错误，
+                # 再交给模型层校验与状态机结构化拒绝），成功路径复用统一收口
+                raw = args.get("segment")
+                if not isinstance(raw, dict):
+                    return json.dumps(
+                        {
+                            "ok": False,
+                            "error": "append 需要 segment 参数（对象，含 seg_id/title/task_description/expected_ms）",
+                        },
+                        ensure_ascii=False,
+                    )
+                expected_ms = raw.get("expected_ms")
+                if (
+                    not isinstance(expected_ms, int)
+                    or isinstance(expected_ms, bool)
+                    or expected_ms < _APPEND_MIN_EXPECTED_MS
+                ):
+                    return json.dumps(
+                        {
+                            "ok": False,
+                            "error": f"追加环节预期时长至少 1 分钟（expected_ms >= {_APPEND_MIN_EXPECTED_MS}，当前 {expected_ms!r}）",
+                        },
+                        ensure_ascii=False,
+                    )
+                seg_dict = dict(raw)
+                seg_dict["id"] = seg_dict.pop("seg_id", "")
+                try:
+                    segment = RundownSegment.model_validate(seg_dict)
+                except Exception as exc:
+                    return json.dumps(
+                        {"ok": False, "error": f"segment 参数校验失败: {exc}"},
+                        ensure_ascii=False,
+                    )
+                reject = self._state.append_segment(segment, by="agent")
             else:
                 return json.dumps({"ok": False, "error": f"未知 action={action!r}"}, ensure_ascii=False)
         except Exception as exc:
