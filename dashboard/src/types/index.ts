@@ -689,9 +689,10 @@ export interface RundownStateResponse {
  *
  * - `pause` / `resume` 仅在对应状态合法；
  * - `goto` 需要 `segment_id`；
- * - `next` 在末段时结束整场流程单。
+ * - `next` 在末段时结束整场流程单；
+ * - `restart` 整场重开（游标回首环节、计时清零；导演通道）。
  */
-export type RundownControlAction = 'pause' | 'resume' | 'next' | 'goto';
+export type RundownControlAction = 'pause' | 'resume' | 'next' | 'goto' | 'restart';
 
 /** `POST /api/v1/rundown/control` 请求体。 */
 export interface RundownControlRequest {

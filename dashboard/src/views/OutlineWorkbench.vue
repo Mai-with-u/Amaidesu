@@ -114,6 +114,15 @@
           </div>
           <div class="total-sub">
             流程单 ID：<span class="mono">{{ snapshot.rundown_id ?? '—' }}</span>
+            <el-button
+              size="small"
+              :icon="RefreshLeft"
+              class="restart-btn"
+              :loading="actionLoading === 'restart'"
+              @click="handleRestart"
+            >
+              重新开始
+            </el-button>
           </div>
         </article>
 
@@ -580,11 +589,13 @@ import {
   Plus,
   Position,
   Refresh,
+  RefreshLeft,
   VideoPause,
 } from '@element-plus/icons-vue';
 import { useRundownState } from '@/composables/rundown/useRundownState';
 import { useRundownDisplay } from '@/composables/rundown/useRundownDisplay';
 import { useRundownLibrary } from '@/composables/rundown/useRundownLibrary';
+import { confirmAction } from '@/utils/confirmAction';
 import type { RundownSegmentView } from '@/types';
 
 // 装配：运行态 → 展示派生（消费 state/currentSegment）→ 库与编辑器（消费 state/fetchState）
@@ -671,6 +682,17 @@ function handleJump(seg: RundownSegmentView): void {
   void performControl('goto', { segment_id: seg.id }).then(result => {
     if (result) drawerOpen.value = false;
   });
+}
+
+// 整场重开（导演通道）：游标回首环节、计时清零；任意运行态可用，含 done（encore）
+async function handleRestart(): Promise<void> {
+  const ok = await confirmAction(
+    '确定重新开始整场流程单？游标将回到第一环节、计时清零。',
+    '重新开始流程单',
+    { confirmButtonText: '重新开始' },
+  );
+  if (!ok) return;
+  void performControl('restart');
 }
 </script>
 
@@ -820,6 +842,10 @@ function handleJump(seg: RundownSegmentView): void {
   font-size: 11px;
   color: var(--text-placeholder);
   margin-top: 2px;
+}
+
+.total-sub .restart-btn {
+  margin-left: 12px;
 }
 
 /* ---- status 卡：tag 主导 ---- */

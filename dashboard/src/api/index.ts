@@ -337,7 +337,7 @@ export const visionApi = {
 //
 // `GET /rundown/state`：当前流程单运行时快照（available / snapshot / transitions /
 // segments / config）。available=false 时 snapshot=null，前端按不可用态渲染。
-// `POST /rundown/control`：手动控制（pause / resume / next / goto，by="human"），
+// `POST /rundown/control`：手动控制（pause / resume / next / goto / restart，by="human"），
 // 返回最新 snapshot；前端只在收到响应后做错误提示，正常状态由后端通过
 // `rundown.changed` 事件推上来。
 export const rundownApi = {

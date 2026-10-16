@@ -62,13 +62,13 @@ def apply_rundown_control(
     segment_id: Optional[str] = None,
     now_ms: Optional[int] = None,
 ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
-    """执行 Dashboard 手动控制动作（pause/resume/next/goto/renew，by="human"）。
+    """执行 Dashboard 手动控制动作（pause/resume/next/goto/renew/restart，by="human"）。
 
     仅做转发与结构化拒绝翻译；调用方可凭 ``success`` / ``message`` /
     ``snapshot`` 三元组渲染 UI。
 
     Args:
-        action: 控制动作名（pause/resume/next/goto/renew）
+        action: 控制动作名（pause/resume/next/goto/renew/restart）
         segment_id: goto 必填；其它动作忽略
         now_ms: 可选时间戳（默认走 RundownState 注入时钟或真实时钟）
 
@@ -92,6 +92,9 @@ def apply_rundown_control(
             reject = state.renew(by="human", now_ms=now_ms)
         elif action == "next":
             reject = state.next(by="human", now_ms=now_ms)
+        elif action == "restart":
+            # 整场重开是导演通道（Agent 工具不暴露 restart）
+            reject = state.restart(by="human", now_ms=now_ms)
         elif action == "goto":
             if not segment_id:
                 return False, "goto 必须提供 segment_id", None

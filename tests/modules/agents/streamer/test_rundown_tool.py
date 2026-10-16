@@ -90,6 +90,7 @@ def test_tool_is_visible_to_the_planner_with_a_complete_function_shape() -> None
     assert parameters["properties"]["action"]["enum"] == ["next", "goto", "pause", "resume", "renew"]
     assert parameters["required"] == ["action"]
     assert "renew" in _PARAMETERS_SCHEMA["properties"]["action"]["enum"]  # Planner 侧可见续期能力
+    assert "restart" not in _PARAMETERS_SCHEMA["properties"]["action"]["enum"]  # 整场重开是导演通道，Agent 无权
 
 
 async def test_registry_invoke_and_planner_dispatch_share_one_state_machine() -> None:

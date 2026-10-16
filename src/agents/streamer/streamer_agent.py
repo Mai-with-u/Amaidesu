@@ -1267,8 +1267,13 @@ class StreamerAgent(BaseAgent):
     # ==================================================================
 
     def _is_rundown_active(self) -> bool:
-        """判定流程单是否激活且有当前环节（供 ProactiveTrigger rundown_ready）。"""
-        return self._rundown_state.status == "running"
+        """判定流程单是否在供能（供 ProactiveTrigger rundown_ready）。
+
+        done 仍供能：流程单内容排完不是停止内容推进的理由——Agent 按既定
+        节奏被唤醒，凭情境（完成文案 + 弹幕）进入自由互动。paused 不供能
+        （导演明确叫停）。
+        """
+        return self._rundown_state.status in ("running", "done")
 
     def _is_rundown_overdue(self) -> bool:
         """当前环节停留是否已超预期（供 ProactiveTrigger rundown_overdue 闹钟）。"""

@@ -327,7 +327,7 @@ def test_transitions_are_capped_and_emit_failures_are_soft() -> None:
     assert noisy.goto("chat", by="human", now_ms=clock.now) is None and noisy.index == 1
 
 
-def test_build_context_text_renders_segment_fields_and_hides_when_done() -> None:
+def test_build_context_text_renders_segment_fields_and_done_facts() -> None:
     harness = _Harness().load(
         _rundown(
             _segment("opening", "开场", key_points=["问好", "预告"], notes="备注内容"),
@@ -337,6 +337,7 @@ def test_build_context_text_renders_segment_fields_and_hides_when_done() -> None
     )
     harness.clock.advance(60_000)
     text = harness.state.build_context_text(now_ms=harness.now)
+    assert text is not None
     for fragment in (
         "[流程单] 环节 1/2：开场",
         "剩 约 9 分钟",
@@ -348,9 +349,14 @@ def test_build_context_text_renders_segment_fields_and_hides_when_done() -> None
     ):
         assert fragment in text
 
+    # done 态不断供：返回完成事实块而非 None，防"（当前无流程单）"被误读为该重新开场
     done = _Harness().load()
     done.finish()
-    assert done.state.build_context_text(now_ms=done.now) is None
+    done_text = done.state.build_context_text(now_ms=done.now)
+    assert done_text is not None
+    assert "已全部完成（3/3 环节）" in done_text
+    assert "自由互动" in done_text
+    assert "重启或切换" in done_text
 
 
 def test_renew_resets_timer_keeps_segment_and_emits(h: _Harness) -> None:
@@ -395,3 +401,51 @@ def test_overdue_context_text_names_the_way_out_then_recovers_after_renew(h: _Ha
     h.clock.advance(60_000)
     recovered = h.state.build_context_text(now_ms=h.now)
     assert "剩 约 9 分钟" in recovered and "已超时" not in recovered
+
+
+def test_last_segment_context_adds_renew_guidance_until_overdue(h: _Harness) -> None:
+    """末段（后续环节为空、未超时）追加续期引导；超时分支已有 renew 提示，不重复追加。"""
+    h.drive_to_last()
+    text = h.state.build_context_text(now_ms=h.now)
+    assert "最后一环" in text and "renew 延长本环节" in text
+
+    h.clock.advance(600_000)
+    overdue_text = h.state.build_context_text(now_ms=h.now)
+    assert "已超时" in overdue_text and overdue_text.count("renew") == 1
+
+
+def test_restart_rejects_idle_and_agent() -> None:
+    """未加载结构化拒绝；agent 不在 restart 白名单（单的生死归导演）。"""
+    assert RundownState().restart(by="human").reason == "no_rundown_loaded"
+    h = _Harness().load()
+    with pytest.raises(ValueError):
+        h.state.restart(by="agent")
+
+
+def test_restart_resets_running_to_first_segment(h: _Harness) -> None:
+    h.drive_to_last()
+    h.clock.advance(120_000)
+    assert h.state.restart(by="human") is None
+    assert (h.state.status, h.state.index, h.state.current_segment_id) == ("running", 0, "opening")
+    # 环节与整场锚点都重置为 now：计时归零
+    assert h.state.get_current_remaining_ms(now_ms=h.now) == 600_000
+    assert h.state.get_elapsed_live_ms(now_ms=h.now) == 0
+    assert h.events[-1][0] == "rundown.changed" and h.state.get_transitions()[-1]["action"] == "restart"
+
+
+def test_restart_clears_paused(h: _Harness) -> None:
+    h.state.pause(by="human", now_ms=h.now)
+    h.clock.advance(30_000)
+    assert h.state.restart(by="human") is None
+    assert (h.state.status, h.state.paused_at_ms) == ("running", None)
+    assert h.state.get_current_remaining_ms(now_ms=h.now) == 600_000
+    # 旧暂停累计不带入重开后的整场计时：推进量即已播量（漏清整场累计会虚慢）
+    h.clock.advance(10_000)
+    assert h.state.get_elapsed_live_ms(now_ms=h.now) == 10_000
+
+
+def test_restart_from_done_reopens(h: _Harness) -> None:
+    h.finish()
+    h.clock.advance(60_000)
+    assert h.state.restart(by="human") is None
+    assert (h.state.status, h.state.index, h.state.current_segment_id) == ("running", 0, "opening")

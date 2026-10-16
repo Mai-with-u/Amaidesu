@@ -26,6 +26,7 @@ class RundownControlAction(str, Enum):
     NEXT = "next"
     GOTO = "goto"
     RENEW = "renew"
+    RESTART = "restart"
 
 
 class RundownSegmentView(BaseModel):

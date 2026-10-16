@@ -83,6 +83,9 @@ _VALID_BY: frozenset[str] = frozenset({"agent", "human", "system"})
 #: ``min_duration_ms`` 守卫只约束 Agent 抢跑；human / system（导演与装配层）免检
 _MIN_GUARD_BY: frozenset[str] = frozenset({"agent"})
 
+#: restart 的独立白名单：单的生死归导演（human / system），Agent 在单内自主但无权重开
+_RESTART_VALID_BY: frozenset[str] = frozenset({"human", "system"})
+
 
 def _format_duration_ms(ms: int) -> str:
     """毫秒时长的口语化渲染（分钟粒度；不足 1 分钟显示秒）。"""
@@ -438,6 +441,35 @@ class RundownState:
         )
         return None
 
+    def restart(self, *, by: str, now_ms: Optional[int] = None) -> Optional[RundownReject]:
+        """整场重开（导演通道）：游标回 0、环节/整场锚点重置为 ``now``、暂停与累计清零。
+
+        任意已加载状态（running / paused / done）都可 restart——导演可能中途
+        整场重来；未加载（idle）结构化拒绝。``by`` 用独立白名单，仅接受
+        ``"human"`` / ``"system"``（传 ``"agent"`` 抛 ``ValueError``）：
+        done 是"内容排完了"的事实，重启是导演决策。
+        """
+        if by not in _RESTART_VALID_BY:
+            raise ValueError(f"RundownState.restart: 非法 by={by!r}，仅接受 {_RESTART_VALID_BY}")
+        if self.rundown is None:
+            return RundownReject(reason="no_rundown_loaded")
+        now = self._resolve_now(now_ms)
+        self.index = 0
+        first = self.rundown.segments[0]
+        self.segment_started_at_ms = now
+        self.rundown_started_at_ms = now
+        self.paused_at_ms = None
+        self._accumulated_pause_ms = 0
+        self._accumulated_session_pause_ms = 0
+        self._apply_change(
+            action="restart",
+            segment_id=first.id,
+            segment_title=first.title,
+            by=cast(RundownActor, by),
+            now_ms=now,
+        )
+        return None
+
     def replace_definition(
         self,
         rundown: Rundown,
@@ -649,14 +681,23 @@ class RundownState:
         """渲染注入 Planner / Replyer 的流程单情境文本。
 
         内容：当前环节位置与计时、目标、要点、备注、后续环节列表（Agent
-        据此用 ``rundown_control`` 自主切换）。流程单未激活或已无当前环节
-        （done）返回 ``None``，调用方注入占位文本。
+        据此用 ``rundown_control`` 自主切换）。流程单未激活（未加载或未
+        开始）返回 ``None``，调用方注入占位文本；done 返回完成事实块——
+        完成不是断供，明确告知"进入自由互动"并封死"该重新开场"的误读。
         """
+        if self.rundown is None:
+            return None
+        total = len(self.rundown.segments)
+        if self.index >= total:
+            n = self.index
+            return (
+                f"[流程单] 本场流程单已全部完成（{n}/{n} 环节）——进入自由互动："
+                "呼应弹幕、闲聊、回顾本场内容；导演重启或切换流程单时会另行通知"
+            )
         seg = self.current_segment
-        if self.rundown is None or seg is None:
+        if seg is None:
             return None
         now = self._resolve_now(now_ms)
-        total = len(self.rundown.segments)
         elapsed = self._segment_elapsed_ms(now)
         remaining = max(0, seg.expected_ms - elapsed)
 
@@ -687,4 +728,9 @@ class RundownState:
         if upcoming:
             names = " → ".join(f"{s.title}({s.id})" for s in upcoming)
             lines.append(f"后续环节：{names}（可用 rundown_control 的 goto/next 切换）")
+        elif self.status == "running" and overdue_ms <= 0:
+            # 末段续期引导：末段 next = 整场 finish，引导"还想继续聊"时选 renew
+            lines.append(
+                "本环节是流程单最后一环，结束后进入自由互动；话题仍值得继续时可用 rundown_control 的 renew 延长本环节"
+            )
         return "\n".join(lines)

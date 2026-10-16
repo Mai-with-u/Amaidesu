@@ -98,3 +98,29 @@ async def test_control_renew_rejected_when_paused() -> None:
 
     assert success is False
     assert message == "流程单未在运行"
+
+
+# restart（整场重开）翻译：导演通道，agent 无权（工具层不暴露）
+
+
+async def test_control_restart_resets_to_first_segment() -> None:
+    """done 态 restart 走 by="human"：快照回首环节、状态回 running。"""
+    state = _loaded_state()
+    for _ in range(len(DEFAULT_RUNDOWN.segments)):
+        apply_rundown_control(state, "next")
+    assert state.status == "done"
+
+    success, message, snapshot = apply_rundown_control(state, "restart")
+
+    assert (success, message) == (True, "已执行")
+    assert snapshot is not None
+    assert (snapshot["status"], snapshot["index"]) == ("running", 0)
+    assert snapshot["current"]["id"] == DEFAULT_RUNDOWN.segments[0].id
+    assert state.get_transitions()[-1]["action"] == "restart"
+
+
+async def test_control_restart_rejected_when_idle() -> None:
+    success, message, snapshot = apply_rundown_control(RundownState(), "restart")
+
+    assert success is False and message == "未加载流程单"
+    assert snapshot is not None and snapshot["status"] == "idle"
