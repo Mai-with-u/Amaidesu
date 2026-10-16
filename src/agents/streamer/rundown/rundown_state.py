@@ -145,6 +145,9 @@ class RundownState:
         self.rundown_started_at_ms: Optional[int] = None
 
         self._accumulated_pause_ms: int = 0
+        # 整场累计暂停时长：与环节累计同源（同一 paused_at_ms 区间）但独立累计，
+        # 不随 goto/next/renew 的环节切换清零——整场进度口径据此扣除暂停
+        self._accumulated_session_pause_ms: int = 0
         self._transitions: Deque[Dict[str, Any]] = deque(maxlen=TRANSITIONS_MAXLEN)
 
         self._clock: Optional[ClockFn] = clock
@@ -214,12 +217,26 @@ class RundownState:
             )
         return None
 
+    def _settle_pause_if_paused(self, now: int) -> None:
+        """结算进行中的暂停区间：把 ``now - paused_at_ms`` 同时累加进环节累计与
+        整场累计，并解除暂停冻结（``paused_at_ms = None``）。
+
+        环节切换 / 整场定义替换在清暂停锚点前必须先经此结算，否则暂停时长
+        既不进环节累计也不进整场累计，直接蒸发（进度与已播时长虚涨）。
+        """
+        if self.paused_at_ms is None:
+            return
+        delta = max(0, now - self.paused_at_ms)
+        self._accumulated_pause_ms += delta
+        self._accumulated_session_pause_ms += delta
+        self.paused_at_ms = None
+
     # ------------------------------------------------------------------
     # 变更方法：validate → mutate → record → emit → notify
     # ------------------------------------------------------------------
 
     def load(self, rundown: Rundown, *, now_ms: Optional[int] = None) -> None:
-        """加载流程单，重置游标到首段（index=0），清空暂停与累计暂停时长。
+        """加载流程单，重置游标到首段（index=0），清空暂停与环节/整场累计暂停时长。
 
         总是允许（无前置条件）；调用方应在状态未启用时调一次。
         """
@@ -230,6 +247,7 @@ class RundownState:
         self.rundown_started_at_ms = now
         self.paused_at_ms = None
         self._accumulated_pause_ms = 0
+        self._accumulated_session_pause_ms = 0
 
         first = rundown.segments[0]
         self._apply_change(
@@ -274,6 +292,8 @@ class RundownState:
 
         target_idx = next(i for i, seg in enumerate(self.rundown.segments) if seg.id == segment_id)
         target_seg = self.rundown.segments[target_idx]
+        # 暂停态下切换环节先结算暂停时长（进整场累计，不蒸发）
+        self._settle_pause_if_paused(now)
         self.index = target_idx
         self.segment_started_at_ms = now
         # 跳到目标后清空暂停计时（目标段是新一段计时）
@@ -317,7 +337,9 @@ class RundownState:
         if self.index >= total:
             return RundownReject(reason="already_done")
         if self.index == total - 1:
-            # finish：游标推到 total（status 派生为 done），发完成事件
+            # finish：游标推到 total（status 派生为 done），发完成事件；
+            # 暂停态下先结算暂停时长（进整场累计，不蒸发）
+            self._settle_pause_if_paused(now)
             self.index = total
             self.paused_at_ms = None
             self._apply_change(
@@ -329,9 +351,10 @@ class RundownState:
             )
             return None
 
-        # 普通推进
+        # 普通推进（暂停态下先结算暂停时长，进整场累计不蒸发）
         target_idx = self.index + 1
         target_seg = self.rundown.segments[target_idx]
+        self._settle_pause_if_paused(now)
         self.index = target_idx
         self.segment_started_at_ms = now
         self.paused_at_ms = None
@@ -362,18 +385,18 @@ class RundownState:
         return None
 
     def resume(self, *, by: str, now_ms: Optional[int] = None) -> Optional[RundownReject]:
-        """恢复计时（仅在 paused 时合法；把 ``now - paused_at_ms`` 计入累计暂停）。
+        """恢复计时（仅在 paused 时合法；把 ``now - paused_at_ms`` 计入环节累计与整场累计）。
 
         注：resume() 不重置 ``segment_started_at_ms``——它把暂停期间
-        的时长折算到 ``_accumulated_pause_ms`` 里扣减，保持原锚点不变。
+        的时长折算到累计暂停里扣减，保持原锚点不变。
         """
         if by not in _VALID_BY:
             raise ValueError(f"RundownState.resume: 非法 by={by!r}，仅接受 {_VALID_BY}")
         if self.status != "paused" or self.paused_at_ms is None:
             return RundownReject(reason="not_paused")
         now = self._resolve_now(now_ms)
-        self._accumulated_pause_ms += max(0, now - self.paused_at_ms)
-        self.paused_at_ms = None
+        # 恢复计时：暂停区间同记环节累计与整场累计
+        self._settle_pause_if_paused(now)
         self._apply_change(
             action="resume",
             segment_id=self.current_segment_id,
@@ -456,7 +479,9 @@ class RundownState:
             if new_index >= 0:
                 self.index = new_index
             else:
-                # 当前环节已被删除：回未开始，清计时锚点（含暂停冻结）
+                # 当前环节已被删除：回未开始，清计时锚点；暂停态先结算暂停时长
+                # （进整场累计不蒸发），环节累计随锚点一并清零
+                self._settle_pause_if_paused(now)
                 self.index = -1
                 self.segment_started_at_ms = 0
                 self.paused_at_ms = None
@@ -537,13 +562,15 @@ class RundownState:
     # ------------------------------------------------------------------
 
     def get_progress_percent(self, *, now_ms: Optional[int] = None) -> Optional[float]:
-        """整场进度百分比（wall clock 从 ``rundown_started_at_ms`` 算；夹取到 ``[0, 100]``）。"""
+        """整场进度百分比（扣除整场累计暂停；暂停中以 ``paused_at_ms`` 冻结结算基准；夹取到 ``[0, 100]``）。"""
         if self.rundown is None or self.rundown_started_at_ms is None:
             return None
         total = sum(seg.expected_ms for seg in self.rundown.segments)
         if total <= 0:
             return None
-        elapsed = max(0, self._resolve_now(now_ms) - self.rundown_started_at_ms)
+        now = self._resolve_now(now_ms)
+        effective_now = self.paused_at_ms if self.paused_at_ms is not None else now
+        elapsed = max(0, effective_now - self.rundown_started_at_ms - self._accumulated_session_pause_ms)
         pct = elapsed / total * 100.0
         if pct < 0.0:
             return 0.0
@@ -552,13 +579,15 @@ class RundownState:
         return pct
 
     def get_elapsed_live_ms(self, *, now_ms: Optional[int] = None) -> Optional[int]:
-        """整场已播时长（Unix 毫秒；wall clock，与整场进度同口径不扣暂停）。
+        """整场已播时长（Unix 毫秒；扣除整场累计暂停，与整场进度同口径）。
 
         未加载流程单返回 ``None``（装配层据此判断"未开播"）。
         """
         if self.rundown is None or self.rundown_started_at_ms is None:
             return None
-        return max(0, self._resolve_now(now_ms) - self.rundown_started_at_ms)
+        now = self._resolve_now(now_ms)
+        effective_now = self.paused_at_ms if self.paused_at_ms is not None else now
+        return max(0, effective_now - self.rundown_started_at_ms - self._accumulated_session_pause_ms)
 
     def get_current_remaining_ms(self, *, now_ms: Optional[int] = None) -> int:
         """当前环节剩余时长（毫秒；扣除累计暂停；超时或 done 返回 0）。"""

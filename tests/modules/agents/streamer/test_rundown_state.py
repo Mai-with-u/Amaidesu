@@ -162,6 +162,81 @@ def test_pause_resume_rejections(h: _Harness) -> None:
     assert h.state.pause(by="human", now_ms=h.now).reason == "not_running"
 
 
+def test_session_progress_freezes_during_pause_and_excludes_pause_after_resume(h: _Harness) -> None:
+    """整场进度/已播时长扣除暂停：暂停中冻结，恢复后不把暂停时长计入已播。"""
+    h.clock.advance(100_000)
+    assert h.state.pause(by="human", now_ms=h.now) is None
+    h.clock.advance(200_000)
+    # 暂停中整场口径冻结在暂停起点
+    assert h.state.get_elapsed_live_ms(now_ms=h.now) == 100_000
+    progress_paused = h.state.get_progress_percent(now_ms=h.now)
+    assert progress_paused is not None
+
+    h.clock.advance(300_000)
+    assert h.state.get_elapsed_live_ms(now_ms=h.now) == 100_000  # 仍冻结
+    assert h.state.get_progress_percent(now_ms=h.now) == progress_paused
+
+    assert h.state.resume(by="human", now_ms=h.now) is None
+    assert h.state.get_elapsed_live_ms(now_ms=h.now) == 100_000  # 暂停的 500 秒不进已播
+    h.clock.advance(50_000)
+    assert h.state.get_elapsed_live_ms(now_ms=h.now) == 150_000
+
+
+def test_resume_accumulates_both_segment_and_session_pause(h: _Harness) -> None:
+    h.clock.advance(100_000)
+    h.state.pause(by="human", now_ms=h.now)
+    h.clock.advance(200_000)
+    assert h.state.resume(by="human", now_ms=h.now) is None
+    assert (h.state._accumulated_pause_ms, h.state._accumulated_session_pause_ms) == (200_000, 200_000)
+
+    # 二次暂停叠加累计
+    h.clock.advance(50_000)
+    h.state.pause(by="human", now_ms=h.now)
+    h.clock.advance(30_000)
+    assert h.state.resume(by="human", now_ms=h.now) is None
+    assert (h.state._accumulated_pause_ms, h.state._accumulated_session_pause_ms) == (230_000, 230_000)
+
+
+@pytest.mark.parametrize("action", ["goto", "next", "finish"])
+def test_pause_in_segment_switch_settles_into_session_progress(h: _Harness, action: str) -> None:
+    """暂停态下 goto / next / finish 切换环节，暂停时长结算进整场累计而不蒸发。"""
+    if action == "finish":
+        h.drive_to_last()
+    h.clock.advance(100_000)
+    assert h.state.pause(by="human", now_ms=h.now) is None
+    baseline = h.state.get_elapsed_live_ms(now_ms=h.now)  # 暂停起点前的真实已播
+    h.clock.advance(200_000)
+
+    if action == "goto":
+        assert h.state.goto("chat", by="human", now_ms=h.now) is None
+    elif action == "next":
+        assert h.state.next(by="human", now_ms=h.now) is None
+    else:
+        assert h.state.next(by="human", now_ms=h.now) is None  # finish
+
+    if action != "finish":
+        # 新环节从切换时刻起算，暂停的 200 秒不进环节计时
+        assert h.state.get_current_remaining_ms(now_ms=h.now) == 600_000
+    # 整场口径已扣除这 200 秒暂停：已播冻结在暂停起点
+    assert h.state.get_elapsed_live_ms(now_ms=h.now) == baseline
+    h.clock.advance(50_000)
+    assert h.state.get_elapsed_live_ms(now_ms=h.now) == baseline + 50_000
+
+
+def test_replace_definition_deleting_current_segment_in_pause_keeps_session_pause(h: _Harness) -> None:
+    h.drive_to_last()
+    h.clock.advance(100_000)
+    assert h.state.pause(by="human", now_ms=h.now) is None
+    h.clock.advance(200_000)
+    assert _replace(h, _segment("opening", "开场"), _segment("chat", "闲聊")) is None
+    # 当前环节被删回到未开始，但暂停时长已结算进整场累计
+    # （drive_to_last 走了 60_001ms，环节内又播了 100_000ms；200_000ms 暂停不计）
+    assert h.state.paused_at_ms is None
+    assert h.state.get_elapsed_live_ms(now_ms=h.now) == 160_001
+    h.clock.advance(50_000)
+    assert h.state.get_elapsed_live_ms(now_ms=h.now) == 210_001
+
+
 def _replace(h: _Harness, *segments: RundownSegment, rundown_id: str = "test_rd"):
     return h.state.replace_definition(_rundown(*segments, title="v2", rundown_id=rundown_id), now_ms=h.now)
 
