@@ -49,11 +49,6 @@ from .live import (
     LiveEndedPayload,
     LiveStartedPayload,
 )
-from .llm import (
-    ContextSectionItemPayload,
-    ContextSectionPayload,
-    LLMContextUsedPayload,
-)
 from .planner import (
     PlannerBatchItem,
     PlannerDecisionPayload,
@@ -66,7 +61,7 @@ from .room import (
     RoomMessageUser,
     SuperChatInfo,
 )
-from .room_state import RoomStateFramePayload, RoomStateWatchedPayload
+from .room_state import RoomStateWatchedPayload
 from .rundown import RundownChangedPayload
 from .speech import StreamerSpeechPayload
 from .tasks import TaskChangedPayload
@@ -97,7 +92,6 @@ __all__ = [
     "SuperChatInfo",
     "RoomMessagePayload",
     # room.state.* 直播间状态快照
-    "RoomStateFramePayload",
     "RoomStateWatchedPayload",
     # game.* 游戏里程碑
     "GamePayload",
@@ -114,10 +108,6 @@ __all__ = [
     "ToolResultPayload",
     # tool.health.* 工具健康状态变更
     "ToolHealthPayload",
-    # llm.context.used 调用上下文水位
-    "LLMContextUsedPayload",
-    "ContextSectionPayload",
-    "ContextSectionItemPayload",
     # tts.utterance.* 发声实例生命周期
     "UtteranceStartedPayload",
     "UtteranceFinishedPayload",

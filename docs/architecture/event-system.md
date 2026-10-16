@@ -194,7 +194,6 @@ event_bus.reset_stats(event_name=None)
 
 - **`room.message.enter`**：决策侧不消费（仅观察面 / 进房统计）
 - **`room.state.watched_count`**：状态子层（非行为流），不落明细表——主播侧 RoomState 承接为内存快照，经后台记账写 `live_sessions.audience_total`。数据源是 B 站 WATCHED_CHANGE 推送（累计观看人次，UV 口径）；open-live 协议无"当前在线人数"推送，`live_sessions.viewer_count` 暂无数据源、维持 0
-- **`room.state.frame`**：状态子层，直播画面快照（观众此刻看到的画面）。发布者是通用采集器 `live_frame`（OBS 节目画面或桌面截屏，低频采样，画面明显变化或隔太久才发）；载荷只带图像暂存句柄（`VisionImageStore`），图像本体不进事件流。订阅者：主播 Agent 保留最新一帧，决策时挂在请求尾部
 - **`rundown.changed`**：唯一变更边界（工具 / Dashboard / 编辑写穿 / 装配层 load 四路同径）；`by` 区分 agent/human/system；finish 时 `segment_id=""` 且 `index==total`；写穿后游标重置时 `index==-1`
 - **`tts.utterance.*`**：终点广播，消费者不得触发新一轮决策（防环；与 TTS 是否启用正交）
 - **`streamer.speech`**：业务信号，与 TTS 启用正交；`utterance_id` 与 `tts.utterance.*` 共用关联键；`emotion`（17 枚举值）+ `emotion_intensity` 必选（生产者保证必有值），虚拟形象适配器订阅它作自动情绪反射
@@ -222,7 +221,6 @@ Dashboard WebSocket 的 `type` 字段 = **事件名直通**；唯一例外是 `r
 | 一事件一个类 | `CoreStartupPayload` / `CoreShutdownPayload` / `CoreErrorPayload` / `RundownChangedPayload` / `TaskChangedPayload` / `PlannerDecisionPayload` / `PlannerVerdictPayload` / `StreamerStagePayload` / `StreamerSpeechPayload` | 各自对应 |
 | 一事件一个类（形状不同） | `UtteranceStartedPayload` / `UtteranceFinishedPayload` / `UtteranceFailedPayload` | `tts.utterance.*` 三事件 |
 | 一事件一个类（形状不同） | `RoomStateWatchedPayload` | `room.state.watched_count` |
-| 一事件一个类（形状不同） | `RoomStateFramePayload` | `room.state.frame` |
 | 一类多注册 + 判别字段 | `BodyEventPayload`（`_DISCRIMINANT_FIELD="kind"`） | `game.body.*` 九事件（attacked / attack_ended / died / respawned / reflex_started / reflex_finished / dimension_changed / need_unhandled / unknown） |
 | 不绑定具体名（动态族） | `ToolResultPayload` / `ToolHealthPayload` | `tool.result.<name>` / `tool.health.<name>` |
 | 开放载荷 | `OpenPayload`（`extra="allow"`，保留任意字段） | 无绑定事件；通用消费者（记录器）的 model_class |

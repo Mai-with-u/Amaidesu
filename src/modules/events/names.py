@@ -44,10 +44,6 @@ class CoreEvents:
     # 变化即推）；订阅者：主播侧 RoomState（更新快照供后台记账写 live_sessions）。
     # open-live 协议无"当前在线人数"推送，累计口径是与协议唯一对得上的真值。
     ROOM_STATE_WATCHED_COUNT = "room.state.watched_count"
-    # 直播画面快照：观众此刻看到的画面（发布者：画面采集器 live_frame，按低频采样、
-    # 画面明显变化或隔太久才发；载荷只带图像暂存句柄，不带图像本体）。
-    # 订阅者：主播侧把最新一帧挂在决策请求尾部看一眼。
-    ROOM_STATE_FRAME = "room.state.frame"
 
     # ========== v2 语义域事件（game.* 游戏里程碑） ==========
     # 低频、只发重大变化。四类：milestone / attention_required / error / report。
@@ -170,13 +166,6 @@ class CoreEvents:
     # 通道（思考流只转发 reasoning），本事件是"游戏 Agent 每步说了什么"
     # 的唯一观测面；llm_request_id 供观察面懒取缓存/Token/上下文统计。
     AGENT_REPLIED = "agent.replied"
-
-    # ========== v2 语义域事件（LLM 调用上下文水位） ==========
-    # LLMManager 每次成功调用收尾即发一条（观察面终点广播，不承载唤醒语义，
-    # 消费者不得触发新决策）。payload 携带该次调用的上下文分段占用解剖
-    # （system / messages / tools，见 src/modules/llm/context_meter.py），
-    # WebUI "上下文水位"明细据此实时刷新。
-    LLM_CONTEXT_USED = "llm.context.used"
 
     @classmethod
     def get_all_events(cls) -> tuple[str, ...]:

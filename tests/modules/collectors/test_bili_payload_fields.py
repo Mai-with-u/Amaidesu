@@ -251,7 +251,7 @@ async def test_watched_change_is_a_state_event_gated_by_config(overrides: dict, 
         return
     ((event_name, payload),) = bus.events
     assert event_name == CoreEvents.ROOM_STATE_WATCHED_COUNT == "room.state.watched_count"
-    assert (payload.platform, payload.audience_total, payload.watched_show) == ("bilibili", 12000, "1.2万人看过")
+    assert (payload.platform, payload.audience_total) == ("bilibili", 12000)
 
 
 def test_collector_registration_metadata_and_semantic_event_switch() -> None:

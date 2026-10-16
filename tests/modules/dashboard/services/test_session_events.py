@@ -46,7 +46,7 @@ def _collect(reader: SessionEventReader, **kwargs):
 def test_replay_whitelist_covers_exact_names_and_dynamic_prefixes() -> None:
     for name in ("planner.decision", "game.milestone", "tool.result.maicraft_observe"):
         assert is_replay_event_type(name)
-    for name in ("room.message.danmaku", "llm.context.used", "task.changed", "core.startup"):
+    for name in ("room.message.danmaku", "room.state.watched_count", "task.changed", "core.startup"):
         assert not is_replay_event_type(name)
 
 
@@ -79,7 +79,7 @@ def test_collect_drops_other_sessions_and_events_outside_the_whitelist(tmp_path)
             _record("planner.decision", _ms(1)),
             _record("planner.decision", _ms(1) + 10, session_id=8),  # 他场
             _record("task.changed", _ms(2)),  # 非卡面
-            _record("llm.context.used", _ms(3)),  # 非卡面
+            _record("room.state.watched_count", _ms(3)),  # 非卡面
             _record("tool.result.minecraft_glance", _ms(4)),  # 动态族
         ],
     )

@@ -11,7 +11,6 @@ from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     GamePayload,
-    LLMContextUsedPayload,
     RoomMessagePayload,
     RoomMessageUser,
     RundownChangedPayload,
@@ -78,11 +77,9 @@ async def test_start_subscribes_to_every_forwarded_event_and_stop_unsubscribes_a
         CoreEvents.GAME_ERROR,
         CoreEvents.GAME_MILESTONE,
         CoreEvents.TASK_CHANGED,
-        CoreEvents.LLM_CONTEXT_USED,
     }
     assert expected <= set(bus.subscribed)
     assert bus.subscribed[CoreEvents.TASK_CHANGED][1] is TaskChangedPayload
-    assert bus.subscribed[CoreEvents.LLM_CONTEXT_USED][1] is LLMContextUsedPayload
 
     subscribed_count = len(bus.subscribed)
     await bus.broadcaster.stop()  # type: ignore[attr-defined]
@@ -160,29 +157,12 @@ async def test_game_events_pass_through_with_concrete_name(started, event_name, 
     assert (call.args[1]["event_type"], call.args[1]["message"]) == (event_type, "交付总结")
 
 
-async def test_task_and_context_events_pass_through(started) -> None:
+async def test_task_event_passes_through(started) -> None:
     _bus, _ws, deliver = started
     task = TaskChangedPayload(
         task_id="deleg_1", status="running", initiator="operator", executor="minecraft", summary="执行 Agent 已开始处理"
     )
     assert (await deliver(CoreEvents.TASK_CHANGED, task)).args[0] == CoreEvents.TASK_CHANGED
-
-    sections = [
-        {"key": "system", "tokens": 100, "raw_tokens": 90, "count": 1, "items": []},
-        {"key": "messages", "tokens": 700, "raw_tokens": 630, "count": 8, "items": []},
-        {"key": "tools", "tokens": 200, "raw_tokens": 180, "count": 2, "items": []},
-    ]
-    usage = LLMContextUsedPayload(
-        request_id="req_cb", profile_name="replyer", model_name="glm-4.7", context_window=128_000,
-        api_prompt_tokens=1_000, completion_tokens=200, sections=sections, calibrated=True,
-    )  # fmt: skip
-    call = await deliver(CoreEvents.LLM_CONTEXT_USED, usage)
-    assert call.args[0] == "llm.context.used" and call.kwargs.get("message_id") == usage.id
-    assert (call.args[1]["request_id"], call.args[1]["api_prompt_tokens"], len(call.args[1]["sections"])) == (
-        "req_cb",
-        1_000,
-        3,
-    )
 
 
 @pytest.mark.asyncio

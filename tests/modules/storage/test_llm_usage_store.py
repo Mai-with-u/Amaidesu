@@ -1,17 +1,13 @@
-"""llm_usage / llm_requests 落库链路：仓储往返、LLMManager 旁路落库与降级、上下文解剖出库与事件"""
+"""llm_usage / llm_requests 落库链路：仓储往返、LLMManager 旁路落库与降级、上下文解剖出库"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
-
 import pytest
 
 from src.modules.diagnostics.readers import read_latest_breakdowns
 from src.modules.diagnostics.writer import DiagnosticsWriter
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads import LLMContextUsedPayload
 from src.modules.llm.payload import Response, Usage
 from src.modules.storage.database import SQLiteDatabase
 from tests.modules.storage.helpers import make_llm_manager
@@ -23,14 +19,6 @@ class _FakeUsageClient:
     async def generate(self, request, **kwargs) -> Response:
         usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
         return Response(success=True, content="回复", model="glm-4.7", usage=usage)
-
-
-class _RecordingEventBus:
-    def __init__(self) -> None:
-        self.emitted: list[tuple[str, Any, str]] = []
-
-    async def emit(self, event_name: str, data: Any, source: str = "unknown") -> None:
-        self.emitted.append((event_name, data, source))
 
 
 async def test_insert_llm_usage_roundtrip(store: SQLiteDatabase) -> None:
@@ -87,14 +75,10 @@ async def test_missing_or_failing_repo_does_not_break_call(store: SQLiteDatabase
     assert (await manager.generate("你好", profile="planner")).success
 
 
-@pytest.mark.parametrize("with_bus", [True, False])
-async def test_breakdown_goes_to_diagnostics_and_context_event(
-    store: SQLiteDatabase, tmp_path: Path, with_bus: bool
-) -> None:
-    """breakdown 不再落库（列为 NULL），正文与分段占用走诊断小时流与 latest 快照；有总线才发事件。"""
-    bus = _RecordingEventBus() if with_bus else None
+async def test_breakdown_goes_to_diagnostics(store: SQLiteDatabase, tmp_path: Path) -> None:
+    """breakdown 不落库（列为 NULL），正文与分段占用走诊断小时流与 latest 快照。"""
     writer = DiagnosticsWriter(base_dir=tmp_path, retention_days=0)
-    manager = make_llm_manager(_FakeUsageClient(), llm_repo=store.llm, event_bus=bus, diagnostics_writer=writer)
+    manager = make_llm_manager(_FakeUsageClient(), llm_repo=store.llm, diagnostics_writer=writer)
     result = await manager.generate("你好", profile="planner")
     assert result.success
     writer.stop()
@@ -108,14 +92,6 @@ async def test_breakdown_goes_to_diagnostics_and_context_event(
     assert {section["key"] for section in breakdown["sections"]} == _SECTION_KEYS
     assert isinstance(record["timestamp_ms"], int)
     assert read_latest_breakdowns(base_dir=tmp_path)["glm-4.7"]["request_id"] == result.request_id
-
-    if bus is None:
-        return
-    ((event_name, payload, source),) = bus.emitted
-    assert (event_name, source) == (CoreEvents.LLM_CONTEXT_USED, "LLMManager")
-    assert isinstance(payload, LLMContextUsedPayload)
-    assert (payload.request_id, payload.model_name, payload.api_prompt_tokens) == (result.request_id, "glm-4.7", 10)
-    assert {section.key for section in payload.sections} == _SECTION_KEYS
 
 
 async def test_latest_breakdowns_query_returns_latest_per_model(store: SQLiteDatabase) -> None:

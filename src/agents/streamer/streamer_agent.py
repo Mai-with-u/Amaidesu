@@ -437,8 +437,8 @@ class StreamerAgent(BaseAgent):
         self._timeline_notes: List[TimelineTurn] = []
         self._planner.bind_action_recorder(self._record_delegation)
         # 最新一帧直播画面：查询式取自图像暂存的 latest 槽位（live_frame 采集器
-        # 每次采样覆盖写入），每个决策窗第一次请求必挂。不订阅 room.state.frame：
-        # 发布事件只在画面明显变化时发，靠它取"最新帧"拿到的是最久 60 秒前的画面
+        # 每次采样覆盖写入），每个决策窗第一次请求必挂——走查询不走事件流，
+        # 保证决策时拿到的是刚截的画面
         if config.live_frame.enabled:
             self._planner.bind_frame_provider(self._latest_live_frame, stale_warn_ms=config.live_frame.stale_warn_ms)
 

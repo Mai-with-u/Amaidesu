@@ -1,4 +1,4 @@
-"""直播画面采集器：变化才发布、隔太久补发、取帧失败不中断、图像只以句柄进事件。"""
+"""直播画面采集器：每次采样覆盖暂存最新帧、变化才刷新比对基线、取帧失败不中断采样。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import base64
 import io
 from types import SimpleNamespace
 from typing import List, Optional
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from PIL import Image
@@ -18,8 +17,6 @@ from src.modules.collectors.frame.live_frame_collector import (
     describe_live_frame_obs_error,
     frame_change,
 )
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.room_state import RoomStateFramePayload
 from src.modules.vision.image_store import VisionImageStore, set_image_store
 
 
@@ -59,11 +56,8 @@ def _store() -> VisionImageStore:
     set_image_store(VisionImageStore())
 
 
-def _collector(script: List[object], **config: object) -> tuple[LiveFrameCollector, MagicMock]:
-    bus = MagicMock()
-    bus.emit = AsyncMock()
-    collector = LiveFrameCollector(config={"refresh_ms": 0, **config}, event_bus=bus, grabber=_Grabber(script))
-    return collector, bus
+def _collector(script: List[object], **config: object) -> LiveFrameCollector:
+    return LiveFrameCollector(config={"refresh_ms": 0, **config}, grabber=_Grabber(script))
 
 
 def test_frame_change_measures_mean_gray_difference() -> None:
@@ -72,57 +66,50 @@ def test_frame_change_measures_mean_gray_difference() -> None:
     assert frame_change([0, 0], [255, 255]) == 1.0
 
 
-async def test_publishes_first_and_changed_frames_only(_store: VisionImageStore) -> None:
-    """首帧必发；画面没明显变化不发；明显变化再发，事件只带暂存句柄。"""
-    collector, bus = _collector([_frame(10), _frame(12), _frame(200)])
-    first = await collector.sample_once()
-    assert isinstance(first, RoomStateFramePayload) and first.change == 1.0 and first.source == "obs"
-    assert await collector.sample_once() is None
-    third = await collector.sample_once()
-    assert third is not None and third.change > 0.5
-    assert [call.args[0] for call in bus.emit.await_args_list] == [CoreEvents.ROOM_STATE_FRAME] * 2
-    assert _store.get(third.image_ref).startswith("data:image/png;base64,")
-    assert "base64" not in third.model_dump_json()
+async def test_first_and_changed_frames_hit_the_change_gate(_store: VisionImageStore) -> None:
+    """首帧必中闸；画面没明显变化不中；明显变化再中，暂存里始终是刚截的画面。"""
+    collector = _collector([_frame(10), _frame(12), _frame(200)])
+    assert await collector.sample_once() is True
+    assert await collector.sample_once() is False
+    assert await collector.sample_once() is True
+    latest = _store.latest()
+    assert latest is not None and latest.change > 0.5
+    assert _store.get(latest.ref).startswith("data:image/png;base64,")
 
 
 async def test_unchanged_frame_still_updates_latest_slot(_store: VisionImageStore) -> None:
-    """低于发布阈值的帧不发事件，但暂存的最新帧槽位每次采样都覆盖更新——
-    决策窗查询式挂帧看的必须是刚截的画面，而不是最近一次发布的。"""
-    collector, bus = _collector([_frame(10), _frame(11), _frame(200)], refresh_ms=0)
-    first = await collector.sample_once()
-    assert await collector.sample_once() is None
+    """低于变化阈值的帧不刷新基线，但暂存的最新帧槽位每次采样都覆盖更新——
+    决策窗查询式挂帧看的必须是刚截的画面，而不是上一张稳定画面。"""
+    collector = _collector([_frame(10), _frame(11), _frame(200)], refresh_ms=0)
+    assert await collector.sample_once() is True
+    assert await collector.sample_once() is False
     latest = _store.latest()
-    assert latest is not None and latest.ref != first.image_ref
-    assert _store.get(latest.ref).startswith("data:image/png;base64,")
-    third = await collector.sample_once()
-    assert _store.latest().ref == third.image_ref
-    # 发布闸不动：三次采样只发布首帧与变化帧两次
-    assert bus.emit.await_count == 2
+    assert latest is not None and _store.get(latest.ref).startswith("data:image/png;base64,")
+    assert await collector.sample_once() is True
 
 
-async def test_unchanged_frame_republished_after_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
-    """画面一直没变，隔 refresh_ms 仍补发一次，订阅方知道画面还是新的。"""
+async def test_unchanged_frame_refreshes_baseline_after_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """画面一直没变，隔 refresh_ms 仍触发一次基线刷新（补刷周期到）。"""
     clock = {"now": 1_000_000}
     monkeypatch.setattr("src.modules.collectors.frame.live_frame_collector.now_ms", lambda: clock["now"])
-    collector, _ = _collector([_frame(10), _frame(10), _frame(10)], refresh_ms=60_000)
-    assert await collector.sample_once() is not None
+    collector = _collector([_frame(10), _frame(10), _frame(10)], refresh_ms=60_000)
+    assert await collector.sample_once() is True
     clock["now"] += 30_000
-    assert await collector.sample_once() is None
+    assert await collector.sample_once() is False
     clock["now"] += 30_000
-    assert await collector.sample_once() is not None
+    assert await collector.sample_once() is True
 
 
 async def test_grab_failure_does_not_stop_sampling() -> None:
-    """来源不可用（OBS 没开）只记日志，恢复后照常发布。"""
-    collector, bus = _collector([ConnectionRefusedError("OBS 未开"), None, _frame(10)])
-    assert await collector.sample_once() is None
-    assert await collector.sample_once() is None
-    assert await collector.sample_once() is not None
-    assert bus.emit.await_count == 1
+    """来源不可用（OBS 没开）只记日志，恢复后照常采样。"""
+    collector = _collector([ConnectionRefusedError("OBS 未开"), None, _frame(10)])
+    assert await collector.sample_once() is False
+    assert await collector.sample_once() is False
+    assert await collector.sample_once() is True
 
 
 async def test_stop_closes_grabber() -> None:
-    collector, _ = _collector([])
+    collector = _collector([])
     await collector.stop()
     assert collector._grabber.closed  # type: ignore[attr-defined]
 

@@ -29,9 +29,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from pydantic import BaseModel
 
 from src.modules.diagnostics.writer import DiagnosticsWriter
-from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.llm import LLMContextUsedPayload
 from src.modules.llm.bootstrap import (
     ProfileNames,
     _ResolvedProfile,
@@ -439,7 +436,6 @@ class LLMManager:
     def __init__(
         self,
         llm_repo: Optional[LLMRepo] = None,
-        event_bus: Optional[EventBus] = None,
         live_session_resolver: Optional[Callable[[], Optional[int]]] = None,
         diagnostics_writer: Optional[DiagnosticsWriter] = None,
     ) -> None:
@@ -464,9 +460,6 @@ class LLMManager:
         self._retry_config = RetryConfig()
         # 注入后每次成功调用旁路写一条 llm_usage（失败降级不阻断调用）；None 时不落库
         self._llm_repo = llm_repo
-        # 注入后每次成功调用发布 llm.context.used 上下文水位事件（观察面终点
-        # 广播）；None 时不发布。事件发布失败只告警，绝不阻断调用链
-        self._event_bus = event_bus
         # 注入后每次落库解析当前直播场次主键写入 llm_usage.live_session_id；
         # None（未注入或无进行中场次）落 NULL = 场间消耗。解析失败只告警
         self._live_session_resolver = live_session_resolver
@@ -1003,7 +996,6 @@ class LLMManager:
             start_time=start_time,
             breakdown=breakdown,
         )
-        await self._emit_context_used(breakdown=breakdown, result=result)
 
     def _build_context_breakdown(
         self,
@@ -1033,29 +1025,6 @@ class LLMManager:
         except Exception as exc:  # noqa: BLE001 估算属旁路观测，任何异常只降级
             self.logger.warning(f"上下文分段估算失败（本次跳过）: {exc}")
             return None
-
-    async def _emit_context_used(self, *, breakdown: Optional[ContextBreakdown], result: LLMResponse) -> None:
-        """发布 llm.context.used 上下文水位事件（观察面终点广播；失败只告警）。"""
-        if self._event_bus is None or breakdown is None:
-            return
-        try:
-            usage = result.usage or {}
-            await self._event_bus.emit(
-                CoreEvents.LLM_CONTEXT_USED,
-                LLMContextUsedPayload(
-                    request_id=breakdown.request_id,
-                    profile_name=breakdown.profile_name,
-                    model_name=breakdown.model_name,
-                    context_window=self.get_model_context_window(breakdown.model_name),
-                    api_prompt_tokens=breakdown.api_prompt_tokens,
-                    completion_tokens=int(usage.get("completion_tokens", 0) or 0),
-                    sections=[section.model_dump() for section in breakdown.sections],
-                    calibrated=breakdown.calibrated,
-                ),
-                source="LLMManager",
-            )
-        except Exception as exc:  # noqa: BLE001 事件属旁路观测，失败不阻断调用链
-            self.logger.warning(f"上下文水位事件发布失败: {exc}")
 
     @staticmethod
     def _build_request_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:

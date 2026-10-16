@@ -1,9 +1,10 @@
-"""直播画面采集器：低频采样观众此刻看到的画面，明显变化时发布画面快照事件。
+"""直播画面采集器：低频采样观众此刻看到的画面，写入进程内图像暂存。
 
 画面是持续流（不是被调才看的快照），按"持续流做采集器"的判据放在采集器层：
-每隔 ``interval_ms`` 取一帧，缩成小灰度图与上一次发布的画面比较，差异超过
-``change_threshold``、或距上次发布超过 ``refresh_ms`` 才发布。图像本体存进进程内
-图像暂存（``VisionImageStore``），事件 ``room.state.frame`` 只带句柄。
+每隔 ``interval_ms`` 取一帧，缩成小灰度图与上一次的画面比较，差异超过
+``change_threshold``、或距上次超过 ``refresh_ms`` 时刷新比对基线并记日志。
+每次采样都覆盖暂存（``VisionImageStore``）的"最新帧"槽位，决策窗按需查询取帧，
+不经事件流。
 
 画面来源：
 
@@ -27,8 +28,6 @@ from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.collectors.base import BaseCollector
-from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.room_state import RoomStateFramePayload
 from src.modules.logging import get_logger, silence_third_party_logger
 from src.modules.studio.obs.obs_errors import describe_obs_error
 from src.modules.time_utils import now_ms
@@ -267,35 +266,37 @@ class LiveFrameCollector(BaseCollector):
         await self._stop_collect_task()
         await self._grabber.close()
 
-    async def collect(self) -> AsyncIterator[RoomStateFramePayload]:
-        """按间隔取帧，值得发布的帧发事件后产出载荷。"""
+    async def collect(self) -> AsyncIterator[None]:
+        """按间隔采样画面（仅驱动采样循环，无事件产出）。"""
         while True:
-            payload = await self.sample_once()
-            if payload is not None:
-                yield payload
+            await self.sample_once()
             await asyncio.sleep(self.typed_config.interval_ms / 1000)
+            yield
 
-    async def sample_once(self) -> Optional[RoomStateFramePayload]:
-        """取一帧并决定是否发布：明显变化或隔太久才发；取帧失败返回 None。"""
+    async def sample_once(self) -> bool:
+        """取一帧并覆盖暂存最新帧槽位；画面明显变化或隔太久时刷新比对基线并记日志。
+
+        Returns:
+            本次采样是否触达变化闸（明显变化或补刷周期到）。
+        """
         frame = await self._grab()
         if frame is None:
-            return None
+            return False
         try:
             thumb = await asyncio.to_thread(_thumbnail, frame.image)
         except Exception as exc:  # noqa: BLE001 - 坏帧跳过，下一轮重取
             self.logger.warning(f"画面解码失败，跳过这一帧：{exc}")
-            return None
+            return False
         change = frame_change(self._last_thumb, thumb)
         now = now_ms()
         refresh = self.typed_config.refresh_ms
         overdue = refresh > 0 and now - self._last_published_ms >= refresh
         publish = change >= self.typed_config.change_threshold or overdue
         # 每次成功采样都覆盖暂存里的"最新帧"槽位：决策窗挂帧是查询式的，
-        # 看的必须是刚截的画面而不是最近一次发布的——静态画面若只靠发布事件
-        # 更新，"最新可用画面"其实是 refresh_ms（60 秒）前的。发布闸不动：
-        # 时间线/回放只在画面明显变化时留痕的语义不变
+        # 看的必须是刚截的画面。基线只在触达变化闸时重置，让"明显变化"
+        # 的判定始终对着上一张稳定画面
         store = get_image_store()
-        latest = store.put_latest(
+        store.put_latest(
             frame.data_url,
             width=frame.width,
             height=frame.height,
@@ -303,19 +304,11 @@ class LiveFrameCollector(BaseCollector):
             timestamp_ms=now,
         )
         if not publish:
-            return None
-        payload = RoomStateFramePayload(
-            image_ref=latest.ref,
-            width=frame.width,
-            height=frame.height,
-            source=self.typed_config.source,
-            change=round(change, 4),
-            timestamp_ms=now,
-        )
+            return False
         self._last_thumb = thumb
         self._last_published_ms = now
-        await self.emit_event(CoreEvents.ROOM_STATE_FRAME, payload)
-        return payload
+        self.logger.debug(f"画面{'明显变化' if not overdue else '距上次采样已久'}，刷新比对基线（差异 {change:.2f}）")
+        return True
 
     async def _grab(self) -> Optional[GrabbedFrame]:
         """取帧；失败只记日志（连续失败按间隔抽样记录），不中断采样循环。"""

@@ -22,7 +22,7 @@ CORE_EVENT_VALUES: Dict[str, str] = {
     if not name.startswith("_") and isinstance(getattr(CoreEvents, name), str)
 }
 
-# 世界侧输入事件：弹幕行为流 + 房间状态推送 + 直播画面快照（采集器发布）
+# 世界侧输入事件：弹幕行为流 + 房间状态推送（采集器发布）
 INPUT_EVENTS = {
     "room.message.danmaku",
     "room.message.gift",
@@ -30,7 +30,6 @@ INPUT_EVENTS = {
     "room.message.enter",
     "room.message.partner_speech",
     "room.state.watched_count",
-    "room.state.frame",
 }
 # Agent 域允许的非输入订阅：场次生命周期（主动发言闸门）、游戏事件族、工具结果
 AGENT_ALLOWED_PREFIXES = ("live.started", "live.ended", "game.", "tool.result.")

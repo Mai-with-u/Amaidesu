@@ -34,7 +34,7 @@
 
 ## 直播画面
 
-`[agents.streamer.live_frame]` 启用、collectors.toml 启用 `live_frame` 采集器、且 planner 主模型支持视觉时，决策窗第一次请求的末尾多挂一条 user 消息：【直播画面】说明 + 最新一帧画面（`room.state.frame` 的图像句柄）。规则：
+`[agents.streamer.live_frame]` 启用、collectors.toml 启用 `live_frame` 采集器、且 planner 主模型支持视觉时，决策窗第一次请求的末尾多挂一条 user 消息：【直播画面】说明 + 最新一帧画面（图像暂存 `VisionImageStore` 的句柄，查询式取自 latest 槽位）。规则：
 
 - 只挂第一次请求，同窗后续 ReAct 步骤不带；不写进消息序列，前缀不受影响；
 - 画面超过 `max_age_ms` 视为过时不看；看过的那一帧不再看；两次之间至少隔 `min_interval_ms`；

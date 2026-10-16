@@ -314,7 +314,6 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             RoomStateWatchedPayload(
                 platform=_PLATFORM,
                 audience_total=watched_msg.watched_count,
-                watched_show=watched_msg.watched_show,
             ),
         )
 
