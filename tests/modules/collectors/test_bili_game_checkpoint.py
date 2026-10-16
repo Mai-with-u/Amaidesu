@@ -251,3 +251,57 @@ async def test_end_app_noop_without_game_id(tmp_path: Path, stale: Any) -> None:
     await client._end_app(game_id=stale)
 
     assert calls == []
+
+
+# ---------------- 清残留与首次启动之间的冷却间隔 ----------------
+
+
+async def _run_first_attempt_and_stop(
+    client: BiliWebSocketClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[float]:
+    """让 run() 走完清残留与首次连接尝试即退出，收集其间每一次 sleep 时长。"""
+    import asyncio as _asyncio
+
+    sleeps: list[float] = []
+    real_sleep = _asyncio.sleep
+
+    async def fake_sleep(delay: Any, *args: Any, **kwargs: Any) -> None:
+        sleeps.append(delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr(_asyncio, "sleep", fake_sleep)
+
+    async def fake_connect() -> None:
+        client.is_started = False  # 首次连接尝试后即退出运行循环
+        return None
+
+    client._connect = fake_connect  # type: ignore[method-assign]
+    await client.run(message_handler=lambda *a, **k: None)
+    return sleeps
+
+
+async def test_run_waits_after_clearing_stale_game(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """真清了残留：首次连接前等待冷却间隔，躲 B 站 end→start 冷却（code=7001）。"""
+    from src.modules.collectors.bilibili.official.client.websocket_client import STALE_CLEAR_COOLDOWN_S
+
+    cp = _make_checkpoint(tmp_path)
+    cp.save("stale-game-3")
+    client = _make_client(cp)
+    _install_post_spy(client, [_FakeResponse({"code": 0, "message": "0"})])
+
+    sleeps = await _run_first_attempt_and_stop(client, monkeypatch)
+
+    assert sleeps[0] == STALE_CLEAR_COOLDOWN_S, "清残留后必须先等冷却再首次连接"
+
+
+async def test_run_starts_immediately_without_stale_game(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无残留：不做冷却等待，照常立即启动。"""
+    from src.modules.collectors.bilibili.official.client.websocket_client import STALE_CLEAR_COOLDOWN_S
+
+    client = _make_client(_make_checkpoint(tmp_path))
+    _install_post_spy(client, [])
+
+    sleeps = await _run_first_attempt_and_stop(client, monkeypatch)
+
+    assert STALE_CLEAR_COOLDOWN_S not in sleeps, "没清残留不得引入冷却等待"

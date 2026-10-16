@@ -35,6 +35,10 @@ _RECONNECT_MAX_DELAY_S = 60.0  # 最大重连等待秒数（指数退避上限�
 _RECONNECT_BACKOFF_FACTOR = 2.0  # 退避倍率
 _RECONNECT_MAX_ATTEMPTS = 0  # 最大重连次数，0 = 无限
 
+# 清残留后的启动间隔（秒）：B 站对 app/end → app/start 有冷却限制
+# （code=7001 请求冷却期），真清过残留就等这么久再首次连接
+STALE_CLEAR_COOLDOWN_S = 5
+
 
 class BiliWebSocketClient:
     """Bilibili官方WebSocket客户端"""
@@ -82,7 +86,12 @@ class BiliWebSocketClient:
         # B 站开放平台一个 app_id 同时只允许一场进行中的游戏：
         # 上次进程异常退出未 end 的残留会话会在 app/start 撞"房间重复游戏"，
         # 启动前先按检查点幂等清理一次（end 失败一律忽略，不阻塞正常 start）
-        await self._clear_stale_game()
+        cleared_stale = await self._clear_stale_game()
+        if cleared_stale:
+            # B 站对 end → start 有冷却限制（code=7001 请求冷却期）：真清了
+            # 残留就等几秒再首次连接，躲过冷却期，省一次注定失败的尝试
+            self.logger.info(f"已清残留，等待 {STALE_CLEAR_COOLDOWN_S}s 躲过 B 站 end→start 冷却后启动")
+            await asyncio.sleep(STALE_CLEAR_COOLDOWN_S)
 
         attempt = 0
 
@@ -194,16 +203,22 @@ class BiliWebSocketClient:
         # verify=False 为既有取舍：显式跳过证书校验（历史行为，恢复需单独评估）
         return requests.post(url=url, headers=headers, data=body, verify=False, timeout=timeout)
 
-    async def _clear_stale_game(self) -> None:
-        """按检查点清理上次异常退出遗留的服务端游戏会话（幂等，可安全重复）"""
+    async def _clear_stale_game(self) -> bool:
+        """按检查点清理上次异常退出遗留的服务端游戏会话（幂等，可安全重复）。
+
+        Returns:
+            是否真的清理了残留（无检查点时 False）——调用方据此决定是否
+            等待 B 站 end → start 冷却期。
+        """
         stale_game_id = self.game_id_checkpoint.load()
         if not stale_game_id:
             self.logger.debug("无残留检查点，跳过清残留")
-            return
+            return False
         # 残留可能已失效：end 返回任何错误都不阻塞启动
         await self._end_app(game_id=stale_game_id)
         self.game_id_checkpoint.clear()
         self.logger.info(f"检测到残留 game_id={stale_game_id}，已清理")
+        return True
 
     async def _get_websocket_info(self) -> tuple[Optional[str], Optional[str]]:
         """获取WebSocket连接信息"""
