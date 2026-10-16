@@ -12,7 +12,6 @@ LLM 请求历史记录管理器
 注意：所有地方都应该使用全局实例以确保数据一致性
 """
 
-import json
 import uuid
 from collections import deque
 from datetime import datetime
@@ -126,13 +125,15 @@ class TokenUsage(BaseModel):
 
 
 class RequestRecord(BaseModel):
-    """LLM 请求记录
+    """LLM 请求记录（内存缓存形态；落库只取统计与摘要，正文出库到诊断文件）。
 
-    ``profile_name`` 替换历史 ``client_type``（§2 扩容正名）：该字段实际承载
-    的是 LLM 用途 profile 名（planner / replyer / summary / minecraft /
-    minecraft_builder / vision / simulator）；与 ``LLMProviderConfig.client_type``
-    （客户端实现标识）概念不同。历史行 client_type 值（llm / llm_fast /
-    llm_summary / vlm）原样保留以备历史查询（不映射）。
+    ``request_params`` 仅在内存留存：写库前用它截取 ``preview_text`` 摘要与
+    ``image_count`` 计数，本身不落库。``profile_name`` 替换历史 ``client_type``：
+    该字段实际承载的是 LLM 用途 profile 名（planner / replyer / summary /
+    minecraft / minecraft_builder / vision / simulator）；与
+    ``LLMProviderConfig.client_type``（客户端实现标识）概念不同。历史行
+    client_type 值（llm / llm_fast / llm_summary / vlm）原样保留以备历史查询
+    （不映射）。
     """
 
     request_id: str = Field(default_factory=lambda: f"req_{uuid.uuid4().hex[:12]}")
@@ -141,15 +142,11 @@ class RequestRecord(BaseModel):
     model_name: str
     request_params: Dict[str, Any] = Field(default_factory=dict)
     response_content: Optional[str] = None
-    reasoning_content: Optional[str] = None
-    tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
     usage: Optional[TokenUsage] = None
     cost: float = 0.0
     success: bool = True
     error: Optional[str] = None
     latency_ms: int = 0
-    # 厂商原始 usage JSON（解析即弃链路唯一兜底，落库 ``llm_requests.usage_raw_json``）
-    usage_raw_json: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
@@ -160,14 +157,11 @@ class RequestRecord(BaseModel):
             "model_name": self.model_name,
             "request_params": self.request_params,
             "response_content": self.response_content,
-            "reasoning_content": self.reasoning_content,
-            "tool_calls": self.tool_calls,
             "usage": self.usage.model_dump() if self.usage else None,
             "cost": self.cost,
             "success": self.success,
             "error": self.error,
             "latency_ms": self.latency_ms,
-            "usage_raw_json": self.usage_raw_json,
         }
 
 
@@ -278,12 +272,11 @@ class RequestHistoryManager:
     async def _persist_request(self, record_dict: Dict[str, Any]) -> None:
         """写单条请求到 ``llm_requests`` 表；失败仅告警（记账旁路语义）。
 
-        库行只存统计与摘要：正文大字段（request_params / reasoning_content /
-        tool_calls / usage_raw_json）由调用链写侧出库到诊断文件，列留 NULL
-        （存量旧行仍在库列，读侧降级回退）。SQLite 写入统一走 observation
-        （两表唯一写入者），本方法只负责把请求记录字典整理成插入载荷。
-        profile_name 字段承载 LLM 用途 profile 名；历史数据经 v12 迁移后该列
-        已改名，传入字段名仍维持 ``profile_name``。
+        库行只存统计与摘要：正文（request_params / response_content）与
+        分段占用由调用链写侧出库到诊断文件，``response_content`` 保留正文
+        存档。SQLite 写入统一走 observation（两表唯一写入者），本方法只负责
+        把请求记录字典整理成插入载荷。profile_name 字段承载 LLM 用途 profile
+        名；历史数据经 v12 迁移后该列已改名，传入字段名仍维持 ``profile_name``。
         """
         if self._llm_repo is None:
             return
@@ -296,10 +289,7 @@ class RequestHistoryManager:
                     timestamp_ms=record_dict.get("timestamp", 0),
                     profile_name=record_dict.get("profile_name", ""),
                     model_name=record_dict.get("model_name", ""),
-                    request_params_json=None,
                     response_content=record_dict.get("response_content"),
-                    reasoning_content=None,
-                    tool_calls_json=None,
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
                     completion_tokens=int(usage.get("completion_tokens", 0)),
                     total_tokens=int(usage.get("total_tokens", 0)),
@@ -310,7 +300,6 @@ class RequestHistoryManager:
                     success=bool(record_dict.get("success", True)),
                     error=record_dict.get("error"),
                     latency_ms=int(record_dict.get("latency_ms", 0)),
-                    usage_raw_json=None,
                     preview_text=build_prompt_preview(record_dict.get("request_params")),
                     image_count=count_image_parts(record_dict.get("request_params")),
                 ),
@@ -338,11 +327,12 @@ class RequestHistoryManager:
 
     @staticmethod
     def _row_to_record(row: Dict[str, Any]) -> Dict[str, Any]:
-        """DB 行 → 历史记录字典（usage 嵌套与 JSON 列还原）。
+        """DB 行 → 历史记录字典（usage 嵌套还原）。
 
-        读取 ``profile_name`` 列（v12 迁移后该列已改名）；同时回带 reasoning_tokens
-        与 usage_raw_json（解析即弃链路唯一兜底）、preview_text（v14 列表预览
-        摘要；正文大字段 v14 起出库，旧行列值仍在，新行为 NULL 由读侧文件回查）。
+        读取 ``profile_name`` 列（v12 迁移后该列已改名），回带 reasoning_tokens
+        与 preview_text（列表预览摘要）、image_count（注入截图计数）。正文
+        与分段占用已出库到诊断文件，详情读侧经 ``read_llm_request_payload``
+        回查，不在本层还原。
         """
         usage = None
         if row.get("prompt_tokens") or row.get("completion_tokens") or row.get("total_tokens"):
@@ -353,23 +343,12 @@ class RequestHistoryManager:
                 "reasoning_tokens": (int(row["reasoning_tokens"]) if row.get("reasoning_tokens") is not None else None),
             }
 
-        def _load_json(text: Any, fallback: Any) -> Any:
-            if not text:
-                return fallback
-            try:
-                return json.loads(text)
-            except (TypeError, json.JSONDecodeError):
-                return fallback
-
         return {
             "request_id": row.get("request_id", ""),
             "timestamp": row.get("timestamp_ms", 0),
             "profile_name": row.get("profile_name", ""),
             "model_name": row.get("model_name", ""),
-            "request_params": _load_json(row.get("request_params"), {}),
             "response_content": row.get("response_content"),
-            "reasoning_content": row.get("reasoning_content"),
-            "tool_calls": _load_json(row.get("tool_calls"), []),
             "usage": usage,
             "cost": float(row.get("cost", 0.0)),
             "success": bool(row.get("success", 1)),
@@ -377,7 +356,6 @@ class RequestHistoryManager:
             "latency_ms": int(row.get("latency_ms", 0)),
             "cache_hit_tokens": int(row.get("cache_hit_tokens") or 0),
             "cache_miss_tokens": int(row.get("cache_miss_tokens") or 0),
-            "usage_raw_json": row.get("usage_raw_json"),
             "preview_text": row.get("preview_text") or "",
             "image_count": int(row.get("image_count") or 0),
         }

@@ -29,7 +29,6 @@ def test_build_view_shape() -> None:
             "id",
             "title",
             "task_description",
-            "key_points",
             "expected_ms",
             "min_duration_ms",
             "notes",

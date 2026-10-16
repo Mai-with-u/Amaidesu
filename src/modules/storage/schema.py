@@ -1,8 +1,9 @@
 """
 存储 Schema 定义
 
-本模块是全部 SQLite 表的**单一事实源**：16 张业务表（11 张核心直播表 +
-2 张模拟器运行时表 + 1 张流程单表 + 2 张观众画像表）+ ``schema_migrations``。
+本模块是全部 SQLite 表的**单一事实源**：21 张业务表（11 张核心直播表 +
+2 张模拟器运行时表 + 5 张流程单域表 + 2 张观众画像表 + 1 张 LLM 请求历史表）
++ ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
 表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
 
@@ -52,7 +53,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 16
+SCHEMA_VERSION: int = 17
 
 
 # =============================================================================
@@ -73,7 +74,11 @@ SCHEMA_VERSION: int = 16
 # - llm_requests            LLM 请求历史（完整请求/响应，dashboard 历史页数据源）
 # - sim_personas            模拟器常驻观众人设（运行时数据，WebUI 管理）
 # - sim_gifts               模拟器礼物目录（运行时数据，WebUI 管理）
-# - rundowns                流程单（rundown 子系统）
+# - rundowns                流程单模板（元信息行）
+# - rundown_segments        流程单环节行（凡环节皆行，seq 定序）
+# - rundown_instances       流程单实例头（每场一行，崩溃恢复 + 时点快照）
+# - rundown_instance_segments 流程单实例环节快照行
+# - rundown_transitions     流程单变更事实行（append-only）
 # - schema_migrations       版本管理
 # =============================================================================
 
@@ -108,8 +113,20 @@ def build_schema_sql() -> str:
         # session_recaps —— 场次回顾
         + _SESSION_RECAPS_SQL
         + "\n"
-        # rundowns —— 流程单
+        # rundowns —— 流程单模板（元信息）
         + _RUNDOWNS_SQL
+        + "\n"
+        # rundown_segments —— 流程单环节行
+        + _RUNDOWN_SEGMENTS_SQL
+        + "\n"
+        # rundown_instances —— 流程单实例头
+        + _RUNDOWN_INSTANCES_SQL
+        + "\n"
+        # rundown_instance_segments —— 流程单实例环节快照行
+        + _RUNDOWN_INSTANCE_SEGMENTS_SQL
+        + "\n"
+        # rundown_transitions —— 流程单变更事实行
+        + _RUNDOWN_TRANSITIONS_SQL
         + "\n"
         # game_events —— 游戏里程碑
         + _GAME_EVENTS_SQL
@@ -147,6 +164,10 @@ def list_expected_tables() -> List[str]:
         "viewer_profiles",
         "session_recaps",
         "rundowns",
+        "rundown_segments",
+        "rundown_instances",
+        "rundown_instance_segments",
+        "rundown_transitions",
         "game_events",
         "timeline_summary",
         "llm_usage",
@@ -193,7 +214,6 @@ CREATE TABLE IF NOT EXISTS live_chat (
     message_type     TEXT NOT NULL,
     message_id       TEXT,
     reply_to_message_id TEXT,
-    tool_result      TEXT,
     simulated        INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_live_chat_session_ts ON live_chat(live_session_id, timestamp_ms);
@@ -348,10 +368,92 @@ _RUNDOWNS_SQL = """
 CREATE TABLE IF NOT EXISTS rundowns (
     id            TEXT PRIMARY KEY,
     title         TEXT NOT NULL,
-    segments_json TEXT NOT NULL,
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL
 );
+""".strip()
+
+
+# --- rundown_segments —— 流程单环节行 ---
+# 判据"凡环节皆行"：环节是查询面实体（编排页逐环节渲染、运行态按环节定位），
+# 整段 JSON 塞单列无法按环节索引。``seq`` 定序（模板内顺序即播放顺序），
+# ``(rundown_id, seg_id)`` 唯一保证 goto 定位键稳定。
+
+_RUNDOWN_SEGMENTS_SQL = """
+CREATE TABLE IF NOT EXISTS rundown_segments (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    rundown_id       TEXT NOT NULL,
+    seq              INTEGER NOT NULL,
+    seg_id           TEXT NOT NULL,
+    title            TEXT NOT NULL,
+    task_description TEXT NOT NULL,
+    expected_ms      INTEGER NOT NULL,
+    min_duration_ms  INTEGER,
+    notes            TEXT,
+    UNIQUE(rundown_id, seg_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rundown_segments_rundown ON rundown_segments(rundown_id, seq);
+""".strip()
+
+
+# --- rundown_instances / rundown_instance_segments —— 流程单实例双表 ---
+# 实例头一场一行（live_session_id 主键），承载游标与计时锚点的时点快照：
+# 崩溃恢复读一行即还原（快照式持久化，不做事件溯源重放）；
+# 环节快照行随变更事务内全量替换，防模板漂移（恢复源 = 实例，不是模板）。
+# 游标列名用 ``seg_index``——``index`` 是 SQL 关键字，直接用会踩坑。
+
+_RUNDOWN_INSTANCES_SQL = """
+CREATE TABLE IF NOT EXISTS rundown_instances (
+    live_session_id              INTEGER PRIMARY KEY,
+    template_id                  TEXT NOT NULL DEFAULT '',
+    seg_index                    INTEGER NOT NULL DEFAULT -1,
+    segment_started_at_ms        INTEGER NOT NULL DEFAULT 0,
+    paused_at_ms                 INTEGER,
+    rundown_started_at_ms        INTEGER NOT NULL DEFAULT 0,
+    accumulated_pause_ms         INTEGER NOT NULL DEFAULT 0,
+    accumulated_session_pause_ms INTEGER NOT NULL DEFAULT 0,
+    updated_at_ms                INTEGER NOT NULL
+);
+""".strip()
+
+
+_RUNDOWN_INSTANCE_SEGMENTS_SQL = """
+CREATE TABLE IF NOT EXISTS rundown_instance_segments (
+    live_session_id  INTEGER NOT NULL,
+    seq              INTEGER NOT NULL,
+    seg_id           TEXT NOT NULL,
+    title            TEXT NOT NULL,
+    task_description TEXT NOT NULL,
+    expected_ms      INTEGER NOT NULL,
+    min_duration_ms  INTEGER,
+    notes            TEXT,
+    PRIMARY KEY(live_session_id, seq)
+);
+""".strip()
+
+
+# --- rundown_transitions —— 流程单变更事实行（append-only）---
+# 每次环节变更（load/append/goto/next/renew/pause/resume/finish/restore…）
+# 一行事实：分析"实际停留 vs 预期停留"的数据面。``expected_ms`` 每行都填
+# （当前环节预期时长，实际停留统计免 JOIN 模板表）；``task_description``
+# 仅 append 行填（append 后模板行可能被改写，事实行存当时的描述）。
+
+_RUNDOWN_TRANSITIONS_SQL = """
+CREATE TABLE IF NOT EXISTS rundown_transitions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id INTEGER NOT NULL,
+    rundown_id      TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    seg_id          TEXT NOT NULL DEFAULT '',
+    seg_title       TEXT NOT NULL DEFAULT '',
+    seg_index       INTEGER NOT NULL,
+    by              TEXT NOT NULL,
+    at_ms           INTEGER NOT NULL,
+    expected_ms     INTEGER,
+    task_description TEXT,
+    updated_at_ms   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rundown_transitions_session ON rundown_transitions(live_session_id, at_ms);
 """.strip()
 
 
@@ -374,8 +476,7 @@ CREATE TABLE IF NOT EXISTS timeline_summary (
     live_session_id  INTEGER NOT NULL,
     start_ms         INTEGER NOT NULL,
     end_ms           INTEGER NOT NULL,
-    summary          TEXT NOT NULL,
-    tags             TEXT
+    summary          TEXT NOT NULL
 );
 """.strip()
 
@@ -440,14 +541,13 @@ CREATE TABLE IF NOT EXISTS sim_gifts (
 # --- llm_requests —— LLM 请求历史（RequestHistoryManager 落库）---
 # usage 拆平为多列以便 SQL 聚合（statistics/费用汇总）。正文大字段
 # （request_params / reasoning_content / tool_calls / usage_raw_json /
-# breakdown_json）自 v14 起出库到 logs/llm_requests/ 诊断文件，列保留作
-# 存量旧行的降级回退（新行一律 NULL）；``preview_text`` 为列表页 Prompt
-# 预览摘要（写侧从最后一条有正文的消息截取，新行专用）；``image_count``
-# 为注入截图计数（写侧从消息图像片段统计，正文出库后列表徽标唯一来源）。
-# ``profile_name`` 替换历史 ``client_type`` 列（§2 扩容正名）；新增
-# ``reasoning_tokens`` 思考量列与 ``usage_raw_json`` 解析即弃唯一兜底；
-# ``breakdown_json`` 为上下文分段占用解剖（监控面板数据源，见
-# ``src/modules/llm/context_meter.py``），估算失败/旧数据为 NULL。
+# breakdown_json）v14 起出库到 logs/llm_requests/ 诊断文件，v17 起
+# 死列 DROP（实测全库非空为零，回退价值消失）；``response_content``
+# 保留——活跃写入的正文存档（详情页消费，纯文本非序列化结构）。
+# ``preview_text`` 为列表页 Prompt 预览摘要（写侧从最后一条有正文的消息
+# 截取，新行专用）；``image_count`` 为注入截图计数（写侧从消息图像片段
+# 统计，正文出库后列表徽标唯一来源）。``profile_name`` 替换历史
+# ``client_type`` 列。
 
 _LLM_REQUESTS_SQL = """
 CREATE TABLE IF NOT EXISTS llm_requests (
@@ -455,10 +555,7 @@ CREATE TABLE IF NOT EXISTS llm_requests (
     timestamp_ms        INTEGER NOT NULL,
     profile_name        TEXT NOT NULL DEFAULT '',
     model_name          TEXT NOT NULL DEFAULT '',
-    request_params      TEXT,
     response_content    TEXT,
-    reasoning_content   TEXT,
-    tool_calls          TEXT,
     prompt_tokens       INTEGER NOT NULL DEFAULT 0,
     completion_tokens   INTEGER NOT NULL DEFAULT 0,
     total_tokens        INTEGER NOT NULL DEFAULT 0,
@@ -469,8 +566,6 @@ CREATE TABLE IF NOT EXISTS llm_requests (
     success             INTEGER NOT NULL DEFAULT 1,
     error               TEXT,
     latency_ms          INTEGER NOT NULL DEFAULT 0,
-    usage_raw_json      TEXT,
-    breakdown_json      TEXT,
     preview_text        TEXT NOT NULL DEFAULT '',
     image_count         INTEGER NOT NULL DEFAULT 0
 );

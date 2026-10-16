@@ -87,15 +87,13 @@ async def _seed_call(
     )
 
 
-async def _seed_breakdown(
-    store: SQLiteDatabase, request_id: str, model_name: str, timestamp_ms: int, prompt: int = 100, **kwargs: Any
-) -> None:
-    """带上下文分段解剖的请求明细；with_breakdown=False 造无解剖的历史行。"""
-    profile_name = kwargs.get("profile_name", "replyer")
-    breakdown = {
+def _breakdown_payload(request_id: str, model_name: str, prompt: int, profile_name: str = "replyer") -> Dict[str, Any]:
+    """一份上下文分段占用解剖（诊断文件数据形态）。"""
+    return {
         "request_id": request_id,
         "profile_name": profile_name,
         "model_name": model_name,
+        "timestamp_ms": 1_700_000_000_000,
         "api_prompt_tokens": prompt,
         "local_total_tokens": 90,
         "calibrated": True,
@@ -105,13 +103,19 @@ async def _seed_breakdown(
             {"key": "tools", "tokens": 30, "raw_tokens": 27, "count": 1, "items": [{"name": "reply", "tokens": 30}]},
         ],
     }
+
+
+async def _seed_breakdown(
+    store: SQLiteDatabase, request_id: str, model_name: str, timestamp_ms: int, prompt: int = 100, **kwargs: Any
+) -> None:
+    """带上下文分段解剖的请求明细（库行只存统计；分段占用经诊断文件回查）。"""
+    profile_name = kwargs.get("profile_name", "replyer")
     await store.llm.insert_llm_request(
         request_id=request_id,
         timestamp_ms=timestamp_ms,
         profile_name=profile_name,
         model_name=model_name,
         prompt_tokens=prompt,
-        breakdown_json=json.dumps(breakdown) if kwargs.get("with_breakdown", True) else None,
     )
 
 
@@ -193,8 +197,10 @@ async def test_usage_trends_daily_aggregation(llm_client, store) -> None:
         assert (await client.get("/api/v1/llm/usage/trends", params={"days": days})).status_code == 422
 
 
-async def test_history_rows_carry_tool_call_preview_and_usage_details(llm_client, store) -> None:
-    """响应以 tool_calls 承载时预览回退为首条工具调用摘要；逐条缓存、思考 token、原始 usage 随行透出。"""
+async def test_history_rows_carry_tool_call_preview_and_usage_details(
+    llm_client, store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """列表行只带统计与摘要；详情正文经诊断文件回查合并（tool_calls / 原始 usage 随详情透出）。"""
     client = await llm_client()
     raw_usage = json.dumps({"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150})
     tool_calls = [
@@ -211,21 +217,23 @@ async def test_history_rows_carry_tool_call_preview_and_usage_details(llm_client
         cache_hit=3840,
         cache_miss=84,
         profile_name="planner",
-        tool_calls_json=json.dumps(tool_calls, ensure_ascii=False),
         reasoning_tokens=42,
-        usage_raw_json=raw_usage,
         image_count=2,
+    )
+    payload = {"request_params": {}, "tool_calls": tool_calls, "reasoning_content": None, "usage_raw_json": raw_usage}
+    monkeypatch.setattr(
+        llm_api, "read_llm_request_payload", lambda request_id, ts: payload if request_id == "tc1" else None
     )
 
     body = (await client.get("/api/v1/llm/history", params={"page": 1, "page_size": 10})).json()
     row = next(item for item in body["items"] if item["request_id"] == "tc1")
-    assert row["response_preview"].startswith("[调用 reply]") and "我的世界" in row["response_preview"]
+    # 0/0 = 未上报 ≠ 零命中，前端据此算命中率；列表正名为 profile_name
+    assert (row["cache_hit_tokens"], row["cache_miss_tokens"], row["profile_name"]) == (3840, 84, "planner")
+    assert row["reasoning_tokens"] == 42
+    assert row["usage_raw_json"] is None  # 正文字段不再随列表行透出，详情接口回查诊断文件
     detail = (await client.get("/api/v1/llm/history/tc1")).json()
-    for item in (row, detail):
-        # 0/0 = 未上报 ≠ 零命中，前端据此算命中率；列表正名为 profile_name
-        assert (item["cache_hit_tokens"], item["cache_miss_tokens"], item["profile_name"]) == (3840, 84, "planner")
-        assert (item["reasoning_tokens"], item["usage_raw_json"]) == (42, raw_usage)
-        assert "client_type" not in item
+    assert detail["usage_raw_json"] == raw_usage
+    assert detail["tool_calls"] == tool_calls
     # 注入截图计数随列表行透出（WebUI 徽标数据源）；详情响应不携带
     assert row["image_count"] == 2
     assert "image_count" not in detail
@@ -253,29 +261,39 @@ async def test_usage_context_window_and_latest_prompt(llm_client, store, windows
     assert {m: body[m]["context_window"] for m in (MODEL_A, MODEL_B)} == expected
 
 
-async def test_context_breakdown_latest_per_model(llm_client, store) -> None:
+async def test_context_breakdown_latest_per_model(llm_client, store, monkeypatch: pytest.MonkeyPatch) -> None:
     client = await llm_client()
     assert (await client.get("/api/v1/llm/context-breakdown")).json() == {}
 
-    await _seed_breakdown(store, "cb-a1", MODEL_A, 1_000)
+    # 分段占用只存在于诊断快照文件（v17 起 breakdown 库列已退役）；快照每模型一份最新水位
+    snapshots = {
+        MODEL_A: _breakdown_payload("cb-a2", MODEL_A, 500),
+        MODEL_B: _breakdown_payload("cb-b1", MODEL_B, 100, profile_name="planner"),
+    }
+    monkeypatch.setattr(llm_api, "read_latest_breakdowns", lambda *args, **kwargs: snapshots)
     await _seed_breakdown(store, "cb-a2", MODEL_A, 2_000, prompt=500)
-    await _seed_breakdown(store, "cb-a3", MODEL_A, 3_000, with_breakdown=False)
     await _seed_breakdown(store, "cb-b1", MODEL_B, 1_500, profile_name="planner")
 
     body = (await client.get("/api/v1/llm/context-breakdown")).json()
     model_a = body[MODEL_A]
-    # 最新的带解剖行（无解剖行不构成快照）
     assert (model_a["request_id"], model_a["api_prompt_tokens"], model_a["calibrated"]) == ("cb-a2", 500, True)
     assert {section["key"] for section in model_a["sections"]} == {"system", "messages", "tools"}
     assert (model_a["context_window"], model_a["free_tokens"]) == (0, None)
     assert body[MODEL_B]["profile_name"] == "planner"
 
 
-async def test_context_breakdown_by_request(llm_client, store) -> None:
-    """按请求 ID 取分段：命中返回明细，未命中或无分段返回 null，前端按空态渲染。"""
+async def test_context_breakdown_by_request(llm_client, store, monkeypatch: pytest.MonkeyPatch) -> None:
+    """按请求 ID 取分段：诊断文件命中返回明细，未命中或行不存在返回 null，前端按空态渲染。"""
     client = await llm_client()
     await _seed_breakdown(store, "cbr-1", MODEL_A, 1_000, prompt=2_933)
-    await _seed_breakdown(store, "cbr-2", MODEL_A, 2_000, with_breakdown=False)
+    await _seed_breakdown(store, "cbr-2", MODEL_A, 2_000)
+
+    def _read_from_file(request_id: str, timestamp_ms: int):
+        if request_id == "cbr-1":
+            return _breakdown_payload("cbr-1", MODEL_A, 2_933)
+        return None
+
+    monkeypatch.setattr(llm_api, "read_request_breakdown", _read_from_file)
 
     body = (await client.get("/api/v1/llm/context-breakdown/cbr-1")).json()
     assert (body["request_id"], body["api_prompt_tokens"]) == ("cbr-1", 2_933)
@@ -284,11 +302,21 @@ async def test_context_breakdown_by_request(llm_client, store) -> None:
         assert (await client.get(f"/api/v1/llm/context-breakdown/{missing}")).json() is None
 
 
-async def test_context_breakdown_threads_window_from_llm_manager(llm_client, store) -> None:
+async def test_context_breakdown_threads_window_from_llm_manager(
+    llm_client, store, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """free = max(0, window - used)；窗口未配置时 free 为 None。"""
     client = await llm_client({MODEL_A: 128_000, MODEL_B: 0})
     await _seed_breakdown(store, "cbw-a1", MODEL_A, 1_000, prompt=10_000)
     await _seed_breakdown(store, "cbw-b1", MODEL_B, 1_100, prompt=300)
+    snapshots = {
+        MODEL_A: _breakdown_payload("cbw-a1", MODEL_A, 10_000),
+        MODEL_B: _breakdown_payload("cbw-b1", MODEL_B, 300),
+    }
+    monkeypatch.setattr(llm_api, "read_latest_breakdowns", lambda *args, **kwargs: snapshots)
+    monkeypatch.setattr(
+        llm_api, "read_request_breakdown", lambda request_id, ts: snapshots[MODEL_A] if request_id == "cbw-a1" else None
+    )
 
     body = (await client.get("/api/v1/llm/context-breakdown")).json()
     assert (body[MODEL_A]["context_window"], body[MODEL_A]["free_tokens"]) == (128_000, 118_000)

@@ -35,7 +35,6 @@ class ChatRepo(BaseRepo):
         platform: str = "",
         message_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
-        tool_result: Optional[str] = None,
         simulated: bool = False,
     ) -> int:
         """插入一条 live_chat 行，返回 lastrowid。
@@ -49,8 +48,8 @@ class ChatRepo(BaseRepo):
                 cur = conn.execute(
                     "INSERT INTO live_chat ("
                     "live_session_id, timestamp_ms, platform, sender_role, sender_id, sender_name,"
-                    " content, message_type, message_id, reply_to_message_id, tool_result, simulated"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " content, message_type, message_id, reply_to_message_id, simulated"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
@@ -62,7 +61,6 @@ class ChatRepo(BaseRepo):
                         message_type,
                         message_id,
                         reply_to_message_id,
-                        tool_result,
                         1 if simulated else 0,
                     ),
                 )

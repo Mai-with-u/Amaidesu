@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import List, Optional
+from typing import List
 
 from src.modules.storage.repos._base import BaseRepo
 
@@ -23,16 +23,14 @@ class TopicRepo(BaseRepo):
         start_ms: int,
         end_ms: int,
         summary: str,
-        tags: Optional[str] = None,
     ) -> int:
         """插入一条摘要历史行，返回 lastrowid。"""
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "INSERT INTO timeline_summary (live_session_id, start_ms, end_ms, summary, tags) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (live_session_id, start_ms, end_ms, summary, tags),
+                    "INSERT INTO timeline_summary (live_session_id, start_ms, end_ms, summary) VALUES (?, ?, ?, ?)",
+                    (live_session_id, start_ms, end_ms, summary),
                 )
                 return int(cur.lastrowid or 0)
 

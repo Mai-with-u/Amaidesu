@@ -11,6 +11,8 @@ from src.modules.storage.repos.chat import ChatRepo
 from src.modules.storage.repos.events import EventRepo
 from src.modules.storage.repos.llm import LLMRepo
 from src.modules.storage.repos.recaps import SessionRecapRepo
+from src.modules.storage.repos.rundown_instances import RundownInstanceRepo
+from src.modules.storage.repos.rundown_transitions import RundownTransitionRepo
 from src.modules.storage.repos.rundowns import RundownRepo
 from src.modules.storage.repos.sessions import SessionRepo
 from src.modules.storage.repos.sim import SimRepo
@@ -23,7 +25,9 @@ __all__ = [
     "ChatRepo",
     "EventRepo",
     "LLMRepo",
+    "RundownInstanceRepo",
     "RundownRepo",
+    "RundownTransitionRepo",
     "SessionRecapRepo",
     "SessionRepo",
     "SimRepo",

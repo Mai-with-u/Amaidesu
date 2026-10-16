@@ -28,7 +28,7 @@ def build_rundown_view(state: RundownState, *, now_ms: Optional[int] = None) -> 
             {
                 "snapshot": dict,  # RundownState.get_snapshot() 原样
                 "transitions": list[dict],  # 最近 50 条变更历史
-                "segments": list[dict],  # 环节清单（id/title/目标/要点/时长/备注）
+                "segments": list[dict],  # 环节清单（id/title/目标/时长/备注）
             }
     """
     rundown = state.rundown
@@ -40,7 +40,6 @@ def build_rundown_view(state: RundownState, *, now_ms: Optional[int] = None) -> 
             "id": seg.id,
             "title": seg.title,
             "task_description": seg.task_description,
-            "key_points": list(seg.key_points),
             "expected_ms": seg.expected_ms,
             "min_duration_ms": seg.min_duration_ms,
             "notes": seg.notes,

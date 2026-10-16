@@ -83,7 +83,8 @@ async def test_breakdown_goes_to_diagnostics(store: SQLiteDatabase, tmp_path: Pa
     assert result.success
     writer.stop()
 
-    assert [r["breakdown_json"] for r in await store.execute("SELECT breakdown_json FROM llm_requests")] == [None]
+    cols = {row["name"] for row in await store.execute("PRAGMA table_info(llm_requests)")}
+    assert "breakdown_json" not in cols  # v17 起死列退役，分段占用只走诊断文件
     (stream,) = list((tmp_path / "llm_requests").rglob("*.jsonl"))
     record = json.loads(stream.read_text(encoding="utf-8").strip())
     breakdown = record["breakdown"]
@@ -94,32 +95,16 @@ async def test_breakdown_goes_to_diagnostics(store: SQLiteDatabase, tmp_path: Pa
     assert read_latest_breakdowns(base_dir=tmp_path)["glm-4.7"]["request_id"] == result.request_id
 
 
-async def test_latest_breakdowns_query_returns_latest_per_model(store: SQLiteDatabase) -> None:
-    """每模型最新一条带解剖行；无解剖或空模型名的行不进入结果。"""
-    for request_id, model, ts, with_breakdown in (
-        ("r_a1", "model-a", 1_000, True),
-        ("r_a2", "model-a", 2_000, True),
-        ("r_a3", "model-a", 3_000, False),
-        ("r_b1", "model-b", 1_500, True),
-        ("r_c1", "", 2_500, True),
-    ):
-        breakdown = {
-            "request_id": request_id,
-            "profile_name": "planner",
-            "model_name": model,
-            "api_prompt_tokens": 100,
-            "local_total_tokens": 90,
-            "calibrated": True,
-            "sections": [{"key": "system", "tokens": 10, "raw_tokens": 9, "count": 1, "items": []}],
-        }
-        await store.llm.insert_llm_request(
-            request_id=request_id,
-            timestamp_ms=ts,
-            profile_name="planner",
-            model_name=model,
-            prompt_tokens=100,
-            breakdown_json=json.dumps(breakdown) if with_breakdown else None,
-        )
+async def test_breakdown_not_persisted_diagnostics_is_authoritative(store: SQLiteDatabase, tmp_path: Path) -> None:
+    """分段占用不落库（列已随 v17 退役）：诊断小时流与 latest 快照是唯一数据源。"""
+    writer = DiagnosticsWriter(base_dir=tmp_path, retention_days=0)
+    manager = make_llm_manager(_FakeUsageClient(), llm_repo=store.llm, diagnostics_writer=writer)
+    result = await manager.generate("你好", profile="planner")
+    writer.stop()
 
-    result = await store.llm.llm_requests_latest_breakdowns()
-    assert {model: row["request_id"] for model, row in result.items()} == {"model-a": "r_a2", "model-b": "r_b1"}
+    cols = {row["name"] for row in await store.execute("PRAGMA table_info(llm_requests)")}
+    assert "breakdown_json" not in cols
+    (stream,) = list((tmp_path / "llm_requests").rglob("*.jsonl"))
+    record = json.loads(stream.read_text(encoding="utf-8").strip())
+    assert record["breakdown"]["request_id"] == result.request_id
+    assert read_latest_breakdowns(base_dir=tmp_path)["glm-4.7"]["request_id"] == result.request_id

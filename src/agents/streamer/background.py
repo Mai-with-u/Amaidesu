@@ -441,7 +441,7 @@ class BackgroundMaintainer:
             live_pk = await self._session_manager.resolve_pk()
             window_start = previous_summary_ms or max(now_ms - self._summary_interval_ms, 0)
             await self._topic_repo.insert_timeline_summary(
-                live_session_id=live_pk, start_ms=window_start, end_ms=now_ms, summary=summary, tags=None
+                live_session_id=live_pk, start_ms=window_start, end_ms=now_ms, summary=summary
             )
             snapshot = self._room_state.get_snapshot(now_ms=now_ms)
             await self._topic_repo.delete_session_topics(live_session_id=live_pk)

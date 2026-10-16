@@ -130,42 +130,23 @@ async def get_context_breakdown(server: ServerDep) -> Dict[str, LLMContextBreakd
     """每模型最近一次调用的上下文分段占用（"上下文水位"悬停明细数据源）。
 
     数据取每模型最新水位快照（``logs/llm_context/latest.json``，引擎成功
-    路径覆写），窗口上限取 LLMManager 装配索引；快照空时回退库存量行
-    （``llm_requests.breakdown_json``，正文出库前的历史形态）。
+    路径覆写），窗口上限取 LLMManager 装配索引；快照空时返回空对象
+    （分段占用只产生于引擎成功路径，快照缺条目 = 该模型尚无水位可看）。
     ``breakdown`` 解析失败的条目跳过（不伪造分段）。
     """
     context_windows = _context_windows_of(server)
     result: Dict[str, LLMContextBreakdownResponse] = {}
 
     snapshot_models = read_latest_breakdowns()
-    if snapshot_models:
-        for model_name, breakdown in snapshot_models.items():
-            row = {
-                "timestamp_ms": breakdown.get("timestamp_ms"),
-                "profile_name": breakdown.get("profile_name"),
-                "request_id": breakdown.get("request_id"),
-            }
-            result[model_name] = _assemble_breakdown_response(
-                breakdown, model_name=model_name, row=row, context_windows=context_windows
-            )
-        return result
-
-    llm_repo = server.llm_repo
-    if llm_repo is None:
-        return {}
-
-    rows = await llm_repo.llm_requests_latest_breakdowns()
-    for model_name, row in rows.items():
-        try:
-            breakdown = json.loads(str(row.get("breakdown_json") or ""))
-        except ValueError:
-            continue
-        if not isinstance(breakdown, dict):
-            continue
+    for model_name, breakdown in snapshot_models.items():
+        row = {
+            "timestamp_ms": breakdown.get("timestamp_ms"),
+            "profile_name": breakdown.get("profile_name"),
+            "request_id": breakdown.get("request_id"),
+        }
         result[model_name] = _assemble_breakdown_response(
             breakdown, model_name=model_name, row=row, context_windows=context_windows
         )
-
     return result
 
 
@@ -176,10 +157,9 @@ async def get_context_breakdown(server: ServerDep) -> Dict[str, LLMContextBreakd
 async def get_context_breakdown_by_request(request_id: str, server: ServerDep) -> Optional[LLMContextBreakdownResponse]:
     """按请求 ID 取单次调用的上下文分段占用（时间线决策卡水位胶囊悬停明细）。
 
-    库行 ``breakdown_json`` 有值（存量旧行）直读；新行正文出库后列值为空，
-    按库行 ``timestamp_ms`` 回查诊断文件。两者都无分段（估算不可用的行）或
-    行不存在一律返回 null（前端按空态渲染，不报错）；窗口上限同口径取
-    LLMManager 装配索引。
+    分段占用存诊断文件（按库行 ``timestamp_ms`` 定位回查）；文件未命中
+    （估算不可用的行）或行不存在一律返回 null（前端按空态渲染，不报错）；
+    窗口上限同口径取 LLMManager 装配索引。
     """
     llm_repo = server.llm_repo
     if llm_repo is None:
@@ -189,17 +169,8 @@ async def get_context_breakdown_by_request(request_id: str, server: ServerDep) -
     if row is None:
         return None
 
-    breakdown: Optional[Dict[str, Any]] = None
-    raw = row.get("breakdown_json")
-    if raw:
-        try:
-            parsed = json.loads(str(raw))
-            breakdown = parsed if isinstance(parsed, dict) else None
-        except ValueError:
-            breakdown = None
-    if breakdown is None:
-        # 文件回查线性扫描小时文件，挪线程池避免冻结事件循环（悬停触发，低频）
-        breakdown = await asyncio.to_thread(read_request_breakdown, request_id, int(row.get("timestamp_ms") or 0))
+    # 文件回查线性扫描小时文件，挪线程池避免冻结事件循环（悬停触发，低频）
+    breakdown = await asyncio.to_thread(read_request_breakdown, request_id, int(row.get("timestamp_ms") or 0))
     if not isinstance(breakdown, dict):
         return None
     model_name = str(row.get("model_name") or "")

@@ -19,7 +19,6 @@
 - ``id``：环节唯一标识（流程单内唯一，goto 定位用）
 - ``title``：环节标题，面向人展示
 - ``task_description``：给 AI 的目标指引，允许自由发挥
-- ``key_points``：要点列表（可空），给 AI 提供本环节需要覆盖的要点
 - ``expected_ms``：预期停留时长（毫秒，``>= 1000``）——只用于进度显示与
   超时提醒，**不是切换器**
 - ``min_duration_ms``：最少停留时长（可选）——工具校验下界，防御抢跑
@@ -57,7 +56,13 @@ from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-__all__ = ["RundownSegment", "Rundown", "DEFAULT_RUNDOWN"]
+__all__ = [
+    "RundownSegment",
+    "Rundown",
+    "RundownInstance",
+    "RundownTransition",
+    "DEFAULT_RUNDOWN",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +71,7 @@ __all__ = ["RundownSegment", "Rundown", "DEFAULT_RUNDOWN"]
 
 
 class RundownSegment(BaseModel):
-    """流程单中单个环节——一段有目标 / 时长 / 要点的直播片段。"""
+    """流程单中单个环节——一段有目标 / 时长的直播片段。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -75,10 +80,6 @@ class RundownSegment(BaseModel):
     task_description: str = Field(
         ...,
         description="给 AI 的目标指引（开场/话题引导/收尾等），允许 AI 自由发挥",
-    )
-    key_points: List[str] = Field(
-        default_factory=list,
-        description="要点列表（可空），给 AI 提供本环节需要覆盖的要点",
     )
     expected_ms: int = Field(
         ...,
@@ -171,33 +172,109 @@ DEFAULT_RUNDOWN: Rundown = Rundown(
             title="开场问候",
             task_description=(
                 "用友善、轻松的语气向首次进入直播间的观众打招呼，"
-                "说明这是首播，预告接下来会自我介绍，欢迎大家在弹幕互动。"
+                "说明这是首播，预告接下来会自我介绍，欢迎大家在弹幕互动。\n"
+                "要点：问好、说明首播、欢迎弹幕"
             ),
-            key_points=["问好", "说明首播", "欢迎弹幕"],
             expected_ms=180_000,  # 约 3 分钟
         ),
         RundownSegment(
             id="self_intro",
             title="自我介绍",
             task_description=(
-                "围绕自己的角色定位、开播初衷、未来内容规划展开，让观众快速了解主播是谁、为什么开播、接下来打算做什么。"
+                "围绕自己的角色定位、开播初衷、未来内容规划展开，让观众快速了解主播是谁、为什么开播、接下来打算做什么。\n"
+                "要点：角色身份、开播初衷、未来内容方向"
             ),
-            key_points=["角色身份", "开播初衷", "未来内容方向"],
             expected_ms=600_000,  # 约 10 分钟
         ),
         RundownSegment(
             id="chat",
             title="互动闲聊",
-            task_description=("欢迎观众弹幕提问与闲聊，主动抛出话题制造氛围；保持对话流动，不主导话题而是呼应观众。"),
-            key_points=["回应弹幕", "抛出互动话题", "维持氛围"],
+            task_description=(
+                "欢迎观众弹幕提问与闲聊，主动抛出话题制造氛围；保持对话流动，不主导话题而是呼应观众。\n"
+                "要点：回应弹幕、抛出互动话题、维持氛围"
+            ),
             expected_ms=1_200_000,  # 约 20 分钟
         ),
         RundownSegment(
             id="closing",
             title="收尾预告",
-            task_description=("感谢今晚陪伴的观众，简短预告下次直播内容与下播时间，自然结束本次首播。"),
-            key_points=["感谢观众", "预告下次直播", "道别"],
+            task_description=(
+                "感谢今晚陪伴的观众，简短预告下次直播内容与下播时间，自然结束本次首播。\n"
+                "要点：感谢观众、预告下次直播、道别"
+            ),
             expected_ms=300_000,  # 约 5 分钟
         ),
     ],
 )
+
+
+# ---------------------------------------------------------------------------
+# 流程单实例快照（rundown_instances / rundown_instance_segments 双表的出入参）
+# ---------------------------------------------------------------------------
+
+
+class RundownInstanceSegment(BaseModel):
+    """流程单实例的单个环节快照行（与模板环节同构的标量列）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seq: int = Field(..., description="环节序号（实例内定序，与主键 (live_session_id, seq) 配对）")
+    seg_id: str = Field(..., description="环节唯一标识（goto 定位用）")
+    title: str = Field(..., description="环节标题")
+    task_description: str = Field(default="", description="给 AI 的目标指引")
+    expected_ms: int = Field(..., description="预期停留时长（毫秒）")
+    min_duration_ms: Optional[int] = Field(default=None, description="最少停留时长（毫秒，可选）")
+    notes: Optional[str] = Field(default=None, description="备注（可选）")
+
+
+class RundownInstance(BaseModel):
+    """流程单实例时点快照——一场直播一份（头 + 环节行列表）。
+
+    崩溃恢复与防模板漂移的时点事实源：头行承载游标与计时锚点（绝对时刻，
+    恢复后宕机时间照算），``segments`` 是变更时刻的环节集全量快照（含
+    Agent 追加环节，模板后来被改写也不影响恢复）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    live_session_id: int = Field(..., description="场次主键（实例头主键，一场一行）")
+    template_id: str = Field(default="", description="实例来源流程单模板 id；空 = 未知/无模板")
+    seg_index: int = Field(default=-1, description="当前环节游标（-1 = 未开始）；列名避开 SQL 关键字 index")
+    segment_started_at_ms: int = Field(default=0, description="当前环节开始时刻（Unix epoch 毫秒）")
+    paused_at_ms: Optional[int] = Field(default=None, description="暂停起始时刻；None = 非暂停态")
+    rundown_started_at_ms: int = Field(default=0, description="流程单启动时刻（Unix epoch 毫秒）")
+    accumulated_pause_ms: int = Field(default=0, description="当前环节累计暂停时长（毫秒）")
+    accumulated_session_pause_ms: int = Field(default=0, description="整场累计暂停时长（毫秒）")
+    updated_at_ms: int = Field(..., description="快照写入时刻（Unix epoch 毫秒）")
+    segments: List[RundownInstanceSegment] = Field(
+        default_factory=list,
+        description="环节快照行列表（按 seq 升序）；变更时全量替换",
+    )
+
+
+# ---------------------------------------------------------------------------
+# 流程单变更事实行（rundown_transitions 出入参）
+# ---------------------------------------------------------------------------
+
+
+class RundownTransition(BaseModel):
+    """一次流程单环节变更的事实行（append-only，不做更新）。
+
+    ``expected_ms`` 每行都填（变更时刻当前环节的预期时长，实际停留统计免
+    JOIN 模板表）；``task_description`` 仅 append 行填——append 后模板行
+    可能被改写，事实行存当时的描述，其余动作留空。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    live_session_id: int = Field(..., description="场次主键")
+    rundown_id: str = Field(..., description="流程单 id")
+    action: str = Field(..., description="变更动作名（load/append/goto/next/renew/pause/resume/finish/restore…）")
+    seg_id: str = Field(default="", description="当前环节 id（无环节语义的动作留空）")
+    seg_title: str = Field(default="", description="当前环节标题")
+    seg_index: int = Field(..., description="当前环节游标")
+    by: str = Field(..., description="触发方（agent/human/system）")
+    at_ms: int = Field(..., description="变更时刻（Unix epoch 毫秒）")
+    expected_ms: Optional[int] = Field(default=None, description="当前环节预期时长（毫秒，每行都填）")
+    task_description: Optional[str] = Field(default=None, description="环节描述（仅 append 行填）")
+    updated_at_ms: int = Field(..., description="落库时刻（Unix epoch 毫秒）")

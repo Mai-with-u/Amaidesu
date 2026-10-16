@@ -320,17 +320,6 @@
         </section>
 
         <section class="drawer-section">
-          <h4 class="drawer-h">关键要点</h4>
-          <ul v-if="activeSegment.key_points.length > 0" class="key-points">
-            <li v-for="(point, i) in activeSegment.key_points" :key="i" class="key-point">
-              <span class="key-point-bullet" aria-hidden="true">·</span>
-              <span>{{ point }}</span>
-            </li>
-          </ul>
-          <p v-else class="drawer-muted">未设置关键要点</p>
-        </section>
-
-        <section class="drawer-section">
           <h4 class="drawer-h">元信息</h4>
           <dl class="meta-grid">
             <dt>预期时长</dt>
@@ -519,14 +508,6 @@
             type="textarea"
             :rows="3"
             placeholder="给主播 Agent 的目标指引，允许自由发挥"
-          />
-        </el-form-item>
-        <el-form-item label="关键要点">
-          <el-input
-            v-model="segForm.keyPointsText"
-            type="textarea"
-            :rows="3"
-            placeholder="每行一条；可留空"
           />
         </el-form-item>
         <el-form-item label="预期时长">
@@ -1161,12 +1142,6 @@ async function handleRestart(): Promise<void> {
   font-style: italic;
 }
 
-.key-points,
-.key-point,
-.key-point-bullet {
-  color: var(--color-rundown);
-  font-weight: 700;
-}
 .meta-grid {
   display: grid;
   grid-template-columns: auto 1fr;

@@ -15,10 +15,10 @@ def _segment(**overrides) -> RundownSegment:
 
 def test_construction_defaults_and_full_fields() -> None:
     minimal = RundownSegment(id="s1", title="开场", task_description="和观众打招呼", expected_ms=10_000)
-    assert (minimal.key_points, minimal.min_duration_ms, minimal.notes) == ([], None, None)
+    assert (minimal.min_duration_ms, minimal.notes) == (None, None)
 
-    full = _segment(key_points=["问好", "自我介绍"], expected_ms=60_000, min_duration_ms=30_000, notes="参考开场白")
-    assert (full.key_points, full.min_duration_ms, full.notes) == (["问好", "自我介绍"], 30_000, "参考开场白")
+    full = _segment(expected_ms=60_000, min_duration_ms=30_000, notes="参考开场白")
+    assert (full.min_duration_ms, full.notes) == (30_000, "参考开场白")
 
     rundown = Rundown(rundown_id="rd_1", title="测试流程单", segments=[minimal])
     assert (rundown.rundown_id, rundown.title, len(rundown.segments)) == ("rd_1", "测试流程单", 1)
@@ -73,6 +73,6 @@ def test_default_rundown_is_valid_and_has_the_agreed_shape() -> None:
         1_200_000,
         300_000,
     ]  # 3/10/20/5 分钟，合计 38 分钟
-    assert all(seg.key_points and seg.task_description for seg in DEFAULT_RUNDOWN.segments)
+    assert all(seg.task_description for seg in DEFAULT_RUNDOWN.segments)
     ids = [seg.id for seg in DEFAULT_RUNDOWN.segments]
     assert len(ids) == len(set(ids))

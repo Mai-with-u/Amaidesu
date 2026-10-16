@@ -10,6 +10,7 @@ from typing import AsyncIterator
 
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations import SCHEMA_MIGRATIONS
+from src.modules.storage.migrations.v13_llm_context_breakdown import migrate as v13_migrate
 from src.modules.storage.migrations.v14_llm_request_preview_column import migrate as v14_migrate
 from src.modules.storage.schema import _GIFTS_SQL, SCHEMA_VERSION, build_schema_sql
 
@@ -52,10 +53,13 @@ def test_build_schema_sql_is_current_shape() -> None:
         "CREATE TABLE IF NOT EXISTS viewer_profiles",
         "CREATE TABLE IF NOT EXISTS session_recaps",
         "UNIQUE(platform, user_id)",
-        "breakdown_json",
         "preview_text",
+        # v17 清理后不再出现的遗留列（死列 / 出库列）
+        "rundown_segments",
     ):
         assert marker in sql
+    for gone in ("breakdown_json", "usage_raw_json", "segments_json", "tool_result"):
+        assert gone not in sql
     # gifts 已改名 quantity（viewers 的 gift_count 属不同语义）；扁平事实私有表与观众事实中间表均已移除
     assert "gift_count" not in _GIFTS_SQL
     assert "_memory_facts" not in sql and "viewer_facts" not in sql
@@ -230,20 +234,21 @@ CREATE TABLE llm_requests (
 """.strip()
 
 
-async def test_v12_to_v13_adds_breakdown_column(db_path: Path) -> None:
-    await _rollback_to(
-        db_path,
-        12,
-        "DROP TABLE llm_requests",
-        _V12_LLM_REQUESTS_SQL,
+def test_v12_to_v13_adds_breakdown_column() -> None:
+    """v13 钩子给 v12 形状旧表补 breakdown_json 列（幂等）；该列随后被 v17 清理退役。"""
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_V12_LLM_REQUESTS_SQL)
+    conn.execute(
         "INSERT INTO llm_requests(request_id, timestamp_ms, profile_name, model_name, prompt_tokens)"
-        " VALUES ('r_old', 1000, 'replyer', 'model-a', 100)",
+        " VALUES ('r_old', 1000, 'replyer', 'model-a', 100)"
     )
     for _ in range(2):
-        async with _opened(db_path) as reopened:
-            assert await reopened.get_schema_version() == SCHEMA_VERSION
-            rows = await reopened.execute("SELECT request_id, breakdown_json FROM llm_requests")
-            assert [(r["request_id"], r["breakdown_json"]) for r in rows] == [("r_old", None)]
+        v13_migrate(conn)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(llm_requests)")}
+        assert "breakdown_json" in cols
+        row = conn.execute("SELECT request_id, breakdown_json FROM llm_requests").fetchone()
+        assert row == ("r_old", None)
+    conn.close()
 
 
 def test_v14_adds_preview_column_idempotently() -> None:

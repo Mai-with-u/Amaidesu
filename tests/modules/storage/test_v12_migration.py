@@ -62,7 +62,7 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set:
 def _assert_v12_columns(conn: sqlite3.Connection) -> None:
     req_cols = _column_names(conn, "llm_requests")
     assert "reasoning_tokens" in _column_names(conn, "llm_usage")
-    assert {"reasoning_tokens", "usage_raw_json", "profile_name"} <= req_cols
+    assert {"reasoning_tokens", "profile_name"} <= req_cols
     assert "client_type" not in req_cols
 
 
@@ -81,6 +81,11 @@ async def test_fresh_db_has_v12_columns_and_profile_index(store: SQLiteDatabase)
             return {row[1] for row in conn.execute("PRAGMA index_list(llm_requests)").fetchall()}
 
     assert "idx_llm_requests_profile" in await store._run_in_executor(_check)
+    # usage_raw_json 曾随 v12 落地，全链升到 v17 后作为出库死列退役
+    def _check_gone() -> set:
+        with store.manager.transaction() as conn:
+            return _column_names(conn, "llm_requests")
+    assert "usage_raw_json" not in await store._run_in_executor(_check_gone)
 
 
 async def test_v11_db_upgrade_renames_column_and_keeps_legacy_values(db_path: Path) -> None:
@@ -107,12 +112,12 @@ async def test_v11_db_upgrade_renames_column_and_keeps_legacy_values(db_path: Pa
         try:
             assert await db.get_schema_version() == SCHEMA_VERSION
             rows = await db.execute(
-                "SELECT profile_name, reasoning_tokens, usage_raw_json FROM llm_requests ORDER BY timestamp_ms"
+                "SELECT profile_name, reasoning_tokens FROM llm_requests ORDER BY timestamp_ms"
             )
-            assert [(r["profile_name"], r["reasoning_tokens"], r["usage_raw_json"]) for r in rows] == [
-                ("llm", 0, None),
-                ("llm_fast", 0, None),
-                ("vlm", 0, None),
+            assert [(r["profile_name"], r["reasoning_tokens"]) for r in rows] == [
+                ("llm", 0),
+                ("llm_fast", 0),
+                ("vlm", 0),
             ]
             assert [r["reasoning_tokens"] for r in await db.execute("SELECT reasoning_tokens FROM llm_usage")] == [0]
         finally:
@@ -142,5 +147,5 @@ async def test_engine_persists_reasoning_tokens_without_raw_usage_body(store: SQ
 
     assert (await manager.generate("你好", profile="planner")).success
     assert [r["reasoning_tokens"] for r in await store.execute("SELECT reasoning_tokens FROM llm_usage")] == [7]
-    rows = await store.execute("SELECT profile_name, reasoning_tokens, usage_raw_json FROM llm_requests")
-    assert [(r["profile_name"], r["reasoning_tokens"], r["usage_raw_json"]) for r in rows] == [("planner", 7, None)]
+    rows = await store.execute("SELECT profile_name, reasoning_tokens FROM llm_requests")
+    assert [(r["profile_name"], r["reasoning_tokens"]) for r in rows] == [("planner", 7)]

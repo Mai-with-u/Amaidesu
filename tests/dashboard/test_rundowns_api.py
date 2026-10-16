@@ -84,7 +84,6 @@ def _definition(rundown_id: str = "", *, dup_segment_ids: bool = False) -> Dict[
             "id": seg_id,
             "title": title,
             "task_description": f"目标 {title[-1]}",
-            "key_points": [],
             "expected_ms": expected_ms,
             "min_duration_ms": None,
             "notes": None,

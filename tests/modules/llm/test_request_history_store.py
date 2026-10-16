@@ -58,8 +58,8 @@ async def test_records_persist_and_query_with_paging_filters_and_detail(store, m
     first = page["records"][0]
     assert first["usage"] == first["usage"] | {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
     assert "reasoning_tokens" in first["usage"]
-    # 正文出库：列表不还原 request_params，只给 preview_text 摘要
-    assert (first["request_params"], first["preview_text"]) == ({}, "hi")
+    # 正文出库：列表只给 preview_text 摘要，不还原正文
+    assert "request_params" not in first and first["preview_text"] == "hi"
 
     def ids(history) -> list[str]:
         return [r["request_id"] for r in history["records"]]
@@ -72,7 +72,7 @@ async def test_records_persist_and_query_with_paging_filters_and_detail(store, m
 
 
 async def test_body_fields_leave_db_keeping_statistics_and_preview(store, manager) -> None:
-    """正文五字段落库一律 NULL（正文在诊断文件）；profile_name / reasoning_tokens / preview_text 落库并还原。"""
+    """正文不入库（v17 起出库列已退役，正文在诊断文件）；profile_name / reasoning_tokens / preview_text 落库并还原。"""
     record = _record("req-v14", ts_ms=7_000).to_dict()
     record["request_params"] = {
         "messages": [
@@ -87,13 +87,14 @@ async def test_body_fields_leave_db_keeping_statistics_and_preview(store, manage
         ]
     }
     record["usage"]["reasoning_tokens"] = 3
-    record["usage_raw_json"] = '{"completion_tokens_details": {"reasoning_tokens": 3}}'
     manager.record_request_from_dict(record)
     await _wait_for_count(store, 1)
 
-    row = (await store.execute("SELECT * FROM llm_requests"))[0]
+    # 出库列已整列退役：表结构里不再有这些列
+    columns = {row["name"] for row in await store.execute("PRAGMA table_info(llm_requests)")}
     for column in ("request_params", "reasoning_content", "tool_calls", "usage_raw_json", "breakdown_json"):
-        assert row[column] is None
+        assert column not in columns
+    row = (await store.execute("SELECT * FROM llm_requests"))[0]
     assert (row["profile_name"], row["reasoning_tokens"]) == ("planner", 3)
     # 预览摘要取最后一条有正文的消息，截 50 字符
     assert row["preview_text"].startswith("帮我看看这局局势") and len(row["preview_text"]) <= 50
@@ -102,6 +103,7 @@ async def test_body_fields_leave_db_keeping_statistics_and_preview(store, manage
 
     fetched = await manager.get_request_by_id("req-v14")
     assert (fetched["profile_name"], fetched["usage"]["reasoning_tokens"]) == ("planner", 3)
+    assert "request_params" not in fetched and "usage_raw_json" not in fetched  # 详情正文走诊断文件回查
     first = (await manager.get_history())["records"][0]
     assert first["preview_text"] == row["preview_text"] and first["image_count"] == 1
 

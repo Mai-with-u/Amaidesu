@@ -188,7 +188,6 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
     id: '',
     title: '',
     task_description: '',
-    keyPointsText: '',
     expectedMinutes: 5,
     minMinutes: null as number | null,
     notes: '',
@@ -203,7 +202,6 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
       segForm.id = seg.id;
       segForm.title = seg.title;
       segForm.task_description = seg.task_description;
-      segForm.keyPointsText = seg.key_points.join('\n');
       segForm.expectedMinutes = Math.round((seg.expected_ms / MINUTES_MS) * 10) / 10;
       segForm.minMinutes =
         seg.min_duration_ms != null
@@ -214,7 +212,6 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
       segForm.id = `segment_${editorForm.segments.length + 1}`;
       segForm.title = '';
       segForm.task_description = '';
-      segForm.keyPointsText = '';
       segForm.expectedMinutes = 5;
       segForm.minMinutes = null;
       segForm.notes = '';
@@ -251,10 +248,6 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
       id: segForm.id.trim(),
       title: segForm.title.trim(),
       task_description: segForm.task_description.trim(),
-      key_points: segForm.keyPointsText
-        .split('\n')
-        .map(line => line.trim())
-        .filter(Boolean),
       expected_ms: Math.max(1000, Math.round((segForm.expectedMinutes ?? 0.1) * MINUTES_MS)),
       min_duration_ms:
         segForm.minMinutes != null

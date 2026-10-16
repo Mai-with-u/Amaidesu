@@ -51,8 +51,7 @@ Pydantic BaseModel，`extra="forbid"`。
 
 - `id`：环节唯一标识（流程单内唯一，goto 定位用）
 - `title`：环节标题，面向人展示
-- `task_description`：给 AI 的目标指引，允许自由发挥
-- `key_points`：要点列表（可空）
+- `task_description`：给 AI 的目标指引，允许自由发挥（要点类信息并入描述文本，不设独立字段）
 - `expected_ms`：预期停留时长（毫秒，`>= 1000`）——只用于进度显示与超时提醒，**不是切换器**
 - `min_duration_ms`：最少停留时长（可选）——工具校验下界，防御 Agent 抢跑
 - `notes`：备注（可选）——导演直录内容（如参考开场白），直接注入上下文
@@ -75,18 +74,10 @@ Pydantic BaseModel，`extra="forbid"`。
 
 权威存储为 SQLite `rundowns` 表（内容数据归存储，不进配置文件）：
 
-```sql
-CREATE TABLE IF NOT EXISTS rundowns (
-    id            TEXT PRIMARY KEY,
-    title         TEXT NOT NULL,
-    segments_json TEXT NOT NULL,
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL
-);
-```
+模板元信息在 `rundowns`（一行一单），环节按"凡环节皆行"拆 `rundown_segments` 行表（`seq` 定序，`(rundown_id, seg_id)` 唯一）；DDL 权威在 `src/modules/storage/schema.py`，此处不复制。另有三张流程单域表随 v17 建立：`rundown_instances` / `rundown_instance_segments`（实例时点快照双表，崩溃恢复 + 防模板漂移）与 `rundown_transitions`（append-only 变更事实行）。
 
-- 环节列表整体读写（每单 3-10 环节），不建子表。
-- **运行进度不持久化**：重启即重读流程单从头开始；崩溃续播是伪需求。
+- 环节列表经仓储行集组装读写（每单 3-10 环节），写路径事务内整单覆写。
+- 实例接线（写穿 / 恢复）由流程单运行时切片承担；建表先行。
 - TOML 无关：流程单没有文件格式，一律经 WebUI 建立。
 
 ## 运行时状态（`rundown_state.py`）

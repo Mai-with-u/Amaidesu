@@ -30,8 +30,8 @@ def temp_dir() -> Generator[Path, None, None]:
 
 
 def test_new_database_has_image_count(temp_dir: Path) -> None:
-    """新库：DDL 已含 image_count 列，版本推进到 16。"""
-    assert SCHEMA_VERSION == 16
+    """新库：DDL 已含 image_count 列。"""
+    assert SCHEMA_VERSION >= 16
     db = SQLiteDatabase(temp_dir / "fresh.db")
     asyncio.run(db.initialize())
     try:

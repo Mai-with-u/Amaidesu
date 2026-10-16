@@ -8,8 +8,9 @@ SQLiteDatabase —— 存储装配入口（组合根）
   按版本执行 ``migrations/`` 注册表回调并写入 ``schema_migrations``
 - **健康自检**：``is_healthy()`` / ``table_exists()`` / 表清单 / 版本号
 - **按域装配仓储**：``sessions`` / ``chat`` / ``viewers`` / ``viewer_profiles`` /
-  ``recaps`` / ``sim`` / ``events`` / ``llm`` / ``rundowns`` / ``topics`` 十个域
-  仓储（见 ``repos/``）。业务消费者按需注入仓储，不经过本类做领域读写
+  ``recaps`` / ``sim`` / ``events`` / ``llm`` / ``rundowns`` / ``rundown_instances`` /
+  ``rundown_transitions`` / ``topics`` 十二个域仓储（见 ``repos/``）。
+  业务消费者按需注入仓储，不经过本类做领域读写
 - **原始执行面**：``execute`` 系列保留给运维脚本、自检与测试；业务表读写一律走仓储
 
 ## 重要不变量
@@ -36,7 +37,9 @@ from src.modules.storage.repos import (
     ChatRepo,
     EventRepo,
     LLMRepo,
+    RundownInstanceRepo,
     RundownRepo,
+    RundownTransitionRepo,
     SessionRecapRepo,
     SessionRepo,
     SimRepo,
@@ -112,6 +115,9 @@ class SQLiteDatabase:
         self.events = EventRepo(self._manager)
         self.llm = LLMRepo(self._manager)
         self.rundowns = RundownRepo(self._manager)
+        # 流程单实例快照与变更事实（崩溃恢复 / 分析数据面；接线由流程单切片承担）
+        self.rundown_instances = RundownInstanceRepo(self._manager)
+        self.rundown_transitions = RundownTransitionRepo(self._manager)
         self.topics = TopicRepo(self._manager)
         # 主播记忆的两张表：常客名册 + 场次回顾（写入归主播 Agent，读取面给 Planner/工具/WebUI）
         self.viewer_profiles = ViewerProfileRepo(self._manager)

@@ -35,7 +35,6 @@ class RundownSegmentView(BaseModel):
     id: str
     title: str
     task_description: str = ""
-    key_points: List[str] = Field(default_factory=list)
     expected_ms: int = 0
     min_duration_ms: Optional[int] = None
     notes: Optional[str] = None

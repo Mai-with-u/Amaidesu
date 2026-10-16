@@ -720,8 +720,6 @@ class RundownState:
             )
         if seg.task_description:
             lines.append(f"目标：{seg.task_description}")
-        if seg.key_points:
-            lines.append(f"要点：{'、'.join(seg.key_points)}")
         if seg.notes:
             lines.append(f"备注：{seg.notes}")
         upcoming = self.rundown.segments[self.index + 1 :]

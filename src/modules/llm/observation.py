@@ -168,10 +168,7 @@ async def record_request(repo: LLMRepo, row: LLMRequestInsert) -> bool:
         timestamp_ms=row.timestamp_ms,
         profile_name=row.profile_name,
         model_name=row.model_name,
-        request_params_json=row.request_params_json,
         response_content=row.response_content,
-        reasoning_content=row.reasoning_content,
-        tool_calls_json=row.tool_calls_json,
         prompt_tokens=row.prompt_tokens,
         completion_tokens=row.completion_tokens,
         total_tokens=row.total_tokens,
@@ -182,7 +179,6 @@ async def record_request(repo: LLMRepo, row: LLMRequestInsert) -> bool:
         success=row.success,
         error=row.error,
         latency_ms=row.latency_ms,
-        usage_raw_json=row.usage_raw_json,
         preview_text=row.preview_text,
         image_count=row.image_count,
     )

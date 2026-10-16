@@ -1,9 +1,10 @@
 """LLMRepo —— LLM 调用记录仓储（llm_usage + llm_requests）。
 
 - ``llm_usage``：每次 LLM 调用的 token/费用记录（observation 写入）。
-- ``llm_requests``：完整请求/响应历史（observation 写入）。
-  usage 拆平为列以便 SQL 聚合（statistics/费用汇总）；request_params 与
-  tool_calls 结构不定，存 JSON 文本。dashboard 历史页按时间倒序分页查询。
+- ``llm_requests``：请求历史（observation 写入）。usage 拆平为列以便 SQL
+  聚合（statistics/费用汇总）；正文大字段出库到诊断文件，库行只存统计与
+  摘要（``response_content`` 为活跃写入的正文存档）。dashboard 历史页按
+  时间倒序分页查询。
 - 两表经 ``request_id`` 连接；``insert_llm_call`` 把两表写入放进同一事务，
   供调用方做"聚合账 + 请求明细"的原子记账。
 """
@@ -43,22 +44,19 @@ class LLMUsageInsert:
 
 @dataclass
 class LLMRequestInsert:
-    """``llm_requests`` 单行插入载荷（JSON 列由调用方序列化好传入）。
+    """``llm_requests`` 单行插入载荷。
 
-    ``profile_name`` 替换历史 ``client_type``（§2 扩容正名）：该列实际承载的
-    是 LLM 用途 profile 名，与 ``LLMProviderConfig.client_type``（客户端实现
-    标识）概念不同。旧值域 ``llm/llm_fast/llm_summary/vlm`` 原样保留以备
-    历史查询（不映射），新行一律为 profile 闭集合成员。
+    ``profile_name`` 替换历史 ``client_type``：该列实际承载的是 LLM 用途
+    profile 名，与 ``LLMProviderConfig.client_type``（客户端实现标识）概念
+    不同。旧值域 ``llm/llm_fast/llm_summary/vlm`` 原样保留以备历史查询
+    （不映射），新行一律为 profile 闭集合成员。
     """
 
     request_id: str
     timestamp_ms: int
     profile_name: str = ""
     model_name: str = ""
-    request_params_json: Optional[str] = None
     response_content: Optional[str] = None
-    reasoning_content: Optional[str] = None
-    tool_calls_json: Optional[str] = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -69,9 +67,6 @@ class LLMRequestInsert:
     success: bool = True
     error: Optional[str] = None
     latency_ms: int = 0
-    usage_raw_json: Optional[str] = None
-    # 上下文分段占用解剖 JSON（见 src/modules/llm/context_meter.py）；估算不可用时为 None
-    breakdown_json: Optional[str] = None
     # 列表页 Prompt 预览摘要（写侧从正文最后一条有正文的消息截取；正文出库后
     # 新行唯一预览来源）
     preview_text: str = ""
@@ -124,10 +119,7 @@ class LLMRepo(BaseRepo):
             row.timestamp_ms,
             row.profile_name,
             row.model_name,
-            row.request_params_json,
             row.response_content,
-            row.reasoning_content,
-            row.tool_calls_json,
             row.prompt_tokens,
             row.completion_tokens,
             row.total_tokens,
@@ -138,8 +130,6 @@ class LLMRepo(BaseRepo):
             1 if row.success else 0,
             row.error,
             row.latency_ms,
-            row.usage_raw_json,
-            row.breakdown_json,
             row.preview_text,
             row.image_count,
         )
@@ -148,11 +138,11 @@ class LLMRepo(BaseRepo):
     def _request_insert_sql() -> str:
         return (
             "INSERT OR IGNORE INTO llm_requests ("
-            "request_id, timestamp_ms, profile_name, model_name, request_params, response_content,"
-            " reasoning_content, tool_calls, prompt_tokens, completion_tokens, total_tokens,"
+            "request_id, timestamp_ms, profile_name, model_name, response_content,"
+            " prompt_tokens, completion_tokens, total_tokens,"
             " cache_hit_tokens, cache_miss_tokens, reasoning_tokens, cost, success, error,"
-            " latency_ms, usage_raw_json, breakdown_json, preview_text, image_count"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " latency_ms, preview_text, image_count"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
 
     async def insert_llm_usage_row(self, row: LLMUsageInsert) -> int:
@@ -176,10 +166,7 @@ class LLMRepo(BaseRepo):
         timestamp_ms: int,
         profile_name: str = "",
         model_name: str = "",
-        request_params_json: Optional[str] = None,
         response_content: Optional[str] = None,
-        reasoning_content: Optional[str] = None,
-        tool_calls_json: Optional[str] = None,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         total_tokens: int = 0,
@@ -190,8 +177,6 @@ class LLMRepo(BaseRepo):
         success: bool = True,
         error: Optional[str] = None,
         latency_ms: int = 0,
-        usage_raw_json: Optional[str] = None,
-        breakdown_json: Optional[str] = None,
         preview_text: str = "",
         image_count: int = 0,
     ) -> bool:
@@ -205,10 +190,7 @@ class LLMRepo(BaseRepo):
             timestamp_ms=timestamp_ms,
             profile_name=profile_name,
             model_name=model_name,
-            request_params_json=request_params_json,
             response_content=response_content,
-            reasoning_content=reasoning_content,
-            tool_calls_json=tool_calls_json,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
@@ -219,8 +201,6 @@ class LLMRepo(BaseRepo):
             success=success,
             error=error,
             latency_ms=latency_ms,
-            usage_raw_json=usage_raw_json,
-            breakdown_json=breakdown_json,
             preview_text=preview_text,
             image_count=image_count,
         )
@@ -323,7 +303,7 @@ class LLMRepo(BaseRepo):
         return dict(rows[0]) if rows else None
 
     async def get_llm_request_stats(self, request_ids: List[str]) -> List[Dict[str, Any]]:
-        """按 id 批量取请求统计列（不含 request_params 等正文大字段）。
+        """按 id 批量取请求统计列（不含正文）。
 
         观察面统计胶囊合批懒取专用：只回统计列，避免逐卡取详情时回传整段
         请求正文。未命中的 id 不在结果中。
@@ -564,31 +544,6 @@ class LLMRepo(BaseRepo):
             if not name:
                 continue
             result[name] = int(row["prompt_tokens"] or 0)
-        return result
-
-    async def llm_requests_latest_breakdowns(self) -> Dict[str, Dict[str, Any]]:
-        """每模型最近一次带上下文分段解剖的请求行（监控面板水位明细数据源）。
-
-        返回 ``{model_name: 行 dict}``，行含 request_id / timestamp_ms /
-        profile_name / model_name / breakdown_json；无记录的模型不返回键。
-        过滤 ``breakdown_json IS NOT NULL``（估算不可用的行不构成快照）；
-        ``prompt_tokens`` 一并带出，供展示与 breakdown 内总数互相印证。
-        """
-        rows = await self._execute(
-            "SELECT request_id, timestamp_ms, profile_name, model_name, prompt_tokens, breakdown_json"
-            " FROM llm_requests t1"
-            " WHERE breakdown_json IS NOT NULL AND model_name != ''"
-            "   AND timestamp_ms = ("
-            " SELECT MAX(timestamp_ms) FROM llm_requests t2"
-            "  WHERE t2.model_name = t1.model_name AND t2.breakdown_json IS NOT NULL"
-            " )"
-        )
-        result: Dict[str, Dict[str, Any]] = {}
-        for row in rows:
-            name = str(row["model_name"] or "")
-            if not name:
-                continue
-            result[name] = dict(row)
         return result
 
     async def llm_usage_daily_trends(self, *, start_ms: int) -> Dict[str, Any]:

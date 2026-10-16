@@ -1,4 +1,4 @@
-"""rundowns 表 CRUD 与 v5 → v6 迁移（agenda 两表 DROP，rundowns 新建）"""
+"""rundowns 模板行集读写与 v5 → v6 迁移（agenda 两表 DROP，rundowns 新建）"""
 
 from __future__ import annotations
 
@@ -65,7 +65,8 @@ async def test_upsert_preserves_created_at_and_refreshes_updated_at(store: SQLit
     assert (fetched.title, fetched.segments[0].expected_ms) == ("更新后的标题", 20_000)
 
 
-async def test_segments_serialization_round_trip(store: SQLiteDatabase) -> None:
+async def test_segment_rows_roundtrip_with_optional_fields(store: SQLiteDatabase) -> None:
+    """保存 → 重读一致：环节行拆分存储后 Optional 字段（None 与有值两形态）无损。"""
     complex_rundown = Rundown(
         rundown_id="rd_complex",
         title="复杂流程单",
@@ -74,7 +75,6 @@ async def test_segments_serialization_round_trip(store: SQLiteDatabase) -> None:
                 id="s1",
                 title="开场",
                 task_description="打招呼",
-                key_points=["问好", "自我介绍"],
                 expected_ms=60_000,
                 min_duration_ms=30_000,
                 notes="参考开场白",
@@ -85,6 +85,24 @@ async def test_segments_serialization_round_trip(store: SQLiteDatabase) -> None:
     for rundown in (complex_rundown, DEFAULT_RUNDOWN):
         await store.rundowns.upsert_rundown(rundown)
         assert await store.rundowns.get_rundown(rundown.rundown_id) == rundown
+
+    # 环节按 seq 定序落行；重跑 upsert 全量替换不残留旧行
+    rows = await store.execute(
+        "SELECT seq, seg_id FROM rundown_segments WHERE rundown_id='rd_complex' ORDER BY seq"
+    )
+    assert [(r["seq"], r["seg_id"]) for r in rows] == [(0, "s1"), (1, "s2")]
+    complex_rundown.segments[0].title = "改名后的开场"
+    await store.rundowns.upsert_rundown(complex_rundown)
+    rows = await store.execute("SELECT COUNT(*) AS n FROM rundown_segments WHERE rundown_id='rd_complex'")
+    assert rows[0]["n"] == 2
+    assert (await store.rundowns.get_rundown("rd_complex")).segments[0].title == "改名后的开场"
+
+
+async def test_delete_rundown_removes_segment_rows(store: SQLiteDatabase) -> None:
+    await store.rundowns.upsert_rundown(_make_rundown("rd_del"))
+    await store.rundowns.delete_rundown("rd_del")
+    rows = await store.execute("SELECT COUNT(*) AS n FROM rundown_segments WHERE rundown_id='rd_del'")
+    assert rows[0]["n"] == 0
 
 
 async def test_fresh_db_has_rundowns_and_no_agenda_tables(store: SQLiteDatabase) -> None:
@@ -120,7 +138,7 @@ async def test_v5_to_v6_migration_is_idempotent(db_path: Path) -> None:
             if round_no == 0:
                 cols = {row["name"]: row for row in await db.execute("PRAGMA table_info(rundowns)")}
                 assert (cols["id"]["type"], cols["id"]["pk"]) == ("TEXT", 1)
-                for name in ("title", "segments_json", "created_at_ms", "updated_at_ms"):
+                for name in ("title", "created_at_ms", "updated_at_ms"):
                     assert cols[name]["notnull"] == 1
                 await db.rundowns.upsert_rundown(_make_rundown("keep_me"))
             else:

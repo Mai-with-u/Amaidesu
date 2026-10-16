@@ -330,7 +330,13 @@ def test_transitions_are_capped_and_emit_failures_are_soft() -> None:
 def test_build_context_text_renders_segment_fields_and_done_facts() -> None:
     harness = _Harness().load(
         _rundown(
-            _segment("opening", "开场", key_points=["问好", "预告"], notes="备注内容"),
+            RundownSegment(
+                id="opening",
+                title="开场",
+                task_description="开场目标" + chr(10) + "要点：问好、预告",
+                expected_ms=600_000,
+                notes="备注内容",
+            ),
             _segment("chat", "闲聊"),
             rundown_id="ctx_rd",
         )
@@ -344,6 +350,7 @@ def test_build_context_text_renders_segment_fields_and_done_facts() -> None:
         "目标：开场目标",
         "要点：问好、预告",
         "备注：备注内容",
+        # 要点已并入 task_description（key_points 字段删除），随"目标"行一并渲染
         "后续环节：闲聊(chat)",
         "rundown_control",
     ):

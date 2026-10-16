@@ -73,7 +73,7 @@ async def test_insert_methods_write_rows_and_simulated_flag(store: SQLiteDatabas
     chat = await store.execute("SELECT * FROM live_chat ORDER BY id")
     assert [(r["content"], r["simulated"]) for r in chat] == [("真", 0), ("假", 1)]
     # 可选列缺省落 NULL
-    assert (chat[0]["sender_id"], chat[0]["sender_name"], chat[0]["tool_result"]) == (None, None, None)
+    assert (chat[0]["sender_id"], chat[0]["sender_name"]) == (None, None)
     gift = (await store.execute("SELECT * FROM gifts WHERE simulated=0"))[0]
     assert (gift["gift_name"], gift["quantity"], gift["user_name"]) == ("真", 10, "大佬")
     sc = await store.execute("SELECT * FROM super_chats WHERE simulated=0")

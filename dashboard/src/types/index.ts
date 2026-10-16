@@ -647,7 +647,6 @@ export interface RundownSegmentView {
   id: string;
   title: string;
   task_description: string;
-  key_points: string[];
   expected_ms: number;
   min_duration_ms: number | null;
   notes: string | null;
