@@ -405,7 +405,6 @@ async def create_app_components(
     # 场次归属解析器：落库时取当前显式场次主键（无场次 → NULL = 场间消耗）
     llm_service = LLMManager(
         llm_repo=database.llm,
-        event_bus=event_bus,
         live_session_resolver=lambda: session_manager.active_pk,
         diagnostics_writer=diagnostics_writer,
     )
