@@ -51,6 +51,7 @@ export function useChartPalette(): Ref<ChartPalette> {
 /**
  * 在容器元素上驱动一个 ECharts 实例：
  * 挂载时 init + setOption，容器尺寸变化时 resize，option 变化时增量更新，卸载时 dispose。
+ * 容器允许晚于组件挂载出现（外层 v-if 等数据到达才渲染）：ref 由 null 变为元素时补初始化。
  */
 export function useECharts(
   container: Ref<HTMLElement | null>,
@@ -59,14 +60,22 @@ export function useECharts(
   const chart = shallowRef<echarts.ECharts | null>(null);
   let observer: ResizeObserver | null = null;
 
-  onMounted(() => {
-    const el = container.value;
+  const mount = (el: HTMLElement | null | undefined) => {
     if (!el) return;
+    if (chart.value) {
+      if (chart.value.getDom() === el) return;
+      // 容器被 v-if 整体替换时，旧实例绑定的 DOM 已脱挂，重建
+      observer?.disconnect();
+      chart.value.dispose();
+    }
     chart.value = echarts.init(el);
     chart.value.setOption(option.value);
     observer = new ResizeObserver(() => chart.value?.resize());
     observer.observe(el);
-  });
+  };
+
+  onMounted(() => mount(container.value));
+  watch(container, el => mount(el));
 
   watch(option, next => chart.value?.setOption(next), { deep: true });
 
