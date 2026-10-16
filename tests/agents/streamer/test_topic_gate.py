@@ -9,7 +9,7 @@ import pytest
 
 from src.agents.streamer.planner import Planner, _Intent
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.topic_gate import check_topic, rejection_reason
+from src.agents.streamer.topic_gate import check_topic, rejection_reason, strip_citations
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
@@ -54,6 +54,72 @@ def test_check_topic(topic, recent_topics, recent_speeches, fresh_texts, allowed
 def test_rejection_reason_offers_new_angle_then_silence() -> None:
     assert "换新角度" in rejection_reason(False)
     assert "保持沉默" in rejection_reason(True) and "不再调用任何工具" in rejection_reason(True)
+
+
+# 引注剥除与豁免词过滤（出处引注与 ASCII 碎片曾让查重闸全部放行）
+
+
+def test_strip_citations_removes_paren_notes_and_ascii_tokens() -> None:
+    """中英文括号内的出处引注段与残余 ASCII 字母词元都剥掉，正文中文原样保留
+    （数字不剥，留给数值归一压占位符）。"""
+    assert (
+        strip_citations("刚做出3个云杉木门（见 reflex_finished）；当前任务：装上门（游戏记录）")
+        == "刚做出3个云杉木门 ；当前任务：装上门 "
+    )
+    assert strip_citations("经 craft 拿到羊肉（glance 确认）") == "经   拿到羊肉 "
+    assert strip_citations("提交对方块（-86,66,50）的交互") == "提交对方块 的交互"
+    assert strip_citations("无引注的普通话题") == "无引注的普通话题"
+
+
+def test_citation_loophole_closed() -> None:
+    """出处引注不再充当新词：摘要与旧话题只差引注段时判重拦下，
+    即使本窗语料里真有 reflex_finished 这类 ASCII 标识。"""
+    verdict = check_topic(
+        "刚做出木门（见 reflex_finished），正在装上门",
+        recent_topics=["做出木门（游戏记录），正在装上门"],
+        recent_speeches=["木门做好啦，这就装上"],
+        fresh_texts=["[minecraft·reflex_finished] craft 完成：云杉木门3"],
+    )
+    assert (verdict.allowed, verdict.duplicate) == (False, True)
+
+
+def test_ascii_fragments_never_count_as_new_words() -> None:
+    """豁免词只认纯 CJK：fresh 语料里的英文标识碎片不构成新角度证据。"""
+    verdict = check_topic(
+        "手头任务仍是回木屋装门、挖出空地放床设重生点（任务进行中，尚未完成）",
+        recent_topics=["当前任务：回木屋装门、挖出空地放床设重生点（游戏记录）"],
+        recent_speeches=["这就回去把门装上、床放好设重生点"],
+        fresh_texts=["craft 提交交互（reflex_started）", "hunt 目标 ACQUIRE"],
+    )
+    assert (verdict.allowed, verdict.duplicate) == (False, True)
+
+
+def test_replay_repeat_pair_is_blocked() -> None:
+    """真实复读对固化（近邻两轮，"睡觉放床"话题连读）：
+    剥引注后字面大面积重合，本窗游戏叙事不构成豁免新词，判重拦下。"""
+    known_topic = (
+        "游戏内已入夜，主播尝试睡觉但未成功：身边没有能放下床的两格空位（需要空格与结实的地面），"
+        "身体没有硬放，随即结束该动作（见游戏记录）。床在背包里，手上已是石斧。手头任务仍是白天就近采集"
+        "木头、圆石、矿物与食物、天黑前回到落脚处附近收尾，现已天黑。附近怪物密集（苦力怕/骷髅/僵尸），"
+        "河边有鱼和发光鱿鱼，远处有猪鸡牛羊。"
+    )
+    repeat_topic = (
+        "游戏内已入夜，主播尝试睡觉未完成：身边没有能放下床的两格空位（需空格与结实的地面），"
+        "身体没有硬放，该动作已结束（见游戏记录）。床仍在背包里，手上已是石斧。落脚处附近地面散着三件掉落物。"
+        "手头采集任务仍在进行中：白天就近收集木头、圆石、矿物与食物，天黑前回到落脚处附近收尾。"
+        "附近怪物密集（苦力怕/骷髅/僵尸），河边有鱼和发光鱿鱼。"
+    )
+    fresh = [
+        "身体处理完急事：天黑了想去睡，没睡成：睡觉没有完成：身边没有能放床的两格空位（要空格与结实的地面），不硬放",
+    ]
+    verdict = check_topic(
+        repeat_topic,
+        recent_topics=[known_topic],
+        recent_speeches=["夜里这附近实在没地方摆床，我就没硬放了。床还在背包里，先把采集的东西收好，回落脚处再放下。"],
+        fresh_texts=fresh,
+    )
+    assert (verdict.allowed, verdict.duplicate) == (False, True)
+    assert verdict.overlap_ratio >= 0.5
 
 
 # planner 接线：打回 → 再次拒绝 → 沉默兜底；新话题放行
