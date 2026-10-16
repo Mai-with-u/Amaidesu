@@ -1285,7 +1285,7 @@ async def run_shutdown(
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = None,
     diagnostics_writer: Optional[DiagnosticsWriter] = None,
 ) -> None:
-    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard 与事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），诊断落盘线程冲刷收尾，最后 EventBus/LLMManager 清理，SQLiteDatabase.close 收尾落盘。"""
+    """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard；场次结账在事件历史/总线拆除之前（live.ended 要被记录）；随后事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），诊断落盘线程冲刷收尾，最后 EventBus/LLMManager 清理，SQLiteDatabase.close 收尾落盘。"""
     _saw_cancelled = False
 
     async def safe_log(coro, name: str):
@@ -1336,6 +1336,17 @@ async def run_shutdown(
             logger.error(f"Dashboard 停止失败: {type(e).__name__}: {e}", exc=True)
         logger.info("Dashboard 已停止")
 
+    # 场次结账先于事件历史/总线拆除：close_session 发出的 live.ended 必须
+    # 在事件历史记录器与 EventBus 还活着时广播，否则回看时间线缺下播标记
+    # （进行中场次在进程退出时收口：live.ended 事件 + 结束时间；空场次整行
+    # 丢弃；无显式场次时 close_session 返回 False 静默跳过）。
+    if session_manager is not None:
+        await safe_log(
+            session_manager.close_session(reason="进程退出"),
+            "live_sessions 场次结账",
+        )
+        await safe_log(session_manager.stop(), "LiveSessionManager.stop")
+
     if event_recorder is not None:
         logger.info("正在停止事件历史记录器...")
         await safe_log(event_recorder.stop(), "EventHistoryRecorder")
@@ -1360,15 +1371,6 @@ async def run_shutdown(
         logger.info("正在停止 StorageLedger...")
         await safe_log(storage_ledger.stop(), "StorageLedger")
         logger.info("StorageLedger 已停止")
-
-    # 场次结账：进行中的显式场次在进程退出时收口（live.ended 事件 + 结束时间；
-    # 空场次整行丢弃）。无显式场次时 close_session 返回 False 静默跳过。
-    if session_manager is not None:
-        await safe_log(
-            session_manager.close_session(reason="进程退出"),
-            "live_sessions 场次结账",
-        )
-        await safe_log(session_manager.stop(), "LiveSessionManager.stop")
 
     # 工具熔断器探活：先停 monitor 循环（不再触发新的 recover_tool），
     # 再关闭 MCP stdio 子进程（修停机泄漏——``close_mcp_providers`` 此前

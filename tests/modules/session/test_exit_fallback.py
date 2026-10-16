@@ -184,3 +184,53 @@ async def test_fallback_helper_settles_via_real_manager(store: SQLiteDatabase, b
     row = await store.sessions.get_live_session(live_session_id=pk)
     assert row is not None
     assert row["ended_at_ms"] is not None
+
+
+class _StubRecorder:
+    """最小事件历史记录器替身：只在 stop 时快照 live.ended 是否已到达。"""
+
+    def __init__(self, collector: _EndedCollector) -> None:
+        self._collector = collector
+        self.event_history = None
+        self.diagnostics_writer = None
+        self.ended_seen_at_stop = False
+
+    async def stop(self) -> None:
+        # emit 是并发扇出、不等订阅者完成的：让出循环，pending 的 handler 跑完再快照
+        await asyncio.sleep(0.05)
+        self.ended_seen_at_stop = bool(self._collector.ended)
+
+
+async def test_shutdown_settles_session_before_event_telemetry_goes_down(
+    store: SQLiteDatabase, bus: EventBus
+) -> None:
+    """收尾链顺序：场次结账的 live.ended 必须在事件历史记录器停止之前发出。
+
+    结账若排在记录器/总线拆除之后（如兜底挂在 main() finally 位而常规
+    结账在总线 cleanup 之后），事件流里就缺下播标记，回看时间线断档。
+    """
+    collector = _EndedCollector(bus)
+    recorder = _StubRecorder(collector)
+    manager = _make_manager(store, bus)
+    await manager.start()
+    pk = await _open_session_with_detail(store, manager)
+
+    await app_main.run_shutdown(
+        bus,
+        None,
+        None,
+        recorder,
+        None,
+        None,
+        None,
+        session_manager=manager,
+    )
+
+    assert collector.ended and collector.ended[0].reason == "进程退出", "退出收尾必须广播 live.ended"
+    assert collector.ended[0].live_session_id == pk
+    assert recorder.ended_seen_at_stop, "live.ended 必须在事件历史记录器停止之前到达"
+
+    # 兜底幂等守卫仍在：常规结账后再触发兜底不重复广播
+    await app_main.fallback_close_active_session(manager)
+    await asyncio.sleep(0.05)
+    assert len(collector.ended) == 1, "兜底不得产生第二条 live.ended"
