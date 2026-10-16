@@ -434,9 +434,6 @@
       :close-on-click-modal="false"
     >
       <el-form label-width="84px" class="editor-form">
-        <el-form-item label="流程单 ID">
-          <el-input v-model="editorForm.rundown_id" placeholder="唯一标识，配置引用此 id" />
-        </el-form-item>
         <el-form-item label="标题">
           <el-input v-model="editorForm.title" placeholder="流程单标题" />
         </el-form-item>

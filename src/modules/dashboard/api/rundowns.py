@@ -7,7 +7,7 @@
 - ``POST   /api/v1/rundowns``            — upsert（新建与保存共用）
 - ``DELETE /api/v1/rundowns/{id}``       — 删除
 - ``POST   /api/v1/rundowns/{id}/duplicate`` — 复制
-- ``POST   /api/v1/rundowns/{id}/activate``  — 设为当前（写配置）
+- ``POST   /api/v1/rundowns/{id}/activate``  — 设为当前（写配置 + 在线 Agent 热切运行态）
 
 数据来源与职责切分
 ------------------
@@ -148,25 +148,53 @@ async def get_rundown_template(server: ServerDep) -> RundownTemplateResponse:
 
 @router.post("", response_model=RundownMutateResponse)
 async def upsert_rundown(definition: RundownDefinition, server: ServerDep) -> RundownMutateResponse:
-    """新建或整体保存一份流程单（repo 落盘；运行中的同 id 单即时写穿）。"""
+    """新建或保存一份流程单（repo 落盘；运行中的同 id 单即时写穿）。
+
+    - body 不带 id（空串/None）→ 新建：服务端生成 ``rundown_{uuid4().hex[:8]}``，
+      主键撞号时重新生成重试（至多 3 次）再落库——ID 是机器标识，不进用户契约面。
+    - body 带 id → 视为"保存这份单"（id 不可变）：该 id 必须已存在，
+      根治"改 ID 静默覆盖另一份单"的数据丢失路径。
+    """
     repo = _get_repo(server)
     if repo is None:
         return RundownMutateResponse(success=False, message="流程单存储未就绪")
 
-    error = _validate_definition(definition)
+    body_id = (definition.rundown_id or "").strip()
+    if body_id:
+        try:
+            existing = await repo.get_rundown(body_id)
+        except Exception as exc:
+            return RundownMutateResponse(success=False, message=f"读取流程单失败: {exc}", rundown_id=body_id)
+        if existing is None:
+            return RundownMutateResponse(success=False, message="流程单不存在，无法保存", rundown_id=body_id)
+        rundown_id = body_id
+    else:
+        rundown_id = ""
+        for _ in range(3):
+            candidate = f"rundown_{uuid4().hex[:8]}"
+            try:
+                clash = await repo.get_rundown(candidate)
+            except Exception as exc:
+                return RundownMutateResponse(success=False, message=f"读取流程单失败: {exc}")
+            if clash is None:
+                rundown_id = candidate
+                break
+        if not rundown_id:
+            return RundownMutateResponse(success=False, message="生成流程单 id 失败，请重试")
+
+    resolved = definition.model_copy(update={"rundown_id": rundown_id})
+    error = _validate_definition(resolved)
     if error is not None:
-        return RundownMutateResponse(
-            success=False, message=f"流程单定义不合法: {error}", rundown_id=definition.rundown_id
-        )
+        return RundownMutateResponse(success=False, message=f"流程单定义不合法: {error}", rundown_id=rundown_id)
 
     try:
-        await repo.upsert_rundown(Rundown.model_validate(definition.model_dump()))
+        await repo.upsert_rundown(Rundown.model_validate(resolved.model_dump()))
     except Exception as exc:
-        return RundownMutateResponse(success=False, message=f"保存流程单失败: {exc}", rundown_id=definition.rundown_id)
+        return RundownMutateResponse(success=False, message=f"保存流程单失败: {exc}", rundown_id=rundown_id)
 
-    runtime_message = await _apply_to_runtime(server, definition)
+    runtime_message = await _apply_to_runtime(server, resolved)
     message = "流程单已保存" if runtime_message is None else f"流程单已保存（{runtime_message}）"
-    return RundownMutateResponse(success=True, message=message, rundown_id=definition.rundown_id)
+    return RundownMutateResponse(success=True, message=message, rundown_id=rundown_id)
 
 
 @router.delete("/{rundown_id}", response_model=RundownMutateResponse)
@@ -213,7 +241,12 @@ async def duplicate_rundown(rundown_id: str, server: ServerDep) -> RundownMutate
 
 @router.post("/{rundown_id}/activate", response_model=RundownMutateResponse)
 async def activate_rundown(rundown_id: str, server: ServerDep) -> RundownMutateResponse:
-    """设为当前流程单（写配置落盘；重启主播 Agent 后生效，不热切运行中的单）。"""
+    """设为当前流程单：先写配置落盘，再对在线主播 Agent 热切运行态。
+
+    顺序固定"先配置、后运行态"：热切失败不回滚配置，把不一致显式告知
+    （配置已指向，重启主播 Agent 后生效）。Agent 未启用/无可切换门面时
+    维持"只写配置"的降级语义。
+    """
     repo = _get_repo(server)
     if repo is None:
         return RundownMutateResponse(success=False, message="流程单存储未就绪")
@@ -235,8 +268,22 @@ async def activate_rundown(rundown_id: str, server: ServerDep) -> RundownMutateR
     )
     if not outcome.success:
         return RundownMutateResponse(success=False, message=f"配置写入失败: {outcome.message}", rundown_id=rundown_id)
+
+    agent = resolve_streamer_agent(server)
+    switch_raw = getattr(agent, "switch_rundown", None) if agent is not None else None
+    if not callable(switch_raw):
+        return RundownMutateResponse(
+            success=True, message="已设为当前流程单，主播 Agent 启动后生效", rundown_id=rundown_id
+        )
+
+    try:
+        switched, switch_message, _ = await switch_raw(rundown_id)
+    except Exception as exc:
+        switched, switch_message = False, f"热切流程单异常: {exc}"
+    if switched:
+        return RundownMutateResponse(success=True, message=switch_message, rundown_id=rundown_id)
     return RundownMutateResponse(
-        success=True,
-        message="已设为当前流程单（重启主播 Agent 后生效，当前直播不受影响）",
+        success=False,
+        message=f"{switch_message}；配置已指向，重启主播 Agent 后生效",
         rundown_id=rundown_id,
     )

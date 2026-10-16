@@ -716,11 +716,14 @@ export interface RundownControlResponse {
 /**
  * 流程单完整定义——库列表项与保存请求体共用同一形状。
  *
+ * `rundown_id` 为机器标识、不在用户契约面：保存请求省略/空串 = 新建（服务端
+ * 生成）；带 id = 保存该份单（id 必须已存在）。库列表响应始终携带。
+ *
  * 完整性校验（环节 id 唯一、时长下界、最短停留不超预期）由后端领域模型负责，
  * 前端仅做非空预检以省一次往返。
  */
 export interface RundownDefinition {
-  rundown_id: string;
+  rundown_id?: string;
   title: string;
   segments: RundownSegmentView[];
 }

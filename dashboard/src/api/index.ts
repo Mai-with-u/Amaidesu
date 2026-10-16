@@ -348,7 +348,8 @@ export const rundownApi = {
   // 流程单库（列表 / 模板 / upsert / 删除 / 复制 / 设为当前）
   //
   // upsert 保存的流程单正是直播运行中的那份时，后端会写穿运行态
-  // （进度按环节 id 对齐）；activate 只落盘配置，重启主播 Agent 后生效。
+  // （进度按环节 id 对齐）；新建不带 id（服务端生成）。activate 落盘配置
+  // 并对在线主播 Agent 热切运行态，成功文案以后端 message 为准。
   listRundowns: () => api.get<RundownListResponse>('/rundowns'),
   getTemplate: () => api.get<RundownTemplateResponse>('/rundowns/template'),
   upsert: (definition: RundownDefinition) =>

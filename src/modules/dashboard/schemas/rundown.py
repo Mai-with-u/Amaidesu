@@ -84,7 +84,9 @@ class RundownDefinition(BaseModel):
     由后端 ``Rundown`` 模型负责，本层只做形状与非空约束。
     """
 
-    rundown_id: str = Field(..., min_length=1, description="流程单唯一标识（存储主键、配置引用同一 id）")
+    rundown_id: Optional[str] = Field(
+        default=None, description="流程单唯一标识（存储主键、配置引用同一 id）；省略或空 = 新建，由服务端生成"
+    )
     title: str = Field(..., min_length=1, description="流程单标题")
     segments: List[RundownSegmentView] = Field(..., min_length=1, description="环节列表，非空")
 

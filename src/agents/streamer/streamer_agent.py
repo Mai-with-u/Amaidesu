@@ -1356,6 +1356,28 @@ class StreamerAgent(BaseAgent):
         """执行 Dashboard 手动控制动作（动作翻译见 rundown 子包）。"""
         return apply_rundown_control(self._rundown_state, action, segment_id=segment_id, now_ms=now_ms)
 
+    async def switch_rundown(self, rundown_id: str) -> tuple[bool, str, Optional[Dict[str, Any]]]:
+        """直播中热切换流程单（Dashboard activate 的运行态写穿）。
+
+        从流程单库读取目标单后经 :meth:`RundownState.load` 换载——游标回到
+        首环节、计时重置、开场白信号按既有 pending 链路触发，不与旧单做
+        进度对齐（换单是新内容开始）。读取失败/目标不存在不改动运行态，
+        返回 ``(False, 原因, 当前快照)`` 供调用方渲染。
+        """
+        snapshot = self._rundown_state.get_snapshot()
+        if self._rundowns is None:
+            return False, "流程单存储未就绪", snapshot
+        try:
+            rundown = await self._rundowns.get_rundown(rundown_id)
+        except Exception as exc:
+            self._logger.error(f"热切流程单 '{rundown_id}' 读取失败: {exc}", exc=True)
+            return False, f"读取流程单失败: {exc}", snapshot
+        if rundown is None:
+            return False, f"流程单 '{rundown_id}' 不存在", snapshot
+        self._rundown_state.load(rundown)
+        self._logger.info(f"已热切流程单: id={rundown.rundown_id!r}, segments={len(rundown.segments)}")
+        return True, f"已切换至流程单「{rundown.title}」", self._rundown_state.get_snapshot()
+
     async def apply_rundown_definition(
         self,
         definition: Dict[str, Any],

@@ -33,6 +33,11 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
   /** 配置当前指向的流程单 id；空串 = 使用内置默认流程单 */
   const currentRundownId = computed(() => state.value?.config.rundown_id ?? '');
 
+  /** 库列表行的 id（后端始终返回；类型可选仅为放行"新建不带 id"的请求体） */
+  function rundownIdOf(def: RundownDefinition): string {
+    return def.rundown_id ?? '';
+  }
+
   function totalExpectedMs(def: RundownDefinition): number {
     return def.segments.reduce((sum, seg) => sum + (seg.expected_ms || 0), 0);
   }
@@ -75,7 +80,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
   });
 
   function fillEditorForm(def: RundownDefinition): void {
-    editorForm.rundown_id = def.rundown_id;
+    editorForm.rundown_id = def.rundown_id ?? '';
     editorForm.title = def.title;
     editorForm.segments = JSON.parse(JSON.stringify(def.segments)) as RundownSegmentView[];
   }
@@ -88,7 +93,8 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
         return;
       }
       fillEditorForm(res.data.definition);
-      editorForm.rundown_id = `rundown_${Date.now() % 100_000}`;
+      // id 不进用户契约面：新建不带 id，服务端生成
+      editorForm.rundown_id = '';
       editorOriginalId.value = '';
       editorOpen.value = true;
     } catch (e) {
@@ -109,7 +115,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
     if (state.value && state.value.segments.length > 0) {
       // 运行中的是内置默认流程单（虚拟存在不写库）：从快照预填，保存即落库
       fillEditorForm({
-        rundown_id: `rundown_${Date.now() % 100_000}`,
+        rundown_id: '',
         title: state.value.snapshot?.title || '未命名流程单',
         segments: state.value.segments,
       });
@@ -123,15 +129,11 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
 
   function startEdit(def: RundownDefinition): void {
     fillEditorForm(def);
-    editorOriginalId.value = def.rundown_id;
+    editorOriginalId.value = def.rundown_id ?? '';
     editorOpen.value = true;
   }
 
   async function saveEditor(): Promise<void> {
-    if (!editorForm.rundown_id.trim()) {
-      ElMessage.warning('请填写流程单 ID');
-      return;
-    }
     if (!editorForm.title.trim()) {
       ElMessage.warning('请填写流程单标题');
       return;
@@ -142,8 +144,9 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
     }
     editorSaving.value = true;
     try {
+      // id 留空 = 新建（服务端生成）；编辑时回传原 id（视为"保存这份单"）
       const res = await rundownApi.upsert({
-        rundown_id: editorForm.rundown_id.trim(),
+        rundown_id: editorForm.rundown_id.trim() || undefined,
         title: editorForm.title.trim(),
         segments: editorForm.segments,
       });
@@ -270,7 +273,8 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
   // ---- 库操作：删除 / 复制 / 设为当前 ----
 
   async function removeRundown(def: RundownDefinition): Promise<void> {
-    const referenced = def.rundown_id === currentRundownId.value;
+    const targetId = rundownIdOf(def);
+    const referenced = targetId === currentRundownId.value;
     const ok = await confirmAction(
       referenced
         ? `确定删除「${def.title}」？当前配置仍指向它，重启主播 Agent 后将回退内置默认流程单。`
@@ -280,7 +284,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
     );
     if (!ok) return;
     try {
-      const res = await rundownApi.remove(def.rundown_id);
+      const res = await rundownApi.remove(targetId);
       if (!res.data.success) {
         ElMessage.error(res.data.message || '删除失败');
         return;
@@ -294,7 +298,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
 
   async function duplicateRundown(def: RundownDefinition): Promise<void> {
     try {
-      const res = await rundownApi.duplicate(def.rundown_id);
+      const res = await rundownApi.duplicate(rundownIdOf(def));
       if (!res.data.success) {
         ElMessage.error(res.data.message || '复制失败');
         return;
@@ -308,7 +312,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
 
   async function activateRundown(def: RundownDefinition): Promise<void> {
     try {
-      const res = await rundownApi.activate(def.rundown_id);
+      const res = await rundownApi.activate(rundownIdOf(def));
       if (!res.data.success) {
         ElMessage.error(res.data.message || '设置失败');
         return;
