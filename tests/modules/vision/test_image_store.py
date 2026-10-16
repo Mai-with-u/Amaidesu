@@ -52,3 +52,16 @@ def test_ttl_expiry_visible_window_default_and_singleton_swap() -> None:
     finally:
         set_image_store(VisionImageStore())  # 测试隔离
     assert get_image_store() is not replacement
+
+
+def test_latest_slot_overwrites_per_sample_and_resolves_body_via_ref() -> None:
+    """latest 槽位覆盖式更新（防内存堆积），本体经 ref 从 LRU 条目取回；clear 一并清空。"""
+    store = _store()
+    assert store.latest() is None
+    first = store.put_latest(DATA_URL, width=64, height=36, change=1.0, timestamp_ms=1_000)
+    second = store.put_latest(DATA_URL, width=32, height=18, change=0.1, timestamp_ms=2_000)
+    assert second.ref.startswith("img_") and store.latest() is second
+    assert (second.width, second.height, second.change, second.timestamp_ms) == (32, 18, 0.1, 2_000)
+    assert store.get(first.ref) == DATA_URL and store.get(second.ref) == DATA_URL
+    store.clear()
+    assert store.latest() is None

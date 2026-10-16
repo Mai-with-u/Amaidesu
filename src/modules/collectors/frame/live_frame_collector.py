@@ -289,10 +289,23 @@ class LiveFrameCollector(BaseCollector):
         now = now_ms()
         refresh = self.typed_config.refresh_ms
         overdue = refresh > 0 and now - self._last_published_ms >= refresh
-        if change < self.typed_config.change_threshold and not overdue:
+        publish = change >= self.typed_config.change_threshold or overdue
+        # 每次成功采样都覆盖暂存里的"最新帧"槽位：决策窗挂帧是查询式的，
+        # 看的必须是刚截的画面而不是最近一次发布的——静态画面若只靠发布事件
+        # 更新，"最新可用画面"其实是 refresh_ms（60 秒）前的。发布闸不动：
+        # 时间线/回放只在画面明显变化时留痕的语义不变
+        store = get_image_store()
+        latest = store.put_latest(
+            frame.data_url,
+            width=frame.width,
+            height=frame.height,
+            change=round(change, 4),
+            timestamp_ms=now,
+        )
+        if not publish:
             return None
         payload = RoomStateFramePayload(
-            image_ref=get_image_store().put(frame.data_url),
+            image_ref=latest.ref,
             width=frame.width,
             height=frame.height,
             source=self.typed_config.source,

@@ -51,7 +51,8 @@ from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.time_utils import now_ms
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-from src.modules.events.payloads.room_state import RoomStateFramePayload, RoomStateWatchedPayload
+from src.modules.events.payloads.room_state import RoomStateWatchedPayload
+from src.modules.vision.image_store import get_image_store
 
 from .rundown.presentation import apply_rundown_control, build_rundown_view
 from .rundown.rundown_state import RundownState
@@ -435,14 +436,11 @@ class StreamerAgent(BaseAgent):
         # 与对话轮同以场次为界
         self._timeline_notes: List[TimelineTurn] = []
         self._planner.bind_action_recorder(self._record_delegation)
-        # 最新一帧直播画面（room.state.frame）；启用 live_frame 时决策窗第一次请求挂在尾部看一眼
-        self._latest_frame: Optional[RoomStateFramePayload] = None
+        # 最新一帧直播画面：查询式取自图像暂存的 latest 槽位（live_frame 采集器
+        # 每次采样覆盖写入），每个决策窗第一次请求必挂。不订阅 room.state.frame：
+        # 发布事件只在画面明显变化时发，靠它取"最新帧"拿到的是最久 60 秒前的画面
         if config.live_frame.enabled:
-            self._planner.bind_frame_provider(
-                lambda: self._latest_frame,
-                max_age_ms=config.live_frame.max_age_ms,
-                min_interval_ms=config.live_frame.min_interval_ms,
-            )
+            self._planner.bind_frame_provider(self._latest_live_frame, stale_warn_ms=config.live_frame.stale_warn_ms)
 
         # 运营递话提醒队列（receive_prompt 入队；下个决策窗以【运营提醒】段
         # 注入参考块，读取即取空——送达一次制）。满时拒收，必达不允许静默挤旧。
@@ -674,12 +672,7 @@ class StreamerAgent(BaseAgent):
             self._on_room_state_watched,
             model_class=RoomStateWatchedPayload,
         )
-        # 直播画面快照：只保留最新一帧，看不看、何时看由 Planner 按 live_frame 配置决定
-        self._event_bus.on(
-            CoreEvents.ROOM_STATE_FRAME,
-            self._on_live_frame,
-            model_class=RoomStateFramePayload,
-        )
+        # 直播画面不在此订阅：决策窗挂帧查询式读图像暂存的 latest 槽位（见 _latest_live_frame）
         # 游戏叙事（三通道·事件）：游戏 Agent（如 MinecraftAgent）emit game.*
         # → 主播侧收集最近叙事，进 Planner 上下文（按 payload.game 过滤可扩展到多游戏）
         self._event_bus.on(
@@ -729,7 +722,7 @@ class StreamerAgent(BaseAgent):
             model_class=LiveEndedPayload,
         )
         self._logger.info(
-            "StreamerAgent 已订阅 room.message.danmaku|gift|super_chat|guard / room.state.watched_count|frame"
+            "StreamerAgent 已订阅 room.message.danmaku|gift|super_chat|guard / room.state.watched_count"
             " / game.* / game.body.* / game.chat.* / live.started|ended"
         )
 
@@ -946,10 +939,9 @@ class StreamerAgent(BaseAgent):
         private = set(self._private_chat_lines)
         return NarrativeView(text=view.text, fresh=tuple(line for line in view.fresh if line not in private))
 
-    async def _on_live_frame(self, event_name: str, payload: RoomStateFramePayload, source: str) -> None:
-        """room.state.frame 回调：记下最新一帧画面（图像本体在暂存里，这里只留句柄与时刻）。"""
-        del event_name, source
-        self._latest_frame = payload
+    def _latest_live_frame(self) -> Optional[Any]:
+        """最新一帧直播画面（图像暂存 latest 槽位快照；从未采样过为 None）。"""
+        return get_image_store().latest()
 
     async def _on_room_state_watched(
         self,

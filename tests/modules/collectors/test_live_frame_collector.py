@@ -85,6 +85,21 @@ async def test_publishes_first_and_changed_frames_only(_store: VisionImageStore)
     assert "base64" not in third.model_dump_json()
 
 
+async def test_unchanged_frame_still_updates_latest_slot(_store: VisionImageStore) -> None:
+    """低于发布阈值的帧不发事件，但暂存的最新帧槽位每次采样都覆盖更新——
+    决策窗查询式挂帧看的必须是刚截的画面，而不是最近一次发布的。"""
+    collector, bus = _collector([_frame(10), _frame(11), _frame(200)], refresh_ms=0)
+    first = await collector.sample_once()
+    assert await collector.sample_once() is None
+    latest = _store.latest()
+    assert latest is not None and latest.ref != first.image_ref
+    assert _store.get(latest.ref).startswith("data:image/png;base64,")
+    third = await collector.sample_once()
+    assert _store.latest().ref == third.image_ref
+    # 发布闸不动：三次采样只发布首帧与变化帧两次
+    assert bus.emit.await_count == 2
+
+
 async def test_unchanged_frame_republished_after_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     """画面一直没变，隔 refresh_ms 仍补发一次，订阅方知道画面还是新的。"""
     clock = {"now": 1_000_000}

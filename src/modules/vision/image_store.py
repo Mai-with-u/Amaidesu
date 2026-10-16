@@ -16,6 +16,7 @@ import threading
 import uuid
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 from src.modules.logging import get_logger
@@ -31,6 +32,21 @@ DEFAULT_VISIBLE_TURNS = 1
 # 场景大概率已变，留引用只会让模型拿到过期画面
 DEFAULT_CAPACITY = 16
 DEFAULT_TTL_MS = 15 * 60 * 1000
+
+
+@dataclass(frozen=True, slots=True)
+class LatestFrame:
+    """最新一帧直播画面的槽位快照：句柄 + 采样元数据（宽高/变化度/时刻）。
+
+    本体仍在暂存条目里，经 ``ref`` 用 ``get()`` 取回；槽位只留元数据，
+    采样方每次成功采样覆盖写入，消费方（决策窗挂帧）查询式取用。
+    """
+
+    ref: str
+    width: int
+    height: int
+    change: float
+    timestamp_ms: int
 
 
 class VisionImageStore:
@@ -51,6 +67,9 @@ class VisionImageStore:
         self._lock = threading.Lock()
         # ref → (data_url, created_ms)；OrderedDict 尾部 = 最近使用
         self._entries: "OrderedDict[str, tuple[str, int]]" = OrderedDict()
+        # 最新一帧直播画面槽位（覆盖式，防内存堆积）：与 LRU 条目相互独立，
+        # 只留元数据，本体经 ref 复用 get() 读取
+        self._latest: Optional[LatestFrame] = None
 
     def put(self, data_url: str) -> str:
         """存入一张图，返回引用句柄（``img_<hex>``）。
@@ -82,10 +101,23 @@ class VisionImageStore:
             self._entries.move_to_end(ref)
             return data_url
 
+    def put_latest(self, data_url: str, *, width: int, height: int, change: float, timestamp_ms: int) -> LatestFrame:
+        """覆盖写入最新一帧直播画面（图像本体照常入 LRU 暂存），返回槽位快照。"""
+        ref = self.put(data_url)
+        with self._lock:
+            self._latest = LatestFrame(ref=ref, width=width, height=height, change=change, timestamp_ms=timestamp_ms)
+            return self._latest
+
+    def latest(self) -> Optional[LatestFrame]:
+        """取最新一帧的槽位快照；还没有任何采样时返回 None。"""
+        with self._lock:
+            return self._latest
+
     def clear(self) -> None:
         """清空（测试隔离用）。"""
         with self._lock:
             self._entries.clear()
+            self._latest = None
 
     def _evict_expired(self, now_ms: int) -> None:
         """过期逐出（put 前调用；持有锁）。"""
@@ -115,6 +147,7 @@ def set_image_store(store: VisionImageStore) -> None:
 
 __all__ = [
     "VisionImageStore",
+    "LatestFrame",
     "get_image_store",
     "set_image_store",
     "DEFAULT_VISIBLE_TURNS",

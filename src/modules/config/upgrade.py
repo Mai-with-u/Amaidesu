@@ -792,6 +792,28 @@ def _upgrade_replyer_style_drop_emoji(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "replyer_style_drop_emoji", "2.0.45", _upgrade_replyer_style_drop_emoji)
 
 
+def _retire_live_frame_gates(data: Dict[str, Any]) -> List[str]:
+    """agents.toml v2.0.46：``[agents.streamer.live_frame]`` 的两道挂帧节流键退役。
+
+    决策窗改为每窗必挂暂存里的最新帧，``max_age_ms`` / ``min_interval_ms``
+    失去消费者。只处理本段内的这两个键——其他段的 ``min_interval_ms``
+    （如 proactive）是活跃配置，不许误伤。对已迁移数据零变更（幂等）。
+    """
+    streamer = (data.get("agents") or {}).get("streamer")
+    live_frame = streamer.get("live_frame") if isinstance(streamer, dict) else None
+    if not isinstance(live_frame, dict):
+        return []
+    changed: List[str] = []
+    for key in ("max_age_ms", "min_interval_ms"):
+        if key in live_frame:
+            del live_frame[key]
+            changed.append(f"agents.streamer.live_frame.{key}")
+    return changed
+
+
+register_file_hook("agents.toml", "retire_live_frame_gates", "2.0.46", _retire_live_frame_gates)
+
+
 __all__ = [
     "FileUpgradeHook",
     "CrossFileHook",

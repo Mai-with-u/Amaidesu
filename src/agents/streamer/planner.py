@@ -77,6 +77,9 @@ def _render_observation(data: Any) -> str:
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
 _DEFAULT_MAX_STEPS: int = 8
 
+#: 画面帧龄告警的最小间隔（毫秒）：断流告警限频，避免长冷场时逐窗刷日志
+_STALE_WARN_INTERVAL_MS: int = 5 * 60 * 1000
+
 
 @dataclass
 class _Delegation:
@@ -275,12 +278,11 @@ class Planner:
         # 参考段只留每个游戏最近一次委派，时间线里留下整场的先后
         self._action_recorder: Optional[Callable[[str, str], None]] = None
         # 直播画面（StreamerAgent 在启用时绑定）：返回最新一帧画面快照或 None。
-        # 看过的那一帧与时刻用来去重、限频——画面每次都按未命中缓存计费
+        # 每个决策窗的第一次请求必挂最新帧（查询式取自暂存 latest 槽位），
+        # 同窗后续 ReAct 步不重复挂——frame_tail 每窗只算一次、只拼进第一步请求
         self._frame_provider: Optional[Callable[[], Optional[Any]]] = None
-        self._frame_max_age_ms = 0
-        self._frame_min_interval_ms = 0
-        self._last_frame_ref = ""
-        self._last_frame_ms = 0
+        self._frame_stale_warn_ms = 0
+        self._last_stale_warn_ms = 0
         # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派 27 次、
         # 目标来回反转——主播看不到身体手上正做着什么，就会把每条弹幕都改派成新目标
         self._delegations: Dict[str, _Delegation] = {}
@@ -315,19 +317,18 @@ class Planner:
         """注入开播时长查询（StreamerAgent 构造 RundownState 后绑定，同 bind 模式）。"""
         self._elapsed_live_provider = provider
 
-    def bind_frame_provider(
-        self, provider: Callable[[], Optional[Any]], *, max_age_ms: int, min_interval_ms: int
-    ) -> None:
-        """注入直播画面来源与看画面的时效、间隔（StreamerAgent 在 live_frame 启用时绑定）。"""
+    def bind_frame_provider(self, provider: Callable[[], Optional[Any]], *, stale_warn_ms: int) -> None:
+        """注入直播画面来源与帧龄告警阈值（StreamerAgent 在 live_frame 启用时绑定）。"""
         self._frame_provider = provider
-        self._frame_max_age_ms = max_age_ms
-        self._frame_min_interval_ms = min_interval_ms
+        self._frame_stale_warn_ms = stale_warn_ms
 
     def _live_frame_message(self) -> Optional[Dict[str, Any]]:
-        """这一窗要不要看一眼直播画面：主模型能看图、画面够新、没看过这一帧、离上次够久才看。
+        """本决策窗第一次请求尾部挂最新直播画面（每窗必看，静止画面重复看是设计内行为）。
 
-        返回挂在第一次请求尾部的 user 消息（说明 + 图片句柄），不写进消息序列；
-        画面带来的印象由模型这一步的思考与决定带下去。
+        画面从暂存的最新帧槽位查询式取得；帧龄超过告警阈值时限频记一条警告
+        ——OBS 画面断流（采样一直失败、槽位停在旧帧）由此从静默变可见。
+        返回 user 消息（说明 + 图片句柄），不写进消息序列；画面带来的印象
+        由模型这一步的思考与决定带下去。
         """
         if self._frame_provider is None or not self._visual_caller():
             return None
@@ -336,17 +337,14 @@ class Planner:
         except Exception as exc:  # noqa: BLE001 - 取不到画面就不看，决策照常
             self.logger.warning(f"读取直播画面失败，本窗不看画面：{exc}", exc=True)
             return None
-        ref = getattr(frame, "image_ref", "") if frame is not None else ""
+        ref = getattr(frame, "ref", "") if frame is not None else ""
         if not ref:
             return None
         current_ms = now_ms()
         age_ms = current_ms - int(getattr(frame, "timestamp_ms", 0) or 0)
-        if age_ms > self._frame_max_age_ms or ref == self._last_frame_ref:
-            return None
-        if current_ms - self._last_frame_ms < self._frame_min_interval_ms:
-            return None
-        self._last_frame_ref = ref
-        self._last_frame_ms = current_ms
+        if age_ms > self._frame_stale_warn_ms and current_ms - self._last_stale_warn_ms >= _STALE_WARN_INTERVAL_MS:
+            self._last_stale_warn_ms = current_ms
+            self.logger.warning(f"直播画面已 {age_text(age_ms)}未更新（超过告警阈值），请检查画面来源是否断流")
         note = (
             f"【直播画面】观众此刻看到的画面（{age_text(age_ms)}截取）。描述观感、氛围时可以参考；"
             "游戏里的数值和进展以游戏记录和查询结果为准，画面里看不清的不要猜。"

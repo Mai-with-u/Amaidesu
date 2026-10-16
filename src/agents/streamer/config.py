@@ -394,8 +394,9 @@ class StreamerLiveFrameConfig(BaseConfig):
     """[agents.streamer.live_frame] 段
 
     决策时看一眼直播画面（画面来自 collectors.toml 的 ``live_frame`` 采集器）。
-    只在 planner 档位的主模型能看图时生效；每个决策窗至多在第一次请求尾部挂一帧，
-    同一帧不重复看，两次之间至少隔 ``min_interval_ms``——画面每次都按未命中缓存计费。
+    只在 planner 档位的主模型能看图时生效；每个决策窗的第一次请求尾部必挂
+    最新一帧（查询式取自图像暂存的 latest 槽位，静止画面重复看是设计内行为）；
+    同窗后续 ReAct 步不重复挂。
     """
 
     enabled: bool = Field(
@@ -403,17 +404,11 @@ class StreamerLiveFrameConfig(BaseConfig):
         default=False,
         description="决策时把最新的直播画面挂在请求尾部（需同时启用 live_frame 采集器、主模型支持视觉）",
     )
-    max_age_ms: int = Field(
-        title="画面最长时效",
-        default=15_000,
-        ge=1000,
-        description="超过这么久的画面视为过时，不再给决策看（毫秒）",
-    )
-    min_interval_ms: int = Field(
-        title="最短间隔",
-        default=15_000,
+    stale_warn_ms: int = Field(
+        title="画面过时告警阈值",
+        default=60_000,
         ge=0,
-        description="两次看画面之间至少间隔多久（毫秒），控制图片成本",
+        description="挂帧时最新画面帧龄超过它就记一条告警（毫秒，限频 5 分钟一条）；用于暴露 OBS 画面断流",
     )
 
 
