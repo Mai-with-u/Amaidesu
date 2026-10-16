@@ -56,7 +56,9 @@ export type EntryKind =
   /** 会话模式的过程折叠条（合成展示条目，不对应任何事件） */
   | 'process_group'
   /** 思考行：ReAct 各步/生成段思考流（视图层合成条目，不对应事件；流式期间文本原地增长） */
-  | 'thinking';
+  | 'thinking'
+  /** 系统事件行（core.error / core.startup / core.shutdown）：运营必看，两个视图档位都显示 */
+  | 'system';
 
 /** 事件缓冲条目：events store 在 WebSocketMessage 上补了去重 id */
 export type FeedEvent = WebSocketMessage & { id: string };
@@ -246,6 +248,8 @@ export const CONVERSATION_KINDS: ReadonlySet<EntryKind> = new Set([
   'gift',
   'super_chat',
   'boundary',
+  // 系统事件是运营事件（错误 / 服务启停），不豁免进"简洁也要看"集合就等于看不到
+  'system',
 ]);
 
 /** 简洁档过滤判定（控制台简洁档 / 未来观众面复用同一口径） */
@@ -538,6 +542,42 @@ function fromTtsFailed(event: FeedEvent, data: Record<string, unknown>): ShowEnt
   });
 }
 
+/** 系统事件：core.error / core.startup / core.shutdown。
+ *  error 是显性失败行（红色，参照 TTS 失败行先例）；启停是中性运营标记行 */
+export function fromSystemEvent(event: FeedEvent, data: Record<string, unknown>): ShowEntry | null {
+  if (event.type === 'core.error') {
+    const message = str(data.message) || '原因未知';
+    return makeEntry({
+      id: event.id,
+      kind: 'system',
+      tsMs: event.timestamp_ms,
+      text: message,
+      note: str(data.collector),
+      badge: '系统错误',
+      failed: true,
+    });
+  }
+  if (event.type === 'core.startup') {
+    return makeEntry({
+      id: event.id,
+      kind: 'system',
+      tsMs: event.timestamp_ms,
+      text: str(data.message) || '服务已启动',
+      badge: '启动',
+    });
+  }
+  if (event.type === 'core.shutdown') {
+    return makeEntry({
+      id: event.id,
+      kind: 'system',
+      tsMs: event.timestamp_ms,
+      text: str(data.message) || '服务已停止',
+      badge: '关闭',
+    });
+  }
+  return null;
+}
+
 /** 里程碑：game.milestone（GamePayload） */
 function fromMilestone(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
   const meta = [str(data.game), str(data.scene)].filter(Boolean).join(' · ');
@@ -630,6 +670,12 @@ export function toEntry(event: FeedEvent): ShowEntry | null {
   if (event.type.startsWith('tool.result.')) return fromToolResult(event, data);
   if (event.type === 'rundown.changed') return fromRundown(event, data);
   if (event.type === 'tts.utterance.failed') return fromTtsFailed(event, data);
+  if (
+    event.type === 'core.error' ||
+    event.type === 'core.startup' ||
+    event.type === 'core.shutdown'
+  )
+    return fromSystemEvent(event, data);
   // game.milestone 旧路径由 LiveObserver 本地处理；其他 game.*（report/attention_required/error）统一走 toGameEntry
   if (event.type === 'game.milestone') return fromMilestone(event, data);
   if (

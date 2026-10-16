@@ -827,6 +827,12 @@ describe('isConversationEntry 简洁档口径', () => {
     }
   });
 
+  it('系统事件行两个档位都显示（运营事件不豁免就等于看不到）', () => {
+    expect(isConversationEntry(makeEntry({ id: 'e', kind: 'system', tsMs: 1, text: '' }))).toBe(
+      true,
+    );
+  });
+
   it('管线诊断卡整卡排除：工具/决策/裁决/阶段/思考/游戏上报/里程碑等', () => {
     for (const kind of [
       'tool',
@@ -840,5 +846,39 @@ describe('isConversationEntry 简洁档口径', () => {
     ] as EntryKind[]) {
       expect(isConversationEntry(makeEntry({ id: 'e', kind, tsMs: 1, text: '' }))).toBe(false);
     }
+  });
+});
+
+describe('core.* 系统事件 → system 行', () => {
+  it('core.error：红色失败行，正文取 message，错误源入 note', () => {
+    const entry = toEntry(
+      evt('core.error', {
+        message: 'B 站应用启动失败（code=1）',
+        data: { collector: 'bili_danmaku' },
+      }),
+    );
+    expect(entry).not.toBeNull();
+    expect(entry!.kind).toBe('system');
+    expect(entry!.failed).toBe(true);
+    expect(entry!.text).toBe('B 站应用启动失败（code=1）');
+    expect(entry!.badge).toBe('系统错误');
+  });
+
+  it('core.startup / core.shutdown：中性运营标记行，message 缺省走默认文案', () => {
+    const up = toEntry(evt('core.startup', { message: 'Amaidesu 组件装配完成' }));
+    expect(up).not.toBeNull();
+    expect(up!.kind).toBe('system');
+    expect(up!.failed).toBe(false);
+    expect(up!.text).toBe('Amaidesu 组件装配完成');
+    expect(up!.badge).toBe('启动');
+
+    const down = toEntry(evt('core.shutdown', {}));
+    expect(down).not.toBeNull();
+    expect(down!.text).toBe('服务已停止');
+    expect(down!.badge).toBe('关闭');
+  });
+
+  it('system 行不属于会话过程行（会话模式不被折叠）', () => {
+    expect(isChatProcessKind('system')).toBe(false);
   });
 });

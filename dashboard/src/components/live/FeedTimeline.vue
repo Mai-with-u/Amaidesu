@@ -76,6 +76,22 @@
           <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
         </div>
 
+        <!-- 系统事件行：core.error 显性失败（错误色，与 TTS 失败行同系）；
+             core.startup / core.shutdown 中性运营标记（安静单行 + 徽标） -->
+        <div
+          v-else-if="entry.kind === 'system'"
+          class="whisper"
+          :class="{ 'is-system-error': entry.failed }"
+        >
+          <span class="whisper-dot" aria-hidden="true" />
+          <span class="whisper-text">
+            <template v-if="entry.badge">[{{ entry.badge }}]</template>
+            {{ entry.text }}<template v-if="entry.note"> · {{ entry.note }}</template>
+          </span>
+          <span class="grow" />
+          <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+        </div>
+
         <!-- 思考行：ReAct 各步/生成段思考流（视图层合成条目）。
              默认折叠只留单行预览，流式期间预览实时增长；展开看全文 -->
         <details v-else-if="entry.kind === 'thinking'" class="think">
@@ -1113,6 +1129,11 @@ async function copyText(text: string): Promise<void> {
 
 /* 语音合成失败行：错误色突出，与安静单行区分 */
 .whisper.is-tts-failed .whisper-text {
+  color: var(--color-danger);
+}
+
+/* 系统事件行：错误行错误色突出；启停行保持安静单行默认色 */
+.whisper.is-system-error .whisper-text {
   color: var(--color-danger);
 }
 

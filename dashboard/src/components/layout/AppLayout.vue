@@ -89,10 +89,14 @@ import RestartOverlay from './RestartOverlay.vue';
 import { useThemeStore, useWebSocketStore } from '@/stores';
 import { storeToRefs } from 'pinia';
 import { configApi, systemApi } from '@/api';
+import { useSystemNotifications } from '@/composables/useSystemNotifications';
 
 const themeStore = useThemeStore();
 const wsStore = useWebSocketStore();
 const { isConnected } = storeToRefs(wsStore);
+
+// 系统级事件（core.error / core.startup / core.shutdown）右上角显式通知
+useSystemNotifications();
 
 // ---- 重启 ----
 const restarting = ref(false);
