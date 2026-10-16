@@ -6,6 +6,10 @@
           <el-icon><Monitor /></el-icon>
           <span>运行总览</span>
         </el-menu-item>
+        <el-menu-item index="/review">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>场次复盘</span>
+        </el-menu-item>
         <el-menu-item index="/live">
           <el-icon><VideoCamera /></el-icon>
           <span>直播控制台</span>
@@ -100,6 +104,7 @@ import { useRoute } from 'vue-router';
 import {
   Monitor,
   Connection,
+  DataAnalysis,
   Document,
   Tools,
   Setting,

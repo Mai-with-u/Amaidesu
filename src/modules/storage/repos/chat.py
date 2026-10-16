@@ -376,6 +376,63 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def summarize_sessions(self, *, live_session_ids: List[int]) -> Dict[str, int]:
+        """场次复盘 chips 计数：弹幕/进入/礼物/SC 计数与付费合计（多场 IN 合并）。
+
+        - 弹幕 = live_chat 中 sender_role='viewer' 且 message_type='danmaku' 的行
+        - 进入 = live_chat 中 message_type='enter' 的行（进场提示）
+        - 礼物/SC 计数与金额（平台最小货币单位）取 gifts / super_chats 行数与
+          total_price 合计（银瓜子免费礼物照常计入行数，金额区分看 currency）
+        """
+
+        def _exec() -> Dict[str, int]:
+            placeholders = ",".join("?" for _ in live_session_ids)
+            ids = [int(sid) for sid in live_session_ids]
+            with self._manager.transaction() as conn:
+                chat_row = conn.execute(
+                    "SELECT"
+                    " COALESCE(SUM(CASE WHEN sender_role='viewer' AND message_type='danmaku' THEN 1 ELSE 0 END), 0) AS danmaku_count,"
+                    " COALESCE(SUM(CASE WHEN message_type='enter' THEN 1 ELSE 0 END), 0) AS enter_count"
+                    f" FROM live_chat WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
+                    ids,
+                ).fetchone()
+                gift_row = conn.execute(
+                    "SELECT COUNT(*) AS gift_count, COALESCE(SUM(total_price), 0) AS gift_total_price"
+                    f" FROM gifts WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
+                    ids,
+                ).fetchone()
+                sc_row = conn.execute(
+                    "SELECT COUNT(*) AS super_chat_count, COALESCE(SUM(total_price), 0) AS super_chat_total_price"
+                    f" FROM super_chats WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
+                    ids,
+                ).fetchone()
+                return {
+                    "danmaku_count": int(chat_row["danmaku_count"]) if chat_row else 0,
+                    "enter_count": int(chat_row["enter_count"]) if chat_row else 0,
+                    "gift_count": int(gift_row["gift_count"]) if gift_row else 0,
+                    "gift_total_price": int(gift_row["gift_total_price"]) if gift_row else 0,
+                    "super_chat_count": int(sc_row["super_chat_count"]) if sc_row else 0,
+                    "super_chat_total_price": int(sc_row["super_chat_total_price"]) if sc_row else 0,
+                }
+
+        return await self._run_in_executor(_exec)
+
+    async def list_assistant_speech_by_session(self, *, live_session_ids: List[int]) -> List[sqlite3.Row]:
+        """取场内主播发言时刻（sender_role='assistant'，时间正序），供节奏/沉默计算。"""
+
+        def _exec() -> List[sqlite3.Row]:
+            placeholders = ",".join("?" for _ in live_session_ids)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT live_session_id, timestamp_ms FROM live_chat"
+                    f" WHERE sender_role='assistant' AND live_session_id IN ({placeholders})"
+                    " ORDER BY timestamp_ms",  # noqa: S608 子句为代码内常量
+                    [int(sid) for sid in live_session_ids],
+                ).fetchall()
+                return list(rows)
+
+        return await self._run_in_executor(_exec)
+
     async def list_session_gifts(
         self,
         *,

@@ -347,7 +347,7 @@
  * 本组件只做装配与跨块的少量编排（清空时间线联动未读计数）。
  */
 import { computed, onMounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { Loading } from '@element-plus/icons-vue';
 import { useWebSocketStore } from '@/stores';
@@ -445,6 +445,7 @@ const sendBarRef = ref<InstanceType<typeof InterventionInput> | null>(null);
 // 干预发话：目标二选一（默认主播），模式集合与传输随目标切换——
 // 单一事实源在 useAgentIntervention，主播目标复用既有行为（昵称插槽、在途 chip）
 const router = useRouter();
+const route = useRoute();
 const interventionTarget = ref<string>(STREAMER_AGENT_NAME);
 const {
   activeMode,
@@ -506,7 +507,15 @@ const wallClock = computed(() => formatTimeHMS(nowTick.value));
 // 生命周期
 
 onMounted(() => {
-  void loadSessions();
+  void loadSessions().then(() => {
+    // 直达预过滤：场次复盘页经 ?session=<id> 跳入时选中该历史场次进回看
+    //（列表加载完成后才能命中；无效 id 静默忽略，维持实时模式）
+    const deepLinkId = Number(route.query.session ?? '');
+    if (Number.isFinite(deepLinkId) && deepLinkId > 0) {
+      const target = sessions.value.find(s => s.live_session_id === deepLinkId);
+      if (target && !target.is_active) selectSession(target);
+    }
+  });
   void loadSimulatorStatus();
 });
 </script>

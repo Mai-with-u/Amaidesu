@@ -822,6 +822,9 @@ async def create_app_components(
             session_manager,
             llm_repo=database.llm,
             rundown_repo=database.rundowns,
+            # 场次复盘聚合/导出的数据源：game_events 计数与 db 快照副本路径
+            event_repo=database.events,
+            storage_db_path=database.db_path,
             # 观众域只读消费面：列表 / 档案 / 对话 / 贡献聚合直查存储层
             viewer_repo=database.viewers,
             chat_repo=database.chat,
@@ -1128,6 +1131,8 @@ async def _start_dashboard(
     viewer_repo=None,
     chat_repo=None,
     viewer_profile_repo=None,
+    event_repo=None,
+    storage_db_path=None,
     task_tracker=None,
     subtitle_service=None,
     tts_engine=None,
@@ -1158,6 +1163,9 @@ async def _start_dashboard(
             chat_repo=chat_repo,
             # 常客名册仓储：/api/v1/memory/* 管理面与主播 Agent 共用同一张表
             viewer_profile_repo=viewer_profile_repo,
+            # 场次复盘面：game_events 计数仓储与 db 快照路径（/api/v1/review*）
+            event_repo=event_repo,
+            storage_db_path=storage_db_path,
             # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源
             task_tracker=task_tracker,
             # 字幕服务与 TTS 引擎：/api/v1/debug 直测端点经此驱动真实基础设施

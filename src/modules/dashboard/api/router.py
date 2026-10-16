@@ -15,6 +15,7 @@ from src.modules.dashboard.api import (
     events,
     llm,
     memory,
+    review,
     rundown,
     rundowns,
     sessions,
@@ -60,6 +61,9 @@ def create_app() -> FastAPI:
 
     # 直播场次控制面（列表 / 开启 / 结束 / 删除，LiveSessionManager 承载）
     app.include_router(sessions.router, prefix="/api/v1/live-sessions", tags=["Sessions"])
+
+    # 场次复盘只读聚合 + 数据包导出（services.session_review 承载口径）
+    app.include_router(review.router, prefix="/api/v1/review", tags=["Review"])
 
     # 观众统计只读端点（viewers 表最小消费面）
     app.include_router(viewers.router, prefix="/api/v1/viewers", tags=["Viewers"])

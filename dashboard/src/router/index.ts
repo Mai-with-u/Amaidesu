@@ -9,6 +9,12 @@ const router = createRouter({
       component: () => import('@/views/Dashboard.vue'),
     },
     {
+      // 场次复盘（只读聚合 + 超阈染色 + 数据包导出）
+      path: '/review',
+      name: 'session-review',
+      component: () => import('@/views/SessionReview.vue'),
+    },
+    {
       path: '/collectors',
       name: 'collectors',
       component: () => import('@/views/Collectors.vue'),

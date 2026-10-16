@@ -54,5 +54,20 @@ class EventRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def count_game_events_by_type(self, *, live_session_ids: List[int]) -> List[sqlite3.Row]:
+        """按类型计数场次游戏事件（多场 IN 合并，复盘页游戏侧指标数据源）。"""
+
+        def _exec() -> List[sqlite3.Row]:
+            placeholders = ",".join("?" for _ in live_session_ids)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT event_type, COUNT(*) AS n FROM game_events"
+                    f" WHERE live_session_id IN ({placeholders}) GROUP BY event_type",  # noqa: S608 子句为代码内常量
+                    [int(sid) for sid in live_session_ids],
+                ).fetchall()
+                return list(rows)
+
+        return await self._run_in_executor(_exec)
+
 
 __all__ = ["EventRepo"]

@@ -422,6 +422,107 @@ class LLMRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def review_window_stats(
+        self,
+        *,
+        windows: List[tuple],
+        slow_thresholds: Optional[Dict[str, int]] = None,
+    ) -> tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """场次复盘窗口聚合：总体 / 按 profile / 水位序列（一次方法三查询）。
+
+        ``windows`` 为 (start_ms, end_ms) 列表，多窗口 OR 合并（多选合并视图
+        把场间空窗排除在统计外）。``slow_thresholds`` 为 profile → 慢调用阈值
+        （毫秒，与运行期慢调用告警同源），未配置的 profile 用 15s 兜底缺省。
+        返回 ``(overall, by_profile, series)``：series 为水位图时间序列行
+        （timestamp_ms / profile_name / prompt_tokens，另带窗口归属场次），
+        按时间升序；窗口归属按行时间落在哪个窗口判定（窗口互斥由场次边界保证）。
+        """
+
+        clauses = ["(timestamp_ms >= ? AND timestamp_ms <= ?)"] * len(windows)
+        params: List[Any] = []
+        for start, end in windows:
+            params.extend([int(start), int(end)])
+        where = f" WHERE ({' OR '.join(clauses)})" if clauses else ""
+        thresholds = slow_thresholds or {}
+
+        def _exec() -> tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
+            with self._manager.transaction() as conn:
+                overall = conn.execute(
+                    "SELECT COUNT(*) AS calls,"
+                    " COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0) AS failed_calls,"
+                    " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+                    " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+                    " COALESCE(SUM(total_tokens), 0) AS total_tokens,"
+                    " COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,"
+                    " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens,"
+                    " COALESCE(SUM(cost), 0) AS cost,"
+                    " COALESCE(MAX(prompt_tokens), 0) AS max_prompt_tokens"
+                    f" FROM llm_requests{where}",  # noqa: S608 子句为代码内常量
+                    tuple(params),
+                ).fetchone()
+                profile_rows = conn.execute(
+                    "SELECT profile_name, COUNT(*) AS calls,"
+                    " COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0) AS failed_calls,"
+                    " COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) AS ok_calls,"
+                    " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+                    " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+                    " COALESCE(SUM(total_tokens), 0) AS total_tokens,"
+                    " COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,"
+                    " COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens,"
+                    " COALESCE(SUM(cost), 0) AS cost,"
+                    " COALESCE(MAX(prompt_tokens), 0) AS max_prompt_tokens"
+                    f" FROM llm_requests{where} GROUP BY profile_name ORDER BY calls DESC",  # noqa: S608 子句为代码内常量
+                    tuple(params),
+                ).fetchall()
+                series_rows = conn.execute(
+                    f"SELECT timestamp_ms, profile_name, prompt_tokens FROM llm_requests{where} ORDER BY timestamp_ms",  # noqa: S608 子句为代码内常量
+                    tuple(params),
+                ).fetchall()
+
+                # 慢调用按 profile 阈值在 Python 侧判（SQL CASE 逐 profile 阈值不可参数化）
+                slow_overall = 0
+                slow_by_profile: Dict[str, int] = {}
+                for row in profile_rows:
+                    profile = str(row["profile_name"] or "")
+                    threshold = int(thresholds.get(profile, 15_000))
+                    slow = int(
+                        conn.execute(
+                            f"SELECT COUNT(*) AS n FROM llm_requests{where} AND profile_name = ? AND latency_ms > ?",  # noqa: S608 子句为代码内常量
+                            (*params, profile, threshold),
+                        ).fetchone()["n"]
+                    )
+                    slow_by_profile[profile] = slow
+                    slow_overall += slow
+
+                # 水位序列行补窗口归属（场边界互斥，逐行判所属窗口即可）
+                enriched_series = []
+                for row in series_rows:
+                    ts = int(row["timestamp_ms"])
+                    session_id = 0
+                    for idx, (start, end) in enumerate(windows):
+                        if start <= ts <= end:
+                            session_id = idx
+                            break
+                    enriched_series.append(
+                        {
+                            "timestamp_ms": ts,
+                            "profile_name": str(row["profile_name"] or ""),
+                            "prompt_tokens": int(row["prompt_tokens"] or 0),
+                            "session_id": session_id,
+                        }
+                    )
+
+                overall_dict = dict(overall) if overall else {}
+                overall_dict["slow_calls"] = slow_overall
+                profile_list = []
+                for row in profile_rows:
+                    item = dict(row)
+                    item["slow_calls"] = slow_by_profile.get(str(item.get("profile_name") or ""), 0)
+                    profile_list.append(item)
+                return overall_dict, profile_list, enriched_series
+
+        return await self._run_in_executor(_exec)
+
     async def llm_usage_by_model(self) -> List[Dict[str, Any]]:
         """按模型聚合 ``llm_usage`` 全量用量（dashboard /usage 数据源）。
 

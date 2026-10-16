@@ -80,6 +80,8 @@ class DashboardServer:
         llm_repo: Optional[Any] = None,
         rundown_repo: Optional[Any] = None,
         viewer_profile_repo: Optional[Any] = None,
+        event_repo: Optional[Any] = None,
+        storage_db_path: Optional[Path] = None,
         task_tracker: Optional[Any] = None,
         subtitle_service: Optional[Any] = None,
         tts_engine: Optional[Any] = None,
@@ -130,6 +132,11 @@ class DashboardServer:
         # 注入 ViewerProfileRepo 让 `/api/v1/memory/*` 承载常客名册管理面
         # （列表/纠正/删除）；未注入（极简启动/测试）时相关端点返回 503
         self.viewer_profile_repo = viewer_profile_repo
+        # 注入 EventRepo 让 /api/v1/review 的游戏事件计数直查 game_events；
+        # storage_db_path 供 /api/v1/review/export 打包 db 一致性快照副本；
+        # 未注入时相应分节/打包项按缺数据降级
+        self.event_repo = event_repo
+        self.storage_db_path = storage_db_path
         # 注入字幕服务与 TTS 引擎让 `/api/v1/debug/subtitle|tts` 直测端点
         # 可用；未注入（极简启动/测试）时相关端点返回 503
         self.subtitle_service = subtitle_service

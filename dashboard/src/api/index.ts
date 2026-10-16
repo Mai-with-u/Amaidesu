@@ -69,6 +69,7 @@ import type {
   TriggerProactiveResponse,
   LiveSessionListResponse,
   SessionTimelineResponse,
+  SessionReviewResponse,
   ViewerListResponse,
   ViewerInsights,
   VisionMonitorsResponse,
@@ -380,6 +381,23 @@ export const memoryApi = {
       `/memory/profiles/${encodeURIComponent(platform)}/${encodeURIComponent(userId)}`,
     ),
   getStats: () => api.get<MemoryStatsResponse>('/memory/stats'),
+};
+
+// 场次复盘（只读聚合 + 数据包导出）
+//
+// `GET /review?ids=`：单场或多选合并聚合（缺省=最新已结束场次，后端定）。
+// `GET /review/export?ids=`：数据包 zip（db 快照 + 日志原样 + manifest），
+// 浏览器下载走原生 <a> 直链（带凭证的 axios blob 需另行拼装，此处 cookie
+// 同源场景直接跳转即可）。
+export const reviewApi = {
+  get: (ids?: number[]) =>
+    api.get<SessionReviewResponse>('/review', {
+      params: ids?.length ? { ids: ids.join(',') } : {},
+    }),
+  exportUrl: (ids: number[]): string => {
+    const query = ids.length ? `?ids=${ids.join(',')}` : '';
+    return `/api/v1/review/export${query}`;
+  },
 };
 
 export default api;

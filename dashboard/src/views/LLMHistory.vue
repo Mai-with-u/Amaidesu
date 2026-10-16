@@ -106,6 +106,20 @@ if (queryModelName) {
   queryParams.model_name = queryModelName;
 }
 
+// 直达筛选：场次复盘页经 ?start_time=&end_time=（Unix 毫秒）跳入时预置时间窗，
+// 同步到日期选择器（ui 显示与查询口径一致），同样在 setup 期首拉之前写入
+const queryStartTime = Number(route.query.start_time ?? '');
+const queryEndTime = Number(route.query.end_time ?? '');
+if (
+  Number.isFinite(queryStartTime) &&
+  Number.isFinite(queryEndTime) &&
+  queryEndTime > queryStartTime
+) {
+  dateRange.value = [queryStartTime, queryEndTime];
+  queryParams.start_time = queryStartTime;
+  queryParams.end_time = queryEndTime;
+}
+
 // 获取历史数据
 async function fetchHistory() {
   loading.value = true;
