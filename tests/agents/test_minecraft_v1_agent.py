@@ -782,6 +782,8 @@ async def test_only_a_changed_event_stream_is_called_reentering_the_world() -> N
     agent._urgent_before_pause = (_ESCAPED, time.monotonic())
     reentered = agent._pause_notice(run, True)
     assert "游戏重进了世界或重启过" in reentered and "已撤离" not in reentered
+    # 恢复结论前先核对工作笔记：东西可能已放置或已消耗，"背包里没有"不等于丢了。
+    assert "minecraft_get_work_log" in reentered and "背包里没有不等于丢了" in reentered
     assert agent._urgent_before_pause is None, "急事用过一次就清掉"
 
     agent._urgent_before_pause = (_ESCAPED, time.monotonic() - 120)

@@ -1160,7 +1160,9 @@ class MinecraftAgent(BaseAgent):
             why = "Mod 没写暂停原因"
         return (
             f"[系统] 目标 {run.goal_id}（{self._goal_label(run)}）被暂停了，身体没在做它。{why}。"
-            f"先看现场，再用 maicraft_goal(operation=resume 或 cancel, goal_id={run.goal_id}) 继续或取消。"
+            f"先用 minecraft_get_work_log 读工作笔记，核对哪些事其实已经做完"
+            f"（东西可能已放置或已消耗，背包里没有不等于丢了）；再看现场。"
+            f"然后才用 maicraft_goal(operation=resume 或 cancel, goal_id={run.goal_id}) 继续或取消。"
         )
 
     async def _on_decision_asked(self, run: GoalRun) -> None:
