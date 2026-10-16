@@ -1,7 +1,7 @@
 """
 弹幕小部件服务。
 
-订阅 ``room.message.*`` 四种语义域事件（弹幕/礼物/SC/进场）并广播给前端
+订阅 ``room.message.*`` 五种语义域事件（弹幕/礼物/SC/上舰/进场）并广播给前端
 WebSocket 客户端。本服务的订阅面收敛在 ``room.message.*``；字幕显示由
 字幕基础设施 ``SubtitleService`` 通过 ``DashboardBackend`` 驱动——本服务
 暴露 ``show_subtitle`` / ``clear_subtitle`` 公开方法供 Backend 调用。
@@ -73,6 +73,7 @@ class DanmakuWidgetService:
             CoreEvents.ROOM_MESSAGE_DANMAKU,
             CoreEvents.ROOM_MESSAGE_GIFT,
             CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            CoreEvents.ROOM_MESSAGE_GUARD,
             CoreEvents.ROOM_MESSAGE_ENTER,
         ):
             self.event_bus.on(
@@ -92,6 +93,7 @@ class DanmakuWidgetService:
             CoreEvents.ROOM_MESSAGE_DANMAKU,
             CoreEvents.ROOM_MESSAGE_GIFT,
             CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            CoreEvents.ROOM_MESSAGE_GUARD,
             CoreEvents.ROOM_MESSAGE_ENTER,
         ):
             self.event_bus.off(event_name, self._on_input_message)
@@ -233,6 +235,20 @@ class DanmakuWidgetService:
                     importance=importance,
                     sc_price=to_cny(payload.sc.total_price, payload.sc.currency) if payload.sc else None,
                     sc_message=payload.content or None,
+                    platform=platform,
+                    room_id=room_id,
+                    simulated=payload.simulated,
+                )
+
+            if payload.message_type == "guard":
+                return DanmakuWidgetMessage(
+                    user_name=user_name,
+                    user_id=user_id,
+                    content=payload.content or "",
+                    message_type=MessageType.GUARD,
+                    timestamp_ms=timestamp,
+                    importance=importance,
+                    guard_level=payload.guard.guard_level if payload.guard else None,
                     platform=platform,
                     room_id=room_id,
                     simulated=payload.simulated,

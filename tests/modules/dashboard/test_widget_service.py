@@ -15,6 +15,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import (
     GiftInfo,
+    GuardInfo,
     RoomMessagePayload,
     RoomMessageUser,
     SuperChatInfo,
@@ -85,6 +86,22 @@ def test_convert_enter_message() -> None:
     assert msg.message_type == MessageType.ENTER
 
 
+def test_convert_guard_message() -> None:
+    """上舰事件转 widget 消息：类型为 guard，舰队等级随 payload.guard 透传。"""
+    svc = _make_service()
+    msg = svc._convert_payload_to_widget(
+        _make_payload(
+            message_type="guard",
+            content="开通了舰长",
+            guard=GuardInfo(guard_level=3, total_price=138_000),
+        )
+    )
+    assert msg is not None
+    assert msg.message_type == MessageType.GUARD
+    assert msg.guard_level == 3
+    assert msg.user_name == "观众A"
+
+
 def test_convert_simulated_flag_propagates() -> None:
     """simulated 溯源标记从 payload 贯通到 widget 消息，前端靠它过滤模拟弹幕。"""
     svc = _make_service()
@@ -97,7 +114,7 @@ def test_convert_simulated_flag_propagates() -> None:
 
 
 async def test_start_subscribes_all_room_message_events() -> None:
-    """弹幕小部件需订阅全部 4 种 room.message 事件（礼物/SC/进场也要上屏）。"""
+    """弹幕小部件需订阅全部 5 种 room.message 事件（礼物/SC/上舰/进场也要上屏）。"""
     svc = _make_service()
     await svc.start()
     try:
@@ -105,6 +122,7 @@ async def test_start_subscribes_all_room_message_events() -> None:
             CoreEvents.ROOM_MESSAGE_DANMAKU,
             CoreEvents.ROOM_MESSAGE_GIFT,
             CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            CoreEvents.ROOM_MESSAGE_GUARD,
             CoreEvents.ROOM_MESSAGE_ENTER,
         ):
             assert svc.event_bus._handlers.get(event_name), f"缺少订阅: {event_name}"
@@ -114,6 +132,7 @@ async def test_start_subscribes_all_room_message_events() -> None:
         CoreEvents.ROOM_MESSAGE_DANMAKU,
         CoreEvents.ROOM_MESSAGE_GIFT,
         CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+        CoreEvents.ROOM_MESSAGE_GUARD,
         CoreEvents.ROOM_MESSAGE_ENTER,
     ):
         assert not svc.event_bus._handlers.get(event_name), f"stop 后未解除订阅: {event_name}"

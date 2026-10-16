@@ -7,7 +7,7 @@ WS 类型规则：``type = 事件名``（精确直通）；唯一例外是 ``roo
 折叠为 ``room.message``（前端多处按此聚合过滤）。
 
 订阅清单：
-- ``room.message.danmaku / gift / super_chat / enter`` → ``"room.message"``
+- ``room.message.danmaku / gift / super_chat / guard / enter`` → ``"room.message"``
 - 决策可观测：``planner.decision`` / ``planner.verdict`` / ``streamer.stage``
 - 场次生命周期：``live.started`` / ``live.ended``
 - ``rundown.changed`` / ``streamer.speech``（直通）
@@ -108,6 +108,7 @@ class EventBroadcaster:
             CoreEvents.ROOM_MESSAGE_DANMAKU,
             CoreEvents.ROOM_MESSAGE_GIFT,
             CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            CoreEvents.ROOM_MESSAGE_GUARD,
             CoreEvents.ROOM_MESSAGE_ENTER,
         ):
             return self._on_room_message
@@ -154,6 +155,7 @@ class EventBroadcaster:
             CoreEvents.ROOM_MESSAGE_DANMAKU,
             CoreEvents.ROOM_MESSAGE_GIFT,
             CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+            CoreEvents.ROOM_MESSAGE_GUARD,
             CoreEvents.ROOM_MESSAGE_ENTER,
         ):
             self._subscribe_event(event_name, self._on_room_message, RoomMessagePayload)

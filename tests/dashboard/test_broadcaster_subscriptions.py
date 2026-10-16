@@ -67,6 +67,7 @@ async def test_start_subscribes_to_every_forwarded_event_and_stop_unsubscribes_a
         CoreEvents.ROOM_MESSAGE_DANMAKU,
         CoreEvents.ROOM_MESSAGE_GIFT,
         CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+        CoreEvents.ROOM_MESSAGE_GUARD,
         CoreEvents.ROOM_MESSAGE_ENTER,
         CoreEvents.RUNDOWN_CHANGED,
         CoreEvents.TOOL_RESULT_WILDCARD,
@@ -87,7 +88,13 @@ async def test_start_subscribes_to_every_forwarded_event_and_stop_unsubscribes_a
 
 
 @pytest.mark.parametrize(
-    "event_name", [CoreEvents.ROOM_MESSAGE_GIFT, CoreEvents.ROOM_MESSAGE_SUPER_CHAT, CoreEvents.ROOM_MESSAGE_ENTER]
+    "event_name",
+    [
+        CoreEvents.ROOM_MESSAGE_GIFT,
+        CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+        CoreEvents.ROOM_MESSAGE_GUARD,
+        CoreEvents.ROOM_MESSAGE_ENTER,
+    ],
 )
 async def test_room_message_events_share_one_ws_type(started, event_name: str) -> None:
     _bus, _ws, deliver = started
