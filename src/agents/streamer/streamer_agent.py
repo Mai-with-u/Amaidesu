@@ -665,6 +665,13 @@ class StreamerAgent(BaseAgent):
                 self._on_room_message_received,
                 model_class=RoomMessagePayload,
             )
+        # 进房（room.message.enter）：只记 RoomState 的进房名单（活跃度行的
+        # 欢迎原料），不是对话消息——不进决策缓冲、不触发决策窗
+        self._event_bus.on(
+            CoreEvents.ROOM_MESSAGE_ENTER,
+            self._on_room_enter,
+            model_class=RoomMessagePayload,
+        )
         # 房间状态流（room.state.*）：观看数等统计推送只更新 RoomState 快照
         # （后台记账数据源），不是对话消息——不进决策缓冲、不影响热度
         self._event_bus.on(
@@ -722,7 +729,7 @@ class StreamerAgent(BaseAgent):
             model_class=LiveEndedPayload,
         )
         self._logger.info(
-            "StreamerAgent 已订阅 room.message.danmaku|gift|super_chat|guard / room.state.watched_count"
+            "StreamerAgent 已订阅 room.message.danmaku|gift|super_chat|guard|enter / room.state.watched_count"
             " / game.* / game.body.* / game.chat.* / live.started|ended"
         )
 
@@ -956,6 +963,20 @@ class StreamerAgent(BaseAgent):
         """
         del event_name, source
         self._room_state.set_audience_total(payload.audience_total, now_ms=payload.timestamp_ms)
+
+    async def _on_room_enter(
+        self,
+        event_name: str,
+        payload: RoomMessagePayload,
+        source: str,
+    ) -> None:
+        """``room.message.enter`` 回调：记 RoomState 进房名单（限频去重在 RoomState 内）。
+
+        主播原先完全看不到观众进房（观众数协议无源恒 0，做不了人数门槛），
+        名单经【房间活跃度】行进决策上下文，供欢迎话术顺口点名。
+        """
+        del event_name, source
+        self._room_state.record_enter(payload.user.id, payload.user.name, now_ms=payload.timestamp_ms)
 
     async def _on_room_message_received(
         self,

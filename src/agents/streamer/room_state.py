@@ -54,6 +54,15 @@ AUDIENCE_WINDOW_MS: int = 600_000
 #: 观众进入样本的容量上限（防御性：正常推送频率下远达不到）
 _AUDIENCE_SAMPLE_CAP: int = 64
 
+#: 进房记录的渲染窗口（毫秒）：activity_line 只报最近这段时间进房的观众
+ENTER_WINDOW_MS: int = 600_000
+
+#: 同一观众进房记录的限频（毫秒）：窗口内反复进出不重复记，欢迎不追着同一人刷
+ENTER_DEDUP_MS: int = 1_800_000
+
+#: activity_line 最多点名的进房观众数（控制决策上下文占用）
+ENTER_RENDER_CAP: int = 5
+
 #: 中文停用词表(高频无意义字/语气词)。后续可扩展。
 _STOPWORDS: frozenset[str] = frozenset(
     "的了吗啊呀呢吧哦呐哈你我他她它是最和在有无要都也就还又把这被让给跟和与及个么不没很太非常"
@@ -131,6 +140,8 @@ class RoomState:
         # 观看数推送样本 (ts, 累计人次):增量观察窗口的原料(累计口径只增不减,
         # 窗口两端之差 = 近 N 分钟新增进入)
         self._audience_samples: List[Tuple[int, int]] = []
+        # 进房记录 (ts, user_id, 昵称)：room.message.enter 驱动，欢迎话术的原料
+        self._enters: List[Tuple[int, str, str]] = []
 
     # ------------------------------------------------------------------
     # 时钟注入
@@ -265,6 +276,35 @@ class RoomState:
         return summary
 
     # ------------------------------------------------------------------
+    # 进房记录（room.message.enter 驱动）
+    # ------------------------------------------------------------------
+
+    def record_enter(self, user_id: str, user_name: str, *, now_ms: Optional[int] = None) -> None:
+        """记录一位观众进房（内存态；同一观众在限频窗口内重复进房不重复记）。
+
+        Args:
+            user_id: 观众唯一 ID（限频的判定键）
+            user_name: 昵称（activity_line 点名用）
+            now_ms: 进房时刻（Unix 毫秒）；None 时使用真实时钟
+        """
+        ts = self._resolve_now(now_ms)
+        for entry_ts, entry_id, _ in reversed(self._enters):
+            if entry_id == user_id:
+                if ts - entry_ts < ENTER_DEDUP_MS:
+                    return
+                break
+        self._enters.append((ts, user_id, user_name))
+        # 记录只为限频与渲染服务：超出限频窗口的旧记录裁掉，长播不无限增长
+        cutoff = ts - ENTER_DEDUP_MS
+        while self._enters and self._enters[0][0] < cutoff:
+            self._enters.pop(0)
+
+    def _recent_enter_names(self, now_ms: int) -> List[str]:
+        """渲染窗口内最近进房的观众昵称（按进房先后，最多 ENTER_RENDER_CAP 位）。"""
+        names = [name for ts, _, name in self._enters if ts >= now_ms - ENTER_WINDOW_MS]
+        return names[-ENTER_RENDER_CAP:]
+
+    # ------------------------------------------------------------------
     # 观众规模(状态推送驱动)
     # ------------------------------------------------------------------
 
@@ -302,8 +342,10 @@ class RoomState:
         """房间活跃度一句话（planner 参考段用，校准互动密度与发言策略）。
 
         事实陈述不带指令：近 10 分钟新增观看（累计口径的窗口增量；推送样本
-        不足时如实说未知）+ 近 1 分钟弹幕量与热度等级。全部有源：观看增量
-        来自 ``room.state.watched_count`` 推送，弹幕量来自滑动窗口。
+        不足时如实说未知）+ 近 1 分钟弹幕量与热度等级 + 近 10 分钟进房的
+        观众名单（限频去重后取最近几位，欢迎话术的点名原料）。全部有源：
+        观看增量来自 ``room.state.watched_count`` 推送，弹幕量来自滑动窗口，
+        进房名单来自 ``room.message.enter``。
         """
         ts = self._resolve_now(now_ms)
         self._trim(ts)
@@ -312,7 +354,9 @@ class RoomState:
             audience_text = "近 10 分钟新增观看未知（推送样本不足）"
         else:
             audience_text = f"近 10 分钟新增观看 {increment}"
-        return f"{audience_text}；近 1 分钟弹幕 {len(self._window)} 条（热度 {self._compute_heat(ts)}）"
+        enter_names = self._recent_enter_names(ts)
+        enter_text = f"；近 10 分钟进房：{'、'.join(enter_names)}" if enter_names else ""
+        return f"{audience_text}；近 1 分钟弹幕 {len(self._window)} 条（热度 {self._compute_heat(ts)}）{enter_text}"
 
     # ------------------------------------------------------------------
     # 冷场判定

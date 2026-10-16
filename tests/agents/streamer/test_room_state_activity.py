@@ -58,3 +58,39 @@ async def test_planner_reference_contains_activity_section() -> None:
     assert "【房间活跃度】" in text
     assert "近 10 分钟新增观看" in text
     assert "近 1 分钟弹幕" in text
+
+
+def test_activity_line_lists_recent_enters_within_window() -> None:
+    """进房名单进活跃度行：窗口内的进房按先后点名，窗口外的旧记录不再出现。"""
+    state = RoomState()
+    state.record_enter("u1", "阿明", now_ms=1_000_000)
+    state.record_enter("u2", "小麦", now_ms=1_001_000)
+    line = state.activity_line(now_ms=1_002_000)
+    assert "近 10 分钟进房：阿明、小麦" in line
+
+    # 窗口外的进房不再渲染
+    line_later = state.activity_line(now_ms=1_001_000 + 600_000 + 1)
+    assert "进房" not in line_later
+
+
+def test_enter_records_are_rate_limited_per_user() -> None:
+    """同人限频：限频窗口内反复进房只记一次，不重复点名；过窗后再进重新记。"""
+    state = RoomState()
+    state.record_enter("u1", "阿明", now_ms=1_000_000)
+    state.record_enter("u1", "阿明", now_ms=1_100_000)
+    assert "近 10 分钟进房：阿明" in state.activity_line(now_ms=1_200_000)
+
+    # 限频窗口（30 分钟）过后再进房：重新记录、重新可欢迎
+    state.record_enter("u1", "阿明", now_ms=1_000_000 + 1_800_000)
+    line = state.activity_line(now_ms=1_000_000 + 1_800_000)
+    assert line.count("阿明") == 1, "窗口内旧记录已裁剪，同名只出现一次"
+
+
+def test_enter_render_is_capped_to_recent_few() -> None:
+    """渲染截取最近几位：进房很多时名单只保留最近的，不撑爆决策上下文。"""
+    state = RoomState()
+    for i in range(8):
+        state.record_enter(f"u{i}", f"观众{i}", now_ms=1_000_000 + i)
+    line = state.activity_line(now_ms=1_100_000)
+    assert "观众0" not in line and "观众2" not in line
+    assert "观众7" in line
