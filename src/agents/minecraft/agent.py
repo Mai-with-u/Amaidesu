@@ -1006,8 +1006,14 @@ class MinecraftAgent(BaseAgent):
             self._update_goal_ledger(run)
 
     def _polls_running_goal(self, name: str, arguments: Dict[str, Any]) -> bool:
-        """这次调用只是在查询还在跑的目标（没提问、没被暂停），不算推进。"""
+        """这次调用只是在查询还在跑的目标（没提问、没被暂停），不算推进。
+
+        带 ``path`` 的 get 读的是结束了的目标里折起来的证据，不是在等进展：结束的目标本来就已移出跟踪名单，
+        这里再明说一次，不靠名单碰巧对得上——宿主还没收到结束事件时，模型照着结果去读证据也不会被并入等待。
+        """
         if name != GOAL or arguments.get("operation") not in _GOAL_POLLING_OPERATIONS:
+            return False
+        if arguments.get("path"):
             return False
         tracked = self._goals.tracked_ids()
         if not tracked or self._actionable_goals():
@@ -1068,10 +1074,11 @@ class MinecraftAgent(BaseAgent):
             if note.get("state") == AWAITING_ANSWER or goal_id in self._paused_goals
         )
 
-    async def _on_goal_changed(self, run: GoalRun, after_world_change: bool = False) -> None:
-        """事件流说目标变了：记账，并在需要模型处理时带着完整结果唤醒任务。
+    async def _on_goal_changed(self, run: GoalRun, after_world_change: bool = False, self_brief: str = "") -> None:
+        """事件流说目标变了：记账，并在需要模型处理时带着结果唤醒任务。
 
         ``after_world_change``：事件流换了编号（重进世界或游戏重启）后重新核对时查到的样子。
+        ``self_brief``：结束事件带来的结束那一刻角色的一行自身摘要，没有时为空串。
         """
         before = self._goal_notes.get(run.goal_id, {})
         if run.finished:
@@ -1079,10 +1086,7 @@ class MinecraftAgent(BaseAgent):
             self._paused_goals.discard(run.goal_id)
             self._remember_finished(run)
             self._update_goal_ledger(run)
-            self._inject_wakeup_message(
-                f"[系统] 目标 {run.goal_id}（{self._goal_label(run)}）结束了：{run.result_status}。"
-                f"完整结果：{json_text(run.result)}"
-            )
+            self._inject_wakeup_message(self._finish_notice(run, self_brief))
             return
         self._note_goal(run)
         self._update_goal_ledger(run)
@@ -1093,6 +1097,30 @@ class MinecraftAgent(BaseAgent):
             )
         elif run.state == PAUSED and before.get("state") != PAUSED:
             self._inject_wakeup_message(self._pause_notice(run, after_world_change))
+
+    def _finish_notice(self, run: GoalRun, self_brief: str) -> str:
+        """目标结束的通知：达成情况、结束那一刻角色怎样、结果，以及折起来的大块证据怎么读回。
+
+        结束时在哪、血和饱食、手上拿着什么、开着什么界面由 Mod 写成一行附在结束事件上：
+        模型接下一步之前不用为这些先看一眼自己。
+        Mod 默认把结果里的大块证据（试过的办法、大的细节、长列表）折起来列在 ``result.folded``，
+        这里给的不是完整结果：有折起来的段时说清用哪个调用、照抄哪个 path 读回来，不让模型以为证据丢了。
+        """
+        brief = self_brief.strip().rstrip("。")
+        body = f"结束时：{brief}。" if brief else ""
+        folded = (run.result or {}).get("folded")
+        if isinstance(folded, list) and folded:
+            # 有折起来的段：告诉模型按段读回，长列表照返回的 next 一页页翻，不必一次全拿。
+            label = (
+                f"结果（大块证据折在 result.folded 里，要看哪段就照抄它的 path 用 "
+                f"maicraft_goal(operation=get, goal_id={run.goal_id}, path=…) 读，长的照返回的 next 翻页）"
+            )
+        else:
+            label = "结果"
+        return (
+            f"[系统] 目标 {run.goal_id}（{self._goal_label(run)}）结束了：{run.result_status}。"
+            f"{body}{label}：{json_text(run.result)}"
+        )
 
     def _pause_notice(self, run: GoalRun, after_world_change: bool) -> str:
         """目标被暂停的通知：说清为什么停，只有事件流真换了才说重进世界。

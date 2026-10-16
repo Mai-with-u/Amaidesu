@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Dict, List, Optional
 
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
@@ -32,6 +33,8 @@ class FakeMaicraft(BaseToolProvider):
 
     def __init__(self) -> None:
         self.goals: Dict[int, Dict[str, Any]] = {}
+        # 结束了的目标里折起来的试过的办法：默认结果里不给，按路径 /attempts 读回。
+        self.folded_attempts: Dict[int, List[Dict[str, Any]]] = {}
         self.events: List[Dict[str, Any]] = []
         self.stream_id = "stream-1"
         self.calls: List[tuple[str, Dict[str, Any]]] = []
@@ -132,6 +135,8 @@ class FakeMaicraft(BaseToolProvider):
         run = self.goals.get(arguments.get("goal_id"))
         if run is None:
             return error("unknown_id", f"没有编号为 {arguments.get('goal_id')} 的目标")
+        if operation == "get" and arguments.get("path"):
+            return self._read_folded(run, str(arguments["path"]))
         if operation == "answer":
             run.pop("question", None)
             run["state"] = "running"
@@ -142,6 +147,18 @@ class FakeMaicraft(BaseToolProvider):
             run["state"] = "finished"
             run["result"] = {"status": "cancelled", "summary": "目标被取消", "changes": [], "remaining": []}
         return ok(dict(run))
+
+    def _read_folded(self, run: Dict[str, Any], path: str) -> Dict[str, Any]:
+        """按路径读结束了的目标里折起来的一段：和真实接口一样，没结束、路径不对都按参数问题回。"""
+        goal_id = run["goal_id"]
+        if run.get("state") != "finished":
+            return error("invalid_parameter", f"目标 {goal_id} 还没结束，没有结果可按路径读")
+        attempts = self.folded_attempts.get(goal_id)
+        if path != "/attempts" or attempts is None:
+            return error("invalid_parameter", f"结果里没有 {path}")
+        return ok(
+            {"goal_id": goal_id, "path": path, "type": "list", "value": attempts, "total": len(attempts), "offset": 0}
+        )
 
     async def _events(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         expected = arguments.get("stream_id")
@@ -167,14 +184,31 @@ class FakeMaicraft(BaseToolProvider):
 
     # 测试推进目标
 
-    def _append(self, kind: str, goal_id: int, message: str, status: Optional[str] = None) -> None:
+    def _append(
+        self, kind: str, goal_id: int, message: str, status: Optional[str] = None, self_brief: Optional[str] = None
+    ) -> None:
         event: Dict[str, Any] = {"cursor": len(self.events) + 1, "kind": kind, "goal_id": goal_id, "message": message}
         if status:
             event["status"] = status
+        if self_brief:
+            event["self_brief"] = self_brief
         self.events.append(event)
         self._new_event.set()
 
-    def finish(self, goal_id: int, status: str = "done", summary: str = "砍了 5 块原木") -> None:
+    def finish(
+        self,
+        goal_id: int,
+        status: str = "done",
+        summary: str = "砍了 5 块原木",
+        *,
+        self_brief: Optional[str] = None,
+        attempts: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """目标结束：结果写进运行表、发 finished 事件。
+
+        ``self_brief`` 是结束那一刻角色的一行自身摘要，和真实接口一样只在事件上；
+        ``attempts`` 给了就像真实接口那样折起来：默认结果里只留 ``folded`` 一项，按路径 ``/attempts`` 读回。
+        """
         run = self.goals[goal_id]
         run["state"] = "finished"
         run.pop("question", None)
@@ -184,7 +218,17 @@ class FakeMaicraft(BaseToolProvider):
             "changes": [{"kind": "item_gained", "what": "minecraft:oak_log", "count": 5}],
             "remaining": [],
         }
-        self._append("finished", goal_id, summary, status)
+        if attempts:
+            self.folded_attempts[goal_id] = attempts
+            run["result"]["folded"] = [
+                {
+                    "path": "/attempts",
+                    "type": "list",
+                    "items": len(attempts),
+                    "chars": len(json.dumps(attempts, ensure_ascii=False)),
+                }
+            ]
+        self._append("finished", goal_id, summary, status, self_brief)
 
     def ask(self, goal_id: int, text: str = "动哪个箱子？") -> None:
         run = self.goals[goal_id]

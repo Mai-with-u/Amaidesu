@@ -139,8 +139,8 @@ async def test_look_around_and_remember_a_place_end_to_end() -> None:
     await agent.stop()
 
 
-async def test_a_background_goal_wakes_the_task_with_its_full_result() -> None:
-    """要动手的目标在后台跑：模型让出后零推理等待，目标结束时带着完整结果唤醒，再交付。"""
+async def test_a_background_goal_wakes_the_task_with_its_result() -> None:
+    """要动手的目标在后台跑：模型让出后零推理等待，目标结束时带着结果唤醒，再交付。"""
     server = FakeMaicraft()
 
     def script(messages: List[Dict[str, Any]]) -> Response:
@@ -169,7 +169,59 @@ async def test_a_background_goal_wakes_the_task_with_its_full_result() -> None:
 
     woken = _texts(llm.seen[-1])
     assert "目标 1" in woken and "done" in woken and "minecraft:oak_log" in woken
+    # 结束事件没带自身摘要、结果也没折：通知里不凭空多出这两句。
+    assert "结束时：" not in woken and "result.folded" not in woken
     assert agent._goals.tracked_ids() == []
+    await agent.stop()
+
+
+async def test_the_finish_notice_carries_the_self_brief_and_how_to_read_folded_evidence() -> None:
+    """目标结束的通知带上结束那一刻的自身摘要；证据折起来时说清怎么读回，模型按 path 读证据不算轮询。"""
+    server = FakeMaicraft()
+    brief = "在 minecraft:overworld 12, 64, -8；血 18，饱食 15；手上 minecraft:iron_axe"
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        text = _texts(messages)
+        if "被河挡住" in text:
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "绕过河砍到原木了"})])
+        if "结束了" in text:
+            # 读通知里说的折起来那段：试过的办法。
+            return _resp(calls=[_call("maicraft_goal", {"operation": "get", "goal_id": 1, "path": "/attempts"})])
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
+
+    agent, llm, bus = await _start(server, script)
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
+    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+
+    server.finish(1, self_brief=brief, attempts=[{"tried": "从北边靠近树", "result": "被河挡住"}])
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+
+    notice = next(
+        str(message["content"])
+        for message in llm.seen[-1]
+        if message.get("role") == "user" and "结束了" in str(message.get("content"))
+    )
+    assert f"结束时：{brief}。" in notice
+    assert "result.folded" in notice and "maicraft_goal(operation=get, goal_id=1, path=" in notice
+    assert "完整结果" not in notice and "被河挡住" not in notice, "折起来的证据不进通知"
+    assert {"operation": "get", "goal_id": 1, "path": "/attempts"} in server.calls_to("goal")
+    assert "只在查询还在跑的目标" not in _texts(llm.seen[-1])
+    await agent.stop()
+
+
+async def test_reading_folded_evidence_by_path_is_never_taken_for_polling() -> None:
+    """带 path 的 get 读的是结束了的目标里折起来的证据：哪怕名单里还挂着这个编号，也不当成轮询并入等待。"""
+    server = FakeMaicraft()
+    agent, llm, bus = await _start(server, lambda messages: _resp("好"))
+    run = goal_run_of({"goal_id": 4, "ability": "maicraft:gather", "state": "running"})
+    assert run is not None
+    agent._track_goal(run)
+
+    assert agent._polls_running_goal("maicraft_goal", {"operation": "get", "goal_id": 4})
+    assert not agent._polls_running_goal("maicraft_goal", {"operation": "get", "goal_id": 4, "path": "/attempts"})
     await agent.stop()
 
 

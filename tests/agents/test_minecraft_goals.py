@@ -17,13 +17,15 @@ class _Recorder:
     def __init__(self) -> None:
         self.changed: List[GoalRun] = []
         self.after_world_change: List[bool] = []
+        self.self_briefs: List[str] = []
         self.gone: List[tuple[int, str]] = []
         self.body: List[Dict[str, Any]] = []
         self.decisions: List[GoalRun] = []
 
-    async def on_changed(self, run: GoalRun, after_world_change: bool) -> None:
+    async def on_changed(self, run: GoalRun, after_world_change: bool, self_brief: str) -> None:
         self.changed.append(run)
         self.after_world_change.append(after_world_change)
+        self.self_briefs.append(self_brief)
 
     async def on_gone(self, goal_id: int, reason: str) -> None:
         self.gone.append((goal_id, reason))
@@ -91,6 +93,25 @@ async def test_finished_goal_is_read_in_full_and_no_longer_tracked() -> None:
     assert finished.finished and finished.result_status == "done"
     assert finished.result["changes"][0]["count"] == 5
     assert not watch.tracking(goal_id)
+    assert recorder.self_briefs == [""], "Mod 没在结束事件上写自身摘要时交空串"
+
+
+async def test_the_self_brief_on_a_finished_event_rides_along_with_the_result() -> None:
+    """结束事件上那一行自身摘要只在事件里、查询里没有：随查询结果一起交给回调；提问这类事件不带。"""
+    server, recorder = FakeMaicraft(), _Recorder()
+    watch = _watch(server, recorder)
+    await watch.step()
+    goal_id = await _launch(server, watch)
+    server.ask(goal_id)
+    await watch.step()
+    brief = "在 minecraft:overworld 12, 64, -8；血 18，饱食 15；手上 minecraft:iron_pickaxe"
+    server.finish(goal_id, self_brief=f"  {brief}  ")
+
+    await watch.step()
+
+    assert [run.state for run in recorder.changed] == ["awaiting_answer", "finished"]
+    assert recorder.self_briefs == ["", brief]
+    assert "self_brief" not in (recorder.changed[-1].result or {}), "摘要不混进查询到的结果"
 
 
 async def test_questions_are_handed_over_and_the_goal_stays_tracked() -> None:
