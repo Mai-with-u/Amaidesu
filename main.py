@@ -182,29 +182,29 @@ def load_config() -> Tuple[ConfigService, Dict[str, Any], bool]:
     config_service = ConfigService(base_dir=_BASE_DIR)
     try:
         config, was_created = config_service.initialize()
-        # 装配清单日志：6 文件树（按 disk 存在性 + 各文件 [meta].version）
-        # ——不仅核对 config dict，也核对磁盘 6 文件齐整性，便于 QA 断言
-        assembly_files = ("agents", "collectors", "infra", "model", "storage", "tools")
+        # 装配清单日志：7 文件树（按 disk 存在性 + 各文件 [meta].version）
+        # ——不仅核对 config dict，也核对磁盘 7 文件齐整性，便于 QA 断言
+        assembly_files = ("agents", "collectors", "tools", "avatar", "model", "storage", "infra")
         config_dir = os.path.join(_BASE_DIR, "config")
         disk_present = [name for name in assembly_files if os.path.exists(os.path.join(config_dir, f"{name}.toml"))]
-        logger.info(f"配置装配清单（v2 6-file tree）：磁盘文件 {len(disk_present)}/6 个 → {disk_present}")
+        logger.info(f"配置装配清单（v2 7-file tree）：磁盘文件 {len(disk_present)}/7 个 → {disk_present}")
         return config_service, config, was_created
     except Exception as e:
-        logger.critical(f"配置文件初始化失败: {e}", exc_info=True)
-        logger.critical("请检查 config/ 目录下的配置文件格式，或删除 config/ 目录重新生成。")
+        logger.exception(f"配置文件初始化失败: {e}")
+        logger.error("请检查 config/ 目录下的配置文件格式，或删除 config/ 目录重新生成。")
         sys.exit(1)
 
 
 def validate_config(config: Dict[str, Any]) -> None:
     """验证配置完整性，缺失必要配置时给出明确错误提示。
 
-    配置按 6 文件树划分：
-    agents / collectors / infra / model / storage / tools。
+    配置按 7 文件树划分：
+    agents / collectors / tools / avatar / model / storage / infra。
     本函数只做"存在性 + 顶层类型"轻量检查；详细字段验证由各 ConfigSchema
     在组件构造阶段自动完成（fail-fast 由 Pydantic 保证）。
     """
     if not isinstance(config, dict):
-        logger.critical("配置根对象不是 dict（schema 漂移？）")
+        logger.error("配置根对象不是 dict（schema 漂移？）")
         return
 
     # infra.toml 段（tts / subtitle / events / interceptors / dashboard / logging / simulator）
