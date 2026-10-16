@@ -5,6 +5,9 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from src.modules.storage import SCHEMA_VERSION, list_expected_tables
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown, RundownSegment
@@ -15,6 +18,21 @@ from src.modules.time_utils import now_ms
 def _make_rundown(rundown_id: str, title: str = "测试流程单", expected_ms: int = 10_000) -> Rundown:
     segment = RundownSegment(id="s1", title="开场", task_description="打招呼", expected_ms=expected_ms)
     return Rundown(rundown_id=rundown_id, title=title, segments=[segment])
+
+
+# 环节标题契约校验（模型层，human / agent 路径统一受约束）
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n "])
+def test_segment_title_blank_is_rejected(blank: str) -> None:
+    with pytest.raises(ValidationError, match="环节标题不能为空"):
+        RundownSegment(id="s1", title=blank, task_description="打招呼", expected_ms=10_000)
+
+
+def test_segment_title_is_stripped_and_valid_title_passes() -> None:
+    seg = RundownSegment(id="s1", title="  开场问候  ", task_description="打招呼", expected_ms=10_000)
+    assert seg.title == "开场问候"
+    assert RundownSegment(id="s1", title="开场", task_description="", expected_ms=10_000).task_description == ""
 
 
 async def test_rundown_crud_round_trip_in_creation_order(store: SQLiteDatabase) -> None:

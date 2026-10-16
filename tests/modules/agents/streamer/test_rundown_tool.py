@@ -174,15 +174,21 @@ def test_renew_resets_the_segment_timer_and_is_rejected_after_completion() -> No
 
 
 def _rundown_with_blank_title() -> Rundown:
-    """中段标题全空白的流程单（编辑器漏填的脏数据形态）。"""
-    return Rundown(
+    """中段标题全空白的流程单（编辑器漏填的脏数据形态）。
+
+    标题非空校验已下沉模型层，构造后原地改脏以模拟绕过模型校验的鸭子实例
+    （如历史存量数据）——工具层守卫保留为纵深防御，正是拦这类形态。
+    """
+    rundown = Rundown(
         rundown_id="blank_rd",
         title="空标题流程单",
         segments=[
             RundownSegment(id="a", title="开场", task_description="目标", expected_ms=60_000),
-            RundownSegment(id="b", title="   ", task_description="目标", expected_ms=60_000),
+            RundownSegment(id="b", title="闲聊", task_description="目标", expected_ms=60_000),
         ],
     )
+    rundown.segments[1].title = "   "
+    return rundown
 
 
 @pytest.mark.parametrize("action", ["next", "goto"])

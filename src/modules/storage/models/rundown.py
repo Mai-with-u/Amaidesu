@@ -31,8 +31,9 @@
 - ``title``：标题
 - ``segments``：环节列表，非空
 
-校验仅两条：环节 ``id`` 在流程单内唯一；任一环节 ``min_duration_ms`` 不大于
-其 ``expected_ms``。无分支、无回退字段——"分支"是 Agent 看到情境中的后续
+校验：环节 ``id`` 在流程单内唯一；任一环节 ``min_duration_ms`` 不大于
+其 ``expected_ms``；环节 ``title`` strip 后非空（同时规范化首尾空格）。
+无分支、无回退字段——"分支"是 Agent 看到情境中的后续
 环节列表后自行 ``goto`` 的决定，不是数据结构。
 
 ``DEFAULT_RUNDOWN``
@@ -53,7 +54,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 __all__ = ["RundownSegment", "Rundown", "DEFAULT_RUNDOWN"]
@@ -93,6 +94,19 @@ class RundownSegment(BaseModel):
         default=None,
         description="备注（可选）；导演直录内容（如参考开场白），直接注入上下文",
     )
+
+    @field_validator("title")
+    @classmethod
+    def _title_must_be_non_blank(cls, value: str) -> str:
+        """环节标题非空校验（strip 后非空），并顺手规范化首尾空格。
+
+        标题会注入 Agent 情境文本并面向人展示，空标题环节无意义——契约层
+        统一拦截（WebUI 表单校验之外的第二道闸，human 手动路径同样受约束）。
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("环节标题不能为空（空串或纯空白）")
+        return stripped
 
 
 # ---------------------------------------------------------------------------
