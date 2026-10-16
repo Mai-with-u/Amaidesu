@@ -49,7 +49,6 @@ from src.modules.dashboard.schemas.component import (
 from src.modules.dashboard.schemas.event import (
     EventHistoryItem,
     EventListResponse,
-    EventStatsResponse,
 )
 from src.modules.dashboard.schemas.session import (
     SessionActionResponse,
@@ -115,7 +114,6 @@ __all__ = [
     "SubscribeResponse",
     "EventHistoryItem",
     "EventListResponse",
-    "EventStatsResponse",
     # 场次
     "SessionItem",
     "SessionListResponse",

@@ -294,13 +294,6 @@ async def get_history(
     )
 
 
-@router.get("/history/dates", response_model=List[str])
-async def get_available_dates() -> List[str]:
-    """获取有记录的日期列表（降序）"""
-    history_manager = get_global_request_history_manager()
-    return await history_manager.get_available_dates()
-
-
 @router.get("/history/models", response_model=List[str])
 async def get_available_models() -> List[str]:
     """获取历史记录中出现过的模型名（去重升序；供筛选下拉全量候选项）"""

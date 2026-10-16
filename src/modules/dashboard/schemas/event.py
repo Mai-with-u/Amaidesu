@@ -30,18 +30,6 @@ class EventListResponse(BaseModel):
     has_more: bool = Field(default=False, description="是否还有更早的事件（游标分页）")
 
 
-class EventStatsResponse(BaseModel):
-    """事件历史环形缓冲统计。"""
-
-    total: int = Field(default=0, description="缓冲内当前事件数")
-    capacity: int = Field(default=0, description="缓冲容量上限")
-    by_type: Dict[str, int] = Field(default_factory=dict, description="按事件类型计数")
-    by_level: Dict[str, int] = Field(default_factory=dict, description="按严重级别计数")
-    by_source: Dict[str, int] = Field(default_factory=dict, description="按数据源计数")
-    oldest_timestamp_ms: Optional[int] = Field(default=None, description="最早事件时刻（缓冲为空时为 null）")
-    newest_timestamp_ms: Optional[int] = Field(default=None, description="最新事件时刻（缓冲为空时为 null）")
-
-
 class WebSocketMessage(BaseModel):
     """WebSocket 消息格式"""
 

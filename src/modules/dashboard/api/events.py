@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Optional
 from fastapi import APIRouter, Depends, Query
 
 from src.modules.dashboard.dependencies import get_dashboard_server
-from src.modules.dashboard.schemas.event import EventListResponse, EventStatsResponse
+from src.modules.dashboard.schemas.event import EventListResponse
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -56,15 +56,3 @@ async def list_events(
         events = events[:limit]
 
     return EventListResponse(events=[e.model_dump() for e in events], total=len(events), has_more=has_more)
-
-
-@router.get("/events/stats", response_model=EventStatsResponse)
-async def get_event_stats(
-    server: ServerDep,
-) -> EventStatsResponse:
-    """获取事件统计信息"""
-    history_service = server.event_history
-    if not history_service:
-        return EventStatsResponse()
-
-    return EventStatsResponse.model_validate(history_service.get_statistics())

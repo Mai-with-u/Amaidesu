@@ -199,36 +199,6 @@ class EventHistoryService:
                 break
         return results
 
-    def get_statistics(self) -> Dict[str, Any]:
-        """聚合当前环形缓冲的统计信息(不读库)。"""
-        type_counts: Dict[str, int] = {}
-        level_counts: Dict[str, int] = {}
-        source_counts: Dict[str, int] = {}
-
-        oldest_ts: Optional[int] = None
-        newest_ts: Optional[int] = None
-
-        for record in self._buffer:
-            type_counts[record.type] = type_counts.get(record.type, 0) + 1
-            level_counts[record.level] = level_counts.get(record.level, 0) + 1
-            source_counts[record.source] = source_counts.get(record.source, 0) + 1
-
-            ts = record.timestamp_ms
-            if oldest_ts is None or ts < oldest_ts:
-                oldest_ts = ts
-            if newest_ts is None or ts > newest_ts:
-                newest_ts = ts
-
-        return {
-            "total": len(self._buffer),
-            "capacity": self.max_events,
-            "by_type": type_counts,
-            "by_level": level_counts,
-            "by_source": source_counts,
-            "oldest_timestamp_ms": oldest_ts,
-            "newest_timestamp_ms": newest_ts,
-        }
-
     def cleanup(self) -> None:
         """释放资源:清空环形缓冲。"""
         self._buffer.clear()
