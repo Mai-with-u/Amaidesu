@@ -168,6 +168,50 @@ async def test_proactive_is_gated_by_live_session_not_by_danmaku(rig_factory) ->
     assert agent.get_statistics()["total_proactive"] == baseline and agent._rundown_proactive_pending is True
 
 
+async def test_rundown_pending_survives_disabled_switch_and_fires_after_reenable(rig_factory) -> None:
+    """总开关关闭期间发生的环节切换信号保留，重开开关后下一 tick 补说开场白。"""
+    rig = await rig_factory([_planner_step()], proactive={"enabled": False})
+    agent = rig.agent
+    await rig.bus.emit(
+        CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, source="manual", title="测试场"), source="test"
+    )
+    agent._rundown_proactive_pending = True
+    await asyncio.sleep(0.2)
+    # 开关关闭期间信号不被静默消费
+    assert agent.get_statistics()["total_proactive"] == 0 and agent._rundown_proactive_pending is True
+
+    agent._proactive_trigger.set_enabled(True)
+    await asyncio.sleep(0.2)
+    assert agent._rundown_proactive_pending is False
+    assert agent.get_statistics()["total_proactive"] >= 1
+
+
+async def test_rundown_pending_survives_reminder_preemption(rig_factory) -> None:
+    """同一 tick 被更高优先级的运营递话抢占时环节切换信号保留，队列清空后下一 tick 触发。
+
+    决策执行器替换为空转桩，使递话不被送达消费（真实送达在任何决策窗取空队列），
+    借此把"被抢占的 tick"稳定放大成可观察窗口。
+    """
+    rig = await rig_factory([_planner_step()] * 8, proactive={"enabled": True})
+    agent = rig.agent
+    await rig.bus.emit(
+        CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, source="manual", title="测试场"), source="test"
+    )
+    agent._rundown_proactive_pending = True
+    agent._reminder_queue.append("后台留言")
+    real_execute = agent._execute_round
+    agent._execute_round = AsyncMock()  # 递话滞留队列，reminder 每 tick 都抢先
+    await asyncio.sleep(0.15)
+    # reminder 抢占每个 tick，rundown 信号保留待送达窗口让位之后
+    assert agent.get_statistics()["total_proactive"] >= 1 and agent._rundown_proactive_pending is True
+
+    agent._execute_round = real_execute
+    agent._reminder_queue.clear()
+    await asyncio.sleep(0.15)
+    assert agent._rundown_proactive_pending is False
+    assert agent.get_statistics()["total_proactive"] >= 2
+
+
 async def test_danmaku_reply_is_not_gated_by_live_session(rig_factory) -> None:
     rig = await rig_factory()
     assert rig.agent._live_active is False

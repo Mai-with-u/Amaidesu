@@ -1139,7 +1139,6 @@ class StreamerAgent(BaseAgent):
                 if not self._live_active:
                     return
                 rundown_pending = self._rundown_proactive_pending
-                self._rundown_proactive_pending = False
                 game_pending = self._game_decision_pending
                 self._game_decision_pending = False
                 reason = self._proactive_trigger.should_trigger(
@@ -1154,6 +1153,13 @@ class StreamerAgent(BaseAgent):
                     # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
                     reminder_pending=bool(self._reminder_queue),
                 )
+                # 环节切换信号在确认消费后才清零：should_trigger 里总开关关闭 /
+                # reminder 抢先返回时不会走到 rundown_pending 分支，信号保留，
+                # 重新满足条件后开场白还能补说（pending 分支优先级高于
+                # overdue/ready，返回 "rundown" 且 rundown_pending=True 时
+                # 必然源自本信号）。game_pending 同形态问题按任务范围界定暂不处理。
+                if rundown_pending and reason == "rundown":
+                    self._rundown_proactive_pending = False
                 self._external_proactive_pending = False
                 if reason is not None:
                     self._stats.total_proactive += 1
