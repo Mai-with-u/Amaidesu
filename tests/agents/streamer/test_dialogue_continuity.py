@@ -332,6 +332,8 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
         reset_prompt_manager()
     assert "进展只说有凭据的" in prompt and '让主播说"还在弄"' in prompt
     assert '"已经拿到"这类没凭据的细节' in prompt and "想讲具体进度就先查" in prompt
+    # 实播中主播三次说"吃鸡蛋回血"，游戏侧却明确上报过身上没有能吃的东西：消耗与放置类断言同样要有凭据
+    assert "消耗与放置的断言同样只说有凭据的" in prompt and "照实说没吃成、没放成即可" in prompt
 
 
 def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
