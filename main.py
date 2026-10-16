@@ -1297,14 +1297,17 @@ async def run_shutdown(
             # 异常消息可能为空（如 CancelledError），带上类型名与堆栈才有排查上下文
             logger.error(f"{name} 失败: {type(e).__name__}: {e}", exc=True)
 
-    # 关闭起点广播：趁 EventHistoryRecorder 还在订阅，先落 core.shutdown
+    # 关闭起点广播：趁 EventHistoryRecorder 还在订阅，先落 core.shutdown；
+    # 发出失败只记日志，不得阻断关闭链
     if event_bus is not None:
-        with contextlib.suppress(Exception):
+        try:
             await event_bus.emit(
                 CoreEvents.CORE_SHUTDOWN,
-                CoreShutdownPayload(event=CoreEvents.CORE_SHUTDOWN, message="Amaidesu 开始关闭"),
+                CoreShutdownPayload(event=CoreEvents.CORE_SHUTDOWN, message="Amaidesu 正在关闭"),
                 source="Main",
             )
+        except Exception:
+            logger.warning("core.shutdown 事件发出失败（关闭流程继续）", exc=True)
 
     if collector_manager is not None:
         logger.info("正在停止 CollectorManager...")
