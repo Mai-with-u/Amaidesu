@@ -237,6 +237,22 @@ export function isRoundLinkable(entry: ShowEntry): boolean {
   );
 }
 
+/** 简洁档（观众视角）可见的条目类型：对话内容本身 + 给阅读分段的结构行。
+ *  工具/决策/裁决/阶段/思考/游戏上报/里程碑等管线与诊断卡整卡排除——观众在
+ *  直播里看不到它们（实测游戏场次里程碑可达数十张，放进简洁档即淹没对话） */
+export const CONVERSATION_KINDS: ReadonlySet<EntryKind> = new Set([
+  'speech',
+  'danmaku',
+  'gift',
+  'super_chat',
+  'boundary',
+]);
+
+/** 简洁档过滤判定（控制台简洁档 / 未来观众面复用同一口径） */
+export function isConversationEntry(entry: ShowEntry): boolean {
+  return CONVERSATION_KINDS.has(entry.kind);
+}
+
 // 事件 → 时间线条目
 
 export function makeEntry(base: {

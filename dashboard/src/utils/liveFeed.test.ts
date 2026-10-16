@@ -23,6 +23,7 @@ import {
   fromDecision,
   guidanceOf,
   isChatProcessKind,
+  isConversationEntry,
   isRecord,
   isRoundLinkable,
   isSilentDecision,
@@ -41,6 +42,7 @@ import {
   toGameEntry,
   toolArgPills,
   userLabel,
+  type EntryKind,
   type ShowEntry,
 } from './liveFeed';
 
@@ -835,5 +837,28 @@ describe('响应卡（agent.replied）', () => {
     expect(entry!.kind).toBe('agent_reply');
     expect(entry!.text).not.toBe('');
     expect(isChatProcessKind('agent_reply')).toBe(true);
+  });
+});
+
+describe('isConversationEntry 简洁档口径', () => {
+  it('对话内容与结构行可见：发言/弹幕/礼物/SC/场次边界', () => {
+    for (const kind of ['speech', 'danmaku', 'gift', 'super_chat', 'boundary'] as EntryKind[]) {
+      expect(isConversationEntry(makeEntry({ id: 'e', kind, tsMs: 1, text: '' }))).toBe(true);
+    }
+  });
+
+  it('管线诊断卡整卡排除：工具/决策/裁决/阶段/思考/游戏上报/里程碑等', () => {
+    for (const kind of [
+      'tool',
+      'decision',
+      'verdict',
+      'stage',
+      'tts',
+      'thinking',
+      'game',
+      'milestone',
+    ] as EntryKind[]) {
+      expect(isConversationEntry(makeEntry({ id: 'e', kind, tsMs: 1, text: '' }))).toBe(false);
+    }
   });
 });

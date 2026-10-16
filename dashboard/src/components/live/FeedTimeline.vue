@@ -1,5 +1,8 @@
 <template>
-  <div class="feed-timeline" :class="{ 'is-compact': compact, 'is-chat': isChat }">
+  <div
+    class="feed-timeline"
+    :class="{ 'is-compact': compact, 'is-chat': isChat, 'is-simple': simple }"
+  >
     <div v-if="entries.length === 0" class="stage-empty">
       <el-icon class="stage-empty-icon"><Monitor /></el-icon>
       <p class="stage-empty-text">{{ emptyText }}</p>
@@ -619,6 +622,9 @@ interface Props {
   /** 决策轮可点：带轮次 ID 的决策/裁决/工具/发言行点击后上抛 roundClick
    *  （默认关闭——首页复用本组件时行不可点） */
   roundClickable?: boolean;
+  /** 简洁档：藏卡面上的诊断胶囊行（缓存/Token/模型/上下文/完整请求），
+   *  只留内容本体——管线诊断卡由页面层条目过滤排除，这里兜卡面上的统计胶囊 */
+  simple?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -626,6 +632,7 @@ const props = withDefaults(defineProps<Props>(), {
   layout: 'timeline',
   emptyText: '静候消息与决策',
   roundClickable: false,
+  simple: false,
 });
 
 const emit = defineEmits<{
@@ -1857,6 +1864,11 @@ async function copyText(text: string): Promise<void> {
   margin: 2px 0 0;
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+/* 简洁档：藏诊断胶囊行（缓存/Token/模型/上下文/完整请求），只留内容本体 */
+.feed-timeline.is-simple .d-meta {
+  display: none;
 }
 
 /* 紧凑模式（首页缩略视图）                                        */

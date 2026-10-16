@@ -22,6 +22,11 @@
         {{ simulatorChip.label }}
       </router-link>
       <span class="grow" />
+      <!-- 视图档位：完整=运营全量；简洁=纯浏览时间线（挂第二屏纯观看） -->
+      <el-radio-group v-model="viewMode" size="small" class="view-switch">
+        <el-radio-button value="full">完整</el-radio-button>
+        <el-radio-button value="simple">简洁</el-radio-button>
+      </el-radio-group>
       <span class="show-feed" :class="{ 'is-dead': !wsConnected }">
         {{ wsConnected ? '实时' : '连接中断' }}
       </span>
@@ -34,10 +39,12 @@
         <header class="sessions-head">
           <h2 class="sessions-title">场次</h2>
           <span class="grow" />
-          <el-button size="small" type="primary" @click="openSession">开启</el-button>
-          <el-button size="small" :disabled="!activeExplicitSession" @click="closeSession"
-            >结束</el-button
-          >
+          <template v-if="isFullMode">
+            <el-button size="small" type="primary" @click="openSession">开启</el-button>
+            <el-button size="small" :disabled="!activeExplicitSession" @click="closeSession"
+              >结束</el-button
+            >
+          </template>
         </header>
         <div class="sessions-filters">
           <el-input v-model="sessionQuery" size="small" placeholder="搜索场次标题" clearable />
@@ -114,7 +121,11 @@
           <span v-else class="slate-idle">流程单未运行或未接入</span>
         </section>
 
-        <div v-if="showTestModeNotice" class="test-mode-notice" title="正式直播请先在左侧开启场次">
+        <div
+          v-if="showTestModeNotice && isFullMode"
+          class="test-mode-notice"
+          title="正式直播请先在左侧开启场次"
+        >
           测试模式：未开启场次，消息仅在内存中流转不落库
         </div>
 
@@ -162,7 +173,7 @@
                 游戏 Agent
               </el-check-tag>
             </span>
-            <template v-if="sessionMode === 'live'">
+            <template v-if="sessionMode === 'live' && isFullMode">
               <!-- 显示模式：时间线=单列沿脊线；会话=观众左/主播右气泡对齐 -->
               <el-radio-group v-model="displayMode" size="small">
                 <el-radio-button value="timeline">时间线</el-radio-button>
@@ -176,7 +187,11 @@
                 清空
               </el-button>
             </template>
-            <el-button v-else size="small" type="primary" @click="backToLive">回到实时</el-button>
+            <!-- 回到实时只跟场次模式挂钩（回看态导航）；不能 v-else 接前一 template——
+                 那里复合了 isFullMode，简洁档实时态会误显本按钮 -->
+            <el-button v-if="sessionMode !== 'live'" size="small" type="primary" @click="backToLive"
+              >回到实时</el-button
+            >
           </header>
 
           <div class="stage-body">
@@ -193,14 +208,11 @@
                 </el-button>
               </div>
               <FeedTimeline
-                :entries="entries"
+                :entries="displayEntries"
                 :layout="displayMode"
                 round-clickable
-                :empty-text="
-                  sessionMode === 'live'
-                    ? '静候消息与决策——注入一条弹幕试试'
-                    : '该场次暂无可回看条目'
-                "
+                :simple="!isFullMode"
+                :empty-text="timelineEmptyText"
                 @round-click="jumpToAgentRound"
               />
             </div>
@@ -218,7 +230,9 @@
           <!-- minecraft 目标的进行中任务卡条：发话→看任务→取消就地闭环。
                主播无任务账本、无进行中任务时整条隐藏，不占控制台空间 -->
           <div
-            v-if="interventionTarget === MINECRAFT_AGENT_NAME && runningTasks.length > 0"
+            v-if="
+              isFullMode && interventionTarget === MINECRAFT_AGENT_NAME && runningTasks.length > 0
+            "
             class="task-strip"
           >
             <ul class="task-strip-list">
@@ -247,7 +261,7 @@
                共享输入条（Tab/Shift+Tab 切模式、Enter 发送、↑↓ 回溯历史）。
                模式与传输随目标切换，主播目标复用既有行为（昵称插槽、在途 chip）；
                强制回应为后台执行：发送后立即可继续输入，在途状态由状态 chip 承载 -->
-          <div v-if="sessionMode === 'live'" class="input-dock">
+          <div v-if="sessionMode === 'live' && isFullMode" class="input-dock">
             <div class="input-target">
               <span class="input-target-label">发给</span>
               <el-radio-group v-model="interventionTarget" size="small">
@@ -319,6 +333,13 @@
  *   "思考"按 llm_request_id 从 LLM 请求历史懒取 reasoning_content
  * 渲染字段一律取自后端真实 Payload（src/modules/events/payloads/），不臆造字段。
  *
+ * 视图档位（顶栏切换，useConsoleViewMode 持久化）：完整=运营全量；简洁=
+ * 观众视角的纯浏览——藏起干预输入条/任务条/场次生命周期开关/暂停清空等
+ * 操作件，时间线内容也过滤成对话流（发言/弹幕/礼物/场次边界，
+ * 口径见 liveFeed.isConversationEntry），工具/决策/阶段等管线诊断卡整卡
+ * 不出现、发言卡上的 LLM 统计胶囊一并隐藏（FeedTimeline simple 档）。
+ * 实时与回看两种场次模式都适用。
+ *
  * 页面私有逻辑按块拆在 composables/live/：场次侧边栏（useLiveSessions）、
  * 思考流（useThinkingStream）、时间线内容合成（useLiveTimeline）、顶栏/环节
  * 徽章（useLiveStatus）、干预输入条（useInterventionBar）、滚动跟随接线
@@ -344,9 +365,10 @@ import {
 import { agentRoundLocation } from '@/composables/useAgentDeepLink';
 import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
+import { useConsoleViewMode } from '@/composables/live/useConsoleViewMode';
 import { confirmAction } from '@/utils/confirmAction';
 import { formatTimeHMS } from '@/utils/format';
-import { MAX_ENTRIES, relativeTime, type ShowEntry } from '@/utils/liveFeed';
+import { MAX_ENTRIES, isConversationEntry, relativeTime, type ShowEntry } from '@/utils/liveFeed';
 import type { TaskCard } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 
@@ -400,7 +422,23 @@ const {
 
 const { rundownBanner, stageChip, simulatorChip, loadSimulatorStatus } = useLiveStatus();
 
-const { scrollRef, unseen, onScroll, jumpToLatest, resetUnseen } = useTimelineScroll(entries);
+// 视图档位：完整=上图全量运营面；简洁=观众视角的纯浏览——除藏运营操作件外，
+// 时间线内容本身也过滤成对话流（发言/弹幕/礼物/场次边界），
+// 工具/决策/阶段等管线诊断卡整卡不出现
+const { viewMode, isFullMode } = useConsoleViewMode();
+
+/** 喂给时间线的展示条目：完整档原样；简洁档按对话口径过滤（口径在 liveFeed.isConversationEntry） */
+const displayEntries = computed<ShowEntry[]>(() =>
+  isFullMode.value ? entries.value : entries.value.filter(isConversationEntry),
+);
+
+const timelineEmptyText = computed(() => {
+  if (sessionMode.value === 'live') return '静候消息与决策——注入一条弹幕试试';
+  return isFullMode.value ? '该场次暂无可回看条目' : '简洁档只显示发言与弹幕——该场次暂无对话内容';
+});
+
+const { scrollRef, unseen, onScroll, jumpToLatest, resetUnseen } =
+  useTimelineScroll(displayEntries);
 
 const sendBarRef = ref<InstanceType<typeof InterventionInput> | null>(null);
 
@@ -606,6 +644,12 @@ onMounted(() => {
 .sim-chip:hover {
   border-color: var(--color-primary);
   color: var(--color-primary);
+}
+
+/* --- 视图档位切换 --- */
+.view-switch {
+  flex-shrink: 0;
+  align-self: center;
 }
 
 /* 双栏：场次侧边栏 + 主区                                        */
