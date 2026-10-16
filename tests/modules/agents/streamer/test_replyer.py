@@ -34,7 +34,6 @@ def _plan(should_reply: bool = True, target: str = "m1", topic_summary: str = "�
         target=target,
         topic_summary=topic_summary,
         reply_guidance="回应夸奖，带点得意",
-        confidence=0.9,
     )
 
 

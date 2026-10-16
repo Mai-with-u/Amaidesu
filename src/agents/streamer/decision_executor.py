@@ -62,7 +62,6 @@ _SILENT_REASON_LABEL: Dict[str, str] = {
     "llm_failed": "LLM 返回失败",
     "prompt_render_failed": "提示词渲染失败",
     "assembler_failed": "上下文组装失败",
-    "low_confidence": "置信度不足",
 }
 
 
@@ -174,7 +173,6 @@ class DecisionRoundExecutor:
                         "reply_to",
                         "topic_summary",
                         "reply_guidance",
-                        "confidence",
                         "silent_reason",
                     }
                     | None,
@@ -182,7 +180,7 @@ class DecisionRoundExecutor:
                     "emotion": str | None,
                     "utterance_id": str | None,
                     "reply_to_message_id": str | None,  # 回复关联键
-                    "silent_reason": str | None,  # low_confidence=低置信度压制
+                    "silent_reason": str | None,  # 静默原因码（natural/max_steps/llm_error 等）
                     "error": str | None,  # planner/reply 失败原因，成功为 None
                     "planner_raw": str,  # Planner LLM 原始输出（完整内容）
                     "llm_request_id": str | None,  # LLM 请求历史指针
@@ -326,7 +324,6 @@ class DecisionRoundExecutor:
             "reply_to": outcome.get("reply_to"),
             "topic_summary": outcome.get("topic_summary", ""),
             "reply_guidance": outcome.get("reply_guidance", ""),
-            "confidence": outcome.get("confidence"),
             "silent_reason": outcome.get("silent_reason"),
         }
         result["reply_to_message_id"] = outcome.get("reply_to")
@@ -475,7 +472,6 @@ class DecisionRoundExecutor:
             ),
             topic_summary=str((result.get("plan") or {}).get("topic_summary", "") or ""),
             reply_guidance=str((result.get("plan") or {}).get("reply_guidance", "") or ""),
-            confidence=float((result.get("plan") or {}).get("confidence", 0.0) or 0.0),
             reply_to_message_id=str(reply_to) if reply_to else None,
             silent_reason=str(silent) if silent else None,
             speech=(str(result["speech"]) if result.get("speech") else None),

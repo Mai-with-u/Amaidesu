@@ -1038,7 +1038,6 @@ class StreamerAgent(BaseAgent):
         - **proactive=True 时绕过 ProactiveTrigger 四道限流**（proactive_enabled /
           防接龙间隔 / 每小时上限 / 话题要求）——测试"主播主动开口"不受配置卡死；
           测限流本身请走 ``trigger_external_proactive``（真实链路）；
-        - ``forced=True`` 时 Planner 的低置信度降级豁免（与 SC/礼物强制响应同语义）。
 
         与真实链路的一致性（核心承诺）：Planner / Replyer / 发言管线 /
         RoomState / 限流记账全部走同一份代码——本方法不复制任何决策编排逻辑，

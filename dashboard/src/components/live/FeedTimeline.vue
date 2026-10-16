@@ -105,9 +105,6 @@
             <span class="act-kind">决策</span>
             <span class="d-internal" title="主播的内部盘算，不会作为台词念出来">内部</span>
             <code v-if="entry.roundId" class="d-round mono">{{ entry.roundId }}</code>
-            <span v-if="confidenceLabel(entry)" class="d-conf mono">{{
-              confidenceLabel(entry)
-            }}</span>
             <span
               v-if="entry.badge"
               class="act-badge"
@@ -593,7 +590,6 @@ import {
   agentGroupOf,
   batchSizeOf,
   buildChatRows,
-  confidenceLabel,
   guidanceOf,
   isChatProcessKind,
   isRoundLinkable,

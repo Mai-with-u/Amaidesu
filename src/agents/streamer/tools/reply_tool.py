@@ -11,7 +11,7 @@
 工具契约：
 - kind: ``"sync"``（gather 等齐结果；Replyer 是一次性 LLM 调用，不是 fire-and-forget）
 - provider: ``"streamer"``（主播 Agent 自有工具；全名 streamer_reply）
-- arguments: ``{topic_summary, emotion, intensity, reply_guidance?, target?, confidence?}``
+- arguments: ``{topic_summary, emotion, intensity, reply_guidance?, target?}``
 - 失败兜底：ToolExecutionResult(success=False, error_message=...)
 """
 
@@ -75,12 +75,6 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
             "minimum": 0.0,
             "maximum": 1.0,
             "description": "Planner 决定本句情绪强度（0.0-1.0）",
-        },
-        "confidence": {
-            "type": "number",
-            "minimum": 0.0,
-            "maximum": 1.0,
-            "description": "Planner 决策置信度（0.0-1.0；可空）",
         },
     },
     "required": ["topic_summary", "emotion", "intensity"],
@@ -171,11 +165,6 @@ class ReplyToolProvider(BaseToolProvider):
         if event_bus is None:
             return
         try:
-            confidence_raw = args.get("confidence", 0.9)
-            try:
-                confidence = float(confidence_raw) if confidence_raw is not None else 0.9
-            except (TypeError, ValueError):
-                confidence = 0.9
             target = args.get("target")
             await event_bus.emit(
                 CoreEvents.PLANNER_VERDICT,
@@ -183,7 +172,6 @@ class ReplyToolProvider(BaseToolProvider):
                     round_id=round_id,
                     topic_summary=str(args.get("topic_summary", "") or ""),
                     reply_guidance=str(args.get("reply_guidance", "") or ""),
-                    confidence=min(1.0, max(0.0, confidence)),
                     target=target if isinstance(target, str) else None,
                 ),
                 source="reply_tool",
@@ -226,7 +214,7 @@ class ReplyToolProvider(BaseToolProvider):
         """reply 工具的 invoke（ToolProvider 协议）。
 
         契约：
-        - 接收 invocation.arguments：topic_summary / reply_guidance / target / confidence / emotion / intensity
+        - 接收 invocation.arguments：topic_summary / reply_guidance / target / emotion / intensity
         - 把意图参数适配为 DecisionPlan(should_reply=True)（Replyer.generate 接口形态）
         - 调用 Replyer.generate
         - 返回 ToolExecutionResult（成功时 structured_content 为结果 dict，失败时 error_message 非空）
@@ -247,11 +235,6 @@ class ReplyToolProvider(BaseToolProvider):
         reply_guidance = str(args.get("reply_guidance", "") or "")
         raw_target = args.get("target", None)
         target = raw_target if isinstance(raw_target, str) else None
-        confidence_raw = args.get("confidence", 0.9)
-        try:
-            confidence = float(confidence_raw) if confidence_raw is not None else 0.9
-        except (TypeError, ValueError):
-            confidence = 0.9
 
         # 本轮弹幕批由 Planner 调用前注入；主动发言或脱离 Planner 调用时为空列表
         batch: List[Any] = list(self._round_batch)
@@ -263,7 +246,6 @@ class ReplyToolProvider(BaseToolProvider):
                 target=target,
                 topic_summary=topic_summary,
                 reply_guidance=reply_guidance,
-                confidence=confidence,
                 emotion=args.get("emotion", "neutral"),
                 intensity=args.get("intensity", 0.5),
             )
@@ -325,7 +307,6 @@ class ReplyToolProvider(BaseToolProvider):
                     "target": plan.target,
                     "topic_summary": plan.topic_summary,
                     "reply_guidance": plan.reply_guidance,
-                    "confidence": plan.confidence,
                 },
                 "llm_request_id": result.get("llm_request_id"),
             },

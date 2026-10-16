@@ -31,7 +31,7 @@ class StreamerTestDecisionRequest(BaseModel):
     """
 
     batch: List[StreamerTestDanmakuItem] = Field(default_factory=list)
-    forced: bool = Field(default=False, description="强制响应（豁免 Planner 低置信度降级）")
+    forced: bool = Field(default=False, description="强制响应（SC/礼物/上舰）")
     proactive: bool = Field(default=False, description="主动发言模式（空批次，绕过限流）")
 
 

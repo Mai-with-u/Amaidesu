@@ -85,7 +85,7 @@ _DECISION = {
     "success": True,
     "trigger_reason": "dashboard:debug_test",
     "proactive": False,
-    "plan": {"should_reply": True, "target": "debug_测试观众", "topic_summary": "打招呼", "confidence": 0.87},
+    "plan": {"should_reply": True, "target": "debug_测试观众", "topic_summary": "打招呼"},
     "speech": "你好呀，欢迎来到直播间！",
     "emotion": "happy",
     "utterance_id": "utt_1700000000000_1",
@@ -128,7 +128,7 @@ def test_test_decision_success_and_forwarded_arguments(streamer_client) -> None:
     agent = FakeStreamerAgent(debug_result=_DECISION)
     body = streamer_client(agent).post("/api/v1/streamer/test-decision", json={"batch": _BATCH, "forced": True}).json()
 
-    assert body["success"] is True and body["plan"]["should_reply"] is True and body["plan"]["confidence"] == 0.87
+    assert body["success"] is True and body["plan"]["should_reply"] is True
     assert (body["speech"], body["emotion"], body["elapsed_ms"]) == ("你好呀，欢迎来到直播间！", "happy", 1234)
     assert body["utterance_id"].startswith("utt_")
     assert agent.debug_calls == [{"batch": _BATCH, "forced": True, "proactive": False}]

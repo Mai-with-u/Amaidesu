@@ -161,7 +161,7 @@ async def test_replyer_renders_chapter_line_verbatim() -> None:
     chapter = TimelineTurn(role="user", content="[前情提要·第 1 章]\n主播: 答应唱歌", message_type=CHAPTER_MESSAGE_TYPE)
     note = note_turn("游戏·minecraft·report", "交付: 木头砍好了", 0)
     assert note.message_type == GAME_MESSAGE_TYPE and note.content == "[游戏·minecraft·report] 交付: 木头砍好了"
-    plan = DecisionPlan(should_reply=True, target="", topic_summary="唱歌", reply_guidance="兑现", confidence=0.9)
+    plan = DecisionPlan(should_reply=True, target="", topic_summary="唱歌", reply_guidance="兑现")
     await replyer.generate(plan, [], history=[chapter, note])
     dialogue = next(
         call.kwargs["dialogue_prompt"] for call in prompt.render.call_args_list if "dialogue_prompt" in call.kwargs

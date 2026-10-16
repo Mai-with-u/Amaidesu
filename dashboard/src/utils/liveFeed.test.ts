@@ -17,7 +17,6 @@ import {
   batchSizeOf,
   callerSourceLabel,
   chatProcessSummary,
-  confidenceLabel,
   decisionDetail,
   formatAmount,
   fromDecision,
@@ -383,19 +382,6 @@ describe('planner.decision → 决策卡四态', () => {
     expect(entry).toMatchObject({ badge: '回应', text: '聊聊皮肤', note: '' });
   });
 
-  it('低置信压制：固定文案 + 静默徽标', () => {
-    const entry = fromDecision('d1', 1, {
-      should_reply: false,
-      silent_reason: 'low_confidence',
-      error_message: '置信不足',
-    });
-    expect(entry).toMatchObject({
-      badge: '静默·压制',
-      text: 'LLM 想回应，但置信度过低——被裁决压制为静默',
-      note: '置信不足',
-    });
-  });
-
   it('普通沉默：带主题时正文点名主题', () => {
     const withTopic = fromDecision('d1', 1, { should_reply: false, topic_summary: '聊天气' });
     expect(withTopic).toMatchObject({ badge: '沉默', text: '决定不回应（聊天气）' });
@@ -545,17 +531,11 @@ describe('rundown.changed / game.*', () => {
 describe('决策卡 detail 取值助手', () => {
   const entry = fromDecision('d1', 1, {
     should_reply: false,
-    confidence: 0.85,
     reply_guidance: '别接这个话',
     batch: [{}, {}, {}],
     planner_duration_ms: 1200,
     reply_duration_ms: 800,
     planner_raw: 'RAW',
-  });
-
-  it('confidenceLabel 两位小数；缺失回空串', () => {
-    expect(confidenceLabel(entry)).toBe('置信 0.85');
-    expect(confidenceLabel(fromDecision('d', 1, {}))).toBe('');
   });
 
   it('isSilentDecision：未回应且未失败即静默', () => {

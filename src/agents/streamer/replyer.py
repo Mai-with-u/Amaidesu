@@ -372,7 +372,6 @@ def _render_plan_text(plan: DecisionPlan, *, target_text: str = "") -> str:
         f"{target_line}"
         f"topic_summary: {plan.topic_summary or '（无特定话题）'}\n"
         f"reply_guidance: {plan.reply_guidance or '（无额外指引）'}\n"
-        f"confidence: {plan.confidence:.2f}"
     )
 
 

@@ -27,7 +27,7 @@
       </ul>
     </details>
 
-    <!-- 说或不说：失败 / 回应（含发言与情绪）/ 沉默（含原因着色与置信度） -->
+    <!-- 说或不说：失败 / 回应（含发言与情绪）/ 沉默（含原因着色） -->
     <div v-if="card.error" class="round-verdict is-error">
       <span class="verdict-tag">失败</span>
       <p class="verdict-text">{{ card.error }}</p>
@@ -47,9 +47,6 @@
         :title="card.silentReason"
       >
         {{ silentReasonLabel }}
-      </span>
-      <span v-if="card.confidence !== undefined" class="round-conf mono">
-        置信 {{ card.confidence.toFixed(2) }}
       </span>
     </div>
 
@@ -108,9 +105,8 @@ const props = withDefaults(
 const nowMs = useNowTick();
 const timeLabel = computed(() => relativeTime(nowMs.value, props.card.timestampMs));
 
-/** 静默原因着色：低置信度黄 / LLM 异常红 / 超步数橙 / 其余中性 */
+/** 静默原因着色：LLM 异常红 / 超步数橙 / 其余中性 */
 const SILENT_TONE: Record<string, string> = {
-  low_confidence: 'is-warn',
   llm_error: 'is-danger',
   llm_failed: 'is-danger',
   max_steps: 'is-orange',
@@ -125,7 +121,6 @@ const SILENT_REASON_LABEL: Record<string, string> = {
   llm_failed: 'LLM 返回失败',
   prompt_render_failed: '提示词渲染失败',
   assembler_failed: '上下文组装失败',
-  low_confidence: '置信度不足',
 };
 const silentReasonLabel = computed(() => {
   const reason = props.card.silentReason ?? '';

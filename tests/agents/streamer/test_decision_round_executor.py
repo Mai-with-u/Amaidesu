@@ -20,7 +20,6 @@ _OKAY_OUTCOME = {
     "reply_to": "m1",
     "topic_summary": "闲聊",
     "reply_guidance": "热情一点",
-    "confidence": 0.9,
     "silent_reason": None,
     "reply_duration_ms": 12,
     "reply_payload": {"speech": "你好呀", "emotion": {"name": "happy", "intensity": 0.5}, "actions": []},
@@ -168,7 +167,7 @@ async def test_planner_exception_short_circuits_with_error_prefix():
 @pytest.mark.parametrize(
     ("outcome", "error", "planner_failures", "replyer_failures"),
     [
-        ({"replied": False, "silent_reason": "low_confidence", "reply_failures": 2, "error": None}, None, 0, 2),
+        ({"replied": False, "silent_reason": "max_steps", "reply_failures": 2, "error": None}, None, 0, 2),
         (
             {"replied": False, "reply_failures": 0, "error": "reply tool exploded"},
             "planner_failed: reply tool exploded",

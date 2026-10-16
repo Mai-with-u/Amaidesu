@@ -50,7 +50,6 @@ async def test_danmaku_mode_returns_full_view() -> None:
         "reply_to": "debug_测试观众",
         "topic_summary": "打招呼",
         "reply_guidance": "友好回应",
-        "confidence": 0.9,
         "speech": "欢迎来到直播间！",
         "emotion": "happy",
         "reply_payload": _REPLY,
@@ -61,7 +60,7 @@ async def test_danmaku_mode_returns_full_view() -> None:
     assert (result["success"], result["error"], result["trigger_reason"]) == (True, None, "dashboard:debug_test")
     assert result["elapsed_ms"] >= 0 and result["utterance_id"].startswith("utt_")
     plan = result["plan"]
-    assert (plan["should_reply"], plan["confidence"], plan["topic_summary"]) == (True, 0.9, "打招呼")
+    assert (plan["should_reply"], plan["topic_summary"]) == (True, "打招呼")
     assert (result["speech"], result["emotion"]) == ("欢迎来到直播间！", "happy")
 
     call = agent._planner.plan.await_args

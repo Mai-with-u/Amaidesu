@@ -464,7 +464,7 @@ class Planner:
             outcome dict：
             - replied: 是否完成说话（reply 工具成功）
             - speech / emotion / emotion_intensity: reply 产出（StreamerAgent 送发言管线）
-            - target / reply_to / topic_summary / reply_guidance / confidence: reply 意图
+            - target / reply_to / topic_summary / reply_guidance: reply 意图
             - silent_reason: 未说话原因（natural=自然终止 / max_steps=超步 / llm_error 等）
             - steps / tool_trace: 循环步数与执行过的工具名序列（可观测）
             - error: 异常原因（无异常为 None）
@@ -492,7 +492,6 @@ class Planner:
             "reply_to": None,
             "topic_summary": "",
             "reply_guidance": "",
-            "confidence": None,
             "silent_reason": None,
             "steps": 0,
             "tool_trace": [],
@@ -1019,10 +1018,6 @@ class Planner:
         outcome["target"] = metadata.get("target") or args.get("target")
         outcome["topic_summary"] = str(args.get("topic_summary", "") or "")
         outcome["reply_guidance"] = str(args.get("reply_guidance", "") or "")
-        try:
-            outcome["confidence"] = float(args.get("confidence")) if args.get("confidence") is not None else None
-        except (TypeError, ValueError):
-            outcome["confidence"] = None
         reply_to = args.get("target")
         outcome["reply_to"] = reply_to if isinstance(reply_to, str) and reply_to else None
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到

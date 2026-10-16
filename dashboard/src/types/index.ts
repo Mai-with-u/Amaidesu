@@ -261,14 +261,13 @@ export interface StreamerDecisionPlan {
   target?: string | null;
   topic_summary?: string;
   reply_guidance?: string;
-  confidence?: number;
 }
 
 /**
  * `POST /api/v1/streamer/test-decision` 请求体。
  *
  * `batch` 与 `proactive` 互斥：主动发言由房间状态驱动，不接受弹幕批次；
- * `forced=true` 豁免 Planner 低置信度降级（与 SC/礼物强制响应同语义）。
+ * `forced=true` 强制响应（SC/礼物/上舰）。
  */
 export interface StreamerTestDecisionRequest {
   batch?: StreamerTestDanmaku[];

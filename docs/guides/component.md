@@ -880,7 +880,7 @@ class MyToolProvider(ToolProvider):
 7. _make_two_stage_decision(batch) → Planner.plan(batch, llm=planner_llm 默认 llm)
          ↓ Planner ReAct 循环：chat_messages + 工具列表（ToolRegistry 全量 + reply 局部工具）
          ↓ 每步 tool_calls 串行执行（查游戏状态/记忆等 → 观察 tool role 作为观察返回），max_steps=8 防失控
-8. LLM 调 reply(意图参数 {topic_summary, reply_guidance, target, confidence})
+8. LLM 调 reply(意图参数 {topic_summary, reply_guidance, target})
          ↓ Planner 循环内直连 _reply_provider.invoke（局部工具，不进 ToolRegistry）
 9. ReplyToolProvider.invoke(invocation)
          ↓ 注入依赖：persona / history / rundown

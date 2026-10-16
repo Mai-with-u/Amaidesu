@@ -24,7 +24,6 @@ function decisionData(overrides: Record<string, unknown> = {}): Record<string, u
     proactive: false,
     batch: [],
     should_reply: false,
-    confidence: 0.0,
     planner_raw: '',
     planner_duration_ms: 0,
     reply_duration_ms: 0,
@@ -57,13 +56,11 @@ describe('groupDecisionRounds', () => {
         'planner.decision',
         decisionData({
           should_reply: false,
-          silent_reason: 'low_confidence',
-          confidence: 0.42,
+          silent_reason: 'max_steps',
         }),
       ),
     ]);
-    expect(cards[0].silentReason).toBe('low_confidence');
-    expect(cards[0].confidence).toBe(0.42);
+    expect(cards[0].silentReason).toBe('max_steps');
     expect(cards[0].speech).toBeUndefined();
   });
 

@@ -35,15 +35,15 @@ class PlannerBatchItem(BaseModel):
 @register_event(CoreEvents.PLANNER_DECISION)
 class PlannerDecisionPayload(BasePayload):
     """
-    决策轮记录事件 Payload（每轮两阶段决策结束发一条，成功/失败/降级全覆盖）
+    决策轮记录事件 Payload（每轮两阶段决策结束发一条，成功/失败/静默全覆盖）
 
     事件名：``planner.decision``
     发布者：StreamerAgent（``_make_two_stage_decision`` 收口处）
     订阅者：观察器（决策卡渲染）、事件历史（回看）、互动分析（reply_to_message_id）
 
-    该事件是"主播为什么这么做"的可观测事实：触发原因、决策结论（含低置信度
-    被裁决压制的标记）、失败原因（LLM/解析/工具）、产出（发言/情绪/utterance）、
-    耗时与 LLM 请求历史指针全部在这条事件里，观察者无需翻日志。
+    该事件是"主播为什么这么做"的可观测事实：触发原因、决策结论、失败原因
+    （LLM/解析/工具）、产出（发言/情绪/utterance）、耗时与 LLM 请求历史指针
+    全部在这条事件里，观察者无需翻日志。
 
     Attributes:
         round_id: 决策轮次 ID（格式 ``rnd_{epoch_ms}_{seq}``，进程内单调递增），
@@ -57,10 +57,9 @@ class PlannerDecisionPayload(BasePayload):
         target: 决策面向的对象（用户名 / "all"）
         topic_summary: 话题摘要
         reply_guidance: 给 Replyer 的方向性指引
-        confidence: 决策置信度 [0.0, 1.0]
         reply_to_message_id: 决策所回复弹幕的 message_id（Planner 输出；互动分析关联键）
-        silent_reason: 静默原因标记。``low_confidence``=LLM 想回但被低置信度裁决
-            压制（与"LLM 自己决定沉默"区分开）；None=无压制。
+        silent_reason: 静默原因标记（natural=自然终止 / max_steps=超步 /
+            llm_error=LLM 调用异常等）；None=已发言。
         speech: 主播发言文本（成功且有发言时）
         emotion: 关联情绪标签（可选）
         utterance_id: 发言实例 ID（成功且有发言时）
@@ -86,14 +85,13 @@ class PlannerDecisionPayload(BasePayload):
     target: Optional[str] = Field(default=None, description="决策面向的对象")
     topic_summary: str = Field(default="", description="话题摘要")
     reply_guidance: str = Field(default="", description="给 Replyer 的方向性指引")
-    confidence: float = Field(default=0.0, description="决策置信度 [0.0, 1.0]")
     reply_to_message_id: Optional[str] = Field(
         default=None,
         description="决策所回复弹幕的 message_id（互动分析关联键）",
     )
     silent_reason: Optional[str] = Field(
         default=None,
-        description="静默原因标记：low_confidence=低置信度裁决压制；None=无压制",
+        description="静默原因标记：natural/max_steps/llm_error 等；None=已发言",
     )
     speech: Optional[str] = Field(default=None, description="主播发言文本（成功且有发言时）")
     emotion: Optional[str] = Field(default=None, description="关联情绪标签（可选）")
@@ -155,7 +153,7 @@ class PlannerVerdictPayload(BasePayload):
     订阅者：观察器（裁决卡实时渲染）
 
     与 ``planner.decision`` 的分工：
-    - verdict = 裁决发生时刻的即时事实（回应意图 + 置信度），观察者实时可见，
+    - verdict = 裁决发生时刻的即时事实（回应意图），观察者实时可见，
       出现于查证工具卡之后、表达生成之前
     - decision = 轮末统计汇总（耗时/原始输出/请求指针），观察器按 round_id
       回填到裁决卡，不渲染重复卡片；沉默轮无 verdict，decision 独立成卡
@@ -165,7 +163,6 @@ class PlannerVerdictPayload(BasePayload):
         live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
         topic_summary: 话题摘要（Planner 的 reply 调用参数）
         reply_guidance: 给 Replyer 的方向性指引
-        confidence: 决策置信度 [0.0, 1.0]
         target: 决策面向的对象
         timestamp_ms: 事件发布时间戳（Unix 毫秒）
     """
@@ -177,7 +174,6 @@ class PlannerVerdictPayload(BasePayload):
     )
     topic_summary: str = Field(default="", description="话题摘要")
     reply_guidance: str = Field(default="", description="给 Replyer 的方向性指引")
-    confidence: float = Field(default=0.0, description="决策置信度 [0.0, 1.0]")
     target: Optional[str] = Field(default=None, description="决策面向的对象")
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),

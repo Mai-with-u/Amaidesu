@@ -165,7 +165,6 @@ async def test_provider_emit_verdict_failure_does_not_block_invoke():
             "target": None,
             "topic_summary": "s",
             "reply_guidance": "",
-            "confidence": 0.9,
         },
         "llm_request_id": None,
     }

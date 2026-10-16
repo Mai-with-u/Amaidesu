@@ -87,7 +87,7 @@ export interface ShowEntry {
   replyTo: string;
   /** 观众消息自身 ID（弹幕 / SC / 礼物；enter 为空）。决策/发言卡通过 replyTo 反查本字段定位被回复弹幕 */
   messageId: string;
-  /** 决策卡附加字段（置信度/耗时/原始输出/请求历史指针等） */
+  /** 决策卡附加字段（耗时/原始输出/请求历史指针等） */
   detail: Record<string, unknown> | null;
   /** LLM 请求历史指针（决策卡"完整请求"链接） */
   llmRequestId: string;
@@ -439,9 +439,7 @@ export function fromDecision(id: string, tsMs: number, data: Record<string, unkn
     ? error
     : shouldReply
       ? str(data.topic_summary) || '决定发言'
-      : silentReason === 'low_confidence'
-        ? 'LLM 想回应，但置信度过低——被裁决压制为静默'
-        : str(data.topic_summary)
+      : str(data.topic_summary)
           ? `决定不回应（${str(data.topic_summary)}）`
           : '决定不回应';
   const note = shouldReply && !error ? '' : error ? '' : str(data.error_message);
@@ -652,11 +650,6 @@ export function decisionDetail(entry: ShowEntry): Record<string, unknown> {
 export function isSilentDecision(entry: ShowEntry): boolean {
   const detail = decisionDetail(entry);
   return !bool(detail.should_reply) && !entry.failed;
-}
-
-export function confidenceLabel(entry: ShowEntry): string {
-  const value = num(decisionDetail(entry).confidence);
-  return value != null ? `置信 ${value.toFixed(2)}` : '';
 }
 
 export function guidanceOf(entry: ShowEntry): string {

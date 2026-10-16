@@ -61,7 +61,7 @@ async def test_replyer_renders_config_persona_and_never_the_planner_only_behavio
     agent, llm, prompt = streamer
     llm.generate = AsyncMock(return_value=Response(success=True, content="测试回复"))  # 纯文本契约：正文即台词
     plan = DecisionPlan(
-        should_reply=True, target="all", topic_summary="测试话题", reply_guidance="按配置 persona 回答", confidence=0.9
+        should_reply=True, target="all", topic_summary="测试话题", reply_guidance="按配置 persona 回答"
     )
 
     assert await agent._replyer.generate(plan, []) is not None
@@ -82,7 +82,6 @@ async def test_planner_gets_behavior_style_only_and_none_of_the_expression_side_
         "target": "all",
         "topic_summary": "测试话题",
         "reply_guidance": "依据行动准则决策",
-        "confidence": 0.85,
     }
     llm.generate = AsyncMock(
         return_value=Response(

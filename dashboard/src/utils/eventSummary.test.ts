@@ -82,40 +82,21 @@ describe('planner.*', () => {
     expect(summarizeEvent('planner.decision', { error: 'LLM 超时' })).toBe('决策失败 · LLM 超时');
   });
 
-  it('decision 低置信压制', () => {
-    expect(
-      summarizeEvent('planner.decision', { should_reply: false, silent_reason: 'low_confidence' }),
-    ).toBe('低置信压制，本轮沉默');
-  });
-
   it('decision 普通沉默', () => {
     expect(summarizeEvent('planner.decision', { should_reply: false })).toBe('本轮不回应');
   });
 
-  it('decision 回应带主题与置信度', () => {
+  it('decision 回应带主题', () => {
     expect(
       summarizeEvent('planner.decision', {
         should_reply: true,
         topic_summary: '聊聊新皮肤',
-        confidence: 0.85,
       }),
-    ).toBe('回应: 聊聊新皮肤（85%）');
-  });
-
-  it('置信度为 0 不展示百分比', () => {
-    expect(
-      summarizeEvent('planner.decision', {
-        should_reply: true,
-        topic_summary: '聊聊',
-        confidence: 0,
-      }),
-    ).toBe('回应: 聊聊');
+    ).toBe('回应: 聊聊新皮肤');
   });
 
   it('verdict 输出裁决前缀', () => {
-    expect(summarizeEvent('planner.verdict', { topic_summary: '回个招呼', confidence: 0.5 })).toBe(
-      '裁决: 回个招呼（50%）',
-    );
+    expect(summarizeEvent('planner.verdict', { topic_summary: '回个招呼' })).toBe('裁决: 回个招呼');
   });
 });
 

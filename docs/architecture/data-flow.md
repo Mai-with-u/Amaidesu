@@ -191,7 +191,7 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
          └─ llm_service.generate(tools=[reply 函数定义], profile="replyer")——LLM 只见 reply
          └─ 解析 {speech, emotion, actions} 三元组
          └─ 敏感词净化（替换/丢弃/放行三策略）
-   └─ 无置信度门槛：说与不说由 ReAct 循环内的工具调用行为直接表达（reply_tool 与 Replyer 之间经 `DecisionPlan` 契约传递表达意图）
+   └─ 说与不说由 ReAct 循环内的工具调用行为直接表达（reply_tool 与 Replyer 之间经 `DecisionPlan` 契约传递表达意图）
 
 6. 结果落库 + 发言管线分发
    └─ ToolExecutionResult.success=True，structured_content 为 dict（`{speech, emotion, actions, metadata}`）

@@ -258,7 +258,6 @@ async def test_speech_event_precedes_round_end_events() -> None:
             "reply_to": "m1",
             "topic_summary": "闲聊",
             "reply_guidance": "热情一点",
-            "confidence": 0.9,
             "silent_reason": None,
             "reply_duration_ms": 12,
             "reply_payload": {"speech": "你好呀", "emotion": {"name": "happy", "intensity": 0.5}, "actions": []},
@@ -306,7 +305,6 @@ async def test_agent_decision_round_completes_with_tts_disabled() -> None:
             "target": "u1",
             "topic_summary": "t",
             "reply_guidance": "r",
-            "confidence": 0.9,
             "reply_payload": reply,
         }
     )

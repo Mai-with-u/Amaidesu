@@ -2,7 +2,7 @@
  * 决策轮归组：把事件缓冲里的一轮决策折叠成"一次决定一张卡"的视图模型。
  *
  * ``planner.decision`` 是每轮的锚（轮次内的一切都以 round_id 关联）：
- * 触发原因、批消息、说或不说（含静默原因）、发言、置信度、错误、
+ * 触发原因、批消息、说或不说（含静默原因）、发言、错误、
  * Planner 原始输出与 LLM 请求指针都在这条事件里；挂同轮的 ``tool.result.*``
  * 补充本轮调用了哪些工具。没有决策锚的工具结果（如 minecraft 的工具调用）
  * 不成卡——本模块只回答"主播这轮为什么这么做"。
@@ -54,9 +54,8 @@ export interface DecisionRoundCard {
   proactive?: boolean;
   batch: DecisionRoundBatchItem[];
   shouldReply: boolean;
-  /** 静默原因（shouldReply=false 时可读；low_confidence 等七种码） */
+  /** 静默原因（shouldReply=false 时可读） */
   silentReason?: string;
-  confidence?: number;
   speech?: string;
   emotion?: string;
   error?: string;
@@ -139,7 +138,6 @@ export function groupDecisionRounds(events: ReadonlyArray<DecisionEvent>): Decis
       batch: readBatch(data.batch),
       shouldReply: bool(data.should_reply),
       silentReason: str(data.silent_reason) || undefined,
-      confidence: num(data.confidence) ?? undefined,
       speech: str(data.speech) || undefined,
       emotion: str(data.emotion) || undefined,
       error: str(data.error) || undefined,

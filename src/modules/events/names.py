@@ -79,7 +79,7 @@ class CoreEvents:
     TASK_CHANGED = "task.changed"
 
     # ========== v2 语义域事件（planner 决策轮记录） ==========
-    # 每轮两阶段决策结束发一条（成功/失败/低置信度降级全覆盖），观察器的
+    # 每轮两阶段决策结束发一条（成功/失败/静默全覆盖），观察器的
     # 决策卡数据源；round_id 为本轮弹幕批次/决策/发言/工具结果的共同关联键。
     PLANNER_DECISION = "planner.decision"
     # 裁决时刻即时事件：reply 工具被调用（Planner 决定回应）时发一条，
