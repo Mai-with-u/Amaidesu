@@ -26,7 +26,7 @@ def _write_old_live_frame(tmp_path: Path, version: str = "2.0.45") -> Path:
 
 
 def test_live_frame_gates_removed_and_written_back(tmp_path: Path) -> None:
-    """旧键删除、stale_warn_ms 按新默认物化落盘，版本推进到 2.0.46；再次加载零变更。"""
+    """旧键删除、stale_warn_ms 按新默认物化落盘，版本推进到 2.0.47；再次加载零变更。"""
     generate_default_configs(tmp_path)
     path = _write_old_live_frame(tmp_path)
 
@@ -36,7 +36,7 @@ def test_live_frame_gates_removed_and_written_back(tmp_path: Path) -> None:
     live_frame = doc["agents"]["streamer"]["live_frame"]
     assert "max_age_ms" not in live_frame and "min_interval_ms" not in live_frame
     assert live_frame["stale_warn_ms"] == 60_000
-    assert doc["meta"]["version"] == "2.0.46"
+    assert doc["meta"]["version"] == "2.0.47"
 
     first = path.read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)

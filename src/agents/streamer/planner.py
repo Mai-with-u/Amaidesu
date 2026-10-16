@@ -128,7 +128,7 @@ class _PlannerConfig(BaseConfig):
     """
 
     planner_max_steps: int = Field(default=_DEFAULT_MAX_STEPS, title="决策最大步数")
-    planner_recent_intents_max: int = Field(default=6, ge=0, title="回看最近几轮打算")
+    planner_recent_intents_max: int = Field(default=60, ge=0, title="回看最近几轮打算")
     planner_recent_relays_max: int = Field(default=4, ge=0, title="回看最近几次补充要求")
     reference_tools: List[str] = Field(default_factory=list, title="每轮自动参考的只读工具")
 

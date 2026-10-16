@@ -490,9 +490,10 @@ class StreamerConfig(BaseConfig):
     )
     planner_recent_intents_max: int = Field(
         title="回看最近几轮打算",
-        default=6,
+        default=60,
         ge=0,
-        description="Planner 上下文列出最近几轮自己说出口的话题与指引（防止连着几轮讲同一件事；0 = 不列）",
+        description="Planner 上下文列出最近几轮自己说出口的话题与指引（防止连着几轮讲同一件事；"
+        "60 轮约覆盖 15-20 分钟，按 18 秒一轮口径；0 = 不列）",
     )
     planner_recent_relays_max: int = Field(
         title="回看最近几次补充要求",

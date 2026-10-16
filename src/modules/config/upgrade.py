@@ -814,6 +814,23 @@ def _retire_live_frame_gates(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "retire_live_frame_gates", "2.0.46", _retire_live_frame_gates)
 
 
+def _widen_recent_intents_window(data: Dict[str, Any]) -> List[str]:
+    """agents.toml v2.0.47：已聊话题回看窗默认 6 → 60 轮。
+
+    6 轮（约 2 分钟）只够看穿两三句内的连读，十几分钟前的同一话题
+    照样被当新角度讲。仅改写等于旧默认 6 的落盘值，用户显式设置的其他值
+    不动。对已迁移数据零变更（幂等）。
+    """
+    streamer = (data.get("agents") or {}).get("streamer")
+    if not isinstance(streamer, dict) or streamer.get("planner_recent_intents_max") != 6:
+        return []
+    streamer["planner_recent_intents_max"] = 60
+    return ["agents.streamer.planner_recent_intents_max: 6 -> 60"]
+
+
+register_file_hook("agents.toml", "widen_recent_intents_window", "2.0.47", _widen_recent_intents_window)
+
+
 __all__ = [
     "FileUpgradeHook",
     "CrossFileHook",
