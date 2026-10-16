@@ -50,6 +50,7 @@ _PROACTIVE_REASON_LABEL: Dict[str, str] = {
     "external": "外部指令唤醒",
     "schedule": "定时主动开麦",
     "cold": "冷场主动开麦",
+    "reminder": "递话催醒",
     "rundown": "流程单推进",
     "game": "游戏 Agent 待定夺",
 }
