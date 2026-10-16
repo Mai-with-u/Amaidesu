@@ -97,6 +97,7 @@ def test_hurt_and_dimension_change_are_encounters_and_reminders_stay_silent() ->
     assert classify("reminder") is None
     assert classify("gear_broken") == "unknown", "装备用坏没有专门事件名，走 unknown 但有说清性质的开头"
     assert classify("discovered") == "unknown"
+    assert classify("sky_changed") == "unknown", "天色变了是观众也看得见的变化，进叙事通道而不是静默"
 
 
 def test_summary_tells_what_kind_of_encounter_it_was() -> None:
@@ -110,6 +111,11 @@ def test_summary_tells_what_kind_of_encounter_it_was() -> None:
     )
     assert summarize("unknown", "gear_broken", "铁镐用坏了") == "手上的装备用坏了：铁镐用坏了"
     assert summarize("unknown", "discovered", "看见一片岩浆湖") == "探索时发现了值得记的东西：看见一片岩浆湖"
+    # 天色变了有自己的开头，不念成"身体事件：sky_changed"；括号里的时间与天气照念，分号重组为逗号。
+    assert summarize("unknown", "sky_changed", "天黑了，到了能睡的时间（夜晚，距天亮约 8 分钟；晴）") == (
+        "天色变了：天黑了，到了能睡的时间（夜晚，距天亮约 8 分钟，晴）"
+    )
+    assert summarize("unknown", "sky_changed", "开始下雨了（白天；雨）") == "天色变了：开始下雨了（白天，雨）"
 
 
 def test_summary_drops_coordinates_and_keeps_the_rest() -> None:

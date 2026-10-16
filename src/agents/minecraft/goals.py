@@ -5,7 +5,8 @@ MaiCraft v1 把目标运行的处境变化写进一条事件流（``events``）�
 
 - 目标提问、被暂停、恢复、结束时，再用 ``goal(get)`` 取它此刻的完整样子交给回调——
   事件只说"变了"，完整结果（变化、问题、剩下的部分）以查询为准；
-- 与目标无关的事件（生存需求插进来的临时任务、角色自己处理不了的需求、角色死亡）原样交给身体事件回调；
+- 与目标无关的事件（生存需求插进来的临时任务、角色自己处理不了的需求、角色死亡、跟随的处境变化、天色变了）
+  原样交给身体事件回调；
 - Mod 自己挂出的决策（死亡恢复：编号是负数，不是谁下达的目标）提问时，读一次交给决策回调，等模型按选项回答；
 - 事件流换了（换世界、重进世界）时游标作废，逐个重新查询在跟踪的目标：查得到就照常交回调，
   查不到或已经不是原来那个目标，就按"不在了"交给回调，不让它挂在待办里永远等不到结果；
@@ -37,9 +38,17 @@ _EMPTY_READ_FLOOR_S = 1.0
 # 这些事件说明目标的处境变了，需要取它此刻的完整样子。
 _GOAL_CHANGE_KINDS = frozenset({"asked", "paused", "resumed", "finished"})
 # 与目标无关的身体事件：生存需求的临时任务开始与结束、处理不了的需求、角色死亡；
-# 跟随中的处境变化（跟不过去、跟丢了、过门、上下车、帮打）也不带目标编号，同样交给身体事件回调。
+# 跟随中的处境变化（跟不过去、跟丢了、过门、上下车、帮打）也不带目标编号，同样交给身体事件回调；
+# 天色变了（天黑到了能睡的时间、天亮、开始下雨、雨停）只在变的那一刻来一条，也不带目标编号，同样交过去。
 _BODY_EVENT_KINDS = frozenset(
-    {"temporary_task_started", "temporary_task_finished", "need_unhandled", "character_died", "follow_status"}
+    {
+        "temporary_task_started",
+        "temporary_task_finished",
+        "need_unhandled",
+        "character_died",
+        "follow_status",
+        "sky_changed",
+    }
 )
 
 McpCall = Callable[[str, Dict[str, Any]], Awaitable[MaicraftReply]]

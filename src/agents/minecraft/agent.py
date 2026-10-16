@@ -93,6 +93,13 @@ _FOLLOW_NOTICE = (
     "需要时换许可重下（例如放开 change_blocks）、取消，或跟主播说一声。"
 )
 
+# 天色变了（天黑、天亮、下雨、雨停）：身体照常做手上的事，夜里能弄到床会自己找空当去睡、
+# 弄不到床又打不过会挖坑封顶熬到天亮；模型据此决定要不要专门安排睡觉、回家或赶在天黑前收尾。
+_SKY_NOTICE = (
+    "[天色] {message}。这是观察不是命令：身体照常做手上的事，夜里能弄到床会自己找空当去睡，"
+    "弄不到床又打不过会挖坑封顶熬到天亮；要专门安排睡觉、回家或赶在天黑前收尾就调整计划，不用就接着做。"
+)
+
 # 游戏没连上时拒收委派的原因：经委派工具原样回给派活的一方，它据此等连上再派，
 # 不让这边接了活却只能拿截屏一块块显示器去找游戏窗口。
 _GAME_NOT_CONNECTED = (
@@ -246,6 +253,8 @@ class MinecraftAgent(BaseAgent):
         self._batch_active: bool = False
         self._batch_body_events: List[Dict[str, Any]] = []
         self._body_notified: set = set()
+        # 挂在消息队列里、还没被模型读到的那条天色通知：新的天色来了就把它换掉，队列里只留最新一条。
+        self._sky_notice: Optional[tuple] = None
         self._task_reported = False
         self._wait_requested = False
 
@@ -1130,8 +1139,10 @@ class MinecraftAgent(BaseAgent):
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:
-        """生存需求的临时任务、处理不了的需求、角色死亡与跟随的处境变化：记进本批上下文，后三种告诉任务（前两种同时告诉主播）。
+        """生存需求的临时任务、处理不了的需求、角色死亡、跟随的处境变化与天色变了：都记进本批上下文。
 
+        处理不了的需求、角色死亡、跟随的处境变化唤醒任务告诉模型（前两种同时告诉主播）；
+        天色变了不唤醒，挂在队列里随下一次唤醒带给模型；临时任务的开始与结束只告诉主播。
         临时任务收尾那句话另外留给紧接着的暂停通知：撤离后主任务停在半路时，游戏 Agent 从暂停通知里读到它。
         """
         kind = str(event.get("kind") or "")
@@ -1144,6 +1155,10 @@ class MinecraftAgent(BaseAgent):
             # 急事收尾：撤离甩开追兵后人已不在原地，Mod 写"主任务停在半路等下一步指示"，紧接着把主任务挂成暂停。
             # 记下这句交给随后的暂停通知，游戏 Agent 才知道是撤离把角色带离了原地，不会猜成游戏重连。
             self._urgent_before_pause = (message, time.monotonic())
+        if kind == "sky_changed":
+            # 天黑、天亮、下雨、雨停：只挂进队列不唤醒；给观众的叙述由注意流采集器出，这里不再上报主播。
+            self._carry_sky_notice(message)
+            return
         if kind == "follow_status":
             # 跟随的处境变了：任务还没结束就告诉模型；给观众的叙述由注意流采集器出，这里不再上报主播。
             if self._batch_active or not self._task_finished:
@@ -1167,6 +1182,22 @@ class MinecraftAgent(BaseAgent):
             else f"身体处理完急事：{message}"
         )
         await self._emit_game_event("attention_required", notice, already_resolved=kind == "temporary_task_finished")
+
+    def _carry_sky_notice(self, message: str) -> None:
+        """天色变了：任务还没结束就挂进消息队列但不唤醒，随本批下一步或下一次唤醒（目标结束、提问、暂停、主播新指令）带给模型。
+
+        天黑后身体自己会去睡或封顶自保，用不着模型立刻插手；为一次天黑天亮就把等着目标的模型叫醒，
+        只会白花一次推理、打断它手上的安排。队列里只留最新一条：长目标跑过几轮昼夜时，模型醒来只要知道现在的天色。
+        任务已交付时不挂：空闲的游戏 Agent 不会处理它，等到下个任务才读到只会是过时的天色。
+        """
+        # 先撤下还没被读到的上一条天色，再按任务是否还在进行决定挂不挂这一条。
+        stale, self._sky_notice = self._sky_notice, None
+        if stale is not None and stale in self._message_queue:
+            self._message_queue.remove(stale)
+        if not self._batch_active and self._task_finished:
+            return
+        self._sky_notice = ("", _SKY_NOTICE.format(message=message))
+        self._message_queue.append(self._sky_notice)
 
     @staticmethod
     def _goal_label(run: GoalRun) -> str:

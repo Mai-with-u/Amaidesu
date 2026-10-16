@@ -347,6 +347,48 @@ async def test_character_death_tells_the_running_task_and_the_streamer() -> None
     await agent.stop()
 
 
+async def test_sky_changes_ride_along_with_the_next_wakeup_instead_of_waking_the_task() -> None:
+    """天色变了不叫醒等着目标的模型：挂在队列里随目标结束一起带上，只留最新一条；任务交付后不再挂，也不上报主播。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        # 下砍树目标 -> 让出等砍树 -> 天黑、下雨都不唤醒 -> 砍树结束被唤醒，连同最新天色一起读到 -> 交付。
+        if "结束了" in _texts(messages):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "砍到 5 块原木了"})])
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
+
+    agent, llm, bus = await _start(server, script)
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
+    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+
+    server.body_event("sky_changed", "天黑了，到了能睡的时间（夜晚，距天亮约 8 分钟；晴）")
+    server.body_event("sky_changed", "开始下雨了（夜晚；雨）")
+    await _wait_until(lambda: any("开始下雨了" in str(content) for _, content in agent._message_queue))
+    await asyncio.sleep(0.2)
+    assert len(llm.seen) == 2, "天色变了不唤醒等着目标的模型"
+    assert len(agent._message_queue) == 1, "队列里只留最新一条天色"
+
+    server.finish(1, summary="砍了 5 块原木")
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+    woken = _texts(llm.seen[-1])
+    assert "[天色] 开始下雨了（夜晚；雨）" in woken and "目标 1" in woken
+    assert "[天色] 天黑了" not in woken, "被新天色换掉的那条不再带给模型"
+
+    server.body_event("sky_changed", "天亮了，过了能睡的时间（白天；雨）")
+    await _wait_until(lambda: any("天亮了" in record["message"] for record in agent._batch_body_events))
+    assert not agent._message_queue, "任务交付后不挂天色，等到下个任务只会是过时的"
+    alerts = [
+        call.args[1]
+        for call in bus.emit.await_args_list
+        if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
+    ]
+    assert alerts == [], "给观众的天色叙述由注意流采集器出，游戏 Agent 不上报主播"
+    await agent.stop()
+
+
 async def test_skill_catalog_follows_the_abilities_the_mod_has(tmp_path: Path) -> None:
     """技能目录按 Mod 的能力清单筛：用到的能力都在才进目录，为旧版 Mod 写的不进；正文按名读。"""
     for name, requires in (

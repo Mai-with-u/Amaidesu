@@ -123,6 +123,21 @@ async def test_other_goals_are_ignored_and_body_events_pass_through() -> None:
     assert server.calls_to("goal") == [], "没在跟踪的目标不去查"
 
 
+async def test_sky_changes_pass_through_to_the_body_callback() -> None:
+    """天黑、下雨这类天色变化不带目标编号：和跟随的处境变化一样原样交给身体回调，不去查目标。"""
+    server, recorder = FakeMaicraft(), _Recorder()
+    watch = _watch(server, recorder)
+    await watch.step()
+    server.body_event("sky_changed", "天黑了，到了能睡的时间（夜晚，距天亮约 8 分钟；晴）")
+    server.body_event("follow_status", "跟丢了在找：他过了门")
+
+    await watch.step()
+
+    assert [event["kind"] for event in recorder.body] == ["sky_changed", "follow_status"]
+    assert recorder.body[0]["message"].startswith("天黑了")
+    assert recorder.changed == [] and server.calls_to("goal") == []
+
+
 async def test_after_a_world_change_missing_goals_are_reported_gone() -> None:
     """事件流换了：逐个查在跟踪的目标，查不到的如实说不在了。"""
     server, recorder = FakeMaicraft(), _Recorder()
