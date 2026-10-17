@@ -1,5 +1,23 @@
 name: Ruff
-on: [ push, pull_request ]
+on:
+  push:
+    paths:
+      - '**.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/ruff.yml'
+  pull_request:
+    paths:
+      - '**.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/ruff.yml'
+
+# 同分支连续推送时取消未跑完的旧 run，只保留最新一次
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ruff-format:
     runs-on: ubuntu-latest
