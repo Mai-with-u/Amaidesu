@@ -4,6 +4,9 @@
 上一次交出之后才到的标"新"。缓冲有界：已经交给过决策窗、又超过保留期的旧条目
 不再回放——否则整场的遭遇每窗全量重放，主播会把十分钟前讲过的掉血反复当新闻播。
 没交出过的条目不论多久都保留，保证新事实至少被看到一次。
+缓冲可开同摘要短窗折叠：折叠窗内连续到达、内容相同的条目并入一条附计数
+说明（"另 N 次相同"），身体侧按重试节奏连发的同一失败摘要不再逐条挤占
+决策叙事窗口；折叠只发生在本缓冲，底层事件记录不受影响。
 """
 
 from __future__ import annotations
@@ -34,16 +37,25 @@ class NarrativeView:
 
 @dataclass
 class _Slot:
-    """缓冲里的一条：条目本身 + 是否已经交给过决策窗。"""
+    """缓冲里的一条：条目本身 + 是否已经交给过决策窗 + 短窗折叠吸收的相同条数。"""
 
     entry: NarrativeEntry
     delivered: bool = False
+    repeat_count: int = 1  # 同摘要折叠：这一条目共代表多少条相同叙事
 
 
 def _mark_line(entry: NarrativeEntry, *, fresh: bool, now: int) -> str:
     """一行叙事：行首标到达距今多久，没交出过的另标"新"。"""
     age = age_text(now - entry.received_ms)
     return f"[{'新·' if fresh else ''}{age}] {entry.line}"
+
+
+def _render_slot(slot: _Slot, *, fresh: bool, now: int) -> str:
+    """一条缓冲的渲染行：折叠过多条的附上计数说明，其余与单条渲染一致。"""
+    line = _mark_line(slot.entry, fresh=fresh, now=now)
+    if slot.repeat_count > 1:
+        line += f"（另 {slot.repeat_count - 1} 次相同）"
+    return line
 
 
 def render_narrative(entries: List[NarrativeEntry], *, seen_until_ms: int, now: int) -> str:
@@ -54,14 +66,18 @@ def render_narrative(entries: List[NarrativeEntry], *, seen_until_ms: int, now: 
 class NarrativeBuffer:
     """有界叙事缓冲：按到达先后暂存，回放时丢掉已交出且过了保留期的旧条目。"""
 
-    def __init__(self, *, ttl_ms: int, max_items: int) -> None:
+    def __init__(self, *, ttl_ms: int, max_items: int, fold_window_ms: int = 0) -> None:
         """
         Args:
             ttl_ms: 已交给过决策窗的条目，自到达起保留多久（毫秒）；过期后不再回放。
             max_items: 最多保留条数；超出时先丢最早的（已交出的条目总是更早到达）。
+            fold_window_ms: 同摘要折叠窗（毫秒）；0 表示不折叠。窗口内连续到达、
+                摘要文本相同的条目并入最近一条，只记条数——同一失败反复上报
+                （如每几秒重试一次睡觉失败）不再逐条挤占决策叙事窗口。
         """
         self._ttl_ms = ttl_ms
         self._max_items = max_items
+        self._fold_window_ms = fold_window_ms
         # 逐条记"是否已交出"：同一毫秒里先交出、后到达的条目也不会被误当成旧事
         self._slots: List[_Slot] = []
 
@@ -69,14 +85,23 @@ class NarrativeBuffer:
         return len(self._slots)
 
     def add(self, line: str, now: int) -> None:
-        """事件到达即入缓冲；同时按上限裁剪，没开播、长时间没有决策窗时也不会无限增长。"""
-        self._slots.append(_Slot(NarrativeEntry(received_ms=now, line=line)))
+        """事件到达即入缓冲；同摘要落在折叠窗内时并入最近一条只记数，按上限裁剪。"""
+        folded = False
+        if self._fold_window_ms > 0 and self._slots:
+            last = self._slots[-1]
+            if last.entry.line == line and now - last.entry.received_ms <= self._fold_window_ms:
+                last.repeat_count += 1
+                # 再次发生是新信息：重开"新"标记，下一决策窗能看到计数更新
+                last.delivered = False
+                folded = True
+        if not folded:
+            self._slots.append(_Slot(NarrativeEntry(received_ms=now, line=line)))
         self._prune(now)
 
     def render(self, now: int) -> NarrativeView:
         """交给一个决策窗：先丢过期旧条目再渲染，并把本次交出的条目都记为"已交出"。"""
         self._prune(now)
-        text = "\n".join(_mark_line(slot.entry, fresh=not slot.delivered, now=now) for slot in self._slots)
+        text = "\n".join(_render_slot(slot, fresh=not slot.delivered, now=now) for slot in self._slots)
         fresh = tuple(slot.entry.line for slot in self._slots if not slot.delivered)
         for slot in self._slots:
             slot.delivered = True

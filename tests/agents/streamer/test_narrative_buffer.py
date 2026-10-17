@@ -72,6 +72,35 @@ def test_zero_ttl_replays_each_entry_once() -> None:
     assert buffer.render(now=2).text == ""
 
 
+def test_same_summary_within_fold_window_collapses_with_count() -> None:
+    """折叠窗内连续到达的同摘要条目并入一条附计数说明，不再逐条挤占叙事。"""
+    buffer = NarrativeBuffer(ttl_ms=5 * _MINUTE, max_items=10, fold_window_ms=90_000)
+    line = "[minecraft·reflex_finished] 天黑了想去睡，没睡成"
+    buffer.add(line, now=0)
+    buffer.render(now=1_000)  # 首条已交出过
+    for offset in (10_000, 30_000, 70_000):
+        buffer.add(line, now=offset)
+
+    view = buffer.render(now=80_000)
+
+    assert view.text == f"[新·1 分钟前] {line}（另 3 次相同）"
+    assert len(buffer) == 1
+    assert view.fresh == (line,)
+
+
+def test_fold_breaks_on_different_summary_or_expired_window() -> None:
+    """摘要不同、或距首条超过折叠窗的到达都不折叠，各自成条。"""
+    buffer = NarrativeBuffer(ttl_ms=5 * _MINUTE, max_items=10, fold_window_ms=90_000)
+    buffer.add("[minecraft·reflex_finished] 没睡成", now=0)
+    buffer.add("[minecraft·attacked] 被僵尸打了", now=10_000)
+    buffer.add("[minecraft·reflex_finished] 没睡成", now=100_000)  # 距首条 100 秒，超出 90 秒窗
+
+    view = buffer.render(now=110_000)
+
+    assert "（另" not in view.text
+    assert len(buffer) == 3
+
+
 async def test_agent_buffers_follow_narrative_config() -> None:
     """StreamerAgent 的身体近况缓冲按 [agents.streamer.narrative] 段的上限裁剪。"""
     agent = make_streamer_agent({"narrative": {"body_max_items": 2}})

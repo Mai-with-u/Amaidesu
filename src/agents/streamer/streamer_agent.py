@@ -92,6 +92,10 @@ __all__ = ["StreamerAgent", "StreamerConfig"]
 _PROFILE_PLANNER = "planner"
 _PROFILE_REPLYER = "replyer"
 
+# 身体近况的同摘要折叠窗（毫秒）：窗口内连续到达、摘要相同的条目并入一条只记数。
+# 覆盖身体侧按重试节奏连发同一失败摘要的典型间隔（秒级到一分多钟）
+_BODY_EVENT_FOLD_WINDOW_MS = 90_000
+
 # 运营递话提醒队列上限（条）。满时拒收递话（receive_prompt 返回 False，
 # REST 侧映射 409）——必达语义不允许静默挤掉旧条目。
 _REMINDER_QUEUE_MAX = 5
@@ -427,7 +431,14 @@ class StreamerAgent(BaseAgent):
         # 主播会把早就讲过的掉血一遍遍当新闻播
         narrative = config.narrative
         self._game_narrative = NarrativeBuffer(ttl_ms=narrative.game_ttl_ms, max_items=narrative.game_max_items)
-        self._body_narrative = NarrativeBuffer(ttl_ms=narrative.body_ttl_ms, max_items=narrative.body_max_items)
+        # 身体侧开同摘要折叠：急事处理失败会按重试节奏连发几十条一模一样的摘要
+        # （当晚 70 秒内同一条"没睡成"来了 7 条），逐条进叙事只会挤占决策窗口；
+        # 折叠只在叙事组装层，底层事件记录不受影响
+        self._body_narrative = NarrativeBuffer(
+            ttl_ms=narrative.body_ttl_ms,
+            max_items=narrative.body_max_items,
+            fold_window_ms=_BODY_EVENT_FOLD_WINDOW_MS,
+        )
         # 游戏里的聊天（订阅 game.chat.*）：游戏世界里的玩家在跟我说话、服务器在通知，
         # 与观众弹幕分开——开口说话对方听不到，要回得在游戏里打字
         self._game_chat = NarrativeBuffer(ttl_ms=narrative.chat_ttl_ms, max_items=narrative.chat_max_items)
