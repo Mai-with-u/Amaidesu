@@ -57,6 +57,11 @@ class _Harness:
         self.state.load(rundown or _default_rundown(), now_ms=self.now)
         return self
 
+    def begin(self) -> "_Harness":
+        """armed → running（起算）：load 后需要 running 语义的用例链上这一步。"""
+        self.state.begin(by="system", now_ms=self.now)
+        return self
+
     def drive_to_last(self) -> None:
         """推进到末段（human 免 min_duration 检查）。"""
         self.clock.advance(60_001)
@@ -70,30 +75,58 @@ class _Harness:
 
 @pytest.fixture
 def h() -> _Harness:
-    return _Harness().load()
+    """已起算（running）的夹具：load 只装载结构，需要计时语义的用例显式 begin。"""
+    return _Harness().load().begin()
 
 
 def test_initial_state_and_load_emit() -> None:
     idle = RundownState()
     assert (idle.status, idle.get_snapshot()["rundown_id"], idle.get_snapshot()["status"]) == ("idle", "", "idle")
 
+    # load 只装载结构不起算：双锚点 None，派生为 armed（已装载待开播）
     harness = _Harness().load()
     state = harness.state
-    assert (state.status, state.current_segment_id, state.rundown_started_at_ms) == ("running", "opening", harness.now)
+    assert (state.status, state.current_segment_id) == ("armed", "opening")
+    assert (state.rundown_started_at_ms, state.segment_started_at_ms) == (None, None)
     ((name, payload),) = harness.events
-    assert (name, payload.segment_id, payload.index, payload.total, payload.by) == (
+    assert (name, payload.segment_id, payload.index, payload.total, payload.by, payload.action) == (
         "rundown.changed",
         "opening",
         0,
         3,
         "system",
+        "load",
     )
     assert harness.changed == [("opening", "system")]
 
-    # 重新 load 清掉此前的暂停累计
+    # begin 起算：双锚点 = now，事件 action="begin"，armed → running
+    harness.events.clear()
+    harness.changed.clear()
+    assert state.begin(by="system", now_ms=harness.now) is None
+    assert (state.status, state.rundown_started_at_ms, state.segment_started_at_ms) == (
+        "running",
+        harness.now,
+        harness.now,
+    )
+    assert (harness.events[-1][1].action, harness.events[-1][1].segment_id) == ("begin", "opening")
+    assert harness.changed == [("opening", "system")]
+
+    # 重复 begin 被结构化拒绝（already_begun），状态不变
+    harness.clock.advance(60_000)
+    reject = state.begin(by="human", now_ms=harness.now)
+    assert reject is not None and reject.reason == "already_begun"
+    assert state.rundown_started_at_ms == harness.now - 60_000
+
+    # begin 白名单：agent 无权（何时开播不是 Agent 的决定）
+    harness2 = _Harness().load()
+    with pytest.raises(ValueError):
+        harness2.state.begin(by="agent", now_ms=harness2.now)
+
+    # 重新 load 清掉此前的暂停累计并回到 armed
     state.pause(by="human", now_ms=harness.now)
     harness.load()
-    assert state.paused_at_ms is None and state.get_current_remaining_ms(now_ms=harness.now) == 600_000
+    assert state.status == "armed" and state.paused_at_ms is None
+    assert state.get_current_remaining_ms(now_ms=harness.now) == 600_000
 
 
 def test_goto_moves_and_notifies(h: _Harness) -> None:
@@ -113,9 +146,9 @@ def test_goto_and_next_reject_agent_inside_min_duration_but_not_human(h: _Harnes
     assert h.state.next(by="agent", now_ms=h.now).reason == "min_duration_not_met"
 
     assert h.state.goto("chat", by="human", now_ms=h.now) is None and h.state.index == 1
-    h.load()
+    h.load().begin()
     assert h.state.next(by="human", now_ms=h.now) is None and h.state.current_segment_id == "chat"
-    h.load()
+    h.load().begin()
     h.clock.advance(60_000)
     assert h.state.next(by="agent", now_ms=h.now) is None and h.state.current_segment_id == "chat"
 
@@ -328,18 +361,22 @@ def test_transitions_are_capped_and_emit_failures_are_soft() -> None:
 
 
 def test_build_context_text_renders_segment_fields_and_done_facts() -> None:
-    harness = _Harness().load(
-        _rundown(
-            RundownSegment(
-                id="opening",
-                title="开场",
-                task_description="开场目标" + chr(10) + "要点：问好、预告",
-                expected_ms=600_000,
-                notes="备注内容",
-            ),
-            _segment("chat", "闲聊"),
-            rundown_id="ctx_rd",
+    harness = (
+        _Harness()
+        .load(
+            _rundown(
+                RundownSegment(
+                    id="opening",
+                    title="开场",
+                    task_description="开场目标" + chr(10) + "要点：问好、预告",
+                    expected_ms=600_000,
+                    notes="备注内容",
+                ),
+                _segment("chat", "闲聊"),
+                rundown_id="ctx_rd",
+            )
         )
+        .begin()
     )
     harness.clock.advance(60_000)
     text = harness.state.build_context_text(now_ms=harness.now)
@@ -456,6 +493,80 @@ def test_restart_from_done_reopens(h: _Harness) -> None:
     h.clock.advance(60_000)
     assert h.state.restart(by="human") is None
     assert (h.state.status, h.state.index, h.state.current_segment_id) == ("running", 0, "opening")
+
+
+# ---------------------------------------------------------------------------
+# armed（已装载待开播）：隐含起算 / 拒绝面 / 只读派生
+# ---------------------------------------------------------------------------
+
+
+def test_armed_goto_next_append_imply_begin() -> None:
+    """armed 态被实际推进时隐含起算：双锚点 = 动作时刻，无单独 begin 事件。"""
+    # goto：锚点 = goto 时刻，首条事实行 action 即 goto
+    harness = _Harness().load()
+    harness.clock.advance(120_000)
+    assert harness.state.goto("chat", by="human", now_ms=harness.now) is None
+    assert (harness.state.status, harness.state.rundown_started_at_ms, harness.state.segment_started_at_ms) == (
+        "running",
+        harness.now,
+        harness.now,
+    )
+    assert [t["action"] for t in harness.state.get_transitions()] == ["load", "goto"]
+
+    # next：同样隐含起算
+    harness2 = _Harness().load()
+    harness2.clock.advance(30_000)
+    assert harness2.state.next(by="human", now_ms=harness2.now) is None
+    assert (harness2.state.status, harness2.state.rundown_started_at_ms) == ("running", harness2.now)
+    assert [t["action"] for t in harness2.state.get_transitions()] == ["load", "next"]
+
+    # append：隐含起算，首段计时从 append 时刻开始
+    harness3 = _Harness().load()
+    harness3.clock.advance(45_000)
+    assert harness3.state.append_segment(_append_args(), by="agent", now_ms=harness3.now) is None
+    assert (harness3.state.status, harness3.state.rundown_started_at_ms) == ("running", harness3.now)
+    assert harness3.state._segment_elapsed_ms(harness3.now) == 0
+    assert [t["action"] for t in harness3.state.get_transitions()] == ["load", "append"]
+
+
+def test_armed_rejections() -> None:
+    """armed 态拒绝面：pause/renew 依非 running、resume 依非 paused、restart 拒 not_started。"""
+    harness = _Harness().load()
+    state = harness.state
+    assert (state.status, state.rundown) == ("armed", state.rundown)  # 拒绝均不变更
+    assert state.pause(by="human", now_ms=harness.now).reason == "not_running"
+    assert state.renew(by="agent", now_ms=harness.now).reason == "not_running"
+    assert state.resume(by="human", now_ms=harness.now).reason == "not_paused"
+    restart_reject = state.restart(by="human", now_ms=harness.now)
+    assert restart_reject is not None and restart_reject.reason == "not_started"
+    # 拒绝后仍 armed，零变更零事件（load 事件之外）
+    assert state.status == "armed" and len(harness.events) == 1
+
+
+def test_armed_readonly_derivations_and_context_mark() -> None:
+    """armed 只读派生：elapsed=0 / remaining=满 / progress 与整场已播=None / 不超时；
+    情境文本带"未开播，待起算"标注。"""
+    harness = _Harness().load()
+    state = harness.state
+    harness.clock.advance(3600_000)  # 时间流逝不影响 armed 派生
+    assert state._segment_elapsed_ms(harness.now) == 0
+    assert state.get_current_remaining_ms(now_ms=harness.now) == 600_000
+    assert state.get_progress_percent(now_ms=harness.now) is None
+    assert state.get_elapsed_live_ms(now_ms=harness.now) is None
+    assert state.is_current_segment_overdue(now_ms=harness.now) is False
+
+    snapshot = state.get_snapshot(now_ms=harness.now)
+    assert (snapshot["status"], snapshot["paused"]) == ("armed", False)
+    assert (snapshot["current"]["elapsed_ms"], snapshot["current"]["remaining_ms"]) == (0, 600_000)
+    assert snapshot["progress_percent"] is None
+
+    text = state.build_context_text(now_ms=harness.now)
+    assert text is not None
+    assert "（未开播，待起算）" in text
+    assert "剩 约 10 分钟" in text
+
+    # armed 不写穿：锚点为 None 无法落非空整型列，export_progress 返回空 dict
+    assert state.export_progress() == {}
 
 
 # ---------------------------------------------------------------------------

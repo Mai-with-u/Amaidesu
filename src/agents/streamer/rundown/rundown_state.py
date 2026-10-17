@@ -6,8 +6,12 @@
 - **可变字段仅五个**（公开四个 + 5th 进度锚点）：``rundown`` / ``index`` /
   ``segment_started_at_ms`` / ``paused_at_ms`` / ``rundown_started_at_ms``。
   加上若干私有字段（累计暂停 ms / 推进历史 deque / 注入时钟 / 注入回调）。
-- **status 派生**：``"idle"`` / ``"running"`` / ``"paused"`` / ``"done"`` 由
-  上述字段即时算出，不另存枚举。
+- **status 派生**：``"idle"`` / ``"armed"`` / ``"running"`` / ``"paused"`` /
+  ``"done"`` 由上述字段即时算出，不另存枚举。
+- **"场"对齐直播的"场"**：``load()`` 只装载结构不起算（双锚点保持
+  ``None``，派生为 ``armed`` 待开播态）；``begin()`` 在开播时刻起算，
+  ``goto`` / ``next`` / ``append_segment`` 在 armed 态实际推进时隐含起算。
+  提前开机调试不虚涨整场进度。
 - **变更方法统一五步走**：validate → mutate → append transition →
   emit ``rundown.changed`` → invoke ``on_changed``。
 - **拒绝结构化**：未知环节 id / 未达 ``min_duration_ms`` 不抛异常，返回
@@ -92,6 +96,10 @@ _MIN_GUARD_BY: frozenset[str] = frozenset({"agent"})
 #: restart 的独立白名单：单的生死归导演（human / system），Agent 在单内自主但无权重开
 _RESTART_VALID_BY: frozenset[str] = frozenset({"human", "system"})
 
+#: begin 的独立白名单：起算是场次边界事件（开播翻转），归装配层（system）；
+#: 导演也可手动预演起算（human）。Agent 无权——何时开播不是它说了算
+_BEGIN_VALID_BY: frozenset[str] = frozenset({"system", "human"})
+
 #: append 的独立白名单：追加是 Agent 的计划扩展权（导演改单走编辑写穿通道）
 _APPEND_VALID_BY: frozenset[str] = frozenset({"agent"})
 
@@ -128,12 +136,13 @@ class RundownState:
     通过方法调用驱动，**不**订阅 EventBus。
 
     Attributes:
-        status: 派生状态（``"idle"`` / ``"running"`` / ``"paused"`` / ``"done"``）
+        status: 派生状态（``"idle"`` / ``"armed"`` / ``"running"`` / ``"paused"`` / ``"done"``）
         rundown: 当前流程单（``None`` = 未启用）
         index: 当前环节下标（``-1``=未开始，``len(segments)``=已结束）
-        segment_started_at_ms: 当前环节开始锚点（Unix 毫秒）
+        segment_started_at_ms: 当前环节开始锚点（Unix 毫秒；``None`` = 尚未起算）
         paused_at_ms: 非空 = 暂停中（计时冻结）
-        rundown_started_at_ms: 整场时间轴锚点——``load()`` 时记录
+        rundown_started_at_ms: 整场时间轴锚点——``begin()`` 起算时记录
+            （``None`` = 已装载未开播，armed 态）
     """
 
     def __init__(
@@ -155,7 +164,7 @@ class RundownState:
         """
         self.rundown: Optional[Rundown] = None
         self.index: int = -1
-        self.segment_started_at_ms: int = 0
+        self.segment_started_at_ms: Optional[int] = None
         self.paused_at_ms: Optional[int] = None
         self.rundown_started_at_ms: Optional[int] = None
 
@@ -184,9 +193,15 @@ class RundownState:
 
     @property
     def status(self) -> str:
-        """派生状态：``"idle"`` / ``"running"`` / ``"paused"`` / ``"done"``。"""
+        """派生状态：``"idle"`` / ``"armed"`` / ``"running"`` / ``"paused"`` / ``"done"``。
+
+        armed = 已装载待开播（双锚点 ``None``），起算后进入 running；
+        派生顺序保证 paused / done 等既有态的判定不受影响。
+        """
         if self.rundown is None:
             return "idle"
+        if self.rundown_started_at_ms is None:
+            return "armed"
         if self.paused_at_ms is not None:
             return "paused"
         if self.index >= len(self.rundown.segments):
@@ -208,16 +223,31 @@ class RundownState:
         return self.rundown.segments[self.index]
 
     def _segment_elapsed_ms(self, now: int) -> int:
-        """当前环节已用时长（扣除累计暂停；暂停中以 paused_at_ms 为基准冻结）。"""
-        if self.current_segment is None:
+        """当前环节已用时长（扣除累计暂停；暂停中以 paused_at_ms 为基准冻结）。
+
+        未起算（锚点 ``None``，armed 态）返回 0——环节剩余自然等于完整预期时长。
+        """
+        if self.current_segment is None or self.segment_started_at_ms is None:
             return 0
         effective_now = self.paused_at_ms if self.paused_at_ms is not None else now
         return max(0, effective_now - self.segment_started_at_ms - self._accumulated_pause_ms)
+
+    def _begin_if_armed(self, now: int) -> None:
+        """armed 态隐含起算：双锚点置为 ``now``，不发单独 begin 事件。
+
+        供 ``goto`` / ``next`` / ``append_segment`` 在 armed 态实际推进前调用——
+        首条事实行的 action 即其自身动作，起算事实由首行的时间戳承载。
+        """
+        if self.rundown_started_at_ms is None:
+            self.rundown_started_at_ms = now
+            self.segment_started_at_ms = now
 
     def _min_duration_reject(self, *, by: str, now: int) -> Optional[RundownReject]:
         """Agent 抢跑守卫：``min_duration_ms`` 只约束 ``by="agent"``（导演/装配层免检）。
 
         当前环节未设下界、无当前环节、或停留已达标时返回 ``None``（放行）。
+        armed 态（未起算，elapsed=0）对 Agent 一律按下界未达拒绝——还没开播
+        无"已停留"可言，抢跑守卫按最保守口径执行。
         """
         if by not in _MIN_GUARD_BY:
             return None
@@ -251,15 +281,20 @@ class RundownState:
     # ------------------------------------------------------------------
 
     def load(self, rundown: Rundown, *, now_ms: Optional[int] = None) -> None:
-        """加载流程单，重置游标到首段（index=0），清空暂停与环节/整场累计暂停时长。
+        """装载流程单定义，重置游标到首段（index=0），清空暂停与环节/整场累计暂停时长。
+
+        **只装载结构，不起算**：双锚点保持 ``None``，状态派生为 ``armed``
+        （已装载待开播）——流程单的"场"对齐直播的"场"，提前开机调试不
+        虚涨整场进度。起算由 :meth:`begin`（开播时刻）或 armed 态的实际
+        推进隐含完成。
 
         总是允许（无前置条件）；调用方应在状态未启用时调一次。
         """
         self.rundown = rundown
         self.index = 0
         now = self._resolve_now(now_ms)
-        self.segment_started_at_ms = now
-        self.rundown_started_at_ms = now
+        self.segment_started_at_ms = None
+        self.rundown_started_at_ms = None
         self.paused_at_ms = None
         self._accumulated_pause_ms = 0
         self._accumulated_session_pause_ms = 0
@@ -272,6 +307,35 @@ class RundownState:
             by="system",
             now_ms=now,
         )
+
+    def begin(self, *, by: str, now_ms: Optional[int] = None) -> Optional[RundownReject]:
+        """起算整场：双锚点置为 ``now``（armed → running），计时从此刻开始。
+
+        仅 armed 态合法——已在计时（running / paused）或已结束（done）的
+        场次重复起算被结构化拒绝（``already_begun``）；未加载同样拒绝。
+
+        ``by`` 用独立白名单：``"system"``（装配层在 live.started 翻转处调用）
+        或 ``"human"``（导演手动预演起算）；``"agent"`` 抛 ``ValueError``——
+        何时开播不是 Agent 的决定。
+        """
+        if by not in _BEGIN_VALID_BY:
+            raise ValueError(f"RundownState.begin: 非法 by={by!r}，仅接受 {_BEGIN_VALID_BY}")
+        if self.rundown is None:
+            return RundownReject(reason="no_rundown_loaded")
+        if self.rundown_started_at_ms is not None:
+            return RundownReject(reason="already_begun")
+        now = self._resolve_now(now_ms)
+        self.rundown_started_at_ms = now
+        self.segment_started_at_ms = now
+        first = self.rundown.segments[self.index] if 0 <= self.index < len(self.rundown.segments) else None
+        self._apply_change(
+            action="begin",
+            segment_id=first.id if first is not None else "",
+            segment_title=first.title if first is not None else "",
+            by=cast(RundownActor, by),
+            now_ms=now,
+        )
+        return None
 
     def goto(
         self,
@@ -307,6 +371,8 @@ class RundownState:
 
         target_idx = next(i for i, seg in enumerate(self.rundown.segments) if seg.id == segment_id)
         target_seg = self.rundown.segments[target_idx]
+        # armed 态实际推进隐含起算：双锚点 = 动作时刻，不发单独 begin 事件
+        self._begin_if_armed(now)
         # 暂停态下切换环节先结算暂停时长（进整场累计，不蒸发）
         self._settle_pause_if_paused(now)
         self.index = target_idx
@@ -353,7 +419,9 @@ class RundownState:
             return RundownReject(reason="already_done")
         if self.index == total - 1:
             # finish：游标推到 total（status 派生为 done），发完成事件；
+            # armed 态先隐含起算（单环节单直接被推完的边角）；
             # 暂停态下先结算暂停时长（进整场累计，不蒸发）
+            self._begin_if_armed(now)
             self._settle_pause_if_paused(now)
             self.index = total
             self.paused_at_ms = None
@@ -366,9 +434,10 @@ class RundownState:
             )
             return None
 
-        # 普通推进（暂停态下先结算暂停时长，进整场累计不蒸发）
+        # 普通推进（armed 态先隐含起算；暂停态下先结算暂停时长，进整场累计不蒸发）
         target_idx = self.index + 1
         target_seg = self.rundown.segments[target_idx]
+        self._begin_if_armed(now)
         self._settle_pause_if_paused(now)
         self.index = target_idx
         self.segment_started_at_ms = now
@@ -456,8 +525,9 @@ class RundownState:
     def restart(self, *, by: str, now_ms: Optional[int] = None) -> Optional[RundownReject]:
         """整场重开（导演通道）：游标回 0、环节/整场锚点重置为 ``now``、暂停与累计清零。
 
-        任意已加载状态（running / paused / done）都可 restart——导演可能中途
-        整场重来；未加载（idle）结构化拒绝。``by`` 用独立白名单，仅接受
+        任意已起算状态（running / paused / done）都可 restart——导演可能中途
+        整场重来；未加载（idle）拒绝 ``no_rundown_loaded``，armed（还没开播
+        无从重开）拒绝 ``not_started``。``by`` 用独立白名单，仅接受
         ``"human"`` / ``"system"``（传 ``"agent"`` 抛 ``ValueError``）：
         done 是"内容排完了"的事实，重启是导演决策。
         """
@@ -465,6 +535,8 @@ class RundownState:
             raise ValueError(f"RundownState.restart: 非法 by={by!r}，仅接受 {_RESTART_VALID_BY}")
         if self.rundown is None:
             return RundownReject(reason="no_rundown_loaded")
+        if self.rundown_started_at_ms is None:
+            return RundownReject(reason="not_started")
         now = self._resolve_now(now_ms)
         self.index = 0
         first = self.rundown.segments[0]
@@ -517,6 +589,8 @@ class RundownState:
 
         now = self._resolve_now(now_ms)
         was_done = self.index >= len(self.rundown.segments)
+        # armed 态实际推进隐含起算：双锚点 = 动作时刻，不发单独 begin 事件
+        self._begin_if_armed(now)
         # model_copy 替换环节列表而非原地改：self.rundown 可能是内置
         # DEFAULT_RUNDOWN 常量，原地 append 会污染全局单例
         self.rundown = self.rundown.model_copy(update={"segments": [*self.rundown.segments, segment]})
@@ -580,7 +654,7 @@ class RundownState:
                 # （进整场累计不蒸发），环节累计随锚点一并清零
                 self._settle_pause_if_paused(now)
                 self.index = -1
-                self.segment_started_at_ms = 0
+                self.segment_started_at_ms = None
                 self.paused_at_ms = None
                 self._accumulated_pause_ms = 0
         else:
@@ -680,7 +754,8 @@ class RundownState:
         计时锚点取**绝对时刻语义**原样还原：恢复后 elapsed 自然包含宕机
         时间，超时闹钟照常报量，衔接决策归 Agent。``on_changed`` 照常置位
         proactive pending——Agent 醒来看到"第 N 环节 + 已超时 X 分钟"自行
-        衔接，不重说开场白。
+        衔接，不重说开场白。快照必然开播后写穿（armed 不落实例），锚点
+        非空，还原后直接是 running / paused / done，不会落回 armed。
         """
         now = self._resolve_now(now_ms)
         if not instance.segments:
@@ -710,9 +785,10 @@ class RundownState:
 
         返回 ``RundownInstance`` 头部对应的进度字段（不含 ``live_session_id``
         与 ``updated_at_ms``——前者由桥接层按场次补，后者由仓储层刷新）；
-        未加载流程单返回空 dict，调用方据此跳过写穿。
+        未加载流程单或未起算（armed，锚点为 ``None`` 无法落非空整型列）
+        返回空 dict，调用方据此跳过写穿。
         """
-        if self.rundown is None:
+        if self.rundown is None or self.rundown_started_at_ms is None:
             return {}
         return {
             "template_id": self.rundown.rundown_id,
@@ -777,7 +853,8 @@ class RundownState:
         """Dashboard / 情境注入使用的快照 dict。
 
         字段：status / rundown_id / title / current{id,title,expected_ms,elapsed_ms,remaining_ms}
-        / index / total / progress_percent / paused。
+        / index / total / progress_percent / paused。armed 态 status 为
+        ``"armed"``，current 的 elapsed 为 0、remaining 为完整预期时长。
         """
         seg = self.current_segment
         current_dict: Optional[Dict[str, Any]] = None
@@ -838,6 +915,9 @@ class RundownState:
 
         lines: List[str] = []
         paused_mark = "（计时暂停中）" if self.paused_at_ms is not None else ""
+        # armed 态标注未起算：elapsed/remaining 显示的是"预期值"而非真实进度，
+        # 提醒读者（Dashboard / 人工调试）此单已装载但还没开播
+        armed_mark = "（未开播，待起算）" if self.status == "armed" else ""
         overdue_ms = elapsed - seg.expected_ms
         if overdue_ms > 0:
             # 超时不冻结显示：明确报出超时量与出路（续期/切换），
@@ -846,12 +926,13 @@ class RundownState:
                 f"[流程单] 环节 {self.index + 1}/{total}：{seg.title}"
                 f"（已进行 {_format_duration_ms(elapsed)}，已超时 {_format_duration_ms(overdue_ms)}）"
                 f"——本环节设计时长 {_format_duration_ms(seg.expected_ms)}，"
-                f"可用 rundown_control 的 renew 续期本环节，或 goto/next 切换环节{paused_mark}"
+                f"可用 rundown_control 的 renew 续期本环节，或 goto/next 切换环节{paused_mark}{armed_mark}"
             )
         else:
             lines.append(
                 f"[流程单] 环节 {self.index + 1}/{total}：{seg.title}"
-                f"（已进行 {_format_duration_ms(elapsed)}，剩 {_format_duration_ms(remaining)}）{paused_mark}"
+                f"（已进行 {_format_duration_ms(elapsed)}，剩 {_format_duration_ms(remaining)}）"
+                f"{paused_mark}{armed_mark}"
             )
         if seg.task_description:
             lines.append(f"目标：{seg.task_description}")

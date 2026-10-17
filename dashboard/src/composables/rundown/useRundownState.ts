@@ -44,6 +44,8 @@ export function useRundownState() {
     switch (s.status) {
       case 'running':
         return '进行中';
+      case 'armed':
+        return '待开播';
       case 'paused':
         return '已暂停';
       case 'done':
@@ -58,6 +60,7 @@ export function useRundownState() {
     if (!s) return 'info';
     if (s.status === 'paused') return 'warning';
     if (s.status === 'running') return 'success';
+    // armed（待开播）与 done 均用 info：中性提示色，不与"运行中/已暂停"争抢注意力
     return 'info';
   });
 

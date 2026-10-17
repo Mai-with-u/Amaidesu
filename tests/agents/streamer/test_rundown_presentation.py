@@ -10,8 +10,10 @@ from src.modules.storage.models.rundown import DEFAULT_RUNDOWN
 
 
 def _loaded_state() -> RundownState:
+    """已起算（running）的状态：load 只装载结构，控制用例需计时语义故显式 begin。"""
     state = RundownState()
     state.load(DEFAULT_RUNDOWN)
+    state.begin(by="system")
     return state
 
 
@@ -123,3 +125,15 @@ async def test_control_restart_rejected_when_idle() -> None:
 
     assert success is False and message == "未加载流程单"
     assert snapshot is not None and snapshot["status"] == "idle"
+
+
+async def test_control_restart_rejected_when_armed() -> None:
+    """armed（已装载未开播）restart 被 not_started 话术拒绝——还没开始无从重开。"""
+    state = RundownState()
+    state.load(DEFAULT_RUNDOWN)
+    assert state.status == "armed"
+
+    success, message, snapshot = apply_rundown_control(state, "restart")
+
+    assert success is False and message == "流程单尚未开始"
+    assert snapshot is not None and snapshot["status"] == "armed"

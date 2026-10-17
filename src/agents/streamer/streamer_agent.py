@@ -758,6 +758,12 @@ class StreamerAgent(BaseAgent):
         """live.started 回调：开播，放行主动发言，读出上场回顾固定整场。"""
         del event_name, source
         self._live_active = True
+        # 流程单开播起算：armed（已装载待开播）→ running，双锚点 = 开播时刻。
+        # 已起算的场（崩溃恢复的进行中/已完成）被结构化拒绝，保持现态静默忽略；
+        # begin 经 on_changed 置位 proactive pending——开场白信号在开播时刻才置
+        reject = self._rundown_state.begin(by="system")
+        if reject is not None:
+            self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
         self._unpersisted_turns.clear()
         self._timeline_notes.clear()

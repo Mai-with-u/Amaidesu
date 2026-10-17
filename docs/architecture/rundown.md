@@ -88,16 +88,17 @@ Pydantic BaseModel，`extra="forbid"`。
 |------|------|
 | `rundown` | 当前流程单（`None` = 未启用） |
 | `index` | 当前环节下标（`-1` = 未开始/已结束） |
-| `segment_started_at_ms` | 当前环节开始锚点 |
+| `segment_started_at_ms` | 当前环节开始锚点（`None` = 尚未起算） |
 | `paused_at_ms` | 非空 = 暂停中（计时冻结） |
 
-`status`（idle / running / paused / done）是派生值，不是状态机枚举。所有方法接受可选 `now_ms`（可注入时钟，测试不依赖 wall clock）。
+`status`（idle / armed / running / paused / done）是派生值，不是状态机枚举。流程单的"场"对齐直播的"场"：`load()` 只装载结构不起算（双锚点保持 `None`，派生为 `armed` 待开播态），`begin()` 在开播时刻（live.started）起算；armed 态被 `goto` / `next` / `append` 实际推进时隐含起算，不发单独事件。提前开机调试不虚涨整场进度。所有方法接受可选 `now_ms`（可注入时钟，测试不依赖 wall clock）。
 
 变更方法（**唯一变更边界**，Agent 工具与 Dashboard 按钮走同一路径）：
 
 | 方法 | 校验 | 副作用 |
 |------|------|--------|
-| `load(rundown)` | 段非空 | 重置游标，置位首段扩展情境 |
+| `load(rundown)` | 段非空 | 只装载结构不起算（armed），重置游标 |
+| `begin(by)` | 仅 armed；by ∈ {system, human} | 双锚点 = now（armed → running），发事件 |
 | `goto(segment_id, by)` | id 存在；已达 `min_duration_ms` | 变更游标 → 发事件 → 置 proactive 信号 |
 | `next(by)` | 同上 | 顺序推进 |
 | `pause()` / `resume()` | 状态合法 | 计时冻结/恢复 |

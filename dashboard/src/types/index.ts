@@ -614,8 +614,9 @@ export interface SimulatorControlResponse {
 /**
  * 流程单运行时快照（`/api/v1/rundown/state` 的 `snapshot` 字段）。
  *
- * - `status` 为后端派生值：`idle`（未加载）/ `running` / `paused` / `done`；
- *   前端据此切换"未加载"/"运行中"/"已暂停"/"已结束"布局。
+ * - `status` 为后端派生值：`idle`（未加载）/ `armed`（已装载待开播）/
+ *   `running` / `paused` / `done`；
+ *   前端据此切换"未加载"/"待开播"/"运行中"/"已暂停"/"已结束"布局。
  * - `current` 为 null 表示当前无环节（idle 或 done）。
  * - `paused`：暂停中时为 true；前端据此 toggle 暂停/继续按钮与本地 tick。
  * - `current.elapsed_ms` 为后端扣除暂停后的累计已播毫秒；
@@ -623,7 +624,7 @@ export interface SimulatorControlResponse {
  * - `progress_percent` 可能为 null（快照缺失），前端按 fallback 处理。
  */
 export interface RundownSnapshot {
-  status: 'idle' | 'running' | 'paused' | 'done';
+  status: 'idle' | 'armed' | 'running' | 'paused' | 'done';
   rundown_id: string;
   title: string;
   current: RundownCurrentSegment | null;

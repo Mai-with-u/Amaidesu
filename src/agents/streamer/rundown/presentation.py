@@ -108,6 +108,8 @@ def apply_rundown_control(
                 ),
                 "unknown_segment_id": f"环节不存在（可用: {', '.join(reject.available_ids)}）",
                 "already_done": "流程单已完成",
+                "not_started": "流程单尚未开始",
+                "already_begun": "流程单已开始",
                 "not_running": "流程单未在运行",
                 "not_paused": "流程单未在暂停",
                 "no_rundown_loaded": "未加载流程单",

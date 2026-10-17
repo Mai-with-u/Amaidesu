@@ -340,7 +340,11 @@ async def test_rundown_active_covers_done_but_not_paused() -> None:
             segments=[RundownSegment(id="a", title="A", task_description="x", expected_ms=600_000)],
         )
     )
-    assert agent._is_rundown_active() is True
+    # armed（已装载未开播）不供能：rundown_ready 只认已起算的场
+    assert (state.status, agent._is_rundown_active()) == ("armed", False)
+
+    state.begin(by="system")
+    assert (state.status, agent._is_rundown_active()) == ("running", True)
 
     state.pause(by="human")
     assert (state.status, agent._is_rundown_active()) == ("paused", False)

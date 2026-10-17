@@ -58,6 +58,7 @@ def _provider(rundown: Rundown = DEFAULT_RUNDOWN) -> tuple[RundownControlProvide
     clock = _FakeClock()
     state = RundownState(clock=clock)
     state.load(rundown, now_ms=clock.now)
+    state.begin(by="system", now_ms=clock.now)  # 工具用例需要 running 语义：load 后显式起算
     return RundownControlProvider(state), clock
 
 
