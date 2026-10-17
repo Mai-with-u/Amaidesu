@@ -39,6 +39,25 @@ _RECONNECT_MAX_ATTEMPTS = 0  # 最大重连次数，0 = 无限
 # （code=7001 请求冷却期），真清过残留就等这么久再首次连接
 STALE_CLEAR_COOLDOWN_S = 5
 
+# 应用心跳失败后的重试间隔上限（秒）：失败按指数退避到这个值，
+# 避免会话异常时按 20s 固定节奏反复打 B 站接口
+_APP_HEARTBEAT_MAX_INTERVAL_S = 120.0
+
+
+class AppSessionExpiredError(Exception):
+    """B 站应用会话已服务端级失效（心跳过期 / GameId 错误等），当前会话无法续命。
+
+    从应用心跳循环抛出、穿出 run() 的任务组，触发既有的"end → 清理 →
+    重连（重新 app/start）"路径重开会话；瞬时网络错误不属此类，不抛。
+    """
+
+
+def _is_session_expired(payload: dict[str, Any]) -> bool:
+    """判别 B 站心跳响应是否为会话级失效（区别于可自愈的瞬时网络/服务抖动）。"""
+    code = payload.get("code")
+    message = str(payload.get("message", ""))
+    return code == 7003 or ("心跳过期" in message) or ("GameId" in message and "错误" in message)
+
 
 class BiliWebSocketClient:
     """Bilibili官方WebSocket客户端"""
@@ -52,6 +71,7 @@ class BiliWebSocketClient:
         api_host: str,
         game_id_checkpoint: Optional[GameIdCheckpoint] = None,
         start_error_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        reopen_on_session_expired: bool = True,
     ) -> None:
         self.id_code = id_code
         self.app_id = app_id
@@ -62,6 +82,9 @@ class BiliWebSocketClient:
         self.game_id_checkpoint = game_id_checkpoint or GameIdCheckpoint()
         # app/start 失败的外显回调（如采集器经事件总线向 WebUI 发告警），可为空
         self.start_error_callback = start_error_callback
+        # 应用心跳遇到会话级失效时是否自动重开（抛错穿出任务组触发重连）；
+        # 关闭后只做告警节流，由人工介入
+        self.reopen_on_session_expired = reopen_on_session_expired
         self.logger = get_logger("BiliWebSocketClient")
 
         self.game_id = ""
@@ -70,6 +93,11 @@ class BiliWebSocketClient:
         self.heartbeat_task = None
         self.app_heartbeat_task = None
         self.recv_task = None
+        # 应用心跳连续失败状态（告警节流）：连续失败只在首条 warning，同因降
+        # debug；恢复成功记一条 info 并复位。特征串变化视为新原因，重新 warning。
+        self._app_hb_fail_streak = 0
+        self._app_hb_fail_reason = ""
+        self._app_hb_first_fail_ts = 0.0
 
     async def run(self, message_handler: Callable[..., Any], queue: Optional[asyncio.Queue] = None) -> None:
         """运行WebSocket客户端（带自动重连）
@@ -260,7 +288,15 @@ class BiliWebSocketClient:
             return None, None
 
     async def _send_app_heartbeat(self) -> None:
-        """发送应用心跳"""
+        """发送应用心跳；失败按同因节流告警，会话级失效按配置抛错触发重开。
+
+        节流语义：连续失败只在首条记 warning（附失败计数与持续时间），同因
+        重复降 debug；原因变化重新 warning；恢复成功记一条 info 并复位。
+        B 站会话长时间挂机后过期（code=7003 心跳过期/GameId 错误）只会一直
+        失败下去，属会话级失效：``reopen_on_session_expired`` 开启时抛
+        ``AppSessionExpiredError``，由任务组瓦解触发既有的 end → 重连路径
+        重开会话；关闭时按普通失败节流告警，等人工介入。
+        """
         if not self.game_id:
             return
 
@@ -276,12 +312,40 @@ class BiliWebSocketClient:
 
             data = response.json()
             if data.get("code") == 0:
+                if self._app_hb_fail_streak > 0:
+                    duration = time.time() - self._app_hb_first_fail_ts
+                    self.logger.info(
+                        f"应用心跳恢复成功（此前连续失败 {self._app_hb_fail_streak} 次，持续 {duration:.0f} 秒）"
+                    )
+                self._app_hb_fail_streak = 0
+                self._app_hb_fail_reason = ""
                 self.logger.debug("应用心跳发送成功")
-            else:
-                self.logger.warning(f"应用心跳失败: {data}")
+                return
 
+            reason = f"code={data.get('code')} {data.get('message', data)}"
+            if _is_session_expired(data):
+                if self.reopen_on_session_expired:
+                    self.logger.info(f"应用会话已服务端失效（{reason}），触发自动重开会话")
+                    raise AppSessionExpiredError(f"应用会话失效（{reason}）")
+            self._record_app_heartbeat_failure(reason)
+
+        except AppSessionExpiredError:
+            raise
         except Exception as e:
-            self.logger.warning(f"发送应用心跳时出错: {e}")
+            self._record_app_heartbeat_failure(f"{type(e).__name__}: {e}")
+
+    def _record_app_heartbeat_failure(self, reason: str) -> None:
+        """登记一次应用心跳失败：同因只 warning 一次（附计数与持续时间），重复降 debug。"""
+        self._app_hb_fail_streak += 1
+        if self._app_hb_fail_streak == 1 or reason != self._app_hb_fail_reason:
+            self._app_hb_fail_reason = reason
+            self._app_hb_first_fail_ts = time.time()
+            self.logger.warning(f"应用心跳失败（第 {self._app_hb_fail_streak} 次，后续同因降为 debug）: {reason}")
+        else:
+            duration = time.time() - self._app_hb_first_fail_ts
+            self.logger.debug(
+                f"应用心跳仍失败（同因，已连续 {self._app_hb_fail_streak} 次 / {duration:.0f} 秒）: {reason}"
+            )
 
     async def _end_app(self, game_id: Optional[str] = None) -> None:
         """结束应用
@@ -391,12 +455,23 @@ class BiliWebSocketClient:
                 break
 
     async def _app_heartbeat_loop(self) -> None:
-        """应用心跳循环"""
+        """应用心跳循环：失败按指数退避放慢节奏；会话级失效抛错穿出任务组触发重开。"""
+        interval_s = float(_APP_HEARTBEAT_INTERVAL_S)
         while self.is_started:
             try:
                 await self._send_app_heartbeat()
-                await asyncio.sleep(_APP_HEARTBEAT_INTERVAL_S)
+                if self._app_hb_fail_streak > 0:
+                    # 失败期间指数退避放慢心跳，避免对异常会话按 20s 固定节奏空打接口
+                    interval_s = min(interval_s * 2, _APP_HEARTBEAT_MAX_INTERVAL_S)
+                    self.logger.debug(f"应用心跳间隔退避至 {interval_s:.0f}s")
+                else:
+                    interval_s = float(_APP_HEARTBEAT_INTERVAL_S)
+                await asyncio.sleep(interval_s)
 
+            except AppSessionExpiredError:
+                # 不能在这里吞掉：吞掉后任务组不瓦解，end → 重连永远不会触发，
+                # 心跳只能对着已死的会话失败到底（场次30 实测 1401 条告警刷屏）
+                raise
             except Exception as e:
                 self.logger.warning(f"应用心跳循环出错: {e}")
                 break

@@ -118,6 +118,12 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             description="是否向系统发出弹幕/SC/礼物等标准事件（关闭后主播感知不到直播动态）",
             json_schema_extra={"x-ui-advanced": True},
         )
+        app_heartbeat_reopen: bool = Field(
+            default=True,
+            title="心跳失效自动重开",
+            description="应用心跳报会话级失效（心跳过期/GameId 错误）时自动 end 并重开会话；关闭后只节流告警",
+            json_schema_extra={"x-ui-advanced": True},
+        )
 
     def __init__(
         self,
@@ -208,6 +214,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             access_key_secret=self.access_key_secret,
             api_host=self.api_host,
             start_error_callback=self._emit_start_error_alert,
+            reopen_on_session_expired=self.typed_config.app_heartbeat_reopen,
         )
 
         self.logger.info("开始采集 Bilibili 官方弹幕数据...")
