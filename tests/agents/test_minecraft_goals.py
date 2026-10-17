@@ -159,6 +159,20 @@ async def test_sky_changes_pass_through_to_the_body_callback() -> None:
     assert recorder.changed == [] and server.calls_to("goal") == []
 
 
+async def test_a_due_timer_passes_through_to_the_body_callback() -> None:
+    """模型用 timer 设的计时到点不挂在任何目标上：原样交给身体回调由游戏 Agent 叫醒模型，不去查目标。"""
+    server, recorder = FakeMaicraft(), _Recorder()
+    watch = _watch(server, recorder)
+    await watch.step()
+    server.body_event("timer_due", "计时 3 到点：看炉子烧好没（600 秒前设的；此刻白天）")
+
+    await watch.step()
+
+    assert [event["kind"] for event in recorder.body] == ["timer_due"]
+    assert recorder.body[0]["message"] == "计时 3 到点：看炉子烧好没（600 秒前设的；此刻白天）"
+    assert recorder.changed == [] and server.calls_to("goal") == []
+
+
 async def test_after_a_world_change_missing_goals_are_reported_gone() -> None:
     """事件流换了：逐个查在跟踪的目标，查不到的如实说不在了。"""
     server, recorder = FakeMaicraft(), _Recorder()

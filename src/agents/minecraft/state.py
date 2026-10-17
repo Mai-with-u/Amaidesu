@@ -24,6 +24,18 @@ class MinecraftInstruction(NamedTuple):
     content: str
 
 
+class TimerDue(NamedTuple):
+    """计时到点的叫醒：模型自己用 timer 要的"过 N 秒叫我"，不是旁人的通知，手上没有任务时也开批。
+
+    排队时不定怎么处理，轮到读它的那一刻才看任务状态：进行中就是一条普通通知；已交付就由它开一个新任务
+    （备注就是这次要做的事）；挂起着就接着原任务做。排队时就定的话，到点那一刻任务还在跑、
+    读到之前刚好交付，这条叫醒会一直留在队列里没人读，模型永远等不到。
+    """
+
+    task_id: str
+    content: str
+
+
 @dataclass(slots=True)
 class TodoItem:
     """一条待办（全量文档元素）"""

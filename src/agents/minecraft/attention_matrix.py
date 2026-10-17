@@ -17,9 +17,13 @@ MaiCraft v1 的事件流里大部分是目标运行的处境变化（开始、�
 提醒（快溺水、装备快坏、黑暗里反复挨打这类）是写给游戏 Agent 的维护提示，证据在 observe(self) 里，
 不是遭遇本身；转给主播只会变成一串重复的"身体事件"，把真正的挨打和死亡挤掉，所以不进叙事通道。
 
+计时到点（`timer_due`）同理：那是游戏 Agent 用 timer 给自己定的"过 N 秒回头看一眼"，备注是它写给自己的
+（"看炉子烧好没"），画面里什么都没发生；到点后它去看、去做，取出东西、交付这些后续才是主播能讲的，
+会照常走步进完成与 `game.report`。提前把一句自备忘念给观众，只会和随后的真进展说两遍，所以也不进叙事通道。
+
 ## 契约
 
-- `classify()` 返回 `None` = 这条事件不进入叙事通道（目标运行的处境变化、提醒）；
+- `classify()` 返回 `None` = 这条事件不进入叙事通道（目标运行的处境变化、提醒、计时到点）；
 - 未知事件种类归 `unknown` 且保留 `source_event_type`，所以**上游加新事件种类不会让本系统的事件面漂移**；
 - `summarize()` 只陈述事件里有的事实：Mod 写的那句话去掉坐标，坐标这类遥测不进叙事通道。
 """
@@ -67,8 +71,9 @@ _SOURCE_KINDS: Dict[str, str] = {
 # （步进完成除外——它转 milestone；目标完成/失败/卡住不经这里，交付与升级走 game.report）
 _GOAL_KINDS = frozenset({"started", "asked", "paused", "resumed", "finished", "death_recovery_applied"})
 
-#: 写给游戏 Agent 的维护提示：证据在 observe(self) 里，不是遭遇，不进叙事通道
-_SILENT_KINDS = frozenset({"reminder"})
+#: 写给游戏 Agent 自己的：维护提示（证据在 observe(self) 里）与计时到点（它给自己定的回头看一眼），
+#: 都不是遭遇，不进叙事通道；计时到点后游戏 Agent 去做的事另走步进完成与交付，主播从那里讲。
+_SILENT_KINDS = frozenset({"reminder", "timer_due"})
 
 #: 每种叙事的开头：Mod 那句话是写给游戏 Agent 的，主播要先知道这是什么性质的事
 _LEADS: Dict[str, str] = {

@@ -47,7 +47,7 @@ from src.agents.minecraft.maicraft import (
     ledger_task_id,
     reply_of,
 )
-from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction
+from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, TimerDue
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.context import PrefixGuard, TailImages
@@ -98,6 +98,13 @@ _FOLLOW_NOTICE = (
 _SKY_NOTICE = (
     "[天色] {message}。这是观察不是命令：身体照常做手上的事，夜里能弄到床会自己找空当去睡，"
     "弄不到床又打不过会挖坑封顶熬到天亮；要专门安排睡觉、回家或赶在天黑前收尾就调整计划，不用就接着做。"
+)
+
+# 计时到点：模型自己用 timer 设的"过 N 秒叫我"到了，Mod 那句话（编号、备注、设了多少秒、此刻天色）原样带上；
+# 计时到点就用掉了，还要再等得重新设，说清这一点免得模型以为它还挂着。
+_TIMER_NOTICE = (
+    "[计时] {message}。这是你自己用 timer 设的到点提醒：按备注去看一眼、做决定；"
+    "这个计时已经用掉了，还要再等就重新设一个。"
 )
 
 # 游戏没连上时拒收委派的原因：经委派工具原样回给派活的一方，它据此等连上再派，
@@ -560,9 +567,10 @@ class MinecraftAgent(BaseAgent):
             self._wake_event.clear()
             if not (self._running and self._message_queue) or not self._live_active:
                 continue
-            # 任务交付或挂起后等主播新指令，后台通知只补充已知状态，不独立开新任务。
+            # 任务交付或挂起后等主播新指令，后台通知只补充已知状态，不独立开新任务；
+            # 计时到点除外：那是模型自己要的叫醒，闲着时不开批它就永远等不到。
             if (self._task_finished or self._task_suspended) and not any(
-                isinstance(message, MinecraftInstruction) for message in self._message_queue
+                isinstance(message, (MinecraftInstruction, TimerDue)) for message in self._message_queue
             ):
                 continue
             try:
@@ -632,7 +640,9 @@ class MinecraftAgent(BaseAgent):
             while self._message_queue:
                 queued = self._message_queue.popleft()
                 task_id, content = queued
-                if isinstance(queued, MinecraftInstruction):
+                # 计时到点轮到读时才看任务状态：已交付就和一条指令一样开新任务（备注就是这次要做的事）；
+                # 挂起着就接着原任务做，不记成原始指令；任务进行中只是一条普通通知。
+                if isinstance(queued, MinecraftInstruction) or (isinstance(queued, TimerDue) and self._task_finished):
                     if self._task_finished:
                         self._start_new_task(messages, system_message)
                         opening_due = True
@@ -640,6 +650,8 @@ class MinecraftAgent(BaseAgent):
                     self._task_finished = False
                     self._task_suspended = False
                     self._task_steps = 0
+                elif isinstance(queued, TimerDue):
+                    self._task_suspended = False
                 if task_id:
                     self._delegated_batch_ids.append(task_id)
                 messages.append({"role": "user", "content": content})
@@ -1167,10 +1179,10 @@ class MinecraftAgent(BaseAgent):
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:
-        """生存需求的临时任务、处理不了的需求、角色死亡、跟随的处境变化与天色变了：都记进本批上下文。
+        """生存需求的临时任务、处理不了的需求、角色死亡、跟随的处境变化、天色变了与计时到点：都记进本批上下文。
 
         处理不了的需求、角色死亡、跟随的处境变化唤醒任务告诉模型（前两种同时告诉主播）；
-        天色变了不唤醒，挂在队列里随下一次唤醒带给模型；临时任务的开始与结束只告诉主播。
+        计时到点手上没有任务也叫醒模型；天色变了不唤醒，挂在队列里随下一次唤醒带给模型；临时任务的开始与结束只告诉主播。
         临时任务收尾那句话另外留给紧接着的暂停通知：撤离后主任务停在半路时，游戏 Agent 从暂停通知里读到它。
         """
         kind = str(event.get("kind") or "")
@@ -1192,6 +1204,9 @@ class MinecraftAgent(BaseAgent):
             if self._batch_active or not self._task_finished:
                 self._inject_wakeup_message(_FOLLOW_NOTICE.format(message=message))
             return
+        if kind == "timer_due":
+            self._wake_for_timer(message)
+            return
         notice = _BODY_NOTICES.get(kind)
         if notice is not None:
             # 处理不了的需求、角色死亡：身体自己顾不过来，任务还没结束就注入一条通知唤醒模型，同时上报主播。
@@ -1210,6 +1225,20 @@ class MinecraftAgent(BaseAgent):
             else f"身体处理完急事：{message}"
         )
         await self._emit_game_event("attention_required", notice, already_resolved=kind == "temporary_task_finished")
+
+    def _wake_for_timer(self, message: str) -> None:
+        """计时到点：模型自己设的"过 N 秒叫我"到了，不管手上有没有任务都叫醒它，Mod 那句话原样带上。
+
+        不能像跟随那样只在任务进行中才说：模型设完计时多半去干别的、交付了或闲着，只在任务中才叫就永远等不到。
+        排成 TimerDue 而不是普通通知：worker 认得它，交付或挂起后也开批；轮到读时再按任务状态决定开新任务还是接着做。
+        收工态不排：下一场开播时突然冒出一条上一场的提醒只会让模型去看过时的东西。
+        给观众的叙述不出：这是模型给自己定的回头看一眼，注意流分类表把它归进静默。
+        """
+        if not self._live_active:
+            self._logger.info(f"收工态不叫醒到点的计时：{message[:60]}")
+            return
+        self._message_queue.append(TimerDue("", _TIMER_NOTICE.format(message=message)))
+        self._wake_event.set()
 
     def _carry_sky_notice(self, message: str) -> None:
         """天色变了：任务还没结束就挂进消息队列但不唤醒，随本批下一步或下一次唤醒（目标结束、提问、暂停、主播新指令）带给模型。
@@ -1260,7 +1289,11 @@ class MinecraftAgent(BaseAgent):
             }
         tracked = self._goals.tracked_ids()
         if not tracked:
-            return {"ok": False, "error": "没有在跑的目标；继续推进待办，或上报阻塞"}
+            # 只设了计时、没有目标在跑：计时到点不管这一轮结没结束都会叫醒，说清这点，免得模型为等计时去上报阻塞。
+            return {
+                "ok": False,
+                "error": "没有在跑的目标；继续推进待办，或上报阻塞。只在等计时不用让出：到点会叫醒你，这一轮结束了也会叫",
+            }
         if self._message_queue:
             return {"ok": True, "waiting": False, "reason": "已有新消息，请处理最新事实"}
         self._wait_requested = True
@@ -1268,7 +1301,7 @@ class MinecraftAgent(BaseAgent):
             "ok": True,
             "waiting": True,
             "goals": [self._goal_notes[goal_id] for goal_id in tracked if goal_id in self._goal_notes],
-            "resume_on": "目标结束、提问、被暂停，或主播发来新指令",
+            "resume_on": "目标结束、提问、被暂停、计时到点，或主播发来新指令",
         }
 
     def _unfinished_todos(self) -> bool:

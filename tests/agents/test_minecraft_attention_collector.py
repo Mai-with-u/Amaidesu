@@ -98,6 +98,7 @@ def test_hurt_and_dimension_change_are_encounters_and_reminders_stay_silent() ->
     assert classify("gear_broken") == "unknown", "装备用坏没有专门事件名，走 unknown 但有说清性质的开头"
     assert classify("discovered") == "unknown"
     assert classify("sky_changed") == "unknown", "天色变了是观众也看得见的变化，进叙事通道而不是静默"
+    assert classify("timer_due") is None, "计时到点是游戏 Agent 给自己定的回头看一眼，后续进展另走步进完成与交付"
 
 
 def test_summary_tells_what_kind_of_encounter_it_was() -> None:
