@@ -64,7 +64,7 @@ flowchart LR
 |------|----------|------|
 | **EventBus** | `src/modules/events/event_bus.py` | 事件总线核心：emit / on / off、精确 + 通配匹配、拦截器链、统计 |
 | **EventRegistry** | `src/modules/events/registry.py` | `@register_event` 装饰器 + `EVENT_REGISTRY` + 启动一致性硬检查 |
-| **CoreEvents** | `src/modules/events/names.py` | 事件名常量（24 个具名 + 3 个通配占位符） |
+| **CoreEvents** | `src/modules/events/names.py` | 事件名常量（具名 + 通配占位符，全集以该文件为准） |
 | **Payloads** | `src/modules/events/payloads/*.py` | 事件载荷类型（Pydantic，按语义域分包） |
 | **EventInterceptor** | `src/modules/events/interceptors/*.py` | 拦截管道（限流 / 相似过滤 / 场次盖章） |
 | **EventHistoryRecorder** | `src/modules/events/event_recorder.py` | 事件记录器：订阅 `#`（全部事件）写内存环形缓冲 |
@@ -79,7 +79,7 @@ src/modules/events/
 ├── event_history.py      # EventHistoryService（纯内存环形缓冲，运行周期观察窗）
 ├── event_recorder.py     # EventHistoryRecorder（订阅 # 全部事件 → 记录）
 ├── event_type_map.py     # WS 类型名（room.message 折叠例外，唯一非直通映射）
-├── names.py              # CoreEvents 常量（24 具名 + 3 通配占位符）
+├── names.py              # CoreEvents 事件名常量（具名 + 通配占位符）
 ├── registry.py           # @register_event + EVENT_REGISTRY + ensure_registry_consistency
 ├── interceptors/
 │   ├── base.py           # EventInterceptor 基类（scope_prefixes / priority / intercept）
@@ -91,10 +91,14 @@ src/modules/events/
 └── payloads/
     ├── __init__.py       # Payload 统一导出
     ├── base.py           # BasePayload / OpenPayload（开放载荷，extra=allow）
+    ├── agents.py         # agent.* Payload（agent.prompted / agent.replied）
+    ├── body.py           # game.body.* Payload（BodyEventPayload，判别字段 kind）
     ├── core.py           # core.* Payload
     ├── live.py           # live.* Payload（LiveStartedPayload / LiveEndedPayload 两类）
     ├── room.py           # room.message.* Payload（一类六注册）
-    ├── game.py           # game.* Payload（一类四注册）
+    ├── room_state.py     # room.state.* Payload（RoomStateWatchedPayload）
+    ├── game.py           # game.* Payload（GamePayload 一类四注册 + GameBoardStatePayload）
+    ├── game_chat.py      # game.chat.received Payload
     ├── rundown.py        # rundown.changed Payload
     ├── tasks.py          # task.changed Payload
     ├── planner.py        # planner.decision / planner.verdict / streamer.stage Payload
@@ -182,7 +186,7 @@ event_bus.reset_stats(event_name=None)
 
 ## 事件事实表与拓扑
 
-> **单一事实源（代码导出）**：所有具名事件（含 3 个通配占位符）以 `src/modules/events/names.py` 的 `CoreEvents` 常量为唯一权威定义。`CoreEvents.get_all_events()`（或 `CoreEvents.ALL_EVENTS`）枚举全部具名事件；启动期 `ensure_registry_consistency()` 守护 `EVENT_REGISTRY` 与 `CoreEvents` 具名事件集合完全一致——漂移在启动期暴露，拒启。Payload 类与字段语义写在 `src/modules/events/payloads/*.py` 与 `CoreEvents` 常量 docstring 里，以代码为准。
+> **单一事实源（代码导出）**：所有事件名（具名 + 通配占位符）以 `src/modules/events/names.py` 的 `CoreEvents` 常量为唯一权威定义。`CoreEvents.get_all_events()`（或 `CoreEvents.ALL_EVENTS`）枚举全部具名事件；启动期 `ensure_registry_consistency()` 守护 `EVENT_REGISTRY` 与 `CoreEvents` 具名事件集合完全一致——漂移在启动期暴露，拒启。Payload 类与字段语义写在 `src/modules/events/payloads/*.py` 与 `CoreEvents` 常量 docstring 里，以代码为准。
 
 事件名清单 / 发布者 / 订阅者拓扑**从代码导出**，本节不再手抄：
 
@@ -216,7 +220,8 @@ Dashboard WebSocket 的 `type` 字段 = **事件名直通**；唯一例外是 `r
 | 形态 | 类 | 事件 |
 |---|---|---|
 | 一类多注册 + 判别字段 | `RoomMessagePayload`（`_DISCRIMINANT_FIELD="message_type"`） | `room.message.*` 六事件 |
-| 一类多注册 + 判别字段 | `GamePayload`（`_DISCRIMINANT_FIELD="event_type"`） | `game.*` 四事件 |
+| 一类多注册 + 判别字段 | `GamePayload`（`_DISCRIMINANT_FIELD="event_type"`） | `game.milestone` / `game.attention_required` / `game.error` / `game.report` |
+| 一事件一个类 | `GameBoardStatePayload` | `game.state.changed`（高频呈现流，不落 `game_events` 表） |
 | 一事件一个类 | `LiveStartedPayload` / `LiveEndedPayload`（字段本就不同） | `live.started` / `live.ended` |
 | 一事件一个类 | `CoreStartupPayload` / `CoreShutdownPayload` / `CoreErrorPayload` / `RundownChangedPayload` / `TaskChangedPayload` / `PlannerDecisionPayload` / `PlannerVerdictPayload` / `StreamerStagePayload` / `StreamerSpeechPayload` | 各自对应 |
 | 一事件一个类（形状不同） | `UtteranceStartedPayload` / `UtteranceFinishedPayload` / `UtteranceFailedPayload` | `tts.utterance.*` 三事件 |
@@ -265,7 +270,7 @@ ensure_registry_consistency()   # 启动硬检查：EVENT_REGISTRY 与 CoreEvent
 |--------|----------|--------|------|
 | `RateLimitInterceptor` | 100 | `room.message.*` | 全局 / 单用户滑动窗口限流（防刷屏）；用户标识经共用 `lookup.extract_user_id` 提取（嵌套 `user.id` 优先，顶层键兜底） |
 | `SimilarFilterInterceptor` | 100 | `room.message.*` | 相似文本合并（滑动窗口内相似度超阈值丢弃） |
-| `SessionStampInterceptor` | 200 | room.message. / streamer. / planner.decision / tool.result. / game. | 场次盖章：`live_session_id=0` 的业务事件统一注入当前场次主键（单点注入、全链一致；归属解析失败放行原 payload 不阻断） |
+| `SessionStampInterceptor` | 200 | room.message. / streamer. / planner. / tool.result. / game. / rundown. / task. / agent. | 场次盖章：`live_session_id=0` 的业务事件统一注入当前场次主键（单点注入、全链一致；归属解析失败放行原 payload 不阻断） |
 
 **执行顺序 = `priority` 升序**（数值小者先行，同值按注册顺序），与 `add_interceptor` 的注册顺序解耦：净化类（限流 / 相似过滤）先于加工类（场次盖章），被净化丢弃的消息不消耗归属解析。
 

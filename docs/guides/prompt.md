@@ -43,9 +43,15 @@ pm.load_all()
 | 模板键 | 位置 | 用途 |
 |--------|------|------|
 | `amaidesu_planner_react` | `src/agents/streamer/prompts/` | Planner ReAct 循环系统提示词（行为准则，工具面经 LLM 请求注入，不在模板内） |
-| `amaidesu_replyer` | `src/agents/streamer/prompts/` | Replyer 回复生成模板（人设注入 + reply 工具调用契约） |
+| `amaidesu_planner_delegate_rules` | `src/agents/streamer/prompts/` | Planner 委派守则（游戏委派的受理与推进约束） |
+| `amaidesu_replyer` | `src/agents/streamer/prompts/` | Replyer 回复生成的 user 段输入模板（只产出台词，无工具调用契约） |
+| `amaidesu_replyer_system` | `src/agents/streamer/prompts/` | Replyer 的 system 稳定段（人设与表达契约，构造期渲染） |
 | `summary_system` | `src/agents/streamer/prompts/` | 后台维护者话题摘要的系统提示词 |
+| `chapter_system` | `src/agents/streamer/prompts/` | 按章压缩的系统提示词（上下文检查点） |
+| `profile_system` | `src/agents/streamer/prompts/` | 观众画像整理的系统提示词（收播整理） |
+| `session_recap_system` | `src/agents/streamer/prompts/` | 场次回顾总结的系统提示词（收播整理） |
 | `amaidesu_minecraft_agent` | `src/agents/minecraft/prompts/` | MinecraftAgent 系统提示词（事件驱动 ReAct AI 玩家） |
+| `text_adv_vlm_question` | `src/agents/text_adv/prompts/` | 文字冒险观察循环的 VLM 用户提问 |
 | `screen_vlm_system` | `src/modules/vision/prompts/` | 屏幕感知 VLM 的 system message |
 | `screen_vlm_prompt` | `src/modules/vision/prompts/` | 屏幕感知 VLM 的用户 prompt |
 | `viewer_message` | `src/modules/simulator/prompts/` | 模拟观众发言生成（常驻人设） |
@@ -177,7 +183,7 @@ input_config = config_service.get_config_with_defaults(
 
 | 文件 | 内容 |
 |------|------|
-| `agents.toml` | 业务 Agent（`[agents].enabled` + streamer/minecraft/text_adv 子树） |
+| `agents.toml` | 业务 Agent（`[agents].enabled` + streamer/minecraft/text_adv/game_2048 子树） |
 | `collectors.toml` | 采集器（顶层 `enabled` 名单 + 各采集器子段） |
 | `tools.toml` | 工具域（`[tools]` 提供者开关 / `disabled_tools` / `[tools.tasks]` 异步任务基建） |
 | `avatar.toml` | 虚拟形象域（`[avatar.platform]` 启用名单 + 各平台成员段 + `[avatar.lipsync]` 口型共享件） |
@@ -192,7 +198,7 @@ input_config = config_service.get_config_with_defaults(
 ```toml
 # config/agents.toml —— Agent 启用
 [agents]
-enabled = ["streamer"]        # 可选: streamer / minecraft / text_adv
+enabled = ["streamer"]        # 可选: streamer / minecraft / text_adv / game_2048
 
 # config/avatar.toml —— 虚拟形象平台启用（名单成员 = 平台工具全部可见）
 [platform]
@@ -255,7 +261,7 @@ if config_service.is_interceptor_enabled("rate_limit"):
 ```bash
 # 首次运行自动生成 config/ 七文件
 uv run python main.py
-# → 生成 agents.toml, collectors.toml, tools.toml, model.toml, storage.toml, infra.toml
+# → 生成 agents.toml, collectors.toml, tools.toml, avatar.toml, model.toml, storage.toml, infra.toml
 ```
 
 ---

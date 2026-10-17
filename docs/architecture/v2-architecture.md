@@ -84,7 +84,7 @@
 ```mermaid
 flowchart TB
     subgraph Agents["Agent 层（主播自我驱动 / 游戏命令驱动）"]
-        SA["主播 StreamerAgent<br/>MessageBuffer → Planner 决策循环 → reply 工具 → Replyer 表达引擎<br/>+ Rundown 流程单 + 后台双任务"]
+        SA["主播 StreamerAgent<br/>MessageBuffer → Planner 决策循环 → streamer_reply 工具 → Replyer 表达引擎<br/>+ Rundown 流程单 + 后台双任务"]
         GA["游戏代理（命令驱动）<br/>MinecraftAgent：framework_delegate 委派唤醒任务内有界循环（AI 玩家范式）"]
     end
     subgraph Tools["工具层（被动能力，ToolRegistry 注册）"]
@@ -106,16 +106,83 @@ flowchart TB
 
 各层要点：
 
-- **主播 Agent**：`src/agents/streamer/`——弹幕窗 MessageBuffer 聚合，Planner 以 ReAct 循环决策（工具列表 = 全局 ToolRegistry + reply 局部工具，Planner LLM profile 代码硬编码 `planner`（高质量模型档），`planner_max_steps=8` 防失控）：查信息（游戏状态 / 往场回顾 / 常客印象）→ 调 `reply` 工具提供情绪与强度 → Replyer 表达引擎生成纯文本 speech（含敏感词净化），由 reply 工具组装情绪与元数据。Replyer 使用一条 system 人设与一条 user（聊天记录、本轮消息、回复指引、风格），末尾为“现在，你说：”，不向模型发送 tools。**Planner 与 Replyer 都是内部件，两者都不注册为工具**（reply_tool 是 LLM 调用入口）。Rundown 流程单子系统以"备忘录 + 闹钟"给环节方向，推进权归 Agent 自身。
+- **主播 Agent**：`src/agents/streamer/`——弹幕窗 MessageBuffer 聚合，Planner 以 ReAct 循环决策（工具列表 = 全局 ToolRegistry + reply 局部工具，Planner LLM profile 代码硬编码 `planner`（高质量模型档），`planner_max_steps=8` 防失控）：查信息（游戏状态 / 往场回顾 / 观众印象）→ 调 `streamer_reply` 工具（spec 声明名 `reply`）提供情绪与强度 → Replyer 表达引擎生成纯文本 speech（含敏感词净化），由该工具组装情绪与元数据。Replyer 使用一条 system 人设与一条 user（聊天记录、本轮消息、回复指引、风格），末尾为“现在，你说：”，不向模型发送 tools。**Planner 与 Replyer 都是内部件，两者都不注册为工具**（reply_tool 是 LLM 调用入口）。Rundown 流程单子系统以"备忘录 + 闹钟"给环节方向，推进权归 Agent 自身。
 - **游戏代理**（`src/agents/<name>/`，如 minecraft / text_adv）：AI 玩家范式——感知（公用 `vision_look_at_screen` 快照）、推进（专属工具如 text_adv_advance）、循环内聚于一个自包含包。加游戏 = 加包 + 配置，框架零改动。
 - **工具层**：全部工具统一 ToolSpec 契约，两个来源——内置（进程内渲染/感知）、MCP（外部扩展）。同步调用结果直返，异步工具经 `tool.result.<name>` 事件回传。
 - **存储层**：SQLite 存储（具体表与字段以 schema_migrations 为唯一事实源）+ schema_migrations 版本化迁移；模拟数据带 `simulated` 列，统计查询一律排除——模拟观众不是观众。
+
+## 一场直播怎么运转
+
+静态形状之上，看动态：观众说话的时候，和没人说话的时候。
+
+```mermaid
+sequenceDiagram
+    participant 输入 as 控制台 / B 站弹幕采集器
+    participant 总线 as 事件总线 + 拦截器
+    participant 主播 as StreamerAgent
+    participant 工具 as ToolRegistry
+    participant 出口 as TTS / 虚拟形象 / 演播
+
+    rect rgb(248, 248, 248)
+    Note over 输入,出口: 时刻一——观众说话了
+    输入->>总线: room.message.danmaku「今天玩什么？」
+    总线->>总线: 拦截器：限流 + 相似合并（拦刷屏与复读）
+    总线->>主播: 分发
+    主播->>主播: MessageBuffer 攒批（默认窗口 3 秒 / 满 20 条）
+    主播->>工具: memory_recall_session(n_back=1)
+    工具-->>主播: 上场回顾「答应大家这周开 Minecraft 新坑」
+    Note over 主播,工具: Planner ReAct 决策（有步数上限，防失控）
+    主播->>工具: obs_switch_scene（切到游戏场景）
+    主播->>工具: streamer_reply（生成台词与情绪）
+    工具-->>主播: 台词 + 情绪
+    主播->>出口: 台词进发言队列播出；情绪驱动虚拟形象表情
+    end
+    rect rgb(248, 248, 248)
+    Note over 输入,出口: 时刻二——没人说话，主播自己开口
+    主播->>主播: rundown_overdue（ProactiveTrigger 内部触发：流程单环节超时）
+    主播->>主播: ProactiveTrigger：空转检测
+    主播->>出口: 主动开口「该开游戏了」
+    end
+```
+
+时刻一是观众消息的来路：先过拦截器（拦掉刷屏与复读），再攒成一小批统一处理；开口之前主播可以先查记忆、看看游戏里的情况，然后决定这批说不说、怎么说。时刻二是设计目标所在：没人说话时，主播也要能靠节目单与空转检测继续推进——还是同一个决策循环，输入换成了"此刻节目单走到哪、我是什么人设"。这一目标仍在打磨，实际效果依赖节目单与提示词的质量。
+
+回复产出的是台词与情绪：台词送去合成播出，情绪驱动虚拟形象表情；而要做的事（切场景、换装扮）不打包进回复，在决策循环里直接执行。按设计，加一档直播节目只需改节目单与提示词，不新增代码模块。
+
+### 游戏 Agent：同一类，派活通道不一样
+
+游戏 Agent（Minecraft、文字冒险、2048）与主播的分工不同：主播自己找活干，游戏 Agent 等命令——拿到命令才启动自己的循环、做完即停、空闲时不运行。进展上报到事件总线，主播订阅后当作"游戏里发生了什么"纳入决策；状态从各自暴露的查询工具拿；彼此之间互不依赖。差别在"命令从哪来"：Minecraft 走委派，一整轮是这样跑的：
+
+```mermaid
+sequenceDiagram
+    participant 主播 as StreamerAgent
+    participant 注册表 as ToolRegistry
+    participant MC as MinecraftAgent
+    participant 总线 as 事件总线
+
+    主播->>注册表: framework_delegate("minecraft", "建一座房子")
+    注册表-->>主播: 受理回执（任务号）
+    Note over MC: 指令入队，唤醒任务循环
+    MC->>MC: 有界循环：调 MCP 工具一步步干
+    MC->>总线: game.report（交付总结）
+    总线->>主播: 订阅 game.*：先记下，空闲时再处理
+    主播->>注册表: minecraft_get_work_log()
+    注册表-->>主播: 工作文档（想看细节时再查）
+```
+
+文字冒险和 2048 走另一条通道：不接委派，主播直接调它们的专属工具驱动——启停观察循环、推进剧情、在选项间做选择、对局落子；文字冒险的观察循环遇到选项屏会上报，等主播来选。两种交互形态的定案见 [ADR-043](../decisions/043-game-agent-interaction-shapes.md)。
+
+按设计，加一类游戏只需新增一个独立的 Agent 包和一份配置，不需要改框架。
+
+### 工具：一张清单，各拿一份
+
+主播和游戏 Agent 要用的能力——看屏、查记忆、控制虚拟形象与 OBS、接外部 MCP——都做成被动工具：被调才干活，调用即返回结果，失败也是结果而不是异常，一次工具故障不会打断决策循环。所有工具注册进同一张清单，每个 Agent 按可见名单各拿一份，自带的工具只登记给自己；带外部连接的工具自己维护连接、接受健康探活，连续失败自动熔断、从所有工具列表里暂时消失，恢复后自动回来。想接入自己的工具，见[组件开发指南](../guides/component.md)。
 
 ## 支撑系统的同步升级
 
 ### 事件系统：语义域 + 通配订阅 + 拦截器
 
-事件名从流水线位置词（`input.message.received`）改为语义域（`room.message.danmaku`）——事件描述"世界上发生了什么"，而不是"它处在管道第几站"。EventBus 支持 MQTT 风格通配订阅（`*` 单层 / `#` 多层尾缀）与最长前缀优先分发。
+事件名从流水线位置词（`input.message.received`）改为语义域（`room.message.danmaku`）——事件描述"世界上发生了什么"，而不是"它处在管道第几站"。EventBus 支持 AMQP topic 风格通配订阅（`*` 单层 / `#` 多层尾缀）；精确与通配命中的订阅者并发分发，无先后语义。
 
 输入净化职责由 EventBus 分发层的**事件拦截器**承担（限流、相似过滤）。
 
@@ -166,4 +233,3 @@ flowchart TB
 - [事件系统](event-system.md) - 事件全表、通配语义、拦截器开发
 - [组件开发指南](../guides/component.md) - 采集器/工具/Agent 三范式实操
 - [ADR-005](../decisions/005-v2-agent-tool-architecture.md) - 本决策的正式决策记录
-- 完整定案存档：`.omo/drafts/amaidesu-v2-architecture.md`（41 条定案清单）

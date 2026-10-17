@@ -16,7 +16,7 @@
 
 | 文件 | 职责 |
 |------|------|
-| `rundown.py` | 数据契约 `Rundown` / `RundownSegment` + 内置默认流程单 `DEFAULT_RUNDOWN` |
+| 数据契约 | 不在本包——已下沉 `src/modules/storage/models/rundown.py`（`Rundown` / `RundownSegment` + 内置默认流程单 `DEFAULT_RUNDOWN`，与存储层共用持久化契约） |
 | `rundown_state.py` | 运行时状态：游标 + 计时 + 唯一变更边界 |
 | `../tools/rundown_tool.py` | `RundownControlProvider`（注册名 `rundown_control`）：Agent 切换/暂停/恢复环节的工具 |
 | 闹钟 | 不在本包——并入 `proactive_trigger.py`，作为一个触发源（`rundown_overdue`） |
@@ -41,7 +41,7 @@ flowchart LR
     Watch[超时闹钟<br/>ProactiveTrigger 触发源] -.->|只提醒：已超时| Planner
 ```
 
-## 数据模型（`rundown.py`）
+## 数据模型（`src/modules/storage/models/rundown.py`）
 
 Pydantic BaseModel，`extra="forbid"`。
 
@@ -154,7 +154,7 @@ rundown_id = ""   # 空 = 使用内置默认流程单；指向 rundowns 表中�
 
 ## 架构约束
 
-- 子系统全部内聚 `src/agents/streamer/` 包内（核心在 `rundown/` 子包，工具在 `tools/`），不跨 Agent 共享；闹钟复用 ProactiveTrigger，不新建循环组件
+- 运行时内聚 `src/agents/streamer/` 包内（状态在 `rundown/` 子包，工具在 `tools/`），不跨 Agent 共享；数据契约下沉 `src/modules/storage/models/rundown.py`、CRUD 在 `src/modules/storage/`；闹钟复用 ProactiveTrigger，不新建循环组件
 - 不新增事件：仅 `rundown.changed` 一个语义域事件（事件表见[事件系统](./event-system.md)）
 - 状态变更只经 `RundownState` 变更边界；工具、Dashboard、闹钟兜底皆不绕过
 - 闹钟只提醒不执法；硬切换策略留位不实现（YAGNI）

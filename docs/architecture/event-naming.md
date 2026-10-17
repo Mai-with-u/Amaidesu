@@ -24,7 +24,7 @@
 
 | 部分 | 必填 | 说明 | 示例 |
 |---|---|---|---|
-| `域` | ✅ | **拥有这个事实的来源子系统**：core/live/room/game/rundown/planner/streamer/tts/task | `room` |
+| `域` | ✅ | **拥有这个事实的来源子系统**：core/live/room/game/rundown/planner/streamer/tts/task/agent | `room` |
 | `子类` | 可选 | 该域内的**子层**：`message`（行为流）/ `state`（状态快照）/ `result`（工具结果）/ `command`（命令下发） | `message` |
 | `动作` | ✅ | **已发生的事实**（过去时语义）：具体、单一、无歧义 | `danmaku` |
 
@@ -39,7 +39,7 @@
 事件名第一段回答"**这件事是谁的事实**"——即拥有该事实的来源子系统。两类来源都合法：
 
 - **世界适配器**：直播平台接入（弹幕/礼物/SC → `room`）、场次管理（`live`）、游戏 Agent（`game`）——它们感知外部世界发生的事实；
-- **内部组件**：Planner（`planner`）、主播 Agent（`streamer`）、TTS（`tts`）、流程单（`rundown`）、任务记录表（`task`）、系统核心（`core`）——它们是内部业务事实的归属方。
+- **内部组件**：Planner（`planner`）、主播 Agent（`streamer`）、TTS（`tts`）、流程单（`rundown`）、任务记录表（`task`）、Agent 控制面（`agent`）、系统核心（`core`）——它们是内部业务事实的归属方。
 
 **放置规则**：新事件归属于"事实发生时谁拥有它"，而不是"谁消费它"或"它发生在哪个处理阶段"。归属拿不准时，问"这件事的原始记录写给谁的名下"。
 
@@ -50,13 +50,14 @@
 | **core** | 系统级核心状态（启动 / 关闭 / 错误）。**不属于任何业务域**，仅供系统组件订阅 | `core.startup` / `core.shutdown` / `core.error` |
 | **live** | 直播场次生命周期（开播 / 下播）。**唯一含时间窗锚点**的域，所有 room/game 事件均需携带 `live_session_id` | `live.started` / `live.ended` |
 | **room** | 直播间行为流 / 状态。**子层强制**：行为流走 `.message.*`（已发生事实），状态走 `.state.*`（当前属性快照） | `room.message.danmaku` / `room.message.gift` / `room.message.super_chat` / `room.message.guard` / `room.message.enter` / `room.message.partner_speech` / `room.state.watched_count` |
-| **game** | 游戏里程碑 / 异常 / 上报。**低频**，只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 交付总结）。`live_session_id` 为 int 场次主键：发布方不填，由场次盖章拦截器注入。另有 `game.body.*`（9 类）：MaiCraft 任务事件流经采集器**分类**后的 AI 玩家遭遇（被袭击/死亡/重生/紧急反应/切维度/处理不了的需求），高频、与 `game.*` 不混层 | `game.milestone` / `game.attention_required` / `game.error` / `game.report`；`game.body.attacked` 等 9 类 |
+| **game** | 游戏里程碑 / 异常 / 上报。**里程碑类低频**，只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 交付总结）；例外是 `game.state.changed`（棋局状态高频快照，呈现流，不落 `game_events` 表）。`live_session_id` 为 int 场次主键：发布方不填，由场次盖章拦截器注入。另有 `game.body.*`（9 类）：MaiCraft 任务事件流经采集器**分类**后的 AI 玩家遭遇（被袭击/死亡/重生/紧急反应/切维度/处理不了的需求），高频、与 `game.*` 不混层；`game.chat.received`（`kind` = player / system）：游戏内他人聊天，同走三层名 | `game.milestone` / `game.attention_required` / `game.error` / `game.report` / `game.state.changed`；`game.body.attacked` 等 9 类；`game.chat.received` |
 | **rundown** | 流程单（Rundown）状态变更（加载 / 跳转 / 推进 / 暂停 / 恢复）。**单事件 + payload 判别，仅变更即发**，不是周期性状态广播 | `rundown.changed` |
 | **planner** | 主播决策轮记录：轮末一条 `planner.decision`（决策卡数据源）；裁决时刻即时一条 `planner.verdict`（reply 被调用时、表达生成之前） | `planner.decision` / `planner.verdict` |
 | **streamer** | 主播 Agent 管线阶段与发言业务事实：`streamer.stage`（决策管线阶段变化）/ `streamer.speech`（一条发言已生成，与 TTS 启用与否正交） | `streamer.stage` / `streamer.speech` |
 | **tts** | 一次发声实例的生命周期（开始 / 完成 / 失败），`utterance_id` 全链路串联；**终点广播**，消费者不得触发新决策 | `tts.utterance.started` / `tts.utterance.finished` / `tts.utterance.failed` |
 | **task** | 异步任务生命周期（受理 → 进行中含决策点 → 终态）。发起方订阅按 `payload.initiator` 过滤唤醒；**通知是提示、查询是事实源**（记录表是事实源） | `task.changed` |
 | **tool**（通配前缀） | 异步工具结果 / 工具健康切换。**通配 pattern**：`tool.result.#` / `tool.health.#` 一站式监听；emit 时用具体名 `tool.result.<tool_name>` | `tool.result.speak` / `tool.health.maicraft_speak` |
+| **agent** | Agent 控制面事实：Agent 收到提示（`agent.prompted`）与回复投递（`agent.replied`） | `agent.prompted` / `agent.replied` |
 
 ---
 
@@ -80,7 +81,7 @@
 
 同一域下**行为流（发生的事）**与**状态（当前什么样）**性质不同，必须分不同子层，**禁止平铺同层**。
 
-| ✅ 行为流 `.message.*` | ✅ 状态 `.state.*`（预留） | ❌ 平铺同层 |
+| ✅ 行为流 `.message.*` | ✅ 状态 `.state.*` | ❌ 平铺同层 |
 |---|---|---|
 | `room.message.danmaku`（弹幕已收到） | `room.state.heat`（当前热度快照） | `room.danmaku` 与 `room.heat_changed` 同层 |
 | `room.message.gift` | `room.state.online_count` | `room.gift` + `room.online` 平铺 |
@@ -232,6 +233,9 @@ class CoreEvents:
     GAME_ERROR = "game.error"
     GAME_REPORT = "game.report"
 
+    # Game 进程内状态快照（高频呈现流，不落 game_events 表）
+    GAME_STATE_CHANGED = "game.state.changed"
+
     # Rundown 流程单变更（单事件，payload 判别）
     RUNDOWN_CHANGED = "rundown.changed"
 
@@ -267,6 +271,14 @@ class CoreEvents:
     GAME_BODY_UNKNOWN = "game.body.unknown"
     # 通配订阅专用（emit 用上面的具体常量）
     GAME_BODY_WILDCARD = "game.body.#"
+
+    # 游戏内他人聊天（kind = player / system；通配订阅专用）
+    GAME_CHAT_RECEIVED = "game.chat.received"
+    GAME_CHAT_WILDCARD = "game.chat.#"
+
+    # Agent 控制面事实（提示 / 回复投递）
+    AGENT_PROMPTED = "agent.prompted"
+    AGENT_REPLIED = "agent.replied"
 ```
 
 完整事件清单（具名常量 + 通配占位符，以 `CoreEvents` 代码为准）见 [事件系统 - 事件事实表](event-system.md#事件事实表与拓扑)。

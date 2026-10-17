@@ -38,7 +38,7 @@ uv run python main.py
 
 ```
 config/
-├── agents.toml      # 业务 Agent（[agents] 启用名单 + streamer/minecraft/text_adv 子树）
+├── agents.toml      # 业务 Agent（[agents] 启用名单 + streamer/minecraft/text_adv/game_2048 子树）
 ├── collectors.toml  # 采集器（顶层 enabled 名单 + 各采集器子段）
 ├── tools.toml       # 工具域（[tools] 提供者开关 / disabled_tools / [tools.tasks]）
 ├── avatar.toml      # 虚拟形象（[avatar.platform] 启用名单 + 各平台成员段 + [avatar.lipsync] 口型共享件）
@@ -110,7 +110,7 @@ enabled = ["streamer"]
 # [agents.streamer.proactive] # 主动发言（enabled 默认 true）
 ```
 
-游戏 Agent 是独立顶级配置段，启用即在 `enabled` 列表加名（当前可用：`text_adv` 文字冒险示例，零依赖开箱可玩；`minecraft` 需 MCP 服务器，Agent 私有 MCP 配置在 `[agents.minecraft.mcp]`，位置即归属）：
+游戏 Agent 是独立顶级配置段，启用即在 `enabled` 列表加名（当前可用：`text_adv` 文字冒险示例，零依赖开箱可玩；`game_2048` 2048 对局示例，Agent 自任棋局宿主；`minecraft` 需 MCP 服务器，Agent 私有 MCP 配置在 `[agents.minecraft.mcp]`，位置即归属，完整用法见 [Minecraft Agent 使用指南](guides/minecraft-agent.md)）：
 
 ```toml
 [agents]
@@ -126,7 +126,7 @@ enabled = ["streamer", "text_adv"]
 ```toml
 # config/collectors.toml
 enabled = ["console_input"]          # 仅启用控制台输入
-# enabled = ["console_input", "bili_danmaku"]  # B 站 legacy 弹幕（需填 room_id）
+# enabled = ["console_input", "bili_danmaku"]  # B 站 legacy 弹幕（需填 room_id；未在维护）
 # enabled = ["console_input", "bili_danmaku_official"]  # B 站官方弹幕（需填 id_code/app_id/access_key）
 # enabled = ["console_input", "stt"]     # 语音转写（需 iflytek 配置）
 
@@ -204,9 +204,10 @@ uv run python main.py --dry
 | 名称 | 用途 | 关键子配置 |
 |------|------|-----------|
 | `console_input` | 控制台输入（开发测试，零依赖） | `user_id` / `user_nickname` |
-| `bili_danmaku` | B 站 legacy 弹幕（轮询） | `room_id` / `poll_interval` |
+| `bili_danmaku` | B 站 legacy 弹幕（轮询；未在维护，可用性未知） | `room_id` / `poll_interval` |
 | `bili_danmaku_official` | B 站官方长连弹幕 | `id_code` / `app_id` / `access_key(_secret)` / `api_host` |
 | `stt` | 语音转文字（讯飞 ASR + VAD） | 包内 ConfigSchema（iflytek_asr / vad / audio） |
+| `live_frame` | 直播画面帧采集（OBS WebSocket 取帧，主播每次决策可见最新画面，见 ADR-041） | 包内 ConfigSchema（OBS 连接 / 采样参数） |
 
 Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agent 开关，名单见 `src/modules/agents/companions.py`）：
 
@@ -224,12 +225,12 @@ Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agen
 |------|------|-----------|
 | `streamer` | 主播 Agent（Planner ReAct 决策循环 + Replyer 表达引擎） | `[agents.streamer]` 子树（persona / context / proactive / background / command / word_filter） |
 | `minecraft` | 游戏 Agent（MCP 工具玩 Minecraft，事件驱动 ReAct） | `[agents.minecraft]`（[包内配置 Schema](../src/agents/minecraft/config.py)） |
-
-> `text_adv`（文字冒险示例，零依赖开箱可玩）同属 Agent 清单；完整名单见 `src/modules/agents/factory.py` 的 `SUPPORTED_AGENTS`。
+| `text_adv` | 游戏 Agent（文字冒险示例，零依赖开箱可玩） | `[agents.text_adv]` |
+| `game_2048` | 游戏 Agent（2048 对局宿主，主播直接调工具遥控落子） | `[agents.game_2048]` |
 
 #### 工具（按族列举，代表工具名）
 
-工具注册走 `src/modules/tools/registry.py` 的 `ToolRegistry`。StreamerAgent 自带 `streamer_reply`（发言出口）、`rundown_control`（流程单推进，随 rundown 注册项）与 `memory_recall_session` / `memory_recall_viewer`（场次回顾 / 常客印象），均只对 `streamer` Agent 可见。主动发言判定与观众 `/命令` 解析是代码直连的内部件，不是工具。其他族系需要启用对应 `[tools.<pack>]` 包才会注入。
+工具注册走 `src/modules/tools/registry.py` 的 `ToolRegistry`。StreamerAgent 自带 `streamer_reply`（发言出口）、`rundown_control`（流程单推进，随 rundown 注册项）与 `memory_recall_session` / `memory_recall_viewer`（场次回顾 / 观众印象），均只对 `streamer` Agent 可见。主动发言判定与观众 `/命令` 解析是代码直连的内部件，不是工具。其他族系需要启用对应 `[tools.<pack>]` 包才会注入。
 
 | 工具包（`[tools.<pack>]`） | 代表工具 | 说明 |
 |----------------------------|---------|------|
@@ -367,7 +368,7 @@ vite_dev_port = 60315                               # Vite 开发服务器端口
 - **观众**：观众列表（搜索 / 排序 / 分页）、单观众档案（对话交织）、互动分析
 - **采集器 / Agent / 工具页**：组件启停与健康状态、工具提供者开关与故障重连
 - **事件流 / 日志**：实时事件流（`/ws` 推送，可按类型过滤）与运行日志
-- **流程单工作台**：流程单库编辑，直播中编辑写穿数据库
+- **流程单工作台**：流程单库编辑，支持开播前预挂（装载后待开播，开播自动起算），直播中编辑写穿数据库
 - **世界模拟器**：模拟弹幕生成与录制回放
 - **LLM 用量 / LLM 历史**：token 用量统计、命中率与趋势图表、请求级 prompt 明细
 - **配置在线编辑**：在线修改配置并经统一管线写回（infra 段即时重载，其余待重启）

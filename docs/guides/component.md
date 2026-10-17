@@ -75,7 +75,7 @@ Q3（数据源型并行判据）
 
 | 成员 | 必填 | 说明 |
 |------|------|------|
-| `name: str`（类属性） | ✓ | 唯一标识（与配置段名一致） |
+| `name: str`（类属性） | ✓ | 唯一标识（与配置段名一致）；缺省时基类兜底为类名小写（Agent 基类无此兜底） |
 | `description: str`（类属性） | ✓ | 人类可读描述 |
 | `__init__(event_bus=...)` | ✓ | 必须调 `super().__init__(event_bus=event_bus)` |
 | `start()` / `stop()` / `cleanup()` | 可覆写 | 基类有状态机实现，子类多覆写以挂自己的后台任务 |
@@ -83,7 +83,6 @@ Q3（数据源型并行判据）
 | `collect() -> AsyncIterator[Any]` | **必须覆写** | 数据流出口；在生成器内自行构造事件载荷并 emit（自产自发，基类不兜底转发） |
 | `emit_event(name, payload, source=...)` | 工具方法 | 封装 emit，bus 为 None 时安全跳过 |
 | `set_event_bus(bus)` | 工具方法 | 生命周期内事后注入 EventBus |
-| `_emit_semantic_events: bool`（实例属性） | 可选 | `True` 表示子类在 `collect()` 里自行 emit 语义事件；`False`/缺省 → 基类 `_emit_normalized_message` 按 `data_type` 自动转发 |
 | 状态机 | — | `CREATED → STARTING → RUNNING → STOPPING → STOPPED → ERRORED`（`CollectorState` 枚举） |
 
 > **关键**：基类**不强制**子类覆写方法（不挂 `abc.ABC`），所有方法都有合理默认实现；子类按需覆写。`collect()` 抛 `NotImplementedError`——子类必须实现。
@@ -170,7 +169,7 @@ class MyCollector(BaseCollector):
             # 真实采集逻辑在外层 _my_loop 里完成
             yield payload  # 已在本生成器内 emit
 
-    # ---------- 子类自带 emit：标记 _emit_semantic_events=True 让基类跳过兜底 ----------
+    # ---------- 子类自带后台任务：直接 emit 语义事件（基类无兜底转发） ----------
 
     async def _my_loop(self) -> None:
         """后台任务：实时抓外部源 + emit room.message.danmaku。"""
@@ -649,8 +648,7 @@ reply 走注册表后三事件都发——观测冗余是**有意接受**的（�
 | `_on_pause()` / `_on_resume()` / `_on_shutdown()` | 可覆写钩子 | 配合 `pause()` / `resume()` / `shutdown()` 状态切换 |
 | `emit_event(name, payload, source=...)` | 工具方法 | bus 为 None 时安全跳过 |
 | `note_heartbeat()` / `is_alive(dead_threshold_ms=60000)` | 健康 | 心跳协议 |
-| `clone()` | 重启支持 | 默认 `self.__class__()`；子类可覆写（依赖注入需重建） |
-| `increment_restart_counter()` / `restart_count` | 重启 | 崩溃自愈计数 |
+| `increment_restart_counter()` / `restart_count` | 重启 | 崩溃自愈计数（实例重建走 AgentManager 工厂，基类无 clone 方法） |
 | `@property state -> AgentState` | 状态 | `CREATED / STARTING / RUNNING / PAUSED / STOPPING / STOPPED / ERRORED` |
 
 ### 最小骨架代码
@@ -877,14 +875,14 @@ class MyToolProvider(ToolProvider):
         ↓ 进入 MessageBuffer；TimingGate 判定是否强制响应
 6. StreamerAgent._flush_loop 周期检查 → MessageBuffer.should_flush()
         ↓ 取出一批弹幕
-7. _make_two_stage_decision(batch) → Planner.plan(batch, llm=planner_llm 默认 llm)
+7. DecisionRoundExecutor.execute(batch, forced=…, trigger_reason=…, proactive=…) → Planner.plan(batch, forced=…, proactive=…, history=…, rundown_text=…, …)
          ↓ Planner ReAct 循环：chat_messages + 工具列表（ToolRegistry 全量 + reply 局部工具）
          ↓ 每步 tool_calls 串行执行（查游戏状态/记忆等 → 观察 tool role 作为观察返回），max_steps=8 防失控
 8. LLM 调 reply(意图参数 {topic_summary, reply_guidance, target})
          ↓ Planner 循环内直连 _reply_provider.invoke（局部工具，不进 ToolRegistry）
 9. ReplyToolProvider.invoke(invocation)
-         ↓ 注入依赖：persona / history / rundown
-10. Replyer.generate(plan, batch, persona, history, rundown)
+         ↓ 注入依赖：history / rundown / game_chat / state_facts（人设经 system 模板构造期渲染）
+10. Replyer.generate(plan, batch, history=…, rundown=…, game_chat=…, state_facts=…)
          ↓ LLM（llm profile，高质量模型）+ 人设 prompt + 敏感词净化；LLM 只见 reply
 11. ToolExecutionResult{success=True, structured_content={speech, emotion, metadata}}
          ↓

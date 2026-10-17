@@ -119,7 +119,7 @@ replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，�
 ## 6. 录制与回放
 
 - **录制源**：SQLite `live_chat` 业务表（消息流单一事实源，真实直播与模拟数据同表、以 `simulated` 列区分）——录制即落库，无需第二种录制格式；
-- **读回 API**：`ChatRepo.list_chat_dates()` / `list_danmaku_by_date(date, simulated_only=...)`（按本地日期过滤，时间正序）；
+- **读回 API**：`ChatRepo.list_chat_dates_with_counts()` / `list_danmaku_by_date(date, simulated_only=...)`（按本地日期过滤，时间正序）；
 - **回放队列**：`ReplayEngine` 过滤 `room.message.danmaku` 事件、还原 payload、按相邻毫秒时间戳差值调度；
 - **典型用法**：真实直播一晚 → 次日用 replay 模式重放给主播 Agent 锻炼（`replay_simulated_only=false` 回放全部真实弹幕）。
 

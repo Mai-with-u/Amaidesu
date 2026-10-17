@@ -67,5 +67,4 @@ LLM 运行时是全系统唯一"每个决策都经过"的热路径，但它的�
 ## 关联
 
 - 模块权威：`src/modules/llm/`（engine / clients / payload / observation / bootstrap）
-- 精华来源：`.omo/drafts/llm-system-refactor.md`（含用户三次推翻 AI 建议的完整裁决轨迹）
 - 缓存优化后续：请求历史逐条命中率展示（dashboard，独立批次）

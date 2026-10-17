@@ -48,4 +48,3 @@ avatar 是代码结构最完整的域之一——独立模块目录 `src/modules
 - [ADR-014：配置体系六文件重构](014-config-six-file-refactor.md)（本 ADR 修订其文件数边界，机制判据沿用）
 - [ADR-023：虚拟形象平台无关边界——平台差异全关进适配器](023-avatar-platform-agnostic-boundary.md)
 - [ADR-027：动态配置段统一注册表机制](027-dynamic-config-section-registry.md)
-- 讨论全档与模型实测数据：`.omo/drafts/avatar-config-boundary.md`

@@ -33,5 +33,4 @@
 ## 关联
 
 - ADR-032"归一化分治"：本篇兑现其"控制面将来按需单开议题"的留白
-- 讨论草稿（兼权威）：`.omo/drafts/llm-capability-config.md`（含各议题决策与亲核事实）
 - 参考对照：MaiBot `ModelInfo.extra_params` 路线（`E:\01_Projects\Code\AI\MaiBot\MaiBot-v1.0.0`，本机）

@@ -63,7 +63,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
     end
 
     subgraph Storage["存储 SQLite"]
-        DB[("13 张业务表：live_sessions / live_chat / gifts<br/>super_chats / topics / viewers / rundowns<br/>game_events / timeline_summary / llm_usage<br/>sim_personas / sim_gifts / llm_requests")]
+        DB[("SQLite 业务表（全集以 storage/schema.py 建表为准）<br/>场次与消息：live_sessions / live_chat / gifts<br/>super_chats / guards / topics<br/>观众与记忆：viewers / viewer_profiles / session_recaps<br/>流程单：rundowns / rundown_segments / rundown_instances<br/>rundown_instance_segments / rundown_transitions<br/>游戏与用量：game_events / timeline_summary<br/>llm_usage / llm_requests<br/>模拟：sim_personas / sim_gifts")]
     end
 
     Ext --> Collectors
@@ -208,7 +208,7 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
 链路关键性质：
 
 - **每一步都是单向流动**。控制台输入 → EventBus → StreamerAgent → 工具调用 → 返回值，全程无环。Planner→Replyer 是同 Agent 内 await（经 registry 调用而非事件中转）。
-- **拦截器层是全局单点**。RateLimit/SimilarFilter 作用于 `room.message.*`，所有订阅者共享净化后的结果。`core.*` / `live.*` / `planner.*` / `tts.utterance.*` 等不经过拦截器。
+- **拦截器层是全局单点**。RateLimit/SimilarFilter 作用于 `room.message.*`，所有订阅者共享净化后的结果；场次盖章（session_stamp）作用于全部业务域前缀（room.message. / streamer. / planner. / tool.result. / game. / rundown. / task. / agent.）。`core.*` / `live.*` / `tts.utterance.*` 不经过任何拦截器。
 - **TTS 是基础模块而非工具**。每句 reply 落库即发声——reply 结构化结果的 `speech` 字段由 StreamerAgent 主动入 UtteranceQueue，不依赖 LLM 决策调用 TTS 工具；装配期 `build_tts_infrastructure(infra.toml [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent，运行时由 UtteranceQueue 通过注入的 `speak` 适配器调 `engine.handle_speech`——零 Facade 路由层、零 ToolRegistry 条目。`infra.toml [tts]` 自包含（行为参数 + 四引擎子段），`tools.toml` 无任何 TTS 段，详见 ADR-007。
 - **空转提醒不经事件**。空闲提醒职责归 ProactiveTrigger 自身（流程单超时提醒是其触发源之一）。
 

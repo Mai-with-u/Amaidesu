@@ -5,6 +5,7 @@
 ## 入门
 
 - [快速开始](getting-started.md)
+- [直播运行手册](guides/runbook.md)
 
 ## 开发指南
 
@@ -15,6 +16,7 @@
 - [依赖注入](guides/dependency-injection.md)
 - [模拟直播间](guides/simulator.md)
 - [文字冒险 Agent](guides/text-adv-agent.md)
+- [Minecraft Agent](guides/minecraft-agent.md)
 - [发布](guides/release.md)
 - [GPT-SoVITS 语音服务部署](guides/gptsovits.md)
 
@@ -25,6 +27,9 @@
 - [事件系统](architecture/event-system.md)
 - [事件命名](architecture/event-naming.md)
 - [流程单机制](architecture/rundown.md)
+- [存储](architecture/storage.md)
+- [语音合成（TTS）](architecture/tts.md)
+- [屏幕感知（Vision）](architecture/vision.md)
 - [游戏 Agent（Minecraft）](architecture/minecraft-agent.md)
 - [虚拟形象（Avatar）](architecture/avatar-platform.md)
 - [主播上下文构成](architecture/streamer-context.md)

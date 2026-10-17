@@ -33,4 +33,4 @@
 - 故障切换边缘：主模型 visual、备选非 visual 时带图请求失败——接受单轮损失 + 错误日志（主备能力不一致属配置问题）
 - 落位修正（2026-10-12 无场次冒烟实锤）：提图 user 消息原设计紧随自己的回执插入，多工具并发轮里会打断 assistant 回合的回执连续性，被 DeepSeek 400 拒收（insufficient tool messages following tool_calls message）——翻译层统一推迟到整段回执结束之后落位，按来源回执分组保序，配对语义不变
 - DeepSeek flash 的图像请求形态（data URL vs 公网 URL）我方未实测，列入实现切片冒烟验收；context_meter 对 ImagePart 采用千级标称估算（API usage 仍为真值）
-- 关联：缺陷修复 `e0405d70`（base64 滤除）、设计讨论草稿 `.omo/drafts/vision-direct-design.md`
+- 关联：缺陷修复 `e0405d70`（base64 滤除）
