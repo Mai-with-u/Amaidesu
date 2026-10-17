@@ -15,7 +15,12 @@
         >
           <div class="use-name">
             <span class="u-dot"></span>{{ profileLabel(profile.key) }}
-            <el-tag v-if="getChangeCount(`${profile.key}.model_list`) > 0" size="small" type="warning" effect="plain">
+            <el-tag
+              v-if="getChangeCount(`${profile.key}.model_list`) > 0"
+              size="small"
+              type="warning"
+              effect="plain"
+            >
               已修改
             </el-tag>
           </div>
@@ -82,7 +87,12 @@
         <span class="cnt">{{ models.length }} 个模型 · {{ unusedCount }} 个未投入使用</span>
       </div>
       <div class="filters">
-        <button type="button" class="fbtn" :class="{ on: providerFilter === 'all' }" @click="providerFilter = 'all'">
+        <button
+          type="button"
+          class="fbtn"
+          :class="{ on: providerFilter === 'all' }"
+          @click="providerFilter = 'all'"
+        >
           全部
         </button>
         <button
@@ -130,12 +140,20 @@
               </td>
               <td>
                 <template v-if="usageChips(models[idx]).length > 0">
-                  <span v-for="chip in usageChips(models[idx])" :key="chip" class="ref">{{ chip }}</span>
+                  <span v-for="chip in usageChips(models[idx])" :key="chip" class="ref">{{
+                    chip
+                  }}</span>
                 </template>
                 <span v-else class="unused">未投入使用</span>
               </td>
               <td @click.stop>
-                <el-button type="danger" size="small" text :icon="Delete" @click="removeModel(idx)" />
+                <el-button
+                  type="danger"
+                  size="small"
+                  text
+                  :icon="Delete"
+                  @click="removeModel(idx)"
+                />
               </td>
             </tr>
             <tr v-if="modelExpanded[idx] === true" class="model-edit-row">
@@ -144,7 +162,9 @@
                   <!-- 身份字段（name）：失焦/回车提交——改名触发引用守护，
                        逐键提交会把中间态名字写进引用方 -->
                   <div class="name-field">
-                    <label class="name-field-label">模型名称<span class="required-mark">*</span></label>
+                    <label class="name-field-label"
+                      >模型名称<span class="required-mark">*</span></label
+                    >
                     <el-input
                       :model-value="itemDisplayName(models[idx])"
                       placeholder="模型唯一名"
@@ -161,7 +181,12 @@
                       placeholder="选择提供商"
                       @update:model-value="updateModelField(idx, 'api_provider', $event)"
                     >
-                      <el-option v-for="name in providerNames" :key="name" :label="name" :value="name" />
+                      <el-option
+                        v-for="name in providerNames"
+                        :key="name"
+                        :label="name"
+                        :value="name"
+                      />
                     </el-select>
                   </div>
                   <div class="field-grid">
@@ -174,8 +199,13 @@
                       @update:model-value="updateModelField(idx, sub.key, $event)"
                     />
                   </div>
-                  <details v-if="showAdvanced && modelAdvancedFields.length > 0" class="advanced-block">
-                    <summary class="advanced-toggle">高级参数（{{ modelAdvancedFields.length }}）</summary>
+                  <details
+                    v-if="showAdvanced && modelAdvancedFields.length > 0"
+                    class="advanced-block"
+                  >
+                    <summary class="advanced-toggle">
+                      高级参数（{{ modelAdvancedFields.length }}）
+                    </summary>
                     <div class="field-grid">
                       <FieldRenderer
                         v-for="sub in modelAdvancedFields"
@@ -223,7 +253,9 @@
           <span class="key" :class="apiKeySet(entry.item.api_key) ? 'is-set' : 'is-unset'">
             {{ apiKeySet(entry.item.api_key) ? '● 密钥已设置' : '○ 未设置' }}
           </span>
-          <span class="models-count">{{ modelsOfProvider(itemDisplayName(entry.item)).length }} 个模型</span>
+          <span class="models-count"
+            >{{ modelsOfProvider(itemDisplayName(entry.item)).length }} 个模型</span
+          >
           <el-button
             type="danger"
             size="small"
@@ -253,7 +285,9 @@
             />
           </div>
           <details v-if="showAdvanced && providerAdvancedFields.length > 0" class="advanced-block">
-            <summary class="advanced-toggle">高级参数（{{ providerAdvancedFields.length }}）</summary>
+            <summary class="advanced-toggle">
+              高级参数（{{ providerAdvancedFields.length }}）
+            </summary>
             <div class="field-grid">
               <FieldRenderer
                 v-for="sub in providerAdvancedFields"
@@ -284,13 +318,7 @@
  */
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import {
-  ArrowDown,
-  ArrowRight,
-  Close,
-  Delete,
-  Plus,
-} from '@element-plus/icons-vue';
+import { ArrowDown, ArrowRight, Close, Delete, Plus } from '@element-plus/icons-vue';
 import FieldRenderer from './FieldRenderer.vue';
 import SubFieldGroup from './SubFieldGroup.vue';
 import { confirmAction } from '@/utils/confirmAction';
@@ -429,15 +457,11 @@ function setItemField(
 // ── 数据视图 ─────────────────────────────────────────────
 const providers = computed(() => readArray(providersField.value));
 const models = computed(() => readArray(modelsField.value));
-const providerEntries = computed(() =>
-  providers.value.map((item, index) => ({ index, item })),
-);
-const providerNames = computed(() =>
-  [...new Set(providers.value.map(p => itemDisplayName(p)).filter(n => n !== ''))],
-);
-const modelNames = computed(() =>
-  models.value.map(m => itemDisplayName(m)).filter(n => n !== ''),
-);
+const providerEntries = computed(() => providers.value.map((item, index) => ({ index, item })));
+const providerNames = computed(() => [
+  ...new Set(providers.value.map(p => itemDisplayName(p)).filter(n => n !== '')),
+]);
+const modelNames = computed(() => models.value.map(m => itemDisplayName(m)).filter(n => n !== ''));
 const grouped = computed(() => groupModelsByProvider(models.value, providers.value));
 function modelsOfProvider(providerName: string): { index: number; model: ConfigItem }[] {
   return grouped.value.byProvider.get(providerName) ?? [];
@@ -467,24 +491,30 @@ function danglingRefs(profile: { modelList: string[] }): string[] {
 }
 
 /** 整条 model_list 数组写回（所有用途编辑的唯一写路径） */
-function updateModelList(
-  profile: { modelListField?: ConfigFieldSchema },
-  value: string[],
-) {
+function updateModelList(profile: { modelListField?: ConfigFieldSchema }, value: string[]) {
   if (profile.modelListField) props.updateValue(profile.modelListField, value);
 }
 
-function setMainModel(profile: { key: string; modelListField?: ConfigFieldSchema; modelList: string[] }, name: string) {
+function setMainModel(
+  profile: { key: string; modelListField?: ConfigFieldSchema; modelList: string[] },
+  name: string,
+) {
   if (name === '') return;
   updateModelList(profile, [name, ...profile.modelList.slice(1)]);
 }
 
-function addFallback(profile: { key: string; modelListField?: ConfigFieldSchema; modelList: string[] }, name: string) {
+function addFallback(
+  profile: { key: string; modelListField?: ConfigFieldSchema; modelList: string[] },
+  name: string,
+) {
   if (name === '' || profile.modelList.includes(name)) return;
   updateModelList(profile, [...profile.modelList, name]);
 }
 
-function removeFallback(profile: { key: string; modelListField?: ConfigFieldSchema; modelList: string[] }, index: number) {
+function removeFallback(
+  profile: { key: string; modelListField?: ConfigFieldSchema; modelList: string[] },
+  index: number,
+) {
   updateModelList(
     profile,
     profile.modelList.filter((_, i) => i !== index),
@@ -504,9 +534,7 @@ const filteredModelIndices = computed(() =>
     ),
 );
 
-const unusedCount = computed(
-  () => models.value.filter(m => usageChips(m).length === 0).length,
-);
+const unusedCount = computed(() => models.value.filter(m => usageChips(m).length === 0).length);
 
 function modelAbilityTags(item: ConfigItem | undefined): string[] {
   const tags: string[] = [];
@@ -598,7 +626,10 @@ async function commitModelName(index: number, input: string) {
 function addProvider() {
   const arr = [...providers.value];
   const item = buildDefaultItem(providerItemFields.value);
-  item.name = uniqueName(arr.map(p => itemDisplayName(p)), 'new-provider');
+  item.name = uniqueName(
+    arr.map(p => itemDisplayName(p)),
+    'new-provider',
+  );
   arr.push(item);
   writeArray(providersField.value, arr);
   providerOpen.value[arr.length - 1] = true;

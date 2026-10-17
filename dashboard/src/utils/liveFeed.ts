@@ -444,8 +444,8 @@ export function fromDecision(id: string, tsMs: number, data: Record<string, unkn
     : shouldReply
       ? str(data.topic_summary) || '决定发言'
       : str(data.topic_summary)
-          ? `决定不回应（${str(data.topic_summary)}）`
-          : '决定不回应';
+        ? `决定不回应（${str(data.topic_summary)}）`
+        : '决定不回应';
   const note = shouldReply && !error ? '' : error ? '' : str(data.error_message);
   return makeEntry({
     id,

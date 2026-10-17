@@ -69,10 +69,7 @@ export interface ModelGroup {
  * 数据仍是扁平数组，分桶只是呈现层的派生视图；api_provider 指向不存在
  * provider 的模型落入 unassigned（编辑中途的悬空引用不丢不藏）。
  */
-export function groupModelsByProvider(
-  models: ConfigItem[],
-  providers: ConfigItem[],
-): ModelGroup {
+export function groupModelsByProvider(models: ConfigItem[], providers: ConfigItem[]): ModelGroup {
   const providerNames = new Set(providers.map(p => String(p?.name ?? '')));
   const byProvider = new Map<string, { index: number; model: ConfigItem }[]>();
   for (const name of providerNames) byProvider.set(name, []);

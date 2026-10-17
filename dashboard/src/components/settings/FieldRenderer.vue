@@ -235,7 +235,9 @@ const isLongText = computed(() => {
   if (props.field.widget === 'input') return false;
   if (props.field.type !== 'string') return false;
   const value = String(props.modelValue ?? '');
-  return value.includes('\n') || value.length > 80 || (props.field.validation?.max_length ?? 0) > 100;
+  return (
+    value.includes('\n') || value.length > 80 || (props.field.validation?.max_length ?? 0) > 100
+  );
 });
 
 // 描述展示形态：icon = 标签旁 ⓘ 悬浮（缺省 inline = 内联段落）

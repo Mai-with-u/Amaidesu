@@ -704,7 +704,10 @@ async function jumpFromChangesPanel(key: string) {
 }
 
 /** 在 schema 全字段树（children/properties/对象数组元素树）中按 key 查找字段 */
-function findFieldInSchema(fields: ConfigFieldSchema[], key: string): ConfigFieldSchema | undefined {
+function findFieldInSchema(
+  fields: ConfigFieldSchema[],
+  key: string,
+): ConfigFieldSchema | undefined {
   for (const f of fields) {
     if (f.key === key) return f;
     if (f.children) {

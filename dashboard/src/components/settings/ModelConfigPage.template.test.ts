@@ -30,7 +30,9 @@ describe('ModelConfigPage 三层结构', () => {
   });
 
   it('profile 卡底"更多设置"折叠条仅在存在 otherChildren 时渲染，内部走 SubFieldGroup', () => {
-    expect(pageSource).toMatch(/<details v-if="profile\.otherChildren\.length > 0" class="more-block">/);
+    expect(pageSource).toMatch(
+      /<details v-if="profile\.otherChildren\.length > 0" class="more-block">/,
+    );
     expect(pageSource).toMatch(/<SubFieldGroup[\s\S]*?:fields="profile\.otherChildren"/);
     // 同一条逐 key 更新路径：SubFieldGroup 直接接注入的 updateValue
     expect(pageSource).toMatch(/<SubFieldGroup[\s\S]*?:update-value="updateValue"/);
@@ -45,7 +47,7 @@ describe('ModelConfigPage 三层结构', () => {
 
   it('第二层模型注册：表格 + 按提供商筛选 chips + 行展开编辑，不嵌套在 provider 下', () => {
     expect(pageSource).toContain('<table class="model-table"');
-    expect(pageSource).toContain('providerFilter = \'all\'');
+    expect(pageSource).toContain("providerFilter = 'all'");
     expect(pageSource).toContain('toggleModelExpand(idx)');
     // 旧结构（provider 节内嵌模型子卡）不得残留
     expect(pageSource).not.toContain('owned-models');
@@ -69,8 +71,12 @@ describe('ModelConfigPage 三层结构', () => {
   });
 
   it('添加模型/提供商走 buildDefaultItem 追加并自动展开新行', () => {
-    expect(pageSource).toMatch(/buildDefaultItem\(modelItemFields\.value\)[\s\S]*?modelExpanded\.value\[arr\.length - 1\] = true/);
-    expect(pageSource).toMatch(/buildDefaultItem\(providerItemFields\.value\)[\s\S]*?providerOpen\.value\[arr\.length - 1\] = true/);
+    expect(pageSource).toMatch(
+      /buildDefaultItem\(modelItemFields\.value\)[\s\S]*?modelExpanded\.value\[arr\.length - 1\] = true/,
+    );
+    expect(pageSource).toMatch(
+      /buildDefaultItem\(providerItemFields\.value\)[\s\S]*?providerOpen\.value\[arr\.length - 1\] = true/,
+    );
   });
 
   it('页头全部展开/收起命令接入专用页', () => {
@@ -82,7 +88,9 @@ describe('ModelConfigPage 三层结构', () => {
 
 describe('ModelConfigPage 零指引文案', () => {
   it('不出现解释页面用法/数据流向的提示段落', () => {
-    expect(pageSource).not.toMatch(/候选为|改动会?进入|保存更改|这个页面|按顺序|可手敲|字段说明|zone-tip|field-hint/);
+    expect(pageSource).not.toMatch(
+      /候选为|改动会?进入|保存更改|这个页面|按顺序|可手敲|字段说明|zone-tip|field-hint/,
+    );
   });
 
   it('警示条是条件渲染且无静态提示段落', () => {
@@ -117,7 +125,9 @@ describe('ModelConfigPage 改名引用守护', () => {
   it('provider 改名级联写 llm_models 数组整值，model 改名级联按 profile 独立 key 逐条写', () => {
     expect(pageSource).toContain('applyProviderRenameToModels(models.value, oldName, newName)');
     // 每 profile 一次独立 updateValue 调用 → 变更清单逐条可见、可逐条撤销
-    expect(pageSource).toMatch(/for \(const entry of changed\) \{[\s\S]*?props\.updateValue\(field, entry\.modelList\)/);
+    expect(pageSource).toMatch(
+      /for \(const entry of changed\) \{[\s\S]*?props\.updateValue\(field, entry\.modelList\)/,
+    );
   });
 
   it('不引入第二套保存/脏跟踪：写回统一经注入的 updateValue', () => {
