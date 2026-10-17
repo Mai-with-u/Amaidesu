@@ -4,7 +4,7 @@
     <header class="page-header">
       <div class="header-left">
         <h1 class="page-title">事件日志</h1>
-        <p class="page-subtitle">实时监控系统事件流</p>
+        <p class="page-subtitle">实时监控系统事件流，可回查落盘历史（跨启动）</p>
       </div>
       <div class="header-actions">
         <el-popover placement="bottom-end" :width="380" trigger="click" @show="fetchBusStats">
@@ -44,8 +44,11 @@
             <el-empty v-else description="暂无统计" :image-size="60" />
           </div>
         </el-popover>
+        <el-tag :type="windowActive ? 'warning' : 'primary'" effect="plain" size="small">
+          {{ windowActive ? '历史浏览' : '实时' }}
+        </el-tag>
         <el-tag type="info" effect="plain" size="small">
-          {{ filteredEvents.length }} / {{ events.length }} 条事件
+          {{ filteredEvents.length }} / {{ displayEvents.length }} 条事件
         </el-tag>
       </div>
     </header>
@@ -53,7 +56,7 @@
     <!-- 筛选工具栏 -->
     <section class="filter-toolbar">
       <div class="filter-left">
-        <!-- 搜索框 -->
+        <!-- 搜索框（在当前显示列表内检索：实时尾部或已加载的历史窗口） -->
         <el-input
           v-model="searchQuery"
           placeholder="搜索事件内容..."
@@ -70,6 +73,7 @@
           collapse-tags-tooltip
           placeholder="筛选事件类型"
           clearable
+          filterable
           style="width: 280px"
         >
           <el-option v-for="type in availableEventTypes" :key="type" :label="type" :value="type">
@@ -79,62 +83,74 @@
             </span>
           </el-option>
         </el-select>
-
-        <!-- 显示隐藏事件开关 -->
-        <el-tooltip content="显示默认隐藏的系统事件（如心跳）" placement="top">
-          <el-switch v-model="showHiddenEvents" active-text="显示全部" inactive-text="过滤噪音" />
-        </el-tooltip>
       </div>
 
       <div class="filter-right">
-        <!-- 暂停/继续 -->
+        <!-- 暂停/继续（冻结显示，后台仍在接收） -->
         <el-button :type="isPaused ? 'primary' : 'default'" @click="togglePause">
           <el-icon><component :is="pausePlayIcon" /></el-icon>
           {{ isPaused ? '继续' : '暂停' }}
         </el-button>
 
         <!-- 清空 -->
-        <el-button :disabled="events.length === 0" @click="clearEvents">
+        <el-button :disabled="displayEvents.length === 0" @click="clearEvents">
           <el-icon><Delete /></el-icon>
           清空
         </el-button>
       </div>
     </section>
 
+    <!-- 历史查询栏（加载更早 / 加载更晚 / 时间跳转 / 回到实时） -->
+    <section class="history-section">
+      <HistoryBar
+        :loading="windowLoading"
+        :has-older="windowHasOlder"
+        :has-newer="windowHasNewer"
+        :window-active="windowActive"
+        exhausted-text="已到可查范围最早的记录（默认范围=本次启动，更早请用时间跳转）"
+        @load-older="onLoadOlder"
+        @load-newer="onLoadNewer"
+        @jump="onJump"
+        @exit="onExitWindow"
+      />
+    </section>
+
     <!-- 事件列表 -->
     <section class="event-list-section">
-      <div ref="eventListRef" class="event-list">
+      <div ref="eventListRef" class="event-list" @scroll="handleScroll">
         <div v-if="filteredEvents.length === 0" class="empty-state">
           <el-icon :size="48" color="var(--text-placeholder)">
             <Document />
           </el-icon>
           <span>{{
-            isPaused ? '事件流已暂停' : events.length === 0 ? '等待事件...' : '没有匹配的事件'
+            isPaused
+              ? '事件显示已暂停（后台仍在接收）'
+              : displayEvents.length === 0
+                ? '等待事件...'
+                : '没有匹配的事件'
           }}</span>
         </div>
 
         <div v-else class="events-container">
+          <div v-if="renderTrimmed" class="render-trim-note">
+            仅显示最新 {{ MAX_RENDER_ROWS }} 条，可加载更早或缩小筛选范围
+          </div>
           <div
             v-for="event in visibleEvents"
-            :key="event.timestamp_ms + event.type"
+            :key="event.id"
             class="event-row"
-            @click="toggleEventExpand(event.timestamp_ms + event.type)"
+            @click="toggleEventExpand(event.id)"
           >
-            <span class="event-time mono">{{ formatTime(event.timestamp_ms) }}</span>
+            <span class="event-time mono">{{ formatEventTime(event.timestamp_ms) }}</span>
             <span class="event-type" :class="getEventClass(event.type)">{{ event.type }}</span>
             <div class="event-data-wrapper">
               <pre
                 class="event-data"
-                :class="{ expanded: expandedEvents.has(event.timestamp_ms + event.type) }"
-                v-html="
-                  formatEventDataHtml(
-                    event.data,
-                    expandedEvents.has(event.timestamp_ms + event.type),
-                  )
-                "
+                :class="{ expanded: expandedEvents.has(event.id) }"
+                v-html="formatEventDataHtml(event.data, expandedEvents.has(event.id))"
               ></pre>
               <span v-if="shouldShowExpand(event.data)" class="expand-hint">
-                {{ expandedEvents.has(event.timestamp_ms + event.type) ? '点击收起' : '点击展开' }}
+                {{ expandedEvents.has(event.id) ? '点击收起' : '点击展开' }}
               </span>
             </div>
           </div>
@@ -145,7 +161,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, markRaw } from 'vue';
+import { computed, markRaw, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { Document, VideoPause, VideoPlay, Search, Delete, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
@@ -153,7 +169,7 @@ import { storeToRefs } from 'pinia';
 import { debugApi } from '@/api';
 import type { EventBusStatsResponse } from '@/types';
 import DOMPurify from 'dompurify';
-import { formatTimeHMS as formatTime } from '@/utils/format';
+import { formatDateMD, formatTimeHMS } from '@/utils/format';
 import hljs from 'highlight.js/lib/core';
 import json from 'highlight.js/lib/languages/json';
 import 'highlight.js/styles/atom-one-dark.min.css';
@@ -162,26 +178,30 @@ import 'highlight.js/styles/atom-one-dark.min.css';
 hljs.registerLanguage('json', json);
 
 const eventsStore = useEventsStore();
-const { events } = storeToRefs(eventsStore);
+const { events, windowEvents, windowHasOlder, windowHasNewer, windowLoading } =
+  storeToRefs(eventsStore);
 
 // 状态
 const eventListRef = ref<HTMLElement | null>(null);
 const isPaused = ref(false);
 const searchQuery = ref('');
 const selectedTypes = ref<string[]>([]);
-const showHiddenEvents = ref(false);
 const expandedEvents = ref<Set<string>>(new Set());
 
-// 默认隐藏的非事件流消息：日志通道专用消息不进事件面板
-const HIDDEN_EVENT_TYPES = ['log.entry'];
+// 渲染上限：非虚拟滚动下列表面积的护栏（超出时渲染最新一端并提示）
+const MAX_RENDER_ROWS = 400;
 
 // 动态图标
 const pausePlayIcon = computed(() => (isPaused.value ? markRaw(VideoPlay) : markRaw(VideoPause)));
 
-// 获取所有出现过的唯一事件类型（动态生成）
+// 显示列表：历史浏览窗口优先，否则实时缓冲
+const displayEvents = computed(() => windowEvents.value ?? events.value);
+const windowActive = computed(() => windowEvents.value !== null);
+
+// 获取显示列表中出现过的唯一事件类型（动态生成）
 const availableEventTypes = computed(() => {
   const types = new Set<string>();
-  events.value.forEach(event => {
+  displayEvents.value.forEach(event => {
     types.add(event.type);
   });
   return Array.from(types).sort();
@@ -189,7 +209,7 @@ const availableEventTypes = computed(() => {
 
 // 获取某个事件类型的数量
 function getEventTypeCount(type: string): number {
-  return events.value.filter(e => e.type === type).length;
+  return displayEvents.value.filter(e => e.type === type).length;
 }
 
 // EventBus 累计统计（进程启动以来的发射/订阅计数；与上方会话内实时流计数互补）
@@ -215,13 +235,9 @@ async function fetchBusStats(): Promise<void> {
   }
 }
 
-// 筛选后的事件列表
+// 筛选后的事件列表（正文/类型为客户端筛选，作用于显示列表）
 const filteredEvents = computed(() => {
-  let result = events.value;
-
-  if (!showHiddenEvents.value) {
-    result = result.filter(event => !isHiddenEvent(event.type));
-  }
+  let result = displayEvents.value;
 
   if (selectedTypes.value.length > 0) {
     result = result.filter(event => selectedTypes.value.includes(event.type));
@@ -239,16 +255,33 @@ const filteredEvents = computed(() => {
   return result;
 });
 
-const MAX_VISIBLE_EVENTS = 100;
+// 渲染窗口：取筛选结果最新一端，超出上限时提示
 const visibleEvents = computed(() => {
-  const list = filteredEvents.value;
-  if (list.length <= MAX_VISIBLE_EVENTS) return list;
-  return list.slice(list.length - MAX_VISIBLE_EVENTS);
+  if (filteredEvents.value.length <= MAX_RENDER_ROWS) return filteredEvents.value;
+  return filteredEvents.value.slice(-MAX_RENDER_ROWS);
 });
 
-// 判断是否为隐藏的系统事件
-function isHiddenEvent(type: string): boolean {
-  return HIDDEN_EVENT_TYPES.some(hidden => type.toLowerCase().includes(hidden.toLowerCase()));
+const renderTrimmed = computed(() => filteredEvents.value.length > MAX_RENDER_ROWS);
+
+// ------------------------------------------------------------------
+// 动作
+// ------------------------------------------------------------------
+
+function onLoadOlder() {
+  void eventsStore.fetchOlder().then(() => scrollListTo('top'));
+}
+
+function onLoadNewer() {
+  void eventsStore.fetchNewer().then(() => scrollListTo('bottom'));
+}
+
+function onJump(timestampMs: number) {
+  void eventsStore.jumpTo(timestampMs).then(() => scrollListTo('top'));
+}
+
+function onExitWindow() {
+  eventsStore.exitWindow();
+  scrollToBottom();
 }
 
 // 暂停/继续自动滚动（事件始终在后台接收,仅停止自动滚动）
@@ -266,6 +299,46 @@ function clearEvents() {
   eventsStore.clearEvents();
   expandedEvents.value.clear();
   ElMessage.success('已清空事件列表');
+}
+
+// ------------------------------------------------------------------
+// 展示辅助
+// ------------------------------------------------------------------
+
+// 跨天条目时间列补日期前缀（历史浏览跨启动时定位用）
+const newestTimestampMs = computed(() => displayEvents.value.at(-1)?.timestamp_ms ?? 0);
+
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function formatEventTime(timestampMs: number): string {
+  const hms = formatTimeHMS(timestampMs);
+  const date = new Date(timestampMs);
+  const newest = newestTimestampMs.value ? new Date(newestTimestampMs.value) : null;
+  if (newest && !isSameDay(date, newest)) {
+    return `${formatDateMD(timestampMs)} ${hms}`;
+  }
+  return hms;
+}
+
+// 获取事件类型的 CSS 类（v2 事件族颜色映射；core.* 经 WS 包装为 system.*）
+function getEventClass(type: string): string {
+  if (type.startsWith('room.message')) return 'type-collector';
+  if (type === 'streamer.speech') return 'type-agent';
+  if (type === 'rundown.changed') return 'type-agent';
+  if (type.startsWith('planner')) return 'type-agent';
+  if (type.startsWith('tool.result')) return 'type-tool';
+  if (type.startsWith('tts.utterance')) return 'type-tool';
+  if (type.startsWith('game')) return 'type-game';
+  if (type.startsWith('live')) return 'type-live';
+  if (type.includes('error')) return 'type-error';
+  if (type.startsWith('system')) return 'type-system';
+  return 'type-default';
 }
 
 // 格式化事件数据（带语法高亮和 XSS 防护）
@@ -297,19 +370,15 @@ function toggleEventExpand(key: string) {
   expandedEvents.value = new Set(expandedEvents.value);
 }
 
-// 获取事件类型的 CSS 类（v2 事件族颜色映射；core.* 经 WS 包装为 system.*）
-function getEventClass(type: string): string {
-  if (type.startsWith('room.message')) return 'type-collector';
-  if (type === 'streamer.speech') return 'type-agent';
-  if (type === 'rundown.changed') return 'type-agent';
-  if (type.startsWith('planner')) return 'type-agent';
-  if (type.startsWith('tool.result')) return 'type-tool';
-  if (type.startsWith('tts.utterance')) return 'type-tool';
-  if (type.startsWith('game')) return 'type-game';
-  if (type.startsWith('live')) return 'type-live';
-  if (type.includes('error')) return 'type-error';
-  if (type.startsWith('system')) return 'type-system';
-  return 'type-default';
+// ------------------------------------------------------------------
+// 滚动
+// ------------------------------------------------------------------
+
+function scrollListTo(position: 'top' | 'bottom') {
+  void nextTick(() => {
+    if (!eventListRef.value) return;
+    eventListRef.value.scrollTop = position === 'top' ? 0 : eventListRef.value.scrollHeight;
+  });
 }
 
 // 自动滚动到底部 - 使用 requestAnimationFrame 节流
@@ -330,13 +399,25 @@ function scrollToBottom() {
   });
 }
 
+// 处理滚动事件（仅实时模式：滚离底部即停跟随；历史浏览态自由滚动）
+function handleScroll() {
+  if (!eventListRef.value || windowActive.value) return;
+
+  const { scrollTop, scrollHeight, clientHeight } = eventListRef.value;
+  const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+
+  if (!isAtBottom) {
+    isPaused.value = true;
+  }
+}
+
 // 生命周期
 let unsubscribe: (() => void) | null = null;
 
 onMounted(() => {
   // 订阅事件变化,自动滚动 (事件接收由 store setup 阶段统一处理)
   unsubscribe = eventsStore.$subscribe(() => {
-    if (!isPaused.value) {
+    if (!isPaused.value && !windowActive.value) {
       scrollToBottom();
     }
   });
@@ -347,7 +428,6 @@ onUnmounted(() => {
   if (unsubscribe) {
     unsubscribe();
   }
-  // 取消 pending 的 scrollToBottom
   if (scrollRAFId !== null) {
     cancelAnimationFrame(scrollRAFId);
   }
@@ -420,8 +500,22 @@ onUnmounted(() => {
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color-light);
+  margin-bottom: var(--spacing-sm);
+  flex-shrink: 0;
+}
+
+/* 历史查询栏 */
+.history-section {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color-light);
   margin-bottom: var(--spacing-md);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .filter-left {
@@ -476,6 +570,13 @@ onUnmounted(() => {
   color: var(--text-placeholder);
 }
 
+.render-trim-note {
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: 12px;
+  color: var(--text-placeholder);
+  background: var(--bg-hover);
+}
+
 .events-container {
   padding: var(--spacing-sm) 0;
 }
@@ -502,7 +603,7 @@ onUnmounted(() => {
 .event-time {
   color: var(--text-secondary);
   white-space: nowrap;
-  min-width: 80px;
+  min-width: 128px;
   font-size: 12px;
 }
 

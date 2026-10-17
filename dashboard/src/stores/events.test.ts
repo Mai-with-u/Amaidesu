@@ -27,9 +27,10 @@ vi.mock('@/api', () => ({
 
 import { useEventsStore } from '@/stores/events';
 
-/** 构造一条实时事件消息 */
+/** 构造一条实时事件消息（WS 协议：总线事件带 kind="event"） */
 function makeMessage(overrides: Partial<WebSocketMessage> & { type: string }): WebSocketMessage {
   return {
+    kind: 'event',
     timestamp_ms: 1000,
     data: {},
     ...overrides,
@@ -209,6 +210,28 @@ describe('events store 消息通道', () => {
     expect(store.cursor).toBe('');
   });
 
+  it('uuid 形式的事件 id（后端实际形态）入列并推进游标', () => {
+    const { store, handleMessage } = setupStore();
+    const uuid = '73a5ce59-b574-4018-a37e-79c9a1c15f7b';
+    handleMessage(makeMessage({ type: 'evt.a', timestamp_ms: 1000, id: uuid }));
+
+    expect(store.cursor).toBe(uuid);
+    expect(localStorage.getItem('amaidesu-events-cursor')).toBe(uuid);
+  });
+
+  it('日志通道（kind="log"）与握手帧（kind="transport"）不入事件缓冲', () => {
+    const { store, handleMessage } = setupStore();
+    handleMessage(makeMessage({ kind: 'log', type: 'log.entry', timestamp_ms: 1000, data: {} }));
+    handleMessage(
+      makeMessage({ kind: 'transport', type: 'connected', timestamp_ms: 1000, data: {} }),
+    );
+    handleMessage(
+      makeMessage({ kind: 'transport', type: 'subscribe_response', timestamp_ms: 1001, data: {} }),
+    );
+
+    expect(store.events).toHaveLength(0);
+  });
+
   it('clearEvents 清空时间线', () => {
     const { store, handleMessage } = setupStore();
     handleMessage(makeMessage({ type: 'evt.a', timestamp_ms: 1000, id: '1' }));
@@ -262,5 +285,89 @@ describe('events store backfill 缺口回填', () => {
     handleMessage(makeMessage({ type: 'evt.a', timestamp_ms: 1000, id: '10' }));
     await store.backfill();
     expect(store.cursor).toBe('10');
+  });
+});
+
+describe('events store 历史浏览窗口', () => {
+  function setupWithEvents(handleMessage: (m: WebSocketMessage) => void) {
+    handleMessage(makeMessage({ type: 'evt.a', timestamp_ms: 5000, id: 'a5' }));
+    handleMessage(makeMessage({ type: 'evt.b', timestamp_ms: 6000, id: 'b6' }));
+  }
+
+  it('fetchOlder：以基线最旧一条为 before 游标拉一页，并入窗口并更新续翻信号', async () => {
+    const { store, handleMessage } = setupStore();
+    setupWithEvents(handleMessage);
+    list.mockResolvedValue({
+      data: { events: [makeRecord('z1', 3000), makeRecord('z2', 4000)], has_more: true },
+    });
+
+    await store.fetchOlder();
+
+    expect(list).toHaveBeenCalledWith({ before_timestamp_ms: 5000, limit: 500 });
+    expect(store.windowEvents!.map(e => e.id)).toEqual(['z1', 'z2', 'a5', 'b6']);
+    expect(store.windowHasOlder).toBe(true);
+  });
+
+  it('fetchNewer：以窗口最新 +1 为 start_ms 反向取页（take=oldest）', async () => {
+    const { store, handleMessage } = setupStore();
+    setupWithEvents(handleMessage);
+    list.mockResolvedValue({
+      data: { events: [makeRecord('z1', 3000), makeRecord('z2', 4000)], has_more: true },
+    });
+    await store.fetchOlder();
+    list.mockClear();
+    list.mockResolvedValue({
+      data: { events: [makeRecord('n1', 7000)], has_more: false, has_more_newer: false },
+    });
+
+    await store.fetchNewer();
+
+    expect(list).toHaveBeenCalledWith({ start_ms: 6001, take: 'oldest', limit: 500 });
+    expect(store.windowEvents!.map(e => e.id)).toEqual(['z1', 'z2', 'a5', 'b6', 'n1']);
+    expect(store.windowHasNewer).toBe(false);
+  });
+
+  it('jumpTo：窗口整体替换为跳转时刻之后的一页', async () => {
+    const { store, handleMessage } = setupStore();
+    setupWithEvents(handleMessage);
+    list.mockResolvedValue({
+      data: {
+        events: [makeRecord('j1', 8000), makeRecord('j2', 9000)],
+        has_more: true,
+        has_more_newer: true,
+      },
+    });
+
+    await store.jumpTo(8000);
+
+    expect(list).toHaveBeenCalledWith({ start_ms: 8000, take: 'oldest', limit: 500 });
+    expect(store.windowEvents!.map(e => e.id)).toEqual(['j1', 'j2']);
+    expect(store.windowHasOlder).toBe(true);
+    expect(store.windowHasNewer).toBe(true);
+  });
+
+  it('exitWindow：回到实时模式（窗口清空、续翻信号复位）', async () => {
+    const { store, handleMessage } = setupStore();
+    setupWithEvents(handleMessage);
+    list.mockResolvedValue({ data: { events: [makeRecord('z1', 3000)], has_more: true } });
+    await store.fetchOlder();
+
+    store.exitWindow();
+
+    expect(store.windowEvents).toBeNull();
+    expect(store.windowHasOlder).toBe(true);
+    expect(store.windowHasNewer).toBe(false);
+  });
+
+  it('clearEvents 同时清空窗口', async () => {
+    const { store, handleMessage } = setupStore();
+    setupWithEvents(handleMessage);
+    list.mockResolvedValue({ data: { events: [makeRecord('z1', 3000)], has_more: true } });
+    await store.fetchOlder();
+
+    store.clearEvents();
+
+    expect(store.events).toHaveLength(0);
+    expect(store.windowEvents).toBeNull();
   });
 });
