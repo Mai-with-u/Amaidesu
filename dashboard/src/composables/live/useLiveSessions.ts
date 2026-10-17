@@ -22,11 +22,11 @@ const SOURCE_LABEL: Record<string, string> = {
   legacy: '历史',
 };
 
-/** 场次默认标题（yyyy-MM-dd HH:mm 周X，按给定时刻）：开场次预填与未命名场次重命名预填共用 */
+/** 场次默认标题（yyyy-MM-dd 周X HH:mm，按给定时刻）：开场次预填与未命名场次重命名预填共用 */
 export function defaultSessionTitle(at: Date = new Date()): string {
   const pad = (n: number): string => String(n).padStart(2, '0');
   const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][at.getDay()] ?? '';
-  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())} ${weekday}`;
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${weekday} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
 /** 侧栏时钟/时长的时刻标签（事件→条目取值助手见 utils/liveFeed.ts） */

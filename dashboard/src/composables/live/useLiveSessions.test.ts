@@ -172,7 +172,7 @@ describe('useLiveSessions', () => {
     expect(composable.activeExplicitSession.value).toBe(false);
   });
 
-  it('openSession：对话框预填默认标题（yyyy-MM-dd HH:mm 周X）', async () => {
+  it('openSession：对话框预填默认标题（yyyy-MM-dd 周X HH:mm）', async () => {
     const composable = mount();
     promptMock.mockRejectedValueOnce('cancel');
     await composable.openSession();
