@@ -336,6 +336,8 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
     assert "消耗与放置的断言同样只说有凭据的" in prompt and "照实说没吃成、没放成即可" in prompt
     # 实播中身体侧上报"32 格内没有能睡的床"，主播却说"木屋附近根本没床"：限定性失败消息不得升格为无条件判断
     assert "转述保留原有限定" in prompt and "不说\"根本没床\"" in prompt
+    # 实播中同一张床被反复改名六次、悬念自相矛盾：玩笑桥段一次成立不反复重演
+    assert "玩笑桥段一次成立" in prompt and "不得只预告不落地" in prompt
 
 
 def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
