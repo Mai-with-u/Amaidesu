@@ -82,6 +82,7 @@ import type {
   ViewerProfileUpdatePayload,
   MemoryMutationResponse,
   MemoryStatsResponse,
+  LogsQueryResponse,
   WebSocketMessage,
 } from '@/types';
 
@@ -271,14 +272,43 @@ export const liveSessionsApi = {
     api.get<SessionTimelineResponse>(`/live-sessions/${id}/timeline`, { params }),
 };
 
-// 事件历史（游标续传）
+// 事件历史（游标续传 + 落盘扩容）
 //
-// `GET /events?since_id=`：返回游标之后的事件缺口（断线/刷新后由 store 调用补齐）。
+// `GET /events?since_id=`：返回游标之后的事件缺口（断线/刷新后由 store 调用补齐，
+// 只读内存环形缓冲）。
+// `GET /events?start_ms=&before_timestamp_ms=&take=`：时间窗查询（内存环形 ∪
+// logs/events 落盘文件），供事件页"加载更早/时间跳转"；窗口起点缺省=本次启动。
 export const eventsApi = {
-  list: (params?: { since_id?: string; limit?: number }) =>
-    api.get<{ events: WebSocketMessage[]; total: number; has_more: boolean }>('/events', {
-      params,
-    }),
+  list: (params?: {
+    since_id?: string;
+    limit?: number;
+    start_ms?: number;
+    before_timestamp_ms?: number;
+    take?: 'newest' | 'oldest';
+  }) =>
+    api.get<{
+      events: WebSocketMessage[];
+      total: number;
+      has_more: boolean;
+      has_more_newer?: boolean;
+    }>('/events', { params }),
+};
+
+// 日志落盘历史（日志查看器"加载更早/时间跳转/服务端搜索"数据源）
+//
+// `GET /logs`：扫 logs/webui 按天 JSONL（默认仅 INFO 及以上，DEBUG 只在实时
+// 尾部缓冲）；窗口起点缺省=本次启动时刻，显式传 start_ms 可跨启动跳转（复盘）。
+export const logsApi = {
+  list: (params?: {
+    start_ms?: number;
+    end_ms?: number;
+    before_timestamp_ms?: number;
+    levels?: string;
+    modules?: string;
+    q?: string;
+    take?: 'newest' | 'oldest';
+    limit?: number;
+  }) => api.get<LogsQueryResponse>('/logs', { params }),
 };
 
 // 观众（列表 / 分析 / 档案 / 对话 / 贡献 / 场次）

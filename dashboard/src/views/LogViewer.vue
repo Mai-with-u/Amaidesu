@@ -4,14 +4,18 @@
     <header class="page-header">
       <div class="header-left">
         <h1 class="page-title">日志查看器</h1>
-        <p class="page-subtitle">实时监控系统日志</p>
+        <p class="page-subtitle">实时监控系统日志，可回查落盘历史（默认仅 INFO 及以上落盘）</p>
       </div>
       <div class="header-actions">
-        <el-tag :type="isRealtimeScroll ? 'primary' : 'info'" effect="plain" size="small">
-          {{ isRealtimeScroll ? '实时滚动' : '自由滚动' }}
+        <el-tag
+          :type="isRealtimeScroll && !windowActive ? 'primary' : 'info'"
+          effect="plain"
+          size="small"
+        >
+          {{ windowActive ? '历史浏览' : isRealtimeScroll ? '实时滚动' : '自由滚动' }}
         </el-tag>
         <el-tag type="info" effect="plain" size="small">
-          {{ filteredLogs.length }} / {{ logs.length }} 条日志
+          {{ filteredLogs.length }} / {{ displayLogs.length }} 条日志
         </el-tag>
       </div>
     </header>
@@ -19,13 +23,15 @@
     <!-- 筛选工具栏 -->
     <section class="filter-toolbar">
       <div class="filter-left">
-        <!-- 搜索框 -->
+        <!-- 搜索框（回车发起服务端搜索：窗口=本次启动以来） -->
         <el-input
           v-model="searchQuery"
-          placeholder="搜索日志内容..."
+          placeholder="搜索日志内容（回车在本次启动范围内检索）..."
           :prefix-icon="Search"
           clearable
-          style="width: 240px"
+          style="width: 320px"
+          @keyup.enter="onSearch"
+          @clear="onSearchClear"
         />
 
         <!-- 日志级别筛选 -->
@@ -73,24 +79,49 @@
       </div>
 
       <div class="filter-right">
-        <!-- 暂停/继续（显示点击后的动作） -->
-        <el-button :type="isPaused ? 'primary' : 'default'" @click="togglePause">
+        <!-- 暂停/继续（暂停冻结显示后台续收，恢复补入） -->
+        <el-button :type="isPaused ? 'primary' : 'default'" @click="onTogglePause">
           <el-icon><component :is="pausePlayIcon" /></el-icon>
           {{ isPaused ? '继续' : '暂停' }}
         </el-button>
 
-        <!-- 滚动模式切换（显示点击后的动作） -->
-        <el-button :type="isRealtimeScroll ? 'default' : 'primary'" @click="toggleScrollMode">
+        <!-- 实时/自由滚动（仅实时模式有意义） -->
+        <el-button
+          v-if="!windowActive"
+          :type="isRealtimeScroll ? 'default' : 'primary'"
+          @click="toggleScrollMode"
+        >
           <el-icon><component :is="scrollModeIcon" /></el-icon>
           {{ isRealtimeScroll ? '自由滚动' : '实时滚动' }}
         </el-button>
 
         <!-- 清空 -->
-        <el-button :disabled="logs.length === 0" @click="clearLogs">
+        <el-button :disabled="displayLogs.length === 0" @click="clearLogs">
           <el-icon><Delete /></el-icon>
           清空
         </el-button>
       </div>
+    </section>
+
+    <!-- 历史查询栏（加载更早 / 加载更晚 / 时间跳转 / 回到实时） -->
+    <section class="history-section">
+      <HistoryBar
+        :loading="windowLoading"
+        :has-older="windowHasOlder"
+        :has-newer="windowHasNewer"
+        :window-active="windowActive"
+        :exhausted-text="exhaustedText"
+        @load-older="onLoadOlder"
+        @load-newer="onLoadNewer"
+        @jump="onJump"
+        @exit="onExitWindow"
+      />
+      <span v-if="persistAvailable === false" class="persist-note"
+        >日志落盘不可用（未启用或目录缺失），无法查询历史</span
+      >
+      <el-tag v-if="isSearchMode" type="warning" effect="plain" size="small"
+        >服务端搜索结果（本次启动以来）</el-tag
+      >
     </section>
 
     <!-- 日志列表 -->
@@ -101,34 +132,75 @@
             <Document />
           </el-icon>
           <span>{{
-            isPaused ? '日志流已暂停' : logs.length === 0 ? '等待日志...' : '没有匹配的日志'
+            isPaused
+              ? '日志显示已暂停（后台仍在接收，继续后补入）'
+              : displayLogs.length === 0
+                ? '等待日志...'
+                : '没有匹配的日志'
           }}</span>
         </div>
 
         <div v-else class="logs-container">
-          <div
-            v-for="log in visibleLogs"
-            :key="log.timestamp + log.message"
-            class="log-row"
-            :class="`log-level-${log.level.toLowerCase()}`"
-            @click="toggleLogExpand(log.timestamp + log.message)"
-          >
-            <span class="log-time mono">{{ formatTime(log.timestamp) }}</span>
-            <span class="log-level" :class="`level-${log.level.toLowerCase()}`">
-              {{ log.level }}
-            </span>
-            <span class="log-module">{{ log.module }}</span>
-            <div class="log-message-wrapper">
-              <pre
-                class="log-message"
-                :class="{ expanded: expandedLogs.has(log.timestamp + log.message) }"
-                >{{ log.message }}</pre
-              >
-              <span v-if="shouldShowExpand(log.message)" class="expand-hint">
-                {{ expandedLogs.has(log.timestamp + log.message) ? '点击收起' : '点击展开' }}
+          <template v-for="row in collapsedRows" :key="row.key">
+            <!-- 组首条 -->
+            <div
+              class="log-row"
+              :class="`log-level-${row.entries[0]!.level.toLowerCase()}`"
+              @click="toggleLogExpand(messageKey(row.entries[0]!))"
+            >
+              <span class="log-time mono">{{ formatLogTime(row.entries[0]!.timestamp) }}</span>
+              <span class="log-level" :class="`level-${row.entries[0]!.level.toLowerCase()}`">
+                {{ row.entries[0]!.level }}
               </span>
+              <span class="log-module">{{ row.entries[0]!.module }}</span>
+              <div class="log-message-wrapper">
+                <pre
+                  class="log-message"
+                  :class="{ expanded: expandedLogs.has(messageKey(row.entries[0]!)) }"
+                  >{{ row.entries[0]!.message }}</pre
+                >
+                <span class="row-hints">
+                  <span
+                    v-if="row.entries.length > 1"
+                    class="collapse-badge"
+                    @click.stop="toggleGroupExpand(row.key)"
+                  >
+                    ×{{ row.entries.length
+                    }}{{ expandedGroups.has(row.key) ? ' 收起' : ' 重复，点击展开' }}
+                  </span>
+                  <span v-if="shouldShowExpand(row.entries[0]!.message)" class="expand-hint">
+                    {{ expandedLogs.has(messageKey(row.entries[0]!)) ? '点击收起' : '点击展开' }}
+                  </span>
+                </span>
+              </div>
             </div>
-          </div>
+            <!-- 组内重复条目（展开时逐条显示） -->
+            <template v-if="row.entries.length > 1 && expandedGroups.has(row.key)">
+              <div
+                v-for="entry in row.entries.slice(1)"
+                :key="entry.timestamp"
+                class="log-row log-row-sub"
+                :class="`log-level-${entry.level.toLowerCase()}`"
+                @click="toggleLogExpand(messageKey(entry))"
+              >
+                <span class="log-time mono">{{ formatLogTime(entry.timestamp) }}</span>
+                <span class="log-level" :class="`level-${entry.level.toLowerCase()}`">{{
+                  entry.level
+                }}</span>
+                <span class="log-module">{{ entry.module }}</span>
+                <div class="log-message-wrapper">
+                  <pre
+                    class="log-message"
+                    :class="{ expanded: expandedLogs.has(messageKey(entry)) }"
+                    >{{ entry.message }}</pre
+                  >
+                  <span v-if="shouldShowExpand(entry.message)" class="expand-hint">
+                    {{ expandedLogs.has(messageKey(entry)) ? '点击收起' : '点击展开' }}
+                  </span>
+                </div>
+              </div>
+            </template>
+          </template>
         </div>
       </div>
     </section>
@@ -136,7 +208,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, markRaw } from 'vue';
+import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import {
   Document,
   VideoPause,
@@ -147,11 +219,21 @@ import {
   Unlock,
 } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { useLogsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
+import { useLogsStore, type LogEntry } from '@/stores/logs';
+import { collapseAdjacentLogs } from '@/utils/logCollapse';
 
 const logsStore = useLogsStore();
-const { logs, isPaused, availableModules } = storeToRefs(logsStore);
+const {
+  logs,
+  isPaused,
+  windowLogs,
+  windowHasOlder,
+  windowHasNewer,
+  windowLoading,
+  persistAvailable,
+  availableModules,
+} = storeToRefs(logsStore);
 
 // 日志级别常量
 const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] as const;
@@ -159,9 +241,11 @@ const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] as const;
 // 状态
 const logListRef = ref<HTMLElement | null>(null);
 const searchQuery = ref('');
+const isSearchMode = ref(false);
 const selectedLevels = ref<string[]>([]);
 const selectedModules = ref<string[]>([]);
 const expandedLogs = ref<Set<string>>(new Set());
+const expandedGroups = ref<Set<string>>(new Set());
 const isRealtimeScroll = ref(true);
 
 // 动态图标
@@ -171,19 +255,27 @@ const scrollModeIcon = computed(() =>
   isRealtimeScroll.value ? markRaw(RefreshRight) : markRaw(Unlock),
 );
 
-// 获取某个日志级别的数量
+// 显示列表：历史浏览窗口优先，否则实时尾部
+const displayLogs = computed<LogEntry[]>(() => windowLogs.value ?? logs.value);
+const windowActive = computed(() => windowLogs.value !== null);
+
+// 更早耗尽提示：窗口起点随查询口径变化（默认启动、跳转后为所选时刻），文案不写死
+const exhaustedText = computed(
+  () => '已到可查范围最早的记录（默认范围=本次启动，更早请用时间跳转）',
+);
+
+// 级别/模块计数基于当前显示列表
 function getLevelCount(level: string): number {
-  return logs.value.filter(log => log.level === level).length;
+  return displayLogs.value.filter(log => log.level === level).length;
 }
 
-// 获取某个模块的数量
 function getModuleCount(module: string): number {
-  return logs.value.filter(log => log.module === module).length;
+  return displayLogs.value.filter(log => log.module === module).length;
 }
 
-// 筛选后的日志列表
+// 筛选后的日志列表（级别/模块为客户端筛选；搜索态正文筛选已在服务端完成）
 const filteredLogs = computed(() => {
-  let result = logs.value;
+  let result = displayLogs.value;
 
   if (selectedLevels.value.length > 0) {
     result = result.filter(log => selectedLevels.value.includes(log.level));
@@ -193,27 +285,74 @@ const filteredLogs = computed(() => {
     result = result.filter(log => selectedModules.value.includes(log.module));
   }
 
-  if (searchQuery.value.trim()) {
-    const query = searchQuery.value.toLowerCase();
-    result = result.filter(log => {
-      if (log.message.toLowerCase().includes(query)) return true;
-      if (log.module.toLowerCase().includes(query)) return true;
-      return false;
-    });
-  }
-
   return result;
 });
 
-// 仅用于渲染的日志列表（限制数量以避免 DOM 过多）
-const MAX_VISIBLE_LOGS = 100;
-const visibleLogs = computed(() => {
-  const list = filteredLogs.value;
-  if (list.length <= MAX_VISIBLE_LOGS) return list;
-  return list.slice(list.length - MAX_VISIBLE_LOGS);
-});
+// 同因折叠：相邻同级别/同模块/同正文合并为一组
+const collapsedRows = computed(() => collapseAdjacentLogs(filteredLogs.value));
 
-// 切换滚动模式
+function messageKey(entry: LogEntry): string {
+  return `${entry.timestamp}|${entry.module}|${entry.message}`;
+}
+
+// ------------------------------------------------------------------
+// 动作
+// ------------------------------------------------------------------
+
+function onSearch() {
+  const query = searchQuery.value.trim();
+  if (!query) {
+    onSearchClear();
+    return;
+  }
+  isSearchMode.value = true;
+  void logsStore.runSearch(query).then(() => scrollListTo('bottom'));
+}
+
+function onSearchClear() {
+  if (!isSearchMode.value) return;
+  isSearchMode.value = false;
+  logsStore.exitWindow();
+}
+
+function onLoadOlder() {
+  void logsStore.fetchOlder().then(() => scrollListTo('top'));
+}
+
+function onLoadNewer() {
+  void logsStore.fetchNewer().then(() => scrollListTo('bottom'));
+}
+
+function onJump(timestampMs: number) {
+  void logsStore.jumpTo(timestampMs).then(() => scrollListTo('top'));
+}
+
+function onExitWindow() {
+  isSearchMode.value = false;
+  logsStore.exitWindow();
+  scrollToBottom();
+}
+
+function onTogglePause() {
+  logsStore.togglePause();
+}
+
+// 恢复暂停的补入报告（store 置值 → 视图提示后清空）
+watch(
+  () => logsStore.resumeReport,
+  report => {
+    if (!report) return;
+    if (report.dropped > 0) {
+      ElMessage.warning(
+        `已补入 ${report.added} 条暂停期间的日志，积压溢出丢弃 ${report.dropped} 条（完整内容可翻历史找回）`,
+      );
+    } else if (report.added > 0) {
+      ElMessage.success(`已补入 ${report.added} 条暂停期间的日志`);
+    }
+    logsStore.resumeReport = null;
+  },
+);
+
 function toggleScrollMode() {
   isRealtimeScroll.value = !isRealtimeScroll.value;
   if (isRealtimeScroll.value) {
@@ -224,40 +363,43 @@ function toggleScrollMode() {
   }
 }
 
-// 暂停/继续日志流
-function togglePause() {
-  logsStore.togglePause();
-  if (isPaused.value) {
-    ElMessage.info('日志流已暂停');
-  } else {
-    ElMessage.success('日志流已恢复');
-  }
-}
-
-// 清空日志
 function clearLogs() {
   logsStore.clearLogs();
   expandedLogs.value.clear();
+  expandedGroups.value.clear();
   ElMessage.success('已清空日志列表');
 }
 
-// 格式化时间
-function formatTime(timestamp: string): string {
-  // 处理 ISO 格式或其他时间格式
-  const date = new Date(timestamp);
-  const hours = date.getHours().toString().padStart(2, '0');
-  const minutes = date.getMinutes().toString().padStart(2, '0');
-  const seconds = date.getSeconds().toString().padStart(2, '0');
-  const ms = date.getMilliseconds().toString().padStart(3, '0');
-  return `${hours}:${minutes}:${seconds}.${ms}`;
+// ------------------------------------------------------------------
+// 展示辅助
+// ------------------------------------------------------------------
+
+function pad2(value: number): string {
+  return value.toString().padStart(2, '0');
 }
 
-// 判断是否需要展开按钮
+// 最新一条与较旧条目跨天时，时间列补日期前缀（跨天/跨启动浏览可定位）
+const newestTimestamp = computed(() => displayLogs.value.at(-1)?.timestamp ?? '');
+
+function formatLogTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  const hms = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}.${date.getMilliseconds().toString().padStart(3, '0')}`;
+  const newest = newestTimestamp.value ? new Date(newestTimestamp.value) : null;
+  if (
+    newest &&
+    (date.getFullYear() !== newest.getFullYear() ||
+      date.getMonth() !== newest.getMonth() ||
+      date.getDate() !== newest.getDate())
+  ) {
+    return `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${hms}`;
+  }
+  return hms;
+}
+
 function shouldShowExpand(message: string): boolean {
   return message.length > 100 || message.includes('\n');
 }
 
-// 切换日志展开状态
 function toggleLogExpand(key: string) {
   if (expandedLogs.value.has(key)) {
     expandedLogs.value.delete(key);
@@ -265,6 +407,26 @@ function toggleLogExpand(key: string) {
     expandedLogs.value.add(key);
   }
   expandedLogs.value = new Set(expandedLogs.value);
+}
+
+function toggleGroupExpand(key: string) {
+  if (expandedGroups.value.has(key)) {
+    expandedGroups.value.delete(key);
+  } else {
+    expandedGroups.value.add(key);
+  }
+  expandedGroups.value = new Set(expandedGroups.value);
+}
+
+// ------------------------------------------------------------------
+// 滚动
+// ------------------------------------------------------------------
+
+function scrollListTo(position: 'top' | 'bottom') {
+  void nextTick(() => {
+    if (!logListRef.value) return;
+    logListRef.value.scrollTop = position === 'top' ? 0 : logListRef.value.scrollHeight;
+  });
 }
 
 // 自动滚动到底部 - 使用 requestAnimationFrame 节流，避免强制同步布局
@@ -285,31 +447,28 @@ function scrollToBottom() {
   });
 }
 
-// 处理滚动事件
+// 处理滚动事件（仅实时模式：用户滚离底部切自由滚动；历史浏览态自由滚动）
 function handleScroll() {
-  if (!logListRef.value || isRealtimeScroll.value === false) return;
+  if (!logListRef.value || windowActive.value || isRealtimeScroll.value === false) return;
 
   const { scrollTop, scrollHeight, clientHeight } = logListRef.value;
   const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
 
-  // 如果用户手动滚动离开底部，切换到自由滚动模式
   if (!isAtBottom) {
     isRealtimeScroll.value = false;
   }
 }
 
-// 监听日志变化，自动滚动
+// 监听日志变化，自动滚动（历史浏览/暂停态不跟随）
 let unsubscribe: (() => void) | null = null;
 
 onMounted(() => {
-  // 订阅日志变化，自动滚动
   unsubscribe = logsStore.$subscribe(() => {
-    if (!isPaused.value && isRealtimeScroll.value) {
+    if (!isPaused.value && isRealtimeScroll.value && !windowActive.value) {
       scrollToBottom();
     }
   });
 
-  // 初始滚动到底部
   scrollToBottom();
 });
 
@@ -317,7 +476,6 @@ onUnmounted(() => {
   if (unsubscribe) {
     unsubscribe();
   }
-  // 取消 pending 的 scrollToBottom
   if (scrollRAFId !== null) {
     cancelAnimationFrame(scrollRAFId);
   }
@@ -363,8 +521,27 @@ onUnmounted(() => {
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color-light);
+  margin-bottom: var(--spacing-sm);
+  flex-shrink: 0;
+}
+
+/* 历史查询栏 */
+.history-section {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color-light);
   margin-bottom: var(--spacing-md);
   flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.persist-note {
+  font-size: 12px;
+  color: var(--color-warning);
 }
 
 .filter-left {
@@ -414,12 +591,11 @@ onUnmounted(() => {
   background-color: var(--color-critical);
 }
 
-.level-count {
+.level-count,
+.module-count {
   font-size: 10px;
   font-weight: 500;
   color: var(--text-placeholder);
-  background: transparent;
-  padding: 0;
   min-width: 28px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -438,18 +614,6 @@ onUnmounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
-}
-
-.module-count {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--text-placeholder);
-  background: transparent;
-  padding: 0;
-  min-width: 28px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
 }
 
 /* 日志列表 */
@@ -500,6 +664,12 @@ onUnmounted(() => {
   border-bottom: none;
 }
 
+/* 组内重复条目缩进呈现 */
+.log-row-sub {
+  padding-left: calc(var(--spacing-md) * 2);
+  opacity: 0.85;
+}
+
 /* 日志级别背景色 */
 .log-row.log-level-debug {
   background-color: rgba(128, 128, 128, 0.03);
@@ -521,14 +691,10 @@ onUnmounted(() => {
   background-color: var(--color-critical-bg);
 }
 
-.log-row:hover {
-  background-color: var(--bg-hover);
-}
-
 .log-time {
   color: var(--text-secondary);
   white-space: nowrap;
-  min-width: 95px;
+  min-width: 128px;
   font-size: 12px;
 }
 
@@ -608,6 +774,22 @@ onUnmounted(() => {
   padding: var(--spacing-sm);
   border-radius: var(--radius-sm);
   white-space: pre-wrap;
+}
+
+.row-hints {
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: center;
+}
+
+.collapse-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-warning);
+  background-color: var(--color-warning-bg);
+  border-radius: var(--radius-sm);
+  padding: 1px 8px;
+  cursor: pointer;
 }
 
 .expand-hint {

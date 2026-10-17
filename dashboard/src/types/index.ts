@@ -367,6 +367,27 @@ export interface SubscribeRequest {
   events: string[];
 }
 
+// 日志历史（GET /logs，扫 logs/webui 按天落盘 JSONL）
+
+export interface LogEntryItem {
+  timestamp: string;
+  level: string;
+  module: string;
+  message: string;
+  exception?: string;
+}
+
+export interface LogsQueryResponse {
+  entries: LogEntryItem[];
+  total: number;
+  has_more_older: boolean;
+  has_more_newer: boolean;
+  /** 落盘不可用（未启用/目录缺失）时历史降级为空 */
+  persist_available: boolean;
+  /** 实际生效的窗口起点（Unix 毫秒；缺省=本次启动时刻） */
+  window_start_ms: number;
+}
+
 // Tools
 
 /** json = array/object/未声明 type 的复杂参数（JSON 文本域承载，提交时解析） */

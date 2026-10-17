@@ -70,6 +70,7 @@ declare module 'vue' {
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     FeedTimeline: typeof import('./src/components/live/FeedTimeline.vue')['default']
     FieldRenderer: typeof import('./src/components/settings/FieldRenderer.vue')['default']
+    HistoryBar: typeof import('./src/components/debug/HistoryBar.vue')['default']
     HistoryDetail: typeof import('./src/components/llm-history/HistoryDetail.vue')['default']
     HistoryFilter: typeof import('./src/components/llm-history/HistoryFilter.vue')['default']
     HistoryTable: typeof import('./src/components/llm-history/HistoryTable.vue')['default']
