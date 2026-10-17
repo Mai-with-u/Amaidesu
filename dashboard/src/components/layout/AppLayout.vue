@@ -5,12 +5,7 @@
       <div class="header-left">
         <div class="brand">
           <span class="brand-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-              <line x1="9" y1="9" x2="9.01" y2="9" />
-              <line x1="15" y1="9" x2="15.01" y2="9" />
-            </svg>
+            <img src="/icon.png" alt="Amaidesu" />
           </span>
           <span class="brand-text">Amaidesu</span>
         </div>
@@ -296,9 +291,11 @@ onUnmounted(() => {
   transform: rotate(-8deg) scale(1.06);
 }
 
-.brand-icon svg {
-  width: 20px;
-  height: 20px;
+.brand-icon img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: inherit;
 }
 
 .brand-text {
