@@ -31,7 +31,7 @@ export interface ReviewSessionBrief {
   viewer_count: number;
 }
 
-/** 决策→发言链路时延分位（口径：planner.decision 自带 total_duration_ms） */
+/** 决策→发言链路时延分位（口径：planner.verdict → streamer.speech 按 round_id 配对） */
 export interface DecisionLatency {
   sample_count: number;
   p50_ms: number | null;

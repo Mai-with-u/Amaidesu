@@ -508,12 +508,20 @@ const wallClock = computed(() => formatTimeHMS(nowTick.value));
 
 onMounted(() => {
   void loadSessions().then(() => {
-    // 直达预过滤：场次复盘页经 ?session=<id> 跳入时选中该历史场次进回看
-    //（列表加载完成后才能命中；无效 id 静默忽略，维持实时模式）
-    const deepLinkId = Number(route.query.session ?? '');
-    if (Number.isFinite(deepLinkId) && deepLinkId > 0) {
-      const target = sessions.value.find(s => s.live_session_id === deepLinkId);
-      if (target && !target.is_active) selectSession(target);
+    // 直达预过滤：场次复盘页经 ?session=<id[,id...]> 跳入时选中该历史场次进回看
+    //（列表加载完成后才能命中；无效 id 静默忽略，维持实时模式）。
+    // 复盘侧多选合并可带多场，回看视图一次只呈现一场——按链接顺序选中首个命中场次，
+    // 其余 id 保留在链接中供手动切换
+    const deepLinkIds = String(route.query.session ?? '')
+      .split(',')
+      .map(Number)
+      .filter(id => Number.isFinite(id) && id > 0);
+    for (const id of deepLinkIds) {
+      const target = sessions.value.find(s => s.live_session_id === id);
+      if (target && !target.is_active) {
+        selectSession(target);
+        break;
+      }
     }
   });
   void loadSimulatorStatus();

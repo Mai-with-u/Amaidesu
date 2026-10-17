@@ -41,6 +41,16 @@ export function waterlineColor(profile: string, index: number): string {
 }
 
 /**
+ * 按 profile 名全集的排序下标取展示色（用表色圈与水位图折线共用同一入口，
+ * 保证任意 profile 集合下同一 profile 恒为同色）。已知专色 profile 不受
+ * 下标影响；未知 profile 在全集缺席时按下标 0 兜底。
+ */
+export function waterlineColorForProfile(profile: string, allProfiles: string[]): string {
+  const index = [...new Set(allProfiles)].sort().indexOf(profile);
+  return waterlineColor(profile, index < 0 ? 0 : index);
+}
+
+/**
  * 场间空窗判定的最小间隔：相邻两点跨场（session_id 变化）即断线，
  * 同场内间隔超过该值也断（防长时间无请求的直线伪影）。
  */

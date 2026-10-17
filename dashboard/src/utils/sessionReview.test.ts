@@ -7,6 +7,7 @@ import {
   slowCallsLevel,
   splitWaterlinePoints,
   waterlineColor,
+  waterlineColorForProfile,
   WATERLINE_GAP_MS,
 } from './sessionReview';
 import type { WaterlinePoint } from '@/types/review';
@@ -70,6 +71,20 @@ describe('配色与格式化', () => {
   it('已知 profile 用专色，未知 profile 依次取兜底色', () => {
     expect(waterlineColor('planner', 0)).toBe('#6366f1');
     expect(waterlineColor('unknown', 0)).toBe(waterlineColor('other', 0));
+  });
+
+  it('同 profile 在全集任意排列下取色一致（色圈与折线同色）', () => {
+    const full = ['minecraft', 'planner', 'zebra-model', 'alpha-model'];
+    for (const profile of full) {
+      const fromFull = waterlineColorForProfile(profile, full);
+      // 传入子集或乱序全集，同一 profile 色不变
+      expect(waterlineColorForProfile(profile, [...full].reverse())).toBe(fromFull);
+    }
+    // 排序下标驱动兜底色分配：排序后 alpha 第 0、zebra 第 3
+    expect(waterlineColorForProfile('alpha-model', full)).toBe(waterlineColor('alpha-model', 0));
+    expect(waterlineColorForProfile('zebra-model', full)).toBe(waterlineColor('zebra-model', 3));
+    // 全集缺席时按下标 0 兜底，不抛错
+    expect(waterlineColorForProfile('ghost', [])).toBe(waterlineColor('ghost', 0));
   });
 
   it('时长与秒标签', () => {

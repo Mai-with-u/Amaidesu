@@ -12,6 +12,7 @@ super_chats / game_events）、LLM 请求统计窗口切片（llm_requests 统�
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.dashboard.schemas.review import (
@@ -64,11 +65,17 @@ def longest_silence_ms(speech_ts: Sequence[int], start_ms: int, end_ms: int) -> 
     return max((b - a) for a, b in zip(bounds, bounds[1:], strict=False)) if end_ms > start_ms else 0
 
 
-def _to_brief(row: Dict[str, object]) -> ReviewSessionBrief:
-    """live_sessions 行 → 基本信息（ended 缺失按进行中处理，时长截到现在由调用方保证）。"""
+def _to_brief(row: Dict[str, object], now_ms: Optional[int] = None) -> ReviewSessionBrief:
+    """live_sessions 行 → 基本信息。
+
+    进行中场次（ended 缺失）以当前时刻为聚合窗口右端：时长取
+    ``now_ms - started``，保证聚合窗与派生指标（速率/沉默）不为零宽。
+    now_ms 由调用方注入以便测试；缺省取系统当前毫秒。
+    """
     started = int(row["started_at_ms"])  # type: ignore[index]
     ended_raw = row.get("ended_at_ms")
     ended = int(ended_raw) if ended_raw is not None else None
+    right = ended if ended is not None else (now_ms if now_ms is not None else int(time.time() * 1000))
     return ReviewSessionBrief(
         live_session_id=int(row["id"]),  # type: ignore[index]
         title=row.get("title"),  # type: ignore[arg-type]
@@ -76,7 +83,7 @@ def _to_brief(row: Dict[str, object]) -> ReviewSessionBrief:
         platform=str(row.get("platform") or ""),
         started_at_ms=started,
         ended_at_ms=ended,
-        duration_ms=max(0, (ended if ended is not None else started) - started),
+        duration_ms=max(0, right - started),
         heat=int(row.get("heat") or 0),  # type: ignore[arg-type]
         viewer_count=int(row.get("viewer_count") or 0),  # type: ignore[arg-type]
     )
@@ -109,7 +116,9 @@ class SessionReviewAggregator:
 
     async def build(self, session_rows: List[Dict[str, object]]) -> SessionReviewResponse:
         """按场次行列表聚合（多行即多选合并视图）。"""
-        briefs = [_to_brief(row) for row in session_rows]
+        # 进行中场次的窗口右端统一取同一时刻，保证各场次口径一致
+        now_ms = int(time.time() * 1000)
+        briefs = [_to_brief(row, now_ms=now_ms) for row in session_rows]
         windows = [
             (b.started_at_ms, b.ended_at_ms if b.ended_at_ms is not None else b.started_at_ms + b.duration_ms)
             for b in briefs
@@ -117,7 +126,10 @@ class SessionReviewAggregator:
         session_ids = [b.live_session_id for b in briefs]
 
         window_start = min((b.started_at_ms for b in briefs), default=0)
-        window_end = max((b.ended_at_ms if b.ended_at_ms is not None else b.started_at_ms for b in briefs), default=0)
+        window_end = max(
+            (b.ended_at_ms if b.ended_at_ms is not None else b.started_at_ms + b.duration_ms for b in briefs),
+            default=0,
+        )
 
         chips, speech = await self._chat_section(session_ids, briefs, window_start, window_end)
         llm, waterline = await self._llm_section(windows, session_ids)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from datetime import datetime
 from src.modules.dashboard.services.session_events import SessionEventReader
 from src.modules.dashboard.services.session_review import (
     SessionReviewAggregator,
+    _to_brief,
     longest_silence_ms,
     percentile,
 )
@@ -42,6 +44,48 @@ def test_longest_silence_counts_boundaries() -> None:
     assert longest_silence_ms([60_000, 90_000], 0, 150_000) == 60_000
     # 零发言：整场即沉默
     assert longest_silence_ms([], 1_000, 61_000) == 60_000
+
+
+def _ongoing_row(pk: int, started: int) -> Dict[str, object]:
+    return {
+        "id": pk,
+        "title": None,
+        "source": "manual",
+        "platform": "",
+        "started_at_ms": started,
+        "ended_at_ms": None,
+        "heat": 0,
+        "viewer_count": 0,
+    }
+
+
+def test_to_brief_ongoing_window_right_end_is_now() -> None:
+    # 进行中场次（ended 缺失）以当前时刻为窗口右端：时长=now-started，不为零宽
+    now_ms = BASE + 300_000
+    brief = _to_brief(_ongoing_row(7, BASE), now_ms=now_ms)
+    assert brief.ended_at_ms is None
+    assert brief.duration_ms == 300_000
+    # 已结束场次不受 now 影响
+    ended_row = {**_ongoing_row(8, BASE), "ended_at_ms": BASE + 60_000}
+    assert _to_brief(ended_row, now_ms=now_ms).duration_ms == 60_000
+
+
+async def test_aggregator_ongoing_session_window_extends_to_now(store) -> None:
+    # 开播时刻取 10 分钟前（真实 now 口径）：距 now 过远的开播会把速率稀释为 0
+    started = int(time.time() * 1000) - 600_000
+    pk = await store.sessions.insert_live_session(started_at_ms=started, title="进行中场")
+    await _seed_chat(store, pk, started + 60_000, "assistant", "还在播", mtype="speak")
+
+    agg = SessionReviewAggregator(chat_repo=store.chat)
+    body = await agg.build([dict(await store.sessions.get_live_session(live_session_id=pk))])
+
+    brief = body.sessions[0]
+    assert brief.ended_at_ms is None
+    # 窗口右端=当前时刻：时长为正、window_end 晚于开播
+    assert brief.duration_ms > 0
+    assert body.window_end_ms > started
+    # 速率口径随窗口生效：有发言即得正速率
+    assert body.speech.rate_per_min is not None and body.speech.rate_per_min > 0
 
 
 # ---------------------------------------------------------------------- #

@@ -61,9 +61,15 @@
     />
 
     <template v-if="review">
-      <!-- 场次信息 chips -->
+      <!-- 场次信息 chips（互动类零值降饱和） -->
       <section class="chips" aria-label="场次信息">
-        <span v-for="chip in chips" :key="chip" class="chip mono">{{ chip }}</span>
+        <span
+          v-for="chip in chips"
+          :key="chip.label"
+          class="chip mono"
+          :class="{ 'is-dimmed': chip.dimmed }"
+          >{{ chip.label }}</span
+        >
       </section>
 
       <!-- 核心指标卡 -->
@@ -72,6 +78,9 @@
           <div class="stat-label">场内发言</div>
           <div class="stat-value">{{ review.speech.count }}<span class="stat-unit">条</span></div>
           <div class="stat-sub">口径：live_chat 主播发言行（sender_role=assistant）</div>
+          <div v-if="review.speech.rate_per_min !== null" class="stat-sub">
+            ≈{{ review.speech.rate_per_min }} 条/分钟
+          </div>
         </div>
         <div class="stat">
           <div class="stat-label">最长沉默</div>
@@ -96,8 +105,9 @@
           </div>
           <div class="stat-sub">
             p50 {{ formatMsAsSeconds(review.decisions.latency.p50_ms) }} · max
-            {{ formatMsAsSeconds(review.decisions.latency.max_ms) }} · 超过 30s 染红（verdict→speech
-            按 round_id 配对）
+            {{ formatMsAsSeconds(review.decisions.latency.max_ms) }} · 样本
+            {{ review.decisions.latency.sample_count }} · 超过 30s 染红（verdict→speech 按 round_id
+            配对）
           </div>
         </div>
         <div class="stat">
@@ -140,6 +150,8 @@
               <tr>
                 <th>Profile</th>
                 <th class="num">笔数</th>
+                <th class="num">慢调用</th>
+                <th class="num">失败</th>
                 <th class="num">输入</th>
                 <th class="num">缓存</th>
                 <th class="num">输出</th>
@@ -149,13 +161,15 @@
             <tbody>
               <tr v-for="row in review.llm.by_profile" :key="row.profile_name">
                 <td>
-                  <span
-                    class="tier"
-                    :style="{ borderColor: waterlineColor(row.profile_name, 0) }"
-                    >{{ row.profile_name || 'unknown' }}</span
-                  >
+                  <span class="tier" :style="{ borderColor: profileColor(row.profile_name) }">{{
+                    row.profile_name || 'unknown'
+                  }}</span>
                 </td>
                 <td class="num">{{ row.calls }}</td>
+                <td class="num" :class="{ zero: row.slow_calls === 0 }">{{ row.slow_calls }}</td>
+                <td class="num" :class="{ zero: row.failed_calls === 0 }">
+                  {{ row.failed_calls }}
+                </td>
                 <td class="num">{{ compactNumber(row.prompt_tokens) }}</td>
                 <td class="num">{{ cacheRate(row.cache_hit_rate) }}</td>
                 <td class="num">{{ compactNumber(row.completion_tokens) }}</td>
@@ -164,6 +178,12 @@
               <tr class="total-row">
                 <td>合计</td>
                 <td class="num">{{ review.llm.overall.calls }}</td>
+                <td class="num" :class="{ zero: review.llm.overall.slow_calls === 0 }">
+                  {{ review.llm.overall.slow_calls }}
+                </td>
+                <td class="num" :class="{ zero: review.llm.overall.failed_calls === 0 }">
+                  {{ review.llm.overall.failed_calls }}
+                </td>
                 <td class="num">{{ compactNumber(review.llm.overall.prompt_tokens) }}</td>
                 <td class="num">{{ cacheRate(review.llm.overall.cache_hit_rate) }}</td>
                 <td class="num">{{ compactNumber(review.llm.overall.completion_tokens) }}</td>
@@ -207,7 +227,7 @@ import {
   formatMsAsSeconds,
   latencyLevel,
   slowCallsLevel,
-  waterlineColor,
+  waterlineColorForProfile,
 } from '@/utils/sessionReview';
 import { useChartPalette, useECharts } from '@/composables/useECharts';
 
@@ -254,43 +274,75 @@ async function loadReview(): Promise<void> {
 
 function sessionLabel(item: LiveSessionItem): string {
   const title = item.title || `场次 #${item.live_session_id}`;
-  return `${title} · ${formatDateTime(item.started_at_ms)}`;
+  // 进行中场次在列表中显式标注，避免被误当历史场次深链回看
+  const ongoing = item.ended_at_ms === null ? '（进行中）' : '';
+  return `${title}${ongoing} · ${formatDateTime(item.started_at_ms)}`;
 }
 
-const chips = computed<string[]>(() => {
+/** 单枚信息 chip：dimmed=零值弱信息降饱和展示 */
+interface ReviewChip {
+  label: string;
+  dimmed: boolean;
+}
+
+/** 来源值 → 展示文案（未收录的原值兜底） */
+const SOURCE_LABELS: Record<string, string> = { manual: '手动' };
+
+function sourceLabel(source: string): string {
+  return SOURCE_LABELS[source] ?? source;
+}
+
+const chips = computed<ReviewChip[]>(() => {
   const r = review.value;
   if (!r) return [];
-  const labels: string[] = r.sessions.map(
-    s => `场次 #${s.live_session_id}${s.title ? ` · ${s.title}` : ''}`,
-  );
+  // 互动类零值 chip 属弱信息（没有互动发生），降饱和弱化；时间/时长/来源等
+  // 信息 chip 恒常显示
+  const list: ReviewChip[] = r.sessions.map(s => ({
+    label: `场次 #${s.live_session_id}${s.title ? ` · ${s.title}` : ''}`,
+    dimmed: false,
+  }));
   if (r.sessions.length === 1) {
     const s = r.sessions[0];
     const endLabel = s.ended_at_ms !== null ? formatTimeHMS(s.ended_at_ms) : '进行中';
-    labels.push(`${formatTimeHMS(s.started_at_ms)} – ${endLabel}`);
-    labels.push(formatDurationMs(s.duration_ms));
-    labels.push(`来源 ${s.source}`);
-    labels.push(`heat ${s.heat}`);
-    labels.push(`观众数 ${s.viewer_count}`);
+    list.push({ label: `${formatTimeHMS(s.started_at_ms)} – ${endLabel}`, dimmed: false });
+    list.push({ label: formatDurationMs(s.duration_ms), dimmed: false });
+    list.push({ label: `来源 ${sourceLabel(s.source)}`, dimmed: false });
+    list.push({ label: `人气 ${s.heat}`, dimmed: s.heat === 0 });
+    list.push({ label: `观众数 ${s.viewer_count}`, dimmed: s.viewer_count === 0 });
   } else {
-    labels.push(formatDurationMs(r.window_end_ms - r.window_start_ms));
-    labels.push(`${r.sessions.length} 场合并`);
+    list.push({ label: formatDurationMs(r.window_end_ms - r.window_start_ms), dimmed: false });
+    list.push({ label: `${r.sessions.length} 场合并`, dimmed: false });
   }
-  labels.push(`弹幕 ${r.chips.danmaku_count}`);
-  labels.push(`进入 ${r.chips.enter_count}`);
-  labels.push(`礼物 ${r.chips.gift_count}`);
-  labels.push(`SC ${r.chips.super_chat_count}`);
-  return labels;
+  // 金额为平台虚拟货币原值合计（混合币种无法安全折算人民币），仅在有金额时追加
+  const giftAmount = r.chips.gift_total_price > 0 ? ` · ${r.chips.gift_total_price}` : '';
+  const scAmount = r.chips.super_chat_total_price > 0 ? ` · ${r.chips.super_chat_total_price}` : '';
+  list.push({ label: `弹幕 ${r.chips.danmaku_count}`, dimmed: r.chips.danmaku_count === 0 });
+  list.push({ label: `进入 ${r.chips.enter_count}`, dimmed: r.chips.enter_count === 0 });
+  list.push({ label: `礼物 ${r.chips.gift_count}${giftAmount}`, dimmed: r.chips.gift_count === 0 });
+  list.push({
+    label: `SC ${r.chips.super_chat_count}${scAmount}`,
+    dimmed: r.chips.super_chat_count === 0,
+  });
+  return list;
 });
 
 const decisionSummary = computed<string>(() => {
   const d = review.value?.decisions;
   if (!d) return '';
-  const parts = Object.entries(d.distribution)
+  // 分层表述：前段是触发来源分布（计数和=total），后段是 total 的子集
+  //（静默/失败与来源分布有交叠），用分隔符与"其中"措辞区分层次
+  const sources = Object.entries(d.distribution)
     .slice(0, 3)
-    .map(([reason, count]) => `${reason} ${count}`);
-  if (d.silent_count) parts.push(`静默 ${d.silent_count}`);
-  if (d.failed_count) parts.push(`失败 ${d.failed_count}`);
-  return parts.join(' · ') || '无决策记录';
+    .map(([reason, count]) => `${reason} ${count}`)
+    .join(' · ');
+  const extras = [
+    d.silent_count ? `静默 ${d.silent_count}` : '',
+    d.failed_count ? `失败 ${d.failed_count}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  if (!sources && !extras) return '无决策记录';
+  return extras ? `${sources} ｜ 其中${extras}` : sources;
 });
 
 const gameSummary = computed<string>(() => {
@@ -309,6 +361,15 @@ const cacheRateLabel = computed<string>(() =>
 
 function cacheRate(rate: number | null): string {
   return rate === null ? '—' : `${Math.round(rate * 100)}%`;
+}
+
+// profile 名全集：表格色圈与图表折线共用同一取色入口，保证同 profile 同色
+const profileNames = computed<string[]>(() =>
+  review.value ? review.value.llm.by_profile.map(row => row.profile_name) : [],
+);
+
+function profileColor(profile: string): string {
+  return waterlineColorForProfile(profile, profileNames.value);
 }
 
 // 水位图 option：时间轴 + 按 profile 多折线（null 断线留空隙）
@@ -344,14 +405,14 @@ const chartOption = computed<EChartsCoreOption | null>(() => {
       axisLabel: { color: palette.value.textColor },
       splitLine: { lineStyle: { color: palette.value.borderColorLight } },
     },
-    series: data.map((s, i) => ({
+    series: data.map(s => ({
       name: s.profile,
       type: 'line' as const,
       showSymbol: false,
       connectNulls: false,
       data: s.data,
-      lineStyle: { color: waterlineColor(s.profile, i), width: 1.5 },
-      itemStyle: { color: waterlineColor(s.profile, i) },
+      lineStyle: { color: profileColor(s.profile), width: 1.5 },
+      itemStyle: { color: profileColor(s.profile) },
     })),
   };
 });
@@ -361,8 +422,11 @@ const safeChartOption = computed<EChartsCoreOption>(() => chartOption.value ?? {
 useECharts(chartRef, safeChartOption);
 
 const eventReviewLink = computed<string>(() => {
-  const first = review.value?.sessions[0];
-  return first ? `/live?session=${first.live_session_id}` : '/live';
+  const r = review.value;
+  if (!r || !r.sessions.length) return '/live';
+  // 多选合并时携带全部场次 id（LiveObserver 按序取首个命中进回看）
+  const ids = selectedIds.value.length ? selectedIds.value : r.sessions.map(s => s.live_session_id);
+  return `/live?session=${ids.join(',')}`;
 });
 
 const llmHistoryLink = computed<string>(() => {
@@ -440,6 +504,17 @@ function exportPackage(): void {
 
 .mono {
   font-family: var(--font-mono);
+}
+
+/* 零值互动 chip：弱信息降饱和（次级文字色 + 半透明） */
+.chip.is-dimmed {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+/* 用量表零值数字：与降饱和 chip 同口径的弱化 */
+.usage-table .num.zero {
+  color: var(--text-secondary);
 }
 
 .stats {
