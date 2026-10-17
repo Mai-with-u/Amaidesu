@@ -47,7 +47,7 @@ from src.agents.minecraft.maicraft import (
     ledger_task_id,
     reply_of,
 )
-from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, TimerDue
+from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, WakeEvenIdle
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.context import PrefixGuard, TailImages
@@ -211,7 +211,8 @@ class MinecraftAgent(BaseAgent):
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
         self._worker_task: Optional[asyncio.Task[None]] = None
         self._wake_event: asyncio.Event = asyncio.Event()
-        # 指令队列：委派与递话是 MinecraftInstruction，宿主的目标通知是 (空任务号, 正文)
+        # 指令队列：委派与递话是 MinecraftInstruction，宿主的目标通知是 (空任务号, 正文)，
+        # 计时到点与 Mod 挂出的决策是 WakeEvenIdle（闲着也开批）
         self._message_queue: Deque[tuple] = deque()
         # 原始指令跟随逻辑任务，不能因一次后台通知重新开批就丢失。
         self._task_instructions: List[str] = []
@@ -568,9 +569,10 @@ class MinecraftAgent(BaseAgent):
             if not (self._running and self._message_queue) or not self._live_active:
                 continue
             # 任务交付或挂起后等主播新指令，后台通知只补充已知状态，不独立开新任务；
-            # 计时到点除外：那是模型自己要的叫醒，闲着时不开批它就永远等不到。
+            # 闲着也叫醒的通知除外：计时到点是模型自己要的叫醒，Mod 挂出的死亡恢复决策没人答角色就一直停在死亡屏幕，
+            # 闲着时不开批它们就永远没人管。
             if (self._task_finished or self._task_suspended) and not any(
-                isinstance(message, (MinecraftInstruction, TimerDue)) for message in self._message_queue
+                isinstance(message, (MinecraftInstruction, WakeEvenIdle)) for message in self._message_queue
             ):
                 continue
             try:
@@ -640,9 +642,12 @@ class MinecraftAgent(BaseAgent):
             while self._message_queue:
                 queued = self._message_queue.popleft()
                 task_id, content = queued
-                # 计时到点轮到读时才看任务状态：已交付就和一条指令一样开新任务（备注就是这次要做的事）；
-                # 挂起着就接着原任务做，不记成原始指令；任务进行中只是一条普通通知。
-                if isinstance(queued, MinecraftInstruction) or (isinstance(queued, TimerDue) and self._task_finished):
+                # 闲着也叫醒的通知（计时到点、Mod 挂出的决策）轮到读时才看任务状态：已交付就和一条指令一样开新任务
+                # （计时的备注、要回答的决策就是这次要做的事）；挂起着就接着原任务做，不记成原始指令；
+                # 任务进行中只是一条普通通知。
+                if isinstance(queued, MinecraftInstruction) or (
+                    isinstance(queued, WakeEvenIdle) and self._task_finished
+                ):
                     if self._task_finished:
                         self._start_new_task(messages, system_message)
                         opening_due = True
@@ -650,7 +655,7 @@ class MinecraftAgent(BaseAgent):
                     self._task_finished = False
                     self._task_suspended = False
                     self._task_steps = 0
-                elif isinstance(queued, TimerDue):
+                elif isinstance(queued, WakeEvenIdle):
                     self._task_suspended = False
                 if task_id:
                     self._delegated_batch_ids.append(task_id)
@@ -1159,11 +1164,14 @@ class MinecraftAgent(BaseAgent):
         )
 
     async def _on_decision_asked(self, run: GoalRun) -> None:
-        """Mod 自己挂出的决策（死亡恢复）在等回答：带着问题与选项唤醒任务，让模型按问题里给的选项选。
+        """Mod 自己挂出的决策（死亡恢复）在等回答：带着问题与选项叫醒模型，让它按问题里给的选项选。
 
-        决策不是本 Agent 下达的目标：不进跟踪名单、不记任务账本；空闲时也唤醒，没人回答角色就一直停在死亡屏幕。
+        决策不是本 Agent 下达的目标：不进跟踪名单、不记任务账本。
+        闲着、挂起、任务进行中都要叫醒：没人回答，角色就一直停在死亡屏幕。普通通知在交付或挂起后不开批，
+        所以和计时到点一样排成闲着也叫醒的通知：交付过就由这条决策开一个新任务，挂起着就接着原任务做，
+        进行中只是一条普通通知。
         """
-        self._inject_wakeup_message(
+        self._wake_even_idle(
             f"[系统] Mod 挂出的决策（{run.ability}，goal_id={run.goal_id}）在等你回答：{json_text(run.question)}。"
             f"按问题里给的选项，用 maicraft_goal(operation=answer, goal_id={run.goal_id}, answer=选项编号) 回答。"
         )
@@ -1230,14 +1238,21 @@ class MinecraftAgent(BaseAgent):
         """计时到点：模型自己设的"过 N 秒叫我"到了，不管手上有没有任务都叫醒它，Mod 那句话原样带上。
 
         不能像跟随那样只在任务进行中才说：模型设完计时多半去干别的、交付了或闲着，只在任务中才叫就永远等不到。
-        排成 TimerDue 而不是普通通知：worker 认得它，交付或挂起后也开批；轮到读时再按任务状态决定开新任务还是接着做。
-        收工态不排：下一场开播时突然冒出一条上一场的提醒只会让模型去看过时的东西。
         给观众的叙述不出：这是模型给自己定的回头看一眼，注意流分类表把它归进静默。
         """
+        self._wake_even_idle(_TIMER_NOTICE.format(message=message))
+
+    def _wake_even_idle(self, content: str) -> None:
+        """排一条闲着也要叫醒模型的通知（计时到点、Mod 挂出的决策），并叫醒 worker。
+
+        排成 WakeEvenIdle 而不是普通通知：worker 认得它，交付或挂起后也开批；轮到读时再按任务状态
+        决定开新任务、接着原任务做，还是当普通通知读。
+        收工态不排：下一场开播时突然冒出一条上一场的提醒或决策，只会让模型去看过时的东西。
+        """
         if not self._live_active:
-            self._logger.info(f"收工态不叫醒到点的计时：{message[:60]}")
+            self._logger.info(f"收工态不叫醒：{content[:60]}")
             return
-        self._message_queue.append(TimerDue("", _TIMER_NOTICE.format(message=message)))
+        self._message_queue.append(WakeEvenIdle("", content))
         self._wake_event.set()
 
     def _carry_sky_notice(self, message: str) -> None:

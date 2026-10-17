@@ -627,6 +627,101 @@ async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
     await agent.stop()
 
 
+_ANSWER_RESPAWN = {"operation": "answer", "goal_id": -1, "answer": "respawn"}
+
+
+async def test_a_death_decision_wakes_an_idle_agent_as_a_new_task() -> None:
+    """任务交付后闲着时角色死了：死亡恢复决策照样叫醒模型，由它开一个新任务，角色不会一直停在死亡屏幕。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        # 看一眼周围交付 -> 闲着 -> 角色死了被决策叫醒（新任务）-> 回答重生 -> 交付。
+        if _called(messages, "maicraft_goal"):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "复活了"})])
+        if "Mod 挂出的决策" in _texts(messages):
+            return _resp(calls=[_call("maicraft_goal", dict(_ANSWER_RESPAWN))])
+        return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
+
+    agent, llm, bus = await _start(server, script)
+    agent.receive_delegation(instruction="看一眼周围", task_id="d-1")
+    await _wait_until(lambda: len(_reports(bus)) == 1 and agent._batch_active is False)
+    assert agent._task_finished
+
+    server.die()
+    await _wait_until(lambda: len(_reports(bus)) == 2)
+    woken = _texts(llm.seen[-1])
+    assert "Mod 挂出的决策" in woken and "goal_id=-1" in woken
+    assert "看一眼周围" not in woken, "交付过的任务不再续，由决策开新任务"
+    assert "[开局资料]" in woken, "新任务照常附上开局资料"
+    assert server.calls_to("goal")[-1] == _ANSWER_RESPAWN
+    await agent.stop()
+
+
+async def test_a_death_decision_wakes_a_task_suspended_for_the_streamer() -> None:
+    """上报主播挂起后角色死了：决策叫醒模型接着原任务答，不当成新指令；答完可以接着等主播拿主意。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        # 缺燃料上报主播挂起 -> 角色死了被决策叫醒（接着原任务）-> 回答重生 -> 再上报一次接着等主播。
+        if _called(messages, "maicraft_goal"):
+            return _resp(calls=[_call("minecraft_report", {"kind": "escalation", "content": "复活了，还是缺燃料"})])
+        if "Mod 挂出的决策" in _texts(messages):
+            return _resp(calls=[_call("maicraft_goal", dict(_ANSWER_RESPAWN))])
+        return _resp(calls=[_call("minecraft_report", {"kind": "escalation", "content": "缺燃料，要不要去砍树"})])
+
+    agent, llm, bus = await _start(server, script)
+    agent.receive_delegation(instruction="烧点铁锭", task_id="d-1")
+    await _wait_until(lambda: agent._task_suspended and agent._batch_active is False)
+
+    server.die()
+    await _wait_until(lambda: len(_reports(bus)) == 2)
+    woken = _texts(llm.seen[-1])
+    assert "烧点铁锭" in woken and "死亡恢复决策等你回答" in woken and "Mod 挂出的决策" in woken
+    assert server.calls_to("goal")[-1] == _ANSWER_RESPAWN
+    assert agent._task_instructions == ["烧点铁锭"], "决策不记成原始指令"
+    assert agent._task_suspended, "答完再上报就接着等主播"
+    await agent.stop()
+
+
+async def test_a_death_while_the_task_is_being_delivered_still_gets_answered() -> None:
+    """模型交付的那一步角色死了：决策不管排在交付前还是交付后，都不能留在队列里没人读，交付后由它开新任务。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if _called(messages, "maicraft_goal"):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "复活了"})])
+        if "Mod 挂出的决策" in _texts(messages):
+            return _resp(calls=[_call("maicraft_goal", dict(_ANSWER_RESPAWN))])
+        # 模型还在想这一步时角色死了（任务进行中），这一步随即交付；只死一次。
+        if not any(goal_id < 0 for goal_id in server.goals):
+            server.die()
+        return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
+
+    agent, llm, bus = await _start(server, script)
+    # 目标跟踪第一次读事件流只建游标、不补发之前的事件：等它读过一次（发出第二次读取）再派活，
+    # 不然第一步就死的事件会被当成接手前的旧事件跳过。
+    await _wait_until(lambda: len(server.calls_to("events")) >= 2)
+    agent.receive_delegation(instruction="看一眼周围", task_id="d-1")
+    await _wait_until(lambda: len(_reports(bus)) == 2)
+    assert "Mod 挂出的决策" in _texts(llm.seen[-1])
+    assert server.calls_to("goal")[-1] == _ANSWER_RESPAWN
+    assert not agent._message_queue
+    await agent.stop()
+
+
+async def test_a_death_decision_is_not_queued_while_off_air() -> None:
+    """收工态不排决策叫醒：下一场开播时冒出上一场的死亡决策只会让模型去答过时的问题。"""
+    agent, llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
+    agent._live_active = False
+    decision = goal_run_of(
+        {"goal_id": -1, "ability": "death_recovery", "state": "awaiting_answer", "question": {"text": "角色死了"}}
+    )
+    assert decision is not None
+    await agent._on_decision_asked(decision)
+    assert not agent._message_queue and llm.seen == []
+    await agent.stop()
+
+
 _ESCAPED = "已撤离，甩开了追兵（血快见底，先撤离保命），离打点 31 格；主任务停在半路等下一步指示"
 
 
