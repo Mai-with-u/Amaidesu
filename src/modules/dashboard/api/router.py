@@ -14,6 +14,7 @@ from src.modules.dashboard.api import (
     debug,
     events,
     llm,
+    logs,
     memory,
     review,
     rundown,
@@ -33,8 +34,8 @@ def create_app() -> FastAPI:
     """创建 FastAPI 应用。
 
     路由域：system / components / config / debug / llm / tools / events /
-    rundown / rundowns / streamer / simulator / live-sessions / viewers /
-    agents / vision / memory，全部挂在 ``/api/v1`` 前缀下。
+    logs / rundown / rundowns / streamer / simulator / live-sessions /
+    viewers / agents / vision / memory，全部挂在 ``/api/v1`` 前缀下。
     """
     app = FastAPI(
         title="Amaidesu Dashboard API",
@@ -50,6 +51,8 @@ def create_app() -> FastAPI:
     app.include_router(llm.router, prefix="/api/v1/llm", tags=["LLM"])
     app.include_router(tools.router, prefix="/api/v1", tags=["Tools"])
     app.include_router(events.router, prefix="/api/v1", tags=["Events"])
+    # 日志落盘历史查询（日志查看器"加载更早/时间跳转/服务端搜索"数据源）
+    app.include_router(logs.router, prefix="/api/v1", tags=["Logs"])
     # 流程单运行态（状态视图 / 手动控制）
     app.include_router(rundown.router, prefix="/api/v1/rundown", tags=["Rundown"])
     # 流程单库 CRUD（列表 / 模板 / upsert / 删除 / 复制 / 设为当前）

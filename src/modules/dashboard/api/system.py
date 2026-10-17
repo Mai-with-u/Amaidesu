@@ -28,8 +28,15 @@ if TYPE_CHECKING:
 router = APIRouter()
 logger = get_logger("SystemAPI")
 
-# 进程启动时刻（Unix 毫秒），运行时长由当前时刻回推
+# 进程启动时刻（Unix 毫秒），运行时长由当前时刻回推；
+# 日志/事件历史查询以它为默认窗口起点（"本次启动以来"）
 _startup_time_ms: int = now_ms()
+
+
+def startup_time_ms() -> int:
+    """返回进程启动时刻（Unix 毫秒）。"""
+    return _startup_time_ms
+
 
 # CHANGELOG 位于仓库根（api → dashboard → modules → src → 仓库根）
 _CHANGELOG_PATH = Path(__file__).resolve().parents[4] / "CHANGELOG.md"

@@ -65,10 +65,12 @@ class WebSocketHandler:
         ua = ua_full.split()[-1] if ua_full.split() else ua_full
         logger.info(f"WebSocket 客户端连接: {client_id}，当前连接数: {self.client_count}，UA尾段: {ua}")
 
-        # 发送欢迎消息（入队，由 writer task 串行发送）
+        # 发送欢迎消息（入队，由 writer task 串行发送）；握手帧标 transport，
+        # 前端事件/日志缓冲按 kind 分流时不消费
         await self.send_to_client(
             client_id,
             WebSocketMessage(
+                kind="transport",
                 type="connected",
                 timestamp_ms=now_ms(),
                 data={
@@ -148,6 +150,7 @@ class WebSocketHandler:
         await self.send_to_client(
             client_id,
             WebSocketMessage(
+                kind="transport",
                 type="subscribe_response",
                 timestamp_ms=now_ms(),
                 data=SubscribeResponse(
@@ -195,9 +198,20 @@ class WebSocketHandler:
                 pass
             return True
 
-    async def broadcast(self, event_type: str, data: Dict[str, object], message_id: Optional[str] = None) -> int:
-        """广播消息到所有订阅了该事件的客户端（入队，由各客户端 writer task 串行发送）"""
+    async def broadcast(
+        self,
+        event_type: str,
+        data: Dict[str, object],
+        message_id: Optional[str] = None,
+        kind: str = "event",
+    ) -> int:
+        """广播消息到所有订阅了该事件的客户端（入队，由各客户端 writer task 串行发送）。
+
+        ``kind`` 标记消息类别（默认 "event"=EventBus 总线事件；日志通道传
+        "log"），前端按 kind 分流进不同缓冲。
+        """
         message = WebSocketMessage(
+            kind=kind,
             type=event_type,
             timestamp_ms=now_ms(),
             data=data,
@@ -238,6 +252,7 @@ class WebSocketHandler:
     async def send_heartbeat(self) -> None:
         """发送心跳到所有客户端，并踢出超过超时阈值未响应 pong 的连接"""
         message = WebSocketMessage(
+            kind="transport",
             type="ping",
             timestamp_ms=now_ms(),
             data={},

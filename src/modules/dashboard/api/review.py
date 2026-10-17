@@ -26,6 +26,7 @@ from src.modules.dashboard.schemas.review import (
     ReviewSessionBrief,
     SessionReviewResponse,
 )
+from src.modules.dashboard.services.event_query import events_dir_of
 from src.modules.dashboard.services.session_events import SessionEventReader
 from src.modules.dashboard.services.session_review import SessionReviewAggregator
 from src.modules.logging import get_logger
@@ -98,19 +99,11 @@ def _slow_thresholds(server: "DashboardServer") -> Dict[str, int]:
     return thresholds
 
 
-def _events_dir_of(server: "DashboardServer") -> Optional[Path]:
-    """诊断事件流目录（logs/events）；诊断未装配时返回 None（决策侧降级）。"""
-    writer = getattr(server, "diagnostics_writer", None)
-    if writer is None:
-        return None
-    return writer.base_dir / "events"
-
-
 def _build_aggregator(server: "DashboardServer") -> SessionReviewAggregator:
     """从装配取齐聚合依赖；缺件按 None 传入由聚合器逐节降级。"""
     reader = SessionEventReader(
         event_history=getattr(server, "event_history", None),
-        events_dir=_events_dir_of(server),
+        events_dir=events_dir_of(server),
     )
     return SessionReviewAggregator(
         chat_repo=getattr(server, "chat_repo", None),

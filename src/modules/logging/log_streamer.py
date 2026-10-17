@@ -190,6 +190,11 @@ class LogStreamer:
     # 公开 API                                                            #
     # ------------------------------------------------------------------ #
 
+    @property
+    def persist_dir(self) -> Optional[Path]:
+        """落盘目录（未启用落盘时 None）——日志历史查询面据此降级。"""
+        return self._persist_dir
+
     def set_ws_handler(self, ws_handler: "WebSocketHandler") -> None:
         """设置 WebSocket 处理器（用于延迟设置）"""
         self.ws_handler = ws_handler
@@ -274,6 +279,7 @@ class LogStreamer:
         count = 0
         for log_entry in history:
             message = WebSocketMessage(
+                kind="log",
                 type="log.entry",
                 timestamp_ms=now_ms(),
                 data=log_entry,
@@ -308,11 +314,12 @@ class LogStreamer:
             except RuntimeError:
                 # 没有运行中的事件循环，忽略
                 pass
-            # 广播到 WebSocket 客户端（仅当 ws_handler 已设置时）
+            # 广播到 WebSocket 客户端（仅当 ws_handler 已设置时）；kind="log"
+            # 标记日志通道，前端事件缓冲不消费
             if self.ws_handler is not None:
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(self.ws_handler.broadcast("log.entry", log_entry))
+                    loop.create_task(self.ws_handler.broadcast("log.entry", log_entry, kind="log"))
                 except RuntimeError:
                     # 没有运行中的事件循环，忽略
                     pass

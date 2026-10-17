@@ -28,6 +28,11 @@ class EventListResponse(BaseModel):
     events: List[EventHistoryItem] = Field(default_factory=list)
     total: int = Field(default=0, description="本次返回条数")
     has_more: bool = Field(default=False, description="是否还有更早的事件（游标分页）")
+    has_more_newer: bool = Field(default=False, description="窗口内是否还有更晚的事件（时间跳转后向后翻页）")
+    files_pruned: bool = Field(
+        default=False, description="窗口内存在缺失的诊断天目录（被清理或从未落盘），事件侧相应降级"
+    )
+    window_start_ms: int = Field(default=0, description="实际生效的窗口起点（Unix 毫秒；缺省=本次启动时刻）")
 
 
 class WebSocketMessage(BaseModel):
@@ -36,7 +41,9 @@ class WebSocketMessage(BaseModel):
     kind: str = Field(
         default="event",
         description='消息类别："event"=EventBus 事件广播（进前端事件缓冲）；"stream"=观测流（'
-        "如 thinking.delta，best-effort 直推，前端独立缓冲，不入事件通道）",
+        "如 thinking.delta，best-effort 直推，前端独立缓冲，不入事件通道）；"
+        '"log"=日志通道（log.entry，前端日志缓冲专用）；"transport"=连接与订阅握手帧'
+        "（connected / subscribe_response / ping，前端事件与日志缓冲均不消费）",
     )
     type: str
     timestamp_ms: int

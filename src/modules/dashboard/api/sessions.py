@@ -14,7 +14,6 @@
 """
 
 import asyncio
-from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -29,6 +28,7 @@ from src.modules.dashboard.schemas.session import (
     SessionRenameRequest,
     SessionTimelineResponse,
 )
+from src.modules.dashboard.services.event_query import events_dir_of
 from src.modules.dashboard.services.session_events import SessionEventReader
 from src.modules.dashboard.services.session_timeline import build_timeline_items
 from src.modules.logging import get_logger
@@ -166,7 +166,7 @@ async def session_timeline(
     detail_rows = await manager.get_session_details(session_id, limit=limit, before_timestamp_ms=before_timestamp_ms)
     reader = SessionEventReader(
         event_history=getattr(server, "event_history", None),
-        events_dir=_events_dir_of(server),
+        events_dir=events_dir_of(server),
     )
     # 文件扫描是同步 IO，放线程池避免阻塞事件循环（回看是低频操作，无缓存）
     window = await asyncio.to_thread(
@@ -183,14 +183,6 @@ async def session_timeline(
         has_more=has_more,
         events_pruned=window.days_pruned,
     )
-
-
-def _events_dir_of(server: "DashboardServer") -> Optional[Path]:
-    """从装配取诊断事件流目录；诊断未装配（极简启动/测试）时返回 None。"""
-    writer = getattr(server, "diagnostics_writer", None)
-    if writer is None:
-        return None
-    return writer.base_dir / "events"
 
 
 @router.delete("/{session_id}", response_model=SessionActionResponse)
