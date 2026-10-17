@@ -334,6 +334,8 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
     assert '"已经拿到"这类没凭据的细节' in prompt and "想讲具体进度就先查" in prompt
     # 实播中主播三次说"吃鸡蛋回血"，游戏侧却明确上报过身上没有能吃的东西：消耗与放置类断言同样要有凭据
     assert "消耗与放置的断言同样只说有凭据的" in prompt and "照实说没吃成、没放成即可" in prompt
+    # 实播中身体侧上报"32 格内没有能睡的床"，主播却说"木屋附近根本没床"：限定性失败消息不得升格为无条件判断
+    assert "转述保留原有限定" in prompt and "不说\"根本没床\"" in prompt
 
 
 def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
