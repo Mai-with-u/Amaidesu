@@ -1,12 +1,12 @@
-"""主播记忆测试：场次回顾 / 常客名册 / 记忆工具 / StreamerAgent 接线。
+"""主播记忆测试：场次回顾 / 观众画像 / 记忆工具 / StreamerAgent 接线。
 
 真库（临时 SQLite）+ mock LLM：
 - ``SessionRecapWriter``：原料来自库表；空场次与未结账不写；LLM 失败不写；
   启动补写只补已结束且缺回顾的；注入渲染排除本场
-- ``RegularsRosterWriter``：互动门槛、每场人数上限、原料水位（同场重复收尾不空转）、
-  LLM 失败逐人降级；付费直读原料行
+- ``RegularsRosterWriter``：互动门槛、每场人数上限、只取上次整理后的新话（同场重复
+  收尾不空转）、LLM 失败逐人降级；付费明细原料行
 - ``build_memory_tool_provider``：往前第 n 场、排除本场、按昵称查印象
-- ``StreamerAgent``：两仓储齐全才注册记忆工具；开播装入上场回顾；收播写回顾并更新名册
+- ``StreamerAgent``：两仓储齐全才注册记忆工具；开播装入上场回顾；收播写回顾并更新观众画像
 """
 
 from __future__ import annotations
@@ -190,7 +190,7 @@ async def test_recap_backfill_and_render_recent(store: SQLiteDatabase) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 常客名册
+# 观众画像
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +208,7 @@ async def test_roster_threshold_watermark_and_batch(store: SQLiteDatabase) -> No
     assert await store.viewer_profiles.get_profile_text(platform="bilibili", user_id="u_new") is None
 
     writer = _roster_writer(store, llm, min_interactions=3, batch_max=5)
-    assert await writer.update_for_session(pk) == 1  # 已更新的那位水位之后没新话，只剩另一位
+    assert await writer.update_for_session(pk) == 1  # 已更新的那位上次整理后没新话，只剩另一位
     assert await writer.update_for_session(pk) == 0  # 同场重复收尾不空转
     assert llm.generate.await_count == 2
     assert await store.viewer_profiles.count_profiles() == 2
@@ -359,7 +359,7 @@ async def test_live_started_loads_previous_recap(store: SQLiteDatabase) -> None:
 
 @pytest.mark.asyncio
 async def test_bootstrap_backfills_recap_roster_and_section(store: SQLiteDatabase) -> None:
-    """启动善后：补写漏掉的回顾、补跑该场名册，并把回顾装进上场回顾段。"""
+    """启动善后：补写漏掉的回顾、补跑该场画像更新，并把回顾装进上场回顾段。"""
     pk = await _ended_session(store)
     await _streamer_says(store, pk, "下场继续挖", 2_000)
     for i in range(3):

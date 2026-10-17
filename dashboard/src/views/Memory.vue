@@ -3,7 +3,7 @@
     <!-- 页面头：身份 + 总量 + 刷新                                               -->
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">常客名册</h1>
+        <h1 class="page-title">观众画像</h1>
         <p class="page-subtitle">
           主播对常客的印象 · 查看 / 纠正 / 清理
           <template v-if="stats && stats.profile_count > 0">
@@ -29,7 +29,7 @@
       <span class="count-hint mono">{{ shownRange }} / {{ total }}</span>
     </div>
 
-    <!-- 名册表                                                                  -->
+    <!-- 画像表                                                                  -->
     <section class="table-card">
       <el-table
         v-loading="loading"
@@ -48,11 +48,11 @@
             <span class="text-cell">{{ row.profile_text }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="原料水位" width="120">
+        <el-table-column label="已整理到" width="120">
           <template #default="{ row }">
             <span
               v-if="row.last_compressed_at_ms > 0"
-              :title="formatTime(row.last_compressed_at_ms)"
+              :title="`这位观众 ${formatTime(row.last_compressed_at_ms)} 之前的发言与付费记录已融入印象`"
             >
               {{ relativeAge(row.last_compressed_at_ms) }}
             </span>
@@ -78,7 +78,7 @@
         {{
           searchText
             ? '没有匹配的常客'
-            : '还没有常客印象——每场收播后，会为本场最活跃且互动达门槛的观众整理印象'
+            : '还没有观众画像——每场收播后，会为本场最活跃、互动次数够多的观众整理印象'
         }}
       </div>
     </section>
@@ -116,9 +116,9 @@
 
 <script setup lang="ts">
 /**
- * 常客名册管理 —— viewer_profiles 的查看 / 纠正 / 清理入口
+ * 观众画像管理 —— viewer_profiles 的查看 / 纠正 / 清理入口
  *
- * 数据面：/api/v1/memory/*（名册列表 / 纠正 / 删除 / 统计）。印象由主播在每场
+ * 数据接口：/api/v1/memory/*（画像列表 / 纠正 / 删除 / 统计）。印象由主播在每场
  * 收播时为本场活跃的常客整理，这里只提供人工查看与纠正。
  * 搜索 250ms 防抖走服务端 LIKE（印象文本 / user_id）。
  */
@@ -162,7 +162,7 @@ async function loadProfiles(): Promise<void> {
     items.value = response.data.items;
     total.value = response.data.total;
   } catch {
-    ElMessage.error('常客名册加载失败');
+    ElMessage.error('观众画像加载失败');
   } finally {
     loading.value = false;
   }

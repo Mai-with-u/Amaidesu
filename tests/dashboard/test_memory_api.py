@@ -1,4 +1,4 @@
-"""Memory API：常客名册管理端点（名册列表 / 纠正 / 删除 / 统计），真实临时库的 ``ViewerProfileRepo`` 经完整 HTTP 层。
+"""Memory API：观众画像管理端点（画像列表 / 纠正 / 删除 / 统计），真实临时库的 ``ViewerProfileRepo`` 经完整 HTTP 层。
 
 造数直连仓储写入方法（与主播 Agent 收播写库同链路）。
 """

@@ -362,10 +362,10 @@ export const rundownApi = {
     api.post<RundownMutateResponse>(`/rundowns/${rundownId}/activate`),
 };
 
-// 常客名册管理（viewer_profiles 管理消费面）
+// 观众画像管理（viewer_profiles 的查看与纠正接口）
 //
 // 读写全部经后端 ViewerProfileRepo（常客印象读写）。
-// `GET /memory/profiles`：名册列表（搜索 / 分页）。
+// `GET /memory/profiles`：画像列表（搜索 / 分页）。
 // `PATCH / DELETE /memory/profiles/{platform}/{user_id}`：人工纠正 / 删除印象。
 // `GET /memory/stats`：总量统计（常客数 / 最近更新）。
 export const memoryApi = {

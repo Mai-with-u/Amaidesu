@@ -4,7 +4,7 @@
 - ``_summarize_topic``：弹幕 + 时间窗 SC 进摘要输入；摘要写进 RoomState；
   不再从摘要循环里提取观众事实，也不再投递画像任务
 
-主播自己的记忆（场次回顾 / 常客名册）在收播时生成，测试见
+主播自己的记忆（场次回顾 / 观众画像）在收播时生成，测试见
 ``tests/agents/streamer/test_streamer_memory.py``。
 """
 

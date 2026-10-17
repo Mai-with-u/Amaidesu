@@ -1,10 +1,10 @@
-"""ViewerProfileRepo —— 常客名册仓储（viewer_profiles）。
+"""ViewerProfileRepo —— 观众画像仓储（viewer_profiles）。
 
 每位常客一行印象文本，身份键 ``(platform, user_id)``。昵称不进本表
 （随改名漂移，权威在 ``viewers``），注入与工具查询时经 ``ViewerRepo`` 实时解析。
 
-``last_compressed_at_ms`` 是原料水位：该时刻之前的弹幕与付费记录已融进
-印象，收播时只把水位之后的新原料喂给下一次更新。
+``last_compressed_at_ms`` 是已整理到的时间点：该时刻之前的弹幕与付费记录
+已融进印象，收播时只把这之后的新话喂给下一次更新。
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from src.modules.time_utils import now_ms
 
 
 class ViewerProfileRepo(BaseRepo):
-    """viewer_profiles 表的读写面（主播 Agent 收播更新 / Planner 注入 / WebUI 管理）。"""
+    """viewer_profiles 表的读写入口（主播 Agent 收播更新 / Planner 注入 / WebUI 管理）。"""
 
     async def get_profile_text(self, *, platform: str, user_id: str) -> Optional[str]:
         """取印象文本；无印象返回 None（"有印象才注入"的判定点）。"""
@@ -33,7 +33,7 @@ class ViewerProfileRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def get_profile(self, *, platform: str, user_id: str) -> Optional[sqlite3.Row]:
-        """取完整印象行（含水位）；无印象返回 None。"""
+        """取完整印象行（含已整理时刻）；无印象返回 None。"""
 
         def _exec() -> Optional[sqlite3.Row]:
             with self._manager.transaction() as conn:
@@ -53,7 +53,7 @@ class ViewerProfileRepo(BaseRepo):
         profile_text: str,
         last_compressed_at_ms: int,
     ) -> bool:
-        """写入或更新印象（收播更新写回；水位一并推进）。空文本不写，返回 False。"""
+        """写入或更新印象（收播更新写回；已整理时刻一并推进）。空文本不写，返回 False。"""
         text = (profile_text or "").strip()
         if not text or not platform or not user_id:
             return False
@@ -81,7 +81,7 @@ class ViewerProfileRepo(BaseRepo):
         limit: int = 50,
         offset: int = 0,
     ) -> Tuple[int, List[sqlite3.Row]]:
-        """名册列表（WebUI 管理面）：搜索 + 分页，返回 ``(命中总数, 当页行)``。
+        """画像列表（WebUI 管理接口）：搜索 + 分页，返回 ``(命中总数, 当页行)``。
 
         ``search`` 非空时对 profile_text / user_id 做 LIKE 子串匹配。
         """
@@ -113,7 +113,7 @@ class ViewerProfileRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def count_profiles(self) -> int:
-        """名册总行数（管理面统计）。"""
+        """画像总行数（管理接口统计）。"""
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
@@ -123,7 +123,7 @@ class ViewerProfileRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def update_profile_text(self, *, platform: str, user_id: str, profile_text: str) -> bool:
-        """人工纠正印象文本（WebUI）；行不存在或空文本返回 False。水位不动——纠正版作为旧印象参与下次更新。"""
+        """人工纠正印象文本（WebUI）；行不存在或空文本返回 False。已整理时刻不动——纠正版作为旧印象参与下次更新。"""
         text = (profile_text or "").strip()
         if not text:
             return False

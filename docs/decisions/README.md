@@ -64,5 +64,5 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-039：场次回看事件侧以诊断事件流为事实源（默认不滚删 / 删除即降级 / 思考按请求指针懒取）](039-event-replay-diagnostics-source.md)
 - [ADR-040：上下文分层与检查点（按窗口比例定预算 / 只追加 / 按章压缩 / 图只挂尾部）](040-context-layering-and-checkpoints.md)
 - [ADR-041：直播画面做成采集流（变化才发布 / 事件只带句柄 / 决策窗首请求尾部看一眼）](041-live-frame-stream.md)
-- [ADR-042：主播记忆改为场次回顾 + 常客名册（退役事实提取与通用记忆层）](042-streamer-memory-recap-and-roster.md)
+- [ADR-042：主播记忆改为场次回顾 + 观众画像（退役事实提取与通用记忆层）](042-streamer-memory-recap-and-roster.md)
 - [ADR-043：游戏 Agent 的两种交互形态（委派型 / 遥控型——工具面自带玩法说明、命令可映射为工具调用、留空目标只认可接收名册）](043-game-agent-interaction-shapes.md)

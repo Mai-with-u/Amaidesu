@@ -1,6 +1,6 @@
-"""ViewerProfileRepo（常客名册仓储）单元测试
+"""ViewerProfileRepo（观众画像仓储）单元测试
 
-覆盖：upsert / get（含水位）/ 空文本拒写 / 列表分页搜索 / 人工纠正 / 删除 / 计数。
+覆盖：upsert / get（含已整理时刻）/ 空文本拒写 / 列表分页搜索 / 人工纠正 / 删除 / 计数。
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ async def test_upsert_and_get(repo: ViewerProfileRepo) -> None:
     assert row is not None
     assert int(row["last_compressed_at_ms"]) == 100
 
-    # 覆盖写：文本与水位一起推进
+    # 覆盖写：文本与已整理时刻一起推进
     assert await repo.upsert_profile(
         platform="bilibili", user_id="u1", profile_text="老粉，最近在考试", last_compressed_at_ms=200
     )
@@ -88,7 +88,7 @@ async def test_update_text_and_delete(repo: ViewerProfileRepo) -> None:
     row = await repo.get_profile(platform="bilibili", user_id="u1")
     assert row is not None
     assert row["profile_text"] == "人工纠正版"
-    assert int(row["last_compressed_at_ms"]) == 10  # 纠正不动水位
+    assert int(row["last_compressed_at_ms"]) == 10  # 纠正不改已整理时刻
 
     assert await repo.update_profile_text(platform="bilibili", user_id="u1", profile_text="  ") is False
     assert await repo.update_profile_text(platform="bilibili", user_id="ghost", profile_text="x") is False

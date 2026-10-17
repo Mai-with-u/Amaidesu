@@ -66,5 +66,5 @@
 
 ## 关联
 
-- [ADR-042：主播记忆改为场次回顾 + 常客名册](042-streamer-memory-recap-and-roster.md)——常客名册以本决策的身份键定位观众
+- [ADR-042：主播记忆改为场次回顾 + 观众画像](042-streamer-memory-recap-and-roster.md)——观众画像以本决策的身份键定位观众
 - 表结构权威：`src/modules/storage/schema.py`；展示换算：`src/modules/types/currency.py`

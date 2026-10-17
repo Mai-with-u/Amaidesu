@@ -141,7 +141,7 @@ class SessionRecapWriter:
     async def backfill_missing(self, *, limit: int = 1) -> List[int]:
         """补写最近 ``limit`` 场"已结束却没有回顾"的场次（进程异常退出的善后），返回补写成功的场次主键。
 
-        调用方拿到主键后可顺带补跑常客名册——收播整理没跑到回顾，名册多半也没跑到。
+        调用方拿到主键后可顺带补跑观众画像——收播整理没跑到回顾，画像多半也没跑到。
         """
         try:
             pending = await self._recaps.list_ended_sessions_without_recap(limit=limit)

@@ -418,10 +418,10 @@ class StreamerLiveFrameConfig(BaseConfig):
 
 
 class StreamerMemoryConfig(BaseConfig):
-    """[agents.streamer.memory] —— 主播自己的记忆：场次回顾 + 常客名册
+    """[agents.streamer.memory] —— 主播自己的记忆：场次回顾 + 观众画像
 
     场次回顾在收播时写（启动时补写上一场缺失的），开播后注入最近几场；
-    常客名册在收播时为本场最活跃、互动量达门槛的几位常客更新印象。
+    观众画像在收播时为本场最活跃、互动量达门槛的几位常客更新印象。
     两样都用 summary 档位的模型，失败只降级不阻断直播主链路。
     """
 
@@ -445,9 +445,9 @@ class StreamerMemoryConfig(BaseConfig):
         description="开播后注入最近几场的回顾（0 = 不注入，只留工具按需查）",
     )
     roster_enabled: bool = Field(
-        title="是否启用常客名册",
+        title="是否启用观众画像",
         default=True,
-        description="收播时为本场活跃常客更新印象（关闭后名册不再增长，已有印象仍注入）",
+        description="收播时为本场活跃常客更新印象（关闭后收播不再更新，已有印象仍注入）",
     )
     roster_min_interactions: int = Field(
         title="建档门槛",
@@ -523,7 +523,7 @@ class StreamerConfig(BaseConfig):
     memory: StreamerMemoryConfig = Field(
         title="主播记忆",
         default_factory=StreamerMemoryConfig,
-        description="主播自己的记忆：场次回顾（收播写、开播注入）与常客名册（收播更新常客印象）",
+        description="主播自己的记忆：场次回顾（收播写、开播注入）与观众画像（收播更新观众印象）",
     )
     background: StreamerBackgroundConfig = Field(
         title="后台维护配置",

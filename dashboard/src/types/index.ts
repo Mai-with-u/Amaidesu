@@ -948,14 +948,14 @@ export interface ViewerSessionsResponse {
   items: ViewerSessionItem[];
 }
 
-// ===== 常客名册管理（/api/v1/memory） =====
+// ===== 观众画像管理（/api/v1/memory） =====
 
-/** 一位常客的印象（viewer_profiles 行投影） */
+/** 一位观众的印象（viewer_profiles 单行） */
 export interface ViewerProfileItem {
   platform: string;
   user_id: string;
   profile_text: string;
-  /** 原料水位：该时刻前的弹幕与付费记录已融进印象 */
+  /** 已整理到的时间点：该时刻前的弹幕与付费记录已融进印象 */
   last_compressed_at_ms: number;
   updated_at_ms: number;
 }

@@ -1,11 +1,11 @@
 """主播记忆工具：``memory_recall_session`` / ``memory_recall_viewer``。
 
-两个真工具（注册进 ToolRegistry、名单只对主播可见），都是按键取、不是按
-自由文本搜：
+两个真工具（注册进 ToolRegistry、名单只对主播可见），都是按明确的键直接取、
+不做自由文本搜索：
 
 - ``recall_session(n_back)``——往前第 n 场的回顾（1 = 上一场）。主播要回答
   "上次玩到哪了""上周答应的事"时用它，不用猜关键词
-- ``recall_viewer(nickname | user_id)``——常客名册里对某位观众的印象；昵称经
+- ``recall_viewer(nickname | user_id)``——观众画像里对某位观众的印象；昵称经
   ``viewers`` 反查身份键（印象文本不存昵称，昵称随改名漂移）
 
 简单工具正典路径：``ToolSpec`` + 普通 async 函数（``as_tool_impl`` 包装）+
@@ -60,7 +60,7 @@ RECALL_SESSION_SPEC = ToolSpec(
 RECALL_VIEWER_SPEC = ToolSpec(
     name="recall_viewer",
     description=(
-        "查常客名册里对某位观众的印象（偏好、性格、与主播的关系、待回应的历史）。"
+        "查观众画像里对某位观众的印象（偏好、性格、与主播的关系、待回应的历史）。"
         "提供 nickname（昵称）或 user_id 之一；只有互动够多的常客才有印象，没有就是还不熟。"
     ),
     parameters_schema={
@@ -88,8 +88,8 @@ def build_memory_tool_provider(
     """组装记忆工具 Provider（provider="memory"，两个工具）。
 
     Args:
-        recap_repo: ``SessionRecapRepo``——场次回顾读面
-        profile_repo: ``ViewerProfileRepo``——常客印象读面
+        recap_repo: ``SessionRecapRepo``——场次回顾查询
+        profile_repo: ``ViewerProfileRepo``——观众印象查询
         viewer_repo: ``ViewerRepo``——昵称反查（可选；缺失时只能按 user_id 查）
         current_session_provider: 返回进行中场次主键的回调（``None`` = 未开播）；
             本场还没收播，往前数时要把它排除掉

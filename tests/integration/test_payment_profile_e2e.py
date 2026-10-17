@@ -1,7 +1,7 @@
 """付费数据链路 + 平台身份 + 主播记忆端到端测试
 
 链路：room.message.* 事件 → StorageLedger 落库（付费三表全字段 + viewers
-统计写穿）→ (platform, user_id) 身份隔离 → 收播整理（常客名册 + 场次回顾）
+统计写穿）→ (platform, user_id) 身份隔离 → 收播整理（观众画像 + 场次回顾）
 → Planner 注入人物画像与上场回顾。
 
 LLM 不在链内（mock），存储与事件总线走真实组件（SQLite 临时库）。

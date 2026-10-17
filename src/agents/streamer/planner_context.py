@@ -38,7 +38,7 @@ class AssemblerInputs:
     session_recap_section: str = ""  # 上场回顾段（开播后固定，整场不变；由场次回顾读出）
     stage_descriptions: str = ""  # 环节描述
     environment: Optional[EnvironmentBlock] = None
-    person_profile_section: str = ""  # 人物画像段（本批发言人里有印象的常客，由常客名册取得）
+    person_profile_section: str = ""  # 人物画像段（本批发言人里有印象的常客，由观众画像取得）
 
 
 class PlannerAssembler:

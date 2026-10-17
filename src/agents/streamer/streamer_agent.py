@@ -195,10 +195,10 @@ class StreamerAgent(BaseAgent):
             sessions_repo: 可选 ``SessionRepo``（live_sessions 实时状态，转交后台维护器）
             topic_repo: 可选 ``TopicRepo``（摘要/话题快照落地，转交后台维护器）
             viewer_repo: 可选 ``ViewerRepo``（观众统计仓储）——Planner 画像注入
-                时经它实时取观众昵称、常客名册按互动量筛候选、工具按昵称反查；
-                None 时注入行回退 platform/user_id、名册不更新
-            viewer_profile_repo: 可选 ``ViewerProfileRepo``（常客名册）。``None`` 时
-                名册相关功能整体降级——Planner 走无画像注入路径、收播不更新印象、
+                时经它实时取观众昵称、观众画像按互动量筛候选、工具按昵称反查；
+                None 时注入行回退 platform/user_id、画像不更新
+            viewer_profile_repo: 可选 ``ViewerProfileRepo``（观众画像）。``None`` 时
+                画像相关功能整体降级——Planner 走无画像注入路径、收播不更新印象、
                 ``memory_recall_viewer`` 工具不注册
             recap_repo: 可选 ``SessionRecapRepo``（场次回顾）。``None`` 时收播不写
                 回顾、开播不注入上场回顾、``memory_recall_session`` 工具不注册
@@ -372,7 +372,7 @@ class StreamerAgent(BaseAgent):
             prompt_manager=self._prompt,  # 摘要/画像系统提示词渲染（复用 Agent 持有的 PromptManager）
         )
 
-        # 主播记忆：场次回顾（收播写 / 启动补写 / 开播注入）与常客名册（收播更新）。
+        # 主播记忆：场次回顾（收播写 / 启动补写 / 开播注入）与观众画像（收播更新）。
         # 仓储或开关缺一则该项降级为 None；两者都用 summary 档位模型，不抢决策优先级
         memory_cfg = config.memory
         self._recap_inject_count: int = int(memory_cfg.recap_inject_count)
@@ -547,7 +547,7 @@ class StreamerAgent(BaseAgent):
             await self._background.start()
 
         # 收播整理善后：上次进程退出时没来得及写的回顾，启动后在后台补写一场、
-        # 顺带补跑该场的常客名册，补完再把"上场回顾"段读出来（开播前就能用）
+        # 顺带补跑该场的观众画像更新，补完再把"上场回顾"段读出来（开播前就能用）
         if self._recap_writer is not None:
             spawn_background_task(
                 self._bootstrap_recaps(),
@@ -789,7 +789,7 @@ class StreamerAgent(BaseAgent):
         payload: LiveEndedPayload,
         source: str,
     ) -> None:
-        """live.ended 回调：下播，主动发言收闸，道别收束本场，后台写本场回顾并更新常客名册。"""
+        """live.ended 回调：下播，主动发言收闸，道别收束本场，后台写本场回顾并更新观众画像。"""
         del event_name, source
         self._live_active = False
         self._logger.info("场次已结束：主动发言收闸")
@@ -819,7 +819,7 @@ class StreamerAgent(BaseAgent):
             )
 
     # ==================================================================
-    # 主播记忆：场次回顾 / 常客名册
+    # 主播记忆：场次回顾 / 观众画像
     # ==================================================================
 
     def _session_recap_text(self) -> str:
@@ -846,9 +846,9 @@ class StreamerAgent(BaseAgent):
             self._logger.info(f"上场回顾已装入参考段（{len(self._recap_section)} 字）")
 
     async def _bootstrap_recaps(self) -> None:
-        """启动善后：补写上次退出时漏掉的回顾（最多一场）并补跑该场名册，再装入上场回顾段。
+        """启动善后：补写上次退出时漏掉的回顾（最多一场）并补跑该场画像更新，再装入上场回顾段。
 
-        名册按原料水位只吃新话，即使上次其实已经更新过也不会重复调用模型。
+        画像只取上次整理之后的新话，即使上次其实已经更新过也不会重复调用模型。
         """
         assert self._recap_writer is not None  # noqa: S101 调用方已 guard
         written = await self._recap_writer.backfill_missing(limit=1)
@@ -859,11 +859,11 @@ class StreamerAgent(BaseAgent):
                 try:
                     await self._roster_writer.update_for_session(live_session_id)
                 except Exception as exc:
-                    self._logger.warning(f"启动补跑常客名册失败（场次 {live_session_id}）: {exc}")
+                    self._logger.warning(f"启动补跑观众画像失败（场次 {live_session_id}）: {exc}")
         await self._refresh_recap_section()
 
     async def _settle_session(self, live_session_id: int) -> None:
-        """收播整理：回顾 → 常客名册。逐项降级，一项失败不影响另一项。"""
+        """收播整理：回顾 → 观众画像。逐项降级，一项失败不影响另一项。"""
         if self._recap_writer is not None:
             try:
                 await self._recap_writer.write_recap(live_session_id)
@@ -873,7 +873,7 @@ class StreamerAgent(BaseAgent):
             try:
                 await self._roster_writer.update_for_session(live_session_id)
             except Exception as exc:
-                self._logger.warning(f"收播更新常客名册失败（场次 {live_session_id}）: {exc}")
+                self._logger.warning(f"收播更新观众画像失败（场次 {live_session_id}）: {exc}")
 
     async def _on_game_event(
         self,

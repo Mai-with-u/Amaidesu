@@ -119,7 +119,7 @@ class SQLiteDatabase:
         self.rundown_instances = RundownInstanceRepo(self._manager)
         self.rundown_transitions = RundownTransitionRepo(self._manager)
         self.topics = TopicRepo(self._manager)
-        # 主播记忆的两张表：常客名册 + 场次回顾（写入归主播 Agent，读取面给 Planner/工具/WebUI）
+        # 主播记忆的两张表：观众画像 + 场次回顾（写入归主播 Agent，读取给 Planner/工具/WebUI）
         self.viewer_profiles = ViewerProfileRepo(self._manager)
         self.recaps = SessionRecapRepo(self._manager)
 

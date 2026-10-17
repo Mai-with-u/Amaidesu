@@ -8,7 +8,7 @@
     db_path = "data/amaidesu.db"
     busy_timeout_ms = 5000
 
-> **db_path 单一权威**：所有业务表（含主播记忆的常客名册与场次回顾）共用
+> **db_path 单一权威**：所有业务表（含主播记忆的观众画像与场次回顾）共用
 > 同一 SQLite 文件，路径权威在 ``[sqlite].db_path``。
 >
 > **wal / foreign_keys 不再配置化**：WAL 与外键约束在

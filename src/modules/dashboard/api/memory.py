@@ -1,11 +1,11 @@
-"""常客名册管理端点（WebUI 名册页数据面）
+"""观众画像管理端点（WebUI 观众画像页的数据接口）
 
-``viewer_profiles`` 表的管理消费面：印象列表 / **人工编辑纠正** / 删除 / 统计。
+``viewer_profiles`` 表的管理接口：印象列表 / **人工编辑纠正** / 删除 / 统计。
 读写全部经 ``ViewerProfileRepo``，本模块不做 SQL。印象由主播 Agent 在收播时
 生成（见 ``src/agents/streamer/memory/``），这里只提供查看与纠正。
 
 - ``GET  /memory/stats``                               总量统计（常客数 / 最近更新）
-- ``GET  /memory/profiles``                            名册列表（搜索 / 分页）
+- ``GET  /memory/profiles``                            画像列表（搜索 / 分页）
 - ``PATCH /memory/profiles/{platform}/{user_id}``      人工纠正印象文本
 - ``DELETE /memory/profiles/{platform}/{user_id}``     删除印象（删除后该观众回到无印象态）
 
@@ -30,10 +30,10 @@ ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
 def _require_repo(server: "DashboardServer") -> "ViewerProfileRepo":
-    """取常客名册仓储，未装配时 503。"""
+    """取观众画像仓储，未装配时 503。"""
     repo = server.viewer_profile_repo
     if repo is None:
-        raise HTTPException(status_code=503, detail="常客名册不可用")
+        raise HTTPException(status_code=503, detail="观众画像不可用")
     return repo
 
 
@@ -45,17 +45,17 @@ class MemoryStatsResponse(BaseModel):
 
 
 class ViewerProfileItem(BaseModel):
-    """一位常客的印象（``viewer_profiles`` 行投影）。"""
+    """一位观众的印象（``viewer_profiles`` 行内容）。"""
 
     platform: str
     user_id: str
     profile_text: str
-    last_compressed_at_ms: int = Field(description="原料水位（该时刻前的弹幕与付费记录已融进印象）")
+    last_compressed_at_ms: int = Field(description="已整理到的时间点（该时刻前的弹幕与付费记录已融进印象）")
     updated_at_ms: int
 
 
 class ViewerProfileListResponse(BaseModel):
-    """名册列表响应：``total`` 为命中搜索条件的全量行数（分页器用）。"""
+    """画像列表响应：``total`` 为命中搜索条件的全量行数（分页器用）。"""
 
     total: int
     items: List[ViewerProfileItem]
@@ -75,7 +75,7 @@ class MutationResponse(BaseModel):
 
 @router.get("/stats", response_model=MemoryStatsResponse)
 async def get_memory_stats(server: ServerDep) -> MemoryStatsResponse:
-    """名册总量统计（管理页头部概览）。"""
+    """画像总量统计（管理页头部概览）。"""
     repo = _require_repo(server)
     total, rows = await repo.list_profiles(limit=1)
     latest = int(rows[0]["updated_at_ms"]) if rows else 0
@@ -89,7 +89,7 @@ async def list_viewer_profiles(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ViewerProfileListResponse:
-    """名册列表（搜索 / 分页）。"""
+    """画像列表（搜索 / 分页）。"""
     repo = _require_repo(server)
     total, rows = await repo.list_profiles(search=search, limit=limit, offset=offset)
     return ViewerProfileListResponse(

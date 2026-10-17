@@ -66,7 +66,7 @@ SCHEMA_VERSION: int = 17
 # - guards                  大航海开通/续费明细（购买事件表）
 # - topics                  话题（每行一个，1NF）
 # - viewers                 观众统计（跨场客观数字）
-# - viewer_profiles         常客名册（每位常客一份 LLM 维护的印象文本，主播认人的依据）
+# - viewer_profiles         观众画像（每位常客一份 LLM 维护的印象文本，主播认人的依据）
 # - session_recaps          场次回顾（每场一份收播总结，主播跨场次记得自己做过什么）
 # - game_events             游戏里程碑事件
 # - timeline_summary        摘要层
@@ -107,7 +107,7 @@ def build_schema_sql() -> str:
         # viewers —— 观众统计
         + _VIEWERS_SQL
         + "\n"
-        # viewer_profiles —— 常客名册
+        # viewer_profiles —— 观众画像
         + _VIEWER_PROFILES_SQL
         + "\n"
         # session_recaps —— 场次回顾
@@ -329,9 +329,9 @@ CREATE TABLE IF NOT EXISTS viewers (
 """.strip()
 
 
-# --- viewer_profiles —— 常客名册 ---
-# 每位常客一行印象文本；``last_compressed_at_ms`` 是原料水位：该时刻之前的
-# 弹幕与付费记录已经融进印象，下次只喂水位之后的新原料。有印象才注入
+# --- viewer_profiles —— 观众画像 ---
+# 每位常客一行印象文本；``last_compressed_at_ms`` 是已整理到的时间点：该时刻
+# 之前的弹幕与付费记录已经融进印象，下次只整理这之后的新话。有印象才注入
 # planner——主播由此认出老观众。
 
 _VIEWER_PROFILES_SQL = """

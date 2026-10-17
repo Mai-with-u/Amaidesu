@@ -21,7 +21,7 @@
   - 并发 = 1（顺序保证：摘要块必须按时间序——乱序 = 倒叙）
   - 失败可丢弃可重算；摘要用 summary profile（不抢主决策优先级）
 
-主播自己的记忆（场次回顾 / 常客名册）不在本循环里：那是收播时的事，见 ``memory/`` 子包。
+主播自己的记忆（场次回顾 / 观众画像）不在本循环里：那是收播时的事，见 ``memory/`` 子包。
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ class BackgroundMaintainer:
 
     写入面只有话题摘要（timeline_summary / topics）与场次心跳（live_sessions）。
     话题/付费数据的权威表分别是 topics / 付费明细三表，不从事件流二次写入；
-    主播自己的记忆（场次回顾 / 常客名册）在收播时由 ``memory/`` 子包生成。
+    主播自己的记忆（场次回顾 / 观众画像）在收播时由 ``memory/`` 子包生成。
     """
 
     def __init__(

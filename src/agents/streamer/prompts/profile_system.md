@@ -1,7 +1,7 @@
 ---
 name: profile_system
 version: "2.0"
-description: "常客名册的收播更新：旧印象 + 该观众本场说过的话 + 付费与身份 → 新印象（后台 summary 档位调用）"
+description: "观众画像的收播更新：旧印象 + 该观众本场说过的话 + 付费与身份 → 新印象（后台 summary 档位调用）"
 variables: [profile_max_length]
 author: Amaidesu
 tags: [streamer, memory, roster]

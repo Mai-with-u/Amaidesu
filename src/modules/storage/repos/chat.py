@@ -706,7 +706,7 @@ class ChatRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def list_session_speakers(self, *, live_session_id: int, limit: int = 10) -> List[sqlite3.Row]:
-        """本场发言最多的观众（按弹幕条数倒序），常客名册收播更新的候选来源。
+        """本场发言最多的观众（按弹幕条数倒序），观众画像收播更新的候选来源。
 
         只统计 ``sender_role='viewer'`` 且带身份键的行；昵称权威仍在 viewers，
         这里的 user_name 只是该观众本场留下的昵称之一（聚合近似）。
@@ -741,7 +741,7 @@ class ChatRepo(BaseRepo):
     ) -> List[sqlite3.Row]:
         """某观众在本场、某时刻之后的弹幕（时间正序，最多 ``limit`` 条最近的）。
 
-        常客印象的原料窗口：``since_ms`` 传该观众印象的原料水位，只喂新话。
+        常客印象的原料窗口：``since_ms`` 传该观众画像已整理到的时间点，只喂这之后的新话。
         先 DESC LIMIT 取最近一批，再反转回正序（排序不变量见模块说明）。
         """
         page_limit = max(1, min(int(limit), 200))

@@ -230,7 +230,7 @@ class Planner:
             prompt_service: 提示词管理器，需提供 ``render(name, **vars) -> str``。
             room_state: 直播间态势规则层实例。
             tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
-            profile_repo: 常客名册读面（``ViewerProfileRepo`` 结构契约，只用
+            profile_repo: 观众画像查询（``ViewerProfileRepo`` 结构契约，只用
                 ``get_profile_text``）；None 时无画像注入。
             viewer_repo: ``ViewerRepo``（观众统计仓储）——画像注入时经它实时取
                 昵称（昵称会漂移不进画像文本）；None 时注入行回退 platform/user_id。
@@ -1173,7 +1173,7 @@ class Planner:
         self,
         batch: List[Any],
     ) -> str:
-        """按本批发言时间倒序注入全部已有印象（常客名册），完整保留人物经历与偏好。"""
+        """按本批发言时间倒序注入全部已有印象（观众画像），完整保留人物经历与偏好。"""
         if self._profile_repo is None or not batch:
             return ""
 

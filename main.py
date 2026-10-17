@@ -417,7 +417,7 @@ async def create_app_components(
     # CoreService 构造走内置默认。
 
     # --- 启动期不进行任何上下文重新写入（每次启动 = 干净测试环境）---
-    # 跨场次记忆由主播 Agent 的场次回顾 / 常客名册承载，不在组合根做 live_chat 重新写入。
+    # 跨场次记忆由主播 Agent 的场次回顾 / 观众画像承载，不在组合根做 live_chat 重新写入。
     # 无显式场次期间消息仅在内存流转，落库路径依据 0 值跳过。
 
     register_event_interceptors(event_bus, config, session_manager=session_manager)
@@ -546,7 +546,7 @@ async def create_app_components(
             sessions_repo=database.sessions,
             topic_repo=database.topics,
             viewer_repo=database.viewers,
-            # 主播记忆两仓储 + 游戏事件读面（场次回顾原料）
+            # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）
             viewer_profile_repo=database.viewer_profiles,
             recap_repo=database.recaps,
             event_repo=database.events,
@@ -633,7 +633,7 @@ async def create_app_components(
             sessions_repo=database.sessions,
             topic_repo=database.topics,
             viewer_repo=database.viewers,
-            # 主播记忆两仓储 + 游戏事件读面（场次回顾原料）
+            # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）
             viewer_profile_repo=database.viewer_profiles,
             recap_repo=database.recaps,
             event_repo=database.events,
@@ -829,12 +829,12 @@ async def create_app_components(
             # 场次复盘聚合/导出的数据源：game_events 计数与 db 快照副本路径
             event_repo=database.events,
             storage_db_path=database.db_path,
-            # 观众域只读消费面：列表 / 档案 / 对话 / 贡献聚合直查存储层
+            # 观众域只读查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
             viewer_repo=database.viewers,
             chat_repo=database.chat,
-            # 常客名册仓储：/api/v1/memory/* 管理面与主播 Agent 共用同一张表
+            # 观众画像仓储：/api/v1/memory/* 管理接口与主播 Agent 共用同一张表
             viewer_profile_repo=database.viewer_profiles,
-            # 任务卡快照与运营委派的数据源（通用任务基建，ADR-013）
+            # 任务卡快照与运营委派的数据源（通用任务基建）
             task_tracker=task_tracker,
             # 基础设施直测面：/api/v1/debug/subtitle|tts 端点的数据源
             subtitle_service=subtitle_service,
@@ -1054,7 +1054,7 @@ async def _register_agents_from_config(
         [agents.minecraft] = { max_steps = 50, mcp = {...} }
         [agents.text_adv]  = { monitor_index, region, keys, stability_*, no_change_limit, auto_button_xy, game_window_title_keyword }
 
-    viewer_profile_repo / recap_repo / event_repo 为主播记忆（常客名册 / 场次
+    viewer_profile_repo / recap_repo / event_repo 为主播记忆（观众画像 / 场次
     回顾）与游戏事件的仓储，仅 streamer Agent 消费。
 
     tts_section 为核心 ``[tts]`` 段，仅 streamer Agent 在构造时消费
@@ -1107,7 +1107,7 @@ async def _register_agents_from_config(
             sessions_repo=sessions_repo,
             topic_repo=topic_repo,
             viewer_repo=viewer_repo,
-            # 主播记忆两仓储 + 游戏事件读面（场次回顾原料）
+            # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）
             viewer_profile_repo=viewer_profile_repo,
             recap_repo=recap_repo,
             event_repo=event_repo,
@@ -1169,7 +1169,7 @@ async def _start_dashboard(
             # 观众域仓储：统计表（viewers）与明细三表（live_chat 族）
             viewer_repo=viewer_repo,
             chat_repo=chat_repo,
-            # 常客名册仓储：/api/v1/memory/* 管理面与主播 Agent 共用同一张表
+            # 观众画像仓储：/api/v1/memory/* 管理接口与主播 Agent 共用同一张表
             viewer_profile_repo=viewer_profile_repo,
             # 场次复盘面：game_events 计数仓储与 db 快照路径（/api/v1/review*）
             event_repo=event_repo,

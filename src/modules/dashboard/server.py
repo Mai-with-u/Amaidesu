@@ -129,7 +129,7 @@ class DashboardServer:
         # 注入 RundownRepo 让 `/api/v1/rundowns*` 承载流程单库 CRUD；
         # 未注入（极简启动/测试）时相关端点降级 success=false
         self.rundown_repo = rundown_repo
-        # 注入 ViewerProfileRepo 让 `/api/v1/memory/*` 承载常客名册管理面
+        # 注入 ViewerProfileRepo 让 `/api/v1/memory/*` 承载观众画像管理接口
         # （列表/纠正/删除）；未注入（极简启动/测试）时相关端点返回 503
         self.viewer_profile_repo = viewer_profile_repo
         # 注入 EventRepo 让 /api/v1/review 的游戏事件计数直查 game_events；

@@ -54,14 +54,14 @@ def instantiate_agent(
 ) -> Optional[BaseAgent]:
     """按名实例化 Agent；未知名字返回 None。
 
-    基础设施参数按 Agent 各自消费面透传（未列出的 Agent 忽略对应参数）：
+    基础设施参数按各 Agent 实际需要透传（未列出的 Agent 忽略对应参数）：
     - streamer：thinking_sink / speech_config / tts_engine / subtitle_service /
       session_manager / rundown_repo / rundown_instance_repo /
       rundown_transition_repo / chat_repo / sessions_repo / topic_repo /
       viewer_repo / viewer_profile_repo / recap_repo / event_repo /
       context_assembler_config。仓储缺省 None 时对应能力降级（chat_repo 缺失
       = 对话历史读取整体短路，Planner/Replyer 无历史上下文；记忆两仓储缺失
-      = 场次回顾 / 常客名册整体关闭），组合根必须传入
+      = 场次回顾 / 观众画像整体关闭），组合根必须传入
     - minecraft：thinking_sink / task_tracker；llm_profile 使用 Agent
       类默认值（``[llm_profiles.minecraft]`` 段）；技能库在工厂内取全局单例注入
     - text_adv：基础四件套 + 工厂内装配的感知/动作依赖（读屏 reader /
