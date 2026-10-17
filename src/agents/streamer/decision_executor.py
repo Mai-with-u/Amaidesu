@@ -53,6 +53,7 @@ _PROACTIVE_REASON_LABEL: Dict[str, str] = {
     "reminder": "递话催醒",
     "rundown": "流程单推进",
     "game": "游戏 Agent 待定夺",
+    "signoff": "收播道别",
 }
 
 #: 静默原因（Planner outcome.silent_reason）→ 面板可读文案。

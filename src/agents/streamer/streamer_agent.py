@@ -772,14 +772,25 @@ class StreamerAgent(BaseAgent):
         payload: LiveEndedPayload,
         source: str,
     ) -> None:
-        """live.ended 回调：下播，主动发言收闸，后台写本场回顾并更新常客名册。"""
+        """live.ended 回调：下播，主动发言收闸，道别收束本场，后台写本场回顾并更新常客名册。"""
         del event_name, source
         self._live_active = False
+        self._logger.info("场次已结束：主动发言收闸")
+        # 收播道别窗：手动结束场次会绕过流程单收尾环节（只有自然走完才道别），
+        # 没有这一窗 Agent 会一路静默到停机。触发判据是"场次结束但 Agent 仍在
+        # 运行"——应用停机路径（AgentManager 先停，live.ended 后到）此时
+        # _running 已为 False，进程退出时的道别无意义，不触发。forced 豁免
+        # 重复闸：道别话题常与收尾环节的发言字面重合，被误抑制就永远说不出再见。
+        # await 形态：本回调由事件总线的后台任务驱动，await 不阻塞发布方，
+        # 且保证道别决策窗赶在事件面仍在、发言管线未停的窗口内完整走完
+        # （说完再见再做收播整理与记忆清理）。
+        if self._running:
+            await self._execute_round([], forced=True, trigger_reason="proactive:signoff", proactive=True)
         # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
+        # （道别发言不属已结账的场次，留在内存对话里供下播后的调试闲聊接续）
         self._unpersisted_turns.clear()
         self._timeline_notes.clear()
         await self._timeline.reset()
-        self._logger.info("场次已结束：主动发言收闸")
         # 收播整理：先写这一场的回顾，再给本场活跃的常客更新印象（两次 LLM 调用，
         # 放后台不阻塞事件回调）。空场次（无任何明细行，行已删）没东西可整理
         if not payload.empty_discarded and (self._recap_writer is not None or self._roster_writer is not None):
@@ -1161,21 +1172,26 @@ class StreamerAgent(BaseAgent):
             return
 
         async with self._flush_lock:
-            # buffer 空时 → 主动发言判定（场次边界闸：未开播直接返回且不消费
-            # pending 信号，环节变更/游戏待定夺信号保留到开播后首个 tick 生效）
+            # buffer 空时 → 主动发言判定。递话必达优先于开播闸：下播后运营递话
+            # 仍须送达（TTS 管道不依赖场次），队列空且未开播才早退——早退不消费
+            # pending 信号，环节变更/游戏待定夺信号保留到开播后首个 tick 生效。
+            # 未开播的递话窗里环节/游戏 pending 不参与判定（不能在未开播时说
+            # 开场白/推进游戏），也因此不会被误消费。
             if self._buffer.is_empty:
-                if not self._live_active:
+                if not self._reminder_queue and not self._live_active:
                     return
-                rundown_pending = self._rundown_proactive_pending
-                game_pending = self._game_decision_pending
-                self._game_decision_pending = False
+                live_gated = not self._live_active
+                rundown_pending = False if live_gated else self._rundown_proactive_pending
+                game_pending = False if live_gated else self._game_decision_pending
+                if not live_gated:
+                    self._game_decision_pending = False
                 reason = self._proactive_trigger.should_trigger(
                     self._room_state,
                     now_ms(),
-                    external_pending=self._external_proactive_pending,
+                    external_pending=False if live_gated else self._external_proactive_pending,
                     rundown_pending=rundown_pending,
-                    rundown_ready=self._is_rundown_active(),
-                    rundown_overdue=self._is_rundown_overdue(),
+                    rundown_ready=False if live_gated else self._is_rundown_active(),
+                    rundown_overdue=False if live_gated else self._is_rundown_overdue(),
                     game_pending=game_pending,
                     # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
                     # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
@@ -1188,7 +1204,8 @@ class StreamerAgent(BaseAgent):
                 # 必然源自本信号）。game_pending 同形态问题按任务范围界定暂不处理。
                 if rundown_pending and reason == "rundown":
                     self._rundown_proactive_pending = False
-                self._external_proactive_pending = False
+                if not live_gated:
+                    self._external_proactive_pending = False
                 if reason is not None:
                     self._stats.total_proactive += 1
                     self._logger.info(f"主动发言触发: {reason}")

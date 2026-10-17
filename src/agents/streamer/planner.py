@@ -189,7 +189,8 @@ def _tool_call_parts(call: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
 
 
 # 没有观众、运营或游戏侧新输入的主动触发原因；这些窗口不给游戏活补充要求。
-_NO_INPUT_PROACTIVE_REASONS = frozenset({"rundown", "schedule", "cold"})
+# signoff（收播道别）同样没有任何新输入：场次已结账，不给游戏活递补充要求。
+_NO_INPUT_PROACTIVE_REASONS = frozenset({"rundown", "schedule", "cold", "signoff"})
 
 
 class Planner:
@@ -297,6 +298,8 @@ class Planner:
         self._round_game_narrative: str = ""
         self._round_body_narrative: str = ""
         self._round_tool_receipts: List[Tuple[str, Any]] = []
+        # 本窗是否豁免产出侧重复闸（收播道别窗：道别话题常与收尾环节发言字面重合）
+        self._round_bypass_topic_gate: bool = False
 
         self._assembler = PlannerAssembler()
         # 工具刚返回的截图：观察里只留文字，真图挂在下一步请求的尾部让模型看一次
@@ -482,6 +485,8 @@ class Planner:
         self._round_game_narrative = game_narrative or ""
         self._round_body_narrative = body_narrative or ""
         self._round_tool_receipts = []
+        # 收播道别窗整窗豁免重复闸（见 _round_bypass_topic_gate 声明处）
+        self._round_bypass_topic_gate = trigger_reason == "proactive:signoff"
 
         outcome: Dict[str, Any] = {
             "replied": False,
@@ -523,6 +528,7 @@ class Planner:
             game_chat,
             overview=overview,
             session_recap=session_recap,
+            trigger_reason=trigger_reason,
         )
         if reference_text is None:
             outcome["error"] = self.last_failure
@@ -720,17 +726,26 @@ class Planner:
         game_chat: str = "",
         overview: str = "",
         session_recap: str = "",
+        trigger_reason: str = "",
     ) -> Optional[str]:
         """构造参考段（一条 user 消息，固定在消息序列尾）。
 
-        内容 = 情境标注（强制/主动）+ 游戏叙事 + 身体侧近况 + 游戏里的聊天 + 运营提醒 +
-        组装器元数据段（上场回顾 / 环节描述 / 直播间快照 / 人物画像）。对话内容不在此
-        处——历史与本批走 canonical 映射的原生消息通道。
+        内容 = 情境标注（强制/主动，按触发原因取条件子句）+ 游戏叙事 + 身体侧近况 +
+        游戏里的聊天 + 运营提醒 + 组装器元数据段（上场回顾 / 环节描述 / 直播间快照 /
+        人物画像）。对话内容不在此处——历史与本批走 canonical 映射的原生消息通道。
         """
+        signoff_window = trigger_reason == "proactive:signoff"
         lines: List[str] = []
-        if forced:
+        if forced and not signoff_window:
+            # signoff 的 forced 只是闸门豁免语义（绕过重复闸保住道别），不是
+            # 付费/点名的强制回应情境，不按 _forced_situation 措辞标注
             lines.append(_forced_situation(batch))
-        if proactive:
+        if signoff_window:
+            lines.append(
+                "【情境】场次已结束（收播道别）：向观众道别收束本场；若收尾环节刚已道别过，"
+                "则简短收束即可，不必重复告别。"
+            )
+        elif proactive:
             # 主动窗不只来自冷场/定时：环节切换、游戏上报、游戏里有人说话也会唤醒，按实际可能来源说明
             lines.append(
                 "【情境】本窗为主动发言触发（冷场、定时、环节推进或游戏里有新动静）——弹幕可能为空，"
@@ -937,19 +952,21 @@ class Planner:
         调用前把 replyer 阶段回调设到 Provider 的临时槽位，调用后立即清理
         （一次性语义，防跨轮残留）——槽位挂在 Provider 实例上，不经注册表。
         产出侧重复闸：新话题与最近发言字面大面积重合、又没有本窗新词背书时，
-        当工具错误打回（首次给改题机会，再次拒绝并引导本轮沉默）。
+        当工具错误打回（首次给改题机会，再次拒绝并引导本轮沉默）；收播道别窗
+        整窗豁免——道别话题与收尾环节发言字面重合是常态，闸会系统性误杀道别。
         """
-        verdict = check_topic(
-            str(args.get("topic_summary") or ""),
-            recent_topics=[intent.topic_summary for intent in self._recent_intents],
-            recent_speeches=[intent.speech for intent in self._recent_intents],
-            fresh_texts=fresh_texts or [],
-        )
-        if not verdict.allowed:
-            attempt = int(outcome.get("topic_gate_retries") or 0)
-            outcome["topic_gate_retries"] = attempt + 1
-            self.logger.info(f"重复闸打回 reply（第 {attempt + 1} 次）：{args.get('topic_summary')!r}")
-            return json.dumps({"ok": False, "error": rejection_reason(attempt >= 1)}, ensure_ascii=False), False
+        if not self._round_bypass_topic_gate:
+            verdict = check_topic(
+                str(args.get("topic_summary") or ""),
+                recent_topics=[intent.topic_summary for intent in self._recent_intents],
+                recent_speeches=[intent.speech for intent in self._recent_intents],
+                fresh_texts=fresh_texts or [],
+            )
+            if not verdict.allowed:
+                attempt = int(outcome.get("topic_gate_retries") or 0)
+                outcome["topic_gate_retries"] = attempt + 1
+                self.logger.info(f"重复闸打回 reply（第 {attempt + 1} 次）：{args.get('topic_summary')!r}")
+                return json.dumps({"ok": False, "error": rejection_reason(attempt >= 1)}, ensure_ascii=False), False
         if self._tool_registry is None:
             outcome["reply_failures"] += 1
             return json.dumps(

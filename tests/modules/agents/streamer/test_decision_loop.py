@@ -7,6 +7,7 @@ replyer 响应正文即台词（纯文本契约）。
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -224,6 +225,74 @@ async def test_handle_message_direct_entry_buffers_without_event_bus() -> None:
     agent = make_streamer_agent(tool_registry=ToolRegistry())
     await agent.handle_message(_danmaku("直接调用"))
     assert agent.get_statistics()["total_messages"] == 1
+
+
+# -------------------- 场次生命周期礼节：收播道别 + 下播后递话必达 --------------------
+
+
+async def _wait_decisions(rig: _Rig, count: int, timeout: float = 3.0) -> list:
+    """等决策事件累计到 count 条（收播道别经总线后台任务异步到达，需轮询）。"""
+
+    async def _poll() -> None:
+        while len(rig.decisions) < count:
+            await asyncio.sleep(0.02)
+
+    await asyncio.wait_for(_poll(), timeout)
+    return rig.decisions
+
+
+async def test_signoff_fires_on_manual_live_end(rig_factory) -> None:
+    """真收播（场次结束、Agent 仍运行）触发一轮 forced 决策窗，reason 为 signoff。"""
+    rig = await rig_factory([_planner_step(_reply_call())], proactive={"enabled": False})
+    await rig.bus.emit(
+        CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, source="manual", title="测试场"), source="test"
+    )
+    await asyncio.sleep(0.1)
+    assert rig.decisions == []  # 开播本身不触发决策窗
+
+    await rig.bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=1, reason="手动结束"), source="test")
+    decisions = await _wait_decisions(rig, 1)
+    assert len(decisions) == 1
+    assert decisions[0].trigger_reason == "proactive:signoff"
+    assert decisions[0].forced is True
+
+
+async def test_signoff_not_fired_on_stopped_agent(rig_factory) -> None:
+    """应用停机路径的收播（Agent 已停）不触发道别：进程退出时道别无意义。"""
+    rig = await rig_factory([_planner_step(_reply_call())])
+    await rig.agent.stop()
+    baseline = len(rig.calls("planner"))
+    await rig.bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=1, reason="进程退出"), source="test")
+    await asyncio.sleep(0.2)
+    assert rig.agent._live_active is False
+    assert len(rig.calls("planner")) == baseline and rig.decisions == []
+
+
+async def test_reminder_reaches_planner_after_live_end(rig_factory) -> None:
+    """下播后运营递话仍送达：豁免开播闸触发决策窗并取空队列（递话必达）。"""
+    rig = await rig_factory([_planner_step(_reply_call())], proactive={"enabled": True})
+    agent = rig.agent
+    assert agent._live_active is False
+    agent._reminder_queue.append("准备下播，和观众说再见")
+    await asyncio.sleep(0.3)
+
+    assert agent._reminder_queue == deque(), "递话队列必须在决策窗内被取空"
+    decisions = await _wait_decisions(rig, 1)
+    assert decisions[0].trigger_reason == "proactive:reminder"
+    # 递话文本进入 planner 参考段（【运营提醒】块）
+    planner_messages = [c.args[0] for c in rig.calls("planner")]
+    assert any("准备下播，和观众说再见" in str(m) for m in planner_messages)
+
+
+async def test_no_proactive_without_live_and_without_reminder(rig_factory) -> None:
+    """未开播且无递话维持静默：早退不触发决策、不消费 pending 信号（现状不回归）。"""
+    rig = await rig_factory([_planner_step()], proactive={"enabled": True})
+    agent = rig.agent
+    agent._rundown_proactive_pending = True
+    agent._external_proactive_pending = True
+    await asyncio.sleep(0.3)
+    assert rig.decisions == []
+    assert agent._rundown_proactive_pending is True and agent._external_proactive_pending is True
 
 
 # 统计字段口径
