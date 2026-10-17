@@ -48,9 +48,7 @@ def json_text(value: Any) -> str:
 def _elide_oversized_results(source: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """超长的旧工具结果换成占位，写明哪个工具、什么参数、原文多少字符；其余消息原样保留。"""
     calls = {
-        call.get("id"): call.get("function") or {}
-        for message in source
-        for call in message.get("tool_calls") or []
+        call.get("id"): call.get("function") or {} for message in source for call in message.get("tool_calls") or []
     }
     elided = []
     for message in source:
