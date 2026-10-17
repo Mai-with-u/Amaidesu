@@ -49,8 +49,8 @@ async def test_reminder_wakes_proactive_round_when_live(proactive: bool) -> None
 
 
 @pytest.mark.parametrize("scenario", ["just_spoke", "not_live"])
-async def test_reminder_waits_and_stays_queued(scenario: str) -> None:
-    """防接龙窗口内或未开播：不促发也不消费，队列保留到下一 tick。"""
+async def test_reminder_gate_by_scenario(scenario: str) -> None:
+    """防接龙窗口内不促发也不消费（队列保留）；未开播递话必达——照常触发消费，不因下播吞掉留言。"""
     agent = _agent()
     if scenario == "just_spoke":
         agent._live_active = True
@@ -58,7 +58,13 @@ async def test_reminder_waits_and_stays_queued(scenario: str) -> None:
     agent.receive_prompt(content="插一句提醒", source="operator")
     await agent._maybe_flush()
 
-    agent._rounds.execute.assert_not_awaited()
+    if scenario == "just_spoke":
+        agent._rounds.execute.assert_not_awaited()
+        assert len(agent._reminder_queue) == 1
+        return
+    agent._rounds.execute.assert_awaited_once()
+    call = agent._rounds.execute.call_args
+    assert (call.kwargs["proactive"], call.kwargs["trigger_reason"]) == (True, "proactive:reminder")
     assert len(agent._reminder_queue) == 1
 
 
