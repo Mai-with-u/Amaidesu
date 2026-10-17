@@ -85,8 +85,10 @@ export function useRundownState() {
   const tickElapsedMs = computed(() => {
     const seg = currentSegment.value;
     if (!seg) return 0;
-    // 后端 elapsed_ms 是快照时刻的累计；paused 时不递增
+    // 后端 elapsed_ms 是快照时刻的累计；paused 时不递增，armed（待开播）
+    // 计时未起算恒为 0——本地 tick 不得从快照基线漂移累加
     if (snapshot.value?.paused) return Math.max(0, seg.elapsed_ms);
+    if (snapshot.value?.status === 'armed') return 0;
     const drift = nowTickMs.value - snapshotBaselineMs.value;
     return Math.max(0, Math.min(seg.expected_ms, seg.elapsed_ms + drift));
   });

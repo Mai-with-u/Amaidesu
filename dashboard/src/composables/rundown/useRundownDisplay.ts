@@ -22,6 +22,8 @@ export function useRundownDisplay(options: UseRundownDisplayOptions) {
 
   function segmentStatusOf(seg: RundownSegmentView): 'done' | 'current' | 'pending' {
     const cur = currentSegment.value;
+    // armed（待开播）：游标虽停在首段但计时未起算，环节一概"待开始"
+    if (state.value?.snapshot?.status === 'armed') return 'pending';
     if (cur && cur.id === seg.id) return 'current';
     // 简化：用 currentSegment.id 之前的视作 done，索引比较作为兜底
     const segments = state.value?.segments ?? [];
