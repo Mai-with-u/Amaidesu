@@ -38,6 +38,13 @@ logger = get_logger("McpClient")
 ResourceUpdateCallback = Callable[[str], None]
 
 
+# 最近一次连接失败特征串（server 名 → 特征串）：按 server 名跨实例共享。
+# 长驻调用方（如事件流采集器）每轮重试会新建客户端实例，去重状态若挂在实例上，
+# 实例一换就被当成"首次失败"，同因告警会持续刷屏；挂在 server 名上才贴合
+# "同一个 server 因同一个原因连不上，warning 只该出现一次"的语义。
+_last_connect_failures: Dict[str, str] = {}
+
+
 class McpClient:
     """单个 MCP server 的客户端封装。
 
@@ -53,8 +60,6 @@ class McpClient:
         self._connected = False
         # 活跃资源订阅（uri → 举旗回调）：持久于实例，重连成功后据此重发订阅请求
         self._subscriptions: Dict[str, ResourceUpdateCallback] = {}
-        # 最近一次连接失败的特征串：长驻调用方会周期性重试，同因失败只该喊一次
-        self._connect_failure = ""
         # 只使用通道配置设置期限，不读取工具参数来猜测游戏动作需要等待多久。
         self._request_timeout_ms = getattr(config, "request_timeout_ms", DEFAULT_REQUEST_TIMEOUT_MS)
         # 兼容既有配置的秒单位，进入通道后统一保存毫秒，直到 SDK 边界才换算。
@@ -117,7 +122,7 @@ class McpClient:
     @property
     def last_connect_error(self) -> str:
         """最近一次连接失败的特征串（无失败历史为空串；运营面展示降级原因用）。"""
-        return self._connect_failure
+        return _last_connect_failures.get(self.name, "")
 
     async def _request(self, operation: str, call: Callable[[], Awaitable[Any]]) -> Any:
         """所有协议请求共用总期限；超时只使所用会话失效，供后续调用重新连接。"""
@@ -177,10 +182,10 @@ class McpClient:
                     return await self._connect_once(timeout_ms)
         except Exception as exc:  # noqa: BLE001 - 连接边界兜底
             failure = f"{type(exc).__name__}: {exc} (timeout_ms={timeout_ms})"
-            if failure == self._connect_failure:
+            if failure == _last_connect_failures.get(self.name, ""):
                 logger.debug(f"MCP server '{self.name}' 仍然连接失败（同因）: {failure}")
             else:
-                self._connect_failure = failure
+                _last_connect_failures[self.name] = failure
                 # 首次失败是可预期告警（服务端未启动等），failure 串已含异常类型与原因，不附堆栈
                 logger.warning(f"MCP server '{self.name}' 连接失败（后续同因失败降为 debug）: {failure}")
             return False
@@ -205,7 +210,7 @@ class McpClient:
             await self._client.__aenter__()
             await self._resubscribe_all()
             self._connected = True
-            self._connect_failure = ""
+            _last_connect_failures[self.name] = ""
             logger.info(f"MCP server '{self.name}' 已连接（transport={self.config.transport}）")
             return self._connected
         except (Exception, asyncio.CancelledError):

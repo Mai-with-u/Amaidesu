@@ -385,8 +385,18 @@ def _raise_with(message: str):
     return _raise
 
 
+@pytest.fixture
+def _reset_shared_connect_failures() -> Any:
+    """连接失败特征串按 server 名跨实例共享：测前测后清空，防同名 server 的测试间串扰。"""
+    from src.modules.mcp import client as mcp_client_module
+
+    mcp_client_module._last_connect_failures.clear()
+    yield
+    mcp_client_module._last_connect_failures.clear()
+
+
 async def test_same_connect_failure_warns_once_until_reason_changes_or_a_success_resets(
-    monkeypatch, loguru_capture
+    monkeypatch, loguru_capture, _reset_shared_connect_failures
 ) -> None:
     """常驻调用方周期性重连，"服务没开"是常态：同因只 warning 一次，理由变了或连上过再失败才重新报。"""
     client = McpClient(
@@ -414,3 +424,32 @@ async def test_same_connect_failure_warns_once_until_reason_changes_or_a_success
     monkeypatch.setattr(client, "_build_transport", _raise_with("boom"))
     client._connected = False  # 已连接的服务再次断开才进入重连分支
     assert await client.connect() is False and failures() == 3
+
+
+async def test_connect_failure_dedup_survives_instance_recreation(
+    monkeypatch, loguru_capture, _reset_shared_connect_failures
+) -> None:
+    """事件流采集器每轮重试都新建客户端实例：去重状态按 server 名共享，换实例不算"首次失败"。"""
+
+    def make_client() -> McpClient:
+        return McpClient(
+            name="recreated", config=McpServerConfig(enabled=True, transport="http", url="http://127.0.0.1:9/mcp")
+        )
+
+    def failures() -> int:
+        return len([r for r in loguru_capture.records if r["level"] == "WARNING" and "连接失败" in r["message"]])
+
+    # 挂在类上（覆盖换出来的每个新实例）时是绑定方法，替身要接住 self
+    def raise_boom(self: Any) -> Any:
+        raise RuntimeError("boom")
+
+    def raise_changed(self: Any) -> Any:
+        raise RuntimeError("changed")
+
+    monkeypatch.setattr(McpClient, "_build_transport", raise_boom)
+    assert await make_client().connect() is False
+    assert await make_client().connect() is False and failures() == 1  # 新实例 + 同因：不再 warning
+    assert any(r["level"] == "DEBUG" and "同因" in r["message"] for r in loguru_capture.records)
+
+    monkeypatch.setattr(McpClient, "_build_transport", raise_changed)
+    assert await make_client().connect() is False and failures() == 2  # 原因变了，重新 warning
