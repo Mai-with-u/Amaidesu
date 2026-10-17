@@ -18,6 +18,10 @@
           <el-icon><User /></el-icon>
           <span>观众</span>
         </el-menu-item>
+        <el-menu-item index="/memory">
+          <el-icon><Avatar /></el-icon>
+          <span>观众画像</span>
+        </el-menu-item>
         <el-menu-item index="/collectors">
           <el-icon><Connection /></el-icon>
           <span>采集器</span>
@@ -29,10 +33,6 @@
         <el-menu-item index="/tools">
           <el-icon><Tools /></el-icon>
           <span>工具</span>
-        </el-menu-item>
-        <el-menu-item index="/memory">
-          <el-icon><Collection /></el-icon>
-          <span>观众画像</span>
         </el-menu-item>
         <el-menu-item index="/eventlog">
           <el-icon><Document /></el-icon>
@@ -120,7 +120,7 @@ import {
   MagicStick,
   Odometer,
   User,
-  Collection,
+  Avatar,
   Memo,
 } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/stores';
