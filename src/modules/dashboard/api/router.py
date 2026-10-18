@@ -84,7 +84,7 @@ def create_app() -> FastAPI:
     # 视觉感知端点（mss 显示器枚举 + 预览抓帧），无 VLM / 不缓存
     app.include_router(vision.router, prefix="/api/v1/vision", tags=["Vision"])
 
-    # 表情差分图静态资源（挂件页取图；路由形如 /api/v1/avatar/expression_sheet/assets/<文件名>）
+    # 表情差分图静态资源（小部件页取图；路由形如 /api/v1/avatar/expression_sheet/assets/<文件名>）
     app.include_router(avatar.router, prefix="/api/v1/avatar", tags=["Avatar"])
 
     return app

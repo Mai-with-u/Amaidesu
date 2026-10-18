@@ -4,7 +4,7 @@ ExpressionSheetProvider - 表情差分图虚拟形象工具集
 基于"表情差分图切换"的静态立绘虚拟形象：17 个情绪各对应一张差分图，
 文件名 = 情绪枚举值（如 ``happy.png`` / ``speechless.png``），图片目录由
 配置 ``[avatar.platform.expression_sheet] image_dir`` 指定。设置情绪 =
-切换到对应差分图，由挂件页（``/widget/expression_sheet``）取
+切换到对应差分图，由小部件页（``/widget/expression_sheet``）取
 ``image_url`` 展示；无连接语义、无外部依赖。
 
 - 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
@@ -43,7 +43,7 @@ SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".web
 # 兜底差分图的情绪名（对应情绪枚举值；缺图时回退到它）
 FALLBACK_EMOTION = Emotion.NEUTRAL.value
 
-# 挂件页取图的静态路由前缀（dashboard 后端提供，见 dashboard/api/avatar.py）
+# 小部件页取图的静态路由前缀（dashboard 后端提供，见 dashboard/api/avatar.py）
 ASSET_URL_PREFIX = "/api/v1/avatar/expression_sheet/assets"
 
 _EXPRESSION_SHEET_SET_EXPRESSION_SCHEMA: Dict[str, Any] = {
@@ -203,7 +203,7 @@ class ExpressionSheetProvider(BaseToolProvider):
 
         校验顺序：情绪名合法性 → 目录就绪态 → 图文件存在（缺图回退
         ``neutral`` 差分图）。成功返回 ``{emotion, intensity, image_url}``，
-        挂件页按 ``image_url`` 取图展示。
+        小部件页按 ``image_url`` 取图展示。
         """
         if emotion not in {e.value for e in Emotion}:
             return _fail("expression_sheet_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")

@@ -6,7 +6,7 @@
 
 ## 背景（Context）
 
-字幕存在两套并行事实：`src/modules/subtitle/`（桌面窗 + Dashboard 挂件，经 `SubtitleService` 多后端广播）与 Warudo 自带的 `SubtitleManager`（端口 8766，docstring 自述"为 OBS 浏览器源提供实时字幕推送"）。逐项对比后确认两者做同一件事，且 Dashboard 的 `/subtitle` 页样式能力更强（每条消息可带字号/颜色/背景/边框 + `auto_hide_after_ms`）。双轨的害处在 ADR-007 遗留节已被自承："事件与字幕存在双轨，待统一"。
+字幕存在两套并行事实：`src/modules/subtitle/`（桌面窗 + Dashboard 小部件，经 `SubtitleService` 多后端广播）与 Warudo 自带的 `SubtitleManager`（端口 8766，docstring 自述"为 OBS 浏览器源提供实时字幕推送"）。逐项对比后确认两者做同一件事，且 Dashboard 的 `/subtitle` 页样式能力更强（每条消息可带字号/颜色/背景/边框 + `auto_hide_after_ms`）。双轨的害处在 ADR-007 遗留节已被自承："事件与字幕存在双轨，待统一"。
 
 同时，字幕的**驱动时机**一直挂在编排层派发（发言决定时刻），与实际发声不对齐：TTS 队列积压或丢弃时，字幕显示的是"决定要说的话"而不是"正在说的话"。
 
@@ -14,7 +14,7 @@
 
 **字幕收敛为"一源 → 三面"；源的选择在装配期一次定死，两种模式互斥。**
 
-- **三面**：桌面小窗 / Dashboard 挂件 / OBS 用 Dashboard `/subtitle` 页。三者都是 `SubtitleService` 的 Backend，一源广播。
+- **三面**：桌面小窗 / Dashboard 小部件 / OBS 用 Dashboard `/subtitle` 页。三者都是 `SubtitleService` 的 Backend，一源广播。
 - **装配期择流**：以启动装配时有没有建出 TTS 引擎（`build_tts_infrastructure` 返回值，fail-soft 语义已含"禁用 / 缺配置 / 构造失败"）为判据——
   - **有引擎** → 字幕跟随播放事件：`tts.utterance.started` 显示该句文本、`finished` 清空（与实际播放对齐；队列丢最旧的台词自然不显示字幕）；
   - **无引擎** → 编排层派发直出（现状行为）。

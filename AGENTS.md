@@ -66,7 +66,7 @@
 - **import 纪律**：import 一律放文件顶部（`from __future__` 之后），按 isort 排序。函数体内 import 限 5 种情形，且必须自足注释说明原因：TYPE_CHECKING 块、循环 import 规避、可选重型依赖延迟加载、Pydantic `model_rebuild()` forward-ref、测试可 mock 性。顶部已有同模块 import 时，函数内直接复用顶部引用
 - **类型注解**：所有函数与方法必须含完整类型注解（参数与返回值类型）；缺注解视为缺陷，必要时通过 `TYPE_CHECKING` 推迟导入以避免循环
 - **日志使用**：统一通过 `src.modules.logging.get_logger` 取 logger（返回项目门面 `ModuleLogger`，对外仅 debug/info/warning/error/exception 方法），参数用类名或模块名（命令行 `--filter <name>` 按此过滤可见输出）；异常路径一律 `logger.exception(...)`（error 级）或 `logger.error/warning/debug(..., exc=True)`（保持级别，也可直接传异常对象）携带上下文，不得静默吞异常；loguru 原生 API 仅限 `src/modules/logging/` 内部使用，契约测试强制（调用点出现 stdlib 风格异常参数或目录外导入 loguru 即失败）
-- **前端约定**：错误文案提取统一走 `dashboard/src/utils/apiError.ts` 的 `getApiErrorMessage`，不手写 instanceof 分支；时间格式化优先复用 `dashboard/src/utils/format` 助手，专用形态就地保留；涉及定时器/订阅/WebSocket 的组合式必须在 docstring 声明 keep-alive 生命周期语义并按激活态启停；挂件页 WebSocket 连接复用共享组合式，不自绘重连循环
+- **前端约定**：错误文案提取统一走 `dashboard/src/utils/apiError.ts` 的 `getApiErrorMessage`，不手写 instanceof 分支；时间格式化优先复用 `dashboard/src/utils/format` 助手，专用形态就地保留；涉及定时器/订阅/WebSocket 的组合式必须在 docstring 声明 keep-alive 生命周期语义并按激活态启停；小部件页 WebSocket 连接复用共享组合式，不自绘重连循环
 
 ### AI 痕迹防范（防 AI slop）
 

@@ -1,5 +1,5 @@
 /**
- * 表情差分挂件页（/widget/expression_sheet）的组合式。
+ * 表情差分小部件页（/widget/expression_sheet）的组合式。
  *
  * 订阅主事件 WS 流（订阅句柄由页面从 useWebSocketStore → api/websocket 的
  * 共享连接注入，不自绘重连循环），过滤 streamer.speech 事件，取 payload 的
@@ -7,7 +7,7 @@
  * 17 枚举值之一，非法值兜底回 neutral。
  *
  * 事件消费边界（v1 范围）：只跟随 streamer.speech 事件；LLM 直调
- * expression_sheet_set_expression 工具的场景不经事件流，不反射到挂件页。
+ * expression_sheet_set_expression 工具的场景不经事件流，不反射到小部件页。
  *
  * 生命周期语义：非 keep-alive 全屏展示页——setup 订阅 + 连接，作用域销毁
  * （onScopeDispose）退订；不进主导航，也不置于 keep-alive 容器。若未来

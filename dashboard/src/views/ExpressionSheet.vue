@@ -21,7 +21,7 @@ import { NEUTRAL_EMOTION, useExpressionSheetWidget } from '@/composables/useExpr
 import { useWebSocketStore } from '@/stores/websocket';
 
 /**
- * 表情差分挂件页（给 OBS 浏览器源嵌的全屏展示页，形态参照 Subtitle.vue）。
+ * 表情差分小部件页（给 OBS 浏览器源嵌的全屏展示页，形态参照 Subtitle.vue）。
  *
  * 纯展示页：只跟随 streamer.speech 事件切换差分图，不渲染任何控制台 UI。
  * 展示回退链：对应情绪差分图 404 → neutral 差分图；neutral 也 404 →

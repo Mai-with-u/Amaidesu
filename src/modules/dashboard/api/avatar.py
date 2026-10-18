@@ -7,7 +7,7 @@
 行为约定：
 
 - 数据源是已装配的 ``ExpressionSheetProvider`` 解析出的差分图目录
-  （``image_dir``）；Provider 未装配 / 未配置目录时一律 404（挂件页
+  （``image_dir``）；Provider 未装配 / 未配置目录时一律 404（小部件页
   据此回退 neutral 差分图，neutral 也 404 时显示"未配置"占位）。
 - 安全硬要求：``filename`` 只接受纯文件名——含路径分隔符（``/``、``\``）
   或 ``..`` 的一律 404，杜绝路径穿越读到目录外文件。
@@ -78,7 +78,7 @@ async def get_expression_sheet_asset(
 ) -> FileResponse:
     """按文件名服务差分图（数据源 = Provider 已解析的差分图目录）。
 
-    Provider 未装配 / 目录未配置 / 文件不存在 → 404（挂件页回退链依据）。
+    Provider 未装配 / 目录未配置 / 文件不存在 → 404（小部件页回退链依据）。
     """
     _validate_pure_filename(filename)
     provider = _get_expression_sheet_provider(server)

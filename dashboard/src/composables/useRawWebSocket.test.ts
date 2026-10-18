@@ -1,4 +1,4 @@
-// useRawWebSocket.ts 挂件页裸 WebSocket 组合式的测试
+// useRawWebSocket.ts 小部件页裸 WebSocket 组合式的测试
 //
 // 覆盖：消息送达（onMessage 收原始 MessageEvent）、异常关闭后 3 秒重连、
 // 作用域销毁后不再重连（disposed 守卫 + 清理重连定时器）。
