@@ -10,7 +10,10 @@
   target（不回退已高于 target 的目标文件）。
 
 调度不存在全局版本上界：文件版本超前于全部钩子时自然零变更。新钩子随
-结构变更在此登记。
+结构变更在此登记。钩子的 ``target_version`` 是该文件自身版本流内的坐标，
+新钩子取该文件链上界的下一位即可，与主程序发布版本号无关——配置版本
+流与发布版本同自 2.0.0 起步、此后各自独立递进，下方历史钩子的 target
+数字与发布版本号相近只是同起点独立演进的自然结果，两套序列无关。
 """
 
 from __future__ import annotations
@@ -684,6 +687,38 @@ def _drop_tools_memory_section(data: Dict[str, Any]) -> List[str]:
 
 
 register_file_hook("tools.toml", "drop_tools_memory_section", "2.0.45", _drop_tools_memory_section)
+
+
+# web 搜索 bing 引擎入口的历届默认值：等于旧值说明用户没显式改过，才随默认值更换改写
+_WEB_SEARCH_BING_ENTRY_OLD_DEFAULT = "https://cn.bing.com/search"
+_WEB_SEARCH_BING_ENTRY_NEW_DEFAULT = "https://www.bing.com/search"
+
+
+def _upgrade_web_search_bing_entry(data: Dict[str, Any]) -> List[str]:
+    """tools.toml v2.0.46：web 搜索 bing 引擎默认入口更换。
+
+    cn.bing.com 对无 cookie 直连请求改为落地必应首页（不再返回结果页），
+    默认入口换为 www.bing.com/search。仅当落盘值等于旧默认（用户未显式
+    改过）时才改写，自定义入口保持原值。对已迁移数据零变更（幂等）。
+    """
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        return []
+    web = tools.get("web")
+    if not isinstance(web, dict):
+        return []
+    search = web.get("search")
+    if not isinstance(search, dict):
+        return []
+    config = search.get("config")
+    if not isinstance(config, dict) or config.get("base_url") != _WEB_SEARCH_BING_ENTRY_OLD_DEFAULT:
+        return []
+    config["base_url"] = _WEB_SEARCH_BING_ENTRY_NEW_DEFAULT
+    return ["tools.web.search.config.base_url"]
+
+
+# 生产钩子登记：tools.toml v2.0.46（web 搜索 bing 入口默认值 cn→www）
+register_file_hook("tools.toml", "web_search_bing_entry_default_swap", "2.0.46", _upgrade_web_search_bing_entry)
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:

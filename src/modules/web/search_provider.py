@@ -106,7 +106,7 @@ class WebSearchProvider(BaseToolProvider):
             ),
         )
         base_url: str = Field(
-            default="https://cn.bing.com/search",
+            default="https://www.bing.com/search",
             title="搜索入口",
             description="bing 引擎的结果页入口（默认 Bing 网页版，免 API key）",
         )

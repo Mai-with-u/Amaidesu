@@ -2,7 +2,8 @@
 
 通用记忆检索工具（query_memory / query_viewer_profile）退役，主播记忆工具随
 主播 Agent 注册、没有独立开关。覆盖：
-- 旧配置（带 [tools.memory] 段与其 config 子段）→ 加载 → 磁盘写回已删、版本推进 2.0.45；
+- 旧配置（带 [tools.memory] 段与其 config 子段）→ 加载 → 磁盘写回已删、
+  版本推进链上界（当前 2.0.46）；
 - 其余 [tools.*] 段不动；
 - 二次加载零写回（幂等）；
 - 迁移后的 tools.toml 不再认识 [tools.memory]：手写回去 = 加载期硬错。
@@ -37,7 +38,7 @@ def test_tools_memory_section_dropped_and_written_back(tmp_path: Path) -> None:
     migrated = tomlkit.parse((tmp_path / "tools.toml").read_text(encoding="utf-8-sig"))
     assert "memory" not in migrated["tools"]
     assert migrated["tools"]["vision"]["enabled"] is True  # 其他段原样保留
-    assert get_config_version(tmp_path, "tools.toml") == "2.0.45"
+    assert get_config_version(tmp_path, "tools.toml") == "2.0.46"  # 链上界随新增钩子推进
 
     first = (tmp_path / "tools.toml").read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)

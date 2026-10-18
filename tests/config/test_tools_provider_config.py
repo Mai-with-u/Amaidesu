@@ -56,7 +56,7 @@ def test_empty_config_backfills_defaults_with_comments_into_disk_and_runtime_vie
     _append(other, WEB_SEARCH_SECTION)
     load_config_dir(other)
     web = _tools_text(other)  # web 动态分类域走同一注册表管线
-    assert 'base_url = "https://cn.bing.com/search"' in web and "timeout_ms = 10000" in web
+    assert 'base_url = "https://www.bing.com/search"' in web and "timeout_ms = 10000" in web
     assert "max_fetch_chars" not in web
 
 
