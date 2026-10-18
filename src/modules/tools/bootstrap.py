@@ -38,6 +38,7 @@ report = bind_core_tools(registry, config=tools_section_dict)
 | ``[avatar.platform.vts]``（名单成员） | ``register_vts_tools`` | VTubeStudio 控制 |
 | ``[avatar.platform.vrchat]``（名单成员） | ``register_vrchat_tools`` | VRChat OSC 桥接 |
 | ``[avatar.platform.warudo]``（名单成员） | ``register_warudo_tools`` | Warudo 控制 |
+| ``[avatar.platform.expression_sheet]``（名单成员） | ``register_expression_sheet_tools`` | 表情差分形象控制 |
 | ``[tools.studio.obs]`` | ``register_obs_tools`` | OBS Studio 控制 |
 | ``[tools.web.search]`` | ``register_web_search_tools`` | 联网搜索（web_search / web_fetch_url） |
 
@@ -96,6 +97,14 @@ def _load_warudo() -> Callable[..., Any]:
     return register_warudo_tools
 
 
+def _load_expression_sheet() -> Callable[..., Any]:
+    from src.modules.avatar.platform.expression_sheet.expression_sheet_provider import (
+        register_expression_sheet_tools,
+    )
+
+    return register_expression_sheet_tools
+
+
 def _load_obs() -> Callable[..., Any]:
     from src.modules.studio.obs.obs_provider import register_obs_tools
 
@@ -114,6 +123,7 @@ _DOMAIN_MEMBERS: List[_EntrySpec] = [
     (("avatar", "vts"), "VTubeStudio 控制", _load_vts),
     (("avatar", "vrchat"), "VRChat OSC 桥接", _load_vrchat),
     (("avatar", "warudo"), "Warudo 控制", _load_warudo),
+    (("avatar", "expression_sheet"), "表情差分形象控制", _load_expression_sheet),
     (("studio", "obs"), "OBS Studio 控制", _load_obs),
     (("web", "search"), "联网搜索", _load_web_search),
 ]

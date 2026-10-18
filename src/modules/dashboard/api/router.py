@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.modules.dashboard.api import (
     agents,
+    avatar,
     components,
     config,
     debug,
@@ -35,7 +36,7 @@ def create_app() -> FastAPI:
 
     路由域：system / components / config / debug / llm / tools / events /
     logs / rundown / rundowns / streamer / simulator / live-sessions /
-    viewers / agents / vision / memory，全部挂在 ``/api/v1`` 前缀下。
+    viewers / agents / vision / memory / avatar，全部挂在 ``/api/v1`` 前缀下。
     """
     app = FastAPI(
         title="Amaidesu Dashboard API",
@@ -82,6 +83,9 @@ def create_app() -> FastAPI:
 
     # 视觉感知端点（mss 显示器枚举 + 预览抓帧），无 VLM / 不缓存
     app.include_router(vision.router, prefix="/api/v1/vision", tags=["Vision"])
+
+    # 表情差分图静态资源（挂件页取图；路由形如 /api/v1/avatar/expression_sheet/assets/<文件名>）
+    app.include_router(avatar.router, prefix="/api/v1/avatar", tags=["Avatar"])
 
     return app
 

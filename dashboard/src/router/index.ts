@@ -94,6 +94,13 @@ const router = createRouter({
       meta: { layout: false },
     },
     {
+      // 表情差分挂件页（给 OBS 浏览器源嵌的全屏展示页，不进主导航）
+      path: '/widget/expression_sheet',
+      name: 'expression-sheet-widget',
+      component: () => import('@/views/ExpressionSheet.vue'),
+      meta: { layout: false },
+    },
+    {
       path: '/game2048',
       name: 'game2048',
       component: () => import('@/views/Game2048.vue'),

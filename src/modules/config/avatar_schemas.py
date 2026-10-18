@@ -34,6 +34,7 @@ from typing import List
 from pydantic import ConfigDict, Field
 
 from src.modules.avatar.lipsync import LipSyncConfig
+from src.modules.avatar.platform.expression_sheet.expression_sheet_provider import ExpressionSheetProvider
 from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
 from src.modules.avatar.platform.vts.vts_provider import VTSProvider
 from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider
@@ -42,7 +43,7 @@ from src.modules.config.schemas.base import BaseConfig
 
 # 平台成员名合法清单（与注册表键 ("avatar", <名>) 的提供者位、bootstrap
 # 成员表、代码目录三方同源；名单出现表外名字属拼写错误，加载期硬错）
-PLATFORM_NAMES: tuple[str, ...] = ("vts", "warudo", "vrchat")
+PLATFORM_NAMES: tuple[str, ...] = ("vts", "warudo", "vrchat", "expression_sheet")
 
 
 class AvatarPlatformConfig(BaseConfig):
@@ -59,7 +60,7 @@ class AvatarPlatformConfig(BaseConfig):
     enabled: List[str] = Field(
         default_factory=lambda: ["vts"],
         title="启用平台名单",
-        description="启用的虚拟形象平台名单（合法名：vts / warudo / vrchat）",
+        description="启用的虚拟形象平台名单（合法名：vts / warudo / vrchat / expression_sheet）",
         json_schema_extra={"x-options": list(PLATFORM_NAMES)},
     )
     vts: VTSProvider.ConfigSchema = Field(
@@ -76,6 +77,11 @@ class AvatarPlatformConfig(BaseConfig):
         default_factory=VRChatProvider.ConfigSchema,
         title="VRChat 配置",
         description="VRChat 平台配置（OSC 主机与输出端口）",
+    )
+    expression_sheet: ExpressionSheetProvider.ConfigSchema = Field(
+        default_factory=ExpressionSheetProvider.ConfigSchema,
+        title="表情差分配置",
+        description="表情差分图平台配置（差分图片目录）",
     )
 
 

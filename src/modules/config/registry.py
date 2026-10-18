@@ -59,6 +59,7 @@ EXPECTED_TOOL_PROVIDERS: tuple[tuple[str, str], ...] = (
     ("avatar", "vts"),
     ("avatar", "vrchat"),
     ("avatar", "warudo"),
+    ("avatar", "expression_sheet"),
     ("studio", "obs"),
     ("web", "search"),
 )
@@ -107,6 +108,7 @@ def _fill_tool_providers() -> dict[tuple[str, str], type[BaseConfig]]:
     成员身份 (分类段, 提供者键) 与装配侧 ``tools.bootstrap._DOMAIN_MEMBERS``
     同构；两表一致性由契约测试守护。
     """
+    from src.modules.avatar.platform.expression_sheet.expression_sheet_provider import ExpressionSheetProvider
     from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
     from src.modules.avatar.platform.vts.vts_provider import VTSProvider
     from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider
@@ -117,6 +119,7 @@ def _fill_tool_providers() -> dict[tuple[str, str], type[BaseConfig]]:
         ("avatar", "vts"): VTSProvider.ConfigSchema,
         ("avatar", "vrchat"): VRChatProvider.ConfigSchema,
         ("avatar", "warudo"): WarudoProvider.ConfigSchema,
+        ("avatar", "expression_sheet"): ExpressionSheetProvider.ConfigSchema,
         ("studio", "obs"): OBSProvider.ConfigSchema,
         ("web", "search"): WebSearchProvider.ConfigSchema,
     }
