@@ -306,7 +306,7 @@ def test_categories_lists_static_members_with_config_and_runtime_state(tools_cli
     cats = _categories(tools_client)
 
     vts = cats["avatar"]["vts"]
-    assert set(cats["avatar"]) == {"vts", "vrchat", "warudo"}
+    assert set(cats["avatar"]) == {"vts", "vrchat", "warudo", "expression_sheet"}
     assert (vts["enabled"], vts["in_config"], vts["switchable"]) == (True, True, True)
     assert (vts["tool_count"], vts["disabled_count"], vts["provider_name"]) == (1, 0, "vts")
     # 运行时计数按 (分类, provider) 聚合；配置未声明的已知成员仍列出供面板开启

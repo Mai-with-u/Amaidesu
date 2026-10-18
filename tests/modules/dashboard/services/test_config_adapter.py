@@ -178,7 +178,12 @@ def test_groups_cover_seven_scopes_with_self_described_labels_readonly_and_widge
 
     avatar = _iter_fields(next(g for g in result["groups"] if g["key"] == "avatar")["fields"])
     by_key = {f["key"]: f for f in avatar}
-    assert by_key["avatar.platform.enabled"]["validation"]["options"] == ["vts", "warudo", "vrchat"]  # 封闭候选池
+    assert by_key["avatar.platform.enabled"]["validation"]["options"] == [
+        "vts",
+        "warudo",
+        "vrchat",
+        "expression_sheet",
+    ]  # 封闭候选池
     assert by_key["avatar.lipsync.type"]["readonly"] is True  # 常量型字段只读
     assert by_key["avatar.lipsync.min_mouth_delta"]["precision"] == 3  # 精度标记透传
 
