@@ -23,6 +23,7 @@ from websockets.asyncio.server import serve
 from src.modules.collectors.bilibili.laplace.bili_danmaku_laplace_collector import (
     BiliDanmakuLaplaceCollector,
 )
+from src.modules.collectors.bilibili.laplace.client import LaplaceBridgeClient
 from src.modules.collectors.bilibili.laplace.events import LaplaceEventMapper
 from src.modules.collectors.factory import instantiate_collector
 from src.modules.events.event_bus import EventBus
@@ -394,6 +395,21 @@ async def test_emit_disabled_still_yields() -> None:
     assert len(payloads) == 1
     assert payloads[0].message_type == "danmaku"
     assert bus.events == []
+
+
+# ===== 客户端重连退避 =====
+
+
+def test_reconnect_delay_caps_without_overflow() -> None:
+    client = LaplaceBridgeClient(
+        url="ws://localhost:9696",
+        token="",
+        reconnect_base_ms=3000,
+        reconnect_max_ms=60000,
+    )
+    assert client._reconnect_delay_ms(1) == 3000
+    assert client._reconnect_delay_ms(2) == 4500
+    assert client._reconnect_delay_ms(10_000) == 60000
 
 
 # ===== 本地假 bridge 端到端 =====

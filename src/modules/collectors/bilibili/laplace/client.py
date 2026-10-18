@@ -52,6 +52,9 @@ _MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 _PING_INTERVAL_S = 20.0
 _PING_TIMEOUT_S = 20.0
 _CLOSE_TIMEOUT_S = 1.0
+# 退避指数上限：1.5 ** 30 已足够让任何正常配置先撞上 reconnect_max_ms，
+# 同时避免 attempt 无限增长后浮点溢出
+_MAX_BACKOFF_EXPONENT = 30
 
 
 class LaplaceBridgeClient:
@@ -143,12 +146,20 @@ class LaplaceBridgeClient:
                 )
 
             attempt += 1
-            delay_ms = min(
-                int(self._reconnect_base_ms * (1.5 ** (attempt - 1))),
-                self._reconnect_max_ms,
-            )
+            delay_ms = self._reconnect_delay_ms(attempt)
             self.logger.info(f"LAPLACE bridge {delay_ms / 1000:.1f}s 后重连（第 {attempt} 次）")
             await asyncio.sleep(delay_ms / 1000)
+
+    def _reconnect_delay_ms(self, attempt: int) -> int:
+        """按 1.5 倍指数退避计算重连等待，封顶 ``reconnect_max_ms``。
+
+        attempt 会随失败次数无限增长；直接算 ``1.5 ** attempt`` 在约 1750 次后
+        会浮点溢出（默认 60s 上限下约 29 小时连续失败），异常会逃出重连循环
+        并终止采集任务。指数本身封顶即可，30 次方已足以让任何正常配置先撞上
+        ``reconnect_max_ms``。
+        """
+        exponent = min(max(attempt - 1, 0), _MAX_BACKOFF_EXPONENT)
+        return min(int(self._reconnect_base_ms * (1.5**exponent)), self._reconnect_max_ms)
 
     def _connect_url(self) -> str:
         """返回带 query token 的连接地址（token 为空时原样返回）。"""
