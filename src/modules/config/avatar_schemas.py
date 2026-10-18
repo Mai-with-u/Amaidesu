@@ -21,8 +21,8 @@
   名单约定）；成员段直接铺参数键——没有 tools.toml 动态键机制的
   ``.config`` 中间层，段位即归属；
 - 成员段 typed 引用各平台包内 ConfigSchema（静态命名段，平台名封闭
-  三值：vts / warudo / vrchat，与代码目录 ``src/modules/avatar/platform/``
-  镜像）；包内 Schema 是字段与默认值的唯一权威；
+  四值：vts / warudo / vrchat / expression_sheet，与代码目录
+  ``src/modules/avatar/platform/`` 镜像）；包内 Schema 是字段与默认值的唯一权威；
 - ``lipsync`` 与 ``platform`` 平级（口型分析共享件，非平台成员）；
   将来 avatar 新部件 = 新的第二段，以部件本名命名。
 """
