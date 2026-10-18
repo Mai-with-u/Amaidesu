@@ -24,8 +24,10 @@ LAPLACE 是**传输层**，事件仍属于 B 站：采集器统一写 `platform=
 
 **先阅读 [LAPLACE Event Bridge 文档](https://laplace.live/chat/event-bridge)，按其中说明准备一个可用的桥接服务器。** 本文只覆盖 Amaidesu 侧的配置与排障。
 
-1. **桥接服务器（`leb-server`）**：从 [event-bridge Releases](https://github.com/laplace-live/event-bridge/releases) 下载对应平台的单文件二进制（Windows 为 `leb-server-windows-x64.exe`）。该文件不随仓库分发。也可以使用 LAPLACE Event Fetcher v2.2.0+ 的 bridge mode，此时不需要保持控制台页面开启。
+1. **桥接服务器（`leb-server`）**：从 [event-bridge Releases](https://github.com/laplace-live/event-bridge/releases) 下载对应平台的单文件二进制（Windows 为 `leb-server-windows-x64.exe`）。该文件不随仓库分发。
 2. **LAPLACE Chat 控制台**：使用 `leb-server` 时，打开 `https://chat.laplace.live/dashboard/<房间号>`。Event Bridge 设置只存在于控制台页面，OBS 页面不转发事件。
+
+> LAPLACE Event Fetcher 是 LAPLACE 的另一个独立项目；它的 bridge mode 不属于本文的 `leb-server` 路径，部署与事件源要求以该项目文档为准。
 
 ## 配置步骤
 
@@ -77,7 +79,8 @@ room_id = 0           # 0=不过滤；填写时使用规范长房间号
 ## 事件映射
 
 Laplace 的 `message` / `gift` / `superchat` / `toast` / `interaction` 分别映射为
-`room.message.*` 语义事件；映射表与过滤/去重/脱敏逻辑的权威实现在
+`room.message.*` 语义事件；字段语义见 [LAPLACE 事件类型文档](https://chat.laplace.live/event-types/)。
+映射表与过滤/去重/脱敏逻辑的权威实现在
 [`events.py` 的 `LaplaceEventMapper`](../../src/modules/collectors/bilibili/laplace/events.py)。
 其他事件（在线人数、点赞、天选、红包、弹幕撤回等）当前忽略；SC 删除与弹幕撤回不会追溯修改已落库数据。
 
@@ -85,6 +88,8 @@ Laplace 的 `message` / `gift` / `superchat` / `toast` / `interaction` 分别映
 
 - **实时流，无历史补播**：断线期间的事件不会补发；重连后依靠 `id` / `stableKey` 去重，不会重复落库。
 - **礼物金额为源限制**：Laplace 只提供含舰队折扣的总价，采集器把它同时写入 `total_price` 与 `paid_price`；`unit_price` 是由总价反推的近似值。现有金额口径要求贡献按标价计算，该源无法提供标价，因此贡献统计会按折扣后金额计算；代码与本文均已显式注明。
+- **SC 金额按人民币换算**：Laplace 的 `priceNormalized` 是实际货币单位（人民币元），采集器优先用它 ×1000 转为金瓜子；只有该字段缺失或非正数时才回退 `price`。金额大小与单位无关，不能按金额猜单位。
+- **盲盒 ID 取配置 ID**：`blindGift.blind_gift_config_id` 是盲盒配置 ID，写入 `GiftInfo.blind_gift_id`；`original_gift_id` 是开出的实际礼物，不写入该字段。
 - **上舰无粉丝牌快照**：Laplace `toast` 事件没有粉丝牌字段，`GuardInfo` 的该两项保持默认；原始事件仍在 `raw_data` 中。
 - **Dashboard 实时事件流不显示 guard**：既有广播清单只包含 danmaku/gift/super_chat/enter；guard 仍会正常落库与进入 Planner 上下文。
 - **控制台页面必须开启**；只开 OBS 弹幕窗口不会向 bridge 推送事件。

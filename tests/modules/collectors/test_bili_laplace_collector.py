@@ -84,7 +84,7 @@ def _gift_event(**overrides: Any) -> Dict[str, Any]:
         giftAmount=2,
         giftId=31036,
         giftName="小星星",
-        blindGift={"blind_gift_id": 0},
+        blindGift={"blind_gift_config_id": 32251, "original_gift_id": 31036},
     )
     event.update(overrides)
     return event
@@ -205,6 +205,7 @@ def test_gift_payload() -> None:
     assert gift.name == "小星星"
     assert gift.count == 2
     assert gift.gift_id == 31036
+    assert gift.blind_gift_id == 32251
     assert gift.unit_price == 500
     assert gift.total_price == 1000
     assert gift.paid_price == 1000
@@ -227,6 +228,24 @@ def test_gift_silver_and_unknown_currency() -> None:
     assert unknown.gift.currency == ""
 
 
+def test_gift_blind_gift_legacy_fallback() -> None:
+    payload = LaplaceEventMapper().to_payload(_gift_event(blindGift={"blindGiftId": 9001}))
+    assert payload is not None and payload.gift is not None
+    assert payload.gift.blind_gift_id == 9001
+
+
+def test_gift_blind_gift_does_not_use_original_gift_id() -> None:
+    payload = LaplaceEventMapper().to_payload(_gift_event(blindGift={"original_gift_id": 31036}))
+    assert payload is not None and payload.gift is not None
+    assert payload.gift.blind_gift_id == 0
+
+
+def test_gift_non_blind_gift_has_zero_id() -> None:
+    payload = LaplaceEventMapper().to_payload(_gift_event(blindGift=None))
+    assert payload is not None and payload.gift is not None
+    assert payload.gift.blind_gift_id == 0
+
+
 def test_super_chat_payload() -> None:
     payload = LaplaceEventMapper().to_payload(_sc_event())
     assert payload is not None and payload.sc is not None
@@ -242,10 +261,23 @@ def test_super_chat_payload() -> None:
     assert "***" in sc.raw_data
 
 
-def test_super_chat_price_fallback_to_normalized() -> None:
-    payload = LaplaceEventMapper().to_payload(_sc_event(price=30, priceNormalized=30.0))
+def test_super_chat_price_uses_normalized_currency() -> None:
+    # 1000 元以上的 SC 若按 price 大小猜单位，会被误判成金瓜子并缩小 1000 倍
+    payload = LaplaceEventMapper().to_payload(_sc_event(price=2_000, priceNormalized=2_000.0))
     assert payload is not None and payload.sc is not None
-    assert payload.sc.total_price == 30000
+    assert payload.sc.total_price == 2_000_000
+
+
+def test_super_chat_price_prefers_normalized_when_raw_is_gold() -> None:
+    payload = LaplaceEventMapper().to_payload(_sc_event(price=2_000_000, priceNormalized=2_000.0))
+    assert payload is not None and payload.sc is not None
+    assert payload.sc.total_price == 2_000_000
+
+
+def test_super_chat_price_falls_back_to_raw_price() -> None:
+    payload = LaplaceEventMapper().to_payload(_sc_event(price=30_000, priceNormalized=0.0))
+    assert payload is not None and payload.sc is not None
+    assert payload.sc.total_price == 30_000
 
 
 def test_guard_payload() -> None:

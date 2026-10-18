@@ -12,8 +12,12 @@ LAPLACE Event Bridge（https://laplace.live/chat/event-bridge）把它的
 - ``platform`` 固定 ``bilibili``（Laplace 是传输层，不是平台）
 - ``timestamp_ms`` 取 ``timestampNormalized``（毫秒），缺失才回退当前时刻
 - 付费事件保留 ``raw_data``；SC 的举报 ``token`` 在落库前脱敏为 ``***``
+- SC 金额优先用 ``priceNormalized``（人民币元）×1000 转金瓜子；只有该字段
+  缺失或非正数时才回退 ``price``。``SuperChatInfo.total_price`` 的单位是金瓜子
 - 礼物 ``price`` 是含舰队折扣的总价，源不提供标价，因此
   ``total_price`` 与 ``paid_price`` 同值；``unit_price`` 为反推近似值
+- 盲盒礼物 ``blind_gift_id`` 取 ``blindGift.blind_gift_config_id``；
+  ``original_gift_id`` 是开出的实际礼物，不写入该字段
 """
 
 from __future__ import annotations
@@ -150,16 +154,15 @@ def _as_float(value: Any, default: float = 0.0) -> float:
 def _sc_total_gold(price: Any, price_normalized: Any) -> int:
     """SC 金额统一为金瓜子。
 
-    Laplace 的 ``price`` 通常是金瓜子（SC 最低 30 元 = 30000）；若源返回的是
-    人民币元（``price < 1000``），用 ``priceNormalized × 1000`` 兜底。
+    ``priceNormalized`` 是 LAPLACE 定义的“实际货币单位价格”（人民币元），
+    优先用它换算：1 元 = 1000 金瓜子。金额大小与单位无关，不能用
+    ``price < 1000`` 之类的大小判断猜单位；只有该字段缺失或非正数时，
+    才回退到源 ``price``（通常已是金瓜子）。
     """
-    gold = max(_as_int(price), 0)
-    if gold >= _RMB_TO_GOLD_COIN:
-        return gold
     normalized = _as_float(price_normalized)
     if normalized > 0:
         return int(round(normalized * _RMB_TO_GOLD_COIN))
-    return gold
+    return max(_as_int(price), 0)
 
 
 class LaplaceEventMapper:
@@ -381,9 +384,16 @@ class LaplaceEventMapper:
 
     @staticmethod
     def _blind_gift_id(blind_gift: Optional[Dict[str, Any]]) -> int:
+        """取盲盒配置 ID；非盲盒返回 0。
+
+        LAPLACE 的 ``blindGift`` 对应 B 站 ``SEND_GIFT_V2.BlindGift``：
+        ``blind_gift_config_id`` 是盲盒配置 ID，``original_gift_id`` 是开出的
+        实际礼物 ID。``GiftInfo.blind_gift_id`` 语义是前者，不能用后者顶替。
+        旧键名仅作上游字段变动时的兜底。
+        """
         if not isinstance(blind_gift, dict):
             return 0
-        for key in ("blind_gift_id", "blindGiftId", "gift_id"):
+        for key in ("blind_gift_config_id", "blind_gift_id", "blindGiftId", "gift_id"):
             value = blind_gift.get(key)
             if value:
                 return _as_int(value)
