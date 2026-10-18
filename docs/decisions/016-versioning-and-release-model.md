@@ -21,7 +21,7 @@ v2.0.0 重构以来项目没有任何发布动作：仓库零 git tag，main 停
 - **SemVer**：MAJOR = 架构代际更替或需用户手动干预的不兼容升级；MINOR = 向后兼容的功能发布；PATCH = 修复。tag 统一带 `v` 前缀。
 - **发布 commit 在 v2.0.0 上**：CHANGELOG 条目 + bump pyproject 合为一个 release commit，tag 指向该 commit；main 以 `--ff-only` 快进到该 commit，永不产生自己的提交。tag 与 pyproject 同 commit、同名、同步。
 - **CHANGELOG 是发布产物**：根目录 `CHANGELOG.md`，首次发布时创建，发布时手写。它面向用户，与"文档内不设变更历史"的纪律不冲突——该纪律约束的是代码与架构文档内的变更记录条目。
-- **内部版本机制解耦**：`[meta].version` 与 `SCHEMA_VERSION` 保持各自独立的版本流，不参与发布流程，发布清单不触碰它们；两者与发布版本数字相近纯属观感巧合。
+- **内部版本机制解耦**：`[meta].version` 与 `SCHEMA_VERSION` 保持各自独立的版本流，不参与发布流程，发布清单不触碰它们。配置版本流与发布版本同自 2.0.0 起步（该次重构配置系统同步大改）、此后各自独立递进，数字相近是独立演进的自然结果；迁移钩子的 `target_version` 按各配置文件版本流自身链上界递进取号，与发布版本号无关，两套序列互不换算、互不带动。
 - **WebUI 不设独立版本号**：dashboard 构建产物由后端托管，同仓同发同装，一个交付物一个版本号；前端版本从 `/api/v1/system/status` 取，不自持。`dashboard/package.json` 的 version 无对外语义。
 
 ## 替代方案（Alternatives）
