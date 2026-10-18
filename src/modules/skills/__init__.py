@@ -3,9 +3,9 @@
 能力契约回答"某个能力怎么调"，知识库回答"世界里的事实是什么"，
 Skill 回答"一类目标该怎么做成"——把能力与知识编排成打法。
 
-技能文档内聚在消费方包的 ``skills/`` 目录（``src/**/skills/**/*.md``），
-frontmatter 声明名字、一句话用途、受众 Agent、分类与环境前提。
-消费方把目录注入系统提示词，正文经自有读取工具按需取用。
+玩法技能随能力提供方（MaiCraft）发布，经 MCP 的 ``skill://`` 资源下发；
+宿主自己只保留直播与上报策略。两边在目录里合并，本地技能写在
+``src/**/skills/**/*.md``，远端技能由消费 Agent 从服务器目录登记。
 
 使用示例：
     ```python
@@ -14,7 +14,7 @@ frontmatter 声明名字、一句话用途、受众 Agent、分类与环境前�
     library = get_skill_library()
     entries = library.catalog("minecraft", {"mods": {"create"}})
     prompt_section = render_catalog(entries)
-    body = library.read("create_power_network", "minecraft", {"mods": {"create"}})
+    body = library.read("streaming_policy", "minecraft")
     ```
 """
 
@@ -25,10 +25,11 @@ from src.modules.skills.library import (
     render_catalog,
     reset_skill_library,
 )
-from src.modules.skills.models import Skill, SkillEntry, SkillEnvironment, SkillMetadata
+from src.modules.skills.models import RemoteSkill, Skill, SkillEntry, SkillEnvironment, SkillMetadata
 from src.modules.skills.tool import SKILL_TOOL_NAME, build_skill_spec
 
 __all__ = [
+    "RemoteSkill",
     "SKILLS_DIR_NAME",
     "SKILL_TOOL_NAME",
     "Skill",

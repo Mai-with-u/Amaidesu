@@ -7,6 +7,7 @@ import pytest
 
 from src.modules.agents.factory import SUPPORTED_AGENTS
 from src.modules.skills import (
+    RemoteSkill,
     SkillLibrary,
     build_skill_spec,
     get_skill_library,
@@ -200,6 +201,68 @@ class TestRender:
     def test_render_empty_catalog_is_empty(self) -> None:
         assert render_catalog([]) == ""
 
+    def test_render_marks_remote_origin(self) -> None:
+        library = SkillLibrary()
+        library.replace_remote(
+            "MaiCraft",
+            [RemoteSkill(name="survival-opening", description="生存开局", category="survival",
+                         uri="skill://survival/survival-opening/SKILL.md", agents=("minecraft",))],
+        )
+
+        assert render_catalog(library.catalog("minecraft")).splitlines() == [
+            "- survival",
+            "  - `survival-opening`：生存开局（来自 MaiCraft）",
+        ]
+
+
+class TestRemote:
+    def test_remote_catalog_merges_and_is_visible_only_to_its_agent(self) -> None:
+        library = SkillLibrary()
+        library.replace_remote(
+            "MaiCraft",
+            [
+                RemoteSkill(name="survival-opening", description="生存开局", category="survival",
+                            uri="skill://survival/survival-opening/SKILL.md", agents=("minecraft",)),
+                RemoteSkill(name="create-power-network", description="动力网", category="create",
+                            uri="skill://create/create-power-network/SKILL.md", agents=("minecraft",)),
+            ],
+        )
+
+        entries = library.catalog("minecraft")
+        assert [(entry.name, entry.origin, entry.uri) for entry in entries] == [
+            ("create-power-network", "MaiCraft", "skill://create/create-power-network/SKILL.md"),
+            ("survival-opening", "MaiCraft", "skill://survival/survival-opening/SKILL.md"),
+        ]
+        assert library.catalog("streamer") == []
+        assert library.remote("survival-opening", "minecraft").uri == "skill://survival/survival-opening/SKILL.md"
+        assert library.remote("survival-opening", "streamer") is None
+
+    def test_remote_does_not_shadow_a_local_skill(self, tmp_path: Path) -> None:
+        _write(tmp_path, "a.md", _skill("streaming_policy", category="streaming"))
+        library = _library(tmp_path)
+
+        library.replace_remote(
+            "MaiCraft",
+            [RemoteSkill(name="streaming_policy", description="远端同名", category="streaming",
+                         uri="skill://streaming/streaming_policy/SKILL.md", agents=("minecraft",))],
+        )
+
+        assert library.remote("streaming_policy", "minecraft") is None
+        assert [entry.name for entry in library.catalog("minecraft")] == ["streaming_policy"]
+
+    def test_clear_remote_keeps_local(self, tmp_path: Path) -> None:
+        _write(tmp_path, "a.md", _skill("streaming_policy", category="streaming"))
+        library = _library(tmp_path)
+        library.replace_remote(
+            "MaiCraft",
+            [RemoteSkill(name="survival-opening", description="生存开局", category="survival",
+                         uri="skill://survival/survival-opening/SKILL.md", agents=("minecraft",))],
+        )
+
+        library.clear_remote("MaiCraft")
+
+        assert [entry.name for entry in library.catalog("minecraft")] == ["streaming_policy"]
+
 
 def test_skill_spec_is_declared_per_provider() -> None:
     spec = build_skill_spec("minecraft")
@@ -227,11 +290,11 @@ class TestRepositorySkills:
             agents = skill.metadata.agents
             assert agents == ["*"] or set(agents) <= set(SUPPORTED_AGENTS), f"技能 {name} 的受众拼写有误: {agents}"
 
-    def test_minecraft_mod_skills_hidden_when_mod_absent(self) -> None:
+    def test_repository_keeps_only_the_host_policy(self) -> None:
         library = get_skill_library()
 
-        vanilla = {e.name for e in library.catalog("minecraft", {"mods": set()})}
-        with_mods = {e.name for e in library.catalog("minecraft", {"mods": {"create", "mekanism", "ftbquests"}})}
-
-        assert not any(name.startswith(("create_", "mekanism_")) for name in vanilla)
-        assert vanilla < with_mods
+        assert "streaming_policy" in library.list_skills()
+        assert not any(
+            name.startswith(("survival_", "create_", "mekanism_", "progression_", "building_"))
+            for name in library.list_skills()
+        ), "玩法技能随 Mod 发布，宿主仓库只留直播与上报策略"

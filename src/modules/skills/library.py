@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Optional
 
@@ -20,7 +21,7 @@ from pydantic import ValidationError
 
 from src.modules.logging import get_logger
 
-from .models import Skill, SkillEntry, SkillEnvironment, SkillMetadata
+from .models import RemoteSkill, Skill, SkillEntry, SkillEnvironment, SkillMetadata
 
 # 约定目录名：组件把技能文档放进自己包内的 skills/ 子目录即可被发现
 SKILLS_DIR_NAME = "skills"
@@ -47,6 +48,8 @@ class SkillLibrary:
         self.auto_scan_src = auto_scan_src
         self._extra_roots: list[Path] = []
         self._skills: dict[str, Skill] = {}
+        # 远端技能：服务器目录里的一行。正文不在这里，读取方按 uri 去服务器取。
+        self._remote: dict[str, RemoteSkill] = {}
 
     def register_scan_root(self, path: Path | str) -> None:
         """注册额外扫描根（在 ``load_all`` 之前调用）。"""
@@ -123,6 +126,34 @@ class SkillLibrary:
         """按名取已加载技能（不区分受众与环境，供管理与测试使用）。"""
         return self._skills.get(name)
 
+    # === 远端技能（服务器发布，正文按 uri 另取） ===
+
+    def replace_remote(self, origin: str, skills: Iterable[RemoteSkill]) -> None:
+        """用服务器最新目录替换某个来源的远端技能。
+
+        同名本地技能优先：本地是宿主自己的直播策略，不能被服务器静默顶掉；
+        重复的名字记一条告警，不抛错（服务器换版本不该让宿主起不来）。
+        """
+        self._remote = {name: skill for name, skill in self._remote.items() if skill.origin != origin}
+        for skill in skills:
+            if skill.name in self._skills:
+                self.logger.warning(f"远端技能 {skill.name!r} 与本地同名，保留本地，跳过 {skill.uri}")
+                continue
+            self._remote[skill.name] = skill
+        count = sum(1 for skill in self._remote.values() if skill.origin == origin)
+        self.logger.info(f"已登记 {origin} 的 {count} 项技能")
+
+    def clear_remote(self, origin: str) -> None:
+        """连接断开时撤掉某个来源的远端技能；本地技能不受影响。"""
+        self._remote = {name: skill for name, skill in self._remote.items() if skill.origin != origin}
+
+    def remote(self, name: str, agent: str) -> Optional[RemoteSkill]:
+        """按名找一项服务器技能；不是远端、或不属于这个 Agent 时为 None。"""
+        skill = self._remote.get(name.strip())
+        if skill is None or not skill.visible_to(agent):
+            return None
+        return skill
+
     def catalog(self, agent: str, environment: Optional[SkillEnvironment] = None) -> list[SkillEntry]:
         """某个 Agent 在当前环境下可用的技能目录（按分类、名字排序）。
 
@@ -143,6 +174,18 @@ class SkillLibrary:
                     description=meta.description,
                     category=meta.category,
                     unverified=related if status == "unverified" else {},
+                )
+            )
+        for skill in self._remote.values():
+            if not skill.visible_to(agent):
+                continue
+            entries.append(
+                SkillEntry(
+                    name=skill.name,
+                    description=skill.description,
+                    category=skill.category,
+                    origin=skill.origin,
+                    uri=skill.uri,
                 )
             )
         entries.sort(key=lambda entry: (entry.category, entry.name))
@@ -190,6 +233,8 @@ def render_catalog(entries: list[SkillEntry]) -> str:
         lines.append(f"- {category}")
         for entry in grouped[category]:
             line = f"  - `{entry.name}`：{entry.description}"
+            if entry.origin != "local":
+                line += f"（来自 {entry.origin}）"
             if entry.unverified:
                 pending = "；".join(f"{kind}: {', '.join(items)}" for kind, items in sorted(entry.unverified.items()))
                 line += f"（前提待确认 {pending}）"

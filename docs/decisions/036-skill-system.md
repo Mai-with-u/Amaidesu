@@ -1,6 +1,6 @@
 # ADR-036：Skill 系统——Agent 侧玩法经验文档（目录常驻 + 正文按需 + 环境门控）
 
-- 状态：已采纳（2026-10-06 定案并实现）
+- 状态：已采纳（2026-10-06）；内容归属由 ADR-044 修订（2026-10-18）：玩法技能改随 MaiCraft 发布，本 ADR 的目录、正文按需、受众与环境门控机制继续有效。
 - 日期：2026-10-06
 - 实现提交：`d3e11b39b3777e7f6e16e28bbc1f793b73ba4f68`（feat(skills): 新增技能库基础设施）、`0978b397650cbbacbb36aefc153fd078943edbeb`（feat(minecraft): 新增生存/机械动力/Mek/通关种子技能）、`65cc0311a7e0406de4f8890c06801fbd659f3ed9`（feat(minecraft): 游戏 Agent 接入技能目录与读取；agent.py 部分被并发提交覆盖，由 `ad07f847ee7c221f8236299adce3b3fb09b981bc` fix(minecraft): 恢复并发提交互相覆盖的改动 恢复）；MaiCraft 仓库 `f5ddd008484044545d8659f5e3c27a7c971f1431`（feat(mcp): 新增已装模组清单只读资源 maicraft://environment）
 
