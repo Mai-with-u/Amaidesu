@@ -15,6 +15,7 @@
 - [Skill 编写与接入](guides/skill.md)
 - [依赖注入](guides/dependency-injection.md)
 - [模拟直播间](guides/simulator.md)
+- [LAPLACE Event Bridge 弹幕接入](guides/laplace-bridge.md)
 - [文字冒险 Agent](guides/text-adv-agent.md)
 - [Minecraft Agent](guides/minecraft-agent.md)
 - [发布](guides/release.md)

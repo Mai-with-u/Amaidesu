@@ -177,7 +177,13 @@ def test_instantiating_an_unknown_collector_name_is_a_hard_error(name: str) -> N
 
 def test_registered_names_exclude_retired_ones_and_known_names_instantiate_quietly(loguru_capture) -> None:
     assert "screen" not in SUPPORTED_COLLECTORS
-    assert {"console_input", "bili_danmaku", "bili_danmaku_official", "stt"} <= set(SUPPORTED_COLLECTORS)
+    assert {
+        "console_input",
+        "bili_danmaku",
+        "bili_danmaku_official",
+        "bili_danmaku_laplace",
+        "stt",
+    } <= set(SUPPORTED_COLLECTORS)
 
     assert instantiate_collector("console_input").name == "console_input"
     assert not any(record["level"] == "WARNING" for record in loguru_capture.records)

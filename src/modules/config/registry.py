@@ -46,6 +46,7 @@ EXPECTED_COMPONENTS: tuple[str, ...] = (
     # 通用采集器（配置宿主 collectors.toml；随 Agent 开关的附属采集器不在此列）
     "bili_danmaku",
     "bili_danmaku_official",
+    "bili_danmaku_laplace",
     "console_input",
     "live_frame",
     "stt",
@@ -78,6 +79,9 @@ def _fill_collectors() -> dict[str, type[BaseConfig]]:
     名单在 ``src.modules.agents.companions``。
     """
     from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import BiliDanmakuCollector
+    from src.modules.collectors.bilibili.laplace.bili_danmaku_laplace_collector import (
+        BiliDanmakuLaplaceCollector,
+    )
     from src.modules.collectors.bilibili.official.bili_danmaku_official_collector import (
         BiliDanmakuOfficialCollector,
     )
@@ -88,6 +92,7 @@ def _fill_collectors() -> dict[str, type[BaseConfig]]:
     return {
         "bili_danmaku": BiliDanmakuCollector.ConfigSchema,
         "bili_danmaku_official": BiliDanmakuOfficialCollector.ConfigSchema,
+        "bili_danmaku_laplace": BiliDanmakuLaplaceCollector.ConfigSchema,
         "console_input": ConsoleInputCollector.ConfigSchema,
         "live_frame": LiveFrameCollector.ConfigSchema,
         "stt": STTCollector.ConfigSchema,

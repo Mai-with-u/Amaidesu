@@ -37,7 +37,14 @@ def test_missing_registrations_are_asserted_with_names(monkeypatch) -> None:
 def test_collector_and_agent_tables_are_split_disjoint_and_match_factory() -> None:
     registry.fill_component_schemas()
     collectors, agents = set(registry.COLLECTOR_SCHEMAS), set(registry.AGENT_SCHEMAS)
-    assert collectors == {"bili_danmaku", "bili_danmaku_official", "console_input", "live_frame", "stt"}
+    assert collectors == {
+        "bili_danmaku",
+        "bili_danmaku_official",
+        "bili_danmaku_laplace",
+        "console_input",
+        "live_frame",
+        "stt",
+    }
     assert agents == {"minecraft", "game_2048"}
     assert (
         not collectors & agents and set(registry.COMPONENT_SCHEMAS) == collectors | agents

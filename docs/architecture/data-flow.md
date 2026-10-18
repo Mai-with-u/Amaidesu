@@ -35,6 +35,7 @@ flowchart TB
         C2["BiliDanmakuLegacy"]
         C3["ConsoleInput"]
         C4["STT"]
+        C5["BiliDanmakuLaplace"]
     end
 
     subgraph Interceptors["[事件拦截器] EventBus 分发层 · 全局单点"]
