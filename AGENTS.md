@@ -130,6 +130,7 @@
 - 格式 `type(scope): subject`。type 从封闭集合取值：feat / fix / docs / refactor / perf / test / chore / build / revert
 - scope 与代码顶层模块/目录名一致（小写英文，单复数以目录为准），拿不准就省略；任务性词汇（wiring/cleanup/comments 类，均为本项目真实漂移案例）使 log 检索失真，禁止用作 scope
 - subject 用中文、动词开头、句末不加句号，≤30 字符（约 60 显示宽，保证 `git log --oneline` 不截断）；同批多个意图用 "+" 分列
+- fix 类 subject 必须点名被修复的缺陷，让人不看 diff 即知在救什么，以"修复 X 因 Y 而 Z"形态表述，动作细节留给 body——真实反例"bing 搜索入口默认值换 www 并配存量迁移钩子"（纯动作罗列，看不出修的什么），应为"修复 bing 搜索因 cn 入口落地首页而恒空"；fix 类 body 按"缺陷 → 修复"组织（有取舍再附）
 - body 用中文说明"为什么"与关键取舍，每行 ≤36 个中文字符（72 显示宽）；diff 自明的（措辞/格式/笔误）可省略，行为变化或含取舍的必须写
 - 测试结果仅在有额外信息量时写入提交信息（如个别失败属预期过渡态），常规通过数留在本地
 - revert 手写：`revert(scope): 回滚 <原 subject 摘要>`，body 注明原提交 hash 与回滚原因
