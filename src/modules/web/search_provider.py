@@ -4,11 +4,13 @@ web 分类的被动工具：LLM 需要外部信息时调用，拿到文本结果
 无持续循环、无长连接——每次调用是独立 HTTP 请求，探活沿用基类默认
 语义（"无可检查之物，让流量决定"：失败熔断、冷却期满即恢复）。
 
-- ``web_search(query, max_results)``：关键词搜索。解析搜索引擎结果页
-  HTML（默认 Bing 网页版，免 API key），返回标题+网址+摘要文本列表；
-  ``base_url`` 可指向其他同构搜索引擎入口
-- ``web_fetch_url(url)``：抓取指定网址正文——去除脚本/样式标签后提取
-  纯文本，压缩空白并完整返回，用于阅读搜索结果中的具体页面
+工具层只定义"能力"，具体实现是可插拔的引擎（见 ``engines/`` 子包），
+由配置独立选择、互不捆绑：
+
+- ``web_search(query, max_results)``：关键词搜索，``search_engine``
+  决定结果来源（bing 解析结果页 HTML / deepseek 搜索 API）
+- ``web_fetch_url(url)``：抓取指定网址正文，``fetch_engine`` 决定
+  读取方式（local 本机抓取 / deepseek 抓取 API）
 
 TOML 段位：``[tools.web.search].config``；经 ``tools.bootstrap`` 按
 分类开关装配，ConfigSchema 登记于 ``config/registry.TOOL_PROVIDER_SCHEMAS``。
@@ -16,12 +18,9 @@ TOML 段位：``[tools.web.search].config``；经 ``tools.bootstrap`` 按
 
 from __future__ import annotations
 
-import re
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional
 from urllib.parse import urlparse
 
-import aiohttp
-from bs4 import BeautifulSoup
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
@@ -29,6 +28,7 @@ from src.modules.logging import get_logger
 from src.modules.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
+from src.modules.web.engines import SearchHit, build_fetch_engine, build_search_engine
 
 logger = get_logger("WebSearch")
 
@@ -69,20 +69,14 @@ FETCH_URL_SPEC = ToolSpec(
     provider=PROVIDER_NAME,
 )
 
-# 结果条目（解析中间态：title / url / snippet）
-_Hit = tuple[str, str, str]
-
-# 纯文本化时整体剔除的标签
-_STRIP_TAGS = ("script", "style", "noscript", "header", "footer", "nav")
-
 
 class WebSearchProvider(BaseToolProvider):
     """联网搜索 ToolProvider（web 分类；无状态，无连接生命周期）
 
     实现契约：``invoke`` 永不抛异常，一切失败（网络/解析/参数）都转为
     ``ToolExecutionResult(success=False)``，由注册表熔断器按连续失败计数。
-    HTTP 走 aiohttp 异步请求，不阻塞事件循环；结果页解析为纯函数（见
-    模块级 ``parse_search_results`` / ``html_to_text``），独立可测。
+    两侧引擎在 ``__init__`` 按配置各构造一份；引擎内部的网络与解析失败
+    以异常上抛，由 ``invoke`` 统一转失败结果。
     """
 
     PROVIDER_NAME = "web"
@@ -94,10 +88,27 @@ class WebSearchProvider(BaseToolProvider):
         TOML 段位：[tools.web.search].config
         """
 
+        search_engine: Literal["bing", "deepseek"] = Field(
+            default="bing",
+            title="搜索引擎",
+            description="搜索结果来源：bing（解析网页版结果页，免费）或 deepseek（DeepSeek 搜索 API，结果质量更高，按成功请求计费）",
+        )
+        fetch_engine: Literal["local", "deepseek"] = Field(
+            default="local",
+            title="网页读取方式",
+            description="读取网页正文的方式：local（本机直接抓取，免费）或 deepseek（DeepSeek 抓取 API，按成功请求计费）",
+        )
+        api_key: str = Field(
+            default="",
+            title="DeepSeek API Key",
+            description=(
+                "DeepSeek API 密钥；任一引擎选择 deepseek 时必填（与 DeepSeek 模型 API 为同一密钥），成功请求约 5 元/千次"
+            ),
+        )
         base_url: str = Field(
             default="https://cn.bing.com/search",
             title="搜索入口",
-            description="搜索引擎结果页入口（默认 Bing 网页版，免 API key）",
+            description="bing 引擎的结果页入口（默认 Bing 网页版，免 API key）",
         )
         user_agent: str = Field(
             default=(
@@ -113,7 +124,7 @@ class WebSearchProvider(BaseToolProvider):
             ge=1000,
             le=60000,
             title="请求超时",
-            description="单次搜索请求的等待上限（毫秒）",
+            description="单次请求的等待上限（毫秒）",
             json_schema_extra={"x-ui-advanced": True},
         )
         default_max_results: int = Field(
@@ -127,6 +138,8 @@ class WebSearchProvider(BaseToolProvider):
     def __init__(self, config: Optional["WebSearchProvider.ConfigSchema"] = None) -> None:
         self._config = config or self.ConfigSchema()
         self.name = self.PROVIDER_NAME
+        self._search_engine = build_search_engine(self._config.search_engine, self._config)
+        self._fetch_engine = build_fetch_engine(self._config.fetch_engine, self._config)
 
     def list_tools(self) -> Iterable[ToolSpec]:
         return [SEARCH_SPEC, FETCH_URL_SPEC]
@@ -170,7 +183,7 @@ class WebSearchProvider(BaseToolProvider):
     # ------------------------------------------------------------------
 
     async def _run_search(self, args: Dict[str, Any]) -> str:
-        """关键词搜索：抓结果页 → 解析 → 格式化为文本列表。"""
+        """关键词搜索：所选 search 引擎 → 结果格式化为文本列表。"""
         query = str(args.get("query", "")).strip()
         if not query:
             return "（空查询）"
@@ -180,88 +193,42 @@ class WebSearchProvider(BaseToolProvider):
             max_results = self._config.default_max_results
         max_results = max(1, min(max_results, 10))
 
-        html = await self._http_get(self._config.base_url, params={"q": query})
-        hits = parse_search_results(html, max_results)
+        hits = await self._search_engine.search(query, max_results)
         if not hits:
             return f"（未搜索到与「{query}」相关的结果）"
-        lines: List[str] = []
-        for idx, (title, url, snippet) in enumerate(hits, start=1):
-            lines.append(f"[{idx}] {title}")
-            lines.append(f"    {url}")
-            if snippet:
-                lines.append(f"    {snippet}")
-        return "\n".join(lines)
+        return format_hits(hits)
 
     async def _run_fetch(self, args: Dict[str, Any]) -> str:
-        """抓取网址正文：scheme 校验 → 拉取 → 完整提取正文。"""
+        """抓取网址正文：scheme 校验 → 所选 fetch 引擎提取正文。"""
         url = str(args.get("url", "")).strip()
         scheme = urlparse(url).scheme.lower()
         if scheme not in ("http", "https"):
             raise ValueError(f"仅支持 http/https 网址，得到: {url!r}")
 
-        html = await self._http_get(url)
-        text = html_to_text(html)
+        text = await self._fetch_engine.fetch(url)
         if not text:
             return "（页面无可提取正文，可能需要浏览器渲染）"
         return text
 
-    # ------------------------------------------------------------------
-    # HTTP
-    # ------------------------------------------------------------------
-
-    async def _http_get(self, url: str, params: Optional[Dict[str, str]] = None) -> str:
-        """异步 GET，返回响应文本（非 2xx 抛异常，由 invoke 统一转失败结果）。"""
-        async with aiohttp.ClientSession(
-            headers=self._http_headers(),
-            timeout=aiohttp.ClientTimeout(total=self._config.timeout_ms / 1000),
-        ) as session:
-            async with session.get(url, params=params) as resp:
-                resp.raise_for_status()
-                return await resp.text()
-
-    def _http_headers(self) -> Dict[str, str]:
-        return {
-            "User-Agent": self._config.user_agent,
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        }
-
 
 # ----------------------------------------------------------------------
-# 模块级解析函数（纯函数，独立可测）
+# 结果格式化（引擎无关，独立可测）
 # ----------------------------------------------------------------------
 
 
-def parse_search_results(html: str, limit: int) -> List[_Hit]:
-    """从搜索引擎结果页 HTML 解析结果条目（标题/网址/摘要）。
-
-    选择器面向 Bing 网页版结果结构（``li.b_algo`` 为主条目）；页面改版或
-    命中验证码时解析为空列表，由调用方呈现"无结果"而非报错。
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    hits: List[_Hit] = []
-    for li in soup.select("li.b_algo"):
-        anchor = li.select_one("h2 a")
-        if anchor is None:
-            continue
-        title = anchor.get_text(strip=True)
-        url = str(anchor.get("href") or "").strip()
-        if not title or not url:
-            continue
-        caption = li.select_one(".b_caption p") or li.select_one("p")
-        snippet = caption.get_text(strip=True) if caption is not None else ""
-        hits.append((title, url, snippet))
-        if len(hits) >= limit:
-            break
-    return hits
-
-
-def html_to_text(html: str) -> str:
-    """网页 HTML → 紧凑纯文本：剔除脚本/样式等标签，压缩连续空行。"""
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(_STRIP_TAGS):
-        tag.decompose()
-    text = soup.get_text(separator="\n", strip=True)
-    return re.sub(r"\n{2,}", "\n", text)
+def format_hits(hits: List[SearchHit]) -> str:
+    """结果列表 → 给模型阅读的文本；summary/date 等增值字段有则附加。"""
+    lines: List[str] = []
+    for idx, hit in enumerate(hits, start=1):
+        lines.append(f"[{idx}] {hit.title}")
+        lines.append(f"    {hit.url}")
+        if hit.snippet:
+            lines.append(f"    {hit.snippet}")
+        if hit.summary:
+            lines.append(f"    摘要：{hit.summary}")
+        if hit.date:
+            lines.append(f"    日期：{hit.date}")
+    return "\n".join(lines)
 
 
 # ----------------------------------------------------------------------
@@ -296,8 +263,7 @@ __all__ = [
     "SEARCH_SPEC",
     "FETCH_URL_SPEC",
     "WebSearchProvider",
-    "parse_search_results",
-    "html_to_text",
+    "format_hits",
     "create_web_search_provider",
     "register_web_search_tools",
 ]
