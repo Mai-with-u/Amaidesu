@@ -15,7 +15,7 @@ dependencies = [
     "requests>=2.31.0",
     "packaging>=24.0",
     "urllib3>=2.0.0",
-    "websockets>=10.0",
+    "websockets>=15.0",
     # 日志和配置
     "loguru>=0.7.0",
     # 数据验证
