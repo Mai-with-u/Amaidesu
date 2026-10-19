@@ -46,6 +46,10 @@
           <el-icon><List /></el-icon>
           <span>流程单工作台</span>
         </el-menu-item>
+        <el-menu-item index="/widgets">
+          <el-icon><Grid /></el-icon>
+          <span>小部件</span>
+        </el-menu-item>
 
         <div class="sidebar-divider" />
 
@@ -68,25 +72,6 @@
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
           <span>设置</span>
-        </el-menu-item>
-
-        <div class="sidebar-divider" />
-        <div class="sidebar-pinned-label">小部件</div>
-        <el-menu-item index="/danmaku">
-          <el-icon><ChatLineSquare /></el-icon>
-          <span>弹幕</span>
-        </el-menu-item>
-        <el-menu-item index="/subtitle">
-          <el-icon><ChatDotRound /></el-icon>
-          <span>字幕</span>
-        </el-menu-item>
-        <el-menu-item index="/widget/expression_sheet">
-          <el-icon><Picture /></el-icon>
-          <span>差分</span>
-        </el-menu-item>
-        <el-menu-item index="/game2048">
-          <el-icon><Grid /></el-icon>
-          <span>2048</span>
         </el-menu-item>
       </el-menu>
     </nav>
@@ -116,8 +101,6 @@ import {
   TrendCharts,
   Clock,
   Tickets,
-  ChatLineSquare,
-  ChatDotRound,
   Grid,
   VideoCamera,
   List,
@@ -126,7 +109,6 @@ import {
   User,
   Avatar,
   Memo,
-  Picture,
 } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/stores';
 import ChangelogDialog from './ChangelogDialog.vue';
@@ -222,15 +204,6 @@ onMounted(() => {
   height: 1px;
   margin: var(--spacing-sm) var(--spacing-lg);
   background-color: var(--border-color-light);
-}
-
-.sidebar-pinned-label {
-  padding: 4px var(--spacing-lg) var(--spacing-xs);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-placeholder);
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
 }
 
 .sidebar-footer {
