@@ -275,6 +275,6 @@ describe('useLiveSessions', () => {
     expect(composable.elapsedLabel(ended)).toBeNull();
     // 共享时钟 tick 一次才把 nowTick 推到当前假系统时间（模块级 ref 初值是真实时刻）
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(composable.elapsedLabel(active)).toBe('已播 2 分钟');
+    expect(composable.elapsedLabel(active)).toBe('已播 2:01');
   });
 });

@@ -160,17 +160,17 @@ export function relativeAge(ms: number, now: number = Date.now()): string {
 }
 
 /**
- * 已持续时长（毫秒）→ 人读标签（"40 秒 / 23 分钟 / 1 小时 23 分"）。
+ * 已持续时长（毫秒）→ 秒表式标签（"0:40 / 23:45 / 1:23:45"）。
  * 进行中场次的"已播"标签用；消费方配共享时钟逐秒刷新。
  */
 export function formatElapsedMs(ms: number): string {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
-  if (totalSec < 60) return `${totalSec} 秒`;
+  const sec = totalSec % 60;
   const totalMin = Math.floor(totalSec / 60);
-  if (totalMin < 60) return `${totalMin} 分钟`;
+  const min = totalMin % 60;
   const hours = Math.floor(totalMin / 60);
-  const minutes = totalMin % 60;
-  return minutes === 0 ? `${hours} 小时` : `${hours} 小时 ${minutes} 分`;
+  if (hours === 0) return `${totalMin}:${String(sec).padStart(2, '0')}`;
+  return `${hours}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
 // ==================== 注入截图 ====================
