@@ -66,7 +66,13 @@ from .rundown.rundown_state import RundownState
 from .tools.rundown_tool import RundownControlProvider, build_rundown_tool_provider
 from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
-from .memory import RegularsRosterWriter, SessionRecapWriter, build_memory_tool_provider
+from .memory import (
+    RegularsRosterWriter,
+    SessionRecapWriter,
+    StreamerNotebook,
+    build_memory_tool_provider,
+    build_notebook_tool_provider,
+)
 from .message_buffer import MessageBuffer
 from .planner import Planner
 from .proactive_trigger import ProactiveTrigger
@@ -329,6 +335,11 @@ class StreamerAgent(BaseAgent):
             enabled=wf.enabled,
         )
 
+        # 本场备忘录（进程内会话状态，不入库；收播取快照折叠进回顾后清空）
+        self._notebook = StreamerNotebook(max_chars=config.memory.notebook_max_chars)
+        # 收播时刻的备忘录全文快照：清空备忘录前取走，供回顾生成原料读取
+        self._session_notebook_snapshot: str = ""
+
         # Replyer（表达引擎，Agent 内部件——非工具）
         # 人设四件套从包内配置权威 config.persona 单点构建、构造期注入
         # （behavior_style 不进表达侧——只走 Planner 决策通道）
@@ -344,6 +355,7 @@ class StreamerAgent(BaseAgent):
             prompt_service=prompt_manager,
             tool_registry=tool_registry,
             word_filter=self._word_filter,
+            notebook_text_provider=self._notebook.read,
         )
 
         # 主动发言触发器（纯规则组件，Agent 内部件）
@@ -367,6 +379,7 @@ class StreamerAgent(BaseAgent):
             on_changed=self._on_rundown_changed,
         )
         self._planner.bind_elapsed_live_provider(self._rundown_state.get_elapsed_live_ms)
+        self._planner.bind_notebook_provider(self._notebook.read)
         # 控制执行器：经 ToolRegistry 注册后供 Planner ReAct 循环调用（单实例单状态机）
         self._rundown_tool_provider = RundownControlProvider(self._rundown_state)
 
@@ -406,6 +419,7 @@ class StreamerAgent(BaseAgent):
                 event_repo=event_repo,
                 llm_service=llm_manager,
                 prompt_manager=prompt_manager,
+                notebook_text_provider=lambda: self._session_notebook_snapshot,
                 max_length=memory_cfg.recap_max_length,
             )
         self._roster_writer: Optional[RegularsRosterWriter] = None
@@ -641,6 +655,8 @@ class StreamerAgent(BaseAgent):
           Provider 注册/摘除进出名单（Agent 启动即注册，无需二次开关）。
         - ``memory_recall_session`` / ``memory_recall_viewer``：主播记忆工具
           （provider="memory"，名单 ``["streamer"]``），两张记忆表都注入时才注册。
+        - ``streamer_notebook``：本场备忘录（provider="streamer"，名单 ``["streamer"]``），
+          会话内状态不依赖仓储，随注册无条件注册。
         """
 
         # reply tool（无条件构造——thinking 槽位与注册共用同一实例）
@@ -667,6 +683,13 @@ class StreamerAgent(BaseAgent):
                 visible_to={"rundown_control": ["streamer"]},
             )
             registered = "streamer_reply / rundown_control"
+            # 备忘录工具：随主播 Agent 无条件注册（会话内状态，不依赖任何仓储）
+            self.register_tool_provider(
+                build_notebook_tool_provider(self._notebook),
+                registry=self._tool_registry,
+                visible_to={"streamer_notebook": ["streamer"]},
+            )
+            registered += " / streamer_notebook"
             if self._recap_repo is not None and self._profile_repo is not None:
                 self.register_tool_provider(
                     build_memory_tool_provider(
@@ -824,6 +847,12 @@ class StreamerAgent(BaseAgent):
         self._pending_private_chat.clear()
         self._timeline_notes.clear()
         await self._timeline.reset()
+        # 备忘录生命周期收口：先取全文快照（回顾生成的原料之一，经只读回调递入）
+        # 再清空——备忘录是场次作用域，下一场从空白开始
+        self._session_notebook_snapshot = self._notebook.read()
+        if self._session_notebook_snapshot:
+            self._logger.info(f"本场备忘录已归档待回顾折叠（{len(self._session_notebook_snapshot)} 字），备忘录清空")
+        self._notebook.clear()
         # 收播整理：先写这一场的回顾，再给本场活跃的常客更新印象（两次 LLM 调用，
         # 放后台不阻塞事件回调）。空场次（无任何明细行，行已删）没东西可整理
         if not payload.empty_discarded and (self._recap_writer is not None or self._roster_writer is not None):

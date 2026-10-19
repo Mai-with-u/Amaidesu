@@ -301,6 +301,8 @@ class Planner:
         self._round_tool_receipts: List[Tuple[str, Any]] = []
         # 本窗是否豁免产出侧重复闸（收播道别窗：道别话题常与收尾环节发言字面重合）
         self._round_bypass_topic_gate: bool = False
+        # 本场备忘录全文查询（StreamerAgent 构造期绑定；空串 = 还没写过，段整段省略）
+        self._notebook_text_provider: Optional[Callable[[], str]] = None
 
         self._assembler = PlannerAssembler()
         # 工具刚返回的截图：观察里只留文字，真图挂在下一步请求的尾部让模型看一次
@@ -325,6 +327,10 @@ class Planner:
         """注入直播画面来源与帧龄告警阈值（StreamerAgent 在 live_frame 启用时绑定）。"""
         self._frame_provider = provider
         self._frame_stale_warn_ms = stale_warn_ms
+
+    def bind_notebook_provider(self, provider: Callable[[], str]) -> None:
+        """注入本场备忘录全文查询（StreamerAgent 构造期绑定，同 bind 模式）。"""
+        self._notebook_text_provider = provider
 
     def _live_frame_message(self) -> Optional[Dict[str, Any]]:
         """本决策窗第一次请求尾部挂最新直播画面（每窗必看，静止画面重复看是设计内行为）。
@@ -818,12 +824,21 @@ class Planner:
 
         person_profile_section = await self._collect_person_profiles(batch)
 
+        notebook_text = ""
+        if self._notebook_text_provider is not None:
+            try:
+                notebook_text = self._notebook_text_provider() or ""
+            except Exception as exc:
+                # 备忘录读不到只省段，不挡决策
+                self.logger.warning(f"读取备忘录失败，本轮参考段省略备忘录段: {exc}", exc=True)
+
         try:
             assembler_inputs = AssemblerInputs(
                 session_recap_section=session_recap or "",
                 stage_descriptions=rundown_text or "",
                 environment=env_block,
                 person_profile_section=person_profile_section,
+                notebook_section=notebook_text,
             )
             assembled_text = self._assembler.assemble(assembler_inputs)
         except Exception as e:

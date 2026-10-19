@@ -4,11 +4,13 @@
 下次启动时经 ``backfill_missing`` 补写（只看已结账且无回顾的场次）。
 两条路径共用同一份原料与同一次 LLM 调用，原料全部来自库表，不依赖进程内状态。
 
-原料（全部按场次主键取，各自封顶控制 prompt 体量）：
+原料（全部按场次主键取，各自封顶控制 prompt 体量；备忘录是唯一例外——
+进程内会话状态，收播时由主播 Agent 先取走全文快照再清空，经只读回调递入）：
 - 主播自己说过的话（``live_chat`` 的 assistant 行）——承诺、梗、进展都在嘴里
 - 话题摘要轨迹（``timeline_summary``）——观众这场聊了什么
 - 游戏里程碑（``game_events``）——游戏里做到哪
 - 本场最活跃的观众与付费（``live_chat`` 聚合 + 付费三表）——谁来得多、谁撑场
+- 主播备忘录全文（``streamer_notebook`` 的会话内状态）——已翻篇/已兑现的结论账
 
 产出写 ``session_recaps``；开播注入与 ``memory_recall_session`` 工具都从那张表读。
 """
@@ -17,7 +19,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
@@ -80,14 +82,20 @@ class SessionRecapWriter:
         prompt_manager: PromptManager,
         topic_repo: Any = None,
         event_repo: Any = None,
+        notebook_text_provider: Optional[Callable[[], str]] = None,
         max_length: int = 500,
     ) -> None:
-        """全部仓储与服务由主播 Agent 构造时注入；topic/event 仓储缺失只让原料少一类。"""
+        """全部仓储与服务由主播 Agent 构造时注入；topic/event 仓储缺失只让原料少一类。
+
+        ``notebook_text_provider`` 返回收播时刻的备忘录全文快照（主播 Agent 在
+        清空备忘录前取走）；None 或空串 = 本场没写过备忘录，原料少这一类。
+        """
         self._sessions = sessions_repo
         self._chat = chat_repo
         self._recaps = recap_repo
         self._topics = topic_repo
         self._events = event_repo
+        self._notebook_text_provider = notebook_text_provider
         self._llm = llm_service
         self._prompt_manager = prompt_manager
         self._max_length = max(100, int(max_length))
@@ -195,11 +203,24 @@ class SessionRecapWriter:
         audience = await self._render_audience(live_session_id)
         if audience:
             sections.append("【活跃观众与付费】\n" + audience)
+        notebook = self._render_notebook()
+        if notebook:
+            sections.append("【主播备忘录（本场结束时的工作笔记全文）】\n" + notebook)
         # 只有场次头没有任何内容 = 空场次，不值得写回顾
         if len(sections) <= 1:
             return ""
         text = "\n\n".join(sections)
         return text[:_MATERIAL_MAX_CHARS]
+
+    def _render_notebook(self) -> str:
+        """收播时刻的备忘录全文快照（空/回调缺失 = 本场没写，整段省略）。"""
+        if self._notebook_text_provider is None:
+            return ""
+        try:
+            return (self._notebook_text_provider() or "").strip()
+        except Exception as exc:
+            logger.warning(f"读取备忘录快照失败，回顾原料省略该类: {exc}")
+            return ""
 
     def _render_head(self, session_row: sqlite3.Row) -> str:
         started = int(session_row["started_at_ms"] or 0)

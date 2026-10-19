@@ -20,12 +20,26 @@ from typing import Any, Callable, Optional
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
 
+from .notebook import StreamerNotebook
 from .recap import format_recap
 
-__all__ = ["MEMORY_PROVIDER_NAME", "RECALL_SESSION_SPEC", "RECALL_VIEWER_SPEC", "build_memory_tool_provider"]
+__all__ = [
+    "MEMORY_PROVIDER_NAME",
+    "NOTEBOOK_SPEC",
+    "NOTEBOOK_TOOL_FULL_NAME",
+    "RECALL_SESSION_SPEC",
+    "RECALL_VIEWER_SPEC",
+    "build_memory_tool_provider",
+    "build_notebook_tool_provider",
+]
 
 # 提供者短名（注册全名 = memory_recall_session / memory_recall_viewer）
 MEMORY_PROVIDER_NAME = "memory"
+
+# 备忘录工具的注册形态：provider="streamer"、声明名 notebook → 全名 streamer_notebook
+# （与 streamer_reply 同短名；测试锁定全名防拼写类事故）
+NOTEBOOK_PROVIDER_NAME = "streamer"
+NOTEBOOK_TOOL_FULL_NAME = "streamer_notebook"
 
 # 工具目录分类（工具页按它归组；随主播 Agent 启用，不可单独开关）
 MEMORY_TOOL_CATEGORY = "memory"
@@ -76,6 +90,48 @@ RECALL_VIEWER_SPEC = ToolSpec(
     result_event="",
     provider=MEMORY_PROVIDER_NAME,
 )
+
+
+NOTEBOOK_SPEC = ToolSpec(
+    name="notebook",
+    description=(
+        "本场备忘录（工作笔记，全量读写）：你的跨轮次记忆——滚动上下文每轮被裁剪，"
+        "备忘录不会，且每轮自动注入决策与表达上下文。沉淀结论，不沉淀流水——"
+        "坐标、观察编号、证据清单和操作流水不写进来；过几轮还会需要、而滚动窗口留不住的"
+        "信息才写。无参调用=读回全文；带 content=用新全文覆盖旧全文。收播清空，跨场记忆走场次回顾。"
+    ),
+    parameters_schema={
+        "type": "object",
+        "properties": {
+            "content": {"type": "string", "description": "新的备忘录全文（覆盖写）；缺省 = 只读"},
+        },
+        "required": [],
+    },
+    kind="sync",
+    result_event="",
+    provider=NOTEBOOK_PROVIDER_NAME,
+)
+
+
+def build_notebook_tool_provider(notebook: StreamerNotebook) -> ToolProvider:
+    """组装备忘录工具 Provider（provider="streamer"，全名 ``streamer_notebook``）。
+
+    与 ``streamer_reply`` 共用提供者短名 "streamer"——注册表按派生全名索引，
+    全名唯一即可；备忘录是主播自己的工作笔记，随主播 Agent 一并注册。
+    """
+
+    async def _notebook(invocation: ToolInvocation) -> str:
+        args = invocation.arguments or {}
+        if "content" not in args:
+            text = notebook.read()
+            return text if text else "（备忘录还是空的）"
+        return notebook.set(str(args.get("content", "")))
+
+    return make_provider_from_specs(
+        NOTEBOOK_PROVIDER_NAME,
+        [(NOTEBOOK_SPEC, as_tool_impl(NOTEBOOK_SPEC.full_name, _notebook))],
+        category=MEMORY_TOOL_CATEGORY,
+    )
 
 
 def build_memory_tool_provider(

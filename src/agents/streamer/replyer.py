@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.modules.logging import get_logger
 
@@ -50,6 +50,7 @@ class Replyer:
         prompt_service: Any,
         tool_registry: Optional[Any] = None,
         word_filter: Optional["WordFilter"] = None,
+        notebook_text_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         """初始化 Replyer。
 
@@ -63,6 +64,7 @@ class Replyer:
                     amaidesu_replyer 两个模板，分别承载 system 稳定段与本轮变化段）。
             tool_registry: 工具注册表（仅作占位注入，表达引擎自身不消费工具列表）。
             word_filter: 敏感词过滤器（输出端净化入口；None 表示不净化）。
+            notebook_text_provider: 本场备忘录全文查询（None 或空串 = 无备忘录段）。
         """
         self._config: Dict[str, Any] = config or {}
         # LLM profile 绑定是模块级显式常量（REPLYER_PROFILE），不读配置、无兜底；
@@ -77,6 +79,7 @@ class Replyer:
         self._prompt_service = prompt_service
         self._tool_registry = tool_registry
         self._word_filter = word_filter
+        self._notebook_text_provider = notebook_text_provider
         self.logger = get_logger("Replyer")
 
     async def generate(
@@ -213,6 +216,15 @@ class Replyer:
             else:
                 nickname, separator, body = content.partition(": ")
                 dialogue_lines.append(f"{nickname}说：{body}" if separator else content)
+        # 备忘录段：本场工作笔记全文（空 = 省略段），读失败只省段不挡表达
+        notebook_section = ""
+        if self._notebook_text_provider is not None:
+            try:
+                notebook_text = self._notebook_text_provider() or ""
+                if notebook_text:
+                    notebook_section = f"## 备忘录\n\n{notebook_text}"
+            except Exception as exc:
+                self.logger.warning(f"读取备忘录失败，本轮省略备忘录段: {exc}", exc=True)
         return self._prompt_service.render(
             _REPLYER_TEMPLATE,
             plan=_render_plan_text(plan, target_text=target_text),
@@ -227,6 +239,7 @@ class Replyer:
             game_chat="\n".join(game_chat) if game_chat else "（无）",
             rundown=rundown_render,
             state_facts=state_facts.strip() or "（无）",
+            notebook_section=notebook_section,
         )
 
     # ==================== 敏感词净化（输出端） ====================

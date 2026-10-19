@@ -415,6 +415,15 @@ class StreamerMemoryConfig(BaseConfig):
         le=1000,
         description="单人印象文本长度上限（字符；提示词约束 LLM 篇幅，超出截断）",
     )
+    notebook_max_chars: int = Field(
+        title="备忘录容量上限",
+        default=2000,
+        ge=100,
+        le=20000,
+        description="本场备忘录（工作笔记）的字符上限，超出截断；备忘录每轮全量注入决策与表达两层，"
+        "覆盖写的结论集量级天然小，默认值按注入成本与结论体量折中",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
 
 class StreamerConfig(BaseConfig):

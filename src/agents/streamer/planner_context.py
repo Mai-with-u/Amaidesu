@@ -39,6 +39,7 @@ class AssemblerInputs:
     stage_descriptions: str = ""  # 环节描述
     environment: Optional[EnvironmentBlock] = None
     person_profile_section: str = ""  # 人物画像段（本批发言人里有印象的常客，由观众画像取得）
+    notebook_section: str = ""  # 备忘录段（本场工作笔记全文，模型经 streamer_notebook 主动写）
 
 
 class PlannerAssembler:
@@ -68,6 +69,9 @@ class PlannerAssembler:
 
         if inputs.person_profile_section:
             sections.append(("人物画像-内部参考", inputs.person_profile_section))
+
+        if inputs.notebook_section:
+            sections.append(("备忘录-内部参考", inputs.notebook_section))
 
         return "\n\n".join(f"## {title}\n{body}" for title, body in sections)
 
