@@ -75,15 +75,12 @@
 
 <script setup lang="ts">
 import { Sunny, Moon, SwitchButton } from '@element-plus/icons-vue';
-import { ref, onUnmounted } from 'vue';
-import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
-import { getApiErrorMessage } from '@/utils/apiError';
 import Sidebar from './Sidebar.vue';
 import RestartOverlay from './RestartOverlay.vue';
 import { useThemeStore, useWebSocketStore } from '@/stores';
+import { useAppRestartStore } from '@/stores/appRestart';
 import { storeToRefs } from 'pinia';
-import { configApi, systemApi } from '@/api';
 import { useSystemNotifications } from '@/composables/useSystemNotifications';
 
 const themeStore = useThemeStore();
@@ -93,44 +90,17 @@ const { isConnected } = storeToRefs(wsStore);
 // 系统级事件（core.error / core.startup / core.shutdown）右上角显式通知
 useSystemNotifications();
 
-// ---- 重启 ----
-const restarting = ref(false);
-const overlayVisible = ref(false);
-const overlayStatus = ref<'requesting' | 'restarting' | 'checking' | 'success' | 'failed'>(
-  'requesting',
-);
-const overlayProgress = ref(0);
-const overlayElapsed = ref(0);
-const overlayCheckAttempts = ref(0);
-const overlayMaxAttempts = 60;
-
-let _progressTimer: ReturnType<typeof setInterval> | null = null;
-let _elapsedTimer: ReturnType<typeof setInterval> | null = null;
-let _healthTimer: ReturnType<typeof setInterval> | null = null;
-
-function clearAllTimers() {
-  if (_progressTimer) {
-    clearInterval(_progressTimer);
-    _progressTimer = null;
-  }
-  if (_elapsedTimer) {
-    clearInterval(_elapsedTimer);
-    _elapsedTimer = null;
-  }
-  if (_healthTimer) {
-    clearInterval(_healthTimer);
-    _healthTimer = null;
-  }
-}
-
-function startProgressAnimation() {
-  _progressTimer = setInterval(() => {
-    if (overlayProgress.value < 90) overlayProgress.value += 1;
-  }, 200);
-  _elapsedTimer = setInterval(() => {
-    overlayElapsed.value += 1;
-  }, 1000);
-}
+// ---- 重启（流程与遮罩状态在全局 appRestart store，任何页面可触发） ----
+const appRestart = useAppRestartStore();
+const {
+  restarting,
+  overlayVisible,
+  overlayStatus,
+  overlayProgress,
+  overlayElapsed,
+  overlayCheckAttempts,
+  overlayMaxAttempts,
+} = storeToRefs(appRestart);
 
 async function handleRestart() {
   const ok = await confirmAction(
@@ -142,90 +112,11 @@ async function handleRestart() {
     },
   );
   if (!ok) return;
-
-  restarting.value = true;
-  overlayVisible.value = true;
-  overlayStatus.value = 'requesting';
-  overlayProgress.value = 0;
-  overlayElapsed.value = 0;
-  overlayCheckAttempts.value = 0;
-
-  try {
-    const response = await configApi.restart();
-    if (!response.data.success) {
-      overlayStatus.value = 'failed';
-      ElMessage.error(`重启失败: ${response.data.message}`);
-      return;
-    }
-
-    overlayStatus.value = 'restarting';
-    startProgressAnimation();
-
-    // 等后端退出后开始检查
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    overlayStatus.value = 'checking';
-    let attempts = 0;
-
-    _healthTimer = setInterval(async () => {
-      attempts++;
-      overlayCheckAttempts.value = attempts;
-
-      try {
-        await systemApi.getHealth();
-        // 成功
-        clearAllTimers();
-        overlayProgress.value = 100;
-        overlayStatus.value = 'success';
-        setTimeout(() => {
-          overlayVisible.value = false;
-          restarting.value = false;
-          ElMessage.success('服务重启完成');
-        }, 1200);
-      } catch {
-        if (attempts >= overlayMaxAttempts) {
-          clearAllTimers();
-          overlayStatus.value = 'failed';
-          restarting.value = false;
-        }
-      }
-    }, 2000);
-  } catch (e) {
-    clearAllTimers();
-    overlayStatus.value = 'failed';
-    ElMessage.error(`重启失败: ${getApiErrorMessage(e, '网络错误')}`);
-    restarting.value = false;
-  }
+  void appRestart.beginRestart();
 }
 
 function handleRetry() {
-  // 重试健康检查
-  clearAllTimers();
-  overlayStatus.value = 'checking';
-  overlayCheckAttempts.value = 0;
-  let attempts = 0;
-
-  _healthTimer = setInterval(async () => {
-    attempts++;
-    overlayCheckAttempts.value = attempts;
-    try {
-      await systemApi.getHealth();
-      clearAllTimers();
-      overlayProgress.value = 100;
-      overlayStatus.value = 'success';
-      setTimeout(() => {
-        overlayVisible.value = false;
-        restarting.value = false;
-        ElMessage.success('服务重启完成');
-      }, 1200);
-    } catch {
-      if (attempts >= overlayMaxAttempts) {
-        clearAllTimers();
-        overlayStatus.value = 'failed';
-        restarting.value = false;
-      }
-    }
-  }, 2000);
+  appRestart.retryHealthCheck();
 }
 
 function handleRefreshPage() {
@@ -237,10 +128,6 @@ function onToggleTheme(event: MouseEvent): void {
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
   void themeStore.toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
 }
-
-onUnmounted(() => {
-  clearAllTimers();
-});
 </script>
 
 <style scoped>
