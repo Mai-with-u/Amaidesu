@@ -80,6 +80,12 @@ const layers = ref<ImageLayer[]>([
 watch(currentSrc, src => {
   const hidden = layers.value.find(layer => !layer.visible);
   if (!hidden) return;
+  if (hidden.src === src) {
+    // 表情回到隐藏层已加载过的图（如 中立→笑脸→中立）：src 不变不会触发
+    // load 事件，直接接管可见层，否则卡在旧表情不切换
+    onLayerLoad(hidden);
+    return;
+  }
   hidden.loaded = false;
   hidden.src = src;
 });
