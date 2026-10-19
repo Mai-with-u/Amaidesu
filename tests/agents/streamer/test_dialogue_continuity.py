@@ -172,7 +172,7 @@ async def test_reply_runs_last_and_holds_round_batch() -> None:
         success=True,
         content="",
         tool_calls=[
-            ToolCall(id="c1", name="streamer_reply", arguments={"topic_summary": "切环节"}),
+            ToolCall(id="c1", name="streamer_reply", arguments={"topic_summary": "切环节", "is_novel": True}),
             ToolCall(id="c2", name="rundown_control", arguments={"action": "next"}),
         ],
     )

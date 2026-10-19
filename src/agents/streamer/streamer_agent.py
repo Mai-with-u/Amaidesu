@@ -666,6 +666,8 @@ class StreamerAgent(BaseAgent):
             history_provider=self._read_history_sync,
             rundown_text_provider=self._build_rundown_text_sync,
             event_bus=self._event_bus,
+            gate_window=self.typed_config.speech_gate_window,
+            gate_ratio=self.typed_config.speech_gate_ratio,
         )
         # Planner 的 reply 调用经 registry；绑定 Provider 仅为 thinking 回调槽位
         self._planner.bind_reply_provider(self._reply_provider)

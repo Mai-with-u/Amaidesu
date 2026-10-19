@@ -163,7 +163,7 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
             content="",
             tool_calls=[
                 ToolCall(id="c1", name="glance", arguments={}),
-                ToolCall(id="c2", name="streamer_reply", arguments={"topic_summary": "交付完成"}),
+                ToolCall(id="c2", name="streamer_reply", arguments={"topic_summary": "交付完成", "is_novel": True}),
             ],
         )
     )

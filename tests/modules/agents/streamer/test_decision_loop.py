@@ -32,7 +32,7 @@ def _planner_step(*tool_calls: ToolCall) -> Response:
 
 
 def _reply_call(target: str = "u1", topic: str = "主播好可爱", call_id: str = "call_p1") -> ToolCall:
-    args = {"topic_summary": topic, "reply_guidance": "回应夸奖", "target": target}
+    args = {"topic_summary": topic, "reply_guidance": "回应夸奖", "target": target, "is_novel": True}
     return ToolCall(id=call_id, name="streamer_reply", arguments=args)
 
 

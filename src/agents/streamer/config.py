@@ -5,7 +5,13 @@
 段树结构（TOML 视角）::
 
     [agents.streamer]
-    rundown_id, planner_max_steps, planner_recent_intents_max, planner_recent_relays_max
+    (
+        rundown_id,
+        planner_max_steps,
+        planner_recent_intents_max,
+        planner_recent_relays_max,
+    )
+    speech_gate_window, speech_gate_ratio
 
     [agents.streamer.persona]
     bot_name, personality, style_constraints, behavior_style, audience_salutation
@@ -460,6 +466,22 @@ class StreamerConfig(BaseConfig):
         default_factory=list,
         description="决策前自动调用的只读工具全名（无参数），结果放进参考段的【现场速览】；"
         "省掉“先查一步再开口”的请求。按所接游戏配置，空 = 不调用",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    speech_gate_window: int = Field(
+        title="发言闸比对窗口条数",
+        default=10,
+        ge=0,
+        description="reply 生成台词后，与最近这么多条已说发言做重合度比对（0 = 关闭该检查）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    speech_gate_ratio: float = Field(
+        title="发言闸判重阈值",
+        default=0.5,
+        gt=0.0,
+        le=1.0,
+        description="台词对最近发言的字符重合度达到该值即打回（场次 31 真实发言回放定标："
+        "正常发言上限约 0.42，复读对落在 0.53）",
         json_schema_extra={"x-ui-advanced": True},
     )
 

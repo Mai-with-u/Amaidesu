@@ -1,63 +1,24 @@
-"""话题重复闸：纯函数判重口径、Planner 的 reply 打回路径与闸后沉默兜底"""
+"""发言闸：清洗纯函数、台词级重合度口径、reply 工具的打回路径与每窗重试上限"""
 
 from __future__ import annotations
 
-from typing import Any, List
+from types import SimpleNamespace
+from typing import Any, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner, _Intent
-from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.timeline import GameEventBatch
-from src.agents.streamer.topic_gate import check_topic, rejection_reason, strip_citations
-from src.modules.llm.payload import Response, ToolCall
-from src.modules.time_utils import now_ms
-from src.modules.tools.models import ToolExecutionResult, ToolSpec
-from src.modules.tools.provider import make_provider_from_specs
-from src.modules.tools.registry import ToolRegistry
-
-
-@pytest.mark.parametrize(
-    ("topic", "recent_topics", "recent_speeches", "fresh_texts", "allowed", "duplicate"),
-    [
-        # 换皮复述（同义改写、加语气词）bigram 大面积重合
-        ("我在游戏里挖到了石料", ["石料进展"], ["我在游戏里挖到了石料"], None, False, True),
-        # 同话题但超过一半成分是新的
-        ("石料要拿去修水车了", ["挖石料"], ["我在游戏里挖到了石料"], None, True, False),
-        # 新实体豁免：字面重合，但带进了本窗新语料里才出现的新词
-        ("我在游戏里挖到了附魔书", ["石料进展"], ["我在游戏里挖到了石料"], ["观众：附魔书是什么"], True, True),
-        # 换数字写法不构成新角度
-        ("背包里就剩2.8滴血了，僵尸还在贴脸", ["血量见底"], ["背包里就剩五滴血了，僵尸还在贴脸"], None, False, True),
-        # 新语料里的数字不充当新实体证据：叙事数值刷新不是新角度
-        (
-            "那群苦力怕在远处排队，血就剩五点了",
-            ["怪群围观"],
-            ["那群苦力怕在远处排队"],
-            ["远处那三十五只苦力怕、十六只骷髅都没散"],
-            False,
-            True,
-        ),
-        # 空白/单字话题与无历史语料：无从比对，交由提示词纪律
-        ("   ", ["石料"], ["挖到石料了"], None, True, False),
-        ("好", ["石料"], ["挖到石料了"], None, True, False),
-        ("随便什么话题", [], [], None, True, False),
-    ],
+from src.agents.streamer.tools.reply_tool import ReplyToolProvider
+from src.agents.streamer.topic_gate import (
+    SPEECH_DUPLICATE_RATIO,
+    SPEECH_GATE_WINDOW,
+    speech_overlap_ratio,
+    strip_citations,
 )
-def test_check_topic(topic, recent_topics, recent_speeches, fresh_texts, allowed: bool, duplicate: bool) -> None:
-    kwargs = {"fresh_texts": fresh_texts} if fresh_texts else {}
-    verdict = check_topic(topic, recent_topics=recent_topics, recent_speeches=recent_speeches, **kwargs)
-    assert (verdict.allowed, verdict.duplicate) == (allowed, duplicate)
-    if duplicate and not allowed:
-        assert verdict.overlap_ratio >= 0.5
+from src.modules.tools.models import ToolInvocation, ToolSpec
 
 
-def test_rejection_reason_offers_new_angle_then_silence() -> None:
-    assert "换新角度" in rejection_reason(False)
-    assert "保持沉默" in rejection_reason(True) and "不再调用任何工具" in rejection_reason(True)
-
-
-# 引注剥除与豁免词过滤（出处引注与 ASCII 碎片曾让查重闸全部放行）
+# 清洗与口径（纯函数）
 
 
 def test_strip_citations_removes_paren_notes_and_ascii_tokens() -> None:
@@ -72,94 +33,180 @@ def test_strip_citations_removes_paren_notes_and_ascii_tokens() -> None:
     assert strip_citations("无引注的普通话题") == "无引注的普通话题"
 
 
-def test_citation_loophole_closed() -> None:
-    """出处引注不再充当新词：摘要与旧话题只差引注段时判重拦下，
-    即使本窗语料里真有 reflex_finished 这类 ASCII 标识。"""
-    verdict = check_topic(
-        "刚做出木门（见 reflex_finished），正在装上门",
-        recent_topics=["做出木门（游戏记录），正在装上门"],
-        recent_speeches=["木门做好啦，这就装上"],
-        fresh_texts=["[minecraft·reflex_finished] craft 完成：云杉木门3"],
-    )
-    assert (verdict.allowed, verdict.duplicate) == (False, True)
+def test_speech_overlap_ratio_measures_containment() -> None:
+    """包含率分母是新台词自身：换皮复述接近 1，全新内容接近 0。"""
+    repeat = speech_overlap_ratio("我在游戏里挖到了石料呀", ["我在游戏里挖到了石料"])
+    fresh = speech_overlap_ratio("水车修好开始转动了", ["我在游戏里挖到了石料"])
+    assert repeat > SPEECH_DUPLICATE_RATIO
+    assert fresh < 0.2
 
 
-def test_ascii_fragments_never_count_as_new_words() -> None:
-    """豁免词只认纯 CJK：fresh 语料里的英文标识碎片不构成新角度证据。"""
-    verdict = check_topic(
-        "手头任务仍是回木屋装门、挖出空地放床设重生点（任务进行中，尚未完成）",
-        recent_topics=["当前任务：回木屋装门、挖出空地放床设重生点（游戏记录）"],
-        recent_speeches=["这就回去把门装上、床放好设重生点"],
-        fresh_texts=["craft 提交交互（reflex_started）", "hunt 目标 ACQUIRE"],
-    )
-    assert (verdict.allowed, verdict.duplicate) == (False, True)
+def test_speech_overlap_ratio_normalizes_numbers() -> None:
+    """数值变化不构成新内容：换数字写法仍是高重合。"""
+    ratio = speech_overlap_ratio("血量就剩2.8点了", ["血量就剩五点了"])
+    assert ratio >= SPEECH_DUPLICATE_RATIO
 
 
-def test_replay_repeat_pair_is_blocked() -> None:
-    """真实复读对固化（近邻两轮，"睡觉放床"话题连读）：
-    剥引注后字面大面积重合，本窗游戏事件行不构成豁免新词，判重拦下。"""
-    known_topic = (
-        "游戏内已入夜，主播尝试睡觉但未成功：身边没有能放下床的两格空位（需要空格与结实的地面），"
-        "身体没有硬放，随即结束该动作（见游戏记录）。床在背包里，手上已是石斧。手头任务仍是白天就近采集"
-        "木头、圆石、矿物与食物、天黑前回到落脚处附近收尾，现已天黑。附近怪物密集（苦力怕/骷髅/僵尸），"
-        "河边有鱼和发光鱿鱼，远处有猪鸡牛羊。"
-    )
-    repeat_topic = (
-        "游戏内已入夜，主播尝试睡觉未完成：身边没有能放下床的两格空位（需空格与结实的地面），"
-        "身体没有硬放，该动作已结束（见游戏记录）。床仍在背包里，手上已是石斧。落脚处附近地面散着三件掉落物。"
-        "手头采集任务仍在进行中：白天就近收集木头、圆石、矿物与食物，天黑前回到落脚处附近收尾。"
-        "附近怪物密集（苦力怕/骷髅/僵尸），河边有鱼和发光鱿鱼。"
-    )
-    fresh = [
-        "身体处理完急事：天黑了想去睡，没睡成：睡觉没有完成：身边没有能放床的两格空位（要空格与结实的地面），不硬放",
-    ]
-    verdict = check_topic(
-        repeat_topic,
-        recent_topics=[known_topic],
-        recent_speeches=["夜里这附近实在没地方摆床，我就没硬放了。床还在背包里，先把采集的东西收好，回落脚处再放下。"],
-        fresh_texts=fresh,
-    )
-    assert (verdict.allowed, verdict.duplicate) == (False, True)
-    assert verdict.overlap_ratio >= 0.5
+def test_speech_overlap_ratio_empty_sides_pass() -> None:
+    """任一侧无可比对成分（过短/空白/无历史）返回 0——无从比对即放行。"""
+    assert speech_overlap_ratio("好", ["挖到石料了"]) == 0.0
+    assert speech_overlap_ratio("随便说点什么", []) == 0.0
+    assert speech_overlap_ratio("   ", ["挖到石料了"]) == 0.0
 
 
-# planner 接线：打回 → 再次拒绝 → 沉默兜底；新话题放行
+def test_speech_gate_window_default() -> None:
+    """比对窗口默认最近 10 条（场次 31 回放定标：正常发言与复读在此窗口分层最清晰）。"""
+    assert SPEECH_GATE_WINDOW == 10
 
 
-def _reply_response(topic: str) -> Response:
-    return Response(
-        success=True,
-        content="",
-        tool_calls=[ToolCall(id="c1", name="streamer_reply", arguments={"topic_summary": topic, "reply_guidance": ""})],
-    )
+# reply 工具接线：is_novel 自检打回 → 台词重合度打回 → 每窗重试上限
 
 
-def _silent_response() -> Response:
-    return Response(success=True, content="（沉默）", tool_calls=[])
+def _invocation(arguments: dict[str, Any]) -> ToolInvocation:
+    return ToolInvocation(tool_name="streamer_reply", arguments=arguments, source="planner-react")
 
 
-class _ReplyStub:
-    """可切换成败的 reply Provider 桩（记录收到的 topic）。"""
-
-    def __init__(self) -> None:
-        self.topics: List[str] = []
-
-    async def __call__(self, invocation: Any) -> ToolExecutionResult:
-        self.topics.append(str(invocation.arguments.get("topic_summary") or ""))
-        return ToolExecutionResult(
-            tool_name="streamer_reply",
-            success=True,
-            structured_content={"speech": f"说了：{self.topics[-1]}", "metadata": {}},
+def _history(*speeches: str) -> List[Any]:
+    """对话历史桩：观众/主播行交错，主播行携带台词原文。"""
+    turns: List[Any] = []
+    for i, speech in enumerate(speeches):
+        turns.append(
+            SimpleNamespace(role="user", content=f"观众{i}: 随便聊聊", sender_name="", message_type="", message_id="")
         )
+        turns.append(SimpleNamespace(role="assistant", content=speech, sender_name="", message_type="", message_id=""))
+    return turns
 
 
-def _planner(responses: List[Response]) -> tuple[Planner, MagicMock, _ReplyStub]:
+def _provider(history: Optional[List[Any]] = None) -> ReplyToolProvider:
+    class _Replyer:
+        async def generate(self, **kwargs: Any) -> dict[str, Any]:
+            return {"speech": "台词", "llm_request_id": None}
+
+    return ReplyToolProvider(replyer=_Replyer(), history_provider=(lambda: history) if history else None)
+
+
+async def test_is_novel_false_is_rejected_immediately() -> None:
+    """自评重复（is_novel=false）立即打回，不触达表达侧。"""
+    provider = _provider(_history("我在游戏里挖到了石料"))
+    result = await provider.invoke(
+        _invocation({"topic_summary": "石料", "is_novel": False, "emotion": "neutral", "intensity": 0.5})
+    )
+    assert result.success is False
+    assert result.error_message == "你自评这是重复——要么拿出真内容重新调用，要么本轮别发言"
+
+
+async def test_is_novel_missing_is_rejected() -> None:
+    """未申报（非布尔）同样打回并提示申报义务，防静默绕过。"""
+    provider = _provider()
+    result = await provider.invoke(_invocation({"topic_summary": "话题", "emotion": "neutral", "intensity": 0.5}))
+    assert result.success is False
+    assert "is_novel" in (result.error_message or "")
+
+
+async def test_duplicate_speech_bounces_with_overlap_summary() -> None:
+    """生成后台词与最近发言大面积重合：打回并附重合度概况。"""
+    provider = _provider(_history("我在游戏里挖到了石料"))
+    replyer = provider._replyer
+
+    async def _repeat(**kwargs: Any) -> dict[str, Any]:
+        return {"speech": "我在游戏里挖到了石料呀", "llm_request_id": None}
+
+    replyer.generate = _repeat  # type: ignore[method-assign]
+    result = await provider.invoke(
+        _invocation({"topic_summary": "石料", "is_novel": True, "emotion": "neutral", "intensity": 0.5})
+    )
+    assert result.success is False
+    assert result.error_message is not None and "重合度" in result.error_message
+    assert "真内容" in result.error_message
+    assert provider.gate_bounces == 1
+
+
+async def test_speech_gate_retry_limit_one_per_window() -> None:
+    """每窗重试上限 1 次：第二次重合打回改引导沉默；换窗清零后恢复首次话术。"""
+    provider = _provider(_history("我在游戏里挖到了石料"))
+    replyer = provider._replyer
+
+    async def _repeat(**kwargs: Any) -> dict[str, Any]:
+        return {"speech": "我在游戏里挖到了石料呀", "llm_request_id": None}
+
+    replyer.generate = _repeat  # type: ignore[method-assign]
+    arguments = {"topic_summary": "石料", "is_novel": True, "emotion": "neutral", "intensity": 0.5}
+
+    first = await provider.invoke(_invocation(dict(arguments)))
+    assert first.success is False and "真内容" in (first.error_message or "")
+
+    second = await provider.invoke(_invocation(dict(arguments)))
+    assert second.success is False
+    assert second.error_message is not None and "保持沉默" in second.error_message
+    assert "不再调用任何工具" in second.error_message
+
+    # 新决策窗：Planner 在 plan() 入口清零，重新拿到完整的重试机会
+    provider.reset_speech_gate()
+    third = await provider.invoke(_invocation(dict(arguments)))
+    assert third.success is False and "真内容" in (third.error_message or "")
+
+
+async def test_fresh_speech_passes_and_logs_telemetry() -> None:
+    """新内容台词放行；遥测三字段（申报值/结果/重合度）进既有工具日志。"""
+    provider = _provider(_history("我在游戏里挖到了石料"))
+    with pytest.MonkeyPatch.context() as mp:
+        records: List[str] = []
+        mp.setattr(provider._logger, "info", lambda message, **kw: records.append(str(message)))
+        result = await provider.invoke(
+            _invocation({"topic_summary": "水车", "is_novel": True, "emotion": "neutral", "intensity": 0.5})
+        )
+    assert result.success is True
+    assert provider.gate_bounces == 0
+    assert any("is_novel=true" in r and "结果=pass" in r and "重合度=" in r for r in records)
+
+
+async def test_gate_exempt_window_skips_overlap_check() -> None:
+    """道别窗豁免：字面重合的台词照常放行（闸会系统性误杀道别）。"""
+    provider = _provider(_history("谢谢大家今天的陪伴，我们下次再见"))
+    replyer = provider._replyer
+
+    async def _farewell(**kwargs: Any) -> dict[str, Any]:
+        return {"speech": "谢谢大家今天的陪伴，我们下次再见呀", "llm_request_id": None}
+
+    replyer.generate = _farewell  # type: ignore[method-assign]
+    provider.set_speech_gate_exempt(True)
+    result = await provider.invoke(
+        _invocation({"topic_summary": "道别", "is_novel": True, "emotion": "neutral", "intensity": 0.5})
+    )
+    assert result.success is True
+
+
+async def test_gate_window_config_zero_disables_check() -> None:
+    """窗口配置为 0 即关闭台词重合度检查（自检 false 仍打回）。"""
+    provider = ReplyToolProvider(
+        replyer=_RepeatReplyer(), history_provider=lambda: _history("我在游戏里挖到了石料"), gate_window=0
+    )
+    result = await provider.invoke(
+        _invocation({"topic_summary": "石料", "is_novel": True, "emotion": "neutral", "intensity": 0.5})
+    )
+    assert result.success is True
+
+
+class _RepeatReplyer:
+    """固定复读同一句台词的表达层桩（窗口关闭时应照常放行）。"""
+
+    async def generate(self, **kwargs: Any) -> dict[str, Any]:
+        return {"speech": "我在游戏里挖到了石料呀", "llm_request_id": None}
+
+
+# Planner 接线：每窗入口清零 Provider 打回计数；打回经工具回执喂回，outcome 带打回次数
+
+
+def _planner_with_real_provider(provider: ReplyToolProvider, responses: List[Any]) -> tuple[Any, AsyncMock]:
+    from src.agents.streamer.planner import Planner
+    from src.agents.streamer.room_state import RoomState
+    from src.modules.tools.provider import make_provider_from_specs
+    from src.modules.tools.registry import ToolRegistry
+
     registry = ToolRegistry()
-    reply = _ReplyStub()
-
     spec = ToolSpec(name="reply", description="主播发言出口", kind="sync", provider="streamer")
     registry.register_provider(
-        make_provider_from_specs("streamer", [(spec, reply.__call__)]), visible_to={"streamer_reply": ["streamer"]}
+        make_provider_from_specs("streamer", [(spec, provider.invoke)]), visible_to={"streamer_reply": ["streamer"]}
     )
     llm = MagicMock()
     llm.generate = AsyncMock(side_effect=list(responses))
@@ -172,69 +219,71 @@ def _planner(responses: List[Response]) -> tuple[Planner, MagicMock, _ReplyStub]
         room_state=RoomState(),
         tool_registry=registry,
         context_enabled=False,
+        reply_provider=provider,
     )
-    return planner, llm, reply
+    return planner, llm
 
 
-_REPEAT_TOPIC = "我在游戏里挖到了石料"
+def _reply_call(topic: str) -> Any:
+    from src.modules.llm.payload import Response, ToolCall
 
-
-def _seed_spoken(planner: Planner) -> None:
-    """预置一轮已说出口的话题+台词：闸要有"最近发言"才判得了重。"""
-    planner._recent_intents.append(
-        _Intent(at_ms=now_ms(), topic_summary="石料进展", reply_guidance="", speech=_REPEAT_TOPIC)
+    return Response(
+        success=True,
+        content="",
+        tool_calls=[
+            ToolCall(
+                id="c1",
+                name="streamer_reply",
+                arguments={"topic_summary": topic, "is_novel": True, "emotion": "neutral", "intensity": 0.5},
+            )
+        ],
     )
 
 
-async def test_gate_rejects_repeat_then_silence_fallback() -> None:
-    """重复话题两次被打回后模型选择沉默：自然终止（无产出结束）是合法终态。
+def _silent_call() -> Any:
+    from src.modules.llm.payload import Response
 
-    打回走工具回执（reply_failures 不增——不是 registry 执行失败），
-    二次拒绝话术显式引导本轮沉默。
-    """
-    planner, llm, reply = _planner(
-        [_reply_response(_REPEAT_TOPIC), _reply_response(_REPEAT_TOPIC + "呀"), _silent_response()]
-    )
-    _seed_spoken(planner)
+    return Response(success=True, content="（沉默）", tool_calls=[])
 
-    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(events=("挖到了石料",)))
+
+def _provider_with_fixed_speech(history: Optional[List[Any]] = None) -> ReplyToolProvider:
+    """表达层桩：固定复读同一句（与历史语料字面重合）的 ReplyToolProvider。"""
+    return ReplyToolProvider(replyer=_RepeatReplyer(), history_provider=(lambda: history) if history else None)
+
+
+async def test_planner_passes_duplicate_speech_to_next_window_clean() -> None:
+    """台词重合打回经工具回执喂回：本窗 reply_failures 计数、打回话术进观察，
+    outcome.speech_gate_bounces 读自 Provider 槽位；下一窗计数从零开始。"""
+    provider = _provider_with_fixed_speech(_history("我在游戏里挖到了石料"))
+    planner, llm = _planner_with_real_provider(provider, [_reply_call("石料"), _silent_call()])
+
+    outcome = await planner.plan([], proactive=True)
 
     assert (outcome["replied"], outcome["silent_reason"], outcome["speech"]) == (False, "natural", None)
-    assert (outcome["topic_gate_retries"], outcome["reply_failures"]) == (2, 0)
-    # reply 从未真正执行到表达侧
-    assert reply.topics == []
-    # 打回经工具回执喂回：最后一次请求里两条 tool 回执，先改题机会、后沉默引导
+    assert outcome["reply_failures"] == 1
+    assert outcome["speech_gate_bounces"] == 1
     last_messages = llm.generate.call_args_list[-1].args[0]
     tool_texts = [m["content"] for m in last_messages if m.get("role") == "tool"]
-    assert len(tool_texts) == 2
-    assert "换新角度" in tool_texts[0]
-    assert "保持沉默" in tool_texts[1]
+    assert len(tool_texts) == 1 and "真内容" in tool_texts[0]
+
+    # 下一窗：打回计数已随 plan() 入口清零，重合台词再次拿到完整的首次打回话术
+    llm.generate.side_effect = [_reply_call("石料"), _silent_call()]
+    outcome = await planner.plan([], proactive=True)
+    assert outcome["speech_gate_bounces"] == 1
+    last_messages = llm.generate.call_args_list[-1].args[0]
+    tool_texts = [m["content"] for m in last_messages if m.get("role") == "tool"]
+    assert "真内容" in tool_texts[0]
 
 
-async def test_gate_passes_fresh_topic_and_records_intent() -> None:
-    """新话题正常放行：reply 成功收尾，台词随意图留档供后续窗口比对。"""
-    planner, _llm, reply = _planner([_reply_response("新话题：水车修好了")])
-    _seed_spoken(planner)
+async def test_planner_gate_bounces_accumulate_within_window() -> None:
+    """同窗内第二次重合：Provider 改引导沉默，outcome 计到 2。"""
+    provider = _provider_with_fixed_speech(_history("我在游戏里挖到了石料"))
+    planner, llm = _planner_with_real_provider(provider, [_reply_call("石料"), _reply_call("石料"), _silent_call()])
 
-    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(events=("水车转起来了",)))
+    outcome = await planner.plan([], proactive=True)
 
-    assert outcome["replied"] is True
-    assert outcome["topic_gate_retries"] == 0
-    assert reply.topics == ["新话题：水车修好了"]
-    assert planner._recent_intents[-1].speech == "说了：新话题：水车修好了"
-
-
-async def test_gate_retries_reset_per_plan() -> None:
-    """打回计数是本轮口径：上一窗打回过，下一窗从零计。"""
-    planner, llm, _reply = _planner([_reply_response(_REPEAT_TOPIC), _silent_response()])
-    _seed_spoken(planner)
-
-    # 上一窗：打回一次后收场
-    await planner.plan([], proactive=True, game_batch=GameEventBatch(events=("挖到了石料",)))
-
-    # 下一窗：同样的话题仍能拿到完整的两次打回机会
-    llm.generate.side_effect = [_reply_response(_REPEAT_TOPIC), _silent_response()]
-    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(events=("挖到了石料",)))
-
-    assert outcome["topic_gate_retries"] == 1
     assert outcome["silent_reason"] == "natural"
+    assert outcome["speech_gate_bounces"] == 2
+    last_messages = llm.generate.call_args_list[-1].args[0]
+    tool_texts = [m["content"] for m in last_messages if m.get("role") == "tool"]
+    assert len(tool_texts) == 2 and "保持沉默" in tool_texts[1]

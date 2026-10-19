@@ -108,7 +108,7 @@ async def test_provider_sets_and_clears_thinking_callback():
     result = await provider.invoke(
         ToolInvocation(
             tool_name="streamer_reply",
-            arguments={"topic_summary": "s"},
+            arguments={"topic_summary": "s", "is_novel": True},
             source="planner-react",
         )
     )
@@ -148,7 +148,7 @@ async def test_provider_emit_verdict_failure_does_not_block_invoke():
     result = await provider.invoke(
         ToolInvocation(
             tool_name="streamer_reply",
-            arguments={"topic_summary": "s"},
+            arguments={"topic_summary": "s", "is_novel": True},
             source="planner-react",
         )
     )

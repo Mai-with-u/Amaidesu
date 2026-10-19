@@ -134,7 +134,7 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
         return_value=Response(
             success=True,
             content="",
-            tool_calls=[ToolCall(id="c1", name="streamer_reply", arguments={"topic_summary": "游戏里有人问"})],
+            tool_calls=[ToolCall(id="c1", name="streamer_reply", arguments={"topic_summary": "游戏里有人问", "is_novel": True})],
         )
     )
     prompt = MagicMock()

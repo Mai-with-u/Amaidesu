@@ -46,7 +46,6 @@ from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBloc
 from src.agents.streamer.state_facts import extract_state_facts
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import GameEventBatch
-from src.agents.streamer.topic_gate import check_topic, rejection_reason
 from src.modules.context import TailImages
 from src.modules.agents.control import PROVIDER_NAME as FRAMEWORK_PROVIDER
 from src.modules.logging import get_logger
@@ -98,8 +97,8 @@ class _Delegation:
 class _Intent:
     """一轮已说出口的打算：何时说的、围绕什么话题、给表达侧的指引、说出的台词。
 
-    台词一并保留：重复闸（topic_gate）需要拿"说出口的原话"与新话题做
-    字面重叠检测——指引只是给表达侧的方向，最终落在观众耳朵里的是台词。
+    台词一并保留：发言闸的台词级重合度检查需要拿"说出口的原话"做比对——
+    指引只是给表达侧的方向，最终落在观众耳朵里的是台词。
     """
 
     at_ms: int
@@ -299,7 +298,7 @@ class Planner:
         # 由 state_facts 提取器从这批行与本轮回执生成
         self._round_game_events: List[str] = []
         self._round_tool_receipts: List[Tuple[str, Any]] = []
-        # 本窗是否豁免产出侧重复闸（收播道别窗：道别话题常与收尾环节发言字面重合）
+        # 本窗是否豁免发言闸的台词重合度检查（收播道别窗：道别话题常与收尾环节发言字面重合）
         self._round_bypass_topic_gate: bool = False
         # 本场备忘录全文查询（StreamerAgent 构造期绑定；空串 = 还没写过，段整段省略）
         self._notebook_text_provider: Optional[Callable[[], str]] = None
@@ -477,7 +476,7 @@ class Planner:
             - reply_payload: reply 工具完整结果（发言管线消费）
             - reply_duration_ms: reply 工具调用累计耗时（毫秒；未调用为 0）
             - reply_failures: reply 工具失败次数（成功轮为 0）
-            - topic_gate_retries: 重复闸打回 reply 的次数（本轮内累计）
+            - speech_gate_bounces: 发言闸台词重合度检查打回 reply 的次数（本轮内累计）
         """
         self.last_raw_content = ""
         self.last_request_id = None
@@ -491,8 +490,12 @@ class Planner:
         # 游戏聊天原话（非私聊）随本轮说话交给表达侧；私聊行只进本窗参考段
         fresh_game_chat = list(resolved_batch.fresh_chat)
         private_game_chat = list(resolved_batch.private_chat)
-        # 收播道别窗整窗豁免重复闸（见 _round_bypass_topic_gate 声明处）
+        # 收播道别窗整窗豁免台词重合度检查（见 _round_bypass_topic_gate 声明处）
         self._round_bypass_topic_gate = trigger_reason == "proactive:signoff"
+        # 发言闸打回计数是本窗口径：Provider 槽位跨窗存活，每窗入口清零
+        reset_gate = getattr(self._reply_provider, "reset_speech_gate", None)
+        if reset_gate is not None:
+            reset_gate()
 
         outcome: Dict[str, Any] = {
             "replied": False,
@@ -510,7 +513,7 @@ class Planner:
             "reply_payload": None,
             "reply_duration_ms": 0,
             "reply_failures": 0,
-            "topic_gate_retries": 0,
+            "speech_gate_bounces": 0,
         }
 
         system_prompt = self._render_system_prompt()
@@ -550,10 +553,6 @@ class Planner:
         source_dialogue = [
             message for message in self._build_dialogue_messages(batch, []) if message.get("role") == "user"
         ]
-        # 重复闸的新实体豁免语料：本窗弹幕原话 + 本轮新入账的游戏事件行（含本窗新到的
-        # 游戏聊天与私聊）。批次里的行都是本轮才入账的，旧条目不在其中，不会把旧词豁免成"新"
-        fresh_texts = [str(message.get("content") or "") for message in source_dialogue]
-        fresh_texts.extend(self._round_game_events)
         # 流程单推进、冷场、定时这类主动窗没有观众、运营或游戏聊天的新输入：此时再给手上的游戏活
         # 补充要求，只会把游戏侧自己汇报过的进展或我的猜测转述回去，变成过时或互相矛盾的指令。
         # 游戏聊天只认本批新到的：更早的聊天已在历史里，拿历史判断会让几分钟前的
@@ -653,7 +652,6 @@ class Planner:
                         thinking=thinking,
                         round_id=round_id,
                         game_chat=fresh_game_chat,
-                        fresh_texts=fresh_texts,
                     )
                 else:
                     observation = await self._invoke_registry_tool(
@@ -741,7 +739,7 @@ class Planner:
         signoff_window = trigger_reason == "proactive:signoff"
         lines: List[str] = []
         if forced and not signoff_window:
-            # signoff 的 forced 只是闸门豁免语义（绕过重复闸保住道别），不是
+            # signoff 的 forced 只是闸门豁免语义（绕过台词重合度检查保住道别），不是
             # 付费/点名的强制回应情境，不按 _forced_situation 措辞标注
             lines.append(_forced_situation(batch))
         if signoff_window:
@@ -948,7 +946,6 @@ class Planner:
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
         game_chat: Optional[List[str]] = None,
-        fresh_texts: Optional[List[str]] = None,
     ) -> tuple[str, bool]:
         """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出写进 outcome 并返回 (观察, replied=True)。
 
@@ -956,22 +953,10 @@ class Planner:
         熔断复用既有机制，tool.result 事件照发）。thinking 回调槽位机制保留：
         调用前把 replyer 阶段回调设到 Provider 的临时槽位，调用后立即清理
         （一次性语义，防跨轮残留）——槽位挂在 Provider 实例上，不经注册表。
-        产出侧重复闸：新话题与最近发言字面大面积重合、又没有本窗新词背书时，
-        当工具错误打回（首次给改题机会，再次拒绝并引导本轮沉默）；收播道别窗
-        整窗豁免——道别话题与收尾环节发言字面重合是常态，闸会系统性误杀道别。
+        发言闸（新颖自检 + 台词级重合度检查）在 reply 工具内部执行：打回以
+        工具错误形态回到 ReAct 循环；收播道别窗整窗豁免——道别话题与收尾
+        环节发言字面重合是常态，闸会系统性误杀道别。
         """
-        if not self._round_bypass_topic_gate:
-            verdict = check_topic(
-                str(args.get("topic_summary") or ""),
-                recent_topics=[intent.topic_summary for intent in self._recent_intents],
-                recent_speeches=[intent.speech for intent in self._recent_intents],
-                fresh_texts=fresh_texts or [],
-            )
-            if not verdict.allowed:
-                attempt = int(outcome.get("topic_gate_retries") or 0)
-                outcome["topic_gate_retries"] = attempt + 1
-                self.logger.info(f"重复闸打回 reply（第 {attempt + 1} 次）：{args.get('topic_summary')!r}")
-                return json.dumps({"ok": False, "error": rejection_reason(attempt >= 1)}, ensure_ascii=False), False
         if self._tool_registry is None:
             outcome["reply_failures"] += 1
             return json.dumps(
@@ -981,6 +966,7 @@ class Planner:
         set_batch = getattr(self._reply_provider, "set_round_batch", None)
         set_game_chat = getattr(self._reply_provider, "set_round_game_chat", None)
         set_state_facts = getattr(self._reply_provider, "set_round_state_facts", None)
+        set_gate_exempt = getattr(self._reply_provider, "set_speech_gate_exempt", None)
         invoke_started_ms = now_ms()
         try:
             if set_thinking is not None:
@@ -999,6 +985,9 @@ class Planner:
                         self._round_tool_receipts,
                     )
                 )
+            if set_gate_exempt is not None:
+                # 道别窗豁免台词重合度检查：槽位一次性，调用后清空
+                set_gate_exempt(self._round_bypass_topic_gate)
             result = await self._tool_registry.invoke(
                 ToolInvocation(
                     tool_name="streamer_reply",
@@ -1022,10 +1011,16 @@ class Planner:
                 set_game_chat(None)
             if set_state_facts is not None:
                 set_state_facts(None)
+            if set_gate_exempt is not None:
+                set_gate_exempt(False)
         outcome["reply_duration_ms"] += now_ms() - invoke_started_ms
 
         if not result.success:
             outcome["reply_failures"] += 1
+            # 发言闸打回也是工具失败的一种：计数从 Provider 槽位读出供观测
+            gate_bounces = getattr(self._reply_provider, "gate_bounces", None)
+            if isinstance(gate_bounces, int):
+                outcome["speech_gate_bounces"] = gate_bounces
             return json.dumps({"ok": False, "error": result.error_message or "reply 失败"}, ensure_ascii=False), False
 
         payload = result.structured_content if isinstance(result.structured_content, dict) else {}
