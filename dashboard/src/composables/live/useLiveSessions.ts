@@ -11,9 +11,10 @@ import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useEventsStore } from '@/stores';
+import { useNowTick } from '@/composables/useNowTick';
 import { liveSessionsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
-import { formatDateMD, formatTimeHM } from '@/utils/format';
+import { formatDateMD, formatTimeHM, formatElapsedMs } from '@/utils/format';
 import type { LiveSessionItem } from '@/types';
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -36,6 +37,8 @@ function clockLabel(ms: number): string {
 
 export function useLiveSessions() {
   const { events } = storeToRefs(useEventsStore());
+  // 共享 1s 时钟：驱动进行中场次"已播"标签逐秒刷新
+  const nowTick = useNowTick();
 
   const sessions = ref<LiveSessionItem[]>([]);
   /** 进行中的显式场次主键（来自 API 响应，不受侧边栏筛选影响——筛选只是视图） */
@@ -77,6 +80,12 @@ export function useLiveSessions() {
       return item.is_active;
     }
     return selectedSession.value?.live_session_id === item.live_session_id;
+  }
+
+  /** 进行中场次已播时长标签（随共享时钟逐秒刷新；非进行中场次不显示） */
+  function elapsedLabel(item: LiveSessionItem): string | null {
+    if (!item.is_active) return null;
+    return `已播 ${formatElapsedMs(nowTick.value - item.started_at_ms)}`;
   }
 
   async function loadSessions(): Promise<void> {
@@ -216,6 +225,7 @@ export function useLiveSessions() {
     sessionTitle,
     sourceLabel,
     sessionTimeLabel,
+    elapsedLabel,
     isSelected,
     loadSessions,
     openSession,

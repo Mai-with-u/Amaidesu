@@ -2,7 +2,7 @@
 //
 // 覆盖：列表加载与筛选透传、筛选防抖、模式切换（实时/回看）、选中语义、
 // 生命周期开关（开启/结束/重命名/删除，含默认标题预填与留空回落）、
-// 生命周期事件驱动的侧边栏刷新。
+// 生命周期事件驱动的侧边栏刷新、进行中场次已播标签。
 
 import { effectScope, nextTick, type EffectScope } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
@@ -265,5 +265,16 @@ describe('useLiveSessions', () => {
     });
     const crossLabel = composable.sessionTimeLabel(crossDay);
     expect(crossLabel).toContain(formatDateMD(9_000_000 + 26 * 3_600_000));
+  });
+
+  it('elapsedLabel：进行中场次返回已播标签并随时钟刷新；非进行中场次不显示', async () => {
+    vi.setSystemTime(9_000_000);
+    const composable = mount();
+    const active = sessionItem({ is_active: true, started_at_ms: 8_880_000 });
+    const ended = sessionItem({ is_active: false });
+    expect(composable.elapsedLabel(ended)).toBeNull();
+    // 共享时钟 tick 一次才把 nowTick 推到当前假系统时间（模块级 ref 初值是真实时刻）
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(composable.elapsedLabel(active)).toBe('已播 2 分钟');
   });
 });

@@ -10,6 +10,7 @@ import {
   formatDateTime,
   formatDateTimeCn,
   formatDurationShort,
+  formatElapsedMs,
   formatImageSize,
   formatLatency,
   formatNumber,
@@ -36,6 +37,22 @@ describe('formatDurationShort', () => {
     [172800, '2d 前'],
   ])('%i 秒 → "%s"', (diffSec, expected) => {
     expect(formatDurationShort(diffSec)).toBe(expected);
+  });
+});
+
+describe('formatElapsedMs', () => {
+  it.each([
+    [0, '0 秒'],
+    [40_000, '40 秒'],
+    [59_999, '59 秒'],
+    [60_000, '1 分钟'],
+    [2_560_000, '42 分钟'],
+    [3_599_999, '59 分钟'],
+    [3_600_000, '1 小时'],
+    [5_400_000, '1 小时 30 分'],
+    [-5, '0 秒'],
+  ])('%i 毫秒 → "%s"', (ms, expected) => {
+    expect(formatElapsedMs(ms)).toBe(expected);
   });
 });
 
