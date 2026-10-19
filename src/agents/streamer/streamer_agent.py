@@ -1242,7 +1242,6 @@ class StreamerAgent(BaseAgent):
                     now_ms(),
                     external_pending=False if live_gated else self._external_proactive_pending,
                     rundown_pending=rundown_pending,
-                    rundown_ready=False if live_gated else self._is_rundown_active(),
                     rundown_overdue=False if live_gated else self._is_rundown_overdue(),
                     game_pending=game_pending,
                     # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
@@ -1252,7 +1251,7 @@ class StreamerAgent(BaseAgent):
                 # 环节切换信号在确认消费后才清零：should_trigger 里总开关关闭 /
                 # reminder 抢先返回时不会走到 rundown_pending 分支，信号保留，
                 # 重新满足条件后开场白还能补说（pending 分支优先级高于
-                # overdue/ready，返回 "rundown" 且 rundown_pending=True 时
+                # overdue，返回 "rundown" 且 rundown_pending=True 时
                 # 必然源自本信号）。game_pending 同形态问题按任务范围界定暂不处理。
                 if rundown_pending and reason == "rundown":
                     self._rundown_proactive_pending = False
@@ -1362,15 +1361,6 @@ class StreamerAgent(BaseAgent):
     # ==================================================================
     # 流程单（Rundown）运行时
     # ==================================================================
-
-    def _is_rundown_active(self) -> bool:
-        """判定流程单是否在供能（供 ProactiveTrigger rundown_ready）。
-
-        done 仍供能：流程单内容排完不是停止内容推进的理由——Agent 按既定
-        节奏被唤醒，凭情境（完成文案 + 弹幕）进入自由互动。paused 不供能
-        （导演明确叫停）。
-        """
-        return self._rundown_state.status in ("running", "done")
 
     def _is_rundown_overdue(self) -> bool:
         """当前环节停留是否已超预期（供 ProactiveTrigger rundown_overdue 闹钟）。"""

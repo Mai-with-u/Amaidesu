@@ -68,13 +68,14 @@ def test_external_is_highest_priority_but_obeys_interval_and_topic(config, speec
     )  # 优先于冷场
 
 
-@pytest.mark.parametrize(
-    ("now_ms", "expected"),
-    [(10_005_000, "rundown"), (10_001_000, None)],  # 独立间隔 3 秒：到点触发，太近不触发
-)
-def test_rundown_ready_has_its_own_interval(now_ms: int, expected) -> None:
-    trigger = _trigger(rundown_speech_interval_ms=3_000)
-    assert trigger.should_trigger(_Room(last_speech_ms=10_000_000), now_ms=now_ms, rundown_ready=True) == expected
+def test_overdue_alarm_defaults_to_five_minute_cooldown() -> None:
+    """默认冷却 5 分钟：60 秒时不重复提醒，到 5 分钟才再响。"""
+    trigger = _trigger()
+    room = _Room(last_speech_ms=None)
+    assert trigger.should_trigger(room, now_ms=10_000_000, rundown_overdue=True) == "rundown"
+    assert trigger.should_trigger(room, now_ms=10_060_000, rundown_overdue=True) is None
+    assert trigger.should_trigger(room, now_ms=10_299_999, rundown_overdue=True) is None
+    assert trigger.should_trigger(room, now_ms=10_300_000, rundown_overdue=True) == "rundown"
 
 
 def test_overdue_alarm_has_double_cooldown_and_speech_debounce() -> None:

@@ -325,30 +325,3 @@ async def test_replyer_failures_count_without_touching_planner_failures(rig_fact
     stats = rig.agent.get_statistics()
     assert (stats["replyer_failures"], stats["planner_failures"]) == (2, 0)
     assert (stats["total_replies"], stats["total_no_action"]) == (0, 2)
-
-
-async def test_rundown_active_covers_done_but_not_paused() -> None:
-    """_is_rundown_active：done 继续给 rundown_ready 供能（完成不是断供理由），paused 不供能。"""
-    from src.modules.storage.models.rundown import Rundown, RundownSegment
-
-    agent = make_streamer_agent(tool_registry=ToolRegistry())
-    state = agent._rundown_state
-    state.load(
-        Rundown(
-            rundown_id="rd_active",
-            title="供能测试",
-            segments=[RundownSegment(id="a", title="A", task_description="x", expected_ms=600_000)],
-        )
-    )
-    # armed（已装载未开播）不供能：rundown_ready 只认已起算的场
-    assert (state.status, agent._is_rundown_active()) == ("armed", False)
-
-    state.begin(by="system")
-    assert (state.status, agent._is_rundown_active()) == ("running", True)
-
-    state.pause(by="human")
-    assert (state.status, agent._is_rundown_active()) == ("paused", False)
-
-    state.resume(by="human")
-    state.next(by="human")
-    assert (state.status, agent._is_rundown_active()) == ("done", True)
