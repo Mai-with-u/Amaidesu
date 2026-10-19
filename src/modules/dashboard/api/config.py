@@ -36,8 +36,10 @@ from src.modules.dashboard.schemas.config import (
     ConfigUpdateResponse,
     SchemaGroupsResponse,
 )
+from src.modules.dashboard.services.component_runtime import ComponentRuntimeContext
 from src.modules.dashboard.services.config_adapter import (
     _SCOPES,
+    ConfigApplyOutcome,
     _build_frontend_groups,
     _mask_sensitive_values,
     _resolve_scope,
@@ -59,6 +61,28 @@ _bg_tasks: set = set()
 
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
+
+
+def _save_message(outcome: ConfigApplyOutcome) -> str:
+    """把编排结果翻译为保存回执文案，区分三种形态：
+
+    - 已生效：agents / collectors 域变更的组件已按新配置重建（含跳过与失败明细）；
+    - 需重启进程：涉及 agents / collectors / infra 之外的域；
+    - 纯 hot 段：即时生效（现状语义不变）。
+    """
+    if outcome.requires_restart:
+        return "配置已保存到文件，需重启服务后完全生效"
+    report = outcome.hot_apply
+    if report is None or not report.attempted:
+        return "配置已保存，hot 段已即时生效"
+    parts: list[str] = []
+    if report.restarted:
+        parts.append("已生效（重启组件：" + "、".join(report.restarted) + "）")
+    if report.skipped:
+        parts.append("未运行组件将在下次启动生效：" + "、".join(report.skipped))
+    if report.failures:
+        parts.append("组件重启失败：" + "；".join(f"{name}（{reason}）" for name, reason in report.failures))
+    return "配置已保存，" + "，".join(parts)
 
 
 @router.get("", response_model=ConfigResponse)
@@ -133,17 +157,15 @@ async def update_config(request: ConfigUpdateRequest, server: ServerDep) -> Conf
         config_service,
         get_config_dir(server),
         [(request.key, request.value)],
+        hot_context=ComponentRuntimeContext.from_server(server),
     )
     if not outcome.success:
         raise HTTPException(status_code=422, detail=outcome.message)
 
     logger.info(f"配置已更新: {request.key} (写入 {outcome.target_file})")
-    message = (
-        "配置已保存，hot 段已即时生效" if not outcome.requires_restart else "配置已保存到文件，需重启服务后完全生效"
-    )
     return ConfigUpdateResponse(
         success=True,
-        message=message,
+        message=_save_message(outcome),
         requires_restart=outcome.requires_restart,
         target_file=outcome.target_file,
     )
@@ -174,6 +196,7 @@ async def batch_update_config(
         config_service,
         get_config_dir(server),
         [(change.key, change.value) for change in request.changes],
+        hot_context=ComponentRuntimeContext.from_server(server),
     )
     if not outcome.success:
         if outcome.errors:
@@ -188,7 +211,7 @@ async def batch_update_config(
     logger.info(f"批量配置更新成功: 共 {len(outcome.applied)} 项")
     return BatchConfigUpdateResponse(
         success=True,
-        message="配置已保存" + ("，hot 段已即时生效" if not outcome.requires_restart else "，需重启服务后完全生效"),
+        message=_save_message(outcome),
         requires_restart=outcome.requires_restart,
         results=[BatchChangeResult(key=key, success=True) for key, _ in outcome.applied],
     )

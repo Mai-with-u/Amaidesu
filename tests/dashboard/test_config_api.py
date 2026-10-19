@@ -182,3 +182,12 @@ def test_schema_is_self_described_per_root(client) -> None:
     # meta.version 的 readonly 标记透传（与写接口拒绝共用信号）
     version = next(f for f in _leaf_fields(groups["agents"]["fields"]) if f["key"] == "agents.meta.version")
     assert version["readonly"] is True
+
+
+def test_patch_agents_domain_hot_applies_and_reports(client) -> None:
+    """agents 域保存即回执"已热应用"：无管理器时组件未运行 → requires_restart=False + 跳过明细。"""
+    resp = _patch(client, "agents.agents.streamer.persona.bot_name", "热应用名")
+    body = resp.json()
+    assert resp.status_code == 200 and body["success"] is True
+    assert body["requires_restart"] is False
+    assert "未运行组件将在下次启动生效" in body["message"] and "streamer" in body["message"]

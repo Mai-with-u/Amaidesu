@@ -17,8 +17,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.modules.agents.companions import owner_of, start_companions, stop_companions
-from src.modules.collectors.factory import SUPPORTED_COLLECTORS
+from src.modules.agents.companions import owner_of
 from src.modules.config.errors import ConfigValidationError
 from src.modules.config.multi_file_loader import update_config_values
 from src.modules.dashboard.dependencies import get_dashboard_server
@@ -27,6 +26,12 @@ from src.modules.dashboard.schemas.component import (
     ComponentControlRequest,
     ComponentControlResponse,
     ComponentListResponse,
+)
+from src.modules.dashboard.services.component_runtime import (
+    ComponentRuntimeContext,
+    read_sub_config,
+    start_instance,
+    stop_instance,
 )
 from src.modules.dashboard.utils.component_helper import (
     build_config_view,
@@ -152,117 +157,38 @@ async def control_component(
 
 
 async def _try_dynamic_start(server: "DashboardServer", group: str, name: str) -> ComponentControlResponse | None:
-    """尝试动态启动组件（实例化+注册+start）。返回 None 表示不可动态启动。"""
-    sub_cfg = _read_sub_config(server, group, name)
+    """尝试动态启动组件（实例化+注册+start）。返回 None 表示不可动态启动。
 
-    if group == "collectors":
-        manager = server.collector_manager
-        if manager is None:
-            return None
-        # 用户输入拦截放 API 边界：factory 对未知名直接 raise（程序缺陷语义），
-        # 表外名在这里以 4xx 语义响应而不是穿透到装配层
-        if name not in SUPPORTED_COLLECTORS:
-            return ComponentControlResponse(
-                success=False,
-                message=f"未知采集器名 '{name}'（合法名单：{list(SUPPORTED_COLLECTORS)}）",
-            )
-        if manager.get_collector_by_name(name) is not None:
-            ok = await manager.start_collector(name)
-            return ComponentControlResponse(
-                success=ok, message=f"组件 {name} 已启动" if ok else f"组件 {name} 启动失败"
-            )
-        ok = await manager.enable_collector(name, sub_cfg, event_bus=getattr(server, "event_bus", None))
-        if ok:
-            _sync_enabled_config(server, group, name, enable=True)
-            return ComponentControlResponse(success=True, message=f"组件 {name} 已启动并加入启用配置")
-        return ComponentControlResponse(success=False, message=f"组件 {name} 启动失败（已尝试动态启用）")
-
-    if group == "agents":
-        manager = server.agent_manager
-        if manager is None:
-            return None
-        if manager.get_agent_by_name(name) is not None:
-            ok = await manager.start_agent(name)
-            if ok:
-                await _start_agent_companions(server, name, sub_cfg)
-            return ComponentControlResponse(
-                success=ok, message=f"Agent {name} 已启动" if ok else f"Agent {name} 启动失败"
-            )
-        ok = await manager.enable_agent(
-            name,
-            sub_cfg,
-            llm_manager=getattr(server, "llm_manager", None),
-            prompt_manager=getattr(server, "prompt_manager", None),
-            event_bus=getattr(server, "event_bus", None),
-        )
-        if ok:
-            _sync_enabled_config(server, group, name, enable=True)
-            await _start_agent_companions(server, name, sub_cfg)
-            return ComponentControlResponse(success=True, message=f"Agent {name} 已启动并加入启用配置")
-        return ComponentControlResponse(success=False, message=f"Agent {name} 启动失败（已尝试动态启用）")
-
-    return None  # 未知 group 或无实例语义：由调用方回退配置写回
+    实际管理器操作复用服务层 ``component_runtime``（与配置保存热应用同一份
+    逻辑）；本函数只补按钮路径特有的语义：新实例化时同步 enabled 配置、
+    响应措辞。未知采集器名的拦截已内聚在服务层启动路径。
+    """
+    ctx = ComponentRuntimeContext.from_server(server)
+    sub_cfg = read_sub_config(server.config_service, config_dir(server), group, name)
+    result = await start_instance(ctx, group, name, sub_cfg)
+    if result is None:
+        return None  # 无管理器：由调用方回退配置写回
+    label = "Agent" if group == "agents" else "组件"
+    if not result.success:
+        return ComponentControlResponse(success=False, message=f"{label} {name} 启动失败：{result.detail}")
+    if result.created:
+        _sync_enabled_config(server, group, name, enable=True)
+        return ComponentControlResponse(success=True, message=f"{label} {name} 已启动并加入启用配置")
+    return ComponentControlResponse(success=True, message=f"{label} {name} 已启动")
 
 
 async def _try_dynamic_stop(server: "DashboardServer", group: str, name: str) -> ComponentControlResponse | None:
-    """尝试动态停止组件（stop+unregister+配置移除）。返回 None 表示无实例可停。"""
-    if group == "collectors":
-        manager = server.collector_manager
-        if manager is None or manager.get_collector_by_name(name) is None:
-            return None
-        ok = await manager.disable_collector(name)
-        if ok:
-            _sync_enabled_config(server, group, name, enable=False)
-            return ComponentControlResponse(success=True, message=f"组件 {name} 已停止并从启用配置移除")
-        return ComponentControlResponse(success=False, message=f"组件 {name} 停止失败")
+    """尝试动态停止组件（stop+unregister+配置移除）。返回 None 表示无实例可停。
 
-    if group == "agents":
-        manager = server.agent_manager
-        if manager is None or manager.get_agent_by_name(name) is None:
-            return None
-        ok = await manager.disable_agent(name)
-        if ok:
-            _sync_enabled_config(server, group, name, enable=False)
-            await _stop_agent_companions(server, name)
-            return ComponentControlResponse(success=True, message=f"Agent {name} 已停止并从启用配置移除")
-        return ComponentControlResponse(success=False, message=f"Agent {name} 停止失败")
-
-    return None
-
-
-async def _start_agent_companions(server: "DashboardServer", agent_name: str, agent_config: dict) -> None:
-    """Agent 启用后把它的附属采集器一并装上并启动（没有采集器管理器时随下次重启装配）。"""
-    manager = server.collector_manager
-    if manager is None:
-        return
-    started = await start_companions(manager, agent_name, agent_config, getattr(server, "event_bus", None))
-    if started:
-        logger.info(f"Agent {agent_name} 的附属采集器已随之启动：{started}")
-
-
-async def _stop_agent_companions(server: "DashboardServer", agent_name: str) -> None:
-    """Agent 停用后把它的附属采集器一并停掉移除。"""
-    manager = server.collector_manager
-    if manager is None:
-        return
-    stopped = await stop_companions(manager, agent_name)
-    if stopped:
-        logger.info(f"Agent {agent_name} 的附属采集器已随之停止：{stopped}")
-
-
-def _read_sub_config(server: "DashboardServer", group: str, name: str) -> dict:
-    """读取组件的子段配置 dict（无则空 dict）。
-
-    - collectors → collectors.toml 顶层同名段（``[<name>]``）
-    - agents → agents.toml ``[agents.<name>]``
+    管理器操作复用服务层 ``component_runtime``；按钮停用路径连带停 Agent 的
+    附属采集器（服务层默认行为）。
     """
-    if group == "collectors":
-        doc = read_toml_dict(config_dir(server) / "collectors.toml")
-        section = doc.get(name)
-        return dict(section) if isinstance(section, dict) else {}
-    if group == "agents":
-        main_config = server.config_service.main_config if server.config_service else {}
-        agents_section = main_config.get("agents") if isinstance(main_config, dict) else {}
-        section = (agents_section or {}).get(name) if isinstance(agents_section, dict) else None
-        return dict(section) if isinstance(section, dict) else {}
-    return {}
+    ctx = ComponentRuntimeContext.from_server(server)
+    ok = await stop_instance(ctx, group, name)
+    if ok is None:
+        return None
+    label = "Agent" if group == "agents" else "组件"
+    if ok:
+        _sync_enabled_config(server, group, name, enable=False)
+        return ComponentControlResponse(success=True, message=f"{label} {name} 已停止并从启用配置移除")
+    return ComponentControlResponse(success=False, message=f"{label} {name} 停止失败")

@@ -23,6 +23,11 @@ from src.modules.config.multi_file_loader import (
 from src.modules.config.registry import COMPONENT_SCHEMAS, TOOL_PROVIDER_DOMAINS, TOOL_PROVIDER_SCHEMAS
 from src.modules.config.schema_generator import ConfigSchemaGenerator, collect_all_fields
 from src.modules.config.tools_schemas import ToolsConfig
+from src.modules.dashboard.services.component_runtime import (
+    ComponentRuntimeContext,
+    HotApplyReport,
+    hot_apply_components,
+)
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -32,6 +37,10 @@ logger = get_logger("ConfigAdapter")
 
 # 七文件 scope 清单（= 文件名去后缀；顺序即 Schema 分组展示顺序）
 _SCOPES = ("agents", "collectors", "tools", "avatar", "model", "storage", "infra")
+
+# 保存后可进程内即时生效的 scope：infra 走 ConfigService 热重载；
+# agents / collectors 走组件重建热应用（其余域改动仍需重启进程）
+_HOT_SCOPES = ("agents", "collectors", "infra")
 
 # GET 响应中敏感字段的占位文案：明文不下发，回写同值会被拒绝
 _SENSITIVE_PLACEHOLDER = "已设置"
@@ -609,6 +618,8 @@ class ConfigApplyOutcome:
     # last-wins 去重后的实际写入条目（key, value），供响应逐条回执
     applied: list[tuple[str, Any]] = dataclasses.field(default_factory=list)
     errors: list[Tuple[str, str]] = dataclasses.field(default_factory=list)
+    # agents / collectors 域变更的组件重建热应用回执（未注入热应用上下文时为 None）
+    hot_apply: Optional[HotApplyReport] = None
 
 
 async def _apply_and_reload(
@@ -616,18 +627,23 @@ async def _apply_and_reload(
     config_dir: Path,
     updates_by_file: dict[str, dict[str, Any]],
     keys: list[str],
-) -> tuple[bool, bool, Optional[str]]:
-    """按文件分组走统一管线写盘，随后对触碰的 scope 尝试重载。
+    hot_context: Optional[ComponentRuntimeContext] = None,
+) -> tuple[bool, bool, Optional[str], Optional[HotApplyReport]]:
+    """按文件分组走统一管线写盘，随后对触碰的 scope 尝试重载与热应用。
+
+    agents / collectors 域变更在 ``hot_context`` 注入时对运行中的受影响组件
+    执行"停 → 按新配置重新实例化 → 启动"（保存即生效）；其余域维持
+    "需重启进程"语义。组件重建失败不影响配置已写盘的事实，逐条记入回执。
 
     Returns:
-        (success, requires_restart, error_message)
+        (success, requires_restart, error_message, hot_apply_report)
     """
     # 事务前置：全部文件先校验，任一失败即整批拒绝（磁盘零写入）
     try:
         for file_name, updates in updates_by_file.items():
             validate_config_updates(config_dir, file_name, updates)
     except ConfigValidationError as e:
-        return False, False, str(e)
+        return False, False, str(e), None
 
     for file_name, updates in updates_by_file.items():
         try:
@@ -635,12 +651,15 @@ async def _apply_and_reload(
         except ConfigValidationError as e:
             # 前置校验已通过，此处失败属并发修改窗口；忠实上报
             logger.error(f"写入配置文件失败: {file_name}: {e}")
-            return False, False, f"写入配置文件失败: {e}"
+            return False, False, f"写入配置文件失败: {e}", None
 
     scopes = [_resolve_scope(k) for k in keys]
     reloaded = await config_service.reload_config(changed_scopes=scopes)
-    hot_applied = bool(reloaded) and all(s == "infra" for s in scopes)
-    return True, not hot_applied, None
+    hot_report = None
+    if hot_context is not None and any(s in ("agents", "collectors") for s in scopes):
+        hot_report = await hot_apply_components(hot_context, config_service, config_dir, keys)
+    hot_applied = bool(reloaded) and all(s in _HOT_SCOPES for s in scopes)
+    return True, not hot_applied, None, hot_report
 
 
 def _array_item_identity(item: Any) -> Optional[str]:
@@ -735,11 +754,13 @@ async def apply_config_updates(
     config_service: "ConfigService",
     config_dir: Path,
     changes: Sequence[Tuple[str, Any]],
+    hot_context: Optional[ComponentRuntimeContext] = None,
 ) -> ConfigApplyOutcome:
     """配置写路径统一业务入口（单条与批量共用，重复 key 按 last-wins 去重）。
 
     编排顺序：逐条前置校验 → 按 scope 分组到目标 TOML 文件 → 统一管线写盘 →
-    触碰 scope 热重载。任一前置校验失败即整体拒绝，磁盘零写入。
+    触碰 scope 热重载 →（注入 ``hot_context`` 时）agents / collectors 域变更
+    的组件重建热应用。任一前置校验失败即整体拒绝，磁盘零写入。
     """
     if not changes:
         return ConfigApplyOutcome(success=False, message="没有可保存的更改")
@@ -773,11 +794,15 @@ async def apply_config_updates(
         updates_by_file.setdefault(root_cls.__file_name__, {})[path_in_file] = value
 
     target_file = next(iter(updates_by_file)) if len(updates_by_file) == 1 else None
-    success, requires_restart, error = await _apply_and_reload(
-        config_service, config_dir, updates_by_file, [k for k, _ in normalized]
+    success, requires_restart, error, hot_report = await _apply_and_reload(
+        config_service, config_dir, updates_by_file, [k for k, _ in normalized], hot_context=hot_context
     )
     if not success:
         return ConfigApplyOutcome(success=False, message=error or "写入失败")
     return ConfigApplyOutcome(
-        success=True, requires_restart=requires_restart, target_file=target_file, applied=normalized
+        success=True,
+        requires_restart=requires_restart,
+        target_file=target_file,
+        applied=normalized,
+        hot_apply=hot_report,
     )
