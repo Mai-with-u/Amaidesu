@@ -84,7 +84,7 @@ def _gift_event(**overrides: Any) -> Dict[str, Any]:
         giftAmount=2,
         giftId=31036,
         giftName="小星星",
-        blindGift={"blind_gift_config_id": 32251, "original_gift_id": 31036},
+        blindGift=None,
     )
     event.update(overrides)
     return event
@@ -205,7 +205,7 @@ def test_gift_payload() -> None:
     assert gift.name == "小星星"
     assert gift.count == 2
     assert gift.gift_id == 31036
-    assert gift.blind_gift_id == 32251
+    assert gift.blind_gift_id == 0
     assert gift.unit_price == 500
     assert gift.total_price == 1000
     assert gift.paid_price == 1000
@@ -226,6 +226,14 @@ def test_gift_silver_and_unknown_currency() -> None:
     unknown = mapper.to_payload(_gift_event(id="evt-gift-2", coinType="mystery"))
     assert unknown is not None and unknown.gift is not None
     assert unknown.gift.currency == ""
+
+
+def test_gift_blind_gift_config_id() -> None:
+    payload = LaplaceEventMapper().to_payload(
+        _gift_event(blindGift={"blind_gift_config_id": 32251, "original_gift_id": 31036})
+    )
+    assert payload is not None and payload.gift is not None
+    assert payload.gift.blind_gift_id == 32251
 
 
 def test_gift_blind_gift_legacy_fallback() -> None:
