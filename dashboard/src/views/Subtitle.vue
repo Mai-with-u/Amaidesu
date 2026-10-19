@@ -78,7 +78,7 @@ const textStyle = computed(() => ({
   lineHeight: '1.4',
 }));
 
-const { status } = useRawWebSocket('/ws/subtitle', {
+const { status } = useRawWebSocket('/ws/widget/subtitle', {
   onMessage: event => {
     try {
       const data: SubtitleData = JSON.parse(event.data);

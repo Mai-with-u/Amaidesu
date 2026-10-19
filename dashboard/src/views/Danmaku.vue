@@ -80,12 +80,12 @@ function getDisplayText(msg: DanmakuMessage): string {
   }
 }
 
-// /ws/danmaku 专用协议（与主 WS 事件流无关）：
+// /ws/widget/danmaku 专用协议（与主 WS 事件流无关）：
 // - 实时推送：{ type: "new_message", message: {...} }
 // - 连接握手：{ type: "history", messages: [...] }（最近 15 条）
 // - 连接握手：{ type: "style", font_size }（配置的弹幕字号，随历史之后下发）
 // 模拟消息（simulated=true）不在弹幕小部件展示
-const { status } = useRawWebSocket('/ws/danmaku', {
+const { status } = useRawWebSocket('/ws/widget/danmaku', {
   onMessage: event => {
     try {
       const data = JSON.parse(event.data);

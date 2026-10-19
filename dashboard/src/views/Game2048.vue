@@ -320,9 +320,9 @@ function applyFrame(state: Game2048State) {
   lastMoves = state.moves;
 }
 
-// /ws/game2048 专用协议（与主 WS 事件流无关）：
+// /ws/widget/game2048 专用协议（与主 WS 事件流无关）：
 // 接入即推单槽最新快照，后续每步落子增量推送：{ type: "state", state: {...} }
-const { status } = useRawWebSocket('/ws/game2048', {
+const { status } = useRawWebSocket('/ws/widget/game2048', {
   onMessage: event => {
     try {
       const data = JSON.parse(event.data);

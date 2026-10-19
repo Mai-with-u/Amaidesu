@@ -866,6 +866,29 @@ def _widen_recent_intents_window(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "widen_recent_intents_window", "2.0.47", _widen_recent_intents_window)
 
 
+def _upgrade_widget_drop_html_page(data: Dict[str, Any]) -> List[str]:
+    """infra.toml v2.0.43：删三个小部件段的 ``enable_html_page`` 键。
+
+    旧版后端直出透明页（/widget、/widget/2048）整体退役，嵌入页统一为
+    前端 SPA 的 /widget/<name> 路由，该开关失去消费者。对已迁移数据零
+    变更（幂等）。
+    """
+    dashboard = data.get("dashboard")
+    if not isinstance(dashboard, dict):
+        return []
+    changed: List[str] = []
+    for section in ("danmaku_widget", "subtitle_widget", "game2048_widget"):
+        widget = dashboard.get(section)
+        if isinstance(widget, dict) and "enable_html_page" in widget:
+            del widget["enable_html_page"]
+            changed.append(f"dashboard.{section}.enable_html_page")
+    return changed
+
+
+# 生产钩子登记：infra.toml v2.0.43（小部件段 enable_html_page 删键，旧透明页退役）
+register_file_hook("infra.toml", "widget_drop_html_page", "2.0.43", _upgrade_widget_drop_html_page)
+
+
 __all__ = [
     "FileUpgradeHook",
     "CrossFileHook",

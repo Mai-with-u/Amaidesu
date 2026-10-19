@@ -468,7 +468,6 @@ class DashboardServer:
 
         subtitle_config = SubtitleWidgetConfig(
             enabled=subtitle_widget_config.enabled,
-            enable_html_page=subtitle_widget_config.enable_html_page,
             max_messages=subtitle_widget_config.max_messages,
             auto_hide_after_ms=subtitle_widget_config.auto_hide_after_ms,
             font_size=subtitle_widget_config.font_size,
@@ -479,11 +478,9 @@ class DashboardServer:
         )
 
         danmaku_enabled = bool(danmaku_widget_config and danmaku_widget_config.enabled)
-        danmaku_html_page = False
         if danmaku_enabled:
             widget_config = DanmakuWidgetConfig(
                 enabled=danmaku_widget_config.enabled,
-                enable_html_page=danmaku_widget_config.enable_html_page,
                 font_size=danmaku_widget_config.font_size,
                 max_messages=danmaku_widget_config.max_messages,
                 show_danmaku=danmaku_widget_config.show_danmaku,
@@ -494,7 +491,6 @@ class DashboardServer:
                 show_reply=danmaku_widget_config.show_reply,
                 min_importance=danmaku_widget_config.min_importance,
             )
-            danmaku_html_page = widget_config.enable_html_page
 
             widget_service = DanmakuWidgetService(
                 event_bus=self.event_bus,
@@ -511,7 +507,6 @@ class DashboardServer:
             self.logger.info("弹幕小部件服务已禁用")
 
         game2048_enabled = bool(game2048_widget_config and game2048_widget_config.enabled)
-        game2048_html_page = bool(game2048_enabled and game2048_widget_config.enable_html_page)
         if game2048_enabled:
             game_service = Game2048WidgetService(event_bus=self.event_bus)
             self.widget_gateway.game2048_service = game_service
@@ -521,13 +516,5 @@ class DashboardServer:
             self.logger.info("2048 棋盘小部件服务已启动")
 
         if danmaku_enabled or game2048_enabled:
-            self.app.include_router(
-                create_widget_router(
-                    self.widget_gateway,
-                    include_page=danmaku_html_page,
-                    include_game2048_page=game2048_html_page,
-                )
-            )
-            self.logger.info(
-                "widget 族路由已注册: /widget, /widget/2048, /ws/danmaku, /ws/subtitle, /ws/widget, /ws/game2048"
-            )
+            self.app.include_router(create_widget_router(self.widget_gateway))
+            self.logger.info("widget 族路由已注册: /ws/widget/danmaku, /ws/widget/subtitle, /ws/widget/game2048")
