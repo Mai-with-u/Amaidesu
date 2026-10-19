@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { useWidgetCatalog } from './useWidgetCatalog';
+import { buildWidgetUrl, useWidgetCatalog } from './useWidgetCatalog';
 
 describe('useWidgetCatalog', () => {
   const { widgets } = useWidgetCatalog();
@@ -23,5 +23,14 @@ describe('useWidgetCatalog', () => {
       expect(widget.description.trim()).not.toBe('');
       expect(widget.recommendedSize.trim()).not.toBe('');
     }
+  });
+
+  it('嵌入态网址不含查询参数，预览态追加 preview=1', () => {
+    expect(buildWidgetUrl('http://localhost:60315', '/widget/danmaku')).toBe(
+      'http://localhost:60315/widget/danmaku',
+    );
+    expect(buildWidgetUrl('http://localhost:60315', '/widget/danmaku', { preview: true })).toBe(
+      'http://localhost:60315/widget/danmaku?preview=1',
+    );
   });
 });

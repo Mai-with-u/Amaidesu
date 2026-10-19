@@ -51,3 +51,16 @@ const WIDGET_CATALOG: readonly WidgetMeta[] = [
 export function useWidgetCatalog(): { widgets: readonly WidgetMeta[] } {
   return { widgets: WIDGET_CATALOG };
 }
+
+/** 嵌入页预览态的查询参数名：带参=从管理页打开的预览，允许显示占位与提示 */
+export const PREVIEW_QUERY = 'preview';
+
+/**
+ * 拼嵌入页完整网址。嵌入态（复制进直播软件）不带查询参数，页面保持极简；
+ * 预览态（管理页打开）带 preview=1，允许占位文字等不上屏的提示显示。
+ */
+export function buildWidgetUrl(origin: string, path: string, options?: { preview?: boolean }): string {
+  const url = new URL(path, origin);
+  if (options?.preview) url.searchParams.set(PREVIEW_QUERY, '1');
+  return url.toString();
+}

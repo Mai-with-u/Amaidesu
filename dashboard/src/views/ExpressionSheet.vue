@@ -7,30 +7,38 @@
       alt="主播差分立绘"
       @error="onImageError"
     />
-    <div v-else class="sheet-placeholder">
+    <div v-else-if="isPreview" class="sheet-placeholder">
       <span>表情差分形象未配置</span>
-      <span class="placeholder-hint">请在 avatar.toml [avatar.platform.expression_sheet] 配置 image_dir</span>
+      <span class="placeholder-hint">在设置页 avatar 域配置素材目录后显示</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 
 import { NEUTRAL_EMOTION, useExpressionSheetWidget } from '@/composables/useExpressionSheetWidget';
 import { useWebSocketStore } from '@/stores/websocket';
 
 /**
- * 表情差分小部件页（给 OBS 浏览器源嵌的全屏展示页，形态参照 Subtitle.vue）。
+ * 表情差分嵌入页（给 OBS/直播姬浏览器源嵌的全屏透明页，形态参照 Subtitle.vue）。
  *
  * 纯展示页：只跟随 streamer.speech 事件切换差分图，不渲染任何控制台 UI。
  * 展示回退链：对应情绪差分图 404 → neutral 差分图；neutral 也 404 →
  * "未配置"占位。差分图由后端 GET /api/v1/avatar/expression_sheet/assets/<文件名>
  * 服务（emotion 文件名 = 情绪枚举值 + .png）。
  *
+ * 两态语义：嵌入态（直播软件里的裸网址）任何提示都不上屏——未配置时就是
+ * 纯透明；预览态（管理页打开，带 ?preview=1）才显示占位文字供排查。
+ *
  * 事件消费边界（v1 范围）：LLM 直调 expression_sheet_set_expression 工具的
  * 场景不经 streamer.speech 事件流，不反射到本页。
  */
+
+const route = useRoute();
+/** 预览态（管理页"打开"按钮带 ?preview=1）才允许占位提示渲染 */
+const isPreview = computed(() => route.query.preview === '1');
 
 // WS 复用共享事件流连接（useWebSocketStore → api/websocket，重连循环收敛在共享客户端内）
 const wsStore = useWebSocketStore();
