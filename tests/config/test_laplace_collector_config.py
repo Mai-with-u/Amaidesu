@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -12,14 +13,14 @@ from src.modules.config.service import ConfigService
 from tests.config.helpers import tail_version
 
 
-def _seed_collectors(config_dir, *, enabled: str, extra: str = "") -> None:
+def _seed_collectors(config_dir: Path, *, enabled: str, extra: str = "") -> None:
     (config_dir / "collectors.toml").write_text(
         "\n".join(
             [
                 f"enabled = [{enabled}]",
                 "",
                 "[meta]",
-                'version = "2.0.40"',
+                f'version = "{tail_version("collectors.toml")}"',
                 "",
                 "[bili_danmaku_laplace]",
                 'url = "ws://127.0.0.1:9696"',
@@ -30,7 +31,7 @@ def _seed_collectors(config_dir, *, enabled: str, extra: str = "") -> None:
     )
 
 
-def test_laplace_section_defaults_and_write_back(tmp_path) -> None:
+def test_laplace_section_defaults_and_write_back(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     generate_default_configs(config_dir)
@@ -57,7 +58,7 @@ def test_laplace_section_defaults_and_write_back(tmp_path) -> None:
     assert written["bili_danmaku_laplace"]["url"] == "ws://127.0.0.1:9696"
 
 
-def test_laplace_unknown_key_in_registered_section_is_hard_error(tmp_path) -> None:
+def test_laplace_unknown_key_in_registered_section_is_hard_error(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     generate_default_configs(config_dir)
@@ -73,7 +74,7 @@ def test_laplace_unknown_key_in_registered_section_is_hard_error(tmp_path) -> No
     assert "unknown_key" in str(exc_info.value.__cause__)
 
 
-def test_laplace_unknown_enabled_name_is_hard_error(tmp_path) -> None:
+def test_laplace_unknown_enabled_name_is_hard_error(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     generate_default_configs(config_dir)
