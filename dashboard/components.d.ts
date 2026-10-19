@@ -85,6 +85,7 @@ declare module 'vue' {
     SubFieldGroup: typeof import('./src/components/settings/SubFieldGroup.vue')['default']
     TrendChart: typeof import('./src/components/llm/TrendChart.vue')['default']
     VisionCapturePanel: typeof import('./src/components/vision/VisionCapturePanel.vue')['default']
+    WidgetStatusBadge: typeof import('./src/components/widget/WidgetStatusBadge.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']
