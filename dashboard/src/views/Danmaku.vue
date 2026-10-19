@@ -2,18 +2,27 @@
   <div class="danmaku-container">
     <div ref="messagesRef" class="messages">
       <TransitionGroup name="message">
-        <div v-for="msg in messages" :key="msg.id" class="message" :class="msg.message_type">
+        <div
+          v-for="msg in messages"
+          :key="msg.id"
+          class="message"
+          :class="msg.message_type"
+          :style="{ fontSize: `${fontSize}px` }"
+        >
           <span class="username">{{ msg.user_name }}</span>
           <span class="content">{{ getDisplayText(msg) }}</span>
         </div>
       </TransitionGroup>
     </div>
+    <WidgetStatusBadge :status="status" />
   </div>
 </template>
 
 <script setup lang="tsx">
 import { ref, nextTick } from 'vue';
+
 import { useRawWebSocket } from '@/composables/useRawWebSocket';
+import WidgetStatusBadge from '@/components/widget/WidgetStatusBadge.vue';
 
 interface DanmakuMessage {
   id: string;
@@ -32,6 +41,8 @@ interface DanmakuMessage {
 const messages = ref<DanmakuMessage[]>([]);
 const messagesRef = ref<HTMLElement | null>(null);
 const maxMessages = 15;
+/** 弹幕字号（像素）；连接握手时随 style 消息以配置值覆盖 */
+const fontSize = ref<number>(16);
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substring(2);
@@ -72,8 +83,9 @@ function getDisplayText(msg: DanmakuMessage): string {
 // /ws/danmaku 专用协议（与主 WS 事件流无关）：
 // - 实时推送：{ type: "new_message", message: {...} }
 // - 连接握手：{ type: "history", messages: [...] }（最近 15 条）
+// - 连接握手：{ type: "style", font_size }（配置的弹幕字号，随历史之后下发）
 // 模拟消息（simulated=true）不在弹幕小部件展示
-useRawWebSocket('/ws/danmaku', {
+const { status } = useRawWebSocket('/ws/danmaku', {
   onMessage: event => {
     try {
       const data = JSON.parse(event.data);
@@ -86,6 +98,10 @@ useRawWebSocket('/ws/danmaku', {
         messages.value = (data.messages as DanmakuMessage[])
           .filter(m => m.simulated !== true)
           .map(m => ({ ...m, id: generateId() }));
+      } else if (data.type === 'style') {
+        if (typeof data.font_size === 'number') {
+          fontSize.value = data.font_size;
+        }
       }
     } catch (e) {
       console.error('解析消息失败:', e);

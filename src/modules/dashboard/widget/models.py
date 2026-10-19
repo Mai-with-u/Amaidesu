@@ -123,6 +123,7 @@ class DanmakuWidgetConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="是否启用弹幕小部件")
     enable_html_page: bool = Field(default=False, description="是否启用后端 HTML 页面（若为 false，则使用 Vue 页面）")
+    font_size: int = Field(default=16, ge=10, le=72, description="弹幕字号（像素），连接握手时随 style 消息下发")
     max_messages: int = Field(default=30, ge=5, le=100, description="最大消息数量")
     show_danmaku: bool = Field(default=True, description="显示普通弹幕")
     show_gift: bool = Field(default=True, description="显示礼物")

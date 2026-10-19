@@ -3,30 +3,61 @@
     <div v-if="subtitle" class="subtitle-area" :style="areaStyle">
       <span class="subtitle-text" :style="textStyle">{{ subtitle }}</span>
     </div>
+    <WidgetStatusBadge :status="status" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onScopeDispose } from 'vue';
+
 import { useRawWebSocket } from '@/composables/useRawWebSocket';
+import WidgetStatusBadge from '@/components/widget/WidgetStatusBadge.vue';
+
+/**
+ * 字幕嵌入页（供 OBS/直播姬浏览器源捕获的全屏透明页）。
+ *
+ * 样式与位置由后端随每条字幕下发（字号/颜色/背景/边框/位置，来源是
+ * infra [dashboard] 的字幕小部件配置）；duration_ms > 0 时按该时长
+ * 自动隐藏，新字幕即重置计时，duration_ms == 0 是清空信号不计时。
+ * 隐藏计时是一次性短定时器，随每条字幕重置、随页面卸载（onScopeDispose）
+ * 清理；断线提示复用 WidgetStatusBadge（预览态醒目、嵌入态淡化）。
+ */
 
 interface SubtitleData {
   type: string;
   text: string;
+  duration_ms?: number;
   font_size?: number;
   font_color?: string;
   background_color?: string;
   border_color?: string;
+  position?: string;
 }
+
+type SubtitlePosition = 'top' | 'bottom' | 'center';
 
 const subtitle = ref<string>('');
 const fontSize = ref<number>(32);
 const fontColor = ref<string>('#ffffff');
 const backgroundColor = ref<string>('rgba(0,0,0,0.45)');
 const borderColor = ref<string>('#ff8800');
+const position = ref<SubtitlePosition>('bottom');
+
+let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearHideTimer(): void {
+  if (hideTimer !== null) {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+  }
+}
+
+onScopeDispose(clearHideTimer);
 
 const containerStyle = computed(() => ({
-  paddingBottom: '30px',
+  alignItems: position.value === 'top' ? 'flex-start' : position.value === 'center' ? 'center' : 'flex-end',
+  paddingBottom: position.value === 'bottom' ? '30px' : '0',
+  paddingTop: position.value === 'top' ? '30px' : '0',
 }));
 
 const areaStyle = computed(() => ({
@@ -47,7 +78,7 @@ const textStyle = computed(() => ({
   lineHeight: '1.4',
 }));
 
-useRawWebSocket('/ws/subtitle', {
+const { status } = useRawWebSocket('/ws/subtitle', {
   onMessage: event => {
     try {
       const data: SubtitleData = JSON.parse(event.data);
@@ -57,6 +88,16 @@ useRawWebSocket('/ws/subtitle', {
         if (data.font_color) fontColor.value = data.font_color;
         if (data.background_color) backgroundColor.value = data.background_color;
         if (data.border_color) borderColor.value = data.border_color;
+        if (data.position === 'top' || data.position === 'bottom' || data.position === 'center') {
+          position.value = data.position;
+        }
+        clearHideTimer();
+        // duration_ms > 0 自动隐藏；== 0 是清空信号（后端约定），不计时
+        if (subtitle.value && data.duration_ms && data.duration_ms > 0) {
+          hideTimer = setTimeout(() => {
+            subtitle.value = '';
+          }, data.duration_ms);
+        }
       }
     } catch (e) {
       console.error('解析消息失败:', e);

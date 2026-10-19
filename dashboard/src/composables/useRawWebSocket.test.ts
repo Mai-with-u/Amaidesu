@@ -1,19 +1,20 @@
 // useRawWebSocket.ts 小部件页裸 WebSocket 组合式的测试
 //
 // 覆盖：消息送达（onMessage 收原始 MessageEvent）、异常关闭后 3 秒重连、
-// 作用域销毁后不再重连（disposed 守卫 + 清理重连定时器）。
-// node 环境运行：用假 WebSocket 类 + 假 window 替换全局。
+// 作用域销毁后不再重连（disposed 守卫 + 清理重连定时器）、status 随连接
+// 生命周期流转。node 环境运行：用假 WebSocket 类 + 假 window 替换全局。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { effectScope, type EffectScope } from 'vue';
+import { effectScope, type EffectScope, type Ref } from 'vue';
 
-import { useRawWebSocket } from '@/composables/useRawWebSocket';
+import { useRawWebSocket, type WidgetSocketStatus } from '@/composables/useRawWebSocket';
 
 /** 可手动驱动回调的假 WebSocket */
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   url: string;
+  onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -27,6 +28,11 @@ class FakeWebSocket {
   close(): void {
     this.closed = true;
     this.onclose?.();
+  }
+
+  /** 测试侧模拟连接建立 */
+  emitOpen(): void {
+    this.onopen?.();
   }
 
   /** 测试侧模拟服务端推送 */
@@ -118,5 +124,26 @@ describe('useRawWebSocket', () => {
     scope2.stop();
     vi.advanceTimersByTime(10_000);
     expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it('status 随连接生命周期流转：connecting → connected → disconnected → 重连 connecting', () => {
+    let status: Ref<WidgetSocketStatus> | undefined;
+    const scope = effectScope();
+    scope.run(() => {
+      status = useRawWebSocket('/ws/danmaku', { onMessage: () => {} }).status;
+    });
+
+    expect(status!.value).toBe('connecting');
+    FakeWebSocket.instances[0]!.emitOpen();
+    expect(status!.value).toBe('connected');
+
+    FakeWebSocket.instances[0]!.emitClose();
+    expect(status!.value).toBe('disconnected');
+
+    vi.advanceTimersByTime(3000);
+    expect(status!.value).toBe('connecting');
+    FakeWebSocket.instances[1]!.emitOpen();
+    expect(status!.value).toBe('connected');
+    scope.stop();
   });
 });

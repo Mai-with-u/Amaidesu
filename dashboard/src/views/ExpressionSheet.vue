@@ -1,12 +1,17 @@
 <template>
   <div class="sheet-container">
-    <img
-      v-if="displayState !== 'unconfigured'"
-      class="sheet-image"
-      :src="currentSrc"
-      alt="主播差分立绘"
-      @error="onImageError"
-    />
+    <div v-if="displayState !== 'unconfigured'" class="sheet-stage">
+      <img
+        v-for="layer in layers"
+        :key="layer.id"
+        class="sheet-image"
+        :class="{ visible: layer.visible }"
+        :src="layer.src"
+        alt="主播差分立绘"
+        @load="onLayerLoad(layer)"
+        @error="onImageError"
+      />
+    </div>
     <div v-else-if="isPreview" class="sheet-placeholder">
       <span>表情差分形象未配置</span>
       <span class="placeholder-hint">在设置页 avatar 域配置素材目录后显示</span>
@@ -31,6 +36,7 @@ import { useWebSocketStore } from '@/stores/websocket';
  *
  * 两态语义：嵌入态（直播软件里的裸网址）任何提示都不上屏——未配置时就是
  * 纯透明；预览态（管理页打开，带 ?preview=1）才显示占位文字供排查。
+ * 展示层用双图交叉淡入（新图加载完成才切换可见层），换图不闪白。
  *
  * 事件消费边界（v1 范围）：LLM 直调 expression_sheet_set_expression 工具的
  * 场景不经 streamer.speech 事件流，不反射到本页。
@@ -56,6 +62,36 @@ const assetUrl = (name: string): string => `/api/v1/avatar/expression_sheet/asse
 const currentSrc = computed(() =>
   displayState.value === 'fallback' ? assetUrl(NEUTRAL_EMOTION) : assetUrl(emotion.value),
 );
+
+/** 双层图交叉淡入：新图加载完成后才切换可见层，换图不再闪白 */
+interface ImageLayer {
+  id: number;
+  src: string;
+  visible: boolean;
+  /** 新图是否已完成加载；完成才允许接管可见层 */
+  loaded: boolean;
+}
+
+const layers = ref<ImageLayer[]>([
+  { id: 0, src: currentSrc.value, visible: true, loaded: true },
+  { id: 1, src: '', visible: false, loaded: false },
+]);
+
+watch(currentSrc, src => {
+  const hidden = layers.value.find(layer => !layer.visible);
+  if (!hidden) return;
+  hidden.loaded = false;
+  hidden.src = src;
+});
+
+function onLayerLoad(layer: ImageLayer): void {
+  layer.loaded = true;
+  if (!layer.visible) {
+    for (const other of layers.value) {
+      other.visible = other.id === layer.id;
+    }
+  }
+}
 
 /** 图片加载失败：情绪图 → neutral 兜底；neutral 也失败 → 未配置占位 */
 const onImageError = (): void => {
@@ -92,10 +128,26 @@ body,
   overflow: hidden;
 }
 
+.sheet-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .sheet-image {
+  position: absolute;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.sheet-image.visible {
+  opacity: 1;
 }
 
 .sheet-placeholder {

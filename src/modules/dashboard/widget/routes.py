@@ -66,7 +66,10 @@ class WidgetGateway:
         self._game2048_clients.clear()
 
     async def run_danmaku_socket(self, websocket: WebSocket) -> None:
-        await self._run_socket(websocket, self._danmaku_clients, with_history=True)
+        style_payload: Optional[dict] = None
+        if self.widget_service is not None:
+            style_payload = {"type": "style", "font_size": self.widget_service.config.font_size}
+        await self._run_socket(websocket, self._danmaku_clients, with_history=True, style_payload=style_payload)
 
     async def run_subtitle_socket(self, websocket: WebSocket) -> None:
         await self._run_socket(websocket, self._subtitle_clients, with_history=False)
@@ -97,8 +100,15 @@ class WidgetGateway:
         finally:
             self._game2048_clients.discard(websocket)
 
-    async def _run_socket(self, websocket: WebSocket, clients: set[WebSocket], *, with_history: bool) -> None:
-        """widget 族 WebSocket 端点的公共收发循环（accept → 可选历史 → 保活 → 清理）。"""
+    async def _run_socket(
+        self,
+        websocket: WebSocket,
+        clients: set[WebSocket],
+        *,
+        with_history: bool,
+        style_payload: Optional[dict] = None,
+    ) -> None:
+        """widget 族 WebSocket 端点的公共收发循环（accept → 可选历史/样式 → 保活 → 清理）。"""
         await websocket.accept()
         clients.add(websocket)
 
@@ -106,6 +116,9 @@ class WidgetGateway:
             if with_history and self.widget_service is not None:
                 history = self.widget_service.get_recent_messages(15)
                 await websocket.send_json({"type": "history", "messages": history})
+
+            if style_payload:
+                await websocket.send_json(style_payload)
 
             while True:
                 await websocket.receive_text()

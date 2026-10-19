@@ -64,3 +64,8 @@ export function buildWidgetUrl(origin: string, path: string, options?: { preview
   if (options?.preview) url.searchParams.set(PREVIEW_QUERY, '1');
   return url.toString();
 }
+
+/** 当前页面是否为预览态（管理页"打开"带 ?preview=1）；嵌入直播软件的裸网址返回 false */
+export function isPreviewMode(): boolean {
+  return new URLSearchParams(window.location.search).get(PREVIEW_QUERY) === '1';
+}

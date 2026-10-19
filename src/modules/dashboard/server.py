@@ -484,6 +484,7 @@ class DashboardServer:
             widget_config = DanmakuWidgetConfig(
                 enabled=danmaku_widget_config.enabled,
                 enable_html_page=danmaku_widget_config.enable_html_page,
+                font_size=danmaku_widget_config.font_size,
                 max_messages=danmaku_widget_config.max_messages,
                 show_danmaku=danmaku_widget_config.show_danmaku,
                 show_gift=danmaku_widget_config.show_gift,
