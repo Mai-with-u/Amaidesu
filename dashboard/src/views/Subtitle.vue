@@ -8,7 +8,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onScopeDispose } from 'vue';
+import { ref, computed } from 'vue';
 
 import { useRawWebSocket } from '@/composables/useRawWebSocket';
 import WidgetStatusBadge from '@/components/widget/WidgetStatusBadge.vue';
@@ -17,10 +17,11 @@ import WidgetStatusBadge from '@/components/widget/WidgetStatusBadge.vue';
  * 字幕嵌入页（供 OBS/直播姬浏览器源捕获的全屏透明页）。
  *
  * 样式与位置由后端随每条字幕下发（字号/颜色/背景/边框/位置，来源是
- * infra [dashboard] 的字幕小部件配置）；duration_ms > 0 时按该时长
- * 自动隐藏，新字幕即重置计时，duration_ms == 0 是清空信号不计时。
- * 隐藏计时是一次性短定时器，随每条字幕重置、随页面卸载（onScopeDispose）
- * 清理；断线提示复用 WidgetStatusBadge（预览态醒目、嵌入态淡化）。
+ * infra [dashboard] 的字幕小部件配置）。字幕跟随语音生命周期显示：
+ * 开始说话时出现、说完由清空消息撤下——**不按 duration_ms 自动隐藏**，
+ * 直播画面上字幕中途消失等于不可见（payload 里的 duration_ms 是
+ * 无消费者的遗留字段，留待配置域清理）。断线提示复用
+ * WidgetStatusBadge（预览态醒目、嵌入态淡化）。
  */
 
 interface SubtitleData {
@@ -42,17 +43,6 @@ const fontColor = ref<string>('#ffffff');
 const backgroundColor = ref<string>('rgba(0,0,0,0.45)');
 const borderColor = ref<string>('#ff8800');
 const position = ref<SubtitlePosition>('bottom');
-
-let hideTimer: ReturnType<typeof setTimeout> | null = null;
-
-function clearHideTimer(): void {
-  if (hideTimer !== null) {
-    clearTimeout(hideTimer);
-    hideTimer = null;
-  }
-}
-
-onScopeDispose(clearHideTimer);
 
 const containerStyle = computed(() => ({
   alignItems: position.value === 'top' ? 'flex-start' : position.value === 'center' ? 'center' : 'flex-end',
@@ -90,13 +80,6 @@ const { status } = useRawWebSocket('/ws/widget/subtitle', {
         if (data.border_color) borderColor.value = data.border_color;
         if (data.position === 'top' || data.position === 'bottom' || data.position === 'center') {
           position.value = data.position;
-        }
-        clearHideTimer();
-        // duration_ms > 0 自动隐藏；== 0 是清空信号（后端约定），不计时
-        if (subtitle.value && data.duration_ms && data.duration_ms > 0) {
-          hideTimer = setTimeout(() => {
-            subtitle.value = '';
-          }, data.duration_ms);
         }
       }
     } catch (e) {

@@ -253,15 +253,8 @@ const FIELD_DEFS: Record<string, readonly WidgetFieldDef[]> = {
       ],
       fallback: 'bottom',
     },
-    {
-      key: 'auto_hide_after_ms',
-      label: '自动隐藏（毫秒）',
-      type: 'number',
-      min: 1000,
-      max: 30000,
-      step: 500,
-      fallback: 5000,
-    },
+    // auto_hide_after_ms 不上表单：嵌入页字幕跟随语音生命周期（说完才清），
+    // 该键当前已无任何展示面消费，配置域的键清理另行处置
   ],
   game2048: [{ key: 'enabled', label: '启用小部件', type: 'switch', fallback: true }],
 };
