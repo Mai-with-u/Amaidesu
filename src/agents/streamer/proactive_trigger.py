@@ -16,8 +16,8 @@
 - **无 I/O、无 LLM 调用、无 EventBus、无 asyncio**：所有时间通过参数注入
   （``now_ms``），便于确定性测试，禁止 ``time.sleep``。
 - **触发优先级**：``reminder > rundown_pending > game_pending >
-  external > rundown_overdue > schedule > cold``（同一 tick 多触发条件
-  同时满足时只取优先级最高的一个；reminder/各 rundown/game 分支各自
+  external > rundown_overdue > rundown_ready > schedule > cold``（同一 tick
+  多触发条件同时满足时只取优先级最高的一个；reminder/各 rundown/game 分支各自
   绕过部分公共前置，见下文）。
 - **公共频率限制**（对 ``external`` / ``schedule`` / ``cold`` 生效）：
     - ``min_interval_ms``（防接龙，对照 ``room_state.last_speech_ms``；
@@ -43,6 +43,11 @@
   （默认 5 分钟，内部状态对照）+ ``rundown_speech_interval_ms`` 防抖（对照
   ``last_speech_ms``，刚发过言不立即提醒）。Agent 被唤醒后自行决定推进或
   继续——闹钟只提醒不执法。
+- ``rundown_ready=True``（环节内持续产出信号）：环节供能期间按
+  ``rundown_ready_interval_ms``（默认 30 秒，对照 ``last_speech_ms``）给
+  主播开口机会——绕过公共三道前置（环节任务描述即话题）。这只供给机会：
+  说不说、说什么由 Agent 按本窗新输入自定，发言质量由 ``is_novel`` 自检
+  与台词重合度闸把关，闸打回即本轮沉默。
 - 仅受总开关约束（``enabled=False`` 时不触发任何 rundown）。
 
 **游戏待定夺触发源（game_pending）的限流独立性**
@@ -87,8 +92,12 @@ _DEFAULT_SCHEDULE_ONLY_COLD: bool = True
 _DEFAULT_MAX_PER_HOUR: int = 6
 _DEFAULT_TOPIC_REQUIRED: bool = True
 # 环节内防抖间隔（毫秒）。当前仅 rundown_overdue 触发源使用——刚发过言不
-# 立即提醒；"环节内持续发言"触发源已退役，本间隔不再驱动主动推话题。
+# 立即提醒。
 _DEFAULT_RUNDOWN_SPEECH_INTERVAL_MS: int = 3_000
+# 环节内持续发言间隔（毫秒）。rundown_ready 触发源的节奏：环节供能期间按此
+# 间隔给主播产出机会——量由唤醒保证，质由 is_novel 自检与台词重合度闸把关，
+# 唤醒本身不保证发言（闸打回即沉默）。远长于退役前的 3 秒强推形态。
+_DEFAULT_RUNDOWN_READY_INTERVAL_MS: int = 30_000
 # 环节超时提醒冷却（毫秒）。超时后按此间隔反复提醒，直到 Agent 推进环节。
 _DEFAULT_RUNDOWN_OVERDUE_INTERVAL_MS: int = 300_000
 
@@ -138,6 +147,10 @@ class ProactiveTrigger:
         self._rundown_overdue_interval_ms: int = _cfg(
             config, "rundown_overdue_interval_ms", _DEFAULT_RUNDOWN_OVERDUE_INTERVAL_MS
         )
+        # 环节内持续发言间隔（毫秒）。仅 rundown_ready 触发源使用。
+        self._rundown_ready_interval_ms: int = _cfg(
+            config, "rundown_ready_interval_ms", _DEFAULT_RUNDOWN_READY_INTERVAL_MS
+        )
 
         # 运行期状态
         # 上次主动触发时刻（None = 尚未触发过）。仅 schedule 判定读取；
@@ -169,13 +182,14 @@ class ProactiveTrigger:
         external_pending: bool = False,
         rundown_pending: bool = False,
         rundown_overdue: bool = False,
+        rundown_ready: bool = False,
         game_pending: bool = False,
         reminder_pending: bool = False,
     ) -> str | None:
         """判定当前 tick 是否应触发主动发言。
 
         优先级顺序：``reminder > rundown_pending > game_pending >
-        external > rundown_overdue > schedule > cold``。
+        external > rundown_overdue > rundown_ready > schedule > cold``。
 
         公共前置条件（仅对 ``external`` / ``schedule`` / ``cold`` 生效）：
         - ``enabled=False`` → 永不触发（含 rundown；reminder 豁免——必达）
@@ -202,6 +216,9 @@ class ProactiveTrigger:
           双重冷却（``rundown_overdue_interval_ms`` 内部状态 +
           ``rundown_speech_interval_ms`` 防抖对照 ``last_speech_ms``），
           Agent 被唤醒后自行决定推进或继续。
+        - ``rundown_ready=True``（环节内持续产出信号）：绕过公共三道前置，
+          仅按 ``rundown_ready_interval_ms``（默认 30 秒）对照
+          ``last_speech_ms`` 防抖——供给开口机会，不保证发言。
 
         Args:
             room_state: 直播间态势对象（duck-typed；需具备 ``last_speech_ms``
@@ -278,6 +295,14 @@ class ProactiveTrigger:
             speech_settled = last_speech_ms is None or (now_ms - last_speech_ms) >= self._rundown_speech_interval_ms
             if overdue_cooled and speech_settled:
                 self._last_overdue_ms = now_ms
+                return "rundown"
+
+        # rundown_ready：环节内持续产出机会——内容推进信号，绕过公共三道前置
+        # （流程单环节任务描述即话题，不依赖弹幕消化出的话题摘要）。节奏对照
+        # last_speech_ms 的 ready_interval_ms：这只是给主播开口的机会，说不说、
+        # 说什么由模型按本窗新输入自定，is_novel 自检与台词重合度闸把关质量。
+        if rundown_ready:
+            if last_speech_ms is None or (now_ms - last_speech_ms) >= self._rundown_ready_interval_ms:
                 return "rundown"
 
         # 公共前置（schedule / cold 专用，行为不变）

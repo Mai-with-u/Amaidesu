@@ -93,6 +93,24 @@ def test_overdue_alarm_has_double_cooldown_and_speech_debounce() -> None:
     assert debounced.should_trigger(recent, now_ms=10_004_000, rundown_overdue=True) == "rundown"
 
 
+def test_ready_gives_speaking_opportunity_on_thirty_second_cadence() -> None:
+    """默认 30 秒节奏：距上次发言不足 30 秒不开口，到点即给机会。"""
+    trigger = _trigger()
+    recent = _Room(last_speech_ms=10_000_000)
+    assert trigger.should_trigger(recent, now_ms=10_029_999, rundown_ready=True) is None
+    assert trigger.should_trigger(recent, now_ms=10_030_000, rundown_ready=True) == "rundown"
+
+    silent = _Room(last_speech_ms=None)
+    assert trigger.should_trigger(silent, now_ms=10_000_000, rundown_ready=True) == "rundown"
+
+
+def test_ready_needs_no_topic_and_ignores_the_anti_chain_interval() -> None:
+    """环节任务描述即话题：空话题快照照样触发；30 秒节奏不受 120 秒防接龙约束。"""
+    trigger = _trigger(min_interval_ms=120_000, topic_required=True)
+    room = _Room(last_speech_ms=10_000_000, topic="")
+    assert trigger.should_trigger(room, now_ms=10_030_000, rundown_ready=True) == "rundown"
+
+
 @pytest.mark.parametrize(
     ("config", "room", "now_ms", "expected"),
     [

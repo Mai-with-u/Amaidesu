@@ -369,6 +369,7 @@ class StreamerAgent(BaseAgent):
             "max_per_hour": proactive.max_per_hour,
             "topic_required": proactive.topic_required,
             "rundown_speech_interval_ms": proactive.rundown_speech_interval_ms,
+            "rundown_ready_interval_ms": proactive.rundown_ready_interval_ms,
         }
         self._proactive_trigger = ProactiveTrigger(proactive_config)
 
@@ -1274,6 +1275,7 @@ class StreamerAgent(BaseAgent):
                     external_pending=False if live_gated else self._external_proactive_pending,
                     rundown_pending=rundown_pending,
                     rundown_overdue=False if live_gated else self._is_rundown_overdue(),
+                    rundown_ready=False if live_gated else self._is_rundown_active(),
                     game_pending=game_pending,
                     # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
                     # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
@@ -1396,6 +1398,15 @@ class StreamerAgent(BaseAgent):
     def _is_rundown_overdue(self) -> bool:
         """当前环节停留是否已超预期（供 ProactiveTrigger rundown_overdue 闹钟）。"""
         return self._rundown_state.is_current_segment_overdue()
+
+    def _is_rundown_active(self) -> bool:
+        """判定流程单是否在供能（供 ProactiveTrigger rundown_ready 持续产出信号）。
+
+        done 仍供能：流程单内容排完不是停止内容推进的理由——Agent 按既定节奏
+        获得开口机会，凭情境（完成文案 + 弹幕）自由互动。paused 不供能（导演
+        明确叫停）。供能不等于发言：is_novel 自检与台词重合度闸把关质量。
+        """
+        return self._rundown_state.status in ("running", "done")
 
     def _build_rundown_text(self) -> Optional[str]:
         """拼装流程单情境文本（注入 Planner/Replyer $rundown 变量）。"""

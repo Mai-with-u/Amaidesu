@@ -38,7 +38,13 @@
         min_interval_ms,
         schedule_interval_ms,
     )
-    schedule_only_cold, max_per_hour, topic_required, rundown_speech_interval_ms
+    (
+        schedule_only_cold,
+        max_per_hour,
+        topic_required,
+        rundown_speech_interval_ms,
+    )
+    rundown_ready_interval_ms
 
     [agents.streamer.word_filter]
     enabled, words, replacement, case_sensitive, drop_on_match
@@ -229,6 +235,12 @@ class StreamerProactiveConfig(BaseConfig):
         default=3_000,
         ge=1_000,
         description="流程单环节内两次主动发言最小间隔",
+    )
+    rundown_ready_interval_ms: int = Field(
+        title="环节内持续产出间隔",
+        default=30_000,
+        ge=5_000,
+        description="环节供能期间给主播开口机会的节奏；只供机会不保证发言，质量由发言自检与重合度闸把关",
     )
 
 
