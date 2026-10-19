@@ -43,9 +43,6 @@
     [agents.streamer.thinking_stream]
     enabled, flush_interval_ms, buffer_max
 
-    [agents.streamer.narrative]
-    game_ttl_ms, game_max_items, body_ttl_ms, body_max_items, chat_ttl_ms, chat_max_items
-
 设计原则：
 - 组件包内单一权威：所有字段以嵌套子模型承载；中央树仅引用本类。
 - LLM profile 用途名硬编码为 ``planner`` / ``replyer`` / ``summary``，与 model 块
@@ -311,58 +308,6 @@ class StreamerCommandConfig(BaseConfig):
     )
 
 
-class StreamerNarrativeConfig(BaseConfig):
-    """[agents.streamer.narrative] 段
-
-    游戏叙事 / 身体近况 / 游戏聊天三个缓冲的回放上限。每个决策窗把缓冲回放给
-    Planner；已经交给过决策窗、又超过保留期的旧条目不再回放，避免主播把讲过的
-    遭遇当新闻反复播。没交出过的条目不受保留期影响，只受条数上限约束。
-    """
-
-    game_ttl_ms: int = Field(
-        title="游戏叙事保留期",
-        default=900_000,
-        ge=0,
-        description="游戏进展与上报交给过决策窗后，自到达起保留多久（毫秒）；更早的进展要靠查询工具",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    game_max_items: int = Field(
-        title="游戏叙事条数上限",
-        default=20,
-        ge=1,
-        description="游戏叙事最多保留条数",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    body_ttl_ms: int = Field(
-        title="身体近况保留期",
-        default=300_000,
-        ge=0,
-        description="被袭击/死亡/重生等遭遇交给过决策窗后，自到达起保留多久（毫秒）",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    body_max_items: int = Field(
-        title="身体近况条数上限",
-        default=10,
-        ge=1,
-        description="身体近况最多保留条数",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    chat_ttl_ms: int = Field(
-        title="游戏聊天保留期",
-        default=300_000,
-        ge=0,
-        description="游戏里玩家与系统消息交给过决策窗后，自到达起保留多久（毫秒）",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    chat_max_items: int = Field(
-        title="游戏聊天条数上限",
-        default=10,
-        ge=1,
-        description="游戏聊天最多保留条数",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-
-
 class StreamerThinkingStreamConfig(BaseConfig):
     """[agents.streamer.thinking_stream] 段
 
@@ -560,11 +505,6 @@ class StreamerConfig(BaseConfig):
         default_factory=StreamerThinkingStreamConfig,
         description="思考流旁路配置",
     )
-    narrative: StreamerNarrativeConfig = Field(
-        title="叙事回放配置",
-        default_factory=StreamerNarrativeConfig,
-        description="游戏叙事/身体近况/游戏聊天回放给 Planner 的保留期与条数上限",
-    )
     live_frame: StreamerLiveFrameConfig = Field(
         title="直播画面",
         default_factory=StreamerLiveFrameConfig,
@@ -585,6 +525,5 @@ __all__ = [
     "StreamerWordFilterConfig",
     "StreamerCommandConfig",
     "StreamerThinkingStreamConfig",
-    "StreamerNarrativeConfig",
     "StreamerLiveFrameConfig",
 ]

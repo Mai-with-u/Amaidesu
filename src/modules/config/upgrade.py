@@ -866,6 +866,23 @@ def _widen_recent_intents_window(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "widen_recent_intents_window", "2.0.47", _widen_recent_intents_window)
 
 
+def _retire_streamer_narrative(data: Dict[str, Any]) -> List[str]:
+    """agents.toml v2.0.48：删 ``[agents.streamer.narrative]`` 段。
+
+    游戏事件素材改为统一追加式历史：事件在决策窗边界批量写进对话时间线，
+    不再逐窗重放，三个叙事缓冲及其保留期/条数上限/折叠窗配置失去消费者。
+    段留在文件里即属未知段硬错，整段原地删除。对已迁移数据零变更（幂等）。
+    """
+    streamer = (data.get("agents") or {}).get("streamer")
+    if not isinstance(streamer, dict) or "narrative" not in streamer:
+        return []
+    del streamer["narrative"]
+    return ["agents.streamer.narrative"]
+
+
+register_file_hook("agents.toml", "retire_streamer_narrative", "2.0.48", _retire_streamer_narrative)
+
+
 def _upgrade_widget_drop_html_page(data: Dict[str, Any]) -> List[str]:
     """infra.toml v2.0.43：删三个小部件段的 ``enable_html_page`` 键。
 

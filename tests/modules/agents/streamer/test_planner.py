@@ -7,6 +7,7 @@ import pytest
 
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
+from src.agents.streamer.timeline import GameEventBatch
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
@@ -209,13 +210,18 @@ async def test_context_assembly_paths() -> None:
     prompt.render.assert_called_once()
     assert prompt.render.call_args.args[0] == "amaidesu_planner_react"
 
-    # forced 标注与游戏叙事进参考段（序列尾）；字符级 topics 不进 prompt
+    # forced 标注进参考段（序列尾）；本轮新入账的游戏事件不再重放进参考段——
+    # 它们已在决策窗边界追加进对话历史，只有状态跃迁事实块汇总进参考段；字符级 topics 不进 prompt
     planner, llm, _prompt = _make_planner([_resp()])
     planner._room_state.update(_msg("来个落地水"))
     planner._room_state.update(_msg("来个落地水"))
-    await planner.plan([_msg()], forced=True, game_narrative="刚挖到钻石")
+    await planner.plan(
+        [_msg()],
+        forced=True,
+        game_batch=GameEventBatch(events=("[20:01 游戏·minecraft·report] 刚挖到钻石",)),
+    )
     reference = _reference_message(llm)["content"]
-    assert "强制回应" in reference and "刚挖到钻石" in reference and "关键变化" not in reference
+    assert "强制回应" in reference and "【当前状态（客观事实）】" in reference and "关键变化" not in reference
 
 
 @pytest.mark.parametrize(

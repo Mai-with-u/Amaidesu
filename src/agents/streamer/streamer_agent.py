@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from src.modules.agents.base import BaseAgent
@@ -68,7 +68,6 @@ from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
 from .memory import RegularsRosterWriter, SessionRecapWriter, build_memory_tool_provider
 from .message_buffer import MessageBuffer
-from .narrative import NarrativeBuffer, NarrativeView
 from .planner import Planner
 from .proactive_trigger import ProactiveTrigger
 from .replyer import WordFilter, Replyer
@@ -76,7 +75,7 @@ from .room_state import RoomState
 from .speech_dispatcher import SpeechDispatcher
 from .stats import StreamerStats
 from .term_sanitizer import sanitize_internal_terms
-from .timeline import StreamerTimeline, TimelineTurn, note_turn
+from .timeline import GameEventBatch, StreamerTimeline, TimelineTurn, note_turn
 from .timing_gate import TimingGate
 from .tools.reply_tool import ReplyToolProvider
 from .command.router import CommandRouter
@@ -92,9 +91,15 @@ __all__ = ["StreamerAgent", "StreamerConfig"]
 _PROFILE_PLANNER = "planner"
 _PROFILE_REPLYER = "replyer"
 
-# 身体近况的同摘要折叠窗（毫秒）：窗口内连续到达、摘要相同的条目并入一条只记数。
-# 覆盖身体侧按重试节奏连发同一失败摘要的典型间隔（秒级到一分多钟）
-_BODY_EVENT_FOLD_WINDOW_MS = 90_000
+# 游戏事件同摘要折叠窗（毫秒）：待入账队列里连续到达、内容相同的条目并入一条只记数。
+# 覆盖游戏/身体侧按重试节奏连发同一失败摘要的典型间隔（秒级到一分多钟）
+_GAME_EVENT_FOLD_WINDOW_MS = 90_000
+
+# 待入账队列上限（条）。决策窗长期不发生时防无界增长；溢出丢最旧
+_PENDING_GAME_EVENTS_MAX = 200
+
+# 私聊暂存上限（行）。只进本窗决策参考段，不进时间线
+_PRIVATE_CHAT_LINES_MAX = 10
 
 # 运营递话提醒队列上限（条）。满时拒收递话（receive_prompt 返回 False，
 # REST 侧映射 409）——必达语义不允许静默挤掉旧条目。
@@ -122,6 +127,21 @@ class _LiveChatTurn:
     message_id: str = ""
     # 发生时刻：落库行与内存对话轮按它合并成同一条时间线
     timestamp_ms: int = 0
+
+
+@dataclass
+class _PendingGameEvent:
+    """待入账的一条游戏事件：时间线行（未折叠的底稿）+ 到达时刻 + 同摘要折叠吸收的相同条数。
+
+    折叠只发生在待入账阶段：条目一经决策窗边界写进时间线就不再改写，
+    之后到达的相同摘要是新的一条。
+    """
+
+    turn: TimelineTurn
+    base: str  # 未附加折叠计数说明的行原文（折叠比较键）
+    arrived_ms: int
+    count: int = 1
+    is_chat: bool = False  # 游戏聊天行：入账后其原话随本窗说话交给表达侧
 
 
 def _text_field(item: Any, name: str) -> str:
@@ -426,24 +446,17 @@ class StreamerAgent(BaseAgent):
         # 统计（决策循环各分支增量；对外经 get_statistics 导出）
         self._stats = StreamerStats()
 
-        # 游戏叙事与身体近况（订阅 game.* / game.body.*；每个决策窗回放给 Planner）。
-        # 缓冲有界：交给过决策窗又过了保留期的旧条目不再回放——整场遭遇每窗全量重放时，
-        # 主播会把早就讲过的掉血一遍遍当新闻播
-        narrative = config.narrative
-        self._game_narrative = NarrativeBuffer(ttl_ms=narrative.game_ttl_ms, max_items=narrative.game_max_items)
-        # 身体侧开同摘要折叠：急事处理失败会按重试节奏连发几十条一模一样的摘要
-        # （当晚 70 秒内同一条"没睡成"来了 7 条），逐条进叙事只会挤占决策窗口；
-        # 折叠只在叙事组装层，底层事件记录不受影响
-        self._body_narrative = NarrativeBuffer(
-            ttl_ms=narrative.body_ttl_ms,
-            max_items=narrative.body_max_items,
-            fold_window_ms=_BODY_EVENT_FOLD_WINDOW_MS,
-        )
-        # 游戏里的聊天（订阅 game.chat.*）：游戏世界里的玩家在跟我说话、服务器在通知，
-        # 与观众弹幕分开——开口说话对方听不到，要回得在游戏里打字
-        self._game_chat = NarrativeBuffer(ttl_ms=narrative.chat_ttl_ms, max_items=narrative.chat_max_items)
-        # 私聊的那几行：决策照常看到，但不交给表达侧——表达侧拿到的是本窗新到的原话，私下的话不能被当众说出来
-        self._private_chat_lines: deque[str] = deque(maxlen=narrative.chat_max_items)
+        # 游戏事件待入账队列（game.* / game.body.* / game.chat.* 三通道统一）：
+        # 事件到达先进队列做同摘要折叠，下个决策窗边界（读历史时）整批追加进时间线的
+        # game 条目——事件在对话历史里只出现一次、不再逐窗重放，更早的细节查对话
+        # 历史与前情提要，需要数值现场用游戏状态查询工具。相邻窗口的历史前缀逐字一致
+        self._pending_game_events: List[_PendingGameEvent] = []
+        # 私聊的那几行：只进本窗决策参考段，不进时间线——表达侧与历史都看不到，
+        # 私下的话不能被当众说出来
+        self._pending_private_chat: deque[str] = deque(maxlen=_PRIVATE_CHAT_LINES_MAX)
+        # 最近一次决策窗边界入账的批次（决策执行器每窗在历史读取后经 provider 取用；
+        # 状态跃迁事实块与本轮新鲜语料从这批行取，不再从重放全文提取）
+        self._window_game_batch = GameEventBatch()
 
         # 未落库的对话轮：没开场次时的全部对话、调试面板注入的观众消息都不会写进
         # live_chat，由这里按时间并入历史——主播问"要不要拉一下"、观众回"拉"时，
@@ -458,9 +471,9 @@ class StreamerAgent(BaseAgent):
             profiles=(_PROFILE_PLANNER, _PROFILE_REPLYER),
             summary_profile=SUMMARY_PROFILE,
         )
-        # 进时间线的游戏记录：游戏里程碑（game.*）与我在游戏里开始做的事。参考段的
-        # 【游戏叙事】只回放最近一阵，这里留下整场的先后，换章时一起写进前情提要。
-        # 与对话轮同以场次为界
+        # 进时间线的游戏记录：游戏事件（game.* / game.body.* / game.chat.*）与我在
+        # 游戏里开始做的事。事件在决策窗边界整批入账，这里留下整场的先后，换章时
+        # 一起写进前情提要。与对话轮同以场次为界
         self._timeline_notes: List[TimelineTurn] = []
         self._planner.bind_action_recorder(self._record_delegation)
         # 最新一帧直播画面：查询式取自图像暂存的 latest 槽位（live_frame 采集器
@@ -507,9 +520,7 @@ class StreamerAgent(BaseAgent):
             thinking_enabled=bool(getattr(config.thinking_stream, "enabled", True)),
             history_provider=self._read_history,
             rundown_text_provider=self._build_rundown_text,
-            game_narrative_provider=self._game_narrative_text,
-            body_narrative_provider=self._body_narrative_text,
-            game_chat_provider=self._game_chat_view,
+            game_events_provider=self._current_game_batch,
             reminders_provider=self._drain_reminders,
             session_recap_provider=self._session_recap_text,
             logger=self._logger,
@@ -707,8 +718,9 @@ class StreamerAgent(BaseAgent):
             model_class=RoomStateWatchedPayload,
         )
         # 直播画面不在此订阅：决策窗挂帧查询式读图像暂存的 latest 槽位（见 _latest_live_frame）
-        # 游戏叙事（三通道·事件）：游戏 Agent（如 MinecraftAgent）emit game.*
-        # → 主播侧收集最近叙事，进 Planner 上下文（按 payload.game 过滤可扩展到多游戏）
+        # 游戏事件（三通道）：游戏 Agent（如 MinecraftAgent）emit game.*
+        # → 主播侧入待入账队列，决策窗边界批量追加进对话时间线（按 payload.game
+        # 过滤可扩展到多游戏）
         self._event_bus.on(
             CoreEvents.GAME_MILESTONE,
             self._on_game_event,
@@ -719,20 +731,20 @@ class StreamerAgent(BaseAgent):
             self._on_game_event,
             model_class=GamePayload,
         )
-        # 游戏异常也进叙事（如"无法执行目标：LLM 未注入"）——否则主播不知命令失败
+        # 游戏异常也进事件行（如"无法执行目标：LLM 未注入"）——否则主播不知命令失败
         self._event_bus.on(
             CoreEvents.GAME_ERROR,
             self._on_game_event,
             model_class=GamePayload,
         )
-        # 游戏主动上报（交付总结/升级决策）——主播叙事与"是否回提示词"的决策数据源
+        # 游戏主动上报（交付总结/升级决策）——追加进历史并兼作"是否回提示词"的决策数据源
         self._event_bus.on(
             CoreEvents.GAME_REPORT,
             self._on_game_event,
             model_class=GamePayload,
         )
         # 身体侧近况（AI 玩家遭遇：被袭击/死亡/重生/紧急反应）——采集器分类后的事件，
-        # 与上面的 game.* 叙事分两条线；通配订阅覆盖 8 类，按 payload.kind 便于扩展
+        # 与上面的 game.* 事件分两条线（行标签区分）；通配订阅覆盖 8 类，按 payload.kind 便于扩展
         self._event_bus.on(
             CoreEvents.GAME_BODY_WILDCARD,
             self._on_body_event,
@@ -777,6 +789,8 @@ class StreamerAgent(BaseAgent):
             self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
         self._unpersisted_turns.clear()
+        self._pending_game_events.clear()
+        self._pending_private_chat.clear()
         self._timeline_notes.clear()
         await self._timeline.reset()
         # 上场回顾：开播这一刻从库里读最近几场（排除本场），整场固定不再变
@@ -806,6 +820,8 @@ class StreamerAgent(BaseAgent):
         # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
         # （道别发言不属已结账的场次，留在内存对话里供下播后的调试闲聊接续）
         self._unpersisted_turns.clear()
+        self._pending_game_events.clear()
+        self._pending_private_chat.clear()
         self._timeline_notes.clear()
         await self._timeline.reset()
         # 收播整理：先写这一场的回顾，再给本场活跃的常客更新印象（两次 LLM 调用，
@@ -881,41 +897,72 @@ class StreamerAgent(BaseAgent):
         payload: GamePayload,
         source: str,
     ) -> None:
-        """game.* 事件回调：完整收集游戏叙事，供 Planner 理解已有进展。
+        """game.* 事件回调：事件行入待入账队列，下个决策窗边界批量追加进时间线。
 
-        叙事行带事件类型标记（``[game·event_type]``），Planner 据此区分
-        "剧情推进"（milestone）与"需要定夺"（report）；message 本体经术语脱敏
-        （任务号/观测引用等内部标识不进主播上下文）。
-        ``report`` 类型（交付总结/升级决策）同时置位待定夺触发信号——游戏
-        停在选项处等主播定夺，下次空缓冲 tick 应促发一轮主动决策。
+        行标签带事件类型（``游戏·<game>·<类型>``），决策层据此区分"剧情推进"
+        （milestone）与"需要定夺"（report）；message 本体经术语脱敏（任务号/观测
+        引用等内部标识不进主播上下文）。``report`` 类型（交付总结/升级决策）同时
+        置位待定夺触发信号——游戏停在选项处等主播定夺，下次空缓冲 tick 应促发
+        一轮主动决策。
         """
         try:
             message = sanitize_internal_terms(payload.message)
-            line = f"[{payload.game}·{payload.event_type}] {message}"
-            self._game_narrative.add(line, now_ms())
-            # 同一条里程碑以发生时刻进时间线：参考段过了保留期不再回放，时间线里一直留着
-            self._timeline_notes.append(
-                note_turn(f"游戏·{payload.game}·{payload.event_type}", message, payload.timestamp_ms or now_ms())
-            )
+            turn = note_turn(f"游戏·{payload.game}·{payload.event_type}", message, payload.timestamp_ms or now_ms())
+            self._stage_game_event(turn)
             if payload.event_type == "report":
                 self._game_decision_pending = True
                 # 游戏里做完或卡住待定夺：【我手头在游戏里做的事】里那件事随之标成已上报
                 self._planner.note_game_report(payload.game, payload.report_kind or "")
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
-            self._logger.warning(f"收集游戏叙事失败: {exc}")
+            self._logger.warning(f"收集游戏事件失败: {exc}", exc=True)
+
+    def _stage_game_event(self, turn: TimelineTurn, *, is_chat: bool = False) -> None:
+        """游戏事件入待入账队列：同摘要落在折叠窗内时并入最近一条只记数，按上限裁剪。"""
+        now = now_ms()
+        if self._pending_game_events:
+            last = self._pending_game_events[-1]
+            if last.base == turn.content and now - last.arrived_ms <= _GAME_EVENT_FOLD_WINDOW_MS:
+                last.count += 1
+                return
+        self._pending_game_events.append(
+            _PendingGameEvent(turn=turn, base=turn.content, arrived_ms=now, is_chat=is_chat)
+        )
+        overflow = len(self._pending_game_events) - _PENDING_GAME_EVENTS_MAX
+        if overflow > 0:
+            del self._pending_game_events[:overflow]
+
+    def _drain_game_events(self) -> GameEventBatch:
+        """决策窗边界：待入账队列整批写进时间线，本批行作为"本轮新入账批次"交决策链。
+
+        折叠过多条的行附计数说明（"另 N 次相同"）后再入时间线；时间线条目只追加
+        不改写，相邻窗口的历史前缀逐字一致。私聊行不进时间线，单独随批次交本窗
+        决策参考段。
+        """
+        staged = self._pending_game_events
+        self._pending_game_events = []
+        private = list(self._pending_private_chat)
+        self._pending_private_chat.clear()
+        events: List[str] = []
+        fresh_chat: List[str] = []
+        for item in staged:
+            content = item.base if item.count == 1 else f"{item.base}（另 {item.count - 1} 次相同）"
+            turn = item.turn if content == item.turn.content else replace(item.turn, content=content)
+            self._timeline_notes.append(turn)
+            events.append(content)
+            if item.is_chat:
+                fresh_chat.append(content)
+        batch = GameEventBatch(events=tuple(events), fresh_chat=tuple(fresh_chat), private_chat=tuple(private))
+        self._window_game_batch = batch
+        return batch
+
+    def _current_game_batch(self) -> GameEventBatch:
+        """本窗新入账的游戏事件批次（决策执行器在历史读取后取用；无新事件为空批次）。"""
+        return self._window_game_batch
 
     def _record_delegation(self, agent: str, instruction: str) -> None:
         """Planner 受理委派后回调：把"我在哪个游戏里开始做什么"按此刻进时间线。"""
         where = f"我在 {agent} 里开始做" if agent else "我在游戏里开始做"
         self._timeline_notes.append(note_turn(where, sanitize_internal_terms(instruction), now_ms()))
-
-    def _game_narrative_text(self) -> str:
-        """导出游戏叙事全文（Planner 上下文用），并把本次交出的条目记为"已给过"。
-
-        每条标出到达距今多久，上一次决策之后才到达的另标"新"——20 分钟前的
-        进展不会再被当成刚发生的事播报一遍；交出过又过了保留期的不再回放。
-        """
-        return self._game_narrative.render(now_ms()).text
 
     async def _on_body_event(
         self,
@@ -923,31 +970,28 @@ class StreamerAgent(BaseAgent):
         payload: BodyEventPayload,
         source: str,
     ) -> None:
-        """``game.body.*`` 回调：完整收集 AI 玩家身体侧事件，供 Planner 理解连续遭遇。
+        """``game.body.*`` 回调：AI 玩家身体侧事件入待入账队列（标签 ``遭遇·<game>·<种类>``）。
 
-        与游戏叙事分两条线：``game.*`` 是低频进展/上报（含任务上下文），
-        ``game.body.*`` 是身体侧的遭遇（被袭击/死亡/重生/紧急反应）。
-        两者形状不同、更新频率不同，混在一条缓冲里会让高频的遭遇把进展挤掉，
-        所以各留各的；同一件事若两条线都报（任务中遭遇攻击），由提示词规定
-        只讲一次、以带任务上下文的那条为准。
-        死亡是要紧事：置位待定夺信号（与 game.report 同款），下次空缓冲 tick
-        立即促发一轮决策，主播当场知道、当场解说。
+        与游戏进展（``game.*``）同走追加式历史，行标签区分两条线；同一件事两条线
+        都报（任务中遭遇攻击）时，由提示词规定只讲一次、以带任务上下文的那条为准。
+        死亡是要紧事：置位待定夺信号（与 game.report 同款），下次空缓冲 tick 立即
+        促发一轮决策，主播当场知道、当场解说。
         """
         try:
             marker = "（已结束）" if getattr(payload, "resolved", False) else ""
-            line = f"[{payload.game}·{payload.kind}] {sanitize_internal_terms(payload.summary)}{marker}"
-            self._body_narrative.add(line, now_ms())
+            turn = note_turn(
+                f"遭遇·{payload.game}·{payload.kind}",
+                f"{sanitize_internal_terms(payload.summary)}{marker}",
+                payload.timestamp_ms or now_ms(),
+            )
+            self._stage_game_event(turn)
             if payload.kind == "died":
                 # 死亡是要紧事：与 game.report 同款置位待定夺信号，下次空缓冲 tick 立即
                 # 促发一轮决策（绕最小间隔与每小时上限）。死亡连发时连窗是有意行为——
                 # 那是叙事价值最高的时刻，主播应当场知道、当场解说。
                 self._game_decision_pending = True
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
-            self._logger.warning(f"收集身体近况失败: {exc}")
-
-    def _body_narrative_text(self) -> str:
-        """导出身体侧近况全文（Planner 上下文用），标注到达时间与"新"，口径同游戏叙事。"""
-        return self._body_narrative.render(now_ms()).text
+            self._logger.warning(f"收集身体侧事件失败: {exc}", exc=True)
 
     async def _on_game_chat(
         self,
@@ -955,11 +999,12 @@ class StreamerAgent(BaseAgent):
         payload: GameChatPayload,
         source: str,
     ) -> None:
-        """``game.chat.*`` 回调：收集游戏里别人说的话；玩家搭话促发一轮决策。
+        """``game.chat.*`` 回调：游戏里别人说的话入待入账队列；玩家搭话促发一轮决策。
 
         玩家聊天是有人在跟游戏里的我说话，像弹幕一样值得及时接住，所以置位待决策信号
         （下次空缓冲 tick 触发；弹幕在排队时随那一轮一起看到）。系统消息（公告、死亡
-        提示、传送请求等）是信息，只进参考段，不单独唤醒主播。
+        提示、传送请求等）是信息，只作参考，不单独唤醒主播。私聊行不进时间线：
+        只交本窗决策参考段，私下的话不能被当众说出来。
         """
         del event_name, source
         try:
@@ -970,25 +1015,15 @@ class StreamerAgent(BaseAgent):
             note = "（原话过长已截断）" if payload.truncated else ""
             if payload.suppressed:
                 note += f"（之前还有 {payload.suppressed} 条重复或刷屏的没转过来）"
-            line = f"[{payload.game}] {speaker}：{payload.content}{note}"
-            self._game_chat.add(line, now_ms())
+            body = f"{speaker}：{payload.content}{note}"
             if payload.private:
-                self._private_chat_lines.append(line)
+                self._pending_private_chat.append(f"[{payload.game}] {body}")
+            else:
+                self._stage_game_event(note_turn(payload.game, body, payload.timestamp_ms or now_ms()), is_chat=True)
             if payload.kind == "player":
                 self._game_decision_pending = True
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
-            self._logger.warning(f"收集游戏聊天失败: {exc}")
-
-    def _game_chat_view(self) -> NarrativeView:
-        """导出游戏里的聊天：全文给 Planner（到达时间与"新"口径同游戏叙事），本窗新到的原话给表达侧。
-
-        私聊只留在全文里：表达侧会围绕新到的原话跟观众聊，私下的话交过去就等于当众转述。
-        """
-        view = self._game_chat.render(now_ms())
-        if not self._private_chat_lines:
-            return view
-        private = set(self._private_chat_lines)
-        return NarrativeView(text=view.text, fresh=tuple(line for line in view.fresh if line not in private))
+            self._logger.warning(f"收集游戏聊天失败: {exc}", exc=True)
 
     def _latest_live_frame(self) -> Optional[Any]:
         """最新一帧直播画面（图像暂存 latest 槽位快照；从未采样过为 None）。"""
@@ -1631,7 +1666,12 @@ class StreamerAgent(BaseAgent):
         显式场次进行中时，live_chat 是已落库对话的事实源；没开场次时的对话与
         调试注入的观众消息不会落库，由内存对话轮按发生时刻并入同一条时间线。
         读库失败返回 None（宁可本轮无历史，也不拿残缺历史冒充完整对话）。
+
+        决策窗边界在此收口：待入账的游戏事件队列整批追加进时间线（本方法每轮
+        决策先被调用一次，队列只在这里消费），本批行同时记为"本轮新入账批次"
+        供决策执行器与状态事实块取用。
         """
+        self._drain_game_events()
         stored: List[_LiveChatTurn] = []
         live_pk: Optional[int] = None
         if self._chat is not None and self._session_manager is not None:

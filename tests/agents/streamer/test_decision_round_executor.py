@@ -12,6 +12,7 @@ from src.agents.streamer.decision_executor import (
     _trigger_reason_text,
 )
 from src.agents.streamer.stats import StreamerStats
+from src.agents.streamer.timeline import GameEventBatch
 from src.modules.events.names import CoreEvents
 
 _OKAY_OUTCOME = {
@@ -71,7 +72,7 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
         thinking_enabled=False,
         history_provider=AsyncMock(return_value=[]),
         rundown_text_provider=MagicMock(return_value=None),
-        game_narrative_provider=MagicMock(return_value=""),
+        game_events_provider=MagicMock(return_value=GameEventBatch()),
     )
     deps = {
         "planner": planner,

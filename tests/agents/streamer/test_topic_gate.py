@@ -9,6 +9,7 @@ import pytest
 
 from src.agents.streamer.planner import Planner, _Intent
 from src.agents.streamer.room_state import RoomState
+from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.topic_gate import check_topic, rejection_reason, strip_citations
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.time_utils import now_ms
@@ -96,7 +97,7 @@ def test_ascii_fragments_never_count_as_new_words() -> None:
 
 def test_replay_repeat_pair_is_blocked() -> None:
     """真实复读对固化（近邻两轮，"睡觉放床"话题连读）：
-    剥引注后字面大面积重合，本窗游戏叙事不构成豁免新词，判重拦下。"""
+    剥引注后字面大面积重合，本窗游戏事件行不构成豁免新词，判重拦下。"""
     known_topic = (
         "游戏内已入夜，主播尝试睡觉但未成功：身边没有能放下床的两格空位（需要空格与结实的地面），"
         "身体没有硬放，随即结束该动作（见游戏记录）。床在背包里，手上已是石斧。手头任务仍是白天就近采集"
@@ -196,7 +197,7 @@ async def test_gate_rejects_repeat_then_silence_fallback() -> None:
     )
     _seed_spoken(planner)
 
-    outcome = await planner.plan([], proactive=True, game_narrative="挖到了石料")
+    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(events=("挖到了石料",)))
 
     assert (outcome["replied"], outcome["silent_reason"], outcome["speech"]) == (False, "natural", None)
     assert (outcome["topic_gate_retries"], outcome["reply_failures"]) == (2, 0)
@@ -215,7 +216,7 @@ async def test_gate_passes_fresh_topic_and_records_intent() -> None:
     planner, _llm, reply = _planner([_reply_response("新话题：水车修好了")])
     _seed_spoken(planner)
 
-    outcome = await planner.plan([], proactive=True, game_narrative="水车转起来了")
+    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(events=("水车转起来了",)))
 
     assert outcome["replied"] is True
     assert outcome["topic_gate_retries"] == 0
@@ -229,11 +230,11 @@ async def test_gate_retries_reset_per_plan() -> None:
     _seed_spoken(planner)
 
     # 上一窗：打回一次后收场
-    await planner.plan([], proactive=True, game_narrative="挖到了石料")
+    await planner.plan([], proactive=True, game_batch=GameEventBatch(events=("挖到了石料",)))
 
     # 下一窗：同样的话题仍能拿到完整的两次打回机会
     llm.generate.side_effect = [_reply_response(_REPEAT_TOPIC), _silent_response()]
-    outcome = await planner.plan([], proactive=True, game_narrative="挖到了石料")
+    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(events=("挖到了石料",)))
 
     assert outcome["topic_gate_retries"] == 1
     assert outcome["silent_reason"] == "natural"

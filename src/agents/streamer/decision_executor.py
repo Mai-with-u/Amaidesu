@@ -5,7 +5,7 @@
 生成 round_id → 发射 ``streamer.stage``（planning）→ Planner ReAct 决策
 → 产出送发言管线 → 发射 ``planner.decision`` 与 idle 状态。
 
-依赖全部构造期注入（不持 Agent 引用）；历史/流程单/游戏叙事经 provider
+依赖全部构造期注入（不持 Agent 引用）；历史/流程单/游戏事件批次经 provider
 回调取用（读数逻辑的事件近邻留在 Agent）。
 """
 
@@ -25,8 +25,8 @@ from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import ModuleLogger, get_logger
 from src.modules.time_utils import now_ms
 
-from .narrative import NarrativeView
 from .planner import Planner
+from .timeline import GameEventBatch
 from .proactive_trigger import ProactiveTrigger
 from .room_state import RoomState
 from .speech_dispatcher import SpeechDispatcher
@@ -107,23 +107,19 @@ class DecisionRoundExecutor:
         thinking_enabled: bool,
         history_provider: Callable[[], Any],
         rundown_text_provider: Callable[[], Optional[str]],
-        game_narrative_provider: Callable[[], str],
-        body_narrative_provider: Optional[Callable[[], str]] = None,
+        game_events_provider: Optional[Callable[[], GameEventBatch]] = None,
         reminders_provider: Optional[Callable[[], str]] = None,
         logger: Optional[ModuleLogger] = None,
-        game_chat_provider: Optional[Callable[[], NarrativeView]] = None,
         session_recap_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         """``history_provider`` 等 provider 返回值形态：
 
         - history: ``Optional[List]``（None/空 = 无历史，鸭子类型对话轮）
         - rundown_text: ``Optional[str]``（None = 无流程单情境）
-        - game_narrative: ``str``（可为空串）
-        - body_narrative: ``str``（可为空串；AI 玩家身体侧近况，缺省 = 不注入）
+        - game_events: ``GameEventBatch``（本轮新入账的游戏事件批次：时间线新行进
+          事实块与新鲜语料，聊天原话随说话交给表达侧；缺省 = 本窗无游戏事件）
         - reminders: ``str``（可为空串；运营递话留言，**读取即取空队列**——
           送达一次制，缺省 = 不注入）
-        - game_chat: ``NarrativeView``（全文进 Planner 参考段，本窗新到的原话随说话交给
-          表达侧；缺省 = 不注入）
         - session_recap: ``str``（可为空串；上场回顾，开播后固定整场不变，缺省 = 不注入）
         """
         self._logger = logger or get_logger("StreamerAgent.DecisionRoundExecutor")
@@ -137,10 +133,8 @@ class DecisionRoundExecutor:
         self._thinking_enabled = thinking_enabled
         self._history_provider = history_provider
         self._rundown_text_provider = rundown_text_provider
-        self._game_narrative_provider = game_narrative_provider
-        self._body_narrative_provider = body_narrative_provider
+        self._game_events_provider = game_events_provider
         self._reminders_provider = reminders_provider
-        self._game_chat_provider = game_chat_provider
         self._session_recap_provider = session_recap_provider
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
@@ -263,15 +257,8 @@ class DecisionRoundExecutor:
         # 拼装流程单上下文
         rundown_text = self._rundown_text_provider()
 
-        # 游戏叙事（三通道·事件：MinecraftAgent 等 emit 的 game.* 摘要）
-        game_narrative = self._game_narrative_provider()
-
-        # 身体侧近况（采集器分类后的 game.body.* 摘要；缺省不注入）
-        body_narrative = self._body_narrative_provider() if self._body_narrative_provider else ""
-
-        # 游戏里的聊天（game.chat.* 摘要：别的玩家在跟我说话、服务器通知；缺省不注入）。
-        # 全文给 Planner 判断；本窗新到的原话另交给表达侧，玩家搭话促发的一轮才不会被当成冷场
-        game_chat = self._game_chat_provider() if self._game_chat_provider else NarrativeView(text="")
+        # 本轮新入账的游戏事件批次（决策窗边界批量追加进时间线的那一批；缺省为空批次）
+        game_batch = self._game_events_provider() if self._game_events_provider else GameEventBatch()
 
         # 运营递话留言（读取即取空队列——送达一次制；缺省不注入）
         reminders = self._reminders_provider() if self._reminders_provider else ""
@@ -292,14 +279,11 @@ class DecisionRoundExecutor:
                 proactive=proactive,
                 history=history,
                 rundown_text=rundown_text,
-                game_narrative=game_narrative,
-                body_narrative=body_narrative,
-                game_chat=game_chat.text,
+                game_batch=game_batch,
                 reminders=reminders,
                 thinking=thinking,
                 round_id=round_id,
                 trigger_reason=trigger_reason,
-                fresh_game_chat=list(game_chat.fresh),
                 session_recap=session_recap,
             )
         except Exception as exc:

@@ -36,7 +36,7 @@ def test_live_frame_gates_removed_and_written_back(tmp_path: Path) -> None:
     live_frame = doc["agents"]["streamer"]["live_frame"]
     assert "max_age_ms" not in live_frame and "min_interval_ms" not in live_frame
     assert live_frame["stale_warn_ms"] == 60_000
-    assert doc["meta"]["version"] == "2.0.47"
+    assert doc["meta"]["version"] == "2.0.48"
 
     first = path.read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)
