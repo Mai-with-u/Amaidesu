@@ -128,7 +128,7 @@ enabled = ["streamer", "text_adv"]
 enabled = ["console_input"]          # 仅启用控制台输入
 # enabled = ["console_input", "bili_danmaku"]  # B 站 legacy 弹幕（需填 room_id；未在维护）
 # enabled = ["console_input", "bili_danmaku_official"]  # B 站官方弹幕（需填 id_code/app_id/access_key）
-# enabled = ["console_input", "bili_danmaku_laplace"]   # LAPLACE Event Bridge（需本地 leb-server，见 guides/laplace-bridge.md）
+# enabled = ["console_input", "bili_danmaku_laplace"]   # LAPLACE Event Bridge（需 leb-server 或 Event Fetcher bridge mode，见 guides/laplace-bridge.md）
 # enabled = ["console_input", "stt"]     # 语音转写（需 iflytek 配置）
 
 # 各采集器的具体配置 = 同名子段（由该采集器包内 ConfigSchema 校验，缺键自动补默认）
@@ -207,7 +207,7 @@ uv run python main.py --dry
 | `console_input` | 控制台输入（开发测试，零依赖） | `user_id` / `user_nickname` |
 | `bili_danmaku` | B 站 legacy 弹幕（轮询；未在维护，可用性未知） | `room_id` / `poll_interval` |
 | `bili_danmaku_official` | B 站官方长连弹幕 | `id_code` / `app_id` / `access_key(_secret)` / `api_host` |
-| `bili_danmaku_laplace` | LAPLACE Event Bridge 弹幕（client 角色连本地 leb-server） | 包内 ConfigSchema（url / token / room_id / 事件开关） |
+| `bili_danmaku_laplace` | LAPLACE Event Bridge 弹幕（client 角色连 leb-server 或 Event Fetcher bridge mode） | 包内 ConfigSchema（url / token / room_id / 事件开关） |
 | `stt` | 语音转文字（讯飞 ASR + VAD） | 包内 ConfigSchema（iflytek_asr / vad / audio） |
 | `live_frame` | 直播画面帧采集（OBS WebSocket 取帧，主播每次决策可见最新画面，见 ADR-041） | 包内 ConfigSchema（OBS 连接 / 采样参数） |
 
