@@ -34,7 +34,12 @@
             <div class="url-row">
               <code class="path-code">{{ fullUrl }}</code>
               <button type="button" class="action-button" @click="copyEmbedUrl">复制</button>
-              <a class="action-button" :href="previewUrl" target="_blank" rel="noopener">打开页面</a>
+              <a class="action-button" :href="fullUrl" target="_blank" rel="noopener" title="与 OBS 嵌入效果完全一致">
+                打开正式
+              </a>
+              <a class="action-button" :href="previewUrl" target="_blank" rel="noopener" title="额外显示排查提示（如未配置占位）">
+                打开预览
+              </a>
             </div>
           </dd>
         </div>
@@ -93,7 +98,7 @@
           <dt class="field-label">使用方式</dt>
           <dd class="field-value">
             在直播软件里添加「浏览器源」，粘贴上方网址，宽高按推荐尺寸设置。
-            「打开页面」会在浏览器新标签预览效果——比正式嵌入的页面多显示排查提示。
+            「打开正式」与 OBS 嵌入后的效果完全一致；「打开预览」会额外显示排查提示。
           </dd>
         </div>
       </dl>
