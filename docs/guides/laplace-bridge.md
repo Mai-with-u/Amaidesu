@@ -89,7 +89,7 @@ Laplace 的 `message` / `gift` / `superchat` / `toast` / `interaction` 分别映
 
 ## 已知限制
 
-- **实时流，无历史补播**：断线期间的事件不会补发；重连后依靠 `id` / `stableKey` 去重，降低重复落库概率。gift 的 `id` 可能由上游按“时间戳:房间:UID”生成，极端情况下同一用户同一时间戳的多条礼物可能被当成重复。
+- **实时流，无历史补播**：断线期间的事件不会补发；重连后依靠 `id` / `stableKey` / 内容指纹去重，降低重复落库概率。gift 的事件 `id` 可能由上游按“时间戳:房间:UID”生成，采集器不单独用 `id` 判断重复，而是比较 uid、礼物 ID、数量、价格、时间戳等内容字段，避免同一用户同一时间戳的不同礼物被误删。
 - **观众身份与 official 不互通**：Laplace 公开事件只有 `uid`（legacy 链路是真实 B 站 UID；Open Platform 来源的 `uid` 已废弃、恒 0，且不提供 `open_id`）。本采集器与 legacy 同命名空间，`bili_danmaku_official` 用 `open_id`；切换消息源会让同一观众在 viewers/画像里变成两个身份，同一房间不要混用、不要中途换源。B 站字段定义见[开放平台文档](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)。
 - **礼物金额为源限制**：Laplace 只提供含舰队折扣的总价，采集器把它同时写入 `total_price` 与 `paid_price`；`unit_price` 是由总价反推的近似值。现有金额口径要求贡献按标价计算，该源无法提供标价，因此贡献统计会按折扣后金额计算；代码与本文均已显式注明。
 - **连击信息缺失**：Laplace `gift` 事件只提供 `giftAmount`，没有 `combo_id` / `combo_count`；`GiftInfo` 的 `combo_*` 保持默认，连击归并只能按消息量处理。

@@ -234,8 +234,8 @@ class LaplaceEventMapper:
             return None
         if not self._should_handle(event):
             return None
-        if self._is_duplicate(event):
-            self.logger.debug(f"Laplace 重复事件（已忽略）: type={event.type}, key={self._dedupe_key(event)}")
+        if self._is_duplicate(event, raw):
+            self.logger.debug(f"Laplace 重复事件（已忽略）: type={event.type}, key={self._dedupe_key(event, raw)}")
             return None
 
         if isinstance(event, _MessageEvent):
@@ -417,21 +417,50 @@ class LaplaceEventMapper:
             value //= 1_000_000
         return value if value > 0 else now_ms()
 
-    def _dedupe_key(self, event: _LaplaceEventBase) -> str:
+    def _gift_dedupe_key(self, event: _GiftEvent, raw: Dict[str, Any]) -> str:
+        """礼物的内容指纹。
+
+        LAPLACE 的 ``Gift.id`` 由“时间戳:房间:UID”构成，同一用户同一时间戳
+        的多条礼物会共用 id，不能单独作为去重键。这里把能区分事件的字段拼
+        成指纹：只有内容完全相同的重播才会被丢弃；连击更新只要数量、价格或
+        时间戳有差异就会保留。``combo_total_coin`` 若被上游保留在原始事件
+        中，也纳入指纹。
+        """
+        combo_total = raw.get("combo_total_coin", raw.get("comboTotalCoin"))
+        parts = (
+            event.id or "",
+            event.origin,
+            event.uid,
+            event.gift_id,
+            event.gift_amount,
+            event.price,
+            event.coin_type or "",
+            event.guard_type,
+            event.timestamp_normalized,
+            event.gift_name or "",
+            event.message or "",
+            self._blind_gift_id(event.blind_gift),
+            combo_total if combo_total is not None else "",
+        )
+        return ":".join(str(part) for part in parts)
+
+    def _dedupe_key(self, event: _LaplaceEventBase, raw: Dict[str, Any]) -> str:
         if isinstance(event, _MessageEvent):
             key = event.id_str or event.id
         elif isinstance(event, _SuperChatEvent):
             key = str(event.sc_id) if event.sc_id else (event.id or "")
         elif isinstance(event, _ToastEvent):
             key = event.stable_key or event.id
+        elif isinstance(event, _GiftEvent):
+            key = self._gift_dedupe_key(event, raw)
         else:
             key = event.id
         return f"{event.type}:{key}" if key else ""
 
-    def _is_duplicate(self, event: _LaplaceEventBase) -> bool:
+    def _is_duplicate(self, event: _LaplaceEventBase, raw: Dict[str, Any]) -> bool:
         if self._dedupe_cache_size <= 0:
             return False
-        key = self._dedupe_key(event)
+        key = self._dedupe_key(event, raw)
         if not key:
             return False
         if key in self._seen:

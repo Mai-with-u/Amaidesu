@@ -374,6 +374,24 @@ def test_duplicate_message_dropped() -> None:
     assert mapper.to_payload(_message_event()) is None
 
 
+def test_duplicate_gift_dropped() -> None:
+    mapper = LaplaceEventMapper()
+    assert mapper.to_payload(_gift_event()) is not None
+    assert mapper.to_payload(_gift_event()) is None
+
+
+def test_gift_same_id_different_content_not_deduped() -> None:
+    mapper = LaplaceEventMapper()
+    assert mapper.to_payload(_gift_event(id="same", giftAmount=1, price=500)) is not None
+    assert mapper.to_payload(_gift_event(id="same", giftAmount=2, price=1000)) is not None
+
+
+def test_gift_combo_total_coin_distinguishes_events() -> None:
+    mapper = LaplaceEventMapper()
+    assert mapper.to_payload(_gift_event(id="combo", combo_total_coin=500)) is not None
+    assert mapper.to_payload(_gift_event(id="combo", combo_total_coin=1000)) is not None
+
+
 def test_same_id_different_types_not_cross_deduped() -> None:
     mapper = LaplaceEventMapper()
     assert mapper.to_payload(_message_event(id="same", idStr="")) is not None
