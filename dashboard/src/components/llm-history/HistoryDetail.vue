@@ -49,10 +49,13 @@
         </el-descriptions-item>
       </el-descriptions>
 
-      <!-- 提示词预览：messages 按序卡片化渲染完整对话流 -->
-      <div v-if="promptMessages.length || promptSystem || promptFallback" class="detail-section">
+      <!-- 提示词预览：messages 按序卡片化渲染完整对话流；正文缺失时显示空态说明 -->
+      <div class="detail-section">
         <h4 class="section-title">提示词预览</h4>
-        <div class="prompt-preview">
+        <p v-if="!promptMessages.length && !promptSystem && !promptFallback" class="empty-hint">
+          请求正文未找到：正文存于日志诊断文件，可能已被清理。
+        </p>
+        <div v-else class="prompt-preview">
           <div v-if="promptSystem" class="message-card">
             <div class="message-header">
               <span class="prompt-role is-system">system</span>
@@ -126,10 +129,24 @@
         </div>
       </div>
 
-      <!-- 推理链 -->
+      <!-- 推理链：默认折叠，标题行点击展开/收起 -->
       <div v-if="detail.reasoning_content" class="detail-section">
-        <h4 class="section-title">推理链</h4>
-        <div class="reasoning-content">
+        <div
+          class="section-header is-clickable"
+          role="button"
+          tabindex="0"
+          @click="reasoningExpanded = !reasoningExpanded"
+          @keydown.enter="reasoningExpanded = !reasoningExpanded"
+        >
+          <h4 class="section-title">
+            推理链
+            <el-icon class="fold-arrow" :class="{ 'is-expanded': reasoningExpanded }">
+              <ArrowRight />
+            </el-icon>
+          </h4>
+          <span class="fold-hint">{{ reasoningExpanded ? '收起' : '展开' }}</span>
+        </div>
+        <div v-show="reasoningExpanded" class="reasoning-content">
           {{ detail.reasoning_content }}
         </div>
       </div>
@@ -174,18 +191,25 @@
         </div>
       </div>
 
-      <!-- 请求参数（低频查看，置于末尾；可折叠 JSON 树） -->
+      <!-- 请求参数（低频查看，置于末尾；messages 已在提示词预览逐条展示，树中去重避免大请求双份 DOM） -->
       <div class="detail-section">
         <div class="section-header">
           <h4 class="section-title">请求参数</h4>
-          <el-icon class="copy-icon" title="复制 JSON" @click="copyJson(detail.request_params)">
+          <el-icon
+            class="copy-icon"
+            title="复制 JSON（含 messages 的完整原始参数）"
+            @click="copyJson(detail.request_params)"
+          >
             <CopyDocument />
           </el-icon>
         </div>
+        <p v-if="messagesCount !== null" class="empty-hint">
+          messages（{{ messagesCount }} 条）已在上方提示词预览逐条展示，此处不再重复渲染。
+        </p>
         <div class="params-block">
-          <!-- 默认全展开，仅 tools 字段强制折叠 -->
+          <!-- 默认全展开，仅 tools 字段可折叠（messages 剔除后 tools 是剩余的最大字段） -->
           <VueJsonPretty
-            :data="detail.request_params"
+            :data="paramsTree"
             :path-collapsible="node => node.path === 'root.tools'"
             theme="dark"
             show-line
@@ -195,7 +219,13 @@
     </div>
 
     <template #footer>
-      <el-button @click="handleClose(false)">关闭</el-button>
+      <div class="footer-nav">
+        <div v-if="showNav" class="nav-buttons">
+          <el-button :disabled="!hasPrev" @click="emit('prev')">上一条</el-button>
+          <el-button :disabled="!hasNext" @click="emit('next')">下一条</el-button>
+        </div>
+        <el-button @click="handleClose(false)">关闭</el-button>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -205,7 +235,7 @@ import { computed, ref, watch } from 'vue';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { ElMessage } from 'element-plus';
-import { CopyDocument } from '@element-plus/icons-vue';
+import { ArrowRight, CopyDocument } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import { normalizeMessage, type PreviewMessage } from '@/utils/llmMessage';
@@ -222,10 +252,16 @@ import {
 interface Props {
   visible: boolean;
   detail: LLMRequestHistory | null;
+  /** 当前行是否存在于列表页数据中；?request_id= 直达而列表无此行时隐藏导航按钮 */
+  showNav: boolean;
+  hasPrev: boolean;
+  hasNext: boolean;
 }
 
 interface Emits {
   (e: 'update:visible', value: boolean): void;
+  (e: 'prev'): void;
+  (e: 'next'): void;
 }
 
 const props = defineProps<Props>();
@@ -233,6 +269,17 @@ const emit = defineEmits<Emits>();
 
 // 展开的截图占位符（"消息序号:图序号"）；仅展开的单张渲染 <img>，换详情即清空
 const expandedImages = ref(new Set<string>());
+
+// 推理链默认折叠：内容长且属于次要信息，展开动作由标题行触发
+const reasoningExpanded = ref(false);
+
+watch(
+  () => props.detail?.request_id,
+  () => {
+    expandedImages.value = new Set();
+    reasoningExpanded.value = false;
+  },
+);
 
 function imageKey(messageIndex: number, imageIndex: number): string {
   return `${messageIndex}:${imageIndex}`;
@@ -253,13 +300,6 @@ function toggleImage(messageIndex: number, imageIndex: number): void {
   expandedImages.value = next;
 }
 
-watch(
-  () => props.detail?.request_id,
-  () => {
-    expandedImages.value = new Set();
-  },
-);
-
 // 提示词消息按序完整渲染（含 assistant 的 tool_calls 与 tool 返回）
 const promptMessages = computed<PreviewMessage[]>(() => {
   const messages = props.detail?.request_params?.messages;
@@ -277,6 +317,23 @@ const promptSystem = computed<string>(() => {
 const promptFallback = computed(() => {
   const prompt = props.detail?.request_params?.prompt as string | undefined;
   return prompt || '';
+});
+
+// 请求体 messages 条数；无 messages 键时为 null（说明行不显示）
+const messagesCount = computed<number | null>(() => {
+  const messages = props.detail?.request_params?.messages;
+  return Array.isArray(messages) ? messages.length : null;
+});
+
+// 参数树数据：剔除 messages 的浅拷贝，避免与提示词预览双份渲染大正文；
+// 复制按钮仍复制完整原始 request_params
+const paramsTree = computed<Record<string, unknown>>(() => {
+  const params = props.detail?.request_params;
+  if (!params) return {};
+  if (messagesCount.value === null) return params;
+  const rest: Record<string, unknown> = { ...params };
+  delete rest.messages;
+  return rest;
 });
 
 // 缓存命中：上游上报了（hit+miss>0）才展示，0/0 是"未上报"而非零命中
@@ -406,6 +463,42 @@ function handleClose(value: boolean) {
 
 .error-title {
   color: var(--color-danger);
+}
+
+/* 可点击的区块头（推理链折叠开关） */
+.section-header.is-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.fold-arrow {
+  font-size: 12px;
+  margin-left: 4px;
+  transition: transform 0.2s;
+}
+
+.fold-arrow.is-expanded {
+  transform: rotate(90deg);
+}
+
+.fold-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* muted 说明行：参数去重提示 / 正文缺失空态 */
+.empty-hint {
+  margin: 0 0 var(--spacing-sm) 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 弹窗 footer：导航按钮居左、关闭居右 */
+.footer-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
 }
 
 .mono {
