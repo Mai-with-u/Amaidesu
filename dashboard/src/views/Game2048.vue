@@ -1,5 +1,6 @@
 <template>
   <div class="game2048-container">
+    <WidgetStatusBadge :status="status" />
     <div class="left-panel">
       <div class="stat">
         <div class="stat-label stroke">得分</div>
@@ -57,6 +58,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useRawWebSocket } from '@/composables/useRawWebSocket';
+import WidgetStatusBadge from '@/components/widget/WidgetStatusBadge.vue';
 
 /** game.state.changed 快照载荷（/ws/game2048 单槽推送，与 GameBoardStatePayload 对齐） */
 interface Game2048State {
@@ -318,9 +320,9 @@ function applyFrame(state: Game2048State) {
   lastMoves = state.moves;
 }
 
-// /ws/game2048 专用协议（与主 WS 事件流无关）：
+// /ws/widget/game2048 专用协议（与主 WS 事件流无关）：
 // 接入即推单槽最新快照，后续每步落子增量推送：{ type: "state", state: {...} }
-useRawWebSocket('/ws/game2048', {
+const { status } = useRawWebSocket('/ws/widget/game2048', {
   onMessage: event => {
     try {
       const data = JSON.parse(event.data);

@@ -29,7 +29,7 @@ class GameChatPayload(BasePayload):
     """游戏内收到的一条聊天（已滤掉 AI 玩家自己的回显）。
 
     发布者：游戏专属聊天采集器（如 ``maicraft_chat``）
-    订阅者：主播 Agent（【游戏里的聊天】参考段，玩家聊天促发一轮决策）
+    订阅者：主播 Agent（对话历史的游戏聊天条目，玩家聊天促发一轮决策）
 
     Attributes:
         live_session_id: 场次主键；发布方不填，由场次盖章拦截器注入（0 = 未归属）

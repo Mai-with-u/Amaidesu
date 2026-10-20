@@ -321,3 +321,80 @@ def test_whole_list_submission_keeps_the_real_key_and_never_persists_the_placeho
     assert outcome.applied[0][1][0]["api_key"] == "sk-real" and outcome.applied[0][1][0]["base_url"] == "u2"
     written = (tmp_path / "model.toml").read_text(encoding="utf-8")
     assert "sk-real" in written and PLACEHOLDER not in written
+
+
+# 保存管线热应用：agents / collectors 域变更触发组件重建回执
+
+
+class _FakeHotReport:
+    """component_runtime.HotApplyReport 同形替身（热应用已被替换，无需真实管理器）。"""
+
+    def __init__(self, restarted: list[str]) -> None:
+        self.restarted = restarted
+        self.skipped: list[str] = []
+        self.failures: list[tuple[str, str]] = []
+
+    @property
+    def attempted(self) -> bool:
+        return bool(self.restarted or self.skipped or self.failures)
+
+
+def _generated_config_dir(tmp_path: Any) -> Any:
+    from src.modules.config.multi_file_loader import generate_default_configs
+
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir()
+    generate_default_configs(cfg_dir)
+    return cfg_dir
+
+
+def test_apply_config_updates_without_hot_context_keeps_restart_semantics(tmp_path) -> None:
+    outcome = asyncio.run(
+        apply_config_updates(
+            _FakeConfigService({}), _generated_config_dir(tmp_path), [("tools.tools.tasks.poll_interval_ms", 3000)]
+        )
+    )
+    assert outcome.success and outcome.requires_restart is True  # 未注入热应用上下文 = 维持需重启语义
+    assert outcome.hot_apply is None
+
+
+def test_apply_config_updates_with_hot_context_hot_applies_component_domain(tmp_path, monkeypatch) -> None:
+    import src.modules.dashboard.services.config_adapter as adapter
+
+    applied_keys: list[list[str]] = []
+
+    async def fake_hot_apply(ctx, config_service, config_dir, keys):  # noqa: ANN001
+        applied_keys.append(list(keys))
+        return _FakeHotReport(restarted=["streamer"])
+
+    monkeypatch.setattr(adapter, "hot_apply_components", fake_hot_apply)
+    outcome = asyncio.run(
+        apply_config_updates(
+            _FakeConfigService({}),
+            _generated_config_dir(tmp_path),
+            [("agents.agents.streamer.persona.bot_name", "新名字")],
+            hot_context=object(),  # 只作存在性标记：热应用入口已被替换，上下文不被消费
+        )
+    )
+
+    assert outcome.success and outcome.requires_restart is False  # agents 域已热应用，不再要求重启进程
+    assert outcome.hot_apply is not None and outcome.hot_apply.restarted == ["streamer"]
+    assert applied_keys == [["agents.agents.streamer.persona.bot_name"]]
+
+
+def test_apply_config_updates_with_hot_context_keeps_restart_for_non_component_domain(tmp_path, monkeypatch) -> None:
+    import src.modules.dashboard.services.config_adapter as adapter
+
+    async def fail_hot_apply(ctx, config_service, config_dir, keys):  # noqa: ANN001
+        raise AssertionError("tools 域变更不应触发组件热应用")
+
+    monkeypatch.setattr(adapter, "hot_apply_components", fail_hot_apply)
+    outcome = asyncio.run(
+        apply_config_updates(
+            _FakeConfigService({}),
+            _generated_config_dir(tmp_path),
+            [("tools.tools.tasks.poll_interval_ms", 3000)],
+            hot_context=object(),
+        )
+    )
+    assert outcome.success and outcome.requires_restart is True and outcome.hot_apply is None

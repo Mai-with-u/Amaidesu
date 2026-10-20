@@ -10,7 +10,7 @@ import pytest
 
 from src.agents.streamer import canonical
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
-from src.agents.streamer.narrative import NarrativeView
+from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.plan import DecisionPlan
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.replyer import Replyer
@@ -134,7 +134,7 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
         return_value=Response(
             success=True,
             content="",
-            tool_calls=[ToolCall(id="c1", name="streamer_reply", arguments={"topic_summary": "游戏里有人问"})],
+            tool_calls=[ToolCall(id="c1", name="streamer_reply", arguments={"topic_summary": "游戏里有人问", "is_novel": True})],
         )
     )
     prompt = MagicMock()
@@ -148,10 +148,17 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
         reply_provider=provider,
     )
 
-    outcome = await planner.plan([], proactive=True, fresh_game_chat=["[minecraft] 玩家 Steve：在吗"])
+    outcome = await planner.plan(
+        [],
+        proactive=True,
+        game_batch=GameEventBatch(
+            events=("[20:01 minecraft] 玩家 Steve：在吗",),
+            fresh_chat=("[20:01 minecraft] 玩家 Steve：在吗",),
+        ),
+    )
 
     assert outcome["replied"] is True
-    assert seen == [["[minecraft] 玩家 Steve：在吗"]]
+    assert seen == [["[20:01 minecraft] 玩家 Steve：在吗"]]
     assert provider._round_game_chat == []
 
 
@@ -172,10 +179,10 @@ async def test_executor_splits_game_chat_view() -> None:
         thinking_enabled=False,
         history_provider=AsyncMock(return_value=[]),
         rundown_text_provider=MagicMock(return_value=None),
-        game_narrative_provider=MagicMock(return_value=""),
-        game_chat_provider=MagicMock(
-            return_value=NarrativeView(
-                text="[新·刚刚] [minecraft] 玩家 Steve：在吗", fresh=("[minecraft] 玩家 Steve：在吗",)
+        game_events_provider=MagicMock(
+            return_value=GameEventBatch(
+                events=("[20:01 minecraft] 玩家 Steve：在吗",),
+                fresh_chat=("[20:01 minecraft] 玩家 Steve：在吗",),
             )
         ),
     )
@@ -183,5 +190,5 @@ async def test_executor_splits_game_chat_view() -> None:
     await executor.execute([], forced=False, trigger_reason="proactive:game", proactive=True)
 
     kwargs = planner.plan.await_args.kwargs
-    assert kwargs["game_chat"] == "[新·刚刚] [minecraft] 玩家 Steve：在吗"
-    assert kwargs["fresh_game_chat"] == ["[minecraft] 玩家 Steve：在吗"]
+    assert kwargs["game_batch"].events == ("[20:01 minecraft] 玩家 Steve：在吗",)
+    assert kwargs["game_batch"].fresh_chat == ("[20:01 minecraft] 玩家 Steve：在吗",)

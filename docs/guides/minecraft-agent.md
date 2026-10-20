@@ -77,6 +77,6 @@ mc = "看看周围，继续手头的活"
 - `maicraft.py` — MaiCraft v1 返回格式与事件流语义的唯一解读点
 - `goals.py` — 后台目标跟踪（事件长轮询 → 唤醒）
 - `tools.py` — 玩家决策工具与对外工具面
-- `skills/` — 玩法经验技能库（按 Mod 能力清单筛选进目录），编写见 [Skill 编写与接入](skill.md)
+- `skills/` — 本地直播与上报策略（玩法技能随 MaiCraft 发布，经 `skill://` 资源读），编写见 [Skill 编写与接入](skill.md)
 
 架构与设计（为什么这样、终止语义怎么定的）：[MinecraftAgent 设计](../architecture/minecraft-agent.md)。

@@ -1,14 +1,16 @@
 """Skill 数据模型：元数据、加载后的技能与目录条目
 
 Skill 是"怎么把一类事做成"的经验文档（打法、步骤、决策点、常见坑），
-与能力契约（某个能力怎么调）和外部知识库（世界里的事实是什么）分工：
-契约与事实由能力提供方给出，打法由使用能力的 Agent 一侧沉淀。
+与能力契约（某个能力怎么调）和外部知识库（世界里的事实是什么）分工。
+玩法技能随能力提供方（MaiCraft）发布，宿主只保留直播与上报策略；两边在
+目录里合并，正文各按自己的来源读。
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Set
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -115,6 +117,25 @@ class Skill(BaseModel):
         return self.metadata.name
 
 
+@dataclass(frozen=True, slots=True)
+class RemoteSkill:
+    """服务器发布的一项技能：目录里的一行，正文按 uri 另取。
+
+    技能正文不随目录一起读：模型要读哪一篇，宿主再按 ``uri`` 去 ``resources/read``。
+    受众由注册方声明（MaiCraft 的技能只给 minecraft），与本地技能同一个筛选口径。
+    """
+
+    name: str
+    description: str
+    category: str
+    uri: str
+    agents: tuple[str, ...] = ("*",)
+    origin: str = "MaiCraft"
+
+    def visible_to(self, agent: str) -> bool:
+        return self.agents == ("*",) or agent in self.agents
+
+
 class SkillEntry(BaseModel):
     """目录条目：某个 Agent 在当前环境下看到的一项技能"""
 
@@ -123,10 +144,14 @@ class SkillEntry(BaseModel):
     category: str
     # 有前提但当前环境尚未确认时，列出待确认的项，由模型结合现场自行判断
     unverified: dict[str, list[str]] = Field(default_factory=dict)
+    # 本地技能是 local；远端技能写明来源，读正文时模型能看到是谁发布的
+    origin: str = "local"
+    uri: str = ""
 
 
 __all__ = [
     "Applicability",
+    "RemoteSkill",
     "Skill",
     "SkillEntry",
     "SkillEnvironment",

@@ -66,3 +66,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-041：直播画面做成采集流（变化才发布 / 事件只带句柄 / 决策窗首请求尾部看一眼）](041-live-frame-stream.md)
 - [ADR-042：主播记忆改为场次回顾 + 观众画像（退役事实提取与通用记忆层）](042-streamer-memory-recap-and-roster.md)
 - [ADR-043：游戏 Agent 的两种交互形态（委派型 / 遥控型——工具面自带玩法说明、命令可映射为工具调用、留空目标只认可接收名册）](043-game-agent-interaction-shapes.md)
+- [ADR-044：玩法技能随 Mod 发布，直播策略留宿主（skill:// 资源 + 本地策略）](044-skills-over-mcp.md)

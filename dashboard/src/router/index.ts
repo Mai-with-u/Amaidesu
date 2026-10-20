@@ -82,26 +82,35 @@ const router = createRouter({
       component: () => import('@/views/LLMHistory.vue'),
     },
     {
-      path: '/danmaku',
+      // 小部件管理页：嵌入页列表、复制嵌入网址与配置入口（壳内常规页面）
+      path: '/widgets',
+      name: 'widgets',
+      component: () => import('@/views/Widgets.vue'),
+    },
+    {
+      // 弹幕嵌入页（给 OBS/直播姬浏览器源嵌的全屏透明页，不在壳内导航）
+      path: '/widget/danmaku',
       name: 'danmaku',
       component: () => import('@/views/Danmaku.vue'),
       meta: { layout: false },
     },
     {
-      path: '/subtitle',
+      // 字幕嵌入页（同上）
+      path: '/widget/subtitle',
       name: 'subtitle',
       component: () => import('@/views/Subtitle.vue'),
       meta: { layout: false },
     },
     {
-      // 表情差分小部件页（给 OBS 浏览器源嵌的全屏展示页，不进主导航）
+      // 表情差分嵌入页（同上）
       path: '/widget/expression_sheet',
       name: 'expression-sheet-widget',
       component: () => import('@/views/ExpressionSheet.vue'),
       meta: { layout: false },
     },
     {
-      path: '/game2048',
+      // 2048 嵌入页（同上）
+      path: '/widget/game2048',
       name: 'game2048',
       component: () => import('@/views/Game2048.vue'),
       meta: { layout: false },

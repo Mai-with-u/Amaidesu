@@ -115,12 +115,21 @@ export const componentApi = {
 // 配置
 //
 // 后端 `/api/v1/config` 返回各配置文件 scope 展平的合并视图（敏感字段以
-// 占位文案遮蔽）；`/api/v1/config/schema` 返回按文件归组的 groups。配置
-// 读写由 stores/settings.ts 经本文件的共享 axios 实例完成，此处仅暴露
-// AppLayout 顶栏使用的重启触发，以及视觉采集面板读取 vision 段的合并视图入口。
+// 占位文案遮蔽）；`/api/v1/config/schema` 返回按文件归组的 groups。设置页
+// 的读写走 stores/settings.ts（pending 队列流）；此处暴露重启触发、合并
+// 视图读取，以及小部件管理页等页面直接使用的批量原子写回入口。
 export const configApi = {
   restart: () => api.post<ConfigUpdateResponse>('/config/restart'),
   getConfig: () => api.get<{ config: Record<string, unknown> }>('/config'),
+  // 批量原子写回：全成或整批回退（后端保证）；requires_restart 表示改动须重启生效
+  saveBatch: (changes: { key: string; value: unknown }[]) =>
+    api.post<{
+      success: boolean;
+      message: string;
+      requires_restart?: boolean;
+      results?: { key: string; success: boolean }[];
+      errors?: { key: string; message: string }[];
+    }>('/config/batch', { changes }),
 };
 
 // 调试注入

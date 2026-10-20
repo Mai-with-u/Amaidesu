@@ -28,10 +28,10 @@ def test_sanitize_internal_terms(text: str, expected) -> None:
     assert sanitize_internal_terms(text) == (text if expected is None else expected)
 
 
-async def test_game_narrative_line_sanitized_at_boundary() -> None:
-    """game.* 叙事进入缓冲前脱敏：任务号不进主播上下文。"""
+async def test_game_event_line_sanitized_at_boundary() -> None:
+    """game.* 事件行进入待入账队列前脱敏：任务号不进主播上下文。"""
     agent = StreamerAgent.__new__(StreamerAgent)  # 只测事件行组装，不走完整装配
-    agent._game_narrative = MagicMock()
+    agent._pending_game_events = []
     agent._planner = MagicMock()
     agent._logger = MagicMock()
 
@@ -43,7 +43,7 @@ async def test_game_narrative_line_sanitized_at_boundary() -> None:
     )
     await agent._on_game_event("game.report", payload, "test")
 
-    line = agent._game_narrative.add.call_args.args[0]
+    line = agent._pending_game_events[0].base
     assert "deleg_" not in line and "simulated:" not in line
     assert "一个游戏任务" in line and "chest" in line
 

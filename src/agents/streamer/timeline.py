@@ -19,14 +19,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.agents.streamer import canonical
 from src.modules.context import BackgroundCheckpoint, ContextBudgetConfig, PrefixGuard, TokenCounter, Watermarks
 from src.modules.context import fold_count, resolve_watermarks
 from src.modules.logging import get_logger
 
-__all__ = ["CHAPTER_MESSAGE_TYPE", "GAME_MESSAGE_TYPE", "StreamerTimeline", "TimelineTurn", "note_turn"]
+__all__ = [
+    "CHAPTER_MESSAGE_TYPE",
+    "GAME_MESSAGE_TYPE",
+    "GameEventBatch",
+    "StreamerTimeline",
+    "TimelineTurn",
+    "note_turn",
+]
 
 logger = get_logger("StreamerTimeline")
 
@@ -90,6 +97,22 @@ def note_turn(label: str, body: str, timestamp_ms: int) -> TimelineTurn:
     return TimelineTurn(
         role="user", content=f"[{head}] {body}", message_type=GAME_MESSAGE_TYPE, timestamp_ms=timestamp_ms
     )
+
+
+@dataclass(frozen=True)
+class GameEventBatch:
+    """一个决策窗新入账的游戏事件批次（决策窗边界批量追加进时间线的那一批）。
+
+    - ``events``：本批全部时间线行原文（含私聊行）；状态跃迁事实块与本轮
+      新鲜语料从这里取，不再从历史回放里提取。
+    - ``fresh_chat``：本批里游戏聊天的非私聊行原话，随本轮说话交给表达侧。
+    - ``private_chat``：私聊行。私聊不进时间线（表达侧与历史都看不到），
+      只在本批交给决策层，且下一窗不再携带。
+    """
+
+    events: Tuple[str, ...] = ()
+    fresh_chat: Tuple[str, ...] = ()
+    private_chat: Tuple[str, ...] = ()
 
 
 class StreamerTimeline:

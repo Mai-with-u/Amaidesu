@@ -5,7 +5,13 @@
 段树结构（TOML 视角）::
 
     [agents.streamer]
-    rundown_id, planner_max_steps, planner_recent_intents_max, planner_recent_relays_max
+    (
+        rundown_id,
+        planner_max_steps,
+        planner_recent_intents_max,
+        planner_recent_relays_max,
+    )
+    speech_gate_window, speech_gate_ratio
 
     [agents.streamer.persona]
     bot_name, personality, style_constraints, behavior_style, audience_salutation
@@ -32,7 +38,13 @@
         min_interval_ms,
         schedule_interval_ms,
     )
-    schedule_only_cold, max_per_hour, topic_required, rundown_speech_interval_ms
+    (
+        schedule_only_cold,
+        max_per_hour,
+        topic_required,
+        rundown_speech_interval_ms,
+    )
+    rundown_ready_interval_ms
 
     [agents.streamer.word_filter]
     enabled, words, replacement, case_sensitive, drop_on_match
@@ -42,9 +54,6 @@
 
     [agents.streamer.thinking_stream]
     enabled, flush_interval_ms, buffer_max
-
-    [agents.streamer.narrative]
-    game_ttl_ms, game_max_items, body_ttl_ms, body_max_items, chat_ttl_ms, chat_max_items
 
 设计原则：
 - 组件包内单一权威：所有字段以嵌套子模型承载；中央树仅引用本类。
@@ -227,6 +236,12 @@ class StreamerProactiveConfig(BaseConfig):
         ge=1_000,
         description="流程单环节内两次主动发言最小间隔",
     )
+    rundown_ready_interval_ms: int = Field(
+        title="环节内持续产出间隔",
+        default=30_000,
+        ge=5_000,
+        description="环节供能期间给主播开口机会的节奏；只供机会不保证发言，质量由发言自检与重合度闸把关",
+    )
 
 
 class StreamerWordFilterConfig(BaseConfig):
@@ -307,58 +322,6 @@ class StreamerCommandConfig(BaseConfig):
         default=3,
         ge=1,
         description="同一用户在一个时间窗内允许发出的命令条数上限",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-
-
-class StreamerNarrativeConfig(BaseConfig):
-    """[agents.streamer.narrative] 段
-
-    游戏叙事 / 身体近况 / 游戏聊天三个缓冲的回放上限。每个决策窗把缓冲回放给
-    Planner；已经交给过决策窗、又超过保留期的旧条目不再回放，避免主播把讲过的
-    遭遇当新闻反复播。没交出过的条目不受保留期影响，只受条数上限约束。
-    """
-
-    game_ttl_ms: int = Field(
-        title="游戏叙事保留期",
-        default=900_000,
-        ge=0,
-        description="游戏进展与上报交给过决策窗后，自到达起保留多久（毫秒）；更早的进展要靠查询工具",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    game_max_items: int = Field(
-        title="游戏叙事条数上限",
-        default=20,
-        ge=1,
-        description="游戏叙事最多保留条数",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    body_ttl_ms: int = Field(
-        title="身体近况保留期",
-        default=300_000,
-        ge=0,
-        description="被袭击/死亡/重生等遭遇交给过决策窗后，自到达起保留多久（毫秒）",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    body_max_items: int = Field(
-        title="身体近况条数上限",
-        default=10,
-        ge=1,
-        description="身体近况最多保留条数",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    chat_ttl_ms: int = Field(
-        title="游戏聊天保留期",
-        default=300_000,
-        ge=0,
-        description="游戏里玩家与系统消息交给过决策窗后，自到达起保留多久（毫秒）",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    chat_max_items: int = Field(
-        title="游戏聊天条数上限",
-        default=10,
-        ge=1,
-        description="游戏聊天最多保留条数",
         json_schema_extra={"x-ui-advanced": True},
     )
 
@@ -470,6 +433,15 @@ class StreamerMemoryConfig(BaseConfig):
         le=1000,
         description="单人印象文本长度上限（字符；提示词约束 LLM 篇幅，超出截断）",
     )
+    notebook_max_chars: int = Field(
+        title="备忘录容量上限",
+        default=2000,
+        ge=100,
+        le=20000,
+        description="本场备忘录（工作笔记）的字符上限，超出截断；备忘录每轮全量注入决策与表达两层，"
+        "覆盖写的结论集量级天然小，默认值按注入成本与结论体量折中",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
 
 class StreamerConfig(BaseConfig):
@@ -506,6 +478,22 @@ class StreamerConfig(BaseConfig):
         default_factory=list,
         description="决策前自动调用的只读工具全名（无参数），结果放进参考段的【现场速览】；"
         "省掉“先查一步再开口”的请求。按所接游戏配置，空 = 不调用",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    speech_gate_window: int = Field(
+        title="发言闸比对窗口条数",
+        default=10,
+        ge=0,
+        description="reply 生成台词后，与最近这么多条已说发言做重合度比对（0 = 关闭该检查）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    speech_gate_ratio: float = Field(
+        title="发言闸判重阈值",
+        default=0.5,
+        gt=0.0,
+        le=1.0,
+        description="台词对最近发言的字符重合度达到该值即打回（场次 31 真实发言回放定标："
+        "正常发言上限约 0.42，复读对落在 0.53）",
         json_schema_extra={"x-ui-advanced": True},
     )
 
@@ -560,11 +548,6 @@ class StreamerConfig(BaseConfig):
         default_factory=StreamerThinkingStreamConfig,
         description="思考流旁路配置",
     )
-    narrative: StreamerNarrativeConfig = Field(
-        title="叙事回放配置",
-        default_factory=StreamerNarrativeConfig,
-        description="游戏叙事/身体近况/游戏聊天回放给 Planner 的保留期与条数上限",
-    )
     live_frame: StreamerLiveFrameConfig = Field(
         title="直播画面",
         default_factory=StreamerLiveFrameConfig,
@@ -585,6 +568,5 @@ __all__ = [
     "StreamerWordFilterConfig",
     "StreamerCommandConfig",
     "StreamerThinkingStreamConfig",
-    "StreamerNarrativeConfig",
     "StreamerLiveFrameConfig",
 ]

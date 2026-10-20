@@ -920,13 +920,14 @@ class RundownState:
         armed_mark = "（未开播，待起算）" if self.status == "armed" else ""
         overdue_ms = elapsed - seg.expected_ms
         if overdue_ms > 0:
-            # 超时不冻结显示：明确报出超时量与出路（续期/切换），
+            # 超时不冻结显示：明确报出超时量与两条出路（续期/新建环节），
             # 避免渲染成"剩 0 秒"让 Agent 失去决策依据
             lines.append(
                 f"[流程单] 环节 {self.index + 1}/{total}：{seg.title}"
                 f"（已进行 {_format_duration_ms(elapsed)}，已超时 {_format_duration_ms(overdue_ms)}）"
                 f"——本环节设计时长 {_format_duration_ms(seg.expected_ms)}，"
-                f"可用 rundown_control 的 renew 续期本环节，或 goto/next 切换环节{paused_mark}{armed_mark}"
+                f"可用 rundown_control 的 renew 延长当前环节，或 append 新建环节承接后续"
+                f"{paused_mark}{armed_mark}"
             )
         else:
             lines.append(

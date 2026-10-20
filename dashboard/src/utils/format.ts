@@ -159,6 +159,20 @@ export function relativeAge(ms: number, now: number = Date.now()): string {
   return new Date(ms).toLocaleDateString('zh-CN');
 }
 
+/**
+ * 已持续时长（毫秒）→ 秒表式标签（"0:40 / 23:45 / 1:23:45"）。
+ * 进行中场次的"已播"标签用；消费方配共享时钟逐秒刷新。
+ */
+export function formatElapsedMs(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const sec = totalSec % 60;
+  const totalMin = Math.floor(totalSec / 60);
+  const min = totalMin % 60;
+  const hours = Math.floor(totalMin / 60);
+  if (hours === 0) return `${totalMin}:${String(sec).padStart(2, '0')}`;
+  return `${hours}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
 // ==================== 注入截图 ====================
 
 /**

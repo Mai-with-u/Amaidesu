@@ -1,6 +1,6 @@
 <template>
   <div class="console-page">
-    <!-- 顶栏：页面身份 + 阶段状态 + 模拟器徽章 + 实时脉冲 + 时钟         -->
+    <!-- 顶栏：页面身份 + 阶段状态 + 模拟器徽章 + 实时脉冲         -->
     <header class="console-head">
       <span class="pulse" :class="wsConnected ? 'is-live' : 'is-dead'" aria-hidden="true" />
       <h1 class="console-title">直播控制台</h1>
@@ -27,10 +27,6 @@
         <el-radio-button value="full">完整</el-radio-button>
         <el-radio-button value="simple">简洁</el-radio-button>
       </el-radio-group>
-      <span class="show-feed" :class="{ 'is-dead': !wsConnected }">
-        {{ wsConnected ? '实时' : '连接中断' }}
-      </span>
-      <time class="show-clock mono">{{ wallClock }}</time>
     </header>
 
     <div class="console-body">
@@ -71,6 +67,9 @@
             </div>
             <div class="session-meta mono">
               <span class="session-time">{{ sessionTimeLabel(item) }}</span>
+              <span v-if="elapsedLabel(item)" class="session-elapsed">{{
+                elapsedLabel(item)
+              }}</span>
               <span class="grow" />
               <span class="msg-count">{{ item.message_count }} 条</span>
               <span class="session-actions">
@@ -367,7 +366,6 @@ import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
 import { useConsoleViewMode } from '@/composables/live/useConsoleViewMode';
 import { confirmAction } from '@/utils/confirmAction';
-import { formatTimeHMS } from '@/utils/format';
 import { MAX_ENTRIES, isConversationEntry, relativeTime, type ShowEntry } from '@/utils/liveFeed';
 import type { TaskCard } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
@@ -389,6 +387,7 @@ const {
   sessionTitle,
   sourceLabel,
   sessionTimeLabel,
+  elapsedLabel,
   isSelected,
   loadSessions,
   openSession,
@@ -496,13 +495,9 @@ function clearTimeline(): void {
   resetUnseen();
 }
 
-// 秒级时钟：驱动相对时间与台上时钟刷新
+// 秒级时钟：驱动顶部环节横幅的相对时间刷新
 
 const nowTick = useNowTick();
-
-/** 当前 Unix 秒（相对时间标签入参；FeedTimeline 自带 tick，这里仅供顶部环节横幅使用） */
-
-const wallClock = computed(() => formatTimeHMS(nowTick.value));
 
 // 生命周期
 
@@ -590,23 +585,6 @@ onMounted(() => {
     box-shadow: 0 0 0 5px var(--color-danger-bg);
     opacity: 0.65;
   }
-}
-
-.show-feed {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 1.4px;
-  text-transform: uppercase;
-  color: var(--color-danger);
-}
-.show-feed.is-dead {
-  color: var(--text-placeholder);
-}
-
-.show-clock {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
 }
 
 /* --- 阶段徽章：决策管线正在做什么 --- */
@@ -800,6 +778,12 @@ onMounted(() => {
 }
 .session-time {
   min-width: 0;
+}
+.session-elapsed {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--color-danger);
 }
 .msg-count {
   flex-shrink: 0;

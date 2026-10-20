@@ -2,7 +2,7 @@
 
 覆盖三种形态：有状态事件（死亡/重生/任务开始结束/交付 + 睡觉类关键词行）、
 无状态事件（只有挨打/聊天/剧情行 → 空块）、带工具回执（minecraft_glance 形态
-回执的关键字段成行）。
+回执的关键字段成行）。行形态与时间线 game 条目一致（``[HH:MM 标签] 正文``）。
 """
 
 from __future__ import annotations
@@ -13,21 +13,16 @@ import pytest
 
 from src.agents.streamer.state_facts import extract_state_facts
 
-# 叙事行形态与 streamer_agent/narrative 渲染一致：行首到达时间标记（可带"新"）+ [game·类型]
-_GAME_NARRATIVE = "\n".join(
-    [
-        "[20 分钟前] [minecraft·milestone] 采集完成：8 个橡木原木进了背包",
-        "[新·刚刚] [minecraft·report] 本次目标交付：蜂蜜胶已做好并收进背包",
-        "[15 分钟前] [minecraft·attention_required] 附近有苦力怕在游荡",
-    ]
-)
-_BODY_NARRATIVE = "\n".join(
-    [
-        "[新·刚刚] [minecraft·died] 角色倒下了：被苦力怕炸死（已结束）",
-        "[2 分钟前] [minecraft·respawned] 角色在床边重生",
-        "[10 分钟前] [minecraft·attacked] 身体挨了一阵打：骷髅射了两箭",
-    ]
-)
+# 本轮新入账批次的时间线行（与 streamer_agent 追加进时间线的 game 条目同形）
+_GAME_EVENTS = [
+    "[20:01 游戏·minecraft·milestone] 采集完成：8 个橡木原木进了背包",
+    "[20:10 游戏·minecraft·report] 本次目标交付：蜂蜜胶已做好并收进背包",
+    "[20:05 游戏·minecraft·attention_required] 附近有苦力怕在游荡",
+    "[20:07 遭遇·minecraft·died] 角色倒下了：被苦力怕炸死（已结束）",
+    "[20:08 遭遇·minecraft·respawned] 角色在床边重生",
+    "[20:03 遭遇·minecraft·attacked] 身体挨了一阵打：骷髅射了两箭",
+    "[20:09 minecraft] 玩家 Steve：你们服务器几点天亮",
+]
 _RECEIPT: Dict[str, Any] = {
     "body": {"dimension": "minecraft:overworld", "health": 20.0, "food": 18, "held": "铁镐"},
     "inventory": ["橡木原木 ×8", "床 ×1", "铁锭 ×3"],
@@ -37,35 +32,40 @@ _RECEIPT: Dict[str, Any] = {
 
 
 def test_state_events_extracted_and_noise_skipped() -> None:
-    """有状态事件：交付/死亡/重生/关键词行进块；挨打、苦力怕游荡这类非状态行跳过。"""
-    facts = extract_state_facts(_GAME_NARRATIVE, _BODY_NARRATIVE)
+    """有状态事件：交付/死亡/重生/关键词行进块；挨打、游荡、聊天行跳过。"""
+    facts = extract_state_facts(_GAME_EVENTS)
     lines = facts.splitlines()
     # 交付上报、死亡、重生、带"完成"关键词的里程碑都算状态跃迁
     assert any("交付：蜂蜜胶已做好" in line for line in lines)
     assert any("角色倒下了" in line and "（已结束）" in line for line in lines)
     assert any("重生" in line for line in lines)
     assert any("采集完成" in line for line in lines)
-    # 非状态行不进块：挨打与游荡的苦力怕是遭遇/场景，不是状态
+    # 非状态行不进块：挨打与游荡是遭遇/场景，游戏聊天整行不参与
     assert not any("挨了一阵打" in line for line in lines)
     assert not any("苦力怕在游荡" in line for line in lines)
-    # 保留原到达时间标记，供逐句核对
-    assert any(line.startswith("[新·刚刚]") for line in lines)
+    assert not any("几点天亮" in line for line in lines)
+    # 保留原钟点标记，供逐句核对
+    assert any(line.startswith("[20:10") for line in lines)
+
+
+def test_delegation_line_is_state_transition() -> None:
+    """委派行（我在 <game> 里开始做）是状态跃迁：一件事开始了。"""
+    facts = extract_state_facts(["[20:12 我在 minecraft 里开始做] 做一个蜂蜜胶"])
+    assert "做一个蜂蜜胶" in facts
 
 
 def test_no_state_events_yields_empty_block() -> None:
-    """无状态事件：只有非状态叙事行时事实块为空串（调用方整段省略）。"""
-    narrative = "\n".join(
-        [
-            "[刚刚] [minecraft·attention_required] 附近有苦力怕在游荡",
-            "[1 分钟前] [minecraft·attacked] 身体挨了一阵打：骷髅射了两箭",
-        ]
-    )
-    assert extract_state_facts(narrative, "", ()) == ""
+    """无状态事件：只有非状态事件行时事实块为空串（调用方整段省略）。"""
+    events = [
+        "[20:05 游戏·minecraft·attention_required] 附近有苦力怕在游荡",
+        "[20:03 遭遇·minecraft·attacked] 身体挨了一阵打：骷髅射了两箭",
+    ]
+    assert extract_state_facts(events) == ""
 
 
 def test_tool_receipt_key_fields_appended() -> None:
     """带工具回执：glance 形态回执的身体/背包/工作要点各成一行；场景列表不进。"""
-    facts = extract_state_facts("", "", [("glance", _RECEIPT)])
+    facts = extract_state_facts([], [("glance", _RECEIPT)])
     assert "[glance回执]" in facts
     assert '身体：dimension="minecraft:overworld"，health=20.0，food=18，held="铁镐"' in facts
     assert "当前背包：橡木原木 ×8、床 ×1、铁锭 ×3" in facts
@@ -76,9 +76,9 @@ def test_tool_receipt_key_fields_appended() -> None:
 
 def test_receipt_non_glance_shape_skipped_and_cap_applies() -> None:
     """非速览形态回执不进块；状态行超上限时只留最近的。"""
-    assert extract_state_facts("", "", [("streamer_reply", {"ok": True})]) == ""
-    many = "\n".join(f"[{i} 分钟前] [minecraft·report] 交付 {i} 号" for i in range(12))
-    facts = extract_state_facts(many, "", ())
+    assert extract_state_facts([], [("streamer_reply", {"ok": True})]) == ""
+    many = [f"[20:{i:02d} 游戏·minecraft·report] 交付 {i} 号" for i in range(12)]
+    facts = extract_state_facts(many)
     assert len(facts.splitlines()) == 8
     assert "交付 11 号" in facts and "交付 0 号" not in facts
 
@@ -117,17 +117,19 @@ async def _capture_turn_input(state_facts: str) -> str:
 @pytest.mark.asyncio
 async def test_replyer_renders_state_facts_or_placeholder() -> None:
     """事实块原样进"当前状态（客观事实）"分节；空块占位为"（无）"。"""
-    assert await _capture_turn_input("[刚刚] [minecraft·report] 交付完成") == "[刚刚] [minecraft·report] 交付完成"
+    line = "[20:10 游戏·minecraft·report] 交付完成"
+    assert await _capture_turn_input(line) == line
     assert await _capture_turn_input("") == "（无）"
 
 
 @pytest.mark.asyncio
 async def test_planner_hands_state_facts_to_reply_tool() -> None:
-    """本轮回执与叙事汇成事实块随 reply 交给表达侧，调用后槽位清空。"""
+    """本轮新入账批次与回执汇成事实块随 reply 交给表达侧，调用后槽位清空。"""
     from unittest.mock import AsyncMock, MagicMock
 
     from src.agents.streamer.planner import Planner
     from src.agents.streamer.room_state import RoomState
+    from src.agents.streamer.timeline import GameEventBatch
     from src.agents.streamer.tools.reply_tool import ReplyToolProvider
     from src.modules.llm.payload import Response, ToolCall
     from src.modules.tools.models import ToolExecutionResult
@@ -161,7 +163,7 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
             content="",
             tool_calls=[
                 ToolCall(id="c1", name="glance", arguments={}),
-                ToolCall(id="c2", name="streamer_reply", arguments={"topic_summary": "交付完成"}),
+                ToolCall(id="c2", name="streamer_reply", arguments={"topic_summary": "交付完成", "is_novel": True}),
             ],
         )
     )
@@ -179,8 +181,7 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
     outcome = await planner.plan(
         [],
         proactive=True,
-        game_narrative="[刚刚] [minecraft·report] 本次目标交付：蜂蜜胶已做好",
-        body_narrative="",
+        game_batch=GameEventBatch(events=("[20:10 游戏·minecraft·report] 本次目标交付：蜂蜜胶已做好",)),
     )
 
     assert outcome["replied"] is True

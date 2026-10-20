@@ -317,18 +317,3 @@ class DanmakuWidgetService:
     def get_recent_messages(self, count: int = 15) -> List[dict]:
         messages = list(self.messages)[-count:]
         return [msg.model_dump(mode="json") for msg in messages]
-
-    def get_recent_subtitles(self, count: int = 5) -> List[dict]:
-        subtitles = list(self.subtitle_messages)[-count:]
-        return [msg.model_dump(mode="json") for msg in subtitles]
-
-    def get_stats(self) -> dict:
-        return {
-            "is_running": self._is_running,
-            "message_count": len(self.messages),
-            "max_messages": self.config.max_messages,
-            "subtitle_count": len(self.subtitle_messages),
-            "subtitle_enabled": self.subtitle_config.enabled,
-            "config": self.config.model_dump(),
-            "subtitle_config": self.subtitle_config.model_dump(),
-        }

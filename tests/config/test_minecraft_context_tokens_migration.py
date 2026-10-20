@@ -38,7 +38,7 @@ def test_char_budget_converted_and_written_back(tmp_path: Path, chars: int, expe
     context = doc["agents"]["minecraft"]["context"]
     assert "max_context_chars" not in context
     assert context["max_tokens"] == expected_tokens
-    assert doc["meta"]["version"] == "2.0.47"
+    assert doc["meta"]["version"] == "2.0.48"
 
     first = path.read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)

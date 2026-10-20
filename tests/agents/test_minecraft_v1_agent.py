@@ -558,8 +558,66 @@ async def test_a_due_timer_is_dropped_while_off_air() -> None:
     await agent.stop()
 
 
+class _RemoteSkillsClient:
+    """只实现资源接口的 MCP 客户端替身：目录一项，正文按地址返回。"""
+
+    connected = True
+
+    def __init__(self) -> None:
+        self.reads: List[str] = []
+
+    async def list_resources(self) -> List[Any]:
+        return [
+            SimpleNamespace(
+                uri="skill://survival/survival-opening/SKILL.md",
+                name="survival-opening",
+                description="生存开局：从空手到有石器、食物、床和据点的稳定状态",
+                mimeType="text/markdown",
+            )
+        ]
+
+    async def read_resource(self, uri: str) -> Any:
+        self.reads.append(uri)
+        return SimpleNamespace(
+            contents=[
+                SimpleNamespace(
+                    uri=uri,
+                    mimeType="text/markdown",
+                    text="---\nname: survival-opening\n---\n\nbody-of-survival-opening",
+                )
+            ]
+        )
+
+
+async def test_remote_skills_are_listed_and_read_by_uri() -> None:
+    """玩法技能由 MaiCraft 随包发布：目录里标明来源，正文按 skill:// 地址读。"""
+    server = FakeMaicraft()
+    library = SkillLibrary()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(
+            message.get("role") == "tool" and "body-of-survival-opening" in str(message.get("content"))
+            for message in messages
+        ):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "读过远程技能了"})])
+        return _resp(calls=[_call("minecraft_skill", {"name": "survival-opening"})])
+
+    agent, llm, bus = await _start(server, script, skills=library)
+    client = _RemoteSkillsClient()
+    agent._mcp_client = client
+    agent._remote_skills_loaded = False
+    agent.receive_delegation(instruction="先看看生存开局", task_id="d-remote")
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+
+    system = str(llm.seen[0][0]["content"])
+    assert "survival-opening" in system
+    assert "来自 MaiCraft" in system
+    assert client.reads == ["skill://survival/survival-opening/SKILL.md"]
+    await agent.stop()
+
+
 async def test_skill_catalog_follows_the_abilities_the_mod_has(tmp_path: Path) -> None:
-    """技能目录按 Mod 的能力清单筛：用到的能力都在才进目录，为旧版 Mod 写的不进；正文按名读。"""
+    """本地技能仍按能力清单筛（直播策略一般不用，机制保留）：用到的能力都在才进目录，为旧版 Mod 写的不进；正文按名读。"""
     for name, requires in (
         ("chop_trees", "abilities: [maicraft:gather]"),
         ("make_tools", "abilities: [maicraft:obtain]"),

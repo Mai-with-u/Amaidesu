@@ -14,6 +14,7 @@ from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftInstruction
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
+from src.agents.streamer.timeline import GameEventBatch
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
@@ -82,11 +83,10 @@ async def test_game_request_and_reminder_windows_still_relay() -> None:
 
 
 async def test_only_fresh_game_chat_counts_as_new_input() -> None:
-    """冷场窗里只有看过的旧聊天不算新输入，递话被拦；本窗新到玩家原话才放行。"""
-    old_chat = "[3 分钟前] [minecraft] 玩家 Steve：在吗"
+    """冷场窗里没有本窗新入账的玩家原话时递话被拦；批次里带来聊天原话才放行。"""
     invoked: List[ToolInvocation] = []
     planner = _planner([_relay("回 Steve 一句"), Response(success=True, content="不说")], invoked)
-    await planner.plan([], proactive=True, trigger_reason="proactive:cold", game_chat=old_chat)
+    await planner.plan([], proactive=True, trigger_reason="proactive:cold")
     assert invoked == []
 
     planner = _planner([_relay("回 Steve 一句"), Response(success=True, content="不说")], invoked)
@@ -94,8 +94,10 @@ async def test_only_fresh_game_chat_counts_as_new_input() -> None:
         [],
         proactive=True,
         trigger_reason="proactive:cold",
-        game_chat=f"{old_chat}\n[新·刚刚] [minecraft] 玩家 Steve：你在干嘛",
-        fresh_game_chat=["[minecraft] 玩家 Steve：你在干嘛"],
+        game_batch=GameEventBatch(
+            events=("[20:01 minecraft] 玩家 Steve：你在干嘛",),
+            fresh_chat=("[20:01 minecraft] 玩家 Steve：你在干嘛",),
+        ),
     )
     assert [call.tool_name for call in invoked] == ["framework_prompt"]
 

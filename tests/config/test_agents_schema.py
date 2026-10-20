@@ -48,8 +48,7 @@ def test_streamer_defaults_are_the_full_package_config() -> None:
     assert (streamer.proactive.enabled, streamer.word_filter.enabled, streamer.command.prefix) == (True, False, "/")
     assert streamer.command.tool_mappings == []  # 工具映射表默认空：委派 mappings 不受影响
     assert streamer.thinking_stream.enabled is True
-    narrative = streamer.narrative
-    assert (narrative.body_ttl_ms, narrative.game_ttl_ms, narrative.chat_max_items) == (300_000, 900_000, 10)
+    assert not hasattr(streamer, "narrative")  # 叙事回放配置已随追加式历史退役
 
 
 def test_minecraft_config_comes_from_its_package_and_has_no_step_limit() -> None:

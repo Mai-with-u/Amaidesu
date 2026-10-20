@@ -77,8 +77,9 @@ def test_command_parsing_is_not_an_llm_tool() -> None:
     registry = ToolRegistry()
     agent, _ = _agent(registry=registry)
     agent._register_tools()
+    # 工具全集 = reply + rundown_control + streamer_notebook（主播 Agent 随启用的固定面）
     names = [spec.name for spec in registry.list_tools()]
-    assert len(names) == 2 and not any("command" in name for name in names)
+    assert sorted(names) == ["control", "notebook", "reply"] and not any("command" in name for name in names)
 
     for py_file in Path("src/agents/streamer/command").glob("*.py"):
         source = py_file.read_text(encoding="utf-8")

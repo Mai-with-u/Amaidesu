@@ -293,8 +293,9 @@ class MinecraftToolProvider(BaseToolProvider):
     wait_callback: Optional[Callable[[], Dict[str, Any]]] = None
     # 主播看一眼：由 Agent 读观察并精简成叙事视图（未注入时不提供该工具）
     glance_reader: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
-    # 按名读技能正文：由 Agent 按自己的受众名与当前能力清单筛选（未注入技能库时不提供该工具）
-    skill_reader: Optional[Callable[[str], Dict[str, Any]]] = None
+    # 按名读技能正文：由 Agent 按自己的受众名筛本地策略，远端玩法技能按地址去 MaiCraft 读（未注入技能库时不提供该工具）；
+    # 远端技能要经 MCP 的 resources/read 取正文，所以读取器是异步的。
+    skill_reader: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
 
     @property
     def name(self) -> str:
@@ -351,7 +352,7 @@ class MinecraftToolProvider(BaseToolProvider):
             elif matched.name == "glance" and self.glance_reader is not None:
                 result = await self.glance_reader()
             elif matched.name == SKILL_TOOL_NAME and self.skill_reader is not None:
-                result = self.skill_reader(str(args.get("name", "")))
+                result = await self.skill_reader(str(args.get("name", "")))
             else:
                 return ToolExecutionResult(
                     tool_name=tool_name,

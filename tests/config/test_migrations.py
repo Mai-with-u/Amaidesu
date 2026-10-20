@@ -110,6 +110,20 @@ def _seed_sc_probability(d: Path) -> None:
     write_doc(d, "infra.toml", doc)
 
 
+def _seed_widget_html_page(d: Path) -> None:
+    doc = _rewound(d, "infra.toml", "2.0.42")
+    for section in ("danmaku_widget", "subtitle_widget", "game2048_widget"):
+        doc["dashboard"][section]["enable_html_page"] = True
+    write_doc(d, "infra.toml", doc)
+
+
+def _check_widget_html_page(d: Path) -> None:
+    dashboard = read_doc(d, "infra.toml")["dashboard"]
+    for section in ("danmaku_widget", "subtitle_widget", "game2048_widget"):
+        assert "enable_html_page" not in dashboard[section]
+    assert dashboard["danmaku_widget"]["enabled"] is True  # 段内其余字段原样保留
+
+
 def _check_sc_probability(d: Path) -> None:
     simulator = read_doc(d, "infra.toml")["simulator"]
     assert "sc_probability" not in simulator and "sc_pay_probability" in simulator  # 实际生效的付费 SC 概率不受影响
@@ -312,6 +326,7 @@ CASES = [
     Case(
         "minecraft-companion-collectors", ("collectors.toml",), _seed_minecraft_companions, _check_minecraft_companions
     ),
+    Case("widget-html-page", ("infra.toml",), _seed_widget_html_page, _check_widget_html_page),
 ]
 
 

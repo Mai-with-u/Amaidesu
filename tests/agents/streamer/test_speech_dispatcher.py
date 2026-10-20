@@ -15,6 +15,7 @@ import pytest
 
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
 from src.agents.streamer.speech_dispatcher import SpeechDispatcher
+from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.modules.events.event_bus import EventBus
@@ -276,7 +277,7 @@ async def test_speech_event_precedes_round_end_events() -> None:
         thinking_enabled=False,
         history_provider=AsyncMock(return_value=[]),
         rundown_text_provider=MagicMock(return_value=None),
-        game_narrative_provider=MagicMock(return_value=""),
+        game_events_provider=MagicMock(return_value=GameEventBatch()),
     )
     order: list[str] = []
 

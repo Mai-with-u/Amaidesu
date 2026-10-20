@@ -77,7 +77,7 @@ async def test_planner_reference_contains_reminder_section_only_when_present() -
         tool_registry=MagicMock(),
         context_enabled=False,
     )
-    common = {"forced": False, "proactive": False, "game_narrative": "", "body_narrative": ""}
+    common: dict = {"forced": False, "proactive": False}
     with_reminder = await planner._assemble_reference([], None, None, reminders="- 上线新活动", **common)
     assert "【运营提醒】" in with_reminder and "上线新活动" in with_reminder
     assert "【运营提醒】" not in await planner._assemble_reference([], None, None, **common)

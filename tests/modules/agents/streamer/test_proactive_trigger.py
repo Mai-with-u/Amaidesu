@@ -68,13 +68,14 @@ def test_external_is_highest_priority_but_obeys_interval_and_topic(config, speec
     )  # 优先于冷场
 
 
-@pytest.mark.parametrize(
-    ("now_ms", "expected"),
-    [(10_005_000, "rundown"), (10_001_000, None)],  # 独立间隔 3 秒：到点触发，太近不触发
-)
-def test_rundown_ready_has_its_own_interval(now_ms: int, expected) -> None:
-    trigger = _trigger(rundown_speech_interval_ms=3_000)
-    assert trigger.should_trigger(_Room(last_speech_ms=10_000_000), now_ms=now_ms, rundown_ready=True) == expected
+def test_overdue_alarm_defaults_to_five_minute_cooldown() -> None:
+    """默认冷却 5 分钟：60 秒时不重复提醒，到 5 分钟才再响。"""
+    trigger = _trigger()
+    room = _Room(last_speech_ms=None)
+    assert trigger.should_trigger(room, now_ms=10_000_000, rundown_overdue=True) == "rundown"
+    assert trigger.should_trigger(room, now_ms=10_060_000, rundown_overdue=True) is None
+    assert trigger.should_trigger(room, now_ms=10_299_999, rundown_overdue=True) is None
+    assert trigger.should_trigger(room, now_ms=10_300_000, rundown_overdue=True) == "rundown"
 
 
 def test_overdue_alarm_has_double_cooldown_and_speech_debounce() -> None:
@@ -90,6 +91,24 @@ def test_overdue_alarm_has_double_cooldown_and_speech_debounce() -> None:
         debounced.should_trigger(recent, now_ms=10_001_000, rundown_overdue=True) is None
     )  # 刚发过言，即使超时也不提醒
     assert debounced.should_trigger(recent, now_ms=10_004_000, rundown_overdue=True) == "rundown"
+
+
+def test_ready_gives_speaking_opportunity_on_thirty_second_cadence() -> None:
+    """默认 30 秒节奏：距上次发言不足 30 秒不开口，到点即给机会。"""
+    trigger = _trigger()
+    recent = _Room(last_speech_ms=10_000_000)
+    assert trigger.should_trigger(recent, now_ms=10_029_999, rundown_ready=True) is None
+    assert trigger.should_trigger(recent, now_ms=10_030_000, rundown_ready=True) == "rundown"
+
+    silent = _Room(last_speech_ms=None)
+    assert trigger.should_trigger(silent, now_ms=10_000_000, rundown_ready=True) == "rundown"
+
+
+def test_ready_needs_no_topic_and_ignores_the_anti_chain_interval() -> None:
+    """环节任务描述即话题：空话题快照照样触发；30 秒节奏不受 120 秒防接龙约束。"""
+    trigger = _trigger(min_interval_ms=120_000, topic_required=True)
+    room = _Room(last_speech_ms=10_000_000, topic="")
+    assert trigger.should_trigger(room, now_ms=10_030_000, rundown_ready=True) == "rundown"
 
 
 @pytest.mark.parametrize(

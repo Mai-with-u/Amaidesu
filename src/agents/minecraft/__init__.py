@@ -10,7 +10,7 @@
 - ``context.py``             任务历史按预算集中整理
 - ``agent.py``               MinecraftAgent（BaseAgent）：命令驱动 ReAct 循环
 - ``prompts/``               系统提示词
-- ``skills/``                技能（玩法经验文档），按能力清单筛选后进目录
+- ``skills/``                 本地直播与上报策略（玩法技能随 MaiCraft 发布，经 ``skill://`` 读）
 
 两个采集器常驻长轮询 MaiCraft v1 的 ``events``（连接、游标与长轮询在 ``events_collector.py``）：
 ``attention_collector.py`` 读任务事件流，把挨打、换维度、身体先处理的急事、处理不了的需求与角色死亡转成 ``game.body.*``

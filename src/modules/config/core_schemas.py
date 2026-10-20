@@ -27,7 +27,6 @@ class SubtitleWidgetConfig(BaseConfig):
     """字幕小部件配置"""
 
     enabled: bool = Field(default=True, title="是否启用", description="是否启用字幕小部件")
-    enable_html_page: bool = Field(default=False, title="是否启用 HTML 页面", description="是否启用后端 HTML 页面")
     max_messages: int = Field(
         default=10, ge=1, le=50, title="最大消息数", description="最大字幕显示数量（用于历史记录）"
     )
@@ -45,8 +44,12 @@ class DanmakuWidgetConfig(BaseConfig):
     """弹幕小部件配置"""
 
     enabled: bool = Field(default=True, title="是否启用", description="是否启用弹幕小部件")
-    enable_html_page: bool = Field(
-        default=False, title="是否启用 HTML 页面", description="是否启用后端 HTML 页面（若为 false，则使用 Vue 页面）"
+    font_size: int = Field(
+        default=16,
+        ge=10,
+        le=72,
+        title="弹幕字号",
+        description="弹幕字号（像素），经 /ws/danmaku 连接握手以 style 消息下发",
     )
     max_messages: int = Field(default=30, ge=5, le=100, title="最大消息数", description="最大消息数量")
     show_danmaku: bool = Field(default=True, title="是否显示弹幕", description="显示普通弹幕")
@@ -65,11 +68,6 @@ class Game2048WidgetConfig(BaseConfig):
         default=True,
         title="是否启用",
         description="是否启用 2048 棋盘小部件（订阅 game.state.changed 推送）",
-    )
-    enable_html_page: bool = Field(
-        default=True,
-        title="是否启用 HTML 页面",
-        description="是否启用后端 HTML 透明页（/widget/2048，供 OBS 浏览器源 / Warudo 网页道具加载）",
     )
 
 
