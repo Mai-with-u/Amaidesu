@@ -23,7 +23,7 @@ v2 不再有 Input/Decision/Output 三阶段流水线，组件通过**语义域�
 ```mermaid
 flowchart TB
     subgraph Ext["外部输入"]
-        Bili["B 站弹幕 official / legacy"]
+        Bili["B 站弹幕 official / legacy / laplace"]
         Cons["控制台"]
         Sim["模拟输入<br/>(SimulatorService LLM 仿真 / generate / replay<br/>条件装配，仅开发期)"]
         Mic["麦克风 STT"]
@@ -35,6 +35,7 @@ flowchart TB
         C2["BiliDanmakuLegacy"]
         C3["ConsoleInput"]
         C4["STT"]
+        C5["BiliDanmakuLaplace"]
     end
 
     subgraph Interceptors["[事件拦截器] EventBus 分发层 · 全局单点"]

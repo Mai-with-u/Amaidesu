@@ -5,6 +5,7 @@
 配置名与类名映射：
 - bili_danmaku         → BiliDanmakuCollector（legacy）
 - bili_danmaku_official→ BiliDanmakuOfficialCollector
+- bili_danmaku_laplace → BiliDanmakuLaplaceCollector
 - console_input        → ConsoleInputCollector
 - live_frame           → LiveFrameCollector
 - stt                  → STTCollector
@@ -23,6 +24,7 @@ from src.modules.collectors.base import BaseCollector
 SUPPORTED_COLLECTORS: tuple[str, ...] = (
     "bili_danmaku",
     "bili_danmaku_official",
+    "bili_danmaku_laplace",
     "console_input",
     "live_frame",
     "stt",
@@ -51,6 +53,10 @@ def instantiate_collector(
         )
 
         return BiliDanmakuOfficialCollector(config=config or {}, event_bus=event_bus)
+    if name == "bili_danmaku_laplace":
+        from src.modules.collectors.bilibili.laplace import BiliDanmakuLaplaceCollector
+
+        return BiliDanmakuLaplaceCollector(config=config or {}, event_bus=event_bus)
     if name == "console_input":
         from src.modules.collectors.console.console_input_collector import ConsoleInputCollector
 
