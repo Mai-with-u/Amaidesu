@@ -39,12 +39,14 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
 from src.modules.logging import get_logger
 
 from .agents import AgentPromptedPayload, AgentRepliedPayload
+from .body import BodyEventPayload
 from .core import (
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
 )
 from .game import GamePayload
+from .game_chat import GameChatPayload
 from .live import (
     LiveEndedPayload,
     LiveStartedPayload,
@@ -95,6 +97,10 @@ __all__ = [
     "RoomStateWatchedPayload",
     # game.* 游戏里程碑
     "GamePayload",
+    # game.body.* AI 玩家身体事件流
+    "BodyEventPayload",
+    # game.chat.* 游戏内聊天流
+    "GameChatPayload",
     # planner / streamer 决策管线
     "PlannerBatchItem",
     "PlannerDecisionPayload",

@@ -66,6 +66,21 @@
           <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
         </div>
 
+        <!-- 游戏身体事件（game.body.*）：轻量小行（游戏绿色系），死亡行红色醒目 -->
+        <div
+          v-else-if="entry.kind === 'game_body'"
+          class="whisper is-body-event"
+          :class="{ 'is-body-danger': entry.failed }"
+        >
+          <span class="whisper-dot" aria-hidden="true" />
+          <span class="whisper-text">
+            <template v-if="entry.badge">[{{ entry.badge }}]</template>
+            {{ entry.text }}<template v-if="entry.note"> · {{ entry.note }}</template>
+          </span>
+          <span class="grow" />
+          <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+        </div>
+
         <!-- 语音合成失败：安静单行错误样式（冷启动服务不可用等，运营者可见跳句原因） -->
         <div v-else-if="entry.kind === 'tts'" class="whisper is-tts-failed">
           <span class="whisper-dot" aria-hidden="true" />
@@ -77,9 +92,10 @@
         </div>
 
         <!-- 系统事件行：core.error 显性失败（错误色，与 TTS 失败行同系）；
-             core.startup / core.shutdown 中性运营标记（安静单行 + 徽标） -->
+             core.startup / core.shutdown 中性运营标记（安静单行 + 徽标）；
+             tool.health.* 同形态复用（熔断=错误色 / 恢复=中性） -->
         <div
-          v-else-if="entry.kind === 'system'"
+          v-else-if="entry.kind === 'system' || entry.kind === 'tool_health'"
           class="whisper"
           :class="{ 'is-system-error': entry.failed }"
         >
@@ -450,6 +466,10 @@
           <div class="act-head">
             <span class="act-kind act-kind--speech">主播</span>
             <span v-if="entry.note" class="act-emotion">{{ entry.note }}</span>
+            <!-- TTS 播报态标记：tts.utterance.started/finished 按 utterance_id 回填 -->
+            <span v-if="entry.ttsState" class="tts-state">{{
+              entry.ttsState === 'speaking' ? '播报中' : '已播完'
+            }}</span>
             <span class="grow" />
             <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
           </div>
@@ -548,7 +568,7 @@
           <p v-if="entry.note" class="act-note is-game-note">{{ entry.note }}</p>
         </div>
 
-        <!-- 观众发声：弹幕 / 礼物 / SC -->
+        <!-- 聊天气泡：弹幕 / 礼物 / SC / 上舰 / 游戏内聊天 -->
         <div v-else class="chat" :class="`chat--${entry.kind}`">
           <span class="avatar" aria-hidden="true">{{ entry.initial }}</span>
           <div class="bubble">
@@ -1092,12 +1112,65 @@ async function copyText(text: string): Promise<void> {
   color: var(--text-primary);
 }
 
-/* 安静单行：进场 / 阶段状态                                      */
+/* --- 上舰（guard）：付费卡片形态，绿色系（与游戏域同色系区分于礼物暖色/SC 红色） --- */
+.chat--guard {
+  max-width: 90%;
+}
+.chat--guard .avatar {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+.chat--guard .bubble {
+  padding: 10px 14px;
+  border-left: 3px solid var(--color-success);
+  background: var(--color-success-bg);
+  box-shadow: var(--shadow-sm);
+}
+.chat--guard .who {
+  color: var(--color-success);
+}
+.chat--guard .chip {
+  background: var(--color-success);
+  color: var(--text-inverse);
+  border-color: var(--color-success);
+}
+.chat--guard .say {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* --- 游戏内聊天（game_chat）：与 B 站弹幕区分的游戏域绿色系 --- */
+.chat--game_chat {
+  max-width: 82%;
+}
+.chat--game_chat .avatar {
+  border-color: var(--color-game);
+  color: var(--color-game);
+  background: var(--color-game-bg);
+}
+.chat--game_chat .bubble {
+  border-left: 2px solid var(--color-game);
+  background: var(--color-game-bg);
+}
+.chat--game_chat .who {
+  color: var(--color-game);
+}
+
+/* 安静单行：进场 / 阶段状态 / 游戏身体事件                        */
 .whisper {
   display: flex;
   align-items: center;
   gap: 10px;
   min-height: 18px;
+}
+/* 游戏身体事件：轻量行游戏绿色系；死亡（阵亡）红色醒目 */
+.whisper.is-body-event .whisper-text {
+  color: var(--color-game);
+}
+.whisper.is-body-event.is-body-danger .whisper-text {
+  color: var(--color-danger);
+  font-weight: 600;
 }
 /* 占位宽度与头像一致（28px），使圆点正落在时间轴脊线上 */
 .whisper-dot {
@@ -1198,6 +1271,17 @@ async function copyText(text: string): Promise<void> {
   font-weight: 600;
   color: var(--color-agent);
   background: var(--color-agent-bg);
+  flex-shrink: 0;
+}
+
+/* TTS 播报态标记（发言卡头部小字）：播报中=主色 / 已播完=中性弱色 */
+.tts-state {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: rgba(64, 158, 255, 0.12);
   flex-shrink: 0;
 }
 

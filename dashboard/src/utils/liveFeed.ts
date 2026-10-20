@@ -38,6 +38,7 @@ export type EntryKind =
   | 'danmaku'
   | 'gift'
   | 'super_chat'
+  | 'guard'
   | 'enter'
   | 'speech'
   | 'tool'
@@ -49,6 +50,13 @@ export type EntryKind =
   | 'tts'
   | 'boundary'
   | 'game'
+  /** 游戏内聊天（game.chat.received）：游戏世界里别人说的话，与 B 站弹幕视觉区分 */
+  | 'game_chat'
+  /** 游戏身体事件（game.body.*）：AI 玩家遭遇的轻量小行 */
+  | 'game_body'
+  /** 工具健康跃迁（tool.health.*）：熔断/恢复系统行（独立于 kind='system'，
+   *  因简洁档口径不同——guard 进简洁档、tool.health 不进） */
+  | 'tool_health'
   /** 递话受理（agent.prompted）：运营/跨 Agent 留言送达目标 */
   | 'prompt'
   /** Agent 每步响应（agent.replied）：命令驱动型 Agent 中间步骤的行动说明，决定卡形态 */
@@ -99,6 +107,11 @@ export interface ShowEntry {
   simulated: boolean;
   /** 工具卡参数药丸。空数组表示无入参或入参非对象，正文回退 text */
   argPills: ToolArgPill[];
+  /** TTS 全链路关联键（streamer.speech.utterance_id）；tts.utterance.* 经它回填播报态 */
+  utteranceId: string;
+  /** TTS 播报态：speaking=开始出声 / done=播放完成；空串=无信号（未启用 TTS 等）。
+   *  由 buildLiveEntries 按 utteranceId 就地回填，不新增时间线行 */
+  ttsState: '' | 'speaking' | 'done';
 }
 
 /** 单步思考段（与工具卡时间交织的实时思考流片段） */
@@ -206,6 +219,9 @@ export type AgentGroup = 'streamer' | 'game' | 'room';
 export function agentGroupOf(entry: ShowEntry): AgentGroup {
   if (entry.kind === 'game') return 'game';
   if (entry.kind === 'agent_reply') return 'game';
+  // 游戏域事件流：身体事件与游戏内聊天都是游戏 Agent 采集的游戏世界事实
+  if (entry.kind === 'game_body') return 'game';
+  if (entry.kind === 'game_chat') return 'game';
   if (entry.kind === 'thinking') {
     return entry.source === '游戏 Agent' ? 'game' : 'streamer';
   }
@@ -247,6 +263,8 @@ export const CONVERSATION_KINDS: ReadonlySet<EntryKind> = new Set([
   'danmaku',
   'gift',
   'super_chat',
+  // 上舰是付费行为，与礼物/SC 同级——观众视角应与付费消息同样可见
+  'guard',
   'boundary',
   // 系统事件是运营事件（错误 / 服务启停），不豁免进"简洁也要看"集合就等于看不到
   'system',
@@ -278,6 +296,7 @@ export function makeEntry(base: {
   source?: string;
   simulated?: boolean;
   argPills?: ToolArgPill[];
+  utteranceId?: string;
 }): ShowEntry {
   const actor = base.actor ?? '';
   return {
@@ -300,6 +319,8 @@ export function makeEntry(base: {
     source: base.source ?? '',
     simulated: base.simulated ?? false,
     argPills: base.argPills ?? [],
+    utteranceId: base.utteranceId ?? '',
+    ttsState: '',
   };
 }
 
@@ -351,6 +372,31 @@ function fromRoomMessage(event: FeedEvent, data: Record<string, unknown>): ShowE
       tsMs,
       actor,
       text: `${actor} 进入直播间`,
+    });
+  }
+
+  // 上舰：付费行为与礼物/SC 同级（对齐卡片形态），层级/金额从 guard 结构化字段取
+  if (messageType === 'guard') {
+    const guard = isRecord(data.guard) ? data.guard : null;
+    const level = guard ? (num(guard.guard_level) ?? 0) : 0;
+    const levelLabel = level === 1 ? '总督' : level === 2 ? '提督' : level === 3 ? '舰长' : '';
+    const total = guard ? (num(guard.total_price) ?? 0) : 0;
+    // 金瓜子口径：1000 金瓜子 = 1 元（与 RoomMessagePayload 契约一致）
+    const money = total > 0 ? `¥${formatAmount(total / 1000)}` : '';
+    const period =
+      guard && num(guard.guard_num)
+        ? ` ${num(guard.guard_num)}${str(guard.guard_unit) || '月'}`
+        : '';
+    return makeEntry({
+      id: event.id,
+      kind: 'guard',
+      tsMs,
+      actor,
+      text: fallback() || `开通${levelLabel || '舰队'}${period}`,
+      badge: levelLabel ? `上舰·${levelLabel}` : '上舰',
+      money,
+      messageId,
+      simulated: bool(data.simulated),
     });
   }
 
@@ -429,6 +475,8 @@ function fromSpeech(event: FeedEvent, data: Record<string, unknown>): ShowEntry 
     replyTo: str(data.reply_to_message_id),
     roundId: str(data.round_id),
     llmRequestId: str(data.llm_request_id),
+    // TTS 全链路关联键：tts.utterance.started/finished 据此回填播报态
+    utteranceId: str(data.utterance_id),
   });
 }
 
@@ -654,6 +702,83 @@ function fromAgentReply(event: FeedEvent, data: Record<string, unknown>): ShowEn
   });
 }
 
+/** 游戏身体事件：game.body.*（BodyEventPayload，kind 为判别字段）。
+ *  轻量小行（对齐 whisper 级别），死亡行红色醒目；summary 已是叙事化中文事实 */
+function fromBodyEvent(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  const kind = str(data.kind) || event.type.slice('game.body.'.length);
+  const badge =
+    kind === 'attacked'
+      ? '遇袭'
+      : kind === 'attack_ended'
+        ? '遇袭解除'
+        : kind === 'died'
+          ? '阵亡'
+          : kind === 'respawned'
+            ? '重生'
+            : kind === 'reflex_started'
+              ? '应激开始'
+              : kind === 'reflex_finished'
+                ? '应激结束'
+                : kind === 'dimension_changed'
+                  ? '维度切换'
+                  : kind === 'need_unhandled'
+                    ? '需求未处理'
+                    : '未知';
+  // 有攻击者/命中数就带上（payload 契约：无证据字段为空串/0）
+  const noteParts: string[] = [];
+  const attacker = str(data.attacker);
+  if (attacker) noteParts.push(`来源 ${attacker}`);
+  const hits = num(data.hits);
+  if (hits != null && hits > 0) noteParts.push(`命中 ${hits} 次`);
+  return makeEntry({
+    id: event.id,
+    kind: 'game_body',
+    tsMs: event.timestamp_ms,
+    actor: str(data.game) || '游戏',
+    text: str(data.summary) || summarizeEvent(event.type, data),
+    note: noteParts.join(' · '),
+    badge,
+    failed: kind === 'died',
+    source: '游戏 Agent',
+  });
+}
+
+/** 游戏内聊天：game.chat.received（GameChatPayload）。
+ *  chat 行形态（actor=游戏内说话者），徽标区分私聊/系统消息，与 B 站弹幕视觉区分 */
+function fromGameChat(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  const isPrivate = bool(data.private);
+  const kind = str(data.kind) || 'player';
+  const suppressed = num(data.suppressed) ?? 0;
+  return makeEntry({
+    id: event.id,
+    kind: 'game_chat',
+    tsMs: event.timestamp_ms,
+    actor: str(data.sender) || (kind === 'system' ? '系统消息' : '游戏内玩家'),
+    text: str(data.content) || summarizeEvent(event.type, data),
+    badge: isPrivate ? '私聊' : kind === 'system' ? '系统' : '游戏内',
+    note: suppressed > 0 ? `另有 ${suppressed} 条被折叠` : '',
+    source: '游戏 Agent',
+  });
+}
+
+/** 工具健康跃迁：tool.health.*（ToolHealthPayload，仅 open/closed 跃迁时发射）。
+ *  熔断 → 警告系统行（failed 承载红色），恢复 → 普通系统行 */
+function fromToolHealth(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
+  const toolName = str(data.tool_name) || event.type.slice('tool.health.'.length) || 'tool';
+  const open = str(data.state) === 'open';
+  const failureCount = num(data.failure_count) ?? 0;
+  const lastError = str(data.last_error);
+  return makeEntry({
+    id: event.id,
+    kind: 'tool_health',
+    tsMs: event.timestamp_ms,
+    text: open ? `工具 ${toolName} 已熔断摘除` : `工具 ${toolName} 已恢复可用`,
+    note: open ? lastError || `连续失败 ${failureCount} 次` : '',
+    badge: open ? '熔断' : '恢复',
+    failed: open,
+  });
+}
+
 /** 非控制台事件（system.* 等）返回 null，不进时间线 */
 export function toEntry(event: FeedEvent): ShowEntry | null {
   const data = isRecord(event.data) ? event.data : {};
@@ -670,6 +795,12 @@ export function toEntry(event: FeedEvent): ShowEntry | null {
   if (event.type.startsWith('tool.result.')) return fromToolResult(event, data);
   if (event.type === 'rundown.changed') return fromRundown(event, data);
   if (event.type === 'tts.utterance.failed') return fromTtsFailed(event, data);
+  // TTS 播报态两端点不新增行：buildLiveEntries 按 utterance_id 回填到既有发言行
+  if (event.type === 'tts.utterance.started' || event.type === 'tts.utterance.finished')
+    return null;
+  if (event.type.startsWith('tool.health.')) return fromToolHealth(event, data);
+  if (event.type.startsWith('game.body.')) return fromBodyEvent(event, data);
+  if (event.type === 'game.chat.received') return fromGameChat(event, data);
   if (
     event.type === 'core.error' ||
     event.type === 'core.startup' ||
@@ -740,11 +871,22 @@ export function buildLiveEntries(events: FeedEvent[], hiddenIds: Set<string>): S
   const next: ShowEntry[] = [];
   // 轮次 → 已渲染的裁决卡；decision 到达时把统计回填进裁决卡而非新增重复卡
   const verdictByRound = new Map<string, ShowEntry>();
+  // utterance_id → 已渲染的发言行；tts.utterance.started/finished 据此回填播报态
+  const speechByUtterance = new Map<string, ShowEntry>();
   for (const event of events) {
     if (hiddenIds.has(event.id)) continue;
+    // TTS 播报态：就地改写目标发言行，不产生新条目；发言行不在列（被裁剪/未渲染）则丢弃
+    if (event.type === 'tts.utterance.started' || event.type === 'tts.utterance.finished') {
+      const utteranceId = str(isRecord(event.data) ? event.data.utterance_id : '');
+      const speech = utteranceId ? speechByUtterance.get(utteranceId) : undefined;
+      if (speech) speech.ttsState = event.type === 'tts.utterance.started' ? 'speaking' : 'done';
+      continue;
+    }
     const entry = toEntry(event);
     if (!entry) continue;
-    if (entry.kind === 'verdict' && entry.roundId) {
+    if (entry.kind === 'speech' && entry.utteranceId) {
+      speechByUtterance.set(entry.utteranceId, entry);
+    } else if (entry.kind === 'verdict' && entry.roundId) {
       verdictByRound.set(entry.roundId, entry);
     } else if (entry.kind === 'decision' && entry.roundId) {
       const verdict = verdictByRound.get(entry.roundId);
@@ -851,6 +993,8 @@ const CHAT_PROCESS_KINDS: ReadonlySet<EntryKind> = new Set<EntryKind>([
   'thinking',
   'prompt',
   'agent_reply',
+  // 游戏身体事件是过程性动态（AI 玩家遭遇流），会话模式折叠进过程条
+  'game_body',
 ]);
 
 /** 过程条合成条目 id 前缀（与事件条目 id 区分，避免 key 冲突） */
@@ -868,6 +1012,7 @@ const CHAT_PROCESS_LABEL: Record<string, string> = {
   boundary: '场次',
   thinking: '思考',
   agent_reply: '响应',
+  game_body: '动态',
 };
 
 /** 该条目在会话模式是否属于过程行（折叠进过程条） */

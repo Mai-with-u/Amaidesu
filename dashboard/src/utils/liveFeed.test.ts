@@ -882,3 +882,226 @@ describe('core.* 系统事件 → system 行', () => {
     expect(isChatProcessKind('system')).toBe(false);
   });
 });
+
+describe('room.message guard → 上舰行', () => {
+  it('层级徽标 + 金瓜子换算金额（1000 金瓜子 = 1 元）', () => {
+    const entry = toEntry(
+      evt('room.message', {
+        user: { name: 'Alice' },
+        message_type: 'guard',
+        content: 'Alice 开通了舰长',
+        guard: { guard_level: 3, guard_num: 1, guard_unit: '月', total_price: 138000 },
+      }),
+    );
+    expect(entry).toMatchObject({
+      kind: 'guard',
+      badge: '上舰·舰长',
+      money: '¥138',
+      actor: 'Alice',
+    });
+  });
+
+  it('guard 缺失或层级未知：兜底徽标，正文回退事件摘要', () => {
+    const entry = toEntry(evt('room.message', { user: { name: 'Bob' }, message_type: 'guard' }));
+    expect(entry).toMatchObject({ kind: 'guard', badge: '上舰' });
+    expect(entry?.text).not.toBe('');
+  });
+
+  it('上舰是付费行为：进简洁档，与礼物/SC 同级', () => {
+    const entry = toEntry(evt('room.message', { user: { name: 'Alice' }, message_type: 'guard' }));
+    expect(entry && isConversationEntry(entry)).toBe(true);
+  });
+});
+
+describe('game.body.* → 身体事件轻量行', () => {
+  it('遇袭：徽标 + 摘要正文 + 攻击者/命中数附注，归游戏 Agent 组', () => {
+    const entry = toEntry(
+      evt('game.body.attacked', {
+        game: 'minecraft',
+        kind: 'attacked',
+        summary: '正在被僵尸攻击',
+        attacker: 'minecraft:zombie',
+        hits: 3,
+      }),
+    );
+    expect(entry).toMatchObject({
+      kind: 'game_body',
+      badge: '遇袭',
+      text: '正在被僵尸攻击',
+      note: '来源 minecraft:zombie · 命中 3 次',
+      failed: false,
+    });
+    expect(entry && agentGroupOf(entry)).toBe('game');
+  });
+
+  it('阵亡：红色醒目（failed），attack_ended/respawned 等各配徽标', () => {
+    const died = toEntry(
+      evt('game.body.died', { game: 'minecraft', kind: 'died', summary: '死了' }),
+    );
+    expect(died).toMatchObject({ kind: 'game_body', badge: '阵亡', failed: true });
+
+    const ended = toEntry(evt('game.body.attack_ended', { kind: 'attack_ended', summary: '解除' }));
+    expect(ended?.badge).toBe('遇袭解除');
+    const respawn = toEntry(evt('game.body.respawned', { kind: 'respawned', summary: '重生' }));
+    expect(respawn?.badge).toBe('重生');
+    const reflex = toEntry(
+      evt('game.body.reflex_started', { kind: 'reflex_started', summary: '应激' }),
+    );
+    expect(reflex?.badge).toBe('应激开始');
+    const dim = toEntry(
+      evt('game.body.dimension_changed', { kind: 'dimension_changed', summary: '下界' }),
+    );
+    expect(dim?.badge).toBe('维度切换');
+    const need = toEntry(
+      evt('game.body.need_unhandled', { kind: 'need_unhandled', summary: '需求' }),
+    );
+    expect(need?.badge).toBe('需求未处理');
+  });
+
+  it('unknown 兜底：原文展示不丢弃', () => {
+    const entry = toEntry(
+      evt('game.body.unknown', {
+        kind: 'unknown',
+        summary: '未知遭遇',
+        source_event_type: 'weird_event',
+      }),
+    );
+    expect(entry).toMatchObject({ kind: 'game_body', badge: '未知', text: '未知遭遇' });
+  });
+
+  it('不进简洁档（过程性动态，观众视角折叠）', () => {
+    const entry = toEntry(evt('game.body.attacked', { kind: 'attacked', summary: 'x' }));
+    expect(entry && isConversationEntry(entry)).toBe(false);
+    expect(entry && isChatProcessKind(entry.kind)).toBe(true);
+  });
+});
+
+describe('game.chat.received → 游戏内聊天行', () => {
+  it('玩家聊天：actor=说话者，私聊带徽标；归游戏 Agent 组', () => {
+    const entry = toEntry(
+      evt('game.chat.received', {
+        game: 'minecraft',
+        kind: 'player',
+        sender: 'Steve',
+        content: '麦麦你在干嘛呀',
+        private: true,
+      }),
+    );
+    expect(entry).toMatchObject({
+      kind: 'game_chat',
+      actor: 'Steve',
+      text: '麦麦你在干嘛呀',
+      badge: '私聊',
+    });
+    expect(entry && agentGroupOf(entry)).toBe('game');
+    expect(entry && isChatProcessKind(entry.kind)).toBe(false);
+  });
+
+  it('系统消息：sender 为空回退"系统消息"，折叠数附注', () => {
+    const entry = toEntry(
+      evt('game.chat.received', { kind: 'system', content: 'Server restart', suppressed: 2 }),
+    );
+    expect(entry).toMatchObject({
+      kind: 'game_chat',
+      actor: '系统消息',
+      badge: '系统',
+      note: '另有 2 条被折叠',
+    });
+  });
+
+  it('不进简洁档', () => {
+    const entry = toEntry(
+      evt('game.chat.received', { kind: 'player', sender: 'A', content: 'hi' }),
+    );
+    expect(entry && isConversationEntry(entry)).toBe(false);
+  });
+});
+
+describe('tool.health.* → 健康跃迁系统行', () => {
+  it('熔断（open）：warning 样式（failed），带工具名与原因', () => {
+    const entry = toEntry(
+      evt('tool.health.maicraft_speak', {
+        tool_name: 'maicraft_speak',
+        provider: 'maicraft',
+        state: 'open',
+        failure_count: 3,
+        last_error: 'MCP server 未连接',
+      }),
+    );
+    expect(entry).toMatchObject({
+      kind: 'tool_health',
+      text: '工具 maicraft_speak 已熔断摘除',
+      badge: '熔断',
+      failed: true,
+      note: 'MCP server 未连接',
+    });
+    // 归 room 组（始终可见），不进简洁档
+    expect(entry && agentGroupOf(entry)).toBe('room');
+    expect(entry && isConversationEntry(entry)).toBe(false);
+  });
+
+  it('恢复（closed）：普通系统行', () => {
+    const entry = toEntry(
+      evt('tool.health.maicraft_speak', {
+        tool_name: 'maicraft_speak',
+        state: 'closed',
+        last_error: '',
+      }),
+    );
+    expect(entry).toMatchObject({
+      kind: 'tool_health',
+      text: '工具 maicraft_speak 已恢复可用',
+      badge: '恢复',
+      failed: false,
+      note: '',
+    });
+  });
+});
+
+describe('tts.utterance.started/finished → 发言行播报态回填', () => {
+  it('按 utterance_id 回填既有发言行，不新增条目', () => {
+    const speech = evt(
+      'streamer.speech',
+      {
+        utterance_id: 'utt_1',
+        text: '大家好',
+        emotion: 'happy',
+        emotion_intensity: 0.5,
+      },
+      1000,
+    );
+    const started = evt('tts.utterance.started', { utterance_id: 'utt_1' }, 1100);
+    const finished = evt(
+      'tts.utterance.finished',
+      { utterance_id: 'utt_1', duration_ms: 2000 },
+      3000,
+    );
+    const entries = buildLiveEntries([speech, started, finished], new Set());
+    expect(entries).toHaveLength(1);
+    expect(entries[0].kind).toBe('speech');
+    expect(entries[0].ttsState).toBe('done');
+  });
+
+  it('started 与 finished 分别给出播报中/已播完', () => {
+    const mid = buildLiveEntries(
+      [
+        evt(
+          'streamer.speech',
+          { utterance_id: 'u', text: 'x', emotion: 'neutral', emotion_intensity: 0.5 },
+          1000,
+        ),
+        evt('tts.utterance.started', { utterance_id: 'u' }, 1100),
+      ],
+      new Set(),
+    );
+    expect(mid[0].ttsState).toBe('speaking');
+  });
+
+  it('utterance_id 无匹配发言行时静默丢弃，不产生新行', () => {
+    const entries = buildLiveEntries(
+      [evt('tts.utterance.started', { utterance_id: 'nope' })],
+      new Set(),
+    );
+    expect(entries).toHaveLength(0);
+  });
+});

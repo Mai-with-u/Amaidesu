@@ -15,6 +15,10 @@ WS 类型规则：``type = 事件名``（精确直通）；唯一例外是 ``roo
 - ``rundown.changed`` / ``streamer.speech``（直通）
 - 游戏上报：``game.report`` / ``game.attention_required`` / ``game.error`` /
   ``game.milestone``（直通；游戏 Agent 的汇报/求助/异常/里程碑进直播时间线）
+- ``game.body.#`` / ``game.chat.#`` 通配 → type 为具体事件名
+  （AI 玩家身体事件流与游戏内聊天，直播时间线游戏域轻量行数据源）
+- ``tts.utterance.started`` / ``tts.utterance.finished``（直通；
+  前端按 utterance_id 关联到发言行显示播报态，不新增时间线行）
 - ``core.startup`` / ``core.shutdown`` / ``core.error``（直通）
 - ``tool.result.#`` / ``tool.health.#`` 通配 → type 为具体事件名
 """
@@ -28,9 +32,11 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     AgentPromptedPayload,
     AgentRepliedPayload,
+    BodyEventPayload,
     CoreErrorPayload,
     CoreShutdownPayload,
     CoreStartupPayload,
+    GameChatPayload,
     GamePayload,
     LiveEndedPayload,
     LiveStartedPayload,
@@ -44,6 +50,8 @@ from src.modules.events.payloads import (
     TaskChangedPayload,
     ToolHealthPayload,
     UtteranceFailedPayload,
+    UtteranceFinishedPayload,
+    UtteranceStartedPayload,
     ToolResultPayload,
 )
 from src.modules.events.payloads.base import BasePayload
@@ -136,6 +144,9 @@ class EventBroadcaster:
         CoreEvents.GAME_ATTENTION_REQUIRED: (None, GamePayload),
         CoreEvents.GAME_ERROR: (None, GamePayload),
         CoreEvents.GAME_MILESTONE: (None, GamePayload),
+        # 游戏域事件流（通配订阅收到具体事件名后按该名直通，见 test_wildcard_*）
+        CoreEvents.GAME_BODY_WILDCARD: (None, BodyEventPayload),
+        CoreEvents.GAME_CHAT_WILDCARD: (None, GameChatPayload),
         # 任务卡实时增量（进行中账本变化；已完结从事件环聚合）
         CoreEvents.TASK_CHANGED: (None, TaskChangedPayload),
         # 递话受理（运营/跨 Agent 留言送达目标；时间线递话行 + 最近递话数据源）
@@ -144,6 +155,9 @@ class EventBroadcaster:
         CoreEvents.AGENT_REPLIED: (None, AgentRepliedPayload),
         # TTS 发声失败（冷启动服务不可用等）：运营者要在时间线看到"静默跳句"的原因
         CoreEvents.TTS_UTTERANCE_FAILED: (None, UtteranceFailedPayload),
+        # TTS 播报态两端点：前端按 utterance_id 关联到既有发言行打"播报中/已播完"标记
+        CoreEvents.TTS_UTTERANCE_STARTED: (None, UtteranceStartedPayload),
+        CoreEvents.TTS_UTTERANCE_FINISHED: (None, UtteranceFinishedPayload),
         CoreEvents.TOOL_RESULT_WILDCARD: (None, ToolResultPayload),
         CoreEvents.TOOL_HEALTH_WILDCARD: (None, ToolHealthPayload),
         CoreEvents.CORE_STARTUP: (None, CoreStartupPayload),

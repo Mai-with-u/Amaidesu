@@ -10,6 +10,8 @@ import pytest
 from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
+    BodyEventPayload,
+    GameChatPayload,
     GamePayload,
     RoomMessagePayload,
     RoomMessageUser,
@@ -19,6 +21,8 @@ from src.modules.events.payloads import (
     TaskChangedPayload,
     ToolResultPayload,
     UtteranceFailedPayload,
+    UtteranceFinishedPayload,
+    UtteranceStartedPayload,
 )
 from src.modules.events.payloads.tool_health import ToolHealthPayload
 
@@ -79,6 +83,10 @@ async def test_start_subscribes_to_every_forwarded_event_and_stop_unsubscribes_a
         CoreEvents.GAME_ATTENTION_REQUIRED,
         CoreEvents.GAME_ERROR,
         CoreEvents.GAME_MILESTONE,
+        CoreEvents.GAME_BODY_WILDCARD,
+        CoreEvents.GAME_CHAT_WILDCARD,
+        CoreEvents.TTS_UTTERANCE_STARTED,
+        CoreEvents.TTS_UTTERANCE_FINISHED,
         CoreEvents.TASK_CHANGED,
     }
     assert expected <= set(bus.subscribed)
@@ -182,6 +190,39 @@ async def test_task_event_passes_through(started) -> None:
         task_id="deleg_1", status="running", initiator="operator", executor="minecraft", summary="执行 Agent 已开始处理"
     )
     assert (await deliver(CoreEvents.TASK_CHANGED, task)).args[0] == CoreEvents.TASK_CHANGED
+
+
+async def test_game_body_and_chat_wildcards_keep_concrete_event_name(started) -> None:
+    """game.body.# / game.chat.# 通配订阅收到具体事件名后，WS type 沿用该具体名。"""
+    _bus, _ws, deliver = started
+    body = BodyEventPayload(
+        game="minecraft", kind="attacked", summary="正在被僵尸攻击", attacker="minecraft:zombie", hits=2
+    )
+    call = await deliver(CoreEvents.GAME_BODY_ATTACKED, body, CoreEvents.GAME_BODY_WILDCARD)
+    assert call.args[0] == CoreEvents.GAME_BODY_ATTACKED and call.kwargs.get("message_id") == body.id
+    assert (call.args[1]["kind"], call.args[1]["attacker"], call.args[1]["hits"]) == ("attacked", "minecraft:zombie", 2)
+
+    chat = GameChatPayload(game="minecraft", kind="player", sender="Steve", content="你在干嘛")
+    call = await deliver(CoreEvents.GAME_CHAT_RECEIVED, chat, CoreEvents.GAME_CHAT_WILDCARD)
+    assert call.args[0] == CoreEvents.GAME_CHAT_RECEIVED
+    assert (call.args[1]["sender"], call.args[1]["content"]) == ("Steve", "你在干嘛")
+
+
+@pytest.mark.asyncio
+async def test_tts_utterance_started_and_finished_pass_through(started) -> None:
+    """TTS 播报态两端点直通转发：前端按 utterance_id 关联到发言行显示播报态。"""
+    _bus, _ws, deliver = started
+    started_payload = UtteranceStartedPayload(
+        utterance_id="utt_1", speech_text="大家好", engine="edge", duration_ms=None
+    )
+    call = await deliver(CoreEvents.TTS_UTTERANCE_STARTED, started_payload)
+    assert call.args[0] == CoreEvents.TTS_UTTERANCE_STARTED
+    assert call.args[1]["utterance_id"] == "utt_1"
+
+    finished_payload = UtteranceFinishedPayload(utterance_id="utt_1", engine="edge", duration_ms=2000)
+    call = await deliver(CoreEvents.TTS_UTTERANCE_FINISHED, finished_payload)
+    assert call.args[0] == CoreEvents.TTS_UTTERANCE_FINISHED
+    assert call.args[1]["duration_ms"] == 2000
 
 
 @pytest.mark.asyncio
