@@ -91,7 +91,7 @@ Laplace 的 `message` / `gift` / `superchat` / `toast` / `interaction` 分别映
 
 - **实时流，无历史补播**：断线期间的事件不会补发；重连后依靠 `id` / `stableKey` / 内容指纹去重，降低重复落库概率。gift 的事件 `id` 可能由上游按“时间戳:房间:UID”生成，采集器不单独用 `id` 判断重复，而是比较 uid、礼物 ID、数量、价格、时间戳等内容字段，避免同一用户同一时间戳的不同礼物被误删。
 - **观众身份与 official 不互通**：Laplace 公开事件只有 `uid`（legacy 链路是真实 B 站 UID；Open Platform 来源的 `uid` 已废弃、恒 0，且不提供 `open_id`）。本采集器与 legacy 同命名空间，`bili_danmaku_official` 用 `open_id`；切换消息源会让同一观众在 viewers/画像里变成两个身份，同一房间不要混用、不要中途换源。B 站字段定义见[开放平台文档](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)。
-- **礼物金额按实付价统计**：Laplace 只提供含舰队折扣的实付总价，采集器把它同时写入 `total_price` 与 `paid_price`；`unit_price` 是由总价反推的近似值。该源没有标价，按“源只提供实付价时以实付价计贡献”的例外口径统计，因此 laplace 礼物的贡献低于标价，跨源对比时需注意。
+- **礼物金额按实付价统计**：Laplace 只提供含舰队折扣的实付总价，采集器把它同时写入 `total_price` 与 `paid_price`；`unit_price` 是由总价反推的近似值。该源没有标价，按“源只提供实付价时以实付价计贡献”的例外口径统计，因此 laplace 礼物的贡献不高于标价，跨源对比时需注意。
 - **连击信息缺失**：Laplace `gift` 事件只提供 `giftAmount`，没有 `combo_id` / `combo_count`；`GiftInfo` 的 `combo_*` 保持默认，连击归并只能按消息量处理。
 - **SC 金额按人民币换算**：Laplace 的 `priceNormalized` 是实际货币单位（人民币元），采集器优先用它 ×1000 转为金瓜子；只有该字段缺失或非正数时才回退 `price`。金额大小与单位无关，不能按金额猜单位。
 - **盲盒 ID 取配置 ID**：`blindGift.blind_gift_config_id` 是盲盒配置 ID，写入 `GiftInfo.blind_gift_id`；`original_gift_id` 是开出的实际礼物，不写入该字段。
