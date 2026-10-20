@@ -332,6 +332,19 @@ def test_zero_uid_is_dropped() -> None:
     assert LaplaceEventMapper().to_payload(_message_event(uid=0)) is None
 
 
+def test_zero_uid_warning_is_rate_limited_per_type(loguru_capture) -> None:
+    mapper = LaplaceEventMapper()
+    assert mapper.to_payload(_message_event(uid=0)) is None
+    assert mapper.to_payload(_message_event(uid=0)) is None
+    assert mapper.to_payload(_gift_event(uid=0)) is None
+
+    warnings = [
+        record for record in loguru_capture.records if record["level"] == "WARNING" and "缺少 uid" in record["message"]
+    ]
+    assert len(warnings) == 2
+    assert "后续同类事件降为 debug" in warnings[0]["message"]
+
+
 def test_room_filter() -> None:
     mapper = LaplaceEventMapper(room_id=3159986)
     assert mapper.to_payload(_message_event(origin=1)) is None

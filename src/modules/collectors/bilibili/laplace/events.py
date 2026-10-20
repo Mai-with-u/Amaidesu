@@ -196,6 +196,7 @@ class LaplaceEventMapper:
         self._handle_guard = handle_guard
         self._dedupe_cache_size = dedupe_cache_size
         self._seen: OrderedDict[str, None] = OrderedDict()
+        self._uid_missing_warned_types: set[str] = set()
 
     def to_payload(self, raw: Dict[str, Any]) -> Optional[RoomMessagePayload]:
         """解析并映射单条事件；不支持/非法/重复事件返回 None。"""
@@ -229,9 +230,16 @@ class LaplaceEventMapper:
             self.logger.debug(f"Laplace 事件房间不匹配（已忽略）: origin={event.origin}, 期望={self._room_id}")
             return None
         if not event.uid:
-            self.logger.warning(
-                f"Laplace 事件缺少 uid（已丢弃）: type={event.type}, id={event.id!r}, username={event.username!r}"
-            )
+            detail = f"type={event.type}, id={event.id!r}, username={event.username!r}"
+            if event.type not in self._uid_missing_warned_types:
+                self._uid_missing_warned_types.add(event.type)
+                self.logger.warning(
+                    f"Laplace 事件缺少 uid（已丢弃）: {detail}；后续同类事件降为 debug。"
+                    "若使用匿名直连，请检查 LAPLACE「进阶」登录同步；"
+                    "开放平台来源的 uid 恒 0，当前不可用"
+                )
+            else:
+                self.logger.debug(f"Laplace 事件缺少 uid（已丢弃）: {detail}")
             return None
         if not self._should_handle(event):
             return None
