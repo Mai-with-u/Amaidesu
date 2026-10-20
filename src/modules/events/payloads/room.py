@@ -10,7 +10,8 @@
 - 礼物/SC/上舰放结构化字段（``gift``/``sc``/``guard``），不混进 ``content``
 - 所有时间字段统一毫秒（``timestamp_ms``）
 - 金额统一平台最小虚拟货币单位（B 站 = 金瓜子，1000 金瓜子 = 1 元），
-  取值口径 = 标价（实付另记 ``paid_price``）；币种用 ``currency``
+  取值口径优先标价（实付另记 ``paid_price``）；源只提供实付价时
+  ``total_price`` 等于 ``paid_price``；币种用 ``currency``
   带平台前缀标识（``bilibili_gold_coin`` / ``bilibili_silver_coin``）
 - ``platform`` 是身份键组成部分（与 ``user_id`` 组成 ``(platform, user_id)``
   复合键），由采集器作为装配期常量统一注入，发布方逐条手填的反例不允许
@@ -52,17 +53,19 @@ class GiftInfo(BaseModel):
     """
     礼物信息（嵌套子结构）
 
-    金额字段单位 = 平台最小虚拟货币单位（B 站金瓜子）；``total_price`` 取
+    金额字段单位 = 平台最小虚拟货币单位（B 站金瓜子）；``total_price`` 优先取
     标价口径（观众认知中的礼物价值），打折/优惠场景的实付额记 ``paid_price``。
-    连击消息以 ``combo_id`` 标识同一次连击（数量规则去重键）。
+    源只提供实付价、没有标价时（如 LAPLACE Event Bridge 的礼物），``total_price``
+    与 ``paid_price`` 同值，贡献按实付价统计。连击消息以 ``combo_id`` 标识
+    同一次连击（数量规则去重键）。
 
     Attributes:
         name: 礼物名称（如 "小星星"）
         count: 礼物数量（一次可送多个；存储层映射 ``gifts.quantity``）
         gift_id: 礼物 ID（平台礼物主键，比名称稳定）
-        unit_price: 标价单价（金瓜子；免费礼物为银瓜子数）
-        total_price: 标价总额 = unit_price × count
-        paid_price: 实付总额（无优惠时与 total_price 相等）
+        unit_price: 标价单价（金瓜子；免费礼物为银瓜子数；源只提供实付价时为反推近似值）
+        total_price: 标价总额 = unit_price × count；源只提供实付价时等于实付总额
+        paid_price: 实付总额（无优惠时与 total_price 相等；源受限时二者同值）
         currency: 币种标识（bilibili_gold_coin / bilibili_silver_coin）
         combo_id: 连击标识（同一次连击共用，去重键）
         combo_count: 连击累计数
@@ -78,9 +81,13 @@ class GiftInfo(BaseModel):
     name: str = Field(..., description="礼物名称")
     count: int = Field(default=1, ge=1, description="礼物数量")
     gift_id: int = Field(default=0, description="礼物 ID（平台礼物主键）")
-    unit_price: int = Field(default=0, ge=0, description="标价单价（平台最小虚拟货币单位）")
-    total_price: int = Field(default=0, ge=0, description="标价总额（unit_price × count）")
-    paid_price: int = Field(default=0, ge=0, description="实付总额（无优惠时等于 total_price）")
+    unit_price: int = Field(
+        default=0, ge=0, description="标价单价（平台最小虚拟货币单位）；源只提供实付价时为反推近似值"
+    )
+    total_price: int = Field(
+        default=0, ge=0, description="标价总额（unit_price × count）；源只提供实付价时等于实付总额"
+    )
+    paid_price: int = Field(default=0, ge=0, description="实付总额（无优惠时等于 total_price；源受限时二者同值）")
     currency: str = Field(default="", description="币种标识（如 bilibili_gold_coin / bilibili_silver_coin）")
     combo_id: str = Field(default="", description="连击标识（同一次连击共用）")
     combo_count: int = Field(default=0, ge=0, description="连击累计数")

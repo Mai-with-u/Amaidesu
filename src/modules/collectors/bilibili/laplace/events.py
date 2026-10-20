@@ -14,8 +14,9 @@ LAPLACE Event Bridge（https://laplace.live/chat/event-bridge）把它的
 - 付费事件保留 ``raw_data``；SC 的举报 ``token`` 在落库前脱敏为 ``***``
 - SC 金额优先用 ``priceNormalized``（人民币元）×1000 转金瓜子；只有该字段
   缺失或非正数时才回退 ``price``。``SuperChatInfo.total_price`` 的单位是金瓜子
-- 礼物 ``price`` 是含舰队折扣的总价，源不提供标价，因此
-  ``total_price`` 与 ``paid_price`` 同值；``unit_price`` 为反推近似值
+- 礼物 ``price`` 是含舰队折扣的实付总价，源不提供标价，因此
+  ``total_price`` 与 ``paid_price`` 同值、贡献按实付价统计；
+  ``unit_price`` 为反推近似值
 - 盲盒礼物 ``blind_gift_id`` 取 ``blindGift.blind_gift_config_id``；
   ``original_gift_id`` 是开出的实际礼物，不写入该字段
 """
