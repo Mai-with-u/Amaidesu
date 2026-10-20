@@ -8,6 +8,8 @@ WS 类型规则：``type = 事件名``（精确直通）；唯一例外是 ``roo
 
 订阅清单：
 - ``room.message.danmaku / gift / super_chat / guard / enter`` → ``"room.message"``
+- ``room.state.watched_count`` → ``"room.state"``（状态快照：值即当前状态，
+  变化即重发；前端按族取最新值显示）
 - 决策可观测：``planner.decision`` / ``planner.verdict`` / ``streamer.stage``
 - 场次生命周期：``live.started`` / ``live.ended``
 - ``rundown.changed`` / ``streamer.speech``（直通）
@@ -21,7 +23,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set
 
 from pydantic import BaseModel
 
-from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE
+from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE, ROOM_STATE_TYPE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     AgentPromptedPayload,
@@ -35,6 +37,7 @@ from src.modules.events.payloads import (
     PlannerDecisionPayload,
     PlannerVerdictPayload,
     RoomMessagePayload,
+    RoomStateWatchedPayload,
     RundownChangedPayload,
     StreamerSpeechPayload,
     StreamerStagePayload,
@@ -112,6 +115,8 @@ class EventBroadcaster:
             CoreEvents.ROOM_MESSAGE_ENTER,
         ):
             return self._on_room_message
+        if event_name == CoreEvents.ROOM_STATE_WATCHED_COUNT:
+            return self._on_room_state
         entry = self._SUBSCRIPTIONS.get(event_name)
         if entry is None:
             return None
@@ -160,6 +165,8 @@ class EventBroadcaster:
         ):
             self._subscribe_event(event_name, self._on_room_message, RoomMessagePayload)
 
+        self._subscribe_event(CoreEvents.ROOM_STATE_WATCHED_COUNT, self._on_room_state, RoomStateWatchedPayload)
+
     def _subscribe_event(self, event_name: str, handler: Callable, model_class: type[BaseModel]) -> None:
         try:
             self.event_bus.on(event_name, handler, model_class=model_class)
@@ -174,6 +181,14 @@ class EventBroadcaster:
             await self.ws_handler.broadcast(ROOM_MESSAGE_TYPE, dict_data, message_id=data.id)
         except Exception as e:
             logger.error(f"广播 room message 失败: {e}")
+
+    async def _on_room_state(self, event_name: str, data: RoomStateWatchedPayload, source: str) -> None:
+        """room.state.* 族折叠广播：WS type 统一为 room.state，载荷透传。"""
+        try:
+            dict_data = data.model_dump()
+            await self.ws_handler.broadcast(ROOM_STATE_TYPE, dict_data, message_id=data.id)
+        except Exception as e:
+            logger.error(f"广播 room state 失败: {e}")
 
     async def _on_named_event(self, event_name: str, data: BasePayload, source: str) -> None:
         """通用直通广播：WS type = 事件名。"""

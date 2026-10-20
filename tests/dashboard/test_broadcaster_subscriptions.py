@@ -13,6 +13,7 @@ from src.modules.events.payloads import (
     GamePayload,
     RoomMessagePayload,
     RoomMessageUser,
+    RoomStateWatchedPayload,
     RundownChangedPayload,
     StreamerSpeechPayload,
     TaskChangedPayload,
@@ -69,6 +70,7 @@ async def test_start_subscribes_to_every_forwarded_event_and_stop_unsubscribes_a
         CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
         CoreEvents.ROOM_MESSAGE_GUARD,
         CoreEvents.ROOM_MESSAGE_ENTER,
+        CoreEvents.ROOM_STATE_WATCHED_COUNT,
         CoreEvents.RUNDOWN_CHANGED,
         CoreEvents.TOOL_RESULT_WILDCARD,
         CoreEvents.TOOL_HEALTH_WILDCARD,
@@ -101,6 +103,16 @@ async def test_room_message_events_share_one_ws_type(started, event_name: str) -
     payload = _room(event_name.rsplit(".", 1)[-1])
     call = await deliver(event_name, payload)
     assert call.args[0] == "room.message" and isinstance(call.args[1], dict)
+    assert call.kwargs.get("message_id") == payload.id
+
+
+async def test_room_state_watched_count_folds_to_room_state(started) -> None:
+    """累计观看人次状态快照折叠进 room.state 族类型，载荷字段透传。"""
+    _bus, _ws, deliver = started
+    payload = RoomStateWatchedPayload(platform="bilibili", audience_total=12000)
+    call = await deliver(CoreEvents.ROOM_STATE_WATCHED_COUNT, payload)
+    assert call.args[0] == "room.state" and isinstance(call.args[1], dict)
+    assert (call.args[1]["platform"], call.args[1]["audience_total"]) == ("bilibili", 12000)
     assert call.kwargs.get("message_id") == payload.id
 
 

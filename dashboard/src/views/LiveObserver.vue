@@ -21,6 +21,10 @@
       >
         {{ simulatorChip.label }}
       </router-link>
+      <!-- 累计观看人次：room.state 状态快照推送（值即当前状态，变化即重发）；仅完整档 -->
+      <span v-if="isFullMode && watchedLabel" class="watched-chip" title="本场累计观看人次">
+        累计观看 {{ watchedLabel }}
+      </span>
       <span class="grow" />
       <!-- 视图档位：完整=运营全量；简洁=纯浏览时间线（挂第二屏纯观看） -->
       <el-radio-group v-model="viewMode" size="small" class="view-switch">
@@ -349,7 +353,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { Loading } from '@element-plus/icons-vue';
-import { useWebSocketStore } from '@/stores';
+import { useWebSocketStore, useEventsStore } from '@/stores';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import { useNowTick } from '@/composables/useNowTick';
 import { useLiveSessions } from '@/composables/live/useLiveSessions';
@@ -366,6 +370,7 @@ import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
 import { useConsoleViewMode } from '@/composables/live/useConsoleViewMode';
 import { confirmAction } from '@/utils/confirmAction';
+import { formatNumber } from '@/utils/format';
 import { MAX_ENTRIES, isConversationEntry, relativeTime, type ShowEntry } from '@/utils/liveFeed';
 import type { TaskCard } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
@@ -375,6 +380,20 @@ import FeedTimeline from '@/components/live/FeedTimeline.vue';
 
 const wsStore = useWebSocketStore();
 const { isConnected: wsConnected } = storeToRefs(wsStore);
+
+const eventsStore = useEventsStore();
+/** 顶栏「累计观看」胶囊：取事件缓冲中最新一条 room.state 快照的 audience_total（UV 口径只增不减） */
+const watchedLabel = computed<string | null>(() => {
+  const list = eventsStore.events;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].type !== 'room.state') continue;
+    const value = list[i].data.audience_total;
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? formatNumber(value)
+      : null;
+  }
+  return null;
+});
 
 const {
   sessions,
@@ -639,6 +658,20 @@ onMounted(() => {
 .sim-chip:hover {
   border-color: var(--color-primary);
   color: var(--color-primary);
+}
+
+/* 累计观看人次胶囊：与 stage-chip 同一视觉层的只读数字 */
+.watched-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border-color-dark);
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  flex-shrink: 0;
+  align-self: center;
+  white-space: nowrap;
 }
 
 /* --- 视图档位切换 --- */
