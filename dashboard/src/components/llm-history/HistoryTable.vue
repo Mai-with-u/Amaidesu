@@ -50,7 +50,11 @@
 
       <el-table-column prop="cost" label="费用" width="90" align="right">
         <template #default="{ row }">
-          <span class="cost">{{ formatCost(row.cost) }}</span>
+          <!-- 0 值通常是未配置单价导致的零费用，与真实计费区分开 -->
+          <el-tooltip v-if="row.cost === 0" content="未配置单价或费用为 0" placement="top">
+            <span class="text-muted">—</span>
+          </el-tooltip>
+          <span v-else class="cost">{{ formatCost(row.cost) }}</span>
         </template>
       </el-table-column>
 

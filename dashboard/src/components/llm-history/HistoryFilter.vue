@@ -24,12 +24,15 @@
           style="width: 160px"
           @update:model-value="handleProfileNameChange"
         >
+          <!-- 用途是后端封闭集合（8 个 profile），标签沿用既有中文 + 英文原文 -->
           <el-option label="主 LLM" value="planner" />
           <el-option label="回复" value="replyer" />
           <el-option label="视觉" value="vision" />
           <el-option label="游戏" value="minecraft" />
+          <el-option label="minecraft_builder" value="minecraft_builder" />
           <el-option label="摘要" value="summary" />
           <el-option label="模拟" value="simulator" />
+          <el-option label="tts" value="tts" />
         </el-select>
       </div>
 
@@ -37,13 +40,13 @@
         <label class="filter-label">时间范围</label>
         <el-date-picker
           :model-value="dateRange"
-          type="daterange"
+          type="datetimerange"
           range-separator="至"
-          start-placeholder="开始日期"
-          end-placeholder="结束日期"
+          start-placeholder="开始时间"
+          end-placeholder="结束时间"
           :shortcuts="dateShortcuts"
           value-format="x"
-          style="width: 280px"
+          style="width: 400px"
           @update:model-value="handleDateRangeChange"
         />
       </div>

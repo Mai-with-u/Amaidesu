@@ -7,6 +7,25 @@
         <p class="page-subtitle">查看和分析 LLM 请求记录</p>
       </div>
       <div class="header-actions">
+        <!-- 紧凑统计条：statistics 按时间窗聚合，与表格筛选口径不同，故不放请求数 -->
+        <div class="stats-strip">
+          <div class="stat-item">
+            <span class="stat-label">成功率</span>
+            <span class="stat-value">{{ successRateText }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">平均延迟</span>
+            <span class="stat-value">{{ statsAvgLatencyText }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">总 tokens</span>
+            <span class="stat-value">{{ statsTokensText }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">缓存命中率</span>
+            <span class="stat-value">{{ cacheHitRateText }}</span>
+          </div>
+        </div>
         <el-tooltip
           content="缓存命中来自上游上报，0 可能代表「未上报」而非真实零命中"
           placement="bottom"
@@ -40,12 +59,20 @@
     />
 
     <!-- 请求详情弹窗 -->
-    <HistoryDetail v-model:visible="detailVisible" :detail="currentDetail" />
+    <HistoryDetail
+      v-model:visible="detailVisible"
+      :detail="currentDetail"
+      :show-nav="currentRowExists"
+      :has-prev="hasPrev"
+      :has-next="hasNext"
+      @prev="showPrevDetail"
+      @next="showNextDetail"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, watch } from 'vue';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { llmApi } from '@/api';
@@ -56,7 +83,7 @@ import type {
   LLMHistoryStatistics,
 } from '@/types';
 import { getApiErrorMessage } from '@/utils/apiError';
-import { formatNumber as formatCacheTokens } from '@/utils/format';
+import { formatLatency, formatNumber, formatNumber as formatCacheTokens } from '@/utils/format';
 import HistoryFilter from '@/components/llm-history/HistoryFilter.vue';
 import HistoryTable from '@/components/llm-history/HistoryTable.vue';
 import HistoryDetail from '@/components/llm-history/HistoryDetail.vue';
@@ -68,8 +95,30 @@ const totalRecords = ref(0);
 const detailVisible = ref(false);
 const currentDetail = ref<LLMRequestHistory | null>(null);
 const availableModels = ref<string[]>([]);
-// 统计视图数据：页头展示当前时间窗内的缓存命中总量（随筛选联动）
+// 统计视图数据：页头展示当前时间窗内的聚合指标（随筛选联动）
 const statistics = ref<LLMHistoryStatistics | null>(null);
+
+// 统计条文案：statistics 拉取失败（null）时各项降级为 "—"
+const successRateText = computed<string>(() => {
+  if (!statistics.value) return '—';
+  return `${(statistics.value.success_rate * 100).toFixed(1)}%`;
+});
+
+const statsAvgLatencyText = computed<string>(() => {
+  if (!statistics.value) return '—';
+  return formatLatency(statistics.value.avg_latency_ms);
+});
+
+const statsTokensText = computed<string>(() => {
+  if (!statistics.value) return '—';
+  return formatNumber(statistics.value.total_tokens);
+});
+
+// 命中率为 null 表示窗口内上游未上报缓存用量（≠真实零命中），显示 "—"
+const cacheHitRateText = computed<string>(() => {
+  const rate = statistics.value?.cache_hit_rate;
+  return rate === null || rate === undefined ? '—' : `${(rate * 100).toFixed(1)}%`;
+});
 
 async function fetchStatistics() {
   try {
@@ -167,15 +216,54 @@ function handleReset() {
   fetchHistory();
 }
 
+// 详情加载统一入口：行点击、上一条/下一条都按 request_id 拉完整详情；
+// 加载失败抛错给调用方，调用方决定提示方式且不改动当前详情
+async function loadDetail(requestId: string): Promise<LLMRequestHistory> {
+  const response = await llmApi.getRequestById(requestId);
+  return response.data;
+}
+
 // 显示详情（行只带摘要，完整内容按 request_id 拉取）
-async function showDetail(row: LLMRequestHistorySummary) {
+async function showDetail(row: LLMRequestHistorySummary): Promise<void> {
   try {
-    const response = await llmApi.getRequestById(row.request_id);
-    currentDetail.value = response.data;
+    currentDetail.value = await loadDetail(row.request_id);
     detailVisible.value = true;
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, '获取详情失败'));
   }
+}
+
+// 详情导航：以当前列表页 historyData 的顺序（时间倒序）为准。
+// 经 ?request_id= 直达而该行不在当前列表数据里时，currentRowExists 为 false，两按钮隐藏
+const currentRowIndex = computed<number>(() => {
+  const id = currentDetail.value?.request_id;
+  if (!id) return -1;
+  return historyData.value.findIndex(item => item.request_id === id);
+});
+
+const currentRowExists = computed<boolean>(() => currentRowIndex.value >= 0);
+const hasPrev = computed<boolean>(() => currentRowIndex.value > 0);
+const hasNext = computed<boolean>(
+  () => currentRowIndex.value >= 0 && currentRowIndex.value < historyData.value.length - 1,
+);
+
+async function switchDetail(offset: number): Promise<void> {
+  const target = historyData.value[currentRowIndex.value + offset];
+  if (!target) return;
+  try {
+    currentDetail.value = await loadDetail(target.request_id);
+  } catch (error) {
+    // 切换失败保持当前详情不变，仅提示
+    ElMessage.error(getApiErrorMessage(error, '获取详情失败'));
+  }
+}
+
+function showPrevDetail(): void {
+  void switchDetail(-1);
+}
+
+function showNextDetail(): void {
+  void switchDetail(1);
 }
 
 // 直达详情：外部页面（如直播控制台决策卡）经 ?request_id= 跳入时自动打开
@@ -269,6 +357,36 @@ onMounted(() => {
   gap: var(--spacing-sm);
 }
 
+/* 紧凑统计条：纵排标签+数值的并排小单元 */
+.stats-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: 4px var(--spacing-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.3;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 768px) {
   .page-header {
     flex-direction: column;
@@ -278,6 +396,11 @@ onMounted(() => {
   .header-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  .stats-strip {
+    width: 100%;
+    justify-content: space-between;
   }
 }
 </style>
