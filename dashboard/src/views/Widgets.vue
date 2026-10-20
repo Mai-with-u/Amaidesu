@@ -34,6 +34,7 @@
             <div class="url-row">
               <code class="path-code">{{ fullUrl }}</code>
               <button type="button" class="action-button" @click="copyEmbedUrl">复制</button>
+              <a class="action-button" :href="previewUrl" target="_blank" rel="noopener">打开页面</a>
             </div>
           </dd>
         </div>
@@ -92,8 +93,7 @@
           <dt class="field-label">使用方式</dt>
           <dd class="field-value">
             在直播软件里添加「浏览器源」，粘贴上方网址，宽高按推荐尺寸设置。
-            <a class="preview-link" :href="previewUrl" target="_blank" rel="noopener">打开预览</a>
-            查看当前效果（预览态会显示排查提示，正式嵌入请使用复制的网址）。
+            「打开页面」会在浏览器新标签预览效果——比正式嵌入的页面多显示排查提示。
           </dd>
         </div>
       </dl>
@@ -508,6 +508,8 @@ async function saveWidgetConfig(): Promise<void> {
 }
 
 .action-button {
+  display: inline-flex;
+  align-items: center;
   padding: 4px 12px;
   border: 1px solid var(--border-color-light);
   border-radius: var(--radius-md);
@@ -515,6 +517,7 @@ async function saveWidgetConfig(): Promise<void> {
   color: var(--text-regular);
   font-size: 13px;
   cursor: pointer;
+  text-decoration: none;
   transition: background-color var(--transition-fast), color var(--transition-fast);
 }
 
@@ -532,11 +535,6 @@ async function saveWidgetConfig(): Promise<void> {
   background-color: var(--color-primary);
   border-color: var(--color-primary);
   color: #fff;
-}
-
-.preview-link {
-  color: var(--color-primary);
-  margin: 0 2px;
 }
 
 .form-grid {
