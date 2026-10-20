@@ -260,6 +260,14 @@
             </ul>
           </div>
 
+          <!-- Agent 备忘录/待办面板：跟随时间线来源过滤只显对应节（纯观测只读）。
+             只在实际时档 + 完整档显示（回看无快照语义、简洁档藏运营面） -->
+          <AgentMemoPanel
+            v-if="sessionMode === 'live' && isFullMode"
+            :target="agentFilter"
+            class="memo-panel-dock"
+          />
+
           <!-- 干预输入区：页级目标选择（主播 / minecraft；adv 不支持收话不出现）+
                共享输入条（Tab/Shift+Tab 切模式、Enter 发送、↑↓ 回溯历史）。
                模式与传输随目标切换，主播目标复用既有行为（昵称插槽、在途 chip）；
@@ -374,6 +382,7 @@ import { formatNumber } from '@/utils/format';
 import { MAX_ENTRIES, isConversationEntry, relativeTime, type ShowEntry } from '@/utils/liveFeed';
 import type { TaskCard } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
+import AgentMemoPanel from '@/components/live/AgentMemoPanel.vue';
 
 // 装配：场次侧边栏 → 思考流 → 时间线内容 → 滚动跟随 → 干预输入条
 // （依赖沿参数单向流动：时间线消费场次模式与思考行，滚动跟随消费展示条目）
@@ -1031,6 +1040,12 @@ onMounted(() => {
   flex-shrink: 0;
   padding: 6px var(--spacing-md) 0;
   background: var(--bg-card);
+}
+
+/* 备忘录/待办面板：任务卡条下方、干预输入区上方的常驻观测条 */
+.memo-panel-dock {
+  flex-shrink: 0;
+  margin: 6px var(--spacing-md) 0;
 }
 
 .task-strip-list {

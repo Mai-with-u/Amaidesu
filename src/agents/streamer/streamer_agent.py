@@ -72,6 +72,7 @@ from .memory import (
     StreamerNotebook,
     build_memory_tool_provider,
     build_notebook_tool_provider,
+    emit_notebook_changed,
 )
 from .message_buffer import MessageBuffer
 from .planner import Planner
@@ -621,6 +622,14 @@ class StreamerAgent(BaseAgent):
         self._logger.info(f"StreamerAgent 已停止（摘除 {removed} 个工具）")
 
     # ==================================================================
+    # 观测面（只读快照，供 dashboard REST 查询；无任何写入口）
+    # ==================================================================
+
+    def memo_snapshot(self) -> Dict[str, Any]:
+        """备忘录快照（只读）：``GET /agents/streamer/memo`` 的数据源。"""
+        return {"notebook": self._notebook.read()}
+
+    # ==================================================================
     # 工具提供（list_tools）
     # ==================================================================
 
@@ -688,7 +697,7 @@ class StreamerAgent(BaseAgent):
             registered = "streamer_reply / rundown_control"
             # 备忘录工具：随主播 Agent 无条件注册（会话内状态，不依赖任何仓储）
             self.register_tool_provider(
-                build_notebook_tool_provider(self._notebook),
+                build_notebook_tool_provider(self._notebook, event_bus=self._event_bus),
                 registry=self._tool_registry,
                 visible_to={"streamer_notebook": ["streamer"]},
             )
@@ -855,6 +864,8 @@ class StreamerAgent(BaseAgent):
         self._session_notebook_snapshot = self._notebook.read()
         if self._session_notebook_snapshot:
             self._logger.info(f"本场备忘录已归档待回顾折叠（{len(self._session_notebook_snapshot)} 字），备忘录清空")
+            # 清空也是备忘录状态变化：发观测事件（快照非空才发——空备忘录清空无状态变化）
+            await emit_notebook_changed(self._event_bus, "")
         self._notebook.clear()
         # 收播整理：先写这一场的回顾，再给本场活跃的常客更新印象（两次 LLM 调用，
         # 放后台不阻塞事件回调）。空场次（无任何明细行，行已删）没东西可整理

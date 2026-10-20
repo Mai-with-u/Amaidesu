@@ -491,6 +491,18 @@ class MinecraftAgent(BaseAgent):
         self._paused.set()
 
     # ==================================================================
+    # 观测面（只读快照，供 dashboard REST 查询；无任何写入口）
+    # ==================================================================
+
+    def memo_snapshot(self) -> Dict[str, Any]:
+        """备忘录/待办/近期上报三元组快照（只读）：``GET /agents/minecraft/memo`` 的数据源。"""
+        return {
+            "notebook": self._mc_state.notebook,
+            "todos": [{"content": t.content, "status": t.status} for t in self._mc_state.todos],
+            "reports": [dict(r) for r in self._mc_state.reports],
+        }
+
+    # ==================================================================
     # 工具提供（list_tools）
     # ==================================================================
 

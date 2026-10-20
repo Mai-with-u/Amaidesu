@@ -3,6 +3,7 @@ Agent 控制面 API（运行态观测 + 框架级控制端点）
 
 - GET  /api/v1/agents                  -> 已注册 Agent 列表（运行态 + enabled 配置态）
 - GET  /api/v1/agents/{name}/state     -> 单个 Agent 运行状态
+- GET  /api/v1/agents/{name}/memo      -> Agent 备忘录/待办快照（纯只读观测）
 - POST /api/v1/agents/{name}/control   -> 框架级控制（pause/resume/shutdown/restart）
 - POST /api/v1/agents/{name}/prompt    -> 递话（运营提醒/插话：纯文本留言，不派新任务）
 - POST /api/v1/agents/{name}/delegate  -> 运营直派（派新任务，登记账本，任务卡可见）
@@ -32,10 +33,12 @@ from src.modules.dashboard.schemas.agent import (
     AgentDelegateRequest,
     AgentDelegateResponse,
     AgentListResponse,
+    AgentMemoResponse,
     AgentPromptRequest,
     AgentPromptResponse,
     AgentStateResponse,
     AgentSummary,
+    MemoTodoItem,
 )
 from src.modules.dashboard.utils.component_helper import config_dir, read_toml_dict
 from src.modules.logging import get_logger
@@ -127,6 +130,35 @@ async def get_agent_state(name: str, server: ServerDep) -> AgentStateResponse:
         heartbeat_ms=int(info["heartbeat_ms"]),
         is_alive=bool(info["is_alive"]),
         restart_count=int(info["restart_count"]),
+    )
+
+
+@router.get("/{name}/memo", response_model=AgentMemoResponse, summary="查询 Agent 备忘录/待办快照（只读）")
+async def get_agent_memo(name: str, server: ServerDep) -> AgentMemoResponse:
+    """Agent 的工作笔记快照（纯观测，无任何写端点）。
+
+    - 主播：备忘录全文（``{notebook}``）
+    - minecraft：待办/工作笔记/近期上报三元组（``{notebook, todos, reports}``）
+
+    AgentManager 未注入 503；Agent 不存在或该 Agent 不提供备忘录快照 404。
+    """
+    manager = _get_agent_manager(server)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="AgentManager 未注入，备忘录快照不可用")
+    agent = manager.get_agent_by_name(name)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent 不存在: {name}")
+    snapshot_fn = getattr(agent, "memo_snapshot", None)
+    if not callable(snapshot_fn):
+        raise HTTPException(status_code=404, detail=f"Agent {name} 不提供备忘录快照")
+    data = snapshot_fn()
+    todos = data.get("todos")
+    reports = data.get("reports")
+    return AgentMemoResponse(
+        name=name,
+        notebook=str(data.get("notebook", "")),
+        todos=[MemoTodoItem(**t) for t in todos] if todos is not None else None,
+        reports=list(reports) if reports is not None else None,
     )
 
 

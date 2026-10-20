@@ -23,6 +23,7 @@ from src.agents.streamer.memory.tools import (
     NOTEBOOK_TOOL_FULL_NAME,
     build_memory_tool_provider,
     build_notebook_tool_provider,
+    emit_notebook_changed,
 )
 
 __all__ = [
@@ -34,5 +35,6 @@ __all__ = [
     "build_memory_tool_provider",
     "build_notebook_tool_provider",
     "collect_payment_material",
+    "emit_notebook_changed",
     "format_recap",
 ]

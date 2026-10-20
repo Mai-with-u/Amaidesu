@@ -17,11 +17,16 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.notebook import StreamerNotebookChangedPayload
+from src.modules.logging import get_logger
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
 
 from .notebook import StreamerNotebook
 from .recap import format_recap
+
+logger = get_logger("StreamerNotebookTools")
 
 __all__ = [
     "MEMORY_PROVIDER_NAME",
@@ -31,6 +36,7 @@ __all__ = [
     "RECALL_VIEWER_SPEC",
     "build_memory_tool_provider",
     "build_notebook_tool_provider",
+    "emit_notebook_changed",
 ]
 
 # 提供者短名（注册全名 = memory_recall_session / memory_recall_viewer）
@@ -113,11 +119,33 @@ NOTEBOOK_SPEC = ToolSpec(
 )
 
 
-def build_notebook_tool_provider(notebook: StreamerNotebook) -> ToolProvider:
+async def emit_notebook_changed(event_bus: Any, notebook_text: str) -> None:
+    """发布 ``streamer.notebook.changed`` 观测事件（写入/清空后调用）。
+
+    终点广播：只供观察面渲染与复盘落盘（EventHistoryRecorder 按 ``#`` 通配
+    接住落 `logs/events/`），消费者不得触发新决策；发布失败只告警不反噬工具
+    执行与生命周期收口。``live_session_id`` 发布方不填，由事件总线的场次盖章
+    拦截器注入（与 ``streamer.speech`` 同路）。
+    """
+    if event_bus is None:
+        return
+    try:
+        await event_bus.emit(
+            CoreEvents.STREAMER_NOTEBOOK_CHANGED,
+            StreamerNotebookChangedPayload(notebook=notebook_text),
+            source="streamer_notebook",
+        )
+    except Exception as exc:  # noqa: BLE001 - 观测事件不阻断写入路径
+        logger.warning(f"streamer.notebook.changed 发布失败（已忽略）: {exc}")
+
+
+def build_notebook_tool_provider(notebook: StreamerNotebook, event_bus: Any = None) -> ToolProvider:
     """组装备忘录工具 Provider（provider="streamer"，全名 ``streamer_notebook``）。
 
     与 ``streamer_reply`` 共用提供者短名 "streamer"——注册表按派生全名索引，
     全名唯一即可；备忘录是主播自己的工作笔记，随主播 Agent 一并注册。
+    ``event_bus`` 用于写入成功后发 ``streamer.notebook.changed`` 观测事件
+    （读回不发——读不改变备忘录状态）；未注入（极简场景）时只写不发。
     """
 
     async def _notebook(invocation: ToolInvocation) -> str:
@@ -125,7 +153,9 @@ def build_notebook_tool_provider(notebook: StreamerNotebook) -> ToolProvider:
         if "content" not in args:
             text = notebook.read()
             return text if text else "（备忘录还是空的）"
-        return notebook.set(str(args.get("content", "")))
+        saved = notebook.set(str(args.get("content", "")))
+        await emit_notebook_changed(event_bus, saved)
+        return saved
 
     return make_provider_from_specs(
         NOTEBOOK_PROVIDER_NAME,

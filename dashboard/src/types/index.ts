@@ -142,6 +142,21 @@ export interface AgentDelegateResponse {
   executor: string;
 }
 
+/** minecraft 待办条目（minecraft_todo 文档元素） */
+export interface MemoTodoItem {
+  content: string;
+  status: string;
+}
+
+/** Agent 备忘录/待办快照（`GET /api/v1/agents/{name}/memo`，纯只读观测）。
+ *  `todos` / `reports` 仅 minecraft 返回（三元组）；主播只有 `notebook`，两者为 null */
+export interface AgentMemoResponse {
+  name: string;
+  notebook: string;
+  todos?: MemoTodoItem[] | null;
+  reports?: Array<Record<string, string>> | null;
+}
+
 /** 任务卡（进行中 = 账本快照；已完结 = 事件环聚合的终态末次载荷） */
 export interface TaskCard {
   task_id: string;

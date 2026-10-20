@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AgentMemoPanel: typeof import('./src/components/live/AgentMemoPanel.vue')['default']
     AppLayout: typeof import('./src/components/layout/AppLayout.vue')['default']
     ArrayEditor: typeof import('./src/components/settings/ArrayEditor.vue')['default']
     ChangelogDialog: typeof import('./src/components/layout/ChangelogDialog.vue')['default']

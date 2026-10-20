@@ -9,6 +9,7 @@
 import axios from 'axios';
 import type {
   AgentControlActionType,
+  AgentMemoResponse,
   AgentControlResponse,
   AgentDelegateResponse,
   AgentListResponse,
@@ -215,6 +216,8 @@ export const agentsApi = {
   /** 硬取消：清追踪 + 账面 cancelled + 通知停手（任务未知/已终态 404） */
   cancelAgentTask: (name: string, taskId: string) =>
     api.post<{ cancelled: boolean }>(`/agents/${name}/tasks/${taskId}/cancel`),
+  /** 备忘录/待办快照（只读观测：主播 = notebook；minecraft = notebook/todos/reports 三元组） */
+  getAgentMemo: (name: string) => api.get<AgentMemoResponse>(`/agents/${name}/memo`),
 };
 
 // 任务卡快照（进行中账本 + 已完结事件聚合）

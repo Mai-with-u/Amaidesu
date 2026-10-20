@@ -185,3 +185,49 @@ def test_endpoints_return_503_without_agent_manager(mount, initialized_config) -
     client = mount(config_service=initialized_config)
     assert client.get("/api/v1/agents").status_code == 503
     assert client.post("/api/v1/agents/x/control", json={"action": "pause"}).status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# GET /agents/{name}/memo：备忘录/待办快照（纯只读观测）
+# ---------------------------------------------------------------------------
+
+
+def test_agent_memo_snapshot_three_states(client, manager: AgentManager) -> None:
+    # 不支持快照的 Agent（替身未实现 memo_snapshot）→ 404；未知 Agent → 404
+    unsupported = client.get("/api/v1/agents/sample_agent/memo")
+    assert unsupported.status_code == 404 and "不提供备忘录快照" in unsupported.json()["detail"]
+    ghost = client.get("/api/v1/agents/ghost/memo")
+    assert ghost.status_code == 404 and "ghost" in ghost.json()["detail"]
+
+    # 提供快照的 Agent：minecraft 形态返回三元组
+    mc = manager.get_agent_by_name("sample_agent")
+    assert mc is not None
+    mc.memo_snapshot = (  # type: ignore[method-assign]
+        lambda: {
+            "notebook": "已拿齐小麦",
+            "todos": [{"content": "下矿", "status": "in_progress"}, {"content": "回基地", "status": "pending"}],
+            "reports": [{"kind": "delivery", "content": "交付完成", "scene": "矿洞"}],
+        }
+    )
+    body = client.get("/api/v1/agents/sample_agent/memo").json()
+    assert body["name"] == "sample_agent"
+    assert body["notebook"] == "已拿齐小麦"
+    assert body["todos"] == [
+        {"content": "下矿", "status": "in_progress"},
+        {"content": "回基地", "status": "pending"},
+    ]
+    assert body["reports"] == [{"kind": "delivery", "content": "交付完成", "scene": "矿洞"}]
+
+    # 主播形态：只有 notebook，todos / reports 为 None
+    streamer = manager.get_agent_by_name("sample_agent")
+    assert streamer is not None
+    streamer.memo_snapshot = lambda: {"notebook": "答应观众画新皮肤"}  # type: ignore[method-assign]
+    body = client.get("/api/v1/agents/sample_agent/memo").json()
+    assert body == {"name": "sample_agent", "notebook": "答应观众画新皮肤", "todos": None, "reports": None}
+
+
+def test_agent_memo_is_read_only_surface(client) -> None:
+    # 架构红线：备忘录观测面只有 GET，任何写方法都不存在
+    assert client.post("/api/v1/agents/sample_agent/memo").status_code in (404, 405)
+    assert client.put("/api/v1/agents/sample_agent/memo", json={}).status_code in (404, 405)
+    assert client.delete("/api/v1/agents/sample_agent/memo").status_code in (404, 405)

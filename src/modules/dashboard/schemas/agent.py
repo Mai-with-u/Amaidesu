@@ -5,7 +5,7 @@ Agent 控制面 Schema
 """
 
 from enum import Enum
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -99,3 +99,23 @@ class AgentDelegateResponse(BaseModel):
     accepted: bool
     task_id: str
     executor: str
+
+
+class MemoTodoItem(BaseModel):
+    """minecraft 待办条目（minecraft_todo 文档元素）"""
+
+    content: str
+    status: str = "pending"
+
+
+class AgentMemoResponse(BaseModel):
+    """Agent 备忘录/待办快照（只读观测；仅 GET，无任何写端点）。
+
+    ``todos`` / ``reports`` 仅 minecraft 目标返回（三元组）；主播只有
+    ``notebook``，两者为 None。
+    """
+
+    name: str
+    notebook: str = ""
+    todos: Optional[List[MemoTodoItem]] = None
+    reports: Optional[List[Dict[str, Any]]] = None

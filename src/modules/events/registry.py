@@ -268,6 +268,7 @@ def register_core_events() -> None:
         room as _room_payloads,  # noqa: F401
         room_state as _room_state_payloads,  # noqa: F401
         rundown as _rundown_payloads,  # noqa: F401
+        notebook as _notebook_payloads,  # noqa: F401
         speech as _speech_payloads,
         tasks as _tasks_payloads,  # noqa: F401
         tool_health as _tool_health_payloads,  # noqa: F401

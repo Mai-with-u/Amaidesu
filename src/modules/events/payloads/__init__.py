@@ -65,6 +65,7 @@ from .room import (
 )
 from .room_state import RoomStateWatchedPayload
 from .rundown import RundownChangedPayload
+from .notebook import StreamerNotebookChangedPayload
 from .speech import StreamerSpeechPayload
 from .tasks import TaskChangedPayload
 from .tool_health import ToolHealthPayload
@@ -120,4 +121,6 @@ __all__ = [
     "UtteranceFailedPayload",
     # streamer.speech 主播发言业务事实
     "StreamerSpeechPayload",
+    # streamer.notebook.changed 主播备忘录观测
+    "StreamerNotebookChangedPayload",
 ]

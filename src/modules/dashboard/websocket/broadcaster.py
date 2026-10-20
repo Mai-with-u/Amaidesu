@@ -45,6 +45,7 @@ from src.modules.events.payloads import (
     RoomMessagePayload,
     RoomStateWatchedPayload,
     RundownChangedPayload,
+    StreamerNotebookChangedPayload,
     StreamerSpeechPayload,
     StreamerStagePayload,
     TaskChangedPayload,
@@ -140,6 +141,8 @@ class EventBroadcaster:
         CoreEvents.LIVE_ENDED: (None, LiveEndedPayload),
         CoreEvents.RUNDOWN_CHANGED: (None, RundownChangedPayload),
         CoreEvents.STREAMER_SPEECH: (None, StreamerSpeechPayload),
+        # 主播备忘录观测（直播控制台备忘录面板的实时刷新触发）
+        CoreEvents.STREAMER_NOTEBOOK_CHANGED: (None, StreamerNotebookChangedPayload),
         CoreEvents.GAME_REPORT: (None, GamePayload),
         CoreEvents.GAME_ATTENTION_REQUIRED: (None, GamePayload),
         CoreEvents.GAME_ERROR: (None, GamePayload),
