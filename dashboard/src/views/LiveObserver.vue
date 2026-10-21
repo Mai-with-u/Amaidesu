@@ -216,6 +216,7 @@
                 round-clickable
                 :simple="!isFullMode"
                 :empty-text="timelineEmptyText"
+                :anchor-entry-id="anchoredId"
                 @round-click="jumpToAgentRound"
               />
             </div>
@@ -376,6 +377,7 @@ import {
 import { agentRoundLocation } from '@/composables/useAgentDeepLink';
 import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
+import { useTimelineAnchor } from '@/composables/live/useTimelineAnchor';
 import { useConsoleViewMode } from '@/composables/live/useConsoleViewMode';
 import { confirmAction } from '@/utils/confirmAction';
 import { formatNumber } from '@/utils/format';
@@ -467,6 +469,27 @@ const timelineEmptyText = computed(() => {
 const { scrollRef, unseen, onScroll, jumpToLatest, resetUnseen } =
   useTimelineScroll(displayEntries);
 
+// 回看时刻锚定：复盘页指标卡深链（/live?session=&at=<ms>）跳入时自动向前
+// 翻页到目标时刻，滚动定位并短暂高亮（翻页上限与降级提示在组合式内）
+const { anchoredId, anchorAt } = useTimelineAnchor({
+  entries: displayEntries,
+  hasMore: replayHasMore,
+  loadingMore: replayLoadingMore,
+  loadOlder: loadOlderReplay,
+  scrollRoot: scrollRef,
+});
+
+/** 回放首屏加载完成后再锚定（loadReplayTimeline 由场次模式 watch 异步触发，
+ *  有界等待防止诊断流缺失时空转） */
+async function anchorAfterReplayLoad(targetMs: number): Promise<void> {
+  for (let i = 0; i < 50; i += 1) {
+    if (sessionMode.value !== 'replay') return;
+    if (displayEntries.value.length > 0) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  await anchorAt(targetMs);
+}
+
 const sendBarRef = ref<InstanceType<typeof InterventionInput> | null>(null);
 
 // 干预发话：目标二选一（默认主播），模式集合与传输随目标切换——
@@ -543,6 +566,11 @@ onMounted(() => {
       const target = sessions.value.find(s => s.live_session_id === id);
       if (target && !target.is_active) {
         selectSession(target);
+        // 时刻锚定（复盘页指标卡深链）：at=毫秒时刻，回看加载完成后定位高亮
+        const anchorMs = Number(route.query.at);
+        if (Number.isFinite(anchorMs) && anchorMs > 0) {
+          void anchorAfterReplayLoad(anchorMs);
+        }
         break;
       }
     }

@@ -64,6 +64,22 @@ class SessionRecapRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_recaps_by_session_ids(self, *, live_session_ids: List[int]) -> List[sqlite3.Row]:
+        """按场次主键集合取回顾行（复盘聚合的多场一次读取；顺序不保证）。"""
+
+        def _exec() -> List[sqlite3.Row]:
+            placeholders = ",".join("?" for _ in live_session_ids)
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT live_session_id, started_at_ms, ended_at_ms, recap_text, created_at_ms"
+                        f" FROM session_recaps WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
+                        [int(sid) for sid in live_session_ids],
+                    ).fetchall()
+                )
+
+        return await self._run_in_executor(_exec)
+
     async def list_recent_recaps(
         self, *, limit: int = 3, exclude_session_id: Optional[int] = None
     ) -> List[sqlite3.Row]:

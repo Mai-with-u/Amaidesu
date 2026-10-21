@@ -829,6 +829,9 @@ async def create_app_components(
             # 场次复盘聚合/导出的数据源：game_events 计数与 db 快照副本路径
             event_repo=database.events,
             storage_db_path=database.db_path,
+            # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
+            recap_repo=database.recaps,
+            rundown_transition_repo=database.rundown_transitions,
             # 观众域只读查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
             viewer_repo=database.viewers,
             chat_repo=database.chat,
@@ -1140,6 +1143,8 @@ async def _start_dashboard(
     chat_repo=None,
     viewer_profile_repo=None,
     event_repo=None,
+    recap_repo=None,
+    rundown_transition_repo=None,
     storage_db_path=None,
     task_tracker=None,
     subtitle_service=None,
@@ -1173,6 +1178,9 @@ async def _start_dashboard(
             viewer_profile_repo=viewer_profile_repo,
             # 场次复盘面：game_events 计数仓储与 db 快照路径（/api/v1/review*）
             event_repo=event_repo,
+            # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
+            recap_repo=recap_repo,
+            rundown_transition_repo=rundown_transition_repo,
             storage_db_path=storage_db_path,
             # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源
             task_tracker=task_tracker,

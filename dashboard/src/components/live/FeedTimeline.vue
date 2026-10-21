@@ -9,7 +9,13 @@
     </div>
 
     <ol v-else class="feed">
-      <li v-for="entry in feedRows" :key="entry.id" class="feed-row" :class="rowAlignClass(entry)">
+      <li
+        v-for="entry in feedRows"
+        :key="entry.id"
+        class="feed-row"
+        :class="[rowAlignClass(entry), { 'is-anchored': entry.id === anchorEntryId }]"
+        :data-entry-id="entry.id"
+      >
         <!-- 会话模式的过程折叠条（合成条目）：挂在主播发言之后，点击展开该轮过程 -->
         <button
           v-if="entry.kind === 'process_group'"
@@ -657,6 +663,8 @@ interface Props {
   /** 简洁档：藏卡面上的诊断胶囊行（缓存/Token/模型/上下文/完整请求），
    *  只留内容本体——管线诊断卡由页面层条目过滤排除，这里兜卡面上的统计胶囊 */
   simple?: boolean;
+  /** 锚定高亮条目 id（回看深链 ?at= 定位；非空时该行加 is-anchored 类） */
+  anchorEntryId?: string | null;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -665,6 +673,7 @@ const props = withDefaults(defineProps<Props>(), {
   emptyText: '静候消息与决策',
   roundClickable: false,
   simple: false,
+  anchorEntryId: null,
 });
 
 const emit = defineEmits<{
@@ -960,6 +969,15 @@ async function copyText(text: string): Promise<void> {
 }
 .is-round-clickable:hover {
   outline: 1px solid var(--color-primary);
+}
+
+/* 回看深链锚定高亮（?at= 定位的目标行，数秒后自动熄灭） */
+.feed-row.is-anchored {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 4px;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+  transition: background 0.6s ease;
 }
 
 @keyframes rowIn {

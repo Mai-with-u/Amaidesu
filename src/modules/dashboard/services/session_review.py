@@ -7,6 +7,7 @@ super_chats / game_events）、LLM 请求统计窗口切片（llm_requests 统�
 
 多场合并口径：计数与用量跨场累加；发言节奏/最长沉默逐场计算后取最值；
 水位图时间序列按场拼接（点带 session_id，前端在场边界断线留空隙）。
+观众构成、游戏明细、流程单执行属单场语义，合并视图不产出。
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.dashboard.schemas.review import (
     DecisionLatency,
+    GameEventItem,
     LLMDomainStats,
     ReviewChips,
     ReviewDecisions,
@@ -24,7 +26,9 @@ from src.modules.dashboard.schemas.review import (
     ReviewLLM,
     ReviewSessionBrief,
     ReviewSpeech,
+    ReviewViewers,
     SessionReviewResponse,
+    ViewerSpeakerItem,
     WaterlinePoint,
     WaterlineSeries,
 )
@@ -32,6 +36,7 @@ from src.modules.dashboard.services.llm_stats import cache_hit_rate
 from src.modules.dashboard.services.session_events import SessionEventReader
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
+from src.modules.types.currency import to_cny
 
 if TYPE_CHECKING:
     from src.modules.events.event_history import EventRecord
@@ -41,6 +46,9 @@ logger = get_logger("SessionReviewService")
 # 水位图单 profile 采样点上限：超限按等步长抽样保形（一场数千笔请求时
 # 折线形状不变，载荷可控）
 _MAX_WATERLINE_POINTS = 2_000
+
+# 游戏明细单场返回上限（超出截断并以 truncated 标记）
+_MAX_GAME_ITEMS = 100
 
 
 def percentile(sorted_values: Sequence[float], q: float) -> Optional[float]:
@@ -56,13 +64,42 @@ def percentile(sorted_values: Sequence[float], q: float) -> Optional[float]:
     return float(sorted_values[low]) * (1 - frac) + float(sorted_values[high]) * frac
 
 
-def longest_silence_ms(speech_ts: Sequence[int], start_ms: int, end_ms: int) -> int:
-    """最长沉默（毫秒）：相邻发言时刻的最大间隔，场次首尾计入边界。
+def longest_silence(speech_ts: Sequence[int], start_ms: int, end_ms: int) -> Tuple[int, Optional[int]]:
+    """最长沉默（毫秒）与其起点：相邻发言时刻的最大间隔，场次首尾计入边界。
 
-    场内零发言时整场时长即沉默；单点发言时取两端到边界的较大者。
+    场内零发言时整场时长即沉默（起点=场次开始）；单点发言时取两端到边界的
+    较大者。沉默起点 = 区间左端（上一条发言或场次开始），供复盘页跳转回看。
     """
+    if end_ms <= start_ms:
+        return 0, None
     bounds = [start_ms, *sorted(speech_ts), end_ms]
-    return max((b - a) for a, b in zip(bounds, bounds[1:], strict=False)) if end_ms > start_ms else 0
+    best_gap = 0
+    best_start: Optional[int] = None
+    for a, b in zip(bounds, bounds[1:], strict=False):
+        if b - a > best_gap:
+            best_gap = b - a
+            best_start = a
+    return best_gap, best_start
+
+
+def longest_silence_ms(speech_ts: Sequence[int], start_ms: int, end_ms: int) -> int:
+    """最长沉默（毫秒）：相邻发言时刻的最大间隔，场次首尾计入边界。"""
+    return longest_silence(speech_ts, start_ms, end_ms)[0]
+
+
+def cny_total(by_currency: Dict[str, int]) -> Optional[float]:
+    """按币种分组的金额原值 → 可折算人民币合计（元）。
+
+    银瓜子等免费/未知币种 ``to_cny`` 返回 None，自然不计入；全部不可折算时
+    返回 None（与"未发生付费"区分开，避免 0 元误导）。
+    """
+    total: Optional[float] = None
+    for currency, amount in by_currency.items():
+        cny = to_cny(int(amount), currency)
+        if cny is None:
+            continue
+        total = (total or 0.0) + cny
+    return total
 
 
 def _to_brief(row: Dict[str, object], now_ms: Optional[int] = None) -> ReviewSessionBrief:
@@ -86,6 +123,7 @@ def _to_brief(row: Dict[str, object], now_ms: Optional[int] = None) -> ReviewSes
         duration_ms=max(0, right - started),
         heat=int(row.get("heat") or 0),  # type: ignore[arg-type]
         viewer_count=int(row.get("viewer_count") or 0),  # type: ignore[arg-type]
+        audience_total=int(row.get("audience_total") or 0),  # type: ignore[arg-type]
     )
 
 
@@ -99,12 +137,14 @@ class SessionReviewAggregator:
         llm_repo: Optional[object] = None,
         event_repo: Optional[object] = None,
         event_reader: Optional[SessionEventReader] = None,
+        recap_repo: Optional[object] = None,
         slow_thresholds: Optional[Dict[str, int]] = None,
     ) -> None:
         self.chat_repo = chat_repo
         self.llm_repo = llm_repo
         self.event_repo = event_repo
         self.event_reader = event_reader
+        self.recap_repo = recap_repo
         # 每 profile 慢调用阈值（毫秒；来自 [llm_profiles.<name>].slow_threshold_ms，
         # 与运行期慢调用告警同源同值），未配置的 profile 落全局缺省
         self.slow_thresholds = slow_thresholds or {}
@@ -135,6 +175,9 @@ class SessionReviewAggregator:
         llm, waterline = await self._llm_section(windows, session_ids)
         decisions, degraded = await self._decision_section(session_ids, windows)
         game = await self._game_section(session_ids)
+        await self._fill_recaps(briefs)
+        # 观众构成/游戏明细属单场语义，合并视图不产出
+        viewers = await self._viewers_section(briefs[0]) if len(briefs) == 1 else None
 
         return SessionReviewResponse(
             sessions=briefs,
@@ -146,8 +189,28 @@ class SessionReviewAggregator:
             llm=llm,
             waterline=waterline,
             game=game,
+            viewers=viewers,
             degraded=degraded,
         )
+
+    async def _fill_recaps(self, briefs: List[ReviewSessionBrief]) -> None:
+        """把收播总结按场次主键回填到 brief（缺回顾的场次保持 None）。"""
+        if self.recap_repo is None or not briefs:
+            return
+        try:
+            rows = await self.recap_repo.list_recaps_by_session_ids(  # type: ignore[attr-defined]
+                live_session_ids=[b.live_session_id for b in briefs]
+            )
+        except Exception as exc:  # noqa: BLE001 - 回顾缺失不阻断聚合，按无数据降级
+            logger.warning(f"读取场次回顾失败，复盘页总结面板降级: {exc}", exc=True)
+            return
+        by_id = {int(row["live_session_id"]): row for row in rows}
+        for brief in briefs:
+            row = by_id.get(brief.live_session_id)
+            if row is None:
+                continue
+            brief.recap_text = str(row["recap_text"] or "")
+            brief.recap_created_at_ms = int(row["created_at_ms"]) if row["created_at_ms"] else None
 
     # ------------------------------------------------------------------ #
     # 各数据源分节                                                        #
@@ -171,8 +234,8 @@ class SessionReviewAggregator:
             enter_count=int(summary.get("enter_count") or 0),
             gift_count=int(summary.get("gift_count") or 0),
             super_chat_count=int(summary.get("super_chat_count") or 0),
-            gift_total_price=int(summary.get("gift_total_price") or 0),
-            super_chat_total_price=int(summary.get("super_chat_total_price") or 0),
+            gift_total_cny=cny_total(dict(summary.get("gift_total_by_currency") or {})),
+            super_chat_total_cny=cny_total(dict(summary.get("super_chat_total_by_currency") or {})),
         )
 
         speech_rows = await self.chat_repo.list_assistant_speech_by_session(  # type: ignore[attr-defined]
@@ -181,6 +244,7 @@ class SessionReviewAggregator:
         # 节奏/沉默逐场计算后取最值合并（跨场拼接会把场间空窗误算成沉默）
         total_speech = 0
         worst_silence: Optional[int] = None
+        worst_silence_start: Optional[int] = None
         best_rate: Optional[float] = None
         by_session: Dict[int, List[int]] = {}
         for row in speech_rows:
@@ -190,9 +254,10 @@ class SessionReviewAggregator:
             total_speech += len(ts_list)
             s_start = brief.started_at_ms
             s_end = brief.ended_at_ms if brief.ended_at_ms is not None else window_end
-            silence = longest_silence_ms(ts_list, s_start, s_end)
+            silence, silence_start = longest_silence(ts_list, s_start, s_end)
             if worst_silence is None or silence > worst_silence:
                 worst_silence = silence
+                worst_silence_start = silence_start
             minutes = max(s_end - s_start, 1) / 60_000
             rate = len(ts_list) / minutes
             if best_rate is None or rate > best_rate:
@@ -203,6 +268,7 @@ class SessionReviewAggregator:
             if window_end > window_start
             else None,
             longest_silence_ms=worst_silence,
+            longest_silence_start_ms=worst_silence_start,
         )
         return chips, speech
 
@@ -309,17 +375,19 @@ class SessionReviewAggregator:
                 speech_at[round_id] = int(record.timestamp_ms)
         decisions.total = sum(distribution.values())
         decisions.distribution = dict(sorted(distribution.items(), key=lambda kv: -kv[1]))
-        latencies: List[int] = []
+        # 时延样本带开口时刻，最慢一次的时刻供复盘页锚定跳转回看
+        latencies: List[Tuple[int, int]] = []
         for rid, spoken_at in speech_at.items():
             decided_at = verdict_at.get(rid)
             if decided_at is not None and spoken_at >= decided_at:
-                latencies.append(spoken_at - decided_at)
+                latencies.append((spoken_at - decided_at, spoken_at))
         latencies.sort()
         decisions.latency = DecisionLatency(
             sample_count=len(latencies),
-            p50_ms=int(percentile(latencies, 0.5)) if latencies else None,
-            p90_ms=int(percentile(latencies, 0.9)) if latencies else None,
-            max_ms=latencies[-1] if latencies else None,
+            p50_ms=int(percentile([v for v, _ in latencies], 0.5)) if latencies else None,
+            p90_ms=int(percentile([v for v, _ in latencies], 0.9)) if latencies else None,
+            max_ms=latencies[-1][0] if latencies else None,
+            max_at_ms=latencies[-1][1] if latencies else None,
         )
         return decisions, degraded
 
@@ -328,11 +396,60 @@ class SessionReviewAggregator:
             return ReviewGame()
         rows = await self.event_repo.count_game_events_by_type(live_session_ids=session_ids)  # type: ignore[attr-defined]
         by_type = {str(row["event_type"]): int(row["n"]) for row in rows}
-        return ReviewGame(total=sum(by_type.values()), by_type=by_type)
+        game = ReviewGame(total=sum(by_type.values()), by_type=by_type)
+        # 明细列表只服务单场视图（逐条锚定跳转回看）；合并视图保持空
+        if len(session_ids) == 1:
+            detail_rows = await self.event_repo.list_session_game_events(  # type: ignore[attr-defined]
+                live_session_id=session_ids[0], limit=_MAX_GAME_ITEMS
+            )
+            game.items = [
+                GameEventItem(
+                    game=str(row["game"]),
+                    event_type=str(row["event_type"]),
+                    message=str(row["message"] or ""),
+                    timestamp_ms=int(row["timestamp_ms"]),
+                )
+                for row in detail_rows
+            ]
+            game.truncated = game.total > len(game.items)
+        return game
+
+    async def _viewers_section(self, brief: ReviewSessionBrief) -> Optional[ReviewViewers]:
+        """单场观众构成：发言观众数 / 新·回头观众 / 发言条数 top。"""
+        if self.chat_repo is None:
+            return None
+        try:
+            cohorts = await self.chat_repo.count_session_viewer_cohorts(  # type: ignore[attr-defined]
+                live_session_id=brief.live_session_id, started_at_ms=brief.started_at_ms
+            )
+            speaker_rows = await self.chat_repo.list_session_speakers(  # type: ignore[attr-defined]
+                live_session_id=brief.live_session_id, limit=5
+            )
+        except Exception as exc:  # noqa: BLE001 - 观众侧缺失不阻断聚合，按无数据降级
+            logger.warning(f"读取观众构成失败（场次 {brief.live_session_id}）: {exc}", exc=True)
+            return None
+        active_total = int(cohorts.get("active_total") or 0)
+        new_viewers = int(cohorts.get("new_viewers") or 0)
+        return ReviewViewers(
+            active_total=active_total,
+            new_viewers=new_viewers,
+            returning_viewers=max(0, active_total - new_viewers),
+            top_speakers=[
+                ViewerSpeakerItem(
+                    platform=str(row["platform"]),
+                    user_id=str(row["user_id"]),
+                    user_name=str(row["user_name"] or ""),
+                    message_count=int(row["message_count"] or 0),
+                )
+                for row in speaker_rows
+            ],
+        )
 
 
 __all__ = [
     "SessionReviewAggregator",
+    "cny_total",
+    "longest_silence",
     "longest_silence_ms",
     "percentile",
 ]

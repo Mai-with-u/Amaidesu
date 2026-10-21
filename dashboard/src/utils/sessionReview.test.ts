@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildWaterlineData,
+  consoleReplayLink,
+  dwellLevel,
   formatDurationMs,
   formatMsAsSeconds,
   latencyLevel,
@@ -92,5 +94,22 @@ describe('配色与格式化', () => {
     expect(formatDurationMs(7_200_000)).toBe('2 小时');
     expect(formatMsAsSeconds(35_300)).toBe('35.3s');
     expect(formatMsAsSeconds(null)).toBe('—');
+  });
+});
+
+describe('consoleReplayLink / dwellLevel', () => {
+  it('回看深链：无 at 只带场次，有 at 追加时刻', () => {
+    expect(consoleReplayLink(7)).toBe('/live?session=7');
+    expect(consoleReplayLink(7, 1234)).toBe('/live?session=7&at=1234');
+  });
+
+  it('停留染色：超一倍红、超 25% 黄、未封口/无预计不比', () => {
+    expect(dwellLevel(2_000_001, 1_000_000, 9_999)).toBe('red');
+    expect(dwellLevel(1_300_000, 1_000_000, 9_999)).toBe('yellow');
+    expect(dwellLevel(1_000_000, 1_000_000, 9_999)).toBeNull();
+    // 未封口（仍在该环节）与无预计不参与比较
+    expect(dwellLevel(9_999_999, 1_000, null)).toBeNull();
+    expect(dwellLevel(9_999_999, null, 9_999)).toBeNull();
+    expect(dwellLevel(0, 1_000, 9_999)).toBeNull();
   });
 });

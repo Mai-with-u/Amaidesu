@@ -108,3 +108,31 @@ export function formatMsAsSeconds(ms: number | null): string {
   if (ms === null) return '—';
   return `${(ms / 1000).toFixed(1)}s`;
 }
+
+// ==================== 时刻锚定与流程单执行 ====================
+
+/** 控制台回看深链：/live?session=<id>[&at=<ms>]（at=毫秒时刻，回看定位锚点） */
+export function consoleReplayLink(sessionId: number, atMs?: number | null): string {
+  return atMs != null ? `/live?session=${sessionId}&at=${atMs}` : `/live?session=${sessionId}`;
+}
+
+/** 实际停留超预计 25% 染黄（阈值前端常量，与卡片口径同源） */
+export const DWELL_OVER_YELLOW_RATIO = 1.25;
+/** 实际停留超预计一倍染红 */
+export const DWELL_OVER_RED_RATIO = 2.0;
+
+/**
+ * 流程单环节停留染色：>2 倍预计红、>1.25 倍预计黄，否则无色。
+ * 未封口（left_at 空）或无预计时长不参与比较，恒无色。
+ */
+export function dwellLevel(
+  dwellMs: number,
+  expectedMs: number | null,
+  leftAtMs: number | null,
+): 'red' | 'yellow' | null {
+  if (leftAtMs === null || expectedMs === null || expectedMs <= 0 || dwellMs <= 0) return null;
+  const ratio = dwellMs / expectedMs;
+  if (ratio > DWELL_OVER_RED_RATIO) return 'red';
+  if (ratio > DWELL_OVER_YELLOW_RATIO) return 'yellow';
+  return null;
+}

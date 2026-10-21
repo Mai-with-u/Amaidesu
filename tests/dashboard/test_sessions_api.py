@@ -166,3 +166,50 @@ async def test_timeline_cursor_pagination(sessions_client, event_history) -> Non
     assert [i["data"]["round_id"] for i in page1["items"]] == ["rnd_2", "rnd_3"] and page1["has_more"] is True
     page2 = (await client.get(url, params={"limit": 2, "before_timestamp_ms": page1["items"][0]["ts_ms"]})).json()
     assert [i["data"]["round_id"] for i in page2["items"]] == ["rnd_1"] and page2["has_more"] is False
+
+
+@pytest.fixture
+async def rundown_client(api, event_bus, session_manager, store):
+    return await api(
+        event_bus=event_bus,
+        session_manager=session_manager,
+        rundown_transition_repo=store.rundown_transitions,
+    )
+
+
+async def test_rundown_execution_endpoint(rundown_client, store) -> None:
+    from src.modules.storage.models.rundown import RundownTransition
+
+    # 直接造已结束场次行（走 API 开场会是"现在"开播且空场次结账被整行丢弃）
+    pk = await store.sessions.insert_live_session(started_at_ms=BASE, title="执行回看场")
+    started = BASE
+    ended = BASE + 600_000
+    await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=ended)
+    for seq, (action, seg, at, expected) in enumerate(
+        [
+            ("load", "s1", started, 300_000),
+            ("next", "s2", started + 300_000, 300_000),
+            ("finish", "", ended, None),
+        ],
+        start=1,
+    ):
+        await store.rundown_transitions.insert(
+            RundownTransition(
+                live_session_id=pk,
+                rundown_id="rd-1",
+                action=action,
+                seg_id=seg,
+                seg_index=seq,
+                by="agent",
+                at_ms=at,
+                expected_ms=expected,
+                updated_at_ms=at,
+            )
+        )
+
+    body = (await rundown_client.get(f"/api/v1/live-sessions/{pk}/rundown-execution")).json()
+    assert body["live_session_id"] == pk and body["rundown_id"] == "rd-1"
+    assert [(s["seg_id"], s["dwell_ms"]) for s in body["segments"]] == [("s1", 300_000), ("s2", 300_000)]
+    assert body["transitions_count"] == 3
+    # 未装配事实仓储 → 503；不存在的场次 → 404
+    assert (await rundown_client.get("/api/v1/live-sessions/99999/rundown-execution")).status_code == 404

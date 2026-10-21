@@ -1,10 +1,13 @@
 <!--
   SessionReview - 场次复盘页（只读聚合）
 
-  布局按设计定案：信息 chips → 指标卡（超阈仅染色）→ 水位图 + LLM 用量表 →
+  布局：主播收播总结（session_recaps，只读）→ 信息 chips → 指标卡（超阈仅染色，
+  沉默/最慢时延卡带"跳转时刻"深链进控制台回看）→ 流程单执行（单场）→
+  观众构成 + 游戏明细（单场，明细逐条锚定跳转）→ 水位图 + LLM 用量表 →
   深入入口（事件回看 / LLM 历史 · 本场预过滤）。全部数字来自后端结构化聚合
   （GET /api/v1/review），本页不做告警判定；多选合并视图由后端窗口合并、
-  水位图按 session_id 断线留空隙。深挖取证不在本页——带数字开 AI 会话。
+  水位图按 session_id 断线留空隙；总结/流程单/观众/游戏明细属单场语义，
+  合并视图不产出。深挖取证不在本页——带数字开 AI 会话。
 -->
 <template>
   <div class="session-review">
@@ -61,6 +64,18 @@
     />
 
     <template v-if="review">
+      <!-- 主播收播总结（session_recaps；写作者视角=主播本人，注入下场开场记忆） -->
+      <section v-if="recapBlocks.length" class="panel recap-panel" aria-label="主播收播总结">
+        <div class="panel-title">主播收播总结</div>
+        <p class="recap-hint">
+          主播视角的自动总结——收播时生成、下一场开播时注入其记忆；此处只读，纠正记忆走记忆管理通道
+        </p>
+        <div v-for="block in recapBlocks" :key="block.sessionId" class="recap-block">
+          <div class="recap-meta mono">{{ block.heading }}</div>
+          <p class="recap-text">{{ block.text }}</p>
+        </div>
+      </section>
+
       <!-- 场次信息 chips（互动类零值降饱和） -->
       <section class="chips" aria-label="场次信息">
         <span
@@ -86,6 +101,9 @@
           <div class="stat-label">最长沉默</div>
           <div class="stat-value">{{ formatMsAsSeconds(review.speech.longest_silence_ms) }}</div>
           <div class="stat-sub">相邻发言最大间隔，场次首尾计入边界</div>
+          <router-link v-if="silenceLink" class="link stat-sub" :to="silenceLink">
+            跳转沉默起点 →
+          </router-link>
         </div>
         <div class="stat">
           <div class="stat-label">决策</div>
@@ -109,6 +127,9 @@
             {{ review.decisions.latency.sample_count }} · 超过 30s 染红（verdict→speech 按 round_id
             配对）
           </div>
+          <router-link v-if="latencyMaxLink" class="link stat-sub" :to="latencyMaxLink">
+            跳转最慢一次 →
+          </router-link>
         </div>
         <div class="stat">
           <div class="stat-label">LLM 失败</div>
@@ -134,6 +155,86 @@
           <div class="stat-sub">{{ gameSummary }}</div>
         </div>
       </section>
+
+      <!-- 流程单执行（单场视图；rundown_transitions 事实行重放） -->
+      <section v-if="rundown && rundown.segments.length" class="panel" aria-label="流程单执行">
+        <div class="panel-title">流程单执行</div>
+        <p class="table-note">
+          实际停留为墙钟口径（含暂停）；超预计 25% 染黄、一倍染红（阈值为前端常量）
+        </p>
+        <table class="usage-table">
+          <thead>
+            <tr>
+              <th>环节</th>
+              <th>进入</th>
+              <th class="num">实际停留</th>
+              <th class="num">预计</th>
+              <th class="num">暂停</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(seg, i) in rundown.segments" :key="i">
+              <td>#{{ seg.seg_index }} {{ seg.seg_title || seg.seg_id || '（无标题）' }}</td>
+              <td class="num">{{ formatTimeHMS(seg.entered_at_ms) }}</td>
+              <td class="num" :class="dwellCellClass(seg)">
+                {{ seg.left_at_ms === null ? '→ 收播' : formatDurationMs(seg.dwell_ms) }}
+              </td>
+              <td class="num">
+                {{ seg.expected_ms === null ? '—' : formatDurationMs(seg.expected_ms) }}
+              </td>
+              <td class="num" :class="{ zero: seg.pause_ms === 0 }">
+                {{ seg.pause_ms === 0 ? '—' : formatDurationMs(seg.pause_ms) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="rundown.pause_total_ms > 0" class="table-note">
+          总暂停 {{ formatDurationMs(rundown.pause_total_ms) }}（已含在各段停留内，未从停留扣除）
+        </p>
+      </section>
+
+      <div v-if="review.viewers || review.game.items.length" class="columns">
+        <!-- 观众构成（单场视图） -->
+        <section v-if="review.viewers" class="panel" aria-label="观众构成">
+          <div class="panel-title">观众构成</div>
+          <div class="chips">
+            <span class="chip mono">发言观众 {{ review.viewers.active_total }}</span>
+            <span class="chip mono">新观众 {{ review.viewers.new_viewers }}</span>
+            <span class="chip mono">回头观众 {{ review.viewers.returning_viewers }}</span>
+          </div>
+          <ol v-if="review.viewers.top_speakers.length" class="top-speakers">
+            <li
+              v-for="sp in review.viewers.top_speakers"
+              :key="sp.platform + ':' + sp.user_id"
+              class="top-speaker"
+            >
+              <span class="top-name">{{ sp.user_name || sp.user_id }}</span>
+              <span class="grow" />
+              <span class="mono top-count">{{ sp.message_count }} 条</span>
+            </li>
+          </ol>
+          <p class="table-note">新/回头按历史首条发言时刻判定（首条在本场 = 新观众）</p>
+        </section>
+
+        <!-- 游戏事件明细（单场视图，逐条锚定跳转回看） -->
+        <section v-if="review.game.items.length" class="panel" aria-label="游戏事件明细">
+          <div class="panel-title">游戏事件明细</div>
+          <ul class="game-items">
+            <li v-for="(item, i) in review.game.items" :key="i" class="game-item">
+              <span class="mono game-time">{{ formatTimeHMS(item.timestamp_ms) }}</span>
+              <span class="game-msg"
+                >[{{ item.game }}/{{ item.event_type }}] {{ item.message }}</span
+              >
+              <router-link class="link game-jump" :to="replayLink(item.timestamp_ms)"
+                >跳转 →</router-link
+              >
+            </li>
+          </ul>
+          <p v-if="review.game.truncated" class="table-note">
+            明细仅显示最近 {{ review.game.items.length }} 条（本场共 {{ review.game.total }} 条）
+          </p>
+        </section>
+      </div>
 
       <div class="columns">
         <!-- 水位图 -->
@@ -217,12 +318,20 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import type { EChartsCoreOption } from 'echarts/core';
 import { liveSessionsApi, reviewApi } from '@/api';
-import type { LiveSessionItem, SessionReviewResponse } from '@/types';
+import type {
+  LiveSessionItem,
+  ReviewSessionBrief,
+  RundownSegmentRun,
+  SessionReviewResponse,
+  SessionRundownExecutionResponse,
+} from '@/types';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { compactNumber } from '@/utils/chartFormat';
 import { formatCost, formatDateTime, formatTimeHMS } from '@/utils/format';
 import {
   buildWaterlineData,
+  consoleReplayLink,
+  dwellLevel,
   formatDurationMs,
   formatMsAsSeconds,
   latencyLevel,
@@ -237,6 +346,9 @@ const selectedIds = ref<number[]>([]);
 const review = ref<SessionReviewResponse | null>(null);
 const loading = ref(false);
 const errorMessage = ref('');
+
+/** 流程单执行回看（单场选择时加载；未装配/无事实行时为 null，面板整体隐藏） */
+const rundown = ref<SessionRundownExecutionResponse | null>(null);
 
 const chartRef = ref<HTMLElement | null>(null);
 const palette = useChartPalette();
@@ -270,7 +382,72 @@ async function loadReview(): Promise<void> {
   } finally {
     loading.value = false;
   }
+  await loadRundown();
 }
+
+/** 流程单执行仅在单场选择时加载；接口不可用/无事实行按无数据降级（面板隐藏） */
+async function loadRundown(): Promise<void> {
+  const ids = selectedIds.value;
+  if (review.value === null || ids.length !== 1) {
+    rundown.value = null;
+    return;
+  }
+  try {
+    const resp = await liveSessionsApi.rundownExecution(ids[0]);
+    rundown.value = resp.data;
+  } catch {
+    rundown.value = null;
+  }
+}
+
+/** 单场选择的 brief（多选合并视图为 null——单场语义面板以此为开关） */
+const singleBrief = computed<ReviewSessionBrief | null>(() =>
+  review.value && review.value.sessions.length === 1 ? review.value.sessions[0] : null,
+);
+
+/** 控制台回看深链（本场预过滤；at=时刻锚点） */
+function replayLink(atMs?: number): string {
+  const brief = singleBrief.value;
+  return brief ? consoleReplayLink(brief.live_session_id, atMs) : '/live';
+}
+
+const silenceLink = computed<string | null>(() => {
+  const start = review.value?.speech.longest_silence_start_ms;
+  return start != null ? replayLink(start) : null;
+});
+
+const latencyMaxLink = computed<string | null>(() => {
+  const at = review.value?.decisions.latency.max_at_ms;
+  return at != null ? replayLink(at) : null;
+});
+
+/** 停留超时染色类（未封口/无预计不参与比较） */
+function dwellCellClass(seg: RundownSegmentRun): string {
+  const level = dwellLevel(seg.dwell_ms, seg.expected_ms, seg.left_at_ms);
+  return level === 'red' ? 'dwell-red' : level === 'yellow' ? 'dwell-yellow' : '';
+}
+
+/** 收播总结块（有回顾的场次各一块；单场只出自身） */
+const recapBlocks = computed<Array<{ sessionId: number; heading: string; text: string }>>(() => {
+  const r = review.value;
+  if (!r) return [];
+  const merged = r.sessions.length > 1;
+  return r.sessions
+    .filter(s => (s.recap_text ?? '').length > 0)
+    .map(s => {
+      const label = `${s.title || `场次 #${s.live_session_id}`}`;
+      const generated = s.recap_created_at_ms !== null ? formatDateTime(s.recap_created_at_ms) : '';
+      const headingParts = [
+        ...(merged ? [`场次 #${s.live_session_id} · ${label}`] : [label]),
+        ...(generated ? [`生成于 ${generated}`] : []),
+      ];
+      return {
+        sessionId: s.live_session_id,
+        heading: headingParts.join(' · '),
+        text: s.recap_text ?? '',
+      };
+    });
+});
 
 function sessionLabel(item: LiveSessionItem): string {
   const title = item.title || `场次 #${item.live_session_id}`;
@@ -308,14 +485,17 @@ const chips = computed<ReviewChip[]>(() => {
     list.push({ label: formatDurationMs(s.duration_ms), dimmed: false });
     list.push({ label: `来源 ${sourceLabel(s.source)}`, dimmed: false });
     list.push({ label: `人气 ${s.heat}`, dimmed: s.heat === 0 });
-    list.push({ label: `观众数 ${s.viewer_count}`, dimmed: s.viewer_count === 0 });
+    // 累计观看人次（UV 口径；协议无"当前在线"推送，viewer_count 恒 0 不上屏）
+    list.push({ label: `累计观看 ${s.audience_total}`, dimmed: s.audience_total === 0 });
   } else {
     list.push({ label: formatDurationMs(r.window_end_ms - r.window_start_ms), dimmed: false });
     list.push({ label: `${r.sessions.length} 场合并`, dimmed: false });
   }
-  // 金额为平台虚拟货币原值合计（混合币种无法安全折算人民币），仅在有金额时追加
-  const giftAmount = r.chips.gift_total_price > 0 ? ` · ${r.chips.gift_total_price}` : '';
-  const scAmount = r.chips.super_chat_total_price > 0 ? ` · ${r.chips.super_chat_total_price}` : '';
+  // 金额为付费折算人民币（银瓜子等免费币种不计入；无可折算金额不追加）
+  const giftCny = r.chips.gift_total_cny;
+  const giftAmount = giftCny != null && giftCny > 0 ? ` · ¥${giftCny.toFixed(2)}` : '';
+  const scCny = r.chips.super_chat_total_cny;
+  const scAmount = scCny != null && scCny > 0 ? ` · ¥${scCny.toFixed(2)}` : '';
   list.push({ label: `弹幕 ${r.chips.danmaku_count}`, dimmed: r.chips.danmaku_count === 0 });
   list.push({ label: `进入 ${r.chips.enter_count}`, dimmed: r.chips.enter_count === 0 });
   list.push({ label: `礼物 ${r.chips.gift_count}${giftAmount}`, dimmed: r.chips.gift_count === 0 });
@@ -657,5 +837,105 @@ function exportPackage(): void {
 .link-hint {
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+/* 收播总结面板：正文保留换行，元信息弱化 */
+.recap-hint {
+  margin: -6px 0 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.recap-block + .recap-block {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-color-light);
+}
+
+.recap-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.recap-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+/* 流程单停留超时染色（阈值口径同 dwellLevel 常量） */
+.usage-table .dwell-red {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.usage-table .dwell-yellow {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+/* 观众构成 top 列表 */
+.top-speakers {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.top-speaker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-color-light);
+  font-size: 13px;
+}
+
+.top-speaker:last-child {
+  border-bottom: none;
+}
+
+.top-count {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* 游戏事件明细行 */
+.game-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.game-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-color-light);
+  font-size: 13px;
+}
+
+.game-item:last-child {
+  border-bottom: none;
+}
+
+.game-time {
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.game-msg {
+  flex: 1;
+  min-width: 0;
+}
+
+.game-jump {
+  flex-shrink: 0;
+  font-size: 12px;
 }
 </style>

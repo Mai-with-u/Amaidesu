@@ -374,16 +374,17 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def summarize_sessions(self, *, live_session_ids: List[int]) -> Dict[str, int]:
-        """场次复盘 chips 计数：弹幕/进入/礼物/SC 计数与付费合计（多场 IN 合并）。
+    async def summarize_sessions(self, *, live_session_ids: List[int]) -> Dict[str, Any]:
+        """场次复盘 chips 计数：弹幕/进入/礼物/SC 计数与金额（多场 IN 合并）。
 
         - 弹幕 = live_chat 中 sender_role='viewer' 且 message_type='danmaku' 的行
         - 进入 = live_chat 中 message_type='enter' 的行（进场提示）
-        - 礼物/SC 计数与金额（平台最小货币单位）取 gifts / super_chats 行数与
-          total_price 合计（银瓜子免费礼物照常计入行数，金额区分看 currency）
+        - 礼物/SC 计数取 gifts / super_chats 行数；金额按 currency 分组合计
+          （平台最小货币单位原值），付费折算由聚合层经 ``to_cny`` 处理——
+          银瓜子等免费币种自然落不进人民币合计
         """
 
-        def _exec() -> Dict[str, int]:
+        def _exec() -> Dict[str, Any]:
             placeholders = ",".join("?" for _ in live_session_ids)
             ids = [int(sid) for sid in live_session_ids]
             with self._manager.transaction() as conn:
@@ -394,23 +395,31 @@ class ChatRepo(BaseRepo):
                     f" FROM live_chat WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
                     ids,
                 ).fetchone()
-                gift_row = conn.execute(
-                    "SELECT COUNT(*) AS gift_count, COALESCE(SUM(total_price), 0) AS gift_total_price"
-                    f" FROM gifts WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
+                gift_rows = conn.execute(
+                    "SELECT currency, COALESCE(SUM(total_price), 0) AS total"
+                    f" FROM gifts WHERE live_session_id IN ({placeholders}) GROUP BY currency",  # noqa: S608 子句为代码内常量
+                    ids,
+                ).fetchall()
+                sc_rows = conn.execute(
+                    "SELECT currency, COALESCE(SUM(total_price), 0) AS total"
+                    f" FROM super_chats WHERE live_session_id IN ({placeholders}) GROUP BY currency",  # noqa: S608 子句为代码内常量
+                    ids,
+                ).fetchall()
+                gift_count = conn.execute(
+                    f"SELECT COUNT(*) AS n FROM gifts WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
                     ids,
                 ).fetchone()
-                sc_row = conn.execute(
-                    "SELECT COUNT(*) AS super_chat_count, COALESCE(SUM(total_price), 0) AS super_chat_total_price"
-                    f" FROM super_chats WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
+                sc_count = conn.execute(
+                    f"SELECT COUNT(*) AS n FROM super_chats WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
                     ids,
                 ).fetchone()
                 return {
                     "danmaku_count": int(chat_row["danmaku_count"]) if chat_row else 0,
                     "enter_count": int(chat_row["enter_count"]) if chat_row else 0,
-                    "gift_count": int(gift_row["gift_count"]) if gift_row else 0,
-                    "gift_total_price": int(gift_row["gift_total_price"]) if gift_row else 0,
-                    "super_chat_count": int(sc_row["super_chat_count"]) if sc_row else 0,
-                    "super_chat_total_price": int(sc_row["super_chat_total_price"]) if sc_row else 0,
+                    "gift_count": int(gift_count["n"]) if gift_count else 0,
+                    "gift_total_by_currency": {str(r["currency"] or ""): int(r["total"]) for r in gift_rows},
+                    "super_chat_count": int(sc_count["n"]) if sc_count else 0,
+                    "super_chat_total_by_currency": {str(r["currency"] or ""): int(r["total"]) for r in sc_rows},
                 }
 
         return await self._run_in_executor(_exec)
@@ -428,6 +437,36 @@ class ChatRepo(BaseRepo):
                     [int(sid) for sid in live_session_ids],
                 ).fetchall()
                 return list(rows)
+
+        return await self._run_in_executor(_exec)
+
+    async def count_session_viewer_cohorts(self, *, live_session_id: int, started_at_ms: int) -> Dict[str, int]:
+        """单场观众构成：场内发言观众数 / 新观众数（历史首条发言落在本场）。
+
+        新旧判定锚点 = 该观众（platform+sender_id）在全表的历史首条发言时刻：
+        ``first_ms >= started_at_ms`` 即新观众（首 条发言就在本场）；回头观众由
+        聚合层用 ``active_total - new`` 推得。全表 GROUP BY 只在复盘页低频触发。
+        """
+
+        def _exec() -> Dict[str, int]:
+            with self._manager.transaction() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS active_total,"
+                    " COALESCE(SUM(CASE WHEN first_ms >= ? THEN 1 ELSE 0 END), 0) AS new_viewers"
+                    " FROM ("
+                    "  SELECT platform, sender_id, MIN(timestamp_ms) AS first_ms"
+                    "  FROM live_chat"
+                    "  WHERE sender_role='viewer' AND platform<>''"
+                    "    AND sender_id IS NOT NULL AND sender_id<>''"
+                    "  GROUP BY platform, sender_id"
+                    "  HAVING MAX(CASE WHEN live_session_id=? THEN 1 ELSE 0 END) = 1"
+                    " )",
+                    (int(started_at_ms), int(live_session_id)),
+                ).fetchone()
+                return {
+                    "active_total": int(row["active_total"]) if row else 0,
+                    "new_viewers": int(row["new_viewers"]) if row else 0,
+                }
 
         return await self._run_in_executor(_exec)
 

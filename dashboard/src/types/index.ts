@@ -839,6 +839,30 @@ export interface SessionTimelineResponse {
   events_pruned: boolean;
 }
 
+/** 流程单单段执行事实（一次进入 = 一条；goto 回跳会再次出现） */
+export interface RundownSegmentRun {
+  seg_id: string;
+  seg_title: string;
+  seg_index: number;
+  entered_at_ms: number;
+  /** 空 = 直到场次结束/当前时刻仍停留在该环节（停留未封口） */
+  left_at_ms: number | null;
+  /** 墙钟停留（含暂停；未封口只含已确认部分，进行中场次恒 0） */
+  dwell_ms: number;
+  /** 进入时该环节的预计时长 */
+  expected_ms: number | null;
+  pause_ms: number;
+}
+
+/** 单场流程单执行回看（GET /api/v1/live-sessions/{id}/rundown-execution） */
+export interface SessionRundownExecutionResponse {
+  live_session_id: number;
+  rundown_id: string;
+  segments: RundownSegmentRun[];
+  pause_total_ms: number;
+  transitions_count: number;
+}
+
 // ==================== Vision（视觉捕获） ====================
 
 /** 单台显示器（mss 枚举；index=0 为虚拟合屏，不参与选择） */

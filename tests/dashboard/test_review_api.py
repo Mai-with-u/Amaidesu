@@ -19,6 +19,7 @@ from src.modules.dashboard.services.session_events import SessionEventReader
 from src.modules.dashboard.services.session_review import (
     SessionReviewAggregator,
     _to_brief,
+    longest_silence,
     longest_silence_ms,
     percentile,
 )
@@ -44,6 +45,24 @@ def test_longest_silence_counts_boundaries() -> None:
     assert longest_silence_ms([60_000, 90_000], 0, 150_000) == 60_000
     # 零发言：整场即沉默
     assert longest_silence_ms([], 1_000, 61_000) == 60_000
+
+
+def test_longest_silence_start_marks_gap_left_edge() -> None:
+    # 90s→600s 是最长区间，沉默起点 = 90s（上一条发言时刻）
+    gap, start = longest_silence([60_000, 90_000], 0, 600_000)
+    assert (gap, start) == (510_000, 90_000)
+    # 零发言：起点 = 开播时刻
+    assert longest_silence([], 1_000, 61_000) == (60_000, 1_000)
+
+
+def test_cny_total_skips_free_and_unknown_currency() -> None:
+    from src.modules.dashboard.services.session_review import cny_total
+
+    # 空币种按 B 站金瓜子兜底：1000 瓜子 = 1 元
+    assert cny_total({"": 1000, "bilibili_gold_coin": 2000}) == 3.0
+    # 银瓜子（免费）与未知币种不计入；全部不可折算 → None
+    assert cny_total({"bilibili_silver_coin": 500, "unknown_coin": 7}) is None
+    assert cny_total({}) is None
 
 
 def _ongoing_row(pk: int, started: int) -> Dict[str, object]:
@@ -99,9 +118,27 @@ async def _seed_session(store, started: int, ended: int) -> int:
     return pk
 
 
-async def _seed_chat(store, pk: int, ts: int, role: str, content: str, mtype: str = "danmaku") -> None:
+async def _seed_chat(
+    store,
+    pk: int,
+    ts: int,
+    role: str,
+    content: str,
+    mtype: str = "danmaku",
+    *,
+    sender_id: str | None = None,
+    sender_name: str | None = None,
+    platform: str = "",
+) -> None:
     await store.chat.insert_live_chat(
-        live_session_id=pk, timestamp_ms=ts, sender_role=role, content=content, message_type=mtype
+        live_session_id=pk,
+        timestamp_ms=ts,
+        sender_role=role,
+        content=content,
+        message_type=mtype,
+        sender_id=sender_id,
+        sender_name=sender_name,
+        platform=platform,
     )
 
 
@@ -128,11 +165,13 @@ async def test_aggregator_counts_and_silence(store) -> None:
     body = await agg.build([row])
 
     assert (body.chips.danmaku_count, body.chips.enter_count) == (1, 1)
-    assert (body.chips.gift_count, body.chips.gift_total_price) == (1, 100)
-    assert (body.chips.super_chat_count, body.chips.super_chat_total_price) == (1, 1000)
+    # 金额为付费折算人民币（空币种按金瓜子兜底：100 瓜子=0.1 元、1000 瓜子=1 元）
+    assert (body.chips.gift_count, body.chips.gift_total_cny) == (1, pytest.approx(0.1))
+    assert (body.chips.super_chat_count, body.chips.super_chat_total_cny) == (1, pytest.approx(1.0))
     assert body.speech.count == 2
-    # 首发 60s、末次 90s、收播 600s → 最长沉默 510s
+    # 首发 60s、末次 90s、收播 600s → 最长沉默 510s，起点=末次发言
     assert body.speech.longest_silence_ms == 510_000
+    assert body.speech.longest_silence_start_ms == BASE + 90_000
     assert body.game.by_type == {"died": 1}
     assert body.window_start_ms == BASE and body.window_end_ms == BASE + 600_000
 
@@ -239,7 +278,92 @@ async def test_aggregator_decisions_from_events_jsonl(store, tmp_path: Path) -> 
     assert body.decisions.latency.p50_ms == 14_000
     assert body.decisions.latency.p90_ms == 21_200
     assert body.decisions.latency.max_ms == 23_000
+    # 最慢一轮（rnd_2）的开口时刻，供复盘页锚定跳转
+    assert body.decisions.latency.max_at_ms == BASE + 83_000
     assert body.degraded is False
+
+
+# ---------------------------------------------------------------------- #
+# 单场语义分节（回顾回填 / 观众构成 / 游戏明细）                          #
+# ---------------------------------------------------------------------- #
+
+
+async def test_aggregator_fills_recaps_and_tolerates_missing(store) -> None:
+    a = await _seed_session(store, BASE, BASE + 60_000)
+    b = await _seed_session(store, BASE + 600_000, BASE + 660_000)
+    await store.recaps.upsert_recap(
+        live_session_id=a, started_at_ms=BASE, ended_at_ms=BASE + 60_000, recap_text="上一场聊了改版"
+    )
+
+    agg = SessionReviewAggregator(recap_repo=store.recaps)
+    rows = [dict(await store.sessions.get_live_session(live_session_id=pk)) for pk in (a, b)]
+    body = await agg.build(rows)
+
+    filled = {s.live_session_id: s for s in body.sessions}
+    assert filled[a].recap_text == "上一场聊了改版"
+    assert filled[a].recap_created_at_ms is not None
+    # 无回顾的场次保持 None（老场次/生成失败），不阻断聚合
+    assert filled[b].recap_text is None
+    # 仓储未注入时同样降级为空
+    bare = await SessionReviewAggregator().build(rows)
+    assert all(s.recap_text is None for s in bare.sessions)
+
+
+async def test_aggregator_viewer_cohorts_single_session_only(store) -> None:
+    old = await _seed_session(store, BASE - 600_000, BASE - 300_000)
+    pk = await _seed_session(store, BASE, BASE + 600_000)
+    # 老观众：历史首条发言在上一场，本场再来 → 回头
+    await _seed_chat(
+        store, old, BASE - 500_000, "viewer", "上场的", sender_id="u_old", sender_name="老张", platform="bilibili"
+    )
+    await _seed_chat(
+        store, pk, BASE + 1_000, "viewer", "又来了", sender_id="u_old", sender_name="老张", platform="bilibili"
+    )
+    # 新观众：历史首条发言就在本场
+    await _seed_chat(
+        store, pk, BASE + 2_000, "viewer", "第一次来", sender_id="u_new", sender_name="小李", platform="bilibili"
+    )
+    # 顶条观众：多发言者排前
+    for i in range(3):
+        await _seed_chat(
+            store, pk, BASE + 10_000 + i, "viewer", f"话痨{i}",
+            sender_id="u_chatty", sender_name="话痨王", platform="bilibili",
+        )  # fmt: skip
+
+    row = dict(await store.sessions.get_live_session(live_session_id=pk))
+    agg = SessionReviewAggregator(chat_repo=store.chat)
+    single = await agg.build([row])
+    assert single.viewers is not None
+    assert single.viewers.active_total == 3
+    assert (single.viewers.new_viewers, single.viewers.returning_viewers) == (2, 1)
+    assert single.viewers.top_speakers[0].message_count == 3
+    assert single.viewers.top_speakers[0].user_name == "话痨王"
+
+    # 多选合并视图不产出观众构成（单场语义）
+    other = dict(await store.sessions.get_live_session(live_session_id=old))
+    merged = await agg.build([row, other])
+    assert merged.viewers is None
+
+
+async def test_aggregator_game_items_single_session_only(store) -> None:
+    pk = await _seed_session(store, BASE, BASE + 600_000)
+    await store.events.insert_game_event(
+        live_session_id=pk, game="minecraft", event_type="died", message="摔死", timestamp_ms=BASE + 7_000
+    )
+    await store.events.insert_game_event(
+        live_session_id=pk, game="minecraft", event_type="milestone", message="拿到钻石", timestamp_ms=BASE + 8_000
+    )
+
+    row = dict(await store.sessions.get_live_session(live_session_id=pk))
+    agg = SessionReviewAggregator(event_repo=store.events)
+    single = await agg.build([row])
+    assert single.game.total == 2
+    assert [i.event_type for i in single.game.items] == ["died", "milestone"]  # 时间正序
+    assert single.game.truncated is False
+
+    other = await _seed_session(store, BASE + 3_600_000, BASE + 3_900_000)
+    merged = await agg.build([row, dict(await store.sessions.get_live_session(live_session_id=other))])
+    assert merged.game.total == 2 and merged.game.items == []
 
 
 # ---------------------------------------------------------------------- #
@@ -259,6 +383,7 @@ async def review_client(api, event_bus, store, tmp_path: Path) -> AsyncGenerator
             chat_repo=store.chat,
             llm_repo=store.llm,
             event_repo=store.events,
+            recap_repo=store.recaps,
             storage_db_path=store.db_path if hasattr(store, "db_path") else None,
             diagnostics_writer=SimpleNamespace(base_dir=tmp_path / "logs"),
         )

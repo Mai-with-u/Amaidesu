@@ -151,3 +151,36 @@ SessionTimelineItem = Union[
 
 # 前向引用在此刻已全部可解析，显式重建避免延迟解析失败
 SessionTimelineResponse.model_rebuild()
+
+
+class RundownSegmentRun(BaseModel):
+    """流程单单段执行事实（一次进入 = 一行；goto 回跳会再次出现）。
+
+    停留口径：墙钟时长（含暂停），``pause_ms`` 单列供扣除；``left_at_ms``
+    为空表示直到场次结束/当前时刻仍停留在该环节（停留未封口，``dwell_ms``
+    仅含已确认部分——进行中场次恒为 0）。
+    """
+
+    seg_id: str
+    seg_title: str = ""
+    seg_index: int = 0
+    entered_at_ms: int
+    left_at_ms: Optional[int] = None
+    dwell_ms: int = 0
+    expected_ms: Optional[int] = None
+    """进入时该环节的预计时长（变更事实行自带，模板改写后以最新一次为准）。"""
+    pause_ms: int = 0
+
+
+class SessionRundownExecutionResponse(BaseModel):
+    """单场流程单执行回看（``GET /live-sessions/{id}/rundown-execution``）。
+
+    把 rundown_transitions 事实行重放为"各环节实际停留 vs 预计时长"的
+    结构化视图；无任何变更事实的场次 segments 为空。
+    """
+
+    live_session_id: int
+    rundown_id: str = ""
+    segments: List[RundownSegmentRun] = Field(default_factory=list)
+    pause_total_ms: int = 0
+    transitions_count: int = 0

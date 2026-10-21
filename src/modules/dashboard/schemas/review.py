@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 
 class ReviewSessionBrief(BaseModel):
-    """聚合范围内的单场基本信息（live_sessions 行投影）。"""
+    """聚合范围内的单场基本信息（live_sessions 行投影 + 场次回顾行投影）。"""
 
     live_session_id: int
     title: Optional[str] = None
@@ -21,6 +21,12 @@ class ReviewSessionBrief(BaseModel):
     duration_ms: int = 0
     heat: int = 0
     viewer_count: int = 0
+    audience_total: int = 0
+    """本场累计观看人次（UV 口径；room.state 记账写入，无推送的场次为 0）。"""
+    recap_text: Optional[str] = None
+    """收播总结全文（session_recaps；未生成/功能前老场次为 None）。"""
+    recap_created_at_ms: Optional[int] = None
+    """收播总结的生成时刻（Unix 毫秒）。"""
 
 
 class ReviewChips(BaseModel):
@@ -30,8 +36,10 @@ class ReviewChips(BaseModel):
     enter_count: int = 0
     gift_count: int = 0
     super_chat_count: int = 0
-    gift_total_price: int = 0
-    super_chat_total_price: int = 0
+    gift_total_cny: Optional[float] = None
+    """付费礼物折算人民币合计（银瓜子等免费币种不计入；无可折算金额为 None）。"""
+    super_chat_total_cny: Optional[float] = None
+    """SC 金额折算人民币合计（无可折算金额为 None）。"""
 
 
 class ReviewSpeech(BaseModel):
@@ -40,6 +48,8 @@ class ReviewSpeech(BaseModel):
     count: int = 0
     rate_per_min: Optional[float] = None
     longest_silence_ms: Optional[int] = None
+    longest_silence_start_ms: Optional[int] = None
+    """最长沉默区间的起点时刻（= 沉默前最后一条发言；零/单点发言为 None）。"""
 
 
 class DecisionLatency(BaseModel):
@@ -56,6 +66,8 @@ class DecisionLatency(BaseModel):
     p50_ms: Optional[int] = None
     p90_ms: Optional[int] = None
     max_ms: Optional[int] = None
+    max_at_ms: Optional[int] = None
+    """最慢一轮的开口时刻（streamer.speech，供回看定位到时刻）。"""
 
 
 class ReviewDecisions(BaseModel):
@@ -108,11 +120,46 @@ class WaterlineSeries(BaseModel):
     points: List[WaterlinePoint] = Field(default_factory=list)
 
 
+class GameEventItem(BaseModel):
+    """单条游戏事件（game_events 行投影，供复盘页明细列表）。"""
+
+    game: str
+    event_type: str
+    message: str
+    timestamp_ms: int
+
+
 class ReviewGame(BaseModel):
-    """场内游戏事件计数（game_events 表按类型）。"""
+    """场内游戏事件计数与明细（game_events 表按类型）。"""
 
     total: int = 0
     by_type: Dict[str, int] = Field(default_factory=dict)
+    items: List[GameEventItem] = Field(default_factory=list)
+    """明细列表（单场视图填充，按时间正序；合并视图为空）。"""
+    truncated: bool = False
+    """明细超出单场返回上限被截断（total > len(items) 时为真）。"""
+
+
+class ViewerSpeakerItem(BaseModel):
+    """活跃观众条目（单场发言计数）。"""
+
+    platform: str
+    user_id: str
+    user_name: str = ""
+    message_count: int = 0
+
+
+class ReviewViewers(BaseModel):
+    """场内观众侧聚合（单场视图；合并视图为 None）。"""
+
+    active_total: int = 0
+    """场内发过言的观众数（platform+sender_id 去重）。"""
+    new_viewers: int = 0
+    """新观众数（历史首条发言落在本场窗口内）。"""
+    returning_viewers: int = 0
+    """回头观众数（场内发言但历史首条发言早于本场）。"""
+    top_speakers: List[ViewerSpeakerItem] = Field(default_factory=list)
+    """发言条数最多的观众（倒序，至多 5 位）。"""
 
 
 class SessionReviewResponse(BaseModel):
@@ -127,6 +174,8 @@ class SessionReviewResponse(BaseModel):
     llm: ReviewLLM = Field(default_factory=ReviewLLM)
     waterline: List[WaterlineSeries] = Field(default_factory=list)
     game: ReviewGame = Field(default_factory=ReviewGame)
+    viewers: Optional[ReviewViewers] = None
+    """观众侧聚合（单场视图填充；多选合并视图为 None）。"""
     degraded: bool = False
     """诊断事件天目录存在缺失（被清理或从未落盘）——决策侧指标相应降级。"""
 
@@ -143,6 +192,7 @@ class ReviewExportManifest(BaseModel):
 
 __all__ = [
     "DecisionLatency",
+    "GameEventItem",
     "LLMDomainStats",
     "ReviewChips",
     "ReviewDecisions",
@@ -151,7 +201,9 @@ __all__ = [
     "ReviewLLM",
     "ReviewSessionBrief",
     "ReviewSpeech",
+    "ReviewViewers",
     "SessionReviewResponse",
+    "ViewerSpeakerItem",
     "WaterlinePoint",
     "WaterlineSeries",
 ]

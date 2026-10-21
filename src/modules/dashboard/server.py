@@ -81,6 +81,8 @@ class DashboardServer:
         rundown_repo: Optional[Any] = None,
         viewer_profile_repo: Optional[Any] = None,
         event_repo: Optional[Any] = None,
+        recap_repo: Optional[Any] = None,
+        rundown_transition_repo: Optional[Any] = None,
         storage_db_path: Optional[Path] = None,
         task_tracker: Optional[Any] = None,
         subtitle_service: Optional[Any] = None,
@@ -137,6 +139,12 @@ class DashboardServer:
         # 未注入时相应分节/打包项按缺数据降级
         self.event_repo = event_repo
         self.storage_db_path = storage_db_path
+        # 注入 SessionRecapRepo 让 /api/v1/review 的总结面板读 session_recaps；
+        # 未注入（极简启动/测试）时复盘聚合的回顾字段按缺数据降级为空
+        self.recap_repo = recap_repo
+        # 注入 RundownTransitionRepo 让 /live-sessions/{id}/rundown-execution
+        # 读流程单变更事实行；未注入（极简启动/测试）时该端点返回 503
+        self.rundown_transition_repo = rundown_transition_repo
         # 注入字幕服务与 TTS 引擎让 `/api/v1/debug/subtitle|tts` 直测端点
         # 可用；未注入（极简启动/测试）时相关端点返回 503
         self.subtitle_service = subtitle_service

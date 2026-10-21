@@ -7,6 +7,8 @@
 - ``POST /sessions/{id}/close`` 结束指定场次（须为当前进行中场次）
 - ``PATCH /sessions/{id}``     重命名场次（title 空=清除标题）
 - ``DELETE /sessions/{id}``    删除场次（级联清除明细）
+- ``GET  /sessions/{id}/timeline``          单场时间线回看（明细行 + 事件侧）
+- ``GET  /sessions/{id}/rundown-execution``  单场流程单执行回看（实际 vs 预计）
 
 场次归属由 ``LiveSessionManager`` 负责（唯一事实源）；本层只做参数校验与
 结果序列化，不含场次语义。无显式场次期间消息不落库，因此列表只含历史
@@ -26,10 +28,12 @@ from src.modules.dashboard.schemas.session import (
     SessionOpenRequest,
     SessionOpenResponse,
     SessionRenameRequest,
+    SessionRundownExecutionResponse,
     SessionTimelineResponse,
 )
 from src.modules.dashboard.services.event_query import events_dir_of
 from src.modules.dashboard.services.session_events import SessionEventReader
+from src.modules.dashboard.services.session_rundown import build_rundown_execution
 from src.modules.dashboard.services.session_timeline import build_timeline_items
 from src.modules.logging import get_logger
 
@@ -182,6 +186,30 @@ async def session_timeline(
         items=items,
         has_more=has_more,
         events_pruned=window.days_pruned,
+    )
+
+
+@router.get("/{session_id}/rundown-execution", response_model=SessionRundownExecutionResponse)
+async def session_rundown_execution(
+    session_id: int,
+    server: ServerDep,
+) -> SessionRundownExecutionResponse:
+    """单场流程单执行回看：变更事实行重放为"各环节实际停留 vs 预计时长"。"""
+    repo = getattr(server, "rundown_transition_repo", None)
+    if repo is None:
+        raise HTTPException(status_code=503, detail="RundownTransitionRepo 未装配")
+    manager = _require_session_manager(server)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
+    row = await manager.sessions.get_live_session(live_session_id=session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
+    transitions = await repo.list_by_session(session_id)
+    ended_raw = row["ended_at_ms"]
+    return build_rundown_execution(
+        session_id,
+        transitions,
+        ended_at_ms=int(ended_raw) if ended_raw is not None else None,
     )
 
 

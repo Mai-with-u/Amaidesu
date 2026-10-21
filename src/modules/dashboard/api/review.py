@@ -110,6 +110,7 @@ def _build_aggregator(server: "DashboardServer") -> SessionReviewAggregator:
         llm_repo=getattr(server, "llm_repo", None),
         event_repo=getattr(server, "event_repo", None),
         event_reader=reader,
+        recap_repo=getattr(server, "recap_repo", None),
         slow_thresholds=_slow_thresholds(server),
     )
 

@@ -69,6 +69,7 @@ import type {
   TriggerProactiveRequest,
   TriggerProactiveResponse,
   LiveSessionListResponse,
+  SessionRundownExecutionResponse,
   SessionTimelineResponse,
   SessionReviewResponse,
   ViewerListResponse,
@@ -282,6 +283,9 @@ export const liveSessionsApi = {
   remove: (id: number) => api.delete<{ success: boolean; detail: string }>(`/live-sessions/${id}`),
   timeline: (id: number, params?: { limit?: number; before_timestamp_ms?: number }) =>
     api.get<SessionTimelineResponse>(`/live-sessions/${id}/timeline`, { params }),
+  // 单场流程单执行回看（rundown_transitions 事实行重放：各环节实际停留 vs 预计）
+  rundownExecution: (id: number) =>
+    api.get<SessionRundownExecutionResponse>(`/live-sessions/${id}/rundown-execution`),
 };
 
 // 事件历史（游标续传 + 落盘扩容）
