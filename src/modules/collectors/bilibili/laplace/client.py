@@ -32,7 +32,8 @@ import websockets
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.backoff import ExponentialBackoff
+from src.modules.utils.time_utils import now_ms
 
 # 非业务的控制消息（established 单独处理）
 _CONTROL_TYPES = frozenset(
@@ -80,6 +81,12 @@ class LaplaceBridgeClient:
         self._token = token
         self._reconnect_base_ms = reconnect_base_ms
         self._reconnect_max_ms = reconnect_max_ms
+        self._backoff = ExponentialBackoff(
+            base_delay_ms=reconnect_base_ms,
+            cap_delay_ms=reconnect_max_ms,
+            factor=1.5,
+            max_exponent=_MAX_BACKOFF_EXPONENT,
+        )
         self._client_id: str = ""
 
     @property
@@ -117,6 +124,7 @@ class LaplaceBridgeClient:
                                 f"LAPLACE Event Bridge 握手完成: clientId={self._client_id or '<unknown>'}"
                             )
                             attempt = 0
+                            self._backoff.reset()
                             continue
                         if event_type in _CONTROL_TYPES:
                             continue
@@ -146,20 +154,29 @@ class LaplaceBridgeClient:
                 )
 
             attempt += 1
-            delay_ms = self._reconnect_delay_ms(attempt)
+            delay_ms = self._backoff.next_delay_ms()
             self.logger.info(f"LAPLACE bridge {delay_ms / 1000:.1f}s 后重连（第 {attempt} 次）")
             await asyncio.sleep(delay_ms / 1000)
 
     def _reconnect_delay_ms(self, attempt: int) -> int:
-        """按 1.5 倍指数退避计算重连等待，封顶 ``reconnect_max_ms``。
+        """attempt 纯查询形态的退避计算：给定第 attempt 次重连的等待毫秒数。
 
-        attempt 会随失败次数无限增长；直接算 ``1.5 ** attempt`` 在约 1750 次后
-        会浮点溢出（默认 60s 上限下约 29 小时连续失败），异常会逃出重连循环
-        并终止采集任务。指数本身封顶即可，30 次方已足以让任何正常配置先撞上
-        ``reconnect_max_ms``。
+        运行路径走实例上推进的 ``self._backoff``（established 处复位）；本方法
+        保留同样的公式作为无状态查询，供测试直接断言序列。
+
+        溢出论证见 ``ExponentialBackoff``：attempt 无限增长时 ``1.5 ** n``
+        会浮点溢出，指数封顶后结果必然已撞上 ``reconnect_max_ms``。
         """
-        exponent = min(max(attempt - 1, 0), _MAX_BACKOFF_EXPONENT)
-        return min(int(self._reconnect_base_ms * (1.5**exponent)), self._reconnect_max_ms)
+        backoff = ExponentialBackoff(
+            base_delay_ms=self._reconnect_base_ms,
+            cap_delay_ms=self._reconnect_max_ms,
+            factor=1.5,
+            max_exponent=_MAX_BACKOFF_EXPONENT,
+        )
+        delay_ms = backoff.next_delay_ms()
+        for _ in range(min(max(attempt - 1, 0), _MAX_BACKOFF_EXPONENT)):
+            delay_ms = backoff.next_delay_ms()
+        return delay_ms
 
     def _connect_url(self) -> str:
         """返回带 query token 的连接地址（token 为空时原样返回）。"""

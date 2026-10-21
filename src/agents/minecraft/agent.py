@@ -59,6 +59,7 @@ from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayloa
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
 from src.modules.llm.context_meter import SECTION_SKILLS
+from src.modules.utils.backoff import ExponentialBackoff
 from src.modules.skills import RemoteSkill, SkillEnvironment, SkillLibrary, render_catalog
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
@@ -401,10 +402,12 @@ class MinecraftAgent(BaseAgent):
 
     async def _mcp_recover_loop(self, prov: Any) -> None:
         """私有 MCP 降级恢复循环：退避重试装配（5s 起步 60s 封顶，连上即止）。"""
-        delay = 5.0
+        # 恢复成功即整循环退出，助手无需复位
+        backoff = ExponentialBackoff(base_delay_ms=5000, cap_delay_ms=60000)
+        delay_ms = backoff.next_delay_ms()
         while self._running:
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, 60.0)
+            await asyncio.sleep(delay_ms / 1000)
+            delay_ms = backoff.next_delay_ms()
             if not self._running:
                 return
             try:

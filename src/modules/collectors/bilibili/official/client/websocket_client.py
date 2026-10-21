@@ -17,6 +17,7 @@ import urllib3
 import websockets
 
 from src.modules.logging import get_logger
+from src.modules.utils.backoff import ExponentialBackoff
 
 from .game_checkpoint import GameIdCheckpoint
 from .proto import Proto
@@ -122,6 +123,11 @@ class BiliWebSocketClient:
             await asyncio.sleep(STALE_CLEAR_COOLDOWN_S)
 
         attempt = 0
+        backoff = ExponentialBackoff(
+            base_delay_ms=int(_RECONNECT_BASE_DELAY_S * 1000),
+            cap_delay_ms=int(_RECONNECT_MAX_DELAY_S * 1000),
+            factor=_RECONNECT_BACKOFF_FACTOR,
+        )
 
         while self.is_started:
             attempt += 1
@@ -130,12 +136,13 @@ class BiliWebSocketClient:
                 websocket = await self._connect()
                 if not websocket:
                     self.logger.warning(f"连接失败（第 {attempt} 次），准备重连...")
-                    await self._reconnect_delay(attempt)
+                    await self._reconnect_delay(attempt, backoff)
                     continue
 
                 self.websocket = websocket
                 self.logger.info(f"WebSocket 已连接（第 {attempt} 次尝试）")
                 attempt = 0  # 连接成功后重置计数
+                backoff.reset()
 
                 # 启动后台任务
                 tasks = [
@@ -167,7 +174,7 @@ class BiliWebSocketClient:
                 break
 
             self.logger.info("WebSocket 连接断开，准备重连...")
-            await self._reconnect_delay(attempt if attempt > 0 else 1)
+            await self._reconnect_delay(attempt if attempt > 0 else 1, backoff)
 
     async def close(self) -> None:
         """关闭WebSocket连接"""
@@ -518,17 +525,19 @@ class BiliWebSocketClient:
             finally:
                 self.websocket = None
 
-    async def _reconnect_delay(self, attempt: int) -> None:
+    async def _reconnect_delay(self, attempt: int, backoff: ExponentialBackoff) -> None:
         """重连等待（指数退避），连接断开后根据尝试次数递增等待时间。
 
         Args:
-            attempt: 当前重连尝试次数（1-based）
+            attempt: 当前重连尝试次数（1-based），仅用于日志与最大次数判断；
+                等待时长的推进由 ``backoff`` 状态承载，连接成功处调 ``reset()`` 复位
+            backoff: 本轮连接循环的退避助手
         """
         if _RECONNECT_MAX_ATTEMPTS > 0 and attempt > _RECONNECT_MAX_ATTEMPTS:
             self.logger.error(f"已达最大重连次数 ({_RECONNECT_MAX_ATTEMPTS})，停止重连")
             self.is_started = False
             return
 
-        delay = min(_RECONNECT_BASE_DELAY_S * (_RECONNECT_BACKOFF_FACTOR ** (attempt - 1)), _RECONNECT_MAX_DELAY_S)
-        self.logger.info(f"等待 {delay:.1f}s 后重连（第 {attempt} 次）")
-        await asyncio.sleep(delay)
+        delay_ms = backoff.next_delay_ms()
+        self.logger.info(f"等待 {delay_ms / 1000:.1f}s 后重连（第 {attempt} 次）")
+        await asyncio.sleep(delay_ms / 1000)

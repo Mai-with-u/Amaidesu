@@ -28,6 +28,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ToolInvocation
+from src.modules.utils.backoff import ExponentialBackoff
 
 #: 连接失败的退避上限（秒）。Mod 常年不开时按最短间隔硬重连纯属空转：
 #: 退避到 60 秒一次，游戏后启动仍能在 1 分钟内接上。
@@ -103,14 +104,13 @@ class MaicraftEventsCollector(BaseCollector):
         这里逐轮兜底并把连接拆掉，下一轮重新连接（游戏可能后启动）。
         连接失败按指数退避重试（5 → 10 → 20 → 40 → 60 秒封顶），连上一次即复位。
         """
-        base_s = self.typed_config.retry_interval_ms / 1000
-        retry_s = base_s
+        base_ms = self.typed_config.retry_interval_ms
+        backoff = ExponentialBackoff(base_delay_ms=base_ms, cap_delay_ms=int(_RETRY_MAX_S * 1000))
         while True:
             if not await self._ensure_ready():
-                await asyncio.sleep(retry_s)
-                retry_s = min(retry_s * 2, _RETRY_MAX_S)
+                await asyncio.sleep(backoff.next_delay_ms() / 1000)
                 continue
-            retry_s = base_s
+            backoff.reset()
             try:
                 await self._drain()
             except asyncio.CancelledError:
@@ -119,7 +119,10 @@ class MaicraftEventsCollector(BaseCollector):
                 self.logger.debug(f"{self.stream_label}读取未完成，保留读取位置后重连", exc=exc)
                 self._report_unavailable(f"读取失败（{type(exc).__name__}: {exc}）")
                 await self._teardown()
-                await asyncio.sleep(retry_s)
+                # 此分支到达时必为 ready 复位后首轮：取 base 后即复位，与原
+                # "睡当前值但不推进"的语义逐字节等价
+                await asyncio.sleep(backoff.next_delay_ms() / 1000)
+                backoff.reset()
             yield None
 
     def _report_unavailable(self, reason: str) -> None:
