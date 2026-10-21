@@ -230,9 +230,7 @@ class McpToolProvider(BaseToolProvider):
             result = await self._client.call_tool(spec.name, {"action": "get", "task_id": task_id})
         except Exception as exc:  # noqa: BLE001 - 查询异常按无新事实上抛给调用方记日志
             raise RuntimeError(f"MCP 任务查询失败（{spec.name}）: {type(exc).__name__}: {exc}") from exc
-        from src.modules.mcp.mapper import to_result
-
-        exec_result = to_result(result, tool_name=self.task_query_tool)
+        exec_result = mapper.to_result(result, tool_name=self.task_query_tool)
         if not exec_result.success:
             return None  # server 业务错误（如任务不存在）→ 无新事实
         structured = exec_result.structured_content if isinstance(exec_result.structured_content, dict) else {}
@@ -273,9 +271,7 @@ class McpToolProvider(BaseToolProvider):
             result = await self._client.call_tool(spec.name, arguments)
         except Exception as exc:  # noqa: BLE001 - 读取异常按"没读到"上抛给调用方记日志
             raise RuntimeError(f"MCP 注意流读取失败（{spec.name}）: {type(exc).__name__}: {exc}") from exc
-        from src.modules.mcp.mapper import to_result
-
-        exec_result = to_result(result, tool_name=self.attention_read_tool)
+        exec_result = mapper.to_result(result, tool_name=self.attention_read_tool)
         if not exec_result.success:
             logger.warning(f"注意流读取返回业务错误（{spec.name}）: {exec_result.error_message}")
             return None

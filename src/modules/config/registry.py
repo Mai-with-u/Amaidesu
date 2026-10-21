@@ -78,6 +78,9 @@ def _fill_collectors() -> dict[str, type[BaseConfig]]:
     身体事件流与聊天流）随所属 Agent 开关、配置由 Agent 配置换算，不进 collectors.toml，
     名单在 ``src.modules.agents.companions``。
     """
+    # 函数内 import：注册表惰性填充——逐包 import 会拉起全部采集器实现及其依赖链，
+    # 导入 config.registry 本身不应付出这些成本；multi_file_loader 对本模块的
+    # 函数内引用也是同一口径（组件包会传递引用 config 层，导入期互相拉扯）
     from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import BiliDanmakuCollector
     from src.modules.collectors.bilibili.laplace.bili_danmaku_laplace_collector import (
         BiliDanmakuLaplaceCollector,
@@ -101,6 +104,7 @@ def _fill_collectors() -> dict[str, type[BaseConfig]]:
 
 def _fill_agents() -> dict[str, type[BaseConfig]]:
     """从各 Agent 包显式收集 ConfigSchema（包内模块级定义）"""
+    # 函数内 import：Agent 包依赖链较重，注册表仅在填充时拉起
     from src.agents.game_2048.config import Game2048Config
     from src.agents.minecraft.config import MinecraftConfig
 
@@ -113,6 +117,7 @@ def _fill_tool_providers() -> dict[tuple[str, str], type[BaseConfig]]:
     成员身份 (分类段, 提供者键) 与装配侧 ``tools.bootstrap._DOMAIN_MEMBERS``
     同构；两表一致性由契约测试守护。
     """
+    # 函数内 import：各工具提供者包携带各自依赖（avatar 平台/web 搜索等），注册表仅在填充时拉起
     from src.modules.avatar.platform.expression_sheet.expression_sheet_provider import ExpressionSheetProvider
     from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
     from src.modules.avatar.platform.vts.vts_provider import VTSProvider

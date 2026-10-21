@@ -313,6 +313,8 @@ async def list_personas(server: ServerDep) -> PersonaListResponse:
     "/personas", response_model=PersonaCreateResponse, response_model_exclude_none=True, summary="新增常驻人设"
 )
 async def create_persona(server: ServerDep, request: PersonaCreateRequest) -> PersonaCreateResponse:
+    # 函数内 import：触发 simulator 包 __init__ 会拉起 SimulatorService（LLM/存储依赖链），
+    # 仅端点实际调用时加载
     from src.modules.simulator.types import Persona, PersonaRole
 
     pool = _require_pool(server)
@@ -382,6 +384,7 @@ async def list_gifts(server: ServerDep) -> GiftListResponse:
 
 @router.post("/gifts", response_model=GiftCreateResponse, response_model_exclude_none=True, summary="新增礼物")
 async def create_gift(server: ServerDep, request: GiftCreateRequest) -> GiftCreateResponse:
+    # 函数内 import：同 create_persona，仅端点实际调用时拉起 simulator 包依赖链
     from src.modules.simulator.types import GiftItem
 
     gen = _require_gift_generator(server)

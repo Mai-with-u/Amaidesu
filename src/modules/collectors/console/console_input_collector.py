@@ -9,6 +9,7 @@ ConsoleInputCollector —— 控制台输入采集器
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -27,7 +28,7 @@ from src.modules.events.payloads.room import (
     SuperChatInfo,
 )
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.types.guard_levels import GUARD_LEVEL_NAMES
 
 # 控制台输入循环异常后重试间隔（秒）
@@ -121,9 +122,7 @@ class ConsoleInputCollector(BaseCollector):
                     "手动注入弹幕请改用 WebUI 直播控制台的输入条"
                 )
                 return
-            import os as _os
-
-            if _os.environ.get("TERM_PROGRAM") == "vscode":
+            if os.environ.get("TERM_PROGRAM") == "vscode":
                 self.logger.warning(
                     "检测到 VSCode 集成终端：其 shell integration 会向 stdin 注入命令流，"
                     "干扰控制台输入（丢字符/丢行）。建议改用 Windows Terminal 或独立 PowerShell 窗口运行。"

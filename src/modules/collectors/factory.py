@@ -44,28 +44,34 @@ def instantiate_collector(
     （Dashboard 动态启停的 API 入口另行校验用户输入）。
     """
     if name == "bili_danmaku":
+        # 函数内 import：具体采集器实现携带各自依赖（网络栈/音频栈等），仅在实例化该采集器时加载
         from src.modules.collectors.bilibili.legacy.bili_danmaku_collector import BiliDanmakuCollector
 
         return BiliDanmakuCollector(config=config or {}, event_bus=event_bus)
     if name == "bili_danmaku_official":
+        # 函数内 import：同上，仅在实例化该采集器时加载
         from src.modules.collectors.bilibili.official.bili_danmaku_official_collector import (
             BiliDanmakuOfficialCollector,
         )
 
         return BiliDanmakuOfficialCollector(config=config or {}, event_bus=event_bus)
     if name == "bili_danmaku_laplace":
+        # 函数内 import：同上，仅在实例化该采集器时加载
         from src.modules.collectors.bilibili.laplace import BiliDanmakuLaplaceCollector
 
         return BiliDanmakuLaplaceCollector(config=config or {}, event_bus=event_bus)
     if name == "console_input":
+        # 函数内 import：同上，仅在实例化该采集器时加载
         from src.modules.collectors.console.console_input_collector import ConsoleInputCollector
 
         return ConsoleInputCollector(config=config or {}, event_bus=event_bus)
     if name == "live_frame":
+        # 函数内 import：同上，仅在实例化该采集器时加载
         from src.modules.collectors.frame.live_frame_collector import LiveFrameCollector
 
         return LiveFrameCollector(config=config or {}, event_bus=event_bus)
     if name == "stt":
+        # 函数内 import：同上，仅在实例化该采集器时加载
         from src.modules.collectors.stt.stt_collector import STTCollector
 
         return STTCollector(config=config or {}, event_bus=event_bus)

@@ -35,12 +35,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, Optional
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 
 from src.modules.config.core_schemas import AgentSupervisorConfig
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolSpec
 
 logger = get_logger("BaseAgent")
@@ -279,9 +280,6 @@ class BaseAgent(abc.ABC):
         """订阅 ``task.changed``（start 尾部调用；按发起方过滤后派发钩子）。"""
         if self._event_bus is None or self._task_wakeup_handler is not None:
             return
-        from src.modules.events.names import CoreEvents
-        from src.modules.events.payloads.tasks import TaskChangedPayload
-
         agent = self
 
         async def _on_task_changed(event_name: str, payload: TaskChangedPayload, source: str) -> None:
@@ -296,8 +294,6 @@ class BaseAgent(abc.ABC):
         """退订 ``task.changed``（stop 尾部调用；幂等）。"""
         if self._event_bus is None or self._task_wakeup_handler is None:
             return
-        from src.modules.events.names import CoreEvents
-
         try:
             self._event_bus.off(CoreEvents.TASK_CHANGED, self._task_wakeup_handler)
         except Exception as exc:  # noqa: BLE001 - 退订失败不阻断停机

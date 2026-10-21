@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set
 
 from pydantic import BaseModel
 
+from src.modules.dashboard.schemas.event import WebSocketMessage
 from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE, ROOM_STATE_TYPE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
@@ -57,7 +58,7 @@ from src.modules.events.payloads import (
 )
 from src.modules.events.payloads.base import BasePayload
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.dashboard.websocket.handler import WebSocketHandler
@@ -222,8 +223,6 @@ class EventBroadcaster:
         recent = self.event_history.get_recent(self.history_push_limit)
         if not recent:
             return
-        from src.modules.dashboard.schemas.event import WebSocketMessage
-
         message = WebSocketMessage(
             type="events.history",
             timestamp_ms=now_ms(),

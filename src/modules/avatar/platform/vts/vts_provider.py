@@ -33,7 +33,7 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
-from src.modules.task_utils import spawn_background_task
+from src.modules.utils.task_utils import spawn_background_task
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,
@@ -489,6 +489,8 @@ class VTSProvider(BaseToolProvider):
             return
 
         try:
+            # 可选重型依赖延迟加载：pyvts 仅在 VTS 平台实际建立连接时导入，
+            # 缺失按平台不可用降级，不阻断其他 avatar 平台
             import pyvts  # noqa: F401
             from pyvts import vts
 
@@ -811,6 +813,7 @@ class VTSProvider(BaseToolProvider):
 
     def _make_vts_request_proxy(self) -> Any:
         """创建可调用代理，所有 VTS API 调用都经过同一把 asyncio.Lock 串行化"""
+        # 可选重型依赖延迟加载：pyvts 仅在真正构造请求对象时导入（见 setup 处同款说明）
         import pyvts
 
         handler = self

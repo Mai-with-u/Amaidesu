@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from src.modules.collectors.base import BaseCollector, CollectorState
+from src.modules.collectors.factory import instantiate_collector
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 logger = get_logger("CollectorManager")
 
@@ -144,8 +145,6 @@ class CollectorManager:
             config: 子段配置 dict。
             event_bus: 可选 EventBus（注入采集器）。
         """
-        from src.modules.collectors.factory import instantiate_collector
-
         instance = instantiate_collector(name, config or {}, event_bus=event_bus)
         if instance.name != name:
             instance.name = name

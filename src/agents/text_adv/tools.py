@@ -92,6 +92,8 @@ def _query_monitor_geometry(monitor_index: int) -> Optional[MonitorGeometry]:
     坐标链路不可用并走拒绝路径。
     """
     try:
+        # 可选重型依赖延迟加载：mss 缺失或查询失败都走下方降级路径（返回 None），
+        # 调用方按坐标链路不可用拒绝
         import mss
 
         with mss.mss() as sct:

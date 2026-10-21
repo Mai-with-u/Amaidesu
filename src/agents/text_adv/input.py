@@ -51,6 +51,8 @@ class PyAutoGuiInputBackend:
     """
 
     def __init__(self) -> None:
+        # 可选重型依赖延迟加载：pyautogui 在无显示环境 import 期即失败（见类 docstring），
+        # 实例化时环境必然齐备
         import pyautogui
 
         self._pyautogui = pyautogui

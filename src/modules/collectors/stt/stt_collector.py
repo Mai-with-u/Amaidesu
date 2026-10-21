@@ -121,6 +121,7 @@ class STTCollector(BaseCollector):
     def _check_dependencies(self) -> None:
         """检查必要的依赖"""
         try:
+            # 可选重型依赖延迟加载：torch 缺失时记日志并置 None，后续按依赖缺失降级，不阻断构造
             import torch
 
             self.torch = torch
@@ -129,6 +130,7 @@ class STTCollector(BaseCollector):
             self.torch = None
 
         try:
+            # 可选重型依赖延迟加载：sounddevice 缺失时记日志并置 None（本机录音不可用）
             import sounddevice as sd
 
             self.sd = sd
@@ -137,6 +139,7 @@ class STTCollector(BaseCollector):
             self.sd = None
 
         try:
+            # 可选重型依赖延迟加载：aiohttp 缺失时记日志并置 None（远程识别不可用）
             import aiohttp
 
             self.aiohttp = aiohttp

@@ -74,6 +74,8 @@ def instantiate_agent(
     config = config if isinstance(config, dict) else {}
 
     if name == "streamer":
+        # 函数内 import：各 Agent 包携带各自依赖链，仅在实际实例化该 Agent 时加载，
+        # 未启用的 Agent 不付导入成本
         from src.agents.streamer.config import StreamerConfig
         from src.agents.streamer.streamer_agent import StreamerAgent
 
@@ -115,6 +117,7 @@ def instantiate_agent(
         )
 
     if name == "minecraft":
+        # 函数内 import：同上，minecraft 包（含 mcp 依赖链）仅在实例化时加载
         from src.agents.minecraft import MinecraftAgent
         from src.agents.minecraft.config import MinecraftConfig
 
@@ -135,6 +138,7 @@ def instantiate_agent(
         )
 
     if name == "text_adv":
+        # 函数内 import：text_adv 包（感知/动作后端依赖链）仅在实例化时加载
         from src.agents.text_adv import TextAdvConfig, TextAdvGameAgent
         from src.agents.text_adv.input import PyAutoGuiInputBackend
         from src.agents.text_adv.vlm import RegistryVisionReader
@@ -160,6 +164,7 @@ def instantiate_agent(
         )
 
     if name == "game_2048":
+        # 函数内 import：game_2048 包仅在实例化时加载
         from src.agents.game_2048 import Game2048Agent, Game2048Config
 
         try:

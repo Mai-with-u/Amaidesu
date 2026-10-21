@@ -20,7 +20,7 @@ from src.modules.dashboard.schemas.system import (
 )
 from src.modules.dashboard.utils.component_helper import build_config_view, get_v2_component_list
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -120,6 +120,7 @@ def _build_event_bus_stats(server: "DashboardServer") -> EventBusStats:
 
 def _get_app_version() -> str:
     try:
+        # 函数内 import：importlib.metadata 导入即扫描已装发行版元数据，成本不低，仅在查询版本时付出
         from importlib.metadata import version
 
         return version("amaidesu")

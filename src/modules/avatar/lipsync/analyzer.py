@@ -276,6 +276,7 @@ class LipSyncAnalyzer:
         if not self.is_speaking:
             return
         try:
+            # 可选重型依赖延迟加载：numpy 缺失时口型分析整体降级为静音处理
             import numpy as np
 
             array = np.asarray(chunk)
@@ -368,6 +369,7 @@ class LipSyncAnalyzer:
 
         if self.is_speaking:
             try:
+                # 可选重型依赖延迟加载：numpy 缺失时按零音量/零元音降级发射
                 import numpy as np
             except ImportError:
                 await self._emit(volume, vowel_values)
@@ -467,6 +469,7 @@ class LipSyncAnalyzer:
     def _detect_vowels(self, audio_array: "np.ndarray", sample_rate: int = 16000) -> Dict[str, float]:
         """共振峰法元音检测（FFT 频带能量）"""
         try:
+            # 可选重型依赖延迟加载：numpy 缺失时元音检测返回空结果
             import numpy as np
         except ImportError:
             return {"A": 0.0, "I": 0.0, "U": 0.0, "E": 0.0, "O": 0.0}

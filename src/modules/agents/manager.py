@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.config.core_schemas import AgentSupervisorConfig
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.registry import ToolRegistry
 
 logger = get_logger("AgentManager")
@@ -236,6 +236,7 @@ class AgentManager:
         ``tool_registry`` / 各仓储未显式传入时回退到 ``__init__`` 成员；
         Dashboard 动态启停场景一般不传这些，回退保证 Agent 不再拿到 None。
         """
+        # 函数内 import：factory 顶层拉起 skills 等依赖链，仅在动态启停真正实例化 Agent 时加载
         from src.modules.agents.factory import instantiate_agent
 
         effective_registry = tool_registry if tool_registry is not None else self._tool_registry

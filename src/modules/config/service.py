@@ -28,6 +28,7 @@ from typing import (
 )
 
 
+from src.modules.config.self_write_guard import consume_self_write
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -135,6 +136,8 @@ class ConfigService:
             (success, was_created) — success=True 表示多文件模式就绪；
             was_created=True 表示本次执行了生成
         """
+        # 函数内 import：multi_file_loader 顶层拉起 tomlkit 与全部域 Schema，
+        # 本模块被 Dashboard 等只读入口顶层引用时不应付出该成本，仅在配置管线运行时加载
         from src.modules.config.multi_file_loader import (
             generate_default_configs,
             load_config_dir,
@@ -624,6 +627,7 @@ class ConfigService:
 
     def _load_main_config_from_disk(self) -> Dict[str, Any]:
         """从磁盘重新加载所有配置文件, 返回扁平化的 _main_config。"""
+        # 函数内 import：同 _try_multi_file_init，仅在真正读盘时拉起 loader 及其依赖
         from src.modules.config.multi_file_loader import load_config_dir
 
         config_dir = Path(self.base_dir) / "config"
@@ -644,8 +648,6 @@ class ConfigService:
         """FileWatcher 回调入口: 自写抑制过滤 → 解析 scopes → reload_config。"""
         if not changes:
             return
-        from src.modules.config.self_write_guard import consume_self_write
-
         # 自写抑制：配置管线自身写盘产生的事件不触发重载（防重入放大）
         external = [c for c in changes if not consume_self_write(c.path)]
         if not external:
@@ -664,6 +666,7 @@ class ConfigService:
         if self._file_watcher is not None and self._file_watcher.running:
             return
 
+        # 函数内 import：watchfiles 为可选第三方依赖，仅在启动文件监听时加载
         from src.modules.config.file_watcher import FileWatcher
 
         config_dir = Path(self.base_dir) / "config"
