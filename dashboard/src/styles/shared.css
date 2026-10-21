@@ -1,0 +1,53 @@
+/* 跨页面复用的基础形态类：从各视图 scoped 样式中规则体完全一致的定义收敛而来。
+   新增页面优先复用这些类；与某页需要差异时在该页 scoped 内覆盖。 */
+
+.advanced-block {
+  border-top: 1px dashed var(--border-color-light);
+  padding-top: var(--spacing-xs);
+}
+
+.back-link {
+  font-size: 13px;
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.count-hint {
+  font-size: 11px;
+  color: var(--text-placeholder);
+}
+
+.expand-hint {
+  font-size: 10px;
+  color: var(--color-primary);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.pager {
+  justify-content: flex-end;
+}
+
+.required-mark {
+  color: var(--color-danger);
+  margin-left: 2px;
+}
+
+.stat-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--spacing-sm);
+}
+
+.table-card {
+  padding: var(--spacing-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-lg);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}

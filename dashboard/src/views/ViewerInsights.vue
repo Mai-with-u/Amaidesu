@@ -234,19 +234,8 @@ onMounted(() => {
   width: 110px;
 }
 
-.back-link {
-  font-size: 13px;
-  color: var(--color-primary);
-  text-decoration: none;
-}
 .back-link:hover {
   text-decoration: underline;
-}
-
-.stat-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: var(--spacing-sm);
 }
 
 .stat-card {

@@ -528,10 +528,6 @@ function handleJsonEdit(index: number) {
 }
 
 /* 高级参数折叠区 */
-.advanced-block {
-  border-top: 1px dashed var(--border-color-light);
-  padding-top: var(--spacing-xs);
-}
 
 .advanced-toggle {
   display: flex;

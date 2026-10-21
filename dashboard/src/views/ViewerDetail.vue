@@ -378,11 +378,6 @@ onMounted(async () => {
   flex-wrap: wrap;
 }
 
-.back-link {
-  font-size: 13px;
-  color: var(--color-primary);
-  text-decoration: none;
-}
 .back-link:hover {
   text-decoration: underline;
 }
@@ -416,12 +411,6 @@ onMounted(async () => {
   font-size: 11px;
   color: var(--text-secondary);
   background: var(--bg-card);
-}
-
-.stat-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: var(--spacing-sm);
 }
 
 .stat-card {

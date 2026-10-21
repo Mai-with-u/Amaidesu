@@ -409,11 +409,6 @@ function setObjectValue(key: string, value: unknown) {
   color: var(--text-primary);
 }
 
-.required-mark {
-  color: var(--color-danger);
-  margin-left: 2px;
-}
-
 .readonly-tag {
   margin-left: 6px;
   vertical-align: middle;

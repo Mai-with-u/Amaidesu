@@ -685,13 +685,6 @@ onUnmounted(() => {
   white-space: pre;
 }
 
-.expand-hint {
-  font-size: 10px;
-  color: var(--color-primary);
-  opacity: 0;
-  transition: opacity var(--transition-fast);
-}
-
 .event-row:hover .expand-hint {
   opacity: 1;
 }

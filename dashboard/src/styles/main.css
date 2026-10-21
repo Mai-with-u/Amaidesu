@@ -1,5 +1,6 @@
 /* 导入 CSS 变量 */
 @import './variables.css';
+@import './shared.css';
 
 /* 全局重置 */
 * {

@@ -285,26 +285,8 @@ onMounted(() => {
   gap: var(--spacing-sm);
 }
 
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-}
-
 .search-input {
   width: 260px;
-}
-
-.count-hint {
-  font-size: 11px;
-  color: var(--text-placeholder);
-}
-
-.table-card {
-  padding: var(--spacing-sm);
-  background: var(--bg-card);
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-lg);
 }
 
 .text-cell {
@@ -330,10 +312,6 @@ onMounted(() => {
   text-align: center;
   font-size: 13px;
   color: var(--text-placeholder);
-}
-
-.pager {
-  justify-content: flex-end;
 }
 
 .edit-desc {

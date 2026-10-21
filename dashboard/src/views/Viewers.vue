@@ -235,30 +235,12 @@ onMounted(() => {
   text-decoration: underline;
 }
 
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-}
-
 .search-input {
   width: 260px;
 }
 
 .order-select {
   width: 140px;
-}
-
-.count-hint {
-  font-size: 11px;
-  color: var(--text-placeholder);
-}
-
-.table-card {
-  padding: var(--spacing-sm);
-  background: var(--bg-card);
-  border: 1px solid var(--border-color-light);
-  border-radius: var(--radius-lg);
 }
 
 .table-card :deep(.el-table__row) {
@@ -280,10 +262,6 @@ onMounted(() => {
   text-align: center;
   font-size: 13px;
   color: var(--text-placeholder);
-}
-
-.pager {
-  justify-content: flex-end;
 }
 
 @media (max-width: 860px) {

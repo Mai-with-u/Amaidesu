@@ -964,21 +964,11 @@ async function removeModel(index: number) {
   color: var(--text-primary);
 }
 
-.required-mark {
-  color: var(--color-danger);
-  margin-left: 2px;
-}
-
 .field-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: var(--spacing-sm);
   align-items: start;
-}
-
-.advanced-block {
-  border-top: 1px dashed var(--border-color-light);
-  padding-top: var(--spacing-xs);
 }
 
 .advanced-toggle {
