@@ -24,7 +24,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 
 class BiliDanmakuMessageConfig(BaseModel):
@@ -109,7 +109,8 @@ class BiliDanmakuCollector(BaseCollector):
         self.api_url = f"https://api.live.bilibili.com/xlive/web-room/v1/dM/gethistory?roomid={self.room_id}"
 
         # 状态变量
-        self._latest_timestamp_s: float = time.time()
+        # 去重水位线：时刻统一毫秒 int（B 站接口返回秒级 ts，比较点在边界换算）
+        self._latest_timestamp: int = int(time.time() * 1000)
         self._session: Optional[aiohttp.ClientSession] = None
         self.is_started: bool = False
 
@@ -186,7 +187,7 @@ class BiliDanmakuCollector(BaseCollector):
             self.logger.warning("aiohttp session 未初始化或已关闭，跳过本次轮询。")
             return
 
-        new_max_timestamp = self._latest_timestamp_s
+        new_max_timestamp_ms = self._latest_timestamp
 
         try:
             self.logger.debug(f"轮询 Bilibili API: {self.api_url}")
@@ -210,9 +211,10 @@ class BiliDanmakuCollector(BaseCollector):
                         timestamp = item.get("check_info", {}).get("ts")
                         item.get("uid")
 
-                        if timestamp and timestamp > self._latest_timestamp_s:
+                        # B 站 ts 为秒级，换算毫秒后与水位线比较，禁止单位混比
+                        if timestamp and timestamp * 1000 > self._latest_timestamp:
                             new_danmakus.append(item)
-                            new_max_timestamp = max(new_max_timestamp, timestamp)
+                            new_max_timestamp_ms = max(new_max_timestamp_ms, timestamp * 1000)
 
                     if new_danmakus:
                         new_danmakus.sort(key=lambda x: x.get("check_info", {}).get("ts", 0))
@@ -228,7 +230,7 @@ class BiliDanmakuCollector(BaseCollector):
                     else:
                         self.logger.debug("没有新的弹幕")
 
-                    self._latest_timestamp_s = new_max_timestamp
+                    self._latest_timestamp = new_max_timestamp_ms
                 else:
                     self.logger.warning(
                         f"Bilibili API 返回错误: code={data.get('code')}, message={data.get('message')}"
