@@ -126,7 +126,7 @@ def test_factory_forwards_streamer_infrastructure_and_repositories() -> None:
     assert agent._speech._tts_engine is tts and agent._speech._subtitle_service is subtitle
     assert agent._speech._speech_max_queue == 5
     # 仓储四件缺失时历史读取在入口守卫处整体短路，这里守住透传不回退
-    assert agent._rundowns is repos["rundown_repo"] and agent._chat is repos["chat_repo"]
+    assert agent._rundown_coord._rundowns is repos["rundown_repo"] and agent._chat is repos["chat_repo"]
     assert (
         agent._background._sessions_repo is repos["sessions_repo"]
         and agent._background._topic_repo is repos["topic_repo"]

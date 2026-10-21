@@ -5,7 +5,7 @@
 - 生命周期：start/stop/cleanup + 可重建性
 - 工具提供：list_tools() → 暴露 reply（streamer_reply）；rundown_control 由 rundown 注册项声明
 - 事件上报：emit（rundown.changed 等；订阅 room.message.danmaku 等）
-- 状态读写：RoomState / RundownState 内部组件
+- 状态读写：RoomState / RundownCoordinator（内含 RundownState）内部组件
 - 健康：BaseAgent 心跳协议
 - 元数据：name / description
 
@@ -45,14 +45,6 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.logging import get_logger
-from src.modules.storage.models.rundown import (
-    DEFAULT_RUNDOWN,
-    Rundown,
-    RundownInstance,
-    RundownInstanceSegment,
-    RundownSegment,
-    RundownTransition,
-)
 from src.modules.utils.task_utils import spawn_background_task
 from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
@@ -61,9 +53,8 @@ from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.room_state import RoomStateWatchedPayload
 from src.modules.vision.image_store import get_image_store
 
-from .rundown.presentation import apply_rundown_control, build_rundown_view
-from .rundown.rundown_state import RundownState
-from .tools.rundown_tool import RundownControlProvider, build_rundown_tool_provider
+from .rundown.rundown_coordinator import RundownCoordinator
+from .tools.rundown_tool import build_rundown_tool_provider
 from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
 from .memory import (
@@ -166,7 +157,7 @@ class StreamerAgent(BaseAgent):
       rundown_control 由 rundown 注册项声明（provider="rundown"）。
       should_speak_proactively / parse_command 是代码直连的内部件，不是工具。
     - 事件上报：emit（rundown.changed / planner.decision 等）；订阅 room.message.*
-    - 状态读写：内部 RoomState / RundownState / MessageBuffer
+    - 状态读写：内部 RoomState / RundownCoordinator / MessageBuffer
     - 健康：BaseAgent 心跳
     - 元数据：name / description
     """
@@ -271,11 +262,8 @@ class StreamerAgent(BaseAgent):
         self._prompt = prompt_manager
         self._event_bus = event_bus
         self._tool_registry = tool_registry
-        # 仓储注入（组合根按需分发；None 时对应能力降级）
-        self._rundowns = rundown_repo
-        # 流程单持久化两仓储（可选；None 时对应持久化能力整体跳过）
-        self._rundown_instance_repo = rundown_instance_repo
-        self._rundown_transition_repo = rundown_transition_repo
+        # 仓储注入（组合根按需分发；None 时对应能力降级。流程单三仓储由
+        # RundownCoordinator 直接收取，不在 Agent 身上落字段）
         self._chat = chat_repo
         self._session_manager = session_manager
         # 思考流旁路出口（可选；观察面专用，不进 EventBus 不落库）
@@ -374,16 +362,23 @@ class StreamerAgent(BaseAgent):
         }
         self._proactive_trigger = ProactiveTrigger(proactive_config)
 
-        # 流程单（Rundown）子系统：备忘录 + 闹钟（推进权归 Agent）
-        # Planner 构造早于 RundownState，开播时长锚点沿用 bind 注入（同 bind_reply_provider）
-        self._rundown_state = RundownState(
-            emit=self._emit_rundown_changed,
-            on_changed=self._on_rundown_changed,
+        # 流程单（Rundown）子系统：备忘录 + 闹钟（推进权归 Agent）。
+        # 状态机与仓储/总线/场次解析的粘合收拢在协调器内（依赖全构造注入，
+        # 环节变更经回调置位宿主的 proactive pending）；开播时长锚点沿用
+        # bind 注入（同 bind_reply_provider）
+        self._rundown_coord = RundownCoordinator(
+            config=config,
+            rundown_repo=rundown_repo,
+            rundown_instance_repo=rundown_instance_repo,
+            rundown_transition_repo=rundown_transition_repo,
+            session_manager=session_manager,
+            event_bus=event_bus,
+            logger=self._logger,
+            bg_tasks=self._bg_tasks,
+            notify_proactive=self._on_rundown_changed_proactive,
         )
-        self._planner.bind_elapsed_live_provider(self._rundown_state.get_elapsed_live_ms)
+        self._planner.bind_elapsed_live_provider(self._rundown_coord.state.get_elapsed_live_ms)
         self._planner.bind_notebook_provider(self._notebook.read)
-        # 控制执行器：经 ToolRegistry 注册后供 Planner ReAct 循环调用（单实例单状态机）
-        self._rundown_tool_provider = RundownControlProvider(self._rundown_state)
 
         # 后台维护器（双任务：轻循环 + 压缩 worker）——读包内权威配置
         bg = config.background
@@ -454,7 +449,7 @@ class StreamerAgent(BaseAgent):
         self._live_active: bool = False
         # 一次性 pending flag（外部 API 触发主动发言）
         self._external_proactive_pending: bool = False
-        # 流程单环节切换触发 flag（RundownState 变更回调置位；装配接线）
+        # 流程单环节切换触发 flag（协调器变更回调置位；经 _on_rundown_changed_proactive）
         self._rundown_proactive_pending: bool = False
         # 游戏待定夺触发 flag（game.report 事件置位；下次空缓冲 tick 消费）
         self._game_decision_pending: bool = False
@@ -535,7 +530,7 @@ class StreamerAgent(BaseAgent):
             thinking_sink=thinking_sink,
             thinking_enabled=bool(getattr(config.thinking_stream, "enabled", True)),
             history_provider=self._read_history,
-            rundown_text_provider=self._build_rundown_text,
+            rundown_text_provider=self._rundown_coord.build_text,
             game_events_provider=self._current_game_batch,
             reminders_provider=self._drain_reminders,
             session_recap_provider=self._session_recap_text,
@@ -584,7 +579,7 @@ class StreamerAgent(BaseAgent):
             )
 
         # 启动流程单（fail-soft：加载失败降级为无流程单）
-        await self._start_rundown()
+        await self._rundown_coord.start()
 
         # 启动发言管线（speech → TTS / emotion → VTS；队列生命周期归 dispatcher）
         await self._speech.start()
@@ -674,7 +669,7 @@ class StreamerAgent(BaseAgent):
             replyer=self._replyer,
             # 没有聊天仓储时历史仍由内存对话轮承载，表达侧照样知道上一句说了什么
             history_provider=self._read_history_sync,
-            rundown_text_provider=self._build_rundown_text_sync,
+            rundown_text_provider=self._rundown_coord.build_text_sync,
             event_bus=self._event_bus,
             gate_window=self.typed_config.speech_gate_window,
             gate_ratio=self.typed_config.speech_gate_ratio,
@@ -690,7 +685,7 @@ class StreamerAgent(BaseAgent):
                 self._reply_provider, registry=self._tool_registry, visible_to={"streamer_reply": ["streamer"]}
             )
             self.register_tool_provider(
-                build_rundown_tool_provider(self._rundown_tool_provider),
+                build_rundown_tool_provider(self._rundown_coord.tool_provider),
                 registry=self._tool_registry,
                 visible_to={"rundown_control": ["streamer"]},
             )
@@ -819,7 +814,7 @@ class StreamerAgent(BaseAgent):
         # 流程单开播起算：armed（已装载待开播）→ running，双锚点 = 开播时刻。
         # 已起算的场（崩溃恢复的进行中/已完成）被结构化拒绝，保持现态静默忽略；
         # begin 经 on_changed 置位 proactive pending——开场白信号在开播时刻才置
-        reject = self._rundown_state.begin(by="system")
+        reject = self._rundown_coord.state.begin(by="system")
         if reject is not None:
             self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
@@ -1138,6 +1133,10 @@ class StreamerAgent(BaseAgent):
         if topic_hint:
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
+    def _on_rundown_changed_proactive(self) -> None:
+        """流程单环节变更通知（协调器回调）：置位 proactive 即时信号，下个 tick 消费。"""
+        self._rundown_proactive_pending = True
+
     def receive_prompt(self, *, content: str, source: str = "") -> bool:
         """接收递话（运营/跨 Agent 留言）：入提醒队列，下个决策窗必达。
 
@@ -1285,8 +1284,8 @@ class StreamerAgent(BaseAgent):
                     now_ms(),
                     external_pending=False if live_gated else self._external_proactive_pending,
                     rundown_pending=rundown_pending,
-                    rundown_overdue=False if live_gated else self._is_rundown_overdue(),
-                    rundown_ready=False if live_gated else self._is_rundown_active(),
+                    rundown_overdue=False if live_gated else self._rundown_coord.is_overdue(),
+                    rundown_ready=False if live_gated else self._rundown_coord.is_active(),
                     game_pending=game_pending,
                     # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
                     # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
@@ -1403,208 +1402,6 @@ class StreamerAgent(BaseAgent):
         return span / (buf.size - 1)
 
     # ==================================================================
-    # 流程单（Rundown）运行时
-    # ==================================================================
-
-    def _is_rundown_overdue(self) -> bool:
-        """当前环节停留是否已超预期（供 ProactiveTrigger rundown_overdue 闹钟）。"""
-        return self._rundown_state.is_current_segment_overdue()
-
-    def _is_rundown_active(self) -> bool:
-        """判定流程单是否在供能（供 ProactiveTrigger rundown_ready 持续产出信号）。
-
-        done 仍供能：流程单内容排完不是停止内容推进的理由——Agent 按既定节奏
-        获得开口机会，凭情境（完成文案 + 弹幕）自由互动。paused 不供能（导演
-        明确叫停）。供能不等于发言：is_novel 自检与台词重合度闸把关质量。
-        """
-        return self._rundown_state.status in ("running", "done")
-
-    def _build_rundown_text(self) -> Optional[str]:
-        """拼装流程单情境文本（注入 Planner/Replyer $rundown 变量）。"""
-        return self._rundown_state.build_context_text()
-
-    def _build_rundown_text_sync(self) -> Optional[str]:
-        """同步包装（reply_tool 的 rundown_text_provider 鸭子接口）。"""
-        return self._build_rundown_text()
-
-    async def _start_rundown(self) -> None:
-        """加载流程单并启动运行时（唯一装配点；fail-soft）。
-
-        加载顺序：配置 ``rundown_id`` → 存储读取；未配置 / 不存在 / 读取失败
-        → 回退内置默认流程单（初次直播·自我介绍）。
-        """
-        rundown_id = (self.typed_config.rundown_id or "").strip()
-        rundown: Optional[Rundown] = None
-        if rundown_id and self._rundowns is not None:
-            try:
-                rundown = await self._rundowns.get_rundown(rundown_id)
-            except Exception as exc:
-                self._logger.warning(f"读取流程单 '{rundown_id}' 失败: {exc}")
-                rundown = None
-            if rundown is None:
-                self._logger.warning(f"流程单 '{rundown_id}' 不存在，回退内置默认流程单")
-        if rundown is None:
-            rundown = DEFAULT_RUNDOWN
-        if await self._try_restore_rundown(rundown):
-            return
-        self._rundown_state.load(rundown)
-        self._logger.info(f"流程单已加载: id={rundown.rundown_id!r}, segments={len(rundown.segments)}")
-
-    async def _try_restore_rundown(self, template: Rundown) -> bool:
-        """崩溃恢复：有活跃场次且实例快照与本单模板匹配时还原进度。
-
-        - 无实例仓储 / 无活跃场次 / 无快照 → ``False``（走常规 load）。
-        - ``template_id`` 不匹配（导演开播前换了单）或快照无环节行 →
-          ``False`` + info 日志，绝不拿别的单的进度套本单。
-        - 快照损坏（越界游标等）→ ``RundownState.restore`` 拒绝，回退常规
-          load + warning。
-        - 成功 → 用快照环节行（含 Agent 追加环节，防模板漂移）构造清单并
-          ``restore``，info 日志含恢复到的环节位置。
-        """
-        if self._rundown_instance_repo is None or self._session_manager is None:
-            return False
-        try:
-            pk = await self._session_manager.resolve_pk()
-        except Exception as exc:
-            self._logger.warning(f"崩溃恢复跳过：场次主键解析失败: {exc}", exc=True)
-            return False
-        if pk is None:
-            return False
-        try:
-            snapshot = await self._rundown_instance_repo.get_by_session(pk)
-        except Exception as exc:
-            self._logger.warning(f"崩溃恢复跳过：实例快照读取失败（回退常规加载）: {exc}", exc=True)
-            return False
-        if snapshot is None:
-            return False
-        if snapshot.template_id != template.rundown_id or not snapshot.segments:
-            self._logger.info(f"实例快照与流程单不匹配（template={snapshot.template_id!r}），回退常规加载")
-            return False
-        rundown = template.model_copy(
-            update={
-                "segments": [
-                    RundownSegment(
-                        id=s.seg_id,
-                        title=s.title,
-                        task_description=s.task_description,
-                        expected_ms=s.expected_ms,
-                        min_duration_ms=s.min_duration_ms,
-                        notes=s.notes,
-                    )
-                    for s in snapshot.segments
-                ]
-            }
-        )
-        reject = self._rundown_state.restore(rundown, snapshot)
-        if reject is not None:
-            self._logger.warning(f"实例快照损坏（{reject.reason}），回退常规加载")
-            return False
-        self._logger.info(
-            f"流程单已从实例快照恢复: id={template.rundown_id!r}, "
-            f"恢复到第 {snapshot.seg_index + 1}/{len(snapshot.segments)} 环节"
-        )
-        return True
-
-    def _on_rundown_changed(self, segment_id: str, by: str) -> None:
-        """流程单变更通知：置位 proactive 即时信号（新环节开场要马上说）。"""
-        self._rundown_proactive_pending = True
-        self._logger.info(f"流程单变更: segment={segment_id!r}, by={by!r}")
-
-    def _emit_rundown_changed(self, event_name: str, payload: Any) -> None:
-        """桥接 RundownState 的事件回调：EventBus 异步 emit + 场次持久化（落行/写穿）。"""
-        if self._event_bus is not None:
-            spawn_background_task(
-                self._event_bus.emit(event_name, payload, source="RundownState"),
-                logger=self._logger,
-                tasks=self._bg_tasks,
-                label="StreamerAgent.rundown_changed_emit",
-            )
-        self._persist_rundown_change(payload)
-
-    def _persist_rundown_change(self, payload: Any) -> None:
-        """流程单变更的持久化旁路：transitions 落行 + 实例快照写穿（fire-and-forget）。
-
-        两仓储任一未注入则整体跳过（测试与降级场景）；无活跃场次
-        （``resolve_pk()`` 为 None）不落任何行。落行与写穿各自独立
-        try/except——失败只 warning，不阻断状态机与事件链路，也不互相阻断。
-        """
-        if self._rundown_instance_repo is None and self._rundown_transition_repo is None:
-            return
-
-        async def _run() -> None:
-            try:
-                pk = await self._session_manager.resolve_pk() if self._session_manager is not None else None
-            except Exception as exc:
-                self._logger.warning(f"流程单持久化跳过：场次主键解析失败: {exc}", exc=True)
-                return
-            if pk is None:
-                return
-
-            # --- 变更事实行（append-only）---
-            if self._rundown_transition_repo is not None:
-                try:
-                    current = self._rundown_state.current_segment
-                    task_desc: Optional[str] = None
-                    if payload.action == "append" and self._rundown_state.rundown is not None:
-                        appended = next(
-                            (s for s in self._rundown_state.rundown.segments if s.id == payload.segment_id),
-                            None,
-                        )
-                        task_desc = appended.task_description if appended is not None else None
-                    await self._rundown_transition_repo.insert(
-                        RundownTransition(
-                            live_session_id=pk,
-                            rundown_id=payload.rundown_id,
-                            action=payload.action,
-                            seg_id=payload.segment_id,
-                            seg_title=payload.segment_title,
-                            seg_index=payload.index,
-                            by=payload.by,
-                            at_ms=payload.at_ms,
-                            expected_ms=current.expected_ms if current is not None else None,
-                            task_description=task_desc,
-                            updated_at_ms=now_ms(),
-                        )
-                    )
-                except Exception as exc:
-                    self._logger.warning(f"rundown_transitions 落行失败（不阻断链路）: {exc}", exc=True)
-
-            # --- 实例快照写穿（头 + 环节行全量替换）---
-            if self._rundown_instance_repo is not None:
-                try:
-                    progress = self._rundown_state.export_progress()
-                    state_rundown = self._rundown_state.rundown
-                    if progress and state_rundown is not None:
-                        await self._rundown_instance_repo.upsert(
-                            RundownInstance(
-                                live_session_id=pk,
-                                updated_at_ms=now_ms(),
-                                segments=[
-                                    RundownInstanceSegment(
-                                        seq=i,
-                                        seg_id=seg.id,
-                                        title=seg.title,
-                                        task_description=seg.task_description,
-                                        expected_ms=seg.expected_ms,
-                                        min_duration_ms=seg.min_duration_ms,
-                                        notes=seg.notes,
-                                    )
-                                    for i, seg in enumerate(state_rundown.segments)
-                                ],
-                                **progress,
-                            )
-                        )
-                except Exception as exc:
-                    self._logger.warning(f"rundown_instances 写穿失败（不阻断链路）: {exc}", exc=True)
-
-        spawn_background_task(
-            _run(),
-            logger=self._logger,
-            tasks=self._bg_tasks,
-            label="StreamerAgent.rundown_persist",
-        )
-
-    # ==================================================================
     # 公开门面：主动发言动态开关（Dashboard 直播控制台）
     # ==================================================================
 
@@ -1617,19 +1414,16 @@ class StreamerAgent(BaseAgent):
         self._proactive_trigger.set_enabled(enabled)
 
     # ==================================================================
-    # 公开门面：供 Dashboard API 读取与控制流程单
+    # 公开门面：供 Dashboard API 读取与控制流程单（实现收拢在协调器内）
     # ==================================================================
 
     def is_rundown_available(self) -> bool:
-        """判定流程单是否对外可用（运行时已加载流程单）。
-
-        - 返回 ``False`` 表示 Dashboard 编排页应降级为不可用视图。
-        """
-        return self._rundown_state.rundown is not None
+        """判定流程单是否对外可用（运行时已加载流程单）。"""
+        return self._rundown_coord.is_available()
 
     def get_rundown_view(self, *, now_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """聚合 Dashboard 编排页所需的流程单视图数据（视图拼装见 rundown 子包）。"""
-        return build_rundown_view(self._rundown_state, now_ms=now_ms)
+        return self._rundown_coord.get_rundown_view(now_ms=now_ms)
 
     async def rundown_control(
         self,
@@ -1639,58 +1433,18 @@ class StreamerAgent(BaseAgent):
         now_ms: Optional[int] = None,
     ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
         """执行 Dashboard 手动控制动作（动作翻译见 rundown 子包）。"""
-        return apply_rundown_control(self._rundown_state, action, segment_id=segment_id, now_ms=now_ms)
+        return await self._rundown_coord.control(action, segment_id=segment_id, now_ms=now_ms)
 
     async def switch_rundown(self, rundown_id: str) -> tuple[bool, str, Optional[Dict[str, Any]]]:
-        """直播中热切换流程单（Dashboard activate 的运行态写穿）。
-
-        从流程单库读取目标单后经 :meth:`RundownState.load` 换载——游标回到
-        首环节、计时重置、开场白信号按既有 pending 链路触发，不与旧单做
-        进度对齐（换单是新内容开始）。读取失败/目标不存在不改动运行态，
-        返回 ``(False, 原因, 当前快照)`` 供调用方渲染。
-        """
-        snapshot = self._rundown_state.get_snapshot()
-        if self._rundowns is None:
-            return False, "流程单存储未就绪", snapshot
-        try:
-            rundown = await self._rundowns.get_rundown(rundown_id)
-        except Exception as exc:
-            self._logger.error(f"热切流程单 '{rundown_id}' 读取失败: {exc}", exc=True)
-            return False, f"读取流程单失败: {exc}", snapshot
-        if rundown is None:
-            return False, f"流程单 '{rundown_id}' 不存在", snapshot
-        self._rundown_state.load(rundown)
-        self._logger.info(f"已热切流程单: id={rundown.rundown_id!r}, segments={len(rundown.segments)}")
-        return True, f"已切换至流程单「{rundown.title}」", self._rundown_state.get_snapshot()
+        """直播中热切换流程单（Dashboard activate 的运行态写穿）。"""
+        return await self._rundown_coord.switch(rundown_id)
 
     async def apply_rundown_definition(
         self,
         definition: Dict[str, Any],
     ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
-        """应用编辑后的流程单定义（Dashboard 保存时的运行态写穿）。
-
-        收 dict 由本方法内部校验转 ``Rundown``——Dashboard 不 import 本包
-        模型，规避装配链循环 import。落盘由调用方负责，本方法只管运行态：
-
-        - 运行中的流程单 id 与定义一致 → ``replace_definition``（游标按环节
-          id 对齐，进度尽量保留），成功后 Agent 下一轮决策从情境中看到新内容。
-        - Agent 未加载流程单 / 运行的是其他流程单 → 运行态不动，直接成功。
-        """
-        try:
-            rundown = Rundown.model_validate(definition)
-        except Exception as exc:
-            return False, f"流程单定义校验失败: {exc}", None
-
-        current = self._rundown_state.rundown
-        if current is None:
-            return True, "流程单已保存（运行时未加载流程单，启动后生效）", None
-        if current.rundown_id != rundown.rundown_id:
-            return True, "流程单已保存（当前直播运行的是其他流程单，不受影响）", self._rundown_state.get_snapshot()
-
-        reject = self._rundown_state.replace_definition(rundown)
-        if reject is not None:
-            return False, f"运行态更新被拒绝: {reject.reason}", self._rundown_state.get_snapshot()
-        return True, "流程单已保存并即时生效", self._rundown_state.get_snapshot()
+        """应用编辑后的流程单定义（Dashboard 保存时的运行态写穿）。"""
+        return await self._rundown_coord.apply_definition(definition)
 
     # ==================================================================
     # 历史读取（duck-typed 鸭子接口）
