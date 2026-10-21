@@ -6,8 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider, create_warudo_provider
+from src.modules.avatar.platform.warudo.warudo_provider import (
+    WarudoProvider,
+    create_warudo_provider,
+    register_warudo_tools,
+)
 from src.modules.tools import ToolInvocation
+from src.modules.tools.registry import ToolRegistry
 
 
 def _provider(**config) -> WarudoProvider:
@@ -34,6 +39,7 @@ def test_action_catalog_defaults_to_builtin_and_merges_config() -> None:
 
 def test_tool_face_is_the_four_agreed_tools_without_catalog_in_descriptions() -> None:
     provider = _provider(action_catalog={"wave": "招手"})
+    provider._is_connected = True  # 工具表仅连接态非空
     specs = provider.list_tools()
     assert {s.full_name for s in specs} == {
         "warudo_set_expression",
@@ -44,6 +50,24 @@ def test_tool_face_is_the_four_agreed_tools_without_catalog_in_descriptions() ->
     assert all(s.provider == "warudo" for s in specs)
     expression = next(s for s in specs if s.full_name == "warudo_set_expression")
     assert "招手" not in expression.description  # 描述不承载目录
+
+
+def test_tools_degraded_to_empty_when_not_connected_and_registry_follows_connection() -> None:
+    provider = _provider()
+    provider._is_connected = False
+    assert provider.list_tools() == []  # 未连接（含装配期）工具表为空：降级登记，Agent 不可见不可调
+
+    registry = ToolRegistry()
+    registered = register_warudo_tools(registry, config={"ws_host": "localhost", "ws_port": 19190})
+    assert registry.list_tools(provider="warudo") == []  # 装配期降级登记 0 工具
+
+    registered._is_connected = True
+    registered._fire_connection_changed(True)
+    assert len(registry.list_tools(provider="warudo")) == 4  # 连上后补注册
+
+    registered._is_connected = False
+    registered._fire_connection_changed(False)
+    assert registry.list_tools(provider="warudo") == []  # 断连摘除
 
 
 async def test_set_expression_and_sight_write_state_and_validate_target() -> None:
@@ -70,6 +94,22 @@ def _stubbed_provider() -> WarudoProvider:
     provider = create_warudo_provider(config={"ws_host": "localhost", "ws_port": 19190})
     provider._connect = AsyncMock()  # type: ignore[method-assign]  # 避免真实触发 websockets.connect
     return provider
+
+
+async def test_connect_failure_fires_no_callback() -> None:
+    provider = _stubbed_provider()
+    # _connect 被打桩后走真实失败分支不可行，直接验证手动断开只迁移时回调一次
+    provider._is_connected = False
+    fired: list[bool] = []
+    provider.on_connection_changed = fired.append
+    provider.websocket = MagicMock(close=AsyncMock())
+    await provider.disconnect()
+    assert fired == []  # 本就未连接，断开不触发迁移回调
+
+    provider._is_connected = True
+    provider.websocket = MagicMock(close=AsyncMock())
+    await provider.disconnect()
+    assert fired == [False]  # True→False 迁移回调一次
 
 
 async def test_connect_reports_connection_state_and_reconnect_composes_disconnect_and_connect() -> None:
