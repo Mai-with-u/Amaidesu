@@ -255,8 +255,10 @@ class ConfigSchemaGenerator:
             try:
                 factory = cast(Callable[[], Any], field_info.default_factory)
                 schema["default"] = factory()
-            except (TypeError, Exception):
-                # default_factory 可能依赖外部状态/接受 model dict 参数，跳过
+            except Exception:
+                # default_factory 是任意可调用对象，可能依赖尚未就绪的外部状态、
+                # 或接受本模型实例为参数而在此处调用签名不兼容；无法产出默认值
+                # 时放弃填充，前端回退为空值
                 pass
 
         # array items

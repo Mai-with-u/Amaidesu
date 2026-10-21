@@ -455,6 +455,7 @@ def _write_back_schema_file(
         with open(file_path, "rb") as f:
             has_bom = f.read(3) == b"\xef\xbb\xbf"
     except OSError:
+        # 文件尚不存在（首次生成路径）时探测不到 BOM，按无 BOM 写入即可
         pass
     new_bytes = content.encode("utf-8-sig" if has_bom else "utf-8")
 
@@ -463,6 +464,7 @@ def _write_back_schema_file(
         if file_path.read_bytes() == new_bytes:
             return None
     except OSError:
+        # 读取失败即无法确认内容一致，放弃短路、继续走完整写盘路径
         pass
 
     backup_path = _backup_file(file_path, config_dir, batch_id=batch_id)
