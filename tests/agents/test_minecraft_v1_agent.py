@@ -605,7 +605,7 @@ async def test_remote_skills_are_listed_and_read_by_uri() -> None:
     agent, llm, bus = await _start(server, script, skills=library)
     client = _RemoteSkillsClient()
     agent._mcp_client = client
-    agent._remote_skills_loaded = False
+    agent._skill_support._remote_skills_loaded = False
     agent.receive_delegation(instruction="先看看生存开局", task_id="d-remote")
     await _wait_until(lambda: len(_reports(bus)) == 1)
 

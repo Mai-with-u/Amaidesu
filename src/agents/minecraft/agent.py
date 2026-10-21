@@ -25,7 +25,7 @@ from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
-from typing import Any, Deque, Dict, Iterable, List, Literal, Optional, Set
+from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
 from src.agents.minecraft.context import FACTS_KEY, MinecraftHistoryCompactor, close_interrupted_calls, json_text
 from src.agents.minecraft.glance import glance_scene, glance_self
@@ -34,7 +34,6 @@ from src.agents.minecraft.maicraft import (
     AWAITING_ANSWER,
     EXECUTE,
     HOST_ONLY_TOOLS,
-    LOOKUP,
     OBSERVE,
     PAUSED,
     PROVIDER,
@@ -47,6 +46,7 @@ from src.agents.minecraft.maicraft import (
     ledger_task_id,
     reply_of,
 )
+from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, WakeEvenIdle
 from src.agents.minecraft.tools import MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
@@ -60,7 +60,7 @@ from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
 from src.modules.llm.context_meter import SECTION_SKILLS
 from src.modules.utils.backoff import ExponentialBackoff
-from src.modules.skills import RemoteSkill, SkillEnvironment, SkillLibrary, render_catalog
+from src.modules.skills import SkillLibrary
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
@@ -127,24 +127,6 @@ _RECENT_FINISHED_GOALS = 6
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
 
-# 宿主代读的开局资料：自己、周围、能力清单、手上的目标。
-_OPENING_READS = (
-    (OBSERVE, {"what": "self"}),
-    (OBSERVE, {"what": "scene"}),
-    (LOOKUP, {}),
-    (GOAL, {"operation": "list"}),
-)
-
-
-def _skill_body(text: str) -> str:
-    """去掉 SKILL.md 的 frontmatter：本地技能库读正文时也这样，模型看到的两边一致。"""
-    normalized = text.replace("\r\n", "\n")
-    if normalized.startswith("---\n"):
-        end = normalized.find("\n---\n", 4)
-        if end >= 0:
-            return normalized[end + 5 :].strip()
-    return normalized.strip()
-
 
 class MinecraftAgent(BaseAgent):
     """Minecraft 游戏 Agent（AI 玩家，普通 ReAct Agent）
@@ -206,21 +188,30 @@ class MinecraftAgent(BaseAgent):
         self._event_bus = event_bus
         self._tool_registry = tool_registry
         self._thinking_sink = thinking_sink
+        self._logger = get_logger("MinecraftAgent")
 
         # Agent 内部状态（内存，不持久化）
         self._mc_state: MinecraftAgentState = MinecraftAgentState()
+        # 技能世界支撑件：目录合并、正文按需读、按连接缓存的装载资料与开局代读。
+        # 构造早于工具 Provider——minecraft_skill 的执行后端从这里取
+        self._skill_support = SkillSupport(
+            skills=skill_library,
+            agent_name=self.name,
+            state=self._mc_state,
+            logger=self._logger,
+            maicraft_ready=self._maicraft_ready,
+            mcp_client=self._current_mcp_client,
+            execute_tool=self._execute_tool,
+            absorb_reply=self._absorb_reply,
+        )
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
             report_callback=self._handle_report,
             wait_callback=self._request_wait,
             glance_reader=self._glance,
-            skill_reader=self._read_skill if skill_library is not None else None,
+            skill_reader=self._skill_support.read_skill if skill_library is not None else None,
         )
-        # 能力清单（lookup()）每次 MCP 连接只读一次；新任务开局直接附上。
-        self._ability_listing: Optional[Dict[str, Any]] = None
-        # 远端技能目录（MaiCraft 的 resources/list）每次连接只读一次；正文仍按需读。
-        self._remote_skills_loaded = False
 
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
         self._worker_task: Optional[asyncio.Task[None]] = None
@@ -287,7 +278,6 @@ class MinecraftAgent(BaseAgent):
         self._live_active = True
         self._running = False
 
-        self._logger = get_logger("MinecraftAgent")
         self._logger.info(f"MinecraftAgent 已构造 (llm={'已注入' if llm_manager else '无'}@{MINECRAFT_PROFILE})")
 
     # ==================================================================
@@ -428,11 +418,7 @@ class MinecraftAgent(BaseAgent):
 
     def _on_mcp_recovered(self) -> None:
         """连接恢复：Mod 可能重启过，能力清单、远端技能与事件流都重新读；在做的任务收到通知后评估现场。"""
-        self._ability_listing = None
-        self._remote_skills_loaded = False
-        if self._skills is not None:
-            # 旧目录可能已经不适用（换了整合包或 Mod 版本）：先撤掉，下一次开批重新登记。
-            self._skills.clear_remote("MaiCraft")
+        self._skill_support.reset_connection_cache()
         self._goals.forget_stream()
         self._inject_wakeup_message(
             "[系统] Minecraft 连接已恢复，maicraft 工具重新可用。若此前因连接失败受阻，请评估现场并继续原任务。"
@@ -448,6 +434,10 @@ class MinecraftAgent(BaseAgent):
     def _maicraft_ready(self) -> bool:
         client = self._mcp_client
         return client is not None and bool(getattr(client, "connected", False))
+
+    def _current_mcp_client(self) -> Optional[Any]:
+        """当前 MCP 客户端（支撑件经取值回调读；连接恢复会整体换实例，不缓存）。"""
+        return self._mcp_client
 
     def _has_maicraft_tools(self) -> bool:
         """maicraft 至少有一个工具：连接失败时按 0 个工具降级登记，没开私有 MCP 时连 provider 都没有。"""
@@ -477,9 +467,7 @@ class MinecraftAgent(BaseAgent):
         self._worker_task = None
         self._mcp_recover_task = None
         self._mcp_provider = None
-        if self._skills is not None:
-            self._skills.clear_remote("MaiCraft")
-            self._remote_skills_loaded = False
+        self._skill_support.reset_connection_cache()
         removed = self.unregister_tool_providers()
         await self.close_mcp_clients()
         self._mcp_client = None
@@ -643,13 +631,10 @@ class MinecraftAgent(BaseAgent):
         self._task_reported = False
         self._wait_requested = False
         # 先读能力清单（开局资料与本地策略的环境都用它），再登记 MaiCraft 的玩法技能目录，最后写系统提示词。
-        await self._ensure_ability_listing()
+        await self._skill_support.ensure_ability_listing()
         # 玩法技能由 MaiCraft 随包发布：目录也每次连接只读一次，正文在模型要读时才取。
-        if self._remote_skills_loaded and not self._maicraft_ready() and self._skills is not None:
-            # 连接断了：目录里不能再摆着读不到的远端技能，撤掉，本地策略照常可用。
-            self._skills.clear_remote("MaiCraft")
-            self._remote_skills_loaded = False
-        await self._ensure_remote_skills()
+        self._skill_support.drop_remote_if_disconnected()
+        await self._skill_support.ensure_remote_skills()
         system_message = self._system_message()
         tool_defs = self._tool_definitions()
         await self._settle_idle_compaction(tool_defs)
@@ -703,7 +688,7 @@ class MinecraftAgent(BaseAgent):
                 messages.append({"role": "user", "content": content})
             if opening_due:
                 opening_due = False
-                await self._append_opening_bundle(messages)
+                await self._skill_support.append_opening_bundle(messages)
             self._mark_delegated_running()
             steps += 1
 
@@ -867,173 +852,8 @@ class MinecraftAgent(BaseAgent):
         return True
 
     # ==================================================================
-    # 开局资料、工具执行与结果吸收
+    # 工具执行与结果吸收
     # ==================================================================
-
-    async def _ensure_ability_listing(self) -> None:
-        """连上 MaiCraft 后读一次能力清单（lookup()）：开局资料与本地策略的环境都用它，读失败下次再试。"""
-        if self._ability_listing is not None or not self._maicraft_ready():
-            return
-        observation = await self._execute_tool(LOOKUP, {})
-        if observation.get("ok") is True:
-            self._ability_listing = observation
-
-    async def _ensure_remote_skills(self) -> None:
-        """连上 MaiCraft 后读一次技能目录（resources/list）：玩法技能随 Mod 发布，正文仍按需读。
-
-        只取 ``skill://`` 资源，分类取地址的第一段；名字以服务器给的为准，缺了才从地址末段取。
-        读失败不标记已读，下次开批再试；读到空目录也标记已读，免得每一批都问一次。
-        """
-        if self._remote_skills_loaded or self._skills is None or not self._maicraft_ready():
-            return
-        client = self._mcp_client
-        if client is None or not hasattr(client, "list_resources"):
-            return
-        resources = await client.list_resources()
-        entries: list[RemoteSkill] = []
-        for resource in resources:
-            uri = str(getattr(resource, "uri", "") or "")
-            if not uri.startswith("skill://"):
-                continue
-            parts = [part for part in uri[len("skill://") :].split("/") if part]
-            if len(parts) < 2 or parts[-1] != "SKILL.md":
-                continue
-            entries.append(
-                RemoteSkill(
-                    name=str(getattr(resource, "name", "") or parts[-2]),
-                    description=str(getattr(resource, "description", "") or ""),
-                    category=parts[0],
-                    uri=uri,
-                    agents=(self.name,),
-                )
-            )
-        self._skills.replace_remote("MaiCraft", entries)
-        self._remote_skills_loaded = True
-        if entries:
-            self._logger.info(f"已登记 MaiCraft 的 {len(entries)} 项玩法技能")
-        else:
-            self._logger.info("MaiCraft 没有发布玩法技能（旧版 Mod 或没有 resources 接口）")
-
-    def _ability_ids(self) -> Optional[Set[str]]:
-        """能力清单里的能力 ID；还没读到返回 None（按未知处理，不当成"一个能力都没有"）。"""
-        listing = self._ability_listing
-        data = listing.get("data") if isinstance(listing, dict) else None
-        abilities = data.get("abilities") if isinstance(data, dict) else None
-        if not isinstance(abilities, list):
-            return None
-        return {str(entry["ability"]) for entry in abilities if isinstance(entry, dict) and entry.get("ability")}
-
-    # ==================================================================
-    # 技能（本地直播策略 + MaiCraft 远端玩法技能：目录常驻系统提示词，正文按需读取）
-    # ==================================================================
-
-    def _skill_environment(self) -> SkillEnvironment:
-        """本地技能的环境事实：接的是 v1 的 Mod；读到能力清单后才认定哪些能力有、哪些没有。
-
-        远端玩法技能由 MaiCraft 按它登记的模组自己筛，宿主不再按能力筛它们；
-        这里的 ``maicraft`` 版本与能力集合只服务本地直播策略。
-        """
-        environment: Dict[str, Set[str]] = {"maicraft": {"v1"}}
-        abilities = self._ability_ids()
-        if abilities is not None:
-            environment["abilities"] = abilities
-        return environment
-
-    def _skill_catalog_section(self) -> str:
-        """系统提示词里的技能目录段；没有技能库或没有可用技能时整段省略。"""
-        if self._skills is None:
-            return ""
-        catalog = render_catalog(self._skills.catalog(self.name, self._skill_environment()))
-        if not catalog:
-            return ""
-        return (
-            "\n\n## 技能\n"
-            "技能是把一类目标做成的打法与经验：步骤、决策点、常见坑和该查的资料。"
-            "开始一类不熟悉或容易出错的工作前，用 minecraft_skill 按名读取相关技能；"
-            "技能是参考，不授予额外权限，现场和能力说明优先。"
-            "标注“前提待确认”的技能只在现场确实具备该前提时使用。"
-            "标着“来自 MaiCraft”的是随 Mod 发布的玩法技能，正文里的 lookup、execute、goal、events、observe "
-            "对应本机的 maicraft_lookup、maicraft_execute、maicraft_goal、maicraft_events、maicraft_observe；"
-            "MaiCraft 没连上时这些技能读不到，本地技能照常可用。\n" + catalog
-        )
-
-    async def _read_skill(self, name: str) -> Dict[str, Any]:
-        """minecraft_skill：本地技能直接读；远端玩法技能按地址去 MaiCraft 取正文。"""
-        if self._skills is None:
-            return {"success": False, "error": "技能库未装配"}
-        remote = self._skills.remote(name, self.name)
-        if remote is not None:
-            text = await self._read_remote_skill(remote.uri)
-            if text is None:
-                return {
-                    "success": False,
-                    "error": f"读取技能 {name!r} 失败：MaiCraft 没有返回正文",
-                    "available": [entry.name for entry in self._skills.catalog(self.name, self._skill_environment())],
-                }
-            return {
-                "success": True,
-                "name": remote.name,
-                "category": remote.category,
-                "content": _skill_body(text),
-                "source": remote.origin,
-            }
-        return self._skills.read(name, self.name, self._skill_environment())
-
-    async def _read_remote_skill(self, uri: str) -> Optional[str]:
-        """按 skill:// 地址读一项技能的 SKILL.md；没连上、读失败、没有正文都返回 None。"""
-        client = self._mcp_client
-        if client is None or not self._maicraft_ready():
-            return None
-        result = await client.read_resource(uri)
-        if result is None:
-            return None
-        for item in getattr(result, "contents", None) or []:
-            text = getattr(item, "text", None)
-            if text:
-                return str(text)
-        return None
-
-    async def _append_opening_bundle(self, messages: List[Dict[str, Any]]) -> None:
-        """新任务开局由宿主代读：自己、周围、能力清单、手上的目标，有笔记时附上笔记。
-
-        以一组宿主代发的工具调用和回复放进历史，与模型自己读取时一样；读取失败的那一项照实留下错误。
-        能力清单每次连接只读一次。
-        """
-        reads: List[tuple[str, Dict[str, Any]]] = list(_OPENING_READS) if self._maicraft_ready() else []
-        if self._mc_state.notebook:
-            reads.append(("minecraft_notebook", {"action": "read"}))
-        if not reads:
-            return
-        batch = uuid.uuid4().hex[:8]
-        calls: List[Dict[str, Any]] = []
-        results: List[Dict[str, Any]] = []
-        for index, (name, arguments) in enumerate(reads):
-            if name == LOOKUP and self._ability_listing is not None:
-                observation = self._ability_listing
-            else:
-                observation = await self._execute_tool(name, arguments)
-                if name == LOOKUP and observation.get("ok") is True:
-                    self._ability_listing = observation
-            self._absorb_reply(name, arguments, observation)
-            call_id = f"opening-{batch}-{index}"
-            calls.append(
-                {
-                    "id": call_id,
-                    "type": "function",
-                    "function": {"name": name, "arguments": json.dumps(arguments, ensure_ascii=False)},
-                }
-            )
-            results.append(
-                {"role": "tool", "tool_call_id": call_id, "content": json.dumps(observation, ensure_ascii=False)}
-            )
-        messages.append(
-            {
-                "role": "assistant",
-                "content": "[开局资料] 宿主已代为读取自己、周围、能力清单和手上的目标；仍有效时直接使用，不重复读取。",
-                "tool_calls": calls,
-            }
-        )
-        messages.extend(results)
 
     def _visual_caller(self) -> bool:
         """本档位主模型能否看图（能力协商出口，ADR-037）。
@@ -1628,7 +1448,7 @@ class MinecraftAgent(BaseAgent):
 
     def _system_message(self) -> Dict[str, Any]:
         """任务历史开头的系统消息；附技能目录时带计量标注，上下文面板据此把它记入技能段。"""
-        catalog = self._skill_catalog_section()
+        catalog = self._skill_support.catalog_section()
         message: Dict[str, Any] = {"role": "system", "content": self._system_prompt() + catalog}
         if catalog:
             message["context_parts"] = [{"section": SECTION_SKILLS, "name": "技能目录", "text": catalog}]
