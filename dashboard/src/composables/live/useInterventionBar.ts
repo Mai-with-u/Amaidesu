@@ -108,7 +108,7 @@ export function useInterventionBar(options: { settle: () => Promise<void> }) {
             }
           })
           .catch((error: unknown) => {
-            ElMessage.error(error instanceof Error ? error.message : '测试执行失败');
+            ElMessage.error(getApiErrorMessage(error, '测试执行失败'));
           })
           .finally(() => {
             forcePending.value = Math.max(0, forcePending.value - 1);

@@ -12,6 +12,7 @@
 import { computed, reactive, ref, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { rundownApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
 import { confirmAction } from '@/utils/confirmAction';
 import type { RundownDefinition, RundownSegmentView, RundownStateResponse } from '@/types';
 
@@ -52,7 +53,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
       }
       libraryItems.value = res.data.rundowns;
     } catch (e) {
-      ElMessage.error(e instanceof Error ? e.message : '流程单库加载失败');
+      ElMessage.error(getApiErrorMessage(e, '流程单库加载失败'));
     } finally {
       libraryLoading.value = false;
     }
@@ -98,7 +99,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
       editorOriginalId.value = '';
       editorOpen.value = true;
     } catch (e) {
-      ElMessage.error(e instanceof Error ? e.message : '模板加载失败');
+      ElMessage.error(getApiErrorMessage(e, '模板加载失败'));
     }
   }
 
@@ -160,7 +161,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
       void fetchState({ silent: true });
       if (libraryOpen.value) await fetchLibrary();
     } catch (e) {
-      ElMessage.error(e instanceof Error ? e.message : '保存失败');
+      ElMessage.error(getApiErrorMessage(e, '保存失败'));
     } finally {
       editorSaving.value = false;
     }
@@ -285,7 +286,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
       ElMessage.success(res.data.message || '已删除');
       await fetchLibrary();
     } catch (e) {
-      ElMessage.error(e instanceof Error ? e.message : '删除失败');
+      ElMessage.error(getApiErrorMessage(e, '删除失败'));
     }
   }
 
@@ -299,7 +300,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
       ElMessage.success(`已复制为 ${res.data.rundown_id}`);
       await fetchLibrary();
     } catch (e) {
-      ElMessage.error(e instanceof Error ? e.message : '复制失败');
+      ElMessage.error(getApiErrorMessage(e, '复制失败'));
     }
   }
 
@@ -315,7 +316,7 @@ export function useRundownLibrary(options: UseRundownLibraryOptions) {
       // 只刷库列表会让它们停留在旧值
       await Promise.all([fetchLibrary(), fetchState({ silent: true })]);
     } catch (e) {
-      ElMessage.error(e instanceof Error ? e.message : '设置失败');
+      ElMessage.error(getApiErrorMessage(e, '设置失败'));
     }
   }
 

@@ -13,6 +13,7 @@ import { ElMessage } from 'element-plus';
 import { rundownApi } from '@/api';
 import { wsClient } from '@/api/websocket';
 import { useNowTick } from '@/composables/useNowTick';
+import { getApiErrorMessage } from '@/utils/apiError';
 import type {
   RundownControlAction,
   RundownControlResponse,
@@ -126,7 +127,7 @@ export function useRundownState() {
       // 本地 tick 从该基准起算已播时长，吸收取数耗时造成的漂移
       snapshotBaselineMs.value = Date.now();
     } catch (e) {
-      loadError.value = e instanceof Error ? e.message : '无法加载流程单状态';
+      loadError.value = getApiErrorMessage(e, '无法加载流程单状态');
       state.value = null;
     } finally {
       initialLoading.value = false;
@@ -164,7 +165,7 @@ export function useRundownState() {
       }
       return data.snapshot;
     } catch (e) {
-      ElMessage.error(e instanceof Error ? e.message : '操作失败');
+      ElMessage.error(getApiErrorMessage(e, '操作失败'));
       return null;
     } finally {
       actionLoading.value = null;

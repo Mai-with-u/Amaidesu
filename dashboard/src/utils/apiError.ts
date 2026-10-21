@@ -3,8 +3,6 @@
  *
  * axios 错误穿透后端 `{ detail }`（FastAPI 的 400/404/409/422 detail 均为
  * 中文业务文案），其次取 Error.message，兜底返回调用方给定的 fallback。
- * 与既有局部提取器（extractReconnectDetail / extractInvokeDetail /
- * extractHttpError / extractAgentError）同语义，属其收敛归一。
  */
 
 export function getApiErrorMessage(error: unknown, fallback: string): string {

@@ -12,6 +12,7 @@ import { storeToRefs } from 'pinia';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { liveSessionsApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
 import { buildReplayEntries } from '@/utils/replayFeed';
 import {
   MAX_ENTRIES,
@@ -108,7 +109,7 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
       replayHasMore.value = response.data.has_more;
       replayPruned.value = response.data.events_pruned;
     } catch (error) {
-      ElMessage.error(error instanceof Error ? error.message : '回看加载失败');
+      ElMessage.error(getApiErrorMessage(error, '回看加载失败'));
       replayEntries.value = [];
       replayHasMore.value = false;
       replayPruned.value = false;
@@ -140,7 +141,7 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
       replayHasMore.value = response.data.has_more;
       replayPruned.value = replayPruned.value || response.data.events_pruned;
     } catch (error) {
-      ElMessage.error(error instanceof Error ? error.message : '更早内容加载失败');
+      ElMessage.error(getApiErrorMessage(error, '更早内容加载失败'));
     } finally {
       replayLoadingMore.value = false;
     }

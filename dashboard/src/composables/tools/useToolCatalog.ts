@@ -5,6 +5,7 @@
 
 import { computed, ref, watch } from 'vue';
 import { toolsApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
 import type { ToolCategoryView, ToolEntry, ToolProviderUnit } from '@/types';
 
 const CATEGORY_META: Record<string, { label: string; description: string }> = {
@@ -42,7 +43,7 @@ export function useToolCatalog() {
       tools.value = toolResp.data.tools ?? [];
       ensureActiveCategory();
     } catch (e) {
-      error.value = e instanceof Error ? e.message : '无法加载工具数据';
+      error.value = getApiErrorMessage(e, '无法加载工具数据');
       categories.value = [];
       tools.value = [];
     } finally {

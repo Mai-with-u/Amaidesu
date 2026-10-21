@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { componentApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
 import type {
   ComponentControlAction,
   ComponentControlResponse,
@@ -35,7 +36,7 @@ export const useComponentsStore = defineStore('components', () => {
       const response = await componentApi.getAll();
       components.value = response.data;
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to fetch components';
+      error.value = getApiErrorMessage(e, 'Failed to fetch components');
     } finally {
       loading.value = false;
     }
@@ -100,7 +101,7 @@ export const useComponentsStore = defineStore('components', () => {
         messages.push(r.value.message);
       } else {
         failed++;
-        const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        const reason = getApiErrorMessage(r.reason, String(r.reason));
         messages.push(reason);
       }
     });

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { systemApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
 import type { SystemStatusResponse } from '@/types';
 import { useComponentsStore } from './components';
 
@@ -22,7 +23,7 @@ export const useSystemStore = defineStore('system', () => {
       const response = await systemApi.getStatus();
       status.value = response.data;
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to fetch status';
+      error.value = getApiErrorMessage(e, 'Failed to fetch status');
     } finally {
       loading.value = false;
     }

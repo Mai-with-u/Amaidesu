@@ -6,6 +6,7 @@
 import { computed, reactive, ref, watch, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useComponentsStore } from '@/stores';
+import { getApiErrorMessage } from '@/utils/apiError';
 import type { ComponentControlAction, ComponentSummary, WebSocketMessage } from '@/types';
 
 /** 事件流缓冲上限；超出从头丢弃 */
@@ -86,7 +87,7 @@ export function useComponentMasterDetail<TItem extends ComponentStreamItem>(
       const result = await componentsStore.controlComponent(options.domain, name, action);
       ElMessage.success(result.message);
     } catch (error) {
-      ElMessage.error(error instanceof Error ? error.message : '操作失败');
+      ElMessage.error(getApiErrorMessage(error, '操作失败'));
     } finally {
       controlPending[key] = false;
       options.afterControl?.();
