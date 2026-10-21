@@ -38,7 +38,7 @@ describe('useExpressionSheetWidget', () => {
 
   type WidgetDeps = Parameters<typeof useExpressionSheetWidget>[0];
 
-function run(deps: WidgetDeps) {
+  function run(deps: WidgetDeps) {
     const scope = effectScope();
     scopes.push(scope);
     return scope.run(() => useExpressionSheetWidget(deps))!;
@@ -85,7 +85,9 @@ function run(deps: WidgetDeps) {
     const sub = new FakeSubscription();
     const scope = effectScope();
     scopes.push(scope);
-    scope.run(() => useExpressionSheetWidget({ subscribe: sub.subscribe, unsubscribe: sub.unsubscribe }));
+    scope.run(() =>
+      useExpressionSheetWidget({ subscribe: sub.subscribe, unsubscribe: sub.unsubscribe }),
+    );
     expect(sub.unsubscribed).toBe(false);
 
     scope.stop();

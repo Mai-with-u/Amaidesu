@@ -45,7 +45,8 @@ const borderColor = ref<string>('#ff8800');
 const position = ref<SubtitlePosition>('bottom');
 
 const containerStyle = computed(() => ({
-  alignItems: position.value === 'top' ? 'flex-start' : position.value === 'center' ? 'center' : 'flex-end',
+  alignItems:
+    position.value === 'top' ? 'flex-start' : position.value === 'center' ? 'center' : 'flex-end',
   paddingBottom: position.value === 'bottom' ? '30px' : '0',
   paddingTop: position.value === 'top' ? '30px' : '0',
 }));

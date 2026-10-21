@@ -23,7 +23,10 @@ interface RawWebSocketHandlers {
   onMessage: (event: MessageEvent) => void;
 }
 
-export function useRawWebSocket(path: string, handlers: RawWebSocketHandlers): {
+export function useRawWebSocket(
+  path: string,
+  handlers: RawWebSocketHandlers,
+): {
   status: Ref<WidgetSocketStatus>;
 } {
   let ws: WebSocket | null = null;

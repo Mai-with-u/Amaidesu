@@ -6,7 +6,12 @@ describe('useWidgetCatalog', () => {
   const { widgets } = useWidgetCatalog();
 
   it('目录含弹幕/字幕/差分立绘/2048 四个条目', () => {
-    expect(widgets.map(w => w.key)).toEqual(['danmaku', 'subtitle', 'expression_sheet', 'game2048']);
+    expect(widgets.map(w => w.key)).toEqual([
+      'danmaku',
+      'subtitle',
+      'expression_sheet',
+      'game2048',
+    ]);
   });
 
   it('嵌入页路径唯一且统一挂在 /widget/ 前缀下', () => {

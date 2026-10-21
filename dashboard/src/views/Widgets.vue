@@ -34,10 +34,22 @@
             <div class="url-row">
               <code class="path-code">{{ fullUrl }}</code>
               <button type="button" class="action-button" @click="copyEmbedUrl">复制</button>
-              <a class="action-button" :href="fullUrl" target="_blank" rel="noopener" title="与 OBS 嵌入效果完全一致">
+              <a
+                class="action-button"
+                :href="fullUrl"
+                target="_blank"
+                rel="noopener"
+                title="与 OBS 嵌入效果完全一致"
+              >
                 打开正式
               </a>
-              <a class="action-button" :href="previewUrl" target="_blank" rel="noopener" title="额外显示排查提示（如未配置占位）">
+              <a
+                class="action-button"
+                :href="previewUrl"
+                target="_blank"
+                rel="noopener"
+                title="额外显示排查提示（如未配置占位）"
+              >
                 打开预览
               </a>
             </div>
@@ -89,7 +101,12 @@
           <dt class="field-label">配置</dt>
           <dd class="field-value">
             {{ configLoadFailed ? '配置读取失败' : '配置加载中…' }}
-            <button v-if="configLoadFailed" type="button" class="action-button" @click="refreshConfig">
+            <button
+              v-if="configLoadFailed"
+              type="button"
+              class="action-button"
+              @click="refreshConfig"
+            >
               重试
             </button>
           </dd>
@@ -97,8 +114,8 @@
         <div class="field">
           <dt class="field-label">使用方式</dt>
           <dd class="field-value">
-            在直播软件里添加「浏览器源」，粘贴上方网址，宽高按推荐尺寸设置。
-            「打开正式」与 OBS 嵌入后的效果完全一致；「打开预览」会额外显示排查提示。
+            在直播软件里添加「浏览器源」，粘贴上方网址，宽高按推荐尺寸设置。 「打开正式」与 OBS
+            嵌入后的效果完全一致；「打开预览」会额外显示排查提示。
           </dd>
         </div>
       </dl>
@@ -168,7 +185,10 @@ function readSection(source: unknown, key: string): Record<string, unknown> | un
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
 }
 
-function readEnabled(dashboard: Record<string, unknown> | undefined, key: string): boolean | undefined {
+function readEnabled(
+  dashboard: Record<string, unknown> | undefined,
+  key: string,
+): boolean | undefined {
   const widget = readSection(dashboard, key);
   const enabled = widget?.['enabled'];
   return typeof enabled === 'boolean' ? enabled : undefined;
@@ -181,7 +201,9 @@ const fullUrl = computed(() =>
   selected.value ? buildWidgetUrl(window.location.origin, selected.value.path) : '',
 );
 const previewUrl = computed(() =>
-  selected.value ? buildWidgetUrl(window.location.origin, selected.value.path, { preview: true }) : '',
+  selected.value
+    ? buildWidgetUrl(window.location.origin, selected.value.path, { preview: true })
+    : '',
 );
 
 async function copyEmbedUrl(): Promise<void> {
@@ -238,12 +260,36 @@ const FIELD_DEFS: Record<string, readonly WidgetFieldDef[]> = {
     { key: 'show_guard', label: '大航海', type: 'switch', fallback: true },
     { key: 'show_enter', label: '进场消息', type: 'switch', fallback: false },
     { key: 'show_reply', label: 'AI 回复', type: 'switch', fallback: true },
-    { key: 'min_importance', label: '最小重要性', type: 'number', min: 0, max: 1, step: 0.05, fallback: 0 },
-    { key: 'max_messages', label: '最大消息数', type: 'number', min: 5, max: 100, step: 1, fallback: 30 },
+    {
+      key: 'min_importance',
+      label: '最小重要性',
+      type: 'number',
+      min: 0,
+      max: 1,
+      step: 0.05,
+      fallback: 0,
+    },
+    {
+      key: 'max_messages',
+      label: '最大消息数',
+      type: 'number',
+      min: 5,
+      max: 100,
+      step: 1,
+      fallback: 30,
+    },
   ],
   subtitle: [
     { key: 'enabled', label: '启用小部件', type: 'switch', fallback: true },
-    { key: 'font_size', label: '字体大小', type: 'number', min: 12, max: 72, step: 1, fallback: 32 },
+    {
+      key: 'font_size',
+      label: '字体大小',
+      type: 'number',
+      min: 12,
+      max: 72,
+      step: 1,
+      fallback: 32,
+    },
     { key: 'font_color', label: '字体颜色', type: 'text', fallback: '#ffffff' },
     { key: 'background_color', label: '背景颜色', type: 'text', fallback: 'rgba(0,0,0,0.45)' },
     { key: 'border_color', label: '边框颜色', type: 'text', fallback: '#ff8800' },
@@ -271,7 +317,7 @@ const snapshots = ref<Record<string, string>>({});
 const viewSections = ref<Record<string, Record<string, unknown>>>({});
 const saving = ref(false);
 
-const formFields = computed(() => (selected.value ? FIELD_DEFS[selected.value.key] ?? [] : []));
+const formFields = computed(() => (selected.value ? (FIELD_DEFS[selected.value.key] ?? []) : []));
 
 const dirty = computed(() => {
   const key = selected.value?.key;
@@ -420,7 +466,9 @@ async function saveWidgetConfig(): Promise<void> {
   color: var(--text-regular);
   text-align: left;
   cursor: pointer;
-  transition: background-color var(--transition-fast), color var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .widget-item:hover {
@@ -523,7 +571,9 @@ async function saveWidgetConfig(): Promise<void> {
   font-size: 13px;
   cursor: pointer;
   text-decoration: none;
-  transition: background-color var(--transition-fast), color var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .action-button:hover {
