@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from src.modules.events.payloads.room import RoomMessagePayload
-from src.modules.time_utils import now_ms as _real_now_ms
+from src.modules.utils.time_utils import now_ms as _real_now_ms
 
 __all__ = ["RoomStateSnapshot", "RoomState"]
 

@@ -96,6 +96,7 @@ class VoiceboxProvider:
 
         self._session = aiohttp.ClientSession()
 
+        # 函数内 import：src.modules.audio 顶层即拉起 numpy（重型数值依赖），仅在需要音频设备管理时加载
         from src.modules.audio import AudioDeviceManager
 
         manager = AudioDeviceManager(

@@ -15,7 +15,7 @@ import sqlite3
 from typing import List, Optional
 
 from src.modules.storage.repos._base import BaseRepo
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 
 class SessionRecapRepo(BaseRepo):

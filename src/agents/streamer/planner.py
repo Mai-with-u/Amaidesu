@@ -49,7 +49,7 @@ from src.agents.streamer.timeline import GameEventBatch
 from src.modules.context import TailImages
 from src.modules.agents.control import PROVIDER_NAME as FRAMEWORK_PROVIDER
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
 from src.modules.tools.models import ToolInvocation
 from src.modules.vision.image_store import get_image_store

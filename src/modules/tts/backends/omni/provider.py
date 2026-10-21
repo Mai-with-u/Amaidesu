@@ -127,6 +127,7 @@ class OmniTTSProvider:
         if self.tts_lock is None:
             self.tts_lock = asyncio.Lock()
 
+        # 函数内 import：src.modules.audio 顶层即拉起 numpy（重型数值依赖），仅在需要音频设备管理时加载
         from src.modules.audio import AudioDeviceManager
 
         manager = AudioDeviceManager(
@@ -248,6 +249,7 @@ class OmniTTSProvider:
         函数体内导入：单元测试 patch wav_decoder.extract_pcm_from_wav 拦截
         解码，顶部导入会使 patch 失效。
         """
+        # 测试可 mock 性：调用期绑定使测试对 wav_decoder 模块属性的 patch 生效（见上 docstring）
         from src.modules.tts.wav_decoder import extract_pcm_from_wav
 
         wav_bytes = base64.b64decode(audio_base64)

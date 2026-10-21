@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, Optional
 
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 # 讯飞听写协议帧状态码：首帧 / 中间帧 / 末帧
 STATUS_FIRST_FRAME = 0

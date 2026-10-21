@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 from src.modules.events.event_history import EventRecord
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_history import EventHistoryService

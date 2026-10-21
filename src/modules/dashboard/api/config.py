@@ -47,7 +47,7 @@ from src.modules.dashboard.services.config_adapter import (
 )
 from src.modules.dashboard.utils.component_helper import config_dir as get_config_dir
 from src.modules.logging import get_logger
-from src.modules.task_utils import spawn_background_task
+from src.modules.utils.task_utils import spawn_background_task
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer

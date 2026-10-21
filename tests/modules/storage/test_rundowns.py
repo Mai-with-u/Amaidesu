@@ -12,7 +12,7 @@ from src.modules.storage import SCHEMA_VERSION, list_expected_tables
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown, RundownSegment
 from src.modules.storage.schema import build_schema_sql
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 
 def _make_rundown(rundown_id: str, title: str = "测试流程单", expected_ms: int = 10_000) -> Rundown:

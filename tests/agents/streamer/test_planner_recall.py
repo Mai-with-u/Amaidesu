@@ -11,7 +11,7 @@ import pytest
 from src.agents.streamer.planner import Planner, _Intent
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import Response, ToolCall
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry

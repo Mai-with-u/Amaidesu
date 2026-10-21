@@ -50,7 +50,7 @@ from src.modules.simulator.seed_data import seed_simulator_data
 from src.modules.simulator.token_budget import TokenBudgetController
 from src.modules.simulator.types import StreamerContextSnapshot
 from src.modules.storage.repos import ChatRepo, SimRepo
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.config.service import ConfigService

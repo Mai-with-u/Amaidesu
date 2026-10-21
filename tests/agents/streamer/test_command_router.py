@@ -9,7 +9,7 @@ import pytest
 from src.agents.streamer.command.router import CommandRouter
 from src.agents.streamer.config import StreamerCommandConfig
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult
 
 

@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from src.modules.events.payloads.tool_health import ToolHealthPayload
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 
 if TYPE_CHECKING:

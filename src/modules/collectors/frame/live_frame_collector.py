@@ -30,7 +30,7 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.collectors.base import BaseCollector
 from src.modules.logging import get_logger, silence_third_party_logger
 from src.modules.studio.obs.obs_errors import describe_obs_error
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.vision.image_store import get_image_store
 from src.modules.vision.mss_capture import MssScreenCapture
 

@@ -20,7 +20,7 @@ from typing import Any, List
 
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.types.currency import to_cny
 from src.modules.types.guard_levels import GUARD_LEVEL_NAMES
 

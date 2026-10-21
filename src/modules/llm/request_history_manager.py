@@ -22,8 +22,8 @@ from pydantic import BaseModel, Field
 from src.modules.llm.observation import record_request
 from src.modules.logging import get_logger
 from src.modules.storage.repos.llm import LLMRequestInsert
-from src.modules.task_utils import spawn_background_task
-from src.modules.time_utils import now_ms
+from src.modules.utils.task_utils import spawn_background_task
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.storage.repos import LLMRepo

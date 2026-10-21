@@ -23,7 +23,7 @@ from PIL import Image, ImageColor, ImageFilter, ImageFont, ImageTk
 
 from src.modules.config.core_schemas import SubtitleGuiParams
 from src.modules.logging import ModuleLogger, get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 try:
     import customtkinter as ctk
@@ -74,7 +74,7 @@ def _virtual_screen_bounds() -> Optional[Tuple[int, int, int, int]]:
 
     口径是物理像素，与 Tk 的窗口位置参数（``geometry`` 的 ``+x+y``、事件里的
     ``x_root``）同口径——前提是进程为 per-monitor DPI 感知，见
-    ``src.modules.windows_dpi``。
+    ``src.modules.utils.windows_dpi``。
     """
     try:
         user32 = ctypes.windll.user32

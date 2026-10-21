@@ -16,7 +16,7 @@ from src.modules.agents.manager import AgentManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger

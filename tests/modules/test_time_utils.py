@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.modules.time_utils import elapsed_ms, format_duration_ms, ms_to_datetime, now_ms
+from src.modules.utils.time_utils import elapsed_ms, format_duration_ms, ms_to_datetime, now_ms
 
 
 def test_now_ms_is_a_13_digit_int_within_the_unix_ms_range_and_never_goes_back() -> None:
@@ -16,7 +16,7 @@ def test_now_ms_is_a_13_digit_int_within_the_unix_ms_range_and_never_goes_back()
 
 
 def test_elapsed_ms_measures_from_start_and_clamps_future_start_to_zero() -> None:
-    with patch("src.modules.time_utils.now_ms", return_value=10_000):
+    with patch("src.modules.utils.time_utils.now_ms", return_value=10_000):
         assert elapsed_ms(9_900) == 100
         assert elapsed_ms(10_000) == 0
         assert elapsed_ms(70_000) == 0  # start 在未来：不返回负数

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.registry import ToolRegistry
 from tests.agents.streamer.helpers import make_streamer_agent

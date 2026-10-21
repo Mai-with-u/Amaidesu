@@ -21,7 +21,7 @@ from pydantic import ConfigDict, Field
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 #: 叙事种类（判别字段取值；与 9 个事件名末段一一对应）
 BodyKind = Literal[

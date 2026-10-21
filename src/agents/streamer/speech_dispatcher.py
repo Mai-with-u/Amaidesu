@@ -26,7 +26,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import ModuleLogger, get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 from .utterance_queue import (
     DEFAULT_MAX_QUEUE,

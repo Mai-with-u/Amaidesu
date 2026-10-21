@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
-from src.modules.time_utils import now_ms as _real_now_ms
+from src.modules.utils.time_utils import now_ms as _real_now_ms
 
 from .canonical import canonical_content
 from .room_state import RoomState

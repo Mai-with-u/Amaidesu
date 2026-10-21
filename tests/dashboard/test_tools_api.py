@@ -15,7 +15,7 @@ from src.modules.config.service import ConfigService
 from src.modules.dashboard.api.router import create_app
 from src.modules.dashboard.dependencies import get_dashboard_server, set_dashboard_server
 from src.modules.dashboard.server import DashboardServer
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolSpec
 
 

@@ -27,7 +27,7 @@ from src.modules.dashboard.schemas.debug import (
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer

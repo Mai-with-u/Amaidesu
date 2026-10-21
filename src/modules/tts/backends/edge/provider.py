@@ -217,6 +217,7 @@ class EdgeTTSProvider:
 
     def _setup_audio_device(self) -> None:
         """初始化音频设备管理器（统一走系统默认输出设备）"""
+        # 函数内 import：src.modules.audio 顶层即拉起 numpy（重型数值依赖），仅在需要音频设备管理时加载
         from src.modules.audio import AudioDeviceManager
 
         manager = AudioDeviceManager(sample_rate=48000, channels=1, dtype=np.float32, sink=self.audio_sink)

@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 
 import pytest
 
-from src.modules import windows_dpi
+from src.modules.utils import windows_dpi
 
 
 class _FakeFunc:

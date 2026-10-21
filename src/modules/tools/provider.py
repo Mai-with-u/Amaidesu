@@ -58,7 +58,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, ClassVar, Iterable, List, Optional, Protocol, runtime_checkable
 
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 
 # MCP 外部扩展提供者的分类：工具页分组与上下文计量据此区分 MCP 工具与内置工具

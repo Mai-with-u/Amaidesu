@@ -23,7 +23,7 @@ from src.modules.events.payloads.planner import (
 )
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import ModuleLogger, get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 from .planner import Planner
 from .timeline import GameEventBatch

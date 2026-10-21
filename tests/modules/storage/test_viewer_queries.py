@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.modules.storage.database import SQLiteDatabase
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 PLATFORM = "bilibili"
 BASE = 1_700_000_000_000

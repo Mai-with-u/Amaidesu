@@ -25,7 +25,7 @@ from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.web.engines import SearchHit, build_fetch_engine, build_search_engine

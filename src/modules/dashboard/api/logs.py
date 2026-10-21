@@ -21,7 +21,7 @@ from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.logs import LogEntryItem, LogQueryResponse
 from src.modules.dashboard.services.log_query import LogHistoryReader
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer

@@ -11,7 +11,7 @@ from src.agents.streamer.planner import Planner
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import make_streamer_agent
 
 

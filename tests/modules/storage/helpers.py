@@ -13,7 +13,7 @@ from src.modules.events.payloads.room import (
     RoomMessageUser,
     SuperChatInfo,
 )
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 # 测试默认平台标识（B 站链路）
 DEFAULT_PLATFORM = "bilibili"

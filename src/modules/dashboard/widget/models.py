@@ -10,7 +10,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
 
 

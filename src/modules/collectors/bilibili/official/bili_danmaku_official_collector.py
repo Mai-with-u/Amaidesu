@@ -29,7 +29,7 @@ from src.modules.events.payloads.room import (
 )
 from src.modules.events.payloads.room_state import RoomStateWatchedPayload
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.types.bili import (
     BiliBaseMessage,
     BiliMessageType,

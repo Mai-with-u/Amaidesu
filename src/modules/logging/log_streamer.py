@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger as loguru_logger
 
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.dashboard.websocket.handler import WebSocketHandler

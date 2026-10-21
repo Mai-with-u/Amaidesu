@@ -15,7 +15,7 @@ from typing import Any, AsyncIterator, Optional
 
 from src.modules.events.payloads.base import BasePayload
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 # EventBus 类型提示（避免循环依赖；实际注入由 CollectorManager 完成）
 EventBusLike = Any

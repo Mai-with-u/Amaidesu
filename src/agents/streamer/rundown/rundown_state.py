@@ -37,7 +37,7 @@ from typing import Any, Callable, Deque, Dict, List, Literal, Optional, cast
 
 from src.modules.logging import get_logger
 from src.modules.storage.models.rundown import Rundown, RundownInstance, RundownSegment
-from src.modules.time_utils import now_ms as _real_now_ms
+from src.modules.utils.time_utils import now_ms as _real_now_ms
 
 
 __all__ = [

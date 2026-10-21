@@ -74,7 +74,7 @@ from src.modules.tools.tasks import resolve_tasks_config
 from src.modules.tools.bootstrap import bind_core_tools
 from src.modules.vision.look_at_screen import LookAtScreenProvider, LlmVisionTextReader
 from src.modules.vision.mss_capture import MssScreenCapture
-from src.modules.windows_dpi import setup_process_dpi_awareness
+from src.modules.utils.windows_dpi import setup_process_dpi_awareness
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))

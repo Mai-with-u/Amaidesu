@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field
 
 from src.modules.events.payloads.base import BasePayload
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 
 # 注意：ToolHealthPayload **不注册**到具体 ``tool.health.*`` 事件名

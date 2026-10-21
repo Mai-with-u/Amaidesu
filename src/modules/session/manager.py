@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, List, Optional
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 from src.modules.storage.repos import ChatRepo, SessionRepo
 from src.modules.types.currency import to_cny

@@ -53,10 +53,10 @@ from src.modules.storage.models.rundown import (
     RundownSegment,
     RundownTransition,
 )
-from src.modules.task_utils import spawn_background_task
+from src.modules.utils.task_utils import spawn_background_task
 from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.room_state import RoomStateWatchedPayload
 from src.modules.vision.image_store import get_image_store

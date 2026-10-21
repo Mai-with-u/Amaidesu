@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import ModuleLogger, get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolInvocation
 
 from .command_parser import CommandParser

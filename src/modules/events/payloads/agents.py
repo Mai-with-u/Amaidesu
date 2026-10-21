@@ -14,7 +14,7 @@ from pydantic import Field
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 
 @register_event(CoreEvents.AGENT_PROMPTED)

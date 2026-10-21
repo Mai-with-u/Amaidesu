@@ -49,7 +49,7 @@ from src.modules.dashboard.services.tool_catalog import (
 from src.modules.dashboard.schemas.tool_catalog import ToolCatalogResponse
 from src.modules.dashboard.utils.component_helper import config_dir, read_toml_dict
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 
 if TYPE_CHECKING:

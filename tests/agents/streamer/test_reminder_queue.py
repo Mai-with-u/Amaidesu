@@ -8,7 +8,7 @@ import pytest
 
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import make_streamer_agent
 
 

@@ -18,7 +18,7 @@ from src.modules.dashboard.schemas.event import (
     WebSocketMessage,
 )
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 logger = get_logger("WebSocketHandler")
 

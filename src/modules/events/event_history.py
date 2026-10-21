@@ -20,7 +20,7 @@ from typing import Any, Deque, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 
 # 默认参数

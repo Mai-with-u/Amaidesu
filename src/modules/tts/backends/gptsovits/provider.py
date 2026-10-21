@@ -121,6 +121,7 @@ class GPTSoVITSProvider:
                 "ref_audio_path（相对 GPT-SoVITS 根目录）与 prompt_text（参考音频转写），否则合成将失败"
             )
 
+        # 函数内 import：src.modules.audio 顶层即拉起 numpy（重型数值依赖），仅在需要音频设备管理时加载
         from src.modules.audio import AudioDeviceManager
 
         manager = AudioDeviceManager(

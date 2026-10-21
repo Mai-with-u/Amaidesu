@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Union
 
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 logger = get_logger("DiagnosticsWriter")
 

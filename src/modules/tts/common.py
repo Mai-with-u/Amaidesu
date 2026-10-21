@@ -29,7 +29,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
 )
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus

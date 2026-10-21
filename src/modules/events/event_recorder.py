@@ -21,7 +21,7 @@ from src.modules.events.event_history import EventRecord, EventHistoryService, i
 from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE
 from src.modules.events.payloads.base import BasePayload, OpenPayload
 from src.modules.logging import get_logger
-from src.modules.time_utils import now_ms
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.diagnostics.writer import DiagnosticsWriter
