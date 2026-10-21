@@ -203,6 +203,12 @@ class DashboardServer:
             async def serve_spa(full_path: str) -> FileResponse | Dict[str, str]:
                 if full_path.startswith("api/") or full_path == "ws":
                     return {"detail": "Not Found"}
+                # dist 根下的真实文件（public/ 拷贝物如 icon.png）优先于 SPA 回退：
+                # 只挂 /assets 时这类路径会拿到 index.html，浏览器把 HTML 当图片
+                candidate = DASHBOARD_DIST / full_path
+                if full_path and candidate.is_file() and candidate.resolve().is_relative_to(DASHBOARD_DIST.resolve()):
+                    # 与 index.html 同理 no-cache：icon.png 等未带内容 hash，重验避免换图后失效
+                    return FileResponse(str(candidate), headers={"Cache-Control": "no-cache"})
                 # no-cache 强制每次重验（未变时 304）：后端重建后标签页必须拿到新 index，
                 # 否则启发式缓存会让旧入口引用已被清掉的 chunk hash，懒加载路由卡死
                 return FileResponse(str(DASHBOARD_DIST / "index.html"), headers={"Cache-Control": "no-cache"})
