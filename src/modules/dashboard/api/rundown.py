@@ -5,6 +5,9 @@
 - ``GET  /api/v1/rundown/state``   — 整场快照 + 变更历史 + 环节清单
 - ``POST /api/v1/rundown/control`` — pause / resume / next / goto
 
+本模块只负责直播运行态的编排控制；流程单库的增删改查见 rundowns.py
+（``/api/v1/rundowns``），两者职责不同。
+
 数据来源
 --------
 - 运行时态 → :class:`StreamerAgent` 公开门面（``get_rundown_view`` / ``rundown_control``），

@@ -9,6 +9,9 @@
 - ``POST   /api/v1/rundowns/{id}/duplicate`` — 复制
 - ``POST   /api/v1/rundowns/{id}/activate``  — 设为当前（写配置 + 在线 Agent 热切运行态）
 
+本模块只负责流程单定义的持久化管理；直播运行态的查询与手动控制见
+rundown.py（``/api/v1/rundown``），两者职责不同。
+
 数据来源与职责切分
 ------------------
 - 存储读写 → ``RundownRepo``（组合根注入 ``DashboardServer.rundown_repo``）；
