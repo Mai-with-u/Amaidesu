@@ -29,6 +29,12 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from pydantic import Field
 
 from src.modules.avatar.speech_binding import bind_speech_emotion, bind_speaking_state
+from src.modules.avatar.tool_common import (
+    clamp_intensity,
+    contract_tool_specs,
+    dispatch_tool,
+    unknown_action_fail,
+)
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -42,7 +48,6 @@ from src.modules.tools.models import (
     tool_result_ok,
 )
 from src.modules.tools.provider import BaseToolProvider
-from src.modules.types.emotion_vocab import Emotion
 
 from .expression_controller import ExpressionController
 from .hotkey_matcher import HotkeyMatcher
@@ -56,36 +61,6 @@ if TYPE_CHECKING:
 # =============================================================================
 # 工具的 JSON Schema 描述
 # =============================================================================
-
-_VTS_SET_EXPRESSION_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "emotion": {
-            "type": "string",
-            "enum": [e.value for e in Emotion],
-            "description": "情绪（17 枚举值之一，小写）",
-        },
-        "intensity": {
-            "type": "number",
-            "minimum": 0.0,
-            "maximum": 1.0,
-            "default": 0.5,
-            "description": "情绪强度（0.0–1.0；1.0 为该情绪的完整幅度）",
-        },
-    },
-    "required": ["emotion"],
-}
-
-_VTS_TRIGGER_PRESET_ACTION_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "description": "预设动作名（取自 vts_list_preset_actions 返回的目录）",
-        },
-    },
-    "required": ["action"],
-}
 
 _VTS_SET_IDLE_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -416,59 +391,52 @@ class VTSProvider(BaseToolProvider):
         """
         if not self._is_connected:
             return []
-        return [
-            ToolSpec(
-                name="set_expression",
-                description="VTS 设置主播当前情绪（17 枚举值 + 强度，持续生效直至下次设置）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_VTS_SET_EXPRESSION_SCHEMA,
-            ),
-            ToolSpec(
-                name="list_preset_actions",
-                description="列出 VTS 可演的预设动作目录（连接后的热键清单；贴纸/道具已绑成热键的也在列）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-            ),
-            ToolSpec(
-                name="trigger_preset_action",
-                description="触发一个预设动作（动作名取自 vts_list_preset_actions 返回的目录）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_VTS_TRIGGER_PRESET_ACTION_SCHEMA,
-            ),
+        specs = contract_tool_specs(
+            self.PROVIDER_NAME,
+            set_expression="VTS 设置主播当前情绪（17 枚举值 + 强度，持续生效直至下次设置）",
+            list_preset_actions="列出 VTS 可演的预设动作目录（连接后的热键清单；贴纸/道具已绑成热键的也在列）",
+            trigger_preset_action="触发一个预设动作（动作名取自 vts_list_preset_actions 返回的目录）",
+        )
+        # set_idle_enabled 是 VTS 平台特有工具（非三平台契约面），声明就地追加
+        specs.append(
             ToolSpec(
                 name="set_idle_enabled",
                 description="VTS 启停 idle 拟人动画（呼吸/摆头/身体摇摆）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_SET_IDLE_SCHEMA,
-            ),
-        ]
+            )
+        )
+        return specs
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        """ToolProvider.invoke：分发到对应的 handler 方法。"""
+        """ToolProvider.invoke：分发到对应的 handler 方法。
+
+        handlers 为零参闭包字典，每次 invoke 现构造（捕获本次参数解析结果）。
+        """
         args = invocation.arguments or {}
-        try:
-            if invocation.tool_name == "vts_set_expression":
-                return await self.set_expression(
+
+        async def _set_idle_enabled_tool() -> ToolExecutionResult:
+            # set_idle_enabled 是"同步动作 + 固定 ok 返回"的本地操作，包一层异步
+            # 闭包适配 dispatch_tool 的统一 handler 形态（其余三个契约工具本体
+            # 即异步方法，无需包装；不对称是有意的）
+            self._set_idle_enabled(bool(args["enabled"]))
+            return tool_result_ok("vts_set_idle_enabled", True)
+
+        return await dispatch_tool(
+            invocation,
+            self.PROVIDER_NAME,
+            {
+                "vts_set_expression": lambda: self.set_expression(
                     str(args.get("emotion", "")),
                     float(args.get("intensity", 0.5)),
-                )
-            if invocation.tool_name == "vts_list_preset_actions":
-                return await self.list_preset_actions()
-            if invocation.tool_name == "vts_trigger_preset_action":
-                return await self.trigger_preset_action(str(args.get("action", "")))
-            if invocation.tool_name == "vts_set_idle_enabled":
-                self._set_idle_enabled(bool(args["enabled"]))
-                return tool_result_ok("vts_set_idle_enabled", True)
-            return tool_result_fail(
-                invocation.tool_name,
-                f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'",
-            )
-        except Exception as exc:  # noqa: BLE001 — Provider 边界兜底
-            self.logger.exception(f"VTS 工具 {invocation.tool_name} 调用异常: {exc}")
-            return tool_result_fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
+                ),
+                "vts_list_preset_actions": self.list_preset_actions,
+                "vts_trigger_preset_action": lambda: self.trigger_preset_action(str(args.get("action", ""))),
+                "vts_set_idle_enabled": _set_idle_enabled_tool,
+            },
+            self.logger,
+        )
 
     async def health_check(self) -> bool:
         """探活钩子（BaseToolProvider 契约：维护外部连接者必须真实检查）。
@@ -614,7 +582,7 @@ class VTSProvider(BaseToolProvider):
         params = self._emotion_map.get(emotion)
         if params is None:
             return tool_result_fail("vts_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
-        factor = min(1.0, max(0.0, float(intensity)))
+        factor = clamp_intensity(intensity)
         scaled = {name: value * factor for name, value in params.items()}
         success = await self.expression.set_multi_parameter(scaled, 1.0)
         return tool_result_ok(
@@ -642,13 +610,7 @@ class VTSProvider(BaseToolProvider):
         resolved = self.hotkey_matcher.find_by_name(action) if action else None
         if not resolved:
             catalog = [a["name"] for a in (await self.list_preset_actions()).structured_content["actions"]]
-            return ToolExecutionResult(
-                tool_name="vts_trigger_preset_action",
-                success=False,
-                error_message=f"未知预设动作 '{action}'",
-                structured_content={"available_actions": catalog},
-                content=str(catalog),
-            )
+            return unknown_action_fail("vts_trigger_preset_action", action, catalog)
         success = await self.hotkey_matcher.trigger_hotkey(resolved)
         return tool_result_ok("vts_trigger_preset_action", bool(success), {"action": action})
 

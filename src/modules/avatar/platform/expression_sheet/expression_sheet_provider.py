@@ -29,6 +29,7 @@ from typing import Any, Dict, Optional
 from pydantic import Field
 
 from src.modules.avatar.speech_binding import bind_speech_emotion
+from src.modules.avatar.tool_common import contract_tool_specs, dispatch_tool
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -45,36 +46,6 @@ FALLBACK_EMOTION = Emotion.NEUTRAL.value
 
 # 小部件页取图的静态路由前缀（dashboard 后端提供，见 dashboard/api/avatar.py）
 ASSET_URL_PREFIX = "/api/v1/avatar/expression_sheet/assets"
-
-_EXPRESSION_SHEET_SET_EXPRESSION_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "emotion": {
-            "type": "string",
-            "enum": [e.value for e in Emotion],
-            "description": "情绪（17 枚举值之一，小写）",
-        },
-        "intensity": {
-            "type": "number",
-            "minimum": 0.0,
-            "maximum": 1.0,
-            "default": 0.5,
-            "description": "情绪强度（0.0–1.0）",
-        },
-    },
-    "required": ["emotion"],
-}
-
-_EXPRESSION_SHEET_TRIGGER_PRESET_ACTION_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "description": ("预设动作名（取自 expression_sheet_list_preset_actions 返回的目录）"),
-        },
-    },
-    "required": ["action"],
-}
 
 
 class ExpressionSheetProvider(BaseToolProvider):
@@ -158,43 +129,31 @@ class ExpressionSheetProvider(BaseToolProvider):
         """
         if not self.is_ready:
             return []
-        return [
-            ToolSpec(
-                name="set_expression",
-                description="表情差分形象切换主播当前情绪差分图（17 枚举值 + 强度，持续生效直至下次设置）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_EXPRESSION_SHEET_SET_EXPRESSION_SCHEMA,
-            ),
-            ToolSpec(
-                name="list_preset_actions",
-                description="列出表情差分形象可演的预设动作目录（当前为空目录，动作面后补）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-            ),
-            ToolSpec(
-                name="trigger_preset_action",
-                description="触发一个预设动作（动作名取自 expression_sheet_list_preset_actions 返回的目录）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_EXPRESSION_SHEET_TRIGGER_PRESET_ACTION_SCHEMA,
-            ),
-        ]
+        # 三个契约工具的声明样板走公共件；description 是平台文案，关键字传入
+        return contract_tool_specs(
+            self.PROVIDER_NAME,
+            set_expression="表情差分形象切换主播当前情绪差分图（17 枚举值 + 强度，持续生效直至下次设置）",
+            list_preset_actions="列出表情差分形象可演的预设动作目录（当前为空目录，动作面后补）",
+            trigger_preset_action="触发一个预设动作（动作名取自 expression_sheet_list_preset_actions 返回的目录）",
+        )
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        """分发到对应的 handler 方法（handlers 每次现构造，捕获本次参数）。"""
         args = invocation.arguments or {}
-        try:
-            n = invocation.tool_name
-            if n == "expression_sheet_set_expression":
-                return await self.set_expression(str(args.get("emotion", "")), float(args.get("intensity", 0.5)))
-            if n == "expression_sheet_list_preset_actions":
-                return await self.list_preset_actions()
-            if n == "expression_sheet_trigger_preset_action":
-                return await self.trigger_preset_action(str(args.get("action", "")))
-            return _fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
-        except Exception as exc:  # noqa: BLE001
-            self.logger.exception(f"表情差分工具 {invocation.tool_name} 调用异常: {exc}")
-            return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
+        return await dispatch_tool(
+            invocation,
+            self.PROVIDER_NAME,
+            {
+                "expression_sheet_set_expression": lambda: self.set_expression(
+                    str(args.get("emotion", "")), float(args.get("intensity", 0.5))
+                ),
+                "expression_sheet_list_preset_actions": self.list_preset_actions,
+                "expression_sheet_trigger_preset_action": lambda: self.trigger_preset_action(
+                    str(args.get("action", ""))
+                ),
+            },
+            self.logger,
+        )
 
     # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
 

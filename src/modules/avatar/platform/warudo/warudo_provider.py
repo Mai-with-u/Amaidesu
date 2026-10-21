@@ -23,13 +23,18 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 from pydantic import Field
 
 from src.modules.avatar.speech_binding import bind_speech_emotion, bind_speaking_state
+from src.modules.avatar.tool_common import (
+    clamp_intensity,
+    contract_tool_specs,
+    dispatch_tool,
+    unknown_action_fail,
+)
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec, tool_result_fail, tool_result_ok
 from src.modules.tools.provider import BaseToolProvider
-from src.modules.types.emotion_vocab import Emotion
 
 from .lip_sync_renderer import WarudoLipSyncRenderer
 from .state.warudo_state_manager import WarudoStateManager
@@ -55,38 +60,9 @@ except ImportError:
 
 
 # =============================================================================
-# 工具参数 Schema
+# 工具参数 Schema（契约工具三件套的 schema 走 avatar.tool_common 单一定义源；
+# 此处只留 Warudo 特有工具）
 # =============================================================================
-
-_WARUDO_SET_EXPRESSION_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "emotion": {
-            "type": "string",
-            "enum": [e.value for e in Emotion],
-            "description": "情绪（17 枚举值之一，小写）",
-        },
-        "intensity": {
-            "type": "number",
-            "minimum": 0.0,
-            "maximum": 1.0,
-            "default": 0.5,
-            "description": "情绪强度（0.0–1.0；1.0 为该情绪的完整幅度）",
-        },
-    },
-    "required": ["emotion"],
-}
-
-_WARUDO_TRIGGER_PRESET_ACTION_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "description": "预设动作名（取自 warudo_list_preset_actions 返回的目录）",
-        },
-    },
-    "required": ["action"],
-}
 
 _WARUDO_SET_SIGHT_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -278,52 +254,40 @@ class WarudoProvider(BaseToolProvider):
         """
         if not self._is_connected:
             return []
-        return [
-            ToolSpec(
-                name="set_expression",
-                description="Warudo 设置主播当前情绪（17 枚举值 + 强度，持续生效直至下次设置）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_SET_EXPRESSION_SCHEMA,
-            ),
-            ToolSpec(
-                name="list_preset_actions",
-                description="列出 Warudo 可演的预设动作目录（配置登记的蓝图动作 + 内置条目）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-            ),
-            ToolSpec(
-                name="trigger_preset_action",
-                description="触发一个预设动作（动作名取自 warudo_list_preset_actions 返回的目录）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_TRIGGER_PRESET_ACTION_SCHEMA,
-            ),
+        specs = contract_tool_specs(
+            self.PROVIDER_NAME,
+            set_expression="Warudo 设置主播当前情绪（17 枚举值 + 强度，持续生效直至下次设置）",
+            list_preset_actions="列出 Warudo 可演的预设动作目录（配置登记的蓝图动作 + 内置条目）",
+            trigger_preset_action="触发一个预设动作（动作名取自 warudo_list_preset_actions 返回的目录）",
+        )
+        # set_sight 是 Warudo 平台特有工具（非三平台契约面），声明就地追加
+        specs.append(
             ToolSpec(
                 name="set_sight",
                 description="Warudo 设置视线目标（看镜头/看弹幕/看手机）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_WARUDO_SET_SIGHT_SCHEMA,
-            ),
-        ]
+            )
+        )
+        return specs
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        """分发到对应的 handler 方法（handlers 每次现构造，捕获本次参数）。"""
         args = invocation.arguments or {}
-        try:
-            n = invocation.tool_name
-            if n == "warudo_set_expression":
-                return await self.set_expression(str(args.get("emotion", "")), float(args.get("intensity", 0.5)))
-            if n == "warudo_list_preset_actions":
-                return await self.list_preset_actions()
-            if n == "warudo_trigger_preset_action":
-                return await self.trigger_preset_action(str(args.get("action", "")))
-            if n == "warudo_set_sight":
-                return await self.set_sight(str(args.get("target", "")))
-            return tool_result_fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
-        except Exception as exc:  # noqa: BLE001 — Provider 边界兜底
-            self.logger.exception(f"Warudo 工具 {invocation.tool_name} 调用异常: {exc}")
-            return tool_result_fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
+        return await dispatch_tool(
+            invocation,
+            self.PROVIDER_NAME,
+            {
+                "warudo_set_expression": lambda: self.set_expression(
+                    str(args.get("emotion", "")), float(args.get("intensity", 0.5))
+                ),
+                "warudo_list_preset_actions": self.list_preset_actions,
+                "warudo_trigger_preset_action": lambda: self.trigger_preset_action(str(args.get("action", ""))),
+                "warudo_set_sight": lambda: self.set_sight(str(args.get("target", ""))),
+            },
+            self.logger,
+        )
 
     # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
 
@@ -336,7 +300,7 @@ class WarudoProvider(BaseToolProvider):
         states = _WARUDO_EMOTION_STATES.get(emotion)
         if states is None:
             return tool_result_fail("warudo_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
-        factor = min(1.0, max(0.0, float(intensity)))
+        factor = clamp_intensity(intensity)
         applied: Dict[str, Any] = {}
         state_manager = self.state_manager
         channels = {
@@ -376,13 +340,7 @@ class WarudoProvider(BaseToolProvider):
             await self._send_action_internal(action, 1)
             return tool_result_ok("warudo_trigger_preset_action", True, {"action": action})
         catalog = [entry["name"] for entry in self._preset_action_catalog()]
-        return ToolExecutionResult(
-            tool_name="warudo_trigger_preset_action",
-            success=False,
-            error_message=f"未知预设动作 '{action}'",
-            structured_content={"available_actions": catalog},
-            content=str(catalog),
-        )
+        return unknown_action_fail("warudo_trigger_preset_action", action, catalog)
 
     async def set_sight(self, target: str) -> ToolExecutionResult:
         """设置视线目标（camera/danmu/phone）；程度由适配器定（满幅）。"""
