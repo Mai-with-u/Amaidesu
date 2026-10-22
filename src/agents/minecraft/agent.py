@@ -46,6 +46,7 @@ from src.agents.minecraft.maicraft import (
     ledger_task_id,
     reply_of,
 )
+from src.agents.minecraft.repeated_notice import notice_present, repeat_reference
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, WakeEvenIdle
 from src.agents.minecraft.tools import MinecraftToolProvider
@@ -1153,7 +1154,7 @@ class MinecraftAgent(BaseAgent):
             # 死亡时 Mod 让目标停在原地，另挂一条死亡恢复决策等模型选（决策提问另由决策回调唤醒）；
             # 这里只说明来龙去脉、提醒复活后先看一眼自己，不催模型重下目标。
             if self._batch_active or not self._task_finished:
-                self._inject_wakeup_message(notice.format(message=message))
+                self._inject_wakeup_message(self._body_notice_content(kind, notice, message))
             await self._emit_game_event("attention_required", message)
             return
         if not self._batch_active or (kind, message) in self._body_notified:
@@ -1165,6 +1166,18 @@ class MinecraftAgent(BaseAgent):
             else f"身体处理完急事：{message}"
         )
         await self._emit_game_event("attention_required", notice, already_resolved=kind == "temporary_task_finished")
+
+    def _body_notice_content(self, kind: str, notice: str, message: str) -> str:
+        """身体通知交给模型的正文。
+
+        处理不了的需求（饿了没吃上的说明会列出每个来源没弄到的原因，常有几千字）和对话历史里、
+        或待读队列里一字不差的那条重复时，只留一句指回前面那条；前面那条已被历史整理换成摘要、
+        或根本还没读到时，指过去没有意义，完整展示。其余通知（角色死亡等）每次都是新事实，原样给。
+        """
+        content = notice.format(message=message)
+        if kind != "need_unhandled" or not notice_present(content, self._messages, self._message_queue):
+            return content
+        return repeat_reference(message)
 
     def _wake_for_timer(self, message: str) -> None:
         """计时到点：模型自己设的"过 N 秒叫我"到了，不管手上有没有任务都叫醒它，Mod 那句话原样带上。

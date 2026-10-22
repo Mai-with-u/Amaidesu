@@ -558,6 +558,91 @@ async def test_a_due_timer_is_dropped_while_off_air() -> None:
     await agent.stop()
 
 
+# 饿了没吃上：每个来源没弄到的原因逐个列出，真实说明常有几千字
+_HUNGRY_FAILURE = (
+    "饿了但没吃上：还要 8 个能吃的（饿了，弄点吃的），问过各来源都拿不到；箱子：附近没有；"
+    "打猎：附近没有动物；合成：身上没有材料；先回去继续干活，过一分钟再找吃的"
+)
+
+
+def _capture_injections(agent: MinecraftAgent) -> List[str]:
+    """记下交给模型的通知正文，不真的叫醒模型；任务置为进行中，通知才会注入。"""
+    captured: List[str] = []
+    agent._inject_wakeup_message = captured.append  # type: ignore[method-assign]
+    agent._task_finished = False
+    return captured
+
+
+def _need_unhandled(message: str, cursor: int) -> Dict[str, Any]:
+    return {"kind": "need_unhandled", "message": message, "cursor": cursor}
+
+
+async def test_a_repeated_need_unhandled_points_back_while_the_first_copy_is_in_history() -> None:
+    """同样的没吃上说明再来一遍，前面那份还在历史里：只留一句指回去，不再整段抄。"""
+    agent, _llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
+    captured = _capture_injections(agent)
+
+    await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 1))
+    assert len(captured) == 1 and "箱子：附近没有" in captured[0], "第一次完整展示"
+
+    # 第一份已经交给模型读过：它在历史里
+    agent._messages.append({"role": "user", "content": captured[0]})
+    await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 2))
+
+    assert len(captured) == 2
+    assert "箱子：附近没有" not in captured[1], captured[1]
+    assert "饿了但没吃上" in captured[1] and "没有新变化" in captured[1], captured[1]
+    await agent.stop()
+
+
+async def test_a_repeated_need_unhandled_points_back_while_the_first_copy_is_still_queued() -> None:
+    """前面那份还在排队、模型没读到：一样不重抄，两条一起读到时第二条指回第一条。"""
+    agent, _llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
+    captured = _capture_injections(agent)
+
+    await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 1))
+    agent._message_queue.append(("", captured[0]))
+    await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 2))
+
+    assert "箱子：附近没有" not in captured[1], captured[1]
+    await agent.stop()
+
+
+async def test_a_repeated_need_unhandled_is_shown_in_full_once_the_first_copy_is_compacted_away() -> None:
+    """历史整理把前面那份换成了摘要：指过去没有意义，重新完整展示。"""
+    agent, _llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
+    captured = _capture_injections(agent)
+
+    await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 1))
+    agent._messages[:] = [
+        {"role": "system", "content": "系统说明"},
+        {"role": "user", "content": "[历史推理摘要·第 1 段，不能覆盖原始要求]\n饿了没吃上，箱子和野外都没有吃的"},
+    ]
+    await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 2))
+
+    assert captured[1] == captured[0], "前面那份已不在历史里，要完整再给一次"
+    await agent.stop()
+
+
+async def test_a_different_need_unhandled_and_other_body_notices_are_always_shown_in_full() -> None:
+    """说明变了就是新事实；角色死亡这类通知每次都是新的，不套用指回前面那条。"""
+    agent, _llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
+    captured = _capture_injections(agent)
+
+    await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 1))
+    agent._messages.append({"role": "user", "content": captured[0]})
+    changed = _HUNGRY_FAILURE.replace("附近没有动物", "附近有牛但够不着")
+    await agent._on_body_event(_need_unhandled(changed, 2))
+    assert "够不着" in captured[1], "说明变了：完整展示"
+
+    died = {"kind": "character_died", "message": "角色死了：在 (1, 64, 2)", "cursor": 3}
+    await agent._on_body_event(died)
+    agent._messages.append({"role": "user", "content": captured[2]})
+    await agent._on_body_event(died)
+    assert captured[3] == captured[2], "死亡通知不去重"
+    await agent.stop()
+
+
 class _RemoteSkillsClient:
     """只实现资源接口的 MCP 客户端替身：目录一项，正文按地址返回。"""
 
