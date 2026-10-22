@@ -275,3 +275,54 @@ async def test_transport_failures_still_trip_the_tool() -> None:
         result = await registry.invoke(ToolInvocation(tool_name="reference_read"))
         assert not result.success and not client.connected
     assert registry.is_tripped("reference_read")
+
+
+async def _wait_until(predicate: Any, timeout_s: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while not predicate():
+        assert asyncio.get_running_loop().time() < deadline, "等待超时"
+        await asyncio.sleep(0.005)
+
+
+async def test_recovery_retries_until_tools_arrive_then_reports_once() -> None:
+    client, prov = _provider()
+    client._connected = False
+    assert await prov.setup() == 0
+    refreshed: List[int] = []
+    prov.on_tools_refreshed = refreshed.append
+
+    prov.start_recovery(base_delay_ms=1, cap_delay_ms=2)
+    prov.start_recovery(base_delay_ms=1, cap_delay_ms=2)  # 幂等：不会起第二个循环
+    await _wait_until(lambda: client.connect_calls >= 3)
+    assert prov.recovering and refreshed == []
+
+    client.set_tools([FakeTool("read_group", "读群")])
+    client.next_connect_result = True
+    await _wait_until(lambda: not prov.recovering)
+    assert refreshed == [1] and [s.full_name for s in prov.list_tools()] == ["serverA_read_group"]
+
+
+async def test_recovery_stops_quietly_when_reconnected_elsewhere() -> None:
+    client, prov = _provider()
+    client._connected = False
+    await prov.setup()
+    prov.start_recovery(base_delay_ms=20, cap_delay_ms=20)
+    client.set_tools([FakeTool("read_group", "读群")])
+    client.next_connect_result = True
+    assert await prov.reconnect() is True  # 面板手动重连先一步恢复
+    calls = client.connect_calls
+    await _wait_until(lambda: not prov.recovering)
+    assert client.connect_calls == calls  # 循环发现已恢复就退出，不再重连
+
+
+async def test_close_cancels_recovery_loop() -> None:
+    client, prov = _provider()
+    client._connected = False
+    await prov.setup()
+    prov.start_recovery(base_delay_ms=1, cap_delay_ms=2)
+    await _wait_until(lambda: client.connect_calls >= 2)
+    await prov.close()
+    assert not prov.recovering and client.close_calls == 1
+    calls = client.connect_calls
+    await asyncio.sleep(0.02)
+    assert client.connect_calls == calls

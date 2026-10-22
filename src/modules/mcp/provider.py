@@ -28,6 +28,7 @@ from src.modules.mcp.requests import McpRequestTimeout
 from src.modules.mcp.client import McpClient
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import MCP_CATEGORY, BaseToolProvider
+from src.modules.utils.backoff import ExponentialBackoff
 
 logger = get_logger("McpToolProvider")
 
@@ -99,6 +100,8 @@ class McpToolProvider(BaseToolProvider):
         # 重试）后才能赋值，只能在构造之后声明，故为公开属性
         self.on_tools_refreshed: Optional[Callable[[int], None]] = None
         self.switch_config: Optional[Dict[str, str]] = None
+        # 降级恢复循环（start_recovery 启动；拉到工具即止，close 时取消）
+        self._recover_task: Optional[asyncio.Task[None]] = None
 
     @property
     def name(self) -> str:
@@ -209,8 +212,47 @@ class McpToolProvider(BaseToolProvider):
         duration_ms = int(time.time() * 1000) - started_ms
         return mapper.to_result(result, tool_name=full_name, duration_ms=duration_ms)
 
+    def start_recovery(self, *, base_delay_ms: int = 5000, cap_delay_ms: int = 60000) -> None:
+        """降级登记后的后台恢复：按退避间隔重试 ``setup``，拉到工具即止（幂等）。
+
+        恢复成功沿 ``setup`` 内的 ``on_tools_refreshed`` 回调交给绑定处补注册，
+        与初次装配、手动重连走同一个出口；``close`` 时随连接一并取消。
+        """
+        if self._recover_task is not None and not self._recover_task.done():
+            return
+        backoff = ExponentialBackoff(base_delay_ms=base_delay_ms, cap_delay_ms=cap_delay_ms)
+        self._recover_task = asyncio.create_task(self._recover_loop(backoff), name=f"mcp-recover:{self.server_name}")
+
+    @property
+    def recovering(self) -> bool:
+        """降级恢复循环是否仍在重试。"""
+        return self._recover_task is not None and not self._recover_task.done()
+
+    async def _recover_loop(self, backoff: ExponentialBackoff) -> None:
+        while True:
+            await asyncio.sleep(backoff.next_delay_ms() / 1000)
+            if self._specs:
+                # 期间已被手动重连恢复（工具集已由那条路径刷新），本循环无事可做
+                return
+            try:
+                count = await self.setup()
+            except Exception as exc:  # noqa: BLE001 - 单轮失败安静重试，原因留给下一轮
+                logger.debug(f"MCP Provider '{self.server_name}' 恢复重试异常: {type(exc).__name__}: {exc}")
+                continue
+            if count > 0:
+                logger.info(f"MCP Provider '{self.server_name}' 降级恢复：{count} 个工具")
+                return
+
     async def close(self) -> None:
-        """关闭底层连接（幂等）。"""
+        """取消降级恢复循环并关闭底层连接（幂等）。"""
+        task = self._recover_task
+        self._recover_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await self._client.close()
 
     # ----- 任务适配器（可选；绑定处声明，见构造参数） -----

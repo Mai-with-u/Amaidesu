@@ -2,7 +2,7 @@
 
 状态：已采纳
 日期：2026-09-18
-实现提交：3a314ff37542615c3ee08043956c5c23079a972e
+实现提交：3a314ff37542615c3ee08043956c5c23079a972e；通用 MCP 跟进见 `git log -- docs/decisions/019-tool-registry-provider-refresh.md`
 
 ## 背景
 
@@ -17,7 +17,7 @@
 1. **Provider 常驻登记**：`register_provider` 对 0 工具 Provider 照常登记（分类落账、`list_providers` 在列）。连接失败从"未注册的静默"变为"已登记 0 工具"的可见降级态，不再 close-and-drop。
 2. **工具集刷新**：registry 新增 `refresh_provider_tools`（换血语义：摘旧条目 → 按 provider 当前 `list_tools()` 重登记；存续工具保留"熔断待探活"，消失工具连带清健康状态）。`reconnect_provider` 成功后先刷新再探活复位，报告携带 `refreshed`。
 3. **可见名单来源化**：`visible_to` 接受静态 dict 或 `(specs) -> dict` 策略 callable，registry 保存来源；刷新时策略对新工具集重跑。fail-closed 名单必须走策略形态——否则刷新补注册的新工具落"未列出 = 全员"默认，对所有 Agent 泄露可见性。
-4. **装配失败常驻重试**：MinecraftAgent 私有 MCP 装配失败 → 降级登记 + 后台退避重试（5s 起步 60s 封顶，对齐 MaicraftAttentionCollector 的"Mod 没开是常态"失败语义）。任务查询 / attention 适配器绑定经 `on_tools_refreshed` 回调统一在三条路径（初次装配 / 恢复重试 / 手动重连）触发，幂等。
+4. **装配失败常驻重试**：MinecraftAgent 私有 MCP 装配失败 → 降级登记 + 后台退避重试（5s 起步 60s 封顶，对齐 MaicraftAttentionCollector 的"Mod 没开是常态"失败语义）。任务查询 / attention 适配器绑定经 `on_tools_refreshed` 回调统一在三条路径（初次装配 / 恢复重试 / 手动重连）触发，幂等。通用 MCP（`bind_mcp_tools`）同样降级登记，退避重试由 `McpToolProvider.start_recovery` 承担、停机随 `close` 取消；补注册经 `on_tools_refreshed` 调 `refresh_provider_tools`——外部服务（如常驻的 MaiBot）晚于本进程启动时不必重启。
 5. **工具页注册表驱动**：categories 端点卡片 = 注册表 `list_providers`（事实源）∪ 配置声明态（enabled=false 未装配也可见）∪ 已知成员发现表（首次可开启）；分类 = provider 自声明 category 动态发现 + 固定词表排序。提供者开关按 `switch_config` 声明路由写回目标文件（Agent 私有 MCP → agents.toml），不再依赖成员表静态映射。
 6. **MCP reconnect 语义升级**：断开 → 重连 → 重拉清单换血；连上但清单为空视为重连未成。
 

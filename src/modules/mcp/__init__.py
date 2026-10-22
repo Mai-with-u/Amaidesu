@@ -8,6 +8,8 @@
   （ToolRegistry 统一分发）
 - **不包含 server 特定语义**：工具名的语义化（如 goal 组装、资源
   订阅解释）由消费方内容层负责，本模块只做通道
+- 装配时连不上的 server 以 0 工具占位登记（工具页可见、可手动重连），
+  后台退避重试；连上后自动补注册工具，无需重启
 
 模块结构：
 - ``config.py``：配置 Schema（McpServerConfig / McpExternalConfig）
@@ -25,6 +27,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any, Dict, Optional
 
 from src.modules.logging import get_logger
@@ -56,8 +59,9 @@ async def bind_mcp_tools(
             如 maicraft → "maicraft"；也可显式传值覆盖，如 "game"）
 
     Returns:
-        ``{server_name: {"ok", "tools", "error"}}`` 报告。
-        单个 server 失败不影响其它 server（隔离边界）。
+        ``{server_name: {"ok", "tools", "error", "degraded"}}`` 报告。
+        单个 server 失败不影响其它 server（隔离边界）；连不上的 server
+        ``degraded=True``：已占位登记并在后台重试，连上后自动补注册。
 
     Example:
         config = McpExternalConfig.parse_extra(tools_cfg)
@@ -68,7 +72,7 @@ async def bind_mcp_tools(
 
     for server_name in cfg.enabled_servers():
         server_cfg: McpServerConfig = cfg.servers[server_name]
-        entry: Dict[str, Any] = {"ok": False, "tools": 0, "error": ""}
+        entry: Dict[str, Any] = {"ok": False, "tools": 0, "error": "", "degraded": False}
         try:
             client = McpClient(name=server_name, config=server_cfg)
             prov = McpToolProvider(
@@ -76,14 +80,22 @@ async def bind_mcp_tools(
                 server_name=server_name,
                 provider=provider or server_name,
             )
-            count = await prov.setup()
+            try:
+                count = await prov.setup()
+            except Exception as exc:  # noqa: BLE001 - 装配异常按连接失败同径降级
+                logger.warning(f"MCP server '{server_name}' 装配异常，按连接失败降级: {type(exc).__name__}: {exc}")
+                count = 0
+            new_count = registry.register_provider(prov)
+            # 登记之后才挂补注册回调：初次 setup 时 provider 尚未登记，此刻刷新只会报"未注册"。
+            # 之后无论后台恢复还是 server 侧清单变化，拉到工具都经这里换血。
+            prov.on_tools_refreshed = partial(_refresh_registered_tools, registry, prov)
             if count == 0:
-                # 连接失败或 server 无工具：不注册（避免空 Provider 进入 registry）
-                entry["ok"] = False
-                entry["error"] = "连接失败或 server 未暴露工具"
-                await client.close()
+                # server 没起来是常态（如 MaiBot 晚于本进程启动）：0 工具占位登记，
+                # 工具页可见、可手动重连；后台退避重试，连上即补注册，无需重启
+                entry["degraded"] = True
+                entry["error"] = "连接失败或 server 未暴露工具（已占位登记，后台自动重连）"
+                prov.start_recovery()
             else:
-                new_count = registry.register_provider(prov)
                 entry["ok"] = True
                 entry["tools"] = new_count
                 if new_count == 0:
@@ -95,6 +107,16 @@ async def bind_mcp_tools(
         report[server_name] = entry
 
     return report
+
+
+def _refresh_registered_tools(registry: ToolRegistry, prov: McpToolProvider, count: int) -> None:
+    """工具清单（重）同步成功后，按 provider 当前清单换血登记。"""
+    report = registry.refresh_provider_tools(prov)
+    if report.get("ok"):
+        added = len(report.get("added", []))
+        logger.info(f"MCP server '{prov.server_name}' 工具集已刷新（{count} 个，新增 {added} 个）")
+    else:
+        logger.warning(f"MCP server '{prov.server_name}' 工具集刷新失败: {report.get('error')}")
 
 
 async def close_mcp_providers(registry: ToolRegistry) -> None:
