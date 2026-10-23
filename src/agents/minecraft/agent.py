@@ -29,7 +29,7 @@ from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
 from src.agents.minecraft.attention_matrix import classify, summarize
 from src.agents.minecraft.context import FACTS_KEY, MinecraftHistoryCompactor, close_interrupted_calls, json_text
-from src.agents.minecraft.glance import glance_scene, glance_self
+from src.agents.minecraft.glance import glance_brief, glance_scene, glance_self
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.maicraft import (
     AWAITING_ANSWER,
@@ -1371,15 +1371,18 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
 
     async def _glance(self) -> Dict[str, Any]:
-        """主播看一眼：读一次自己与周围，只留直播叙事用得上的事实，再附上身体手头的工作。"""
-        result: Dict[str, Any] = {"tool": "glance"}
+        """主播看一眼：读一次自己与周围，只留直播叙事用得上的事实，再附上身体手头的工作。
+
+        结果最前面放一句话现场（``brief``）：主播的现场卡只放这一句白话，其余字段留给想细看时查。
+        """
+        view: Dict[str, Any] = {}
         if not self._maicraft_ready():
-            result["unavailable"] = "游戏连接还没就绪，暂时看不到游戏里的情况"
+            view["unavailable"] = "游戏连接还没就绪，暂时看不到游戏里的情况"
         else:
-            result.update(glance_self(await self._call_maicraft(OBSERVE, {"what": "self"})))
-            result.update(glance_scene(await self._call_maicraft(OBSERVE, {"what": "scene"})))
-        result["work"] = self._glance_work()
-        return result
+            view.update(glance_self(await self._call_maicraft(OBSERVE, {"what": "self"})))
+            view.update(glance_scene(await self._call_maicraft(OBSERVE, {"what": "scene"})))
+        view["work"] = self._glance_work()
+        return {"tool": "glance", "brief": glance_brief(view), **view}
 
     def _glance_work(self) -> Dict[str, Any]:
         """身体手头的工作，写成主播自己的口吻：读这份结果的就是主播本人。"""

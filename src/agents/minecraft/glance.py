@@ -10,12 +10,185 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from .attention_matrix import biome_name, item_name
 from .maicraft import MaicraftReply
 
-__all__ = ["NEARBY_BLOCKS", "glance_scene", "glance_self"]
+__all__ = ["NEARBY_BLOCKS", "glance_brief", "glance_scene", "glance_self"]
 
 # 直播里说"身边"的范围：再远的生物与设施观众在画面里也看不清，主播提起来只会让人困惑。
 NEARBY_BLOCKS = 24
+
+# 一句话现场的长度上限：它要塞进主播的现场卡，卡总共只有几百字
+BRIEF_MAX_CHARS = 300
+
+_DIMENSIONS: Dict[str, str] = {
+    "minecraft:overworld": "主世界",
+    "minecraft:the_nether": "下界",
+    "minecraft:the_end": "末地",
+}
+
+#: 常见生物的中文名（模组生物不在表里，原样去掉命名空间交给主播念）
+_MOBS: Dict[str, str] = {
+    "zombie": "僵尸",
+    "husk": "尸壳",
+    "drowned": "溺尸",
+    "skeleton": "骷髅",
+    "stray": "流浪者",
+    "creeper": "苦力怕",
+    "spider": "蜘蛛",
+    "cave_spider": "洞穴蜘蛛",
+    "enderman": "末影人",
+    "witch": "女巫",
+    "slime": "史莱姆",
+    "phantom": "幻翼",
+    "pillager": "掠夺者",
+    "vindicator": "卫道士",
+    "cow": "牛",
+    "pig": "猪",
+    "sheep": "羊",
+    "chicken": "鸡",
+    "horse": "马",
+    "wolf": "狼",
+    "cat": "猫",
+    "fox": "狐狸",
+    "bee": "蜜蜂",
+    "goat": "山羊",
+    "rabbit": "兔子",
+    "villager": "村民",
+    "iron_golem": "铁傀儡",
+    "squid": "鱿鱼",
+    "glow_squid": "发光鱿鱼",
+    "cod": "鳕鱼",
+    "salmon": "鲑鱼",
+    "axolotl": "美西螈",
+    "bat": "蝙蝠",
+    "player": "玩家",
+}
+
+#: 常见设施方块的中文名
+_BLOCKS: Dict[str, str] = {
+    "chest": "箱子",
+    "barrel": "木桶",
+    "crafting_table": "工作台",
+    "furnace": "熔炉",
+    "blast_furnace": "高炉",
+    "smoker": "烟熏炉",
+    "anvil": "铁砧",
+    "enchanting_table": "附魔台",
+    "brewing_stand": "酿造台",
+    "smithing_table": "锻造台",
+}
+
+
+def _mob_name(raw: str) -> str:
+    plain = item_name(raw)
+    return _MOBS.get(plain, plain)
+
+
+def _block_name(raw: str) -> str:
+    plain = item_name(raw)
+    if plain.endswith("_bed"):
+        return "床"
+    return _BLOCKS.get(plain, plain)
+
+
+def _health_words(health: Any) -> str:
+    """血量（满 20）→ 白话；不知道就不说。"""
+    if not isinstance(health, (int, float)) or isinstance(health, bool):
+        return ""
+    if health >= 18:
+        return "血是满的"
+    if health >= 12:
+        return "血还行"
+    return "掉了不少血" if health >= 6 else "血快没了"
+
+
+def _food_words(food: Any) -> str:
+    """饥饿值（满 20）→ 白话；不知道就不说。"""
+    if not isinstance(food, (int, float)) or isinstance(food, bool):
+        return ""
+    if food >= 17:
+        return "不饿"
+    return "有点饿" if food >= 10 else "很饿"
+
+
+def _list_words(names: List[str], limit: int) -> str:
+    """去重后取前几个，用顿号连起来；多出来的说"等"。"""
+    unique = list(dict.fromkeys(name for name in names if name))
+    head = "、".join(unique[:limit])
+    return f"{head}等" if len(unique) > limit else head
+
+
+def glance_brief(view: Dict[str, Any]) -> str:
+    """一句话现场：把速览里的事实写成主播一眼读得懂的白话，不带数字、坐标和观察编号。
+
+    主播的现场卡只放这一句（几千字的速览原文塞不下，也会被逐字念出来）。物品与模组生物认不出中文名时
+    保留 ID 去掉原版命名空间，主播说话时自己换成叫法；上游没给的事就不写，不猜。
+    """
+    if view.get("unavailable"):
+        return str(view["unavailable"])
+    sentences: List[str] = []
+    body = view.get("body") if isinstance(view.get("body"), dict) else {}
+    where = _DIMENSIONS.get(str(body.get("dimension") or ""), "")
+    biome = biome_name(str(view["biome"])) if view.get("biome") else ""
+    place = f"在{where}的{biome}" if where and biome else (f"在{where or biome}" if where or biome else "")
+    if body.get("in_water"):
+        place = f"{place}，泡在水里" if place else "泡在水里"
+    if body.get("air"):
+        place = f"{place}，正在憋气" if place else "正在憋气"
+    if place:
+        sentences.append(place)
+    sky = "，".join(str(view[key]) for key in ("time", "weather") if view.get(key))
+    if sky:
+        sentences.append(sky)
+    state = "，".join(words for words in (_health_words(body.get("health")), _food_words(body.get("food"))) if words)
+    if state:
+        sentences.append(state)
+    if body.get("held"):
+        sentences.append(f"手上拿着{item_name(str(body['held']))}")
+    if body.get("control"):
+        sentences.append(str(body["control"]))
+    inventory = [str(entry).split(" ×", 1)[0] for entry in view.get("inventory") or []]
+    if inventory:
+        sentences.append("背包里有" + _list_words([item_name(item) for item in inventory], 5))
+    entities = [entity for entity in view.get("entities") or [] if isinstance(entity, dict) and entity.get("type")]
+    hostile = [entity for entity in entities if entity.get("hostile") is True]
+    if hostile:
+        nearest = hostile[0]
+        where_from = f"在{nearest['direction']}" if nearest.get("direction") else ""
+        sentences.append(f"身边有{_mob_name(str(nearest['type']))}{where_from}，是敌对的")
+    friendly = [
+        _mob_name(str(entity["type"])) + (f"（叫{entity['name']}）" if entity.get("name") else "")
+        for entity in entities
+        if entity.get("hostile") is not True
+    ]
+    if friendly:
+        sentences.append("身边还有" + _list_words(friendly, 4))
+    facilities = [
+        _block_name(str(item["block"]))
+        for item in view.get("facilities") or []
+        if isinstance(item, dict) and item.get("block")
+    ]
+    if facilities:
+        sentences.append("附近有" + _list_words(facilities, 4))
+    distant = [
+        _mob_name(str(entry).split(" ×", 1)[0].split("（", 1)[0]) for entry in view.get("distant_entities") or []
+    ]
+    if distant:
+        sentences.append("远处还有" + _list_words(distant, 3))
+    work = view.get("work") if isinstance(view.get("work"), dict) else {}
+    goals = [goal for goal in work.get("goals") or [] if isinstance(goal, dict) and goal.get("purpose")]
+    if goals:
+        doing = f"，眼下{goals[0]['doing']}" if goals[0].get("doing") else ""
+        sentences.append(f"手上在{goals[0]['purpose']}{doing}")
+    elif work.get("state"):
+        sentences.append(f"手上：{work['state']}")
+    brief = ""
+    for sentence in sentences:
+        if len(brief) + len(sentence) + 1 > BRIEF_MAX_CHARS:
+            break
+        brief += sentence + "。"
+    return brief
 
 
 def _failure(reply: MaicraftReply) -> str:

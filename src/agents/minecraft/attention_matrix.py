@@ -198,12 +198,17 @@ def _plain_id(raw_id: str) -> str:
     return raw_id.split(":", 1)[1] if raw_id.startswith("minecraft:") else raw_id
 
 
-def _gear_name(raw_id: str) -> str:
-    """``minecraft:iron_pickaxe`` → "铁镐"；认不出的去掉命名空间原样给。"""
+def item_name(raw_id: str) -> str:
+    """物品 ID → 念得出口的名字：常见工具护甲拼中文（``minecraft:iron_pickaxe`` → "铁镐"），其余去掉原版命名空间。"""
     material, _, gear = _plain_id(raw_id).partition("_")
     if material in _MATERIALS and gear in _GEAR:
         return f"{_MATERIALS[material]}{_GEAR[gear]}"
     return _plain_id(raw_id)
+
+
+def biome_name(raw_id: str) -> str:
+    """群系 ID → 中文名；表里没有的去掉原版命名空间原样给。"""
+    return _BIOMES.get(_plain_id(raw_id), _plain_id(raw_id))
 
 
 def _health_words(remaining: float) -> str:
@@ -231,10 +236,10 @@ def _rewrite_clause(clause: str) -> str:
     text = re.sub(r"\d+\s*格内", "附近", text)
     gear = re.fullmatch(r"(?:mainhand|offhand|head|chest|legs|feet)\s*的\s*(\S+?)\s*耐久打空消灭了", text)
     if gear:
-        return f"{_gear_name(gear.group(1))}坏了"
+        return f"{item_name(gear.group(1))}坏了"
     biome = re.fullmatch(r"发现群系\s*(\S+)", text)
     if biome:
-        return _BIOMES.get(_plain_id(biome.group(1)), _plain_id(biome.group(1)))
+        return biome_name(biome.group(1))
     hearts = re.fullmatch(r"掉了约\s*(\d+)\s*颗心", text)
     if hearts:
         return _hearts_words(int(hearts.group(1)))
@@ -325,7 +330,9 @@ def summarize(kind: str, source_event_type: str, message: str) -> str:
 __all__ = [
     "KIND_TO_EVENT",
     "RESOLVED_KINDS",
+    "biome_name",
     "classify",
+    "item_name",
     "plain_detail",
     "summarize",
     "without_coordinates",

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
-from src.agents.minecraft.glance import glance_scene
+from src.agents.minecraft.glance import glance_brief, glance_scene
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response, ToolCall
@@ -349,7 +349,35 @@ async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     assert view["work"]["goals"] == [
         {"ability": "maicraft:gather", "purpose": "砍树", "state": "running", "doing": "走向树"}
     ]
+    # 一句话现场排在最前面：主播的现场卡只放这一句白话，不带数字和坐标
+    assert list(view)[:2] == ["tool", "brief"]
+    assert view["brief"] == (
+        "在主世界的森林。白天，晴。血是满的，有点饿。手上拿着石斧。背包里有oak_log。"
+        "身边还有牛。附近有箱子。远处还有苦力怕、鱿鱼、蝙蝠等。手上在砍树，眼下走向树。"
+    )
     await agent.stop()
+
+
+def test_glance_brief_is_plain_speech_without_numbers() -> None:
+    """一句话现场：敌对生物带方位排在前头，有名字的带名字，没连上游戏照实说，全程不带数字。"""
+    view = {
+        "body": {"dimension": "minecraft:the_nether", "health": 4, "food": 6, "in_water": True},
+        "biome": "minecraft:soul_sand_valley",
+        "inventory": ["create:wrench ×1", "minecraft:diamond_pickaxe ×1"],
+        "entities": [
+            {"type": "minecraft:skeleton", "direction": "左后方", "distance": 8, "hostile": True},
+            {"type": "minecraft:wolf", "name": "小白", "direction": "右侧", "distance": 3},
+        ],
+        "facilities": [{"block": "minecraft:red_bed", "distance": 5}],
+        "work": {"state": "卡住了，正等我拿主意", "todo": []},
+    }
+    brief = glance_brief(view)
+    assert brief == (
+        "在下界的灵魂沙峡谷，泡在水里。血快没了，很饿。背包里有create:wrench、钻石镐。"
+        "身边有骷髅在左后方，是敌对的。身边还有狼（叫小白）。附近有床。手上：卡住了，正等我拿主意。"
+    )
+    assert not any(char.isdigit() for char in brief)
+    assert glance_brief({"unavailable": "游戏连接还没就绪", "work": {"state": "空闲"}}) == "游戏连接还没就绪"
 
 
 def test_glance_distant_entities_only_counts_what_is_known_to_be_far() -> None:
