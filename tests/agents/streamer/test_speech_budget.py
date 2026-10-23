@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.plan import DecisionPlan
-from src.agents.streamer.replyer import Replyer, _fit_to_budget
+from src.agents.streamer.replyer import Replyer, fit_to_budget
 from src.modules.llm.payload import Response
 from tests.agents.streamer.helpers import make_streamer_agent
 
@@ -37,9 +37,9 @@ _LONG = (
         ),
     ],
 )
-def test_fit_to_budget_keeps_whole_sentences(speech: str, budget: int, expected: str) -> None:
+def testfit_to_budget_keeps_whole_sentences(speech: str, budget: int, expected: str) -> None:
     """只在完整句子之后下刀；第一句本身超预算时整句保留，不截成半截。"""
-    assert _fit_to_budget(speech, budget) == expected
+    assert fit_to_budget(speech, budget) == expected
 
 
 def _replyer(*responses: Response, speech_max_chars: Optional[int] = 40) -> tuple[Replyer, MagicMock]:

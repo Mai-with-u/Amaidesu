@@ -20,7 +20,7 @@ from typing import List, Literal, Sequence, Tuple
 
 from .planner_context import age_text
 
-__all__ = ["GoalLine", "SceneInputs", "brief_of", "build_scene_card"]
+__all__ = ["GoalLine", "GoalStatus", "SceneInputs", "brief_of", "build_scene_card"]
 
 #: 现场信息过了这么久就提醒"可能已经变了"：嘴据此少下断言
 STALE_SCENE_MS = 60_000

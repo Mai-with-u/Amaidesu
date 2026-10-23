@@ -42,6 +42,7 @@ from ..replyer import Replyer
 
 __all__ = [
     "build_reply_tool_spec",
+    "coerce_emotion",
 ]
 
 
@@ -75,7 +76,7 @@ _EMOTION_ALIASES: Dict[str, Emotion] = {
 }
 
 
-def _coerce_emotion(raw: Any) -> tuple[Emotion, str]:
+def coerce_emotion(raw: Any) -> tuple[Emotion, str]:
     """把 Planner 给的情绪值收敛到枚举，返回（情绪, 改写说明）；说明为空表示原样合法。
 
     合法值原样通过；名单外的常见近义词就近映射；其余一律按 neutral。
@@ -360,7 +361,7 @@ class ReplyToolProvider(BaseToolProvider):
         batch: List[Any] = list(self._round_batch)
 
         # 情绪值先收敛到枚举：名单外的近义词就近映射，不为一个情绪词打回整轮
-        emotion, emotion_note = _coerce_emotion(args.get("emotion", "neutral"))
+        emotion, emotion_note = coerce_emotion(args.get("emotion", "neutral"))
         if emotion_note:
             self._logger.warning(f"reply_tool: {emotion_note}")
 

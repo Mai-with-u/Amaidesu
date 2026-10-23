@@ -183,7 +183,7 @@ class Replyer:
         except Exception as exc:
             self.logger.warning(f"台词重说异常，改为直接截短: {exc}", exc=True)
         candidate = shortened or speech
-        fitted = _fit_to_budget(candidate, budget)
+        fitted = fit_to_budget(candidate, budget)
         self.logger.info(
             f"台词超出长度预算（{len(speech)} 字 > {budget}）：重说后 {len(shortened) or '失败'}，最终 {len(fitted)} 字"
         )
@@ -421,7 +421,7 @@ def _plain_text_speech(content: Any) -> str:
     return text
 
 
-def _fit_to_budget(speech: str, budget: int) -> str:
+def fit_to_budget(speech: str, budget: int) -> str:
     """把台词截到长度预算内：去掉分段换行，从头累加完整句子，再加一句就超预算时停下。
 
     第一句本身就超预算时整句保留——宁可长一点，也不把一句话截成半截。
@@ -450,4 +450,4 @@ def _render_plan_text(plan: DecisionPlan, *, target_text: str = "") -> str:
     )
 
 
-__all__ = ["Replyer", "WordFilter"]
+__all__ = ["Replyer", "WordFilter", "fit_to_budget"]

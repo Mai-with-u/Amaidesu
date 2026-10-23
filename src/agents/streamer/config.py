@@ -55,6 +55,15 @@
     [agents.streamer.thinking_stream]
     enabled, flush_interval_ms, buffer_max
 
+    [agents.streamer.mouth]
+    (
+        enabled,
+        reaction_ttl_ms,
+        same_kind_cooldown_ms,
+        min_gap_ms,
+    )
+    quiet_ms, history_items, card_max_chars, scene_refresh_ms
+
 设计原则：
 - 组件包内单一权威：所有字段以嵌套子模型承载；中央树仅引用本类。
 - LLM profile 用途名硬编码为 ``planner`` / ``replyer`` / ``summary``，与 model 块
@@ -444,6 +453,70 @@ class StreamerMemoryConfig(BaseConfig):
     )
 
 
+class StreamerMouthConfig(BaseConfig):
+    """[agents.streamer.mouth] 段
+
+    嘴：游戏里出事时不经 Planner、几秒内当场出一句短反应。离线对照里，带一张现场卡的瘦嘴
+    比现管线快三倍多、语气词多一倍，复读持平；所以把"对遭遇的反应"从决策轮里拆出来。
+    总开关默认关闭，关闭时一切照旧。
+    """
+
+    enabled: bool = Field(
+        title="是否启用嘴",
+        default=False,
+        description="开启后，游戏里出事时由嘴当场出一句短反应；死亡也改由嘴来反应，不再专门唤醒 Planner",
+    )
+    reaction_ttl_ms: int = Field(
+        title="反应等播放的上限",
+        default=6000,
+        ge=0,
+        description="反应生成好后前面还有话没播完时，最多等这么久；等不到整句作废（过时的反应比不说还怪）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    same_kind_cooldown_ms: int = Field(
+        title="同类遭遇冷却",
+        default=15000,
+        ge=0,
+        description="同一类遭遇（被打、摔了、天色变了……）多久之内只反应一次；之后的只记进现场卡",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    min_gap_ms: int = Field(
+        title="两句之间的最小间隔",
+        default=1500,
+        ge=0,
+        description="前面那句刚播完时，再空这么久才出下一句",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    quiet_ms: int = Field(
+        title="低优先事件的安静门槛",
+        default=20000,
+        ge=0,
+        description="急事开始结束、天色变化这类小事：她最近这么久里说过话就不为它开口，只记进现场卡",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    history_items: int = Field(
+        title="带几条最近记录",
+        default=14,
+        ge=0,
+        description="嘴每次看到的最近记录条数（弹幕、她说过的话、游戏条目）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    card_max_chars: int = Field(
+        title="现场卡上限",
+        default=800,
+        ge=200,
+        description="现场卡的字数上限；超出时先减条数，再丢次要段落",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    scene_refresh_ms: int = Field(
+        title="一句话现场刷新间隔",
+        default=15000,
+        ge=0,
+        description="一句话现场最多多久读一次；死亡、重生、换维度时立即重读",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+
+
 class StreamerConfig(BaseConfig):
     """主播 Agent 完整配置（[agents.streamer] 段及子段）
 
@@ -562,6 +635,11 @@ class StreamerConfig(BaseConfig):
         default_factory=StreamerLiveFrameConfig,
         description="决策时看一眼直播画面（默认关闭）",
     )
+    mouth: StreamerMouthConfig = Field(
+        title="嘴",
+        default_factory=StreamerMouthConfig,
+        description="游戏里出事时当场出一句短反应（默认关闭）",
+    )
 
 
 __all__ = [
@@ -578,4 +656,5 @@ __all__ = [
     "StreamerCommandConfig",
     "StreamerThinkingStreamConfig",
     "StreamerLiveFrameConfig",
+    "StreamerMouthConfig",
 ]

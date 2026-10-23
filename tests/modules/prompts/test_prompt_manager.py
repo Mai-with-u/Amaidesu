@@ -127,6 +127,7 @@ def test_singleton_is_shared_resettable_auto_scans_and_loads_exactly_the_declare
             "amaidesu_planner_delegate_rules",
             "amaidesu_replyer_system",
             "amaidesu_replyer",
+            "amaidesu_mouth",
             "viewer_message",
             "sc_message",
             "passerby_message",
