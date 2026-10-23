@@ -62,7 +62,7 @@ async def test_minecraft_stop_removes_its_provider_and_closes_the_mcp_client_exa
 
     with (
         patch("src.modules.mcp.client.McpClient", return_value=client),
-        patch("src.modules.mcp.provider.McpToolProvider", return_value=provider),
+        patch("src.agents.minecraft.agent.MaicraftMcpProvider", return_value=provider),
     ):
         await agent.start()
     assert registry.has("maicraft_greet") and registry.visible_to_of("maicraft_greet") == ["minecraft"]

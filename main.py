@@ -634,6 +634,7 @@ async def create_app_components(
             event_bus,
             tool_registry,
             task_tracker,
+            task_ledger,
             tts_section=tts_section,
             tts_engine=tts_engine,
             # 有 TTS 时字幕走播放事件跟随器，编排层不再直出（互斥择流）
@@ -1081,6 +1082,7 @@ async def _register_agents_from_config(
     event_bus,
     tool_registry=None,
     task_tracker=None,
+    task_ledger=None,
     *,
     tts_section: Optional[Dict[str, Any]] = None,
     tts_engine: Optional[Any] = None,
@@ -1170,6 +1172,7 @@ async def _register_agents_from_config(
             # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
             context_assembler_config=None,
             task_tracker=task_tracker,
+            task_ledger=task_ledger,
         )
         if agent is None:
             logger.warning(f"Agent '{agent_name}' 实例化失败（工厂未返回实例）")

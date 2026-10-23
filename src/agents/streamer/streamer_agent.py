@@ -196,6 +196,7 @@ class StreamerAgent(BaseAgent):
         subtitle_service: Optional["SubtitleService"] = None,
         session_manager: Optional[Any] = None,
         thinking_sink: Optional[Any] = None,
+        task_ledger: Optional[Any] = None,
     ) -> None:
         """初始化主播 Agent。
 
@@ -258,6 +259,8 @@ class StreamerAgent(BaseAgent):
             thinking_sink: 可选思考流旁路出口（``ThinkingStreamSink`` 结构契约，
                 dashboard 侧 hub 实现）。``None`` 或配置关闭时思考流
                 整体短路——决策循环行为与无旁路完全一致。
+            task_ledger: 可选任务记录表（``TaskLedger``，异步任务基建）。
+                ``None`` 时委派渲染不带机器账状态（planner 只显示 LLM 交付语）。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -265,6 +268,8 @@ class StreamerAgent(BaseAgent):
         self._prompt = prompt_manager
         self._event_bus = event_bus
         self._tool_registry = tool_registry
+        # 任务记录表引用：委派渲染的机器状态从这里查询（None 时 planner 降级只看交付语）
+        self._task_ledger = task_ledger
         # 仓储注入（组合根按需分发；None 时对应能力降级。流程单三仓储由
         # RundownCoordinator 直接收取，不在 Agent 身上落字段）
         self._chat = chat_repo
@@ -389,6 +394,8 @@ class StreamerAgent(BaseAgent):
         )
         self._planner.bind_elapsed_live_provider(self._rundown_coord.state.get_elapsed_live_ms)
         self._planner.bind_notebook_provider(self._notebook.read)
+        if task_ledger is not None:
+            self._planner.bind_delegation_status_provider(self._delegation_machine_status)
 
         # 后台维护器（双任务：轻循环 + 压缩 worker）——读包内权威配置
         bg = config.background
@@ -662,6 +669,18 @@ class StreamerAgent(BaseAgent):
         removed = self.unregister_tool_providers()
 
         self._logger.info(f"StreamerAgent 已停止（摘除 {removed} 个工具）")
+
+    def _delegation_machine_status(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """委派任务在任务账本里的机器状态（planner 委派渲染的保底事实源，只读查询）。
+
+        返回 ``None`` = 终态已移除或查不到（渲染侧以 LLM 交付语或"没有回音"为准）。
+        """
+        if self._task_ledger is None:
+            return None
+        record = self._task_ledger.get(task_id)
+        if record is None:
+            return None
+        return {"status": record.status, "updated_at_ms": record.updated_at_ms, "snapshot": dict(record.snapshot)}
 
     # ==================================================================
     # 观测面（只读快照，供 dashboard REST 查询；无任何写入口）

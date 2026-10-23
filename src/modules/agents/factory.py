@@ -51,6 +51,7 @@ def instantiate_agent(
     event_repo: Optional[Any] = None,
     context_assembler_config: Optional[Any] = None,
     task_tracker: Optional[Any] = None,
+    task_ledger: Optional[Any] = None,
 ) -> Optional[BaseAgent]:
     """按名实例化 Agent；未知名字返回 None。
 
@@ -59,7 +60,7 @@ def instantiate_agent(
       session_manager / rundown_repo / rundown_instance_repo /
       rundown_transition_repo / chat_repo / sessions_repo / topic_repo /
       viewer_repo / viewer_profile_repo / recap_repo / event_repo /
-      context_assembler_config。仓储缺省 None 时对应能力降级（chat_repo 缺失
+      context_assembler_config / task_ledger（委派渲染的机器状态查询源）。仓储缺省 None 时对应能力降级（chat_repo 缺失
       = 对话历史读取整体短路，Planner/Replyer 无历史上下文；记忆两仓储缺失
       = 场次回顾 / 观众画像整体关闭），组合根必须传入
     - minecraft：thinking_sink / task_tracker；llm_profile 使用 Agent
@@ -114,6 +115,7 @@ def instantiate_agent(
             subtitle_service=subtitle_service,
             session_manager=session_manager,
             thinking_sink=thinking_sink,
+            task_ledger=task_ledger,
         )
 
     if name == "minecraft":

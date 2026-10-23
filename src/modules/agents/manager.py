@@ -222,6 +222,7 @@ class AgentManager:
         event_repo: Optional[Any] = None,
         context_assembler_config: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
+        task_ledger: Optional[Any] = None,
     ) -> bool:
         """动态启用 Agent：实例化（配置段名）→ 注册 → 启动。
 
@@ -279,6 +280,7 @@ class AgentManager:
             event_repo=effective_event_repo,
             context_assembler_config=context_assembler_config,
             task_tracker=task_tracker,
+            task_ledger=task_ledger,
         )
         if instance is None:
             logger.warning(f"未实现的 Agent: {name}")

@@ -83,6 +83,10 @@ _DEFAULT_MAX_STEPS: int = 8
 #: 画面帧龄告警的最小间隔（毫秒）：断流告警限频，避免长冷场时逐窗刷日志
 _STALE_WARN_INTERVAL_MS: int = 5 * 60 * 1000
 
+# 在途委派的账本多久没有刷新就向模型提示"没有新进展"：实测主播约 4 分钟就开始
+# 盲发重复指令，提示线压在这个节奏之前（数据源是任务账本的时间戳，渲染时现算）
+_DELEG_STALL_HINT_MS: int = 4 * 60 * 1000
+
 
 @dataclass
 class _Delegation:
@@ -303,6 +307,9 @@ class Planner:
         # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派 27 次、
         # 目标来回反转——主播看不到身体手上正做着什么，就会把每条弹幕都改派成新目标
         self._delegations: Dict[str, _Delegation] = {}
+        # 委派的机器状态查询（StreamerAgent 构造期绑定，读任务账本）：任务号 →
+        # {"status", "updated_at_ms", "snapshot"} 或 None（终态已移除/查不到）
+        self._delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
         # 最近几轮自己说出口的打算（话题 + 指引）。对话历史里只有最终台词，看不出"我已经连着
         # 几轮在讲同一件事"——实测主播连续十分钟句句提掉血，每轮都把它当新消息开口
         self._recent_intents: Deque[_Intent] = deque(maxlen=self.typed_config.planner_recent_intents_max)
@@ -346,6 +353,10 @@ class Planner:
     def bind_notebook_provider(self, provider: Callable[[], str]) -> None:
         """注入本场备忘录全文查询（StreamerAgent 构造期绑定，同 bind 模式）。"""
         self._notebook_text_provider = provider
+
+    def bind_delegation_status_provider(self, provider: Callable[[str], Optional[Dict[str, Any]]]) -> None:
+        """注入委派的机器状态查询（StreamerAgent 构造期绑定，读任务账本，同 bind 模式）。"""
+        self._delegation_status_provider = provider
 
     def _live_frame_message(self) -> Optional[Dict[str, Any]]:
         """本决策窗第一次请求尾部挂最新直播画面（每窗必看，静止画面重复看是设计内行为）。
@@ -422,14 +433,41 @@ class Planner:
             # 任务号（deleg_*）是 minecraft 侧的检索地址，对决策无信息量且会被念给观众：
             # 同一执行者手上只保留最近一次委派，注入前转成人类可读描述；原话同样脱敏
             head = f"{age_text(current_ms - delegation.at_ms)}{game}开始做一个任务：{sanitize_internal_terms(delegation.instruction)}"
-            if delegation.report_kind == "delivery":
-                state = f"已在{age_text(current_ms - delegation.reported_ms)}做完，结果见游戏记录。"
-            elif delegation.report_kind == "escalation":
-                state = f"在{age_text(current_ms - delegation.reported_ms)}卡住了，正等我和观众一起定夺（见游戏记录）。"
-            else:
-                state = "还在做，还没做完。"
-            rows.append(f"- {head}\n  {state}")
+            rows.append(f"- {head}\n  {self._delegation_state_line(delegation, current_ms)}")
         return "\n".join(rows)
+
+    def _delegation_state_line(self, delegation: _Delegation, current_ms: int) -> str:
+        """委派的状态行：机器账（保底事实）与 LLM 交付语合并显示。
+
+        机器状态查询式取自任务账本（绑定 ``bind_delegation_status_provider``；
+        None = 已终态或查不到——终态条目按账本约定移除，此时以 LLM 交付语或
+        "没有回音"的保底说法为准）。在途时按账本时间戳补"已 X 无进展"与
+        游戏侧的停滞标记，主播据此不再把在途的活当成没派出去而重复派。
+        """
+        record = (
+            self._delegation_status_provider(delegation.task_id)
+            if self._delegation_status_provider is not None and delegation.task_id
+            else None
+        )
+        if delegation.report_kind == "delivery":
+            return f"已在{age_text(current_ms - delegation.reported_ms)}做完，结果见游戏记录。"
+        if delegation.report_kind == "escalation":
+            return f"在{age_text(current_ms - delegation.reported_ms)}卡住了，正等我和观众一起定夺（见游戏记录）。"
+        if record is None:
+            if self._delegation_status_provider is None:
+                # 未绑定机器账查询（缺 task_ledger 的装配）：维持只有交付语的渲染
+                return "还在做，还没做完。"
+            return "账面上已了结这次委派，结果见游戏记录。"
+        if record.get("status") == "waiting_for_decision":
+            return f"停着等我和观众拿主意（{age_text(current_ms - int(record.get('updated_at_ms') or 0))}前记的）。"
+        stalled = (record.get("snapshot") or {}).get("stalled_goals") or {}
+        if stalled:
+            names = "、".join(sorted({str(name) for name in stalled.values()}))
+            return f"还在做，但游戏说有的目标停着没动静（{names}）。"
+        idle_ms = current_ms - int(record.get("updated_at_ms") or 0)
+        if idle_ms >= _DELEG_STALL_HINT_MS:
+            return f"还在做，账面已 {age_text(idle_ms)}没有新进展。"
+        return "还在做，还没做完。"
 
     def _render_recent_intents(self, current_ms: int) -> str:
         """我最近几轮想说的：由旧到新只列每轮的话题一句话，作为"已聊话题"清单供重叠判断。
