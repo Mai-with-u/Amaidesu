@@ -8,6 +8,7 @@ import pytest
 
 from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
 from src.modules.avatar.platform.warudo.warudo_provider import (
+    BUILTIN_MOTIONS,
     WarudoProvider,
     create_warudo_provider,
     register_warudo_tools,
@@ -26,16 +27,32 @@ async def _invoke(provider: WarudoProvider, tool: str, **arguments):
 
 def test_action_catalog_defaults_to_builtin_and_merges_config() -> None:
     assert _provider().action_catalog == {}
-    assert [e["name"] for e in _provider()._preset_action_catalog()] == ["throw_fish"]  # 内置条目始终在
+    names = [e["name"] for e in _provider()._preset_action_catalog()]
+    assert names == [*BUILTIN_MOTIONS, "throw_fish"]  # 内置头部动作、站姿与抛鱼始终在
 
     entries = {
         e["name"]: e["description"]
-        for e in _provider(action_catalog={"wave": "招手", "sit": "坐下"})._preset_action_catalog()
+        for e in _provider(action_catalog={"wave": "招手", "nod_once": "用力点头"})._preset_action_catalog()
     }
-    assert (entries["wave"], entries["sit"]) == ("招手", "坐下") and entries["throw_fish"]
+    assert (entries["wave"], entries["nod_once"]) == ("招手", "用力点头")  # 同名以配置说明为准
+    assert list(entries).count("nod_once") == 1 and entries["throw_fish"]
 
     with pytest.raises(ValueError):  # action_catalog 必须是 Dict[str, str]，非 dict 严格报错
         _provider(action_catalog="invalid")
+
+
+async def test_builtin_motions_and_catalog_entries_send_the_action_name_to_the_blueprint() -> None:
+    provider = _provider(action_catalog={"wave": "招手"})
+    provider._send_action_internal = AsyncMock()
+    for action in ("nod_once", "pose_think", "wave"):
+        assert (await provider.trigger_preset_action(action)).success is True
+    assert [c.args for c in provider._send_action_internal.call_args_list] == [
+        ("nod_once", 1),
+        ("pose_think", 1),
+        ("wave", 1),
+    ]
+    unknown = await provider.trigger_preset_action("dance")
+    assert unknown.success is False and "nod_once" in unknown.structured_content["available_actions"]
 
 
 def test_tool_face_is_the_four_agreed_tools_without_catalog_in_descriptions() -> None:

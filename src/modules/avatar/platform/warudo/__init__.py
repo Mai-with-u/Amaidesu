@@ -12,7 +12,6 @@ from .tasks.blink_task import BlinkTask
 from .tasks.shift_task import ShiftTask
 from .tasks.talking_head_task import TalkingHeadTask
 from .tasks.throw_fish_task import ThrowFishTask
-from .tasks.typing_action_task import TypingActionTask
 from .warudo_provider import WarudoProvider, create_warudo_provider, register_warudo_tools
 from .warudo_sender import ActionSender
 
@@ -30,6 +29,5 @@ __all__ = [
     "ShiftTask",
     "TalkingHeadTask",
     "ThrowFishTask",
-    "TypingActionTask",
     "ActionSender",
 ]

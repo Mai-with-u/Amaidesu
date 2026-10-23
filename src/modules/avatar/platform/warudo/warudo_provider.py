@@ -44,7 +44,6 @@ from .tasks.blink_task import BlinkTask
 from .tasks.shift_task import ShiftTask
 from .tasks.talking_head_task import TalkingHeadTask
 from .tasks.throw_fish_task import ThrowFishTask
-from .tasks.typing_action_task import TypingActionTask
 from .warudo_sender import ActionSender
 
 if TYPE_CHECKING:
@@ -81,6 +80,19 @@ _WARUDO_SET_SIGHT_SCHEMA: Dict[str, Any] = {
 
 # 内置预设动作（除配置 action_catalog 外固定可演的条目）
 _THROW_FISH_ACTION = "throw_fish"
+
+# 内置头部动作与站姿：动作名直发蓝图（数据 1），蓝图播放 Warudo 自带动画，
+# 与具体模型无关；仓库的模板蓝图按这些名字接收
+BUILTIN_MOTIONS: Dict[str, str] = {
+    "nod_once": "点头一次",
+    "nod_twice": "点头两次",
+    "shake_head": "摇头",
+    "tilt_head": "歪头",
+    "look_away": "低头看向一边",
+    "pose_calm": "双手背到身后的放松站姿",
+    "pose_think": "思考站姿",
+    "pose_default": "恢复默认站姿",
+}
 
 
 # =============================================================================
@@ -206,11 +218,6 @@ class WarudoProvider(BaseToolProvider):
             cooldown_seconds=self.throw_fish_cooldown,
         )
 
-        self.typing_action_task = TypingActionTask(
-            send_action_callback=send_action_callback,
-            logger=self.logger,
-        )
-
         self._is_connected = False
         self._has_started = False
         self.render_count = 0
@@ -232,8 +239,16 @@ class WarudoProvider(BaseToolProvider):
         return self.PROVIDER_NAME
 
     def _preset_action_catalog(self) -> list:
-        """预设动作目录：配置 ``action_catalog`` 条目 + 内置条目（抛鱼，带冷却）。"""
+        """预设动作目录：配置 ``action_catalog`` 条目 + 内置头部动作与站姿 + 抛鱼（带冷却）。
+
+        配置条目与内置条目同名时以配置的说明为准（用户自己的蓝图可能另有含义）。
+        """
         catalog = [{"name": name, "description": desc} for name, desc in self.action_catalog.items()]
+        catalog.extend(
+            {"name": name, "description": desc}
+            for name, desc in BUILTIN_MOTIONS.items()
+            if name not in self.action_catalog
+        )
         catalog.append({"name": _THROW_FISH_ACTION, "description": "抛鱼动画（内置，带冷却）"})
         return catalog
 
@@ -291,9 +306,7 @@ class WarudoProvider(BaseToolProvider):
         if emotion not in {e.value for e in Emotion}:
             return tool_result_fail("warudo_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
         factor = clamp_intensity(intensity)
-        applied = {
-            key: round(weight * factor, 4) for key, weight in self.expression.emotions.get(emotion, {}).items()
-        }
+        applied = {key: round(weight * factor, 4) for key, weight in self.expression.emotions.get(emotion, {}).items()}
         # 收到情绪 → 表情键整表写入；眨眼键交给眼部状态合并，笑眼等暂停眨眼的键生效时眨眼任务跳过
         self.state_manager.expression_state.set_weights(applied)
         blink_blocked = any(applied.get(key, 0.0) > 0 for key in self.expression.blink_blocking_keys)
@@ -309,8 +322,8 @@ class WarudoProvider(BaseToolProvider):
     async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
         """触发一个预设动作；未知名把目录随失败结果返回（失败即发现）。
 
-        内置条目 ``throw_fish`` 走冷却任务（冷却中经结果载荷告知）；其余
-        条目按配置登记的动作名直发蓝图。
+        内置条目 ``throw_fish`` 走冷却任务（冷却中经结果载荷告知）；头部动作、
+        站姿与配置登记的条目都按动作名直发蓝图。
         """
         action = action.strip()
         if action == _THROW_FISH_ACTION:
@@ -320,7 +333,7 @@ class WarudoProvider(BaseToolProvider):
                 True,
                 {"action": action, "fired": bool(fired), "cooldown_seconds": self.throw_fish_cooldown},
             )
-        if action in self.action_catalog:
+        if action in self.action_catalog or action in BUILTIN_MOTIONS:
             await self._send_action_internal(action, 1)
             return tool_result_ok("warudo_trigger_preset_action", True, {"action": action})
         catalog = [entry["name"] for entry in self._preset_action_catalog()]
@@ -410,11 +423,6 @@ class WarudoProvider(BaseToolProvider):
                 await self.talking_head_task.stop()
             except Exception as e:
                 self.logger.error(f"停止 talking_head 任务失败: {e}")
-
-        try:
-            await self.typing_action_task.stop()
-        except Exception as e:
-            self.logger.error(f"停止 typing_action 任务失败: {e}")
 
         try:
             self.state_manager.stop_monitoring()
@@ -628,12 +636,6 @@ class WarudoProvider(BaseToolProvider):
                 self.logger.info("TalkingHead 任务已启动")
             except Exception as e:
                 self.logger.error(f"启动 TalkingHead 任务失败: {e}")
-
-        try:
-            await self.typing_action_task.start()
-            self.logger.info("TypingAction 任务已启动")
-        except Exception as e:
-            self.logger.error(f"启动 TypingAction 任务失败: {e}")
 
 
 # =============================================================================
