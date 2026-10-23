@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from src.modules.diagnostics.writer import DiagnosticsWriter
 from src.modules.llm.bootstrap import (
     ProfileNames,
+    _ResolvedModel,
     _ResolvedProfile,
     build_resolved_profile,
     index_models,
@@ -51,6 +52,7 @@ from src.modules.llm.payload import (
     ImagePart,
     ImageRefPart,
     Message,
+    Reasoning,
     Response,
     TextPart,
     ToolCall,
@@ -183,6 +185,52 @@ def _context_parts_from_protocol(raw: Any) -> List[ContextPart]:
     return parts
 
 
+def _reasoning_from_protocol(raw: Any) -> Optional[Reasoning]:
+    """assistant dict 消息的 ``reasoning`` 键 → 中立 Reasoning。
+
+    Agent 把上一步响应的 ``reasoning_echo`` 原样放回历史（对象或其 dict 形态）；
+    缺失或形状不对按没有思考处理——回传只影响效果，不值得为它让整个请求失败。
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, Reasoning):
+        return raw
+    try:
+        return Reasoning.model_validate(raw)
+    except ValueError as exc:
+        get_logger("LLMProtocol").warning(f"历史思考形状不对，本条不回传：{exc}", exc=True)
+        return None
+
+
+def _request_for_model(request: GenerateRequest, model: _ResolvedModel) -> GenerateRequest:
+    """按这次要调用的模型筛掉不该发的思考。
+
+    模型关着回传开关时全部不发；开着时只发它自己产出的思考，换到备用模型时
+    别的模型的思考不发——对方认不出这段思考，可能报错也可能被带偏。不改调用方
+    的请求对象：故障切换时下一个模型拿到的仍是完整历史，重新按自己筛一遍。
+    """
+    if not any(message.reasoning is not None for message in request.messages):
+        return request
+    messages = [
+        message
+        if message.reasoning is None or (model.reasoning_echo and message.reasoning.model == model.model_name)
+        else message.model_copy(update={"reasoning": None})
+        for message in request.messages
+    ]
+    return request.model_copy(update={"messages": messages})
+
+
+def _echo_reasoning(response: LLMResponse, model: _ResolvedModel) -> Optional[Reasoning]:
+    """开着回传开关的模型产出思考时，打包成可回传的思考交给调用方。
+
+    开关关闭时不附带，调用方的历史里就不会出现思考，上下文预算也不计它；
+    格式未知（视觉、音频这类单次调用路径不记录格式）同样不附带。
+    """
+    if not model.reasoning_echo or not response.reasoning_content or response.reasoning_format is None:
+        return None
+    return Reasoning(text=response.reasoning_content, format=response.reasoning_format, model=model.model_name)
+
+
 def _optional_str(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
@@ -227,6 +275,7 @@ def _normalize_generate_input(
                         parts=_content_to_parts(content),
                         tool_calls=_tool_calls_from_protocol(item.get("tool_calls")),
                         tool_call_id=str(tool_call_id) if tool_call_id else None,
+                        reasoning=_reasoning_from_protocol(item.get("reasoning")) if role == "assistant" else None,
                     )
                 )
             else:
@@ -359,6 +408,8 @@ def _payload_response_to_legacy(resp: Response) -> LLMResponse:
         ],
         finish_reason=resp.finish_reason,
         reasoning_content=resp.reasoning_content,
+        reasoning_format=resp.reasoning_format,
+        reasoning_echo=resp.reasoning_echo,
         error=resp.error,
         request_id=resp.request_id,
         usage_raw_json=resp.usage_raw_json,
@@ -398,6 +449,8 @@ def _legacy_response_to_payload(result: LLMResponse) -> Response:
         usage=usage,
         model=result.model,
         reasoning_content=result.reasoning_content,
+        reasoning_format=result.reasoning_format,
+        reasoning_echo=result.reasoning_echo,
         error=result.error,
         request_id=result.request_id,
         usage_raw_json=result.usage_raw_json,
@@ -789,6 +842,10 @@ class LLMManager:
                 self._model_call_counts[profile_name].get(resolved_model.model_name, 0) + 1
             )
 
+            # 每个模型各自筛一遍历史思考：开关与产出模型都按这次实际调用的模型判断
+            model_kwargs = dict(kwargs)
+            if isinstance(model_kwargs.get("request"), GenerateRequest):
+                model_kwargs["request"] = _request_for_model(model_kwargs["request"], resolved_model)
             response, error = await self._call_one_with_retry(
                 method=method,
                 client=client,
@@ -799,11 +856,12 @@ class LLMManager:
                 request_id=request_id,
                 start_time=start_time,
                 slow_threshold_ms=profile.slow_threshold_ms,
-                **kwargs,
+                **model_kwargs,
             )
 
             if response is not None:
                 response.request_id = request_id
+                response.reasoning_echo = _echo_reasoning(response, resolved_model)
                 if idx > 0:
                     self.logger.warning(
                         f"[LLM 故障切换] profile={profile_name} 切到 {resolved_model.model_name}（之前尝试 {attempted_models[:-1]} 失败）"

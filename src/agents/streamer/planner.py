@@ -48,6 +48,7 @@ from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.context import TailImages
 from src.modules.agents.control import PROVIDER_NAME as FRAMEWORK_PROVIDER
+from src.modules.llm.payload import Reasoning
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
@@ -626,6 +627,11 @@ class Planner:
                     }
                     for tc in tool_calls
                 ]
+            # 模型开着回传开关时，这一步的思考随本轮历史带回给它，下一步接着这段推理决策；
+            # 下一轮从聊天记录重建历史，思考不跨轮保留
+            echo = getattr(response, "reasoning_echo", None)
+            if isinstance(echo, Reasoning):
+                assistant_msg["reasoning"] = echo.model_dump()
             messages.append(assistant_msg)
 
             # 自然终止：LLM 不再调用任何工具 = 本轮不说话

@@ -79,12 +79,15 @@ class _ResolvedModel(BaseModel):
         provider_name: 关联 provider 名
         visual: 是否声明视觉能力（对应 ``llm_models[].visual``）；能力协商
             的查询出口经此判定"当前主模型能否看图"（ADR-037）
+        reasoning_echo: 工具循环内是否回传该模型自己产出的思考（对应
+            ``llm_models[].reasoning_echo``）
     """
 
     model_name: str
     model_identifier: str
     provider_name: str
     visual: bool = False
+    reasoning_echo: bool = True
 
     model_config = {"frozen": True}
 
@@ -175,6 +178,7 @@ def build_resolved_profile(
                 model_identifier=mcfg.get("model_identifier", mname),
                 provider_name=provider_name,
                 visual=bool(mcfg.get("visual", False)),
+                reasoning_echo=bool(mcfg.get("reasoning_echo", True)),
             )
         )
 

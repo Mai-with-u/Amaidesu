@@ -11,6 +11,7 @@ import pytest
 
 from src.agents.streamer.planner import Planner, _render_observation
 from src.agents.streamer.room_state import RoomState
+from src.modules.llm.payload import Reasoning
 from src.modules.tools.models import ResultBlock, ToolExecutionResult
 from src.modules.vision.image_store import VisionImageStore, set_image_store
 
@@ -172,6 +173,28 @@ async def test_tail_image_rides_only_the_next_request(image_store) -> None:
     assert [has_image(messages) for messages in sent] == [False, True, True]
     assert sent[2][: len(sent[1]) - 1] == sent[1][:-1]
     assert not has_image(sent[2][: len(sent[1]) - 1])
+
+
+async def test_echoed_reasoning_rides_along_within_the_round() -> None:
+    """模型开着回传开关时，上一步的思考随 assistant 消息进本轮历史，下一步请求带着它。"""
+    planner = _planner(ToolExecutionResult(tool_name="memory_query", success=True, structured_content={"hit": 1}))
+    sent: list = []
+    echo = Reasoning(text="先查记忆再决定说不说", model="m")
+    query = SimpleNamespace(id="c1", name="memory_query", arguments={})
+    responses = [
+        SimpleNamespace(success=True, content="", tool_calls=[query], request_id="r1", reasoning_echo=echo),
+        SimpleNamespace(success=True, content="不说了", tool_calls=[], request_id="r2"),
+    ]
+
+    async def generate(messages: list, **_: Any) -> Any:
+        sent.append(list(messages))
+        return responses[len(sent) - 1]
+
+    planner._llm_service.generate = generate
+    await planner.plan([], proactive=True)
+
+    assert len(sent) == 2
+    assert [m.get("reasoning") for m in sent[1] if m.get("role") == "assistant"] == [echo.model_dump()]
 
 
 async def test_reference_tools_view_filters_binary_payloads() -> None:

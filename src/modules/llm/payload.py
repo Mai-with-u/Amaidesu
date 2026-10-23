@@ -68,6 +68,23 @@ class ToolCall(BaseModel):
     arguments_error: Optional[str] = None
 
 
+ReasoningFormat = Literal["field", "think_tag"]
+"""思考内容在响应里的承载格式：独立字段，或正文开头的 ``<think>`` 标签。"""
+
+
+class Reasoning(BaseModel):
+    """模型某一步产出的思考，供工具循环内回传给同一个模型
+
+    ``format`` 记录收到时的格式，写回时按原格式还原，服务端看到的历史与
+    它当初生成的一致；``model`` 是产出它的模型注册名（``[[llm_models]].name``），
+    引擎只把思考发给同一个模型，换到备用模型时这段思考不发。
+    """
+
+    text: str
+    format: ReasoningFormat = "field"
+    model: str = ""
+
+
 class Message(BaseModel):
     """对话消息（system 不在此列）
 
@@ -80,12 +97,14 @@ class Message(BaseModel):
     经 ``tool_call_id`` 关联回对应调用——多轮工具循环喂养上下文时两者缺一
     都会得到协议非法的消息序列（tool 消息必须回应带 tool_calls 的
     assistant），故随 role 一并建模，而非仅存在于各厂商协议形状中。
+    ``reasoning`` 只在 assistant 消息上有意义：该步思考，按模型开关决定是否发出。
     """
 
     role: Literal["user", "assistant", "tool"]
     parts: List[Part] = Field(default_factory=list)
     tool_calls: List[ToolCall] = Field(default_factory=list)
     tool_call_id: Optional[str] = None
+    reasoning: Optional[Reasoning] = None
 
 
 class ToolSpec(BaseModel):
@@ -157,6 +176,11 @@ class Response(BaseModel):
     # 实际服务这次请求的 API 模型标识（可能与请求时的注册名不同）
     model: Optional[str] = None
     reasoning_content: Optional[str] = None
+    # 思考在响应里的承载格式（Client 解析时记录；无思考为 None）
+    reasoning_format: Optional[ReasoningFormat] = None
+    # 产出思考的模型开着回传开关时由 Engine 填写；调用方把它原样放进这一步的
+    # assistant 消息（dict 消息用 ``reasoning`` 键），下一步请求即带回给同一个模型
+    reasoning_echo: Optional[Reasoning] = None
     error: Optional[str] = None
     # 本次调用的请求历史 ID（账本落库键）；失败路径同样回填
     request_id: str = ""
@@ -174,6 +198,8 @@ __all__ = [
     "ImagePart",
     "ImageRefPart",
     "Part",
+    "ReasoningFormat",
+    "Reasoning",
     "Message",
     "ToolSpec",
     "ContextPart",

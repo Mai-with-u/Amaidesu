@@ -17,7 +17,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.tool_result import ToolResultPayload
-from src.modules.llm.payload import Response, ToolCall
+from src.modules.llm.payload import Reasoning, Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
@@ -202,6 +202,26 @@ async def test_natural_termination_falls_back_to_single_delivery_without_milesto
     assert len(reports) == 1 and reports[0].report_kind == "delivery"
     assert "钻石挖完了" in reports[0].message
     assert _game_events(bus, "milestone") == []
+
+
+async def test_echoed_reasoning_rides_along_in_task_history(start_agent) -> None:
+    """模型开着回传开关时，上一步的思考随 assistant 消息进任务历史，下一步请求带着它。"""
+    echo = Reasoning(text="先记待办再去挖", model="m")
+    sent: list[list[dict]] = []
+
+    async def fake(messages, **kwargs):
+        sent.append([dict(m) for m in messages])
+        if not _has_tool_message(messages):
+            todo = {"action": "write", "todos": [{"content": "挖钻石"}]}
+            return Response(success=True, tool_calls=[_tool_call("minecraft_todo", todo)], reasoning_echo=echo)
+        return _resp("钻石挖完了")
+
+    agent = await start_agent(_llm(fake), registry=ToolRegistry())
+    agent.receive_prompt(content="挖钻石", source="test")
+    await _wait_until(lambda: len(sent) >= 2)
+
+    assert [m["reasoning"] for m in sent[0] if "reasoning" in m] == []
+    assert [m["reasoning"] for m in sent[1] if "reasoning" in m] == [echo.model_dump()]
 
 
 async def test_report_delivery_stops_batch_after_same_round_tools(start_agent) -> None:

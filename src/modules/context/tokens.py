@@ -54,14 +54,18 @@ class TokenCounter:
         return tokens
 
     def message(self, message: Mapping[str, Any]) -> int:
-        """一条 OpenAI 形态消息：正文（文本或分段）+ 工具调用 + 包装开销。
+        """一条 OpenAI 形态消息：正文（文本或分段）+ 工具调用 + 回传的思考 + 包装开销。
 
-        以下划线开头的键是 Agent 内部标记（模型看不到），不计入。
+        以下划线开头的键是 Agent 内部标记（模型看不到），不计入。思考只有模型开着
+        回传开关时才会存进历史，存了就会随请求发出，所以照实计入预算。
         """
         total = _TOKENS_PER_MESSAGE + self._content(message.get("content"))
         tool_calls = message.get("tool_calls")
         if tool_calls:
             total += self._structured_tokens(tool_calls)
+        reasoning = message.get("reasoning")
+        if isinstance(reasoning, Mapping):
+            total += self.text(str(reasoning.get("text") or ""))
         return total
 
     def messages(self, messages: Iterable[Mapping[str, Any]]) -> int:

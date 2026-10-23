@@ -181,6 +181,7 @@ class LLMModelConfig(BaseConfig):
         cache: 缓存计费方式（none=全价；hit_discount=命中按 cache_price_in 分段）
         cache_price_in: 缓存命中输入 token 单价（每百万 token；cache 为 none 时必须为 0）
         context_window: 上下文窗口 token 总量（用于 Dashboard 水位展示；0 = 不展示）
+        reasoning_echo: 工具循环内是否把该模型自己产出的思考原样回传给它
     """
 
     name: str = Field(default="default", title="模型名称", description="模型唯一名（被 profile.model_list 引用）")
@@ -215,6 +216,18 @@ class LLMModelConfig(BaseConfig):
         ge=0,
         title="上下文窗口",
         description="上下文窗口 token 总量（用于 Dashboard 水位展示；0 = 不展示）",
+    )
+    # 是否回传取决于模型怎么处理历史，与用途无关：MiniMax、Kimi、智谱、千问的文档要求多步工具调用时
+    # 带回思考，DeepSeek 官方端点按工具调用 id 在服务端自行拼回，回传只多算输入 token。
+    # 只回传同一模型产出的思考，换到备用模型时自动不带。
+    reasoning_echo: bool = Field(
+        default=True,
+        title="回传思考内容",
+        description=(
+            "多步工具调用时把该模型自己上一步的思考原样带回给它（按收到时的格式：reasoning_content 字段或正文 <think> 标签）；"
+            "回传的思考计入输入 token。Kimi / 千问 / 智谱还需在 provider 的 extra_body 打开读取历史思考的参数"
+            "（thinking.keep / preserve_thinking / clear_thinking）"
+        ),
     )
 
     @model_validator(mode="after")

@@ -162,11 +162,13 @@ def _count_message_tokens(message: Any) -> int:
 
     遗留 dict 路径文本在 ``content``；中立 payload dump 路径文本在 ``parts``
     （TextPart/ImagePart）。图像（含 data URL 的 base64 内嵌）不进 tokenizer，
-    按固定估值计；assistant 既往工具调用按其 JSON 序列化计数。
+    按固定估值计；assistant 既往工具调用按其 JSON 序列化计数；回传给模型的
+    思考（``reasoning.text``）按正文计数，归在 assistant 名下。
     """
     content = _field(message, "content")
     parts = _field(message, "parts") or []
     tool_calls = _field(message, "tool_calls") or []
+    reasoning = _field(message, "reasoning")
 
     total = _count_content_tokens(content)
     for part in parts:
@@ -181,6 +183,9 @@ def _count_message_tokens(message: Any) -> int:
                 total += count_text_tokens(json.dumps(part, ensure_ascii=False))
     if tool_calls:
         total += count_text_tokens(json.dumps(tool_calls, ensure_ascii=False, default=str))
+    reasoning_text = _field(reasoning, "text") if reasoning is not None else None
+    if isinstance(reasoning_text, str):
+        total += count_text_tokens(reasoning_text)
     return total + _TOKENS_PER_MESSAGE
 
 

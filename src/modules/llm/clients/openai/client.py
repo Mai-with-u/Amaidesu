@@ -33,13 +33,14 @@ from src.modules.llm.payload import (
     ImagePart,
     ImageRefPart,
     Message,
+    Reasoning,
     Response,
     TextPart,
     ToolCall,
     ToolSpec,
     Usage,
 )
-from src.modules.llm.reasoning import ReasoningParseMode, parse_reasoning
+from src.modules.llm.reasoning import ReasoningParseMode, split_reasoning
 from src.modules.logging import get_logger
 
 # 具体的 SDK 异常集合：Client 翻译处只捕获这些类型并翻译为分类异常
@@ -279,7 +280,27 @@ class OpenAIClient(BaseLLMClient):
         if contents and all(c["type"] == "text" for c in contents):
             content: Any = "".join(c["text"] for c in contents)
             result["content"] = content
+        if message.role == "assistant" and message.reasoning is not None:
+            cls._attach_reasoning(result, message.reasoning)
         return [result]
+
+    @staticmethod
+    def _attach_reasoning(result: Dict[str, Any], reasoning: Reasoning) -> None:
+        """把上一步的思考按收到时的格式写回 assistant 消息。
+
+        独立字段写成 ``reasoning_content``；从正文 ``<think>`` 标签切出来的
+        包回正文开头，与模型当初输出的正文一致。引擎已按模型开关和产出模型
+        筛过，走到这里的思考都该发出。
+        """
+        if reasoning.format == "field":
+            result["reasoning_content"] = reasoning.text
+            return
+        tag = f"<think>{reasoning.text}</think>"
+        content = result.get("content")
+        if isinstance(content, list) and content:
+            result["content"] = [{"type": "text", "text": tag}, *content]
+        else:
+            result["content"] = tag + (content if isinstance(content, str) else "")
 
     @classmethod
     def _request_to_openai_messages(cls, request: GenerateRequest) -> List[Dict[str, Any]]:
@@ -459,6 +480,7 @@ class OpenAIClient(BaseLLMClient):
             usage=cls._usage_to_payload(result.usage),
             model=result.model,
             reasoning_content=result.reasoning_content,
+            reasoning_format=result.reasoning_format,
             error=result.error,
             request_id=result.request_id,
             usage_raw_json=result.usage_raw_json,
@@ -658,9 +680,9 @@ class OpenAIClient(BaseLLMClient):
             if audio_base64 is not None and not raw_content:
                 # 音频模态响应：语音文本由 transcript 回填 content（即模型产出
                 # 文本），不做 reasoning 解析
-                content, reasoning_content = transcript or "", None
+                content, reasoning_content, reasoning_format = transcript or "", None, None
             else:
-                content, reasoning_content = parse_reasoning(
+                content, reasoning_content, reasoning_format = split_reasoning(
                     raw_content,
                     getattr(message, "reasoning_content", None),
                     ReasoningParseMode(self.config.get("reasoning_parse_mode", "auto")),
@@ -672,6 +694,7 @@ class OpenAIClient(BaseLLMClient):
                 model=response.model,
                 usage=usage,
                 reasoning_content=reasoning_content,
+                reasoning_format=reasoning_format,
                 finish_reason=getattr(response.choices[0], "finish_reason", None),
                 usage_raw_json=self._vendor_usage_to_raw_json(response.usage),
                 audio_base64=audio_base64,
@@ -781,7 +804,7 @@ class OpenAIClient(BaseLLMClient):
 
         raw_content = "".join(content_parts)
         native_reasoning = "".join(reasoning_parts) or None
-        content, reasoning_content = parse_reasoning(
+        content, reasoning_content, reasoning_format = split_reasoning(
             raw_content,
             native_reasoning,
             ReasoningParseMode(self.config.get("reasoning_parse_mode", "auto")),
@@ -792,6 +815,7 @@ class OpenAIClient(BaseLLMClient):
             model=model_name or model,
             usage=usage,
             reasoning_content=reasoning_content,
+            reasoning_format=reasoning_format,
             finish_reason=finish_reason,
             usage_raw_json=usage_raw,
         )

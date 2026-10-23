@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from src.modules.llm.payload import GenerateRequest, Response
+from src.modules.llm.payload import GenerateRequest, Reasoning, ReasoningFormat, Response
 
 OnDeltaCallback = Any
 """流式增量回调：(kind, text_delta)，kind ∈ {"reasoning", "content"}。"""
@@ -37,6 +37,9 @@ class LLMResponse(BaseModel):
     # 结束原因在新旧响应转换之间保留，避免把容量上限中断误判为正常交付。
     finish_reason: Optional[str] = None
     reasoning_content: Optional[str] = None
+    # 思考的承载格式与可回传的思考，语义同 ``payload.Response`` 的同名字段
+    reasoning_format: Optional[ReasoningFormat] = None
+    reasoning_echo: Optional[Reasoning] = None
     error: Optional[str] = None
     # 本次调用的请求历史 ID（request_history_manager 落库键）。调用方（如
     # Planner 决策事件）用它作为"查看完整请求"的指针；失败路径同样回填。
