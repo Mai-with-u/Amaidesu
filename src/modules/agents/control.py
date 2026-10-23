@@ -1,9 +1,9 @@
 """
 AgentControl —— 框架级 Agent 控制与委派/递话
 
-- framework_delegate / framework_task_status：跨 Agent 委派原语
-  ——派活拿回执（accepted + task_id），任务进度随时可查；指令只当自然
-  语言（给目标，不给步骤），不加编排/条件分支
+- framework_delegate / framework_task_status / framework_task_cancel：
+  跨 Agent 委派原语——派活拿回执（accepted + task_id），任务进度随时可查，
+  在途可撤；指令只当自然语言（给目标，不给步骤），不加编排/条件分支
 - framework_prompt：递话原语——纯文本留言（插话/提醒），不派任务、
   不进账本；与委派共享 Agent 侧文本接缝（receive_prompt），记账分家
 - provider="framework"（框架内置提供，非独立源；可见名单默认 ["*"]）
@@ -11,7 +11,7 @@ AgentControl —— 框架级 Agent 控制与委派/递话
   类本体承载，不进 LLM 工具面；控制面（DashboardServer）经 API 直调
   （重建走 ``AgentManager.rebuild``，不经本类）
 
-LLM 工具面注册方式（framework provider 含 delegate/prompt/task_status 三个 spec）：
+LLM 工具面注册方式（framework provider 含 delegate/prompt/task_status/task_cancel 四个 spec）：
 ```python
 provider = build_agent_control_provider(manager, task_ledger)
 tool_registry.register_provider(provider)
@@ -89,6 +89,25 @@ _TASK_STATUS_SPEC: ToolSpec = ToolSpec(
         "type": "object",
         "properties": {
             "task_id": {"type": "string", "description": "受理回执返回的任务号"},
+        },
+        "required": ["task_id"],
+    },
+    kind="sync",
+    provider=PROVIDER_NAME,
+)
+
+#: 任务撤销工具规格（与 task_status 对仗；只收框架委派号）
+_TASK_CANCEL_SPEC: ToolSpec = ToolSpec(
+    name="task_cancel",
+    description=(
+        "撤掉一个还在途的委派任务：按任务号叫停，目标会收到停手通知。"
+        "只收 framework_delegate 受理回执里的委派任务号（deleg_ 开头）；"
+        "执行方自己在游戏里挂的目标不归它管，由执行方用自己的目标工具收场。"
+    ),
+    parameters_schema={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "要撤掉的委派任务号（deleg_ 开头）"},
         },
         "required": ["task_id"],
     },
@@ -250,8 +269,12 @@ class AgentControlProvider(BaseToolProvider):
     - ``framework_delegate(agent, instruction)``：名册校验 + **禁自派** +
       目标接收入口（BaseAgent 默认拒收）→ 受理成功登记同一张任务记录表
       （agent 型：发起方=调用方、执行者=目标、事实源=执行 Agent）
-    - 受理失败（目标不存在/未启用/拒收/自派）与任务失败（执行中失败）分开
+    - 受理失败（目标不存在/未启用/拒收/自派/目标在途）与任务失败（执行中失败）分开
     - ``framework_task_status(task_id)``：查记录表；未知任务号 → 失败结果
+    - ``framework_task_cancel(task_id)``：撤委派单——只收 deleg_ 前缀的框架
+      任务号，转发目标 Agent 的 ``cancel_task``（单写者规则：取消经执行 Agent，
+      框架不代写账面）；执行方内部目标号（如 maicraft-goal-N）拒绝并提示走
+      执行方自己的目标工具收场
 
     递话原语（与委派并列：传输同路、记账分家——纯文本留言不进账本）：
     - ``framework_prompt(agent, content)``：目标解析与禁自派复用委派同款
@@ -271,16 +294,16 @@ class AgentControlProvider(BaseToolProvider):
         return PROVIDER_NAME
 
     def list_tools(self) -> Iterable[ToolSpec]:
-        """委派 + 递话 + 任务状态工具（恒三件）。
+        """委派 + 递话 + 任务状态 + 任务撤销工具（恒四件）。
 
         **参数枚举里的名册只含真正覆写了接收入口的 Agent**——没接入的 Agent
         （如纯手柄型游戏 Agent）不出现在 enum 与描述里，LLM 从源头选不出
-        "必被拒收"的委派目标。三件必须恒返回：registry 的 invoke 表是注册期
+        "必被拒收"的委派目标。四件必须恒返回：registry 的 invoke 表是注册期
         快照（装配顺序总是 framework 先注册、Agent 后注册），此刻名册常为空，
         按名册裁剪工具会把 delegate 砍出 invoke 表、命令直连链路整体断掉。
         接入状态变化经重启后下一次装配生效（与名册快照同节拍）。
         """
-        return [self._delegate_spec(), self._prompt_spec(), _TASK_STATUS_SPEC]
+        return [self._delegate_spec(), self._prompt_spec(), _TASK_STATUS_SPEC, _TASK_CANCEL_SPEC]
 
     def _roster(self, hook: str) -> Dict[str, str]:
         """当前名册 {注册名: 描述}，仅含覆写了 ``hook`` 接收入口的 Agent。
@@ -333,8 +356,10 @@ class AgentControlProvider(BaseToolProvider):
         return (
             f"委派型游戏（可以把一件事交给它在后台做）：{listed}。"
             "用 framework_delegate 开始做一件事（只给目标与约束，不给步骤），"
-            "用 framework_prompt 给手上正在做的事补充要求；进度以它的上报与 "
-            "framework_task_status 的查询结果为准，不要自己推测。"
+            "用 framework_prompt 给手上正在做的事补充要求；"
+            "同一目标手上已有一件事没做完时，新委派会被拒（拒绝理由带在途详情），"
+            "用 framework_task_cancel 报委派任务号可以撤掉在途的；"
+            "进度以它的上报与 framework_task_status 的查询结果为准，不要自己推测。"
         )
 
     def _delegate_spec(self) -> ToolSpec:
@@ -393,6 +418,8 @@ class AgentControlProvider(BaseToolProvider):
                 return self._invoke_prompt(args, caller=invocation.source)
             if name == "framework_task_status":
                 return self._invoke_task_status(args)
+            if name == "framework_task_cancel":
+                return self._invoke_task_cancel(args, caller=invocation.source)
             return ToolExecutionResult(
                 tool_name=name,
                 success=False,
@@ -584,6 +611,65 @@ class AgentControlProvider(BaseToolProvider):
             tool_name="framework_prompt",
             success=True,
             structured_content={"delivered": True, "executor": target.name},
+        )
+
+    def _invoke_task_cancel(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
+        """撤委派单：前缀校验 → 查记录表定位执行者 → 转发目标 cancel_task。
+
+        只收 deleg_ 前缀的框架委派号——执行方内部目标号（如 maicraft-goal-N）
+        是另一本账（执行 Agent 在游戏里挂的目标），不归框架撤，提示走执行方
+        自己的目标工具。取消经执行 Agent（单写者规则），框架不代写账面。
+        """
+        task_id = str(args.get("task_id", "") or "")
+        tool_name = "framework_task_cancel"
+        if not task_id:
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message="task_cancel 需要 task_id（framework_delegate 回执返回的委派任务号）",
+            )
+        if not task_id.startswith("deleg_"):
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message=(
+                    f"只能撤委派任务（deleg_ 开头），'{task_id}' 是执行方内部目标号，"
+                    "不归这里撤——让执行方用它自己的目标工具（如 maicraft_goal 的 cancel）收场"
+                ),
+            )
+        if self.task_ledger is None:
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message="任务基建未装配（task_ledger 未注入），撤单不可用",
+            )
+        record = self.task_ledger.get(task_id)
+        if record is None:
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message=f"任务不存在: '{task_id}'（未知任务号或已终态）",
+            )
+        target = self.manager.get_agent_by_name(record.executor)
+        if target is None:
+            logger.warning(f"task_cancel: 执行者 '{record.executor}' 不在名册（task_id={task_id}）")
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message=f"撤单失败：执行者 '{record.executor}' 不在名册，无法送达停手通知",
+            )
+        cancelled = target.cancel_task(task_id, source=caller or "unknown")
+        if not cancelled:
+            return ToolExecutionResult(
+                tool_name=tool_name,
+                success=False,
+                error_message=f"撤单失败：任务 '{task_id}' 不在执行者 '{record.executor}' 的追踪范围（未知号或已终态）",
+            )
+        logger.info(f"委派撤单: {caller or 'unknown'} 撤掉 {record.executor} 的 {task_id}")
+        return ToolExecutionResult(
+            tool_name=tool_name,
+            success=True,
+            structured_content={"cancelled": True, "task_id": task_id, "executor": record.executor},
         )
 
     def _invoke_task_status(self, args: Dict[str, Any]) -> ToolExecutionResult:

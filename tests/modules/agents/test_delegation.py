@@ -43,6 +43,7 @@ class _StubAgent(BaseAgent):
         self._refuse = refuse
         self.received: List[tuple[str, str]] = []  # (task_id, instruction)
         self.prompts_received: List[tuple[str, str]] = []  # (content, source)
+        self.cancel_calls: List[tuple[str, str]] = []  # (task_id, source)
 
     def list_tools(self):
         return []
@@ -56,6 +57,14 @@ class _StubAgent(BaseAgent):
     def receive_prompt(self, *, content: str, source: str = "") -> bool:
         self.prompts_received.append((content, source))
         return True
+
+    def cancel_task(self, task_id: str, source: str = "") -> bool:
+        if any(tid == task_id for tid, _ in self.received) and not any(
+            tid == task_id for tid, _ in self.cancel_calls
+        ):
+            self.cancel_calls.append((task_id, source))
+            return True
+        return False
 
     def finish(self, ledger: TaskLedger, *, failed: bool = False) -> None:
         for task_id, _ in self.received:
@@ -238,6 +247,45 @@ async def test_in_flight_gate_is_per_target(rig: _Rig) -> None:
     assert res.success and res.structured_content["executor"] == "agent_a"
 
 
+# 撤单工具：framework_task_cancel 只收 deleg_ 前缀，转发执行 Agent 的 cancel_task
+
+
+async def test_task_cancel_forwards_to_target_executor(rig: _Rig) -> None:
+    task_id = (
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
+    ).structured_content["task_id"]
+
+    res = await rig.call("framework_task_cancel", {"task_id": task_id}, source="streamer")
+    assert res.success
+    assert res.structured_content == {"cancelled": True, "task_id": task_id, "executor": "agent_b"}
+    assert _agent(rig, "agent_b").cancel_calls == [(task_id, "streamer")]
+
+    # 已取消的再撤：执行方不再追踪 → 失败
+    res = await rig.call("framework_task_cancel", {"task_id": task_id}, source="streamer")
+    assert res.success is False and "追踪范围" in res.error_message
+
+    # 撤掉在途后，同目标可以再派（执行 Agent 落账 cancelled 终态移除，在途门放行）
+    rig.ledger.update(task_id, "cancelled", summary="已撤")
+    res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "再挖个矿"})
+    assert res.success
+
+
+async def test_task_cancel_rejects_non_framework_ids_and_unknown(rig: _Rig) -> None:
+    # 执行方内部目标号：不是委派单，提示走执行方自己的目标工具
+    res = await rig.call("framework_task_cancel", {"task_id": "maicraft-goal-489"})
+    assert res.success is False
+    assert "内部目标" in res.error_message and "maicraft_goal" in res.error_message
+
+    # 未知委派号
+    res = await rig.call("framework_task_cancel", {"task_id": "deleg_1700000000000_9"})
+    assert res.success is False and "任务不存在" in res.error_message
+
+    # 空号
+    res = await rig.call("framework_task_cancel", {"task_id": ""})
+    assert res.success is False and "task_id" in res.error_message
+
+
+
 # 真实 minecraft Agent：入队带任务号、批次状态写回、硬取消、断连恢复续跑
 
 
@@ -322,6 +370,21 @@ async def test_minecraft_cancel_clears_suspended_zombie(mc: _McRig) -> None:
 
     assert mc.minecraft.cancel_task(task_id, source="operator") is True
     assert mc.ledger.get(task_id) is None and mc.minecraft._delegated_finished_ids == []
+
+
+async def test_framework_task_cancel_reaches_minecraft(mc: _McRig) -> None:
+    """撤单工具走全链路：provider → minecraft.cancel_task → 账面 cancelled + 停手通知入队。"""
+    task_id = await mc.delegate()
+    mc.absorb_into_batch()
+
+    res = await mc.call("framework_task_cancel", {"task_id": task_id}, source="streamer")
+    assert res.success and res.structured_content["cancelled"] is True
+    assert mc.ledger.get(task_id) is None
+    assert any(task_id in notice and "已被取消" in notice for notice in mc.queued_notices())
+
+    # 撤掉在途后同目标可再派
+    res = await mc.call("framework_delegate", {"agent": "minecraft", "instruction": "再挖个矿"}, source="streamer")
+    assert res.success
 
 
 async def test_escalation_waits_for_decision_and_mcp_recovery_resumes(mc: _McRig) -> None:
