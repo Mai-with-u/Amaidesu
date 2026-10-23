@@ -10,9 +10,9 @@ ToolProvider 协议实现，编排各引擎子件（``WarudoStateManager`` / 后
   - ``warudo_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）
   - ``warudo_set_sight``             - 设置视线（看镜头/看弹幕/看手机）
 
-眉毛/眼睛/瞳孔/嘴部等 blendshape 状态件是情绪映射与氛围任务的内部通道
-（方法保留供机件调用），不再对 LLM 暴露。被收敛的历史工具的方法保留，
-仅撤 LLM 工具注册。
+表情 / 眼 / 瞳孔 / 口型等状态件是情绪映射与氛围任务的内部通道，不对
+LLM 暴露。情绪用哪些表情键由表情档案配置（``expression_profile``），
+代码不认任何具体模型的形状名。
 """
 
 from __future__ import annotations
@@ -35,7 +35,9 @@ from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec, tool_result_fail, tool_result_ok
 from src.modules.tools.provider import BaseToolProvider
+from src.modules.types.emotion_vocab import Emotion
 
+from .expression_profile import BLINK_KEY, WarudoExpressionConfig
 from .lip_sync_renderer import WarudoLipSyncRenderer
 from .state.warudo_state_manager import WarudoStateManager
 from .tasks.blink_task import BlinkTask
@@ -76,30 +78,6 @@ _WARUDO_SET_SIGHT_SCHEMA: Dict[str, Any] = {
     "required": ["target"],
 }
 
-
-# 情绪 → Warudo blendshape 状态映射（词表 17 值全覆盖）。
-# 值 = {通道: (状态键, 满幅权重)}；状态键是 Warudo 项目的 blendshape 预设名
-# （与 warudo_state_manager 的 ALL_*_STATE 常量对齐），强度在 set_expression
-# 中按线性缩放施加。解析细节是适配器实现自由，架构不约束映射结果。
-_WARUDO_EMOTION_STATES: Dict[str, Dict[str, tuple]] = {
-    "neutral": {},
-    "happy": {"mouth": ("mouth_happy_strong", 1.0), "eyebrow": ("eyebrow_happy_weak", 0.8)},
-    "sad": {"mouth": ("mouth_sad_weak", 1.0), "eyebrow": ("eyebrow_sad_weak", 0.9)},
-    "angry": {"mouth": ("mouth_angry_weak", 1.0), "eyebrow": ("eyebrow_angry_strong", 0.9)},
-    "surprised": {"mouth": ("mouth_smlie_teeth", 0.6), "eyebrow": ("eyebrow_happy_strong", 1.0)},
-    "scared": {"eyebrow": ("eyebrow_sad_strong", 1.0), "eye": ("eye_happy_strong", 0.5)},
-    "disgusted": {"mouth": ("mouth_angry_weak", 0.6), "eyebrow": ("eyebrow_angry_weak", 0.7)},
-    "shy": {"mouth": ("mouth_smlie_2", 0.8), "eyebrow": ("eyebrow_happy_weak", 0.4)},
-    "embarrassed": {"mouth": ("mouth_smlie_3", 0.7), "eyebrow": ("eyebrow_sad_weak", 0.3)},
-    "confused": {"eyebrow": ("eyebrow_sad_weak", 0.6), "mouth": ("mouth_smlie_2", 0.2)},
-    "love": {"mouth": ("mouth_happy_strong", 0.9), "eye": ("eye_happy_strong", 1.0)},
-    "excited": {"mouth": ("mouth_smlie_teeth", 1.0), "eyebrow": ("eyebrow_happy_strong", 0.9)},
-    "smug": {"mouth": ("mouth_smlie_3", 0.9), "eyebrow": ("eyebrow_happy_weak", 0.5)},
-    "serious": {"eyebrow": ("eyebrow_angry_weak", 0.5), "mouth": ("mouth_angry_weak", 0.3)},
-    "tired": {"eye": ("eye_close", 0.6), "mouth": ("mouth_smlie_2", 0.1)},
-    "crying": {"eye": ("eye_close", 0.8), "mouth": ("mouth_sad_weak", 1.0), "eyebrow": ("eyebrow_sad_strong", 0.8)},
-    "speechless": {"eyebrow": ("eyebrow_angry_weak", 0.2)},
-}
 
 # 内置预设动作（除配置 action_catalog 外固定可演的条目）
 _THROW_FISH_ACTION = "throw_fish"
@@ -157,6 +135,12 @@ class WarudoProvider(BaseToolProvider):
             default_factory=dict,
             description="可用蓝图动作目录 {动作名: 说明}，人类配置预声明；用于拼入工具描述供 LLM 选择",
         )
+        # 表情档案：情绪 → 表情键映射（默认 VRM 标准表情名；自定义形状名的模型换档案）
+        expression: WarudoExpressionConfig = Field(
+            default_factory=WarudoExpressionConfig,
+            title="表情档案",
+            description="情绪用哪些表情键、各占多少；换模型时改这里，蓝图按同一份档案生成",
+        )
 
     def __init__(
         self,
@@ -183,6 +167,7 @@ class WarudoProvider(BaseToolProvider):
         self.talking_head_interval: float = self.typed_config.talking_head_interval
         self.throw_fish_cooldown: float = self.typed_config.throw_fish_cooldown
         self.action_catalog: Dict[str, str] = dict(self.typed_config.action_catalog)
+        self.expression: WarudoExpressionConfig = self.typed_config.expression
 
         # WebSocket 状态
         self.websocket: Any = None
@@ -197,7 +182,13 @@ class WarudoProvider(BaseToolProvider):
             await self._send_action_internal(action, data)
             return True
 
-        self.state_manager = WarudoStateManager(self.logger, send_action_callback)
+        # 状态件的表情键全集取自档案：换情绪时这些键整表重发，旧表情不残留
+        self.state_manager = WarudoStateManager(
+            self.logger,
+            send_action_callback,
+            expression_keys=self.expression.expression_keys(),
+            mouth_keys=self.expression.mouth_keys,
+        )
         self.blink_task = BlinkTask(self.state_manager, self.logger)
         self.shift_task = ShiftTask(self.state_manager, self.logger)
 
@@ -292,28 +283,21 @@ class WarudoProvider(BaseToolProvider):
     # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
 
     async def set_expression(self, emotion: str, intensity: float) -> ToolExecutionResult:
-        """设置当前情绪：查映射表 → 按强度缩放 → 写 blendshape 状态件。
+        """设置当前情绪：查表情档案 → 按强度缩放 → 写表情与眼部状态件。
 
         状态件的写入经监控循环推送到 Warudo（``changed`` 标志驱动）；
-        换情绪时各通道 ``set_first_layer`` 自带清零，旧状态不残留。
+        换情绪时表情键整表替换，旧表情不残留。档案未列出的合法情绪按中性处理。
         """
-        states = _WARUDO_EMOTION_STATES.get(emotion)
-        if states is None:
+        if emotion not in {e.value for e in Emotion}:
             return tool_result_fail("warudo_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
         factor = clamp_intensity(intensity)
-        applied: Dict[str, Any] = {}
-        state_manager = self.state_manager
-        channels = {
-            "eyebrow": state_manager.eyebrow_state,
-            "eye": state_manager.eye_state,
-            "mouth": state_manager.mouth_state,
+        applied = {
+            key: round(weight * factor, 4) for key, weight in self.expression.emotions.get(emotion, {}).items()
         }
-        for channel, (key, weight) in states.items():
-            component = channels.get(channel)
-            if component is None:
-                continue
-            component.set_first_layer(key, weight * factor)
-            applied[channel] = {"key": key, "weight": round(weight * factor, 4)}
+        # 收到情绪 → 表情键整表写入；眨眼键交给眼部状态合并，笑眼等暂停眨眼的键生效时眨眼任务跳过
+        self.state_manager.expression_state.set_weights(applied)
+        blink_blocked = any(applied.get(key, 0.0) > 0 for key in self.expression.blink_blocking_keys)
+        self.state_manager.eye_state.set_expression(applied.get(BLINK_KEY, 0.0), blink_blocked)
         return tool_result_ok(
             "warudo_set_expression", True, {"emotion": emotion, "intensity": factor, "applied": applied}
         )
@@ -372,14 +356,14 @@ class WarudoProvider(BaseToolProvider):
         self.logger.info(f"{self.__class__.__name__} 已启动")
 
     def _set_mouth_channel(self, key: str, weight: float) -> None:
-        """嘴部单键写入（渲染器回调）：空键清空全部元音通道，否则 set_first_layer。"""
-        mouth_state = self.state_manager.mouth_state
-        if not key:
-            for existing in list(mouth_state.first_layer):
-                mouth_state.first_layer[existing] = 0.0
-            mouth_state.changed = True
-            return
-        mouth_state.set_first_layer(key, weight)
+        """元音单键写入（渲染器回调）：空键 = 停嘴，清空全部元音。
+
+        口型只写元音状态件，不碰情绪表情；张嘴期间档案里的嘴部表情键暂时
+        让位（按 0 下发），停嘴后恢复，说完一句话嘴形表情不会丢。
+        """
+        vowel_state = self.state_manager.vowel_state
+        vowel_state.set_vowel(key, weight)
+        self.state_manager.expression_state.set_speaking(vowel_state.active)
 
     def _set_speaking(self, speaking: bool) -> None:
         """说话状态回调：说话时点头（talking-head 任务），停说即恢复。"""

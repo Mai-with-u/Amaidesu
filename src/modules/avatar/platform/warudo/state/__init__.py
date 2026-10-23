@@ -6,19 +6,19 @@
 """
 
 from .warudo_state_manager import (
-    EyebrowState,
+    ExpressionState,
     EyeState,
-    MouthState,
     PupilState,
     SightState,
+    VowelState,
     WarudoStateManager,
 )
 
 __all__ = [
     "WarudoStateManager",
     "SightState",
-    "EyebrowState",
+    "ExpressionState",
     "EyeState",
     "PupilState",
-    "MouthState",
+    "VowelState",
 ]

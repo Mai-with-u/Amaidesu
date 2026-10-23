@@ -1,11 +1,15 @@
 """Warudo 状态管理系统
 
 包含所有状态类和状态管理器，用于管理 Warudo 模型的面部表情状态。
+
+表情键的全集由表情档案决定（见 ``expression_profile``），本模块不认任何
+具体模型的形状名；眨眼、移眼、口型元音是固定协议键。
 """
 
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
+from src.modules.avatar.platform.warudo.expression_profile import BLINK_KEY, VOWEL_KEYS
 from src.modules.logging import ModuleLogger
 
 # ==================== 常量定义 ====================
@@ -25,39 +29,11 @@ name_transfer_dict = {
     "phone": "phone",
 }
 
-ALL_EYEBROW_STATE = {
-    "eyebrow_happy_weak": 0.0,
-    "eyebrow_happy_strong": 0.0,
-    "eyebrow_angry_weak": 0.0,
-    "eyebrow_angry_strong": 0.0,
-    "eyebrow_sad_weak": 0.0,
-    "eyebrow_sad_strong": 0.0,
-}
-
-ALL_EYE_STATE = {
-    "eye_happy_strong": 0.0,
-    "eye_close": 0.0,
-}
-
 ALL_PUPIL_STATE = {
     "eye_shift_left": 0.0,
     "eye_shift_right": 0.0,
     "eye_shift_up": 0.0,
     "eye_shift_down": 0.0,
-}
-
-ALL_MOUTH_STATE = {
-    "mouth_happy_strong": 0.0,
-    "mouth_angry_weak": 0.0,
-    "mouth_sad_weak": 0.0,
-    "mouth_smlie_2": 0.0,
-    "mouth_smlie_3": 0.0,
-    "mouth_smlie_teeth": 0.0,
-    "VowelA": 0.0,
-    "VowelI": 0.0,
-    "VowelU": 0.0,
-    "VowelE": 0.0,
-    "VowelO": 0.0,
 }
 
 
@@ -108,60 +84,59 @@ class SightState:
         self.changed = True
 
 
-class EyebrowState:
-    """眉毛状态管理"""
+class ExpressionState:
+    """情绪表情状态：当前情绪写入的表情键与权重。
 
-    def __init__(self) -> None:
-        self.first_layer = {
-            "eyebrow_happy_weak": 0.0,
-            "eyebrow_happy_strong": 0.0,
-            "eyebrow_angry_weak": 0.0,
-            "eyebrow_angry_strong": 0.0,
-            "eyebrow_sad_weak": 0.0,
-            "eyebrow_sad_strong": 0.0,
-        }
+    换情绪时整表替换并整表下发（不在新情绪里的键发 0），旧表情不残留；
+    说话口型生效期间，嘴部表情键暂时按 0 下发，停嘴后恢复原权重。
+    """
+
+    def __init__(self, keys: Iterable[str] = (), mouth_keys: Iterable[str] = ()) -> None:
+        # 眨眼键由眼部状态单独合并下发，这里排除，避免两路同时写同一个键
+        self.weights: Dict[str, float] = {key: 0.0 for key in keys if key != BLINK_KEY}
+        self.mouth_keys = frozenset(mouth_keys)
+        self.speaking = False
         self.changed = True
+
+    def set_weights(self, weights: Dict[str, float]) -> None:
+        """整表替换当前表情：列出的键取新权重，其余键清零。"""
+        for key in self.weights:
+            self.weights[key] = 0.0
+        for key, weight in weights.items():
+            if key != BLINK_KEY:
+                self.weights[key] = max(0.0, min(1.0, float(weight)))
+        self.changed = True
+
+    def set_speaking(self, speaking: bool) -> None:
+        """口型开始/结束：只有档案配置了嘴部表情键时才需要重发。"""
+        if speaking == self.speaking:
+            return
+        self.speaking = speaking
+        if self.mouth_keys:
+            self.changed = True
+
+    def get_state(self) -> Dict[str, float]:
+        """待下发的表情权重（说话时嘴部表情键按 0 下发）"""
+        if not self.speaking:
+            return dict(self.weights)
+        return {key: (0.0 if key in self.mouth_keys else weight) for key, weight in self.weights.items()}
 
     async def send_state(self, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
-        """发送眉毛状态
-
-        Args:
-            send_action_callback: 发送动作的回调函数
-        """
-        state = self.get_eyebrow_state()
-        for k, v in state.items():
-            await send_action_callback(k, v)
-
-    def get_eyebrow_state(self) -> Dict[str, float]:
-        """获取眉毛状态"""
-        result = ALL_EYEBROW_STATE.copy()
-        if any(v > 0 for v in self.first_layer.values()):
-            for k in result:
-                if k in self.first_layer:
-                    result[k] = self.first_layer[k]
-        return result
-
-    def set_first_layer(self, key: str, weight: float = 1.0) -> None:
-        """设置第一层状态
-
-        Args:
-            key: 眉毛状态类型
-            weight: 权重 (0.0-1.0)
-        """
-        for k in self.first_layer:
-            self.first_layer[k] = 0.0
-        self.first_layer[key] = weight
-        self.changed = True
+        """整表下发表情键（含零值，保证旧值被清掉）"""
+        for key, weight in self.get_state().items():
+            await send_action_callback(key, weight)
 
 
 class EyeState:
-    """眼睛状态管理"""
+    """眼部状态：眨眼与情绪对眨眼键的写入合并成一个下发值。
+
+    情绪写了眨眼键（如困倦半闭眼）或档案指定的暂停眨眼键（如笑眼）生效时，
+    自动眨眼暂停，避免眨眼把情绪眼形覆盖掉。
+    """
 
     def __init__(self) -> None:
-        self.first_layer = {
-            "eye_happy_strong": 0.0,
-            "eye_close": 0.0,
-        }
+        self.expression_weight = 0.0
+        self.blink_blocked = False
         self.is_blinking = False
         self.changed = True
 
@@ -169,22 +144,15 @@ class EyeState:
         """检查是否可以眨眼
 
         Returns:
-            bool: 如果当前没有其他眼部动作，返回 True
+            bool: 情绪没有占用眼部时返回 True
         """
-        # 只要 eye_happy_strong 或 eye_close 有值（非0），就不能眨眼
-        if self.first_layer.get("eye_happy_strong", 0.0) > 0 or self.first_layer.get("eye_close", 0.0) > 0:
-            return False
-        return True
+        return not self.blink_blocked and self.expression_weight <= 0
 
-    async def send_state(self, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
-        """发送眼睛状态
-
-        Args:
-            send_action_callback: 发送动作的回调函数
-        """
-        state = self.get_eye_state()
-        for k, v in state.items():
-            await send_action_callback(k, v)
+    def set_expression(self, weight: float, blink_blocked: bool) -> None:
+        """情绪写入眨眼键的权重，以及当前情绪是否暂停眨眼"""
+        self.expression_weight = max(0.0, min(1.0, float(weight)))
+        self.blink_blocked = blink_blocked
+        self.changed = True
 
     def set_blinking(self, is_blinking: bool) -> None:
         """设置眨眼状态
@@ -195,36 +163,18 @@ class EyeState:
         self.is_blinking = is_blinking
         self.changed = True
 
-    def set_first_layer(self, key: str, weight: float = 1.0) -> None:
-        """设置第一层状态
+    def get_eye_state(self) -> Dict[str, float]:
+        """获取眼睛状态：眨眼中闭满，否则取情绪写入的权重"""
+        return {BLINK_KEY: 1.0 if self.is_blinking else self.expression_weight}
+
+    async def send_state(self, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
+        """发送眼睛状态
 
         Args:
-            key: 眼睛状态类型
-            weight: 权重 (0.0-1.0)
+            send_action_callback: 发送动作的回调函数
         """
-        if not key:
-            for k in self.first_layer:
-                self.first_layer[k] = 0.0
-            self.changed = True
-            return
-
-        for k in self.first_layer:
-            self.first_layer[k] = 0.0
-        self.first_layer[key] = weight
-        self.changed = True
-
-    def get_eye_state(self) -> Dict[str, float]:
-        """获取眼睛状态"""
-        result = ALL_EYE_STATE.copy()
-        if self.is_blinking:
-            result["eye_close"] = 1.0
-            return result
-
-        if any(v > 0 for v in self.first_layer.values()):
-            for k in result:
-                if k in self.first_layer:
-                    result[k] = self.first_layer[k]
-        return result
+        for k, v in self.get_eye_state().items():
+            await send_action_callback(k, v)
 
 
 class PupilState:
@@ -269,78 +219,30 @@ class PupilState:
         self.changed = True
 
 
-class MouthState:
-    """嘴巴状态管理，获取状态时，如果有口型，会优先只返回口型状态"""
+class VowelState:
+    """口型元音状态：同一时刻只保留一个元音键（口型渲染器取最强元音）"""
 
     def __init__(self) -> None:
-        self.first_layer = {
-            "mouth_happy_strong": 0.0,
-            "mouth_angry_weak": 0.0,
-            "mouth_sad_weak": 0.0,
-            "mouth_smlie_2": 0.0,
-            "mouth_smlie_3": 0.0,
-            "mouth_smlie_teeth": 0.0,
-        }
-        self.second_layer = {
-            "VowelA": 0.0,
-            "VowelI": 0.0,
-            "VowelU": 0.0,
-            "VowelE": 0.0,
-            "VowelO": 0.0,
-        }
+        self.weights: Dict[str, float] = {key: 0.0 for key in VOWEL_KEYS}
         self.changed = True
+
+    def set_vowel(self, key: str, weight: float) -> None:
+        """写入一个元音并清零其余；空键 = 全部清零（停嘴）"""
+        for existing in self.weights:
+            self.weights[existing] = 0.0
+        if key in self.weights:
+            self.weights[key] = max(0.0, min(1.0, float(weight)))
+        self.changed = True
+
+    @property
+    def active(self) -> bool:
+        """是否有元音正在张嘴"""
+        return any(v > 0 for v in self.weights.values())
 
     async def send_state(self, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
-        """发送嘴巴状态
-
-        Args:
-            send_action_callback: 发送动作的回调函数
-        """
-        state = self.get_mouth_state()
-        for k, v in state.items():
-            await send_action_callback(k, v)
-
-    def set_first_layer(self, key: str, weight: float = 1.0) -> None:
-        """设置第一层状态
-
-        Args:
-            key: 嘴巴状态类型
-            weight: 权重 (0.0-1.0)
-        """
-        for k in self.first_layer:
-            self.first_layer[k] = 0.0
-        self.first_layer[key] = weight
-        self.changed = True
-
-    def get_mouth_state(self) -> Dict[str, float]:
-        """获取嘴巴状态"""
-        result = ALL_MOUTH_STATE.copy()
-        if any(v > 0 for v in self.second_layer.values()):
-            # 优先返回口型状态
-            for k in result:
-                if k in self.second_layer:
-                    result[k] = self.second_layer[k]
-        else:
-            # 返回表情状态
-            for k in result:
-                if k in self.first_layer:
-                    result[k] = self.first_layer[k]
-                elif k in self.second_layer:
-                    result[k] = self.second_layer[k]
-        return result
-
-    def set_vowel_state(self, lip_sync_states: Dict[str, float]) -> None:
-        """设置口型状态
-
-        Args:
-            lip_sync_states: 字典，格式为 {"VowelA": 0.8, "VowelI": 0.3, ...}
-        """
-        for vowel_key, intensity in lip_sync_states.items():
-            if vowel_key in self.second_layer:
-                # 限制强度值范围
-                intensity = max(0.0, min(1.0, float(intensity)))
-                self.second_layer[vowel_key] = intensity
-                self.changed = True
+        """整表下发元音键（含零值）"""
+        for key, weight in self.weights.items():
+            await send_action_callback(key, weight)
 
 
 # ==================== 状态管理器 ====================
@@ -352,33 +254,34 @@ class WarudoStateManager:
     管理所有面部状态，并定期检查并发送变化到 Warudo。
     """
 
-    def __init__(self, logger: ModuleLogger, send_action_callback: Callable[[str, Any], Awaitable[None]]) -> None:
+    def __init__(
+        self,
+        logger: ModuleLogger,
+        send_action_callback: Callable[[str, Any], Awaitable[None]],
+        expression_keys: Iterable[str] = (),
+        mouth_keys: Iterable[str] = (),
+    ) -> None:
         """初始化状态管理器
 
         Args:
             logger: 日志记录器
             send_action_callback: 发送动作的回调函数，签名为 async def send_action(name: str, value: Any)
+            expression_keys: 表情档案涉及的全部表情键（换情绪时整表重发）
+            mouth_keys: 说话口型期间暂时归零的嘴部表情键
         """
         self.logger = logger
         self.send_action_callback = send_action_callback
 
         # 初始化所有状态
+        self.expression_state = ExpressionState(expression_keys, mouth_keys)
         self.eye_state = EyeState()
         self.pupil_state = PupilState()
-        self.mouth_state = MouthState()
-        self.eyebrow_state = EyebrowState()
+        self.vowel_state = VowelState()
         self.sight_state = SightState()
 
         # 监控任务
         self._monitoring_task: Optional[asyncio.Task] = None
         self._is_monitoring = False
-
-        # 需要使用 debug 日志级别的动作列表
-        self.debug_actions = {
-            "eye_shift_left",
-            "eye_shift_right",
-            "eye_close",
-        }
 
         self.logger.info("Warudo 状态管理器已初始化")
 
@@ -423,33 +326,15 @@ class WarudoStateManager:
             self.logger.exception(f"状态监控循环出错: {e}")
 
     async def _send_changed_states(self) -> None:
-        """发送所有变化的状态"""
-        # 嘴巴状态
-        if self.mouth_state.changed:
-            await self.mouth_state.send_state(self.send_action_callback)
-            self.logger.debug("发送嘴巴状态")
-            self.mouth_state.changed = False
-
-        # 眼睛状态
-        if self.eye_state.changed:
-            await self.eye_state.send_state(self.send_action_callback)
-            self.logger.debug("发送眼睛状态")
-            self.eye_state.changed = False
-
-        # 瞳孔状态
-        if self.pupil_state.changed:
-            await self.pupil_state.send_state(self.send_action_callback)
-            self.logger.debug("发送瞳孔状态")
-            self.pupil_state.changed = False
-
-        # 眉毛状态
-        if self.eyebrow_state.changed:
-            await self.eyebrow_state.send_state(self.send_action_callback)
-            self.logger.debug("发送眉毛状态")
-            self.eyebrow_state.changed = False
-
-        # 视线状态
-        if self.sight_state.changed:
-            await self.sight_state.send_state(self.send_action_callback)
-            self.logger.debug("发送视线状态")
-            self.sight_state.changed = False
+        """发送所有变化的状态：口型 → 表情 → 眼 → 瞳孔 → 视线"""
+        for label, state in (
+            ("口型", self.vowel_state),
+            ("表情", self.expression_state),
+            ("眼睛", self.eye_state),
+            ("瞳孔", self.pupil_state),
+            ("视线", self.sight_state),
+        ):
+            if state.changed:
+                await state.send_state(self.send_action_callback)
+                self.logger.debug(f"发送{label}状态")
+                state.changed = False

@@ -1,6 +1,6 @@
 """Warudo 口型渲染器：平台无关口型信号 → Warudo Vowel 通道
 
-元音成分 A/I/U/E/O 写入嘴部 blendshape 状态件的 ``VowelA~O`` 通道
+元音成分 A/I/U/E/O 写入元音状态件的 ``VowelA~O`` 通道
 （经监控循环推送到 Warudo）；张嘴量参与开口元音（A/O）的权重，与
 Warudo 原生音频口型互斥（启用本渲染器时应在 Warudo 侧关闭原生口型）。
 """
@@ -15,7 +15,7 @@ _OPEN_VOWELS = ("A", "O")
 
 
 class WarudoLipSyncRenderer(LipSyncRenderer):
-    """Warudo 口型渲染器：``MouthSignal`` → 嘴部状态件 ``VowelA~O`` 通道"""
+    """Warudo 口型渲染器：``MouthSignal`` → 元音状态件 ``VowelA~O`` 通道"""
 
     def __init__(
         self,
@@ -24,8 +24,8 @@ class WarudoLipSyncRenderer(LipSyncRenderer):
         set_mouth_channel: Callable[[str, float], Any],
     ) -> None:
         """Args:
-        set_mouth_channel: 嘴部通道写入回调（provider 的 mouth_state.set_first_layer
-            单键写法包装——先清零再设目标通道，避免旧元音残留）。
+        set_mouth_channel: 元音通道写入回调（provider 的元音状态件单键写法——
+            先清零再设目标元音，避免旧元音残留；空键 = 停嘴）。
         """
         self.logger = get_logger(logger_name)
         self._set_mouth_channel = set_mouth_channel

@@ -1,10 +1,10 @@
 """Warudo 工具模块"""
 
 from .state.warudo_state_manager import (
-    EyebrowState,
+    ExpressionState,
     EyeState,
-    MouthState,
     PupilState,
+    VowelState,
     SightState,
     WarudoStateManager,
 )
@@ -22,10 +22,10 @@ __all__ = [
     "register_warudo_tools",
     "WarudoStateManager",
     "SightState",
-    "EyebrowState",
+    "ExpressionState",
     "EyeState",
     "PupilState",
-    "MouthState",
+    "VowelState",
     "BlinkTask",
     "ShiftTask",
     "TalkingHeadTask",

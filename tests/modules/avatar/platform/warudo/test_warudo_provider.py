@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
 from src.modules.avatar.platform.warudo.warudo_provider import (
     WarudoProvider,
     create_warudo_provider,
@@ -70,13 +71,40 @@ def test_tools_degraded_to_empty_when_not_connected_and_registry_follows_connect
     assert registry.list_tools(provider="warudo") == []  # 断连摘除
 
 
-async def test_set_expression_and_sight_write_state_and_validate_target() -> None:
+async def test_set_expression_uses_vrm_standard_names_by_default_and_validates_emotion() -> None:
     provider = _provider()
-    result = await _invoke(provider, "warudo_set_expression", emotion="happy", intensity=1.0)
-    # 情绪写入 blendshape 状态件（监控循环推送），不直连 WebSocket
-    assert result.success is True
-    assert result.structured_content["applied"]["mouth"] == {"key": "mouth_happy_strong", "weight": 1.0}
+    result = await _invoke(provider, "warudo_set_expression", emotion="tired", intensity=0.5)
+    # 情绪写入状态件（监控循环推送），不直连 WebSocket；默认档案用 VRM 标准表情名
+    assert result.success is True and result.structured_content["applied"] == {"relaxed": 0.3, "eye_close": 0.2}
+    state = provider.state_manager
+    assert state.expression_state.weights["relaxed"] == 0.3 and state.eye_state.get_eye_state()["eye_close"] == 0.2
 
+    assert (await _invoke(provider, "warudo_set_expression", emotion="joyful")).success is False  # 词表外情绪
+    happy = await _invoke(provider, "warudo_set_expression", emotion="happy", intensity=1.0)
+    assert happy.structured_content["applied"] == {"happy": 1.0}
+    assert (await _invoke(provider, "warudo_set_expression", emotion="neutral")).structured_content["applied"] == {}
+    assert state.expression_state.weights["happy"] == 0.0  # 中性 = 清空表情
+
+
+async def test_maimai_profile_keeps_its_shapes_blink_rule_and_mouth_handoff() -> None:
+    provider = _provider(expression=read_profile_expression(MAIMAI_PROFILE_PATH))
+    state = provider.state_manager
+
+    await provider.set_expression("love", 1.0)
+    assert state.expression_state.weights["eye_happy_strong"] == 1.0
+    assert state.eye_state.can_blink() is False  # 笑眼生效时眨眼任务跳过
+
+    await provider.set_expression("happy", 1.0)
+    provider._set_mouth_channel("VowelA", 0.7)  # 口型开始：嘴形让位，眉形保留
+    assert state.expression_state.get_state()["mouth_happy_strong"] == 0.0
+    assert state.expression_state.get_state()["eyebrow_happy_weak"] == 0.8
+    assert state.vowel_state.weights["VowelA"] == 0.7
+    provider._set_mouth_channel("", 0.0)  # 停嘴：嘴形恢复，不等下一句
+    assert state.expression_state.get_state()["mouth_happy_strong"] == 1.0 and not state.vowel_state.active
+
+
+async def test_set_sight_validates_target() -> None:
+    provider = _provider()
     assert (await _invoke(provider, "warudo_set_sight", target="camera")).success is True
     assert (await _invoke(provider, "warudo_set_sight", target="wall")).success is False  # target 只有三个合法值
 
