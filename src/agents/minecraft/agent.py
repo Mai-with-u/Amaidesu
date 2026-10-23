@@ -27,6 +27,7 @@ from contextlib import suppress
 from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
+from src.agents.minecraft.attention_matrix import classify, summarize
 from src.agents.minecraft.context import FACTS_KEY, MinecraftHistoryCompactor, close_interrupted_calls, json_text
 from src.agents.minecraft.glance import glance_scene, glance_self
 from src.agents.minecraft.goals import GoalWatch
@@ -1159,16 +1160,15 @@ class MinecraftAgent(BaseAgent):
             # 这里只说明来龙去脉、提醒复活后先看一眼自己，不催模型重下目标。
             if self._batch_active or not self._task_finished:
                 self._inject_wakeup_message(self._body_notice_content(kind, notice, message))
-            await self._emit_game_event("attention_required", message)
+            # 上报主播的是给观众听的白话（模型那边仍收 Mod 原话）：和注意流采集器的叙事同一套说法
+            await self._emit_game_event("attention_required", summarize(classify(kind) or "unknown", kind, message))
             return
         if not self._batch_active or (kind, message) in self._body_notified:
             return
         self._body_notified.add((kind, message))
-        notice = (
-            f"执行任务期间身体先处理了一件急事：{message}"
-            if kind == "temporary_task_started"
-            else f"身体处理完急事：{message}"
-        )
+        # 任务进行中的急事：开头点明是在做事时碰上的，正文是白话化的 Mod 原话
+        spoken = summarize(classify(kind) or "unknown", kind, message)
+        notice = f"执行任务时{spoken}" if kind == "temporary_task_started" else spoken
         await self._emit_game_event("attention_required", notice, already_resolved=kind == "temporary_task_finished")
 
     def _body_notice_content(self, kind: str, notice: str, message: str) -> str:

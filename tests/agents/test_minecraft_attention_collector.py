@@ -5,7 +5,7 @@
 覆盖：
 - 元数据/继承/配置默认值
 - 分类：临时任务开始与结束、处理不了的需求进叙事通道，目标运行的处境变化不进
-- 摘要：Mod 那句话去掉坐标，坐标这类遥测不进事件
+- 摘要：Mod 那句话改成观众听得懂的白话，坐标、血量这类遥测不进事件
 - 增量语义：首读只建游标（翻过积压页），之后带流编号与游标长轮询
 - 换流：只重置游标、不转发换流前后的历史
 - 读取失败：游标不动（那一段事件不能因此永久丢失）
@@ -101,30 +101,112 @@ def test_hurt_and_dimension_change_are_encounters_and_reminders_stay_silent() ->
     assert classify("timer_due") is None, "计时到点是游戏 Agent 给自己定的回头看一眼，后续进展另走步进完成与交付"
 
 
-def test_summary_tells_what_kind_of_encounter_it_was() -> None:
-    """挨打、换维度、装备用坏、探索发现：开头说清是什么事，坐标与观察编号不念给观众。"""
-    assert (
-        summarize("attacked", "hurt", "被骷髅（e12）射中 3 下，掉了 6 点血，还剩 8 点")
-        == "身体挨了一阵打：被骷髅射中 3 下，掉了 6 点血，还剩 8 点"
-    )
-    assert summarize("dimension_changed", "dimension_changed", "从主世界到了下界，落在 12, 70, -8") == (
-        "换了个维度：从主世界到了下界"
-    )
-    assert summarize("unknown", "gear_broken", "铁镐用坏了") == "手上的装备用坏了：铁镐用坏了"
-    assert summarize("unknown", "discovered", "看见一片岩浆湖") == "探索时发现了值得记的东西：看见一片岩浆湖"
-    # 天色变了有自己的开头，不念成"身体事件：sky_changed"；括号里的时间与天气照念，分号重组为逗号。
-    assert summarize("unknown", "sky_changed", "天黑了，到了能睡的时间（夜晚，距天亮约 8 分钟；晴）") == (
-        "天色变了：天黑了，到了能睡的时间（夜晚，距天亮约 8 分钟，晴）"
-    )
-    assert summarize("unknown", "sky_changed", "开始下雨了（白天；雨）") == "天色变了：开始下雨了（白天，雨）"
+@pytest.mark.parametrize(
+    ("kind", "source", "message", "expected"),
+    [
+        # 下面的原话都摘自真实直播的事件流：Mod 写给游戏 Agent 的说法换成观众听得懂的白话，数字一律不念
+        ("attacked", "hurt", "摔了一下，掉了 1.7 点血，还剩 18.3 点", "摔了一下"),
+        ("attacked", "hurt", "被苦力怕炸到一下，掉了 1 点血，还剩 7.8 点", "被苦力怕炸到一下，血掉了不少"),
+        ("attacked", "hurt", "摔了 2 下，掉了 4.4 点血，还剩 17.4 点", "摔了好几下"),
+        ("attacked", "hurt", "被骷髅（e12）射中 3 下，掉了 6 点血，还剩 3 点", "被骷髅射中好几下，血快没了"),
+        (
+            "died",
+            "character_died",
+            "角色死了（Dev被蜘蛛杀死了），等重生，它下的目标停在原地，目标 426 maicraft:obtain 第 0 步，"
+            "看现场决定下一件做什么，重生后接着做",
+            "死了：被蜘蛛杀死了，等重生，重生后接着做",
+        ),
+        (
+            "need_unhandled",
+            "need_unhandled",
+            "饿了但没吃上，弄吃的过了 60 秒还没弄到（在弄#c:foods/cooked_meat 里的任一物品），先回去继续干活",
+            "有件事没办成：饿了但没吃上，先回去继续干活",
+        ),
+        (
+            "reflex_finished",
+            "temporary_task_finished",
+            "已撤离，甩开了追兵（手上没有任何武器，对面会还手），离打点 27 格",
+            "急事处理完了：跑开了，甩开了追兵（手上没有任何武器，对面会还手）",
+        ),
+        (
+            "reflex_finished",
+            "temporary_task_finished",
+            "自卫结束，回到打点，没见打倒哪只（拿 minecraft:string 挥中 1 下），位移 1 格，掉了约 1 颗心",
+            "急事处理完了：打完了，没打倒哪只，掉了点血",
+        ),
+        (
+            "reflex_finished",
+            "temporary_task_finished",
+            "自卫结束，回到打点，位移 1 格，掉了约 0 颗心",
+            "急事处理完了：打完了，没掉血",
+        ),
+        # 范围限定换成"附近"但不丢：说成"根本没床"就是没凭据的断言
+        (
+            "reflex_finished",
+            "temporary_task_finished",
+            "天黑了想去睡，没睡成，睡觉没有完成，32 格内没有能睡的床，身上也没带床"
+            "（扫到 1 张床，都睡不上，1 张超出这次肯走的距离），夜里不走远路去睡，也不摸黑去弄床",
+            "急事处理完了：天黑了想去睡，没睡成，附近没有能睡的床，身上也没带床，夜里不走远路去睡，也不摸黑去弄床",
+        ),
+        (
+            "reflex_finished",
+            "temporary_task_finished",
+            "捡回了死时撒在地上的东西（身上多了 3 格），接着干活",
+            "急事处理完了：捡回了死时撒在地上的东西，接着干活",
+        ),
+        (
+            "reflex_finished",
+            "temporary_task_finished",
+            "退回了安全处，继续干活",
+            "急事处理完了：退回了安全处，继续干活",
+        ),
+        (
+            "reflex_started",
+            "temporary_task_started",
+            "被威胁，插入自卫：打点在 3, 64, -9",
+            "先放下手上的事：被怪盯上了，先自卫",
+        ),
+        (
+            "reflex_started",
+            "temporary_task_started",
+            "刚重生，回死的地方捡东西（还有 285 秒就消失）",
+            "先放下手上的事：刚重生，回死的地方捡东西",
+        ),
+        # 括号里的时间天气说得出口就照念；夹了倒计时这种数字就整段不要，不留半截
+        (
+            "unknown",
+            "sky_changed",
+            "天黑了，到了能睡的时间（傍晚，晴）",
+            "天色变了：天黑了，到了能睡的时间（傍晚，晴）",
+        ),
+        ("unknown", "sky_changed", "开始下雨了（夜晚，距天亮约 8 分钟；雨）", "天色变了：开始下雨了"),
+        (
+            "unknown",
+            "gear_broken",
+            "装备用坏了，mainhand 的 minecraft:iron_pickaxe 耐久打空消灭了（满耐久 250，最后看到剩 1）",
+            "装备用坏了：铁镐坏了",
+        ),
+        ("unknown", "discovered", "发现群系 minecraft:lush_caves（脚下）", "发现了新东西：繁茂洞穴（脚下）"),
+        ("unknown", "discovered", "看见一片岩浆湖", "发现了新东西：看见一片岩浆湖"),
+        (
+            "unknown",
+            "stalled",
+            "目标 425（maicraft:obtain（做一张床所需的 3 块羊毛））已经 10 分钟没有任何新事件，"
+            "仍在推进中，用 goal 按编号看它此刻在做什么，不会再动了就取消",
+            "手上的事好一阵没进展了",
+        ),
+        ("dimension_changed", "dimension_changed", "从主世界到了下界，落在 12, 70, -8", "换了个维度：从主世界到了下界"),
+        ("need_unhandled", "need_unhandled", "", "有件事没办成"),
+        ("unknown", "something_new", "", "游戏里有了新动静"),
+    ],
+)
+def test_summary_is_plain_speech_for_viewers(kind: str, source: str, message: str, expected: str) -> None:
+    """摘要是观众听得懂的白话：开头说清是什么事，幕后说法换掉，坐标、血量、格数、秒数一律不念。"""
+    assert summarize(kind, source, message) == expected
 
 
-def test_summary_drops_coordinates_and_keeps_the_rest() -> None:
-    """摘要只陈述事件里有的事实，带坐标的分句整句去掉，不留"停在了"这种残片。"""
-    assert (
-        summarize("reflex_started", "temporary_task_started", "被威胁，插入自卫：打点在 3, 64, -9")
-        == "身体先停下手上的活处理急事：被威胁，插入自卫"
-    )
+def test_without_coordinates_keeps_milestone_conclusions() -> None:
+    """进展结论句只去坐标与观察编号（不走白话化），不留"停在了"这种残片。"""
     assert (
         without_coordinates("自卫结束但走不回打点（还差 7 格），停在了 3, 64, 9；主任务已暂停，等下一步指示")
         == "自卫结束但走不回打点（还差 7 格），主任务已暂停，等下一步指示"
@@ -135,12 +217,6 @@ def test_summary_drops_coordinates_and_keeps_the_rest() -> None:
         == "第 3 步（maicraft:build，砌东墙），按图建好了"
     )
     assert without_coordinates("挖到了: 3 个 minecraft:iron_ore") == "挖到了，3 个 minecraft:iron_ore"
-    assert summarize("reflex_finished", "temporary_task_finished", "退回了安全处，继续干活") == (
-        "身体处理完急事：退回了安全处，继续干活"
-    )
-    assert summarize("need_unhandled", "need_unhandled", "") == "身体遇到处理不了的事"
-    assert summarize("died", "character_died", "角色死了，等重生") == "角色倒下了：角色死了，等重生"
-    assert summarize("unknown", "something_new", "") == "身体事件：something_new"
 
 
 def test_body_event_names_are_the_closed_kind_set() -> None:
@@ -164,10 +240,10 @@ def test_body_event_names_are_the_closed_kind_set() -> None:
 
 def test_body_payload_requires_game_and_kind() -> None:
     """游戏标识由发布方给定（框架不假定是哪款游戏），缺 game 直接报错。"""
-    payload = BodyEventPayload(game="minecraft", kind="reflex_started", summary="身体先停下手上的活处理急事")
+    payload = BodyEventPayload(game="minecraft", kind="reflex_started", summary="先放下手上的事")
     assert payload.game == "minecraft" and payload.timestamp_ms > 0
     with pytest.raises(ValidationError):
-        BodyEventPayload(kind="reflex_started", summary="身体先停下手上的活处理急事")
+        BodyEventPayload(kind="reflex_started", summary="先放下手上的事")
 
 
 # 增量读取与转发
@@ -213,8 +289,8 @@ async def test_incremental_read_forwards_only_body_encounters() -> None:
     ]
     started, need = bus.events[0][1], bus.events[1][1]
     assert started.kind == "reflex_started" and started.source_event_type == "temporary_task_started"
-    assert started.summary == "身体先停下手上的活处理急事：被威胁，插入自卫" and started.resolved is False
-    assert need.summary.startswith("身体遇到处理不了的事：饿了但没吃上")
+    assert started.summary == "先放下手上的事：被怪盯上了，先自卫" and started.resolved is False
+    assert need.summary == "有件事没办成：饿了但没吃上，身上没有食物，先回去继续干活"
     # 坐标与游标这类遥测不入事件（比对时去掉随机 id，免得 uuid 里碰巧出现 "-9"）
     dumped = json.dumps([payload.model_dump(exclude={"id"}) for _, payload in bus.events], ensure_ascii=False)
     assert "-9" not in dumped and "cursor" not in dumped

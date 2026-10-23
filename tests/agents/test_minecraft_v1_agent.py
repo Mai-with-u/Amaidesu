@@ -395,7 +395,8 @@ async def test_character_death_tells_the_running_task_and_the_streamer() -> None
         for call in bus.emit.await_args_list
         if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
     ]
-    assert any("角色死了" in alert.message for alert in alerts)
+    # 上报主播的是白话（模型那边仍收 Mod 原话，见上面的唤醒正文）
+    assert any(alert.message.startswith("死了：") for alert in alerts)
     assert agent._goals.tracked_ids() == [1], "死亡不结束目标"
     await agent.stop()
 
