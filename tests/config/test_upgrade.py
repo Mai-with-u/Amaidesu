@@ -157,7 +157,8 @@ def test_load_advances_only_files_with_hooks_writes_back_and_second_load_is_clea
     assert get_config_version(tmp_path, "infra.toml") == tail_version(
         "infra.toml"
     )  # 未拨版本但有生产钩子的文件随调度推进
-    assert get_config_version(tmp_path, "avatar.toml") == CONFIG_BASELINE_VERSION  # 无宿主钩子：保持基线种子值
+    # 钩子 target 都不高于基线的文件：没有适用钩子，保持基线种子值
+    assert get_config_version(tmp_path, "storage.toml") == CONFIG_BASELINE_VERSION
 
     _, report = load_config_dir(tmp_path)  # 二次加载：各文件 old == 当前值，零写回
     assert not report.has_drift

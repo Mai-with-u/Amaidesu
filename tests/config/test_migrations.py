@@ -14,6 +14,7 @@ import pytest
 import tomlkit
 from pydantic import ValidationError
 
+from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
 from src.modules.config.model_schemas import LLMModelConfig
 from src.modules.config.multi_file_loader import generate_default_configs, get_config_version, load_config_dir
 from src.modules.config.upgrade import (
@@ -272,6 +273,34 @@ def _check_avatar_lipsync_and_idle(d: Path) -> None:
     assert vts["vts_host"] == "127.0.0.1" and vts["idle_extra_params"]["SleeveL"] == 0.3
 
 
+def _seed_warudo_expression(enabled: list[str], keep_profile: bool = False) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "avatar.toml", "2.0.38")
+        platform = doc["platform"]
+        platform["enabled"] = enabled
+        if keep_profile:  # 用户已显式写过档案：只留一个情绪做标记
+            platform["warudo"]["expression"]["emotions"] = {"happy": {"smile": 1.0}}
+        else:  # 拨回旧布局：情绪映射还在代码里，文件没有档案段
+            del platform["warudo"]["expression"]
+        write_doc(d, "avatar.toml", doc)
+
+    return seed
+
+
+def _check_warudo_expression(expected: str) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        expression = read_doc(d, "avatar.toml")["platform"]["warudo"]["expression"]
+        emotions = expression["emotions"]
+        if expected == "maimai":  # 已启用 Warudo：写入麦麦档案，保持原表现
+            assert expression.unwrap() == read_profile_expression(MAIMAI_PROFILE_PATH)
+        elif expected == "vrm":  # 未启用：按默认 VRM 标准档案补出
+            assert dict(emotions["happy"]) == {"happy": 1.0} and len(emotions) == 17
+        else:  # 已有档案原样保留
+            assert emotions.unwrap() == {"happy": {"smile": 1.0}}
+
+    return check
+
+
 # collectors.toml
 
 
@@ -322,6 +351,24 @@ CASES = [
         ("tools.toml", "infra.toml"),
         _seed_avatar_lipsync_and_idle,
         _check_avatar_lipsync_and_idle,
+    ),
+    Case(
+        "warudo-enabled-gets-maimai-profile",
+        ("avatar.toml",),
+        _seed_warudo_expression(["vts", "warudo"]),
+        _check_warudo_expression("maimai"),
+    ),
+    Case(
+        "warudo-disabled-gets-vrm-default",
+        ("avatar.toml",),
+        _seed_warudo_expression(["vts"]),
+        _check_warudo_expression("vrm"),
+    ),
+    Case(
+        "warudo-explicit-profile-kept",
+        ("avatar.toml",),
+        _seed_warudo_expression(["warudo"], keep_profile=True),
+        _check_warudo_expression("kept"),
     ),
     Case(
         "minecraft-companion-collectors", ("collectors.toml",), _seed_minecraft_companions, _check_minecraft_companions

@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Protocol
 
+from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
 from src.modules.config.errors import ConfigValidationError
 from src.modules.logging import get_logger
 
@@ -567,6 +568,33 @@ register_cross_file_hook(
 register_cross_file_hook(
     "infra.toml", "avatar.toml", "avatar_lipsync_to_avatar_file", "2.0.38", _upgrade_avatar_lipsync_to_avatar_file
 )
+
+
+def _upgrade_warudo_maimai_expression(data: Dict[str, Any]) -> List[str]:
+    """avatar.toml v2.0.41：已启用 Warudo 的配置写入麦麦表情档案。
+
+    情绪 → 表情键映射改由 ``[platform.warudo.expression]`` 配置、默认取 VRM
+    标准表情名；此前适配器内置的是麦麦模型的自定义形状名。启用名单里已有
+    Warudo 的部署一直按麦麦映射运行，写入麦麦档案保持表现不变；未启用的
+    部署拿默认档案。已有档案段视为用户显式配置，不动。对已迁移数据零变更（幂等）。
+    """
+    platform = data.get("platform")
+    if not isinstance(platform, dict):
+        return []
+    enabled = platform.get("enabled")
+    if not isinstance(enabled, list) or "warudo" not in enabled:
+        return []
+    warudo = platform.setdefault("warudo", {})
+    if not isinstance(warudo, dict) or "expression" in warudo:
+        return []
+    warudo["expression"] = read_profile_expression(MAIMAI_PROFILE_PATH)
+    return ["platform.warudo.expression（写入麦麦表情档案）"]
+
+
+# 生产钩子登记：avatar.toml v2.0.41（已启用 Warudo 的配置写入麦麦表情档案）。
+# target 取 2.0.41：存量 avatar.toml 停在 2.0.38（迁出钩子）或新生成基线
+# 2.0.40，两者都要跑到；新生成文件未启用 Warudo，钩子零变更只推进版本
+register_file_hook("avatar.toml", "warudo_maimai_expression", "2.0.41", _upgrade_warudo_maimai_expression)
 
 
 # Minecraft 的两个事件流采集器改为随 Minecraft Agent 开关的附属采集器（见 src.modules.agents.companions）
