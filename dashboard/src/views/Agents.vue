@@ -143,7 +143,7 @@
               </el-button>
               <!-- 重启/关机为低频高风险动作，收进下拉（点击后仍有确认框） -->
               <el-dropdown class="more-actions" trigger="click" @command="onMoreCommand">
-                <el-button size="small" plain :loading="moreActionsLoading">
+                <el-button plain :loading="moreActionsLoading">
                   更多
                   <el-icon class="el-icon--right"><arrow-down /></el-icon>
                 </el-button>

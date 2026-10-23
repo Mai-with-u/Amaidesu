@@ -40,8 +40,8 @@
           <h2 class="sessions-title">场次</h2>
           <span class="grow" />
           <template v-if="isFullMode">
-            <el-button size="small" type="primary" @click="openSession">开启</el-button>
-            <el-button size="small" :disabled="!activeExplicitSession" @click="closeSession"
+            <el-button type="primary" @click="openSession">开启</el-button>
+            <el-button :disabled="!activeExplicitSession" @click="closeSession"
               >结束</el-button
             >
           </template>
@@ -183,16 +183,16 @@
                 <el-radio-button value="chat">会话</el-radio-button>
               </el-radio-group>
               <span class="stage-count mono">{{ entries.length }} / {{ MAX_ENTRIES }}</span>
-              <el-button size="small" :type="paused ? 'primary' : 'default'" @click="togglePause">
+              <el-button :type="paused ? 'primary' : 'default'" @click="togglePause">
                 {{ paused ? '继续' : '暂停' }}
               </el-button>
-              <el-button size="small" :disabled="entries.length === 0" @click="clearTimeline">
+              <el-button :disabled="entries.length === 0" @click="clearTimeline">
                 清空
               </el-button>
             </template>
             <!-- 回到实时只跟场次模式挂钩（回看态导航）；不能 v-else 接前一 template——
                  那里复合了 isFullMode，简洁档实时态会误显本按钮 -->
-            <el-button v-if="sessionMode !== 'live'" size="small" type="primary" @click="backToLive"
+            <el-button v-if="sessionMode !== 'live'" type="primary" @click="backToLive"
               >回到实时</el-button
             >
           </header>

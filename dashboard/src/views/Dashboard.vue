@@ -35,12 +35,11 @@
           <span class="verdict-meta-item">主动发言</span>
           <el-switch
             v-model="proactiveEnabled"
-            size="small"
             :loading="proactiveToggling"
             @change="onProactiveToggle"
           />
         </div>
-        <el-button class="verdict-eventlog" type="primary" plain size="small" @click="goEventLog">
+        <el-button class="verdict-eventlog" type="primary" plain @click="goEventLog">
           事件流
         </el-button>
       </div>

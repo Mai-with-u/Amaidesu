@@ -43,7 +43,7 @@
       class="restart-banner"
     >
       <template #title>有已保存的配置需要重启服务才能生效</template>
-      <el-button size="small" type="primary" @click="showRestartDialog = true">立即重启</el-button>
+      <el-button type="primary" @click="showRestartDialog = true">立即重启</el-button>
     </el-alert>
 
     <!-- 保存失败逐 key 定位：点击 key 切到所属文件 Tab 并滚动高亮字段 -->

@@ -28,7 +28,7 @@
       show-icon
       class="state-block"
     >
-      <el-button size="small" type="primary" @click="refresh">重试</el-button>
+      <el-button type="primary" @click="refresh">重试</el-button>
     </el-alert>
 
     <!-- 不可用态：后端流程单未加载 -->
@@ -44,7 +44,7 @@
           请在设置页配置 <code>agents.streamer.rundown_id</code>；未配置时主播 Agent
           会自动使用内置默认流程单。
         </p>
-        <el-button size="small" type="primary" @click="refresh">重试</el-button>
+        <el-button type="primary" @click="refresh">重试</el-button>
       </el-alert>
     </template>
 
@@ -64,7 +64,7 @@
           <h3 class="section-title">环节预览</h3>
           <div class="section-tools">
             <span class="section-meta">共 {{ state.segments.length }} 个环节</span>
-            <el-button size="small" :icon="EditPen" @click="startEditCurrent">编辑流程单</el-button>
+            <el-button :icon="EditPen" @click="startEditCurrent">编辑流程单</el-button>
           </div>
         </header>
         <el-table
@@ -217,7 +217,7 @@
           <h3 class="section-title">环节清单</h3>
           <div class="section-tools">
             <span class="section-meta">共 {{ state?.segments.length ?? 0 }} 个环节</span>
-            <el-button size="small" :icon="EditPen" @click="startEditCurrent">编辑流程单</el-button>
+            <el-button :icon="EditPen" @click="startEditCurrent">编辑流程单</el-button>
           </div>
         </header>
         <el-table
@@ -439,7 +439,7 @@
 
       <div class="seg-editor-bar">
         <span class="section-title">环节（{{ editorForm.segments.length }}）</span>
-        <el-button size="small" :icon="Plus" @click="openSegmentDialog(-1)">添加环节</el-button>
+        <el-button :icon="Plus" @click="openSegmentDialog(-1)">添加环节</el-button>
       </div>
       <div v-if="editorForm.segments.length === 0" class="seg-editor-empty">
         <el-empty description="至少需要一个环节" :image-size="60" />
