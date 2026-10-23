@@ -604,7 +604,18 @@ class MinecraftAgent(BaseAgent):
         return None
 
     def cancel_task(self, task_id: str, source: str = "") -> bool:
-        """硬取消：清委派追踪清单 + 账面 cancelled + 注入停手通知（不打断当前工具调用）。"""
+        """硬取消：清委派追踪清单 + 账面 cancelled + 注入停手通知（不打断当前工具调用）。
+
+        还排在消息队列里、没被任何批次吸收的委派单同样可撤：直接出队并记账，
+        不注入停手通知（模型根本没见过这条指令，无需停手）。
+        """
+        queued = [item for item in self._message_queue if item[0] == task_id]
+        if queued:
+            self._message_queue = deque(item for item in self._message_queue if item[0] != task_id)
+            if self._task_tracker is not None:
+                self._task_tracker.ledger.update(task_id, "cancelled", summary=f"被取消（source={source or '未知'}）")
+            self._logger.info(f"MinecraftAgent 队列中的委派已撤（task_id={task_id}, source={source or '未知'}）")
+            return True
         if task_id not in self._delegated_batch_ids and task_id not in self._delegated_finished_ids:
             return False
         if task_id in self._delegated_batch_ids:
