@@ -1,4 +1,4 @@
-"""直播近况同步：把开播、换环节、收播与场次回顾推给 MaiBot 上的桥接插件。
+"""直播近况同步：把开播、换环节、收播、场次回顾与整场记录推给 MaiBot 上的桥接插件。
 
 MaiBot 7×24 常驻，Amaidesu 开播时才启动；QQ 那边的麦麦要知道"自己正在直播 /
 刚播完一场"，只能由直播这边在事实发生时推过去。本模块只订阅事实事件并向外推送，
@@ -10,6 +10,9 @@ MaiBot 7×24 常驻，Amaidesu 开播时才启动；QQ 那边的麦麦要知道"
   直播期间按心跳间隔重发，插件错过任何一次都能被下一次补齐，也据此判断直播是否
   仍在进行。
 - **场次回顾**：回顾写好后单独发一次，失败按 5s / 30s / 2min 重试三次。
+- **整场记录**：回顾写好时一并从库里读出这场的全部对话推过去（重试同上），插件把它
+  回放进 MaiBot 的直播间会话、由聊天摘要吸收进长期记忆。挂在回顾事件上而不是收播事件
+  上：进程退出时收播来不及推，回顾则会在下次启动时补写，整场记录随之补推。
 
 模拟器回放出来的场次（``source="replay"``）是开发设施，不对外同步。
 """
@@ -18,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Protocol, Sequence, Set
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Optional, Protocol, Sequence, Set
 
 import aiohttp
 
@@ -36,8 +39,8 @@ logger = get_logger("LiveStatusReporter")
 
 # 模拟器回放场次的来源标记：回放是开发设施，不对外同步
 _REPLAY_SOURCE = "replay"
-# 回顾推送失败后的重试间隔（毫秒）
-_RECAP_RETRY_DELAYS_MS = (5_000, 30_000, 120_000)
+# 回顾与整场记录推送失败后的重试间隔（毫秒）
+_RETRY_DELAYS_MS = (5_000, 30_000, 120_000)
 
 
 class StatusSender(Protocol):
@@ -46,6 +49,12 @@ class StatusSender(Protocol):
     async def send(self, body: Dict[str, Any]) -> None: ...
 
     async def close(self) -> None: ...
+
+
+class TranscriptSource(Protocol):
+    """按场次主键给出推给插件的整场记录；没有可推的（空场次、回放场次等）返回 None。"""
+
+    async def load(self, live_session_id: int) -> Optional[Dict[str, Any]]: ...
 
 
 class HttpStatusSender:
@@ -96,18 +105,20 @@ class LiveStatusReporter:
         event_bus: "EventBus",
         sender: StatusSender,
         heartbeat_interval_ms: int = 60_000,
-        recap_retry_delays_ms: Sequence[int] = _RECAP_RETRY_DELAYS_MS,
+        retry_delays_ms: Sequence[int] = _RETRY_DELAYS_MS,
+        transcript_source: Optional[TranscriptSource] = None,
         clock_ms: Callable[[], int] = now_ms,
     ) -> None:
         self._event_bus = event_bus
         self._sender = sender
         self._heartbeat_interval_ms = heartbeat_interval_ms
-        self._recap_retry_delays_ms = tuple(recap_retry_delays_ms)
+        self._retry_delays_ms = tuple(retry_delays_ms)
+        self._transcript_source = transcript_source
         self._clock_ms = clock_ms
         self._live: Optional[_LiveState] = None
         self._replay_session_ids: Set[int] = set()
         self._heartbeat_task: Optional[asyncio.Task[None]] = None
-        self._recap_tasks: Set[asyncio.Task[None]] = set()
+        self._push_tasks: Set[asyncio.Task[None]] = set()
         self._last_failure = ""
         self._subscribed = False
 
@@ -124,16 +135,16 @@ class LiveStatusReporter:
         self._subscribed = True
 
     async def stop(self) -> None:
-        """退订事件，取消心跳与回顾重试，关闭连接（幂等）。"""
+        """退订事件，取消心跳与回顾、整场记录的推送，关闭连接（幂等）。"""
         if self._subscribed:
             self._event_bus.off(CoreEvents.LIVE_STARTED, self._on_live_started)
             self._event_bus.off(CoreEvents.LIVE_ENDED, self._on_live_ended)
             self._event_bus.off(CoreEvents.RUNDOWN_CHANGED, self._on_rundown_changed)
             self._event_bus.off(CoreEvents.STREAMER_RECAP_WRITTEN, self._on_recap_written)
             self._subscribed = False
-        tasks = [task for task in (self._heartbeat_task, *self._recap_tasks) if task is not None]
+        tasks = [task for task in (self._heartbeat_task, *self._push_tasks) if task is not None]
         self._heartbeat_task = None
-        self._recap_tasks.clear()
+        self._push_tasks.clear()
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -194,7 +205,7 @@ class LiveStatusReporter:
         await self._send(body, "收播近况")
 
     async def _on_recap_written(self, event_name: str, payload: StreamerRecapWrittenPayload, source: str) -> None:
-        """回顾写好：后台推送，失败按退避重试，不阻塞事件分发。"""
+        """回顾写好：后台推回顾与整场记录，失败按退避重试，不阻塞事件分发。"""
         if payload.live_session_id in self._replay_session_ids:
             return
         body = {
@@ -204,9 +215,9 @@ class LiveStatusReporter:
             "ended_at_ms": payload.ended_at_ms,
             "text": payload.recap_text,
         }
-        task = asyncio.create_task(self._send_recap_with_retry(body), name="maibot-sync-recap")
-        self._recap_tasks.add(task)
-        task.add_done_callback(self._recap_tasks.discard)
+        self._spawn(self._send_with_retry(body, "场次回顾"), "maibot-sync-recap")
+        if self._transcript_source is not None:
+            self._spawn(self._push_transcript(payload.live_session_id), "maibot-sync-transcript")
 
     # ---- 推送 ----
 
@@ -247,14 +258,31 @@ class LiveStatusReporter:
         self._last_failure = ""
         return True
 
-    async def _send_recap_with_retry(self, body: Dict[str, Any]) -> None:
-        if await self._send(body, "场次回顾"):
+    def _spawn(self, coro: Coroutine[Any, Any, None], name: str) -> None:
+        task = asyncio.create_task(coro, name=name)
+        self._push_tasks.add(task)
+        task.add_done_callback(self._push_tasks.discard)
+
+    async def _push_transcript(self, live_session_id: int) -> None:
+        """读出整场记录推给插件；读库失败只记日志，不影响近况与回顾。"""
+        assert self._transcript_source is not None  # noqa: S101 调用方已 guard
+        try:
+            body = await self._transcript_source.load(live_session_id)
+        except Exception as exc:  # noqa: BLE001 - 读库失败不影响直播主链路
+            logger.warning(f"读取场次 {live_session_id} 的整场记录失败，不推送: {exc}", exc=True)
             return
-        for delay_ms in self._recap_retry_delays_ms:
+        if body is None:
+            return
+        await self._send_with_retry(body, "整场记录")
+
+    async def _send_with_retry(self, body: Dict[str, Any], what: str) -> None:
+        if await self._send(body, what):
+            return
+        for delay_ms in self._retry_delays_ms:
             await asyncio.sleep(delay_ms / 1000)
-            if await self._send(body, "场次回顾"):
+            if await self._send(body, what):
                 return
-        logger.warning(f"场次回顾（场次 {body['live_session_id']}）多次推送失败，已放弃")
+        logger.warning(f"{what}（场次 {body['live_session_id']}）多次推送失败，已放弃")
 
     def _start_heartbeat(self) -> None:
         if self._heartbeat_task is not None and not self._heartbeat_task.done():

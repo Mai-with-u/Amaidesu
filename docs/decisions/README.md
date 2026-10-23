@@ -68,3 +68,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-043：游戏 Agent 的两种交互形态（委派型 / 遥控型——工具面自带玩法说明、命令可映射为工具调用、留空目标只认可接收名册）](043-game-agent-interaction-shapes.md)
 - [ADR-044：玩法技能随 Mod 发布，直播策略留宿主（skill:// 资源 + 本地策略）](044-skills-over-mcp.md)
 - [ADR-045：直播近况推给 MaiBot（回顾写好补事实事件 / 出站上报器推完整快照 / 插件在规划与回复前注入）](045-live-status-sync-to-maibot.md)
+- [ADR-046：直播内容进 MaiBot 长期记忆（草案，暂定：整场记录回放进固定的直播间会话 / 主播的话以麦麦身份发出以触发聊天摘要）](046-live-transcript-to-maibot-memory.md)

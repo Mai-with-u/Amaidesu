@@ -127,7 +127,7 @@ async def test_replay_sessions_are_not_synced() -> None:
 
 async def test_recap_retries_until_delivered_and_gives_up_after_budget() -> None:
     sender = FakeSender(failures=2)
-    bus, reporter = _reporter(sender, recap_retry_delays_ms=(1, 1, 1))
+    bus, reporter = _reporter(sender, retry_delays_ms=(1, 1, 1))
     recap = StreamerRecapWrittenPayload(live_session_id=5, started_at_ms=1_000, ended_at_ms=2_000, recap_text="挖了钻石")
     try:
         await bus.emit(CoreEvents.STREAMER_RECAP_WRITTEN, recap, source="test")
@@ -137,9 +137,58 @@ async def test_recap_retries_until_delivered_and_gives_up_after_budget() -> None
         assert body["type"] == "recap" and body["text"] == "挖了钻石" and body["live_session_id"] == 5
 
         hopeless = FakeSender(failures=100)
-        bus2, reporter2 = _reporter(hopeless, recap_retry_delays_ms=(1, 1))
+        bus2, reporter2 = _reporter(hopeless, retry_delays_ms=(1, 1))
         await bus2.emit(CoreEvents.STREAMER_RECAP_WRITTEN, recap, source="test")
-        await _wait_until(lambda: hopeless.attempts == 3 and not reporter2._recap_tasks)
+        await _wait_until(lambda: hopeless.attempts == 3 and not reporter2._push_tasks)
+        await reporter2.stop()
+    finally:
+        await reporter.stop()
+
+
+class FakeTranscriptSource:
+    """按场次给出整场记录；``broken`` 时模拟读库失败。"""
+
+    def __init__(self, bodies: Dict[int, Dict[str, Any]], broken: bool = False) -> None:
+        self.bodies = bodies
+        self.broken = broken
+        self.loaded: List[int] = []
+
+    async def load(self, live_session_id: int) -> Dict[str, Any] | None:
+        self.loaded.append(live_session_id)
+        if self.broken:
+            raise RuntimeError("数据库被锁")
+        return self.bodies.get(live_session_id)
+
+
+async def test_transcript_follows_recap_with_retry_and_skips_missing_or_broken() -> None:
+    sender = FakeSender(failures=1)
+    transcript = {"type": "transcript", "live_session_id": 5, "lines": [{"ts_ms": 1, "role": "viewer", "text": "hi"}]}
+    source = FakeTranscriptSource({5: transcript})
+    bus, reporter = _reporter(sender, retry_delays_ms=(1, 1), transcript_source=source)
+    try:
+        for live_session_id in (5, 6):
+            await bus.emit(
+                CoreEvents.STREAMER_RECAP_WRITTEN,
+                StreamerRecapWrittenPayload(
+                    live_session_id=live_session_id, started_at_ms=1, ended_at_ms=2, recap_text="挖了钻石"
+                ),
+                source="test",
+            )
+        await _wait_until(lambda: not reporter._push_tasks and len(sender.bodies) == 3)
+        assert source.loaded == [5, 6]
+        pushed = [body for body in sender.bodies if body["type"] == "transcript"]
+        assert len(pushed) == 1 and pushed[0]["lines"] == transcript["lines"] and pushed[0]["sent_at_ms"] == 42
+
+        broken = FakeTranscriptSource({}, broken=True)
+        sender2 = FakeSender()
+        bus2, reporter2 = _reporter(sender2, transcript_source=broken)
+        await bus2.emit(
+            CoreEvents.STREAMER_RECAP_WRITTEN,
+            StreamerRecapWrittenPayload(live_session_id=7, started_at_ms=1, ended_at_ms=2, recap_text="x"),
+            source="test",
+        )
+        await _wait_until(lambda: not reporter2._push_tasks and broken.loaded == [7])
+        assert [body["type"] for body in sender2.bodies] == ["recap"]
         await reporter2.stop()
     finally:
         await reporter.stop()
@@ -161,7 +210,7 @@ async def test_discarded_empty_session_is_flagged() -> None:
 
 async def test_stop_unsubscribes_cancels_and_closes() -> None:
     sender = FakeSender()
-    bus, reporter = _reporter(sender, heartbeat_interval_ms=10, recap_retry_delays_ms=(10_000,))
+    bus, reporter = _reporter(sender, heartbeat_interval_ms=10, retry_delays_ms=(10_000,))
     await bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1), source="test")
     await _wait_until(lambda: len(sender.bodies) >= 1)
     failing = FakeSender(failures=100)
@@ -171,11 +220,11 @@ async def test_stop_unsubscribes_cancels_and_closes() -> None:
         StreamerRecapWrittenPayload(live_session_id=1, started_at_ms=1, ended_at_ms=2, recap_text="x"),
         source="test",
     )
-    await _wait_until(lambda: bool(reporter._recap_tasks))
+    await _wait_until(lambda: bool(reporter._push_tasks))
 
     await reporter.stop()
 
-    assert failing.closed and reporter._heartbeat_task is None and not reporter._recap_tasks
+    assert failing.closed and reporter._heartbeat_task is None and not reporter._push_tasks
     attempts = failing.attempts
     await bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=2), source="test")
     await asyncio.sleep(0.05)
@@ -218,3 +267,5 @@ def test_composition_root_builds_reporter_only_when_fully_configured() -> None:
         bus, {"maibot_sync": {"enabled": True, "url": "http://127.0.0.1:8767/live-status", "token": "t"}}
     )
     assert isinstance(reporter, LiveStatusReporter) and reporter._subscribed
+    # 没有数据库时只推近况与回顾，不推整场记录
+    assert reporter._transcript_source is None

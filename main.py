@@ -60,7 +60,12 @@ from src.modules.llm.engine import LLMManager
 from src.modules.llm.request_history_manager import get_global_request_history_manager
 from src.modules.logging import configure_from_config, get_logger
 from src.modules.logging.log_streamer import LogStreamer
-from src.modules.maibot_sync import HttpStatusSender, LiveStatusReporter, MaiBotSyncConfigSchema
+from src.modules.maibot_sync import (
+    HttpStatusSender,
+    LiveStatusReporter,
+    MaiBotSyncConfigSchema,
+    StorageTranscriptSource,
+)
 from src.modules.storage.bootstrap import build_database
 from src.modules.prompts import get_prompt_manager
 from src.modules.session import LiveSessionManager
@@ -443,10 +448,10 @@ async def create_app_components(
         session_manager=session_manager,
     )
 
-    # --- 直播近况同步给 MaiBot（[maibot_sync]）---
+    # --- 直播近况与整场记录同步给 MaiBot（[maibot_sync]）---
     # 第 ① 段只接线订阅：心跳随 live.started 才起，第 ② 段 Agent 启动补写回顾发出的
-    # streamer.recap.written 也能接住
-    maibot_sync_reporter = _build_maibot_sync_reporter(event_bus, config)
+    # streamer.recap.written 也能接住（整场记录随回顾一起补推）
+    maibot_sync_reporter = _build_maibot_sync_reporter(event_bus, config, database=database)
 
     # --- CollectorManager ---
     # 采集器配置位于 collectors.toml：根键 = enabled 名单 + 各采集器同名子段
@@ -953,8 +958,16 @@ async def _start_storage_ledger(
         return None
 
 
-def _build_maibot_sync_reporter(event_bus: EventBus, config: Dict[str, Any]) -> Optional[LiveStatusReporter]:
-    """按 ``[maibot_sync]`` 装配直播近况上报器；未启用或缺地址/令牌时不装配。"""
+def _build_maibot_sync_reporter(
+    event_bus: EventBus,
+    config: Dict[str, Any],
+    *,
+    database: Optional[SQLiteDatabase] = None,
+) -> Optional[LiveStatusReporter]:
+    """按 ``[maibot_sync]`` 装配直播近况上报器；未启用或缺地址/令牌时不装配。
+
+    ``send_transcript`` 开启且有数据库时，回顾写好后一并从库里读出整场记录推过去。
+    """
     raw = config.get("maibot_sync", {}) if isinstance(config, dict) else {}
     sync_config = MaiBotSyncConfigSchema(**raw) if isinstance(raw, dict) else MaiBotSyncConfigSchema()
     if not sync_config.enabled:
@@ -963,6 +976,9 @@ def _build_maibot_sync_reporter(event_bus: EventBus, config: Dict[str, Any]) -> 
     if not sync_config.url or not sync_config.token:
         logger.warning("[maibot_sync] 已启用但 url 或 token 未设置，不向 MaiBot 同步直播近况")
         return None
+    transcript_source: Optional[StorageTranscriptSource] = None
+    if sync_config.send_transcript and database is not None:
+        transcript_source = StorageTranscriptSource(sessions=database.sessions, chat=database.chat)
     reporter = LiveStatusReporter(
         event_bus=event_bus,
         sender=HttpStatusSender(
@@ -971,9 +987,11 @@ def _build_maibot_sync_reporter(event_bus: EventBus, config: Dict[str, Any]) -> 
             timeout_ms=sync_config.request_timeout_ms,
         ),
         heartbeat_interval_ms=sync_config.heartbeat_interval_ms,
+        transcript_source=transcript_source,
     )
     reporter.setup()
-    logger.info(f"直播近况同步已接线：开播 / 换环节 / 收播 / 场次回顾 → {sync_config.url}")
+    pushed = "开播 / 换环节 / 收播 / 场次回顾" + (" / 整场记录" if transcript_source is not None else "")
+    logger.info(f"直播近况同步已接线：{pushed} → {sync_config.url}")
     return reporter
 
 

@@ -27,6 +27,14 @@ class MaiBotSyncConfigSchema(BaseConfig):
         title="访问令牌",
         description="与桥接插件 server.auth_token 相同的令牌；空串 = 未设置",
     )
+    send_transcript: bool = Field(
+        default=True,
+        title="推送整场记录",
+        description=(
+            "回顾写好后，是否把这场的全部对话（弹幕、醒目留言、主播发言）一并推给插件，"
+            "由插件回放进 MaiBot 的直播间会话、进长期记忆；插件侧还要打开 live_memory.enabled"
+        ),
+    )
     heartbeat_interval_ms: int = Field(
         default=60_000,
         ge=5_000,
