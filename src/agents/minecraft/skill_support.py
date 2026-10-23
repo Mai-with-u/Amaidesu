@@ -7,7 +7,7 @@
 - 按连接缓存的装载资料：能力清单（lookup）与远端技能目录，每次 MCP 连接
   只读一次，连接恢复/断开时作废重读
 - 新任务开局的"宿主代读"资料包：自己、周围、能力清单、手上的目标（有笔记
-  时附笔记），以一组宿主代发的工具调用与回复进历史，与模型自己读取同形
+  时附笔记），以一条紧跟任务指令的宿主消息进历史，写明不是模型发起的调用
 
 依赖全部构造器注入，不持有宿主引用（与 ``GoalWatch`` 同款形态）：MCP 客户端
 经取值回调注入（连接恢复会整体换实例），工具执行与回复吸收经回调注入——
@@ -17,10 +17,9 @@
 
 from __future__ import annotations
 
-import json
-import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
+from src.agents.minecraft.context import opening_message
 from src.agents.minecraft.maicraft import GOAL, LOOKUP, OBSERVE
 from src.agents.minecraft.state import MinecraftAgentState
 from src.modules.logging import ModuleLogger
@@ -244,7 +243,7 @@ class SkillSupport:
     async def append_opening_bundle(self, messages: List[Dict[str, Any]]) -> None:
         """新任务开局由宿主代读：自己、周围、能力清单、手上的目标，有笔记时附上笔记。
 
-        以一组宿主代发的工具调用和回复放进历史，与模型自己读取时一样；读取失败的那一项照实留下错误。
+        以一条紧跟任务指令的宿主消息放进历史，每项写明调用名、参数和回复；读取失败的那一项照实留下错误。
         能力清单每次连接只读一次。
         """
         reads: List[tuple[str, Dict[str, Any]]] = list(_OPENING_READS) if self._maicraft_ready() else []
@@ -252,10 +251,10 @@ class SkillSupport:
             reads.append(("minecraft_notebook", {"action": "read"}))
         if not reads:
             return
-        batch = uuid.uuid4().hex[:8]
-        calls: List[Dict[str, Any]] = []
-        results: List[Dict[str, Any]] = []
-        for index, (name, arguments) in enumerate(reads):
+        # 读自己 -> 读周围 -> 读能力清单（本次连接读过就复用）-> 读手上的目标 -> 有笔记再读笔记；
+        # 每项读完先吸收进目标跟踪状态，再一起拼成一条消息放在任务指令后面
+        opened: List[tuple[str, Dict[str, Any], Dict[str, Any]]] = []
+        for name, arguments in reads:
             if name == LOOKUP and self._ability_listing is not None:
                 observation = self._ability_listing
             else:
@@ -263,22 +262,5 @@ class SkillSupport:
                 if name == LOOKUP and observation.get("ok") is True:
                     self._ability_listing = observation
             self._absorb_reply(name, arguments, observation)
-            call_id = f"opening-{batch}-{index}"
-            calls.append(
-                {
-                    "id": call_id,
-                    "type": "function",
-                    "function": {"name": name, "arguments": json.dumps(arguments, ensure_ascii=False)},
-                }
-            )
-            results.append(
-                {"role": "tool", "tool_call_id": call_id, "content": json.dumps(observation, ensure_ascii=False)}
-            )
-        messages.append(
-            {
-                "role": "assistant",
-                "content": "[开局资料] 宿主已代为读取自己、周围、能力清单和手上的目标；仍有效时直接使用，不重复读取。",
-                "tool_calls": calls,
-            }
-        )
-        messages.extend(results)
+            opened.append((name, arguments, observation))
+        messages.append(opening_message(opened))

@@ -8,7 +8,12 @@ import pytest
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig, MinecraftContextConfig
-from src.agents.minecraft.context import SUMMARY_KEY, MinecraftHistoryCompactor, close_interrupted_calls
+from src.agents.minecraft.context import (
+    SUMMARY_KEY,
+    MinecraftHistoryCompactor,
+    close_interrupted_calls,
+    opening_message,
+)
 from src.modules.config.agents_schemas import AgentsConfig
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
@@ -137,7 +142,9 @@ async def test_oversized_old_result_is_elided_and_history_is_split_under_the_gua
     37 万字符的字段，被 20 万字符的装配守卫拦了 17 次，历史 24 分钟只涨不落。
     """
     llm = MagicMock()
-    llm.generate = AsyncMock(return_value=Response(success=True, content="查过世界记忆，记录很多", finish_reason="stop"))
+    llm.generate = AsyncMock(
+        return_value=Response(success=True, content="查过世界记忆，记录很多", finish_reason="stop")
+    )
     messages = history()
     messages[2]["tool_calls"][0]["function"] = {"name": "maicraft_observe", "arguments": '{"what":"world_memory"}'}
     messages[3]["content"] = '{"ok":true,"data":{"records":[' + '{"kind":"site"},' * 12_000 + "]}}"
@@ -156,6 +163,32 @@ async def test_oversized_old_result_is_elided_and_history_is_split_under_the_gua
     assert "maicraft_observe" in serialized and "world_memory" in serialized and '\\"chars\\":' in serialized
     assert "已确认的原生组件资料" in serialized
     assert tokens(messages) < 24000
+
+
+async def test_oversized_opening_item_is_elided_alone() -> None:
+    """开局资料只把超长的那一项换成占位：调用名和参数留着，其余项原样交给摘要。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(
+        return_value=Response(success=True, content="开局读过自己和能力清单", finish_reason="stop")
+    )
+    messages = history()
+    messages.insert(
+        2,
+        opening_message(
+            [
+                ("maicraft_observe", {"what": "self"}, {"ok": True, "data": {"health": 20}}),
+                ("maicraft_lookup", {}, {"ok": True, "data": {"abilities": [{"id": "dig"}] * 6_000}}),
+            ]
+        ),
+    )
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000, recent_turns=2))
+
+    assert await compactor.compact(messages, [], {"original_instructions": ["建好"]})
+    request = llm.generate.call_args.args[0]
+    serialized = "".join(m["content"] for m in request if m["content"].startswith("[已发生的历史记录"))
+    assert "[开局资料]" in serialized and '\\"health\\":20' in serialized
+    assert "maicraft_lookup" in serialized and "这项开局资料太长" in serialized
+    assert '\\"id\\":\\"dig\\"' not in serialized
 
 
 def test_interrupted_calls_have_unknown_receipts_and_config_stays_in_minecraft() -> None:

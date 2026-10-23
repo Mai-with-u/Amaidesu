@@ -98,11 +98,11 @@ def _reports(bus: MagicMock) -> List[GamePayload]:
 
 
 def _called(messages: List[Dict[str, Any]], tool: str) -> bool:
-    """模型在这段历史里调用过这个工具没有（宿主代读的开局资料不算）。"""
+    """模型在这段历史里调用过这个工具没有（开局资料是宿主消息，不含工具调用）。"""
     return any(
         call["function"]["name"] == tool
         for message in messages
-        if message.get("role") == "assistant" and "[开局资料]" not in str(message.get("content"))
+        if message.get("role") == "assistant"
         for call in message.get("tool_calls") or []
     )
 
@@ -124,14 +124,15 @@ async def test_look_around_and_remember_a_place_end_to_end() -> None:
     await _wait_until(lambda: len(_reports(bus)) == 1)
 
     first = llm.seen[0]
-    opening = [
-        message
-        for message in first
-        if message.get("role") == "assistant" and "[开局资料]" in str(message.get("content"))
-    ]
+    opening = [index for index, message in enumerate(first) if "[开局资料]" in str(message.get("content"))]
     assert opening, "新任务开局附上宿主代读的资料"
-    read_tools = [call["function"]["name"] for call in opening[0]["tool_calls"]]
+    message = first[opening[0]]
+    assert message["role"] == "user" and "看一眼周围并记住一个地点" in str(first[opening[0] - 1]["content"])
+    # 每项一段"### 调用名 参数"，读取顺序不变
+    read_tools = [part["text"].lstrip("\n").split(" ")[1] for part in message["content"][1:]]
     assert read_tools == ["maicraft_observe", "maicraft_observe", "maicraft_lookup", "maicraft_goal"]
+    # 官方 DeepSeek 核对工具调用 id、Gemini 3 核对签名：模型第一次响应前不能有宿主编出来的调用
+    assert not any(m.get("role") == "assistant" or m.get("role") == "tool" for m in first)
     assert "minecraft:cow" in _texts(first) and "maicraft:remember" in _texts(first)
     assert all(tool["name"] != "maicraft_events" for tool in llm.tools_given[0]), "事件流不给模型"
     assert _reports(bus)[0].report_kind == "delivery"

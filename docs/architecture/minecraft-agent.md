@@ -27,7 +27,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
   ▼
 任务批次（每步 = 一次 LLM 推理）：
   ├─ flush 新消息（主播提示词 / 宿主推送的目标通知）→ user 消息
-  ├─ 新任务开局：宿主代读 observe(self)、observe(scene)、lookup()、goal(list)，以 [开局资料] 回执放进历史
+  ├─ 新任务开局：宿主代读 observe(self)、observe(scene)、lookup()、goal(list)，以一条紧跟任务指令的 [开局资料] 宿主消息放进历史（不伪造工具调用）
   ├─ 历史超预算时集中整理一次
   ├─ LLM 推理（系统提示词 + 对话历史 + 工具列表）→ tool_calls（可多个）
   ├─ 串行执行（局部工具直接落状态；maicraft_* 经 ToolRegistry 透传 = MCP 调用）

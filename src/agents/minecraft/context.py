@@ -38,6 +38,11 @@ _SUMMARY_PART_CHARS = 100_000
 # 消息内部标记：任务事实块与历史推理摘要段（模型看不到，整理时据此识别）
 FACTS_KEY = "_minecraft_context_facts"
 SUMMARY_KEY = "_minecraft_context_summary"
+# 开局资料消息的内部标记：整理摘要时据此逐项省略超长的那一项
+OPENING_KEY = "_minecraft_opening"
+
+_OPENING_HEADER = "[开局资料] 宿主已代为读取下面几项，这些不是你发起的调用；仍有效时直接使用，不重复读取。"
+_OPENING_OMITTED = "这项开局资料太长，摘要不收原文；决策模型当时已经读过，后面要用就重新调用"
 
 
 def json_text(value: Any) -> str:
@@ -45,13 +50,41 @@ def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
+def opening_message(reads: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> dict[str, Any]:
+    """宿主代读的开局资料 → 一条紧跟任务指令的消息：开头说明来历，之后每项一段"调用名 参数"加回复。
+
+    不伪装成模型自己发起的工具调用：DeepSeek 官方端点核对工具调用 id、Gemini 3 要求函数调用
+    带签名，宿主编出来的调用在这两处都会让整条请求被拒。每项单独一个文本段，整理摘要时可以
+    只把超长的那一项换成占位。
+    """
+    parts = [{"type": "text", "text": _OPENING_HEADER}]
+    for name, arguments, observation in reads:
+        parts.append({"type": "text", "text": f"\n\n### {name} {json_text(arguments)}\n{json_text(observation)}"})
+    return {"role": "user", "content": parts, OPENING_KEY: True}
+
+
+def _elide_opening(message: dict[str, Any]) -> dict[str, Any]:
+    """开局资料逐项省略：超长的那一项只留调用名和参数，写明原文多少字符；其余项原样保留。"""
+    parts = []
+    for part in message.get("content") or []:
+        text = str(part.get("text", "")) if isinstance(part, dict) else str(part)
+        if len(text) > _SUMMARY_RESULT_CHARS:
+            call, _, body = text.lstrip("\n").partition("\n")
+            text = f"\n\n{call}\n" + json_text({"omitted": _OPENING_OMITTED, "chars": len(body)})
+        parts.append({"type": "text", "text": text})
+    return {**message, "content": parts}
+
+
 def _elide_oversized_results(source: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """超长的旧工具结果换成占位，写明哪个工具、什么参数、原文多少字符；其余消息原样保留。"""
+    """超长的旧工具结果与开局资料项换成占位，写明哪个调用、什么参数、原文多少字符；其余消息原样保留。"""
     calls = {
         call.get("id"): call.get("function") or {} for message in source for call in message.get("tool_calls") or []
     }
     elided = []
     for message in source:
+        if message.get(OPENING_KEY):
+            elided.append(_elide_opening(message))
+            continue
         content = message.get("content")
         text = content if isinstance(content, str) else json_text(content)
         if message.get("role") == "tool" and len(text) > _SUMMARY_RESULT_CHARS:
