@@ -31,7 +31,7 @@ from src.modules.events.payloads.agents import AgentPromptedPayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
-from src.modules.tools.tasks import TaskLedger
+from src.modules.tools.tasks import TERMINAL_TASK_STATES, TaskLedger, TaskRecord
 from src.modules.utils.time_utils import now_ms
 
 logger = get_logger("AgentControl")
@@ -67,7 +67,8 @@ _DELEGATE_DESCRIPTION = (
     "把一项工作委派给目标 Agent：给目标与自然语言指令（不给步骤），"
     "立刻返回受理回执（accepted + task_id）。任务状态变化会以事件通知你；"
     "随时可用 framework_task_status 按 task_id 查询进度与快照。"
-    "目标忙时会排队，无须等待。"
+    "同一目标手上已有一件事未做完时会拒绝受理，收到拒绝理由就等当前那件做完、"
+    "或用 framework_prompt 递话调整，不要重复派。"
 )
 
 #: 递话工具的固定说明
@@ -411,6 +412,38 @@ class AgentControlProvider(BaseToolProvider):
         """生成委派任务号（deleg_{epoch_ms}_{seq}，全链路关联键）。"""
         return _generate_task_id()
 
+    def _in_flight_delegation(self, executor: str) -> Optional[TaskRecord]:
+        """查目标 Agent 名下未终态的委派单（有就拒新单，队列深度 = 1）。"""
+        if self.task_ledger is None:
+            return None
+        for task_id in self.task_ledger.active_task_ids():
+            record = self.task_ledger.get(task_id)
+            if (
+                record is not None
+                and record.tool == "framework_delegate"
+                and record.executor == executor
+                and record.status not in TERMINAL_TASK_STATES
+            ):
+                return record
+        return None
+
+    def _in_flight_refusal_message(self, record: TaskRecord) -> str:
+        """构造在途拒受理的失败理由：在途任务号 + 指令原文 + 受理距今时长 + 已知进展。"""
+        waited_ms = max(now_ms() - record.created_at_ms, 0)
+        instruction = str(record.snapshot.get("instruction", "") or "（快照无指令原文）")
+        lines = [
+            f"受理失败：目标 '{record.executor}' 手上已有一件事没做完"
+            f"（任务号 {record.task_id}，已受理 {waited_ms // 1000} 秒），"
+            "同一目标同时只接一件事。",
+            f"在途指令原文：「{instruction}」",
+        ]
+        # 已知进展摘要有就带（批级关联/执行侧写入快照的额外字段），读不到不硬造
+        extras = {k: v for k, v in record.snapshot.items() if k not in ("instruction",)}
+        if extras:
+            lines.append(f"在途任务的已知进展：{extras}")
+        lines.append("等它交付或用 framework_prompt 递话调整，不要重复派同一件事。")
+        return "\n".join(lines)
+
     def _resolve_target(
         self, target_name: str, caller: str, tool_name: str, hook: str
     ) -> tuple[Optional[Any], Optional[ToolExecutionResult]]:
@@ -479,6 +512,16 @@ class AgentControlProvider(BaseToolProvider):
             return failure
         assert target is not None  # 解析成功时必有实例（类型收窄）
         target_name = target.name  # 留空目标时由 helper 解析出注册名
+        # 受理前置检查：目标名下已有未终态委派单即拒（不判语义是否相同——
+        # 必达机制不押 LLM 判断；队列深度 = 1）。framework_prompt 不受此限。
+        in_flight = self._in_flight_delegation(target_name)
+        if in_flight is not None:
+            logger.info(f"委派拒受理（目标在途）: {initiator} -> {target_name}（在途 task_id={in_flight.task_id}）")
+            return ToolExecutionResult(
+                tool_name="framework_delegate",
+                success=False,
+                error_message=self._in_flight_refusal_message(in_flight),
+            )
         task_id = self._next_task_id()
         receive = getattr(target, "receive_delegation", None)
         if not callable(receive):

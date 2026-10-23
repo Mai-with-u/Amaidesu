@@ -202,6 +202,42 @@ async def test_prompt_target_resolution_matches_delegate(rig: _Rig) -> None:
     assert len(rig.ledger) == 0
 
 
+# 在途拒受理：目标名下有未终态委派单即拒（队列深度 = 1），framework_prompt 不受此限
+
+
+async def test_delegate_rejected_while_target_has_in_flight_delegation(rig: _Rig) -> None:
+    first = (
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
+    ).structured_content["task_id"]
+
+    # 不判语义相同：指令不同的新单同样拒，理由带在途任务号 + 指令原文 + 受理时长
+    res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "再去挖个矿"})
+    assert res.success is False
+    assert first in res.error_message and "盖一座房子" in res.error_message and "秒" in res.error_message
+    assert len(rig.ledger) == 1  # 拒单不登记
+
+    # 拒绝理由带已知进展（快照里除指令外的字段有就带）
+    rig.ledger.update(first, "running", summary="开始", snapshot={"instruction": "盖一座房子", "goals": "地基已挖好"})
+    res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "换个活"})
+    assert res.success is False and "地基已挖好" in res.error_message
+
+    # 在途不拦递话：补充要求的合法通道照常
+    res = await rig.call("framework_prompt", {"agent": "agent_b", "content": "屋顶用石砖"})
+    assert res.success and len(rig.ledger) == 1
+
+    # 终态后放行新单
+    _agent(rig, "agent_b").finish(rig.ledger)
+    res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "再来一件"})
+    assert res.success and res.structured_content["accepted"] is True
+
+
+async def test_in_flight_gate_is_per_target(rig: _Rig) -> None:
+    """门只看目标名下：agent_b 在途不挡别人的单。"""
+    await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
+    res = await rig.call("framework_delegate", {"agent": "agent_a", "instruction": "闲着照常接"}, source="streamer")
+    assert res.success and res.structured_content["executor"] == "agent_a"
+
+
 # 真实 minecraft Agent：入队带任务号、批次状态写回、硬取消、断连恢复续跑
 
 
