@@ -328,3 +328,40 @@ async def test_agent_wires_speech_dependencies_into_dispatcher() -> None:
         assert speech.tts_enabled is True and speech.utterance_queue is not None
     finally:
         await agent._on_stop()
+
+
+# ---------------- 嘴的反应通道 ----------------
+
+
+async def test_reaction_is_dropped_before_any_record_when_the_mouth_stays_busy(started) -> None:
+    """前一句迟迟播不完：反应等到上限就整句作废，业务事件不发（记录里不留"说了却没出声"的话）。"""
+    bus, engine = EventBus(), _Engine(delay_s=0.5)
+    captured = _capture_speech(bus)
+    dispatcher = await started(bus=bus, engine=engine, config=_TTS_ON)
+    await dispatcher.dispatch({"speech": "一句很长的话", "emotion": {"name": "happy", "intensity": 0.5}})
+    await _until(lambda: len(engine.calls) == 1)
+
+    result = await dispatcher.dispatch_reaction(
+        "哇！什么东西？！", emotion="scared", emotion_intensity=0.7, wait_ms=100
+    )
+
+    assert result is None
+    assert [payload.text for _, payload in captured] == ["一句很长的话"]
+
+
+async def test_reaction_speaks_once_the_mouth_is_free(started) -> None:
+    """前一句播完就出声：业务事件、TTS 共用同一 utterance_id，带上情绪。"""
+    bus, engine = EventBus(), _Engine(delay_s=0.05)
+    captured = _capture_speech(bus)
+    dispatcher = await started(bus=bus, engine=engine, config=_TTS_ON)
+    await dispatcher.dispatch({"speech": "前一句", "emotion": {"name": "happy", "intensity": 0.5}})
+
+    utterance_id = await dispatcher.dispatch_reaction(
+        "疼疼疼！", emotion="scared", emotion_intensity=0.7, wait_ms=2000, gap_ms=10, round_id="mouth_1"
+    )
+
+    assert utterance_id is not None
+    await _until(lambda: len(engine.calls) == 2)
+    assert engine.calls[-1] == ("疼疼疼！", utterance_id)
+    payload = captured[-1][1]
+    assert (payload.text, payload.emotion, payload.round_id) == ("疼疼疼！", "scared", "mouth_1")

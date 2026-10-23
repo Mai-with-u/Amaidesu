@@ -1,4 +1,4 @@
-"""嘴：游戏里出事时当场出一句短反应——由头合并、冷却、安静门槛、现场卡、输出解析与兜底。"""
+"""嘴：游戏里出事时当场出一句短反应——由头合并、冷却、安静门槛、现场卡、输出解析与兜底、接线。"""
 
 from __future__ import annotations
 
@@ -11,8 +11,12 @@ from src.agents.streamer.config import StreamerMouthConfig
 from src.agents.streamer.mouth import Mouth, Trigger
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.scene_card import GoalLine
+from src.modules.events.payloads.body import BodyEventPayload
+from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
+from tests.agents.streamer.helpers import make_streamer_agent
 
 NOW = 1_800_000_000_000
 
@@ -211,3 +215,60 @@ async def test_loop_merges_back_to_back_triggers_into_one_reaction(prompts: Any)
     assert len(llm.calls) == 1
     last = llm.calls[0]["messages"][-1]["content"]
     assert "被苦力怕炸到一下；有件事没办成：饿了但没吃上" in last
+
+
+# ---------------- 接线 ----------------
+
+
+def test_mouth_is_off_by_default() -> None:
+    """开关默认关闭：不构造嘴，一切照旧。"""
+    assert make_streamer_agent()._mouth is None
+
+
+async def test_with_mouth_on_death_goes_to_the_mouth_not_the_planner() -> None:
+    """嘴开着：死亡交给嘴当场反应，不再专门唤醒 Planner；关着时照旧唤醒。"""
+    payload = BodyEventPayload(game="minecraft", kind="died", summary="死了：被蜘蛛杀死了")
+
+    agent = make_streamer_agent({"mouth": {"enabled": True}})
+    reactions: List[tuple] = []
+    agent._mouth.react = lambda key, text, **kw: reactions.append((key, text, kw))  # type: ignore[union-attr,method-assign]
+    await agent._on_body_event("game.body.died", payload, "maicraft_attention")
+    assert agent._game_decision_pending is False
+    assert reactions == [("body:died", "死了：被蜘蛛杀死了", {"urgent": True, "refresh_scene": True})]
+
+    plain = make_streamer_agent()
+    await plain._on_body_event("game.body.died", payload, "maicraft_attention")
+    assert plain._game_decision_pending is True
+
+
+async def test_with_mouth_on_progress_reacts_but_attention_alerts_do_not() -> None:
+    """游戏进展、交付卡住当场反应（Planner 照样被交付唤醒去定夺）；急事提醒与遭遇是同一件事，不另触发。"""
+    agent = make_streamer_agent({"mouth": {"enabled": True}})
+    reactions: List[str] = []
+    agent._mouth.react = lambda key, text, **kw: reactions.append(key)  # type: ignore[union-attr,method-assign]
+
+    report = GamePayload(game="minecraft", event_type="report", message="床做好了，放在屋里", report_kind="delivery")
+    await agent._on_game_event("game.report", report, "minecraft")
+    alert = GamePayload(game="minecraft", event_type="attention_required", message="急事处理完了：打完了，没掉血")
+    await agent._on_game_event("game.attention_required", alert, "minecraft")
+
+    assert reactions == ["game:report"] and agent._game_decision_pending is True
+
+
+async def test_viewer_messages_go_into_the_mouth_records() -> None:
+    """弹幕记进嘴的最近记录（阶段 1 不由嘴回弹幕，但现场要知道观众刚说了什么）。"""
+    agent = make_streamer_agent({"mouth": {"enabled": True}})
+    message = RoomMessagePayload(
+        message_type="danmaku", user=RoomMessageUser(id="u1", name="小明"), content="麦麦小心后面"
+    )
+    await agent.handle_message(message)
+    records = list(agent._mouth._records)  # type: ignore[union-attr]
+    assert [(record.kind, record.sender, record.text) for record in records] == [("viewer", "小明", "麦麦小心后面")]
+
+
+async def test_every_spoken_line_reaches_the_mouth_records_without_subscribing_to_speech() -> None:
+    """她说过的每句话经发声分发器直连记进嘴（Agent 不订阅自己的输出事件）：Planner 的回话也算。"""
+    agent = make_streamer_agent({"mouth": {"enabled": True}})
+    await agent._speech.dispatch({"speech": "走走走，回家！", "emotion": {"name": "happy", "intensity": 0.5}})
+    records = list(agent._mouth._records)  # type: ignore[union-attr]
+    assert [(record.kind, record.text) for record in records] == [("speech", "走走走，回家！")]

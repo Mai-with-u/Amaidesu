@@ -44,6 +44,7 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
+from src.agents.streamer.scene_card import GoalLine, GoalStatus
 from src.agents.streamer.state_facts import extract_state_facts
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import GameEventBatch
@@ -388,6 +389,26 @@ class Planner:
         if delegation is not None and report_kind in {"delivery", "escalation"}:
             delegation.report_kind = report_kind
             delegation.reported_ms = now_ms()
+
+    def current_goals(self) -> List[GoalLine]:
+        """手上的事（嘴的现场卡用）：每个游戏最近一次开始做的事、原话（已脱敏）与进展。"""
+        goals: List[GoalLine] = []
+        for delegation in self._delegations.values():
+            status: GoalStatus = "进行中"
+            if delegation.report_kind == "delivery":
+                status = "做完了"
+            elif delegation.report_kind == "escalation":
+                status = "卡住了"
+            goals.append(
+                GoalLine(
+                    game=delegation.agent,
+                    instruction=sanitize_internal_terms(delegation.instruction),
+                    started_ms=delegation.at_ms,
+                    status=status,
+                    status_ms=delegation.reported_ms,
+                )
+            )
+        return goals
 
     def _render_delegations(self, current_ms: int) -> str:
         """我手头在游戏里做的事：每个游戏最近一次开始做的事、距今多久、做完了还是卡住了。

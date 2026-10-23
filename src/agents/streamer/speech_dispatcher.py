@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Coroutine, Dict, Optional
+from typing import Any, Callable, Coroutine, Dict, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -77,6 +77,9 @@ class SpeechDispatcher:
         # 异步扇出任务强引用集合（fire-and-forget 不阻塞决策循环；持有以避免
         # 事件循环的弱引用导致任务被 GC；停止时限期汇合防止悬挂）。
         self._bg_tasks: set = set()
+        # 每句话发出后的回调（嘴用它记下她说过的每句话，Planner 的与嘴自己的都算）。
+        # 代码直连而不是订阅 streamer.speech：Agent 不订阅自己的输出事件
+        self._spoken_listener: Optional[Callable[[str, int], None]] = None
 
     def _spawn(self, coro: Coroutine[Any, Any, Any], *, label: str) -> None:
         """把后台 coroutine 创建并纳入强引用持有（决策循环同步返回，不等待）。
@@ -103,6 +106,19 @@ class SpeechDispatcher:
                 self._logger.warning(f"{label} 后台任务未捕获异常: err={exc}")
 
         task.add_done_callback(_on_done)
+
+    def bind_spoken_listener(self, listener: Optional[Callable[[str, int], None]]) -> None:
+        """挂上"每句话发出后"的回调：参数是台词与发出时刻（Unix 毫秒）；传 None 摘掉。"""
+        self._spoken_listener = listener
+
+    def _notify_spoken(self, text: str) -> None:
+        listener = self._spoken_listener
+        if listener is None:
+            return
+        try:
+            listener(text, now_ms())
+        except Exception as exc:  # noqa: BLE001 - 旁路记录失败不挡发言
+            self._logger.warning(f"发言回调失败（已忽略）: {exc}", exc=True)
 
     # -----只读状态（观察面 / 测试）-----
 
@@ -269,11 +285,59 @@ class SpeechDispatcher:
                 llm_request_id=reply_payload.get("llm_request_id"),
             )
             self._schedule_subtitle_show(cleaned_speech, utterance_id)
+            self._notify_spoken(cleaned_speech)
             if self._tts_enabled and self._utterance_queue is not None:
                 await self._utterance_queue.enqueue(utterance_id, cleaned_speech)
             return cleaned_speech, cleaned_emotion, utterance_id
 
         return None
+
+    async def dispatch_reaction(
+        self,
+        speech: str,
+        *,
+        emotion: str,
+        emotion_intensity: float,
+        wait_ms: int,
+        gap_ms: int = 0,
+        priority: int = 5,
+        round_id: str = "",
+        llm_request_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """嘴的发声方式：前面还有话没播完时最多等 ``wait_ms``，等不到整句作废；能出声的插到其他待播台词前面。
+
+        和 :meth:`dispatch` 的区别：dispatch 等待超时照样放行（发言总要发），而突发反应过了时效
+        就不该再说。作废发生在业务事件发出之前，记录里不会留下"说了却没出声"的台词。
+        前面那句刚播完时再空 ``gap_ms`` 才出声，两句不挤在一起。
+
+        Returns:
+            本句的 utterance_id；空台词或作废时返回 None。
+        """
+        text = speech.strip()
+        if not text:
+            return None
+        queue = self._utterance_queue
+        if self._tts_enabled and queue is not None and queue.busy:
+            if not await queue.wait_idle(timeout_ms=max(1, wait_ms)):
+                self._logger.info(f"反应等不到前一句播完（>{wait_ms}ms），整句作废: {text[:30]}")
+                return None
+            if gap_ms > 0:
+                await asyncio.sleep(gap_ms / 1000.0)
+        utterance_id = self._next_utterance_id()
+        await self._emit_streamer_speech(
+            utterance_id,
+            text,
+            emotion,
+            emotion_intensity,
+            round_id=round_id,
+            llm_request_id=llm_request_id,
+        )
+        self._schedule_subtitle_show(text, utterance_id)
+        self._notify_spoken(text)
+        if self._tts_enabled and queue is not None:
+            # 已经发出业务事件，就不再设过期：记录里有的台词一定要出声
+            await queue.enqueue(utterance_id, text, priority=priority)
+        return utterance_id
 
     async def _wait_for_playback_slot(self) -> None:
         """背压闸：上一句播完（队列排空）才放行本次发言。

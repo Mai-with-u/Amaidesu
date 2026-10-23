@@ -47,6 +47,7 @@ from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.logging import get_logger
 from src.modules.utils.task_utils import spawn_background_task
 from src.modules.tools import ToolSpec
+from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.utils.time_utils import now_ms
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -66,10 +67,12 @@ from .memory import (
     emit_notebook_changed,
 )
 from .message_buffer import MessageBuffer
+from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
 from .planner import Planner
 from .proactive_trigger import ProactiveTrigger
 from .replyer import WordFilter, Replyer
 from .room_state import RoomState
+from .scene_card import brief_of
 from .speech_dispatcher import SpeechDispatcher
 from .stats import StreamerStats
 from .term_sanitizer import sanitize_internal_terms
@@ -545,13 +548,43 @@ class StreamerAgent(BaseAgent):
             logger=self._logger,
         )
 
+        # 嘴（Agent 内部件，代码直连）：游戏里出事时不经 Planner 当场出一句短反应。
+        # 开关关闭时不构造，所有路径与原来一致
+        self._mouth: Optional[Mouth] = None
+        if config.mouth.enabled:
+            self._mouth = Mouth(
+                config.mouth,
+                llm_service=llm_manager,
+                prompt_service=prompt_manager,
+                speech=self._speech,
+                room_state=self._room_state,
+                persona={
+                    "bot_name": config.persona.bot_name,
+                    "personality": config.persona.personality,
+                    "style_constraints": config.persona.style_constraints,
+                },
+                speech_max_chars=config.speech_max_chars,
+                gate_window=config.speech_gate_window,
+                gate_ratio=config.speech_gate_ratio,
+                word_filter=self._word_filter,
+                goals_provider=self._planner.current_goals,
+                notebook_provider=self._notebook.read,
+                segment_provider=self._current_segment_title,
+                scene_reader=self._read_scene_brief,
+                is_live=lambda: self._live_active,
+                profile=_PROFILE_REPLYER,
+            )
+            # 她说过的每句话（Planner 的与嘴自己的）经发声分发器直连记进嘴的最近记录，嘴才不会重复自己
+            self._speech.bind_spoken_listener(self._mouth.note_speech)
+
         self._logger.info(
             f"StreamerAgent 已构造 "
             f"(profile_planner={_PROFILE_PLANNER}, profile_replyer={_PROFILE_REPLYER}, "
             f"proactive_enabled={config.proactive.enabled}, "
             f"rundown_id={config.rundown_id!r}, "
             f"tts_enabled={self._speech.tts_enabled}, "
-            f"tts_engine={'<已注入>' if tts_engine is not None else '<未注入>'})"
+            f"tts_engine={'<已注入>' if tts_engine is not None else '<未注入>'}, "
+            f"mouth_enabled={self._mouth is not None})"
         )
 
     # ==================================================================
@@ -591,12 +624,18 @@ class StreamerAgent(BaseAgent):
 
         # 启动发言管线（speech → TTS / emotion → VTS；队列生命周期归 dispatcher）
         await self._speech.start()
+        if self._mouth is not None:
+            await self._mouth.start()
 
         self._logger.info("StreamerAgent 已启动")
 
     async def _on_stop(self) -> None:
         """Agent 停止钩子。"""
         self._running = False
+
+        # 嘴先停：它会往发声管线里塞台词
+        if self._mouth is not None:
+            await self._mouth.stop()
 
         # 停止发言管线（TTS 队列先停，保证不遗留 invoke 在飞）
         await self._speech.stop()
@@ -819,6 +858,8 @@ class StreamerAgent(BaseAgent):
         """live.started 回调：开播，放行主动发言，读出上场回顾固定整场。"""
         del event_name, source
         self._live_active = True
+        if self._mouth is not None:
+            self._mouth.reset()
         # 流程单开播起算：armed（已装载待开播）→ running，双锚点 = 开播时刻。
         # 已起算的场（崩溃恢复的进行中/已完成）被结构化拒绝，保持现态静默忽略；
         # begin 经 on_changed 置位 proactive pending——开场白信号在开播时刻才置
@@ -844,6 +885,8 @@ class StreamerAgent(BaseAgent):
         """live.ended 回调：下播，主动发言收闸，道别收束本场，后台写本场回顾并更新观众画像。"""
         del event_name, source
         self._live_active = False
+        if self._mouth is not None:
+            self._mouth.reset()
         self._logger.info("场次已结束：主动发言收闸")
         # 收播道别窗：手动结束场次会绕过流程单收尾环节（只有自然走完才道别），
         # 没有这一窗 Agent 会一路静默到停机。触发判据是"场次结束但 Agent 仍在
@@ -955,6 +998,9 @@ class StreamerAgent(BaseAgent):
             message = sanitize_internal_terms(payload.message)
             turn = note_turn(f"游戏·{payload.game}·{payload.event_type}", message, payload.timestamp_ms or now_ms())
             self._stage_game_event(turn)
+            if self._mouth is not None and payload.event_type in URGENT_GAME_TYPES and message:
+                self._mouth.note_game(message)
+                self._mouth.react(f"game:{payload.event_type}", message, urgent=True)
             if payload.event_type == "report":
                 self._game_decision_pending = True
                 # 游戏里做完或卡住待定夺：【我手头在游戏里做的事】里那件事随之标成已上报
@@ -1031,7 +1077,18 @@ class StreamerAgent(BaseAgent):
                 payload.timestamp_ms or now_ms(),
             )
             self._stage_game_event(turn)
-            if payload.kind == "died":
+            if self._mouth is not None:
+                # 嘴开着：遭遇由嘴当场反应（几秒内出声），死亡也一样——不再为它专门唤醒 Planner，
+                # 免得嘴说一句、Planner 过十几秒又把同一件事讲一遍
+                summary = sanitize_internal_terms(payload.summary)
+                self._mouth.note_game(summary)
+                self._mouth.react(
+                    f"body:{payload.kind}",
+                    summary,
+                    urgent=payload.kind in URGENT_BODY_KINDS,
+                    refresh_scene=payload.kind in SCENE_CHANGING_BODY_KINDS,
+                )
+            elif payload.kind == "died":
                 # 死亡是要紧事：与 game.report 同款置位待定夺信号，下次空缓冲 tick 立即
                 # 促发一轮决策（绕最小间隔与每小时上限）。死亡连发时连窗是有意行为——
                 # 那是叙事价值最高的时刻，主播应当场知道、当场解说。
@@ -1066,10 +1123,34 @@ class StreamerAgent(BaseAgent):
                 self._pending_private_chat.append(f"[{payload.game}] {body}")
             else:
                 self._stage_game_event(note_turn(payload.game, body, payload.timestamp_ms or now_ms()), is_chat=True)
+                if self._mouth is not None:
+                    self._mouth.note_game(body)
             if payload.kind == "player":
                 self._game_decision_pending = True
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏聊天失败: {exc}", exc=True)
+
+    def _current_segment_title(self) -> str:
+        """当前流程单环节的标题（嘴的现场卡用）；没有流程单为空。"""
+        segment = self._rundown_coord.state.current_segment
+        return segment.title if segment is not None else ""
+
+    async def _read_scene_brief(self) -> str:
+        """读一句话现场：逐个调配置的参考工具，取第一个结果里的 ``brief``；都没有返回空串。"""
+        if self._tool_registry is None:
+            return ""
+        for name in self.typed_config.reference_tools:
+            try:
+                result = await self._tool_registry.invoke(
+                    ToolInvocation(tool_name=name, arguments={}, source="mouth-scene", caller_profile=_PROFILE_REPLYER)
+                )
+            except Exception as exc:  # noqa: BLE001 - 读不到现场不挡反应
+                self._logger.warning(f"嘴读现场工具 '{name}' 失败: {exc}", exc=True)
+                continue
+            brief = brief_of(result.structured_content) if result.success else ""
+            if brief:
+                return brief
+        return ""
 
     def _latest_live_frame(self) -> Optional[Any]:
         """最新一帧直播画面（图像暂存 latest 槽位快照；从未采样过为 None）。"""
@@ -1134,6 +1215,9 @@ class StreamerAgent(BaseAgent):
         forced = self._timing_gate.is_forced(msg)
         # 入缓冲
         self._buffer.add(msg, arrival_ms=now_ms(), forced=forced)
+        if self._mouth is not None:
+            sender = msg.user.name if msg.user is not None else ""
+            self._mouth.note_viewer(sender or "观众", msg.content)
 
     def trigger_external_proactive(self, topic_hint: Optional[str] = None) -> None:
         """外部 API 触发主动发言（Dashboard / API 调用）。"""
