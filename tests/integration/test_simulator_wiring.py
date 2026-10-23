@@ -21,8 +21,8 @@ from src.modules.config.service import ConfigService
 from src.modules.logging.log_streamer import _LIVE_STREAMERS
 from src.modules.simulator.service import SimulatorService
 
-# create_app_components 返回元组的下标（共 14 项）
-EVENT_BUS, LLM, AGENT_MANAGER, SIMULATOR, SESSION_MANAGER = 0, 1, 5, 6, 9
+# create_app_components 返回元组的下标（共 15 项）
+EVENT_BUS, LLM, AGENT_MANAGER, SIMULATOR, SESSION_MANAGER, MAIBOT_SYNC = 0, 1, 5, 6, 9, 14
 
 
 def _minimal_config(simulator_enabled: bool) -> Dict[str, Any]:
@@ -99,9 +99,10 @@ async def test_log_streamer_persist_dir_is_passed_through_as_is(tmp_path: Path) 
 async def test_disabled_simulator_is_not_wired_at_all(tmp_path: Path) -> None:
     result = await _assemble(tmp_path, simulator_enabled=False)
     try:
-        assert len(result) == 14
+        assert len(result) == 15
         assert result[SIMULATOR] is None
         assert result[SESSION_MANAGER] is not None  # 会话管理器始终装配
+        assert result[MAIBOT_SYNC] is None  # 未配置 [maibot_sync] 时不同步直播近况
     finally:
         await _cleanup(result)
     assert not [s for s in _LIVE_STREAMERS if s.persist]  # 测试装配不得留下 persist LogStreamer（会写真实 data/logs/）

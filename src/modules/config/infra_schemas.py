@@ -20,6 +20,7 @@ from src.modules.config.core_schemas import (
 from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.config.schemas.logging import LoggingConfig
+from src.modules.maibot_sync.config_schema import MaiBotSyncConfigSchema
 from src.modules.simulator.config_schema import SimulatorConfigSchema
 
 
@@ -37,6 +38,7 @@ class InfraRootConfig(BaseConfig):
     - ``[logging]``     — 日志
     - ``[diagnostics]`` — 本地诊断记录落盘（LLM 正文/事件流/TTS 记录）
     - ``[simulator]``   — 模拟直播间
+    - ``[maibot_sync]`` — 直播近况同步给 MaiBot 桥接插件
     """
 
     __file_name__ = "infra.toml"
@@ -93,6 +95,11 @@ class InfraRootConfig(BaseConfig):
         default_factory=SimulatorConfigSchema,
         title="模拟直播间配置",
         description="模拟直播间配置（人设/礼物数据位于 SQLite 的 sim_personas/sim_gifts 表）",
+    )
+    maibot_sync: MaiBotSyncConfigSchema = Field(
+        default_factory=MaiBotSyncConfigSchema,
+        title="MaiBot 近况同步",
+        description="把开播、换环节、收播与场次回顾推给 MaiBot 桥接插件（AmaidesuBridgePlugin）",
     )
 
 

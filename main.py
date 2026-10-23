@@ -60,6 +60,7 @@ from src.modules.llm.engine import LLMManager
 from src.modules.llm.request_history_manager import get_global_request_history_manager
 from src.modules.logging import configure_from_config, get_logger
 from src.modules.logging.log_streamer import LogStreamer
+from src.modules.maibot_sync import HttpStatusSender, LiveStatusReporter, MaiBotSyncConfigSchema
 from src.modules.storage.bootstrap import build_database
 from src.modules.prompts import get_prompt_manager
 from src.modules.session import LiveSessionManager
@@ -333,6 +334,7 @@ async def create_app_components(
     Optional[ToolHealthMonitor],
     Optional[TaskTracker],
     Optional[TtsDiagnosticsRecorder],
+    Optional[LiveStatusReporter],
 ]:
     """组合根：构造并连接所有核心组件。
 
@@ -366,7 +368,8 @@ async def create_app_components(
         (event_bus, llm_service, dashboard_server,
          event_recorder, collector_manager, agent_manager,
          simulator_service, database, storage_ledger, session_manager,
-         tool_registry, health_monitor, tts_diagnostics_recorder)
+         tool_registry, health_monitor, task_tracker, tts_diagnostics_recorder,
+         maibot_sync_reporter)
     """
     # --- 存储（SQLiteDatabase：建表 + 迁移 + 自检）---
     # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
@@ -439,6 +442,11 @@ async def create_app_components(
         auto_start=storage_ledger_auto_start,
         session_manager=session_manager,
     )
+
+    # --- 直播近况同步给 MaiBot（[maibot_sync]）---
+    # 第 ① 段只接线订阅：心跳随 live.started 才起，第 ② 段 Agent 启动补写回顾发出的
+    # streamer.recap.written 也能接住
+    maibot_sync_reporter = _build_maibot_sync_reporter(event_bus, config)
 
     # --- CollectorManager ---
     # 采集器配置位于 collectors.toml：根键 = enabled 名单 + 各采集器同名子段
@@ -879,6 +887,7 @@ async def create_app_components(
         health_monitor if agents_config else None,
         task_tracker if agents_config else None,
         tts_diagnostics_recorder,
+        maibot_sync_reporter,
     )
 
 
@@ -940,6 +949,30 @@ async def _start_storage_ledger(
     except Exception as exc:
         logger.warning(f"StorageLedger 构造/启动失败: {exc}")
         return None
+
+
+def _build_maibot_sync_reporter(event_bus: EventBus, config: Dict[str, Any]) -> Optional[LiveStatusReporter]:
+    """按 ``[maibot_sync]`` 装配直播近况上报器；未启用或缺地址/令牌时不装配。"""
+    raw = config.get("maibot_sync", {}) if isinstance(config, dict) else {}
+    sync_config = MaiBotSyncConfigSchema(**raw) if isinstance(raw, dict) else MaiBotSyncConfigSchema()
+    if not sync_config.enabled:
+        logger.debug("[maibot_sync].enabled=false，不向 MaiBot 同步直播近况")
+        return None
+    if not sync_config.url or not sync_config.token:
+        logger.warning("[maibot_sync] 已启用但 url 或 token 未设置，不向 MaiBot 同步直播近况")
+        return None
+    reporter = LiveStatusReporter(
+        event_bus=event_bus,
+        sender=HttpStatusSender(
+            url=sync_config.url,
+            token=sync_config.token,
+            timeout_ms=sync_config.request_timeout_ms,
+        ),
+        heartbeat_interval_ms=sync_config.heartbeat_interval_ms,
+    )
+    reporter.setup()
+    logger.info(f"直播近况同步已接线：开播 / 换环节 / 收播 / 场次回顾 → {sync_config.url}")
+    return reporter
 
 
 async def _start_log_streamer(
@@ -1300,6 +1333,7 @@ async def run_shutdown(
     task_tracker: Optional[TaskTracker] = None,
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = None,
     diagnostics_writer: Optional[DiagnosticsWriter] = None,
+    maibot_sync_reporter: Optional[LiveStatusReporter] = None,
 ) -> None:
     """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard；场次结账在事件历史/总线拆除之前（live.ended 要被记录）；随后事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），诊断落盘线程冲刷收尾，最后 EventBus/LLMManager 清理，SQLiteDatabase.close 收尾落盘。"""
     _saw_cancelled = False
@@ -1418,6 +1452,11 @@ async def run_shutdown(
         await safe_log(event_bus.cleanup(), "EventBus.cleanup")
         logger.info("EventBus 已清理")
 
+    # 直播近况上报器放在总线清理之后收尾：进程退出结账发出的 live.ended 由总线
+    # 等到处理完，"已下播"近况才推得出去；之后再退订、停心跳、关连接
+    if maibot_sync_reporter is not None:
+        await safe_log(maibot_sync_reporter.stop(), "LiveStatusReporter.stop")
+
     logger.info("正在清理 LLMManager...")
     if llm_service is not None:
         await safe_log(llm_service.cleanup(), "LLMManager.cleanup")
@@ -1473,6 +1512,7 @@ async def main() -> None:
         health_monitor,
         task_tracker,
         tts_diagnostics_recorder,
+        maibot_sync_reporter,
     ) = await create_app_components(
         config,
         config_service,
@@ -1512,6 +1552,7 @@ async def main() -> None:
                 health_monitor=health_monitor,
                 task_tracker=task_tracker,
                 tts_diagnostics_recorder=tts_diagnostics_recorder,
+                maibot_sync_reporter=maibot_sync_reporter,
             )
             return
 
@@ -1560,6 +1601,7 @@ async def main() -> None:
             health_monitor=health_monitor,
             task_tracker=task_tracker,
             tts_diagnostics_recorder=tts_diagnostics_recorder,
+            maibot_sync_reporter=maibot_sync_reporter,
         )
     finally:
         await fallback_close_active_session(session_manager)
