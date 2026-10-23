@@ -1059,6 +1059,7 @@ def register_vts_tools(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
+    subtitle_service: Optional[Any] = None,
 ) -> VTSProvider:
     """构造 VTSProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。
 

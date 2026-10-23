@@ -437,6 +437,7 @@ def register_obs_tools(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
+    subtitle_service: Optional[Any] = None,
 ) -> OBSProvider:
     provider = create_obs_provider(config=config, event_bus=event_bus)
     registry.register_provider(provider)

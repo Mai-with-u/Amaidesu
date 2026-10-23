@@ -1,7 +1,7 @@
 """
 VRChatProvider - VRChat OSC 虚拟形象工具集
 
-- 引擎：OSC 客户端初始化、动作参数写入
+- 引擎：OSC 客户端初始化、动作参数写入、头顶聊天框发送
 - ToolProvider 协议由本类自身实现
 - 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
   - ``vrchat_set_expression``        - 设置情绪（VRChat 无标准表情参数体系，返回未应用结果）
@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional
 
 from pydantic import Field
 
+from src.modules.avatar.platform.vrchat.chatbox import VRChatChatboxBackend
 from src.modules.avatar.speech_binding import bind_speech_emotion
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -79,7 +80,7 @@ class VRChatProvider(BaseToolProvider):
     category = "avatar"
 
     class ConfigSchema(BaseConfig):
-        """VRChat OSC 配置（地址端口 + 动作表）"""
+        """VRChat OSC 配置（地址端口 + 动作表 + 聊天框）"""
 
         # 常量型字段：值恒等于段名，仅作段位标识，WebUI 只读呈现（改了也会被忽略）
         type: str = Field(title="段位标识", default="vrchat", json_schema_extra={"readonly": True})
@@ -111,6 +112,18 @@ class VRChatProvider(BaseToolProvider):
             ge=0,
             description="触发后多久把动作参数写回 0（鼓掌、跳舞这类循环动作靠归零停下）；0 = 不归零",
         )
+        chatbox_enabled: bool = Field(
+            title="头顶聊天框",
+            default=True,
+            description="把主播说的话同步显示到 VRChat 头顶聊天框（跟随字幕源，超过 144 字截断）",
+        )
+        chatbox_min_interval_ms: int = Field(
+            title="聊天框最短间隔",
+            default=1600,
+            ge=0,
+            description="两条聊天框之间的最短间隔；发得太快 VRChat 会冷却，间隔内只发最新一条",
+            json_schema_extra={"x-ui-advanced": True},
+        )
 
     def __init__(
         self,
@@ -134,6 +147,12 @@ class VRChatProvider(BaseToolProvider):
         self.emote_reset_ms: int = self.typed_config.emote_reset_ms
         # 动作归零任务：新动作触发时取消上一个，避免旧的归零打断新动作
         self._emote_reset_task: Optional[asyncio.Task] = None
+        # 头顶聊天框字幕后端（装配时注册到字幕服务；未连接时发送自行跳过）
+        self.chatbox = VRChatChatboxBackend(
+            self._send_chatbox,
+            min_interval_ms=self.typed_config.chatbox_min_interval_ms,
+            enabled=self.typed_config.chatbox_enabled,
+        )
 
         # OSC 客户端
         self.osc_client: Any = None
@@ -249,6 +268,8 @@ class VRChatProvider(BaseToolProvider):
         # 被动半事件订阅：情绪反射（streamer.speech；set_expression 当前不渲染
         # 情绪面，订阅保持契约一致性，未来接入表情通道无需改装配）
         self._speech_emotion_handler = bind_speech_emotion(self.event_bus, self, self.logger)
+        # 重新启动时按配置恢复聊天框（上次清理时已停用）
+        self.chatbox.enabled = self.typed_config.chatbox_enabled
         self._has_started = True
         self.logger.info(f"{self.__class__.__name__} 已启动")
 
@@ -261,7 +282,8 @@ class VRChatProvider(BaseToolProvider):
             except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
                 self.logger.debug(f"streamer.speech 退订失败（已忽略）: {exc}")
             self._speech_emotion_handler = None
-        # 先停动作归零，再断 OSC：断开后归零发送会落空
+        # 先停聊天框与动作归零，再断 OSC：断开后它们的发送都会落空
+        await self.chatbox.close()
         await self._cancel_emote_reset()
         await self._disconnect()
         self._has_started = False
@@ -305,6 +327,12 @@ class VRChatProvider(BaseToolProvider):
                 await task
             except asyncio.CancelledError:
                 self.logger.debug("动作归零任务已取消")
+
+    def _send_chatbox(self, text: str) -> None:
+        """发一条头顶聊天框：立即显示、不弹键盘、不播提示音；空串 = 清空"""
+        if not self._is_connected or not self.osc_client:
+            return
+        self.osc_client.send_message("/chatbox/input", [text, True, False])
 
     def get_stats(self) -> Dict[str, Any]:
         return {
@@ -374,10 +402,15 @@ def register_vrchat_tools(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
+    subtitle_service: Optional[Any] = None,
 ) -> VRChatProvider:
+    """构造 VRChatProvider 并注册到 registry；给了字幕服务且开了聊天框时，
+    把聊天框登记为字幕后端（跟随字幕服务已选定的字幕源）。"""
     provider = create_vrchat_provider(
         config=config,
         event_bus=event_bus,
     )
     registry.register_provider(provider)
+    if subtitle_service is not None and provider.chatbox.enabled:
+        subtitle_service.register_backend(provider.chatbox)
     return provider

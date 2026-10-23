@@ -660,6 +660,7 @@ def register_warudo_tools(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
+    subtitle_service: Optional[Any] = None,
 ) -> WarudoProvider:
     """构造 WarudoProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。
 

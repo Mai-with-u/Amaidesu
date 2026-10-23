@@ -665,6 +665,8 @@ async def create_app_components(
             event_bus=event_bus,
             lipsync_analyzer=lipsync_analyzer,
             avatar_platform=avatar_platform,
+            # 平台自带的字幕显示面（VRChat 头顶聊天框）登记为同一个字幕服务的后端，跟随已选定的字幕源
+            subtitle_service=subtitle_service,
         )
         from src.modules.tools.bootstrap import CORE_MEMBER_COUNT
 
