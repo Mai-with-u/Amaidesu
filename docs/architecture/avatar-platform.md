@@ -71,8 +71,8 @@ TTS 播放器把正在播放的音频实时递给共享口型分析器；分析�
 | | VTS | Warudo | VRChat |
 |---|-----|--------|--------|
 | 连接方式 | WebSocket（localhost:8001） | WebSocket（localhost:19190） | UDP OSC（127.0.0.1:9000） |
-| 表情怎么做 | 写内置参数 | 写 blendshape 状态通道 | 不支持（OSC 无标准表情参数），如实返回"未应用" |
-| 预设动作 | VTS 热键 | Warudo 蓝图动作 | 写形象动作参数（默认 SDK 模板的 `VRCEmote`，参数名和动作表可配置） |
+| 表情怎么做 | 写内置参数 | 按表情档案写表情键，蓝图把键落到模型上 | 不支持（OSC 无标准表情参数），如实返回"未应用" |
+| 预设动作 | VTS 热键 | 蓝图动作（内置头部动作、站姿、抛鱼 + 配置登记的动作） | 写形象动作参数（默认 SDK 模板的 `VRCEmote`，参数名和动作表可配置） |
 | 断线处理 | 自动重连 + 健康检查 | 自动重连 | 无需（UDP 无连接概念） |
 | 口型 | 支持 | 支持（元音通道） | 由 VRChat 按麦克风声音自己算 |
 | 自动小动作 | idle 微动 | 眨眼 / 移眼 / 点头等 | 无 |
@@ -81,6 +81,21 @@ TTS 播放器把正在播放的音频实时递给共享口型分析器；分析�
 平台不自建字幕源：字幕由独立的字幕模块统一选源（来龙去脉见 [ADR-025](../decisions/025-subtitle-single-source.md)）。平台自带的显示面（目前只有 VRChat 头顶聊天框）登记为字幕服务的又一个后端，跟随同一个字幕源；聊天框单条最多 144 字，两条之间至少隔约 1.5 秒，间隔内只发最新一条。
 
 VRChat 的 OSC 接口里，能写的只有形象作者自定义的参数（`/avatar/parameters/<名字>`）和与形象无关的聊天框（`/chatbox/*`）、移动输入（`/input/*`）；口型、手势等内置参数全部只读。某个形象有哪些参数，VRChat 每次加载形象时会写在本机 `%LOCALAPPDATA%Low\VRChat\VRChat\OSC\<用户ID>\Avatars\<形象ID>.json` 里。
+
+## Warudo：表情档案与蓝图
+
+Warudo 侧由场景里的蓝图接住 Amaidesu 发来的 WebSocket 动作（`{"action": 名字, "data": 值}`），再驱动角色。适配器不认任何具体模型的形状名，情绪用哪些"表情键"、各占多少，写在 `config/avatar.toml` 的 `[platform.warudo.expression]` 表情档案里：
+
+- 默认档案用 VRM 标准表情名（happy / angry / sad / relaxed / surprised），口型、眨眼、移眼是固定协议键（`VowelA~O`、`eye_close`、`eye_shift_*`）；
+- 表情做在自定义形状上的模型换一份档案，麦麦的档案在 `src/modules/avatar/platform/warudo/profiles/maimai.toml`，可整段粘贴进配置；
+- 档案还管两条规则：哪些键生效时暂停自动眨眼（如笑眼），哪些嘴部键在说话口型期间让位。
+
+蓝图不手画，用 `scripts/warudo_blueprints.py` 按同一份档案生成后在 Warudo 蓝图页导入，适配器发的动作名与蓝图接的名字天然一致：
+
+- 写法三选一：`vrm`（走 VRM 表情代理写 1.0 标准名）、`vrm0`（写 0.x 预设名 Joy / A / Blink 等）、`shape`（直接写模型网格上的同名形状，麦麦用这种）。不确定模型认哪套名字时，Warudo 日志里"Available VRM blendshape clips"一行列出的就是它认的名字；
+- 蓝图按资源 ID 找角色。新建场景的默认角色 ID 固定，但删过或重新添加过角色后 ID 会变，此时先保存场景、再加 `--scene <场景文件>` 生成，否则蓝图找不到角色、什么都不会动；
+- 头部动作与站姿播放 Warudo 自带动画，与模型无关；视线、抛鱼依赖场景道具或第三方插件，不在生成范围；
+- 导入后用 `--probe ws://localhost:19190` 逐项试发，对着画面核对。
 
 ## VTS：换模型需要重新配置吗
 
