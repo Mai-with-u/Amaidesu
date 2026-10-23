@@ -12,7 +12,8 @@ Amaidesu 启动时就会去连它们；连接型组件错过也不会坏（各�
 |------|---------|---------|
 | GPT-SoVITS（api_v2） | `[tts].provider = "gptsovits"` | 服务端日志出现 `Uvicorn running on http://127.0.0.1:9880`（命令见 [部署指南](gptsovits.md)） |
 | VTube Studio | `[avatar.platform].enabled` 含 `vts` | 模型已加载，插件 API 端口 8001 开启 |
-| Warudo | enabled 含 `warudo` | WebSocket 端口 19190 可达 |
+| Warudo | enabled 含 `warudo` | WebSocket 端口 19190 可达，场景里已导入按当前角色生成的 Amaidesu 蓝图（见[虚拟形象接入](avatar.md#warudo)） |
+| VRChat | enabled 含 `vrchat` | VRChat 里 OSC 已启用（见[虚拟形象接入](avatar.md#vrchat)） |
 | OBS | 启用 `live_frame` 采集器或 `[tools.studio.obs]` | WebSocket 服务开启（默认端口 4455），密码与配置一致 |
 
 ### 2. 启动 Amaidesu

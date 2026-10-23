@@ -20,6 +20,7 @@
 - [Minecraft Agent](guides/minecraft-agent.md)
 - [发布](guides/release.md)
 - [GPT-SoVITS 语音服务部署](guides/gptsovits.md)
+- [虚拟形象接入（Warudo / VRChat）](guides/avatar.md)
 
 ## 架构与设计
 
