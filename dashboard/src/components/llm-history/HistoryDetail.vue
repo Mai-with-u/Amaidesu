@@ -571,23 +571,23 @@ function handleClose(value: boolean) {
 }
 
 .prompt-role.is-system {
-  color: #7c9cff;
-  background: rgba(124, 156, 255, 0.15);
+  color: var(--color-planner);
+  background: var(--color-planner-bg);
 }
 
 .prompt-role.is-user {
-  color: #67c23a;
-  background: rgba(103, 194, 58, 0.15);
+  color: var(--color-success);
+  background: var(--color-success-bg);
 }
 
 .prompt-role.is-assistant {
-  color: #409eff;
-  background: rgba(64, 158, 255, 0.15);
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
 }
 
 .prompt-role.is-tool {
-  color: #e6a23c;
-  background: rgba(230, 162, 60, 0.15);
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
 }
 
 /* tool 返回内容：JSON 美化代码块 */

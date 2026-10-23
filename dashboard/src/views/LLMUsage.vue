@@ -15,7 +15,7 @@
     </header>
 
     <!-- 统计卡片 -->
-    <section class="stats-cards stagger-in">
+    <section class="stats-cards">
       <div class="stat-card cost">
         <div class="stat-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -395,12 +395,12 @@ const trendPoints = computed(() => trends.value?.points ?? []);
 const trendLabels = computed(() => trendPoints.value.map(point => point.date.slice(5))); // MM-DD
 
 const callBarSeries = computed(() => [
-  { name: '调用次数', color: '#8b5cf6', values: trendPoints.value.map(point => point.total_calls) },
+  { name: '调用次数', color: '#9a6bc0', values: trendPoints.value.map(point => point.total_calls) },
 ]);
 
 const costLineSeries = computed(() => ({
   name: '费用',
-  color: '#10b981',
+  color: '#55935f',
   values: trendPoints.value.map(point => point.cost),
 }));
 
@@ -414,12 +414,12 @@ const costTooltips = computed(() =>
 const tokenBarSeries = computed(() => [
   {
     name: '输入 Token',
-    color: '#3b82f6',
+    color: '#4a7fb5',
     values: trendPoints.value.map(point => point.prompt_tokens),
   },
   {
     name: '输出 Token',
-    color: '#8b5cf6',
+    color: '#9a6bc0',
     values: trendPoints.value.map(point => point.completion_tokens),
   },
 ]);
@@ -436,7 +436,7 @@ const tokenTooltips = computed(() =>
 // 命中率折到 0-100 展示；null（无上报）断线
 const rateLineSeries = computed(() => ({
   name: '缓存命中率',
-  color: '#10b981',
+  color: '#55935f',
   values: trendPoints.value.map(point =>
     point.cache_hit_rate === null ? null : point.cache_hit_rate * 100,
   ),
@@ -466,7 +466,7 @@ function goToModelHistory(modelName: string): void {
 
 // 上下文水位色阶：≤80% 蓝色（安全），>80% 警告橙（即将溢出）
 function waterLevelColor(ratio: number): string {
-  return ratio > 0.8 ? '#f59e0b' : '#3b82f6';
+  return ratio > 0.8 ? '#c08a2e' : '#4a7fb5';
 }
 
 // 格式化时间戳
@@ -611,19 +611,19 @@ onMounted(() => {
 }
 
 .stat-card.cost::before {
-  background: linear-gradient(180deg, #10b981, #059669);
+  background: linear-gradient(180deg, #55935f, #3f7449);
 }
 
 .stat-card.tokens::before {
-  background: linear-gradient(180deg, #3b82f6, #2563eb);
+  background: linear-gradient(180deg, #4a7fb5, #39618e);
 }
 
 .stat-card.calls::before {
-  background: linear-gradient(180deg, #8b5cf6, #7c3aed);
+  background: linear-gradient(180deg, #9a6bc0, #7a4f9e);
 }
 
 .stat-card.models::before {
-  background: linear-gradient(180deg, #f59e0b, #d97706);
+  background: linear-gradient(180deg, #c08a2e, #9a6c20);
 }
 
 .stat-card.rate::before {
@@ -647,22 +647,22 @@ onMounted(() => {
 
 .stat-card.cost .stat-icon {
   background: rgba(16, 185, 129, 0.1);
-  color: #10b981;
+  color: #55935f;
 }
 
 .stat-card.tokens .stat-icon {
   background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
+  color: #4a7fb5;
 }
 
 .stat-card.calls .stat-icon {
   background: rgba(139, 92, 246, 0.1);
-  color: #8b5cf6;
+  color: #9a6bc0;
 }
 
 .stat-card.models .stat-icon {
   background: rgba(245, 158, 11, 0.1);
-  color: #f59e0b;
+  color: #c08a2e;
 }
 
 .stat-card.rate .stat-icon {
@@ -823,11 +823,11 @@ onMounted(() => {
 }
 
 .token-value.prompt {
-  color: #3b82f6;
+  color: #4a7fb5;
 }
 
 .token-value.completion {
-  color: #8b5cf6;
+  color: #9a6bc0;
 }
 
 .token-value.total {
@@ -876,7 +876,7 @@ onMounted(() => {
 }
 
 .water-level-text.warn {
-  color: #f59e0b;
+  color: #c08a2e;
   font-weight: 600;
 }
 
@@ -888,7 +888,7 @@ onMounted(() => {
 .cost-value {
   font-family: var(--font-mono);
   font-weight: 600;
-  color: #10b981;
+  color: #55935f;
 }
 
 .time-value {

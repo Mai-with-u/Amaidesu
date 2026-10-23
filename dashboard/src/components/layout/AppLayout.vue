@@ -168,9 +168,6 @@ function onToggleTheme(event: MouseEvent): void {
   align-items: center;
   justify-content: center;
   border-radius: 9px;
-  background: linear-gradient(135deg, var(--color-primary), var(--color-agent));
-  box-shadow: 0 4px 12px rgba(var(--color-primary-rgb), 0.3);
-  color: #fff;
   transition: transform 0.4s var(--ease-spring);
 }
 

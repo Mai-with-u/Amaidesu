@@ -137,7 +137,7 @@ import { formatQuotaAmount, formatResetIn, quotaLevel } from '@/utils/providerQu
  * tools 是较早落库记录的单一工具段，保留以便旧记录照常显示。
  */
 const SECTION_META: Record<string, { label: string; color: string }> = {
-  messages: { label: 'Messages', color: '#3b82f6' },
+  messages: { label: 'Messages', color: '#4a7fb5' },
   mcp_tools: { label: 'MCP tools', color: '#e2603f' },
   system_tools: { label: 'System tools', color: '#1f9d6b' },
   tools: { label: 'Tools', color: '#d99a1e' },

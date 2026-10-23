@@ -43,7 +43,7 @@ interface DonutItem {
 const props = withDefaults(
   defineProps<{
     items: DonutItem[];
-    /** 各条目颜色（与 items 一一对应；不足时循环取色板） */
+    /** 各条目颜色（与 items 一一对应；不足时循环取色板；缺省取主题系列色） */
     colors?: string[];
     /** 中心行上方的小标签（如 "总费用"） */
     totalLabel?: string;
@@ -52,7 +52,7 @@ const props = withDefaults(
     size?: number;
   }>(),
   {
-    colors: () => ['#409eff', '#10b981', '#f59e0b', '#8b5cf6', '#f56c6c', '#0ea5e9', '#d946ef'],
+    colors: () => [],
     totalLabel: '总计',
     formatValue: (value: number): string => `${value}`,
     size: 168,
@@ -62,6 +62,11 @@ const props = withDefaults(
 const containerRef = ref<HTMLElement | null>(null);
 const palette = useChartPalette();
 
+/** 未显式传入 colors 时取主题色板系列色（主色 + 域色板循环） */
+const resolvedColors = computed(() =>
+  props.colors.length > 0 ? props.colors : palette.value.seriesColors,
+);
+
 const total = computed(() => props.items.reduce((sum, item) => sum + Math.max(0, item.value), 0));
 
 const totalText = computed(() => props.formatValue(total.value));
@@ -69,9 +74,10 @@ const totalText = computed(() => props.formatValue(total.value));
 const legendItems = computed(() =>
   props.items.map((item, index) => {
     const ratio = total.value > 0 ? Math.max(0, item.value) / total.value : 0;
+    const colors = resolvedColors.value;
     return {
       model: item.name,
-      color: props.colors[index % props.colors.length],
+      color: colors[index % colors.length],
       valueText: props.formatValue(item.value),
       percentText: `${(ratio * 100).toFixed(1)}%`,
     };
@@ -80,10 +86,11 @@ const legendItems = computed(() =>
 
 const option = computed<EChartsCoreOption>(() => {
   const paletteValue = palette.value;
+  const colors = resolvedColors.value;
   const data = props.items.map((item, index) => ({
     name: item.name,
     value: Math.max(0, item.value),
-    itemStyle: { color: props.colors[index % props.colors.length] },
+    itemStyle: { color: colors[index % colors.length] },
   }));
 
   return {

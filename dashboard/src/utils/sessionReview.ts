@@ -27,14 +27,14 @@ export function slowCallsLevel(count: number): 'yellow' | null {
 
 // ==================== 水位图（ECharts option 构造） ====================
 
-/** 水位图两条线的展示色（planner 靛蓝 / minecraft 粉，与 mockup 一致） */
+/** 水位图两条线的展示色（planner 靛蓝 / minecraft 玫红，取自全局域色板） */
 export const WATERLINE_COLORS: Record<string, string> = {
-  planner: '#6366f1',
-  minecraft: '#ec4899',
+  planner: '#5d6ab8',
+  minecraft: '#c05e8a',
 };
 
-/** 兜底配色（未知 profile 依次取用） */
-const FALLBACK_COLORS = ['#14b8a6', '#e6a23c', '#409eff', '#909399'];
+/** 兜底配色（未知 profile 依次取用，取自全局域色板） */
+const FALLBACK_COLORS = ['#3d968f', '#c08a2e', '#4a7fb5', '#857e74'];
 
 export function waterlineColor(profile: string, index: number): string {
   return WATERLINE_COLORS[profile] ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length];

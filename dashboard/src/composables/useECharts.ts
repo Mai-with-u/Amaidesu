@@ -22,6 +22,8 @@ export interface ChartPalette {
   primaryColor: string;
   collectorColor: string;
   agentColor: string;
+  /** 多系列图表的默认取色圈（主色 + 域色板，与全局色板同族） */
+  seriesColors: string[];
 }
 
 /**
@@ -44,6 +46,16 @@ export function useChartPalette(): Ref<ChartPalette> {
       primaryColor: read('--color-primary'),
       collectorColor: read('--color-collector'),
       agentColor: read('--color-agent'),
+      seriesColors: [
+        read('--color-primary'),
+        read('--color-collector'),
+        read('--color-tool'),
+        read('--color-rundown'),
+        read('--color-agent'),
+        read('--color-danger'),
+        read('--color-planner'),
+        read('--color-game'),
+      ],
     };
   });
 }
