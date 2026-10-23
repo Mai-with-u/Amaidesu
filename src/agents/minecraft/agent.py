@@ -938,8 +938,10 @@ class MinecraftAgent(BaseAgent):
             return
         if name == EXECUTE:
             if run.finished:
-                # 当场完成的目标（记地点、只读分析）没有后台过程，结果已经在回复里。
+                # 当场完成的目标（记地点、只读分析）没有后台过程，结果已经在回复里；
+                # 账面仍要记：先登记再写终态，直接写会因条目不存在而落空（终态变化广播不出来）。
                 self._remember_finished(run)
+                self._register_and_settle_goal(run)
                 return
             self._track_goal(run)
             return
@@ -990,6 +992,18 @@ class MinecraftAgent(BaseAgent):
                 snapshot=run.data,
             )
         self._logger.info(f"开始跟踪目标 {run.goal_id}（{run.ability}）：{run.state}")
+
+    def _register_and_settle_goal(self, run: GoalRun) -> None:
+        """execute 当场返回终态的目标补记账：先按受理登记、再写终态，账本才广播得出这次变化。"""
+        if self._task_tracker is not None:
+            self._task_tracker.track(
+                task_id=ledger_task_id(run.goal_id),
+                provider=PROVIDER,
+                tool=EXECUTE,
+                initiator=self.name,
+                snapshot=run.data,
+            )
+        self._update_goal_ledger(run)
 
     def _note_goal(self, run: GoalRun) -> None:
         """记下目标此刻的样子：任务状态、看一眼与交付门禁都读它。"""

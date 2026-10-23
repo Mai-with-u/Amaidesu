@@ -325,6 +325,38 @@ async def test_goals_are_mirrored_into_the_shared_task_ledger() -> None:
     await agent.stop()
 
 
+async def test_execute_finishing_inline_still_lands_in_the_ledger() -> None:
+    """execute 当场返回终态的目标也要记账：先登记再写终态，终态变化广播得出来。
+
+    回归形态（场次40 goal-489/490）：当场完成的路径过去只记进最近结束清单，
+    账本从未登记，终态写入落空，主播与任务面看不到任何 task.changed。
+    """
+    server = FakeMaicraft()
+    ledger = TaskLedger()
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger._event_bus = ledger_bus
+    tracker = TaskTracker(ToolRegistry(), ledger)
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(message.get("role") == "tool" and "记住了" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "记好了"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "remember", "parameters": {"name": "家"}}})])
+
+    agent, llm, bus = await _start(server, script, tracker=tracker)
+    agent.receive_delegation(instruction="记一下家", task_id="d-1")
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+    assert "maicraft-goal-1" not in ledger, "终态条目已按约定移除"
+
+    changed = [
+        call.args[1]
+        for call in ledger_bus.emit.await_args_list
+        if call.args and getattr(call.args[1], "task_id", "") == "maicraft-goal-1"
+    ]
+    assert changed and changed[0].status == "succeeded", "当场完成的终态广播 task.changed"
+    assert agent._goals.tracked_ids() == [], "当场完成的目标不进跟踪名单"
+    await agent.stop()
+
+
 async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     server = FakeMaicraft()
     agent, llm, bus = await _start(server, lambda messages: _resp("好"))
