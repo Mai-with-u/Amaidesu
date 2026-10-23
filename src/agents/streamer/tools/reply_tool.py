@@ -46,6 +46,49 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
+# 情绪值收敛：Planner 给出名单外的情绪词时映射到最近的枚举值
+# ---------------------------------------------------------------------------
+
+# 工具定义里虽带了枚举，部分模型（实测 gemini）仍常填 cheerful / playful 这类近义词。
+# 拒收会让 Planner 整轮重跑一步（一场 22 句台词被拒 18 次，每次多等十几秒），
+# 而情绪只驱动表情与语气，差一档不影响事实——所以就近映射，映射不到按 neutral 并记日志
+_EMOTION_ALIASES: Dict[str, Emotion] = {
+    **dict.fromkeys(
+        ("cheerful", "joyful", "pleased", "amused", "glad", "delighted", "content", "relieved", "grateful", "warm"),
+        Emotion.HAPPY,
+    ),
+    **dict.fromkeys(("lively", "energetic", "enthusiastic", "thrilled", "eager", "hyped"), Emotion.EXCITED),
+    **dict.fromkeys(("playful", "teasing", "mischievous", "proud", "confident", "cocky", "sly"), Emotion.SMUG),
+    **dict.fromkeys(("shocked", "amazed", "astonished", "startled", "curious"), Emotion.SURPRISED),
+    **dict.fromkeys(("nervous", "anxious", "worried", "fearful", "afraid"), Emotion.SCARED),
+    **dict.fromkeys(("awkward", "sheepish", "flustered"), Emotion.EMBARRASSED),
+    **dict.fromkeys(("bashful",), Emotion.SHY),
+    **dict.fromkeys(("annoyed", "frustrated", "irritated", "mad", "grumpy"), Emotion.ANGRY),
+    **dict.fromkeys(("disappointed", "upset", "lonely", "down", "gloomy"), Emotion.SAD),
+    **dict.fromkeys(("sleepy", "exhausted", "bored"), Emotion.TIRED),
+    **dict.fromkeys(("determined", "focused", "thoughtful"), Emotion.SERIOUS),
+    **dict.fromkeys(("helpless", "dumbfounded", "exasperated"), Emotion.SPEECHLESS),
+    **dict.fromkeys(("puzzled", "perplexed"), Emotion.CONFUSED),
+    **dict.fromkeys(("affectionate", "loving", "adoring"), Emotion.LOVE),
+    **dict.fromkeys(("tearful", "sobbing"), Emotion.CRYING),
+    **dict.fromkeys(("calm", "relaxed", "chill"), Emotion.NEUTRAL),
+}
+
+
+def _coerce_emotion(raw: Any) -> tuple[Emotion, str]:
+    """把 Planner 给的情绪值收敛到枚举，返回（情绪, 改写说明）；说明为空表示原样合法。
+
+    合法值原样通过；名单外的常见近义词就近映射；其余一律按 neutral。
+    """
+    text = str(raw or "").strip().lower()
+    try:
+        return Emotion(text), ""
+    except ValueError:
+        mapped = _EMOTION_ALIASES.get(text, Emotion.NEUTRAL)
+        return mapped, f"{raw!r} 不在情绪名单，按 {mapped.value} 处理"
+
+
+# ---------------------------------------------------------------------------
 # ToolSpec：reply 工具定义
 # ---------------------------------------------------------------------------
 
@@ -316,6 +359,11 @@ class ReplyToolProvider(BaseToolProvider):
         # 本轮弹幕批由 Planner 调用前注入；主动发言或脱离 Planner 调用时为空列表
         batch: List[Any] = list(self._round_batch)
 
+        # 情绪值先收敛到枚举：名单外的近义词就近映射，不为一个情绪词打回整轮
+        emotion, emotion_note = _coerce_emotion(args.get("emotion", "neutral"))
+        if emotion_note:
+            self._logger.warning(f"reply_tool: {emotion_note}")
+
         # 构造 plan（must should_reply=true）
         try:
             plan = DecisionPlan(
@@ -323,15 +371,15 @@ class ReplyToolProvider(BaseToolProvider):
                 target=target,
                 topic_summary=topic_summary,
                 reply_guidance=reply_guidance,
-                emotion=args.get("emotion", "neutral"),
+                emotion=emotion,
                 intensity=args.get("intensity", 0.5),
             )
         except (TypeError, ValueError) as exc:
-            self._logger.warning(f"reply_tool: Planner 情绪参数无效: {exc}", exc=True)
+            self._logger.warning(f"reply_tool: Planner 情绪强度无效: {exc}", exc=True)
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,
-                error_message=f"Planner 情绪参数无效: {exc}",
+                error_message=f"Planner 情绪强度无效: {exc}",
             )
 
         try:
