@@ -508,6 +508,27 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
         notebook_section="",
         bot_name="麦麦",
         style_constraints="",
+        length_rule="整句不超过 40 字。",
     )
     # 打算只在定下、改主意或做完时讲，平时不复述
     assert "聊天记录里你已经说过的就不再复述" in turn and "日常且简短" not in turn
+    # 像张嘴说话一样回一句，长度预算写在提示里；任务书点到的不用都说
+    assert "像张嘴说话一样回一句，不分段。整句不超过 40 字。" in turn and "挑最想说的那一件" in turn
+
+
+def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None:
+    """一轮一个点、一句话：指引写几个点她就讲几个点，表达侧又按写稿的路子起承转合，台词成了小作文。
+
+    本机实测换了两种模型都一样：22 句台词字数中位 91、最长 155，8 句分了段；
+    指引只有一个点的那句 50 字，四五个点的一百出头。
+    """
+    planner = prompts.render(
+        "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="", game_rules=""
+    )
+    assert "一轮只递一个点" in planner and "只写和这一个点有关的事实" in planner
+    assert "一句话以内" in planner and "五个点，表达引擎会一口气全讲完" in planner
+
+    system = prompts.render("amaidesu_replyer_system", bot_name="麦麦", personality="活泼")
+    assert "不像在写稿" in system and "一次只说一件事，一句话，说完就停" in system
+    assert "✗ 写稿" in system and "✓ 说话" in system and "不分段" in system
+    assert "从零创作" not in system and "用你自己的话张嘴说出来" in system

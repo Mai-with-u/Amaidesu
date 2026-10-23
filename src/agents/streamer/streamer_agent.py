@@ -344,6 +344,8 @@ class StreamerAgent(BaseAgent):
                 "personality": config.persona.personality,
                 "style_constraints": config.persona.style_constraints,
                 "audience_salutation": config.persona.audience_salutation,
+                # 表达出口的台词长度预算：超出先重说成一句，仍超按完整句子截短
+                "speech_max_chars": config.speech_max_chars,
             },
             llm_service=llm_manager,
             prompt_service=prompt_manager,

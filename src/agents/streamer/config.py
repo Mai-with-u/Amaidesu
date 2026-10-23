@@ -11,7 +11,7 @@
         planner_recent_intents_max,
         planner_recent_relays_max,
     )
-    speech_gate_window, speech_gate_ratio
+    speech_gate_window, speech_gate_ratio, speech_max_chars
 
     [agents.streamer.persona]
     bot_name, personality, style_constraints, behavior_style, audience_salutation
@@ -92,7 +92,7 @@ class StreamerPersonaConfig(BaseConfig):
     )
     style_constraints: str = Field(
         title="说话风格约束",
-        default="口语化，使用网络流行语，避免机械式回复",
+        default="口语化，短句为主，偶尔玩个梗，不堆网络流行语",
         description="说话风格约束（注入 Replyer 表达侧）",
     )
     behavior_style: str = Field(
@@ -494,6 +494,15 @@ class StreamerConfig(BaseConfig):
         le=1.0,
         description="台词对最近发言的字符重合度达到该值即打回（场次 31 真实发言回放定标："
         "正常发言上限约 0.42，复读对落在 0.53）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    # 一句台词的长度上限：提示词里的"一两句"是软要求，换了几种模型都照样写成一大段，
+    # 所以在表达引擎出口再卡一道——超出先让模型重说成一句，仍超就截到预算内最后一个完整句子
+    speech_max_chars: int = Field(
+        title="台词长度预算",
+        default=40,
+        ge=0,
+        description="一句台词最多多少字；超出时先让模型重说成一句，仍超就截到预算内最后一个完整句子（0 = 不限制）",
         json_schema_extra={"x-ui-advanced": True},
     )
 

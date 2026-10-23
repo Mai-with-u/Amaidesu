@@ -22,6 +22,8 @@ from src.modules.config.tools_schemas import (
 
 def _infra(**sections: dict):
     return InfraRootConfig.from_dict_with_drift_check({"meta": {"version": "0.0.0"}, **sections})
+
+
 class TestStreamerPersonaConfig:
     """Persona 段权威（agents/streamer/config.py StreamerPersonaConfig）
 
@@ -34,7 +36,7 @@ class TestStreamerPersonaConfig:
         assert p.bot_name == "麦麦"
         assert p.personality == "活泼开朗，有些调皮，喜欢和观众互动"
         # 表达侧统一禁 emoji：默认值不含"适当使用emoji"（与模板指令矛盾，见 v2.0.45 钩子）
-        assert p.style_constraints == "口语化，使用网络流行语，避免机械式回复"
+        assert p.style_constraints == "口语化，短句为主，偶尔玩个梗，不堆网络流行语"
         assert p.behavior_style.startswith("积极与观众互动"), "behavior_style 默认文本与权威定义漂移"
         assert p.audience_salutation == "大家"
 
@@ -50,7 +52,7 @@ def test_streamer_persona_and_context_defaults() -> None:
     assert persona.bot_name == "麦麦" and persona.audience_salutation == "大家"
     assert persona.personality == "活泼开朗，有些调皮，喜欢和观众互动"
     # v2.0.45 迁移钩子后旧默认（含"适当使用emoji"）已改写，见 replyer_style_drop_emoji
-    assert persona.style_constraints == "口语化，使用网络流行语，避免机械式回复"
+    assert persona.style_constraints == "口语化，短句为主，偶尔玩个梗，不堆网络流行语"
     assert persona.behavior_style.startswith("积极与观众互动")  # Planner 决策侧注入契约，必须非空
 
     context = StreamerContextConfig()

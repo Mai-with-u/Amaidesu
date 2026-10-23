@@ -120,7 +120,7 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
         },
         "reply_guidance": {
             "type": "string",
-            "description": "回复指引：说什么方向、对谁说、不提什么，以及她对这件事的态度与语气（可空；不写成台词）",
+            "description": "回复指引：一件事、一个态度，一句话以内——说什么方向、对谁说、不提什么，以及她对这件事的态度与语气（可空；不写成台词）",
         },
         "target": {
             "type": "string",

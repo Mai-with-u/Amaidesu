@@ -28,8 +28,14 @@ from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE
 # 故这里复制文本（保持依赖方向 agents → config 干净）。
 _DEFAULT_BOT_NAME = "麦麦"
 _DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和观众互动"
-_DEFAULT_STYLE_CONSTRAINTS = "口语化，使用网络流行语，避免机械式回复"
+_DEFAULT_STYLE_CONSTRAINTS = "口语化，短句为主，偶尔玩个梗，不堆网络流行语"
 _DEFAULT_AUDIENCE_SALUTATION = "大家"
+# 一句台词的长度上限（与 StreamerConfig.speech_max_chars 默认值对齐）；0 = 不限制
+_DEFAULT_SPEECH_MAX_CHARS = 40
+
+# 一个完整句子：至少一个非标点字，到句末标点（或全文结尾）为止；开头的"……"跟着后面的字算同一句。
+# 截短时只在完整句子之后下刀，不把一句话截成半截
+_SENTENCE = re.compile(r"[。！？!?…~～]*[^。！？!?…~～]+(?:[。！？!?…~～]+|$)")
 
 # 复古消息布局：稳定人设放进 system，历史与本轮要求合并进单条 user。
 _REPLYER_SYSTEM_TEMPLATE = "amaidesu_replyer_system"
@@ -74,6 +80,7 @@ class Replyer:
         self._personality: str = self._config.get("personality", _DEFAULT_PERSONALITY)
         self._style_constraints: str = self._config.get("style_constraints", _DEFAULT_STYLE_CONSTRAINTS)
         self._audience_salutation: str = self._config.get("audience_salutation", _DEFAULT_AUDIENCE_SALUTATION)
+        self._speech_max_chars: int = int(self._config.get("speech_max_chars", _DEFAULT_SPEECH_MAX_CHARS))
 
         self._llm_service = llm_service
         self._prompt_service = prompt_service
@@ -131,10 +138,15 @@ class Replyer:
         if not speech:
             self.logger.warning("Replyer 返回空台词，本轮不发声")
             return None
+        request_id = getattr(response, "request_id", None) or None
+
+        # 超出长度预算：先让模型重说成一句，仍超就截到预算内最后一个完整句子
+        if self._speech_max_chars > 0 and len(speech) > self._speech_max_chars:
+            speech, request_id = await self._shorten(system_prompt, speech, request_id)
 
         result = {
             "speech": speech,
-            "llm_request_id": getattr(response, "request_id", None) or None,
+            "llm_request_id": request_id,
         }
 
         # 敏感词净化只影响台词
@@ -145,6 +157,37 @@ class Replyer:
 
         self.logger.info(f"Replyer 生成回复: speech={result.get('speech', '')[:50]!r}")
         return result
+
+    async def _shorten(self, system_prompt: str, speech: str, request_id: Optional[str]) -> Tuple[str, Optional[str]]:
+        """把超出长度预算的台词压成一句：重说一次，仍超或重说失败就按完整句子截短。
+
+        重说只带人设（system 稳定段，前缀缓存可命中）和原台词，不重发整段上下文——
+        要的只是"同一个人把这句话说短"，事实都在原台词里。
+        """
+        budget = self._speech_max_chars
+        instruction = (
+            f"你刚想说的这段话有 {len(speech)} 字，太长了，像在写稿：\n{speech}\n\n"
+            f"像主播随口说话那样重说：只留最想说的那一件事，一句话，不超过 {budget} 字，不分段。"
+            "不要加原话里没有的事。只输出台词。"
+        )
+        shortened = ""
+        try:
+            response = await self._llm_service.generate(
+                [{"role": "user", "content": instruction}], system=system_prompt, profile=self.profile
+            )
+            if getattr(response, "success", False):
+                shortened = _plain_text_speech(getattr(response, "content", None))
+                request_id = getattr(response, "request_id", None) or request_id
+            else:
+                self.logger.warning(f"台词重说失败，改为直接截短: {getattr(response, 'error', 'unknown')}")
+        except Exception as exc:
+            self.logger.warning(f"台词重说异常，改为直接截短: {exc}", exc=True)
+        candidate = shortened or speech
+        fitted = _fit_to_budget(candidate, budget)
+        self.logger.info(
+            f"台词超出长度预算（{len(speech)} 字 > {budget}）：重说后 {len(shortened) or '失败'}，最终 {len(fitted)} 字"
+        )
+        return fitted, request_id
 
     # ==================== prompt 渲染（人设注入核心） ====================
 
@@ -240,6 +283,8 @@ class Replyer:
             rundown=rundown_render,
             state_facts=state_facts.strip() or "（无）",
             notebook_section=notebook_section,
+            # 长度预算先在提示里说清，多数台词一次就落在预算内；出口处还有截短兜底
+            length_rule=f"整句不超过 {self._speech_max_chars} 字。" if self._speech_max_chars > 0 else "",
         )
 
     # ==================== 敏感词净化（输出端） ====================
@@ -374,6 +419,23 @@ def _plain_text_speech(content: Any) -> str:
         return ""
     text = _THINK_UNCLOSED.sub("", _THINK_BLOCK.sub("", content)).strip()
     return text
+
+
+def _fit_to_budget(speech: str, budget: int) -> str:
+    """把台词截到长度预算内：去掉分段换行，从头累加完整句子，再加一句就超预算时停下。
+
+    第一句本身就超预算时整句保留——宁可长一点，也不把一句话截成半截。
+    """
+    text = re.sub(r"\s*\n+\s*", "", speech).strip()
+    if len(text) <= budget:
+        return text
+    kept = ""
+    for sentence in _SENTENCE.findall(text):
+        if kept and len(kept) + len(sentence) > budget:
+            break
+        kept += sentence
+    # 全是标点（切不出句子）时原样返回，不把台词截成空串
+    return kept or text
 
 
 def _render_plan_text(plan: DecisionPlan, *, target_text: str = "") -> str:
