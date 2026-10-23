@@ -651,7 +651,7 @@ onMounted(() => {
 .count-tag {
   flex-shrink: 0;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   height: 18px;
   padding: 0 6px;
   line-height: 16px;

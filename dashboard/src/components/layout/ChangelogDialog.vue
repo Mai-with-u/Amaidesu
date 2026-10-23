@@ -161,7 +161,7 @@ async function loadChangelog(): Promise<void> {
 
 .toc-heading {
   padding: 0 10px var(--spacing-xs);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-placeholder);
   letter-spacing: 0.5px;

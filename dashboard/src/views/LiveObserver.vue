@@ -827,7 +827,7 @@ onMounted(() => {
   flex-shrink: 0;
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   background: var(--bg-card);
   color: var(--text-secondary);
@@ -843,7 +843,7 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   margin-top: 3px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 .session-time {
@@ -904,7 +904,7 @@ onMounted(() => {
 .sessions-hint {
   margin: 0;
   padding: 8px 10px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--text-placeholder);
   border-top: 1px solid var(--border-color-light);
@@ -939,7 +939,7 @@ onMounted(() => {
 }
 
 .slate-eyebrow {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.6px;
   color: var(--color-rundown);
@@ -1107,7 +1107,7 @@ onMounted(() => {
 
 .task-strip-status {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   padding: 1px 8px;
   border-radius: 999px;
@@ -1125,7 +1125,7 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 
@@ -1187,7 +1187,7 @@ onMounted(() => {
   border-radius: 999px;
   background: var(--color-agent-bg);
   color: var(--color-agent);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
 }

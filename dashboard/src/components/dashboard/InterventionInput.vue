@@ -255,7 +255,7 @@ defineExpose({ focus: () => inputRef.value?.focus(), settle });
 }
 
 .intervention-option-desc {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
   white-space: normal;
 }
@@ -266,7 +266,7 @@ defineExpose({ focus: () => inputRef.value?.focus(), settle });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
   cursor: default;
 }

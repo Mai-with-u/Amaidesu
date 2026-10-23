@@ -13,7 +13,7 @@
   <div class="session-review">
     <header class="review-head">
       <div>
-        <h1>场次复盘</h1>
+        <h1 class="page-title">场次复盘</h1>
         <p class="review-sub">
           只读聚合 · 超阈数字仅染色（阈值为前端常量）· 支持多选合并跨场对比 · 深挖取证走 AI 会话
         </p>
@@ -644,7 +644,6 @@ function exportPackage(): void {
 
 .review-head h1 {
   margin: 0 0 4px;
-  font-size: 20px;
 }
 
 .review-sub {

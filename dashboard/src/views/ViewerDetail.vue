@@ -17,7 +17,7 @@
     </header>
 
     <!-- 统计卡行：礼物 / SC / 场次 / 首次出现                           -->
-    <section v-if="detail" class="stat-cards stagger-in">
+    <section v-if="detail" class="stat-cards">
       <div class="stat-card">
         <span class="stat-value mono">{{ detail.gift_total_count }}</span>
         <span class="stat-label">礼物件数</span>
@@ -521,7 +521,7 @@ onMounted(async () => {
 .type-tag {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   background: var(--bg-hover);
   color: var(--color-warning, #b88230);
@@ -531,13 +531,13 @@ onMounted(async () => {
 .sim-tag {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
   border: 1px dashed var(--border-color-dark);
 }
 
 .bubble-time {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
 }
 

@@ -53,7 +53,7 @@
           <h2 class="card-title">直播对话流</h2>
           <span class="card-hint">最近 {{ liveEntries.length }} 条 · 实时折叠</span>
           <span class="grow" />
-          <a class="card-link" @click.prevent="router.push('/live')">深度观察 → 直播控制台</a>
+          <a class="card-link" @click.prevent="router.push('/live')">打开直播控制台</a>
         </div>
         <div class="feed-scroll">
           <FeedTimeline :entries="liveEntries" compact empty-text="暂无直播活动" />
@@ -147,7 +147,6 @@
         <span class="mono">{{ infra.rundown.text }}</span>
       </a>
       <span class="grow" />
-      <span class="infra-hint mono">→</span>
     </footer>
   </div>
 </template>
@@ -884,7 +883,7 @@ onDeactivated(() => {
   color: var(--text-secondary);
 }
 .stat-cap {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
 }
 .stat-divider {
@@ -924,8 +923,7 @@ onDeactivated(() => {
 }
 .infra-link.is-disabled,
 .infra-idle,
-.infra-sep,
-.infra-hint {
+.infra-sep {
   color: var(--text-placeholder);
 }
 .infra-idle {
@@ -934,9 +932,6 @@ onDeactivated(() => {
 .infra-link .mono.is-warn {
   color: var(--color-danger);
   font-weight: 700;
-}
-.infra-hint {
-  font-size: 14px;
 }
 
 /* 响应式 */

@@ -992,7 +992,7 @@ async function copyText(text: string): Promise<void> {
 }
 
 .stamp {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
   flex-shrink: 0;
   white-space: nowrap;
@@ -1050,7 +1050,7 @@ async function copyText(text: string): Promise<void> {
 .chip {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.4px;
   background: var(--bg-card);
@@ -1262,7 +1262,7 @@ async function copyText(text: string): Promise<void> {
 }
 
 .act-kind {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.4px;
   color: var(--color-agent);
@@ -1276,7 +1276,7 @@ async function copyText(text: string): Promise<void> {
   padding: 0 5px;
   border: 1px solid var(--border-color-dark);
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 1px;
   color: var(--text-secondary);
@@ -1285,7 +1285,7 @@ async function copyText(text: string): Promise<void> {
 .act-emotion {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--color-agent);
   background: var(--color-agent-bg);
@@ -1296,7 +1296,7 @@ async function copyText(text: string): Promise<void> {
 .tts-state {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--color-primary);
   background: rgba(64, 158, 255, 0.12);
@@ -1304,7 +1304,7 @@ async function copyText(text: string): Promise<void> {
 }
 
 .d-round {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
   white-space: nowrap;
   overflow: hidden;
@@ -1313,7 +1313,7 @@ async function copyText(text: string): Promise<void> {
 }
 
 .d-conf {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -1321,7 +1321,7 @@ async function copyText(text: string): Promise<void> {
 .act-badge {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   background: var(--color-danger);
   color: var(--text-inverse);
@@ -1406,7 +1406,7 @@ async function copyText(text: string): Promise<void> {
   padding: 0 5px;
   border: 1px solid var(--border-color-dark);
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1.6;
   color: var(--text-secondary);
@@ -1443,7 +1443,7 @@ async function copyText(text: string): Promise<void> {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 6px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
 }
 
@@ -1462,7 +1462,7 @@ async function copyText(text: string): Promise<void> {
 .d-pill {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 16px;
   flex-shrink: 0;
@@ -1512,7 +1512,7 @@ async function copyText(text: string): Promise<void> {
 }
 .d-raw summary {
   cursor: pointer;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
   user-select: none;
 }
@@ -1521,7 +1521,7 @@ async function copyText(text: string): Promise<void> {
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--text-secondary);
   white-space: pre-wrap;
@@ -1541,7 +1541,7 @@ async function copyText(text: string): Promise<void> {
 }
 .d-thinking pre {
   margin: 0;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--text-secondary);
   white-space: pre-wrap;
@@ -1550,7 +1550,7 @@ async function copyText(text: string): Promise<void> {
   overflow-y: auto;
 }
 .d-thinking-empty {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
 }
 
@@ -1573,7 +1573,7 @@ async function copyText(text: string): Promise<void> {
   display: none;
 }
 .think-caret {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
   transition: transform var(--transition-fast);
   flex-shrink: 0;
@@ -1609,7 +1609,7 @@ async function copyText(text: string): Promise<void> {
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
   font-family: inherit;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--text-secondary);
   white-space: pre-wrap;
@@ -1670,7 +1670,7 @@ async function copyText(text: string): Promise<void> {
 }
 .arg-key {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 .arg-key::after {
@@ -1720,7 +1720,7 @@ async function copyText(text: string): Promise<void> {
 .act-source {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   background: var(--bg-active);
   color: var(--text-secondary);
@@ -1748,7 +1748,7 @@ async function copyText(text: string): Promise<void> {
 }
 .t-payload summary::before {
   content: '▸';
-  font-size: 10px;
+  font-size: 11px;
   transition: transform 0.15s ease;
 }
 .t-payload[open] summary::before {
@@ -1766,7 +1766,7 @@ async function copyText(text: string): Promise<void> {
   gap: 6px;
 }
 .t-payload-tag {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.05em;
   color: var(--text-secondary);
@@ -1871,7 +1871,7 @@ async function copyText(text: string): Promise<void> {
 }
 
 .prompt-kind {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.4px;
   color: var(--color-primary);
@@ -1892,7 +1892,7 @@ async function copyText(text: string): Promise<void> {
 .prompt-target {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   background: var(--bg-active);
   color: var(--text-secondary);
@@ -1926,7 +1926,7 @@ async function copyText(text: string): Promise<void> {
   min-width: 0;
 }
 .beat-eyebrow {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.6px;
   color: var(--color-rundown);
@@ -1943,7 +1943,7 @@ async function copyText(text: string): Promise<void> {
 .beat-action {
   padding: 0 7px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   background: var(--color-rundown-bg);
   color: var(--color-rundown);
@@ -2073,11 +2073,11 @@ async function copyText(text: string): Promise<void> {
   flex-shrink: 0;
 }
 .chat-process-action {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
 }
 .chat-process-arrow {
-  font-size: 10px;
+  font-size: 11px;
   transition: transform var(--transition-fast);
 }
 .chat-process-strip[aria-expanded='true'] .chat-process-arrow {

@@ -609,7 +609,7 @@ onUnmounted(() => {
 
 .event-type {
   padding: 2px 8px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.5px;
   border-radius: var(--radius-sm);

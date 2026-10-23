@@ -1004,7 +1004,7 @@ onDeactivated(() => {
 
 .md-prompt-source {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--color-primary);
 }
@@ -1020,7 +1020,7 @@ onDeactivated(() => {
 
 .md-prompt-time {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
 }
 
@@ -1057,7 +1057,7 @@ onDeactivated(() => {
   border-radius: 999px;
   background: var(--color-agent-bg);
   color: var(--color-agent);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
 }

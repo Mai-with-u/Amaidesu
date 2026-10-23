@@ -906,7 +906,7 @@ async function handleRestart(): Promise<void> {
 }
 
 .current-eyebrow {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.6px;
   text-transform: uppercase;
@@ -939,7 +939,7 @@ async function handleRestart(): Promise<void> {
 }
 
 .time-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -987,7 +987,7 @@ async function handleRestart(): Promise<void> {
 
 .next-eyebrow {
   color: var(--text-placeholder);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.2px;
   text-transform: uppercase;
