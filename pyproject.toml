@@ -133,3 +133,12 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.uv]
+# 包索引显式固化（2026-10-23）：uv 重新解析锁文件时曾把下载源整份替换成本机
+# pip 镜像配置（pip.ini 的清华源），产生千行 URL 噪音。仓库内声明 default 索引
+# 后以此为准，个人机器的镜像/代理配置不再渗入 uv.lock。镜像加速走个人代理。
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
