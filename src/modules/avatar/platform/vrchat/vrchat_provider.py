@@ -1,16 +1,21 @@
 """
 VRChatProvider - VRChat OSC 虚拟形象工具集
 
-- 引擎：OSC 客户端初始化、参数写入、手势触发
+- 引擎：OSC 客户端初始化、动作参数写入
 - ToolProvider 协议由本类自身实现
 - 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
   - ``vrchat_set_expression``        - 设置情绪（VRChat 无标准表情参数体系，返回未应用结果）
-  - ``vrchat_list_preset_actions``   - 列出可演预设（手势 enum）
-  - ``vrchat_trigger_preset_action`` - 触发预设手势（未知名随结果返回目录）
+  - ``vrchat_list_preset_actions``   - 列出可演预设（动作表）
+  - ``vrchat_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）
+
+预设动作写形象参数 ``/avatar/parameters/<动作参数>``。VRChat 的内置参数（口型、
+手势等）全部只读，能写的只有形象作者自定义的参数；默认动作表对应 VRChat SDK
+默认模板里的 ``VRCEmote``，自定义形象可在配置里换参数名和动作表。
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Optional
 
 from pydantic import Field
@@ -58,7 +63,7 @@ _VRCHAT_TRIGGER_PRESET_ACTION_SCHEMA: Dict[str, Any] = {
     "properties": {
         "action": {
             "type": "string",
-            "description": "预设动作名（取自 vrchat_list_preset_actions 返回的手势目录）",
+            "description": "预设动作名（取自 vrchat_list_preset_actions 返回的动作目录）",
         },
     },
     "required": ["action"],
@@ -73,27 +78,39 @@ class VRChatProvider(BaseToolProvider):
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category = "avatar"
 
-    # 手势名称到 VRChat OSC 整数值的映射
-    # 参考: https://docs.vrchat.com/docs/osc-as-a-parameter#emotes
-    GESTURE_MAP: Dict[str, int] = {
-        "Neutral": 0,
-        "Wave": 1,
-        "Peace": 2,
-        "ThumbsUp": 3,
-        "RocknRoll": 4,
-        "HandGun": 5,
-        "Point": 6,
-        "Victory": 7,
-        "Cross": 8,
-    }
-
     class ConfigSchema(BaseConfig):
-        """VRChat OSC 配置（host + out port）"""
+        """VRChat OSC 配置（地址端口 + 动作表）"""
 
         # 常量型字段：值恒等于段名，仅作段位标识，WebUI 只读呈现（改了也会被忽略）
         type: str = Field(title="段位标识", default="vrchat", json_schema_extra={"readonly": True})
         vrc_host: str = Field(title="OSC 主机地址", default="127.0.0.1", description="VRChat OSC 主机地址")
         vrc_out_port: int = Field(title="OSC 输出端口", default=9000, ge=1, le=65535, description="VRChat OSC 输出端口")
+        emote_parameter: str = Field(
+            title="动作参数名",
+            default="VRCEmote",
+            description="预设动作写入的形象参数名（SDK 默认模板为 VRCEmote；自定义形象按其参数填写）",
+        )
+        # 默认值取 VRChat SDK 默认动作菜单：1~6 已核实，7、8 按菜单顺序推定
+        emotes: Dict[str, int] = Field(
+            title="动作表",
+            default_factory=lambda: {
+                "Wave": 1,
+                "Clap": 2,
+                "Point": 3,
+                "Cheer": 4,
+                "Dance": 5,
+                "Backflip": 6,
+                "Sadness": 7,
+                "Die": 8,
+            },
+            description="{动作名: 参数值}；触发时把该值写入动作参数",
+        )
+        emote_reset_ms: int = Field(
+            title="动作归零延迟",
+            default=3000,
+            ge=0,
+            description="触发后多久把动作参数写回 0（鼓掌、跳舞这类循环动作靠归零停下）；0 = 不归零",
+        )
 
     def __init__(
         self,
@@ -112,6 +129,11 @@ class VRChatProvider(BaseToolProvider):
             raise
         self.vrc_host: str = self.typed_config.vrc_host
         self.vrc_out_port: int = self.typed_config.vrc_out_port
+        self.emote_parameter: str = self.typed_config.emote_parameter
+        self.emotes: Dict[str, int] = dict(self.typed_config.emotes)
+        self.emote_reset_ms: int = self.typed_config.emote_reset_ms
+        # 动作归零任务：新动作触发时取消上一个，避免旧的归零打断新动作
+        self._emote_reset_task: Optional[asyncio.Task] = None
 
         # OSC 客户端
         self.osc_client: Any = None
@@ -139,7 +161,7 @@ class VRChatProvider(BaseToolProvider):
                 description=(
                     "VRChat 设置主播当前情绪（17 枚举值 + 强度）。"
                     "VRChat OSC 参数每 avatar 自定义、无标准表情通道，当前不渲染情绪面，"
-                    "手势类表达走 vrchat_trigger_preset_action"
+                    "动作类表达走 vrchat_trigger_preset_action"
                 ),
                 kind="sync",
                 provider=self.PROVIDER_NAME,
@@ -147,7 +169,7 @@ class VRChatProvider(BaseToolProvider):
             ),
             ToolSpec(
                 name="list_preset_actions",
-                description="列出 VRChat 可演的预设动作目录（手势清单）",
+                description="列出 VRChat 可演的预设动作目录（挥手、鼓掌、跳舞等）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
             ),
@@ -182,7 +204,7 @@ class VRChatProvider(BaseToolProvider):
 
         VRChat OSC 参数体系每 avatar 自定义、无标准表情通道，本平台不渲染
         情绪面：合法情绪名返回成功但 ``applied=False``（诚实告知未应用），
-        映射表外的情绪名按失败结果返回。手势类表达走 trigger_preset_action。
+        映射表外的情绪名按失败结果返回。动作类表达走 trigger_preset_action。
         """
         if emotion not in {e.value for e in Emotion}:
             return _fail("vrchat_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
@@ -199,15 +221,15 @@ class VRChatProvider(BaseToolProvider):
         )
 
     async def list_preset_actions(self) -> ToolExecutionResult:
-        """列出可演预设目录（VRChat 内置手势 enum）。"""
-        actions = [{"name": name, "type": "gesture"} for name in self.GESTURE_MAP if name != "Neutral"]
+        """列出可演预设目录（配置的动作表）。"""
+        actions = [{"name": name, "type": "emote"} for name in self.emotes]
         return _ok("vrchat_list_preset_actions", True, {"actions": actions})
 
     async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
-        """触发一个预设手势；未知名把目录随失败结果返回（失败即发现）。"""
+        """触发一个预设动作；未知名把目录随失败结果返回（失败即发现）。"""
         action = action.strip()
-        if action in self.GESTURE_MAP and action != "Neutral":
-            self._trigger_gesture(action)
+        if action in self.emotes:
+            self._trigger_emote(action)
             return _ok("vrchat_trigger_preset_action", True, {"action": action})
         catalog = [entry["name"] for entry in (await self.list_preset_actions()).structured_content["actions"]]
         return ToolExecutionResult(
@@ -239,26 +261,50 @@ class VRChatProvider(BaseToolProvider):
             except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
                 self.logger.debug(f"streamer.speech 退订失败（已忽略）: {exc}")
             self._speech_emotion_handler = None
+        # 先停动作归零，再断 OSC：断开后归零发送会落空
+        await self._cancel_emote_reset()
         await self._disconnect()
         self._has_started = False
         self.logger.info(f"{self.__class__.__name__} 已停止")
 
     # ===== 业务方法 =====
 
-    def _trigger_gesture(self, gesture_name: str) -> None:
+    def _trigger_emote(self, emote_name: str) -> None:
+        """写动作参数 → 延迟归零；新动作会取消上一个尚未执行的归零"""
         if not self._is_connected or not self.osc_client:
-            self.logger.warning("OSC 客户端未连接，无法触发手势")
+            self.logger.warning("OSC 客户端未连接，无法触发动作")
+            return
+        address = f"/avatar/parameters/{self.emote_parameter}"
+        value = self.emotes[emote_name]
+        try:
+            self.osc_client.send_message(address, value)
+            self.logger.debug(f"触发 VRChat 动作: {emote_name} ({address} = {value})")
+        except Exception as e:
+            self.logger.error(f"触发 VRChat 动作失败: {emote_name}: {e}", exc=True)
+            return
+        if self.emote_reset_ms > 0:
+            if self._emote_reset_task is not None and not self._emote_reset_task.done():
+                self._emote_reset_task.cancel()
+            self._emote_reset_task = asyncio.create_task(self._reset_emote(address), name="VRChat_EmoteReset")
+
+    async def _reset_emote(self, address: str) -> None:
+        # 鼓掌、跳舞这类循环动作只在参数回到 0 时停下；单次动作归零也无副作用
+        await asyncio.sleep(self.emote_reset_ms / 1000)
+        if not self._is_connected or not self.osc_client:
             return
         try:
-            if gesture_name not in self.GESTURE_MAP:
-                self.logger.warning(f"未知的手势名称: {gesture_name}")
-                return
-            gesture_value = self.GESTURE_MAP[gesture_name]
-            address = "/avatar/parameters/VRCEmote"
-            self.osc_client.send_message(address, gesture_value)
-            self.logger.debug(f"触发 VRChat 手势: {gesture_name} (value: {gesture_value})")
+            self.osc_client.send_message(address, 0)
         except Exception as e:
-            self.logger.error(f"触发 VRChat 手势失败: {gesture_name}: {e}")
+            self.logger.error(f"VRChat 动作归零失败: {address}: {e}", exc=True)
+
+    async def _cancel_emote_reset(self) -> None:
+        task, self._emote_reset_task = self._emote_reset_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                self.logger.debug("动作归零任务已取消")
 
     def get_stats(self) -> Dict[str, Any]:
         return {
