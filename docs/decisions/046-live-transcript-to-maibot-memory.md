@@ -2,11 +2,11 @@
 
 - 状态：草案（暂定方案，等 MaiBot 维护者对"走消息流程还是走导入流程"表态后再定）
 - 日期：2026-10-23
-- 实现提交：与本 ADR 同笔交付（`git log -- docs/decisions/046-live-transcript-to-maibot-memory.md`）；MaiBot 侧的回放在 AmaidesuBridgePlugin 仓库
+- 实现提交：与本 ADR 同笔交付（`git log -- docs/decisions/046-live-transcript-to-maibot-memory.md`）；MaiBot 侧的回放在 MaiBot-Amaidesu-Adapter 仓库
 
 ## 背景（Context）
 
-"一个麦麦"的记忆互通分两半。读的一半已经做了：主播可经桥接插件查 QQ 麦麦在群里的记忆和对群友的印象。写的一半还缺：直播里发生的事进不了 MaiBot 的长期记忆，私聊麦麦问"上次直播聊了什么"它答不上来。插件能力表只开放了检索，没有写入。
+"一个麦麦"的记忆互通分两半。读的一半已经做了：主播可经适配器插件查 QQ 麦麦在群里的记忆和对群友的印象。写的一半还缺：直播里发生的事进不了 MaiBot 的长期记忆，私聊麦麦问"上次直播聊了什么"它答不上来。插件能力表只开放了检索，没有写入。
 
 MaiBot 维护者的建议是：把每次直播当成 MaiBot 里的一场群聊，记忆走 MaiBot 自己的聊天摘要流程，再用共享记忆组（`a_memorix.shared_memory_groups`）让 QQ 群和私聊也能查到——不需要开放写入接口。具体落地有两条路：
 

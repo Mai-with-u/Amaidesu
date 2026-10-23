@@ -38,7 +38,7 @@ class InfraRootConfig(BaseConfig):
     - ``[logging]``     — 日志
     - ``[diagnostics]`` — 本地诊断记录落盘（LLM 正文/事件流/TTS 记录）
     - ``[simulator]``   — 模拟直播间
-    - ``[maibot_sync]`` — 直播近况同步给 MaiBot 桥接插件
+    - ``[maibot_sync]`` — 直播近况同步给 MaiBot 适配器插件
     """
 
     __file_name__ = "infra.toml"
@@ -99,7 +99,7 @@ class InfraRootConfig(BaseConfig):
     maibot_sync: MaiBotSyncConfigSchema = Field(
         default_factory=MaiBotSyncConfigSchema,
         title="MaiBot 近况同步",
-        description="把开播、换环节、收播与场次回顾推给 MaiBot 桥接插件（AmaidesuBridgePlugin）",
+        description="把开播、换环节、收播与场次回顾推给 MaiBot 适配器插件（MaiBot-Amaidesu-Adapter）",
     )
 
 

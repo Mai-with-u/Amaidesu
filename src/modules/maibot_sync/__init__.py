@@ -1,4 +1,4 @@
-"""直播近况同步（把开播、换环节、收播、场次回顾与整场记录推给 MaiBot 桥接插件）。
+"""直播近况同步（把开播、换环节、收播、场次回顾与整场记录推给 MaiBot 适配器插件）。
 
 - ``config_schema.py``：``[maibot_sync]`` 配置 Schema（infra.toml）
 - ``reporter.py``：上报器（订阅事实事件 → HTTP 推送）

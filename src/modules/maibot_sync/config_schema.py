@@ -6,7 +6,7 @@ from src.modules.config.schemas.base import BaseConfig
 
 
 class MaiBotSyncConfigSchema(BaseConfig):
-    """把直播近况推给 MaiBot 桥接插件（AmaidesuBridgePlugin）的配置。
+    """把直播近况推给 MaiBot 适配器插件（MaiBot-Amaidesu-Adapter）的配置。
 
     地址与令牌对应插件 ``[server]`` 段：与 MCP 服务同一端口、同一令牌，路径为
     ``/live-status``。默认关闭；空串表示未配置，开启后地址或令牌缺失时不装配。
@@ -15,17 +15,17 @@ class MaiBotSyncConfigSchema(BaseConfig):
     enabled: bool = Field(
         default=False,
         title="是否启用",
-        description="是否把开播、换环节、收播与场次回顾推给 MaiBot 桥接插件",
+        description="是否把开播、换环节、收播与场次回顾推给 MaiBot 适配器插件",
     )
     url: str = Field(
         default="",
         title="接收地址",
-        description="桥接插件的近况接收地址（如 http://127.0.0.1:8767/live-status）；空串 = 未设置",
+        description="适配器插件的近况接收地址（如 http://127.0.0.1:8767/live-status）；空串 = 未设置",
     )
     token: str = Field(
         default="",
         title="访问令牌",
-        description="与桥接插件 server.auth_token 相同的令牌；空串 = 未设置",
+        description="与适配器插件 server.auth_token 相同的令牌；空串 = 未设置",
     )
     send_transcript: bool = Field(
         default=True,

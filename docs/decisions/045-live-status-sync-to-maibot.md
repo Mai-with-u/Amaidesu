@@ -2,17 +2,17 @@
 
 - 状态：已采纳（2026-10-23）
 - 日期：2026-10-23
-- 实现提交：与本 ADR 同笔交付（`git log -- docs/decisions/045-live-status-sync-to-maibot.md`）；MaiBot 侧的接收、缓存与注入在 AmaidesuBridgePlugin 仓库
+- 实现提交：与本 ADR 同笔交付（`git log -- docs/decisions/045-live-status-sync-to-maibot.md`）；MaiBot 侧的接收、缓存与注入在 MaiBot-Amaidesu-Adapter 仓库
 
 ## 背景（Context）
 
-MaiBot 7×24 常驻 QQ，Amaidesu 开播时才启动。两边定位为"一个身份、两个身体"：各自保有决策循环，不让 MaiBot 当主播的大脑（以 MaiBot 为决策核心的桥接早已放弃）。第一步已让主播经 MaiBot 上的桥接插件（MCP 工具）读写 QQ 群；反方向还缺一条：在 QQ 上和麦麦聊天时，它不知道自己"正在直播 / 刚播完一场"。
+MaiBot 7×24 常驻 QQ，Amaidesu 开播时才启动。两边定位为"一个身份、两个身体"：各自保有决策循环，不让 MaiBot 当主播的大脑（以 MaiBot 为决策核心的桥接早已放弃）。第一步已让主播经 MaiBot 上的适配器插件（MCP 工具）读写 QQ 群；反方向还缺一条：在 QQ 上和麦麦聊天时，它不知道自己"正在直播 / 刚播完一场"。
 
 要同步的近况有四类：开播、换环节、收播、场次回顾。前三类已有事实事件（`live.started` / `rundown.changed` / `live.ended`）。场次回顾是收播后由后台调模型写成的，写完的时刻只有写入方知道，没有事件。
 
 ## 决策（Decision）
 
-核心一句：**回顾写好补一条事实事件；一个只订阅事件、向外推送的上报器把近况推给桥接插件；插件缓存后在 MaiBot 每次规划与回复前注入，并提供查询工具。**
+核心一句：**回顾写好补一条事实事件；一个只订阅事件、向外推送的上报器把近况推给适配器插件；插件缓存后在 MaiBot 每次规划与回复前注入，并提供查询工具。**
 
 1. **新增 `streamer.recap.written`**：由 `SessionRecapWriter` 在回顾落库后发出（收播整理与启动补写共用 `write_recap`，两条路径都发），载荷带场次主键、起止时刻与回顾全文。场次主键由发布方显式填写——补写的是过去的场次，不能交给按"当前场次"盖章的拦截器。
 2. **出站上报器 `src/modules/maibot_sync/`**：订阅上述四个事件，经 HTTP POST 推给插件（与 MCP 服务同一端口、同一令牌，路径 `/live-status`）。按组件判据它不是工具（不被调用）、不是 Agent（不持有办事过程）、也不是采集器（不采集数据），是与 StorageLedger 同形态的出站基础设施；放在 modules 下，与 VTS / Warudo / B 站等外部平台对接同位。配置为 infra.toml `[maibot_sync]`，默认关闭。
