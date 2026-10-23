@@ -66,6 +66,7 @@ from src.modules.skills import SkillLibrary
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
+from src.modules.tools.tasks import TERMINAL_TASK_STATES
 from src.modules.vision.image_store import get_image_store
 
 from .config import MinecraftConfig
@@ -1030,9 +1031,32 @@ class MinecraftAgent(BaseAgent):
         ledger = getattr(self._task_tracker, "ledger", None)
         if ledger is None:
             return
-        ledger.update(
-            ledger_task_id(run.goal_id), ledger_status_of(run), snapshot=run.data, summary=summary or run.summary
-        )
+        status = ledger_status_of(run)
+        ledger.update(ledger_task_id(run.goal_id), status, snapshot=run.data, summary=summary or run.summary)
+        if status in TERMINAL_TASK_STATES:
+            self._settle_batch_delegations(status, self._dry_goal_summary(run))
+
+    @staticmethod
+    def _dry_goal_summary(run: GoalRun) -> str:
+        """目标终态给委派账的干巴机器摘要：只陈述结果，话术语义留给 LLM 的交付语。"""
+        label = run.result_status or "结束"
+        return f"游戏目标 {run.goal_id}（{run.ability}）{label}：{run.summary}"
+
+    def _settle_batch_delegations(self, status: str, summary: str) -> None:
+        """批级关联：本批吸收的委派共享批内目标的终态，干巴机器摘要先到账保底。
+
+        LLM 的交付/升级后到时按终态粘滞改不动状态（条目已移除，重复写入无效），
+        它的话术经 game.report 走主播侧；这里保证的是"LLM 一句没说也有回音"。
+        粗糙性已知并接受：一批委派共享批内目标终态，批中途某个目标先失败就先写失败。
+        """
+        ledger = getattr(self._task_tracker, "ledger", None)
+        if ledger is None:
+            return
+        for task_id in list(self._delegated_finished_ids):
+            if ledger.get(task_id) is None:
+                # 已被早到的目标终态或 LLM 交付写过终态：状态粘滞，不回退
+                continue
+            ledger.update(task_id, status, summary=summary)
 
     def _actionable_goals(self) -> List[int]:
         """要模型动手才会往下走的目标：在等回答的、被暂停的。"""
@@ -1137,6 +1161,7 @@ class MinecraftAgent(BaseAgent):
         ledger = getattr(self._task_tracker, "ledger", None)
         if ledger is not None:
             ledger.update(ledger_task_id(goal_id), "failed", summary=reason)
+        self._settle_batch_delegations("failed", f"游戏目标 {goal_id} 不在了：{reason}")
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:

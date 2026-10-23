@@ -1090,3 +1090,49 @@ async def test_a_delegation_is_refused_when_the_game_is_not_connected() -> None:
     agent._mcp_provider = FakeMaicraft()
     assert agent.receive_delegation(instruction="去砍点木头", task_id="d-3") is None
     assert len(agent._message_queue) == 1
+
+
+async def test_a_failed_goal_settles_the_batch_delegations_with_a_dry_summary() -> None:
+    """批级关联：批内目标终态直写本批委派账（干巴保底），LLM 后到的交付改不动状态。"""
+    server = FakeMaicraft()
+    ledger = TaskLedger()
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger._event_bus = ledger_bus
+    tracker = TaskTracker(ToolRegistry(), ledger)
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if "目标 1" in _texts(messages) or "结束了" in _texts(messages):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "没做成，坑壁有缺口"})])
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
+
+    agent, llm, bus = await _start(server, script, tracker=tracker)
+    # 委派单由框架受理时登记（framework provider 的职责），这里按生产形态预登记
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+    )
+    agent.receive_delegation(instruction="去挖坑壁后面的矿", task_id="d-1")
+    await _wait_until(lambda: "maicraft-goal-1" in ledger)
+    await _wait_until(lambda: ledger.get("d-1") is not None and ledger.get("d-1").status == "running")
+
+    server.finish(1, status="failed", summary="坑壁有缺口，够不着")
+    await _wait_until(lambda: "maicraft-goal-1" not in ledger)
+    await _wait_until(lambda: ledger.get("d-1") is None)
+
+    changed = [
+        call.args[1]
+        for call in ledger_bus.emit.await_args_list
+        if call.args and getattr(call.args[1], "task_id", "") == "d-1"
+    ]
+    assert changed and changed[0].status == "failed"
+    assert "坑壁有缺口" in changed[0].summary, "保底摘要是干巴但真实的机器摘要"
+
+    agent._finish_delegated("succeeded", summary="delivery: 没做成，坑壁有缺口")
+    assert ledger.get("d-1") is None, "终态粘滞：LLM 后到的交付不复活也不回退账面状态"
+    await agent.stop()
