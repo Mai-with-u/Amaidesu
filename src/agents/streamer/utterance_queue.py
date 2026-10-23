@@ -1,13 +1,18 @@
-"""UtteranceQueue - 主播发言播放队列（FIFO 串行调度器）
+"""UtteranceQueue - 主播发言播放队列（按优先级排队的串行调度器）
 
 本模块是 StreamerAgent 的发言下游编排器：
-- 持有 FIFO 播放队列（容量受 `max_queue` 限制）
+- 持有播放队列（容量受 `max_queue` 限制）：优先级高的排前面，同级先来先播；
+  不传优先级时全部同级，退化为原来的 FIFO
 - 后台 worker 串行调用 speak 可调用对象（``await self._speak(text, utterance_id)``）
 - 与 TTS 引擎解耦：TTS 引擎自行发布 ``tts.utterance.*`` 生命周期事件，
   本队列不参与事件发布，避免越权。
 
 设计原则（StreamerAgent 发言管线约束）：
-- 队列溢出采用"丢最旧"策略（FIFO 满时先弹队首再入队）
+- 队列溢出丢"优先级最低里最旧的"一条；新来的比队里所有条目都低时丢新来的
+  （全部同级时就是丢最旧，与原来一致）
+- 反应类台词带过期时刻：轮到它时已经过时就跳过，过时的"哇什么东西"比不说还怪
+- 长段话的几句标同一个段落号：正在播的段落被更高优先级的台词插进来时，剩下没播的句子
+  直接丢掉，不在突发反应之后接着讲
 - 单 worker 串行保证播放顺序，避免叠加/打断
 - 入队即返回（fire-and-forget），不阻塞上游决策循环的 tick 节奏
 - 单 utterance 超时由 `render_timeout_ms` 看门狗保护（防止合成/播放卡死拖垮队列）
@@ -29,6 +34,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable, Deque, Optional
 
 from src.modules.logging import get_logger
+from src.modules.utils.time_utils import now_ms
 
 
 # 默认队列容量
@@ -58,10 +64,16 @@ class _UtteranceItem:
     Attributes:
         utterance_id: 编排层生成的唯一 ID（格式 ``utt_{epoch_ms}_{seq}``）。
         text: 待合成的台词文本。
+        priority: 优先级，越大越先播；同级先来先播。
+        expires_at_ms: 过期时刻（Unix 毫秒），轮到它时已过就跳过；0 = 不过期。
+        segment: 段落号：长段话拆成的几句共用一个，空串 = 独立一句。
     """
 
     utterance_id: str
     text: str
+    priority: int = 0
+    expires_at_ms: int = 0
+    segment: str = ""
 
 
 class UtteranceQueue:
@@ -88,6 +100,7 @@ class UtteranceQueue:
         logger_name: str = "UtteranceQueue",
         max_queue: int = DEFAULT_MAX_QUEUE,
         render_timeout_ms: int = DEFAULT_RENDER_TIMEOUT_MS,
+        clock: Callable[[], int] = now_ms,
     ) -> None:
         """构造发言队列。
 
@@ -98,6 +111,7 @@ class UtteranceQueue:
             logger_name: 日志记录器名（默认 ``UtteranceQueue``）。
             max_queue: 队列容量上限（必须 ≥ 1）。
             render_timeout_ms: 单 utterance 调用超时（毫秒；必须 ≥ 100）。
+            clock: 当前时刻（Unix 毫秒）；判定过期用，测试可注入。
 
         Raises:
             ValueError: 入参越界时。
@@ -114,6 +128,9 @@ class UtteranceQueue:
         self._logger = get_logger(logger_name)
         self._max_queue = max_queue
         self._render_timeout_ms = render_timeout_ms
+        self._clock = clock
+        # 最近开播的那一句所属的段落：更高优先级的台词插进来时，这个段落剩下的句子作废
+        self._current_segment = ""
 
         self._queue: Deque[_UtteranceItem] = deque()
         # 有可用项目时唤醒 worker（队列入队 + worker 等待）
@@ -135,40 +152,62 @@ class UtteranceQueue:
         self._total_processed = 0
         self._total_timeouts = 0
         self._total_errors = 0
+        self._total_expired = 0
+        self._total_interrupted = 0
 
     # ---------------- 公共 API ----------------
 
-    async def enqueue(self, utterance_id: str, text: str) -> bool:
+    async def enqueue(
+        self,
+        utterance_id: str,
+        text: str,
+        *,
+        priority: int = 0,
+        ttl_ms: int = 0,
+        segment: str = "",
+    ) -> bool:
         """将一条 utterance 投入播放队列。
 
-        当队列已满，先弹出队首（最旧的 pending），记录 WARN 日志，
-        再将本条入队。被丢弃的 utterance 不会触发 ``tts.utterance.*``
-        事件。
+        按优先级插队（同级排在已有同级之后）。队列已满时丢掉优先级最低里最旧的一条，
+        记录 WARN 日志；新来的比队里所有条目都低时丢新来的这条。被丢弃的 utterance
+        不会触发 ``tts.utterance.*`` 事件。
 
         Args:
             utterance_id: 编排层生成的唯一 ID（关联 reply/TTS/存储）。
             text: 待合成文本。
+            priority: 优先级，越大越先播（默认 0：全部同级即原来的 FIFO）。
+            ttl_ms: 多久之内没轮到就作废（0 = 不过期）。突发反应用：过时了不该再说。
+            segment: 段落号：长段话拆成的几句共用一个。
 
         Returns:
-            是否成功入队（本方法永不返回 False——drop 后再入队，恒入队）。
-            返回 True 仅用于表达"被接受"的语义；队列停用时返回 False 表示拒绝。
+            是否被接受；队列停用、或队满时新条目优先级最低被丢掉时返回 False。
         """
         if self._stopping.is_set():
             self._logger.warning(f"队列正在停止，拒绝入队: utterance_id={utterance_id}")
             return False
 
-        item = _UtteranceItem(utterance_id=utterance_id, text=text)
+        expires_at_ms = self._clock() + ttl_ms if ttl_ms > 0 else 0
+        item = _UtteranceItem(
+            utterance_id=utterance_id, text=text, priority=priority, expires_at_ms=expires_at_ms, segment=segment
+        )
         async with self._lock:
-            dropped_id: Optional[str] = None
+            self._drop_interrupted_segment(item)
             if len(self._queue) >= self._max_queue:
-                # 丢最旧（队首）
-                oldest = self._queue.popleft()
-                dropped_id = oldest.utterance_id
+                # 丢优先级最低里最旧的；全部同级时就是丢最旧（队首），与原来一致
+                candidates = [queued for queued in self._queue if queued.priority <= item.priority]
+                if not candidates:
+                    self._total_dropped += 1
+                    self._logger.warning(
+                        f"队列已满（容量 {self._max_queue}）且都比这条急，丢弃新来的 utterance: utterance_id={utterance_id}"
+                    )
+                    return False
+                victim = min(candidates, key=lambda queued: queued.priority)
+                self._queue.remove(victim)
                 self._total_dropped += 1
                 self._logger.warning(
-                    f"队列已满（容量 {self._max_queue}），丢弃最旧 utterance: utterance_id={dropped_id}"
+                    f"队列已满（容量 {self._max_queue}），丢弃最旧 utterance: utterance_id={victim.utterance_id}"
                 )
-            self._queue.append(item)
+            self._insert_by_priority(item)
             self._total_enqueued += 1
 
         # 唤醒可能正在等待的 worker（即便 stopping 状态也 set，保证退出检查）
@@ -226,6 +265,34 @@ class UtteranceQueue:
             f"processed={self._total_processed}, dropped={self._total_dropped}）"
         )
 
+    def _insert_by_priority(self, item: _UtteranceItem) -> None:
+        """插到第一个比它优先级低的条目前面；同级排在已有同级之后（同级先来先播）。"""
+        for index, queued in enumerate(self._queue):
+            if queued.priority < item.priority:
+                self._queue.insert(index, item)
+                return
+        self._queue.append(item)
+
+    def _drop_interrupted_segment(self, item: _UtteranceItem) -> None:
+        """正在播的段落被更高优先级的台词插进来：段落里还没播的句子作废，不在反应之后接着讲。
+
+        段落还没开播时不算打断——急的先播，段落随后整段照常播。
+        """
+        if not self._current_segment or item.segment == self._current_segment:
+            return
+        rest = [
+            queued
+            for queued in self._queue
+            if queued.segment == self._current_segment and queued.priority < item.priority
+        ]
+        for queued in rest:
+            self._queue.remove(queued)
+        if rest:
+            self._total_interrupted += len(rest)
+            self._logger.info(
+                f"段落被插断，丢弃剩余 {len(rest)} 句: segment={self._current_segment}, 插队={item.utterance_id}"
+            )
+
     @property
     def size(self) -> int:
         """当前队列深度（仅用于诊断/测试）。"""
@@ -271,6 +338,8 @@ class UtteranceQueue:
             "dropped": self._total_dropped,
             "timeouts": self._total_timeouts,
             "errors": self._total_errors,
+            "expired": self._total_expired,
+            "interrupted": self._total_interrupted,
             "queue_size": len(self._queue),
             "max_queue": self._max_queue,
         }
@@ -290,10 +359,11 @@ class UtteranceQueue:
                 async with self._lock:
                     if self._stopping.is_set():
                         return
-                    if not self._queue:
+                    item = self._pop_fresh()
+                    if item is None:
                         self._wakeup.clear()
                         continue
-                    item = self._queue.popleft()
+                    self._current_segment = item.segment
                     if not self._queue:
                         # 取完后队列为空，清除 wakeup 让下一次 enqueue 再唤醒
                         self._wakeup.clear()
@@ -313,6 +383,18 @@ class UtteranceQueue:
             raise
         except Exception as exc:  # noqa: BLE001 - worker 边界兜底
             self._logger.exception(f"worker 循环异常退出: {exc}")
+
+    def _pop_fresh(self) -> Optional[_UtteranceItem]:
+        """取下一条还没过期的；过期的直接作废（反应过时了再说只会更怪）。"""
+        now = self._clock()
+        while self._queue:
+            item = self._queue.popleft()
+            if item.expires_at_ms and item.expires_at_ms <= now:
+                self._total_expired += 1
+                self._logger.info(f"utterance 已过期，跳过: utterance_id={item.utterance_id}")
+                continue
+            return item
+        return None
 
     async def _dispatch(self, item: _UtteranceItem) -> None:
         """单条 utterance 的处理入口（speak + 超时保护 + 错误兜底）。

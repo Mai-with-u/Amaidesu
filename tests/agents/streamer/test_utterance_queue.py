@@ -162,3 +162,103 @@ def test_constructor_validation(kwargs: dict, error: type, match: str) -> None:
         UtteranceQueue(**kwargs)
     # 默认值与核心配置一致
     assert (DEFAULT_MAX_QUEUE, DEFAULT_RENDER_TIMEOUT_MS) == (3, 60_000)
+
+
+# ---------------- 优先级、过期与段落（快嘴用） ----------------
+
+
+class _Clock:
+    """可拨动的时钟（Unix 毫秒）：判定过期用。"""
+
+    def __init__(self, now: int = 1_000_000) -> None:
+        self.now = now
+
+    def __call__(self) -> int:
+        return self.now
+
+
+def _queue_with(recorder: _Recorder, *, max_queue: int = 8, clock: Optional[_Clock] = None) -> UtteranceQueue:
+    return UtteranceQueue(speak=recorder, max_queue=max_queue, render_timeout_ms=2000, clock=clock or _Clock())
+
+
+async def test_higher_priority_jumps_ahead_and_same_priority_stays_fifo() -> None:
+    """急的插到前面，同级先来先播：付费致谢、突发反应不必排在闲聊后面。"""
+    recorder = _Recorder()
+    queue = _queue_with(recorder)
+    for uid, priority in (("a", 0), ("b", 0), ("c", 5), ("d", 5), ("e", 1)):
+        await queue.enqueue(uid, uid, priority=priority)
+    await queue.start()
+    try:
+        await _wait_for(lambda: len(recorder.calls) == 5)
+        assert [uid for _, uid in recorder.calls] == ["c", "d", "e", "a", "b"]
+    finally:
+        await queue.stop()
+
+
+async def test_full_queue_drops_the_least_urgent_and_refuses_a_less_urgent_newcomer() -> None:
+    """满了丢优先级最低里最旧的；新来的比队里都低时丢新来的，不挤掉更急的。"""
+    recorder = _Recorder()
+    queue = _queue_with(recorder, max_queue=2)
+    assert await queue.enqueue("low", "low", priority=0) is True
+    assert await queue.enqueue("high", "high", priority=5) is True
+    assert await queue.enqueue("mid", "mid", priority=1) is True, "挤掉最低的 low"
+    assert await queue.enqueue("low2", "low2", priority=0) is False, "比队里都低，丢新来的"
+    await queue.start()
+    try:
+        await _wait_for(lambda: len(recorder.calls) == 2)
+        assert [uid for _, uid in recorder.calls] == ["high", "mid"]
+        assert queue.get_stats()["dropped"] == 2
+    finally:
+        await queue.stop()
+
+
+async def test_expired_reaction_is_skipped_when_its_turn_comes() -> None:
+    """过了时效的反应轮到时跳过（过时的"哇什么东西"比不说还怪），不过期的照常播。"""
+    recorder = _Recorder()
+    clock = _Clock()
+    queue = _queue_with(recorder, clock=clock)
+    await queue.enqueue("reaction", "哇什么东西", ttl_ms=6000)
+    await queue.enqueue("chat", "刚才说到哪了")
+    clock.now += 7000
+    await queue.start()
+    try:
+        await _wait_for(lambda: len(recorder.calls) == 1)
+        await asyncio.sleep(0.05)
+        assert [uid for _, uid in recorder.calls] == ["chat"]
+        assert queue.get_stats()["expired"] == 1
+    finally:
+        await queue.stop()
+
+
+async def test_urgent_line_cuts_a_passage_that_is_already_playing() -> None:
+    """长段播到一半被突发反应插进来：剩下的句子作废，不在反应之后接着讲。"""
+    recorder = _Recorder(delay_s=0.1)
+    queue = _queue_with(recorder)
+    await queue.start()
+    try:
+        for index in range(3):
+            await queue.enqueue(f"p{index}", f"第 {index} 句", segment="story")
+        await _wait_for(lambda: len(recorder.calls) == 1)
+        await queue.enqueue("ouch", "疼疼疼！", priority=5)
+        await _wait_for(lambda: len(recorder.calls) == 2)
+        await asyncio.sleep(0.25)
+        assert [uid for _, uid in recorder.calls] == ["p0", "ouch"]
+        assert queue.get_stats()["interrupted"] == 2
+    finally:
+        await queue.stop()
+
+
+async def test_passage_not_started_yet_is_not_cut() -> None:
+    """段落还没开播时急的先播，段落随后整段照常播。"""
+    recorder = _Recorder()
+    queue = _queue_with(recorder)
+    await queue.enqueue("p0", "第 0 句", segment="story")
+    await queue.enqueue("p1", "第 1 句", segment="story")
+    await queue.enqueue("ouch", "疼疼疼！", priority=5)
+    await queue.start()
+    try:
+        await _wait_for(lambda: len(recorder.calls) == 3)
+        assert [uid for _, uid in recorder.calls] == ["ouch", "p0", "p1"]
+        assert queue.get_stats()["interrupted"] == 0
+    finally:
+        await queue.stop()
