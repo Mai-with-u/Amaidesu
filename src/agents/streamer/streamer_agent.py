@@ -314,6 +314,9 @@ class StreamerAgent(BaseAgent):
             viewer_repo=viewer_repo,
             context_enabled=bool(_context_enabled),
             behavior_style=_behavior_style,
+            # 房管也要知道她是谁：挑话题、在回复指引里定她的态度都以人设为准；措辞风格仍只给表达侧
+            bot_name=config.persona.bot_name,
+            personality=config.persona.personality,
         )
 
         # 敏感词过滤器（输出净化；None 表示不启用）

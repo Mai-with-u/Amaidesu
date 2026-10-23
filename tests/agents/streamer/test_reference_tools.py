@@ -88,8 +88,9 @@ def test_streamer_config_defaults_to_no_reference_tools() -> None:
 def test_planner_prompt_mentions_overview() -> None:
     reset_prompt_manager()
     try:
-        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动", game_rules="")
+        prompt = get_prompt_manager().render(
+            "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=""
+        )
     finally:
         reset_prompt_manager()
     assert "【现场速览】是本轮决策前自动读取的现场" in prompt
-

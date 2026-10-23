@@ -252,7 +252,9 @@ def _render_planner_with_delegate_rules() -> str:
     """按生产拼装方式渲染主播提示词：委派型游戏在场时【当前游戏的玩法】里带委派守则。"""
     manager = get_prompt_manager()
     rules = manager.render("amaidesu_planner_delegate_rules")
-    return manager.render("amaidesu_planner_react", behavior_style="积极互动", game_rules=rules)
+    return manager.render(
+        "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=rules
+    )
 
 
 def test_planner_prompt_keeps_viewer_method_and_relays_instead_of_redelegating() -> None:
@@ -261,7 +263,9 @@ def test_planner_prompt_keeps_viewer_method_and_relays_instead_of_redelegating()
     reset_prompt_manager()
     try:
         prompt = _render_planner_with_delegate_rules()
-        bare = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动", game_rules="")
+        bare = get_prompt_manager().render(
+            "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=""
+        )
     finally:
         reset_prompt_manager()
     assert "framework_delegate" not in bare and "手头的事没做完时补充" not in bare
@@ -298,26 +302,49 @@ def test_streamer_prompts_speak_as_one_streamer() -> None:
 
 
 def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
-    """发言交接契约：topic_summary/reply_guidance 是任务书不是台词草稿——客观状态 + 纯方向意图 + 正误对照在场。
+    """发言交接契约：topic_summary/reply_guidance 是任务书不是台词草稿——客观状态 + 方向与她的态度 + 正误对照在场。
 
-    实测虚构剧情根因：planner 以主播身份写出带腔调的台词草稿，replyer 退化为扩写草稿。
+    实测虚构剧情根因：planner 以主播身份写出带腔调的台词草稿，replyer 退化为扩写草稿——所以事实部分
+    仍须客观、两段都禁第一人称与台词草稿。线上回放里有人味的台词又几乎都来自指引里写的态度
+    （"带点疲惫的自嘲"），所以态度与语气正式归回复指引，但只针对已有事实、不夹带新事实。
     """
     reset_prompt_manager()
     try:
-        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动", game_rules="")
+        prompt = get_prompt_manager().render(
+            "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=""
+        )
     finally:
         reset_prompt_manager()
     assert "发言交接契约" in prompt and "任务书" in prompt and "不是台词草稿" in prompt
     assert "可核对的客观状态陈述" in prompt and "禁止第一人称叙事" in prompt
-    assert "纯方向意图" in prompt and "情绪已由 `reply` 的 emotion / intensity" in prompt
-    assert "错误示范" in prompt and "正确示范" in prompt
+    assert "reply_guidance = 方向 + 她的态度与语气" in prompt and "纯方向意图" not in prompt
+    assert "态度只针对 `topic_summary` 里已有的事实" in prompt and "不写成她口吻的整句台词" in prompt
+    assert "情绪类别和强度仍由 `reply` 的 emotion / intensity 字段给出" in prompt
+    assert "错误示范（reply_guidance）" in prompt and "正确示范（reply_guidance）" in prompt
+
+
+def test_planner_prompt_knows_who_she_is_but_stays_the_room_manager() -> None:
+    """房管知道她是谁：人设进决策侧，挑话题、定态度按她的性子来；身份仍是房管，措辞仍归表达侧。"""
+    reset_prompt_manager()
+    try:
+        prompt = get_prompt_manager().render(
+            "amaidesu_planner_react", bot_name="麦麦", personality="嘴硬但心软", behavior_style="", game_rules=""
+        )
+    finally:
+        reset_prompt_manager()
+    assert "# 她是谁" in prompt and "主播叫 麦麦，她嘴硬但心软" in prompt
+    assert "不是要你替她说话" in prompt and "房管（运营）" in prompt
+    # 素材清单把她的喜好和执念列为可聊的东西
+    assert "她的喜好和执念（见「她是谁」）" in prompt
 
 
 def test_planner_prompt_only_reports_progress_with_evidence() -> None:
     """进展只说有凭据的：实测游戏侧每次执行都被拒，主播却说"机器在嗡嗡响、蜂蜜胶在冒出来"。"""
     reset_prompt_manager()
     try:
-        prompt = get_prompt_manager().render("amaidesu_planner_react", behavior_style="积极互动", game_rules="")
+        prompt = get_prompt_manager().render(
+            "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=""
+        )
     finally:
         reset_prompt_manager()
     assert "进展只说有凭据的" in prompt and '让主播说"还在弄"' in prompt
@@ -415,7 +442,9 @@ def prompts():
 def test_streamer_prompts_keep_rules(prompts) -> None:
     # 清单横跨主模板与委派守则子模板：按生产拼装方式（委派型游戏在场）渲染后一并核对
     rules = prompts.render("amaidesu_planner_delegate_rules")
-    planner = prompts.render("amaidesu_planner_react", behavior_style="积极互动", game_rules=rules)
+    planner = prompts.render(
+        "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=rules
+    )
     assert [rule for rule in _PLANNER_PROMPT_RULES if rule not in planner] == []
     assert "【身体" not in planner
 
@@ -433,7 +462,9 @@ def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts:
     线上回放里 81 轮决策沉默了 51 轮，理由全是"游戏没新进展"；开口的 30 句里 27 句在复述同一个打算，
     床名向零观众的房间讨了 7 次也没定下来。
     """
-    planner = prompts.render("amaidesu_planner_react", behavior_style="积极互动", game_rules="")
+    planner = prompts.render(
+        "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=""
+    )
     # 沉默不再是默认：复述才是失败，沉默要写理由，【冷场】时默认开口
     assert "复述是失败的选择，沉默要有理由" in planner and "说明里写清为什么不说" in planner
     assert "参考段出现【冷场】行时" in planner

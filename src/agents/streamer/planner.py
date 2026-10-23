@@ -10,8 +10,9 @@
 核心契约：
 1. **人设行为准则注入**：系统提示词注入 ``$behavior_style``（行动准则：
    何时参与聊天、如何观察局面、何时保持安静）——来自 [persona].behavior_style。
-2. **身份/表达人设隔离**：Planner 不传 ``$personality`` / ``$style_constraints`` /
-   ``$bot_name``——表达侧三件套仅注入 Replyer。behavior_style = 决策侧。
+2. **人设分工**：Planner 注入 ``$bot_name`` / ``$personality``——知道她是谁，才能替她挑话题、
+   在回复指引里定下她对这件事的态度；措辞风格 ``$style_constraints`` 仍只注入 Replyer。
+   身份仍是房管：交接稿的事实部分保持客观可核对，态度与语气只写在回复指引里。
 3. **高质量模型**：Planner profile 默认 ``planner``（StreamerAgent 装配期硬编码
    传入 `_PROFILE_PLANNER`）——ReAct 决策核心做工具编排与表达意图构思，
    质量敏感（乱调工具/意图偏差的代价高于延迟）。
@@ -22,7 +23,7 @@
 7. **降级安全**：LLM 异常 / 超步 / reply 不可用均产出 silent outcome（不抛异常）。
 
 数据流：
-    batch + room_state.snapshot + history + forced/proactive + behavior_style
+    batch + room_state.snapshot + history + forced/proactive + behavior_style + 人设（bot_name/personality）
         ──▶ render('amaidesu_planner_react')（系统提示词）
         ──▶ 消息序列 = [system] + 历史消息（user=观众 / assistant=主播，
             canonical 映射）+ 本批消息（user）+ 参考段（user，固定序列尾）
@@ -222,6 +223,8 @@ class Planner:
         viewer_repo: Any = None,
         context_enabled: bool = True,
         behavior_style: str = "",
+        bot_name: str = "麦麦",
+        personality: str = "",
         reply_provider: Any = None,
         elapsed_live_provider: Optional[Callable[[], Optional[int]]] = None,
     ) -> None:
@@ -240,6 +243,8 @@ class Planner:
                 昵称（昵称会漂移不进画像文本）；None 时注入行回退 platform/user_id。
             context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
             behavior_style: 人设行为准则（决策侧）。
+            bot_name: 主播名字（她是谁）。
+            personality: 主播性格描述——替她挑话题、定态度的依据。
             reply_provider: reply 局部工具的 Provider（ReplyToolProvider）；
                 start 前由 StreamerAgent 经 ``bind_reply_provider`` 注入也可。
             elapsed_live_provider: 整场开播时长查询（``RundownState.get_elapsed_live_ms``，
@@ -281,6 +286,8 @@ class Planner:
         self._viewer_repo = viewer_repo
         self._context_enabled = context_enabled
         self._behavior_style: str = behavior_style or ""
+        self._bot_name: str = bot_name or "麦麦"
+        self._personality: str = personality or ""
         self._reply_provider = reply_provider
         self._elapsed_live_provider = elapsed_live_provider
         # 委派受理后把"我在哪个游戏里开始做什么"记进时间线（StreamerAgent 绑定）；
@@ -706,11 +713,15 @@ class Planner:
     # ==================== 提示词与上下文 ====================
 
     def _render_system_prompt(self) -> Optional[str]:
-        """渲染 ReAct 系统提示词（行为准则 + 当前游戏的玩法 + 工具守则）。"""
+        """渲染 ReAct 系统提示词（她是谁 + 行为准则 + 当前游戏的玩法 + 工具守则）。"""
         behavior_style_render = self._behavior_style or "（未配置行动准则，请依据直播间态势与对话历史自行决策）"
+        # 人设是全程不变的稳定段，放系统提示词里吃前缀缓存；没配性格时如实说明，不编一个
+        personality_render = self._personality or "（未配置性格描述，按直播间里她说过的话揣摩）"
         try:
             return self._prompt_service.render(
                 self.TEMPLATE_NAME,
+                bot_name=self._bot_name,
+                personality=personality_render,
                 behavior_style=behavior_style_render,
                 game_rules=self._render_game_rules(),
             )

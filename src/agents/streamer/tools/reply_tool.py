@@ -77,7 +77,7 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
         },
         "reply_guidance": {
             "type": "string",
-            "description": "Planner 给 Replyer 的回复指引（语气、重点等；可空）",
+            "description": "回复指引：说什么方向、对谁说、不提什么，以及她对这件事的态度与语气（可空；不写成台词）",
         },
         "target": {
             "type": "string",

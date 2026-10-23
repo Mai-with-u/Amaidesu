@@ -3,8 +3,8 @@
 人设唯一来源是 agents.toml ``[agents.streamer.persona]``：
   1. 表达侧：StreamerAgent 构造期把 bot_name/personality/style_constraints/audience_salutation 注入 Replyer，
      prompt 渲染 kwargs 必须等于配置值（非 _DEFAULT_* 硬编码兜底）。
-  2. 决策侧：behavior_style 仅注入 Planner；Planner 渲染 kwargs 不得含 personality/style_constraints/bot_name
-     （决策/表达分离契约的反向断言）。
+  2. 决策侧：behavior_style 仅注入 Planner；bot_name/personality 同时注入 Planner（房管据此替她挑话题、
+     定态度），style_constraints 不得进 Planner（措辞风格只归表达侧的反向断言）。
   3. bot_name 默认值全库统一为 "麦麦"，历史 "爱德丝" 禁止。
 
 入口是 factory.instantiate_agent（与 manager 动态启用路径同源），任一项回退都会在对应断言点失败。
@@ -60,9 +60,7 @@ async def test_replyer_renders_config_persona_and_never_the_planner_only_behavio
     进本轮输入模板；behavior_style 只进 Planner。"""
     agent, llm, prompt = streamer
     llm.generate = AsyncMock(return_value=Response(success=True, content="测试回复"))  # 纯文本契约：正文即台词
-    plan = DecisionPlan(
-        should_reply=True, target="all", topic_summary="测试话题", reply_guidance="按配置 persona 回答"
-    )
+    plan = DecisionPlan(should_reply=True, target="all", topic_summary="测试话题", reply_guidance="按配置 persona 回答")
 
     assert await agent._replyer.generate(plan, []) is not None
 
@@ -96,7 +94,9 @@ async def test_planner_gets_behavior_style_only_and_none_of_the_expression_side_
 
     kwargs = prompt.render.call_args.kwargs
     assert kwargs.get("behavior_style") == _PERSONA["behavior_style"]
-    assert not {"personality", "style_constraints", "bot_name"} & kwargs.keys()  # 仅 Replyer 表达侧消费
+    # 房管也要知道她是谁：名字与性格进决策侧；措辞风格仍只归 Replyer 表达侧
+    assert (kwargs.get("bot_name"), kwargs.get("personality")) == (_PERSONA["bot_name"], _PERSONA["personality"])
+    assert "style_constraints" not in kwargs
 
 
 def test_default_bot_name_is_maimai_everywhere_and_the_legacy_name_is_gone() -> None:
