@@ -38,6 +38,9 @@ _RETRY_DELAYS_S = (1.0, 2.0, 5.0, 10.0, 30.0)
 _EMPTY_READ_FLOOR_S = 1.0
 # 这些事件说明目标的处境变了，需要取它此刻的完整样子。
 _GOAL_CHANGE_KINDS = frozenset({"asked", "paused", "resumed", "finished"})
+# Mod 侧停滞判定（目标长时间没有任何新事件仍未结束）：目标处境也算变了，
+# 取它此刻的样子交给回调（回调据此记账本中间态并转发叙事），不唤醒模型另做决策。
+_GOAL_STALLED_KIND = "stalled"
 # 与目标无关的身体事件：生存需求的临时任务开始与结束、处理不了的需求、角色死亡；
 # 跟随中的处境变化（跟不过去、跟丢了、过门、上下车、帮打）也不带目标编号，同样交给身体事件回调；
 # 天色变了（天黑到了能睡的时间、天亮、开始下雨、雨停）只在变的那一刻来一条，也不带目标编号，同样交过去；
@@ -58,7 +61,8 @@ _BODY_EVENT_KINDS = frozenset(
 McpCall = Callable[[str, Dict[str, Any]], Awaitable[MaicraftReply]]
 # 第二个参数：这次是事件流换了编号（重进世界或游戏重启）后重新核对时查到的。
 # 第三个参数：结束事件带来的那一行自身摘要；不是结束事件、重新核对时查到的、Mod 没写时为空串。
-GoalChanged = Callable[[GoalRun, bool, str], Awaitable[None]]
+# 第四个参数：这条变化由 Mod 的停滞事件（stalled）引来。
+GoalChanged = Callable[[GoalRun, bool, str, bool], Awaitable[None]]
 GoalGone = Callable[[int, str], Awaitable[None]]
 DecisionAsked = Callable[[GoalRun], Awaitable[None]]
 BodyEvent = Callable[[Dict[str, Any]], Awaitable[None]]
@@ -225,14 +229,22 @@ class GoalWatch:
             # 负数编号是 Mod 自己挂出的决策（死亡恢复），不是谁下达的目标：不跟踪，读一次交给决策回调。
             await self._decision_asked(goal_id)
             return
-        if not isinstance(goal_id, int) or goal_id not in self._goals or kind not in _GOAL_CHANGE_KINDS:
+        if (
+            not isinstance(goal_id, int)
+            or goal_id not in self._goals
+            or (kind not in _GOAL_CHANGE_KINDS and kind != _GOAL_STALLED_KIND)
+        ):
             return
         # 目标结束时 Mod 在事件上附一行"结束那一刻角色怎样"，goal(get) 里没有：记下来随查询结果一起交给回调；
         # 刚进世界还没看清自己时 Mod 不带这个字段，就交空串。
         brief = event.get("self_brief") if kind == "finished" else None
-        await self._refresh(goal_id, self_brief=brief.strip() if isinstance(brief, str) else "")
+        await self._refresh(
+            goal_id, self_brief=brief.strip() if isinstance(brief, str) else "", stalled=kind == _GOAL_STALLED_KIND
+        )
 
-    async def _refresh(self, goal_id: int, after_world_change: bool = False, self_brief: str = "") -> None:
+    async def _refresh(
+        self, goal_id: int, after_world_change: bool = False, self_brief: str = "", stalled: bool = False
+    ) -> None:
         """取目标此刻的样子交给回调；结束了就不再跟踪。查询失败留着，等下一条事件或重新同步。"""
         reply = await self._call(GOAL, {"operation": "get", "goal_id": goal_id})
         tracked = self._goals.get(goal_id)
@@ -256,7 +268,7 @@ class GoalWatch:
             return
         if run.finished:
             self.untrack(goal_id)
-        await self._on_goal_changed(run, after_world_change, self_brief)
+        await self._on_goal_changed(run, after_world_change, self_brief, stalled)
 
     async def _decision_asked(self, decision_id: int) -> None:
         """取 Mod 挂出的决策此刻的样子：还在等回答就交给决策回调；读不到或已答复就不打扰模型。"""

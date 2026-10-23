@@ -1058,6 +1058,34 @@ class MinecraftAgent(BaseAgent):
                 continue
             ledger.update(task_id, status, summary=summary)
 
+    def _flag_batch_delegations_stalled(self, goal_id: int, ability: str) -> None:
+        """STALLED 打进本批委派账的快照（中间态）：主播侧渲染看得到"停着没动静"。
+
+        目标随后结束（或恢复有动静）时分别由终态直写与常规进度写入覆盖掉这份标记。
+        """
+        ledger = getattr(self._task_tracker, "ledger", None)
+        if ledger is None:
+            return
+        for task_id in list(self._delegated_finished_ids):
+            record = ledger.get(task_id)
+            if record is None:
+                continue
+            stalled = dict(record.snapshot.get("stalled_goals") or {})
+            stalled[str(goal_id)] = ability
+            ledger.update(task_id, "running", snapshot={**record.snapshot, "stalled_goals": stalled})
+
+    def _note_goal_stalled(self, run: GoalRun) -> None:
+        """Mod 报告目标停着没动静的账面中间态：快照带停滞标记，本批委派账同步打标。"""
+        ledger = getattr(self._task_tracker, "ledger", None)
+        if ledger is not None:
+            ledger.update(
+                ledger_task_id(run.goal_id),
+                ledger_status_of(run),
+                snapshot={**run.data, "stalled": True},
+                summary=f"Mod 报告目标长时间没有新事件，仍未结束：{run.doing or run.ability}",
+            )
+        self._flag_batch_delegations_stalled(run.goal_id, run.ability)
+
     def _actionable_goals(self) -> List[int]:
         """要模型动手才会往下走的目标：在等回答的、被暂停的。"""
         return sorted(
@@ -1066,11 +1094,16 @@ class MinecraftAgent(BaseAgent):
             if note.get("state") == AWAITING_ANSWER or goal_id in self._paused_goals
         )
 
-    async def _on_goal_changed(self, run: GoalRun, after_world_change: bool = False, self_brief: str = "") -> None:
+    async def _on_goal_changed(
+        self, run: GoalRun, after_world_change: bool = False, self_brief: str = "", stalled: bool = False
+    ) -> None:
         """事件流说目标变了：记账，并在需要模型处理时带着结果唤醒任务。
 
         ``after_world_change``：事件流换了编号（重进世界或游戏重启）后重新核对时查到的样子。
         ``self_brief``：结束事件带来的结束那一刻角色的一行自身摘要，没有时为空串。
+        ``stalled``：Mod 侧停滞判定引来（目标长时间没有新事件仍未结束）——记账本中间态
+        并转发"有目标停着没动静"给主播；不另唤醒模型（Mod 节流过，模型侧由任务账本
+        的停滞告警兜底）。
         """
         before = self._goal_notes.get(run.goal_id, {})
         if run.finished:
@@ -1081,6 +1114,13 @@ class MinecraftAgent(BaseAgent):
             self._inject_wakeup_message(self._finish_notice(run, self_brief))
             return
         self._note_goal(run)
+        if stalled:
+            self._note_goal_stalled(run)
+            await self._emit_game_event(
+                "attention_required",
+                f"有目标停着没动静：目标 {run.goal_id}（{self._goal_label(run)}）很长时间没有新事件，还没结束。",
+            )
+            return
         self._update_goal_ledger(run)
         if run.state == AWAITING_ANSWER and before.get("question") != run.question:
             self._inject_wakeup_message(

@@ -18,14 +18,16 @@ class _Recorder:
         self.changed: List[GoalRun] = []
         self.after_world_change: List[bool] = []
         self.self_briefs: List[str] = []
+        self.stalled: List[bool] = []
         self.gone: List[tuple[int, str]] = []
         self.body: List[Dict[str, Any]] = []
         self.decisions: List[GoalRun] = []
 
-    async def on_changed(self, run: GoalRun, after_world_change: bool, self_brief: str) -> None:
+    async def on_changed(self, run: GoalRun, after_world_change: bool, self_brief: str, stalled: bool = False) -> None:
         self.changed.append(run)
         self.after_world_change.append(after_world_change)
         self.self_briefs.append(self_brief)
+        self.stalled.append(stalled)
 
     async def on_gone(self, goal_id: int, reason: str) -> None:
         self.gone.append((goal_id, reason))
@@ -271,3 +273,18 @@ async def test_a_death_recovery_question_is_handed_over_without_tracking_it() ->
     assert recorder.decisions[0].ability == "death_recovery"
     assert recorder.decisions[0].question["options"][0]["id"] == "respawn"
     assert recorder.changed == [] and watch.tracked_ids() == []
+
+
+async def test_a_stalled_event_refreshes_the_goal_and_flags_the_callback() -> None:
+    """Mod 的停滞判定：目标还在跟踪、查询刷新后带 stalled 旗标交给回调。"""
+    server, recorder = FakeMaicraft(), _Recorder()
+    watch = _watch(server, recorder)
+    await watch.step()
+    goal_id = await _launch(server, watch)
+    server._append("stalled", goal_id, "目标很久没有新事件")
+
+    await watch.step()
+
+    assert [run.state for run in recorder.changed] == ["running"]
+    assert recorder.stalled == [True], "停滞旗标随查询结果一起交给回调"
+    assert watch.tracking(goal_id), "停滞不是结束，目标继续跟踪"

@@ -1136,3 +1136,49 @@ async def test_a_failed_goal_settles_the_batch_delegations_with_a_dry_summary() 
     agent._finish_delegated("succeeded", summary="delivery: 没做成，坑壁有缺口")
     assert ledger.get("d-1") is None, "终态粘滞：LLM 后到的交付不复活也不回退账面状态"
     await agent.stop()
+
+
+async def test_a_stalled_goal_lands_in_ledgers_and_reaches_the_streamer() -> None:
+    """STALLED 消费：账本中间态（快照带停滞标记）+ 委派账打标 + 叙事转发；不唤醒模型。"""
+    server = FakeMaicraft()
+    ledger = TaskLedger()
+    tracker = TaskTracker(ToolRegistry(), ledger)
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
+
+    agent, llm, bus = await _start(server, script, tracker=tracker)
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+    )
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: "maicraft-goal-1" in ledger and ledger.get("d-1") is not None)
+
+    server._append("stalled", 1, "目标很久没有新事件")
+    await _wait_until(
+        lambda: any(
+            isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
+            for call in bus.emit.await_args_list
+        )
+    )
+    attention = [
+        call.args[1]
+        for call in bus.emit.await_args_list
+        if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
+    ][-1]
+    assert "停着没动静" in attention.message
+
+    goal_record = ledger.get("maicraft-goal-1")
+    assert goal_record is not None and goal_record.status == "running", "停滞是中间态不是终态"
+    assert goal_record.snapshot.get("stalled") is True
+    assert ledger.get("d-1").snapshot.get("stalled_goals", {}).get("1") == "maicraft:gather", "批级委派账同步打标"
+    queued = "".join(str(item[-1]) for item in agent._message_queue)
+    assert "停着没动静" not in queued and "结束了" not in queued, "停滞不唤醒模型（模型侧由账本停滞告警兜底）"
+    await agent.stop()
