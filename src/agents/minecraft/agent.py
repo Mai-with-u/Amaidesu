@@ -130,6 +130,35 @@ _RECENT_FINISHED_GOALS = 6
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
 
+# 长自由文本事件的概述阈值：发给主播素材前超过它先用 summary 档压成保信息摘要，
+# 短文直通（进展类事件中位几十字符，天然分开）
+_ATTENTION_SUMMARY_THRESHOLD_CHARS = 300
+# 概述降级的首句斩尾上限：只留第一句，再多截断（斩尾是兜底，不弃用）
+_SUMMARY_FALLBACK_MAX_CHARS = 120
+# 概述走 summary 档（低成本，每场几次调用）
+_SUMMARY_PROFILE = "summary"
+
+
+def _first_sentence_truncation(text: str) -> str:
+    """概述的降级形态：只留第一句，句子本身太长再硬截断。"""
+    stripped = str(text or "").strip()
+    for separator in ("。", "！", "？", "!?", "\n"):
+        index = stripped.find(separator)
+        if index >= 0:
+            stripped = stripped[: index + len(separator)]
+            break
+    if len(stripped) > _SUMMARY_FALLBACK_MAX_CHARS:
+        stripped = stripped[:_SUMMARY_FALLBACK_MAX_CHARS]
+    return stripped
+
+
+# 概述提示词：只压缩不评价——防多出一个自由发挥的转述者
+_SUMMARY_COMPRESS_INSTRUCTION = (
+    "把下面这段 Minecraft 游戏事件长文压缩成一段保信息摘要：保留目标、试过的办法、"
+    "失败或缺的东西、数量与下一步指向等全部事实细节；只压缩不评价——不加评论、"
+    "不臆测、不改变任何事实。直接输出摘要正文。"
+)
+
 
 class MinecraftAgent(BaseAgent):
     """Minecraft 游戏 Agent（AI 玩家，普通 ReAct Agent）
@@ -269,6 +298,8 @@ class MinecraftAgent(BaseAgent):
         self._batch_active: bool = False
         self._batch_body_events: List[Dict[str, Any]] = []
         self._body_notified: set = set()
+        # 在跑的长文概述后台任务：持引用防被垃圾回收，完成即移除
+        self._summary_tasks: set[asyncio.Task[None]] = set()
         # 挂在消息队列里、还没被模型读到的那条天色通知：新的天色来了就把它换掉，队列里只留最新一条。
         self._sky_notice: Optional[tuple] = None
         self._task_reported = False
@@ -1240,8 +1271,9 @@ class MinecraftAgent(BaseAgent):
             # 这里只说明来龙去脉、提醒复活后先看一眼自己，不催模型重下目标。
             if self._batch_active or not self._task_finished:
                 self._inject_wakeup_message(self._body_notice_content(kind, notice, message))
-            # 上报主播的是给观众听的白话（模型那边仍收 Mod 原话）：和注意流采集器的叙事同一套说法
-            await self._emit_game_event("attention_required", summarize(classify(kind) or "unknown", kind, message))
+            # 上报主播的是给观众听的白话（模型那边仍收 Mod 原话）：和注意流采集器的叙事同一套说法；
+            # 经素材调度器发送，超阈值长文再走保信息摘要兜底
+            self._schedule_attention_material(summarize(classify(kind) or "unknown", kind, message))
             return
         if not self._batch_active or (kind, message) in self._body_notified:
             return
@@ -1250,6 +1282,48 @@ class MinecraftAgent(BaseAgent):
         spoken = summarize(classify(kind) or "unknown", kind, message)
         notice = f"执行任务时{spoken}" if kind == "temporary_task_started" else spoken
         await self._emit_game_event("attention_required", notice, already_resolved=kind == "temporary_task_finished")
+
+    def _schedule_attention_material(self, message: str) -> None:
+        """把一条身体事件转成主播素材（game.attention_required）：长文先概述，不阻塞事件主流程。
+
+        超过阈值的长自由文本（need_unhandled 的逐来源排查说明、目标失败枚举等）经 summary 档
+        压成保信息摘要再发；载荷两栏——概述进 message，原文留档进 scene。概述是后台任务：
+        失败静默降级为首句斩尾并记 debug 日志。
+        """
+        if len(message) <= _ATTENTION_SUMMARY_THRESHOLD_CHARS:
+            task = asyncio.create_task(self._emit_attention_material(message))
+        else:
+            task = asyncio.create_task(self._emit_attention_material_with_summary(message))
+        self._summary_tasks.add(task)
+        task.add_done_callback(self._summary_tasks.discard)
+
+    async def _emit_attention_material(self, message: str) -> None:
+        await self._emit_game_event("attention_required", message)
+
+    async def _emit_attention_material_with_summary(self, message: str) -> None:
+        """长文的两栏载荷：压缩概述进素材，原文留档；概述拿不到就降级首句斩尾。"""
+        summary = await self._summarize_long_text(message)
+        await self._emit_game_event("attention_required", summary, scene=f"原文留档：{message}")
+
+    async def _summarize_long_text(self, message: str) -> str:
+        """长自由文本 → 保信息摘要（summary 档）；失败降级首句斩尾（debug 记原因）。"""
+        if self._llm is None:
+            return _first_sentence_truncation(message)
+        try:
+            response = await self._llm.generate(
+                [{"role": "user", "content": f"{_SUMMARY_COMPRESS_INSTRUCTION}\n\n{message}"}],
+                profile=_SUMMARY_PROFILE,
+            )
+        except Exception as exc:  # noqa: BLE001 - 概述失败静默降级，不影响事件主流程
+            self._logger.debug(f"长文概述调用失败，降级首句斩尾: {type(exc).__name__}: {exc}", exc=True)
+            return _first_sentence_truncation(message)
+        summary = (response.content or "").strip()
+        if response.success and summary and not response.tool_calls:
+            return summary
+        self._logger.debug(
+            f"长文概述响应不可用（success={response.success}，带工具调用={bool(response.tool_calls)}），降级首句斩尾"
+        )
+        return _first_sentence_truncation(message)
 
     def _body_notice_content(self, kind: str, notice: str, message: str) -> str:
         """身体通知交给模型的正文。

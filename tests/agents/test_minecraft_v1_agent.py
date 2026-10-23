@@ -1182,3 +1182,67 @@ async def test_a_stalled_goal_lands_in_ledgers_and_reaches_the_streamer() -> Non
     queued = "".join(str(item[-1]) for item in agent._message_queue)
     assert "停着没动静" not in queued and "结束了" not in queued, "停滞不唤醒模型（模型侧由账本停滞告警兜底）"
     await agent.stop()
+
+
+def _attention_events(bus: MagicMock) -> List[GamePayload]:
+    return [
+        call.args[1]
+        for call in bus.emit.await_args_list
+        if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
+    ]
+
+
+class _SummaryLlm:
+    """summary 档替身：记下收到的档位与提示，按剧本回复或抛错。"""
+
+    def __init__(self, behavior: Callable[[List[Dict[str, Any]]], Response]) -> None:
+        self.behavior = behavior
+        self.calls: List[Dict[str, Any]] = []
+
+    async def generate(self, messages: List[Dict[str, Any]], **kwargs: Any) -> Response:
+        self.calls.append({"messages": messages, "profile": kwargs.get("profile")})
+        return self.behavior(messages)
+
+
+async def test_long_body_event_is_summarized_before_reaching_the_streamer() -> None:
+    """长文概述器：超过阈值的长文经 summary 档压缩后两栏发出，短文直通不调 LLM。"""
+    server = FakeMaicraft()
+    llm = _SummaryLlm(lambda messages: _resp("饿了：翻过箱子没有、合成缺干海带块、烧炼缺原料"))
+    agent, _llm, bus = await _start(server, lambda messages: _resp("好"))
+    agent._llm = llm
+
+    short = "吃了一个苹果"
+    await agent._on_body_event({"kind": "need_unhandled", "message": short})
+    long_text = "饿了没吃上。" + "翻过箱子没有面包，合成台缺干海带块，烧炼炉缺原料，64 格内没有可猎动物。" * 20
+    await agent._on_body_event({"kind": "need_unhandled", "message": long_text})
+    await _wait_until(lambda: len(_attention_events(bus)) == 2)
+
+    assert llm.calls and llm.calls[0]["profile"] == "summary", "概述走 summary 档"
+    assert "只压缩不评价" in llm.calls[0]["messages"][0]["content"], "提示词只压缩不评价"
+    first, summarized = _attention_events(bus)
+    assert first.message == short and first.scene == "", "短文直通，不调概述"
+    assert "干海带块" in summarized.message, "概述保信息"
+    assert summarized.scene.startswith("原文留档：") and long_text in summarized.scene, "原文留档进载荷"
+    await agent.stop()
+
+
+async def test_summary_failure_falls_back_to_first_sentence() -> None:
+    """概述失败静默降级为首句斩尾，素材不缺席。"""
+    server = FakeMaicraft()
+
+    def boom(messages: List[Dict[str, Any]]) -> Response:
+        raise RuntimeError("summary 引擎不可用")
+
+    llm = _SummaryLlm(boom)
+    agent, _llm, bus = await _start(server, lambda messages: _resp("好"))
+    agent._llm = llm
+
+    long_text = "饿了没吃上。翻过箱子没有面包，合成台缺干海带块，烧炼炉缺原料。" + "细节" * 200
+    await agent._on_body_event({"kind": "need_unhandled", "message": long_text})
+    await _wait_until(lambda: len(_attention_events(bus)) == 1)
+
+    emitted = _attention_events(bus)[0]
+    assert emitted.message.startswith("饿了没吃上。"), "降级为首句斩尾"
+    assert "细节" not in emitted.message, "斩尾不带后半长文"
+    assert long_text in emitted.scene, "原文留档仍在"
+    await agent.stop()
