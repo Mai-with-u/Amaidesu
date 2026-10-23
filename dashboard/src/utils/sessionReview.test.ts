@@ -71,7 +71,7 @@ describe('buildWaterlineData', () => {
 
 describe('配色与格式化', () => {
   it('已知 profile 用专色，未知 profile 依次取兜底色', () => {
-    expect(waterlineColor('planner', 0)).toBe('#5d6ab8');
+    expect(waterlineColor('planner', 0)).toBe('#6366f1');
     expect(waterlineColor('unknown', 0)).toBe(waterlineColor('other', 0));
   });
 

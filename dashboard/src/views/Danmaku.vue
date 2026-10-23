@@ -119,10 +119,6 @@ body,
 </style>
 
 <style scoped>
-/*
- * 观众面配色与麦麦的角色色绑定：普通弹幕用叶冠绿、礼物与麦麦回复用发色橙，
- * 全部压掉荧光感；底色统一暖黑半透明，靠描边色区分消息类型。
- */
 .danmaku-container {
   width: 100%;
   height: 100vh;
@@ -130,7 +126,7 @@ body,
   padding: 15px 20px;
   box-sizing: border-box;
   overflow: hidden;
-  font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
 }
 
 .messages {
@@ -149,50 +145,46 @@ body,
 
 .message {
   padding: 8px 14px;
-  border-radius: 8px;
+  border-radius: 6px;
   color: #fff;
   text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
-  background: rgba(14, 11, 8, 0.38);
+  background: rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(4px);
 }
 
 .message.text {
-  border-left: 3px solid #93cf87;
+  border-left: 3px solid #00ff88;
 }
 
 .message.gift {
-  background: rgba(255, 162, 89, 0.22);
-  border-left: 3px solid #ffa259;
+  background: rgba(255, 136, 0, 0.25);
+  border-left: 3px solid #ff8800;
 }
 
 .message.super_chat {
-  background: linear-gradient(90deg, rgba(255, 177, 92, 0.34), rgba(255, 122, 89, 0.22));
-  border-left: 3px solid #ffb35c;
+  background: linear-gradient(90deg, rgba(255, 107, 107, 0.3), rgba(107, 255, 107, 0.2));
+  border-left: 3px solid #ff6b6b;
 }
 
 .message.guard {
-  background: rgba(90, 181, 170, 0.22);
-  border-left: 3px solid #5ab5aa;
+  background: rgba(78, 205, 196, 0.25);
+  border-left: 3px solid #4ecdc4;
 }
 
 .message.enter {
-  background: rgba(120, 110, 100, 0.18);
-  border-left: 3px solid #8f887d;
+  background: rgba(100, 100, 100, 0.2);
+  border-left: 3px solid #888;
 }
 
 .message.reply {
-  background: rgba(255, 154, 85, 0.16);
-  border-left: 3px solid #ff9a55;
+  background: rgba(64, 158, 255, 0.25);
+  border-left: 3px solid #409eff;
 }
 
 .username {
-  color: #9fdc8f;
+  color: #00ff88;
   font-weight: 600;
   margin-right: 6px;
-}
-
-.message.reply .username {
-  color: #ffb27a;
 }
 
 .content {
