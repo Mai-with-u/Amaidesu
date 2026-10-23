@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.0",
+    "@fontsource/jetbrains-mono": "^5.2.5",
     "axios": "^1.6.0",
     "dompurify": "^3.3.1",
     "echarts": "^6.1.0",
