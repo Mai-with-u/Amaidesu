@@ -7,17 +7,19 @@ import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.glance import glance_brief, glance_scene
-from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
+from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of, reply_of
+from src.agents.minecraft.tools import MaicraftMcpProvider
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
 from src.modules.skills import SkillLibrary
+from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger, TaskTracker
 
@@ -355,6 +357,79 @@ async def test_execute_finishing_inline_still_lands_in_the_ledger() -> None:
     assert changed and changed[0].status == "succeeded", "当场完成的终态广播 task.changed"
     assert agent._goals.tracked_ids() == [], "当场完成的目标不进跟踪名单"
     await agent.stop()
+
+
+def _goal_lookup_of(server: FakeMaicraft) -> Callable[[str, Dict[str, Any]], Awaitable[MaicraftReply]]:
+    """替身服务器的宿主读取通道：和真实 Agent 一样经 invoke + reply_of 走。"""
+
+    async def lookup(name: str, arguments: Dict[str, Any]) -> MaicraftReply:
+        result = await server.invoke(ToolInvocation(tool_name=name, arguments=arguments))
+        return reply_of(result)
+
+    return lookup
+
+
+async def test_goal_query_adapter_maps_goal_get_to_ledger_shapes() -> None:
+    """查询适配器：goal(get) 的运行状态映射成账本词表；不是目标编号或查不到时无新事实。"""
+    server = FakeMaicraft()
+    await server.invoke(ToolInvocation(tool_name="maicraft_execute", arguments={"goal": {"ability": "gather"}}))
+    provider = MaicraftMcpProvider(
+        client=SimpleNamespace(), server_name="maicraft", goal_lookup=_goal_lookup_of(server)
+    )
+
+    running = await provider.query_task("maicraft-goal-1")
+    assert running is not None and running["status"] == "running"
+
+    server.ask(1)
+    asked = await provider.query_task("maicraft-goal-1")
+    assert asked is not None and asked["status"] == "waiting_for_decision"
+
+    server.finish(1, status="partial", summary="只砍到 2 块")
+    finished = await provider.query_task("maicraft-goal-1")
+    assert finished is not None and finished["status"] == "failed", "部分完成按账本词表记失败"
+    assert finished["summary"] == "只砍到 2 块"
+    assert finished["snapshot"]["goal_id"] == 1
+
+    assert await provider.query_task("deleg_1_1") is None, "委派编号不是目标编号"
+    assert await provider.query_task("maicraft-goal-99") is None, "查不到的目标按无新事实处理"
+
+
+async def test_tracker_fallback_verification_uses_the_goal_query_adapter() -> None:
+    """跟踪循环的周期兜底：经适配器核实目标状态并写账，事件流通知缺了也能对上账。"""
+    server = FakeMaicraft()
+    await server.invoke(ToolInvocation(tool_name="maicraft_execute", arguments={"goal": {"ability": "gather"}}))
+    provider = MaicraftMcpProvider(
+        client=SimpleNamespace(), server_name="maicraft", goal_lookup=_goal_lookup_of(server)
+    )
+    # 未连真 server（setup 没跑）时工具缓存为空；归属映射按注册后的样子补一个 execute 的 spec。
+    provider._specs = [
+        ToolSpec(
+            name="execute",
+            description="execute",
+            parameters_schema={"type": "object"},
+            kind="sync",
+            provider="maicraft",
+        )
+    ]
+    registry = ToolRegistry()
+    registry.register_provider(provider)
+    ledger = TaskLedger()
+    tracker = TaskTracker(registry, ledger)
+    ledger.register(
+        task_id="maicraft-goal-1",
+        provider="maicraft",
+        tool="maicraft_execute",
+        initiator="minecraft",
+        executor="maicraft",
+        source="provider",
+    )
+
+    await tracker.step()
+    assert ledger.get("maicraft-goal-1").status == "running"
+
+    server.finish(1, status="done", summary="砍了 5 块原木")
+    await tracker.step()
+    assert "maicraft-goal-1" not in ledger, "周期兜底核实出终态，条目移除"
 
 
 async def test_glance_shows_body_nearby_things_and_running_goals() -> None:

@@ -50,7 +50,7 @@ from src.agents.minecraft.maicraft import (
 from src.agents.minecraft.repeated_notice import notice_present, repeat_reference
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, WakeEvenIdle
-from src.agents.minecraft.tools import MinecraftToolProvider
+from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.context import PrefixGuard, TailImages
 from src.modules.events.event_bus import EventBus
@@ -354,11 +354,12 @@ class MinecraftAgent(BaseAgent):
             return
         # 函数内 import：mcp 模块涉及 fastmcp 重型依赖，按"可选重型依赖延迟加载"只在启动期导入一次。
         from src.modules.mcp.client import McpClient
-        from src.modules.mcp.provider import McpToolProvider
 
         client = McpClient(name=PROVIDER, config=self.typed_config.mcp)
         self._mcp_client = client
-        prov = McpToolProvider(client=client, server_name=PROVIDER, provider=PROVIDER)
+        prov = MaicraftMcpProvider(
+            client=client, server_name=PROVIDER, provider=PROVIDER, goal_lookup=self._call_maicraft
+        )
         self._mcp_provider = prov
         prov.on_tools_refreshed = self._on_mcp_tools_ready
         prov.switch_config = {"file": "agents.toml", "key": "agents.minecraft.mcp.enabled"}
