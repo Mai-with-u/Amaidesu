@@ -532,3 +532,16 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
     assert "不像在写稿" in system and "一次只说一件事，一句话，说完就停" in system
     assert "✗ 写稿" in system and "✓ 说话" in system and "不分段" in system
     assert "从零创作" not in system and "用你自己的话张嘴说出来" in system
+
+
+def test_prompts_forbid_inventing_off_game_life_events(prompts: Any) -> None:
+    """游戏之外的事也要有出处：实测 Planner 在话题摘要里编出"开播前桌上摆了两升大水壶、差点碰翻"，
+    表达侧照着当真事讲了一大段。看法和感受可以聊，凭空多出来的现实经历不行。"""
+    planner = prompts.render(
+        "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="", game_rules=""
+    )
+    assert "游戏之外的事同样要有出处" in planner and "没有出处的现实生活经历一律不写" in planner
+    assert "不能凭空给她多出一段现实生活里的经历" in planner
+
+    system = prompts.render("amaidesu_replyer_system", bot_name="麦麦", personality="活泼")
+    assert "不编现实生活里的经历" in system and "事情只说游戏里和直播间里真发生过的" in system
