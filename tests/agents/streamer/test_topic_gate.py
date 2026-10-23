@@ -92,7 +92,10 @@ async def test_is_novel_false_is_rejected_immediately() -> None:
         _invocation({"topic_summary": "石料", "is_novel": False, "emotion": "neutral", "intensity": 0.5})
     )
     assert result.success is False
-    assert result.error_message == "你自评这是重复——要么拿出真内容重新调用，要么本轮别发言"
+    assert (
+        result.error_message
+        == "你自评这是重复——要么换个新角度拿出真内容重新调用（新进展，或她对这件事的新态度、新联想），要么本轮别发言"
+    )
 
 
 async def test_is_novel_missing_is_rejected() -> None:

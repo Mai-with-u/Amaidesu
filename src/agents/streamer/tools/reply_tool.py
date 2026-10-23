@@ -69,8 +69,9 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
         "is_novel": {
             "type": "boolean",
             "description": (
-                "新颖自检（必填）：填 true 前先确认本条包含观众没听过的内容"
-                "（新事实/新进展/新互动对象；数值变化不算）。"
+                "新颖自检（必填）：填 true 前先确认本条有增量——信息上的新（新事实/新进展/新互动对象），"
+                "或表达上的新（她对已知的事有新态度、新联想、新玩笑，或扯出相关旧事）；"
+                "数值变化、把说过的结论或打算换个说法再讲都不算。"
                 "没有就如实填 false——工具会拒收并让你换内容或本轮别发言。"
             ),
         },
@@ -309,7 +310,7 @@ class ReplyToolProvider(BaseToolProvider):
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,
-                error_message="你自评这是重复——要么拿出真内容重新调用，要么本轮别发言",
+                error_message="你自评这是重复——要么换个新角度拿出真内容重新调用（新进展，或她对这件事的新态度、新联想），要么本轮别发言",
             )
 
         # 本轮弹幕批由 Planner 调用前注入；主动发言或脱离 Planner 调用时为空列表
@@ -393,7 +394,7 @@ class ReplyToolProvider(BaseToolProvider):
                 else:
                     error_message = (
                         f"台词与最近发言大面积重复（重合度 {ratio:.0%}；换皮措辞、数值变化不算新内容）——"
-                        "要么拿出真内容重新调用，要么本轮别发言。"
+                        "要么换个新角度拿出真内容重新调用（新进展，或她对这件事的新态度、新联想），要么本轮别发言。"
                     )
                 return ToolExecutionResult(
                     tool_name=invocation.tool_name,

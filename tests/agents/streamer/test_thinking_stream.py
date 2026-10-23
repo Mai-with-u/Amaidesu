@@ -63,7 +63,8 @@ def _make_planner() -> tuple[Planner, Dict[str, Any]]:
         config={"planner_max_steps": 3},
         llm_service=llm,
         prompt_service=prompt,
-        room_state=MagicMock(),
+        # 替身声明从没开过口：参考段会读上次开口时刻决定要不要写冷场行
+        room_state=MagicMock(last_speech_ms=None),
     )
     return planner, captured
 

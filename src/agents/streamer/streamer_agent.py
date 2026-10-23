@@ -303,6 +303,8 @@ class StreamerAgent(BaseAgent):
                 "planner_recent_intents_max": config.planner_recent_intents_max,
                 "planner_recent_relays_max": config.planner_recent_relays_max,
                 "reference_tools": list(config.reference_tools),
+                # 冷场提示复用主动发言的冷场阈值：同一个"多久算冷"只配一处
+                "cold_silence_ms": config.proactive.cold_timeout_ms,
             },
             llm_service=llm_manager,
             prompt_service=prompt_manager,

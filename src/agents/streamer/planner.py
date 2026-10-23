@@ -132,6 +132,9 @@ class _PlannerConfig(BaseConfig):
     planner_recent_intents_max: int = Field(default=60, ge=0, title="回看最近几轮打算")
     planner_recent_relays_max: int = Field(default=4, ge=0, title="回看最近几次补充要求")
     reference_tools: List[str] = Field(default_factory=list, title="每轮自动参考的只读工具")
+    # 主播多久没开口算冷场：超过后参考段出现【冷场】行，提示词据此把"找话说"设为默认。
+    # 装配期取主动发言的冷场阈值（proactive.cold_timeout_ms），0 = 不提示
+    cold_silence_ms: int = Field(default=45_000, ge=0, title="冷场提示阈值（毫秒）")
 
 
 def _as_id_str(value: Any) -> str:
@@ -255,6 +258,9 @@ class Planner:
                     config, "planner_recent_relays_max", defaults.planner_recent_relays_max
                 ),
                 reference_tools=list(getattr(config, "reference_tools", None) or []),
+                cold_silence_ms=getattr(
+                    getattr(config, "proactive", None), "cold_timeout_ms", defaults.cold_silence_ms
+                ),
             )
         elif isinstance(config, dict):
             self.typed_config = _PlannerConfig.from_dict(config)
@@ -269,6 +275,7 @@ class Planner:
         self._llm_service = llm_service
         self._prompt_service = prompt_service
         self._room_state = room_state
+        self._cold_silence_ms: int = self.typed_config.cold_silence_ms
         self._tool_registry = tool_registry
         self._profile_repo = profile_repo
         self._viewer_repo = viewer_repo
@@ -412,6 +419,20 @@ class Planner:
                 line += "（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
             lines.append(line)
         return "\n".join(lines)
+
+    def _render_silence(self, current_ms: int) -> str:
+        """冷场行：她最近一次开口距今超过冷场阈值时，写出已经沉默多久；否则为空。
+
+        从没开过口（开播第一句前）不算冷场——开场白由流程单的开场环节负责；
+        阈值为 0 时整行关闭。
+        """
+        last_speech_ms = self._room_state.last_speech_ms
+        if self._cold_silence_ms <= 0 or last_speech_ms is None:
+            return ""
+        silent_ms = current_ms - last_speech_ms
+        if silent_ms < self._cold_silence_ms:
+            return ""
+        return f"【冷场】她已经 {silent_ms // 1000} 秒没开口（超过 {self._cold_silence_ms // 1000} 秒算冷场）"
 
     def _superseded_by_game_report(self, intent: _Intent) -> bool:
         """该条目对游戏进展的说法是否已被后续回执覆盖：说出口的时刻落在某次
@@ -757,13 +778,20 @@ class Planner:
             # 主动窗不只来自冷场/定时：环节切换、游戏上报、游戏里有人说话也会唤醒，按实际可能来源说明
             lines.append(
                 "【情境】本窗为主动发言触发（冷场、定时、环节推进或游戏里有新动静）——弹幕可能为空，"
-                "结合房间态势与对话历史里刚入账的游戏条目决定是否开口、做什么。"
+                "结合房间态势与对话历史里刚入账的游戏条目决定是否开口、做什么；"
+                "游戏里没有新动静不等于没话可说。"
             )
+        current_ms = now_ms()
         activity = self._room_state.activity_line()
         if activity:
             # 房间活跃度事实一行（观众增量+弹幕量）：互动话术密度与发言策略的校准依据，
             # 空房间连续提问/求押注只会自问自答
             lines.append(f"【房间活跃度】{activity}")
+        silence = self._render_silence(current_ms)
+        if silence:
+            # 冷场行紧跟活跃度：线上回放里她只在游戏出事时开口，游戏一平静就整段不说话，
+            # 而模型看不到"已经多久没开口"——把沉默时长摆出来，提示词据此把找话说设为默认
+            lines.append(silence)
         if private_game_chat:
             # 私密游戏聊天：只发给我一个人的话，不进对话历史（表达侧看不到），只在本窗参考段出现。
             # 决策据此安排回应，但原话与内容不能被当众念出或转述
@@ -776,7 +804,6 @@ class Planner:
             # 状态跃迁事实块：只收本轮新入账批次里的死亡/重生/任务开始结束/交付类条目，
             # 供客观核对——叙事讲经历，这里只列可核对的状态
             lines.append(f"【当前状态（客观事实）】\n{state_facts}")
-        current_ms = now_ms()
         work = self._render_delegations(current_ms)
         if work:
             # 我手头在游戏里做的事：最近一次开始做的原话与进展。看得到自己在忙什么，
@@ -789,13 +816,16 @@ class Planner:
         intents = self._render_recent_intents(current_ms)
         if intents:
             # 已聊话题清单 + 硬规则：复盘发现 46% 的决策窗里模型自己写"别复述"却做不到——
-            # 把"重叠必须有新角度，否则沉默"写成显式注入规则，而不是靠模型自觉
+            # 把"重叠必须有新角度"写成显式注入规则，而不是靠模型自觉。新角度既认信息上的新，
+            # 也认表达上的新（新态度、新联想、旧事）；线上回放里 30 句有 27 句在复述同一个打算，
+            # 所以讲过的结论和打算单独点名不再复述；拿不出新角度先换话题，再考虑沉默
             lines.append(
                 "【已聊话题】（由旧到新，只列话题一句话；说出口的原话见对话历史）\n"
                 f"{intents}\n"
-                "硬规则：本轮想说的话题若与上述清单重叠，必须给出实质性新角度"
-                "（新事实/新进展/新互动对象；血量、数量、倒计时这类数值变化不算新角度），"
-                "否则选择本轮沉默。"
+                "硬规则：本轮想说的话题若与上述清单重叠，必须换一个实质性新角度"
+                "（新事实/新进展/新互动对象，或她对这件事的新态度、新联想、相关旧事；"
+                "血量、数量、倒计时这类数值变化不算新角度）；清单里讲过的结论和打算不再复述。"
+                "拿不出新角度就换个话题，或者本轮沉默。"
             )
         if reminders:
             # 运营提醒：后台递话，必达素材——不伪装观众弹幕、不进对话历史，

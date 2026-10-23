@@ -90,6 +90,9 @@ async def test_spoken_intents_listed_oldest_first() -> None:
 
     assert "【已聊话题】" in text
     assert "硬规则" in text and "实质性新角度" in text
+    # 新角度也认表达上的新；讲过的打算单独点名不再复述，拿不出新角度先换话题
+    assert "新态度、新联想、相关旧事" in text and "讲过的结论和打算不再复述" in text
+    assert "拿不出新角度就换个话题" in text
     section = _topic_lines(text)
     assert section == ["- 刚刚 话题：报平安：满血了", "- 刚刚 话题：还是满血"]
 

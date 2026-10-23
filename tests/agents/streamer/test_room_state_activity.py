@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
 
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import AUDIENCE_WINDOW_MS, RoomState
+from src.modules.utils.time_utils import now_ms
+from tests.agents.streamer.helpers import make_streamer_agent
 
 
 class _Danmaku:
@@ -94,3 +97,47 @@ def test_enter_render_is_capped_to_recent_few() -> None:
     line = state.activity_line(now_ms=1_100_000)
     assert "观众0" not in line and "观众2" not in line
     assert "观众7" in line
+
+
+async def _silence_reference(state: RoomState, cold_silence_ms: int) -> str:
+    planner = Planner(
+        config={"cold_silence_ms": cold_silence_ms},
+        llm_service=MagicMock(),
+        prompt_service=MagicMock(),
+        room_state=state,
+        context_enabled=False,  # 裸路径：情境段即整段参考文本
+    )
+    text = await planner._assemble_reference([], None, None, False, True, "")
+    assert text is not None
+    return text
+
+
+async def test_planner_reference_marks_cold_after_long_silence() -> None:
+    """她超过冷场阈值没开口，参考段写出已经沉默多久：线上回放里游戏一平静她就整段不说话。"""
+    state = RoomState()
+    state.record_speech(now_ms() - 60_000)
+    text = await _silence_reference(state, 45_000)
+    assert "【冷场】她已经" in text and "秒没开口（超过 45 秒算冷场）" in text
+
+
+@pytest.mark.parametrize(
+    ("silent_ms", "cold_silence_ms"),
+    [
+        (None, 45_000),  # 还没开过口：开场白由流程单负责，不算冷场
+        (10_000, 45_000),  # 刚说过话
+        (600_000, 0),  # 阈值 0 = 关闭提示
+    ],
+)
+async def test_planner_reference_skips_cold_line(silent_ms: Optional[int], cold_silence_ms: int) -> None:
+    """没开过口、刚说过话、或关掉提示时，不出现冷场行。"""
+    state = RoomState()
+    if silent_ms is not None:
+        state.record_speech(now_ms() - silent_ms)
+    text = await _silence_reference(state, cold_silence_ms)
+    assert "【冷场】" not in text
+
+
+def test_streamer_wires_proactive_cold_timeout_into_planner() -> None:
+    """冷场提示复用主动发言的冷场阈值，同一个"多久算冷"只配一处。"""
+    agent = make_streamer_agent({"proactive": {"cold_timeout_ms": 30_000}})
+    assert agent._planner._cold_silence_ms == 30_000
