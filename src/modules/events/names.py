@@ -111,6 +111,12 @@ class CoreEvents:
     # 这是终点广播：观察面渲染用，消费者不得触发新决策（防环约束）。
     STREAMER_NOTEBOOK_CHANGED = "streamer.notebook.changed"
 
+    # ========== v2 语义域事件（streamer 场次回顾写好） ==========
+    # 收播整理（或启动补写）把一场直播总结成回顾并落库后发一条，携带回顾全文与
+    # 场次起止。回顾在收播后由后台调模型生成，完成时刻只有写入方知道，外部
+    # （如把近况同步给 QQ 那边的麦麦）只能经这条事实通知拿到。
+    STREAMER_RECAP_WRITTEN = "streamer.recap.written"
+
     # ========== v2 语义域事件（tool 异步工具结果通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
     # 如 "tool.result.speak"/"tool.result.summarize_timeline"。

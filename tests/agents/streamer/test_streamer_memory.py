@@ -28,6 +28,7 @@ from src.agents.streamer.memory import (
     collect_payment_material,
 )
 from src.agents.streamer.streamer_agent import StreamerAgent
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.tools import ToolInvocation, ToolRegistry
@@ -102,7 +103,7 @@ async def _ended_session(store: SQLiteDatabase, *, started: int = 1_000, ended: 
     return pk
 
 
-def _recap_writer(store: SQLiteDatabase, llm: MagicMock) -> SessionRecapWriter:
+def _recap_writer(store: SQLiteDatabase, llm: MagicMock, event_bus: Any = None) -> SessionRecapWriter:
     return SessionRecapWriter(
         sessions_repo=store.sessions,
         chat_repo=store.chat,
@@ -112,6 +113,7 @@ def _recap_writer(store: SQLiteDatabase, llm: MagicMock) -> SessionRecapWriter:
         llm_service=llm,
         prompt_manager=_prompts(),
         max_length=200,
+        event_bus=event_bus,
     )
 
 
@@ -168,6 +170,35 @@ async def test_recap_skipped_for_empty_unended_or_llm_failure(store: SQLiteDatab
     await _streamer_says(store, failed_pk, "说了点什么", 2_000)
     assert await _recap_writer(store, _llm(success=False)).write_recap(failed_pk) is None
     assert await store.recaps.get_recap(live_session_id=failed_pk) is None
+
+
+@pytest.mark.asyncio
+async def test_recap_written_event_on_settle_and_backfill_only_when_stored(store: SQLiteDatabase) -> None:
+    """回顾落库后发 streamer.recap.written（收播与补写同一出口）；没写成不发，发布失败不推翻落库。"""
+    bus = MagicMock()
+    bus.emit = AsyncMock()
+    pk = await _ended_session(store, started=1_000, ended=9_000)
+    await _streamer_says(store, pk, "答应下场挖钻石", 2_000)
+
+    text = await _recap_writer(store, _llm("这场答应了挖钻石"), bus).write_recap(pk)
+
+    event_name, payload = bus.emit.await_args.args[:2]
+    assert event_name == CoreEvents.STREAMER_RECAP_WRITTEN
+    assert (payload.live_session_id, payload.started_at_ms, payload.ended_at_ms) == (pk, 1_000, 9_000)
+    assert payload.recap_text == text
+
+    bus.emit.reset_mock()
+    failed_pk = await _ended_session(store)
+    await _streamer_says(store, failed_pk, "说了点什么", 2_000)
+    assert await _recap_writer(store, _llm(success=False), bus).write_recap(failed_pk) is None
+    bus.emit.assert_not_awaited()
+
+    backfill_pk = await _ended_session(store, started=20_000, ended=30_000)
+    await _streamer_says(store, backfill_pk, "上次没来得及总结", 21_000)
+    bus.emit = AsyncMock(side_effect=RuntimeError("总线已关"))
+    assert await _recap_writer(store, _llm("补写的回顾"), bus).backfill_missing(limit=1) == [backfill_pk]
+    assert bus.emit.await_args.args[1].live_session_id == backfill_pk
+    assert await store.recaps.get_recap(live_session_id=backfill_pk) is not None
 
 
 @pytest.mark.asyncio

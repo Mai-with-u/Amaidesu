@@ -19,14 +19,19 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
-from typing import Any, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.recap import StreamerRecapWrittenPayload
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
 from src.modules.types.currency import to_cny
 from src.modules.types.guard_levels import GUARD_LEVEL_NAMES
 
 from ..background import SUMMARY_PROFILE
+
+if TYPE_CHECKING:
+    from src.modules.events.event_bus import EventBus
 
 __all__ = ["SessionRecapWriter", "format_recap"]
 
@@ -84,11 +89,13 @@ class SessionRecapWriter:
         event_repo: Any = None,
         notebook_text_provider: Optional[Callable[[], str]] = None,
         max_length: int = 500,
+        event_bus: Optional["EventBus"] = None,
     ) -> None:
         """全部仓储与服务由主播 Agent 构造时注入；topic/event 仓储缺失只让原料少一类。
 
         ``notebook_text_provider`` 返回收播时刻的备忘录全文快照（主播 Agent 在
         清空备忘录前取走）；None 或空串 = 本场没写过备忘录，原料少这一类。
+        ``event_bus`` 用于回顾落库后发 ``streamer.recap.written``；None 时只写库不通知。
         """
         self._sessions = sessions_repo
         self._chat = chat_repo
@@ -99,6 +106,7 @@ class SessionRecapWriter:
         self._llm = llm_service
         self._prompt_manager = prompt_manager
         self._max_length = max(100, int(max_length))
+        self._event_bus = event_bus
         self._system_prompt: str = ""
 
     # ------------------------------------------------------------------
@@ -144,7 +152,29 @@ class SessionRecapWriter:
             recap_text=text,
         )
         logger.info(f"场次回顾已写入（场次 {live_session_id}）: {text[:60]}")
+        await self._announce_written(int(live_session_id), started_at, ended_at, text)
         return text
+
+    async def _announce_written(self, live_session_id: int, started_at_ms: int, ended_at_ms: int, text: str) -> None:
+        """回顾落库后发事实通知；收播整理与启动补写都经 ``write_recap``，两条路径都会发。
+
+        通知失败只告警：回顾已经在库里，开播注入与回忆工具不受影响。
+        """
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.emit(
+                CoreEvents.STREAMER_RECAP_WRITTEN,
+                StreamerRecapWrittenPayload(
+                    live_session_id=live_session_id,
+                    started_at_ms=started_at_ms,
+                    ended_at_ms=ended_at_ms,
+                    recap_text=text,
+                ),
+                source="SessionRecapWriter",
+            )
+        except Exception as exc:  # noqa: BLE001 - 通知失败不推翻已落库的回顾
+            logger.warning(f"streamer.recap.written 发布失败（场次 {live_session_id}，已忽略）: {exc}")
 
     async def backfill_missing(self, *, limit: int = 1) -> List[int]:
         """补写最近 ``limit`` 场"已结束却没有回顾"的场次（进程异常退出的善后），返回补写成功的场次主键。

@@ -167,7 +167,7 @@ class StreamerAgent(BaseAgent):
     description = "Streamer Agent - 主播决策 + 表达 + 后台维护"
 
     # -----事件族声明（可选）-----
-    emits_events = (CoreEvents.RUNDOWN_CHANGED,)
+    emits_events = (CoreEvents.RUNDOWN_CHANGED, CoreEvents.STREAMER_RECAP_WRITTEN)
 
     def __init__(
         self,
@@ -418,6 +418,7 @@ class StreamerAgent(BaseAgent):
                 prompt_manager=prompt_manager,
                 notebook_text_provider=lambda: self._session_notebook_snapshot,
                 max_length=memory_cfg.recap_max_length,
+                event_bus=event_bus,
             )
         self._roster_writer: Optional[RegularsRosterWriter] = None
         if (
