@@ -5,7 +5,7 @@
       <div class="header-left">
         <div class="brand">
           <span class="brand-icon">
-            <img src="/icon.png" alt="Amaidesu" />
+            <img src="/icon.png" alt="Amaidesu" width="30" height="30" />
           </span>
           <span class="brand-text">Amaidesu</span>
         </div>
@@ -34,7 +34,7 @@
           :content="themeStore.theme === 'light' ? '切换到深色模式' : '切换到浅色模式'"
           placement="bottom"
         >
-          <el-button class="theme-toggle" circle @click="onToggleTheme">
+          <el-button class="theme-toggle" circle aria-label="切换深浅主题" @click="onToggleTheme">
             <!-- 图标随主题旋转换场：月亮转出、太阳转入 -->
             <transition name="theme-icon" mode="out-in">
               <el-icon :key="themeStore.theme">

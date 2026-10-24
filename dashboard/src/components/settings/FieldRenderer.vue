@@ -384,7 +384,9 @@ function setObjectValue(key: string, value: unknown) {
   background: var(--bg-card);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-color-light);
-  transition: all var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
 }
 
 .field-renderer.is-modified {

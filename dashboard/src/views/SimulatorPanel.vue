@@ -173,9 +173,7 @@
             <template #header>
               <div class="card-header-row">
                 <span>常驻观众（SQLite sim_personas 表，增删改即时落库）</span>
-                <el-button type="primary" @click="openPersonaDialog()"
-                  >新增人设</el-button
-                >
+                <el-button type="primary" @click="openPersonaDialog()">新增人设</el-button>
               </div>
             </template>
             <el-table :data="personas" stripe size="small">
@@ -219,9 +217,7 @@
             <template #header>
               <div class="card-header-row">
                 <span>礼物清单（SQLite sim_gifts 表，按权重随机触发）</span>
-                <el-button type="primary" @click="openGiftDialog()"
-                  >新增礼物</el-button
-                >
+                <el-button type="primary" @click="openGiftDialog()">新增礼物</el-button>
               </div>
             </template>
             <el-table :data="gifts" stripe size="small">

@@ -150,7 +150,9 @@ onMounted(() => {
   margin: 2px var(--spacing-sm);
   border-radius: var(--radius-md);
   color: var(--text-regular);
-  transition: all var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast);
 }
 
 .sidebar-menu :deep(.el-menu-item:hover) {
@@ -226,7 +228,9 @@ onMounted(() => {
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast);
 }
 
 .changelog-entry:hover {

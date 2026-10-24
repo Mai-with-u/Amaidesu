@@ -152,6 +152,7 @@ body,
   backdrop-filter: blur(4px);
 }
 
+/* 左侧彩边 = 消息类型的观众可读编码（弹幕流无其他 UI 承载类型信息），经审保留 */
 .message.text {
   border-left: 3px solid #00ff88;
 }

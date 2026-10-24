@@ -590,7 +590,9 @@ onMounted(() => {
   align-items: center;
   gap: var(--spacing-md);
   box-shadow: var(--shadow-sm);
-  transition: all var(--transition-normal);
+  transition:
+    box-shadow var(--transition-normal),
+    border-color var(--transition-normal);
   position: relative;
   overflow: hidden;
 }

@@ -1,9 +1,10 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="UTF-8">
-    <link rel="icon" type="image/png" href="/icon.png">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f5f7fa" />
     <title>Amaidesu Dashboard</title>
     <script>
       // 首帧前定主题：Vue 挂载前就把 data-theme 与 Element Plus 的 dark 类写到 <html>，
@@ -25,6 +26,9 @@
         var root = document.documentElement;
         root.setAttribute('data-theme', theme);
         root.classList.toggle('dark', theme === 'dark');
+        // 浏览器地址栏/系统 UI 随主题同色，避免深色下残留浅色条
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', theme === 'dark' ? '#0d1117' : '#f5f7fa');
       })();
     </script>
   </head>

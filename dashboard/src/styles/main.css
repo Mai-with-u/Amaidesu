@@ -26,8 +26,12 @@ body {
   height: 100%;
 }
 
-/* 深色下原生控件（滚动条、日期选择、复选框）跟着变暗；写在 body 而非 html 上，
+/* 原生控件（滚动条、日期选择、复选框）随主题走；写在 body 而非 html 上，
    OBS 小部件页的透明画布不受影响 */
+[data-theme='light'] body {
+  color-scheme: light;
+}
+
 [data-theme='dark'] body {
   color-scheme: dark;
 }
