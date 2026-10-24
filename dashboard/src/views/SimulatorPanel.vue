@@ -365,7 +365,7 @@
       </el-form>
       <template #footer>
         <el-button @click="personaDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="savePersona">保存</el-button>
+        <el-button type="primary" :loading="personaSaving" @click="savePersona">保存</el-button>
       </template>
     </el-dialog>
 
@@ -418,7 +418,7 @@
       </el-form>
       <template #footer>
         <el-button @click="giftDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveGift">保存</el-button>
+        <el-button type="primary" :loading="giftSaving" @click="saveGift">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -434,7 +434,7 @@
  */
 import { onActivated, onDeactivated, onMounted, reactive, ref, computed } from 'vue';
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
-import { confirmAction } from '@/utils/confirmAction';
+import { useCrudDialog } from '@/composables/useCrudDialog';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { simulatorApi } from '@/api';
 import type { SimulatorReplayProgress, SimPersona, SimGift, ReplayDateEntry } from '@/types';
@@ -463,7 +463,6 @@ const status = reactive<SimulatorStatusState>({
 
 const activeTab = ref('control');
 const toggling = ref<'start' | 'stop' | null>(null);
-const saving = ref(false);
 const lastError = ref('');
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -474,13 +473,9 @@ const loadingDates = ref(false);
 
 // ---- 人设 ----
 const personas = ref<SimPersona[]>([]);
-const personaDialogVisible = ref(false);
-const personaFormOriginalId = ref('');
 
 // ---- 礼物 ----
 const gifts = ref<SimGift[]>([]);
-const giftDialogVisible = ref(false);
-const giftFormOriginalId = ref('');
 
 const personaRoles = [
   { value: 'fan', label: 'fan 粉丝' },
@@ -527,6 +522,123 @@ const giftRules: FormRules = {
   ],
   gift_name: [{ required: true, message: '请输入礼物名称', trigger: 'blur' }],
 };
+
+// 两套实体共用一个 CRUD 弹窗状态机；差异只剩字段映射、payload 组装与文案
+const personaCrud = useCrudDialog({
+  form: personaForm,
+  emptyForm: emptyPersonaForm,
+  formRef: personaFormRef,
+  rowId: (row: SimPersona) => row.user_id,
+  fillForm: (row, form) => {
+    form.user_id = row.user_id;
+    form.user_nickname = row.user_nickname;
+    form.role = row.role;
+    form.personality = row.personality;
+    form.speaking_style = row.speaking_style;
+    form.fans_medal_level = row.fans_medal_level;
+    form.guard_level = row.guard_level;
+  },
+  // 编辑接口不接受 user_id，新建也不需要（服务端生成）
+  createPayload: form => ({
+    user_nickname: form.user_nickname,
+    role: form.role,
+    personality: form.personality,
+    speaking_style: form.speaking_style,
+    fans_medal_level: form.fans_medal_level,
+    guard_level: form.guard_level,
+  }),
+  updatePayload: form => ({
+    user_nickname: form.user_nickname,
+    role: form.role,
+    personality: form.personality,
+    speaking_style: form.speaking_style,
+    fans_medal_level: form.fans_medal_level,
+    guard_level: form.guard_level,
+  }),
+  api: {
+    create: simulatorApi.createPersona,
+    update: simulatorApi.updatePersona,
+    remove: simulatorApi.deletePersona,
+  },
+  refetch: fetchPersonas,
+  messages: {
+    created: '已新增',
+    saved: '已保存',
+    createFailed: '新增失败',
+    saveFailed: '保存失败',
+    saveError: '保存失败',
+    removed: '已删除',
+    removeFailed: '删除失败',
+    removeError: '删除失败',
+    removeConfirm: row => `确认删除人设「${row.user_nickname}」？`,
+  },
+});
+const {
+  dialogVisible: personaDialogVisible,
+  saving: personaSaving,
+  open: openPersonaDialog,
+  save: savePersona,
+  remove: removePersona,
+} = personaCrud;
+
+const giftCrud = useCrudDialog({
+  form: giftForm,
+  emptyForm: emptyGiftForm,
+  formRef: giftFormRef,
+  rowId: (row: SimGift) => row.gift_id,
+  fillForm: (row, form) => {
+    form.gift_id = row.gift_id;
+    form.gift_name = row.gift_name;
+    form.category = row.category;
+    form.weight = row.weight;
+    form.data_type = row.data_type;
+    form.unit_price = row.unit_price;
+    form.sc_amount_rmb = row.sc_amount_rmb ?? undefined;
+  },
+  // 新建由用户指定 gift_id，编辑时主键不可变，故 update payload 不含它
+  createPayload: form => ({
+    gift_id: form.gift_id,
+    gift_name: form.gift_name,
+    category: form.category,
+    weight: form.weight,
+    data_type: form.data_type,
+    unit_price: form.unit_price,
+    sc_amount_rmb: form.sc_amount_rmb ?? null,
+  }),
+  updatePayload: form => ({
+    gift_name: form.gift_name,
+    category: form.category,
+    weight: form.weight,
+    data_type: form.data_type,
+    unit_price: form.unit_price,
+    sc_amount_rmb: form.sc_amount_rmb ?? null,
+  }),
+  api: {
+    create: simulatorApi.createGift,
+    update: simulatorApi.updateGift,
+    remove: simulatorApi.deleteGift,
+  },
+  refetch: fetchGifts,
+  messages: {
+    created: '已新增',
+    saved: '已保存',
+    createFailed: '新增失败',
+    saveFailed: '保存失败',
+    saveError: '保存失败',
+    removed: '已删除',
+    removeFailed: '删除失败',
+    removeError: '删除失败',
+    removeConfirm: row => `确认删除礼物「${row.gift_name}」？`,
+  },
+});
+const {
+  dialogVisible: giftDialogVisible,
+  saving: giftSaving,
+  originalId: giftFormOriginalId,
+  open: openGiftDialog,
+  save: saveGift,
+  remove: removeGift,
+} = giftCrud;
 
 const configMode = computed(() => (status.config.mode as string) ?? '');
 
@@ -705,161 +817,6 @@ async function stopSimulator() {
   } finally {
     toggling.value = null;
     await fetchStatus();
-  }
-}
-
-// ---- 人设 CRUD ----
-
-function openPersonaDialog(row?: SimPersona) {
-  personaFormOriginalId.value = row?.user_id ?? '';
-  Object.assign(personaForm, emptyPersonaForm());
-  if (row) {
-    personaForm.user_id = row.user_id;
-    personaForm.user_nickname = row.user_nickname;
-    personaForm.role = row.role;
-    personaForm.personality = row.personality;
-    personaForm.speaking_style = row.speaking_style;
-    personaForm.fans_medal_level = row.fans_medal_level;
-    personaForm.guard_level = row.guard_level;
-  }
-  personaDialogVisible.value = true;
-}
-
-async function savePersona() {
-  const valid = await personaFormRef.value?.validate().catch(() => false);
-  if (!valid) return;
-  saving.value = true;
-  try {
-    if (personaFormOriginalId.value) {
-      const payload = {
-        user_nickname: personaForm.user_nickname,
-        role: personaForm.role,
-        personality: personaForm.personality,
-        speaking_style: personaForm.speaking_style,
-        fans_medal_level: personaForm.fans_medal_level,
-        guard_level: personaForm.guard_level,
-      };
-      const res = await simulatorApi.updatePersona(personaFormOriginalId.value, payload);
-      if (res.data.success) {
-        ElMessage.success('已保存');
-      } else {
-        ElMessage.warning(res.data.message || '保存失败');
-      }
-    } else {
-      const res = await simulatorApi.createPersona({
-        user_nickname: personaForm.user_nickname,
-        role: personaForm.role,
-        personality: personaForm.personality,
-        speaking_style: personaForm.speaking_style,
-        fans_medal_level: personaForm.fans_medal_level,
-        guard_level: personaForm.guard_level,
-      });
-      if (res.data.success) {
-        ElMessage.success('已新增');
-      } else {
-        ElMessage.warning(res.data.message || '新增失败');
-      }
-    }
-    personaDialogVisible.value = false;
-    await fetchPersonas();
-  } catch (err) {
-    ElMessage.error(getApiErrorMessage(err, '保存失败'));
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function removePersona(row: SimPersona) {
-  const ok = await confirmAction(`确认删除人设「${row.user_nickname}」？`, '删除确认');
-  if (!ok) return;
-  try {
-    const res = await simulatorApi.deletePersona(row.user_id);
-    if (res.data.success) {
-      ElMessage.success('已删除');
-    } else {
-      ElMessage.warning(res.data.message || '删除失败');
-    }
-    await fetchPersonas();
-  } catch (err) {
-    ElMessage.error(getApiErrorMessage(err, '删除失败'));
-  }
-}
-
-// ---- 礼物 CRUD ----
-
-function openGiftDialog(row?: SimGift) {
-  giftFormOriginalId.value = row?.gift_id ?? '';
-  Object.assign(giftForm, emptyGiftForm());
-  if (row) {
-    giftForm.gift_id = row.gift_id;
-    giftForm.gift_name = row.gift_name;
-    giftForm.category = row.category;
-    giftForm.weight = row.weight;
-    giftForm.data_type = row.data_type;
-    giftForm.unit_price = row.unit_price;
-    giftForm.sc_amount_rmb = row.sc_amount_rmb ?? undefined;
-  }
-  giftDialogVisible.value = true;
-}
-
-async function saveGift() {
-  const valid = await giftFormRef.value?.validate().catch(() => false);
-  if (!valid) return;
-  saving.value = true;
-  try {
-    if (giftFormOriginalId.value) {
-      const payload = {
-        gift_name: giftForm.gift_name,
-        category: giftForm.category,
-        weight: giftForm.weight,
-        data_type: giftForm.data_type,
-        unit_price: giftForm.unit_price,
-        sc_amount_rmb: giftForm.sc_amount_rmb ?? null,
-      };
-      const res = await simulatorApi.updateGift(giftFormOriginalId.value, payload);
-      if (res.data.success) {
-        ElMessage.success('已保存');
-      } else {
-        ElMessage.warning(res.data.message || '保存失败');
-      }
-    } else {
-      const res = await simulatorApi.createGift({
-        gift_id: giftForm.gift_id,
-        gift_name: giftForm.gift_name,
-        category: giftForm.category,
-        weight: giftForm.weight,
-        data_type: giftForm.data_type,
-        unit_price: giftForm.unit_price,
-        sc_amount_rmb: giftForm.sc_amount_rmb ?? null,
-      });
-      if (res.data.success) {
-        ElMessage.success('已新增');
-      } else {
-        ElMessage.warning(res.data.message || '新增失败');
-      }
-    }
-    giftDialogVisible.value = false;
-    await fetchGifts();
-  } catch (err) {
-    ElMessage.error(getApiErrorMessage(err, '保存失败'));
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function removeGift(row: SimGift) {
-  const ok = await confirmAction(`确认删除礼物「${row.gift_name}」？`, '删除确认');
-  if (!ok) return;
-  try {
-    const res = await simulatorApi.deleteGift(row.gift_id);
-    if (res.data.success) {
-      ElMessage.success('已删除');
-    } else {
-      ElMessage.warning(res.data.message || '删除失败');
-    }
-    await fetchGifts();
-  } catch (err) {
-    ElMessage.error(getApiErrorMessage(err, '删除失败'));
   }
 }
 
