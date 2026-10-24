@@ -260,7 +260,8 @@ async def test_with_mouth_on_death_goes_to_the_mouth_not_the_planner() -> None:
 
 
 async def test_with_mouth_on_progress_reacts_but_attention_alerts_do_not() -> None:
-    """游戏进展、交付卡住当场反应（Planner 照样被交付唤醒去定夺）；急事提醒与遭遇是同一件事，不另触发。"""
+    """游戏进展、交付卡住当场反应（Planner 照样被交付唤醒去定夺）；急事提醒与遭遇是同一件事，不另触发；
+    游戏 Agent 自己的报错不是游戏里发生的事，既不触发也不进嘴的最近记录。"""
     agent = make_streamer_agent({"mouth": {"enabled": True}})
     reactions: List[str] = []
     agent._mouth.react = lambda key, text, **kw: reactions.append(key)  # type: ignore[union-attr,method-assign]
@@ -269,8 +270,11 @@ async def test_with_mouth_on_progress_reacts_but_attention_alerts_do_not() -> No
     await agent._on_game_event("game.report", report, "minecraft")
     alert = GamePayload(game="minecraft", event_type="attention_required", message="急事处理完了：打完了，没掉血")
     await agent._on_game_event("game.attention_required", alert, "minecraft")
+    error = GamePayload(game="minecraft", event_type="error", message="LLM 推理异常: ValueError: 请求被拒")
+    await agent._on_game_event("game.error", error, "minecraft")
 
     assert reactions == ["game:report"] and agent._game_decision_pending is True
+    assert all("LLM 推理异常" not in record.text for record in agent._mouth._records)  # type: ignore[union-attr]
 
 
 async def test_viewer_messages_go_into_the_mouth_records() -> None:

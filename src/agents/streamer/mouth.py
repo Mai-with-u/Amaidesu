@@ -42,8 +42,9 @@ MOUTH_TEMPLATE = "amaidesu_mouth"
 URGENT_BODY_KINDS = frozenset({"attacked", "died", "respawned", "dimension_changed", "need_unhandled"})
 #: 现场一下子变了的遭遇：读到就立即重读一句话现场
 SCENE_CHANGING_BODY_KINDS = frozenset({"died", "respawned", "dimension_changed"})
-#: 游戏进展类事件里要当场反应的：进展、交付或卡住、出错（急事提醒和遭遇说的是同一件事，不另触发）
-URGENT_GAME_TYPES = frozenset({"milestone", "report", "error"})
+#: 游戏进展类事件里要当场反应的：进展、交付或卡住（急事提醒和遭遇说的是同一件事，不另触发）。
+#: 游戏 Agent 自己出的错（模型调用失败、请求被拒）不是游戏里发生的事，不给嘴，由 Planner 看着处理
+URGENT_GAME_TYPES = frozenset({"milestone", "report"})
 
 #: 事件到了先等这么久再生成：同一瞬间连发的几条并成一个由头
 _DEBOUNCE_S = 0.3
