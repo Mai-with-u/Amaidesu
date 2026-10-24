@@ -1,12 +1,13 @@
-"""LLM 客户端抽象与遗留共享响应模型。
+"""LLM 客户端抽象与共享响应模型。
 
 Client 接口（Engine↔Client 契约）采用中立 payload：客户端接受
 ``GenerateRequest``、返回 ``payload.Response``。实现类在
 ``clients/<vendor>/`` 中注册到 ``clients`` 包的调度表（显式字典），
 本模块不再承载任何注册表机制。
 
-``LLMResponse`` 是遗留响应形状（消费方与既有测试尚未迁移），由
-Engine 在新旧契约之间做双向适配；其退役随消费方迁移逐步完成。
+``LLMResponse`` 是 OpenAI 适配端内部 SDK 结果的归拢形态：适配端把各
+协议响应整理成它，再在公开边界转换为 ``payload.Response``；引擎与
+消费方一律只见中立契约。
 """
 
 from __future__ import annotations
@@ -23,10 +24,10 @@ OnDeltaCallback = Any
 
 
 class LLMResponse(BaseModel):
-    """LLM 响应结果（遗留形状）
+    """LLM 响应结果（OpenAI 适配端内部形态）
 
-    旧入口（``chat`` / ``chat_messages`` 等）与既有消费方仍依赖此形状；
-    新入口统一返回 ``payload.Response``。两者之间的转换由 Engine 负责。
+    适配端以它归拢 SDK 响应，公开边界统一转成 ``payload.Response``；
+    引擎与消费方不直接消费此形状。
     """
 
     success: bool

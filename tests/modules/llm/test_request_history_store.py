@@ -12,7 +12,7 @@ from src.modules.storage.database import SQLiteDatabase
 
 @pytest.fixture
 def manager(store: SQLiteDatabase) -> RequestHistoryManager:
-    return RequestHistoryManager(use_global=False, llm_repo=store.llm)
+    return RequestHistoryManager(llm_repo=store.llm)
 
 
 def _record(request_id: str, *, ts_ms: int, model: str = "glm-x", success: bool = True, tokens: int = 10, **kwargs):
@@ -150,7 +150,7 @@ async def test_request_stats_by_ids_from_store(store, manager) -> None:
 
 
 async def test_without_store_queries_fall_back_to_memory_cache() -> None:
-    manager = RequestHistoryManager(use_global=False, llm_repo=None)
+    manager = RequestHistoryManager(llm_repo=None)
     manager.record_request(_record("req-cache", ts_ms=1_000, tokens=8))
     assert manager.get_cache_size() == 1
 

@@ -11,7 +11,7 @@ import pytest
 import src.modules.dashboard.api.llm as llm_api
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.llm.quota import ProviderQuota, QuotaWindow
-from src.modules.llm.request_history_manager import get_global_request_history_manager
+from src.modules.llm.request_history_manager import RequestHistoryManager
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.repos.llm import LLMRequestInsert, LLMUsageInsert
 
@@ -35,15 +35,15 @@ def _isolate_context_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 async def llm_client(api, store: SQLiteDatabase, event_bus):
-    """llm_client(windows=None)：/history* 经全局 history_manager 读库，与组合根同款注入。"""
-    get_global_request_history_manager().attach_repo(store.llm)
+    """llm_client(windows=None)：/history* 经注入的 history_manager 读库，与组合根同款注入。"""
 
     async def _make(windows: Dict[str, int] | None = None):
-        extra = {"llm_manager": _FakeLLMManager(windows)} if windows else {}
+        extra: Dict[str, Any] = {"request_history_manager": RequestHistoryManager(llm_repo=store.llm)}
+        if windows:
+            extra["llm_manager"] = _FakeLLMManager(windows)
         return await api(event_bus=event_bus, llm_repo=store.llm, **extra)
 
     yield _make
-    get_global_request_history_manager().attach_repo(None)
 
 
 async def _seed_call(

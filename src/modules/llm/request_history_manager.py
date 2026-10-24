@@ -2,14 +2,11 @@
 LLM 请求历史记录管理器
 
 负责记录每次 LLM 请求的完整信息，包括请求参数、响应内容、Token 使用量、费用等。
-持久化目标是 SQLite ``llm_requests`` 表（组合根经 ``attach_repo`` 注入）；
+持久化目标是 SQLite ``llm_requests`` 表（组合根构造时注入 ``llm_repo``）；
 未注入时仅保留内存环形缓存（查询范围随之受限）。
 
-全局管理器使用方式：
-1. 直接创建 RequestHistoryManager() - 会自动使用全局实例
-2. 使用 get_global_request_history_manager() - 显式获取全局实例
-
-注意：所有地方都应该使用全局实例以确保数据一致性
+实例经构造器注入持有方（LLMManager 写入、DashboardServer 查询），
+组合根构造一份共享实例分别传入，不做全局单例。
 """
 
 import uuid
@@ -27,22 +24,6 @@ from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.storage.repos import LLMRepo
-
-# 全局请求历史记录管理器实例
-global_request_history_manager: Optional["RequestHistoryManager"] = None
-
-
-def get_global_request_history_manager() -> "RequestHistoryManager":
-    """获取全局请求历史记录管理器实例
-
-    这是获取全局请求历史记录管理器的推荐方式。
-    确保所有地方都使用同一个实例以保持数据一致性。
-    """
-    global global_request_history_manager
-    if global_request_history_manager is None:
-        global_request_history_manager = RequestHistoryManager(use_global=False)
-    return global_request_history_manager
-
 
 CACHE_SIZE = 100  # 内存缓存大小
 
@@ -188,7 +169,6 @@ class RequestHistoryManager:
 
     def __init__(
         self,
-        use_global: bool = True,
         cache_size: int = CACHE_SIZE,
         enabled: bool = True,
         llm_repo: Optional["LLMRepo"] = None,
@@ -196,17 +176,10 @@ class RequestHistoryManager:
         """初始化请求历史记录管理器
 
         Args:
-            use_global: 是否使用全局实例
             cache_size: 内存缓存大小
             enabled: 是否启用记录功能。测试环境关闭以避免污染数据库
             llm_repo: 持久化目标（LLMRepo）；未注入时仅内存缓存（可后续 attach_repo）
         """
-        # 如果使用全局实例且已存在，则返回现有实例
-        global global_request_history_manager
-        if use_global and global_request_history_manager is not None:
-            self.__dict__.update(global_request_history_manager.__dict__)
-            return
-
         # 初始化 logger
         self.logger = get_logger("RequestHistoryManager")
 
@@ -221,10 +194,6 @@ class RequestHistoryManager:
 
         # fire-and-forget 后台任务强引用（防 GC 中途回收 + 异常可见化）
         self._bg_tasks: set = set()
-
-        # 如果使用全局实例，保存到全局变量
-        if use_global:
-            global_request_history_manager = self
 
     def attach_repo(self, llm_repo: Optional["LLMRepo"]) -> None:
         """组合根注入持久化目标（全局单例可能先于组合根被惰性创建）。"""
