@@ -111,9 +111,9 @@
         :has-newer="windowHasNewer"
         :window-active="windowActive"
         :exhausted-text="exhaustedText"
-        @load-older="onLoadOlder"
-        @load-newer="onLoadNewer"
-        @jump="onJump"
+        @load-older="loadOlder"
+        @load-newer="loadNewer"
+        @jump="jump"
         @exit="onExitWindow"
       />
       <span v-if="persistAvailable === false" class="persist-note"
@@ -161,8 +161,7 @@
                 <pre
                   class="log-message"
                   :class="{ expanded: expandedLogs.has(messageKey(row.entries[0]!)) }"
-                  >{{ row.entries[0]!.message }}</pre
-                >
+                  >{{ row.entries[0]!.message }}</pre>
                 <span class="row-hints">
                   <span
                     v-if="row.entries.length > 1"
@@ -196,8 +195,7 @@
                   <pre
                     class="log-message"
                     :class="{ expanded: expandedLogs.has(messageKey(entry)) }"
-                    >{{ entry.message }}</pre
-                  >
+                    >{{ entry.message }}</pre>
                   <span v-if="shouldShowExpand(entry.message)" class="expand-hint">
                     {{ expandedLogs.has(messageKey(entry)) ? '点击收起' : '点击展开' }}
                   </span>
@@ -228,6 +226,7 @@ import { confirmAction } from '@/utils/confirmAction';
 import { storeToRefs } from 'pinia';
 import { useLogsStore, type LogEntry } from '@/stores/logs';
 import { collapseAdjacentLogs } from '@/utils/logCollapse';
+import { useLogStreamQuery } from '@/composables/useLogStreamQuery';
 
 const logsStore = useLogsStore();
 const {
@@ -313,9 +312,28 @@ const scrollModeIcon = computed(() =>
   isRealtimeScroll.value ? markRaw(RefreshRight) : markRaw(Unlock),
 );
 
-// 显示列表：历史浏览窗口优先，否则实时尾部
-const displayLogs = computed<LogEntry[]>(() => windowLogs.value ?? logs.value);
-const windowActive = computed(() => windowLogs.value !== null);
+// 显示列表/筛选/计数/翻页锚定：共享查询机械（谓词为本页域知识）
+const {
+  displayItems: displayLogs,
+  windowActive,
+  filteredItems: filteredLogs,
+  countBy,
+  scrollListTo,
+  loadOlder,
+  loadNewer,
+  jump,
+} = useLogStreamQuery({
+  live: logs,
+  window: windowLogs,
+  fetchOlder: () => logsStore.fetchOlder(),
+  fetchNewer: () => logsStore.fetchNewer(),
+  jumpTo: timestampMs => logsStore.jumpTo(timestampMs),
+  listEl: logListRef,
+  predicates: [
+    log => selectedLevels.value.length === 0 || selectedLevels.value.includes(log.level),
+    log => selectedModules.value.length === 0 || selectedModules.value.includes(log.module),
+  ],
+});
 
 // 更早耗尽提示：窗口起点随查询口径变化（默认启动、跳转后为所选时刻），文案不写死
 const exhaustedText = computed(
@@ -324,27 +342,12 @@ const exhaustedText = computed(
 
 // 级别/模块计数基于当前显示列表
 function getLevelCount(level: string): number {
-  return displayLogs.value.filter(log => log.level === level).length;
+  return countBy(log => log.level === level);
 }
 
 function getModuleCount(module: string): number {
-  return displayLogs.value.filter(log => log.module === module).length;
+  return countBy(log => log.module === module);
 }
-
-// 筛选后的日志列表（级别/模块为客户端筛选；搜索态正文筛选已在服务端完成）
-const filteredLogs = computed(() => {
-  let result = displayLogs.value;
-
-  if (selectedLevels.value.length > 0) {
-    result = result.filter(log => selectedLevels.value.includes(log.level));
-  }
-
-  if (selectedModules.value.length > 0) {
-    result = result.filter(log => selectedModules.value.includes(log.module));
-  }
-
-  return result;
-});
 
 // 同因折叠：相邻同级别/同模块/同正文合并为一组
 const collapsedRows = computed(() => collapseAdjacentLogs(filteredLogs.value));
@@ -371,18 +374,6 @@ function onSearchClear() {
   if (!isSearchMode.value) return;
   isSearchMode.value = false;
   logsStore.exitWindow();
-}
-
-function onLoadOlder() {
-  void logsStore.fetchOlder().then(() => scrollListTo('top'));
-}
-
-function onLoadNewer() {
-  void logsStore.fetchNewer().then(() => scrollListTo('bottom'));
-}
-
-function onJump(timestampMs: number) {
-  void logsStore.jumpTo(timestampMs).then(() => scrollListTo('top'));
 }
 
 function onExitWindow() {
@@ -487,12 +478,7 @@ function toggleGroupExpand(key: string) {
 // 滚动
 // ------------------------------------------------------------------
 
-function scrollListTo(position: 'top' | 'bottom') {
-  void nextTick(() => {
-    if (!logListRef.value) return;
-    logListRef.value.scrollTop = position === 'top' ? 0 : logListRef.value.scrollHeight;
-  });
-}
+// 滚动锚定已收进 useLogStreamQuery（scrollListTo 随需解构；翻页/跳转自动锚定）
 
 // 自动滚动到底部 - 使用 requestAnimationFrame 节流，避免强制同步布局
 let scrollRAFId: number | null = null;

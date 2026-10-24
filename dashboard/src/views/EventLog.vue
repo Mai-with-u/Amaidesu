@@ -109,9 +109,9 @@
         :has-newer="windowHasNewer"
         :window-active="windowActive"
         exhausted-text="已到可查范围最早的记录（默认范围=本次启动，更早请用时间跳转）"
-        @load-older="onLoadOlder"
-        @load-newer="onLoadNewer"
-        @jump="onJump"
+        @load-older="loadOlder"
+        @load-newer="loadNewer"
+        @jump="jump"
         @exit="onExitWindow"
       />
     </section>
@@ -172,6 +172,8 @@ import { Document, VideoPause, VideoPlay, Search, Delete, Refresh } from '@eleme
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
+import { EVENT } from '@/types/events';
+import { useLogStreamQuery } from '@/composables/useLogStreamQuery';
 import { debugApi } from '@/api';
 import { confirmAction } from '@/utils/confirmAction';
 import type { EventBusStatsResponse } from '@/types';
@@ -251,9 +253,32 @@ const MAX_RENDER_ROWS = 400;
 // 动态图标
 const pausePlayIcon = computed(() => (isPaused.value ? markRaw(VideoPlay) : markRaw(VideoPause)));
 
-// 显示列表：历史浏览窗口优先，否则实时缓冲
-const displayEvents = computed(() => windowEvents.value ?? events.value);
-const windowActive = computed(() => windowEvents.value !== null);
+// 显示列表/筛选/计数/翻页锚定：共享查询机械（谓词为本页域知识）
+const {
+  displayItems: displayEvents,
+  windowActive,
+  filteredItems: filteredEvents,
+  countBy,
+  loadOlder,
+  loadNewer,
+  jump,
+} = useLogStreamQuery({
+  live: events,
+  window: windowEvents,
+  fetchOlder: () => eventsStore.fetchOlder(),
+  fetchNewer: () => eventsStore.fetchNewer(),
+  jumpTo: timestampMs => eventsStore.jumpTo(timestampMs),
+  listEl: eventListRef,
+  predicates: [
+    event => selectedTypes.value.length === 0 || selectedTypes.value.includes(event.type),
+    event => {
+      if (!searchQuery.value.trim()) return true;
+      const query = searchQuery.value.toLowerCase();
+      if (event.type.toLowerCase().includes(query)) return true;
+      return JSON.stringify(event.data).toLowerCase().includes(query);
+    },
+  ],
+});
 
 // 获取显示列表中出现过的唯一事件类型（动态生成）
 const availableEventTypes = computed(() => {
@@ -266,7 +291,7 @@ const availableEventTypes = computed(() => {
 
 // 获取某个事件类型的数量
 function getEventTypeCount(type: string): number {
-  return displayEvents.value.filter(e => e.type === type).length;
+  return countBy(event => event.type === type);
 }
 
 // EventBus 累计统计（进程启动以来的发射/订阅计数；与上方会话内实时流计数互补）
@@ -292,25 +317,7 @@ async function fetchBusStats(): Promise<void> {
   }
 }
 
-// 筛选后的事件列表（正文/类型为客户端筛选，作用于显示列表）
-const filteredEvents = computed(() => {
-  let result = displayEvents.value;
-
-  if (selectedTypes.value.length > 0) {
-    result = result.filter(event => selectedTypes.value.includes(event.type));
-  }
-
-  if (searchQuery.value.trim()) {
-    const query = searchQuery.value.toLowerCase();
-    result = result.filter(event => {
-      if (event.type.toLowerCase().includes(query)) return true;
-      const dataStr = JSON.stringify(event.data).toLowerCase();
-      return dataStr.includes(query);
-    });
-  }
-
-  return result;
-});
+// 筛选后的事件列表由 useLogStreamQuery 的 filteredEvents 承载（谓词见上）
 
 // 渲染窗口：取筛选结果最新一端，超出上限时提示
 const visibleEvents = computed(() => {
@@ -323,18 +330,6 @@ const renderTrimmed = computed(() => filteredEvents.value.length > MAX_RENDER_RO
 // ------------------------------------------------------------------
 // 动作
 // ------------------------------------------------------------------
-
-function onLoadOlder() {
-  void eventsStore.fetchOlder().then(() => scrollListTo('top'));
-}
-
-function onLoadNewer() {
-  void eventsStore.fetchNewer().then(() => scrollListTo('bottom'));
-}
-
-function onJump(timestampMs: number) {
-  void eventsStore.jumpTo(timestampMs).then(() => scrollListTo('top'));
-}
 
 function onExitWindow() {
   eventsStore.exitWindow();
@@ -390,11 +385,11 @@ function formatEventTime(timestampMs: number): string {
   return hms;
 }
 
-// 获取事件类型的 CSS 类（v2 事件族颜色映射；core.* 经 WS 包装为 system.*）
+// 获取事件类型的 CSS 类（v2 事件族颜色映射）
 function getEventClass(type: string): string {
   if (type.startsWith('room.message')) return 'type-collector';
-  if (type === 'streamer.speech') return 'type-agent';
-  if (type === 'rundown.changed') return 'type-agent';
+  if (type === EVENT.streamerSpeech) return 'type-agent';
+  if (type === EVENT.rundownChanged) return 'type-agent';
   if (type.startsWith('planner')) return 'type-agent';
   if (type.startsWith('tool.result')) return 'type-tool';
   if (type.startsWith('tts.utterance')) return 'type-tool';
@@ -438,12 +433,7 @@ function toggleEventExpand(key: string) {
 // 滚动
 // ------------------------------------------------------------------
 
-function scrollListTo(position: 'top' | 'bottom') {
-  void nextTick(() => {
-    if (!eventListRef.value) return;
-    eventListRef.value.scrollTop = position === 'top' ? 0 : eventListRef.value.scrollHeight;
-  });
-}
+// 滚动锚定已收进 useLogStreamQuery（scrollListTo 随需解构；翻页/跳转自动锚定）
 
 // 自动滚动到底部 - 使用 requestAnimationFrame 节流
 let scrollRAFId: number | null = null;
