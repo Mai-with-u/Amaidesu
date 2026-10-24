@@ -1,4 +1,4 @@
-<!-- 游戏 Agent 上报（game.*）：绿色系左边线，act 卡形态变体 -->
+<!-- 游戏 Agent 上报（game.*）：游戏域色（粉）左边线，act 卡形态变体 -->
 <script setup lang="ts">
 import { relativeTime } from '@/utils/liveFeed';
 import type { CardProps } from './registry';

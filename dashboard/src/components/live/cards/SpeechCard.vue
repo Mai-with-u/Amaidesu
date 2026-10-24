@@ -72,13 +72,20 @@ const host = useTimelineCardHost();
 </template>
 
 <style scoped>
+/* 发言卡面级色：绿 = 产出/成功语义（"说出来了"）。与工具边线、成功徽标同属
+ * 绿色语义族，底色面/边线/徽标是同一语义的三个处理档位 */
+.act.is-speech {
+  background: var(--color-tool-bg);
+  border-left: 2px solid var(--color-tool);
+}
+
 .act-emotion {
   padding: 0 6px;
   border-radius: var(--radius-sm);
   font-size: 11px;
   font-weight: 600;
-  color: var(--color-agent);
-  background: var(--color-agent-bg);
+  color: var(--color-tool);
+  background: var(--color-tool-bg);
   flex-shrink: 0;
 }
 

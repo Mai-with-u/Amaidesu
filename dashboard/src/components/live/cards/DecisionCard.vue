@@ -140,7 +140,7 @@ const host = useTimelineCardHost();
 </template>
 
 <style scoped>
-/* 决策卡走中性灰系：决策是主播的内部盘算（不播出），紫色只留给真正说出口的发言卡——
+/* 决策卡走中性灰系：决策是主播的内部盘算（未发声不染产出色），产出绿只给说出口的发言卡——
  * "想的"与"说的"靠底色一眼分层，不依赖读头部标签 */
 .decision.is-failed {
   background: var(--color-danger-bg);

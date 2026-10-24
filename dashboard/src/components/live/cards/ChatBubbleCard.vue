@@ -137,7 +137,7 @@ defineProps<CardProps>();
   color: var(--text-primary);
 }
 
-/* --- 上舰（guard）：付费卡片形态，绿色系（与游戏域同色系区分于礼物暖色/SC 红色） --- */
+/* --- 上舰（guard）：付费卡片形态，安全绿色系（区别于礼物暖色/SC 红色） --- */
 .chat--guard {
   max-width: 90%;
 }
@@ -165,7 +165,7 @@ defineProps<CardProps>();
   color: var(--text-primary);
 }
 
-/* --- 游戏内聊天（game_chat）：与 B 站弹幕区分的游戏域绿色系 --- */
+/* --- 游戏内聊天（game_chat）：与 B 站弹幕区分的游戏域色（粉） --- */
 .chat--game_chat {
   max-width: 82%;
 }

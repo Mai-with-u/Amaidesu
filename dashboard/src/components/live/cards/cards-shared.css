@@ -73,7 +73,7 @@
   color: var(--color-tool);
 }
 
-/* 游戏 Agent 上报变体：绿色系左边线 + 浅绿底 */
+/* 游戏 Agent 上报变体：游戏域色（粉）左边线 + 浅粉底 */
 .feed-timeline .act.is-agent-game {
   background: var(--color-game-bg);
   border-left-color: var(--color-game);
@@ -83,7 +83,7 @@
   border-left-color: var(--color-danger);
 }
 
-/* 决策/响应卡框架：中性灰系——决策是主播的内部盘算（不播出），游戏域响应走绿变体 */
+/* 决策/响应卡框架：决策是主播的内部盘算（未发声不染产出色，走中性灰），响应走游戏域色变体 */
 .feed-timeline .decision {
   margin-left: 38px; /* 28px 头像 + 10px 间距：与气泡体对齐 */
   max-width: 92%;
@@ -113,7 +113,7 @@
   flex-shrink: 0;
 }
 .feed-timeline .act-kind--speech {
-  color: var(--color-agent);
+  color: var(--color-tool);
 }
 .feed-timeline .act-kind--game {
   color: var(--color-game);

@@ -58,7 +58,7 @@ const running = computed(() => props.entry.kind === 'stage' && props.entry.speak
   gap: 10px;
   min-height: 18px;
 }
-/* 游戏身体事件：轻量行游戏绿色系；死亡（阵亡）红色醒目 */
+/* 游戏身体事件：轻量行游戏域色（粉）；死亡（阵亡）红色醒目 */
 .whisper.is-body-event .whisper-text {
   color: var(--color-game);
 }
