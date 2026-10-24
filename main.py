@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger as loguru_logger
 
 from src.modules.agents.companions import companion_names, register_companions
+from src.modules.agents.deps import AgentDeps
 from src.modules.agents.factory import instantiate_agent
 from src.modules.agents.manager import AgentManager
 from src.modules.collectors.factory import instantiate_collector
@@ -627,32 +628,50 @@ async def create_app_components(
         task_tracker.start()
         logger.info(f"任务跟踪循环已启动（poll_interval_ms={tasks_poll_ms}, wait_timeout_ms={tasks_wait_ms}）")
 
+        # speech_config 推导（组合根职责）：兜底与 Schema 默认一致
+        # （render_timeout_ms 防引擎卡死的上限语义；wait_playback* 发言等
+        # 播放的背压语义，0 = 不限时的约定同上）
+        _tts = tts_section if isinstance(tts_section, dict) else {}
+        _speech_cfg = {
+            "enabled": bool(_tts.get("enabled", False)),
+            "max_queue": int(_tts.get("max_queue", 3) or 3),
+            "render_timeout_ms": int(_tts.get("render_timeout_ms", 60000) or 0),
+            "wait_playback": bool(_tts.get("wait_playback", True)),
+            "wait_playback_timeout_ms": int(_tts.get("wait_playback_timeout_ms", 60000) or 0),
+        }
         await _register_agents_from_config(
             agent_manager,
             agents_config,
             config_service,
-            llm_service,
-            event_bus,
-            tool_registry,
-            task_tracker,
-            task_ledger,
-            tts_section=tts_section,
-            tts_engine=tts_engine,
-            # 有 TTS 时字幕走播放事件跟随器，编排层不再直出（互斥择流）
-            subtitle_service=None if subtitle_follows_playback else subtitle_service,
-            session_manager=session_manager,
-            rundown_repo=database.rundowns,
-            rundown_instance_repo=database.rundown_instances,
-            rundown_transition_repo=database.rundown_transitions,
-            chat_repo=database.chat,
-            sessions_repo=database.sessions,
-            topic_repo=database.topics,
-            viewer_repo=database.viewers,
-            # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）
-            viewer_profile_repo=database.viewer_profiles,
-            recap_repo=database.recaps,
-            event_repo=database.events,
-            thinking_sink=thinking_hub,
+            deps=AgentDeps(
+                llm_manager=llm_service,
+                prompt_manager=get_prompt_manager(),
+                event_bus=event_bus,
+                tool_registry=tool_registry,
+                thinking_sink=thinking_hub,
+                speech_config=_speech_cfg,
+                tts_engine=tts_engine,
+                # 有 TTS 时字幕走播放事件跟随器，编排层不再直出（互斥择流）
+                subtitle_service=None if subtitle_follows_playback else subtitle_service,
+                session_manager=session_manager,
+                # 仓储四件（对话历史/流程单/场次状态/话题快照的读侧面）；
+                # chat_repo 缺失 = StreamerAgent 历史读取整体短路
+                rundown_repo=database.rundowns,
+                rundown_instance_repo=database.rundown_instances,
+                rundown_transition_repo=database.rundown_transitions,
+                chat_repo=database.chat,
+                sessions_repo=database.sessions,
+                topic_repo=database.topics,
+                viewer_repo=database.viewers,
+                # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）
+                viewer_profile_repo=database.viewer_profiles,
+                recap_repo=database.recaps,
+                event_repo=database.events,
+                # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
+                context_assembler_config=None,
+                task_tracker=task_tracker,
+                task_ledger=task_ledger,
+            ),
         )
 
         # --- 核心域工具（avatar 平台名单 / studio 域开关，L2 Provider）---
@@ -1081,51 +1100,20 @@ async def _register_agents_from_config(
     manager,
     config_section,
     config_service,
-    llm_service,
-    event_bus,
-    tool_registry=None,
-    task_tracker=None,
-    task_ledger=None,
-    *,
-    tts_section: Optional[Dict[str, Any]] = None,
-    tts_engine: Optional[Any] = None,
-    subtitle_service: Optional[Any] = None,
-    session_manager: Optional[Any] = None,
-    rundown_repo: Optional[Any] = None,
-    rundown_instance_repo: Optional[Any] = None,
-    rundown_transition_repo: Optional[Any] = None,
-    chat_repo: Optional[Any] = None,
-    sessions_repo: Optional[Any] = None,
-    topic_repo: Optional[Any] = None,
-    viewer_repo: Optional[Any] = None,
-    viewer_profile_repo: Optional[Any] = None,
-    recap_repo: Optional[Any] = None,
-    event_repo: Optional[Any] = None,
-    thinking_sink: Optional[Any] = None,
+    deps: "AgentDeps",
 ):
     """根据 [agents] 段注册 Agent 实例到 AgentManager。
 
     构造本身委托 ``factory.instantiate_agent``（与 Dashboard 动态启用
-    enable_agent 同一构造路径），本函数只负责遍历 enabled 列表、
-    收集基础设施服务并落注册元数据。
+    enable_agent 同一构造路径），本函数只负责遍历 enabled 列表并落注册
+    元数据；基础设施依赖经 ``deps``（``AgentDeps`` 值对象）整体透传给
+    工厂——调用方（组合根）负责按启动语义填齐，本函数不改写、不回退。
 
     [agents] 段结构（扁平：每个 Agent 一份顶级子配置）：
         enabled = ["streamer", "minecraft", "text_adv"]
         [agents.streamer]  = { 完整子树（persona / context / background / ...） }
         [agents.minecraft] = { max_steps = 50, mcp = {...} }
         [agents.text_adv]  = { monitor_index, region, keys, stability_*, no_change_limit, auto_button_xy, game_window_title_keyword }
-
-    viewer_profile_repo / recap_repo / event_repo 为主播记忆（观众画像 / 场次
-    回顾）与游戏事件的仓储，仅 streamer Agent 消费。
-
-    tts_section 为核心 ``[tts]`` 段，仅 streamer Agent 在构造时消费
-    ``speech_config``（enabled / max_queue / render_timeout_ms）。
-    tts_engine 为对应 Provider 实例（由 build_tts_infrastructure 构造），
-    streamer Agent 直接持有并由编排队列调用其 ``handle_speech``。
-
-    subtitle_service 为字幕基础设施实例（由 build_subtitle_infrastructure
-    构造）；streamer Agent 在编排路径上调用其 ``show`` / ``clear``，
-    与 TTS 关闭正交——字幕关闭不影响业务事件与 TTS 入队。
     """
     enabled_list = config_section.get("enabled", []) or []
     for agent_name in enabled_list:
@@ -1136,47 +1124,7 @@ async def _register_agents_from_config(
         if meta is None:
             logger.warning(f"未知的 Agent 类型: {agent_name}（升级 hook 应已过滤 maibot 等）")
             continue
-        tts = tts_section if isinstance(tts_section, dict) else {}
-        # 兜底与 Schema 默认一致（render_timeout_ms 防引擎卡死的上限语义；
-        # wait_playback* 发言等播放的背压语义，0 = 不限时的约定同上）
-        speech_cfg = {
-            "enabled": bool(tts.get("enabled", False)),
-            "max_queue": int(tts.get("max_queue", 3) or 3),
-            "render_timeout_ms": int(tts.get("render_timeout_ms", 60000) or 0),
-            "wait_playback": bool(tts.get("wait_playback", True)),
-            "wait_playback_timeout_ms": int(tts.get("wait_playback_timeout_ms", 60000) or 0),
-        }
-        agent = instantiate_agent(
-            agent_name,
-            sub_cfg,
-            llm_manager=llm_service,
-            prompt_manager=get_prompt_manager(),
-            event_bus=event_bus,
-            tool_registry=tool_registry,
-            thinking_sink=thinking_sink,
-            speech_config=speech_cfg,
-            tts_engine=tts_engine,
-            # 调用方已按装配期择流传入（有 TTS → None，字幕走播放事件跟随器）
-            subtitle_service=subtitle_service,
-            session_manager=session_manager,
-            # 仓储四件（对话历史/流程单/场次状态/话题快照的读侧面）；
-            # chat_repo 缺失 = StreamerAgent 历史读取整体短路
-            rundown_repo=rundown_repo,
-            rundown_instance_repo=rundown_instance_repo,
-            rundown_transition_repo=rundown_transition_repo,
-            chat_repo=chat_repo,
-            sessions_repo=sessions_repo,
-            topic_repo=topic_repo,
-            viewer_repo=viewer_repo,
-            # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）
-            viewer_profile_repo=viewer_profile_repo,
-            recap_repo=recap_repo,
-            event_repo=event_repo,
-            # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
-            context_assembler_config=None,
-            task_tracker=task_tracker,
-            task_ledger=task_ledger,
-        )
+        agent = instantiate_agent(agent_name, sub_cfg, deps=deps)
         if agent is None:
             logger.warning(f"Agent '{agent_name}' 实例化失败（工厂未返回实例）")
             continue

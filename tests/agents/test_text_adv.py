@@ -22,6 +22,7 @@ from src.agents.text_adv import (
 from src.agents.text_adv.input import FakeInputBackend
 from src.agents.text_adv.vlm import FakeVisionReader, ScreenReading
 from src.agents.text_adv.window import FakeWindowBackend
+from src.modules.agents.deps import AgentDeps
 from src.modules.agents.factory import instantiate_agent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -134,9 +135,7 @@ def test_metadata_builder_and_factory_wiring(monkeypatch: pytest.MonkeyPatch) ->
     agent = instantiate_agent(
         "text_adv",
         {"stability_sample_ms": 10, "stability_consecutive": 2, "stability_timeout_ms": 120},
-        llm_manager=object(),
-        prompt_manager=object(),
-        tool_registry=registry,
+        deps=AgentDeps(llm_manager=object(), prompt_manager=object(), tool_registry=registry),
     )
 
     async def run() -> list[str]:

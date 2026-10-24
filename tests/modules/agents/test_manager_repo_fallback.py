@@ -84,10 +84,11 @@ async def test_enable_agent_repos_fallback_to_members(manager_with_repos) -> Non
     """Dashboard 场景：不传记忆仓储 → 工厂收到成员对象。"""
     mgr, calls = manager_with_repos
     assert await _enable(mgr) is True
-    assert calls[0]["viewer_profile_repo"] is mgr._viewer_profile_repo
-    assert calls[0]["recap_repo"] is mgr._recap_repo
-    assert calls[0]["event_repo"] is mgr._event_repo
-    assert calls[0]["tool_registry"] is mgr._tool_registry
+    resolved = calls[0]["deps"]
+    assert resolved.viewer_profile_repo is mgr._viewer_profile_repo
+    assert resolved.recap_repo is mgr._recap_repo
+    assert resolved.event_repo is mgr._event_repo
+    assert resolved.tool_registry is mgr._tool_registry
 
 
 @pytest.mark.asyncio
@@ -95,10 +96,11 @@ async def test_enable_agent_explicit_overrides_members(manager_with_repos) -> No
     mgr, calls = manager_with_repos
     explicit_recap, explicit_reg = object(), ToolRegistry()
     await _enable(mgr, recap_repo=explicit_recap, tool_registry=explicit_reg)
-    assert calls[0]["recap_repo"] is explicit_recap
-    assert calls[0]["tool_registry"] is explicit_reg
+    resolved = calls[0]["deps"]
+    assert resolved.recap_repo is explicit_recap
+    assert resolved.tool_registry is explicit_reg
     # 未显式传的仍回退成员
-    assert calls[0]["viewer_profile_repo"] is mgr._viewer_profile_repo
+    assert resolved.viewer_profile_repo is mgr._viewer_profile_repo
 
 
 @pytest.mark.asyncio
@@ -108,20 +110,24 @@ async def test_enable_agent_without_members_passes_none(stub_factory) -> None:
     patcher.start()
     try:
         await _enable(AgentManager())
-        assert calls[0]["recap_repo"] is None
-        assert calls[0]["viewer_profile_repo"] is None
-        assert calls[0]["tool_registry"] is None
+        resolved = calls[0]["deps"]
+        assert resolved.recap_repo is None
+        assert resolved.viewer_profile_repo is None
+        assert resolved.tool_registry is None
     finally:
         patcher.stop()
 
 
-def test_factory_signature_accepts_memory_repos() -> None:
-    """``instantiate_agent`` 接受主播记忆两仓储 + 游戏事件仓储（关键字、默认 None），不再有 memory 参数。"""
+def test_factory_signature_takes_single_deps_value_object() -> None:
+    """``instantiate_agent`` 的基建签名收敛为单一 ``deps`` 值对象；记忆两仓储与游戏事件仓储在 AgentDeps 字段里。"""
+    from src.modules.agents.deps import AgentDeps
     from src.modules.agents.factory import instantiate_agent
 
     params = inspect.signature(instantiate_agent).parameters
+    assert list(params) == ["name", "config", "deps"]
+    assert params["deps"].kind == inspect.Parameter.KEYWORD_ONLY
+    fields = AgentDeps.__dataclass_fields__
     for name in ("viewer_profile_repo", "recap_repo", "event_repo"):
-        assert params[name].kind == inspect.Parameter.KEYWORD_ONLY
-        assert params[name].default is None
+        assert name in fields and fields[name].default is None
     assert "memory" not in params
     assert "memory_policy" not in params

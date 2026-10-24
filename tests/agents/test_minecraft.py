@@ -12,6 +12,7 @@ from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftAgentState
 from src.agents.minecraft.tools import MinecraftToolProvider
+from src.modules.agents.deps import AgentDeps
 from src.modules.agents.factory import instantiate_agent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.agents import AgentRepliedPayload
@@ -502,9 +503,7 @@ async def test_unfinished_todos_block_natural_and_explicit_delivery(start_agent)
 
 def test_factory_rejects_legacy_game_name() -> None:
     """分类层已移除，旧注册名 "game" 不再可实例化。"""
-    agent = instantiate_agent(
-        "game", {}, llm_manager=None, prompt_manager=None, event_bus=MagicMock(), tool_registry=None
-    )
+    agent = instantiate_agent("game", {}, deps=AgentDeps())
     assert agent is None
 
 
