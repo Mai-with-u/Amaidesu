@@ -146,7 +146,11 @@
             <div
               class="log-row"
               :class="`log-level-${row.entries[0]!.level.toLowerCase()}`"
+              role="button"
+              tabindex="0"
               @click="toggleLogExpand(messageKey(row.entries[0]!))"
+              @keydown.enter.prevent="toggleLogExpand(messageKey(row.entries[0]!))"
+              @keydown.space.prevent="toggleLogExpand(messageKey(row.entries[0]!))"
             >
               <span class="log-time mono">{{ formatLogTime(row.entries[0]!.timestamp) }}</span>
               <span class="log-level" :class="`level-${row.entries[0]!.level.toLowerCase()}`">
@@ -209,6 +213,7 @@
 
 <script setup lang="ts">
 import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import {
   Document,
   VideoPause,
@@ -219,6 +224,7 @@ import {
   Unlock,
 } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
+import { confirmAction } from '@/utils/confirmAction';
 import { storeToRefs } from 'pinia';
 import { useLogsStore, type LogEntry } from '@/stores/logs';
 import { collapseAdjacentLogs } from '@/utils/logCollapse';
@@ -247,6 +253,58 @@ const selectedModules = ref<string[]>([]);
 const expandedLogs = ref<Set<string>>(new Set());
 const expandedGroups = ref<Set<string>>(new Set());
 const isRealtimeScroll = ref(true);
+
+const route = useRoute();
+const router = useRouter();
+
+// query 的单值与重复键（?level=INFO&level=ERROR）统一读为字符串数组
+function readQueryList(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String);
+  return raw ? [String(raw)] : [];
+}
+
+// 深链初始化：?level=&module= 在 setup 期写入筛选状态；level 过滤掉不在级别表里的值
+const queryLevels = readQueryList(route.query.level).filter(level =>
+  (LOG_LEVELS as readonly string[]).includes(level),
+);
+if (queryLevels.length > 0) {
+  selectedLevels.value = queryLevels;
+}
+const queryModules = readQueryList(route.query.module);
+if (queryModules.length > 0) {
+  selectedModules.value = queryModules;
+}
+
+// 筛选变更回写 URL：level/module 可重复键，空数组（默认态）删键而非留空串，
+// replace 不产生历史记录。客户端筛选不触发请求，故无回写循环风险
+watch([selectedLevels, selectedModules], () => {
+  const query: Record<string, string | string[]> = {};
+  if (selectedLevels.value.length > 0) {
+    query.level = selectedLevels.value;
+  }
+  if (selectedModules.value.length > 0) {
+    query.module = selectedModules.value;
+  }
+  void router.replace({ query });
+});
+
+// 前进/后退恢复：query 变化与当前状态一致（本页 replace 触发）时跳过，
+// 否则视为用户导航，把 query 写回筛选状态
+watch(
+  () => route.query,
+  query => {
+    const nextLevels = readQueryList(query.level);
+    const nextModules = readQueryList(query.module);
+    if (
+      nextLevels.join('\u0000') === selectedLevels.value.join('\u0000') &&
+      nextModules.join('\u0000') === selectedModules.value.join('\u0000')
+    ) {
+      return;
+    }
+    selectedLevels.value = nextLevels;
+    selectedModules.value = nextModules;
+  },
+);
 
 // 动态图标
 const pausePlayIcon = computed(() => (isPaused.value ? markRaw(VideoPlay) : markRaw(VideoPause)));
@@ -363,7 +421,14 @@ function toggleScrollMode() {
   }
 }
 
-function clearLogs() {
+async function clearLogs() {
+  if (
+    !(await confirmAction(
+      '将清空当前日志列表（仅内存缓冲，不影响落盘文件）。确定要清空吗？',
+      '清空日志列表',
+    ))
+  )
+    return;
   logsStore.clearLogs();
   expandedLogs.value.clear();
   expandedGroups.value.clear();

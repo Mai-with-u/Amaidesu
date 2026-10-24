@@ -73,7 +73,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { llmApi } from '@/api';
 import type {
@@ -136,6 +136,7 @@ async function fetchStatistics() {
 const dateRange = ref<[number, number] | null>(null);
 
 const route = useRoute();
+const router = useRouter();
 
 // 查询参数
 const queryParams = reactive<LLMHistoryQueryParams>({
@@ -312,6 +313,47 @@ function debouncedFetchHistory() {
   }, 300);
 }
 
+// 筛选状态回写 URL：把 model_name 与时间窗写进 query（replace 不产生历史记录，
+// 空值/默认态删键而非留空串），使筛选结果可直接分享与刷新恢复
+function syncFilterToQuery(): void {
+  const query: Record<string, string> = {};
+  if (queryParams.model_name) {
+    query.model_name = queryParams.model_name;
+  }
+  if (queryParams.start_time !== undefined && queryParams.end_time !== undefined) {
+    query.start_time = String(queryParams.start_time);
+    query.end_time = String(queryParams.end_time);
+  }
+  void router.replace({ query });
+}
+
+// 前进/后退恢复：query 变化时若与当前筛选状态一致（本页 replace 触发），跳过；
+// 不一致则为用户导航，写回筛选状态——既有筛选 watcher 会自动重查并再回写（幂等）
+watch(
+  () => route.query,
+  query => {
+    const modelName = String(query.model_name ?? '').trim();
+    const startTime = Number(query.start_time ?? '');
+    const endTime = Number(query.end_time ?? '');
+    const hasRange = Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime;
+    const sameModel = modelName === (queryParams.model_name ?? '');
+    const sameRange = hasRange
+      ? queryParams.start_time === startTime && queryParams.end_time === endTime
+      : queryParams.start_time === undefined && queryParams.end_time === undefined;
+    if (sameModel && sameRange) return;
+    queryParams.model_name = modelName || undefined;
+    if (hasRange) {
+      dateRange.value = [startTime, endTime];
+      queryParams.start_time = startTime;
+      queryParams.end_time = endTime;
+    } else {
+      dateRange.value = null;
+      queryParams.start_time = undefined;
+      queryParams.end_time = undefined;
+    }
+  },
+);
+
 // 监听筛选条件变化，自动触发搜索
 watch(
   [
@@ -321,6 +363,7 @@ watch(
     () => queryParams.success_only,
   ],
   () => {
+    syncFilterToQuery();
     debouncedFetchHistory();
   },
 );
