@@ -327,6 +327,12 @@ import {
 } from '@element-plus/icons-vue';
 import { useSettingsStore } from '@/stores/settings';
 import type { ConfigFieldSchema, ConfigGroupSchema } from '@/types/settings';
+import {
+  collectMatchingFields,
+  findFieldValue,
+  isAdvancedField,
+  updateFieldValueImmutably,
+} from '@/utils/settingsSchema';
 import SubFieldGroup from '@/components/settings/SubFieldGroup.vue';
 import ComponentCardList from '@/components/settings/ComponentCardList.vue';
 import ModelConfigPage from '@/components/settings/ModelConfigPage.vue';
@@ -478,16 +484,13 @@ onMounted(async () => {
   await settingsStore.fetchSchema();
 });
 
-// 搜索模式：全局跨文件结果
+// 搜索模式：全局跨文件结果。递归收集与去重语义见 utils/settingsSchema.ts；
+// seen 在「全组」粒度去重，避免嵌套字段被父级和子级同时返回造成重复卡片。
 const globalSearchResults = computed(() => {
   if (!searchQuery.value) return [];
   const q = searchQuery.value.toLowerCase();
   const results: { section: ConfigGroupSchema; fields: ConfigFieldSchema[]; file: string }[] = [];
 
-  /**
-   * 递归遍历字段：children 是树形分组，properties 是字典式键值（来自 object 类型）。
-   * 命中即收集；用 seenSet 在「全组」粒度去重，避免嵌套字段被父级和子级同时返回造成重复卡片。
-   */
   for (const group of settingsStore.groups) {
     const seen = new Set<string>();
     const matched: ConfigFieldSchema[] = [];
@@ -498,36 +501,6 @@ const globalSearchResults = computed(() => {
   }
   return results;
 });
-
-function fieldMatches(f: ConfigFieldSchema, q: string): boolean {
-  return (
-    f.label.toLowerCase().includes(q) ||
-    f.key.toLowerCase().includes(q) ||
-    (f.description?.toLowerCase().includes(q) ?? false)
-  );
-}
-
-function collectMatchingFields(
-  fields: ConfigFieldSchema[],
-  q: string,
-  seen: Set<string>,
-  out: ConfigFieldSchema[],
-): void {
-  for (const f of fields) {
-    if (!seen.has(f.key) && fieldMatches(f, q)) {
-      seen.add(f.key);
-      out.push(f);
-    } else if (seen.has(f.key)) {
-      // 命中过 key 的父级不再重复收集，但子级分支仍要继续遍历
-    }
-    if (f.children && f.children.length > 0) {
-      collectMatchingFields(f.children, q, seen, out);
-    }
-    if (f.properties) {
-      collectMatchingFields(Object.values(f.properties), q, seen, out);
-    }
-  }
-}
 
 // 搜索态：按文件名聚合命中字段数（Tab 徽标数据源；零命中 Tab 不显示徽标）
 const searchHitCountByFile = computed(() => {
@@ -610,31 +583,11 @@ function getPendingChangeCount(key: string): number {
 
 // ── 字段读写 ──────────────────────────────────────────────
 function getFieldValue(key: string): unknown {
-  const keys = key.split('.');
-  let current: unknown = settingsStore.currentValues;
-  for (const k of keys) {
-    if (current && typeof current === 'object' && k in current) {
-      current = (current as Record<string, unknown>)[k];
-    } else {
-      return undefined;
-    }
-  }
-  return current;
+  return findFieldValue(settingsStore.currentValues, key);
 }
 
 function updateFieldValue(field: ConfigFieldSchema, value: unknown) {
-  const keys = field.key.split('.');
-  const newValues = { ...settingsStore.currentValues };
-  let current: Record<string, unknown> = newValues;
-  for (let i = 0; i < keys.length - 1; i++) {
-    const k = keys[i];
-    if (!current[k] || typeof current[k] !== 'object') {
-      current[k] = {};
-    }
-    current[k] = { ...(current[k] as Record<string, unknown>) };
-    current = current[k] as Record<string, unknown>;
-  }
-  current[keys[keys.length - 1]] = value;
+  const newValues = updateFieldValueImmutably(settingsStore.currentValues, field.key, value);
   settingsStore.updateCurrentValues(newValues);
   updatePendingChanges(field, value);
 }
@@ -675,7 +628,7 @@ async function jumpToField(key: string) {
     activeFileTab.value = fileKey;
   }
   if (searchQuery.value) searchQuery.value = '';
-  if (!showAdvanced.value && isAdvancedField(key)) {
+  if (!showAdvanced.value && isAdvancedFieldInGroups(key)) {
     showAdvanced.value = true;
   }
   await nextTick();
@@ -703,35 +656,9 @@ async function jumpFromChangesPanel(key: string) {
   await jumpToField(key);
 }
 
-/** 在 schema 全字段树（children/properties/对象数组元素树）中按 key 查找字段 */
-function findFieldInSchema(
-  fields: ConfigFieldSchema[],
-  key: string,
-): ConfigFieldSchema | undefined {
-  for (const f of fields) {
-    if (f.key === key) return f;
-    if (f.children) {
-      const found = findFieldInSchema(f.children, key);
-      if (found) return found;
-    }
-    if (f.properties) {
-      const found = findFieldInSchema(Object.values(f.properties), key);
-      if (found) return found;
-    }
-    if (f.items?.fields) {
-      const found = findFieldInSchema(f.items.fields, key);
-      if (found) return found;
-    }
-  }
-  return undefined;
-}
-
-function isAdvancedField(key: string): boolean {
-  for (const group of settingsStore.groups) {
-    const found = findFieldInSchema(group.fields, key);
-    if (found) return found.advanced === true;
-  }
-  return false;
+/** 在 schema 全字段树中按 key 查找并判断是否高级字段（查找逻辑见 utils/settingsSchema.ts） */
+function isAdvancedFieldInGroups(key: string): boolean {
+  return isAdvancedField(key, settingsStore.groups);
 }
 
 // 清单逐项撤销至空时自动收起面板
