@@ -98,7 +98,9 @@ export type WsKind = 'event' | 'stream' | 'log' | 'transport';
 
 /** WS 消息 type 字段全集（总线事件 + 观测流 + 协议帧） */
 export type WsMessageType =
-  EventName | (typeof STREAM)[keyof typeof STREAM] | (typeof PROTOCOL)[keyof typeof PROTOCOL];
+  | EventName
+  | (typeof STREAM)[keyof typeof STREAM]
+  | (typeof PROTOCOL)[keyof typeof PROTOCOL];
 
 /**
  * 通配族判别守卫：前缀单源 + 类型收窄（收窄后可安全做前缀切片取族内后缀）。

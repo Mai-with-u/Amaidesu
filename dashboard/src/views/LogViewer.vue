@@ -161,7 +161,8 @@
                 <pre
                   class="log-message"
                   :class="{ expanded: expandedLogs.has(messageKey(row.entries[0]!)) }"
-                  >{{ row.entries[0]!.message }}</pre>
+                  >{{ row.entries[0]!.message }}</pre
+                >
                 <span class="row-hints">
                   <span
                     v-if="row.entries.length > 1"
@@ -195,7 +196,8 @@
                   <pre
                     class="log-message"
                     :class="{ expanded: expandedLogs.has(messageKey(entry)) }"
-                    >{{ entry.message }}</pre>
+                    >{{ entry.message }}</pre
+                  >
                   <span v-if="shouldShowExpand(entry.message)" class="expand-hint">
                     {{ expandedLogs.has(messageKey(entry)) ? '点击收起' : '点击展开' }}
                   </span>
