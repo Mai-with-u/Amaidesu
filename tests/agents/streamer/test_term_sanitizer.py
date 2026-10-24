@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.agents.streamer.game_ledger import GameLedger
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.streamer_agent import StreamerAgent
@@ -31,7 +32,7 @@ def test_sanitize_internal_terms(text: str, expected) -> None:
 async def test_game_event_line_sanitized_at_boundary() -> None:
     """game.* 事件行进入待入账队列前脱敏：任务号不进主播上下文。"""
     agent = StreamerAgent.__new__(StreamerAgent)  # 只测事件行组装，不走完整装配
-    agent._pending_game_events = []
+    agent._game_ledger = GameLedger()
     agent._planner = MagicMock()
     agent._logger = MagicMock()
 
@@ -43,7 +44,7 @@ async def test_game_event_line_sanitized_at_boundary() -> None:
     )
     await agent._on_game_event("game.report", payload, "test")
 
-    line = agent._pending_game_events[0].base
+    line = agent._game_ledger._pending[0].base
     assert "deleg_" not in line and "simulated:" not in line
     assert "一个游戏任务" in line and "chest" in line
 

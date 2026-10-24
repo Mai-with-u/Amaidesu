@@ -99,7 +99,7 @@ async def test_body_events_append_with_own_label_and_only_death_wakes(live_agent
         _body("attack_ended", "摆脱了僵尸的攻击（共命中 2 次）", resolved=True),
         source="maicraft_attention",
     )
-    await _wait_until(lambda: len(agent._pending_game_events) == 2)
+    await _wait_until(lambda: len(agent._game_ledger._pending) == 2)
 
     batch = agent._drain_game_events()
     text = "\n".join(batch.events)
@@ -120,7 +120,7 @@ async def test_identical_lines_within_fold_window_merge_with_count(live_agent) -
         await bus.emit(
             CoreEvents.GAME_BODY_REFLEX_STARTED, _body("reflex_started", "紧急反应接管"), source="t"
         )
-    await _wait_until(lambda: len(agent._pending_game_events) == 1)
+    await _wait_until(lambda: len(agent._game_ledger._pending) == 1)
 
     batch = agent._drain_game_events()
     assert len(batch.events) == 1 and "另 2 次相同" in batch.events[0]
@@ -131,7 +131,7 @@ async def test_game_chat_appends_and_player_wakes_and_fresh_lines_hand_to_replye
     agent, bus = live_agent
     system = GameChatPayload(game="minecraft", kind="system", content="Alex 请求传送到你这里", timestamp_ms=1_000)
     await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, system, source="maicraft_chat")
-    await _wait_until(lambda: len(agent._pending_game_events) == 1)
+    await _wait_until(lambda: len(agent._game_ledger._pending) == 1)
     # 系统消息只作参考，不单独唤醒
     assert agent._game_decision_pending is False
 
@@ -139,7 +139,7 @@ async def test_game_chat_appends_and_player_wakes_and_fresh_lines_hand_to_replye
         game="minecraft", kind="player", sender="Steve", content="麦麦你在干嘛呀", suppressed=2, timestamp_ms=1_000
     )
     await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, player, source="maicraft_chat")
-    await _wait_until(lambda: len(agent._pending_game_events) == 2)
+    await _wait_until(lambda: len(agent._game_ledger._pending) == 2)
     # 玩家是在跟游戏里的我说话：像弹幕一样值得及时接住
     assert agent._game_decision_pending is True
 

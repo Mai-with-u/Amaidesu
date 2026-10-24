@@ -218,7 +218,11 @@ async def test_context_assembly_paths() -> None:
     await planner.plan(
         [_msg()],
         forced=True,
-        game_batch=GameEventBatch(events=("[20:01 游戏·minecraft·report] 刚挖到钻石",)),
+        # 事实块随批次由账本携带（facts_text），planner 不再自己从行提取
+        game_batch=GameEventBatch(
+            events=("[20:01 游戏·minecraft·report] 刚挖到钻石",),
+            facts_text="[20:01 游戏·minecraft·report] 刚挖到钻石",
+        ),
     )
     reference = _reference_message(llm)["content"]
     assert "强制回应" in reference and "【当前状态（客观事实）】" in reference and "关键变化" not in reference
@@ -391,4 +395,3 @@ async def test_system_prompt_render_receives_game_rules() -> None:
     kwargs = prompt.render.call_args.kwargs
     assert prompt.render.call_args.args[0] == "amaidesu_planner_react"
     assert kwargs["game_rules"] == "- X 的玩法"
-

@@ -46,7 +46,7 @@ from src.agents.streamer import canonical
 from src.agents.streamer.plan import ReplyRoundAttachment
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
 from src.agents.streamer.scene_card import GoalLine, GoalStatus
-from src.agents.streamer.state_facts import extract_state_facts
+from src.agents.streamer.game_ledger import GameLedger
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.context import TailImages
@@ -319,7 +319,8 @@ class Planner:
         self._recent_relays: Deque[_Relay] = deque(maxlen=self.typed_config.planner_recent_relays_max)
         # 本决策窗的游戏事件素材：本轮新入账批次（决策窗边界批量追加进时间线的那一批，
         # 每轮 plan() 入口重置）。状态跃迁事实块（planner 参考段与表达侧交接各一份）
-        # 由 state_facts 提取器从这批行与本轮回执生成
+        # 随批次由账本产出；回执随本窗 ReAct 循环累积，reply 交接时合成全量
+        self._round_facts_text = ""
         self._round_game_events: List[str] = []
         self._round_tool_receipts: List[Tuple[str, Any]] = []
         # 本窗是否豁免发言闸的台词重合度检查（收播道别窗：道别话题常与收尾环节发言字面重合）
@@ -574,6 +575,7 @@ class Planner:
         self._tail_images.drain()
         # 本窗游戏事件素材重置（本轮新入账批次；回执随 ReAct 循环逐步累积，reply 交接时取全量）
         resolved_batch = game_batch or GameEventBatch()
+        self._round_facts_text = resolved_batch.facts_text
         self._round_game_events = list(resolved_batch.events)
         self._round_tool_receipts = []
         # 游戏聊天原话（非私聊）随本轮说话交给表达侧；私聊行只进本窗参考段
@@ -868,7 +870,7 @@ class Planner:
         if overview:
             # 本轮决策前自动读取的现场：已经足够时直接据此决定，不再调用同样的查询工具
             lines.append(f"【现场速览（本轮决策前自动读取）】\n{overview}")
-        state_facts = extract_state_facts(self._round_game_events)
+        state_facts = self._round_facts_text
         if state_facts:
             # 状态跃迁事实块：只收本轮新入账批次里的死亡/重生/任务开始结束/交付类条目，
             # 供客观核对——叙事讲经历，这里只列可核对的状态
@@ -1078,10 +1080,7 @@ class Planner:
                 # 游戏里有人搭话促发的一轮弹幕批是空的，原话同样交给表达侧
                 game_chat=list(game_chat or []),
                 # 状态跃迁事实块：表达侧的客观事实底稿（含本轮观察工具回执要点）
-                state_facts=extract_state_facts(
-                    self._round_game_events,
-                    self._round_tool_receipts,
-                ),
+                state_facts=GameLedger.compose_facts(self._round_facts_text, self._round_tool_receipts),
                 # 道别窗豁免台词重合度检查
                 gate_exempt=self._round_bypass_topic_gate,
             )

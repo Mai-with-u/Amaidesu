@@ -103,16 +103,20 @@ def note_turn(label: str, body: str, timestamp_ms: int) -> TimelineTurn:
 class GameEventBatch:
     """一个决策窗新入账的游戏事件批次（决策窗边界批量追加进时间线的那一批）。
 
-    - ``events``：本批全部时间线行原文（含私聊行）；状态跃迁事实块与本轮
-      新鲜语料从这里取，不再从历史回放里提取。
+    - ``events``：本批全部时间线行原文（含私聊行）；本轮新鲜语料从这里取，
+      不再从历史回放里提取。
     - ``fresh_chat``：本批里游戏聊天的非私聊行原话，随本轮说话交给表达侧。
     - ``private_chat``：私聊行。私聊不进时间线（表达侧与历史都看不到），
       只在本批交给决策层，且下一窗不再携带。
+    - ``facts_text``：本批状态跃迁事实块（账本从结构化条目渲染，带原钟点标记）。
+    - ``timeline_turns``：本批待追加进时间线的条目（决策窗边界由持有方批量落账）。
     """
 
     events: Tuple[str, ...] = ()
     fresh_chat: Tuple[str, ...] = ()
     private_chat: Tuple[str, ...] = ()
+    facts_text: str = ""
+    timeline_turns: Tuple[TimelineTurn, ...] = ()
 
 
 class StreamerTimeline:

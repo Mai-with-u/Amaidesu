@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from src.modules.agents.base import BaseAgent
@@ -74,9 +74,9 @@ from .replyer import WordFilter, Replyer
 from .room_state import RoomState
 from .scene_card import brief_of
 from .speech_dispatcher import SpeechDispatcher
+from .game_ledger import GameLedger
 from .stats import StreamerStats
-from .term_sanitizer import sanitize_internal_terms
-from .timeline import GameEventBatch, StreamerTimeline, TimelineTurn, note_turn
+from .timeline import GameEventBatch, StreamerTimeline, TimelineTurn
 from .timing_gate import TimingGate
 from .tools.reply_tool import ReplyToolProvider
 from .command.router import CommandRouter
@@ -91,13 +91,6 @@ __all__ = ["StreamerAgent", "StreamerConfig"]
 # LLM profile 用途名（与 [llm_profiles.<name>] 三层结构对齐；model.toml 必填 6 成员）
 _PROFILE_PLANNER = "planner"
 _PROFILE_REPLYER = "replyer"
-
-# 游戏事件同摘要折叠窗（毫秒）：待入账队列里连续到达、内容相同的条目并入一条只记数。
-# 覆盖游戏/身体侧按重试节奏连发同一失败摘要的典型间隔（秒级到一分多钟）
-_GAME_EVENT_FOLD_WINDOW_MS = 90_000
-
-# 待入账队列上限（条）。决策窗长期不发生时防无界增长；溢出丢最旧
-_PENDING_GAME_EVENTS_MAX = 200
 
 # 私聊暂存上限（行）。只进本窗决策参考段，不进时间线
 _PRIVATE_CHAT_LINES_MAX = 10
@@ -128,21 +121,6 @@ class _LiveChatTurn:
     message_id: str = ""
     # 发生时刻：落库行与内存对话轮按它合并成同一条时间线
     timestamp_ms: int = 0
-
-
-@dataclass
-class _PendingGameEvent:
-    """待入账的一条游戏事件：时间线行（未折叠的底稿）+ 到达时刻 + 同摘要折叠吸收的相同条数。
-
-    折叠只发生在待入账阶段：条目一经决策窗边界写进时间线就不再改写，
-    之后到达的相同摘要是新的一条。
-    """
-
-    turn: TimelineTurn
-    base: str  # 未附加折叠计数说明的行原文（折叠比较键）
-    arrived_ms: int
-    count: int = 1
-    is_chat: bool = False  # 游戏聊天行：入账后其原话随本窗说话交给表达侧
 
 
 def _text_field(item: Any, name: str) -> str:
@@ -475,11 +453,11 @@ class StreamerAgent(BaseAgent):
         # 统计（决策循环各分支增量；对外经 get_statistics 导出）
         self._stats = StreamerStats()
 
-        # 游戏事件待入账队列（game.* / game.body.* / game.chat.* 三通道统一）：
-        # 事件到达先进队列做同摘要折叠，下个决策窗边界（读历史时）整批追加进时间线的
+        # 游戏事件账本（game.* / game.body.* / game.chat.* 三通道统一）：事件到达
+        # 先入账做同摘要折叠，下个决策窗边界（读历史时）整批出账追加进时间线的
         # game 条目——事件在对话历史里只出现一次、不再逐窗重放，更早的细节查对话
         # 历史与前情提要，需要数值现场用游戏状态查询工具。相邻窗口的历史前缀逐字一致
-        self._pending_game_events: List[_PendingGameEvent] = []
+        self._game_ledger = GameLedger()
         # 私聊的那几行：只进本窗决策参考段，不进时间线——表达侧与历史都看不到，
         # 私下的话不能被当众说出来
         self._pending_private_chat: deque[str] = deque(maxlen=_PRIVATE_CHAT_LINES_MAX)
@@ -887,7 +865,7 @@ class StreamerAgent(BaseAgent):
             self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
         self._unpersisted_turns.clear()
-        self._pending_game_events.clear()
+        self._game_ledger.reset()
         self._pending_private_chat.clear()
         self._timeline_notes.clear()
         await self._timeline.reset()
@@ -920,7 +898,7 @@ class StreamerAgent(BaseAgent):
         # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
         # （道别发言不属已结账的场次，留在内存对话里供下播后的调试闲聊接续）
         self._unpersisted_turns.clear()
-        self._pending_game_events.clear()
+        self._game_ledger.reset()
         self._pending_private_chat.clear()
         self._timeline_notes.clear()
         await self._timeline.reset()
@@ -1014,9 +992,9 @@ class StreamerAgent(BaseAgent):
         一轮主动决策。
         """
         try:
-            message = sanitize_internal_terms(payload.message)
-            turn = note_turn(f"游戏·{payload.game}·{payload.event_type}", message, payload.timestamp_ms or now_ms())
-            self._stage_game_event(turn)
+            message = self._game_ledger.record_event(
+                payload.game, payload.event_type, payload.message, payload.timestamp_ms or now_ms()
+            )
             if self._mouth is not None and payload.event_type in URGENT_GAME_TYPES and message:
                 self._mouth.note_game(message)
                 self._mouth.react(f"game:{payload.event_type}", message, urgent=True)
@@ -1027,42 +1005,16 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏事件失败: {exc}", exc=True)
 
-    def _stage_game_event(self, turn: TimelineTurn, *, is_chat: bool = False) -> None:
-        """游戏事件入待入账队列：同摘要落在折叠窗内时并入最近一条只记数，按上限裁剪。"""
-        now = now_ms()
-        if self._pending_game_events:
-            last = self._pending_game_events[-1]
-            if last.base == turn.content and now - last.arrived_ms <= _GAME_EVENT_FOLD_WINDOW_MS:
-                last.count += 1
-                return
-        self._pending_game_events.append(
-            _PendingGameEvent(turn=turn, base=turn.content, arrived_ms=now, is_chat=is_chat)
-        )
-        overflow = len(self._pending_game_events) - _PENDING_GAME_EVENTS_MAX
-        if overflow > 0:
-            del self._pending_game_events[:overflow]
-
     def _drain_game_events(self) -> GameEventBatch:
-        """决策窗边界：待入账队列整批写进时间线，本批行作为"本轮新入账批次"交决策链。
+        """决策窗边界：账本整批出账，本批时间线条目落进时间线，批次行交决策链。
 
         折叠过多条的行附计数说明（"另 N 次相同"）后再入时间线；时间线条目只追加
         不改写，相邻窗口的历史前缀逐字一致。私聊行不进时间线，单独随批次交本窗
         决策参考段。
         """
-        staged = self._pending_game_events
-        self._pending_game_events = []
-        private = list(self._pending_private_chat)
+        batch = self._game_ledger.drain(private_chat=self._pending_private_chat)
         self._pending_private_chat.clear()
-        events: List[str] = []
-        fresh_chat: List[str] = []
-        for item in staged:
-            content = item.base if item.count == 1 else f"{item.base}（另 {item.count - 1} 次相同）"
-            turn = item.turn if content == item.turn.content else replace(item.turn, content=content)
-            self._timeline_notes.append(turn)
-            events.append(content)
-            if item.is_chat:
-                fresh_chat.append(content)
-        batch = GameEventBatch(events=tuple(events), fresh_chat=tuple(fresh_chat), private_chat=tuple(private))
+        self._timeline_notes.extend(batch.timeline_turns)
         self._window_game_batch = batch
         return batch
 
@@ -1071,9 +1023,11 @@ class StreamerAgent(BaseAgent):
         return self._window_game_batch
 
     def _record_delegation(self, agent: str, instruction: str) -> None:
-        """Planner 受理委派后回调：把"我在哪个游戏里开始做什么"按此刻进时间线。"""
-        where = f"我在 {agent} 里开始做" if agent else "我在游戏里开始做"
-        self._timeline_notes.append(note_turn(where, sanitize_internal_terms(instruction), now_ms()))
+        """Planner 受理委派后回调：把"我在哪个游戏里开始做什么"按此刻进时间线。
+
+        委派行直写时间线，不进决策窗批次（批次只收三类游戏事件通道的条目）。
+        """
+        self._timeline_notes.append(self._game_ledger.record_delegation(agent, instruction))
 
     async def _on_body_event(
         self,
@@ -1089,17 +1043,16 @@ class StreamerAgent(BaseAgent):
         促发一轮决策，主播当场知道、当场解说。
         """
         try:
-            marker = "（已结束）" if getattr(payload, "resolved", False) else ""
-            turn = note_turn(
-                f"遭遇·{payload.game}·{payload.kind}",
-                f"{sanitize_internal_terms(payload.summary)}{marker}",
+            summary = self._game_ledger.record_encounter(
+                payload.game,
+                payload.kind,
+                payload.summary,
+                bool(getattr(payload, "resolved", False)),
                 payload.timestamp_ms or now_ms(),
             )
-            self._stage_game_event(turn)
             if self._mouth is not None:
                 # 嘴开着：遭遇由嘴当场反应（几秒内出声），死亡也一样——不再为它专门唤醒 Planner，
                 # 免得嘴说一句、Planner 过十几秒又把同一件事讲一遍
-                summary = sanitize_internal_terms(payload.summary)
                 self._mouth.note_game(summary)
                 self._mouth.react(
                     f"body:{payload.kind}",
@@ -1141,7 +1094,7 @@ class StreamerAgent(BaseAgent):
             if payload.private:
                 self._pending_private_chat.append(f"[{payload.game}] {body}")
             else:
-                self._stage_game_event(note_turn(payload.game, body, payload.timestamp_ms or now_ms()), is_chat=True)
+                self._game_ledger.record_chat(payload.game, body, payload.timestamp_ms or now_ms())
                 if self._mouth is not None:
                     self._mouth.note_game(body)
             if payload.kind == "player":
