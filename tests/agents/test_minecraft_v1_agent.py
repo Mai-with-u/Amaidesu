@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
+from src.agents.minecraft.attention_matrix import classify, summarize
 from src.agents.minecraft.glance import glance_brief, glance_scene
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of, reply_of
 from src.agents.minecraft.tools import MaicraftMcpProvider
@@ -1204,8 +1205,8 @@ class _SummaryLlm:
         return self.behavior(messages)
 
 
-async def test_long_body_event_is_summarized_before_reaching_the_streamer() -> None:
-    """长文概述器：超过阈值的长文经 summary 档压缩后两栏发出，短文直通不调 LLM。"""
+async def test_body_event_reaches_streamer_as_white_talk() -> None:
+    """身体事件经白话速览转一句观众话发出：白话已是短句，不再触发保信息摘要压缩。"""
     server = FakeMaicraft()
     llm = _SummaryLlm(lambda messages: _resp("饿了：翻过箱子没有、合成缺干海带块、烧炼缺原料"))
     agent, _llm, bus = await _start(server, lambda messages: _resp("好"))
@@ -1217,17 +1218,16 @@ async def test_long_body_event_is_summarized_before_reaching_the_streamer() -> N
     await agent._on_body_event({"kind": "need_unhandled", "message": long_text})
     await _wait_until(lambda: len(_attention_events(bus)) == 2)
 
-    assert llm.calls and llm.calls[0]["profile"] == "summary", "概述走 summary 档"
-    assert "只压缩不评价" in llm.calls[0]["messages"][0]["content"], "提示词只压缩不评价"
-    first, summarized = _attention_events(bus)
-    assert first.message == short and first.scene == "", "短文直通，不调概述"
-    assert "干海带块" in summarized.message, "概述保信息"
-    assert summarized.scene.startswith("原文留档：") and long_text in summarized.scene, "原文留档进载荷"
+    # 白话速览把长短事件都转成一句观众话，整篇原文不再进主播素材
+    assert llm.calls == [], "白话短句直通，不调概述档"
+    first, second = _attention_events(bus)
+    assert first.message == summarize(classify("need_unhandled") or "unknown", "need_unhandled", short)
+    assert second.message == summarize(classify("need_unhandled") or "unknown", "need_unhandled", long_text)
     await agent.stop()
 
 
 async def test_summary_failure_falls_back_to_first_sentence() -> None:
-    """概述失败静默降级为首句斩尾，素材不缺席。"""
+    """压缩兜底仍有效：素材调度器直接收到超阈值长文时走 summary 档，概述失败降级首句斩尾。"""
     server = FakeMaicraft()
 
     def boom(messages: List[Dict[str, Any]]) -> Response:
@@ -1238,7 +1238,8 @@ async def test_summary_failure_falls_back_to_first_sentence() -> None:
     agent._llm = llm
 
     long_text = "饿了没吃上。翻过箱子没有面包，合成台缺干海带块，烧炼炉缺原料。" + "细节" * 200
-    await agent._on_body_event({"kind": "need_unhandled", "message": long_text})
+    # 直呼调度器（白话速览异常超长时的兜底路径）
+    agent._schedule_attention_material(long_text)
     await _wait_until(lambda: len(_attention_events(bus)) == 1)
 
     emitted = _attention_events(bus)[0]
