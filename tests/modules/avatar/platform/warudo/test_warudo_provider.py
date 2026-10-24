@@ -57,7 +57,7 @@ async def test_builtin_motions_and_catalog_entries_send_the_action_name_to_the_b
 
 def test_tool_face_is_the_four_agreed_tools_without_catalog_in_descriptions() -> None:
     provider = _provider(action_catalog={"wave": "招手"})
-    provider._is_connected = True  # 工具表仅连接态非空
+    provider.mark_connected()  # 工具表仅连接态非空
     specs = provider.list_tools()
     assert {s.full_name for s in specs} == {
         "warudo_set_expression",
@@ -72,19 +72,17 @@ def test_tool_face_is_the_four_agreed_tools_without_catalog_in_descriptions() ->
 
 def test_tools_degraded_to_empty_when_not_connected_and_registry_follows_connection() -> None:
     provider = _provider()
-    provider._is_connected = False
+    provider.mark_disconnected()
     assert provider.list_tools() == []  # 未连接（含装配期）工具表为空：降级登记，Agent 不可见不可调
 
     registry = ToolRegistry()
     registered = register_warudo_tools(registry, config={"ws_host": "localhost", "ws_port": 19190})
     assert registry.list_tools(provider="warudo") == []  # 装配期降级登记 0 工具
 
-    registered._is_connected = True
-    registered._fire_connection_changed(True)
+    registered.mark_connected()
     assert len(registry.list_tools(provider="warudo")) == 4  # 连上后补注册
 
-    registered._is_connected = False
-    registered._fire_connection_changed(False)
+    registered.mark_disconnected()
     assert registry.list_tools(provider="warudo") == []  # 断连摘除
 
 

@@ -302,6 +302,87 @@ class BaseToolProvider(ABC):
 
 
 # =============================================================================
+# 连接态中间层：ConnectionToolProvider
+# =============================================================================
+
+
+class ConnectionToolProvider(BaseToolProvider):
+    """维护外部连接的 Provider 中间层：承载"连接态 → 工具表换血"公共行为。
+
+    适用于工具只在连接建立后才可用、断开即整体摘除的 Provider（如 VTS /
+    Warudo / OBS 的 avatar/studio 工具面）。子类只负责两件事：
+
+    - 在自身连接检测点（连接成功 / 断开检测 / 手动 connect-disconnect /
+      invoke 捕获连接类异常）调用 ``mark_connected`` / ``mark_disconnected``
+    - 实现 ``_connected_tools()`` 返回连接建立后的全量工具清单
+
+    换血契约：
+
+    1. 未连接 → ``list_tools()`` 返回空（装配期降级登记 0 工具，Provider
+       登记本体在册）
+    2. 连接建立 → ``mark_connected()`` → ``on_connection_changed(True)`` →
+       装配端经 ``registry.refresh_provider_tools`` 补注册全量
+    3. 断开 → ``mark_disconnected()`` → ``on_connection_changed(False)`` →
+       refresh 全摘除（登记保留）
+    4. 回调异常吞掉放行（仓库错误隔离惯例）：换血失败不反噬连接态
+    5. 触发时机由各平台自身检测机制决定，本层不收拢重连循环
+    6. 手动重连路径不变：手动 connect 成功同样走 ``mark_connected``
+
+    无连接工具的 Provider（reply / rundown / 游戏工具等）不继承本层，
+    ``BaseToolProvider`` 保持干净。MCP 的"占位补注册"语义与本层等价但回调
+    形态不同（``on_tools_refreshed(count)`` vs bool 连接态回调），机制零缺陷
+    暂不迁移；将来收编时以 ``mark_connected`` 换掉 ``on_tools_refreshed``。
+    """
+
+    # 连接态标志（初始未连接）：子类不再自建同语义标志；仍可另持协议层
+    # 私有状态（如"正在连接中"），与本标志语义互补不重叠
+    _connected: bool = False
+
+    # 连接态变化回调槽（注册接线方注入，通常经 ``wire_connection_tools``）：
+    # True=已连接 / False=已断开；None = 未接线（工具表停在装配期快照）
+    on_connection_changed: Optional[Callable[[bool], None]] = None
+
+    def mark_connected(self) -> None:
+        """标记连接建立：置标志并触发回调（True）。"""
+        self._set_connected(True)
+
+    def mark_disconnected(self) -> None:
+        """标记连接断开：清标志并触发回调（False）。"""
+        self._set_connected(False)
+
+    def _set_connected(self, connected: bool) -> None:
+        """置标志并通知；回调异常隔离记录不上抛——通知失败只影响工具表
+        刷新时机，不反噬连接流程。未接线（None）时静默跳过。"""
+        self._connected = connected
+        callback = self.on_connection_changed
+        if callback is None:
+            return
+        try:
+            callback(connected)
+        except Exception as exc:  # noqa: BLE001 - 通知旁路，不反噬连接流程
+            _logger.error(f"{type(self).__name__} 连接态回调异常（已忽略）: {type(exc).__name__}: {exc}", exc=True)
+
+    def list_tools(self) -> Iterable[ToolSpec]:
+        """未连接返回空清单（降级登记 0 工具）；连接后返回子类全量清单。"""
+        if not self._connected:
+            return []
+        return self._connected_tools()
+
+    def _connected_tools(self) -> Iterable[ToolSpec]:
+        """连接建立后暴露的全量工具清单——子类必须实现。"""
+        raise NotImplementedError("ConnectionToolProvider 子类必须实现 _connected_tools()")
+
+
+def wire_connection_tools(provider: ConnectionToolProvider, registry: Any) -> None:
+    """装配接线：连接态回调驱动注册表对 Provider 做工具集换血。
+
+    连接成功经 ``registry.refresh_provider_tools`` 补注册全量，断开整体
+    摘除（Provider 登记本体保留）——装配端标准写法收成单一定义。
+    """
+    provider.on_connection_changed = lambda _connected: registry.refresh_provider_tools(provider)
+
+
+# =============================================================================
 # 返回值归一化：as_tool_impl
 # =============================================================================
 
@@ -403,7 +484,16 @@ def make_provider_from_specs(
     return _SpecImplProvider(name=name, spec_impl_pairs=spec_impl_pairs, category=category)
 
 
-__all__ = ["MCP_CATEGORY", "ToolProvider", "BaseToolProvider", "ToolImpl", "as_tool_impl", "make_provider_from_specs"]
+__all__ = [
+    "MCP_CATEGORY",
+    "ToolProvider",
+    "BaseToolProvider",
+    "ConnectionToolProvider",
+    "wire_connection_tools",
+    "ToolImpl",
+    "as_tool_impl",
+    "make_provider_from_specs",
+]
 
 
 # 让 Pylance 不报 _ 变量未用
