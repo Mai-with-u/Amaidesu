@@ -28,7 +28,13 @@ from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
 from src.agents.minecraft.attention_matrix import classify, summarize
-from src.agents.minecraft.context import FACTS_KEY, MinecraftHistoryCompactor, close_interrupted_calls, json_text
+from src.agents.minecraft.context import (
+    FACTS_KEY,
+    MinecraftHistoryCompactor,
+    close_interrupted_calls,
+    json_text,
+    strip_unsendable,
+)
 from src.agents.minecraft.glance import glance_brief, glance_scene, glance_self
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.maicraft import (
@@ -61,6 +67,7 @@ from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayloa
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
 from src.modules.llm.context_meter import SECTION_SKILLS
+from src.modules.llm.errors import UnsendableRequestError
 from src.modules.utils.backoff import ExponentialBackoff
 from src.modules.skills import SkillLibrary
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
@@ -77,6 +84,16 @@ MINECRAFT_PROFILE = "minecraft"
 
 # 递话来源标签：运营在控制面直接说的话与主播决策循环递来的补充分开标注。
 _PROMPT_SOURCE_LABELS = {"operator": "[运营原话]", "planner-react": "[主播补充]"}
+
+# 模型调用失败、身体停下时主播看一眼读到的说法（她本人的口吻）：暂时性失败再派一次活就会重试；
+# 请求发不出去且换回执、重开对话都补救不了时，再派活也是同一个结果
+_FAULT_RETRY = "身体出故障了，暂时动不了；再派一次活它会重新试"
+_FAULT_STUCK = "身体出故障了，动不了；重新派活也没用，得等后台修好"
+# 对话发不出去、按任务事实重开时给模型的说明
+_RESTART_NOTICE = (
+    "[系统] 上一段对话里有内容发不出去，已经整段丢掉。上面是原指令、待办与目标记录，下面是宿主刚读的现场；"
+    "按这些接着做，之前看过的东西要用就重新查。"
+)
 
 # 本批任务期间保留的身体事件条数上限（上报携带的任务上下文，多了只会淹没重点）
 _MAX_BATCH_BODY_EVENTS = 5
@@ -226,6 +243,9 @@ class MinecraftAgent(BaseAgent):
         self._task_steps = 0
         self._task_finished = True
         self._task_suspended = False
+        # 身体因模型调用失败而停下时的说法（主播看一眼时读到）；空串 = 没出故障。
+        # 和"卡住了等主播拿主意"分开：出故障时重新派活不一定有用，主播不该以为身体在等她
+        self._body_fault = ""
         # 同一逻辑任务跨后台等待沿用历史，只有新任务或集中整理才重建前缀。
         self._messages: List[Dict[str, Any]] = []
         self._context_compactor = MinecraftHistoryCompactor(llm_manager, config.context)
@@ -660,6 +680,8 @@ class MinecraftAgent(BaseAgent):
         mc_seq_box = [0]
         action_reminded = False
         polling_reminded = False
+        # 请求发不出去时的补救进度：换过回执、重开过对话；请求一发成功就清零，下次再出事从头补救
+        stripped = restarted = False
         while self._running:
             await self._paused.wait()
             if not self._live_active:
@@ -710,15 +732,38 @@ class MinecraftAgent(BaseAgent):
                 )
             except asyncio.CancelledError:
                 raise
+            except UnsendableRequestError as exc:
+                # 请求因内容被拒，原样重发必然再被拒：先把回执里的二进制换成说明重试一次 ->
+                # 还不行就按任务事实重开对话再试 -> 仍不行才停下，主播看一眼时读到身体出故障了
+                if not stripped and strip_unsendable(messages):
+                    stripped = True
+                    self._prefix_guard.expect_rewrite("换掉发不出去的回执")
+                    self._logger.warning(f"MinecraftAgent 请求发不出去，回执里的二进制已换成说明，重试一次: {exc}")
+                    continue
+                if not restarted:
+                    stripped = restarted = True
+                    self._restart_conversation(messages, system_message)
+                    opening_due = True
+                    self._logger.warning(f"MinecraftAgent 请求仍发不出去，按任务事实重开对话: {exc}")
+                    continue
+                self._task_suspended = True
+                self._body_fault = _FAULT_STUCK
+                self._logger.error(f"MinecraftAgent 请求发不出去，换掉回执、重开对话都没用，任务停下: {exc}", exc=True)
+                await self.emit_error(f"请求发不出去：{exc}；换掉回执、重开对话都没用，任务停在这里，重新派活也不会好")
+                return
             except Exception as exc:  # noqa: BLE001 - 单步失败转错误事件
                 self._task_suspended = True
+                self._body_fault = _FAULT_RETRY
                 self._logger.warning(f"MinecraftAgent LLM 推理异常: {type(exc).__name__}: {exc}", exc=True)
                 await self.emit_error(f"LLM 推理异常: {type(exc).__name__}: {exc}；本任务已保留，等待新指令继续")
                 return
             if not response.success:
                 self._task_suspended = True
+                self._body_fault = _FAULT_RETRY
                 await self.emit_error(f"LLM 调用失败: {response.error or '未知错误'}")
                 return
+            self._body_fault = ""
+            stripped = restarted = False
 
             tool_calls = response.tool_calls or []
             content_text = response.content
@@ -807,6 +852,22 @@ class MinecraftAgent(BaseAgent):
                 polling_reminded = True
             else:
                 polling_reminded = False
+
+    def _restart_conversation(self, messages: List[Dict[str, Any]], system_message: Dict[str, Any]) -> None:
+        """这段对话发不出去：整段丢掉，只留系统说明与任务事实重开；原指令、待办、目标记录照旧。
+
+        重开后由调用方补一份开局资料，模型按事实与新读的现场接着做，不必等主播重新派活。
+        """
+        facts = self._current_task_context()
+        messages[:] = [
+            dict(system_message),
+            {"role": "user", "content": "[原任务事实与已有证据]\n" + json_text(facts), FACTS_KEY: True},
+            {"role": "user", "content": _RESTART_NOTICE},
+        ]
+        self._shown_context = deepcopy(facts)
+        # 丢掉的那段对话里看过的截图也一并作废
+        self._tail_images.drain()
+        self._prefix_guard.expect_rewrite("对话发不出去，按任务事实重开")
 
     def _start_new_task(self, messages: List[Dict[str, Any]], system_message: Dict[str, Any]) -> None:
         """上一个任务已交付，新指令开新任务：历史、待办与目标记录重新开始。"""
@@ -1386,7 +1447,9 @@ class MinecraftAgent(BaseAgent):
 
     def _glance_work(self) -> Dict[str, Any]:
         """身体手头的工作，写成主播自己的口吻：读这份结果的就是主播本人。"""
-        if self._task_suspended:
+        if self._body_fault:
+            state = self._body_fault
+        elif self._task_suspended:
             state = "卡住了，正等我拿主意"
         elif not self._task_finished:
             state = "正在做手上的事"

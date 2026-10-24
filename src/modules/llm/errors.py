@@ -23,6 +23,7 @@ __all__ = [
     "LLMInterruptedError",
     "LLMTimeoutError",
     "RetryableError",
+    "UnsendableRequestError",
 ]
 
 
@@ -50,6 +51,14 @@ class FatalError(LLMError):
     """不可恢复失败：请求参数错误 / 鉴权失败等，重试无意义。"""
 
     default_message = "不可恢复失败，重试无意义"
+
+
+class UnsendableRequestError(ValueError):
+    """请求在装配期就被拒：内容本身发不出去（文本里夹着长串 base64），原样重发必然再被拒。
+
+    在发出之前抛出，不经过故障切换；调用方要么改掉请求里的内容再发，要么放弃这份请求。
+    继承 ValueError：它本质是调用方给了一份不合法的输入。
+    """
 
 
 class LLMTimeoutError(LLMError):

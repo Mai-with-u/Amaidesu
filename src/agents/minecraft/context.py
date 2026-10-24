@@ -16,6 +16,7 @@ from typing import Any
 
 from src.agents.minecraft.config import MinecraftContextConfig
 from src.modules.context import TokenCounter, Watermarks, resolve_watermarks
+from src.modules.llm.engine import inline_payload_spans
 from src.modules.logging import get_logger
 
 logger = get_logger("MinecraftContext")
@@ -43,6 +44,11 @@ OPENING_KEY = "_minecraft_opening"
 
 _OPENING_HEADER = "[开局资料] 宿主已代为读取下面几项，这些不是你发起的调用；仍有效时直接使用，不重复读取。"
 _OPENING_OMITTED = "这项开局资料太长，摘要不收原文；决策模型当时已经读过，后面要用就重新调用"
+# 请求发不出去时换下二进制的说明：写清原来有多少、为什么没送到、要用怎么办
+_UNSENDABLE_NOTE = (
+    "[这里原有 {chars} 字连续 base64：二进制被当成文字带进了回执，整条请求发不出去，宿主已把它换成这句说明；"
+    "要用里面的东西就换个方式查]"
+)
 
 
 def json_text(value: Any) -> str:
@@ -102,6 +108,40 @@ def _elide_oversized_results(source: list[dict[str, Any]]) -> list[dict[str, Any
             }
         elided.append(message)
     return elided
+
+
+def strip_unsendable(messages: list[dict[str, Any]]) -> int:
+    """请求被装配守卫拒发时：把历史里每串会被拒的连续 base64 换成一句说明，返回换了几处。
+
+    只换二进制那一段，回执其余内容原样留着；判定规则与守卫同一份。base64 落在 JSON 字符串值里，
+    换成中文说明后整段 JSON 仍然合法，模型照常能读。
+    """
+    replaced = 0
+
+    def _clean(text: str) -> str:
+        nonlocal replaced
+        spans = inline_payload_spans(text)
+        if not spans:
+            return text
+        pieces: list[str] = []
+        last = 0
+        for start, end in spans:
+            pieces.append(text[last:start])
+            pieces.append(_UNSENDABLE_NOTE.format(chars=end - start))
+            last = end
+        pieces.append(text[last:])
+        replaced += len(spans)
+        return "".join(pieces)
+
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = _clean(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    part["text"] = _clean(part["text"])
+    return replaced
 
 
 def _history_parts(source: list[dict[str, Any]]) -> list[str]:

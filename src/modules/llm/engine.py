@@ -43,7 +43,14 @@ from src.modules.llm.bootstrap import (
 from src.modules.llm.client import LLMResponse
 from src.modules.llm.clients import resolve_client_method
 from src.modules.llm.context_meter import ContextBreakdown, estimate_breakdown, extract_request_sections
-from src.modules.llm.errors import FatalError, LLMError, LLMInterruptedError, LLMTimeoutError, RetryableError
+from src.modules.llm.errors import (
+    FatalError,
+    LLMError,
+    LLMInterruptedError,
+    LLMTimeoutError,
+    RetryableError,
+    UnsendableRequestError,
+)
 from src.modules.llm.interrupt import guarded_call
 from src.modules.llm.observation import calculate_cost, record_usage
 from src.modules.llm.request_history_manager import build_prompt_preview, count_image_parts
@@ -65,7 +72,7 @@ from src.modules.storage.repos import LLMRepo
 from src.modules.storage.repos.llm import LLMRequestInsert
 from src.modules.vision.image_store import get_image_store
 
-__all__ = ["LLMManager", "LLMResponse", "RetryConfig"]
+__all__ = ["LLMManager", "LLMResponse", "RetryConfig", "inline_payload_spans"]
 
 
 class RetryConfig(BaseModel):
@@ -352,6 +359,16 @@ def _hydrate_image_refs(request: GenerateRequest) -> None:
         messages[i] = msg.model_copy(update={"parts": new_parts})
 
 
+def inline_payload_spans(text: str) -> List[Tuple[int, int]]:
+    """装配守卫会因这段文本拒发时，返回其中每串连续 base64 的起止位置；发得出去就返回空列表。
+
+    调用方据此把请求里的二进制换成说明再发，判定规则与守卫同一份。
+    """
+    if len(text) <= _MAX_INLINE_TEXT_CHARS:
+        return []
+    return [match.span() for match in _BASE64_RUN.finditer(text)]
+
+
 def _guard_inline_payload(request: GenerateRequest) -> None:
     """装配守卫：请求文本字段超长且夹带长串 base64 即硬错（宁拒发不静默烧）。
 
@@ -359,6 +376,7 @@ def _guard_inline_payload(request: GenerateRequest) -> None:
     base64 唯一合法形态且经窗口限额；文本里出现长串 base64 说明某个工具
     回执把二进制当文本带进了对话。正常文本再长也放行：它是调用方真要的内容，
     多长由各自的上下文预算与整理机制管，拒发只会让同一条回执每步都失败。
+    拒发抛 :class:`UnsendableRequestError`，调用方据此区分"内容发不出去"和暂时性失败。
     """
     candidates: List[str] = []
     if request.system:
@@ -370,13 +388,12 @@ def _guard_inline_payload(request: GenerateRequest) -> None:
             elif isinstance(part, TextPart):
                 candidates.append(part.text)
     for text in candidates:
-        if len(text) <= _MAX_INLINE_TEXT_CHARS:
-            continue
-        run = _BASE64_RUN.search(text)
-        if run is not None:
-            raise ValueError(
+        spans = inline_payload_spans(text)
+        if spans:
+            start, end = spans[0]
+            raise UnsendableRequestError(
                 f"装配守卫：请求文本含 {len(text)} 字符超长字段（上限 {_MAX_INLINE_TEXT_CHARS}），"
-                f"其中有 {run.end() - run.start()} 字符连续 base64，疑似内联大载荷泄漏，拒绝发送；"
+                f"其中有 {end - start} 字符连续 base64，疑似内联大载荷泄漏，拒绝发送；"
                 "请检查工具回执是否把 base64 当文本进了对话"
             )
 
