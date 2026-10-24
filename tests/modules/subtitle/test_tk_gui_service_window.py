@@ -47,9 +47,6 @@ class FakeCtkRoot:
     def winfo_screenheight(self):
         return self._screen[1]
 
-    def winfo_fpixels(self, _spec):
-        return 96.0 * self._scale
-
     def update_idletasks(self):
         pass
 
