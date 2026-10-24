@@ -8,6 +8,7 @@ from src.modules.avatar.tool_common import (
     contract_tool_specs,
     clamp_intensity,
     dispatch_tool,
+    scaled_emotion_weights,
     set_expression_schema,
     trigger_action_schema,
     unknown_action_fail,
@@ -90,3 +91,18 @@ def test_clamp_intensity_bounds() -> None:
     assert clamp_intensity(-1.0) == 0.0
     assert clamp_intensity(2.0) == 1.0
     assert clamp_intensity("0.7") == 0.7  # 字符串数值经 float 归一
+
+
+def test_scaled_emotion_weights_validates_scales_and_defaults_neutral() -> None:
+    """VTS / Warudo 共用的缩放语义：词表外拒绝、按强度线性缩放、档案缺档按中性空表。"""
+    table = {"happy": {"MouthSmile": 0.8}, "tired": {"relaxed": 0.6, "eye_close": 0.4}}
+
+    factor, scaled = scaled_emotion_weights("happy", 0.5, table)
+    assert (factor, scaled) == (0.5, {"MouthSmile": 0.4})
+    # 超界强度先收敛再缩放；权重保留 4 位小数
+    _, scaled_full = scaled_emotion_weights("tired", 2.0, table)
+    assert scaled_full == {"relaxed": 0.6, "eye_close": 0.4}
+    # 合法但档案未列的情绪（Warudo 档案缺档形态）按中性处理
+    assert scaled_emotion_weights("neutral", 1.0, table) == (1.0, {})
+    # 词表外情绪返回 None（调用方转失败结果）
+    assert scaled_emotion_weights("joyful", 0.5, table) is None

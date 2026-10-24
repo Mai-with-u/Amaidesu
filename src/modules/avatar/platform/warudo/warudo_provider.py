@@ -24,9 +24,9 @@ from pydantic import Field
 
 from src.modules.avatar.speech_binding import bind_speech_emotion, bind_speaking_state
 from src.modules.avatar.tool_common import (
-    clamp_intensity,
     contract_tool_specs,
     dispatch_tool,
+    scaled_emotion_weights,
     unknown_action_fail,
 )
 from src.modules.config.schemas.base import BaseConfig
@@ -35,7 +35,6 @@ from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec, tool_result_fail, tool_result_ok
 from src.modules.tools.provider import ConnectionToolProvider, wire_connection_tools
-from src.modules.types.emotion_vocab import Emotion
 
 from .expression_profile import BLINK_KEY, WarudoExpressionConfig
 from .lip_sync_renderer import WarudoLipSyncRenderer
@@ -298,10 +297,10 @@ class WarudoProvider(ConnectionToolProvider):
         状态件的写入经监控循环推送到 Warudo（``changed`` 标志驱动）；
         换情绪时表情键整表替换，旧表情不残留。档案未列出的合法情绪按中性处理。
         """
-        if emotion not in {e.value for e in Emotion}:
+        resolved = scaled_emotion_weights(emotion, intensity, self.expression.emotions)
+        if resolved is None:
             return tool_result_fail("warudo_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
-        factor = clamp_intensity(intensity)
-        applied = {key: round(weight * factor, 4) for key, weight in self.expression.emotions.get(emotion, {}).items()}
+        factor, applied = resolved
         # 收到情绪 → 表情键整表写入；眨眼键交给眼部状态合并，笑眼等暂停眨眼的键生效时眨眼任务跳过
         self.state_manager.expression_state.set_weights(applied)
         blink_blocked = any(applied.get(key, 0.0) > 0 for key in self.expression.blink_blocking_keys)

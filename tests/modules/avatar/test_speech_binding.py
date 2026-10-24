@@ -39,7 +39,8 @@ async def test_speech_is_reflected_to_vts_parameters_and_tolerated_by_vrchat() -
     bind_speech_emotion(bus, vrchat, vrchat.logger)  # VRChat 无情绪通道：诚实返回未应用，不抛
 
     await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("happy", 0.8))
-    assert vts.expression.set_multi_parameter.await_args.args[0] == {"MouthSmile": 0.8 * 0.8, "Brows": 0.6 * 0.8}
+    # 缩放统一走 scaled_emotion_weights：4 位小数收敛，不带浮点尾差进平台参数
+    assert vts.expression.set_multi_parameter.await_args.args[0] == {"MouthSmile": 0.64, "Brows": 0.48}
 
 
 async def test_provider_error_in_reflection_does_not_break_the_bus() -> None:

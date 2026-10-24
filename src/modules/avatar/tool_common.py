@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.modules.logging import ModuleLogger
 from src.modules.tools.models import (
@@ -144,6 +144,30 @@ def clamp_intensity(intensity: float) -> float:
     return min(1.0, max(0.0, float(intensity)))
 
 
+# 17 Emotion 枚举值集合（词表编译期已知；set_expression 的合法性边界）
+_EMOTION_VALUES = frozenset(e.value for e in Emotion)
+
+
+def scaled_emotion_weights(
+    emotion: str,
+    intensity: float,
+    weights_by_emotion: Mapping[str, Mapping[str, float]],
+) -> Optional[Tuple[float, Dict[str, float]]]:
+    """按强度线性缩放情绪权重表，返回 (收敛后强度, 缩放后权重)；词表外情绪返回 None。
+
+    各形象平台 set_expression 共用的缩放语义：0.0 收回全部表情参数、1.0 为
+    权重表完整幅度、线性内插，权重统一保留 4 位小数。权重表本身由各平台
+    自持（参数名与每档幅度是平台各自的事；档案未列出的合法情绪按空表 =
+    中性处理），本函数收拢"词表校验 + 强度收敛 + 线性缩放"的公共语义，
+    保证同一情绪在不同平台上幅度一致。
+    """
+    if emotion not in _EMOTION_VALUES:
+        return None
+    factor = clamp_intensity(intensity)
+    weights = weights_by_emotion.get(emotion, {})
+    return factor, {key: round(weight * factor, 4) for key, weight in weights.items()}
+
+
 __all__ = [
     "SET_EXPRESSION_TOOL",
     "LIST_PRESET_ACTIONS_TOOL",
@@ -154,4 +178,5 @@ __all__ = [
     "dispatch_tool",
     "unknown_action_fail",
     "clamp_intensity",
+    "scaled_emotion_weights",
 ]

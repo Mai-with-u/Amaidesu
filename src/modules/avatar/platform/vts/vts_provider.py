@@ -30,9 +30,9 @@ from pydantic import Field
 
 from src.modules.avatar.speech_binding import bind_speech_emotion, bind_speaking_state
 from src.modules.avatar.tool_common import (
-    clamp_intensity,
     contract_tool_specs,
     dispatch_tool,
+    scaled_emotion_weights,
     unknown_action_fail,
 )
 from src.modules.config.schemas.base import BaseConfig
@@ -560,11 +560,10 @@ class VTSProvider(ConnectionToolProvider):
         ``neutral`` 映射为空参数表（表情交回 idle/基线渲染）。映射表外的
         情绪名按失败结果返回（词表编译期已知，出现未知名即调用方契约破坏）。
         """
-        params = self._emotion_map.get(emotion)
-        if params is None:
+        resolved = scaled_emotion_weights(emotion, intensity, self._emotion_map)
+        if resolved is None:
             return tool_result_fail("vts_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
-        factor = clamp_intensity(intensity)
-        scaled = {name: value * factor for name, value in params.items()}
+        factor, scaled = resolved
         success = await self.expression.set_multi_parameter(scaled, 1.0)
         return tool_result_ok(
             "vts_set_expression",
