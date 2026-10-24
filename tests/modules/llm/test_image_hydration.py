@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from src.modules.llm.clients.openai.client import OpenAIClient
@@ -68,6 +70,22 @@ def test_guard_rejects_oversized_text_but_allows_hydrated_image() -> None:
     request = _request([{"role": "user", "content": "看看"}])
     request.messages[0].parts.append(ImagePart(image="data:image/png;base64," + "A" * 300_000))
     _guard_inline_payload(request)
+
+
+def test_guard_lets_long_real_text_through_but_still_catches_base64_inside_it() -> None:
+    """周围几十台机器的检视结果本来就有二十多万字：正常文本再长也放行；夹着一长串 base64 的照样拒发。"""
+    machines = [
+        {"id": f"m{index}", "ports": [{"at": {"x": -80, "y": 98, "z": port}, "side": "down", "note": "接着一段线缆"}]}
+        for index in range(40)
+        for port in range(60)
+    ]
+    receipt = json.dumps({"ok": True, "data": {"machines": machines}}, ensure_ascii=False)
+    assert len(receipt) > 200_000
+    _guard_inline_payload(_request([{"role": "tool", "tool_call_id": "c1", "content": receipt}]))
+
+    leaked = json.dumps({"ok": True, "screenshot": "iVBOR" + "Qk" * 20_000, "data": {"machines": machines}})
+    with pytest.raises(ValueError, match="连续 base64"):
+        _guard_inline_payload(_request([{"role": "tool", "tool_call_id": "c1", "content": leaked}]))
 
 
 def test_client_translation_requires_hydrated_parts() -> None:

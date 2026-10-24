@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -310,10 +311,14 @@ def _normalize_generate_input(
     )
 
 
-# 装配守卫阈值：请求文本字段超过该长度即硬错。注水后的 data URL 图像走
-# ImagePart 专用通道不在此列；文本字段里的超长内容只能是内联大载荷泄漏
+# 装配守卫阈值：请求文本字段超过该长度时检查里面是否夹带二进制。注水后的 data URL
+# 图像走 ImagePart 专用通道不在此列；文本字段里混进 base64 = 内联大载荷泄漏
 # （观察占位符契约被绕过），宁可拒发也不静默烧 token
 _MAX_INLINE_TEXT_CHARS = 200_000
+# 超长字段里出现这么长一串连续的 base64 字符才算泄漏。正常的长文本（游戏回执 JSON、资料原文）
+# 到处是引号、逗号、空格和中文，连不成这么长；一张截图的 base64 是几十万个连续字符。
+# 只按长度判会误伤：周围 40 台机器的检视结果有 22 万字，被拒发后游戏 Agent 每步都撞同一条回执
+_BASE64_RUN = re.compile(r"[A-Za-z0-9+/]{10000,}")
 
 
 def _hydrate_image_refs(request: GenerateRequest) -> None:
@@ -348,11 +353,12 @@ def _hydrate_image_refs(request: GenerateRequest) -> None:
 
 
 def _guard_inline_payload(request: GenerateRequest) -> None:
-    """装配守卫：请求文本字段超长即硬错（2026-10-12 拍板：宁拒发不静默烧）。
+    """装配守卫：请求文本字段超长且夹带长串 base64 即硬错（宁拒发不静默烧）。
 
     只扫文本承载字段（system / 文本 part）——注水后的 ImagePart.image 是
-    base64 唯一合法形态且经窗口限额；文本里出现超长内容只能说明某个工具
-    回执把二进制当文本带进了对话。
+    base64 唯一合法形态且经窗口限额；文本里出现长串 base64 说明某个工具
+    回执把二进制当文本带进了对话。正常文本再长也放行：它是调用方真要的内容，
+    多长由各自的上下文预算与整理机制管，拒发只会让同一条回执每步都失败。
     """
     candidates: List[str] = []
     if request.system:
@@ -364,10 +370,14 @@ def _guard_inline_payload(request: GenerateRequest) -> None:
             elif isinstance(part, TextPart):
                 candidates.append(part.text)
     for text in candidates:
-        if len(text) > _MAX_INLINE_TEXT_CHARS:
+        if len(text) <= _MAX_INLINE_TEXT_CHARS:
+            continue
+        run = _BASE64_RUN.search(text)
+        if run is not None:
             raise ValueError(
                 f"装配守卫：请求文本含 {len(text)} 字符超长字段（上限 {_MAX_INLINE_TEXT_CHARS}），"
-                "疑似内联大载荷泄漏，拒绝发送；请检查工具回执是否把 base64 当文本进了对话"
+                f"其中有 {run.end() - run.start()} 字符连续 base64，疑似内联大载荷泄漏，拒绝发送；"
+                "请检查工具回执是否把 base64 当文本进了对话"
             )
 
 
