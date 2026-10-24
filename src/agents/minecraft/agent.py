@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 import uuid
 from collections import deque
@@ -29,6 +28,7 @@ from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
 from src.agents.minecraft.attention_matrix import classify, summarize
 from src.agents.minecraft.context import FACTS_KEY, MinecraftHistoryCompactor, close_interrupted_calls, json_text
+from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
 from src.agents.minecraft.glance import glance_brief, glance_scene, glance_self
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.maicraft import (
@@ -43,8 +43,6 @@ from src.agents.minecraft.maicraft import (
     MaicraftReply,
     goal_id_of_ledger,
     goal_run_of,
-    ledger_status_of,
-    ledger_task_id,
     reply_of,
 )
 from src.agents.minecraft.repeated_notice import notice_present, repeat_reference
@@ -66,7 +64,6 @@ from src.modules.skills import SkillLibrary
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
-from src.modules.tools.tasks import TERMINAL_TASK_STATES
 from src.modules.vision.image_store import get_image_store
 
 from .config import MinecraftConfig
@@ -116,16 +113,6 @@ _TIMER_NOTICE = (
 _GAME_NOT_CONNECTED = (
     "游戏没连上：maicraft 一个工具都没有（Minecraft 客户端没开，或 MaiCraft 的 MCP 没连上），没法操作角色；连上后再派"
 )
-
-# 暂停前的身体急事多久之内还算这次暂停的来由：撤离甩开追兵后，Mod 在急事收尾的同一刻把主任务挂成暂停，
-# 两条事件前后脚到；隔久了的急事和这次暂停无关，不拿来解释。
-_URGENT_BEFORE_PAUSE_S = 60.0
-
-# Mod 没写暂停原因时 doing 只有这一句（"目标 maicraft:build 已暂停（第 0 步）"）：多出来的内容就是 Mod 写的原因。
-_BARE_PAUSE_DOING = re.compile(r"目标 \S+ 已暂停（第 \d+ 步）")
-
-# 结束了的目标在任务状态里保留几条：交付前对照用，再多只会挤占上下文。
-_RECENT_FINISHED_GOALS = 6
 
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
@@ -270,10 +257,9 @@ class MinecraftAgent(BaseAgent):
         self._delegated_batch_ids: List[str] = []
         self._delegated_finished_ids: List[str] = []
 
-        # 后台目标：在跟踪的目标此刻的样子、最近结束的目标、被暂停的目标。
-        self._goal_notes: Dict[int, Dict[str, Any]] = {}
-        self._finished_goals: Deque[Dict[str, Any]] = deque(maxlen=_RECENT_FINISHED_GOALS)
-        self._paused_goals: set[int] = set()
+        # 后台目标账本：在跟踪的目标此刻的样子、最近结束的目标、被暂停的目标，
+        # 以及目标 ↔ 任务账/委派账的记账联动（通知路由留在 Agent）。
+        self._goal_ledger = GoalLedger(task_tracker=task_tracker, agent_name=self.name)
         # 最近一条身体急事收尾的那句话与收到的时刻：紧接着到的暂停通知带上它，说清主任务为什么停在半路。
         self._urgent_before_pause: Optional[tuple[str, float]] = None
 
@@ -862,14 +848,14 @@ class MinecraftAgent(BaseAgent):
         self._context_compactor.checkpoints = 0
         self._shown_context = {}
         self._mc_state.set_todos([])
-        self._finished_goals.clear()
+        self._goal_ledger.clear_finished()
 
     async def _end_without_tool_calls(
         self, messages: List[Dict[str, Any]], content: str, steps: int, reminded: bool
     ) -> bool:
         """模型这一轮没调用工具：按终止语义收尾。返回 True 表示给过提醒、继续推进。"""
         pending = self._goals.tracked_ids()
-        actionable = self._actionable_goals()
+        actionable = self._goal_ledger.actionable_goal_ids()
         if actionable or (not pending and self._unfinished_todos()):
             return await self._continue_after_no_progress(
                 messages, reminded, "仍有目标在等你回答或被暂停，或还有未完成待办"
@@ -896,7 +882,9 @@ class MinecraftAgent(BaseAgent):
                 "content": "[任务尚需行动] "
                 + reason
                 + "。回答目标提出的问题、继续或取消被暂停的目标、推进下一项待办；确实无法推进时用 escalation 上报。\n"
-                + json_text({"goals_needing_you": [self._goal_notes[goal_id] for goal_id in self._actionable_goals()]}),
+                + json_text(
+                    {"goals_needing_you": self._goal_ledger.notes_for(self._goal_ledger.actionable_goal_ids())}
+                ),
             }
         )
         return True
@@ -984,25 +972,24 @@ class MinecraftAgent(BaseAgent):
             if run.finished:
                 # 当场完成的目标（记地点、只读分析）没有后台过程，结果已经在回复里；
                 # 账面仍要记：先登记再写终态，直接写会因条目不存在而落空（终态变化广播不出来）。
-                self._remember_finished(run)
-                self._register_and_settle_goal(run)
+                self._goal_ledger.remember_finished(run)
+                self._goal_ledger.register_and_settle(run)
                 return
             self._track_goal(run)
             return
         if arguments.get("operation") in ("cancel",) or run.finished:
             self._goals.untrack(run.goal_id)
-            self._goal_notes.pop(run.goal_id, None)
-            self._paused_goals.discard(run.goal_id)
-            self._remember_finished(run)
-            self._update_goal_ledger(run)
+            self._goal_ledger.forget(run.goal_id)
+            self._goal_ledger.remember_finished(run)
+            self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegated_finished_ids)
             return
         if not self._goals.tracking(run.goal_id) and arguments.get("operation") == "resume":
             # 重启或重进世界后恢复的目标：模型明确解除暂停，从此由宿主跟踪。
             self._track_goal(run)
             return
         if self._goals.tracking(run.goal_id):
-            self._note_goal(run)
-            self._update_goal_ledger(run)
+            self._goal_ledger.note(run)
+            self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegated_finished_ids)
 
     def _polls_running_goal(self, name: str, arguments: Dict[str, Any]) -> bool:
         """这次调用只是在查询还在跑的目标（没提问、没被暂停），不算推进。
@@ -1015,7 +1002,7 @@ class MinecraftAgent(BaseAgent):
         if arguments.get("path"):
             return False
         tracked = self._goals.tracked_ids()
-        if not tracked or self._actionable_goals():
+        if not tracked or self._goal_ledger.actionable_goal_ids():
             return False
         goal_id = arguments.get("goal_id")
         return arguments.get("operation") == "list" or goal_id in tracked
@@ -1026,115 +1013,8 @@ class MinecraftAgent(BaseAgent):
 
     def _track_goal(self, run: GoalRun) -> None:
         self._goals.track(run)
-        self._note_goal(run)
-        if self._task_tracker is not None:
-            self._task_tracker.track(
-                task_id=ledger_task_id(run.goal_id),
-                provider=PROVIDER,
-                tool=EXECUTE,
-                initiator=self.name,
-                snapshot=run.data,
-            )
+        self._goal_ledger.track(run)
         self._logger.info(f"开始跟踪目标 {run.goal_id}（{run.ability}）：{run.state}")
-
-    def _register_and_settle_goal(self, run: GoalRun) -> None:
-        """execute 当场返回终态的目标补记账：先按受理登记、再写终态，账本才广播得出这次变化。"""
-        if self._task_tracker is not None:
-            self._task_tracker.track(
-                task_id=ledger_task_id(run.goal_id),
-                provider=PROVIDER,
-                tool=EXECUTE,
-                initiator=self.name,
-                snapshot=run.data,
-            )
-        self._update_goal_ledger(run)
-
-    def _note_goal(self, run: GoalRun) -> None:
-        """记下目标此刻的样子：任务状态、看一眼与交付门禁都读它。"""
-        note: Dict[str, Any] = {"goal_id": run.goal_id, "ability": run.ability, "state": run.state}
-        if run.purpose:
-            note["purpose"] = run.purpose
-        if run.question:
-            note["question"] = run.question
-        if run.doing:
-            note["doing"] = run.doing
-        self._goal_notes[run.goal_id] = note
-        if run.state == PAUSED:
-            self._paused_goals.add(run.goal_id)
-        else:
-            self._paused_goals.discard(run.goal_id)
-
-    def _remember_finished(self, run: GoalRun) -> None:
-        self._finished_goals.append(
-            {"goal_id": run.goal_id, "ability": run.ability, "status": run.result_status, "summary": run.summary}
-        )
-
-    def _update_goal_ledger(self, run: GoalRun, summary: str = "") -> None:
-        ledger = getattr(self._task_tracker, "ledger", None)
-        if ledger is None:
-            return
-        status = ledger_status_of(run)
-        ledger.update(ledger_task_id(run.goal_id), status, snapshot=run.data, summary=summary or run.summary)
-        if status in TERMINAL_TASK_STATES:
-            self._settle_batch_delegations(status, self._dry_goal_summary(run))
-
-    @staticmethod
-    def _dry_goal_summary(run: GoalRun) -> str:
-        """目标终态给委派账的干巴机器摘要：只陈述结果，话术语义留给 LLM 的交付语。"""
-        label = run.result_status or "结束"
-        return f"游戏目标 {run.goal_id}（{run.ability}）{label}：{run.summary}"
-
-    def _settle_batch_delegations(self, status: str, summary: str) -> None:
-        """批级关联：本批吸收的委派共享批内目标的终态，干巴机器摘要先到账保底。
-
-        LLM 的交付/升级后到时按终态粘滞改不动状态（条目已移除，重复写入无效），
-        它的话术经 game.report 走主播侧；这里保证的是"LLM 一句没说也有回音"。
-        粗糙性已知并接受：一批委派共享批内目标终态，批中途某个目标先失败就先写失败。
-        """
-        ledger = getattr(self._task_tracker, "ledger", None)
-        if ledger is None:
-            return
-        for task_id in list(self._delegated_finished_ids):
-            if ledger.get(task_id) is None:
-                # 已被早到的目标终态或 LLM 交付写过终态：状态粘滞，不回退
-                continue
-            ledger.update(task_id, status, summary=summary)
-
-    def _flag_batch_delegations_stalled(self, goal_id: int, ability: str) -> None:
-        """STALLED 打进本批委派账的快照（中间态）：主播侧渲染看得到"停着没动静"。
-
-        目标随后结束（或恢复有动静）时分别由终态直写与常规进度写入覆盖掉这份标记。
-        """
-        ledger = getattr(self._task_tracker, "ledger", None)
-        if ledger is None:
-            return
-        for task_id in list(self._delegated_finished_ids):
-            record = ledger.get(task_id)
-            if record is None:
-                continue
-            stalled = dict(record.snapshot.get("stalled_goals") or {})
-            stalled[str(goal_id)] = ability
-            ledger.update(task_id, "running", snapshot={**record.snapshot, "stalled_goals": stalled})
-
-    def _note_goal_stalled(self, run: GoalRun) -> None:
-        """Mod 报告目标停着没动静的账面中间态：快照带停滞标记，本批委派账同步打标。"""
-        ledger = getattr(self._task_tracker, "ledger", None)
-        if ledger is not None:
-            ledger.update(
-                ledger_task_id(run.goal_id),
-                ledger_status_of(run),
-                snapshot={**run.data, "stalled": True},
-                summary=f"Mod 报告目标长时间没有新事件，仍未结束：{run.doing or run.ability}",
-            )
-        self._flag_batch_delegations_stalled(run.goal_id, run.ability)
-
-    def _actionable_goals(self) -> List[int]:
-        """要模型动手才会往下走的目标：在等回答的、被暂停的。"""
-        return sorted(
-            goal_id
-            for goal_id, note in self._goal_notes.items()
-            if note.get("state") == AWAITING_ANSWER or goal_id in self._paused_goals
-        )
 
     async def _on_goal_changed(
         self, run: GoalRun, after_world_change: bool = False, self_brief: str = "", stalled: bool = False
@@ -1147,80 +1027,29 @@ class MinecraftAgent(BaseAgent):
         并转发"有目标停着没动静"给主播；不另唤醒模型（Mod 节流过，模型侧由任务账本
         的停滞告警兜底）。
         """
-        before = self._goal_notes.get(run.goal_id, {})
+        before = self._goal_ledger.note_of(run.goal_id)
         if run.finished:
-            self._goal_notes.pop(run.goal_id, None)
-            self._paused_goals.discard(run.goal_id)
-            self._remember_finished(run)
-            self._update_goal_ledger(run)
-            self._inject_wakeup_message(self._finish_notice(run, self_brief))
+            self._goal_ledger.settle_finished(run, batch_task_ids=self._delegated_finished_ids)
+            self._inject_wakeup_message(finish_notice(run, self_brief))
             return
-        self._note_goal(run)
+        self._goal_ledger.note(run)
         if stalled:
-            self._note_goal_stalled(run)
+            self._goal_ledger.note_stalled(run, batch_task_ids=self._delegated_finished_ids)
             await self._emit_game_event(
                 "attention_required",
-                f"有目标停着没动静：目标 {run.goal_id}（{self._goal_label(run)}）很长时间没有新事件，还没结束。",
+                f"有目标停着没动静：目标 {run.goal_id}（{goal_label(run)}）很长时间没有新事件，还没结束。",
             )
             return
-        self._update_goal_ledger(run)
+        self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegated_finished_ids)
         if run.state == AWAITING_ANSWER and before.get("question") != run.question:
             self._inject_wakeup_message(
-                f"[系统] 目标 {run.goal_id}（{self._goal_label(run)}）在等你回答：{json_text(run.question)}。"
+                f"[系统] 目标 {run.goal_id}（{goal_label(run)}）在等你回答：{json_text(run.question)}。"
                 f"用 maicraft_goal(operation=answer, goal_id={run.goal_id}, answer=选项编号) 回答。"
             )
         elif run.state == PAUSED and before.get("state") != PAUSED:
-            self._inject_wakeup_message(self._pause_notice(run, after_world_change))
-
-    def _finish_notice(self, run: GoalRun, self_brief: str) -> str:
-        """目标结束的通知：达成情况、结束那一刻角色怎样、结果，以及折起来的大块证据怎么读回。
-
-        结束时在哪、血和饱食、手上拿着什么、开着什么界面由 Mod 写成一行附在结束事件上：
-        模型接下一步之前不用为这些先看一眼自己。
-        Mod 默认把结果里的大块证据（试过的办法、大的细节、长列表）折起来列在 ``result.folded``，
-        这里给的不是完整结果：有折起来的段时说清用哪个调用、照抄哪个 path 读回来，不让模型以为证据丢了。
-        """
-        brief = self_brief.strip().rstrip("。")
-        body = f"结束时：{brief}。" if brief else ""
-        folded = (run.result or {}).get("folded")
-        if isinstance(folded, list) and folded:
-            # 有折起来的段：告诉模型按段读回，长列表照返回的 next 一页页翻，不必一次全拿。
-            label = (
-                f"结果（大块证据折在 result.folded 里，要看哪段就照抄它的 path 用 "
-                f"maicraft_goal(operation=get, goal_id={run.goal_id}, path=…) 读，长的照返回的 next 翻页）"
-            )
-        else:
-            label = "结果"
-        return (
-            f"[系统] 目标 {run.goal_id}（{self._goal_label(run)}）结束了：{run.result_status}。"
-            f"{body}{label}：{json_text(run.result)}"
-        )
-
-    def _pause_notice(self, run: GoalRun, after_world_change: bool) -> str:
-        """目标被暂停的通知：说清为什么停，只有事件流真换了才说重进世界。
-
-        原因按这个顺序取：事件流换了编号（重进世界或游戏重启，没做完的目标读回来都先停着）；
-        Mod 在 doing 里写了原因就照抄 Mod 的；都没有时带上暂停前最近一条身体急事
-        （撤离甩开追兵后"离打点 N 格，主任务停在半路等下一步指示"那句）；还没有就如实说没写原因。
-        急事用一次就清掉，不拿去解释之后别的暂停。
-        """
-        urgent, self._urgent_before_pause = self._urgent_before_pause, None
-        fresh = urgent is not None and time.monotonic() - urgent[1] <= _URGENT_BEFORE_PAUSE_S
-        doing = run.doing.strip().rstrip("。")
-        if after_world_change:
-            why = "游戏重进了世界或重启过，没做完的目标读回来都先停着"
-        elif doing and not _BARE_PAUSE_DOING.fullmatch(doing):
-            why = f"Mod 说：{doing}"
-        elif fresh and urgent is not None:
-            why = f"暂停前身体刚处理完一件急事：{urgent[0].strip().rstrip('。')}"
-        else:
-            why = "Mod 没写暂停原因"
-        return (
-            f"[系统] 目标 {run.goal_id}（{self._goal_label(run)}）被暂停了，身体没在做它。{why}。"
-            f"先用 minecraft_get_work_log 读工作笔记，核对哪些事其实已经做完"
-            f"（东西可能已放置或已消耗，背包里没有不等于丢了）；再看现场。"
-            f"然后才用 maicraft_goal(operation=resume 或 cancel, goal_id={run.goal_id}) 继续或取消。"
-        )
+            # 急事用一次就清掉，不拿去解释之后别的暂停；是否新鲜由通知函数按当下时刻判定
+            urgent, self._urgent_before_pause = self._urgent_before_pause, None
+            self._inject_wakeup_message(pause_notice(run, after_world_change, urgent, time.monotonic()))
 
     async def _on_decision_asked(self, run: GoalRun) -> None:
         """Mod 自己挂出的决策（死亡恢复）在等回答：带着问题与选项叫醒模型，让它按问题里给的选项选。
@@ -1237,13 +1066,7 @@ class MinecraftAgent(BaseAgent):
 
     async def _on_goal_gone(self, goal_id: int, reason: str) -> None:
         """在跟踪的目标查不到了（多半是换了世界）：如实告诉任务，不让它挂着等不来的结果。"""
-        note = self._goal_notes.pop(goal_id, {"goal_id": goal_id})
-        self._paused_goals.discard(goal_id)
-        self._finished_goals.append({**note, "status": "gone", "summary": reason})
-        ledger = getattr(self._task_tracker, "ledger", None)
-        if ledger is not None:
-            ledger.update(ledger_task_id(goal_id), "failed", summary=reason)
-        self._settle_batch_delegations("failed", f"游戏目标 {goal_id} 不在了：{reason}")
+        self._goal_ledger.mark_gone(goal_id, reason, batch_task_ids=self._delegated_finished_ids)
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:
@@ -1386,9 +1209,6 @@ class MinecraftAgent(BaseAgent):
         self._message_queue.append(self._sky_notice)
 
     @staticmethod
-    def _goal_label(run: GoalRun) -> str:
-        return f"{run.ability}，{run.purpose}" if run.purpose else run.ability
-
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """账本的变化回到这里：目标的成败已经由事件流直接送达，账本只补"长时间没进展"的告警。"""
         goal_id = goal_id_of_ledger(payload.task_id)
@@ -1409,12 +1229,12 @@ class MinecraftAgent(BaseAgent):
 
     def _request_wait(self) -> Dict[str, Any]:
         """只允许对在跑的目标让出；在等回答或被暂停的目标不会自己往下走。"""
-        actionable = self._actionable_goals()
+        actionable = self._goal_ledger.actionable_goal_ids()
         if actionable:
             return {
                 "ok": False,
                 "error": "有目标在等你回答或被暂停了，等待不会推进；先处理它们",
-                "goals": [self._goal_notes[goal_id] for goal_id in actionable],
+                "goals": self._goal_ledger.notes_for(actionable),
             }
         tracked = self._goals.tracked_ids()
         if not tracked:
@@ -1429,7 +1249,7 @@ class MinecraftAgent(BaseAgent):
         return {
             "ok": True,
             "waiting": True,
-            "goals": [self._goal_notes[goal_id] for goal_id in tracked if goal_id in self._goal_notes],
+            "goals": self._goal_ledger.notes_for(tracked),
             "resume_on": "目标结束、提问、被暂停、计时到点，或主播发来新指令",
         }
 
@@ -1442,8 +1262,8 @@ class MinecraftAgent(BaseAgent):
             "original_instructions": list(self._task_instructions),
             "todo": self._mc_state.todo_doc()["todos"],
             "notebook": self._mc_state.notebook,
-            "background_goals": [deepcopy(note) for _, note in sorted(self._goal_notes.items())],
-            "recently_finished_goals": list(self._finished_goals),
+            "background_goals": [deepcopy(note) for note in self._goal_ledger.all_notes_sorted()],
+            "recently_finished_goals": self._goal_ledger.recent_finished(),
             "reasoning_steps_used": self._task_steps,
         }
 
@@ -1560,7 +1380,7 @@ class MinecraftAgent(BaseAgent):
         work: Dict[str, Any] = {"state": state, "todo": self._mc_state.todo_doc()["todos"]}
         goals = [
             {key: note[key] for key in ("ability", "purpose", "state", "doing") if key in note}
-            for _, note in sorted(self._goal_notes.items())
+            for note in self._goal_ledger.all_notes_sorted()
         ]
         if goals:
             work["goals"] = goals

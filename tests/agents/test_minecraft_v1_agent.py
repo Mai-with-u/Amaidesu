@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.glance import glance_brief, glance_scene
+from src.agents.minecraft.goal_ledger import pause_notice
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of, reply_of
 from src.agents.minecraft.tools import MaicraftMcpProvider
 from src.modules.events.payloads.game import GamePayload
@@ -1060,14 +1061,14 @@ async def test_only_a_changed_event_stream_is_called_reentering_the_world() -> N
     assert run is not None
 
     agent._urgent_before_pause = (_ESCAPED, time.monotonic())
-    reentered = agent._pause_notice(run, True)
+    urgent, agent._urgent_before_pause = agent._urgent_before_pause, None
+    reentered = pause_notice(run, True, urgent, time.monotonic())
     assert "游戏重进了世界或重启过" in reentered and "已撤离" not in reentered
     # 恢复结论前先核对工作笔记：东西可能已放置或已消耗，"背包里没有"不等于丢了。
     assert "minecraft_get_work_log" in reentered and "背包里没有不等于丢了" in reentered
     assert agent._urgent_before_pause is None, "急事用过一次就清掉"
 
-    agent._urgent_before_pause = (_ESCAPED, time.monotonic() - 120)
-    stale = agent._pause_notice(run, False)
+    stale = pause_notice(run, False, (_ESCAPED, time.monotonic() - 120), time.monotonic())
     assert "Mod 没写暂停原因" in stale and "已撤离" not in stale and "重进" not in stale
 
 
