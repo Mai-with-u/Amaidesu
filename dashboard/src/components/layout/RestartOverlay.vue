@@ -29,18 +29,13 @@
           <p class="status-desc">{{ statusDesc }}</p>
         </div>
 
-        <!-- 进度条 -->
+        <!-- 真实等待信号：已等待秒数，检查态附带健康检查次数 -->
         <div v-if="showProgress" class="progress-section">
-          <el-progress
-            :percentage="progress"
-            :stroke-width="8"
-            :show-text="false"
-            :color="progressColor"
-          />
-          <div class="progress-meta">
-            <span>{{ Math.round(progress) }}%</span>
-            <span>{{ formatTime(elapsed) }}</span>
-          </div>
+          <p class="progress-meta">
+            已等待 {{ elapsed }} 秒<template v-if="status === 'checking'">
+              · 第 {{ checkAttempts }} 次健康检查</template
+            >
+          </p>
         </div>
 
         <!-- 提示 -->
@@ -73,7 +68,6 @@ const props = withDefaults(
   defineProps<{
     visible: boolean;
     status: 'requesting' | 'restarting' | 'checking' | 'success' | 'failed';
-    progress: number;
     elapsed: number;
     checkAttempts?: number;
     maxAttempts?: number;
@@ -94,12 +88,6 @@ const emit = defineEmits<{
 const isRunning = computed(() => ['requesting', 'restarting', 'checking'].includes(props.status));
 
 const showProgress = computed(() => props.status !== 'failed');
-
-const progressColor = computed(() => {
-  if (props.status === 'success') return 'var(--color-success)';
-  if (props.status === 'failed') return 'var(--color-danger)';
-  return 'var(--color-primary)';
-});
 
 const statusTitle = computed(() => {
   const titles: Record<string, string> = {
@@ -133,13 +121,6 @@ const tipText = computed(() => {
   };
   return tips[props.status] || '';
 });
-
-// Helpers
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
 </script>
 
 <style scoped>
@@ -236,16 +217,13 @@ function formatTime(seconds: number): string {
 /* Progress */
 .progress-section {
   width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
 }
 
 .progress-meta {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.45);
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+  text-align: center;
 }
 
 /* Tips */

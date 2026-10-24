@@ -19,20 +19,14 @@ export const useAppRestartStore = defineStore('app-restart', () => {
   const restarting = ref(false);
   const overlayVisible = ref(false);
   const overlayStatus = ref<RestartOverlayStatus>('requesting');
-  const overlayProgress = ref(0);
   const overlayElapsed = ref(0);
   const overlayCheckAttempts = ref(0);
   const overlayMaxAttempts = 60;
 
-  let progressTimer: ReturnType<typeof setInterval> | null = null;
   let elapsedTimer: ReturnType<typeof setInterval> | null = null;
   let healthTimer: ReturnType<typeof setInterval> | null = null;
 
   function clearAllTimers(): void {
-    if (progressTimer !== null) {
-      clearInterval(progressTimer);
-      progressTimer = null;
-    }
     if (elapsedTimer !== null) {
       clearInterval(elapsedTimer);
       elapsedTimer = null;
@@ -43,10 +37,8 @@ export const useAppRestartStore = defineStore('app-restart', () => {
     }
   }
 
-  function startProgressAnimation(): void {
-    progressTimer = setInterval(() => {
-      if (overlayProgress.value < 90) overlayProgress.value += 1;
-    }, 200);
+  /** 等待秒数计时：真实经过时间，遮罩展示"已等待 N 秒"的唯一数据源 */
+  function startElapsedTimer(): void {
     elapsedTimer = setInterval(() => {
       overlayElapsed.value += 1;
     }, 1000);
@@ -61,7 +53,6 @@ export const useAppRestartStore = defineStore('app-restart', () => {
       try {
         await systemApi.getHealth();
         clearAllTimers();
-        overlayProgress.value = 100;
         overlayStatus.value = 'success';
         setTimeout(() => {
           overlayVisible.value = false;
@@ -83,7 +74,6 @@ export const useAppRestartStore = defineStore('app-restart', () => {
     restarting.value = true;
     overlayVisible.value = true;
     overlayStatus.value = 'requesting';
-    overlayProgress.value = 0;
     overlayElapsed.value = 0;
     overlayCheckAttempts.value = 0;
 
@@ -97,7 +87,7 @@ export const useAppRestartStore = defineStore('app-restart', () => {
       }
 
       overlayStatus.value = 'restarting';
-      startProgressAnimation();
+      startElapsedTimer();
 
       // 等后端退出后开始检查
       await new Promise(resolve => setTimeout(resolve, 3000));
@@ -124,7 +114,6 @@ export const useAppRestartStore = defineStore('app-restart', () => {
     restarting,
     overlayVisible,
     overlayStatus,
-    overlayProgress,
     overlayElapsed,
     overlayCheckAttempts,
     overlayMaxAttempts,

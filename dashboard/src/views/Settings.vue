@@ -288,7 +288,7 @@
 
       <template #footer>
         <el-button @click="showRestartDialog = false">稍后重启</el-button>
-        <el-button type="primary" :loading="restarting" @click="handleRestart">
+        <el-button type="primary" :loading="appRestart.restarting" @click="handleRestart">
           立即重启
         </el-button>
       </template>
@@ -326,6 +326,7 @@ import {
   Right,
 } from '@element-plus/icons-vue';
 import { useSettingsStore } from '@/stores/settings';
+import { useAppRestartStore } from '@/stores/appRestart';
 import type { ConfigFieldSchema, ConfigGroupSchema } from '@/types/settings';
 import {
   collectMatchingFields,
@@ -406,8 +407,8 @@ const iconMap: Record<string, unknown> = {
 
 // ── 状态 ──────────────────────────────────────────────────
 const settingsStore = useSettingsStore();
+const appRestart = useAppRestartStore();
 const showRestartDialog = ref(false);
-const restarting = ref(false);
 const searchQuery = ref('');
 const activeFileTab = ref('agents.toml');
 /** 高级字段总开关：关时浏览模式不渲染 advanced 字段（搜索结果不受影响） */
@@ -679,22 +680,10 @@ async function handleDiscard() {
   ElMessage.info('已丢弃所有更改');
 }
 
+/** 重启走全局重启流程（遮罩 + 健康检查），成功失败均由 store 内提示，本页只负责收起对话框 */
 async function handleRestart() {
-  restarting.value = true;
-  try {
-    const result = await settingsStore.restartService();
-    if (result.success) {
-      ElMessage.success('服务正在重启...');
-      showRestartDialog.value = false;
-    } else {
-      ElMessage.error(result.message);
-    }
-  } catch (error) {
-    console.error('Restart failed:', error);
-    ElMessage.error('重启服务失败');
-  } finally {
-    restarting.value = false;
-  }
+  showRestartDialog.value = false;
+  await appRestart.beginRestart();
 }
 </script>
 

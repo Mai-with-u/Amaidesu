@@ -64,7 +64,6 @@
   <RestartOverlay
     :visible="overlayVisible"
     :status="overlayStatus"
-    :progress="overlayProgress"
     :elapsed="overlayElapsed"
     :check-attempts="overlayCheckAttempts"
     :max-attempts="overlayMaxAttempts"
@@ -96,7 +95,6 @@ const {
   restarting,
   overlayVisible,
   overlayStatus,
-  overlayProgress,
   overlayElapsed,
   overlayCheckAttempts,
   overlayMaxAttempts,
