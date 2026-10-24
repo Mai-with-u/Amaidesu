@@ -9,6 +9,12 @@ import pytest
 from src.modules.audio import audio_device_manager as adm
 from src.modules.audio.audio_device_manager import AudioDeviceManager
 
+# 无音频子系统的环境（如无头 CI）下依赖降级，本文件的 sd 假件挂载点不存在
+pytestmark = pytest.mark.skipif(
+    not adm.DEPENDENCIES_OK,
+    reason="sounddevice 依赖不可用（无音频子系统环境），音频管理器走降级路径",
+)
+
 SD = "src.modules.audio.audio_device_manager.sd"
 
 
