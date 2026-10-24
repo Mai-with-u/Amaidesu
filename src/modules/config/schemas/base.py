@@ -1,6 +1,6 @@
 """组件配置基类定义
 
-定义所有组件（Collector/Decider/Handler）配置的基类，
+定义所有组件配置的基类，
 提供漂移检测和 TOML 生成功能。
 """
 
@@ -100,7 +100,7 @@ class DriftReport:
 class BaseConfig(BaseModel):
     """组件配置基类
 
-    所有组件（Collector/Decider/Handler）配置的基类，
+    所有组件配置的基类，
     定义通用字段、漂移检测逻辑和 TOML 生成功能。
 
     注意：

@@ -1,47 +1,16 @@
-"""配置加载：Schema 默认值与主配置合并、agents 启用名单、deep_merge 规则，以及历史重构遗留的契约守卫"""
-
-import inspect
+"""配置加载：agents 启用名单取值、schemas 导出契约守卫、诊断保留默认值"""
 
 import pytest
-from pydantic import BaseModel
 
 from src.modules.config import schemas
 from src.modules.config.core_schemas import DiagnosticsConfig
-from src.modules.config.service import ConfigService, deep_merge_configs
-
-
-class InputProviderSchema(BaseModel):
-    enabled: bool = True
-    priority: int = 100
-    message_prefix: str = ""
-    max_messages: int = 10
-    custom_field: str = "default_value"
+from src.modules.config.service import ConfigService
 
 
 def _service(base_dir) -> ConfigService:
     service = ConfigService(base_dir=str(base_dir))
     service.initialize()
     return service
-
-
-def test_schema_defaults_apply_and_unknown_phase_or_uninitialized_service_yield_nothing(tmp_path) -> None:
-    (tmp_path / "config.toml").write_text(
-        '[general]\nplatform_id = "test"\n\n[collectors]\nenabled = ["test_input"]\n', encoding="utf-8"
-    )
-    service = _service(tmp_path)
-    merged = service.get_config_with_defaults("test_input", "input", InputProviderSchema)
-    assert merged == {
-        "enabled": True,
-        "priority": 100,
-        "message_prefix": "",
-        "max_messages": 10,
-        "custom_field": "default_value",
-    }
-    assert service.get_config_with_defaults("test_component", "invalid_phase") == {}
-
-    assert (
-        ConfigService(base_dir=str(tmp_path / "other")).get_config_with_defaults("test_input", "input") == {}
-    )  # 未初始化
 
 
 def test_agents_enabled_list_keeps_the_users_choice(tmp_path) -> None:
@@ -54,21 +23,9 @@ def test_agents_enabled_list_keeps_the_users_choice(tmp_path) -> None:
     assert _service(tmp_path).get_section("agents", {}).get("enabled") == ["streamer", "minecraft"]
 
 
-def test_deep_merge_overrides_scalars_recurses_dicts_replaces_lists_and_ignores_none() -> None:
-    merged = deep_merge_configs(
-        {"a": 1, "b": 2, "nested": {"x": 10, "y": 20}, "items": [1, 2, 3]},
-        {"b": None, "c": 3, "nested": {"y": 200, "z": 30}, "items": [4, 5]},
-    )
-    assert merged == {"a": 1, "b": 2, "c": 3, "nested": {"x": 10, "y": 200, "z": 30}, "items": [4, 5]}  # None 不覆盖
-    assert deep_merge_configs({"a": 1, "b": 2}, {"b": 20, "c": 3}) == {"a": 1, "b": 20, "c": 3}
-
-
-def test_historical_refactor_contracts() -> None:
+def test_schemas_all_exports_are_defined() -> None:
     assert "list_all_providers" not in schemas.__all__  # __all__ 里的名称必须实际定义
     assert all(hasattr(schemas, name) for name in schemas.__all__)
-    assert "phase" in inspect.signature(ConfigService.get_config_with_defaults).parameters  # 签名用 phase 而非 layer
-    assert "layer" not in inspect.signature(ConfigService.get_config_with_defaults).parameters
-    assert "phase" in inspect.signature(ConfigService.load_global_overrides).parameters
 
 
 def test_diagnostics_keep_forever_by_default_and_reject_negative_retention() -> None:

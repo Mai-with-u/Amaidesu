@@ -22,7 +22,6 @@ class ComponentSummary(BaseModel):
     """组件摘要信息"""
 
     name: str
-    phase: str  # input/decision/output（v2 group 是主字段，phase 保留兼容）
     type: str
     is_started: bool
     is_enabled: bool

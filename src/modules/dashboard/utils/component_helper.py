@@ -105,7 +105,6 @@ def get_v2_component_list(config_main: Optional[Dict[str, Any]], server: Any) ->
         config_root=_nested(config_main, "collectors") or {},
         enabled_list=_nested(config_main, "collectors", "enabled") or [],
         group="collectors",
-        phase="input",
         component_type="collector",
         running_names=running_collectors,
         descriptions=collector_descriptions,
@@ -163,7 +162,6 @@ def _build_from_config(
     enabled_list: list[str],
     *,
     group: str,
-    phase: str,
     component_type: str,
     running_names: set[str],
     descriptions: Dict[str, str],
@@ -180,7 +178,6 @@ def _build_from_config(
         components.append(
             ComponentSummary(
                 name=name,
-                phase=phase,
                 group=group,
                 type=component_type,
                 is_started=is_enabled and name in running_names,
@@ -208,7 +205,6 @@ def _build_companion_components(
             components.append(
                 ComponentSummary(
                     name=name,
-                    phase="input",
                     group="collectors",
                     type="collector",
                     is_started=is_enabled and name in running_names,
@@ -234,7 +230,6 @@ def _build_agent_components(
         components.append(
             ComponentSummary(
                 name=name,
-                phase="decision",
                 group="agents",
                 type="agent",
                 is_started=is_enabled and name in running_names,
