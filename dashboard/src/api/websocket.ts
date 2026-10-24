@@ -1,3 +1,4 @@
+import { PROTOCOL } from '@/types/events';
 import type { WebSocketMessage, SubscribeRequest } from '@/types';
 
 type MessageCallback = (message: WebSocketMessage) => void;
@@ -51,7 +52,7 @@ class WebSocketClient {
           try {
             const message: WebSocketMessage = JSON.parse(event.data);
             // 应用层心跳：响应 ping，供后端检测半开连接
-            if (message.type === 'ping') {
+            if (message.type === PROTOCOL.ping) {
               this.sendRaw({ type: 'pong' });
               return;
             }

@@ -15,6 +15,7 @@
 // 注意：事件 timestamp 是 Unix 秒（与 Dashboard/LiveObserver 既有用法一致），
 // 调用方如需展示相对时间请自行换算。
 
+import { EVENT, EVENT_FAMILY } from '@/types/events';
 import { truncateText } from '@/utils/format';
 
 /**
@@ -26,9 +27,8 @@ import { truncateText } from '@/utils/format';
  */ export function summarizeEvent(type: string, data: unknown): string {
   const d = (data ?? {}) as Record<string, unknown>;
 
-  // WS 层把 4 种 room.message.* EventBus 事件统一广播为 "room.message"，
-  // 消息种类由 payload.message_type 判别。
-  if (type === 'room.message') {
+  // room.message.* 族折叠广播，消息种类由 payload.message_type 判别。
+  if (type === EVENT.roomMessage) {
     const messageType = pickString(d.message_type, 12) || 'danmaku';
     const user = (d.user as { name?: string; id?: string } | undefined) ?? null;
     const userLabel = user?.name || (user?.id ? `#${user.id}` : '匿名');
@@ -36,22 +36,22 @@ import { truncateText } from '@/utils/format';
     return content ? `${messageType} · ${userLabel}: ${content}` : `${messageType} · ${userLabel}`;
   }
 
-  if (type === 'streamer.speech') {
+  if (type === EVENT.streamerSpeech) {
     const text = pickString(d.text, 32);
     return text ? `发言: ${text}` : type;
   }
 
-  if (type.startsWith('tool.result.')) {
-    const toolName = pickString(d.tool_name, 16) || type.replace('tool.result.', '');
+  if (type.startsWith(EVENT_FAMILY.toolResult)) {
+    const toolName = pickString(d.tool_name, 16) || type.replace(EVENT_FAMILY.toolResult, '');
     const status = pickString(d.status, 8) || '—';
     const errTail = pickString(d.error_message, 24);
     return errTail ? `${toolName} · ${status} · ${errTail}` : `${toolName} · ${status}`;
   }
 
-  if (type.startsWith('planner.')) {
+  if (type === EVENT.plannerDecision || type === EVENT.plannerVerdict) {
     // decision 是轮末汇总（失败/沉默/回应三态互斥），verdict 只在决定回应时发。
     // target 是用户 id 哈希（无名字映射），一行摘要里不展示。
-    if (type === 'planner.decision') {
+    if (type === EVENT.plannerDecision) {
       const err = pickString(d.error, 24);
       if (err) return `决策失败 · ${err}`;
       if (d.should_reply === false) {
@@ -62,7 +62,7 @@ import { truncateText } from '@/utils/format';
     return `裁决: ${pickString(d.topic_summary, 24)}`.trim();
   }
 
-  if (type === 'rundown.changed') {
+  if (type === EVENT.rundownChanged) {
     const seg = pickString(d.segment_title, 18);
     const index = typeof d.index === 'number' ? d.index : null;
     const total = typeof d.total === 'number' ? d.total : null;
@@ -70,20 +70,28 @@ import { truncateText } from '@/utils/format';
     return seg ? `切换到 ${seg}` : '切换到（未命名环节）';
   }
 
-  if (type.startsWith('game.')) {
+  if (
+    type === EVENT.gameReport ||
+    type === EVENT.gameAttentionRequired ||
+    type === EVENT.gameError ||
+    type === EVENT.gameMilestone ||
+    type === EVENT.gameChatReceived ||
+    type.startsWith(EVENT_FAMILY.gameBody) ||
+    type.startsWith(EVENT_FAMILY.gameChat)
+  ) {
     const message = pickString(d.message, 32);
     const scene = pickString(d.scene, 14);
     return scene ? `${message} @ ${scene}` : message || type;
   }
 
-  if (type.startsWith('live.')) {
+  if (type === EVENT.liveStarted || type === EVENT.liveEnded) {
     const session = pickString(d.live_session_id, 16);
     const platform = pickString(d.platform, 10);
     if (platform && session) return `${platform} · ${session}`;
     return session || platform || type;
   }
 
-  if (type.startsWith('core.')) {
+  if (type === EVENT.coreStartup || type === EVENT.coreShutdown || type === EVENT.coreError) {
     const message = pickString(d.message, 24) || pickString(d.event, 16);
     return message || type;
   }

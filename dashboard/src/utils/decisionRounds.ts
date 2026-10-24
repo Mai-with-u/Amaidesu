@@ -12,6 +12,7 @@
  */
 
 import type { WebSocketMessage } from '@/types';
+import { EVENT, EVENT_FAMILY, isToolResultEvent } from '@/types/events';
 import { bool, isRecord, num, pickToolText, str, summarizeToolArgs } from './liveFeed';
 
 /** 事件输入形状：与 events store 条目一致（WS 消息 + 去重 id） */
@@ -108,7 +109,7 @@ function readResultSummary(result: unknown): string {
 function readTool(event: DecisionEvent, data: Record<string, unknown>): DecisionRoundToolItem {
   const status = str(data.status);
   return {
-    name: str(data.tool_name) || event.type.slice('tool.result.'.length) || 'tool',
+    name: str(data.tool_name) || event.type.slice(EVENT_FAMILY.toolResult.length) || 'tool',
     status,
     failed: status === 'error',
     argsSummary: summarizeToolArgs(data.arguments),
@@ -127,7 +128,7 @@ function readTool(event: DecisionEvent, data: Record<string, unknown>): Decision
 export function groupDecisionRounds(events: ReadonlyArray<DecisionEvent>): DecisionRoundCard[] {
   const cards = new Map<string, DecisionRoundCard>();
   for (const event of events) {
-    if (event.type !== 'planner.decision') continue;
+    if (event.type !== EVENT.plannerDecision) continue;
     const data = isRecord(event.data) ? event.data : {};
     const roundId = str(data.round_id);
     const card: DecisionRoundCard = {
@@ -149,7 +150,7 @@ export function groupDecisionRounds(events: ReadonlyArray<DecisionEvent>): Decis
     cards.set(roundId || `event:${event.id}`, card);
   }
   for (const event of events) {
-    if (!event.type.startsWith('tool.result.')) continue;
+    if (!isToolResultEvent(event.type)) continue;
     const data = isRecord(event.data) ? event.data : {};
     const roundId = str(data.round_id);
     if (!roundId) continue;

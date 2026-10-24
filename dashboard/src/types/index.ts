@@ -1,5 +1,9 @@
 // 后端 REST/WS 接口的类型定义；事件名以语义域事件名为准。
 
+import type { WsKind, WsMessageType } from './events';
+
+export type { WsKind, WsMessageType };
+
 // 系统状态
 
 /**
@@ -351,15 +355,15 @@ export interface TriggerProactiveResponse {
 /**
  * WebSocket 消息。
  *
- * `type` 字段是 WS 广播类型：4 种 room.message.* EventBus 事件统一广播为
- * `room.message`（消息种类由 payload.message_type 判别）；其余沿用事件名
- * （`streamer.speech` / `rundown.changed` / `planner.decision` /
- * `tool.result.<name>` / `game.*` / `live.*` / `system.*`）。
+ * `type` 字段是 WS 广播类型，词汇与折叠规则见 `./events`（前端唯一事实源，
+ * 与后端 broadcaster 订阅清单对账）：直通事件的 type = 事件名；room.message.*
+ * 与 room.state.* 折叠为族类型（成员由载荷字段判别）；通配族的 type 为
+ * 具体事件名（如 `tool.result.<name>`）。
  */
 export interface WebSocketMessage {
-  /** 消息类别："event"=事件广播（缺省，进事件缓冲）；"stream"=观测流（独立缓冲，不入事件通道） */
-  kind?: string;
-  type: string;
+  /** 消息类别："event"=事件广播（缺省，进事件缓冲）；"stream"=观测流；"log"=日志通道；"transport"=握手心跳（后两者不入事件通道） */
+  kind?: WsKind;
+  type: WsMessageType;
   /** 消息时刻（Unix 毫秒） */
   timestamp_ms: number;
   data: Record<string, unknown>;

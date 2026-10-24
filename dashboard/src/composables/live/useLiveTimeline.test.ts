@@ -12,7 +12,7 @@ import { ElMessage } from 'element-plus';
 import { useEventsStore, useWebSocketStore } from '@/stores';
 import { useLiveTimeline } from '@/composables/live/useLiveTimeline';
 import { makeEntry, type ShowEntry } from '@/utils/liveFeed';
-import type { LiveSessionItem, WebSocketMessage } from '@/types';
+import type { LiveSessionItem, WebSocketMessage, WsMessageType } from '@/types';
 
 vi.mock('@/api/websocket', () => ({
   wsClient: {
@@ -51,7 +51,7 @@ function event(
   tsMs: number,
   data: Record<string, unknown> = {},
 ): WebSocketMessage & { id: string } {
-  return { id, type, timestamp_ms: tsMs, data };
+  return { id, type: type as WsMessageType, timestamp_ms: tsMs, data };
 }
 
 function danmakuEvent(

@@ -402,6 +402,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { Loading, QuestionFilled } from '@element-plus/icons-vue';
 import { useWebSocketStore, useEventsStore } from '@/stores';
+import { EVENT } from '@/types/events';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import { useNowTick } from '@/composables/useNowTick';
 import { useLiveSessions } from '@/composables/live/useLiveSessions';
@@ -436,7 +437,7 @@ const eventsStore = useEventsStore();
 const watchedLabel = computed<string | null>(() => {
   const list = eventsStore.events;
   for (let i = list.length - 1; i >= 0; i--) {
-    if (list[i].type !== 'room.state') continue;
+    if (list[i].type !== EVENT.roomState) continue;
     const value = list[i].data.audience_total;
     return typeof value === 'number' && Number.isFinite(value) && value >= 0
       ? formatNumber(value)

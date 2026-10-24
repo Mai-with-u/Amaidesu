@@ -399,6 +399,7 @@ import { confirmAction } from '@/utils/confirmAction';
 import { ArrowDown, Loading, Refresh } from '@element-plus/icons-vue';
 import { storeToRefs } from 'pinia';
 import { useComponentsStore, useEventsStore } from '@/stores';
+import { EVENT, isPlannerEvent } from '@/types/events';
 import { agentsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
@@ -608,7 +609,7 @@ const recentPrompts = computed<RecentPrompt[]>(() => {
   if (!name) return [];
   const rows: RecentPrompt[] = [];
   for (const e of events.value) {
-    if (e.type !== 'agent.prompted') continue;
+    if (e.type !== EVENT.agentPrompted) continue;
     const data = isRecord(e.data) ? e.data : {};
     if (str(data.target) !== name) continue;
     const source = str(data.source);
@@ -628,7 +629,7 @@ const latestDecisionLabel = computed<string>(() => {
   // events store 按 timestamp_ms 升序；末条即最新。逆序找第一条 planner.*。
   const all = events.value;
   for (let i = all.length - 1; i >= 0; i--) {
-    if (all[i].type.startsWith('planner.')) {
+    if (isPlannerEvent(all[i].type)) {
       return relativeTime(all[i].timestamp_ms);
     }
   }

@@ -176,6 +176,7 @@ import type {
 } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import PulseChart from '@/components/dashboard/PulseChart.vue';
+import { EVENT, isPlannerEvent } from '@/types/events';
 import { useChartPalette } from '@/composables/useECharts';
 import { formatTimeHM } from '@/utils/format';
 import { buildLiveEntries, type FeedEvent, type ShowEntry } from '@/utils/liveFeed';
@@ -309,8 +310,8 @@ const heartbeat = computed<{ text: string; tone: 'live' | 'fresh' | 'stale' | 's
   const events = eventsStore.events;
   let latest = 0;
   for (const event of events) {
-    if (event.type === 'streamer.stage') continue;
-    if (!event.type.startsWith('planner.') && event.type !== 'streamer.speech') continue;
+    if (event.type === EVENT.streamerStage) continue;
+    if (!isPlannerEvent(event.type) && event.type !== EVENT.streamerSpeech) continue;
     if (event.timestamp_ms > latest) latest = event.timestamp_ms;
   }
   if (latest === 0) return { text: '尚未触发', tone: 'silent' };
@@ -355,8 +356,8 @@ function buildPulse(events: FeedEvent[]): BucketWindow {
     if (ts < windowStart || ts > windowEnd + PULSE_BUCKET_MS) continue;
     const idx = Math.floor((ts - windowStart) / PULSE_BUCKET_MS);
     if (idx < 0 || idx >= PULSE_BUCKETS) continue;
-    if (event.type === 'room.message') audience[idx] += 1;
-    else if (event.type === 'streamer.speech') streamer[idx] += 1;
+    if (event.type === EVENT.roomMessage) audience[idx] += 1;
+    else if (event.type === EVENT.streamerSpeech) streamer[idx] += 1;
   }
   return {
     labels,
@@ -376,7 +377,7 @@ const pulseLabels = computed(() => pulseWindow.value.labels);
 const bufferCounts = computed(() => {
   const result = { danmaku: 0, gift: 0, superChat: 0, enter: 0 };
   for (const event of eventsStore.events) {
-    if (event.type !== 'room.message') continue;
+    if (event.type !== EVENT.roomMessage) continue;
     const data = event.data as Record<string, unknown> | undefined;
     const mt = (data?.message_type ?? '') as string;
     if (mt === 'danmaku') result.danmaku += 1;
@@ -424,7 +425,7 @@ const verdict = computed<Verdict>(() => {
   }
   const nowMs = Date.now();
   const recentError = eventsStore.events.find(event => {
-    if (event.type !== 'core.error') return false;
+    if (event.type !== EVENT.coreError) return false;
     return nowMs - event.timestamp_ms <= ERROR_WINDOW_MS;
   });
   if (recentError) {
@@ -531,7 +532,7 @@ function stopRefresh(): void {
 watch(
   () => eventsStore.events[eventsStore.events.length - 1]?.type,
   type => {
-    if (type === 'rundown.changed')
+    if (type === EVENT.rundownChanged)
       void rundownApi.getState().then(r => (rundownState.value = r.data));
   },
 );

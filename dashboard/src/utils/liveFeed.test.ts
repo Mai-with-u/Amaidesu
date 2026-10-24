@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { WsMessageType } from '@/types';
 import {
   MAX_ENTRIES,
   type FeedEvent,
@@ -47,10 +48,11 @@ import {
 
 let seq = 0;
 
-/** 构造 FeedEvent（events store 入口形状：WebSocketMessage + 去重 id） */
+/** 构造 FeedEvent（events store 入口形状：WebSocketMessage + 去重 id）。
+ *  type 允许合成词汇（unknown.type 类），显式断言 = 线上字符串按契约收口 */
 function evt(type: string, data: Record<string, unknown>, tsMs = 1000): FeedEvent {
   seq += 1;
-  return { id: `e${seq}`, type, timestamp_ms: tsMs, data };
+  return { id: `e${seq}`, type: type as WsMessageType, timestamp_ms: tsMs, data };
 }
 
 describe('通用取值助手', () => {

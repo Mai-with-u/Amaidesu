@@ -2,7 +2,8 @@ import { defineStore } from 'pinia';
 import { ref, shallowRef } from 'vue';
 import { useWebSocketStore } from './websocket';
 import { eventsApi } from '@/api';
-import type { WebSocketMessage } from '@/types';
+import { PROTOCOL } from '@/types/events';
+import type { WebSocketMessage, WsMessageType } from '@/types';
 
 const MAX_EVENTS = 1000;
 /** 历史浏览窗口上限（约 2 页）：渲染面积有界，超出沿页进方向裁剪对侧 */
@@ -53,7 +54,7 @@ function toLoggedEvent(value: unknown): LoggedEvent | null {
   if (typeof record.type !== 'string') return null;
   if (typeof record.timestamp_ms !== 'number' || !Number.isFinite(record.timestamp_ms)) return null;
   return {
-    type: record.type,
+    type: record.type as WsMessageType,
     timestamp_ms: record.timestamp_ms,
     data: (typeof record.data === 'object' && record.data !== null ? record.data : {}) as Record<
       string,
@@ -108,7 +109,7 @@ export const useEventsStore = defineStore('events', () => {
     // 观测流（kind="stream"，如 thinking.delta）不入事件通道——独立缓冲，防污染事件历史与游标
     if (message.kind === 'stream') return;
     // 后端初始历史：与当前条目合并（幂等，任意到达顺序，避免替换吞掉已到达的实时事件）
-    if (message.type === 'events.history') {
+    if (message.type === PROTOCOL.eventsHistory) {
       const history = toLoggedEvents(message.data.events);
       events.value = mergeEvents(history, events.value);
       return;

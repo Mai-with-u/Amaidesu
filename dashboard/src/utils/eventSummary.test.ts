@@ -143,12 +143,12 @@ describe('live.*', () => {
 
 describe('core.*', () => {
   it('message 优先，其次 event 字段', () => {
-    expect(summarizeEvent('core.started', { message: '核心就绪' })).toBe('核心就绪');
-    expect(summarizeEvent('core.started', { event: 'core.started' })).toBe('core.started');
+    expect(summarizeEvent('core.startup', { message: '核心就绪' })).toBe('核心就绪');
+    expect(summarizeEvent('core.startup', { event: 'core.startup' })).toBe('core.startup');
   });
 
   it('双缺失回退事件 type', () => {
-    expect(summarizeEvent('core.started', {})).toBe('core.started');
+    expect(summarizeEvent('core.startup', {})).toBe('core.startup');
   });
 });
 

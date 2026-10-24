@@ -3,8 +3,11 @@ EventBus 事件广播器
 
 订阅 EventBus 事件并广播给 WebSocket 客户端。
 
-WS 类型规则：``type = 事件名``（精确直通）；唯一例外是 ``room.message.*``
-折叠为 ``room.message``（前端多处按此聚合过滤）。
+WS 类型规则：``type = 事件名``（精确直通）；两个折叠例外——``room.message.*``
+折叠为 ``room.message``（前端多处按此聚合过滤）、``room.state.watched_count``
+折叠为 ``room.state``（前端按族取最新值）。前端词汇镜像的契约测试见
+``tests/dashboard/test_ws_event_vocabulary_contract.py``（与
+dashboard/src/types/events.ts 双向对账）。
 
 订阅清单：
 - ``room.message.danmaku / gift / super_chat / guard / enter`` → ``"room.message"``

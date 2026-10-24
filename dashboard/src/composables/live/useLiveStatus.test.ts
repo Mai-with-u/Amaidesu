@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { simulatorApi } from '@/api';
 import { useEventsStore, useWebSocketStore } from '@/stores';
 import { useLiveStatus } from '@/composables/live/useLiveStatus';
-import type { WebSocketMessage } from '@/types';
+import type { WebSocketMessage, WsMessageType } from '@/types';
 
 vi.mock('@/api/websocket', () => ({
   wsClient: {
@@ -38,7 +38,7 @@ function event(
   tsMs: number,
   data: Record<string, unknown>,
 ): WebSocketMessage & { id: string } {
-  return { id, type, timestamp_ms: tsMs, data };
+  return { id, type: type as WsMessageType, timestamp_ms: tsMs, data };
 }
 
 describe('useLiveStatus', () => {

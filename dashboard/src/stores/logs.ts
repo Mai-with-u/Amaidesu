@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref, shallowRef } from 'vue';
 import { useWebSocketStore } from './websocket';
 import { logsApi } from '@/api';
+import { PROTOCOL } from '@/types/events';
 import type { LogEntryItem, WebSocketMessage } from '@/types';
 
 export interface LogEntry {
@@ -120,7 +121,7 @@ export const useLogsStore = defineStore('logs', () => {
 
   function handleLog(message: WebSocketMessage) {
     // 日志通道专用：kind="log" 由 WS 协议标记（事件/握手帧不入日志缓冲）
-    if (message.kind !== 'log' || message.type !== 'log.entry' || !message.data) return;
+    if (message.kind !== 'log' || message.type !== PROTOCOL.logEntry || !message.data) return;
     if (!isLogEntry(message.data)) return;
     const entry = message.data;
     if (isPaused.value) {

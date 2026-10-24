@@ -14,6 +14,7 @@ import { agentsApi, tasksApi } from '@/api';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { useAgentTasks, taskStatusText } from '@/composables/useAgentTasks';
+import type { WsMessageType } from '@/types';
 
 vi.mock('@/api', async importOriginal => ({
   ...(await importOriginal<object>()),
@@ -57,11 +58,14 @@ function snapshot(running: ReturnType<typeof task>[], finished: ReturnType<typeo
 }
 
 let seq = 0;
-/** 往事件 store 塞一条 WS 事件（shape 与 events store 入口一致） */
+/** 往事件 store 塞一条 WS 事件（shape 与 events store 入口一致）。type 允许合成词汇，显式断言 = 线上字符串按契约收口 */
 function pushEvent(type: string): void {
   const store = useEventsStore();
   seq += 1;
-  store.events = [...store.events, { id: `e${seq}`, type, timestamp_ms: 1000, data: {} }];
+  store.events = [
+    ...store.events,
+    { id: `e${seq}`, type: type as WsMessageType, timestamp_ms: 1000, data: {} },
+  ];
 }
 
 describe('useAgentTasks', () => {

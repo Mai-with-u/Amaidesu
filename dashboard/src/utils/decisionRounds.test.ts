@@ -6,14 +6,15 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { WsMessageType } from '@/types';
 import { groupDecisionRounds, type DecisionEvent } from '@/utils/decisionRounds';
 
 let seq = 0;
 
-/** 构造事件（events store 入口形状：WS 消息 + 去重 id） */
+/** 构造事件（events store 入口形状：WS 消息 + 去重 id）。type 允许合成词汇，显式断言 = 线上字符串按契约收口 */
 function evt(type: string, data: Record<string, unknown>, tsMs = 1000): DecisionEvent {
   seq += 1;
-  return { id: `e${seq}`, type, timestamp_ms: tsMs, data };
+  return { id: `e${seq}`, type: type as WsMessageType, timestamp_ms: tsMs, data };
 }
 
 /** 决策事件最小载荷（完整字段以 src/modules/events/payloads/planner.py 为准） */

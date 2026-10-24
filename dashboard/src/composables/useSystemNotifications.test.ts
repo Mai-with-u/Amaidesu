@@ -13,7 +13,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { ElNotification } from 'element-plus';
 import { useSystemNotifications } from '@/composables/useSystemNotifications';
 import { useWebSocketStore } from '@/stores';
-import type { WebSocketMessage } from '@/types';
+import type { WebSocketMessage, WsMessageType } from '@/types';
 
 vi.mock('@/api/websocket', () => ({
   wsClient: {
@@ -66,7 +66,7 @@ function mountComposable(): {
 }
 
 function event(type: string, data: Record<string, unknown>): WebSocketMessage {
-  return { type, timestamp_ms: 1_706_745_600_000, data };
+  return { type: type as WsMessageType, timestamp_ms: 1_706_745_600_000, data };
 }
 
 beforeEach(() => {
