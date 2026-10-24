@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Optional, Protocol, Tuple
 
 import numpy as np
 
@@ -28,14 +28,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.llm.bootstrap import validate_profile_binding
 from src.modules.llm.payload import Response
 from src.modules.logging import get_logger
-from ...common import (
-    build_stats_dict,
-    compute_duration_ms,
-    emit_utterance_failed,
-    emit_utterance_finished,
-    emit_utterance_started,
-    normalize_tts_text,
-)
+from ...common import build_stats_dict, prepare_speech_text, synthesize_play_and_notify
 
 DTYPE = np.int16
 
@@ -164,84 +157,40 @@ class OmniTTSProvider:
         """
         if not self._has_started:
             await self.setup()
-        # 合成前的符号清洗只作用于合成文本；utterance 事件的 speech_text
-        # 是字幕等消费方的展示面，必须携带规范化前原文
-        final_text = normalize_tts_text(text)
-        if not final_text.strip():
-            self.logger.debug("文本规范化后为空，跳过渲染")
+        final_text = prepare_speech_text(self.logger, text)
+        if final_text is None:
             return
         if self.tts_lock is None:
             self.tts_lock = asyncio.Lock()
         async with self.tts_lock:
-            await self._synthesize(final_text, utterance_id=utterance_id, speech_text=text)
+            await synthesize_play_and_notify(
+                self,
+                utterance_id=utterance_id,
+                speech_text=text,
+                synthesize=lambda: self._synthesize_audio(final_text),
+            )
 
-    async def _synthesize(self, text: str, utterance_id: Optional[str] = None, *, speech_text: str) -> None:
-        """调用音频模态生成 → 解码 → 播放（全量引擎：合成完拿完整 PCM）
+    async def _synthesize_audio(self, text: str) -> Tuple[np.ndarray, int]:
+        """文本 → 音频（音频模态生成 → 改写检测 → 解码 PCM）
 
-        异常处理：合成或播放任一阶段失败都先发 failed 事件再向上抛，由
-        编排队列兜底。
-
-        Args:
-            text: 送合成的规范化文本。
-            utterance_id: 一次发声实例的唯一 ID；非 None 时发布生命周期事件。
-            speech_text: 事件展示文本（规范化前原文，字幕按此展示）。
+        改写检测钩子：chat 形态对面是生成模型，transcript 与定稿台词的偏差
+        在合成阶段就地告警暴露（不阻断后续播放编排）。
         """
-        try:
-            response = await self._llm.generate_audio(
-                text,
-                profile=self.llm_profile,
-                voice=self.voice,
-                audio_format=self.audio_format,
-                system=self.style_prompt or None,
-            )
-            if not response.success:
-                raise RuntimeError(f"音频合成失败: {response.error or '未知错误'}")
-            if not response.audio_base64:
-                raise RuntimeError("模型响应未携带音频（audio_base64 为空）")
+        response = await self._llm.generate_audio(
+            text,
+            profile=self.llm_profile,
+            voice=self.voice,
+            audio_format=self.audio_format,
+            system=self.style_prompt or None,
+        )
+        if not response.success:
+            raise RuntimeError(f"音频合成失败: {response.error or '未知错误'}")
+        if not response.audio_base64:
+            raise RuntimeError("模型响应未携带音频（audio_base64 为空）")
 
-            audio_array = self._decode_to_pcm(response.audio_base64)
-            if len(audio_array) == 0:
-                self.logger.warning("音频解码结果为空，跳过播放")
-                return
-
-            self._warn_if_rewritten(text, response.content)
-
-            duration_ms = compute_duration_ms(len(audio_array), self.sample_rate)
-
-            await emit_utterance_started(
-                self.event_bus,
-                utterance_id=utterance_id,
-                speech_text=speech_text,
-                engine=self.PROVIDER_NAME,
-                duration_ms=duration_ms,
-            )
-
-            await self.audio_manager.play_audio(audio_array, samplerate=self.sample_rate)
-            self.render_count += 1
-
-            await emit_utterance_finished(
-                self.event_bus,
-                utterance_id=utterance_id,
-                engine=self.PROVIDER_NAME,
-                duration_ms=duration_ms,
-            )
-        except asyncio.CancelledError:
-            # 协程取消不会停止已提交给声卡的播放，超时取消时必须显式截断
-            if self.audio_manager:
-                self.audio_manager.stop_audio()
-            self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
-            raise
-        except Exception as e:
-            self.error_count += 1
-            self.logger.exception(f"omni_tts 合成/播放失败: {e}")
-            await emit_utterance_failed(
-                self.event_bus,
-                utterance_id=utterance_id,
-                speech_text=speech_text,
-                engine=self.PROVIDER_NAME,
-                error_message=f"{type(e).__name__}: {e}",
-            )
-            raise
+        audio_array = self._decode_to_pcm(response.audio_base64)
+        self._warn_if_rewritten(text, response.content)
+        return audio_array, self.sample_rate
 
     def _decode_to_pcm(self, audio_base64: str) -> np.ndarray:
         """base64 音频（wav 封装）解码为 int16 PCM 数组。
