@@ -19,18 +19,18 @@
     <!-- 其余类型：逐项编辑 -->
     <template v-else>
       <div class="array-items">
-        <div v-for="(_, index) in items" :key="index" class="array-item">
+        <div v-for="(id, index) in itemIds" :key="id" class="array-item">
           <!-- 对象项（元素子字段树可用）：折叠卡片 + 递归字段渲染；无子字段树时退化为 JSON 文本框 -->
           <template v-if="isObjectWithFields(itemSchema)">
-            <div class="object-item" :class="{ 'is-expanded': expandedItems.has(index) }">
+            <div class="object-item" :class="{ 'is-expanded': expandedIds.has(id) }">
               <button
                 type="button"
                 class="object-item-header"
-                :aria-expanded="expandedItems.has(index)"
-                @click="toggleItem(index)"
+                :aria-expanded="expandedIds.has(id)"
+                @click="toggleItem(id)"
               >
                 <el-icon class="object-item-arrow"
-                  ><component :is="expandedItems.has(index) ? ArrowDown : ArrowRight"
+                  ><component :is="expandedIds.has(id) ? ArrowDown : ArrowRight"
                 /></el-icon>
                 <span class="object-item-title">{{ itemTitle(index) }}</span>
                 <el-button
@@ -39,10 +39,10 @@
                   text
                   :icon="Delete"
                   class="object-item-delete"
-                  @click.stop="removeItem(index)"
+                  @click.stop="removeItem(id)"
                 />
               </button>
-              <div v-if="expandedItems.has(index)" class="object-item-body">
+              <div v-if="expandedIds.has(id)" class="object-item-body">
                 <FieldRenderer
                   v-for="sub in normalItemFields"
                   :key="sub.key"
@@ -56,15 +56,15 @@
                   <button
                     type="button"
                     class="advanced-toggle"
-                    :aria-expanded="advancedOpen.has(index)"
-                    @click="toggleAdvanced(index)"
+                    :aria-expanded="advancedIds.has(id)"
+                    @click="toggleAdvanced(id)"
                   >
                     <el-icon class="advanced-arrow">
-                      <component :is="advancedOpen.has(index) ? ArrowDown : ArrowRight" />
+                      <component :is="advancedIds.has(id) ? ArrowDown : ArrowRight" />
                     </el-icon>
                     高级参数（{{ advancedItemFields.length }}）
                   </button>
-                  <div v-show="advancedOpen.has(index)" class="advanced-body">
+                  <div v-show="advancedIds.has(id)" class="advanced-body">
                     <FieldRenderer
                       v-for="sub in advancedItemFields"
                       :key="sub.key"
@@ -117,9 +117,7 @@
                 placeholder="JSON 文本"
                 @input="handleJsonEdit(index)"
               />
-              <p v-if="jsonErrors[index]" class="json-item-error">
-                JSON 解析失败，保持上一次合法值
-              </p>
+              <p v-if="jsonErrors[id]" class="json-item-error">JSON 解析失败，保持上一次合法值</p>
             </div>
           </template>
 
@@ -140,7 +138,7 @@
             size="small"
             text
             :icon="Delete"
-            @click="removeItem(index)"
+            @click="removeItem(id)"
           />
         </div>
       </div>
@@ -158,6 +156,7 @@
 import { ref, computed, watch } from 'vue';
 import { Plus, Delete, ArrowRight, ArrowDown } from '@element-plus/icons-vue';
 import type { ConfigFieldSchema } from '@/types/settings';
+import { getDefaultValueForType } from '@/utils/configField';
 import FieldRenderer from './FieldRenderer.vue';
 
 const props = defineProps<{
@@ -217,34 +216,43 @@ const tagPlaceholder = computed(() =>
   optionPool.value.length > 0 ? '选择或输入后回车添加' : '输入后回车添加',
 );
 
-// 展开状态（按索引跟踪；删除项时随索引重排统一重置）
-const expandedItems = ref<Set<number>>(new Set([0]));
+// 每项的稳定标识：进入列表时分配自增 id，此后删除/重排不变——展开态、错误态
+// 等「项的本地状态」按 id 记账，删除中间项后其余项的状态自然保持原位，无需平移
+const itemIds = ref<number[]>([]);
+let nextItemId = 0;
+function allocateItemId(): number {
+  nextItemId += 1;
+  return nextItemId;
+}
 
-/** 高级参数折叠状态（按索引；x-ui-advanced 字段收进此处，默认收起） */
-const advancedOpen = ref<Set<number>>(new Set());
+// 展开状态（按项 id 记账；重建列表时默认展开第一项）
+const expandedIds = ref<Set<number>>(new Set());
 
-function toggleAdvanced(index: number): void {
-  const next = new Set(advancedOpen.value);
-  if (next.has(index)) {
-    next.delete(index);
+/** 高级参数折叠状态（按项 id 记账；x-ui-advanced 字段收进此处，默认收起） */
+const advancedIds = ref<Set<number>>(new Set());
+
+function toggleAdvanced(id: number): void {
+  const next = new Set(advancedIds.value);
+  if (next.has(id)) {
+    next.delete(id);
   } else {
-    next.add(index);
+    next.add(id);
   }
-  advancedOpen.value = next;
+  advancedIds.value = next;
 }
 
 /** 元素子字段按 x-ui-advanced 拆分：常规字段直出，高级字段进折叠区 */
 const normalItemFields = computed(() => (itemSchema.value?.fields ?? []).filter(f => !f.advanced));
 const advancedItemFields = computed(() => (itemSchema.value?.fields ?? []).filter(f => f.advanced));
 
-function toggleItem(index: number): void {
-  const next = new Set(expandedItems.value);
-  if (next.has(index)) {
-    next.delete(index);
+function toggleItem(id: number): void {
+  const next = new Set(expandedIds.value);
+  if (next.has(id)) {
+    next.delete(id);
   } else {
-    next.add(index);
+    next.add(id);
   }
-  expandedItems.value = next;
+  expandedIds.value = next;
 }
 
 // 元素标题：优先取标识性字段（name/title/id）的值，否则 #索引
@@ -279,7 +287,7 @@ const originalItems = computed<unknown[]>(() => {
   return Array.isArray(props.originalValue) ? props.originalValue : [];
 });
 
-/** 对象/数组项的 JSON 展示串和错误标记，索引对齐 items。 */
+/** 对象/数组项的 JSON 展示串和错误标记：展示串与 items 索引对齐，错误标记按项 id 记账。 */
 const jsonDisplays = ref<string[]>([]);
 const jsonErrors = ref<Record<number, boolean>>({});
 
@@ -291,43 +299,50 @@ function isJsonItemType(type?: string): boolean {
   return type === 'object' || type === 'array';
 }
 
-/** 初始化：数组项与 JSON 展示串按当前 modelValue 重置。 */
+/** 重建 JSON 展示串：按当前 items 对齐；之前合法的展示串会被覆盖，避免错位 */
+function rebuildJsonDisplays(): void {
+  jsonDisplays.value = items.value.map(v =>
+    isJsonItemType(itemSchema.value?.type) && typeof v === 'object' && v !== null
+      ? JSON.stringify(v, null, 2)
+      : String(v ?? ''),
+  );
+}
+
+/** 初始化：数组项、稳定 id 与 JSON 展示串按当前 modelValue 重建，项的本地状态全部清零。 */
 watch(
   () => props.modelValue,
   newVal => {
     if (Array.isArray(newVal)) {
       items.value = [...newVal];
-      // 重建 JSON 展示串：按当前 items 对齐；之前合法的展示串会被覆盖，避免错位
-      jsonDisplays.value = items.value.map(v =>
-        isJsonItemType(itemSchema.value?.type) && typeof v === 'object' && v !== null
-          ? JSON.stringify(v, null, 2)
-          : String(v ?? ''),
-      );
+      itemIds.value = items.value.map(() => allocateItemId());
+      rebuildJsonDisplays();
       jsonErrors.value = {};
+      expandedIds.value = itemIds.value.length > 0 ? new Set([itemIds.value[0]!]) : new Set();
+      advancedIds.value = new Set();
     } else {
       items.value = [];
+      itemIds.value = [];
       jsonDisplays.value = [];
       jsonErrors.value = {};
+      expandedIds.value = new Set();
+      advancedIds.value = new Set();
     }
   },
   { immediate: true },
 );
 
-/** 类型变化时（如 schema 重新加载）也要重建展示串；用 unref 风格直接读 computed。 */
+/** 类型变化时（如 schema 重新加载）也要重建展示串 */
 watch(
   () => itemSchema.value?.type,
   () => {
-    jsonDisplays.value = items.value.map(v =>
-      isJsonItemType(itemSchema.value?.type) && typeof v === 'object' && v !== null
-        ? JSON.stringify(v, null, 2)
-        : String(v ?? ''),
-    );
+    rebuildJsonDisplays();
     jsonErrors.value = {};
   },
 );
 
 // 添加项
 function addItem() {
+  const newId = allocateItemId();
   if (isObjectWithFields(itemSchema.value)) {
     // 对象项：按元素子字段树的 default 构造空对象
     const newItem: Record<string, unknown> = {};
@@ -335,12 +350,14 @@ function addItem() {
       newItem[sub.key] = sub.default ?? getDefaultValueForType(sub.type);
     }
     items.value.push(newItem);
-    expandedItems.value = new Set([...expandedItems.value, items.value.length - 1]);
+    itemIds.value.push(newId);
+    expandedIds.value = new Set([...expandedIds.value, newId]);
     handleUpdate();
     return;
   }
   const defaultValue = itemSchema.value?.default;
   items.value.push(defaultValue ?? getDefaultValueForType(itemSchema.value?.type));
+  itemIds.value.push(newId);
   if (isJsonItemType(itemSchema.value?.type)) {
     jsonDisplays.value.push(
       typeof items.value[items.value.length - 1] === 'object'
@@ -351,49 +368,20 @@ function addItem() {
   handleUpdate();
 }
 
-// 获取类型默认值
-function getDefaultValueForType(type?: string): unknown {
-  switch (type) {
-    case 'string':
-      return '';
-    case 'integer':
-    case 'float':
-      return 0;
-    case 'boolean':
-      return false;
-    case 'object':
-      return {};
-    case 'array':
-      return [];
-    default:
-      return '';
-  }
-}
-
-// 移除项
-function removeItem(index: number) {
+// 移除项：本地状态按 id 记账，删掉对应条目即可，其余项状态不受影响
+function removeItem(id: number) {
+  const index = itemIds.value.indexOf(id);
+  if (index === -1) return;
   items.value.splice(index, 1);
   jsonDisplays.value.splice(index, 1);
-  // 索引错位会导致残留的 error/展开标记指向旧位置，统一重排
-  const shiftedErrors: Record<number, boolean> = {};
-  for (const [k, v] of Object.entries(jsonErrors.value)) {
-    const ki = Number(k);
-    if (ki < index) shiftedErrors[ki] = v;
-    else if (ki > index) shiftedErrors[ki - 1] = v;
-  }
-  jsonErrors.value = shiftedErrors;
-  const shiftedExpanded = new Set<number>();
-  for (const ki of expandedItems.value) {
-    if (ki < index) shiftedExpanded.add(ki);
-    else if (ki > index) shiftedExpanded.add(ki - 1);
-  }
-  expandedItems.value = shiftedExpanded;
-  const shiftedAdvanced = new Set<number>();
-  for (const ki of advancedOpen.value) {
-    if (ki < index) shiftedAdvanced.add(ki);
-    else if (ki > index) shiftedAdvanced.add(ki - 1);
-  }
-  advancedOpen.value = shiftedAdvanced;
+  itemIds.value.splice(index, 1);
+  delete jsonErrors.value[id];
+  const nextExpanded = new Set(expandedIds.value);
+  nextExpanded.delete(id);
+  expandedIds.value = nextExpanded;
+  const nextAdvanced = new Set(advancedIds.value);
+  nextAdvanced.delete(id);
+  advancedIds.value = nextAdvanced;
   handleUpdate();
 }
 
@@ -403,17 +391,19 @@ function handleUpdate() {
   emit('change');
 }
 
-/** JSON 项编辑：解析失败时保留上一次合法值，仅展示错误提示。 */
+/** JSON 项编辑：解析失败时保留上一次合法值，仅展示错误提示（错误标记按项 id 记账）。 */
 function handleJsonEdit(index: number) {
   const text = jsonDisplays.value[index] ?? '';
+  const id = itemIds.value[index];
+  if (id === undefined) return;
   try {
     const parsed = JSON.parse(text);
-    jsonErrors.value[index] = false;
+    jsonErrors.value[id] = false;
     items.value[index] = parsed;
     handleUpdate();
   } catch {
     // 解析失败：不修改 items，保留上一次合法值，仅标记错误状态
-    jsonErrors.value[index] = true;
+    jsonErrors.value[id] = true;
   }
 }
 </script>
