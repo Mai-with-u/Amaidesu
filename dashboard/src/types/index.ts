@@ -55,6 +55,12 @@ export interface ChangelogResponse {
   content: string;
 }
 
+/** 健康检查响应（GET /api/v1/system/health） */
+export interface SystemHealthResponse {
+  status: string;
+  timestamp_ms: number;
+}
+
 // 组件
 /**
  * 组件摘要。
@@ -139,6 +145,11 @@ export interface AgentPromptResponse {
   delivered: boolean;
 }
 
+/** 任务硬取消响应（任务未知/已终态 404） */
+export interface AgentCancelTaskResponse {
+  cancelled: boolean;
+}
+
 /** Agent 直派受理回执（派新任务，登记账本） */
 export interface AgentDelegateResponse {
   accepted: boolean;
@@ -182,9 +193,33 @@ export interface TaskSnapshotResponse {
 }
 
 // 配置
-//
-// 配置读写经 stores/settings.ts 直连 `/api/v1/config/*`（响应形状内联于
-// store），前端无独立 ConfigResponse 类型。
+
+/** 合并视图响应（GET /api/v1/config）：顶层键为七个配置 scope 的展平字典 */
+export interface ConfigGetResponse {
+  config: Record<string, unknown>;
+}
+
+/** 批量写回中单条变更的处理结果 */
+export interface ConfigBatchResultItem {
+  key: string;
+  success: boolean;
+}
+
+/** 批量写回中失败条目的错误明细 */
+export interface ConfigBatchErrorItem {
+  key: string;
+  message: string;
+}
+
+/** 批量原子写回响应（POST /api/v1/config/batch）：全成或整批回退；
+ *  requires_restart 表示改动须重启生效 */
+export interface ConfigBatchSaveResponse {
+  success: boolean;
+  message: string;
+  requires_restart?: boolean;
+  results?: ConfigBatchResultItem[];
+  errors?: ConfigBatchErrorItem[];
+}
 
 // 调试注入
 
@@ -384,6 +419,16 @@ export interface ThinkingDelta {
 export interface SubscribeRequest {
   action: 'subscribe' | 'unsubscribe';
   events: string[];
+}
+
+// 事件历史（GET /events，游标续传 + 落盘扩容）
+
+/** 事件历史查询响应：断线/刷新后补缺口（since_id）与时间窗查询共用 */
+export interface EventListResponse {
+  events: WebSocketMessage[];
+  total: number;
+  has_more: boolean;
+  has_more_newer?: boolean;
 }
 
 // 日志历史（GET /logs，扫 logs/webui 按天落盘 JSONL）
@@ -649,6 +694,49 @@ export interface SimulatorControlResponse {
   is_running?: boolean;
 }
 
+/** 可回放录制日期列表响应（GET /api/v1/simulator/replay/dates） */
+export interface ReplayDatesResponse {
+  dates: ReplayDateEntry[];
+}
+
+/** 常驻人设列表响应（GET /api/v1/simulator/personas；pool 未装配时为空列表 + is_available=false） */
+export interface PersonaListResponse {
+  personas: SimPersona[];
+  is_available: boolean;
+}
+
+/** 新增常驻人设响应（失败时 persona 为空） */
+export interface PersonaCreateResponse {
+  success: boolean;
+  message?: string;
+  persona?: SimPersona;
+}
+
+/** 常驻人设更新 / 删除的通用响应 */
+export interface PersonaOperationResponse {
+  success: boolean;
+  message?: string;
+}
+
+/** 礼物目录列表响应（GET /api/v1/simulator/gifts；生成器未装配时为空列表 + is_available=false） */
+export interface GiftListResponse {
+  gifts: SimGift[];
+  is_available: boolean;
+}
+
+/** 新增礼物响应（失败时 gift 为空） */
+export interface GiftCreateResponse {
+  success: boolean;
+  message?: string;
+  gift?: SimGift;
+}
+
+/** 礼物更新 / 删除的通用响应 */
+export interface GiftOperationResponse {
+  success: boolean;
+  message?: string;
+}
+
 // Rundown（流程单编排页）
 
 /**
@@ -817,6 +905,17 @@ export interface LiveSessionItem {
 export interface LiveSessionListResponse {
   items: LiveSessionItem[];
   active_session_id: number | null;
+}
+
+/** 开启新场次响应（POST /api/v1/live-sessions/open） */
+export interface SessionOpenResponse {
+  live_session_id: number;
+}
+
+/** 场次动作通用响应（close / rename / remove 共用） */
+export interface SessionActionResponse {
+  success: boolean;
+  detail: string;
 }
 
 /** 单场时间线条目（GET /api/v1/live-sessions/{id}/timeline） */
