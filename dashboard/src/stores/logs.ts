@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef } from 'vue';
 import { useWebSocketStore } from './websocket';
+import { createWindowedBuffer } from '@/composables/useWindowedBuffer';
 import { logsApi } from '@/api';
 import { PROTOCOL } from '@/types/events';
 import type { LogEntryItem, WebSocketMessage } from '@/types';
@@ -32,30 +33,72 @@ function toLogEntry(item: LogEntryItem): LogEntry {
   };
 }
 
-/** 历史块并入现有列表：按键去重、时间升序（ISO 同构字符串可直接比较）、按窗口上限裁剪 */
-function mergeEntries(chunk: LogEntry[], base: LogEntry[], keepHead: boolean): LogEntry[] {
-  const byKey = new Map<string, LogEntry>();
-  for (const entry of [...base, ...chunk]) {
-    byKey.set(`${entry.timestamp}|${entry.module}|${entry.message}`, entry);
-  }
-  const merged = [...byKey.values()].sort((a, b) => (a.timestamp < b.timestamp ? -1 : 1));
-  return keepHead ? merged.slice(0, MAX_WINDOW_LOGS) : merged.slice(-MAX_WINDOW_LOGS);
+function toLogEntries(items: LogEntryItem[]): LogEntry[] {
+  return items.map(toLogEntry);
+}
+
+/** 日志页元数据边车（随每页回报，经 onPageMeta 回写 store 状态） */
+interface LogsPageMeta {
+  persistAvailable?: boolean;
+  windowStartMs?: number;
 }
 
 export const useLogsStore = defineStore('logs', () => {
   /** 实时尾部缓冲（WS 推送；暂停期间进积压队列不丢） */
   const logs = shallowRef<LogEntry[]>([]);
   const isPaused = ref(false);
-  /** 历史浏览窗口：null = 实时模式（显示实时尾部）；非 null = 显示该窗口 */
-  const windowLogs = shallowRef<LogEntry[] | null>(null);
-  /** 窗口双向续翻信号（服务端 has_more 语义） */
-  const windowHasOlder = ref(true);
-  const windowHasNewer = ref(false);
-  const windowLoading = ref(false);
   /** 落盘可用性（最近一次查询回报；null = 尚未查询过） */
   const persistAvailable = ref<boolean | null>(null);
   /** 实际生效的窗口起点（服务端缺省=本次启动时刻），"已到窗口起点"提示用 */
   const windowStartMs = ref(0);
+  // 浏览窗口机械（状态 refs + 翻页/跳转/回实时）由共享工厂承载，
+  // 响应字段名归一（has_more_older → hasOlder 等）与参数组装在 fetchPage 适配层
+  const buffer = createWindowedBuffer<LogEntry>({
+    pageSize: PAGE_SIZE,
+    maxWindow: MAX_WINDOW_LOGS,
+    entryKey: entry => `${entry.timestamp}|${entry.module}|${entry.message}`,
+    entryTime: entry => Date.parse(entry.timestamp),
+    // 时间排序沿用 ISO 串字典序：后端时刻串同构，字典序即时刻序，
+    // 且不受 Date.parse 对同毫秒/亚毫秒精度归并的影响
+    sortCompare: (a, b) => (a.timestamp < b.timestamp ? -1 : 1),
+    liveList: () => logs.value,
+    onPageMeta: meta => {
+      const page = meta as LogsPageMeta;
+      if (page.persistAvailable !== undefined) persistAvailable.value = page.persistAvailable;
+      if (page.windowStartMs !== undefined) windowStartMs.value = page.windowStartMs;
+    },
+    fetchPage: async ({ direction, fromMs }) => {
+      if (direction === 'older') {
+        const response = await logsApi.list({ before_timestamp_ms: fromMs, limit: PAGE_SIZE });
+        return {
+          items: toLogEntries(response.data.entries),
+          hasOlder: response.data.has_more_older,
+          hasNewer: response.data.has_more_newer,
+          meta: {
+            persistAvailable: response.data.persist_available,
+            windowStartMs: response.data.window_start_ms,
+          },
+        };
+      }
+      const response = await logsApi.list({ start_ms: fromMs, take: 'oldest', limit: PAGE_SIZE });
+      return {
+        items: toLogEntries(response.data.entries),
+        hasOlder: response.data.has_more_older,
+        hasNewer: response.data.has_more_newer,
+        meta: {
+          persistAvailable: response.data.persist_available,
+          // 窗口起点只随"以时刻开窗"的查询（older/jump）刷新，newer 不改写
+          windowStartMs: direction === 'jump' ? response.data.window_start_ms : undefined,
+        },
+      };
+    },
+  });
+  /** 历史浏览窗口：null = 实时模式（显示实时尾部）；非 null = 显示该窗口 */
+  const windowLogs = buffer.window;
+  /** 窗口双向续翻信号（服务端 has_more 语义） */
+  const windowHasOlder = buffer.hasOlder;
+  const windowHasNewer = buffer.hasNewer;
+  const windowLoading = buffer.loading;
   /** 恢复暂停时的补入报告（视图读后即清） */
   const resumeReport = ref<{ added: number; dropped: number } | null>(null);
 
@@ -165,88 +208,14 @@ export const useLogsStore = defineStore('logs', () => {
   }
 
   // ------------------------------------------------------------------ #
-  // 历史浏览窗口（加载更早 / 加载更晚 / 时间跳转 / 服务端搜索）           #
+  // 历史浏览窗口（服务端搜索；翻页/跳转/回实时由工厂承载）               #
   // ------------------------------------------------------------------ #
-
-  function guardWindowLoading(): boolean {
-    if (windowLoading.value) return false;
-    windowLoading.value = true;
-    return true;
-  }
-
-  /** 当前浏览基线：窗口模式用窗口，实时模式用实时尾部 */
-  function browsingBase(): LogEntry[] {
-    return windowLogs.value ?? logs.value;
-  }
-
-  /** "加载更早"：从当前浏览基线最旧一条向前翻一页（实时模式下即进入窗口模式） */
-  async function fetchOlder(): Promise<void> {
-    const base = browsingBase();
-    const oldest = base[0];
-    if (!oldest || !guardWindowLoading()) return;
-    try {
-      const response = await logsApi.list({
-        before_timestamp_ms: Date.parse(oldest.timestamp),
-        limit: PAGE_SIZE,
-      });
-      persistAvailable.value = response.data.persist_available;
-      windowStartMs.value = response.data.window_start_ms;
-      windowLogs.value = mergeEntries(toLogEntries(response.data.entries), base, false);
-      windowHasOlder.value = response.data.has_more_older;
-      if (!windowHasNewer.value) windowHasNewer.value = response.data.has_more_newer;
-    } catch (error) {
-      console.error('加载更早日志失败:', error);
-    } finally {
-      windowLoading.value = false;
-    }
-  }
-
-  /** "加载更晚"：从窗口最新一条向后补一页（时间跳转/向前翻页后追赶实时边缘） */
-  async function fetchNewer(): Promise<void> {
-    const base = browsingBase();
-    const newest = base[base.length - 1];
-    if (!newest || !guardWindowLoading()) return;
-    try {
-      const response = await logsApi.list({
-        start_ms: Date.parse(newest.timestamp) + 1,
-        take: 'oldest',
-        limit: PAGE_SIZE,
-      });
-      persistAvailable.value = response.data.persist_available;
-      windowLogs.value = mergeEntries(toLogEntries(response.data.entries), base, true);
-      windowHasNewer.value = response.data.has_more_newer;
-    } catch (error) {
-      console.error('加载更晚日志失败:', error);
-    } finally {
-      windowLoading.value = false;
-    }
-  }
-
-  /** 时间跳转：显示 [ts, …) 之后的一页（复盘跨启动定位用） */
-  async function jumpTo(timestampMs: number): Promise<void> {
-    if (!guardWindowLoading()) return;
-    try {
-      const response = await logsApi.list({
-        start_ms: timestampMs,
-        take: 'oldest',
-        limit: PAGE_SIZE,
-      });
-      persistAvailable.value = response.data.persist_available;
-      windowStartMs.value = response.data.window_start_ms;
-      windowLogs.value = toLogEntries(response.data.entries);
-      windowHasOlder.value = response.data.has_more_older;
-      windowHasNewer.value = response.data.has_more_newer;
-    } catch (error) {
-      console.error('时间跳转失败:', error);
-    } finally {
-      windowLoading.value = false;
-    }
-  }
 
   /** 服务端搜索：窗口=本次启动以来（服务端缺省），取最靠新的 500 条命中 */
   async function runSearch(keyword: string): Promise<void> {
     const query = keyword.trim();
-    if (!query || !guardWindowLoading()) return;
+    if (!query || windowLoading.value) return;
+    windowLoading.value = true;
     try {
       const response = await logsApi.list({ q: query, limit: 500 });
       persistAvailable.value = response.data.persist_available;
@@ -261,19 +230,9 @@ export const useLogsStore = defineStore('logs', () => {
     }
   }
 
-  /** 回到实时：丢弃浏览窗口 */
-  function exitWindow(): void {
-    windowLogs.value = null;
-    windowHasOlder.value = true;
-    windowHasNewer.value = false;
-  }
-
-  function toLogEntries(items: LogEntryItem[]): LogEntry[] {
-    return items.map(toLogEntry);
-  }
-
   function clearLogs() {
     logs.value = [];
+    buffer.exitWindow();
   }
 
   return {
@@ -289,10 +248,10 @@ export const useLogsStore = defineStore('logs', () => {
     availableModules,
     clearLogs,
     togglePause,
-    fetchOlder,
-    fetchNewer,
-    jumpTo,
+    fetchOlder: buffer.fetchOlder,
+    fetchNewer: buffer.fetchNewer,
+    jumpTo: buffer.jumpTo,
     runSearch,
-    exitWindow,
+    exitWindow: buffer.exitWindow,
   };
 });
