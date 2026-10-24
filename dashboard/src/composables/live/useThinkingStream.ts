@@ -1,5 +1,5 @@
 /**
- * 思考流（WS kind="stream"；ADR-008 best-effort 观测通道）的视图层消费。
+ * 思考流（WS kind="stream"；best-effort 观测通道）的视图层消费。
  *
  * 只在视图层合成：按 (round_id, phase, step) 累积思考段，再合成 kind='thinking'
  * 的时间线行与事件条目按时间归并（不进 events store、不落库、不回看）。

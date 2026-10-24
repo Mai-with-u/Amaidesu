@@ -20,7 +20,7 @@ export interface GroupStatus {
 }
 
 /**
- * EventBus 总吞吐统计（顶层暴露，不再走 phase）。
+ * EventBus 总吞吐统计（顶层暴露）。
  */
 export interface EventBusStats {
   total_events: number;
@@ -574,7 +574,7 @@ export interface ToolReconnectResponse {
   refreshed?: { added: string[]; removed: string[]; count: number } | null;
 }
 
-// Simulator 控制面（ADR-006）
+// Simulator 控制面
 
 /**
  * SimulatorService 实时状态（`/api/v1/simulator/status` 响应）。

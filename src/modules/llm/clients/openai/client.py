@@ -244,8 +244,8 @@ class OpenAIClient(BaseLLMClient):
         循环时这两项是协议合法性前提，缺则服务端拒绝整个消息序列。
 
         tool 观察携带图像片段时按协议拆分：OpenAI 协议 tool 角色只收文本
-        （图像仅 user 角色可带），tool 消息保留文本、图像提升为 user 消息
-        （ADR-037）；提图消息的落位由 ``_request_to_openai_messages`` 统一
+        （图像仅 user 角色可带），tool 消息保留文本、图像提升为 user 消息；
+        提图消息的落位由 ``_request_to_openai_messages`` 统一
         推迟到整段回执结束之后——紧邻插入会在多工具并发轮里打断回执连续
         性，被严格端点 400 拒收。能走到这里的带图观察必然来自视觉调用方
         （组装层已按主模型 visual 位分叉），此处不做能力兜底。

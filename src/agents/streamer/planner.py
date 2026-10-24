@@ -974,7 +974,7 @@ class Planner:
         return history_messages + batch_messages
 
     def _visual_caller(self) -> bool:
-        """本档位主模型能否看图（能力协商出口，ADR-037）。
+        """本档位主模型能否看图（能力协商出口）。
 
         引擎不可查（测试假件 / 未注入）或查询异常一律按非视觉——判错方向
         是多一次 VLM 转述，而不是把图塞给看不懂的模型。

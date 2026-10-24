@@ -210,14 +210,14 @@ class BackgroundMaintainer:
         """单次轻 tick：记账 + 摘要门控 + 窗口滑动检查。"""
         ts = now_ms if now_ms is not None else _real_now_ms()
 
-        # 1. 写 live_sessions（热度/计数快照）
+        # 写 live_sessions（热度/计数快照）
         if self._sessions_repo is not None:
             try:
                 await self._write_live_session(ts)
             except Exception as exc:
                 self._logger.warning(f"写 live_sessions 失败: {exc}")
 
-        # 2. 摘要门控（按热度间隔；上次摘要后无新弹幕则跳过 LLM 调用）
+        # 摘要门控（按热度间隔；上次摘要后无新弹幕则跳过 LLM 调用）
         try:
             await self._maybe_summarize(ts)
         except Exception as exc:
