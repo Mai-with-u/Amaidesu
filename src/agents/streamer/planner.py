@@ -43,6 +43,7 @@ from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
+from src.agents.streamer.plan import ReplyRoundAttachment
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
 from src.agents.streamer.scene_card import GoalLine, GoalStatus
 from src.agents.streamer.state_facts import extract_state_facts
@@ -580,10 +581,8 @@ class Planner:
         private_game_chat = list(resolved_batch.private_chat)
         # 收播道别窗整窗豁免台词重合度检查（见 _round_bypass_topic_gate 声明处）
         self._round_bypass_topic_gate = trigger_reason == "proactive:signoff"
-        # 发言闸打回计数是本窗口径：Provider 槽位跨窗存活，每窗入口清零
-        reset_gate = getattr(self._reply_provider, "reset_speech_gate", None)
-        if reset_gate is not None:
-            reset_gate()
+        # 发言闸打回计数是本窗口径：由 Provider 检测 round_id 变化清零（每窗
+        # 首次 reply 调用前生效，时序与本入口等价）
 
         outcome: Dict[str, Any] = {
             "replied": False,
@@ -1056,9 +1055,10 @@ class Planner:
         """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出写进 outcome 并返回 (观察, replied=True)。
 
         统一调用路径：reply 与其他工具一样经 ``registry.invoke``（观测/停用/
-        熔断复用既有机制，tool.result 事件照发）。thinking 回调槽位机制保留：
-        调用前把 replyer 阶段回调设到 Provider 的临时槽位，调用后立即清理
-        （一次性语义，防跨轮残留）——槽位挂在 Provider 实例上，不经注册表。
+        熔断复用既有机制，tool.result 事件照发）。本窗交接材料（thinking 回调/
+        弹幕批/游戏聊天/状态事实块/闸豁免）打包进 ``ReplyRoundAttachment``、
+        随 ``ToolInvocation.attachment`` 传入——材料生命周期 = 调用生命周期，
+        调用即弃，无跨轮残留。
         发言闸（新颖自检 + 台词级重合度检查）在 reply 工具内部执行：打回以
         工具错误形态回到 ReAct 循环；收播道别窗整窗豁免——道别话题与收尾
         环节发言字面重合是常态，闸会系统性误杀道别。
@@ -1068,32 +1068,23 @@ class Planner:
             return json.dumps(
                 {"ok": False, "error": "reply 工具不可用（tool_registry 未注入）"}, ensure_ascii=False
             ), False
-        set_thinking = getattr(self._reply_provider, "set_thinking_callback", None)
-        set_batch = getattr(self._reply_provider, "set_round_batch", None)
-        set_game_chat = getattr(self._reply_provider, "set_round_game_chat", None)
-        set_state_facts = getattr(self._reply_provider, "set_round_state_facts", None)
-        set_gate_exempt = getattr(self._reply_provider, "set_speech_gate_exempt", None)
         invoke_started_ms = now_ms()
         try:
-            if set_thinking is not None:
-                set_thinking(thinking.callback_for("replyer", 1) if thinking else None)
-            if set_batch is not None:
-                # 表达侧要看到观众原话才能接上话；槽位一次性，调用后立即清空
-                set_batch(batch)
-            if set_game_chat is not None:
-                # 游戏里有人搭话促发的一轮弹幕批是空的，原话同样交给表达侧，调用后清空
-                set_game_chat(game_chat)
-            if set_state_facts is not None:
-                # 状态跃迁事实块：表达侧的客观事实底稿（含本轮观察工具回执要点），调用后清空
-                set_state_facts(
-                    extract_state_facts(
-                        self._round_game_events,
-                        self._round_tool_receipts,
-                    )
-                )
-            if set_gate_exempt is not None:
-                # 道别窗豁免台词重合度检查：槽位一次性，调用后清空
-                set_gate_exempt(self._round_bypass_topic_gate)
+            attachment = ReplyRoundAttachment(
+                # 思考流回调只在调用单上活一次，不经 LLM、模型不可伪造
+                thinking_callback=thinking.callback_for("replyer", 1) if thinking else None,
+                # 表达侧要看到观众原话才能接上话
+                round_batch=list(batch or []),
+                # 游戏里有人搭话促发的一轮弹幕批是空的，原话同样交给表达侧
+                game_chat=list(game_chat or []),
+                # 状态跃迁事实块：表达侧的客观事实底稿（含本轮观察工具回执要点）
+                state_facts=extract_state_facts(
+                    self._round_game_events,
+                    self._round_tool_receipts,
+                ),
+                # 道别窗豁免台词重合度检查
+                gate_exempt=self._round_bypass_topic_gate,
+            )
             result = await self._tool_registry.invoke(
                 ToolInvocation(
                     tool_name="streamer_reply",
@@ -1101,6 +1092,7 @@ class Planner:
                     source="planner-react",
                     round_id=round_id,
                     caller_profile=PLANNER_PROFILE,
+                    attachment=attachment,
                 )
             )
         except Exception as e:
@@ -1108,25 +1100,14 @@ class Planner:
             outcome["reply_duration_ms"] += now_ms() - invoke_started_ms
             outcome["reply_failures"] += 1
             return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False), False
-        finally:
-            if set_thinking is not None:
-                set_thinking(None)
-            if set_batch is not None:
-                set_batch(None)
-            if set_game_chat is not None:
-                set_game_chat(None)
-            if set_state_facts is not None:
-                set_state_facts(None)
-            if set_gate_exempt is not None:
-                set_gate_exempt(False)
         outcome["reply_duration_ms"] += now_ms() - invoke_started_ms
 
         if not result.success:
             outcome["reply_failures"] += 1
-            # 发言闸打回也是工具失败的一种：计数从 Provider 槽位读出供观测
-            gate_bounces = getattr(self._reply_provider, "gate_bounces", None)
-            if isinstance(gate_bounces, int):
-                outcome["speech_gate_bounces"] = gate_bounces
+            # 发言闸打回也是工具失败的一种：计数随失败结果的 structured_content 回传供观测
+            bounce_payload = result.structured_content
+            if isinstance(bounce_payload, dict) and isinstance(bounce_payload.get("speech_gate_bounces"), int):
+                outcome["speech_gate_bounces"] = bounce_payload["speech_gate_bounces"]
             return json.dumps({"ok": False, "error": result.error_message or "reply 失败"}, ensure_ascii=False), False
 
         payload = result.structured_content if isinstance(result.structured_content, dict) else {}

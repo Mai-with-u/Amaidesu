@@ -188,4 +188,5 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
     assert len(seen) == 1
     assert "交付：蜂蜜胶已做好" in seen[0]
     assert "身体：health=12.0" in seen[0]
-    assert provider._round_state_facts == ""
+    # 事实块随调用单一次性传入：Provider 上不再有跨调用槽位
+    assert not hasattr(provider, "_round_state_facts")

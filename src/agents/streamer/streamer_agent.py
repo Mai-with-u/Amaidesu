@@ -719,8 +719,8 @@ class StreamerAgent(BaseAgent):
 
         名单口径（注册处声明）：
         - ``streamer_reply``：LLM 可调的真工具，注册 + 名单 ``["streamer"]``
-          （自己的工具填自己）；Planner 经 registry 统一调用，thinking 回调
-          槽位仍挂在本 Provider 实例上。
+          （自己的工具填自己）；Planner 经 registry 统一调用，本窗交接材料
+          随 ``ToolInvocation.attachment`` 传入（不经实例槽位）。
         - ``rundown_control``：注册（provider="rundown"，名单 ``["streamer"]``）
           进 ToolRegistry，与其他工具同一路径被 Planner 调用；可见性随
           Provider 注册/摘除进出名单（Agent 启动即注册，无需二次开关）。
@@ -730,7 +730,7 @@ class StreamerAgent(BaseAgent):
           会话内状态不依赖仓储，随注册无条件注册。
         """
 
-        # reply tool（无条件构造——thinking 槽位与注册共用同一实例）
+        # reply tool（无条件构造——注册与 Planner 侧引用共用同一实例）
         self._reply_provider = ReplyToolProvider(
             replyer=self._replyer,
             # 没有聊天仓储时历史仍由内存对话轮承载，表达侧照样知道上一句说了什么
@@ -740,7 +740,7 @@ class StreamerAgent(BaseAgent):
             gate_window=self.typed_config.speech_gate_window,
             gate_ratio=self.typed_config.speech_gate_ratio,
         )
-        # Planner 的 reply 调用经 registry；绑定 Provider 仅为 thinking 回调槽位
+        # Planner 的 reply 调用经 registry；绑定 Provider 仅供引用/诊断（材料走 attachment）
         self._planner.bind_reply_provider(self._reply_provider)
 
         # proactive tool

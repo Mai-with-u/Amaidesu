@@ -148,7 +148,8 @@ def _capture_references(planner: Planner) -> List[str]:
 
 
 async def test_reply_runs_last_and_holds_round_batch() -> None:
-    """模型把 reply 写在环节切换前面：环节切换先执行；reply 调用期间持有本批弹幕，结束后清空。"""
+    """模型把 reply 写在环节切换前面：环节切换先执行；本批弹幕随 attachment
+    交给 reply 调用（材料生命周期 = 调用生命周期，Provider 无槽位残留）。"""
     invoked: List[str] = []
     seen_batches: List[List[str]] = []
 
@@ -181,7 +182,9 @@ async def test_reply_runs_last_and_holds_round_batch() -> None:
 
     assert outcome["replied"] is True
     assert invoked == ["rundown_control", "streamer_reply"]
-    assert seen_batches == [["拉"]] and provider._round_batch == []
+    assert seen_batches == [["拉"]]
+    # 弹幕批随调用单一次性传入：Provider 上不再有跨调用槽位
+    assert not hasattr(provider, "_round_batch")
 
 
 async def test_forced_debug_batch_is_not_labeled_as_paid() -> None:
@@ -546,6 +549,8 @@ def test_prompts_forbid_inventing_off_game_life_events(prompts: Any) -> None:
 
     system = prompts.render("amaidesu_replyer_system", bot_name="麦麦", personality="活泼")
     assert "不编现实生活里的经历" in system and "事情只说游戏里和直播间里真发生过的" in system
+
+
 async def test_delegation_rendering_merges_machine_status_and_stall_age() -> None:
     """委派状态行合并机器账：在途按账本时间戳提示没有新进展，停滞打标直说，交付语仍在。"""
     planner = _planner()
