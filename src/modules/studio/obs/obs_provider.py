@@ -21,7 +21,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger, silence_third_party_logger
 from src.modules.studio.obs.obs_errors import describe_obs_error
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
-from src.modules.tools.provider import BaseToolProvider
+from src.modules.tools.provider import ConnectionToolProvider, wire_connection_tools
 
 if TYPE_CHECKING:
     pass
@@ -64,8 +64,14 @@ _OBS_SET_VISIBILITY_SCHEMA: Dict[str, Any] = {
 }
 
 
-class OBSProvider(BaseToolProvider):
-    """OBS ToolProvider（send_text / switch_scene / set_source_visibility）"""
+class OBSProvider(ConnectionToolProvider):
+    """OBS ToolProvider（send_text / switch_scene / set_source_visibility / send_test）
+
+    工具表随连接态动态（继承 ``ConnectionToolProvider`` 中间层）：未连接
+    返回空（装配期降级登记 0 工具），连接成功 / 断开 / invoke 捕获连接类
+    异常时经 ``mark_connected`` / ``mark_disconnected`` 换血工具表——断连后
+    工具即时摘除，不再等熔断器事后兜底。
+    """
 
     PROVIDER_NAME = "obs"
 
@@ -119,7 +125,6 @@ class OBSProvider(BaseToolProvider):
         self.test_on_connect = self.typed_config.test_on_connect
 
         self.obs_connection: Any = None
-        self.is_connected = False
         self._has_started = False
 
         if not self.password:
@@ -131,7 +136,21 @@ class OBSProvider(BaseToolProvider):
     def name(self) -> str:
         return self.PROVIDER_NAME
 
-    def list_tools(self) -> list[ToolSpec]:
+    @property
+    def is_connected(self) -> bool:
+        """连接态只读视图（基类标志的原名兼容）：既有读点与外部观察沿用。"""
+        return self._connected
+
+    @is_connected.setter
+    def is_connected(self, value: bool) -> None:
+        """写入口收敛到 mark_*：置标志的同时触发连接态回调（换血工具表）。"""
+        if value:
+            self.mark_connected()
+        else:
+            self.mark_disconnected()
+
+    def _connected_tools(self) -> list[ToolSpec]:
+        """连接建立后暴露的全量工具清单（未连接时基类 list_tools 降级返回空）。"""
         return [
             ToolSpec(
                 name="send_text",
@@ -192,6 +211,11 @@ class OBSProvider(BaseToolProvider):
             return _fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
         except Exception as exc:  # noqa: BLE001
             self.logger.exception(f"OBS 工具 {invocation.tool_name} 调用异常: {exc}")
+            # 连接类异常（连接被关闭 / obsws 超时 / 管道断裂）：首次失败即摘除工具，
+            # 不等熔断器兜底；业务性失败（场景/来源不存在等）不误摘
+            if self._connected and _is_connection_error(exc):
+                self.logger.warning("OBS 工具调用遇连接类异常，摘除断连工具")
+                self.mark_disconnected()
             return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
 
     # ===== 生命周期 =====
@@ -208,6 +232,7 @@ class OBSProvider(BaseToolProvider):
         if not self._has_started:
             return
         if self.obs_connection:
+            was_connected = self._connected
             try:
                 self.obs_connection.disconnect()
                 self.logger.info("已断开 OBS WebSocket 连接")
@@ -215,7 +240,8 @@ class OBSProvider(BaseToolProvider):
                 self.logger.error(f"断开 OBS 连接时出错: {e}")
             finally:
                 self.obs_connection = None
-                self.is_connected = False
+                if was_connected:
+                    self.mark_disconnected()
         self._has_started = False
 
     async def connect(self) -> bool:
@@ -243,13 +269,15 @@ class OBSProvider(BaseToolProvider):
         """
         self.logger.info("手动断开 OBS 连接")
         if self.obs_connection:
+            was_connected = self._connected
             try:
                 self.obs_connection.disconnect()
             except Exception as e:
                 self.logger.warning(f"手动断开 OBS 连接异常（忽略）: {e}")
             finally:
                 self.obs_connection = None
-                self.is_connected = False
+                if was_connected:
+                    self.mark_disconnected()
         return True
 
     # ===== 业务方法 =====
@@ -362,8 +390,9 @@ class OBSProvider(BaseToolProvider):
         except Exception as e:
             # 握手阶段失败（OBS 没开、没启用 WebSocket 服务器、密码不对等）：翻译原因后报连接失败
             self.logger.error(f"连接 OBS 失败：{self._describe(e, connected=False)}")
-            self.is_connected = False
             self.obs_connection = None
+            if self._connected:
+                self.mark_disconnected()
             return False
         self.obs_connection = client
         if self.test_on_connect:
@@ -374,10 +403,11 @@ class OBSProvider(BaseToolProvider):
                 # 先断开这条半开的连接再报连接失败，不泄漏 WebSocket
                 self.logger.warning("OBS 测试消息未发出（原因见上一条），断开本次连接")
                 self._close_client(client)
-                self.is_connected = False
                 self.obs_connection = None
+                if self._connected:
+                    self.mark_disconnected()
                 return False
-        self.is_connected = True
+        self.mark_connected()
         self.logger.info(f"成功连接到 OBS WebSocket: {self.host}:{self.port}")
         return True
 
@@ -405,6 +435,17 @@ class OBSProvider(BaseToolProvider):
             not_found=not_found,
             connected=connected,
         )
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    """判定是否连接类异常（保守策略）：只认 obsws/websocket 专属异常与底层
+    管道断裂——业务性失败（场景/来源不存在等 OBSSDKRequestError）不误摘。
+    按类名识别以兼容依赖缺失时的降级路径（同 obs_errors 的惯例）。
+    """
+    name = type(exc).__name__
+    return name in ("OBSSDKTimeoutError", "WebSocketConnectionClosedException") or isinstance(
+        exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+    )
 
 
 def _ok(tool_name: str, success: bool, structured: Any = None) -> ToolExecutionResult:
@@ -441,4 +482,5 @@ def register_obs_tools(
 ) -> OBSProvider:
     provider = create_obs_provider(config=config, event_bus=event_bus)
     registry.register_provider(provider)
+    wire_connection_tools(provider, registry)
     return provider

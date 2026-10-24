@@ -36,8 +36,11 @@ def test_avatar_vts_is_registered_degraded_only_when_enabled() -> None:
 
 def test_studio_obs_enabled_registers_obs_tools() -> None:
     registry = ToolRegistry()
-    bind_core_tools(registry, config={"studio": {"obs": {"enabled": True, "config": {}}}})
-    assert [t for t in registry.list_tools() if t.full_name.startswith("obs_")]
+    report = bind_core_tools(registry, config={"studio": {"obs": {"enabled": True, "config": {}}}})
+    # 装配期未连接 → 降级登记：Provider 在册（可见可重连）但 0 工具，连接成功后再补注册
+    assert [t for t in registry.list_tools() if t.full_name.startswith("obs_")] == []
+    cards = [c for c in registry.list_providers() if c["name"] == "obs"]
+    assert len(cards) == 1 and cards[0]["tool_count"] == 0 and report.get("obs", 0) == 0
 
 
 def test_non_registry_argument_raises_type_error() -> None:
