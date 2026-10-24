@@ -166,14 +166,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { computed, markRaw, onMounted, onUnmounted, ref } from 'vue';
 import { Document, VideoPause, VideoPlay, Search, Delete, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
 import { EVENT } from '@/types/events';
 import { useLogStreamQuery } from '@/composables/useLogStreamQuery';
+import { useStreamPageQuery } from '@/composables/useStreamPageQuery';
+import { useAutoScrollFollow } from '@/composables/useAutoScrollFollow';
 import { debugApi } from '@/api';
 import { confirmAction } from '@/utils/confirmAction';
 import type { EventBusStatsResponse } from '@/types';
@@ -197,55 +198,28 @@ const searchQuery = ref('');
 const selectedTypes = ref<string[]>([]);
 const expandedEvents = ref<Set<string>>(new Set());
 
-const route = useRoute();
-const router = useRouter();
-
-// query.type 兼容单值与重复键（?type=a&type=b），统一为字符串数组
-function readTypeList(raw: typeof route.query.type): string[] {
-  if (Array.isArray(raw)) return raw.map(String);
-  return raw ? [String(raw)] : [];
-}
-
-// 深链初始化：?q=&type= 在 setup 期写入筛选状态，早于首次渲染
-const querySearch = String(route.query.q ?? '');
-if (querySearch) {
-  searchQuery.value = querySearch;
-}
-const queryTypes = readTypeList(route.query.type);
-if (queryTypes.length > 0) {
-  selectedTypes.value = queryTypes;
-}
-
-// 筛选变更回写 URL：q=搜索词、type=事件类型（可重复）；空值/默认态删键而非留空串，
-// replace 不产生历史记录。客户端筛选不触发请求，故无回写循环风险
-watch([searchQuery, selectedTypes], () => {
-  const query: Record<string, string | string[]> = {};
-  if (searchQuery.value.trim()) {
-    query.q = searchQuery.value;
-  }
-  if (selectedTypes.value.length > 0) {
-    query.type = selectedTypes.value;
-  }
-  void router.replace({ query });
+// 深链四件套（初始化/回写/恢复）：机械在 useStreamPageQuery，
+// 键名映射与搜索词的单值/trim 语义是本页域知识
+useStreamPageQuery({
+  fields: [
+    {
+      key: 'q',
+      single: true,
+      get: () => (searchQuery.value.trim() ? [searchQuery.value] : []),
+      set: values => {
+        searchQuery.value = values[0] ?? '';
+      },
+    },
+    {
+      key: 'type',
+      get: () => selectedTypes.value,
+      set: values => {
+        selectedTypes.value = values;
+      },
+    },
+  ],
+  watchSources: [searchQuery, selectedTypes],
 });
-
-// 前进/后退恢复：query 变化与当前状态一致（本页 replace 触发）时跳过，
-// 否则视为用户导航，把 query 写回筛选状态
-watch(
-  () => route.query,
-  query => {
-    const nextSearch = String(query.q ?? '');
-    const nextTypes = readTypeList(query.type);
-    if (
-      nextSearch === searchQuery.value &&
-      nextTypes.join('\u0000') === selectedTypes.value.join('\u0000')
-    ) {
-      return;
-    }
-    searchQuery.value = nextSearch;
-    selectedTypes.value = nextTypes;
-  },
-);
 
 // 渲染上限：非虚拟滚动下列表面积的护栏（超出时渲染最新一端并提示）
 const MAX_RENDER_ROWS = 400;
@@ -420,7 +394,7 @@ function shouldShowExpand(data: Record<string, unknown>): boolean {
 }
 
 // 切换事件展开状态
-function toggleEventExpand(key: string) {
+function toggleEventExpand(key: string): void {
   if (expandedEvents.value.has(key)) {
     expandedEvents.value.delete(key);
   } else {
@@ -434,36 +408,15 @@ function toggleEventExpand(key: string) {
 // ------------------------------------------------------------------
 
 // 滚动锚定已收进 useLogStreamQuery（scrollListTo 随需解构；翻页/跳转自动锚定）
-
-// 自动滚动到底部 - 使用 requestAnimationFrame 节流
-let scrollRAFId: number | null = null;
-let pendingScroll = false;
-
-function scrollToBottom() {
-  if (pendingScroll) return;
-  pendingScroll = true;
-
-  scrollRAFId = requestAnimationFrame(() => {
-    pendingScroll = false;
-    nextTick(() => {
-      if (eventListRef.value) {
-        eventListRef.value.scrollTop = eventListRef.value.scrollHeight;
-      }
-    });
-  });
-}
-
-// 处理滚动事件（仅实时模式：滚离底部即停跟随；历史浏览态自由滚动）
-function handleScroll() {
-  if (!eventListRef.value || windowActive.value) return;
-
-  const { scrollTop, scrollHeight, clientHeight } = eventListRef.value;
-  const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
-
-  if (!isAtBottom) {
+// 自动滚底的 RAF 节流/初始滚底/卸载清理收进 useAutoScrollFollow；
+// 非历史浏览态才判离底，滚离即暂停跟随
+const { scrollToBottom, handleScroll } = useAutoScrollFollow({
+  container: eventListRef,
+  canHandleScroll: () => !windowActive.value,
+  onLeaveBottom: () => {
     isPaused.value = true;
-  }
-}
+  },
+});
 
 // 生命周期
 let unsubscribe: (() => void) | null = null;
@@ -481,9 +434,6 @@ onMounted(() => {
 onUnmounted(() => {
   if (unsubscribe) {
     unsubscribe();
-  }
-  if (scrollRAFId !== null) {
-    cancelAnimationFrame(scrollRAFId);
   }
 });
 </script>
