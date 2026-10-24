@@ -16,9 +16,17 @@
         :class="[rowAlignClass(entry), { 'is-anchored': entry.id === anchorEntryId }]"
         :data-entry-id="entry.id"
       >
-        <!-- 会话模式的过程折叠条（合成条目）：挂在主播发言之后，点击展开该轮过程 -->
+        <!-- 注册表直派：已迁出的卡片按 kind 查表渲染（registry.ts 是分发的唯一缝隙） -->
+        <Component
+          :is="CARD_REGISTRY[entry.kind]"
+          v-if="CARD_REGISTRY[entry.kind]"
+          :entry="entry"
+          :now-ms="nowMs"
+        />
+
+        <!-- 迁移过渡：未注册 kind 仍走内联分支 -->
         <button
-          v-if="entry.kind === 'process_group'"
+          v-else-if="entry.kind === 'process_group'"
           type="button"
           class="chat-process-strip"
           :aria-expanded="expandedChatGroups.has(entry.id)"
@@ -31,19 +39,6 @@
           }}</span>
           <span class="chat-process-arrow" aria-hidden="true">▸</span>
         </button>
-
-        <!-- 环节推进 / 场次边界：横贯分隔行 -->
-        <div v-else-if="entry.kind === 'rundown' || entry.kind === 'boundary'" class="beat">
-          <span class="beat-rule" aria-hidden="true" />
-          <span class="beat-body">
-            <span class="beat-eyebrow">{{ entry.kind === 'boundary' ? '场次' : '环节' }}</span>
-            <span class="beat-label">{{ entry.text }}</span>
-            <span v-if="entry.badge" class="beat-action">{{ entry.badge }}</span>
-            <span v-if="entry.note" class="beat-note">{{ entry.note }}</span>
-          </span>
-          <span class="beat-rule" aria-hidden="true" />
-          <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
-        </div>
 
         <!-- 里程碑：庆祝行 -->
         <div v-else-if="entry.kind === 'milestone'" class="milestone">
@@ -603,24 +598,6 @@
           <p v-if="entry.note" class="act-note is-game-note">{{ entry.note }}</p>
         </div>
 
-        <!-- 聊天气泡：弹幕 / 礼物 / SC / 上舰 / 游戏内聊天 -->
-        <div v-else class="chat" :class="`chat--${entry.kind}`">
-          <span class="avatar" aria-hidden="true">{{ entry.initial }}</span>
-          <div class="bubble">
-            <div class="bubble-head">
-              <span class="who" :title="entry.actor">{{ entry.actor }}</span>
-              <span v-if="entry.badge" class="chip">{{ entry.badge }}</span>
-              <span v-if="entry.simulated" class="chip" title="来自控制台注入的模拟消息">
-                模拟
-              </span>
-              <span v-if="entry.money" class="money mono">{{ entry.money }}</span>
-              <span class="grow" />
-              <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
-            </div>
-            <p class="say">{{ entry.text }}</p>
-          </div>
-        </div>
-
         <!-- 会话布局的主播侧头像：置于条件链末尾避免打断 v-else-if 链；
              与左侧观众头像呼应，撑起发言行右对齐的对话感 -->
         <span
@@ -657,6 +634,8 @@ import { CopyDocument, Monitor } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import ContextBreakdownCard from '@/components/llm/ContextBreakdownCard.vue';
+import { CARD_REGISTRY } from '@/components/live/cards/registry';
+import '@/components/live/cards/cards-shared.css';
 import { formatNumber } from '@/utils/format';
 import {
   agentGroupOf,
@@ -1027,21 +1006,11 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
-.stamp {
-  font-size: 11px;
-  color: var(--text-placeholder);
-  flex-shrink: 0;
-  white-space: nowrap;
-}
+/* 时间戳叶子类（stamp/chip/money）已收进 cards/cards-shared.css（.feed-timeline
+   前缀全局），供已迁卡片与内联分支共用 */
 
-/* 观众发声：气泡                                                */
-.chat {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  max-width: 82%;
-}
-
+/* 观众头像基样式：主播侧头像（avatar--host）仍在内联发言分支使用；
+   观众气泡卡迁移后自带同名规则，批量迁移完成时随内联分支一并退役 */
 .avatar {
   width: 28px;
   height: 28px;
@@ -1056,159 +1025,6 @@ async function copyText(text: string): Promise<void> {
   color: var(--color-collector);
   box-shadow: 0 0 0 3px var(--bg-card);
   z-index: 1;
-}
-
-.bubble {
-  flex: 1;
-  min-width: 0;
-  padding: 7px 12px;
-  border-radius: 4px 12px 12px 12px;
-  background: var(--bg-hover);
-}
-
-.bubble-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 2px;
-}
-
-.who {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-collector);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 220px;
-}
-
-.chip {
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-color-light);
-  flex-shrink: 0;
-}
-
-.money {
-  font-size: 12px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-.say {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-regular);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* --- 礼物：暖色高亮 --- */
-.chat--gift {
-  max-width: 88%;
-}
-.chat--gift .avatar {
-  border-color: var(--color-warning);
-  color: var(--color-warning);
-}
-.chat--gift .bubble {
-  background: var(--color-warning-bg);
-  border-left: 2px solid var(--color-warning);
-  box-shadow: var(--shadow-sm);
-}
-.chat--gift .who {
-  color: var(--color-warning);
-}
-.chat--gift .say {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-/* --- SC：最强高亮（暖色渐变 + 金额） --- */
-.chat--super_chat {
-  max-width: 92%;
-}
-.chat--super_chat .avatar {
-  border-color: var(--color-danger);
-  color: var(--color-danger);
-}
-.chat--super_chat .bubble {
-  padding: 10px 14px;
-  border-left: 3px solid var(--color-danger);
-  background: linear-gradient(100deg, var(--color-danger-bg), var(--color-warning-bg));
-  box-shadow: var(--shadow-md);
-}
-.chat--super_chat .who {
-  font-size: 12px;
-  color: var(--color-danger);
-}
-.chat--super_chat .chip {
-  background: var(--color-danger);
-  color: var(--text-inverse);
-  border-color: var(--color-danger);
-}
-.chat--super_chat .money {
-  font-size: 14px;
-  color: var(--color-danger);
-}
-.chat--super_chat .say {
-  font-size: 15px;
-  font-weight: 500;
-  line-height: 1.55;
-  color: var(--text-primary);
-}
-
-/* --- 上舰（guard）：付费卡片形态，绿色系（与游戏域同色系区分于礼物暖色/SC 红色） --- */
-.chat--guard {
-  max-width: 90%;
-}
-.chat--guard .avatar {
-  border-color: var(--color-success);
-  color: var(--color-success);
-}
-.chat--guard .bubble {
-  padding: 10px 14px;
-  border-left: 3px solid var(--color-success);
-  background: var(--color-success-bg);
-  box-shadow: var(--shadow-sm);
-}
-.chat--guard .who {
-  color: var(--color-success);
-}
-.chat--guard .chip {
-  background: var(--color-success);
-  color: var(--text-inverse);
-  border-color: var(--color-success);
-}
-.chat--guard .say {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-/* --- 游戏内聊天（game_chat）：与 B 站弹幕区分的游戏域绿色系 --- */
-.chat--game_chat {
-  max-width: 82%;
-}
-.chat--game_chat .avatar {
-  border-color: var(--color-game);
-  color: var(--color-game);
-  background: var(--color-game-bg);
-}
-.chat--game_chat .bubble {
-  border-left: 2px solid var(--color-game);
-  background: var(--color-game-bg);
-}
-.chat--game_chat .who {
-  color: var(--color-game);
 }
 
 /* 安静单行：进场 / 阶段状态 / 游戏身体事件                        */
@@ -1960,63 +1776,6 @@ async function copyText(text: string): Promise<void> {
   white-space: nowrap;
 }
 
-/* 环节推进 / 场次边界：横贯分隔行                                 */
-.beat {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 6px 0;
-}
-.beat-rule {
-  height: 1px;
-  background: var(--color-rundown);
-  opacity: 0.45;
-}
-.beat-rule:first-child {
-  width: 24px;
-  flex-shrink: 0;
-}
-.beat-rule:last-of-type {
-  flex: 1;
-}
-.beat-body {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.beat-eyebrow {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1.6px;
-  color: var(--color-rundown);
-  flex-shrink: 0;
-}
-.beat-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.beat-action {
-  padding: 0 7px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  background: var(--color-rundown-bg);
-  color: var(--color-rundown);
-  flex-shrink: 0;
-}
-.beat-note {
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* 里程碑：庆祝行                                                */
 .milestone {
   display: flex;
@@ -2063,11 +1822,11 @@ async function copyText(text: string): Promise<void> {
 .feed-timeline.is-compact .act {
   max-width: 100%;
 }
-.feed-timeline.is-compact .say,
+.feed-timeline.is-compact :deep(.say),
 .feed-timeline.is-compact .act-text {
   font-size: 12px;
 }
-.feed-timeline.is-compact .stamp {
+.feed-timeline.is-compact :deep(.stamp) {
   font-size: 9px;
 }
 

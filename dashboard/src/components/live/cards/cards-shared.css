@@ -1,0 +1,31 @@
+/* 时间线卡片共享叶子类：已迁出的卡片组件与 FeedTimeline 未迁移的内联分支共用。
+ *
+ * 纯 css（不带 scoped），以 .feed-timeline 为作用域前缀——chip / stamp 这类
+ * 通用名在库内其他组件里各有自己的 scoped 定义，前缀防止本文件泄漏到时间线之外。
+ * 卡片专属版式在各卡自己的 scoped 样式里；卡片内变体（如 .chat--sc .chip）
+ * 以更高优先级覆盖此处的基类。 */
+
+.feed-timeline .stamp {
+  font-size: 11px;
+  color: var(--text-placeholder);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.feed-timeline .chip {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color-light);
+  flex-shrink: 0;
+}
+
+.feed-timeline .money {
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
